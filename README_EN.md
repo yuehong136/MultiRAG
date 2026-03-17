@@ -1,797 +1,523 @@
 <div align="center">
-<h1>MultiRAG - Enterprise-Grade RAG Intelligent Backend Engine</h1>
+<h1>MultiRAG</h1>
+<p>Enterprise-grade backend engine for RAG, Agents, Workflows, and MCP</p>
 </div>
 
 <p align="center">
-  <a href="./README.md"><img alt="简体中文版自述文件" src="https://img.shields.io/badge/简体中文-DBEDFA"></a>
-  <a href="./README_EN.md"><img alt="README in English" src="https://img.shields.io/badge/English-DFE0E5"></a>
+  <a href="./README.md"><img alt="简体中文" src="https://img.shields.io/badge/简体中文-DBEDFA"></a>
+  <a href="./README_EN.md"><img alt="English" src="https://img.shields.io/badge/English-DFE0E5"></a>
 </p>
 
 <p align="center">
-    <a href="https://github.com/yourusername/multirag/releases/latest">
-        <img src="https://img.shields.io/github/v/release/yourusername/multirag?color=blue&label=Latest%20Release" alt="Latest Release">
-    </a>
-    <a href="https://github.com/yourusername/multirag/blob/main/LICENSE">
-        <img height="21" src="https://img.shields.io/badge/License-Apache--2.0-ffffff?labelColor=d4eaf7&color=2e6cc4" alt="license">
-    </a>
-    <a href="https://www.python.org/downloads/release/python-3120/">
-        <img src="https://img.shields.io/badge/python-3.12+-blue.svg" alt="Python 3.12+">
-    </a>
-    <a href="pyproject.toml">
-        <img src="https://img.shields.io/badge/version-0.4.1-green.svg" alt="Version">
-    </a>
+  <a href="https://github.com/yuehong136/MultiRAG/releases/latest">
+    <img src="https://img.shields.io/github/v/release/yuehong136/MultiRAG?color=2e6cc4&label=release" alt="Latest Release">
+  </a>
+  <a href="https://github.com/yuehong136/MultiRAG/blob/main/LICENSE">
+    <img src="https://img.shields.io/badge/license-Apache--2.0-4c7ed8" alt="License">
+  </a>
+  <a href="https://www.python.org/downloads/release/python-3120/">
+    <img src="https://img.shields.io/badge/python-3.12%2B-3776ab" alt="Python 3.12+">
+  </a>
+  <a href="./pyproject.toml">
+    <img src="https://img.shields.io/badge/version-0.9.9-2f9e44" alt="Version 0.9.9">
+  </a>
 </p>
 
-<h4 align="center">
-  <a href="#-documentation">Documentation</a> |
-  <a href="#-roadmap">Roadmap</a> |
-  <a href="#-community">Community</a> |
-  <a href="#-api-documentation">API Docs</a>
-</h4>
-
-#
+<p align="center">
+  <a href="#-what-is-multirag">Overview</a> |
+  <a href="#-release-focus">Release Focus</a> |
+  <a href="#-core-capabilities">Capabilities</a> |
+  <a href="#-quick-start">Quick Start</a> |
+  <a href="#-development-from-source">Development</a> |
+  <a href="#-api-and-documentation">API & Docs</a>
+</p>
 
 <details open>
 <summary><b>Table of Contents</b></summary>
 
 - [What is MultiRAG?](#-what-is-multirag)
-- [Latest Updates](#-latest-updates)
-- [Core Features](#-core-features)
+- [Release Focus](#-release-focus)
+- [Core Capabilities](#-core-capabilities)
 - [System Architecture](#-system-architecture)
+- [Project Structure](#-project-structure)
 - [Quick Start](#-quick-start)
-- [Configuration](#-configuration)
+- [Docker Profiles](#-docker-profiles)
 - [Docker Image Build](#-docker-image-build)
+- [Configuration](#-configuration)
 - [Development from Source](#-development-from-source)
-- [API Documentation](#-api-documentation)
-- [Documentation](#-documentation)
-- [Roadmap](#-roadmap)
-- [Community](#-community)
+- [API and Documentation](#-api-and-documentation)
+- [Typical Use Cases](#-typical-use-cases)
 - [Contributing](#-contributing)
+- [License](#-license)
 
 </details>
 
-## 💡 What is MultiRAG?
+## 📌 What is MultiRAG?
 
-MultiRAG is an intelligent RAG (Retrieval-Augmented Generation) backend engine designed for enterprise applications. The project integrates RAG retrieval enhancement, GraphRAG knowledge graphs, Workflow orchestration, and Agent frameworks to provide a complete AI application backend solution for enterprises.
+MultiRAG is an enterprise-oriented AI backend project built around RAG, GraphRAG, Workflow orchestration, Agents, and MCP. It provides an end-to-end service layer for document understanding, ingestion, retrieval, QA, tool invocation, workflow execution, and open APIs.
 
-### Project Highlights
+It is suitable for building:
 
-- 🔥 **Modular Architecture** - Independent core modules supporting flexible combinations
-- ⚡ **High Performance** - Distributed task execution and concurrent processing
-- 🔌 **Multi-Engine Support** - Compatible with Milvus, Elasticsearch, Infinity, and other vector databases
-- 🌐 **Multi-Model Adaptation** - Supports OpenAI, ZHIPU-AI, Tongyi-Qianwen, and other major LLM providers
-- 📊 **Enterprise Features** - Complete permission management, monitoring, logging, and error handling
+- enterprise knowledge base QA and retrieval-augmented systems
+- multi-source ingestion and unified retrieval platforms
+- Agent and MCP-powered backend services
+- document understanding, table extraction, and multimodal retrieval services
+- OpenAI-compatible capability layers for downstream products
 
-## 🔥 Latest Updates
+## 🔥 Release Focus
 
-- 2025-10-29 Support for MCP (Model Context Protocol) standardized interface
-- 2025-10-20 Added Admin service containerization support with Docker deployment
-- 2025-10-15 Added sensitive word library management system with Milvus vector search
-- 2025-10-10 Optimized document parsing performance with DOCX table intelligent analysis
-- 2025-10-05 Upgraded FastAPI framework with improved health check mechanism
-- 2025-09-28 Support for multiple vector database switching (Milvus/Elasticsearch/Infinity)
-- 2025-09-20 Added GraphRAG knowledge graph enhanced retrieval
-- 2025-09-15 Integrated Workflow engine with visual orchestration support
+Current repository version is `v0.9.9`. Compared with older docs, the project scope is significantly broader:
 
-## 🎉 Stay Updated
+- MCP client/server support with FastMCP 3 and Streamable HTTP
+- stronger Agent, Workflow, and Workflow v2 execution chains
+- broader enterprise connectors and relational DB integrations
+- backend support across Milvus, Infinity, Elasticsearch, OpenSearch, OceanBase, and SeekDB
+- richer OpenAI-compatible responses, including references and metadata-related enhancements
+- deeper document understanding with OCR, table rotation correction, PDF Vision, and PaddleOCR flows
 
-⭐️ Star our repository to stay informed about exciting new features and improvements! Get instant notifications for new releases! 🌟
+## ✨ Core Capabilities
 
-## 🌟 Core Features
+### Retrieval and knowledge augmentation
 
-### 🍭 **RAG Retrieval Enhancement System**
-- **Multi-modal Document Processing** - Support for PDF, Word, PPT, Excel, images, and more
-- **Intelligent Document Parsing** - Based on DeepDoc deep document understanding technology
-- **Vector Search Optimization** - Multiple embedding models and reranking algorithms
-- **Knowledge Base Management** - Unified document upload, index building, and retrieval optimization
+- Supports standard RAG, GraphRAG, SQL retrieval, hybrid recall, and reranking
+- Supports document metadata storage, filtering, references, and conditional retrieval
+- Exposes OpenAI-compatible response formats for easier SDK and client integration
+- Supports multiple chunking strategies, retrieval thresholds, and ranking controls
 
-### 🌱 **GraphRAG Knowledge Graph**
-- **Entity Relationship Extraction** - Automatic knowledge graph construction
-- **Graph Reasoning Query** - Complex relationship inference support
-- **Entity Disambiguation & Linking** - Intelligent entity recognition and association
+### Deep document understanding
 
-### 🍔 **Workflow Engine**
-- **Visual Orchestration** - Complex business process design support
-- **Component Development** - Rich built-in component library
-- **Parallel Execution** - Workflow parallelism and conditional branching
-- **API Integration** - Flexible third-party system integration
+- Supports PDF, DOCX, PPT/PPTX, Excel, images, and other common formats
+- Built on DeepDoc for OCR, layout analysis, tables, and figures
+- Includes PaddleOCR, PaddleOCR-VL, PDF Vision, and Docling-based flows
+- Handles parent-child chunking, page fixes, table orientation detection, and correction
 
-### 🛀 **Agent Framework**
-- **Tool Invocation** - Python code execution, external API calls
-- **Role Definition** - Configurable Agent roles and capabilities
-- **Memory Management** - Session history and knowledge memory mechanisms
-- **Multi-Agent Collaboration** - Multi-agent cooperative work support
+### Agents, workflows, and MCP
 
-### 🎨 **MCP Protocol Support**
-- **Standardized Interface** - Based on Model Context Protocol
-- **Multi-Mode Deployment** - Self-host and host mode support
-- **Secure Authentication** - Complete API Key authentication mechanism
+- Agent component system with tools, memory, file inputs, and multi-step execution
+- Workflow and Workflow v2 orchestration modules
+- MCP in both client and server directions
+- Structured tool outputs, SSE side-channel logs, and timeout control
+
+### Data source connectivity
+
+- Covers GitHub, GitLab, Bitbucket
+- Covers Jira, Confluence, Notion, Airtable, Asana, Moodle
+- Covers Google Drive, SharePoint, Dropbox, Box, Seafile, WebDAV
+- Covers Slack, Teams, Discord, Gmail, IMAP, Zendesk
+- Supports relational data connectors (MySQL / PostgreSQL)
+
+### Model and platform integration
+
+- Integrates with OpenAI, Anthropic, Gemini, Tongyi, DashScope, Volcengine, Groq, Ollama, Vertex AI, and more
+- Supports Chat, Embedding, Rerank, Vision, TTS, and Sequence2Text
+- Supports provider routing, factory configuration, enable/disable controls, and OpenAI-compatible access
+
+### Operations and engineering
+
+- Built on FastAPI for service deployment and extension
+- Includes Docker Compose deployment, source-based development, Admin APIs, CLI, and tests
+- Ships with task executors, health checks, system settings, logging, and permission controls
 
 ## 🔎 System Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    MultiRAG System Architecture                  │
-├─────────────────────────────────────────────────────────────────┤
-│  API Layer          │    Core Engine Layer   │   Data Storage    │
-│                     │                        │                   │
-│  ┌───────────────┐  │  ┌──────────────────┐  │  ┌─────────────┐  │
-│  │ FastAPI       │  │  │ RAG Engine       │  │  │ Vector DB   │  │
-│  │ RESTful API   │  │  │ GraphRAG Engine  │  │  │ • Milvus    │  │
-│  │ MCP Server    │  │  │ Workflow Engine  │  │  │ • ES        │  │
-│  │ SSE Stream    │  │  │ Agent Framework  │  │  │ • Infinity  │  │
-│  └───────────────┘  │  │ DeepDoc Parser   │  │  │ • OpenSearch│  │
-│                     │  │ Task Executor    │  │  └─────────────┘  │
-│  ┌───────────────┐  │  └──────────────────┘  │                   │
-│  │ Auth & ACL    │  │                        │  ┌─────────────┐  │
-│  │ Rate Limit    │  │  ┌──────────────────┐  │  │ RDBMS       │  │
-│  │ Monitoring    │  │  │ LLM Adapters     │  │  │ • PostgreSQL│  │
-│  └───────────────┘  │  │ • OpenAI         │  │  │ • MySQL     │  │
-│                     │  │ • ZHIPU-AI       │  │  └─────────────┘  │
-│                     │  │ • Tongyi-Qianwen │  │                   │
-│                     │  │ • Ollama         │  │  ┌─────────────┐  │
-│                     │  └──────────────────┘  │  │ Object Store│  │
-│                     │                        │  │ • MinIO     │  │
-│                     │  ┌──────────────────┐  │  │ • AWS S3    │  │
-│                     │  │ Message Queue    │  │  │ • Azure Blob│  │
-│                     │  │ Redis Streams    │  │  │ • Alibaba OSS│ │
-│                     │  └──────────────────┘  │  └─────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
+```text
+┌─────────────────────────────────────────────────────────────────────┐
+│                              MultiRAG                               │
+├─────────────────────────────────────────────────────────────────────┤
+│ API / Protocol Layer                                                │
+│  - FastAPI REST APIs                                                │
+│  - OpenAI-compatible APIs                                           │
+│  - MCP Server / SSE Stream                                          │
+│  - Admin APIs / CLI                                                 │
+├─────────────────────────────────────────────────────────────────────┤
+│ Core Engine Layer                                                   │
+│  - RAG / GraphRAG / SQL Retrieval                                   │
+│  - Agent / Workflow / Workflow v2                                   │
+│  - LLM / Embedding / Rerank / Vision / TTS                          │
+│  - Task Executor / Sync / Background Jobs                           │
+├─────────────────────────────────────────────────────────────────────┤
+│ Parsing and Integration Layer                                       │
+│  - DeepDoc / OCR / Table / PDF Vision                               │
+│  - Enterprise Data Source Connectors                                │
+│  - MCP Client / Tool Invocation                                     │
+├─────────────────────────────────────────────────────────────────────┤
+│ Storage Layer                                                       │
+│  - Vector/Search: Milvus / Infinity / ES / OpenSearch               │
+│  - Database: PostgreSQL / MySQL / OceanBase / SeekDB                │
+│  - Object Storage: MinIO / S3 / OSS / Azure Blob                    │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-## 🎬 Quick Start
+## 🗂️ Project Structure
 
-### 📝 Prerequisites
+The repository has evolved from a single RAG service into a broader AI backend platform:
 
-- CPU >= 4 cores
-- RAM >= 16 GB (32GB recommended for better performance)
-- Disk >= 50 GB
-- Docker >= 24.0.0 & Docker Compose >= v2.26.1
-- Python >= 3.12 (for source deployment)
+```text
+multirag/
+├── api/             # FastAPI entrypoint, routers, DB models, service layer
+├── core/            # RAG/retrieval/LLM/parsing/execution core logic
+├── deepdoc/         # Document parsing, OCR, layout analysis
+├── agent/           # Agent components, tools, templates, plugins
+├── workflow/        # Workflow v1
+├── workflow_v2/     # Workflow v2
+├── common/          # Shared utilities, connectors, storage adapters
+├── mcp/             # MCP client/server
+├── memory/          # Memory-related capabilities
+├── admin/           # Admin server and CLI
+├── docker/          # Docker Compose, Nginx, deployment configs
+├── docs/            # Documentation and API references
+├── tests/           # Unit and integration tests
+└── tools/           # Firecrawl, chatgpt-on-wechat, and integrations
+```
 
-> [!TIP]
-> If Docker is not installed on your local machine (Windows, Mac, or Linux), see [Install Docker Engine](https://docs.docker.com/engine/install/).
+### Module overview
 
-### 🚀 Start Services
+#### API layer
 
-1. Ensure `vm.max_map_count` >= 262144 (Linux systems):
+- [`api/apps`](./api/apps) contains routes for KB, documents, conversations, LLMs, connectors, MCP, workflows, system settings, and admin features
+- Supports REST APIs, SSE streaming, and OpenAI-compatible endpoints
 
-   > Check the `vm.max_map_count` value:
-   >
-   > ```bash
-   > $ sysctl vm.max_map_count
-   > ```
-   >
-   > If the value is less than 262144, reset it to at least 262144:
-   >
-   > ```bash
-   > # In this example, we set it to 262144:
-   > $ sudo sysctl -w vm.max_map_count=262144
-   > ```
-   >
-   > This change will reset after a system reboot. To make it permanent, add or update the `vm.max_map_count` value in **/etc/sysctl.conf**:
-   >
-   > ```bash
-   > vm.max_map_count=262144
-   > ```
+#### Core engine layer
+
+- [`core/llm`](./core/llm) handles model adapters, embeddings, rerankers, vision, and TTS
+- [`core/nlp`](./core/nlp) handles retrieval, search, query processing, and algorithms
+- [`core/svr`](./core/svr) handles task execution, synchronization, and background jobs
+
+#### Parsing and integration layer
+
+- [`deepdoc`](./deepdoc) handles advanced document and image understanding
+- [`common/data_source`](./common/data_source) contains enterprise connectors and sync logic
+- [`common/doc_store`](./common/doc_store) contains vector/search backend adapters
+
+## 🚀 Quick Start
+
+### Requirements
+
+- CPU `>= 4 cores`
+- RAM `>= 16 GB` (32 GB recommended)
+- Docker `>= 24`
+- Docker Compose `>= v2.26`
+- Python `>= 3.12` (for source deployment)
+
+### Docker startup (recommended)
+
+1. On Linux, check `vm.max_map_count` (especially for ES/Milvus):
+
+```bash
+sysctl vm.max_map_count
+sudo sysctl -w vm.max_map_count=262144
+```
 
 2. Clone the repository:
 
-   ```bash
-   $ git clone http://122.112.170.159:8888/scdf/ai/multrag.git
-   $ cd multrag
-   ```
+```bash
+git clone git@github.com:yuehong136/MultiRAG.git
+cd MultiRAG
+```
 
-3. Start services using Docker Compose:
+3. Start services:
 
-   ```bash
-   $ cd docker
+```bash
+cd docker
 
-   # Minimal deployment (auto-starts postgres + redis + minio + multirag)
-   $ docker compose --profile cpu up -d
+# minimal deployment (postgres + redis + minio + multirag)
+docker compose --profile cpu up -d
 
-   # With Milvus vector database
-   $ docker compose --profile cpu --profile milvus up -d
+# add Milvus
+docker compose --profile cpu --profile milvus up -d
 
-   # With Elasticsearch search engine
-   $ docker compose --profile cpu --profile elasticsearch up -d
+# add Elasticsearch
+docker compose --profile cpu --profile elasticsearch up -d
 
-   # With TEI Embedding service
-   $ docker compose --profile cpu --profile tei-cpu up -d
+# add Infinity
+docker compose --profile cpu --profile infinity up -d
 
-   # Full deployment (Milvus + TEI)
-   $ docker compose --profile cpu --profile milvus --profile tei-cpu up -d
+# add OceanBase
+docker compose --profile cpu --profile oceanbase up -d
 
-   # GPU mode
-   $ docker compose --profile gpu --profile milvus --profile tei-gpu up -d
-   ```
+# add TEI
+docker compose --profile cpu --profile milvus --profile tei-cpu up -d
 
-4. Check server status after startup:
+# GPU mode
+docker compose --profile gpu --profile milvus --profile tei-gpu up -d
+```
 
-   ```bash
-   $ docker logs -f multirag
-   ```
+4. Verify startup:
 
-   _The following output confirms successful system startup:_
+```bash
+docker logs -f multirag
+```
+
+   _The following output confirms that the system has successfully started：_
 
    ```bash
                 __  ___      ____  _ ____  ___   ______
                /  |/  /_  __/ / /_(_) __ \/   | / ____/
-              / /|_/ / / / / / __/ / /_/ / /| |/ / __
+              / /|_/ / / / / / __/ / /_/ / /| |/ / __   v0.9.9
              / /  / / /_/ / / /_/ / _, _/ ___ / /_/ /
             /_/  /_/\__,_/_/\__/_/_/ |_/_/  |_\____/
 
-   * Running on all addresses (0.0.0.0)
+INFO:     Uvicorn running on http://0.0.0.0:8123 (Press CTRL+C to quit)
    ```
+5. Configure model and storage settings:
 
-   > If you skip this confirmation step and access MultiRAG directly, your browser may show a `network abnormal` error because MultiRAG may not be fully initialized yet.
+- edit [`configs/service_conf.yaml`](./configs/service_conf.yaml)
+- or use [`docker/service_conf.yaml.template`](./docker/service_conf.yaml.template)
 
-5. In your web browser, enter the server's IP address to access MultiRAG.
-   > With default settings, simply enter `http://IP_OF_YOUR_MACHINE:8123` (default HTTP port is `8123`).
+6. Default API endpoint: `http://IP_OF_YOUR_MACHINE:8123`
 
-6. In [service_conf.yaml](./configs/service_conf.yaml), select the desired LLM factory and update the `API_KEY` field with your API key.
-
-   _Get started!_
-
-### 🍎 macOS (Apple Silicon) Deployment
-
-Since some services (like TEI) only have x86_64 versions, Apple Silicon Macs need to use a dedicated configuration file:
+### macOS (Apple Silicon)
 
 ```bash
-$ cd docker
-
-# Minimal deployment (via Rosetta 2 x86_64 emulation)
-$ docker compose -f docker-compose-macos.yml --profile cpu up -d
-
-# With Milvus vector database
-$ docker compose -f docker-compose-macos.yml --profile cpu --profile milvus up -d
-
-# With TEI Embedding service
-$ docker compose -f docker-compose-macos.yml --profile cpu --profile tei-cpu up -d
+cd docker
+docker compose -f docker-compose-macos.yml --profile cpu up -d
 ```
 
-**Prerequisites**:
-- Enable **"Use Rosetta for x86_64/amd64 emulation on Apple Silicon"** in Docker Desktop settings
-- Or use OrbStack and select x86-64 (emulated) architecture
+Recommendations:
 
-**Performance Notes**:
-- Running via Rosetta 2 emulation, performance is approximately 50-70% of native
-- Suitable for development and testing; production environments should use Linux x86_64 servers
+- enable Rosetta x86_64 emulation in Docker Desktop
+- or use OrbStack with x86_64 emulation
 
-### 📦 Service Profiles
+For more combinations, see [`docker/README.md`](./docker/README.md).
 
-MultiRAG uses Docker Compose profiles to start services on demand:
+## 📦 Docker Profiles
 
-#### Required Services (auto-start, no profile needed)
+### Default baseline services
 
-| Service | Container Name | Port | Description |
-|---------|---------------|------|-------------|
-| postgres | multirag-postgres | 5432 | PostgreSQL database |
-| redis | multirag-redis | 6379 | Redis cache service |
-| minio | multirag-minio | 9000, 9001 | MinIO object storage |
+- `postgres`
+- `redis`
+- `minio`
 
-#### Optional Services (require profile specification)
+### Optional profiles
 
-| Profile | Service | Description |
-|---------|---------|-------------|
-| `cpu` | multirag-cpu | MultiRAG main service (CPU version) |
-| `gpu` | multirag-gpu | MultiRAG main service (GPU version) |
-| `elasticsearch` | es01 | Elasticsearch search engine |
-| `opensearch` | opensearch01 | OpenSearch search engine |
-| `milvus` | milvus-standalone, milvus-etcd, milvus-minio | Milvus vector database cluster |
-| `infinity` | infinity | Infinity vector database |
-| `oceanbase` | oceanbase | OceanBase vector database |
-| `tei-cpu` | tei-cpu | TEI Embedding service (CPU version) |
-| `tei-gpu` | tei-gpu | TEI Embedding service (GPU version) |
-| `sandbox` | sandbox-executor-manager | Sandbox executor |
-| `kibana` | kibana | Elasticsearch visualization tool |
+| Profile | Description |
+|---|---|
+| `cpu` | MultiRAG CPU main service |
+| `gpu` | MultiRAG GPU main service |
+| `milvus` | Milvus vector DB |
+| `elasticsearch` | Elasticsearch |
+| `opensearch` | OpenSearch |
+| `infinity` | Infinity vector DB |
+| `oceanbase` | OceanBase vector DB |
+| `tei-cpu` | TEI CPU service |
+| `tei-gpu` | TEI GPU service |
+| `sandbox` | Sandbox executor |
+| `kibana` | Kibana |
 
-#### Container Count Reference
+### Common combinations
 
-| Command | Containers Started |
-|---------|-------------------|
-| `--profile cpu` | postgres, redis, minio, multirag-cpu (4) |
-| `--profile cpu --profile milvus` | above + milvus-etcd, milvus-minio, milvus-standalone (7) |
-| `--profile cpu --profile milvus --profile tei-cpu` | above + tei-cpu (8) |
-| `--profile cpu --profile elasticsearch` | postgres, redis, minio, multirag-cpu, es01 (5) |
+| Command | Scenario |
+|---|---|
+| `docker compose --profile cpu up -d` | Minimal setup |
+| `docker compose --profile cpu --profile milvus up -d` | Typical RAG deployment |
+| `docker compose --profile cpu --profile infinity up -d` | Infinity-based retrieval |
+| `docker compose --profile cpu --profile oceanbase up -d` | OceanBase-based setup |
+| `docker compose --profile gpu --profile milvus --profile tei-gpu up -d` | GPU + Milvus + TEI |
 
-## 🔧 Configuration
+## 🔧 Docker Image Build
 
-When configuring the system, you need to manage the following files:
+### Build lightweight image
 
-### Configuration File Structure
-
+```bash
+docker build --platform linux/amd64 --build-arg LIGHTEN=1 -f Dockerfile -t multirag:slim .
 ```
+
+### Build full image
+
+```bash
+docker build --platform linux/amd64 -f Dockerfile -t multirag:latest .
+```
+
+### Rebuild and restart
+
+```bash
+cd docker
+docker compose --profile cpu down
+docker compose --profile cpu up -d
+```
+
+## ⚙️ Configuration
+
+### Configuration layout
+
+```text
+configs/
+├── service_conf.yaml
+├── llm_factories.json
+└── alembic/
+
 docker/
-├── .env                        # Environment variables (ports, passwords, etc.)
-├── docker-compose.yml          # Main config file (includes base file)
-├── docker-compose-base.yml     # Infrastructure services (PostgreSQL, Redis, MinIO, etc.)
-├── docker-compose-macos.yml    # macOS-specific config
-├── service_conf.yaml.template  # Service configuration template
-└── nginx/                      # Nginx reverse proxy config
-    ├── nginx.conf
-    ├── proxy.conf
-    └── multirag.conf
+├── .env
+├── docker-compose.yml
+├── docker-compose-base.yml
+├── docker-compose-macos.yml
+└── service_conf.yaml.template
 ```
 
-### Main Configuration Files
+### Main config files
 
-- **[.env](./docker/.env)**: Docker environment variables including port mappings, database passwords, service switches
-- **[service_conf.yaml](./configs/service_conf.yaml)**: Backend service configuration including database connections, LLM settings, storage settings
-- **[docker-compose.yml](./docker/docker-compose.yml)**: Main Docker Compose config, includes infrastructure services via `include`
-- **[docker-compose-base.yml](./docker/docker-compose-base.yml)**: Infrastructure service definitions (PostgreSQL, Redis, MinIO, Milvus, etc.)
+- [`docker/.env`](./docker/.env) Docker variables (ports, passwords, service switches)
+- [`configs/service_conf.yaml`](./configs/service_conf.yaml) backend runtime settings (DB, LLM, storage, retrieval)
+- [`docker/docker-compose.yml`](./docker/docker-compose.yml) main compose file
+- [`docker/docker-compose-base.yml`](./docker/docker-compose-base.yml) infrastructure compose file
 
-> [!TIP]
-> For detailed Docker configuration documentation, see [docker/README.md](./docker/README.md)
+### Common ports
 
-### Port Configuration
-
-| Service | Default Port | Environment Variable |
-|---------|-------------|---------------------|
+| Service | Default Port | Env Variable |
+|---|---|---|
 | Nginx HTTP | 80 | `SVR_WEB_HTTP_PORT` |
 | Nginx HTTPS | 443 | `SVR_WEB_HTTPS_PORT` |
 | Main API | 8123 | `SVR_HTTP_PORT` |
 | Admin API | 8130 | `ADMIN_SVR_HTTP_PORT` |
 | PostgreSQL | 5432 | `POSTGRES_PORT` |
 | Redis | 6379 | `REDIS_PORT` |
-| MinIO | 9000, 9001 | `MINIO_PORT`, `MINIO_CONSOLE_PORT` |
+| MinIO | 9000/9001 | `MINIO_PORT` / `MINIO_CONSOLE_PORT` |
 | Milvus | 19530 | `MILVUS_PORT` |
 | Elasticsearch | 9200 | `ES_PORT` |
 
-Configuration updates require restarting containers:
-
-```bash
-$ cd docker
-$ docker compose --profile cpu down
-$ docker compose --profile cpu up -d
-```
-
-### Switching Vector Database Engines
-
-MultiRAG supports multiple vector databases, enabled via profiles:
-
-#### Using Milvus (Recommended)
-
-```bash
-$ docker compose --profile cpu --profile milvus up -d
-```
-
-#### Using Elasticsearch
-
-```bash
-$ docker compose --profile cpu --profile elasticsearch up -d
-```
-
-#### Using Infinity
-
-```bash
-$ docker compose --profile cpu --profile infinity up -d
-```
-
-> [!WARNING]
-> When switching vector databases, use `docker compose down -v` to clear existing data. The `-v` flag removes data volumes.
-
-### Main Configuration Options
-
-#### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DOC_ENGINE` | Document engine type (milvus/elasticsearch/infinity) | `milvus` |
-| `STORAGE_IMPL` | Storage implementation (MINIO/S3/AZURE/OSS) | `MINIO` |
-| `LIGHTEN` | Lightweight mode (without embedding models) | `0` |
-| `MAX_CONTENT_LENGTH` | Maximum document size | `1GB` |
-| `REGISTER_ENABLED` | User registration switch | `1` |
-
-#### Vector Database Configuration
-
-MultiRAG supports multiple vector databases:
+### Key config example
 
 ```yaml
-# Milvus configuration (recommended)
-milvus:
-  host: localhost
-  port: 19530
-  user: root
-  password: Milvus
-
-# Elasticsearch configuration
-elasticsearch:
-  hosts: ["http://localhost:9200"]
-
-# Infinity configuration
-infinity:
-  uri: "infinity:23817"
-```
-
-#### LLM Model Configuration
-
-Supports major LLM providers:
-
-```yaml
+# configs/service_conf.yaml
 user_default_llm:
-  factory: "ZHIPU-AI"  # OpenAI, ZHIPU-AI, Tongyi-Qianwen, Ollama, etc.
+  factory: "OpenAI"
   api_key: "your-api-key"
-  base_url: "https://open.bigmodel.cn/api/paas/v4/"
+  base_url: "https://api.openai.com/v1"
   default_models:
-    chat_model: "glm-4-plus"
-    embedding_model: "embedding-2"
-    rerank_model: "bge-reranker-v2-m3"
+    chat_model: "gpt-4o-mini"
+    embedding_model: "text-embedding-3-large"
+
+retrieval:
+  doc_engine: "milvus"  # milvus / infinity / elasticsearch / opensearch
 ```
 
-## 🔧 Docker Image Build
+### Backend switching checklist
 
-### Build Lightweight Image (without embedding models)
-
-This image is approximately 2 GB and relies on external LLM and embedding services (like TEI).
-
-```bash
-$ git clone http://122.112.170.159:8888/scdf/ai/multrag.git
-$ cd multrag/
-$ docker build --platform linux/amd64 --build-arg LIGHTEN=1 -f Dockerfile -t multirag:slim .
-```
-
-### Build Full Image (with embedding models)
-
-This image is approximately 9 GB. It includes embedding models and only requires external LLM services.
-
-```bash
-$ git clone http://122.112.170.159:8888/scdf/ai/multrag.git
-$ cd multrag/
-$ docker build --platform linux/amd64 -f Dockerfile -t multirag:latest .
-```
-
-### Rebuild and Update Service
-
-```bash
-# Build image
-$ docker build -t multirag:latest .
-
-# Restart service
-$ cd docker
-$ docker compose --profile cpu down
-$ docker compose --profile cpu up -d
-```
+- ensure matching Docker profile and config are aligned
+- verify Alembic migrations after upgrades
+- run retrieval/write regression checks for OceanBase, SeekDB, and Infinity
 
 ## 🔨 Development from Source
 
-### 1. Install Development Tools
+### 1. Install dependencies
 
 ```bash
-# Install uv and pre-commit (skip if already installed)
-$ pipx install uv pre-commit
+uv sync --python 3.12 --all-extras
+uv run python download_deps.py
 ```
 
-### 2. Clone Source Code and Install Dependencies
+### 2. Start infrastructure services
 
 ```bash
-$ git clone http://122.112.170.159:8888/scdf/ai/multrag.git
-$ cd multrag/
-$ uv sync --python 3.12 --all-extras  # Install MultiRAG Python dependencies
-$ uv run download_deps.py
-$ pre-commit install
+docker compose -f docker/docker-compose-base.yml up -d
 ```
 
-### 3. Start Infrastructure Services
-
-Use Docker Compose to start dependency services (PostgreSQL, Redis, MinIO, etc.):
+Enable extra backends as needed:
 
 ```bash
-# Start only infrastructure services (not the multirag main service)
-$ cd docker
-$ docker compose up -d postgres redis minio
-
-# If Milvus vector database is needed
-$ docker compose --profile milvus up -d
+docker compose -f docker/docker-compose-base.yml --profile milvus up -d
+docker compose -f docker/docker-compose-base.yml --profile infinity up -d
+docker compose -f docker/docker-compose-base.yml --profile oceanbase up -d
 ```
 
-Add the following lines to `/etc/hosts` to resolve service hostnames:
-
-```
-127.0.0.1       postgres redis minio milvus es01 infinity
-```
-
-### 4. Configure Environment Variables
+### 3. Start the backend service
 
 ```bash
-# HuggingFace mirror site (recommended for users in China)
-$ export HF_ENDPOINT=https://hf-mirror.com
+export PYTHONPATH=$(pwd)
+uv run python -m api.multirag_server
 ```
 
-### 5. Install System Dependencies (Optional)
-
-If your operating system doesn't have jemalloc, install it as follows:
+### 4. Run tests
 
 ```bash
-# Ubuntu/Debian
-$ sudo apt-get install libjemalloc-dev
-# CentOS/RHEL
-$ sudo yum install jemalloc
-# OpenSUSE
-$ sudo zypper install jemalloc
-# macOS
-$ brew install jemalloc
+uv run pytest
 ```
 
-### 6. Start Backend Services
+Single-test example:
 
 ```bash
-$ source .venv/bin/activate
-$ export PYTHONPATH=$(pwd)
-$ bash docker/launch_backend_service.sh
+uv run pytest tests/unit/test_image_filter.py
 ```
 
-_The following output confirms successful system startup:_
+### 5. Run lint and formatting
 
 ```bash
-             __  ___      ____  _ ____  ___   ______
-            /  |/  /_  __/ / /_(_) __ \/   | / ____/
-           / /|_/ / / / / / __/ / /_/ / /| |/ / __
-          / /  / / /_/ / / /_/ / _, _/ ___ / /_/ /
-         /_/  /_/\__,_/_/\__/_/_/ |_/_/  |_\____/
-
-* Running on all addresses (0.0.0.0)
+ruff check
+ruff format
 ```
 
-### 7. Stop Services
+### 6. Typical dev entry points
 
-```bash
-$ pkill -f "multirag_server.py|task_executor.py"
-```
+- service entry: [`api/multirag_server.py`](./api/multirag_server.py)
+- API routes: [`api/apps`](./api/apps)
+- core logic: [`core`](./core)
+- document parsing: [`deepdoc`](./deepdoc)
+- agents: [`agent`](./agent)
+- MCP: [`mcp`](./mcp)
+- workflows: [`workflow`](./workflow) / [`workflow_v2`](./workflow_v2)
 
-## 📚 API Documentation
+## 📚 API and Documentation
 
-### Core Endpoints
+### API domains
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/chat/completions` | POST | Chat conversation interface |
+Main API domains include:
+
+- knowledge base, dataset, document, and chunk management
+- chat, conversation, retrieval, and OpenAI-compatible APIs
+- LLM providers, model settings, and system configuration
+- agent, canvas, workflow, and workflow v2 execution
+- connectors, MCP server, admin, user, and tenant management
+
+### Common endpoint examples
+
+| Path | Method | Description |
+|---|---|---|
+| `/api/v1/chat/completions` | POST | Chat endpoint |
 | `/api/v1/datasets` | GET/POST | Knowledge base management |
 | `/api/v1/documents` | POST/DELETE | Document management |
-| `/api/v1/chunks` | GET | Document chunk query |
+| `/api/v1/chunks` | GET | Chunk query |
 | `/api/v1/workflows` | GET/POST | Workflow management |
 | `/api/v1/agents` | POST | Agent execution |
+| `/api/v1/mcp/*` | GET/POST | MCP-related APIs |
 
-### Usage Examples
+OpenAPI docs are available at `/docs` after service startup.
 
-```python
-import requests
+### Documentation index
 
-# Chat interface
-response = requests.post(
-    "http://localhost:8000/api/v1/chat/completions",
-    headers={"Authorization": "Bearer your-api-key"},
-    json={
-        "model": "glm-4-plus",
-        "messages": [
-            {"role": "user", "content": "Hello, please introduce MultiRAG features"}
-        ],
-        "dataset_ids": ["kb_001"]
-    }
-)
+- Getting started: [`docs/get_started.md`](./docs/get_started.md)
+- Deployment guide: [`docs/DEPLOYMENT_GUIDE.md`](./docs/DEPLOYMENT_GUIDE.md)
+- Architecture: [`docs/architecture.md`](./docs/architecture.md)
+- HTTP API reference: [`docs/references/http_api_reference.md`](./docs/references/http_api_reference.md)
+- Python API reference: [`docs/references/python_api_reference.md`](./docs/references/python_api_reference.md)
+- Supported models: [`docs/references/supported_models.md`](./docs/references/supported_models.md)
+- Docker guide: [`docker/README.md`](./docker/README.md)
 
-# Knowledge base creation
-response = requests.post(
-    "http://localhost:8000/api/v1/datasets",
-    headers={"Authorization": "Bearer your-api-key"},
-    json={
-        "name": "Technical Documentation",
-        "description": "Store technical documents",
-        "parser": "manual"
-    }
-)
-```
+## 🛠️ Typical Use Cases
 
-Detailed API documentation: [http://localhost:8000/docs](http://localhost:8000/docs)
+- enterprise internal QA and intelligent search
+- multi-source ingestion and unified retrieval
+- Agent backends for business systems
+- document understanding and structured extraction
+- OpenAI-compatible platform services
 
-## 🛠️ Development Guide
+## 🤝 Contributing
 
-### Project Structure
+Issues and pull requests are welcome.
 
-```
-multirag/
-├── api/                        # API Service Layer
-│   ├── admin/                  # Admin API
-│   ├── apps/                   # FastAPI Application Modules
-│   │   ├── sdk/               # SDK Interface (OpenAI API compatible)
-│   │   ├── auth/              # OAuth/OIDC Authentication
-│   │   ├── dataset_app.py     # Knowledge Base Management
-│   │   ├── document_app.py    # Document Management
-│   │   ├── conversation_app.py # Conversation Management
-│   │   ├── workflow_app.py    # Workflow API
-│   │   └── ...                # Other Business APIs
-│   ├── db/                    # Database Layer
-│   │   ├── models/           # SQLAlchemy Models
-│   │   └── services/         # Database Services
-│   ├── service/               # Business Logic Services
-│   ├── middleware/            # Middleware (Auth, Rate Limiting, etc.)
-│   └── utils/                 # API Utilities
-│
-├── core/                       # Core Engine
-│   ├── app/                   # Document Parsers (by type)
-│   │   ├── naive.py          # General Parser
-│   │   ├── paper.py          # Paper Parser
-│   │   ├── resume.py         # Resume Parser
-│   │   └── ...               # Other Parsers
-│   ├── flow/                  # Document Processing Pipeline
-│   │   ├── parser/           # Parsers
-│   │   ├── splitter/         # Chunkers
-│   │   ├── extractor/        # Information Extractors
-│   │   └── tokenizer/        # Tokenizers
-│   ├── llm/                   # LLM Adapters
-│   │   ├── chat_model.py     # Chat Model
-│   │   ├── embedding_model.py # Embedding Model
-│   │   ├── rerank_model.py   # Rerank Model
-│   │   └── ...               # Vendor Adapters
-│   ├── nlp/                   # NLP Processing Modules
-│   ├── prompts/               # Prompt Templates
-│   ├── svr/                   # Server Components
-│   │   └── task_executor.py  # Task Executor
-│   └── utils/                 # Storage Connectors
-│       ├── milvus_conn.py    # Milvus Connection
-│       ├── es_conn.py        # Elasticsearch Connection
-│       └── ...               # Other Connectors
-│
-├── agent/                      # Agent Framework
-│   ├── component/             # Agent Components
-│   │   ├── base.py           # Base Component
-│   │   ├── llm.py            # LLM Component
-│   │   ├── iteration.py      # Loop Component
-│   │   └── ...               # Other Components
-│   ├── tools/                 # Tool Collection
-│   │   ├── retrieval.py      # Knowledge Base Retrieval
-│   │   ├── code_exec.py      # Code Execution
-│   │   ├── crawler.py        # Web Crawler
-│   │   ├── duckduckgo.py     # DuckDuckGo Search
-│   │   └── ...               # Other Tools
-│   └── templates/             # Agent Templates
-│
-├── agentic_reasoning/          # Agentic Reasoning Module
-│   └── deep_research.py       # Deep Research
-│
-├── deepdoc/                    # Deep Document Processing
-│   ├── parser/                # Document Parsers
-│   │   ├── pdf_parser.py     # PDF Parser
-│   │   ├── docx_parser.py    # Word Parser
-│   │   └── ...               # Other Formats
-│   └── vision/                # Vision Processing
-│
-├── graphrag/                   # GraphRAG Knowledge Graph
-│   ├── entity_extractor.py    # Entity Extraction
-│   ├── graph_builder.py       # Graph Building
-│   └── graph_search.py        # Graph Search
-│
-├── workflow/                   # Workflow Engine v1
-├── workflow_v2/                # Workflow Engine v2
-│   ├── component/             # Workflow Components
-│   │   ├── llm_component.py  # LLM Component
-│   │   ├── code_component.py # Code Component
-│   │   └── ...               # Other Components
-│   └── workflow.py            # Workflow Executor
-│
-├── mcp/                        # MCP Protocol Support
-├── plugin/                     # Plugin System
-├── sandbox/                    # Sandbox Executor
-├── server/                     # Server Modules
-├── admin/                      # Admin Service
-├── intergrations/              # Third-party Integrations
-│
-├── common/                     # Common Modules
-├── configs/                    # Configuration Files
-├── errors/                     # Error Definitions
-├── scripts/                    # Script Tools
-└── docker/                     # Docker Deployment Config
-```
+Before contributing, review:
 
-### Core Components
+- [`docs/architecture.md`](./docs/architecture.md)
+- [`docker/README.md`](./docker/README.md)
+- [`AGENTS.md`](./AGENTS.md)
 
-| Component | Location | Description |
-|-----------|----------|-------------|
-| **TaskExecutor** | `core/svr/task_executor.py` | Distributed task executor for document parsing, vectorization, and async tasks |
-| **RAG Engine** | `core/flow/` | Retrieval-augmented generation engine with parsing, chunking, and vectorization pipeline |
-| **LLM Adapters** | `core/llm/` | LLM adapters supporting OpenAI, ZHIPU-AI, Tongyi-Qianwen, and more |
-| **GraphRAG** | `graphrag/` | Knowledge graph enhanced retrieval with entity extraction and graph reasoning |
-| **Workflow Engine** | `workflow_v2/` | Workflow orchestration engine with visual process design |
-| **Agent Framework** | `agent/` | Intelligent agent framework with tool invocation and multi-agent collaboration |
-| **DeepDoc Parser** | `deepdoc/` | Deep document parser supporting complex document structure recognition |
-| **MCP Server** | `mcp/` | Model Context Protocol server |
-
-### Extension Development
-
-#### Adding Custom Document Parser
-
-```python
-# core/app/custom.py
-from core.app.naive import Naive
-
-class CustomParser(Naive):
-    """Custom document parser"""
-    
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000, **kwargs):
-        # Implement custom parsing logic
-        sections = []
-        # ... parsing logic
-        return sections
-
-# Register in FACTORY
-FACTORY["custom"] = CustomParser
-```
-
-#### Adding Custom Agent Tool
-
-```python
-# agent/tools/custom_tool.py
-from agent.tools.base import BaseTool
-
-class CustomTool(BaseTool):
-    """Custom tool"""
-    name = "custom_tool"
-    description = "Tool description"
-    
-    def run(self, query: str, **kwargs):
-        # Implement tool logic
-        return result
-```
-
-#### Adding Custom Workflow Component
-
-```python
-# workflow_v2/component/custom_component.py
-from workflow_v2.component.base_component import BaseComponent
-
-class CustomComponent(BaseComponent):
-    """Custom workflow component"""
-    component_type = "custom"
-    
-    def execute(self, inputs: dict) -> dict:
-        # Implement component logic
-        return outputs
-```
-
-## 🏄 Contributing
-
-We welcome community contributions! Please follow this process:
-
-1. **Fork the project** - Create your branch
-2. **Local development** - Develop on a feature branch
-3. **Code standards** - Run `pre-commit` checks
-4. **Test verification** - Ensure tests pass
-5. **Submit PR** - Describe changes in detail
-
-### Commit Convention
+Before submitting changes, at least run:
 
 ```bash
-feat: Add user authentication module
-fix: Fix document parsing memory leak
-docs: Update API documentation
-style: Code formatting adjustments
-refactor: Refactor RAG retrieval logic
-perf: Optimize vector search performance
-test: Add unit tests
-chore: Update dependency versions
-```
-
-### Development Environment
-
-```bash
-# Install development tools
-uv add --dev pytest black flake8 mypy
-pre-commit install
-
-# Run tests
-pytest tests/
-
-# Code formatting
-black . --line-length 120
+uv run pytest
+ruff check
+ruff format
 ```
 
 ## 📄 License
 
-This project is open-sourced under the [Apache-2.0](LICENSE) license.
-
----
-
-<p align="center">
-  <strong>MultiRAG - Making Enterprise AI Development Easier</strong><br>
-  If this project helps you, please give us a ⭐️ Star!
-</p>
+This project is licensed under Apache-2.0.
