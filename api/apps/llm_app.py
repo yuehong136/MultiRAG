@@ -457,6 +457,17 @@ class ChatAgentAdapter:
                                     }
                                 }
 
+                            tool_logs = tool_call.get("server_logs", [])
+                            if tool_logs:
+                                yield {
+                                    "type": "tool_logs",
+                                    "content": {
+                                        "tool_name": tool_name,
+                                        "logs": tool_logs,
+                                        "call_id": call_id,
+                                    }
+                                }
+
                         previous_tool_count = len(use_tools)
 
                     if delta_ans:

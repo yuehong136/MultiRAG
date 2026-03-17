@@ -343,11 +343,18 @@ class Agent(LLM, ToolBase):
             nonlocal hist, use_tools, last_calling
             logging.info(f"{last_calling=} == {name=}")
             last_calling = name
+            tool_obj = self.toolcall_session.get_tool_obj(name)
             tool_response = await self.toolcall_session.tool_call_async(name, args)
+            tool_logs: list[str] = []
+            if isinstance(tool_obj, MCPToolCallSession):
+                meta = tool_obj.get_last_tool_call_meta()
+                if meta:
+                    tool_logs = list(meta.get("server_logs") or [])
             use_tools.append({
                 "name": name,
                 "arguments": args,
-                "results": tool_response
+                "results": tool_response,
+                "server_logs": tool_logs,
             })
             return name, tool_response
 

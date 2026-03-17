@@ -13,6 +13,11 @@ from typing import Any, Literal, Protocol
 MCP_INIT_TIMEOUT = int(os.environ.get("MCP_INIT_TIMEOUT", 15))
 # MCP 工具调用超时时间（秒），可通过环境变量配置
 MCP_TOOL_CALL_TIMEOUT = int(os.environ.get("MCP_TOOL_CALL_TIMEOUT", 60))
+# 是否将服务端日志拼接到工具结果字符串末尾。
+# 默认关闭，避免污染 LLM 的 tool observation；保留环境变量开关兼容旧行为。
+MCP_APPEND_SERVER_LOGS_TO_RESULT = os.environ.get(
+    "MCP_APPEND_SERVER_LOGS_TO_RESULT", "false"
+).lower() in {"1", "true", "yes", "on"}
 
 from typing_extensions import override
 
@@ -71,6 +76,8 @@ class MCPToolCallSession(ToolCallSession):
 
         # Phase 4: Accumulator for MCP logging/progress notifications during tool calls
         self._recent_logs: list[str] = []
+        # 最近一次工具调用的旁路元数据，供 API / SSE / 调试界面按需读取
+        self._last_tool_call_meta: dict[str, Any] | None = None
 
         self._event_loop = asyncio.new_event_loop()
         self._thread_pool = ThreadPoolExecutor(max_workers=1)
@@ -247,6 +254,7 @@ class MCPToolCallSession(ToolCallSession):
     async def _call_mcp_tool(self, name: str, arguments: dict[str, Any], request_timeout: float | int = MCP_TOOL_CALL_TIMEOUT) -> str:
         # Phase 4: 清空日志累积器，本次调用期间的服务端日志/进度会写入 _recent_logs
         self._recent_logs = []
+        self._last_tool_call_meta = None
 
         # Phase 4: 定义进度回调，将服务端 report_progress 收集到 _recent_logs
         # 如果服务端不调用 report_progress，此回调不会被触发（零开销）
@@ -264,6 +272,15 @@ class MCPToolCallSession(ToolCallSession):
         )
 
         if result.isError:
+            self._last_tool_call_meta = {
+                "tool_name": name,
+                "arguments": arguments,
+                "text": f"MCP server error: {result.content}",
+                "structured_content": getattr(result, "structuredContent", None),
+                "meta": getattr(result, "meta", None),
+                "server_logs": list(self._recent_logs),
+                "is_error": True,
+            }
             return f"MCP server error: {result.content}"
 
         parts: list[str] = []
@@ -291,9 +308,19 @@ class MCPToolCallSession(ToolCallSession):
             meta_str = ", ".join(f"{k}={v}" for k, v in result.meta.items())
             parts.append(f"(meta: {meta_str})")
 
-        # Phase 4: 附加本次调用期间收集的服务端日志/进度
-        # 兼容性：不发送通知的服务器 _recent_logs 为空，自动跳过
-        if self._recent_logs:
+        text_result = "\n".join(parts)
+        self._last_tool_call_meta = {
+            "tool_name": name,
+            "arguments": arguments,
+            "text": text_result,
+            "structured_content": getattr(result, "structuredContent", None),
+            "meta": getattr(result, "meta", None),
+            "server_logs": list(self._recent_logs),
+            "is_error": False,
+        }
+
+        # Phase 4: 兼容旧行为，按需附加本次调用期间收集的服务端日志/进度
+        if self._recent_logs and MCP_APPEND_SERVER_LOGS_TO_RESULT:
             parts.append("\n--- Server Logs ---")
             parts.extend(self._recent_logs[-10:])  # 最多附带 10 条，防止过长
 
@@ -337,6 +364,23 @@ class MCPToolCallSession(ToolCallSession):
     def is_ready(self) -> bool:
         """检查 MCP 会话是否已初始化完成且无错误"""
         return self._initialized.is_set() and self._init_error is None
+
+    def get_last_tool_call_meta(self) -> dict[str, Any] | None:
+        """获取最近一次工具调用的旁路元数据。
+
+        返回的结构保持宽松，避免扩大与 ragflow upstream 的签名差异。
+        当前包含：
+        - tool_name
+        - arguments
+        - text
+        - structured_content
+        - meta
+        - server_logs
+        - is_error
+        """
+        if self._last_tool_call_meta is None:
+            return None
+        return dict(self._last_tool_call_meta)
 
     @property
     def server_instructions(self) -> str | None:
