@@ -7,7 +7,7 @@ from io import BytesIO
 from typing import Any, Literal, Annotated
 
 import xxhash
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator, Discriminator, model_validator
 from sqlalchemy.exc import OperationalError
@@ -16,7 +16,7 @@ from urllib.parse import quote
 
 from api.constants import FILE_NAME_LEN_LIMIT
 from api.db import FileType
-from api.db.db_models import File as FileModel, Task, get_db
+from api.db.db_models import APIToken, File as FileModel, Task, get_db
 from api.db.services.document_service import DocumentService
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.file2document_service import File2DocumentService
@@ -455,6 +455,42 @@ def download_document(
         )
     except Exception:
         return get_error_data_result(retmsg="This document has been deleted")
+
+
+@router.get("/documents/{document_id}", summary="按文档ID下载文档")
+def download_doc(
+    document_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    仅通过文档ID下载文档（使用API Token认证）
+    """
+    token = request.headers.get("Authorization", "").split()
+    if len(token) != 2:
+        return get_error_data_result(retmsg="Authorization is not valid!")
+    token = token[1]
+    objs = APIToken.query(db, beta=token)
+    if not objs:
+        return get_error_data_result(retmsg="Authentication error: API key is invalid!")
+
+    if not document_id:
+        return get_error_data_result(retmsg="Specify document_id please.")
+    doc = DocumentService.query(db, id=document_id)
+    if not doc:
+        return get_error_data_result(retmsg=f"The dataset not own the document {document_id}.")
+    # The process of downloading
+    doc_id, doc_location = File2DocumentService.get_storage_address(db, doc_id=document_id)
+    file_stream = settings.STORAGE_IMPL.get(doc_id, doc_location)
+    if not file_stream:
+        return construct_json_result(message="This file is empty.", code=RetCode.DATA_ERROR)
+    file = BytesIO(file_stream)
+    encoded_filename = quote(doc[0].name)
+    return StreamingResponse(
+        file,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"}
+    )
 
 
 @router.get("/datasets/{dataset_id}/documents", summary="获取文档列表")

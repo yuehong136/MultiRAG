@@ -2761,7 +2761,7 @@ def rename(
 def get_document(
         doc_id: str,
         db: Session = Depends(get_db),
-        # user=Depends(manager)
+        user=Depends(manager)
 ):
     try:
         doc = DocumentService.get_by_id(db, doc_id)

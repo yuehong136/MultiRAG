@@ -339,7 +339,7 @@ async def completion(
 
     # 记录用户消息
     message_id = str(uuid4())
-    conv.message.append({"role": "user", "content": query, "id": message_id})
+    conv.message.append({"role": "user", "content": query, "id": message_id, "files": files})
 
     # 流式运行
     txt = ""
