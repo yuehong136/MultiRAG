@@ -5,6 +5,10 @@ async def main():
     try:
         # To access MultiRAG server in `host` mode, attach a Bearer token:
         # async with Client("http://localhost:9382/mcp/", auth="multirag-xxxxx") as client:
+        # Or pass a custom API key header:
+        # from fastmcp.client.transports import StreamableHttpTransport
+        # transport = StreamableHttpTransport("http://localhost:9382/mcp/", headers={"x-api-key": "multirag-xxxxx"})
+        # async with Client(transport=transport) as client:
 
         async with Client("http://localhost:9382/mcp/") as client:
             tools = await client.list_tools()

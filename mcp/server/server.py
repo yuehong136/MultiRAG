@@ -1,4 +1,3 @@
-import contextvars
 import json
 import logging
 import random
@@ -16,6 +15,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from strenum import StrEnum
 
 from fastmcp import Context, FastMCP
+from fastmcp.server.dependencies import get_http_headers
 from fastmcp.server.http import RequestContextMiddleware, create_sse_app, create_streamable_http_app
 
 
@@ -36,17 +36,50 @@ TRANSPORT_SSE_ENABLED = True
 TRANSPORT_STREAMABLE_HTTP_ENABLED = True
 JSON_RESPONSE = True
 
-# Per-request API key storage for host mode
-_request_api_key: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "_request_api_key", default=None
-)
+def _extract_token_from_headers(headers: dict[str, str]) -> str | None:
+    """Extract bearer token or API key from HTTP headers (string keys, lowercase)."""
+    auth = headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        token = auth[7:].strip()
+        if token:
+            return token
+
+    for key in ("api_key", "x-api-key"):
+        val = headers.get(key, "")
+        if val:
+            return val.strip()
+
+    return None
+
+
+def _extract_token_from_scope(scope: dict) -> str | None:
+    """Extract bearer token or API key from ASGI scope headers (bytes keys)."""
+    raw_headers = dict(scope.get("headers", []))
+
+    auth_header = raw_headers.get(b"authorization", b"")
+    if auth_header.lower().startswith(b"bearer "):
+        token = auth_header[7:].strip().decode(errors="ignore")
+        if token:
+            return token
+
+    for key in (b"api_key", b"x-api-key"):
+        val = raw_headers.get(key)
+        if val:
+            return val.decode(errors="ignore").strip()
+
+    return None
 
 
 def _resolve_api_key() -> str:
-    """Resolve the API key for the current request based on launch mode."""
+    """Resolve the API key for the current request based on launch mode.
+
+    In self-host mode returns the static HOST_API_KEY.
+    In host mode extracts the per-request token via fastmcp ``get_http_headers()``.
+    """
     if MODE == LaunchMode.SELF_HOST:
         return HOST_API_KEY
-    token = _request_api_key.get()
+    headers = get_http_headers()
+    token = _extract_token_from_headers(headers)
     if not token:
         raise ValueError("MultiRAG API key or Bearer token is required.")
     return token
@@ -364,9 +397,12 @@ class MultiRAGConnector:
 # ---------------------------------------------------------------------------
 class AuthMiddleware:
     """
+    ASGI-level gate that runs before FastMCP's ``RequestContextMiddleware``.
+
     self-host mode: validates that the Bearer token matches HOST_API_KEY.
-    host mode: extracts the Bearer token and stores it in a ContextVar
-               for per-request forwarding to the backend API.
+    host mode: ensures a valid Bearer token or API key header is present.
+               The actual token is later read inside tool handlers via
+               ``get_http_headers()`` (fastmcp dependency injection).
     """
 
     def __init__(self, app: ASGIApp):
@@ -379,14 +415,7 @@ class AuthMiddleware:
 
         path = scope["path"]
         if path.startswith("/messages/") or path.startswith("/sse") or path.startswith("/mcp"):
-            headers = dict(scope["headers"])
-            token: str | None = None
-
-            auth_header = headers.get(b"authorization")
-            if auth_header and auth_header.startswith(b"Bearer "):
-                token = auth_header.removeprefix(b"Bearer ").strip().decode(errors="ignore")
-            elif b"api_key" in headers:
-                token = headers[b"api_key"].decode(errors="ignore")
+            token = _extract_token_from_scope(scope)
 
             if not token:
                 response = JSONResponse({"error": "Missing or invalid authorization header"}, status_code=401)
@@ -398,13 +427,7 @@ class AuthMiddleware:
                 await response(scope, receive, send)
                 return
 
-            reset_token = _request_api_key.set(token)
-            try:
-                await self.app(scope, receive, send)
-            finally:
-                _request_api_key.reset(reset_token)
-        else:
-            await self.app(scope, receive, send)
+        await self.app(scope, receive, send)
 
 
 # ---------------------------------------------------------------------------
@@ -636,9 +659,6 @@ def main(base_url, host, port, mode, api_key, transport_sse_enabled, transport_s
     if MODE == LaunchMode.SELF_HOST and not HOST_API_KEY:
         raise click.UsageError("--api-key is required when --mode is 'self-host'")
 
-    if TRANSPORT_STREAMABLE_HTTP_ENABLED and MODE == LaunchMode.HOST:
-        raise click.UsageError("The --host mode is not supported with streamable-http transport yet.")
-
     if not TRANSPORT_STREAMABLE_HTTP_ENABLED and JSON_RESPONSE:
         JSON_RESPONSE = False
 
@@ -697,7 +717,7 @@ if __name__ == "__main__":
             --base-url=http://127.0.0.1:8123 \
             --mode=self-host --api-key=multirag-xxxxx
 
-    2. Host mode (multi-tenant, self-host only, clients must provide Authorization headers):
+    2. Host mode (multi-tenant, clients must provide Authorization headers):
         uv run mcp/server/server.py --host=127.0.0.1 --port=9382 \
             --base-url=http://127.0.0.1:8123 \
             --mode=host
