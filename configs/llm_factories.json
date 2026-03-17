@@ -1599,9 +1599,30 @@
         {
             "name": "StepFun",
             "logo": "",
-            "tags": "LLM",
+            "tags": "LLM,IMAGE2TEXT,SPEECH2TEXT,TTS",
             "status": "1",
             "llm": [
+                {
+                    "llm_name": "step-3",
+                    "tags": "LLM,CHAT,IMAGE2TEXT,64k",
+                    "max_tokens": 65536,
+                    "mdl_type": "image2text",
+                    "is_tools": true
+                },
+                {
+                    "llm_name": "step-2-mini",
+                    "tags": "LLM,CHAT,32k",
+                    "max_tokens": 32768,
+                    "mdl_type": "chat",
+                    "is_tools": true
+                },
+                {
+                    "llm_name": "step-2-16k",
+                    "tags": "LLM,CHAT,16k",
+                    "max_tokens": 16384,
+                    "mdl_type": "chat",
+                    "is_tools": true
+                },
                 {
                     "llm_name": "step-1-8k",
                     "tags": "LLM,CHAT,8k",
@@ -1631,11 +1652,60 @@
                     "is_tools": true
                 },
                 {
+                    "llm_name": "step-r1-v-mini",
+                    "tags": "LLM,CHAT,IMAGE2TEXT,100k",
+                    "max_tokens": 102400,
+                    "mdl_type": "image2text",
+                    "is_tools": true
+                },
+                {
                     "llm_name": "step-1v-8k",
                     "tags": "LLM,CHAT,IMAGE2TEXT",
                     "max_tokens": 8192,
                     "mdl_type": "image2text",
                     "is_tools": true
+                },
+                {
+                    "llm_name": "step-1v-32k",
+                    "tags": "LLM,CHAT,IMAGE2TEXT,32k",
+                    "max_tokens": 32768,
+                    "mdl_type": "image2text",
+                    "is_tools": true
+                },
+                {
+                    "llm_name": "step-1o-vision-32k",
+                    "tags": "LLM,CHAT,IMAGE2TEXT,32k",
+                    "max_tokens": 32768,
+                    "mdl_type": "image2text",
+                    "is_tools": true
+                },
+                {
+                    "llm_name": "step-1o-turbo-vision",
+                    "tags": "LLM,CHAT,IMAGE2TEXT,32k",
+                    "max_tokens": 32768,
+                    "mdl_type": "image2text",
+                    "is_tools": true
+                },
+                {
+                    "llm_name": "step-tts-mini",
+                    "tags": "TTS,1000c",
+                    "max_tokens": 1000,
+                    "mdl_type": "tts",
+                    "is_tools": false
+                },
+                {
+                    "llm_name": "step-tts-vivid",
+                    "tags": "TTS,1000c",
+                    "max_tokens": 1000,
+                    "mdl_type": "tts",
+                    "is_tools": false
+                },
+                {
+                    "llm_name": "step-asr",
+                    "tags": "SPEECH2TEXT,100MB",
+                    "max_tokens": 32768,
+                    "mdl_type": "speech2text",
+                    "is_tools": false
                 }
             ]
         },
