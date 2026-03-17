@@ -1709,38 +1709,83 @@ async def knowledge_graph(doc_id: str, db: Session = Depends(get_db), user=Depen
     }
     ```
     """
-    req = {
-        "doc_ids":[doc_id],
-        "knowledge_graph_kwd": ["graph", "mind_map"]
-    }
-    tenant_id = DocumentService.get_tenant_id(db, doc_id)
-    kb_names = KnowledgebaseService.get_kb_ids(db, tenant_id)
-    sres = await settings.retriever.search(req, search.index_name_one(tenant_id, kb_names))
     obj = {"graph": {}, "mind_map": {}}
-    for id in sres.ids[:2]:
-        ty = sres.field[id]["knowledge_graph_kwd"]
-        try:
-            content_json = json.loads(sres.field[id]["content_with_weight"])
-        except Exception:
-            continue
+    doc = DocumentService.get_by_id(db, doc_id)
+    if not doc:
+        return get_json_result(data=obj)
 
-        if ty == 'mind_map':
-            node_dict = {}
+    kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
+    if not kb:
+        return get_json_result(data=obj)
 
-            def repeat_deal(content_json, node_dict):
-                if 'id' in content_json:
-                    if content_json['id'] in node_dict:
-                        node_name = content_json['id']
-                        content_json['id'] += f"({node_dict[content_json['id']]})"
-                        node_dict[node_name] += 1
-                    else:
-                        node_dict[content_json['id']] = 1
-                if 'children' in content_json and content_json['children']:
-                    for item in content_json['children']:
-                        repeat_deal(item, node_dict)
+    index_name = search.index_name_one(kb.tenant_id, kb.name)
+    if not settings.docStoreConn.index_exist(index_name, doc.kb_id):
+        return get_json_result(data=obj)
 
-            repeat_deal(content_json, node_dict)
+    select_fields = ["knowledge_graph_kwd", "content_with_weight"]
+    graph_res = await thread_pool_exec(
+        settings.docStoreConn.search,
+        select_fields,
+        [],
+        {
+            "kb_id": doc.kb_id,
+            "knowledge_graph_kwd": ["subgraph"],
+            "source_id": doc_id,
+            "removed_kwd": "N",
+        },
+        [],
+        OrderByExpr(),
+        0,
+        1,
+        index_name,
+        [doc.kb_id],
+    )
+    mind_map_res = await thread_pool_exec(
+        settings.docStoreConn.search,
+        select_fields,
+        [],
+        {
+            "kb_id": doc.kb_id,
+            "doc_id": doc_id,
+            "knowledge_graph_kwd": ["mind_map"],
+        },
+        [],
+        OrderByExpr(),
+        0,
+        1,
+        index_name,
+        [doc.kb_id],
+    )
+    graph_fields = settings.docStoreConn.get_fields(graph_res, select_fields)
+    mind_map_fields = settings.docStoreConn.get_fields(mind_map_res, select_fields)
 
-        obj[ty] = content_json
+    for search_fields in (graph_fields, mind_map_fields):
+        for _, field in search_fields.items():
+            if not isinstance(field, dict):
+                continue
+            ty = field["knowledge_graph_kwd"]
+            try:
+                content_json = json.loads(field["content_with_weight"])
+            except Exception:
+                continue
+
+            if ty == "mind_map":
+                node_dict = {}
+
+                def repeat_deal(content_json, node_dict):
+                    if 'id' in content_json:
+                        if content_json['id'] in node_dict:
+                            node_name = content_json['id']
+                            content_json['id'] += f"({node_dict[content_json['id']]})"
+                            node_dict[node_name] += 1
+                        else:
+                            node_dict[content_json['id']] = 1
+                    if 'children' in content_json and content_json['children']:
+                        for item in content_json['children']:
+                            repeat_deal(item, node_dict)
+
+                repeat_deal(content_json, node_dict)
+
+            obj["graph" if ty == "subgraph" else ty] = content_json
 
     return get_json_result(data=obj)
