@@ -34,12 +34,13 @@ from core.nlp import is_english
 
 
 class InfinityConnectionBase(DocStoreConnection):
-    def __init__(self, mapping_file_name: str = "infinity_mapping.json", logger_name: str = "multirag.infinity_conn"):
+    def __init__(self, mapping_file_name: str = "infinity_mapping.json", logger_name: str = "multirag.infinity_conn", table_name_prefix: str = "multirag_"):
         from common.doc_store.infinity_conn_pool import INFINITY_CONN
 
         self.dbName = settings.INFINITY.get("db_name", "default_db")
         self.mapping_file_name = mapping_file_name
         self.logger = logging.getLogger(logger_name)
+        self.table_name_prefix = table_name_prefix
         infinity_uri = settings.INFINITY["uri"]
         if ":" in infinity_uri:
             host, port = infinity_uri.split(":")
@@ -78,6 +79,9 @@ class InfinityConnectionBase(DocStoreConnection):
             schema = json.load(f)
         table_names = inf_db.list_tables().table_names
         for table_name in table_names:
+            if not table_name.startswith(self.table_name_prefix):
+                # Skip tables not created by me
+                continue
             inf_table = inf_db.get_table(table_name)
             index_names = inf_table.list_indexes().index_names
             if "q_vec_idx" not in index_names:
