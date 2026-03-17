@@ -2579,8 +2579,9 @@ async def do_handle_task(db, task):
     task_tenant_id = task["tenant_id"]
     task_embedding_id = task["embd_id"]
     task_language = task["language"]
-    task_llm_id = (task.get("parser_config") or {}).get("llm_id") or task["llm_id"]
-    task["llm_id"] = task_llm_id
+    doc_task_llm_id = (task.get("parser_config") or {}).get("llm_id") or task["llm_id"]
+    kb_task_llm_id = (task.get("kb_parser_config") or {}).get("llm_id") or task["llm_id"]
+    task["llm_id"] = kb_task_llm_id
     task_dataset_id = task.get("kb_id")  # analyze_v2 之外的任务必须有 kb_id
     task_doc_id = task["doc_id"]
     task_document_name = task.get("name", "unknown")
@@ -2654,7 +2655,7 @@ async def do_handle_task(db, task):
             return
 
         # bind detached LLM bundles for RAPTOR to avoid sharing the business session
-        chat_model = LLMBundle(None, task_tenant_id, LLMType.CHAT, llm_name=task_llm_id, lang=task_language)
+        chat_model = LLMBundle(None, task_tenant_id, LLMType.CHAT, llm_name=kb_task_llm_id, lang=task_language)
         raptor_embedding_model = LLMBundle(None, task_tenant_id, LLMType.EMBEDDING, llm_name=task_embedding_id, lang=task_language)
         # run RAPTOR
         async with kg_limiter:
@@ -2683,7 +2684,7 @@ async def do_handle_task(db, task):
 
         graphrag_conf = kb_parser_config.get("graphrag", {})
         start_ts = timer()
-        chat_model = LLMBundle(db, task_tenant_id, LLMType.CHAT, llm_name=task_llm_id, lang=task_language)
+        chat_model = LLMBundle(db, task_tenant_id, LLMType.CHAT, llm_name=kb_task_llm_id, lang=task_language)
         with_resolution = graphrag_conf.get("resolution", False)
         with_community = graphrag_conf.get("community", False)
         async with kg_limiter:
@@ -2708,6 +2709,7 @@ async def do_handle_task(db, task):
         return
     else:
         # Standard chunking methods
+        task['llm_id'] = doc_task_llm_id
         start_ts = timer()
         chunks = await build_chunks(task, progress_callback, db)
         logging.info("Build document {}: {:.2f}s".format(task_document_name, timer() - start_ts))
