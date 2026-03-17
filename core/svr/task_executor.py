@@ -250,6 +250,8 @@ def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="
         if cancel:
             raise TaskCanceledException(msg)
         logging.info(f"set_progress({task_id}), progress: {prog}, progress_msg: {msg}, enable_sse: {enable_sse}")
+    except TaskCanceledException:
+        raise
     except NoResultFound:
         logging.warning("set_progress(%s): 记录不存在，无法更新进度", task_id)
     except Exception as e:
@@ -1083,6 +1085,8 @@ async def run_dataflow(db: Session, task: dict):
             for i, ck in enumerate(chunks):
                 v = vects[i].tolist()
                 ck["q_%d_vec" % len(v)] = v
+        except TaskCanceledException:
+            raise
         except Exception as e:
             set_progress(db, task_id, prog=-1, msg=f"[ERROR]: {e}")
             PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
@@ -2720,6 +2724,8 @@ async def do_handle_task(db, task):
         start_ts = timer()
         try:
             token_count = await embedding(chunks, embedding_model, task_parser_config, progress_callback)
+        except TaskCanceledException:
+            raise
         except Exception as e:
             error_message = "Generate embedding error:{}".format(str(e))
             progress_callback(-1, error_message)
@@ -2742,7 +2748,8 @@ async def do_handle_task(db, task):
 
     async def _maybe_insert_chunks(_chunks):
         if has_canceled(task_id):
-            return True
+            progress_callback(-1, msg="Task has been canceled.")
+            return False
         insert_result = await insert_chunks(db, task_id, task_tenant_id, task_dataset_id, _chunks, progress_callback,
                                 collection_name, schema)
         return bool(insert_result)
@@ -2859,6 +2866,12 @@ async def handle_task():
                 # "handle_task done" 日志也清理 base64
                 task_done_dict = copy.deepcopy(task_dict)  # 复用之前清理过的 task_dict
                 logging.info(f"handle_task done for task {json.dumps(task_done_dict)}")
+            except TaskCanceledException as e:
+                DONE_TASKS += 1
+                CURRENT_TASKS.pop(task_id, None)
+                logging.info(
+                    f"handle_task canceled for task {task_id}: {getattr(e, 'msg', str(e))}"
+                )
             except Exception as e:
                 FAILED_TASKS += 1
                 CURRENT_TASKS.pop(task_id, None)

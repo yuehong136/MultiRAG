@@ -2642,7 +2642,9 @@ def run(
                                              code=RetCode.ARGUMENT_ERROR)
 
             if str(req["run"]) == TaskStatus.CANCEL.value:
-                if str(d["run"]) == TaskStatus.RUNNING.value:
+                tasks = list(TaskService.query(db, doc_id=id))
+                has_unfinished_task = any((task.progress or 0) < 1 for task in tasks)
+                if str(d["run"]) in [TaskStatus.RUNNING.value, TaskStatus.CANCEL.value] or has_unfinished_task:
                     cancel_all_task_of(db, id)
                 else:
                     return get_data_error_result(retmsg="Cannot cancel a task that is not in RUNNING status")
