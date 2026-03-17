@@ -52,14 +52,23 @@ RUN --mount=type=cache,id=multirag_apt,target=/var/cache/apt,sharing=locked \
     apt install -y libatk-bridge2.0-0 && \
     apt install -y libpython3-dev libgtk-4-1 libnss3 xdg-utils libgbm-dev && \
     apt install -y libjemalloc-dev && \
-    apt install -y nginx unzip curl wget git vim less && \
+    apt install -y gnupg unzip curl wget git vim less && \
     apt install -y ghostscript && \
     apt install -y pandoc && \
     apt install -y texlive && \
     apt install -y fonts-freefont-ttf fonts-noto-cjk && \
     apt install -y postgresql-client && \
     apt install -y fonts-wqy-zenhei fonts-wqy-microhei && \
-    apt install -y lsb-release build-essential gcc libdatrie-dev net-tools tcl-dev ffmpeg gpg
+    apt install -y lsb-release build-essential gcc libdatrie-dev net-tools tcl-dev ffmpeg
+
+ARG NGINX_VERSION=1.29.5-1~noble
+RUN --mount=type=cache,id=multirag_apt,target=/var/cache/apt,sharing=locked \
+    mkdir -p /etc/apt/keyrings && \
+    curl -fsSL https://nginx.org/keys/nginx_signing.key | gpg --dearmor -o /etc/apt/keyrings/nginx-archive-keyring.gpg && \
+    echo "deb [signed-by=/etc/apt/keyrings/nginx-archive-keyring.gpg] https://nginx.org/packages/mainline/ubuntu/ noble nginx" > /etc/apt/sources.list.d/nginx.list && \
+    apt update && \
+    apt install -y nginx=${NGINX_VERSION} && \
+    apt-mark hold nginx
 
 # 安装 MSSQL ODBC 驱动 (pyodbc 依赖)
 # macOS ARM64 环境安装 msodbcsql18，x86_64 环境安装 msodbcsql17
