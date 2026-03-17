@@ -28,16 +28,24 @@ from common.float_utils import get_float
 from common import settings
 from common.misc_utils import get_uuid
 from core.nlp.search import Dealer, index_name
+from core.graphrag.llm_protocol import GraphRAGCompletionLLM, unwrap_graphrag_chat_response
 from core.graphrag.query_analyze_prompt import PROMPTS
 from core.graphrag.utils import get_entity_type2samples, get_llm_cache, set_llm_cache, get_relation
 
 
 class KGSearch(Dealer):
-    async def _chat(self, llm_bdl, system, history, gen_conf):
+    async def _chat(
+        self,
+        llm_bdl: GraphRAGCompletionLLM,
+        system: str,
+        history: list[dict[str, str]],
+        gen_conf: dict,
+    ):
         response = get_llm_cache(llm_bdl.llm_name, system, history, gen_conf)
         if response:
             return response
         response = await llm_bdl.async_chat(system, history, gen_conf)
+        response = unwrap_graphrag_chat_response(response)
         if response.find("**ERROR**") >= 0:
             raise Exception(response)
         set_llm_cache(llm_bdl.llm_name, system, response, history, gen_conf)
@@ -57,7 +65,7 @@ class KGSearch(Dealer):
                 normalized.extend([name for name in idx if isinstance(name, str) and name])
         return normalized
 
-    async def query_rewrite(self, llm, question, idxnms, kb_ids):
+    async def query_rewrite(self, llm: GraphRAGCompletionLLM, question, idxnms, kb_ids):
         idxnms = await self._normalize_idx_names(idxnms)
         ty2ents = await get_entity_type2samples(idxnms, kb_ids)
         hint_prompt = PROMPTS["minirag_query2kwd"].format(query=question,

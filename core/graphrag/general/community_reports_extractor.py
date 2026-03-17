@@ -21,7 +21,7 @@ from common.token_utils import num_tokens_from_string
 from common.exceptions import TaskCanceledException
 from common.connection_utils import timeout
 from common.misc_utils import thread_pool_exec
-from core.llm.chat import Base as CompletionLLM
+from core.graphrag.llm_protocol import GraphRAGCompletionLLM
 from core.graphrag.general import leiden
 from core.graphrag.general.community_report_prompt import COMMUNITY_REPORT_PROMPT
 from core.graphrag.general.extractor import Extractor
@@ -46,7 +46,7 @@ class CommunityReportsExtractor(Extractor):
 
     def __init__(
             self,
-            llm_invoker: CompletionLLM,
+            llm_invoker: GraphRAGCompletionLLM,
             max_report_length: int | None = None,
     ):
         super().__init__(llm_invoker)

@@ -28,7 +28,7 @@ from api.db.services.task_service import has_canceled
 from common.misc_utils import thread_pool_exec
 from common.exceptions import TaskCanceledException
 from core.nlp import is_english
-from core.llm.chat import Base as CompletionLLM
+from core.graphrag.llm_protocol import GraphRAGCompletionLLM
 from core.graphrag.utils import perform_variable_replacements, chat_limiter, GraphChange
 from core.graphrag.entity_resolution_prompt import ENTITY_RESOLUTION_PROMPT
 from core.graphrag.general.extractor import Extractor
@@ -56,7 +56,7 @@ class EntityResolution(Extractor):
 
     def __init__(
             self,
-            llm_invoker: CompletionLLM,
+            llm_invoker: GraphRAGCompletionLLM,
     ):
         super().__init__(llm_invoker)
         """Init method definition."""
@@ -293,4 +293,3 @@ class EntityResolution(Extractor):
             return len(a & b) > 1
 
         return len(a & b)*1./max_l >= 0.8
-

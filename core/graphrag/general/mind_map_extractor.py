@@ -18,6 +18,7 @@ import asyncio
 import logging
 import collections
 import re
+from collections.abc import Mapping
 from typing import Any
 from dataclasses import dataclass
 from functools import reduce
@@ -26,7 +27,7 @@ import markdown_to_json
 
 from common.misc_utils import thread_pool_exec
 from common.token_utils import num_tokens_from_string
-from core.llm.chat import Base as CompletionLLM
+from core.graphrag.llm_protocol import GraphRAGCompletionLLM
 from core.graphrag.general.extractor import Extractor
 from core.graphrag.general.mind_map_prompt import MIND_MAP_EXTRACTION_PROMPT
 from core.graphrag.utils import ErrorHandlerFn, perform_variable_replacements, chat_limiter
@@ -45,7 +46,7 @@ class MindMapExtractor(Extractor):
 
     def __init__(
         self,
-        llm_invoker: CompletionLLM,
+        llm_invoker: GraphRAGCompletionLLM,
         prompt: str | None = None,
         input_text_key: str | None = None,
         on_error: ErrorHandlerFn | None = None,
@@ -60,7 +61,11 @@ class MindMapExtractor(Extractor):
     def _key(self, k):
         return re.sub(r"\*+", "", k)
 
-    def _be_children(self, obj: dict, keyset: set):
+    def _be_children(
+        self,
+        obj: Mapping[str, Any] | list[str] | str,
+        keyset: set[str],
+    ) -> list[dict[str, Any]]:
         if isinstance(obj, str):
             obj = [obj]
         if isinstance(obj, list):
@@ -149,34 +154,44 @@ class MindMapExtractor(Extractor):
 
         return d2
 
-    def _list_to_kv(self, data):
+    def _list_to_kv(self, data: dict[str, Any]) -> dict[str, Any]:
         for key, value in data.items():
             if isinstance(value, dict):
                 self._list_to_kv(value)
             elif isinstance(value, list):
                 new_value = {}
+                has_nested_list = False
                 for i in range(len(value)):
                     if isinstance(value[i], list) and i > 0:
+                        has_nested_list = True
                         new_value[value[i - 1]] = value[i][0]
-                data[key] = new_value
+                data[key] = new_value if has_nested_list else value
             else:
                 continue
         return data
 
-    def _todict(self, layer: collections.OrderedDict):
-        to_ret = layer
+    def _todict(self, layer: Mapping[str, Any] | list[Any] | str) -> dict[str, Any] | list[Any] | str:
         if isinstance(layer, collections.OrderedDict):
-            to_ret = dict(layer)
+            layer = dict(layer)
 
-        try:
-            for key, value in to_ret.items():
-                to_ret[key] = self._todict(value)
-        except AttributeError:
-            pass
+        if isinstance(layer, Mapping):
+            to_ret = {key: self._todict(value) for key, value in layer.items()}
+            return self._list_to_kv(to_ret)
 
-        return self._list_to_kv(to_ret)
+        if isinstance(layer, list):
+            return [
+                self._todict(value) if isinstance(value, (collections.OrderedDict, Mapping, list)) else value
+                for value in layer
+            ]
 
-    async def _process_document(self, text: str, prompt_variables: dict[str, str], out_res) -> str:
+        return layer
+
+    async def _process_document(
+        self,
+        text: str,
+        prompt_variables: dict[str, str],
+        out_res: list[dict[str, Any] | list[Any] | str],
+    ) -> None:
         variables = {
             **prompt_variables,
             self._input_text_key: text,
