@@ -46,7 +46,8 @@ def chunk(filename, binary, tenant_id, lang, callback=None, **kwargs):
             try:
                 doc.update({"doc_type_kwd": "video"})
                 cv_mdl = LLMBundle(db, tenant_id, llm_type=LLMType.IMAGE2TEXT, lang=lang)
-                ans = asyncio.run(cv_mdl.async_chat(system="", history=[], gen_conf={}, video_bytes=binary, filename=filename))
+                video_prompt = str(parser_config.get("video_prompt", "") or "")
+                ans = asyncio.run(cv_mdl.async_chat(system="", history=[], gen_conf={}, video_bytes=binary, filename=filename, video_prompt=video_prompt))
                 callback(0.8, "CV LLM respond: %s ..." % ans[:32])
                 ans += "\n" + ans
                 tokenize(doc, ans, eng)

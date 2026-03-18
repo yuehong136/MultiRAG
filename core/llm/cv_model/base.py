@@ -6,13 +6,15 @@
 @date：2024/7/22 9:30
 @desc:
 """
+import base64
+import logging
 import os
 from abc import ABC
+from io import BytesIO
+from typing import Any
+
 from openai import OpenAI
 from core.nlp import is_english
-from typing import Any
-import base64
-from io import BytesIO
 
 from core.prompts.generator import vision_llm_describe_prompt
 
@@ -55,12 +57,11 @@ class Base(ABC):
 
         pmpt = [{"type": "text", "text": text}]
         for img in images:
-            pmpt.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": img if isinstance(img, str) and img.startswith("data:") else f"data:image/png;base64,{img}"
-                }
-            })
+            try:
+                pmpt.append({"type": "image_url", "image_url": {"url": self._normalize_image(img)}})
+            except Exception:
+                logging.warning("[%s] Skip invalid image input in request payload.", self.__class__.__name__)
+                continue
         return pmpt
 
     def chat(self, system, history, gen_conf, images=None, **kwargs):
@@ -132,6 +133,61 @@ class Base(ABC):
             b64 = base64.b64encode(data).decode("utf-8")
             mime = f"image/{fmt.lower()}"
         return f"data:{mime};base64,{b64}"
+
+    @staticmethod
+    def _blob_to_data_url(blob, mime_type="image/png"):
+        if isinstance(blob, str):
+            blob = blob.strip()
+            if blob.startswith("data:") or blob.startswith("http://") or blob.startswith("https://") or blob.startswith("file://"):
+                return blob
+            return f"data:{mime_type};base64,{blob}"
+        if isinstance(blob, BytesIO):
+            blob = blob.getvalue()
+        if isinstance(blob, memoryview):
+            blob = blob.tobytes()
+        if isinstance(blob, bytearray):
+            blob = bytes(blob)
+        if isinstance(blob, bytes):
+            b64 = base64.b64encode(blob).decode("utf-8")
+            return f"data:{mime_type};base64,{b64}"
+        return None
+
+    def _normalize_image(self, image):
+        if isinstance(image, dict):
+            inline_data = image.get("inline_data")
+            if isinstance(inline_data, dict):
+                mime = inline_data.get("mime_type") or "image/png"
+                data_url = self._blob_to_data_url(inline_data.get("data"), mime)
+                if data_url:
+                    return data_url
+
+            image_url = image.get("image_url")
+            if isinstance(image_url, dict):
+                data_url = self._blob_to_data_url(image_url.get("url"), image.get("mime_type") or "image/png")
+                if data_url:
+                    return data_url
+            if isinstance(image_url, str):
+                data_url = self._blob_to_data_url(image_url, image.get("mime_type") or "image/png")
+                if data_url:
+                    return data_url
+
+            if "url" in image:
+                data_url = self._blob_to_data_url(image.get("url"), image.get("mime_type") or "image/png")
+                if data_url:
+                    return data_url
+
+            mime = image.get("mime_type") or image.get("media_type") or "image/png"
+            for key in ("blob", "data"):
+                if key in image:
+                    data_url = self._blob_to_data_url(image.get(key), mime)
+                    if data_url:
+                        return data_url
+
+        if isinstance(image, (bytes, bytearray, memoryview, BytesIO)):
+            return self.image2base64(image)
+        if isinstance(image, str):
+            return self._blob_to_data_url(image, "image/png")
+        return self.image2base64(image)
 
     def prompt(self, b64):
         return [

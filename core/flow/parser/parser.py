@@ -154,6 +154,7 @@ class ParserParam(ProcessParamBase):
                     "mkv"
                 ],
                 "output_format": "text",
+                "prompt": "",
             },
         }
 
@@ -667,7 +668,8 @@ class Parser(ProcessBase):
         self.set_output("output_format", conf["output_format"])
         with db_connection() as db:
             cv_mdl = LLMBundle(db, self._canvas.get_tenant_id(), LLMType.IMAGE2TEXT, llm_name=conf["llm_id"])
-        txt = asyncio.run(cv_mdl.async_chat(system="", history=[], gen_conf={}, video_bytes=blob, filename=name))
+        video_prompt = str(conf.get("prompt", "") or "")
+        txt = asyncio.run(cv_mdl.async_chat(system="", history=[], gen_conf={}, video_bytes=blob, filename=name, video_prompt=video_prompt))
 
         self.set_output("text", txt)
 

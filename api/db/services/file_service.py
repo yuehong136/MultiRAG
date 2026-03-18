@@ -653,9 +653,9 @@ class FileService(CommonService):
         return structured(file.filename, filename_type(file.filename), file_content, file.content_type)
 
     @staticmethod
-    def get_files(files: list[dict] | None) -> list[str]:
+    def get_files(files: list[dict] | None, raw: bool = False) -> list[str] | tuple[list[str], list[bytes]]:
         if not files:
-            return []
+            return ([], []) if raw else []
 
         def image_to_base64(file):
             return "data:{};base64,{}".format(
@@ -665,9 +665,13 @@ class FileService(CommonService):
 
         exe = ThreadPoolExecutor(max_workers=5)
         threads = []
+        imgs = []
         for file in files:
             if file["mime_type"].find("image") >= 0:
-                threads.append(exe.submit(image_to_base64, file))
+                if raw:
+                    imgs.append(FileService.get_blob(file["created_by"], file["id"]))
+                else:
+                    threads.append(exe.submit(image_to_base64, file))
                 continue
             threads.append(exe.submit(
                 FileService.parse,
@@ -676,4 +680,8 @@ class FileService(CommonService):
                 True,
                 file["created_by"]
             ))
-        return [th.result() for th in threads]
+
+        if raw:
+            return [th.result() for th in threads], imgs
+        else:
+            return [th.result() for th in threads]

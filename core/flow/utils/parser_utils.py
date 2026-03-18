@@ -823,23 +823,27 @@ class FlowParser:
         binary: bytes,
         tenant_id: str,
         llm_name: str | None = None,
+        prompt: str = "",
         callback=None
     ) -> dict:
         """
-        视频解析（参考 core/flow/parser/parser.py._video 第 618-628 行）
-        
+        视频解析（参考 core/flow/parser/parser.py._video 第 663-672 行）
+
+        Args:
+            prompt: 自定义视频描述提示词，为空时由模型使用默认提示
+
         Returns:
             {"output_format": "text", "text": "视频描述"}
         """
         if callback:
             callback(0.1, "Start to work on a video.")
-        
+
         with db_connection() as db:
             cv_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, llm_name=llm_name)
-        
-        # 视频分析（使用 async_chat，参考 parser.py 修改）
-        txt = await cv_mdl.async_chat(system="", history=[], gen_conf={}, video_bytes=binary, filename=filename)
-        
+
+        video_prompt = str(prompt or "")
+        txt = await cv_mdl.async_chat(system="", history=[], gen_conf={}, video_bytes=binary, filename=filename, video_prompt=video_prompt)
+
         return {"output_format": "text", "text": txt}
     
     @staticmethod
@@ -1022,7 +1026,7 @@ async def parse_file(
         email_config: 邮件配置 {"output_format": "json", "fields": [...]}
         slides_config: PPT 配置 {"parse_method": "deepdoc", "output_format": "json", "table_context_size": 0, "image_context_size": 0}
         markdown_config: Markdown 配置 {"output_format": "json", "table_context_size": 0, "image_context_size": 0}
-        video_config: 视频配置 {"llm_id": "..."}
+        video_config: 视频配置 {"llm_id": "...", "prompt": ""}
         audio_config: 音频配置 {"llm_id": "..."}
         callback: 进度回调
     
@@ -1145,10 +1149,11 @@ async def parse_file(
     # 视频文件
     elif ext in ["mp4", "avi", "mkv", "mov", "flv", "wmv"]:
         return await FlowParser.parse_video(
-            filename, 
-            binary, 
-            tenant_id, 
-            video_config.get("llm_id"), 
+            filename,
+            binary,
+            tenant_id,
+            video_config.get("llm_id"),
+            video_config.get("prompt", ""),
             callback
         )
     
