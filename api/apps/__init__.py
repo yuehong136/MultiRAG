@@ -1,11 +1,3 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： apps.__init__.py
-@date：2024/7/11 14:30
-@desc:
-"""
 import logging
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -34,6 +26,7 @@ from errors.exceptions import AITranslateException
 from api.constants import API_VERSION
 from workflow_v2.workflow_exceptions import NodeExecutionError, WorkflowValidationError
 from workflow_v2.workflow_state_manager import workflow_state_manager
+from api.utils.api_utils import SDKAuthError
 
 description = """
 Multi-RAG API helps you do awesome stuff. 🚀
@@ -141,7 +134,7 @@ app = FastAPI(
     title="Multi-RAG",
     description=description,
     summary="大模型底座接口",
-    version="0.9.8",
+    version="0.9.9",
     terms_of_service="https://cake-doom-0c6.notion.site/4b6c4b3a5338497494620b3dd82e4acc?pvs=4",
     contact={
         "name": "Du Xiaolong",
@@ -302,6 +295,10 @@ def search_pages_path(page_path):
     app_path_list = [path for path in page_path.glob("*_app.py") if not path.name.startswith(".")]
     api_path_list = [path for path in page_path.glob("*sdk/*.py") if not path.name.startswith(".")]
     app_path_list.extend(api_path_list)
+    restful_api_path_list = [
+        path for path in page_path.glob("*restful_apis/*.py") if not path.name.startswith(".")
+    ]
+    app_path_list.extend(restful_api_path_list)
     return app_path_list
 
 
@@ -316,8 +313,9 @@ def register_page(page_path):
     sys.modules[module_name] = page
     spec.loader.exec_module(page)
     sdk_path = "\\sdk\\" if sys.platform.startswith("win") else "/sdk/"
+    restful_api_path = "\\restful_apis\\" if sys.platform.startswith("win") else "/restful_apis/"
     url_prefix = (
-        f"/api/{API_VERSION}" if sdk_path in path else f"/{API_VERSION}/{page_name}"
+        f"/api/{API_VERSION}" if sdk_path in path or restful_api_path in path else f"/{API_VERSION}/{page_name}"
     )
     # 确保模块有 router 属性
     if hasattr(page, 'router'):
@@ -330,6 +328,8 @@ def register_page(page_path):
 pages_dir = [
     Path(__file__).parent,
     Path(__file__).parent.parent / 'api' / 'apps',
+    Path(__file__).parent.parent / 'api' / 'apps' / 'restful_apis',
+    Path(__file__).parent.parent / 'api' / 'apps' / 'sdk',
 ]
 
 # 遍历页面目录，注册每个找到的页面
@@ -407,6 +407,18 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     )
 
 
+@app.exception_handler(SDKAuthError)
+async def sdk_auth_exception_handler(request: Request, exc: SDKAuthError):
+    return JSONResponse(
+        status_code=200,
+        content={
+            "retcode": exc.retcode,
+            "retmsg": exc.retmsg,
+            "data": exc.data,
+        },
+    )
+
+
 # 定义FastAPI应用的自定义异常处理器
 @app.exception_handler(Exception)
 def custom_exception_handler(request: Request, exc: Exception):
@@ -460,7 +472,7 @@ def login(data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get
         jwt_token = manager.create_access_token(data={"sub": email})
         # 返回包含JWT令牌和令牌类型的响应
         return {"access_token": jwt_token, "token_type": "bearer"}
-    except Exception as e:
+    except Exception:
         db.rollback()
         raise InvalidCredentialsException
 
