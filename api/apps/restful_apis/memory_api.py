@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.db.db_models import get_db
-from api.utils.api_utils import get_json_result
+from api.utils.api_utils import get_json_result, get_error_argument_result
 from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
 from api.apps.services import memory_api_service
 from common.constants import RetCode
@@ -187,6 +187,153 @@ def get_memory_messages(
             db, memory_id, agent_id or [], keywords.strip() if keywords else "", page, page_size
         )
         return get_json_result(data=result)
+    except NotFoundException as e:
+        logger.error(e)
+        return get_json_result(data=False, retmsg=str(e.msg), retcode=RetCode.NOT_FOUND)
+    except Exception as e:
+        logger.error(e)
+        return get_json_result(data=False, retmsg="Internal server error", retcode=RetCode.SERVER_ERROR)
+
+
+# ==================== Message Endpoints ====================
+
+class AddMessageRequest(BaseModel):
+    """添加消息请求模型"""
+    memory_id: str | list[str] = Field(..., description="Memory ID or list of Memory IDs")
+    agent_id: str = Field(..., description="Agent ID")
+    session_id: str = Field(..., description="Session ID")
+    user_input: str = Field(..., description="User input message")
+    agent_response: str = Field(..., description="Agent response message")
+    user_id: str = Field(default="", description="Optional User ID")
+
+
+class UpdateMessageRequest(BaseModel):
+    """更新消息状态请求模型"""
+    status: bool = Field(..., description="Message status (True=active, False=inactive)")
+
+
+@router.post('/messages', summary="添加消息到记忆")
+async def add_message(
+    request_body: AddMessageRequest,
+    db: Session = Depends(get_db),
+    user=Depends(manager),
+):
+    memory_ids = request_body.memory_id
+    if isinstance(memory_ids, str):
+        memory_ids = [memory_ids]
+
+    message_dict = {
+        "user_id": request_body.user_id,
+        "agent_id": request_body.agent_id,
+        "session_id": request_body.session_id,
+        "user_input": request_body.user_input,
+        "agent_response": request_body.agent_response,
+    }
+
+    res, msg = await memory_api_service.add_message(db, memory_ids, message_dict)
+    if res:
+        return get_json_result(retmsg=msg)
+    return get_json_result(retcode=RetCode.SERVER_ERROR, retmsg="Some messages failed to add. Detail:" + msg)
+
+
+@router.delete('/messages/{memory_id}:{message_id}', summary="忘记（软删除）消息")
+def forget_message(
+    memory_id: str,
+    message_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(manager),
+):
+    try:
+        memory_api_service.forget_message(db, memory_id, message_id)
+        return get_json_result(data=True)
+    except NotFoundException as e:
+        logger.error(e)
+        return get_json_result(data=False, retmsg=str(e.msg), retcode=RetCode.NOT_FOUND)
+    except Exception as e:
+        logger.error(e)
+        return get_json_result(data=False, retmsg="Internal server error", retcode=RetCode.SERVER_ERROR)
+
+
+@router.put('/messages/{memory_id}:{message_id}', summary="更新消息状态")
+def update_message(
+    memory_id: str,
+    message_id: int,
+    request_body: UpdateMessageRequest,
+    db: Session = Depends(get_db),
+    user=Depends(manager),
+):
+    if not isinstance(request_body.status, bool):
+        return get_error_argument_result("Status must be a boolean.")
+    try:
+        update_succeed = memory_api_service.update_message_status(db, memory_id, message_id, request_body.status)
+        if update_succeed:
+            return get_json_result(data=update_succeed)
+        else:
+            return get_json_result(data=False, retcode=RetCode.SERVER_ERROR, retmsg=f"Failed to set status for message '{message_id}' in memory '{memory_id}'.")
+    except NotFoundException as e:
+        logger.error(e)
+        return get_json_result(data=False, retmsg=str(e.msg), retcode=RetCode.NOT_FOUND)
+    except Exception as e:
+        logger.error(e)
+        return get_json_result(data=False, retmsg="Internal server error", retcode=RetCode.SERVER_ERROR)
+
+
+@router.get('/messages/search', summary="搜索记忆中的消息")
+def search_message(
+    memory_id: list[str] = Query(..., description="List of Memory IDs"),
+    query: str = Query(..., description="Search query"),
+    similarity_threshold: float = Query(default=0.2, description="Minimum similarity threshold"),
+    keywords_similarity_weight: float = Query(default=0.7, description="Weight for keyword similarity"),
+    top_n: int = Query(default=5, description="Maximum number of results"),
+    agent_id: str = Query(default="", description="Optional Agent ID filter"),
+    session_id: str = Query(default="", description="Optional Session ID filter"),
+    db: Session = Depends(get_db),
+    user=Depends(manager),
+):
+    if len(memory_id) == 1 and ',' in memory_id[0]:
+        memory_id = memory_id[0].split(',')
+    filter_dict = {"memory_id": memory_id, "agent_id": agent_id, "session_id": session_id}
+    params = {
+        "query": query,
+        "similarity_threshold": similarity_threshold,
+        "keywords_similarity_weight": keywords_similarity_weight,
+        "top_n": top_n,
+    }
+    res = memory_api_service.search_message(db, filter_dict, params)
+    return get_json_result(data=res)
+
+
+@router.get('/messages', summary="获取最近的消息")
+def get_messages(
+    memory_id: list[str] = Query(..., description="List of Memory IDs"),
+    agent_id: str = Query(default="", description="Agent ID"),
+    session_id: str = Query(default="", description="Session ID"),
+    limit: int = Query(default=10, description="Maximum number of messages"),
+    db: Session = Depends(get_db),
+    user=Depends(manager),
+):
+    if len(memory_id) == 1 and ',' in memory_id[0]:
+        memory_id = memory_id[0].split(',')
+    if not memory_id:
+        return get_error_argument_result("memory_ids is required.")
+    try:
+        res = memory_api_service.get_messages(db, memory_id, agent_id, session_id, limit)
+        return get_json_result(data=res)
+    except Exception as e:
+        logger.error(e)
+        return get_json_result(data=False, retmsg="Internal server error", retcode=RetCode.SERVER_ERROR)
+
+
+@router.get('/messages/{memory_id}:{message_id}/content', summary="获取消息内容")
+def get_message_content(
+    memory_id: str,
+    message_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(manager),
+):
+    try:
+        res = memory_api_service.get_message_content(db, memory_id, message_id)
+        return get_json_result(data=res)
     except NotFoundException as e:
         logger.error(e)
         return get_json_result(data=False, retmsg=str(e.msg), retcode=RetCode.NOT_FOUND)

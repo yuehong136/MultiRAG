@@ -12,11 +12,12 @@ from api.db.services.memory_service import MemoryService
 from api.db.services.user_service import UserTenantService
 from api.db.services.canvas_service import UserCanvasService
 from api.db.services.task_service import TaskService
-from api.db.joint_services.memory_message_service import get_memory_size_cache, judge_system_prompt_is_default
+from api.db.joint_services.memory_message_service import get_memory_size_cache, judge_system_prompt_is_default, save_to_memory, query_message
 from api.utils.memory_utils import format_ret_data_from_memory, get_memory_type_human
 from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
 from common.constants import MemoryType, TenantPermission, ForgettingPolicy
 from common.exceptions import ArgumentException, NotFoundException
+from common.time_utils import current_timestamp, timestamp_to_date
 from memory.services.messages import MessageService
 from memory.utils.prompt_util import PromptAssembler
 
@@ -228,3 +229,97 @@ def get_memory_messages(db: Session, memory_id: str, agent_ids: list[str], keywo
             extract_msg["agent_name"] = agent_name_mapping.get(extract_msg.get("agent_id"), "Unknown")
 
     return {"messages": messages, "storage_type": memory.storage_type}
+
+
+async def add_message(db: Session, memory_ids: list[str], message_dict: dict):
+    """
+    添加消息到Memory
+
+    :param db: 数据库会话
+    :param memory_ids: Memory ID列表
+    :param message_dict: {
+        "user_id": str,
+        "agent_id": str,
+        "session_id": str,
+        "user_input": str,
+        "agent_response": str,
+    }
+    """
+    res = []
+    for memory_id in memory_ids:
+        success, msg = await save_to_memory(db, memory_id, message_dict)
+        res.append({"memory_id": memory_id, "success": success, "message": msg})
+
+    if all(r["success"] for r in res):
+        return True, "Successfully added to memories."
+    return False, str(res)
+
+
+def forget_message(db: Session, memory_id: str, message_id: int):
+    """忘记（软删除）消息"""
+    memory = MemoryService.get_by_memory_id(db, memory_id)
+    if not memory:
+        raise NotFoundException(f"Memory '{memory_id}' not found.")
+
+    forget_time = timestamp_to_date(current_timestamp())
+    update_succeed = MessageService.update_message(
+        {"memory_id": memory_id, "message_id": int(message_id)},
+        {"forget_at": forget_time},
+        memory.tenant_id, memory_id)
+    if update_succeed:
+        return True
+    raise Exception(f"Failed to forget message '{message_id}' in memory '{memory_id}'.")
+
+
+def update_message_status(db: Session, memory_id: str, message_id: int, status: bool):
+    """更新消息状态"""
+    memory = MemoryService.get_by_memory_id(db, memory_id)
+    if not memory:
+        raise NotFoundException(f"Memory '{memory_id}' not found.")
+
+    update_succeed = MessageService.update_message(
+        {"memory_id": memory_id, "message_id": int(message_id)},
+        {"status": status},
+        memory.tenant_id, memory_id)
+    if update_succeed:
+        return True
+    raise Exception(f"Failed to set status for message '{message_id}' in memory '{memory_id}'.")
+
+
+def search_message(db: Session, filter_dict: dict, params: dict):
+    """
+    搜索记忆中的消息
+
+    :param db: 数据库会话
+    :param filter_dict: {
+        "memory_id": list[str],
+        "agent_id": str,
+        "session_id": str
+    }
+    :param params: {
+        "query": str,
+        "similarity_threshold": float,
+        "keywords_similarity_weight": float,
+        "top_n": int
+    }
+    """
+    return query_message(db, filter_dict, params)
+
+
+def get_messages(db: Session, memory_ids: list[str], agent_id: str = "", session_id: str = "", limit: int = 10):
+    """获取最近的消息"""
+    memory_list = MemoryService.get_by_ids(db, memory_ids)
+    uids = [memory.tenant_id for memory in memory_list]
+    return MessageService.get_recent_messages(uids, memory_ids, agent_id, session_id, limit)
+
+
+def get_message_content(db: Session, memory_id: str, message_id: int):
+    """获取消息内容"""
+    memory = MemoryService.get_by_memory_id(db, memory_id)
+    if not memory:
+        raise NotFoundException(f"Memory '{memory_id}' not found.")
+
+    res = MessageService.get_by_message_id(memory_id, message_id, memory.tenant_id)
+    if res:
+        return res
+    raise NotFoundException(f"Message '{message_id}' in memory '{memory_id}' not found.")
