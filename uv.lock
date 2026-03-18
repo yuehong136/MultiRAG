@@ -2349,21 +2349,6 @@ wheels = [
 ]
 
 [[package]]
-name = "google-ai-generativelanguage"
-version = "0.6.15"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "google-api-core", extra = ["grpc"] },
-    { name = "google-auth" },
-    { name = "proto-plus" },
-    { name = "protobuf" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/11/d1/48fe5d7a43d278e9f6b5ada810b0a3530bbeac7ed7fcbcd366f932f05316/google_ai_generativelanguage-0.6.15.tar.gz", hash = "sha256:8f6d9dc4c12b065fe2d0289026171acea5183ebf2d0b11cefe12f3821e159ec3" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/7c/a3/67b8a6ff5001a1d8864922f2d6488dc2a14367ceb651bc3f09a947f2f306/google_ai_generativelanguage-0.6.15-py3-none-any.whl", hash = "sha256:5a03ef86377aa184ffef3662ca28f19eeee158733e45d7947982eb953c6ebb6c" },
-]
-
-[[package]]
 name = "google-api-core"
 version = "2.24.2"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -2379,15 +2364,9 @@ wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/46/95/f472d85adab6e538da2025dfca9e976a0d125cc0af2301f190e77b76e51c/google_api_core-2.24.2-py3-none-any.whl", hash = "sha256:810a63ac95f3c441b7c0e43d344e372887f62ce9071ba972eacf32672e072de9" },
 ]
 
-[package.optional-dependencies]
-grpc = [
-    { name = "grpcio" },
-    { name = "grpcio-status" },
-]
-
 [[package]]
 name = "google-api-python-client"
-version = "2.165.0"
+version = "2.193.0"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
     { name = "google-api-core" },
@@ -2396,9 +2375,9 @@ dependencies = [
     { name = "httplib2" },
     { name = "uritemplate" },
 ]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/d5/b5/46e6a866407e1d620d6722e7f5e076c3908801b6bc122e0908ea92b9d78f/google_api_python_client-2.165.0.tar.gz", hash = "sha256:0d2aee76727a104705630bebbc43669c864b766924e9329051ef7b7e2468eb72" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/90/f4/e14b6815d3b1885328dd209676a3a4c704882743ac94e18ef0093894f5c8/google_api_python_client-2.193.0.tar.gz", hash = "sha256:8f88d16e89d11341e0a8b199cafde0fb7e6b44260dffb88d451577cbd1bb5d33" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/9d/dc/432b2b61e2335dc20196f543b5c84400d246c8cdfb8169fea183e7a0c52d/google_api_python_client-2.165.0-py2.py3-none-any.whl", hash = "sha256:4eaab7d4a20be0d3d1dde462fa95e9e0ccc2a3e177a656701bf73fe738ddef7d" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/f0/6d/fe75167797790a56d17799b75e1129bb93f7ff061efc7b36e9731bd4be2b/google_api_python_client-2.193.0-py3-none-any.whl", hash = "sha256:c42aa324b822109901cfecab5dc4fc3915d35a7b376835233c916c70610322db" },
 ]
 
 [[package]]
@@ -2442,46 +2421,6 @@ wheels = [
 ]
 
 [[package]]
-name = "google-cloud-aiplatform"
-version = "1.70.0"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "docstring-parser" },
-    { name = "google-api-core", extra = ["grpc"] },
-    { name = "google-auth" },
-    { name = "google-cloud-bigquery" },
-    { name = "google-cloud-resource-manager" },
-    { name = "google-cloud-storage" },
-    { name = "packaging" },
-    { name = "proto-plus" },
-    { name = "protobuf" },
-    { name = "pydantic" },
-    { name = "shapely" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/88/06/bc8028c03d4bedb85114c780a9f749b67ff06ce29d25dc7f1a99622f2692/google-cloud-aiplatform-1.70.0.tar.gz", hash = "sha256:e8edef6dbc7911380d0ea55c47544e799f62b891cb1a83b504ca1c09fff9884b" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/46/d9/280e5a9b5caf69322f64fa55f62bf447d76c5fe30e8df6e93373f22c4bd7/google_cloud_aiplatform-1.70.0-py2.py3-none-any.whl", hash = "sha256:690e6041f03d3aa85102ac3f316c958d6f43a99aefb7fb3f8938dee56d08abd9" },
-]
-
-[[package]]
-name = "google-cloud-bigquery"
-version = "3.30.0"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "google-api-core", extra = ["grpc"] },
-    { name = "google-auth" },
-    { name = "google-cloud-core" },
-    { name = "google-resumable-media" },
-    { name = "packaging" },
-    { name = "python-dateutil" },
-    { name = "requests" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/f1/2f/3dda76b3ec029578838b1fe6396e6b86eb574200352240e23dea49265bb7/google_cloud_bigquery-3.30.0.tar.gz", hash = "sha256:7e27fbafc8ed33cc200fe05af12ecd74d279fe3da6692585a3cef7aee90575b6" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/0c/6d/856a6ca55c1d9d99129786c929a27dd9d31992628ebbff7f5d333352981f/google_cloud_bigquery-3.30.0-py2.py3-none-any.whl", hash = "sha256:f4d28d846a727f20569c9b2d2f4fa703242daadcb2ec4240905aa485ba461877" },
-]
-
-[[package]]
 name = "google-cloud-core"
 version = "2.4.3"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -2492,22 +2431,6 @@ dependencies = [
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/d6/b8/2b53838d2acd6ec6168fd284a990c76695e84c65deee79c9f3a4276f6b4f/google_cloud_core-2.4.3.tar.gz", hash = "sha256:1fab62d7102844b278fe6dead3af32408b1df3eb06f5c7e8634cbd40edc4da53" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/40/86/bda7241a8da2d28a754aad2ba0f6776e35b67e37c36ae0c45d49370f1014/google_cloud_core-2.4.3-py2.py3-none-any.whl", hash = "sha256:5130f9f4c14b4fafdff75c79448f9495cfade0d8775facf1b09c3bf67e027f6e" },
-]
-
-[[package]]
-name = "google-cloud-resource-manager"
-version = "1.14.2"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "google-api-core", extra = ["grpc"] },
-    { name = "google-auth" },
-    { name = "grpc-google-iam-v1" },
-    { name = "proto-plus" },
-    { name = "protobuf" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/6e/ca/a4648f5038cb94af4b3942815942a03aa9398f9fb0bef55b3f1585b9940d/google_cloud_resource_manager-1.14.2.tar.gz", hash = "sha256:962e2d904c550d7bac48372607904ff7bb3277e3bb4a36d80cc9a37e28e6eb74" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/b1/ea/a92631c358da377af34d3a9682c97af83185c2d66363d5939ab4a1169a7f/google_cloud_resource_manager-1.14.2-py3-none-any.whl", hash = "sha256:d0fa954dedd1d2b8e13feae9099c01b8aac515b648e612834f9942d2795a9900" },
 ]
 
 [[package]]
@@ -2567,24 +2490,6 @@ wheels = [
 ]
 
 [[package]]
-name = "google-generativeai"
-version = "0.8.4"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "google-ai-generativelanguage" },
-    { name = "google-api-core" },
-    { name = "google-api-python-client" },
-    { name = "google-auth" },
-    { name = "protobuf" },
-    { name = "pydantic" },
-    { name = "tqdm" },
-    { name = "typing-extensions" },
-]
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/9b/b0/6c6af327a8a6ef3be6fe79be1d6f1e2914d6c363aa6b081b93396f4460a7/google_generativeai-0.8.4-py3-none-any.whl", hash = "sha256:e987b33ea6decde1e69191ddcaec6ef974458864d243de7191db50c21a7c5b82" },
-]
-
-[[package]]
 name = "google-resumable-media"
 version = "2.7.2"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -2615,11 +2520,6 @@ dependencies = [
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/1b/d7/ee9d56af4e6dbe958562b5020f46263c8a4628e7952070241fc0e9b182ae/googleapis_common_protos-1.69.2.tar.gz", hash = "sha256:3e1b904a27a33c821b4b749fd31d334c0c9c30e6113023d495e48979a3dc9c5f" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/f9/53/d35476d547a286506f0a6a634ccf1e5d288fffd53d48f0bd5fef61d68684/googleapis_common_protos-1.69.2-py3-none-any.whl", hash = "sha256:0b30452ff9c7a27d80bfc5718954063e8ab53dd3697093d3bc99581f5fd24212" },
-]
-
-[package.optional-dependencies]
-grpc = [
-    { name = "grpcio" },
 ]
 
 [[package]]
@@ -2726,20 +2626,6 @@ wheels = [
 ]
 
 [[package]]
-name = "grpc-google-iam-v1"
-version = "0.14.2"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "googleapis-common-protos", extra = ["grpc"] },
-    { name = "grpcio" },
-    { name = "protobuf" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/b9/4e/8d0ca3b035e41fe0b3f31ebbb638356af720335e5a11154c330169b40777/grpc_google_iam_v1-0.14.2.tar.gz", hash = "sha256:b3e1fc387a1a329e41672197d0ace9de22c78dd7d215048c4c78712073f7bd20" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/66/6f/dd9b178aee7835b96c2e63715aba6516a9d50f6bebbd1cc1d32c82a2a6c3/grpc_google_iam_v1-0.14.2-py3-none-any.whl", hash = "sha256:a3171468459770907926d56a440b2bb643eec1d7ba215f48f3ecece42b4d8351" },
-]
-
-[[package]]
 name = "grpcio"
 version = "1.67.1"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -2763,20 +2649,6 @@ wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/74/0d/7df509a2cd2a54814598caf2fb759f3e0b93764431ff410f2175a6efb9e4/grpcio-1.67.1-cp313-cp313-musllinux_1_1_x86_64.whl", hash = "sha256:917e8d8994eed1d86b907ba2a61b9f0aef27a2155bca6cbb322430fc7135b7bb" },
     { url = "https://mirrors.aliyun.com/pypi/packages/0a/08/bc3b0155600898fd10f16b79054e1cca6cb644fa3c250c0fe59385df5e6f/grpcio-1.67.1-cp313-cp313-win32.whl", hash = "sha256:e279330bef1744040db8fc432becc8a727b84f456ab62b744d3fdb83f327e121" },
     { url = "https://mirrors.aliyun.com/pypi/packages/5a/96/44759eca966720d0f3e1b105c43f8ad4590c97bf8eb3cd489656e9590baa/grpcio-1.67.1-cp313-cp313-win_amd64.whl", hash = "sha256:fa0c739ad8b1996bd24823950e3cb5152ae91fca1c09cc791190bf1627ffefba" },
-]
-
-[[package]]
-name = "grpcio-status"
-version = "1.67.1"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "googleapis-common-protos" },
-    { name = "grpcio" },
-    { name = "protobuf" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/be/c7/fe0e79a80ac6346e0c6c0a24e9e3cbc3ae1c2a009acffb59eab484a6f69b/grpcio_status-1.67.1.tar.gz", hash = "sha256:2bf38395e028ceeecfd8866b081f61628114b384da7d51ae064ddc8d766a5d11" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/05/18/56999a1da3577d8ccc8698a575d6638e15fe25650cc88b2ce0a087f180b9/grpcio_status-1.67.1-py3-none-any.whl", hash = "sha256:16e6c085950bdacac97c779e6a502ea671232385e6e37f258884d6883392c2bd" },
 ]
 
 [[package]]
@@ -4090,9 +3962,10 @@ dependencies = [
     { name = "fastmcp" },
     { name = "ffmpeg-python" },
     { name = "flagembedding" },
+    { name = "google-api-python-client" },
     { name = "google-auth-oauthlib" },
+    { name = "google-cloud-storage" },
     { name = "google-genai" },
-    { name = "google-generativeai" },
     { name = "google-search-results" },
     { name = "graspologic" },
     { name = "groq" },
@@ -4175,7 +4048,6 @@ dependencies = [
     { name = "transformers" },
     { name = "uvicorn" },
     { name = "valkey" },
-    { name = "vertexai" },
     { name = "volcengine" },
     { name = "volcengine-python-sdk", extra = ["ark"] },
     { name = "voyageai" },
@@ -4238,9 +4110,10 @@ requires-dist = [
     { name = "fastmcp", specifier = ">=3.0.0" },
     { name = "ffmpeg-python", specifier = ">=0.2.0" },
     { name = "flagembedding", specifier = "==1.2.10" },
+    { name = "google-api-python-client", specifier = ">=2.190.0,<3.0.0" },
     { name = "google-auth-oauthlib", specifier = ">=1.2.0,<2.0.0" },
+    { name = "google-cloud-storage", specifier = ">=2.19.0,<3.0.0" },
     { name = "google-genai", specifier = ">=1.41.0,<2.0.0" },
-    { name = "google-generativeai", specifier = ">=0.8.3,<0.9.0" },
     { name = "google-search-results", specifier = "==2.4.2" },
     { name = "graspologic", git = "https://github.com/yuzhichang/graspologic.git?rev=38e680cab72bc9fb68a7992c3bcc2d53b24e42fd#38e680cab72bc9fb68a7992c3bcc2d53b24e42fd" },
     { name = "groq", specifier = "==0.9.0" },
@@ -4323,7 +4196,6 @@ requires-dist = [
     { name = "transformers", specifier = ">=4.35.0,<5.0.0" },
     { name = "uvicorn", specifier = ">=0.30.1" },
     { name = "valkey", specifier = "==6.0.2" },
-    { name = "vertexai", specifier = "==1.70.0" },
     { name = "volcengine", specifier = "==1.0.194" },
     { name = "volcengine-python-sdk", extras = ["ark"], specifier = ">=5.0.5" },
     { name = "voyageai", specifier = "==0.2.3" },
@@ -7007,23 +6879,6 @@ source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/9e/bd/3704a8c3e0942d711c1299ebf7b9091930adae6675d7c8f476a7ce48653c/sgmllib3k-1.0.0.tar.gz", hash = "sha256:7868fb1c8bfa764c1ac563d3cf369c381d1325d36124933a726f29fcdaa812e9" }
 
 [[package]]
-name = "shapely"
-version = "2.0.5"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "numpy" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/ad/99/c47247f4d688bbb5346df5ff1de5d9792b6d95cbbb2fd7b71f45901c1878/shapely-2.0.5.tar.gz", hash = "sha256:bff2366bc786bfa6cb353d6b47d0443c570c32776612e527ee47b6df63fcfe32" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/04/df/8062f14cb7aa502b8bda358103facedc80b87eec41e3391182655ff40615/shapely-2.0.5-cp312-cp312-macosx_10_9_x86_64.whl", hash = "sha256:03bd7b5fa5deb44795cc0a503999d10ae9d8a22df54ae8d4a4cd2e8a93466195" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/5d/e7/719f384857c39aa51aa19d09d7cac84aeab1b25a7d0dab62433bf7b419e9/shapely-2.0.5-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:2ff9521991ed9e201c2e923da014e766c1aa04771bc93e6fe97c27dcf0d40ace" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/a4/77/c05e794a65263deb020d7e25623234975dd96881f9e8cde341810ca683e7/shapely-2.0.5-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:1b65365cfbf657604e50d15161ffcc68de5cdb22a601bbf7823540ab4918a98d" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/f0/32/b7687654b6e747ceae8f9fa4cc7489a8ebf275c64caf811f949d87e89f5d/shapely-2.0.5-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:21f64e647a025b61b19585d2247137b3a38a35314ea68c66aaf507a1c03ef6fe" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/f9/9c/5b68b3cd484065c7d33d83168d2ecfebfeeaa6d88bc9cfd830de2df490ac/shapely-2.0.5-cp312-cp312-win32.whl", hash = "sha256:3ac7dc1350700c139c956b03d9c3df49a5b34aaf91d024d1510a09717ea39199" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/d4/c3/e98e3eb9f06def32b8e2454ab718cafb99149f023dff023e257125132d6e/shapely-2.0.5-cp312-cp312-win_amd64.whl", hash = "sha256:30e8737983c9d954cd17feb49eb169f02f1da49e24e5171122cf2c2b62d65c95" },
-]
-
-[[package]]
 name = "six"
 version = "1.16.0"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -7867,18 +7722,6 @@ source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/45/f7/b552b7a67017e6233cd8a3b783ce8c4b548e29df98daedd7fb4c4c2cc8f8/valkey-6.0.2.tar.gz", hash = "sha256:dc2e91512b82d1da0b91ab0cdbd8c97c0c0250281728cb32f9398760df9caeae" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/d7/cb/b1eac0fe9cbdbba0a5cf189f5778fe54ba7d7c9f26c2f62ca8d759b38f52/valkey-6.0.2-py3-none-any.whl", hash = "sha256:dbbdd65439ee0dc5689502c54f1899504cc7268e85cb7fe8935f062178ff5805" },
-]
-
-[[package]]
-name = "vertexai"
-version = "1.70.0"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "google-cloud-aiplatform" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/01/17/04958e273962f420cb89573c6423f231e34a684769ef49c6fed2b12cd7b1/vertexai-1.70.0.tar.gz", hash = "sha256:3af16f63c462dfc77600773fba366a99575b9fe4303fc080bd1cf823066c66fa" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/4a/e4/ec11c62ba6e17457b68e089b740075c23b894e801545979c0f9d01208a81/vertexai-1.70.0-py3-none-any.whl", hash = "sha256:9e0c85013efa5cad41e37e23e9fcca7e959b409288ca22832a1b7b9ae6abc393" },
 ]
 
 [[package]]

@@ -78,7 +78,6 @@ class AgentParam(LLMParam, ToolParamBase):
         self.mcp = []
         self.max_rounds = 5
         self.description = ""
-        self.custom_header = {}
 
 
 class Agent(LLM, ToolBase):
@@ -110,8 +109,7 @@ class Agent(LLM, ToolBase):
         for mcp in self._param.mcp:
             with db_connection() as db:
                 mcp_server = MCPServerService.get_by_id(db, mcp["mcp_id"])
-            custom_header = self._param.custom_header
-            tool_call_session = MCPToolCallSession(mcp_server, mcp_server.variables, custom_header)
+            tool_call_session = MCPToolCallSession(mcp_server, mcp_server.variables)
             self._mcp_sessions.append(tool_call_session)
             for tnm, meta in mcp["tools"].items():
                 self.tool_meta.append(mcp_tool_metadata_to_openai_tool(meta))
