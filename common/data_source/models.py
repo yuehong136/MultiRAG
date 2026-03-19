@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Sequence, NamedTuple
 from typing_extensions import TypedDict, NotRequired
 from pydantic import BaseModel
+from enum import Enum
 
 
 @dataclass(frozen=True)
@@ -304,6 +305,13 @@ class ProcessedSlackMessage:
         self.thread_or_message_ts = thread_or_message_ts
         self.filter_reason = filter_reason
         self.failure = failure
+
+
+class SeafileSyncScope(str, Enum):
+    """Defines how much of SeaFile to synchronise."""
+    ACCOUNT = "account"      # All libraries the token can see
+    LIBRARY = "library"      # A single library (repo)
+    DIRECTORY = "directory"  # A single directory inside a library
 
 
 # Type aliases for type hints

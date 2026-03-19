@@ -45,7 +45,7 @@ from common.data_source.gitlab_connector import GitlabConnector
 from common.data_source.bitbucket.connector import BitbucketConnector
 from common.data_source.interfaces import CheckpointOutputWrapper
 from common.data_source.config import INDEX_BATCH_SIZE
-from common.data_source.models import ConnectorFailure
+from common.data_source.models import ConnectorFailure, SeafileSyncScope
 from common.data_source.webdav_connector import WebDAVConnector
 from common.signal_utils import start_tracemalloc_and_snapshot, stop_tracemalloc
 from common.config_utils import show_configs
@@ -1168,16 +1168,18 @@ class SeaFile(SyncBase):
     SOURCE_NAME: str = FileSource.SEAFILE
 
     async def _generate(self, task: dict):
+        conf = self.conf
         self.connector = SeaFileConnector(
-            seafile_url=self.conf["seafile_url"],
-            batch_size=self.conf.get("batch_size", INDEX_BATCH_SIZE),
-            include_shared=self.conf.get("include_shared", True)
+            seafile_url=conf["seafile_url"],
+            batch_size=conf.get("batch_size", INDEX_BATCH_SIZE),
+            include_shared=conf.get("include_shared", True),
+            sync_scope=conf.get("sync_scope", SeafileSyncScope.ACCOUNT),
+            repo_id=conf.get("repo_id") or None,
+            sync_path=conf.get("sync_path") or None,
         )
-
-        self.connector.load_credentials(self.conf["credentials"])
+        self.connector.load_credentials(conf["credentials"])
 
         poll_start = task.get("poll_range_start")
-
         if task["reindex"] == "1" or poll_start is None:
             document_generator = self.connector.load_from_state()
             begin_info = "totally"
@@ -1188,12 +1190,16 @@ class SeaFile(SyncBase):
             )
             begin_info = f"from {poll_start}"
 
+        scope = conf.get("sync_scope", "account")
+        extra = ""
+        if scope in ("library", "directory"):
+            extra = f" repo_id={conf.get('repo_id')}"
+        if scope == "directory":
+            extra += f" path={conf.get('sync_path')}"
+
         logging.info(
-            "Connect to SeaFile: {} (include_shared: {}) {}".format(
-                self.conf["seafile_url"],
-                self.conf.get("include_shared", True),
-                begin_info
-            )
+            "Connect to SeaFile: %s (scope=%s%s) %s",
+            conf["seafile_url"], scope, extra, begin_info,
         )
         return document_generator
 
