@@ -4,7 +4,6 @@ import copy
 import inspect
 import json
 import logging
-import time
 from functools import partial
 from urllib.parse import quote_plus
 
@@ -23,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from agent.component.llm import LLM
 from api.apps import manager
+from api.apps.services.canvas_replica_service import CanvasReplicaService
 from api.db import CanvasCategory
 from api.db.db_models import get_db, APIToken, Task
 from api.db.services.canvas_service import (
@@ -250,11 +250,12 @@ def save(
     - 支持增量更新（只传需要更新的字段）
     """
     req = request_body.model_dump()
-    
+
     # 处理DSL格式
-    if not isinstance(req["dsl"], str):
-        req["dsl"] = json.dumps(req["dsl"], ensure_ascii=False)
-    req["dsl"] = json.loads(req["dsl"])
+    try:
+        req["dsl"] = CanvasReplicaService.normalize_dsl(req["dsl"])
+    except ValueError as e:
+        return get_data_error_result(retmsg=str(e))
     
     cate = req.get("canvas_category", CanvasCategory.Agent)
     
@@ -298,14 +299,22 @@ def save(
         UserCanvasService.update_by_id(db, req["id"], flow)
     
     # 保存版本
-    UserCanvasVersionService.insert(
+    UserCanvasVersionService.save_or_replace_latest(
         db,
         user_canvas_id=req["id"],
         dsl=req["dsl"],
-        title="{0}_{1}".format(req["title"], time.strftime("%Y_%m_%d_%H_%M_%S"))
+        title=UserCanvasVersionService.build_version_title(getattr(user, "nickname", user.id), req.get("title")),
     )
-    UserCanvasVersionService.delete_all_versions(db, req["id"])
-    
+    replica_ok = CanvasReplicaService.replace_for_set(
+        canvas_id=req["id"],
+        tenant_id=str(user.id),
+        runtime_user_id=str(user.id),
+        dsl=req["dsl"],
+        canvas_category=req.get("canvas_category", cate),
+        title=req.get("title", ""),
+    )
+    if not replica_ok:
+        return get_data_error_result(retmsg="canvas saved, but replica sync failed.")
     return get_json_result(data=req)
 
 
@@ -334,11 +343,21 @@ def get(
     """
     if not UserCanvasService.accessible(db, canvas_id, user.id):
         return get_data_error_result(retmsg="canvas not found.")
-    
-    canvas = UserCanvasService.get_by_canvas_id(db, canvas_id)
-    if not canvas:
+
+    exists, canvas = UserCanvasService.get_by_canvas_id(db, canvas_id)
+    if not exists or not canvas:
         return get_data_error_result(retmsg="canvas not found.")
-    
+    try:
+        CanvasReplicaService.bootstrap(
+            canvas_id=canvas_id,
+            tenant_id=str(user.id),
+            runtime_user_id=str(user.id),
+            dsl=canvas.get("dsl"),
+            canvas_category=canvas.get("canvas_category", CanvasCategory.Agent),
+            title=canvas.get("title", ""),
+        )
+    except ValueError as e:
+        return get_data_error_result(retmsg=str(e))
     return get_json_result(data=canvas)
 
 
@@ -459,26 +478,35 @@ async def run(
     query = req.get("query", "")
     files = req.get("files", [])
     inputs = req.get("inputs", {})
-    user_id = req.get("user_id", user.id)
-    
-    if not await thread_pool_exec(UserCanvasService.accessible, db, req["id"], user.id):
+    tenant_id = str(user.id)
+    runtime_user_id = req.get("user_id") or tenant_id
+    user_id = str(runtime_user_id)
+
+    if not await thread_pool_exec(UserCanvasService.accessible, db, req["id"], tenant_id):
         return get_json_result(
             data=False,
             retmsg='Only owner of canvas authorized for this operation.',
             retcode=RetCode.OPERATING_ERROR
         )
-    
-    cvs = await thread_pool_exec(UserCanvasService.get_by_id, db, req["id"])
-    if not cvs:
-        return get_data_error_result(retmsg="canvas not found.")
-    
-    if not isinstance(cvs.dsl, str):
-        cvs.dsl = json.dumps(cvs.dsl, ensure_ascii=False)
-    
+
+    replica_payload = CanvasReplicaService.load_for_run(
+        canvas_id=req["id"],
+        tenant_id=tenant_id,
+        runtime_user_id=user_id,
+    )
+
+    if not replica_payload:
+        return get_data_error_result(retmsg="canvas replica not found, please call /get/<canvas_id> first.")
+
+    replica_dsl = replica_payload.get("dsl", {})
+    canvas_title = replica_payload.get("title", "")
+    canvas_category = replica_payload.get("canvas_category", CanvasCategory.Agent)
+    dsl_str = json.dumps(replica_dsl, ensure_ascii=False)
+
     # DataFlow模式
-    if cvs.canvas_category == CanvasCategory.DataFlow:
+    if canvas_category == CanvasCategory.DataFlow:
         task_id = get_uuid()
-        Pipeline(cvs.dsl, tenant_id=user.id, doc_id=CANVAS_DEBUG_DOC_ID, task_id=task_id, flow_id=req["id"])
+        Pipeline(dsl_str, tenant_id=tenant_id, doc_id=CANVAS_DEBUG_DOC_ID, task_id=task_id, flow_id=req["id"])
         ok, error_message = await thread_pool_exec(
             queue_dataflow,
             db,
@@ -492,20 +520,34 @@ async def run(
         if not ok:
             return get_data_error_result(retmsg=error_message)
         return get_json_result(data={"message_id": task_id})
-    
+
     # Agent模式 - SSE流式响应
     try:
-        canvas = Canvas(cvs.dsl, user.id, canvas_id=cvs.id)
+        canvas = Canvas(dsl_str, tenant_id, canvas_id=req["id"])
     except Exception as e:
         return server_error_response(e)
-    
+
     async def sse():
         nonlocal canvas, user_id
         try:
             async for ans in canvas.run(query=query, files=files, user_id=user_id, inputs=inputs):
                 yield "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
-            cvs.dsl = json.loads(str(canvas))
-            await thread_pool_exec(UserCanvasService.update_by_id, db, req["id"], cvs.to_dict())
+
+            commit_ok = CanvasReplicaService.commit_after_run(
+                canvas_id=req["id"],
+                tenant_id=tenant_id,
+                runtime_user_id=user_id,
+                dsl=json.loads(str(canvas)),
+                canvas_category=canvas_category,
+                title=canvas_title,
+            )
+            if not commit_ok:
+                logging.error(
+                    "Canvas runtime replica commit failed: canvas_id=%s tenant_id=%s runtime_user_id=%s",
+                    req["id"],
+                    tenant_id,
+                    user_id,
+                )
 
         except Exception as e:
             logging.exception(e)
@@ -836,10 +878,10 @@ async def upload(
     - 文件会存储在用户的存储空间中
     - 自动检测PDF文件的完整性
     """
-    canvas = UserCanvasService.get_by_canvas_id(db, canvas_id)
-    if not canvas:
+    exists, canvas = UserCanvasService.get_by_canvas_id(db, canvas_id)
+    if not exists or not canvas:
         return get_data_error_result(retmsg="canvas not found.")
-    
+
     user_id = canvas["user_id"]
     file_objs = file if file else []
     try:
