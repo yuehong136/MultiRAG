@@ -889,6 +889,10 @@ def parse_documents(
         return get_error_data_result(retmsg=f"Failed to queue parsing: {str(e)}")
 
 
+DOC_STOP_PARSING_INVALID_STATE_MESSAGE = "Can't stop parsing document that has not started or already completed"
+DOC_STOP_PARSING_INVALID_STATE_ERROR_CODE = "DOC_STOP_PARSING_INVALID_STATE"
+
+
 @router.delete("/datasets/{dataset_id}/chunks", summary="停止解析")
 def stop_parsing_documents(
     dataset_id: str,
@@ -927,7 +931,11 @@ def stop_parsing_documents(
             if not doc:
                 continue
             if doc[0].run != TaskStatus.RUNNING.value:
-                return get_error_data_result(retmsg="Can't stop parsing document that has not started or already completed")
+                return construct_json_result(
+                    code=RetCode.DATA_ERROR,
+                    message=DOC_STOP_PARSING_INVALID_STATE_MESSAGE,
+                    data={"error_code": DOC_STOP_PARSING_INVALID_STATE_ERROR_CODE},
+                )
             # Send cancellation signal via Redis to stop background task
             cancel_all_task_of(doc_id)
             # 更新文档状态为取消
