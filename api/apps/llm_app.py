@@ -610,6 +610,7 @@ class SetAPIKeyRequest(BaseModel):
     llm_factory: str
     api_key: str
     base_url: str | None = None
+    source_fid: str | None = None
     verify: bool = False
 
 
@@ -829,7 +830,7 @@ def factories(db: Session = Depends(get_db), user=Depends(manager)):
     try:
         fac = get_allowed_llm_factories(db)
         # fac = [f.to_dict() for f in fac if f.name not in ["Youdao", "FastEmbed", "BAAI", "Builtin"]]
-        fac = [f.to_dict() for f in fac if f.name not in []]
+        fac = [f.to_dict() for f in fac if f.name not in ["siliconflow_intl"]]
         llms = LLMService.get_all(db)
         mdl_types = {}
         for m in llms:
@@ -886,13 +887,22 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
     req = request.model_dump()
     chat_passed, embd_passed, rerank_passed = False, False, False
     factory = req["llm_factory"]
+    base_url = req.get("base_url", "")
+    source_factory = req.get("source_fid", factory)
     extra = {"provider": factory}
     timeout_seconds = int(os.environ.get("LLM_TIMEOUT_SECONDS", 10))
+    source_llms = list(LLMService.query(db, fid=source_factory))
+    if not source_llms:
+        msg = f"No models configured for {factory} (source: {source_factory})."
+        if req.get("verify", False):
+            return get_json_result(data={"message": msg, "success": False})
+        return get_data_error_result(retmsg=msg)
+
     msg = ""
-    for llm in LLMService.query(db, fid=factory):
+    for llm in source_llms:
         if not embd_passed and llm.mdl_type == LLMType.EMBEDDING.value:
             assert factory in EmbeddingModel, f"Embedding model from {factory} is not supported yet."
-            mdl = EmbeddingModel[factory](req["api_key"], llm.llm_name, base_url=req.get("base_url"))
+            mdl = EmbeddingModel[factory](req["api_key"], llm.llm_name, base_url=base_url)
             try:
                 arr, tc = await asyncio.wait_for(
                     thread_pool_exec(mdl.encode, ["Test if the api key is available"]),
@@ -905,7 +915,7 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
                 msg += f"\nFail to access embedding model({llm.llm_name}) using this api key." + str(e)
         elif not chat_passed and llm.mdl_type == LLMType.CHAT.value:
             assert factory in ChatModel, f"Chat model from {factory} is not supported yet."
-            mdl = ChatModel[factory](req["api_key"], llm.llm_name, base_url=req.get("base_url"), **extra)
+            mdl = ChatModel[factory](req["api_key"], llm.llm_name, base_url=base_url, **extra)
             try:
                 m, tc = await asyncio.wait_for(
                     mdl.async_chat(
@@ -922,7 +932,7 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
                 msg += f"\nFail to access model({llm.fid}/{llm.llm_name}) this api key." + str(e)
         elif not rerank_passed and llm.mdl_type == LLMType.RERANK.value:
             assert factory in RerankModel, f"Re-rank model from {factory} is not supported yet."
-            mdl = RerankModel[factory](req["api_key"], llm.llm_name, base_url=req.get("base_url"))
+            mdl = RerankModel[factory](req["api_key"], llm.llm_name, base_url=base_url)
             try:
                 arr, tc = await asyncio.wait_for(
                     thread_pool_exec(mdl.similarity, "What's the weather?", ["Is it sunny today?"]),
@@ -943,13 +953,13 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
 
     llm_config = {
         "api_key": req["api_key"],
-        "api_base": req.get("base_url", "")
+        "api_base": base_url
     }
     for n in ["mdl_type", "llm_name"]:
         if n in req:
             llm_config[n] = req[n]
 
-    for llm in LLMService.query(db, fid=factory):
+    for llm in source_llms:
         llm_config["max_tokens"] = llm.max_tokens
         if not TenantLLMService.filter_update(
                 db,
