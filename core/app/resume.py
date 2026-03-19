@@ -182,7 +182,7 @@ FIELD_MAP = FIELD_MAP_ZH
 # Each prompt ends with /no_think marker to suppress reasoning model's thinking output
 # Prompts loaded from md files under rag/prompts/, supporting bilingual versions
 
-from rag.prompts.template import load_prompt
+from core.prompts.template import load_prompt
 
 
 def _load_resume_prompt(name: str, lang: str) -> str:
@@ -1076,10 +1076,12 @@ def _call_llm(prompt: str, tenant_id , lang: str) -> Optional[dict]:
                 if attempt > 0:
                     gen_conf["seed"] = random.randint(0, 1000000)
 
-                response = llm.chat(
-                    system=get_system_prompt(lang),
-                    history=[{"role": "user", "content": prompt}],
-                    gen_conf=gen_conf,
+                response = llm._run_coroutine_sync(
+                    llm.async_chat(
+                        system=get_system_prompt(lang),
+                        history=[{"role": "user", "content": prompt}],
+                        gen_conf=gen_conf,
+                    )
                 )
                 cleaned = _clean_llm_json_response(response)
                 return _parse_json_with_repair(cleaned)
@@ -2279,7 +2281,7 @@ def _build_chunk_document(filename: str, resume: dict,
     # add_positions input format: [(page, left, right, top, bottom), ...]
     #   - page starts from 0, function internally stores +1
     #   - task_executor sorts by page_num_int and top_int (page first, then Y coordinate)
-    from rag.nlp import add_positions
+    from core.nlp import add_positions
 
     for i, ck in enumerate(chunks):
         # All chunks placed on page=0, top increments by index to ensure logical ordering
