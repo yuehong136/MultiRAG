@@ -41,6 +41,7 @@ from common.constants import LLMType, StatusEnum, ParserType
 from common.string_utils import remove_redundant_spaces
 from common import settings
 from common.time_utils import current_timestamp, datetime_format
+from common.text_utils import normalize_arabic_digits
 
 
 def sync_async_generator(async_gen):
@@ -536,9 +537,12 @@ BAD_CITATION_PATTERNS = [
     re.compile(r"【\s*ID\s*[: ]*\s*(\d+)\s*】"),  # 【ID: 12】
     re.compile(r"ref\s*(\d+)", flags=re.IGNORECASE),  # ref12、REF 12
 ]
+CITATION_MARKER_PATTERN = re.compile(r"\[(?:ID:)?([0-9\u0660-\u0669\u06F0-\u06F9]+)\]")
+
 
 def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
     max_index = len(kbinfos["chunks"])
+    normalized_answer = normalize_arabic_digits(answer) or ""
 
     def safe_add(i):
         if 0 <= i < max_index:
@@ -546,19 +550,36 @@ def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
             return True
         return False
 
-    def find_and_replace(pattern, group_index=1, repl=lambda i: f"ID:{i}", flags=0):
+    def find_and_replace(pattern, group_index=1, repl=lambda digits: f"ID:{digits}"):
         nonlocal answer
+        nonlocal normalized_answer
 
-        def replacement(match):
+        matches = list(pattern.finditer(normalized_answer))
+        if not matches:
+            return
+
+        parts = []
+        last_idx = 0
+        for match in matches:
+            parts.append(answer[last_idx:match.start()])
             try:
                 i = int(match.group(group_index))
-                if safe_add(i):
-                    return f"[{repl(i)}]"
             except Exception:
-                pass
-            return match.group(0)
+                parts.append(answer[match.start():match.end()])
+                last_idx = match.end()
+                continue
 
-        answer = re.sub(pattern, replacement, answer, flags=flags)
+            if safe_add(i):
+                digit_start, digit_end = match.span(group_index)
+                digits_original = answer[digit_start:digit_end]
+                parts.append(f"[{repl(digits_original)}]")
+            else:
+                parts.append(answer[match.start():match.end()])
+            last_idx = match.end()
+
+        parts.append(answer[last_idx:])
+        answer = "".join(parts)
+        normalized_answer = normalize_arabic_digits(answer) or ""
 
     for pattern in BAD_CITATION_PATTERNS:
         find_and_replace(pattern)
@@ -784,7 +805,8 @@ def chat(dialog, messages, db, stream=True, **kwargs):
 
         if knowledges and (prompt_config.get("quote", True) and kwargs.get("quote", True)):
             idx = set([])
-            if embd_mdl and not re.search(r"\[ID:([0-9]+)\]", answer):
+            normalized_answer = normalize_arabic_digits(answer) or ""
+            if embd_mdl and not CITATION_MARKER_PATTERN.search(normalized_answer):
                 answer, idx = retriever.insert_citations(
                     answer,
                     [ck["content_ltks"] for ck in kbinfos["chunks"]],
@@ -794,7 +816,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                     vtweight=dialog.vector_similarity_weight
                 )
             else:
-                for match in re.finditer(r"\[ID:([0-9]+)\]", answer):
+                for match in CITATION_MARKER_PATTERN.finditer(normalized_answer):
                     i = int(match.group(1))
                     if i < len(kbinfos["chunks"]):
                         idx.add(i)
