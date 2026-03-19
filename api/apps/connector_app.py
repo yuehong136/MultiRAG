@@ -133,6 +133,7 @@ class RebuildRequest(BaseModel):
 class GoogleWebOAuthStartRequest(BaseModel):
     """启动 Google Web OAuth 请求"""
     credentials: str | dict  # Google OAuth 凭证 JSON
+    redirect_uri: str | None = None  # 自定义重定向 URI（可选）
 
 
 class GoogleWebOAuthResultRequest(BaseModel):
@@ -643,11 +644,15 @@ def start_google_web_oauth(
         return get_json_result(retcode=RetCode.ARGUMENT_ERROR, retmsg="Invalid Google OAuth type.")
 
     if source == "gmail":
-        redirect_uri = GMAIL_WEB_OAUTH_REDIRECT_URI
+        default_redirect_uri = GMAIL_WEB_OAUTH_REDIRECT_URI
         scopes = GOOGLE_SCOPES[DocumentSource.GMAIL]
     else:
-        redirect_uri = GOOGLE_DRIVE_WEB_OAUTH_REDIRECT_URI
+        default_redirect_uri = GOOGLE_DRIVE_WEB_OAUTH_REDIRECT_URI
         scopes = GOOGLE_SCOPES[DocumentSource.GOOGLE_DRIVE]
+
+    redirect_uri = request.redirect_uri or default_redirect_uri
+    if isinstance(redirect_uri, str):
+        redirect_uri = redirect_uri.strip()
 
     if not redirect_uri:
         return get_json_result(
@@ -692,6 +697,7 @@ def start_google_web_oauth(
     cache_payload = {
         "user_id": user.id,
         "client_config": client_config,
+        "redirect_uri": redirect_uri,
         "created_at": int(time.time()),
     }
     REDIS_CONN.set_obj(_web_state_cache_key(flow_id, source), cache_payload, WEB_FLOW_TTL_SECS)
@@ -749,6 +755,7 @@ def google_drive_web_oauth_callback(
 
     state_obj = json.loads(state_cache)
     client_config = state_obj.get("client_config")
+    redirect_uri = state_obj.get("redirect_uri", GOOGLE_DRIVE_WEB_OAUTH_REDIRECT_URI)
     if not client_config:
         REDIS_CONN.delete(_web_state_cache_key(state_id, source))
         return _render_web_oauth_popup(state_id, False, "Authorization session was invalid. Please retry.", source)
@@ -762,7 +769,7 @@ def google_drive_web_oauth_callback(
 
     try:
         flow = Flow.from_client_config(client_config, scopes=GOOGLE_SCOPES[DocumentSource.GOOGLE_DRIVE])
-        flow.redirect_uri = GOOGLE_DRIVE_WEB_OAUTH_REDIRECT_URI
+        flow.redirect_uri = redirect_uri
         flow.fetch_token(code=code)
     except Exception as exc:
         logging.exception("Failed to exchange Google OAuth code: %s", exc)
@@ -824,6 +831,7 @@ def gmail_web_oauth_callback(
 
     state_obj = json.loads(state_cache)
     client_config = state_obj.get("client_config")
+    redirect_uri = state_obj.get("redirect_uri", GMAIL_WEB_OAUTH_REDIRECT_URI)
     if not client_config:
         REDIS_CONN.delete(_web_state_cache_key(state_id, source))
         return _render_web_oauth_popup(state_id, False, "Authorization session was invalid. Please retry.", source)
@@ -837,7 +845,7 @@ def gmail_web_oauth_callback(
 
     try:
         flow = Flow.from_client_config(client_config, scopes=GOOGLE_SCOPES[DocumentSource.GMAIL])
-        flow.redirect_uri = GMAIL_WEB_OAUTH_REDIRECT_URI
+        flow.redirect_uri = redirect_uri
         flow.fetch_token(code=code)
     except Exception as exc:
         logging.exception("Failed to exchange Google OAuth code: %s", exc)
