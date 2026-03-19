@@ -201,6 +201,8 @@ authentication:
   site:
     # 站点认证开关
     switch: false
+  # SSO-only mode: hide password login form
+  disable_password_login: false
 
 permission:
   # 权限检查开关
