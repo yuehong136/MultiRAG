@@ -1,6 +1,7 @@
 import json
 import time
 import urllib.parse
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -73,8 +74,8 @@ DROP DATASET <name>
 LIST FILES OF DATASET <name>
 CREATE CHAT <name>
 DROP CHAT <name>
-CREATE CHAT <name> SESSION <session_name>
-DROP CHAT <name> SESSION <session_name>
+CREATE CHAT <name> SESSION
+DROP CHAT <name> SESSION <session_id>
 LIST CHAT <name> SESSIONS
 CHAT <message> ON <chat_name> SESSION <session_id>
 IMPORT <doc_paths> INTO DATASET <dataset_name>
@@ -1109,31 +1110,30 @@ class MultiRAGClient:
             print("This command is only allowed in USER mode")
             return
         chat_name = command["chat_name"]
-        session_name = command["session_name"]
         dialog_id = self._get_chat_id_by_name(chat_name)
         if dialog_id is None:
             return
+        conversation_id = uuid.uuid4().hex
         payload = {
-            "conversation_id": "",
+            "conversation_id": conversation_id,
             "is_new": True,
-            "name": session_name,
             "dialog_id": dialog_id,
         }
         response = self.http_client.request("POST", "conversation/set", json_body=payload, use_api_base=False, auth_kind="web")
         res_json = response.json()
         code = res_json.get("code", res_json.get("retcode", -1))
         if response.status_code == 200 and code == 0:
-            print(f"Success to create chat session '{session_name}' for chat: {chat_name}")
+            print(f"Success to create chat session for chat: {chat_name}")
         else:
             msg = res_json.get("message", res_json.get("retmsg", ""))
-            print(f"Fail to create chat session '{session_name}' for chat {chat_name}: {msg}")
+            print(f"Fail to create chat session for chat {chat_name}: {msg}")
 
     def drop_chat_session(self, command: dict):
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
         chat_name = command["chat_name"]
-        session_name = command["session_name"]
+        session_id = command["session_id"]
         dialog_id = self._get_chat_id_by_name(chat_name)
         if dialog_id is None:
             return
@@ -1142,20 +1142,20 @@ class MultiRAGClient:
             return
         to_drop_session_ids = []
         for session in sessions:
-            if session["name"] == session_name:
+            if session["id"] == session_id:
                 to_drop_session_ids.append(session["id"])
         if not to_drop_session_ids:
-            print(f"Chat session '{session_name}' not found in chat '{chat_name}'")
+            print(f"Chat session '{session_id}' not found in chat '{chat_name}'")
             return
         payload = {"conversation_ids": to_drop_session_ids}
         response = self.http_client.request("POST", "conversation/rm", json_body=payload, use_api_base=False, auth_kind="web")
         res_json = response.json()
         code = res_json.get("code", res_json.get("retcode", -1))
         if response.status_code == 200 and code == 0:
-            print(f"Success to drop chat session '{session_name}' from chat: {chat_name}")
+            print(f"Success to drop chat session '{session_id}' from chat: {chat_name}")
         else:
             msg = res_json.get("message", res_json.get("retmsg", ""))
-            print(f"Fail to drop chat session '{session_name}' from chat {chat_name}: {msg}")
+            print(f"Fail to drop chat session '{session_id}' from chat {chat_name}: {msg}")
 
     def list_chat_sessions(self, command: dict):
         if self.server_type != "user":
