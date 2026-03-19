@@ -490,14 +490,14 @@ class FileService(CommonService):
         return "\n\n".join(res)
 
     @staticmethod
-    def parse(filename, blob, img_base64=True, tenant_id=None):
+    def parse(filename, blob, img_base64=True, tenant_id=None, layout_recognize=None):
         from core.app import audio, email, naive, picture, presentation
 
         def dummy(prog=None, msg=""):
             pass
 
         FACTORY = {ParserType.PRESENTATION.value: presentation, ParserType.PICTURE.value: picture, ParserType.AUDIO.value: audio, ParserType.EMAIL.value: email}
-        parser_config = {"chunk_token_num": 16096, "delimiter": "\n!?;。；！？", "layout_recognize": "Plain Text"}
+        parser_config = {"chunk_token_num": 16096, "delimiter": "\n!?;。；！？", "layout_recognize": layout_recognize or "Plain Text"}
         kwargs = {"lang": "Chinese", "callback": dummy, "parser_config": parser_config, "from_page": 0, "to_page": 100000, "tenant_id": tenant_id}
         file_type = filename_type(filename)
         if img_base64 and file_type == FileType.VISUAL.value:
@@ -653,7 +653,7 @@ class FileService(CommonService):
         return structured(file.filename, filename_type(file.filename), file_content, file.content_type)
 
     @staticmethod
-    def get_files(files: list[dict] | None, raw: bool = False) -> list[str] | tuple[list[str], list[bytes]]:
+    def get_files(files: list[dict] | None, raw: bool = False, layout_recognize: str = None) -> list[str] | tuple[list[str], list[bytes]]:
         if not files:
             return ([], []) if raw else []
 
@@ -678,7 +678,8 @@ class FileService(CommonService):
                 file["name"],
                 FileService.get_blob(file["created_by"], file["id"]),
                 True,
-                file["created_by"]
+                file["created_by"],
+                layout_recognize
             ))
 
         if raw:
