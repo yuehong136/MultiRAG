@@ -6,7 +6,6 @@ import re
 from copy import deepcopy
 import jinja2
 import json_repair
-from sqlalchemy.orm import Session
 
 from api.db.db_models import db_connection
 from common.misc_utils import hash_str2int
@@ -23,13 +22,22 @@ def get_value(d, k1, k2):
     return d.get(k1, d.get(k2))
 
 
+def normalize_prompt_kb_id(raw_kb_id):
+    if isinstance(raw_kb_id, list):
+        for kb_id in raw_kb_id:
+            if isinstance(kb_id, str) and kb_id:
+                return kb_id
+        return ""
+    return raw_kb_id or ""
+
+
 def chunks_format(reference):
     if not reference or not isinstance(reference, dict):
         return []
     return [
         {
             "id": get_value(chunk, "chunk_id", "id"),
-            "content": get_value(chunk, "content", "text"),
+            "content": chunk.get("content") or chunk.get("text") or chunk.get("content_with_weight"),
             "document_id": get_value(chunk, "doc_id", "document_id"),
             "document_name": get_value(chunk, "docnm_kwd", "document_name"),
             "dataset_id": get_value(chunk, "kb_id", "dataset_id"),
@@ -115,7 +123,7 @@ def kb_prompt(kbinfos, max_tokens, hash_id=False):
         docs = DocMetadataService.get_metadata_for_documents(
             db,
             doc_ids,
-            get_value(kbinfos["chunks"][0], "kb_id", "dataset_id") if kbinfos["chunks"][:chunks_num] else "",
+            normalize_prompt_kb_id(get_value(kbinfos["chunks"][0], "kb_id", "dataset_id")) if kbinfos["chunks"][:chunks_num] else "",
         )
 
     def draw_node(k, line):

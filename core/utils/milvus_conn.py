@@ -19,7 +19,6 @@ This module provides a specialized Milvus connection for storing and retrieving 
 """
 
 import copy
-import json
 import re
 import time
 from datetime import datetime
@@ -48,6 +47,28 @@ from common.float_utils import get_float
 from common.string_utils import truncate_utf8_bytes
 
 ATTEMPT_TIME = 2
+ARRAY_FILTER_FIELDS = {"important_kwd", "question_kwd", "entities_kwd"}
+
+
+def quote_milvus_filter_value(value) -> str:
+    return f"'{value}'" if isinstance(value, str) else str(value)
+
+
+def build_milvus_filter_clause(field_name: str, value) -> str:
+    if field_name in ARRAY_FILTER_FIELDS:
+        if isinstance(value, list):
+            values = ",".join(quote_milvus_filter_value(item) for item in value)
+            return f"ARRAY_CONTAINS_ANY({field_name}, [{values}])"
+        return f"ARRAY_CONTAINS({field_name}, {quote_milvus_filter_value(value)})"
+
+    if isinstance(value, list):
+        values = ",".join(quote_milvus_filter_value(item) for item in value)
+        return f"{field_name} in [{values}]"
+
+    if isinstance(value, str):
+        return f"{field_name} == '{value}'"
+
+    return f"{field_name} == {value}"
 
 
 @singleton
@@ -137,12 +158,11 @@ class MilvusConnection(MilvusConnectionBase):
                             if kk == "exists":
                                 filter_parts.append(f'{vv} == ""')
                 elif isinstance(v, list):
-                    values = [f"'{item}'" if isinstance(item, str) else str(item) for item in v]
-                    filter_parts.append(f"{k} in [{','.join(values)}]")
+                    filter_parts.append(build_milvus_filter_clause(k, v))
                 elif isinstance(v, str):
-                    filter_parts.append(f"{k} == '{v}'")
+                    filter_parts.append(build_milvus_filter_clause(k, v))
                 elif isinstance(v, (int, float)):
-                    filter_parts.append(f"{k} == {v}")
+                    filter_parts.append(build_milvus_filter_clause(k, v))
 
             if filter_parts:
                 filter_expr = " && ".join(filter_parts)
@@ -456,12 +476,11 @@ class MilvusConnection(MilvusConnectionBase):
                     self.logger.warning(f"Milvus doesn't support exists query: {k}={v}, this condition will be ignored")
                     continue
                 if isinstance(v, list):
-                    values = [f"'{item}'" if isinstance(item, str) else str(item) for item in v]
-                    filter_parts.append(f"{k} in [{','.join(values)}]")
+                    filter_parts.append(build_milvus_filter_clause(k, v))
                 elif isinstance(v, str):
-                    filter_parts.append(f"{k} == '{v}'")
+                    filter_parts.append(build_milvus_filter_clause(k, v))
                 elif isinstance(v, (int, float)):
-                    filter_parts.append(f"{k} == {v}")
+                    filter_parts.append(build_milvus_filter_clause(k, v))
                 else:
                     self.logger.warning(f"Condition `{k}={v}` type {type(v)} not supported, will be ignored")
 
@@ -602,12 +621,11 @@ class MilvusConnection(MilvusConnectionBase):
             if k in ("pk", "id") or not v:
                 continue
             if isinstance(v, list):
-                values = [f"'{item}'" if isinstance(item, str) else str(item) for item in v]
-                filter_parts.append(f"{k} in [{','.join(values)}]")
+                filter_parts.append(build_milvus_filter_clause(k, v))
             elif isinstance(v, str):
-                filter_parts.append(f"{k} == '{v}'")
+                filter_parts.append(build_milvus_filter_clause(k, v))
             elif isinstance(v, (int, float)):
-                filter_parts.append(f"{k} == {v}")
+                filter_parts.append(build_milvus_filter_clause(k, v))
 
         filter_expr = " && ".join(filter_parts) if filter_parts else ""
 
@@ -917,7 +935,7 @@ class MilvusConnection(MilvusConnectionBase):
                     timeout=timeout,
                     **kwargs,
                 )
-            except Exception as ex:
+            except Exception:
                 self.logger.error(f"Hybrid search collection failed: {coll}", exc_info=True)
                 continue
 
@@ -1157,8 +1175,6 @@ class MilvusConnection(MilvusConnectionBase):
     def get_cluster_stats(self):
         """Get Milvus cluster statistics."""
         try:
-            from common.misc_utils import convert_bytes
-
             server_version = utility.get_server_version(using=self._using)
             server_type = utility.get_server_type(using=self._using)
 

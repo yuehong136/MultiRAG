@@ -72,6 +72,8 @@ def index_name_one(uid, kb_name):
 
 
 class Dealer:
+    ARRAY_FILTER_FIELDS = {"important_kwd", "question_kwd", "entities_kwd"}
+
     def __init__(self, dataStore: DocStoreConnection):
         self.qryr = query.FulltextQueryer()
         self.dataStore = dataStore
@@ -193,6 +195,13 @@ class Dealer:
             elif k == "auth":
                 # auth 字段特殊处理 - 直接使用值作为表达式
                 filter_parts.append(f"{v}")
+            elif k in self.ARRAY_FILTER_FIELDS:
+                if isinstance(v, list):
+                    values = [f"'{item}'" if isinstance(item, str) else str(item) for item in v]
+                    filter_parts.append(f"ARRAY_CONTAINS_ANY({k}, [{','.join(values)}])")
+                else:
+                    value = f"'{v}'" if isinstance(v, str) else str(v)
+                    filter_parts.append(f"ARRAY_CONTAINS({k}, {value})")
             elif isinstance(v, list):
                 # 其他字段按类型处理 - 列表
                 values = [f"'{item}'" if isinstance(item, str) else str(item) for item in v]
@@ -415,7 +424,7 @@ class Dealer:
             )
 
     def get_aggregation(self, res, g):
-        if not "aggregations" in res or "aggs_" + g not in res["aggregations"]:
+        if "aggregations" not in res or "aggs_" + g not in res["aggregations"]:
             return
         bkts = res["aggregations"]["aggs_" + g]["buckets"]
         return [(b["key"], b["doc_count"]) for b in bkts]
@@ -446,7 +455,8 @@ class Dealer:
                 for w in keywords:
                     t = re.sub(r"(^|[ .?/'\"\(\)!,:;-])(%s)([ .?/'\"\(\)!,:;-])" % re.escape(w), r"\1<em>\2</em>\3", t,
                                flags=re.IGNORECASE | re.MULTILINE)
-                if not re.search(r"<em>[^<>]+</em>", t, flags=re.IGNORECASE | re.MULTILINE): continue
+                if not re.search(r"<em>[^<>]+</em>", t, flags=re.IGNORECASE | re.MULTILINE):
+                    continue
                 txts.append(t)
 
             # 拼接并返回最终结果
@@ -628,7 +638,7 @@ class Dealer:
                 # 如果是字符串格式，尝试解析
                 try:
                     vector = [get_float(v) for v in vector.split("\t")]
-                except:
+                except Exception:
                     vector = [0.0] * vector_dim
                     zero_count += 1
 

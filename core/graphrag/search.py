@@ -26,7 +26,7 @@ from common.token_utils import num_tokens_from_string
 from common.doc_store.doc_store_base import OrderByExpr
 from common.float_utils import get_float
 from common import settings
-from common.misc_utils import get_uuid
+from common.misc_utils import get_uuid, thread_pool_exec
 from core.nlp.search import Dealer, index_name
 from core.graphrag.llm_protocol import GraphRAGCompletionLLM, unwrap_graphrag_chat_response
 from core.graphrag.query_analyze_prompt import PROMPTS
@@ -66,7 +66,7 @@ class KGSearch(Dealer):
         return normalized
 
     async def query_rewrite(self, llm: GraphRAGCompletionLLM, question, idxnms, kb_ids):
-        idxnms = await self._normalize_idx_names(idxnms)
+        idxnms = self._normalize_idx_names(idxnms)
         ty2ents = await get_entity_type2samples(idxnms, kb_ids)
         hint_prompt = PROMPTS["minirag_query2kwd"].format(query=question,
                                                           TYPE_POOL=json.dumps(ty2ents, ensure_ascii=False, indent=2))
@@ -145,26 +145,44 @@ class KGSearch(Dealer):
             }
         return res
 
-    def get_relevant_ents_by_keywords(self, keywords, filters, idxnms, kb_ids, emb_mdl, sim_thr=0.3, N=56):
+    async def get_relevant_ents_by_keywords(self, keywords, filters, idxnms, kb_ids, emb_mdl, sim_thr=0.3, N=56):
         if not keywords:
             return {}
         filters = deepcopy(filters)
         filters["knowledge_graph_kwd"] = "entity"
-        matchDense = self.get_vector(", ".join(keywords), emb_mdl, 1024, sim_thr)
-        milvus_res = self.dataStore.search(["content_with_weight", "entity_kwd", "rank_flt"], [], filters, [matchDense],
-                                       OrderByExpr(), 0, N,
-                                       idxnms, kb_ids)
+        matchDense = await self.get_vector(", ".join(keywords), emb_mdl, 1024, sim_thr)
+        milvus_res = await thread_pool_exec(
+            self.dataStore.search,
+            ["content_with_weight", "entity_kwd", "rank_flt"],
+            [],
+            filters,
+            [matchDense],
+            OrderByExpr(),
+            0,
+            N,
+            idxnms,
+            kb_ids,
+        )
         return self._ent_info_from_(milvus_res, sim_thr)
 
-    def get_relevant_relations_by_txt(self, txt, filters, idxnms, kb_ids, emb_mdl, sim_thr=0.3, N=56):
+    async def get_relevant_relations_by_txt(self, txt, filters, idxnms, kb_ids, emb_mdl, sim_thr=0.3, N=56):
         if not txt:
             return {}
         filters = deepcopy(filters)
         filters["knowledge_graph_kwd"] = "relation"
-        matchDense = self.get_vector(txt, emb_mdl, 1024, sim_thr)
-        milvus_res = self.dataStore.search(
+        matchDense = await self.get_vector(txt, emb_mdl, 1024, sim_thr)
+        milvus_res = await thread_pool_exec(
+            self.dataStore.search,
             ["content_with_weight", "_score", "from_entity_kwd", "to_entity_kwd", "weight_int"],
-            [], filters, [matchDense], OrderByExpr(), 0, N, idxnms, kb_ids)
+            [],
+            filters,
+            [matchDense],
+            OrderByExpr(),
+            0,
+            N,
+            idxnms,
+            kb_ids,
+        )
         return self._relation_info_from_(milvus_res, sim_thr)
 
     def get_relevant_ents_by_types(self, types, filters, idxnms, kb_ids, N=56):
@@ -210,9 +228,13 @@ class KGSearch(Dealer):
             ents = [qst]
             pass
 
-        ents_from_query = self.get_relevant_ents_by_keywords(ents, filters, idxnms, kb_ids, emb_mdl, ent_sim_threshold)
+        ents_from_query = await self.get_relevant_ents_by_keywords(
+            ents, filters, idxnms, kb_ids, emb_mdl, ent_sim_threshold
+        )
         ents_from_types = self.get_relevant_ents_by_types(ty_kwds, filters, idxnms, kb_ids, 10000)
-        rels_from_txt = self.get_relevant_relations_by_txt(qst, filters, idxnms, kb_ids, emb_mdl, rel_sim_threshold)
+        rels_from_txt = await self.get_relevant_relations_by_txt(
+            qst, filters, idxnms, kb_ids, emb_mdl, rel_sim_threshold
+        )
         nhop_pathes = defaultdict(dict)
         for _, ent in ents_from_query.items():
             nhops = ent.get("n_hop_ents", [])
@@ -324,7 +346,7 @@ class KGSearch(Dealer):
                                                         comm_topn, max_token),
                 "doc_id": "",
                 "docnm_kwd": "Related content in Knowledge Graph",
-                "kb_id": kb_ids,
+                "kb_id": kb_ids[0] if isinstance(kb_ids, list) else kb_ids,
                 "important_kwd": [],
                 "image_id": "",
                 "similarity": 1.,
@@ -345,7 +367,7 @@ class KGSearch(Dealer):
         fltr["knowledge_graph_kwd"] = "community_report"
         fltr["entities_kwd"] = entities
         comm_res = self.dataStore.search(fields, [], fltr, [],
-                                         OrderByExpr(), 0, topn, idxnms, kb_ids)
+                                         odr, 0, topn, idxnms, kb_ids)
         comm_res_fields = self.dataStore.get_fields(comm_res, fields)
         txts = []
         for ii, (_, row) in enumerate(comm_res_fields.items()):
