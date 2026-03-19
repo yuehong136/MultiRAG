@@ -298,7 +298,8 @@ async def retrieval(
 
             meta = dict(metadata_map.get(chunk["doc_id"], {})) if chunk["doc_id"] in existing_doc_ids else {}
             meta["doc_id"] = chunk["doc_id"]
-
+            # Dify expects metadata.document_id for external retrieval sources.
+            meta["document_id"] = chunk["doc_id"]
             records.append(
                 RetrievalRecord(
                     content=chunk.get("content_with_weight", ""),
