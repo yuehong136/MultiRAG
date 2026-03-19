@@ -17,7 +17,7 @@ from api.db.services.file_service import FileService
 from api.utils.api_utils import get_error_data_result, get_result, server_error_response, token_required, \
     get_json_result
 from api.utils.file_utils import filename_type
-from api.utils.web_utils import CONTENT_TYPE_MAP
+from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers
 from common import settings
 from common.misc_utils import get_uuid, thread_pool_exec
 from common.constants import RetCode
@@ -445,23 +445,23 @@ def download_file(
 
         # 确定文件的MIME类型
         ext = re.search(r"\.([^.]+)$", file.name)
-        content_type = "application/octet-stream"  # 默认类型
-        
-        if ext:
-            if file.type == FileType.VISUAL.value:
-                content_type = f'image/{ext.group(1)}'
-            else:
-                content_type = f'application/{ext.group(1)}'
+        extension = ext.group(1).lower() if ext else None
+        content_type = None
+        if extension:
+            fallback_prefix = "image" if file.type == FileType.VISUAL.value else "application"
+            content_type = CONTENT_TYPE_MAP.get(extension, f"{fallback_prefix}/{extension}")
 
         # 使用StreamingResponse返回文件
         from io import BytesIO
-        return StreamingResponse(
+        response = StreamingResponse(
             BytesIO(blob),
-            media_type=content_type,
+            media_type=content_type or "application/octet-stream",
             headers={
                 "Content-Disposition": f"attachment; filename={file.name}"
             }
         )
+        apply_safe_file_response_headers(response, content_type, extension)
+        return response
     except Exception as e:
         return server_error_response(e)
 
@@ -488,10 +488,12 @@ async def download_attachment(
         content_type = CONTENT_TYPE_MAP.get(ext, f"application/{ext}")
 
         from io import BytesIO
-        return StreamingResponse(
+        response = StreamingResponse(
             BytesIO(data),
             media_type=content_type
         )
+        apply_safe_file_response_headers(response, content_type, ext)
+        return response
     except Exception as e:
         return server_error_response(e)
 

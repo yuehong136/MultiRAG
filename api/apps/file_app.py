@@ -21,7 +21,7 @@ from starlette.responses import StreamingResponse
 from api.apps import manager
 from api.db import FileType
 from api.utils.file_utils import filename_type
-from api.utils.web_utils import CONTENT_TYPE_MAP
+from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers
 from api.common.check_team_permission import check_file_team_permission
 from api.db.db_models import get_db
 from api.db.services import duplicate_name
@@ -557,16 +557,15 @@ def get_file(
         file_stream = BytesIO(file_content)
         ext = re.search(r"\.([^.]+)$", file.name.lower())
         ext = ext.group(1) if ext else None
-        media_type = "application/octet-stream"
+        content_type = None
         if ext:
-            if file.type == FileType.VISUAL.value:
-                media_type = CONTENT_TYPE_MAP.get(ext, f"image/{ext}")
-            else:
-                media_type = CONTENT_TYPE_MAP.get(ext, f"application/{ext}")
+            fallback_prefix = "image" if file.type == FileType.VISUAL.value else "application"
+            content_type = CONTENT_TYPE_MAP.get(ext, f"{fallback_prefix}/{ext}")
         encoded_filename = quote(file.name)
 
-        response = StreamingResponse(file_stream, media_type=media_type)
+        response = StreamingResponse(file_stream, media_type=content_type or "application/octet-stream")
         response.headers["Content-Disposition"] = f"attachment; filename={encoded_filename}"
+        apply_safe_file_response_headers(response, content_type, ext)
         return response
     except Exception as e:
         return construct_error_response(e)

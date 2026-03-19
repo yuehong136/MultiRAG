@@ -138,6 +138,45 @@ CONTENT_TYPE_MAP = {
 }
 
 
+FORCE_ATTACHMENT_EXTENSIONS = {
+    "htm",
+    "html",
+    "shtml",
+    "xht",
+    "xhtml",
+    "xml",
+    "mhtml",
+    "svg",
+}
+
+
+FORCE_ATTACHMENT_CONTENT_TYPES = {
+    "text/html",
+    "image/svg+xml",
+    "application/xhtml+xml",
+    "text/xml",
+    "application/xml",
+    "multipart/related",
+}
+
+
+def should_force_attachment(ext: str | None, content_type: str | None = None) -> bool:
+    normalized_ext = (ext or "").lower().strip(".")
+    if normalized_ext in FORCE_ATTACHMENT_EXTENSIONS:
+        return True
+    normalized_type = (content_type or "").lower()
+    return normalized_type in FORCE_ATTACHMENT_CONTENT_TYPES
+
+
+def apply_safe_file_response_headers(response, content_type: str | None, ext: str | None = None):
+    if content_type:
+        response.headers["Content-Type"] = content_type
+    if should_force_attachment(ext, content_type):
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Content-Disposition"] = "attachment"
+    return response
+
+
 def html2pdf(
     source: str,
     timeout: int = 2,

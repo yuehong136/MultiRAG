@@ -46,7 +46,7 @@ from api.common.check_team_permission import check_kb_team_permission
 from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str, \
     get_json_result, get_data_error_result, server_error_response
 from api.utils.file_utils import filename_type, thumbnail
-from api.utils.web_utils import CONTENT_TYPE_MAP, html2pdf, is_valid_url
+from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers, html2pdf, is_valid_url
 from common.misc_utils import get_uuid, thread_pool_exec
 from common.metadata_utils import meta_filter, convert_conditions, turn2jsonschema
 from common.constants import RetCode
@@ -2780,17 +2780,16 @@ def get_document(
 
         ext = re.search(r"\.([^.]+)$", doc.name.lower())
         ext = ext.group(1) if ext else None
-        media_type = "application/octet-stream"
+        content_type = None
         if ext:
-            if doc.type == FileType.VISUAL.value:
-                media_type = CONTENT_TYPE_MAP.get(ext, f"image/{ext}")
-            else:
-                media_type = CONTENT_TYPE_MAP.get(ext, f"application/{ext}")
+            fallback_prefix = "image" if doc.type == FileType.VISUAL.value else "application"
+            content_type = CONTENT_TYPE_MAP.get(ext, f"{fallback_prefix}/{ext}")
 
         # 使用 quote 对文件名进行编码
         encoded_filename = quote(doc.name)
-        response = StreamingResponse(file_stream, media_type=media_type)
+        response = StreamingResponse(file_stream, media_type=content_type or "application/octet-stream")
         response.headers["Content-Disposition"] = f"attachment; filename*=UTF-8''{encoded_filename}"
+        apply_safe_file_response_headers(response, content_type, ext)
         return response
     except Exception as e:
         return construct_error_response(e)
@@ -2814,8 +2813,9 @@ def download_attachment(
     """
     try:
         data = settings.STORAGE_IMPL.get(user.id, attachment_id)
+        content_type = CONTENT_TYPE_MAP.get(ext, f"application/{ext}")
         response = Response(content=data)
-        response.headers["Content-Type"] = CONTENT_TYPE_MAP.get(ext, f"application/{ext}")
+        apply_safe_file_response_headers(response, content_type, ext)
         return response
     except Exception as e:
         return construct_error_response(e)
