@@ -36,6 +36,7 @@ from common.token_utils import num_tokens_from_string
 from common.float_utils import normalize_overlapped_percent
 from common.parser_config_utils import normalize_layout_recognizer
 from core.utils.file_utils import extract_embed_file, extract_links_from_pdf, extract_links_from_docx, extract_html
+from core.utils.lazy_image import LazyDocxImage
 from core.nlp import concat_img, find_codec, naive_merge, naive_merge_with_images, naive_merge_docx, rag_tokenizer, \
     tokenize_chunks, doc_tokenize_chunks_with_images, tokenize_table, append_context2table_image4pdf, tokenize_chunks_with_images, \
     attach_media_context
@@ -248,7 +249,7 @@ class Docx(DocxParser):
         imgs = paragraph._element.xpath(".//pic:pic")
         if not imgs:
             return None
-        res_img = None
+        image_blobs = []
         for img in imgs:
             embed = img.xpath(".//a:blip/@r:embed")
             if not embed:
@@ -272,17 +273,11 @@ class Docx(DocxParser):
             except Exception as e:
                 logging.warning(f"The recognized image stream appears to be corrupted. Skipping image, exception: {e}")
                 continue
-            try:
-                image = Image.open(BytesIO(image_blob)).convert("RGB")
-                if res_img is None:
-                    res_img = image
-                else:
-                    res_img = concat_img(res_img, image)
-            except Exception as e:
-                logging.warning(f"Fail to open or concat images, exception: {e}")
-                continue
+            image_blobs.append(image_blob)
 
-        return res_img
+        if not image_blobs:
+            return None
+        return LazyDocxImage(image_blobs)
 
     def __clean(self, line):
         line = re.sub(r"\u3000", " ", line).strip()
