@@ -6,6 +6,7 @@ import json
 import logging
 import time
 from functools import partial
+from urllib.parse import quote_plus
 
 from fastapi import (
     APIRouter,
@@ -17,8 +18,8 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
-from peewee import MySQLDatabase, PostgresqlDatabase
 
 from agent.component.llm import LLM
 from api.apps import manager
@@ -1021,8 +1022,8 @@ def test_db_connect(
         - data: "Database Connection Successful!" 表示连接成功
     
     支持的数据库：
-    1. **MySQL/MariaDB**: 使用MySQLDatabase
-    2. **PostgreSQL**: 使用PostgresqlDatabase
+    1. **MySQL/MariaDB**: 使用SQLAlchemy + pymysql
+    2. **PostgreSQL**: 使用SQLAlchemy + psycopg2
     3. **MS SQL Server**: 使用pyodbc，需要ODBC Driver 17
     4. **IBM DB2**: 使用ibm_db
     
@@ -1050,30 +1051,14 @@ def test_db_connect(
     
     try:
         if req["db_type"] in ["mysql", "mariadb"]:
-            db_conn = MySQLDatabase(
-                req["database"],
-                user=req["username"],
-                host=req["host"],
-                port=req["port"],
-                password=req["password"]
-            )
+            url = f"mysql+pymysql://{quote_plus(req['username'])}:{quote_plus(req['password'])}@{req['host']}:{req['port']}/{req['database']}"
+            engine = create_engine(url)
         elif req["db_type"] == "oceanbase":
-            db_conn = MySQLDatabase(
-                req["database"],
-                user=req["username"],
-                host=req["host"],
-                port=req["port"],
-                password=req["password"],
-                charset="utf8mb4"
-            )
+            url = f"mysql+pymysql://{quote_plus(req['username'])}:{quote_plus(req['password'])}@{req['host']}:{req['port']}/{req['database']}?charset=utf8mb4"
+            engine = create_engine(url)
         elif req["db_type"] == 'postgres':
-            db_conn = PostgresqlDatabase(
-                req["database"],
-                user=req["username"],
-                host=req["host"],
-                port=req["port"],
-                password=req["password"]
-            )
+            url = f"postgresql+psycopg2://{quote_plus(req['username'])}:{quote_plus(req['password'])}@{req['host']}:{req['port']}/{req['database']}"
+            engine = create_engine(url)
         elif req["db_type"] == 'mssql':
             import pyodbc
             connection_string = (
@@ -1159,8 +1144,9 @@ def test_db_connect(
             return server_error_response("Unsupported database type.")
         
         if req["db_type"] != 'mssql':
-            db_conn.connect()
-        db_conn.close()
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            engine.dispose()
         
         return get_json_result(data="Database Connection Successful!")
     except Exception as e:

@@ -65,8 +65,14 @@ class FlowHierarchicalMerger:
         if callback:
             callback(0.1, "Start to merge hierarchically.")
         
-        # 提取文本行
-        lines = [c.get("content_with_weight", c.get("text", "")) for c in chunks]
+        # 提取文本行（参考 hierarchical_merger.py 第 71-86 行的健壮性改进）
+        lines = []
+        for c in chunks:
+            if isinstance(c, dict):
+                raw_text = c.get("content_with_weight", c.get("text"))
+            else:
+                raw_text = c
+            lines.append(raw_text if isinstance(raw_text, str) else ("" if raw_text is None else str(raw_text)))
         
         # 识别每行的层级
         matches = []

@@ -25,7 +25,7 @@ from tika import parser as tika_parser
 from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
 from core.app.naive import Docx, Markdown as MarkdownParser
-from core.nlp import concat_img
+from core.nlp import BULLET_PATTERN, bullets_category, concat_img, docx_question_level, not_bullet
 from core.llm.cv import Base as VLM
 from common.constants import LLMType
 from common.misc_utils import thread_pool_exec
@@ -60,6 +60,85 @@ class FlowParser:
     - Markdown (json/text)
     """
     
+    @staticmethod
+    def _extract_word_title_lines(doc, to_page=100000):
+        """提取 Word 文档标题行（参考 core/flow/parser/parser.py._extract_word_title_lines）"""
+        lines = []
+        if not doc or not getattr(doc, "paragraphs", None):
+            return lines
+
+        pn = 0
+        bull = bullets_category([p.text for p in doc.paragraphs])
+        for p in doc.paragraphs:
+            if pn > to_page:
+                break
+            question_level, p_text = docx_question_level(p, bull)
+            lines.append((question_level, p_text))
+            for run in p.runs:
+                if "lastRenderedPageBreak" in run._element.xml:
+                    pn += 1
+                    continue
+                if "w:br" in run._element.xml and 'type="page"' in run._element.xml:
+                    pn += 1
+        return lines
+
+    @staticmethod
+    def _extract_markdown_title_lines(sections):
+        """提取 Markdown 标题行（参考 core/flow/parser/parser.py._extract_markdown_title_lines）"""
+        lines = []
+        if not sections:
+            return lines
+
+        section_texts = []
+        for section in sections:
+            text = section[0] if isinstance(section, tuple) else section
+            if not isinstance(text, str):
+                continue
+            text = text.strip()
+            if text:
+                section_texts.append(text)
+
+        if not section_texts:
+            return lines
+
+        bull = bullets_category(section_texts)
+        if bull < 0:
+            return lines
+
+        bullet_patterns = BULLET_PATTERN[bull]
+        default_level = len(bullet_patterns) + 1
+        for text in section_texts:
+            level = default_level
+            for idx, pattern in enumerate(bullet_patterns, start=1):
+                if re.match(pattern, text) and not not_bullet(text):
+                    level = idx
+                    break
+            lines.append((level, text))
+        return lines
+
+    @staticmethod
+    def _extract_title_texts(lines):
+        """提取标题文本集合（参考 core/flow/parser/parser.py._extract_title_texts）"""
+        normalized_lines = []
+        level_set = set()
+        for level, txt in lines or []:
+            if not isinstance(txt, str):
+                continue
+            txt = txt.strip()
+            if not txt:
+                continue
+            normalized_lines.append((level, txt))
+            level_set.add(level)
+
+        if not normalized_lines or not level_set:
+            return set()
+
+        sorted_levels = sorted(level_set)
+        h2_level = sorted_levels[1] if len(sorted_levels) > 1 else 1
+        h2_level = sorted_levels[-2] if h2_level == sorted_levels[-1] and len(sorted_levels) > 2 else h2_level
+
+        return {txt for level, txt in normalized_lines if level <= h2_level}
+
     @staticmethod
     async def parse_audio(
         filename: str,
@@ -129,10 +208,12 @@ class FlowParser:
         callback=None,
         table_context_size: int = 0,
         image_context_size: int = 0,
+        abstract: bool = False,
+        author: bool = False,
         **method_kwargs
     ) -> dict:
         """
-        PDF 解析（参考 core/flow/parser/parser.py._pdf 第 229-400 行）
+        PDF 解析（参考 core/flow/parser/parser.py._pdf 第 296-530 行）
 
         Args:
             parse_method:
@@ -359,6 +440,68 @@ class FlowParser:
             elif layout == "table":
                 b["doc_type_kwd"] = "table"
         
+        # 提取作者信息（参考 core/flow/parser/parser.py 第 467-502 行）
+        if author:
+
+            def _begin(txt):
+                if not isinstance(txt, str):
+                    return False
+                return re.match(
+                    r"[0-9. 一、i]*(introduction|abstract|摘要|引言|keywords|key words|关键词|background|背景|目录|前言|contents)",
+                    txt.lower().strip(),
+                )
+
+            i = 0
+            while i < min(32, len(bboxes) - 1):
+                b = bboxes[i]
+                i += 1
+                layout_type = b.get("layout_type", "")
+                layoutno = b.get("layoutno", "")
+                is_title = "title" in str(layout_type).lower() or "title" in str(layoutno).lower()
+                if not is_title:
+                    continue
+
+                title_txt = b.get("text", "")
+                if _begin(title_txt):
+                    break
+
+                for j in range(3):
+                    next_idx = i + j
+                    if next_idx >= len(bboxes):
+                        break
+                    candidate = bboxes[next_idx].get("text", "")
+                    if _begin(candidate):
+                        break
+                    if isinstance(candidate, str) and "@" in candidate:
+                        break
+                    bboxes[next_idx]["author"] = True
+                break
+
+        # 提取摘要信息（参考 core/flow/parser/parser.py 第 504-525 行）
+        if abstract:
+            i = 0
+            abstract_idx = None
+            while i + 1 < min(32, len(bboxes)):
+                b = bboxes[i]
+                i += 1
+                txt = b.get("text", "")
+                if not isinstance(txt, str):
+                    continue
+                txt = txt.lower().strip()
+                if re.match(r"(abstract|摘要)", txt):
+                    if len(txt.split()) > 32 or len(txt) > 64:
+                        abstract_idx = i - 1
+                        break
+                    next_txt = bboxes[i].get("text", "") if i < len(bboxes) else ""
+                    if isinstance(next_txt, str):
+                        next_txt = next_txt.lower().strip()
+                        if len(next_txt.split()) > 32 or len(next_txt) > 64:
+                            abstract_idx = i
+                    i += 1
+                    break
+            if abstract_idx is not None:
+                bboxes[abstract_idx]["abstract"] = True
+
         # 注意：attach_media_context 在 splitter 阶段调用（参考 splitter.py 第 112-119 行）
         # parser 阶段只负责标记 doc_type_kwd，不添加上下文
 
@@ -553,13 +696,20 @@ class FlowParser:
 
         if output_format == "json":
             main_sections = await _to_thread(docx_parser, filename, binary)
+            # 提取标题信息（参考 core/flow/parser/parser.py._word）
+            title_lines = FlowParser._extract_word_title_lines(getattr(docx_parser, "doc", None))
+            title_texts = FlowParser._extract_title_texts(title_lines)
             sections = []
             tbls = []
             for text, image, html in main_sections:
-                sections.append((text, image))
+                section = {"text": text, "image": image}
+                text_key = text.strip() if isinstance(text, str) else ""
+                if text_key and text_key in title_texts:
+                    section["title"] = True
+                sections.append(section)
                 tbls.append(((None, html), ""))
 
-            json_sections = [{"text": section[0], "image": section[1]} for section in sections if section]
+            json_sections = sections
             json_sections.extend([{"text": tb, "image": None, "doc_type_kwd": "table"} for ((_, tb), _) in tbls])
 
             # 注意：attach_media_context 在 splitter 阶段调用
@@ -729,10 +879,16 @@ class FlowParser:
         
         if output_format == "json":
             json_results = []
-            
+            # 提取标题信息（参考 core/flow/parser/parser.py._markdown）
+            title_lines = FlowParser._extract_markdown_title_lines(sections)
+            title_texts = FlowParser._extract_title_texts(title_lines)
+
             for idx, (section_text, _) in enumerate(sections):
                 json_result = {"text": section_text}
-                
+                text_key = section_text.strip() if isinstance(section_text, str) else ""
+                if text_key and text_key in title_texts:
+                    json_result["title"] = True
+
                 # 从 section_images 获取图片（参考 parser.py 第 580-587 行）
                 images = []
                 if section_images and len(section_images) > idx and section_images[idx] is not None:
@@ -1071,7 +1227,7 @@ async def parse_file(
     
     # PDF 文件
     elif ext == "pdf":
-        pdf_extra = {k: v for k, v in pdf_config.items() if k not in {"parse_method", "output_format", "lang", "table_context_size", "image_context_size"}}
+        pdf_extra = {k: v for k, v in pdf_config.items() if k not in {"parse_method", "output_format", "lang", "table_context_size", "image_context_size", "abstract", "author"}}
         return await FlowParser.parse_pdf(
             filename,
             binary,
@@ -1081,6 +1237,8 @@ async def parse_file(
             pdf_config.get("lang", "Chinese"),
             callback=callback,
             table_context_size=pdf_config.get("table_context_size", 0),
+            abstract=pdf_config.get("abstract", False),
+            author=pdf_config.get("author", False),
             image_context_size=pdf_config.get("image_context_size", 0),
             **pdf_extra
         )
