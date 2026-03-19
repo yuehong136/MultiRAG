@@ -73,6 +73,12 @@ class EngineMetadataStore(MetadataStore):
                 doc_id = cls._extract_doc_id(doc, hit)
                 if doc_id:
                     yield doc_id, doc
+        # Check if OceanBase SearchResult format
+        elif hasattr(results, 'chunks') and hasattr(results, 'total'):
+            for doc in results.chunks:
+                doc_id = cls._extract_doc_id(doc)
+                if doc_id:
+                    yield doc_id, doc
         elif isinstance(results, list):
             for res in results:
                 docs = [res] if isinstance(res, dict) else res
@@ -97,7 +103,7 @@ class EngineMetadataStore(MetadataStore):
         try:
             if not settings.docStoreConn.index_exist(index_name, ""):
                 return
-            if not settings.DOC_ENGINE_INFINITY:
+            if not settings.DOC_ENGINE_INFINITY and not settings.DOC_ENGINE_OCEANBASE:
                 count_resp = settings.docStoreConn.es.count(index=index_name)
                 if count_resp.get("count", 1) == 0:
                     settings.docStoreConn.delete_idx(index_name, "")
@@ -109,10 +115,13 @@ class EngineMetadataStore(MetadataStore):
                     order_by=OrderByExpr(), offset=0, limit=1,
                     index_names=index_name, knowledgebase_ids=[""],
                 )
+                total = None
                 if isinstance(results, tuple):
                     _, total = results
-                    if total == 0:
-                        settings.docStoreConn.delete_idx(index_name, "")
+                elif hasattr(results, 'total'):
+                    total = results.total
+                if total is not None and total == 0:
+                    settings.docStoreConn.delete_idx(index_name, "")
         except Exception as e:
             logger.warning("Failed to check/drop empty metadata index %s: %s", index_name, e)
 
@@ -154,6 +163,10 @@ class EngineMetadataStore(MetadataStore):
                     page_docs = df.to_dict("records")
                 else:
                     page_docs = list(df) if df else []
+            elif hasattr(results, 'chunks') and hasattr(results, 'total'):
+                # OceanBase SearchResult format
+                page_docs = results.chunks
+                total_count = results.total
             elif hasattr(results, "get") and "hits" in results:
                 hits_obj = results.get("hits", {})
                 hits = hits_obj.get("hits", [])
@@ -200,7 +213,7 @@ class EngineMetadataStore(MetadataStore):
                meta_fields: dict) -> bool:
         index_name = self._index_name(tenant_id)
 
-        if not settings.DOC_ENGINE_INFINITY:
+        if not settings.DOC_ENGINE_INFINITY and not settings.DOC_ENGINE_OCEANBASE:
             # ES: partial update or insert
             if not settings.docStoreConn.index_exist(index_name, ""):
                 settings.docStoreConn.create_doc_meta_idx(index_name)
@@ -217,7 +230,7 @@ class EngineMetadataStore(MetadataStore):
                 pass
             return self._insert(index_name, doc_id, kb_id, meta_fields)
 
-        # Infinity: delete + insert
+        # Infinity/OceanBase: delete + insert
         self._delete_from_store(index_name, doc_id, kb_id)
         return self._insert(index_name, doc_id, kb_id, meta_fields)
 
@@ -230,7 +243,7 @@ class EngineMetadataStore(MetadataStore):
         if err:
             logger.error("Failed to insert metadata for doc %s: %s", doc_id, err)
             return False
-        if not settings.DOC_ENGINE_INFINITY:
+        if not settings.DOC_ENGINE_INFINITY and not settings.DOC_ENGINE_OCEANBASE:
             try:
                 settings.docStoreConn.es.indices.refresh(index=index_name)
             except Exception:
@@ -287,7 +300,7 @@ class EngineMetadataStore(MetadataStore):
             if not settings.docStoreConn.index_exist(index_name, ""):
                 continue
 
-            if not settings.DOC_ENGINE_INFINITY:
+            if not settings.DOC_ENGINE_INFINITY and not settings.DOC_ENGINE_OCEANBASE:
                 try:
                     response = settings.docStoreConn.es.mget(
                         index=index_name,
@@ -315,13 +328,13 @@ class EngineMetadataStore(MetadataStore):
             results = settings.docStoreConn.search(
                 select_fields=["*"],
                 highlight_fields=[],
-                condition={"id": group_doc_ids, "kb_id": [kb_id]},
+                condition={"id": group_doc_ids},
                 match_expressions=[],
                 order_by=OrderByExpr(),
                 offset=0,
                 limit=max(len(group_doc_ids), 1),
                 index_names=index_name,
-                knowledgebase_ids=[""],
+                knowledgebase_ids=[kb_id],
             )
             for doc_id, doc in self._iter_results(results):
                 meta = self._extract_metadata(doc)
