@@ -39,6 +39,10 @@ minio:
   bucket: ''
   prefix_path: ''
   workflow_bucket: 'multirag-workflow'
+  # 可选: 设为 true 启用 HTTPS (SSL/TLS)，MinIO 客户端和健康检查均生效
+  # secure: false
+  # 可选: 设为 false 允许自签名证书（如开发环境）
+  # verify: true
 
 azure:
   auth_type: 'spn'

@@ -39,6 +39,10 @@ minio:
   bucket: '${MINIO_BUCKET:-}'
   prefix_path: '${MINIO_PREFIX_PATH:-}'
   workflow_bucket: '${MINIO_WORKFLOW_BUCKET:-multirag-workflow}'
+  # optional: set to true for HTTPS (SSL/TLS). Used by MinIO client and health check.
+  # secure: ${MINIO_SECURE:-false}
+  # optional: set to false to allow self-signed certificates (e.g. in development).
+  # verify: ${MINIO_VERIFY:-true}
 
 azure:
   auth_type: '${AZURE_AUTH_TYPE:-spn}'
