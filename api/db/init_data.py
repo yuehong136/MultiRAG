@@ -7,6 +7,7 @@ import uuid
 from copy import deepcopy
 
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from api.db import UserTenantRole
@@ -84,8 +85,12 @@ def init_superuser(
     # get_init_tenant_llm 已经包含了所有配置的 LLM factory，无需重复添加
     tenant_llm = get_init_tenant_llm(db, user_info["id"])
 
-    if not UserService.save(db, **user_info):
-        logging.error("can't init admin.")
+    try:
+        if not UserService.save(db, **user_info):
+            logging.error("can't init admin.")
+            return
+    except IntegrityError:
+        logging.info("User with email %s already exists, skipping.", email)
         return
     
     # 检查 Tenant 是否已存在，避免重复插入
@@ -113,16 +118,17 @@ def init_superuser(
 
     logging.info(f"Super user initialized. email: {email},A default password has been set; changing the password after login is strongly recommended.")
 
-    chat_mdl = LLMBundle(db, tenant["id"], LLMType.CHAT, tenant["llm_id"])
-    msg = asyncio.run(chat_mdl.async_chat(system="", history=[{"role": "user", "content": "Hello!"}], gen_conf={}))
-    if msg.find("ERROR: ") == 0:
-        logging.error("'{}' doesn't work. {}".format(tenant["llm_id"], msg))
-    else:
-        logging.info("【success！！！】" + msg)
-    embd_mdl = LLMBundle(db, tenant["id"], LLMType.EMBEDDING, tenant["embd_id"])
-    v, c = embd_mdl.encode(["Hello!"])
-    if c == 0:
-        logging.error("'{}' doesn't work!".format(tenant["embd_id"]))
+    if tenant["llm_id"]:
+        chat_mdl = LLMBundle(db, tenant["id"], LLMType.CHAT, tenant["llm_id"])
+        msg = asyncio.run(chat_mdl.async_chat(system="", history=[{"role": "user", "content": "Hello!"}], gen_conf={}))
+        if msg.find("ERROR: ") == 0:
+            logging.error("'{}' doesn't work. {}".format(tenant["llm_id"], msg))
+
+    if tenant["embd_id"]:
+        embd_mdl = LLMBundle(db, tenant["id"], LLMType.EMBEDDING, tenant["embd_id"])
+        v, c = embd_mdl.encode(["Hello!"])
+        if c == 0:
+            logging.error("'{}' doesn't work!".format(tenant["embd_id"]))
 
 
 def init_llm_factory(db: Session):
