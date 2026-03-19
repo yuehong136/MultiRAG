@@ -11,7 +11,7 @@ import os.path
 import json
 import pathlib
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from io import BytesIO
 from typing import Any, Literal
 
@@ -54,6 +54,18 @@ from common.file_utils import get_project_base_directory
 from common import settings
 from core.nlp import search, rag_tokenizer
 from deepdoc.parser.html_parser import RAGFlowHtmlParser
+
+
+def _is_safe_download_filename(name: str) -> bool:
+    if not name or name in {".", ".."}:
+        return False
+    if "\x00" in name or len(name) > 255:
+        return False
+    if name != PurePosixPath(name).name:
+        return False
+    if name != PureWindowsPath(name).name:
+        return False
+    return True
 
 
 router = APIRouter()
@@ -3141,7 +3153,13 @@ async def parse(
                     with open(self.filepath, "rb") as f:
                         return f.read()
 
-            f = File(r.group(1), os.path.join(download_path, r.group(1)))
+            filename = r.group(1).strip()
+            if not _is_safe_download_filename(filename):
+                return get_json_result(
+                    data=False, retmsg="Invalid downloaded filename", retcode=RetCode.ARGUMENT_ERROR
+                )
+            filepath = os.path.join(download_path, filename)
+            f = File(filename, filepath)
             txt = FileService.parse_docs([f], user.id)
             return get_json_result(data=txt)
         except Exception as e:

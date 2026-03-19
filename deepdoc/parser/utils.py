@@ -3,7 +3,7 @@ from core.nlp import find_codec
 
 def get_text(fnm: str, binary=None) -> str:
     txt = ""
-    if binary:
+    if binary is not None:
         encoding = find_codec(binary)
         txt = binary.decode(encoding, errors="ignore")
     else:
