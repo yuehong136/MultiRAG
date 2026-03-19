@@ -21,7 +21,7 @@ from typing import Any
 import xxhash
 from sqlalchemy.exc import NoResultFound, OperationalError
 from sqlalchemy.orm import Session, aliased
-from sqlalchemy import func, asc, and_, or_, select, desc as sa_desc, update
+from sqlalchemy import func, asc, and_, or_, select, desc as sa_desc, update, delete as sa_delete
 
 from api.constants import IMG_BASE64_PREFIX, FILE_NAME_LEN_LIMIT
 from api.utils.db_utils import bulk_insert_into_db
@@ -1913,10 +1913,10 @@ class DocumentService(CommonService):
         from api.db.services.task_service import TaskService, cancel_all_task_of
         # 在删除文档前先保存需要的属性
         doc_id = doc.id
-        cls.clear_chunk_num(db, doc.id)
-
-        document = DocumentService.get_by_doc_id(db, doc.id)
-        kb = KnowledgebaseService.get_by_id(db, document["kb_id"])
+        kb_id = doc.kb_id
+        kb = KnowledgebaseService.get_by_id(db, kb_id)
+        if not cls.delete_document_and_update_kb_counts(db, doc.id):
+            return True
         db_type = settings.docStoreConn.db_type()
         is_tenant_scoped = db_type in {"elasticsearch", "opensearch"}
         collection_name = (
@@ -2023,7 +2023,7 @@ class DocumentService(CommonService):
         except Exception as e:
             logging.warning(f"Failed to cleanup knowledge graph for document {doc_id}: {e}")
 
-        return cls.delete_by_id(db, doc_id)
+        return True
 
     @classmethod
     def get_newly_uploaded(cls, db: Session):
@@ -2152,8 +2152,40 @@ class DocumentService(CommonService):
         return kb_result.rowcount
 
     @classmethod
-    def clear_chunk_num(cls, db: Session, doc_id: str, max_retries=3):
+    def delete_document_and_update_kb_counts(cls, db: Session, doc_id: str) -> bool:
+        """Atomically delete the document row and update KB counters.
+
+        Returns True if the document was deleted by this call, False if it was
+        already deleted by a concurrent request (idempotent).
         """
+        doc = db.get(cls.model, doc_id)
+        if doc is None:
+            return False
+        token_num = doc.token_num
+        chunk_num = doc.chunk_num
+        kb_id = doc.kb_id
+        with db.begin_nested():
+            result = db.execute(
+                sa_delete(cls.model).where(cls.model.id == doc_id)
+            )
+            if not result.rowcount:
+                return False
+            db.execute(
+                update(Knowledgebase)
+                .where(Knowledgebase.id == kb_id)
+                .values(
+                    token_num=Knowledgebase.token_num - token_num,
+                    chunk_num=Knowledgebase.chunk_num - chunk_num,
+                    doc_num=Knowledgebase.doc_num - 1,
+                )
+            )
+        db.commit()
+        return True
+
+    @classmethod
+    def clear_chunk_num(cls, db: Session, doc_id: str, max_retries=3):
+        """Deprecated: use delete_document_and_update_kb_counts instead.
+
         清除文档的 chunk 数量并更新知识库统计（SQLAlchemy 2.0 Core 风格）。
         """
         doc = cls.get_by_id(db, doc_id)
