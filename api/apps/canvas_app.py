@@ -504,7 +504,8 @@ async def run(
     dsl_str = json.dumps(replica_dsl, ensure_ascii=False)
 
     # DataFlow模式
-    if canvas_category == CanvasCategory.DataFlow:
+    _, cvs = await thread_pool_exec(UserCanvasService.get_by_id, db, req["id"])
+    if cvs.canvas_category == CanvasCategory.DataFlow:
         task_id = get_uuid()
         Pipeline(dsl_str, tenant_id=tenant_id, doc_id=CANVAS_DEBUG_DOC_ID, task_id=task_id, flow_id=req["id"])
         ok, error_message = await thread_pool_exec(
