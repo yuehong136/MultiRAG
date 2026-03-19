@@ -2,7 +2,6 @@ import os
 import json
 import secrets
 import logging
-from datetime import date
 
 from common.constants import MULTI_RAG_SERVICE_NAME, SVR_QUEUE_NAME, Storage
 from common.file_utils import get_project_base_directory
@@ -20,6 +19,7 @@ from core.utils.azure_spn_conn import MultiRAGAzureSpnBlob
 from core.utils.gcs_conn import MultiRAGGCS
 from core.utils.minio_conn import MultiRAGMinio
 from core.utils.opendal_conn import OpenDALStorage
+from core.utils.redis_conn import REDIS_CONN
 from core.utils.s3_conn import MultiRAGS3
 from core.utils.oss_conn import MultiRAGOSS
 from core.nlp import search
@@ -149,20 +149,11 @@ def get_svr_queue_names():
 
 
 def _get_or_create_secret_key():
-    secret_key = os.environ.get("MULTIRAG_SECRET_KEY")
-    if secret_key and len(secret_key) >= 32:
-        return secret_key
-
-    # Check if there's a configured secret key
-    configured_key = get_base_config(MULTI_RAG_SERVICE_NAME, {}).get("secret_key")
-    if configured_key and configured_key != str(date.today()) and len(configured_key) >= 32:
-        return configured_key
-
     # Generate a new secure key and warn about it
-    new_key = secrets.token_hex(32)
-    # logging.warning(f"SECURITY WARNING: Using auto-generated SECRET_KEY. Generated key: {new_key}")
-    logging.warning(f"SECURITY WARNING: Using auto-generated SECRET_KEY.")
-    return new_key
+    generated_key = secrets.token_hex(32)
+    secret_key = REDIS_CONN.get_or_create_secret_key("multirag:system:secret_key", generated_key)
+    logging.warning("SECURITY WARNING: Using auto-generated SECRET_KEY.")
+    return secret_key
 
 
 def _parse_model_entry(entry):
