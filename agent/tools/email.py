@@ -68,6 +68,7 @@ class EmailParam(ToolParamBase):
         self.smtp_server = ""  # SMTP server address
         self.smtp_port = 465  # SMTP port
         self.email = ""  # Sender email
+        self.smtp_username = ""  # Optional SMTP login username, fallback to sender email
         self.password = ""  # Email authorization code
         self.sender_name = ""  # Sender name
 
@@ -95,6 +96,7 @@ class EmailParam(ToolParamBase):
                 "optional": True
             },
         }
+
 
 class Email(ToolBase, ABC):
     component_name = "Email"
@@ -149,9 +151,11 @@ class Email(ToolBase, ABC):
                     server.ehlo()
                     server.starttls(context=context)
                     server.ehlo()
+
                     # Login
-                    logging.info(f"Attempting to login with email: {self._param.email}")
-                    server.login(self._param.email, self._param.password)
+                    smtp_username = self._param.smtp_username or self._param.email
+                    logging.info(f"Attempting to login with username: {smtp_username}")
+                    server.login(smtp_username, self._param.password)
 
                     # Get all recipient list
                     recipients = [email_data["to_email"]]
