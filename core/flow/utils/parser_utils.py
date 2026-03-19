@@ -208,8 +208,7 @@ class FlowParser:
         callback=None,
         table_context_size: int = 0,
         image_context_size: int = 0,
-        abstract: bool = False,
-        author: bool = False,
+        preprocess: list | None = None,
         **method_kwargs
     ) -> dict:
         """
@@ -227,6 +226,7 @@ class FlowParser:
             lang: 语言（VLM 模式使用）
             table_context_size: 表格上下文 token 数（0 表示不添加）
             image_context_size: 图片上下文 token 数（0 表示不添加）
+            preprocess: 预处理参数列表（如 ["abstract", "author", "title"]）
             method_kwargs: 解析器特定参数（如 table_result_type、mineru_api 等）
         
         Returns:
@@ -439,9 +439,11 @@ class FlowParser:
                 b["doc_type_kwd"] = "image"
             elif layout == "table":
                 b["doc_type_kwd"] = "table"
-        
+            if "title" in (preprocess or []) and "title" in str(b.get("layout_type", "").lower()):
+                b["title"] = True
+
         # 提取作者信息（参考 core/flow/parser/parser.py 第 467-502 行）
-        if author:
+        if "author" in (preprocess or []):
 
             def _begin(txt):
                 if not isinstance(txt, str):
@@ -478,7 +480,7 @@ class FlowParser:
                 break
 
         # 提取摘要信息（参考 core/flow/parser/parser.py 第 504-525 行）
-        if abstract:
+        if "abstract" in (preprocess or []):
             i = 0
             abstract_idx = None
             while i + 1 < min(32, len(bboxes)):
@@ -642,7 +644,8 @@ class FlowParser:
         output_format: Literal["json", "markdown"] = "json",
         callback=None,
         table_context_size: int = 0,
-        image_context_size: int = 0
+        image_context_size: int = 0,
+        preprocess: list | None = None
     ) -> dict:
         """
         Word 文档解析（参考 core/flow/parser/parser.py._word 第 485-504 行）
@@ -704,7 +707,7 @@ class FlowParser:
             for text, image, html in main_sections:
                 section = {"text": text, "image": image}
                 text_key = text.strip() if isinstance(text, str) else ""
-                if text_key and text_key in title_texts:
+                if text_key and text_key in title_texts and "title" in (preprocess or []):
                     section["title"] = True
                 sections.append(section)
                 tbls.append(((None, html), ""))
@@ -850,7 +853,8 @@ class FlowParser:
         callback=None,
         table_context_size: int = 0,
         image_context_size: int = 0,
-        delimiter: str | None = None
+        delimiter: str | None = None,
+        preprocess: list | None = None
     ) -> dict:
         """
         Markdown 解析（参考 core/flow/parser/parser.py._markdown 第 553-597 行）
@@ -886,7 +890,7 @@ class FlowParser:
             for idx, (section_text, _) in enumerate(sections):
                 json_result = {"text": section_text}
                 text_key = section_text.strip() if isinstance(section_text, str) else ""
-                if text_key and text_key in title_texts:
+                if text_key and text_key in title_texts and "title" in (preprocess or []):
                     json_result["title"] = True
 
                 # 从 section_images 获取图片（参考 parser.py 第 580-587 行）
@@ -1227,7 +1231,7 @@ async def parse_file(
     
     # PDF 文件
     elif ext == "pdf":
-        pdf_extra = {k: v for k, v in pdf_config.items() if k not in {"parse_method", "output_format", "lang", "table_context_size", "image_context_size", "abstract", "author"}}
+        pdf_extra = {k: v for k, v in pdf_config.items() if k not in {"parse_method", "output_format", "lang", "table_context_size", "image_context_size", "preprocess"}}
         return await FlowParser.parse_pdf(
             filename,
             binary,
@@ -1237,9 +1241,8 @@ async def parse_file(
             pdf_config.get("lang", "Chinese"),
             callback=callback,
             table_context_size=pdf_config.get("table_context_size", 0),
-            abstract=pdf_config.get("abstract", False),
-            author=pdf_config.get("author", False),
             image_context_size=pdf_config.get("image_context_size", 0),
+            preprocess=pdf_config.get("preprocess", []),
             **pdf_extra
         )
     
@@ -1264,7 +1267,8 @@ async def parse_file(
             word_config.get("output_format", "json"),
             callback,
             table_context_size=word_config.get("table_context_size", 0),
-            image_context_size=word_config.get("image_context_size", 0)
+            image_context_size=word_config.get("image_context_size", 0),
+            preprocess=word_config.get("preprocess", [])
         )
     
     # PPT 文件
@@ -1290,7 +1294,8 @@ async def parse_file(
             callback,
             table_context_size=markdown_config.get("table_context_size", 0),
             image_context_size=markdown_config.get("image_context_size", 0),
-            delimiter=markdown_config.get("delimiter")
+            delimiter=markdown_config.get("delimiter"),
+            preprocess=markdown_config.get("preprocess", [])
         )
     
     # 图片文件
