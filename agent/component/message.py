@@ -27,7 +27,9 @@ from functools import partial
 from typing import Any
 
 from agent.component.base import ComponentBase, ComponentParamBase
-from jinja2 import Template as Jinja2Template
+from jinja2.sandbox import SandboxedEnvironment
+
+_jinja2_sandbox = SandboxedEnvironment()
 
 from common.connection_utils import timeout
 from common.misc_utils import get_uuid

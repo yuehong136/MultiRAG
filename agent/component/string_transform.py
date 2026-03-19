@@ -18,7 +18,9 @@ import re
 from abc import ABC
 from typing import Any
 
-from jinja2 import Template as Jinja2Template
+from jinja2.sandbox import SandboxedEnvironment
+
+_jinja2_sandbox = SandboxedEnvironment()
 from agent.component.base import ComponentParamBase
 from common.connection_utils import timeout
 from .message import Message
