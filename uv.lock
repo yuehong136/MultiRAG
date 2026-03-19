@@ -2582,7 +2582,7 @@ wheels = [
 [[package]]
 name = "graspologic"
 version = "0.1.dev847+g38e680cab"
-source = { git = "https://github.com/yuzhichang/graspologic.git?rev=38e680cab72bc9fb68a7992c3bcc2d53b24e42fd#38e680cab72bc9fb68a7992c3bcc2d53b24e42fd" }
+source = { git = "https://gitee.com/infiniflow/graspologic.git?rev=38e680cab72bc9fb68a7992c3bcc2d53b24e42fd#38e680cab72bc9fb68a7992c3bcc2d53b24e42fd" }
 dependencies = [
     { name = "anytree" },
     { name = "beartype" },
@@ -4172,7 +4172,7 @@ requires-dist = [
     { name = "google-cloud-storage", specifier = ">=2.19.0,<3.0.0" },
     { name = "google-genai", specifier = ">=1.41.0,<2.0.0" },
     { name = "google-search-results", specifier = "==2.4.2" },
-    { name = "graspologic", git = "https://github.com/yuzhichang/graspologic.git?rev=38e680cab72bc9fb68a7992c3bcc2d53b24e42fd#38e680cab72bc9fb68a7992c3bcc2d53b24e42fd" },
+    { name = "graspologic", git = "https://gitee.com/infiniflow/graspologic.git?rev=38e680cab72bc9fb68a7992c3bcc2d53b24e42fd#38e680cab72bc9fb68a7992c3bcc2d53b24e42fd" },
     { name = "groq", specifier = "==0.9.0" },
     { name = "html-text", specifier = "==0.6.2" },
     { name = "httpx", extras = ["socks"], specifier = ">=0.28.1,<0.29.0" },
