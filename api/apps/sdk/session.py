@@ -1296,11 +1296,11 @@ async def mindmap(request: SearchBotMindmapRequest, db: Session = Depends(get_db
     req = request.model_dump()
     token = request.headers.get("Authorization").split()
     if len(token) != 2:
-        return get_error_data_result(retmsg='Authorization is not valid!"')
+        return get_error_data_result(retmsg='Authorization is not valid!')
     token = token[1]
     objs = APIToken.query(beta=token)
     if not objs:
-        return get_error_data_result(retmsg='Authentication error: API key is invalid!"')
+        return get_error_data_result(retmsg='Authentication error: API key is invalid!')
 
     tenant_id = objs[0].tenant_id
 
