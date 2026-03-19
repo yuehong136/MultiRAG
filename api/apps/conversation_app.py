@@ -618,8 +618,8 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db), 
     req = request.model_dump()
     if not req.get("conversation_id") or not req.get("messages"):
         return get_data_error_result(retmsg="Missing conversation_id or messages!")
-    is_stream = req.get("stream", True)
-    stream = is_stream
+    # Remove stream from req to avoid duplicate argument error
+    stream = req.pop("stream", True)
     msg = []
     for m in req["messages"]:
         if m["role"] == "system":
