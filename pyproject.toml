@@ -181,6 +181,7 @@ dev = [
     "debugpy>=1.8.13",
     "pytest>=8.3.4",
     "pytest-cov>=6.0.0",
+    "pytest-playwright>=0.7.2",
     "ruff",
 ]
 
@@ -202,4 +203,13 @@ exclude = [".venv", "core/svr/discord_svr.py"]
 [tool.pytest.ini_options]
 pythonpath = [
     "."
+]
+
+markers = [
+    "p0: critical priority test cases",
+    "p1: high priority test cases",
+    "p2: medium priority test cases",
+    "p3: low priority test cases",
+    "smoke: smoke test cases",
+    "auth: authentication UI tests",
 ]
