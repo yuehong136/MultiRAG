@@ -41,6 +41,7 @@ class SupportedLiteLLMProvider(StrEnum):
     BaiduYiyan = "BaiduYiyan"
     n1n = "n1n"
     HunYuan = "Tencent Hunyuan"
+    Avian = "Avian"
 
 
 FACTORY_DEFAULT_BASE_URL = {
@@ -69,6 +70,7 @@ FACTORY_DEFAULT_BASE_URL = {
     SupportedLiteLLMProvider.BaiduYiyan: "https://qianfan.baidubce.com/v2",
     SupportedLiteLLMProvider.n1n: "https://api.n1n.ai/v1",
     SupportedLiteLLMProvider.HunYuan: "https://api.hunyuan.cloud.tencent.com/v1",
+    SupportedLiteLLMProvider.Avian: "https://api.avian.io/v1",
 }
 
 
@@ -109,6 +111,7 @@ LITELLM_PROVIDER_PREFIX = {
     SupportedLiteLLMProvider.BaiduYiyan: "openai/",
     SupportedLiteLLMProvider.n1n: "openai/",
     SupportedLiteLLMProvider.HunYuan: "openai/",
+    SupportedLiteLLMProvider.Avian: "openai/",
 }
 
 ChatModel = globals().get("ChatModel", {})
