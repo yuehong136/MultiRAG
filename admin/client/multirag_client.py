@@ -1,7 +1,6 @@
 import json
 import time
 import urllib.parse
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -74,8 +73,8 @@ DROP DATASET <name>
 LIST FILES OF DATASET <name>
 CREATE CHAT <name>
 DROP CHAT <name>
-CREATE CHAT <name> SESSION
-DROP CHAT <name> SESSION <session_id>
+CREATE CHAT <name> SESSION <session_name>
+DROP CHAT <name> SESSION <session_name>
 LIST CHAT <name> SESSIONS
 CHAT <message> ON <chat_name> SESSION <session_id>
 IMPORT <doc_paths> INTO DATASET <dataset_name>
@@ -346,7 +345,7 @@ class MultiRAGClient:
         password_tree: Tree = command["password"]
         password: str = password_tree.children[0].strip("'\"")
         print(f"Alter user: {user_name}, password: ******")
-        from multirag_cli import encrypt
+        from user import encrypt_password as encrypt
         response = self.http_client.request(
             "PUT", f"admin/users/{user_name}/password",
             json_body={"new_password": encrypt(password)},
@@ -371,7 +370,7 @@ class MultiRAGClient:
         password: str = password_tree.children[0].strip("'\"")
         role: str = command["role"]
         print(f"Create user: {user_name}, password: ******, role: {role}")
-        from multirag_cli import encrypt
+        from user import encrypt_password as encrypt
         response = self.http_client.request(
             "POST", "admin/users",
             json_body={"user_name": user_name, "password": encrypt(password), "role": role},
@@ -1110,38 +1109,53 @@ class MultiRAGClient:
             print("This command is only allowed in USER mode")
             return
         chat_name = command["chat_name"]
+        session_name = command["session_name"]
         dialog_id = self._get_chat_id_by_name(chat_name)
         if dialog_id is None:
             return
-        conversation_id = uuid.uuid4().hex
-        payload = {"conversation_id": conversation_id, "is_new": True, "dialog_id": dialog_id}
+        payload = {
+            "conversation_id": "",
+            "is_new": True,
+            "name": session_name,
+            "dialog_id": dialog_id,
+        }
         response = self.http_client.request("POST", "conversation/set", json_body=payload, use_api_base=False, auth_kind="web")
         res_json = response.json()
         code = res_json.get("code", res_json.get("retcode", -1))
         if response.status_code == 200 and code == 0:
-            print(f"Success to create chat session for chat: {chat_name}, session_id: {conversation_id}")
+            print(f"Success to create chat session '{session_name}' for chat: {chat_name}")
         else:
             msg = res_json.get("message", res_json.get("retmsg", ""))
-            print(f"Fail to create chat session for chat {chat_name}: {msg}")
+            print(f"Fail to create chat session '{session_name}' for chat {chat_name}: {msg}")
 
     def drop_chat_session(self, command: dict):
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
         chat_name = command["chat_name"]
-        session_id = command["session_id"]
+        session_name = command["session_name"]
         dialog_id = self._get_chat_id_by_name(chat_name)
         if dialog_id is None:
             return
-        payload = {"conversation_ids": [session_id]}
+        sessions = self._list_chat_sessions(dialog_id)
+        if sessions is None:
+            return
+        to_drop_session_ids = []
+        for session in sessions:
+            if session["name"] == session_name:
+                to_drop_session_ids.append(session["id"])
+        if not to_drop_session_ids:
+            print(f"Chat session '{session_name}' not found in chat '{chat_name}'")
+            return
+        payload = {"conversation_ids": to_drop_session_ids}
         response = self.http_client.request("POST", "conversation/rm", json_body=payload, use_api_base=False, auth_kind="web")
         res_json = response.json()
         code = res_json.get("code", res_json.get("retcode", -1))
         if response.status_code == 200 and code == 0:
-            print(f"Success to drop chat session '{session_id}' from chat: {chat_name}")
+            print(f"Success to drop chat session '{session_name}' from chat: {chat_name}")
         else:
             msg = res_json.get("message", res_json.get("retmsg", ""))
-            print(f"Fail to drop chat session: {msg}")
+            print(f"Fail to drop chat session '{session_name}' from chat {chat_name}: {msg}")
 
     def list_chat_sessions(self, command: dict):
         if self.server_type != "user":
@@ -1151,14 +1165,14 @@ class MultiRAGClient:
         dialog_id = self._get_chat_id_by_name(chat_name)
         if dialog_id is None:
             return
-        response = self.http_client.request("GET", "conversation/list", params={"dialog_id": dialog_id}, use_api_base=False, auth_kind="web")
-        res_json = response.json()
-        code = res_json.get("code", res_json.get("retcode", -1))
-        if response.status_code == 200 and code == 0:
-            self._print_table_simple(res_json.get("data", []))
-        else:
-            msg = res_json.get("message", res_json.get("retmsg", ""))
-            print(f"Fail to list chat sessions for chat {chat_name}: {msg}")
+        sessions = self._list_chat_sessions(dialog_id)
+        if sessions is None:
+            return
+        for session in sessions:
+            session["chat_name"] = chat_name
+        if "iterations" in command:
+            return sessions
+        self._print_table_simple(sessions)
 
     def chat_on_session(self, command: dict):
         if self.server_type != "user":
@@ -1365,6 +1379,17 @@ class MultiRAGClient:
                 return chat.get("id")
         print(f"Chat '{chat_name}' not found")
         return None
+
+    def _list_chat_sessions(self, dialog_id: str) -> list | None:
+        response = self.http_client.request("GET", f"conversation/list?dialog_id={dialog_id}", use_api_base=False, auth_kind="web")
+        res_json = response.json()
+        code = res_json.get("code", res_json.get("retcode", -1))
+        if response.status_code == 200 and code == 0:
+            return res_json.get("data", [])
+        else:
+            msg = res_json.get("message", res_json.get("retmsg", ""))
+            print(f"Fail to list chat sessions: {msg}")
+            return None
 
     def _list_chats(self) -> list | None:
         response = self.http_client.request("POST", "dialog/next", json_body={}, use_api_base=False, auth_kind="web")
