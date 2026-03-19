@@ -864,7 +864,9 @@ def parse_documents(
         for doc in docs:
             if doc.status == "0":  # 未启用的文档不解析
                 continue
-            
+            if doc.run == TaskStatus.RUNNING.value:
+                return get_error_data_result(retmsg="Can't parse document that is currently being processed")
+
             DocumentService.update_by_id(
                 db,
                 doc.id, 
@@ -924,6 +926,8 @@ def stop_parsing_documents(
             doc = DocumentService.query(db, kb_id=dataset_id, id=doc_id)
             if not doc:
                 continue
+            if doc[0].run != TaskStatus.RUNNING.value:
+                return get_error_data_result(retmsg="Can't stop parsing document that has not started or already completed")
             # Send cancellation signal via Redis to stop background task
             cancel_all_task_of(doc_id)
             # 更新文档状态为取消
