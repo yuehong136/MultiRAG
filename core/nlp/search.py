@@ -1005,7 +1005,10 @@ class Dealer:
         with db_connection() as db:
             kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
         for p in range(offset, max_count, bs):
-            milvus_res = self.dataStore.search(fields, [], condition, [], orderBy, p, bs, index_name(tenant_id, [kb.name]),
+            limit = min(bs, max_count - p)
+            if limit <= 0:
+                break
+            milvus_res = self.dataStore.search(fields, [], condition, [], orderBy, p, limit, index_name(tenant_id, [kb.name]),
                                            kb_ids)
             dict_chunks = self.dataStore.get_fields(milvus_res, fields)
             # 直接删除系统字段
@@ -1016,8 +1019,8 @@ class Dealer:
                 doc["id"] = id
             if dict_chunks:
                 res.extend(dict_chunks.values())
-            # FIX: Solo terminar si no hay chunks, no si hay menos de bs
-            if len(dict_chunks.values()) == 0:
+            chunk_count = len(dict_chunks)
+            if chunk_count == 0 or chunk_count < limit:
                 break
         return res
 
