@@ -95,6 +95,26 @@ class RAGFlowExcelParser:
         return wb
 
     @staticmethod
+    def _fill_worksheet_from_dataframe(ws, df: pd.DataFrame):
+        for col_num, column_name in enumerate(df.columns, 1):
+            ws.cell(row=1, column=col_num, value=column_name)
+        for row_num, row in enumerate(df.values, 2):
+            for col_num, value in enumerate(row, 1):
+                ws.cell(row=row_num, column=col_num, value=value)
+
+    @staticmethod
+    def _dataframe_to_workbook(df):
+        if isinstance(df, dict) and len(df) > 1:
+            return RAGFlowExcelParser._dataframes_to_workbook(df)
+
+        df = RAGFlowExcelParser._clean_dataframe(df)
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Data"
+        RAGFlowExcelParser._fill_worksheet_from_dataframe(ws, df)
+        return wb
+
+    @staticmethod
     def _dataframes_to_workbook(dfs: dict):
         wb = Workbook()
         default_sheet = wb.active
@@ -103,11 +123,7 @@ class RAGFlowExcelParser:
         for sheet_name, df in dfs.items():
             df = RAGFlowExcelParser._clean_dataframe(df)
             ws = wb.create_sheet(title=sheet_name)
-            for col_num, column_name in enumerate(df.columns, 1):
-                ws.cell(row=1, column=col_num, value=column_name)
-            for row_num, row in enumerate(df.values, 2):
-                for col_num, value in enumerate(row, 1):
-                    ws.cell(row=row_num, column=col_num, value=value)
+            RAGFlowExcelParser._fill_worksheet_from_dataframe(ws, df)
         return wb
 
     @staticmethod
