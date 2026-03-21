@@ -1,0 +1,29 @@
+postgresql:
+  name: 'postgresql'
+  dbname: 'postgres'
+  user: 'usr_ai'
+  password: '123456'
+  host: '127.0.0.1'
+  port: 5432
+  max_connections: 100
+  stale_timeout: 30
+
+minio:
+  user: 'minioadmin'
+  password: '12345678'
+  host: '127.0.0.1:9000'
+  region: ''
+  bucket: 'multirag'
+  prefix_path: ''
+  workflow_bucket: 'multirag-workflow'
+
+redis:
+  db: 1
+  username: ''
+  password: ''
+  host: '127.0.0.1:6379'
+
+es:
+  hosts: 'http://127.0.0.1:1200'
+  username: 'elastic'
+  password: 'infini_rag_flow'
