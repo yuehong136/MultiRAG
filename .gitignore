@@ -252,3 +252,7 @@ internal/cpp/cmake-build-debug/
 
 # Exclude hash-like temporary files
 *[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*
+
+# Go server build output
+bin/
+internal/
