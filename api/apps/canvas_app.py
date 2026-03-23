@@ -63,6 +63,7 @@ class SaveCanvasRequest(BaseModel):
     avatar: str | None = Field(None, description="头像URL")
     permission: str | None = Field(None, description="权限设置")
     canvas_category: str | None = Field(None, description="Canvas类别")
+    release: bool | str = Field(default="", description="是否发布")
 
 
 class RemoveCanvasRequest(BaseModel):
@@ -250,6 +251,7 @@ def save(
     - 支持增量更新（只传需要更新的字段）
     """
     req = request_body.model_dump()
+    req['release'] = bool(req.get("release", ""))
 
     # 处理DSL格式
     try:

@@ -304,11 +304,13 @@ async def completion(
     inputs = kwargs.get("inputs", {}) or {}
     user_id = kwargs.get("user_id", "") or ""
     custom_header = kwargs.get("custom_header", "")
+    release_mode = str(kwargs.get("release", "")).strip().lower()
 
     # 组装 canvas & conversation
     if session_id:
         ok, conv = API4ConversationService.get_by_id(db, session_id)
-        assert ok, "Session not found!"
+        if not ok:
+            raise LookupError("Session not found!")
         if not conv.message:
             conv.message = []
         if not isinstance(conv.dsl, str):
@@ -316,8 +318,12 @@ async def completion(
         canvas = Canvas(conv.dsl, tenant_id, agent_id, canvas_id=agent_id, custom_header=custom_header)
     else:
         ok, cvs = UserCanvasService.get_by_id(db, agent_id)
-        assert ok, "Agent not found."
-        assert cvs.user_id == tenant_id, "You do not own the agent."
+        if not ok:
+            raise LookupError("Agent not found.")
+        if cvs.user_id != tenant_id:
+            raise PermissionError("You do not own the agent.")
+        if release_mode == "true" and not bool(cvs.release):
+            raise PermissionError("No available published version")
         dsl_str = cvs.dsl if isinstance(cvs.dsl, str) else json.dumps(cvs.dsl, ensure_ascii=False)
         session_id = get_uuid()
         canvas = Canvas(cvs.dsl, tenant_id, agent_id, canvas_id=cvs.id, custom_header=custom_header)

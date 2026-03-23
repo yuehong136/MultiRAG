@@ -1193,6 +1193,7 @@ class UserCanvas(BaseModel):
     user_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False, doc="user_id")
     title: Mapped[str | None] = mapped_column(String(255), index=False, nullable=True, doc="Canvas title")
     permission: Mapped[str] = mapped_column(String(16), index=True, nullable=False, default="me", doc="me|team")
+    release: Mapped[bool] = mapped_column(Boolean, index=True, nullable=False, default=False, doc="is released")
     description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="Canvas description")
     canvas_type: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="Canvas type")
     canvas_category: Mapped[str] = mapped_column(String(32), index=True, nullable=False, default="agent_canvas", doc="Canvas category: agent_canvas|dataflow_canvas")

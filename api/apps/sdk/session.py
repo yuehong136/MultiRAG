@@ -1,5 +1,6 @@
 import json
 import copy
+import logging
 import re
 import time
 from typing import Any
@@ -157,25 +158,32 @@ def create_session(
     return get_result(data=conv)
 
 
+class CreateAgentSessionRequest(BaseModel):
+    user_id: str | None = None
+    release: bool = False
+
+
 @router.post("/agents/{agent_id}/sessions", summary="创建代理会话")
 def create_agent_session(
     agent_id: str,
-    user_id: str = Query(None),
+    request_body: CreateAgentSessionRequest = None,
     db: Session = Depends(get_db),
     tenant_id: str = Depends(token_required)
 ):
-    if user_id is None:
-        user_id = tenant_id
-    
+    user_id = (request_body.user_id if request_body and request_body.user_id else None) or tenant_id
+    release_mode = request_body.release if request_body else False
+
     e, cvs = UserCanvasService.get_by_id(db, agent_id)
     if not e:
         return get_error_data_result(retmsg="Agent not found.")
     if not UserCanvasService.query(db, user_id=tenant_id, id=agent_id):
         return get_error_data_result(retmsg="You cannot access the agent.")
-    
+
     if not isinstance(cvs.dsl, str):
         cvs.dsl = json.dumps(cvs.dsl, ensure_ascii=False)
 
+    if release_mode and not bool(cvs.release):
+        raise PermissionError("No available published version")
     session_id = get_uuid()
     canvas = Canvas(cvs.dsl, tenant_id, agent_id, canvas_id=cvs.id)
     canvas.reset()
@@ -1073,7 +1081,23 @@ async def agent_bot_completions(agent_id: str, request: AgentCompletionRequest, 
     if req.get("stream", True):
         # TODO: 需要获取正确的tenant_id
         tenant_id = "default"  # 临时解决方案
-        resp = StreamingResponse(agent_completion(tenant_id, agent_id, **req), media_type="text/event-stream")
+
+        async def stream():
+            try:
+                async for answer in agent_completion(tenant_id, agent_id, **req):
+                    yield answer
+            except Exception as e:
+                logging.exception(e)
+                error_result = get_error_data_result(retmsg=str(e) or "Unknown error")
+                yield "data:" + json.dumps(
+                    {
+                        "event": "message",
+                        "data": {"content": f"Error {error_result.get('code', 500)}: {error_result.get('message', str(e))}\n\n"},
+                    },
+                    ensure_ascii=False,
+                ) + "\n\n"
+
+        resp = StreamingResponse(stream(), media_type="text/event-stream")
         resp.headers["Cache-control"] = "no-cache"
         resp.headers["Connection"] = "keep-alive"
         resp.headers["X-Accel-Buffering"] = "no"
@@ -1082,8 +1106,12 @@ async def agent_bot_completions(agent_id: str, request: AgentCompletionRequest, 
 
     # TODO: 需要获取正确的tenant_id
     tenant_id = "default"  # 临时解决方案
-    async for answer in agent_completion(tenant_id, agent_id, **req):
-        return get_result(data=answer)
+    try:
+        async for answer in agent_completion(tenant_id, agent_id, **req):
+            return get_result(data=answer)
+    except Exception as e:
+        logging.exception(e)
+        return get_error_data_result(retmsg=str(e) or "Unknown error")
 
 
 @router.get("/agentbots/{agent_id}/inputs", summary="获取代理机器人输入表单")
