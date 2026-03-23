@@ -99,6 +99,8 @@ class ChunkModel(BaseModel):
     image_id: str = ""
     available: bool = True
     positions: list[list[int]] = Field(default_factory=list)
+    tag_kwd: list[str] = Field(default_factory=list)
+    tag_feas: dict = Field(default_factory=dict)
 
     @field_validator("positions")
     @classmethod
@@ -132,12 +134,16 @@ class StopParsingRequest(BaseModel):
 class AddChunkRequest(BaseModel):
     content: str
     important_keywords: list[str] = Field(default_factory=list)
+    tag_kwd: list[str] = Field(default_factory=list)
+    tag_feas: dict = Field(default_factory=dict)
 
 
 class UpdateChunkRequest(BaseModel):
     content: str | None = None
     important_keywords: list[str] | None = None
     available: bool | None = None
+    tag_kwd: list[str] | None = None
+    tag_feas: dict | None = None
 
 
 class DeleteChunksRequest(BaseModel):
@@ -971,6 +977,7 @@ async def list_chunks(
     page_size: int = Query(30, ge=1, le=100),
     keywords: str | None = Query(None),
     id: str | None = Query(None, description="Chunk ID to retrieve a specific chunk"),
+    available: bool | None = Query(None, description="Filter by availability status"),
     db: Session = Depends(get_db),
     tenant_id: str = Depends(token_required)
 ):
@@ -1008,6 +1015,9 @@ async def list_chunks(
         "question": keywords or "",
         "sort": True,
     }
+
+    if available is not None:
+        query["available_int"] = 1 if available else 0
 
     # Key mapping for document fields
     key_mapping = {
@@ -1061,6 +1071,8 @@ async def list_chunks(
             "image_id": chunk.get("img_id", ""),
             "available": bool(chunk.get("available_int", 1)),
             "positions": chunk.get("position_int", []),
+            "tag_kwd": chunk.get("tag_kwd", []),
+            "tag_feas": chunk.get("tag_feas", {}),
         }
         res["chunks"].append(final_chunk)
         _ = ChunkModel(**final_chunk)  # validate the chunk
@@ -1085,6 +1097,8 @@ async def list_chunks(
                 "image_id": chunk_data.get("img_id", ""),
                 "available": bool(int(chunk_data.get("available_int", "1"))),
                 "positions": chunk_data.get("position_int", []),
+                "tag_kwd": chunk_data.get("tag_kwd", []),
+                "tag_feas": chunk_data.get("tag_feas", {}),
             }
             res["chunks"].append(d)
             _ = ChunkModel(**d)  # validate the chunk
@@ -1148,7 +1162,11 @@ def add_document_chunk(
             "create_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "create_timestamp_flt": datetime.datetime.now().timestamp(),
         }
-        
+        if "tag_kwd" in req:
+            chunk_data["tag_kwd"] = req["tag_kwd"]
+        if "tag_feas" in req:
+            chunk_data["tag_feas"] = req["tag_feas"]
+
         # 生成embedding
         v, c = embd_mdl.encode([req["content"]])
         chunk_data["q_%d_vec" % len(v[0])] = v[0]
@@ -1268,6 +1286,11 @@ def update_chunk(
         if not isinstance(req["positions"], list):
             return get_error_data_result("`positions` should be a list")
         chunk_data["position_int"] = req["positions"]
+
+    if "tag_kwd" in req:
+        chunk_data["tag_kwd"] = req["tag_kwd"]
+    if "tag_feas" in req:
+        chunk_data["tag_feas"] = req["tag_feas"]
 
     # 更新修改时间
     chunk_data["update_time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
