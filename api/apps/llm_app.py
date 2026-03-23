@@ -1,11 +1,3 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： llm_app.py
-@date：2024/7/11 14:30
-@desc:
-"""
 import asyncio
 import threading
 import logging
@@ -888,7 +880,7 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
     chat_passed, embd_passed, rerank_passed = False, False, False
     factory = req["llm_factory"]
     base_url = req.get("base_url", "")
-    source_factory = req.get("source_fid", factory)
+    source_factory = req.get("source_fid") or factory
     extra = {"provider": factory}
     timeout_seconds = int(os.environ.get("LLM_TIMEOUT_SECONDS", 10))
     source_llms = list(LLMService.query(db, fid=source_factory))
@@ -917,19 +909,19 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
             assert factory in ChatModel, f"Chat model from {factory} is not supported yet."
             mdl = ChatModel[factory](req["api_key"], llm.llm_name, base_url=base_url, **extra)
             try:
-                m, tc = await asyncio.wait_for(
-                    mdl.async_chat(
+                async with asyncio.timeout(timeout_seconds):
+                    async for chunk in mdl.async_chat_streamly(
                         "",
-                        [{"role": "user", "content": "Hello! How are you doing!"}],
-                        {"temperature": 0.9, "max_tokens": 50},
-                    ),
-                    timeout=timeout_seconds,
-                )
-                if m.find("**ERROR**") >= 0:
-                    raise Exception(m)
-                chat_passed = True
+                        [{"role": "user", "content": "Hi"}],
+                        {"temperature": 0.9},
+                    ):
+                        if chunk and isinstance(chunk, str) and chunk.find("**ERROR**") < 0:
+                            chat_passed = True
+                            break
+                    if not chat_passed:
+                        raise Exception("No valid response received")
             except Exception as e:
-                msg += f"\nFail to access model({llm.fid}/{llm.llm_name}) this api key." + str(e)
+                msg += f"\nFail to access model({llm.fid}/{llm.llm_name}) using this api key." + str(e)
         elif not rerank_passed and llm.mdl_type == LLMType.RERANK.value:
             assert factory in RerankModel, f"Re-rank model from {factory} is not supported yet."
             mdl = RerankModel[factory](req["api_key"], llm.llm_name, base_url=base_url)
@@ -1185,16 +1177,18 @@ POST
                 **extra,
             )
             try:
-                m, tc = await asyncio.wait_for(
-                    mdl.async_chat(
+                verified = False
+                async with asyncio.timeout(timeout_seconds):
+                    async for chunk in mdl.async_chat_streamly(
                         "",
-                        [{"role": "user", "content": "Hello! How are you doing!"}],
+                        [{"role": "user", "content": "Hi"}],
                         {"temperature": 0.9},
-                    ),
-                    timeout=timeout_seconds,
-                )
-                if not tc and m.find("**ERROR**:") >= 0:
-                    raise Exception(m)
+                    ):
+                        if chunk and isinstance(chunk, str) and chunk.find("**ERROR**:") < 0:
+                            verified = True
+                            break
+                    if not verified:
+                        raise Exception("No valid response received")
             except Exception as e:
                 msg += f"\nFail to access model({factory}/{mdl_nm})." + str(e)
 

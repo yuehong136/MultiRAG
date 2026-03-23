@@ -252,6 +252,7 @@ internal/cpp/cmake-build-debug/
 
 # Exclude hash-like temporary files
 *[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*
+!configs/alembic/versions/*.py
 
 # Go server build output
 bin/

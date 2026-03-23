@@ -737,12 +737,18 @@ class LLM(BaseModel):
 
 class TenantLLM(BaseModel):
     __tablename__ = "t_ai_tenant_llms"
-    __table_args__ = {"schema": "usr_ai"}
+    __table_args__ = (
+        sa.UniqueConstraint("tenant_id", "llm_factory", "llm_name", name="idx_tenant_llm_unique"),
+        {"schema": "usr_ai"},
+    )
 
-    tenant_id: Mapped[str] = mapped_column(String(32), primary_key=True, index=True, nullable=False)
-    llm_factory: Mapped[str] = mapped_column(String(128), primary_key=True, index=True, nullable=False, doc="LLM factory name")
+    # The database migrates this table to an integer identity primary key.
+    # Keep the ORM aligned so inserts don't send UUID strings into BIGINT columns.
+    id: Mapped[int | None] = mapped_column(BigInteger, primary_key=True, autoincrement=True, nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(32), primary_key=False, index=True, nullable=False)
+    llm_factory: Mapped[str] = mapped_column(String(128), primary_key=False, index=True, nullable=False, doc="LLM factory name")
     mdl_type: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True, doc="LLM, Text Embedding, Image2Text, ASR")
-    llm_name: Mapped[str | None] = mapped_column(String(128), primary_key=True, index=True, nullable=True)
+    llm_name: Mapped[str | None] = mapped_column(String(128), primary_key=False, index=True, nullable=True)
     api_key: Mapped[str | None] = mapped_column(Text, nullable=True, doc="API KEY")
     api_base: Mapped[str | None] = mapped_column(String(255), index=False, nullable=True)
     max_tokens: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=8192)
