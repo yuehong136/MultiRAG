@@ -180,6 +180,11 @@ def completion(db, tenant_id, chat_id, question, name="New session", session_id=
         "role": "user",
         "id": str(uuid4())
     }
+
+    # Propagate runtime attachments so downstream chat flow can resolve file content.
+    if isinstance(kwargs.get("files"), list) and kwargs["files"]:
+        question["files"] = kwargs["files"]
+
     conv.message.append(question)
     for m in conv.message:
         if m["role"] == "system":
@@ -268,6 +273,11 @@ async def async_completion(db, tenant_id, chat_id, question, name="New session",
         "role": "user",
         "id": str(uuid4())
     }
+
+    # Propagate runtime attachments so downstream chat flow can resolve file content.
+    if isinstance(kwargs.get("files"), list) and kwargs["files"]:
+        question["files"] = kwargs["files"]
+
     conv.message.append(question)
     for m in conv.message:
         if m["role"] == "system":
@@ -342,6 +352,11 @@ def iframe_completion(db, dialog_id, question, session_id=None, stream=True, **k
         "content": question,
         "id": str(uuid4())
     }
+
+    # Propagate runtime attachments so downstream chat flow can resolve file content.
+    if isinstance(kwargs.get("files"), list) and kwargs["files"]:
+        question["files"] = kwargs["files"]
+
     messages.append(question)
 
     msg = []
@@ -418,6 +433,11 @@ async def async_iframe_completion(db, dialog_id, question, session_id=None, stre
         "content": question,
         "id": str(uuid4())
     }
+
+    # Propagate runtime attachments so downstream chat flow can resolve file content.
+    if isinstance(kwargs.get("files"), list) and kwargs["files"]:
+        question["files"] = kwargs["files"]
+
     messages.append(question)
 
     msg = []

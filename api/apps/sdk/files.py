@@ -130,6 +130,42 @@ def upload_files(
         return server_error_response(e)
 
 
+@router.post("/files/upload_info", summary="上传运行时文件元数据")
+async def upload_info(
+    files: list[UploadFile] | None = File(None),
+    url: str | None = Query(None),
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(token_required)
+):
+    """
+    Upload runtime file metadata for SDK chat completions.
+    Accepts either multipart file(s) or a URL, not both.
+    """
+    file_objs = files or []
+
+    if file_objs and url:
+        return get_error_data_result(
+            retmsg="Provide either multipart file(s) or ?url=..., not both.",
+        )
+
+    if not file_objs and not url:
+        return get_error_data_result(
+            retmsg="Missing input: provide multipart file(s) or url",
+        )
+
+    try:
+        if url and not file_objs:
+            return get_result(data=await FileService.upload_info(db, tenant_id, None, url))
+
+        if len(file_objs) == 1:
+            return get_result(data=await FileService.upload_info(db, tenant_id, file_objs[0], None))
+
+        results = [await FileService.upload_info(db, tenant_id, f) for f in file_objs]
+        return get_result(data=results)
+    except Exception as e:
+        return server_error_response(e)
+
+
 @router.post("/files", summary="创建文件或文件夹")
 def create_file(
     request: CreateFileRequest,
