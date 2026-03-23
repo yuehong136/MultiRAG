@@ -33,6 +33,7 @@ WORKERS="${WS:-1}"            # TaskExecutor 数量，默认取 WS 环境变量�
 CONSUMER_NO_BEG=0              # 消费者 ID 起始（含）
 CONSUMER_NO_END=0              # 消费者 ID 结束（不含） - 为 0 表示未指定区间
 REDIS_CONF="${REDIS_CONF_PATH:-/etc/redis/redis.conf}"   # Redis 配置文件路径
+API_PROXY_SCHEME="${API_PROXY_SCHEME:-python}"           # python | hybrid | go
 LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu/"             # jemalloc 依赖
 export LD_LIBRARY_PATH
 
@@ -112,9 +113,40 @@ function task_exe() {
   done &
 }
 
+wait_for_server() {
+  local url="$1"
+  local name="$2"
+  local max_retries=60
+  local retry=0
+  echo "[entrypoint] 等待 ${name} 就绪 (${url})..."
+  while ! curl -sf "${url}" > /dev/null 2>&1; do
+    retry=$((retry + 1))
+    if (( retry >= max_retries )); then
+      echo "[entrypoint] 警告: 等待 ${name} 超时，继续启动..."
+      return 1
+    fi
+    sleep 1
+  done
+  echo "[entrypoint] ${name} 已就绪"
+  return 0
+}
+
 start_server() {
-  echo "[entrypoint] 启动 api.multirag_server..."
-  exec "${PY}" -m api.multirag_server ${INIT_SUPERUSER_ARGS}
+  echo "[entrypoint] 启动 api.multirag_server (模式: ${API_PROXY_SCHEME})..."
+  if [[ "${API_PROXY_SCHEME}" == "go" ]]; then
+    # Go-only 模式：只启动 Go 服务端
+    exec bin/server_main
+  elif [[ "${API_PROXY_SCHEME}" == "hybrid" ]]; then
+    # 混合模式：先启动 Python 服务，就绪后再启动 Go 服务
+    "${PY}" -m api.multirag_server ${INIT_SUPERUSER_ARGS} &
+    wait_for_server "http://127.0.0.1:8123/healthz" "multirag_server"
+    echo "[entrypoint] 启动 Go server_main (hybrid 模式)..."
+    bin/server_main &
+    wait
+  else
+    # Python-only 模式（默认）
+    exec "${PY}" -m api.multirag_server ${INIT_SUPERUSER_ARGS}
+  fi
 }
 
 start_admin_server() {

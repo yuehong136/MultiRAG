@@ -225,6 +225,7 @@ COPY pyproject.toml uv.lock alembic.ini ./
 COPY mcp mcp
 COPY common common
 COPY memory memory
+COPY bin bin
 
 # 添加并配置entrypoint
 COPY ./docker/entrypoint.sh ./entrypoint.sh
