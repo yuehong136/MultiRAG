@@ -24,7 +24,7 @@ type Search struct {
 	Name         string  `gorm:"column:name;size:128;not null;index" json:"name"`
 	Description  *string `gorm:"column:description;type:text" json:"description,omitempty"`
 	CreatedBy    string  `gorm:"column:created_by;size:32;not null;index" json:"created_by"`
-	SearchConfig JSONMap `gorm:"column:search_config;type:text;not null" json:"search_config"`
+	SearchConfig JSONMap `gorm:"column:search_config;type:jsonb;not null" json:"search_config"`
 	Status       *string `gorm:"column:status;size:1;index" json:"status,omitempty"`
 	BaseModel
 }

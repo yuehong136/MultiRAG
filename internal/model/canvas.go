@@ -27,7 +27,7 @@ type UserCanvas struct {
 	Description    *string `gorm:"column:description;type:text" json:"description,omitempty"`
 	CanvasType     *string `gorm:"column:canvas_type;size:32;index" json:"canvas_type,omitempty"`
 	CanvasCategory string  `gorm:"column:canvas_category;size:32;not null;default:agent_canvas;index" json:"canvas_category"`
-	DSL            JSONMap `gorm:"column:dsl;type:text" json:"dsl,omitempty"`
+	DSL            JSONMap `gorm:"column:dsl;type:jsonb" json:"dsl,omitempty"`
 	BaseModel
 }
 
@@ -40,11 +40,11 @@ func (UserCanvas) TableName() string {
 type CanvasTemplate struct {
 	ID             string  `gorm:"column:id;primaryKey;size:32" json:"id"`
 	Avatar         *string `gorm:"column:avatar;type:text" json:"avatar,omitempty"`
-	Title          JSONMap `gorm:"column:title;type:text" json:"title"`
-	Description    JSONMap `gorm:"column:description;type:text" json:"description"`
+	Title          JSONMap `gorm:"column:title;type:jsonb" json:"title"`
+	Description    JSONMap `gorm:"column:description;type:jsonb" json:"description"`
 	CanvasType     *string `gorm:"column:canvas_type;size:32;index" json:"canvas_type,omitempty"`
 	CanvasCategory string  `gorm:"column:canvas_category;size:32;not null;default:agent_canvas;index" json:"canvas_category"`
-	DSL            JSONMap `gorm:"column:dsl;type:text" json:"dsl,omitempty"`
+	DSL            JSONMap `gorm:"column:dsl;type:jsonb" json:"dsl,omitempty"`
 	BaseModel
 }
 
@@ -59,7 +59,7 @@ type UserCanvasVersion struct {
 	UserCanvasID string  `gorm:"column:user_canvas_id;size:255;not null;index" json:"user_canvas_id"`
 	Title        *string `gorm:"column:title;size:255" json:"title,omitempty"`
 	Description  *string `gorm:"column:description;type:text" json:"description,omitempty"`
-	DSL          JSONMap `gorm:"column:dsl;type:text" json:"dsl,omitempty"`
+	DSL          JSONMap `gorm:"column:dsl;type:jsonb" json:"dsl,omitempty"`
 	BaseModel
 }
 

@@ -40,6 +40,12 @@ func RunMigrations(db *gorm.DB) error {
 	if err := renameColumnIfExists(db, "t_ai_documents", "process_duation", "process_duration"); err != nil {
 		return fmt.Errorf("failed to rename t_ai_documents.process_duation: %w", err)
 	}
+	if err := renameColumnIfExists(db, "t_ai_evaluation_cases", "metadata", "case_metadata"); err != nil {
+		return fmt.Errorf("failed to rename t_ai_evaluation_cases.metadata: %w", err)
+	}
+	if err := renameColumnIfExists(db, "t_ai_evaluation_runs", "status", "run_status"); err != nil {
+		return fmt.Errorf("failed to rename t_ai_evaluation_runs.status: %w", err)
+	}
 
 	// Add unique index on t_ai_users.email
 	if err := migrateAddUniqueEmail(db); err != nil {
@@ -315,6 +321,163 @@ func modifyColumnTypes(db *gorm.DB) error {
 		return count > 0
 	}
 
+	columnType := func(table, column string) string {
+		var dataType string
+		if IsPostgres() {
+			db.Raw(`SELECT data_type FROM information_schema.columns
+				WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`, table, column).Scan(&dataType)
+		} else {
+			db.Raw(`SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS
+				WHERE TABLE_NAME = ? AND COLUMN_NAME = ?`, table, column).Scan(&dataType)
+		}
+		return strings.ToLower(dataType)
+	}
+
+	ensureJSONColumn := func(table, column, defaultJSON string, notNull bool) {
+		if !db.Migrator().HasTable(table) || !columnExists(table, column) {
+			return
+		}
+
+		if IsPostgres() {
+			targetDefault := "NULL"
+			if defaultJSON != "" {
+				targetDefault = fmt.Sprintf("'%s'::jsonb", defaultJSON)
+			}
+
+			if columnType(table, column) != "jsonb" {
+				usingExpr := fmt.Sprintf(`
+					CASE
+						WHEN %[1]s IS NULL OR BTRIM(%[1]s::text) = '' THEN %[2]s
+						ELSE %[1]s::jsonb
+					END
+				`, column, targetDefault)
+				if err := db.Exec(fmt.Sprintf(`
+					ALTER TABLE %s
+					ALTER COLUMN %s TYPE JSONB
+					USING %s
+				`, table, column, usingExpr)).Error; err != nil {
+					logger.Warn(fmt.Sprintf("Failed to modify %s.%s to JSONB", table, column), zap.Error(err))
+				}
+			}
+
+			if defaultJSON != "" {
+				if err := db.Exec(fmt.Sprintf(`
+					ALTER TABLE %s
+					ALTER COLUMN %s SET DEFAULT '%s'::jsonb
+				`, table, column, defaultJSON)).Error; err != nil {
+					logger.Warn(fmt.Sprintf("Failed to set %s.%s default", table, column), zap.Error(err))
+				}
+				if err := db.Exec(fmt.Sprintf(`
+					UPDATE %s
+					SET %s = '%s'::jsonb
+					WHERE %s IS NULL
+				`, table, column, defaultJSON, column)).Error; err != nil {
+					logger.Warn(fmt.Sprintf("Failed to backfill %s.%s nulls", table, column), zap.Error(err))
+				}
+			}
+
+			if notNull {
+				if err := db.Exec(fmt.Sprintf(`
+					ALTER TABLE %s
+					ALTER COLUMN %s SET NOT NULL
+				`, table, column)).Error; err != nil {
+					logger.Warn(fmt.Sprintf("Failed to set %s.%s not null", table, column), zap.Error(err))
+				}
+			} else {
+				if err := db.Exec(fmt.Sprintf(`
+					ALTER TABLE %s
+					ALTER COLUMN %s DROP NOT NULL
+				`, table, column)).Error; err != nil {
+					logger.Warn(fmt.Sprintf("Failed to drop %s.%s not null", table, column), zap.Error(err))
+				}
+			}
+			return
+		}
+
+		if defaultJSON != "" {
+			if err := db.Exec(fmt.Sprintf(`
+				UPDATE %s
+				SET %s = ?
+				WHERE %s IS NULL OR TRIM(CAST(%s AS CHAR)) = ''
+			`, table, column, column, column), defaultJSON).Error; err != nil {
+				logger.Warn(fmt.Sprintf("Failed to backfill %s.%s nulls", table, column), zap.Error(err))
+			}
+		}
+
+		nullability := "NULL"
+		if notNull {
+			nullability = "NOT NULL"
+		}
+		if err := db.Exec(fmt.Sprintf(`
+			ALTER TABLE %s
+			MODIFY COLUMN %s JSON %s
+		`, table, column, nullability)).Error; err != nil {
+			logger.Warn(fmt.Sprintf("Failed to modify %s.%s to JSON", table, column), zap.Error(err))
+		}
+	}
+
+	addJSONColumnIfMissing := func(table, column, defaultJSON string, notNull bool) {
+		if !db.Migrator().HasTable(table) || columnExists(table, column) {
+			return
+		}
+
+		nullability := "NULL"
+		if notNull {
+			nullability = "NOT NULL"
+		}
+
+		if IsPostgres() {
+			if err := db.Exec(fmt.Sprintf(`
+				ALTER TABLE %s
+				ADD COLUMN IF NOT EXISTS %s JSONB
+			`, table, column)).Error; err != nil {
+				logger.Warn(fmt.Sprintf("Failed to add %s.%s", table, column), zap.Error(err))
+				return
+			}
+			if defaultJSON != "" {
+				if err := db.Exec(fmt.Sprintf(`
+					ALTER TABLE %s
+					ALTER COLUMN %s SET DEFAULT '%s'::jsonb
+				`, table, column, defaultJSON)).Error; err != nil {
+					logger.Warn(fmt.Sprintf("Failed to set %s.%s default", table, column), zap.Error(err))
+				}
+				if err := db.Exec(fmt.Sprintf(`
+					UPDATE %s
+					SET %s = '%s'::jsonb
+					WHERE %s IS NULL
+				`, table, column, defaultJSON, column)).Error; err != nil {
+					logger.Warn(fmt.Sprintf("Failed to backfill %s.%s", table, column), zap.Error(err))
+				}
+			}
+			if notNull {
+				if err := db.Exec(fmt.Sprintf(`
+					ALTER TABLE %s
+					ALTER COLUMN %s SET NOT NULL
+				`, table, column)).Error; err != nil {
+					logger.Warn(fmt.Sprintf("Failed to set %s.%s not null", table, column), zap.Error(err))
+				}
+			}
+			return
+		}
+
+		if err := db.Exec(fmt.Sprintf(`
+			ALTER TABLE %s
+			ADD COLUMN %s JSON %s
+		`, table, column, nullability)).Error; err != nil {
+			logger.Warn(fmt.Sprintf("Failed to add %s.%s", table, column), zap.Error(err))
+			return
+		}
+		if defaultJSON != "" {
+			if err := db.Exec(fmt.Sprintf(`
+				UPDATE %s
+				SET %s = ?
+				WHERE %s IS NULL
+			`, table, column, column), defaultJSON).Error; err != nil {
+				logger.Warn(fmt.Sprintf("Failed to backfill %s.%s", table, column), zap.Error(err))
+			}
+		}
+	}
+
 	// t_ai_dialogs.top_k: ensure it's INTEGER with default 1024
 	if db.Migrator().HasTable("t_ai_dialogs") && columnExists("t_ai_dialogs", "top_k") {
 		if IsPostgres() {
@@ -360,32 +523,46 @@ func modifyColumnTypes(db *gorm.DB) error {
 		}
 	}
 
-	// t_ai_canvas_templates.title and description: ensure they're TEXT type (same as Python JSONField)
-	// Note: Python's JSONField uses null=True with application-level default, not database DEFAULT
-	if db.Migrator().HasTable("t_ai_canvas_templates") {
-		if columnExists("t_ai_canvas_templates", "title") {
-			if IsPostgres() {
-				if err := db.Exec(`ALTER TABLE t_ai_canvas_templates ALTER COLUMN title TYPE TEXT`).Error; err != nil {
-					logger.Warn("Failed to modify t_ai_canvas_templates.title", zap.Error(err))
-				}
-			} else {
-				if err := db.Exec(`ALTER TABLE t_ai_canvas_templates MODIFY COLUMN title LONGTEXT NULL`).Error; err != nil {
-					logger.Warn("Failed to modify t_ai_canvas_templates.title", zap.Error(err))
-				}
-			}
-		}
-		if columnExists("t_ai_canvas_templates", "description") {
-			if IsPostgres() {
-				if err := db.Exec(`ALTER TABLE t_ai_canvas_templates ALTER COLUMN description TYPE TEXT`).Error; err != nil {
-					logger.Warn("Failed to modify t_ai_canvas_templates.description", zap.Error(err))
-				}
-			} else {
-				if err := db.Exec(`ALTER TABLE t_ai_canvas_templates MODIFY COLUMN description LONGTEXT NULL`).Error; err != nil {
-					logger.Warn("Failed to modify t_ai_canvas_templates.description", zap.Error(err))
-				}
-			}
-		}
-	}
+	// t_ai_documents.parser_config/meta_fields: keep JSON columns aligned with Python backend
+	addJSONColumnIfMissing("t_ai_dialogs", "search_mode", "", false)
+	ensureJSONColumn("t_ai_dialogs", "llm_setting", `{"temperature":0.1,"top_p":0.3,"frequency_penalty":0.7,"presence_penalty":0.4,"max_tokens":512}`, true)
+	ensureJSONColumn("t_ai_dialogs", "prompt_config", `{"system":"","prologue":"Hi! I'm your assistant. What can I do for you?","parameters":[],"empty_response":"Sorry! No relevant content was found in the knowledge base!"}`, true)
+	ensureJSONColumn("t_ai_dialogs", "meta_data_filter", `{}`, false)
+	ensureJSONColumn("t_ai_dialogs", "kb_ids", `[]`, true)
+	ensureJSONColumn("t_ai_dialogs", "search_mode", "", false)
+
+	ensureJSONColumn("t_ai_conversations", "message", "", false)
+	ensureJSONColumn("t_ai_conversations", "reference", `[]`, false)
+
+	ensureJSONColumn("t_ai_api4conversations", "message", "", false)
+	ensureJSONColumn("t_ai_api4conversations", "reference", `[]`, false)
+	ensureJSONColumn("t_ai_api4conversations", "dsl", `{}`, false)
+
+	ensureJSONColumn("t_ai_documents", "parser_config", `{}`, true)
+	ensureJSONColumn("t_ai_documents", "meta_fields", `{}`, true)
+
+	ensureJSONColumn("t_ai_user_canvases", "dsl", `{}`, false)
+	ensureJSONColumn("t_ai_canvas_templates", "title", `{}`, false)
+	ensureJSONColumn("t_ai_canvas_templates", "description", `{}`, false)
+	ensureJSONColumn("t_ai_canvas_templates", "dsl", `{}`, false)
+	ensureJSONColumn("t_ai_user_canvas_version", "dsl", `{}`, false)
+
+	ensureJSONColumn("t_ai_mcp_server", "variables", `{}`, false)
+	ensureJSONColumn("t_ai_mcp_server", "headers", `{}`, false)
+
+	ensureJSONColumn("t_ai_search", "search_config", `{}`, true)
+	ensureJSONColumn("t_pipeline_operation_log", "dsl", `{}`, false)
+	ensureJSONColumn("t_ai_connectors", "config", `{}`, true)
+
+	ensureJSONColumn("t_ai_evaluation_datasets", "kb_ids", `[]`, true)
+	ensureJSONColumn("t_ai_evaluation_cases", "relevant_doc_ids", "", false)
+	ensureJSONColumn("t_ai_evaluation_cases", "relevant_chunk_ids", "", false)
+	ensureJSONColumn("t_ai_evaluation_cases", "case_metadata", "", false)
+	ensureJSONColumn("t_ai_evaluation_runs", "config_snapshot", `{}`, true)
+	ensureJSONColumn("t_ai_evaluation_runs", "metrics_summary", "", false)
+	ensureJSONColumn("t_ai_evaluation_results", "retrieved_chunks", `[]`, true)
+	ensureJSONColumn("t_ai_evaluation_results", "metrics", `{}`, true)
+	ensureJSONColumn("t_ai_evaluation_results", "token_usage", "", false)
 
 	// t_ai_system_settings.value: ensure it's TEXT
 	if db.Migrator().HasTable("t_ai_system_settings") && columnExists("t_ai_system_settings", "value") {
