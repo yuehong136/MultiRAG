@@ -8,10 +8,12 @@ import re
 import uuid
 from typing import Any
 from datetime import datetime
+
 from pymilvus import FieldSchema, DataType, CollectionSchema, Function, FunctionType, AnnSearchRequest, WeightedRanker
 from pymilvus.client.constants import DEFAULT_CONSISTENCY_LEVEL
-
 from sqlalchemy.orm import Session
+
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.llm_service import LLMBundle
 from common.constants import LLMType
 from common import settings
@@ -21,6 +23,19 @@ logger = logging.getLogger(__name__)
 
 # 固定的QA模板集合名称
 QA_TEMPLATE_COLLECTION = "bl_qa_template"
+
+
+def _get_embedding_bundle(db: Session, tenant_id: str) -> LLMBundle:
+    embd_config = get_tenant_default_model_by_type(db, tenant_id, LLMType.EMBEDDING)
+    return LLMBundle(db, tenant_id, embd_config)
+
+
+def _get_chat_bundle(db: Session, tenant_id: str, llm_name: str | None = None) -> LLMBundle:
+    if llm_name:
+        chat_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, llm_name)
+    else:
+        chat_config = get_tenant_default_model_by_type(db, tenant_id, LLMType.CHAT)
+    return LLMBundle(db, tenant_id, chat_config)
 
 # ================================
 # 1. 模板存储服务
@@ -128,7 +143,7 @@ class QATemplateStorageService:
         """存储QA模板到Milvus"""
         try:
             # 获取嵌入模型
-            embedding_model = LLMBundle(db, tenant_id, LLMType.EMBEDDING.value)
+            embedding_model = _get_embedding_bundle(db, tenant_id)
 
             # 准备要向量化的文本
             texts_to_embed = []
@@ -226,7 +241,7 @@ class QATemplateStorageService:
         """存储QA模板V2到Milvus - 支持类型化参数"""
         try:
             # 获取嵌入模型
-            embedding_model = LLMBundle(db, tenant_id, LLMType.EMBEDDING.value)
+            embedding_model = _get_embedding_bundle(db, tenant_id)
 
             # 准备要向量化的文本
             texts_to_embed = []
@@ -586,7 +601,7 @@ class QATemplateMatchingService:
             logger.info(f"使用集合: {collection_name} (版本: {collection_version})")
 
             # 获取嵌入模型并向量化用户查询
-            embedding_model = LLMBundle(db, tenant_id, LLMType.EMBEDDING.value)
+            embedding_model = _get_embedding_bundle(db, tenant_id)
             query_embeddings, _ = embedding_model.encode_queries(user_query)
             query_vector = [get_float(v) for v in query_embeddings]
 
@@ -851,7 +866,7 @@ class StatelessSlotExtractionService:
             )
 
             # 调用LLM
-            chat_model = LLMBundle(db, tenant_id, LLMType.CHAT.value, llm_name)
+            chat_model = _get_chat_bundle(db, tenant_id, llm_name)
 
             response = chat_model.chat(
                 system=prompt,
@@ -940,7 +955,7 @@ class StatelessSlotExtractionService:
             )
 
             # 调用LLM
-            chat_model = LLMBundle(db, tenant_id, LLMType.CHAT.value, llm_name)
+            chat_model = _get_chat_bundle(db, tenant_id, llm_name)
 
             response = chat_model.chat(
                 system=prompt,
@@ -1028,7 +1043,7 @@ class StatelessSlotExtractionService:
             )
 
             # 调用LLM
-            chat_model = LLMBundle(db, tenant_id, LLMType.CHAT.value, llm_name)
+            chat_model = _get_chat_bundle(db, tenant_id, llm_name)
 
             response = chat_model.chat(
                 system=prompt,
@@ -1204,7 +1219,7 @@ class StatelessSlotExtractionService:
             )
 
             # 调用LLM
-            chat_model = LLMBundle(db, tenant_id, LLMType.CHAT.value, llm_name)
+            chat_model = _get_chat_bundle(db, tenant_id, llm_name)
 
             response = chat_model.chat(
                 system=prompt,
@@ -1312,7 +1327,7 @@ class ClarificationService:
             )
 
             # 调用LLM
-            chat_model = LLMBundle(db, tenant_id, LLMType.CHAT.value, llm_name)
+            chat_model = _get_chat_bundle(db, tenant_id, llm_name)
 
             response = chat_model.chat(
                 system=prompt,
@@ -1623,7 +1638,7 @@ class LLMScoringService:
             )
 
             # 调用LLM
-            chat_model = LLMBundle(db, tenant_id, LLMType.CHAT.value, llm_name)
+            chat_model = _get_chat_bundle(db, tenant_id, llm_name)
 
             response = chat_model.chat(
                 system=prompt,
@@ -1780,7 +1795,7 @@ class RAGService:
             collection_name = search.index_name_one(tenant_id, kb.name)
 
             # 检索相关文档
-            embedding_model = LLMBundle(db, tenant_id, LLMType.EMBEDDING.value)
+            embedding_model = _get_embedding_bundle(db, tenant_id)
             query_embeddings, _ = embedding_model.encode([query])
 
             # 向量搜索
@@ -1821,7 +1836,7 @@ class RAGService:
             )
 
             # 调用LLM生成回答
-            chat_model = LLMBundle(db, tenant_id, LLMType.CHAT.value, llm_name)
+            chat_model = _get_chat_bundle(db, tenant_id, llm_name)
 
             answer = chat_model.chat(
                 system=prompt,
@@ -1944,7 +1959,7 @@ class LLMScoringServiceV2:
             )
 
             # 调用LLM
-            chat_model = LLMBundle(db, tenant_id, LLMType.CHAT.value, llm_name)
+            chat_model = _get_chat_bundle(db, tenant_id, llm_name)
             response = chat_model.chat(
                 system=prompt,
                 history=[{"role": "user", "content": f"{user_input}\n请严格按照格式要求进行评分"}],

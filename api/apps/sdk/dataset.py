@@ -27,6 +27,7 @@ from api.utils.api_utils import (
     token_required,
     verify_embedding_availability,
 )
+from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from core.nlp import search
 from common.constants import PAGERANK_FLD
 
@@ -138,6 +139,7 @@ def create_dataset(
             if not ok:
                 return err
 
+        payload = ensure_tenant_model_id_for_params(db, tenant_id, payload)
         if not KnowledgebaseService.save(db, **payload):
             return get_error_data_result(retmsg="Create dataset error.(Database error)")
 
@@ -329,6 +331,7 @@ def update_dataset(
                 # Elasticsearch requires PAGERANK_FLD be non-zero!
                 settings.docStoreConn.update({"exists": PAGERANK_FLD}, {"remove": PAGERANK_FLD}, search.index_name(kb.tenant_id), kb.id)
 
+        req = ensure_tenant_model_id_for_params(db, tenant_id, req)
         if not KnowledgebaseService.update_by_id(db, kb.id, req):
             return get_error_data_result(retmsg="Update dataset error.(Database error)")
 

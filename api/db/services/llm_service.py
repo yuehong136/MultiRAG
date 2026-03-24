@@ -85,8 +85,8 @@ def get_init_tenant_llm(db, user_id):
 
 
 class LLMBundle(LLM4Tenant):
-    def __init__(self, db: Session | None, tenant_id: str, llm_type: str, llm_name: str | None = None, lang: str = "Chinese", **kwargs):
-        super().__init__(db, tenant_id, llm_type, llm_name, lang, **kwargs)
+    def __init__(self, db: Session | None, tenant_id: str, model_config: dict, lang: str = "Chinese", **kwargs):
+        super().__init__(db, tenant_id, model_config, lang, **kwargs)
 
     def bind_tools(self, toolcall_session, tools):
         if not self.is_tools:
@@ -97,7 +97,12 @@ class LLMBundle(LLM4Tenant):
     def _record_usage(self, used_tokens: int) -> bool:
         if not isinstance(used_tokens, int) or used_tokens <= 0:
             return True
-        return bool(TenantLLMService.increase_usage_by_identity(self.usage_identity, used_tokens))
+        if self.model_config.get("llm_factory") == "Builtin":
+            return True
+        model_id = self.model_config.get("id")
+        if model_id is None:
+            raise ValueError(f"Model config for {self.model_config.get('llm_name')} is missing tenant model id")
+        return bool(TenantLLMService.increase_usage_by_id(model_id, used_tokens))
 
     def encode(self, texts: list):
         if self.langfuse:

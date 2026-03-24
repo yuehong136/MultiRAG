@@ -24,6 +24,7 @@ from tika import parser as tika_parser
 
 from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from core.app.naive import Docx, Markdown as MarkdownParser
 from core.nlp import BULLET_PATTERN, bullets_category, concat_img, docx_question_level, not_bullet
 from core.llm.cv import Base as VLM
@@ -168,7 +169,8 @@ class FlowParser:
             logger.info(f"[AUDIO] Audio file: {filename}, size: {audio_size} bytes, path: {tmp_path}")
 
             with db_connection() as db:
-                seq2txt_mdl = LLMBundle(db, tenant_id, LLMType.SPEECH2TEXT, llm_name=llm_id)
+                seq2txt_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.SPEECH2TEXT.value, llm_id)
+                seq2txt_mdl = LLMBundle(db, tenant_id, seq2txt_config)
             
             logger.info(f"[AUDIO] Calling SPEECH2TEXT model: {seq2txt_mdl.mdl.model_name if hasattr(seq2txt_mdl, 'mdl') else 'unknown'}")
             
@@ -298,7 +300,8 @@ class FlowParser:
                 raise RuntimeError("MinerU model not configured. Please add MinerU in Model Providers or set MINERU_* env.")
             
             with db_connection() as db:
-                ocr_model = LLMBundle(db, tenant_id, LLMType.OCR, llm_name=resolved_model_name, lang=lang)
+                ocr_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.OCR.value, resolved_model_name)
+                ocr_model = LLMBundle(db, tenant_id, ocr_config, lang=lang)
                 pdf_parser = ocr_model.mdl
             
             mineru_parse_method = method_kwargs.get("mineru_parse_method", "raw")
@@ -388,7 +391,8 @@ class FlowParser:
                 raise RuntimeError("PaddleOCR model not configured. Please add PaddleOCR in Model Providers or set PADDLEOCR_* env.")
 
             with db_connection() as db:
-                ocr_model = LLMBundle(db, tenant_id, LLMType.OCR, llm_name=resolved_model_name)
+                ocr_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.OCR.value, resolved_model_name)
+                ocr_model = LLMBundle(db, tenant_id, ocr_config)
                 pdf_parser = ocr_model.mdl
 
             paddleocr_parse_method = method_kwargs.get("paddleocr_parse_method", "raw")
@@ -414,7 +418,8 @@ class FlowParser:
             # VLM 模式（参考第 244-251 行）
             # parse_method 是 VLM 模型名称（如 "qwen-vl-plus"）
             with db_connection() as db:
-                vision_model = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, llm_name=parse_method, lang=lang)
+                vision_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.IMAGE2TEXT.value, parse_method)
+                vision_model = LLMBundle(db, tenant_id, vision_config, lang=lang)
             
             lines, _ = await _to_thread(VisionParser(vision_model=vision_model), binary, callback)
             
@@ -963,7 +968,8 @@ class FlowParser:
             
             actual_llm_name = llm_name or parse_method  # 优先使用 llm_name，否则用 parse_method
             with db_connection() as db:
-                cv_model = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, llm_name=actual_llm_name, lang=lang)
+                cv_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.IMAGE2TEXT.value, actual_llm_name)
+                cv_model = LLMBundle(db, tenant_id, cv_config, lang=lang)
             
             img_binary = BytesIO()
             img.save(img_binary, format="JPEG")
@@ -999,7 +1005,8 @@ class FlowParser:
             callback(0.1, "Start to work on a video.")
 
         with db_connection() as db:
-            cv_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, llm_name=llm_name)
+            cv_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.IMAGE2TEXT.value, llm_name)
+            cv_mdl = LLMBundle(db, tenant_id, cv_config)
 
         video_prompt = str(prompt or "")
         txt = await cv_mdl.async_chat(system="", history=[], gen_conf={}, video_bytes=binary, filename=filename, video_prompt=video_prompt)

@@ -11,7 +11,7 @@ class BaseComponent(ABC):
         self._inputs: dict[str, Any] = {}
         self._outputs: dict[str, Any] = {}
         self._nodes: dict[str, Any] = {}
-        self.workflow_node: 'WorkflowNode' = None
+        self.workflow_node: Any = None
         self.logger = ComponentLogger(logger, self)
 
     @property

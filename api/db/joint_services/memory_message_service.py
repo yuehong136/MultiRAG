@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from api.utils.db_utils import bulk_insert_into_db
 from api.db.db_models import Task, db_connection
+from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name
 from api.db.services.task_service import TaskService
 from api.db.services.memory_service import MemoryService
 from api.db.services.tenant_llm_service import TenantLLMService
@@ -67,6 +68,7 @@ async def save_to_memory(db: Session, memory_id: str, message_dict: dict):
         db,
         tenant_id,
         memory.llm_id,
+        getattr(memory, "tenant_llm_id", None),
         {"temperature": memory.temperature},
         get_memory_type_human(memory.memory_type),
         message_dict.get("user_input", ""),
@@ -136,6 +138,7 @@ async def save_extracted_to_memory_only(db: Session, memory_id: str, message_dic
         db,
         tenant_id,
         memory.llm_id,
+        getattr(memory, "tenant_llm_id", None),
         {"temperature": memory.temperature},
         get_memory_type_human(memory.memory_type),
         message_dict.get("user_input", ""),
@@ -171,6 +174,7 @@ async def extract_by_llm(
     db: Session,
     tenant_id: str,
     llm_id: str,
+    tenant_llm_id: int | None,
     extract_conf: dict,
     memory_type: list[str],
     user_input: str,
@@ -179,24 +183,6 @@ async def extract_by_llm(
     user_prompt: str = "",
     task_id: str | None = None
 ) -> list[dict]:
-    """
-    Extract memory content using LLM.
-
-    Args:
-        db: Database session
-        tenant_id: Tenant ID
-        llm_id: LLM model ID
-        extract_conf: Extraction configuration (temperature, etc.)
-        memory_type: Memory type list
-        user_input: User input text
-        agent_response: Agent response text
-        system_prompt: Optional custom system prompt
-        user_prompt: Optional custom user prompt
-        task_id: Optional task ID for progress tracking
-
-    Returns:
-        List of extracted content dicts
-    """
     llm_type = TenantLLMService.llm_id2llm_type(llm_id)
     if not llm_type:
         raise RuntimeError(f"Unknown type of LLM '{llm_id}'")
@@ -210,7 +196,11 @@ async def extract_by_llm(
         user_prompts.append({"role": "user", "content": f"Conversation: {conversation_content}\nConversation Time: {conversation_time}\nCurrent Time: {conversation_time}"})
     else:
         user_prompts.append({"role": "user", "content": PromptAssembler.assemble_user_prompt(conversation_content, conversation_time, conversation_time)})
-    llm = LLMBundle(db, tenant_id, llm_type, llm_id)
+    if tenant_llm_id:
+        llm_config = get_model_config_by_id(db, tenant_llm_id)
+    else:
+        llm_config = get_model_config_by_type_and_name(db, tenant_id, llm_type, llm_id)
+    llm = LLMBundle(db, tenant_id, llm_config)
     if task_id:
         TaskService.update_progress(db, task_id, {"progress": 0.15, "progress_msg": timestamp_to_date(current_timestamp()) + " " + "Prepared prompts and LLM."})
     res = await llm.async_chat(system_prompt, user_prompts, extract_conf)
@@ -226,19 +216,11 @@ async def extract_by_llm(
 
 
 async def embed_and_save(db: Session, memory, message_list: list[dict], task_id: str | None = None):
-    """
-    Embed messages and save to storage.
-
-    Args:
-        db: Database session
-        memory: Memory object
-        message_list: List of messages to save
-        task_id: Optional task ID for progress tracking
-
-    Returns:
-        Tuple of (success, message)
-    """
-    embedding_model = LLMBundle(db, memory.tenant_id, llm_type=LLMType.EMBEDDING, llm_name=memory.embd_id)
+    if getattr(memory, "tenant_embd_id", None):
+        embd_config = get_model_config_by_id(db, memory.tenant_embd_id)
+    else:
+        embd_config = get_model_config_by_type_and_name(db, memory.tenant_id, LLMType.EMBEDDING.value, memory.embd_id)
+    embedding_model = LLMBundle(db, memory.tenant_id, embd_config)
     if task_id:
         TaskService.update_progress(db, task_id, {"progress": 0.65, "progress_msg": timestamp_to_date(current_timestamp()) + " " + "Prepared embedding model."})
     vector_list, _ = embedding_model.encode([msg["content"] for msg in message_list])
@@ -311,7 +293,11 @@ def query_message(db: Session, filter_dict: dict, params: dict):
     question = params["query"]
     question = question.strip()
     memory = memory_list[0]
-    embd_model = LLMBundle(db, memory.tenant_id, llm_type=LLMType.EMBEDDING, llm_name=memory.embd_id)
+    if getattr(memory, "tenant_embd_id", None):
+        embd_config = get_model_config_by_id(db, memory.tenant_embd_id)
+    else:
+        embd_config = get_model_config_by_type_and_name(db, memory.tenant_id, LLMType.EMBEDDING.value, memory.embd_id)
+    embd_model = LLMBundle(db, memory.tenant_id, embd_config)
     match_dense = get_vector(question, embd_model, similarity=params["similarity_threshold"])
     match_text, _ = MsgTextQuery().question(question, min_match=params["similarity_threshold"])
     keywords_similarity_weight = params.get("keywords_similarity_weight", 0.7)

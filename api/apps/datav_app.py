@@ -553,40 +553,36 @@ def get_embedding_model(
 ):
     """
     获取向量模型实例
-    
+
     Args:
         db: 数据库会话
         tenant_id: 租户 ID (当前用户 ID)
         config: 向量模型配置，为空则使用系统默认配置
-    
+
     Returns:
         向量模型实例
     """
-    from api.db.services.tenant_llm_service import TenantLLMService
+    from api.db.services.llm_service import LLMBundle
+    from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
     from common.constants import LLMType
-    
-    if config is None:
-        # 使用系统默认配置，llm_name=None 会使用 tenant.embd_id
-        model_name = None
-    else:
-        model_name = config.model_name
-    
+
     try:
-        # 使用项目现有的 model_instance 方法获取模型实例
-        embedding_model = TenantLLMService.model_instance(
-            db=db,
-            tenant_id=tenant_id,
-            llm_type=LLMType.EMBEDDING.value,
-            llm_name=model_name
-        )
-        
-        if embedding_model is None:
-            raise ValueError(f"无法创建向量模型实例: {model_name or '默认模型'}")
-        
-        return embedding_model
-    
+        if config is None or config.model_name is None:
+            # 使用系统默认配置
+            model_config = get_tenant_default_model_by_type(db, tenant_id, LLMType.EMBEDDING)
+        else:
+            model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.EMBEDDING.value, config.model_name)
+
+        bundle = LLMBundle(db, tenant_id, model_config)
+
+        if bundle.mdl is None:
+            raise ValueError(f"无法创建向量模型实例: {config.model_name if config else '默认模型'}")
+
+        return bundle.mdl
+
     except LookupError as e:
-        raise ValueError(f"模型配置未授权: {model_name or '默认模型'}. {str(e)}")
+        model_name = config.model_name if config else '默认模型'
+        raise ValueError(f"模型配置未授权: {model_name}. {str(e)}")
     except Exception as e:
         logger.exception(f"获取向量模型失败: {str(e)}")
         raise ValueError(f"获取向量模型失败: {str(e)}")

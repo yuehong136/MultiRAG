@@ -30,6 +30,7 @@ from agent.tools.base import LLMToolPluginCallSession, ToolParamBase, ToolBase, 
 from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from api.db.services.mcp_server_service import MCPServerService
 from common.connection_utils import timeout
 from core.prompts.generator import next_step_async, COMPLETE_TASK, \
@@ -93,7 +94,12 @@ class Agent(LLM, ToolBase):
             indexed_name = f"{original_name}_{idx}"
             self.tools[indexed_name] = cpn
         with db_connection() as db:
-            self.chat_mdl = LLMBundle(db, self._canvas.get_tenant_id(), TenantLLMService.llm_id2llm_type(self._param.llm_id), self._param.llm_id,
+            model_config = get_model_config_by_type_and_name(
+                db, self._canvas.get_tenant_id(),
+                TenantLLMService.llm_id2llm_type(self._param.llm_id),
+                self._param.llm_id,
+            )
+            self.chat_mdl = LLMBundle(db, self._canvas.get_tenant_id(), model_config,
                                       max_retries=self._param.max_retries,
                                       retry_interval=self._param.delay_after_error,
                                       max_rounds=self._param.max_rounds,

@@ -27,6 +27,7 @@ from common.metadata_utils import apply_meta_data_filter
 from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
+from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.memory_service import MemoryService
 from api.db.joint_services import memory_message_service
 from common import settings
@@ -95,7 +96,7 @@ class Retrieval(ToolBase, ABC):
             if not memory_list:
                 raise Exception("No memory is selected.")
 
-            embd_names = list({memory.embd_id for memory in memory_list})
+            embd_names = list({memory.tenant_embd_id or memory.embd_id for memory in memory_list})
             assert len(embd_names) == 1, "Memory use different embedding models."
 
             vars = self.get_input_elements_from_text(query_text)
@@ -166,16 +167,25 @@ class Retrieval(ToolBase, ABC):
             if not kbs:
                 raise Exception("No dataset is selected.")
 
-            embd_nms = list(set([kb.embd_id for kb in kbs]))
-            assert len(embd_nms) == 1, "Knowledge bases use different embedding models."
+            embd_keys = list(set([kb.tenant_embd_id or kb.embd_id for kb in kbs]))
+            assert len(embd_keys) == 1, "Knowledge bases use different embedding models."
 
             embd_mdl = None
-            if embd_nms:
-                embd_mdl = LLMBundle(db, self._canvas.get_tenant_id(), LLMType.EMBEDDING, embd_nms[0])
+            if embd_keys:
+                if kbs[0].tenant_embd_id:
+                    embd_model_config = get_model_config_by_id(db, kbs[0].tenant_embd_id)
+                else:
+                    embd_model_config = get_model_config_by_type_and_name(
+                        db, self._canvas.get_tenant_id(), LLMType.EMBEDDING.value, kbs[0].embd_id,
+                    )
+                embd_mdl = LLMBundle(db, self._canvas.get_tenant_id(), embd_model_config)
 
             rerank_mdl = None
             if self._param.rerank_id:
-                rerank_mdl = LLMBundle(db, kbs[0].tenant_id, LLMType.RERANK, self._param.rerank_id)
+                rerank_model_config = get_model_config_by_type_and_name(
+                    db, kbs[0].tenant_id, LLMType.RERANK.value, self._param.rerank_id,
+                )
+                rerank_mdl = LLMBundle(db, kbs[0].tenant_id, rerank_model_config)
 
             vars = self.get_input_elements_from_text(query_text)
             vars = {k: o["value"] for k, o in vars.items()}
@@ -216,7 +226,8 @@ class Retrieval(ToolBase, ABC):
 
                 chat_mdl = None
                 if self._param.meta_data_filter.get("method") in ["auto", "semi_auto"]:
-                    chat_mdl = LLMBundle(db, self._canvas.get_tenant_id(), LLMType.CHAT)
+                    chat_model_config = get_tenant_default_model_by_type(db, self._canvas.get_tenant_id(), LLMType.CHAT)
+                    chat_mdl = LLMBundle(db, self._canvas.get_tenant_id(), chat_model_config)
 
                 doc_ids = await apply_meta_data_filter(
                     self._param.meta_data_filter,
@@ -255,7 +266,8 @@ class Retrieval(ToolBase, ABC):
 
                 # TOC增强和知识图谱检索
                 if self._param.toc_enhance:
-                    chat_mdl = LLMBundle(db, self._canvas._tenant_id, LLMType.CHAT)
+                    toc_chat_config = get_tenant_default_model_by_type(db, self._canvas._tenant_id, LLMType.CHAT)
+                    chat_mdl = LLMBundle(db, self._canvas._tenant_id, toc_chat_config)
                     cks = await settings.retriever.retrieval_by_toc(query, kbinfos["chunks"], tenant_ids, kb_names, chat_mdl, self._param.top_n)
                     if self.check_if_canceled("Retrieval processing"):
                         return
@@ -263,11 +275,12 @@ class Retrieval(ToolBase, ABC):
                         kbinfos["chunks"] = cks
                 kbinfos["chunks"] = settings.retriever.retrieval_by_children(kbinfos["chunks"], [kb.tenant_id for kb in kbs])
                 if self._param.use_kg:
+                    kg_chat_config = get_tenant_default_model_by_type(db, self._canvas.get_tenant_id(), LLMType.CHAT)
                     ck = await settings.kg_retriever.retrieval(query,
                                                            tenant_ids,
                                                            kb_ids,
                                                            embd_mdl,
-                                                           LLMBundle(db, self._canvas.get_tenant_id(), LLMType.CHAT))
+                                                           LLMBundle(db, self._canvas.get_tenant_id(), kg_chat_config))
                     if self.check_if_canceled("Retrieval processing"):
                         return
                     if ck["content_with_weight"]:
@@ -276,7 +289,8 @@ class Retrieval(ToolBase, ABC):
                 kbinfos = {"chunks": [], "doc_aggs": []}
 
             if self._param.use_kg and kbs:
-                ck = await settings.kg_retriever.retrieval(query, tenant_ids, filtered_kb_ids, embd_mdl, LLMBundle(db, kbs[0].tenant_id, LLMType.CHAT))
+                kg2_chat_config = get_tenant_default_model_by_type(db, kbs[0].tenant_id, LLMType.CHAT)
+                ck = await settings.kg_retriever.retrieval(query, tenant_ids, filtered_kb_ids, embd_mdl, LLMBundle(db, kbs[0].tenant_id, kg2_chat_config))
                 if self.check_if_canceled("Retrieval processing"):
                     return
                 if ck["content_with_weight"]:

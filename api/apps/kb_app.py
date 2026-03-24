@@ -1,11 +1,3 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： kb_app.py
-@date：2024/8/5 9:22
-@desc:
-"""
 import json
 import logging
 import os
@@ -30,6 +22,8 @@ from api.utils.api_utils import server_error_response, get_data_error_result, ge
 from api.db import VALID_FILE_TYPES
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from api.utils.api_utils import get_json_result
 from api.apps import manager
 from api.constants import DATASET_NAME_LIMIT, MILVUS_NAME_PATTERN
@@ -167,7 +161,8 @@ def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), u
 
         if not e:
             return res  # 直接返回错误响应
-        
+
+        res = ensure_tenant_model_id_for_params(db, user.id, res)
         if not KnowledgebaseService.save(db, **res):
             return get_data_error_result()
         return get_json_result(data={"kb_id": res["id"]})
@@ -251,6 +246,7 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
 
         # 过滤掉None值，避免将None写入数据库
         filtered_data = {k: v for k, v in req_data.items() if v is not None and k != "kb_id"}
+        filtered_data = ensure_tenant_model_id_for_params(db, user.id, filtered_data)
         old_name = kb.name
         if not KnowledgebaseService.update_by_id(db, kb.id, filtered_data):
             return get_data_error_result()
@@ -1737,6 +1733,7 @@ def check_embedding(
         return s if s else "None"
     req = request.model_dump()
     kb_id = req.get("kb_id", "")
+    tenant_embd_id = req.get("tenant_embd_id")
     embd_id = req.get("embd_id", "")
     n = int(req.get("check_num", 5) or 5)
 
@@ -1751,7 +1748,15 @@ def check_embedding(
     if not kb:
         return get_error_data_result(retmsg="Invalid dataset ID")
 
-    emb_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING, embd_id)
+    if tenant_embd_id:
+        from api.db.joint_services.tenant_model_service import get_model_config_by_id
+        embd_config = get_model_config_by_id(db, tenant_embd_id)
+    elif kb.tenant_embd_id:
+        from api.db.joint_services.tenant_model_service import get_model_config_by_id
+        embd_config = get_model_config_by_id(db, kb.tenant_embd_id)
+    else:
+        embd_config = get_model_config_by_type_and_name(db, kb.tenant_id, LLMType.EMBEDDING.value, embd_id or kb.embd_id)
+    emb_mdl = LLMBundle(db, kb.tenant_id, embd_config)
     samples = sample_random_chunks_with_vectors(settings.docStoreConn, tenant_id=kb.tenant_id, kb_id=kb_id, kb_name=kb.name, n=n)
 
     results, eff_sims = [], []

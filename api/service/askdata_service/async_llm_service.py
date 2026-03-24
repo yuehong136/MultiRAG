@@ -4,13 +4,16 @@ import logging
 import threading
 import queue
 import time
-from typing import Dict, Any, Optional
+from typing import Any
 from concurrent.futures import ThreadPoolExecutor
+
 from sqlalchemy.orm import Session
 
-from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from api.service.askdata_service.event.event_manager import event_manager
+from common.constants import LLMType
+
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +25,7 @@ class AsyncLLMService:
         self.db = db
         self.executor = ThreadPoolExecutor(max_workers=4)
 
-    async def send_event(self, event_id: str, data: Dict[str, Any], event_type: str = "message"):
+    async def send_event(self, event_id: str, data: dict[str, Any], event_type: str = "message"):
         """发送事件的辅助方法"""
         try:
             await event_manager.publish(
@@ -41,7 +44,7 @@ class AsyncLLMService:
             system: str = "",
             history: list = None,
             gen_conf: dict = None,
-            llm_name: Optional[str] = None
+            llm_name: str | None = None
     ) -> None:
         """
         异步流式聊天主函数 - 简化版本
@@ -69,11 +72,11 @@ class AsyncLLMService:
 
             # 2. 创建LLM实例
             logger.info(f"🤖 创建LLM实例 - event_id: {event_id}, llm_name: {llm_name}")
+            model_config = get_model_config_by_type_and_name(self.db, tenant_id, LLMType.CHAT.value, llm_name)
             llm_bundle = LLMBundle(
                 db=self.db,
                 tenant_id=tenant_id,
-                llm_type=LLMType.CHAT,
-                llm_name=llm_name
+                model_config=model_config,
             )
 
             # 3. 发送模型就绪事件

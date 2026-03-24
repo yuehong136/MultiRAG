@@ -4,10 +4,11 @@ import json
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from api.db.services.user_service import TenantService
 from api.service.ai_translate_service.llm_prompts import PromptTemplateLoader
+from common.constants import LLMType
 from errors.exceptions import AITranslateException
 
 
@@ -23,7 +24,8 @@ class AITranslateService:
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
 
-        chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, llm_name)
+        model_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], LLMType.CHAT.value, llm_name)
+        chat_model = LLMBundle(db, tenants[0]["tenant_id"], model_config)
         resp = chat_model.chat(system="", history=[{"role": "user", "content": prompt}], gen_conf={})
         logging.info(f"ai_translate resp: {resp}")
         if contains_chinese_unicode(resp):
@@ -43,7 +45,8 @@ class AITranslateService:
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
 
-        chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, llm_name)
+        model_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], LLMType.CHAT.value, llm_name)
+        chat_model = LLMBundle(db, tenants[0]["tenant_id"], model_config)
         resp = chat_model.chat(system="", history=[{"role": "user", "content": prompt}], gen_conf={})
         logging.info(f"ai_batch_translate resp: {resp}")
         if contains_chinese_unicode(resp):

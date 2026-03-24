@@ -1,11 +1,3 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： knowledgebase_service.py
-@date：2024/7/9 9:00
-@desc:
-"""
 from datetime import datetime
 
 from sqlalchemy import func, update, or_, and_, select
@@ -656,3 +648,8 @@ class KnowledgebaseService(CommonService):
         except Exception as e:
             db.rollback()
             raise e
+
+    @classmethod
+    def get_null_tenant_embd_id_row(cls, db: Session):
+        stmt = select(cls.model.id, cls.model.tenant_id, cls.model.embd_id).where(cls.model.tenant_embd_id.is_(None))
+        return db.execute(stmt).all()

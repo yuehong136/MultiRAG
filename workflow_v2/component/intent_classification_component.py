@@ -1,7 +1,9 @@
 from typing import Any
 from dataclasses import dataclass
-from common.constants import LLMType
+
 from api.db.services.llm_service import LLMBundle
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+from common.constants import LLMType
 from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.component.llm_component import LLMParams
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
@@ -83,16 +85,21 @@ Requirements:
                 return {"id": idx, "name": intent.name}
         return None
 
-    async def execute(self) -> dict[str, Any]:
-        query = self.inputs.get("query", "")
+    async def _classify(self, query: str) -> dict[str, Any]:
         if not query.strip():
             return {"classificationId": 0, "reason": "Empty query"}
-        input = "Question: " + query + "\tCategory: "
-        # 调用 LLM 进行意图分类
-        llm = LLMBundle(self.db, self.user.id, LLMType.CHAT, self.llm_params.model_name)
-        result = llm.chat(self.prompt, [{"role": "user", "content": input}], {})
 
-        # 匹配分类结果
+        input_text = "Question: " + query + "\tCategory: "
+        model_config = get_model_config_by_type_and_name(
+            self.db, self.user.id, LLMType.CHAT.value, self.llm_params.model_name
+        )
+        llm = LLMBundle(self.db, self.user.id, model_config)
+        result = await llm.async_chat(
+            self.prompt,
+            [{"role": "user", "content": input_text}],
+            {},
+        )
+
         classification = self._match_intent(result)
         if classification is None:
             return {"classificationId": 0, "reason": "No matching intent"}
@@ -100,23 +107,11 @@ Requirements:
             return {"classificationId": 0, "reason": "其他意图"}
 
         return {"classificationId": classification["id"], "reason": classification["name"]}
+
+    async def execute(self) -> dict[str, Any]:
+        query = self.inputs.get("query", "")
+        return await self._classify(query)
 
     async def execute_alone(self, input_value: dict, batch_value: dict | None = None) -> dict:
         query = input_value.get("query", "")
-        if not query.strip():
-            return {"classificationId": 0, "reason": "Empty query"}
-
-        # 调用 LLM 进行意图分类
-        input = "Question: " + query + "\tCategory: "
-        # 调用 LLM 进行意图分类
-        llm = LLMBundle(self.db, self.user.id, LLMType.CHAT, self.llm_params.model_name)
-        result = llm.chat(self.prompt, [{"role": "user", "content": input}], {})
-
-        # 匹配分类结果
-        classification = self._match_intent(result)
-        if classification is None:
-            return {"classificationId": 0, "reason": "No matching intent"}
-        if classification["name"] == "其他意图":
-            return {"classificationId": 0, "reason": "其他意图"}
-
-        return {"classificationId": classification["id"], "reason": classification["name"]}
+        return await self._classify(query)

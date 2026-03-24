@@ -15,6 +15,7 @@ from api.db.services.document_service import DocumentService
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
+from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.utils.api_utils import apikey_dependency, build_error_result
 from common import settings
 from common.metadata_utils import convert_conditions, meta_filter
@@ -241,7 +242,11 @@ async def retrieval(
             )
 
         # 初始化嵌入模型
-        embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
+        if kb.tenant_embd_id:
+            embd_config = get_model_config_by_id(db, kb.tenant_embd_id)
+        else:
+            embd_config = get_model_config_by_type_and_name(db, kb.tenant_id, LLMType.EMBEDDING.value, kb.embd_id)
+        embd_mdl = LLMBundle(db, kb.tenant_id, embd_config)
 
         # 处理元数据过滤
         if metadata_condition:
@@ -274,12 +279,13 @@ async def retrieval(
 
         # 知识图谱增强检索
         if use_kg:
+            kg_chat_config = get_tenant_default_model_by_type(db, kb.tenant_id, LLMType.CHAT)
             kg_result = await settings.kg_retriever.retrieval(
                 question,
                 [tenant_id],
                 [kb_id],
                 embd_mdl,
-                LLMBundle(db, kb.tenant_id, LLMType.CHAT),
+                LLMBundle(db, kb.tenant_id, kg_chat_config),
             )
             if kg_result.get("content_with_weight"):
                 ranks["chunks"].insert(0, kg_result)

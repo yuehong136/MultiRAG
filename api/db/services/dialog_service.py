@@ -1,11 +1,3 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： dialog_service.py
-@date：2025/7/17 15:30
-@desc:
-"""
 import asyncio
 import logging
 import binascii
@@ -28,6 +20,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
+from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from core.graphrag.general.mind_map_extractor import MindMapExtractor
 from core.app.tag import label_question
 from core.advanced_rag import DeepResearcher
@@ -42,6 +35,25 @@ from common.string_utils import remove_redundant_spaces
 from common import settings
 from common.time_utils import current_timestamp, datetime_format
 from common.text_utils import normalize_arabic_digits
+
+
+def _resolve_model_config(
+    db: Session,
+    tenant_id: str,
+    tenant_model_id: int | None,
+    model_type: str | LLMType,
+    model_name: str,
+) -> dict:
+    model_type_value = model_type.value if isinstance(model_type, LLMType) else model_type
+    if tenant_model_id:
+        return get_model_config_by_id(db, tenant_model_id)
+    return get_model_config_by_type_and_name(db, tenant_id, model_type_value, model_name)
+
+
+def _resolve_dialog_primary_model_config(db: Session, dialog) -> dict:
+    llm_type = TenantLLMService.llm_id2llm_type(dialog.llm_id)
+    model_type = LLMType.IMAGE2TEXT.value if llm_type == "image2text" else LLMType.CHAT.value
+    return _resolve_model_config(db, dialog.tenant_id, dialog.tenant_llm_id, model_type, dialog.llm_id)
 
 
 def sync_async_generator(async_gen):
@@ -284,6 +296,21 @@ class DialogService(CommonService):
 
         return res
 
+    @classmethod
+    def get_null_tenant_llm_id_row(cls, db: Session):
+        from api.db.db_models import Dialog
+        stmt = select(Dialog.id, Dialog.tenant_id, Dialog.llm_id).where(Dialog.tenant_llm_id.is_(None))
+        return db.execute(stmt).all()
+
+    @classmethod
+    def get_null_tenant_rerank_id_row(cls, db: Session):
+        from api.db.db_models import Dialog
+        stmt = select(Dialog.id, Dialog.tenant_id, Dialog.rerank_id).where(
+            Dialog.rerank_id.is_not(None),
+            Dialog.tenant_rerank_id.is_(None),
+        )
+        return db.execute(stmt).all()
+
 def chat_solo(db, dialog, messages, stream=True):
     llm_type = TenantLLMService.llm_id2llm_type(dialog.llm_id)
     attachments = ""
@@ -296,21 +323,16 @@ def chat_solo(db, dialog, messages, stream=True):
             text_attachments, image_files = split_file_attachments(messages[-1]["files"], raw=True)
         attachments = "\n\n".join(text_attachments)
 
-    if llm_type == "image2text":
-        llm_model_config = TenantLLMService.get_model_config(db, dialog.tenant_id, LLMType.IMAGE2TEXT, dialog.llm_id)
-    else:
-        llm_model_config = TenantLLMService.get_model_config(db, dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
+    llm_model_config = _resolve_dialog_primary_model_config(db, dialog)
     factory = llm_model_config.get("llm_factory", "") if llm_model_config else ""
 
-    if llm_type == "image2text":
-        chat_mdl = LLMBundle(db, dialog.tenant_id, LLMType.IMAGE2TEXT, dialog.llm_id)
-    else:
-        chat_mdl = LLMBundle(db, dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
+    chat_mdl = LLMBundle(db, dialog.tenant_id, llm_model_config)
 
     prompt_config = dialog.prompt_config
     tts_mdl = None
     if prompt_config.get("tts"):
-        tts_mdl = LLMBundle(db, dialog.tenant_id, LLMType.TTS)
+        tts_model_config = get_tenant_default_model_by_type(db, dialog.tenant_id, LLMType.TTS)
+        tts_mdl = LLMBundle(db, dialog.tenant_id, tts_model_config)
     msg = [{"role": m["role"], "content": re.sub(r"##\d+\$\$", "", m["content"])} for m in messages if m["role"] != "system"]
     if attachments and msg:
         msg[-1]["content"] += attachments
@@ -351,21 +373,16 @@ async def async_chat_solo(db, dialog, messages, stream=True):
             text_attachments, image_files = split_file_attachments(messages[-1]["files"], raw=True)
         attachments = "\n\n".join(text_attachments)
 
-    if llm_type == "image2text":
-        llm_model_config = TenantLLMService.get_model_config(db, dialog.tenant_id, LLMType.IMAGE2TEXT, dialog.llm_id)
-    else:
-        llm_model_config = TenantLLMService.get_model_config(db, dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
+    llm_model_config = _resolve_dialog_primary_model_config(db, dialog)
     factory = llm_model_config.get("llm_factory", "") if llm_model_config else ""
 
-    if llm_type == "image2text":
-        chat_mdl = LLMBundle(db, dialog.tenant_id, LLMType.IMAGE2TEXT, dialog.llm_id)
-    else:
-        chat_mdl = LLMBundle(db, dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
+    chat_mdl = LLMBundle(db, dialog.tenant_id, llm_model_config)
 
     prompt_config = dialog.prompt_config
     tts_mdl = None
     if prompt_config.get("tts"):
-        tts_mdl = LLMBundle(db, dialog.tenant_id, LLMType.TTS)
+        tts_model_config = get_tenant_default_model_by_type(db, dialog.tenant_id, LLMType.TTS)
+        tts_mdl = LLMBundle(db, dialog.tenant_id, tts_model_config)
     msg = [{"role": m["role"], "content": re.sub(r"##\d+\$\$", "", m["content"])} for m in messages if m["role"] != "system"]
     if attachments and msg:
         msg[-1]["content"] += attachments
@@ -395,25 +412,38 @@ async def async_chat_solo(db, dialog, messages, stream=True):
 def get_models(db, dialog):
     embd_mdl, chat_mdl, rerank_mdl, tts_mdl = None, None, None, None
     kbs = KnowledgebaseService.get_by_ids(db, dialog.kb_ids)
-    embedding_list = list(set([kb.embd_id for kb in kbs]))
-    if len(embedding_list) > 1:
+    embedding_keys = list(set([kb.tenant_embd_id or kb.embd_id for kb in kbs]))
+    if len(embedding_keys) > 1:
         raise Exception("**ERROR**: Knowledge bases use different embedding models.")
 
-    if embedding_list:
-        embd_mdl = LLMBundle(db, dialog.tenant_id, LLMType.EMBEDDING, embedding_list[0])
+    if embedding_keys:
+        embd_model_config = _resolve_model_config(
+            db,
+            dialog.tenant_id,
+            kbs[0].tenant_embd_id,
+            LLMType.EMBEDDING.value,
+            kbs[0].embd_id,
+        )
+        embd_mdl = LLMBundle(db, dialog.tenant_id, embd_model_config)
         if not embd_mdl:
-            raise LookupError("Embedding model(%s) not found" % embedding_list[0])
+            raise LookupError("Embedding model(%s) not found" % kbs[0].embd_id)
 
-    if TenantLLMService.llm_id2llm_type(dialog.llm_id) == "image2text":
-        chat_mdl = LLMBundle(db, dialog.tenant_id, LLMType.IMAGE2TEXT, dialog.llm_id)
-    else:
-        chat_mdl = LLMBundle(db, dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
+    chat_model_config = _resolve_dialog_primary_model_config(db, dialog)
+    chat_mdl = LLMBundle(db, dialog.tenant_id, chat_model_config)
 
     if dialog.rerank_id:
-        rerank_mdl = LLMBundle(db, dialog.tenant_id, LLMType.RERANK, dialog.rerank_id)
+        rerank_model_config = _resolve_model_config(
+            db,
+            dialog.tenant_id,
+            dialog.tenant_rerank_id,
+            LLMType.RERANK.value,
+            dialog.rerank_id,
+        )
+        rerank_mdl = LLMBundle(db, dialog.tenant_id, rerank_model_config)
 
     if dialog.prompt_config.get("tts"):
-        tts_mdl = LLMBundle(db, dialog.tenant_id, LLMType.TTS)
+        tts_model_config = get_tenant_default_model_by_type(db, dialog.tenant_id, LLMType.TTS)
+        tts_mdl = LLMBundle(db, dialog.tenant_id, tts_model_config)
     return kbs, embd_mdl, rerank_mdl, chat_mdl, tts_mdl
 
 
@@ -598,10 +628,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     chat_start_ts = timer()
 
     llm_type = TenantLLMService.llm_id2llm_type(dialog.llm_id)
-    if llm_type == "image2text":
-        llm_model_config = TenantLLMService.get_model_config(db, dialog.tenant_id, LLMType.IMAGE2TEXT, dialog.llm_id)
-    else:
-        llm_model_config = TenantLLMService.get_model_config(db, dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
+    llm_model_config = _resolve_dialog_primary_model_config(db, dialog)
 
     factory = llm_model_config.get("llm_factory", "") if llm_model_config else ""
     max_tokens = llm_model_config.get("max_tokens", 8192)
@@ -759,7 +786,8 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                 kbinfos["chunks"].extend(tav_res["chunks"])
                 kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
             if prompt_config.get("use_kg"):
-                ck = asyncio.run(settings.kg_retriever.retrieval(" ".join(questions), tenant_ids, dialog.kb_ids, embd_mdl, LLMBundle(db, dialog.tenant_id, LLMType.CHAT)))
+                kg_chat_model_config = get_tenant_default_model_by_type(db, dialog.tenant_id, LLMType.CHAT)
+                ck = asyncio.run(settings.kg_retriever.retrieval(" ".join(questions), tenant_ids, dialog.kb_ids, embd_mdl, LLMBundle(db, dialog.tenant_id, kg_chat_model_config)))
                 if ck["content_with_weight"]:
                     kbinfos["chunks"].insert(0, ck)
 
@@ -923,10 +951,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
     chat_start_ts = timer()
 
     llm_type = TenantLLMService.llm_id2llm_type(dialog.llm_id)
-    if llm_type == "image2text":
-        llm_model_config = TenantLLMService.get_model_config(db, dialog.tenant_id, LLMType.IMAGE2TEXT, dialog.llm_id)
-    else:
-        llm_model_config = TenantLLMService.get_model_config(db, dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
+    llm_model_config = _resolve_dialog_primary_model_config(db, dialog)
 
     factory = llm_model_config.get("llm_factory", "") if llm_model_config else ""
     max_tokens = llm_model_config.get("max_tokens", 8192)
@@ -1101,7 +1126,8 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
                 kbinfos["chunks"].extend(tav_res["chunks"])
                 kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
             if prompt_config.get("use_kg"):
-                ck = await settings.kg_retriever.retrieval(" ".join(questions), tenant_ids, dialog.kb_ids, embd_mdl, LLMBundle(db, dialog.tenant_id, LLMType.CHAT))
+                kg_chat_model_config = get_tenant_default_model_by_type(db, dialog.tenant_id, LLMType.CHAT)
+                ck = await settings.kg_retriever.retrieval(" ".join(questions), tenant_ids, dialog.kb_ids, embd_mdl, LLMBundle(db, dialog.tenant_id, kg_chat_model_config))
                 if ck["content_with_weight"]:
                     kbinfos["chunks"].insert(0, ck)
 
@@ -1820,15 +1846,26 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
     meta_data_filter = search_config.get("meta_data_filter")
 
     kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
-    embedding_list = list(set([kb.embd_id for kb in kbs]))
+    embedding_keys = list(set([kb.tenant_embd_id or kb.embd_id for kb in kbs]))
 
     is_knowledge_graph = all([kb.parser_id == ParserType.KG for kb in kbs])
     retriever = settings.retriever if not is_knowledge_graph else settings.kg_retriever
 
-    embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, embedding_list[0])
-    chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, chat_llm_name)
+    if len(embedding_keys) > 1:
+        raise ValueError("Knowledge bases use different embedding models.")
+    embd_model_config = _resolve_model_config(
+        db,
+        tenant_id,
+        kbs[0].tenant_embd_id if kbs else None,
+        LLMType.EMBEDDING.value,
+        kbs[0].embd_id if kbs else "",
+    )
+    embd_mdl = LLMBundle(db, tenant_id, embd_model_config)
+    chat_model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, chat_llm_name)
+    chat_mdl = LLMBundle(db, tenant_id, chat_model_config)
     if rerank_id:
-        rerank_mdl = LLMBundle(db, tenant_id, LLMType.RERANK, rerank_id)
+        rerank_model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.RERANK.value, rerank_id)
+        rerank_mdl = LLMBundle(db, tenant_id, rerank_model_config)
     max_tokens = chat_mdl.max_length
     tenant_ids = list([kb.tenant_id for kb in kbs])
 
@@ -1897,15 +1934,26 @@ async def async_ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None
     meta_data_filter = search_config.get("meta_data_filter")
 
     kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
-    embedding_list = list(set([kb.embd_id for kb in kbs]))
+    embedding_keys = list(set([kb.tenant_embd_id or kb.embd_id for kb in kbs]))
 
     is_knowledge_graph = all([kb.parser_id == ParserType.KG for kb in kbs])
     retriever = settings.retriever if not is_knowledge_graph else settings.kg_retriever
 
-    embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, embedding_list[0])
-    chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, chat_llm_name)
+    if len(embedding_keys) > 1:
+        raise ValueError("Knowledge bases use different embedding models.")
+    embd_model_config = _resolve_model_config(
+        db,
+        tenant_id,
+        kbs[0].tenant_embd_id if kbs else None,
+        LLMType.EMBEDDING.value,
+        kbs[0].embd_id if kbs else "",
+    )
+    embd_mdl = LLMBundle(db, tenant_id, embd_model_config)
+    chat_model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, chat_llm_name)
+    chat_mdl = LLMBundle(db, tenant_id, chat_model_config)
     if rerank_id:
-        rerank_mdl = LLMBundle(db, tenant_id, LLMType.RERANK, rerank_id)
+        rerank_model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.RERANK.value, rerank_id)
+        rerank_mdl = LLMBundle(db, tenant_id, rerank_model_config)
     max_tokens = chat_mdl.max_length
     tenant_ids = list([kb.tenant_id for kb in kbs])
 
@@ -1982,14 +2030,29 @@ async def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=No
     kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
     if not kbs:
         return {"error": "No KB selected"}
-    embedding_list = list(set([kb.embd_id for kb in kbs]))
+    embedding_keys = list(set([kb.tenant_embd_id or kb.embd_id for kb in kbs]))
     tenant_ids = list(set([kb.tenant_id for kb in kbs]))
     kb_names = list(set([kb.name for kb in kbs]))
 
-    embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, llm_name=embedding_list[0])
-    chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))
+    if len(embedding_keys) > 1:
+        raise ValueError("Knowledge bases use different embedding models.")
+    embd_model_config = _resolve_model_config(
+        db,
+        tenant_id,
+        kbs[0].tenant_embd_id if kbs else None,
+        LLMType.EMBEDDING.value,
+        kbs[0].embd_id if kbs else "",
+    )
+    embd_mdl = LLMBundle(db, tenant_id, embd_model_config)
+    chat_id = search_config.get("chat_id", "")
+    if chat_id:
+        chat_model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, chat_id)
+    else:
+        chat_model_config = get_tenant_default_model_by_type(db, tenant_id, LLMType.CHAT)
+    chat_mdl = LLMBundle(db, tenant_id, chat_model_config)
     if rerank_id:
-        rerank_mdl = LLMBundle(db, tenant_id, LLMType.RERANK, rerank_id)
+        rerank_model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.RERANK.value, rerank_id)
+        rerank_mdl = LLMBundle(db, tenant_id, rerank_model_config)
 
     if meta_data_filter:
         metas = DocMetadataService.get_flatted_meta_by_kbs(db, kb_ids)

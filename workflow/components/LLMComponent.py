@@ -1,9 +1,9 @@
 from dataclasses import dataclass
 import json
 
-from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
-from api.db.services.tenant_llm_service import TenantLLMService
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+from common.constants import LLMType
 from workflow.WorkflowContext import WorkflowContext, NodeIOData
 from workflow.basic.Component import Component, ComponentParameter
 from workflow.basic.Node import ValueTypeOfIODefinition, Batch
@@ -48,7 +48,6 @@ class LLMComponent(Component[LLMComponentParam]):
         user = kwargs.get('user')
         db = kwargs.get('db')
         model = self.component_parameter.model
-        api_key = TenantLLMService.get_api_key(db, user.id, model).api_key
         prompt = self.component_parameter.prompt
 
         if self.component_parameter.is_batch:
@@ -69,7 +68,8 @@ class LLMComponent(Component[LLMComponentParam]):
             parameter_dict_list = self.combine_dict_arrays(parameter_dict)
             output_data_list = []
             for parameter_dict in parameter_dict_list:
-                chat_mdl = LLMBundle(db, user.id, LLMType.CHAT, model)
+                model_config = get_model_config_by_type_and_name(db, user.id, LLMType.CHAT.value, model)
+                chat_mdl = LLMBundle(db, user.id, model_config)
                 history = [{"role": "user", "content": safe_format_double_braces(prompt, **parameter_dict)}]
                 response = chat_mdl.chat(system="", history=history, gen_conf={})
                 output_data_list.append(response)
@@ -92,7 +92,8 @@ class LLMComponent(Component[LLMComponentParam]):
                     parameter_dict[parameter_name] = input_definition.content
 
             prompt = safe_format_double_braces(prompt, **parameter_dict)
-            chat_mdl = LLMBundle(db, user.id, LLMType.CHAT, model)
+            model_config = get_model_config_by_type_and_name(db, user.id, LLMType.CHAT.value, model)
+            chat_mdl = LLMBundle(db, user.id, model_config)
             history = [{"role": "user", "content": safe_format_double_braces(prompt, **parameter_dict)}]
             response = chat_mdl.chat(system="", history=history, gen_conf={})
             print(f"LLM 输出：{response}")

@@ -166,6 +166,11 @@ ensure_docling() {
     || uv pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --extra-index-url https://pypi.org/simple --no-cache-dir "docling${DOCLING_PIN}"
 }
 
+ensure_db_init() {
+  echo "[entrypoint] 初始化数据库表..."
+  "${PY}" -c "from api.db.db_models import init_database_tables as init_web_db; init_web_db()"
+}
+
 _term() {
   echo "[entrypoint] 收到终止信号，清理子进程..."
   pkill -TERM -P $$ || true
@@ -223,6 +228,8 @@ generate_config() {
 generate_config
 
 ensure_docling
+
+ensure_db_init
 
 # 启动 Nginx（优先启动，作为统一入口）
 if [[ "${ENABLE_WEBSERVER}" -eq 1 ]]; then

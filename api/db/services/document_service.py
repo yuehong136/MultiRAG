@@ -1,11 +1,3 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： document_service.py
-@date：2024/8/14 11:00
-@desc:
-"""
 import asyncio
 import json
 import logging
@@ -45,6 +37,15 @@ class DocumentService(CommonService):
 
     def __init__(self):
         super().__init__(Document)
+
+    @classmethod
+    def get_tenant_embd_id(cls, db: Session, doc_id: str) -> int | None:
+        from api.db.db_models import Knowledgebase
+        stmt = select(Knowledgebase.tenant_embd_id).join(
+            Knowledgebase, Knowledgebase.id == cls.model.kb_id
+        ).where(cls.model.id == doc_id)
+        result = db.execute(stmt).scalar_one_or_none()
+        return result
 
     @staticmethod
     def _normalize_graph_source_ids(graph_source: Any) -> list[str]:
@@ -2330,14 +2331,14 @@ class DocumentService(CommonService):
         return exists is not None
 
     @classmethod
-    def get_embd_id(cls, db: Session, doc_id: str):
-        query = db.query(cls.model, Knowledgebase.embd_id).join(
-            Knowledgebase, cls.model.kb_id == Knowledgebase.id
-        ).filter(
+    def get_embd_id(cls, db: Session, doc_id: str) -> str | None:
+        stmt = select(Knowledgebase.embd_id).join(
+            cls.model, cls.model.kb_id == Knowledgebase.id
+        ).where(
             cls.model.id == doc_id,
-            Knowledgebase.status == StatusEnum.VALID.value
-        ).first()
-        return query.embd_id if query else None
+            Knowledgebase.status == StatusEnum.VALID.value,
+        )
+        return db.execute(stmt).scalar_one_or_none()
 
     @classmethod
     def get_chunking_config(cls, db: Session, doc_id: str) -> dict | None:
@@ -2992,7 +2993,7 @@ def doc_upload_and_parse(db, conversation_id, file_objs, user_id):
     from api.db.services.dialog_service import DialogService
     from api.db.services.file_service import FileService
     from api.db.services.llm_service import LLMBundle
-    from api.db.services.user_service import TenantService
+    from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
     from core.app import audio, email, naive, picture, presentation
 
     conv = ConversationService.get_by_id(db, conversation_id)
@@ -3009,7 +3010,11 @@ def doc_upload_and_parse(db, conversation_id, file_objs, user_id):
     if not kb:
         raise LookupError("Can't find this dataset!")
 
-    embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id, lang=kb.language)
+    if kb.tenant_embd_id:
+        embd_config = get_model_config_by_id(db, kb.tenant_embd_id)
+    else:
+        embd_config = get_model_config_by_type_and_name(db, kb.tenant_id, LLMType.EMBEDDING.value, kb.embd_id)
+    embd_mdl = LLMBundle(db, kb.tenant_id, embd_config, lang=kb.language)
 
     err, files = FileService.upload_document(db, kb, file_objs, user_id)
     assert not err, "\n".join(err)
@@ -3089,8 +3094,8 @@ def doc_upload_and_parse(db, conversation_id, file_objs, user_id):
     idxnm = search.index_name(kb.tenant_id, [kb.name])
     try_create_idx = True
 
-    tenant = TenantService.get_by_id(db, kb.tenant_id)
-    llm_bdl = LLMBundle(db, kb.tenant_id, LLMType.CHAT, tenant.llm_id)
+    chat_config = get_tenant_default_model_by_type(db, kb.tenant_id, LLMType.CHAT)
+    llm_bdl = LLMBundle(db, kb.tenant_id, chat_config)
     for doc_id in docids:
         cks = [c for c in docs if c["doc_id"] == doc_id]
 

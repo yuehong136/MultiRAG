@@ -1,11 +1,3 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： dialog_app.py
-@date：2024/8/12 16:00
-@desc: 对话管理接口
-"""
 from typing import Annotated, Literal, Any
 
 import logging
@@ -19,6 +11,7 @@ from api.db.services.dialog_service import DialogService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService, UserTenantService
+from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from api.utils.api_utils import server_error_response, get_data_error_result, get_json_result
 from common.constants import StatusEnum
 from common.misc_utils import get_uuid
@@ -397,8 +390,8 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
             return get_data_error_result(retmsg="Tenant not found!")
 
         kbs = KnowledgebaseService.get_by_ids(db, request.kb_ids or [])
-        embd_ids = [TenantLLMService.split_model_name_and_factory(kb.embd_id)[0] for kb in kbs]  # remove vendor suffix for comparison
-        embd_count = len(set(embd_ids))
+        embd_keys = [kb.tenant_embd_id or TenantLLMService.split_model_name_and_factory(kb.embd_id)[0] for kb in kbs]
+        embd_count = len(set(embd_keys))
         if embd_count > 1:
             return get_data_error_result(retmsg=f'Datasets use different embedding models: {[kb.embd_id for kb in kbs]}"')
 
@@ -426,6 +419,7 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
                 "icon": request.icon,
                 "search_mode": search_mode_dict
             }
+            dia = ensure_tenant_model_id_for_params(db, user.id, dia)
             if not DialogService.save(db, **dia):
                 return get_data_error_result(retmsg="Fail to new a dialog!")
 
@@ -442,6 +436,7 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
             del update_data["dialog_id"]
             if "kb_names" in update_data:
                 del update_data["kb_names"]
+            update_data = ensure_tenant_model_id_for_params(db, user.id, update_data)
             if not DialogService.update_by_id(db, request.dialog_id, update_data):
                 return get_data_error_result(retmsg="Dialog not found!")
             dia = DialogService.get_by_id(db, request.dialog_id)
@@ -456,18 +451,6 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
 
 @router.get('/get', summary="获取对话", response_description="成功获取对话")
 def get(dialog_id: str, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    获取对话
-
-    该接口用于获取指定对话的信息。
-
-    参数:
-    - dialog_id: str 对话的唯一标识符
-
-    返回:
-    - 成功时返回包含对话信息的JSON结果
-    - 失败时返回错误信息
-    """
     try:
         dia = DialogService.get_by_id(db, dialog_id)
         if not dia:
@@ -480,15 +463,6 @@ def get(dialog_id: str, db: Session = Depends(get_db), user=Depends(manager)):
 
 @router.get('/list', summary="列出对话", response_description="成功列出对话")
 def list_dialogs(db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    列出对话
-
-    该接口用于列出当前用户的所有对话。
-
-    返回:
-    - 成功时返回包含对话列表的JSON结果
-    - 失败时返回错误信息
-    """
     try:
         conversations = DialogService.query(
             db,
@@ -506,7 +480,6 @@ def list_dialogs(db: Session = Depends(get_db), user=Depends(manager)):
 
 @router.post("/next", response_model=ListDialogsResponse, summary="List dialogs (next)")
 def list_dialogs_next(
-    # Query 参数（保持与你原逻辑一致的默认值与行为）
     keywords: Annotated[str, Query(alias="keywords", description="关键词模糊搜索")] = "",
     page_number: Annotated[int, Query(alias="page", ge=0, description="页码（从1开始；为0则不分页）")] = 0,
     items_per_page: Annotated[int, Query(alias="page_size", ge=0, description="每页大小（为0则不分页）")] = 0,
@@ -562,7 +535,6 @@ def list_dialogs_next(
         return get_json_result(data=ListDialogsResponse(dialogs=dialogs, total=total))
 
     except HTTPException:
-        # 透传框架级异常
         raise
     except Exception as e:
         return server_error_response(e)
@@ -570,19 +542,6 @@ def list_dialogs_next(
 
 @router.post('/rm', summary="删除对话应用", response_description="成功删除对话应用")
 def rm(request: RemoveDialogRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    删除对话
-
-    该接口用于删除指定的对话。
-
-    参数:
-    - request: RemoveDialogRequest对象，包含要删除的对话ID列表
-        - dialog_ids: List[str] 要删除的对话ID列表
-
-    返回:
-    - 成功时返回成功删除的JSON结果
-    - 失败时返回错误信息
-    """
     dialog_list=[]
     tenants = UserTenantService.query(db, user_id=user.id)
     try:
@@ -596,7 +555,6 @@ def rm(request: RemoveDialogRequest, db: Session = Depends(get_db), user=Depends
                     retcode=RetCode.OPERATING_ERROR)
             dialog_list.append({"id": id, "status": StatusEnum.INVALID.value})
         DialogService.update_many_by_id(db, dialog_list)
-        # DialogService.delete_by_id(db, id)
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)

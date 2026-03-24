@@ -27,6 +27,7 @@ class VariableAggregationComponent(BaseComponent):
         self.mergeGroups: list[MergeGroup] = []
 
     def _extract_merge_groups(self, node_data: dict[str, Any]):
+        self.mergeGroups = []
         merge_groups_params = node_data['data']['inputs'].get('mergeGroups', [])
         for merge_group in merge_groups_params:
             merge_group_name = merge_group['name']
@@ -44,11 +45,55 @@ class VariableAggregationComponent(BaseComponent):
                 variables.append(Variable(name=key, value=value))
             self.mergeGroups.append(MergeGroup(name=merge_group_name, variables=variables))
 
+    def _get_nested_value(self, data: Any, path: str) -> Any:
+        parts = path.split(".")
+        current = data
+        for part in parts:
+            if isinstance(current, dict):
+                if part not in current:
+                    raise KeyError(f"Cannot find path {path}")
+                current = current[part]
+            elif isinstance(current, list) and current and isinstance(current[0], dict):
+                if part not in current[0]:
+                    raise KeyError(f"Cannot find path {path}")
+                current = current[0][part]
+            else:
+                raise KeyError(f"Cannot find path {path}")
+        return current
+
+    def _resolve_variable_value(self, variable: dict[str, Any], input_value: dict[str, Any]) -> Any:
+        value_def = variable.get("value", {})
+        if value_def.get("type") == "literal":
+            return value_def.get("content")
+        if value_def.get("type") == "ref":
+            ref_content = value_def.get("content", {})
+            ref_name = ref_content.get("name")
+            if ref_name:
+                return self._get_nested_value(input_value, ref_name)
+        return None
+
     async def execute(self) -> dict[str, Any]:
         self._extract_merge_groups(node_data=self.node_data)
         merged_values = self.get_first_non_empty_value(self.mergeGroups)
         self.workflow_node.input = {"mergeGroups": self.mergeGroups}
         return merged_values
+
+    async def execute_alone(self, input_value: dict, batch_value: dict | None = None) -> dict[str, Any]:
+        self.mergeGroups = []
+        merge_groups_params = self.node_data['data']['inputs'].get('mergeGroups', [])
+        for merge_group in merge_groups_params:
+            variables = []
+            for i, variable in enumerate(merge_group.get('variables', [])):
+                variables.append(
+                    Variable(
+                        name=merge_group['name'] + f"_{i}",
+                        value=self._resolve_variable_value(variable, input_value),
+                    )
+                )
+            self.mergeGroups.append(MergeGroup(name=merge_group['name'], variables=variables))
+
+        self.workflow_node.input = {"mergeGroups": self.mergeGroups}
+        return self.get_first_non_empty_value(self.mergeGroups)
 
     def get_first_non_empty_value(self, merge_groups):
         result = {}

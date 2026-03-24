@@ -16,3 +16,7 @@ class EndComponent(BaseComponent):
 
     async def execute(self) -> Dict[str, Any]:
         return {"output": parse_template(self.content_template, self.inputs)}
+
+    async def execute_alone(self, input_value: dict, batch_value: dict | None = None) -> Dict[str, Any]:
+        self.inputs = input_value
+        return await self.execute()

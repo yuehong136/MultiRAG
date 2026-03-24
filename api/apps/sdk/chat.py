@@ -13,6 +13,7 @@ from api.db.services.user_service import TenantService
 from common.misc_utils import get_uuid
 from common.constants import RetCode
 from api.utils.api_utils import check_duplicate_ids, get_error_data_result, get_result, token_required
+from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 
 router = APIRouter()
 
@@ -61,7 +62,7 @@ def create(request: CreateChatRequest, db: Session = Depends(get_db), tenant_id:
             return get_error_data_result(f"The dataset {kb_id} doesn't own parsed file")
 
     kbs = KnowledgebaseService.get_by_ids(db, ids) if ids else []
-    embd_ids = [TenantLLMService.split_model_name_and_factory(kb.embd_id)[0] for kb in kbs]  # remove vendor suffix for comparison
+    embd_ids = [kb.tenant_embd_id or TenantLLMService.split_model_name_and_factory(kb.embd_id)[0] for kb in kbs]
     embd_count = list(set(embd_ids))
     if len(embd_count) > 1:
         return get_result(retmsg='Datasets use different embedding models."', retcode=RetCode.AUTHENTICATION_ERROR)
@@ -142,6 +143,7 @@ def create(request: CreateChatRequest, db: Session = Depends(get_db), tenant_id:
     # save
     req.pop("dataset_ids")
     req.pop("avatar")
+    req = ensure_tenant_model_id_for_params(db, tenant_id, req)
     if not DialogService.save(db, **req):
         return get_error_data_result(retmsg="Fail to new a chat!")
     # response
@@ -186,7 +188,7 @@ def update(chat_id: str, request: UpdateChatRequest, db: Session = Depends(get_d
                 return get_error_data_result(f"The dataset {kb_id} doesn't own parsed file")
 
         kbs = KnowledgebaseService.get_by_ids(db, ids)
-        embd_ids = [TenantLLMService.split_model_name_and_factory(kb.embd_id)[0] for kb in kbs]  # remove vendor suffix for comparison
+        embd_ids = [kb.tenant_embd_id or TenantLLMService.split_model_name_and_factory(kb.embd_id)[0] for kb in kbs]
         embd_count = list(set(embd_ids))
         if len(embd_count) > 1:
             return get_result(retmsg='Datasets use different embedding models."', retcode=RetCode.AUTHENTICATION_ERROR)
@@ -248,6 +250,7 @@ def update(chat_id: str, request: UpdateChatRequest, db: Session = Depends(get_d
         req["icon"] = req.pop("avatar")
     if "dataset_ids" in req:
         req.pop("dataset_ids")
+    req = ensure_tenant_model_id_for_params(db, tenant_id, req)
     if not DialogService.update_by_id(db, chat_id, req):
         return get_error_data_result(retmsg="Chat not found!")
     return get_result()

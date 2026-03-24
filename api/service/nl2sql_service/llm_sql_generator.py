@@ -5,6 +5,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from api.db.services.llm_service import LLMBundle
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from common.constants import LLMType
 from common.misc_utils import thread_pool_exec
 
@@ -80,7 +81,8 @@ class LLMSQLGenerator:
         """
         try:
             # 初始化LLM模型
-            llm_model_instance = LLMBundle(self.db, self.user_id, LLMType.CHAT, llm_name=llm_name)
+            model_config = get_model_config_by_type_and_name(self.db, self.user_id, LLMType.CHAT.value, llm_name)
+            llm_model_instance = LLMBundle(self.db, self.user_id, model_config)
 
             # 创建包含提示词的对话历史
             history = [{"role": "user", "content": prompt}]

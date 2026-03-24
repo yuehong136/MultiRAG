@@ -22,6 +22,7 @@ from abc import ABC
 from common.constants import LLMType
 from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from agent.component.llm import LLMParam, LLM
 from common.connection_utils import timeout
 from core.llm.chat import ERROR_PREFIX
@@ -124,7 +125,10 @@ class Categorize(LLM, ABC):
         self.set_input_value(query_key, msg[-1]["content"])
         self._param.update_prompt()
         with db_connection() as db:
-            chat_mdl = LLMBundle(db, self._canvas.get_tenant_id(), LLMType.CHAT, self._param.llm_id)
+            model_config = get_model_config_by_type_and_name(
+                db, self._canvas.get_tenant_id(), LLMType.CHAT.value, self._param.llm_id,
+            )
+            chat_mdl = LLMBundle(db, self._canvas.get_tenant_id(), model_config)
 
         user_prompt = """
 ---- Real Data ----

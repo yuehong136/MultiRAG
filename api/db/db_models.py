@@ -670,11 +670,17 @@ class Tenant(BaseModel):
     name: Mapped[str | None] = mapped_column(String(100), index=True, nullable=True, doc="Tenant name")
     public_key: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
     llm_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="default llm ID")
+    tenant_llm_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="default tenant llm row id")
     embd_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="default embedding model ID")
+    tenant_embd_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="default tenant embedding row id")
     asr_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="default ASR model ID")
+    tenant_asr_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="default tenant ASR row id")
     img2txt_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="default image to text model ID")
+    tenant_img2txt_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="default tenant image-to-text row id")
     rerank_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True, doc="default rerank model ID")
+    tenant_rerank_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="default tenant rerank row id")
     tts_id: Mapped[str | None] = mapped_column(String(256), index=True, nullable=True, doc="default tts model ID")
+    tenant_tts_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="default tenant tts row id")
     parser_ids: Mapped[str] = mapped_column(String(256), index=True, nullable=False, doc="document processors")
     credit: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=512)
     status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
@@ -684,10 +690,17 @@ class Tenant(BaseModel):
             "tenant_id": self.id,
             "name": self.name,
             "llm_id": self.llm_id,
+            "tenant_llm_id": self.tenant_llm_id,
             "embd_id": self.embd_id,
+            "tenant_embd_id": self.tenant_embd_id,
             "rerank_id": self.rerank_id,
+            "tenant_rerank_id": self.tenant_rerank_id,
             "asr_id": self.asr_id,
+            "tenant_asr_id": self.tenant_asr_id,
             "img2txt_id": self.img2txt_id,
+            "tenant_img2txt_id": self.tenant_img2txt_id,
+            "tts_id": self.tts_id,
+            "tenant_tts_id": self.tenant_tts_id,
             "parser_ids": self.parser_ids
         }
 
@@ -982,6 +995,7 @@ class Knowledgebase(BaseModel):
     language: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, default="English", doc="English|Chinese")
     description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="KB description")
     embd_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="default embedding model ID")
+    tenant_embd_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="default tenant embedding row id")
     permission: Mapped[str] = mapped_column(String(16), index=True, nullable=False, default="me", doc="me|team")
     created_by: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
     doc_num: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
@@ -1117,6 +1131,7 @@ class Dialog(BaseModel):
     icon: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="icon base64 string")
     language: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, default="English", doc="English|Chinese")
     llm_id: Mapped[str] = mapped_column(String(128), index=False, nullable=False, doc="default llm ID")
+    tenant_llm_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="default tenant llm row id")
     llm_setting: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False,
                          default={"temperature": 0.1, "top_p": 0.3, "frequency_penalty": 0.7, "presence_penalty": 0.4,
                                   "max_tokens": 512})
@@ -1133,6 +1148,7 @@ class Dialog(BaseModel):
     do_refer: Mapped[str] = mapped_column(String(1), index=False, nullable=False, default="1",
                       doc="it needs to insert reference index into answer or not")
     rerank_id: Mapped[str | None] = mapped_column(String(128), index=False, nullable=True, doc="default rerank model ID")
+    tenant_rerank_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="default tenant rerank row id")
     kb_ids: Mapped[list] = mapped_column(JSONB, index=False, nullable=False, default=[])
     search_mode: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True,
                           doc="search mode configuration: hybrid, sparse, dense, or fusion")
@@ -1788,7 +1804,9 @@ class Memory(BaseModel):
         doc="Storage type: table|graph"
     )
     embd_id: Mapped[str] = mapped_column(String(128), index=False, nullable=False, doc="Embedding model ID")
+    tenant_embd_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="tenant embedding row id")
     llm_id: Mapped[str] = mapped_column(String(128), index=False, nullable=False, doc="Chat model ID")
+    tenant_llm_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="tenant llm row id")
     permissions: Mapped[str] = mapped_column(
         String(16), index=True, nullable=False, default="me",
         doc="Permission scope: me|team"
@@ -1815,7 +1833,9 @@ class Memory(BaseModel):
             "memory_type": self.memory_type,
             "storage_type": self.storage_type,
             "embd_id": self.embd_id,
+            "tenant_embd_id": self.tenant_embd_id,
             "llm_id": self.llm_id,
+            "tenant_llm_id": self.tenant_llm_id,
             "permissions": self.permissions,
             "description": self.description,
             "memory_size": self.memory_size,

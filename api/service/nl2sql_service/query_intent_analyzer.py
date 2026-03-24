@@ -8,6 +8,7 @@ from enum import Enum
 from sqlalchemy.orm import Session
 
 from api.db.services.llm_service import LLMBundle
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from api.utils.prompt_template_util import PromptTemplateUtil
 from common.constants import LLMType
 from common.misc_utils import thread_pool_exec
@@ -299,7 +300,8 @@ class QueryIntentAnalyzer:
         """
         try:
             # 初始化LLM模型
-            llm_model_instance = LLMBundle(self.db, self.user_id, LLMType.CHAT, llm_name=llm_name)
+            model_config = get_model_config_by_type_and_name(self.db, self.user_id, LLMType.CHAT.value, llm_name)
+            llm_model_instance = LLMBundle(self.db, self.user_id, model_config)
 
             # 从文件加载提示词模板
             template_path = os.path.join(self.prompt_dir, "user_query_intent_template.txt")

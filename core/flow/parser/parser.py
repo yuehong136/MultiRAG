@@ -28,6 +28,8 @@ from api.db.db_models import db_connection
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.llm_service import LLMBundle
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, \
+    get_tenant_default_model_by_type
 from deepdoc.parser import ExcelParser
 from deepdoc.parser.pdf_parser import PlainParser, RAGFlowPdfParser, VisionParser
 from deepdoc.parser.tcadp_parser import TCADPParser
@@ -346,7 +348,8 @@ class Parser(ProcessBase):
 
             tenant_id = self._canvas._tenant_id
             with db_connection() as db:
-                ocr_model = LLMBundle(db, tenant_id, LLMType.OCR, llm_name=parser_model_name, lang=conf.get("lang", "Chinese"))
+                ocr_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.OCR.value, parser_model_name)
+                ocr_model = LLMBundle(db, tenant_id, ocr_config, lang=conf.get("lang", "Chinese"))
                 pdf_parser = ocr_model.mdl
 
             lines, _ = pdf_parser.parse_pdf(
@@ -427,7 +430,8 @@ class Parser(ProcessBase):
 
             tenant_id = self._canvas._tenant_id
             with db_connection() as db:
-                ocr_model = LLMBundle(db, tenant_id, LLMType.OCR, llm_name=parser_model_name)
+                ocr_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.OCR.value, parser_model_name)
+                ocr_model = LLMBundle(db, tenant_id, ocr_config)
                 pdf_parser = ocr_model.mdl
 
             lines, _ = pdf_parser.parse_pdf(
@@ -449,7 +453,11 @@ class Parser(ProcessBase):
                 bboxes.append(box)
         else:
             with db_connection() as db:
-                vision_model = LLMBundle(db, self._canvas._tenant_id, LLMType.IMAGE2TEXT, llm_name=conf.get("parse_method"), lang=self._param.setups["pdf"].get("lang"))
+                if conf.get("parse_method"):
+                    vision_config = get_model_config_by_type_and_name(db, self._canvas._tenant_id, LLMType.IMAGE2TEXT.value, conf.get("parse_method"))
+                else:
+                    vision_config = get_tenant_default_model_by_type(db, self._canvas._tenant_id, LLMType.IMAGE2TEXT.value)
+                vision_model = LLMBundle(db, self._canvas._tenant_id, vision_config, lang=self._param.setups["pdf"].get("lang"))
             lines, _ = VisionParser(vision_model=vision_model)(blob, callback=self.callback)
             bboxes = []
             for t, poss in lines:
@@ -783,7 +791,8 @@ class Parser(ProcessBase):
             lang = conf["lang"]
             # use VLM to describe the picture
             with db_connection() as db:
-                cv_model = LLMBundle(db, self._canvas.get_tenant_id(), LLMType.IMAGE2TEXT, llm_name=conf["parse_method"], lang=lang)
+                cv_config = get_model_config_by_type_and_name(db, self._canvas.get_tenant_id(), LLMType.IMAGE2TEXT.value, conf["parse_method"])
+                cv_model = LLMBundle(db, self._canvas.get_tenant_id(), cv_config, lang=lang)
             img_binary = io.BytesIO()
             img.save(img_binary, format="JPEG")
             img_binary.seek(0)
@@ -810,7 +819,8 @@ class Parser(ProcessBase):
             tmpf.flush()
             tmp_path = os.path.abspath(tmpf.name)
             with db_connection() as db:
-                seq2txt_mdl = LLMBundle(db, self._canvas.get_tenant_id(), LLMType.SPEECH2TEXT, llm_name=conf["llm_id"])
+                seq2txt_config = get_model_config_by_type_and_name(db, self._canvas.get_tenant_id(), LLMType.SPEECH2TEXT.value, conf["llm_id"])
+                seq2txt_mdl = LLMBundle(db, self._canvas.get_tenant_id(), seq2txt_config)
             txt = seq2txt_mdl.transcription(tmp_path)
 
             self.set_output("text", txt)
@@ -821,7 +831,8 @@ class Parser(ProcessBase):
         conf = self._param.setups["video"]
         self.set_output("output_format", conf["output_format"])
         with db_connection() as db:
-            cv_mdl = LLMBundle(db, self._canvas.get_tenant_id(), LLMType.IMAGE2TEXT, llm_name=conf["llm_id"])
+            cv_config = get_model_config_by_type_and_name(db, self._canvas.get_tenant_id(), LLMType.IMAGE2TEXT.value, conf["llm_id"])
+            cv_mdl = LLMBundle(db, self._canvas.get_tenant_id(), cv_config)
         video_prompt = str(conf.get("prompt", "") or "")
         txt = asyncio.run(cv_mdl.async_chat(system="", history=[], gen_conf={}, video_bytes=blob, filename=name, video_prompt=video_prompt))
 

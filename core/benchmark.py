@@ -1,18 +1,3 @@
-#
-#  Copyright 2024 The InfiniFlow Authors. All Rights Reserved.
-#
-#  Licensed under the Apache License, Version 2.0 (the "License");
-#  you may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
-#
 import asyncio
 import json
 import os
@@ -29,6 +14,7 @@ from tqdm import tqdm
 from api.db.services.llm_service import LLMBundle
 from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name
 from core.nlp import tokenize, search
 from common import settings
 from common.constants import LLMType
@@ -46,7 +32,11 @@ class Benchmark:
             e, self.kb = KnowledgebaseService.get_by_id(kb_id)
             self.similarity_threshold = self.kb.similarity_threshold
             self.vector_similarity_weight = self.kb.vector_similarity_weight
-            self.embd_mdl = LLMBundle(db, self.kb.tenant_id, LLMType.EMBEDDING, llm_name=self.kb.embd_id, lang=self.kb.language)
+            if getattr(self.kb, "tenant_embd_id", None):
+                model_config = get_model_config_by_id(db, self.kb.tenant_embd_id)
+            else:
+                model_config = get_model_config_by_type_and_name(db, self.kb.tenant_id, LLMType.EMBEDDING.value, self.kb.embd_id)
+            self.embd_mdl = LLMBundle(db, self.kb.tenant_id, model_config, lang=self.kb.language)
             self.tenant_id = ''
             self.index_name = ''
             self.initialized_index = False

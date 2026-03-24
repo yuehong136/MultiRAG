@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 from api.db.services.document_service import DocumentService
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.llm_service import LLMBundle
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.task_service import TaskService, has_canceled, CANVAS_DEBUG_DOC_ID, GRAPH_RAPTOR_FAKE_DOC_ID
 from api.db.services.file2document_service import File2DocumentService
 from api.db.db_models import db_connection
@@ -522,7 +523,8 @@ async def build_chunks(task, progress_callback, db: Session):
     if task["parser_config"].get("auto_keywords", 0):
         st = timer()
         progress_callback(msg="Start to generate keywords for every chunk ...")
-        chat_mdl = LLMBundle(db, task["tenant_id"], LLMType.CHAT, llm_name=task["llm_id"], lang=task["language"])
+        model_config = get_model_config_by_type_and_name(db, task["tenant_id"], LLMType.CHAT.value, task["llm_id"])
+        chat_mdl = LLMBundle(db, task["tenant_id"], model_config, lang=task["language"])
 
         async def doc_keyword_extraction(chat_mdl, d, topn):
             cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], "keywords", {"topn": topn})
@@ -559,7 +561,8 @@ async def build_chunks(task, progress_callback, db: Session):
     if task["parser_config"].get("auto_questions", 0):
         st = timer()
         progress_callback(msg="Start to generate questions for every chunk ...")
-        chat_mdl = LLMBundle(db, task["tenant_id"], LLMType.CHAT, llm_name=task["llm_id"], lang=task["language"])
+        model_config = get_model_config_by_type_and_name(db, task["tenant_id"], LLMType.CHAT.value, task["llm_id"])
+        chat_mdl = LLMBundle(db, task["tenant_id"], model_config, lang=task["language"])
 
         async def doc_question_proposal(chat_mdl, d, topn):
             cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], "question", {"topn": topn})
@@ -590,7 +593,8 @@ async def build_chunks(task, progress_callback, db: Session):
     if task["parser_config"].get("enable_metadata", False) and task["parser_config"].get("metadata"):
         st = timer()
         progress_callback(msg="Start to generate meta-data for every chunk ...")
-        chat_mdl = LLMBundle(db, task["tenant_id"], LLMType.CHAT, llm_name=task["llm_id"], lang=task["language"])
+        model_config = get_model_config_by_type_and_name(db, task["tenant_id"], LLMType.CHAT.value, task["llm_id"])
+        chat_mdl = LLMBundle(db, task["tenant_id"], model_config, lang=task["language"])
 
         async def gen_metadata_task(chat_mdl, d):
             cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], "metadata", task["parser_config"]["metadata"])
@@ -641,7 +645,8 @@ async def build_chunks(task, progress_callback, db: Session):
         else:
             all_tags = json.loads(all_tags)
 
-        chat_mdl = LLMBundle(db, task["tenant_id"], LLMType.CHAT, llm_name=task["llm_id"], lang=task["language"])
+        model_config = get_model_config_by_type_and_name(db, task["tenant_id"], LLMType.CHAT.value, task["llm_id"])
+        chat_mdl = LLMBundle(db, task["tenant_id"], model_config, lang=task["language"])
 
         docs_to_tag = []
         for d in docs:
@@ -695,7 +700,8 @@ async def build_chunks(task, progress_callback, db: Session):
 def build_TOC(task, docs, progress_callback):
     progress_callback(msg="Start to generate table of content ...")
     with db_connection() as db:
-        chat_mdl = LLMBundle(db, task["tenant_id"], LLMType.CHAT, llm_name=task["llm_id"], lang=task["language"])
+        model_config = get_model_config_by_type_and_name(db, task["tenant_id"], LLMType.CHAT.value, task["llm_id"])
+        chat_mdl = LLMBundle(db, task["tenant_id"], model_config, lang=task["language"])
     docs = sorted(docs, key=lambda d: (
         d.get("page_num_int", 0)[0] if isinstance(d.get("page_num_int", 0), list) else d.get("page_num_int", 0),
         d.get("top_int", 0)[0] if isinstance(d.get("top_int", 0), list) else d.get("top_int", 0)
@@ -751,10 +757,8 @@ async def _get_embedding_dimension(row: dict) -> int:
 
     try:
         with db_connection() as db:
-            embedding_model = LLMBundle(
-                db, row["tenant_id"], LLMType.EMBEDDING,
-                llm_name=row["embd_id"], lang=row.get("language", "en")
-            )
+            model_config = get_model_config_by_type_and_name(db, row["tenant_id"], LLMType.EMBEDDING.value, row["embd_id"])
+            embedding_model = LLMBundle(db, row["tenant_id"], model_config, lang=row.get("language", "en"))
             sample_vec, _ = embedding_model.encode(["测试文本"])
             # 注意：sample_vec 是 numpy 数组，不能直接用 if sample_vec 判断
             if len(sample_vec) > 0:
@@ -1058,7 +1062,8 @@ async def run_dataflow(db: Session, task: dict):
             set_progress(db, task_id, prog=0.82, msg="\n-------------------------------------\nStart to embedding...")
             kb = KnowledgebaseService.get_by_id(db, task["kb_id"])
             embedding_id = kb.embd_id
-            embedding_model = LLMBundle(db, task["tenant_id"], LLMType.EMBEDDING, llm_name=embedding_id)
+            model_config = get_model_config_by_type_and_name(db, task["tenant_id"], LLMType.EMBEDDING.value, embedding_id)
+            embedding_model = LLMBundle(db, task["tenant_id"], model_config)
 
             @timeout(60)
             def batch_encode(txts):
@@ -1997,8 +2002,10 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
             # 混合：先 HierarchicalMerger，再 RAPTOR
             components_used.extend(["HierarchicalMerger", "RAPTOR"])
             callback(prog=0.3, msg="混合处理：层次化 + RAPTOR...")
-            raptor_chat_mdl = LLMBundle(None, chat_mdl.tenant_id, LLMType.CHAT, llm_name=chat_mdl.llm_name)
-            raptor_embd_mdl = LLMBundle(None, embd_mdl.tenant_id, LLMType.EMBEDDING, llm_name=embd_mdl.llm_name)
+            raptor_chat_config = get_model_config_by_type_and_name(db, chat_mdl.tenant_id, LLMType.CHAT.value, chat_mdl.llm_name)
+            raptor_chat_mdl = LLMBundle(None, chat_mdl.tenant_id, raptor_chat_config)
+            raptor_embd_config = get_model_config_by_type_and_name(db, embd_mdl.tenant_id, LLMType.EMBEDDING.value, embd_mdl.llm_name)
+            raptor_embd_mdl = LLMBundle(None, embd_mdl.tenant_id, raptor_embd_config)
 
             # 先层次化
             # ✨ 传递 tenant_id 和 db 以支持 VLM 图片理解
@@ -2118,8 +2125,10 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
             # 使用 RAPTOR
             components_used.append("RAPTOR")
             callback(prog=0.3, msg="RAPTOR 聚类处理...")
-            raptor_chat_mdl = LLMBundle(None, chat_mdl.tenant_id, LLMType.CHAT, llm_name=chat_mdl.llm_name)
-            raptor_embd_mdl = LLMBundle(None, embd_mdl.tenant_id, LLMType.EMBEDDING, llm_name=embd_mdl.llm_name)
+            raptor_chat_config = get_model_config_by_type_and_name(db, chat_mdl.tenant_id, LLMType.CHAT.value, chat_mdl.llm_name)
+            raptor_chat_mdl = LLMBundle(None, chat_mdl.tenant_id, raptor_chat_config)
+            raptor_embd_config = get_model_config_by_type_and_name(db, embd_mdl.tenant_id, LLMType.EMBEDDING.value, embd_mdl.llm_name)
+            raptor_embd_mdl = LLMBundle(None, embd_mdl.tenant_id, raptor_embd_config)
 
             # ⚠️ 降级保护：chunk 太少（< 3）时，RAPTOR 无法有效聚类
             if len(chunks) < 3:
@@ -2551,9 +2560,10 @@ async def do_handle_task(db, task):
 
         try:
             # 绑定 LLM 模型
-            chat_model = LLMBundle(db, task_tenant_id, LLMType.CHAT, llm_name=task_llm_id, lang=task_language)
-            embedding_model = LLMBundle(db, task_tenant_id, LLMType.EMBEDDING, llm_name=task_embedding_id,
-                                        lang=task_language)
+            chat_model_config = get_model_config_by_type_and_name(db, task_tenant_id, LLMType.CHAT.value, task_llm_id)
+            chat_model = LLMBundle(db, task_tenant_id, chat_model_config, lang=task_language)
+            embd_model_config = get_model_config_by_type_and_name(db, task_tenant_id, LLMType.EMBEDDING.value, task_embedding_id)
+            embedding_model = LLMBundle(db, task_tenant_id, embd_model_config, lang=task_language)
 
             # 获取向量维度
             vts, _ = embedding_model.encode(["test"])
@@ -2604,8 +2614,11 @@ async def do_handle_task(db, task):
 
     try:
         # bind embedding model
-        embedding_model = LLMBundle(db, task_tenant_id, LLMType.EMBEDDING, llm_name=task_embedding_id,
-                                    lang=task_language)
+        if task_embedding_id:
+            embd_model_config = get_model_config_by_type_and_name(db, task_tenant_id, LLMType.EMBEDDING.value, task_embedding_id)
+        else:
+            embd_model_config = get_tenant_default_model_by_type(db, task_tenant_id, LLMType.EMBEDDING.value)
+        embedding_model = LLMBundle(db, task_tenant_id, embd_model_config, lang=task_language)
         vts, _ = embedding_model.encode(["ok"])
         vector_size = len(vts[0])
     except Exception as e:
@@ -2659,8 +2672,12 @@ async def do_handle_task(db, task):
             return
 
         # bind detached LLM bundles for RAPTOR to avoid sharing the business session
-        chat_model = LLMBundle(None, task_tenant_id, LLMType.CHAT, llm_name=kb_task_llm_id, lang=task_language)
-        raptor_embedding_model = LLMBundle(None, task_tenant_id, LLMType.EMBEDDING, llm_name=task_embedding_id, lang=task_language)
+        # RAPTOR runs parallel async tasks that share LLMBundle; if self.db is set,
+        # concurrent encode()/chat() calls would race on _release_db_before_long_io().
+        raptor_chat_config = get_model_config_by_type_and_name(db, task_tenant_id, LLMType.CHAT.value, kb_task_llm_id)
+        chat_model = LLMBundle(None, task_tenant_id, raptor_chat_config, lang=task_language)
+        raptor_embd_config = get_model_config_by_type_and_name(db, task_tenant_id, LLMType.EMBEDDING.value, task_embedding_id)
+        raptor_embedding_model = LLMBundle(None, task_tenant_id, raptor_embd_config, lang=task_language)
         # run RAPTOR
         async with kg_limiter:
             chunks, token_count = await run_raptor_for_kb(
@@ -2688,7 +2705,8 @@ async def do_handle_task(db, task):
 
         graphrag_conf = kb_parser_config.get("graphrag", {})
         start_ts = timer()
-        chat_model = LLMBundle(db, task_tenant_id, LLMType.CHAT, llm_name=kb_task_llm_id, lang=task_language)
+        graphrag_chat_config = get_model_config_by_type_and_name(db, task_tenant_id, LLMType.CHAT.value, kb_task_llm_id)
+        chat_model = LLMBundle(db, task_tenant_id, graphrag_chat_config, lang=task_language)
         with_resolution = graphrag_conf.get("resolution", False)
         with_community = graphrag_conf.get("community", False)
         async with kg_limiter:

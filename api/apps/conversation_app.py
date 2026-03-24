@@ -1,40 +1,29 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： conversation_app.py
-@date：2024/7/16 18:00
-@desc: 会话管理接口
-"""
 import json
 import os
 import re
 import logging
 from copy import deepcopy
-# import trio
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field, model_validator, Discriminator, field_validator
 from typing import Generator, Literal, Annotated, Any
 
+from api.apps import manager
 from api.db.db_models import APIToken, get_db
 from api.db.services.conversation_service import ConversationService, structure_answer
 from api.db.services.dialog_service import DialogService, async_chat, async_ask, gen_mindmap
-# from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
 from api.db.services.tenant_llm_service import TenantLLMService
-from api.db.services.user_service import TenantService, UserTenantService
-from common.constants import LLMType
+from api.db.services.user_service import UserTenantService
+from api.utils.api_utils import server_error_response, get_data_error_result, get_json_result
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from common import settings
-from api.utils.api_utils import server_error_response, get_data_error_result
+from common.constants import LLMType
 from common.misc_utils import get_uuid
 from common.constants import RetCode
-from api.utils.api_utils import get_json_result
-from api.apps import manager
-# from core.graphrag.general.mind_map_extractor import MindMapExtractor
-# from core.app.tag import label_question
 from core.prompts.template import load_prompt
 from core.prompts.generator import chunks_format
 
@@ -316,18 +305,6 @@ def set_conversation(request: SetConversationRequest, db: Session = Depends(get_
 
 @router.get('/get', summary="获取会话", response_description="成功获取会话")
 def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    获取会话
-
-    该接口用于获取指定会话的信息。
-
-    参数:
-    - conversation_id: str 会话的唯一标识符
-
-    返回:
-    - 成功时返回包含会话信息的JSON结果
-    - 失败时返回错误信息
-    """
     try:
 
         conv = ConversationService.get_by_id(db, conversation_id)
@@ -356,19 +333,6 @@ def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(manage
 
 @router.get('/getsse/{dialog_id}', summary="获取对话信息（支持SSE）", response_description="成功获取对话信息")
 def getsse(dialog_id: str, db: Session = Depends(get_db), request: Request = None):
-    """
-    获取对话信息（支持SSE）
-
-    该接口用于根据对话ID获取对话信息，并校验Authorization Token。
-
-    参数:
-    - dialog_id: str 对话的唯一标识符
-    - request: Request 请求对象，用于获取Authorization头部信息
-
-    返回:
-    - 成功时返回包含对话信息的JSON结果
-    - 失败时返回错误信息
-    """
     token_header = request.headers.get('Authorization')
     if not token_header:
         return get_data_error_result(retmsg="Authorization header is missing!")
@@ -396,19 +360,6 @@ def getsse(dialog_id: str, db: Session = Depends(get_db), request: Request = Non
 
 @router.post('/rm', summary="删除会话", response_description="成功删除会话")
 def rm(request: RemoveConversationRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    删除会话
-
-    该接口用于删除指定的会话。
-
-    参数:
-    - request: RemoveConversationRequest对象，包含要删除的会话ID列表
-        - conversation_ids: List[str] 要删除的会话ID列表
-
-    返回:
-    - 成功时返回成功删除的JSON结果
-    - 失败时返回错误信息
-    """
     try:
         for cid in request.conversation_ids:
             conv = ConversationService.get_by_id(db, cid)
@@ -430,18 +381,7 @@ def rm(request: RemoveConversationRequest, db: Session = Depends(get_db), user=D
 
 @router.get('/list', summary="列出会话", response_description="成功列出会话")
 def list_conversation(dialog_id: str, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    列出会话
 
-    该接口用于列出指定对话的所有会话。
-
-    参数:
-    - dialog_id: str 对话所说应用id
-
-    返回:
-    - 成功时返回包含会话列表的JSON结果
-    - 失败时返回错误信息
-    """
     try:
         if not DialogService.query(db, tenant_id=user.id, id=dialog_id):
             return get_json_result(
@@ -460,161 +400,6 @@ def list_conversation(dialog_id: str, db: Session = Depends(get_db), user=Depend
 
 @router.post('/completion', summary="生成对话", response_description="成功生成对话")
 async def completion(request: CompletionRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    # 生成对话响应
-
-    该接口用于在指定会话中生成 AI 对话回复，支持流式和非流式输出，可自定义 LLM 模型及其参数。
-
-    ## 请求参数
-
-    ### 基础参数
-    - **conversation_id** `string` *required*
-      - 会话的唯一标识符
-      - 用于关联历史对话记录
-
-    - **messages** `array` *required*
-      - 消息列表，每个消息包含以下字段：
-        - `role`: 消息角色，可选值：`user`, `assistant`, `system`
-        - `content`: 消息内容
-        - `id`: 消息唯一标识符（可选）
-      - 示例：
-        ```json
-        [
-          {"role": "user", "content": "你好"},
-          {"role": "assistant", "content": "您好，有什么可以帮您的？"}
-        ]
-        ```
-
-    ### 输出配置
-    - **stream** `boolean` *optional*
-      - 是否使用流式响应（Server-Sent Events）
-      - 默认值：`true`
-      - `true`: 实时流式返回，适合长文本生成
-      - `false`: 一次性返回完整结果
-
-    - **filter_condition** `string` *optional*
-      - 自定义过滤条件
-      - 默认值：`""`
-
-    ### 模型配置
-    - **llm_id** `string` *optional*
-      - 指定使用的大语言模型 ID
-      - 不指定则使用对话配置的默认模型
-      - 示例：`"gpt-4"`, `"claude-3-sonnet"`
-
-    - **temperature** `float` *optional*
-      - 温度参数，控制生成文本的随机性
-      - 取值范围：`0.0 ~ 2.0`
-      - 较低值（如 0.2）：更确定、保守的输出
-      - 较高值（如 0.8）：更有创造性、多样化的输出
-
-    - **top_p** `float` *optional*
-      - 核采样参数（nucleus sampling）
-      - 取值范围：`0.0 ~ 1.0`
-      - 控制生成文本的多样性
-      - 建议与 temperature 二选一使用
-
-    - **frequency_penalty** `float` *optional*
-      - 频率惩罚系数
-      - 取值范围：`-2.0 ~ 2.0`
-      - 正值：降低重复词汇出现的频率
-      - 负值：增加重复词汇出现的频率
-
-    - **presence_penalty** `float` *optional*
-      - 存在惩罚系数
-      - 取值范围：`-2.0 ~ 2.0`
-      - 正值：鼓励模型探讨新主题
-      - 负值：鼓励模型深入当前主题
-
-    - **max_tokens** `integer` *optional*
-      - 生成文本的最大 token 数量
-      - 限制回复的最大长度
-
-    ## 响应格式
-
-    ### 流式响应 (stream=true)
-    返回 `text/event-stream` 格式的 SSE 流：
-    ```
-    data: {"retcode": 0, "retmsg": "", "data": {"answer": "部分回答...", "reference": [...]}}
-
-    data: {"retcode": 0, "retmsg": "", "data": {"answer": "继续回答...", "reference": [...]}}
-
-    data: {"retcode": 0, "retmsg": "", "data": true}
-    ```
-
-    ### 非流式响应 (stream=false)
-    ```json
-    {
-      "retcode": 0,
-      "retmsg": "",
-      "data": {
-        "answer": "完整的回答内容",
-        "reference": [
-          {
-            "chunks": [...],
-            "doc_aggs": [...]
-          }
-        ],
-        "id": "message_id"
-      }
-    }
-    ```
-
-    ## 使用示例
-
-    ### 基础调用
-    ```json
-    {
-      "conversation_id": "conv_123456",
-      "messages": [
-        {"role": "user", "content": "介绍一下人工智能"}
-      ],
-      "stream": true
-    }
-    ```
-
-    ### 自定义模型参数
-    ```json
-    {
-      "conversation_id": "conv_123456",
-      "messages": [
-        {"role": "user", "content": "写一首关于春天的诗"}
-      ],
-      "llm_id": "gpt-4",
-      "temperature": 0.8,
-      "max_tokens": 500,
-      "presence_penalty": 0.6,
-      "stream": false
-    }
-    ```
-
-    ## 错误码
-
-    | 错误码 | 说明 |
-    |-------|------|
-    | 0 | 成功 |
-    | 400 | 参数错误（缺少必需参数或参数格式不正确） |
-    | 404 | 会话或对话不存在 |
-    | 500 | 服务器内部错误 |
-
-    ## 注意事项
-
-    1. **消息处理逻辑**
-       - 系统消息（`role: system`）会被自动过滤
-       - 连续的助手消息会被合并处理
-
-    2. **模型切换**
-       - 使用 `llm_id` 参数可以临时切换模型
-       - 需确保指定的模型已在租户配置中设置 API Key
-
-    3. **流式响应**
-       - 推荐用于长文本生成场景
-       - 客户端需要支持 SSE (Server-Sent Events)
-
-    4. **性能优化**
-       - 合理设置 `max_tokens` 避免过长响应
-       - 根据场景调整 `temperature` 平衡质量和多样性
-    """
     req = request.model_dump()
     if not req.get("conversation_id") or not req.get("messages"):
         return get_data_error_result(retmsg="Missing conversation_id or messages!")
@@ -669,11 +454,24 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db), 
         conv.reference.append({"chunks": [], "doc_aggs": []})
 
         if chat_model_id:
-            if not TenantLLMService.get_api_key(db, tenant_id=dia.tenant_id, model_name=chat_model_id):
+            try:
+                override_model_type = TenantLLMService.llm_id2llm_type(chat_model_id)
+                if override_model_type == "image2text":
+                    model_type_value = LLMType.IMAGE2TEXT.value
+                else:
+                    model_type_value = LLMType.CHAT.value
+                override_model_config = get_model_config_by_type_and_name(
+                    db,
+                    dia.tenant_id,
+                    model_type_value,
+                    chat_model_id,
+                )
+            except Exception:
                 req.pop("chat_model_id", None)
                 req.pop("chat_model_config", None)
                 return get_data_error_result(retmsg=f"Cannot use specified model {chat_model_id}.")
             dia.llm_id = chat_model_id
+            dia.tenant_llm_id = override_model_config.get("id")
             dia.llm_setting = chat_model_config
 
         is_embedded = bool(chat_model_id)
@@ -738,31 +536,21 @@ def tts(request: TTSRequest, db: Session = Depends(get_db), user=Depends(manager
     text = req.get("text")
     llm_name = req.get("llm_name")
 
-    tenants = TenantService.get_info_by(db, user.id)
-    if not tenants:
-        raise HTTPException(status_code=404, detail="Tenant not found!")
+    try:
+        if llm_name:
+            tts_config = get_model_config_by_type_and_name(db, user.id, LLMType.TTS.value, llm_name)
+        else:
+            tts_config = get_tenant_default_model_by_type(db, user.id, LLMType.TTS)
+    except Exception as e:
+        return get_data_error_result(retmsg=str(e))
 
-    # 优先使用传递的llm_name，如果没有则使用租户默认的tts_id
-    if llm_name:
-        tts_model_name = llm_name
-    else:
-        tts_model_name = tenants[0].get("tts_id")
-        if not tts_model_name:
-            raise HTTPException(status_code=400, detail="No default TTS model is set and no llm_name provided")
-
-    tts_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.TTS, tts_model_name)
+    tts_mdl = LLMBundle(db, user.id, tts_config)
 
     def stream_audio() -> Generator[bytes, None, None]:
         try:
-            # Split the text and filter out empty strings
             for txt in filter(None, re.split(r"[，。/《》？；：！\n\r:;]+", text)):
-                # Proceed only if txt is not empty after stripping whitespace
                 if txt.strip():
-                    # Add logging to see the text segments being processed
-                    # print(f"Processing text segment: {txt}")
                     for chunk in tts_mdl.tts(txt):
-                        # Add logging to check the size of each chunk
-                        # print(f"Yielding chunk of size: {len(chunk)} bytes")
                         yield chunk
         except Exception as e:
             error_message = json.dumps({
@@ -827,23 +615,16 @@ def sequence2txt(
     with open(temp_audio_path, "wb") as f:
         f.write(file.file.read())
 
-    tenants = TenantService.get_info_by(db, user.id)
-    if not tenants:
+    try:
+        asr_config = get_tenant_default_model_by_type(db, user.id, LLMType.SPEECH2TEXT)
+    except Exception as e:
         try:
             os.remove(temp_audio_path)
         except Exception:
             pass
-        return get_data_error_result(retmsg="Tenant not found!")
+        return get_data_error_result(retmsg=str(e))
 
-    asr_id = tenants[0].get("asr_id")
-    if not asr_id:
-        try:
-            os.remove(temp_audio_path)
-        except Exception:
-            pass
-        return get_data_error_result(retmsg="No default ASR model is set")
-
-    asr_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.SPEECH2TEXT, asr_id)
+    asr_mdl = LLMBundle(db, user.id, asr_config)
 
     if not stream_mode:
         text = asr_mdl.transcription(temp_audio_path)
@@ -871,50 +652,20 @@ def sequence2txt(
 
 @router.post('/asr', summary="语音识别", response_description="成功识别语音")
 def asr(request: ASRRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    语音识别
-
-    该接口用于将输入的音频文件转换为文本。
-
-    参数:
-    - request: ASRRequest对象，包含音频文件的路径和可选的ASR模型名称
-        - audio_file_path: str 音频文件的路径
-        - llm_name: Optional[str] ASR模型名称，如果提供则优先使用此模型
-
-    返回:
-    - 成功时返回包含识别文本的JSON结果
-    - 失败时返回错误信息
-
-    逻辑说明:
-    - 根据用户ID获取租户信息，确保租户存在。
-    - 优先使用请求中的llm_name参数作为ASR模型，如果没有提供则使用租户默认ASR模型ID。
-    - 使用该ASR模型处理音频文件，返回识别的文本。
-    - 若在处理过程中出现错误，则返回错误信息。
-
-    注意事项:
-    - 音频文件路径应为有效路径。
-    - 如果没有提供llm_name且租户未设置默认ASR模型，将返回错误。
-    """
     req = request.model_dump()
     audio_file_path = req.get("audio_file_path")
     llm_name = req.get("llm_name")
 
-    # 获取用户信息和语音识别模型的信息
-    tenants = TenantService.get_info_by(db, user.id)
-    if not tenants:
-        raise HTTPException(status_code=404, detail="Tenant not found!")
+    try:
+        if llm_name:
+            asr_config = get_model_config_by_type_and_name(db, user.id, LLMType.SPEECH2TEXT.value, llm_name)
+        else:
+            asr_config = get_tenant_default_model_by_type(db, user.id, LLMType.SPEECH2TEXT)
+    except Exception as e:
+        return get_data_error_result(retmsg=str(e))
 
-    # 优先使用传递的llm_name，如果没有则使用租户默认的asr_id
-    if llm_name:
-        asr_model_name = llm_name
-    else:
-        asr_model_name = tenants[0].get("asr_id")
-        if not asr_model_name:
-            raise HTTPException(status_code=400, detail="No default ASR model is set and no llm_name provided")
+    asr_mdl = LLMBundle(db, user.id, asr_config)
 
-    asr_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.SPEECH2TEXT, asr_model_name)
-
-    # 调用 ASR 语音识别函数
     transcription_result = asr_mdl.transcription(audio=audio_file_path)
 
     if "**ERROR**" in transcription_result:
@@ -924,49 +675,21 @@ def asr(request: ASRRequest, db: Session = Depends(get_db), user=Depends(manager
 
 @router.post('/asr_upload', summary="语音识别上传", response_description="成功识别语音")
 def asr_upload(file: UploadFile = File(...), llm_name: str | None = None, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    语音识别上传
 
-    该接口用于上传音频文件并将其转换为文本。
-
-    参数:
-    - file: UploadFile 上传的音频文件
-    - llm_name: Optional[str] ASR模型名称，如果提供则优先使用此模型（作为查询参数传递）
-
-    返回:
-    - 成功时返回包含识别文本的JSON结果
-    - 失败时返回错误信息
-
-    逻辑说明:
-    - 将上传的音频文件保存到临时路径，并验证用户和模型信息。
-    - 优先使用传递的llm_name参数作为ASR模型，如果没有提供则使用租户默认ASR模型ID。
-    - 使用该ASR模型识别音频文件内容，并将识别结果返回。
-    - 若在处理过程中出现错误，则返回错误信息。
-
-    注意事项:
-    - 确保上传文件格式为有效的音频格式（如mp3）。
-    - 如果没有提供llm_name且租户未设置默认ASR模型，将返回错误。
-    """
-    # 将上传的 MP3 文件保存到临时文件
     import tempfile
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_audio_file:
         temp_audio_file.write(file.file.read())
         audio_file_path = temp_audio_file.name
 
-    # 获取用户信息和语音识别模型的信息
-    tenants = TenantService.get_info_by(db, user.id)
-    if not tenants:
-        raise HTTPException(status_code=404, detail="Tenant not found!")
+    try:
+        if llm_name:
+            asr_config = get_model_config_by_type_and_name(db, user.id, LLMType.SPEECH2TEXT.value, llm_name)
+        else:
+            asr_config = get_tenant_default_model_by_type(db, user.id, LLMType.SPEECH2TEXT)
+    except Exception as e:
+        return get_data_error_result(retmsg=str(e))
 
-    # 优先使用传递的llm_name，如果没有则使用租户默认的asr_id
-    if llm_name:
-        asr_model_name = llm_name
-    else:
-        asr_model_name = tenants[0].get("asr_id")
-        if not asr_model_name:
-            raise HTTPException(status_code=400, detail="No default ASR model is set and no llm_name provided")
-
-    asr_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.SPEECH2TEXT, asr_model_name)
+    asr_mdl = LLMBundle(db, user.id, asr_config)
 
     # 调用 ASR 语音识别函数
     transcription_result = asr_mdl.transcription(audio=audio_file_path)
@@ -1018,43 +741,13 @@ def delete_msg(request: DeleteMsgRequest, db: Session = Depends(get_db), user=De
         if i < len(conv["reference"]):
             conv["reference"].pop(i)  # 同样对 reference 做相应的 pop 操作
         break
-        # assert conv["message"][i + 1]["id"] == req["message_id"]
-        # conv["message"].pop(i)
-        # conv["message"].pop(i)
-        # conv["reference"].pop(max(0, i//2-1))
-        # break
+
     ConversationService.update_by_id(db, conv["id"], conv)
     return get_json_result(data=conv)
 
 
 @router.post('/thumbup', summary="点赞", response_description="成功点赞")
 def thumbup(request: ThumbupRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    点赞接口
-
-    该接口用于为特定会话中的消息点赞或取消点赞，并添加反馈信息。
-
-    参数:
-    - request: ThumbupRequest对象，包含点赞的详细信息
-        - conversation_id: str 会话的唯一标识符
-        - message_id: str 消息的唯一标识符
-        - set: Optional[bool] 点赞状态（True表示点赞，False表示取消点赞）
-        - feedback: str 反馈信息，当取消点赞时可以提供反馈内容
-
-    返回:
-    - 成功时返回更新后的会话信息的JSON结果
-    - 失败时返回错误信息
-
-    逻辑说明:
-    - 根据会话ID查找指定会话，如果未找到则返回错误。
-    - 在会话的消息列表中查找匹配的消息ID，并根据请求中的点赞状态设置相应的字段。
-    - 若取消点赞且提供了反馈信息，则在消息中记录该反馈。
-    - 更新会话信息并将结果返回。
-
-    注意事项:
-    - 仅支持为"assistant"角色的消息点赞。
-    - 若请求中未设置点赞状态，默认为取消点赞。
-    """
     req = request.model_dump()
     conv = ConversationService.get_by_id(db, req["conversation_id"])
     if not conv:
@@ -1079,21 +772,6 @@ def thumbup(request: ThumbupRequest, db: Session = Depends(get_db), user=Depends
 
 @router.post('/ask', summary="问答接口", response_description="返回答案")
 def ask_about(request: AskAboutRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    问答接口
-
-    该接口用于根据用户的问题从知识库中获取答案。
-
-    参数:
-    - question: 用户提出的问题
-    - kb_ids: 知识库ID列表
-    - user: 当前用户对象
-
-    返回:
-    - 实时流式返回答案数据
-    
-    注意: 虽然此函数定义为同步，但返回 StreamingResponse，FastAPI 会正确处理。
-    """
     req = request.model_dump()
     uid = user.id
 
@@ -1121,22 +799,8 @@ def ask_about(request: AskAboutRequest, db: Session = Depends(get_db), user=Depe
     return StreamingResponse(stream(), media_type="text/event-stream", headers=headers)
 
 
-# 定义 mindmap 接口
 @router.post('/mindmap', summary="生成思维导图", response_description="返回思维导图")
 async def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    生成思维导图
-
-    根据知识库内容生成思维导图。
-
-    参数:
-    - question: 用户提出的问题
-    - kb_ids: 知识库ID列表
-    - user: 当前用户对象
-
-    返回:
-    - 思维导图数据
-    """
     req = request.model_dump()
 
     search_id = req.get("search_id", "")
@@ -1148,76 +812,6 @@ async def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=D
     kb_ids = list(set(kb_ids))
 
     mind_map = await gen_mindmap(db, req["question"], kb_ids, search_app.get("tenant_id", user.id), search_config)
-
-    # search_app = None
-    # search_config = {}
-    # if search_id:
-    #     search_app = SearchService.get_detail(db, search_id)
-    # if search_app:
-    #     search_config = search_app.get("search_config", {})
-    #
-    # kb_ids = req["kb_ids"]
-    # if search_config.get("kb_ids", []):
-    #     kb_ids = search_config.get("kb_ids", [])
-    # kb = KnowledgebaseService.get_by_id(db, kb_ids[0])
-    # if not kb:
-    #     return get_data_error_result(retmsg="Knowledgebase not found!")
-    #
-    # chat_id = ""
-    # similarity_threshold = 0.3,
-    # vector_similarity_weight = 0.3,
-    # top = 1024,
-    # doc_ids = []
-    # rerank_id = ""
-    # rerank_mdl = None
-    #
-    # if search_config:
-    #     if search_config.get("chat_id", ""):
-    #         chat_id = search_config.get("chat_id", "")
-    #     if search_config.get("similarity_threshold", 0.2):
-    #         similarity_threshold = search_config.get("similarity_threshold", 0.2)
-    #     if search_config.get("vector_similarity_weight", 0.3):
-    #         vector_similarity_weight = search_config.get("vector_similarity_weight", 0.3)
-    #     if search_config.get("top_k", 1024):
-    #         top = search_config.get("top_k", 1024)
-    #     if search_config.get("doc_ids", []):
-    #         doc_ids = search_config.get("doc_ids", [])
-    #     if search_config.get("rerank_id", ""):
-    #         rerank_id = search_config.get("rerank_id", "")
-    #
-    # tenant_id = kb.tenant_id
-    # if search_app and search_app.get("tenant_id", ""):
-    #     tenant_id = search_app.get("tenant_id", "")
-    #
-    # embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id)
-    # chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_name=chat_id)
-    # if rerank_id:
-    #     rerank_mdl = LLMBundle(db, tenant_id, LLMType.RERANK, rerank_id)
-    # filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
-    # kb_names = list([kb.name])
-    #
-    # search_mode_dict = request.get_search_mode_dict()
-    #
-    # ranks = settings.retriever.retrieval(
-    #     question=req["question"],
-    #     filter_exp=filter_exp,
-    #     embd_mdl=embd_mdl,
-    #     tenant_id=tenant_id,
-    #     kb_names=kb_names,
-    #     page=1,
-    #     page_size=12,
-    #     similarity_threshold=similarity_threshold,
-    #     vector_similarity_weight=vector_similarity_weight,
-    #     top=top,
-    #     doc_ids=doc_ids,
-    #     aggs=False,
-    #     rerank_mdl=rerank_mdl,
-    #     rank_feature=label_question(db, req["question"], [kb]),
-    #     search_mode=search_mode_dict
-    # )
-    # mindmap = MindMapExtractor(chat_mdl)
-    # mind_map = trio.run(mindmap, [c["text"] for c in ranks["chunks"]])
-    # mind_map = mind_map.output
     if "error" in mind_map:
         return server_error_response(Exception(mind_map["error"]))
     return get_json_result(data=mind_map)
@@ -1225,18 +819,6 @@ async def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=D
 
 @router.post('/related_questions', summary="生成相关问题", response_description="返回相关问题")
 async def related_questions(request: RelatedQuestionsRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    生成相关问题
-
-    根据用户的关键词生成相关搜索问题。
-
-    参数:
-    - question: 用户提出的关键词
-    - user: 当前用户对象
-
-    返回:
-    - 相关搜索问题列表
-    """
     req = request.model_dump()
 
     search_id = req.get("search_id", "")
@@ -1248,7 +830,11 @@ async def related_questions(request: RelatedQuestionsRequest, db: Session = Depe
     question = req["question"]
 
     chat_id = search_config.get("chat_id", "")
-    chat_mdl = LLMBundle(db, user.id, LLMType.CHAT, chat_id)
+    if chat_id:
+        chat_config = get_model_config_by_type_and_name(db, user.id, LLMType.CHAT.value, chat_id)
+    else:
+        chat_config = get_tenant_default_model_by_type(db, user.id, LLMType.CHAT)
+    chat_mdl = LLMBundle(db, user.id, chat_config)
 
     gen_conf = search_config.get("llm_setting", {"temperature": 0.9})
     if "parameter" in gen_conf:

@@ -1,11 +1,3 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： user_service.py
-@date：2024/7/9 9:00
-@desc:
-"""
 import hashlib
 import logging
 from datetime import datetime
@@ -14,20 +6,16 @@ from fastapi import HTTPException
 from sqlalchemy.exc import NoResultFound, IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy import func, select, update
-# from passlib.context import CryptContext
 import bcrypt
 
 from api.db import UserTenantRole
-from common.constants import StatusEnum
 from api.db.db_models import User, Tenant, UserTenant
 from api.db.services.common_service import CommonService
+from common import settings
+from common.constants import StatusEnum
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, datetime_format
-from common import settings
 
-
-# # 创建密码上下文
-# pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 class UserService(CommonService):
     model = User
@@ -192,11 +180,17 @@ class TenantService(CommonService):
             cls.model.id.label("tenant_id"),
             cls.model.name,
             cls.model.llm_id,
+            cls.model.tenant_llm_id,
             cls.model.embd_id,
+            cls.model.tenant_embd_id,
             cls.model.rerank_id,
+            cls.model.tenant_rerank_id,
             cls.model.asr_id,
+            cls.model.tenant_asr_id,
             cls.model.img2txt_id,
+            cls.model.tenant_img2txt_id,
             cls.model.tts_id,
+            cls.model.tenant_tts_id,
             cls.model.parser_ids,
             UserTenant.role.label("role")
         ).join(
@@ -215,16 +209,42 @@ class TenantService(CommonService):
                 "tenant_id": tenant.tenant_id,
                 "name": tenant.name,
                 "llm_id": tenant.llm_id,
+                "tenant_llm_id": tenant.tenant_llm_id,
                 "embd_id": tenant.embd_id,
+                "tenant_embd_id": tenant.tenant_embd_id,
                 "rerank_id": tenant.rerank_id,
+                "tenant_rerank_id": tenant.tenant_rerank_id,
                 "asr_id": tenant.asr_id,
+                "tenant_asr_id": tenant.tenant_asr_id,
                 "img2txt_id": tenant.img2txt_id,
+                "tenant_img2txt_id": tenant.tenant_img2txt_id,
                 "tts_id": tenant.tts_id,
+                "tenant_tts_id": tenant.tenant_tts_id,
                 "parser_ids": tenant.parser_ids,
                 "role": tenant.role
             }
             for tenant in tenants
         ]
+
+    @classmethod
+    def get_null_tenant_model_id_rows(cls, db: Session):
+        stmt = select(
+            cls.model.id,
+            cls.model.llm_id,
+            cls.model.embd_id,
+            cls.model.asr_id,
+            cls.model.img2txt_id,
+            cls.model.rerank_id,
+            cls.model.tts_id,
+        ).where(
+            (cls.model.tenant_llm_id.is_(None))
+            | (cls.model.tenant_embd_id.is_(None))
+            | (cls.model.tenant_asr_id.is_(None))
+            | (cls.model.tenant_img2txt_id.is_(None))
+            | (cls.model.tenant_rerank_id.is_(None))
+            | (cls.model.tenant_tts_id.is_(None))
+        )
+        return db.execute(stmt).all()
 
     @classmethod
     def get_joined_tenants_by_user_id(cls, db: Session, user_id: str):

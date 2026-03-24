@@ -1,14 +1,16 @@
 import io
-from typing import Any
 from dataclasses import dataclass
+import os
+from typing import Any
+
+import chardet
+from docx import Document
+from fastapi import UploadFile
 
 from workflow.utils.MinioOperator import MinioOperator
 from workflow_v2.component.base_component import BaseComponent
-from workflow_v2.utils import match_parameters, map_schema_with_values
+from workflow_v2.utils import match_parameters
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
-from fastapi import UploadFile
-from docx import Document
-import os
 
 
 @dataclass
@@ -203,10 +205,6 @@ def read_bytes_content(bytes_data, encoding='utf-8', chunk_size=None):
     finally:
         # 重置指针位置，以便后续可能的读取
         bytes_data.seek(0)
-
-
-import chardet
-
 
 def detect_and_read_content(bytes_data, chunk_size=None):
     """

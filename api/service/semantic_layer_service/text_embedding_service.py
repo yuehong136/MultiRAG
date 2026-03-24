@@ -6,10 +6,10 @@ from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.db.db_models import get_db
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from api.db.services.llm_service import LLMBundle
 from api.service.semantic_layer_service.models import SemanticTextData, OwnerType, SemanticElementType
 from common import settings
-from common.constants import LLMType
 from common.misc_utils import thread_pool_exec
 
 
@@ -37,7 +37,10 @@ class TextEmbeddingService:
 
         # 批量生成嵌入向量
         texts = [item.text for item in semantic_data_list]
-        embedding_model = LLMBundle(self.db, self.user.id, LLMType.EMBEDDING, llm_name=embedding_model_name)
+        embedding_model_config = get_model_config_by_type_and_name(
+            self.db, self.user.id, "embedding", embedding_model_name
+        )
+        embedding_model = LLMBundle(self.db, self.user.id, embedding_model_config)
 
         # 使用asyncio.to_thread将同步encode方法转为异步
         vectors, _ = await thread_pool_exec(embedding_model.encode, texts)
@@ -104,7 +107,10 @@ class TextEmbeddingService:
             raise RuntimeError(f"Collection {self.COLLECTION_NAME} does not exist")
 
         # 生成查询向量
-        embedding_model_instance = LLMBundle(self.db, self.user.id, LLMType.EMBEDDING, llm_name=embedding_model)
+        embedding_model_config = get_model_config_by_type_and_name(
+            self.db, self.user.id, "embedding", embedding_model
+        )
+        embedding_model_instance = LLMBundle(self.db, self.user.id, embedding_model_config)
         # 使用asyncio.to_thread将同步encode方法转为异步
         query_vector, _ = await thread_pool_exec(embedding_model_instance.encode, [query_text])
 
@@ -248,7 +254,10 @@ class TextEmbeddingService:
 
     async def _get_embedding_model_dim(self, embedding_model: str) -> int:
         """获取嵌入模型的向量维度"""
-        embedding_model_instance = LLMBundle(self.db, self.user.id, LLMType.EMBEDDING, llm_name=embedding_model)
+        embedding_model_config = get_model_config_by_type_and_name(
+            self.db, self.user.id, "embedding", embedding_model
+        )
+        embedding_model_instance = LLMBundle(self.db, self.user.id, embedding_model_config)
         # 使用asyncio.to_thread将encode方法转为异步
         sample_vec, _ = await thread_pool_exec(embedding_model_instance.encode, ["测试"])
         vector_dim = len(sample_vec[0])

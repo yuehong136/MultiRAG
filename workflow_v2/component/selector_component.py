@@ -31,7 +31,7 @@ class LogicType(Enum):
 class Branch:
     """分支信息"""
     port_id: str  # 'true', 'true_1', 'false' 等
-    nodes: list['WorkflowNode']
+    nodes: list[Any]
     conditions: dict | None  # 分支的条件配置
 
 
@@ -40,15 +40,30 @@ class SelectorComponent(BaseComponent):
 
     def __init__(self, component_id: str, title: str, node_data: dict[str, Any], logger: WorkflowContextLogger):
         super().__init__(component_id, title, logger)
-        self.logger = logger
         self.branches_config = self._parse_branches(node_data)
-        self.nodes: list['WorkflowNode'] = []
+        self.nodes = {}
 
     def _parse_branches(self, node_data: dict[str, Any]) -> list[dict]:
         """解析分支配置"""
         branches = node_data.get('data', {}).get('inputs', {}).get('branches', [])
         self.logger.debug(f"Parsed {len(branches)} branches for selector {self.id}")
         return branches
+
+    def _get_nested_value(self, data: Any, path: str) -> Any:
+        parts = path.split(".")
+        current = data
+        for part in parts:
+            if isinstance(current, dict):
+                if part not in current:
+                    raise KeyError(f"Cannot find path {path}")
+                current = current[part]
+            elif isinstance(current, list) and current and isinstance(current[0], dict):
+                if part not in current[0]:
+                    raise KeyError(f"Cannot find path {path}")
+                current = current[0][part]
+            else:
+                raise KeyError(f"Cannot find path {path}")
+        return current
 
     def _get_value(self, input_def: dict) -> Any:
         """从输入定义中获取实际值"""
@@ -60,14 +75,16 @@ class SelectorComponent(BaseComponent):
             return value_def['content']
         elif value_def['type'] == 'ref':
             ref = value_def['content']
-            source_node = self.nodes[ref['blockID']]
-            if source_node.is_completed and source_node.output is not None:
-                # 可以通过output_name来获取特定的输出字段
+            source_node = self.nodes.get(ref['blockID'])
+            if source_node and source_node.is_completed and source_node.output is not None:
                 output_name = ref.get('name')
-                if output_name and output_name in source_node.output:
-                    return source_node.output[output_name]
-                else:
-                    return source_node.output
+                if output_name:
+                    return self._get_nested_value(source_node.output, output_name)
+                return source_node.output
+
+            output_name = ref.get('name')
+            if output_name:
+                return self._get_nested_value(self.inputs, output_name)
         return None
 
     def _evaluate_condition(self, condition: dict) -> bool:
@@ -186,3 +203,7 @@ class SelectorComponent(BaseComponent):
                 error_code=ErrorCode.UNKNOWN_ERROR,
                 details={"component_id": self.id, "error": str(e)}
             )
+
+    async def execute_alone(self, input_value: dict, batch_value: dict | None = None) -> dict[str, Any]:
+        self.inputs = input_value
+        return await self.execute()

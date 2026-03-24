@@ -15,7 +15,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from common.constants import LLMType
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.llm_service import LLMBundle
 
 logger = logging.getLogger(__name__)
@@ -65,11 +65,14 @@ class MetadataExtractor:
         self.max_tokens = max_tokens
         
         # 初始化 LLM
+        if llm_name:
+            model_config = get_model_config_by_type_and_name(db, tenant_id, "chat", llm_name)
+        else:
+            model_config = get_tenant_default_model_by_type(db, tenant_id, "chat")
         self.llm = LLMBundle(
             db, 
             tenant_id, 
-            LLMType.CHAT, 
-            llm_name=llm_name
+            model_config,
         )
     
     async def extract_single(self, content: str) -> Any:
@@ -322,9 +325,3 @@ class BatchMetadataExtractor:
             result[config["field_name"]] = value
         
         return result
-
-
-
-
-
-

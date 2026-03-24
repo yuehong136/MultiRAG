@@ -32,6 +32,10 @@ class CodeComponent(BaseComponent):
             self.logger.error(f"Error occurred while executing code component: {e}")
             raise e
 
+    async def execute_alone(self, input_value: dict, batch_value: dict | None = None) -> dict[str, Any]:
+        self.inputs = input_value
+        return await self.execute()
+
     async def run_temporary_script(self, script: str, args: dict[str, Any],
                                    base_url: str = f"http://{SCRIPT_SCHEDULER_HOST}:{SCRIPT_SCHEDULER_PORT}") -> dict:
         """

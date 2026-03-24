@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from api.apps import manager
 from api.db.db_models import get_db
 from api.utils.api_utils import get_json_result, get_error_argument_result
+from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
 from api.apps.services import memory_api_service
 from common.constants import RetCode
@@ -55,6 +56,8 @@ class UpdateMemoryRequest(BaseModel):
     temperature: float | None = Field(None, ge=0, le=1, description="LLM温度参数")
     system_prompt: str | None = Field(None, description="系统提示词")
     user_prompt: str | None = Field(None, description="用户提示词")
+    tenant_llm_id: int | None = Field(None, description="租户LLM模型关联ID")
+    tenant_embd_id: int | None = Field(None, description="租户嵌入模型关联ID")
 
 
 # ==================== API Endpoints ====================
@@ -71,6 +74,7 @@ def create_memory(
         "embd_id": request_body.embd_id,
         "llm_id": request_body.llm_id,
     }
+    memory_info = ensure_tenant_model_id_for_params(db, user.id, memory_info)
     try:
         success, result = memory_api_service.create_memory(db, user.id, memory_info)
         if success:

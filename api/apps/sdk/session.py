@@ -23,6 +23,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
 from api.db.services.user_service import UserTenantService
+from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.utils.api_utils import check_duplicate_ids, get_data_openai, get_error_data_result, get_json_result, get_result, server_error_response, token_required
 from core.app.tag import label_question
 from core.prompts.template import load_prompt
@@ -107,6 +108,7 @@ class SearchBotRetrievalTestRequest(BaseModel):
     search_id: str | None = ""
     doc_ids: list[str] | None = []
     rerank_id: str | None = None
+    tenant_rerank_id: int | None = None
     keyword: bool | None = False
     highlight: bool | None = False
 
@@ -988,7 +990,8 @@ async def related_questions(
     
     question = req["question"]
     industry = req.get("industry", "")
-    chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT)
+    chat_config = get_tenant_default_model_by_type(db, tenant_id, LLMType.CHAT)
+    chat_mdl = LLMBundle(db, tenant_id, chat_config)
     prompt = """
 Objective: To generate search terms related to the user's search keywords, helping users find more valuable information.
 Instructions:
@@ -1198,7 +1201,8 @@ async def retrieval_test_embedded(request: SearchBotRetrievalTestRequest, db: Se
             metas = DocMetadataService.get_flatted_meta_by_kbs(db, kb_ids)
             chat_mdl = None
             if meta_data_filter.get("method") in ["auto", "semi_auto"]:
-                chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))
+                chat_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, search_config.get("chat_id", ""))
+                chat_mdl = LLMBundle(db, tenant_id, chat_config)
             doc_ids = await apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids)
         # Apply search_config settings if not explicitly provided in request
         if not req.get("similarity_threshold"):
@@ -1227,14 +1231,23 @@ async def retrieval_test_embedded(request: SearchBotRetrievalTestRequest, db: Se
         if langs:
             question = await cross_languages(kb.tenant_id, None, question, langs)
 
-        embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
+        if kb.tenant_embd_id:
+            embd_config = get_model_config_by_id(db, kb.tenant_embd_id)
+        else:
+            embd_config = get_model_config_by_type_and_name(db, kb.tenant_id, LLMType.EMBEDDING.value, kb.embd_id)
+        embd_mdl = LLMBundle(db, kb.tenant_id, embd_config)
 
         rerank_mdl = None
-        if rerank_id:
-            rerank_mdl = LLMBundle(db, kb.tenant_id, LLMType.RERANK.value, llm_name=rerank_id)
+        if req.get("tenant_rerank_id"):
+            rerank_config = get_model_config_by_id(db, req["tenant_rerank_id"])
+            rerank_mdl = LLMBundle(db, kb.tenant_id, rerank_config)
+        elif rerank_id:
+            rerank_config = get_model_config_by_type_and_name(db, kb.tenant_id, LLMType.RERANK.value, rerank_id)
+            rerank_mdl = LLMBundle(db, kb.tenant_id, rerank_config)
 
         if req.get("keyword", False):
-            chat_mdl = LLMBundle(db, kb.tenant_id, LLMType.CHAT)
+            chat_config = get_tenant_default_model_by_type(db, kb.tenant_id, LLMType.CHAT)
+            chat_mdl = LLMBundle(db, kb.tenant_id, chat_config)
             question += await keyword_extraction(chat_mdl, question)
 
         labels = label_question(db, question, [kb])
@@ -1242,7 +1255,8 @@ async def retrieval_test_embedded(request: SearchBotRetrievalTestRequest, db: Se
             question, embd_mdl, tenant_ids, kb_ids, page, size, similarity_threshold, vector_similarity_weight, top, doc_ids, rerank_mdl=rerank_mdl, highlight=req.get("highlight"), rank_feature=labels
         )
         if use_kg:
-            ck = await settings.kg_retriever.retrieval(question, tenant_ids, kb_ids, embd_mdl, LLMBundle(db, kb.tenant_id, LLMType.CHAT))
+            kg_chat_config = get_tenant_default_model_by_type(db, kb.tenant_id, LLMType.CHAT)
+            ck = await settings.kg_retriever.retrieval(question, tenant_ids, kb_ids, embd_mdl, LLMBundle(db, kb.tenant_id, kg_chat_config))
             if ck["content_with_weight"]:
                 ranks["chunks"].insert(0, ck)
 
@@ -1277,7 +1291,11 @@ async def related_questions_embedded(request: SearchBotRelatedQuestionsRequest, 
     question = req["question"]
 
     chat_id = search_config.get("chat_id", "")
-    chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, chat_id)
+    if chat_id:
+        chat_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, chat_id)
+    else:
+        chat_config = get_tenant_default_model_by_type(db, tenant_id, LLMType.CHAT)
+    chat_mdl = LLMBundle(db, tenant_id, chat_config)
 
     gen_conf = search_config.get("llm_setting", {"temperature": 0.9})
     prompt = load_prompt("related_question")

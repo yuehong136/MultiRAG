@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from api.db.services.llm_service import LLMBundle
 from api.db.db_models import db_connection
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from api.utils.prompt_template_util import PromptTemplateUtil
 from common.constants import LLMType
 from common.misc_utils import thread_pool_exec
@@ -176,7 +177,8 @@ class NLQToInitialSQLGenerator:
                 # 在线程中创建独立的数据库会话和LLM实例
                 # 这样可以避免多线程共享数据库会话导致的事务状态冲突
                 with db_connection() as thread_db:
-                    thread_llm_instance = LLMBundle(thread_db, self.user_id, LLMType.CHAT, llm_name=llm_name)
+                    model_config = get_model_config_by_type_and_name(thread_db, self.user_id, LLMType.CHAT.value, llm_name)
+                    thread_llm_instance = LLMBundle(thread_db, self.user_id, model_config)
                     return thread_llm_instance.chat(
                         system="你是一个专业的SQL专家。请根据用户需求和语义层信息生成准确的SQL查询JSON对象。",
                         history=history,
@@ -298,7 +300,8 @@ class NLQToInitialSQLGenerator:
                 # 在线程中创建独立的数据库会话和LLM实例
                 # 这样可以避免多线程共享数据库会话导致的事务状态冲突
                 with db_connection() as thread_db:
-                    thread_llm_instance = LLMBundle(thread_db, self.user_id, LLMType.CHAT, llm_name=llm_name)
+                    model_config = get_model_config_by_type_and_name(thread_db, self.user_id, LLMType.CHAT.value, llm_name)
+                    thread_llm_instance = LLMBundle(thread_db, self.user_id, model_config)
                     return thread_llm_instance.chat(
                         system="你是一个专业的SQL修复专家。请根据错误信息和语义层信息修复SQL查询，输出JSON格式的结果。",
                         history=history,

@@ -31,6 +31,7 @@ from PIL import Image
 
 from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from common.constants import LLMType
 from common.token_utils import num_tokens_from_string
 from common.float_utils import normalize_overlapped_percent
@@ -127,7 +128,8 @@ def by_mineru(
         if mineru_llm_name:
             try:
                 with db_connection() as db:
-                    ocr_model = LLMBundle(db, tenant_id=tenant_id, llm_type=LLMType.OCR, llm_name=mineru_llm_name, lang=lang)
+                    model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.OCR.value, mineru_llm_name)
+                    ocr_model = LLMBundle(db, tenant_id, model_config, lang=lang)
                     pdf_parser = ocr_model.mdl
                     sections, tables = pdf_parser.parse_pdf(
                         filepath=filename,
@@ -214,7 +216,8 @@ def by_paddleocr(
         if paddleocr_llm_name:
             try:
                 with db_connection() as db:
-                    ocr_model = LLMBundle(db, tenant_id=tenant_id, llm_type=LLMType.OCR, llm_name=paddleocr_llm_name, lang=lang)
+                    model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.OCR.value, paddleocr_llm_name)
+                    ocr_model = LLMBundle(db, tenant_id, model_config, lang=lang)
                     pdf_parser = ocr_model.mdl
                     sections, tables = pdf_parser.parse_pdf(
                         filepath=filename,
@@ -241,11 +244,11 @@ def by_plaintext(filename, binary=None, from_page=0, to_page=100000, callback=No
         if not tenant_id:
             raise ValueError("tenant_id is required when using vision layout recognizer")
         with db_connection() as db:
+            model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.IMAGE2TEXT.value, layout_recognizer)
             vision_model = LLMBundle(
                 db,
                 tenant_id,
-                LLMType.IMAGE2TEXT,
-                llm_name=layout_recognizer,
+                model_config,
                 lang=kwargs.get("lang", "Chinese"),
             )
         pdf_parser = VisionParser(vision_model=vision_model, **kwargs)
@@ -973,7 +976,8 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
 
         try:
             with db_connection() as db:
-                vision_model = LLMBundle(db, kwargs["tenant_id"], LLMType.IMAGE2TEXT)
+                model_config = get_tenant_default_model_by_type(db, kwargs["tenant_id"], LLMType.IMAGE2TEXT)
+                vision_model = LLMBundle(db, kwargs["tenant_id"], model_config)
             callback(0.2, "Visual model detected. Attempting to enhance figure extraction...")
         except Exception as e:
             logging.warning(f"Failed to detect figure extraction: {e}")

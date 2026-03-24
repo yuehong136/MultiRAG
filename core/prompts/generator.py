@@ -272,13 +272,15 @@ async def full_question(tenant_id=None, llm_id=None, messages=None, language=Non
     from common.constants import LLMType
     from api.db.services.llm_service import LLMBundle
     from api.db.services.tenant_llm_service import TenantLLMService
+    from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 
     if not chat_mdl:
         with db_connection() as db:
             if TenantLLMService.llm_id2llm_type(llm_id) == "image2text":
-                chat_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, llm_id)
+                mdl_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.IMAGE2TEXT.value, llm_id)
             else:
-                chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_id)
+                mdl_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, llm_id)
+            chat_mdl = LLMBundle(db, tenant_id, mdl_config)
     conv = []
     for m in messages:
         if m["role"] not in ["user", "assistant"]:
@@ -307,14 +309,16 @@ async def cross_languages(tenant_id, llm_id, query, languages=None):
     from common.constants import LLMType
     from api.db.services.llm_service import LLMBundle
     from api.db.services.tenant_llm_service import TenantLLMService
+    from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 
     if languages is None:
         languages = []
     with db_connection() as db:
         if llm_id and TenantLLMService.llm_id2llm_type(llm_id) == "image2text":
-            chat_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, llm_id)
+            mdl_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.IMAGE2TEXT.value, llm_id)
         else:
-            chat_mdl = LLMBundle(db, tenant_id, LLMType.CHAT, llm_id)
+            mdl_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, llm_id)
+        chat_mdl = LLMBundle(db, tenant_id, mdl_config)
 
     rendered_sys_prompt = PROMPT_JINJA_ENV.from_string(CROSS_LANGUAGES_SYS_PROMPT_TEMPLATE).render()
     rendered_user_prompt = PROMPT_JINJA_ENV.from_string(CROSS_LANGUAGES_USER_PROMPT_TEMPLATE).render(query=query, languages=languages)

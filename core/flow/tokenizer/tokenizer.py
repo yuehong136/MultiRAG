@@ -21,7 +21,7 @@ import numpy as np
 from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
-from api.db.services.user_service import TenantService
+from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from core.flow.base import ProcessBase, ProcessParamBase
 from core.flow.tokenizer.schema import TokenizerFromUpstream
 from core.nlp import rag_tokenizer
@@ -57,11 +57,13 @@ class Tokenizer(ProcessBase):
         with db_connection() as db:
             if self._canvas._kb_id:
                 kb = KnowledgebaseService.get_by_id(db, self._canvas._kb_id)
-                embedding_id = kb.embd_id
+                if kb.tenant_embd_id:
+                    embd_config = get_model_config_by_id(db, kb.tenant_embd_id)
+                else:
+                    embd_config = get_model_config_by_type_and_name(db, self._canvas._tenant_id, LLMType.EMBEDDING.value, kb.embd_id)
             else:
-                ten = TenantService.get_by_id(db, self._canvas._tenant_id)
-                embedding_id = ten.embd_id
-            embedding_model = LLMBundle(db, self._canvas._tenant_id, LLMType.EMBEDDING, llm_name=embedding_id)
+                embd_config = get_tenant_default_model_by_type(db, self._canvas._tenant_id, LLMType.EMBEDDING)
+            embedding_model = LLMBundle(db, self._canvas._tenant_id, embd_config)
         texts = []
         for c in chunks:
             txt = ""

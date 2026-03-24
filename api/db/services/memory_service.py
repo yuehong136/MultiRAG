@@ -1,11 +1,3 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： memory_service.py
-@date：2025/01/14
-@desc: Memory服务层 - 采用SQLAlchemy 2.0风格
-"""
 import logging
 from sqlalchemy import select, desc, update, delete
 from sqlalchemy.orm import Session
@@ -16,7 +8,6 @@ from api.db.services.common_service import CommonService
 from api.utils.memory_utils import calculate_memory_type
 from api.constants import MEMORY_NAME_LIMIT
 from common.misc_utils import get_uuid
-from common.time_utils import get_format_time, current_timestamp
 from memory.utils.prompt_util import PromptAssembler
 
 logger = logging.getLogger(__name__)
@@ -98,7 +89,9 @@ class MemoryService(CommonService):
                 cls.model.memory_type,
                 cls.model.storage_type,
                 cls.model.embd_id,
+                cls.model.tenant_embd_id,
                 cls.model.llm_id,
+                cls.model.tenant_llm_id,
                 cls.model.permissions,
                 cls.model.description,
                 cls.model.memory_size,
@@ -146,6 +139,10 @@ class MemoryService(CommonService):
                 User.nickname.label("owner_name"),
                 cls.model.memory_type,
                 cls.model.storage_type,
+                cls.model.embd_id,
+                cls.model.tenant_embd_id,
+                cls.model.llm_id,
+                cls.model.tenant_llm_id,
                 cls.model.permissions,
                 cls.model.description,
                 cls.model.create_time,
@@ -209,7 +206,9 @@ class MemoryService(CommonService):
         name: str,
         memory_type: list[str],
         embd_id: str,
-        llm_id: str
+        llm_id: str,
+        tenant_embd_id: int | None = None,
+        tenant_llm_id: int | None = None,
     ) -> tuple[bool, Memory | str]:
         """
         创建新的Memory
@@ -257,7 +256,9 @@ class MemoryService(CommonService):
                 memory_type=memory_type_int,
                 tenant_id=tenant_id,
                 embd_id=embd_id,
+                tenant_embd_id=tenant_embd_id,
                 llm_id=llm_id,
+                tenant_llm_id=tenant_llm_id,
                 system_prompt=system_prompt,
             )
             db.add(memory)
@@ -332,3 +333,13 @@ class MemoryService(CommonService):
             删除的记录数
         """
         return cls.delete_by_id(db, memory_id)
+
+    @classmethod
+    def get_null_tenant_embd_id_row(cls, db: Session):
+        stmt = select(cls.model.id, cls.model.tenant_id, cls.model.embd_id).where(cls.model.tenant_embd_id.is_(None))
+        return db.execute(stmt).all()
+
+    @classmethod
+    def get_null_tenant_llm_id_row(cls, db: Session):
+        stmt = select(cls.model.id, cls.model.tenant_id, cls.model.llm_id).where(cls.model.tenant_llm_id.is_(None))
+        return db.execute(stmt).all()

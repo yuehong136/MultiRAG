@@ -11,22 +11,27 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from api.db import UserTenantRole
-from api.db.db_models import init_database_tables as init_web_db, LLM, LLMFactories, TenantLLM, db_connection
+from api.db.db_models import init_database_tables as init_web_db, LLM, LLMFactories, TenantLLM, Knowledgebase, Dialog, Memory, db_connection
 from api.db.services import UserService
 from api.db.services.canvas_service import CanvasTemplateService
+from api.db.services.dialog_service import DialogService
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.memory_service import MemoryService
 from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMService
 from api.db.services.llm_service import LLMService, LLMBundle, get_init_tenant_llm
 from api.db.services.user_service import TenantService, UserTenantService
 from api.db.db_models import GuardDimension
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+from api.utils.tenant_utils import ensure_tenant_model_id_for_params
+from api.db.services.system_settings_service import SystemSettingsService
+from api.db.joint_services.memory_message_service import init_message_id_sequence, init_memory_size_cache, fix_missing_tokenized_memory
+# from api.common.base64 import encode_to_base64
 from common import settings
 from common.file_utils import get_project_base_directory
 from common.constants import LLMType
 from scripts.init_ai_guard_system import init_ai_guard_system
-from api.db.services.system_settings_service import SystemSettingsService
-from api.db.joint_services.memory_message_service import init_message_id_sequence, init_memory_size_cache, fix_missing_tokenized_memory
-# from api.common.base64 import encode_to_base64
+
 
 # 超级用户默认配置（支持环境变量覆盖）
 DEFAULT_SUPERUSER_NICKNAME = os.getenv("DEFAULT_SUPERUSER_NICKNAME", "admin")
@@ -115,17 +120,20 @@ def init_superuser(
         logging.warning(f"Failed to clean TenantLLM records: {e}")
     
     TenantLLMService.insert_many(db, tenant_llm)
+    TenantService.update_by_id(db, user_info["id"], ensure_tenant_model_id_for_params(db, user_info["id"], tenant))
 
     logging.info(f"Super user initialized. email: {email},A default password has been set; changing the password after login is strongly recommended.")
 
     if tenant["llm_id"]:
-        chat_mdl = LLMBundle(db, tenant["id"], LLMType.CHAT, tenant["llm_id"])
+        chat_config = get_model_config_by_type_and_name(db, tenant["id"], LLMType.CHAT.value, tenant["llm_id"])
+        chat_mdl = LLMBundle(db, tenant["id"], chat_config)
         msg = asyncio.run(chat_mdl.async_chat(system="", history=[{"role": "user", "content": "Hello!"}], gen_conf={}))
         if msg.find("ERROR: ") == 0:
             logging.error("'{}' doesn't work. {}".format(tenant["llm_id"], msg))
 
     if tenant["embd_id"]:
-        embd_mdl = LLMBundle(db, tenant["id"], LLMType.EMBEDDING, tenant["embd_id"])
+        embd_config = get_model_config_by_type_and_name(db, tenant["id"], LLMType.EMBEDDING.value, tenant["embd_id"])
+        embd_mdl = LLMBundle(db, tenant["id"], embd_config)
         v, c = embd_mdl.encode(["Hello!"])
         if c == 0:
             logging.error("'{}' doesn't work!".format(tenant["embd_id"]))
@@ -160,28 +168,69 @@ def init_llm_factory(db: Session):
     LLMService.filter_delete(db, [LLM.fid == "QAnything"])
     TenantLLMService.filter_update(db, [TenantLLM.llm_factory == "QAnything"], {"llm_factory": "Youdao"})
     TenantLLMService.filter_update(db, [TenantLLM.llm_factory == "cohere"], {"llm_factory": "Cohere"})
-    TenantService.filter_update(db, [1 == 1], {
-        "parser_ids": "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,email:Email,tag:Tag"})
-    # insert openai two embedding models to the current openai user.
-    # print("Start to insert 2 OpenAI embedding models...")
-    # tenant_ids = set([row.tenant_id for row in TenantLLMService.get_openai_models(db)])
-    # for tid in tenant_ids:
-    #     for row in TenantLLMService.query(db, llm_factory="OpenAI", tenant_id=tid):
-    #         row = row.to_dict()
-    #         row["mdl_type"] = LLMType.EMBEDDING.value
-    #         row["llm_name"] = "text-embedding-3-small"
-    #         row["used_tokens"] = 0
-    #         try:
-    #             TenantLLMService.save(db, **row)
-    #             row = deepcopy(row)
-    #             row["llm_name"] = "text-embedding-3-large"
-    #             TenantLLMService.save(db, **row)
-    #         except Exception as e:
-    #             pass
-    #         break
+    TenantService.filter_update(db, [1 == 1], {"parser_ids": "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,email:Email,tag:Tag"})
+
     doc_count = DocumentService.get_all_kb_doc_count(db)
     for kb_id in KnowledgebaseService.get_all_ids(db):
         KnowledgebaseService.update_document_number_in_init(db, kb_id=kb_id, doc_num=doc_count.get(kb_id, 0))
+
+
+def _batch_fill_tenant_model_id(db: Session, rows, *, model_name_attr: str, target_field: str, service, model_class):
+    """按 (tenant_id, model_name) 分组，每组查一次 get_api_key，批量更新。"""
+    groups: dict[tuple[str, str], list] = {}
+    for row in rows:
+        key = (row.tenant_id, getattr(row, model_name_attr))
+        groups.setdefault(key, []).append(row.id)
+
+    for (tenant_id, model_name), ids in groups.items():
+        tenant_llm = TenantLLMService.get_api_key(db, tenant_id, model_name)
+        if tenant_llm:
+            service.filter_update(db, [model_class.id.in_(ids)], {target_field: tenant_llm.id})
+
+
+def fix_empty_tenant_model_id(db: Session):
+    # tenant 表：每行有多个模型字段，无法分组，逐行处理
+    for row in TenantService.get_null_tenant_model_id_rows(db):
+        update_dict = ensure_tenant_model_id_for_params(
+            db,
+            row.id,
+            {
+                "llm_id": row.llm_id,
+                "embd_id": row.embd_id,
+                "asr_id": row.asr_id,
+                "img2txt_id": row.img2txt_id,
+                "rerank_id": row.rerank_id,
+                "tts_id": row.tts_id,
+            },
+        )
+        TenantService.update_by_id(db, row.id, update_dict)
+
+    _batch_fill_tenant_model_id(
+        db, KnowledgebaseService.get_null_tenant_embd_id_row(db),
+        model_name_attr="embd_id", target_field="tenant_embd_id",
+        service=KnowledgebaseService, model_class=Knowledgebase,
+    )
+    _batch_fill_tenant_model_id(
+        db, DialogService.get_null_tenant_llm_id_row(db),
+        model_name_attr="llm_id", target_field="tenant_llm_id",
+        service=DialogService, model_class=Dialog,
+    )
+    if hasattr(DialogService, "get_null_tenant_rerank_id_row"):
+        _batch_fill_tenant_model_id(
+            db, DialogService.get_null_tenant_rerank_id_row(db),
+            model_name_attr="rerank_id", target_field="tenant_rerank_id",
+            service=DialogService, model_class=Dialog,
+        )
+    _batch_fill_tenant_model_id(
+        db, MemoryService.get_null_tenant_embd_id_row(db),
+        model_name_attr="embd_id", target_field="tenant_embd_id",
+        service=MemoryService, model_class=Memory,
+    )
+    _batch_fill_tenant_model_id(
+        db, MemoryService.get_null_tenant_llm_id_row(db),
+        model_name_attr="llm_id", target_field="tenant_llm_id",
+        service=MemoryService, model_class=Memory,
+    )
 
 
 def add_graph_templates(db: Session):
@@ -329,6 +378,7 @@ def _init_web_data_with_db(db: Session) -> None:
         # Initialize message ID sequence and memory size cache
         init_message_id_sequence(db)
         init_memory_size_cache(db)
+        fix_empty_tenant_model_id(db)
         fix_missing_tokenized_memory(db)
 
         logging.info("init web data success:{}".format(time.time() - start_time))

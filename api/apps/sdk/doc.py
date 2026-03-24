@@ -24,6 +24,7 @@ from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
+from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.task_service import TaskService, queue_tasks, cancel_all_task_of
 from api.utils.api_utils import check_duplicate_ids, construct_json_result, get_error_data_result, get_parser_config, get_result, server_error_response, token_required
 from core.app.qa import beAdoc, rmPrefix
@@ -160,6 +161,7 @@ class RetrievalTestRequest(BaseModel):
     vector_similarity_weight: float = Field(default=0.3, ge=0.0, le=1.0)
     top_k: int = Field(default=1024, ge=1)
     rerank_id: str | None = None
+    tenant_rerank_id: int | None = None
     keyword: bool = Field(default=False)
     highlight: bool = Field(default=False)
     use_kg: bool = Field(default=False)
@@ -1146,7 +1148,11 @@ def add_document_chunk(
         chunk_id = xxhash.xxh64(f"{document_id}-{req['content']}").hexdigest()
         
         # 准备chunk数据
-        embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id)
+        if kb.tenant_embd_id:
+            embd_config = get_model_config_by_id(db, kb.tenant_embd_id)
+        else:
+            embd_config = get_model_config_by_type_and_name(db, kb.tenant_id, LLMType.EMBEDDING.value, kb.embd_id)
+        embd_mdl = LLMBundle(db, kb.tenant_id, embd_config)
         tks = rag_tokenizer.tokenize(req["content"])
         
         chunk_data = {
@@ -1263,7 +1269,11 @@ def update_chunk(
 
         # 重新生成embedding
         e, kb = KnowledgebaseService.get_by_id(db, dataset_id)
-        embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id)
+        if kb.tenant_embd_id:
+            embd_config = get_model_config_by_id(db, kb.tenant_embd_id)
+        else:
+            embd_config = get_model_config_by_type_and_name(db, kb.tenant_id, LLMType.EMBEDDING.value, kb.embd_id)
+        embd_mdl = LLMBundle(db, kb.tenant_id, embd_config)
         v, c = embd_mdl.encode([req["content"]])
         chunk_data["q_%d_vec" % len(v[0])] = v[0]
 
@@ -1339,8 +1349,8 @@ async def retrieval_test(
     kb_names = list([kb.name for kb in kbs])
     
     # 验证所有数据集使用相同的embedding模型
-    embd_nms = list(set([TenantLLMService.split_model_name_and_factory(kb.embd_id)[0] for kb in kbs]))
-    if len(embd_nms) != 1:
+    embd_keys = list(set([kb.tenant_embd_id or TenantLLMService.split_model_name_and_factory(kb.embd_id)[0] for kb in kbs]))
+    if len(embd_keys) != 1:
         return get_result(
             retmsg='Datasets use different embedding models.',
             retcode=RetCode.DATA_ERROR,
@@ -1412,19 +1422,28 @@ async def retrieval_test(
         if not kb:
             return get_error_data_result(retmsg="Dataset not found!")
         
-        embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING, llm_name=kb.embd_id)
-        
+        if kb.tenant_embd_id:
+            embd_config = get_model_config_by_id(db, kb.tenant_embd_id)
+        else:
+            embd_config = get_model_config_by_type_and_name(db, kb.tenant_id, LLMType.EMBEDDING.value, kb.embd_id)
+        embd_mdl = LLMBundle(db, kb.tenant_id, embd_config)
+
         rerank_mdl = None
-        if req.get("rerank_id"):
-            rerank_mdl = LLMBundle(db, kb.tenant_id, LLMType.RERANK, llm_name=req["rerank_id"])
-        
+        if req.get("tenant_rerank_id"):
+            rerank_config = get_model_config_by_id(db, req["tenant_rerank_id"])
+            rerank_mdl = LLMBundle(db, kb.tenant_id, rerank_config)
+        elif req.get("rerank_id"):
+            rerank_config = get_model_config_by_type_and_name(db, kb.tenant_id, LLMType.RERANK.value, req["rerank_id"])
+            rerank_mdl = LLMBundle(db, kb.tenant_id, rerank_config)
+
         # 跨语言翻译
         if langs:
             question = await cross_languages(kb.tenant_id, None, question, langs)
-        
+
         # 关键词提取增强
         if req.get("keyword", False):
-            chat_mdl = LLMBundle(db, kb.tenant_id, LLMType.CHAT)
+            chat_config = get_tenant_default_model_by_type(db, kb.tenant_id, LLMType.CHAT)
+            chat_mdl = LLMBundle(db, kb.tenant_id, chat_config)
             question += await keyword_extraction(chat_mdl, question)
         
         # 执行检索
@@ -1447,19 +1466,21 @@ async def retrieval_test(
             search_mode=search_mode_dict
         )
         if toc_enhance:
-            chat_mdl = LLMBundle(db, kb.tenant_id, LLMType.CHAT)
+            toc_chat_config = get_tenant_default_model_by_type(db, kb.tenant_id, LLMType.CHAT)
+            chat_mdl = LLMBundle(db, kb.tenant_id, toc_chat_config)
             cks = await settings.retriever.retrieval_by_toc(question, ranks["chunks"], tenant_ids, chat_mdl, size)
             if cks:
                 ranks["chunks"] = cks
         ranks["chunks"] = settings.retriever.retrieval_by_children(ranks["chunks"], tenant_ids)
         # 知识图谱增强
         if use_kg:
+            kg_chat_config = get_tenant_default_model_by_type(db, kb.tenant_id, LLMType.CHAT)
             ck = await settings.kg_retriever.retrieval(
                 question,
                 [k.tenant_id for k in kbs],
                 kb_ids,
                 embd_mdl,
-                LLMBundle(db, kb.tenant_id, LLMType.CHAT)
+                LLMBundle(db, kb.tenant_id, kg_chat_config)
             )
             if ck["content_with_weight"]:
                 ranks["chunks"].insert(0, ck)

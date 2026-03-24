@@ -38,6 +38,7 @@ from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.db.services.user_service import TenantService, UserService, UserTenantService
 from api.db.services.memory_service import MemoryService
+from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from memory.services.messages import MessageService
 from common import settings
 from core.nlp import search
@@ -124,7 +125,8 @@ def create_new_user(db: Session, user_info: dict) -> dict:
         # 批量插入租户 LLM 配置
         logging.info(f"Inserting tenant LLM configs, count: {len(tenant_llm)}")
         TenantLLMService.insert_many(db, tenant_llm)
-        
+        TenantService.update_by_id(db, user_id, ensure_tenant_model_id_for_params(db, user_id, tenant))
+
         # 创建根文件夹
         # 注意：FileService.insert(db, file_dict) 接受字典作为第二个参数
         logging.info(f"Creating root folder for user")

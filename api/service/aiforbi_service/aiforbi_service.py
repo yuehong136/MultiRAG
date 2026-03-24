@@ -4,7 +4,7 @@ import re
 import pandas as pd
 from fastapi import HTTPException
 
-from common.constants import LLMType
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService
@@ -13,6 +13,7 @@ from api.service.aiforbi_service.llm_prompts import PromptTemplateLoader
 from api.service.aiforbi_service.utils.extract_brackets import extract_brackets
 from api.service.aiforbi_service.utils.extract_js_func import extract_js_function
 from api.service.aiforbi_service.utils.extract_sql import extract_sql
+from common.constants import LLMType
 
 
 class AIForBIService:
@@ -26,7 +27,8 @@ class AIForBIService:
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
 
-        chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, llm_name)
+        model_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], LLMType.CHAT.value, llm_name)
+        chat_model = LLMBundle(db, tenants[0]["tenant_id"], model_config)
         resp = chat_model.chat(system="", history=[{"role": "user", "content": prompt}], gen_conf={})
         logging.info(f"====nl2sql resp:\n {resp}")
         sql = extract_sql(resp)
@@ -48,7 +50,8 @@ class AIForBIService:
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
 
-        chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, llm_name)
+        model_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], LLMType.CHAT.value, llm_name)
+        chat_model = LLMBundle(db, tenants[0]["tenant_id"], model_config)
         resp = chat_model.chat(system="", history=[{"role": "user", "content": prompt}], gen_conf={})
         logging.info(f"====chart_type resp:\n {resp}")
         chart_type_list = extract_brackets(resp, merge=True)
@@ -86,7 +89,8 @@ class AIForBIService:
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
 
-        chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, llm_name)
+        model_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], LLMType.CHAT.value, llm_name)
+        chat_model = LLMBundle(db, tenants[0]["tenant_id"], model_config)
         resp = chat_model.chat(system="", history=[{"role": "user", "content": prompt}], gen_conf={})
         logging.info(f"====dynamic_chart_option_function resp:\n {resp}")
         js_func = extract_js_function(resp, function_name="generateChartOption")
@@ -98,7 +102,8 @@ class AIForBIService:
         tenants = TenantService.get_info_by(db, user_id)
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
-        chat_model = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, llm_name)
+        model_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], LLMType.CHAT.value, llm_name)
+        chat_model = LLMBundle(db, tenants[0]["tenant_id"], model_config)
 
         raw_data = static_chart_option_req_body.raw_data
         # 使用正则表达式提取所有 Markdown 格式的表格

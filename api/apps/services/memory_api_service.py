@@ -13,6 +13,7 @@ from api.db.services.user_service import UserTenantService
 from api.db.services.canvas_service import UserCanvasService
 from api.db.services.task_service import TaskService
 from api.db.joint_services.memory_message_service import get_memory_size_cache, judge_system_prompt_is_default, save_to_memory, query_message
+from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from api.utils.memory_utils import format_ret_data_from_memory, get_memory_type_human
 from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
 from common.constants import MemoryType, TenantPermission, ForgettingPolicy
@@ -32,7 +33,9 @@ def create_memory(db: Session, tenant_id: str, memory_info: dict):
         "name": str,
         "memory_type": list[str],
         "embd_id": str,
-        "llm_id": str
+        "llm_id": str,
+        "tenant_embd_id": str,
+        "tenant_llm_id": str
     }
     """
     name = memory_info["name"].strip()
@@ -49,13 +52,17 @@ def create_memory(db: Session, tenant_id: str, memory_info: dict):
     if invalid_types:
         raise ArgumentException(f"Memory type '{invalid_types}' is not supported.")
 
+    memory_info = ensure_tenant_model_id_for_params(db, tenant_id, dict(memory_info))
+
     success, result = MemoryService.create_memory(
         db=db,
         tenant_id=tenant_id,
         name=name,
         memory_type=list(memory_type_set),
         embd_id=memory_info["embd_id"],
-        llm_id=memory_info["llm_id"]
+        llm_id=memory_info["llm_id"],
+        tenant_embd_id=memory_info.get("tenant_embd_id"),
+        tenant_llm_id=memory_info.get("tenant_llm_id"),
     )
 
     if success:
@@ -105,6 +112,11 @@ def update_memory(db: Session, memory_id: str, new_settings: dict):
     if new_settings.get("llm_id"):
         update_dict["llm_id"] = new_settings["llm_id"]
 
+    if new_settings.get("tenant_llm_id"):
+        update_dict["tenant_llm_id"] = new_settings["tenant_llm_id"]
+    if new_settings.get("tenant_embd_id"):
+        update_dict["tenant_embd_id"] = new_settings["tenant_embd_id"]
+
     if new_settings.get("memory_size"):
         if not 0 < int(new_settings["memory_size"]) <= MEMORY_SIZE_LIMIT:
             raise ArgumentException(f"Memory size should be in range (0, {MEMORY_SIZE_LIMIT}] Bytes.")
@@ -139,7 +151,7 @@ def update_memory(db: Session, memory_id: str, new_settings: dict):
         return True, memory_dict
 
     memory_size = get_memory_size_cache(current_memory.tenant_id, memory_id)
-    not_allowed_update = [f for f in ["embd_id", "memory_type"] if f in to_update and memory_size > 0]
+    not_allowed_update = [f for f in ["tenant_embd_id", "embd_id", "memory_type"] if f in to_update and memory_size > 0]
     if not_allowed_update:
         raise ArgumentException(f"Can't update {not_allowed_update} when memory isn't empty.")
 
@@ -151,6 +163,7 @@ def update_memory(db: Session, memory_id: str, new_settings: dict):
                 {"memory_type": to_update["memory_type"]}
             )
 
+    to_update = ensure_tenant_model_id_for_params(db, current_memory.tenant_id, to_update)
     MemoryService.update_memory(db, current_memory.tenant_id, memory_id, to_update)
     updated_memory = MemoryService.get_by_memory_id(db, memory_id)
     return True, format_ret_data_from_memory(updated_memory)

@@ -1,26 +1,18 @@
-# coding=utf-8
-"""
-@project: writing_system
-@file： writing_service.py
-@desc: 写作内容生成服务类
-"""
 import logging
 import json
-import uuid
 import re
 import asyncio
-from datetime import datetime
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any
 from sqlalchemy.orm import Session
 
 from api.db.db_models import WritingChapter, WritingProject, WritingChapterContent, WritingReferenceMaterial
-from common.constants import StatusEnum, LLMType
 from api.db.services.chapter_service import ChapterService
 from api.db.services.common_service import CommonService
 from api.db.services.user_service import TenantService
 from api.db.services.llm_service import LLMBundle
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from common.misc_utils import get_uuid
-from api.utils.api_utils import get_json_result
+from common.constants import StatusEnum, LLMType
 
 
 class WritingService(CommonService):
@@ -28,8 +20,8 @@ class WritingService(CommonService):
 
     @classmethod
     def generate_outline(cls, db: Session, user_input: str, content_type: str, language_style: str,
-                         word_count: int, model: str, user_id: str, reference: Optional[str] = None,
-                         custom_outline_md: Optional[str] = None) -> Dict[str, Any]:
+                         word_count: int, model: str, user_id: str, reference: str | None = None,
+                         custom_outline_md: str | None = None) -> dict[str, Any]:
         """
         生成文章大纲
 
@@ -101,7 +93,8 @@ class WritingService(CommonService):
             else:
                 # 原有逻辑：使用大模型生成大纲
                 # 创建LLM实例
-                llm_bundle = LLMBundle(db, tenant_id, LLMType.CHAT, model)
+                chat_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, model)
+                llm_bundle = LLMBundle(db, tenant_id, chat_config)
 
                 # 构建提示词
                 # 添加参考信息到提示词中
@@ -245,7 +238,7 @@ class WritingService(CommonService):
             raise e
 
     @classmethod
-    def _prepare_context_for_section(cls, db: Session, chapter_id: str) -> Dict[str, List[Dict[str, Any]]]:
+    def _prepare_context_for_section(cls, db: Session, chapter_id: str) -> dict[str, list[dict[str, Any]]]:
         """
         准备章节写作的上下文信息
 
@@ -359,7 +352,7 @@ class WritingService(CommonService):
         return context
 
     @classmethod
-    def _parse_custom_outline(cls, db: Session, project_id: str, markdown_outline: str) -> Dict[str, Any]:
+    def _parse_custom_outline(cls, db: Session, project_id: str, markdown_outline: str) -> dict[str, Any]:
         """
         解析用户提供的自定义Markdown大纲，创建相应的章节结构
 
@@ -463,8 +456,8 @@ class WritingService(CommonService):
 
     @classmethod
     def _build_writing_prompt(cls, db: Session, chapter_id: str,
-                              context: Dict[str, List[Dict[str, Any]]],
-                              reference_materials: Optional[List[str]] = None) -> str:
+                              context: dict[str, list[dict[str, Any]]],
+                              reference_materials: list[str] | None = None) -> str:
         """
         构建章节写作的提示词
 
@@ -642,7 +635,7 @@ class WritingService(CommonService):
         return prompt
 
     @classmethod
-    def write_section(cls, db: Session, chapter_id: str, extra_references: List[str] = None) -> str:
+    def write_section(cls, db: Session, chapter_id: str, extra_references: list[str] = None) -> str:
         """
         写作章节内容
 
@@ -677,7 +670,8 @@ class WritingService(CommonService):
             tenant_id = tenants[0]["tenant_id"]
 
             # 创建LLM实例
-            llm_bundle = LLMBundle(db, tenant_id, LLMType.CHAT, project.model)
+            chat_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, project.model)
+            llm_bundle = LLMBundle(db, tenant_id, chat_config)
 
             # 准备上下文
             context = cls._prepare_context_for_section(db, chapter_id)
@@ -729,7 +723,7 @@ class WritingService(CommonService):
             raise e
 
     @classmethod
-    async def write_section_stream(cls, db: Session, chapter_id: str, extra_references: List[str] = None):
+    async def write_section_stream(cls, db: Session, chapter_id: str, extra_references: list[str] = None):
         """
         流式写作章节内容，用于异步API
 
@@ -772,7 +766,8 @@ class WritingService(CommonService):
             tenant_id = tenants[0]["tenant_id"]
 
             # 创建LLM实例
-            llm_bundle = LLMBundle(db, tenant_id, LLMType.CHAT, project.model)
+            chat_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, project.model)
+            llm_bundle = LLMBundle(db, tenant_id, chat_config)
 
             # 准备上下文
             context = cls._prepare_context_for_section(db, chapter_id)
@@ -865,7 +860,7 @@ class WritingService(CommonService):
             yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
 
     @classmethod
-    def get_completed_article(cls, db: Session, project_id: str) -> Tuple[str, int]:
+    def get_completed_article(cls, db: Session, project_id: str) -> tuple[str, int]:
         """
         获取完整的文章内容
 
@@ -1010,7 +1005,8 @@ class WritingService(CommonService):
             tenant_id = tenants[0]["tenant_id"]
 
             # 创建LLM实例
-            llm_bundle = LLMBundle(db, tenant_id, LLMType.CHAT, project.model)
+            chat_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, project.model)
+            llm_bundle = LLMBundle(db, tenant_id, chat_config)
 
             # 准备上下文（复用现有逻辑）
             context = cls._prepare_context_for_section(db, chapter_id)
@@ -1115,7 +1111,8 @@ class WritingService(CommonService):
             tenant_id = tenants[0]["tenant_id"]
 
             # 创建LLM实例（注意：LLMBundle可能会缓存db引用，需要后续处理）
-            llm_bundle = LLMBundle(db, tenant_id, LLMType.CHAT, model)
+            chat_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, model)
+            llm_bundle = LLMBundle(db, tenant_id, chat_config)
 
             # 准备上下文（复用现有逻辑）
             context = cls._prepare_context_for_section(db, chapter_id)
@@ -1229,7 +1226,7 @@ class WritingService(CommonService):
             yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
 
     @classmethod
-    def _build_improved_prompt(cls, db: Session, chapter_id: str, context: Dict[str, List[Dict[str, Any]]]) -> str:
+    def _build_improved_prompt(cls, db: Session, chapter_id: str, context: dict[str, list[dict[str, Any]]]) -> str:
         """
         构建改进的章节写作提示词（自动获取参考资料和考虑子章节）
 

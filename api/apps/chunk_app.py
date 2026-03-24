@@ -1,11 +1,3 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： chunk_app.py
-@date：2024/7/30 13:56
-@desc:
-"""
 import datetime
 import json
 from typing import Literal, Annotated, Any
@@ -24,6 +16,7 @@ from api.db.services.search_service import SearchService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.user_service import UserTenantService
+from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.document_service import DocumentService
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.utils.api_utils import server_error_response, get_data_error_result
@@ -153,6 +146,7 @@ class RetrievalTestRequest(BaseModel):
     use_kg: bool = False
     top_k: int = 1024
     rerank_id: str | None = None
+    tenant_rerank_id: int | None = None
     highlight: bool = False
     keyword: bool = False
     search_mode: SearchModeType | None = None
@@ -634,7 +628,11 @@ async def query_vector_store(request: VectorStoreQueryRequest, db: Session = Dep
 
         match_exprs = []
         if request.question:
-            embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
+            if kb.tenant_embd_id:
+                embd_config = get_model_config_by_id(db, kb.tenant_embd_id)
+            else:
+                embd_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.EMBEDDING.value, kb.embd_id)
+            embd_mdl = LLMBundle(db, tenant_id, embd_config)
             dealer = search.Dealer(settings.docStoreConn)
             # 使用固定的 topk 以确保 total 保持一致
             match_exprs.append(
@@ -786,12 +784,20 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
         if not tenant_id:
             return get_data_error_result(retmsg="Tenant not found!")
 
-        embd_id = DocumentService.get_embd_id(db, request.doc_id)
-        embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING, embd_id)
-
         doc = DocumentService.get_by_id(db, request.doc_id)
         if not doc:
             return get_data_error_result(retmsg="Document not found!")
+
+        tenant_embd_id = DocumentService.get_tenant_embd_id(db, request.doc_id)
+        if tenant_embd_id:
+            embd_config = get_model_config_by_id(db, tenant_embd_id)
+        else:
+            embd_id = DocumentService.get_embd_id(db, request.doc_id)
+            if embd_id:
+                embd_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.EMBEDDING.value, embd_id)
+            else:
+                embd_config = get_tenant_default_model_by_type(db, tenant_id, LLMType.EMBEDDING)
+        embd_mdl = LLMBundle(db, tenant_id, embd_config)
 
         if doc.parser_id == ParserType.QA:
             arr = [
@@ -1288,8 +1294,16 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
         if kb.pagerank:
             d[PAGERANK_FLD] = kb.pagerank
 
-        embd_id = DocumentService.get_embd_id(db, req["doc_id"])
-        embd_mdl = LLMBundle(db, tenant_id, LLMType.EMBEDDING.value, embd_id)
+        tenant_embd_id = DocumentService.get_tenant_embd_id(db, req["doc_id"])
+        if tenant_embd_id:
+            embd_config = get_model_config_by_id(db, tenant_embd_id)
+        else:
+            embd_id = DocumentService.get_embd_id(db, req["doc_id"])
+            if embd_id:
+                embd_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.EMBEDDING.value, embd_id)
+            else:
+                embd_config = get_tenant_default_model_by_type(db, tenant_id, LLMType.EMBEDDING)
+        embd_mdl = LLMBundle(db, tenant_id, embd_config)
 
         v, c = embd_mdl.encode(
             [doc.name, req["content_with_weight"] if not d["question_kwd"] else "\n".join(d["question_kwd"])])
@@ -1526,11 +1540,17 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
         search_config = SearchService.get_detail(db, request.search_id or "").get("search_config", {})
         meta_data_filter = search_config.get("meta_data_filter", {})
         if meta_data_filter.get("method") in ["auto", "semi_auto"]:
-            chat_mdl = LLMBundle(db, user.id, LLMType.CHAT, llm_name=search_config.get("chat_id", ""))
+            chat_id = search_config.get("chat_id", "")
+            if chat_id:
+                chat_config = get_model_config_by_type_and_name(db, user.id, LLMType.CHAT.value, chat_id)
+            else:
+                chat_config = get_tenant_default_model_by_type(db, user.id, LLMType.CHAT)
+            chat_mdl = LLMBundle(db, user.id, chat_config)
     else:
         meta_data_filter = request.meta_data_filter or {}
         if meta_data_filter.get("method") in ["auto", "semi_auto"]:
-            chat_mdl = LLMBundle(db, user.id, LLMType.CHAT)
+            chat_config = get_tenant_default_model_by_type(db, user.id, LLMType.CHAT)
+            chat_mdl = LLMBundle(db, user.id, chat_config)
 
     if meta_data_filter:
         metas = DocMetadataService.get_flatted_meta_by_kbs(db, kb_ids)
@@ -1555,13 +1575,24 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
         if request.cross_languages:
             question = await cross_languages(kb.tenant_id, None, question, request.cross_languages)
 
-        embd_mdl = LLMBundle(db, kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
+        if kb.tenant_embd_id:
+            embd_config = get_model_config_by_id(db, kb.tenant_embd_id)
+        elif kb.embd_id:
+            embd_config = get_model_config_by_type_and_name(db, kb.tenant_id, LLMType.EMBEDDING.value, kb.embd_id)
+        else:
+            embd_config = get_tenant_default_model_by_type(db, kb.tenant_id, LLMType.EMBEDDING)
+        embd_mdl = LLMBundle(db, kb.tenant_id, embd_config)
 
         rerank_mdl = None
-        if request.rerank_id:
-            rerank_mdl = LLMBundle(db, kb.tenant_id, LLMType.RERANK.value, llm_name=request.rerank_id)
+        if request.tenant_rerank_id:
+            rerank_config = get_model_config_by_id(db, request.tenant_rerank_id)
+            rerank_mdl = LLMBundle(db, kb.tenant_id, rerank_config)
+        elif request.rerank_id:
+            rerank_config = get_model_config_by_type_and_name(db, kb.tenant_id, LLMType.RERANK.value, request.rerank_id)
+            rerank_mdl = LLMBundle(db, kb.tenant_id, rerank_config)
         if request.keyword:
-            chat_mdl = LLMBundle(db, kb.tenant_id, LLMType.CHAT)
+            chat_config = get_tenant_default_model_by_type(db, kb.tenant_id, LLMType.CHAT)
+            chat_mdl = LLMBundle(db, kb.tenant_id, chat_config)
             question += await keyword_extraction(chat_mdl, question)
         filter_exp = ""
         labels = label_question(db, question, [kb])
@@ -1581,7 +1612,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
                                                    kb.tenant_id,
                                                    request.kb_ids,
                                                    embd_mdl,
-                                                   LLMBundle(db, kb.tenant_id, LLMType.CHAT))
+                                                   LLMBundle(db, kb.tenant_id, get_tenant_default_model_by_type(db, kb.tenant_id, LLMType.CHAT)))
             if ck["content_with_weight"]:
                 ranks["chunks"].insert(0, ck)
         ranks["chunks"] = settings.retriever.retrieval_by_children(ranks["chunks"], [kb.tenant_id])

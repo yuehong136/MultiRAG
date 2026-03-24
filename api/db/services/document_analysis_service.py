@@ -1,17 +1,3 @@
-# coding=utf-8
-"""
-文档智能分析服务 V3 - 完全遵循项目规范
-
-改进点（相比V2）：
-1. ✅ 从 core.prompts.prompts 导入 prompt（而非动态加载）
-2. ✅ 使用 PROMPT_JINJA_ENV 渲染模板
-3. ✅ 完全复用项目基础设施
-4. ✅ 使用 Python 3.12+ 和 Pydantic V2 语法
-
-@project: multirag
-@Author: Claude & 龙
-@date: 2025/10/16
-"""
 import logging
 import re
 import time
@@ -22,36 +8,28 @@ from collections import Counter, defaultdict
 import numpy as np
 from sqlalchemy.orm import Session
 
-from common.constants import LLMType
+from api.db.db_models import db_connection
+from api.db.joint_services.tenant_model_service import get_tenant_default_model_by_type
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from core.nlp import rag_tokenizer
 from core.nlp.term_weight import Dealer as TermWeightDealer
 from common.token_utils import truncate
-from common.connection_utils import timeout
-
-# ⭐ 遵循项目规范：从 core.prompts.prompts 导入
+from common.constants import LLMType
 from core.prompts.generator import (
-    cluster_summary_prompt,
     cluster_keyword_prompt,
     global_tag_prompt,
     global_summary_prompt
 )
-
-# 复用项目的RAPTOR实现
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
-
-# 复用项目的缓存和并发控制
 from core.graphrag.utils import (
     get_llm_cache,
     set_llm_cache,
     get_embed_cache,
     set_embed_cache
 )
-
 from common import settings
-from common.constants import PAGERANK_FLD
 
 # asyncio版本的并发限制器 (代替trio.CapacityLimiter)
 import os
@@ -568,8 +546,11 @@ Focus on the main ideas and key points. Keep the summary coherent and readable."
         logging.info(f"Running RAPTOR with config: {raptor_config}")
         original_length = len(raptor_chunks)
 
-        llm_model = LLMBundle(None, self.tenant_id, LLMType.CHAT)
-        embd_model_raptor = LLMBundle(None, self.tenant_id, LLMType.EMBEDDING)
+        with db_connection() as db:
+            llm_config = get_tenant_default_model_by_type(db, self.tenant_id, LLMType.CHAT)
+            embd_config = get_tenant_default_model_by_type(db, self.tenant_id, LLMType.EMBEDDING)
+        llm_model = LLMBundle(None, self.tenant_id, llm_config)
+        embd_model_raptor = LLMBundle(None, self.tenant_id, embd_config)
 
         raptor = Raptor(
             max_cluster=raptor_config.get("max_cluster", 64),
@@ -928,8 +909,12 @@ Just output the summary, nothing else."""
 
     def _get_llm_model(self):
         """获取LLM模型"""
-        return LLMBundle(None, self.tenant_id, LLMType.CHAT)
+        with db_connection() as db:
+            llm_config = get_tenant_default_model_by_type(db, self.tenant_id, LLMType.CHAT)
+        return LLMBundle(None, self.tenant_id, llm_config)
 
     def _get_embedding_model(self):
         """获取Embedding模型"""
-        return LLMBundle(None, self.tenant_id, LLMType.EMBEDDING)
+        with db_connection() as db:
+            embd_config = get_tenant_default_model_by_type(db, self.tenant_id, LLMType.EMBEDDING)
+        return LLMBundle(None, self.tenant_id, embd_config)

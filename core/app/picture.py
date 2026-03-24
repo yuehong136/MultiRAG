@@ -1,3 +1,6 @@
+#
+#  Copyright 2025 The InfiniFlow Authors. All Rights Reserved.
+#
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
 #  You may obtain a copy of the License at
@@ -19,6 +22,7 @@ from PIL import Image
 
 from api.db.services.llm_service import LLMBundle
 from api.db.db_models import db_connection
+from api.db.joint_services.tenant_model_service import get_tenant_default_model_by_type
 from core.nlp import attach_media_context, rag_tokenizer, tokenize
 from common.constants import LLMType
 from common.string_utils import clean_markdown_block
@@ -45,7 +49,8 @@ def chunk(filename, binary, tenant_id, lang, callback=None, **kwargs):
         if any(filename.lower().endswith(ext) for ext in VIDEO_EXTS):
             try:
                 doc.update({"doc_type_kwd": "video"})
-                cv_mdl = LLMBundle(db, tenant_id, llm_type=LLMType.IMAGE2TEXT, lang=lang)
+                model_config = get_tenant_default_model_by_type(db, tenant_id, LLMType.IMAGE2TEXT)
+                cv_mdl = LLMBundle(db, tenant_id, model_config, lang=lang)
                 video_prompt = str(parser_config.get("video_prompt", "") or "")
                 ans = asyncio.run(cv_mdl.async_chat(system="", history=[], gen_conf={}, video_bytes=binary, filename=filename, video_prompt=video_prompt))
                 callback(0.8, "CV LLM respond: %s ..." % ans[:32])
@@ -72,7 +77,8 @@ def chunk(filename, binary, tenant_id, lang, callback=None, **kwargs):
 
             try:
                 callback(0.4, "Use CV LLM to describe the picture.")
-                cv_mdl = LLMBundle(db, tenant_id, LLMType.IMAGE2TEXT, lang=lang)
+                model_config = get_tenant_default_model_by_type(db, tenant_id, LLMType.IMAGE2TEXT)
+                cv_mdl = LLMBundle(db, tenant_id, model_config, lang=lang)
                 with io.BytesIO() as img_binary:
                     img.save(img_binary, format="JPEG")
                     img_binary.seek(0)

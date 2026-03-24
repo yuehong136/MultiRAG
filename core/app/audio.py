@@ -1,19 +1,12 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： audio.py
-@date：2024/7/26 11:00
-@desc:
-"""
 import logging
 import os
 import re
 import tempfile
 
-from common.constants import LLMType
 from api.db.db_models import db_connection
 from api.db.services.llm_service import LLMBundle
+from api.db.joint_services.tenant_model_service import get_tenant_default_model_by_type
+from common.constants import LLMType
 from core.nlp import rag_tokenizer, tokenize
 
 
@@ -55,7 +48,8 @@ def chunk(filename, binary, tenant_id, lang, callback=None, **kwargs):
 
         callback(0.1, "USE Sequence2Txt LLM to transcription the audio")
         with db_connection() as db:
-            seq2txt_mdl = LLMBundle(db, tenant_id, LLMType.SPEECH2TEXT, lang=lang)
+            model_config = get_tenant_default_model_by_type(db, tenant_id, LLMType.SPEECH2TEXT)
+            seq2txt_mdl = LLMBundle(db, tenant_id, model_config, lang=lang)
         ans = seq2txt_mdl.transcription(audio_path)
         callback(0.8, "Sequence2Txt LLM respond: %s ..." % ans[:32])
 

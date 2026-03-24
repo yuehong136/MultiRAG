@@ -1,11 +1,3 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： dataset_app.py
-@date：2024/7/22 16:30
-@desc:
-"""
 import base64
 import os
 import pathlib
@@ -34,6 +26,7 @@ from common import settings
 from common.misc_utils import get_uuid
 from common.constants import RetCode
 from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str
+from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from api.utils.file_utils import filename_type, thumbnail
 from core.app import book, laws, manual, naive, one, paper, presentation, qa, resume, table, picture
 from api.apps import manager
@@ -124,9 +117,10 @@ def create_dataset(
             "name": dataset_name,
             "embd_id": embd_id,
         }
+        dataset_data = ensure_tenant_model_id_for_params(db, tenant_id, dataset_data)
 
         if not KnowledgebaseService.save(db, **dataset_data):
-            return construct_result()
+            return construct_json_result()
 
         return construct_json_result(
             code=RetCode.SUCCESS,
@@ -255,27 +249,6 @@ def update_dataset(
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
-    """
-    更新指定数据集的信息。
-
-    参数:
-    - dataset_id (str): 数据集ID。
-    - request_body (UpdateDatasetRequest): 请求体，包含更新数据集的信息。
-      - name (Optional[str]): 数据集名称。
-      - embedding_model_id (Optional[str]): 嵌入模型ID。
-      - chunk_method (Optional[str]): 分块方法。
-      - photo (Optional[str]): 图片。
-      - layout_recognize (Optional[bool]): 布局识别。
-      - language (Optional[str]): 语言。
-      - description (Optional[str]): 描述。
-      - permission (Optional[str]): 权限。
-      - token_num (Optional[int]): 令牌数量。
-      - template_type (Optional[str]): 模板类型。
-      - chunk_num (Optional[int]): 分块数量。
-
-    返回:
-    - JSON: 更新后的数据集详细信息的JSON响应。
-    """
     req = request_body.model_dump(exclude_unset=True)
     try:
         # 请求不能为空
@@ -336,6 +309,7 @@ def update_dataset(
         for key in ["name", "language", "description", "permission", "id", "token_num"]:
             if key in req:
                 dataset_updating_data[key] = req.get(key)
+        dataset_updating_data = ensure_tenant_model_id_for_params(db, user.id, dataset_updating_data)
 
         # 更新数据集
         if not KnowledgebaseService.update_by_id(db, dataset.id, dataset_updating_data):
@@ -366,17 +340,6 @@ async def upload_documents(
         db: Session = Depends(get_db),  # 依赖注入数据库会话
         user=Depends(manager)  # 依赖注入当前用户信息
 ):
-    """
-    上传文件到指定的数据集。
-
-    参数:
-    - dataset_id (str): 数据集ID。
-    - files (UploadFile | None): 上传的文件。
-
-    返回:
-    - JSON: 上传文件的详细信息的JSON响应。
-    """
-    # 检查是否有文件上传，如果没有则返回错误
     if not files:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="There is no file!")
 
@@ -485,16 +448,6 @@ def delete_document(
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
-    """
-    删除指定的数据集中的文件。
-
-    参数:
-    - dataset_id (str): 数据集ID。
-    - document_id (str): 文件ID。
-
-    返回:
-    - JSON: 删除操作的结果。
-    """
     root_folder = FileService.get_root_folder(db, user.id)
     parent_file_id = root_folder.id
     FileService.init_knowledgebase_docs(db, parent_file_id, user.id)
@@ -547,20 +500,6 @@ def list_documents(
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
-    """
-    列出指定数据集中的文件。
-
-    参数:
-    - dataset_id (str): 数据集ID。
-    - keywords (str): 关键词，默认值为空。
-    - offset (int): 偏移量，默认值为0。
-    - count (int): 返回文件的数量，默认值为-1表示返回所有。
-    - order_by (str): 排序字段，默认值为"create_time"。
-    - descend (bool): 是否降序排列，默认值为True。
-
-    返回:
-    - JSON: 文件列表的JSON响应。
-    """
     if not dataset_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Lack of 'dataset_id'")
 
@@ -586,17 +525,6 @@ def update_document(
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
-    """
-    更新指定数据集中的文件信息。
-
-    参数:
-    - dataset_id (str): 数据集ID。
-    - document_id (str): 文件ID。
-    - request (UpdateDocumentRequest): 更新请求对象，包含更新的详细信息。
-
-    返回:
-    - JSON: 更新后的文件详细信息的JSON响应。
-    """
     req = request.model_dump(exclude_unset=True)
     try:
         legal_parameters = {"name", "enable", "template_type"}
@@ -680,16 +608,6 @@ def download_document(
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
-    """
-    下载指定数据集中的文件。
-
-    参数:
-    - dataset_id (str): 数据集ID。
-    - document_id (str): 文件ID。
-
-    返回:
-    - StreamingResponse: 文件流响应。
-    """
     try:
         dataset = KnowledgebaseService.get_by_id(db, dataset_id)
         if not dataset:
@@ -795,18 +713,6 @@ async def parse_documents(
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
-    """
-    开始解析指定数据集中的多个文件。
-
-    参数:
-    - dataset_id (str): 数据集ID。
-    - doc_ids (List[str]): 文件ID列表。
-    - db (Session): 数据库会话。
-    - user: 当前用户信息。
-
-    返回:
-    - JSON: 解析操作的结果。
-    """
     try:
         dataset = KnowledgebaseService.get_by_id(db, dataset_id)
         if not dataset:
@@ -854,22 +760,6 @@ def parsing_document_internal(db: Session, id: str):
 
         info = {"run": "1", "progress": 0, "progress_msg": "", "chunk_num": 0, "token_num": 0}
         DocumentService.update_by_id(db, id, info)
-
-        # ELASTICSEARCH.deleteByQuery(Q("match", doc_id=id), idxnm=search.index_name(tenant_id))
-        # # 删除Milvus中的数据
-        # try:
-        #     kb_id = DocumentService.get_by_doc_id(db, id)
-        #     kb = KnowledgebaseService.get_by_id(db, kb_id)
-        #     delete_result = MILVUS_CONNECTION.delete(
-        #         collection_name=search.index_name(tenant_id, kb.name),
-        #         filter=f"doc_id == {id}"
-        #     )
-        #     if not delete_result:
-        #         return construct_json_result(data=False, message="Milvus delete failed!",
-        #                                      code=RetCode.ARGUMENT_ERROR)
-        # except MilvusException as e:
-        #     return construct_json_result(data=False, message=str(e), code=RetCode.ARGUMENT_ERROR)
-
         doc_attributes = DocumentService.get_by_id(db, id).to_dict()
         doc_id = doc_attributes["id"]
         bucket, doc_name = File2DocumentService.get_storage_address(db, doc_id=doc_id)
@@ -884,12 +774,6 @@ def parsing_document_internal(db: Session, id: str):
 
         if doc_attributes["status"] == TaskStatus.FAIL.value:
             message += f"Failed in parsing the document: {doc_id}; "
-        # # 确保 res 可序列化
-        # if res and isinstance(res, dict):
-        #     res = json.dumps(res)
-        # else:
-        #     res = str(res)
-        # 将 res 中的图像对象转换为 base64 字符串
         if res:
             for item in res:
                 if 'image' in item and isinstance(item['image'], Image.Image):
@@ -909,18 +793,6 @@ async def stop_parsing_document(
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
-    """
-    停止解析指定数据集中的文件。
-
-    参数:
-    - dataset_id (str): 数据集ID。
-    - document_id (str): 文件ID。
-    - db (Session): 数据库会话。
-    - user: 当前用户信息。
-
-    返回:
-    - JSON: 停止解析操作的结果。
-    """
     try:
         dataset = KnowledgebaseService.get_by_id(db, dataset_id)
         if not dataset:
@@ -1014,18 +886,6 @@ def show_parsing_status(
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
-    """
-    显示指定数据集中文件的解析状态。
-
-    参数:
-    - dataset_id (str): 数据集ID。
-    - document_id (str): 文件ID。
-    - db (Session): 数据库会话。
-    - user: 当前用户信息。
-
-    返回:
-    - JSON: 文件解析状态的JSON响应。
-    """
     try:
         dataset = KnowledgebaseService.get_by_id(db, dataset_id)
         if not dataset:
@@ -1047,14 +907,4 @@ def show_parsing_status(
 
 
 def is_illegal_value_for_enum(value, enum_class):
-    """
-    检查给定值是否为指定枚举类的非法值。
-
-    参数:
-    - value: 要检查的值。
-    - enum_class: 枚举类。
-
-    返回:
-    - bool: 如果值为非法值，则返回True；否则返回False。
-    """
     return value not in enum_class.__members__.values()

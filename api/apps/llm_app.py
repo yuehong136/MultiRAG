@@ -21,6 +21,7 @@ from agent.component.agent_with_tools import Agent, AgentParam
 from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMService
 from api.db.services.llm_service import LLMService, LLMBundle
 from api.db.services.user_service import TenantService
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result, get_allowed_llm_factories
 from common.constants import StatusEnum, LLMType
 from api.db.db_models import TenantLLM, get_db, db_connection
@@ -575,7 +576,7 @@ def prepare_knowledge_context(db: Session, messages: list[dict], tavily_api_key:
 
     if tavily_api_key and messages:
         try:
-            llm_model_config = TenantLLMService.get_model_config(db, tenant_id, LLMType.CHAT, llm_name)
+            llm_model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, llm_name)
             max_tokens = llm_model_config.get("max_tokens", 8192)
 
             kbinfos = {"total": 0, "chunks": [], "doc_aggs": []}
@@ -792,33 +793,6 @@ router = APIRouter()
 
 @router.get('/factories', summary="获取模型供应商信息", response_description="成功获取到所有模型供应商信息")
 def factories(db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    此异步函数用于获取所有模型供应商的信息，排除特定供应商，并将结果以JSON格式返回。
-    摘要: 获取模型供应商信息
-    响应描述: 成功获取到所有模型供应商信息
-
-    返回:
-    - dict: 包含模型供应商信息的JSON结果，数据部分是一个字典列表，每个字典代表一个供应商的信息。
-
-    功能:
-    1. 查询数据库中所有的模型供应商信息。
-    2. 排除名为"Youdao"、"FastEmbed"和"BAAI"的供应商信息。
-    3. 将筛选后的供应商信息转换为字典列表。
-    4. 将结果封装为JSON格式的字典并返回。
-
-    流程:
-    1. 使用LLMFactoriesService从数据库中获取所有供应商信息。
-    2. 遍历获取的供应商信息，排除特定名称的供应商。
-    3. 将筛选后的供应商信息转换为字典列表。
-    4. 返回封装后的JSON结果。
-
-    异常处理:
-    - 如果在执行数据库操作或数据处理过程中发生异常，将捕获异常并调用server_error_response函数返回服务器错误响应。
-
-    注意:
-    - 被排除的供应商名称"Youdao"、"FastEmbed"和"BAAI"可能是系统默认供应商或特殊供应商，具体原因需根据实际业务逻辑确定。
-    """
-
     try:
         fac = get_allowed_llm_factories(db)
         # fac = [f.to_dict() for f in fac if f.name not in ["Youdao", "FastEmbed", "BAAI", "Builtin"]]
@@ -846,36 +820,6 @@ def factories(db: Session = Depends(get_db), user=Depends(manager)):
 
 @router.post('/set_api_key', summary="新增模型厂商api key", response_description="成功保存该模型服务厂商的api key")
 async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    此异步函数用于设置模型制造商的API密钥，并验证其是否能正确访问特定类型的模型。
-    摘要: 新增模型厂商api key
-    响应描述: 成功保存该模型服务厂商的api key
-
-    参数:
-    - request (SetAPIKeyRequest): 一个依赖注入的请求对象，包含模型工厂ID、API密钥等信息。
-
-    返回:
-    - dict: 成功时返回一个表示操作成功的JSON结果；失败时返回一个包含错误信息的JSON结果。
-
-    功能:
-    1. 验证API密钥是否能够成功访问聊天模型（Chat），并尝试访问嵌入（Embedding）和重排序（Rerank）模型（注：后两者当前未实现）。
-    2. 如果API密钥无法访问任何模型，函数将返回一个错误结果。
-    3. 更新或创建租户的模型配置，包括API密钥、基础URL等信息。
-    4. 如果在更新或创建过程中遇到完整性错误（例如，API密钥已存在），则抛出HTTP异常。
-
-    流程:
-    1. 解析请求体并初始化变量。
-    2. 遍历所有属于指定模型工厂的模型，尝试使用API密钥访问它们。
-    3. 如果访问失败，收集错误信息。
-    4. 如果有错误信息，返回错误结果。
-    5. 否则，更新或创建租户的模型配置。
-    6. 返回操作成功的JSON结果。
-
-    注意:
-    - 目前仅实现了对聊天模型的访问测试。
-    - 未来可能扩展到嵌入和重排序模型的测试。
-    - 在更新或创建租户模型配置时，会检查API密钥是否已存在，以避免重复。
-    """
     req = request.model_dump()
     chat_passed, embd_passed, rerank_passed = False, False, False
     factory = req["llm_factory"]
@@ -1274,37 +1218,13 @@ POST
 
 @router.post('/delete_llm', summary="删除模型", response_description="成功删除该模型")
 def delete_llm(request: DeleteLLMRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    此异步函数用于删除指定的语言模型（LLM）。
-    摘要: 删除模型
-    响应描述: 成功删除该模型
-
-    参数:
-    - request (DeleteLLMRequest): 一个依赖注入的请求对象，包含模型供应商和模型名称的信息。
-
-    返回:
-    - dict: 成功时返回一个表示操作成功的JSON结果。
-
-    功能:
-    1. 删除指定供应商和名称的模型。
-
-    流程:
-    1. 解析请求体，获取模型供应商和模型名称。
-    2. 检查指定的模型是否存在。
-    3. 从数据库中删除指定的模型。
-    4. 返回操作成功的JSON结果。
-
-    异常处理:
-    - 如果在删除模型的过程中发生异常，将捕获异常并返回服务器错误响应。
-    """
     try:
         req = request.model_dump()
         llm = TenantLLMService.query(db, tenant_id=user.id, llm_factory=req["llm_factory"], llm_name=req["llm_name"])
         if not llm:
             raise HTTPException(status_code=404, detail="LLM not found")
 
-        TenantLLMService.filter_delete(db, [TenantLLM.tenant_id == user.id, TenantLLM.llm_factory == req["llm_factory"],
-                                            TenantLLM.llm_name == req["llm_name"]])
+        TenantLLMService.filter_delete(db, [TenantLLM.tenant_id == user.id, TenantLLM.llm_factory == req["llm_factory"], TenantLLM.llm_name == req["llm_name"]])
         return get_json_result(data=True)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1331,141 +1251,6 @@ def delete_factory(request: DeleteFactoryRequest, db: Session = Depends(get_db),
 
 @router.get('/my_llms', summary="获取用户的所有模型", response_description="成功获取到用户的所有模型")
 def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=Depends(manager), request: Request = None):
-    """
-    ### GET `/v1/llm/my_llms` 获取用户的所有模型
-
-**功能描述**:
-此接口用于获取当前登录用户的所有可用语言模型列表，支持按模型厂商分组显示，并可选择是否包含详细信息如token使用量、API基址、最大token数等。接口返回用户配置的所有模型的结构化信息，便于前端展示和管理。
-
----
-
-### 查询参数 (Query Parameters)
-
-| 字段             | 类型      | 必填 | 描述                                                                                    |
-|------------------|-----------|------|---------------------------------------------------------------------------------------|
-| `include_details`| `boolean` | 否   | 是否包含详细信息，`true` 表示返回详细信息（包含已使用token数、API基址、最大token数），`false` 表示返回基本信息。默认值为 `false`。|
-
----
-
-### 响应 (Response)
-
-#### 成功响应 (200)
-
-- **`Content-Type: application/json`**
-
-- **基本信息响应 (`include_details=false`)**:
-    ```json
-    {
-        "retcode": 0,
-        "retmsg": "success",
-        "data": {
-            "OpenAI": {
-                "tags": ["CHAT", "EMBEDDING"],
-                "llm": [
-                    {
-                        "type": "chat",
-                        "name": "gpt-4",
-                        "used_token": 15420
-                    },
-                    {
-                        "type": "embedding",
-                        "name": "text-embedding-ada-002",
-                        "used_token": 8950
-                    }
-                ]
-            },
-            "Anthropic": {
-                "tags": ["CHAT"],
-                "llm": [
-                    {
-                        "type": "chat",
-                        "name": "claude-3-opus",
-                        "used_token": 12300
-                    }
-                ]
-            }
-        }
-    }
-    ```
-
-- **详细信息响应 (`include_details=true`)**:
-    ```json
-    {
-        "retcode": 0,
-        "retmsg": "success",
-        "data": {
-            "OpenAI": {
-                "tags": ["CHAT", "EMBEDDING"],
-                "llm": [
-                    {
-                        "type": "chat",
-                        "name": "gpt-4",
-                        "used_token": 15420,
-                        "api_base": "https://api.openai.com/v1",
-                        "max_tokens": 8192
-                    },
-                    {
-                        "type": "embedding",
-                        "name": "text-embedding-ada-002",
-                        "used_token": 8950,
-                        "api_base": "https://api.openai.com/v1",
-                        "max_tokens": 8192
-                    }
-                ]
-            }
-        }
-    }
-    ```
-
----
-
-### 错误响应
-
-#### **500: 内部错误**
-- **描述**: 当发生意外错误时，返回此错误。
-- **示例**:
-    ```json
-    {
-        "detail": "数据库连接失败或其他系统错误信息"
-    }
-    ```
-
----
-
-### 返回数据结构说明
-
-- **外层结构**: 按模型厂商（如 "OpenAI"、"Anthropic" 等）分组
-- **厂商信息**:
-    - `tags`: 该厂商支持的模型类型标签数组
-    - `llm`: 该厂商下的具体模型列表
-- **模型信息**:
-    - `type`: 模型类型（如 "chat"、"embedding"、"rerank"、"image2text"、"tts" 等）
-    - `name`: 模型名称
-    - `used_token`: 已使用的token数量
-    - `api_base`: API基础地址（仅在 `include_details=true` 时返回）
-    - `max_tokens`: 最大token限制（仅在 `include_details=true` 时返回，默认8192）
-
----
-
-### 主要流程
-
-1. 根据查询参数 `include_details` 确定返回详细程度。
-2. 查询当前用户租户下的所有已配置模型。
-3. 如果需要详细信息，则额外查询模型厂商的标签信息并包含API基址、最大token数等。
-4. 按模型厂商分组整理数据，每个厂商包含支持的模型类型和具体模型列表。
-5. 返回结构化的模型信息数据。
-
----
-
-### 注意事项
-
-- **数据分组**: 返回数据按模型厂商进行分组，便于前端按厂商展示模型列表。
-- **可选详情**: 通过 `include_details` 参数控制是否返回详细信息，基本模式下只返回核心字段以减少数据传输量。
-- **Token统计**: `used_token` 字段显示该模型的累计使用量，可用于使用情况分析。
-- **厂商标签**: `tags` 字段标识该厂商支持的模型类型，帮助前端做功能分类展示。
-- **API配置**: 详细模式下会返回 `api_base` 和 `max_tokens`，用于模型配置管理。
-
-    """
     try:
         TenantLLMService.ensure_mineru_from_env(db, user.id)
 
@@ -1489,6 +1274,7 @@ def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=D
                     }
 
                 res[o_dict["llm_factory"]]["llm"].append({
+                    "id": o_dict["id"],
                     "type": o_dict["mdl_type"],
                     "name": o_dict["llm_name"],
                     "used_token": o_dict["used_tokens"],
@@ -1505,6 +1291,7 @@ def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=D
                         "llm": []
                     }
                 res[o.llm_factory]["llm"].append({
+                    "id": o.id,
                     "type": o.mdl_type,
                     "name": o.llm_name,
                     "used_token": o.used_tokens,
@@ -1755,7 +1542,8 @@ curl -X POST "/v1/llm/embeddings" \\
     encoding_format = (req.get("encoding_format") or "float").lower()
 
     try:
-        emb_bundle = LLMBundle(db, tenant_id, LLMType.EMBEDDING.value, model_name)
+        embd_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.EMBEDDING.value, model_name)
+        emb_bundle = LLMBundle(db, tenant_id, embd_config)
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Embedding model not available: {str(e)}")
 
@@ -1882,36 +1670,6 @@ curl -X POST "/v1/llm/embeddings" \\
 
 @router.get('/list', summary="列出所有模型", response_description="成功列出所有模型")
 def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    列出所有模型，支持按模型类型筛选。
-    摘要: 列出所有模型
-    响应描述: 成功列出所有模型
-
-    参数:
-    - mdl_type (Optional[str]): 可选的模型类型，用于筛选模型。
-
-    返回:
-    - dict: 包含所有模型信息的JSON结果，数据部分是一个字典，其中每个键代表一个模型工厂，值是该工厂下的模型信息列表。
-
-    功能:
-    1. 查询所有有效的模型信息。
-    2. 根据模型类型筛选模型信息。
-    3. 按模型工厂分类整理模型信息。
-    4. 将整理后的模型信息封装为JSON格式的字典并返回。
-
-    流程:
-    1. 使用TenantLLMService从数据库中获取当前用户的所有模型信息。
-    2. 使用LLMService获取所有有效的模型信息。
-    3. 遍历获取的模型信息，按模型工厂分类整理模型信息。
-    4. 将整理后的模型信息封装为JSON格式的字典并返回。
-
-    异常处理:
-    - 如果在执行数据库操作或数据处理过程中发生异常，将捕获异常并抛出HTTP异常，返回服务器错误响应。
-
-    注意:
-    - 模型信息按模型工厂分类，每个工厂下包含多个模型信息。
-    - 可选的模型类型参数用于筛选模型信息，只返回指定类型的模型。
-    """
     self_deployed = ["Youdao", "FastEmbed", "BAAI", "Ollama", "Xinference", "LocalAI", "LM-Studio", "GPUStack"]
     weighted = ["Youdao", "FastEmbed", "BAAI"] if settings.LIGHTEN != 0 else []
     tenant_id = user.id
@@ -1919,11 +1677,14 @@ def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=De
         TenantLLMService.ensure_mineru_from_env(db, tenant_id)
         objs = TenantLLMService.query(db, tenant_id=tenant_id)
         facts = set(o.llm_factory for o in objs if o.api_key and o.status==StatusEnum.VALID.value)
+        tenant_llm_mapping = {f"{o.llm_name}@{o.llm_factory}": o for o in objs}
         status = {(o.llm_name + "@" + o.llm_factory) for o in objs if o.status == StatusEnum.VALID.value}
         llms = LLMService.get_all(db)
         llms = [m.to_dict() for m in llms if m.status == StatusEnum.VALID.value and m.fid not in weighted and (m.fid == 'Builtin' or (m.llm_name + "@" + m.fid) in status)]
 
         for m in llms:
+            tenant_llm = tenant_llm_mapping.get(m["llm_name"] + "@" + m["fid"])
+            m["id"] = tenant_llm.id if tenant_llm else None
             m["available"] = m["fid"] in facts or m["llm_name"].lower() == "flag-embedding" or m["fid"] in self_deployed
             if "tei-" in os.getenv("COMPOSE_PROFILES", "") and m["model_type"]==LLMType.EMBEDDING and m["fid"]=="Builtin" and m["llm_name"]==os.getenv('TEI_MODEL', ''):
                 m["available"] = True
@@ -1932,7 +1693,7 @@ def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=De
         for o in objs:
             if o.llm_name + "@" + o.llm_factory in llm_set:
                 continue
-            llms.append({"llm_name": o.llm_name, "mdl_type": o.mdl_type, "fid": o.llm_factory, "available": True, "status": StatusEnum.VALID.value})
+            llms.append({"id": o.id, "llm_name": o.llm_name, "mdl_type": o.mdl_type, "fid": o.llm_factory, "available": True, "status": StatusEnum.VALID.value})
 
         res = {}
         for m in llms:
@@ -1949,46 +1710,6 @@ def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=De
 
 @router.post('/chat_service', summary="模型对话服务", response_description="成功调用对话模型")
 async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    **功能描述**:
-    此接口用于调用对话模型，基于用户提供的输入生成对应的响应内容。支持文本生成、图像到文本转换、消息处理等多种模型类型。接口根据请求体中的配置，选择适当的模型及生成方式，提供流式和非流式响应模式。
-
-    ### 请求体 (Request Body):
-    - **model_dump (dict)**: 包含以下字段：
-        - `prompt` (str, 可选): 用户提供的提示内容，用于引导对话模型生成响应。
-        - `messages` (list[dict]): 对话消息列表，包含用户与模型之间的对话历史。
-        - `llm_name` (str): 模型名称，用于指定所调用的语言模型。
-        - `stream` (bool): 指定是否使用流式响应。
-        - `gen_conf` (dict, 可选): 生成配置，控制对话生成行为。
-        - `image` (str, 可选): Base64编码的图像数据，适用于图像到文本的转换模型。
-
-    ### 响应 (Response):
-    - **成功响应 (200)**:
-        - `data` (dict): 返回包含模型生成的响应内容，格式可能包括文本、结构化数据或基于图像的文本输出，具体取决于模型类型和请求内容。
-
-    ### 错误响应:
-    - **404: Tenant not found**:
-        - 当根据用户ID查找租户信息失败时，返回此错误，表示该用户无对应的租户记录。
-    - **404: Model not found**:
-        - 当指定的模型名称在用户租户可用模型列表中未找到时，返回此错误。
-
-    ### 主要流程:
-    1. 从请求中提取用户输入的内容、模型名称和配置信息。
-    2. 通过用户信息获取租户信息，确保用户的租户身份；如果未找到租户信息，返回404错误。
-    3. 获取用户租户关联的模型列表，确定模型类型 (`llm_type`)。
-    4. 根据 `llm_type` 判断是否需要传入 `image` 参数，构建生成请求。
-    5. 根据 `stream` 参数选择流式或非流式的生成方法，调用模型获取对话响应内容。
-    6. 返回生成的对话结果。
-
-    ### 注意事项:
-    - **模型选择**:
-        - 仅当 `llm_type` 为 `image2text` 时传递 `image` 参数，以确保在需要图像到文本转换时能处理Base64编码的图像数据。
-        - 支持多种模型类型 (如文本生成、图像到文本、消息对话)，请根据需求选择适当的 `llm_name` 和 `llm_type`。
-    - **流式调用**:
-        - 若 `stream` 参数为 `True`，将返回流式响应，用于实时数据生成；若为 `False`，返回完整的响应数据。
-    - **数据格式**:
-        - 返回数据格式可能因模型及请求内容不同而有所变化；默认返回JSON格式的结构化数据或文本响应。
-    """
     req = request.model_dump()
     tenants = TenantService.get_info_by(db, user.id)
     if not tenants:
@@ -1998,8 +1719,8 @@ async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db)
 
     def get_llm_type(model_name, my_llms):
         for row in my_llms:
-            if row[4] == model_name:  # 这里的第5个元素是 model_name
-                return row[3]  # 第4个元素是 mdl_type (llm_type)
+            if row.llm_name == model_name:
+                return row.mdl_type
         return None  # 如果找不到，返回 None
 
     llm_type = get_llm_type(req["llm_name"], my_llms)
@@ -2008,7 +1729,8 @@ async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db)
     else:
         raise HTTPException(status_code=404, detail=f"Model {req['llm_name']} not found in the list.")
 
-    chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], llm_type, req["llm_name"])
+    mdl_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], llm_type, req["llm_name"])
+    chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], mdl_config)
     # 构建调用参数
     call_params = {
         "system": req["prompt"],
@@ -2209,8 +1931,8 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
 
         def get_llm_type(model_name, my_llms):
             for row in my_llms:
-                if row[4] == model_name:
-                    return row[3]  # 第4个元素是 mdl_type (llm_type)
+                if row.llm_name == model_name:
+                    return row.mdl_type
             return None
 
         llm_type = get_llm_type(req["llm_name"], my_llms)
@@ -2219,7 +1941,8 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
         else:
             raise HTTPException(status_code=404, detail=f"Model {req['llm_name']} not found in the list.")
 
-        chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], llm_type, req["llm_name"])
+        mdl_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], llm_type, req["llm_name"])
+        chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], mdl_config)
         # 构建调用参数
         call_params = {
             "system": req["prompt"],
@@ -2245,15 +1968,16 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
 
         def get_llm_type(model_name, my_llms):
             for row in my_llms:
-                if row[4] == model_name:
-                    return row[3]  # 第4个元素是 mdl_type (llm_type)
+                if row.llm_name == model_name:
+                    return row.mdl_type
             return None
 
         llm_type = get_llm_type(req["llm_name"], my_llms)
         if not llm_type:
             raise HTTPException(status_code=404, detail=f"Model {req['llm_name']} not found in the list.")
 
-        chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], llm_type, req["llm_name"])
+        mdl_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], llm_type, req["llm_name"])
+        chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], mdl_config)
 
         # 构建调用参数
         call_params = {
@@ -2267,12 +1991,14 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
         #     call_params["image"] = req["image"]
 
         if llm_type == "image2text":
-            llm_model_config = TenantLLMService.get_model_config(db, tenants[0]["tenant_id"], LLMType.IMAGE2TEXT,
-                                                                 req["llm_name"])
+            llm_model_config = get_model_config_by_type_and_name(
+                db, tenants[0]["tenant_id"], LLMType.IMAGE2TEXT.value, req["llm_name"]
+            )
             call_params["images"] = req["image"]
         else:
-            llm_model_config = TenantLLMService.get_model_config(db, tenants[0]["tenant_id"], LLMType.CHAT,
-                                                                 req["llm_name"])
+            llm_model_config = get_model_config_by_type_and_name(
+                db, tenants[0]["tenant_id"], LLMType.CHAT.value, req["llm_name"]
+            )
 
         max_tokens = llm_model_config.get("max_tokens", 8192)
         kbinfos = {"total": 0, "chunks": [], "doc_aggs": []}
@@ -2415,7 +2141,8 @@ async def fine_prompt(request: FinePromptRequest, db: Session = Depends(get_db),
 
     [optional: edge cases, details, and an area to call or repeat out specific important considerations]
     """.strip()
-    chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, req["llm_name"])
+    chat_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], LLMType.CHAT.value, req["llm_name"])
+    chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], chat_config)
 
     data = await chat_mdl.async_chat(META_PROMPT, [{"role": "user", "content": "Task, Goal, or Current Prompt:\n" + req["prompt"]}],
                          req["gen_conf"])
@@ -2570,7 +2297,8 @@ async def generate_suggestions(request: SuggestionRequest, db: Session = Depends
     if not tenants:
         raise HTTPException(status_code=404, detail="Tenant not found!")
 
-    chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], LLMType.CHAT, req["llm_name"])
+    chat_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], LLMType.CHAT.value, req["llm_name"])
+    chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], chat_config)
 
     # 调用大模型
     response = await chat_mdl.async_chat(
@@ -2657,15 +2385,16 @@ async def recognize_intent(
 
     def get_llm_type(model_name: str, rows):
         for r in rows:
-            if r[4] == model_name:
-                return r[-3]  # 倒数第三个元素是 llm_type
+            if r.llm_name == model_name:
+                return r.mdl_type
         return None
 
     llm_type = get_llm_type(req["llm_name"], my_llms)
     if llm_type != LLMType.CHAT.value:
         raise HTTPException(status_code=400, detail="指定模型不是对话模型，或未找到")
 
-    chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], llm_type, req["llm_name"])
+    mdl_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], llm_type, req["llm_name"])
+    chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], mdl_config)
 
     # 2) 组 Prompt（few-shot + 指令，完全内存化）
     forms: list[dict] = req["candidate_forms"]
@@ -2724,10 +2453,11 @@ async def fill_fields(
     if not tenants:
         raise HTTPException(status_code=404, detail="Tenant not found!")
     my_llms = TenantLLMService.get_my_llms(db, tenants[0]["tenant_id"])
-    llm_type = next((r[-3] for r in my_llms if r[4] == req.llm_name), None)
+    llm_type = next((r.mdl_type for r in my_llms if r.llm_name == req.llm_name), None)
     if llm_type != LLMType.CHAT.value:
         raise HTTPException(status_code=400, detail="指定模型不是对话模型，或未找到")
-    chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], llm_type, req.llm_name)
+    mdl_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], llm_type, req.llm_name)
+    chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], mdl_config)
 
     async def call_llm(prompt: str) -> str:
         return await chat_mdl.async_chat(
@@ -2850,8 +2580,8 @@ async def enhanced_chat_service_sse(
 
         llm_type = None
         for row in my_llms:
-            if row[4] == request.llm_name:
-                llm_type = row[3]  # 第4个元素是 mdl_type (llm_type)
+            if row.llm_name == request.llm_name:
+                llm_type = row.mdl_type
                 break
 
         if not llm_type:

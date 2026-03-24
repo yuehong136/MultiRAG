@@ -1,15 +1,4 @@
-# coding=utf-8
-"""
-Pipeline 文档分析服务 - 集成 core/flow 所有组件
-
-充分利用项目已有的 Parser、HierarchicalMerger、Splitter、RAPTOR、Extractor 能力
-
-@project: multirag
-@Author: AI Assistant  
-@date: 2025-11-05
-"""
 import asyncio
-from common.misc_utils import thread_pool_exec
 import logging
 import re
 import time
@@ -18,11 +7,13 @@ from copy import deepcopy
 from sklearn.metrics.pairwise import cosine_similarity
 from sqlalchemy.orm import Session
 
-from common import settings
-from common.constants import LLMType
 from api.db.services.document_service import DocumentService
 from api.db.services.llm_service import LLMBundle
+from api.db.joint_services.tenant_model_service import get_tenant_default_model_by_type
 from api.db.services.metadata_extractor import BatchMetadataExtractor
+from common import settings
+from common.constants import LLMType
+from common.misc_utils import thread_pool_exec
 from core.nlp import naive_merge
 from core.nlp.term_weight import Dealer as TermWeightDealer
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
@@ -955,8 +946,10 @@ class PipelineAnalysisService:
             }
         
         # 获取 LLM 和 Embedding 模型
-        llm_model = LLMBundle(None, self.tenant_id, LLMType.CHAT)
-        embd_model = LLMBundle(None, self.tenant_id, LLMType.EMBEDDING)
+        chat_config = get_tenant_default_model_by_type(self.db, self.tenant_id, LLMType.CHAT)
+        llm_model = LLMBundle(self.db, self.tenant_id, chat_config)
+        embd_config = get_tenant_default_model_by_type(self.db, self.tenant_id, LLMType.EMBEDDING)
+        embd_model = LLMBundle(self.db, self.tenant_id, embd_config)
         
         # 创建 RAPTOR 实例
         raptor = Raptor(
@@ -1064,7 +1057,8 @@ class PipelineAnalysisService:
                 
             elif strategy == "semantic":
                 # 使用 Semantic 去重
-                embd_model = LLMBundle(self.db, self.tenant_id, LLMType.EMBEDDING)
+                embd_dedup_config = get_tenant_default_model_by_type(self.db, self.tenant_id, LLMType.EMBEDDING)
+                embd_model = LLMBundle(self.db, self.tenant_id, embd_dedup_config)
                 semantic_dedup = SemanticTagDeduplicator(embd_model)
                 deduped = await semantic_dedup.deduplicate_list(value)
                 result[field_name] = deduped

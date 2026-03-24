@@ -1,12 +1,3 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： user_app.py
-@date：2024/7/15 16:50
-@desc: 用户管理接口
-"""
-
 import logging
 import string
 import os
@@ -24,16 +15,12 @@ from api.apps import manager
 from api.db.db_models import TenantLLM, get_db
 from api.db.services.llm_service import get_init_tenant_llm
 from api.db.services.tenant_llm_service import TenantLLMService
-from api.db.services.user_service import UserService, TenantService, UserTenantService#, pwd_context
+from api.utils.tenant_utils import ensure_tenant_model_id_for_params
+from api.db.services.user_service import UserService, TenantService, UserTenantService
+from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
 from api.db.services.file_service import FileService
 from api.db import UserTenantRole, FileType
-from common.misc_utils import download_img, get_uuid
-from common import settings
-from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
-from common.connection_utils import construct_response
-from common.constants import RetCode
 from api.apps.auth import get_auth_client
-# from api.utils.crypt import decrypt
 from api.utils.web_utils import (
     send_email_html,
     OTP_LENGTH,
@@ -46,8 +33,12 @@ from api.utils.web_utils import (
     captcha_key,
     verified_key,
 )
-from core.utils.redis_conn import REDIS_CONN
+from common.misc_utils import download_img, get_uuid
+from common import settings
+from common.connection_utils import construct_response
+from common.constants import RetCode
 from common.time_utils import current_timestamp, datetime_format, get_format_time
+from core.utils.redis_conn import REDIS_CONN
 
 
 router = APIRouter()
@@ -568,16 +559,12 @@ def setting_user(request: UserUpdateRequest, db: Session = Depends(get_db), user
     request_data = request.model_dump(exclude_none=True)
     if request_data.get("password"):
         new_password = request_data.get("new_password")
-        # if not pwd_context.verify(request_data["password"], user.password):
         if not UserService.verify_password(request_data["password"], user.password):
             return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg='Password error!')
         if new_password:
-            # update_dict["password"] = pwd_context.hash(new_password)
             update_dict["password"] = UserService.hash_password(new_password)
 
-        # 过滤不允许更新的字段
-    allowed_fields = ["password", "new_password", "email", "status", "is_superuser", "login_channel", "is_anonymous",
-                      "is_active", "is_authenticated", "last_login_time"]  # 根据实际需求添加字段
+    allowed_fields = ["password", "new_password", "email", "status", "is_superuser", "login_channel", "is_anonymous", "is_active", "is_authenticated", "last_login_time"]
 
     for field, value in request_data.items():
         if field in allowed_fields:
@@ -594,26 +581,10 @@ def setting_user(request: UserUpdateRequest, db: Session = Depends(get_db), user
 
 @router.get("/info", summary="获取用户信息")
 def user_profile(user=Depends(manager)):
-    """
-    获取用户信息
-
-    该接口用于获取当前登录用户的信息。
-
-    返回:
-    - 成功时返回包含用户信息的JSON结果
-    """
     return get_json_result(data=user.to_dict())
 
 
 def login_user(user):
-    """
-    登录用户
-
-    该函数用于设置用户登录状态。
-
-    参数:
-    - user: User对象，要登录的用户
-    """
     # 在FastAPI中，我们使用JWT token来管理用户会话
     # 这里主要是更新用户的最后登录时间等信息
     user.last_login_time = get_format_time()
@@ -645,19 +616,6 @@ def rollback_user_registration(db: Session, user_id: str):
 
 
 def user_register(db: Session, user_id: str, user: dict):
-    """
-    用户注册
-
-    该函数用于注册新用户。
-
-    参数:
-    - user_id: str 用户的唯一标识符
-    - user: dict 用户信息字典
-
-    返回:
-    - 成功时返回注册的用户对象
-    - 失败时引发HTTP异常
-    """
     user["id"] = user_id
     tenant = {
         "id": user_id,
@@ -688,57 +646,6 @@ def user_register(db: Session, user_id: str, user: dict):
     }
 
     tenant_llm = get_init_tenant_llm(db, user_id)
-    # tenant_llm = []
-    #
-    # seen = set()
-    # factory_configs = []
-    # for factory_config in [
-    #     settings.CHAT_CFG,
-    #     settings.EMBEDDING_CFG,
-    #     settings.ASR_CFG,
-    #     settings.IMAGE2TEXT_CFG,
-    #     settings.RERANK_CFG,
-    # ]:
-    #     factory_name = factory_config["factory"]
-    #     if factory_name not in seen:
-    #         seen.add(factory_name)
-    #         factory_configs.append(factory_config)
-    #
-    # for factory_config in factory_configs:
-    #     for llm in LLMService.query(db, fid=factory_config["factory"]):
-    #         tenant_llm.append(
-    #             {
-    #                 "tenant_id": user_id,
-    #                 "llm_factory": factory_config["factory"],
-    #                 "llm_name": llm.llm_name,
-    #                 "mdl_type": llm.mdl_type,
-    #                 "api_key": factory_config["api_key"],
-    #                 "api_base": factory_config["base_url"],
-    #                 "max_tokens": llm.max_tokens if llm.max_tokens else 8192,
-    #             }
-    #         )
-    #
-    # if settings.LIGHTEN != 1:
-    #     for buildin_embedding_model in settings.BUILTIN_EMBEDDING_MODELS:
-    #         mdlnm, fid = TenantLLMService.split_model_name_and_factory(buildin_embedding_model)
-    #         tenant_llm.append(
-    #             {
-    #                 "tenant_id": user_id,
-    #                 "llm_factory": fid,
-    #                 "llm_name": mdlnm,
-    #                 "mdl_type": "embedding",
-    #                 "api_key": "",
-    #                 "api_base": "",
-    #                 "max_tokens": 1024 if buildin_embedding_model == "BAAI/bge-large-zh-v1.5@BAAI" else 512,
-    #             }
-    #         )
-    #
-    # unique = {}
-    # for item in tenant_llm:
-    #     key = (item["tenant_id"], item["llm_factory"], item["llm_name"])
-    #     if key not in unique:
-    #         unique[key] = item
-    # tenant_llm = list(unique.values())
 
     try:
         if not UserService.save(db, **user):
@@ -746,6 +653,7 @@ def user_register(db: Session, user_id: str, user: dict):
         TenantService.insert(db, **tenant)
         UserTenantService.insert(db, **usr_tenant)
         TenantLLMService.insert_many(db, tenant_llm)
+        TenantService.update_by_id(db, user_id, ensure_tenant_model_id_for_params(db, user_id, tenant))
         FileService.insert(db, file)
         db.commit()
         return UserService.query(db, email=user["email"])
@@ -756,22 +664,6 @@ def user_register(db: Session, user_id: str, user: dict):
 
 @router.post("/register", summary="注册用户")
 def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
-    """
-    注册用户
-
-    该接口用于注册新用户。
-
-    参数:
-    - request: RegisterRequest对象，包含用户的注册信息
-        - email: str 用户的电子邮件地址
-        - nickname: str 用户的昵称
-        - password: str 用户的密码
-
-    返回:
-    - 成功时返回包含访问令牌和用户信息的JSON结果
-    - 失败时返回错误信息
-    """
-
     if not settings.REGISTER_ENABLED:
         return get_json_result(
             data=False,
@@ -825,14 +717,6 @@ def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
 
 @router.get("/tenant_info", summary="获取租户信息")
 def tenant_info(user=Depends(manager), db: Session = Depends(get_db)):
-    """
-    获取租户信息
-
-    该接口用于获取当前登录用户的租户信息。
-
-    返回:
-    - 成功时返回包含租户信息的JSON结果
-    """
     try:
         tenants = TenantService.get_info_by(db, user.id)
         if not tenants:
@@ -844,29 +728,10 @@ def tenant_info(user=Depends(manager), db: Session = Depends(get_db)):
 
 @router.post("/set_tenant_info", summary="设置租户信息")
 def set_tenant_info(request: SetTenantInfoRequest, user=Depends(manager), db: Session = Depends(get_db)):
-    """
-    设置租户信息
-
-    该接口用于更新租户信息。
-
-    参数:
-    - request: SetTenantInfoRequest对象，包含租户的更新信息
-        - tenant_id: str 租户的唯一标识符
-        - name: Optional[str] 租户的名称
-        - llm_id: Optional[str] 大语言模型的ID
-        - embd_id: Optional[str] 嵌入模型的ID
-        - asr_id: Optional[str] 语音识别模型的ID
-        - img2txt_id: Optional[str] 图像转文本模型的ID
-        - rerank_id: Optional[str] 重新排序模型的ID
-        - tts_id: Optional[str] 文本转语音模型的ID
-
-    返回:
-    - 成功时返回更新成功的JSON结果
-    - 失败时返回错误信息
-    """
     req = request.model_dump()
     try:
         tid = req.pop("tenant_id")
+        req = ensure_tenant_model_id_for_params(db, tid, req)
         TenantService.update_by_id(db, tid, req)
         return get_json_result(data=True)
     except Exception as e:
@@ -874,17 +739,6 @@ def set_tenant_info(request: SetTenantInfoRequest, user=Depends(manager), db: Se
 
 
 def user_info_from_github(access_token: str):
-    """
-    从GitHub获取用户信息
-
-    该函数用于从GitHub获取用户信息。
-
-    参数:
-    - access_token: str GitHub访问令牌
-
-    返回:
-    - 用户信息字典
-    """
     import requests
 
     headers = {"Accept": "application/json", "Authorization": f"token {access_token}"}
@@ -903,17 +757,6 @@ def user_info_from_github(access_token: str):
 
 
 def user_info_from_feishu(access_token: str):
-    """
-    从飞书获取用户信息
-
-    该函数用于从飞书获取用户信息。
-
-    参数:
-    - access_token: str 飞书访问令牌
-
-    返回:
-    - 用户信息字典
-    """
     import requests
     headers = {"Content-Type": "application/json; charset=utf-8", 'Authorization': f"Bearer {access_token}"}
     res = requests.get("https://open.feishu.cn/open-apis/authen/v1/user_info", headers=headers)

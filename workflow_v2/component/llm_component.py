@@ -1,11 +1,11 @@
 import asyncio
-from typing import Any
-from dataclasses import dataclass
 import copy
+from dataclasses import dataclass
+from typing import Any
 
 from api.db.services.llm_service import LLMBundle
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from common.constants import LLMType
-from common.misc_utils import thread_pool_exec
 from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.utils import parse_template, match_parameters, dict_arrays_to_array_dicts, map_schema_with_values
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
@@ -64,10 +64,18 @@ class LLMParams:
             return None
 
         if param_type == 'float':
+            if value == "":
+                return None
             return float(value)
         elif param_type == 'integer':
+            if value == "":
+                return None
             return int(value)
         elif param_type == 'boolean':
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                return value.strip().lower() in {"true", "1", "yes", "on"}
             return bool(value)
         return value
 
@@ -82,8 +90,11 @@ class LLMParams:
 
         return cls(
             model_name=cls._convert_value(
-                param_map.get('modelName', {}).get('value') or 'gpt-3.5-turbo',
-                param_map.get('modelName', {}).get('type')),
+                param_map.get('modelName', {}).get('value')
+                or param_map.get('modleName', {}).get('value')
+                or 'gpt-3.5-turbo',
+                param_map.get('modelName', {}).get('type')
+                or param_map.get('modleName', {}).get('type')),
             temperature=cls._convert_value(
                 param_map.get('temperature', {}).get('value', 0.7),
                 param_map.get('temperature', {}).get('type')),
@@ -139,6 +150,42 @@ class LLMComponent(BaseComponent):
         batch_data = node_data['data']['inputs'].get('batch', {})
         return BatchConfig.from_batch_config(batch_data)
 
+    def _build_gen_conf(self) -> dict[str, Any]:
+        gen_conf = {
+            "temperature": self.llm_params.temperature,
+            "top_p": self.llm_params.top_p,
+            "max_tokens": self.llm_params.max_tokens,
+            "frequency_penalty": self.llm_params.frequency_penalty,
+        }
+        return {key: value for key, value in gen_conf.items() if value is not None}
+
+    def _build_history(self, prompt: str, inputs: dict[str, Any]) -> list[dict[str, Any]]:
+        history: list[dict[str, Any]] = []
+        if self.llm_params.enable_chat_history:
+            candidate_history = inputs.get("chat_history") or inputs.get("history")
+            if isinstance(candidate_history, list):
+                history.extend(
+                    item for item in candidate_history
+                    if isinstance(item, dict) and item.get("role") and item.get("content") is not None
+                )
+
+        if prompt:
+            history.append({"role": "user", "content": prompt})
+        return history
+
+    async def _run_single_chat(self, inputs: dict[str, Any]) -> str:
+        model = self.llm_params.model_name
+        actual_system_prompt = parse_template(self.llm_params.system_prompt, inputs)
+        actual_prompt = parse_template(self.llm_params.prompt, inputs)
+        model_config = get_model_config_by_type_and_name(self.db, self.user.id, LLMType.CHAT.value, model)
+        chat_mdl = LLMBundle(self.db, self.user.id, model_config)
+        history = self._build_history(actual_prompt, inputs)
+        return await chat_mdl.async_chat(
+            actual_system_prompt,
+            history,
+            self._build_gen_conf(),
+        )
+
     async def execute(self) -> dict[str, Any]:
         self.logger.info(f"LLMComponent {self.title} execute")
         self.logger.info(f"LLMComponent {self.title} inputs: {self.inputs}")
@@ -173,8 +220,9 @@ class LLMComponent(BaseComponent):
                         model,
                         system_prompt_list[i],
                         prompt_list[i],
-                        self.llm_params,
-                        input_value_dict_list[i]
+                        self._build_gen_conf(),
+                        self.llm_params.enable_chat_history,
+                        input_value_dict_list[i],
                     )
                 )
 
@@ -191,24 +239,7 @@ class LLMComponent(BaseComponent):
             # 批处理
             return {"outputList": output_list}
         else:
-            actual_system_prompt = parse_template(self.llm_params.system_prompt, self.inputs)
-            actual_prompt = parse_template(self.llm_params.prompt, self.inputs)
-            chat_mdl = LLMBundle(self.db, self.user.id, LLMType.CHAT, model)
-            history = [{"role": "user", "content": actual_prompt}]
-
-            # 使用 asyncio.to_thread 防止阻塞主事件循环
-            response = await thread_pool_exec(
-                chat_mdl.chat,
-                system=actual_system_prompt,
-                history=history,
-                gen_conf={
-                    "temperature": self.llm_params.temperature,
-                    "top_p": self.llm_params.top_p,
-                    "max_tokens": self.llm_params.max_tokens,
-                    "frequency_penalty": self.llm_params.frequency_penalty,
-                }
-            )
-
+            response = await self._run_single_chat(self.inputs)
             return {"output": response}
 
     async def execute_alone(self, input_value: dict, batch_value: dict | None = None) -> dict:
@@ -232,8 +263,9 @@ class LLMComponent(BaseComponent):
                         model,
                         system_prompt_list[i],
                         prompt_list[i],
-                        self.llm_params,
-                        input_value_dict_list[i]
+                        self._build_gen_conf(),
+                        self.llm_params.enable_chat_history,
+                        input_value_dict_list[i],
                     )
                 )
 
@@ -251,61 +283,33 @@ class LLMComponent(BaseComponent):
             return {"outputList": output_list}
         else:
             self.inputs = input_value
-            actual_system_prompt = parse_template(self.llm_params.system_prompt, self.inputs)
-            actual_prompt = parse_template(self.llm_params.prompt, self.inputs)
-            chat_mdl = LLMBundle(self.db, self.user.id, LLMType.CHAT, model)
-            history = [{"role": "user", "content": actual_prompt}]
-
-            # 使用 asyncio.to_thread 防止阻塞主事件循环
-            response = await thread_pool_exec(
-                chat_mdl.chat,
-                system=actual_system_prompt,
-                history=history,
-                gen_conf={
-                    "temperature": self.llm_params.temperature,
-                    "top_p": self.llm_params.top_p,
-                    "max_tokens": self.llm_params.max_tokens,
-                    "frequency_penalty": self.llm_params.frequency_penalty,
-                }
-            )
-
+            response = await self._run_single_chat(self.inputs)
             return {"output": response}
 
 
-# 新增异步版本
-async def process_single_chat_async(db, user_id, model, system_prompt, prompt, llm_params, input_dict):
-    chat_mdl = LLMBundle(db, user_id, LLMType.CHAT, model)
-    history = [{"role": "user", "content": prompt}]
+async def process_single_chat_async(
+        db,
+        user_id,
+        model,
+        system_prompt,
+        prompt,
+        gen_conf,
+        enable_chat_history,
+        input_dict,
+):
+    model_config = get_model_config_by_type_and_name(db, user_id, LLMType.CHAT.value, model)
+    chat_mdl = LLMBundle(db, user_id, model_config)
+    history = []
+    if enable_chat_history:
+        candidate_history = input_dict.get("chat_history") or input_dict.get("history")
+        if isinstance(candidate_history, list):
+            history.extend(
+                item for item in candidate_history
+                if isinstance(item, dict) and item.get("role") and item.get("content") is not None
+            )
+    if prompt:
+        history.append({"role": "user", "content": prompt})
 
-    # 使用 asyncio.to_thread 防止阻塞
-    response = await thread_pool_exec(
-        chat_mdl.chat,
-        system=system_prompt,
-        history=history,
-        gen_conf={
-            "temperature": llm_params.temperature,
-            "top_p": llm_params.top_p,
-            "max_tokens": llm_params.max_tokens,
-            "frequency_penalty": llm_params.frequency_penalty,
-        }
-    )
+    response = await chat_mdl.async_chat(system_prompt, history, gen_conf)
 
-    return {"input": input_dict, "output": response}
-
-
-# 同步版本保留，但不再直接使用
-def process_single_chat(args):
-    db, user_id, model, system_prompt, prompt, llm_params, input_dict = args
-    chat_mdl = LLMBundle(db, user_id, LLMType.CHAT, model)
-    history = [{"role": "user", "content": prompt}]
-    response = chat_mdl.chat(
-        system=system_prompt,
-        history=history,
-        gen_conf={
-            "temperature": llm_params.temperature,
-            "top_p": llm_params.top_p,
-            "max_tokens": llm_params.max_tokens,
-            "frequency_penalty": llm_params.frequency_penalty,
-        }
-    )
     return {"input": input_dict, "output": response}

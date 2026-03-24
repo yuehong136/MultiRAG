@@ -18,9 +18,11 @@ import logging
 
 from PIL import Image
 
-from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
+from api.db.db_models import db_connection
+from api.db.joint_services.tenant_model_service import get_tenant_default_model_by_type
 from common.connection_utils import timeout
+from common.constants import LLMType
 from core.app.picture import vision_llm_chunk as picture_vision_llm_chunk, MIN_IMAGE_DIMENSION
 from core.prompts.generator import vision_llm_figure_describe_prompt, vision_llm_figure_describe_prompt_with_context
 from core.nlp import append_context2table_image4pdf
@@ -55,7 +57,9 @@ def vision_figure_parser_docx_wrapper(sections, tbls, callback=None,**kwargs):
     if not sections:
         return tbls
     try:
-        vision_model = LLMBundle(None, kwargs["tenant_id"], LLMType.IMAGE2TEXT)
+        with db_connection() as db:
+            model_config = get_tenant_default_model_by_type(db, kwargs["tenant_id"], LLMType.IMAGE2TEXT)
+        vision_model = LLMBundle(None, kwargs["tenant_id"], model_config)
         callback(0.7, "Visual model detected. Attempting to enhance figure extraction...")
     except Exception:
         vision_model = None
@@ -74,7 +78,9 @@ def vision_figure_parser_figure_xlsx_wrapper(images,callback=None, **kwargs):
     if not images:
         return []
     try:
-        vision_model = LLMBundle(None, kwargs["tenant_id"], LLMType.IMAGE2TEXT)
+        with db_connection() as db:
+            model_config = get_tenant_default_model_by_type(db, kwargs["tenant_id"], LLMType.IMAGE2TEXT)
+        vision_model = LLMBundle(None, kwargs["tenant_id"], model_config)
         callback(0.2, "Visual model detected. Attempting to enhance Excel image extraction...")
     except Exception:
         vision_model = None
@@ -102,7 +108,9 @@ def vision_figure_parser_pdf_wrapper(tbls, callback=None, **kwargs):
     parser_config = kwargs.get("parser_config", {})
     context_size = max(0, int(parser_config.get("image_context_size", 0) or 0))
     try:
-        vision_model = LLMBundle(None, kwargs["tenant_id"], LLMType.IMAGE2TEXT)
+        with db_connection() as db:
+            model_config = get_tenant_default_model_by_type(db, kwargs["tenant_id"], LLMType.IMAGE2TEXT)
+        vision_model = LLMBundle(None, kwargs["tenant_id"], model_config)
         callback(0.7, "Visual model detected. Attempting to enhance figure extraction...")
     except Exception:
         vision_model = None
@@ -139,7 +147,9 @@ def vision_figure_parser_docx_wrapper_naive(chunks, idx_lst, callback=None, **kw
     if not chunks:
         return []
     try:
-        vision_model = LLMBundle(None, kwargs["tenant_id"], LLMType.IMAGE2TEXT)
+        with db_connection() as db:
+            model_config = get_tenant_default_model_by_type(db, kwargs["tenant_id"], LLMType.IMAGE2TEXT)
+        vision_model = LLMBundle(None, kwargs["tenant_id"], model_config)
         callback(0.7, "Visual model detected. Attempting to enhance figure extraction...")
     except Exception:
         vision_model = None

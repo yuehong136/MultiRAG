@@ -673,7 +673,10 @@ def verify_embedding_availability(db: Session, embd_id: str, tenant_id: str) -> 
         in_llm_service = bool(LLMService.query(db=db, llm_name=llm_name, fid=llm_factory, model_type="embedding"))
 
         tenant_llms = TenantLLMService.get_my_llms(db=db, tenant_id=tenant_id)
-        is_tenant_model = any(llm["llm_name"] == llm_name and llm["llm_factory"] == llm_factory and llm["model_type"] == "embedding" for llm in tenant_llms)
+        is_tenant_model = any(
+            llm.llm_name == llm_name and llm.llm_factory == llm_factory and llm.mdl_type == "embedding"
+            for llm in tenant_llms
+        )
 
         is_builtin_model = llm_factory=='Builtin'
         if not (is_builtin_model or is_tenant_model or in_llm_service):

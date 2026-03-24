@@ -1064,9 +1064,13 @@ def _call_llm(prompt: str, tenant_id , lang: str) -> Optional[dict]:
     """
     try:
         from api.db.services.llm_service import LLMBundle
+        from api.db.db_models import db_connection
+        from api.db.joint_services.tenant_model_service import get_tenant_default_model_by_type
         from common.constants import LLMType
 
-        llm =  LLMBundle(tenant_id, LLMType.CHAT, lang=lang)
+        with db_connection() as db:
+            model_config = get_tenant_default_model_by_type(db, tenant_id, LLMType.CHAT)
+        llm = LLMBundle(None, tenant_id, model_config, lang=lang)
 
         for attempt in range(_LLM_MAX_RETRIES + 1):
             try:
