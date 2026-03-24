@@ -16,6 +16,7 @@
 import logging
 import boto3
 from botocore.exceptions import ClientError
+from botocore.config import Config
 import time
 from io import BytesIO
 from common.decorator import singleton
@@ -71,6 +72,8 @@ class MultiRAGOSS:
                 config_kwargs['s3'] = {
                     'addressing_style': self.addressing_style
                 }
+
+            config = Config(**config_kwargs) if config_kwargs else None
 
             # Reference：https://help.aliyun.com/zh/oss/developer-reference/use-amazon-s3-sdks-to-access-oss
             self.conn = boto3.client(
