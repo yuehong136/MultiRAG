@@ -16,6 +16,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import xxhash
 from sqlalchemy.orm import Session
 from sqlalchemy import func, select
 
@@ -389,9 +390,19 @@ class FileService(CommonService):
             if file_id is not None:
                 existing_doc = DocumentService.get_by_id(db, file_id)
                 if existing_doc is not None:
-                    settings.STORAGE_IMPL.put(kb.id, existing_doc.location, file_blob)
-                    DocumentService.update_by_id(db, file_id, {"size": len(file_blob)})
-                    files_info.append((existing_doc.__dict__, file_blob))
+                    try:
+                        new_hash = xxhash.xxh128(file_blob).hexdigest()
+                        old_hash = existing_doc.content_hash or ""
+                        settings.STORAGE_IMPL.put(kb.id, existing_doc.location, file_blob)
+                        existing_doc.size = len(file_blob)
+                        existing_doc.content_hash = new_hash
+                        doc_dict = existing_doc.to_dict()
+                        DocumentService.update_by_id(db, file_id, doc_dict)
+                        if new_hash != old_hash:
+                            files_info.append((doc_dict, file_blob))
+                    except Exception as exc:
+                        logging.exception(f"Failed to update document {file_id}: {exc}")
+                        err.append(filename + ": " + str(exc))
                     continue
 
             try:
@@ -438,6 +449,7 @@ class FileService(CommonService):
                     "location": location,
                     "size": len(file_blob),
                     "thumbnail": thumbnail_location,
+                    "content_hash": xxhash.xxh128(file_blob).hexdigest(),
                     "auth": json.dumps(labels) if labels else None  # 将 labels 转换为 JSON 字符串
                 }
                 DocumentService.insert(db, doc)

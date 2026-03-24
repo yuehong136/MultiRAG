@@ -1043,6 +1043,7 @@ class Document(BaseModel):
     process_duration: Mapped[float] = mapped_column(Float, index=False, nullable=False, default=0)
     meta_fields: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default={})
     suffix: Mapped[str] = mapped_column(String(32), index=True, nullable=False, default="", doc="The real file extension suffix")
+    content_hash: Mapped[str] = mapped_column(String(32), index=True, nullable=False, default="", doc="xxhash128 of document content for change detection")
     run: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="0", doc="start to run processing or cancel.(1: run it; 2: cancel)")
     status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
 
