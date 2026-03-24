@@ -15,7 +15,6 @@
 #
 
 import re
-from typing import Optional
 
 import numpy as np
 from pydantic import BaseModel
@@ -28,6 +27,7 @@ from common.doc_store.doc_store_base import MatchExpr, OrderByExpr, FusionExpr, 
 from common.doc_store.ob_conn_base import OBConnectionBase, get_value_str, vector_search_template
 from common.float_utils import get_float
 from core.nlp.rag_tokenizer import tokenize, fine_grained_tokenize
+from memory.utils.aggregation_utils import aggregate_by_field
 
 # Column definitions for memory message table
 COLUMN_DEFINITIONS: list[Column] = [
@@ -95,7 +95,7 @@ class OBConnection(OBConnectionBase):
     def _get_dataset_id_field(self) -> str:
         return "memory_id"
 
-    def _get_vector_column_name_from_table(self, table_name: str) -> Optional[str]:
+    def _get_vector_column_name_from_table(self, table_name: str) -> str | None:
         """Get the vector column name from the table (q_{size}_vec pattern)."""
         sql = f"""
             SELECT COLUMN_NAME 
@@ -218,7 +218,7 @@ class OBConnection(OBConnectionBase):
 
         # Handle content_embed field - resolve to actual vector column name
         has_content_embed = "content_embed" in output_fields
-        actual_vector_column: Optional[str] = None
+        actual_vector_column: str | None = None
         if has_content_embed:
             output_fields = [f for f in output_fields if f != "content_embed"]
             # Try to get vector column name from first available table
@@ -247,21 +247,21 @@ class OBConnection(OBConnectionBase):
         filters_expr = " AND ".join(filters) if filters else "1=1"
 
         # Parse match expressions
-        fulltext_query: Optional[str] = None
-        fulltext_topn: Optional[int] = None
+        fulltext_query: str | None = None
+        fulltext_topn: int | None = None
         fulltext_search_expr: dict[str, str] = {}
         fulltext_search_weight: dict[str, float] = {}
-        fulltext_search_filter: Optional[str] = None
-        fulltext_search_score_expr: Optional[str] = None
+        fulltext_search_filter: str | None = None
+        fulltext_search_score_expr: str | None = None
 
-        vector_column_name: Optional[str] = None
-        vector_data: Optional[list[float]] = None
-        vector_topn: Optional[int] = None
-        vector_similarity_threshold: Optional[float] = None
-        vector_similarity_weight: Optional[float] = None
-        vector_search_expr: Optional[str] = None
-        vector_search_score_expr: Optional[str] = None
-        vector_search_filter: Optional[str] = None
+        vector_column_name: str | None = None
+        vector_data: list[float] | None = None
+        vector_topn: int | None = None
+        vector_similarity_threshold: float | None = None
+        vector_similarity_weight: float | None = None
+        vector_search_expr: str | None = None
+        vector_search_score_expr: str | None = None
+        vector_search_filter: str | None = None
 
         for m in match_expressions:
             if isinstance(m, MatchTextExpr):
@@ -609,5 +609,10 @@ class OBConnection(OBConnectionBase):
 
     def get_aggregation(self, res, field_name: str):
         """Get aggregation for search results."""
-        # TODO: Implement aggregation functionality for OceanBase memory
-        return []
+        if isinstance(res, tuple):
+            res_obj = res[0]
+        else:
+            res_obj = res
+
+        messages = getattr(res_obj, "messages", None)
+        return aggregate_by_field(messages, field_name)
