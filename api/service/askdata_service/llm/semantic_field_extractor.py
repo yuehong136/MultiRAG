@@ -167,6 +167,7 @@ class SemanticFieldExtractor:
 
             # 填充模板
             prompt = PromptTemplateUtil.fill_template(prompt_template, template_values)
+            logger.debug("[field_extraction] user_query=%s", user_query)
 
             # 检查性能缓存
             from api.service.askdata_service.cache import perf_cache
@@ -200,6 +201,7 @@ class SemanticFieldExtractor:
 
             # 调用LLM处理我们的提示词
             response = await thread_pool_exec(_chat_in_thread)
+            logger.debug("[field_extraction] LLM原始响应: %s", response)
 
             # 提取和处理响应
             extracted_fields, success = self._extract_json_from_response(response)
@@ -207,6 +209,8 @@ class SemanticFieldExtractor:
             if success:
                 # 验证和清理字段
                 cleaned_fields = self._validate_and_clean_fields(extracted_fields)
+                logger.debug("[field_extraction] 提取到 %d 个字段: %s",
+                             len(cleaned_fields), json.dumps(cleaned_fields, ensure_ascii=False))
                 # 缓存成功的结果
                 perf_cache.set(prompt, cleaned_fields, namespace="field_extraction")
                 return cleaned_fields

@@ -45,6 +45,7 @@ from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
 from api.utils.prompt_template_util import PromptTemplateUtil
 from api.service.askdata_service.model_dataset_resolver import ModelDatasetResolver
 from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+from api.service.askdata_service.util.queried_fields_extractor import QueriedFieldsExtractor
 
 logger = get_askdata_logger()
 
@@ -213,6 +214,9 @@ class AskdataService:
                 dataset_details_task,
                 user_permissions_task
             )
+            logger.debug("[semantic_layer] 数据集详情: %d个, 用户权限: %s",
+                         len(dataset_details),
+                         json.dumps(user_semantic_permissions, ensure_ascii=False) if user_semantic_permissions else "None")
 
             # 检查是否在获取基础数据后被停止
             if ask_id:
@@ -333,6 +337,9 @@ class AskdataService:
                 keyword_search_and_semantic_layer_task(),
                 chart_recommendation_task()
             )
+            logger.debug("[semantic_layer] 并行任务完成: LLM维度=%s, LLM指标=%s, 关键字维度=%s, 关键字指标=%d个, 分词=%s, 推荐图表=%s",
+                         llm_dim_ids, llm_metric_ids, keyword_dim_ids,
+                         len(keyword_metrics), segmented_words, recommended_chart)
 
             # 检查是否在并行任务完成后被停止
             if ask_id:
@@ -355,6 +362,7 @@ class AskdataService:
                 all_metrics.extend(new_metrics)
 
             all_metric_ids = [metric["metricId"] for metric in all_metrics]
+            logger.debug("[semantic_layer] 合并后: 维度IDs=%s, 指标IDs=%s", all_dimension_ids, all_metric_ids)
 
             # 5. 使用已经获取的用户权限进行过滤
             # 过滤权限
@@ -364,6 +372,9 @@ class AskdataService:
             allowed_metric_ids, prohibited_metric_ids = filter_metrics_by_permissions(
                 all_metric_ids, user_semantic_permissions
             )
+            logger.debug("[semantic_layer] 权限过滤: allowed_dims=%d, prohibited_dims=%s, allowed_metrics=%d, prohibited_metrics=%s",
+                         len(allowed_dimension_ids), prohibited_dimension_ids,
+                         len(allowed_metric_ids), prohibited_metric_ids)
 
             # 6. 获取维度值和维度详情（并行）
             dimension_values_task = time_task(
@@ -383,6 +394,8 @@ class AskdataService:
                 dimension_values_task,
                 dimensions_task
             )
+            logger.debug("[semantic_layer] 维度详情: %d个, 维度值: %d个",
+                         len(dimensions), len(dimension_values) if isinstance(dimension_values, list) else 0)
 
             model_ids, model_mappings = self._extract_unique_model_ids(dimensions, all_metrics)
             if len(model_ids) == 0:
@@ -410,6 +423,8 @@ class AskdataService:
                 model_relations_task,
                 business_term_task
             )
+            logger.debug("[semantic_layer] model_ids=%s, model_relations=%d个, business_terms=%d个",
+                         model_ids, len(model_relations), len(business_term_rows))
 
             # 检查是否在获取模型详情后被停止
             if ask_id:
@@ -437,6 +452,9 @@ class AskdataService:
                 exclude_dim_and_metric=exclude_dim_and_metric,
                 log_details=True  # 是否打印详细日志
             )
+            logger.debug("[semantic_layer] LLM过滤后: 维度=%d个, 指标=%d个, 排除详情=%s",
+                         len(dimensions), len(all_metrics),
+                         json.dumps(excluded_details, ensure_ascii=False) if excluded_details else "None")
             # 标记无权限的维度和指标
             for dimension in dimensions:
                 if dimension['dimensionId'] in prohibited_dimension_ids:
@@ -524,6 +542,8 @@ class AskdataService:
                 user_semantic_permissions,
                 segmented_words
             )
+            logger.debug("[semantic_layer] 最终语义层: %s",
+                         json.dumps(processed_semantic_layer, ensure_ascii=False))
 
             await send_event(event_id, {}, "stream_end")
 
@@ -687,6 +707,29 @@ class AskdataService:
     async def get_ask_data_history(self, conversation_id: str, user_id: str) -> list[dict]:
         """根据对话ID获取问数历史记录。"""
         return self.history_service.get_history_by_conversation_id(self.db, conversation_id, user_id)
+
+    def extract_queried_fields(
+        self,
+        sql_components: Dict[str, Any],
+        semantic_layer: Dict[str, Any],
+        used_models: List[str]
+    ) -> Dict[str, Any]:
+        """
+        从SQL组件和语义层中提取查询字段信息
+
+        Args:
+            sql_components: SQL组件（包含select、from、where等）
+            semantic_layer: 语义层数据
+            used_models: SQL中使用的模型列表
+
+        Returns:
+            包含维度和指标信息的字典
+        """
+        return QueriedFieldsExtractor.extract_queried_fields(
+            sql_components=sql_components,
+            semantic_layer=semantic_layer,
+            used_models=used_models
+        )
 
     async def delete_ask_data_history_by_conversation(self, conversation_id: str, user_id: str) -> int:
         """根据对话ID和用户ID删除问数历史记录。"""

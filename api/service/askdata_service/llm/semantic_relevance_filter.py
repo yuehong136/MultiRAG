@@ -207,6 +207,7 @@ class SemanticRelevanceFilter:
 
             # 填充模板
             prompt = PromptTemplateUtil.fill_template(prompt_template, template_values)
+            logger.debug("[relevance_filter] user_query=%s", user_query)
 
             # 检查性能缓存
             from api.service.askdata_service.cache import perf_cache
@@ -240,12 +241,17 @@ class SemanticRelevanceFilter:
 
             # 调用LLM处理提示词
             response = await thread_pool_exec(_chat_in_thread)
+            logger.debug("[relevance_filter] LLM原始响应: %s", response)
 
             # 提取和处理响应
             exclude_data = self._extract_json_from_response(response)
 
             # 验证和清理返回的数据
             validated_data = self._validate_exclude_format(exclude_data)
+            logger.debug("[relevance_filter] 排除结果: excludeDim=%d个, excludeMetric=%d个, 详情=%s",
+                         len(validated_data.get('excludeDim', [])),
+                         len(validated_data.get('excludeMetric', [])),
+                         json.dumps(validated_data, ensure_ascii=False))
 
             # 缓存验证后的结果
             perf_cache.set(prompt, validated_data, namespace="relevance_filter")

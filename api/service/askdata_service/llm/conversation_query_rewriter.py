@@ -117,6 +117,8 @@ class ConversationQueryRewriter:
             }
 
             prompt = PromptTemplateUtil.fill_template(prompt_template, template_values)
+            logger.debug("[query_rewriter] new_question=%s, history_count=%d",
+                         question_text, len(history_payload))
             history = [{"role": "user", "content": prompt}]
 
             gen_conf = {
@@ -139,11 +141,15 @@ class ConversationQueryRewriter:
                     )
 
             response = await thread_pool_exec(_chat_in_thread)
+            logger.debug("[query_rewriter] LLM原始响应: %s", response)
 
             extracted_result, success = self._extract_json_from_response(response)
 
             if success:
-                return self._normalize_result(extracted_result)
+                normalized = self._normalize_result(extracted_result)
+                logger.debug("[query_rewriter] 改写结果: is_related=%s, rewritten=%s",
+                             normalized.get('is_related'), normalized.get('rewritten_question'))
+                return normalized
 
             logger.error("Failed to extract valid JSON from LLM response for conversation rewrite")
             return {

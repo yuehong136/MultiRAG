@@ -1,3 +1,4 @@
+import json
 from enum import Enum
 from typing import List, Any, Dict, Optional
 
@@ -77,7 +78,7 @@ async def get_sql_and_table_config(
                 }
             )
 
-        cached_semantic_data = semantic_layer_cache.get(body.ask_id)
+        cached_semantic_data = semantic_layer_cache.get(body.ask_id) 
         if not cached_semantic_data:
             logger.error(f"缓存中未找到语义层数据: ask_id={body.ask_id}")
             return ResponseSchema(
@@ -92,6 +93,8 @@ async def get_sql_and_table_config(
         processed_semantic_layer_data = cached_semantic_data.get('processed_semantic_layer', {})
         model_ids_data = cached_semantic_data.get('model_ids', [])
         phase2_prefetch = cached_semantic_data.get('phase2_prefetch', {})
+        logger.debug("[get-sql] 从缓存获取: model_ids=%s, phase2_prefetch_keys=%s",
+                     model_ids_data, list(phase2_prefetch.keys()) if phase2_prefetch else [])
 
         # 1. 调用Service层获取包含SQL及其组件的完整结果
         sql_generation_result = await service.nlq_to_initial_sql(
@@ -208,6 +211,9 @@ async def get_sql_and_table_config(
         sql = execution_result["final_sql"]
         result_data = execution_result["data"]
         data_count = len(result_data.get('data', []))
+        logger.debug("[get-sql] SQL执行结果: was_fixed=%s, retry_times=%d, data_count=%d, final_sql=%s",
+                     execution_result.get("was_fixed"), execution_result.get("retry_times", 0),
+                     data_count, sql)
 
         # 如果SQL被修复过且used_models发生变化，重新构建模型详情
         if execution_result.get("was_fixed") and execution_result.get("used_models"):
@@ -235,12 +241,21 @@ async def get_sql_and_table_config(
         # 复杂查询，直接返回结果
         if query_complexity == "complex":
             logger.info(f"当前SQL查询复杂度为：{query_complexity}")
+
+            # 对于复杂查询也提取字段信息
+            queried_fields = service.extract_queried_fields(
+                sql_components=sql_generation_result.get("sqlComponents", {}),
+                semantic_layer=processed_semantic_layer_data,
+                used_models=used_models
+            )
+
             response_data = {
                 "sql": sql,
                 "query_complexity": query_complexity,
                 "result": result_data,
                 "was_fixed": execution_result.get("was_fixed", False),
                 "retry_times": execution_result.get("retry_times", 0),
+                "queried_fields": queried_fields,
                 "execution_history": execution_result.get("execution_history", [])  # 可选：返回执行历史
             }
             return ResponseSchema(
@@ -286,6 +301,8 @@ async def get_sql_and_table_config(
         if not _components_valid(sql_components):
             raise ValueError("sql_components_missing_from_or_select")
 
+        logger.debug("[get-sql] sql_components=%s", sql_components)
+
         if pagination_sql:
             result = await query_data_with_params(pagination_sql, int(dataset_id), [])
             result_data = result["data"]
@@ -320,6 +337,18 @@ async def get_sql_and_table_config(
             cached_model_relations=phase2_prefetch.get('model_relations'),
             cached_dimension_values=phase2_prefetch.get('dimension_values'),
         )
+        logger.debug("[get-sql] table_config keys=%s, model_table_alias_mapping=%s",
+                     list(table_config.keys()) if table_config else [],
+                     model_table_alias_mapping_list)
+
+        # 3. 提取查询字段信息
+        queried_fields = service.extract_queried_fields(
+            sql_components=sql_components,
+            semantic_layer=processed_semantic_layer_data,
+            used_models=used_models
+        )
+        logger.debug("[get-sql] queried_fields=%s",
+                     json.dumps(queried_fields, ensure_ascii=False) if queried_fields else "None")
 
         # 4. 构建返回给前端的数据结构
         response_data = {
@@ -334,6 +363,7 @@ async def get_sql_and_table_config(
             "was_fixed": execution_result.get("was_fixed", False),
             "retry_times": execution_result.get("retry_times", 0),
             "pagination_info": pagination_info,
+            "queried_fields": queried_fields,
             # "execution_history": execution_result.get("execution_history", [])  # 可选
         }
 

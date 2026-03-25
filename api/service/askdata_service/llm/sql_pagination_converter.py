@@ -90,6 +90,7 @@ class SQLPaginationConverter:
 
             # 填充模板
             prompt = PromptTemplateUtil.fill_template(prompt_template, template_values)
+            logger.debug("[sql_pagination] 输入sql=%s, db_type=%s", sql_query, database_type)
 
             # 创建包含我们提示词的对话历史
             history = [{"role": "user", "content": prompt}]
@@ -116,9 +117,11 @@ class SQLPaginationConverter:
 
             # 调用LLM处理我们的提示词
             response = await thread_pool_exec(_chat_in_thread)
+            logger.debug("[sql_pagination] LLM原始响应: %s", response)
 
             # 提取并返回SQL语句
             paginated_sql = self._extract_sql_from_response(response)
+            logger.debug("[sql_pagination] 分页SQL: %s", paginated_sql)
 
             logger.info(f"Successfully converted SQL to pagination for {database_type}")
             return paginated_sql

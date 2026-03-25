@@ -205,6 +205,7 @@ class SQLComponentsExtractor:
 
             # 填充模板
             prompt = PromptTemplateUtil.fill_template(prompt_template, template_values)
+            logger.debug("[sql_components] 输入sql=%s", sql_query)
 
             # 创建包含我们提示词的对话历史
             history = [{"role": "user", "content": prompt}]
@@ -231,6 +232,7 @@ class SQLComponentsExtractor:
 
             # 调用LLM处理我们的提示词
             response = await thread_pool_exec(_chat_in_thread)
+            logger.debug("[sql_components] LLM原始响应: %s", response)
 
             # 提取和处理响应
             extracted_components, success = self._extract_json_from_response(response)
@@ -240,6 +242,8 @@ class SQLComponentsExtractor:
                 validated_components = self._validate_sql_components(extracted_components)
                 # 后处理组件
                 final_components = self._post_process_components(validated_components)
+                logger.debug("[sql_components] 提取结果: %s",
+                             json.dumps(final_components, ensure_ascii=False))
                 return final_components
             else:
                 logger.error("Failed to extract valid JSON from LLM response")

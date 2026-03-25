@@ -157,6 +157,7 @@ class NLQToInitialSQLGenerator:
                     "database_type": self.database_type
                 }
             )
+            logger.debug("[sql_generation] user_query=%s, chart=%s", user_query, recommended_chart)
 
             # 检查性能缓存
             from api.service.askdata_service.cache import perf_cache
@@ -186,6 +187,7 @@ class NLQToInitialSQLGenerator:
                     )
 
             response = await thread_pool_exec(_chat_in_thread)
+            logger.debug("[sql_generation] LLM原始响应: %s", response)
 
             json_response = self._extract_llm_response_json(response)
             if not json_response:
@@ -199,6 +201,10 @@ class NLQToInitialSQLGenerator:
                 logger.error(f"提取的JSON未能通过验证。原始JSON: {json_response}")
                 return None
 
+            logger.debug("[sql_generation] 生成结果: sql=%s, usedModels=%s, complexity=%s, components=%s",
+                         validated_data.get('sql'), validated_data.get('usedModels'),
+                         validated_data.get('queryComplexity'),
+                         json.dumps(validated_data.get('sqlComponents', {}), ensure_ascii=False))
             logger.info("成功生成并验证了SQL及其组件。")
             # 缓存成功的结果（failed 不缓存）
             perf_cache.set(prompt, validated_data, namespace="sql_generation")
@@ -282,6 +288,7 @@ class NLQToInitialSQLGenerator:
                     "database_type": self.database_type
                 }
             )
+            logger.debug("[sql_fix] original_sql=%s, error=%s", original_sql, error_message)
 
             history = [{"role": "user", "content": prompt}]
             gen_conf = {
@@ -304,6 +311,7 @@ class NLQToInitialSQLGenerator:
                     )
 
             response = await thread_pool_exec(_chat_in_thread)
+            logger.debug("[sql_fix] LLM原始响应: %s", response)
 
             json_response = self._extract_llm_response_json(response)
             if not json_response:
@@ -315,6 +323,8 @@ class NLQToInitialSQLGenerator:
                 logger.error(f"提取的JSON未能通过验证。原始JSON: {json_response}")
                 return None
 
+            logger.debug("[sql_fix] 修复结果: sql=%s, usedModels=%s",
+                         validated_data.get('sql'), validated_data.get('usedModels'))
             logger.info("成功修复SQL查询。")
             return validated_data
 
