@@ -491,16 +491,8 @@ async def analyze_user_query_background_task(
             ask_id=request.ask_id
         )
 
-        # 成功完成后清理缓存，释放内存
-        if request.ask_id and cached_semantic_data:
-            semantic_layer_cache.remove(request.ask_id)
-
     except Exception as e:
         logger.exception(f"后台聊天任务失败，event_id {event_id}")
-
-        # 异常情况下也要清理缓存，避免内存泄漏
-        if request.ask_id:
-            semantic_layer_cache.remove(request.ask_id)
 
         # 错误报告逻辑保留在此处，因为它是一个横切关注点（发布到事件管理器）
         try:
