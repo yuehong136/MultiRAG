@@ -33,6 +33,8 @@ from api.utils.web_utils import (
     captcha_key,
     verified_key,
 )
+from base64 import b64decode
+from api.utils.crypt import decrypt
 from common.misc_utils import download_img, get_uuid
 from common import settings
 from common.connection_utils import construct_response
@@ -173,6 +175,11 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
                                retmsg=f'Email: {email} is not registered!')
 
     password = request.password
+    try:
+        password = b64decode(decrypt(password)).decode('utf-8')
+    except Exception:
+        return get_json_result(data=False, retcode=RetCode.SERVER_ERROR, retmsg='Fail to crypt password')
+
     user = UserService.query_user(db, email, password)
 
     if user and hasattr(user, 'is_active') and not user.is_active:
@@ -688,11 +695,17 @@ def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
 
     # Construct user info data
     nickname = req["nickname"]
+    try:
+        decrypted_password = b64decode(decrypt(req["password"])).decode('utf-8')
+    except Exception:
+        return get_json_result(data=False, retcode=RetCode.SERVER_ERROR, retmsg='Fail to decrypt password')
+
     user_dict = {
         "access_token": get_uuid(),
         "email": email_address,
         "nickname": nickname,
-        "password": req["password"],
+        "password": decrypted_password,
+        "login_channel": "password",
         "last_login_time": get_format_time(),
         "is_superuser": False,
     }
