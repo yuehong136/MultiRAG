@@ -410,7 +410,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 @app.exception_handler(SDKAuthError)
 async def sdk_auth_exception_handler(request: Request, exc: SDKAuthError):
     return JSONResponse(
-        status_code=200,
+        status_code=RetCode.UNAUTHORIZED,
         content={
             "retcode": exc.retcode,
             "retmsg": exc.retmsg,
