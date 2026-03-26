@@ -1065,6 +1065,16 @@ def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(mana
     """
     req = request.model_dump()
     try:
+        deleted_chunk_ids = req["chunk_ids"]
+        if isinstance(deleted_chunk_ids, list):
+            unique_chunk_ids = list(dict.fromkeys(deleted_chunk_ids))
+            has_ids = len(unique_chunk_ids) > 0
+        else:
+            unique_chunk_ids = [deleted_chunk_ids]
+            has_ids = deleted_chunk_ids not in (None, "")
+        if not has_ids:
+            return get_json_result(data=True)
+
         doc = DocumentService.get_by_id(db, req["doc_id"])
         if not doc:
             return get_data_error_result(retmsg="Document not found!")
@@ -1090,13 +1100,6 @@ def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(mana
                 )
         except Exception:
             return get_data_error_result(retmsg="Chunk deleting failure")
-        deleted_chunk_ids = req["chunk_ids"]
-        if isinstance(deleted_chunk_ids, list):
-            unique_chunk_ids = list(dict.fromkeys(deleted_chunk_ids))
-            has_ids = len(unique_chunk_ids) > 0
-        else:
-            unique_chunk_ids = [deleted_chunk_ids]
-            has_ids = deleted_chunk_ids not in (None, "")
         if has_ids and deleted_count == 0:
             return get_data_error_result(retmsg="Index updating failure")
         chunk_number = deleted_count if deleted_count else 0

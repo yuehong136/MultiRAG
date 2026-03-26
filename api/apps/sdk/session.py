@@ -852,13 +852,12 @@ def delete_sessions(
     errors = []
     success_count = 0
     req = request.model_dump()
-    convs = ConversationService.query(db, dialog_id=chat_id)
-    
+
     ids = req.get("ids")
     if not ids:
-        conv_list = [conv.id for conv in convs]
-    else:
-        conv_list = ids
+        return get_result()
+
+    conv_list = ids
 
     unique_conv_ids, duplicate_messages = check_duplicate_ids(conv_list, "session")
     conv_list = unique_conv_ids
@@ -900,15 +899,11 @@ def delete_agent_sessions(
     if not cvs:
         return get_error_data_result(retmsg=f"You don't own the agent {agent_id}")
 
-    convs = API4ConversationService.query(db, dialog_id=agent_id)
-    if not convs:
-        return get_error_data_result(retmsg=f"Agent {agent_id} has no sessions")
-
     ids = req.get("ids")
     if not ids:
-        conv_list = [conv.id for conv in convs]
-    else:
-        conv_list = ids
+        return get_result()
+
+    conv_list = ids
 
     unique_conv_ids, duplicate_messages = check_duplicate_ids(conv_list, "session")
     conv_list = unique_conv_ids

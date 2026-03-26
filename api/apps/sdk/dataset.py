@@ -177,20 +177,18 @@ def delete(
 
     try:
         kb_id_instance_pairs = []
-        if req["ids"] is None:
-            kbs = KnowledgebaseService.query(db, tenant_id=tenant_id)
-            for kb in kbs:
-                kb_id_instance_pairs.append((kb.id, kb))
-        else:
-            error_kb_ids = []
-            for kb_id in req["ids"]:
-                kb = KnowledgebaseService.get_or_none(db, id=kb_id, tenant_id=tenant_id)
-                if kb is None:
-                    error_kb_ids.append(kb_id)
-                    continue
-                kb_id_instance_pairs.append((kb_id, kb))
-            if len(error_kb_ids) > 0:
-                return get_error_data_result(retmsg=f"""User '{tenant_id}' lacks permission for datasets: '{", ".join(error_kb_ids)}'""")
+        if req["ids"] is None or len(req["ids"]) == 0:
+            return get_result()
+
+        error_kb_ids = []
+        for kb_id in req["ids"]:
+            kb = KnowledgebaseService.get_or_none(db, id=kb_id, tenant_id=tenant_id)
+            if kb is None:
+                error_kb_ids.append(kb_id)
+                continue
+            kb_id_instance_pairs.append((kb_id, kb))
+        if len(error_kb_ids) > 0:
+            return get_error_data_result(retmsg=f"""User '{tenant_id}' lacks permission for datasets: '{", ".join(error_kb_ids)}'""")
 
         errors = []
         success_count = 0

@@ -771,12 +771,10 @@ def delete_documents(
         return get_error_data_result(retmsg="You don't own the dataset.")
     
     ids = req.get("ids")
-    if ids is None:
-        # 删除所有文档
-        docs = DocumentService.query(db, kb_id=dataset_id)
-        doc_ids = [doc.id for doc in docs]
-    else:
-        doc_ids = ids
+    if not ids:
+        return get_result()
+
+    doc_ids = ids
     
     unique_doc_ids, duplicate_messages = check_duplicate_ids(doc_ids, "document")
     errors = []
@@ -1214,13 +1212,12 @@ def rm_chunk(
     if not doc:
         return get_error_data_result(retmsg="Document not found.")
     
-    chunk_ids = req["chunk_ids"]
+    chunk_ids = req.get("chunk_ids")
     if not chunk_ids:
-        return get_error_data_result(retmsg="chunk_ids is required")
-    else:
-        unique_chunk_ids = []
-        duplicate_messages = []
-    settings.docStoreConn.delete({"id": chunk_ids}, search.index_name(tenant_id), dataset_id)
+        return get_result()
+
+    unique_chunk_ids, duplicate_messages = check_duplicate_ids(chunk_ids, "chunk")
+    settings.docStoreConn.delete({"id": unique_chunk_ids}, search.index_name(tenant_id), dataset_id)
 
     DocumentService.increment_chunk_num(
         db,

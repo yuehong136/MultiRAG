@@ -263,12 +263,9 @@ def delete(request: DeleteChatsRequest, db: Session = Depends(get_db), tenant_id
     req = request.model_dump()
     ids = req.get("ids")
     if not ids:
-        id_list = []
-        dias = DialogService.query(db, tenant_id=tenant_id, status=StatusEnum.VALID.value)
-        for dia in dias:
-            id_list.append(dia.id)
-    else:
-        id_list = ids
+        return get_result()
+
+    id_list = ids
 
     unique_id_list, duplicate_messages = check_duplicate_ids(id_list, "assistant")
 
