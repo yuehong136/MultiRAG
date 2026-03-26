@@ -14,6 +14,7 @@ dependencies = [
     "azure-identity==1.17.1",
     "azure-storage-file-datalake==12.16.0",
     "agentrun-sdk>=0.0.23,<1.0.0",
+    "alibabacloud-dingtalk>=2.0.0",
     "bcembedding==0.1.5",
     "beartype>=0.20.0,<1.0.0",
     "bio==1.7.1",

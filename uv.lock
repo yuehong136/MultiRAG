@@ -324,10 +324,37 @@ wheels = [
 ]
 
 [[package]]
+name = "alibabacloud-dingtalk"
+version = "2.2.39"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+dependencies = [
+    { name = "alibabacloud-endpoint-util" },
+    { name = "alibabacloud-gateway-dingtalk" },
+    { name = "alibabacloud-gateway-spi" },
+    { name = "alibabacloud-openapi-util" },
+    { name = "alibabacloud-tea-openapi" },
+    { name = "alibabacloud-tea-util" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/c5/81/e89b6d1d0d9da7f3ac18eed3ec9b5381d85ef4e542015574b35ce13f5c70/alibabacloud_dingtalk-2.2.39.tar.gz", hash = "sha256:351bf61c21e4e12231faf998bb43937b0ebc7bbe1ff09c2f6cf165d42ad153c5" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/41/a2/21fd16871e2511b3db94202768baad59e12ab25fe72952d3e24cdefebe7c/alibabacloud_dingtalk-2.2.39-py3-none-any.whl", hash = "sha256:e0b35f0388049f477320fc7198264d79cec25150abf6ae24f43f2afc671bc05a" },
+]
+
+[[package]]
 name = "alibabacloud-endpoint-util"
 version = "0.0.4"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/92/7d/8cc92a95c920e344835b005af6ea45a0db98763ad6ad19299d26892e6c8d/alibabacloud_endpoint_util-0.0.4.tar.gz", hash = "sha256:a593eb8ddd8168d5dc2216cd33111b144f9189fcd6e9ca20e48f358a739bbf90" }
+
+[[package]]
+name = "alibabacloud-gateway-dingtalk"
+version = "1.0.2"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+dependencies = [
+    { name = "alibabacloud-gateway-spi" },
+    { name = "alibabacloud-tea-util" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/d2/40/751d8bdf133d7fcf053f10c98e8e506810e7bee06458a02eaaa14d30ac26/alibabacloud_gateway_dingtalk-1.0.2.tar.gz", hash = "sha256:acea8b0b1d11e0394913f0b0899ddd19c0bfceab716060449b57fcc250ceb300" }
 
 [[package]]
 name = "alibabacloud-gateway-spi"
@@ -3981,6 +4008,7 @@ dependencies = [
     { name = "agentrun-sdk" },
     { name = "akshare" },
     { name = "alembic" },
+    { name = "alibabacloud-dingtalk" },
     { name = "anthropic" },
     { name = "arxiv" },
     { name = "asana" },
@@ -4131,6 +4159,7 @@ requires-dist = [
     { name = "agentrun-sdk", specifier = ">=0.0.23,<1.0.0" },
     { name = "akshare", specifier = ">=1.15.78,<2.0.0" },
     { name = "alembic", specifier = ">=1.13.2" },
+    { name = "alibabacloud-dingtalk", specifier = ">=2.0.0" },
     { name = "anthropic", specifier = "==0.34.1" },
     { name = "arxiv", specifier = "==2.1.3" },
     { name = "asana", specifier = ">=5.2.2" },
