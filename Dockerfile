@@ -61,6 +61,16 @@ RUN --mount=type=cache,id=multirag_apt,target=/var/cache/apt,sharing=locked \
     apt install -y fonts-wqy-zenhei fonts-wqy-microhei && \
     apt install -y lsb-release build-essential gcc libdatrie-dev net-tools tcl-dev ffmpeg
 
+# Download resource from GitHub to /usr/share/infinity
+RUN mkdir -p /usr/share/infinity/resource && \
+    if [ "$NEED_MIRROR" == "1" ]; then \
+        git clone --depth 1 --single-branch https://gitee.com/infiniflow/resource /tmp/resource; \
+    else \
+        git clone --depth 1 --single-branch https://github.com/infiniflow/resource.git /tmp/resource; \
+    fi && \
+    cp -r /tmp/resource/* /usr/share/infinity/resource && \
+    rm -rf /tmp/resource
+
 ARG NGINX_VERSION=1.29.5-1~noble
 RUN --mount=type=cache,id=multirag_apt,target=/var/cache/apt,sharing=locked \
     mkdir -p /etc/apt/keyrings && \
