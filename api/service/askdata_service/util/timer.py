@@ -1,8 +1,8 @@
 import time
-import logging
 from typing import TypeVar, Coroutine, Any
 
-logger = logging.getLogger(__name__)
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+logger = get_askdata_logger()
 
 T = TypeVar('T')
 

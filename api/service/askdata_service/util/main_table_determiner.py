@@ -1,9 +1,9 @@
-import logging
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
 
-logger = logging.getLogger(__name__)
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+logger = get_askdata_logger()
 
 
 class TableType(Enum):
@@ -78,22 +78,11 @@ class MainTableDeterminer:
         
         # 根据总分排序
         scores.sort(key=lambda x: x.total_score, reverse=True)
-        
-        # 记录评分详情
-        logger.info("=== 主表判断评分结果 ===")
-        for idx, score in enumerate(scores):
-            logger.info(f"排名 {idx + 1}: {score.model_name} (ID: {score.model_id})")
-            logger.info(f"  总分: {score.total_score:.2f}")
-            logger.info(f"  - 关联关系得分: {score.relation_score:.2f}")
-            logger.info(f"  - 指标得分: {score.metric_score:.2f}")
-            logger.info(f"  - 维度得分: {score.dimension_score:.2f}")
-            logger.info(f"  - 语义得分: {score.semantic_score:.2f}")
-            logger.info(f"  判断依据: {', '.join(score.reasons)}")
-        
+
         # 返回得分最高的表作为主表
         main_table = scores[0]
-        logger.info(f"\n最终确定主表: {main_table.model_name} (ID: {main_table.model_id})")
-        
+        logger.info(f"最终确定主表: {main_table.model_name} (ID: {main_table.model_id})")
+
         return main_table.model_id, main_table
     
     def _calculate_model_score(

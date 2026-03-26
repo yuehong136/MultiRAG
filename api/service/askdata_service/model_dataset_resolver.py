@@ -1,9 +1,9 @@
 import asyncio
-import logging
 from typing import Dict, List, Set, Tuple
 from collections import Counter
 
-logger = logging.getLogger(__name__)
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+logger = get_askdata_logger()
 
 
 class ModelDatasetResolver:
@@ -54,7 +54,6 @@ class ModelDatasetResolver:
 
         # 获取模型详情：缓存优先，API 兜底
         model_detail_list = await self._get_model_details(model_ids, cached_model_details)
-        logger.info(f"获取到 {len(model_detail_list)} 个模型详情")
 
         # 筛选实际使用的模型
         matched_models = [m for m in model_detail_list if m.get('modelName') in used_models]
@@ -74,8 +73,6 @@ class ModelDatasetResolver:
                 for dataset in model_detail.get("usedInDatasets", [])
             ]
             model_in_dataset_dict[model_detail["modelId"]] = used_in_dataset_ids
-
-        logger.info(f"实际使用的模型及其数据集: {model_in_dataset_dict}")
 
         # 3. 确定最终使用的数据集
         final_dataset_ids = self._determine_dataset(model_in_dataset_dict, dataset_id_list)

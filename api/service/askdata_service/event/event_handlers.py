@@ -1,6 +1,5 @@
 import asyncio
 import json
-import logging
 import time
 from datetime import datetime
 
@@ -10,7 +9,8 @@ from typing import AsyncGenerator
 
 from api.service.askdata_service.event.event_manager import event_manager
 
-logger = logging.getLogger(__name__)
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+logger = get_askdata_logger()
 
 
 async def event_generator(request: Request, event_id: str) -> AsyncGenerator[bytes, None]:

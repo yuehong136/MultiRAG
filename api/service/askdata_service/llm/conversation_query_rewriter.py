@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 import re
 from typing import Any
@@ -14,7 +13,8 @@ from common.constants import LLMType
 from common.misc_utils import thread_pool_exec
 
 
-logger = logging.getLogger(__name__)
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+logger = get_askdata_logger()
 
 
 class ConversationQueryRewriter:
@@ -43,19 +43,16 @@ class ConversationQueryRewriter:
                 data = json.loads(json_str)
                 if isinstance(data, dict):
                     return data, True
-                logger.warning(f"Expected JSON object but got: {type(data)}")
                 return {}, False
-            except json.JSONDecodeError as error:
-                logger.warning(f"Failed to parse JSON from code block: {error}")
+            except json.JSONDecodeError:
+                pass
 
         try:
             data = json.loads(response)
             if isinstance(data, dict):
                 return data, True
-            logger.warning(f"Expected JSON object but got: {type(data)}")
             return {}, False
         except json.JSONDecodeError:
-            logger.warning("Failed to parse response as JSON")
             return {}, False
 
     @staticmethod
@@ -120,6 +117,8 @@ class ConversationQueryRewriter:
             }
 
             prompt = PromptTemplateUtil.fill_template(prompt_template, template_values)
+            logger.debug("[query_rewriter] new_question=%s, history_count=%d",
+                         question_text, len(history_payload))
             history = [{"role": "user", "content": prompt}]
 
             gen_conf = {
@@ -142,11 +141,15 @@ class ConversationQueryRewriter:
                     )
 
             response = await thread_pool_exec(_chat_in_thread)
+            logger.debug("[query_rewriter] LLM原始响应: %s", response)
 
             extracted_result, success = self._extract_json_from_response(response)
 
             if success:
-                return self._normalize_result(extracted_result)
+                normalized = self._normalize_result(extracted_result)
+                logger.debug("[query_rewriter] 改写结果: is_related=%s, rewritten=%s",
+                             normalized.get('is_related'), normalized.get('rewritten_question'))
+                return normalized
 
             logger.error("Failed to extract valid JSON from LLM response for conversation rewrite")
             return {

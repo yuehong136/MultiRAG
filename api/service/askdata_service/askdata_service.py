@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import logging
 from datetime import date
 from enum import Enum
 from typing import Any, List, Dict, Optional, Tuple, Set
@@ -36,7 +35,6 @@ from api.service.askdata_service.util.merge_dimensions_and_metrics import merge_
 from api.service.askdata_service.util.parse_from_clause import parse_from_clause
 from api.service.askdata_service.util.parse_sql_in_values import parse_sql_in_values
 from api.service.askdata_service.util.semantic_filter_processor import apply_semantic_filter
-from api.service.askdata_service.util.perf_logger import PerfSpan
 from api.service.askdata_service.util.semantic_permissions_filter import filter_dimensions_by_permissions, \
     filter_metrics_by_permissions
 from api.service.askdata_service.util.timer import time_task
@@ -46,8 +44,10 @@ from api.service.nl2sql_service.custom_jieba_tokenizer import custom_tokenize_wi
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
 from api.utils.prompt_template_util import PromptTemplateUtil
 from api.service.askdata_service.model_dataset_resolver import ModelDatasetResolver
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+from api.service.askdata_service.util.queried_fields_extractor import QueriedFieldsExtractor
 
-logger = logging.getLogger(__name__)
+logger = get_askdata_logger()
 
 
 class AskdataService:
@@ -196,18 +196,10 @@ class AskdataService:
         if ask_id:
             await self._async_check_if_stopped(ask_id)
 
-        perf_meta = {
-            "ask_id": ask_id,
-            "event_id": event_id,
-            "dataset_count": len(dataset_id_list)
-        }
-        total_span = PerfSpan("askdata.semantic_layer.total", meta=perf_meta)
-
         await send_event(event_id, {"current_step": 0, "total_steps": 13}, "progress_total")
 
         try:
             # 1. 第一批并行任务：获取dataset_details和用户权限（完全独立，可以同时开始）
-            base_fetch_span = PerfSpan("askdata.semantic_layer.base_fetch", meta=perf_meta)
             dataset_details_task = time_task(
                 self.semantic_api_client.get_dataset_detail_async(dataset_ids=dataset_id_list, event_id=event_id),
                 name="获取数据集详情"
@@ -222,7 +214,9 @@ class AskdataService:
                 dataset_details_task,
                 user_permissions_task
             )
-            base_fetch_span.end(status="ok", dataset_count=len(dataset_details))
+            logger.debug("[semantic_layer] 数据集详情: %d个, 用户权限: %s",
+                         len(dataset_details),
+                         json.dumps(user_semantic_permissions, ensure_ascii=False) if user_semantic_permissions else "None")
 
             # 检查是否在获取基础数据后被停止
             if ask_id:
@@ -243,8 +237,6 @@ class AskdataService:
                         ),
                         name="LLM提取语义字段"
                     )
-
-                    logger.info(f"LLM提取到的语义字段：{extracted_fields}")
 
                     llm_dimension_ids = [field["dimension_id"] for field in extracted_fields if "dimension_id" in field]
                     llm_metric_ids = [field["metric_id"] for field in extracted_fields if "metric_id" in field]
@@ -338,7 +330,6 @@ class AskdataService:
             # 3. 并行执行三个任务
             logger.info("开始并行执行：LLM字段提取、关键字检索和图表推荐...")
 
-            parallel_span = PerfSpan("askdata.semantic_layer.parallel_tasks", meta=perf_meta)
             (llm_dim_ids, llm_metric_ids), \
                 (keyword_dim_ids, keyword_metrics, segmented_words), \
                 (recommended_chart, recommendation_reason) = await asyncio.gather(
@@ -346,12 +337,9 @@ class AskdataService:
                 keyword_search_and_semantic_layer_task(),
                 chart_recommendation_task()
             )
-            parallel_span.end(
-                status="ok",
-                segmented_words=len(segmented_words),
-                llm_dimensions=len(llm_dim_ids),
-                llm_metrics=len(llm_metric_ids)
-            )
+            logger.debug("[semantic_layer] 并行任务完成: LLM维度=%s, LLM指标=%s, 关键字维度=%s, 关键字指标=%d个, 分词=%s, 推荐图表=%s",
+                         llm_dim_ids, llm_metric_ids, keyword_dim_ids,
+                         len(keyword_metrics), segmented_words, recommended_chart)
 
             # 检查是否在并行任务完成后被停止
             if ask_id:
@@ -368,14 +356,13 @@ class AskdataService:
             # 如果有新的指标ID，需要单独查询
             all_metrics = keyword_metrics
             if new_metric_ids:
-                metrics_span = PerfSpan("askdata.semantic_layer.metric_enrich", meta=perf_meta)
                 new_metrics = await time_task(
                     self.semantic_api_client.get_metric_info_by_id_async(metric_ids=new_metric_ids, event_id=event_id),
                     name="获取LLM提取的指标信息")
                 all_metrics.extend(new_metrics)
-                metrics_span.end(status="ok", new_metric_count=len(new_metrics))
 
             all_metric_ids = [metric["metricId"] for metric in all_metrics]
+            logger.debug("[semantic_layer] 合并后: 维度IDs=%s, 指标IDs=%s", all_dimension_ids, all_metric_ids)
 
             # 5. 使用已经获取的用户权限进行过滤
             # 过滤权限
@@ -385,9 +372,11 @@ class AskdataService:
             allowed_metric_ids, prohibited_metric_ids = filter_metrics_by_permissions(
                 all_metric_ids, user_semantic_permissions
             )
+            logger.debug("[semantic_layer] 权限过滤: allowed_dims=%d, prohibited_dims=%s, allowed_metrics=%d, prohibited_metrics=%s",
+                         len(allowed_dimension_ids), prohibited_dimension_ids,
+                         len(allowed_metric_ids), prohibited_metric_ids)
 
             # 6. 获取维度值和维度详情（并行）
-            dim_span = PerfSpan("askdata.semantic_layer.dimension_values", meta=perf_meta)
             dimension_values_task = time_task(
                 self.semantic_api_client.get_dimension_values_async(
                     dimension_ids=allowed_dimension_ids, event_id=event_id
@@ -405,7 +394,8 @@ class AskdataService:
                 dimension_values_task,
                 dimensions_task
             )
-            dim_span.end(status="ok", dimension_count=len(dimensions), dimension_values_count=len(dimension_values))
+            logger.debug("[semantic_layer] 维度详情: %d个, 维度值: %d个",
+                         len(dimensions), len(dimension_values) if isinstance(dimension_values, list) else 0)
 
             model_ids, model_mappings = self._extract_unique_model_ids(dimensions, all_metrics)
             if len(model_ids) == 0:
@@ -413,7 +403,6 @@ class AskdataService:
 
             domain_ids = self._extract_unique_domain_ids(dataset_details)
 
-            model_span = PerfSpan("askdata.semantic_layer.model_details", meta=perf_meta)
             model_details_task = time_task(
                 self.semantic_api_client.get_model_detail_async(model_ids=model_ids),
                 name="获取模型详情"
@@ -434,12 +423,8 @@ class AskdataService:
                 model_relations_task,
                 business_term_task
             )
-            model_span.end(
-                status="ok",
-                model_count=len(model_details),
-                relation_count=len(model_relations),
-                business_term_count=len(business_term_rows)
-            )
+            logger.debug("[semantic_layer] model_ids=%s, model_relations=%d个, business_terms=%d个",
+                         model_ids, len(model_relations), len(business_term_rows))
 
             # 检查是否在获取模型详情后被停止
             if ask_id:
@@ -448,7 +433,6 @@ class AskdataService:
             # 将维度和指标简化后进行合并，为交给LLM进一步排除冗余语义做准备
             merged_dimensions_and_metrics = merge_dimensions_and_metrics(dimension_values, dimensions, all_metrics)
 
-            relevance_span = PerfSpan("askdata.semantic_layer.relevance_filter", meta=perf_meta)
             await send_event(event_id, {"task_name": "LLM过滤不相关的维度和指标", "task_status": "working"}, "task")
             exclude_dim_and_metric = await time_task(
                 self.semantic_relevance_filter.filter_irrelevant_fields(
@@ -461,7 +445,6 @@ class AskdataService:
             )
             await send_event(event_id, {"task_name": "LLM过滤不相关的维度和指标", "task_status": "completed"}, "task")
             await send_event(event_id, {}, "progress_up")
-            relevance_span.end(status="ok")
 
             dimensions, all_metrics, excluded_details = apply_semantic_filter(
                 dimensions=dimensions,
@@ -469,6 +452,9 @@ class AskdataService:
                 exclude_dim_and_metric=exclude_dim_and_metric,
                 log_details=True  # 是否打印详细日志
             )
+            logger.debug("[semantic_layer] LLM过滤后: 维度=%d个, 指标=%d个, 排除详情=%s",
+                         len(dimensions), len(all_metrics),
+                         json.dumps(excluded_details, ensure_ascii=False) if excluded_details else "None")
             # 标记无权限的维度和指标
             for dimension in dimensions:
                 if dimension['dimensionId'] in prohibited_dimension_ids:
@@ -551,21 +537,17 @@ class AskdataService:
                 business_term_rows=business_term_rows
             )
 
-            process_span = PerfSpan("askdata.semantic_layer.process", meta=perf_meta)
             processed_semantic_layer = process_semantic_layer(
                 semantic_layer_original,
                 user_semantic_permissions,
                 segmented_words
             )
-            process_span.end(status="ok")
-
-            logger.info(f"processed_semantic_layer: {processed_semantic_layer}")
+            logger.debug("[semantic_layer] 最终语义层: %s",
+                         json.dumps(processed_semantic_layer, ensure_ascii=False))
 
             await send_event(event_id, {}, "stream_end")
 
             logger.info(f"recommended_chart: {recommended_chart}, recommendation_reason: {recommendation_reason}")
-
-            total_span.end(status="ok", model_count=len(model_details))
 
             # 构建 Phase 2 可复用的预拉数据
             phase2_prefetch_data = {
@@ -576,7 +558,6 @@ class AskdataService:
 
             return processed_semantic_layer, [model_detail["modelId"] for model_detail in model_details], recommended_chart, recommendation_reason, phase2_prefetch_data
         except Exception as e:
-            total_span.end(status="error", error=str(e))
             raise
 
     async def analyze_user_query_stream(
@@ -623,20 +604,8 @@ class AskdataService:
         if ask_id:
             await self._async_check_if_stopped(ask_id)
 
-        log_thinking = os.getenv("ASKDATA_PERF_LOG_THINKING", "1").lower() not in {"0", "false", "no", "off"}
-        if log_thinking:
-            perf_meta = {"ask_id": ask_id, "event_id": event_id, "llm": llm_name}
-            analysis_span = PerfSpan("askdata.analysis_stream", meta=perf_meta)
-            try:
-                await llm_service.chat_stream_async(event_id=event_id, tenant_id=tenant_id, history=history, gen_conf=gen_conf,
-                                                    llm_name=llm_name)
-                analysis_span.end(status="ok")
-            except Exception as e:
-                analysis_span.end(status="error", error=str(e))
-                raise
-        else:
-            await llm_service.chat_stream_async(event_id=event_id, tenant_id=tenant_id, history=history, gen_conf=gen_conf,
-                                                llm_name=llm_name)
+        await llm_service.chat_stream_async(event_id=event_id, tenant_id=tenant_id, history=history, gen_conf=gen_conf,
+                                            llm_name=llm_name)
 
     async def nlq_to_initial_sql(self, user_query: str, llm_name: str, semantic_layer: Dict[str, Any],
                                  recommended_chart: str, ask_id: str = None) -> Optional[
@@ -665,7 +634,7 @@ class AskdataService:
         if result.get("status") == "failed":
             return result
 
-        logger.info(f"成功生成SQL: {result.get('sql')}")
+        logger.info(f"成功生成SQL: {str(result.get('sql'))[:200]}")
         return result
 
     async def fix_sql_query_with_components(self, user_query: str, original_sql: str, error_message: str,
@@ -686,7 +655,7 @@ class AskdataService:
         if not result:
             logger.warning("NLQ to Initial SQL 修复失败，返回 None。")
             return None
-        logger.info(f"成功修复SQL: {result.get('sql')}")
+        logger.info(f"成功修复SQL: {str(result.get('sql'))[:200]}")
         return result
 
     async def generate_table_config(self,
@@ -738,6 +707,29 @@ class AskdataService:
     async def get_ask_data_history(self, conversation_id: str, user_id: str) -> list[dict]:
         """根据对话ID获取问数历史记录。"""
         return self.history_service.get_history_by_conversation_id(self.db, conversation_id, user_id)
+
+    def extract_queried_fields(
+        self,
+        sql_components: Dict[str, Any],
+        semantic_layer: Dict[str, Any],
+        used_models: List[str]
+    ) -> Dict[str, Any]:
+        """
+        从SQL组件和语义层中提取查询字段信息
+
+        Args:
+            sql_components: SQL组件（包含select、from、where等）
+            semantic_layer: 语义层数据
+            used_models: SQL中使用的模型列表
+
+        Returns:
+            包含维度和指标信息的字典
+        """
+        return QueriedFieldsExtractor.extract_queried_fields(
+            sql_components=sql_components,
+            semantic_layer=semantic_layer,
+            used_models=used_models
+        )
 
     async def delete_ask_data_history_by_conversation(self, conversation_id: str, user_id: str) -> int:
         """根据对话ID和用户ID删除问数历史记录。"""
@@ -802,29 +794,24 @@ class AskdataService:
         from_info = parse_from_clause(from_sentence)
         main_table = from_info["main_table"]
         existing_tables = from_info["existing_tables"]
-        logger.info(f"主表: {main_table}, 已存在的表: {existing_tables}")
         # 获得用户手动调整/添加的字段ID列表
         adjusted_field_ids = extract_manually_adjusted_field_ids(table_config)
-        logger.info(f"用户手动调整/添加的字段ID列表: {adjusted_field_ids}")
         # 获取这些字段涉及的模型ID列表（去重）
         adjusted_model_ids = list({
             semantic_field["from_model_id"]
             for field_id in adjusted_field_ids
             if (semantic_field := self._find_semantic_field(field_id, all_semantic_fields)) is not None
         })
-        logger.info(f"用户手动调整涉及的模型ID: {adjusted_model_ids}")
         # 获取用户手动调整涉及的模型信息
         adjusted_models = [
             mapping for mapping in model_table_alias_mapping_list
             if mapping["modelId"] in adjusted_model_ids
         ]
-        logger.info(f"用户手动调整涉及的模型: {adjusted_models}")
         # 判断哪些表需要新增 JOIN
         tables_to_add = [
             mapping for mapping in adjusted_models
             if mapping["table"] not in existing_tables
         ]
-        logger.info(f"需要新增JOIN的表: {tables_to_add}")
 
         # 获取主表的 modelId
         main_table_model_id = next(
@@ -850,8 +837,6 @@ class AskdataService:
                 for adjusted_model_id in adjusted_model_ids:
                     involved_model_ids.add(adjusted_model_id)
 
-                logger.info(f"涉及的所有模型ID: {involved_model_ids}")
-
                 # 2. 获取权限信息
                 permissions_response = await self.semantic_api_client.get_user_semantic_permissions_async(
                     user_id=user_id,
@@ -864,15 +849,12 @@ class AskdataService:
                     model_table_alias_mapping_list
                 )
 
-                logger.info(f"权限映射: {model_permissions_map}")
-
                 # 记录有权限限制的模型
                 if model_permissions_map:
                     models_with_permissions = [
                         f"{perm['table']}({perm['alias']})"
                         for perm in model_permissions_map.values()
                     ]
-                    logger.info(f"以下模型有行级权限限制: {', '.join(models_with_permissions)}")
 
                 # ========== 权限逻辑结束 ==========
 
@@ -885,8 +867,6 @@ class AskdataService:
                     if rel["sourceModelId"] in tables_to_add_ids or rel["targetModelId"] in tables_to_add_ids
                 ]
 
-                logger.info(f"需要新增 JOIN 的关系: {relevant_relationships}")
-
                 # 只在找到关系时才更新 from_sentence
                 if relevant_relationships:
                     from_sentence = append_join_clauses(
@@ -895,7 +875,6 @@ class AskdataService:
                         model_table_alias_mapping_list,
                         existing_tables
                     )
-                    logger.info(f"更新后的 FROM 子句: {from_sentence}")
                 else:
                     logger.warning(f"未找到以下表与主表的关系信息: {[t['table'] for t in tables_to_add]}")
 
@@ -978,13 +957,11 @@ class AskdataService:
                             assembler.add_parameterized_where(f"{sql_column} {operator} %s", [value])
 
             # 注入权限条件
-            logger.info("开始注入权限条件（table-row）")
             apply_permissions_to_assembler(
                 assembler,
                 model_permissions_map,
                 model_table_alias_mapping_list
             )
-            logger.info("权限条件注入完成（table-row）")
 
             for order_by in table_config["order_by"]:
                 if order_by["is_semantic_field"]:
@@ -1135,13 +1112,11 @@ class AskdataService:
                         pass
 
             # 注入权限条件
-            logger.info(f"开始注入权限条件（{chart_type}）")
             apply_permissions_to_assembler(
                 assembler,
                 model_permissions_map,
                 model_table_alias_mapping_list
             )
-            logger.info(f"权限条件注入完成（{chart_type}）")
 
             for having_condition in table_config.get("having_conditions", []):
                 if having_condition["is_semantic_field"]:
@@ -1284,18 +1259,14 @@ class AskdataService:
             logger.info(f"开始生成宽表SQL - 数据集ID: {dataset_id}, 用户ID: {user_id}")
 
             # 1. 获取数据集详情
-            logger.info("步骤1: 获取数据集详情...")
             dataset_details = await self.semantic_api_client.get_dataset_detail_async(dataset_id)
 
             if not dataset_details or len(dataset_details) == 0:
                 raise ValueError(f"未找到数据集 {dataset_id} 的详情信息")
 
             dataset_detail = dataset_details[0]
-            logger.info(f"数据集名称: {dataset_detail.get('datasetName')}")
-            logger.info(f"包含模型数: {len(dataset_detail.get('models', []))}")
 
             # 2. 获取模型关系
-            logger.info("步骤2: 获取模型关系...")
             model_ids = [model["modelId"] for model in dataset_detail.get("models", [])]
 
             if not model_ids:
@@ -1307,21 +1278,16 @@ class AskdataService:
             # 3. 获取用户权限（如果提供了用户ID）
             user_permissions = None
             if user_id:
-                logger.info("步骤3: 获取用户权限...")
                 try:
                     user_permissions = await self.semantic_api_client.get_user_semantic_permissions_async(
                         user_id,
                         [dataset_id]
                     )
-                    logger.info(f"成功获取用户 {user_id} 的权限信息")
                 except Exception as e:
                     logger.warning(f"获取用户权限失败，将使用默认权限: {str(e)}")
                     user_permissions = None
-            else:
-                logger.info("步骤3: 未提供用户ID，跳过权限获取")
 
             # 4. 生成SQL
-            logger.info("步骤4: 生成宽表SQL...")
             sql_generator = WideTableSQLGenerator()
             sql = sql_generator.generate_sql(
                 dataset_detail=dataset_detail,

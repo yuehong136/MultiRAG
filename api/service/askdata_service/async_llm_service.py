@@ -12,10 +12,11 @@ from sqlalchemy.orm import Session
 from api.db.services.llm_service import LLMBundle
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from api.service.askdata_service.event.event_manager import event_manager
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
 from common.constants import LLMType
 
 
-logger = logging.getLogger(__name__)
+logger = get_askdata_logger()
 
 
 class AsyncLLMService:
@@ -33,9 +34,8 @@ class AsyncLLMService:
                 data=data,
                 event_type=event_type
             )
-            logger.debug(f"✅ Event sent: {event_type} - {event_id}")
         except Exception as e:
-            logger.error(f"❌ Failed to send event {event_type}: {e}")
+            logger.error(f"Failed to send event {event_type}: {e}")
 
     async def chat_stream_async(
             self,
@@ -46,31 +46,18 @@ class AsyncLLMService:
             gen_conf: dict = None,
             llm_name: str | None = None
     ) -> None:
-        """
-        异步流式聊天主函数 - 简化版本
-
-        Args:
-            event_id: 事件ID，用于前端监听
-            tenant_id: 租户ID
-            system: 系统提示词
-            history: 对话历史
-            gen_conf: 生成配置
-            llm_name: 模型名称
-        """
         if history is None:
             history = []
         if gen_conf is None:
             gen_conf = {"temperature": 0.7, "max_tokens": 2000}
 
         try:
-            # 1. 发送开始事件
             await self.send_event(
                 event_id,
                 {"message": "开始生成回复", "status": "started"},
                 "chat_start"
             )
 
-            # 2. 创建LLM实例
             logger.info(f"🤖 创建LLM实例 - event_id: {event_id}, llm_name: {llm_name}")
             model_config = get_model_config_by_type_and_name(self.db, tenant_id, LLMType.CHAT.value, llm_name)
             llm_bundle = LLMBundle(
@@ -79,7 +66,6 @@ class AsyncLLMService:
                 model_config=model_config,
             )
 
-            # 3. 发送模型就绪事件
             await self.send_event(
                 event_id,
                 {
@@ -90,7 +76,6 @@ class AsyncLLMService:
                 "model_ready"
             )
 
-            # 4. 执行简化的流式生成
             await self._simple_streaming(
                 event_id=event_id,
                 llm_bundle=llm_bundle,
@@ -100,7 +85,7 @@ class AsyncLLMService:
             )
 
         except Exception as e:
-            logger.exception(f"💥 Async chat stream error - event_id: {event_id}: {e}")
+            logger.exception(f"Async chat stream error - event_id: {event_id}")
             await self.send_event(
                 event_id,
                 {
@@ -125,25 +110,22 @@ class AsyncLLMService:
         error_occurred = threading.Event()
 
         def llm_worker():
-            """LLM工作线程 - 简化版本"""
+            """LLM工作线程"""
             try:
-                logger.info(f"🚀 LLM工作线程启动 - event_id: {event_id}")
                 start_time = time.time()
 
                 for i, chunk in enumerate(llm_bundle.chat_streamly(system, history, gen_conf)):
-                    elapsed = time.time() - start_time
-                    logger.debug(f"📦 LLM产生chunk {i + 1} - {elapsed:.2f}s - {type(chunk)} - event_id: {event_id}")
                     chunk_queue.put(('chunk', chunk))
                     if error_occurred.is_set():
-                        logger.warning(f"⚠️ 检测到错误信号，停止生成 - event_id: {event_id}")
+                        logger.warning(f"检测到错误信号，停止生成 - event_id: {event_id}")
                         break
 
                 chunk_queue.put(('done', None))
                 total_time = time.time() - start_time
-                logger.info(f"✅ LLM工作线程完成 - {total_time:.2f}s - event_id: {event_id}")
+                logger.info(f"LLM工作线程完成 - {total_time:.2f}s - event_id: {event_id}")
 
             except Exception as e:
-                logger.error(f"❌ LLM工作线程异常 - event_id: {event_id}: {e}")
+                logger.error(f"LLM工作线程异常 - event_id: {event_id}: {e}")
                 chunk_queue.put(('error', str(e)))
                 error_occurred.set()
 
@@ -156,14 +138,11 @@ class AsyncLLMService:
             chunk_count = 0
             first_chunk_time = None
 
-            logger.info(f"⏳ 开始等待LLM响应 - event_id: {event_id}")
-
             while True:
                 try:
                     chunk_type, chunk_data = chunk_queue.get(timeout=0.1)
 
                     if chunk_type == 'done':
-                        logger.info(f"🏁 流处理在工作线程中完成，现在发送最终事件 - event_id: {event_id}")
                         await self.send_event(
                             event_id,
                             {
@@ -184,19 +163,16 @@ class AsyncLLMService:
                             "chat_result"
                         )
 
-                        # --- [修改] 开始 ---
-                        # 发送一个专门的结束事件，以通知服务器关闭连接
                         await self.send_event(
                             event_id,
                             {"message": "Stream finished, closing connection."},
                             "stream_end"
                         )
-                        # --- [修改] 结束 ---
 
                         break
 
                     elif chunk_type == 'error':
-                        logger.error(f"💥 处理错误 - event_id: {event_id}: {chunk_data}")
+                        logger.error(f"处理错误 - event_id: {event_id}: {chunk_data}")
                         await self.send_event(
                             event_id,
                             {"message": f"LLM生成错误: {chunk_data}", "status": "error"},
@@ -207,9 +183,7 @@ class AsyncLLMService:
                     elif chunk_type == 'chunk':
                         if first_chunk_time is None:
                             first_chunk_time = time.time()
-                            logger.info(f"⚡ 首个chunk到达 - event_id: {event_id}")
 
-                        # 直接处理文本内容
                         current_content = str(chunk_data)
 
                         delta_content = current_content[len(last_content):]
@@ -217,9 +191,6 @@ class AsyncLLMService:
 
                         full_content = current_content
                         chunk_count += 1
-
-                        logger.debug(
-                            f"📝 处理文本chunk {chunk_count} - delta_len:{len(delta_content)} - event_id: {event_id}")
 
                         await self.send_event(
                             event_id,
@@ -234,7 +205,7 @@ class AsyncLLMService:
                 except queue.Empty:
                     await asyncio.sleep(0.01)
                     if not worker_thread.is_alive() and chunk_queue.empty():
-                        logger.warning(f"⚠️ 工作线程意外结束 - event_id: {event_id}")
+                        logger.warning(f"工作线程意外结束 - event_id: {event_id}")
                         await self.send_event(
                             event_id,
                             {"message": "LLM工作线程意外结束", "status": "error"},
@@ -243,7 +214,7 @@ class AsyncLLMService:
                         break
 
         except Exception as e:
-            logger.exception(f"💥 流式处理主循环异常 - event_id: {event_id}: {e}")
+            logger.exception(f"流式处理主循环异常 - event_id: {event_id}")
             error_occurred.set()
             await self.send_event(
                 event_id,
@@ -253,16 +224,12 @@ class AsyncLLMService:
         finally:
             error_occurred.set()
             if worker_thread.is_alive():
-                logger.info(f"🔄 等待工作线程结束 - event_id: {event_id}")
                 worker_thread.join(timeout=2.0)
                 if worker_thread.is_alive():
-                    logger.warning(f"⚠️ 工作线程未及时结束 - event_id: {event_id}")
-
-            logger.info(f"🧹 流式处理清理完成 - event_id: {event_id}")
+                    logger.warning(f"工作线程未及时结束 - event_id: {event_id}")
 
     def close(self):
         """关闭服务，清理资源"""
-        logger.info("🔄 关闭AsyncLLMService")
         self.executor.shutdown(wait=True)
 
 

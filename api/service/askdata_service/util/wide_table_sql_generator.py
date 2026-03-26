@@ -2,11 +2,11 @@
 宽表SQL生成器
 根据数据集信息、关联关系和权限配置，自动生成宽表查询SQL
 """
-import logging
 from typing import List, Dict
 from .main_table_determiner import MainTableDeterminer
 
-logger = logging.getLogger(__name__)
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+logger = get_askdata_logger()
 
 
 class WideTableSQLGenerator:

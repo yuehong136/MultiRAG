@@ -5,11 +5,11 @@
 """
 
 from typing import Dict, Any, List
-import logging
 
 from api.service.askdata_service.util.build_model_permissions_map import convert_row_filter_to_sql_conditions
 
-logger = logging.getLogger(__name__)
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+logger = get_askdata_logger()
 
 
 def apply_permissions_to_assembler(

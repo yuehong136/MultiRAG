@@ -1,10 +1,10 @@
 import asyncio
 import time
-import logging
 from typing import Dict, Set
 from threading import Lock
 
-logger = logging.getLogger(__name__)
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+logger = get_askdata_logger()
 
 
 class StopRequestManager:
@@ -85,7 +85,6 @@ class StopRequestManager:
                 if current_time - stop_time > self._expire_seconds:
                     # 记录已过期，删除并返回False
                     del self._stopped_requests[ask_id]
-                    logger.debug(f"停止记录 {ask_id} 已过期并被清理")
                     return False
 
                 return True
@@ -112,7 +111,6 @@ class StopRequestManager:
                 ask_id = ask_id.strip()
                 if ask_id in self._stopped_requests:
                     del self._stopped_requests[ask_id]
-                    logger.debug(f"停止记录 {ask_id} 已被移除")
                     return True
                 return False
 

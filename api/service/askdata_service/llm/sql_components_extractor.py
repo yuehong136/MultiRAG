@@ -1,7 +1,6 @@
 import json
 import os
 import re
-import logging
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -13,7 +12,8 @@ from api.utils.prompt_template_util import PromptTemplateUtil
 from common.constants import LLMType
 from common.misc_utils import thread_pool_exec
 
-logger = logging.getLogger(__name__)
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+logger = get_askdata_logger()
 
 
 class SQLComponentsExtractor:
@@ -64,10 +64,9 @@ class SQLComponentsExtractor:
                 if isinstance(data, dict):
                     return data, True
                 else:
-                    logger.warning(f"Expected JSON object but got: {type(data)}")
                     return {}, False
-            except json.JSONDecodeError as e:
-                logger.warning(f"Failed to parse JSON from code block: {e}")
+            except json.JSONDecodeError:
+                pass
 
         # 如果没有找到代码块或解析失败，尝试解析整个响应
         try:
@@ -75,10 +74,8 @@ class SQLComponentsExtractor:
             if isinstance(data, dict):
                 return data, True
             else:
-                logger.warning(f"Expected JSON object but got: {type(data)}")
                 return {}, False
         except json.JSONDecodeError:
-            logger.warning("Failed to parse response as JSON")
             return {}, False
 
     def _validate_sql_components(self, components: dict) -> dict:
@@ -208,6 +205,7 @@ class SQLComponentsExtractor:
 
             # 填充模板
             prompt = PromptTemplateUtil.fill_template(prompt_template, template_values)
+            logger.debug("[sql_components] 输入sql=%s", sql_query)
 
             # 创建包含我们提示词的对话历史
             history = [{"role": "user", "content": prompt}]
@@ -234,6 +232,7 @@ class SQLComponentsExtractor:
 
             # 调用LLM处理我们的提示词
             response = await thread_pool_exec(_chat_in_thread)
+            logger.debug("[sql_components] LLM原始响应: %s", response)
 
             # 提取和处理响应
             extracted_components, success = self._extract_json_from_response(response)
@@ -243,6 +242,8 @@ class SQLComponentsExtractor:
                 validated_components = self._validate_sql_components(extracted_components)
                 # 后处理组件
                 final_components = self._post_process_components(validated_components)
+                logger.debug("[sql_components] 提取结果: %s",
+                             json.dumps(final_components, ensure_ascii=False))
                 return final_components
             else:
                 logger.error("Failed to extract valid JSON from LLM response")

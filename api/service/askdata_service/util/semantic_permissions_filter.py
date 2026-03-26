@@ -1,5 +1,8 @@
-import logging
 from typing import List, Tuple, Dict, Any
+
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+
+logger = get_askdata_logger()
 
 
 def _extract_allowed_semantic_fields(user_semantic_permissions: Dict[str, Any], semantic_type: str) -> Tuple[
@@ -69,18 +72,18 @@ def filter_dimensions_by_permissions(involved_dimension_id_list: List[str],
     prohibited_count = len(prohibited_dimensions)
 
     # 输出日志
-    logging.info(f"开始筛选维度，原始维度总数: {original_count}")
-    logging.info(f"权限中允许的维度数量: {len(allowed_dim_ids)}")
+    logger.info(f"开始筛选维度，原始维度总数: {original_count}")
+    logger.info(f"权限中允许的维度数量: {len(allowed_dim_ids)}")
 
     if allowed_dim_info:
         for info in allowed_dim_info:
-            logging.info(
+            logger.info(
                 f"允许维度 - 模型ID: {info['modelId']}, 维度ID: {info['semanticId']}, 维度名称: {info['semanticName']}")
 
     if prohibited_dimensions:
-        logging.info(f"被禁止的维度: {prohibited_dimensions}")
+        logger.info(f"被禁止的维度: {prohibited_dimensions}")
 
-    logging.info(f"维度筛选完成，允许维度数量: {allowed_count}, 禁止维度数量: {prohibited_count}")
+    logger.info(f"维度筛选完成，允许维度数量: {allowed_count}, 禁止维度数量: {prohibited_count}")
 
     return allowed_dimensions, prohibited_dimensions
 
@@ -111,18 +114,18 @@ Tuple[List[str], List[str]]:
     prohibited_count = len(prohibited_metrics)
 
     # 输出日志
-    logging.info(f"开始筛选度量，原始度量总数: {original_count}")
-    logging.info(f"权限中允许的度量数量: {len(allowed_metric_ids)}")
+    logger.info(f"开始筛选度量，原始度量总数: {original_count}")
+    logger.info(f"权限中允许的度量数量: {len(allowed_metric_ids)}")
 
     if allowed_metric_info:
         for info in allowed_metric_info:
-            logging.info(
+            logger.info(
                 f"允许度量 - 模型ID: {info['modelId']}, 度量ID: {info['semanticId']}, 度量名称: {info['semanticName']}")
 
     if prohibited_metrics:
-        logging.info(f"被禁止的度量: {prohibited_metrics}")
+        logger.info(f"被禁止的度量: {prohibited_metrics}")
 
-    logging.info(f"度量筛选完成，允许度量数量: {allowed_count}, 禁止度量数量: {prohibited_count}")
+    logger.info(f"度量筛选完成，允许度量数量: {allowed_count}, 禁止度量数量: {prohibited_count}")
 
     return allowed_metrics, prohibited_metrics
 
@@ -146,7 +149,7 @@ def filter_semantic_fields_by_permissions(involved_dimension_id_list: List[str],
                 'metrics': (allowed_metrics, prohibited_metrics)
             }
     """
-    logging.info("开始同时筛选维度和度量")
+    logger.info("开始同时筛选维度和度量")
 
     # 过滤维度
     allowed_dimensions, prohibited_dimensions = filter_dimensions_by_permissions(
@@ -161,7 +164,7 @@ def filter_semantic_fields_by_permissions(involved_dimension_id_list: List[str],
         'metrics': (allowed_metrics, prohibited_metrics)
     }
 
-    logging.info("维度和度量筛选全部完成")
+    logger.info("维度和度量筛选全部完成")
 
     return result
 
@@ -169,7 +172,7 @@ def filter_semantic_fields_by_permissions(involved_dimension_id_list: List[str],
 # 测试用例
 if __name__ == "__main__":
     # 配置日志
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    logger.basicConfig(level=logger.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
     # 测试数据
     involved_dimension_id_list = ['36093203355146240', '36072606466712576', '36072606137197568', '37543487938742272',

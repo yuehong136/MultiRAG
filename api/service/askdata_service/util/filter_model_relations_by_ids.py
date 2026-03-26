@@ -1,8 +1,8 @@
-import logging
 from typing import List, Dict, Any, Set
 import json
 
-logger = logging.getLogger(__name__)
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+logger = get_askdata_logger()
 def filter_model_relations_by_ids(
         model_ids: List[str],
         model_relations: List[Dict[str, Any]]

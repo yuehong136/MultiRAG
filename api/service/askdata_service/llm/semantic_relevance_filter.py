@@ -1,7 +1,6 @@
 import json
 import os
 import re
-import logging
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -10,10 +9,11 @@ from api.db.services.llm_service import LLMBundle
 from api.db.db_models import db_connection
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from api.utils.prompt_template_util import PromptTemplateUtil
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
 from common.misc_utils import thread_pool_exec
 from common.constants import LLMType
 
-logger = logging.getLogger(__name__)
+logger = get_askdata_logger()
 
 
 class SemanticRelevanceFilter:
@@ -61,15 +61,14 @@ class SemanticRelevanceFilter:
             try:
                 data = json.loads(json_str)
                 return data
-            except json.JSONDecodeError as e:
-                logger.warning(f"Failed to parse JSON from code block: {e}")
+            except json.JSONDecodeError:
+                pass
 
         # 如果没有找到代码块或解析失败，尝试解析整个响应
         try:
             data = json.loads(response)
             return data
         except json.JSONDecodeError:
-            logger.warning("Failed to parse response as JSON, returning empty exclude lists")
             return {"excludeDim": [], "excludeMetric": []}
 
     def _validate_exclude_format(self, exclude_data: dict) -> dict[str, list[str]]:
@@ -90,7 +89,6 @@ class SemanticRelevanceFilter:
 
         # 验证数据类型
         if not isinstance(exclude_data, dict):
-            logger.warning(f"Expected dict but got: {type(exclude_data)}")
             return validated
 
         # 提取并验证excludeDim
@@ -103,7 +101,7 @@ class SemanticRelevanceFilter:
                     if dim_id is not None
                 ]
             else:
-                logger.warning(f"excludeDim should be a list, got: {type(dim_list)}")
+                pass
 
         # 提取并验证excludeMetric
         if "excludeMetric" in exclude_data:
@@ -115,7 +113,7 @@ class SemanticRelevanceFilter:
                     if metric_id is not None
                 ]
             else:
-                logger.warning(f"excludeMetric should be a list, got: {type(metric_list)}")
+                pass
 
         # 记录过滤结果
         if validated["excludeDim"] or validated["excludeMetric"]:
@@ -154,8 +152,6 @@ class SemanticRelevanceFilter:
                 if dim_id in exclude_dim_ids:
                     should_include = False
                     excluded_count["dimensions"] += 1
-                    logger.debug(
-                        f"Excluding dimension: {field.get('dimension_name') or field.get('dimensionName', dim_id)}")
 
             # 检查是否为指标
             elif "metric_id" in field or "metricId" in field:
@@ -163,7 +159,6 @@ class SemanticRelevanceFilter:
                 if metric_id in exclude_metric_ids:
                     should_include = False
                     excluded_count["metrics"] += 1
-                    logger.debug(f"Excluding metric: {field.get('metric_name') or field.get('metricName', metric_id)}")
 
             if should_include:
                 filtered_data.append(field)
@@ -212,6 +207,7 @@ class SemanticRelevanceFilter:
 
             # 填充模板
             prompt = PromptTemplateUtil.fill_template(prompt_template, template_values)
+            logger.debug("[relevance_filter] user_query=%s", user_query)
 
             # 检查性能缓存
             from api.service.askdata_service.cache import perf_cache
@@ -245,12 +241,17 @@ class SemanticRelevanceFilter:
 
             # 调用LLM处理提示词
             response = await thread_pool_exec(_chat_in_thread)
+            logger.debug("[relevance_filter] LLM原始响应: %s", response)
 
             # 提取和处理响应
             exclude_data = self._extract_json_from_response(response)
 
             # 验证和清理返回的数据
             validated_data = self._validate_exclude_format(exclude_data)
+            logger.debug("[relevance_filter] 排除结果: excludeDim=%d个, excludeMetric=%d个, 详情=%s",
+                         len(validated_data.get('excludeDim', [])),
+                         len(validated_data.get('excludeMetric', [])),
+                         json.dumps(validated_data, ensure_ascii=False))
 
             # 缓存验证后的结果
             perf_cache.set(prompt, validated_data, namespace="relevance_filter")
