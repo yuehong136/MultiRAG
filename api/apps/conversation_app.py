@@ -2,6 +2,7 @@ import json
 import os
 import re
 import logging
+from dataclasses import dataclass
 from copy import deepcopy
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
@@ -26,6 +27,52 @@ from common.misc_utils import get_uuid
 from common.constants import RetCode
 from core.prompts.template import load_prompt
 from core.prompts.generator import chunks_format
+
+
+@dataclass
+class FullAnswerStreamTransformer:
+    # TODO: Transitional compatibility shim for legacy cumulative SSE.
+    # Remove this class and `stream_output="full"` after the application frontend
+    # fully migrates from full-answer chunks to delta streaming.
+    full_answer: str = ""
+
+    def transform(self, answer: dict[str, Any]) -> dict[str, Any] | None:
+        payload = {
+            key: value
+            for key, value in answer.items()
+            if key not in {"final", "start_to_think", "end_to_think"}
+        }
+        is_final = answer.get("final", True)
+
+        if answer.get("start_to_think"):
+            self.full_answer += "<think>"
+            payload["answer"] = self.full_answer
+            payload["reference"] = {}
+            return payload
+
+        if answer.get("end_to_think"):
+            self.full_answer += "</think>"
+            payload["answer"] = self.full_answer
+            payload["reference"] = {}
+            return payload
+
+        answer_text = answer.get("answer") or ""
+        if is_final:
+            if answer_text:
+                if answer_text.startswith(self.full_answer):
+                    self.full_answer = answer_text
+                else:
+                    self.full_answer += answer_text
+            payload["answer"] = self.full_answer
+            return payload
+
+        if not answer_text:
+            return None
+
+        self.full_answer += answer_text
+        payload["answer"] = self.full_answer
+        payload["reference"] = {}
+        return payload
 
 
 class SetConversationRequest(BaseModel):
@@ -79,6 +126,12 @@ class CompletionRequest(BaseModel):
 
     stream: bool | None = True
     """是否使用流式响应，默认值为 True。"""
+
+    # TODO: Transitional compatibility field for the application
+    # frontend. Remove together with `FullAnswerStreamTransformer` after the
+    # frontend fully migrates to delta streaming.
+    stream_output: Literal["delta", "full"] | None = "full"
+    """流式输出格式：delta 为增量，full 为兼容旧前端的累计全文。"""
 
     reasoning: bool | None = None
     """是否启用推理模式。"""
@@ -405,6 +458,9 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db), 
         return get_data_error_result(retmsg="Missing conversation_id or messages!")
     # Remove stream from req to avoid duplicate argument error
     stream = req.pop("stream", True)
+    # TODO(multirag): Transitional compatibility switch for legacy cumulative
+    # SSE consumers. Remove after the application frontend no longer sends it.
+    stream_output = req.pop("stream_output", "delta")
     msg = []
     for m in req["messages"]:
         if m["role"] == "system":
@@ -478,9 +534,18 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db), 
 
         async def stream_response():
             nonlocal dia, msg, db, req, conv
+            # TODO: Transitional compatibility adapter for the
+            # application frontend. Remove after all `/conversation/completion`
+            # consumers handle delta streaming natively.
+            transformer = FullAnswerStreamTransformer() if stream_output == "full" else None
             try:
                 async for ans in async_chat(dia, msg, db, **req):
                     ans = structure_answer(conv, ans, message_id, conv.id)
+                    if transformer is not None:
+                        # TODO: Transitional legacy SSE path.
+                        ans = transformer.transform(ans)
+                        if ans is None:
+                            continue
                     yield "data:" + json.dumps({"retcode": 0, "retmsg": "", "data": ans}, ensure_ascii=False) + "\n\n"
                 ConversationService.update_by_id(db, conv.id, conv.to_dict())
             except Exception as e:

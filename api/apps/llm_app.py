@@ -662,7 +662,7 @@ class LLMServiceRequest(BaseModel):
     gen_conf: dict[str, Any]
     image: str = ""
     tavily_api_key: str = ""
-    delta_stream: bool = True
+    delta_stream: bool = False
 
 
 class ChatRequest(BaseModel):
@@ -681,7 +681,7 @@ class ChatRequest(BaseModel):
     files: list[str] = []
     # 结构化输出控制
     structured_output: bool = False  # 是否使用结构化的SSE消息格式
-    delta_stream: bool = True
+    delta_stream: bool = False
 
 
 class EmbeddingsRequest(BaseModel):
