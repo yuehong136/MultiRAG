@@ -133,7 +133,6 @@ class Base(ABC):
         }
 
         gen_conf = {k: v for k, v in gen_conf.items() if k in allowed_conf}
-
         return gen_conf
 
     async def _async_chat_streamly(self, history, gen_conf, **kwargs):
@@ -152,12 +151,13 @@ class Base(ABC):
                 continue
             if not resp.choices[0].delta.content:
                 resp.choices[0].delta.content = ""
-            if kwargs.get("with_reasoning", True) and hasattr(resp.choices[0].delta, "reasoning_content") and resp.choices[0].delta.reasoning_content:
+            _reasoning = getattr(resp.choices[0].delta, "reasoning_content", None) or getattr(resp.choices[0].delta, "reasoning", None)
+            if kwargs.get("with_reasoning", True) and _reasoning:
                 ans = ""
                 if not reasoning_start:
                     reasoning_start = True
                     ans = "<think>"
-                ans += resp.choices[0].delta.reasoning_content + "</think>"
+                ans += _reasoning + "</think>"
             else:
                 reasoning_start = False
                 ans = resp.choices[0].delta.content
@@ -298,8 +298,9 @@ class Base(ABC):
                         raise Exception(f"500 response structure error. Response: {response}")
 
                     if not hasattr(response.choices[0].message, "tool_calls") or not response.choices[0].message.tool_calls:
-                        if hasattr(response.choices[0].message, "reasoning_content") and response.choices[0].message.reasoning_content:
-                            ans += "<think>" + response.choices[0].message.reasoning_content + "</think>"
+                        _reasoning = getattr(response.choices[0].message, "reasoning_content", None) or getattr(response.choices[0].message, "reasoning", None)
+                        if _reasoning:
+                            ans += "<think>" + _reasoning + "</think>"
 
                         ans += response.choices[0].message.content
                         if response.choices[0].finish_reason == "length":
@@ -374,12 +375,13 @@ class Base(ABC):
                         if not hasattr(delta, "content") or delta.content is None:
                             delta.content = ""
 
-                        if hasattr(delta, "reasoning_content") and delta.reasoning_content:
+                        _reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                        if _reasoning:
                             ans = ""
                             if not reasoning_start:
                                 reasoning_start = True
                                 ans = "<think>"
-                            ans += delta.reasoning_content + "</think>"
+                            ans += _reasoning + "</think>"
                             yield ans
                         else:
                             reasoning_start = False
@@ -1236,12 +1238,13 @@ class LiteLLMBase(ABC):
                     if not hasattr(delta, "content") or delta.content is None:
                         delta.content = ""
 
-                    if kwargs.get("with_reasoning", True) and hasattr(delta, "reasoning_content") and delta.reasoning_content:
+                    _reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                    if kwargs.get("with_reasoning", True) and _reasoning:
                         ans = ""
                         if not reasoning_start:
                             reasoning_start = True
                             ans = "<think>"
-                        ans += delta.reasoning_content + "</think>"
+                        ans += _reasoning + "</think>"
                     else:
                         reasoning_start = False
                         ans = delta.content
@@ -1361,8 +1364,9 @@ class LiteLLMBase(ABC):
                     message = response.choices[0].message
 
                     if not hasattr(message, "tool_calls") or not message.tool_calls:
-                        if hasattr(message, "reasoning_content") and message.reasoning_content:
-                            ans += f"<think>{message.reasoning_content}</think>"
+                        _reasoning = getattr(message, "reasoning_content", None) or getattr(message, "reasoning", None)
+                        if _reasoning:
+                            ans += f"<think>{_reasoning}</think>"
                         ans += message.content or ""
                         if response.choices[0].finish_reason == "length":
                             ans = self._length_stop(ans)
@@ -1442,12 +1446,13 @@ class LiteLLMBase(ABC):
                         if not hasattr(delta, "content") or delta.content is None:
                             delta.content = ""
 
-                        if hasattr(delta, "reasoning_content") and delta.reasoning_content:
+                        _reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                        if _reasoning:
                             ans = ""
                             if not reasoning_start:
                                 reasoning_start = True
                                 ans = "<think>"
-                            ans += delta.reasoning_content + "</think>"
+                            ans += _reasoning + "</think>"
                             yield ans
                         else:
                             reasoning_start = False
