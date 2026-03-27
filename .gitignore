@@ -242,6 +242,7 @@ backup/
 .trae/
 
 # Go server build output
+server_main
 bin/*
 !bin/.gitkeep
 
