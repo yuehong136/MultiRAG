@@ -151,6 +151,12 @@ class DeleteChunksRequest(BaseModel):
     chunk_ids: list[str]
 
 
+class SwitchChunksRequest(BaseModel):
+    chunk_ids: list[str]
+    available_int: int | None = None
+    available: bool | None = None
+
+
 class RetrievalTestRequest(BaseModel):
     question: str
     dataset_ids: list[str]
@@ -1307,6 +1313,45 @@ def update_chunk(
     settings.docStoreConn.upsert([chunk_id], [chunk_data], search.index_name(tenant_id), dataset_id)
 
     return get_result(data={"chunk_id": chunk_id, **req})
+
+
+@router.post("/datasets/{dataset_id}/documents/{document_id}/chunks/switch", summary="切换分块可用状态")
+def switch_chunks(
+    dataset_id: str,
+    document_id: str,
+    request: SwitchChunksRequest,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(token_required)
+):
+    """批量切换指定文档中分块的可用状态"""
+    if not KnowledgebaseService.query(db, id=dataset_id, tenant_id=tenant_id):
+        return get_error_data_result(retmsg=f"You don't own the dataset {dataset_id}.")
+
+    if not request.chunk_ids:
+        return get_error_data_result(retmsg="`chunk_ids` is required.")
+
+    if request.available_int is None and request.available is None:
+        return get_error_data_result(retmsg="`available_int` or `available` is required.")
+
+    available_int = request.available_int if request.available_int is not None else (1 if request.available else 0)
+
+    try:
+        doc = DocumentService.query(db, kb_id=dataset_id, id=document_id)
+        if not doc:
+            return get_error_data_result(retmsg="Document not found!")
+
+        for cid in request.chunk_ids:
+            if not settings.docStoreConn.update(
+                {"id": cid},
+                {"available_int": available_int},
+                search.index_name(tenant_id),
+                doc[0].kb_id,
+            ):
+                return get_error_data_result(retmsg="Index updating failure")
+
+        return get_result(data=True)
+    except Exception as e:
+        return server_error_response(e)
 
 
 @router.post("/retrieval", summary="检索测试")
