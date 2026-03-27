@@ -1,7 +1,7 @@
 [project]
 name = "multirag-cli"
 version = "0.9.9"
-description = "Admin Service's client of [MultiRAG](http://122.112.170.159:8888/scdf/ai/multrag.git). The Admin Service provides user management and system monitoring. "
+description = "Admin Service's client of [MultiRAG](https://github.com/yuehong136/MultiRAG.git). The Admin Service provides user management and system monitoring. "
 authors = [{ name = "Xiaolong Du", email = "du13013901711@163.com" }]
 license = { text = "Apache License, Version 2.0" }
 readme = "README.md"
@@ -24,4 +24,4 @@ test = [
 multirag-cli = "multirag_cli:main"
 
 [tool.setuptools]
-py-modules = ["multirag_cli", "parser"]
+py-modules = ["multirag_cli", "parser", "http_client", "multirag_client", "user"]
