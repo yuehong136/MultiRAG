@@ -16,21 +16,20 @@
 
 import logging
 import re
-import csv
-from copy import deepcopy
 from io import BytesIO
 from timeit import default_timer as timer
-from openpyxl import load_workbook
 
-from deepdoc.parser.utils import get_text
+import csv
+from markdown import markdown
+from copy import deepcopy
+from openpyxl import load_workbook
+from docx import Document
+
 from core.nlp import is_english, random_choices, qbullets_category, add_positions, has_qbullet, docx_question_level
 from core.nlp import rag_tokenizer, tokenize_table, concat_img
-from deepdoc.parser import PdfParser, ExcelParser, DocxParser
-from docx import Document
-from PIL import Image
-from markdown import markdown
-
 from common.float_utils import get_float
+from deepdoc.parser import PdfParser, ExcelParser, DocxParser
+from deepdoc.parser.utils import get_text
 
 
 class Excel(ExcelParser):
@@ -186,17 +185,6 @@ class Pdf(PdfParser):
 class Docx(DocxParser):
     def __init__(self):
         pass
-
-    def get_picture(self, document, paragraph):
-        img = paragraph._element.xpath('.//pic:pic')
-        if not img:
-            return None
-        img = img[0]
-        embed = img.xpath('.//a:blip/@r:embed')[0]
-        related_part = document.part.related_parts[embed]
-        image = related_part.image
-        image = Image.open(BytesIO(image.blob)).convert('RGB')
-        return image
 
     def __call__(self, filename, binary=None, from_page=0, to_page=100000, callback=None):
         self.doc = Document(
