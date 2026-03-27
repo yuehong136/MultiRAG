@@ -352,12 +352,13 @@ def list_datasets(
     page_size: int = Query(30, description="每页数量"),
     orderby: str = Query("create_time", description="排序字段"),
     desc: bool = Query(True, description="是否降序"),
+    include_parsing_status: bool = Query(False, description="是否包含文档解析状态计数"),
     db: Session = Depends(get_db),
     tenant_id: str = Depends(token_required)
 ):
     """
     获取数据集列表
-    
+
     Args:
         id: 数据集ID过滤（可选）
         name: 数据集名称过滤（可选）
@@ -365,21 +366,20 @@ def list_datasets(
         page_size: 每页数量
         orderby: 排序字段
         desc: 是否降序
+        include_parsing_status: 是否包含文档解析状态计数
         db: 数据库会话
         tenant_id: 租户ID
-    
+
     Returns:
         数据集列表
     """
     try:
         kb_id = id
         if kb_id:
-            kbs = KnowledgebaseService.get_kb_by_id(db, kb_id, tenant_id)
-            if not kbs:
+            if not KnowledgebaseService.get_kb_by_id(db, kb_id, tenant_id):
                 return get_error_data_result(retmsg=f"User '{tenant_id}' lacks permission for dataset '{kb_id}'")
         if name:
-            kbs = KnowledgebaseService.get_kb_by_name(db, name, tenant_id)
-            if not kbs:
+            if not KnowledgebaseService.get_kb_by_name(db, name, tenant_id):
                 return get_error_data_result(retmsg=f"User '{tenant_id}' lacks permission for dataset '{name}'")
 
         tenants = TenantService.get_joined_tenants_by_user_id(db, tenant_id)
@@ -395,9 +395,17 @@ def list_datasets(
             name,
         )
 
+        parsing_status_map = {}
+        if include_parsing_status and kbs:
+            kb_ids = [kb["id"] for kb in kbs]
+            parsing_status_map = DocumentService.get_parsing_status_by_kb_ids(db, kb_ids)
+
         response_data_list = []
         for kb in kbs:
-            response_data_list.append(remap_dictionary_keys(kb))
+            data = remap_dictionary_keys(kb)
+            if include_parsing_status:
+                data.update(parsing_status_map.get(kb["id"], {}))
+            response_data_list.append(data)
         return get_result(data=response_data_list, total=total)
     except OperationalError as e:
         logging.exception(e)

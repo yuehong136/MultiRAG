@@ -741,4 +741,5 @@ class BaseListReq(BaseModel):
         return validate_uuid1_hex(v)
 
 
-class ListDatasetReq(BaseListReq): ...
+class ListDatasetReq(BaseListReq):
+    include_parsing_status: Annotated[bool, Field(default=False)]

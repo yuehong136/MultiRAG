@@ -468,6 +468,52 @@ class DocumentService(CommonService):
         }, total
 
     @classmethod
+    def get_parsing_status_by_kb_ids(cls, db: Session, kb_ids: list[str]) -> dict[str, dict[str, int]]:
+        """Return aggregated document parsing status counts grouped by dataset (kb_id).
+
+        For each kb_id, counts documents in each run-status bucket:
+            - unstart_count  (run == "0")
+            - running_count   (run == "1")
+            - cancel_count    (run == "2")
+            - done_count      (run == "3")
+            - fail_count      (run == "4")
+
+        Returns a dict keyed by kb_id, e.g.
+            {"kb-abc": {"unstart_count": 10, "running_count": 2, ...}, ...}
+        """
+        if not kb_ids:
+            return {}
+
+        status_field_map = {
+            TaskStatus.UNSTART.value: "unstart_count",
+            TaskStatus.RUNNING.value: "running_count",
+            TaskStatus.CANCEL.value: "cancel_count",
+            TaskStatus.DONE.value: "done_count",
+            TaskStatus.FAIL.value: "fail_count",
+        }
+
+        empty_status = {v: 0 for v in status_field_map.values()}
+        result: dict[str, dict[str, int]] = {kb_id: dict(empty_status) for kb_id in kb_ids}
+
+        stmt = (
+            select(
+                cls.model.kb_id,
+                cls.model.run,
+                func.count(cls.model.id).label("cnt"),
+            )
+            .where(cls.model.kb_id.in_(kb_ids))
+            .group_by(cls.model.kb_id, cls.model.run)
+        )
+
+        for row in db.execute(stmt):
+            run_val = str(row.run)
+            field_name = status_field_map.get(run_val)
+            if field_name and row.kb_id in result:
+                result[row.kb_id][field_name] = int(row.cnt)
+
+        return result
+
+    @classmethod
     def count_by_kb_id(cls, db: Session, kb_id: str, keywords: str | None = None,
                        run_status: list | None = None, types: list | None = None) -> int:
         """
