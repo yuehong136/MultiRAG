@@ -4,7 +4,7 @@ import zipfile
 import requests
 from requests.exceptions import Timeout, RequestException
 from io import BytesIO
-import PyPDF2
+import pypdf as PyPDF2
 from docx import Document
 import olefile
 

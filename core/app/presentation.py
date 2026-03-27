@@ -20,7 +20,7 @@ import re
 from collections import defaultdict
 from io import BytesIO
 
-from PyPDF2 import PdfReader as pdf2_read
+from pypdf import PdfReader as pdf2_read
 
 from core.app.naive import by_plaintext, PARSERS
 from core.nlp import rag_tokenizer

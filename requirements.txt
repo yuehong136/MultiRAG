@@ -84,9 +84,7 @@ tika >= 2.6.0
 # 用于将 Markdown 文本转换为 HTML
 markdown >= 3.6
 # 用于处理 PDF 文件
-PyPDF2 >= 3.0.1
-# 用于处理 PDF 文件
-pypdf >= 4.3.1
+pypdf >= 6.8.0
 # openpyxl
 openpyxl >= 3.1.5
 # 用于将中文汉字转换为拼音

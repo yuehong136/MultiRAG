@@ -110,7 +110,7 @@ class FileReadError(Exception):
 
 import io
 import docx
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 from fastapi import UploadFile
 
 

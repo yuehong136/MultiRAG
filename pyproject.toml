@@ -98,7 +98,6 @@ dependencies = [
     "pyodbc>=5.2.0,<6.0.0",
     "pypandoc>=1.16",
     "pypdf>=6.8.0",
-    "pypdf2>=3.0.1,<4.0.0",
     "python-calamine>=0.4.0",
     "python-docx>=1.1.2,<2.0.0",
     "python-pptx>=1.0.2,<2.0.0",

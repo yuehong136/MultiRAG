@@ -369,17 +369,17 @@ class ReferenceService(CommonService):
             return file_content.decode('utf-8', errors='ignore')
         elif file_name.lower().endswith('.pdf'):
             try:
-                import PyPDF2
+                import pypdf
                 from io import BytesIO
 
                 pdf_file = BytesIO(file_content)
-                pdf_reader = PyPDF2.PdfReader(pdf_file)
+                pdf_reader = pypdf.PdfReader(pdf_file)
                 text = ""
                 for page_num in range(len(pdf_reader.pages)):
                     text += pdf_reader.pages[page_num].extract_text() + "\n"
                 return text
             except ImportError:
-                return "解析PDF需要PyPDF2库，请安装该库。"
+                return "解析PDF需要pypdf库，请安装该库。"
         elif file_name.lower().endswith(('.docx', '.doc')):
             try:
                 import docx
