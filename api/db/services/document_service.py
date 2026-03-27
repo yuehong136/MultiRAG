@@ -2500,11 +2500,6 @@ class DocumentService(CommonService):
         return DocMetadataService.update_document_metadata(db, doc_id, meta_fields)
 
     @classmethod
-    def get_meta_by_kbs(cls, db: Session, kb_ids):
-        """Deprecated — delegate to DocMetadataService."""
-        return DocMetadataService.get_meta_by_kbs(db, kb_ids)
-
-    @classmethod
     def get_flatted_meta_by_kbs(cls, db: Session, kb_ids: list[str]) -> dict:
         """Deprecated — delegate to DocMetadataService."""
         return DocMetadataService.get_flatted_meta_by_kbs(db, kb_ids)

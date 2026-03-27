@@ -206,30 +206,6 @@ class DocMetadataService:
     # ── aggregate reads ────────────────────────────────────────────────────────
 
     @classmethod
-    def get_meta_by_kbs(cls, db: Session, kb_ids: list[str]) -> dict:
-        """Legacy aggregator — keeps list values as string keys.
-
-        Returns: {field: {str(value_list): [doc_ids]}}
-        """
-        if not kb_ids:
-            return {}
-        tenant_id = cls._kb_tenant(db, kb_ids[0])
-        if not tenant_id:
-            return {}
-        rows = cls._store().list_by_kb_ids(db, tenant_id, kb_ids)
-        meta: dict = {}
-        for doc_id, fields in rows:
-            if not isinstance(fields, dict):
-                continue
-            for key, value in fields.items():
-                if not isinstance(value, list):
-                    value = [value]
-                if any(isinstance(vv, (list, dict)) for vv in value):
-                    continue
-                meta.setdefault(key, {}).setdefault(str(value), []).append(doc_id)
-        return meta
-
-    @classmethod
     def get_flatted_meta_by_kbs(cls, db: Session, kb_ids: list[str]) -> dict:
         """Expanded aggregator — expands list values.
 
