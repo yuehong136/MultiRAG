@@ -531,7 +531,7 @@ class DocumentService(CommonService):
     def get_all_doc_ids_by_kb_ids(cls, db: Session, kb_ids: list[str]) -> list[dict]:
         """根据知识库ID列表批量查询所有文档ID，使用分页避免内存溢出"""
         stmt = (
-            select(cls.model.id)
+            select(cls.model.id, cls.model.kb_id)
             .where(cls.model.kb_id.in_(kb_ids))
             .order_by(cls.model.create_time.asc())
         )
@@ -544,12 +544,12 @@ class DocumentService(CommonService):
             try:
                 doc_batch = db.execute(
                     stmt.offset(offset).limit(limit)
-                ).scalars().all()
+                ).all()
 
                 if not doc_batch:
                     break
 
-                res.extend([{"id": doc_id} for doc_id in doc_batch])
+                res.extend([{"id": row.id, "kb_id": row.kb_id} for row in doc_batch])
                 offset += limit
             except Exception:
                 logging.exception("Failed to get document IDs for kb_ids at offset %d", offset)
@@ -1975,7 +1975,7 @@ class DocumentService(CommonService):
 
         # Delete document metadata (non-critical, log and continue)
         try:
-            DocMetadataService.delete_document_metadata(db, doc_id)
+            DocMetadataService.delete_document_metadata(db, doc_id, doc.kb_id, tenant_id)
         except Exception as e:
             logging.warning(f"Failed to delete metadata for document {doc_id}: {e}")
 

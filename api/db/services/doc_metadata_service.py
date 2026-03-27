@@ -142,12 +142,15 @@ class DocMetadataService:
         return cls._store().upsert(db, doc_id, tenant_id, kb_id, processed)
 
     @classmethod
-    def delete_document_metadata(cls, db: Session, doc_id: str,
+    def delete_document_metadata(cls, db: Session, doc_id: str, kb_id: str,
+                                 tenant_id: str | None = None,
                                  skip_empty_check: bool = False) -> bool:
-        tenant_id, kb_id = cls._get_tenant_kb_for_doc(db, doc_id)
-        if not tenant_id:
-            logger.warning("Doc %s not found for metadata deletion", doc_id)
-            return False
+        # Get tenant_id from kb_id if not provided
+        if tenant_id is None:
+            tenant_id = cls._kb_tenant(db, kb_id)
+            if not tenant_id:
+                logger.warning("Knowledgebase %s not found for metadata deletion", kb_id)
+                return False
         return cls._store().delete(db, doc_id, tenant_id, kb_id,
                                    skip_empty_check=skip_empty_check)
 
