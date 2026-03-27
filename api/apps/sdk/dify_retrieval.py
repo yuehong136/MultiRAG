@@ -229,7 +229,7 @@ async def retrieval(
     search_mode_dict = request_data.get_search_mode_dict()
 
     # 获取元数据并处理过滤条件
-    metas = DocMetadataService.get_meta_by_kbs(db, [kb_id])
+    metas = DocMetadataService.get_flatted_meta_by_kbs(db, [kb_id])
     doc_ids: list[str] = []
 
     try:
