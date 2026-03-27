@@ -1165,7 +1165,7 @@ async def run_dataflow(db: Session, task: dict):
 
 
 @timeout(3600)
-async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_size, callback=None, doc_ids=[]):
+async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_size, callback=None, doc_ids=[], db=None):
     fake_doc_id = GRAPH_RAPTOR_FAKE_DOC_ID
 
     raptor_config = kb_parser_config.get("raptor", {})
@@ -1178,6 +1178,13 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
     res = []
     tk_count = 0
     max_errors = int(os.environ.get("RAPTOR_MAX_ERRORS", 3))
+    doc_name_by_id = {}
+    if db is not None:
+        unique_doc_ids = list(set(doc_ids))
+        if unique_doc_ids:
+            for doc in DocumentService.get_by_ids(db, unique_doc_ids, cols=["id", "name"]):
+                if doc.name:
+                    doc_name_by_id[doc.id] = doc.name
 
     async def generate(chunks, did):
         nonlocal tk_count, res
@@ -1192,11 +1199,12 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
         )
         original_length = len(chunks)
         chunks = await raptor(chunks, kb_parser_config["raptor"]["random_seed"], callback, row["id"])
+        effective_doc_name = row["name"] if did == fake_doc_id else doc_name_by_id.get(did, row["name"])
         doc = {
             "doc_id": did,
             "kb_id": [str(row["kb_id"])],
-            "docnm_kwd": row["name"],
-            "title_tks": rag_tokenizer.tokenize(row["name"]),
+            "docnm_kwd": effective_doc_name,
+            "title_tks": rag_tokenizer.tokenize(effective_doc_name),
             "raptor_kwd": "raptor"
         }
         if row["pagerank"]:
@@ -2688,6 +2696,7 @@ async def do_handle_task(db, task):
                 vector_size=vector_size,
                 callback=progress_callback,
                 doc_ids=task.get("doc_ids", []),
+                db=db,
             )
         if fake_doc_ids := task.get("doc_ids", []):
             task_doc_id = fake_doc_ids[0] # use the first document ID to represent this task for logging purposes
