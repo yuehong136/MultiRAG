@@ -34,6 +34,9 @@ def normalize_prompt_kb_id(raw_kb_id):
 def chunks_format(reference):
     if not reference or not isinstance(reference, dict):
         return []
+    raw_chunks = reference.get("chunks", [])
+    if not isinstance(raw_chunks, list):
+        return []
     return [
         {
             "id": get_value(chunk, "chunk_id", "id"),
@@ -49,7 +52,8 @@ def chunks_format(reference):
             "term_similarity": chunk.get("term_similarity"),
             "doc_type": get_value(chunk, "doc_type_kwd", "doc_type"),
         }
-        for chunk in reference.get("chunks", [])
+        for chunk in raw_chunks
+        if isinstance(chunk, dict)
     ]
 
 
