@@ -36,6 +36,7 @@ from api.utils.web_utils import (
 from base64 import b64decode
 from api.utils.crypt import decrypt
 from common.misc_utils import download_img, get_uuid
+from common.http_client import async_request
 from common import settings
 from common.connection_utils import construct_response
 from common.constants import RetCode
@@ -213,7 +214,7 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
 
 
 @router.get("/github_callback", summary="GitHub 回调")
-def github_callback(code: str, db: Session = Depends(get_db)):
+async def github_callback(code: str, db: Session = Depends(get_db)):
     """
     **Deprecated**, Use `/oauth/callback/<channel>` instead.
 
@@ -228,13 +229,16 @@ def github_callback(code: str, db: Session = Depends(get_db)):
     - 成功时返回包含访问令牌的JSON结果
     - 失败时返回错误信息
     """
-    import requests
-    res = requests.post(settings.GITHUB_OAUTH["url"],
-                        data={
-                            "client_id": settings.GITHUB_OAUTH["client_id"],
-                            "client_secret": settings.GITHUB_OAUTH["secret_key"],
-                            "code": code},
-                        headers={"Accept": "application/json"})
+    res = await async_request(
+        "POST",
+        settings.GITHUB_OAUTH["url"],
+        data={
+            "client_id": settings.GITHUB_OAUTH["client_id"],
+            "client_secret": settings.GITHUB_OAUTH["secret_key"],
+            "code": code,
+        },
+        headers={"Accept": "application/json"},
+    )
     res = res.json()
     if "error" in res:
         return HTTPException(status_code=400, detail=res["error_description"])
@@ -242,12 +246,12 @@ def github_callback(code: str, db: Session = Depends(get_db)):
     if "user:email" not in res["scope"].split(","):
         return HTTPException(status_code=400, detail="user:email not in scope")
 
-    userinfo = user_info_from_github(res["access_token"])
+    userinfo = await user_info_from_github(res["access_token"])
     user_id = get_uuid()
     users = UserService.query(db, email=userinfo["email"])
     if not users:
         try:
-            avatar = download_img(userinfo["avatar_url"])
+            avatar = await download_img(userinfo["avatar_url"])
             users = user_register(db, user_id, {
                 "access_token": get_uuid(),
                 "email": userinfo["email"],
@@ -285,7 +289,7 @@ def github_callback(code: str, db: Session = Depends(get_db)):
 
 
 @router.get("/feishu_callback", summary="飞书回调")
-def feishu_callback(code: str, db: Session = Depends(get_db)):
+async def feishu_callback(code: str, db: Session = Depends(get_db)):
     """
     飞书回调
 
@@ -298,20 +302,31 @@ def feishu_callback(code: str, db: Session = Depends(get_db)):
     - 成功时返回包含访问令牌的JSON结果
     - 失败时返回错误信息
     """
-    import requests
-    app_access_token_res = requests.post(settings.FEISHU_OAUTH["app_access_token_url"], json={
-        "app_id": settings.FEISHU_OAUTH["app_id"],
-        "app_secret": settings.FEISHU_OAUTH["app_secret"]
-    }, headers={"Content-Type": "application/json; charset=utf-8"})
+    app_access_token_res = await async_request(
+        "POST",
+        settings.FEISHU_OAUTH["app_access_token_url"],
+        json={
+            "app_id": settings.FEISHU_OAUTH["app_id"],
+            "app_secret": settings.FEISHU_OAUTH["app_secret"],
+        },
+        headers={"Content-Type": "application/json; charset=utf-8"},
+    )
     app_access_token_res = app_access_token_res.json()
     if app_access_token_res['code'] != 0:
         return HTTPException(status_code=400, detail=app_access_token_res)
 
-    res = requests.post(settings.FEISHU_OAUTH["user_access_token_url"], json={
-        "grant_type": settings.FEISHU_OAUTH["grant_type"],
-        "code": code
-    }, headers={"Content-Type": "application/json; charset=utf-8",
-                'Authorization': f"Bearer {app_access_token_res['app_access_token']}"})
+    res = await async_request(
+        "POST",
+        settings.FEISHU_OAUTH["user_access_token_url"],
+        json={
+            "grant_type": settings.FEISHU_OAUTH["grant_type"],
+            "code": code,
+        },
+        headers={
+            "Content-Type": "application/json; charset=utf-8",
+            "Authorization": f"Bearer {app_access_token_res['app_access_token']}",
+        },
+    )
     res = res.json()
     if res['code'] != 0:
         return HTTPException(status_code=400, detail=res["message"])
@@ -319,12 +334,12 @@ def feishu_callback(code: str, db: Session = Depends(get_db)):
     if "contact:user.email:readonly" not in res["data"]["scope"].split():
         return HTTPException(status_code=400, detail="contact:user.email:readonly not in scope")
 
-    userinfo = user_info_from_feishu(res["data"]["access_token"])
+    userinfo = await user_info_from_feishu(res["data"]["access_token"])
     user_id = get_uuid()
     users = UserService.query(db, email=userinfo["email"])
     if not users:
         try:
-            avatar = download_img(userinfo["avatar_url"])
+            avatar = await download_img(userinfo["avatar_url"])
             users = user_register(db, user_id, {
                 "access_token": get_uuid(),
                 "email": userinfo["email"],
@@ -413,7 +428,7 @@ def oauth_login(channel: str, request: Request):
 
 
 @router.get("/oauth/callback/{channel}", summary="OAuth回调处理")
-def oauth_callback(channel: str, code: str, state: str = None, request: Request = None, db: Session = Depends(get_db)):
+async def oauth_callback(channel: str, code: str, state: str = None, request: Request = None, db: Session = Depends(get_db)):
     """
     OAuth回调处理
 
@@ -448,7 +463,10 @@ def oauth_callback(channel: str, code: str, state: str = None, request: Request 
             return RedirectResponse(url="/?error=missing_code")
 
         # 用授权码换取访问令牌
-        token_info = auth_cli.exchange_code_for_token(code)
+        if hasattr(auth_cli, "async_exchange_code_for_token"):
+            token_info = await auth_cli.async_exchange_code_for_token(code)
+        else:
+            token_info = auth_cli.exchange_code_for_token(code)
         access_token = token_info.get("access_token")
         if not access_token:
             return RedirectResponse(url="/?error=token_failed")
@@ -456,7 +474,10 @@ def oauth_callback(channel: str, code: str, state: str = None, request: Request 
         id_token = token_info.get("id_token")
 
         # 获取用户信息
-        user_info = auth_cli.fetch_user_info(access_token, id_token=id_token)
+        if hasattr(auth_cli, "async_fetch_user_info"):
+            user_info = await auth_cli.async_fetch_user_info(access_token, id_token=id_token)
+        else:
+            user_info = auth_cli.fetch_user_info(access_token, id_token=id_token)
         if not user_info.email:
             return RedirectResponse(url="/?error=email_missing")
 
@@ -467,7 +488,7 @@ def oauth_callback(channel: str, code: str, state: str = None, request: Request 
         if not users:
             try:
                 try:
-                    avatar = download_img(user_info.avatar_url)
+                    avatar = await download_img(user_info.avatar_url)
                 except Exception as e:
                     logging.exception(e)
                     avatar = ""
@@ -751,28 +772,29 @@ def set_tenant_info(request: SetTenantInfoRequest, user=Depends(manager), db: Se
         return server_error_response(e)
 
 
-def user_info_from_github(access_token: str):
-    import requests
-
+async def user_info_from_github(access_token: str):
     headers = {"Accept": "application/json", "Authorization": f"token {access_token}"}
-    res = requests.get(
-        f"https://api.github.com/user?access_token={access_token}", headers=headers
+    res = await async_request(
+        "GET",
+        f"https://api.github.com/user?access_token={access_token}",
+        headers=headers,
     )
     user_info = res.json()
-    email_info = requests.get(
+    email_info_response = await async_request(
+        "GET",
         f"https://api.github.com/user/emails?access_token={access_token}",
         headers=headers,
-    ).json()
+    )
+    email_info = email_info_response.json()
     user_info["email"] = next(
-        (email for email in email_info if email["primary"] == True), None
+        (email for email in email_info if email["primary"]), None
     )["email"]
     return user_info
 
 
-def user_info_from_feishu(access_token: str):
-    import requests
-    headers = {"Content-Type": "application/json; charset=utf-8", 'Authorization': f"Bearer {access_token}"}
-    res = requests.get("https://open.feishu.cn/open-apis/authen/v1/user_info", headers=headers)
+async def user_info_from_feishu(access_token: str):
+    headers = {"Content-Type": "application/json; charset=utf-8", "Authorization": f"Bearer {access_token}"}
+    res = await async_request("GET", "https://open.feishu.cn/open-apis/authen/v1/user_info", headers=headers)
     user_info = res.json()["data"]
     user_info["email"] = None if user_info.get("email") == "" else user_info["email"]
     return user_info
