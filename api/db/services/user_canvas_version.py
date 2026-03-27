@@ -2,7 +2,7 @@ import json
 import logging
 import time
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from api.db.db_models import UserCanvasVersion
@@ -81,10 +81,13 @@ class UserCanvasVersionService(CommonService):
 
     @classmethod
     def delete_all_versions(cls, db: Session, user_canvas_id: str) -> bool:
-        """Keep only the latest 20 versions for the canvas and remove the rest."""
+        """Keep only the latest 20 unpublished versions and remove the rest. Released versions are always kept."""
         stmt = (
             select(cls.model.id)
-            .where(cls.model.user_canvas_id == user_canvas_id)
+            .where(
+                cls.model.user_canvas_id == user_canvas_id,
+                or_(cls.model.release == False, cls.model.release.is_(None)),  # noqa: E712
+            )
             .order_by(cls.model.create_time.desc())
         )
         try:
@@ -97,12 +100,15 @@ class UserCanvasVersionService(CommonService):
             return False
 
     @classmethod
-    def save_or_replace_latest(cls, db: Session, user_canvas_id: str, dsl, title: str | None = None, description: str | None = None):
+    def save_or_replace_latest(cls, db: Session, user_canvas_id: str, dsl, title: str | None = None, description: str | None = None, release=None):
         """
         Persist a canvas snapshot into version history.
 
         If the latest version has the same DSL content, update that version in place
         instead of creating a new row.
+
+        Exception: If the latest version is released (release=True) and current save is not,
+        create a new version to protect the released version.
         """
         try:
             normalized_dsl = cls._normalize_dsl(dsl)
@@ -114,11 +120,28 @@ class UserCanvasVersionService(CommonService):
             latest = db.execute(stmt).scalars().first()
 
             if latest and cls._normalize_dsl(latest.dsl) == normalized_dsl:
+                # Protect released version: if latest is released and current is not,
+                # create a new version instead of updating
+                if latest.release and not release:
+                    insert_data = {"user_canvas_id": user_canvas_id, "dsl": normalized_dsl}
+                    if title is not None:
+                        insert_data["title"] = title
+                    if description is not None:
+                        insert_data["description"] = description
+                    if release is not None:
+                        insert_data["release"] = release
+                    cls.insert(db, **insert_data)
+                    cls.delete_all_versions(db, user_canvas_id)
+                    return None, True
+
+                # Normal case: update existing version
                 update_data = {"dsl": normalized_dsl}
                 if title is not None:
                     update_data["title"] = title
                 if description is not None:
                     update_data["description"] = description
+                if release is not None:
+                    update_data["release"] = release
                 cls.update_by_id(db, latest.id, update_data)
                 cls.delete_all_versions(db, user_canvas_id)
                 return latest.id, False
@@ -128,6 +151,8 @@ class UserCanvasVersionService(CommonService):
                 insert_data["title"] = title
             if description is not None:
                 insert_data["description"] = description
+            if release is not None:
+                insert_data["release"] = release
             cls.insert(db, **insert_data)
             cls.delete_all_versions(db, user_canvas_id)
             return None, True

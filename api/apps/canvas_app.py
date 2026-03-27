@@ -306,6 +306,7 @@ def save(
         user_canvas_id=req["id"],
         dsl=req["dsl"],
         title=UserCanvasVersionService.build_version_title(getattr(user, "nickname", user.id), req.get("title")),
+        release=req.get("release"),
     )
     replica_ok = CanvasReplicaService.replace_for_set(
         canvas_id=req["id"],
@@ -360,6 +361,18 @@ def get(
         )
     except ValueError as e:
         return get_data_error_result(retmsg=str(e))
+
+    # Get the last publication time (latest released version's update_time)
+    last_publish_time = None
+    versions = UserCanvasVersionService.list_by_canvas_id(db, canvas_id)
+    if versions:
+        released_versions = [v for v in versions if v.release]
+        if released_versions:
+            released_versions.sort(key=lambda x: x.update_time, reverse=True)
+            last_publish_time = released_versions[0].update_time
+
+    canvas["last_publish_time"] = last_publish_time
+
     return get_json_result(data=canvas)
 
 

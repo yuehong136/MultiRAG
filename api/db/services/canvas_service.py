@@ -14,21 +14,13 @@ from sqlalchemy.sql import desc as sa_desc
 
 from agent.canvas import Canvas
 from api.db import TenantPermission, CanvasCategory
-from api.db.db_models import (
-    CanvasTemplate,
-    User,
-    UserCanvas,
-    API4Conversation,
-)
+from api.db.db_models import CanvasTemplate, User, UserCanvas, UserCanvasVersion, API4Conversation
 from api.db.services.common_service import CommonService
 from api.db.services.api_service import API4ConversationService
 from common.misc_utils import get_uuid
 from api.utils.api_utils import get_data_openai
 
 
-# ---------------------------
-# CanvasTemplateService
-# ---------------------------
 class CanvasTemplateService(CommonService):
     model = CanvasTemplate
 
@@ -45,9 +37,7 @@ class DataFlowTemplateService(CommonService):
     def __init__(self):
         super().__init__(CanvasTemplate)
 
-# ---------------------------
-# UserCanvasService
-# ---------------------------
+
 class UserCanvasService(CommonService):
     model = UserCanvas
 
@@ -67,10 +57,6 @@ class UserCanvasService(CommonService):
         title: str | None,
         canvas_category=CanvasCategory.Agent
     ):
-        """
-        等价 Peewee 版本：按 user_id(tenant) 过滤，支持 id/title 精确过滤，排序+分页，返回字典行。
-        """
-        # 选择列（与 Peewee dicts() 默认返回所有字段等价）
         columns = list(cls.model.__table__.columns)
 
         base = select(*columns).select_from(cls.model).where(cls.model.user_id == tenant_id)
@@ -91,17 +77,6 @@ class UserCanvasService(CommonService):
 
     @classmethod
     def get_all_agents_by_tenant_ids(cls, db: Session, tenant_ids: list, user_id: str):
-        """
-        根据租户ID列表获取所有有权限的Agent
-        
-        Args:
-            db: 数据库会话
-            tenant_ids: 租户ID列表
-            user_id: 用户ID
-            
-        Returns:
-            list: Agent字典列表
-        """
         # will get all permitted agents, be cautious
         fields = [
             cls.model.id,
@@ -143,10 +118,6 @@ class UserCanvasService(CommonService):
 
     @classmethod
     def get_by_canvas_id(cls, db: Session, pid: str):
-        """
-        返回 (True, dict) / (False, None)
-        等价 Peewee：join User 取 nickname / avatar
-        """
         try:
             fields = [
                 cls.model.id,
@@ -264,7 +235,29 @@ class UserCanvasService(CommonService):
         else:
             stmt = base
         rows = db.execute(stmt).mappings().all()
-        return [dict(r) for r in rows], total
+        agents_list = [dict(r) for r in rows]
+
+        # Get latest release time for each canvas
+        if agents_list:
+            canvas_ids = [a['id'] for a in agents_list]
+            release_stmt = (
+                select(
+                    UserCanvasVersion.user_canvas_id,
+                    func.max(UserCanvasVersion.create_time).label("release_time"),
+                )
+                .where(
+                    UserCanvasVersion.user_canvas_id.in_(canvas_ids),
+                    UserCanvasVersion.release == True,  # noqa: E712
+                )
+                .group_by(UserCanvasVersion.user_canvas_id)
+            )
+            release_rows = db.execute(release_stmt).all()
+            release_time_map = {r.user_canvas_id: r.release_time for r in release_rows}
+
+            for agent in agents_list:
+                agent['release_time'] = release_time_map.get(agent['id'])
+
+        return agents_list, total
 
     @classmethod
     def accessible(cls, db: Session, canvas_id: str, tenant_id: str) -> bool:

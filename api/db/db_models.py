@@ -1,11 +1,3 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： db_models.py
-@date：2024/8/7 17:00
-@desc:
-"""
 import logging
 import os
 import sys
@@ -1461,6 +1453,7 @@ class UserCanvasVersion(BaseModel):
 
     title: Mapped[str | None] = mapped_column(String(255), index=False, nullable=True, doc="Canvas title")
     description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="Canvas description")
+    release: Mapped[bool] = mapped_column(Boolean, index=True, nullable=False, default=False, doc="is released")
     dsl: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True, default={})
 
 
