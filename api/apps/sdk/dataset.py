@@ -58,7 +58,8 @@ class UpdateDatasetRequest(BaseModel):
 
 
 class DeleteDatasetRequest(BaseModel):
-    ids: list[str] | None = None  # If None, delete all; if empty array, delete none
+    ids: list[str] | None = None
+    delete_all: bool = False
 
 
 @router.post("/datasets", summary="创建数据集")
@@ -178,7 +179,12 @@ def delete(
     try:
         kb_id_instance_pairs = []
         if req["ids"] is None or len(req["ids"]) == 0:
-            return get_result()
+            if req.get("delete_all"):
+                req["ids"] = [kb.id for kb in KnowledgebaseService.query(db, tenant_id=tenant_id)]
+                if not req["ids"]:
+                    return get_result()
+            else:
+                return get_result()
 
         error_kb_ids = []
         for kb_id in req["ids"]:

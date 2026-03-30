@@ -46,6 +46,7 @@ class UpdateChatRequest(BaseModel):
 
 class DeleteChatsRequest(BaseModel):
     ids: list[str] | None = None
+    delete_all: bool = False
 
 
 @router.post("/chats", summary="创建聊天")
@@ -263,7 +264,12 @@ def delete(request: DeleteChatsRequest, db: Session = Depends(get_db), tenant_id
     req = request.model_dump()
     ids = req.get("ids")
     if not ids:
-        return get_result()
+        if req.get("delete_all") is True:
+            ids = [d.id for d in DialogService.query(db, tenant_id=tenant_id, status=StatusEnum.VALID.value)]
+            if not ids:
+                return get_result()
+        else:
+            return get_result()
 
     id_list = ids
 

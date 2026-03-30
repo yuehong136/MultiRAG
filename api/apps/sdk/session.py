@@ -50,6 +50,7 @@ class UpdateSessionRequest(BaseModel):
 
 class DeleteSessionsRequest(BaseModel):
     ids: list[str] | None = None
+    delete_all: bool = False
 
 
 class ChatCompletionRequest(BaseModel):
@@ -862,7 +863,12 @@ def delete_sessions(
 
     ids = req.get("ids")
     if not ids:
-        return get_result()
+        if req.get("delete_all") is True:
+            ids = [conv.id for conv in ConversationService.query(db, dialog_id=chat_id)]
+            if not ids:
+                return get_result()
+        else:
+            return get_result()
 
     conv_list = ids
 
@@ -908,7 +914,12 @@ def delete_agent_sessions(
 
     ids = req.get("ids")
     if not ids:
-        return get_result()
+        if req.get("delete_all") is True:
+            ids = [conv.id for conv in API4ConversationService.query(db, dialog_id=agent_id)]
+            if not ids:
+                return get_result()
+        else:
+            return get_result()
 
     conv_list = ids
 

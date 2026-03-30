@@ -122,6 +122,7 @@ class UpdateDocumentRequest(BaseModel):
 
 class DeleteDocumentsRequest(BaseModel):
     ids: list[str] | None = None
+    delete_all: bool = False
 
 
 class ParseDocumentRequest(BaseModel):
@@ -148,7 +149,8 @@ class UpdateChunkRequest(BaseModel):
 
 
 class DeleteChunksRequest(BaseModel):
-    chunk_ids: list[str]
+    chunk_ids: list[str] | None = None
+    delete_all: bool = False
 
 
 class SwitchChunksRequest(BaseModel):
@@ -778,7 +780,12 @@ def delete_documents(
     
     ids = req.get("ids")
     if not ids:
-        return get_result()
+        if req.get("delete_all") is True:
+            ids = [doc.id for doc in DocumentService.query(db, kb_id=dataset_id)]
+            if not ids:
+                return get_result()
+        else:
+            return get_result()
 
     doc_ids = ids
     
@@ -1220,7 +1227,17 @@ def rm_chunk(
     
     chunk_ids = req.get("chunk_ids")
     if not chunk_ids:
-        return get_result()
+        if req.get("delete_all") is True:
+            doc_obj = doc[0]
+            # Clean up storage assets while index rows still exist for discovery
+            DocumentService.delete_chunk_images(doc_obj, search.index_name(tenant_id))
+            condition = {"doc_id": document_id}
+            chunk_number = settings.docStoreConn.delete(condition, search.index_name(tenant_id), dataset_id)
+            if chunk_number != 0:
+                DocumentService.decrement_chunk_num(db, document_id, dataset_id, 1, chunk_number, 0)
+            return get_result(retmsg=f"deleted {chunk_number} chunks")
+        else:
+            return get_result()
 
     unique_chunk_ids, duplicate_messages = check_duplicate_ids(chunk_ids, "chunk")
     settings.docStoreConn.delete({"id": unique_chunk_ids}, search.index_name(tenant_id), dataset_id)

@@ -64,7 +64,8 @@ class SwitchChunkRequest(BaseModel):
 
 class RmChunkRequest(BaseModel):
     doc_id: str
-    chunk_ids: list[str]
+    chunk_ids: list[str] | None = None
+    delete_all: bool = False
 
 
 class CreateChunkRequest(BaseModel):
@@ -1065,14 +1066,36 @@ def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(mana
     """
     req = request.model_dump()
     try:
-        deleted_chunk_ids = req["chunk_ids"]
+        deleted_chunk_ids = req.get("chunk_ids")
         if isinstance(deleted_chunk_ids, list):
             unique_chunk_ids = list(dict.fromkeys(deleted_chunk_ids))
             has_ids = len(unique_chunk_ids) > 0
-        else:
+        elif deleted_chunk_ids is not None:
             unique_chunk_ids = [deleted_chunk_ids]
             has_ids = deleted_chunk_ids not in (None, "")
+        else:
+            unique_chunk_ids = []
+            has_ids = False
         if not has_ids:
+            if req.get("delete_all") is True:
+                doc = DocumentService.get_by_id(db, req["doc_id"])
+                if not doc:
+                    return get_data_error_result(retmsg="Document not found!")
+                kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
+                if not kb:
+                    return get_data_error_result(retmsg="KnowledgeBase not found!")
+                tenant_id = DocumentService.get_tenant_id(db, req["doc_id"])
+                collection_name = search.index_name_one(tenant_id, kb.name)
+                # Clean up storage assets
+                DocumentService.delete_chunk_images(doc, collection_name)
+                condition = {"doc_id": req["doc_id"]}
+                try:
+                    deleted_count = settings.docStoreConn.delete(condition, collection_name, doc.kb_id)
+                except Exception:
+                    return get_data_error_result(retmsg="Chunk deleting failure")
+                if deleted_count > 0:
+                    DocumentService.decrement_chunk_num(db, doc.id, doc.kb_id, 1, deleted_count, 0)
+                return get_json_result(data=True)
             return get_json_result(data=True)
 
         doc = DocumentService.get_by_id(db, req["doc_id"])
