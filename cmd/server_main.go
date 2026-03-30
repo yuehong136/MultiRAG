@@ -39,6 +39,7 @@ func printHelp() {
 	fmt.Fprintf(os.Stderr, "\nExamples:\n")
 	fmt.Fprintf(os.Stderr, "  %s           # Start server with config file port\n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "  %s -p 8080   # Start server on port 8080\n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "  %s --port 8080 # Start server on port 8080\n", os.Args[0])
 }
 
 func main() {

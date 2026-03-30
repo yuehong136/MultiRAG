@@ -744,6 +744,66 @@ class MultiRAGClient:
         else:
             print(f"Fail to list environments, code: {res_json.get('code')}, message: {res_json.get('message')}")
 
+    def show_fingerprint(self, command: dict):
+        if self.server_type != "admin":
+            print("This command is only allowed in ADMIN mode")
+            return
+        response = self.http_client.request("GET", "admin/fingerprint", use_api_base=True, auth_kind="admin")
+        res_json = response.json()
+        if response.status_code == 200:
+            self._print_table_simple(res_json["data"])
+        else:
+            print(f"Fail to show fingerprint, code: {res_json['code']}, message: {res_json['message']}")
+
+    def set_license(self, command: dict):
+        if self.server_type != "admin":
+            print("This command is only allowed in ADMIN mode")
+            return
+        license = command["license"]
+        response = self.http_client.request("POST", "admin/license", json_body={"license": license}, use_api_base=True, auth_kind="admin")
+        res_json = response.json()
+        if response.status_code == 200:
+            print("Set license successfully")
+        else:
+            print(f"Fail to set license, code: {res_json['code']}, message: {res_json['message']}")
+
+    def set_license_config(self, command: dict):
+        if self.server_type != "admin":
+            print("This command is only allowed in ADMIN mode")
+            return
+        value1 = command["value1"]
+        value2 = command["value2"]
+        response = self.http_client.request("POST", "admin/license/config",
+                                            json_body={"value1": value1, "value2": value2}, use_api_base=True,
+                                            auth_kind="admin")
+        res_json = response.json()
+        if response.status_code == 200:
+            print("Set license config successfully")
+        else:
+            print(f"Fail to set license config, code: {res_json['code']}, message: {res_json['message']}")
+
+    def show_license(self, command: dict):
+        if self.server_type != "admin":
+            print("This command is only allowed in ADMIN mode")
+            return
+        response = self.http_client.request("GET", "admin/license", use_api_base=True, auth_kind="admin")
+        res_json = response.json()
+        if response.status_code == 200:
+            self._print_table_simple(res_json["data"])
+        else:
+            print(f"Fail to show license, code: {res_json['code']}, message: {res_json['message']}")
+
+    def check_license(self, command: dict):
+        if self.server_type != "admin":
+            print("This command is only allowed in ADMIN mode")
+            return
+        response = self.http_client.request("GET", "admin/license?check=true", use_api_base=True, auth_kind="admin")
+        res_json = response.json()
+        if response.status_code == 200:
+            print(res_json["data"])
+        else:
+            print(f"Fail to check license, code: {res_json['code']}, message: {res_json['message']}")
+
     def generate_key(self, command: dict[str, Any]) -> None:
         if self.server_type != "admin":
             print("This command is only allowed in ADMIN mode")
@@ -1520,6 +1580,16 @@ def run_command(client: MultiRAGClient, command_dict: dict):
             client.list_configs(command_dict)
         case "list_environments":
             client.list_environments(command_dict)
+        case "show_fingerprint":
+            client.show_fingerprint(command_dict)
+        case "set_license":
+            client.set_license(command_dict)
+        case "set_license_config":
+            client.set_license_config(command_dict)
+        case "show_license":
+            client.show_license(command_dict)
+        case "check_license":
+            client.check_license(command_dict)
         case "generate_key":
             client.generate_key(command_dict)
         case "list_keys":

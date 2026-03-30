@@ -76,6 +76,11 @@ sql_command: login_user
            | parse_dataset_docs
            | parse_dataset_sync
            | parse_dataset_async
+           | show_fingerprint
+           | set_license
+           | set_license_config
+           | show_license
+           | check_license
            | benchmark
 
 // meta command definition
@@ -155,6 +160,10 @@ ASYNC: "ASYNC"i
 SYNC: "SYNC"i
 SESSION: "SESSION"i
 SESSIONS: "SESSIONS"i
+FINGERPRINT: "FINGERPRINT"i
+LICENSE: "LICENSE"i
+CHECK: "CHECK"i
+CONFIG: "CONFIG"i
 BENCHMARK: "BENCHMARK"i
 AS: "AS"i
 RESET: "RESET"i
@@ -196,6 +205,12 @@ show_variable: SHOW VAR identifier ";"
 list_variables: LIST VARS ";"
 list_configs: LIST CONFIGS ";"
 list_environments: LIST ENVS ";"
+
+show_fingerprint: SHOW FINGERPRINT ";"
+set_license: SET LICENSE quoted_string ";"
+set_license_config: SET LICENSE CONFIG NUMBER NUMBER ";"
+show_license: SHOW LICENSE ";"
+check_license: CHECK LICENSE ";"
 
 generate_key: GENERATE KEY FOR USER quoted_string ";"
 list_keys: LIST KEYS OF quoted_string ";"
@@ -398,6 +413,24 @@ class MultiRAGCLITransformer(Transformer):
 
     def list_environments(self, items):
         return {"type": "list_environments"}
+
+    def show_fingerprint(self, items):
+        return {"type": "show_fingerprint"}
+
+    def set_license(self, items):
+        license = items[2].children[0].strip("'\"")
+        return {"type": "set_license", "license": license}
+
+    def set_license_config(self, items):
+        value1: int = int(items[3])
+        value2: int = int(items[4])
+        return {"type": "set_license_config", "value1": value1, "value2": value2}
+
+    def show_license(self, items):
+        return {"type": "show_license"}
+
+    def check_license(self, items):
+        return {"type": "check_license"}
 
     def generate_key(self, items):
         user_name = items[4]
