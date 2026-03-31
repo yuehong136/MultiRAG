@@ -310,7 +310,9 @@ def process_business_datasets(
                 elif dimension_output["dimType"].lower() == "time":
                     original_values = dimension_values.get(dimension_id, [])
                     dimension_output["sampleValues"] = original_values[:5]
-                if not dimension.get("hasPermission", True):
+                has_permission = dimension.get("hasPermission", True)
+                dimension_output["hasPermission"] = has_permission
+                if not has_permission:
                     dimension_output["hasPermission"] = False
                     dimension_output["permissionDesc"] = "当前用户无权限访问此维度，在生成SQL时不允许使用此维度"
                 dimensions_output.append(dimension_output)
@@ -329,7 +331,9 @@ def process_business_datasets(
                 metric_output["formatting"] = metric.get("formatting")
                 metric_output["fromModel"] = metric.get("modelName")
                 metric_output["fromModelId"] = metric.get("modelId")
-                if not metric.get("hasPermission", True):
+                has_permission = metric.get("hasPermission", True)
+                metric_output["hasPermission"] = has_permission
+                if not has_permission:
                     metric_output["hasPermission"] = False
                     metric_output["permissionDesc"] = "当前用户无权限访问此指标，在生成SQL时不允许使用此指标"
                 else:

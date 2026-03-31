@@ -22,6 +22,7 @@ class NLQToInitialSQLGenerator:
 
     # JSON模式，匹配JSON代码块
     JSON_PATTERN = re.compile(r'```json\s*([\s\S]*?)```')
+    PERMISSION_FIELD_PATTERN = re.compile(r'\[([^\[\]]+)\]')
 
     def __init__(self, db: Session, user_id: Any, prompt_dir: str = None, database_type: str = "PostgreSQL"):
         """
@@ -121,6 +122,66 @@ class NLQToInitialSQLGenerator:
 
         return result
 
+    def _build_permission_index(self, semantic_layer: dict[str, Any]) -> dict[str, bool]:
+        """
+        从语义层中提取字段权限索引，兼容按名称、物理字段名和ID检索。
+        """
+        permission_index: dict[str, bool] = {}
+
+        for dataset in semantic_layer.get("businessDatasets", []) or []:
+            for field_group in ("dimensions", "metrics"):
+                for field in dataset.get(field_group, []) or []:
+                    has_permission = field.get("hasPermission", True)
+                    for key in (field.get("name"), field.get("field"), field.get("id")):
+                        if key:
+                            permission_index[str(key)] = bool(has_permission)
+
+        return permission_index
+
+    def _is_permission_denial_grounded(self, json_data: dict[str, Any], semantic_layer: dict[str, Any]) -> bool:
+        """
+        判断模型返回的权限拒绝是否和语义层中的权限标记一致。
+        """
+        if json_data.get("errorCode") != "CRITICAL_PERMISSION_DENIED":
+            return True
+
+        permission_index = self._build_permission_index(semantic_layer)
+        denied_fields = {name for name, has_permission in permission_index.items() if not has_permission}
+        if not denied_fields:
+            return False
+
+        error_message = json_data.get("errorMessage") or ""
+        referenced_fields = {
+            field_name.strip()
+            for field_name in self.PERMISSION_FIELD_PATTERN.findall(error_message)
+            if field_name and field_name.strip()
+        }
+        if not referenced_fields:
+            return False
+
+        return referenced_fields.issubset(denied_fields)
+
+    def _build_permission_correction_prompt(self, semantic_layer: dict[str, Any]) -> str:
+        """
+        构建一条简短的纠正指令，用于多轮对话重试。
+        不重复原始 prompt，仅指出错误并要求重新生成。
+        """
+        permission_index = self._build_permission_index(semantic_layer)
+        denied_fields = sorted({name for name, has_permission in permission_index.items() if not has_permission})
+
+        if denied_fields:
+            return (
+                "你的回答有误。语义层中只有以下字段被明确标记为 hasPermission=false："
+                f"{', '.join(denied_fields)}。"
+                "你所引用的字段并不在此列表中，不能返回 CRITICAL_PERMISSION_DENIED。"
+                "请基于上述语义层信息重新生成可执行的 SQL 查询 JSON。"
+            )
+        return (
+            "你的回答有误。语义层中所有维度和指标的 hasPermission 均为 true，"
+            "没有任何字段被标记为无权限。你不能返回 CRITICAL_PERMISSION_DENIED。"
+            "请基于上述语义层信息重新生成可执行的 SQL 查询 JSON。"
+        )
+
     async def generate_sql_query(self, user_query: str, semantic_layer: dict[str, Any],
                                 llm_name: str, recommended_chart: str) -> \
             dict[str, Any] | None:
@@ -166,27 +227,34 @@ class NLQToInitialSQLGenerator:
                 logger.info("PerfCache命中，跳过LLM调用 [sql_generation]")
                 return cached
 
-            history = [{"role": "user", "content": prompt}]
             gen_conf = {
                 "temperature": 0.1,
                 "top_p": 0.9,
                 "max_tokens": 4096
             }
 
-            # 定义在独立线程中执行的函数，使用独立的数据库会话
-            def _chat_in_thread():
-                # 在线程中创建独立的数据库会话和LLM实例
-                # 这样可以避免多线程共享数据库会话导致的事务状态冲突
-                with db_connection() as thread_db:
-                    model_config = get_model_config_by_type_and_name(thread_db, self.user_id, LLMType.CHAT.value, llm_name)
-                    thread_llm_instance = LLMBundle(thread_db, self.user_id, model_config)
-                    return thread_llm_instance.chat(
-                        system="你是一个专业的SQL专家。请根据用户需求和语义层信息生成准确的SQL查询JSON对象。",
-                        history=history,
-                        gen_conf=gen_conf
-                    )
+            async def _request_llm(history: list[dict[str, str]]) -> str:
+                def _chat_in_thread():
+                    # 在线程中创建独立的数据库会话和LLM实例
+                    # 这样可以避免多线程共享数据库会话导致的事务状态冲突
+                    with db_connection() as thread_db:
+                        model_config = get_model_config_by_type_and_name(
+                            thread_db,
+                            self.user_id,
+                            LLMType.CHAT.value,
+                            llm_name
+                        )
+                        thread_llm_instance = LLMBundle(thread_db, self.user_id, model_config)
+                        return thread_llm_instance.chat(
+                            system="你是一个专业的SQL专家。请根据用户需求和语义层信息生成准确的SQL查询JSON对象。",
+                            history=history,
+                            gen_conf=gen_conf
+                        )
 
-            response = await thread_pool_exec(_chat_in_thread)
+                return await thread_pool_exec(_chat_in_thread)
+
+            initial_history = [{"role": "user", "content": prompt}]
+            response = await _request_llm(initial_history)
             logger.debug("[sql_generation] LLM原始响应: %s", response)
 
             json_response = self._extract_llm_response_json(response)
@@ -194,8 +262,27 @@ class NLQToInitialSQLGenerator:
                 logger.error(f"无法从LLM的响应中提取JSON")
                 return None
             if json_response.get("status") == "failed":
-                logger.error(f"生成SQL失败: {json_response.get('errorMessage')}")
-                return json_response
+                if not self._is_permission_denial_grounded(json_response, semantic_layer):
+                    logger.warning(
+                        "检测到未经语义层权限支持的权限拒绝，触发多轮纠正重试。error=%s",
+                        json_response.get("errorMessage")
+                    )
+                    correction = self._build_permission_correction_prompt(semantic_layer)
+                    retry_history = [
+                        {"role": "user", "content": prompt},
+                        {"role": "assistant", "content": response},
+                        {"role": "user", "content": correction},
+                    ]
+                    retry_response = await _request_llm(retry_history)
+                    logger.debug("[sql_generation] 权限误判重试响应: %s", retry_response)
+                    retry_json_response = self._extract_llm_response_json(retry_response)
+                    if retry_json_response:
+                        json_response = retry_json_response
+
+                if json_response.get("status") == "failed":
+                    logger.error(f"生成SQL失败: {json_response.get('errorMessage')}")
+                    return json_response
+
             validated_data = self._parse_and_validate_llm_json(json_response)
             if not validated_data:
                 logger.error(f"提取的JSON未能通过验证。原始JSON: {json_response}")
