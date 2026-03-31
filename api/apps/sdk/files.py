@@ -79,8 +79,8 @@ def upload_files(
     file_res = []
 
     try:
-        e, pf_folder = FileService.get_by_id(db, pf_id)
-        if not e:
+        pf_folder = FileService.get_by_id(db, pf_id)
+        if not pf_folder:
             return get_error_data_result(retmsg="Can't find this folder!")
 
         for file_obj in files:
@@ -253,7 +253,7 @@ def list_files(
         FileService.init_knowledgebase_docs(db, pf_id, tenant_id)
 
     try:
-        file = FileService.get_by_id(pf_id)
+        file = FileService.get_by_id(db, pf_id)
         if not file:
             return get_error_data_result(retmsg="Folder not found!")
 
@@ -284,7 +284,7 @@ def get_root_folder(
         根文件夹信息
     """
     try:
-        root_folder = FileService.get_root_folder(tenant_id)
+        root_folder = FileService.get_root_folder(db, tenant_id)
         return get_result(data={"root_folder": root_folder})
     except Exception as e:
         return server_error_response(e)
@@ -308,11 +308,11 @@ def get_parent_folder(
         父文件夹信息
     """
     try:
-        e, file = FileService.get_by_id(file_id)
-        if not e:
+        file = FileService.get_by_id(db, file_id)
+        if not file:
             return get_error_data_result(retmsg="Folder not found!")
 
-        parent_folder = FileService.get_parent_folder(file_id)
+        parent_folder = FileService.get_parent_folder(db, file_id)
         return get_result(data={"parent_folder": parent_folder.to_json()})
     except Exception as e:
         return server_error_response(e)
@@ -326,21 +326,21 @@ def get_all_parent_folders(
 ):
     """
     获取文件的所有父文件夹
-    
+
     Args:
         file_id: 文件ID
         db: 数据库会话
         tenant_id: 租户ID
-    
+
     Returns:
         所有父文件夹列表
     """
     try:
-        e, file = FileService.get_by_id(file_id)
-        if not e:
+        file = FileService.get_by_id(db, file_id)
+        if not file:
             return get_error_data_result(retmsg="Folder not found!")
 
-        parent_folders = FileService.get_all_parent_folders(file_id)
+        parent_folders = FileService.get_all_parent_folders(db, file_id)
         parent_folders_res = [folder.to_json() for folder in parent_folders]
         return get_result(data={"parent_folders": parent_folders_res})
     except Exception as e:
@@ -367,38 +367,58 @@ def delete_files(
     req = request.model_dump()
     file_ids = req["file_ids"]
     
+    def _delete_single_file(file) -> tuple[bool, str | None]:
+        try:
+            if file.location:
+                settings.STORAGE_IMPL.rm(file.parent_id, file.location)
+        except Exception:
+            # Best-effort cleanup for user file objects; DB-side deletion still proceeds.
+            pass
+
+        informs = File2DocumentService.get_by_file_id(db, file.id)
+        for inform in informs:
+            doc_id = inform.document_id
+            doc = DocumentService.get_by_id(db, doc_id)
+            if not doc:
+                return False, "Document not found!"
+            doc_tenant_id = DocumentService.get_tenant_id(db, doc_id)
+            if not doc_tenant_id:
+                return False, "Tenant not found!"
+            if not DocumentService.remove_document(db, doc, doc_tenant_id):
+                return False, "Database error (Document removal)!"
+
+        if not FileService.delete(db, file):
+            return False, "Database error (File removal)!"
+        return True, None
+
+    def _delete_folder_recursive(folder) -> tuple[bool, str | None]:
+        sub_files = FileService.list_all_files_by_parent_id(db, folder.id)
+        for sub_file in sub_files:
+            if sub_file.type == FileType.FOLDER.value:
+                ok, err = _delete_folder_recursive(sub_file)
+            else:
+                ok, err = _delete_single_file(sub_file)
+            if not ok:
+                return ok, err
+        if not FileService.delete(db, folder):
+            return False, "Database error (Folder removal)!"
+        return True, None
+
     try:
         for file_id in file_ids:
-            e, file = FileService.get_by_id(file_id)
-            if not e:
+            file = FileService.get_by_id(db, file_id)
+            if not file:
                 return get_error_data_result(retmsg="File or Folder not found!")
             if not file.tenant_id:
                 return get_error_data_result(retmsg="Tenant not found!")
 
             if file.type == FileType.FOLDER.value:
-                file_id_list = FileService.get_all_innermost_file_ids(file_id, [])
-                for inner_file_id in file_id_list:
-                    e, file = FileService.get_by_id(inner_file_id)
-                    if not e:
-                        return get_error_data_result(retmsg="File not found!")
-                    settings.STORAGE_IMPL.rm(file.parent_id, file.location)
-                FileService.delete_folder_by_pf_id(tenant_id, file_id)
+                ok, err = _delete_folder_recursive(file)
             else:
-                settings.STORAGE_IMPL.rm(file.parent_id, file.location)
-                if not FileService.delete(file):
-                    return get_error_data_result(retmsg="Database error (File removal)!")
+                ok, err = _delete_single_file(file)
 
-            informs = File2DocumentService.get_by_file_id(file_id)
-            for inform in informs:
-                doc_id = inform.document_id
-                e, doc = DocumentService.get_by_id(doc_id)
-                if not e:
-                    return get_error_data_result(retmsg="Document not found!")
-                doc_tenant_id = DocumentService.get_tenant_id(doc_id)
-                if not doc_tenant_id:
-                    return get_error_data_result(retmsg="Tenant not found!")
-                if not DocumentService.remove_document(doc, doc_tenant_id):
-                    return get_error_data_result(retmsg="Database error (Document removal)!")
+            if not ok:
+                return get_error_data_result(retmsg=err or "Delete file failed!")
 
         return get_result(data=True)
     except Exception as e:
@@ -434,11 +454,11 @@ def rename_file(
         if file.type != FileType.FOLDER.value and pathlib.Path(req["name"].lower()).suffix != pathlib.Path(file.name.lower()).suffix:
             return get_error_data_result(retmsg="The extension of file can't be changed")
 
-        for existing_file in FileService.query(db, name=req["name"], pf_id=file.parent_id):
+        for existing_file in FileService.query(db, name=req["name"], parent_id=file.parent_id):
             if existing_file.name == req["name"]:
                 return get_error_data_result(retmsg="Duplicated file name in the same folder.", retcode=RetCode.CONFLICT)
 
-        if not FileService.update_by_id(req["file_id"], {"name": req["name"]}):
+        if not FileService.update_by_id(db, req["file_id"], {"name": req["name"]}):
             return get_error_data_result(retmsg="Database error (File rename)!")
 
         informs = File2DocumentService.get_by_file_id(db, req["file_id"])
@@ -469,13 +489,13 @@ def download_file(
         文件流
     """
     try:
-        e, file = FileService.get_by_id(file_id)
-        if not e:
+        file = FileService.get_by_id(db, file_id)
+        if not file:
             return get_error_data_result(retmsg="Document not found!")
 
         blob = settings.STORAGE_IMPL.get(file.parent_id, file.location)
         if not blob:
-            b, n = File2DocumentService.get_storage_address(file_id=file_id)
+            b, n = File2DocumentService.get_storage_address(db, file_id=file_id)
             blob = settings.STORAGE_IMPL.get(b, n)
 
         # 确定文件的MIME类型
@@ -565,8 +585,8 @@ def move_files(
             if not file.tenant_id:
                 return get_error_data_result(retmsg="Tenant not found!")
 
-        fe, _ = FileService.get_by_id(db, parent_id)
-        if not fe:
+        parent_folder = FileService.get_by_id(db, parent_id)
+        if not parent_folder:
             return get_error_data_result(retmsg="Parent Folder not found!")
 
         FileService.move_file(db, file_ids, parent_id)

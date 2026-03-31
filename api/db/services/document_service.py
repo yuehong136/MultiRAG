@@ -1963,7 +1963,7 @@ class DocumentService(CommonService):
         return Document(**doc)
 
     @classmethod
-    def delete_chunk_images(cls, doc: Document, collection_name: str):
+    def delete_chunk_images(cls, doc: Document | DeleteDocumentSnapshot, collection_name: str):
         """删除文档关联的 chunk 图片"""
         page = 0
         page_size = 1000
@@ -2103,7 +2103,7 @@ class DocumentService(CommonService):
                     orphan_file_payloads.append(
                         OrphanFilePayload(
                             file_id=file_id,
-                            bucket=file_row["parent_id"],
+                            bucket=doc_row["kb_id"],
                             location=file_row["location"] or "",
                         )
                     )
