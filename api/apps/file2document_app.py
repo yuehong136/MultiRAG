@@ -1,11 +1,3 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： file2document_app.py
-@date：2025/7/17 9:53
-@desc:
-"""
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -67,7 +59,6 @@ def convert(
                     if not DocumentService.remove_document(db, doc, tenant_id):
                         return get_data_error_result(
                             retmsg="Database error (Document removal)!")
-                File2DocumentService.delete_by_file_id(db, id)
 
                 # 插入
                 for kb_id in kb_ids:
@@ -130,7 +121,6 @@ def rm(
             for inform in informs:
                 if not inform:
                     return get_data_error_result(retmsg="Inform not found!")
-                File2DocumentService.delete_by_file_id(db, file_id)
                 doc_id = inform.document_id
                 doc = DocumentService.get_by_id(db, doc_id)
                 if not doc:

@@ -13,7 +13,6 @@ from common.constants import FileSource, StatusEnum
 from api.db.db_models import File, get_db
 from api.db.services.document_service import DocumentService, queue_raptor_o_graphrag_tasks
 from api.db.services.task_service import GRAPH_RAPTOR_FAKE_DOC_ID, TaskService
-from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import TenantService
@@ -205,17 +204,6 @@ def delete(
                 if not DocumentService.remove_document(db, doc, tenant_id):
                     errors.append(f"Remove document '{doc.id}' error for dataset '{kb_id}'")
                     continue
-                f2d = File2DocumentService.get_by_document_id(db, doc.id)
-                if f2d:
-                    FileService.filter_delete(
-                        db,
-                        [
-                            File.source_type == FileSource.KNOWLEDGEBASE,
-                            File.id == f2d[0].file_id,
-                        ]
-                    )
-
-                File2DocumentService.delete_by_document_id(db, doc.id)
             FileService.filter_delete(
                 db, 
                 [File.source_type == FileSource.KNOWLEDGEBASE, File.type == "folder", File.name == kb.name]

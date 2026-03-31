@@ -14,8 +14,8 @@ from sqlalchemy.orm import Session
 
 from api.constants import NAME_LENGTH_LIMIT
 from api.db import FileType
-from common.constants import ParserType, FileSource, TaskStatus, StatusEnum
-from api.db.db_models import File, get_db, db_connection
+from common.constants import ParserType, TaskStatus, StatusEnum
+from api.db.db_models import get_db, db_connection
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
@@ -201,9 +201,6 @@ def remove_dataset(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="There was an error during the document removal process. Please check the status of the RAGFlow server and try the removal again."
                 )
-            f2d = File2DocumentService.get_by_document_id(db, doc.id)
-            FileService.filter_delete(db, [File.source_type == FileSource.KNOWLEDGEBASE, File.id == f2d[0].file_id])
-            File2DocumentService.delete_by_document_id(db, doc.id)
 
         if not KnowledgebaseService.delete_by_id(db, dataset_id):
             raise HTTPException(
@@ -462,7 +459,7 @@ def delete_document(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                                 detail=f"You cannot delete this document {document_id} due to the authorization reason!")
 
-        real_dataset_id, location = File2DocumentService.get_storage_address(db, doc_id=document_id)
+        real_dataset_id, _location = File2DocumentService.get_storage_address(db, doc_id=document_id)
         if real_dataset_id != dataset_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                                 detail=f"The document {document_id} is not in the dataset: {dataset_id}, but in the dataset: {real_dataset_id}.")
@@ -472,12 +469,6 @@ def delete_document(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="There was an error during the document removal process. Please check the status of the RAGFlow server and try the removal again."
             )
-
-        file_to_doc = File2DocumentService.get_by_document_id(db, document_id)
-        FileService.filter_delete(db, [File.source_type == FileSource.KNOWLEDGEBASE, File.id == file_to_doc[0].file_id])
-        File2DocumentService.delete_by_document_id(db, document_id)
-
-        settings.STORAGE_IMPL.rm(dataset_id, location)
     except Exception as e:
         errors += str(e)
 

@@ -13,7 +13,6 @@ from api.db.db_models import File, get_db
 from api.db.services.connector_service import Connector2KbService
 from api.db.services.document_service import DocumentService, queue_raptor_o_graphrag_tasks
 from api.db.services.doc_metadata_service import DocMetadataService
-from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
 from api.db.services.task_service import TaskService, GRAPH_RAPTOR_FAKE_DOC_ID
@@ -29,7 +28,7 @@ from api.apps import manager
 from api.constants import DATASET_NAME_LIMIT, MILVUS_NAME_PATTERN
 from core.nlp import search
 from core.utils.redis_conn import REDIS_CONN
-from common.constants import RetCode, PipelineTaskType, StatusEnum, VALID_TASK_STATUS, FileSource, LLMType, PAGERANK_FLD
+from common.constants import RetCode, PipelineTaskType, StatusEnum, VALID_TASK_STATUS, FileSource, LLMType
 from common.doc_store.doc_store_base import OrderByExpr
 from common.metadata_utils import turn2jsonschema
 from common import settings
@@ -205,7 +204,7 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
     try:
         if not KnowledgebaseService.query(db, created_by=user.id, id=req_data["kb_id"]):
             return get_json_result(
-                data=False, retmsg=f'Only owner of dataset authorized for this operation.',
+                data=False, retmsg='Only owner of dataset authorized for this operation.',
                 retcode=RetCode.OPERATING_ERROR)
 
         kb = KnowledgebaseService.get_by_id(db, req_data["kb_id"])
@@ -344,7 +343,7 @@ def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
                 break
         else:
             return get_json_result(
-                data=False, retmsg=f'Only owner of dataset authorized for this operation.',
+                data=False, retmsg='Only owner of dataset authorized for this operation.',
                 retcode=RetCode.OPERATING_ERROR)
         kb = KnowledgebaseService.get_detail(db, kb_id)
         if not kb:
@@ -438,7 +437,7 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
         if not kbs:
             # 如果知识库不存在或用户无权限删除，返回错误信息
             return get_json_result(
-                data=False, retmsg=f'Only owner of dataset authorized for this operation.',
+                data=False, retmsg='Only owner of dataset authorized for this operation.',
                 retcode=RetCode.OPERATING_ERROR)
 
         # 提前保存知识库名称，避免访问被删除对象
@@ -447,25 +446,11 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
         kb_tenant_id = kbs[0].tenant_id
         db_type = settings.docStoreConn.db_type()
         is_tenant_scoped = db_type in {"elasticsearch", "opensearch"}
-        storage_fallback_targets: list[tuple[str, str]] = []
-
         # 遍历知识库中的所有文档，进行删除
         for doc in DocumentService.query(db, kb_id=req_data["kb_id"]):
-            doc_id = doc.id  # 提前保存文档 ID，避免后续访问被删除的对象
-
-            b, n = File2DocumentService.get_storage_address(db, doc_id=doc_id)
-            storage_fallback_targets.append((b, n))
-
             # 删除文档，如果失败则返回错误信息
             if not DocumentService.remove_document(db, doc, kbs[0].tenant_id):
                 return get_data_error_result(retmsg="Database error (Document removal)!")
-
-            # 查询与文档关联的文件，并删除这些文件
-            f2d = File2DocumentService.get_by_document_id(db, doc_id)
-            if f2d:
-                FileService.filter_delete(db, [File.source_type == FileSource.KNOWLEDGEBASE, File.id == f2d[0].file_id])
-            # 删除文档与文件的关联记录
-            File2DocumentService.delete_by_document_id(db, doc_id)
         FileService.filter_delete(
             db,
             [
@@ -475,20 +460,11 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
                 File.name == kb_name,
             ]
         )
-        bucket_removed = False
         if hasattr(settings.STORAGE_IMPL, "remove_bucket"):
             try:
                 settings.STORAGE_IMPL.remove_bucket(kb_id)
-                bucket_removed = True
             except Exception as e:
                 logging.warning(f"Failed to remove bucket for dataset {kb_id}: {e}")
-
-        if not bucket_removed:
-            for bucket, name in storage_fallback_targets:
-                try:
-                    settings.STORAGE_IMPL.rm(bucket, name)
-                except Exception as e:
-                    logging.warning(f"Failed to remove source object {bucket}/{name} for dataset {kb_id}: {e}")
 
         # Delete the index BEFORE deleting the database record
         tenants = UserTenantService.query(db, user_id=user.id)

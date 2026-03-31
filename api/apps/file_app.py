@@ -1,11 +1,3 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： file_app.py
-@date：2025/7/17 13:50
-@desc:
-"""
 import logging
 import os
 import pathlib
@@ -445,7 +437,6 @@ def rm(
                 tenant_id = DocumentService.get_tenant_id(db, doc_id)
                 if tenant_id:
                     DocumentService.remove_document(db, doc, tenant_id)
-        File2DocumentService.delete_by_file_id(db, file.id)
         FileService.delete(db, file)
 
     def _delete_folder_recursive(folder, tenant_id):

@@ -4,6 +4,7 @@ import logging
 import random
 import re
 import time
+from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime
@@ -20,16 +21,39 @@ from api.utils.db_utils import bulk_insert_into_db
 from api.db import FileType, UserTenantRole, CanvasCategory
 from api.db.db_models import Document, Knowledgebase, Tenant, Task, UserTenant, File2Document, File, UserCanvas, \
     User
-from api.db.services.common_service import CommonService
+from api.db.services.common_service import CommonService, retry_transient_tx_conflict
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, get_format_time
 from api.db.services.doc_metadata_service import DocMetadataService
 from common import settings
-from common.constants import LLMType, ParserType, TaskStatus, StatusEnum, SVR_CONSUMER_GROUP_NAME, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES
+from common.constants import LLMType, ParserType, TaskStatus, StatusEnum, SVR_CONSUMER_GROUP_NAME, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES, FileSource
 from core.nlp import search, rag_tokenizer
 from core.utils.redis_conn import REDIS_CONN
 from common.doc_store.doc_store_base import OrderByExpr
+
+
+@dataclass(frozen=True)
+class OrphanFilePayload:
+    file_id: str
+    bucket: str
+    location: str
+
+
+@dataclass(frozen=True)
+class DeleteDocumentSnapshot:
+    doc_id: str
+    kb_id: str
+    kb_name: str
+    tenant_id: str
+    thumbnail: str | None
+    location: str | None
+    candidate_file_ids: tuple[str, ...] = ()
+    orphan_file_payloads: tuple[OrphanFilePayload, ...] = ()
+
+    @property
+    def id(self) -> str:
+        return self.doc_id
 
 
 class DocumentService(CommonService):
@@ -816,7 +840,7 @@ class DocumentService(CommonService):
             current_chunks = session.get("chunks", [])
             current_total = len(current_chunks)
             parsing_status = session.get("status", "completed")
-            estimated_total = int(session.get("estimated_total", current_total))
+            _estimated_total = int(session.get("estimated_total", current_total))
             
             if isinstance(batch_index, int) and batch_index >= 0:
                 start = min(batch_index * bs, current_total)
@@ -1496,7 +1520,7 @@ class DocumentService(CommonService):
             
             # 检查解析状态
             parsing_status = session.get("status", "completed")  # parsing | completed | error
-            estimated_total = int(session.get("estimated_total", current_total))
+            _estimated_total = int(session.get("estimated_total", current_total))
             
             if isinstance(batch_index, int) and batch_index >= 0:
                 start = min(batch_index * bs, current_total)
@@ -1955,73 +1979,232 @@ class DocumentService(CommonService):
                     settings.STORAGE_IMPL.rm(doc.kb_id, cid)
             page += 1
 
+    @staticmethod
+    def _release_read_only_transaction(db: Session) -> None:
+        """End an implicit read transaction so this service can own the write tx."""
+        if not db.in_transaction():
+            return
+        if db.dirty or db.new or db.deleted:
+            raise RuntimeError(
+                "Document deletion requires a clean Session before starting its owned transaction."
+            )
+        db.rollback()
+
+    @staticmethod
+    def _resolve_collection_name(tenant_id: str, kb_name: str) -> str:
+        db_type = settings.docStoreConn.db_type()
+        if db_type in {"elasticsearch", "opensearch"}:
+            return search.index_name(tenant_id)[0]
+        return search.index_name_one(tenant_id, kb_name)
+
+    @classmethod
+    @retry_transient_tx_conflict()
+    def _delete_document_db_state(cls, db: Session, doc_id: str) -> DeleteDocumentSnapshot | None:
+        """Delete document-owned DB state inside a short SQLAlchemy 2.0 transaction."""
+        cls._release_read_only_transaction(db)
+
+        with db.begin():
+            doc_row = db.execute(
+                select(
+                    cls.model.id,
+                    cls.model.kb_id,
+                    cls.model.token_num,
+                    cls.model.chunk_num,
+                    cls.model.thumbnail,
+                    cls.model.location,
+                )
+                .where(cls.model.id == doc_id)
+                .with_for_update()
+            ).mappings().one_or_none()
+            if doc_row is None:
+                return None
+
+            kb_row = db.execute(
+                select(
+                    Knowledgebase.id,
+                    Knowledgebase.name,
+                    Knowledgebase.tenant_id,
+                )
+                .where(Knowledgebase.id == doc_row["kb_id"])
+                .with_for_update()
+            ).mappings().one_or_none()
+            if kb_row is None:
+                raise LookupError(f"Knowledgebase {doc_row['kb_id']} not found for document {doc_id}")
+
+            f2d_rows = db.execute(
+                select(File2Document.id, File2Document.file_id)
+                .where(File2Document.document_id == doc_id)
+                .with_for_update()
+            ).mappings().all()
+            candidate_file_ids = tuple(
+                dict.fromkeys(
+                    row["file_id"]
+                    for row in f2d_rows
+                    if row["file_id"]
+                )
+            )
+
+            orphan_file_payloads: list[OrphanFilePayload] = []
+            file_rows: dict[str, Any] = {}
+            remaining_file_refs: dict[str, int] = {}
+
+            if candidate_file_ids:
+                file_rows = {
+                    row["id"]: row
+                    for row in db.execute(
+                        select(
+                            File.id,
+                            File.parent_id,
+                            File.location,
+                            File.source_type,
+                        )
+                        .where(File.id.in_(candidate_file_ids))
+                        .with_for_update()
+                    ).mappings().all()
+                }
+                remaining_file_refs = {
+                    row["file_id"]: row["ref_count"]
+                    for row in db.execute(
+                        select(
+                            File2Document.file_id,
+                            func.count(File2Document.id).label("ref_count"),
+                        )
+                        .where(
+                            File2Document.file_id.in_(candidate_file_ids),
+                            File2Document.document_id != doc_id,
+                        )
+                        .group_by(File2Document.file_id)
+                    ).mappings().all()
+                }
+
+            db.execute(sa_delete(Task).where(Task.doc_id == doc_id))
+            db.execute(sa_delete(File2Document).where(File2Document.document_id == doc_id))
+
+            for file_id in candidate_file_ids:
+                file_row = file_rows.get(file_id)
+                if not file_row or file_row["source_type"] != FileSource.KNOWLEDGEBASE:
+                    continue
+                if remaining_file_refs.get(file_id, 0):
+                    continue
+
+                file_still_linked = (
+                    select(File2Document.id)
+                    .where(File2Document.file_id == file_id)
+                    .exists()
+                )
+                deleted_file = db.execute(
+                    sa_delete(File).where(
+                        File.id == file_id,
+                        File.source_type == FileSource.KNOWLEDGEBASE,
+                        ~file_still_linked,
+                    )
+                )
+                if deleted_file.rowcount:
+                    orphan_file_payloads.append(
+                        OrphanFilePayload(
+                            file_id=file_id,
+                            bucket=file_row["parent_id"],
+                            location=file_row["location"] or "",
+                        )
+                    )
+
+            deleted_document = db.execute(
+                sa_delete(cls.model).where(cls.model.id == doc_id)
+            )
+            if not deleted_document.rowcount:
+                return None
+
+            db.execute(
+                update(Knowledgebase)
+                .where(Knowledgebase.id == doc_row["kb_id"])
+                .values(
+                    token_num=Knowledgebase.token_num - doc_row["token_num"],
+                    chunk_num=Knowledgebase.chunk_num - doc_row["chunk_num"],
+                    doc_num=Knowledgebase.doc_num - 1,
+                )
+            )
+
+            return DeleteDocumentSnapshot(
+                doc_id=doc_row["id"],
+                kb_id=doc_row["kb_id"],
+                kb_name=kb_row["name"],
+                tenant_id=kb_row["tenant_id"],
+                thumbnail=doc_row["thumbnail"],
+                location=doc_row["location"],
+                candidate_file_ids=candidate_file_ids,
+                orphan_file_payloads=tuple(orphan_file_payloads),
+            )
+
     @classmethod
     def remove_document(cls, db: Session, doc: Document, tenant_id: str):
-        from api.db.services.task_service import TaskService, cancel_all_task_of
-        # 在删除文档前先保存需要的属性
-        doc_id = doc.id
-        kb_id = doc.kb_id
-        kb = KnowledgebaseService.get_by_id(db, kb_id)
-        if not cls.delete_document_and_update_kb_counts(db, doc.id):
+        from api.db.services.task_service import cancel_all_task_of
+
+        snapshot = cls._delete_document_db_state(db, doc.id)
+        if snapshot is None:
             return True
-        db_type = settings.docStoreConn.db_type()
-        is_tenant_scoped = db_type in {"elasticsearch", "opensearch"}
-        collection_name = (
-            search.index_name(tenant_id)[0]
-            if is_tenant_scoped
-            else search.index_name_one(tenant_id, kb.name)
-        )
+        doc_id = snapshot.doc_id
+        tenant_id = snapshot.tenant_id or tenant_id
+        collection_name = cls._resolve_collection_name(tenant_id, snapshot.kb_name)
 
         # Cancel all running tasks first — set cancel flag in Redis
         try:
-            cancel_all_task_of(db, doc.id)
+            cancel_all_task_of(db, doc_id)
             logging.info(f"Cancelled all tasks for document {doc_id}")
         except Exception as e:
             logging.warning(f"Failed to cancel tasks for document {doc_id}: {e}")
 
-        # Delete tasks from database
-        try:
-            TaskService.filter_delete(db, [Task.doc_id == doc.id])
-        except Exception as e:
-            logging.warning(f"Failed to delete tasks for document {doc_id}: {e}")
-
         # Delete chunk images (non-critical, log and continue)
         try:
-            cls.delete_chunk_images(doc, collection_name)
+            cls.delete_chunk_images(snapshot, collection_name)
         except Exception as e:
             logging.warning(f"Failed to delete chunk images for document {doc_id}: {e}")
 
         # Delete thumbnail (non-critical, log and continue)
         try:
-            if doc.thumbnail and not doc.thumbnail.startswith(IMG_BASE64_PREFIX):
-                if settings.STORAGE_IMPL.obj_exist(doc.kb_id, doc.thumbnail):
-                    settings.STORAGE_IMPL.rm(doc.kb_id, doc.thumbnail)
+            if snapshot.thumbnail and not snapshot.thumbnail.startswith(IMG_BASE64_PREFIX):
+                if settings.STORAGE_IMPL.obj_exist(snapshot.kb_id, snapshot.thumbnail):
+                    settings.STORAGE_IMPL.rm(snapshot.kb_id, snapshot.thumbnail)
         except Exception as e:
             logging.warning(f"Failed to delete thumbnail for document {doc_id}: {e}")
 
+        for orphan_file in snapshot.orphan_file_payloads:
+            if not orphan_file.location:
+                continue
+            try:
+                settings.STORAGE_IMPL.rm(orphan_file.bucket, orphan_file.location)
+            except Exception as e:
+                logging.warning(
+                    "Failed to delete orphan file object %s/%s for document %s: %s",
+                    orphan_file.bucket,
+                    orphan_file.location,
+                    doc_id,
+                    e,
+                )
+
         # Delete chunks from doc store - this is critical, log errors
         try:
+            db_type = settings.docStoreConn.db_type()
             # 检查集合是否存在并删除向量数据库中的数据
             if settings.docStoreConn.has_collection(collection_name):
                 if db_type == "milvus":
                     settings.docStoreConn.delete(
                         condition={"doc_id": doc_id},
                         index_name=collection_name,
-                        dataset_id=doc.kb_id
+                        dataset_id=snapshot.kb_id
                     )
                 else:
                     # ES/OpenSearch/Infinity 使用位置参数: condition, index_name, knowledgebase_id
                     settings.docStoreConn.delete(
                         {"doc_id": doc_id},
                         collection_name,
-                        doc.kb_id
+                        snapshot.kb_id
                     )
         except Exception as e:
             logging.error(f"Failed to delete chunks from doc store for document {doc_id}: {e}")
 
         # Delete document metadata (non-critical, log and continue)
         try:
-            DocMetadataService.delete_document_metadata(db, doc_id, doc.kb_id, tenant_id)
+            DocMetadataService.delete_document_metadata(db, doc_id, snapshot.kb_id, tenant_id)
         except Exception as e:
             logging.warning(f"Failed to delete metadata for document {doc_id}: {e}")
 
@@ -2030,13 +2213,13 @@ class DocumentService(CommonService):
                 settings.docStoreConn.search(
                     ["source_id"],
                     [],
-                    {"kb_id": doc.kb_id, "knowledge_graph_kwd": ["graph"]},
+                    {"kb_id": snapshot.kb_id, "knowledge_graph_kwd": ["graph"]},
                     [],
                     OrderByExpr(),
                     0,
                     1,
                     collection_name,
-                    [doc.kb_id],
+                    [snapshot.kb_id],
                 ),
                 ["source_id"],
             )
@@ -2044,28 +2227,28 @@ class DocumentService(CommonService):
             if doc_id in graph_source_ids:
                 settings.docStoreConn.update(
                     {
-                        "kb_id": doc.kb_id,
+                        "kb_id": snapshot.kb_id,
                         "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"],
                         "source_id": doc_id,
                     },
                     {"remove": {"source_id": doc_id}},
                     collection_name,
-                    doc.kb_id,
+                    snapshot.kb_id,
                 )
                 settings.docStoreConn.update(
-                    {"kb_id": doc.kb_id, "knowledge_graph_kwd": ["graph"]},
+                    {"kb_id": snapshot.kb_id, "knowledge_graph_kwd": ["graph"]},
                     {"removed_kwd": "Y"},
                     collection_name,
-                    doc.kb_id,
+                    snapshot.kb_id,
                 )
                 settings.docStoreConn.delete(
                     {
-                        "kb_id": doc.kb_id,
+                        "kb_id": snapshot.kb_id,
                         "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"],
                         "must_not": {"exists": "source_id"},
                     },
                     collection_name,
-                    doc.kb_id,
+                    snapshot.kb_id,
                 )
         except Exception as e:
             logging.warning(f"Failed to cleanup knowledge graph for document {doc_id}: {e}")
@@ -2205,29 +2388,9 @@ class DocumentService(CommonService):
         Returns True if the document was deleted by this call, False if it was
         already deleted by a concurrent request (idempotent).
         """
-        doc = db.get(cls.model, doc_id)
-        if doc is None:
-            return False
-        token_num = doc.token_num
-        chunk_num = doc.chunk_num
-        kb_id = doc.kb_id
-        with db.begin_nested():
-            result = db.execute(
-                sa_delete(cls.model).where(cls.model.id == doc_id)
-            )
-            if not result.rowcount:
-                return False
-            db.execute(
-                update(Knowledgebase)
-                .where(Knowledgebase.id == kb_id)
-                .values(
-                    token_num=Knowledgebase.token_num - token_num,
-                    chunk_num=Knowledgebase.chunk_num - chunk_num,
-                    doc_num=Knowledgebase.doc_num - 1,
-                )
-            )
-        db.commit()
-        return True
+        # mapping; multirag routes the actual SQLAlchemy 2.0 transaction through
+        # _delete_document_db_state so all DB-side deletions stay atomic.
+        return cls._delete_document_db_state(db, doc_id) is not None
 
     @classmethod
     def clear_chunk_num(cls, db: Session, doc_id: str, max_retries=3):

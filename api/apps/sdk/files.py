@@ -1,7 +1,7 @@
 import pathlib
 import re
 
-from fastapi import APIRouter, Depends, File, Form, Path, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -399,7 +399,6 @@ def delete_files(
                     return get_error_data_result(retmsg="Tenant not found!")
                 if not DocumentService.remove_document(doc, doc_tenant_id):
                     return get_error_data_result(retmsg="Database error (Document removal)!")
-            File2DocumentService.delete_by_file_id(file_id)
 
         return get_result(data=True)
     except Exception as e:
@@ -608,7 +607,6 @@ def convert(
                         return get_json_result(retmsg="Tenant not found!", retcode=RetCode.NOT_FOUND)
                     if not DocumentService.remove_document(db, doc, tenant_id):
                         return get_json_result(retmsg="Database error (Document removal)!", retcode=RetCode.SERVER_ERROR)
-                File2DocumentService.delete_by_file_id(db, id)
 
                 # insert
                 for kb_id in kb_ids:

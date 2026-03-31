@@ -1,11 +1,3 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： file_service.py
-@date：2024/7/15 15:00
-@desc:
-"""
 import asyncio
 import base64
 import logging
@@ -22,14 +14,13 @@ from sqlalchemy import func, select
 
 from api.db import KNOWLEDGEBASE_FOLDER_NAME, FileType
 from common.constants import FileSource, ParserType, TaskStatus
-from api.db.db_models import Document, File, File2Document, Knowledgebase, Task
+from api.db.db_models import Document, File, File2Document, Knowledgebase
 from api.db.services import duplicate_name
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from common.misc_utils import get_uuid
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.task_service import TaskService
 from api.utils.file_utils import filename_type, read_potential_broken_pdf, thumbnail_img, sanitize_path
 from core.llm.cv_model.models.gptv4 import GptV4
 from common import settings
@@ -559,20 +550,8 @@ class FileService(CommonService):
                 doc_parser = doc.parser_id
                 kb_id = doc.kb_id
 
-                b, n = File2DocumentService.get_storage_address(db, doc_id=doc_id)
-
-                TaskService.filter_delete(db, [Task.doc_id == doc_id])
                 if not DocumentService.remove_document(db, doc, tenant_id):
                     raise Exception("Database error (Document removal)!")
-
-                f2d = File2DocumentService.get_by_document_id(db, doc_id)
-                deleted_file_count = 0
-                if f2d:
-                    deleted_file_count = FileService.filter_delete(
-                        db, [File.source_type == FileSource.KNOWLEDGEBASE, File.id == f2d[0].file_id])
-                File2DocumentService.delete_by_document_id(db, doc_id)
-                if deleted_file_count > 0:
-                    settings.STORAGE_IMPL.rm(b, n)
 
                 if doc_parser == ParserType.TABLE:
                     if kb_id not in kb_table_num_map:

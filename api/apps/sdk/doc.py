@@ -16,7 +16,7 @@ from urllib.parse import quote
 
 from api.constants import FILE_NAME_LEN_LIMIT
 from api.db import FileType
-from api.db.db_models import APIToken, File as FileModel, Task, get_db
+from api.db.db_models import APIToken, Task, get_db
 from api.db.services.document_service import DocumentService
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.file2document_service import File2DocumentService
@@ -27,13 +27,12 @@ from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.task_service import TaskService, queue_tasks, cancel_all_task_of
 from api.utils.api_utils import check_duplicate_ids, construct_json_result, get_error_data_result, get_parser_config, get_result, server_error_response, token_required
-from core.app.qa import beAdoc, rmPrefix
 from core.app.tag import label_question
 from core.nlp import rag_tokenizer, search
 from core.prompts.generator import cross_languages, keyword_extraction
 from common import settings
 from common.metadata_utils import meta_filter, convert_conditions
-from common.constants import FileSource, LLMType, ParserType, TaskStatus, RetCode
+from common.constants import LLMType, TaskStatus, RetCode
 from common.string_utils import remove_redundant_spaces
 
 MAXIMUM_OF_UPLOADING_FILES = 256
@@ -803,18 +802,6 @@ def delete_documents(
             if not DocumentService.remove_document(db, doc[0], tenant_id):
                 errors.append(f"Failed to remove document {doc_id}")
                 continue
-            
-            # 删除相关文件记录
-            f2d = File2DocumentService.get_by_document_id(db, doc_id)
-            if f2d:
-                FileService.filter_delete(
-                    db,
-                    [
-                        FileModel.source_type == FileSource.KNOWLEDGEBASE,
-                        FileModel.id == f2d[0].file_id,
-                    ]
-                )
-            File2DocumentService.delete_by_document_id(db, doc_id)
             success_count += 1
         except Exception as e:
             errors.append(f"Error deleting document {doc_id}: {str(e)}")

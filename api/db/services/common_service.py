@@ -1,14 +1,13 @@
-# common_services.py
-import uuid
+import time
 import logging
 import functools
 from datetime import datetime, timezone
 from typing import Any, Type, Generic, TypeVar
 
-from sqlalchemy import Row, desc, asc, text, exc, update, select, delete, insert
+from sqlalchemy import Row, desc, asc, exc, update, select, delete, insert
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
-from sqlalchemy.exc import NoResultFound, IntegrityError, MultipleResultsFound
+from sqlalchemy.exc import NoResultFound, IntegrityError
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
@@ -98,6 +97,78 @@ def retry_db_operation(max_attempts=3, min_wait=1, max_wait=5):
                     _safe_rollback(db, func.__name__)
                 raise
         return wrapper
+    return decorator
+
+
+TRANSIENT_TX_CONFLICT_CODES = frozenset({"40P01", "40001", "1213", "1205"})
+
+
+def _extract_dbapi_error_code(error: exc.DBAPIError) -> str | None:
+    """Return SQLSTATE / driver error code for portable transient-tx checks."""
+    orig = getattr(error, "orig", None)
+    if orig is not None:
+        for attr in ("sqlstate", "pgcode", "code"):
+            code = getattr(orig, attr, None)
+            if code:
+                return str(code)
+
+        orig_args = getattr(orig, "args", ())
+        if orig_args:
+            first_arg = orig_args[0]
+            if first_arg is not None:
+                return str(first_arg)
+
+    error_args = getattr(error, "args", ())
+    if error_args:
+        first_arg = error_args[0]
+        if first_arg is not None:
+            return str(first_arg)
+
+    return None
+
+
+def _is_transient_tx_conflict(error: exc.DBAPIError) -> bool:
+    code = _extract_dbapi_error_code(error)
+    return code in TRANSIENT_TX_CONFLICT_CODES
+
+
+def retry_transient_tx_conflict(max_attempts: int = 3, base_delay: float = 0.1, max_delay: float = 1.0):
+    """Retry a full transaction when the database aborts due to a transient conflict.
+
+    This helper is intentionally narrow: it only retries known deadlock /
+    serialization conflict codes that are safe to replay at the transaction
+    boundary.
+    """
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            db = _get_session_from_call(args, kwargs)
+
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    return func(*args, **kwargs)
+                except exc.DBAPIError as error:
+                    if not _is_transient_tx_conflict(error) or attempt >= max_attempts:
+                        raise
+
+                    if db is not None:
+                        _safe_rollback(db, func.__name__)
+
+                    code = _extract_dbapi_error_code(error) or "unknown"
+                    delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
+                    logger.warning(
+                        "[DB Tx Retry] %s hit transient tx conflict %s; retrying in %.2fs (%s/%s)",
+                        func.__qualname__,
+                        code,
+                        delay,
+                        attempt,
+                        max_attempts,
+                    )
+                    time.sleep(delay)
+
+        return wrapper
+
     return decorator
 
 
