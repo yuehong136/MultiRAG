@@ -2274,25 +2274,31 @@ class DocumentService(CommonService):
 
     @classmethod
     def get_unfinished_docs(cls, db: Session):
-        # Subquery to get doc_ids with unfinished tasks
-        unfinished_task_query = db.query(Task.doc_id).filter(
-            Task.progress >= 0,
-            Task.progress < 1
+        # Subquery: doc_ids with unfinished tasks
+        unfinished_task_query = select(Task.doc_id).where(
+            Task.progress >= 0, Task.progress < 1
         ).scalar_subquery()
 
-        query = db.query(
+        # Subquery: doc_ids that have at least one non-failed task
+        docs_with_non_failed_tasks = select(Task.doc_id).where(
+            Task.progress >= 0
+        ).distinct().scalar_subquery()
+
+        stmt = select(
             cls.model.id, cls.model.process_begin_at, cls.model.parser_config,
             cls.model.progress_msg, cls.model.run, cls.model.parser_id
-        ).filter(
+        ).where(
             cls.model.status == StatusEnum.VALID.value,
             cls.model.type != FileType.VIRTUAL.value,
             or_(cls.model.run.is_(None), cls.model.run != TaskStatus.CANCEL.value),
             or_(
                 and_(cls.model.progress < 1, cls.model.progress > 0),
-                cls.model.id.in_(unfinished_task_query)  # including unfinished tasks like GraphRAG, RAPTOR and Mindmap
+                cls.model.id.in_(unfinished_task_query),  # including unfinished tasks like GraphRAG, RAPTOR and Mindmap
+                and_(cls.model.progress == -1, cls.model.run == TaskStatus.FAIL.value,
+                     cls.model.id.in_(docs_with_non_failed_tasks))  # re-sync failed docs with recoverable tasks
             )
         )
-        rows = query.all()
+        rows = db.execute(stmt).all()
         return [dict(row._mapping) for row in rows]
 
     @classmethod
@@ -2737,6 +2743,8 @@ class DocumentService(CommonService):
                 elif finished:
                     prg = 1
                     status = TaskStatus.DONE.value
+                elif not finished:
+                    status = TaskStatus.RUNNING.value
 
                 # only for special task and parsed docs and unfinished
                 freeze_progress = special_task_running and doc_progress >= 1 and not finished
@@ -2745,7 +2753,7 @@ class DocumentService(CommonService):
                 if not begin_at:
                     begin_at = datetime.now()
                     # fallback
-                    cls.update_by_id(d["id"], {"process_begin_at": begin_at})
+                    cls.update_by_id(db, d["id"], {"process_begin_at": begin_at})
 
                 info = {
                     "process_duration": max(datetime.timestamp(datetime.now()) - begin_at.timestamp(), 0),
