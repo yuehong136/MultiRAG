@@ -663,10 +663,12 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     retriever = settings.retriever
     questions = [m["content"] for m in messages if m["role"] == "user"][-3:]
     filter_exp = kwargs["filter_condition"] if "filter_condition" in kwargs else ""
-    attachments = kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else []
+    attachments = None
+    if "doc_ids" in kwargs:
+        attachments = [doc_id for doc_id in kwargs["doc_ids"].split(",") if doc_id]
     attachments_ = ""
     if "doc_ids" in messages[-1]:
-        attachments = messages[-1]["doc_ids"]
+        attachments = [doc_id for doc_id in messages[-1]["doc_ids"] if doc_id]
     image_attachments = []
     image_files = []
     if "files" in messages[-1]:
@@ -722,7 +724,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     knowledges = []
 
     # 检查prompt_config中是否包含"knowledge"参数，以决定是否进行知识检索
-    if attachments is not None and "knowledge" in [p["key"] for p in prompt_config["parameters"]]:
+    if "knowledge" in [p["key"] for p in prompt_config["parameters"]]:
         tenant_ids = list(set([kb.tenant_id for kb in kbs]))
         knowledges = []
         prompt_config_for_reasoning = prompt_config
@@ -986,10 +988,12 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
     retriever = settings.retriever
     questions = [m["content"] for m in messages if m["role"] == "user"][-3:]
     filter_exp = kwargs["filter_condition"] if "filter_condition" in kwargs else ""
-    attachments = kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else []
+    attachments = None
+    if "doc_ids" in kwargs:
+        attachments = [doc_id for doc_id in kwargs["doc_ids"].split(",") if doc_id]
     attachments_ = ""
     if "doc_ids" in messages[-1]:
-        attachments = messages[-1]["doc_ids"]
+        attachments = [doc_id for doc_id in messages[-1]["doc_ids"] if doc_id]
     image_attachments = []
     image_files = []
     if "files" in messages[-1]:
@@ -1048,7 +1052,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
     knowledges = []
 
     # 检查prompt_config中是否包含"knowledge"参数，以决定是否进行知识检索
-    if attachments is not None and "knowledge" in param_keys:
+    if "knowledge" in param_keys:
         logging.debug("Proceeding with retrieval")
         tenant_ids = list(set([kb.tenant_id for kb in kbs]))
         knowledges = []
