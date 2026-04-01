@@ -206,12 +206,12 @@ class DocumentService(CommonService):
             items_per_page: int,
             orderby: str,
             desc: bool,
-            keywords: str = None,
-            id: int = None,
-            name: str = None,
-            suffix: list = None,
-            run: list = None,
-            doc_ids: list = None
+            keywords: str | None = None,
+            id: str | None = None,
+            name: str | None = None,
+            suffix: list | None = None,
+            run: list | None = None,
+            doc_ids: list | None = None
     ):
         # 1) 需要返回的列 —— 等价于 Peewee 的 select(*fields)
         #    确保 get_cls_model_fields() 返回的是 Column/ColumnElement 列对象，而不是字符串
