@@ -612,7 +612,7 @@ async def get_semantic_layer_streaming(
 ) -> ResponseSchema:
     token = askdata_ask_id.set(body.ask_id or "-")
     try:
-        logger.info(f"get-semantic-layer-streaming, event_id={custom_event_id}, query={body.user_query[:80]}")
+        logger.info(f"get-semantic-layer-streaming, event_id={custom_event_id}, query={body.user_query[:80]}, dataset_ids={body.dataset_id_list}")
 
         original_user_query = body.user_query
         final_user_query = original_user_query
