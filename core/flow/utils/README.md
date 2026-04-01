@@ -102,8 +102,9 @@ async def parse_audio(...):
 
 **修改 core/flow 后记得更新行号！**
 
-> ⚠️ 注意：parser.py 已支持 MinerU 和 PaddleOCR 两种 OCR 解析器，
-> 均使用 `LLMBundle` + `LLMType.OCR` 获取模型，支持 `模型名@mineru` / `模型名@paddleocr` 格式。
+> ⚠️ 注意：parser.py 已支持 MinerU、PaddleOCR 和 Docling 三种解析器。
+> MinerU 和 PaddleOCR 使用 `LLMBundle` + `LLMType.OCR` 获取模型，支持 `模型名@mineru` / `模型名@paddleocr` 格式。
+> Docling 支持本地模式和外部服务器模式（通过 `DOCLING_SERVER_URL` 环境变量）。
 
 ## 📚 使用示例
 
@@ -184,6 +185,36 @@ parsed = await parse_file(
         "parse_method": "my-paddleocr-model@paddleocr",
         "output_format": "json",
         "paddleocr_parse_method": "raw"  # 可选：raw/manual/paper
+    }
+)
+```
+
+### 使用 Docling 解析
+
+```python
+from core.flow.utils import parse_file
+
+# 方式1：使用本地 Docling（需要 pip install docling）
+parsed = await parse_file(
+    filename="document.pdf",
+    binary=file_content,
+    tenant_id=tenant_id,
+    pdf_config={
+        "parse_method": "docling",
+        "output_format": "json",
+        "docling_parse_method": "raw"  # 可选：raw/manual/paper
+    }
+)
+
+# 方式2：使用外部 Docling 服务器（设置 DOCLING_SERVER_URL 环境变量）
+# export DOCLING_SERVER_URL=http://docling-server:5001
+parsed = await parse_file(
+    filename="document.pdf",
+    binary=file_content,
+    tenant_id=tenant_id,
+    pdf_config={
+        "parse_method": "docling",
+        "output_format": "json"
     }
 )
 ```

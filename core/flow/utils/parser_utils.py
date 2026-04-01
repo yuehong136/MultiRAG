@@ -31,6 +31,7 @@ from core.llm.cv import Base as VLM
 from common.constants import LLMType
 from common.misc_utils import thread_pool_exec
 from deepdoc.parser import ExcelParser
+from deepdoc.parser.docling_parser import DoclingParser
 from deepdoc.parser.pdf_parser import PlainParser, RAGFlowPdfParser, VisionParser
 from deepdoc.parser.ppt_parser import RAGFlowPptParser
 from deepdoc.parser.tcadp_parser import TCADPParser
@@ -204,7 +205,7 @@ class FlowParser:
         filename: str,
         binary: bytes,
         tenant_id: str,
-        parse_method: Literal["deepdoc", "plain_text", "mineru", "tcadp parser", "paddleocr"] | str = "deepdoc",
+        parse_method: Literal["deepdoc", "plain_text", "mineru", "docling", "tcadp parser", "paddleocr"] | str = "deepdoc",
         output_format: Literal["json", "markdown"] = "json",
         lang: str = "Chinese",
         callback=None,
@@ -221,6 +222,7 @@ class FlowParser:
                 - deepdoc: 深度布局解析（保留位置、表格、图片）
                 - plain_text: 纯文本解析（快速）
                 - mineru: MinerU 解析（需要安装 mineru）
+                - docling: Docling 解析（支持本地或外部 Docling 服务器）
                 - tcadp parser: 腾讯云 ADP 解析（支持定位信息）
                 - paddleocr: PaddleOCR 解析（通过 PaddleOCR API 服务）
                 - 其他: VLM 模型名称（如 "qwen-vl-plus"）
@@ -322,7 +324,34 @@ class FlowParser:
                     "text": t,
                 }
                 bboxes.append(box)
-        
+
+        elif method == "docling":
+            # Docling 解析（参考 core/flow/parser/parser.py 的 docling 分支）
+            pdf_parser = DoclingParser(docling_server_url=os.environ.get("DOCLING_SERVER_URL", ""))
+            docling_parse_method = method_kwargs.get("docling_parse_method", "raw")
+            lines, _ = await _to_thread(
+                pdf_parser.parse_pdf,
+                filepath=filename,
+                binary=binary,
+                callback=callback,
+                parse_method=docling_parse_method,
+                docling_server_url=os.environ.get("DOCLING_SERVER_URL", ""),
+            )
+            bboxes = []
+            for item in lines:
+                if not isinstance(item, tuple) or not item:
+                    continue
+                text = item[0]
+                poss = item[-1] if len(item) >= 2 else ""
+                box = {
+                    "text": text,
+                    "image": pdf_parser.crop(poss, 1) if isinstance(poss, str) and poss else None,
+                    "positions": [[pos[0][-1], *pos[1:]] for pos in pdf_parser.extract_positions(poss)]
+                    if isinstance(poss, str) and poss
+                    else [],
+                }
+                bboxes.append(box)
+
         elif method == "tcadp parser":
             # ADP is a document parsing tool using Tencent Cloud API
             table_result_type = method_kwargs.get("table_result_type", "1")
