@@ -5,6 +5,7 @@
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING,TTS,TEXT RE-RANK,SPEECH2TEXT,MODERATION",
             "status": "1",
+            "url": "https://api.openai.com/v1",
             "rank": "999",
             "llm": [
                 {
@@ -218,7 +219,6 @@
                     "max_tokens": 131072,
                     "mdl_type": "chat",
                     "is_tools": true
-
                 },
                 {
                     "llm_name": "grok-3-fast",
@@ -255,6 +255,7 @@
             "logo": "",
             "tags": "LLM",
             "status": "1",
+            "url": "https://ragflow.vip-api.tokenpony.cn/v1",
             "llm": [
                 {
                     "llm_name": "qwen3-8b",
@@ -375,6 +376,7 @@
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING,TEXT RE-RANK,TTS,SPEECH2TEXT,MODERATION",
             "status": "1",
+            "url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "rank": "950",
             "llm": [
                 {
@@ -761,79 +763,80 @@
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING,SPEECH2TEXT,MODERATION",
             "status": "1",
+            "url": "https://open.bigmodel.cn/api/paas/v4",
             "rank": "940",
             "llm": [
-               {
+                {
                     "llm_name": "glm-5",
                     "tags": "LLM,CHAT,128K",
                     "max_tokens": 128000,
                     "mdl_type": "chat",
                     "is_tools": true
-               },
-               {
+                },
+                {
                     "llm_name": "glm-4.7",
                     "tags": "LLM,CHAT,128K",
                     "max_tokens": 128000,
                     "mdl_type": "chat",
                     "is_tools": true
-               },
-               {
+                },
+                {
                     "llm_name": "glm-4.7-flashx",
                     "tags": "LLM,CHAT,128K",
                     "max_tokens": 128000,
                     "mdl_type": "chat",
                     "is_tools": true
-               },
-               {
+                },
+                {
                     "llm_name": "glm-4.6v",
                     "tags": "LLM,CHAT,IMAGE2TEXT,128K",
                     "max_tokens": 64000,
                     "mdl_type": "image2text",
                     "is_tools": true
-               },
-               {
+                },
+                {
                     "llm_name": "glm-4.6v-flashx",
                     "tags": "LLM,CHAT,IMAGE2TEXT,128K",
                     "max_tokens": 64000,
                     "mdl_type": "image2text",
                     "is_tools": true
-               },
-               {
+                },
+                {
                     "llm_name": "glm-4.6",
                     "tags": "LLM,CHAT,CHAT,128K",
                     "max_tokens": 128000,
                     "mdl_type": "chat",
                     "is_tools": true
-               },
-               {
+                },
+                {
                     "llm_name": "glm-4.5-airx",
                     "tags": "LLM,CHAT,128K",
                     "max_tokens": 128000,
                     "mdl_type": "chat",
                     "is_tools": true
-               },
-               {
+                },
+                {
                     "llm_name": "glm-4.5-air",
                     "tags": "LLM,CHAT,128K",
                     "max_tokens": 128000,
                     "mdl_type": "chat",
                     "is_tools": true
-               },
-               {
+                },
+                {
                     "llm_name": "glm-4.5",
                     "tags": "LLM,CHAT,128K",
                     "max_tokens": 128000,
                     "mdl_type": "chat",
                     "is_tools": true
-               },
-               {
+                },
+                {
                     "llm_name": "glm-4.5-x",
                     "tags": "LLM,CHAT,128K",
                     "max_tokens": 128000,
                     "mdl_type": "chat",
                     "is_tools": true
-               },
-               {
+                },
+                {
                     "llm_name": "glm-4.5v",
                     "tags": "LLM,CHAT,IMAGE2TEXT",
                     "max_tokens": 64000,
@@ -858,7 +861,7 @@
                     "llm_name": "glm-4v-plus-0111",
                     "tags": "LLM,CHAT,IMAGE2TEXT",
                     "max_tokens": 8192,
-                   "mdl_type": "image2text",
+                    "mdl_type": "image2text",
                     "is_tools": true
                 },
                 {
@@ -923,6 +926,7 @@
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING,IMAGE2TEXT",
             "status": "1",
+            "url": "https://api.moonshot.cn/v1",
             "rank": "960",
             "llm": [
                 {
@@ -1057,6 +1061,7 @@
             "logo": "",
             "tags": "LLM",
             "status": "1",
+            "url": "https://api.deepseek.com/v1",
             "rank": "970",
             "llm": [
                 {
@@ -1262,6 +1267,7 @@
             "logo": "",
             "tags": "LLM",
             "status": "1",
+            "url": "https://api.minimaxi.com/v1",
             "rank": "810",
             "llm": [
                 {
@@ -1297,6 +1303,7 @@
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING,MODERATION",
             "status": "1",
+            "url": "https://api.mistral.ai/v1",
             "rank": "910",
             "llm": [
                 {
@@ -2756,6 +2763,7 @@
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING,TEXT RE-RANK,IMAGE2TEXT",
             "status": "1",
+            "url": "https://api.siliconflow.cn/v1",
             "rank": "780",
             "llm": [
                 {
@@ -3599,6 +3607,7 @@
             "logo": "",
             "tags": "LLM,IMAGE2TEXT",
             "status": "1",
+            "url": "https://api.hunyuan.cloud.tencent.com/v1",
             "llm": [
                 {
                     "llm_name": "hunyuan-t1-latest",
@@ -3717,6 +3726,7 @@
             "logo": "",
             "tags": "LLM",
             "status": "1",
+            "url": "https://api.anthropic.com/",
             "rank": "990",
             "llm": [
                 {
@@ -3927,6 +3937,7 @@
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING,IMAGE2TEXT,SPEECH2TEXT,TEXT RE-RANK",
             "status": "1",
+            "url": "https://ai.gitee.com/v1/",
             "llm": [
                 {
                     "llm_name": "ERNIE-4.5-Turbo",
@@ -5070,6 +5081,7 @@
             "logo": "",
             "tags": "LLM",
             "status": "1",
+            "url": "https://api.longcat.chat/openai",
             "rank": "870",
             "llm": [
                 {
@@ -6009,6 +6021,7 @@
             "logo": "",
             "tags": "LLM",
             "status": "1",
+            "url": "https://api.n1n.ai/v1",
             "rank": "900",
             "llm": [
                 {
