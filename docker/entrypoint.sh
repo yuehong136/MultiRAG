@@ -156,6 +156,23 @@ start_admin_server() {
     wait
     sleep 1
   done &
+
+  # TODO: 后续计划切换为 Python 和 Go admin_server 并行启动：
+  #   while true; do
+  #     "${PY}" admin/server/admin_server.py &
+  #     bin/admin_server &
+  #     wait
+  #     sleep 1
+  #   done &
+  if [[ "${API_PROXY_SCHEME}" == "hybrid" || "${API_PROXY_SCHEME}" == "go" ]]; then
+    while true; do
+      echo "[entrypoint] 等待 Python Admin Server 就绪后启动 Go Admin Server..."
+      wait_for_server "http://127.0.0.1:8130/api/v1/admin/ping" "admin_server"
+      echo "[entrypoint] 启动 Go Admin Server..."
+      bin/admin_server
+      sleep 1
+    done &
+  fi
 }
 
 ensure_docling() {
