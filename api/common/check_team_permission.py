@@ -34,7 +34,7 @@ def check_kb_team_permission(db: Session, kb: dict | Knowledgebase, other: str) 
         return False
 
     joined_tenants = TenantService.get_joined_tenants_by_user_id(db, other)
-    return any(tenant["tenant_id"] == kb_tenant_id for tenant in joined_tenants)
+    return any(tenant.tenant_id == kb_tenant_id for tenant in joined_tenants)
 
 
 def check_file_team_permission(db: Session, file: dict | File, other: str) -> bool:
