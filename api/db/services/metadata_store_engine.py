@@ -134,7 +134,10 @@ class EngineMetadataStore(MetadataStore):
 
         from common.doc_store.doc_store_base import OrderByExpr
 
+        # Add sort by id for ES to enable search_after on large data
         order_by = OrderByExpr()
+        if not settings.DOC_ENGINE_INFINITY and not settings.DOC_ENGINE_OCEANBASE:
+            order_by.asc("id")
         page_size = 1000
         all_docs: list[dict] = []
         page = 0
@@ -254,14 +257,11 @@ class EngineMetadataStore(MetadataStore):
         if settings.docStoreConn.index_exist(index_name, ""):
             settings.docStoreConn.delete({"id": doc_id}, index_name, kb_id)
 
-    def delete(self, db: Session, doc_id: str, tenant_id: str, kb_id: str,
-               skip_empty_check: bool = False) -> bool:
+    def delete(self, db: Session, doc_id: str, tenant_id: str, kb_id: str) -> bool:
         index_name = self._index_name(tenant_id)
         if not settings.docStoreConn.index_exist(index_name, ""):
             return True
         settings.docStoreConn.delete({"id": doc_id}, index_name, kb_id)
-        if not skip_empty_check:
-            self._drop_if_empty(index_name)
         return True
 
     def list_by_kb_ids(self, db: Session, tenant_id: str,

@@ -212,7 +212,7 @@ def delete_user_data(db: Session, user_id: str) -> dict:
                 if doc_ids:
                     for doc in doc_ids:
                         try:
-                            DocMetadataService.delete_document_metadata(db, doc["id"], doc["kb_id"], tenant_id=None, skip_empty_check=True)
+                            DocMetadataService.delete_document_metadata(db, doc["id"], doc["kb_id"], tenant_id=None)
                         except Exception as e:
                             logging.warning(f"Failed to delete metadata for document {doc['id']}: {e}")
                     doc_delete_res = DocumentService.delete_by_ids(db, [i["id"] for i in doc_ids])

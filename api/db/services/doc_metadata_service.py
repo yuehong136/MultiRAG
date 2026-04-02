@@ -143,16 +143,14 @@ class DocMetadataService:
 
     @classmethod
     def delete_document_metadata(cls, db: Session, doc_id: str, kb_id: str,
-                                 tenant_id: str | None = None,
-                                 skip_empty_check: bool = False) -> bool:
+                                 tenant_id: str | None = None) -> bool:
         # Get tenant_id from kb_id if not provided
         if tenant_id is None:
             tenant_id = cls._kb_tenant(db, kb_id)
             if not tenant_id:
                 logger.warning("Knowledgebase %s not found for metadata deletion", kb_id)
                 return False
-        return cls._store().delete(db, doc_id, tenant_id, kb_id,
-                                   skip_empty_check=skip_empty_check)
+        return cls._store().delete(db, doc_id, tenant_id, kb_id)
 
     @classmethod
     def get_document_metadata(cls, db: Session, doc_id: str) -> dict:
@@ -250,15 +248,19 @@ class DocMetadataService:
         if not tenant_id:
             return {}
 
-        rows = cls._store().list_by_kb_ids(db, tenant_id, [kb_id])
-        doc_ids_set = set(doc_ids) if doc_ids else None
+        store = cls._store()
+        if doc_ids and hasattr(store, "list_by_doc_ids") and callable(getattr(store, "list_by_doc_ids", None)):
+            rows = list(store.list_by_doc_ids(db, doc_ids).items())
+        else:
+            rows = cls._store().list_by_kb_ids(db, tenant_id, [kb_id])
+            if doc_ids:
+                doc_ids_set = set(doc_ids)
+                rows = [(did, meta) for did, meta in rows if did in doc_ids_set]
 
         summary: dict = {}
         type_counter: dict = {}
 
         for doc_id, fields in rows:
-            if doc_ids_set and doc_id not in doc_ids_set:
-                continue
             if not isinstance(fields, dict):
                 continue
             for k, v in fields.items():
@@ -293,7 +295,12 @@ class DocMetadataService:
             return 0
 
         store = cls._store()
-        rows = store.list_by_kb_ids(db, tenant_id, [kb_id])
+        if hasattr(store, "list_by_doc_ids") and callable(getattr(store, "list_by_doc_ids", None)):
+            rows = list(store.list_by_doc_ids(db, doc_ids).items())
+        else:
+            rows = store.list_by_kb_ids(db, tenant_id, [kb_id])
+            doc_ids_set = set(doc_ids)
+            rows = [(did, meta) for did, meta in rows if did in doc_ids_set]
 
         def _norm(meta):
             if isinstance(meta, str):
@@ -367,13 +374,10 @@ class DocMetadataService:
                         changed = True
             return changed
 
-        doc_ids_set = set(doc_ids)
         found_ids: set[str] = set()
         updated = 0
 
         for doc_id, raw_meta in rows:
-            if doc_id not in doc_ids_set:
-                continue
             found_ids.add(doc_id)
             meta = _norm(raw_meta)
             orig = deepcopy(meta)
@@ -381,13 +385,14 @@ class DocMetadataService:
             changed = _apply_deletes(meta) or changed
             if changed and meta != orig:
                 if not meta:
-                    store.delete(db, doc_id, tenant_id, kb_id, skip_empty_check=True)
+                    store.delete(db, doc_id, tenant_id, kb_id)
                 else:
                     processed = cls._split_combined_values(meta)
                     store.upsert(db, doc_id, tenant_id, kb_id, processed)
                 updated += 1
 
         # Insert for docs without existing metadata rows
+        doc_ids_set = set(doc_ids)
         missing = doc_ids_set - found_ids
         if missing and updates:
             for doc_id in missing:

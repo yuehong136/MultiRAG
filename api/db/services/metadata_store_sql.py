@@ -71,8 +71,7 @@ class SqlMetadataStore(MetadataStore):
             logger.error("SqlMetadataStore.upsert failed for doc %s: %s", doc_id, e)
             return False
 
-    def delete(self, db: Session, doc_id: str, tenant_id: str, kb_id: str,
-               skip_empty_check: bool = False) -> bool:
+    def delete(self, db: Session, doc_id: str, tenant_id: str, kb_id: str) -> bool:
         try:
             db.execute(
                 sa_delete(DocumentMetadata).where(DocumentMetadata.id == doc_id)

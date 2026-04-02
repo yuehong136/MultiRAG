@@ -41,8 +41,7 @@ class MetadataStore(ABC):
         """Insert or update metadata for a document. Return True on success."""
 
     @abstractmethod
-    def delete(self, db: Session, doc_id: str, tenant_id: str, kb_id: str,
-               skip_empty_check: bool = False) -> bool:
+    def delete(self, db: Session, doc_id: str, tenant_id: str, kb_id: str) -> bool:
         """Delete metadata for a document. Return True on success."""
 
     @abstractmethod
