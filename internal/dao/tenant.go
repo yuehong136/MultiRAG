@@ -35,7 +35,7 @@ func (dao *TenantDAO) GetJoinedTenantsByUserID(userID string) ([]*TenantWithRole
 	err := DB.Model(&model.Tenant{}).
 		Select("t_ai_tenants.id as tenant_id, t_ai_tenants.name, t_ai_tenants.llm_id, t_ai_tenants.embd_id, t_ai_tenants.asr_id, t_ai_tenants.img2txt_id, t_ai_user_tenants.role").
 		Joins("INNER JOIN t_ai_user_tenants ON t_ai_user_tenants.tenant_id = t_ai_tenants.id").
-		Where("t_ai_user_tenants.user_id = ? AND t_ai_user_tenants.status = ? AND t_ai_user_tenants.role = ? AND t_ai_tenants.status = ?", userID, "1", "normal", "1").
+		Where("t_ai_user_tenants.user_id = ? AND t_ai_user_tenants.status = ? AND t_ai_user_tenants.role IN ? AND t_ai_tenants.status = ?", userID, "1", []string{"normal", "admin"}, "1").
 		Scan(&results).Error
 
 	return results, err
@@ -75,7 +75,7 @@ func (dao *TenantDAO) GetInfoByUserID(userID string) ([]*TenantInfo, error) {
 		Joins("INNER JOIN t_ai_user_tenants ON t_ai_user_tenants.tenant_id = t_ai_tenants.id").
 		Where("t_ai_user_tenants.user_id = ? AND t_ai_user_tenants.status = ? AND t_ai_user_tenants.role = ? AND t_ai_tenants.status = ?", userID, "1", "owner", "1").
 		Scan(&results).Error
-		
+
 	return results, err
 }
 

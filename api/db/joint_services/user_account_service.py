@@ -119,7 +119,7 @@ def create_new_user(db: Session, user_info: dict) -> dict:
         TenantService.insert(db, **tenant)
         
         # 创建用户-租户关系
-        logging.info(f"Creating user-tenant relationship")
+        logging.info("Creating user-tenant relationship")
         UserTenantService.insert(db, **usr_tenant)
         
         # 批量插入租户 LLM 配置
@@ -129,7 +129,7 @@ def create_new_user(db: Session, user_info: dict) -> dict:
 
         # 创建根文件夹
         # 注意：FileService.insert(db, file_dict) 接受字典作为第二个参数
-        logging.info(f"Creating root folder for user")
+        logging.info("Creating root folder for user")
         FileService.insert(db, file)
 
         logging.info(f"User {user_info.get('email')} created successfully")
@@ -289,7 +289,11 @@ def delete_user_data(db: Session, user_id: str) -> dict:
         # step2 delete user-tenant relation
         if tenants:
             # step2.1 delete docs and files in joined team
-            joined_tenants = [t for t in tenants if t["role"] == UserTenantRole.NORMAL.value]
+            joined_tenants = [
+                t
+                for t in tenants
+                if UserTenantService.is_joined_member(t["role"])
+            ]
             if joined_tenants:
                 done_msg += "Start to delete data in joined tenants.\n"
                 created_documents = DocumentService.get_all_docs_by_creator_id(db, usr.id)

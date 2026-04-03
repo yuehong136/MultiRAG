@@ -45,6 +45,21 @@ class SDKAuthError(Exception):
         self.data = data
 
 
+class BusinessError(Exception):
+    """业务层异常，可在 Depends 等任意位置抛出，由全局 handler 转为 get_json_result 格式。"""
+
+    def __init__(
+        self,
+        retmsg: str,
+        retcode: RetCode = RetCode.AUTHENTICATION_ERROR,
+        data: bool = False,
+    ) -> None:
+        super().__init__(retmsg)
+        self.retmsg = retmsg
+        self.retcode = retcode
+        self.data = data
+
+
 async def _coerce_request_data(request: Request) -> dict:
     """
     Fetch JSON body with sane defaults; fallback to form data.

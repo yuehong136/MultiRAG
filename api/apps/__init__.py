@@ -26,7 +26,7 @@ from errors.exceptions import AITranslateException
 from api.constants import API_VERSION
 from workflow_v2.workflow_exceptions import NodeExecutionError, WorkflowValidationError
 from workflow_v2.workflow_state_manager import workflow_state_manager
-from api.utils.api_utils import SDKAuthError
+from api.utils.api_utils import SDKAuthError, BusinessError
 
 description = """
 Multi-RAG API helps you do awesome stuff. 🚀
@@ -411,6 +411,18 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 async def sdk_auth_exception_handler(request: Request, exc: SDKAuthError):
     return JSONResponse(
         status_code=RetCode.UNAUTHORIZED,
+        content={
+            "retcode": exc.retcode,
+            "retmsg": exc.retmsg,
+            "data": exc.data,
+        },
+    )
+
+
+@app.exception_handler(BusinessError)
+async def business_error_handler(request: Request, exc: BusinessError):
+    return JSONResponse(
+        status_code=200,
         content={
             "retcode": exc.retcode,
             "retmsg": exc.retmsg,

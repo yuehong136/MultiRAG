@@ -2,21 +2,19 @@ from datetime import datetime
 
 from sqlalchemy import func, update, or_, and_, select
 from sqlalchemy.orm import Session
-from api.db import TenantPermission
-from common.constants import StatusEnum, RetCode
-from api.db.db_models import Knowledgebase, Tenant, User, UserTenant, Document, UserCanvas
-from api.db.services.common_service import CommonService
-from common.time_utils import current_timestamp, datetime_format
-from api.db.services.user_service import TenantService
-from common.misc_utils import get_uuid
+
 from api.constants import DATASET_NAME_LIMIT
+from api.db import TenantPermission
+from api.db.db_models import Knowledgebase, User, UserTenant, Document, UserCanvas
+from api.db.services.user_service import TenantService, UserTenantService
+from api.db.services.common_service import CommonService
 from api.utils.api_utils import get_data_error_result
+from common.time_utils import current_timestamp, datetime_format
+from common.constants import StatusEnum
+from common.misc_utils import get_uuid
 
 
 class KnowledgebaseService(CommonService):
-    """
-    知识库服务类，提供针对知识库的CRUD操作。
-    """
     model = Knowledgebase
 
     @classmethod
@@ -523,16 +521,19 @@ class KnowledgebaseService(CommonService):
 
     @classmethod
     def accessible(cls, db: Session, kb_id, user_id):
-        docs = db.query(cls.model.id).join(
-            UserTenant, UserTenant.tenant_id == Knowledgebase.tenant_id
-        ).filter(
+        stmt = select(cls.model.tenant_id).where(
             cls.model.id == kb_id,
-            UserTenant.user_id == user_id
-        ).limit(1).all()
-
-        if not docs:
+            cls.model.status == StatusEnum.VALID.value,
+        )
+        tenant_id = db.execute(stmt).scalar_one_or_none()
+        if tenant_id is None:
             return False
-        return True
+
+        membership = UserTenantService.get_membership(db, tenant_id=tenant_id, user_id=user_id)
+        if not membership:
+            return False
+
+        return UserTenantService.can_access_tenant_resources(membership.role)
 
     @classmethod
     def get_kb_by_id(cls, db: Session, kb_id, user_id):

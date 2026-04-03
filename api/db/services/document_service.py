@@ -23,14 +23,15 @@ from api.db.db_models import Document, Knowledgebase, Tenant, Task, UserTenant, 
     User
 from api.db.services.common_service import CommonService, retry_transient_tx_conflict
 from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.user_service import UserTenantService
+from api.db.services.doc_metadata_service import DocMetadataService
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, get_format_time
-from api.db.services.doc_metadata_service import DocMetadataService
 from common import settings
 from common.constants import LLMType, ParserType, TaskStatus, StatusEnum, SVR_CONSUMER_GROUP_NAME, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES, FileSource
+from common.doc_store.doc_store_base import OrderByExpr
 from core.nlp import search, rag_tokenizer
 from core.utils.redis_conn import REDIS_CONN
-from common.doc_store.doc_store_base import OrderByExpr
 
 
 @dataclass(frozen=True)
@@ -2503,26 +2504,27 @@ class DocumentService(CommonService):
 
     @classmethod
     def accessible(cls, db: Session, doc_id, user_id):
-        # 使用 SQLAlchemy 查询文档是否可访问
-        docs = db.query(cls.model.id).join(
-            Knowledgebase, cls.model.kb_id == Knowledgebase.id
-        ).join(
-            UserTenant, UserTenant.tenant_id == Knowledgebase.tenant_id
-        ).filter(
+        stmt = select(Knowledgebase.tenant_id).join(
+            cls.model, cls.model.kb_id == Knowledgebase.id
+        ).where(
             cls.model.id == doc_id,
-            UserTenant.user_id == user_id
-        ).limit(1).all()
-
-        # 如果没有找到文档则返回 False
-        if not docs:
+            cls.model.status == StatusEnum.VALID.value,
+            Knowledgebase.status == StatusEnum.VALID.value,
+        )
+        tenant_id = db.execute(stmt).scalar_one_or_none()
+        if tenant_id is None:
             return False
-        return True
+
+        membership = UserTenantService.get_membership(db, tenant_id=tenant_id, user_id=user_id)
+        if not membership:
+            return False
+
+        return UserTenantService.can_access_tenant_resources(membership.role)
 
     @classmethod
     def accessible4deletion(cls, db: Session, doc_id, user_id):
-        # 构造查询：join Knowledgebase，再 join UserTenant
-        q = (
-            db.query(cls.model.id)
+        stmt = (
+            select(cls.model.id)
             .join(Knowledgebase, cls.model.kb_id == Knowledgebase.id)
             .join(
                 UserTenant,
@@ -2531,19 +2533,18 @@ class DocumentService(CommonService):
                     UserTenant.user_id == user_id
                 )
             )
-            .filter(
+            .where(
                 cls.model.id == doc_id,
                 UserTenant.status == StatusEnum.VALID.value,
                 or_(
                     UserTenant.role == UserTenantRole.NORMAL,
+                    UserTenant.role == UserTenantRole.ADMIN,
                     UserTenant.role == UserTenantRole.OWNER
                 )
             )
+            .limit(1)
         )
-
-        # 只取一条，存在即可删除
-        exists = q.first()
-        return exists is not None
+        return db.execute(stmt).first() is not None
 
     @classmethod
     def get_embd_id(cls, db: Session, doc_id: str) -> str | None:

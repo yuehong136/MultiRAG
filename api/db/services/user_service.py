@@ -261,7 +261,7 @@ class TenantService(CommonService):
         ).where(
             UserTenant.user_id == user_id,
             UserTenant.status == StatusEnum.VALID.value,
-            UserTenant.role == UserTenantRole.NORMAL,
+            UserTenant.role.in_([UserTenantRole.NORMAL, UserTenantRole.ADMIN]),
             cls.model.status == StatusEnum.VALID.value
         )
         return db.execute(stmt).all()
@@ -284,6 +284,22 @@ class TenantService(CommonService):
 
 class UserTenantService(CommonService):
     model = UserTenant
+
+    @staticmethod
+    def can_access_tenant_resources(role: str | None) -> bool:
+        return role == UserTenantRole.OWNER or UserTenantService.is_joined_member(role)
+
+    @staticmethod
+    def is_joined_member(role: str | None) -> bool:
+        return role in {UserTenantRole.NORMAL, UserTenantRole.ADMIN}
+
+    @staticmethod
+    def can_manage_members(role: str | None) -> bool:
+        return role in {UserTenantRole.OWNER, UserTenantRole.ADMIN}
+
+    @staticmethod
+    def can_manage_roles(role: str | None) -> bool:
+        return role == UserTenantRole.OWNER
 
     @classmethod
     def filter_by_id(cls, db: Session, user_tenant_id: str):
@@ -418,3 +434,7 @@ class UserTenantService(CommonService):
             cls.model.user_id == user_id
         )
         return db.scalars(stmt).first()
+
+    @classmethod
+    def get_membership(cls, db: Session, tenant_id: str, user_id: str):
+        return cls.filter_by_tenant_and_user_id(db, tenant_id=tenant_id, user_id=user_id)

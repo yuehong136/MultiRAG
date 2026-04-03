@@ -1,51 +1,213 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： tenant_app.py
-@date：2024/10/17 14:24
-@desc: 用于处理租户用户操作的路由，包括添加、获取、删除和更新租户成员。
-"""
+from enum import StrEnum
+from typing import Literal
 
-import asyncio
-import logging
-
-from fastapi import APIRouter, Depends, Body
+from email_validator import EmailNotValidError, validate_email
+from fastapi import APIRouter, BackgroundTasks, Body, Depends
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import inspect
+from sqlalchemy.orm import Session
 
+from api.apps import manager
 from api.db import UserTenantRole
-from common.constants import StatusEnum
 from api.db.db_models import UserTenant, TenantLLM, Tenant, File, User, get_db
 from api.db.services.file_service import FileService
-from common.misc_utils import get_uuid
-from common.constants import RetCode
-from common.time_utils import delta_seconds
-from api.apps import manager
-from api.utils.api_utils import server_error_response, get_data_error_result
-from sqlalchemy.orm import Session
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import UserTenantService, UserService, TenantService
-from api.utils.api_utils import get_json_result
+from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result, BusinessError
 from api.utils.web_utils import send_invite_email
 from common import settings
+from common.misc_utils import get_uuid
+from common.constants import RetCode, StatusEnum
+from common.time_utils import delta_seconds
 
 router = APIRouter()
 
+
+# ---------------------------------------------------------------------------
+# Enums & Schemas
+# ---------------------------------------------------------------------------
+
+class InviteResultStatus(StrEnum):
+    INVITED = "invited"
+    ALREADY_MEMBER = "already_member"
+    ALREADY_ADMIN = "already_admin"
+    ALREADY_OWNER = "already_owner"
+    ALREADY_INVITED = "already_invited"
+    USER_NOT_FOUND = "user_not_found"
+    INVALID_EMAIL = "invalid_email"
+
+
+class InviteUserRequest(BaseModel):
+    email: EmailStr
+
+
+class BatchInviteUsersRequest(BaseModel):
+    emails: list[str] = Field(default_factory=list)
+
+
+class UpdateTenantMemberRoleRequest(BaseModel):
+    role: Literal["admin", "normal"]
+
+
+# ---------------------------------------------------------------------------
+# Dependencies
+# ---------------------------------------------------------------------------
+
+def _get_membership(
+    tenant_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(manager),
+) -> UserTenant:
+    membership = UserTenantService.get_membership(db, tenant_id=tenant_id, user_id=user.id)
+    if not membership:
+        raise BusinessError(retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
+    return membership
+
+
+def require_member_manager(
+    membership: UserTenant = Depends(_get_membership),
+) -> UserTenant:
+    if not UserTenantService.can_manage_members(membership.role):
+        raise BusinessError(retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
+    return membership
+
+
+def require_role_manager(
+    membership: UserTenant = Depends(_get_membership),
+) -> UserTenant:
+    if not UserTenantService.can_manage_roles(membership.role):
+        raise BusinessError(retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
+    return membership
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def object_as_dict(obj):
     return {c.key: getattr(obj, c.key) for c in inspect(obj).mapper.column_attrs}
 
 
-@router.get("/list", summary="获取租户列表", response_model=dict)
+def _validate_email_safe(email: str) -> bool:
+    try:
+        validate_email(email, check_deliverability=False)
+        return True
+    except EmailNotValidError:
+        return False
+
+
+def _normalize_batch_emails(emails: list[str]) -> list[str]:
+    normalized_emails: list[str] = []
+    seen: set[str] = set()
+    for raw_email in emails:
+        email = (raw_email or "").strip()
+        if not email:
+            continue
+        email_key = email.casefold()
+        if email_key in seen:
+            continue
+        seen.add(email_key)
+        normalized_emails.append(email)
+    return normalized_emails
+
+
+def _get_inviter_display_name(db: Session, user) -> str:
+    inviter_user = UserService.get_by_id(db, user.id)
+    if inviter_user and inviter_user.nickname:
+        return inviter_user.nickname
+    return user.email
+
+
+_ROLE_TO_INVITE_STATUS: dict[UserTenantRole, InviteResultStatus] = {
+    UserTenantRole.NORMAL: InviteResultStatus.ALREADY_MEMBER,
+    UserTenantRole.ADMIN: InviteResultStatus.ALREADY_ADMIN,
+    UserTenantRole.OWNER: InviteResultStatus.ALREADY_OWNER,
+    UserTenantRole.INVITE: InviteResultStatus.ALREADY_INVITED,
+}
+
+_INVITE_MESSAGE_TEMPLATES: dict[InviteResultStatus, str] = {
+    InviteResultStatus.INVITED: "Invitation sent to {email}.",
+    InviteResultStatus.ALREADY_MEMBER: "{email} is already in the team.",
+    InviteResultStatus.ALREADY_ADMIN: "{email} is already an admin of the team.",
+    InviteResultStatus.ALREADY_OWNER: "{email} is the owner of the team.",
+    InviteResultStatus.ALREADY_INVITED: "{email} has already been invited.",
+    InviteResultStatus.USER_NOT_FOUND: "User not found.",
+    InviteResultStatus.INVALID_EMAIL: "Invalid email address: {email}.",
+}
+
+
+def _build_invite_result(
+    email: str,
+    status: InviteResultStatus,
+    invited_user: User | None = None,
+) -> dict:
+    result: dict = {
+        "email": email,
+        "status": status,
+        "message": _INVITE_MESSAGE_TEMPLATES[status].format(email=email),
+    }
+    if invited_user:
+        result["user_id"] = invited_user.id
+        result["nickname"] = invited_user.nickname
+    return result
+
+
+def _invite_user_to_tenant(
+    db: Session,
+    tenant_id: str,
+    invite_user_email: str,
+    inviter_user_id: str,
+    inviter_display_name: str,
+    background_tasks: BackgroundTasks,
+) -> dict:
+    invite_user_email = invite_user_email.strip()
+    if not _validate_email_safe(invite_user_email):
+        return _build_invite_result(invite_user_email, InviteResultStatus.INVALID_EMAIL)
+
+    invite_users = UserService.query(db, email=invite_user_email)
+    if not invite_users:
+        return _build_invite_result(invite_user_email, InviteResultStatus.USER_NOT_FOUND)
+
+    invited_user = invite_users[0]
+    user_tenant = UserTenantService.get_membership(db, tenant_id=tenant_id, user_id=invited_user.id)
+    if user_tenant:
+        invite_status = _ROLE_TO_INVITE_STATUS.get(user_tenant.role, InviteResultStatus.ALREADY_MEMBER)
+        return _build_invite_result(invite_user_email, invite_status, invited_user=invited_user)
+
+    UserTenantService.save(
+        db=db,
+        id=get_uuid(),
+        user_id=invited_user.id,
+        tenant_id=tenant_id,
+        invited_by=inviter_user_id,
+        role=UserTenantRole.INVITE,
+        status=StatusEnum.VALID.value,
+    )
+    background_tasks.add_task(
+        send_invite_email,
+        to_email=invite_user_email,
+        invite_url=settings.MAIL_FRONTEND_URL,
+        tenant_id=tenant_id,
+        inviter=inviter_display_name,
+    )
+    return _build_invite_result(invite_user_email, InviteResultStatus.INVITED, invited_user=invited_user)
+
+
+def _summarize_invite_results(results: list[dict]) -> dict:
+    summary: dict = {"total": len(results)}
+    for status in InviteResultStatus:
+        summary[status.value] = 0
+    for result in results:
+        summary[result["status"]] += 1
+    return summary
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+@router.get("/list", summary="获取租户列表")
 def tenant_list(db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    获取当前用户关联的租户列表。
-
-    此接口返回用户为成员的租户列表，以及距离上次更新的时间差。
-
-    返回:
-        JSON 响应，其中包含租户列表以及每个租户距离上次更新的时间差（秒）。
-    """
     try:
         users = UserTenantService.get_tenants_by_user_id(db, user.id)
         for u in users:
@@ -55,22 +217,12 @@ def tenant_list(db: Session = Depends(get_db), user=Depends(manager)):
         return server_error_response(e)
 
 
-@router.get("/{tenant_id}/user/list", summary="获取租户下用户列表", response_model=dict)
-def user_list(tenant_id: str, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    获取特定租户下的用户列表。
-
-    参数:
-       - tenant_id (str): 租户 ID。
-
-    返回:
-        JSON 响应，其中包含租户下的用户列表，以及每个用户距离上次更新的时间差（秒）。
-    """
-    if user.id != tenant_id:
-        return get_json_result(
-            data=False,
-            retmsg='No authorization.',
-            retcode=RetCode.AUTHENTICATION_ERROR)
+@router.get("/{tenant_id}/user/list", summary="获取租户下用户列表")
+def user_list(
+    tenant_id: str,
+    db: Session = Depends(get_db),
+    _membership: UserTenant = Depends(require_member_manager),
+):
     try:
         users = UserTenantService.get_by_tenant_id(db, tenant_id)
         for u in users:
@@ -80,105 +232,73 @@ def user_list(tenant_id: str, db: Session = Depends(get_db), user=Depends(manage
         return server_error_response(e)
 
 
-@router.post('/{tenant_id}/user', summary="新增租户下用户", response_model=dict)
-async def create(
+@router.post('/{tenant_id}/user', summary="新增租户下用户")
+def create(
     tenant_id: str,
-    email: str = Body(..., embed=True),
+    request_body: InviteUserRequest = Body(...),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
     db: Session = Depends(get_db),
-    user=Depends(manager)
+    user=Depends(manager),
+    _membership: UserTenant = Depends(require_member_manager),
 ):
-    """
-    添加新用户到指定租户。
+    invite_result = _invite_user_to_tenant(
+        db=db,
+        tenant_id=tenant_id,
+        invite_user_email=request_body.email,
+        inviter_user_id=user.id,
+        inviter_display_name=_get_inviter_display_name(db, user),
+        background_tasks=background_tasks,
+    )
+    if invite_result["status"] != InviteResultStatus.INVITED:
+        return get_data_error_result(retmsg=invite_result["message"])
 
-    此接口根据用户邮箱添加用户到租户中。如果用户未找到或已是团队成员，将返回相应提示信息。
-
-    参数:
-       - tenant_id (str): 租户 ID。
-       - email (str): 要添加的用户邮箱（请求体中的 JSON 字段）。
-
-    返回:
-        JSON 响应，其中包含成功添加的用户信息。
-    """
-    if user.id != tenant_id:
-        return get_json_result(
-            data=False,
-            retmsg='No authorization.',
-            retcode=RetCode.AUTHENTICATION_ERROR)
-    invite_user_email = email
-    invite_users = UserService.query(db, email=invite_user_email)
-    if not invite_users:
+    invited_user = UserService.get_by_id(db, invite_result["user_id"])
+    if not invited_user:
         return get_data_error_result(retmsg="User not found.")
 
-    user_id_to_invite = invite_users[0].id
-    user_tenants = UserTenantService.query(db, user_id=user_id_to_invite, tenant_id=tenant_id)
-    if user_tenants:
-        user_tenant_role = user_tenants[0].role
-        if user_tenant_role == UserTenantRole.NORMAL:
-            return get_data_error_result(retmsg=f"{invite_user_email} is already in the team.")
-        if user_tenant_role == UserTenantRole.OWNER:
-            return get_data_error_result(retmsg=f"{invite_user_email} is the owner of the team.")
-        return get_data_error_result(
-            retmsg=f"{invite_user_email} is in the team, but the role: {user_tenant_role} is invalid.")
+    return get_json_result(data={
+        "id": invited_user.id,
+        "avatar": invited_user.avatar,
+        "email": invited_user.email,
+        "nickname": invited_user.nickname,
+    })
 
-    UserTenantService.save(
-        db=db,
-        id=get_uuid(),
-        user_id=user_id_to_invite,
-        tenant_id=tenant_id,
-        invited_by=user.id,
-        role=UserTenantRole.INVITE,
-        status=StatusEnum.VALID.value)
 
-    # Send invitation email asynchronously in background
-    try:
-        user_name = ""
-        inviter_user = UserService.get_by_id(db, user.id)
-        if inviter_user:
-            user_name = inviter_user.nickname
-
-        asyncio.create_task(
-            send_invite_email(
-                to_email=invite_user_email,
-                invite_url=settings.MAIL_FRONTEND_URL,
-                tenant_id=tenant_id,
-                inviter=user_name or user.email
-            )
+@router.post('/{tenant_id}/user/batch', summary="批量新增租户下用户")
+def batch_create(
+    tenant_id: str,
+    request_body: BatchInviteUsersRequest = Body(...),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    db: Session = Depends(get_db),
+    user=Depends(manager),
+    _membership: UserTenant = Depends(require_member_manager),
+):
+    inviter_display_name = _get_inviter_display_name(db, user)
+    normalized_emails = _normalize_batch_emails(request_body.emails)
+    results = [
+        _invite_user_to_tenant(
+            db=db,
+            tenant_id=tenant_id,
+            invite_user_email=email,
+            inviter_user_id=user.id,
+            inviter_display_name=inviter_display_name,
+            background_tasks=background_tasks,
         )
-    except Exception as e:
-        logging.exception(f"Failed to send invite email to {invite_user_email}: {e}")
-        return get_json_result(data=False, retmsg="Failed to send invite email.", retcode=RetCode.SERVER_ERROR)
-
-    # usr = list(usrs.dicts())[0]
-    # usr = {k: v for k, v in usr.items() if k in ["id", "avatar", "email", "nickname"]}
-    usr = {
-        "id": invite_users[0].id,
-        "avatar": invite_users[0].avatar,
-        "email": invite_users[0].email,
-        "nickname": invite_users[0].nickname,
-    }
-
-    return get_json_result(data=usr)
+        for email in normalized_emails
+    ]
+    return get_json_result(data={
+        "results": results,
+        "summary": _summarize_invite_results(results),
+    })
 
 
-@router.delete('/{tenant_id}/user/{user_id}', summary="删除租户下用户", response_model=dict)
+@router.delete('/{tenant_id}/user/{user_id}', summary="删除租户下用户")
 def rm(tenant_id: str, user_id: str, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    从租户中删除指定用户。
-
-    此接口从指定租户中删除指定用户。
-
-    参数:
-       - tenant_id (str): 租户 ID。
-       - user_id (str): 要删除的用户 ID。
-
-    返回:
-        JSON 响应，指示操作是否成功。
-    """
-    actor_membership = UserTenantService.filter_by_tenant_and_user_id(db, tenant_id=tenant_id, user_id=user.id)
-    target_membership = UserTenantService.filter_by_tenant_and_user_id(db, tenant_id=tenant_id, user_id=user_id)
+    actor_membership = UserTenantService.get_membership(db, tenant_id=tenant_id, user_id=user.id)
+    target_membership = UserTenantService.get_membership(db, tenant_id=tenant_id, user_id=user_id)
     target_role = target_membership.role if target_membership else None
     is_self = user.id == user_id
-    is_manager = actor_membership and actor_membership.role in {UserTenantRole.OWNER, UserTenantRole.ADMIN}
+    is_manager = actor_membership and UserTenantService.can_manage_members(actor_membership.role)
     if not is_self and not is_manager:
         return get_json_result(
             data=False,
@@ -202,19 +322,37 @@ def rm(tenant_id: str, user_id: str, db: Session = Depends(get_db), user=Depends
         return server_error_response(e)
 
 
-@router.put("/agree/{tenant_id}", summary="同意加入租户", response_model=dict)
+@router.put('/{tenant_id}/user/{user_id}/role', summary="更新租户成员角色")
+def update_member_role(
+    tenant_id: str,
+    user_id: str,
+    request_body: UpdateTenantMemberRoleRequest = Body(...),
+    db: Session = Depends(get_db),
+    _membership: UserTenant = Depends(require_role_manager),
+):
+    target_membership = UserTenantService.get_membership(db, tenant_id=tenant_id, user_id=user_id)
+    if not target_membership:
+        return get_data_error_result(retmsg="User not found in the team.")
+
+    if target_membership.role == UserTenantRole.OWNER:
+        return get_data_error_result(retmsg="Owner role cannot be changed.")
+
+    if target_membership.role == UserTenantRole.INVITE:
+        return get_data_error_result(retmsg="Invite role cannot be changed before acceptance.")
+
+    if target_membership.role == request_body.role:
+        return get_json_result(data={"user_id": user_id, "role": target_membership.role})
+
+    UserTenantService.filter_update(
+        db,
+        [UserTenant.id == target_membership.id],
+        {"role": request_body.role},
+    )
+    return get_json_result(data={"user_id": user_id, "role": request_body.role})
+
+
+@router.put("/agree/{tenant_id}", summary="同意加入租户")
 def agree(tenant_id: str, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    同意加入租户。
-
-    此接口用于用户接受加入租户的邀请。
-
-    参数:
-       - tenant_id (str): 要加入的租户 ID。
-
-    返回:
-        JSON 响应，指示操作是否成功。
-    """
     try:
         UserTenantService.filter_update(db, [UserTenant.tenant_id == tenant_id, UserTenant.user_id == user.id], {"role": UserTenantRole.NORMAL})
         return get_json_result(data=True)
