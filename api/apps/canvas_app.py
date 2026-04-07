@@ -1591,7 +1591,7 @@ def sessions(
             orderby, desc,
             None, user_id,
             include_dsl,
-            keywords, from_date, to_date,
+            keywords or "", from_date, to_date,
             exp_user_id=exp_user_id,
         )
         return get_json_result(data={"total": total, "sessions": sess})

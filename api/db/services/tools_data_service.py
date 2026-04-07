@@ -6,6 +6,7 @@
 @date：2025/9/23 10:00
 @desc: MCP工具数据服务
 """
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db.db_models import ToolsData
@@ -19,13 +20,13 @@ class ToolsDataService(CommonService):
         super().__init__(ToolsData)
 
     @classmethod
-    def get_by_flow_id_user_id(cls, db: Session, flow_id: str, user_id: str) -> ToolsData | None:
+    def get_by_flow_id_user_id(cls, db: Session, flow_id: str, user_id: str | None) -> ToolsData | None:
         """根据 flow_id 与 user_id 获取唯一的工具数据记录。"""
-        return (
-            db.query(cls.model)
-            .filter(cls.model.flow_id == flow_id, cls.model.user_id == user_id)
-            .one_or_none()
+        stmt = select(cls.model).where(
+            cls.model.flow_id == flow_id,
+            cls.model.user_id == user_id,
         )
+        return db.execute(stmt).scalar_one_or_none()
 
     @classmethod
     def create_or_update(
