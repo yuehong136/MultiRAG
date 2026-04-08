@@ -389,6 +389,25 @@ def token_required(request: Request, db: Session = Depends(get_db)):
     if not objs:
         raise SDKAuthError("Authentication error: API key is invalid!")
     return objs[0].tenant_id
+
+
+def beta_token_required(request: Request, db: Session = Depends(get_db)) -> str:
+    """
+    Beta token validation for chatbots/agentbots/searchbots embedded endpoints.
+    Validates Authorization header against APIToken.beta field.
+    Returns tenant_id.
+    """
+    authorization_str = request.headers.get("Authorization", "")
+    parts = authorization_str.split()
+    if len(parts) != 2:
+        raise SDKAuthError("Authorization is not valid!")
+    token = parts[1]
+    objs = APIToken.query(db, beta=token)
+    if not objs:
+        raise SDKAuthError("Authentication error: API key is invalid!")
+    return objs[0].tenant_id
+
+
 # def token_required(func):
 #     @wraps(func)
 #     def decorated_function(*args, **kwargs):

@@ -107,7 +107,7 @@ class Graph:
 
             cpn["obj"] = component_class(cpn["obj"]["component_name"])(self, k, param)
 
-        self.path = self.dsl["path"]
+        self.path = self.dsl.get("path", [])
 
     def __str__(self):
         self.dsl["path"] = self.path
@@ -298,7 +298,7 @@ class Canvas(Graph):
 
     def load(self):
         super().load()
-        self.history = self.dsl["history"]
+        self.history = self.dsl.get("history", [])
         if "globals" in self.dsl:
             self.globals = self.dsl["globals"]
             if "sys.history" not in self.globals:

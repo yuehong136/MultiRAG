@@ -87,15 +87,20 @@ class LLM(ComponentBase):
 
     def __init__(self, canvas, component_id, param: ComponentParamBase):
         super().__init__(canvas, component_id, param)
-        with db_connection() as db:
-            model_config = get_model_config_by_type_and_name(
-                db, self._canvas.get_tenant_id(),
-                TenantLLMService.llm_id2llm_type(self._param.llm_id),
-                self._param.llm_id,
-            )
-            self.chat_mdl = LLMBundle(db, self._canvas.get_tenant_id(), model_config,
-                                  max_retries=self._param.max_retries,
-                                  retry_interval=self._param.delay_after_error)
+        self.chat_mdl = None
+        try:
+            with db_connection() as db:
+                model_config = get_model_config_by_type_and_name(
+                    db, self._canvas.get_tenant_id(),
+                    TenantLLMService.llm_id2llm_type(self._param.llm_id),
+                    self._param.llm_id,
+                )
+                self.chat_mdl = LLMBundle(db, self._canvas.get_tenant_id(), model_config,
+                                      max_retries=self._param.max_retries,
+                                      retry_interval=self._param.delay_after_error)
+        except LookupError as e:
+            logging.warning("LLM component %s: model '%s' not found, will fail at run time: %s",
+                            component_id, self._param.llm_id, e)
         self.imgs = []
 
     def get_input_form(self) -> dict[str, dict]:
@@ -380,6 +385,9 @@ class LLM(ComponentBase):
     @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10*60)))
     async def _invoke_async(self, **kwargs):
         """异步版本 - 主要实现"""
+        if self.chat_mdl is None:
+            raise LookupError(f"LLM model '{self._param.llm_id}' is not available. "
+                              "Please configure the model API key in the model management page.")
         if self.check_if_canceled("LLM processing"):
             return
 

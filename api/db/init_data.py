@@ -142,9 +142,15 @@ def init_superuser(
 def init_llm_factory(db: Session):
     LLMFactoriesService.filter_delete(db, [1 == 1])
     factory_llm_infos = settings.FACTORY_LLM_INFOS
+    llm_factory_fields = set(LLMFactories.__table__.columns.keys())
     for factory_llm_info in factory_llm_infos:
         info = deepcopy(factory_llm_info)
         llm_infos = info.pop("llm")
+        # Runtime-only config keys such as `url` live in FACTORY_LLM_INFOS and
+        # should not be persisted into the LLMFactories ORM model.
+        # TODO: Replace this ORM-column filter with an explicit config schema or
+        # fixed DB-field mapping if llm_factories.json gains more non-persistent fields.
+        info = {key: value for key, value in info.items() if key in llm_factory_fields}
         try:
             LLMFactoriesService.save(db, **info)
         except Exception as e:

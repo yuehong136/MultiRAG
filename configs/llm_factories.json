@@ -767,7 +767,7 @@
             "rank": "940",
             "llm": [
                 {
-                    "llm_name": "glm-5",
+                    "llm_name": "glm-5-turbo",
                     "tags": "LLM,CHAT,128K",
                     "max_tokens": 128000,
                     "mdl_type": "chat",
