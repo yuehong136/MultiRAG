@@ -186,6 +186,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],  # 允许所有HTTP方法
     allow_headers=["*"],  # 允许所有请求头
+    expose_headers=["Content-Disposition"],
 )
 
 # # 添加敏感词过滤中间件

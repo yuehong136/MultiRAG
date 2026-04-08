@@ -1,7 +1,14 @@
 from typing import Annotated, Literal, Any
 
+import io
+import json
 import logging
-from fastapi import APIRouter, Depends, Query, HTTPException, Body
+import zipfile
+from copy import deepcopy
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, Query, HTTPException, Body, File, UploadFile
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field, Discriminator, model_validator, field_validator, ConfigDict
 
@@ -556,5 +563,262 @@ def rm(request: RemoveDialogRequest, db: Session = Depends(get_db), user=Depends
             dialog_list.append({"id": id, "status": StatusEnum.INVALID.value})
         DialogService.update_many_by_id(db, dialog_list)
         return get_json_result(data=True)
+    except Exception as e:
+        return server_error_response(e)
+
+
+# ==================== Template Export / Import ====================
+
+TEMPLATE_FORMAT = "multirag_dialog_template"
+TEMPLATE_BUNDLE_FORMAT = "multirag_dialog_template_bundle"
+TEMPLATE_VERSION = "1.0"
+
+_STRIP_FIELDS = {
+    "id", "tenant_id", "user_id", "tenant_llm_id", "tenant_rerank_id",
+    "icon",
+    "status", "create_date", "update_date", "create_time", "update_time",
+}
+
+_PROMPT_SENSITIVE_KEYS = {"tavily_api_key"}
+
+
+def sanitize_dialog_for_export(dialog_dict: dict) -> dict:
+    """Strip environment-specific and sensitive fields from a dialog dict."""
+    cleaned = {k: deepcopy(v) for k, v in dialog_dict.items() if k not in _STRIP_FIELDS}
+    prompt_cfg = cleaned.get("prompt_config")
+    if isinstance(prompt_cfg, dict):
+        for key in _PROMPT_SENSITIVE_KEYS:
+            prompt_cfg.pop(key, None)
+    return cleaned
+
+
+def _build_template_json(dialog_dict: dict) -> dict:
+    return {
+        "format": TEMPLATE_FORMAT,
+        "version": TEMPLATE_VERSION,
+        "export_time": datetime.now(timezone.utc).isoformat(),
+        "app": sanitize_dialog_for_export(dialog_dict),
+    }
+
+
+def _safe_filename(name: str) -> str:
+    return "".join(c if c.isalnum() or c in (" ", "-", "_", ".") else "_" for c in name).strip()
+
+
+def _content_disposition(filename: str) -> str:
+    """Build a Content-Disposition header value safe for non-ASCII filenames (RFC 5987)."""
+    from urllib.parse import quote
+    ascii_name = filename.encode("ascii", errors="replace").decode("ascii")
+    utf8_name = quote(filename, safe="")
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{utf8_name}"
+
+
+@router.get('/export', summary="导出对话应用模版", response_description="返回模版 JSON 或 ZIP 文件")
+def export_templates(
+    dialog_ids: str = Query(..., description="逗号分隔的对话 ID 列表"),
+    db: Session = Depends(get_db),
+    user=Depends(manager),
+):
+    try:
+        ids = [did.strip() for did in dialog_ids.split(",") if did.strip()]
+        if not ids:
+            return get_data_error_result(retmsg="dialog_ids is required.")
+
+        tenants = UserTenantService.query(db, user_id=user.id)
+        tenant_ids = {t.tenant_id for t in tenants}
+
+        templates = []
+        for did in ids:
+            dia = DialogService.get_by_id(db, did)
+            if not dia:
+                continue
+            d = dia.to_dict()
+            if d.get("tenant_id") not in tenant_ids and d.get("tenant_id") != user.id:
+                continue
+            templates.append(d)
+
+        if not templates:
+            return get_data_error_result(retmsg="No accessible dialogs found.")
+
+        if len(templates) == 1:
+            payload = _build_template_json(templates[0])
+            content = json.dumps(payload, ensure_ascii=False, indent=2)
+            filename = f"{_safe_filename(templates[0].get('name', 'template'))}.json"
+            return Response(
+                content=content.encode("utf-8"),
+                media_type="application/json",
+                headers={"Content-Disposition": _content_disposition(filename)},
+            )
+
+        now_str = datetime.now().strftime("%Y%m%d")
+        buf = io.BytesIO()
+        manifest_files = []
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for dia_dict in templates:
+                payload = _build_template_json(dia_dict)
+                fname = f"{_safe_filename(dia_dict.get('name', 'template'))}.json"
+                # Deduplicate filenames inside the zip
+                existing = {m["filename"] for m in manifest_files}
+                base, counter = fname, 1
+                while fname in existing:
+                    fname = base.replace(".json", f"_{counter}.json")
+                    counter += 1
+                zf.writestr(fname, json.dumps(payload, ensure_ascii=False, indent=2))
+                manifest_files.append({"filename": fname, "name": dia_dict.get("name", "")})
+
+            manifest = {
+                "format": TEMPLATE_BUNDLE_FORMAT,
+                "version": TEMPLATE_VERSION,
+                "export_time": datetime.now(timezone.utc).isoformat(),
+                "count": len(manifest_files),
+                "files": manifest_files,
+            }
+            zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+
+        buf.seek(0)
+        zip_filename = f"dialog-templates-{now_str}.zip"
+        return StreamingResponse(
+            buf,
+            media_type="application/zip",
+            headers={"Content-Disposition": _content_disposition(zip_filename)},
+        )
+    except Exception as e:
+        return server_error_response(e)
+
+
+def _validate_template(data: dict) -> dict | None:
+    """Return the app dict if valid, else None."""
+    if data.get("format") != TEMPLATE_FORMAT:
+        return None
+    if not data.get("app") or not isinstance(data["app"], dict):
+        return None
+    return data["app"]
+
+
+def _deduplicate_name(db: Session, tenant_id: str, name: str) -> str:
+    if not DialogService.get_or_none(db, tenant_id=tenant_id, name=name):
+        return name
+    counter = 1
+    while True:
+        candidate = f"{name} ({counter})"
+        if not DialogService.get_or_none(db, tenant_id=tenant_id, name=candidate):
+            return candidate
+        counter += 1
+
+
+@router.post('/import', summary="导入对话应用模版", response_description="返回导入结果")
+async def import_templates(
+    file: UploadFile = File(..., description="模版文件 (.json 或 .zip)"),
+    db: Session = Depends(get_db),
+    user=Depends(manager),
+):
+    try:
+        content = await file.read()
+        filename = file.filename or ""
+        app_dicts: list[dict] = []
+
+        if filename.endswith(".zip"):
+            try:
+                with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                    for name in zf.namelist():
+                        if name == "manifest.json" or not name.endswith(".json"):
+                            continue
+                        try:
+                            data = json.loads(zf.read(name))
+                            app_data = _validate_template(data)
+                            if app_data:
+                                app_dicts.append(app_data)
+                        except (json.JSONDecodeError, KeyError):
+                            continue
+            except zipfile.BadZipFile:
+                return get_data_error_result(retmsg="Invalid ZIP file.")
+        elif filename.endswith(".json"):
+            try:
+                data = json.loads(content)
+                app_data = _validate_template(data)
+                if app_data:
+                    app_dicts.append(app_data)
+                else:
+                    return get_data_error_result(retmsg="Invalid template format.")
+            except json.JSONDecodeError:
+                return get_data_error_result(retmsg="Invalid JSON file.")
+        else:
+            return get_data_error_result(retmsg="Unsupported file type. Please upload .json or .zip.")
+
+        if not app_dicts:
+            return get_data_error_result(retmsg="No valid templates found in the file.")
+
+        tenant = TenantService.get_by_id(db, user.id)
+        default_llm_id = tenant.llm_id if tenant else None
+
+        imported = []
+        failed = []
+        for app_data in app_dicts:
+            warnings = []
+            try:
+                name = app_data.get("name", "Imported Dialog")
+                name = _deduplicate_name(db, user.id, name)
+
+                llm_id = app_data.get("llm_id") or default_llm_id
+                if llm_id and llm_id != default_llm_id:
+                    tenant_model = TenantLLMService.get_api_key(db, user.id, llm_id)
+                    if not tenant_model:
+                        warnings.append(f"llm_id '{llm_id}' 不可用，已替换为默认模型")
+                        llm_id = default_llm_id
+
+                prompt_config = app_data.get("prompt_config") or {
+                    "system": "你是一个智能助手。\n以下是知识库：\n{knowledge}\n以上是知识库。",
+                    "prologue": "您好，我是您的助手！",
+                    "parameters": [{"key": "knowledge", "optional": False}],
+                    "empty_response": "知识库中未找到相关内容！",
+                }
+
+                exported_kb_ids = app_data.get("kb_ids") or []
+                valid_kb_ids = []
+                missing_kb_names = []
+                for kid in exported_kb_ids:
+                    kb = KnowledgebaseService.get_by_id(db, kid)
+                    if kb and kb.status == StatusEnum.VALID.value:
+                        valid_kb_ids.append(kid)
+                    else:
+                        missing_kb_names.append(kid)
+                if missing_kb_names:
+                    warnings.append(f"以下知识库不存在或不可用，已自动移除：{', '.join(missing_kb_names)}")
+
+                dia = {
+                    "id": get_uuid(),
+                    "tenant_id": user.id,
+                    "name": name,
+                    "description": app_data.get("description", ""),
+                    "language": app_data.get("language", "Chinese"),
+                    "llm_id": llm_id,
+                    "llm_setting": app_data.get("llm_setting"),
+                    "prompt_type": app_data.get("prompt_type", "simple"),
+                    "prompt_config": prompt_config,
+                    "similarity_threshold": app_data.get("similarity_threshold", 0.1),
+                    "vector_similarity_weight": app_data.get("vector_similarity_weight", 0.3),
+                    "top_n": app_data.get("top_n", 6),
+                    "top_k": app_data.get("top_k", 1024),
+                    "do_refer": app_data.get("do_refer", "1"),
+                    "rerank_id": app_data.get("rerank_id"),
+                    "kb_ids": valid_kb_ids,
+                    "icon": "",
+                    "search_mode": app_data.get("search_mode"),
+                }
+                dia = ensure_tenant_model_id_for_params(db, user.id, dia)
+
+                if not DialogService.save(db, **dia):
+                    failed.append({"name": name, "error": "Failed to save dialog."})
+                    continue
+
+                imported.append({"id": dia["id"], "name": name, "warnings": warnings})
+            except Exception as ex:
+                failed.append({"name": app_data.get("name", "unknown"), "error": str(ex)})
+
+        return get_json_result(data={
+            "imported": imported,
+            "failed": failed,
+            "total": len(imported) + len(failed),
+        })
     except Exception as e:
         return server_error_response(e)
