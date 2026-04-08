@@ -143,8 +143,8 @@ def create_dataset(
         if not KnowledgebaseService.save(db, **payload):
             return get_error_data_result(retmsg="Create dataset error.(Database error)")
 
-        ok, k = KnowledgebaseService.get_by_id(db, payload["id"])
-        if not ok:
+        k = KnowledgebaseService.get_by_id(db, payload["id"])
+        if not k:
             return get_error_data_result(retmsg="Dataset created failed")
 
         response_data = remap_dictionary_keys(k.to_dict())
@@ -327,8 +327,8 @@ def update_dataset(
         if not KnowledgebaseService.update_by_id(db, kb.id, req):
             return get_error_data_result(retmsg="Update dataset error.(Database error)")
 
-        ok, k = KnowledgebaseService.get_by_id(db, kb.id)
-        if not ok:
+        k = KnowledgebaseService.get_by_id(db, kb.id)
+        if not k:
             return get_error_data_result(retmsg="Dataset updated failed")
 
         response_data = remap_dictionary_keys(k.to_dict())
@@ -609,8 +609,8 @@ def run_graphrag(
             retcode=RetCode.AUTHENTICATION_ERROR
         )
 
-    ok, kb = KnowledgebaseService.get_by_id(db, dataset_id)
-    if not ok:
+    kb = KnowledgebaseService.get_by_id(db, dataset_id)
+    if not kb:
         return get_error_data_result(retmsg="Invalid Dataset ID")
 
     task_id = kb.graphrag_task_id
@@ -681,8 +681,8 @@ def trace_graphrag(
             retcode=RetCode.AUTHENTICATION_ERROR
         )
 
-    ok, kb = KnowledgebaseService.get_by_id(db, dataset_id)
-    if not ok:
+    kb = KnowledgebaseService.get_by_id(db, dataset_id)
+    if not kb:
         return get_error_data_result(retmsg="Invalid Dataset ID")
 
     task_id = kb.graphrag_task_id
@@ -722,8 +722,8 @@ def run_raptor(
             retcode=RetCode.AUTHENTICATION_ERROR
         )
 
-    ok, kb = KnowledgebaseService.get_by_id(db, dataset_id)
-    if not ok:
+    kb = KnowledgebaseService.get_by_id(db, dataset_id)
+    if not kb:
         return get_error_data_result(retmsg="Invalid Dataset ID")
 
     task_id = kb.raptor_task_id
@@ -794,8 +794,8 @@ def trace_raptor(
             retcode=RetCode.AUTHENTICATION_ERROR
         )
 
-    ok, kb = KnowledgebaseService.get_by_id(db, dataset_id)
-    if not ok:
+    kb = KnowledgebaseService.get_by_id(db, dataset_id)
+    if not kb:
         return get_error_data_result(retmsg="Invalid Dataset ID")
 
     task_id = kb.raptor_task_id

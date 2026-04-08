@@ -277,8 +277,8 @@ def update_document(
     if not KnowledgebaseService.query(db, id=dataset_id, tenant_id=tenant_id):
         return get_error_data_result(retmsg="You don't own the dataset.")
     
-    e, kb = KnowledgebaseService.get_by_id(db, dataset_id)
-    if not e:
+    kb = KnowledgebaseService.get_by_id(db, dataset_id)
+    if not kb:
         return get_error_data_result(retmsg="Can't find this dataset!")
     
     doc = DocumentService.query(db, kb_id=dataset_id, id=document_id)
@@ -323,8 +323,9 @@ def update_document(
         
         informs = File2DocumentService.get_by_document_id(db, document_id)
         if informs:
-            e, file = FileService.get_by_id(db, informs[0].file_id)
-            FileService.update_by_id(db, file.id, {"name": req["name"]})
+            file = FileService.get_by_id(db, informs[0].file_id)
+            if file:
+                FileService.update_by_id(db, file.id, {"name": req["name"]})
     
     # 更新解析配置
     if "parser_config" in req:
@@ -382,8 +383,8 @@ def update_document(
                 return server_error_response(e)
     
     try:
-        ok, doc = DocumentService.get_by_id(db, doc.id)
-        if not ok:
+        doc = DocumentService.get_by_id(db, doc.id)
+        if not doc:
             return get_error_data_result(retmsg="Document update failed")
     except OperationalError as e:
         logging.exception(e)
@@ -448,8 +449,8 @@ def download_document(
     if not informs:
         return get_error_data_result(retmsg="This document has been deleted")
     
-    e, file = FileService.get_by_id(db, informs[0].file_id)
-    if not e:
+    file = FileService.get_by_id(db, informs[0].file_id)
+    if not file:
         return get_error_data_result(retmsg="This document has been deleted")
     
     try:
@@ -1275,7 +1276,7 @@ def update_chunk(
         chunk_data["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(tks)
 
         # 重新生成embedding
-        e, kb = KnowledgebaseService.get_by_id(db, dataset_id)
+        kb = KnowledgebaseService.get_by_id(db, dataset_id)
         if kb.tenant_embd_id:
             embd_config = get_model_config_by_id(db, kb.tenant_embd_id)
         else:

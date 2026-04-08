@@ -1,11 +1,13 @@
 import json
 import copy
 import logging
+import os
 import re
+import tempfile
 import time
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -24,7 +26,7 @@ from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
 from api.db.services.user_service import UserTenantService
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
-from api.utils.api_utils import check_duplicate_ids, get_data_openai, get_error_data_result, get_json_result, get_result, server_error_response, token_required
+from api.utils.api_utils import beta_token_required, check_duplicate_ids, get_data_openai, get_error_data_result, get_json_result, get_result, server_error_response, token_required
 from core.app.tag import label_question
 from core.prompts.template import load_prompt
 from core.prompts.generator import cross_languages, keyword_extraction, chunks_format
@@ -176,8 +178,8 @@ def create_agent_session(
     user_id = (request_body.user_id if request_body and request_body.user_id else None) or tenant_id
     release_mode = request_body.release if request_body else False
 
-    e, cvs = UserCanvasService.get_by_id(db, agent_id)
-    if not e:
+    cvs = UserCanvasService.get_by_id(db, agent_id)
+    if not cvs:
         return get_error_data_result(retmsg="Agent not found.")
     if not UserCanvasService.query(db, user_id=tenant_id, id=agent_id):
         return get_error_data_result(retmsg="You cannot access the agent.")
@@ -1049,31 +1051,35 @@ Related search terms:
 
 
 @router.post("/chatbots/{dialog_id}/completions", summary="聊天机器人补全")
-async def chatbot_completions(dialog_id: str, request: ChatbotCompletionRequest, db: Session = Depends(get_db)):
-    req = request.model_dump()
-    
-    # 这些接口需要特殊的token验证逻辑，暂时保持原有方式
-    # TODO: 需要重构token验证方式以符合FastAPI模式
-    
+async def chatbot_completions(
+    dialog_id: str,
+    body: ChatbotCompletionRequest,
+    db: Session = Depends(get_db),
+    _: str = Depends(beta_token_required),
+):
+    req = body.model_dump()
+
     if "quote" not in req:
         req["quote"] = False
 
     if req.get("stream", True):
-        resp = StreamingResponse(iframe_completion(dialog_id, **req), media_type="text/event-stream")
+        resp = StreamingResponse(iframe_completion(db, dialog_id, **req), media_type="text/event-stream")
         resp.headers["Cache-control"] = "no-cache"
         resp.headers["Connection"] = "keep-alive"
         resp.headers["X-Accel-Buffering"] = "no"
         resp.headers["Content-Type"] = "text/event-stream; charset=utf-8"
         return resp
 
-    async for answer in iframe_completion(dialog_id, **req):
+    async for answer in iframe_completion(db, dialog_id, **req):
         return get_result(data=answer)
 
 
 @router.get("/chatbots/{dialog_id}/info", summary="获取聊天机器人信息")
-def chatbots_inputs(dialog_id: str, db: Session = Depends(get_db)):
-    # TODO: 需要重构token验证方式以符合FastAPI模式
-    
+def chatbots_inputs(
+    dialog_id: str,
+    db: Session = Depends(get_db),
+    _: str = Depends(beta_token_required),
+):
     dialog = DialogService.get_by_id(db, dialog_id)
     if not dialog:
         return get_error_data_result(retmsg=f"Can't find dialog by ID: {dialog_id}")
@@ -1089,15 +1095,15 @@ def chatbots_inputs(dialog_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/agentbots/{agent_id}/completions", summary="代理机器人补全")
-async def agent_bot_completions(agent_id: str, request: AgentCompletionRequest, db: Session = Depends(get_db)):
-    req = request.model_dump()
-
-    # TODO: 需要重构token验证方式以符合FastAPI模式
+async def agent_bot_completions(
+    agent_id: str,
+    body: AgentCompletionRequest,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(beta_token_required),
+):
+    req = body.model_dump()
 
     if req.get("stream", True):
-        # TODO: 需要获取正确的tenant_id
-        tenant_id = "default"  # 临时解决方案
-
         async def stream():
             try:
                 async for answer in agent_completion(tenant_id, agent_id, **req):
@@ -1109,6 +1115,7 @@ async def agent_bot_completions(agent_id: str, request: AgentCompletionRequest, 
                     {
                         "event": "message",
                         "data": {"content": f"Error {error_result.get('code', 500)}: {error_result.get('message', str(e))}\n\n"},
+                        **error_result,
                     },
                     ensure_ascii=False,
                 ) + "\n\n"
@@ -1120,8 +1127,6 @@ async def agent_bot_completions(agent_id: str, request: AgentCompletionRequest, 
         resp.headers["Content-Type"] = "text/event-stream; charset=utf-8"
         return resp
 
-    # TODO: 需要获取正确的tenant_id
-    tenant_id = "default"  # 临时解决方案
     try:
         async for answer in agent_completion(tenant_id, agent_id, **req):
             return get_result(data=answer)
@@ -1131,30 +1136,33 @@ async def agent_bot_completions(agent_id: str, request: AgentCompletionRequest, 
 
 
 @router.get("/agentbots/{agent_id}/inputs", summary="获取代理机器人输入表单")
-def begin_inputs(agent_id: str, db: Session = Depends(get_db)):
-    # TODO: 需要重构token验证方式以符合FastAPI模式
-    
-    e, cvs = UserCanvasService.get_by_id(db, agent_id)
-    if not e:
+def begin_inputs(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(beta_token_required),
+):
+    cvs = UserCanvasService.get_by_id(db, agent_id)
+    if not cvs:
         return get_error_data_result(retmsg=f"Can't find agent by ID: {agent_id}")
 
-    # TODO: 需要获取正确的tenant_id
-    tenant_id = "default"  # 临时解决方案
     canvas = Canvas(json.dumps(cvs.dsl), tenant_id, canvas_id=cvs.id)
     return get_result(data={
         "title": cvs.title,
         "avatar": cvs.avatar,
-        "inputs": canvas.get_component_input_form("begin")
+        "inputs": canvas.get_component_input_form("begin"),
+        "prologue": canvas.get_prologue(),
+        "mode": canvas.get_mode(),
     })
 
 
 @router.post("/searchbots/ask", summary="搜索机器人询问")
-async def ask_about_embedded(request: SearchBotAskRequest, db: Session = Depends(get_db)):
-    req = request.model_dump()
-    
-    # TODO: 需要重构token验证方式以符合FastAPI模式
-    # TODO: 需要获取正确的tenant_id
-    uid = "default"  # 临时解决方案
+async def ask_about_embedded(
+    body: SearchBotAskRequest,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(beta_token_required),
+):
+    req = body.model_dump()
+    uid = tenant_id
 
     search_id = req.get("search_id", "")
     search_config = {}
@@ -1180,13 +1188,13 @@ async def ask_about_embedded(request: SearchBotAskRequest, db: Session = Depends
 
 
 @router.post("/searchbots/retrieval_test", summary="搜索机器人检索测试")
-async def retrieval_test_embedded(request: SearchBotRetrievalTestRequest, db: Session = Depends(get_db)):
-    req = request.model_dump()
-    
-    # TODO: 需要重构token验证方式以符合FastAPI模式
-    # TODO: 需要获取正确的tenant_id
-    tenant_id = "default"  # 临时解决方案
-    
+async def retrieval_test_embedded(
+    body: SearchBotRetrievalTestRequest,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(beta_token_required),
+):
+    req = body.model_dump()
+
     page = int(req.get("page", 1))
     size = int(req.get("size", 30))
     question = req["question"]
@@ -1203,9 +1211,6 @@ async def retrieval_test_embedded(request: SearchBotRetrievalTestRequest, db: Se
     langs = req.get("cross_languages", [])
     rerank_id = req.get("rerank_id", "")
     tenant_ids = []
-
-    if not tenant_id:
-        return get_error_data_result(retmsg="permission denined.")
 
     if req.get("search_id", ""):
         search_config = SearchService.get_detail(db, req.get("search_id", "")).get("search_config", {})
@@ -1285,15 +1290,12 @@ async def retrieval_test_embedded(request: SearchBotRetrievalTestRequest, db: Se
 
 
 @router.post("/searchbots/related_questions", summary="搜索机器人相关问题")
-async def related_questions_embedded(request: SearchBotRelatedQuestionsRequest, db: Session = Depends(get_db)):
-    req = request.model_dump()
-    
-    # TODO: 需要重构token验证方式以符合FastAPI模式
-    # TODO: 需要获取正确的tenant_id
-    tenant_id = "default"  # 临时解决方案
-    
-    if not tenant_id:
-        return get_error_data_result(retmsg="permission denined.")
+async def related_questions_embedded(
+    body: SearchBotRelatedQuestionsRequest,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(beta_token_required),
+):
+    req = body.model_dump()
 
     search_id = req.get("search_id", "")
     search_config = {}
@@ -1329,14 +1331,11 @@ Related search terms:
 
 
 @router.get("/searchbots/detail", summary="获取搜索机器人详情")
-def detail_share_embedded(search_id: str = Query(...), db: Session = Depends(get_db)):
-    # TODO: 需要重构token验证方式以符合FastAPI模式
-    # TODO: 需要获取正确的tenant_id
-    tenant_id = "default"  # 临时解决方案
-    
-    if not tenant_id:
-        return get_error_data_result(retmsg="permission denined.")
-    
+def detail_share_embedded(
+    search_id: str = Query(...),
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(beta_token_required),
+):
     try:
         tenants = UserTenantService.query(db, user_id=tenant_id)
         for tenant in tenants:
@@ -1354,25 +1353,106 @@ def detail_share_embedded(search_id: str = Query(...), db: Session = Depends(get
 
 
 @router.post("/searchbots/mindmap", summary="生成搜索机器人思维导图")
-async def mindmap(request: SearchBotMindmapRequest, db: Session = Depends(get_db)):
-    req = request.model_dump()
-    token = request.headers.get("Authorization").split()
-    if len(token) != 2:
-        return get_error_data_result(retmsg='Authorization is not valid!')
-    token = token[1]
-    objs = APIToken.query(beta=token)
-    if not objs:
-        return get_error_data_result(retmsg='Authentication error: API key is invalid!')
-
-    tenant_id = objs[0].tenant_id
+async def mindmap(
+    body: SearchBotMindmapRequest,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(beta_token_required),
+):
+    req = body.model_dump()
 
     search_id = req.get("search_id", "")
-    search_app = SearchService.get_detail(search_id) if search_id else {}
+    search_app = SearchService.get_detail(db, search_id) if search_id else {}
 
     mind_map = await gen_mindmap(db, req["question"], req["kb_ids"], tenant_id, search_app.get("search_config", {}))
     if "error" in mind_map:
         return server_error_response(Exception(mind_map["error"]))
     return get_json_result(data=mind_map)
+
+
+class TTSRequest(BaseModel):
+    text: str
+
+
+@router.post("/sequence2txt", summary="语音转文字")
+async def sequence2txt(
+    file: UploadFile = File(...),
+    stream: str = "false",
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(token_required),
+):
+    stream_mode = stream.lower() == "true"
+
+    ALLOWED_EXTS = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".webm", ".opus", ".wma"}
+    filename = file.filename or ""
+    suffix = os.path.splitext(filename)[-1].lower()
+    if suffix not in ALLOWED_EXTS:
+        return get_error_data_result(
+            retmsg=f"Unsupported audio format: {suffix}. Allowed: {', '.join(sorted(ALLOWED_EXTS))}"
+        )
+
+    fd, temp_audio_path = tempfile.mkstemp(suffix=suffix)
+    os.close(fd)
+    content = await file.read()
+    with open(temp_audio_path, "wb") as f:
+        f.write(content)
+
+    try:
+        default_asr_model_config = get_tenant_default_model_by_type(db, tenant_id, LLMType.SPEECH2TEXT)
+    except Exception as e:
+        return get_error_data_result(retmsg=str(e))
+    asr_mdl = LLMBundle(db, tenant_id, default_asr_model_config)
+
+    if not stream_mode:
+        text = asr_mdl.transcription(temp_audio_path)
+        try:
+            os.remove(temp_audio_path)
+        except Exception as e:
+            logging.error(f"Failed to remove temp audio file: {str(e)}")
+        return get_json_result(data={"text": text})
+
+    async def event_stream():
+        try:
+            for evt in asr_mdl.stream_transcription(temp_audio_path):
+                yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            err = {"event": "error", "text": str(e)}
+            yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
+        finally:
+            try:
+                os.remove(temp_audio_path)
+            except Exception as e:
+                logging.error(f"Failed to remove temp audio file: {str(e)}")
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.post("/tts", summary="文字转语音")
+async def tts(
+    body: TTSRequest,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(token_required),
+):
+    text = body.text
+
+    try:
+        default_tts_model_config = get_tenant_default_model_by_type(db, tenant_id, LLMType.TTS)
+    except Exception as e:
+        return get_error_data_result(retmsg=str(e))
+    tts_mdl = LLMBundle(db, tenant_id, default_tts_model_config)
+
+    def stream_audio():
+        try:
+            for txt in re.split(r"[，。/《》？；：！\n\r:;]+", text):
+                for chunk in tts_mdl.tts(txt):
+                    yield chunk
+        except Exception as e:
+            yield ("data:" + json.dumps({"code": 500, "message": str(e), "data": {"answer": "**ERROR**: " + str(e)}}, ensure_ascii=False)).encode("utf-8")
+
+    resp = StreamingResponse(stream_audio(), media_type="audio/mpeg")
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["Connection"] = "keep-alive"
+    resp.headers["X-Accel-Buffering"] = "no"
+    return resp
 
 
 def _build_reference_chunks(reference, include_metadata=False, metadata_fields=None):

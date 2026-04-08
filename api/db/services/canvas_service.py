@@ -301,8 +301,8 @@ async def completion(
 
     # 组装 canvas & conversation
     if session_id:
-        ok, conv = API4ConversationService.get_by_id(db, session_id)
-        if not ok:
+        conv = API4ConversationService.get_by_id(db, session_id)
+        if not conv:
             raise LookupError("Session not found!")
         if not conv.message:
             conv.message = []
@@ -310,8 +310,8 @@ async def completion(
             conv.dsl = json.dumps(conv.dsl, ensure_ascii=False)
         canvas = Canvas(conv.dsl, tenant_id, agent_id, canvas_id=agent_id, custom_header=custom_header)
     else:
-        ok, cvs = UserCanvasService.get_by_id(db, agent_id)
-        if not ok:
+        cvs = UserCanvasService.get_by_id(db, agent_id)
+        if not cvs:
             raise LookupError("Agent not found.")
         if cvs.user_id != tenant_id:
             raise PermissionError("You do not own the agent.")

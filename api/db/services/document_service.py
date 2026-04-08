@@ -2934,7 +2934,9 @@ class DocumentService(CommonService):
     @classmethod
     def do_cancel(cls, db: Session, doc_id):
         try:
-            _, doc = DocumentService.get_by_id(db, doc_id)
+            doc = DocumentService.get_by_id(db, doc_id)
+            if not doc:
+                return False
             return doc.run == TaskStatus.CANCEL.value or doc.progress < 0
         except Exception:
             pass

@@ -519,7 +519,7 @@ async def run(
     dsl_str = json.dumps(replica_dsl, ensure_ascii=False)
 
     # DataFlow模式
-    _, cvs = await thread_pool_exec(UserCanvasService.get_by_id, db, req["id"])
+    cvs = await thread_pool_exec(UserCanvasService.get_by_id, db, req["id"])
     if cvs.canvas_category == CanvasCategory.DataFlow:
         task_id = get_uuid()
         Pipeline(dsl_str, tenant_id=tenant_id, doc_id=CANVAS_DEBUG_DOC_ID, task_id=task_id, flow_id=req["id"])
@@ -1617,8 +1617,8 @@ async def set_session(
     - dict: 新建会话的完整信息
     """
     tenant_id = user.id
-    ok, cvs = UserCanvasService.get_by_id(db, canvas_id)
-    assert ok, "Agent not found."
+    cvs = UserCanvasService.get_by_id(db, canvas_id)
+    assert cvs, "Agent not found."
     if not isinstance(cvs.dsl, str):
         cvs.dsl = json.dumps(cvs.dsl, ensure_ascii=False)
     session_id = get_uuid()
@@ -1663,7 +1663,7 @@ def get_session(
             retmsg='Only owner of canvas authorized for this operation.',
             retcode=RetCode.OPERATING_ERROR,
         )
-    ok, conv = API4ConversationService.get_by_id(db, session_id)
+    conv = API4ConversationService.get_by_id(db, session_id)
     return get_json_result(data=conv.to_dict())
 
 

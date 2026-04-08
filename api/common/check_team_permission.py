@@ -49,8 +49,8 @@ def check_file_team_permission(db: Session, file: dict | File, other: str) -> bo
     kb_ids = [kb_info["kb_id"] for kb_info in FileService.get_kb_id_by_file_id(db, file_id)]
 
     for kb_id in kb_ids:
-        ok, kb = KnowledgebaseService.get_by_id(db, kb_id)
-        if not ok:
+        kb = KnowledgebaseService.get_by_id(db, kb_id)
+        if not kb:
             continue
 
         if check_kb_team_permission(db, kb, other):
