@@ -49,7 +49,7 @@ del _package_path, _import_submodules, _extract_classes_from_module
 
 
 def component_class(class_name):
-    for module_name in ["agent.component", "agent.tools", "rag.flow"]:
+    for module_name in ["agent.component", "agent.tools", "core.flow"]:
         try:
             return getattr(importlib.import_module(module_name), class_name)
         except Exception:
