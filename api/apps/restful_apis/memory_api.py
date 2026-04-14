@@ -291,12 +291,13 @@ def search_message(
     top_n: int = Query(default=5, description="Maximum number of results"),
     agent_id: str = Query(default="", description="Optional Agent ID filter"),
     session_id: str = Query(default="", description="Optional Session ID filter"),
+    user_id: str = Query(default="", description="Optional User ID filter"),
     db: Session = Depends(get_db),
     user=Depends(manager),
 ):
     if len(memory_id) == 1 and ',' in memory_id[0]:
         memory_id = memory_id[0].split(',')
-    filter_dict = {"memory_id": memory_id, "agent_id": agent_id, "session_id": session_id}
+    filter_dict = {"memory_id": memory_id, "agent_id": agent_id, "session_id": session_id, "user_id": user_id}
     params = {
         "query": query,
         "similarity_threshold": similarity_threshold,

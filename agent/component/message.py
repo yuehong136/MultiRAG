@@ -441,8 +441,12 @@ class Message(ComponentBase):
         if not hasattr(self._param, "memory_ids") or not self._param.memory_ids:
             return True, "No memory selected."
 
+        user_id = getattr(self._param, "user_id", "")
+        if user_id and re.match(r"^{.*}$", user_id):
+            user_id = self._canvas.get_variable_value(user_id)
+
         message_dict = {
-            "user_id": self._canvas._tenant_id,
+            "user_id": user_id or "",
             "agent_id": self._canvas._id,
             "session_id": self._canvas.task_id,
             "user_input": self._canvas.get_sys_query(),

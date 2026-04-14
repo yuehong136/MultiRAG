@@ -92,6 +92,9 @@ class Retrieval(ToolBase, ABC):
         """Retrieve from memory storage."""
         with db_connection() as db:
             memory_ids: list[str] = [memory_id for memory_id in self._param.memory_ids]
+            user_id = getattr(self._param, "user_id", None)
+            if user_id and isinstance(user_id, str) and re.match(r"^{.*}$", user_id):
+                user_id = self._canvas.get_variable_value(user_id)
             memory_list = MemoryService.get_by_ids(db, memory_ids)
             if not memory_list:
                 raise Exception("No memory is selected.")
@@ -104,9 +107,12 @@ class Retrieval(ToolBase, ABC):
             query = self.string_format(query_text, vars)
 
             # Query message
+            filter_dict: dict = {"memory_id": memory_ids}
+            if user_id:
+                filter_dict["user_id"] = user_id
             message_list = memory_message_service.query_message(
                 db,
-                {"memory_id": memory_ids},
+                filter_dict,
                 {
                     "query": query,
                     "similarity_threshold": self._param.similarity_threshold,
