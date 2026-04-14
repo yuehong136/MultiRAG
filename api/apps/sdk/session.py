@@ -7,13 +7,13 @@ import tempfile
 import time
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request, UploadFile, File
+from fastapi import APIRouter, Depends, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from agent.canvas import Canvas
-from api.db.db_models import APIToken, get_db
+from api.db.db_models import get_db
 from api.db.services.api_service import API4ConversationService
 from api.db.services.canvas_service import UserCanvasService, completion_openai
 from api.db.services.canvas_service import completion as agent_completion
@@ -178,19 +178,23 @@ def create_agent_session(
     user_id = (request_body.user_id if request_body and request_body.user_id else None) or tenant_id
     release_mode = request_body.release if request_body else False
 
-    cvs = UserCanvasService.get_by_id(db, agent_id)
-    if not cvs:
-        return get_error_data_result(retmsg="Agent not found.")
     if not UserCanvasService.query(db, user_id=tenant_id, id=agent_id):
         return get_error_data_result(retmsg="You cannot access the agent.")
 
-    if not isinstance(cvs.dsl, str):
-        cvs.dsl = json.dumps(cvs.dsl, ensure_ascii=False)
+    try:
+        cvs, dsl = UserCanvasService.get_agent_dsl_with_release(
+            db,
+            agent_id,
+            release_mode=release_mode,
+            tenant_id=tenant_id,
+        )
+    except LookupError:
+        return get_error_data_result(retmsg="Agent not found.")
+    except PermissionError as e:
+        return get_error_data_result(retmsg=str(e))
 
-    if release_mode and not bool(cvs.release):
-        raise PermissionError("No available published version")
     session_id = get_uuid()
-    canvas = Canvas(cvs.dsl, tenant_id, agent_id, canvas_id=cvs.id)
+    canvas = Canvas(dsl, tenant_id, agent_id, canvas_id=cvs.id)
     canvas.reset()
 
     cvs.dsl = json.loads(str(canvas))

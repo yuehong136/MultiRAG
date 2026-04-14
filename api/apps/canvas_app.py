@@ -33,6 +33,7 @@ from api.db.services.canvas_service import (
 )
 from api.db.services.document_service import DocumentService
 from api.db.services.file_service import FileService
+from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
 from api.db.services.task_service import queue_dataflow, CANVAS_DEBUG_DOC_ID, TaskService
 from api.db.services.user_service import TenantService
@@ -372,6 +373,13 @@ def get(
             last_publish_time = released_versions[0].update_time
 
     canvas["last_publish_time"] = last_publish_time
+
+    if canvas.get("canvas_category") == CanvasCategory.DataFlow:
+        datasets = KnowledgebaseService.query(db, pipeline_id=canvas_id)
+        canvas["datasets"] = [
+            {"id": dataset.id, "name": dataset.name, "avatar": dataset.avatar}
+            for dataset in datasets
+        ]
 
     return get_json_result(data=canvas)
 

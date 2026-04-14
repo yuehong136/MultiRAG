@@ -17,6 +17,7 @@ from api.db import TenantPermission, CanvasCategory
 from api.db.db_models import CanvasTemplate, User, UserCanvas, UserCanvasVersion, API4Conversation
 from api.db.services.common_service import CommonService
 from api.db.services.api_service import API4ConversationService
+from api.db.services.user_canvas_version import UserCanvasVersionService
 from common.misc_utils import get_uuid
 from api.utils.api_utils import get_data_openai
 
@@ -273,6 +274,33 @@ class UserCanvasService(CommonService):
             return False
         return True
 
+    @classmethod
+    def get_agent_dsl_with_release(
+        cls,
+        db: Session,
+        agent_id: str,
+        release_mode: bool = False,
+        tenant_id: str | None = None,
+    ) -> tuple[UserCanvas, str]:
+        cvs = cls.get_by_id(db, agent_id)
+        if not cvs:
+            raise LookupError("Agent not found.")
+        if tenant_id and cvs.user_id != tenant_id:
+            raise PermissionError("You do not own the agent.")
+
+        if release_mode:
+            released_version = UserCanvasVersionService.get_latest_released(db, agent_id)
+            if not released_version:
+                raise PermissionError("No available published version")
+            dsl = released_version.dsl
+        else:
+            dsl = cvs.dsl
+
+        if not isinstance(dsl, str):
+            dsl = json.dumps(dsl, ensure_ascii=False)
+
+        return cvs, dsl
+
 
 # ---------------------------
 # 推理流程（SSE / OpenAI 兼容）
@@ -310,16 +338,14 @@ async def completion(
             conv.dsl = json.dumps(conv.dsl, ensure_ascii=False)
         canvas = Canvas(conv.dsl, tenant_id, agent_id, canvas_id=agent_id, custom_header=custom_header)
     else:
-        cvs = UserCanvasService.get_by_id(db, agent_id)
-        if not cvs:
-            raise LookupError("Agent not found.")
-        if cvs.user_id != tenant_id:
-            raise PermissionError("You do not own the agent.")
-        if release_mode == "true" and not bool(cvs.release):
-            raise PermissionError("No available published version")
-        dsl_str = cvs.dsl if isinstance(cvs.dsl, str) else json.dumps(cvs.dsl, ensure_ascii=False)
+        cvs, dsl = UserCanvasService.get_agent_dsl_with_release(
+            db,
+            agent_id,
+            release_mode=release_mode == "true",
+            tenant_id=tenant_id,
+        )
         session_id = get_uuid()
-        canvas = Canvas(cvs.dsl, tenant_id, agent_id, canvas_id=cvs.id, custom_header=custom_header)
+        canvas = Canvas(dsl, tenant_id, agent_id, canvas_id=cvs.id, custom_header=custom_header)
         canvas.reset()
         conv_dict = {
             "id": session_id,
@@ -327,7 +353,7 @@ async def completion(
             "user_id": user_id,
             "message": [],
             "source": "agent",
-            "dsl": dsl_str,
+            "dsl": dsl,
             "reference": []
         }
         # save 并转实体

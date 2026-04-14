@@ -100,6 +100,23 @@ class UserCanvasVersionService(CommonService):
             return False
 
     @classmethod
+    def get_latest_released(cls, db: Session, user_canvas_id: str):
+        """Return the newest released version for the specified canvas."""
+        stmt = (
+            select(cls.model)
+            .where(
+                cls.model.user_canvas_id == user_canvas_id,
+                cls.model.release.is_(True),
+            )
+            .order_by(cls.model.create_time.desc())
+        )
+        try:
+            return db.execute(stmt).scalars().first()
+        except Exception:
+            logging.exception("Failed to get latest released version for %s", user_canvas_id)
+            return None
+
+    @classmethod
     def save_or_replace_latest(cls, db: Session, user_canvas_id: str, dsl, title: str | None = None, description: str | None = None, release=None):
         """
         Persist a canvas snapshot into version history.
