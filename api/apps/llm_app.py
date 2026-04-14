@@ -1760,7 +1760,7 @@ async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db)
 
 
 @router.post('/chat_service_sse', summary="模型对话服务", response_description="成功调用对话模型")
-async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session = Depends(get_db), user=Depends(manager)):
+async def chat_service_sse(request: LLMServiceRequest, http_request: Request, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/v1/llm/chat_service` 模型对话服务
 
@@ -1883,8 +1883,8 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
     req_dict = request.model_dump()
 
     # 检查是否有敏感词过滤结果
-    if hasattr(req, 'state') and hasattr(req.state, 'sensitive_filter_result'):
-        filter_result = req.state.sensitive_filter_result
+    if hasattr(http_request, 'state') and hasattr(http_request.state, 'sensitive_filter_result'):
+        filter_result = http_request.state.sensitive_filter_result
         logging.info(f"[SSE接口] 检测到敏感词过滤结果: {filter_result.get('is_sensitive')}")
 
         if filter_result.get('is_sensitive') and filter_result.get('action') == 'filter':
@@ -1918,7 +1918,7 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
             logging.info(f"[SSE接口] 已应用敏感词过滤，替换了 {len(matched_words)} 个敏感词")
 
     # 使用可能已过滤的数据
-    req = req_dict
+    req_data = req_dict
 
     # 将操作封装在异步函数中
     async def process_non_streaming_request():
@@ -1935,24 +1935,24 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
                     return row.mdl_type
             return None
 
-        llm_type = get_llm_type(req["llm_name"], my_llms)
+        llm_type = get_llm_type(req_data["llm_name"], my_llms)
         if llm_type:
-            logging.debug(f"The llm_type for model {req['llm_name']} is: {llm_type}")
+            logging.debug(f"The llm_type for model {req_data['llm_name']} is: {llm_type}")
         else:
-            raise HTTPException(status_code=404, detail=f"Model {req['llm_name']} not found in the list.")
+            raise HTTPException(status_code=404, detail=f"Model {req_data['llm_name']} not found in the list.")
 
-        mdl_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], llm_type, req["llm_name"])
+        mdl_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], llm_type, req_data["llm_name"])
         chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], mdl_config)
         # 构建调用参数
         call_params = {
-            "system": req["prompt"],
-            "history": req["messages"],
-            "gen_conf": req["gen_conf"]
+            "system": req_data["prompt"],
+            "history": req_data["messages"],
+            "gen_conf": req_data["gen_conf"]
         }
 
         # 如果llm_type为image2text，添加image参数
         if llm_type == 'image2text':
-            call_params["images"] = req["image"]
+            call_params["images"] = req_data["image"]
 
         # 非流式调用，直接返回完整响应
         data = await chat_mdl.async_chat(**call_params)
@@ -1972,18 +1972,18 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
                     return row.mdl_type
             return None
 
-        llm_type = get_llm_type(req["llm_name"], my_llms)
+        llm_type = get_llm_type(req_data["llm_name"], my_llms)
         if not llm_type:
-            raise HTTPException(status_code=404, detail=f"Model {req['llm_name']} not found in the list.")
+            raise HTTPException(status_code=404, detail=f"Model {req_data['llm_name']} not found in the list.")
 
-        mdl_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], llm_type, req["llm_name"])
+        mdl_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], llm_type, req_data["llm_name"])
         chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], mdl_config)
 
         # 构建调用参数
         call_params = {
-            "system": req["prompt"],
-            "history": req["messages"],
-            "gen_conf": req["gen_conf"]
+            "system": req_data["prompt"],
+            "history": req_data["messages"],
+            "gen_conf": req_data["gen_conf"]
         }
 
         # # 如果llm_type为image2text，添加image参数
@@ -1992,19 +1992,19 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
 
         if llm_type == "image2text":
             llm_model_config = get_model_config_by_type_and_name(
-                db, tenants[0]["tenant_id"], LLMType.IMAGE2TEXT.value, req["llm_name"]
+                db, tenants[0]["tenant_id"], LLMType.IMAGE2TEXT.value, req_data["llm_name"]
             )
-            call_params["images"] = req["image"]
+            call_params["images"] = req_data["image"]
         else:
             llm_model_config = get_model_config_by_type_and_name(
-                db, tenants[0]["tenant_id"], LLMType.CHAT.value, req["llm_name"]
+                db, tenants[0]["tenant_id"], LLMType.CHAT.value, req_data["llm_name"]
             )
 
         max_tokens = llm_model_config.get("max_tokens", 8192)
         kbinfos = {"total": 0, "chunks": [], "doc_aggs": []}
-        questions = [m["content"] for m in req["messages"] if m["role"] == "user"]
-        if req["tavily_api_key"]:
-            tav = Tavily(req["tavily_api_key"])
+        questions = [m["content"] for m in req_data["messages"] if m["role"] == "user"]
+        if req_data["tavily_api_key"]:
+            tav = Tavily(req_data["tavily_api_key"])
             tav_res = tav.retrieve_chunks(" ".join(questions))
             kbinfos["chunks"].extend(tav_res["chunks"])
             kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
@@ -2016,18 +2016,24 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
 
     # 处理流式响应
     async def stream_response():
+        stream_iter = None
+        think_iter = None
         try:
             # 获取初始设置
             chat_mdl, call_params = get_initial_setup()
 
             stream_iter = chat_mdl.async_chat_streamly_delta(**call_params)
             accumulated = ""
-            async for kind, value, state in _stream_with_think_delta(stream_iter):
+            think_iter = _stream_with_think_delta(stream_iter)
+            async for kind, value, state in think_iter:
+                if await http_request.is_disconnected():
+                    logging.info("[chat_service_sse] client disconnected, closing upstream stream early")
+                    break
                 if kind == "marker":
                     flags = {"start_to_think": True} if value == "<think>" else {"end_to_think": True}
                     sse_data = json.dumps({"retcode": 0, "retmsg": "", "data": "", **flags}, ensure_ascii=False)
                 else:
-                    if req["delta_stream"]:
+                    if req_data["delta_stream"]:
                         text_data = value
                     else:
                         accumulated += value
@@ -2036,21 +2042,28 @@ async def chat_service_sse(request: LLMServiceRequest, req: Request, db: Session
                 yield f"data: {sse_data}\n\n"
 
             # 流结束
-            end_message = json.dumps({"retcode": 0, "retmsg": "", "data": True}, ensure_ascii=False)
-            yield f"data: {end_message}\n\n"
+            if not await http_request.is_disconnected():
+                end_message = json.dumps({"retcode": 0, "retmsg": "", "data": True}, ensure_ascii=False)
+                yield f"data: {end_message}\n\n"
 
         except Exception as e:
-            error_message = json.dumps(
-                {"retcode": 500, "retmsg": str(e), "data": {"answer": f"**ERROR**: {str(e)}"}},
-                ensure_ascii=False
-            )
-            yield f"data: {error_message}\n\n"
-            # 流结束标记
-            end_message = json.dumps({"retcode": 0, "retmsg": "", "data": True}, ensure_ascii=False)
-            yield f"data: {end_message}\n\n"
+            if not await http_request.is_disconnected():
+                error_message = json.dumps(
+                    {"retcode": 500, "retmsg": str(e), "data": {"answer": f"**ERROR**: {str(e)}"}},
+                    ensure_ascii=False
+                )
+                yield f"data: {error_message}\n\n"
+                # 流结束标记
+                end_message = json.dumps({"retcode": 0, "retmsg": "", "data": True}, ensure_ascii=False)
+                yield f"data: {end_message}\n\n"
+        finally:
+            if think_iter and hasattr(think_iter, "aclose"):
+                await think_iter.aclose()
+            if stream_iter and hasattr(stream_iter, "aclose"):
+                await stream_iter.aclose()
 
     # 根据是否流式调用选择合适的方法
-    if req["stream"]:
+    if req_data["stream"]:
         return StreamingResponse(stream_response(), media_type="text/event-stream")
     else:
         # 直接调用异步函数
