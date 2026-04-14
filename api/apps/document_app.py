@@ -2787,6 +2787,7 @@ def rename(
 @router.get("/get/{doc_id}", summary="获取文档内容", response_description="成功获取文档内容")
 def get_document(
         doc_id: str,
+        action: str = Query("preview", description="preview: 仅预览; download: 下载(需 owner/admin 权限)"),
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
@@ -2795,6 +2796,22 @@ def get_document(
         if not doc:
             return construct_json_result(data=False, message="Document not found!",
                                          code=RetCode.ARGUMENT_ERROR)
+
+        if not DocumentService.accessible(db, doc_id, user.id):
+            return get_json_result(
+                data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR
+            )
+
+        if action == "download":
+            kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
+            if kb:
+                role = UserTenantService.get_role_in_tenant(db, user.id, kb.tenant_id)
+                if not UserTenantService.can_download(role):
+                    return get_json_result(
+                        data=False,
+                        retmsg="No download permission. Please contact your administrator.",
+                        retcode=RetCode.PERMISSION_ERROR,
+                    )
 
         b, n = File2DocumentService.get_storage_address(db, doc_id=doc_id)
 

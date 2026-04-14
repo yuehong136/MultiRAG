@@ -191,7 +191,6 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
         )
     elif user:
         response_data = user.to_dict()
-        # 更新数据库会话标识（用于load_user验证）
         user.access_token = get_uuid()
         current_ts = current_timestamp()
         current_date = datetime_format(datetime.now())
@@ -201,7 +200,6 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
         try:
             db.commit()
             msg = "Welcome back!"
-            # 生成JWT令牌（用于API请求认证）
             jwt_token = manager.create_access_token(data={"sub": email})
             return construct_response(data=response_data, auth=jwt_token, retmsg=msg)
         except Exception as e:

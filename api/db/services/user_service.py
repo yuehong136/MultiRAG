@@ -301,6 +301,22 @@ class UserTenantService(CommonService):
     def can_manage_roles(role: str | None) -> bool:
         return role == UserTenantRole.OWNER
 
+    @staticmethod
+    def can_download(role: str | None) -> bool:
+        return role in {UserTenantRole.OWNER, UserTenantRole.ADMIN}
+
+    @classmethod
+    def get_role_in_tenant(cls, db: Session, user_id: str, tenant_id: str) -> str | None:
+        if user_id == tenant_id:
+            return UserTenantRole.OWNER
+        stmt = select(cls.model.role).where(
+            cls.model.user_id == user_id,
+            cls.model.tenant_id == tenant_id,
+            cls.model.status == StatusEnum.VALID.value,
+        )
+        result = db.execute(stmt).scalar_one_or_none()
+        return result
+
     @classmethod
     def filter_by_id(cls, db: Session, user_tenant_id: str):
         """根据user_tenant_id查找有效的UserTenant记录"""

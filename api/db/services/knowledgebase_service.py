@@ -265,6 +265,7 @@ class KnowledgebaseService(CommonService):
         # 定义查询的字段
         fields = [
             cls.model.id,
+            cls.model.tenant_id,
             cls.model.embd_id,
             cls.model.avatar,
             cls.model.name,
