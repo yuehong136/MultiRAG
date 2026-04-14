@@ -31,11 +31,12 @@ def get_model_config_by_type_and_name(
     if not model_name:
         raise ValueError("Model Name is required")
 
-    model_config = TenantLLMService.get_api_key(db, tenant_id, model_name)
+    model_type_value = model_type.value if hasattr(model_type, "value") else model_type
+    model_config = TenantLLMService.get_api_key(db, tenant_id, model_name, model_type_value)
     if not model_config:
         pure_model_name, fid = TenantLLMService.split_model_name_and_factory(model_name)
         if (
-            model_type == LLMType.EMBEDDING.value
+            model_type_value == LLMType.EMBEDDING.value
             and fid == "Builtin"
             and "tei-" in os.getenv("COMPOSE_PROFILES", "")
             and pure_model_name == os.getenv("TEI_MODEL", "")
@@ -51,12 +52,19 @@ def get_model_config_by_type_and_name(
                 "max_tokens": embedding_cfg.get("max_tokens", 8192),
             }
         else:
-            model_config = TenantLLMService.get_api_key(db, tenant_id, pure_model_name)
+            model_config = TenantLLMService.get_api_key(db, tenant_id, pure_model_name, model_type_value)
             if not model_config:
-                raise LookupError(f"Tenant Model with name {model_name} not found")
+                raise LookupError(f"Tenant Model with name {model_name} and type {model_type_value} not found")
             config_dict = model_config.to_dict()
     else:
         config_dict = model_config.to_dict()
+
+    config_model_type = config_dict.get("mdl_type") or config_dict.get("model_type")
+    config_model_type = config_model_type.value if hasattr(config_model_type, "value") else config_model_type
+    if config_model_type != model_type_value:
+        raise LookupError(
+            f"Tenant Model with name {model_name} has type {config_model_type}, expected {model_type_value}"
+        )
 
     pure_model_name, fid = TenantLLMService.split_model_name_and_factory(config_dict["llm_name"])
     llms = LLMService.query(db, llm_name=pure_model_name, fid=fid) if fid else LLMService.query(db, llm_name=pure_model_name)

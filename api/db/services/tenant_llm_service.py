@@ -44,10 +44,19 @@ class TenantLLMService(CommonService):
     }
 
     @classmethod
-    def get_api_key(cls, db: Session, tenant_id: str, model_name: str):
+    def get_api_key(
+        cls,
+        db: Session,
+        tenant_id: str,
+        model_name: str,
+        model_type: str | LLMType | None = None,
+    ):
         mdlnm, fid = TenantLLMService.split_model_name_and_factory(model_name)
+        model_type_value = model_type.value if hasattr(model_type, "value") else model_type
 
         stmt = select(cls.model).where(cls.model.tenant_id == tenant_id, cls.model.llm_name == mdlnm)
+        if model_type_value is not None:
+            stmt = stmt.where(cls.model.mdl_type == model_type_value)
         if fid:
             stmt = stmt.where(cls.model.llm_factory == fid)
 
@@ -62,6 +71,8 @@ class TenantLLMService(CommonService):
                     cls.model.llm_factory == fid,
                 )
             )
+            if model_type_value is not None:
+                stmt = stmt.where(cls.model.mdl_type == model_type_value)
             obj = db.execute(stmt).scalars().first()
 
         return obj
@@ -132,10 +143,10 @@ class TenantLLMService(CommonService):
         else:
             raise ValueError("LLM type error")
 
-        model_config = cls.get_api_key(db, tenant_id, mdlnm)
+        model_config = cls.get_api_key(db, tenant_id, mdlnm, llm_type)
         mdlnm, fid = TenantLLMService.split_model_name_and_factory(mdlnm)
         if not model_config:  # for some cases seems fid mismatch
-            model_config = cls.get_api_key(db, tenant_id, mdlnm)
+            model_config = cls.get_api_key(db, tenant_id, mdlnm, llm_type)
         if model_config:
             model_config = model_config.to_dict()
         elif llm_type == LLMType.EMBEDDING.value and fid == "Builtin" and "tei-" in os.getenv("COMPOSE_PROFILES", "") and mdlnm == os.getenv("TEI_MODEL", ''):
