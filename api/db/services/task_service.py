@@ -12,7 +12,7 @@ import random
 from datetime import datetime
 
 import xxhash
-from sqlalchemy import asc, delete, desc, select, update, or_
+from sqlalchemy import asc, delete, desc, select, update
 from sqlalchemy.orm import Session
 
 from api.utils.db_utils import bulk_insert_into_db
@@ -294,14 +294,15 @@ class TaskService(CommonService):
                         - progress_msg (str, optional): Progress message to append
                         - progress (float, optional): Progress percentage (0.0 to 1.0)
         """
-        task = cls.get_by_id(db, id)
-        if not task:
-            logging.warning("Update_progress error: task not found")
-            return
 
         def do_update():
+            task = cls.get_by_id(db, id)
+            if not task:
+                logging.warning("Update_progress error: task not found")
+                return
+
             if info.get("progress_msg"):
-                progress_msg = trim_header_by_lines(task.progress_msg + "\n" + info["progress_msg"], 3000)
+                progress_msg = trim_header_by_lines((task.progress_msg or "") + "\n" + str(info["progress_msg"]), 3000)
                 db.execute(
                     update(cls.model)
                     .where(cls.model.id == id)
@@ -310,14 +311,24 @@ class TaskService(CommonService):
 
             if "progress" in info:
                 prog = info["progress"]
+                progress_filters = [cls.model.id == id]
+                if prog < 1:
+                    progress_filters.append(cls.model.progress != -1)
+                    if prog != -1:
+                        progress_filters.append(cls.model.progress < prog)
                 db.execute(
                     update(cls.model)
-                    .where(
-                        (cls.model.id == id) &
-                        ((prog >= 1) | ((cls.model.progress != -1) &
-                        ((prog == -1) | (prog > cls.model.progress))))
-                    )
+                    .where(*progress_filters)
                     .values(progress=prog)
+                )
+
+            # Update process_duration after progress updates.
+            if task.begin_at:
+                process_duration = (datetime.now() - task.begin_at).total_seconds()
+                db.execute(
+                    update(cls.model)
+                    .where(cls.model.id == id)
+                    .values(process_duration=process_duration)
                 )
 
         if os.environ.get("MACOS"):
@@ -325,15 +336,6 @@ class TaskService(CommonService):
         else:
             with DatabaseLock.create(db, f"update_progress_{id}"):
                 do_update()
-
-        # Update process_duration after progress updates
-        if task.begin_at:
-            process_duration = (datetime.now() - task.begin_at).total_seconds()
-            db.execute(
-                update(cls.model)
-                .where(cls.model.id == id)
-                .values(process_duration=process_duration)
-            )
 
         # Note: 不在此处 commit，由调用者控制事务边界
 
@@ -541,7 +543,7 @@ def has_canceled(task_id: str) -> bool:
     return False
 
 
-def queue_dataflow(db: Session, tenant_id: str, flow_id: str, task_id: str, doc_id: str = CANVAS_DEBUG_DOC_ID, file: dict | None = None, priority: int = 0, rerun: bool = False) -> tuple[bool, str]:
+def queue_dataflow(db: Session, tenant_id: str, flow_id: str, task_id: str, doc_id: str = CANVAS_DEBUG_DOC_ID, file: list[dict] | None = None, priority: int = 0, rerun: bool = False) -> tuple[bool, str]:
     """
     Returns a tuple (success: bool, error_message: str).
     """
