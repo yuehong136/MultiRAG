@@ -184,9 +184,11 @@ async def get_sql_and_table_config(
         retry_handler = SQLRetryHandler(max_retries=MAX_RETRY_TIMES)
 
         # 准备修复函数需要的参数
+        # 注意：processed_semantic_layer 是敏感数据，get-semantic-layer-streaming 返回给前端的是空串，
+        # 真实数据只在服务端缓存里。这里必须用缓存里的 processed_semantic_layer_data，不能从 body 读。
         fix_params = {
             "user_query": body.user_query,
-            "semantic_layer": body.semantic_layer.get('processed_semantic_layer', {}),
+            "semantic_layer": processed_semantic_layer_data,
             "llm_name": body.llm_name,
             "used_models": used_models
         }
