@@ -306,8 +306,15 @@ async def get_sql_and_table_config(
         logger.debug("[get-sql] sql_components=%s", sql_components)
 
         if pagination_sql:
+            logger.info("[get-sql][pagination] 生成分页SQL: %s", pagination_sql)
             result = await query_data_with_params(pagination_sql, int(dataset_id), [])
             result_data = result["data"]
+            page_row_count = len(result_data.get("data", [])) if isinstance(result_data, dict) else 0
+            logger.info(
+                "[get-sql][pagination] 分页SQL执行完成: full_data_count=%d, page_row_count=%d, page_size=%d, page_count=%d",
+                data_count, page_row_count, page_size,
+                (data_count + page_size - 1) // page_size,
+            )
             pagination_info = {
                 "data_count": data_count,
                 "page_size": page_size,
@@ -855,7 +862,11 @@ async def re_query(
 ) -> ResponseSchema:
     token = askdata_ask_id.set(body.ask_id or "-")
     try:
-        logger.info(f"re-query, chart_type={body.chart_type}")
+        logger.info(
+            "[re-query] 入参: chart_type=%s, dataset_id=%s, pagination_info=%s, table_config_keys=%s",
+            body.chart_type, body.dataset_id, body.pagination_info,
+            list((body.table_config or {}).keys()),
+        )
 
         requery_sql_result = await service.generate_requery_sql(body.chart_type, body.table_config,
                                                                 sql_components=body.sql_components,
@@ -863,6 +874,14 @@ async def re_query(
                                                                 pagination_info=body.pagination_info, user_id=body.userid)
 
         if body.pagination_info:
+            logger.info(
+                "[re-query] 生成的 count_sql=%s, count_sql_params=%s",
+                requery_sql_result.get("count_sql"), requery_sql_result.get("count_sql_params"),
+            )
+            logger.info(
+                "[re-query] 生成的 data_sql=%s, data_params=%s",
+                requery_sql_result.get("sql"), requery_sql_result.get("params"),
+            )
             result = await query_data_with_params(requery_sql_result["count_sql"], int(body.dataset_id),
                                                   requery_sql_result["count_sql_params"])
             if result["status"] == "error":
@@ -871,7 +890,10 @@ async def re_query(
                     status=StatusEnum.ERROR,
                     message=f"查询数据失败: {result['message']}"
                 )
-            count = result.get("data", {}).get("data", [])[0].get("count", {})
+            count_rows = result.get("data", {}).get("data", [])
+            logger.info("[re-query] count_sql 返回: %s", count_rows)
+            count = count_rows[0].get("count", {}) if count_rows else {}
+            logger.info("[re-query] 提取到的 data_count=%s (type=%s)", count, type(count).__name__)
             result = await query_data_with_params(requery_sql_result["sql"], int(body.dataset_id),
                                                   requery_sql_result["params"])
             if result["status"] == "error":
@@ -880,6 +902,12 @@ async def re_query(
                     status=StatusEnum.ERROR,
                     message=f"查询数据失败: {result['message']}"
                 )
+            data_rows = result.get("data", {}).get("data", []) if isinstance(result.get("data"), dict) else []
+            logger.info(
+                "[re-query] 数据 SQL 返回 %d 行, page_size=%s, page_index=%s, data_count=%s",
+                len(data_rows), body.pagination_info.get("page_size"),
+                body.pagination_info.get("page_index"), count,
+            )
             return ResponseSchema(
                 status=StatusEnum.SUCCESS,
                 message="生成re-query SQL成功",
@@ -890,6 +918,10 @@ async def re_query(
                 }}
             )
         else:
+            logger.info(
+                "[re-query] 无分页 - 生成的 sql=%s, params=%s",
+                requery_sql_result.get("sql"), requery_sql_result.get("params"),
+            )
             result = await query_data_with_params(requery_sql_result["sql"], int(body.dataset_id),
                                                   requery_sql_result["params"])
             if result["status"] == "error":
@@ -898,6 +930,8 @@ async def re_query(
                     status=StatusEnum.ERROR,
                     message=f"查询数据失败: {result['message']}"
                 )
+            data_rows = result.get("data", {}).get("data", []) if isinstance(result.get("data"), dict) else []
+            logger.info("[re-query] 无分页 - 数据 SQL 返回 %d 行", len(data_rows))
 
             return ResponseSchema(
                 status=StatusEnum.SUCCESS,

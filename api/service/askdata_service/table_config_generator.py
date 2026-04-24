@@ -21,6 +21,25 @@ class TableConfigGenerator:
     def __init__(self, semantic_api_client: SemanticApiClient):
         self.semantic_api_client = semantic_api_client
 
+    @staticmethod
+    def _is_sql_expression_value(value: Any) -> bool:
+        """判断 WHERE/HAVING 右侧值是否为 SQL 表达式（非简单字面量）。
+        命中特征即视为表达式：函数调用/括号、PostgreSQL 类型转换、日期时间常量/关键字。
+        这类值不能被当作字面量参数绑定到 `?`，否则会让 `col >= func()` 变成 `col >= 'func()'`
+        的字符串比较（当前 bug 就是这样 count 变 0 的）。
+        """
+        if not isinstance(value, str):
+            return False
+        v = value.strip()
+        if not v:
+            return False
+        if "(" in v or ")" in v or "::" in v:
+            return True
+        v_upper = v.upper()
+        keywords = ("CURRENT_DATE", "CURRENT_TIMESTAMP", "CURRENT_TIME",
+                    "NOW", "INTERVAL", "CAST", "EXTRACT")
+        return any(kw in v_upper for kw in keywords)
+
     async def generate(self, used_table_detail_dict: Dict[str, Dict], model_list: List[Dict],
                        sql_components: Dict[str, Any], recommended_chart: str,
                        cached_model_relations: list | None = None,
@@ -601,11 +620,16 @@ class TableConfigGenerator:
             field = cond['field']
             operator = cond['operator']
             value = cond['value']
-            if "(" in field:
-                # 如果字段中包含了括号，则认为是复杂条件
+            # 复杂条件：field 含括号（表达式字段）或 value 是 SQL 表达式（函数/类型转换/时间常量）。
+            # 原先只判断 field 导致 LLM 生成 `jysj >= (CURRENT_DATE - INTERVAL '7 days')::text`
+            # 被当成普通语义字段，value 被作为字面量参数化绑定，re-query 时退化为字符串比较。
+            if "(" in field or self._is_sql_expression_value(value):
+                val_str = "" if value is None else str(value)
+                raw_condition = (field + " " + operator + (" " + val_str if val_str else "")).strip()
                 filter_columns.append(
                     {"is_semantic_field": False, "is_complex_condition": True,
-                     "raw_condition": cond['field'] + " " + cond['operator'] + " " + cond['value'], "from_model": None,
+                     "raw_condition": raw_condition, "from_model": None,
+                     "field": field, "operator": operator, "value": val_str,
                      "id": str(uuid.uuid4()),
                      "wid": str(uuid.uuid4()), "original_sql_component": cond})
                 continue

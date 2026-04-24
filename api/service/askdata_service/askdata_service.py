@@ -1036,7 +1036,20 @@ class AskdataService:
                 else:
                     assembler.add_raw_column(metric["sql_column"])
 
-            for where_condition in table_config.get("where_conditions", []):
+            # 兜底：前端聚合表分页/刷新路径可能只回传 dimensions/metrics，漏掉
+            # where_conditions/having_conditions/order_by。此时退回到 sql_components
+            # 里原始 LLM 生成的 WHERE，防止分页时静默丢失过滤条件导致 count 与首屏不一致。
+            # 语义：key 缺失或 None = 前端未传，兜底；显式传 [] = 用户清空，尊重其意图。
+            sql_components_safe = sql_components or {}
+            where_conditions_cfg = table_config.get("where_conditions")
+            if where_conditions_cfg is None:
+                raw_where = sql_components_safe.get("where", "").strip()
+                if raw_where:
+                    logger.info("[re-query][fallback] table_config 缺 where_conditions，回退使用 sql_components.where: %s", raw_where)
+                    assembler.add_raw_where(raw_where)
+                where_conditions_cfg = []
+
+            for where_condition in where_conditions_cfg:
                 if where_condition["is_semantic_field"]:
                     semantic_field = self._find_semantic_field(where_condition["id"], all_semantic_fields)
                     table_alias = self._find_table_alias(semantic_field["from_model_id"],
@@ -1118,7 +1131,15 @@ class AskdataService:
                 model_table_alias_mapping_list
             )
 
-            for having_condition in table_config.get("having_conditions", []):
+            having_conditions_cfg = table_config.get("having_conditions")
+            if having_conditions_cfg is None:
+                raw_having = sql_components_safe.get("having", "").strip()
+                if raw_having:
+                    logger.info("[re-query][fallback] table_config 缺 having_conditions，回退使用 sql_components.having: %s", raw_having)
+                    assembler.add_raw_having(raw_having)
+                having_conditions_cfg = []
+
+            for having_condition in having_conditions_cfg:
                 if having_condition["is_semantic_field"]:
                     semantic_field = self._find_semantic_field(having_condition["id"], all_semantic_fields)
                     table_alias = self._find_table_alias(semantic_field["from_model_id"],
@@ -1135,7 +1156,15 @@ class AskdataService:
                 else:
                     assembler.add_raw_having(having_condition["sql_column"])
 
-            for order_by in table_config.get("order_by", []):
+            order_by_cfg = table_config.get("order_by")
+            if order_by_cfg is None:
+                raw_order = sql_components_safe.get("orderBy", "").strip()
+                if raw_order:
+                    logger.info("[re-query][fallback] table_config 缺 order_by，回退使用 sql_components.orderBy: %s", raw_order)
+                    assembler.add_raw_order_by(raw_order)
+                order_by_cfg = []
+
+            for order_by in order_by_cfg:
                 if order_by["is_semantic_field"]:
                     semantic_field = self._find_semantic_field(order_by["id"], all_semantic_fields)
                     table_alias = self._find_table_alias(semantic_field["from_model_id"],
