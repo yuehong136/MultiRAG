@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from agent.canvas import Canvas
@@ -71,9 +71,18 @@ class ChatCompletionOpenAIRequest(BaseModel):
 
 
 class AgentCompletionRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     question: str | None = ""
+    query: str | None = ""
     stream: bool | None = True
     return_trace: bool | None = False
+    session_id: str | None = None
+    inputs: dict[str, Any] | None = None
+    files: list[Any] | None = None
+    release: bool | str | None = None
+    user_id: str | None = ""
+    custom_header: str | None = ""
 
 
 class AskRequest(BaseModel):
@@ -125,6 +134,24 @@ class SearchBotMindmapRequest(BaseModel):
     question: str
     kb_ids: list[str]
     search_id: str | None = ""
+
+
+def build_sse_error_payload(error: Exception) -> str:
+    message = str(error) or "Unknown error"
+    error_result = {
+        "code": RetCode.EXCEPTION_ERROR,
+        "message": message,
+    }
+    return "data:" + json.dumps(
+        {
+            "event": "message",
+            "data": {
+                "content": f"Error {error_result['code']}: {message}\n\n",
+            },
+            **error_result,
+        },
+        ensure_ascii=False,
+    ) + "\n\n"
 
 
 @router.post("/chats/{chat_id}/sessions", summary="创建聊天会话")
@@ -654,7 +681,7 @@ async def agent_completions(
     if req.get("stream", True):
         async def generate():
             trace_items = []
-            async for answer in agent_completion(tenant_id=tenant_id, agent_id=agent_id, **req):
+            async for answer in agent_completion(db=db, tenant_id=tenant_id, agent_id=agent_id, **req):
                 if isinstance(answer, str):
                     try:
                         ans = json.loads(answer[5:])  # remove "data:"
@@ -694,7 +721,7 @@ async def agent_completions(
     final_ans = ""
     trace_items = []
     structured_output = {}
-    async for answer in agent_completion(tenant_id=tenant_id, agent_id=agent_id, **req):
+    async for answer in agent_completion(db=db, tenant_id=tenant_id, agent_id=agent_id, **req):
         try:
             ans = json.loads(answer[5:])
 
@@ -1102,27 +1129,22 @@ def chatbots_inputs(
 async def agent_bot_completions(
     agent_id: str,
     body: AgentCompletionRequest,
+    release: str | None = Query(None),
     db: Session = Depends(get_db),
     tenant_id: str = Depends(beta_token_required),
 ):
     req = body.model_dump()
+    if release is not None and req.get("release") is None:
+        req["release"] = release
 
     if req.get("stream", True):
         async def stream():
             try:
-                async for answer in agent_completion(tenant_id, agent_id, **req):
+                async for answer in agent_completion(db=db, tenant_id=tenant_id, agent_id=agent_id, **req):
                     yield answer
             except Exception as e:
                 logging.exception(e)
-                error_result = get_error_data_result(retmsg=str(e) or "Unknown error")
-                yield "data:" + json.dumps(
-                    {
-                        "event": "message",
-                        "data": {"content": f"Error {error_result.get('code', 500)}: {error_result.get('message', str(e))}\n\n"},
-                        **error_result,
-                    },
-                    ensure_ascii=False,
-                ) + "\n\n"
+                yield build_sse_error_payload(e)
 
         resp = StreamingResponse(stream(), media_type="text/event-stream")
         resp.headers["Cache-control"] = "no-cache"
@@ -1132,7 +1154,7 @@ async def agent_bot_completions(
         return resp
 
     try:
-        async for answer in agent_completion(tenant_id, agent_id, **req):
+        async for answer in agent_completion(db=db, tenant_id=tenant_id, agent_id=agent_id, **req):
             return get_result(data=answer)
     except Exception as e:
         logging.exception(e)

@@ -96,6 +96,7 @@ class Pipeline(Graph):
                 msg += "%s: %s\n" % (t["datetime"], t["message"])
                 with db_connection() as db:
                     TaskService.update_progress(db, self.task_id, {"progress": finished, "progress_msg": msg})
+                    db.commit()
             elif component_name == "END" and not self._doc_id:
                 obj[-1]["trace"][-1]["dsl"] = json.loads(str(self))
             REDIS_CONN.set_obj(log_key, obj, 60 * 30)
@@ -134,10 +135,11 @@ class Pipeline(Graph):
 
         if self._doc_id:
             with db_connection() as db:
-                TaskService.update_progress(self.task_id, {
+                TaskService.update_progress(db, self.task_id, {
                     "progress": random.randint(0, 5) / 100.0,
                     "progress_msg": "Start the pipeline...",
                     "begin_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+                db.commit()
 
         idx = len(self.path) - 1
         cpn_obj = self.get_component_obj(self.path[idx])
@@ -175,5 +177,6 @@ class Pipeline(Graph):
             TaskService.update_progress(db, self.task_id, {
                 "progress": -1,
                 "progress_msg": f"[ERROR]: {self.error}"})
+            db.commit()
 
         return {}

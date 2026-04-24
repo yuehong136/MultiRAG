@@ -538,7 +538,7 @@ async def run(
             req["id"],
             task_id,
             CANVAS_DEBUG_DOC_ID,
-            files[0] if files else None,
+            files if files else None,
             0
         )
         if not ok:
