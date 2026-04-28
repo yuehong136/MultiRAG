@@ -262,8 +262,12 @@ class SemanticApiClient:
 
                     return result
 
+        except asyncio.TimeoutError:
+            error_msg = f"异步请求超时({self.timeout}s): {method} {url}"
+            logger.error(error_msg)
+            raise ApiNetworkError(error_msg)
         except aiohttp.ClientError as e:
-            error_msg = f"异步请求错误: {str(e)}"
+            error_msg = f"异步请求错误: {type(e).__name__}: {e}"
             logger.error(error_msg)
             raise ApiNetworkError(error_msg) from e
         except json.JSONDecodeError as e:
@@ -272,9 +276,9 @@ class SemanticApiClient:
             raise ApiJsonDecodeError(error_msg) from e
         except Exception as e:
             if isinstance(e, SemanticApiError):
-                raise  # 如果是已经包装过的异常就直接抛出
-            error_msg = f"意外异步错误: {str(e)}"
-            logger.error(error_msg)
+                raise
+            error_msg = f"异步请求异常: {type(e).__name__}: {e}, url={url}"
+            logger.error(error_msg, exc_info=True)
             raise ApiRequestError(error_msg) from e
 
     async def get_dimension_info_by_keyword_async(
