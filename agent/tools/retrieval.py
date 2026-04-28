@@ -256,7 +256,7 @@ class Retrieval(ToolBase, ABC):
                     "",
                     embd_mdl,
                     tenant_ids,
-                    filtered_kb_ids,
+                    kb_names,
                     1,
                     self._param.top_n,
                     self._param.similarity_threshold,
@@ -265,6 +265,7 @@ class Retrieval(ToolBase, ABC):
                     aggs=False,
                     rerank_mdl=rerank_mdl,
                     rank_feature=label_question(db, query, kbs),
+                    kb_ids=filtered_kb_ids,
                 )
 
                 if self.check_if_canceled("Retrieval processing"):
