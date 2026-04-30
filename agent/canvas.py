@@ -28,6 +28,7 @@ from functools import partial
 from typing import Any
 
 from agent.component import component_class
+from agent.a2ui import A2UI_EVENT
 from agent.component.base import ComponentBase
 from api.db.db_models import db_connection
 from api.db.services.file_service import FileService
@@ -576,6 +577,12 @@ class Canvas(Graph):
                             break
                         yield _node_finished(_cpn_obj)
                         partials.pop(0)
+                elif cpn_obj.component_name.lower() == "a2ui" and not cpn_obj.error():
+                    yield decorate(A2UI_EVENT, {
+                        "surface_id": cpn_obj.output("surface_id") or None,
+                        "surface_ids": cpn_obj.output("surface_ids") or [],
+                        "commands": cpn_obj.output("commands") or [],
+                    })
 
                 other_branch = False
                 if cpn_obj.error():
@@ -730,7 +737,13 @@ class Canvas(Graph):
             return convs
         for role, obj in self.history[window_size * -2:]:
             if isinstance(obj, dict):
-                convs.append({"role": role, "content": obj.get("content", "")})
+                content = obj.get("content", "")
+                a2ui = obj.get("a2ui")
+                if not content and isinstance(a2ui, dict) and isinstance(a2ui.get("commands"), list):
+                    content = json.dumps(a2ui["commands"], ensure_ascii=False)
+                if not content and isinstance(obj.get("commands"), list):
+                    content = json.dumps(obj["commands"], ensure_ascii=False)
+                convs.append({"role": role, "content": content})
             else:
                 convs.append({"role": role, "content": str(obj)})
         return convs

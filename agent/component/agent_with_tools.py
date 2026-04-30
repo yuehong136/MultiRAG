@@ -231,7 +231,11 @@ class Agent(LLM, ToolBase):
 
         downstreams = self._canvas.get_component(self._id)["downstream"] if self._canvas.get_component(self._id) else []
         ex = self.exception_handler()
-        if any([self._canvas.get_component_obj(cid).component_name.lower() == "message" for cid in downstreams]) and not (ex and ex["goto"]) and not output_schema:
+        if any(
+            self._canvas.get_component_obj(cid).component_name.lower() == "message"
+            for cid in downstreams
+            if self._canvas.get_component(cid)
+        ) and not (ex and ex["goto"]) and not output_schema:
             self.set_output("content", partial(self.stream_output_with_tools_async, prompt, deepcopy(msg), user_defined_prompt))
             return
 

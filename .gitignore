@@ -215,6 +215,11 @@ WARP.md
 admin/release
 
 tests
+!tests/
+tests/*
+!tests/unit/
+tests/unit/*
+!tests/unit/test_tenant_member_management.py
 
 .claude
 

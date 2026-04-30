@@ -433,7 +433,11 @@ class LLM(ComponentBase):
 
         downstreams = self._canvas.get_component(self._id)["downstream"] if self._canvas.get_component(self._id) else []
         ex = self.exception_handler()
-        if any([self._canvas.get_component_obj(cid).component_name.lower() == "message" for cid in downstreams]) and not (
+        if any(
+            self._canvas.get_component_obj(cid).component_name.lower() == "message"
+            for cid in downstreams
+            if self._canvas.get_component(cid)
+        ) and not (
             ex and ex["goto"]
         ):
             self.set_output("content", partial(self._stream_output_async, prompt, deepcopy(msg)))

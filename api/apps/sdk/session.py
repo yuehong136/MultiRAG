@@ -79,6 +79,8 @@ class AgentCompletionRequest(BaseModel):
     return_trace: bool | None = False
     session_id: str | None = None
     inputs: dict[str, Any] | None = None
+    a2ui: list[dict[str, Any]] | None = None
+    metadata: dict[str, Any] | None = None
     files: list[Any] | None = None
     release: bool | str | None = None
     user_id: str | None = ""
@@ -702,7 +704,7 @@ async def agent_completions(
                         answer = "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
                     yield answer
 
-                if event not in ["message", "message_end"]:
+                if event not in ["message", "message_end", "a2ui_command"]:
                     continue
 
                 yield answer

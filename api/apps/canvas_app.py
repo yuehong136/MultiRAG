@@ -629,7 +629,7 @@ async def exp_agent_completion(
                     answer = "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
                 yield answer
 
-            if event not in ("message", "message_end"):
+            if event not in ("message", "message_end", "a2ui_command"):
                 continue
 
             yield answer

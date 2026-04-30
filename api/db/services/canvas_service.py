@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import desc as sa_desc
 
 from agent.canvas import Canvas
+from agent.a2ui import validate_client_a2ui_messages
 from api.db import TenantPermission, CanvasCategory
 from api.db.db_models import CanvasTemplate, User, UserCanvas, UserCanvasVersion, API4Conversation
 from api.db.services.common_service import CommonService
@@ -323,6 +324,8 @@ async def completion(
     query = kwargs.get("query", "") or kwargs.get("question", "") or ""
     files = kwargs.get("files", []) or []
     inputs = kwargs.get("inputs", {}) or {}
+    a2ui_messages = validate_client_a2ui_messages(kwargs.get("a2ui"))
+    metadata = kwargs.get("metadata") if isinstance(kwargs.get("metadata"), dict) else {}
     user_id = kwargs.get("user_id", "") or ""
     custom_header = kwargs.get("custom_header", "")
     release_mode = str(kwargs.get("release", "")).strip().lower()
@@ -364,11 +367,25 @@ async def completion(
 
     # 记录用户消息
     message_id = str(uuid4())
-    conv.message.append({"role": "user", "content": query, "id": message_id, "files": files})
+    user_message = {"role": "user", "content": query, "id": message_id, "files": files}
+    if a2ui_messages:
+        user_message["a2ui"] = a2ui_messages
+    if metadata:
+        user_message["metadata"] = metadata
+    conv.message.append(user_message)
 
     # 流式运行
     txt = ""
-    async for ans in canvas.run(query=query, files=files, user_id=user_id, inputs=inputs):
+    a2ui_commands = []
+    a2ui_surface_ids = set()
+    async for ans in canvas.run(
+        query=query,
+        files=files,
+        user_id=user_id,
+        inputs=inputs,
+        a2ui=a2ui_messages,
+        metadata=metadata,
+    ):
         ans["session_id"] = session_id
         if ans["event"] == "message":
             txt += ans["data"]["content"]
@@ -376,12 +393,26 @@ async def completion(
                 txt += "<think>"
             elif ans["data"].get("end_to_think", False):
                 txt += "</think>"
+        elif ans["event"] == "a2ui_command":
+            data = ans.get("data") or {}
+            commands = data.get("commands") if isinstance(data, dict) else None
+            surface_ids = data.get("surface_ids") if isinstance(data, dict) else None
+            if isinstance(commands, list):
+                a2ui_commands.extend(commands)
+            if isinstance(surface_ids, list):
+                a2ui_surface_ids.update(x for x in surface_ids if isinstance(x, str))
+            elif isinstance(data, dict) and isinstance(data.get("surface_id"), str):
+                a2ui_surface_ids.add(data["surface_id"])
         yield "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
 
     # 结束：写入 assistant 消息、引用、错误，并更新持久层
-    conv.message.append(
-        {"role": "assistant", "content": txt, "created_at": time.time(), "id": message_id}
-    )
+    assistant_message = {"role": "assistant", "content": txt, "created_at": time.time(), "id": message_id}
+    if a2ui_commands:
+        assistant_message["a2ui"] = {
+            "commands": a2ui_commands,
+            "surface_ids": sorted(a2ui_surface_ids),
+        }
+    conv.message.append(assistant_message)
     conv.reference = canvas.get_reference()
     conv.errors = canvas.error
     conv.dsl = str(canvas)
