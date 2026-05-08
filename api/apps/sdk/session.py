@@ -5,6 +5,7 @@ import os
 import re
 import tempfile
 import time
+from io import BytesIO
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, UploadFile, File
@@ -27,10 +28,11 @@ from api.db.services.search_service import SearchService
 from api.db.services.user_service import UserTenantService
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.utils.api_utils import beta_token_required, check_duplicate_ids, get_data_openai, get_error_data_result, get_json_result, get_result, server_error_response, token_required
+from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers
 from core.app.tag import label_question
 from core.prompts.template import load_prompt
 from core.prompts.generator import cross_languages, keyword_extraction, chunks_format
-from common.misc_utils import get_uuid
+from common.misc_utils import get_uuid, thread_pool_exec
 from common.constants import RetCode
 from common import settings
 from common.constants import LLMType, StatusEnum
@@ -1181,6 +1183,38 @@ def begin_inputs(
         "prologue": canvas.get_prologue(),
         "mode": canvas.get_mode(),
     })
+
+
+@router.get("/agentbots/{agent_id}/attachments/{attachment_id}", summary="下载公开 Agent 附件")
+async def download_agentbot_attachment(
+    agent_id: str,
+    attachment_id: str,
+    ext: str = Query("markdown"),
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(beta_token_required),
+):
+    """
+    Public agentbot artifact download for share/widget beta-token flows.
+
+    This is intentionally separate from generic document/file download endpoints
+    so embedded agents do not expand the internal document or SDK file auth
+    boundary.
+    """
+    cvs = UserCanvasService.get_by_id(db, agent_id)
+    if not cvs:
+        return get_error_data_result(retmsg=f"Can't find agent by ID: {agent_id}")
+    if cvs.user_id != tenant_id:
+        return get_error_data_result(retmsg="You cannot access the agent.")
+
+    try:
+        normalized_ext = (ext or "markdown").lstrip(".").lower()
+        data = await thread_pool_exec(settings.STORAGE_IMPL.get, tenant_id, attachment_id)
+        content_type = CONTENT_TYPE_MAP.get(normalized_ext, f"application/{normalized_ext}")
+        response = StreamingResponse(BytesIO(data), media_type=content_type)
+        apply_safe_file_response_headers(response, content_type, normalized_ext)
+        return response
+    except Exception as e:
+        return server_error_response(e)
 
 
 @router.post("/searchbots/ask", summary="搜索机器人询问")
