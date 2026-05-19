@@ -1,17 +1,11 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： datav_app.py
-@date：2025/1/16
-@desc: 向量数据库统一检索接口
-       提供跨数据库的统一向量检索能力，支持 Milvus、Elasticsearch、Infinity 等
-"""
+import json
 import logging
+import threading
 import time
 from enum import StrEnum
 from typing import Any
 
+import redis
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
@@ -20,6 +14,7 @@ from api.apps import manager
 from api.db.db_models import get_db
 from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
 from common import settings
+from common.config_utils import get_base_config
 from core.llm import EmbeddingModel
 
 logger = logging.getLogger("multirag.datav_app")
@@ -1038,3 +1033,129 @@ def get_supported_db_types():
         ]
     }
     return get_json_result(data=data)
+
+
+# =============================================================================
+# datav 项目方独立 Redis 客户端 (懒加载单例)
+# =============================================================================
+
+_DATAV_REDIS_CLIENT: redis.StrictRedis | None = None
+_DATAV_REDIS_LOCK = threading.Lock()
+
+PERSONDATA_LIST_KEY_PREFIX = "datav:cmai:workflow:inputPlugin:persondataList:"
+
+
+def _get_datav_redis() -> redis.StrictRedis:
+    """获取 datav 项目方独立 Redis 客户端 (懒加载)"""
+    global _DATAV_REDIS_CLIENT
+    if _DATAV_REDIS_CLIENT is not None:
+        return _DATAV_REDIS_CLIENT
+
+    with _DATAV_REDIS_LOCK:
+        if _DATAV_REDIS_CLIENT is not None:
+            return _DATAV_REDIS_CLIENT
+
+        cfg = get_base_config("datav_redis", {}) or {}
+        host_port = (cfg.get("host") or "127.0.0.1:6379").split(":")
+        host = host_port[0]
+        port = int(host_port[1]) if len(host_port) > 1 else 6379
+
+        conn_params: dict[str, Any] = {
+            "host": host,
+            "port": port,
+            "db": int(cfg.get("db", 0)),
+            "decode_responses": True,
+            "socket_connect_timeout": 3,
+            "socket_timeout": 5,
+        }
+        if cfg.get("username"):
+            conn_params["username"] = cfg["username"]
+        if cfg.get("password"):
+            conn_params["password"] = cfg["password"]
+
+        _DATAV_REDIS_CLIENT = redis.StrictRedis(**conn_params)
+        logger.info(f"datav_redis 已连接: {host}:{port}/db{conn_params['db']}")
+        return _DATAV_REDIS_CLIENT
+
+
+# =============================================================================
+# persondataList 响应模型
+# =============================================================================
+
+class PersonDataItem(BaseModel):
+    """人员数据项 (datav workflow inputPlugin persondataList 单条记录)"""
+    model_config = ConfigDict(extra="allow")
+
+    checked: bool
+    dataobject: str
+    title: str
+
+
+@router.get(
+    "/persondataList/{workflow_id}",
+    summary="获取 workflow inputPlugin 人员数据列表",
+    response_description="人员数据列表"
+)
+def get_persondata_list(
+    workflow_id: str,
+    user=Depends(manager)
+):
+    """
+    ### GET `/persondataList/{workflow_id}`
+
+    从 datav 项目方提供的独立 Redis 中读取 workflow inputPlugin persondataList 数据。
+
+    Redis key 格式: `datav:cmai:workflow:inputPlugin:persondataList:{workflow_id}`
+    Redis value 格式: JSON 数组，元素结构 `{checked, dataobject, title}`
+
+    ---
+    ### 路径参数
+    | 字段 | 类型 | 描述 |
+    |------|------|------|
+    | `workflow_id` | `string` | workflow ID |
+
+    ---
+    ### 响应
+    ```json
+    {
+        "retcode": 0,
+        "retmsg": "success",
+        "data": [
+            {"checked": true, "dataobject": "t_jzg_gzjl", "title": "教职工工作经历"},
+            {"checked": false, "dataobject": "t_jzg_jtcy", "title": "教职工家庭成员信息"}
+        ]
+    }
+    ```
+
+    key 不存在时返回空数组 `[]`。
+    """
+    workflow_id = (workflow_id or "").strip()
+    if not workflow_id:
+        return get_data_error_result(retmsg="workflow_id 不能为空")
+
+    redis_key = f"{PERSONDATA_LIST_KEY_PREFIX}{workflow_id}"
+
+    try:
+        client = _get_datav_redis()
+        raw = client.get(redis_key)
+    except redis.RedisError as e:
+        logger.exception(f"datav_redis 读取失败: key={redis_key}, err={e}")
+        return server_error_response(e)
+
+    if raw is None:
+        return get_json_result(data=[])
+
+    try:
+        parsed = json.loads(raw)
+        # datav 端写入的是 JSON 字符串再包一层 JSON 字符串 (双层编码)，需要再解一次
+        if isinstance(parsed, str):
+            parsed = json.loads(parsed)
+    except (TypeError, ValueError) as e:
+        logger.error(f"datav_redis value 不是合法 JSON: key={redis_key}, err={e}")
+        return get_data_error_result(retmsg=f"Redis 数据格式异常: {redis_key}")
+
+    if not isinstance(parsed, list):
+        logger.error(f"datav_redis value 不是数组: key={redis_key}, type={type(parsed).__name__}")
+        return get_data_error_result(retmsg=f"Redis 数据格式异常 (期望数组): {redis_key}")
+
+    return get_json_result(data=parsed)

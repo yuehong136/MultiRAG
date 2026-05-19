@@ -144,6 +144,13 @@ redis:
   password: ''
   host: '127.0.0.1:6379'
 
+# datav 项目方提供的独立 Redis（用于读取 workflow inputPlugin persondataList 等数据）
+datav_redis:
+  host: '122.112.237.137:6379'
+  db: 0
+  username: ''
+  password: 'datav123'
+
 task_executor:
   message_queue_type: 'redis'
 
@@ -160,10 +167,12 @@ user_default_llm:
     embedding_model:
       api_key: 'xxx'
       base_url: 'http://192.168.139.127:6380'
-    rerank_model: 'BAAI/bge-reranker-v2-m3'
     asr_model:
       model: 'whisper-large-v3' # alias of name
-    image2text_model: 'glm-4.5v'
+    rerank_model:
+      name: 'BAAI/bge-reranker-v2-m3'
+    image2text_model:
+      name: 'glm-4.6v'
 
 oauth:
   oauth2:

@@ -22,4 +22,4 @@ def download_nltk_data():
     nltk.download('wordnet', halt_on_error=False, quiet=True)
     nltk.download('punkt_tab', halt_on_error=False, quiet=True)
 # download_nltk_data()
-logging.info(f"默认已下载 wordnet、punkt_tab ~如有下载需求请进入 api/validation.py 解开注释")
+logging.info("默认已下载 wordnet、punkt_tab ~如有下载需求请进入 api/validation.py 解开注释")
