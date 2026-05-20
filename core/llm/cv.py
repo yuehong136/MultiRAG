@@ -155,16 +155,22 @@ class Base(ABC):
                 stream=True,
                 extra_body=self.extra_body,
             )
-            async for resp in response:
-                if not resp.choices[0].delta.content:
-                    continue
-                delta = resp.choices[0].delta.content
-                ans = delta
-                if resp.choices[0].finish_reason == "length":
-                    ans += "...\nFor the content length reason, it stopped, continue?" if is_english([ans]) else "······\n由于长度的原因，回答被截断了，要继续吗？"
-                if resp.choices[0].finish_reason == "stop":
-                    tk_count += resp.usage.total_tokens
-                yield ans
+            async with response:
+                async for resp in response:
+                    if not resp.choices:
+                        continue
+                    choice = resp.choices[0]
+                    finish_reason = getattr(choice, "finish_reason", "")
+                    token_count = total_token_count_from_response(resp)
+                    if token_count:
+                        tk_count = token_count
+                    delta = getattr(choice.delta, "content", "") or ""
+                    if not delta:
+                        continue
+                    ans = delta
+                    if finish_reason == "length":
+                        ans += "...\nFor the content length reason, it stopped, continue?" if is_english([ans]) else "······\n由于长度的原因，回答被截断了，要继续吗？"
+                    yield ans
         except Exception as e:
             yield ans + "\n**ERROR**: " + str(e)
 
@@ -482,20 +488,25 @@ class Zhipu4V(GptV4):
         try:
             logging.info(json.dumps(history, ensure_ascii=False, indent=2))
             response = await self.async_client.chat.completions.create(model=self.model_name, messages=self._form_history(system, history, images), stream=True, **gen_conf)
-            async for resp in response:
-                if not resp.choices[0].delta.content:
-                    continue
-                delta = resp.choices[0].delta.content
-                ans = delta
-                if resp.choices[0].finish_reason == "length":
-                    if is_chinese(ans):
-                        ans += LENGTH_NOTIFICATION_CN
-                    else:
-                        ans += LENGTH_NOTIFICATION_EN
-                    tk_count = total_token_count_from_response(resp)
-                if resp.choices[0].finish_reason == "stop":
-                    tk_count = total_token_count_from_response(resp)
-                yield ans
+            async with response:
+                async for resp in response:
+                    if not resp.choices:
+                        continue
+                    choice = resp.choices[0]
+                    finish_reason = getattr(choice, "finish_reason", "")
+                    token_count = total_token_count_from_response(resp)
+                    if token_count:
+                        tk_count = token_count
+                    delta = getattr(choice.delta, "content", "") or ""
+                    if not delta:
+                        continue
+                    ans = delta
+                    if finish_reason == "length":
+                        if is_chinese(ans):
+                            ans += LENGTH_NOTIFICATION_CN
+                        else:
+                            ans += LENGTH_NOTIFICATION_EN
+                    yield ans
         except Exception as e:
             yield ans + "\n**ERROR**: " + str(e)
 

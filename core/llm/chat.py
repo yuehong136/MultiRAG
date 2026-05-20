@@ -146,33 +146,34 @@ class Base(ABC):
 
         response = await self.async_client.chat.completions.create(**request_kwargs)
 
-        async for resp in response:
-            if not resp.choices:
-                continue
-            if not resp.choices[0].delta.content:
-                resp.choices[0].delta.content = ""
-            _reasoning = getattr(resp.choices[0].delta, "reasoning_content", None) or getattr(resp.choices[0].delta, "reasoning", None)
-            if kwargs.get("with_reasoning", True) and _reasoning:
-                ans = ""
-                if not reasoning_start:
-                    reasoning_start = True
-                    ans = "<think>"
-                ans += _reasoning + "</think>"
-            else:
-                reasoning_start = False
-                ans = resp.choices[0].delta.content
-
-            tol = total_token_count_from_response(resp)
-            if not tol:
-                tol = num_tokens_from_string(resp.choices[0].delta.content)
-
-            finish_reason = resp.choices[0].finish_reason if hasattr(resp.choices[0], "finish_reason") else ""
-            if finish_reason == "length":
-                if is_chinese(ans):
-                    ans += LENGTH_NOTIFICATION_CN
+        async with response:
+            async for resp in response:
+                if not resp.choices:
+                    continue
+                if not resp.choices[0].delta.content:
+                    resp.choices[0].delta.content = ""
+                _reasoning = getattr(resp.choices[0].delta, "reasoning_content", None) or getattr(resp.choices[0].delta, "reasoning", None)
+                if kwargs.get("with_reasoning", True) and _reasoning:
+                    ans = ""
+                    if not reasoning_start:
+                        reasoning_start = True
+                        ans = "<think>"
+                    ans += _reasoning + "</think>"
                 else:
-                    ans += LENGTH_NOTIFICATION_EN
-            yield ans, tol
+                    reasoning_start = False
+                    ans = resp.choices[0].delta.content
+
+                tol = total_token_count_from_response(resp)
+                if not tol:
+                    tol = num_tokens_from_string(resp.choices[0].delta.content)
+
+                finish_reason = resp.choices[0].finish_reason if hasattr(resp.choices[0], "finish_reason") else ""
+                if finish_reason == "length":
+                    if is_chinese(ans):
+                        ans += LENGTH_NOTIFICATION_CN
+                    else:
+                        ans += LENGTH_NOTIFICATION_EN
+                yield ans, tol
 
     async def async_chat_streamly(self, system, history, gen_conf: dict = {}, **kwargs):
         if system and history and history[0].get("role") != "system":
@@ -355,48 +356,49 @@ class Base(ABC):
                     final_tool_calls = {}
                     answer = ""
 
-                    async for resp in response:
-                        if not hasattr(resp, "choices") or not resp.choices:
-                            continue
+                    async with response:
+                        async for resp in response:
+                            if not hasattr(resp, "choices") or not resp.choices:
+                                continue
 
-                        delta = resp.choices[0].delta
+                            delta = resp.choices[0].delta
 
-                        if hasattr(delta, "tool_calls") and delta.tool_calls:
-                            for tool_call in delta.tool_calls:
-                                index = tool_call.index
-                                if index not in final_tool_calls:
-                                    if not tool_call.function.arguments:
-                                        tool_call.function.arguments = ""
-                                    final_tool_calls[index] = tool_call
-                                else:
-                                    final_tool_calls[index].function.arguments += tool_call.function.arguments or ""
-                            continue
+                            if hasattr(delta, "tool_calls") and delta.tool_calls:
+                                for tool_call in delta.tool_calls:
+                                    index = tool_call.index
+                                    if index not in final_tool_calls:
+                                        if not tool_call.function.arguments:
+                                            tool_call.function.arguments = ""
+                                        final_tool_calls[index] = tool_call
+                                    else:
+                                        final_tool_calls[index].function.arguments += tool_call.function.arguments or ""
+                                continue
 
-                        if not hasattr(delta, "content") or delta.content is None:
-                            delta.content = ""
+                            if not hasattr(delta, "content") or delta.content is None:
+                                delta.content = ""
 
-                        _reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
-                        if _reasoning:
-                            ans = ""
-                            if not reasoning_start:
-                                reasoning_start = True
-                                ans = "<think>"
-                            ans += _reasoning + "</think>"
-                            yield ans
-                        else:
-                            reasoning_start = False
-                            answer += delta.content
-                            yield delta.content
+                            _reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                            if _reasoning:
+                                ans = ""
+                                if not reasoning_start:
+                                    reasoning_start = True
+                                    ans = "<think>"
+                                ans += _reasoning + "</think>"
+                                yield ans
+                            else:
+                                reasoning_start = False
+                                answer += delta.content
+                                yield delta.content
 
-                        tol = total_token_count_from_response(resp)
-                        if not tol:
-                            total_tokens += num_tokens_from_string(delta.content)
-                        else:
-                            total_tokens = tol
+                            tol = total_token_count_from_response(resp)
+                            if not tol:
+                                total_tokens += num_tokens_from_string(delta.content)
+                            else:
+                                total_tokens = tol
 
-                        finish_reason = getattr(resp.choices[0], "finish_reason", "")
-                        if finish_reason == "length":
-                            yield self._length_stop("")
+                            finish_reason = getattr(resp.choices[0], "finish_reason", "")
+                            if finish_reason == "length":
+                                yield self._length_stop("")
 
                     if answer:
                         yield total_tokens
@@ -420,18 +422,19 @@ class Base(ABC):
 
                 response = await self.async_client.chat.completions.create(model=self.model_name, messages=history, stream=True, tools=tools, tool_choice="auto", **gen_conf)
 
-                async for resp in response:
-                    if not hasattr(resp, "choices") or not resp.choices:
-                        continue
-                    delta = resp.choices[0].delta
-                    if not hasattr(delta, "content") or delta.content is None:
-                        continue
-                    tol = total_token_count_from_response(resp)
-                    if not tol:
-                        total_tokens += num_tokens_from_string(delta.content)
-                    else:
-                        total_tokens = tol
-                    yield delta.content
+                async with response:
+                    async for resp in response:
+                        if not hasattr(resp, "choices") or not resp.choices:
+                            continue
+                        delta = resp.choices[0].delta
+                        if not hasattr(delta, "content") or delta.content is None:
+                            continue
+                        tol = total_token_count_from_response(resp)
+                        if not tol:
+                            total_tokens += num_tokens_from_string(delta.content)
+                        else:
+                            total_tokens = tol
+                        yield delta.content
 
                 yield total_tokens
                 return
