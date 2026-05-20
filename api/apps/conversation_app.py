@@ -211,6 +211,9 @@ class AskAboutRequest(BaseModel):
     kb_ids: list[str]
     """知识库ID列表"""
 
+    search_id: str | None = ""
+    """搜索应用ID，用于读取搜索配置"""
+
 class SparseSearchMode(BaseModel):
     type: Literal["sparse"] = "sparse"
 
@@ -266,6 +269,9 @@ class MindmapRequest(BaseModel):
     kb_ids: list[str]
     """知识库ID列表"""
 
+    search_id: str | None = ""
+    """搜索应用ID，用于读取搜索配置"""
+
     search_mode: SearchModeType | None = None
     """检索模式"""
 
@@ -281,6 +287,9 @@ class MindmapRequest(BaseModel):
 class RelatedQuestionsRequest(BaseModel):
     question: str
     """用户提出的关键词"""
+
+    search_id: str | None = ""
+    """搜索应用ID，用于读取搜索配置"""
 
 
 router = APIRouter()
