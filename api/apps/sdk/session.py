@@ -1185,6 +1185,30 @@ def begin_inputs(
     })
 
 
+@router.get("/agentbots/{agent_id}/persondataList", summary="获取代理机器人 inputPlugin 人员数据列表")
+def agentbot_persondata_list(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(beta_token_required),
+):
+    """
+    公开 (share/widget beta-token) 入口，按 agent_id (即 datav workflow_id) 读取
+    inputPlugin persondataList。与登录态 `/v1/datav/persondataList/{id}` 同源数据，
+    供 Begin 节点 persondata 输入类型在分享页拉取候选项。
+    """
+    cvs = UserCanvasService.get_by_id(db, agent_id)
+    if not cvs:
+        return get_error_data_result(retmsg=f"Can't find agent by ID: {agent_id}")
+
+    try:
+        from api.apps.datav_app import fetch_persondata_list
+        return get_result(data=fetch_persondata_list(agent_id))
+    except ValueError as e:
+        return get_error_data_result(retmsg=str(e))
+    except Exception as e:
+        return server_error_response(e)
+
+
 @router.get("/agentbots/{agent_id}/attachments/{attachment_id}", summary="下载公开 Agent 附件")
 async def download_agentbot_attachment(
     agent_id: str,

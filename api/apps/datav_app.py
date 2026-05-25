@@ -1091,6 +1091,44 @@ class PersonDataItem(BaseModel):
     title: str
 
 
+def fetch_persondata_list(workflow_id: str) -> list:
+    """
+    读取 datav workflow inputPlugin persondataList，返回解析后的数组。
+
+    Redis key 格式: `datav:cmai:workflow:inputPlugin:persondataList:{workflow_id}`
+    Redis value 格式: JSON 数组，元素结构 `{checked, dataobject, title}`。
+    key 不存在时返回空数组 `[]`。
+
+    供 datav 自身路由与对外 (beta token) agentbots 路由复用。
+    workflow_id 为空或 Redis 数据非数组时抛 ValueError，Redis 故障由调用方处理 RedisError。
+    """
+    workflow_id = (workflow_id or "").strip()
+    if not workflow_id:
+        raise ValueError("workflow_id 不能为空")
+
+    redis_key = f"{PERSONDATA_LIST_KEY_PREFIX}{workflow_id}"
+    client = _get_datav_redis()
+    raw = client.get(redis_key)
+
+    if raw is None:
+        return []
+
+    try:
+        parsed = json.loads(raw)
+        # datav 端写入的是 JSON 字符串再包一层 JSON 字符串 (双层编码)，需要再解一次
+        if isinstance(parsed, str):
+            parsed = json.loads(parsed)
+    except (TypeError, ValueError) as e:
+        logger.error(f"datav_redis value 不是合法 JSON: key={redis_key}, err={e}")
+        raise ValueError(f"Redis 数据格式异常: {redis_key}")
+
+    if not isinstance(parsed, list):
+        logger.error(f"datav_redis value 不是数组: key={redis_key}, type={type(parsed).__name__}")
+        raise ValueError(f"Redis 数据格式异常 (期望数组): {redis_key}")
+
+    return parsed
+
+
 @router.get(
     "/persondataList/{workflow_id}",
     summary="获取 workflow inputPlugin 人员数据列表",
@@ -1129,33 +1167,10 @@ def get_persondata_list(
 
     key 不存在时返回空数组 `[]`。
     """
-    workflow_id = (workflow_id or "").strip()
-    if not workflow_id:
-        return get_data_error_result(retmsg="workflow_id 不能为空")
-
-    redis_key = f"{PERSONDATA_LIST_KEY_PREFIX}{workflow_id}"
-
     try:
-        client = _get_datav_redis()
-        raw = client.get(redis_key)
+        return get_json_result(data=fetch_persondata_list(workflow_id))
+    except ValueError as e:
+        return get_data_error_result(retmsg=str(e))
     except redis.RedisError as e:
-        logger.exception(f"datav_redis 读取失败: key={redis_key}, err={e}")
+        logger.exception(f"datav_redis 读取失败: workflow_id={workflow_id}, err={e}")
         return server_error_response(e)
-
-    if raw is None:
-        return get_json_result(data=[])
-
-    try:
-        parsed = json.loads(raw)
-        # datav 端写入的是 JSON 字符串再包一层 JSON 字符串 (双层编码)，需要再解一次
-        if isinstance(parsed, str):
-            parsed = json.loads(parsed)
-    except (TypeError, ValueError) as e:
-        logger.error(f"datav_redis value 不是合法 JSON: key={redis_key}, err={e}")
-        return get_data_error_result(retmsg=f"Redis 数据格式异常: {redis_key}")
-
-    if not isinstance(parsed, list):
-        logger.error(f"datav_redis value 不是数组: key={redis_key}, type={type(parsed).__name__}")
-        return get_data_error_result(retmsg=f"Redis 数据格式异常 (期望数组): {redis_key}")
-
-    return get_json_result(data=parsed)
