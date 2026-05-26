@@ -15,7 +15,7 @@ from sqlalchemy.sql import desc as sa_desc
 from agent.canvas import Canvas
 from agent.a2ui import validate_client_a2ui_messages
 from api.db import TenantPermission, CanvasCategory
-from api.db.db_models import CanvasTemplate, User, UserCanvas, UserCanvasVersion, API4Conversation
+from api.db.db_models import CanvasTemplate, User, UserCanvas, UserCanvasVersion
 from api.db.services.common_service import CommonService
 from api.db.services.api_service import API4ConversationService
 from api.db.services.user_canvas_version import UserCanvasVersionService
@@ -359,9 +359,8 @@ async def completion(
             "dsl": dsl,
             "reference": []
         }
-        # save 并转实体
-        API4ConversationService.save(db, **conv_dict)
-        conv = API4Conversation(**conv_dict)
+        # Use the persisted instance so SQLAlchemy-side defaults are populated.
+        conv = API4ConversationService.save(db, **conv_dict)
         if not conv.message:
             conv.message = []
 

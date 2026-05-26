@@ -1184,12 +1184,12 @@ class API4Conversation(BaseModel):
     exp_user_id: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True, doc="exp_user_id")
     message: Mapped[list | None] = mapped_column(JSONB, index=False, nullable=True)
     reference: Mapped[list | None] = mapped_column(JSONB, index=False, nullable=True, default=[])
-    tokens: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=0)
+    tokens: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=0, server_default=text("0"))
     source: Mapped[str | None] = mapped_column(String(16), index=True, nullable=True, doc="none|agent|dialog")
     dsl: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True, default={})
-    duration: Mapped[float] = mapped_column(Float, index=True, nullable=False, default=0)
-    round: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
-    thumb_up: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
+    duration: Mapped[float] = mapped_column(Float, index=True, nullable=False, default=0, server_default=text("0"))
+    round: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0, server_default=text("0"))
+    thumb_up: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0, server_default=text("0"))
     errors: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, default=None, doc="errors")
 
 

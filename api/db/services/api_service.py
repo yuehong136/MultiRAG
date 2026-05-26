@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import json
+from copy import deepcopy
 from datetime import datetime
-from typing import Any, Iterable
 
 from sqlalchemy import (
     select,
     update,
     func,
     asc,
-    text,
 )
 from sqlalchemy.sql import desc as sa_desc
 from sqlalchemy.orm import Session
@@ -64,6 +62,20 @@ class APITokenService(CommonService):
 
 class API4ConversationService(CommonService):
     model = API4Conversation
+    _append_message_fields = {
+        "name",
+        "exp_user_id",
+        "message",
+        "reference",
+        "tokens",
+        "source",
+        "dsl",
+        "duration",
+        "thumb_up",
+        "errors",
+    }
+    _non_nullable_append_fields = {"tokens", "duration", "thumb_up"}
+    _json_append_fields = {"message", "reference", "dsl"}
 
     def __init__(self):
         super().__init__(API4Conversation)
@@ -185,11 +197,16 @@ class API4ConversationService(CommonService):
         if not obj:
             return 0
 
-        # 将 conversation 字典的 key 对应到模型字段
-        # 注意：只覆盖模型里存在的字段
+        # Only persist conversation payload fields. Avoid writing transient
+        # SQLAlchemy defaults such as tokens=None over non-null database values.
         for k, v in conversation.items():
-            if hasattr(obj, k):
-                setattr(obj, k, v)
+            if k not in cls._append_message_fields or not hasattr(obj, k):
+                continue
+            if k in cls._non_nullable_append_fields and v is None:
+                continue
+            if k in cls._json_append_fields and isinstance(v, (dict, list)):
+                v = deepcopy(v)
+            setattr(obj, k, v)
 
         # 轮次自增（处理 None）
         obj.round = (obj.round or 0) + 1
