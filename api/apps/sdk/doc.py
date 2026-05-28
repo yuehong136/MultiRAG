@@ -1,3 +1,4 @@
+import base64
 import datetime
 import json
 import logging
@@ -27,6 +28,7 @@ from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.task_service import TaskService, queue_tasks, cancel_all_task_of
 from api.utils.api_utils import check_duplicate_ids, construct_json_result, get_error_data_result, get_parser_config, get_result, server_error_response, token_required
+from api.utils.image_utils import store_chunk_image
 from core.app.tag import label_question
 from core.nlp import rag_tokenizer, search
 from core.prompts.generator import cross_languages, keyword_extraction
@@ -137,6 +139,7 @@ class AddChunkRequest(BaseModel):
     important_keywords: list[str] = Field(default_factory=list)
     tag_kwd: list[str] = Field(default_factory=list)
     tag_feas: dict = Field(default_factory=dict)
+    image_base64: str | None = None
 
 
 class UpdateChunkRequest(BaseModel):
@@ -1108,7 +1111,7 @@ async def list_chunks(
 
 
 @router.post("/datasets/{dataset_id}/documents/{document_id}/chunks", summary="添加文档分块")
-def add_document_chunk(
+def add_chunk(
     dataset_id: str,
     document_id: str,
     request: AddChunkRequest,
@@ -1171,6 +1174,10 @@ def add_document_chunk(
             chunk_data["tag_kwd"] = req["tag_kwd"]
         if "tag_feas" in req:
             chunk_data["tag_feas"] = req["tag_feas"]
+        image_base64 = req.get("image_base64")
+        if image_base64:
+            chunk_data["img_id"] = f"{dataset_id}-{chunk_id}"
+            chunk_data["doc_type_kwd"] = "image"
 
         # 生成embedding
         v, c = embd_mdl.encode([req["content"]])
@@ -1178,6 +1185,9 @@ def add_document_chunk(
         
         # 保存到搜索引擎
         settings.docStoreConn.upsert([chunk_id], [chunk_data], search.index_name(kb.tenant_id), dataset_id)
+
+        if image_base64:
+            store_chunk_image(dataset_id, chunk_id, base64.b64decode(image_base64))
         
         # 更新文档统计
         DocumentService.increment_chunk_num(
@@ -1189,7 +1199,7 @@ def add_document_chunk(
             0   # process duration
         )
         
-        return get_result(data={"chunk_id": chunk_id, "content": req["content"]})
+        return get_result(data={"chunk_id": chunk_id, "content": req["content"], "image_id": chunk_data.get("img_id", "")})
     except Exception as e:
         logging.exception(e)
         return get_error_data_result(retmsg=f"Failed to add chunk: {str(e)}")

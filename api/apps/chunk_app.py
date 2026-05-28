@@ -21,6 +21,7 @@ from api.db.services.document_service import DocumentService
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.utils.api_utils import server_error_response, get_data_error_result
 from api.utils.api_utils import get_json_result
+from api.utils.image_utils import store_chunk_image
 from core.app.qa import rmPrefix, beAdoc
 from core.app.tag import label_question
 from core.nlp import search, rag_tokenizer
@@ -73,6 +74,7 @@ class CreateChunkRequest(BaseModel):
     content_with_weight: str
     question_kwd: list[str] | None = None
     important_kwd: list[str] | None = None
+    image_base64: str | None = None
 
 
 class VectorStoreQueryRequest(BaseModel):
@@ -1309,6 +1311,10 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
         d["img_id"] = ""
         d["auth"] = []
         d["available_int"] = 1
+        image_base64 = req.get("image_base64")
+        if image_base64:
+            d["img_id"] = f"{doc.kb_id}-{chunk_id}"
+            d["doc_type_kwd"] = "image"
 
         tenant_id = DocumentService.get_tenant_id(db, req["doc_id"])
         if not tenant_id:
@@ -1342,9 +1348,12 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
 
         settings.docStoreConn.insert([d], search.index_name_one(tenant_id, kb.name), kb.id)
 
+        if image_base64:
+            store_chunk_image(doc.kb_id, chunk_id, base64.b64decode(image_base64))
+
         DocumentService.increment_chunk_num(
             db, doc.id, doc.kb_id, c, 1, 0)
-        return get_json_result(data={"chunk_id": chunk_id})
+        return get_json_result(data={"chunk_id": chunk_id, "image_id": d.get("img_id", "")})
     except Exception as e:
         return server_error_response(e)
 
