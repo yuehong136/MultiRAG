@@ -93,22 +93,40 @@ class HTMLReport(ComponentBase):
             return "".join(str(c) for c in result)
         return result
 
+    @staticmethod
+    def _stringify(value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        try:
+            return json.dumps(value, ensure_ascii=False)
+        except Exception:
+            return str(value)
+
     async def _resolve_source_text(self) -> str:
-        """解析 query 里的上游引用 → 通读源料文本(仿 PDFGenerator)。"""
+        """解析 query 里的上游引用 → 通读源料文本(仿 PDFGenerator)。
+
+        前端 QueryVariable 存的是**裸引用**(如 `begin@report`,无花括号——normalizeVariableReference
+        会主动剥掉花括号),而 PDFGenerator 风格的 variable_ref_patt 正则只匹配 `{…}`。两者约定不一致:
+        裸引用能过 is_reff 却匹配不到任何 `{…}`,旧实现会把字面量 "begin@report" 当源料 → 报告永远空数据。
+        故此处区分两形态:整串本身就是一个引用时直接取值;带花括号的模板文本仍走逐个替换。
+        """
         raw = self._param.query
-        if not isinstance(raw, str):
+        if not isinstance(raw, str) or not raw.strip():
             return ""
-        if not raw.strip() or not self._canvas.is_reff(raw.strip()):
+        stripped = raw.strip()
+        if not self._canvas.is_reff(stripped):
             return raw
+
+        matches = re.findall(self.variable_ref_patt, raw, flags=re.DOTALL)
+        if not matches:
+            # 裸引用:前端单变量绑定字段存的就是这种形态
+            value = await self._collect_partial(self._canvas.get_variable_value(stripped))
+            return self._stringify(value)
+
         text = raw
-        for match in re.findall(self.variable_ref_patt, raw, flags=re.DOTALL):
+        for match in matches:
             value = await self._collect_partial(self._canvas.get_variable_value(match))
-            if not isinstance(value, str):
-                try:
-                    value = json.dumps(value, ensure_ascii=False)
-                except Exception:
-                    value = str(value)
-            text = text.replace("{" + match + "}", value)
+            text = text.replace("{" + match + "}", self._stringify(value))
         return text
 
     @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10 * 60)))
