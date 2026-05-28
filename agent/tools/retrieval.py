@@ -99,7 +99,7 @@ class Retrieval(ToolBase, ABC):
             if not memory_list:
                 raise Exception("No memory is selected.")
 
-            embd_names = list({memory.tenant_embd_id or memory.embd_id for memory in memory_list})
+            embd_names = list({memory.embd_id for memory in memory_list})
             assert len(embd_names) == 1, "Memory use different embedding models."
 
             vars = self.get_input_elements_from_text(query_text)
@@ -173,7 +173,9 @@ class Retrieval(ToolBase, ABC):
             if not kbs:
                 raise Exception("No dataset is selected.")
 
-            embd_keys = list(set([kb.tenant_embd_id or kb.embd_id for kb in kbs]))
+            # Keep the embedding-equivalence check aligned with RAGFlow: tenant_embd_id
+            # selects the concrete tenant model row, while embd_id defines model equivalence.
+            embd_keys = list(set([kb.embd_id for kb in kbs]))
             assert len(embd_keys) == 1, "Knowledge bases use different embedding models."
 
             embd_mdl = None

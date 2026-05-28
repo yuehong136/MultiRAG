@@ -26,6 +26,7 @@ from common.exceptions import ArgumentException, NotFoundException
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+MEMORY_LIST_MAX_PAGE_SIZE = 1000
 
 
 # ==================== Pydantic Models (V2 风格) ====================
@@ -138,10 +139,11 @@ def list_memory(
     storage_type: str | None = Query(None, description="存储类型"),
     keywords: str | None = Query(None, description="搜索关键词"),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(50, ge=1, le=200, description="每页数量"),
+    page_size: int = Query(50, ge=1, description="每页数量"),
     db: Session = Depends(get_db),
     user=Depends(manager)
 ):
+    effective_page_size = min(page_size, MEMORY_LIST_MAX_PAGE_SIZE)
     filter_params = {}
     if tenant_id is not None:
         filter_params["tenant_id"] = tenant_id
@@ -150,7 +152,7 @@ def list_memory(
     if storage_type is not None:
         filter_params["storage_type"] = storage_type
     try:
-        result = memory_api_service.list_memory(db, user.id, filter_params, keywords or "", page, page_size)
+        result = memory_api_service.list_memory(db, user.id, filter_params, keywords or "", page, effective_page_size)
         return get_json_result(data=result)
     except Exception as e:
         logger.error(e)
@@ -180,15 +182,16 @@ def get_memory_messages(
     agent_id: list[str] | None = Query(None, description="Agent ID列表"),
     keywords: str | None = Query(None, description="搜索关键词"),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(50, ge=1, le=200, description="每页数量"),
+    page_size: int = Query(50, ge=1, description="每页数量"),
     db: Session = Depends(get_db),
     user=Depends(manager)
 ):
+    effective_page_size = min(page_size, MEMORY_LIST_MAX_PAGE_SIZE)
     if agent_id and len(agent_id) == 1 and ',' in agent_id[0]:
         agent_id = agent_id[0].split(',')
     try:
         result = memory_api_service.get_memory_messages(
-            db, memory_id, agent_id or [], keywords.strip() if keywords else "", page, page_size
+            db, memory_id, agent_id or [], keywords.strip() if keywords else "", page, effective_page_size
         )
         return get_json_result(data=result)
     except NotFoundException as e:

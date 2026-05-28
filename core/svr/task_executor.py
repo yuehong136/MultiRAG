@@ -2871,7 +2871,7 @@ async def handle_task():
                     except:
                         pass
 
-                logging.info(f"handle_task begin for task {json.dumps(task_dict)}")
+                logging.info(f"handle_task begin for task {json.dumps(task_dict, default=str)}")
 
                 # 保存到 CURRENT_TASKS 前清理 base64（避免心跳日志膨胀）
                 task_for_tracking = copy.deepcopy(task)
@@ -2892,7 +2892,7 @@ async def handle_task():
 
                 # "handle_task done" 日志也清理 base64
                 task_done_dict = copy.deepcopy(task_dict)  # 复用之前清理过的 task_dict
-                logging.info(f"handle_task done for task {json.dumps(task_done_dict)}")
+                logging.info(f"handle_task done for task {json.dumps(task_done_dict, default=str)}")
             except TaskCanceledException as e:
                 DONE_TASKS += 1
                 CURRENT_TASKS.pop(task_id, None)
@@ -2914,7 +2914,7 @@ async def handle_task():
 
                 # 异常日志也清理 base64
                 task_error_dict = copy.deepcopy(task_dict) if 'task_dict' in locals() else {}
-                logging.exception(f"handle_task got exception for task {json.dumps(task_error_dict)}")
+                logging.exception(f"handle_task got exception for task {json.dumps(task_error_dict, default=str)}")
 
             finally:
                 # analyze_v2 任务不记录 pipeline 操作日志（临时 doc_id，无对应 Document 记录）

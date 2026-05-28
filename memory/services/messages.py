@@ -97,6 +97,7 @@ class MessageService:
             "forget_at",
             "status",
         ]
+        extract_select_fields = [*select_fields, "content"]
         order_by = OrderByExpr()
         order_by.desc("valid_at")
 
@@ -123,7 +124,7 @@ class MessageService:
         # Query extracted messages for the raw messages
         extract_filter = {"source_id": [r["message_id"] for r in raw_messages]}
         extract_res, _ = settings.msgStoreConn.search(
-            select_fields=select_fields,
+            select_fields=extract_select_fields,
             highlight_fields=[],
             condition=extract_filter,
             match_expressions=[],
@@ -135,7 +136,7 @@ class MessageService:
             agg_fields=[],
             hide_forgotten=False,
         )
-        extract_msg = settings.msgStoreConn.get_fields(extract_res, select_fields)
+        extract_msg = settings.msgStoreConn.get_fields(extract_res, extract_select_fields)
 
         # Group extracted messages by source_id
         grouped_extract_msg = {}
@@ -272,9 +273,15 @@ class MessageService:
 
     @staticmethod
     def calculate_message_size(message: dict):
-        return sys.getsizeof(message["content"]) + sys.getsizeof(message["content_embed"][0]) * len(
-            message["content_embed"]
-        )
+        content = message.get("content") or ""
+        content_embed = message.get("content_embed")
+        if content_embed is None:
+            content_embed = []
+        elif hasattr(content_embed, "tolist"):
+            content_embed = content_embed.tolist()
+        if not content_embed:
+            return sys.getsizeof(content)
+        return sys.getsizeof(content) + sys.getsizeof(content_embed[0]) * len(content_embed)
 
     @classmethod
     def calculate_memory_size(cls, memory_ids: list[str], uid_list: list[str]):

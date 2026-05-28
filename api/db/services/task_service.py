@@ -41,6 +41,15 @@ def trim_header_by_lines(text: str, max_length) -> str:
             return text[i+1:]
     return text
 
+
+def _task_queue_payload(task: dict) -> dict:
+    payload = task.copy()
+    begin_at = payload.get("begin_at")
+    if isinstance(begin_at, datetime):
+        payload["begin_at"] = begin_at.strftime("%Y-%m-%d %H:%M:%S")
+    return payload
+
+
 class TaskService(CommonService):
     """Service class for managing document processing tasks.
 
@@ -56,6 +65,31 @@ class TaskService(CommonService):
         model: The Task model class for database operations.
     """
     model = Task
+
+    @staticmethod
+    def _coerce_begin_at(value) -> datetime | None:
+        if value is None or isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+                try:
+                    return datetime.strptime(value, fmt)
+                except ValueError:
+                    continue
+            try:
+                parsed = datetime.fromisoformat(value)
+                if parsed.tzinfo is not None:
+                    parsed = parsed.astimezone().replace(tzinfo=None)
+                return parsed
+            except ValueError:
+                logging.warning("Invalid task begin_at value: %s", value)
+                return None
+        logging.warning("Unsupported task begin_at type: %s", type(value).__name__)
+        return None
+
+    @classmethod
+    def mark_started(cls, db: Session, id: str) -> int:
+        return cls.update_by_id(db, id, {"begin_at": datetime.now()})
 
     @classmethod
     def get_task(cls, db: Session, task_id: str, doc_ids: list[str] | None = None):
@@ -323,8 +357,9 @@ class TaskService(CommonService):
                 )
 
             # Update process_duration after progress updates.
-            if task.begin_at:
-                process_duration = (datetime.now() - task.begin_at).total_seconds()
+            begin_at = cls._coerce_begin_at(task.begin_at)
+            if begin_at:
+                process_duration = (datetime.now() - begin_at).total_seconds()
                 db.execute(
                     update(cls.model)
                     .where(cls.model.id == id)
@@ -416,7 +451,7 @@ def queue_tasks(db: Session, doc: dict, bucket: str, name: str, priority: int):
             "progress": 0.0,
             "from_page": 0,
             "to_page": 100000000,
-            "begin_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "begin_at": datetime.now(),
         }
 
     parse_task_array = []
@@ -495,7 +530,7 @@ def queue_tasks(db: Session, doc: dict, bucket: str, name: str, priority: int):
     unfinished_task_array = [task for task in parse_task_array if task["progress"] < 1.0]
     for unfinished_task in unfinished_task_array:
         assert REDIS_CONN.queue_product(
-            settings.get_svr_queue_name(priority), message=unfinished_task
+            settings.get_svr_queue_name(priority), message=_task_queue_payload(unfinished_task)
         ), "Can't access Redis. Please check the Redis' status."
 
 def reuse_prev_task_chunks(task: dict, prev_tasks: list[dict], chunking_config: dict):
@@ -555,7 +590,7 @@ def queue_dataflow(db: Session, tenant_id: str, flow_id: str, task_id: str, doc_
         to_page=100000000,
         task_type="dataflow" if not rerun else "dataflow_rerun",
         priority=priority,
-        begin_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        begin_at=datetime.now(),
     )
 
     if doc_id not in [CANVAS_DEBUG_DOC_ID, GRAPH_RAPTOR_FAKE_DOC_ID]:
@@ -569,7 +604,7 @@ def queue_dataflow(db: Session, tenant_id: str, flow_id: str, task_id: str, doc_
     task["file"] = file
 
     if not REDIS_CONN.queue_product(
-        settings.get_svr_queue_name(priority), message=task
+        settings.get_svr_queue_name(priority), message=_task_queue_payload(task)
     ):
         return False, "Can't access Redis. Please check the Redis' status."
 

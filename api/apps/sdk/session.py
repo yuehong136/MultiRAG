@@ -1168,14 +1168,24 @@ async def agent_bot_completions(
 @router.get("/agentbots/{agent_id}/inputs", summary="获取代理机器人输入表单")
 def begin_inputs(
     agent_id: str,
+    release: str | None = Query(None),
     db: Session = Depends(get_db),
     tenant_id: str = Depends(beta_token_required),
 ):
-    cvs = UserCanvasService.get_by_id(db, agent_id)
-    if not cvs:
+    release_mode = str(release or "").strip().lower() == "true"
+    try:
+        cvs, dsl = UserCanvasService.get_agent_dsl_with_release(
+            db,
+            agent_id,
+            release_mode=release_mode,
+            tenant_id=tenant_id,
+        )
+    except LookupError:
         return get_error_data_result(retmsg=f"Can't find agent by ID: {agent_id}")
+    except PermissionError as e:
+        return get_error_data_result(retmsg=str(e))
 
-    canvas = Canvas(json.dumps(cvs.dsl), tenant_id, canvas_id=cvs.id)
+    canvas = Canvas(dsl, tenant_id, canvas_id=cvs.id)
     return get_result(data={
         "title": cvs.title,
         "avatar": cvs.avatar,

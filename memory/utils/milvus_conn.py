@@ -31,6 +31,43 @@ from common.float_utils import get_float
 from common.constants import PAGERANK_FLD, TAG_FLD
 
 
+def _message_collection_name(index_name: str | list[str], memory_id: str) -> str:
+    if isinstance(index_name, list):
+        if not index_name:
+            raise ValueError("Index name list is empty")
+        index_name = index_name[0]
+    return f"{index_name}_{memory_id}"
+
+
+def _source_id(value) -> int:
+    """Normalize source_id to the integer message id used by RAGFlow/Infinity."""
+    if value in (None, ""):
+        return 0
+    return int(value)
+
+
+def _string_field(value) -> str:
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _vector_field(value) -> list[float]:
+    if value is None:
+        return []
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    if isinstance(value, tuple):
+        value = list(value)
+    if not isinstance(value, list):
+        return []
+    return [float(item) for item in value]
+
+
+def _is_vector_field_name(field_name: str) -> bool:
+    return re.match(r"q_\d+_vec", field_name) is not None
+
+
 @singleton
 class MilvusConnection(MilvusConnectionBase):
     """Milvus connection for message storage."""
@@ -60,6 +97,23 @@ class MilvusConnection(MilvusConnectionBase):
             case _:
                 return field_name
 
+    def _prepare_output_fields(self, collection: Collection, select_fields: list[str]) -> list[str]:
+        milvus_fields = []
+        for field_name in select_fields:
+            converted_name = self.convert_field_name(field_name)
+            if field_name == "content_embed":
+                continue
+            milvus_fields.append(converted_name)
+
+        if "content_embed" in select_fields:
+            for field in collection.schema.fields:
+                if _is_vector_field_name(field.name):
+                    milvus_fields.append(field.name)
+
+        if "id" not in milvus_fields:
+            milvus_fields.append("id")
+        return list(dict.fromkeys(milvus_fields))
+
     @staticmethod
     def map_message_to_milvus_fields(message: dict) -> dict:
         """
@@ -69,20 +123,20 @@ class MilvusConnection(MilvusConnectionBase):
         :return: A dictionary formatted for Milvus indexing.
         """
         storage_doc = {
-            "id": message.get("id"),
+            "id": _string_field(message.get("id")),
             "message_id": message["message_id"],
-            "message_type_kwd": message["message_type"],
-            "source_id": message.get("source_id", ""),
-            "memory_id": message["memory_id"],
-            "user_id": message.get("user_id", ""),
-            "agent_id": message["agent_id"],
-            "session_id": message["session_id"],
-            "valid_at": message.get("valid_at", ""),
-            "invalid_at": message.get("invalid_at", ""),
-            "forget_at": message.get("forget_at", ""),
+            "message_type_kwd": _string_field(message["message_type"]),
+            "source_id": _source_id(message.get("source_id", 0)),
+            "memory_id": _string_field(message["memory_id"]),
+            "user_id": _string_field(message.get("user_id")),
+            "agent_id": _string_field(message["agent_id"]),
+            "session_id": _string_field(message["session_id"]),
+            "valid_at": _string_field(message.get("valid_at")),
+            "invalid_at": _string_field(message.get("invalid_at")),
+            "forget_at": _string_field(message.get("forget_at")),
             "status_int": 1 if message.get("status") else 0,
             "zone_id": message.get("zone_id", 0),
-            "content_ltks": message.get("content", ""),
+            "content_ltks": _string_field(message.get("content")),
             f"q_{len(message['content_embed'])}_vec": message["content_embed"],
         }
         return storage_doc
@@ -99,7 +153,7 @@ class MilvusConnection(MilvusConnectionBase):
         message = {
             "message_id": doc.get("message_id"),
             "message_type": doc.get("message_type_kwd", ""),
-            "source_id": doc.get("source_id") if doc.get("source_id") else None,
+            "source_id": _source_id(doc.get("source_id", 0)),
             "memory_id": doc.get("memory_id", ""),
             "user_id": doc.get("user_id", ""),
             "agent_id": doc.get("agent_id", ""),
@@ -110,7 +164,7 @@ class MilvusConnection(MilvusConnectionBase):
             "forget_at": doc.get("forget_at", "-"),
             "status": bool(int(doc.get("status_int", 0))),
             "content": doc.get("content_ltks", ""),
-            "content_embed": doc.get(embd_field_name, []) if embd_field_name else [],
+            "content_embed": _vector_field(doc.get(embd_field_name)) if embd_field_name else [],
         }
         if doc.get("id"):
             message["id"] = doc["id"]
@@ -119,6 +173,35 @@ class MilvusConnection(MilvusConnectionBase):
     """
     CRUD operations
     """
+
+    def index_exist(self, index_name: str | list[str], memory_id: str = None) -> bool:
+        if not memory_id:
+            return False
+        collection_name = _message_collection_name(index_name, memory_id)
+        try:
+            return utility.has_collection(collection_name, using=self._using)
+        except Exception as e:
+            self.logger.warning(f"Failed to check if collection {collection_name} exists: {e}")
+            return False
+
+    def create_idx(self, index_name: str | list[str], memory_id: str, vector_size: int, parser_id: str = None):
+        collection_name = _message_collection_name(index_name, memory_id)
+        if utility.has_collection(collection_name, using=self._using):
+            self.logger.info(f"Message collection {collection_name} already exists")
+            return True
+        self._create_message_collection(collection_name, vector_size)
+        return True
+
+    def delete_idx(self, index_name: str | list[str], memory_id: str):
+        collection_name = _message_collection_name(index_name, memory_id)
+        try:
+            if utility.has_collection(collection_name, using=self._using):
+                utility.drop_collection(collection_name, using=self._using)
+                self.logger.info(f"Successfully deleted message collection {collection_name}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to delete message collection {collection_name}: {e}")
+            raise
 
     def search(
         self,
@@ -170,9 +253,7 @@ class MilvusConnection(MilvusConnectionBase):
                 filter_expr = self._build_filter_expr(condition, memory_id, hide_forgotten)
 
                 # Convert select fields to Milvus field names
-                milvus_select_fields = [self.convert_field_name(f) for f in select_fields]
-                if "id" not in milvus_select_fields:
-                    milvus_select_fields.append("id")
+                milvus_select_fields = self._prepare_output_fields(collection, select_fields)
 
                 # Check if we have vector search expressions
                 has_vector_search = any(isinstance(m, MatchDenseExpr) for m in match_expressions)
@@ -197,7 +278,11 @@ class MilvusConnection(MilvusConnectionBase):
                                 )
                                 for hits in search_results:
                                     for hit in hits:
-                                        result_dict = {k: v for k, v in hit.entity.items()}
+                                        result_dict = {}
+                                        for field in milvus_select_fields:
+                                            value = hit.entity.get(field)
+                                            if value is not None:
+                                                result_dict[field] = value
                                         result_dict["id"] = hit.id
                                         result_dict["_score"] = hit.distance
                                         results.append(result_dict)
@@ -249,6 +334,14 @@ class MilvusConnection(MilvusConnectionBase):
                 continue
 
             if not v:
+                continue
+
+            if field_name == "source_id":
+                if isinstance(v, list):
+                    vals = ", ".join([str(_source_id(x)) for x in v])
+                    exprs.append(f"{field_name} in [{vals}]")
+                else:
+                    exprs.append(f"{field_name} == {_source_id(v)}")
                 continue
 
             if isinstance(v, str):
@@ -451,7 +544,7 @@ class MilvusConnection(MilvusConnectionBase):
             # Message fields
             FieldSchema(name="message_id", dtype=DataType.INT64),
             FieldSchema(name="message_type_kwd", dtype=DataType.VARCHAR, max_length=64),
-            FieldSchema(name="source_id", dtype=DataType.VARCHAR, max_length=256),
+            FieldSchema(name="source_id", dtype=DataType.INT64),
             FieldSchema(name="memory_id", dtype=DataType.VARCHAR, max_length=256),
             FieldSchema(name="user_id", dtype=DataType.VARCHAR, max_length=256),
             FieldSchema(name="agent_id", dtype=DataType.VARCHAR, max_length=256),

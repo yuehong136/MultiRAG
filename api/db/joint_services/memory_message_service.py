@@ -495,8 +495,7 @@ async def handle_save_to_memory_task(db: Session, task_param: dict):
         return False, f"Task {task_param['id']} is not found."
     if task.progress == -1:
         return False, f"Task {task_param['id']} is already failed."
-    now_time = current_timestamp()
-    TaskService.update_by_id(db, task_param["id"], {"begin_at": timestamp_to_date(now_time)})
+    TaskService.mark_started(db, task_param["id"])
 
     memory_id = task_param["memory_id"]
     source_id = task_param["source_id"]

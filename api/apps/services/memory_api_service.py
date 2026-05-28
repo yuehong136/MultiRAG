@@ -12,7 +12,12 @@ from api.db.services.memory_service import MemoryService
 from api.db.services.user_service import UserTenantService
 from api.db.services.canvas_service import UserCanvasService
 from api.db.services.task_service import TaskService
-from api.db.joint_services.memory_message_service import get_memory_size_cache, judge_system_prompt_is_default, save_to_memory, query_message
+from api.db.joint_services.memory_message_service import (
+    get_memory_size_cache,
+    judge_system_prompt_is_default,
+    queue_save_to_memory_task,
+    query_message,
+)
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from api.utils.memory_utils import format_ret_data_from_memory, get_memory_type_human
 from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
@@ -246,7 +251,7 @@ def get_memory_messages(db: Session, memory_id: str, agent_ids: list[str], keywo
 
 async def add_message(db: Session, memory_ids: list[str], message_dict: dict):
     """
-    添加消息到Memory
+    添加消息到Memory，并投递后台任务提取结构化记忆。
 
     :param db: 数据库会话
     :param memory_ids: Memory ID列表
@@ -258,14 +263,7 @@ async def add_message(db: Session, memory_ids: list[str], message_dict: dict):
         "agent_response": str,
     }
     """
-    res = []
-    for memory_id in memory_ids:
-        success, msg = await save_to_memory(db, memory_id, message_dict)
-        res.append({"memory_id": memory_id, "success": success, "message": msg})
-
-    if all(r["success"] for r in res):
-        return True, "Successfully added to memories."
-    return False, str(res)
+    return await queue_save_to_memory_task(db, memory_ids, message_dict)
 
 
 def forget_message(db: Session, memory_id: str, message_id: int):
