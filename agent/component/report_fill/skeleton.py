@@ -84,16 +84,56 @@ def chart_row_keys(block: dict[str, Any]) -> tuple[str, list[str]]:
     return category, values
 
 
+_TREND_NUM_PATT = re.compile(r"^[+\-−]?\s*[\d,]+(?:\.\d+)?")
+
+
+def _trend_from_change(change: Any) -> str | None:
+    """变化率字符串 → 涨跌向(渲染器据此给红绿上色):带符号或前导数值才认,>0 up / <0 down / ==0 neutral。
+    形如「持平」「—」等非数值文本认不出,返回 None(渲染落灰),宁可不上色也不上错色。"""
+    if not isinstance(change, str):
+        return None
+    m = _TREND_NUM_PATT.match(change.strip())
+    if not m:
+        return None
+    try:
+        num = float(m.group(0).replace("−", "-").replace(",", "").replace(" ", ""))
+    except ValueError:
+        return None
+    if num > 0:
+        return "up"
+    if num < 0:
+        return "down"
+    return "neutral"
+
+
+def _apply_change_trend(node: dict[str, Any]) -> None:
+    """指标卡填完 change 后据其符号补 trend;已显式带 trend 则保留(尊重作者/历史骨架的静态选择)。"""
+    change = node.get("change")
+    if not change or node.get("trend"):
+        return
+    trend = _trend_from_change(change)
+    if trend:
+        node["trend"] = trend
+
+
 def merge_block(block: dict[str, Any], filled: dict[str, Any]) -> dict[str, Any]:
     """
     单个骨架 Block + 填好的叶子值 → 运行时 Block。以 `fields`(钉死的静态结构)为底,
     按路径覆盖填充值,最后回挂 `role`(渲染器侧栏布局靠 `role` 分主/侧列)。
+    指标卡填完 change 后,按其正负号补 trend(渲染器据 trend 给变化率红绿上色)。
     """
     result: dict[str, Any] = dict(block.get("fields") or {})
     result["id"] = block.get("id")
     result["type"] = block.get("type")
     for path, value in filled.items():
         result = set_field_value(result, path, value)
+    btype = result.get("type")
+    if btype == "stat-card":
+        _apply_change_trend(result)
+    elif btype == "stat-card-group":
+        for item in result.get("items") or []:
+            if isinstance(item, dict):
+                _apply_change_trend(item)
     if block.get("role"):
         result["role"] = block["role"]
     return result

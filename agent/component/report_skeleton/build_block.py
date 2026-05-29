@@ -128,18 +128,26 @@ def _build_block(btype: str, raw: dict[str, Any], hint: str | None) -> tuple[dic
         trend = opt_enum(raw.get("trend"), TRENDS)
         if trend:
             fields["trend"] = trend
-        return fields, {"value": _llm(hint)}
+        directives = {"value": _llm(hint)}
+        change = opt_str(raw.get("change"))
+        if change:  # 源料确有对比 → 加变化率空槽(填值期按符号推导 trend 红绿上色)
+            directives["change"] = _llm(change)
+        return fields, directives
     if btype == "stat-card-group":
         raws = [it for it in raw.get("items", []) if is_obj(it)] if isinstance(raw.get("items"), list) else []
         sources = raws if raws else [{}]
         items: list[dict[str, Any]] = []
-        for it in sources:
+        directives: dict[str, Any] = {}
+        for i, it in enumerate(sources):
             card: dict[str, Any] = {"label": to_str(it.get("label"))}
             trend = opt_enum(it.get("trend"), TRENDS)
             if trend:
                 card["trend"] = trend
             items.append(card)
-        directives = {f"items[{i}].value": _llm() for i in range(len(items))}
+            directives[f"items[{i}].value"] = _llm()
+            change = opt_str(it.get("change"))
+            if change:  # 该 KPI 源料有对比 → 加变化率空槽
+                directives[f"items[{i}].change"] = _llm(change)
         return {"type": btype, "items": items}, directives
     if btype == "table":
         headers = str_arr(raw.get("headers"))

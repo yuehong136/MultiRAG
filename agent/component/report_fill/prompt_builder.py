@@ -40,6 +40,10 @@ Rules:
   content must be (topic, ordering, units, tone). Honor it together with the section's overall focus.
 - Write in the SAME LANGUAGE as the source text. Be concise and faithful to the source; never invent
   facts. If the source lacks a value, give the closest faithful summary rather than fabricating.
+- A stat-card "value" is the FIGURE ONLY — a number with its unit or percent (e.g. "38600 人", "78%",
+  "18.6 亿元"); NEVER a sentence and NEVER a restatement of the label. Write "38600 人", not
+  "2025 年在校生总数 38600 人,较上年增长 4.3%". Put any period-over-period comparison in that card's
+  "change" slot as a signed rate ("+4.3%" / "−3.2%"), not inside the value.
 - Output ONLY the JSON object: no markdown code fences, no comments, no prose before or after."""
 
 
@@ -105,6 +109,12 @@ def spec_for(block: dict[str, Any], path: str) -> ValueSpec:
         return ValueSpec(kind="enum", options=list(VARIANT_VALUES), fallback="info")
     if leaf == "trend":
         return ValueSpec(kind="enum", options=list(TREND_VALUES), fallback="neutral")
+    if btype in ("stat-card", "stat-card-group"):
+        # 指标卡:value 是一个干净的数字,change 是带符号的变化率——别让模型填成整句。
+        if leaf == "value":
+            return ValueSpec(kind="metric")
+        if leaf == "change":
+            return ValueSpec(kind="change")
     return ValueSpec(kind="text")
 
 
@@ -140,7 +150,7 @@ def collect_fill_plan(section: dict[str, Any]) -> FillPlan:
 def _schema_for_item(item: FillItem) -> dict[str, Any]:
     spec = item.spec
     desc = {"description": item.description} if item.description else {}
-    if spec.kind == "text":
+    if spec.kind in ("text", "metric", "change"):
         return {"type": "string", **desc}
     if spec.kind == "enum":
         return {"type": "string", "enum": list(spec.options), **desc}
@@ -244,6 +254,10 @@ def _slot_hint(spec: ValueSpec) -> str:
         return f" (name + {spec.columns} values)"
     if spec.kind == "chartData":
         return f" (rows of {{{', '.join([spec.category, *spec.values])}}})"
+    if spec.kind == "metric":
+        return ' (the figure ONLY — a number with its unit or %, e.g. "38600 人" / "78%"; not a sentence, do not repeat the label)'
+    if spec.kind == "change":
+        return ' (a SIGNED change rate, lead with + or −, e.g. "+4.3%" / "−3.2%")'
     return ""
 
 

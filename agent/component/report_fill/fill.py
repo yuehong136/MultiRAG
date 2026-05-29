@@ -110,7 +110,7 @@ _SKIP = object()
 
 def _coerce_value(spec: ValueSpec, raw: Any) -> Any:
     """按 spec 强转模型给的原始值;无法采用返回 `_SKIP` → 留骨架原值。"""
-    if spec.kind == "text":
+    if spec.kind in ("text", "metric", "change"):
         text = _str_or_none(raw)
         return _SKIP if text is None else text
     if spec.kind == "enum":

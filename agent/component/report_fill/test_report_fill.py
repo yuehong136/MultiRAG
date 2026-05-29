@@ -8,13 +8,21 @@ HTMLReport 纯填值逻辑单测(agent/component/report_fill)。
 
 import asyncio
 
-from agent.component.report_fill.fill import fill_skeleton
-from agent.component.report_fill.prompt_builder import build_fill_schema, collect_fill_plan
+from agent.component.report_fill.fill import _coerce_value, fill_skeleton
+from agent.component.report_fill.prompt_builder import (
+    ValueSpec,
+    build_fill_schema,
+    collect_fill_plan,
+    spec_for,
+)
 from agent.component.report_fill.skeleton import (
     chart_row_keys,
+    merge_block,
     merge_skeleton,
     set_field_value,
 )
+
+MINUS = "−"  # Unicode 减号 U+2212(区别于 ASCII 连字符 -)
 
 SKELETON = {
     "title": "Q3 报告",
@@ -113,6 +121,51 @@ def test_merge_skeleton_filters_open_region_and_keeps_role():
     assert blocks[0]["role"] == "side"
 
 
+def test_merge_block_derives_trend_from_change_sign():
+    def trend_of(change):
+        blk = {"id": "x", "type": "stat-card", "fields": {"label": "L", "value": "v", "change": change}}
+        return merge_block(blk, {}).get("trend")
+
+    assert trend_of("+12.5%") == "up"
+    assert trend_of(MINUS + "3.2%") == "down"  # Unicode 减号
+    assert trend_of("-3%") == "down"  # ASCII 连字符
+    assert trend_of("0%") == "neutral"
+    assert trend_of("持平") is None  # 非数值:不臆测方向,渲染落灰
+    assert trend_of("") is None
+
+
+def test_merge_block_derives_trend_from_filled_change():
+    # change 由 llm 空槽填入(真实路径):填完按符号补 trend
+    blk = {
+        "id": "x",
+        "type": "stat-card",
+        "fields": {"label": "营收", "value": ""},
+        "fieldDirectives": {"value": {"mode": "llm"}, "change": {"mode": "llm"}},
+    }
+    out = merge_block(blk, {"value": "1.2亿", "change": "+12.5%"})
+    assert out["change"] == "+12.5%"
+    assert out["trend"] == "up"
+
+
+def test_merge_block_keeps_explicit_trend():
+    # 已显式 trend=neutral,即便 change 为正也不覆盖(尊重静态选择)
+    blk = {"id": "x", "type": "stat-card", "fields": {"label": "L", "value": "v", "change": "+5%", "trend": "neutral"}}
+    assert merge_block(blk, {}).get("trend") == "neutral"
+
+
+def test_merge_block_group_derives_trend_per_item():
+    blk = {
+        "id": "g",
+        "type": "stat-card-group",
+        "fields": {"items": [{"label": "营收"}, {"label": "流失率"}, {"label": "客户数"}]},
+    }
+    out = merge_block(blk, {"items[0].change": "+8%", "items[1].change": "-2%"})
+    items = out["items"]
+    assert items[0]["change"] == "+8%" and items[0]["trend"] == "up"
+    assert items[1]["change"] == "-2%" and items[1]["trend"] == "down"
+    assert "trend" not in items[2]  # 无 change 的 item 不补 trend
+
+
 # ----------------------------------------------------------------------------
 # prompt_builder.py
 # ----------------------------------------------------------------------------
@@ -130,6 +183,19 @@ def test_build_fill_schema_shapes():
     assert set(schema["required"]) == {"blkA__value", "blkA__trend"}
     assert schema["properties"]["blkA__trend"]["enum"] == ["up", "down", "neutral"]
     assert schema["properties"]["blkA__value"]["type"] == "string"
+
+
+def test_spec_for_stat_value_and_change_are_text_like():
+    # 指标卡 value→metric、change→change(都按字符串处理,不被误当 chartData)
+    card = {"type": "stat-card", "fields": {"label": "L"}}
+    assert spec_for(card, "value").kind == "metric"
+    assert spec_for(card, "change").kind == "change"
+    grp = {"type": "stat-card-group", "fields": {"items": [{"label": "A"}]}}
+    assert spec_for(grp, "items[0].value").kind == "metric"
+    assert spec_for(grp, "items[0].change").kind == "change"
+    # 强转:metric/change 当文本透传(非 _SKIP、非数组)
+    assert _coerce_value(ValueSpec(kind="metric"), "38600 人") == "38600 人"
+    assert _coerce_value(ValueSpec(kind="change"), "+4.3%") == "+4.3%"
 
 
 # ----------------------------------------------------------------------------

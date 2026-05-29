@@ -57,11 +57,17 @@ paragraphs.
    "items"; the wording is rewritten from data at fill time.
    { "type":"list", "ordered":boolean, "title"?:string, "items":string[], "hint"?:string }
 
-4. stat-card — ONE KPI. "label" is FRAMEWORK; its value is CONTENT.
-   { "type":"stat-card", "label":string, "trend"?:"up"|"down"|"neutral", "hint":string }
+4. stat-card — ONE KPI. "label" is FRAMEWORK; its value is CONTENT. Add "change" ONLY when the
+   source gives a comparison for this KPI (period-over-period, year-over-year, or an explicit delta):
+   its string is a one-line hint for that change rate. At fill time the runtime writes a SIGNED rate
+   (e.g. "+12.5%" / "−3.2%") and the card colors it green/red by sign — so OMIT "change" for a plain
+   KPI the source reports only as a level. Do not emit "trend"; it is derived from the change's sign.
+   { "type":"stat-card", "label":string, "change"?:string, "hint":string }
 
-5. stat-card-group — a row of KPIs. Each item "label" is FRAMEWORK; the values are CONTENT.
-   { "type":"stat-card-group", "items":[{ "label":string, "trend"?:"up"|"down"|"neutral" }], "hint":string }
+5. stat-card-group — a row of KPIs. Each item "label" is FRAMEWORK; the values are CONTENT. Give an
+   item a "change" (same rule and meaning as #4) only for KPIs the source actually compares; omit it
+   for plain snapshot metrics.
+   { "type":"stat-card-group", "items":[{ "label":string, "change"?:string }], "hint":string }
 
 6. table — "headers" are FRAMEWORK; the rows are CONTENT (do NOT emit rows). Use a table only for
    genuinely tabular data (heterogeneous or text-heavy columns, many columns, exact-value lookup);
@@ -120,8 +126,12 @@ FEW_SHOT_EXAMPLE = """{
       "blocks": [
         { "type": "paragraph", "hint": "Two or three sentences on overall performance and the main driver." },
         { "type": "stat-card-group",
-          "items": [{ "label": "Total Revenue" }, { "label": "Active Customers" }, { "label": "Churn" }],
-          "hint": "The current value and period-over-period change for each KPI." },
+          "items": [
+            { "label": "Total Revenue", "change": "growth vs. the prior quarter" },
+            { "label": "Active Customers" },
+            { "label": "Churn", "change": "change in the churn rate vs. the prior quarter" }
+          ],
+          "hint": "Current value of each KPI; the items given a change also carry a period-over-period rate." },
         { "type": "callout", "variant": "insight", "title": "Key insight",
           "hint": "The single most important takeaway of the quarter." }
       ]
@@ -158,6 +168,12 @@ or primary+supporting ("sidebar-*") content. Do NOT include content blocks — o
 # 单节 few-shot:产出 {blocks:[...]},组件柔性、hint 写「内容范围 + 候选组件」(含图表优先示例)。
 FEW_SHOT_SECTION = """{
   "blocks": [
+    { "type": "stat-card-group",
+      "items": [
+        { "label": "Enrollment", "change": "year-over-year change in total students" },
+        { "label": "Programs" }
+      ],
+      "hint": "Headline figures for this section: Enrollment carries a YoY change, Programs is a current count." },
     { "type": "paragraph", "hint": "Opening narrative of this section: scale and positioning; a prose paragraph." },
     { "type": "chart", "chartType": "line", "title": "Enrollment trend",
       "xAxisKey": "year", "series": [{ "dataKey": "students", "name": "Students" }],

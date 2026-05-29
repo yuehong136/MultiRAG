@@ -98,6 +98,25 @@ def test_normalize_block_stat_card_group_indexed_directives():
     assert blk["annotation"] == "kpis"
 
 
+def test_normalize_block_stat_card_change_directive():
+    # 带 change → 额外 change 空槽(hint = change 文案);不带 → 只有 value 槽
+    blk = normalize_block({"type": "stat-card", "label": "营收", "change": "环比变化", "hint": "Q3 营收"}, False)
+    assert blk["fieldDirectives"]["value"] == {"mode": "llm", "hint": "Q3 营收"}
+    assert blk["fieldDirectives"]["change"] == {"mode": "llm", "hint": "环比变化"}
+    plain = normalize_block({"type": "stat-card", "label": "营收", "hint": "Q3 营收"}, False)
+    assert "change" not in plain["fieldDirectives"]
+
+
+def test_normalize_block_stat_card_group_change_per_item():
+    # 仅对有 change 的 item 加 items[i].change;无 change 的 item 只有 value 槽
+    blk = normalize_block(
+        {"type": "stat-card-group", "items": [{"label": "营收", "change": "环比"}, {"label": "客户数"}], "hint": "kpis"},
+        False,
+    )
+    assert set(blk["fieldDirectives"]) == {"items[0].value", "items[0].change", "items[1].value"}
+    assert blk["fieldDirectives"]["items[0].change"] == {"mode": "llm", "hint": "环比"}
+
+
 def test_normalize_block_sidebar_role():
     assert normalize_block({"type": "paragraph", "role": "side"}, True)["role"] == "side"
     assert normalize_block({"type": "paragraph"}, True)["role"] == "main"
