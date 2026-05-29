@@ -13,6 +13,7 @@ from agent.component.report_fill.prompt_builder import (
     ValueSpec,
     build_fill_schema,
     collect_fill_plan,
+    describe_section,
     spec_for,
 )
 from agent.component.report_fill.skeleton import (
@@ -196,6 +197,32 @@ def test_spec_for_stat_value_and_change_are_text_like():
     # 强转:metric/change 当文本透传(非 _SKIP、非数组)
     assert _coerce_value(ValueSpec(kind="metric"), "38600 人") == "38600 人"
     assert _coerce_value(ValueSpec(kind="change"), "+4.3%") == "+4.3%"
+
+
+def test_describe_section_surfaces_group_item_labels():
+    # stat-card-group 每个 item 槽要缀上该项静态 label,模型据此对号入座而非按位置猜。
+    section = {
+        "id": "s",
+        "title": "关键指标",
+        "layout": "full",
+        "blocks": [
+            {
+                "id": "g",
+                "type": "stat-card-group",
+                "fields": {"items": [{"label": "营收"}, {"label": "流失率"}]},
+                "fieldDirectives": {
+                    "items[0].value": {"mode": "llm"},
+                    "items[0].change": {"mode": "llm"},
+                    "items[1].value": {"mode": "llm"},
+                },
+            }
+        ],
+    }
+    text = describe_section(section, collect_fill_plan(section))
+    assert "item 1 (营收) value" in text
+    assert "item 1 (营收) change" in text
+    assert "item 2 (流失率) value" in text
+    assert "item 1 value" not in text  # 不再是裸位置名
 
 
 # ----------------------------------------------------------------------------

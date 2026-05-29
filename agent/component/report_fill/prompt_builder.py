@@ -245,6 +245,29 @@ def _humanize_path(path: str) -> str:
     return out.replace(".", " ")
 
 
+_ITEM_SLOT_PATT = re.compile(r"^items\[(\d+)\]\.(.+)$")
+
+
+def _humanize_slot(block: dict[str, Any], path: str) -> str:
+    """可读槽名。stat-card-group 的 item 槽额外缀上该项的静态 label,让模型按标签对号入座,
+    而不是靠槽位顺序去猜哪一格配哪个指标(单张 stat-card 的 label 已由 _block_summary 给出)。"""
+    base = _humanize_path(path)
+    if block.get("type") != "stat-card-group":
+        return base
+    m = _ITEM_SLOT_PATT.match(path)
+    if not m:
+        return base
+    idx = int(m.group(1))
+    items = (block.get("fields") or {}).get("items")
+    if not isinstance(items, list) or idx >= len(items):
+        return base
+    item = items[idx]
+    label = item.get("label") if isinstance(item, dict) else None
+    if not isinstance(label, str) or not label.strip():
+        return base
+    return f"item {idx + 1} ({label.strip()}) {_humanize_path(m.group(2))}"
+
+
 def _slot_hint(spec: ValueSpec) -> str:
     if spec.kind == "enum":
         return f" (one of: {' / '.join(spec.options)})"
@@ -274,7 +297,7 @@ def describe_section(section: dict[str, Any], plan: FillPlan) -> str:
         lines.append(f"- {_block_summary(block)}:")
         for item in items:
             guide = f" — {item.description}" if item.description else ""
-            lines.append(f"    · [{item.key}] {_humanize_path(item.path)}{_slot_hint(item.spec)}{guide}")
+            lines.append(f"    · [{item.key}] {_humanize_slot(block, item.path)}{_slot_hint(item.spec)}{guide}")
     return "\n".join(lines)
 
 
