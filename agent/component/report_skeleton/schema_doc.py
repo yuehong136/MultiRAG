@@ -83,8 +83,12 @@ paragraphs.
 
 9. chart — "chartType" + shape keys are FRAMEWORK; the data is CONTENT (do NOT emit "data").
     Prefer a chart over a table whenever the data is a trend/series, a distribution, a
-    composition/share, or a ranking. The shape keys NAME the data fields (they are not themselves
-    data). "chartType" decides them:
+    composition/share, or a ranking. Match "chartType" to the data shape: a trend over time or an
+    ordered series -> line (area to stress cumulative magnitude); a comparison or ranking across
+    categories -> bar; a composition / share of a whole -> pie or donut; stage-to-stage drop-off
+    through a process -> funnel; a multi-metric profile of one or a few entities -> radar; the
+    relationship between two numeric variables -> scatter. The shape keys NAME the data fields (they
+    are not themselves data). "chartType" decides them:
     bar | line | area:
       { "type":"chart","chartType":"bar","title"?:string,"xAxisKey":string,
         "series":[{ "dataKey":string,"name"?:string }],"hint":string }
@@ -107,8 +111,8 @@ RULES:
   even though you are NOT writing the numbers — the template captures the intent of each block.
 - Prefer a CHART over a table for plottable numbers — a trend/series, a distribution, a
   composition/share, or a ranking. Reserve "table" for genuinely tabular data: heterogeneous or
-  text-heavy columns, many columns, or exact-value lookup. When both fit, default to the chart and
-  name the table as the alternative in "hint".
+  text-heavy columns, many columns, or exact-value lookup. When both fit, default to the chart —
+  matching its chartType to the data shape (above) — and name the table as the alternative in "hint".
 - Do NOT invent framework the source does not support; keep titles/labels/headers faithful.
 - Write all framework text and hints in the SAME LANGUAGE as the source report.
 - Output ONE JSON object and nothing else: no markdown code fences, no comments, no prose."""
@@ -178,6 +182,9 @@ FEW_SHOT_SECTION = """{
     { "type": "chart", "chartType": "line", "title": "Enrollment trend",
       "xAxisKey": "year", "series": [{ "dataKey": "students", "name": "Students" }],
       "hint": "Five-year enrollment numbers — a trend, so a line (or bar) chart is the default here." },
+    { "type": "chart", "chartType": "pie", "title": "Students by level",
+      "nameKey": "level", "valueKey": "students",
+      "hint": "Share of students across degree levels — a composition, so a pie (or donut)." },
     { "type": "table", "title": "Programs at a glance", "headers": ["Program", "Department", "Start"],
       "hint": "Per-program facts (name, department, start date) — heterogeneous text, so a table, not a chart." }
   ]
