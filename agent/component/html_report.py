@@ -1,5 +1,5 @@
 """
-HTMLReport 运行期算子:按骨架 + 源料逐节调 LLM 填值,产出 ReportSchema。
+HTMLReport 运行期算子:按骨架 + 源料,先展开生成区(open-region)再逐节调 LLM 填值,产出 ReportSchema。
 
 决策 #29:后端**只产 ReportSchema**,不拼 HTML、不碰 ECharts——`buildReportHtml` 是消费端
 (runtime-chat / datav)的事。本组件只负责:取上游源料 → 注入自身 LLM → 出 outputs。
@@ -25,6 +25,7 @@ from api.db.services.tenant_llm_service import TenantLLMService
 from common.connection_utils import timeout
 
 from .report_fill.fill import fill_skeleton
+from .report_skeleton import expand_open_regions
 
 
 class HTMLReportParam(ComponentParamBase):
@@ -151,7 +152,10 @@ class HTMLReport(ComponentBase):
             except Exception:
                 return None
 
-        result = await fill_skeleton(self._param.skeleton, source_text, resolve_ref, call_llm)
+        # 先展开生成区(open-region)→ 无生成区骨架,再填值。与设计期试运行同一条路径(预览=生产);
+        # 展开失败非致命,全失败也继续填值。
+        expanded = await expand_open_regions(self._param.skeleton, source_text, call_llm)
+        result = await fill_skeleton(expanded.skeleton, source_text, resolve_ref, call_llm)
 
         # 需调模型的节全军覆没 → 视为失败;否则成功(可能带部分告警)。
         if result.llm_sections > 0 and result.ok_sections == 0:
