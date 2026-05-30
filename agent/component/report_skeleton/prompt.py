@@ -113,6 +113,55 @@ def build_region_messages(report_text: str, *, section_title: str | None, brief:
 
 
 # ============================================================
+# 布局优先·展开:把布局优先骨架的 open-region 按「角色 + 组件」展开成具体块——区别于上面的
+# build_region_messages(遵循作者亲写 brief),这里 brief 只供角色/组件,**框架文字一律从新源文取**,
+# 换主题不照搬样报名词;源文对该角色无料则回空块(自然收缩)。
+# ============================================================
+_LAYOUT_FIRST_REGION_HEAD = """You expand ONE region of a report TEMPLATE for a NEW subject, using the
+SOURCE REPORT below. The brief gives you only this region's ROLE and the COMPONENT(s) to use — how many
+blocks, of what kind, in what order. It does NOT give you the subject.
+
+Build the concrete block(s) for that role and DERIVE EVERY FRAMEWORK STRING — block/section titles,
+table headers, chart axis/series field names, stat-card labels, list framing — FROM THE SOURCE REPORT,
+matched to the role. The brief may mention a subject, label, number, or name: that describes the OLD
+sample the template came from, NOT this source — NEVER copy it. Take the real labels from THIS source.
+
+Principles:
+- Honor the brief's COMPONENT instruction (kinds, counts, ordering); take ALL wording from the source.
+- Interpret the ROLE GENEROUSLY — map it to the nearest equivalent in the NEW subject. An "overview of
+  the city" role becomes the overview of THIS subject (a school, a company, …); a "tourist-volume
+  trend" becomes this subject's main volume trend; a "consumption breakdown" becomes this subject's
+  main composition. Re-target the role; never copy the sample's nouns.
+- CONTENT (values, table rows, chart data, prose) is NOT written out — describe it in each block's
+  "hint", in the source language.
+- When the brief leaves the component open, prefer a CHART over a table for plottable numbers.
+- Return {"blocks": []} ONLY when the source has NO reasonable equivalent for this role at all — do not
+  invent a block, do not carry the sample's content over, and do not pad with unrelated material.
+- Build ONLY this region's blocks. Output ONE JSON object {"blocks":[...]} and nothing else."""
+
+LAYOUT_FIRST_REGION_SYSTEM = (
+    _LAYOUT_FIRST_REGION_HEAD + "\n\n" + SKELETON_CONTRACT + "\n\nEXAMPLE blocks (illustration only — produce blocks from the user's actual SOURCE + the brief's role):\n" + FEW_SHOT_SECTION
+)
+
+
+def build_layout_first_region_messages(report_text: str, *, section_title: str | None, brief: str) -> list[dict[str, str]]:
+    where = f' This region sits in the section playing the role "{section_title}".' if section_title else ""
+    brief_text = brief.strip() or "(no brief — infer a sensible block for this position from the source)"
+    user = (
+        "Brief for this region (ROLE + COMPONENT only — any subject/labels in it describe the OLD sample, NOT the source):\n"
+        + brief_text
+        + "\n\nBuild ONLY this region's blocks for the NEW subject, taking every label/header/title from the source below."
+        + where
+        + ' If the source has nothing for this role, return {"blocks": []}. Output {"blocks":[...]} only.\n\n---\n'
+        + report_text.strip()
+    )
+    return [
+        {"role": "system", "content": LAYOUT_FIRST_REGION_SYSTEM},
+        {"role": "user", "content": user},
+    ]
+
+
+# ============================================================
 # 回退:大纲失败时,单次整篇生成
 # ============================================================
 _SYSTEM_PROMPT_HEAD = """You are a report-TEMPLATE engine. Given one complete report written in plain

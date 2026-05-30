@@ -38,8 +38,17 @@ Rules:
   "values" must have exactly the stated number of entries (column order preserved).
 - A slot may carry guidance after an em-dash "—" in the list: follow it. It states what that slot's
   content must be (topic, ordering, units, tone). Honor it together with the section's overall focus.
+- Fill each slot ONLY with content that matches THAT block's specific topic/role. Do NOT pad a slot
+  with unrelated figures pulled from elsewhere in the source. If the block's specific topic has no data
+  in the source, leave the slot empty (see below) rather than substituting unrelated content.
+- For list / bullet items, each item must be a self-contained phrase that keeps the label TOGETHER with
+  its value (e.g. "年度科研经费 18.6 亿元，同比增长 12.5%"), NEVER a bare number or rate stripped of
+  what it measures (not "18.6 亿元" alone, not "+12.5%" alone).
 - Write in the SAME LANGUAGE as the source text. Be concise and faithful to the source; never invent
-  facts. If the source lacks a value, give the closest faithful summary rather than fabricating.
+  facts. If the source GENUINELY lacks the data for a slot, return an EMPTY value for it — an empty
+  string "" (for table rows / chart data, an empty array []). Do NOT apologize, do NOT write
+  "not mentioned" / "无相关数据" / "暂无数据" / "数据未提及", and do NOT restate the label. Empty slots
+  are dropped automatically — leaving one empty is correct when the source has nothing for it.
 - A stat-card "value" is the FIGURE ONLY — a number with its unit or percent (e.g. "38600 人", "78%",
   "18.6 亿元"); NEVER a sentence and NEVER a restatement of the label. Write "38600 人", not
   "2025 年在校生总数 38600 人,较上年增长 4.3%". Put any period-over-period comparison in that card's
@@ -370,5 +379,50 @@ def build_title_messages(
     )
     return [
         {"role": "system", "content": TITLE_SYSTEM},
+        {"role": "user", "content": user},
+    ]
+
+
+# ============================================================
+# 小节标题批量重生成(布局优先:section.titleDirective.mode=='llm' 时单批一调)
+# ============================================================
+
+# 把模板现标题当「角色」,按源文逐节重命名;同序同量,严格回 JSON。
+SECTION_TITLES_SYSTEM = """You re-title the sections of a report TEMPLATE for a NEW subject, using the
+source text. You are given the template's current section titles IN ORDER — treat each as the ROLE of
+that section (e.g. an overview, a scale/metrics section, an outlook). Produce a NEW title for each that
+describes what THAT section becomes for THIS source.
+
+Rules:
+- Return ONE JSON object: {"titles": [string, ...]} — exactly one title per input, in the SAME ORDER.
+- Each title is a short noun phrase (a few words), not a sentence.
+- Do NOT include any section number or ordinal prefix (e.g. "一、", "1.", "（一）", "Part 1") — output
+  the bare title only.
+- Write in the SAME LANGUAGE as the source text. Be faithful to the source; never invent a subject the
+  source does not support.
+- Output ONLY the JSON object: no markdown code fences, no comments, no prose."""
+
+
+def build_section_titles_messages(
+    *,
+    source_text: str,
+    current_titles: list[str],
+    report_title: str = "",
+) -> list[dict[str, str]]:
+    """小节标题(模型态)批量一调的消息:现标题(当角色)+ 源料 → {"titles":[...]}(同序同量)。"""
+    listing = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(current_titles))
+    head = f"Report: {report_title.strip()}\n\n" if report_title.strip() else ""
+    user = "\n".join(
+        [
+            f"Source text:\n{source_text.strip()}",
+            "---",
+            head + "Current section titles (one per section, in order) — re-title each for the source above:",
+            listing,
+            "",
+            f'Return ONE JSON object {{"titles": [...]}} with exactly {len(current_titles)} titles, in the same order.',
+        ]
+    )
+    return [
+        {"role": "system", "content": SECTION_TITLES_SYSTEM},
         {"role": "user", "content": user},
     ]

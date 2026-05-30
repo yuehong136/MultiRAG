@@ -8,7 +8,7 @@ HTMLReport 纯填值逻辑单测(agent/component/report_fill)。
 
 import asyncio
 
-from agent.component.report_fill.fill import _coerce_value, fill_skeleton
+from agent.component.report_fill.fill import _SKIP, _coerce_value, fill_skeleton
 from agent.component.report_fill.prompt_builder import (
     ValueSpec,
     build_fill_schema,
@@ -18,9 +18,13 @@ from agent.component.report_fill.prompt_builder import (
 )
 from agent.component.report_fill.skeleton import (
     chart_row_keys,
+    dedupe_sections,
+    drop_admission_blocks,
+    is_no_content_title,
     merge_block,
     merge_skeleton,
     set_field_value,
+    strip_ordinal_prefix,
 )
 
 MINUS = "−"  # Unicode 减号 U+2212(区别于 ASCII 连字符 -)
@@ -366,3 +370,265 @@ def test_fill_title_llm_failure_falls_back_to_static():
     result = asyncio.run(fill_skeleton(skel, "src", lambda _r: None, call_llm))
     assert result.schema["title"] == "回落标题"  # 解析失败 → 回落静态
     assert len(result.errors) == 1  # 记一条软告警,不判败
+
+
+# ----------------------------------------------------------------------------
+# fill.py — 布局优先收缩(layoutFirst):空槽 → 丢块 → 丢节;coerce 空白 → _SKIP
+# ----------------------------------------------------------------------------
+
+
+def test_coerce_blank_and_empty_collections_skip():
+    # 空白文本 / 空集合 → _SKIP(不进 filled),收缩时据此丢块;非空仍采用。
+    assert _coerce_value(ValueSpec(kind="text"), "") is _SKIP
+    assert _coerce_value(ValueSpec(kind="text"), "   ") is _SKIP
+    assert _coerce_value(ValueSpec(kind="metric"), "") is _SKIP
+    assert _coerce_value(ValueSpec(kind="rows", columns=2), []) is _SKIP
+    assert _coerce_value(ValueSpec(kind="chartData", category="x", values=["y"]), []) is _SKIP
+    assert _coerce_value(ValueSpec(kind="text"), "实") == "实"
+    assert _coerce_value(ValueSpec(kind="rows", columns=2), [["a", "b"]]) == [["a", "b"]]
+
+
+def _llm_para(block_id: str) -> dict:
+    return {"id": block_id, "type": "paragraph", "fields": {"content": "占位"}, "fieldDirectives": {"content": {"mode": "llm"}}}
+
+
+def test_layout_first_shrink_drops_empty_blocks_and_sections():
+    skel = {
+        "title": "t",
+        "layoutFirst": True,
+        "sections": [
+            {"id": "s1", "title": "有料", "layout": "full", "blocks": [_llm_para("p1"), _llm_para("p2")]},
+            {"id": "s2", "title": "无料", "layout": "full", "blocks": [_llm_para("p3")]},
+        ],
+    }
+    # s1:p1 填实、p2 回空;s2:p3 回空 → 整节皆空
+    call_llm, _ = _make_call_llm(['{"p1__content":"有内容","p2__content":""}', '{"p3__content":""}'])
+    result = asyncio.run(fill_skeleton(skel, "src", lambda _r: None, call_llm))
+    secs = {s["id"]: s for s in result.schema["sections"]}
+    assert set(secs) == {"s1"}  # s2 整节皆空 → 丢
+    assert [b["id"] for b in secs["s1"]["blocks"]] == ["p1"]  # p2 空块 → 丢
+    assert secs["s1"]["blocks"][0]["content"] == "有内容"
+
+
+def test_non_layout_first_keeps_empty_blocks():
+    # 非布局优先:空槽不丢,留骨架占位值(回归保护:coerce 空→_SKIP 不应改变非布局优先口径)。
+    skel = {"title": "t", "sections": [{"id": "s", "layout": "full", "blocks": [_llm_para("p")]}]}
+    call_llm, _ = _make_call_llm(['{"p__content":""}'])
+    result = asyncio.run(fill_skeleton(skel, "src", lambda _r: None, call_llm))
+    assert result.schema["sections"][0]["blocks"][0]["content"] == "占位"
+
+
+def test_fill_section_titles_batch_rename():
+    skel = {
+        "title": "报告",
+        "layoutFirst": True,
+        "sections": [
+            {"id": "a", "title": "学校概况", "titleDirective": {"mode": "llm"}, "layout": "full", "blocks": [_llm_para("pa")]},
+            {"id": "b", "title": "发展展望", "titleDirective": {"mode": "llm"}, "layout": "full", "blocks": [_llm_para("pb")]},
+        ],
+    }
+    # 调用序:2 节填值(每节有料,免被收缩)→ 小节标题批量一调
+    call_llm, calls = _make_call_llm(['{"pa__content":"城市概况内容"}', '{"pb__content":"展望内容"}', '{"titles":["城市概况","未来展望"]}'])
+    result = asyncio.run(fill_skeleton(skel, "文旅源文", lambda _r: None, call_llm))
+    secs = {s["id"]: s for s in result.schema["sections"]}
+    assert secs["a"]["title"] == "城市概况"  # 按源文重命名
+    assert secs["b"]["title"] == "未来展望"
+    assert result.schema["title"] == "报告"  # 无报告 titleDirective → 静态不变
+    assert len(calls) == 3  # 2 节填值 + 1 小节标题(无报告标题调用)
+
+
+def test_fill_section_titles_count_mismatch_falls_back():
+    skel = {
+        "title": "报告",
+        "layoutFirst": True,
+        "sections": [{"id": "a", "title": "学校概况", "titleDirective": {"mode": "llm"}, "layout": "full", "blocks": [_llm_para("pa")]}],
+    }
+    call_llm, _ = _make_call_llm(['{"pa__content":"有料"}', '{"titles":["太多","了"]}'])  # 回 2 个、实际 1 节 → 不符
+    result = asyncio.run(fill_skeleton(skel, "src", lambda _r: None, call_llm))
+    assert result.schema["sections"][0]["title"] == "学校概况"  # 回落静态
+    assert len(result.errors) == 1  # 软告警,不判败
+
+
+# ----------------------------------------------------------------------------
+# skeleton.py — 后置确定性去重(布局优先:模板槽多于源文内容 → 多槽塌缩成重复块)
+# ----------------------------------------------------------------------------
+
+
+def test_dedupe_drops_structurally_identical_sibling_blocks():
+    # 列表项相同(抬头不同)→ 判重留首份;条目不同 → 保留。
+    sections = [
+        {
+            "id": "s",
+            "layout": "full",
+            "blocks": [
+                {"id": "l1", "type": "list", "ordered": False, "items": ["a", "b"], "title": "战略方向"},
+                {"id": "l2", "type": "list", "ordered": False, "items": ["a", "b"], "title": "发展规划"},  # 同项异抬头 → 重复
+                {"id": "l3", "type": "list", "ordered": False, "items": ["a", "c"], "title": "其它"},  # 异项 → 保留
+            ],
+        }
+    ]
+    assert [b["id"] for b in dedupe_sections(sections)[0]["blocks"]] == ["l1", "l3"]
+
+
+def test_dedupe_normalizes_whitespace_in_chart_data():
+    # 两图数据相同、仅类别串空格不同(2021 学年 vs 2021学年)、抬头不同 → 仍判重。
+    def chart(bid, label, title):
+        return {
+            "id": bid,
+            "type": "chart",
+            "chartType": "line",
+            "xAxisKey": "学年",
+            "series": [{"dataKey": "在校生人数"}],
+            "data": [{"学年": label, "在校生人数": 100}],
+            "title": title,
+        }
+
+    sections = [{"id": "s", "layout": "full", "blocks": [chart("c1", "2021学年", "增长趋势"), chart("c2", "2021 学年", "趋势")]}]
+    assert [b["id"] for b in dedupe_sections(sections)[0]["blocks"]] == ["c1"]
+
+
+def test_dedupe_is_global_and_drops_emptied_section():
+    # 跨节去重:s2 唯一块与 s1 的块重复 → s2 整节丢。
+    blk = {"type": "stat-card", "label": "总数", "value": "100"}
+    sections = [
+        {"id": "s1", "layout": "full", "blocks": [{**blk, "id": "a"}]},
+        {"id": "s2", "layout": "full", "blocks": [{**blk, "id": "b"}]},
+    ]
+    assert [s["id"] for s in dedupe_sections(sections)] == ["s1"]
+
+
+def test_dedupe_keeps_near_but_distinct_blocks():
+    # 条目数不同的近似指标组 → 不判重(确定性,不臆测语义相同)。
+    g1 = {"id": "g1", "type": "stat-card-group", "items": [{"label": "在校生", "value": "1"}]}
+    g2 = {"id": "g2", "type": "stat-card-group", "items": [{"label": "在校生", "value": "1"}, {"label": "教师", "value": "2"}]}
+    assert [b["id"] for b in dedupe_sections([{"id": "s", "layout": "full", "blocks": [g1, g2]}])[0]["blocks"]] == ["g1", "g2"]
+
+
+def test_dedupe_in_fill_is_gated_on_layout_first():
+    # 两段填出相同内容:布局优先 → 去重留一;非布局优先 → 都留(gated)。
+    def skel(layout_first):
+        s = {"title": "t", "sections": [{"id": "s", "layout": "full", "blocks": [_llm_para("p1"), _llm_para("p2")]}]}
+        if layout_first:
+            s["layoutFirst"] = True
+        return s
+
+    resp = '{"p1__content":"同样的话","p2__content":"同样的话"}'
+    lf = asyncio.run(fill_skeleton(skel(True), "src", lambda _r: None, _make_call_llm([resp])[0]))
+    assert [b["id"] for b in lf.schema["sections"][0]["blocks"]] == ["p1"]  # 去重
+    nf = asyncio.run(fill_skeleton(skel(False), "src", lambda _r: None, _make_call_llm([resp])[0]))
+    assert [b["id"] for b in nf.schema["sections"][0]["blocks"]] == ["p1", "p2"]  # 非布局优先不去重
+
+
+# ----------------------------------------------------------------------------
+# skeleton.py — 小节标题剥序号前缀(源文 markdown 抬头带进来,收缩后会断号)
+# ----------------------------------------------------------------------------
+
+
+def test_strip_ordinal_prefix():
+    assert strip_ordinal_prefix("二、北辰大学办学规模与师资情况") == "北辰大学办学规模与师资情况"
+    assert strip_ordinal_prefix("一、城市概况") == "城市概况"
+    assert strip_ordinal_prefix("十一、其它") == "其它"
+    assert strip_ordinal_prefix("1. Overview") == "Overview"
+    assert strip_ordinal_prefix("（一）总览") == "总览"
+    assert strip_ordinal_prefix("第一章 绪论") == "绪论"
+    assert strip_ordinal_prefix("云岭市城市概况") == "云岭市城市概况"  # 无序号不动
+    assert strip_ordinal_prefix("2025 年度报告") == "2025 年度报告"  # 数字非序号(无分隔符)不动
+    assert strip_ordinal_prefix("三、") == "三、"  # 纯序号剥光 → 回落原值
+    assert strip_ordinal_prefix("") == ""
+
+
+def test_layout_first_strips_section_ordinal_in_fill():
+    # 模型重命名仍带序号("三、X")→ 布局优先确定性剥掉。
+    skel = {
+        "title": "报告",
+        "layoutFirst": True,
+        "sections": [{"id": "a", "title": "二、产业规模", "titleDirective": {"mode": "llm"}, "layout": "full", "blocks": [_llm_para("pa")]}],
+    }
+    call_llm, _ = _make_call_llm(['{"pa__content":"有料"}', '{"titles":["三、北辰大学办学规模"]}'])
+    result = asyncio.run(fill_skeleton(skel, "src", lambda _r: None, call_llm))
+    assert result.schema["sections"][0]["title"] == "北辰大学办学规模"
+
+
+def test_non_layout_first_keeps_section_ordinal():
+    # 非布局优先:不剥序号(gated,不改原口径)。
+    skel = {"title": "t", "sections": [{"id": "a", "title": "二、产业规模", "layout": "full", "blocks": [_llm_para("pa")]}]}
+    call_llm, _ = _make_call_llm(['{"pa__content":"有料"}'])
+    result = asyncio.run(fill_skeleton(skel, "src", lambda _r: None, call_llm))
+    assert result.schema["sections"][0]["title"] == "二、产业规模"
+
+
+# ----------------------------------------------------------------------------
+# skeleton.py — 丢「无对应内容」自认占位小节(模型承认模板某节在新源文无对应)
+# ----------------------------------------------------------------------------
+
+
+def test_is_no_content_title():
+    assert is_no_content_title("无对应内容")
+    assert is_no_content_title("无相关数据")
+    assert is_no_content_title("（无对应内容）")  # 出现即判
+    assert is_no_content_title("No corresponding content")
+    assert is_no_content_title("N/A")
+    assert not is_no_content_title("北辰大学国际合作")
+    assert not is_no_content_title("发展展望")
+    assert not is_no_content_title("")
+    assert not is_no_content_title(None)
+
+
+def test_layout_first_drops_no_content_titled_section_in_fill():
+    skel = {
+        "title": "报告",
+        "layoutFirst": True,
+        "sections": [
+            {"id": "keep", "title": "规模", "titleDirective": {"mode": "llm"}, "layout": "full", "blocks": [_llm_para("p1")]},
+            {"id": "drop", "title": "文化资源", "titleDirective": {"mode": "llm"}, "layout": "full", "blocks": [_llm_para("p2")]},
+        ],
+    }
+    # 节填值 ×2 → 小节标题批量(drop 节被模型标成「无对应内容」)
+    call_llm, _ = _make_call_llm(['{"p1__content":"规模内容"}', '{"p2__content":"凑数内容"}', '{"titles":["北辰大学规模","无对应内容"]}'])
+    result = asyncio.run(fill_skeleton(skel, "src", lambda _r: None, call_llm))
+    assert [s["id"] for s in result.schema["sections"]] == ["keep"]  # 「无对应内容」节整节丢
+
+
+# ----------------------------------------------------------------------------
+# skeleton.py — 丢道歉占位块(generous 映射后模型对无料角色写的「未提及」散文,非空躲过收缩)
+# ----------------------------------------------------------------------------
+
+
+def test_drop_admission_blocks():
+    sections = [
+        {"id": "keep", "layout": "full", "blocks": [{"id": "p1", "type": "paragraph", "content": "北辰大学创建于 1958 年。"}]},
+        {
+            "id": "drop",
+            "layout": "full",
+            "blocks": [
+                {"id": "l", "type": "list", "items": ["计算机学科学生数量未提及；机械工程未提及"]},
+                {"id": "p2", "type": "paragraph", "content": "文本中未提及景区相关内容，无法提供介绍。"},
+            ],
+        },
+        {
+            "id": "mixed",
+            "layout": "full",
+            "blocks": [
+                {"id": "p3", "type": "paragraph", "content": "正常内容。"},
+                {"id": "p4", "type": "paragraph", "content": "源文本未提及该项。"},
+            ],
+        },
+    ]
+    out = {s["id"]: [b["id"] for b in s["blocks"]] for s in drop_admission_blocks(sections)}
+    assert "drop" not in out  # 两块都是道歉 → 整节丢
+    assert out["keep"] == ["p1"]
+    assert out["mixed"] == ["p3"]  # 只丢道歉块 p4,正常块留
+
+
+def test_admission_drop_in_fill_gated_on_layout_first():
+    def skel(layout_first):
+        s = {"title": "t", "sections": [{"id": "keep", "layout": "full", "blocks": [_llm_para("p1")]}, {"id": "adm", "layout": "full", "blocks": [_llm_para("p2")]}]}
+        if layout_first:
+            s["layoutFirst"] = True
+        return s
+
+    responses = ['{"p1__content":"真实内容"}', '{"p2__content":"源文本未提及该项内容"}']
+    lf = asyncio.run(fill_skeleton(skel(True), "src", lambda _r: None, _make_call_llm(responses)[0]))
+    assert [s["id"] for s in lf.schema["sections"]] == ["keep"]  # 布局优先:道歉块所在节丢
+    nf = asyncio.run(fill_skeleton(skel(False), "src", lambda _r: None, _make_call_llm(responses)[0]))
+    assert {s["id"] for s in nf.schema["sections"]} == {"keep", "adm"}  # 非布局优先:不丢

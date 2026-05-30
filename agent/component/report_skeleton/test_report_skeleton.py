@@ -252,6 +252,37 @@ def test_expand_region_failure_is_skipped():
     assert [b["id"] for b in blocks] == ["keep"]  # 失败区丢弃,保其余
 
 
+def test_expand_layout_first_uses_source_derive_prompt_and_stamps_flag():
+    # 全块皆 open-region ⇒ 布局优先:走 source-derive 展开提示词(而非遵循 brief 的 build_region_messages),
+    # 并把 layoutFirst 盖回返回骨架供下游收缩。
+    skel = {
+        "title": "t",
+        "sections": [{"id": "s", "layout": "full", "title": "学校概况", "blocks": [{"id": "og", "type": "open-region", "annotation": "学校招生人数,指标卡组"}]}],
+    }
+    call_llm, calls = _make_call_llm(['{"blocks":[{"type":"stat-card","label":"游客接待量","hint":"年接待游客"}]}'])
+    res = asyncio.run(expand_open_regions(skel, "文旅源文", call_llm))
+    assert res.skeleton["layoutFirst"] is True  # 探测并盖回信号
+    user = calls[0][1]["content"]
+    assert "NEW subject" in user  # 布局优先源文重建提示词
+    assert "Author's instruction" not in user  # 不是遵循 brief 的 build_region_messages
+
+
+def test_expand_layout_first_empty_region_drops_without_error():
+    # 布局优先:源文对某区无料 → 模型合法回 {"blocks":[]} → 该区 0 块、不计错(自然收缩)。
+    skel = {
+        "title": "t",
+        "sections": [{"id": "s", "layout": "full", "title": "无料节", "blocks": [{"id": "og", "type": "open-region", "annotation": "some role"}]}],
+    }
+    call_llm, calls = _make_call_llm(['{"blocks":[]}'])
+    res = asyncio.run(expand_open_regions(skel, "src", call_llm))
+    assert res.open_regions == 1
+    assert res.ok_regions == 1  # 合法空区算成功,不计错
+    assert res.errors == []
+    assert res.skeleton["sections"][0]["blocks"] == []  # 该区贡献 0 块
+    assert res.skeleton["layoutFirst"] is True
+    assert len(calls) == 1
+
+
 # ----------------------------------------------------------------------------
 # generate_skeleton — 编排
 # ----------------------------------------------------------------------------
@@ -290,6 +321,11 @@ def test_generate_layout_first_mode_emits_open_regions():
     assert "fields" not in s1_blocks[0]  # 占位块不带 concrete 框架
     assert [b["type"] for b in secs[1]["blocks"]] == ["open-region", "open-region"]
     assert len(calls) == 3  # 1 大纲 + 2 节
+    # 布局优先默认:盖 layoutFirst 信号 + 报告/有标题小节标题为模型态(运行时按新源文重生成)
+    assert res.skeleton["layoutFirst"] is True
+    assert res.skeleton["titleDirective"]["mode"] == "llm"
+    assert secs[0]["titleDirective"]["mode"] == "llm"
+    assert secs[1]["titleDirective"]["mode"] == "llm"
 
 
 def test_generate_layout_first_fallback_emits_open_regions():

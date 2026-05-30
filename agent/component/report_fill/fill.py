@@ -24,11 +24,12 @@ from .prompt_builder import (
     ValueSpec,
     build_fill_messages,
     build_fill_schema,
+    build_section_titles_messages,
     build_title_messages,
     collect_fill_plan,
     split_fill_key,
 )
-from .skeleton import merge_skeleton
+from .skeleton import dedupe_sections, drop_admission_blocks, is_no_content_title, merge_skeleton, strip_ordinal_prefix
 
 # 调一次 LLM 返回累计文本;取变量真值。两者皆注入。
 CallLLM = Callable[[list[dict[str, str]]], Awaitable[str]]
@@ -113,7 +114,7 @@ def _coerce_value(spec: ValueSpec, raw: Any) -> Any:
     """按 spec 强转模型给的原始值;无法采用返回 `_SKIP` → 留骨架原值。"""
     if spec.kind in ("text", "metric", "change"):
         text = _str_or_none(raw)
-        return _SKIP if text is None else text
+        return _SKIP if text is None or not text.strip() else text  # 空白槽不采用 → 收缩时丢块
     if spec.kind == "enum":
         s = raw if isinstance(raw, str) else ""
         if not s:
@@ -122,7 +123,8 @@ def _coerce_value(spec: ValueSpec, raw: Any) -> Any:
     if spec.kind == "rows":
         if not isinstance(raw, list):
             return _SKIP
-        return [_fit_row(r, spec.columns) for r in raw if isinstance(r, list)]
+        rows = [_fit_row(r, spec.columns) for r in raw if isinstance(r, list)]
+        return rows if rows else _SKIP  # 空表 → 不采用 → 收缩时丢块
     if spec.kind == "criteria":
         if not isinstance(raw, list):
             return _SKIP
@@ -137,7 +139,7 @@ def _coerce_value(spec: ValueSpec, raw: Any) -> Any:
                     "values": _fit_row(vals if isinstance(vals, list) else [], spec.columns),
                 }
             )
-        return out
+        return out if out else _SKIP  # 空对比 → 不采用 → 收缩时丢块
     if spec.kind == "chartData":
         if not isinstance(raw, list):
             return _SKIP
@@ -149,7 +151,7 @@ def _coerce_value(spec: ValueSpec, raw: Any) -> Any:
             for v in spec.values:
                 row[v] = _to_num(r.get(v))
             rows.append(row)
-        return rows
+        return rows if rows else _SKIP  # 空图数据 → 不采用 → 收缩时丢块
     return _SKIP
 
 
@@ -224,6 +226,37 @@ async def _fill_title(
         return static_title, FillError(str(err))
 
 
+async def _fill_section_titles(
+    skeleton: dict[str, Any],
+    source_text: str,
+    call_llm: CallLLM,
+) -> tuple[dict[str, str], FillError | None]:
+    """对 titleDirective.mode=='llm' 的有标题小节,**一次**批量按源文重命名(现标题当角色)。
+    返回 {section_id: new_title}(仅成功重命名的);长度不符 / 调用失败回落静态标题并记一条软告警(不判败)。"""
+    targets = [s for s in (skeleton.get("sections") or []) if (s.get("titleDirective") or {}).get("mode") == "llm" and s.get("title")]
+    if not targets:
+        return {}, None
+    messages = build_section_titles_messages(
+        source_text=source_text,
+        current_titles=[s.get("title") or "" for s in targets],
+        report_title=skeleton.get("title") or "",
+    )
+    try:
+        obj = _extract_json_object(await call_llm(messages))
+        titles = obj.get("titles")
+        if not isinstance(titles, list) or len(titles) != len(targets):
+            return {}, FillError("section-title count mismatch")
+        out: dict[str, str] = {}
+        for sec, new in zip(targets, titles):
+            if isinstance(new, str) and new.strip():
+                out[sec["id"]] = new.strip()
+        return out, None
+    except FillError as err:
+        return {}, err
+    except Exception as err:  # noqa: BLE001 - 任何调用失败都回落静态标题,保其余
+        return {}, FillError(str(err))
+
+
 async def fill_skeleton(
     skeleton: dict[str, Any],
     source_text: str,
@@ -266,13 +299,33 @@ async def fill_skeleton(
         except Exception as err:  # noqa: BLE001 - 任何调用失败都降级为本节失败,保其余
             errors.append(FillError(str(err)))
 
-    # 报告标题:模型态单独生成一次,merge 后覆盖(静态态为 no-op)。
+    # 标题(模型态):小节标题批量一调 + 报告标题单调,merge 后覆盖(静态态为 no-op)。
+    section_titles, sec_title_err = await _fill_section_titles(skeleton, source_text, call_llm)
+    if sec_title_err:
+        errors.append(sec_title_err)
     title_value, title_err = await _fill_title(skeleton, source_text, toc_titles, call_llm)
     if title_err:
         errors.append(title_err)
 
     schema = merge_skeleton(skeleton, filled)
     schema["title"] = title_value
+    layout_first = bool(skeleton.get("layoutFirst"))
+    if layout_first:
+        # generous 映射后模型对无料角色写的道歉散文(非空,躲过收缩)→ 丢块(空节随之丢)。
+        schema["sections"] = drop_admission_blocks(schema.get("sections") or [])
+        # 模板槽位多于源文内容时多槽塌缩成重复块 → 确定性去重(空节随之丢)。
+        schema["sections"] = dedupe_sections(schema.get("sections") or [])
+    # 回写重命名后的小节标题(被收缩/去重丢掉的节自然不在 schema 里);
+    # 布局优先再剥掉源文带来的序号前缀——收缩后序号会断(如 二/三/五/六/八)。
+    for sec in schema.get("sections") or []:
+        new_title = section_titles.get(sec.get("id")) if section_titles else None
+        if new_title:
+            sec["title"] = new_title
+        if layout_first and sec.get("title"):
+            sec["title"] = strip_ordinal_prefix(sec["title"])
+    # 布局优先:模型把映不上的小节标成「无对应内容」之类自认占位 → 整节丢(连带其凑数内容)。
+    if layout_first:
+        schema["sections"] = [sec for sec in (schema.get("sections") or []) if not is_no_content_title(sec.get("title"))]
     return FillResult(
         schema=schema,
         errors=errors,

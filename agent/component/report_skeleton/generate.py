@@ -36,6 +36,17 @@ class GenerateError(Exception):
     """骨架生成失败(模型没吐合法 JSON,或全部节解析失败)。"""
 
 
+def _mark_layout_first(skeleton: dict[str, Any]) -> dict[str, Any]:
+    """布局优先骨架:盖上 layoutFirst 信号,并默认报告 + 有标题的小节标题为「模型态」——
+    跨主题运行时按新源文重生成标题(静态原标题留作回落/设计器静态值)。"""
+    skeleton["layoutFirst"] = True
+    skeleton["titleDirective"] = {"mode": "llm"}
+    for section in skeleton.get("sections") or []:
+        if section.get("title"):
+            section["titleDirective"] = {"mode": "llm"}
+    return skeleton
+
+
 @dataclass
 class GenerateResult:
     skeleton: dict[str, Any]
@@ -68,6 +79,8 @@ async def generate_skeleton(
     if outline is None:
         fallback_messages = build_layout_first_skeleton_messages(report_text) if mode == "layout" else build_skeleton_messages(report_text)
         skeleton = parse_skeleton_response(await call_llm(fallback_messages))
+        if mode == "layout":
+            _mark_layout_first(skeleton)
         return GenerateResult(skeleton=skeleton, used_fallback=True)
 
     # ③ 逐节:某节解析失败跳过,保其余;调用 / 网络错向上抛。按 mode 选逐节 builder。
@@ -93,4 +106,6 @@ async def generate_skeleton(
         "sections": sections,
         "theme": dict(DEFAULT_THEME),
     }
+    if mode == "layout":
+        _mark_layout_first(skeleton)
     return GenerateResult(skeleton=skeleton, errors=errors)

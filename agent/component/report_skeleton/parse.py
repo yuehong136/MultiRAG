@@ -84,13 +84,16 @@ def parse_outline(raw: str) -> dict[str, Any]:
 # ============================================================
 
 
-def parse_section(raw: str, outline: dict[str, Any]) -> dict[str, Any]:
-    """`{blocks:[...]}` + 大纲里的节信息 → 一个 SkeletonSection。"""
+def parse_section(raw: str, outline: dict[str, Any], allow_empty: bool = False) -> dict[str, Any]:
+    """`{blocks:[...]}` + 大纲里的节信息 → 一个 SkeletonSection。
+
+    allow_empty=True(布局优先展开用):模型对某区合法地回 0 块(源文对此角色无料)时不报错,
+    返回空 blocks,由调用方当作「该区贡献 0 块」(自然收缩)。"""
     obj = _extract_json(raw)
     blocks_raw = obj.get("blocks") if is_obj(obj) and isinstance(obj.get("blocks"), list) else []
     sidebar = outline.get("layout") in SIDEBAR
     blocks = [nb for b in blocks_raw if (nb := normalize_block(b, sidebar)) is not None]
-    if not blocks:
+    if not blocks and not allow_empty:
         raise SkeletonParseError("section has no valid blocks")
     section: dict[str, Any] = {"id": make_id("sec"), "layout": outline.get("layout"), "blocks": blocks}
     if outline.get("title"):

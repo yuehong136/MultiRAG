@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -139,14 +140,37 @@ def merge_block(block: dict[str, Any], filled: dict[str, Any]) -> dict[str, Any]
     return result
 
 
+def _block_is_empty(block: dict[str, Any], filled: dict[str, Any]) -> bool:
+    """块有 llm 内容槽但无一被填(源文对其无料)⇒ 空块。纯静态 / 变量块永不算空。
+    `filled` 的键即 directive 路径(与 collect_fill_plan / _apply_fill_json 同源),故可直接比对。"""
+    directives = block.get("fieldDirectives") or {}
+    llm_paths = [path for path, directive in directives.items() if (directive or {}).get("mode") == "llm"]
+    if not llm_paths:
+        return False
+    return all(path not in filled for path in llm_paths)
+
+
 def merge_skeleton(
     skeleton: dict[str, Any],
     filled_by_block: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    """整份骨架 + 各 Block 的填充值 → 完整 ReportSchema(annotation 不进运行时)。"""
+    """整份骨架 + 各 Block 的填充值 → 完整 ReportSchema(annotation 不进运行时)。
+
+    布局优先(layoutFirst)收缩:源文无料的空块丢弃,整节皆空则整节丢——不输出道歉文案 / 空表 / 空壳节。
+    非布局优先保持原行为(空槽留骨架占位值,不丢)。"""
+    layout_first = bool(skeleton.get("layoutFirst"))
     sections_out: list[dict[str, Any]] = []
     for section in skeleton.get("sections") or []:
-        blocks_out = [merge_block(block, filled_by_block.get(block.get("id"), {})) for block in (section.get("blocks") or []) if not is_open_region(block)]
+        blocks_out: list[dict[str, Any]] = []
+        for block in section.get("blocks") or []:
+            if is_open_region(block):
+                continue
+            filled = filled_by_block.get(block.get("id"), {})
+            if layout_first and _block_is_empty(block, filled):
+                continue  # 收缩:空块丢
+            blocks_out.append(merge_block(block, filled))
+        if layout_first and not blocks_out:
+            continue  # 收缩:整节皆空则整节丢
         sec: dict[str, Any] = {
             "id": section.get("id"),
             "layout": section.get("layout"),
@@ -161,4 +185,120 @@ def merge_skeleton(
     out: dict[str, Any] = {"title": skeleton.get("title"), "sections": sections_out}
     if skeleton.get("theme") is not None:
         out["theme"] = skeleton.get("theme")
+    return out
+
+
+# 内容指纹排除的非内容噪声键(id 唯一、title 是抬头、role 是布局)。
+_SIG_EXCLUDE = {"id", "title", "role"}
+
+
+def _strip_ws(value: Any) -> Any:
+    """递归折叠字符串里的所有空白(中英文空格/换行),使「2021 学年」与「2021学年」同指纹。"""
+    if isinstance(value, str):
+        return re.sub(r"\s+", "", value)
+    if isinstance(value, list):
+        return [_strip_ws(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _strip_ws(v) for k, v in value.items()}
+    return value
+
+
+def _content_signature(block: dict[str, Any]) -> str:
+    """块的内容指纹:排除 id/title/role,字符串折叠空白后稳定序列化。
+    同图数据 / 同列表项 / 同表行 / 同指标组(即便抬头不同)→ 同指纹 → 判重。
+    措辞不同的同义段落、条目数不同的近似指标组**不**算同(确定性,不臆测)。"""
+    payload = {k: v for k, v in block.items() if k not in _SIG_EXCLUDE}
+    return json.dumps(_strip_ws(payload), sort_keys=True, ensure_ascii=False)
+
+
+# 小节标题开头的序号前缀(源文 markdown 抬头「## 一、…」带进来的;跨主题收缩后会断号)。
+_ORDINAL_PREFIX = re.compile(
+    r"^\s*(?:"
+    r"[（(]\s*[一二三四五六七八九十百零〇\d]+\s*[)）]"  # （一） (1)
+    r"|第\s*[一二三四五六七八九十百零〇\d]+\s*[章节部分篇讲]"  # 第一章 第1部分
+    r"|[一二三四五六七八九十百零〇]+\s*[、.．。)）]"  # 一、 二.
+    r"|\d+\s*[、.．。)）]"  # 1、 1.
+    r")\s*"
+)
+
+
+def strip_ordinal_prefix(title: str) -> str:
+    """剥掉小节标题开头的序号前缀(一、/1./（一）/第一章…)。
+
+    序号本是源文 markdown 抬头的噪声;布局优先跨主题收缩后,留下来的小节序号还会断号
+    (如 二/三/五/六/八)。剥光则回落原值(不把纯序号标题清成空)。"""
+    if not title:
+        return title
+    stripped = _ORDINAL_PREFIX.sub("", title, count=1).strip()
+    return stripped or title
+
+
+# 模型给映不上的小节起的「自认无对应」标题(跨主题时模板某节在新源文里没对应物)。
+_NO_CONTENT_TITLE = re.compile(
+    r"无对应|无相关(?:内容|数据|信息|章节)?|无匹配|没有对应|暂无对应|无可对应"
+    r"|no\s+(?:corresponding|matching|relevant|applicable)|not\s+applicable|^n\s*/?\s*a$",
+    re.IGNORECASE,
+)
+
+
+def is_no_content_title(title: str | None) -> bool:
+    """标题是否为模型「自认无对应」的占位(如「无对应内容」/「No corresponding content」)。
+    布局优先跨主题时,这类小节是模板节在新源文里没对应、却被凑数填了内容 → 整节应丢。"""
+    return bool(title) and bool(_NO_CONTENT_TITLE.search(title.strip()))
+
+
+# 文本块里的「道歉占位」——generous 映射后,模型对无料角色不回空、改写道歉散文(非空,躲过收缩)。
+_ADMISSION = re.compile(
+    r"未提及|未涉及|未提供|无法提供|没有提及|无相关(?:内容|信息|数据)|源文本?中?未|文本中未|暂无(?:相关|对应)"
+    r"|not\s+mentioned|not\s+provided|no\s+relevant|not\s+available",
+    re.IGNORECASE,
+)
+
+
+def _is_admission_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(_ADMISSION.search(value))
+
+
+def _is_admission_block(block: dict[str, Any]) -> bool:
+    """块的填充内容是否为「未提及/无法提供」之类道歉占位。仅查文本型块(段落/标注/列表);
+    图表/表格/指标卡的「无料」由收缩(空→丢)处理,道歉散文只落在文本块。"""
+    btype = block.get("type")
+    if btype in ("paragraph", "callout"):
+        return _is_admission_text(block.get("content"))
+    if btype == "list":
+        items = [it for it in (block.get("items") or []) if isinstance(it, str) and it.strip()]
+        return bool(items) and all(_is_admission_text(it) for it in items)
+    return False
+
+
+def drop_admission_blocks(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """丢弃内容是道歉占位(未提及/无法提供…)的文本块;某节因此空则整节丢。
+    与收缩(空→丢)互补:收缩管模型回空的情形,本 pass 管模型改写道歉散文的情形。"""
+    out: list[dict[str, Any]] = []
+    for section in sections:
+        kept = [block for block in (section.get("blocks") or []) if not _is_admission_block(block)]
+        if not kept:
+            continue
+        out.append({**section, "blocks": kept})
+    return out
+
+
+def dedupe_sections(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """全报告范围去重:结构相同的兄弟块只留首次出现,其余丢弃;某节被丢空则整节丢。
+
+    布局优先跨主题复用时,模板槽位常多于源文内容 → 多个槽塌缩到同一份内容产生重复块
+    (如同一趋势图出现两次、同一列表重复)。此 pass 做确定性清理(同步幅、低风险)。"""
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for section in sections:
+        kept: list[dict[str, Any]] = []
+        for block in section.get("blocks") or []:
+            signature = _content_signature(block)
+            if signature in seen:
+                continue  # 结构相同的更晚兄弟块 → 丢
+            seen.add(signature)
+            kept.append(block)
+        if not kept:
+            continue  # 整节皆为重复块 → 整节丢
+        out.append({**section, "blocks": kept})
     return out
