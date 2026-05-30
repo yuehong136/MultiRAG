@@ -326,3 +326,43 @@ def test_chart_data_coercion():
     result = asyncio.run(fill_skeleton(skel, "src", lambda _r: None, call_llm))
     data = result.schema["sections"][0]["blocks"][0]["data"]
     assert data == [{"month": "Jan", "rev": 100.0}, {"month": "Feb", "rev": 0}]
+
+
+# ----------------------------------------------------------------------------
+# fill.py — 报告标题(titleDirective.mode=='llm')
+# ----------------------------------------------------------------------------
+
+# 全静态节(无 fieldDirectives)→ 不产生逐节调用,唯一的 LLM 调用就是标题这一调。
+_STATIC_SECTIONS = [{"id": "s", "layout": "full", "blocks": [{"id": "b", "type": "paragraph", "fields": {"content": "x"}}]}]
+
+
+def test_fill_title_llm_generates_and_overrides():
+    skel = {"title": "占位标题", "titleDirective": {"mode": "llm", "hint": "按主题命名"}, "sections": _STATIC_SECTIONS}
+    call_llm, calls = _make_call_llm(['{"title": "云岭市文旅报告"}'])
+    result = asyncio.run(fill_skeleton(skel, "源料正文", lambda _r: None, call_llm))
+    assert result.schema["title"] == "云岭市文旅报告"  # 模型生成覆盖静态占位
+    assert result.errors == []
+    assert result.llm_sections == 0  # 全静态节不计
+    assert len(calls) == 1  # 仅标题这一调
+
+
+def test_fill_title_static_keeps_title_and_skips_call():
+    skel = {"title": "固定标题", "sections": _STATIC_SECTIONS}  # 无 titleDirective
+    called = False
+
+    async def call_llm(_messages):
+        nonlocal called
+        called = True
+        return "{}"
+
+    result = asyncio.run(fill_skeleton(skel, "src", lambda _r: None, call_llm))
+    assert result.schema["title"] == "固定标题"
+    assert called is False  # 静态标题不调模型
+
+
+def test_fill_title_llm_failure_falls_back_to_static():
+    skel = {"title": "回落标题", "titleDirective": {"mode": "llm", "hint": "x"}, "sections": _STATIC_SECTIONS}
+    call_llm, _ = _make_call_llm(["not json at all"])
+    result = asyncio.run(fill_skeleton(skel, "src", lambda _r: None, call_llm))
+    assert result.schema["title"] == "回落标题"  # 解析失败 → 回落静态
+    assert len(result.errors) == 1  # 记一条软告警,不判败

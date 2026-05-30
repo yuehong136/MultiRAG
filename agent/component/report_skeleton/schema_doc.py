@@ -14,7 +14,6 @@ SKELETON_CONTRACT = """OUTPUT — a single JSON object describing a REUSABLE rep
 (not a finished report):
 {
   "title": string,                 // report title (required)
-  "subtitle"?: string,
   "sections": Section[]            // ordered top-level sections (required, non-empty)
 }
 
@@ -121,7 +120,6 @@ RULES:
 # 一份紧凑的「文本 → 模板」few-shot 样例(依从性的最大杠杆)。
 FEW_SHOT_EXAMPLE = """{
   "title": "Quarterly Business Review",
-  "subtitle": "A reusable template",
   "sections": [
     {
       "title": "Executive Summary",

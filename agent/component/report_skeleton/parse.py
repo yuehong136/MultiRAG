@@ -22,7 +22,6 @@ from .coerce import LAYOUTS, SIDEBAR, is_obj, one_of, opt_str, str_arr, to_str
 # 默认主题(与前端 constants.ts 的 DEFAULT_THEME 对齐)。模型不产出 theme(契约无该字段),
 # 故 normalize_theme 实际总回落到此;骨架返回前端后由预设选择器决定最终主题。
 DEFAULT_THEME = {
-    "primaryColor": "#1677ff",
     "colorPalette": ["#1677ff", "#36cfc9", "#ffc53d", "#ff7a45", "#9254de"],
 }
 
@@ -129,9 +128,6 @@ def _normalize_theme(v: Any) -> dict[str, Any]:
     if not is_obj(v):
         return dict(DEFAULT_THEME)
     theme: dict[str, Any] = {}
-    primary = opt_str(v.get("primaryColor"))
-    if primary:
-        theme["primaryColor"] = primary
     palette = str_arr(v.get("colorPalette"))
     if palette:
         theme["colorPalette"] = palette
@@ -152,6 +148,4 @@ def parse_skeleton_response(raw: str) -> dict[str, Any]:
         "sections": sections,
         "theme": _normalize_theme(obj.get("theme")),
     }
-    if opt_str(obj.get("subtitle")):
-        skeleton["subtitle"] = obj["subtitle"]
     return skeleton

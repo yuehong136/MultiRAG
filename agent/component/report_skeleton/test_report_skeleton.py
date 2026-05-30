@@ -176,7 +176,7 @@ def test_parse_skeleton_response_fallback_with_default_theme():
     raw = '{"title":"R","sections":[{"layout":"full","blocks":[{"type":"paragraph","hint":"x"}]}]}'
     sk = parse_skeleton_response(raw)
     assert sk["title"] == "R"
-    assert sk["theme"]["primaryColor"] == "#1677ff"
+    assert sk["theme"]["colorPalette"][0] == "#1677ff"
     assert sk["sections"][0]["blocks"][0]["type"] == "paragraph"
 
 
@@ -269,7 +269,7 @@ def test_generate_outline_then_sections():
     assert len(res.skeleton["sections"]) == 2
     assert res.skeleton["sections"][0]["title"] == "Intro"
     assert res.skeleton["sections"][1]["blocks"][0]["type"] == "chart"
-    assert res.skeleton["theme"]["primaryColor"] == "#1677ff"
+    assert res.skeleton["theme"]["colorPalette"][0] == "#1677ff"
     assert len(calls) == 3  # 1 大纲 + 2 节
 
 

@@ -24,6 +24,7 @@ from .prompt_builder import (
     ValueSpec,
     build_fill_messages,
     build_fill_schema,
+    build_title_messages,
     collect_fill_plan,
     split_fill_key,
 )
@@ -194,6 +195,35 @@ def _merge_into(target: dict[str, dict[str, Any]], src: dict[str, dict[str, Any]
         target[block_id] = {**target.get(block_id, {}), **fields}
 
 
+async def _fill_title(
+    skeleton: dict[str, Any],
+    source_text: str,
+    toc_titles: list[str],
+    call_llm: CallLLM,
+) -> tuple[str, FillError | None]:
+    """titleDirective.mode=='llm' → 单调一次 LLM 生成报告标题;否则用骨架静态 title。
+    失败(解析不出 / 调用异常)回落静态 title 并返回一条 FillError(软降级,不判败)。"""
+    static_title = skeleton.get("title") or ""
+    directive = skeleton.get("titleDirective") or {}
+    if directive.get("mode") != "llm":
+        return static_title, None
+    messages = build_title_messages(
+        source_text=source_text,
+        hint=directive.get("hint") or "",
+        toc_titles=toc_titles,
+    )
+    try:
+        obj = _extract_json_object(await call_llm(messages))
+        title = obj.get("title")
+        if isinstance(title, str) and title.strip():
+            return title.strip(), None
+        return static_title, None
+    except FillError as err:
+        return static_title, err
+    except Exception as err:  # noqa: BLE001 - 任何调用失败都回落静态 title,保其余
+        return static_title, FillError(str(err))
+
+
 async def fill_skeleton(
     skeleton: dict[str, Any],
     source_text: str,
@@ -236,8 +266,15 @@ async def fill_skeleton(
         except Exception as err:  # noqa: BLE001 - 任何调用失败都降级为本节失败,保其余
             errors.append(FillError(str(err)))
 
+    # 报告标题:模型态单独生成一次,merge 后覆盖(静态态为 no-op)。
+    title_value, title_err = await _fill_title(skeleton, source_text, toc_titles, call_llm)
+    if title_err:
+        errors.append(title_err)
+
+    schema = merge_skeleton(skeleton, filled)
+    schema["title"] = title_value
     return FillResult(
-        schema=merge_skeleton(skeleton, filled),
+        schema=schema,
         errors=errors,
         llm_sections=llm_sections,
         ok_sections=ok_sections,

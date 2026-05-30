@@ -159,8 +159,6 @@ def merge_skeleton(
         sections_out.append(sec)
 
     out: dict[str, Any] = {"title": skeleton.get("title"), "sections": sections_out}
-    if skeleton.get("subtitle") is not None:
-        out["subtitle"] = skeleton.get("subtitle")
     if skeleton.get("theme") is not None:
         out["theme"] = skeleton.get("theme")
     return out

@@ -331,3 +331,44 @@ def build_fill_messages(
         {"role": "system", "content": FILL_SYSTEM},
         {"role": "user", "content": user},
     ]
+
+
+# ============================================================
+# 报告标题生成(titleDirective.mode=='llm' 时单独一调)
+# ============================================================
+
+# 只产标题、跟随源语言、忠于源文、严格回 JSON。
+TITLE_SYSTEM = """You write the TITLE of a report, from the source text provided.
+
+Rules:
+- Return ONE JSON object: {"title": string} — nothing else.
+- The title is a short noun phrase naming the report's subject and kind (a few words), NOT a
+  sentence and NOT a restatement of the whole report.
+- Write in the SAME LANGUAGE as the source text. Be faithful to the source; never invent a subject
+  the source does not support.
+- If guidance is provided, follow it.
+- Output ONLY the JSON object: no markdown code fences, no comments, no prose."""
+
+
+def build_title_messages(
+    *,
+    source_text: str,
+    hint: str,
+    toc_titles: list[str],
+) -> list[dict[str, str]]:
+    """报告标题(模型态)单调一次的消息:源料 + 可选 guidance + 章节目录 → {"title": "..."}。"""
+    guide = f"\nGuidance: {hint.strip()}" if hint.strip() else ""
+    toc = f"\nReport sections: {' / '.join(toc_titles)}" if toc_titles else ""
+    user = "\n".join(
+        [
+            f"Source text:\n{source_text.strip()}",
+            "---",
+            f"Write the report title.{guide}{toc}",
+            "",
+            'Return ONE JSON object: {"title": "..."}',
+        ]
+    )
+    return [
+        {"role": "system", "content": TITLE_SYSTEM},
+        {"role": "user", "content": user},
+    ]
