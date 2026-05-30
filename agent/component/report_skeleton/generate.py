@@ -19,7 +19,13 @@ from .parse import (
     parse_section,
     parse_skeleton_response,
 )
-from .prompt import build_outline_messages, build_section_messages, build_skeleton_messages
+from .prompt import (
+    build_layout_first_section_messages,
+    build_layout_first_skeleton_messages,
+    build_outline_messages,
+    build_section_messages,
+    build_skeleton_messages,
+)
 
 CallLLM = Callable[[list[dict[str, str]]], Awaitable[str]]
 # 进度回调:(phase, current, total);phase ∈ {"outline", "sections"}。
@@ -41,8 +47,14 @@ async def generate_skeleton(
     report_text: str,
     call_llm: CallLLM,
     on_progress: OnProgress | None = None,
+    *,
+    mode: str = "detailed",
 ) -> GenerateResult:
-    """报告文本 → 可复用骨架模板:大纲 → 逐节 → 拼装;大纲失败回退整篇。"""
+    """报告文本 → 可复用骨架模板:大纲 → 逐节 → 拼装;大纲失败回退整篇。
+
+    mode='detailed'(默认)产 concrete 块;mode='layout'(布局优先)每块产 open-region 占位,
+    内容 / label 留给运行时按 brief 重生 —— 复用同一编排,只切换逐节 / 回退的 prompt builder。
+    """
     # ① 大纲:解析失败 → 回退整篇;调用 / 网络错向上抛(端点报错)。
     if on_progress:
         on_progress("outline", 0, 0)
@@ -52,12 +64,14 @@ async def generate_skeleton(
     except SkeletonParseError:
         outline = None
 
-    # ② 回退:大纲失败 → 单次整篇生成。
+    # ② 回退:大纲失败 → 单次整篇生成(按 mode 选 concrete / 布局优先 builder)。
     if outline is None:
-        skeleton = parse_skeleton_response(await call_llm(build_skeleton_messages(report_text)))
+        fallback_messages = build_layout_first_skeleton_messages(report_text) if mode == "layout" else build_skeleton_messages(report_text)
+        skeleton = parse_skeleton_response(await call_llm(fallback_messages))
         return GenerateResult(skeleton=skeleton, used_fallback=True)
 
-    # ③ 逐节:某节解析失败跳过,保其余;调用 / 网络错向上抛。
+    # ③ 逐节:某节解析失败跳过,保其余;调用 / 网络错向上抛。按 mode 选逐节 builder。
+    section_builder = build_layout_first_section_messages if mode == "layout" else build_section_messages
     sections: list[dict[str, Any]] = []
     errors: list[str] = []
     outline_sections = outline["sections"]
@@ -66,7 +80,7 @@ async def generate_skeleton(
         if on_progress:
             on_progress("sections", i + 1, total)
         try:
-            section = parse_section(await call_llm(build_section_messages(report_text, outline_section)), outline_section)
+            section = parse_section(await call_llm(section_builder(report_text, outline_section)), outline_section)
             sections.append(section)
         except SkeletonParseError as err:
             errors.append(str(err))

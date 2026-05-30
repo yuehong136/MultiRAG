@@ -28,6 +28,9 @@ CARTESIAN = {"bar", "line", "area"}
 PROPORTION = {"pie", "donut", "funnel"}
 SIDEBAR = {"sidebar-left", "sidebar-right"}
 
+# 生成区占位块类型(布局优先模式产出);不入 BLOCK_KINDS,由 normalize_block 早分支单独保留。
+OPEN_REGION = "open-region"
+
 
 def is_obj(v: Any) -> bool:
     """对应 TS isObj:dict 才算对象(数组 / None 不算)。"""

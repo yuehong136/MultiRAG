@@ -47,11 +47,12 @@ _SSE_HEADERS = {
 
 
 class SkeletonGenRequest(BaseModel):
-    """报告文本 → 可复用骨架。"""
+    """报告文本 → 可复用骨架。mode='detailed'(默认)/ 'layout'(布局优先,产 open-region 占位)。"""
 
     report_text: str
     llm_name: str
     gen_conf: dict[str, Any] = {}
+    mode: str = "detailed"
 
 
 class ReportFillRequest(BaseModel):
@@ -141,7 +142,7 @@ async def report_skeleton_sse(request: SkeletonGenRequest, db: Session = Depends
         def on_progress(phase: str, current: int, total: int) -> None:
             emit({"phase": phase, "current": current, "total": total})
 
-        result = await generate_skeleton(request.report_text, call_llm, on_progress)
+        result = await generate_skeleton(request.report_text, call_llm, on_progress, mode=request.mode)
         return {"skeleton": result.skeleton, "warnings": len(result.errors), "usedFallback": result.used_fallback}
 
     return StreamingResponse(_stream_orchestration(produce), media_type="text/event-stream", headers=_SSE_HEADERS)

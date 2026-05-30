@@ -189,3 +189,39 @@ FEW_SHOT_SECTION = """{
       "hint": "Per-program facts (name, department, start date) — heterogeneous text, so a table, not a chart." }
   ]
 }"""
+
+
+# 布局优先(layout-first)契约:把样报「抽象成布局 + 角色」,每块吐成 open-region 占位 —— 内容 / 具体
+# label 全不写出,由运行时按 brief 重生,从而「换主题套同一套版式」。外层 envelope 由各 prompt 自行指定。
+LAYOUT_FIRST_CONTRACT = """Each block is a GENERATIVE REGION (open-region) — a placeholder the
+runtime expands for the new subject:
+  { "type": "open-region", "hint": string }
+
+GOAL — capture the LAYOUT and the ROLE of each block, NOT this report's subject (the template is
+reused for OTHER subjects). Each "hint" says, in the SOURCE LANGUAGE, TWO things:
+  (1) the block's ROLE — its job in this KIND of report, generalized (e.g. "the most important
+      headline KPIs", "the main metric's trend over time", "the composition / share of the whole",
+      "the key item-by-item breakdown") — NEVER this report's literal labels, numbers, or names;
+  (2) the COMPONENT to render it with, named explicitly so the layout stays consistent across
+      subjects (e.g. "a stat-card group", "a line chart", "a pie chart", "a table").
+
+RULES:
+- One "open-region" per intended block (fine-grained) — each slot pins its own component.
+- Generalize: turn a concrete metric like "营收 ¥12.4M" into a role such as "the headline
+  revenue-type KPI", never the literal label or value. The runtime fills the real label + content.
+- For plottable roles prefer a CHART over a table (a trend/series, a distribution, a
+  composition/share, or a ranking) and name the chart type in the hint; reserve a table for
+  genuinely tabular data (heterogeneous / text-heavy columns, exact lookup).
+- Reconstruct each section's full set of blocks, in order; keep the count faithful to the report.
+- Emit ONLY "open-region" blocks — never concrete block types, "fields", or "data"."""
+
+
+# 布局优先 few-shot:一节抽象成若干 open-region,brief = 角色 + 钉住的组件(示例用英文,实际跟随源语言)。
+FEW_SHOT_LAYOUT_FIRST = """{
+  "blocks": [
+    { "type": "open-region", "hint": "The 3-4 most important headline KPIs for this section, as a stat-card group" },
+    { "type": "open-region", "hint": "The main metric's trend over time, as a line chart" },
+    { "type": "open-region", "hint": "The composition / share of the whole, as a pie chart" },
+    { "type": "open-region", "hint": "The key item-by-item breakdown, as a table" }
+  ]
+}"""

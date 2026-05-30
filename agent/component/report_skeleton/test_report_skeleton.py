@@ -123,6 +123,20 @@ def test_normalize_block_sidebar_role():
     assert "role" not in normalize_block({"type": "paragraph"}, False)
 
 
+def test_normalize_block_open_region_preserved():
+    # 布局优先:open-region 占位原样保留,brief(hint)落 annotation,不造 fields/directives。
+    blk = normalize_block({"type": "open-region", "hint": "最重要的 KPI,指标卡组"}, False)
+    assert blk["type"] == "open-region"
+    assert blk["annotation"] == "最重要的 KPI,指标卡组"
+    assert "fields" not in blk and "fieldDirectives" not in blk
+    assert blk["id"].startswith("blk-")
+    # sidebar 下继承分列 role
+    assert normalize_block({"type": "open-region", "hint": "x", "role": "side"}, True)["role"] == "side"
+    assert normalize_block({"type": "open-region", "hint": "x"}, True)["role"] == "main"
+    # 空 brief:不写 annotation(expand 容忍空 brief)
+    assert "annotation" not in normalize_block({"type": "open-region"}, False)
+
+
 # ----------------------------------------------------------------------------
 # parse
 # ----------------------------------------------------------------------------
@@ -257,6 +271,37 @@ def test_generate_outline_then_sections():
     assert res.skeleton["sections"][1]["blocks"][0]["type"] == "chart"
     assert res.skeleton["theme"]["primaryColor"] == "#1677ff"
     assert len(calls) == 3  # 1 大纲 + 2 节
+
+
+def test_generate_layout_first_mode_emits_open_regions():
+    # mode='layout':复用大纲→逐节编排,但逐节产 open-region 占位(brief = 角色 + 组件)。
+    outline = '{"title":"R","sections":[{"title":"概览","layout":"full","intent":"recap"},{"title":"趋势","layout":"two-column","intent":"trend"}]}'
+    sec1 = '{"blocks":[{"type":"open-region","hint":"最重要的 KPI,指标卡组"}]}'
+    sec2 = '{"blocks":[{"type":"open-region","hint":"主指标趋势,折线图"},{"type":"open-region","hint":"构成占比,饼图"}]}'
+    call_llm, calls = _make_call_llm([outline, sec1, sec2])
+    res = asyncio.run(generate_skeleton("report text", call_llm, mode="layout"))
+
+    assert res.used_fallback is False
+    secs = res.skeleton["sections"]
+    assert len(secs) == 2
+    s1_blocks = secs[0]["blocks"]
+    assert [b["type"] for b in s1_blocks] == ["open-region"]
+    assert s1_blocks[0]["annotation"] == "最重要的 KPI,指标卡组"
+    assert "fields" not in s1_blocks[0]  # 占位块不带 concrete 框架
+    assert [b["type"] for b in secs[1]["blocks"]] == ["open-region", "open-region"]
+    assert len(calls) == 3  # 1 大纲 + 2 节
+
+
+def test_generate_layout_first_fallback_emits_open_regions():
+    # 大纲失败 → 布局优先回退:整篇单次生成,各节 blocks 仍为 open-region。
+    whole = '{"title":"W","sections":[{"layout":"full","blocks":[{"type":"open-region","hint":"概览,指标卡组"}]}]}'
+    call_llm, calls = _make_call_llm(["not json — outline parse fails", whole])
+    res = asyncio.run(generate_skeleton("text", call_llm, mode="layout"))
+    assert res.used_fallback is True
+    blk = res.skeleton["sections"][0]["blocks"][0]
+    assert blk["type"] == "open-region"
+    assert blk["annotation"] == "概览,指标卡组"
+    assert len(calls) == 2  # 大纲尝试 + 整篇回退
 
 
 def test_generate_section_parse_failure_skipped():

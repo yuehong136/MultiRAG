@@ -14,7 +14,9 @@ from __future__ import annotations
 
 from .schema_doc import (
     FEW_SHOT_EXAMPLE,
+    FEW_SHOT_LAYOUT_FIRST,
     FEW_SHOT_SECTION,
+    LAYOUT_FIRST_CONTRACT,
     OUTLINE_CONTRACT,
     SKELETON_CONTRACT,
 )
@@ -152,5 +154,58 @@ def build_skeleton_messages(report_text: str) -> list[dict[str, str]]:
     user = f"Build a reusable report template from the following report, following the JSON contract above. Output only the JSON object.\n\n---\n{report_text.strip()}"
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user},
+    ]
+
+
+# ============================================================
+# 布局优先(layout-first):把样报抽象成「布局 + 角色」,每块吐成 open-region 占位(换主题套同版式)
+# ============================================================
+_LAYOUT_FIRST_SECTION_HEAD = """You are a report-TEMPLATE engine working ONE SECTION AT A TIME in
+LAYOUT-FIRST mode. You are given a full sample report and told which single section to build.
+Capture this section's LAYOUT and the ROLE of each block — NOT this report's subject — because the
+template will be reused for OTHER subjects. Emit each block as a generative region (open-region).
+Output ONE JSON object {"blocks":[...]} and nothing else: no markdown fences, no prose."""
+
+LAYOUT_FIRST_SECTION_SYSTEM = (
+    _LAYOUT_FIRST_SECTION_HEAD + "\n\n" + LAYOUT_FIRST_CONTRACT + "\n\nEXAMPLE section (illustration only — produce open-regions from the user's actual report):\n" + FEW_SHOT_LAYOUT_FIRST
+)
+
+
+def build_layout_first_section_messages(report_text: str, section: dict[str, str]) -> list[dict[str, str]]:
+    title = section.get("title")
+    intent = section.get("intent")
+    focus = f'the section titled "{title}"' if title else "the next section"
+    about = f" (about: {intent})" if intent else ""
+    user = "From the report below, build ONLY " + focus + about + ' as layout-first open-regions. Output {"blocks":[...]} only.\n\n---\n' + report_text.strip()
+    return [
+        {"role": "system", "content": LAYOUT_FIRST_SECTION_SYSTEM},
+        {"role": "user", "content": user},
+    ]
+
+
+# 布局优先回退:大纲失败时单次整篇生成(各节 blocks 全是 open-region)
+_LAYOUT_FIRST_SKELETON_HEAD = """You are a report-TEMPLATE engine in LAYOUT-FIRST mode. From one
+complete sample report, reverse-engineer a REUSABLE template that captures its LAYOUT and the ROLE
+of each block — NOT this report's subject (the template is reused for OTHER subjects). Output a
+single JSON object:
+{
+  "title": string,
+  "sections": [
+    { "title"?: string,
+      "layout": "full" | "two-column" | "three-column" | "sidebar-left" | "sidebar-right",
+      "blocks": [ { "type": "open-region", "hint": string }, ... ] }
+  ]
+}
+Section titles may stay (they recur in this kind of report); block content does not. Output ONE
+JSON object and nothing else: no markdown fences, no comments, no prose."""
+
+LAYOUT_FIRST_SKELETON_SYSTEM = _LAYOUT_FIRST_SKELETON_HEAD + "\n\n" + LAYOUT_FIRST_CONTRACT + "\n\nEXAMPLE blocks within a section (illustration only):\n" + FEW_SHOT_LAYOUT_FIRST
+
+
+def build_layout_first_skeleton_messages(report_text: str) -> list[dict[str, str]]:
+    user = "Build a reusable LAYOUT-FIRST report template (every block an open-region) from the report below. Output only the JSON object.\n\n---\n" + report_text.strip()
+    return [
+        {"role": "system", "content": LAYOUT_FIRST_SKELETON_SYSTEM},
         {"role": "user", "content": user},
     ]

@@ -19,6 +19,7 @@ from .coerce import (
     BLOCK_KINDS,
     CARTESIAN,
     CHART_TYPES,
+    OPEN_REGION,
     PROPORTION,
     TRENDS,
     VARIANTS,
@@ -177,14 +178,23 @@ def _build_block(btype: str, raw: dict[str, Any], hint: str | None) -> tuple[dic
 
 
 def normalize_block(raw: Any, sidebar: bool) -> dict[str, Any] | None:
-    """扁平块 → 骨架 Block;非对象返回 None(其余一律兜底,不丢)。heading 不产出。"""
+    """扁平块 → 骨架 Block;非对象返回 None(其余一律兜底,不丢)。heading 不产出。
+    open-region(布局优先模式)作占位块原样保留:brief(hint)落 annotation,由运行时按 brief 展开。"""
     if not is_obj(raw):
         return None
+    hint = opt_str(raw.get("hint"))
+    # 生成区占位:不造 fields/directives,brief 落 annotation;sidebar 下继承分列 role。
+    if raw.get("type") == OPEN_REGION:
+        region: dict[str, Any] = {"id": make_id("blk"), "type": OPEN_REGION}
+        if hint:
+            region["annotation"] = hint
+        if sidebar:
+            region["role"] = "side" if raw.get("role") == "side" else "main"
+        return region
     btype = one_of(raw.get("type"), BLOCK_KINDS, "paragraph")
     # AI 生成不产出独立标题块:小节 title/subtitle 已渲染为该节抬头,再来个 heading 会重复。
     if btype == "heading":
         return None
-    hint = opt_str(raw.get("hint"))
     fields, directives = _build_block(btype, raw, hint)
     block: dict[str, Any] = {"id": make_id("blk"), "type": btype, "fields": fields}
     if directives:
