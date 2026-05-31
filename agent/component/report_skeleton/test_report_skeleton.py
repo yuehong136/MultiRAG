@@ -326,6 +326,9 @@ def test_generate_layout_first_mode_emits_open_regions():
     assert res.skeleton["titleDirective"]["mode"] == "llm"
     assert secs[0]["titleDirective"]["mode"] == "llm"
     assert secs[1]["titleDirective"]["mode"] == "llm"
+    # 大纲 intent(样报口径)不落到小节注解:布局优先不携带,免设计器误导 + 填值弱扰
+    assert "annotation" not in secs[0]
+    assert "annotation" not in secs[1]
 
 
 def test_generate_layout_first_fallback_emits_open_regions():

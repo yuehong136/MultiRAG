@@ -318,27 +318,30 @@ def build_fill_messages(
     toc_titles: list[str],
     plan: FillPlan,
     schema: dict[str, Any],
+    layout_first: bool = False,
 ) -> list[dict[str, str]]:
-    focus = f'"{section.get("title")}"' if section.get("title") else "this section"
-    intent = f" (about: {section.get('annotation')})" if section.get("annotation") else ""
-    toc = f"Report sections: {' / '.join(toc_titles)}\n" if toc_titles else ""
-    user = "\n".join(
-        [
-            f"Source text:\n{source_text.strip()}",
-            "---",
-            f'Report: "{report_title}"',
-            f"{toc}Fill ONLY the section {focus}{intent}.",
-            "",
-            "Slots to fill:",
-            describe_section(section, plan),
-            "",
-            "Return ONE JSON object with EXACTLY these keys and matching types:",
-            json.dumps(schema, ensure_ascii=False),
-        ]
-    )
+    lines = [f"Source text:\n{source_text.strip()}", "---"]
+    if layout_first:
+        # 布局优先:报告名 / 小节标题 / 注解 / 目录都还是样报主题口径(标题另在运行时按源文重生成),
+        # 对新主题是错的上下文,一律不喂——填值只依据源文 + 已按源文重建的槽位框架。
+        lines.append("Fill ONLY this section.")
+    else:
+        focus = f'"{section.get("title")}"' if section.get("title") else "this section"
+        intent = f" (about: {section.get('annotation')})" if section.get("annotation") else ""
+        toc = f"Report sections: {' / '.join(toc_titles)}\n" if toc_titles else ""
+        lines.append(f'Report: "{report_title}"')
+        lines.append(f"{toc}Fill ONLY the section {focus}{intent}.")
+    lines += [
+        "",
+        "Slots to fill:",
+        describe_section(section, plan),
+        "",
+        "Return ONE JSON object with EXACTLY these keys and matching types:",
+        json.dumps(schema, ensure_ascii=False),
+    ]
     return [
         {"role": "system", "content": FILL_SYSTEM},
-        {"role": "user", "content": user},
+        {"role": "user", "content": "\n".join(lines)},
     ]
 
 

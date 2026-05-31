@@ -11,6 +11,7 @@ import asyncio
 from agent.component.report_fill.fill import _SKIP, _coerce_value, fill_skeleton
 from agent.component.report_fill.prompt_builder import (
     ValueSpec,
+    build_fill_messages,
     build_fill_schema,
     collect_fill_plan,
     describe_section,
@@ -390,6 +391,37 @@ def test_coerce_blank_and_empty_collections_skip():
 
 def _llm_para(block_id: str) -> dict:
     return {"id": block_id, "type": "paragraph", "fields": {"content": "占位"}, "fieldDirectives": {"content": {"mode": "llm"}}}
+
+
+def test_build_fill_messages_layout_first_drops_sample_context():
+    # 布局优先:样报口径的报告名 / 小节标题 / 注解 / 目录都不进填值 prompt(标题另在运行时按源文
+    # 重生成),只留源文 + 已按源文重建的槽位;非布局优先照旧带上,确保改动只作用于布局优先。
+    section = {
+        "id": "s",
+        "title": "学校概况",
+        "annotation": "学校概况与办学定位",
+        "layout": "full",
+        "blocks": [_llm_para("p")],
+    }
+    plan = collect_fill_plan(section)
+    common = dict(
+        report_title="北辰大学发展报告",
+        section=section,
+        source_text="文旅源文正文",
+        toc_titles=["学校概况", "办学规模"],
+        plan=plan,
+        schema=build_fill_schema(plan),
+    )
+    lf = build_fill_messages(**common, layout_first=True)[1]["content"]
+    assert "Fill ONLY this section." in lf
+    assert "文旅源文正文" in lf  # 源文仍在
+    for leaked in ("学校概况", "学校概况与办学定位", "北辰大学发展报告", "办学规模"):
+        assert leaked not in lf
+
+    base = build_fill_messages(**common)[1]["content"]  # 非布局优先:照旧带上整节口径
+    assert 'Report: "北辰大学发展报告"' in base
+    assert "(about: 学校概况与办学定位)" in base
+    assert "Report sections: 学校概况 / 办学规模" in base
 
 
 def test_layout_first_shrink_drops_empty_blocks_and_sections():

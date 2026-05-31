@@ -269,6 +269,7 @@ async def fill_skeleton(
     _merge_into(filled, _resolve_variable_fills(skeleton, resolve_ref))
 
     sections = skeleton.get("sections") or []
+    layout_first = bool(skeleton.get("layoutFirst"))
     toc_titles = [s.get("title") for s in sections if s.get("title")]
     errors: list[FillError] = []
     llm_sections = 0
@@ -289,6 +290,7 @@ async def fill_skeleton(
             toc_titles=toc_titles,
             plan=plan,
             schema=build_fill_schema(plan),
+            layout_first=layout_first,
         )
         try:
             text = await call_llm(messages)
@@ -309,7 +311,6 @@ async def fill_skeleton(
 
     schema = merge_skeleton(skeleton, filled)
     schema["title"] = title_value
-    layout_first = bool(skeleton.get("layoutFirst"))
     if layout_first:
         # generous 映射后模型对无料角色写的道歉散文(非空,躲过收缩)→ 丢块(空节随之丢)。
         schema["sections"] = drop_admission_blocks(schema.get("sections") or [])

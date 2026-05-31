@@ -38,10 +38,15 @@ class GenerateError(Exception):
 
 def _mark_layout_first(skeleton: dict[str, Any]) -> dict[str, Any]:
     """布局优先骨架:盖上 layoutFirst 信号,并默认报告 + 有标题的小节标题为「模型态」——
-    跨主题运行时按新源文重生成标题(静态原标题留作回落/设计器静态值)。"""
+    跨主题运行时按新源文重生成标题(静态原标题留作回落/设计器静态值)。
+
+    小节注解(来自大纲 intent)是样报主题口径、且运行时没有重生成机制,跨主题套用时既会在
+    设计器里误导,又会作为整节口径弱扰填值——布局优先一并清掉,让小节口径只由(运行时重生成的)
+    标题 + 各块自身 hint 承载。"""
     skeleton["layoutFirst"] = True
     skeleton["titleDirective"] = {"mode": "llm"}
     for section in skeleton.get("sections") or []:
+        section.pop("annotation", None)
         if section.get("title"):
             section["titleDirective"] = {"mode": "llm"}
     return skeleton
