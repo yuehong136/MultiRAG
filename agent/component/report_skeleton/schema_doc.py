@@ -211,6 +211,8 @@ RULES:
   composition/share, or a ranking) and name the chart type in the hint; reserve a table for
   genuinely tabular data (heterogeneous / text-heavy columns, exact lookup).
 - Reconstruct each section's full set of blocks, in order; keep the count faithful to the report.
+- Write every "hint" in the SAME LANGUAGE as the source report (a Chinese source → Chinese hints),
+  regardless of the language of this contract or the examples below.
 - Emit ONLY "open-region" blocks — never concrete block types, "fields", or "data"."""
 
 

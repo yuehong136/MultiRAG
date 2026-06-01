@@ -214,6 +214,8 @@ _LAYOUT_FIRST_SECTION_HEAD = """You are a report-TEMPLATE engine working ONE SEC
 LAYOUT-FIRST mode. You are given a full sample report and told which single section to build.
 Capture this section's LAYOUT and the ROLE of each block — NOT this report's subject — because the
 template will be reused for OTHER subjects. Emit each block as a generative region (open-region).
+Write every "hint" in the SAME LANGUAGE as the source report (a Chinese report → Chinese hints),
+regardless of the language of these instructions or the examples below.
 Output ONE JSON object {"blocks":[...]} and nothing else: no markdown fences, no prose."""
 
 LAYOUT_FIRST_SECTION_SYSTEM = (
@@ -246,8 +248,10 @@ single JSON object:
       "blocks": [ { "type": "open-region", "hint": string }, ... ] }
   ]
 }
-Section titles may stay (they recur in this kind of report); block content does not. Output ONE
-JSON object and nothing else: no markdown fences, no comments, no prose."""
+Section titles may stay (they recur in this kind of report); block content does not. Write every
+"hint" in the SAME LANGUAGE as the source report (a Chinese report → Chinese hints), regardless of
+the language of these instructions or the examples. Output ONE JSON object and nothing else: no
+markdown fences, no comments, no prose."""
 
 LAYOUT_FIRST_SKELETON_SYSTEM = _LAYOUT_FIRST_SKELETON_HEAD + "\n\n" + LAYOUT_FIRST_CONTRACT + "\n\nEXAMPLE blocks within a section (illustration only):\n" + FEW_SHOT_LAYOUT_FIRST
 

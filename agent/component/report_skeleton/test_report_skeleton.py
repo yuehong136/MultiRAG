@@ -23,6 +23,10 @@ from agent.component.report_skeleton.parse import (
     parse_section,
     parse_skeleton_response,
 )
+from agent.component.report_skeleton.prompt import (
+    build_layout_first_section_messages,
+    build_layout_first_skeleton_messages,
+)
 
 
 def _make_call_llm(responses):
@@ -341,6 +345,15 @@ def test_generate_layout_first_fallback_emits_open_regions():
     assert blk["type"] == "open-region"
     assert blk["annotation"] == "概览,指标卡组"
     assert len(calls) == 2  # 大纲尝试 + 整篇回退
+
+
+def test_layout_first_prompts_demand_source_language_hints():
+    # few-shot 样例是英文,会把模型带去英文 annotation;两个布局优先系统头必须显式要求
+    # hint 跟随源文语言(中文源→中文 hint),否则生成区在设计器里全是英文。
+    section_sys = build_layout_first_section_messages("报告正文", {"title": "概览", "intent": "recap"})[0]["content"]
+    fallback_sys = build_layout_first_skeleton_messages("报告正文")[0]["content"]
+    assert "SAME LANGUAGE" in section_sys
+    assert "SAME LANGUAGE" in fallback_sys
 
 
 def test_generate_section_parse_failure_skipped():
