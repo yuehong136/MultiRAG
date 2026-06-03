@@ -53,12 +53,19 @@ Section:
 4. stat-card —— 单个 KPI。"label" 是框架;其数值是内容。仅当源文给了该 KPI 的对比(环比、同比
    或明确的增量)时才加 "change":其字符串是该变化率的一句 hint。填充时运行时会写一个带符号的比率
    (如 "+12.5%" / "−3.2%"),卡片按符号着绿/红色 —— 所以源文只报告水平值的纯 KPI 要省略
-   "change"。不要输出 "trend";它由 change 的符号推导。
-   { "type":"stat-card", "label":string, "change"?:string, "hint":string }
+   "change"。不要输出 "trend";它由 change 的符号推导。"label" 旁可选 "icon"(见下方图标表)。
+   { "type":"stat-card", "label":string, "icon"?:string, "change"?:string, "hint":string }
 
 5. stat-card-group —— 一排 KPI。每个 item 的 "label" 是框架;数值是内容。仅给源文确实做了对比的
-   KPI 加 "change"(规则与含义同 #4);纯快照指标省略。
-   { "type":"stat-card-group", "items":[{ "label":string, "change"?:string }], "hint":string }
+   KPI 加 "change"(规则与含义同 #4);纯快照指标省略。每个 item 同样可选 "icon"(见下方图标表)。
+   { "type":"stat-card-group", "items":[{ "label":string, "icon"?:string, "change"?:string }], "hint":string }
+
+指标卡图标("icon",#4/#5 共用,可选):从下面这组图标名里挑一个最贴合该指标「语义」的;拿不准就
+省略(渲染端会按 label 兜底,不会出错)。只能用这些名字,别造新的:
+  users(人群/客流/用户)、money(金额/营收/投资/消费)、trending-up(增长/比率/百分比)、
+  thumbs-up(满意度/好评)、building(机构/场馆/景区/项目)、calendar(日期/场次/年度)、
+  clock(时长/周期/停留)、flag(里程碑)、chart(通用/兜底)、star(评级)、target(目标/达成)、
+  layers(规模/数量/品类)、globe(国际/境外/分布)、check(达标/合格/完成)。
 
 6. table —— "headers" 是框架;行是内容(不要输出 rows)。仅用于真正表格型数据(异质或文字密集的
    列、多列、精确查值);若数字可绘图,优先用图表。
@@ -117,9 +124,9 @@ FEW_SHOT_EXAMPLE = """{
         { "type": "paragraph", "hint": "两三句话概述整体业绩及主要驱动因素。" },
         { "type": "stat-card-group",
           "items": [
-            { "label": "总营收", "change": "相比上一季度的增长" },
-            { "label": "活跃客户" },
-            { "label": "流失率", "change": "流失率相比上一季度的变化" }
+            { "label": "总营收", "icon": "money", "change": "相比上一季度的增长" },
+            { "label": "活跃客户", "icon": "users" },
+            { "label": "流失率", "icon": "trending-up", "change": "流失率相比上一季度的变化" }
           ],
           "hint": "每个 KPI 的当前值;带 change 的条目还附环比变化率。" },
         { "type": "callout", "variant": "insight", "title": "关键洞察",
@@ -160,8 +167,8 @@ FEW_SHOT_SECTION = """{
   "blocks": [
     { "type": "stat-card-group",
       "items": [
-        { "label": "在校生人数", "change": "在校生总数的同比变化" },
-        { "label": "专业数量" }
+        { "label": "在校生人数", "icon": "users", "change": "在校生总数的同比变化" },
+        { "label": "专业数量", "icon": "layers" }
       ],
       "hint": "本节的标题性数字:在校生人数带同比变化,专业数量是当前计数。" },
     { "type": "paragraph", "hint": "本节的开篇叙述:规模与定位;一段散文。" },

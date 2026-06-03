@@ -19,6 +19,7 @@ from .coerce import (
     BLOCK_KINDS,
     CARTESIAN,
     CHART_TYPES,
+    ICONS,
     OPEN_REGION,
     PROPORTION,
     TRENDS,
@@ -126,6 +127,9 @@ def _build_block(btype: str, raw: dict[str, Any], hint: str | None) -> tuple[dic
         return fields, directives
     if btype == "stat-card":
         fields = {"type": btype, "label": to_str(raw.get("label"))}
+        icon = opt_enum(raw.get("icon"), ICONS)  # 框架字段:模型选的语义图标,非法则丢(渲染端启发式兜底)
+        if icon:
+            fields["icon"] = icon
         trend = opt_enum(raw.get("trend"), TRENDS)
         if trend:
             fields["trend"] = trend
@@ -141,6 +145,9 @@ def _build_block(btype: str, raw: dict[str, Any], hint: str | None) -> tuple[dic
         directives: dict[str, Any] = {}
         for i, it in enumerate(sources):
             card: dict[str, Any] = {"label": to_str(it.get("label"))}
+            icon = opt_enum(it.get("icon"), ICONS)  # 同 stat-card:模型选的语义图标,非法则丢
+            if icon:
+                card["icon"] = icon
             trend = opt_enum(it.get("trend"), TRENDS)
             if trend:
                 card["trend"] = trend

@@ -24,6 +24,24 @@ BLOCK_KINDS = [
 CHART_TYPES = ["bar", "line", "area", "pie", "donut", "radar", "funnel", "scatter"]
 VARIANTS = ["info", "success", "warning", "insight"]
 TRENDS = ["up", "down", "neutral"]
+# 指标卡图标名白名单。必须与前端渲染器 renderer/icons.ts 的 ICON_SVGS 键一致;
+# 模型产出的 icon 不在此表内则丢弃(渲染端按 label 关键词启发式兜底)。
+ICONS = [
+    "users",
+    "money",
+    "trending-up",
+    "thumbs-up",
+    "building",
+    "calendar",
+    "clock",
+    "flag",
+    "chart",
+    "star",
+    "target",
+    "layers",
+    "globe",
+    "check",
+]
 CARTESIAN = {"bar", "line", "area"}
 PROPORTION = {"pie", "donut", "funnel"}
 SIDEBAR = {"sidebar-left", "sidebar-right"}

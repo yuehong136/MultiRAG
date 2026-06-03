@@ -121,6 +121,32 @@ def test_normalize_block_stat_card_group_change_per_item():
     assert blk["fieldDirectives"]["items[0].change"] == {"mode": "llm", "hint": "环比"}
 
 
+def test_normalize_block_stat_card_icon_kept_and_validated():
+    # 合法 icon → 落 fields(框架);非法 icon / 未给 → 不写(渲染端按 label 启发式兜底)
+    ok = normalize_block({"type": "stat-card", "label": "营收", "icon": "money", "hint": "Q3 营收"}, False)
+    assert ok["fields"]["icon"] == "money"
+    bad = normalize_block({"type": "stat-card", "label": "营收", "icon": "rocket", "hint": "Q3 营收"}, False)
+    assert "icon" not in bad["fields"]
+    none = normalize_block({"type": "stat-card", "label": "营收", "hint": "Q3 营收"}, False)
+    assert "icon" not in none["fields"]
+
+
+def test_normalize_block_stat_card_group_icon_per_item():
+    # 逐项携带合法 icon;非法或缺省的 item 不带 icon
+    blk = normalize_block(
+        {
+            "type": "stat-card-group",
+            "items": [{"label": "客流", "icon": "users"}, {"label": "X", "icon": "bogus"}, {"label": "Y"}],
+            "hint": "kpis",
+        },
+        False,
+    )
+    items = blk["fields"]["items"]
+    assert items[0]["icon"] == "users"
+    assert "icon" not in items[1]
+    assert "icon" not in items[2]
+
+
 def test_normalize_block_sidebar_role():
     assert normalize_block({"type": "paragraph", "role": "side"}, True)["role"] == "side"
     assert normalize_block({"type": "paragraph"}, True)["role"] == "main"
