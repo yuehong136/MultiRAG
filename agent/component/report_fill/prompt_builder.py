@@ -23,37 +23,30 @@ TREND_VALUES = ["up", "down", "neutral"]
 
 KEY_SEP = "__"
 
-# 按节填空的 system 提示(面向模型,故用英文;移植自 fill-doc.ts 的 FILL_SYSTEM):
+# 按节填空的 system 提示(中文给模型;移植自 fill-doc.ts 的 FILL_SYSTEM):
 # 只补空槽、不改框架、严格回 JSON。
-FILL_SYSTEM = """You fill in the blanks of ONE section of a report TEMPLATE, using the
-source text provided. The template's structure — titles, table headers, chart axes/series, stat
-labels, list/section layout — is FIXED. You do NOT change it; you only produce values for the
-listed blank slots.
+FILL_SYSTEM = """你为报告模板的「一个小节」填空,依据是提供的源文。模板的结构 —— 标题、表头、图表
+坐标轴/系列、指标卡标签、列表/小节布局 —— 是「固定」的。你不改它;你只为下面列出的空槽产出值。
 
-Rules:
-- Return ONE JSON object whose keys are EXACTLY the slot keys listed, nothing more, nothing less.
-- Each value MUST match the given schema type: a string; a string[][] (table rows); an array of
-  row objects (chart data) using EXACTLY the given field keys; or one of the allowed enum values.
-- For table rows, every row must have exactly the stated number of cells. For comparison criteria,
-  "values" must have exactly the stated number of entries (column order preserved).
-- A slot may carry guidance after an em-dash "—" in the list: follow it. It states what that slot's
-  content must be (topic, ordering, units, tone). Honor it together with the section's overall focus.
-- Fill each slot ONLY with content that matches THAT block's specific topic/role. Do NOT pad a slot
-  with unrelated figures pulled from elsewhere in the source. If the block's specific topic has no data
-  in the source, leave the slot empty (see below) rather than substituting unrelated content.
-- For list / bullet items, each item must be a self-contained phrase that keeps the label TOGETHER with
-  its value (e.g. "年度科研经费 18.6 亿元，同比增长 12.5%"), NEVER a bare number or rate stripped of
-  what it measures (not "18.6 亿元" alone, not "+12.5%" alone).
-- Write in the SAME LANGUAGE as the source text. Be concise and faithful to the source; never invent
-  facts. If the source GENUINELY lacks the data for a slot, return an EMPTY value for it — an empty
-  string "" (for table rows / chart data, an empty array []). Do NOT apologize, do NOT write
-  "not mentioned" / "无相关数据" / "暂无数据" / "数据未提及", and do NOT restate the label. Empty slots
-  are dropped automatically — leaving one empty is correct when the source has nothing for it.
-- A stat-card "value" is the FIGURE ONLY — a number with its unit or percent (e.g. "38600 人", "78%",
-  "18.6 亿元"); NEVER a sentence and NEVER a restatement of the label. Write "38600 人", not
-  "2025 年在校生总数 38600 人,较上年增长 4.3%". Put any period-over-period comparison in that card's
-  "change" slot as a signed rate ("+4.3%" / "−3.2%"), not inside the value.
-- Output ONLY the JSON object: no markdown code fences, no comments, no prose before or after."""
+规则:
+- 只返回一个 JSON 对象,其键「恰好」是下面列出的槽键,不多不少。
+- 每个值「必须」匹配给定的 schema 类型:一个 string;一个 string[][](表格行);一组行对象(图表
+  数据),用「恰好」给定的字段键;或某个允许的枚举值之一。
+- 表格行:每行必须恰好有所述数量的单元格。对比矩阵的 "values":必须恰好有所述数量的条目(保持列序)。
+- 槽位在清单里可能在破折号 "—" 后带一段指引:遵循它。它说明该槽的内容必须是什么(主题、排序、单位、
+  语气)。把它与整节的总体焦点一起遵守。
+- 每个槽「只」填与「该块特定主题/角色」相符的内容。不要从源文别处抓无关数字来凑某个槽。若该块的特定
+  主题在源文里没有数据,就把该槽留空(见下),而不是塞无关内容。
+- 列表/项目符号:每一项必须是自洽的短语,把标签与其数值「绑在一起」(如「年度科研经费 18.6 亿元,
+  同比增长 12.5%」),「绝不」是剥离了所度量对象的裸数字或裸比率(不是单独的「18.6 亿元」,也不是
+  单独的「+12.5%」)。
+- 用与源文「相同的语言」书写。简洁、忠于源文;绝不杜撰事实。若源文「确实」缺某个槽的数据,就为它返回
+  一个「空值」—— 空字符串 ""(表格行/图表数据则为空数组 [])。不要道歉,不要写「未提及」/「无相关
+  数据」/「暂无数据」/「数据未提及」,也不要复述标签。空槽会被自动丢弃 —— 源文对它无料时,留空才是对的。
+- 指标卡的 "value"「只」是数字本身 —— 一个带单位或百分号的数(如「38600 人」「78%」「18.6 亿元」);
+  「绝不」是一句话,「绝不」复述标签。写「38600 人」,而非「2025 年在校生总数 38600 人,较上年增长
+  4.3%」。把任何环比对比放进该卡的 "change" 槽,作为带符号的比率(「+4.3%」/「−3.2%」),而非塞进 value。
+- 只输出该 JSON 对象:没有 markdown 代码围栏、没有注释、前后没有散文。"""
 
 
 @dataclass
@@ -226,31 +219,31 @@ def build_fill_schema(plan: FillPlan) -> dict[str, Any]:
 def _block_summary(block: dict[str, Any]) -> str:
     f = block.get("fields") or {}
     title = f.get("title")
-    title_str = f' "{title}"' if isinstance(title, str) and title else ""
+    title_str = f"「{title}」" if isinstance(title, str) and title else ""
     btype = block.get("type")
     if btype == "callout":
-        return f"callout{title_str}"
+        return f"提示框{title_str}"
     if btype == "list":
-        return f"{'numbered' if f.get('ordered') else 'bulleted'} list{title_str}"
+        return f"{'有序' if f.get('ordered') else '无序'}列表{title_str}"
     if btype == "stat-card":
-        return f'stat-card "{f.get("label") or ""}"'
+        return f"指标卡「{f.get('label') or ''}」"
     if btype == "stat-card-group":
-        return "stat-card group"
+        return "指标卡组"
     if btype == "table":
         cols = ", ".join(str(h) for h in _read_arr(f.get("headers")))
-        return f"table{title_str}, columns [{cols}]"
+        return f"表格{title_str},列 [{cols}]"
     if btype == "comparison-matrix":
         cols = ", ".join(str(i) for i in _read_arr(f.get("items")))
-        return f"comparison{title_str}, columns [{cols}]"
+        return f"对比矩阵{title_str},列 [{cols}]"
     if btype == "timeline":
-        return f"timeline{title_str}"
+        return f"时间线{title_str}"
     if btype == "chart":
-        return f"{f.get('chartType') or 'bar'} chart{title_str}"
+        return f"{f.get('chartType') or 'bar'} 图表{title_str}"
     return str(btype)
 
 
 def _humanize_path(path: str) -> str:
-    out = re.sub(r"items\[(\d+)\]", lambda m: f"item {int(m.group(1)) + 1}", path)
+    out = re.sub(r"items\[(\d+)\]", lambda m: f"第 {int(m.group(1)) + 1} 项", path)
     return out.replace(".", " ")
 
 
@@ -274,22 +267,22 @@ def _humanize_slot(block: dict[str, Any], path: str) -> str:
     label = item.get("label") if isinstance(item, dict) else None
     if not isinstance(label, str) or not label.strip():
         return base
-    return f"item {idx + 1} ({label.strip()}) {_humanize_path(m.group(2))}"
+    return f"第 {idx + 1} 项 ({label.strip()}) {_humanize_path(m.group(2))}"
 
 
 def _slot_hint(spec: ValueSpec) -> str:
     if spec.kind == "enum":
-        return f" (one of: {' / '.join(spec.options)})"
+        return f"(取以下之一:{' / '.join(spec.options)})"
     if spec.kind == "rows":
-        return f" ({spec.columns} cells per row)"
+        return f"(每行 {spec.columns} 个单元格)"
     if spec.kind == "criteria":
-        return f" (name + {spec.columns} values)"
+        return f"(name + {spec.columns} 个 values)"
     if spec.kind == "chartData":
-        return f" (rows of {{{', '.join([spec.category, *spec.values])}}})"
+        return f"(行形如 {{{', '.join([spec.category, *spec.values])}}})"
     if spec.kind == "metric":
-        return ' (the figure ONLY — a number with its unit or %, e.g. "38600 人" / "78%"; not a sentence, do not repeat the label)'
+        return "(「只」要数字 —— 一个带单位或 % 的数,如「38600 人」/「78%」;不是一句话,不要复述标签)"
     if spec.kind == "change":
-        return ' (a SIGNED change rate, lead with + or −, e.g. "+4.3%" / "−3.2%")'
+        return "(带符号的变化率,以 + 或 − 开头,如「+4.3%」/「−3.2%」)"
     return ""
 
 
@@ -320,23 +313,23 @@ def build_fill_messages(
     schema: dict[str, Any],
     layout_first: bool = False,
 ) -> list[dict[str, str]]:
-    lines = [f"Source text:\n{source_text.strip()}", "---"]
+    lines = [f"源文:\n{source_text.strip()}", "---"]
     if layout_first:
         # 布局优先:报告名 / 小节标题 / 注解 / 目录都还是样报主题口径(标题另在运行时按源文重生成),
         # 对新主题是错的上下文,一律不喂——填值只依据源文 + 已按源文重建的槽位框架。
-        lines.append("Fill ONLY this section.")
+        lines.append("只填充本节。")
     else:
-        focus = f'"{section.get("title")}"' if section.get("title") else "this section"
-        intent = f" (about: {section.get('annotation')})" if section.get("annotation") else ""
-        toc = f"Report sections: {' / '.join(toc_titles)}\n" if toc_titles else ""
-        lines.append(f'Report: "{report_title}"')
-        lines.append(f"{toc}Fill ONLY the section {focus}{intent}.")
+        focus = f"「{section.get('title')}」" if section.get("title") else "本节"
+        intent = f"(主题:{section.get('annotation')})" if section.get("annotation") else ""
+        toc = f"报告各节:{' / '.join(toc_titles)}\n" if toc_titles else ""
+        lines.append(f"报告:「{report_title}」")
+        lines.append(f"{toc}只填充{focus}{intent}这一节。")
     lines += [
         "",
-        "Slots to fill:",
+        "待填槽位:",
         describe_section(section, plan),
         "",
-        "Return ONE JSON object with EXACTLY these keys and matching types:",
+        "返回一个 JSON 对象,键「恰好」是这些、类型匹配:",
         json.dumps(schema, ensure_ascii=False),
     ]
     return [
@@ -350,16 +343,14 @@ def build_fill_messages(
 # ============================================================
 
 # 只产标题、跟随源语言、忠于源文、严格回 JSON。
-TITLE_SYSTEM = """You write the TITLE of a report, from the source text provided.
+TITLE_SYSTEM = """你根据提供的源文,写出一篇报告的「标题」。
 
-Rules:
-- Return ONE JSON object: {"title": string} — nothing else.
-- The title is a short noun phrase naming the report's subject and kind (a few words), NOT a
-  sentence and NOT a restatement of the whole report.
-- Write in the SAME LANGUAGE as the source text. Be faithful to the source; never invent a subject
-  the source does not support.
-- If guidance is provided, follow it.
-- Output ONLY the JSON object: no markdown code fences, no comments, no prose."""
+规则:
+- 返回一个 JSON 对象:{"title": string} —— 别的什么都不要。
+- 标题是一个简短的名词短语,点明报告的主题与类型(几个字),不是一句话,也不是对全文的复述。
+- 用与源文「相同的语言」书写。忠于源文;绝不杜撰源文不支持的主题。
+- 若提供了指引,遵循它。
+- 只输出该 JSON 对象:没有 markdown 代码围栏、没有注释、没有散文。"""
 
 
 def build_title_messages(
@@ -369,15 +360,15 @@ def build_title_messages(
     toc_titles: list[str],
 ) -> list[dict[str, str]]:
     """报告标题(模型态)单调一次的消息:源料 + 可选 guidance + 章节目录 → {"title": "..."}。"""
-    guide = f"\nGuidance: {hint.strip()}" if hint.strip() else ""
-    toc = f"\nReport sections: {' / '.join(toc_titles)}" if toc_titles else ""
+    guide = f"\n指引:{hint.strip()}" if hint.strip() else ""
+    toc = f"\n报告各节:{' / '.join(toc_titles)}" if toc_titles else ""
     user = "\n".join(
         [
-            f"Source text:\n{source_text.strip()}",
+            f"源文:\n{source_text.strip()}",
             "---",
-            f"Write the report title.{guide}{toc}",
+            f"写出报告标题。{guide}{toc}",
             "",
-            'Return ONE JSON object: {"title": "..."}',
+            '返回一个 JSON 对象:{"title": "..."}',
         ]
     )
     return [
@@ -391,19 +382,16 @@ def build_title_messages(
 # ============================================================
 
 # 把模板现标题当「角色」,按源文逐节重命名;同序同量,严格回 JSON。
-SECTION_TITLES_SYSTEM = """You re-title the sections of a report TEMPLATE for a NEW subject, using the
-source text. You are given the template's current section titles IN ORDER — treat each as the ROLE of
-that section (e.g. an overview, a scale/metrics section, an outlook). Produce a NEW title for each that
-describes what THAT section becomes for THIS source.
+SECTION_TITLES_SYSTEM = """你为一个「新主题」重写报告模板各小节的标题,依据是源文。给你的是模板当前
+各小节标题(「按顺序」)—— 把每个都当作那一节的「角色」(如概览、规模/指标节、展望节)。为每个产出一个
+「新」标题,描述该节对「本」源文而言变成了什么。
 
-Rules:
-- Return ONE JSON object: {"titles": [string, ...]} — exactly one title per input, in the SAME ORDER.
-- Each title is a short noun phrase (a few words), not a sentence.
-- Do NOT include any section number or ordinal prefix (e.g. "一、", "1.", "（一）", "Part 1") — output
-  the bare title only.
-- Write in the SAME LANGUAGE as the source text. Be faithful to the source; never invent a subject the
-  source does not support.
-- Output ONLY the JSON object: no markdown code fences, no comments, no prose."""
+规则:
+- 返回一个 JSON 对象:{"titles": [string, ...]} —— 每个输入恰好一个标题,「顺序相同」。
+- 每个标题是简短的名词短语(几个字),不是一句话。
+- 「不要」带任何小节编号或序号前缀(如「一、」「1.」「(一)」「Part 1」)—— 只输出裸标题。
+- 用与源文「相同的语言」书写。忠于源文;绝不杜撰源文不支持的主题。
+- 只输出该 JSON 对象:没有 markdown 代码围栏、没有注释、没有散文。"""
 
 
 def build_section_titles_messages(
@@ -414,15 +402,15 @@ def build_section_titles_messages(
 ) -> list[dict[str, str]]:
     """小节标题(模型态)批量一调的消息:现标题(当角色)+ 源料 → {"titles":[...]}(同序同量)。"""
     listing = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(current_titles))
-    head = f"Report: {report_title.strip()}\n\n" if report_title.strip() else ""
+    head = f"报告:{report_title.strip()}\n\n" if report_title.strip() else ""
     user = "\n".join(
         [
-            f"Source text:\n{source_text.strip()}",
+            f"源文:\n{source_text.strip()}",
             "---",
-            head + "Current section titles (one per section, in order) — re-title each for the source above:",
+            head + "当前各小节标题(每节一个,按顺序)—— 为上面的源文逐个重写:",
             listing,
             "",
-            f'Return ONE JSON object {{"titles": [...]}} with exactly {len(current_titles)} titles, in the same order.',
+            f'返回一个 JSON 对象 {{"titles": [...]}},恰好 {len(current_titles)} 个标题,顺序相同。',
         ]
     )
     return [

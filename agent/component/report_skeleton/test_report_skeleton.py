@@ -267,8 +267,8 @@ def test_expand_layout_first_uses_source_derive_prompt_and_stamps_flag():
     res = asyncio.run(expand_open_regions(skel, "文旅源文", call_llm))
     assert res.skeleton["layoutFirst"] is True  # 探测并盖回信号
     user = calls[0][1]["content"]
-    assert "NEW subject" in user  # 布局优先源文重建提示词
-    assert "Author's instruction" not in user  # 不是遵循 brief 的 build_region_messages
+    assert "为新主题" in user  # 布局优先源文重建提示词
+    assert "作者对本生成区的指令" not in user  # 不是遵循 brief 的 build_region_messages
 
 
 def test_expand_layout_first_empty_region_drops_without_error():
@@ -352,8 +352,8 @@ def test_layout_first_prompts_demand_source_language_hints():
     # hint 跟随源文语言(中文源→中文 hint),否则生成区在设计器里全是英文。
     section_sys = build_layout_first_section_messages("报告正文", {"title": "概览", "intent": "recap"})[0]["content"]
     fallback_sys = build_layout_first_skeleton_messages("报告正文")[0]["content"]
-    assert "SAME LANGUAGE" in section_sys
-    assert "SAME LANGUAGE" in fallback_sys
+    assert "与源文相同的语言" in section_sys
+    assert "与源文相同的语言" in fallback_sys
 
 
 def test_generate_section_parse_failure_skipped():
@@ -395,7 +395,7 @@ def test_expand_then_fill_composition():
 
     async def call_llm(messages):
         user = messages[-1]["content"]
-        if "Build ONLY this region" in user:  # 展开调用
+        if "本区域的块" in user:  # 展开调用
             return '{"blocks":[{"type":"stat-card","label":"Revenue","hint":"total revenue"}]}'
         # 填值调用:槽键含动态 block id,从消息里抓出来再回填
         m = re.search(r"blk-[0-9a-f]+__value", user)

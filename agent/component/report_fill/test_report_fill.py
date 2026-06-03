@@ -224,10 +224,10 @@ def test_describe_section_surfaces_group_item_labels():
         ],
     }
     text = describe_section(section, collect_fill_plan(section))
-    assert "item 1 (营收) value" in text
-    assert "item 1 (营收) change" in text
-    assert "item 2 (流失率) value" in text
-    assert "item 1 value" not in text  # 不再是裸位置名
+    assert "第 1 项 (营收) value" in text
+    assert "第 1 项 (营收) change" in text
+    assert "第 2 项 (流失率) value" in text
+    assert "第 1 项 value" not in text  # 不再是裸位置名
 
 
 # ----------------------------------------------------------------------------
@@ -413,15 +413,15 @@ def test_build_fill_messages_layout_first_drops_sample_context():
         schema=build_fill_schema(plan),
     )
     lf = build_fill_messages(**common, layout_first=True)[1]["content"]
-    assert "Fill ONLY this section." in lf
+    assert "只填充本节。" in lf
     assert "文旅源文正文" in lf  # 源文仍在
     for leaked in ("学校概况", "学校概况与办学定位", "北辰大学发展报告", "办学规模"):
         assert leaked not in lf
 
     base = build_fill_messages(**common)[1]["content"]  # 非布局优先:照旧带上整节口径
-    assert 'Report: "北辰大学发展报告"' in base
-    assert "(about: 学校概况与办学定位)" in base
-    assert "Report sections: 学校概况 / 办学规模" in base
+    assert "报告:「北辰大学发展报告」" in base
+    assert "(主题:学校概况与办学定位)" in base
+    assert "报告各节:学校概况 / 办学规模" in base
 
 
 def test_layout_first_shrink_drops_empty_blocks_and_sections():
