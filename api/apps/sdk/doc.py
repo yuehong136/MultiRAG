@@ -36,6 +36,7 @@ from common import settings
 from common.metadata_utils import meta_filter, convert_conditions
 from common.constants import LLMType, TaskStatus, RetCode
 from common.string_utils import remove_redundant_spaces
+from common.tag_feature_utils import validate_tag_features
 
 MAXIMUM_OF_UPLOADING_FILES = 256
 
@@ -138,7 +139,7 @@ class AddChunkRequest(BaseModel):
     content: str
     important_keywords: list[str] = Field(default_factory=list)
     tag_kwd: list[str] = Field(default_factory=list)
-    tag_feas: dict = Field(default_factory=dict)
+    tag_feas: Any = Field(default_factory=dict)
     image_base64: str | None = None
 
 
@@ -147,7 +148,7 @@ class UpdateChunkRequest(BaseModel):
     important_keywords: list[str] | None = None
     available: bool | None = None
     tag_kwd: list[str] | None = None
-    tag_feas: dict | None = None
+    tag_feas: Any | None = None
 
 
 class DeleteChunksRequest(BaseModel):
@@ -1173,7 +1174,10 @@ def add_chunk(
         if "tag_kwd" in req:
             chunk_data["tag_kwd"] = req["tag_kwd"]
         if "tag_feas" in req:
-            chunk_data["tag_feas"] = req["tag_feas"]
+            try:
+                chunk_data["tag_feas"] = validate_tag_features(req["tag_feas"])
+            except ValueError as exc:
+                return get_error_data_result(retmsg=f"`tag_feas` {exc}")
         image_base64 = req.get("image_base64")
         if image_base64:
             chunk_data["img_id"] = f"{dataset_id}-{chunk_id}"
@@ -1318,7 +1322,10 @@ def update_chunk(
     if "tag_kwd" in req:
         chunk_data["tag_kwd"] = req["tag_kwd"]
     if "tag_feas" in req:
-        chunk_data["tag_feas"] = req["tag_feas"]
+        try:
+            chunk_data["tag_feas"] = validate_tag_features(req["tag_feas"])
+        except ValueError as exc:
+            return get_error_data_result(retmsg=f"`tag_feas` {exc}")
 
     # 更新修改时间
     chunk_data["update_time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")

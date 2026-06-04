@@ -32,6 +32,7 @@ from common.metadata_utils import apply_meta_data_filter
 from common.constants import RetCode, LLMType, ParserType, PAGERANK_FLD
 from common.misc_utils import thread_pool_exec
 from common.string_utils import remove_redundant_spaces
+from common.tag_feature_utils import validate_tag_features
 
 router = APIRouter()
 
@@ -51,8 +52,8 @@ class SetChunkRequest(BaseModel):
     important_kwd: list[str] | None = []
     question_kwd: list[str] | None = []
     available_int: int | None = None
-    tag_kwd: str | None = None
-    tag_feas: str | None = None
+    tag_kwd: Any | None = None
+    tag_feas: Any | None = None
     image_base64: str | None = None
     img_id: str | None = None
 
@@ -74,6 +75,8 @@ class CreateChunkRequest(BaseModel):
     content_with_weight: str
     question_kwd: list[str] | None = None
     important_kwd: list[str] | None = None
+    tag_kwd: list[str] | None = None
+    tag_feas: Any | None = None
     image_base64: str | None = None
 
 
@@ -697,7 +700,7 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
     | `question_kwd`        | `list[str]`  | 否   | 问题关键词列表；存在时以其内容替代正文参与向量计算。                          |
     | `available_int`       | `int`        | 否   | 可用性标记（如 `1` 启用、`0` 禁用）。                                        |
     | `tag_kwd`             | `string`     | 否   | 标签关键词，用于分类或过滤。                                                  |
-    | `tag_feas`            | `string`     | 否   | 标签特征值，与 `tag_kwd` 配合使用。                                           |
+    | `tag_feas`            | `object`     | 否   | 标签特征值，与 `tag_kwd` 配合使用，格式为 `{tag: score}`。                    |
     | `img_id`              | `string`     | 否   | 关联图片的存储路径，格式为 `{bucket}-{object_name}`，与 `image_base64` 配合使用。|
     | `image_base64`        | `string`     | 否   | Base64 编码的图片数据；仅当 `img_id` 格式合法（含 `-`）时才会写入对象存储。  |
 
@@ -774,10 +777,17 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
     d["question_tks"] = rag_tokenizer.tokenize("\n".join(question_kwd)) if question_kwd else ""
 
     if request.tag_kwd is not None:
+        if not isinstance(request.tag_kwd, list):
+            return get_data_error_result(retmsg="`tag_kwd` should be a list")
+        if not all(isinstance(t, str) for t in request.tag_kwd):
+            return get_data_error_result(retmsg="`tag_kwd` must be a list of strings")
         d["tag_kwd"] = request.tag_kwd
 
     if request.tag_feas is not None:
-        d["tag_feas"] = request.tag_feas
+        try:
+            d["tag_feas"] = validate_tag_features(request.tag_feas)
+        except ValueError as exc:
+            return get_data_error_result(retmsg=f"`tag_feas` {exc}")
 
     if request.available_int is not None:
         d["available_int"] = request.available_int
@@ -1293,8 +1303,17 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
     d["question_tks"] = rag_tokenizer.tokenize("\n".join(d["question_kwd"]))
     d["create_time"] = str(datetime.datetime.now()).replace("T", " ")[:19]
     d["create_timestamp_flt"] = datetime.datetime.now().timestamp()
-    if "tag_feas" in req:
-        d["tag_feas"] = req["tag_feas"]
+    if req.get("tag_kwd") is not None:
+        if not isinstance(req["tag_kwd"], list):
+            return get_data_error_result(retmsg="`tag_kwd` is required to be a list")
+        if not all(isinstance(t, str) for t in req["tag_kwd"]):
+            return get_data_error_result(retmsg="`tag_kwd` must be a list of strings")
+        d["tag_kwd"] = req["tag_kwd"]
+    if req.get("tag_feas") is not None:
+        try:
+            d["tag_feas"] = validate_tag_features(req["tag_feas"])
+        except ValueError as exc:
+            return get_data_error_result(retmsg=f"`tag_feas` {exc}")
 
     try:
         doc = DocumentService.get_by_id(db, req["doc_id"])

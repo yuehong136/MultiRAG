@@ -21,6 +21,7 @@ from common.string_utils import remove_redundant_spaces
 from common.float_utils import get_float
 from common.misc_utils import thread_pool_exec
 from common.constants import TAG_FLD, PAGERANK_FLD
+from common.tag_feature_utils import parse_tag_features
 
 
 def index_name(uid, kb_names=None):
@@ -564,26 +565,33 @@ class Dealer:
         pageranks = []
         for chunk_id in search_res.ids:
             pageranks.append(search_res.field[chunk_id].get(PAGERANK_FLD, 0))
-        pageranks = np.array(pageranks, dtype=float)
+        pageranks = np.nan_to_num(np.array(pageranks, dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
 
         if not query_rfea:
-            return np.array([0 for _ in range(len(search_res.ids))]) + pageranks
+            return pageranks
 
-        q_denor = np.sqrt(np.sum([s * s for t, s in query_rfea.items() if t != PAGERANK_FLD]))
+        query_tag_features = {t: s for t, s in query_rfea.items() if t != PAGERANK_FLD}
+        q_denor = np.sqrt(np.sum([s * s for s in query_tag_features.values()]))
+        if q_denor <= 0:
+            return pageranks
         for i in search_res.ids:
             nor, denor = 0, 0
             if not search_res.field[i].get(TAG_FLD):
                 rank_fea.append(0)
                 continue
-            for t, sc in eval(search_res.field[i].get(TAG_FLD, "{}")).items():
-                if t in query_rfea:
-                    nor += query_rfea[t] * sc
+            tag_features = parse_tag_features(search_res.field[i].get(TAG_FLD), allow_json_string=True, allow_python_literal=True)
+            if not tag_features:
+                rank_fea.append(0)
+                continue
+            for t, sc in tag_features.items():
+                if t in query_tag_features:
+                    nor += query_tag_features[t] * sc
                 denor += sc * sc
             if denor == 0:
                 rank_fea.append(0)
             else:
                 rank_fea.append(nor / np.sqrt(denor) / q_denor)
-        return np.array(rank_fea) * 10. + pageranks
+        return np.nan_to_num(np.array(rank_fea) * 10. + pageranks, nan=0.0, posinf=0.0, neginf=0.0)
 
     def rerank(self, sres, query, tkweight=0.3,
                vtweight=0.7, cfield="content_ltks",
