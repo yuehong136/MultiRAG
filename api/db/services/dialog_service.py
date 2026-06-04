@@ -689,9 +689,17 @@ def chat(dialog, messages, db, stream=True, **kwargs):
             yield ans
             return
 
+    param_keys = [p["key"] for p in prompt_config.get("parameters", [])]
+    # 防御性兜底：配了知识库且 system prompt 含 {knowledge}，但 parameters 缺 knowledge 时自动补回，
+    # 避免因 prompt_config 规范化遗漏（如导入应用、历史数据）导致知识检索被静默跳过。
+    if dialog.kb_ids and "knowledge" not in param_keys and "{knowledge}" in prompt_config.get("system", ""):
+        logging.warning("prompt_config['parameters'] is missing 'knowledge' entry despite kb_ids being set; auto-fixing.")
+        prompt_config.setdefault("parameters", []).append({"key": "knowledge", "optional": False})
+        param_keys.append("knowledge")
+
     # 处理提示配置中的参数，确保必要的参数存在
     # 遍历配置文件中定义的参数，为每个参数检查是否提供了相应的值
-    for p in prompt_config["parameters"]:
+    for p in prompt_config.get("parameters", []):
         # 跳过名为"knowledge"的参数，因为它在这个上下文中不被处理
         if p["key"] == "knowledge":
             continue
@@ -724,7 +732,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     knowledges = []
 
     # 检查prompt_config中是否包含"knowledge"参数，以决定是否进行知识检索
-    if "knowledge" in [p["key"] for p in prompt_config["parameters"]]:
+    if "knowledge" in param_keys:
         tenant_ids = list(set([kb.tenant_id for kb in kbs]))
         knowledges = []
         prompt_config_for_reasoning = prompt_config
@@ -1018,11 +1026,17 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
         else:
             logging.debug("SQL failed or returned no results, falling back to vector search")
 
-    param_keys = [p["key"] for p in prompt_config["parameters"]]
+    param_keys = [p["key"] for p in prompt_config.get("parameters", [])]
+    # 防御性兜底：配了知识库且 system prompt 含 {knowledge}，但 parameters 缺 knowledge 时自动补回，
+    # 避免因 prompt_config 规范化遗漏（如导入应用、历史数据）导致知识检索被静默跳过。
+    if dialog.kb_ids and "knowledge" not in param_keys and "{knowledge}" in prompt_config.get("system", ""):
+        logging.warning("prompt_config['parameters'] is missing 'knowledge' entry despite kb_ids being set; auto-fixing.")
+        prompt_config.setdefault("parameters", []).append({"key": "knowledge", "optional": False})
+        param_keys.append("knowledge")
     logging.debug(f"attachments={attachments}, param_keys={param_keys}, embd_mdl={embd_mdl}")
 
     # 处理提示配置中的参数，确保必要的参数存在
-    for p in prompt_config["parameters"]:
+    for p in prompt_config.get("parameters", []):
         if p["key"] == "knowledge":
             continue
         if p["key"] not in kwargs and not p["optional"]:
