@@ -206,6 +206,11 @@ pythonpath = [
     "."
 ]
 
+# 测试用例收集规则（与 pytest 默认一致，显式声明）
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
 markers = [
     "p0: critical priority test cases",
     "p1: high priority test cases",
@@ -214,4 +219,20 @@ markers = [
     "smoke: smoke test cases",
     "auth: authentication UI tests",
     "asyncio: mark test as async",
+    "integration: integration tests requiring external services (DB/Redis/vector store)",
+]
+
+# 运行参数（强制 marker 注册、精简 traceback、彩色输出）
+addopts = [
+    "--strict-markers",
+    "--tb=short",
+    "--color=yes",
+]
+
+# 屏蔽第三方库的弃用/用户告警噪音（beartype / pydantic / pkg_resources 等），
+# 保持测试输出聚焦真正的失败。注意：pytest.warns(...) 不受此影响，仍可断言告警。
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+    "ignore::UserWarning",
 ]

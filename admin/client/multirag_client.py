@@ -853,14 +853,15 @@ class MultiRAGClient:
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
-        response = self.http_client.request("POST", "kb/list", json_body={}, use_api_base=False, auth_kind="web")
+        # 迁移至 RESTful：GET /api/v1/datasets（page_size 放大以保留旧 kb/list 列全部的行为）
+        response = self.http_client.request("GET", "datasets?page_size=1000", use_api_base=True, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200:
             data = res_json.get("data", {})
             datasets = data.get("kbs", []) if isinstance(data, dict) else data
             self._print_table_simple(datasets)
         else:
-            print(f"Fail to list datasets, code: {res_json.get('retcode')}, message: {res_json.get('retmsg')}")
+            print(f"Fail to list datasets, code: {res_json.get('code', res_json.get('retcode'))}, message: {res_json.get('message', res_json.get('retmsg'))}")
 
     def list_user_agents(self, command: dict):
         if self.server_type != "user":
@@ -1059,15 +1060,17 @@ class MultiRAGClient:
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
+        # 迁移至 RESTful：POST /api/v1/datasets（字段对齐新接口：embedding_model / chunk_method）
         payload = {
             "name": command["dataset_name"],
-            "embd_id": command["embedding"],
+            "embedding_model": command["embedding"],
         }
         if "parser_type" in command:
-            payload["parser_id"] = command["parser_type"]
+            payload["chunk_method"] = command["parser_type"]
         if "pipeline" in command:
-            payload["pipeline_id"] = command["pipeline"]
-        response = self.http_client.request("POST", "kb/create", json_body=payload, use_api_base=False, auth_kind="web")
+            # CreateDatasetRequest 暂无 pipeline_id 字段，经 ext 透传（ext 会并入 create_with_name）
+            payload["ext"] = {"pipeline_id": command["pipeline"]}
+        response = self.http_client.request("POST", "datasets", json_body=payload, use_api_base=True, auth_kind="web")
         res_json = response.json()
         code = res_json.get("code", res_json.get("retcode", -1))
         if response.status_code == 200 and code == 0:
@@ -1084,8 +1087,9 @@ class MultiRAGClient:
         dataset_id = self._get_dataset_id(dataset_name)
         if dataset_id is None:
             return
-        payload = {"kb_id": dataset_id}
-        response = self.http_client.request("POST", "kb/rm", json_body=payload, use_api_base=False, auth_kind="web")
+        # 迁移至 RESTful：DELETE /api/v1/datasets（入参由 {kb_id} 改为 {ids:[...]}）
+        payload = {"ids": [dataset_id]}
+        response = self.http_client.request("DELETE", "datasets", json_body=payload, use_api_base=True, auth_kind="web")
         res_json = response.json()
         code = res_json.get("code", res_json.get("retcode", -1))
         if response.status_code == 200 and code == 0:
@@ -1401,14 +1405,17 @@ class MultiRAGClient:
     # Private helper methods
 
     def _get_dataset_id(self, dataset_name: str) -> str | None:
-        response = self.http_client.request("POST", "kb/list", json_body={}, use_api_base=False, auth_kind="web")
+        # 迁移至 RESTful：GET /api/v1/datasets?name=<精确名>。
+        # 用服务端 name 精确过滤而非"列全部再循环"，与数据集总数无关，避免分页漏查、也无需魔法上限。
+        encoded_name = urllib.parse.quote(dataset_name, safe="")
+        response = self.http_client.request("GET", f"datasets?name={encoded_name}", use_api_base=True, auth_kind="web")
         res_json = response.json()
         if response.status_code != 200:
             msg = res_json.get("message", res_json.get("retmsg", ""))
             print(f"Fail to list datasets: {msg}")
             return None
         data = res_json.get("data", [])
-        # data may be list directly or {"kbs": [...]}
+        # data 可能是 list，也可能是 {"kbs": [...]}（兼容旧形态）
         if isinstance(data, dict):
             data = data.get("kbs", [])
         for dataset in data:

@@ -109,7 +109,9 @@ class UpdateMetadataSettingRequest(BaseModel):
     enable_metadata: bool = True
 
 
-@router.post('/create', summary="创建知识库", response_description="成功创建知识库")
+# @deprecated —— 已迁移至 RESTful 端点 POST /api/v1/datasets（restful_apis/dataset_api.py）。
+# 保留原因：生产环境前端仍在调用；待前端迁移完成后于下一版本删除/注释。
+@router.post('/create', summary="创建知识库", response_description="成功创建知识库", deprecated=True)
 def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req_data = request.model_dump()
     dataset_name = req_data["name"]
@@ -169,7 +171,9 @@ def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), u
         return server_error_response(e)
 
 
-@router.post('/update', summary="更新知识库", response_description="成功更新知识库")
+# @deprecated —— 已迁移至 RESTful 端点 PUT /api/v1/datasets/{dataset_id}（restful_apis/dataset_api.py）。
+# 保留原因：生产环境前端仍在调用；待前端迁移完成后于下一版本删除/注释。
+@router.post('/update', summary="更新知识库", response_description="成功更新知识库", deprecated=True)
 def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req_data = request.model_dump()
     if not isinstance(req_data["name"], str):
@@ -361,7 +365,9 @@ def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
         return server_error_response(e)
 
 
-@router.post('/list', summary="列出知识库", response_description="成功列出知识库")
+# @deprecated —— 已迁移至 RESTful 端点 GET /api/v1/datasets（restful_apis/dataset_api.py）。
+# 保留原因：生产环境前端仍在调用；待前端迁移完成后于下一版本删除/注释。
+@router.post('/list', summary="列出知识库", response_description="成功列出知识库", deprecated=True)
 def list_kbs(
         request_body: ListKbsRequest,
         page: int = 0,
@@ -411,7 +417,9 @@ def list_kbs(
         return server_error_response(e)
 
 
-@router.post('/rm', summary="删除知识库", response_description="成功删除知识库")
+# @deprecated —— 已迁移至 RESTful 端点 DELETE /api/v1/datasets（restful_apis/dataset_api.py）。
+# 保留原因：生产环境前端仍在调用；待前端迁移完成后于下一版本删除/注释。
+@router.post('/rm', summary="删除知识库", response_description="成功删除知识库", deprecated=True)
 def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     删除知识库
@@ -563,7 +571,9 @@ def rename_tags(kb_id: str, request: RenameTagRequest, db: Session = Depends(get
     return get_json_result(data=True)
 
 
-@router.get("/{kb_id}/knowledge_graph", summary="获取知识图谱")
+# @deprecated —— 已迁移至 RESTful 端点 GET /api/v1/datasets/{dataset_id}/knowledge_graph（restful_apis/dataset_api.py）。
+# 保留原因：生产环境前端仍在调用；待前端迁移完成后于下一版本删除/注释。
+@router.get("/{kb_id}/knowledge_graph", summary="获取知识图谱", deprecated=True)
 async def knowledge_graph(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     if not KnowledgebaseService.accessible(db, kb_id, user.id):
         return get_json_result(
@@ -601,7 +611,9 @@ async def knowledge_graph(kb_id: str, db: Session = Depends(get_db), user=Depend
     return get_json_result(data=obj)
 
 
-@router.delete('/{kb_id}/knowledge_graph', summary="删除知识图谱")
+# @deprecated —— 已迁移至 RESTful 端点 DELETE /api/v1/datasets/{dataset_id}/knowledge_graph（restful_apis/dataset_api.py）。
+# 保留原因：生产环境前端仍在调用；待前端迁移完成后于下一版本删除/注释。
+@router.delete('/{kb_id}/knowledge_graph', summary="删除知识图谱", deprecated=True)
 def delete_knowledge_graph(kb_id, db: Session = Depends(get_db), user=Depends(manager)):
     if not KnowledgebaseService.accessible(db, kb_id, user.id):
         return get_json_result(
@@ -1005,7 +1017,9 @@ def pipeline_log_detail(
     return get_json_result(data=log.to_dict())
 
 
-@router.post("/run_graphrag", summary="运行GraphRAG", response_description="成功启动GraphRAG任务")
+# @deprecated —— 已迁移至 RESTful 端点 POST /api/v1/datasets/{dataset_id}/run_graphrag（restful_apis/dataset_api.py）。
+# 保留原因：生产环境前端仍在调用；待前端迁移完成后于下一版本删除/注释。
+@router.post("/run_graphrag", summary="运行GraphRAG", response_description="成功启动GraphRAG任务", deprecated=True)
 def run_graphrag(
         request: RunGraphRagRequest,
         db: Session = Depends(get_db),
@@ -1114,7 +1128,9 @@ def run_graphrag(
     return get_json_result(data={"graphrag_task_id": task_id})
 
 
-@router.get("/trace_graphrag", summary="追踪GraphRAG任务", response_description="成功获取GraphRAG任务状态")
+# @deprecated —— 已迁移至 RESTful 端点 GET /api/v1/datasets/{dataset_id}/trace_graphrag（restful_apis/dataset_api.py）。
+# 保留原因：生产环境前端仍在调用；待前端迁移完成后于下一版本删除/注释。
+@router.get("/trace_graphrag", summary="追踪GraphRAG任务", response_description="成功获取GraphRAG任务状态", deprecated=True)
 def trace_graphrag(
         kb_id: str = Query(..., description="知识库ID"),
         db: Session = Depends(get_db),
@@ -1204,7 +1220,9 @@ def trace_graphrag(
     return get_json_result(data=task.to_dict())
 
 
-@router.post("/run_raptor", summary="运行RAPTOR", response_description="成功启动RAPTOR任务")
+# @deprecated —— 已迁移至 RESTful 端点 POST /api/v1/datasets/{dataset_id}/run_raptor（restful_apis/dataset_api.py）。
+# 保留原因：生产环境前端仍在调用；待前端迁移完成后于下一版本删除/注释。
+@router.post("/run_raptor", summary="运行RAPTOR", response_description="成功启动RAPTOR任务", deprecated=True)
 def run_raptor(
         request: RunRaptorRequest,
         db: Session = Depends(get_db),
@@ -1315,7 +1333,9 @@ def run_raptor(
     return get_json_result(data={"raptor_task_id": task_id})
 
 
-@router.get("/trace_raptor", summary="追踪RAPTOR任务", response_description="成功获取RAPTOR任务状态")
+# @deprecated —— 已迁移至 RESTful 端点 GET /api/v1/datasets/{dataset_id}/trace_raptor（restful_apis/dataset_api.py）。
+# 保留原因：生产环境前端仍在调用；待前端迁移完成后于下一版本删除/注释。
+@router.get("/trace_raptor", summary="追踪RAPTOR任务", response_description="成功获取RAPTOR任务状态", deprecated=True)
 def trace_raptor(
         kb_id: str = Query(..., description="知识库ID"),
         db: Session = Depends(get_db),

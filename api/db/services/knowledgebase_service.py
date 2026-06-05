@@ -479,7 +479,8 @@ class KnowledgebaseService(CommonService):
         return True, payload
 
     @classmethod
-    def get_list(cls, db: Session, joined_tenant_ids, user_id, page_number, items_per_page, orderby, desc, id, name):
+    def get_list(cls, db: Session, joined_tenant_ids, user_id, page_number, items_per_page, orderby, desc, id, name,
+                 keywords=None, parser_id=None):
         """
         # Get list of datasets with filtering and pagination
         # Args:
@@ -491,6 +492,8 @@ class KnowledgebaseService(CommonService):
         #     desc: Boolean indicating descending order
         #     id: Optional ID filter
         #     name: Optional name filter
+        #     keywords: Optional fuzzy match on dataset name
+        #     parser_id: Optional chunk method (parser_id) filter
         # Returns:
         #     Tuple of (List of datasets, Total count of datasets)
         """
@@ -506,6 +509,10 @@ class KnowledgebaseService(CommonService):
             query = query.filter(cls.model.id == id)
         if name:
             query = query.filter(cls.model.name == name)
+        if parser_id:
+            query = query.filter(cls.model.parser_id == parser_id)
+        if keywords:
+            query = query.filter(func.lower(cls.model.name).ilike(f"%{keywords.lower()}%"))
 
         # 根据desc参数确定排序方式
         if desc:

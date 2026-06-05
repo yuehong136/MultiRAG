@@ -16,7 +16,7 @@ from datetime import datetime
 from functools import wraps
 from typing import Any, Callable
 
-from fastapi import Request, Response, Depends
+from fastapi import Request, Depends
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.exc import OperationalError
@@ -408,6 +408,55 @@ def beta_token_required(request: Request, db: Session = Depends(get_db)) -> str:
     return objs[0].tenant_id
 
 
+def current_tenant_id(request: Request, db: Session = Depends(get_db)) -> str:
+    """统一鉴权依赖：同时接受 web 会话 JWT 与 SDK API-key，返回 tenant_id。
+
+    对标 ragflow ``api/apps/__init__.py:_load_user`` 的统一加载思路：
+    先按 web 会话 token(JWT) 解析（复用 ``LoginManager`` 的解码 + ``user_loader``），
+    失败再 fallback 到 SDK API-key（``APIToken`` 表）。这样挂在 ``/api/v1`` 下的
+    RESTful 端点既能服务 web 前端（会话登录），又能服务 SDK（API-key），向后兼容。
+
+    Args:
+        request: FastAPI Request 对象
+        db: 数据库会话
+
+    Returns:
+        str: 租户 ID（tenant_id）
+
+    Raises:
+        SDKAuthError: 两种凭证均无法通过校验
+    """
+    authorization_str = request.headers.get("Authorization")
+    if not authorization_str:
+        raise SDKAuthError("`Authorization` can't be empty")
+
+    parts = authorization_str.split()
+    token = parts[1] if len(parts) >= 2 else parts[0]
+
+    # 1) web 会话 JWT：复用 LoginManager 的解码逻辑与 user_loader
+    #    （延迟导入避免与 api.apps 的循环依赖）
+    from api.apps import manager, load_user
+
+    try:
+        payload = manager._get_payload(token)
+        email = payload.get("sub")
+        if email:
+            user = load_user(email, db)
+            if user is not None:
+                return user.id
+    except Exception:
+        # 非 web JWT（如 SDK API-key）会在此抛出，转入 fallback
+        pass
+
+    # 2) fallback：SDK API-key
+    if os.environ.get("DISABLE_SDK"):
+        raise SDKAuthError("SDK API is disabled.")
+    objs = APIToken.query(db, token=token)
+    if not objs:
+        raise SDKAuthError("Authentication error: invalid credentials!")
+    return objs[0].tenant_id
+
+
 # def token_required(func):
 #     @wraps(func)
 #     def decorated_function(*args, **kwargs):
@@ -666,7 +715,7 @@ def check_duplicate_ids(ids, id_type="item"):
     return list(set(ids)), duplicate_messages
 
 
-def verify_embedding_availability(db: Session, embd_id: str, tenant_id: str) -> tuple[bool, Response | None]:
+def verify_embedding_availability(db: Session, embd_id: str, tenant_id: str) -> tuple[bool, str | None]:
     """
     Verifies availability of an embedding model for a specific tenant.
 
@@ -681,24 +730,24 @@ def verify_embedding_availability(db: Session, embd_id: str, tenant_id: str) -> 
         tenant_id (str): Tenant identifier for access control
 
     Returns:
-        tuple[bool, Response | None]:
+        tuple[bool, str | None]:
         - First element (bool):
             - True: Model is available and authorized
             - False: Validation failed
         - Second element contains:
             - None on success
-            - Error detail dict on failure
+            - Error message string on failure (service 层友好，不耦合 HTTP 响应)
 
     Raises:
         ValueError: When model identifier format is invalid
         OperationalError: When database connection fails (auto-handled)
 
     Examples:
-        >>> verify_embedding_availability("text-embedding@openai", "tenant_123")
+        >>> verify_embedding_availability(db, "text-embedding@openai", "tenant_123")
         (True, None)
 
-        >>> verify_embedding_availability("invalid_model", "tenant_123")
-        (False, {'code': 101, 'message': "Unsupported model: <invalid_model>"})
+        >>> verify_embedding_availability(db, "invalid_model", "tenant_123")
+        (False, "Unsupported model: <invalid_model>")
     """
     from api.db.services.llm_service import LLMService
     from api.db.services.tenant_llm_service import TenantLLMService
@@ -714,13 +763,13 @@ def verify_embedding_availability(db: Session, embd_id: str, tenant_id: str) -> 
 
         is_builtin_model = llm_factory=='Builtin'
         if not (is_builtin_model or is_tenant_model or in_llm_service):
-            return False, get_error_argument_result(f"Unsupported model: <{embd_id}>")
+            return False, f"Unsupported model: <{embd_id}>"
 
         if not (is_builtin_model or is_tenant_model):
-            return False, get_error_argument_result(f"Unauthorized model: <{embd_id}>")
+            return False, f"Unauthorized model: <{embd_id}>"
     except OperationalError as e:
         logging.exception(e)
-        return False, get_error_data_result(retmsg="Database operation failed")
+        return False, "Database operation failed"
 
     return True, None
 

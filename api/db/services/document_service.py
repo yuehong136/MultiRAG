@@ -65,12 +65,16 @@ class DocumentService(CommonService):
 
     @classmethod
     def get_tenant_embd_id(cls, db: Session, doc_id: str) -> int | None:
-        from api.db.db_models import Knowledgebase
-        stmt = select(Knowledgebase.tenant_embd_id).join(
-            Knowledgebase, Knowledgebase.id == cls.model.kb_id
-        ).where(cls.model.id == doc_id)
-        result = db.execute(stmt).scalar_one_or_none()
-        return result
+        stmt = (
+            select(Knowledgebase.tenant_embd_id)
+            .select_from(cls.model)
+            .join(Knowledgebase, Knowledgebase.id == cls.model.kb_id)
+            .where(
+                cls.model.id == doc_id,
+                Knowledgebase.status == StatusEnum.VALID.value,
+            )
+        )
+        return db.execute(stmt).scalar_one_or_none()
 
     @staticmethod
     def _normalize_graph_source_ids(graph_source: Any) -> list[str]:
@@ -2548,11 +2552,14 @@ class DocumentService(CommonService):
 
     @classmethod
     def get_embd_id(cls, db: Session, doc_id: str) -> str | None:
-        stmt = select(Knowledgebase.embd_id).join(
-            cls.model, cls.model.kb_id == Knowledgebase.id
-        ).where(
-            cls.model.id == doc_id,
-            Knowledgebase.status == StatusEnum.VALID.value,
+        stmt = (
+            select(Knowledgebase.embd_id)
+            .select_from(cls.model)
+            .join(Knowledgebase, Knowledgebase.id == cls.model.kb_id)
+            .where(
+                cls.model.id == doc_id,
+                Knowledgebase.status == StatusEnum.VALID.value,
+            )
         )
         return db.execute(stmt).scalar_one_or_none()
 
