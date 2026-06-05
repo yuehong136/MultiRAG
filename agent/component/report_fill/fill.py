@@ -10,6 +10,7 @@ merge_skeleton 回骨架。某节失败跳过,保其余。
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import re
@@ -34,6 +35,30 @@ from .skeleton import dedupe_sections, drop_admission_blocks, is_no_content_titl
 # 调一次 LLM 返回累计文本;取变量真值。两者皆注入。
 CallLLM = Callable[[list[dict[str, str]]], Awaitable[str]]
 ResolveRef = Callable[[str], Any]
+
+# 逐节填值的默认并发上限(同时在飞的 LLM 调用数)。html_report 节点可配置覆盖;
+# <=0 在 fill_skeleton 内退化为串行。
+DEFAULT_FILL_CONCURRENCY = 4
+
+
+def resolve_fill_concurrency(parallel_fill: bool, fill_concurrency: int, env_ceiling: str | None = None) -> int:
+    """节点配置 →(展开/填值共用的)并发上限。纯函数,零 IO,便于单测。
+
+    - `parallel_fill` 关 → 1(逐节串行);开 → max(1, fill_concurrency)。
+    - `fill_concurrency` 非整数 → 回落 DEFAULT_FILL_CONCURRENCY(并行时)。
+    - `env_ceiling`(部署级 REPORT_FILL_CONCURRENCY)是可选**硬上限**:设了则只向下钳,
+      绝不反超节点配置;非整数值忽略。节点配置为主,env 只能再封顶。
+    """
+    try:
+        limit = max(1, int(fill_concurrency)) if parallel_fill else 1
+    except (TypeError, ValueError):
+        limit = DEFAULT_FILL_CONCURRENCY if parallel_fill else 1
+    if env_ceiling:
+        try:
+            limit = min(limit, max(1, int(env_ceiling)))
+        except (TypeError, ValueError):
+            pass
+    return limit
 
 
 class FillError(Exception):
@@ -263,8 +288,19 @@ async def fill_skeleton(
     resolve_ref: ResolveRef,
     call_llm: CallLLM,
     on_progress: Callable[[int, int], None] | None = None,
+    concurrency: int = DEFAULT_FILL_CONCURRENCY,
 ) -> FillResult:
-    """骨架 + 源料 → ReportSchema:变量全局解析 + 逐节 LLM 填空 + 确定性 merge。"""
+    """骨架 + 源料 → ReportSchema:变量全局解析 + 并发逐节 LLM 填空 + 确定性 merge。
+
+    逐节填值各节互不依赖(prompt 只喂全文源料 + 本节框架,写入按 block_id 互不覆盖),
+    小节标题批量调与报告标题调也只依赖源料/骨架——故这三组 LLM 工作经一个并发上限
+    (`concurrency`,钳到 >=1;<=0 退化为串行)的单个 `asyncio.gather` 一起跑,所有
+    LLM 调用共享同一信号量。各节 `try/except` 独立降级(失败跳过、保其余);`gather`
+    按参数顺序回收结果(末两位恒为标题结果),merge 顺序确定、与并发完成序无关。
+
+    `on_progress(done, total_llm)`:每填完一节回调一次(完成计数,非段序——并发下段序
+    无意义)。
+    """
     filled: dict[str, dict[str, Any]] = {}
     _merge_into(filled, _resolve_variable_fills(skeleton, resolve_ref))
 
@@ -272,40 +308,74 @@ async def fill_skeleton(
     layout_first = bool(skeleton.get("layoutFirst"))
     toc_titles = [s.get("title") for s in sections if s.get("title")]
     errors: list[FillError] = []
-    llm_sections = 0
-    ok_sections = 0
-    total = len(sections)
 
-    for i, section in enumerate(sections):
-        if on_progress:
-            on_progress(i + 1, total)
+    # 只有「有 llm 空槽」的节进 LLM;全静态/变量的节跳过(不计 llm_sections)。
+    llm_targets: list[tuple[dict[str, Any], FillPlan]] = []
+    for section in sections:
         plan = collect_fill_plan(section)
-        if not plan.items:  # 全静态/变量的节不调 LLM
-            continue
-        llm_sections += 1
-        messages = build_fill_messages(
-            report_title=skeleton.get("title") or "",
-            section=section,
-            source_text=source_text,
-            toc_titles=toc_titles,
-            plan=plan,
-            schema=build_fill_schema(plan),
-            layout_first=layout_first,
-        )
-        try:
-            text = await call_llm(messages)
-            _merge_into(filled, _apply_fill_json(text, plan))
-            ok_sections += 1
-        except FillError as err:
-            errors.append(err)
-        except Exception as err:  # noqa: BLE001 - 任何调用失败都降级为本节失败,保其余
-            errors.append(FillError(str(err)))
+        if plan.items:
+            llm_targets.append((section, plan))
+    llm_sections = len(llm_targets)
 
-    # 标题(模型态):小节标题批量一调 + 报告标题单调,merge 后覆盖(静态态为 no-op)。
-    section_titles, sec_title_err = await _fill_section_titles(skeleton, source_text, call_llm)
+    # 并发上限:钳到 >=1(<=0 退化串行)。逐节填值 + 两个标题调都经此闸,封顶在飞调用数。
+    sem = asyncio.Semaphore(max(1, int(concurrency)))
+
+    async def guarded(messages: list[dict[str, str]]) -> str:
+        async with sem:
+            return await call_llm(messages)
+
+    done = 0
+
+    async def fill_one(
+        section: dict[str, Any], plan: FillPlan
+    ) -> tuple[dict[str, dict[str, Any]], FillError | None]:
+        nonlocal done
+        try:
+            messages = build_fill_messages(
+                report_title=skeleton.get("title") or "",
+                section=section,
+                source_text=source_text,
+                toc_titles=toc_titles,
+                plan=plan,
+                schema=build_fill_schema(plan),
+                layout_first=layout_first,
+            )
+            text = await guarded(messages)
+            result: tuple[dict[str, dict[str, Any]], FillError | None] = (
+                _apply_fill_json(text, plan),
+                None,
+            )
+        except FillError as err:
+            result = ({}, err)
+        except Exception as err:  # noqa: BLE001 - 任何调用失败都降级为本节失败,保其余
+            result = ({}, FillError(str(err)))
+        if on_progress:
+            # 单线程事件循环:此处读写 done 之间无 await,不会竞态。
+            done += 1
+            on_progress(done, llm_sections)
+        return result
+
+    # 三组互不依赖的 LLM 工作并发跑:逐节填值 × N + 小节标题批量一调 + 报告标题单调。
+    # 参数顺序固定为 [*逐节, 小节标题, 报告标题],故 gather 结果末两位恒为标题结果。
+    results = await asyncio.gather(
+        *[fill_one(section, plan) for section, plan in llm_targets],
+        _fill_section_titles(skeleton, source_text, guarded),
+        _fill_title(skeleton, source_text, toc_titles, guarded),
+    )
+    section_results = results[:llm_sections]
+    section_titles, sec_title_err = results[llm_sections]
+    title_value, title_err = results[llm_sections + 1]
+
+    # 逐节结果按段序回收 merge(各节写入 block_id 互斥,顺序不影响最终值);累计成功节数。
+    ok_sections = 0
+    for partial, err in section_results:
+        if err is not None:
+            errors.append(err)
+        else:
+            ok_sections += 1
+            _merge_into(filled, partial)
     if sec_title_err:
         errors.append(sec_title_err)
-    title_value, title_err = await _fill_title(skeleton, source_text, toc_titles, call_llm)
     if title_err:
         errors.append(title_err)
 

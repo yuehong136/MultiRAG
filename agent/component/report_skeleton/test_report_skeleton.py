@@ -313,6 +313,66 @@ def test_expand_layout_first_empty_region_drops_without_error():
     assert len(calls) == 1
 
 
+def _open_region_sections(n: int) -> dict:
+    """n 个小节,各含一个 open-region;节标题 节{i} 供桩按内容寻址。"""
+    return {
+        "title": "t",
+        "sections": [
+            {"id": f"s{i}", "layout": "full", "title": f"节{i}", "blocks": [{"id": f"og{i}", "type": "open-region", "annotation": "指标"}]}
+            for i in range(n)
+        ],
+    }
+
+
+def _peak_tracking_region_llm(n: int):
+    """记录同时在飞调用峰值的桩:进入 +1、让出循环制造重叠、退出 -1。按节标题寻址回
+    「i+1 个 paragraph」(块数编码区身份,验回填位置)。返回 (call_llm, peak_getter)。"""
+    state = {"in_flight": 0, "peak": 0}
+
+    async def call_llm(messages):
+        state["in_flight"] += 1
+        state["peak"] = max(state["peak"], state["in_flight"])
+        await asyncio.sleep(0)  # 让出循环,逼出真重叠
+        state["in_flight"] -= 1
+        user = messages[1]["content"]
+        i = next(k for k in range(n) if f"节{k}」" in user)  # 节标题 「节{i}」 寻址
+        blocks = ",".join('{"type":"paragraph","hint":"p%d_%d"}' % (i, j) for j in range(i + 1))
+        return '{"blocks":[%s]}' % blocks
+
+    return call_llm, lambda: state["peak"]
+
+
+def test_expand_regions_concurrent_bounded_and_positional():
+    # 各区并发展开,gather 按作业序回收 → 第 i 区结果(i+1 块)回填到自身位置(顺序无关)。
+    n = 4
+    skel = _open_region_sections(n)
+    call_llm, peak = _peak_tracking_region_llm(n)
+    res = asyncio.run(expand_open_regions(skel, "src", call_llm, concurrency=2))
+
+    secs = res.skeleton["sections"]
+    for i in range(n):
+        assert len(secs[i]["blocks"]) == i + 1  # 第 i 区结果落回自身位置(块数=身份)
+        assert all(b["type"] == "paragraph" for b in secs[i]["blocks"])
+    assert res.ok_regions == n
+    assert res.errors == []
+    assert peak() > 1  # 确有并发(非退化串行)
+    assert peak() <= 2  # 不越并发上限
+
+
+def test_expand_concurrency_one_is_serial():
+    # concurrency=1 → 信号量封顶 1,同时在飞恒为 1(退化串行),回填仍正确。
+    n = 3
+    skel = _open_region_sections(n)
+    call_llm, peak = _peak_tracking_region_llm(n)
+    res = asyncio.run(expand_open_regions(skel, "src", call_llm, concurrency=1))
+
+    secs = res.skeleton["sections"]
+    for i in range(n):
+        assert len(secs[i]["blocks"]) == i + 1
+    assert res.ok_regions == n
+    assert peak() == 1  # 串行:任一时刻至多一调在飞
+
+
 # ----------------------------------------------------------------------------
 # generate_skeleton — 编排
 # ----------------------------------------------------------------------------

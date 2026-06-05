@@ -24,7 +24,7 @@ from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
 from common.connection_utils import timeout
 
-from .report_fill.fill import fill_skeleton
+from .report_fill.fill import DEFAULT_FILL_CONCURRENCY, fill_skeleton, resolve_fill_concurrency
 from .report_skeleton import expand_open_regions
 
 
@@ -37,6 +37,8 @@ class HTMLReportParam(ComponentParamBase):
         self.query = ""  # 源料:运行时通读的主语料,绑一个上游变量
         self.llm_id = ""  # 填充模型
         self.temperature = 0.1  # 生成温度(与前端试运行一致的低发散取值)
+        self.parallel_fill = True  # 是否并行填充各小节(关则逐节串行;默认开,保持现有速度)
+        self.fill_concurrency = DEFAULT_FILL_CONCURRENCY  # 并行时的并发上限(同时在飞的 LLM 调用数)
         self.outputs = {
             "report_schema": {"value": None, "type": "object"},
             "success": {"value": False, "type": "boolean"},
@@ -47,6 +49,8 @@ class HTMLReportParam(ComponentParamBase):
         if not isinstance(self.skeleton, dict) or "sections" not in self.skeleton:
             raise ValueError("[HTMLReport] skeleton must be an object with 'sections'.")
         self.check_decimal_float(float(self.temperature), "[HTMLReport] Temperature")
+        self.check_boolean(self.parallel_fill, "[HTMLReport] Parallel fill")
+        self.check_positive_integer(self.fill_concurrency, "[HTMLReport] Fill concurrency")
 
 
 class HTMLReport(ComponentBase):
@@ -152,10 +156,18 @@ class HTMLReport(ComponentBase):
             except Exception:
                 return None
 
+        # 报告 LLM 扇出并发上限:以节点配置(parallel_fill + fill_concurrency)为准,关并行则串行;
+        # REPORT_FILL_CONCURRENCY 作可选部署级硬上限(只向下钳)。展开与填值不同时进行,共用此上限。
+        fill_concurrency = resolve_fill_concurrency(
+            bool(self._param.parallel_fill),
+            self._param.fill_concurrency,
+            os.environ.get("REPORT_FILL_CONCURRENCY"),
+        )
+
         # 先展开生成区(open-region)→ 无生成区骨架,再填值。与设计期试运行同一条路径(预览=生产);
         # 展开失败非致命,全失败也继续填值。
-        expanded = await expand_open_regions(self._param.skeleton, source_text, call_llm)
-        result = await fill_skeleton(expanded.skeleton, source_text, resolve_ref, call_llm)
+        expanded = await expand_open_regions(self._param.skeleton, source_text, call_llm, concurrency=fill_concurrency)
+        result = await fill_skeleton(expanded.skeleton, source_text, resolve_ref, call_llm, concurrency=fill_concurrency)
 
         # 需调模型的节全军覆没 → 视为失败;否则成功(可能带部分告警)。
         if result.llm_sections > 0 and result.ok_sections == 0:

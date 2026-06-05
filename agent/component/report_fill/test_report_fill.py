@@ -7,8 +7,15 @@ HTMLReport 纯填值逻辑单测(agent/component/report_fill)。
 """
 
 import asyncio
+import json
 
-from agent.component.report_fill.fill import _SKIP, _coerce_value, fill_skeleton
+from agent.component.report_fill.fill import (
+    _SKIP,
+    DEFAULT_FILL_CONCURRENCY,
+    _coerce_value,
+    fill_skeleton,
+    resolve_fill_concurrency,
+)
 from agent.component.report_fill.prompt_builder import (
     ValueSpec,
     build_fill_messages,
@@ -331,6 +338,101 @@ def test_chart_data_coercion():
     result = asyncio.run(fill_skeleton(skel, "src", lambda _r: None, call_llm))
     data = result.schema["sections"][0]["blocks"][0]["data"]
     assert data == [{"month": "Jan", "rev": 100.0}, {"month": "Feb", "rev": 0}]
+
+
+# ----------------------------------------------------------------------------
+# fill.py — 并发上限(asyncio.gather + Semaphore)
+# ----------------------------------------------------------------------------
+
+
+def _n_llm_sections(n: int) -> dict:
+    """n 个各含一个 llm 段的小节;每段 key 为 p{i}__content。"""
+    return {
+        "title": "t",
+        "sections": [{"id": f"s{i}", "layout": "full", "blocks": [_llm_para(f"p{i}")]} for i in range(n)],
+    }
+
+
+def _peak_tracking_llm(payload: str):
+    """记录同时在飞调用峰值的桩:进入计数 +1、让出事件循环制造重叠、退出 -1。
+    回固定 payload(各节按自身 key 取值,故与到达顺序无关)。返回 (call_llm, peak_getter)。"""
+    state = {"in_flight": 0, "peak": 0}
+
+    async def call_llm(_messages):
+        state["in_flight"] += 1
+        state["peak"] = max(state["peak"], state["in_flight"])
+        await asyncio.sleep(0)  # 让出循环,逼出真重叠
+        state["in_flight"] -= 1
+        return payload
+
+    return call_llm, lambda: state["peak"]
+
+
+def test_concurrent_fill_is_bounded_and_order_independent():
+    # 每调回「全键 superset」,各节都能取到自身 key → 不依赖响应到达顺序,正好验并发的顺序无关性。
+    n = 6
+    skel = _n_llm_sections(n)
+    superset = json.dumps({f"p{i}__content": f"内容{i}" for i in range(n)})
+    call_llm, peak = _peak_tracking_llm(superset)
+
+    result = asyncio.run(fill_skeleton(skel, "src", lambda _r: None, call_llm, concurrency=3))
+
+    secs = {s["id"]: s for s in result.schema["sections"]}
+    for i in range(n):
+        assert secs[f"s{i}"]["blocks"][0]["content"] == f"内容{i}"  # 各节取到自身 key(顺序无关)
+    assert result.ok_sections == n
+    assert peak() > 1  # 确有并发(非退化串行)
+    assert peak() <= 3  # 不越并发上限
+
+
+def test_concurrency_one_is_serial():
+    # concurrency=1 → 信号量封顶 1,同时在飞恒为 1(退化串行),结果仍正确。
+    n = 4
+    skel = _n_llm_sections(n)
+    superset = json.dumps({f"p{i}__content": f"内容{i}" for i in range(n)})
+    call_llm, peak = _peak_tracking_llm(superset)
+
+    result = asyncio.run(fill_skeleton(skel, "src", lambda _r: None, call_llm, concurrency=1))
+
+    assert result.ok_sections == n
+    assert peak() == 1  # 串行:任一时刻至多一调在飞
+
+
+def test_concurrency_zero_degrades_to_serial_not_crash():
+    # 非法并发数(<=0)被钳到 1,不抛、结果正确。
+    skel = _n_llm_sections(3)
+    superset = json.dumps({f"p{i}__content": f"内容{i}" for i in range(3)})
+    call_llm, peak = _peak_tracking_llm(superset)
+
+    result = asyncio.run(fill_skeleton(skel, "src", lambda _r: None, call_llm, concurrency=0))
+
+    assert result.ok_sections == 3
+    assert peak() == 1
+
+
+def test_resolve_fill_concurrency_node_config():
+    # 关并行 → 1(无视 cap);开并行 → max(1, cap)。
+    assert resolve_fill_concurrency(False, 8) == 1
+    assert resolve_fill_concurrency(True, 8) == 8
+    assert resolve_fill_concurrency(True, 1) == 1
+    assert resolve_fill_concurrency(True, 0) == 1  # 钳到 >=1
+    assert resolve_fill_concurrency(True, -3) == 1
+
+
+def test_resolve_fill_concurrency_bad_cap_falls_back():
+    # cap 非整数 → 并行时回落默认,串行时仍 1。
+    assert resolve_fill_concurrency(True, "x") == DEFAULT_FILL_CONCURRENCY  # type: ignore[arg-type]
+    assert resolve_fill_concurrency(False, "x") == 1  # type: ignore[arg-type]
+
+
+def test_resolve_fill_concurrency_env_ceiling_only_clamps_down():
+    # env 硬上限:只向下钳,绝不反超节点配置;非整数忽略。
+    assert resolve_fill_concurrency(True, 8, "4") == 4  # env 4 < cap 8 → 钳到 4
+    assert resolve_fill_concurrency(True, 2, "10") == 2  # env 10 > cap 2 → 不反超,仍 2
+    assert resolve_fill_concurrency(False, 8, "4") == 1  # 关并行,env 不能把它拉上去
+    assert resolve_fill_concurrency(True, 8, "bad") == 8  # 非整数 env 忽略
+    assert resolve_fill_concurrency(True, 8, "") == 8  # 空 env 忽略
+    assert resolve_fill_concurrency(True, 8, "0") == 1  # env 0 → 钳到 >=1 后取 min
 
 
 # ----------------------------------------------------------------------------
