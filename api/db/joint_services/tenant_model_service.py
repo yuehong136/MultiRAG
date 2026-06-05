@@ -35,12 +35,14 @@ def get_model_config_by_type_and_name(
     model_config = TenantLLMService.get_api_key(db, tenant_id, model_name, model_type_value)
     if not model_config:
         pure_model_name, fid = TenantLLMService.split_model_name_and_factory(model_name)
-        if (
+        compose_profiles = os.getenv("COMPOSE_PROFILES", "")
+        is_tei_builtin_embedding = (
             model_type_value == LLMType.EMBEDDING.value
-            and fid == "Builtin"
-            and "tei-" in os.getenv("COMPOSE_PROFILES", "")
+            and "tei-" in compose_profiles
             and pure_model_name == os.getenv("TEI_MODEL", "")
-        ):
+            and (fid == "Builtin" or fid is None)
+        )
+        if is_tei_builtin_embedding:
             embedding_cfg = settings.EMBEDDING_CFG
             config_dict = {
                 "id": None,
