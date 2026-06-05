@@ -1271,6 +1271,20 @@
             "rank": "810",
             "llm": [
                 {
+                    "llm_name": "MiniMax-M2.7",
+                    "tags": "LLM,CHAT,200k",
+                    "max_tokens": 204800,
+                    "mdl_type": "chat",
+                    "is_tools": true
+                },
+                {
+                    "llm_name": "MiniMax-M2.7-highspeed",
+                    "tags": "LLM,CHAT,200k",
+                    "max_tokens": 204800,
+                    "mdl_type": "chat",
+                    "is_tools": true
+                },
+                {
                     "llm_name": "MiniMax-M2.5",
                     "tags": "LLM,CHAT,200k",
                     "max_tokens": 204800,
