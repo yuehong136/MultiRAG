@@ -1778,6 +1778,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 audio_config = parser_config_dict.get("audio", {"llm_id": config.get("audio_llm_name")})
                 slides_config = parser_config_dict.get("slides", {"parse_method": "deepdoc", "output_format": "json"})
                 markdown_config = parser_config_dict.get("markdown", {"output_format": "json"})
+                epub_config = parser_config_dict.get("epub", {"output_format": "json"})
                 logging.info(f"Using parser_config dictionary mode")
             else:
                 # 方式 2：使用简化参数（自动应用到所有文件类型）
@@ -1856,6 +1857,9 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                     "table_context_size": table_context_size,
                     "image_context_size": image_context_size,
                 }
+                epub_config = {
+                    "output_format": output_format if output_format in ["json", "text"] else "json",
+                }
                 logging.info(f"Using simplified parse_method mode: {parse_method}")
 
             def _parser_callback(prog, msg=""):
@@ -1874,6 +1878,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 markdown_config=markdown_config,
                 video_config=video_config,
                 audio_config=audio_config,
+                epub_config=epub_config,
                 callback=_parser_callback
             )
 

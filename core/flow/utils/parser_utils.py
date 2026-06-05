@@ -30,7 +30,7 @@ from core.nlp import BULLET_PATTERN, bullets_category, concat_img, docx_question
 from core.llm.cv import Base as VLM
 from common.constants import LLMType
 from common.misc_utils import thread_pool_exec
-from deepdoc.parser import ExcelParser
+from deepdoc.parser import EpubParser, ExcelParser
 from deepdoc.parser.docling_parser import DoclingParser
 from deepdoc.parser.pdf_parser import PlainParser, RAGFlowPdfParser, VisionParser
 from deepdoc.parser.ppt_parser import RAGFlowPptParser
@@ -60,6 +60,7 @@ class FlowParser:
     - 视频 (text)
     - 图片 (ocr/vlm)
     - Markdown (json/text)
+    - EPUB (json/text)
     """
     
     @staticmethod
@@ -1187,6 +1188,40 @@ class FlowParser:
                             content_txt += fb
             return {"output_format": "text", "text": content_txt}
 
+    @staticmethod
+    async def parse_epub(
+        filename: str,
+        binary: bytes,
+        output_format: Literal["json", "text"] = "json",
+        callback=None,
+        chunk_token_num: int = 512
+    ) -> dict:
+        """
+        EPUB 解析（参考 core/flow/parser/parser.py._epub）
+
+        EPUB 本质是 zip 包，按 spine（阅读顺序）抽取 XHTML，复用 HtmlParser 切块，无新依赖。
+
+        Args:
+            output_format: json 或 text
+            chunk_token_num: 传给底层 HtmlParser 的切块 token 数
+
+        Returns:
+            {"output_format": "json", "json": [{"text": ...}]}
+            或
+            {"output_format": "text", "text": "..."}
+        """
+        if callback:
+            callback(0.1, "Start to work on an EPUB.")
+
+        epub_parser = EpubParser()
+        sections = await _to_thread(epub_parser, filename, binary, chunk_token_num)
+
+        if output_format == "json":
+            json_results = [{"text": s} for s in sections if s]
+            return {"output_format": "json", "json": json_results}
+        else:
+            return {"output_format": "text", "text": "\n".join(s for s in sections if s)}
+
 
 # ========== 便捷接口 ==========
 
@@ -1203,6 +1238,7 @@ async def parse_file(
     markdown_config: dict | None = None,
     video_config: dict | None = None,
     audio_config: dict | None = None,
+    epub_config: dict | None = None,
     callback=None
 ) -> dict:
     """
@@ -1224,6 +1260,7 @@ async def parse_file(
         markdown_config: Markdown 配置 {"output_format": "json", "table_context_size": 0, "image_context_size": 0}
         video_config: 视频配置 {"llm_id": "...", "prompt": ""}
         audio_config: 音频配置 {"llm_id": "..."}
+        epub_config: EPUB 配置 {"output_format": "json"}
         callback: 进度回调
     
     Returns:
@@ -1259,6 +1296,8 @@ async def parse_file(
         video_config = {}
     if audio_config is None:
         audio_config = {"llm_id": ""}
+    if epub_config is None:
+        epub_config = {"output_format": "json"}
 
     # 根据扩展名路由（参考 core/flow/parser/parser.py 第 701-743 行）
     # 音频文件
@@ -1364,6 +1403,16 @@ async def parse_file(
             email_config.get("fields"),
             callback
         )
-    
+
+    # EPUB 文件
+    elif ext == "epub":
+        return await FlowParser.parse_epub(
+            filename,
+            binary,
+            epub_config.get("output_format", "json"),
+            callback,
+            chunk_token_num=epub_config.get("chunk_token_num", 512)
+        )
+
     else:
         raise ValueError(f"Unsupported file extension: {ext}")

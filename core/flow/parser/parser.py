@@ -77,6 +77,10 @@ class ParserParam(ProcessParamBase):
                 "json"
             ],
             "video": [],
+            "epub": [
+                "text",
+                "json",
+            ],
         }
 
         self.setups = {
@@ -160,6 +164,12 @@ class ParserParam(ProcessParamBase):
                 "output_format": "text",
                 "prompt": "",
             },
+            "epub": {
+                "suffix": [
+                    "epub",
+                ],
+                "output_format": "json",
+            },
         }
 
     def check(self):
@@ -212,6 +222,11 @@ class ParserParam(ProcessParamBase):
         if email_config:
             email_output_format = email_config.get("output_format", "")
             self.check_valid_value(email_output_format, "Email output format abnormal.", self.allowed_output_format["email"])
+
+        epub_config = self.setups.get("epub", "")
+        if epub_config:
+            epub_output_format = epub_config.get("output_format", "")
+            self.check_valid_value(epub_output_format, "EPUB output format abnormal.", self.allowed_output_format["epub"])
 
     def get_input_form(self) -> dict[str, dict]:
         return {}
@@ -992,6 +1007,22 @@ class Parser(ProcessBase):
                             content_txt += fb
             self.set_output("text", content_txt)
 
+    def _epub(self, name, blob, **kwargs):
+        from deepdoc.parser import EpubParser
+
+        self.callback(random.randint(1, 5) / 100.0, "Start to work on an EPUB.")
+        conf = self._param.setups["epub"]
+        self.set_output("output_format", conf["output_format"])
+
+        epub_parser = EpubParser()
+        sections = epub_parser(name, binary=blob)
+
+        if conf.get("output_format") == "json":
+            json_results = [{"text": s} for s in sections if s]
+            self.set_output("json", json_results)
+        else:
+            self.set_output("text", "\n".join(s for s in sections if s))
+
     async def _invoke(self, **kwargs):
         function_map = {
             "pdf": self._pdf,
@@ -1003,6 +1034,7 @@ class Parser(ProcessBase):
             "audio": self._audio,
             "video": self._video,
             "email": self._email,
+            "epub": self._epub,
         }
 
         try:
