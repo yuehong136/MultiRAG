@@ -183,6 +183,10 @@ def merge_skeleton(
         sections_out.append(sec)
 
     out: dict[str, Any] = {"title": skeleton.get("title"), "sections": sections_out}
+    # Hero 顶层字段(设计器静态填):透传进 ReportSchema,否则真实报告丢头图 / eyebrow / 副标题。
+    for key in ("eyebrow", "subtitle", "headerArt", "headerLayout"):
+        if skeleton.get(key) is not None:
+            out[key] = skeleton.get(key)
     if skeleton.get("theme") is not None:
         out["theme"] = skeleton.get("theme")
     return out

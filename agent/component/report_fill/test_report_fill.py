@@ -134,6 +134,30 @@ def test_merge_skeleton_filters_open_region_and_keeps_role():
     assert blocks[0]["role"] == "side"
 
 
+def test_merge_skeleton_passes_through_hero_top_fields():
+    # 设计器手选的头图 / eyebrow / 副标题须进 ReportSchema,否则真实报告丢 Hero。
+    skel = {
+        "title": "t",
+        "eyebrow": "2026 年度",
+        "subtitle": "一句话概述",
+        "headerArt": "watercolor-book",
+        "headerLayout": "card",
+        "sections": [],
+    }
+    schema = merge_skeleton(skel, {})
+    assert schema["eyebrow"] == "2026 年度"
+    assert schema["subtitle"] == "一句话概述"
+    assert schema["headerArt"] == "watercolor-book"
+    assert schema["headerLayout"] == "card"
+
+
+def test_merge_skeleton_omits_hero_top_fields_when_absent():
+    # 未填则不应凭空出现这些键(保持 ReportSchema 干净,渲染回退纯文字 Hero)。
+    schema = merge_skeleton({"title": "t", "sections": []}, {})
+    for key in ("eyebrow", "subtitle", "headerArt", "headerLayout"):
+        assert key not in schema
+
+
 def test_merge_block_derives_trend_from_change_sign():
     def trend_of(change):
         blk = {"id": "x", "type": "stat-card", "fields": {"label": "L", "value": "v", "change": change}}
