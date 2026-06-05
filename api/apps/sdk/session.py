@@ -25,6 +25,7 @@ from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
+from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.db.services.user_service import UserTenantService
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.utils.api_utils import beta_token_required, check_duplicate_ids, get_data_openai, get_error_data_result, get_json_result, get_result, server_error_response, token_required
@@ -229,13 +230,16 @@ def create_agent_session(
     canvas.reset()
 
     cvs.dsl = json.loads(str(canvas))
+    # 记录建会话时 canvas 的版本标题（按 release_mode 取已发布/最新版本）
+    version_title = UserCanvasVersionService.get_latest_version_title(db, cvs.id, release_mode=release_mode)
     conv = {
-        "id": session_id, 
-        "dialog_id": cvs.id, 
-        "user_id": user_id, 
-        "message": [{"role": "assistant", "content": canvas.get_prologue()}], 
-        "source": "agent", 
-        "dsl": cvs.dsl
+        "id": session_id,
+        "dialog_id": cvs.id,
+        "user_id": user_id,
+        "message": [{"role": "assistant", "content": canvas.get_prologue()}],
+        "source": "agent",
+        "dsl": cvs.dsl,
+        "version_title": version_title
     }
     API4ConversationService.save(db, **conv)
     conv["agent_id"] = conv.pop("dialog_id")

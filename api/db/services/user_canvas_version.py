@@ -100,21 +100,35 @@ class UserCanvasVersionService(CommonService):
             return False
 
     @classmethod
-    def get_latest_released(cls, db: Session, user_canvas_id: str):
-        """Return the newest released version for the specified canvas."""
-        stmt = (
-            select(cls.model)
-            .where(
-                cls.model.user_canvas_id == user_canvas_id,
-                cls.model.release.is_(True),
-            )
-            .order_by(cls.model.create_time.desc())
-        )
+    def _get_latest_by_canvas_id(cls, db: Session, user_canvas_id: str, only_released: bool = False):
+        """Return the newest version for the canvas, optionally filtered by release status."""
+        stmt = select(cls.model).where(cls.model.user_canvas_id == user_canvas_id)
+        if only_released:
+            stmt = stmt.where(cls.model.release.is_(True))
+        stmt = stmt.order_by(cls.model.create_time.desc())
         try:
             return db.execute(stmt).scalars().first()
         except Exception:
-            logging.exception("Failed to get latest released version for %s", user_canvas_id)
+            logging.exception("Failed to get latest version for %s", user_canvas_id)
             return None
+
+    @classmethod
+    def get_latest_released(cls, db: Session, user_canvas_id: str):
+        """Return the newest released version for the specified canvas."""
+        return cls._get_latest_by_canvas_id(db, user_canvas_id, only_released=True)
+
+    @classmethod
+    def get_latest_version_title(cls, db: Session, user_canvas_id: str, release_mode: bool = False) -> str | None:
+        """Return the version title for a canvas based on release_mode.
+
+        Args:
+            db: Active database session.
+            user_canvas_id: The canvas ID.
+            release_mode: If True, use the latest released version's title;
+                if False, use the latest version's title regardless of release status.
+        """
+        latest = cls._get_latest_by_canvas_id(db, user_canvas_id, only_released=release_mode)
+        return latest.title if latest else None
 
     @classmethod
     def save_or_replace_latest(cls, db: Session, user_canvas_id: str, dsl, title: str | None = None, description: str | None = None, release=None):
@@ -152,9 +166,9 @@ class UserCanvasVersionService(CommonService):
                     return None, True
 
                 # Normal case: update existing version
+                # DSL unchanged: do NOT update title to preserve version identity
+                # Only update dsl (for normalization consistency), description, and release
                 update_data = {"dsl": normalized_dsl}
-                if title is not None:
-                    update_data["title"] = title
                 if description is not None:
                     update_data["description"] = description
                 if release is not None:

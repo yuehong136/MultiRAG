@@ -1191,6 +1191,7 @@ class API4Conversation(BaseModel):
     round: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0, server_default=text("0"))
     thumb_up: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0, server_default=text("0"))
     errors: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, default=None, doc="errors")
+    version_title: Mapped[str | None] = mapped_column(String(255), index=False, nullable=True, doc="canvas version title when session created")
 
 
 class UserCanvas(BaseModel):

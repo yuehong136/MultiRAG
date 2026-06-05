@@ -1632,6 +1632,8 @@ async def set_session(
     session_id = get_uuid()
     canvas = Canvas(cvs.dsl, tenant_id, canvas_id, canvas_id=cvs.id)
     canvas.reset()
+    # 记录建会话时 canvas 的版本标题（取最新版本，不要求已发布）
+    version_title = UserCanvasVersionService.get_latest_version_title(db, cvs.id, release_mode=False)
     conv = {
         "id": session_id,
         "name": request_body.get("name", ""),
@@ -1642,6 +1644,7 @@ async def set_session(
         "source": "agent",
         "dsl": cvs.dsl,
         "reference": [],
+        "version_title": version_title,
     }
     API4ConversationService.save(db, **conv)
     return get_json_result(data=conv)

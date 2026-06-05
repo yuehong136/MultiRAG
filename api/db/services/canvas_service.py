@@ -350,6 +350,8 @@ async def completion(
         session_id = get_uuid()
         canvas = Canvas(dsl, tenant_id, agent_id, canvas_id=cvs.id, custom_header=custom_header)
         canvas.reset()
+        # 记录建会话时 canvas 的版本标题（按 release_mode 取已发布/最新版本）
+        version_title = UserCanvasVersionService.get_latest_version_title(db, cvs.id, release_mode=release_mode == "true")
         conv_dict = {
             "id": session_id,
             "dialog_id": cvs.id,
@@ -357,7 +359,8 @@ async def completion(
             "message": [],
             "source": "agent",
             "dsl": dsl,
-            "reference": []
+            "reference": [],
+            "version_title": version_title,
         }
         # Use the persisted instance so SQLAlchemy-side defaults are populated.
         conv = API4ConversationService.save(db, **conv_dict)
