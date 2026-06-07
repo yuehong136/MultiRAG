@@ -414,6 +414,8 @@ def test_generate_layout_first_mode_emits_open_regions():
     # 布局优先默认:盖 layoutFirst 信号 + 报告/有标题小节标题为模型态(运行时按新源文重生成)
     assert res.skeleton["layoutFirst"] is True
     assert res.skeleton["titleDirective"]["mode"] == "llm"
+    # 副标题随标题默认模型态:布局优先报告 Hero 自动出一行概述(头图下不再空)
+    assert res.skeleton["subtitleDirective"]["mode"] == "llm"
     assert secs[0]["titleDirective"]["mode"] == "llm"
     assert secs[1]["titleDirective"]["mode"] == "llm"
     # 大纲 intent(样报口径)不落到小节注解:布局优先不携带,免设计器误导 + 填值弱扰

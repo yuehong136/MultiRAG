@@ -500,6 +500,51 @@ def test_fill_title_llm_failure_falls_back_to_static():
 
 
 # ----------------------------------------------------------------------------
+# fill.py — 报告副标题(subtitleDirective.mode=='llm';对称 _fill_title)
+# ----------------------------------------------------------------------------
+
+
+def test_fill_subtitle_llm_generates_and_overrides():
+    # 仅副标题为模型态(标题静态、全静态节)→ 唯一 LLM 调用就是副标题这一调。
+    skel = {"title": "固定标题", "subtitle": "占位副标题", "subtitleDirective": {"mode": "llm", "hint": "一行概述"}, "sections": _STATIC_SECTIONS}
+    call_llm, calls = _make_call_llm(['{"subtitle": "全年文旅总览与核心结论"}'])
+    result = asyncio.run(fill_skeleton(skel, "源料正文", lambda _r: None, call_llm))
+    assert result.schema["subtitle"] == "全年文旅总览与核心结论"  # 模型生成覆盖静态占位
+    assert result.schema["title"] == "固定标题"  # 标题静态不变
+    assert result.errors == []
+    assert len(calls) == 1  # 仅副标题这一调
+
+
+def test_fill_subtitle_static_keeps_and_skips_call():
+    skel = {"title": "t", "subtitle": "静态副标题", "sections": _STATIC_SECTIONS}  # 无 subtitleDirective
+    called = False
+
+    async def call_llm(_messages):
+        nonlocal called
+        called = True
+        return "{}"
+
+    result = asyncio.run(fill_skeleton(skel, "src", lambda _r: None, call_llm))
+    assert result.schema["subtitle"] == "静态副标题"  # merge 透传静态值
+    assert called is False  # 静态副标题不调模型
+
+
+def test_fill_subtitle_llm_failure_falls_back_to_static():
+    skel = {"title": "t", "subtitle": "回落副标题", "subtitleDirective": {"mode": "llm", "hint": "x"}, "sections": _STATIC_SECTIONS}
+    call_llm, _ = _make_call_llm(["not json at all"])
+    result = asyncio.run(fill_skeleton(skel, "src", lambda _r: None, call_llm))
+    assert result.schema["subtitle"] == "回落副标题"  # 解析失败 → 回落静态
+    assert len(result.errors) == 1  # 记一条软告警,不判败
+
+
+def test_fill_subtitle_absent_keeps_schema_clean():
+    # 既无静态副标题也无指令 → 不凭空造 "subtitle" 键(与 merge_skeleton 缺省省略一致)。
+    skel = {"title": "t", "sections": _STATIC_SECTIONS}
+    result = asyncio.run(fill_skeleton(skel, "src", lambda _r: None, _make_call_llm([])[0]))
+    assert "subtitle" not in result.schema
+
+
+# ----------------------------------------------------------------------------
 # fill.py — 布局优先收缩(layoutFirst):空槽 → 丢块 → 丢节;coerce 空白 → _SKIP
 # ----------------------------------------------------------------------------
 

@@ -26,6 +26,7 @@ from .prompt_builder import (
     build_fill_messages,
     build_fill_schema,
     build_section_titles_messages,
+    build_subtitle_messages,
     build_title_messages,
     collect_fill_plan,
     split_fill_key,
@@ -251,6 +252,36 @@ async def _fill_title(
         return static_title, FillError(str(err))
 
 
+async def _fill_subtitle(
+    skeleton: dict[str, Any],
+    source_text: str,
+    toc_titles: list[str],
+    call_llm: CallLLM,
+) -> tuple[str, FillError | None]:
+    """subtitleDirective.mode=='llm' → 单调一次 LLM 生成报告副标题(标题下方一行概述);
+    否则用骨架静态 subtitle(对称 _fill_title)。失败回落静态值并返回一条 FillError(软降级,不判败)。"""
+    static_subtitle = skeleton.get("subtitle") or ""
+    directive = skeleton.get("subtitleDirective") or {}
+    if directive.get("mode") != "llm":
+        return static_subtitle, None
+    messages = build_subtitle_messages(
+        source_text=source_text,
+        hint=directive.get("hint") or "",
+        report_title=skeleton.get("title") or "",
+        toc_titles=toc_titles,
+    )
+    try:
+        obj = _extract_json_object(await call_llm(messages))
+        subtitle = obj.get("subtitle")
+        if isinstance(subtitle, str) and subtitle.strip():
+            return subtitle.strip(), None
+        return static_subtitle, None
+    except FillError as err:
+        return static_subtitle, err
+    except Exception as err:  # noqa: BLE001 - 任何调用失败都回落静态 subtitle,保其余
+        return static_subtitle, FillError(str(err))
+
+
 async def _fill_section_titles(
     skeleton: dict[str, Any],
     source_text: str,
@@ -293,10 +324,11 @@ async def fill_skeleton(
     """骨架 + 源料 → ReportSchema:变量全局解析 + 并发逐节 LLM 填空 + 确定性 merge。
 
     逐节填值各节互不依赖(prompt 只喂全文源料 + 本节框架,写入按 block_id 互不覆盖),
-    小节标题批量调与报告标题调也只依赖源料/骨架——故这三组 LLM 工作经一个并发上限
-    (`concurrency`,钳到 >=1;<=0 退化为串行)的单个 `asyncio.gather` 一起跑,所有
+    小节标题批量调、报告标题调、副标题调也只依赖源料/骨架——故这几组 LLM 工作经一个并发
+    上限(`concurrency`,钳到 >=1;<=0 退化为串行)的单个 `asyncio.gather` 一起跑,所有
     LLM 调用共享同一信号量。各节 `try/except` 独立降级(失败跳过、保其余);`gather`
-    按参数顺序回收结果(末两位恒为标题结果),merge 顺序确定、与并发完成序无关。
+    按参数顺序回收结果(末三位恒为小节标题 / 报告标题 / 副标题),merge 顺序确定、
+    与并发完成序无关。
 
     `on_progress(done, total_llm)`:每填完一节回调一次(完成计数,非段序——并发下段序
     无意义)。
@@ -355,16 +387,19 @@ async def fill_skeleton(
             on_progress(done, llm_sections)
         return result
 
-    # 三组互不依赖的 LLM 工作并发跑:逐节填值 × N + 小节标题批量一调 + 报告标题单调。
-    # 参数顺序固定为 [*逐节, 小节标题, 报告标题],故 gather 结果末两位恒为标题结果。
+    # 互不依赖的 LLM 工作并发跑:逐节填值 × N + 小节标题批量一调 + 报告标题单调 + 副标题单调。
+    # 参数顺序固定为 [*逐节, 小节标题, 报告标题, 副标题],故 gather 结果末三位恒为
+    # 小节标题 / 报告标题 / 副标题。
     results = await asyncio.gather(
         *[fill_one(section, plan) for section, plan in llm_targets],
         _fill_section_titles(skeleton, source_text, guarded),
         _fill_title(skeleton, source_text, toc_titles, guarded),
+        _fill_subtitle(skeleton, source_text, toc_titles, guarded),
     )
     section_results = results[:llm_sections]
     section_titles, sec_title_err = results[llm_sections]
     title_value, title_err = results[llm_sections + 1]
+    subtitle_value, subtitle_err = results[llm_sections + 2]
 
     # 逐节结果按段序回收 merge(各节写入 block_id 互斥,顺序不影响最终值);累计成功节数。
     ok_sections = 0
@@ -378,9 +413,15 @@ async def fill_skeleton(
         errors.append(sec_title_err)
     if title_err:
         errors.append(title_err)
+    if subtitle_err:
+        errors.append(subtitle_err)
 
     schema = merge_skeleton(skeleton, filled)
     schema["title"] = title_value
+    # 副标题:merge 已透传静态值;llm 生成成功则在此覆盖。空值不写(保持 ReportSchema 干净、
+    # 不凭空造 "subtitle" 键,与 merge_skeleton 缺省省略一致)。
+    if subtitle_value:
+        schema["subtitle"] = subtitle_value
     if layout_first:
         # generous 映射后模型对无料角色写的道歉散文(非空,躲过收缩)→ 丢块(空节随之丢)。
         schema["sections"] = drop_admission_blocks(schema.get("sections") or [])

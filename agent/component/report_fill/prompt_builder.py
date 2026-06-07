@@ -378,6 +378,48 @@ def build_title_messages(
 
 
 # ============================================================
+# 报告副标题生成(subtitleDirective.mode=='llm' 时单独一调)
+# ============================================================
+
+# 只产副标题(标题下方一行概述)、跟随源语言、忠于源文、严格回 JSON。
+SUBTITLE_SYSTEM = """你根据提供的源文,写出一篇报告的「副标题」——放在大标题下方的一行概述。
+
+规则:
+- 返回一个 JSON 对象:{"subtitle": string} —— 别的什么都不要。
+- 副标题是「一行」话(一个短句,不是一段),点出报告的核心结论或覆盖范围;它补充标题,
+  不要照抄或复述标题,也不要罗列各章节。
+- 用与源文「相同的语言」书写。忠于源文;绝不杜撰源文不支持的结论。
+- 若提供了指引,遵循它。
+- 只输出该 JSON 对象:没有 markdown 代码围栏、没有注释、没有散文。"""
+
+
+def build_subtitle_messages(
+    *,
+    source_text: str,
+    hint: str,
+    report_title: str = "",
+    toc_titles: list[str],
+) -> list[dict[str, str]]:
+    """报告副标题(模型态)单调一次的消息:源料 + 标题 + 可选 guidance + 章节目录 → {"subtitle": "..."}。"""
+    guide = f"\n指引:{hint.strip()}" if hint.strip() else ""
+    head = f"\n报告标题:{report_title.strip()}" if report_title.strip() else ""
+    toc = f"\n报告各节:{' / '.join(toc_titles)}" if toc_titles else ""
+    user = "\n".join(
+        [
+            f"源文:\n{source_text.strip()}",
+            "---",
+            f"写出报告副标题(标题下方的一行概述)。{head}{guide}{toc}",
+            "",
+            '返回一个 JSON 对象:{"subtitle": "..."}',
+        ]
+    )
+    return [
+        {"role": "system", "content": SUBTITLE_SYSTEM},
+        {"role": "user", "content": user},
+    ]
+
+
+# ============================================================
 # 小节标题批量重生成(布局优先:section.titleDirective.mode=='llm' 时单批一调)
 # ============================================================
 
