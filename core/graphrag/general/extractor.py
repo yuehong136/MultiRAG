@@ -62,11 +62,17 @@ class Extractor:
         self._language = language
         self._entity_types = entity_types or DEFAULT_ENTITY_TYPES
 
+    @staticmethod
+    def _is_truncated_cache(response):
+        return len((response or "").strip()) <= 1
+
     @timeout(60 * 20)
     def _chat(self, system, history, gen_conf={}, task_id=""):
         hist = deepcopy(history)
         conf = deepcopy(gen_conf)
         response = get_llm_cache(self._llm.llm_name, system, hist, conf)
+        if self._is_truncated_cache(response):
+            response = ""
         if response:
             return response
         _, system_msg = message_fit_in([{"role": "system", "content": system}], int(self._llm.max_length * 0.92))
@@ -82,7 +88,8 @@ class Extractor:
                 response = re.sub(r"^.*</think>", "", response, flags=re.DOTALL)
                 if response.find("**ERROR**") >= 0:
                     raise Exception(response)
-                set_llm_cache(self._llm.llm_name, system, response, history, gen_conf)
+                if not self._is_truncated_cache(response):
+                    set_llm_cache(self._llm.llm_name, system, response, history, gen_conf)
                 break
             except Exception as e:
                 logging.exception(e)
