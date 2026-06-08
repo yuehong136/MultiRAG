@@ -69,11 +69,15 @@ class FileReaderComponent(BaseComponent):
             file_list = minio_operator.list_objects(bucket_name=bucket_name, prefix=dir_name, recursive=False)
             for file in file_list:
                 file_name = file['name']
-                if file_name.endswith(".docx") or file_name.endswith(".txt"):
-                    file_data = minio_operator.download_to_memory(bucket_name=bucket_name,
-                                                                  object_name=file_name)
+                file_data = minio_operator.download_to_memory(bucket_name=bucket_name,
+                                                              object_name=file_name)
+                if file_name.endswith(".docx"):
+                    file_content = read_docx_content(file_data)
+                elif file_name.endswith(".txt"):
                     file_content = detect_and_read_content(file_data)
-                    output_list.append({"fileName": file_name.split("/")[-1], "fileContent": file_content})
+                else:
+                    continue
+                output_list.append({"fileName": file_name.split("/")[-1], "fileContent": file_content})
 
             return {"outputList": output_list}
         else:
@@ -96,11 +100,15 @@ class FileReaderComponent(BaseComponent):
             file_list = minio_operator.list_objects(bucket_name=bucket_name, prefix=dir_name, recursive=False)
             for file in file_list:
                 file_name = file['name']
-                if file_name.endswith(".docx") or file_name.endswith(".txt"):
-                    file_data = minio_operator.download_to_memory(bucket_name=bucket_name,
-                                                                  object_name=file_name)
+                file_data = minio_operator.download_to_memory(bucket_name=bucket_name,
+                                                              object_name=file_name)
+                if file_name.endswith(".docx"):
+                    file_content = read_docx_content(file_data)
+                elif file_name.endswith(".txt"):
                     file_content = detect_and_read_content(file_data)
-                    output_list.append({"fileName": file_name.split("/")[-1], "fileContent": file_content})
+                else:
+                    continue
+                output_list.append({"fileName": file_name.split("/")[-1], "fileContent": file_content})
 
             return {"outputList": output_list}
         else:
@@ -130,17 +138,8 @@ async def parse_uploaded_file(file: UploadFile) -> dict:
 
         # 根据文件类型进行不同的处理
         if file_extension == '.docx':
-            # 创建临时文件来处理 docx
-            temp_path = f"temp_{file_name}"
-            with open(temp_path, 'wb') as f:
-                f.write(content)
-
-            # 使用 python-docx 读取内容
-            doc = Document(temp_path)
-            file_content = '\n'.join([paragraph.text for paragraph in doc.paragraphs])
-
-            # 删除临时文件
-            os.remove(temp_path)
+            # 直接从内存读取，正文段落 + 表格单元格
+            file_content = read_docx_content(io.BytesIO(content))
 
         elif file_extension == '.txt':
             # 直接解码文本内容
@@ -160,6 +159,27 @@ async def parse_uploaded_file(file: UploadFile) -> dict:
     finally:
         # 关闭文件
         await file.close()
+
+
+def read_docx_content(bytes_data) -> str:
+    """
+    从内存中的 docx(BytesIO)读取文本：正文段落 + 表格单元格。
+
+    docx 是 zip(OOXML)包，不能按纯文本 decode；且表格内容不在 doc.paragraphs 里，
+    必须单独遍历 doc.tables，否则内容大多在表格里的文档会读成空。
+    """
+    if bytes_data is None:
+        return ""
+    bytes_data.seek(0)
+    doc = Document(bytes_data)
+    parts = [p.text for p in doc.paragraphs if p.text.strip()]
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [c.text.strip() for c in row.cells]
+            row_text = "\t".join(c for c in cells if c)
+            if row_text:
+                parts.append(row_text)
+    return "\n".join(parts)
 
 
 def read_bytes_content(bytes_data, encoding='utf-8', chunk_size=None):
