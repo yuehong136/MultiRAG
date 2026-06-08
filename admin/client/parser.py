@@ -263,7 +263,7 @@ action_list: identifier ("," identifier)*
 
 identifier: WORD
 quoted_string: QUOTED_STRING
-status: WORD
+status: ON | WORD
 
 QUOTED_STRING: /'[^']+'/ | /"[^"]+"/
 WORD: /[a-zA-Z0-9_\-\.]+/
