@@ -382,6 +382,17 @@ class FileService(CommonService):
                 existing_doc = DocumentService.get_by_id(db, file_id)
                 if existing_doc is not None:
                     try:
+                        if str(existing_doc.kb_id) != str(kb.id):
+                            logging.warning(
+                                "Existing document id collision detected for %s: belongs to kb_id=%s, incoming kb_id=%s. "
+                                "Skipping update to avoid cross-KB overwrite.",
+                                file_id,
+                                existing_doc.kb_id,
+                                kb.id,
+                            )
+                            user_msg = "Existing document id collision with another knowledge base; skipping update."
+                            err.append(filename + ": " + user_msg)
+                            continue
                         new_hash = xxhash.xxh128(file_blob).hexdigest()
                         old_hash = existing_doc.content_hash or ""
                         settings.STORAGE_IMPL.put(kb.id, existing_doc.location, file_blob)

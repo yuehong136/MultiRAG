@@ -320,7 +320,6 @@ class SyncLogsService(CommonService):
         cls,
         db: Session,
         task_id: str,
-        min_update: str,
         max_update: str,
         doc_num: int,
         err_msg: str = "",
@@ -332,7 +331,6 @@ class SyncLogsService(CommonService):
         Args:
             db: 数据库会话
             task_id: 任务ID
-            min_update: 最小更新时间
             max_update: 最大更新时间
             doc_num: 文档数量
             err_msg: 错误消息
@@ -343,11 +341,11 @@ class SyncLogsService(CommonService):
         if not task:
             return None
 
-        # 计算新的 poll_range_start
+        # 计算新的 poll_range_start，保持游标单调前移，避免边界附近的更新被漏掉
         if task.poll_range_start:
-            new_poll_range_start = min(task.poll_range_start, min_update) if min_update else task.poll_range_start
+            new_poll_range_start = max(task.poll_range_start, max_update) if max_update else task.poll_range_start
         else:
-            new_poll_range_start = min_update
+            new_poll_range_start = max_update
 
         # 计算新的 poll_range_end
         if task.poll_range_end:
