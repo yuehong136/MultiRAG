@@ -92,6 +92,24 @@ done
 
 # --------------------------- 函数定义 ---------------------------------------
 start_nginx() {
+  # 根据 API_PROXY_SCHEME 选择对应的 nginx 站点配置
+  # 三套配置内置在镜像中（见 Dockerfile），运行时拷贝为生效的 multirag.conf
+  #   python  -> multirag.conf.python  (Python API 8123 / admin 8130)
+  #   go      -> multirag.conf.golang   (Go API 8127 / admin 8132)
+  #   hybrid  -> multirag.conf.hybrid   (按端点分流 Python/Go，结构对齐 ragflow)
+  local NGINX_CONF_DIR="/etc/nginx/conf.d"
+  local SELECTED=""
+  case "${API_PROXY_SCHEME}" in
+    go)     SELECTED="multirag.conf.golang" ;;
+    hybrid) SELECTED="multirag.conf.hybrid" ;;
+    *)      SELECTED="multirag.conf.python" ;;
+  esac
+  if [[ -f "${NGINX_CONF_DIR}/${SELECTED}" ]]; then
+    cp -f "${NGINX_CONF_DIR}/${SELECTED}" "${NGINX_CONF_DIR}/multirag.conf"
+    echo "[entrypoint] 应用 Nginx 配置: ${SELECTED} (API_PROXY_SCHEME=${API_PROXY_SCHEME})"
+  else
+    echo "[entrypoint] 警告: 未找到 ${NGINX_CONF_DIR}/${SELECTED}，沿用已有 multirag.conf"
+  fi
   echo "[entrypoint] 启动 Nginx..."
   /usr/sbin/nginx
 }

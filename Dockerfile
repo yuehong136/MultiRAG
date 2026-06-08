@@ -230,6 +230,16 @@ COPY workflow_v2 workflow_v2
 COPY errors errors
 COPY docker docker
 COPY scripts scripts
+
+# Nginx 配置打进镜像（不再依赖 docker-compose 挂载）
+# 站点配置提供三套变体，由 entrypoint.sh 按 API_PROXY_SCHEME 运行时选择
+COPY docker/nginx/nginx.conf /etc/nginx/nginx.conf
+COPY docker/nginx/proxy.conf /etc/nginx/proxy.conf
+COPY docker/nginx/multirag.conf.python /etc/nginx/conf.d/multirag.conf.python
+COPY docker/nginx/multirag.conf.golang /etc/nginx/conf.d/multirag.conf.golang
+COPY docker/nginx/multirag.conf.hybrid /etc/nginx/conf.d/multirag.conf.hybrid
+RUN rm -f /etc/nginx/conf.d/default.conf /etc/nginx/sites-enabled/default 2>/dev/null || true
+
 COPY admin admin
 COPY pyproject.toml uv.lock alembic.ini ./
 COPY mcp mcp

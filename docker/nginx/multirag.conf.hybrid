@@ -1,0 +1,81 @@
+# ============================================================
+# MultiRAG HTTP 站点配置 —— 混合模式 (API_PROXY_SCHEME=hybrid)
+#
+# 本文件结构对齐 ragflow 的 ragflow.conf.hybrid（逐个跟进其 git 提交），
+# 仅将端口替换为 MultiRAG 的端口；后续跟进 ragflow 新提交时请保持同构。
+#
+# 端口对应（ragflow -> multirag）:
+#   Python 主服务   9380 -> 8123
+#   Python 管理后台 9381 -> 8130
+#   Go 主服务       9384 -> 8127  (= 8123 + 4)
+#   Go 管理后台     9383 -> 8132  (= 8130 + 2)
+# ============================================================
+
+server {
+    listen 80;
+    server_name _;
+    root /multirag/web/dist;
+
+    gzip on;
+    gzip_min_length 1k;
+    gzip_comp_level 9;
+    gzip_types text/plain application/javascript application/x-javascript text/css application/xml text/javascript application/x-httpd-php image/jpeg image/gif image/png application/json;
+    gzip_vary on;
+    gzip_disable "MSIE [1-6]\.";
+
+    location ~ ^/api/v1/admin/roles_with_permission {
+        proxy_pass http://127.0.0.1:8130;
+        include proxy.conf;
+    }
+
+    location ~ ^/api/v1/admin/sandbox {
+        proxy_pass http://127.0.0.1:8130;
+        include proxy.conf;
+    }
+
+    location ~ ^/api/v1/admin/roles {
+        proxy_pass http://127.0.0.1:8130;
+        include proxy.conf;
+    }
+
+    location ~ ^/api/v1/admin/whitelist {
+        proxy_pass http://127.0.0.1:8130;
+        include proxy.conf;
+    }
+
+    location ~ ^/api/v1/admin/variables {
+        proxy_pass http://127.0.0.1:8130;
+        include proxy.conf;
+    }
+
+    location ~ ^/api/v1/admin {
+        proxy_pass http://127.0.0.1:8132;
+        include proxy.conf;
+    }
+
+    location ~ ^/v1/system/config {
+        proxy_pass http://127.0.0.1:8127;
+        include proxy.conf;
+    }
+
+    location ~ ^/v1/user/(login|logout) {
+        proxy_pass http://127.0.0.1:8127;
+        include proxy.conf;
+    }
+
+    location ~ ^/(v1|api) {
+        proxy_pass http://127.0.0.1:8123;
+        include proxy.conf;
+    }
+
+    location / {
+        index index.html;
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Cache-Control: max-age Expires
+    location ~ ^/static/(css|js|media)/ {
+        expires 10y;
+        access_log off;
+    }
+}

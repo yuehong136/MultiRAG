@@ -1,0 +1,50 @@
+# ============================================================
+# MultiRAG HTTP 站点配置 —— 纯 Go 模式 (API_PROXY_SCHEME=go)
+#
+# 文件命名对齐 ragflow 的 ragflow.conf.golang（scheme=go 选用 *.golang）。
+#
+# 端口映射（Go 端口由 internal/server/config.go 计算）:
+#   - Go 主服务 API:   8127  (= multirag.http_port 8123 + 4)
+#   - Go 管理后台 API: 8132  (= admin.http_port   8130 + 2)
+#   - Nginx 对外暴露: 80
+# ============================================================
+
+server {
+    listen 80;
+    server_name _;
+
+    # 前端静态资源目录
+    root /multirag/web/dist;
+
+    # Gzip 压缩配置
+    gzip on;
+    gzip_min_length 1k;
+    gzip_comp_level 9;
+    gzip_types text/plain application/javascript application/x-javascript text/css application/xml text/javascript application/x-httpd-php image/jpeg image/gif image/png application/json;
+    gzip_vary on;
+    gzip_disable "MSIE [1-6]\.";
+
+    # 管理后台 API 路由 -> Go admin 8132
+    location ~ ^/api/v1/admin {
+        proxy_pass http://127.0.0.1:8132;
+        include proxy.conf;
+    }
+
+    # 主服务 API 路由 -> Go server 8127
+    location ~ ^/(v1|api) {
+        proxy_pass http://127.0.0.1:8127;
+        include proxy.conf;
+    }
+
+    # 前端静态资源
+    location / {
+        index index.html;
+        try_files $uri $uri/ /index.html;
+    }
+
+    # 静态资源缓存配置
+    location ~ ^/static/(css|js|media)/ {
+        expires 10y;
+        access_log off;
+    }
+}
