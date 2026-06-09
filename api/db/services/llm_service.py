@@ -513,7 +513,7 @@ class LLMBundle(LLM4Tenant):
                         total_tokens = txt
                         break
 
-                    if txt.endswith("</think>"):
+                    if txt.endswith("</think>") and ans.endswith("</think>"):
                         ans = ans[: -len("</think>")]
 
                     if not self.verbose_tool_use:
@@ -568,7 +568,7 @@ class LLMBundle(LLM4Tenant):
                         total_tokens = txt
                         break
 
-                    if txt.endswith("</think>"):
+                    if txt.endswith("</think>") and ans.endswith("</think>"):
                         ans = ans[: -len("</think>")]
 
                     if not self.verbose_tool_use:

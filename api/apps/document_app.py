@@ -1,11 +1,3 @@
-# coding=utf-8
-"""
-@project: multirag
-@Author：龙
-@file： document_app.py
-@date：2025/7/17 11:30
-@desc:
-"""
 import logging
 import os.path
 import json
@@ -49,7 +41,7 @@ from api.utils.file_utils import filename_type, thumbnail
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers, html2pdf, is_valid_url
 from common.misc_utils import get_uuid, thread_pool_exec
 from common.metadata_utils import meta_filter, convert_conditions, turn2jsonschema
-from common.constants import RetCode
+from common.constants import RetCode, SANDBOX_ARTIFACT_BUCKET
 from common.file_utils import get_project_base_directory
 from common import settings
 from core.nlp import search, rag_tokenizer
@@ -3071,6 +3063,51 @@ def get_image(
         bkt, nm = arr
         file_content = settings.STORAGE_IMPL.get(bkt, nm)
         return Response(content=file_content, media_type="image/jpeg")
+    except Exception as e:
+        return construct_error_response(e)
+
+
+ARTIFACT_CONTENT_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".svg": "image/svg+xml",
+    ".pdf": "application/pdf",
+    ".csv": "text/csv",
+    ".json": "application/json",
+    ".html": "text/html",
+}
+
+
+@router.get("/artifact/{filename}", summary="下载沙箱产物", response_description="成功获取沙箱产物文件")
+def get_artifact(
+        filename: str,
+        user=Depends(manager),
+):
+    """
+    下载代码沙箱（CodeExec）执行产生的产物文件（图表、PDF、CSV 等）。
+
+    参数：
+    - **filename**: 产物文件名（uuid hex + 允许的扩展名）
+    """
+    try:
+        # Validate filename: must be basename with allowed extension, nothing else
+        basename = os.path.basename(filename)
+        if basename != filename or "/" in filename or "\\" in filename:
+            return get_data_error_result(retmsg="Invalid filename.")
+        ext = os.path.splitext(basename)[1].lower()
+        if ext not in ARTIFACT_CONTENT_TYPES:
+            return get_data_error_result(retmsg="Invalid file type.")
+        data = settings.STORAGE_IMPL.get(SANDBOX_ARTIFACT_BUCKET, basename)
+        if not data:
+            return get_data_error_result(retmsg="Artifact not found.")
+        content_type = ARTIFACT_CONTENT_TYPES.get(ext, "application/octet-stream")
+        response = Response(content=data, media_type=content_type)
+        safe_filename = re.sub(r"[^\w.\-]", "_", basename)
+        apply_safe_file_response_headers(response, content_type, ext)
+        if not response.headers.get("Content-Disposition"):
+            response.headers["Content-Disposition"] = f'inline; filename="{safe_filename}"'
+        return response
     except Exception as e:
         return construct_error_response(e)
 

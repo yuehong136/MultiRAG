@@ -62,6 +62,7 @@ class LLMToolPluginCallSession(ToolCallSession):
         用于纯异步上下文（如 FastAPI async 端点），避免在已运行的事件循环中调用 asyncio.run()。
         """
         assert name in self.tools_map, f"LLM tool {name} does not exist"
+        logging.info(f"[ToolCall] invoke name={name} arguments={str(arguments)[:200]}")
         st = timer()
         tool_obj = self.tools_map[name]
         if isinstance(tool_obj, MCPToolCallSession):
@@ -78,7 +79,9 @@ class LLMToolPluginCallSession(ToolCallSession):
             else:
                 resp = await thread_pool_exec(tool_obj.invoke, **arguments)
 
-        self.callback(name, arguments, resp, elapsed_time=timer()-st)
+        elapsed = timer() - st
+        logging.info(f"[ToolCall] done name={name} elapsed={elapsed:.2f}s result={str(resp)[:200]}")
+        self.callback(name, arguments, resp, elapsed_time=elapsed)
         return resp
 
     def get_tool_obj(self, name):
@@ -112,13 +115,8 @@ class ToolParamBase(ComponentParamBase):
             if "enum" in p:
                 params[k]["enum"] = p["enum"]
 
-        desc = self.meta["description"]
-        if hasattr(self, "description"):
-            desc = self.description
-
-        function_name = self.meta["name"]
-        if hasattr(self, "function_name"):
-            function_name = self.function_name
+        desc = getattr(self, "description", None) or self.meta["description"]
+        function_name = getattr(self, "function_name", self.meta["name"])
 
         return {
             "type": "function",
