@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from auth import AdminAuth, admin_manager, login_admin, logout_admin
 from responses import APIResponse, success_response, error_response
-from services import UserMgr, ServiceMgr, UserServiceMgr, SettingsMgr, ConfigMgr, EnvironmentsMgr
+from services import UserMgr, ServiceMgr, UserServiceMgr, SettingsMgr, ConfigMgr, EnvironmentsMgr, SandboxMgr
 from roles import RoleMgr
 from api.common.exceptions import AdminException
 from api.db.db_models import get_db
@@ -814,5 +814,131 @@ def show_version(user=Depends(admin_manager)) -> APIResponse[dict]:
     try:
         res = {"version": get_multirag_version()}
         return success_response(res)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+# ========== 沙箱 provider 配置 ==========
+
+class SandboxConfigSet(BaseModel):
+    """设置沙箱 provider 配置请求"""
+    provider_type: str = Field(..., description="provider 标识，如 self_managed / aliyun_codeinterpreter / e2b")
+    config: dict = Field(default_factory=dict, description="provider 配置")
+    set_active: bool = Field(default=True, description="为 True 时同时切换激活 provider")
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "provider_type": "self_managed",
+            "config": {"endpoint": "http://sandbox-executor-manager:9385"},
+            "set_active": True,
+        }
+    })
+
+
+class SandboxTestRequest(BaseModel):
+    """测试沙箱 provider 连通性请求"""
+    provider_type: str = Field(..., description="provider 标识")
+    config: dict = Field(default_factory=dict, description="provider 配置")
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "provider_type": "self_managed",
+            "config": {"endpoint": "http://sandbox-executor-manager:9385"},
+        }
+    })
+
+
+@admin_router.get(
+    "/sandbox/providers",
+    response_model=APIResponse[list[dict]],
+    summary="列出沙箱 provider",
+    description="列出所有可用的沙箱 provider 及其元数据"
+)
+def list_sandbox_providers(user=Depends(admin_manager)) -> APIResponse[list[dict]]:
+    """列出所有可用的沙箱 provider"""
+    try:
+        res = SandboxMgr.list_providers()
+        return success_response(res)
+    except AdminException as e:
+        return error_response(e.message, e.code)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+@admin_router.get(
+    "/sandbox/providers/{provider_id}/schema",
+    response_model=APIResponse[dict],
+    summary="获取沙箱 provider 配置 schema",
+    description="获取指定 provider 的配置 schema"
+)
+def get_sandbox_provider_schema(provider_id: str, user=Depends(admin_manager)) -> APIResponse[dict]:
+    """获取指定 provider 的配置 schema"""
+    try:
+        res = SandboxMgr.get_provider_config_schema(provider_id)
+        return success_response(res)
+    except AdminException as e:
+        return error_response(e.message, e.code)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+@admin_router.get(
+    "/sandbox/config",
+    response_model=APIResponse[dict],
+    summary="获取当前沙箱配置",
+    description="获取当前激活的沙箱 provider 及其配置"
+)
+def get_sandbox_config(user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[dict]:
+    """获取当前沙箱配置"""
+    try:
+        res = SandboxMgr.get_config(db)
+        return success_response(res)
+    except AdminException as e:
+        return error_response(e.message, e.code)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+@admin_router.post(
+    "/sandbox/config",
+    response_model=APIResponse[dict],
+    summary="设置沙箱配置",
+    description="设置沙箱 provider 配置"
+)
+def set_sandbox_config(
+    data: SandboxConfigSet,
+    user=Depends(admin_manager),
+    db: Session = Depends(get_db)
+) -> APIResponse[dict]:
+    """设置沙箱 provider 配置"""
+    try:
+        logging.info(f"set_sandbox_config: provider_type={data.provider_type}, set_active={data.set_active}")
+        logging.info(f"set_sandbox_config: config keys={list(data.config.keys())}")
+        res = SandboxMgr.set_config(db, data.provider_type, data.config, data.set_active)
+        return success_response(res, "Sandbox configuration updated successfully")
+    except AdminException as e:
+        logging.exception("set_sandbox_config AdminException")
+        return error_response(e.message, e.code)
+    except Exception as e:
+        logging.exception("set_sandbox_config unexpected error")
+        return error_response(str(e), 500)
+
+
+@admin_router.post(
+    "/sandbox/test",
+    response_model=APIResponse[dict],
+    summary="测试沙箱连通性",
+    description="测试与沙箱 provider 的连通性"
+)
+def test_sandbox_connection(
+    data: SandboxTestRequest,
+    user=Depends(admin_manager)
+) -> APIResponse[dict]:
+    """测试与沙箱 provider 的连通性"""
+    try:
+        res = SandboxMgr.test_connection(data.provider_type, data.config)
+        return success_response(res)
+    except AdminException as e:
+        return error_response(e.message, e.code)
     except Exception as e:
         return error_response(str(e), 500)

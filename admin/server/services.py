@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import re
@@ -447,7 +448,20 @@ class SettingsMgr:
         elif len(settings) > 1:
             raise AdminException(f"Can't update more than 1 setting: {name}")
         else:
-            raise AdminException(f"No setting: {name}")
+            # 不存在则新建（沙箱 provider 配置等新键首次写入时走到这里）
+            if name.startswith("sandbox."):
+                data_type = "json"
+            elif name.endswith(".enabled"):
+                data_type = "boolean"
+            else:
+                data_type = "string"
+            SystemSettingsService.save(
+                db,
+                name=name,
+                value=str(value),
+                source="admin",
+                data_type=data_type,
+            )
 
 
 class ConfigMgr:
@@ -475,3 +489,294 @@ class EnvironmentsMgr:
         result.append({"env": "STORAGE_IMPL", "value": os.getenv("STORAGE_IMPL", "MINIO")})
 
         return result
+
+
+class SandboxMgr:
+    """沙箱 provider 配置与操作管理。"""
+
+    # Provider 注册表与元数据
+    PROVIDER_REGISTRY = {
+        "self_managed": {
+            "name": "Self-Managed",
+            "description": "On-premise deployment using Daytona/Docker",
+            "tags": ["self-hosted", "low-latency", "secure"],
+        },
+        "aliyun_codeinterpreter": {
+            "name": "Aliyun Code Interpreter",
+            "description": "Aliyun Function Compute Code Interpreter - Code execution in serverless microVMs",
+            "tags": ["saas", "cloud", "scalable", "aliyun"],
+        },
+        "e2b": {
+            "name": "E2B",
+            "description": "E2B Cloud - Code Execution Sandboxes",
+            "tags": ["saas", "fast", "global"],
+        },
+    }
+
+    @staticmethod
+    def list_providers():
+        """列出所有可用的沙箱 provider。"""
+        return [
+            {"id": provider_id, **metadata}
+            for provider_id, metadata in SandboxMgr.PROVIDER_REGISTRY.items()
+        ]
+
+    @staticmethod
+    def get_provider_config_schema(provider_id: str):
+        """获取指定 provider 的配置 schema。"""
+        from agent.sandbox.providers import (
+            SelfManagedProvider,
+            AliyunCodeInterpreterProvider,
+            E2BProvider,
+        )
+
+        schemas = {
+            "self_managed": SelfManagedProvider.get_config_schema(),
+            "aliyun_codeinterpreter": AliyunCodeInterpreterProvider.get_config_schema(),
+            "e2b": E2BProvider.get_config_schema(),
+        }
+
+        if provider_id not in schemas:
+            raise AdminException(f"Unknown provider: {provider_id}")
+
+        return schemas.get(provider_id, {})
+
+    @staticmethod
+    def get_config(db: Session):
+        """获取当前沙箱配置。"""
+        try:
+            # 当前激活的 provider 类型
+            provider_type_settings = SystemSettingsService.get_by_name(db, "sandbox.provider_type")
+            if not provider_type_settings:
+                # 未配置时返回默认
+                provider_type = "self_managed"
+            else:
+                provider_type = provider_type_settings[0].value
+
+            # provider 专属配置
+            provider_config_settings = SystemSettingsService.get_by_name(db, f"sandbox.{provider_type}")
+            if not provider_config_settings:
+                provider_config = {}
+            else:
+                try:
+                    provider_config = json.loads(provider_config_settings[0].value)
+                except json.JSONDecodeError:
+                    provider_config = {}
+
+            return {
+                "provider_type": provider_type,
+                "config": provider_config,
+            }
+        except Exception as e:
+            raise AdminException(f"Failed to get sandbox config: {str(e)}")
+
+    @staticmethod
+    def set_config(db: Session, provider_type: str, config: dict, set_active: bool = True):
+        """
+        设置沙箱 provider 配置。
+
+        Args:
+            db: 数据库会话
+            provider_type: provider 标识（如 "self_managed"、"e2b"）
+            config: provider 配置字典
+            set_active: 为 True 时同时切换激活 provider；为 False 时仅更新配置不切换。默认 True。
+
+        Returns:
+            含更新后 provider_type 与 config 的字典
+        """
+        from agent.sandbox.providers import (
+            SelfManagedProvider,
+            AliyunCodeInterpreterProvider,
+            E2BProvider,
+        )
+
+        try:
+            # 校验 provider 类型
+            if provider_type not in SandboxMgr.PROVIDER_REGISTRY:
+                raise AdminException(f"Unknown provider type: {provider_type}")
+
+            # 取 schema 做校验
+            schema = SandboxMgr.get_provider_config_schema(provider_type)
+
+            # 按 schema 校验配置
+            for field_name, field_schema in schema.items():
+                if field_schema.get("required", False) and field_name not in config:
+                    raise AdminException(f"Required field '{field_name}' is missing")
+
+                # 类型校验
+                if field_name in config:
+                    field_type = field_schema.get("type")
+                    if field_type == "integer":
+                        if not isinstance(config[field_name], int):
+                            raise AdminException(f"Field '{field_name}' must be an integer")
+                    elif field_type == "string":
+                        if not isinstance(config[field_name], str):
+                            raise AdminException(f"Field '{field_name}' must be a string")
+                    elif field_type == "bool":
+                        if not isinstance(config[field_name], bool):
+                            raise AdminException(f"Field '{field_name}' must be a boolean")
+
+                    # 整型范围校验
+                    if field_type == "integer" and field_name in config:
+                        min_val = field_schema.get("min")
+                        max_val = field_schema.get("max")
+                        if min_val is not None and config[field_name] < min_val:
+                            raise AdminException(f"Field '{field_name}' must be >= {min_val}")
+                        if max_val is not None and config[field_name] > max_val:
+                            raise AdminException(f"Field '{field_name}' must be <= {max_val}")
+
+            # provider 自定义校验
+            provider_classes = {
+                "self_managed": SelfManagedProvider,
+                "aliyun_codeinterpreter": AliyunCodeInterpreterProvider,
+                "e2b": E2BProvider,
+            }
+            provider = provider_classes[provider_type]()
+            is_valid, error_msg = provider.validate_config(config)
+            if not is_valid:
+                raise AdminException(f"Provider validation failed: {error_msg}")
+
+            # set_active 为 True 时才更新 provider_type
+            if set_active:
+                SettingsMgr.update_by_name(db, "sandbox.provider_type", provider_type)
+
+            # 始终更新 provider 配置
+            config_json = json.dumps(config)
+            SettingsMgr.update_by_name(db, f"sandbox.{provider_type}", config_json)
+
+            return {"provider_type": provider_type, "config": config}
+        except AdminException:
+            raise
+        except Exception as e:
+            raise AdminException(f"Failed to set sandbox config: {str(e)}")
+
+    @staticmethod
+    def test_connection(provider_type: str, config: dict):
+        """
+        通过执行一段简单 Python 脚本测试与沙箱 provider 的连通性。
+
+        会创建一个临时沙箱实例并运行测试代码，验证：
+        - 凭证有效
+        - 沙箱可创建
+        - 代码可正常执行
+
+        Args:
+            provider_type: provider 标识
+            config: provider 配置字典
+
+        Returns:
+            含 stdout、stderr、exit_code、execution_time 的测试结果字典
+        """
+        try:
+            from agent.sandbox.providers import (
+                SelfManagedProvider,
+                AliyunCodeInterpreterProvider,
+                E2BProvider,
+            )
+
+            # 按类型实例化 provider
+            provider_classes = {
+                "self_managed": SelfManagedProvider,
+                "aliyun_codeinterpreter": AliyunCodeInterpreterProvider,
+                "e2b": E2BProvider,
+            }
+
+            if provider_type not in provider_classes:
+                raise AdminException(f"Unknown provider type: {provider_type}")
+
+            provider = provider_classes[provider_type]()
+
+            # 用配置初始化
+            if not provider.initialize(config):
+                raise AdminException(f"Failed to initialize provider '{provider_type}'")
+
+            # 创建临时测试实例
+            instance = provider.create_instance(template="python")
+
+            # multirag 各 provider 创建成功的 status 不一致：self_managed/e2b 为 "running"，aliyun 为 "READY"
+            if not instance or instance.status not in ("READY", "running"):
+                raise AdminException(f"Failed to create sandbox instance. Status: {instance.status if instance else 'None'}")
+
+            # 行使基本 Python 功能的测试代码
+            test_code = """
+# Test basic Python functionality
+import sys
+import json
+import math
+
+print("Python version:", sys.version)
+print("Platform:", sys.platform)
+
+# Test basic calculations
+result = 2 + 2
+print(f"2 + 2 = {result}")
+
+# Test JSON operations
+data = {"test": "data", "value": 123}
+print(f"JSON dump: {json.dumps(data)}")
+
+# Test math operations
+print(f"Math.sqrt(16) = {math.sqrt(16)}")
+
+# Test error handling
+try:
+    x = 1 / 1
+    print("Division test: OK")
+except Exception as e:
+    print(f"Error: {e}")
+
+# Return success indicator
+print("TEST_PASSED")
+"""
+
+            # 带超时执行测试代码
+            execution_result = provider.execute_code(
+                instance_id=instance.instance_id,
+                code=test_code,
+                language="python",
+                timeout=10  # 10 秒超时
+            )
+
+            # 清理测试实例（multirag/ragflow base 均为 destroy_instance）
+            try:
+                provider.destroy_instance(instance.instance_id)
+                logging.info(f"Cleaned up test instance {instance.instance_id}")
+            except Exception as cleanup_error:
+                logging.warning(f"Failed to cleanup test instance {instance.instance_id}: {cleanup_error}")
+
+            # 组装结果信息
+            success = execution_result.exit_code == 0 and "TEST_PASSED" in execution_result.stdout
+
+            message_parts = [
+                f"Test {success and 'PASSED' or 'FAILED'}",
+                f"Exit code: {execution_result.exit_code}",
+                f"Execution time: {execution_result.execution_time:.2f}s"
+            ]
+
+            if execution_result.stdout.strip():
+                stdout_preview = execution_result.stdout.strip()[:200]
+                message_parts.append(f"Output: {stdout_preview}...")
+
+            if execution_result.stderr.strip():
+                stderr_preview = execution_result.stderr.strip()[:200]
+                message_parts.append(f"Errors: {stderr_preview}...")
+
+            message = " | ".join(message_parts)
+
+            return {
+                "success": success,
+                "message": message,
+                "details": {
+                    "exit_code": execution_result.exit_code,
+                    "execution_time": execution_result.execution_time,
+                    "stdout": execution_result.stdout,
+                    "stderr": execution_result.stderr,
+                }
+            }
+
+        except AdminException:
+            raise
+        except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            raise AdminException(f"Connection test failed: {str(e)}\n\nStack trace:\n{error_details}")
