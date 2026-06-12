@@ -95,6 +95,12 @@ class AsyncLLMService:
                 },
                 "chat_error"
             )
+            # SSE 生成器只在收到 stream_end 时关闭连接，错误后必须收尾，否则连接挂到30分钟超时
+            await self.send_event(
+                event_id,
+                {"message": "Stream finished, closing connection."},
+                "stream_end"
+            )
 
     async def _simple_streaming(
             self,
@@ -178,6 +184,11 @@ class AsyncLLMService:
                             {"message": f"LLM生成错误: {chunk_data}", "status": "error"},
                             "chat_error"
                         )
+                        await self.send_event(
+                            event_id,
+                            {"message": "Stream finished, closing connection."},
+                            "stream_end"
+                        )
                         return
 
                     elif chunk_type == 'chunk':
@@ -211,6 +222,11 @@ class AsyncLLMService:
                             {"message": "LLM工作线程意外结束", "status": "error"},
                             "chat_error"
                         )
+                        await self.send_event(
+                            event_id,
+                            {"message": "Stream finished, closing connection."},
+                            "stream_end"
+                        )
                         break
 
         except Exception as e:
@@ -220,6 +236,11 @@ class AsyncLLMService:
                 event_id,
                 {"message": f"流式处理错误: {str(e)}", "status": "error"},
                 "chat_error"
+            )
+            await self.send_event(
+                event_id,
+                {"message": "Stream finished, closing connection."},
+                "stream_end"
             )
         finally:
             error_occurred.set()

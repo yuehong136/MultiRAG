@@ -457,7 +457,7 @@ async def analyze_user_query_background_task(
         if not request.ask_id:
             logger.error("ask_id为空，无法从缓存获取数据")
             # 发布错误事件
-            from api.service.nl2sql_service.event.event_manager import event_manager
+            from api.service.askdata_service.event.event_manager import event_manager
             await event_manager.publish(
                 event_id=event_id,
                 data={
@@ -467,13 +467,15 @@ async def analyze_user_query_background_task(
                 },
                 event_type="chat_error"
             )
+            # SSE 生成器只在收到 stream_end 时关闭连接，错误路径不发会让连接挂到30分钟超时
+            await event_manager.publish(event_id=event_id, data={}, event_type="stream_end")
             return
 
         cached_semantic_data = semantic_layer_cache.get(request.ask_id)
         if not cached_semantic_data:
             logger.error(f"缓存中未找到语义层数据: ask_id={request.ask_id}")
             # 发布错误事件
-            from api.service.nl2sql_service.event.event_manager import event_manager
+            from api.service.askdata_service.event.event_manager import event_manager
             await event_manager.publish(
                 event_id=event_id,
                 data={
@@ -483,6 +485,7 @@ async def analyze_user_query_background_task(
                 },
                 event_type="chat_error"
             )
+            await event_manager.publish(event_id=event_id, data={}, event_type="stream_end")
             return
 
         processed_semantic_layer_data = cached_semantic_data.get('processed_semantic_layer', {})
@@ -505,7 +508,7 @@ async def analyze_user_query_background_task(
 
         # 错误报告逻辑保留在此处，因为它是一个横切关注点（发布到事件管理器）
         try:
-            from api.service.nl2sql_service.event.event_manager import event_manager
+            from api.service.askdata_service.event.event_manager import event_manager
             await event_manager.publish(
                 event_id=event_id,
                 data={
@@ -515,6 +518,7 @@ async def analyze_user_query_background_task(
                 },
                 event_type="chat_error"
             )
+            await event_manager.publish(event_id=event_id, data={}, event_type="stream_end")
         except Exception as publish_error:
             logger.error(f"为 {event_id} 发送错误事件失败: {publish_error}")
     finally:
