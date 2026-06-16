@@ -138,3 +138,29 @@ func GenerateSecretKey() (string, error) {
 func GenerateToken() string {
 	return strings.ReplaceAll(uuid.New().String(), "-", "")
 }
+
+// GenerateAPIToken generates a secure random access key
+// Equivalent to Python's generate_confirmation_token():
+// return "multirag-" + secrets.token_urlsafe(32)
+func GenerateAPIToken() string {
+	// Generate 32 random bytes
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		// Fallback to UUID if random generation fails
+		return "multirag-" + strings.ReplaceAll(uuid.New().String(), "-", "")
+	}
+	// Use URL-safe base64 encoding (same as Python's token_urlsafe)
+	return "multirag-" + base64.RawURLEncoding.EncodeToString(bytes)
+}
+
+// GenerateBetaAPIToken generates a beta access key
+// Equivalent to Python's: generate_confirmation_token().replace("multirag-", "")[:32]
+func GenerateBetaAPIToken(accessKey string) string {
+	// Remove "multirag-" prefix
+	withoutPrefix := strings.TrimPrefix(accessKey, "multirag-")
+	// Take first 32 characters
+	if len(withoutPrefix) > 32 {
+		return withoutPrefix[:32]
+	}
+	return withoutPrefix
+}

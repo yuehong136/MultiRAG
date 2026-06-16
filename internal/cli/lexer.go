@@ -231,6 +231,10 @@ func (l *Lexer) lookupIdent(ident string) Token {
 		return Token{Type: TokenKey, Value: ident}
 	case "KEYS":
 		return Token{Type: TokenKeys, Value: ident}
+	case "TOKEN":
+		return Token{Type: TokenToken, Value: ident}
+	case "TOKENS":
+		return Token{Type: TokenTokens, Value: ident}
 	case "GENERATE":
 		return Token{Type: TokenGenerate, Value: ident}
 	case "MODEL":

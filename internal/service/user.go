@@ -934,3 +934,44 @@ func (s *UserService) SetTenantInfo(userID string, req *SetTenantInfoRequest) er
 
 	return nil
 }
+
+// GetUserByAPIToken gets user by access key from Authorization header.
+// This is used for API token authentication.
+// The authorization parameter should be in format: "Bearer <token>" or just "<token>".
+func (s *UserService) GetUserByAPIToken(authorization string) (*model.User, common.ErrorCode, error) {
+	if authorization == "" {
+		return nil, common.CodeUnauthorized, fmt.Errorf("authorization header is empty")
+	}
+
+	// Expected format: "Bearer <token>" or "<token>"
+	parts := strings.Split(authorization, " ")
+	var token string
+	switch len(parts) {
+	case 2:
+		token = parts[1]
+	case 1:
+		token = parts[0]
+	default:
+		return nil, common.CodeUnauthorized, fmt.Errorf("invalid authorization format")
+	}
+
+	// Query API token from database
+	apiTokenDAO := dao.NewAPITokenDAO()
+	userToken, err := apiTokenDAO.GetUserByAPIToken(token)
+	if err != nil {
+		return nil, common.CodeUnauthorized, fmt.Errorf("invalid access token")
+	}
+
+	// Get user by tenant_id from API token (tenant_id equals the owner user's id)
+	user, err := s.userDAO.GetByTenantID(userToken.TenantID)
+	if err != nil {
+		return nil, common.CodeUnauthorized, fmt.Errorf("user not found for this access token")
+	}
+
+	// Check if user's access_token is empty
+	if user.AccessToken == nil || *user.AccessToken == "" {
+		return nil, common.CodeUnauthorized, fmt.Errorf("user has empty access_token in database")
+	}
+
+	return user, common.CodeSuccess, nil
+}

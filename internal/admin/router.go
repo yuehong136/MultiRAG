@@ -66,10 +66,13 @@ func (r *Router) Setup(engine *gin.Engine) {
 			protected.GET("/users/:username/datasets", r.handler.GetUserDatasets)
 			protected.GET("/users/:username/agents", r.handler.GetUserAgents)
 
-			// API Keys
+			// API Keys (/tokens is an alias of /keys, aligned with ragflow naming)
 			protected.GET("/users/:username/keys", r.handler.GetUserAPIKeys)
+			protected.GET("/users/:username/tokens", r.handler.GetUserAPIKeys)
 			protected.POST("/users/:username/keys", r.handler.GenerateUserAPIKey)
+			protected.POST("/users/:username/tokens", r.handler.GenerateUserAPIKey)
 			protected.DELETE("/users/:username/keys/:key", r.handler.DeleteUserAPIKey)
+			protected.DELETE("/users/:username/tokens/:key", r.handler.DeleteUserAPIKey)
 
 			// Role management
 			protected.GET("/roles", r.handler.ListRoles)

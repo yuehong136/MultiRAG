@@ -67,6 +67,8 @@ const (
 	TokenEnvs
 	TokenKey
 	TokenKeys
+	TokenToken
+	TokenTokens
 	TokenGenerate
 	TokenModel
 	TokenModels

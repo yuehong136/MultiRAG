@@ -628,6 +628,104 @@ func (c *MultiRAGClient) SearchOnDatasets(cmd *Command) (map[string]interface{},
 	return nil, nil
 }
 
+// CreateToken creates a new API token for the current user (user mode)
+func (c *MultiRAGClient) CreateToken(cmd *Command) (map[string]interface{}, error) {
+	if c.ServerType != "user" {
+		return nil, fmt.Errorf("this command is only allowed in USER mode")
+	}
+
+	resp, err := c.HTTPClient.Request("POST", "/tokens", true, "web", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create token: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to create token: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	resJSON, err := resp.JSON()
+	if err != nil {
+		return nil, fmt.Errorf("invalid JSON response: %w", err)
+	}
+	if code, ok := resJSON["code"].(float64); !ok || code != 0 {
+		msg, _ := resJSON["message"].(string)
+		return nil, fmt.Errorf("failed to create token: %s", msg)
+	}
+
+	if data, ok := resJSON["data"].(map[string]interface{}); ok {
+		PrintTableSimple([]map[string]interface{}{data})
+	} else {
+		fmt.Println("Token created successfully")
+	}
+	return nil, nil
+}
+
+// ListTokens lists all API tokens for the current user (user mode)
+func (c *MultiRAGClient) ListTokens(cmd *Command) (map[string]interface{}, error) {
+	if c.ServerType != "user" {
+		return nil, fmt.Errorf("this command is only allowed in USER mode")
+	}
+
+	resp, err := c.HTTPClient.Request("GET", "/tokens", true, "web", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tokens: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to list tokens: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	resJSON, err := resp.JSON()
+	if err != nil {
+		return nil, fmt.Errorf("invalid JSON response: %w", err)
+	}
+	if code, ok := resJSON["code"].(float64); !ok || code != 0 {
+		msg, _ := resJSON["message"].(string)
+		return nil, fmt.Errorf("failed to list tokens: %s", msg)
+	}
+
+	tableData := make([]map[string]interface{}, 0)
+	if data, ok := resJSON["data"].([]interface{}); ok {
+		for _, item := range data {
+			if m, ok := item.(map[string]interface{}); ok {
+				tableData = append(tableData, m)
+			}
+		}
+	}
+	PrintTableSimple(tableData)
+	return nil, nil
+}
+
+// DropToken deletes an API token for the current user (user mode)
+func (c *MultiRAGClient) DropToken(cmd *Command) (map[string]interface{}, error) {
+	if c.ServerType != "user" {
+		return nil, fmt.Errorf("this command is only allowed in USER mode")
+	}
+
+	token, ok := cmd.Params["token"].(string)
+	if !ok {
+		return nil, fmt.Errorf("token not provided")
+	}
+
+	resp, err := c.HTTPClient.Request("DELETE", fmt.Sprintf("/tokens/%s", token), true, "web", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to drop token: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to drop token: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	resJSON, err := resp.JSON()
+	if err != nil {
+		return nil, fmt.Errorf("invalid JSON response: %w", err)
+	}
+	if code, ok := resJSON["code"].(float64); !ok || code != 0 {
+		msg, _ := resJSON["message"].(string)
+		return nil, fmt.Errorf("failed to drop token: %s", msg)
+	}
+
+	fmt.Println("Token dropped successfully")
+	return nil, nil
+}
+
 // ExecuteCommand executes a parsed command
 // Returns benchmark result map for commands that support it (e.g., ping_server with iterations > 1)
 func (c *MultiRAGClient) ExecuteCommand(cmd *Command) (map[string]interface{}, error) {
@@ -660,6 +758,12 @@ func (c *MultiRAGClient) ExecuteCommand(cmd *Command) (map[string]interface{}, e
 		return nil, c.AlterUserPassword(cmd)
 	case "drop_user":
 		return nil, c.DropUser(cmd)
+	case "create_token":
+		return c.CreateToken(cmd)
+	case "list_tokens":
+		return c.ListTokens(cmd)
+	case "drop_token":
+		return c.DropToken(cmd)
 	// TODO: Implement other commands
 	default:
 		return nil, fmt.Errorf("command '%s' would be executed with API", cmd.Type)

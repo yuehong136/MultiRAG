@@ -298,6 +298,8 @@ func (p *Parser) parseListCommand() (*Command, error) {
 		return p.parseListAgents()
 	case TokenKeys:
 		return p.parseListKeys()
+	case TokenTokens:
+		return p.parseListTokens()
 	case TokenModel:
 		return p.parseListModelProviders()
 	case TokenDefault:
@@ -571,6 +573,8 @@ func (p *Parser) parseCreateCommand() (*Command, error) {
 		return p.parseCreateDataset()
 	case TokenChat:
 		return p.parseCreateChat()
+	case TokenToken:
+		return p.parseCreateToken()
 	default:
 		return nil, fmt.Errorf("unknown CREATE target: %s", p.curToken.Value)
 	}
@@ -743,6 +747,8 @@ func (p *Parser) parseDropCommand() (*Command, error) {
 		return p.parseDropChat()
 	case TokenKey:
 		return p.parseDropKey()
+	case TokenToken:
+		return p.parseDropToken()
 	default:
 		return nil, fmt.Errorf("unknown DROP target: %s", p.curToken.Value)
 	}
@@ -859,6 +865,44 @@ func (p *Parser) parseDropKey() (*Command, error) {
 	cmd := NewCommand("drop_key")
 	cmd.Params["key"] = key
 	cmd.Params["user_name"] = userName
+
+	p.nextToken()
+	if err := p.expectSemicolon(); err != nil {
+		return nil, err
+	}
+	return cmd, nil
+}
+
+// parseCreateToken parses: CREATE TOKEN;  (user mode, self-service)
+func (p *Parser) parseCreateToken() (*Command, error) {
+	p.nextToken() // consume TOKEN
+	cmd := NewCommand("create_token")
+	if err := p.expectSemicolon(); err != nil {
+		return nil, err
+	}
+	return cmd, nil
+}
+
+// parseListTokens parses: LIST TOKENS;  (user mode, self-service)
+func (p *Parser) parseListTokens() (*Command, error) {
+	p.nextToken() // consume TOKENS
+	cmd := NewCommand("list_tokens")
+	if err := p.expectSemicolon(); err != nil {
+		return nil, err
+	}
+	return cmd, nil
+}
+
+// parseDropToken parses: DROP TOKEN '<token>';  (user mode, self-service)
+func (p *Parser) parseDropToken() (*Command, error) {
+	p.nextToken() // consume TOKEN
+	token, err := p.parseQuotedString()
+	if err != nil {
+		return nil, err
+	}
+
+	cmd := NewCommand("drop_token")
+	cmd.Params["token"] = token
 
 	p.nextToken()
 	if err := p.expectSemicolon(); err != nil {

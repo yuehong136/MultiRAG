@@ -74,6 +74,16 @@ func (dao *UserDAO) GetByAccessToken(token string) (*model.User, error) {
 	return &user, nil
 }
 
+// GetByTenantID get user by tenant ID (tenant_id equals the owner user's id)
+func (dao *UserDAO) GetByTenantID(tenantID string) (*model.User, error) {
+	var user model.User
+	err := DB.Where("id = ?", tenantID).First(&user).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
 // Update update user
 func (dao *UserDAO) Update(user *model.User) error {
 	return DB.Save(user).Error
