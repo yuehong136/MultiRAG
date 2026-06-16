@@ -773,6 +773,75 @@ multirag> BENCHMARK 5 10 PING;
 
 ---
 
+### create_token
+
+**Description**  
+Creates a new API token for the current logged-in user (USER mode only).
+
+**Usage**  
+```
+CREATE TOKEN <token_name>;
+```
+
+**Parameters**  
+- `token_name`: Token name, quoted string (1-20 characters).
+
+**Example**  
+```
+multirag> CREATE TOKEN 'my-cli-key';
+```
+
+**Display Effect**  
+(Sample output will be provided by the user)
+
+---
+
+### list_tokens
+
+**Description**  
+Lists all API tokens of the current logged-in user (USER mode only).
+
+**Usage**  
+```
+LIST TOKENS;
+```
+
+**Parameters**  
+- None.
+
+**Example**  
+```
+multirag> LIST TOKENS;
+```
+
+**Display Effect**  
+(Sample output will be provided by the user)
+
+---
+
+### drop_token
+
+**Description**  
+Deletes an API token of the current logged-in user by its token value (USER mode only).
+
+**Usage**  
+```
+DROP TOKEN <token>;
+```
+
+**Parameters**  
+- `token`: The token value to delete, quoted string.
+
+**Example**  
+```
+multirag> DROP TOKEN 'multirag-xxxxxxxx';
+```
+
+**Display Effect**  
+(Sample output will be provided by the user)
+
+---
+
 **Notes**  
 - All string parameters (such as names, IDs, paths) must be enclosed in single quotes (`'`) or double quotes (`"`).
 - Commands must end with a semicolon (`;`).

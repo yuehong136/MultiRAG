@@ -39,6 +39,9 @@ sql_command: login_user
            | generate_key
            | list_keys
            | drop_key
+           | create_token
+           | list_tokens
+           | drop_token
            | list_user_datasets
            | list_user_agents
            | list_user_chats
@@ -131,6 +134,8 @@ CONFIGS: "CONFIGS"i
 ENVS: "ENVS"i
 KEY: "KEY"i
 KEYS: "KEYS"i
+TOKEN: "TOKEN"i
+TOKENS: "TOKENS"i
 GENERATE: "GENERATE"i
 MODEL: "MODEL"i
 MODELS: "MODELS"i
@@ -215,6 +220,10 @@ check_license: CHECK LICENSE ";"
 generate_key: GENERATE KEY FOR USER quoted_string ";"
 list_keys: LIST KEYS OF quoted_string ";"
 drop_key: DROP KEY quoted_string OF quoted_string ";"
+
+create_token: CREATE TOKEN quoted_string ";"
+list_tokens: LIST TOKENS ";"
+drop_token: DROP TOKEN quoted_string ";"
 
 show_version: SHOW VERSION ";"
 
@@ -444,6 +453,17 @@ class MultiRAGCLITransformer(Transformer):
         key = items[2]
         user_name = items[4]
         return {"type": "drop_key", "key": key, "user_name": user_name}
+
+    def create_token(self, items):
+        name = items[2]
+        return {"type": "create_token", "name": name}
+
+    def list_tokens(self, items):
+        return {"type": "list_tokens"}
+
+    def drop_token(self, items):
+        token = items[2]
+        return {"type": "drop_token", "token": token}
 
     def list_user_datasets(self, items):
         return {"type": "list_user_datasets"}

@@ -849,6 +849,52 @@ class MultiRAGClient:
         else:
             print(f"Failed to drop key for user {user_name}, code: {res_json['code']}, message: {res_json['message']}")
 
+    def create_token(self, command: dict[str, Any]) -> None:
+        """USER 模式：为当前登录用户创建一个 API token。对接主 API POST /v1/system/new_token。"""
+        if self.server_type != "user":
+            print("This command is only allowed in USER mode")
+            return
+        name_tree: Tree = command["name"]
+        name: str = name_tree.children[0].strip("'\"")
+        response = self.http_client.request(
+            "POST", "system/new_token", use_api_base=False, auth_kind="web", json_body={"name": name}
+        )
+        res_json = response.json()
+        if response.status_code == 200:
+            self._print_table_simple(res_json["data"])
+        else:
+            print(f"Failed to create token, code: {res_json.get('code', res_json.get('retcode'))}, message: {res_json.get('message', res_json.get('retmsg'))}")
+
+    def list_tokens(self, command: dict[str, Any]) -> None:
+        """USER 模式：列出当前登录用户的所有 API token。对接主 API GET /v1/system/token_list。"""
+        if self.server_type != "user":
+            print("This command is only allowed in USER mode")
+            return
+        response = self.http_client.request(
+            "GET", "system/token_list", use_api_base=False, auth_kind="web"
+        )
+        res_json = response.json()
+        if response.status_code == 200:
+            self._print_table_simple(res_json["data"])
+        else:
+            print(f"Failed to list tokens, code: {res_json.get('code', res_json.get('retcode'))}, message: {res_json.get('message', res_json.get('retmsg'))}")
+
+    def drop_token(self, command: dict[str, Any]) -> None:
+        """USER 模式：删除当前登录用户的某个 API token。对接主 API POST /v1/system/rm。"""
+        if self.server_type != "user":
+            print("This command is only allowed in USER mode")
+            return
+        token_tree: Tree = command["token"]
+        token: str = token_tree.children[0].strip("'\"")
+        response = self.http_client.request(
+            "POST", "system/rm", use_api_base=False, auth_kind="web", json_body=token
+        )
+        res_json = response.json()
+        if response.status_code == 200:
+            print("Token dropped successfully")
+        else:
+            print(f"Failed to drop token, code: {res_json.get('code', res_json.get('retcode'))}, message: {res_json.get('message', res_json.get('retmsg'))}")
+
     def list_user_datasets(self, command: dict):
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
@@ -1603,6 +1649,12 @@ def run_command(client: MultiRAGClient, command_dict: dict):
             client.list_keys(command_dict)
         case "drop_key":
             client.drop_key(command_dict)
+        case "create_token":
+            client.create_token(command_dict)
+        case "list_tokens":
+            client.list_tokens(command_dict)
+        case "drop_token":
+            client.drop_token(command_dict)
         case "list_user_datasets":
             client.list_user_datasets(command_dict)
         case "list_user_agents":
