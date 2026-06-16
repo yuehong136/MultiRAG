@@ -26,7 +26,7 @@ from docx.image.exceptions import (
     UnrecognizedImageError,
 )
 
-from core.utils.lazy_image import LazyDocxImage
+from core.utils.lazy_image import LazyImage
 from collections import Counter
 from core.nlp import rag_tokenizer
 
@@ -70,7 +70,7 @@ class RAGFlowDocxParser:
                 image_blobs.append(image_blob)
         if not image_blobs:
             return None
-        return LazyDocxImage(image_blobs)
+        return LazyImage(image_blobs)
 
 
     def __extract_table_content(self, tb):
