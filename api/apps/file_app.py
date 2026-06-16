@@ -27,6 +27,22 @@ from common.constants import RetCode, FileSource
 
 router = APIRouter()
 
+# ============================================================================
+# 【废弃通告】本文件的文件管理路由已 RESTful 化，迁移至
+#   api/apps/restful_apis/file_api.py（对外 /api/v1/files，对标 ragflow #13741）。
+# 下列旧路由（/v1/file/*）已标注 deprecated=True：生产环境仍在调用，暂不删除，
+# 待前端迁移到 /api/v1/files 后再于后续版本移除。
+# 端点映射：
+#   POST /upload, POST /create        -> POST   /api/v1/files
+#   GET  /list                        -> GET    /api/v1/files
+#   POST /rm                          -> DELETE /api/v1/files
+#   POST /rename, POST /mv            -> POST   /api/v1/files/move
+#   GET  /get/{file_id}               -> GET    /api/v1/files/{file_id}
+#   GET  /parent_folder               -> GET    /api/v1/files/{file_id}/parent
+#   GET  /all_parent_folder           -> GET    /api/v1/files/{file_id}/ancestors
+# 未迁移（保持启用）：/upload_media_redirect（multirag 专有）、/root_folder。
+# ============================================================================
+
 
 class UploadRequest(BaseModel):
     parent_id: str | None = Field(None, description="父文件夹ID")
@@ -118,7 +134,7 @@ async def upload_media_redirect(
         return construct_error_response(e)
 
 
-@router.post("/upload", summary="上传文件", response_description="成功上传文件")
+@router.post("/upload", summary="上传文件", response_description="成功上传文件", deprecated=True)
 async def upload(
         parent_id: str,
         files: list[UploadFile] = File(...),
@@ -226,7 +242,7 @@ async def upload(
         return construct_error_response(e)
 
 
-@router.post("/create", summary="创建文件或文件夹", response_description="成功创建文件或文件夹")
+@router.post("/create", summary="创建文件或文件夹", response_description="成功创建文件或文件夹", deprecated=True)
 def create(
         request_body: CreateRequest,
         db: Session = Depends(get_db),
@@ -286,7 +302,7 @@ def create(
         return construct_error_response(e)
 
 
-@router.get("/list", summary="列出文件或文件夹", response_description="成功列出文件或文件夹")
+@router.get("/list", summary="列出文件或文件夹", response_description="成功列出文件或文件夹", deprecated=True)
 def list_files(
         parent_id: str | None = None,
         keywords: str = "",
@@ -349,7 +365,7 @@ def get_root_folder(
         return construct_error_response(e)
 
 
-@router.get("/parent_folder", summary="获取父文件夹", response_description="成功获取父文件夹")
+@router.get("/parent_folder", summary="获取父文件夹", response_description="成功获取父文件夹", deprecated=True)
 def get_parent_folder(
         file_id: str,
         db: Session = Depends(get_db),
@@ -375,7 +391,7 @@ def get_parent_folder(
         return construct_error_response(e)
 
 
-@router.get("/all_parent_folder", summary="获取所有父文件夹", response_description="成功获取所有父文件夹")
+@router.get("/all_parent_folder", summary="获取所有父文件夹", response_description="成功获取所有父文件夹", deprecated=True)
 def get_all_parent_folders(
         file_id: str,
         db: Session = Depends(get_db),
@@ -402,7 +418,7 @@ def get_all_parent_folders(
         return construct_error_response(e)
 
 
-@router.post("/rm", summary="删除文件或文件夹", response_description="成功删除文件或文件夹")
+@router.post("/rm", summary="删除文件或文件夹", response_description="成功删除文件或文件夹", deprecated=True)
 def rm(
         request_body: RemoveRequest,
         db: Session = Depends(get_db),
@@ -474,7 +490,7 @@ def rm(
         return construct_error_response(e)
 
 
-@router.post("/rename", summary="重命名文件或文件夹", response_description="成功重命名文件或文件夹")
+@router.post("/rename", summary="重命名文件或文件夹", response_description="成功重命名文件或文件夹", deprecated=True)
 def rename(
         request_body: RenameRequest,
         db: Session = Depends(get_db),
@@ -517,7 +533,7 @@ def rename(
         return construct_error_response(e)
 
 
-@router.get("/get/{file_id}", summary="获取文件", response_description="成功获取文件")
+@router.get("/get/{file_id}", summary="获取文件", response_description="成功获取文件", deprecated=True)
 def get_file(
         file_id: str,
         db: Session = Depends(get_db),
@@ -562,7 +578,7 @@ def get_file(
         return construct_error_response(e)
 
 
-@router.post("/mv", summary="移动文件或文件夹", response_description="成功移动文件或文件夹")
+@router.post("/mv", summary="移动文件或文件夹", response_description="成功移动文件或文件夹", deprecated=True)
 def move(
         request_body: MoveRequest,
         db: Session = Depends(get_db),

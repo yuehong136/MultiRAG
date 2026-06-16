@@ -5877,21 +5877,22 @@ async def get_document_summary(
 @router.post("/upload_info", summary="上传文件获取信息", response_description="成功上传文件")
 async def upload_info(
         url: str | None = Query(None, description="URL地址，用于下载网页内容"),
-        file: UploadFile | None = File(None),
+        file: list[UploadFile] | None = File(None),
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
     """
     上传文件或从URL下载内容，获取文件信息
-    
-    概要：支持两种方式：1) 直接上传文件，2) 通过URL抓取网页内容。
-    
+
+    概要：支持两种方式：1) 直接上传一个或多个文件，2) 通过URL抓取网页内容。
+    两者互斥，且必须提供其一。
+
     参数：
     - **url**: URL地址（可选），用于爬取网页内容
-    - **file**: 上传的文件（可选）
-    
+    - **file**: 上传的文件（可选，支持多个）
+
     返回：
-    - dict: 文件信息
+    - dict | list[dict]: 单文件/单 URL 返回 dict；多文件返回 dict 列表
         - id: 文件唯一标识
         - name: 文件名
         - size: 文件大小
@@ -5901,7 +5902,29 @@ async def upload_info(
         - created_at: 创建时间
         - preview_url: 预览URL
     """
+    file_objs = [f for f in file if getattr(f, "filename", "")] if file else []
+
+    if file_objs and url:
+        return get_json_result(
+            data=False,
+            retmsg="Provide either multipart file(s) or ?url=..., not both.",
+            retcode=RetCode.BAD_REQUEST,
+        )
+    if not file_objs and not url:
+        return get_json_result(
+            data=False,
+            retmsg="Missing input: provide multipart file(s) or url",
+            retcode=RetCode.BAD_REQUEST,
+        )
+
     try:
-        return get_json_result(data=await FileService.upload_info(db, user.id, file, url))
+        if url and not file_objs:
+            return get_json_result(data=await FileService.upload_info(db, user.id, None, url))
+
+        if len(file_objs) == 1:
+            return get_json_result(data=await FileService.upload_info(db, user.id, file_objs[0], None))
+
+        results = [await FileService.upload_info(db, user.id, f, None) for f in file_objs]
+        return get_json_result(data=results)
     except Exception as e:
         return server_error_response(e)

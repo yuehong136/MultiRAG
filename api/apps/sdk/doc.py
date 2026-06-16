@@ -307,6 +307,8 @@ def update_document(
     
     # 更新文档名称
     if "name" in req and req["name"] != doc.name:
+        if not isinstance(req["name"], str):
+            return server_error_response(AttributeError(f"'{type(req['name']).__name__}' object has no attribute 'encode'"))
         if len(req["name"].encode("utf-8")) > FILE_NAME_LEN_LIMIT:
             return get_result(
                 retmsg=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.",
