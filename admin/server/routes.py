@@ -108,7 +108,7 @@ admin_router = APIRouter(tags=["admin"])
 )
 def ping():
     """健康检查端点"""
-    return success_response("PONG")
+    return success_response(message="pong")
 
 
 @admin_router.post(
