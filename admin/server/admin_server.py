@@ -64,7 +64,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     SERVICE_CONFIGS.configs = load_configurations(SERVICE_CONF)
 
     show_configs()
-    logging.info(f'MultiRAG version: {get_multirag_version()}')
+    logging.info(f'MultiRAG admin version: {get_multirag_version()}')
 
     # 初始化默认管理员账号
     from api.db.db_models import SessionLocal

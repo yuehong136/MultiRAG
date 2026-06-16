@@ -3062,7 +3062,7 @@ async def main():
           /____/
 ======================================================================
     """)
-    logging.info(f'MultiRAG version: {get_multirag_version()}')
+    logging.info(f'MultiRAG ingestion version: {get_multirag_version()}')
     show_configs()
     settings.init_settings()
     settings.check_and_install_torch()

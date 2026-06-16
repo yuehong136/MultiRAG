@@ -1417,7 +1417,7 @@ async def main():
                                   __/ |
                                  |___/
     """)
-    logging.info(f"MultiRAG version: {get_multirag_version()}")
+    logging.info(f"MultiRAG data sync version: {get_multirag_version()}")
     show_configs()
     settings.init_settings()
     if sys.platform != "win32":

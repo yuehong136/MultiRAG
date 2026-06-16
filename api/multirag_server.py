@@ -28,6 +28,8 @@ import uvicorn
 from common.mcp_tool_call_conn import shutdown_all_mcp_sessions
 from core.utils.redis_conn import RedisDistributedLock
 
+print("Start MultiRAG server...")
+
 stop_event = threading.Event()
 
 MultiRAG_DEBUGPY_LISTEN = int(os.environ.get('MultiRAG_DEBUGPY_LISTEN', "0"))

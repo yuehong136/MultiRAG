@@ -150,28 +150,46 @@ wait_for_server() {
 }
 
 start_server() {
-  echo "[entrypoint] 启动 api.multirag_server (模式: ${API_PROXY_SCHEME})..."
   if [[ "${API_PROXY_SCHEME}" == "go" ]]; then
-    # Go-only 模式：只启动 Go 服务端
-    exec bin/server_main
+    while true; do
+      echo "[entrypoint] 尝试启动 Go server_main..."
+      bin/server_main
+      echo "[entrypoint] Go server_main 已退出，准备重启"
+      sleep 1
+    done
   elif [[ "${API_PROXY_SCHEME}" == "hybrid" ]]; then
-    # 混合模式：先启动 Python 服务，就绪后再启动 Go 服务
-    "${PY}" -m api.multirag_server ${INIT_SUPERUSER_ARGS} &
-    wait_for_server "http://127.0.0.1:8123/healthz" "multirag_server"
-    echo "[entrypoint] 启动 Go server_main (hybrid 模式)..."
-    bin/server_main &
+    while true; do
+      echo "[entrypoint] 尝试启动 MultiRAG Python server..."
+      "${PY}" -m api.multirag_server ${INIT_SUPERUSER_ARGS}
+      echo "[entrypoint] MultiRAG Python server 已退出，准备重启"
+      sleep 1
+    done &
+
+    while true; do
+      echo "[entrypoint] 等待 Python server 就绪后启动 Go server_main..."
+      wait_for_server "http://127.0.0.1:8123/healthz" "multirag_server"
+      echo "[entrypoint] 启动 Go server_main (hybrid 模式)..."
+      bin/server_main
+      echo "[entrypoint] Go server_main 已退出，准备重启"
+      sleep 1
+    done &
+
     wait
   else
-    # Python-only 模式（默认）
-    exec "${PY}" -m api.multirag_server ${INIT_SUPERUSER_ARGS}
+    while true; do
+      echo "[entrypoint] 尝试启动 MultiRAG Python server..."
+      "${PY}" -m api.multirag_server ${INIT_SUPERUSER_ARGS}
+      echo "[entrypoint] MultiRAG Python server 已退出，准备重启"
+      sleep 1
+    done
   fi
 }
 
 start_admin_server() {
-  echo "[entrypoint] 启动 Admin Server (端口 8130)..."
   while true; do
-    "${PY}" admin/server/admin_server.py &
-    wait
+    echo "[entrypoint] 尝试启动 Admin Python server..."
+    "${PY}" admin/server/admin_server.py
+    echo "[entrypoint] Admin Python server 已退出，准备重启"
     sleep 1
   done &
 
@@ -188,6 +206,7 @@ start_admin_server() {
       wait_for_server "http://127.0.0.1:8130/api/v1/admin/ping" "admin_server"
       echo "[entrypoint] 启动 Go Admin Server..."
       bin/admin_server
+      echo "[entrypoint] Go Admin Server 已退出，准备重启"
       sleep 1
     done &
   fi
@@ -204,6 +223,7 @@ ensure_docling() {
 ensure_db_init() {
   echo "[entrypoint] 初始化数据库表..."
   "${PY}" -c "from api.db.db_models import init_database_tables as init_web_db; init_web_db()"
+  echo "[entrypoint] 数据库表初始化完成"
 }
 
 _term() {
