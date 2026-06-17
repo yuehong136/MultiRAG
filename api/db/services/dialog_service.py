@@ -417,14 +417,15 @@ def get_models(db, dialog):
         raise Exception("**ERROR**: Knowledge bases use different embedding models.")
 
     if embedding_keys:
+        embd_owner_tenant_id = kbs[0].tenant_id
         embd_model_config = _resolve_model_config(
             db,
-            dialog.tenant_id,
+            embd_owner_tenant_id,
             kbs[0].tenant_embd_id,
             LLMType.EMBEDDING.value,
             kbs[0].embd_id,
         )
-        embd_mdl = LLMBundle(db, dialog.tenant_id, embd_model_config)
+        embd_mdl = LLMBundle(db, embd_owner_tenant_id, embd_model_config)
         if not embd_mdl:
             raise LookupError("Embedding model(%s) not found" % kbs[0].embd_id)
 
@@ -1596,7 +1597,7 @@ Please correct the error and write SQL again using the exact field names above, 
             return
 
     if tbl is None or "error" in tbl or "rows" not in tbl or len(tbl["rows"]) == 0:
-        logging.warning(f"use_sql: No valid rows returned, returning None")
+        logging.warning("use_sql: No valid rows returned, returning None")
         return None
 
     if not is_aggregate_sql(sql) and not has_source_columns(tbl.get("columns", [])):
@@ -1871,14 +1872,15 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
 
     if len(embedding_keys) > 1:
         raise ValueError("Knowledge bases use different embedding models.")
+    embd_owner_tenant_id = kbs[0].tenant_id if kbs else tenant_id
     embd_model_config = _resolve_model_config(
         db,
-        tenant_id,
+        embd_owner_tenant_id,
         kbs[0].tenant_embd_id if kbs else None,
         LLMType.EMBEDDING.value,
         kbs[0].embd_id if kbs else "",
     )
-    embd_mdl = LLMBundle(db, tenant_id, embd_model_config)
+    embd_mdl = LLMBundle(db, embd_owner_tenant_id, embd_model_config)
     chat_model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, chat_llm_name)
     chat_mdl = LLMBundle(db, tenant_id, chat_model_config)
     if rerank_id:
@@ -1959,14 +1961,15 @@ async def async_ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None
 
     if len(embedding_keys) > 1:
         raise ValueError("Knowledge bases use different embedding models.")
+    embd_owner_tenant_id = kbs[0].tenant_id if kbs else tenant_id
     embd_model_config = _resolve_model_config(
         db,
-        tenant_id,
+        embd_owner_tenant_id,
         kbs[0].tenant_embd_id if kbs else None,
         LLMType.EMBEDDING.value,
         kbs[0].embd_id if kbs else "",
     )
-    embd_mdl = LLMBundle(db, tenant_id, embd_model_config)
+    embd_mdl = LLMBundle(db, embd_owner_tenant_id, embd_model_config)
     chat_model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, chat_llm_name)
     chat_mdl = LLMBundle(db, tenant_id, chat_model_config)
     if rerank_id:
@@ -2054,14 +2057,15 @@ async def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=No
 
     if len(embedding_keys) > 1:
         raise ValueError("Knowledge bases use different embedding models.")
+    embd_owner_tenant_id = kbs[0].tenant_id
     embd_model_config = _resolve_model_config(
         db,
-        tenant_id,
+        embd_owner_tenant_id,
         kbs[0].tenant_embd_id if kbs else None,
         LLMType.EMBEDDING.value,
         kbs[0].embd_id if kbs else "",
     )
-    embd_mdl = LLMBundle(db, tenant_id, embd_model_config)
+    embd_mdl = LLMBundle(db, embd_owner_tenant_id, embd_model_config)
     chat_id = search_config.get("chat_id", "")
     if chat_id:
         chat_model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, chat_id)
