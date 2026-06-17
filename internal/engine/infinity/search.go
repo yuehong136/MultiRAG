@@ -20,7 +20,7 @@ import (
 	"context"
 	"fmt"
 	"multirag/internal/engine/types"
-	"strconv"
+	"multirag/internal/utility"
 	"strings"
 	"unicode/utf8"
 
@@ -439,8 +439,16 @@ func (e *infinityEngine) searchUnified(ctx context.Context, req *types.SearchReq
 			filterParts = append(filterParts, fmt.Sprintf("doc_id IN ('%s')", docIDs))
 		}
 	}
-	// Default filter for available chunks
-	filterParts = append(filterParts, "available_int=1")
+	// Only add the available_int filter when there's a text/vector match or
+	// AvailableInt is explicitly set, so chunk listing (doc_id only) returns
+	// all chunks of a document.
+	if hasTextMatch || hasVectorMatch || req.AvailableInt != nil {
+		if req.AvailableInt != nil {
+			filterParts = append(filterParts, fmt.Sprintf("available_int=%d", *req.AvailableInt))
+		} else {
+			filterParts = append(filterParts, "available_int=1")
+		}
+	}
 
 	filterStr := strings.Join(filterParts, " AND ")
 
@@ -607,13 +615,13 @@ func calculateScores(chunks []map[string]interface{}, scoreColumn, pagerankField
 	for i := range chunks {
 		score := 0.0
 		if scoreVal, ok := chunks[i][scoreColumn]; ok {
-			if f, ok := toFloat64(scoreVal); ok {
+			if f, ok := utility.ToFloat64(scoreVal); ok {
 				score += f
 				fmt.Printf("[DEBUG]   chunk[%d]: %s=%f\n", i, scoreColumn, f)
 			}
 		}
 		if pagerankVal, ok := chunks[i][pagerankField]; ok {
-			if f, ok := toFloat64(pagerankVal); ok {
+			if f, ok := utility.ToFloat64(pagerankVal); ok {
 				score += f
 			}
 		}
@@ -667,27 +675,6 @@ func getScore(chunk map[string]interface{}) float64 {
 		return score
 	}
 	return 0.0
-}
-
-func toFloat64(val interface{}) (float64, bool) {
-	switch v := val.(type) {
-	case float64:
-		return v, true
-	case float32:
-		return float64(v), true
-	case int:
-		return float64(v), true
-	case int64:
-		return float64(v), true
-	case string:
-		f, err := strconv.ParseFloat(v, 64)
-		if err != nil {
-			return 0, false
-		}
-		return f, true
-	default:
-		return 0, false
-	}
 }
 
 // executeTableSearch executes search on a single table
@@ -899,6 +886,18 @@ func (e *infinityEngine) executeQuery(table *infinity.Table) (*types.SearchRespo
 		for colName := range arrayFields {
 			if val, ok := chunks[i][colName]; !ok || val == nil || val == "" {
 				chunks[i][colName] = []interface{}{}
+			}
+		}
+		// Convert position_int from hex string to array format
+		if posVal, ok := chunks[i]["position_int"].(string); ok {
+			chunks[i]["position_int"] = utility.ConvertHexToPositionIntArray(posVal)
+		} else {
+			chunks[i]["position_int"] = []interface{}{}
+		}
+		// Convert page_num_int and top_int from hex string to array
+		for _, colName := range []string{"page_num_int", "top_int"} {
+			if val, ok := chunks[i][colName].(string); ok {
+				chunks[i][colName] = utility.ConvertHexToIntArray(val)
 			}
 		}
 	}

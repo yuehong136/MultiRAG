@@ -19,6 +19,8 @@ package utility
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -86,4 +88,127 @@ func FormatTime(t time.Time) string {
 		return "N/A (Perpetual)"
 	}
 	return t.Format("2006-01-02 15:04:05")
+}
+
+// JSONFloat64 always marshals with a decimal point (e.g. 0.0 instead of 0).
+type JSONFloat64 float64
+
+// MarshalJSON implements json.Marshaler.
+func (f JSONFloat64) MarshalJSON() ([]byte, error) {
+	return []byte(fmt.Sprintf("%.1f", float64(f))), nil
+}
+
+// FormatTimeToString formats a *time.Time with the given layout, or returns nil.
+func FormatTimeToString(t *time.Time, format string) interface{} {
+	if t == nil {
+		return nil
+	}
+	return t.Format(format)
+}
+
+// ConvertHexToPositionIntArray converts an underscore-separated hex string into
+// a [][]int grouped by 5 elements (used for chunk position_int).
+func ConvertHexToPositionIntArray(hexStr string) interface{} {
+	if hexStr == "" {
+		return nil
+	}
+	parts := strings.Split(hexStr, "_")
+	var intVals []int
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		val, err := strconv.ParseInt(part, 16, 64)
+		if err != nil {
+			continue
+		}
+		intVals = append(intVals, int(val))
+	}
+	if len(intVals) == 0 {
+		return nil
+	}
+	// Group by 5 elements
+	var result [][]int
+	for i := 0; i < len(intVals); i += 5 {
+		end := i + 5
+		if end > len(intVals) {
+			end = len(intVals)
+		}
+		result = append(result, intVals[i:end])
+	}
+	return result
+}
+
+// ConvertHexToIntArray converts an underscore-separated hex string into an []int.
+func ConvertHexToIntArray(hexStr string) interface{} {
+	if hexStr == "" {
+		return nil
+	}
+	parts := strings.Split(hexStr, "_")
+	var result []int
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		val, err := strconv.ParseInt(part, 16, 64)
+		if err != nil {
+			continue
+		}
+		result = append(result, int(val))
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+// IsEmpty reports whether v is nil, an empty slice or an empty string.
+func IsEmpty(v interface{}) bool {
+	if v == nil {
+		return true
+	}
+	if arr, ok := v.([]interface{}); ok {
+		return len(arr) == 0
+	}
+	if arr, ok := v.([]string); ok {
+		return len(arr) == 0
+	}
+	if arr, ok := v.([]int); ok {
+		return len(arr) == 0
+	}
+	if strVal, ok := v.(string); ok && strVal == "" {
+		return true
+	}
+	return false
+}
+
+// SetFieldArray sets result[destKey] to v, or an empty slice when v is empty.
+func SetFieldArray(result map[string]interface{}, destKey string, v interface{}) {
+	if IsEmpty(v) {
+		result[destKey] = []interface{}{}
+	} else {
+		result[destKey] = v
+	}
+}
+
+// ToFloat64 best-effort converts a value to float64.
+func ToFloat64(val interface{}) (float64, bool) {
+	switch v := val.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case string:
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return 0, false
+		}
+		return f, true
+	default:
+		return 0, false
+	}
 }

@@ -529,3 +529,296 @@ func convertPositionInt(hexStr string) []interface{} {
 
 	return result
 }
+
+// GetChunkRequest request for getting a single chunk
+type GetChunkRequest struct {
+	ChunkID string `json:"chunk_id"`
+}
+
+// GetChunkResponse response for getting a single chunk
+type GetChunkResponse struct {
+	Chunk map[string]interface{} `json:"chunk"`
+}
+
+// Get retrieves a single chunk by ID across the user's accessible tenants.
+func (s *ChunkService) Get(req *GetChunkRequest, userID string) (*GetChunkResponse, error) {
+	if s.docEngine == nil {
+		return nil, fmt.Errorf("doc engine not initialized")
+	}
+	if req.ChunkID == "" {
+		return nil, fmt.Errorf("chunk_id is required")
+	}
+
+	ctx := context.Background()
+
+	tenants, err := s.userTenantDAO.GetByUserID(userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user tenants: %w", err)
+	}
+	if len(tenants) == 0 {
+		return nil, fmt.Errorf("user has no accessible tenants")
+	}
+
+	var chunk map[string]interface{}
+	for _, tenant := range tenants {
+		kbIDs, err := s.kbDAO.GetKBIDsByTenantID(tenant.TenantID)
+		if err != nil {
+			continue
+		}
+
+		indexName := fmt.Sprintf("multirag_%s", tenant.TenantID)
+
+		doc, err := s.docEngine.GetChunk(ctx, indexName, req.ChunkID, kbIDs)
+		if err != nil {
+			continue
+		}
+		if doc == nil {
+			continue
+		}
+		c, ok := doc.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		// Format to match Python output
+		result := make(map[string]interface{})
+		skipFields := map[string]bool{
+			"id": true, "authors": true, "_score": true, "SCORE": true,
+		}
+		for k, v := range c {
+			if skipFields[k] || strings.HasSuffix(k, "_vec") || strings.Contains(k, "_sm_") || strings.HasSuffix(k, "_tks") || strings.HasSuffix(k, "_ltks") {
+				continue
+			}
+			switch k {
+			case "content":
+				result["content_with_weight"] = v
+			case "docnm":
+				result["docnm_kwd"] = v
+			case "important_keywords":
+				utility.SetFieldArray(result, "important_kwd", v)
+			case "questions":
+				utility.SetFieldArray(result, "question_kwd", v)
+			case "entities_kwd", "entity_kwd", "entity_type_kwd", "from_entity_kwd",
+				"name_kwd", "raptor_kwd", "removed_kwd", "source_id", "tag_kwd",
+				"to_entity_kwd", "toc_kwd", "authors_tks", "doc_type_kwd":
+				if utility.IsEmpty(v) {
+					result[k] = []interface{}{}
+				} else {
+					result[k] = v
+				}
+			case "tag_feas":
+				if utility.IsEmpty(v) {
+					result[k] = map[string]interface{}{}
+				} else {
+					result[k] = v
+				}
+			case "create_timestamp_flt", "rank_flt", "weight_flt":
+				if floatVal, ok := utility.ToFloat64(v); ok {
+					result[k] = utility.JSONFloat64(floatVal)
+				}
+			default:
+				result[k] = v
+			}
+		}
+		return &GetChunkResponse{Chunk: result}, nil
+	}
+
+	if chunk == nil {
+		return nil, fmt.Errorf("chunk not found")
+	}
+	return &GetChunkResponse{Chunk: chunk}, nil
+}
+
+// ListChunksRequest request for listing chunks of a document
+type ListChunksRequest struct {
+	DocID        string `json:"doc_id" binding:"required"`
+	Page         *int   `json:"page,omitempty"`
+	Size         *int   `json:"size,omitempty"`
+	Keywords     string `json:"keywords,omitempty"`
+	AvailableInt *int   `json:"available_int,omitempty"`
+}
+
+// ListChunksResponse response for listing chunks
+type ListChunksResponse struct {
+	Chunks []map[string]interface{} `json:"chunks"`
+	Doc    map[string]interface{}   `json:"doc"`
+	Total  int64                    `json:"total"`
+}
+
+// List retrieves the chunks belonging to a document.
+func (s *ChunkService) List(req *ListChunksRequest, userID string) (*ListChunksResponse, error) {
+	if s.docEngine == nil {
+		return nil, fmt.Errorf("doc engine not initialized")
+	}
+	if req.DocID == "" {
+		return nil, fmt.Errorf("doc_id is required")
+	}
+
+	ctx := context.Background()
+
+	tenants, err := s.userTenantDAO.GetByUserID(userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user tenants: %w", err)
+	}
+	if len(tenants) == 0 {
+		return nil, fmt.Errorf("user has no accessible tenants")
+	}
+
+	// Get document to find its tenant
+	docDAO := dao.NewDocumentDAO()
+	doc, err := docDAO.GetByID(req.DocID)
+	if err != nil || doc == nil {
+		return nil, fmt.Errorf("document not found")
+	}
+
+	// Get knowledge base to find tenant
+	kb, err := s.kbDAO.GetByID(doc.KbID)
+	if err != nil || kb == nil {
+		return nil, fmt.Errorf("knowledge base not found")
+	}
+
+	// Find which tenant this document belongs to
+	var targetTenantID string
+	for _, tenant := range tenants {
+		if tenant.TenantID == kb.TenantID {
+			targetTenantID = tenant.TenantID
+			break
+		}
+	}
+	if targetTenantID == "" {
+		return nil, fmt.Errorf("user does not have access to this document")
+	}
+
+	kbIDs, err := s.kbDAO.GetKBIDsByTenantID(targetTenantID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get kb ids: %w", err)
+	}
+
+	indexName := fmt.Sprintf("multirag_%s", targetTenantID)
+	page := getPageNum(req.Page)
+	size := getPageSize(req.Size)
+	keywords := req.Keywords
+
+	// Build search request - same as retrieval test but filtered by doc_id
+	searchReq := &engine.SearchRequest{
+		IndexNames: []string{indexName},
+		Question:   keywords,
+		KbIDs:      kbIDs,
+		DocIDs:     []string{req.DocID},
+		Page:       page,
+		Size:       size,
+		TopK:       size,
+	}
+	if req.AvailableInt != nil {
+		searchReq.AvailableInt = req.AvailableInt
+	}
+
+	result, err := s.docEngine.Search(ctx, searchReq)
+	if err != nil {
+		return nil, fmt.Errorf("search failed: %w", err)
+	}
+
+	searchResp, ok := result.(*engine.SearchResponse)
+	if !ok {
+		return nil, fmt.Errorf("invalid search response type")
+	}
+
+	// Format output to match Python
+	chunks := make([]map[string]interface{}, 0, len(searchResp.Chunks))
+	for _, chunk := range searchResp.Chunks {
+		formatted := make(map[string]interface{})
+		skipFields := map[string]bool{
+			"_id": true, "authors": true, "_score": true, "SCORE": true,
+			"important_kwd_empty_count": true, "kb_id": true, "mom_id": true, "page_num_int": true,
+		}
+		for k, v := range chunk {
+			if skipFields[k] || strings.HasSuffix(k, "_vec") || strings.Contains(k, "_sm_") || strings.HasSuffix(k, "_ltks") || strings.HasSuffix(k, "_tks") {
+				continue
+			}
+			switch k {
+			case "img_id":
+				if strVal, ok := v.(string); ok {
+					formatted["image_id"] = strVal
+				} else {
+					formatted["image_id"] = ""
+				}
+			case "position_int":
+				formatted["positions"] = v
+			case "id":
+				formatted["chunk_id"] = v
+			case "content":
+				formatted["content_with_weight"] = v
+			case "docnm":
+				formatted["docnm_kwd"] = v
+			case "important_keywords":
+				utility.SetFieldArray(formatted, "important_kwd", v)
+			case "questions":
+				utility.SetFieldArray(formatted, "question_kwd", v)
+			case "entities_kwd", "entity_kwd", "entity_type_kwd", "from_entity_kwd",
+				"name_kwd", "raptor_kwd", "removed_kwd",
+				"source_id", "tag_kwd", "to_entity_kwd", "toc_kwd", "doc_type_kwd":
+				if utility.IsEmpty(v) {
+					formatted[k] = []interface{}{}
+				} else {
+					formatted[k] = v
+				}
+			default:
+				// Handle _kwd fields that need "###" splitting
+				if strings.HasSuffix(k, "_kwd") && k != "knowledge_graph_kwd" {
+					if strVal, ok := v.(string); ok && strings.Contains(strVal, "###") {
+						parts := strings.Split(strVal, "###")
+						var filtered []interface{}
+						for _, p := range parts {
+							if p != "" {
+								filtered = append(filtered, p)
+							}
+						}
+						formatted[k] = filtered
+					} else {
+						formatted[k] = v
+					}
+				} else {
+					formatted[k] = v
+				}
+			}
+		}
+		chunks = append(chunks, formatted)
+	}
+
+	// Build document info (matching Python doc.to_dict())
+	timeFormat := "2006-01-02T15:04:05"
+	docInfo := map[string]interface{}{
+		"id":               doc.ID,
+		"thumbnail":        doc.Thumbnail,
+		"kb_id":            doc.KbID,
+		"parser_id":        doc.ParserID,
+		"pipeline_id":      doc.PipelineID,
+		"parser_config":    doc.ParserConfig,
+		"source_type":      doc.SourceType,
+		"type":             doc.Type,
+		"created_by":       doc.CreatedBy,
+		"name":             doc.Name,
+		"location":         doc.Location,
+		"size":             doc.Size,
+		"token_num":        doc.TokenNum,
+		"chunk_num":        doc.ChunkNum,
+		"progress":         utility.JSONFloat64(doc.Progress),
+		"progress_msg":     doc.ProgressMsg,
+		"process_begin_at": utility.FormatTimeToString(doc.ProcessBeginAt, timeFormat),
+		"process_duration": doc.ProcessDuration,
+		"content_hash":     doc.ContentHash,
+		"suffix":           doc.Suffix,
+		"run":              doc.Run,
+		"status":           doc.Status,
+		"create_time":      doc.CreateTime,
+		"create_date":      utility.FormatTimeToString(doc.CreateDate, timeFormat),
+		"update_time":      doc.UpdateTime,
+		"update_date":      utility.FormatTimeToString(doc.UpdateDate, timeFormat),
+	}
+
+	return &ListChunksResponse{
+		Total:  searchResp.Total,
+		Chunks: chunks,
+		Doc:    docInfo,
+	}, nil
+}

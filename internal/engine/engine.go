@@ -53,6 +53,9 @@ type DocEngine interface {
 	GetDocument(ctx context.Context, indexName, docID string) (interface{}, error)
 	DeleteDocument(ctx context.Context, indexName, docID string) error
 
+	// Chunk operations
+	GetChunk(ctx context.Context, indexName, chunkID string, kbIDs []string) (interface{}, error)
+
 	// Health check
 	Ping(ctx context.Context) error
 	Close() error

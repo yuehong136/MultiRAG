@@ -165,3 +165,95 @@ func (h *ChunkHandler) RetrievalTest(c *gin.Context) {
 		"message": "success",
 	})
 }
+
+// Get retrieves a single chunk by ID
+// @Summary Get Chunk
+// @Description Get a single chunk by its ID
+// @Tags chunks
+// @Produce json
+// @Param chunk_id query string true "chunk id"
+// @Success 200 {object} map[string]interface{}
+// @Router /v1/chunk/get [get]
+func (h *ChunkHandler) Get(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	chunkID := c.Query("chunk_id")
+	if chunkID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "chunk_id is required",
+		})
+		return
+	}
+
+	req := &service.GetChunkRequest{ChunkID: chunkID}
+	resp, err := h.chunkService.Get(req, user.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"data":    resp.Chunk,
+		"message": "success",
+	})
+}
+
+// List lists the chunks of a document
+// @Summary List Chunks
+// @Description List the chunks belonging to a document
+// @Tags chunks
+// @Accept json
+// @Produce json
+// @Param request body service.ListChunksRequest true "list chunks parameters"
+// @Success 200 {object} map[string]interface{}
+// @Router /v1/chunk/list [post]
+func (h *ChunkHandler) List(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	var req service.ListChunksRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	// Set default values for optional parameters
+	if req.Page == nil {
+		defaultPage := 1
+		req.Page = &defaultPage
+	}
+	if req.Size == nil {
+		defaultSize := 30
+		req.Size = &defaultSize
+	}
+
+	resp, err := h.chunkService.List(&req, user.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"data":    resp,
+		"message": "success",
+	})
+}
