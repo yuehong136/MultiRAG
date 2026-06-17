@@ -1,25 +1,25 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy.orm import Session
 
-from pathlib import Path
-
 from api.db.db_models import get_db
-from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils.api_utils import server_error_response, get_data_error_result, get_json_result
-from common.misc_utils import get_uuid
 from api.db import FileType
+from api.apps.services.file_convert_service import convert_files_with_new_session
 from api.db.services.document_service import DocumentService
+from api.db.services.file2document_service import File2DocumentService
 from common.constants import RetCode
 from api.apps import manager
 
 router = APIRouter()
 
+
 @router.post("/convert", summary="转换文件", response_description="成功转换文件")
 def convert(
         kb_ids: list[str],
         file_ids: list[str],
+        background_tasks: BackgroundTasks,
         db: Session = Depends(get_db),
         user=Depends(manager)
 ):
@@ -33,64 +33,29 @@ def convert(
     返回:
     - JSON: 文件转换结果的JSON响应。
     """
-    file2documents = []
-
     try:
         files = FileService.get_by_ids(db, file_ids)
-        files_set = dict({file.id: file for file in files})
+        files_set = {file.id: file for file in files}
         for file_id in file_ids:
-            file = files_set[file_id]
+            file = files_set.get(file_id)
             if not file:
                 return get_data_error_result(retmsg="File not found!")
-            file_ids_list = [file_id]
+
+        for kb_id in kb_ids:
+            kb = KnowledgebaseService.get_by_id(db, kb_id)
+            if not kb:
+                return get_data_error_result(retmsg="Can't find this dataset!")
+
+        all_file_ids = []
+        for file_id in file_ids:
+            file = files_set[file_id]
             if file.type == FileType.FOLDER.value:
-                file_ids_list = FileService.get_all_innermost_file_ids(db, file_id, [])
-            for id in file_ids_list:
-                informs = File2DocumentService.get_by_file_id(db, id)
-                # 删除
-                for inform in informs:
-                    doc_id = inform.document_id
-                    doc = DocumentService.get_by_id(db, doc_id)
-                    if not doc:
-                        return get_data_error_result(retmsg="Document not found!")
-                    tenant_id = DocumentService.get_tenant_id(db, doc_id)
-                    if not tenant_id:
-                        return get_data_error_result(retmsg="Tenant not found!")
-                    if not DocumentService.remove_document(db, doc, tenant_id):
-                        return get_data_error_result(
-                            retmsg="Database error (Document removal)!")
+                all_file_ids.extend(FileService.get_all_innermost_file_ids(db, file_id, []))
+            else:
+                all_file_ids.append(file_id)
 
-                # 插入
-                for kb_id in kb_ids:
-                    kb = KnowledgebaseService.get_by_id(db, kb_id)
-                    if not kb:
-                        return get_data_error_result(
-                            retmsg="Can't find this dataset!")
-                    file = FileService.get_by_id(db, id)
-                    if not file:
-                        return get_data_error_result(
-                            retmsg="Can't find this file!")
-
-                    doc = DocumentService.insert(db, {
-                        "id": get_uuid(),
-                        "kb_id": kb.id,
-                        "parser_id": FileService.get_parser(file.type, file.name, kb.parser_id),
-                        "pipeline_id": kb.pipeline_id,
-                        "parser_config": kb.parser_config,
-                        "created_by": user.id,
-                        "type": file.type,
-                        "name": file.name,
-                        "suffix": Path(file.name).suffix.lstrip("."),
-                        "location": file.location,
-                        "size": file.size
-                    })
-                    file2document = File2DocumentService.insert(db, {
-                        "id": get_uuid(),
-                        "file_id": id,
-                        "document_id": doc.id,
-                    })
-                    file2documents.append(file2document.to_dict())
-        return get_json_result(data=file2documents)
+        background_tasks.add_task(convert_files_with_new_session, all_file_ids, kb_ids, user.id)
+        return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)
 
