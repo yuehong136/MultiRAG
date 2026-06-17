@@ -11,6 +11,7 @@
     - success=False -> result 为错误信息字符串
   本层不返回 HTTP 响应对象（HTTP 包装交由 restful_apis/dataset_api.py 网关层完成）。
 """
+
 from __future__ import annotations
 
 import json
@@ -73,6 +74,7 @@ def create_dataset(db: Session, tenant_id: str, req: dict) -> tuple[bool, Any]:
     # 字段名转换
     embd_id = req.pop("embedding_model", None) or None
     parser_id = req.pop("chunk_method", None) or None
+    req.pop("parse_type", None)
 
     # auto_metadata_config -> parser_config.metadata
     auto_meta = req.pop("auto_metadata_config", None)
@@ -422,10 +424,7 @@ async def get_knowledge_graph(db: Session, tenant_id: str, dataset_id: str) -> t
         obj["graph"]["nodes"] = sorted(obj["graph"]["nodes"], key=lambda x: x.get("pagerank", 0), reverse=True)[:256]
         if "edges" in obj["graph"]:
             node_id_set = {o["id"] for o in obj["graph"]["nodes"]}
-            filtered_edges = [
-                o for o in obj["graph"]["edges"]
-                if o["source"] != o["target"] and o["source"] in node_id_set and o["target"] in node_id_set
-            ]
+            filtered_edges = [o for o in obj["graph"]["edges"] if o["source"] != o["target"] and o["source"] in node_id_set and o["target"] in node_id_set]
             obj["graph"]["edges"] = sorted(filtered_edges, key=lambda x: x.get("weight", 0), reverse=True)[:128]
 
     return True, obj

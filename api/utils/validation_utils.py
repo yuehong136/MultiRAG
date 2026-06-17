@@ -14,27 +14,30 @@
 #  limitations under the License.
 #
 from collections import Counter
+import json
 import string
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from flask import Request
+from fastapi import Request
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
     StringConstraints,
     ValidationError,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
 from pydantic_core import PydanticCustomError
-from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
 from api.constants import DATASET_NAME_LIMIT
 
 
-def validate_and_parse_json_request(request: Request, validator: type[BaseModel], *, extras: dict[str, Any] | None = None, exclude_unset: bool = False) -> tuple[dict[str, Any] | None, str | None]:
+async def validate_and_parse_json_request(
+    request: Request, validator: type[BaseModel], *, extras: dict[str, Any] | None = None, exclude_unset: bool = False
+) -> tuple[dict[str, Any] | None, str | None]:
     """
     Validates and parses JSON requests through a multi-stage validation pipeline.
 
@@ -82,13 +85,13 @@ def validate_and_parse_json_request(request: Request, validator: type[BaseModel]
         2. Extra fields added via `extras` parameter are automatically removed
            from the final output after validation
     """
-    if request.mimetype != "application/json":
-        return None, f"Unsupported content type: Expected application/json, got {request.content_type}"
+    content_type = request.headers.get("content-type", "")
+    mimetype = content_type.split(";", 1)[0].lower()
+    if mimetype != "application/json":
+        return None, f"Unsupported content type: Expected application/json, got {content_type}"
     try:
-        payload = request.get_json() or {}
-    except UnsupportedMediaType:
-        return None, f"Unsupported content type: Expected application/json, got {request.content_type}"
-    except BadRequest:
+        payload = await request.json() or {}
+    except json.JSONDecodeError:
         return None, "Malformed JSON syntax: Missing commas/brackets or invalid encoding"
 
     if not isinstance(payload, dict):
@@ -155,11 +158,11 @@ def validate_and_parse_request_args(request: Request, validator: type[BaseModel]
             ({'param1': 'value'}, None)  # internal_id removed from output
 
     Notes:
-        - Uses request.args.to_dict() for Flask-compatible parameter extraction
+        - Uses FastAPI/Starlette request.query_params for parameter extraction
         - Maintains immutability of original request arguments
         - Preserves type conversion from Pydantic validation
     """
-    args = request.args.to_dict(flat=True)
+    args = dict(request.query_params)
     try:
         if extras is not None:
             args.update(extras)
@@ -383,11 +386,21 @@ class CreateDatasetReq(Base):
     description: Annotated[str | None, Field(default=None, max_length=65535)]
     embedding_model: Annotated[str | None, Field(default=None, max_length=255, serialization_alias="embd_id")]
     permission: Annotated[Literal["me", "team"], Field(default="me", min_length=1, max_length=16)]
-    chunk_method: Annotated[str | None, Field(default=None, serialization_alias="parser_id")]
     parse_type: Annotated[int | None, Field(default=None, ge=0, le=64)]
     pipeline_id: Annotated[str | None, Field(default=None, min_length=32, max_length=32, serialization_alias="pipeline_id")]
+    chunk_method: Annotated[str | None, Field(default=None, serialization_alias="parser_id")]
     parser_config: Annotated[ParserConfig | None, Field(default=None)]
     auto_metadata_config: Annotated[AutoMetadataConfig | None, Field(default=None)]
+    ext: Annotated[dict[str, Any], Field(default_factory=dict)]
+
+    @field_validator("pipeline_id", mode="before")
+    @classmethod
+    def handle_pipeline_id(cls, v: str | None, info: ValidationInfo) -> str | None:
+        if v is None:
+            return v
+        if info.data.get("parse_type", 0) == 1:
+            return None
+        return v
 
     @field_validator("avatar", mode="after")
     @classmethod
@@ -573,7 +586,7 @@ class CreateDatasetReq(Base):
         - If parser_id is omitted (field not set):
             * If both parse_type and pipeline_id are omitted → default chunk_method = "naive"
             * If both parse_type and pipeline_id are provided → allow ingestion pipeline mode
-        - If parser_id is provided (valid enum) → parse_type and pipeline_id must be None (disallow mixed usage)
+        - If parser_id is provided (valid enum) → parse_type must be None or 1, and pipeline_id must be None
 
         Raises:
             PydanticCustomError with code 'dependency_error' on violation.
@@ -599,11 +612,11 @@ class CreateDatasetReq(Base):
             # Both provided → allow pipeline mode
             return self
 
-        # parser_id provided (valid): MUST NOT have parse_type or pipeline_id
+        # parser_id provided (valid): parse_type MUST be None or 1, and MUST NOT have pipeline_id
         if isinstance(self.chunk_method, str):
-            if self.parse_type is not None or self.pipeline_id is not None:
+            if self.parse_type not in [None, 1] or self.pipeline_id is not None:
                 invalid = []
-                if self.parse_type is not None:
+                if self.parse_type not in [None, 1]:
                     invalid.append("parse_type")
                 if self.pipeline_id is not None:
                     invalid.append("pipeline_id")
@@ -616,20 +629,19 @@ class CreateDatasetReq(Base):
 
     @field_validator("chunk_method", mode="wrap")
     @classmethod
-    def validate_chunk_method(cls, v: Any, handler) -> Any:
+    def validate_chunk_method(cls, v: Any, handler, info: ValidationInfo) -> Any:
         """Wrap validation to unify error messages, including type errors (e.g. list)."""
         allowed = {"naive", "book", "email", "laws", "manual", "one", "paper", "picture", "presentation", "qa", "table", "tag", "resume"}
         error_msg = "Input should be 'naive', 'book', 'email', 'laws', 'manual', 'one', 'paper', 'picture', 'presentation', 'qa', 'table', 'tag' or 'resume'"
-        # Omitted field: handler won't be invoked (wrap still gets value); None treated as explicit invalid
-        if v is None:
-            raise PydanticCustomError("literal_error", error_msg)
         try:
             # Run inner validation (type checking)
             result = handler(v)
         except Exception:
             raise PydanticCustomError("literal_error", error_msg)
+        if not result and not info.data.get("pipeline_id", None):
+            raise PydanticCustomError("literal_error", error_msg)
         # After handler, enforce enumeration
-        if not isinstance(result, str) or result == "" or result not in allowed:
+        if result and result not in allowed:
             raise PydanticCustomError("literal_error", error_msg)
         return result
 

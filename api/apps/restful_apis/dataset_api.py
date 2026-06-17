@@ -9,6 +9,7 @@
 鉴权：使用统一鉴权依赖 current_tenant_id（同时接受 web 会话 JWT 与 SDK API-key），
       因此对外 /api/v1/datasets 既服务 web 前端又服务 SDK。
 """
+
 from __future__ import annotations
 
 import logging
@@ -23,6 +24,7 @@ from sqlalchemy.orm import Session
 from api.db.db_models import get_db
 from api.apps.services import dataset_api_service
 from api.utils.api_utils import current_tenant_id, get_error_data_result, get_result
+from api.utils.validation_utils import CreateDatasetReq
 from common.constants import RetCode
 
 router = APIRouter()
@@ -31,17 +33,9 @@ logger = logging.getLogger(__name__)
 
 # ==================== Pydantic Models (V2 风格) ====================
 
-class CreateDatasetRequest(BaseModel):
-    name: str
-    avatar: str | None = ""
-    description: str | None = ""
-    embedding_model: str | None = None
-    permission: str | None = "me"  # 'me' or 'team'
-    chunk_method: str | None = "naive"  # chunking method
-    parser_config: dict[str, Any] | None = None
-    auto_metadata_config: dict[str, Any] | None = None
-    # ext：承接前端塞进来的旧 web 扩展参数，透传进 KB 创建
-    ext: dict[str, Any] = {}
+
+class CreateDatasetRequest(CreateDatasetReq):
+    pass
 
 
 class UpdateDatasetRequest(BaseModel):
@@ -72,6 +66,7 @@ class AutoMetadataConfigRequest(BaseModel):
 
 # ==================== 响应映射 ====================
 
+
 def _respond(success: bool, result: Any):
     """通用映射：成功 -> get_result(data)，失败 -> get_error_data_result(retmsg)。
 
@@ -86,6 +81,7 @@ def _respond(success: bool, result: Any):
 
 
 # ==================== API Endpoints ====================
+
 
 @router.post("/datasets", summary="创建数据集")
 def create_dataset(
@@ -129,9 +125,7 @@ def update_dataset(
     tenant_id: str = Depends(current_tenant_id),
 ):
     try:
-        success, result = dataset_api_service.update_dataset(
-            db, tenant_id, dataset_id, request.model_dump(exclude_unset=True)
-        )
+        success, result = dataset_api_service.update_dataset(db, tenant_id, dataset_id, request.model_dump(exclude_unset=True))
         return _respond(success, result)
     except OperationalError as e:
         logger.exception(e)
