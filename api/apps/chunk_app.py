@@ -394,6 +394,7 @@ async def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), u
                 "doc_id": sres.field[id]["doc_id"],
                 "docnm_kwd": sres.field[id]["docnm_kwd"],
                 "important_kwd": sres.field[id].get("important_kwd", []),
+                "tag_kwd": sres.field[id].get("tag_kwd", []),
                 "question_kwd": sres.field[id].get("question_kwd", []),
                 "img_id": sres.field[id].get("img_id", ""),
                 "available_int": int(sres.field[id].get("available_int", 1)),
@@ -417,7 +418,7 @@ async def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), u
         return get_json_result(data=res)
     except Exception as e:
         if str(e).find("not_found") > 0:
-            return get_json_result(data=False, retmsg=f'No chunk found!',
+            return get_json_result(data=False, retmsg='No chunk found!',
                                    retcode=RetCode.DATA_ERROR)
         return server_error_response(e)
 
@@ -1619,7 +1620,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
                     break
             else:
                 return get_json_result(
-                    data=False, retmsg=f'Only owner of dataset authorized for this operation.',
+                    data=False, retmsg='Only owner of dataset authorized for this operation.',
                     retcode=RetCode.OPERATING_ERROR)
 
         kb = KnowledgebaseService.get_by_id(db, request.kb_ids[0])
@@ -1678,7 +1679,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
         return get_json_result(data=ranks)
     except Exception as e:
         if str(e).find("not_found") > 0:
-            return get_json_result(data=False, retmsg=f'No chunk found! Check the chunk status please!',
+            return get_json_result(data=False, retmsg='No chunk found! Check the chunk status please!',
                                    retcode=RetCode.DATA_ERROR)
         return server_error_response(e)
 

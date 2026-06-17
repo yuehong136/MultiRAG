@@ -1205,7 +1205,22 @@ def add_chunk(
             0   # process duration
         )
         
-        return get_result(data={"chunk_id": chunk_id, "content": req["content"], "image_id": chunk_data.get("img_id", "")})
+        renamed_chunk = {
+            "id": chunk_id,
+            "content": req["content"],
+            "document_id": document_id,
+            "docnm_kwd": doc.name,
+            "important_keywords": chunk_data.get("important_keywords", []),
+            "questions": chunk_data.get("question_kwd", []),
+            "dataset_id": dataset_id,
+            "image_id": chunk_data.get("img_id", ""),
+            "available": bool(chunk_data.get("available_int", 1)),
+            "positions": chunk_data.get("position_int", []),
+            "tag_kwd": chunk_data.get("tag_kwd", []),
+            "tag_feas": chunk_data.get("tag_feas", {}),
+        }
+        _ = ChunkModel(**renamed_chunk)
+        return get_result(data={"chunk": renamed_chunk})
     except Exception as e:
         logging.exception(e)
         return get_error_data_result(retmsg=f"Failed to add chunk: {str(e)}")

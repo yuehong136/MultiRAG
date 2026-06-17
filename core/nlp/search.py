@@ -918,6 +918,7 @@ class Dealer:
                 "docnm_kwd": dnm,
                 "kb_id": sres.field[id]["kb_id"],
                 "important_kwd": list(sres.field[id].get("important_kwd", [])), # todo 临时用list解决important_kwd非标准python类型问题
+                "tag_kwd": list(sres.field[id].get("tag_kwd", [])),
                 "img_id": sres.field[id].get("img_id", ""),
                 "similarity": float(sim_np[i]),
                 "vector_similarity": float(vsim[i]),
