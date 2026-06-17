@@ -895,6 +895,61 @@ class MultiRAGClient:
         else:
             print(f"Failed to drop token, code: {res_json.get('code', res_json.get('retcode'))}, message: {res_json.get('message', res_json.get('retmsg'))}")
 
+    def _print_key_value(self, data: dict) -> None:
+        """Print data as key-value pairs (one per line)."""
+        if not data:
+            print("No data to print")
+            return
+        for key, value in data.items():
+            print(f"{key}: {value}")
+
+    def get_chunk(self, command: dict[str, Any]) -> None:
+        """USER 模式：按 ID 获取单个 chunk。对接 Go server GET /v1/chunk/get。"""
+        if self.server_type != "user":
+            print("This command is only allowed in USER mode")
+            return
+        chunk_id_tree: Tree = command["chunk_id"]
+        chunk_id: str = chunk_id_tree.children[0].strip("'\"")
+        response = self.http_client.request(
+            "GET", f"chunk/get?chunk_id={chunk_id}", use_api_base=False, auth_kind="web"
+        )
+        res_json = response.json()
+        if response.status_code == 200 and res_json.get("code") == 0:
+            self._print_key_value(res_json["data"])
+        else:
+            print(f"Fail to get chunk, code: {res_json.get('code', res_json.get('retcode'))}, message: {res_json.get('message', res_json.get('retmsg'))}")
+
+    def list_chunks(self, command: dict[str, Any]) -> None:
+        """USER 模式：列出某文档的所有 chunk。对接 Go server POST /v1/chunk/list。"""
+        if self.server_type != "user":
+            print("This command is only allowed in USER mode")
+            return
+        doc_id_tree: Tree = command["doc_id"]
+        payload: dict[str, Any] = {"doc_id": doc_id_tree.children[0].strip("'\"")}
+        if "page" in command:
+            payload["page"] = command["page"]
+        if "size" in command:
+            payload["size"] = command["size"]
+        if "keywords" in command:
+            payload["keywords"] = command["keywords"].children[0].strip("'\"")
+        if "available_int" in command:
+            payload["available_int"] = command["available_int"]
+        response = self.http_client.request(
+            "POST", "chunk/list", use_api_base=False, auth_kind="web", json_body=payload
+        )
+        res_json = response.json()
+        if response.status_code == 200 and res_json.get("code") == 0:
+            chunks = res_json["data"]["chunks"]
+            if chunks:
+                for i, chunk in enumerate(chunks):
+                    print(f"\n--- Chunk {i + 1} ---")
+                    for key, value in chunk.items():
+                        print(f"  {key}: {value}")
+            else:
+                print("No chunks found")
+        else:
+            print(f"Fail to list chunks, code: {res_json.get('code', res_json.get('retcode'))}, message: {res_json.get('message', res_json.get('retmsg'))}")
+
     def list_user_datasets(self, command: dict):
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
@@ -1655,6 +1710,10 @@ def run_command(client: MultiRAGClient, command_dict: dict):
             client.list_tokens(command_dict)
         case "drop_token":
             client.drop_token(command_dict)
+        case "get_chunk":
+            client.get_chunk(command_dict)
+        case "list_chunks":
+            client.list_chunks(command_dict)
         case "list_user_datasets":
             client.list_user_datasets(command_dict)
         case "list_user_agents":

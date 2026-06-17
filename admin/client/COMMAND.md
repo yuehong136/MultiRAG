@@ -842,6 +842,57 @@ multirag> DROP TOKEN 'multirag-xxxxxxxx';
 
 ---
 
+### get_chunk
+
+**Description**  
+Gets a single chunk by its ID (USER mode only).
+
+**Usage**  
+```
+GET CHUNK <chunk_id>;
+```
+
+**Parameters**  
+- `chunk_id`: The chunk ID, quoted string.
+
+**Example**  
+```
+multirag> GET CHUNK 'a1b2c3d4';
+```
+
+**Display Effect**  
+(Sample output will be provided by the user)
+
+---
+
+### list_chunks
+
+**Description**  
+Lists the chunks belonging to a document (USER mode only).
+
+**Usage**  
+```
+LIST CHUNKS OF DOCUMENT <doc_id> [PAGE <page>] [SIZE <size>] [KEYWORDS <keywords>] [AVAILABLE <0|1>];
+```
+
+**Parameters**  
+- `doc_id`: The document ID, quoted string.
+- `PAGE <page>`: Optional page number (positive integer).
+- `SIZE <size>`: Optional page size (positive integer).
+- `KEYWORDS <keywords>`: Optional keyword filter, quoted string.
+- `AVAILABLE <0|1>`: Optional available_int filter (1 = available, 0 = unavailable).
+
+**Example**  
+```
+multirag> LIST CHUNKS OF DOCUMENT 'doc_123';
+multirag> LIST CHUNKS OF DOCUMENT 'doc_123' PAGE 1 SIZE 20 KEYWORDS 'invoice' AVAILABLE 1;
+```
+
+**Display Effect**  
+(Sample output will be provided by the user)
+
+---
+
 **Notes**  
 - All string parameters (such as names, IDs, paths) must be enclosed in single quotes (`'`) or double quotes (`"`).
 - Commands must end with a semicolon (`;`).

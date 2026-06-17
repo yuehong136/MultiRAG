@@ -42,6 +42,8 @@ sql_command: login_user
            | create_token
            | list_tokens
            | drop_token
+           | get_chunk
+           | list_chunks
            | list_user_datasets
            | list_user_agents
            | list_user_chats
@@ -143,6 +145,17 @@ PROVIDERS: "PROVIDERS"i
 DEFAULT: "DEFAULT"i
 CHATS: "CHATS"i
 FILES: "FILES"i
+DOCUMENTS: "DOCUMENTS"i
+DOCUMENT: "DOCUMENT"i
+CHUNK: "CHUNK"i
+CHUNKS: "CHUNKS"i
+GET: "GET"i
+PAGE: "PAGE"i
+SIZE: "SIZE"i
+KEYWORDS: "KEYWORDS"i
+AVAILABLE: "AVAILABLE"i
+METADATA: "METADATA"i
+SUMMARY: "SUMMARY"i
 PING: "PING"i
 LOGIN: "LOGIN"i
 REGISTER: "REGISTER"i
@@ -224,6 +237,9 @@ drop_key: DROP KEY quoted_string OF quoted_string ";"
 create_token: CREATE TOKEN quoted_string ";"
 list_tokens: LIST TOKENS ";"
 drop_token: DROP TOKEN quoted_string ";"
+
+get_chunk: GET CHUNK quoted_string ";"
+list_chunks: LIST CHUNKS OF DOCUMENT quoted_string (PAGE NUMBER)? (SIZE NUMBER)? (KEYWORDS quoted_string)? (AVAILABLE NUMBER)? ";"
 
 show_version: SHOW VERSION ";"
 
@@ -464,6 +480,26 @@ class MultiRAGCLITransformer(Transformer):
     def drop_token(self, items):
         token = items[2]
         return {"type": "drop_token", "token": token}
+
+    def get_chunk(self, items):
+        chunk_id = items[2]
+        return {"type": "get_chunk", "chunk_id": chunk_id}
+
+    def list_chunks(self, items):
+        doc_id = items[4]
+        result = {"type": "list_chunks", "doc_id": doc_id}
+        # Optional params: PAGE NUMBER / SIZE NUMBER / KEYWORDS quoted_string / AVAILABLE NUMBER
+        for i, item in enumerate(items):
+            tok = str(item).upper()
+            if tok == "PAGE":
+                result["page"] = int(items[i + 1])
+            elif tok == "SIZE":
+                result["size"] = int(items[i + 1])
+            elif tok == "KEYWORDS":
+                result["keywords"] = items[i + 1]
+            elif tok == "AVAILABLE":
+                result["available_int"] = int(items[i + 1])
+        return result
 
     def list_user_datasets(self, items):
         return {"type": "list_user_datasets"}
