@@ -3050,7 +3050,7 @@ wheels = [
 
 [[package]]
 name = "infinity-sdk"
-version = "0.7.0.dev2"
+version = "0.7.0.dev5"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
     { name = "datrie" },
@@ -3067,9 +3067,9 @@ dependencies = [
     { name = "sqlglot", extra = ["rs"] },
     { name = "thrift" },
 ]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/99/3e/5d4f4d0b50750a6ef3a358e86b5d2347d511771b5a014956d3973f921f92/infinity_sdk-0.7.0.dev2.tar.gz", hash = "sha256:186a199f2250d19295ff93e52f8d2f023c96926c84e99c924c6567a3be73fb9a" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/cd/83/c3a1e3e87dcfd17622c84fa074997a980ff2a444474651003775947058d2/infinity_sdk-0.7.0.dev5.tar.gz", hash = "sha256:13e7a61869dbf79406aaaaa50ec2932a6701387b95eaf871a1d6572f37a095d7" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/7c/9d/8322c9a3e13a721dedb37c5e978221b263cfbc3dae0644c5ad283c782235/infinity_sdk-0.7.0.dev2-py3-none-any.whl", hash = "sha256:8d7a071ad25a24b50e779f77d1997b792455349e87d259abcafb00539b24cd35" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/c2/6d/c0b68f9e75c27e3398414509916133b22333c7052c4e209cc0a9b4bb448a/infinity_sdk-0.7.0.dev5-py3-none-any.whl", hash = "sha256:6fbc713a0ccf71dab818e539e54569d4540311b3fac8db317aac40da31914aff" },
 ]
 
 [[package]]
@@ -4088,10 +4088,10 @@ dependencies = [
     { name = "extract-msg" },
     { name = "fastapi" },
     { name = "fastapi-login" },
-    { name = "feedparser" },
     { name = "fastembed", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'" },
     { name = "fastembed-gpu", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
     { name = "fastmcp" },
+    { name = "feedparser" },
     { name = "ffmpeg-python" },
     { name = "flagembedding" },
     { name = "google-api-python-client" },
@@ -4242,10 +4242,10 @@ requires-dist = [
     { name = "extract-msg", specifier = ">=0.55.0" },
     { name = "fastapi", specifier = ">=0.128.0" },
     { name = "fastapi-login", specifier = ">=1.10.1" },
-    { name = "feedparser", specifier = ">=6.0.11,<7.0.0" },
     { name = "fastembed", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'", specifier = ">=0.3.6,<0.4.0" },
     { name = "fastembed-gpu", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'", specifier = ">=0.3.6,<0.4.0" },
     { name = "fastmcp", specifier = ">=3.0.0" },
+    { name = "feedparser", specifier = ">=6.0.11,<7.0.0" },
     { name = "ffmpeg-python", specifier = ">=0.2.0" },
     { name = "flagembedding", specifier = "==1.2.10" },
     { name = "google-api-python-client", specifier = ">=2.190.0,<3.0.0" },
@@ -4259,7 +4259,7 @@ requires-dist = [
     { name = "httpx", extras = ["socks"], specifier = ">=0.28.1,<0.29.0" },
     { name = "huggingface-hub", specifier = ">=0.25.0,<0.26.0" },
     { name = "infinity-emb", specifier = ">=0.0.66,<0.0.67" },
-    { name = "infinity-sdk", specifier = "==0.7.0.dev2" },
+    { name = "infinity-sdk", specifier = "==0.7.0.dev5" },
     { name = "itsdangerous", specifier = "==2.1.2" },
     { name = "jieba", specifier = ">=0.42.1" },
     { name = "jira", specifier = "==3.10.5" },
