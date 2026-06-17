@@ -19,6 +19,7 @@ package cli
 import (
 	"bufio"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -726,6 +727,130 @@ func (c *MultiRAGClient) DropToken(cmd *Command) (map[string]interface{}, error)
 	return nil, nil
 }
 
+// GenerateAdminToken generates an API token for a user (admin mode only)
+func (c *MultiRAGClient) GenerateAdminToken(cmd *Command) (map[string]interface{}, error) {
+	if c.ServerType != "admin" {
+		return nil, fmt.Errorf("this command is only allowed in ADMIN mode")
+	}
+
+	userName, ok := cmd.Params["user_name"].(string)
+	if !ok {
+		return nil, fmt.Errorf("user_name not provided")
+	}
+
+	resp, err := c.HTTPClient.Request("POST", fmt.Sprintf("/admin/users/%s/keys", userName), true, "admin", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate token: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to generate token: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	resJSON, err := resp.JSON()
+	if err != nil {
+		return nil, fmt.Errorf("invalid JSON response: %w", err)
+	}
+	if code, ok := resJSON["code"].(float64); !ok || code != 0 {
+		msg, _ := resJSON["message"].(string)
+		return nil, fmt.Errorf("failed to generate token: %s", msg)
+	}
+
+	if data, ok := resJSON["data"].(map[string]interface{}); ok {
+		delete(data, "create_time")
+		delete(data, "update_time")
+		delete(data, "update_date")
+		PrintTableSimple([]map[string]interface{}{data})
+	} else {
+		fmt.Println("Token generated successfully")
+	}
+	return nil, nil
+}
+
+// ListAdminTokens lists all API tokens for a user (admin mode only)
+func (c *MultiRAGClient) ListAdminTokens(cmd *Command) (map[string]interface{}, error) {
+	if c.ServerType != "admin" {
+		return nil, fmt.Errorf("this command is only allowed in ADMIN mode")
+	}
+
+	userName, ok := cmd.Params["user_name"].(string)
+	if !ok {
+		return nil, fmt.Errorf("user_name not provided")
+	}
+
+	resp, err := c.HTTPClient.Request("GET", fmt.Sprintf("/admin/users/%s/keys", userName), true, "admin", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tokens: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to list tokens: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	resJSON, err := resp.JSON()
+	if err != nil {
+		return nil, fmt.Errorf("invalid JSON response: %w", err)
+	}
+	if code, ok := resJSON["code"].(float64); !ok || code != 0 {
+		msg, _ := resJSON["message"].(string)
+		return nil, fmt.Errorf("failed to list tokens: %s", msg)
+	}
+
+	tableData := make([]map[string]interface{}, 0)
+	if data, ok := resJSON["data"].([]interface{}); ok {
+		for _, item := range data {
+			if m, ok := item.(map[string]interface{}); ok {
+				delete(m, "dialog_id")
+				delete(m, "source")
+				delete(m, "create_time")
+				delete(m, "update_time")
+				delete(m, "update_date")
+				tableData = append(tableData, m)
+			}
+		}
+	}
+	PrintTableSimple(tableData)
+	return nil, nil
+}
+
+// DropAdminToken deletes an API token for a user (admin mode only)
+func (c *MultiRAGClient) DropAdminToken(cmd *Command) (map[string]interface{}, error) {
+	if c.ServerType != "admin" {
+		return nil, fmt.Errorf("this command is only allowed in ADMIN mode")
+	}
+
+	userName, ok := cmd.Params["user_name"].(string)
+	if !ok {
+		return nil, fmt.Errorf("user_name not provided")
+	}
+
+	token, ok := cmd.Params["token"].(string)
+	if !ok {
+		return nil, fmt.Errorf("token not provided")
+	}
+
+	// URL encode the token to handle special characters
+	encodedToken := url.QueryEscape(token)
+
+	resp, err := c.HTTPClient.Request("DELETE", fmt.Sprintf("/admin/users/%s/keys/%s", userName, encodedToken), true, "admin", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to drop token: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to drop token: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	resJSON, err := resp.JSON()
+	if err != nil {
+		return nil, fmt.Errorf("invalid JSON response: %w", err)
+	}
+	if code, ok := resJSON["code"].(float64); !ok || code != 0 {
+		msg, _ := resJSON["message"].(string)
+		return nil, fmt.Errorf("failed to drop token: %s", msg)
+	}
+
+	fmt.Println("Token dropped successfully")
+	return nil, nil
+}
+
 // ExecuteCommand executes a parsed command
 // Returns benchmark result map for commands that support it (e.g., ping_server with iterations > 1)
 func (c *MultiRAGClient) ExecuteCommand(cmd *Command) (map[string]interface{}, error) {
@@ -760,9 +885,17 @@ func (c *MultiRAGClient) ExecuteCommand(cmd *Command) (map[string]interface{}, e
 		return nil, c.DropUser(cmd)
 	case "create_token":
 		return c.CreateToken(cmd)
+	case "generate_token":
+		return c.GenerateAdminToken(cmd)
 	case "list_tokens":
+		if c.ServerType == "admin" {
+			return c.ListAdminTokens(cmd)
+		}
 		return c.ListTokens(cmd)
 	case "drop_token":
+		if c.ServerType == "admin" {
+			return c.DropAdminToken(cmd)
+		}
 		return c.DropToken(cmd)
 	// TODO: Implement other commands
 	default:

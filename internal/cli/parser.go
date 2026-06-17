@@ -296,8 +296,6 @@ func (p *Parser) parseListCommand() (*Command, error) {
 		return p.parseListDatasets()
 	case TokenAgents:
 		return p.parseListAgents()
-	case TokenKeys:
-		return p.parseListKeys()
 	case TokenTokens:
 		return p.parseListTokens()
 	case TokenModel:
@@ -360,28 +358,6 @@ func (p *Parser) parseListAgents() (*Command, error) {
 	}
 
 	cmd := NewCommand("list_agents")
-	cmd.Params["user_name"] = userName
-
-	p.nextToken()
-	if err := p.expectSemicolon(); err != nil {
-		return nil, err
-	}
-	return cmd, nil
-}
-
-func (p *Parser) parseListKeys() (*Command, error) {
-	p.nextToken() // consume KEYS
-	if p.curToken.Type != TokenOf {
-		return nil, fmt.Errorf("expected OF")
-	}
-	p.nextToken()
-
-	userName, err := p.parseQuotedString()
-	if err != nil {
-		return nil, err
-	}
-
-	cmd := NewCommand("list_keys")
 	cmd.Params["user_name"] = userName
 
 	p.nextToken()
@@ -745,8 +721,6 @@ func (p *Parser) parseDropCommand() (*Command, error) {
 		return p.parseDropDataset()
 	case TokenChat:
 		return p.parseDropChat()
-	case TokenKey:
-		return p.parseDropKey()
 	case TokenToken:
 		return p.parseDropToken()
 	default:
@@ -844,35 +818,6 @@ func (p *Parser) parseDropChat() (*Command, error) {
 	return cmd, nil
 }
 
-func (p *Parser) parseDropKey() (*Command, error) {
-	p.nextToken() // consume KEY
-	key, err := p.parseQuotedString()
-	if err != nil {
-		return nil, err
-	}
-
-	p.nextToken()
-	if p.curToken.Type != TokenOf {
-		return nil, fmt.Errorf("expected OF")
-	}
-	p.nextToken()
-
-	userName, err := p.parseQuotedString()
-	if err != nil {
-		return nil, err
-	}
-
-	cmd := NewCommand("drop_key")
-	cmd.Params["key"] = key
-	cmd.Params["user_name"] = userName
-
-	p.nextToken()
-	if err := p.expectSemicolon(); err != nil {
-		return nil, err
-	}
-	return cmd, nil
-}
-
 // parseCreateToken parses: CREATE TOKEN;  (user mode, self-service)
 func (p *Parser) parseCreateToken() (*Command, error) {
 	p.nextToken() // consume TOKEN
@@ -883,17 +828,32 @@ func (p *Parser) parseCreateToken() (*Command, error) {
 	return cmd, nil
 }
 
-// parseListTokens parses: LIST TOKENS;  (user mode, self-service)
+// parseListTokens parses:
+//   LIST TOKENS;                 (user mode, self-service)
+//   LIST TOKENS OF '<email>';    (admin mode, on behalf of a user)
 func (p *Parser) parseListTokens() (*Command, error) {
 	p.nextToken() // consume TOKENS
 	cmd := NewCommand("list_tokens")
+
+	if p.curToken.Type == TokenOf {
+		p.nextToken()
+		userName, err := p.parseQuotedString()
+		if err != nil {
+			return nil, err
+		}
+		cmd.Params["user_name"] = userName
+		p.nextToken()
+	}
+
 	if err := p.expectSemicolon(); err != nil {
 		return nil, err
 	}
 	return cmd, nil
 }
 
-// parseDropToken parses: DROP TOKEN '<token>';  (user mode, self-service)
+// parseDropToken parses:
+//   DROP TOKEN '<token>';                 (user mode, self-service)
+//   DROP TOKEN '<token>' OF '<email>';    (admin mode, on behalf of a user)
 func (p *Parser) parseDropToken() (*Command, error) {
 	p.nextToken() // consume TOKEN
 	token, err := p.parseQuotedString()
@@ -905,6 +865,16 @@ func (p *Parser) parseDropToken() (*Command, error) {
 	cmd.Params["token"] = token
 
 	p.nextToken()
+	if p.curToken.Type == TokenOf {
+		p.nextToken()
+		userName, err := p.parseQuotedString()
+		if err != nil {
+			return nil, err
+		}
+		cmd.Params["user_name"] = userName
+		p.nextToken()
+	}
+
 	if err := p.expectSemicolon(); err != nil {
 		return nil, err
 	}
@@ -1320,10 +1290,11 @@ func (p *Parser) parseResetCommand() (*Command, error) {
 	return cmd, nil
 }
 
+// parseGenerateCommand parses: GENERATE TOKEN FOR USER '<email>';  (admin mode)
 func (p *Parser) parseGenerateCommand() (*Command, error) {
 	p.nextToken() // consume GENERATE
-	if p.curToken.Type != TokenKey {
-		return nil, fmt.Errorf("expected KEY")
+	if p.curToken.Type != TokenToken {
+		return nil, fmt.Errorf("expected TOKEN")
 	}
 	p.nextToken()
 	if p.curToken.Type != TokenFor {
@@ -1340,7 +1311,7 @@ func (p *Parser) parseGenerateCommand() (*Command, error) {
 		return nil, err
 	}
 
-	cmd := NewCommand("generate_key")
+	cmd := NewCommand("generate_token")
 	cmd.Params["user_name"] = userName
 
 	p.nextToken()
