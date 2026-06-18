@@ -48,6 +48,30 @@ class GetSqlAndTableConfigReq(BaseModel):
     clear_cache: bool = Field(False, title="清除缓存", description="是否清除LLM响应缓存")
 
 
+def _minimal_table_config(recommended_chart: str | None) -> dict:
+    """
+    表格配置（可调面板）生成失败时的最小可用降级配置。
+
+    数据表/图表在前端从 data.result 独立渲染，不依赖 table_config；此骨架只为让
+    可调面板（MainLayout）不因缺键/缺数组而崩溃：每个 .map 字段都给空数组、键齐备。
+    超集骨架（同时含明细表与聚合表两组键）无害——前端只 .map 实际存在的分组。
+    注意：降级走的是「成功 + 数据 + 此骨架」，绝不可在响应 data 里设 status='error'，
+    否则前端 MainLayout 会隐藏整个数据网格。
+    """
+    return {
+        "chart_type": "table-aggr" if recommended_chart == "聚合表" else "table-row",
+        "columns": {"selected_columns": [], "available_fields": []},
+        "filters": {"filter_conditions": [], "available_fields": []},
+        "order_by": {"order_by_fields": [], "available_fields": []},
+        "dimensions": {"selected_dimensions": [], "available_dimensions": []},
+        "metrics": {"selected_metrics": [], "available_metrics": []},
+        "where_conditions": {"where_conditions": [], "available_fields": []},
+        "having_conditions": {"having_conditions": [], "available_fields": []},
+        "all_semantic_fields": [],
+        "limit": None,
+    }
+
+
 @router.post("/get-sql-and-table-config", response_model=ResponseSchema)
 async def get_sql_and_table_config(
         body: GetSqlAndTableConfigReq = Body(...),
@@ -338,14 +362,26 @@ async def get_sql_and_table_config(
                     )
 
         # 2. 生成表格配置
-        model_table_alias_mapping_list, table_config = await service.generate_table_config(
-            used_table_detail_dict=used_table_detail_dict,
-            model_list=model_list,
-            sql_components=sql_components,
-            recommended_chart=body.semantic_layer.get('recommended_chart'),
-            cached_model_relations=phase2_prefetch.get('model_relations'),
-            cached_dimension_values=phase2_prefetch.get('dimension_values'),
-        )
+        # 表格配置（可调面板）是增强项而非交付物：数据与图表在前端从 result 独立渲染。
+        # 任何生成失败（generate 对未知图表类型隐式返回 None、模型 dimsAndMetrics 缺失、
+        # 其它残余 KeyError 等）都降级为最小可用配置，绝不让整条响应失败、
+        # 绝不设 data.status='error'（否则前端会隐藏整个数据网格）。
+        recommended_chart = body.semantic_layer.get('recommended_chart')
+        try:
+            model_table_alias_mapping_list, table_config = await service.generate_table_config(
+                used_table_detail_dict=used_table_detail_dict,
+                model_list=model_list,
+                sql_components=sql_components,
+                recommended_chart=recommended_chart,
+                cached_model_relations=phase2_prefetch.get('model_relations'),
+                cached_dimension_values=phase2_prefetch.get('dimension_values'),
+            )
+            if table_config is None:
+                raise ValueError(f"generate_table_config 未支持的图表类型: {recommended_chart!r}")
+        except Exception:
+            logger.exception("[get-sql] 生成表格配置失败，降级为最小可用配置（数据与图表不受影响）")
+            model_table_alias_mapping_list = []
+            table_config = _minimal_table_config(recommended_chart)
         logger.debug("[get-sql] table_config keys=%s, model_table_alias_mapping=%s",
                      list(table_config.keys()) if table_config else [],
                      model_table_alias_mapping_list)
@@ -396,10 +432,12 @@ async def get_sql_and_table_config(
         return ResponseSchema(
             # 虽然无法生成SQL，但这里要返回成功的状态，因为中台接口只有在收到成功的状态才能将data返回给前端。
             status=StatusEnum.SUCCESS,
-            message=f"SQL生成失败: {str(e)}",
+            # 用 repr(e) 保证诊断信息非空（str(KeyError('')) == '' 曾导致前端弹出空引号警告）
+            message=f"SQL生成失败: {e!r}",
             data={
                 "status": StatusEnum.ERROR,
-                "message": str(e),
+                # 前端 message.warning 直接展示此字段，必须是永不为空的用户可读文案
+                "message": "生成分析结果时出错，请稍后重试或更换问法",
             }
         )
     finally:

@@ -286,8 +286,12 @@ class TableConfigGenerator:
             table_alias, column_name = self._get_table_alias_and_field_by_split_column(cond['field'])
             operator = cond['operator']
             value = cond['value']
-            table_name = table_alias_mapping[table_alias]
-            table_detail = self._get_table_detail_with_fallback(used_table_detail_dict, table_name)
+            table_name, table_detail = self._resolve_table(table_alias, table_alias_mapping, used_table_detail_dict)
+            if table_detail is None:
+                filter_columns.append(
+                    {"is_semantic_field": False, "sql_column": cond["field"], "operator": operator, "value": value,
+                     "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())})
+                continue
             for metric in table_detail['dimsAndMetrics']['metrics']:
                 if metric['expression'].lower() == table_name+'.'+column_name.lower():
                     filter_columns.append(
@@ -315,8 +319,16 @@ class TableConfigGenerator:
                 split_col = self._get_table_alias_and_field_by_split_column(group_by)
                 if len(split_col) == 2:
                     table_alias, column_name = self._get_table_alias_and_field_by_split_column(group_by)
-                    table_name = table_alias_mapping[table_alias]
-                    table_detail = self._get_table_detail_with_fallback(used_table_detail_dict, table_name)
+                    table_name, table_detail = self._resolve_table(table_alias, table_alias_mapping, used_table_detail_dict)
+                    if table_detail is None:
+                        group_by_dimensions.append({
+                            "is_semantic_field": False,
+                            "sql_column": group_by,
+                            "id": str(uuid.uuid4()),
+                            "wid": str(uuid.uuid4()),
+                            "nanoId": str(uuid.uuid4())
+                        })
+                        continue
                     is_timeseries = False
                     time_unit = None
                     time_source = None
@@ -370,15 +382,14 @@ class TableConfigGenerator:
         for metric in metrics:
             is_matched_semantic_field = False
             table_alias, column_name = self._get_table_alias_and_field_by_split_column(metric)
-            if len(table_alias) == 0:
-                # 如果没有表别名，则无法确定来源表，暂时直接按照原始列名处理
+            table_name, table_detail = self._resolve_table(table_alias, table_alias_mapping, used_table_detail_dict)
+            if table_detail is None:
+                # 无法确定来源表（多表+裸列，或模型表详情缺失），按原始列名作为非语义字段处理
                 selected_metrics.append(
                     {"is_semantic_field": False, "sql_column": metric, "id": str(uuid.uuid4()),
                      "wid": str(uuid.uuid4()), "nanoId": str(uuid.uuid4()), "original_sql_component": metric})
                 continue
             else:
-                table_name = table_alias_mapping[table_alias]
-                table_detail = self._get_table_detail_with_fallback(used_table_detail_dict, table_name)
                 for model_metric in table_detail['dimsAndMetrics']['metrics']:
                     if (model_metric['expression'].lower() == column_name.lower()) or are_expressions_equal_ignore_quotes(model_metric['expression'], column_name):
                         selected_metrics.append(
@@ -552,8 +563,11 @@ class TableConfigGenerator:
             split_col = self._get_table_alias_and_field_by_split_column(col)
             if len(split_col) == 2:
                 alias, column_name = split_col
-                table_name = table_alias_mapping[alias]
-                table_detail = self._get_table_detail_with_fallback(used_table_detail_dict, table_name)
+                table_name, table_detail = self._resolve_table(alias, table_alias_mapping, used_table_detail_dict)
+                if table_detail is None:
+                    selected_columns.append(
+                        {"is_semantic_field": False, "sql_column": col, "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())})
+                    continue
                 for dim in table_detail['dimsAndMetrics']['dimensions']:
                     if dim['dimensionEnName'].lower() == column_name.lower():
                         selected_columns.append(
@@ -603,6 +617,41 @@ class TableConfigGenerator:
         available_keys = list(used_table_detail_dict.keys())
         raise KeyError(f"Table '{table_name}' not found. Available tables: {available_keys}")
 
+    def _resolve_table(self, alias, table_alias_mapping, used_table_detail_dict):
+        """
+        把列的表别名解析为 (真实表名, 表详情)。无法安全确定来源表时返回 (None, None)，
+        调用方据此把该字段降级为非语义字段——本方法绝不抛异常。
+
+        解析顺序：
+          1) 别名命中映射 → 直接用；
+          2) 别名为空/未命中，但本次查询只涉及唯一一张表 → 用那张表
+             （覆盖「单表 + LLM 省略表前缀」高频场景，确定性恢复，无需猜测）；
+          3) 多表 + 空/未知别名 → 无法安全确定 → (None, None)。
+
+        另外校验 dimsAndMetrics：getModelIndsAndDims 空返回会被直接赋成 None
+        （见 model_dataset_resolver._ensure_dims_and_metrics），裸取其 dimensions/metrics
+        会 TypeError，这里一并拦下并降级。
+        """
+        table_name = None
+        if alias and alias in table_alias_mapping:
+            table_name = table_alias_mapping[alias]
+        else:
+            distinct_tables = set(table_alias_mapping.values())
+            if len(distinct_tables) == 1:
+                table_name = next(iter(distinct_tables))
+        if not table_name:
+            return None, None
+        try:
+            detail = self._get_table_detail_with_fallback(used_table_detail_dict, table_name)
+        except KeyError:
+            return None, None
+        dims_and_metrics = detail.get("dimsAndMetrics") if isinstance(detail, dict) else None
+        if (not isinstance(dims_and_metrics, dict)
+                or "dimensions" not in dims_and_metrics
+                or "metrics" not in dims_and_metrics):
+            return None, None
+        return table_name, detail
+
     def _process_where_conditions(self, parts: Dict[str, Any], used_table_detail_dict: Dict[str, Any]) -> List[
         Dict[str, Any]]:
         """处理WHERE条件"""
@@ -634,8 +683,12 @@ class TableConfigGenerator:
                      "wid": str(uuid.uuid4()), "original_sql_component": cond})
                 continue
             table_alias, column_name = self._get_table_alias_and_field_by_split_column(field)
-            table_name = table_alias_mapping[table_alias]
-            table_detail = self._get_table_detail_with_fallback(used_table_detail_dict, table_name)
+            table_name, table_detail = self._resolve_table(table_alias, table_alias_mapping, used_table_detail_dict)
+            if table_detail is None:
+                filter_columns.append(
+                    {"is_semantic_field": False, "sql_column": cond["field"], "operator": operator, "value": value,
+                     "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())})
+                continue
             for dim in table_detail['dimsAndMetrics']['dimensions']:
                 if dim['dimensionEnName'].lower() == column_name.lower():
                     filter_columns.append(
@@ -674,13 +727,12 @@ class TableConfigGenerator:
             is_matched_semantic_field = False
             table_alias, column_name = self._get_table_alias_and_field_by_split_column(order_info['field'])
             direction = order_info['direction']
-            table_name = table_alias_mapping.get(table_alias, None)
-            if not table_name:
+            table_name, table_detail = self._resolve_table(table_alias, table_alias_mapping, used_table_detail_dict)
+            if table_detail is None:
                 order_by_columns.append(
                     {"is_semantic_field": False, "sql_column": order_info['field'], "id": str(uuid.uuid4()),
                      "direction": direction, "wid": str(uuid.uuid4())})
                 continue
-            table_detail = self._get_table_detail_with_fallback(used_table_detail_dict, table_name)
             for metric in table_detail['dimsAndMetrics']['metrics']:
                 if metric['expression'].lower() == table_name+'.'+column_name.lower():
                     order_by_columns.append(
