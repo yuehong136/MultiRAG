@@ -17,7 +17,7 @@ from urllib.parse import quote
 
 from api.constants import FILE_NAME_LEN_LIMIT
 from api.db import FileType
-from api.db.db_models import APIToken, Task, get_db
+from api.db.db_models import APIToken, Document, Task, get_db
 from api.db.services.document_service import DocumentService
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.file2document_service import File2DocumentService
@@ -877,20 +877,30 @@ def parse_documents(
         for doc in docs:
             if doc.status == "0":  # 未启用的文档不解析
                 continue
-            if doc.run == TaskStatus.RUNNING.value:
+            info = {
+                "progress": 0,
+                "progress_msg": "",
+                "run": TaskStatus.RUNNING.value,
+                "chunk_num": 0,
+                "token_num": 0,
+            }
+            if not DocumentService.filter_update(
+                db,
+                [
+                    Document.id == doc.id,
+                    (Document.run.is_(None) | (Document.run != TaskStatus.RUNNING.value)),
+                ],
+                info,
+            ):
                 return get_error_data_result(retmsg="Can't parse document that is currently being processed")
 
-            DocumentService.update_by_id(
-                db,
-                doc.id, 
-                {
-                    "progress": 0,
-                    "progress_msg": "",
-                    "run": TaskStatus.UNSTART.value,
-                }
-            )
-            
-            queue_tasks(db, doc, tenant_id)
+            settings.docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id), dataset_id)
+            TaskService.filter_delete(db, [Task.doc_id == doc.id])
+            doc = DocumentService.get_by_id(db, doc.id)
+            doc_dict = doc.to_dict()
+            doc_dict["tenant_id"] = tenant_id
+            bucket, name = File2DocumentService.get_storage_address(db, doc_id=doc_dict["id"])
+            queue_tasks(db, doc_dict, bucket, name, 0)
         
         message = "Documents queued for parsing"
         if duplicate_messages:
