@@ -168,8 +168,19 @@ class DialogService(CommonService):
         return [item.__dict__ for item in results]
 
     @classmethod
-    def get_by_tenant_ids(cls, db: Session, joined_tenant_ids, user_id, page_number, items_per_page, orderby, desc,
-                          keywords=None, parser_id=None):
+    def get_by_tenant_ids(
+        cls,
+        db: Session,
+        joined_tenant_ids,
+        user_id,
+        page_number,
+        items_per_page,
+        orderby,
+        desc,
+        keywords=None,
+        id=None,
+        name=None,
+    ):
         """
         获取对话列表（支持分页、搜索、排序）
         
@@ -212,11 +223,14 @@ class DialogService(CommonService):
             (cls.model.status == StatusEnum.VALID.value)
         )
 
+        if id:
+            query = query.filter(cls.model.id == id)
+
+        if name:
+            query = query.filter(cls.model.name == name)
+
         if keywords:
             query = query.filter(func.lower(cls.model.name).ilike(f"%{keywords.lower()}%"))
-
-        if parser_id:
-            query = query.filter(cls.model.parser_id == parser_id)
 
         # 根据 desc 参数确定排序方式
         if desc:

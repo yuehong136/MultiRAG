@@ -242,7 +242,12 @@ def get_kb_names(kb_ids, db: Session):
         nms.append(kb.name)
     return ids, nms
 
-@router.post('/set', summary="设置对话", response_description="成功设置对话")
+@router.post(
+    '/set',
+    summary="已过时：设置对话，请使用 /api/v1/chats",
+    response_description="成功设置对话",
+    deprecated=True,
+)
 def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
         设置对话
@@ -380,18 +385,6 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
         if is_create and DialogService.get_or_none(db, tenant_id=user.id, name=request.name):
             return get_data_error_result(retmsg=f"Duplicated Dialog name {request.name}.")
 
-        if not is_create:
-            # only for chat updating
-            if not (request.kb_ids or []) and not prompt_config.get("tavily_api_key") and "{knowledge}" in prompt_config.get("system", ""):
-                return get_data_error_result(retmsg="Please remove `{knowledge}` in system prompt since no dataset / Tavily used here.")
-
-        for p in prompt_config.get("parameters", []):
-            if p["optional"]:
-                continue
-            if prompt_config.get("system", "").find("{%s}" % p["key"]) < 0:
-                return get_data_error_result(
-                    retmsg="Parameter '{}' is not used".format(p["key"]))
-
         tenant = TenantService.get_by_id(db, user.id)
         if not tenant:
             return get_data_error_result(retmsg="Tenant not found!")
@@ -456,7 +449,12 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
         return server_error_response(e)
 
 
-@router.get('/get', summary="获取对话", response_description="成功获取对话")
+@router.get(
+    '/get',
+    summary="已过时：获取对话，请使用 /api/v1/chats/{chat_id}",
+    response_description="成功获取对话",
+    deprecated=True,
+)
 def get(dialog_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     try:
         dia = DialogService.get_by_id(db, dialog_id)
@@ -468,7 +466,12 @@ def get(dialog_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     except Exception as e:
         return server_error_response(e)
 
-@router.get('/list', summary="列出对话", response_description="成功列出对话")
+@router.get(
+    '/list',
+    summary="已过时：列出对话，请使用 /api/v1/chats",
+    response_description="成功列出对话",
+    deprecated=True,
+)
 def list_dialogs(db: Session = Depends(get_db), user=Depends(manager)):
     try:
         conversations = DialogService.query(
@@ -485,12 +488,16 @@ def list_dialogs(db: Session = Depends(get_db), user=Depends(manager)):
         return server_error_response(e)
 
 
-@router.post("/next", response_model=ListDialogsResponse, summary="List dialogs (next)")
+@router.post(
+    "/next",
+    response_model=ListDialogsResponse,
+    summary="已过时：分页列出对话，请使用 /api/v1/chats",
+    deprecated=True,
+)
 def list_dialogs_next(
     keywords: Annotated[str, Query(alias="keywords", description="关键词模糊搜索")] = "",
     page_number: Annotated[int, Query(alias="page", ge=0, description="页码（从1开始；为0则不分页）")] = 0,
     items_per_page: Annotated[int, Query(alias="page_size", ge=0, description="每页大小（为0则不分页）")] = 0,
-    parser_id: Annotated[str | None, Query(alias="parser_id", description="parser 过滤")] = None,
     orderby: Annotated[str, Query(alias="orderby", description="排序字段")] = "create_time",
     # 原逻辑：默认 true；当传入字符串 "false" 时才为 False。
     # 在 FastAPI 中直接使用 bool 会自动解析 ?desc=false 为 False，因此等价且更安全。
@@ -513,8 +520,7 @@ def list_dialogs_next(
                 items_per_page,               # items_per_page
                 orderby,                      # orderby
                 desc,                         # desc
-                keywords,                     # keywords
-                parser_id                     # parser_id
+                keywords                      # keywords
             )
         else:
             tenants = owner_ids
@@ -527,8 +533,7 @@ def list_dialogs_next(
                 0,            # items_per_page=0 -> 不分页
                 orderby,
                 desc,
-                keywords,
-                parser_id
+                keywords
             )
             # 过滤 tenant_id
             dialogs = [d for d in dialogs if d.get("tenant_id") in tenants]
@@ -547,7 +552,12 @@ def list_dialogs_next(
         return server_error_response(e)
 
 
-@router.post('/rm', summary="删除对话应用", response_description="成功删除对话应用")
+@router.post(
+    '/rm',
+    summary="已过时：删除对话应用，请使用 /api/v1/chats 或 /api/v1/chats/{chat_id}",
+    response_description="成功删除对话应用",
+    deprecated=True,
+)
 def rm(request: RemoveDialogRequest, db: Session = Depends(get_db), user=Depends(manager)):
     dialog_list=[]
     tenants = UserTenantService.query(db, user_id=user.id)
