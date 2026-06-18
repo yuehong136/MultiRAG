@@ -291,6 +291,12 @@ func (l *Lexer) lookupIdent(ident string) Token {
 		return Token{Type: TokenBenchmark, Value: ident}
 	case "PING":
 		return Token{Type: TokenPing, Value: ident}
+	case "INDEX":
+		return Token{Type: TokenIndex, Value: ident}
+	case "VECTOR_SIZE":
+		return Token{Type: TokenVectorSize, Value: ident}
+	case "DOC_META":
+		return Token{Type: TokenDocMeta, Value: ident}
 	default:
 		return Token{Type: TokenIdentifier, Value: ident}
 	}

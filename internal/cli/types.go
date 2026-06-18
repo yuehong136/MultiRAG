@@ -97,6 +97,9 @@ const (
 	TokenSync
 	TokenBenchmark
 	TokenPing
+	TokenIndex
+	TokenVectorSize
+	TokenDocMeta
 
 	// Literals
 	TokenIdentifier

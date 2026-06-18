@@ -43,7 +43,7 @@ type DocEngine interface {
 	Search(ctx context.Context, req interface{}) (interface{}, error)
 
 	// Index operations
-	CreateIndex(ctx context.Context, indexName string, mapping interface{}) error
+	CreateIndex(ctx context.Context, indexName, datasetID string, vectorSize int, parserID string) error
 	DeleteIndex(ctx context.Context, indexName string) error
 	IndexExists(ctx context.Context, indexName string) (bool, error)
 
@@ -55,6 +55,9 @@ type DocEngine interface {
 
 	// Chunk operations
 	GetChunk(ctx context.Context, indexName, chunkID string, kbIDs []string) (interface{}, error)
+
+	// Doc metadata index operations (per-tenant)
+	CreateDocMetaIndex(ctx context.Context, indexName string) error
 
 	// Health check
 	Ping(ctx context.Context) error

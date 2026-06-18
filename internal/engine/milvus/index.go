@@ -24,9 +24,15 @@ import (
 )
 
 // CreateIndex creates a collection in Milvus
-func (e *milvusEngine) CreateIndex(ctx context.Context, indexName string, mapping interface{}) error {
-	// TODO: Implement collection creation with schema from mapping
+func (e *milvusEngine) CreateIndex(ctx context.Context, indexName, datasetID string, vectorSize int, parserID string) error {
+	// TODO: Implement collection creation with schema (vectorSize/parserID aware)
 	return fmt.Errorf("milvus CreateIndex not yet implemented")
+}
+
+// CreateDocMetaIndex creates the document metadata collection in Milvus
+func (e *milvusEngine) CreateDocMetaIndex(ctx context.Context, indexName string) error {
+	// TODO: implement doc meta index for Milvus
+	return nil
 }
 
 // DeleteIndex drops a collection in Milvus

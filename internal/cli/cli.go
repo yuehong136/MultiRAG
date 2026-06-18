@@ -238,6 +238,10 @@ SQL Commands (User Mode):
   LIST CHATS;                                            - List user chats
   LIST MODEL PROVIDERS;                                  - List model providers
   LIST DEFAULT MODELS;                                   - List default models
+  CREATE INDEX FOR DATASET 'name' VECTOR_SIZE N;         - Create index for dataset
+  DROP INDEX FOR DATASET 'name';                         - Drop index for dataset
+  CREATE INDEX DOC_META;                                 - Create doc meta index
+  DROP INDEX DOC_META;                                   - Drop doc meta index
 
 SQL Commands (Admin Mode):
   LOGIN USER 'email';                                    - Login as admin

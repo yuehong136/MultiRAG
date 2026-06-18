@@ -16,7 +16,10 @@
 
 package cli
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+)
 
 // ==================== User REGISTER ====================
 
@@ -185,6 +188,8 @@ func (p *Parser) parseCreateCommand() (*Command, error) {
 		return p.parseCreateChat()
 	case TokenToken:
 		return p.parseCreateToken()
+	case TokenIndex:
+		return p.parseCreateIndex()
 	default:
 		return nil, fmt.Errorf("unknown CREATE target: %s", p.curToken.Value)
 	}
@@ -270,6 +275,63 @@ func (p *Parser) parseCreateToken() (*Command, error) {
 	return cmd, nil
 }
 
+// parseCreateIndex parses:
+//
+//	CREATE INDEX FOR DATASET 'name' VECTOR_SIZE N;
+//	CREATE INDEX DOC_META;
+func (p *Parser) parseCreateIndex() (*Command, error) {
+	p.nextToken() // consume INDEX
+
+	// Check if creating doc meta index
+	if p.curToken.Type == TokenDocMeta {
+		p.nextToken()
+		if err := p.expectSemicolon(); err != nil {
+			return nil, err
+		}
+		return NewCommand("create_doc_meta_index"), nil
+	}
+
+	// Otherwise, must be CREATE INDEX FOR DATASET 'name' VECTOR_SIZE N
+	if p.curToken.Type != TokenFor {
+		return nil, fmt.Errorf("expected FOR or DOC_META after INDEX, got %s", p.curToken.Value)
+	}
+	p.nextToken()
+
+	if p.curToken.Type != TokenDataset {
+		return nil, fmt.Errorf("expected DATASET after FOR, got %s", p.curToken.Value)
+	}
+	p.nextToken()
+
+	datasetName, err := p.parseQuotedString()
+	if err != nil {
+		return nil, fmt.Errorf("expected dataset name, got %s", p.curToken.Value)
+	}
+
+	p.nextToken()
+	if p.curToken.Type != TokenVectorSize {
+		return nil, fmt.Errorf("expected VECTOR_SIZE after dataset name, got %s", p.curToken.Value)
+	}
+	p.nextToken()
+
+	if p.curToken.Type != TokenNumber {
+		return nil, fmt.Errorf("expected vector size number, got %s", p.curToken.Value)
+	}
+	vectorSize, err := strconv.Atoi(p.curToken.Value)
+	if err != nil {
+		return nil, fmt.Errorf("invalid vector size: %s", p.curToken.Value)
+	}
+
+	p.nextToken()
+	if err := p.expectSemicolon(); err != nil {
+		return nil, err
+	}
+
+	cmd := NewCommand("create_index")
+	cmd.Params["dataset_name"] = datasetName
+	cmd.Params["vector_size"] = vectorSize
+	return cmd, nil
+}
+
 // ==================== User DROP ====================
 
 func (p *Parser) parseDropCommand() (*Command, error) {
@@ -282,9 +344,53 @@ func (p *Parser) parseDropCommand() (*Command, error) {
 		return p.parseDropChat()
 	case TokenToken:
 		return p.parseDropToken()
+	case TokenIndex:
+		return p.parseDropIndex()
 	default:
 		return nil, fmt.Errorf("unknown DROP target: %s", p.curToken.Value)
 	}
+}
+
+// parseDropIndex parses:
+//
+//	DROP INDEX FOR DATASET 'name';
+//	DROP INDEX DOC_META;
+func (p *Parser) parseDropIndex() (*Command, error) {
+	p.nextToken() // consume INDEX
+
+	// Check if dropping doc meta index
+	if p.curToken.Type == TokenDocMeta {
+		p.nextToken()
+		if err := p.expectSemicolon(); err != nil {
+			return nil, err
+		}
+		return NewCommand("drop_doc_meta_index"), nil
+	}
+
+	// Otherwise, must be DROP INDEX FOR DATASET 'name'
+	if p.curToken.Type != TokenFor {
+		return nil, fmt.Errorf("expected FOR or DOC_META after INDEX, got %s", p.curToken.Value)
+	}
+	p.nextToken()
+
+	if p.curToken.Type != TokenDataset {
+		return nil, fmt.Errorf("expected DATASET after FOR, got %s", p.curToken.Value)
+	}
+	p.nextToken()
+
+	datasetName, err := p.parseQuotedString()
+	if err != nil {
+		return nil, fmt.Errorf("expected dataset name, got %s", p.curToken.Value)
+	}
+
+	p.nextToken()
+	if err := p.expectSemicolon(); err != nil {
+		return nil, err
+	}
+
+	cmd := NewCommand("drop_index")
+	cmd.Params["dataset_name"] = datasetName
+	return cmd, nil
 }
 
 func (p *Parser) parseDropDataset() (*Command, error) {

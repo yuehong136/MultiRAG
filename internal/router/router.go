@@ -109,6 +109,9 @@ func (r *Router) Setup(engine *gin.Engine) {
 		authorized.GET("/v1/user/tenant_info", r.tenantHandler.TenantInfo)
 		// Tenant list endpoint
 		authorized.GET("/v1/tenant/list", r.tenantHandler.TenantList)
+		// Tenant doc meta index endpoints (per-tenant resources)
+		authorized.POST("/v1/tenant/doc_meta_index", r.tenantHandler.CreateDocMetaIndex)
+		authorized.DELETE("/v1/tenant/doc_meta_index", r.tenantHandler.DeleteDocMetaIndex)
 		// User settings endpoint
 		authorized.POST("/v1/user/setting", r.userHandler.Setting)
 		// User change password endpoint
@@ -178,6 +181,8 @@ func (r *Router) Setup(engine *gin.Engine) {
 			kb.GET("/tags", r.knowledgebaseHandler.ListTagsFromKbs)
 			kb.GET("/get_meta", r.knowledgebaseHandler.GetMeta)
 			kb.GET("/basic_info", r.knowledgebaseHandler.GetBasicInfo)
+			kb.POST("/index", r.knowledgebaseHandler.CreateIndex)
+			kb.DELETE("/index", r.knowledgebaseHandler.DeleteIndex)
 
 			// KB ID specific routes
 			kbByID := kb.Group("/:kb_id")

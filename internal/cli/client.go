@@ -118,6 +118,14 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 		return c.ListTokens(cmd)
 	case "drop_token":
 		return c.DropToken(cmd)
+	case "create_index":
+		return c.CreateIndex(cmd)
+	case "drop_index":
+		return c.DropIndex(cmd)
+	case "create_doc_meta_index":
+		return c.CreateDocMetaIndex(cmd)
+	case "drop_doc_meta_index":
+		return c.DropDocMetaIndex(cmd)
 	// TODO: Implement other user commands
 	default:
 		return nil, fmt.Errorf("command '%s' would be executed with API", cmd.Type)
