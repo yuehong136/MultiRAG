@@ -11,7 +11,12 @@ from api.db.db_models import get_db
 from api.apps import manager
 from api.service.askdata_service.askdata_service import AskdataService, get_askdata_service
 from api.service.askdata_service.event.event_handlers import create_sse_response
-from api.service.askdata_service.util.askdata_logger import get_askdata_logger, askdata_ask_id
+from api.service.askdata_service.util.askdata_logger import (
+    get_askdata_logger,
+    askdata_ask_id,
+    askdata_query,
+    log_incident,
+)
 from api.service.askdata_service.util.sql_retry_handler import SQLRetryHandler
 from api.service.askdata_service.util.sqlglot_utils import (
     try_extract_components,
@@ -80,6 +85,7 @@ async def get_sql_and_table_config(
         service: AskdataService = Depends(get_askdata_service)
 ):
     token = askdata_ask_id.set(body.ask_id or "-")
+    q_token = askdata_query.set(body.user_query or "")
     try:
         logger.info(f"get-sql-and-table-config, query={body.user_query[:80]}")
 
@@ -424,6 +430,7 @@ async def get_sql_and_table_config(
 
     except Exception as e:
         logger.exception("get-sql-and-table-config 发生异常")
+        log_incident("get-sql-and-table-config", e)
 
         # 异常情况下也要清理缓存，避免内存泄漏
         if body.ask_id:
@@ -441,6 +448,7 @@ async def get_sql_and_table_config(
             }
         )
     finally:
+        askdata_query.reset(q_token)
         askdata_ask_id.reset(token)
 
 
@@ -488,6 +496,7 @@ async def analyze_user_query_background_task(
     """
     cached_semantic_data = None  # 初始化变量
     token = askdata_ask_id.set(request.ask_id or "-")
+    q_token = askdata_query.set(request.user_query or "")
     try:
         service = get_askdata_service(db, user)
 
@@ -543,6 +552,7 @@ async def analyze_user_query_background_task(
 
     except Exception as e:
         logger.exception(f"后台聊天任务失败，event_id {event_id}")
+        log_incident("analyze-user-query-streaming", e)
 
         # 错误报告逻辑保留在此处，因为它是一个横切关注点（发布到事件管理器）
         try:
@@ -560,6 +570,7 @@ async def analyze_user_query_background_task(
         except Exception as publish_error:
             logger.error(f"为 {event_id} 发送错误事件失败: {publish_error}")
     finally:
+        askdata_query.reset(q_token)
         askdata_ask_id.reset(token)
 
 
@@ -662,6 +673,7 @@ async def get_semantic_layer_streaming(
         service: AskdataService = Depends(get_askdata_service)
 ) -> ResponseSchema:
     token = askdata_ask_id.set(body.ask_id or "-")
+    q_token = askdata_query.set(body.user_query or "")
     try:
         logger.info(f"get-semantic-layer-streaming, event_id={custom_event_id}, query={body.user_query[:80]}, dataset_ids={body.dataset_id_list}")
 
@@ -721,6 +733,7 @@ async def get_semantic_layer_streaming(
 
     except Exception as e:
         logger.exception("获得语义层信息失败")
+        log_incident("get-semantic-layer-streaming", e)
 
         # 异常情况下清理可能的缓存数据
         if body.ask_id:
@@ -736,6 +749,7 @@ async def get_semantic_layer_streaming(
             }
         )
     finally:
+        askdata_query.reset(q_token)
         askdata_ask_id.reset(token)
 
 
@@ -903,6 +917,8 @@ async def re_query(
         service: AskdataService = Depends(get_askdata_service)
 ) -> ResponseSchema:
     token = askdata_ask_id.set(body.ask_id or "-")
+    # re-query 请求体不含 user_query：靠 ask_id 归并到原问题文件，缺失则用占位名
+    q_token = askdata_query.set("")
     try:
         logger.info(
             "[re-query] 入参: chart_type=%s, dataset_id=%s, pagination_info=%s, table_config_keys=%s",
@@ -983,11 +999,13 @@ async def re_query(
 
     except Exception as e:
         logger.exception("生成re-query SQL失败")
+        log_incident("re-query", e, chart_type=body.chart_type)
         return ResponseSchema(
             status=StatusEnum.ERROR,
             message=f"生成re-query SQL失败：{str(e)}"
         )
     finally:
+        askdata_query.reset(q_token)
         askdata_ask_id.reset(token)
 
 
