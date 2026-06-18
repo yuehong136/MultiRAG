@@ -33,12 +33,22 @@ func HistoryFile() string {
 
 const historyFileName = ".multirag_cli_history"
 
+// OutputFormat represents the output format type
+type OutputFormat string
+
+const (
+	OutputFormatTable OutputFormat = "table" // Table format with borders
+	OutputFormatPlain OutputFormat = "plain" // Plain text, space-separated (no borders)
+	OutputFormatJSON  OutputFormat = "json"  // JSON format
+)
+
 // CLI represents the command line interface
 type CLI struct {
-	client  *MultiRAGClient
-	prompt  string
-	running bool
-	line    *liner.State
+	client       *MultiRAGClient
+	prompt       string
+	running      bool
+	line         *liner.State
+	outputFormat OutputFormat
 }
 
 // NewCLI creates a new CLI instance
@@ -51,9 +61,10 @@ func NewCLI() (*CLI, error) {
 	client.PasswordPrompt = line.PasswordPrompt
 
 	return &CLI{
-		prompt: "MultiRAG> ",
-		client: client,
-		line:   line,
+		prompt:       "MultiRAG> ",
+		client:       client,
+		line:         line,
+		outputFormat: OutputFormatTable,
 	}, nil
 }
 
@@ -109,7 +120,7 @@ func (c *CLI) Run() error {
 
 func (c *CLI) execute(input string) error {
 	p := NewParser(input)
-	cmd, err := p.Parse()
+	cmd, err := p.Parse(c.client.ServerType == "admin")
 	if err != nil {
 		return err
 	}
@@ -123,8 +134,13 @@ func (c *CLI) execute(input string) error {
 		return c.handleMetaCommand(cmd)
 	}
 
-	// Execute the command using the client
-	_, err = c.client.ExecuteCommand(cmd)
+	// Execute the command using the client; the returned response renders itself
+	// in the currently selected output format.
+	result, err := c.client.ExecuteCommand(cmd)
+	if result != nil {
+		result.SetOutputFormat(c.outputFormat)
+		result.PrintOut()
+	}
 	return err
 }
 
@@ -174,6 +190,22 @@ func (c *CLI) handleMetaCommand(cmd *Command) error {
 		}
 	case "status":
 		fmt.Printf("Server: %s:%d (mode: %s)\n", c.client.HTTPClient.Host, c.client.HTTPClient.Port, c.client.ServerType)
+	case "format", "f":
+		if len(args) == 0 {
+			fmt.Printf("Current output format: %s\n", c.outputFormat)
+		} else {
+			switch strings.ToLower(args[0]) {
+			case "table":
+				c.outputFormat = OutputFormatTable
+			case "plain":
+				c.outputFormat = OutputFormatPlain
+			case "json":
+				c.outputFormat = OutputFormatJSON
+			default:
+				return fmt.Errorf("invalid output format: %s (expected table, plain or json)", args[0])
+			}
+			fmt.Printf("Output format set to: %s\n", c.outputFormat)
+		}
 	default:
 		return fmt.Errorf("unknown meta command: \\%s", command)
 	}
@@ -190,6 +222,7 @@ Meta Commands:
   \user         - Switch to USER mode (port 9380)
   \host [ip]    - Show or set server host (default: 127.0.0.1)
   \port [num]   - Show or set server port (default: 9380 for user, 9381 for admin)
+  \format [fmt] - Show or set output format: table (default), plain, json
   \status       - Show current connection status
   \? or \h      - Show this help
   \q or \quit   - Exit CLI

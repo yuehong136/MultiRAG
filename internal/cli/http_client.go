@@ -162,15 +162,15 @@ func (c *HTTPClient) Request(method, path string, useAPIBase bool, authKind stri
 
 // RequestWithIterations makes multiple HTTP requests for benchmarking
 // Returns a map with "duration" (total time in seconds) and "response_list"
-func (c *HTTPClient) RequestWithIterations(method, path string, useAPIBase bool, authKind string, headers map[string]string, jsonBody map[string]interface{}, iterations int) (map[string]interface{}, error) {
+func (c *HTTPClient) RequestWithIterations(method, path string, useAPIBase bool, authKind string, headers map[string]string, jsonBody map[string]interface{}, iterations int) (*BenchmarkRawResponse, error) {
 	if iterations <= 1 {
 		resp, err := c.Request(method, path, useAPIBase, authKind, headers, jsonBody)
 		if err != nil {
 			return nil, err
 		}
-		return map[string]interface{}{
-			"duration":      0.0,
-			"response_list": []*Response{resp},
+		return &BenchmarkRawResponse{
+			Duration:     0.0,
+			ResponseList: []*Response{resp},
 		}, nil
 	}
 
@@ -232,9 +232,9 @@ func (c *HTTPClient) RequestWithIterations(method, path string, useAPIBase bool,
 		totalDuration += time.Since(start).Seconds()
 	}
 
-	return map[string]interface{}{
-		"duration":      totalDuration,
-		"response_list": responseList,
+	return &BenchmarkRawResponse{
+		Duration:     totalDuration,
+		ResponseList: responseList,
 	}, nil
 }
 

@@ -33,8 +33,9 @@ type BenchmarkResult struct {
 	ResponseList  []*Response
 }
 
-// RunBenchmark runs a benchmark with the given concurrency and iterations
-func (c *MultiRAGClient) RunBenchmark(cmd *Command) error {
+// RunBenchmark runs a benchmark with the given concurrency and iterations.
+// Results are printed inline by the runner, so it returns a nil ResponseIf.
+func (c *MultiRAGClient) RunBenchmark(cmd *Command) (ResponseIf, error) {
 	concurrency, ok := cmd.Params["concurrency"].(int)
 	if !ok {
 		concurrency = 1
@@ -47,20 +48,20 @@ func (c *MultiRAGClient) RunBenchmark(cmd *Command) error {
 
 	nestedCmd, ok := cmd.Params["command"].(*Command)
 	if !ok {
-		return fmt.Errorf("benchmark command not found")
+		return nil, fmt.Errorf("benchmark command not found")
 	}
 
 	if concurrency < 1 {
-		return fmt.Errorf("concurrency must be greater than 0")
+		return nil, fmt.Errorf("concurrency must be greater than 0")
 	}
 
 	// Add iterations to the nested command
 	nestedCmd.Params["iterations"] = iterations
 
 	if concurrency == 1 {
-		return c.runBenchmarkSingle(concurrency, iterations, nestedCmd)
+		return nil, c.runBenchmarkSingle(concurrency, iterations, nestedCmd)
 	}
-	return c.runBenchmarkConcurrent(concurrency, iterations, nestedCmd)
+	return nil, c.runBenchmarkConcurrent(concurrency, iterations, nestedCmd)
 }
 
 // runBenchmarkSingle runs benchmark with single concurrency (sequential execution)
@@ -90,12 +91,11 @@ func (c *MultiRAGClient) runBenchmarkSingle(concurrency, iterations int, nestedC
 	supportsNative := false
 	if iterations > 1 {
 		result, err := c.ExecuteCommand(nestedCmd)
-		if err == nil && result != nil {
+		if raw, ok := result.(*BenchmarkRawResponse); ok && err == nil {
 			// Command supports benchmark natively
 			supportsNative = true
-			duration, _ := result["duration"].(float64)
-			respList, _ := result["response_list"].([]*Response)
-			responseList = respList
+			duration := raw.Duration
+			responseList = raw.ResponseList
 
 			// Calculate and print results
 			successCount := 0
@@ -123,23 +123,14 @@ func (c *MultiRAGClient) runBenchmarkSingle(concurrency, iterations int, nestedC
 		delete(nestedCmd.Params, "iterations")
 
 		for i := 0; i < iterations; i++ {
-			singleResult, err := c.ExecuteCommand(nestedCmd)
+			_, err := c.ExecuteCommand(nestedCmd)
 			if err != nil {
 				// Command failed, add a failed response
 				responseList = append(responseList, &Response{StatusCode: 0})
 				continue
 			}
-
-			// For commands that return a single response (like ping with iterations=1)
-			if singleResult != nil {
-				if respList, ok := singleResult["response_list"].([]*Response); ok {
-					responseList = append(responseList, respList...)
-				}
-			} else {
-				// Command executed successfully but returned no data
-				// Mark as success for now
-				responseList = append(responseList, &Response{StatusCode: 200, Body: []byte("pong")})
-			}
+			// Command executed successfully; mark as a success
+			responseList = append(responseList, &Response{StatusCode: 200, Body: []byte("pong")})
 		}
 	}
 
