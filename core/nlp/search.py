@@ -239,7 +239,7 @@ class Dealer:
             "docnm_kwd", "content_ltks", "kb_id", "img_id", "doc_type_kwd", "title_tks", "important_kwd",
             "position_int", "doc_id", "page_num_int", "top_int", "create_timestamp_flt",
             "knowledge_graph_kwd", "question_kwd", "question_tks", "available_int",
-            "content_with_weight", "mom_id", PAGERANK_FLD, TAG_FLD,
+            "content_with_weight", "mom_id", PAGERANK_FLD, TAG_FLD, "row_id()",
         ]
         src: list[str] = list(req.get("fields", default_fields))
         highlight_fields = ["content_ltks", "title_tks"]
@@ -927,6 +927,7 @@ class Dealer:
                 "positions": position_int,
                 "doc_type_kwd": chunk.get("doc_type_kwd", ""),
                 "mom_id": chunk.get("mom_id", ""),
+                "row_id": chunk.get("row_id()"),
             }
             if highlight and sres.highlight:
                 if id in sres.highlight:

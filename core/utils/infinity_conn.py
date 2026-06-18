@@ -608,6 +608,9 @@ class InfinityConnection(InfinityConnectionBase):
                     res[field] = res["authors"]
 
         column_map = {col.lower(): col for col in res.columns}
+        # Infinity returns row_id() as row_id; keep lookup compatible with requested fields.
+        if "row_id()" in fields_all and "row_id" in column_map:
+            column_map["row_id()"] = column_map["row_id"]
         matched_columns = {column_map[col.lower()]: col for col in fields_all if col.lower() in column_map}
         none_columns = [col for col in fields_all if col.lower() not in column_map]
 
