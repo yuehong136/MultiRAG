@@ -72,6 +72,10 @@ sql_command: login_user
            | list_user_dataset_files
            | create_user_chat
            | drop_user_chat
+           | create_index
+           | drop_index
+           | create_doc_meta_index
+           | drop_doc_meta_index
            | create_chat_session
            | drop_chat_session
            | list_chat_sessions
@@ -170,6 +174,7 @@ TTS: "TTS"i
 IMPORT: "IMPORT"i
 INTO: "INTO"i
 WITH: "WITH"i
+VECTOR_SIZE: "VECTOR_SIZE"i
 PARSER: "PARSER"i
 PIPELINE: "PIPELINE"i
 PARSE: "PARSE"i
@@ -182,6 +187,8 @@ FINGERPRINT: "FINGERPRINT"i
 LICENSE: "LICENSE"i
 CHECK: "CHECK"i
 CONFIG: "CONFIG"i
+INDEX: "INDEX"i
+DOC_META: "DOC_META"i
 BENCHMARK: "BENCHMARK"i
 AS: "AS"i
 RESET: "RESET"i
@@ -273,6 +280,10 @@ drop_user_dataset: DROP DATASET quoted_string ";"
 list_user_dataset_files: LIST FILES OF DATASET quoted_string ";"
 create_user_chat: CREATE CHAT quoted_string ";"
 drop_user_chat: DROP CHAT quoted_string ";"
+create_index: CREATE INDEX FOR DATASET quoted_string VECTOR_SIZE NUMBER ";"
+drop_index: DROP INDEX FOR DATASET quoted_string ";"
+create_doc_meta_index: CREATE INDEX DOC_META ";"
+drop_doc_meta_index: DROP INDEX DOC_META ";"
 create_chat_session: CREATE CHAT quoted_string SESSION ";"
 drop_chat_session: DROP CHAT quoted_string SESSION quoted_string ";"
 list_chat_sessions: LIST CHAT quoted_string SESSIONS ";"
@@ -610,6 +621,31 @@ class MultiRAGCLITransformer(Transformer):
     def drop_user_chat(self, items):
         chat_name = items[2].children[0].strip("'\"")
         return {"type": "drop_user_chat", "chat_name": chat_name}
+
+    def create_index(self, items):
+        # items: CREATE, INDEX, FOR, DATASET, quoted_string, VECTOR_SIZE, NUMBER, ";"
+        dataset_name = None
+        vector_size = None
+        for i, item in enumerate(items):
+            if hasattr(item, 'data') and item.data == 'quoted_string':
+                dataset_name = item.children[0].strip("'\"")
+            if hasattr(item, 'type') and item.type == 'NUMBER':
+                if i > 0 and items[i - 1].type == 'VECTOR_SIZE':
+                    vector_size = int(item)
+        return {"type": "create_index", "dataset_name": dataset_name, "vector_size": vector_size}
+
+    def drop_index(self, items):
+        dataset_name = None
+        for item in items:
+            if hasattr(item, 'data') and item.data == 'quoted_string':
+                dataset_name = item.children[0].strip("'\"")
+        return {"type": "drop_index", "dataset_name": dataset_name}
+
+    def create_doc_meta_index(self, items):
+        return {"type": "create_doc_meta_index"}
+
+    def drop_doc_meta_index(self, items):
+        return {"type": "drop_doc_meta_index"}
 
     def create_chat_session(self, items):
         chat_name = items[2].children[0].strip("'\"")

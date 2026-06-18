@@ -1270,6 +1270,70 @@ class MultiRAGClient:
             msg = res_json.get("message", res_json.get("retmsg", ""))
             print(f"Fail to drop chat {chat_name}: {msg}")
 
+    def create_index(self, command: dict):
+        if self.server_type != "user":
+            print("This command is only allowed in USER mode")
+            return
+        dataset_name = command["dataset_name"]
+        vector_size = command.get("vector_size")
+        if not vector_size:
+            print("vector_size is required")
+            return
+        # Get dataset ID by name
+        dataset_id = self._get_dataset_id(dataset_name)
+        if dataset_id is None:
+            return
+        payload = {"kb_id": dataset_id, "vector_size": vector_size}
+        response = self.http_client.request("POST", "kb/index", json_body=payload,
+                                            use_api_base=False, auth_kind="web")
+        res_json = response.json()
+        if response.status_code == 200 and res_json.get("code") == 0:
+            print(f"Success to create index for dataset: {dataset_name}")
+        else:
+            print(f"Fail to create index for dataset {dataset_name}, code: {res_json.get('code')}, message: {res_json.get('message')}")
+
+    def drop_index(self, command: dict):
+        if self.server_type != "user":
+            print("This command is only allowed in USER mode")
+            return
+        dataset_name = command["dataset_name"]
+        # Get dataset ID by name
+        dataset_id = self._get_dataset_id(dataset_name)
+        if dataset_id is None:
+            return
+        payload = {"kb_id": dataset_id}
+        response = self.http_client.request("DELETE", "kb/index", json_body=payload,
+                                            use_api_base=False, auth_kind="web")
+        res_json = response.json()
+        if response.status_code == 200 and res_json.get("code") == 0:
+            print(f"Success to drop index for dataset: {dataset_name}")
+        else:
+            print(f"Fail to drop index for dataset {dataset_name}, code: {res_json.get('code')}, message: {res_json.get('message')}")
+
+    def create_doc_meta_index(self, command: dict):
+        if self.server_type != "user":
+            print("This command is only allowed in USER mode")
+            return
+        response = self.http_client.request("POST", "tenant/doc_meta_index",
+                                            use_api_base=False, auth_kind="web")
+        res_json = response.json()
+        if response.status_code == 200 and res_json.get("code") == 0:
+            print("Success to create doc meta index")
+        else:
+            print(f"Fail to create doc meta index, code: {res_json.get('code')}, message: {res_json.get('message')}")
+
+    def drop_doc_meta_index(self, command: dict):
+        if self.server_type != "user":
+            print("This command is only allowed in USER mode")
+            return
+        response = self.http_client.request("DELETE", "tenant/doc_meta_index",
+                                            use_api_base=False, auth_kind="web")
+        res_json = response.json()
+        if response.status_code == 200 and res_json.get("code") == 0:
+            print("Success to drop doc meta index")
+        else:
+            print(f"Fail to drop doc meta index, code: {res_json.get('code')}, message: {res_json.get('message')}")
+
     def create_chat_session(self, command: dict):
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
@@ -1750,6 +1814,14 @@ def run_command(client: MultiRAGClient, command_dict: dict):
             client.create_user_chat(command_dict)
         case "drop_user_chat":
             client.drop_user_chat(command_dict)
+        case "create_index":
+            client.create_index(command_dict)
+        case "drop_index":
+            client.drop_index(command_dict)
+        case "create_doc_meta_index":
+            client.create_doc_meta_index(command_dict)
+        case "drop_doc_meta_index":
+            client.drop_doc_meta_index(command_dict)
         case "create_chat_session":
             client.create_chat_session(command_dict)
         case "drop_chat_session":

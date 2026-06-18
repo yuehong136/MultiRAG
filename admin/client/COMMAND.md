@@ -584,6 +584,99 @@ multirag> DROP CHAT 'my_chat';
 
 ---
 
+### create_index
+
+**Description**  
+Creates the document engine index/table for a dataset (knowledge base).
+
+**Usage**  
+```
+CREATE INDEX FOR DATASET <dataset_name> VECTOR_SIZE <vector_size>;
+```
+
+**Parameters**  
+- `dataset_name`: Dataset name, quoted string.
+- `vector_size`: Embedding vector dimension, positive integer.
+
+**Example**  
+```
+multirag> CREATE INDEX FOR DATASET 'my_dataset' VECTOR_SIZE 1024;
+```
+
+**Display Effect**  
+(Sample output will be provided by the user)
+
+---
+
+### drop_index
+
+**Description**  
+Drops the document engine index/table for a dataset (knowledge base).
+
+**Usage**  
+```
+DROP INDEX FOR DATASET <dataset_name>;
+```
+
+**Parameters**  
+- `dataset_name`: Dataset name, quoted string.
+
+**Example**  
+```
+multirag> DROP INDEX FOR DATASET 'my_dataset';
+```
+
+**Display Effect**  
+(Sample output will be provided by the user)
+
+---
+
+### create_doc_meta_index
+
+**Description**  
+Creates the per-tenant document metadata index.
+
+**Usage**  
+```
+CREATE INDEX DOC_META;
+```
+
+**Parameters**  
+- None.
+
+**Example**  
+```
+multirag> CREATE INDEX DOC_META;
+```
+
+**Display Effect**  
+(Sample output will be provided by the user)
+
+---
+
+### drop_doc_meta_index
+
+**Description**  
+Drops the per-tenant document metadata index.
+
+**Usage**  
+```
+DROP INDEX DOC_META;
+```
+
+**Parameters**  
+- None.
+
+**Example**  
+```
+multirag> DROP INDEX DOC_META;
+```
+
+**Display Effect**  
+(Sample output will be provided by the user)
+
+---
+
 ### list_user_model_providers
 
 **Description**  
