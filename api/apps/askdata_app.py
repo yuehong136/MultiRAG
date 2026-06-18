@@ -11,7 +11,12 @@ from api.db.db_models import get_db
 from api.apps import manager
 from api.service.askdata_service.askdata_service import AskdataService, get_askdata_service
 from api.service.askdata_service.event.event_handlers import create_sse_response
-from api.service.askdata_service.util.askdata_logger import get_askdata_logger, askdata_ask_id
+from api.service.askdata_service.util.askdata_logger import (
+    get_askdata_logger,
+    askdata_ask_id,
+    askdata_query,
+    log_incident,
+)
 from api.service.askdata_service.util.sql_retry_handler import SQLRetryHandler
 from api.service.askdata_service.util.sqlglot_utils import (
     try_extract_components,
@@ -48,6 +53,30 @@ class GetSqlAndTableConfigReq(BaseModel):
     clear_cache: bool = Field(False, title="清除缓存", description="是否清除LLM响应缓存")
 
 
+def _minimal_table_config(recommended_chart: str | None) -> dict:
+    """
+    表格配置（可调面板）生成失败时的最小可用降级配置。
+
+    数据表/图表在前端从 data.result 独立渲染，不依赖 table_config；此骨架只为让
+    可调面板（MainLayout）不因缺键/缺数组而崩溃：每个 .map 字段都给空数组、键齐备。
+    超集骨架（同时含明细表与聚合表两组键）无害——前端只 .map 实际存在的分组。
+    注意：降级走的是「成功 + 数据 + 此骨架」，绝不可在响应 data 里设 status='error'，
+    否则前端 MainLayout 会隐藏整个数据网格。
+    """
+    return {
+        "chart_type": "table-aggr" if recommended_chart == "聚合表" else "table-row",
+        "columns": {"selected_columns": [], "available_fields": []},
+        "filters": {"filter_conditions": [], "available_fields": []},
+        "order_by": {"order_by_fields": [], "available_fields": []},
+        "dimensions": {"selected_dimensions": [], "available_dimensions": []},
+        "metrics": {"selected_metrics": [], "available_metrics": []},
+        "where_conditions": {"where_conditions": [], "available_fields": []},
+        "having_conditions": {"having_conditions": [], "available_fields": []},
+        "all_semantic_fields": [],
+        "limit": None,
+    }
+
+
 @router.post("/get-sql-and-table-config", response_model=ResponseSchema)
 async def get_sql_and_table_config(
         body: GetSqlAndTableConfigReq = Body(...),
@@ -56,6 +85,7 @@ async def get_sql_and_table_config(
         service: AskdataService = Depends(get_askdata_service)
 ):
     token = askdata_ask_id.set(body.ask_id or "-")
+    q_token = askdata_query.set(body.user_query or "")
     try:
         logger.info(f"get-sql-and-table-config, query={body.user_query[:80]}")
 
@@ -338,14 +368,26 @@ async def get_sql_and_table_config(
                     )
 
         # 2. 生成表格配置
-        model_table_alias_mapping_list, table_config = await service.generate_table_config(
-            used_table_detail_dict=used_table_detail_dict,
-            model_list=model_list,
-            sql_components=sql_components,
-            recommended_chart=body.semantic_layer.get('recommended_chart'),
-            cached_model_relations=phase2_prefetch.get('model_relations'),
-            cached_dimension_values=phase2_prefetch.get('dimension_values'),
-        )
+        # 表格配置（可调面板）是增强项而非交付物：数据与图表在前端从 result 独立渲染。
+        # 任何生成失败（generate 对未知图表类型隐式返回 None、模型 dimsAndMetrics 缺失、
+        # 其它残余 KeyError 等）都降级为最小可用配置，绝不让整条响应失败、
+        # 绝不设 data.status='error'（否则前端会隐藏整个数据网格）。
+        recommended_chart = body.semantic_layer.get('recommended_chart')
+        try:
+            model_table_alias_mapping_list, table_config = await service.generate_table_config(
+                used_table_detail_dict=used_table_detail_dict,
+                model_list=model_list,
+                sql_components=sql_components,
+                recommended_chart=recommended_chart,
+                cached_model_relations=phase2_prefetch.get('model_relations'),
+                cached_dimension_values=phase2_prefetch.get('dimension_values'),
+            )
+            if table_config is None:
+                raise ValueError(f"generate_table_config 未支持的图表类型: {recommended_chart!r}")
+        except Exception:
+            logger.exception("[get-sql] 生成表格配置失败，降级为最小可用配置（数据与图表不受影响）")
+            model_table_alias_mapping_list = []
+            table_config = _minimal_table_config(recommended_chart)
         logger.debug("[get-sql] table_config keys=%s, model_table_alias_mapping=%s",
                      list(table_config.keys()) if table_config else [],
                      model_table_alias_mapping_list)
@@ -388,6 +430,7 @@ async def get_sql_and_table_config(
 
     except Exception as e:
         logger.exception("get-sql-and-table-config 发生异常")
+        log_incident("get-sql-and-table-config", e)
 
         # 异常情况下也要清理缓存，避免内存泄漏
         if body.ask_id:
@@ -396,13 +439,16 @@ async def get_sql_and_table_config(
         return ResponseSchema(
             # 虽然无法生成SQL，但这里要返回成功的状态，因为中台接口只有在收到成功的状态才能将data返回给前端。
             status=StatusEnum.SUCCESS,
-            message=f"SQL生成失败: {str(e)}",
+            # 用 repr(e) 保证诊断信息非空（str(KeyError('')) == '' 曾导致前端弹出空引号警告）
+            message=f"SQL生成失败: {e!r}",
             data={
                 "status": StatusEnum.ERROR,
-                "message": str(e),
+                # 前端 message.warning 直接展示此字段，必须是永不为空的用户可读文案
+                "message": "生成分析结果时出错，请稍后重试或更换问法",
             }
         )
     finally:
+        askdata_query.reset(q_token)
         askdata_ask_id.reset(token)
 
 
@@ -450,6 +496,7 @@ async def analyze_user_query_background_task(
     """
     cached_semantic_data = None  # 初始化变量
     token = askdata_ask_id.set(request.ask_id or "-")
+    q_token = askdata_query.set(request.user_query or "")
     try:
         service = get_askdata_service(db, user)
 
@@ -457,7 +504,7 @@ async def analyze_user_query_background_task(
         if not request.ask_id:
             logger.error("ask_id为空，无法从缓存获取数据")
             # 发布错误事件
-            from api.service.nl2sql_service.event.event_manager import event_manager
+            from api.service.askdata_service.event.event_manager import event_manager
             await event_manager.publish(
                 event_id=event_id,
                 data={
@@ -467,13 +514,15 @@ async def analyze_user_query_background_task(
                 },
                 event_type="chat_error"
             )
+            # SSE 生成器只在收到 stream_end 时关闭连接，错误路径不发会让连接挂到30分钟超时
+            await event_manager.publish(event_id=event_id, data={}, event_type="stream_end")
             return
 
         cached_semantic_data = semantic_layer_cache.get(request.ask_id)
         if not cached_semantic_data:
             logger.error(f"缓存中未找到语义层数据: ask_id={request.ask_id}")
             # 发布错误事件
-            from api.service.nl2sql_service.event.event_manager import event_manager
+            from api.service.askdata_service.event.event_manager import event_manager
             await event_manager.publish(
                 event_id=event_id,
                 data={
@@ -483,6 +532,7 @@ async def analyze_user_query_background_task(
                 },
                 event_type="chat_error"
             )
+            await event_manager.publish(event_id=event_id, data={}, event_type="stream_end")
             return
 
         processed_semantic_layer_data = cached_semantic_data.get('processed_semantic_layer', {})
@@ -502,10 +552,11 @@ async def analyze_user_query_background_task(
 
     except Exception as e:
         logger.exception(f"后台聊天任务失败，event_id {event_id}")
+        log_incident("analyze-user-query-streaming", e)
 
         # 错误报告逻辑保留在此处，因为它是一个横切关注点（发布到事件管理器）
         try:
-            from api.service.nl2sql_service.event.event_manager import event_manager
+            from api.service.askdata_service.event.event_manager import event_manager
             await event_manager.publish(
                 event_id=event_id,
                 data={
@@ -515,9 +566,11 @@ async def analyze_user_query_background_task(
                 },
                 event_type="chat_error"
             )
+            await event_manager.publish(event_id=event_id, data={}, event_type="stream_end")
         except Exception as publish_error:
             logger.error(f"为 {event_id} 发送错误事件失败: {publish_error}")
     finally:
+        askdata_query.reset(q_token)
         askdata_ask_id.reset(token)
 
 
@@ -620,6 +673,7 @@ async def get_semantic_layer_streaming(
         service: AskdataService = Depends(get_askdata_service)
 ) -> ResponseSchema:
     token = askdata_ask_id.set(body.ask_id or "-")
+    q_token = askdata_query.set(body.user_query or "")
     try:
         logger.info(f"get-semantic-layer-streaming, event_id={custom_event_id}, query={body.user_query[:80]}, dataset_ids={body.dataset_id_list}")
 
@@ -679,6 +733,7 @@ async def get_semantic_layer_streaming(
 
     except Exception as e:
         logger.exception("获得语义层信息失败")
+        log_incident("get-semantic-layer-streaming", e)
 
         # 异常情况下清理可能的缓存数据
         if body.ask_id:
@@ -694,6 +749,7 @@ async def get_semantic_layer_streaming(
             }
         )
     finally:
+        askdata_query.reset(q_token)
         askdata_ask_id.reset(token)
 
 
@@ -861,6 +917,8 @@ async def re_query(
         service: AskdataService = Depends(get_askdata_service)
 ) -> ResponseSchema:
     token = askdata_ask_id.set(body.ask_id or "-")
+    # re-query 请求体不含 user_query：靠 ask_id 归并到原问题文件，缺失则用占位名
+    q_token = askdata_query.set("")
     try:
         logger.info(
             "[re-query] 入参: chart_type=%s, dataset_id=%s, pagination_info=%s, table_config_keys=%s",
@@ -941,11 +999,13 @@ async def re_query(
 
     except Exception as e:
         logger.exception("生成re-query SQL失败")
+        log_incident("re-query", e, chart_type=body.chart_type)
         return ResponseSchema(
             status=StatusEnum.ERROR,
             message=f"生成re-query SQL失败：{str(e)}"
         )
     finally:
+        askdata_query.reset(q_token)
         askdata_ask_id.reset(token)
 
 

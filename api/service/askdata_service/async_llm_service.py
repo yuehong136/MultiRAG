@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from api.db.services.llm_service import LLMBundle
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from api.service.askdata_service.event.event_manager import event_manager
-from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger, askdata_ask_id, askdata_query
 from common.constants import LLMType
 
 
@@ -95,6 +95,12 @@ class AsyncLLMService:
                 },
                 "chat_error"
             )
+            # SSE 生成器只在收到 stream_end 时关闭连接，错误后必须收尾，否则连接挂到30分钟超时
+            await self.send_event(
+                event_id,
+                {"message": "Stream finished, closing connection."},
+                "stream_end"
+            )
 
     async def _simple_streaming(
             self,
@@ -109,8 +115,15 @@ class AsyncLLMService:
         chunk_queue = queue.Queue()
         error_occurred = threading.Event()
 
+        # ContextVar 不会自动传进 threading.Thread；先捕获、再在 worker 内 set 回，
+        # 否则工作线程里的日志（工作线程完成/异常）会落到 _misc 兜底而非该问文件
+        _ctx_ask_id = askdata_ask_id.get("-")
+        _ctx_query = askdata_query.get("")
+
         def llm_worker():
             """LLM工作线程"""
+            askdata_ask_id.set(_ctx_ask_id)
+            askdata_query.set(_ctx_query)
             try:
                 start_time = time.time()
 
@@ -143,6 +156,17 @@ class AsyncLLMService:
                     chunk_type, chunk_data = chunk_queue.get(timeout=0.1)
 
                     if chunk_type == 'done':
+                        # 流式段是历史事故最集中处：记一次最终内容规模便于复盘；
+                        # chunk 有但正文为空 = 推理模型「只思考无正文」（前端已兜底），单独告警一眼定性
+                        logger.info(
+                            f"分析流完成 - content_len={len(full_content)}, "
+                            f"chunk_count={chunk_count} - event_id: {event_id}"
+                        )
+                        if chunk_count > 0 and len(full_content) == 0:
+                            logger.warning(
+                                f"分析流只思考无正文 - chunk_count={chunk_count} 但最终正文为空"
+                                f"（疑似推理模型以 </think> 收尾）- event_id: {event_id}"
+                            )
                         await self.send_event(
                             event_id,
                             {
@@ -178,6 +202,11 @@ class AsyncLLMService:
                             {"message": f"LLM生成错误: {chunk_data}", "status": "error"},
                             "chat_error"
                         )
+                        await self.send_event(
+                            event_id,
+                            {"message": "Stream finished, closing connection."},
+                            "stream_end"
+                        )
                         return
 
                     elif chunk_type == 'chunk':
@@ -211,6 +240,11 @@ class AsyncLLMService:
                             {"message": "LLM工作线程意外结束", "status": "error"},
                             "chat_error"
                         )
+                        await self.send_event(
+                            event_id,
+                            {"message": "Stream finished, closing connection."},
+                            "stream_end"
+                        )
                         break
 
         except Exception as e:
@@ -220,6 +254,11 @@ class AsyncLLMService:
                 event_id,
                 {"message": f"流式处理错误: {str(e)}", "status": "error"},
                 "chat_error"
+            )
+            await self.send_event(
+                event_id,
+                {"message": "Stream finished, closing connection."},
+                "stream_end"
             )
         finally:
             error_occurred.set()
