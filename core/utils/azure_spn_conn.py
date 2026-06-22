@@ -6,6 +6,13 @@ from common import settings
 from azure.identity import ClientSecretCredential, AzureAuthorityHosts
 from azure.storage.filedatalake import FileSystemClient
 
+_CLOUD_AUTHORITY_MAP = {
+    "public": AzureAuthorityHosts.AZURE_PUBLIC_CLOUD,
+    "china": AzureAuthorityHosts.AZURE_CHINA,
+    "government": AzureAuthorityHosts.AZURE_GOVERNMENT,
+    "germany": AzureAuthorityHosts.AZURE_GERMANY,
+}
+
 
 @singleton
 class MultiRAGAzureSpnBlob:
@@ -16,6 +23,7 @@ class MultiRAGAzureSpnBlob:
         self.secret = os.getenv('SECRET', settings.AZURE["secret"])
         self.tenant_id = os.getenv('TENANT_ID', settings.AZURE["tenant_id"])
         self.container_name = os.getenv('CONTAINER_NAME', settings.AZURE["container_name"])
+        self.cloud = os.getenv('AZURE_CLOUD', settings.AZURE.get("cloud", "public")).lower()
         self.__open__()
 
     def __open__(self):
@@ -26,7 +34,8 @@ class MultiRAGAzureSpnBlob:
             pass
 
         try:
-            credentials = ClientSecretCredential(tenant_id=self.tenant_id, client_id=self.client_id, client_secret=self.secret, authority=AzureAuthorityHosts.AZURE_CHINA)
+            authority = _CLOUD_AUTHORITY_MAP.get(self.cloud, AzureAuthorityHosts.AZURE_PUBLIC_CLOUD)
+            credentials = ClientSecretCredential(tenant_id=self.tenant_id, client_id=self.client_id, client_secret=self.secret, authority=authority)
             self.conn = FileSystemClient(account_url=self.account_url, file_system_name=self.container_name, credential=credentials)
         except Exception:
             logging.exception("Fail to connect %s" % self.account_url)

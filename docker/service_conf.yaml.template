@@ -51,6 +51,7 @@ azure:
   secret: '${AZURE_SECRET:-secret}'
   tenant_id: '${AZURE_TENANT_ID:-tenant_id}'
   container_name: '${AZURE_CONTAINER_NAME:-container_name}'
+  cloud: '${AZURE_CLOUD:-public}'  # Azure cloud: 'public', 'china', 'government', or 'germany'
   # SAS 认证方式
   # container_url: '${AZURE_CONTAINER_URL:-container_url}'
   # sas_token: '${AZURE_SAS_TOKEN:-sas_token}'
@@ -145,6 +146,17 @@ redis:
   password: '${REDIS_PASSWORD:-}'
   host: '${REDIS_HOST:-redis}:6379'
 
+# datav 项目方提供的独立 Redis（用于读取 workflow inputPlugin persondataList 等数据）
+datav_redis:
+  host: '${DATAV_REDIS_HOST:-}'
+  db: ${DATAV_REDIS_DB:-0}
+  username: '${DATAV_REDIS_USERNAME:-}'
+  password: '${DATAV_REDIS_PASSWORD:-}'
+
+datav_persondata_crypto:
+  aes_key_hex: '${DATAV_PERSONDATA_AES_KEY_HEX:-}'
+  aes_iv_hex: '${DATAV_PERSONDATA_AES_IV_HEX:-}'
+
 task_executor:
   message_queue_type: 'redis'
 
@@ -161,10 +173,12 @@ user_default_llm:
     embedding_model:
       api_key: '${EMBEDDING_MODEL_API_KEY:-xxx}'
       base_url: 'http://${TEI_HOST:-tei}:80'
-    rerank_model: '${RERANK_MODEL:-BAAI/bge-reranker-v2-m3}'
+    rerank_model:
+      name: '${RERANK_MODEL:-BAAI/bge-reranker-v2-m3}'
     asr_model:
       model: '${ASR_MODEL:-whisper-large-v3}'
-    image2text_model: '${IMAGE2TEXT_MODEL:-}'
+    image2text_model:
+      name: '${IMAGE2TEXT_MODEL:-glm-4.6v}'
 
 oauth:
   oauth2:
