@@ -21,12 +21,15 @@ from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import UserTenantService
 from api.utils.api_utils import server_error_response, get_data_error_result, get_json_result
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
-from common import settings
 from common.constants import LLMType
 from common.misc_utils import get_uuid
 from common.constants import RetCode
 from core.prompts.template import load_prompt
 from core.prompts.generator import chunks_format
+
+
+# Deprecated compatibility routes for production clients that still call
+# /v1/conversation/*. New integrations should use /api/v1/chats/*.
 
 
 @dataclass
@@ -295,7 +298,7 @@ class RelatedQuestionsRequest(BaseModel):
 router = APIRouter()
 
 
-@router.post('/set', summary="设置会话", response_description="成功设置会话")
+@router.post('/set', summary="[Deprecated] 设置会话", response_description="成功设置会话", deprecated=True)
 def set_conversation(request: SetConversationRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     设置会话
@@ -365,7 +368,7 @@ def set_conversation(request: SetConversationRequest, db: Session = Depends(get_
         return server_error_response(e)
 
 
-@router.get('/get', summary="获取会话", response_description="成功获取会话")
+@router.get('/get', summary="[Deprecated] 获取会话", response_description="成功获取会话", deprecated=True)
 def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     try:
 
@@ -379,7 +382,7 @@ def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(manage
                 avatar = dialog[0].icon
                 break
         else:
-            return get_json_result(data=False, retmsg=f'Only owner of conversation authorized for this operation.', retcode=RetCode.OPERATING_ERROR)
+            return get_json_result(data=False, retmsg='Only owner of conversation authorized for this operation.', retcode=RetCode.OPERATING_ERROR)
 
         for ref in conv.reference:
             if isinstance(ref, list):
@@ -393,7 +396,7 @@ def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(manage
         return server_error_response(e)
 
 
-@router.get('/getsse/{dialog_id}', summary="获取对话信息（支持SSE）", response_description="成功获取对话信息")
+@router.get('/getsse/{dialog_id}', summary="[Deprecated] 获取对话信息（支持SSE）", response_description="成功获取对话信息", deprecated=True)
 def getsse(dialog_id: str, db: Session = Depends(get_db), request: Request = None):
     token_header = request.headers.get('Authorization')
     if not token_header:
@@ -420,7 +423,7 @@ def getsse(dialog_id: str, db: Session = Depends(get_db), request: Request = Non
     except Exception as e:
         return server_error_response(e)
 
-@router.post('/rm', summary="删除会话", response_description="成功删除会话")
+@router.post('/rm', summary="[Deprecated] 删除会话", response_description="成功删除会话", deprecated=True)
 def rm(request: RemoveConversationRequest, db: Session = Depends(get_db), user=Depends(manager)):
     try:
         for cid in request.conversation_ids:
@@ -433,7 +436,7 @@ def rm(request: RemoveConversationRequest, db: Session = Depends(get_db), user=D
                     break
             else:
                 return get_json_result(
-                    data=False, retmsg=f'Only owner of conversation authorized for this operation.',
+                    data=False, retmsg='Only owner of conversation authorized for this operation.',
                     retcode=RetCode.OPERATING_ERROR)
             ConversationService.delete_by_id(db, cid)
         return get_json_result(data=True)
@@ -441,13 +444,13 @@ def rm(request: RemoveConversationRequest, db: Session = Depends(get_db), user=D
         return server_error_response(e)
 
 
-@router.get('/list', summary="列出会话", response_description="成功列出会话")
+@router.get('/list', summary="[Deprecated] 列出会话", response_description="成功列出会话", deprecated=True)
 def list_conversation(dialog_id: str, db: Session = Depends(get_db), user=Depends(manager)):
 
     try:
         if not DialogService.query(db, tenant_id=user.id, id=dialog_id):
             return get_json_result(
-                data=False, retmsg=f'Only owner of dialog authorized for this operation.',
+                data=False, retmsg='Only owner of dialog authorized for this operation.',
                 retcode=RetCode.OPERATING_ERROR)
         convs = ConversationService.query(
             db,
@@ -460,7 +463,7 @@ def list_conversation(dialog_id: str, db: Session = Depends(get_db), user=Depend
         return server_error_response(e)
 
 
-@router.post('/completion', summary="生成对话", response_description="成功生成对话")
+@router.post('/completion', summary="[Deprecated] 生成对话", response_description="成功生成对话", deprecated=True)
 async def completion(request: CompletionRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request.model_dump()
     if not req.get("conversation_id") or not req.get("messages"):
@@ -579,7 +582,7 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db), 
         return server_error_response(e)
 
 
-@router.post('/tts', summary="文本转语音", response_description="成功文本转语音")
+@router.post('/tts', summary="[Deprecated] 文本转语音", response_description="成功文本转语音", deprecated=True)
 def tts(request: TTSRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     文本转语音
@@ -644,7 +647,7 @@ def tts(request: TTSRequest, db: Session = Depends(get_db), user=Depends(manager
     return StreamingResponse(stream_audio(), media_type="audio/mpeg", headers=headers)
 
 
-@router.post('/sequence2txt', summary="语音转文字（流式）", response_description="成功识别语音")
+@router.post('/sequence2txt', summary="[Deprecated] 语音转文字（流式）", response_description="成功识别语音", deprecated=True)
 def sequence2txt(
     file: UploadFile = File(...),
     stream: str = "false",
@@ -724,7 +727,7 @@ def sequence2txt(
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-@router.post('/asr', summary="语音识别", response_description="成功识别语音")
+@router.post('/asr', summary="[Deprecated] 语音识别", response_description="成功识别语音", deprecated=True)
 def asr(request: ASRRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request.model_dump()
     audio_file_path = req.get("audio_file_path")
@@ -747,7 +750,7 @@ def asr(request: ASRRequest, db: Session = Depends(get_db), user=Depends(manager
     return get_json_result(data=transcription_result)
 
 
-@router.post('/asr_upload', summary="语音识别上传", response_description="成功识别语音")
+@router.post('/asr_upload', summary="[Deprecated] 语音识别上传", response_description="成功识别语音", deprecated=True)
 def asr_upload(file: UploadFile = File(...), llm_name: str | None = None, db: Session = Depends(get_db), user=Depends(manager)):
 
     import tempfile
@@ -774,7 +777,7 @@ def asr_upload(file: UploadFile = File(...), llm_name: str | None = None, db: Se
     return get_json_result(data=transcription_result)
 
 
-@router.post('/delete_msg', summary="删除信息", response_description="成功删除信息")
+@router.post('/delete_msg', summary="[Deprecated] 删除信息", response_description="成功删除信息", deprecated=True)
 def delete_msg(request: DeleteMsgRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     删除消息
@@ -820,7 +823,7 @@ def delete_msg(request: DeleteMsgRequest, db: Session = Depends(get_db), user=De
     return get_json_result(data=conv)
 
 
-@router.post('/thumbup', summary="点赞", response_description="成功点赞")
+@router.post('/thumbup', summary="[Deprecated] 点赞", response_description="成功点赞", deprecated=True)
 def thumbup(request: ThumbupRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request.model_dump()
     conv = ConversationService.get_by_id(db, req["conversation_id"])
@@ -833,7 +836,8 @@ def thumbup(request: ThumbupRequest, db: Session = Depends(get_db), user=Depends
         if req["message_id"] == msg.get("id", "") and msg.get("role", "") == "assistant":
             if up_down:
                 msg["thumbup"] = True
-                if "feedback" in msg: del msg["feedback"]
+                if "feedback" in msg:
+                    del msg["feedback"]
             else:
                 msg["thumbup"] = False
                 if feedback:
@@ -844,7 +848,7 @@ def thumbup(request: ThumbupRequest, db: Session = Depends(get_db), user=Depends
     return get_json_result(data=conv)
 
 
-@router.post('/ask', summary="问答接口", response_description="返回答案")
+@router.post('/ask', summary="[Deprecated] 问答接口", response_description="返回答案", deprecated=True)
 def ask_about(request: AskAboutRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request.model_dump()
     uid = user.id
@@ -873,7 +877,7 @@ def ask_about(request: AskAboutRequest, db: Session = Depends(get_db), user=Depe
     return StreamingResponse(stream(), media_type="text/event-stream", headers=headers)
 
 
-@router.post('/mindmap', summary="生成思维导图", response_description="返回思维导图")
+@router.post('/mindmap', summary="[Deprecated] 生成思维导图", response_description="返回思维导图", deprecated=True)
 async def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request.model_dump()
 
@@ -891,7 +895,7 @@ async def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=D
     return get_json_result(data=mind_map)
 
 
-@router.post('/related_questions', summary="生成相关问题", response_description="返回相关问题")
+@router.post('/related_questions', summary="[Deprecated] 生成相关问题", response_description="返回相关问题", deprecated=True)
 async def related_questions(request: RelatedQuestionsRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request.model_dump()
 

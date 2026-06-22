@@ -44,15 +44,6 @@ from common.token_utils import num_tokens_from_string
 router = APIRouter()
 
 
-class CreateSessionRequest(BaseModel):
-    name: str | None = "New session"
-    user_id: str | None = ""
-
-
-class UpdateSessionRequest(BaseModel):
-    name: str | None = None
-
-
 class DeleteSessionsRequest(BaseModel):
     ids: list[str] | None = None
     delete_all: bool = False
@@ -159,42 +150,6 @@ def build_sse_error_payload(error: Exception) -> str:
     ) + "\n\n"
 
 
-@router.post("/chats/{chat_id}/sessions", summary="创建聊天会话")
-def create_session(
-    chat_id: str, 
-    request: CreateSessionRequest, 
-    db: Session = Depends(get_db), 
-    tenant_id: str = Depends(token_required)
-):
-    req = request.model_dump()
-    req["dialog_id"] = chat_id
-    dia = DialogService.query(db, tenant_id=tenant_id, id=req["dialog_id"], status=StatusEnum.VALID.value)
-    if not dia:
-        return get_error_data_result(retmsg="You do not own the assistant.")
-    
-    conv = {
-        "id": get_uuid(),
-        "dialog_id": req["dialog_id"],
-        "name": req.get("name", "New session"),
-        "message": [{"role": "assistant", "content": dia[0].prompt_config.get("prologue")}],
-        "user_id": req.get("user_id", ""),
-        "reference": [],
-    }
-    if not conv.get("name"):
-        return get_error_data_result(retmsg="`name` can not be empty.")
-    
-    ConversationService.save(db, **conv)
-    conv = ConversationService.get_by_id(db, conv["id"])
-    if not conv:
-        return get_error_data_result(retmsg="Fail to create a session!")
-    
-    conv = conv.to_dict()
-    conv["messages"] = conv.pop("message")
-    conv["chat_id"] = conv.pop("dialog_id")
-    del conv["reference"]
-    return get_result(data=conv)
-
-
 class CreateAgentSessionRequest(BaseModel):
     user_id: str | None = None
     release: bool = False
@@ -244,36 +199,6 @@ def create_agent_session(
     API4ConversationService.save(db, **conv)
     conv["agent_id"] = conv.pop("dialog_id")
     return get_result(data=conv)
-
-
-@router.put("/chats/{chat_id}/sessions/{session_id}", summary="更新聊天会话")
-def update_session(
-    chat_id: str, 
-    session_id: str, 
-    request: UpdateSessionRequest, 
-    db: Session = Depends(get_db), 
-    tenant_id: str = Depends(token_required)
-):
-    req = request.model_dump(exclude_unset=True)
-    req["dialog_id"] = chat_id
-    conv_id = session_id
-    
-    conv = ConversationService.query(db, id=conv_id, dialog_id=chat_id)
-    if not conv:
-        return get_error_data_result(retmsg="Session does not exist")
-    if not DialogService.query(db, id=chat_id, tenant_id=tenant_id, status=StatusEnum.VALID.value):
-        return get_error_data_result(retmsg="You do not own the session")
-    
-    if "message" in req or "messages" in req:
-        return get_error_data_result(retmsg="`message` can not be change")
-    if "reference" in req:
-        return get_error_data_result(retmsg="`reference` can not be change")
-    if "name" in req and not req.get("name"):
-        return get_error_data_result(retmsg="`name` can not be empty.")
-    
-    if not ConversationService.update_by_id(db, conv_id, req):
-        return get_error_data_result(retmsg="Session updates error")
-    return get_result()
 
 
 @router.post("/chats/{chat_id}/completions", summary="聊天补全")
@@ -765,64 +690,6 @@ async def agent_completions(
     return get_result(data=final_ans)
 
 
-@router.get("/chats/{chat_id}/sessions", summary="获取聊天会话列表")
-def list_sessions(
-    chat_id: str,
-    id: str | None = Query(None),
-    name: str | None = Query(None),
-    page: int = Query(1),
-    page_size: int = Query(30),
-    orderby: str = Query("create_time"),
-    desc: bool = Query(True),
-    user_id: str | None = Query(None),
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
-    if not DialogService.query(db, tenant_id=tenant_id, id=chat_id, status=StatusEnum.VALID.value):
-        return get_error_data_result(retmsg=f"You don't own the assistant {chat_id}.")
-    
-    page_number = int(page)
-    items_per_page = int(page_size)
-    
-    convs = ConversationService.get_list(db, chat_id, page_number, items_per_page, orderby, desc, id, name, user_id)
-    if not convs:
-        return get_result(data=[])
-    
-    for conv in convs:
-        conv["messages"] = conv.pop("message")
-        infos = conv["messages"]
-        for info in infos:
-            if "prompt" in info:
-                info.pop("prompt")
-        conv["chat_id"] = conv.pop("dialog_id")
-        ref_messages = conv["reference"]
-        if ref_messages:
-            messages = conv["messages"]
-            message_num = 0
-            ref_num = 0
-            while message_num < len(messages) and ref_num < len(ref_messages):
-                if messages[message_num]["role"] != "user":
-                    chunk_list = []
-                    if "chunks" in ref_messages[ref_num]:
-                        chunks = ref_messages[ref_num]["chunks"]
-                        for chunk in chunks:
-                            new_chunk = {
-                                "id": chunk.get("chunk_id", chunk.get("id")),
-                                "content": chunk.get("content_with_weight", chunk.get("content")),
-                                "document_id": chunk.get("doc_id", chunk.get("document_id")),
-                                "document_name": chunk.get("docnm_kwd", chunk.get("document_name")),
-                                "dataset_id": chunk.get("kb_id", chunk.get("dataset_id")),
-                                "image_id": chunk.get("image_id", chunk.get("img_id")),
-                                "positions": chunk.get("positions", chunk.get("position_int")),
-                            }
-                            chunk_list.append(new_chunk)
-                    messages[message_num]["reference"] = chunk_list
-                    ref_num += 1
-                message_num += 1
-        del conv["reference"]
-    return get_result(data=convs)
-
-
 @router.get("/agents/{agent_id}/sessions", summary="获取代理会话列表")
 def list_agent_sessions(
     agent_id: str,
@@ -887,57 +754,6 @@ def list_agent_sessions(
                 message_num += 1
         del conv["reference"]
     return get_result(data=convs)
-
-
-@router.delete("/chats/{chat_id}/sessions", summary="批量删除聊天会话")
-def delete_sessions(
-    chat_id: str, 
-    request: DeleteSessionsRequest, 
-    db: Session = Depends(get_db), 
-    tenant_id: str = Depends(token_required)
-):
-    if not DialogService.query(db, id=chat_id, tenant_id=tenant_id, status=StatusEnum.VALID.value):
-        return get_error_data_result(retmsg="You don't own the chat")
-
-    errors = []
-    success_count = 0
-    req = request.model_dump()
-
-    ids = req.get("ids")
-    if not ids:
-        if req.get("delete_all") is True:
-            ids = [conv.id for conv in ConversationService.query(db, dialog_id=chat_id)]
-            if not ids:
-                return get_result()
-        else:
-            return get_result()
-
-    conv_list = ids
-
-    unique_conv_ids, duplicate_messages = check_duplicate_ids(conv_list, "session")
-    conv_list = unique_conv_ids
-
-    for id in conv_list:
-        conv = ConversationService.query(db, id=id, dialog_id=chat_id)
-        if not conv:
-            errors.append(f"The chat doesn't own the session {id}")
-            continue
-        ConversationService.delete_by_id(db, id)
-        success_count += 1
-
-    if errors:
-        if success_count > 0:
-            return get_result(data={"success_count": success_count, "errors": errors}, retmsg=f"Partially deleted {success_count} sessions with {len(errors)} errors")
-        else:
-            return get_error_data_result(retmsg="; ".join(errors))
-
-    if duplicate_messages:
-        if success_count > 0:
-            return get_result(retmsg=f"Partially deleted {success_count} sessions with {len(duplicate_messages)} errors", data={"success_count": success_count, "errors": duplicate_messages})
-        else:
-            return get_error_data_result(retmsg=";".join(duplicate_messages))
-
-    return get_result()
 
 
 @router.delete("/agents/{agent_id}/sessions", summary="批量删除代理会话")

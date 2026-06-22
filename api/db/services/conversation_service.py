@@ -2,6 +2,7 @@ import logging
 import time
 import json
 from uuid import uuid4
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -15,36 +16,54 @@ from common.misc_utils import get_uuid
 
 from core.prompts.generator import chunks_format
 
+
+def _conversation_to_dict(conversation: Any) -> dict[str, Any]:
+    if hasattr(conversation, "to_dict"):
+        return conversation.to_dict()
+    return {
+        "id": conversation.id,
+        "dialog_id": conversation.dialog_id,
+        "name": conversation.name,
+        "message": conversation.message,
+        "reference": conversation.reference,
+        "user_id": conversation.user_id,
+        "create_time": conversation.create_time,
+        "create_date": conversation.create_date,
+        "update_time": conversation.update_time,
+        "update_date": conversation.update_date,
+    }
+
+
 class ConversationService(CommonService):
     model = Conversation
 
     @classmethod
     def get_list(cls, db: Session, dialog_id, page_number, items_per_page, orderby, is_desc, id=None, name=None, user_id=None):
-        # 使用 SQLAlchemy 的 query 方法开始查询
-        query = db.query(cls.model).filter(cls.model.dialog_id == dialog_id)
+        stmt = select(cls.model).where(cls.model.dialog_id == dialog_id)
 
-        # 添加条件过滤器
         if id:
-            query = query.filter(cls.model.id == id)
+            stmt = stmt.where(cls.model.id == id)
         if name:
-            query = query.filter(cls.model.name == name)
+            stmt = stmt.where(cls.model.name == name)
         if user_id:
-            query = query.filter(cls.model.user_id == user_id)
-        # 根据 desc 参数确定排序方式
+            stmt = stmt.where(cls.model.user_id == user_id)
+        if not hasattr(cls.model, orderby):
+            raise ValueError(f"'{orderby}' is not a valid attribute of '{cls.model.__name__}'")
         order_col = getattr(cls.model, orderby)
-        query = query.order_by(order_col.desc() if is_desc else order_col.asc())
+        stmt = stmt.order_by(order_col.desc() if is_desc else order_col.asc())
 
-        # 应用分页
-        query = query.offset((page_number - 1) * items_per_page).limit(items_per_page)
+        # page_size=0 follows the REST API convention of disabling pagination.
+        if items_per_page > 0:
+            stmt = stmt.offset((page_number - 1) * items_per_page).limit(items_per_page)
 
-        # 执行查询并返回结果
-        results = query.all()
-        # 将结果转换为字典形式返回
-        return [item.__dict__ for item in results]
+        results = db.scalars(stmt).all()
+        return [_conversation_to_dict(item) for item in results]
 
     @classmethod
     def get_all_conversation_by_dialog_ids(cls, db: Session, dialog_ids: list[str]) -> list[dict]:
         """根据对话ID列表批量查询所有会话记录，使用分页避免内存溢出"""
+        if not dialog_ids:
+            return []
 
         stmt = (
             select(cls.model)
@@ -57,29 +76,12 @@ class ConversationService(CommonService):
 
         while True:
             try:
-                s_batch = db.execute(
-                    stmt.offset(offset).limit(limit)
-                ).scalars().all()
+                s_batch = db.scalars(stmt.offset(offset).limit(limit)).all()
 
                 if not s_batch:
                     break
 
-                # 将 ORM 对象转换为字典
-                res.extend([
-                    {
-                        "id": session.id,
-                        "dialog_id": session.dialog_id,
-                        "name": session.name,
-                        "message": session.message,
-                        "reference": session.reference,
-                        "user_id": session.user_id,
-                        "create_time": session.create_time,
-                        "create_date": session.create_date,
-                        "update_time": session.update_time,
-                        "update_date": session.update_date
-                    }
-                    for session in s_batch
-                ])
+                res.extend(_conversation_to_dict(session) for session in s_batch)
                 offset += limit
             except Exception:
                 logging.exception("Failed to get conversations for dialog_ids at offset %d", offset)
@@ -145,7 +147,7 @@ def completion(db, tenant_id, chat_id, question, name="New session", session_id=
             "message": [{"role": "assistant", "content": dia[0].prompt_config.get("prologue"), "created_at": time.time()}],
             "user_id": kwargs.get("user_id", "")
         }
-        ConversationService.save(**conv)
+        ConversationService.save(db, **conv)
         if stream:
             yield "data:" + json.dumps({"code": 0, "message": "",
                                         "data": {
@@ -238,7 +240,7 @@ async def async_completion(db, tenant_id, chat_id, question, name="New session",
             "message": [{"role": "assistant", "content": dia[0].prompt_config.get("prologue"), "created_at": time.time()}],
             "user_id": kwargs.get("user_id", "")
         }
-        ConversationService.save(**conv)
+        ConversationService.save(db, **conv)
         if stream:
             yield "data:" + json.dumps({"code": 0, "message": "",
                                         "data": {
@@ -475,4 +477,3 @@ async def async_iframe_completion(db, dialog_id, question, session_id=None, stre
             API4ConversationService.append_message(db, conv.id, conv.to_dict())
             break
         yield answer
-
