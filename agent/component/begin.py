@@ -14,6 +14,7 @@
 #  limitations under the License.
 #
 from agent.component.fillup import UserFillUpParam, UserFillUp
+from agent.persondata_input import decrypt_persondata_input_value, is_persondata_input
 from api.db.services.file_service import FileService
 
 
@@ -54,6 +55,8 @@ class Begin(UserFillUp):
                     # Support both single file (backward compatibility) and multiple files
                     files = file_value if isinstance(file_value, list) else [file_value]
                     v = FileService.get_files(files, layout_recognize=layout_recognize)
+            elif is_persondata_input(v):
+                v = decrypt_persondata_input_value(v, self._canvas)
             else:
                 v = v.get("value")
             self.set_output(k, v)

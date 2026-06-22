@@ -30,6 +30,7 @@ from typing import Any
 from agent.component import component_class
 from agent.a2ui import A2UI_EVENT
 from agent.component.base import ComponentBase
+from agent.persondata_input import redact_persondata_payload
 from api.db.db_models import db_connection
 from api.db.services.file_service import FileService
 from api.db.services.llm_service import LLMBundle
@@ -87,6 +88,7 @@ class Graph:
         self.components = {}
         self.error = ""
         self.dsl = json.loads(dsl)
+        self._sensitive_values = []
         self._tenant_id = tenant_id
         self.task_id = task_id if task_id else get_uuid()
         self.custom_header = custom_header
@@ -129,10 +131,11 @@ class Graph:
                     dsl["components"][k][c] = json.loads(str(cpn["obj"]))
                     continue
                 dsl["components"][k][c] = deepcopy(cpn[c])
-        return json.dumps(dsl, ensure_ascii=False)
+        return json.dumps(self.redact_sensitive_data(dsl), ensure_ascii=False)
 
     def reset(self):
         self.path = []
+        self._sensitive_values = []
         for k, cpn in self.components.items():
             self.components[k]["obj"].reset()
         try:
@@ -164,6 +167,13 @@ class Graph:
 
     def get_tenant_id(self):
         return self._tenant_id
+
+    def register_sensitive_value(self, value: Any) -> None:
+        if isinstance(value, str) and value and value not in self._sensitive_values:
+            self._sensitive_values.append(value)
+
+    def redact_sensitive_data(self, value: Any) -> Any:
+        return redact_persondata_payload(value, self._sensitive_values)
 
     def get_value_with_variable(self, value: str) -> Any:
         pat = re.compile(r"\{* *\{([a-zA-Z:0-9]+@[A-Za-z0-9_.-]+|sys\.[A-Za-z0-9_.]+|env\.[A-Za-z0-9_.]+)\} *\}*")
@@ -431,7 +441,7 @@ class Canvas(Graph):
             logging.info(msg)
             raise TaskCanceledException(msg)
 
-        yield decorate("workflow_started", {"inputs": kwargs.get("inputs")})
+        yield decorate("workflow_started", {"inputs": self.redact_sensitive_data(kwargs.get("inputs"))})
         self.retrieval.append({"chunks": {}, "doc_aggs": {}})
 
         async def _run_batch(f, t):
@@ -486,8 +496,8 @@ class Canvas(Graph):
 
         def _node_finished(cpn_obj):
             return decorate("node_finished", {
-                "inputs": cpn_obj.get_input_values(),
-                "outputs": cpn_obj.output(),
+                "inputs": self.redact_sensitive_data(cpn_obj.get_input_values()),
+                "outputs": self.redact_sensitive_data(cpn_obj.output()),
                 "component_id": cpn_obj._id,
                 "component_name": self.get_component_name(cpn_obj._id),
                 "component_type": self.get_component_type(cpn_obj._id),
@@ -654,14 +664,14 @@ class Canvas(Graph):
                         if o.get_param("enable_tips"):
                             tips = o.output("tips")
                 self.path = path
-                yield decorate("user_inputs", {"inputs": another_inputs, "tips": tips})
+                yield decorate("user_inputs", {"inputs": self.redact_sensitive_data(another_inputs), "tips": tips})
                 return
         self.path = self.path[:idx]
         if not self.error:
             yield decorate("workflow_finished",
                            {
-                               "inputs": kwargs.get("inputs"),
-                               "outputs": self.get_component_obj(self.path[-1]).output(),
+                               "inputs": self.redact_sensitive_data(kwargs.get("inputs")),
+                               "outputs": self.redact_sensitive_data(self.get_component_obj(self.path[-1]).output()),
                                "elapsed_time": time.perf_counter() - st,
                                "created_at": st,
                            })
@@ -670,7 +680,7 @@ class Canvas(Graph):
         elif "Task has been canceled" in self.error:
             yield decorate("workflow_finished",
                        {
-                           "inputs": kwargs.get("inputs"),
+                           "inputs": self.redact_sensitive_data(kwargs.get("inputs")),
                            "outputs": "Task has been canceled",
                            "elapsed_time": time.perf_counter() - st,
                            "created_at": st,
