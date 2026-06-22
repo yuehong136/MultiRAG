@@ -317,7 +317,7 @@ services:
 
   # ========== MinIO 对象存储 ==========
   minio:
-    image: quay.io/minio/minio:RELEASE.2025-06-13T11-33-47Z
+    image: pgsty/minio:RELEASE.2026-03-25T00-00-00Z
     container_name: multirag-minio
     command: ["server", "--console-address", ":9001", "/data"]
     ports:
