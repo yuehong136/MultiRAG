@@ -26,7 +26,6 @@ from pydantic import (
     Field,
     StringConstraints,
     ValidationError,
-    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -395,7 +394,7 @@ class CreateDatasetReq(Base):
 
     @field_validator("pipeline_id", mode="before")
     @classmethod
-    def handle_pipeline_id(cls, v: str | None, info: ValidationInfo) -> str | None:
+    def handle_pipeline_id(cls, v: str | None, info: Any) -> str | None:
         if v is None:
             return v
         if info.data.get("parse_type", 0) == 1:
@@ -629,7 +628,7 @@ class CreateDatasetReq(Base):
 
     @field_validator("chunk_method", mode="wrap")
     @classmethod
-    def validate_chunk_method(cls, v: Any, handler, info: ValidationInfo) -> Any:
+    def validate_chunk_method(cls, v: Any, handler, info: Any) -> Any:
         """Wrap validation to unify error messages, including type errors (e.g. list)."""
         allowed = {"naive", "book", "email", "laws", "manual", "one", "paper", "picture", "presentation", "qa", "table", "tag", "resume"}
         error_msg = "Input should be 'naive', 'book', 'email', 'laws', 'manual', 'one', 'paper', 'picture', 'presentation', 'qa', 'table', 'tag' or 'resume'"

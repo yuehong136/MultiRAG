@@ -70,6 +70,9 @@ sql_command: login_user
            | create_user_dataset_with_pipeline
            | drop_user_dataset
            | list_user_dataset_files
+           | list_user_dataset_documents
+           | list_user_datasets_metadata
+           | list_user_documents_metadata_summary
            | create_user_chat
            | drop_user_chat
            | create_index
@@ -194,6 +197,7 @@ AS: "AS"i
 RESET: "RESET"i
 DATASET: "DATASET"i
 CHAT: "CHAT"i
+COMMA.2: ","
 
 list_services: LIST SERVICES ";"
 show_service: SHOW SERVICE NUMBER ";"
@@ -278,6 +282,9 @@ create_user_dataset_with_parser: CREATE DATASET quoted_string WITH EMBEDDING quo
 create_user_dataset_with_pipeline: CREATE DATASET quoted_string WITH EMBEDDING quoted_string PIPELINE quoted_string ";"
 drop_user_dataset: DROP DATASET quoted_string ";"
 list_user_dataset_files: LIST FILES OF DATASET quoted_string ";"
+list_user_dataset_documents: LIST DOCUMENTS OF DATASET quoted_string ";"
+list_user_datasets_metadata: LIST METADATA OF DATASETS quoted_string (COMMA quoted_string)* ";"
+list_user_documents_metadata_summary: LIST METADATA SUMMARY OF DATASET quoted_string (DOCUMENTS quoted_string (COMMA quoted_string)*)? ";"
 create_user_chat: CREATE CHAT quoted_string ";"
 drop_user_chat: DROP CHAT quoted_string ";"
 create_index: CREATE INDEX FOR DATASET quoted_string VECTOR_SIZE NUMBER ";"
@@ -295,7 +302,7 @@ parse_dataset_sync: PARSE DATASET quoted_string SYNC ";"
 parse_dataset_async: PARSE DATASET quoted_string ASYNC ";"
 benchmark: BENCHMARK NUMBER NUMBER sql_command
 
-action_list: identifier ("," identifier)*
+action_list: identifier (COMMA identifier)*
 
 identifier: WORD
 quoted_string: QUOTED_STRING
@@ -614,6 +621,29 @@ class MultiRAGCLITransformer(Transformer):
         dataset_name = items[4].children[0].strip("'\"")
         return {"type": "list_user_dataset_files", "dataset_name": dataset_name}
 
+    def list_user_dataset_documents(self, items):
+        dataset_name = items[4].children[0].strip("'\"")
+        return {"type": "list_user_dataset_documents", "dataset_name": dataset_name}
+
+    def list_user_datasets_metadata(self, items):
+        dataset_names = [items[4].children[0].strip("'\"")]
+        for item in items[5:]:
+            if item and hasattr(item, "children") and item.children:
+                dataset_names.append(item.children[0].strip("'\""))
+        return {"type": "list_user_datasets_metadata", "dataset_names": dataset_names}
+
+    def list_user_documents_metadata_summary(self, items):
+        dataset_name = items[5].children[0].strip("'\"")
+        doc_ids = []
+        for item in items[6:]:
+            if item and hasattr(item, "children") and item.children:
+                doc_ids.append(item.children[0].strip("'\""))
+        return {
+            "type": "list_user_documents_metadata_summary",
+            "dataset_name": dataset_name,
+            "document_ids": doc_ids,
+        }
+
     def create_user_chat(self, items):
         chat_name = items[2].children[0].strip("'\"")
         return {"type": "create_user_chat", "chat_name": chat_name}
@@ -699,7 +729,7 @@ class MultiRAGCLITransformer(Transformer):
         return {"type": "benchmark", "concurrency": concurrency, "iterations": iterations, "command": command}
 
     def action_list(self, items):
-        return items
+        return [item for item in items if str(item) != ","]
 
     def meta_command(self, items):
         command_name = str(items[0]).lower()

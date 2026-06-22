@@ -492,6 +492,76 @@ multirag> LIST FILES OF DATASET 'my_dataset';
 
 ---
 
+### list_user_dataset_documents
+
+**Description**
+Lists all documents in the specified dataset, including metadata fields when present.
+
+**Usage**
+```
+LIST DOCUMENTS OF DATASET <dataset_name>;
+```
+
+**Parameters**
+- `dataset_name`: Dataset name, quoted string.
+
+**Example**
+```
+multirag> LIST DOCUMENTS OF DATASET 'my_dataset';
+```
+
+**Display Effect**
+(Sample output will be provided by the user)
+
+---
+
+### list_user_datasets_metadata
+
+**Description**
+Lists metadata values across one or more datasets.
+
+**Usage**
+```
+LIST METADATA OF DATASETS <dataset_name>[, <dataset_name>]*;
+```
+
+**Parameters**
+- `dataset_name`: Dataset name, quoted string.
+
+**Example**
+```
+multirag> LIST METADATA OF DATASETS 'my_dataset', 'archive_dataset';
+```
+
+**Display Effect**
+(Sample output will be provided by the user)
+
+---
+
+### list_user_documents_metadata_summary
+
+**Description**
+Shows metadata value counts for a dataset, optionally limited to specific documents.
+
+**Usage**
+```
+LIST METADATA SUMMARY OF DATASET <dataset_name> [DOCUMENTS <doc_id>[, <doc_id>]*];
+```
+
+**Parameters**
+- `dataset_name`: Dataset name, quoted string.
+- `doc_id`: Optional document ID, quoted string.
+
+**Example**
+```
+multirag> LIST METADATA SUMMARY OF DATASET 'my_dataset' DOCUMENTS 'doc_1', 'doc_2';
+```
+
+**Display Effect**
+(Sample output will be provided by the user)
+
+---
+
 ### list_user_agents
 
 **Description**  

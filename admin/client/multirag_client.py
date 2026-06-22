@@ -1,7 +1,6 @@
 import json
 import time
 import urllib.parse
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +71,9 @@ CREATE DATASET <name> WITH EMBEDDING <embd_id> PARSER <parser_type>
 CREATE DATASET <name> WITH EMBEDDING <embd_id> PIPELINE <pipeline_id>
 DROP DATASET <name>
 LIST FILES OF DATASET <name>
+LIST DOCUMENTS OF DATASET <name>
+LIST METADATA OF DATASETS <dataset_name>[, <dataset_name>]*
+LIST METADATA SUMMARY OF DATASET <dataset_name> [DOCUMENTS <doc_id>[, <doc_id>]*]
 CREATE CHAT <name>
 DROP CHAT <name>
 CREATE CHAT <name> SESSION
@@ -979,13 +981,13 @@ class MultiRAGClient:
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
-        response = self.http_client.request("POST", "dialog/next", json_body={}, use_api_base=False, auth_kind="web")
+        response = self.http_client.request("GET", "chats", use_api_base=True, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200:
             data = res_json.get("data", {})
-            self._print_table_simple(data.get("dialogs", []))
+            self._print_table_simple(data.get("chats", []) if isinstance(data, dict) else data)
         else:
-            print(f"Fail to list chats, code: {res_json.get('retcode')}, message: {res_json.get('retmsg')}")
+            print(f"Fail to list chats, code: {res_json.get('code', res_json.get('retcode'))}, message: {res_json.get('message', res_json.get('retmsg'))}")
 
     def list_user_model_providers(self, command: dict):
         if self.server_type != "user":
@@ -1211,16 +1213,135 @@ class MultiRAGClient:
         if docs is not None:
             self._print_table_simple(docs)
 
+    def list_user_dataset_documents(self, command: dict):
+        if self.server_type != "user":
+            print("This command is only allowed in USER mode")
+            return
+        dataset_name = command["dataset_name"]
+        dataset_id = self._get_dataset_id(dataset_name)
+        if dataset_id is None:
+            return
+        docs = self._list_documents(dataset_name, dataset_id)
+        if docs is None:
+            return
+        if not docs:
+            print(f"No documents found in dataset {dataset_name}")
+            return
+
+        display_docs = []
+        for doc in docs:
+            display_doc = {
+                "name": doc.get("name", ""),
+                "id": doc.get("id", ""),
+                "size": doc.get("size", 0),
+                "status": doc.get("status", ""),
+                "created_at": doc.get("created_at", doc.get("create_time", "")),
+            }
+            meta_fields = doc.get("meta_fields") or {}
+            if meta_fields:
+                display_doc["meta_fields"] = json.dumps(meta_fields, ensure_ascii=False)
+            display_docs.append(display_doc)
+        self._print_table_simple(display_docs)
+
+    def list_user_datasets_metadata(self, command: dict):
+        if self.server_type != "user":
+            print("This command is only allowed in USER mode")
+            return
+
+        dataset_ids = []
+        for dataset_name in command["dataset_names"]:
+            dataset_id = self._get_dataset_id(dataset_name)
+            if dataset_id is None:
+                continue
+            dataset_ids.append(dataset_id)
+
+        if not dataset_ids:
+            print("No valid datasets found")
+            return
+
+        kb_ids = ",".join(dataset_ids)
+        response = self.http_client.request("GET", f"kb/get_meta?kb_ids={kb_ids}", use_api_base=False, auth_kind="web")
+        res_json = response.json()
+        code = res_json.get("code", res_json.get("retcode", -1))
+        if response.status_code != 200 or code != 0:
+            msg = res_json.get("message", res_json.get("retmsg", ""))
+            print(f"Fail to get metadata: {msg}")
+            return
+
+        meta = res_json.get("data") or {}
+        if not meta:
+            print("No metadata found")
+            return
+
+        rows = []
+        for field_name, values in meta.items():
+            if not isinstance(values, dict):
+                continue
+            for value, doc_ids in values.items():
+                if isinstance(doc_ids, list):
+                    doc_id_text = ", ".join(str(doc_id) for doc_id in doc_ids)
+                else:
+                    doc_id_text = str(doc_ids)
+                rows.append({"field": field_name, "value": value, "doc_ids": doc_id_text})
+        self._print_table_simple(rows)
+
+    def list_user_documents_metadata_summary(self, command: dict):
+        if self.server_type != "user":
+            print("This command is only allowed in USER mode")
+            return
+
+        dataset_name = command["dataset_name"]
+        dataset_id = self._get_dataset_id(dataset_name)
+        if dataset_id is None:
+            return
+
+        payload = {"kb_id": dataset_id}
+        doc_ids = command.get("document_ids") or []
+        if doc_ids:
+            payload["doc_ids"] = doc_ids
+
+        response = self.http_client.request("POST", "document/metadata/summary", json_body=payload,
+                                            use_api_base=False, auth_kind="web")
+        res_json = response.json()
+        code = res_json.get("code", res_json.get("retcode", -1))
+        if response.status_code != 200 or code != 0:
+            msg = res_json.get("message", res_json.get("retmsg", ""))
+            print(f"Fail to get metadata summary: {msg}")
+            return
+
+        summary = (res_json.get("data") or {}).get("summary") or {}
+        if not summary:
+            print("No metadata summary found")
+            return
+
+        rows = []
+        for field_name, field_info in summary.items():
+            field_type = ""
+            values = []
+            if isinstance(field_info, dict):
+                field_type = field_info.get("type", "")
+                values = field_info.get("values", [])
+            elif isinstance(field_info, list):
+                values = field_info
+            for item in values:
+                if isinstance(item, (list, tuple)) and len(item) >= 2:
+                    value, count = item[0], item[1]
+                else:
+                    value, count = item, ""
+                rows.append({"field": field_name, "type": field_type, "value": value, "count": count})
+        self._print_table_simple(rows)
+
     def create_user_chat(self, command: dict):
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
         chat_name = command["chat_name"]
+        default_models = self._get_default_models() or {}
         payload = {
             "name": chat_name,
             "description": "",
             "icon": "",
-            "language": "English",
+            "dataset_ids": [],
             "llm_setting": {},
             "prompt_config": {
                 "empty_response": "",
@@ -1228,7 +1349,10 @@ class MultiRAGClient:
                 "quote": True,
                 "keyword": False,
                 "tts": False,
-                "system": "You are an intelligent assistant. Please answer questions based on the provided knowledge base.",
+                "system": (
+                    "You are an intelligent assistant. Please answer questions based on the provided knowledge base.\n"
+                    "{knowledge}"
+                ),
                 "refine_multiturn": False,
                 "use_kg": False,
                 "reasoning": False,
@@ -1237,9 +1361,13 @@ class MultiRAGClient:
             },
             "similarity_threshold": 0.2,
             "top_n": 8,
+            "top_k": 1024,
             "vector_similarity_weight": 0.3,
+            "rerank_id": default_models.get("rerank_id", ""),
         }
-        response = self.http_client.request("POST", "dialog/set", json_body=payload, use_api_base=False, auth_kind="web")
+        if default_models.get("llm_id"):
+            payload["llm_id"] = default_models["llm_id"]
+        response = self.http_client.request("POST", "chats", json_body=payload, use_api_base=True, auth_kind="web")
         res_json = response.json()
         code = res_json.get("code", res_json.get("retcode", -1))
         if response.status_code == 200 and code == 0:
@@ -1260,8 +1388,8 @@ class MultiRAGClient:
         if not to_drop_ids:
             print(f"Chat '{chat_name}' not found")
             return
-        payload = {"dialog_ids": to_drop_ids}
-        response = self.http_client.request("POST", "dialog/rm", json_body=payload, use_api_base=False, auth_kind="web")
+        payload = {"ids": to_drop_ids}
+        response = self.http_client.request("DELETE", "chats", json_body=payload, use_api_base=True, auth_kind="web")
         res_json = response.json()
         code = res_json.get("code", res_json.get("retcode", -1))
         if response.status_code == 200 and code == 0:
@@ -1342,13 +1470,14 @@ class MultiRAGClient:
         dialog_id = self._get_chat_id_by_name(chat_name)
         if dialog_id is None:
             return
-        conversation_id = uuid.uuid4().hex
-        payload = {
-            "conversation_id": conversation_id,
-            "is_new": True,
-            "dialog_id": dialog_id,
-        }
-        response = self.http_client.request("POST", "conversation/set", json_body=payload, use_api_base=False, auth_kind="web")
+        payload = {"name": "New session"}
+        response = self.http_client.request(
+            "POST",
+            f"chats/{dialog_id}/sessions",
+            json_body=payload,
+            use_api_base=True,
+            auth_kind="web",
+        )
         res_json = response.json()
         code = res_json.get("code", res_json.get("retcode", -1))
         if response.status_code == 200 and code == 0:
@@ -1376,8 +1505,14 @@ class MultiRAGClient:
         if not to_drop_session_ids:
             print(f"Chat session '{session_id}' not found in chat '{chat_name}'")
             return
-        payload = {"conversation_ids": to_drop_session_ids}
-        response = self.http_client.request("POST", "conversation/rm", json_body=payload, use_api_base=False, auth_kind="web")
+        payload = {"ids": to_drop_session_ids}
+        response = self.http_client.request(
+            "DELETE",
+            f"chats/{dialog_id}/sessions",
+            json_body=payload,
+            use_api_base=True,
+            auth_kind="web",
+        )
         res_json = response.json()
         code = res_json.get("code", res_json.get("retcode", -1))
         if response.status_code == 200 and code == 0:
@@ -1409,12 +1544,19 @@ class MultiRAGClient:
             return
         message = command["message"]
         session_id = command["session_id"]
-        payload = {
-            "conversation_id": session_id,
-            "messages": [{"role": "user", "content": message}],
-        }
-        response = self.http_client.request("POST", "conversation/completion", json_body=payload,
-                                            use_api_base=False, auth_kind="web", stream=True)
+        chat_name = command["chat_name"]
+        dialog_id = self._get_chat_id_by_name(chat_name)
+        if dialog_id is None:
+            return
+        payload = {"messages": [{"role": "user", "content": message}]}
+        response = self.http_client.request(
+            "POST",
+            f"chats/{dialog_id}/sessions/{session_id}/completions",
+            json_body=payload,
+            use_api_base=True,
+            auth_kind="web",
+            stream=True,
+        )
         if response.status_code != 200:
             print(f"Fail to chat on session, status code: {response.status_code}")
             return
@@ -1613,7 +1755,7 @@ class MultiRAGClient:
         return None
 
     def _list_chat_sessions(self, dialog_id: str) -> list | None:
-        response = self.http_client.request("GET", f"conversation/list?dialog_id={dialog_id}", use_api_base=False, auth_kind="web")
+        response = self.http_client.request("GET", f"chats/{dialog_id}/sessions", use_api_base=True, auth_kind="web")
         res_json = response.json()
         code = res_json.get("code", res_json.get("retcode", -1))
         if response.status_code == 200 and code == 0:
@@ -1624,13 +1766,13 @@ class MultiRAGClient:
             return None
 
     def _list_chats(self) -> list | None:
-        response = self.http_client.request("POST", "dialog/next", json_body={}, use_api_base=False, auth_kind="web")
+        response = self.http_client.request("GET", "chats", use_api_base=True, auth_kind="web")
         res_json = response.json()
         code = res_json.get("code", res_json.get("retcode", -1))
         if response.status_code == 200 and code == 0:
             data = res_json.get("data", {})
             if isinstance(data, dict):
-                return data.get("dialogs", [])
+                return data.get("chats", [])
             return data
         msg = res_json.get("message", res_json.get("retmsg", ""))
         print(f"Fail to list chats: {msg}")
@@ -1810,6 +1952,12 @@ def run_command(client: MultiRAGClient, command_dict: dict):
             client.drop_user_dataset(command_dict)
         case "list_user_dataset_files":
             client.list_user_dataset_files(command_dict)
+        case "list_user_dataset_documents":
+            client.list_user_dataset_documents(command_dict)
+        case "list_user_datasets_metadata":
+            client.list_user_datasets_metadata(command_dict)
+        case "list_user_documents_metadata_summary":
+            client.list_user_documents_metadata_summary(command_dict)
         case "create_user_chat":
             client.create_user_chat(command_dict)
         case "drop_user_chat":
