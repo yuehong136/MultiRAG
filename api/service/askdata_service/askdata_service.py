@@ -806,6 +806,128 @@ class AskdataService:
         """从数据集详情列表中提取所有domainId并去重。"""
         return list(set(d.get('domainId') for d in dataset_details if d.get('domainId')))
 
+    def _apply_nonsemantic_where(self, assembler, cond: Dict[str, Any]) -> None:
+        """把一条「非语义」WHERE 条件应用到 assembler —— table-row 与聚合分支共用，杜绝两套漂移。
+
+        优先级：raw_condition(has_or/复杂表达式) > 结构化(operator+value 分开)重组 > 整条 sql_column 正则兜底 > 裸列兜底。
+        构建器(table_config_generator._process_where_conditions)对普通非语义条件只存「字段名 + 独立 operator/value」，
+        聚合分支历史上却把 sql_column 当整条 'field op value' 正则重解析、无视 operator/value，
+        裸字段名解析不出 → add_raw_where(裸列) 生成非法 WHERE。这里统一成「有 operator 就分开重组」，
+        与 table-row 一致；仅在缺 operator(用户自定义/历史前端打包整条)时才退回正则解析。
+        结构化分支按 dataType 把数值串转成数值，避免数值列被字符串参数绑定(integer > character varying)。
+        """
+        import re
+
+        raw_condition = cond.get("raw_condition")
+        if raw_condition:
+            assembler.add_raw_where(raw_condition)
+            return
+
+        sql_column = cond.get("sql_column")
+        if not sql_column:
+            return
+
+        operator = (cond.get("operator") or "").strip()
+        data_type = cond.get("dataType")
+
+        # 结构化条目（构建器/前端常规形状）：operator、value 分开带，直接重组，绝不把 sql_column 当整条解析。
+        if operator:
+            value = cond.get("value")
+            op_up = operator.upper()
+            if op_up in ('IS NULL', 'IS NOT NULL'):
+                assembler.add_raw_where(f"{sql_column} {operator}")
+            elif op_up in ('IN', 'NOT IN'):
+                if isinstance(value, str):
+                    try:
+                        value_list = json.loads(value)
+                    except Exception:
+                        value_list = [v.strip().strip("'\"") for v in value.split(',')]
+                else:
+                    value_list = value if isinstance(value, list) else [value]
+                if data_type:
+                    value_list = [convert_where_condition_value(v, data_type, '=') for v in value_list]
+                placeholders = ','.join(['%s'] * len(value_list))
+                assembler.add_parameterized_where(f"{sql_column} {operator} ({placeholders})", value_list)
+            elif op_up == 'BETWEEN':
+                value2 = cond.get('value2', value)
+                if data_type:
+                    value = convert_where_condition_value(value, data_type, operator)
+                    value2 = convert_where_condition_value(value2, data_type, operator)
+                assembler.add_parameterized_where(f"{sql_column} BETWEEN %s AND %s", [value, value2])
+            else:
+                if data_type:
+                    value = convert_where_condition_value(value, data_type, operator)
+                assembler.add_parameterized_where(f"{sql_column} {operator} %s", [value])
+            return
+
+        # 无 operator：sql_column 可能是用户自定义/历史前端打包的整条 "field op value"，用正则兜底解析。
+        patterns = [
+            (r'^(.+?)\s+(IS\s+NULL|IS\s+NOT\s+NULL)\s*$', lambda m: (m.group(1), m.group(2), None)),
+            (r'^(.+?)\s+(IN|NOT\s+IN)\s*\((.+)\)\s*$', lambda m: (m.group(1), m.group(2), m.group(3))),
+            (r'^(.+?)\s+(BETWEEN)\s+(.+?)\s+AND\s+(.+)\s*$', lambda m: (m.group(1), m.group(2), (m.group(3), m.group(4)))),
+            (r'^(.+?)\s*(=|!=|<>|>=|<=|>|<|LIKE|NOT\s+LIKE)\s*(.+)\s*$', lambda m: (m.group(1), m.group(2), m.group(3))),
+        ]
+        for pattern, extractor in patterns:
+            match = re.match(pattern, sql_column, re.IGNORECASE)
+            if not match:
+                continue
+            field, op, val = extractor(match)
+            op_up = op.upper()
+            if op_up in ('IS NULL', 'IS NOT NULL'):
+                assembler.add_raw_where(f"{field} {op}")
+            elif op_up in ('IN', 'NOT IN'):
+                val_list = [v.strip().strip("'\"") for v in val.split(',')]
+                if data_type:
+                    val_list = [convert_where_condition_value(v, data_type, '=') for v in val_list]
+                placeholders = ','.join(['%s'] * len(val_list))
+                assembler.add_parameterized_where(f"{field} {op} ({placeholders})", val_list)
+            elif op_up == 'BETWEEN':
+                val1, val2 = val
+                val1, val2 = val1.strip().strip("'\""), val2.strip().strip("'\"")
+                if data_type:
+                    val1 = convert_where_condition_value(val1, data_type, op)
+                    val2 = convert_where_condition_value(val2, data_type, op)
+                assembler.add_parameterized_where(f"{field} BETWEEN %s AND %s", [val1, val2])
+            else:
+                val = val.strip().strip("'\"")
+                if data_type:
+                    val = convert_where_condition_value(val, data_type, op)
+                assembler.add_parameterized_where(f"{field} {op} %s", [val])
+            return
+
+        logger.warning(f"[re-query] 无法解析非语义 where 条件，按原始 SQL 添加(可能非法): {sql_column}")
+        assembler.add_raw_where(sql_column)
+
+    def _apply_nonsemantic_having(self, assembler, cond: Dict[str, Any]) -> None:
+        """把一条「非语义」HAVING 条件应用到 assembler，与非语义 where 同源对齐。
+
+        构建器非语义 having 同样只存「字段名 + 独立 operator/value」，原先 add_raw_having(sql_column) 把裸字段名
+        当整条 HAVING → 非法/丢过滤。这里有 operator 就用 add_having 正常重组(IN 解析、标量按 dataType 转换)；
+        raw_condition 走 add_raw_having；缺 operator 才原样兜底。
+        """
+        raw_condition = cond.get("raw_condition")
+        if raw_condition:
+            assembler.add_raw_having(raw_condition)
+            return
+
+        sql_column = cond.get("sql_column")
+        if not sql_column:
+            return
+
+        operator = (cond.get("operator") or "").strip()
+        if not operator:
+            assembler.add_raw_having(sql_column)
+            return
+
+        value = cond.get("value")
+        data_type = cond.get("dataType")
+        op_up = operator.upper()
+        if op_up == 'IN':
+            value = parse_sql_in_values(value) if isinstance(value, str) else value
+        elif op_up not in ('IS NULL', 'IS NOT NULL', 'NOT IN', 'BETWEEN') and data_type:
+            value = convert_where_condition_value(value, data_type, operator)
+        assembler.add_having(sql_column, FilterOperator.from_value(operator), value)
+
     async def generate_requery_sql(self, chart_type: str, table_config: Dict[str, Any], sql_components: Dict[str, Any],
                                    model_table_alias_mapping_list: List[Dict[str, Any]],
                                    pagination_info: Optional[Dict[str, Any]], user_id: str):
@@ -944,55 +1066,8 @@ class AskdataService:
                         # 普通情况
                         assembler.add_filter(column_name, FilterOperator.from_value(operator), converted_value)
                 else:
-                    raw_condition = filter.get("raw_condition", None)
-                    if raw_condition:
-                        assembler.add_raw_where(raw_condition)
-                    else:
-                        sql_column = filter['sql_column']
-                        operator = filter['operator']
-                        value = filter['value']
-                        # 非语义但已知列类型时，按真实类型转换数值（"66"→66），避免数值列被字符串参数绑定
-                        # 导致 integer > character varying；查不到类型(None)则不转、维持现状。
-                        data_type = filter.get('dataType')
-
-                        # 处理不同的操作符
-                        if operator.upper() in ['IS NULL', 'IS NOT NULL']:
-                            # NULL 检查不需要参数
-                            assembler.add_raw_where(f"{sql_column} {operator}")
-                        elif operator.upper() in ['IN', 'NOT IN']:
-                            # IN 操作符需要特殊处理
-                            if isinstance(value, str):
-                                # 如果是字符串，尝试解析为列表
-                                import json
-                                try:
-                                    value_list = json.loads(value)
-                                except:
-                                    # 如果不是 JSON，尝试分割
-                                    value_list = [v.strip().strip("'\"") for v in value.split(',')]
-                            else:
-                                value_list = value if isinstance(value, list) else [value]
-
-                            if data_type:
-                                value_list = [convert_where_condition_value(v, data_type, '=') for v in value_list]
-                            placeholders = ','.join(['%s'] * len(value_list))
-                            assembler.add_parameterized_where(
-                                f"{sql_column} {operator} ({placeholders})",
-                                value_list
-                            )
-                        elif operator.upper() == 'BETWEEN':
-                            # BETWEEN 需要两个值。必须用 add_parameterized_where：add_raw_where 第二参是
-                            # validate:bool，传 list 会被当校验开关、%s 永不绑定（原 bug）。
-                            value2 = filter.get('value2', value)
-                            if data_type:
-                                value = convert_where_condition_value(value, data_type, operator)
-                                value2 = convert_where_condition_value(value2, data_type, operator)
-                            assembler.add_parameterized_where(f"{sql_column} BETWEEN %s AND %s",
-                                                              [value, value2])
-                        else:
-                            # 普通操作符，使用参数化查询
-                            if data_type:
-                                value = convert_where_condition_value(value, data_type, operator)
-                            assembler.add_parameterized_where(f"{sql_column} {operator} %s", [value])
+                    # 非语义条件统一走共享 helper（与聚合分支同一套逻辑，杜绝漂移）
+                    self._apply_nonsemantic_where(assembler, filter)
 
             # 注入权限条件
             apply_permissions_to_assembler(
@@ -1104,73 +1179,10 @@ class AskdataService:
                         # 普通情况
                         assembler.add_filter(column_name, FilterOperator.from_value(operator), converted_value)
                 else:
-                    raw_condition = where_condition.get("raw_condition", None)
-                    sql_column = where_condition.get("sql_column", None)
-
-                    if raw_condition:
-                        # 如果有 raw_condition，直接使用
-                        assembler.add_raw_where(raw_condition)
-                    elif sql_column:
-                        # 如果有 sql_column，需要解析并参数化
-                        # sql_column 可能包含完整的条件表达式
-                        # 尝试解析操作符和值
-                        import re
-
-                        # 尝试匹配常见的 SQL 条件模式
-                        patterns = [
-                            (r'^(.+?)\s+(IS\s+NULL|IS\s+NOT\s+NULL)\s*$', lambda m: (m.group(1), m.group(2), None)),
-                            (r'^(.+?)\s+(IN|NOT\s+IN)\s*\((.+)\)\s*$', lambda m: (m.group(1), m.group(2), m.group(3))),
-                            (r'^(.+?)\s+(BETWEEN)\s+(.+?)\s+AND\s+(.+)\s*$',
-                             lambda m: (m.group(1), m.group(2), (m.group(3), m.group(4)))),
-                            (r'^(.+?)\s*(=|!=|<>|>=|<=|>|<|LIKE|NOT\s+LIKE)\s*(.+)\s*$',
-                             lambda m: (m.group(1), m.group(2), m.group(3))),
-                        ]
-
-                        matched = False
-                        for pattern, extractor in patterns:
-                            match = re.match(pattern, sql_column, re.IGNORECASE)
-                            if match:
-                                result = extractor(match)
-                                if len(result) == 3:
-                                    field, op, val = result
-                                    # 与 table-row 同源：非语义但已知列类型时按真实类型转换数值，
-                                    # 避免数值列被字符串参数绑定（integer > character varying）。None 则不转。
-                                    data_type = where_condition.get('dataType')
-
-                                    if op.upper() in ['IS NULL', 'IS NOT NULL']:
-                                        assembler.add_raw_where(f"{field} {op}")
-                                    elif op.upper() in ['IN', 'NOT IN']:
-                                        # 解析 IN 列表
-                                        val_list = [v.strip().strip("'\"") for v in val.split(',')]
-                                        if data_type:
-                                            val_list = [convert_where_condition_value(v, data_type, '=') for v in val_list]
-                                        placeholders = ','.join(['%s'] * len(val_list))
-                                        assembler.add_parameterized_where(f"{field} {op} ({placeholders})", val_list)
-                                    elif op.upper() == 'BETWEEN':
-                                        # BETWEEN 有两个值
-                                        val1, val2 = val
-                                        val1 = val1.strip().strip("'\"")
-                                        val2 = val2.strip().strip("'\"")
-                                        if data_type:
-                                            val1 = convert_where_condition_value(val1, data_type, op)
-                                            val2 = convert_where_condition_value(val2, data_type, op)
-                                        assembler.add_parameterized_where(f"{field} BETWEEN %s AND %s", [val1, val2])
-                                    else:
-                                        # 普通比较操作符
-                                        val = val.strip().strip("'\"")
-                                        if data_type:
-                                            val = convert_where_condition_value(val, data_type, op)
-                                        assembler.add_parameterized_where(f"{field} {op} %s", [val])
-
-                                    matched = True
-                                    break
-
-                        if not matched:
-                            logger.warning(f"无法解析 where 条件，将作为原始 SQL 添加: {sql_column}")
-                            assembler.add_raw_where(sql_column)
-                    else:
-                        # 既没有 raw_condition 也没有 sql_column，跳过
-                        pass
+                    # 非语义条件统一走共享 helper：原先把 sql_column 当整条 'field op value' 正则重解析、
+                    # 无视同级 operator/value，构建器存的是「裸字段名 + 独立 operator/value」→ 解析不出 →
+                    # add_raw_where(裸列) 生成非法 WHERE。改为与 table-row 同一套：有 operator 就分开重组。
+                    self._apply_nonsemantic_where(assembler, where_condition)
 
             # 注入权限条件
             apply_permissions_to_assembler(
@@ -1202,7 +1214,8 @@ class AskdataService:
                         value = convert_aggregation_value(column_name, value)
                     assembler.add_having(column_name, FilterOperator.from_value(operator), value)
                 else:
-                    assembler.add_raw_having(having_condition["sql_column"])
+                    # 非语义 having 同源对齐：有 operator 就分开重组(add_having)，不再把裸字段名当整条 HAVING
+                    self._apply_nonsemantic_having(assembler, having_condition)
 
             order_by_cfg = table_config.get("order_by")
             if order_by_cfg is None:
