@@ -216,6 +216,42 @@ func (c *MultiRAGClient) loginUser(email, password string) (string, error) {
 	return token, nil
 }
 
+// Logout ends the current session for both admin and user modes.
+func (c *MultiRAGClient) Logout() (ResponseIf, error) {
+	if c.HTTPClient.LoginToken == "" {
+		return nil, fmt.Errorf("not logged in")
+	}
+
+	var path string
+	if c.ServerType == "admin" {
+		path = "/admin/logout"
+	} else {
+		path = "/user/logout"
+	}
+
+	resp, err := c.HTTPClient.Request("GET", path, c.ServerType == "admin", "web", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("logout failed: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("logout failed: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	resJSON, err := resp.JSON()
+	if err != nil {
+		return nil, fmt.Errorf("logout failed: invalid JSON response: %w", err)
+	}
+
+	code, ok := resJSON["code"].(float64)
+	if !ok || code != 0 {
+		msg, _ := resJSON["message"].(string)
+		return nil, fmt.Errorf("logout failed: %s", msg)
+	}
+
+	return &SimpleResponse{Code: 0, Message: "Logout successful"}, nil
+}
+
 // ShowCurrentUser shows the current logged-in user information
 // TODO: Implement showing current user information when API is available
 func (c *MultiRAGClient) ShowCurrentUser(cmd *Command) (ResponseIf, error) {

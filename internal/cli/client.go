@@ -63,6 +63,8 @@ func (c *MultiRAGClient) ExecuteAdminCommand(cmd *Command) (ResponseIf, error) {
 	switch cmd.Type {
 	case "login_user":
 		return nil, c.LoginUser(cmd)
+	case "logout":
+		return c.Logout()
 	case "ping_server":
 		return c.PingServer(cmd)
 	case "benchmark":
@@ -102,6 +104,8 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 	switch cmd.Type {
 	case "login_user":
 		return nil, c.LoginUser(cmd)
+	case "logout":
+		return c.Logout()
 	case "ping_server":
 		return c.PingServer(cmd)
 	case "benchmark":

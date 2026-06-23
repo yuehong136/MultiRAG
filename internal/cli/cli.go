@@ -143,6 +143,7 @@ func ParseConnectionArgs(args []string) (*ConnectionArgs, error) {
 	var configFilePath string
 	var outputFormat string
 	var hasOtherFlags bool
+	var adminMode bool
 	var flagArgs []string
 
 	for i := 0; i < len(args); i++ {
@@ -159,7 +160,11 @@ func ParseConnectionArgs(args []string) (*ConnectionArgs, error) {
 		default:
 			if strings.HasPrefix(arg, "-") {
 				switch arg {
-				case "-h", "-p", "-w", "-k", "-u", "-admin", "--admin", "-user", "--user":
+				case "-admin", "--admin":
+					// Admin mode ignores the config file (handled below).
+					adminMode = true
+					hasOtherFlags = true
+				case "-h", "-p", "-w", "-k", "-u", "-user", "--user":
 					hasOtherFlags = true
 				}
 			}
@@ -173,18 +178,21 @@ func ParseConnectionArgs(args []string) (*ConnectionArgs, error) {
 		}
 	}
 
-	// Load config file with priority: -f > multirag.yml > none.
+	// Load config file with priority: -f > multirag.yml > none. Admin mode
+	// ignores the config file, which carries user-mode auth (user/password/token).
 	var config *ConfigFile
 	var err error
-	if configFilePath != "" {
-		config, err = LoadConfigFileFromPath(configFilePath)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		config, err = LoadDefaultConfigFile()
-		if err != nil {
-			return nil, err
+	if !adminMode {
+		if configFilePath != "" {
+			config, err = LoadConfigFileFromPath(configFilePath)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			config, err = LoadDefaultConfigFile()
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -559,6 +567,7 @@ Meta Commands:
 
 SQL Commands (User Mode):
   LOGIN USER 'email';                                    - Login as user
+  LOGOUT;                                                - End the current session
   REGISTER USER 'name' AS 'nickname' PASSWORD 'pwd';     - Register new user
   SHOW VERSION;                                          - Show version info
   PING;                                                  - Ping server
@@ -574,6 +583,7 @@ SQL Commands (User Mode):
 
 SQL Commands (Admin Mode):
   LOGIN USER 'email';                                    - Login as admin
+  LOGOUT;                                                - End the current session
   LIST USERS;                                            - List all users
   SHOW USER 'email';                                     - Show user details
   CREATE USER 'email' 'password';                        - Create new user

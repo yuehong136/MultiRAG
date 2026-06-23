@@ -96,6 +96,8 @@ func (p *Parser) parseAdminCommand() (*Command, error) {
 	switch p.curToken.Type {
 	case TokenLogin:
 		return p.parseLoginUser()
+	case TokenLogout:
+		return p.parseLogout()
 	case TokenPing:
 		return p.parsePingServer()
 	case TokenList:
@@ -134,6 +136,8 @@ func (p *Parser) parseUserCommand() (*Command, error) {
 	switch p.curToken.Type {
 	case TokenLogin:
 		return p.parseLoginUser()
+	case TokenLogout:
+		return p.parseLogout()
 	case TokenPing:
 		return p.parsePingServer()
 	case TokenRegister:
@@ -258,6 +262,17 @@ func (p *Parser) parseLoginUser() (*Command, error) {
 		return nil, err
 	}
 
+	return cmd, nil
+}
+
+// parseLogout parses LOGOUT[;] for both admin and user modes.
+func (p *Parser) parseLogout() (*Command, error) {
+	cmd := NewCommand("logout")
+	p.nextToken() // consume LOGOUT
+	// Semicolon is optional for LOGOUT
+	if p.curToken.Type == TokenSemicolon {
+		p.nextToken()
+	}
 	return cmd, nil
 }
 
