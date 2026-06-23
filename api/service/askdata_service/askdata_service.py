@@ -421,8 +421,22 @@ class AskdataService:
             model_details, model_relations, business_term_rows = await asyncio.gather(
                 model_details_task,
                 model_relations_task,
-                business_term_task
+                business_term_task,
+                return_exceptions=True,
             )
+            # 模型关系是「非关键、可降级」依赖：中台 getModelRelationships 接口超时/失败时
+            # 降级为空关系继续（单模型本就常无跨模型关系），避免这一路抖动把已成功的
+            # 模型详情/业务术语连同整个语义层一起拖垮。
+            # ⚠ 降级值必须是 []，绝不能是 None——下游 table_config 对 None 会在 get-sql 阶段
+            #    重新去打这个会超时的接口，等于把 30s 超时挪到下一步。
+            if isinstance(model_relations, BaseException):
+                logger.warning("[semantic_layer] 获取模型关系失败，降级为空关系继续: %r", model_relations)
+                model_relations = []
+            # 模型详情 / 业务术语仍是硬依赖：失败保持原有「整层中止」行为，显式重抛。
+            if isinstance(model_details, BaseException):
+                raise model_details
+            if isinstance(business_term_rows, BaseException):
+                raise business_term_rows
             logger.debug("[semantic_layer] model_ids=%s, model_relations=%d个, business_terms=%d个",
                          model_ids, len(model_relations), len(business_term_rows))
 
@@ -521,10 +535,23 @@ class AskdataService:
                 for model_detail in model_details
             ]
             if dims_metrics_tasks:
-                dims_metrics_results = await asyncio.gather(*dims_metrics_tasks)
+                # 与上面的模型关系 gather 同理：dims/metrics 是可降级依赖，单个模型打中台
+                # getModelIndsAndDimsByModelId 超时/失败时降级为空，绝不让它掀翻整个语义层。
+                # 降级值必须是 dict（{"dimensions": [], "metrics": []}）不能是 None——理由见
+                # model_dataset_resolver._ensure_dims_and_metrics 的说明。每模型用新字面量防串改。
+                dims_metrics_results = await asyncio.gather(*dims_metrics_tasks, return_exceptions=True)
+                _degraded = 0
                 for model_detail, dims_metrics in zip(model_details, dims_metrics_results):
+                    if isinstance(dims_metrics, BaseException):
+                        logger.warning("[dims_metrics] 预拉模型 %s 的维度/指标失败，降级为空继续: %r",
+                                       model_detail.get("modelId"), dims_metrics)
+                        dims_metrics = {"dimensions": [], "metrics": []}
+                        _degraded += 1
+                    elif not isinstance(dims_metrics, dict):
+                        dims_metrics = {"dimensions": [], "metrics": []}
                     model_detail['dimsAndMetrics'] = dims_metrics
-                logger.info(f"预拉 {len(dims_metrics_tasks)} 个模型的 dimsAndMetrics 完成")
+                logger.info(f"预拉 {len(dims_metrics_tasks)} 个模型的 dimsAndMetrics 完成"
+                            + (f"（其中 {_degraded} 个降级为空）" if _degraded else ""))
 
             # 9. 构建最终的语义层
             semantic_layer_original = dict(

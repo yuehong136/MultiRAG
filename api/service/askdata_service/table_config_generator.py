@@ -122,8 +122,17 @@ class TableConfigGenerator:
                         )
                         for m in models_needing_dims
                     ]
-                    dims_results = await asyncio.gather(*dims_tasks)
+                    # return_exceptions：一个关联模型的 dims/metrics 超时不再连累整批关联模型
+                    # （外层 try/except 是粗粒度兜底，这里做细粒度逐元素降级）。降级值用 dict 不用 None，
+                    # 理由见 model_dataset_resolver._ensure_dims_and_metrics。每模型用新字面量防串改。
+                    dims_results = await asyncio.gather(*dims_tasks, return_exceptions=True)
                     for model_detail, dims_metrics in zip(models_needing_dims, dims_results):
+                        if isinstance(dims_metrics, BaseException):
+                            logger.warning("[dims_metrics] 获取关联模型 %s 的维度/指标失败，降级为空继续: %r",
+                                           model_detail.get("modelId"), dims_metrics)
+                            dims_metrics = {"dimensions": [], "metrics": []}
+                        elif not isinstance(dims_metrics, dict):
+                            dims_metrics = {"dimensions": [], "metrics": []}
                         model_detail['dimsAndMetrics'] = dims_metrics
 
                 for model_detail in missing_models_details:
@@ -629,9 +638,10 @@ class TableConfigGenerator:
           3) 别名为空/未命中且为多表 → 按列名在「本次真实 FROM 表」里反查唯一拥有者
              （详见 _resolve_multi_table_owner 的意图说明）。
 
-        校验 dimsAndMetrics：getModelIndsAndDims 空返回会被直接赋成 None
-        （见 model_dataset_resolver._ensure_dims_and_metrics），裸取其 dimensions/metrics
-        会 TypeError，这里一并拦下并降级。
+        校验 dimsAndMetrics：getModelIndsAndDims 空返回/失败现已被三处赋值点统一降级为
+        {"dimensions": [], "metrics": []}（见 model_dataset_resolver._ensure_dims_and_metrics
+        及 askdata_service / 本文件的关联模型补全），正常情况下不再出现 None；这里仍保留
+        isinstance(dict)+键存在校验作为纵深防御，万一拿到 None/畸形也降级为非语义字段不抛异常。
         """
         table_name = None
         if alias and alias in table_alias_mapping:

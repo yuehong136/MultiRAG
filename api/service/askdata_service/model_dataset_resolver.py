@@ -114,8 +114,21 @@ class ModelDatasetResolver:
             )
             for m in models_needing_fetch
         ]
-        results = await asyncio.gather(*tasks)
+        # dims/metrics 是「非关键、可降级」依赖：中台 getModelIndsAndDimsByModelId 超时/失败时
+        # 降级为空维度/指标继续，避免任一模型把整问题拖垮（与 askdata_service 的引擎 B 同源加固；
+        # 这里是第二个隐藏的硬依赖——B 当初只覆盖了 model_relations）。
+        # ⚠ 降级值必须是 {"dimensions": [], "metrics": []} 这样的 dict，【绝不能是 None】：
+        #    table_config_generator._build_semantic_fields_info 等处会直接
+        #    model["dimsAndMetrics"]["dimensions"] 裸取（无 _resolve_table 守卫），None 会 TypeError。
+        #    每个模型用【新字面量】，避免共享可变对象被后续 dim['possibleValues'] 写入串改。
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         for model_detail, dims_metrics in zip(models_needing_fetch, results):
+            if isinstance(dims_metrics, BaseException):
+                logger.warning("[dims_metrics] 获取模型 %s 的维度/指标失败，降级为空继续: %r",
+                               model_detail.get("modelId"), dims_metrics)
+                dims_metrics = {"dimensions": [], "metrics": []}
+            elif not isinstance(dims_metrics, dict):  # 中台空返回时 provider 返回 None，统一成空容器
+                dims_metrics = {"dimensions": [], "metrics": []}
             model_detail['dimsAndMetrics'] = dims_metrics
 
     async def _build_model_dicts(

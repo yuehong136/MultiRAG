@@ -9,6 +9,7 @@ Enhanced API Client for DRM Semantic OpenAPI
 import requests
 import json
 import logging
+import os
 import asyncio
 import aiohttp
 import time
@@ -26,6 +27,41 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# 语义层出站请求【全局并发限流】
+#
+# 背景：智能问数一次问题会对中台语义层发起"扇出式"并发请求——按模型并发拉
+#   dims/metrics、拉模型关系、按关键字四件套(×分词×分页)等。本 client 过去每次调用
+#   都新建 aiohttp.ClientSession 且无任何并发上限，几个问题并发就可能瞬间打出几十个
+#   并发请求，压垮中台的 HikariCP 连接池 / Tomcat 线程，让本来 3~10ms 的快接口
+#   (如 getModelIndsAndDimsByModelId)排队拿不到连接 >30s 而超时（已在演示库实测：
+#   该 SQL 本身仅 9.6ms、PG 端 1000 连接仅用 139、无慢查询 → 瓶颈在中台共享池而非 SQL）。
+#
+#   这里在【唯一出站收口】_make_async_request 上加一道信号量，把"引擎→中台"的总并发
+#   钳在 SEMANTIC_API_MAX_CONCURRENCY 以内（默认 8，可用同名环境变量调整）：
+#     · 命中少数模型的常规问题（在途数 ≤ 上限）完全不受影响、仍并行；
+#     · 扇出风暴被削平为"至多 N 个在途、其余排队"，不再自伤式压垮中台池。
+#
+#   ⚠ asyncio 信号量与事件循环绑定：按【运行中的 loop 懒加载】，避免多事件循环
+#     (测试/脚本反复 asyncio.run) 下 "Future attached to a different loop"。生产是
+#     单进程单 loop，等价于一个进程级全局限流器；多个 SemanticApiClient 实例共享同一
+#     loop 上的同一信号量，故是【全局并发上限】而非每实例各算各的。
+# ---------------------------------------------------------------------------
+SEMANTIC_API_MAX_CONCURRENCY = max(1, int(os.getenv("SEMANTIC_API_MAX_CONCURRENCY", "8")))
+
+_semaphores_by_loop: dict = {}  # {event_loop: asyncio.Semaphore}
+
+
+def _get_semantic_api_semaphore() -> asyncio.Semaphore:
+    """取当前事件循环对应的出站并发信号量（懒加载、按 loop 隔离）。仅在 async 上下文调用。"""
+    loop = asyncio.get_running_loop()
+    sem = _semaphores_by_loop.get(loop)
+    if sem is None:
+        sem = asyncio.Semaphore(SEMANTIC_API_MAX_CONCURRENCY)
+        _semaphores_by_loop[loop] = sem
+    return sem
 
 
 # 自定义异常类
@@ -238,29 +274,41 @@ class SemanticApiClient:
             if data:
                 logger.debug(f"异步请求数据: {json.dumps(data, ensure_ascii=False)}")
 
-            async with aiohttp.ClientSession() as session:
-                async with session.request(
-                        method=method,
-                        url=url,
-                        params=params,
-                        json=data,
-                        headers=request_headers,
-                        timeout=aiohttp.ClientTimeout(total=self.timeout)
-                ) as response:
-                    # 检查HTTP状态码
-                    response.raise_for_status()
+            # 出站并发限流：抢一个槽位再发请求。槽位用尽时在此排队（不计入下面的
+            # aiohttp 超时——total 只从 session.request 开始计时）。排队明显时打一条
+            # 告警，既是自我保护、也是"扇出风暴/中台变慢"的现场信号（会落到每问日志）。
+            sem = _get_semantic_api_semaphore()
+            _wait_start = time.monotonic()
+            async with sem:
+                _waited = time.monotonic() - _wait_start
+                if _waited > 0.5:
+                    logger.warning(
+                        f"语义层出站并发已达上限({SEMANTIC_API_MAX_CONCURRENCY})，本次请求排队 "
+                        f"{_waited:.2f}s 后才发出: {method} {api_path}"
+                    )
+                async with aiohttp.ClientSession() as session:
+                    async with session.request(
+                            method=method,
+                            url=url,
+                            params=params,
+                            json=data,
+                            headers=request_headers,
+                            timeout=aiohttp.ClientTimeout(total=self.timeout)
+                    ) as response:
+                        # 检查HTTP状态码
+                        response.raise_for_status()
 
-                    # 解析响应JSON
-                    result = await response.json()
-                    logger.debug(f"异步响应: {json.dumps(result, ensure_ascii=False)}")
+                        # 解析响应JSON
+                        result = await response.json()
+                        logger.debug(f"异步响应: {json.dumps(result, ensure_ascii=False)}")
 
-                    # 检查业务状态码
-                    if "code" in result and str(result["code"]) != "0":
-                        error_msg = result.get('msg', '未知错误')
-                        logger.warning(f"业务错误: {error_msg}")
-                        raise ApiResponseError(f"业务错误(code={result['code']}): {error_msg}")
+                        # 检查业务状态码
+                        if "code" in result and str(result["code"]) != "0":
+                            error_msg = result.get('msg', '未知错误')
+                            logger.warning(f"业务错误: {error_msg}")
+                            raise ApiResponseError(f"业务错误(code={result['code']}): {error_msg}")
 
-                    return result
+                        return result
 
         except asyncio.TimeoutError:
             error_msg = f"异步请求超时({self.timeout}s): {method} {url}"
