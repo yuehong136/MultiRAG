@@ -5,28 +5,28 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi_login import LoginManager
 from fastapi_login.exceptions import InvalidCredentialsException
 from fastapi.security import OAuth2PasswordRequestForm
-# 添加Session中间件用于OAuth状态管理
 from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy.orm import Session
 
-from api.db.db_models import get_db, SessionLocal
+from api.constants import API_VERSION
+from api.db.db_models import get_db, SessionLocal, APIToken
 from api.db.services import UserService
+from api.utils.api_utils import SDKAuthError, BusinessError
 from common import settings
 from common.constants import RetCode
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, datetime_format
 from datetime import datetime
 from errors.exceptions import AITranslateException
-from api.constants import API_VERSION
 from workflow_v2.workflow_exceptions import NodeExecutionError, WorkflowValidationError
 from workflow_v2.workflow_state_manager import workflow_state_manager
-from api.utils.api_utils import SDKAuthError, BusinessError
 
 description = """
 Multi-RAG API helps you do awesome stuff. 🚀
@@ -218,7 +218,57 @@ if settings.SECRET_KEY is None:
     settings.init_settings()
 
 # 初始化登录管理器，设置密钥和令牌URL
-manager = LoginManager(settings.SECRET_KEY, token_url='/auth/token', default_expiry=timedelta(days=1))
+def _load_user_by_api_token(token: str):
+    """根据 SDK API token 加载其所属租户的 owner 用户，失败返回 None。
+
+    APIToken.tenant_id 即 owner 用户的 id（与 ragflow 一致），故查到 token 后按
+    id 反查用户。
+    """
+    if not token:
+        return None
+    try:
+        objs = APIToken.query(token=token)
+        if not objs:
+            return None
+        db = SessionLocal()
+        try:
+            users = UserService.query(db, id=objs[0].tenant_id)
+            return users[0] if users else None
+        finally:
+            db.close()
+    except Exception as e:
+        logging.warning(f"_load_user_by_api_token got exception {e}")
+        return None
+
+
+class _TokenFallbackLoginManager(LoginManager):
+    """同时接受 web 会话 JWT 与 SDK API token 的 LoginManager。
+
+    web JWT 由父类解析；当 JWT 解码/查找失败时，把 Authorization 值当作 SDK API token
+    （``APIToken`` 表）反查到 owner 用户返回。这样所有 ``Depends(manager)`` 的
+    web 端点（如 ``/v1/chunk/retrieval_test``）既服务前端会话登录，也服务
+    SDK / CLI 的 API key —— 与已支持双认的 ``current_tenant_id`` 行为对齐。
+
+    注意：父类 ``__call__`` 先 ``_get_payload``（JWT 解码）再 ``_get_current_user``，
+    SDK token 会在 ``_get_payload`` 阶段抛异常，所以必须在 ``__call__`` 整体兜底，
+    而不能只重写 ``get_current_user``。
+    """
+
+    async def __call__(self, request: Request, security_scopes=None):
+        try:
+            return await super().__call__(request, security_scopes)
+        except Exception:
+            authorization = request.headers.get("Authorization")
+            if authorization:
+                parts = authorization.split()
+                token = parts[1] if len(parts) >= 2 else parts[0]
+                user = _load_user_by_api_token(token)
+                if user is not None:
+                    return user
+            raise
+
+
+manager = _TokenFallbackLoginManager(settings.SECRET_KEY, token_url='/auth/token', default_expiry=timedelta(days=1))
 
 
 # 定义一个函数，根据电子邮件加载用户
