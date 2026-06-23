@@ -17,6 +17,8 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -24,9 +26,12 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"unicode/utf8"
 
 	"github.com/peterh/liner"
 	"gopkg.in/yaml.v3"
+
+	"multirag/internal/cli/contextengine"
 )
 
 // HistoryFile returns the path to the history file
@@ -73,7 +78,9 @@ type ConnectionArgs struct {
 	Password     string
 	APIToken     string
 	UserName     string
-	Command      string // single command to run non-interactively (empty -> REPL)
+	Command      string   // single command to run non-interactively (empty -> REPL)
+	CommandArgs  []string // split arguments for Context Engine mode (ls/search/cat)
+	IsSQLMode    bool     // true -> SQL parser; false -> Context Engine command
 	OutputFormat string
 	ShowHelp     bool
 	AdminMode    bool
@@ -135,13 +142,20 @@ func parseHostPort(hostPort string) (string, int, error) {
 // (-t/--token) or username/password (-u/--user, -p/--password); the two are
 // mutually exclusive. Admin mode (--admin) ignores the config file.
 func ParseConnectionArgs(args []string) (*ConnectionArgs, error) {
-	// First pass: help, config file path and admin mode.
+	// First pass: help, config file path and admin mode. Once a command word
+	// (non-flag arg) appears, stop treating "--help" as global help so that a
+	// subcommand like "search --help" handles its own help.
 	var configFilePath string
 	var adminMode bool
+	foundCommand := false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if !strings.HasPrefix(arg, "-") {
+			foundCommand = true
+			continue
+		}
 		switch {
-		case arg == "--help" || arg == "-help":
+		case !foundCommand && (arg == "--help" || arg == "-help"):
 			return &ConnectionArgs{ShowHelp: true}, nil
 		case (arg == "-f" || arg == "--config") && i+1 < len(args):
 			configFilePath = args[i+1]
@@ -185,8 +199,15 @@ func ParseConnectionArgs(args []string) (*ConnectionArgs, error) {
 	// forms are supported.
 	var outputFormat string
 	var nonFlagArgs []string
+	cmdStarted := false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		// Once the command word is reached, the rest belongs to the subcommand
+		// (including its own flags like -d/-q/-k/-t/-n).
+		if cmdStarted {
+			nonFlagArgs = append(nonFlagArgs, arg)
+			continue
+		}
 		switch arg {
 		case "-h", "--host":
 			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
@@ -228,9 +249,11 @@ func ParseConnectionArgs(args []string) (*ConnectionArgs, error) {
 		case "--help", "-help":
 			continue
 		default:
-			// Non-flag argument (command word).
+			// Non-flag argument (command word). Everything after it belongs to
+			// the command/subcommand.
 			if !strings.HasPrefix(arg, "-") {
 				nonFlagArgs = append(nonFlagArgs, arg)
+				cmdStarted = true
 			}
 		}
 	}
@@ -274,17 +297,50 @@ func ParseConnectionArgs(args []string) (*ConnectionArgs, error) {
 		}
 	}
 
-	// Single command to run non-interactively. Our parser expects a trailing
-	// semicolon, so append one when missing.
+	// Single command to run non-interactively. Decide between SQL mode and
+	// Context Engine mode based on the leading word.
 	if len(nonFlagArgs) > 0 {
-		cmd := strings.Join(nonFlagArgs, " ")
-		if !strings.HasSuffix(strings.TrimSpace(cmd), ";") {
-			cmd += ";"
+		// Use the joined command so the "search ... ON DATASETS" disambiguation
+		// (inside looksLikeContextEngine) sees the whole command, not just the verb.
+		if looksLikeContextEngine(strings.Join(nonFlagArgs, " ")) {
+			// Context Engine command (ls/search/cat): keep the args split so the
+			// subcommand flag parser (-d/-q/-k/-t/-n) sees them, and do not append
+			// a trailing semicolon.
+			result.IsSQLMode = false
+			result.CommandArgs = nonFlagArgs
+			result.Command = strings.Join(nonFlagArgs, " ")
+		} else {
+			// SQL command. Our parser expects a trailing semicolon.
+			result.IsSQLMode = true
+			cmd := strings.Join(nonFlagArgs, " ")
+			if !strings.HasSuffix(strings.TrimSpace(cmd), ";") {
+				cmd += ";"
+			}
+			result.Command = cmd
 		}
-		result.Command = cmd
 	}
 
 	return result, nil
+}
+
+// looksLikeContextEngine reports whether the leading word selects a Context
+// Engine command (ls/search/cat). Everything else is treated as a SQL command.
+// Notes:
+//   - "list" is intentionally excluded so that "LIST DATASETS" stays SQL.
+//   - "search" collides with the SQL command `SEARCH '...' ON DATASETS '...'`;
+//     it is routed to SQL when that `ON DATASETS` clause is present, otherwise CE.
+func looksLikeContextEngine(input string) bool {
+	fields := strings.Fields(strings.TrimSpace(input))
+	if len(fields) == 0 {
+		return false
+	}
+	switch strings.ToLower(fields[0]) {
+	case "ls", "cat":
+		return true
+	case "search":
+		return !strings.Contains(strings.ToUpper(input), " ON DATASETS")
+	}
+	return false
 }
 
 // PrintUsage prints the CLI usage information.
@@ -329,18 +385,20 @@ Configuration File:
 
 Commands:
   SQL commands like: LOGIN USER 'email'; LIST USERS; etc.
+  Context Engine commands (no quotes): ls datasets, search -q "kw", cat path, etc.
   If no command is provided, the CLI runs in interactive mode.
 `)
 }
 
 // CLI represents the command line interface
 type CLI struct {
-	client       *MultiRAGClient
-	prompt       string
-	running      bool
-	line         *liner.State
-	outputFormat OutputFormat
-	args         *ConnectionArgs
+	client        *MultiRAGClient
+	contextEngine *contextengine.Engine
+	prompt        string
+	running       bool
+	line          *liner.State
+	outputFormat  OutputFormat
+	args          *ConnectionArgs
 }
 
 // NewCLI creates a new CLI instance in interactive mode with default settings.
@@ -384,17 +442,36 @@ func NewCLIWithArgs(args *ConnectionArgs) (*CLI, error) {
 		prompt = "MultiRAG(admin)> "
 	}
 
+	// Auto-login when both username and password are supplied (and no API token).
+	// This makes single-command mode (and config-file credentials) authenticated
+	// without an interactive prompt. The "username without password" case is still
+	// handled by Run() -> verifyPassword().
+	if args != nil && args.UserName != "" && args.Password != "" && args.APIToken == "" {
+		if err := client.LoginUserInteractive(args.UserName, args.Password); err != nil {
+			line.Close()
+			return nil, fmt.Errorf("auto-login failed: %w", err)
+		}
+	}
+
 	outputFormat := OutputFormatTable
 	if args != nil && args.OutputFormat != "" {
 		outputFormat = OutputFormat(args.OutputFormat)
 	}
+	client.OutputFormat = outputFormat
+
+	// Build the Context Engine and register its providers. They issue requests
+	// through the CLI's HTTP client (auto auth) using existing RESTful APIs.
+	engine := contextengine.NewEngine()
+	engine.RegisterProvider(contextengine.NewDatasetProvider(&httpClientAdapter{client: client.HTTPClient}))
+	engine.RegisterProvider(contextengine.NewFileProvider(&httpClientAdapter{client: client.HTTPClient}))
 
 	return &CLI{
-		prompt:       prompt,
-		client:       client,
-		line:         line,
-		outputFormat: outputFormat,
-		args:         args,
+		prompt:        prompt,
+		client:        client,
+		contextEngine: engine,
+		line:          line,
+		outputFormat:  outputFormat,
+		args:          args,
 	}, nil
 }
 
@@ -458,29 +535,533 @@ func (c *CLI) Run() error {
 }
 
 func (c *CLI) execute(input string) error {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return nil
+	}
+
+	// Meta commands start with a backslash.
+	if strings.HasPrefix(input, "\\") {
+		p := NewParser(input)
+		cmd, err := p.Parse(c.client.ServerType == "admin")
+		if err != nil {
+			return err
+		}
+		if cmd != nil && cmd.Type == "meta" {
+			return c.handleMetaCommand(cmd)
+		}
+		return nil
+	}
+
+	// Decide between SQL mode and Context Engine mode.
+	contextEngineMode := false
+	if c.args != nil && len(c.args.CommandArgs) > 0 {
+		// Non-interactive single command: use the mode decided at parse time.
+		contextEngineMode = !c.args.IsSQLMode
+	} else {
+		contextEngineMode = looksLikeContextEngine(input)
+	}
+
+	if contextEngineMode {
+		return c.executeContextEngine(input)
+	}
+
+	// SQL mode: parse and run through the client. The returned response renders
+	// itself in the currently selected output format.
 	p := NewParser(input)
 	cmd, err := p.Parse(c.client.ServerType == "admin")
 	if err != nil {
 		return err
 	}
-
 	if cmd == nil {
 		return nil
 	}
-
-	// Handle meta commands
 	if cmd.Type == "meta" {
 		return c.handleMetaCommand(cmd)
 	}
-
-	// Execute the command using the client; the returned response renders itself
-	// in the currently selected output format.
 	result, err := c.client.ExecuteCommand(cmd)
 	if result != nil {
 		result.SetOutputFormat(c.outputFormat)
 		result.PrintOut()
 	}
 	return err
+}
+
+// executeContextEngine runs a Context Engine command (ls/search/cat). In
+// non-interactive mode the arguments come pre-split from ParseConnectionArgs;
+// in interactive mode the raw input line is tokenized here.
+func (c *CLI) executeContextEngine(input string) error {
+	var args []string
+	if c.args != nil && len(c.args.CommandArgs) > 0 {
+		args = c.args.CommandArgs
+	} else {
+		args = parseContextEngineArgs(input)
+	}
+
+	if len(args) == 0 {
+		return fmt.Errorf("no command provided")
+	}
+	if c.contextEngine == nil {
+		return fmt.Errorf("context engine not available")
+	}
+
+	cmdType := strings.ToLower(args[0])
+	cmdArgs := args[1:]
+
+	var ceCmd *contextengine.Command
+
+	switch cmdType {
+	case "ls", "list":
+		listOpts, err := parseListCommandArgs(cmdArgs)
+		if err != nil {
+			return err
+		}
+		if listOpts == nil {
+			// Help was printed.
+			return nil
+		}
+		ceCmd = &contextengine.Command{
+			Type: contextengine.CommandList,
+			Path: listOpts.Path,
+			Params: map[string]interface{}{
+				"limit": listOpts.Limit,
+			},
+		}
+	case "search":
+		searchOpts, err := parseSearchCommandArgs(cmdArgs)
+		if err != nil {
+			return err
+		}
+		if searchOpts == nil {
+			// Help was printed.
+			return nil
+		}
+		// Use the first directory for provider resolution; default to datasets.
+		searchPath := "datasets"
+		if len(searchOpts.Dirs) > 0 {
+			searchPath = searchOpts.Dirs[0]
+		}
+		ceCmd = &contextengine.Command{
+			Type: contextengine.CommandSearch,
+			Path: searchPath,
+			Params: map[string]interface{}{
+				"query":     searchOpts.Query,
+				"top_k":     searchOpts.TopK,
+				"threshold": searchOpts.Threshold,
+				"dirs":      searchOpts.Dirs,
+			},
+		}
+	case "cat":
+		if len(cmdArgs) == 0 {
+			return fmt.Errorf("cat requires a path argument")
+		}
+		// cat returns raw bytes rather than a *Result.
+		content, err := c.contextEngine.Cat(context.Background(), cmdArgs[0])
+		if err != nil {
+			return err
+		}
+		if len(content) == 0 {
+			fmt.Println("(empty file)")
+		} else if isBinaryContent(content) {
+			return fmt.Errorf("cannot display binary file content")
+		} else {
+			fmt.Println(string(content))
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown context engine command: %s", cmdType)
+	}
+
+	result, err := c.contextEngine.Execute(context.Background(), ceCmd)
+	if err != nil {
+		return err
+	}
+
+	// search defaults to JSON output unless plain/table was explicitly selected.
+	format := c.outputFormat
+	if ceCmd.Type == contextengine.CommandSearch && format != OutputFormatPlain && format != OutputFormatTable {
+		format = OutputFormatJSON
+	}
+	limit := 0
+	if ceCmd.Type == contextengine.CommandList {
+		if l, ok := ceCmd.Params["limit"].(int); ok {
+			limit = l
+		}
+	}
+	c.printContextEngineResult(result, ceCmd.Type, format, limit)
+	return nil
+}
+
+// parseContextEngineArgs splits an input line into arguments, honoring single
+// and double quotes so that quoted queries stay intact.
+func parseContextEngineArgs(input string) []string {
+	var args []string
+	var current strings.Builder
+	inQuote := false
+	var quoteChar rune
+
+	for _, ch := range input {
+		switch ch {
+		case '"', '\'':
+			if !inQuote {
+				inQuote = true
+				quoteChar = ch
+				if current.Len() > 0 {
+					args = append(args, current.String())
+					current.Reset()
+				}
+			} else if ch == quoteChar {
+				inQuote = false
+				args = append(args, current.String())
+				current.Reset()
+			} else {
+				current.WriteRune(ch)
+			}
+		case ' ', '\t':
+			if inQuote {
+				current.WriteRune(ch)
+			} else if current.Len() > 0 {
+				args = append(args, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteRune(ch)
+		}
+	}
+
+	if current.Len() > 0 {
+		args = append(args, current.String())
+	}
+
+	return args
+}
+
+// printContextEngineResult renders the result of an ls/search command.
+func (c *CLI) printContextEngineResult(result *contextengine.Result, cmdType contextengine.CommandType, format OutputFormat, limit int) {
+	if result == nil {
+		return
+	}
+
+	switch cmdType {
+	case contextengine.CommandList:
+		if len(result.Nodes) == 0 {
+			fmt.Println("(empty)")
+			return
+		}
+		displayCount := len(result.Nodes)
+		if limit > 0 && displayCount > limit {
+			displayCount = limit
+		}
+		if format == OutputFormatPlain {
+			for i := 0; i < displayCount; i++ {
+				node := result.Nodes[i]
+				fmt.Printf("%s %s %s %s\n", node.Name, node.Type, node.Path, node.CreatedAt.Format("2006-01-02 15:04"))
+			}
+		} else {
+			fmt.Printf("%-30s %-12s %-50s %-20s\n", "NAME", "TYPE", "PATH", "CREATED")
+			fmt.Println(strings.Repeat("-", 112))
+			for i := 0; i < displayCount; i++ {
+				node := result.Nodes[i]
+				created := node.CreatedAt.Format("2006-01-02 15:04")
+				if node.CreatedAt.IsZero() {
+					created = "-"
+				}
+				displayPath := strings.TrimPrefix(node.Path, "/")
+				fmt.Printf("%-30s %-12s %-50s %-20s\n", node.Name, node.Type, displayPath, created)
+			}
+		}
+		if limit > 0 && result.Total > limit {
+			fmt.Printf("\n... and %d more (use -n to show more)\n", result.Total-limit)
+		}
+		fmt.Printf("Total: %d\n", result.Total)
+	case contextengine.CommandSearch:
+		if len(result.Nodes) == 0 {
+			if format == OutputFormatJSON {
+				fmt.Println("[]")
+			} else {
+				fmt.Println("No results found")
+			}
+			return
+		}
+		type searchResult struct {
+			Content string  `json:"content"`
+			Path    string  `json:"path"`
+			Score   float64 `json:"score,omitempty"`
+		}
+		results := make([]searchResult, 0, len(result.Nodes))
+		for _, node := range result.Nodes {
+			content := node.Name
+			if content == "" {
+				content = "(empty)"
+			}
+			displayPath := strings.TrimPrefix(node.Path, "/")
+			var score float64
+			if s, ok := node.Metadata["similarity"].(float64); ok {
+				score = s
+			} else if s, ok := node.Metadata["_score"].(float64); ok {
+				score = s
+			}
+			results = append(results, searchResult{
+				Content: content,
+				Path:    displayPath,
+				Score:   score,
+			})
+		}
+		if format == OutputFormatJSON {
+			jsonData, err := json.MarshalIndent(results, "", "  ")
+			if err != nil {
+				fmt.Printf("Error marshaling JSON: %v\n", err)
+				return
+			}
+			fmt.Println(string(jsonData))
+		} else if format == OutputFormatPlain {
+			fmt.Printf("%-70s  %-50s  %-10s\n", "CONTENT", "PATH", "SCORE")
+			for i, sr := range results {
+				content := strings.Join(strings.Fields(sr.Content), " ")
+				if len(content) > 70 {
+					content = content[:67] + "..."
+				}
+				displayPath := sr.Path
+				if len(displayPath) > 50 {
+					displayPath = displayPath[:47] + "..."
+				}
+				scoreStr := "-"
+				if sr.Score > 0 {
+					scoreStr = fmt.Sprintf("%.4f", sr.Score)
+				}
+				fmt.Printf("%-70s  %-50s  %-10s\n", content, displayPath, scoreStr)
+				if i >= 99 {
+					fmt.Printf("\n... and %d more results\n", result.Total-i-1)
+					break
+				}
+			}
+			fmt.Printf("\nTotal: %d\n", result.Total)
+		} else {
+			col1Width, col2Width, col3Width := 70, 50, 10
+			sep := "+" + strings.Repeat("-", col1Width+2) + "+" + strings.Repeat("-", col2Width+2) + "+" + strings.Repeat("-", col3Width+2) + "+"
+			fmt.Println(sep)
+			fmt.Printf("| %-70s | %-50s | %-10s |\n", "CONTENT", "PATH", "SCORE")
+			fmt.Println(sep)
+			for i, sr := range results {
+				content := strings.Join(strings.Fields(sr.Content), " ")
+				if len(content) > 70 {
+					content = content[:67] + "..."
+				}
+				displayPath := sr.Path
+				if len(displayPath) > 50 {
+					displayPath = displayPath[:47] + "..."
+				}
+				scoreStr := "-"
+				if sr.Score > 0 {
+					scoreStr = fmt.Sprintf("%.4f", sr.Score)
+				}
+				fmt.Printf("| %-70s | %-50s | %-10s |\n", content, displayPath, scoreStr)
+				if i >= 99 {
+					fmt.Printf("\n... and %d more results\n", result.Total-i-1)
+					break
+				}
+			}
+			fmt.Println(sep)
+			fmt.Printf("Total: %d\n", result.Total)
+		}
+	}
+}
+
+// isBinaryContent reports whether content looks binary (has null bytes or is
+// not valid UTF-8), in which case cat refuses to print it.
+func isBinaryContent(content []byte) bool {
+	for _, b := range content {
+		if b == 0 {
+			return true
+		}
+	}
+	return !utf8.Valid(content)
+}
+
+// SearchCommandOptions holds parsed `search` options.
+type SearchCommandOptions struct {
+	Query     string
+	TopK      int
+	Threshold float64
+	Dirs      []string
+}
+
+// ListCommandOptions holds parsed `ls` options.
+type ListCommandOptions struct {
+	Path  string
+	Limit int
+}
+
+// parseSearchCommandArgs parses: search [-d dir]... -q query [-k top_k] [-t threshold]
+// A nil result with nil error means help was printed.
+func parseSearchCommandArgs(args []string) (*SearchCommandOptions, error) {
+	opts := &SearchCommandOptions{
+		TopK:      10,
+		Threshold: 0.2,
+		Dirs:      []string{},
+	}
+
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			printSearchHelp()
+			return nil, nil
+		}
+	}
+
+	i := 0
+	for i < len(args) {
+		arg := args[i]
+		switch arg {
+		case "-d", "--dir":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("missing value for %s flag", arg)
+			}
+			opts.Dirs = append(opts.Dirs, args[i+1])
+			i += 2
+		case "-q", "--query":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("missing value for %s flag", arg)
+			}
+			opts.Query = args[i+1]
+			i += 2
+		case "-k", "--top-k":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("missing value for %s flag", arg)
+			}
+			topK, err := strconv.Atoi(args[i+1])
+			if err != nil {
+				return nil, fmt.Errorf("invalid top-k value: %s", args[i+1])
+			}
+			opts.TopK = topK
+			i += 2
+		case "-t", "--threshold":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("missing value for %s flag", arg)
+			}
+			threshold, err := strconv.ParseFloat(args[i+1], 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid threshold value: %s", args[i+1])
+			}
+			opts.Threshold = threshold
+			i += 2
+		default:
+			if !strings.HasPrefix(arg, "-") {
+				// Backwards-compatible positional handling: a lone trailing token
+				// is treated as the query.
+				if opts.Query == "" && i == len(args)-1 {
+					opts.Query = arg
+				} else if opts.Query == "" && i < len(args)-1 {
+					// Old "search [path] query" form: first token is a path.
+					opts.Dirs = append(opts.Dirs, arg)
+					queryParts := []string{}
+					for _, part := range args[i+1:] {
+						if !strings.HasPrefix(part, "-") {
+							queryParts = append(queryParts, part)
+						}
+					}
+					opts.Query = strings.Join(queryParts, " ")
+					i = len(args)
+					continue
+				}
+				i++
+			} else {
+				return nil, fmt.Errorf("unknown flag: %s", arg)
+			}
+		}
+	}
+
+	if opts.Query == "" {
+		return nil, fmt.Errorf("query is required (use -q or --query)")
+	}
+	if len(opts.Dirs) == 0 {
+		opts.Dirs = []string{"datasets"}
+	}
+
+	return opts, nil
+}
+
+// printSearchHelp prints help for the search command.
+func printSearchHelp() {
+	fmt.Println(`Search command usage: search [options]
+
+Semantic search in datasets.
+
+Options:
+  -d, --dir <path>       Directory to search in (repeatable, e.g. -d datasets/kb1)
+  -q, --query <query>    Search query (required)
+  -k, --top-k <number>   Number of top results to return (default: 10)
+  -t, --threshold <num>  Similarity threshold, 0.0-1.0 (default: 0.2)
+  -h, --help             Show this help message
+
+Output defaults to JSON. Use \format plain or \format table to change it.
+
+Examples:
+  search -d datasets/kb1 -q "neural networks"
+  search -q "data mining"
+  search -q "RAG" -k 20 -t 0.5`)
+}
+
+// printListHelp prints help for the ls command.
+func printListHelp() {
+	fmt.Println(`List command usage: ls [path] [options]
+
+List contents of a path in the context filesystem.
+
+Arguments:
+  [path]                 Path to list (default: root - all providers and folders)
+                         Examples: datasets, datasets/kb1, myfolder
+
+Options:
+  -n, --limit <number>   Maximum number of items to display (default: 10)
+  -h, --help             Show this help message
+
+Examples:
+  ls                          # List root (providers and file_manager folders)
+  ls datasets                 # List all datasets
+  ls datasets/kb1             # List documents in dataset kb1
+  ls -n 5                     # List 5 items at root`)
+}
+
+// parseListCommandArgs parses: ls [path] [-n limit]
+// A nil result with nil error means help was printed.
+func parseListCommandArgs(args []string) (*ListCommandOptions, error) {
+	opts := &ListCommandOptions{
+		Path:  "", // empty path lists the root (providers and file_manager folders)
+		Limit: 10,
+	}
+
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			printListHelp()
+			return nil, nil
+		}
+	}
+
+	i := 0
+	for i < len(args) {
+		arg := args[i]
+		switch arg {
+		case "-n", "--limit":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("missing value for %s flag", arg)
+			}
+			limit, err := strconv.Atoi(args[i+1])
+			if err != nil {
+				return nil, fmt.Errorf("invalid limit value: %s", args[i+1])
+			}
+			opts.Limit = limit
+			i += 2
+		default:
+			if !strings.HasPrefix(arg, "-") {
+				opts.Path = arg
+			} else {
+				return nil, fmt.Errorf("unknown flag: %s", arg)
+			}
+			i++
+		}
+	}
+
+	return opts, nil
 }
 
 func (c *CLI) handleMetaCommand(cmd *Command) error {
@@ -599,19 +1180,24 @@ SQL Commands (Admin Mode):
   PING;                                                  - Ping server
   ... and many more
 
-Meta Commands:
-  \? or \h      - Show this help
-  \q or \quit   - Exit CLI
-  \c or \clear  - Clear screen
+Context Engine Commands (no quotes, no semicolon):
+  ls [path] [-n limit]          - List datasets/files (default: root listing)
+                                  e.g. ls, ls datasets, ls datasets/kb1, ls myfolder
+  search -q <query> [-d dir]    - Semantic search in datasets
+        [-k top_k] [-t thresh]    e.g. search -d datasets/kb1 -q "neural networks"
+  cat <path>                    - Show a text file's content (e.g. cat myfolder/a.md)
+  Use 'ls -h' or 'search -h' for detailed options.
 
 For more information, see documentation.
 `
 	fmt.Println(help)
 }
 
-// Cleanup performs cleanup before exit
+// Cleanup performs cleanup before exit, restoring the terminal state.
 func (c *CLI) Cleanup() {
-	fmt.Println("\nCleaning up...")
+	if c.line != nil {
+		c.line.Close()
+	}
 }
 
 // RunInteractive runs the CLI in interactive mode
@@ -635,6 +1221,8 @@ func RunInteractive() error {
 
 // RunSingleCommand executes a single command non-interactively and returns.
 func (c *CLI) RunSingleCommand(command string) error {
+	// Restore terminal state on exit; the liner was created in NewCLIWithArgs.
+	defer c.Cleanup()
 	return c.execute(command)
 }
 

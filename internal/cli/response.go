@@ -185,3 +185,49 @@ func (r *KeyValueResponse) PrintOut() {
 		fmt.Printf("%d\n", r.Code)
 	}
 }
+
+// CEListResponse is the result of a ce_ls command (SQL-parser path).
+type CEListResponse struct {
+	Code         int                      `json:"code"`
+	Data         []map[string]interface{} `json:"data"`
+	Message      string                   `json:"message"`
+	Duration     float64
+	outputFormat OutputFormat
+}
+
+func (r *CEListResponse) Type() string                        { return "ce_ls" }
+func (r *CEListResponse) TimeCost() float64                   { return r.Duration }
+func (r *CEListResponse) SetOutputFormat(format OutputFormat) { r.outputFormat = format }
+
+func (r *CEListResponse) PrintOut() {
+	if r.Code == 0 {
+		PrintTableSimpleByFormat(r.Data, r.outputFormat)
+	} else {
+		fmt.Println("ERROR")
+		fmt.Printf("%d, %s\n", r.Code, r.Message)
+	}
+}
+
+// CESearchResponse is the result of a ce_search command (SQL-parser path).
+type CESearchResponse struct {
+	Code         int                      `json:"code"`
+	Data         []map[string]interface{} `json:"data"`
+	Total        int                      `json:"total"`
+	Message      string                   `json:"message"`
+	Duration     float64
+	outputFormat OutputFormat
+}
+
+func (r *CESearchResponse) Type() string                        { return "ce_search" }
+func (r *CESearchResponse) TimeCost() float64                   { return r.Duration }
+func (r *CESearchResponse) SetOutputFormat(format OutputFormat) { r.outputFormat = format }
+
+func (r *CESearchResponse) PrintOut() {
+	if r.Code == 0 {
+		fmt.Printf("Found %d results:\n", r.Total)
+		PrintTableSimpleByFormat(r.Data, r.outputFormat)
+	} else {
+		fmt.Println("ERROR")
+		fmt.Printf("%d, %s\n", r.Code, r.Message)
+	}
+}

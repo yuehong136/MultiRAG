@@ -59,6 +59,14 @@ func (p *Parser) Parse(adminCommand bool) (*Command, error) {
 		return p.parseMetaCommand()
 	}
 
+	// Check for Context Engine commands (ls/search) entered through the SQL
+	// parser. The primary entry point is cli.go's executeContextEngine (which
+	// also supports flags and `cat`); this SQL-parser path is kept aligned with
+	// ragflow and is reached only when Parse() is invoked directly.
+	if p.curToken.Type == TokenIdentifier && isCECommand(p.curToken.Value) {
+		return p.parseCECommand()
+	}
+
 	// Parse SQL-like command
 	return p.parseSQLCommand(adminCommand)
 }
@@ -188,6 +196,94 @@ func (p *Parser) expectSemicolon() error {
 
 func isKeyword(tokenType int) bool {
 	return tokenType >= TokenLogin && tokenType <= TokenDocMeta
+}
+
+// isCECommand reports whether the given word selects a Context Engine command.
+func isCECommand(s string) bool {
+	switch strings.ToUpper(s) {
+	case "LS", "LIST", "SEARCH":
+		return true
+	}
+	return false
+}
+
+// parseCECommand parses a Context Engine command (ls/search) into a ce_ls /
+// ce_search Command executed by MultiRAGClient.CEList / CESearch.
+func (p *Parser) parseCECommand() (*Command, error) {
+	switch strings.ToUpper(p.curToken.Value) {
+	case "LS", "LIST":
+		return p.parseCEListCommand()
+	case "SEARCH":
+		return p.parseCESearchCommand()
+	default:
+		return nil, fmt.Errorf("unknown ContextEngine command: %s", p.curToken.Value)
+	}
+}
+
+// parseCEListCommand parses: ls [path]   (defaults to "datasets").
+func (p *Parser) parseCEListCommand() (*Command, error) {
+	p.nextToken() // consume LS/LIST
+
+	cmd := NewCommand("ce_ls")
+
+	// Accept an identifier/quoted path, or the "datasets" keyword as a path.
+	if p.curToken.Type == TokenIdentifier || p.curToken.Type == TokenQuotedString ||
+		p.curToken.Type == TokenDatasets {
+		path := p.curToken.Value
+		if p.curToken.Type == TokenQuotedString {
+			path = strings.Trim(path, "\"'")
+		}
+		cmd.Params["path"] = path
+		p.nextToken()
+	} else {
+		cmd.Params["path"] = "datasets"
+	}
+
+	if p.curToken.Type == TokenSemicolon {
+		p.nextToken()
+	}
+
+	return cmd, nil
+}
+
+// parseCESearchCommand parses: search <query> [in <path>].
+func (p *Parser) parseCESearchCommand() (*Command, error) {
+	p.nextToken() // consume SEARCH
+
+	cmd := NewCommand("ce_search")
+
+	if p.curToken.Type != TokenIdentifier && p.curToken.Type != TokenQuotedString {
+		return nil, fmt.Errorf("expected query after SEARCH")
+	}
+
+	query := p.curToken.Value
+	if p.curToken.Type == TokenQuotedString {
+		query = strings.Trim(query, "\"'")
+	}
+	cmd.Params["query"] = query
+	p.nextToken()
+
+	// Optional "in <path>" clause.
+	if p.curToken.Type == TokenIdentifier && strings.ToUpper(p.curToken.Value) == "IN" {
+		p.nextToken() // consume IN
+		if p.curToken.Type != TokenIdentifier && p.curToken.Type != TokenQuotedString {
+			return nil, fmt.Errorf("expected path after IN")
+		}
+		path := p.curToken.Value
+		if p.curToken.Type == TokenQuotedString {
+			path = strings.Trim(path, "\"'")
+		}
+		cmd.Params["path"] = path
+		p.nextToken()
+	} else {
+		cmd.Params["path"] = "datasets"
+	}
+
+	if p.curToken.Type == TokenSemicolon {
+		p.nextToken()
+	}
+
+	return cmd, nil
 }
 
 // Helper functions for parsing

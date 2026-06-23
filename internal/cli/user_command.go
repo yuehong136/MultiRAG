@@ -60,13 +60,20 @@ func (c *MultiRAGClient) ListUserDatasets(cmd *Command) (ResponseIf, error) {
 		iterations = val
 	}
 
+	// Use API-token (Bearer) auth when a token is configured, otherwise the web
+	// session token. Mirrors ragflow's authKind selection (useAPIToken -> "api").
+	authKind := "web"
+	if c.HTTPClient.APIKey != "" {
+		authKind = "api"
+	}
+
 	if iterations > 1 {
 		// Benchmark mode - return raw result for benchmark stats
-		return c.HTTPClient.RequestWithIterations("POST", "/kb/list", false, "web", nil, nil, iterations)
+		return c.HTTPClient.RequestWithIterations("POST", "/kb/list", false, authKind, nil, nil, iterations)
 	}
 
 	// Normal mode
-	resp, err := c.HTTPClient.Request("POST", "/kb/list", false, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("POST", "/kb/list", false, authKind, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list datasets: %w", err)
 	}
