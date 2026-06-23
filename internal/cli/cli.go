@@ -18,7 +18,6 @@ package cli
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -62,9 +61,9 @@ func validateOutputFormat(format string) error {
 // ConfigFile represents the multirag.yml connection config file structure.
 type ConfigFile struct {
 	Host     string `yaml:"host"`
-	User     string `yaml:"user"`
-	Password string `yaml:"password"`
 	APIToken string `yaml:"api_token"`
+	UserName string `yaml:"user_name"`
+	Password string `yaml:"password"`
 }
 
 // ConnectionArgs holds the parsed command line / config-file connection options.
@@ -72,12 +71,12 @@ type ConnectionArgs struct {
 	Host         string
 	Port         int
 	Password     string
-	Key          string
-	Type         string // "admin" or "user"
-	Username     string
+	APIToken     string
+	UserName     string
 	Command      string // single command to run non-interactively (empty -> REPL)
 	OutputFormat string
 	ShowHelp     bool
+	AdminMode    bool
 }
 
 // LoadDefaultConfigFile reads multirag.yml from the current directory if present.
@@ -132,43 +131,107 @@ func parseHostPort(hostPort string) (string, int, error) {
 }
 
 // ParseConnectionArgs parses CLI connection options with priority
-// command line > config file > defaults. A config file (multirag.yml or one
-// given via -f) cannot be combined with the other connection flags, but -o and
-// --help are always allowed.
+// command line > config file > defaults. Authentication is either an API token
+// (-t/--token) or username/password (-u/--user, -p/--password); the two are
+// mutually exclusive. Admin mode (--admin) ignores the config file.
 func ParseConnectionArgs(args []string) (*ConnectionArgs, error) {
-	// First pass: pull out help / config path / output format, detect whether
-	// any conflicting connection flag was supplied, and collect the remaining
-	// tokens to hand to the flag parser (the SQL command words plus the
-	// connection flags themselves).
+	// First pass: help, config file path and admin mode.
 	var configFilePath string
-	var outputFormat string
-	var hasOtherFlags bool
 	var adminMode bool
-	var flagArgs []string
-
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
 		case arg == "--help" || arg == "-help":
 			return &ConnectionArgs{ShowHelp: true}, nil
-		case (arg == "-f" || arg == "--f" || arg == "--config") && i+1 < len(args):
+		case (arg == "-f" || arg == "--config") && i+1 < len(args):
 			configFilePath = args[i+1]
 			i++
-		case (arg == "-o" || arg == "--o" || arg == "--output") && i+1 < len(args):
-			outputFormat = args[i+1]
-			i++
-		default:
-			if strings.HasPrefix(arg, "-") {
-				switch arg {
-				case "-admin", "--admin":
-					// Admin mode ignores the config file (handled below).
-					adminMode = true
-					hasOtherFlags = true
-				case "-h", "-p", "-w", "-k", "-u", "-user", "--user":
-					hasOtherFlags = true
+		case arg == "--admin" || arg == "-admin":
+			adminMode = true
+		}
+	}
+
+	result := &ConnectionArgs{}
+
+	// Apply config file first (lower priority). Admin mode ignores it, since the
+	// config carries user-mode auth (user_name/password/api_token).
+	if !adminMode {
+		var config *ConfigFile
+		var err error
+		if configFilePath != "" {
+			config, err = LoadConfigFileFromPath(configFilePath)
+		} else {
+			config, err = LoadDefaultConfigFile()
+		}
+		if err != nil {
+			return nil, err
+		}
+		if config != nil {
+			if config.Host != "" {
+				h, port, err := parseHostPort(config.Host)
+				if err != nil {
+					return nil, fmt.Errorf("invalid host in config file: %v", err)
 				}
+				result.Host = h
+				result.Port = port
 			}
-			flagArgs = append(flagArgs, arg)
+			result.UserName = config.UserName
+			result.Password = config.Password
+			result.APIToken = config.APIToken
+		}
+	}
+
+	// Override with command line flags (higher priority). Both short and long
+	// forms are supported.
+	var outputFormat string
+	var nonFlagArgs []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "-h", "--host":
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				h, port, err := parseHostPort(args[i+1])
+				if err != nil {
+					return nil, fmt.Errorf("invalid host format: %v", err)
+				}
+				result.Host = h
+				result.Port = port
+				i++
+			}
+		case "-t", "--token":
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				result.APIToken = args[i+1]
+				i++
+			}
+		case "-u", "--user":
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				result.UserName = args[i+1]
+				i++
+			}
+		case "-p", "--password":
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				result.Password = args[i+1]
+				i++
+			}
+		case "-o", "--output":
+			if i+1 < len(args) {
+				outputFormat = args[i+1]
+				i++
+			}
+		case "-f", "--config":
+			// Config file path already parsed above.
+			if i+1 < len(args) {
+				i++
+			}
+		case "--admin", "-admin":
+			result.AdminMode = true
+		case "--help", "-help":
+			continue
+		default:
+			// Non-flag argument (command word).
+			if !strings.HasPrefix(arg, "-") {
+				nonFlagArgs = append(nonFlagArgs, arg)
+			}
 		}
 	}
 
@@ -176,125 +239,51 @@ func ParseConnectionArgs(args []string) (*ConnectionArgs, error) {
 		if err := validateOutputFormat(outputFormat); err != nil {
 			return nil, err
 		}
+		result.OutputFormat = outputFormat
 	}
 
-	// Load config file with priority: -f > multirag.yml > none. Admin mode
-	// ignores the config file, which carries user-mode auth (user/password/token).
-	var config *ConfigFile
-	var err error
-	if !adminMode {
-		if configFilePath != "" {
-			config, err = LoadConfigFileFromPath(configFilePath)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			config, err = LoadDefaultConfigFile()
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	if config != nil {
-		if hasOtherFlags {
-			return nil, fmt.Errorf("cannot use connection flags (-h, -p, -w, -k, -u, -admin, -user) together with a config file; use one or the other")
-		}
-		// flagArgs holds only the SQL command words here (-f/-o were stripped and
-		// any other flag would have errored above).
-		return buildArgsFromConfig(config, outputFormat, flagArgs)
-	}
-
-	// No config file: parse the connection flags.
-	fs := flag.NewFlagSet("multirag_cli", flag.ContinueOnError)
-	host := fs.String("h", "127.0.0.1", "Admin or MultiRAG service host")
-	port := fs.Int("p", -1, "Admin or MultiRAG service port (default: 9381 for admin, 9380 for user)")
-	password := fs.String("w", "", "Superuser password")
-	key := fs.String("k", "", "API key for authentication")
-	_ = fs.Bool("admin", false, "Run in admin mode (default)")
-	userMode := fs.Bool("user", false, "Run in user mode")
-	username := fs.String("u", "", "Username (email). In admin mode defaults to admin@multirag.com, in user mode required")
-
-	if err = fs.Parse(flagArgs); err != nil {
-		return nil, fmt.Errorf("failed to parse arguments: %v", err)
-	}
-
-	return buildArgsFromFlags(host, port, password, key, userMode, username, outputFormat, fs.Args())
-}
-
-// buildArgsFromConfig builds ConnectionArgs from a config file.
-func buildArgsFromConfig(config *ConfigFile, outputFormat string, commandArgs []string) (*ConnectionArgs, error) {
-	result := &ConnectionArgs{OutputFormat: outputFormat}
-
-	if config.Host != "" {
-		host, port, err := parseHostPort(config.Host)
-		if err != nil {
-			return nil, fmt.Errorf("invalid host in config file: %v", err)
-		}
-		result.Host = host
-		result.Port = port
-	} else {
+	// Defaults. Ports are MultiRAG's actual listeners: 9381 (admin) / 9380 (user).
+	if result.Host == "" {
 		result.Host = "127.0.0.1"
 	}
-
-	result.Username = config.User
-	result.Password = config.Password
-	result.Key = config.APIToken
-
-	// Auth info in the config implies user mode; otherwise default to admin.
-	if config.User != "" || config.APIToken != "" {
-		result.Type = "user"
-	} else {
-		result.Type = "admin"
-		result.Username = "admin@multirag.com"
-	}
-
-	if result.Port == -1 {
-		if result.Type == "admin" {
+	if result.Port == -1 || result.Port == 0 {
+		if result.AdminMode {
 			result.Port = 9381
 		} else {
 			result.Port = 9380
 		}
 	}
 
-	if len(commandArgs) > 0 {
-		result.Command = strings.Join(commandArgs, " ") + ";"
-	}
-	return result, nil
-}
-
-// buildArgsFromFlags builds ConnectionArgs from parsed command line flags.
-func buildArgsFromFlags(host *string, port *int, password *string, key *string, userMode *bool, username *string, outputFormat string, commandArgs []string) (*ConnectionArgs, error) {
-	result := &ConnectionArgs{
-		Host:         *host,
-		Port:         *port,
-		Password:     *password,
-		Key:          *key,
-		Username:     *username,
-		OutputFormat: outputFormat,
+	if result.UserName == "" && result.Password != "" {
+		return nil, fmt.Errorf("username (-u/--user) is required when using a password (-p/--password)")
 	}
 
-	if *userMode {
-		result.Type = "user"
+	if result.AdminMode {
+		// Admin uses the superuser login; API tokens do not apply.
+		result.APIToken = ""
+		if result.UserName == "" {
+			result.UserName = "admin@multirag.com"
+			result.Password = ""
+		}
 	} else {
-		result.Type = "admin"
-	}
-
-	if result.Port == -1 {
-		if result.Type == "admin" {
-			result.Port = 9381
-		} else {
-			result.Port = 9380
+		// User mode: API token and username/password are mutually exclusive.
+		hasToken := result.APIToken != ""
+		hasUserPass := result.UserName != "" || result.Password != ""
+		if hasToken && hasUserPass {
+			return nil, fmt.Errorf("cannot use both API token (-t/--token) and username/password (-u/--user, -p/--password); use one authentication method")
 		}
 	}
 
-	if result.Type == "admin" && result.Username == "" {
-		result.Username = "admin@multirag.com"
+	// Single command to run non-interactively. Our parser expects a trailing
+	// semicolon, so append one when missing.
+	if len(nonFlagArgs) > 0 {
+		cmd := strings.Join(nonFlagArgs, " ")
+		if !strings.HasSuffix(strings.TrimSpace(cmd), ";") {
+			cmd += ";"
+		}
+		result.Command = cmd
 	}
 
-	if len(commandArgs) > 0 {
-		result.Command = strings.Join(commandArgs, " ") + ";"
-	}
 	return result, nil
 }
 
@@ -305,33 +294,42 @@ func PrintUsage() {
 Usage: multirag_cli [options] [command]
 
 Options:
-  -h string    Admin or MultiRAG service host (default "127.0.0.1")
-  -p int       Admin or MultiRAG service port (default 9381 for admin, 9380 for user)
-  -w string    Superuser password
-  -k string    API key for authentication
-  -f string    Path to config file (YAML format)
-  -o string    Output format: table (default), plain or json
-  -admin       Run in admin mode (default)
-  -user        Run in user mode
-  -u string    Username (email). In admin mode defaults to admin@multirag.com
-  --help       Show this help message
+  -h, --host string      MultiRAG service address (host:port, default "127.0.0.1:9380")
+  -t, --token string     API token for authentication
+  -u, --user string      Username for authentication
+  -p, --password string  Password for authentication
+  -o, --output string    Output format: table (default), plain or json
+  -f, --config string    Path to config file (YAML format)
+  --admin, -admin        Run in admin mode
+  --help                 Show this help message
+
+Mode:
+  --admin, -admin        Run in admin mode (prompt: MultiRAG(admin)>)
+  Default is user mode (prompt: MultiRAG(user)>).
+
+Authentication:
+  You can authenticate using either:
+    1. API token: -t or --token
+    2. Username and password: -u/--user and -p/--password
+  Note: these two methods are mutually exclusive.
 
 Configuration File:
   The CLI automatically reads multirag.yml from the current directory if it exists.
-  Use -f to specify a custom config file path.
+  Use -f or --config to specify a custom config file path.
+  Command line options override config file values.
+  Admin mode (--admin) ignores the config file.
 
   Config file format:
     host: 127.0.0.1:9380
-    user: your-email@example.com
-    password: your-password
     api_token: your-api-token
+    user_name: your-username
+    password: your-password
 
-  When using a config file you cannot combine it with the other connection flags
-  (-o and --help are still allowed). The command line is then only for the
-  SQL command.
+  Note: api_token and user_name/password are mutually exclusive in the config file.
 
 Commands:
   SQL commands like: LOGIN USER 'email'; LIST USERS; etc.
+  If no command is provided, the CLI runs in interactive mode.
 `)
 }
 
@@ -357,10 +355,10 @@ func NewCLIWithArgs(args *ConnectionArgs) (*CLI, error) {
 	// Create liner first
 	line := liner.NewLiner()
 
-	// Determine server type (default to user when no args provided).
+	// Determine server type from the --admin flag; default to user mode.
 	serverType := "user"
-	if args != nil && args.Type != "" {
-		serverType = args.Type
+	if args != nil && args.AdminMode {
+		serverType = "admin"
 	}
 
 	// Create client with password prompt using liner
@@ -376,9 +374,12 @@ func NewCLIWithArgs(args *ConnectionArgs) (*CLI, error) {
 		if args.Port > 0 {
 			client.HTTPClient.Port = args.Port
 		}
+		if args.APIToken != "" {
+			client.HTTPClient.APIKey = args.APIToken
+		}
 	}
 
-	prompt := "MultiRAG> "
+	prompt := "MultiRAG(user)> "
 	if serverType == "admin" {
 		prompt = "MultiRAG(admin)> "
 	}
@@ -399,10 +400,11 @@ func NewCLIWithArgs(args *ConnectionArgs) (*CLI, error) {
 
 // Run starts the interactive CLI
 func (c *CLI) Run() error {
-	// When started directly in admin mode (via flags/config), verify the
-	// superuser password before entering the REPL.
-	if c.args != nil && c.args.Type == "admin" {
-		if err := c.verifyAdminPassword(); err != nil {
+	// When a username was given without a password (admin mode defaults a
+	// username, or -u without -p), prompt for the password and verify before
+	// entering the REPL.
+	if c.args != nil && c.args.UserName != "" && c.args.Password == "" && c.args.APIToken == "" {
+		if err := c.verifyPassword(); err != nil {
 			return err
 		}
 	}
@@ -502,7 +504,7 @@ func (c *CLI) handleMetaCommand(cmd *Command) error {
 	case "user":
 		c.client.ServerType = "user"
 		c.client.HTTPClient.Port = 9380
-		c.prompt = "MultiRAG> "
+		c.prompt = "MultiRAG(user)> "
 		fmt.Println("Switched to USER mode (port 9380)")
 	case "host":
 		if len(args) == 0 {
@@ -636,9 +638,9 @@ func (c *CLI) RunSingleCommand(command string) error {
 	return c.execute(command)
 }
 
-// verifyAdminPassword prompts for the superuser password and verifies it,
-// allowing up to 3 attempts. Used when the CLI starts directly in admin mode.
-func (c *CLI) verifyAdminPassword() error {
+// verifyPassword prompts for the password and verifies it, allowing up to 3
+// attempts. Used when a username is supplied without a password at startup.
+func (c *CLI) verifyPassword() error {
 	const maxAttempts = 3
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		var input string
@@ -683,14 +685,20 @@ func (c *CLI) VerifyAuth() error {
 	if c.args == nil {
 		return nil
 	}
-	if c.args.Username == "" {
+
+	// API token auth is applied at client construction; nothing to verify here.
+	if c.args.APIToken != "" {
+		return nil
+	}
+
+	if c.args.UserName == "" {
 		return errors.New("username is required")
 	}
 	if c.args.Password == "" {
 		return errors.New("password is required")
 	}
 
-	token, err := c.client.loginUser(c.args.Username, c.args.Password)
+	token, err := c.client.loginUser(c.args.UserName, c.args.Password)
 	if err != nil {
 		return err
 	}
