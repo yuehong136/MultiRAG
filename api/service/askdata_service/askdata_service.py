@@ -28,7 +28,7 @@ from api.service.askdata_service.util.append_join_clauses import append_join_cla
 from api.service.askdata_service.util.apply_permissions import apply_permissions_to_assembler
 from api.service.askdata_service.util.build_model_permissions_map import build_model_permissions_map
 from api.service.askdata_service.util.convert_aggregation_value import convert_aggregation_value
-from api.service.askdata_service.util.convert_where_condition_value import process_where_condition
+from api.service.askdata_service.util.convert_where_condition_value import process_where_condition, convert_where_condition_value
 from api.service.askdata_service.util.extract_manually_adjusted_field_ids import extract_manually_adjusted_field_ids
 from api.service.askdata_service.util.filter_model_relations_by_ids import filter_model_relations_by_ids
 from api.service.askdata_service.util.merge_dimensions_and_metrics import merge_dimensions_and_metrics
@@ -951,6 +951,9 @@ class AskdataService:
                         sql_column = filter['sql_column']
                         operator = filter['operator']
                         value = filter['value']
+                        # 非语义但已知列类型时，按真实类型转换数值（"66"→66），避免数值列被字符串参数绑定
+                        # 导致 integer > character varying；查不到类型(None)则不转、维持现状。
+                        data_type = filter.get('dataType')
 
                         # 处理不同的操作符
                         if operator.upper() in ['IS NULL', 'IS NOT NULL']:
@@ -969,18 +972,26 @@ class AskdataService:
                             else:
                                 value_list = value if isinstance(value, list) else [value]
 
+                            if data_type:
+                                value_list = [convert_where_condition_value(v, data_type, '=') for v in value_list]
                             placeholders = ','.join(['%s'] * len(value_list))
                             assembler.add_parameterized_where(
                                 f"{sql_column} {operator} ({placeholders})",
                                 value_list
                             )
                         elif operator.upper() == 'BETWEEN':
-                            # BETWEEN 需要两个值
-                            # 这里假设 value 包含两个值，可能需要根据实际情况调整
-                            assembler.add_raw_where(f"{sql_column} BETWEEN %s AND %s",
-                                                    [value, filter.get('value2', value)])
+                            # BETWEEN 需要两个值。必须用 add_parameterized_where：add_raw_where 第二参是
+                            # validate:bool，传 list 会被当校验开关、%s 永不绑定（原 bug）。
+                            value2 = filter.get('value2', value)
+                            if data_type:
+                                value = convert_where_condition_value(value, data_type, operator)
+                                value2 = convert_where_condition_value(value2, data_type, operator)
+                            assembler.add_parameterized_where(f"{sql_column} BETWEEN %s AND %s",
+                                                              [value, value2])
                         else:
                             # 普通操作符，使用参数化查询
+                            if data_type:
+                                value = convert_where_condition_value(value, data_type, operator)
                             assembler.add_parameterized_where(f"{sql_column} {operator} %s", [value])
 
             # 注入权限条件
@@ -1122,12 +1133,17 @@ class AskdataService:
                                 result = extractor(match)
                                 if len(result) == 3:
                                     field, op, val = result
+                                    # 与 table-row 同源：非语义但已知列类型时按真实类型转换数值，
+                                    # 避免数值列被字符串参数绑定（integer > character varying）。None 则不转。
+                                    data_type = where_condition.get('dataType')
 
                                     if op.upper() in ['IS NULL', 'IS NOT NULL']:
                                         assembler.add_raw_where(f"{field} {op}")
                                     elif op.upper() in ['IN', 'NOT IN']:
                                         # 解析 IN 列表
                                         val_list = [v.strip().strip("'\"") for v in val.split(',')]
+                                        if data_type:
+                                            val_list = [convert_where_condition_value(v, data_type, '=') for v in val_list]
                                         placeholders = ','.join(['%s'] * len(val_list))
                                         assembler.add_parameterized_where(f"{field} {op} ({placeholders})", val_list)
                                     elif op.upper() == 'BETWEEN':
@@ -1135,10 +1151,15 @@ class AskdataService:
                                         val1, val2 = val
                                         val1 = val1.strip().strip("'\"")
                                         val2 = val2.strip().strip("'\"")
+                                        if data_type:
+                                            val1 = convert_where_condition_value(val1, data_type, op)
+                                            val2 = convert_where_condition_value(val2, data_type, op)
                                         assembler.add_parameterized_where(f"{field} BETWEEN %s AND %s", [val1, val2])
                                     else:
                                         # 普通比较操作符
                                         val = val.strip().strip("'\"")
+                                        if data_type:
+                                            val = convert_where_condition_value(val, data_type, op)
                                         assembler.add_parameterized_where(f"{field} {op} %s", [val])
 
                                     matched = True
