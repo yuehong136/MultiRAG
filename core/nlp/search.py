@@ -239,9 +239,14 @@ class Dealer:
             "docnm_kwd", "content_ltks", "kb_id", "img_id", "doc_type_kwd", "title_tks", "important_kwd",
             "position_int", "doc_id", "page_num_int", "top_int", "create_timestamp_flt",
             "knowledge_graph_kwd", "question_kwd", "question_tks", "available_int",
-            "content_with_weight", "mom_id", PAGERANK_FLD, TAG_FLD, "row_id()",
+            "content_with_weight", "mom_id", PAGERANK_FLD, TAG_FLD,
         ]
         src: list[str] = list(req.get("fields", default_fields))
+        if self.dataStore.db_type() == "infinity":
+            if "row_id()" not in src:
+                src.append("row_id()")
+        else:
+            src = [field for field in src if field != "row_id()"]
         highlight_fields = ["content_ltks", "title_tks"]
         if not highlight:
             highlight_fields = []

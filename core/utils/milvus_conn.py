@@ -48,6 +48,7 @@ from common.string_utils import truncate_utf8_bytes
 
 ATTEMPT_TIME = 2
 ARRAY_FILTER_FIELDS = {"important_kwd", "question_kwd", "entities_kwd"}
+UNSUPPORTED_OUTPUT_FIELDS = {"row_id()"}
 
 
 def quote_milvus_filter_value(value) -> str:
@@ -69,6 +70,12 @@ def build_milvus_filter_clause(field_name: str, value) -> str:
         return f"{field_name} == '{value}'"
 
     return f"{field_name} == {value}"
+
+
+def sanitize_milvus_output_fields(output_fields: list[str] | None) -> list[str] | None:
+    if output_fields is None:
+        return None
+    return [field for field in output_fields if field not in UNSUPPORTED_OUTPUT_FIELDS]
 
 
 @singleton
@@ -126,6 +133,7 @@ class MilvusConnection(MilvusConnectionBase):
         if isinstance(index_names, str):
             index_names = index_names.split(",")
         assert isinstance(index_names, list) and len(index_names) > 0
+        select_fields = sanitize_milvus_output_fields(select_fields) or []
 
         all_results = []
         total_hits_count = 0
@@ -918,6 +926,7 @@ class MilvusConnection(MilvusConnectionBase):
     ) -> list[list[dict]]:
         """Perform hybrid search across multiple collections."""
         collections = [collection_name] if isinstance(collection_name, str) else collection_name
+        output_fields = sanitize_milvus_output_fields(output_fields)
 
         conn = self._get_connection()
         all_hits = []
