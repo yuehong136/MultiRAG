@@ -10,14 +10,27 @@ import (
 )
 
 func main() {
-	// Create CLI instance
-	cliApp, err := cli.NewCLI()
+	// Parse command line arguments (skip program name).
+	args, err := cli.ParseConnectionArgs(os.Args[1:])
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Show help and exit.
+	if args.ShowHelp {
+		cli.PrintUsage()
+		os.Exit(0)
+	}
+
+	// Create CLI instance with parsed arguments.
+	cliApp, err := cli.NewCLIWithArgs(args)
 	if err != nil {
 		fmt.Printf("Failed to create CLI: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Handle interrupt signal
+	// Handle interrupt signal.
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -26,9 +39,16 @@ func main() {
 		os.Exit(0)
 	}()
 
-	// Run CLI
-	if err := cliApp.Run(); err != nil {
-		fmt.Printf("CLI error: %v\n", err)
-		os.Exit(1)
+	// Single command mode when a command was supplied, otherwise interactive.
+	if args.Command != "" {
+		if err = cliApp.RunSingleCommand(args.Command); err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		if err = cliApp.Run(); err != nil {
+			fmt.Printf("CLI error: %v\n", err)
+			os.Exit(1)
+		}
 	}
 }

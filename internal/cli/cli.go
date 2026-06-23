@@ -17,13 +17,17 @@
 package cli
 
 import (
+	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
 	"syscall"
+
 	"github.com/peterh/liner"
+	"gopkg.in/yaml.v3"
 )
 
 // HistoryFile returns the path to the history file
@@ -32,6 +36,9 @@ func HistoryFile() string {
 }
 
 const historyFileName = ".multirag_cli_history"
+
+// configFileName is the default connection config read from the current directory.
+const configFileName = "multirag.yml"
 
 // OutputFormat represents the output format type
 type OutputFormat string
@@ -42,6 +49,284 @@ const (
 	OutputFormatJSON  OutputFormat = "json"  // JSON format
 )
 
+// validateOutputFormat reports whether format is one of the supported formats.
+func validateOutputFormat(format string) error {
+	switch OutputFormat(format) {
+	case OutputFormatTable, OutputFormatPlain, OutputFormatJSON:
+		return nil
+	default:
+		return fmt.Errorf("invalid output format: %s (expected table, plain or json)", format)
+	}
+}
+
+// ConfigFile represents the multirag.yml connection config file structure.
+type ConfigFile struct {
+	Host     string `yaml:"host"`
+	User     string `yaml:"user"`
+	Password string `yaml:"password"`
+	APIToken string `yaml:"api_token"`
+}
+
+// ConnectionArgs holds the parsed command line / config-file connection options.
+type ConnectionArgs struct {
+	Host         string
+	Port         int
+	Password     string
+	Key          string
+	Type         string // "admin" or "user"
+	Username     string
+	Command      string // single command to run non-interactively (empty -> REPL)
+	OutputFormat string
+	ShowHelp     bool
+}
+
+// LoadDefaultConfigFile reads multirag.yml from the current directory if present.
+// It returns (nil, nil) when the file does not exist.
+func LoadDefaultConfigFile() (*ConfigFile, error) {
+	data, err := os.ReadFile(configFileName)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var config ConfigFile
+	if err = yaml.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse %s: %v", configFileName, err)
+	}
+	return &config, nil
+}
+
+// LoadConfigFileFromPath reads a connection config file from the given path.
+func LoadConfigFileFromPath(path string) (*ConfigFile, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file %s: %v", path, err)
+	}
+
+	var config ConfigFile
+	if err = yaml.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse config file %s: %v", path, err)
+	}
+	return &config, nil
+}
+
+// parseHostPort splits a "host:port" string into its host and port parts.
+func parseHostPort(hostPort string) (string, int, error) {
+	if hostPort == "" {
+		return "", -1, nil
+	}
+
+	parts := strings.Split(hostPort, ":")
+	if len(parts) != 2 {
+		return "", -1, fmt.Errorf("invalid host format, expected host:port, got: %s", hostPort)
+	}
+
+	host := parts[0]
+	port, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return "", -1, fmt.Errorf("invalid port number: %s", parts[1])
+	}
+	return host, port, nil
+}
+
+// ParseConnectionArgs parses CLI connection options with priority
+// command line > config file > defaults. A config file (multirag.yml or one
+// given via -f) cannot be combined with the other connection flags, but -o and
+// --help are always allowed.
+func ParseConnectionArgs(args []string) (*ConnectionArgs, error) {
+	// First pass: pull out help / config path / output format, detect whether
+	// any conflicting connection flag was supplied, and collect the remaining
+	// tokens to hand to the flag parser (the SQL command words plus the
+	// connection flags themselves).
+	var configFilePath string
+	var outputFormat string
+	var hasOtherFlags bool
+	var flagArgs []string
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--help" || arg == "-help":
+			return &ConnectionArgs{ShowHelp: true}, nil
+		case (arg == "-f" || arg == "--f" || arg == "--config") && i+1 < len(args):
+			configFilePath = args[i+1]
+			i++
+		case (arg == "-o" || arg == "--o" || arg == "--output") && i+1 < len(args):
+			outputFormat = args[i+1]
+			i++
+		default:
+			if strings.HasPrefix(arg, "-") {
+				switch arg {
+				case "-h", "-p", "-w", "-k", "-u", "-admin", "--admin", "-user", "--user":
+					hasOtherFlags = true
+				}
+			}
+			flagArgs = append(flagArgs, arg)
+		}
+	}
+
+	if outputFormat != "" {
+		if err := validateOutputFormat(outputFormat); err != nil {
+			return nil, err
+		}
+	}
+
+	// Load config file with priority: -f > multirag.yml > none.
+	var config *ConfigFile
+	var err error
+	if configFilePath != "" {
+		config, err = LoadConfigFileFromPath(configFilePath)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		config, err = LoadDefaultConfigFile()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if config != nil {
+		if hasOtherFlags {
+			return nil, fmt.Errorf("cannot use connection flags (-h, -p, -w, -k, -u, -admin, -user) together with a config file; use one or the other")
+		}
+		// flagArgs holds only the SQL command words here (-f/-o were stripped and
+		// any other flag would have errored above).
+		return buildArgsFromConfig(config, outputFormat, flagArgs)
+	}
+
+	// No config file: parse the connection flags.
+	fs := flag.NewFlagSet("multirag_cli", flag.ContinueOnError)
+	host := fs.String("h", "127.0.0.1", "Admin or MultiRAG service host")
+	port := fs.Int("p", -1, "Admin or MultiRAG service port (default: 9381 for admin, 9380 for user)")
+	password := fs.String("w", "", "Superuser password")
+	key := fs.String("k", "", "API key for authentication")
+	_ = fs.Bool("admin", false, "Run in admin mode (default)")
+	userMode := fs.Bool("user", false, "Run in user mode")
+	username := fs.String("u", "", "Username (email). In admin mode defaults to admin@multirag.com, in user mode required")
+
+	if err = fs.Parse(flagArgs); err != nil {
+		return nil, fmt.Errorf("failed to parse arguments: %v", err)
+	}
+
+	return buildArgsFromFlags(host, port, password, key, userMode, username, outputFormat, fs.Args())
+}
+
+// buildArgsFromConfig builds ConnectionArgs from a config file.
+func buildArgsFromConfig(config *ConfigFile, outputFormat string, commandArgs []string) (*ConnectionArgs, error) {
+	result := &ConnectionArgs{OutputFormat: outputFormat}
+
+	if config.Host != "" {
+		host, port, err := parseHostPort(config.Host)
+		if err != nil {
+			return nil, fmt.Errorf("invalid host in config file: %v", err)
+		}
+		result.Host = host
+		result.Port = port
+	} else {
+		result.Host = "127.0.0.1"
+	}
+
+	result.Username = config.User
+	result.Password = config.Password
+	result.Key = config.APIToken
+
+	// Auth info in the config implies user mode; otherwise default to admin.
+	if config.User != "" || config.APIToken != "" {
+		result.Type = "user"
+	} else {
+		result.Type = "admin"
+		result.Username = "admin@multirag.com"
+	}
+
+	if result.Port == -1 {
+		if result.Type == "admin" {
+			result.Port = 9381
+		} else {
+			result.Port = 9380
+		}
+	}
+
+	if len(commandArgs) > 0 {
+		result.Command = strings.Join(commandArgs, " ") + ";"
+	}
+	return result, nil
+}
+
+// buildArgsFromFlags builds ConnectionArgs from parsed command line flags.
+func buildArgsFromFlags(host *string, port *int, password *string, key *string, userMode *bool, username *string, outputFormat string, commandArgs []string) (*ConnectionArgs, error) {
+	result := &ConnectionArgs{
+		Host:         *host,
+		Port:         *port,
+		Password:     *password,
+		Key:          *key,
+		Username:     *username,
+		OutputFormat: outputFormat,
+	}
+
+	if *userMode {
+		result.Type = "user"
+	} else {
+		result.Type = "admin"
+	}
+
+	if result.Port == -1 {
+		if result.Type == "admin" {
+			result.Port = 9381
+		} else {
+			result.Port = 9380
+		}
+	}
+
+	if result.Type == "admin" && result.Username == "" {
+		result.Username = "admin@multirag.com"
+	}
+
+	if len(commandArgs) > 0 {
+		result.Command = strings.Join(commandArgs, " ") + ";"
+	}
+	return result, nil
+}
+
+// PrintUsage prints the CLI usage information.
+func PrintUsage() {
+	fmt.Print(`MultiRAG CLI Client
+
+Usage: multirag_cli [options] [command]
+
+Options:
+  -h string    Admin or MultiRAG service host (default "127.0.0.1")
+  -p int       Admin or MultiRAG service port (default 9381 for admin, 9380 for user)
+  -w string    Superuser password
+  -k string    API key for authentication
+  -f string    Path to config file (YAML format)
+  -o string    Output format: table (default), plain or json
+  -admin       Run in admin mode (default)
+  -user        Run in user mode
+  -u string    Username (email). In admin mode defaults to admin@multirag.com
+  --help       Show this help message
+
+Configuration File:
+  The CLI automatically reads multirag.yml from the current directory if it exists.
+  Use -f to specify a custom config file path.
+
+  Config file format:
+    host: 127.0.0.1:9380
+    user: your-email@example.com
+    password: your-password
+    api_token: your-api-token
+
+  When using a config file you cannot combine it with the other connection flags
+  (-o and --help are still allowed). The command line is then only for the
+  SQL command.
+
+Commands:
+  SQL commands like: LOGIN USER 'email'; LIST USERS; etc.
+`)
+}
+
 // CLI represents the command line interface
 type CLI struct {
 	client       *MultiRAGClient
@@ -49,27 +334,71 @@ type CLI struct {
 	running      bool
 	line         *liner.State
 	outputFormat OutputFormat
+	args         *ConnectionArgs
 }
 
-// NewCLI creates a new CLI instance
+// NewCLI creates a new CLI instance in interactive mode with default settings.
 func NewCLI() (*CLI, error) {
+	return NewCLIWithArgs(nil)
+}
+
+// NewCLIWithArgs creates a new CLI instance, applying the given connection
+// arguments when provided. A nil args is treated as "interactive, user mode,
+// defaults".
+func NewCLIWithArgs(args *ConnectionArgs) (*CLI, error) {
 	// Create liner first
 	line := liner.NewLiner()
 
+	// Determine server type (default to user when no args provided).
+	serverType := "user"
+	if args != nil && args.Type != "" {
+		serverType = args.Type
+	}
+
 	// Create client with password prompt using liner
-	client := NewMultiRAGClient("user") // Default to user mode
+	client := NewMultiRAGClient(serverType)
 	client.PasswordPrompt = line.PasswordPrompt
 
+	// Apply connection arguments when provided. NewMultiRAGClient already set the
+	// default port for the mode, so only override when explicitly given.
+	if args != nil {
+		if args.Host != "" {
+			client.HTTPClient.Host = args.Host
+		}
+		if args.Port > 0 {
+			client.HTTPClient.Port = args.Port
+		}
+	}
+
+	prompt := "MultiRAG> "
+	if serverType == "admin" {
+		prompt = "MultiRAG(admin)> "
+	}
+
+	outputFormat := OutputFormatTable
+	if args != nil && args.OutputFormat != "" {
+		outputFormat = OutputFormat(args.OutputFormat)
+	}
+
 	return &CLI{
-		prompt:       "MultiRAG> ",
+		prompt:       prompt,
 		client:       client,
 		line:         line,
-		outputFormat: OutputFormatTable,
+		outputFormat: outputFormat,
+		args:         args,
 	}, nil
 }
 
 // Run starts the interactive CLI
 func (c *CLI) Run() error {
+	// When started directly in admin mode (via flags/config), verify the
+	// superuser password before entering the REPL.
+	if c.args != nil && c.args.Type == "admin" {
+		if err := c.verifyAdminPassword(); err != nil {
+			return err
+		}
+	}
+
 	c.running = true
 
 	// Load history from file
@@ -290,4 +619,71 @@ func RunInteractive() error {
 	}()
 
 	return cli.Run()
+}
+
+// RunSingleCommand executes a single command non-interactively and returns.
+func (c *CLI) RunSingleCommand(command string) error {
+	return c.execute(command)
+}
+
+// verifyAdminPassword prompts for the superuser password and verifies it,
+// allowing up to 3 attempts. Used when the CLI starts directly in admin mode.
+func (c *CLI) verifyAdminPassword() error {
+	const maxAttempts = 3
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		var input string
+		var err error
+
+		if isTerminal() {
+			input, err = c.line.PasswordPrompt("Please input your password: ")
+		} else {
+			fmt.Println("Warning: this terminal does not support secure password input")
+			input, err = c.line.Prompt("Please input your password (will be visible): ")
+		}
+		if err != nil {
+			fmt.Printf("Error reading input: %v\n", err)
+			return err
+		}
+
+		input = strings.TrimSpace(input)
+		if input == "" {
+			if attempt < maxAttempts {
+				fmt.Println("Password cannot be empty, please try again")
+				continue
+			}
+			return errors.New("no password provided after 3 attempts")
+		}
+
+		c.args.Password = input
+		if err = c.VerifyAuth(); err != nil {
+			if attempt < maxAttempts {
+				fmt.Printf("Authentication failed: %v (%d/%d attempts)\n", err, attempt, maxAttempts)
+				continue
+			}
+			return fmt.Errorf("authentication failed after %d attempts: %v", maxAttempts, err)
+		}
+		return nil
+	}
+	return nil
+}
+
+// VerifyAuth logs in using the connection arguments to verify the credentials,
+// storing the resulting session token on the client when successful.
+func (c *CLI) VerifyAuth() error {
+	if c.args == nil {
+		return nil
+	}
+	if c.args.Username == "" {
+		return errors.New("username is required")
+	}
+	if c.args.Password == "" {
+		return errors.New("password is required")
+	}
+
+	token, err := c.client.loginUser(c.args.Username, c.args.Password)
+	if err != nil {
+		return err
+	}
+	c.client.HTTPClient.LoginToken = token
+	return nil
 }
