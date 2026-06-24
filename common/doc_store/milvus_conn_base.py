@@ -38,7 +38,6 @@ from pymilvus.orm.collection import CollectionSchema, FieldSchema
 from pymilvus.orm.connections import connections
 from pymilvus.orm.types import DataType
 
-from common import settings
 from common.constants import PAGERANK_FLD
 from common.doc_store.doc_store_base import (
     DocStoreConnection,
@@ -697,8 +696,6 @@ class MilvusConnectionBase(DocStoreConnection):
 
     def _execute_aggregate(self, select_raw: str, df, group_by_field: str | None, format: str, fetch_size: int) -> dict:
         """Execute aggregate functions (COUNT/SUM/AVG/MIN/MAX) in Python using pandas."""
-        import pandas as pd
-
         # Parse aggregate expressions: COUNT(*), SUM(chunk_data["field"]), etc.
         agg_pattern = re.compile(
             r'(COUNT|SUM|AVG|MIN|MAX)\s*\(\s*(\*|(?:DISTINCT\s+)?[\w\"\[\]\.]+)\s*\)(?:\s+AS\s+(\w+))?',
@@ -912,6 +909,7 @@ class MilvusConnectionBase(DocStoreConnection):
 
                 for collection in collection_names:
                     try:
+                        collection_select_fields = self._filter_collection_output_fields(conn, collection, select_fields)
                         query_payload = expr.raw_text if hasattr(expr, "raw_text") else expr.matching_text
                         res = conn.search(
                             collection,
@@ -920,7 +918,7 @@ class MilvusConnectionBase(DocStoreConnection):
                             param=search_params,
                             limit=expr_limit,
                             expression=filter_expr if filter_expr else None,
-                            output_fields=select_fields,
+                            output_fields=collection_select_fields,
                         )
                     except Exception as e:
                         self.logger.warning(f"BM25 search failed field={field_name}, collection={collection}: {e}")
@@ -1005,13 +1003,14 @@ class MilvusConnectionBase(DocStoreConnection):
 
         for collection in collection_names:
             try:
+                collection_select_fields = self._filter_collection_output_fields(conn, collection, select_fields)
                 res = conn.search(
                     collection,
                     [vector_data],
                     vector_field,
                     search_params,
                     expression=filter_expr,
-                    output_fields=select_fields,
+                    output_fields=collection_select_fields,
                     limit=query_limit,
                 )
             except Exception as e:
@@ -1138,6 +1137,25 @@ class MilvusConnectionBase(DocStoreConnection):
         conn = self._get_connection()
         return conn.describe_collection(collection_name, timeout=timeout, **kwargs)
 
+    def _get_collection_schema_fields(self, conn, collection_name: str) -> dict[str, dict] | None:
+        try:
+            schema = conn.describe_collection(collection_name)
+        except Exception:
+            self.logger.debug("Failed to describe collection schema: %s", collection_name, exc_info=True)
+            return None
+        fields = schema.get("fields", [])
+        if not fields:
+            return None
+        return {field.get("name"): field for field in fields if field.get("name")}
+
+    def _filter_collection_output_fields(self, conn, collection_name: str, output_fields: list[str] | None) -> list[str] | None:
+        if not output_fields or output_fields == ["*"]:
+            return output_fields
+        schema_fields = self._get_collection_schema_fields(conn, collection_name)
+        if not schema_fields:
+            return output_fields
+        return [field for field in output_fields if field in schema_fields.keys()]
+
     def has_collection(self, collection_name: str, timeout: float | None = None, **kwargs):
         conn = self._get_connection()
         return conn.has_collection(collection_name, timeout=timeout, **kwargs)
@@ -1262,6 +1280,7 @@ class MilvusConnectionBase(DocStoreConnection):
 
         for coll in collections:
             try:
+                collection_output_fields = self._filter_collection_output_fields(conn, coll, output_fields)
                 res = conn.search(
                     coll,
                     data,
@@ -1269,13 +1288,13 @@ class MilvusConnectionBase(DocStoreConnection):
                     search_params or {},
                     expression=filter,
                     limit=limit,
-                    output_fields=output_fields,
+                    output_fields=collection_output_fields,
                     partition_names=partition_names,
                     expr_params=expr_params,
                     timeout=timeout,
                     **kwargs,
                 )
-            except Exception as ex:
+            except Exception:
                 self.logger.error(f"Search failed for collection: {coll}", exc_info=True)
                 continue
 

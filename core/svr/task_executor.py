@@ -527,7 +527,8 @@ async def build_chunks(task, progress_callback, db: Session):
             raise
 
     tasks = []
-    for ck in cks:
+    for chunk_order, ck in enumerate(cks):
+        ck["chunk_order_int"] = chunk_order
         tasks.append(asyncio.create_task(upload_to_minio(doc, ck)))
     try:
         await asyncio.gather(*tasks, return_exceptions=False)
@@ -2410,6 +2411,9 @@ async def insert_chunks(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
     Returns:
         成功返回True，失败返回False
     """
+    for chunk_order, ck in enumerate(chunks):
+        ck.setdefault("chunk_order_int", chunk_order)
+
     # 处理 mother chunks (用于 child-parent chunking)
     mothers = []
     mother_ids = set()
@@ -2430,7 +2434,7 @@ async def insert_chunks(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
         flds = list(mom_ck.keys())
         for fld in flds:
             # pk 是 Milvus 主键，必须保留
-            if fld not in ["id", "pk", "content_with_weight", "doc_id", "docnm_kwd", "kb_id", "available_int", "position_int", "create_timestamp_flt", "page_num_int", "top_int"]:
+            if fld not in ["id", "pk", "content_with_weight", "doc_id", "docnm_kwd", "kb_id", "available_int", "position_int", "create_timestamp_flt", "page_num_int", "top_int", "chunk_order_int"]:
                 del mom_ck[fld]
         mothers.append(mom_ck)
 

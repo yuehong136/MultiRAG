@@ -248,6 +248,14 @@
         }
       },
       {
+        "chunk_order_int_template": {
+          "match": "chunk_order_int",
+          "mapping": {
+            "type": "INT64"
+          }
+        }
+      },
+      {
         "page_num_int_template": {
           "match": "page_num_int",
           "mapping": {

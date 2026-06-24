@@ -21,6 +21,8 @@ This module provides a specialized Milvus connection for storing and retrieving 
 import copy
 import re
 import time
+import ast
+from functools import cmp_to_key
 from datetime import datetime
 
 from pymilvus import Collection, Function
@@ -49,6 +51,11 @@ from common.string_utils import truncate_utf8_bytes
 ATTEMPT_TIME = 2
 ARRAY_FILTER_FIELDS = {"important_kwd", "question_kwd", "entities_kwd"}
 UNSUPPORTED_OUTPUT_FIELDS = {"row_id()"}
+MILVUS_NATIVE_ORDERABLE_TYPES = {
+    getattr(DataType, type_name)
+    for type_name in ("INT8", "INT16", "INT32", "INT64", "FLOAT", "DOUBLE", "VARCHAR")
+    if hasattr(DataType, type_name)
+}
 
 
 def quote_milvus_filter_value(value) -> str:
@@ -76,6 +83,88 @@ def sanitize_milvus_output_fields(output_fields: list[str] | None) -> list[str] 
     if output_fields is None:
         return None
     return [field for field in output_fields if field not in UNSUPPORTED_OUTPUT_FIELDS]
+
+
+def _decode_position_scalar(value):
+    if value in (None, "", []):
+        return None
+    if isinstance(value, list):
+        if not value:
+            return None
+        first = value[0]
+        if isinstance(first, (list, tuple)):
+            return first[0] if first else None
+        return first
+    if isinstance(value, str):
+        try:
+            if value.startswith("[") and value.endswith("]"):
+                parsed = ast.literal_eval(value) if value != "[]" else []
+                return _decode_position_scalar(parsed)
+            return int(value.split("_", 1)[0], 16)
+        except Exception:
+            return value
+    return value
+
+
+def build_milvus_native_query_order_by(
+    order_by: OrderByExpr | None,
+    schema_fields: dict[str, dict] | None,
+    native_order_supported: bool,
+) -> list[str] | None:
+    """Build Milvus 3.x query(order_by=[...]) args when all sort fields are scalar."""
+    if not native_order_supported or not order_by or not order_by.fields or not schema_fields:
+        return None
+
+    native_order_by = []
+    for field, direction in order_by.fields:
+        field_info = schema_fields.get(field)
+        if not field_info or field_info.get("type") not in MILVUS_NATIVE_ORDERABLE_TYPES:
+            return None
+        native_order_by.append(f"{field}:{'asc' if direction == 0 else 'desc'}")
+    return native_order_by
+
+
+def sort_milvus_results_by_order_fields(results: list[dict], order_by: OrderByExpr) -> list[dict]:
+    def get_value(item: dict, field: str):
+        value = item.get(field)
+        if value is None and isinstance(item.get("entity"), dict):
+            value = item["entity"].get(field)
+        if field in {"position_int", "page_num_int", "top_int"}:
+            return _decode_position_scalar(value)
+        if field.endswith("_int"):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+        if field.endswith("_flt"):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+        return value
+
+    def compare(left: dict, right: dict) -> int:
+        for field, direction in order_by.fields:
+            left_value = get_value(left, field)
+            right_value = get_value(right, field)
+            left_missing = left_value is None
+            right_missing = right_value is None
+            if left_missing or right_missing:
+                if left_missing and right_missing:
+                    continue
+                return 1 if left_missing else -1
+            if type(left_value) is not type(right_value):
+                left_value = str(left_value)
+                right_value = str(right_value)
+            if left_value == right_value:
+                continue
+            ascending = direction == 0
+            if left_value < right_value:
+                return -1 if ascending else 1
+            return 1 if ascending else -1
+        return 0
+
+    return sorted(results, key=cmp_to_key(compare))
 
 
 @singleton
@@ -134,6 +223,7 @@ class MilvusConnection(MilvusConnectionBase):
             index_names = index_names.split(",")
         assert isinstance(index_names, list) and len(index_names) > 0
         select_fields = sanitize_milvus_output_fields(select_fields) or []
+        query_select_fields = self._append_order_fields(select_fields, order_by)
 
         all_results = []
         total_hits_count = 0
@@ -201,6 +291,7 @@ class MilvusConnection(MilvusConnectionBase):
 
         if not has_retrieval:
             # Query-only mode without vector search
+            native_order_complete = False
             for index_name in index_names:
                 collection_name = index_name
                 try:
@@ -208,11 +299,24 @@ class MilvusConnection(MilvusConnectionBase):
                     if not conn.has_collection(collection_name):
                         continue
 
+                    output_fields = self._filter_collection_output_fields(conn, collection_name, query_select_fields)
+                    native_order_by = self._build_native_query_order_by(conn, collection_name, order_by)
+                    query_kwargs = {}
+                    query_limit = 10000
+                    # Milvus 3.x can push down scalar ordering via query(order_by=[...]).
+                    # Keep this isolated: with pymilvus 2.5.x the request builder does not serialize order_by,
+                    # and multi-collection searches still need a global merge/fallback after per-collection results.
+                    if native_order_by and len(index_names) == 1:
+                        query_kwargs["order_by"] = native_order_by
+                        query_kwargs["offset"] = offset
+                        query_limit = limit
+                        native_order_complete = True
                     results = conn.query(
                         collection_name,
                         filter_expr,
-                        output_fields=select_fields,
-                        limit=10000
+                        output_fields=output_fields,
+                        limit=query_limit,
+                        **query_kwargs,
                     )
 
                     if results:
@@ -220,7 +324,6 @@ class MilvusConnection(MilvusConnectionBase):
                             for result in results:
                                 pagerank = get_float(result.get(PAGERANK_FLD, 0))
                                 result["SCORE"] = pagerank * rank_boost.get(PAGERANK_FLD, 1.0)
-                            results = sorted(results, key=lambda x: x.get("SCORE", 0), reverse=True)
 
                         all_results.extend(results)
                         total_hits_count += len(results)
@@ -228,9 +331,13 @@ class MilvusConnection(MilvusConnectionBase):
                     self.logger.warning(f"Query collection {collection_name} failed: {str(e)}")
 
             if all_results:
-                if offset > 0:
+                if order_by and order_by.fields and not native_order_complete:
+                    all_results = self._sort_by_order_fields(all_results, order_by)
+                elif rank_boost and PAGERANK_FLD in select_fields:
+                    all_results = sorted(all_results, key=lambda x: x.get("SCORE", 0), reverse=True)
+                if offset > 0 and not native_order_complete:
                     all_results = all_results[offset:]
-                if limit > 0:
+                if limit > 0 and not native_order_complete:
                     all_results = all_results[:limit]
                 return all_results, total_hits_count
             else:
@@ -248,6 +355,30 @@ class MilvusConnection(MilvusConnectionBase):
                 rank_boost=rank_boost or {},
             )
             return combined_results, total_hits_count
+
+    @staticmethod
+    def _append_order_fields(select_fields: list[str], order_by: OrderByExpr | None) -> list[str]:
+        if not order_by or not order_by.fields:
+            return select_fields
+        fields = list(select_fields)
+        for field, _order in order_by.fields:
+            if field not in fields:
+                fields.append(field)
+        return fields
+
+    def _supports_native_query_order_by(self) -> bool:
+        # Upgrade hook: pymilvus 3.x exposes query(order_by=[...]) for scalar fields.
+        # Current dependency is pymilvus 2.5.x, whose request builder does not serialize order_by.
+        # When upgrading, replace this with SDK/server capability detection before enabling.
+        return False
+
+    def _build_native_query_order_by(self, conn, collection_name: str, order_by: OrderByExpr | None) -> list[str] | None:
+        schema_fields = self._get_collection_schema_fields(conn, collection_name)
+        return build_milvus_native_query_order_by(order_by, schema_fields, self._supports_native_query_order_by())
+
+    @staticmethod
+    def _sort_by_order_fields(results: list[dict], order_by: OrderByExpr) -> list[dict]:
+        return sort_milvus_results_by_order_fields(results, order_by)
 
     def get(self, doc_id: str, index_name: str | list[str], dataset_ids: list[str]) -> dict | None:
         """Get a single document chunk by ID."""
@@ -934,13 +1065,14 @@ class MilvusConnection(MilvusConnectionBase):
 
         for coll in collections:
             try:
+                collection_output_fields = self._filter_collection_output_fields(conn, coll, output_fields)
                 res = conn.hybrid_search(
                     coll,
                     reqs,
                     ranker,
                     limit=limit,
                     partition_names=partition_names,
-                    output_fields=output_fields,
+                    output_fields=collection_output_fields,
                     timeout=timeout,
                     **kwargs,
                 )
