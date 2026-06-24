@@ -928,12 +928,48 @@ class AskdataService:
             value = convert_where_condition_value(value, data_type, operator)
         assembler.add_having(sql_column, FilterOperator.from_value(operator), value)
 
+    def _build_requery_pagination_result(self, assembler, pagination_info, cap):
+        """构建 re-query 的分页 count_sql/data_sql（table-row 与聚合两分支共用，杜绝形状漂移）。
+
+        cap 为用户在自然语言里给定的行数上限（table_config['limit']）。仅当 cap 为正整数时按
+        「硬上限 + 页内分页」处理：
+          - count：对带 `LIMIT cap` 的子查询计数 → min(实际, cap)，与首屏 data_count 口径一致；
+          - data：把页窗钳到 [offset, offset+page_size) ∩ [0, cap)。越过上限的页返回 0 行
+            （合法 `LIMIT 0`），不会泄露 cap 之外的数据。
+        cap 为 None / 非正整数时维持原行为（全量分页），输出 SQL 字节级不变（零回归）。
+        """
+        page_size = int(pagination_info["page_size"])
+        page_index = int(pagination_info["page_index"])
+        # cap 可能来自前端回传，类型不固定：int 30 / 数字字符串 "30" / None / 空串。
+        # 统一归一成「正整数或 None」——bool 是 int 子类要排除，字符串按数字解析。
+        if isinstance(cap, bool):
+            cap = None
+        elif isinstance(cap, str):
+            cap = int(cap.strip()) if cap.strip().isdigit() else None
+        has_cap = isinstance(cap, int) and cap > 0
+        count_sql, count_sql_params = assembler.build_count_sql_for_jdbc(cap=cap if has_cap else None)
+        if has_cap:
+            offset = (page_index - 1) * page_size
+            # max(0, ...) 承重：offset≥cap 时算出 0，发合法 `LIMIT 0`，绝不能传负数
+            assembler.set_limit(max(0, min(page_size, cap - offset)), offset)
+        else:
+            assembler.set_pagination(page_index, page_size)
+        sql, params = assembler.build_sql_for_jdbc()
+        return {
+            "sql": sql,
+            "params": params,
+            "count_sql": count_sql,
+            "count_sql_params": count_sql_params,
+        }
+
     async def generate_requery_sql(self, chart_type: str, table_config: Dict[str, Any], sql_components: Dict[str, Any],
                                    model_table_alias_mapping_list: List[Dict[str, Any]],
                                    pagination_info: Optional[Dict[str, Any]], user_id: str):
         """生成重新查询的SQL语句。"""
         base_from = sql_components["from"]
         all_semantic_fields = table_config["all_semantic_fields"]
+        # 用户给定的行数上限（如「30 条」）；翻页时作为硬封顶，缺省/非正整数则全量分页
+        cap = table_config.get("limit")
         from_sentence = ""
         if base_from.lower().startswith("from"):
             from_sentence = base_from.split("FROM")[1]
@@ -1088,17 +1124,7 @@ class AskdataService:
                     assembler.add_order_by(order_by["sql_column"], OrderDirection.from_value(order_by["direction"]))
 
             if pagination_info:
-                count_sql, count_sql_params = assembler.build_count_sql_for_jdbc()
-                page_size = int(pagination_info["page_size"])
-                page_index = int(pagination_info["page_index"])
-                assembler.set_pagination(page_index, page_size)
-                sql, params = assembler.build_sql_for_jdbc()
-                return {
-                    "sql": sql,
-                    "params": params,
-                    "count_sql": count_sql,
-                    "count_sql_params": count_sql_params,
-                }
+                return self._build_requery_pagination_result(assembler, pagination_info, cap)
             else:
                 sql, params = assembler.build_sql_for_jdbc()
                 return {
@@ -1237,17 +1263,7 @@ class AskdataService:
                     assembler.add_order_by(order_by["sql_column"], order_by["direction"])
 
             if pagination_info:
-                count_sql, count_sql_params = assembler.build_count_sql_for_jdbc()
-                page_size = int(pagination_info["page_size"])
-                page_index = int(pagination_info["page_index"])
-                assembler.set_pagination(page_index, page_size)
-                sql, params = assembler.build_sql_for_jdbc()
-                return {
-                    "sql": sql,
-                    "params": params,
-                    "count_sql": count_sql,
-                    "count_sql_params": count_sql_params,
-                }
+                return self._build_requery_pagination_result(assembler, pagination_info, cap)
             else:
                 sql, params = assembler.build_sql_for_jdbc()
                 return {
