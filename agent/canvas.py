@@ -30,6 +30,7 @@ from typing import Any
 from agent.component import component_class
 from agent.a2ui import A2UI_EVENT
 from agent.component.base import ComponentBase
+from agent.dsl_migration import normalize_chunker_dsl
 from agent.persondata_input import redact_persondata_payload
 from api.db.db_models import db_connection
 from api.db.services.file_service import FileService
@@ -87,7 +88,7 @@ class Graph:
         self.path = []
         self.components = {}
         self.error = ""
-        self.dsl = json.loads(dsl)
+        self.dsl = normalize_chunker_dsl(json.loads(dsl))
         self._sensitive_values = []
         self._tenant_id = tenant_id
         self.task_id = task_id if task_id else get_uuid()

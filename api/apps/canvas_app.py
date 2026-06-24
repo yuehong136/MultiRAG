@@ -44,6 +44,7 @@ from api.utils.api_utils import (
     get_data_error_result
 )
 from agent.canvas import Canvas
+from agent.dsl_migration import normalize_chunker_dsl
 from common.constants import RetCode
 from common import settings
 from common.misc_utils import get_uuid, thread_pool_exec
@@ -351,6 +352,7 @@ def get(
     exists, canvas = UserCanvasService.get_by_canvas_id(db, canvas_id)
     if not exists or not canvas:
         return get_data_error_result(retmsg="canvas not found.")
+    canvas["dsl"] = normalize_chunker_dsl(canvas.get("dsl", {}))
     try:
         CanvasReplicaService.bootstrap(
             canvas_id=canvas_id,

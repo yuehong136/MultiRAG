@@ -9,8 +9,8 @@ core/flow 组件的纯函数提取工具集
 """
 
 from .parser_utils import FlowParser, parse_file
-from .splitter_utils import FlowSplitter, split_chunks
-from .hierarchical_merger_utils import FlowHierarchicalMerger, hierarchical_merge
+from .token_chunker_utils import FlowTokenChunker, split_chunks
+from .title_chunker_utils import FlowTitleChunker, hierarchical_merge
 from .extractor_utils import FlowExtractor, extract_metadata
 
 __all__ = [
@@ -18,16 +18,15 @@ __all__ = [
     "FlowParser",
     "parse_file",
     
-    # Splitter
-    "FlowSplitter",
+    # TokenChunker
+    "FlowTokenChunker",
     "split_chunks",
     
-    # HierarchicalMerger
-    "FlowHierarchicalMerger",
+    # TitleChunker
+    "FlowTitleChunker",
     "hierarchical_merge",
     
     # Extractor
     "FlowExtractor",
     "extract_metadata",
 ]
-

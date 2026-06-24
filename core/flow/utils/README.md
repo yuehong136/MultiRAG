@@ -1,20 +1,26 @@
-# core/flow/utils - 组件纯函数提取工具
+# core/flow/utils - Canvas-free 组件 Facade
 
 ## 📖 目录说明
 
-此目录包含 `core/flow/` 各组件的**纯函数提取版本**，去除 Canvas/DSL/Graph 框架依赖，可直接在 analyze_v2 等场景中使用。
+此目录包含 `core/flow/` 各组件的 **Canvas-free facade**，去除 Canvas/DSL/Graph 调用成本，可直接在 analyze_v2 等场景中使用。
+
+维护原则已经从“复制一份核心逻辑”调整为：
+
+1. **优先复用正式组件运行时**，例如 `parser_utils.py` 直接分发到 `core.flow.parser.Parser`，`token_chunker_utils.py` 复用 `core.flow.chunker.TokenChunker` 的内部公共函数，`title_chunker_utils.py` 复用 `core.flow.chunker.title_chunker.TitleChunker`。
+2. **utils 只做配置归一化和返回契约适配**，不要在 utils 中重新实现 parser/chunker 的核心算法。
+3. 如果正式组件新增参数、返回字段或文件类型，先检查 facade 是否已经通过正式组件自动继承；只有配置入口、调用方传参或 analyze_v2 返回契约需要补齐时才修改 utils。
 
 ## 📁 文件对应关系
 
 ```
 core/flow/utils/
-├── parser_utils.py              ← 对应 core/flow/parser/
-├── splitter_utils.py            ← 对应 core/flow/splitter/
-├── hierarchical_merger_utils.py ← 对应 core/flow/hierarchical_merger/
-└── extractor_utils.py           ← 对应 core/flow/extractor/
+├── parser_utils.py              ← Canvas-free facade for core/flow/parser/
+├── token_chunker_utils.py       ← Canvas-free facade for core/flow/chunker/
+├── title_chunker_utils.py       ← Canvas-free facade for core/flow/chunker/title_chunker/
+└── extractor_utils.py           ← Canvas-free facade for core/flow/extractor/
 ```
 
-**原则：一个 utils 文件对应一个组件目录**
+**原则：一个 utils 文件对应一个组件目录，但不要复制组件核心算法。**
 
 ## 🔧 维护指南
 
@@ -34,9 +40,9 @@ core/flow/utils/
    - 依赖库 API 是否有更新？（如 check_installation 返回值变化）
 
 3. **同步更新 utils**
-   - 更新核心逻辑
-   - 更新参考注释（行号）
-   - 更新错误处理逻辑
+   - 优先确认是否已通过正式组件自动继承
+   - 更新配置归一化、文件类型路由或调用方传参
+   - 更新 analyze_v2 返回契约适配
    - 测试验证
 
 4. **⚠️ 同步更新相关调用方**
@@ -57,11 +63,11 @@ core/flow/utils/
    
    **示例：添加新的解析器参数**
    
-   以 `table_context_size` 和 `image_context_size` 为例，完整的更新链路：
+   以 `table_context_size` 和 `image_context_size` 为例，完整的检查链路：
    
    ```
    1. core/flow/parser/parser.py        # 原组件添加参数
-   2. core/flow/utils/parser_utils.py   # utils 同步参数
+   2. core/flow/utils/parser_utils.py   # facade 配置入口是否需要透传
    3. core/nlp/__init__.py              # 添加 attach_media_context 函数
    4. core/app/naive.py                 # 传统解析器同步
    5. core/app/paper.py                 # 传统解析器同步
@@ -74,33 +80,26 @@ core/flow/utils/
    12. core/svr/task_executor.py        # 任务执行器
    ```
    
-   **示例：添加 Splitter 参数（如 children_delimiters）**
+   **示例：添加 TokenChunker 参数（如 children_delimiters）**
    
    以 `children_delimiters`（child-parent chunking）为例：
    
    ```
-   1. core/flow/splitter/splitter.py    # 原组件添加参数
-   2. core/flow/utils/splitter_utils.py # utils 同步参数
+   1. core/flow/chunker/token_chunker.py      # 原组件添加参数
+   2. core/flow/utils/token_chunker_utils.py  # utils 同步参数
    3. core/nlp/__init__.py              # tokenize_chunks 添加参数
    4. core/app/naive.py                 # 传统解析器同步
-   5. api/apps/document_app.py          # SplitterConfig 模型
+   5. api/apps/document_app.py          # TokenChunker 请求模型
    6. core/svr/task_executor.py         # run_analyze_v2_task 函数
    ```
 
-### 注释规范
+### Facade 规范
 
-每个函数都标注了参考来源：
+`parser_utils.py` 不再维护 `_pdf`、`_word`、`_image` 等方法的复制实现。新增文件类型或解析参数时，应优先更新 `ParserParam` / `Parser`，然后在 `parse_file()` 的配置归一化中补齐 direct-call 入参。
 
-```python
-async def parse_audio(...):
-    """
-    音频解析（参考 core/flow/parser/parser.py._audio 第 630-648 行）
-                ↑                              ↑           ↑
-             组件文件                        方法名      行号范围
-    """
-```
+`token_chunker_utils.py` 和 `title_chunker_utils.py` 已经跟随 Pipeline 重构，分别复用 `TokenChunker` / `TitleChunker` 的运行时语义。不要恢复旧组件工具实现。
 
-**修改 core/flow 后记得更新行号！**
+`extractor_utils.py` 复用正式 `Extractor` 的 chunk 迭代和 prompt 渲染，但 analyze_v2 主链路仍使用 `task_executor.py` / `pipeline_analysis_service.py` 中更完整的元数据提取能力。
 
 > ⚠️ 注意：parser.py 已支持 MinerU、PaddleOCR 和 Docling 三种解析器。
 > MinerU 和 PaddleOCR 使用 `LLMBundle` + `LLMType.OCR` 获取模型，支持 `模型名@mineru` / `模型名@paddleocr` 格式。
@@ -352,7 +351,7 @@ from core.flow.utils import (
     hierarchical_merge
 )
 
-# Parser → Splitter → HierarchicalMerger
+# Parser → TokenChunker → TitleChunker
 parsed = await parse_file(...)
 chunks = await split_chunks(parsed, ...)
 hierarchy = await hierarchical_merge(chunks, ...)
@@ -396,4 +395,3 @@ python -m pytest tests/test_flow_utils.py -k "splitter"
 2. **明确对应关系**：一个组件 → 一个 utils
 3. **便于追踪**：注释标注参考来源
 4. **易于维护**：清晰的目录结构
-

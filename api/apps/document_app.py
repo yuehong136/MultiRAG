@@ -65,8 +65,8 @@ router = APIRouter()
 
 # ==================== Pydantic Schemas ====================
 
-class HierarchicalConfig(BaseModel):
-    """层次化合并配置"""
+class TitleChunkerConfig(BaseModel):
+    """TitleChunker 配置"""
 
     levels: list[list[str]] = Field(
         default=[
@@ -81,10 +81,18 @@ class HierarchicalConfig(BaseModel):
         le=5,
         description="合并到第几层（0-5）"
     )
+    method: Literal["hierarchy", "group"] = Field(
+        default="hierarchy",
+        description="TitleChunker 方法：hierarchy(按标题层级切分) 或 group(按标题分组)"
+    )
+    include_heading_content: bool = Field(
+        default=False,
+        description="hierarchy 方法下是否把标题自身作为独立内容保留"
+    )
 
 
-class SplitterConfig(BaseModel):
-    """智能切片配置"""
+class TokenChunkerConfig(BaseModel):
+    """TokenChunker 配置"""
 
     chunk_token_size: int = Field(
         default=512,
@@ -282,13 +290,13 @@ class AnalyzeDocumentRequest(BaseModel):
     )
 
     # 组件配置
-    hierarchical_config: HierarchicalConfig | None = Field(
+    hierarchical_config: TitleChunkerConfig | None = Field(
         default=None,
-        description="HierarchicalMerger 配置（可选）"
+        description="TitleChunker 配置（可选）"
     )
-    splitter_config: SplitterConfig | None = Field(
+    splitter_config: TokenChunkerConfig | None = Field(
         default=None,
-        description="Splitter 配置（可选）"
+        description="TokenChunker 配置（请求字段名保留 splitter_config 以兼容既有调用）"
     )
     raptor_config: RaptorConfig | None = Field(
         default=None,
@@ -4359,8 +4367,8 @@ async def run_analyze_v2(
       - 每种类型支持的配置见上述简化方式说明
       - **优势**：一次配置，后续上传任何文件都使用对应配置
 
-    **2. 切分配置（Splitter）**（默认值：null）
-    - `splitter_config`: 使用 core/flow/splitter 逻辑
+    **2. 切分配置（TokenChunker）**（默认值：null）
+    - `splitter_config`: 使用 core/flow/chunker/token_chunker 逻辑（字段名为兼容旧请求保留）
       - `chunk_token_size`: chunk 大小（默认：512，范围：100-4096）
       - `delimiters`: 分隔符优先级列表（默认：null，自动选择）
       - `overlapped_percent`: 重叠比例（默认：0.1 即 10%，范围：0-0.5）
@@ -4373,7 +4381,7 @@ async def run_analyze_v2(
       - `"raptor"`: RAPTOR 聚类（适合长文档 > 10 chunks）
       - `"hybrid"`: 混合策略（先层次化，再 RAPTOR）
 
-    **4. 层次化配置（HierarchicalMerger）**（默认值：null）
+    **4. 层次化配置（TitleChunker）**（默认值：null）
     - `hierarchical_config`: 按标题结构分层合并
       - `levels`: 标题层级正则表达式（默认：[["^#\\s+", "^第...章"], ["^##\\s+", "^\\d+\\.\\s+"]]）
       - `hierarchy`: 合并到第几层（默认：1，范围：0-5）
@@ -4791,7 +4799,7 @@ async def trace_analyze(
 
     **进度说明**:
     - `0.0-0.2`: 文档解析
-    - `0.2-0.7`: 策略处理（HierarchicalMerger/RAPTOR）
+    - `0.2-0.7`: 策略处理（TitleChunker/RAPTOR）
     - `0.7-0.9`: 元数据提取
     - `0.9-1.0`: 最终处理
     - `1.0`: 任务完成
@@ -5081,8 +5089,8 @@ async def analyze_document_v2(
 
     支持组件：
     - Parser: 多格式文档解析（PDF、Word、图片、视频、音频等）
-    - HierarchicalMerger: 按标题结构分层合并
-    - Splitter: 智能切片（支持重叠）
+    - TitleChunker: 按标题结构分层合并
+    - TokenChunker: 智能切片（支持重叠）
     - RAPTOR: 聚类递归摘要（处理超长文档）
     - Extractor: 灵活的元数据提取
 
@@ -5111,8 +5119,8 @@ async def analyze_document_v2(
     #### 组件配置（可选）
     | 参数 | 类型 | 描述 |
     |------|------|------|
-    | `hierarchical_config` | object | HierarchicalMerger 配置 |
-    | `splitter_config` | object | Splitter 配置 |
+    | `hierarchical_config` | object | TitleChunker 配置 |
+    | `splitter_config` | object | TokenChunker 配置（字段名兼容保留） |
     | `raptor_config` | object | RAPTOR 配置 |
 
     **hierarchical_config 示例**:
@@ -5226,7 +5234,7 @@ async def analyze_document_v2(
                 "strategy_used": "hybrid",
                 "chunk_count": 500,
                 "processing_time_seconds": 45.2,
-                "components_used": ["Parser", "HierarchicalMerger", "RAPTOR", "Extractor"],
+                "components_used": ["Parser", "TitleChunker", "RAPTOR", "Extractor"],
                 "dedup_strategy": "smart",
                 "cluster_count": 20,
                 "chapter_count": 10

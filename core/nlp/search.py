@@ -237,7 +237,7 @@ class Dealer:
 
         default_fields = [
             "docnm_kwd", "content_ltks", "kb_id", "img_id", "doc_type_kwd", "title_tks", "important_kwd",
-            "position_int", "doc_id", "page_num_int", "top_int", "create_timestamp_flt",
+            "position_int", "doc_id", "chunk_order_int", "page_num_int", "top_int", "create_timestamp_flt",
             "knowledge_graph_kwd", "question_kwd", "question_tks", "available_int",
             "content_with_weight", "mom_id", PAGERANK_FLD, TAG_FLD,
         ]
@@ -287,7 +287,7 @@ class Dealer:
         if not qst:
             order_by = OrderByExpr()
             if req.get("sort"):
-                order_by.asc("page_num_int").asc("top_int").desc("create_timestamp_flt")
+                order_by.asc("chunk_order_int").asc("page_num_int").asc("top_int").desc("create_timestamp_flt")
             res = await thread_pool_exec(self.dataStore.search, src, [], filters, [], order_by, offset, limit, idx_names, kb_ids)
             keywords_raw: list[str] =  []
             return _build_result(res, keywords_raw)

@@ -108,6 +108,27 @@ def doc_store_exists(collection_name: str, kb_id: str = "") -> bool:
         return bool(settings.docStoreConn.has_collection(collection_name))
     return bool(settings.docStoreConn.index_exist(collection_name, kb_id))
 
+
+def _normalize_pipeline_output_chunks(output: dict) -> tuple[list[dict], int]:
+    embedding_token_consumption = output.get("embedding_token_consumption", 0)
+
+    if "chunks" in output:
+        chunks = output["chunks"]
+    elif "json" in output:
+        chunks = output["json"]
+    elif "markdown" in output:
+        chunks = [{"text": [output["markdown"]]}] if output["markdown"] else []
+    elif "text" in output:
+        chunks = [{"text": [output["text"]]}] if output["text"] else []
+    elif "html" in output:
+        chunks = [{"text": [output["html"]]}] if output["html"] else []
+    else:
+        chunks = []
+
+    if not chunks or not isinstance(chunks, list):
+        return [], embedding_token_consumption
+    return copy.deepcopy(chunks), embedding_token_consumption
+
 FACTORY = {
     "general": naive,
     ParserType.NAIVE.value: naive,
@@ -1044,17 +1065,11 @@ async def run_dataflow(db: Session, task: dict):
         PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
         return
 
-    embedding_token_consumption = chunks.get("embedding_token_consumption", 0)
-    if chunks.get("chunks"):
-        chunks = copy.deepcopy(chunks["chunks"])
-    elif chunks.get("json"):
-        chunks = copy.deepcopy(chunks["json"])
-    elif chunks.get("markdown"):
-        chunks = [{"text": [chunks["markdown"]]}]
-    elif chunks.get("text"):
-        chunks = [{"text": [chunks["text"]]}]
-    elif chunks.get("html"):
-        chunks = [{"text": [chunks["html"]]}]
+    chunks, embedding_token_consumption = _normalize_pipeline_output_chunks(chunks)
+
+    if not chunks:
+        PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
+        return
 
     keys = [k for o in chunks for k in list(o.keys())]
     if not any([re.match(r"q_[0-9]+_vec", k) for k in keys]):
@@ -1270,17 +1285,17 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
     return res, tk_count
 
 
-async def _detect_hierarchical_structure(chunks, hierarchical_config):
+async def _detect_hierarchical_structure(chunks, title_chunker_config):
     """
     检测文档是否有层次结构
     
     参考 core/flow 的设计理念：
-    - 不单独实现检测逻辑，而是直接调用 hierarchical_merge
+    - 不单独实现检测逻辑，而是直接调用 TitleChunker facade
     - 通过返回的 chapters 数量判断是否有结构
     
     Args:
         chunks: chunk 列表
-        hierarchical_config: 层次化配置
+        title_chunker_config: TitleChunker 配置
     
     Returns:
         bool: 是否有层次结构（chapters > 1 表示有结构）
@@ -1290,9 +1305,11 @@ async def _detect_hierarchical_structure(chunks, hierarchical_config):
     # 调用 hierarchical_merge 尝试识别结构
     result = await hierarchical_merge(
         chunks=chunks,
-        levels=hierarchical_config.get("levels") if hierarchical_config else None,
-        hierarchy=hierarchical_config.get("hierarchy", 1) if hierarchical_config else 1,
-        callback=None
+        levels=title_chunker_config.get("levels") if title_chunker_config else None,
+        hierarchy=title_chunker_config.get("hierarchy", 1) if title_chunker_config else 1,
+        callback=None,
+        method=title_chunker_config.get("method", "hierarchy") if title_chunker_config else "hierarchy",
+        include_heading_content=title_chunker_config.get("include_heading_content", False) if title_chunker_config else False
     )
     
     chapters = result.get("chapters", [])
@@ -1303,6 +1320,11 @@ async def _detect_hierarchical_structure(chunks, hierarchical_config):
     logging.info(f"Structure detection: {len(chapters)} chapters identified, has_structure={has_structure}")
     
     return has_structure
+
+
+def _get_chunk_positions(chunk):
+    positions = chunk.get("positions") or chunk.get("position_int") or []
+    return [list(pos[:5]) for pos in positions if isinstance(pos, (list, tuple)) and len(pos) >= 5]
 
 
 async def _hierarchical_merge(chunks, config, tenant_id=None, db=None):
@@ -1339,13 +1361,17 @@ async def _hierarchical_merge(chunks, config, tenant_id=None, db=None):
 
     levels = config.get("levels")
     hierarchy_level = config.get("hierarchy", 1)
+    method = config.get("method", "hierarchy")
+    include_heading_content = config.get("include_heading_content", False)
 
     # ⭐ 调用 core/flow/utils 的层次化合并
     result = await hierarchical_merge(
         chunks=chunks,
         levels=levels,
         hierarchy=hierarchy_level,
-        callback=None
+        callback=None,
+        method=method,
+        include_heading_content=include_heading_content
     )
     
     chapters = result.get("chapters", [])
@@ -1355,16 +1381,17 @@ async def _hierarchical_merge(chunks, config, tenant_id=None, db=None):
         chapter_chunks = chapter.get("chunks", [])
         
         # 合并位置信息
-        chapter_positions = []
+        chapter_positions = _get_chunk_positions(chapter)
         for chunk in chapter_chunks:
-            if "positions" in chunk and chunk["positions"]:
-                chapter_positions.extend(chunk["positions"])
+            chapter_positions.extend(_get_chunk_positions(chunk))
         
         # 合并图片（内存中处理，不上传 MinIO）
         chapter_image = None
         for chunk in chapter_chunks:
             if "image" in chunk and chunk["image"]:
                 chapter_image = concat_img(chapter_image, chunk["image"])
+        if chapter_image is None and chapter.get("image"):
+            chapter_image = chapter.get("image")
         
         # 计算页码范围
         page_range = None
@@ -1374,6 +1401,9 @@ async def _hierarchical_merge(chunks, config, tenant_id=None, db=None):
         
         # 添加到章节信息
         chapter["positions"] = chapter_positions
+        chapter["position_int"] = [tuple(pos[:5]) for pos in chapter_positions]
+        chapter["page_num_int"] = [int(pos[0]) for pos in chapter_positions]
+        chapter["top_int"] = [int(pos[3]) for pos in chapter_positions]
         chapter["image"] = chapter_image
         chapter["page_range"] = page_range
 
@@ -1388,7 +1418,7 @@ async def _hierarchical_merge(chunks, config, tenant_id=None, db=None):
     #
     # 正确的流程：
     # - 用户配置 parse_method="qwen-vl-plus" → 在 Parser 阶段对每张图片进行 VLM
-    # - HierarchicalMerger 只负责合并文本（文本中已包含图片描述）
+    # - TitleChunker 只负责合并文本（文本中已包含图片描述）
     # - 合并后的图片仅用于展示，不再进行 OCR/VLM 处理
     #
     # 参考：core/flow/parser/parser.py 第 346-375 行 - 只处理单张原始图片
@@ -1414,7 +1444,7 @@ async def _hierarchical_merge(chunks, config, tenant_id=None, db=None):
         ]
     }
 
-    logging.info(f"HierarchicalMerger: {len(chapters)} chapters identified")
+    logging.info(f"TitleChunker: {len(chapters)} chapters identified")
 
     # 调试日志：打印每个章节的信息
     for idx, ch in enumerate(chapters):
@@ -1620,7 +1650,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
 
     功能特性：
     - Parser: 文档解析（支持 PDF/Word/Excel/PPT/图片/音视频等，支持 VLM 图片理解）
-    - HierarchicalMerger: 层次化章节合并
+    - TitleChunker: 层次化章节合并
     - RAPTOR: 递归摘要聚类
     - Extractor: 元数据字段提取
     - 智能去重：smart/semantic/none
@@ -1745,7 +1775,6 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 logging.info(f"Task {task_id}: loaded file from MinIO ({len(file_content)} bytes)")
 
             # 解析文件（参考 PipelineAnalysisService._parse_uploaded_file）
-            import tempfile
             if not filename:
                 filename = os.path.basename(temp_file_path) if temp_file_path else "document"
 
@@ -1773,6 +1802,8 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 image_config = parser_config_dict.get("image", {"parse_method": "ocr", "lang": "Chinese"})
                 excel_config = parser_config_dict.get("excel", {"parse_method": "deepdoc", "output_format": "html"})
                 word_config = parser_config_dict.get("word", {"output_format": "json"})
+                code_config = parser_config_dict.get("code", {"output_format": "text"})
+                html_config = parser_config_dict.get("html", {"output_format": "text"})
                 email_config = parser_config_dict.get("email", {"output_format": "json", "fields": None})
                 video_config = parser_config_dict.get("video", {"llm_id": config.get("video_llm_name")})
                 audio_config = parser_config_dict.get("audio", {"llm_id": config.get("audio_llm_name")})
@@ -1797,6 +1828,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                     # TCADP 参数（仅当 parse_method 为 tcadp parser 时生效）
                     "table_result_type": tcadp_table_result_type,
                     "markdown_image_response_type": tcadp_markdown_image_response_type,
+                    "remove_toc": config.get("remove_toc", False),
                     # 媒体上下文
                     "table_context_size": table_context_size,
                     "image_context_size": image_context_size,
@@ -1822,8 +1854,16 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 }
                 word_config = {
                     "output_format": output_format,
+                    "remove_toc": config.get("remove_toc", False),
                     "table_context_size": table_context_size,
                     "image_context_size": image_context_size,
+                }
+                code_config = {
+                    "output_format": output_format if output_format in ["json", "text"] else "text",
+                }
+                html_config = {
+                    "output_format": output_format if output_format in ["json", "text"] else "text",
+                    "remove_toc": config.get("remove_toc", False),
                 }
                 email_config = {"output_format": output_format, "fields": config.get("email_fields")}
                 video_llm_name = config.get("video_llm_name")
@@ -1854,6 +1894,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 }
                 markdown_config = {
                     "output_format": output_format if output_format in ["json", "text"] else "json",
+                    "remove_toc": config.get("remove_toc", False),
                     "table_context_size": table_context_size,
                     "image_context_size": image_context_size,
                 }
@@ -1879,6 +1920,8 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 video_config=video_config,
                 audio_config=audio_config,
                 epub_config=epub_config,
+                code_config=code_config,
+                html_config=html_config,
                 callback=_parser_callback
             )
 
@@ -1887,13 +1930,13 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
             # 2. 切分（支持重叠，保留位置，child-parent chunking）
             callback(prog=0.20, msg="智能切分中...")
 
-            splitter_config = config.get("splitter_config") or {}
-            chunk_token_size = splitter_config.get("chunk_token_size", 512)
-            delimiters = splitter_config.get("delimiters")
-            overlapped_percent = splitter_config.get("overlapped_percent", 0.1)  # 默认 10% 重叠
-            children_delimiters = splitter_config.get("children_delimiters")  # child-parent chunking
+            token_chunker_config = config.get("splitter_config") or {}
+            chunk_token_size = token_chunker_config.get("chunk_token_size", 512)
+            delimiters = token_chunker_config.get("delimiters")
+            overlapped_percent = token_chunker_config.get("overlapped_percent", 0.1)  # 默认 10% 重叠
+            children_delimiters = token_chunker_config.get("children_delimiters")  # child-parent chunking
 
-            def _splitter_callback(prog, msg):
+            def _token_chunker_callback(prog, msg):
                 callback(prog=0.20 + prog * 0.05, msg=msg)
 
             chunked_result = await split_chunks(
@@ -1904,7 +1947,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 children_delimiters=children_delimiters,
                 table_context_size=table_context_size,
                 image_context_size=image_context_size,
-                callback=_splitter_callback
+                callback=_token_chunker_callback
             )
 
             # 3. 转换为 analyze_v2 格式
@@ -1915,9 +1958,15 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                     "embeddings": None
                 }
 
+                for field in ("doc_type_kwd", "position_int", "page_num_int", "top_int", "img_id"):
+                    if field in c:
+                        chunk_dict[field] = c[field]
+
                 # 保留位置信息（如果有）
                 if "positions" in c:
                     chunk_dict["positions"] = c["positions"]
+                elif "position_int" in c:
+                    chunk_dict["positions"] = c["position_int"]
 
                 # 保留图片（如果有）
                 if "image" in c and c["image"]:
@@ -1957,13 +2006,13 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
 
         # 2. 根据策略处理（参考 PipelineAnalysisService._process_with_strategy）
         strategy = config.get("processing_strategy", "auto")
-        hierarchical_config = config.get("hierarchical_config")
+        title_chunker_config = config.get("hierarchical_config")
         raptor_config = config.get("raptor_config") or {}
 
         # 2.1 自动选择策略（参考 PipelineAnalysisService._auto_select_strategy）
         if strategy == "auto":
             # 检测是否有层次结构（复用 core/flow/utils 的 hierarchical_merge）
-            has_structure = await _detect_hierarchical_structure(chunks, hierarchical_config)
+            has_structure = await _detect_hierarchical_structure(chunks, title_chunker_config)
             is_long = len(chunks) > 50
 
             # ⚠️ 保护机制：如果没有检测到结构，不要使用 hierarchical 策略
@@ -1992,19 +2041,19 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
             callback(prog=0.5, msg=f"使用简单策略，共 {len(summaries)} 个片段")
 
         elif strategy == "hierarchical":
-            # 使用 HierarchicalMerger（参考 core/flow/hierarchical_merger）
-            components_used.append("HierarchicalMerger")
+            # 使用 TitleChunker（参考 core/flow/chunker/title_chunker）
+            components_used.append("TitleChunker")
             callback(prog=0.3, msg="层次化合并处理...")
 
             # ✨ 传递 tenant_id 和 db 以支持 VLM 图片理解
-            hierarchical_result = await _hierarchical_merge(chunks, hierarchical_config, tenant_id=tenant_id, db=db)
+            hierarchical_result = await _hierarchical_merge(chunks, title_chunker_config, tenant_id=tenant_id, db=db)
             summaries = hierarchical_result.get("summaries", [])
             structure_info = hierarchical_result.get("structure")
 
             # ⚠️ 保护机制：检查是否真的识别出了结构
             if len(summaries) == 1 and len(chunks) > 10:
                 logging.warning(
-                    f"HierarchicalMerger only identified 1 chapter from {len(chunks)} chunks. "
+                    f"TitleChunker only identified 1 chapter from {len(chunks)} chunks. "
                     f"This may indicate no matching title structure was found. "
                     f"Consider using 'auto' strategy or adjusting hierarchical_config."
                 )
@@ -2012,8 +2061,8 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
             callback(prog=0.7, msg=f"层次化合并完成，{len(summaries)} 个章节")
 
         elif strategy == "hybrid":
-            # 混合：先 HierarchicalMerger，再 RAPTOR
-            components_used.extend(["HierarchicalMerger", "RAPTOR"])
+            # 混合：先 TitleChunker，再 RAPTOR
+            components_used.extend(["TitleChunker", "RAPTOR"])
             callback(prog=0.3, msg="混合处理：层次化 + RAPTOR...")
             raptor_chat_config = get_model_config_by_type_and_name(db, chat_mdl.tenant_id, LLMType.CHAT.value, chat_mdl.llm_name)
             raptor_chat_mdl = LLMBundle(None, chat_mdl.tenant_id, raptor_chat_config)
@@ -2022,14 +2071,14 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
 
             # 先层次化
             # ✨ 传递 tenant_id 和 db 以支持 VLM 图片理解
-            hierarchical_result = await _hierarchical_merge(chunks, hierarchical_config, tenant_id=tenant_id, db=db)
+            hierarchical_result = await _hierarchical_merge(chunks, title_chunker_config, tenant_id=tenant_id, db=db)
             chapters = hierarchical_result.get("chapters", [])
             structure_info = hierarchical_result.get("structure")
 
             # ⚠️ 保护机制：检查是否真的识别出了结构
             if len(chapters) == 1 and len(chunks) > 10:
                 logging.warning(
-                    f"HierarchicalMerger only identified 1 chapter from {len(chunks)} chunks in hybrid strategy. "
+                    f"TitleChunker only identified 1 chapter from {len(chunks)} chunks in hybrid strategy. "
                     f"Falling back to RAPTOR-only processing to avoid creating a single huge chapter."
                 )
                 # 降级为纯 RAPTOR 策略：构造一个完整的 chapter 对象
@@ -2065,7 +2114,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                         if len(embd) > 0:
                             chapter_raptor_inputs.append((text, embd))
                             # ✨ 保存元数据
-                            positions = chunk.get("positions", [])
+                            positions = _get_chunk_positions(chunk)
                             chunk_metadata.append({
                                 "positions": positions,
                                 "image": chunk.get("image"),
@@ -2124,9 +2173,10 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 else:
                     # ✨ 章节较短，直接使用（保留位置信息）
                     for c in chapter_chunks:
+                        positions = _get_chunk_positions(c)
                         all_summaries.append({
                             "text": c.get("content_with_weight", ""),
-                            "positions": c.get("positions", []),
+                            "positions": positions,
                             "image": c.get("image")
                         })
 
@@ -2298,7 +2348,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
             }
         }
 
-        # 添加结构信息（如果使用了 HierarchicalMerger）
+        # 添加结构信息（如果使用了 TitleChunker）
         if structure_info:
             result["structure"] = structure_info
 

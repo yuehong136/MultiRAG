@@ -2,7 +2,6 @@ import asyncio
 import logging
 import re
 import time
-from copy import deepcopy
 
 from sklearn.metrics.pairwise import cosine_similarity
 from sqlalchemy.orm import Session
@@ -14,7 +13,6 @@ from api.db.services.metadata_extractor import BatchMetadataExtractor
 from common import settings
 from common.constants import LLMType
 from common.misc_utils import thread_pool_exec
-from core.nlp import naive_merge
 from core.nlp.term_weight import Dealer as TermWeightDealer
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
 
@@ -173,8 +171,8 @@ class PipelineAnalysisService:
     
     集成 core/flow 下的所有组件：
     - Parser: 文档解析
-    - HierarchicalMerger: 按标题分层
-    - Splitter: 智能切片（带重叠）
+    - TitleChunker: 按标题分层
+    - TokenChunker: 智能切片（带重叠）
     - RAPTOR: 聚类递归摘要
     - Extractor: 灵活元数据提取
     """
@@ -212,14 +210,16 @@ class PipelineAnalysisService:
             parse_method: 解析方法 (auto | deepdoc | plain_text | ocr | vlm)
             output_format: 输出格式 (json | text | markdown | html)
             processing_strategy: 处理策略 (auto | hierarchical | raptor | hybrid | simple)
-            hierarchical_config: HierarchicalMerger 配置
-            splitter_config: Splitter 配置（默认 overlapped_percent=0.1）
+            hierarchical_config: TitleChunker 配置（请求字段名保留 hierarchical_config）
+            splitter_config: TokenChunker 配置（请求字段名保留 splitter_config）
             raptor_config: RAPTOR 配置
             metadata_fields: 元数据字段配置列表
             dedup_strategy: 去重策略 (smart | semantic | none)
             use_cache: 是否使用缓存
         """
         start_time = time.time()
+        title_chunker_config = hierarchical_config
+        token_chunker_config = splitter_config
         
         # 1. 获取文档 chunks（使用 core/flow 逻辑）
         chunks = await self._get_document_chunks(
@@ -227,7 +227,7 @@ class PipelineAnalysisService:
             file, 
             filename, 
             kb_id,
-            splitter_config=splitter_config,
+            token_chunker_config=token_chunker_config,
             parse_method=parse_method
         )
         
@@ -236,12 +236,12 @@ class PipelineAnalysisService:
         
         logger.info(f"Got {len(chunks)} chunks with flow parser")
         
-        # 标记使用了 Splitter
-        components_used = ["Parser", "Splitter"]
+        # 标记使用了 TokenChunker
+        components_used = ["Parser", "TokenChunker"]
         
         # 2. 策略选择
         if processing_strategy == "auto":
-            strategy = self._auto_select_strategy(chunks, hierarchical_config)
+            strategy = self._auto_select_strategy(chunks, title_chunker_config)
             logger.info(f"Auto-selected strategy: {strategy}")
         else:
             strategy = processing_strategy
@@ -250,8 +250,8 @@ class PipelineAnalysisService:
         processed_data = await self._process_with_strategy(
             chunks=chunks,
             strategy=strategy,
-            hierarchical_config=hierarchical_config,
-            splitter_config=splitter_config,
+            title_chunker_config=title_chunker_config,
+            token_chunker_config=token_chunker_config,
             raptor_config=raptor_config,
             components_used=components_used
         )
@@ -279,7 +279,7 @@ class PipelineAnalysisService:
             }
         }
         
-        # 添加结构信息（如果使用了 HierarchicalMerger）
+        # 添加结构信息（如果使用了 TitleChunker）
         if "structure" in processed_data:
             result["structure"] = processed_data["structure"]
         
@@ -295,7 +295,7 @@ class PipelineAnalysisService:
         file=None,
         filename: str | None = None,
         kb_id: str | None = None,
-        splitter_config: dict | None = None,
+        token_chunker_config: dict | None = None,
         parse_method: str = "auto"
     ) -> list[dict]:
         """获取文档 chunks"""
@@ -316,7 +316,7 @@ class PipelineAnalysisService:
                 filename,
                 parse_method=parse_method,
                 output_format="json",
-                splitter_config=splitter_config
+                token_chunker_config=token_chunker_config
             )
         
         # 场景2: 已上传文档
@@ -372,7 +372,7 @@ class PipelineAnalysisService:
         filename: str | None,
         parse_method: str = "auto",
         output_format: str = "json",
-        splitter_config: dict | None = None
+        token_chunker_config: dict | None = None
     ) -> list[dict]:
         """
         使用 core/flow 逻辑解析上传文件（保留位置信息）
@@ -382,14 +382,11 @@ class PipelineAnalysisService:
             filename: 文件名
             parse_method: 解析方法（auto/deepdoc/plain_text等）
             output_format: 输出格式
-            splitter_config: 切分配置
+            token_chunker_config: TokenChunker 配置
         
         Returns:
             chunks with positions and images
         """
-        import tempfile
-        import os
-        
         # 获取文件名
         if hasattr(file, 'filename'):
             fname = file.filename
@@ -418,12 +415,28 @@ class PipelineAnalysisService:
                     parse_method if parse_method not in ["auto", "ocr", "vlm"] else "deepdoc"
                 ),
                 "output_format": output_format,
-                "lang": "Chinese"
+                "lang": "Chinese",
+                "remove_toc": False,
             }
             image_config = {
                 "parse_method": parse_method if parse_method in ["ocr", "vlm"] else "ocr",
                 "llm_name": None,
-                "lang": "Chinese"
+                "lang": "Chinese",
+            }
+            word_config = {
+                "output_format": output_format if output_format in ["json", "markdown"] else "json",
+                "remove_toc": False,
+            }
+            markdown_config = {
+                "output_format": output_format if output_format in ["json", "text"] else "json",
+                "remove_toc": False,
+            }
+            code_config = {
+                "output_format": output_format if output_format in ["json", "text"] else "text",
+            }
+            html_config = {
+                "output_format": output_format if output_format in ["json", "text"] else "text",
+                "remove_toc": False,
             }
             
             parsed_result = await parse_file(
@@ -431,18 +444,22 @@ class PipelineAnalysisService:
                 binary=file_content,
                 tenant_id=self.tenant_id,
                 pdf_config=pdf_config,
-                image_config=image_config
+                image_config=image_config,
+                word_config=word_config,
+                markdown_config=markdown_config,
+                code_config=code_config,
+                html_config=html_config,
             )
             
             logger.info(f"Parsed with flow: format={parsed_result.get('output_format')}")
             
             # 2. 切分（保留位置）
-            if splitter_config is None:
-                splitter_config = {}
+            if token_chunker_config is None:
+                token_chunker_config = {}
             
-            chunk_token_size = splitter_config.get("chunk_token_size", 512)
-            delimiters = splitter_config.get("delimiters")
-            overlapped_percent = splitter_config.get("overlapped_percent", 0.1)  # 默认 10% 重叠
+            chunk_token_size = token_chunker_config.get("chunk_token_size", 512)
+            delimiters = token_chunker_config.get("delimiters")
+            overlapped_percent = token_chunker_config.get("overlapped_percent", 0.1)  # 默认 10% 重叠
             
             chunked_result = await split_chunks(
                 parsed_result=parsed_result,
@@ -458,10 +475,16 @@ class PipelineAnalysisService:
                     "content_with_weight": c.get("text", ""),
                     "content_ltks": c.get("text", "")
                 }
+
+                for field in ("doc_type_kwd", "position_int", "page_num_int", "top_int", "img_id"):
+                    if field in c:
+                        chunk_dict[field] = c[field]
                 
                 # 保留位置信息
                 if "positions" in c:
                     chunk_dict["positions"] = c["positions"]
+                elif "position_int" in c:
+                    chunk_dict["positions"] = c["position_int"]
                 
                 # 保留图片
                 if "image" in c and c["image"]:
@@ -568,26 +591,26 @@ class PipelineAnalysisService:
     def _auto_select_strategy(
         self,
         chunks: list[dict],
-        hierarchical_config: dict | None
+        title_chunker_config: dict | None
     ) -> str:
         """
         自动选择处理策略
         
         Args:
             chunks: 文档切片列表
-            hierarchical_config: 层次化配置
+            title_chunker_config: TitleChunker 配置
             
         Returns:
             策略名称
         """
         chunk_count = len(chunks)
-        has_structure = self._detect_hierarchical_structure(chunks, hierarchical_config)
+        has_structure = self._detect_hierarchical_structure(chunks, title_chunker_config)
         is_long = chunk_count > 50
         
         if has_structure and is_long:
-            return "hybrid"  # HierarchicalMerger + RAPTOR
+            return "hybrid"  # TitleChunker + RAPTOR
         elif has_structure:
-            return "hierarchical"  # 只用 HierarchicalMerger
+            return "hierarchical"  # 只用 TitleChunker
         elif is_long:
             return "raptor"  # 只用 RAPTOR
         else:
@@ -596,19 +619,19 @@ class PipelineAnalysisService:
     def _detect_hierarchical_structure(
         self,
         chunks: list[dict],
-        hierarchical_config: dict | None
+        title_chunker_config: dict | None
     ) -> bool:
         """
         检测文档是否有层次结构
         
         Args:
             chunks: 文档切片
-            hierarchical_config: 层次化配置（包含正则列表）
+            title_chunker_config: TitleChunker 配置（包含正则列表）
             
         Returns:
             是否有层次结构
         """
-        if not hierarchical_config or not hierarchical_config.get("levels"):
+        if not title_chunker_config or not title_chunker_config.get("levels"):
             # 使用默认规则检测
             default_patterns = [
                 r"^#\s+",  # Markdown 一级标题
@@ -618,7 +641,7 @@ class PipelineAnalysisService:
             ]
         else:
             # 使用用户配置的规则
-            levels = hierarchical_config.get("levels", [])
+            levels = title_chunker_config.get("levels", [])
             default_patterns = []
             for level_patterns in levels:
                 default_patterns.extend(level_patterns)
@@ -649,8 +672,8 @@ class PipelineAnalysisService:
         self,
         chunks: list[dict],
         strategy: str,
-        hierarchical_config: dict | None,
-        splitter_config: dict | None,
+        title_chunker_config: dict | None,
+        token_chunker_config: dict | None,
         raptor_config: dict | None,
         components_used: list[str]
     ) -> dict:
@@ -671,9 +694,9 @@ class PipelineAnalysisService:
             }
         
         elif strategy == "hierarchical":
-            # 使用 HierarchicalMerger
-            components_used.append("HierarchicalMerger")
-            return await self._hierarchical_merge(chunks, hierarchical_config)
+            # 使用 TitleChunker
+            components_used.append("TitleChunker")
+            return await self._hierarchical_merge(chunks, title_chunker_config)
         
         elif strategy == "raptor":
             # 使用 RAPTOR
@@ -682,10 +705,10 @@ class PipelineAnalysisService:
         
         elif strategy == "hybrid":
             # 混合：先层次化，再 RAPTOR
-            components_used.extend(["HierarchicalMerger", "RAPTOR"])
+            components_used.extend(["TitleChunker", "RAPTOR"])
             
             # 先按标题分组
-            hierarchical_result = await self._hierarchical_merge(chunks, hierarchical_config)
+            hierarchical_result = await self._hierarchical_merge(chunks, title_chunker_config)
             
             # 对每个章节独立运行 RAPTOR
             all_summaries = []
@@ -715,7 +738,7 @@ class PipelineAnalysisService:
         config: dict | None
     ) -> dict:
         """
-        层次化合并 - 参考 core/flow/hierarchical_merger/hierarchical_merger.py
+        层次化合并 - 参考 core/flow/chunker/title_chunker/
         
         Args:
             chunks: 文档切片
@@ -724,6 +747,8 @@ class PipelineAnalysisService:
                 "hierarchy": 1
             }
         """
+        from core.flow.utils import hierarchical_merge
+
         # 默认配置
         if not config:
             config = {
@@ -734,109 +759,19 @@ class PipelineAnalysisService:
                 "hierarchy": 1
             }
         
-        levels = config.get("levels", [])
+        levels = config.get("levels")
         hierarchy_level = config.get("hierarchy", 1)
-        
-        # 提取文本行
-        lines = [c.get("content_with_weight", "") for c in chunks]
-        
-        # 识别每行的层级
-        matches = []
-        for txt in lines:
-            matched_level = None
-            for lvl, patterns in enumerate(levels):
-                for pattern in patterns:
-                    if re.search(pattern, txt, re.MULTILINE):
-                        matched_level = lvl
-                        break
-                if matched_level is not None:
-                    break
-            
-            # 如果没匹配到任何层级，设为最底层
-            if matched_level is None:
-                matches.append(len(levels))
-            else:
-                matches.append(matched_level)
-        
-        # 构建层次化树状结构
-        root = {"level": -1, "index": -1, "texts": [], "children": []}
-        
-        for i, level in enumerate(matches):
-            if level == 0:
-                # 一级标题，直接添加到 root
-                root["children"].append({
-                    "level": level,
-                    "index": i,
-                    "texts": [],
-                    "children": []
-                })
-            elif level == len(levels):
-                # 普通文本，添加到最近的节点
-                def add_text(node):
-                    if not node["children"]:
-                        node["texts"].append(i)
-                    else:
-                        add_text(node["children"][-1])
-                
-                add_text(root)
-            else:
-                # 中间层级标题
-                def add_child(node, target_level, idx):
-                    if not node["children"] or target_level == node["level"] + 1:
-                        node["children"].append({
-                            "level": target_level,
-                            "index": idx,
-                            "texts": [],
-                            "children": []
-                        })
-                    else:
-                        add_child(node["children"][-1], target_level, idx)
-                
-                add_child(root, level, i)
-        
-        # 按 hierarchy 级别收集路径
-        all_paths = []
-        
-        def collect_paths(node, path, depth):
-            if not node["children"] and path:
-                all_paths.append(path)
-            
-            for child in node["children"]:
-                if depth < hierarchy_level:
-                    new_path = deepcopy(path)
-                else:
-                    new_path = path
-                
-                new_path.extend([child["index"], *child["texts"]])
-                collect_paths(child, new_path, depth + 1)
-                
-                if depth == hierarchy_level:
-                    all_paths.append(new_path)
-        
-        if root["texts"]:
-            all_paths.insert(0, root["texts"])
-        
-        collect_paths(root, [], 0)
-        
-        # 合并文本
-        chapters = []
-        for path_indices in all_paths:
-            if not path_indices:
-                continue
-            
-            # 提取该路径下的所有文本
-            chapter_text = "\n".join([lines[i] for i in path_indices])
-            chapter_chunks = [chunks[i] for i in path_indices]
-            
-            # 提取标题（路径的第一个index）
-            title_text = lines[path_indices[0]] if path_indices else ""
-            
-            chapters.append({
-                "title": title_text.strip(),
-                "text": chapter_text,
-                "chunks": chapter_chunks,
-                "chunk_indices": path_indices
-            })
+        method = config.get("method", "hierarchy")
+        include_heading_content = config.get("include_heading_content", False)
+
+        result = await hierarchical_merge(
+            chunks=chunks,
+            levels=levels,
+            hierarchy=hierarchy_level,
+            method=method,
+            include_heading_content=include_heading_content,
+        )
+        chapters = result.get("chapters", [])
         
         # 构建结构信息
         structure = {
@@ -851,7 +786,7 @@ class PipelineAnalysisService:
             ]
         }
         
-        logger.info(f"HierarchicalMerger: {len(chapters)} chapters identified")
+        logger.info(f"TitleChunker: {len(chapters)} chapters identified")
         
         return {
             "chapters": chapters,
@@ -865,7 +800,7 @@ class PipelineAnalysisService:
         config: dict | None
     ) -> list[dict]:
         """
-        智能切片 - 参考 core/flow/splitter/splitter.py
+        智能切片 - 参考 core/flow/chunker/token_chunker.py
         
         Args:
             chunks: 原始切片
@@ -886,36 +821,55 @@ class PipelineAnalysisService:
         chunk_token_size = config.get("chunk_token_size", 512)
         delimiters = config.get("delimiters", ["\n\n", "\n", "。"])
         overlapped_percent = config.get("overlapped_percent", 0.1)
-        
-        # 合并所有文本
-        full_text = "\n".join([c.get("content_with_weight", "") for c in chunks])
-        
-        # 构建分隔符字符串
-        delimiter_str = ""
-        for d in delimiters:
-            if len(d) > 1:
-                delimiter_str += f"`{d}`"
-            else:
-                delimiter_str += d
-        
-        # 使用 naive_merge 进行智能切片
-        split_chunks = naive_merge(
-            full_text,
-            chunk_token_size,
-            delimiter_str,
-            overlapped_percent
+        children_delimiters = config.get("children_delimiters")
+        table_context_size = config.get("table_context_size", 0)
+        image_context_size = config.get("image_context_size", 0)
+
+        from core.flow.utils import split_chunks
+
+        parsed_result = {
+            "output_format": "json",
+            "json": [
+                {
+                    **c,
+                    "text": c.get("text") or c.get("content_with_weight", ""),
+                    "doc_type_kwd": c.get("doc_type_kwd", "text"),
+                }
+                for c in chunks
+            ],
+        }
+        split_result = await split_chunks(
+            parsed_result=parsed_result,
+            chunk_token_size=chunk_token_size,
+            delimiters=delimiters,
+            overlapped_percent=overlapped_percent,
+            children_delimiters=children_delimiters,
+            table_context_size=table_context_size,
+            image_context_size=image_context_size,
         )
-        
+
         # 转换为标准格式
         result_chunks = []
-        for text in split_chunks:
-            if text.strip():
-                result_chunks.append({
-                    "content_with_weight": text.strip(),
-                    "content_ltks": text.strip()
-                })
-        
-        logger.info(f"Splitter: {len(chunks)} → {len(result_chunks)} chunks (overlap: {overlapped_percent*100}%)")
+        for chunk in split_result:
+            text = chunk.get("text", "")
+            if not text.strip():
+                continue
+            result_chunk = {
+                "content_with_weight": text.strip(),
+                "content_ltks": text.strip(),
+            }
+            for field in ("doc_type_kwd", "position_int", "page_num_int", "top_int", "img_id", "mom"):
+                if field in chunk:
+                    result_chunk[field] = chunk[field]
+            if "positions" in chunk:
+                result_chunk["positions"] = chunk["positions"]
+            elif "position_int" in chunk:
+                result_chunk["positions"] = chunk["position_int"]
+            if "image" in chunk and chunk["image"]:
+                result_chunk["image"] = chunk["image"]
+            result_chunks.append(result_chunk)
+
+        logger.info(f"TokenChunker: {len(chunks)} → {len(result_chunks)} chunks (overlap: {overlapped_percent*100}%)")
         
         return result_chunks
     

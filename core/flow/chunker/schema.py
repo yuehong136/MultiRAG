@@ -12,12 +12,13 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class SplitterFromUpstream(BaseModel):
+class TokenChunkerFromUpstream(BaseModel):
     created_time: float | None = Field(default=None, alias="_created_time")
     elapsed_time: float | None = Field(default=None, alias="_elapsed_time")
 
@@ -33,6 +34,3 @@ class SplitterFromUpstream(BaseModel):
     html_result: str | None = Field(default=None, alias="html")
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    # def to_dict(self, *, exclude_none: bool = True) -> dict:
-    #     return self.model_dump(by_alias=True, exclude_none=exclude_none)

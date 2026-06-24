@@ -27,6 +27,7 @@ from common.token_utils import num_tokens_from_string
 from common.constants import ParserType
 from common.parser_config_utils import normalize_layout_recognizer
 from deepdoc.parser import PdfParser, DocxParser
+from deepdoc.parser.utils import extract_pdf_outlines
 from deepdoc.parser.figure_parser import vision_figure_parser_pdf_wrapper, vision_figure_parser_docx_wrapper
 
 
@@ -212,12 +213,13 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
 
         callback(0.8, "Finish parsing.")
 
-        if len(sections) > 0 and len(pdf_parser.outlines) / len(sections) > 0.03:
-            max_lvl = max([lvl for _, lvl in pdf_parser.outlines])
+        outlines = extract_pdf_outlines(binary if binary is not None else filename)
+        if len(sections) > 0 and len(outlines) / len(sections) > 0.03:
+            max_lvl = max([lvl for _, lvl, _ in outlines])
             most_level = max(0, max_lvl - 1)
             levels = []
             for txt, _, _ in sections:
-                for t, lvl in pdf_parser.outlines:
+                for t, lvl, _ in outlines:
                     tks = set([t[i] + t[i + 1] for i in range(len(t) - 1)])
                     tks_ = set([txt[i] + txt[i + 1] for i in range(min(len(t), len(txt) - 1))])
                     if len(set(tks & tks_)) / max([len(tks), len(tks_), 1]) > 0.8:
