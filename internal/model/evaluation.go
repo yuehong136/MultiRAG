@@ -28,7 +28,8 @@ type EvaluationDataset struct {
 	// Custom time fields (not null) to match Python
 	CreateTime int64 `gorm:"column:create_time;not null;index" json:"create_time"`
 	UpdateTime int64 `gorm:"column:update_time;not null" json:"update_time"`
-	Status     int64 `gorm:"column:status;default:1;index" json:"status"`
+	// Python uses String(1) ("1"=valid, "0"=invalid); keep Go aligned to varchar(1) to avoid type drift
+	Status string `gorm:"column:status;size:1;not null;default:1;index" json:"status"`
 }
 
 // TableName specify table name
