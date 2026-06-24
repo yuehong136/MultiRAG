@@ -935,6 +935,66 @@ func (s *UserService) SetTenantInfo(userID string, req *SetTenantInfoRequest) er
 	return nil
 }
 
+// UserTenantService user tenant service
+// Provides business logic for user-tenant relationship management
+type UserTenantService struct {
+	userTenantDAO *dao.UserTenantDAO
+}
+
+// NewUserTenantService creates a new UserTenantService instance
+func NewUserTenantService() *UserTenantService {
+	return &UserTenantService{
+		userTenantDAO: dao.NewUserTenantDAO(),
+	}
+}
+
+// UserTenantRelation represents a user-tenant relationship response
+// This structure matches the Python implementation's return format
+type UserTenantRelation struct {
+	ID       string `json:"id"`
+	UserID   string `json:"user_id"`
+	TenantID string `json:"tenant_id"`
+	Role     string `json:"role"`
+}
+
+// GetUserTenantRelationByUserID retrieves all user-tenant relationships for a given user ID
+//
+// This method returns a list of user-tenant relationships with selected fields:
+//   - id: the relationship ID
+//   - user_id: the user ID
+//   - tenant_id: the tenant ID
+//   - role: the user's role in the tenant
+//
+// Parameters:
+//   - userID: the unique identifier of the user
+//
+// Returns:
+//   - []*UserTenantRelation: list of user-tenant relationships
+//   - error: error if the operation fails, nil otherwise
+func (s *UserTenantService) GetUserTenantRelationByUserID(userID string) ([]*UserTenantRelation, error) {
+	relations, err := s.userTenantDAO.GetByUserID(userID)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*UserTenantRelation, len(relations))
+	for i, rel := range relations {
+		result[i] = convertToUserTenantRelation(rel)
+	}
+
+	return result, nil
+}
+
+// convertToUserTenantRelation converts model.UserTenant to UserTenantRelation
+func convertToUserTenantRelation(userTenant *model.UserTenant) *UserTenantRelation {
+	return &UserTenantRelation{
+		ID:       userTenant.ID,
+		UserID:   userTenant.UserID,
+		TenantID: userTenant.TenantID,
+		Role:     userTenant.Role,
+	}
+}
+
 // GetUserByAPIToken gets user by access key from Authorization header.
 // This is used for API token authentication.
 // The authorization parameter should be in format: "Bearer <token>" or just "<token>".
