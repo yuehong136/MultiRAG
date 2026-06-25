@@ -1224,7 +1224,8 @@ def list_docs(
 @router.post("/list", summary="列出文档", response_description="成功列出文档")  # 改为 POST
 def list_docs(
         filter_params: DocumentFilter,  # JSON body 参数
-        kb_id: str = Query(..., description="知识库 ID"),
+        dataset_id: str | None = Query(None, alias="id", description="数据集 ID"),
+        legacy_kb_id: str | None = Query(None, alias="kb_id", include_in_schema=False),
         keywords: str = Query("", description="关键字"),
         page: int = Query(0, description="分页页码"),
         page_size: int = Query(0, description="分页大小"),
@@ -1248,7 +1249,7 @@ def list_docs(
     #### Query Parameters
     | 参数名              | 类型      | 必填 | 默认值       | 描述                                                    |
     |---------------------|-----------|------|-------------|--------------------------------------------------------|
-    | `kb_id`             | `string`  | 是   | -           | 知识库的唯一标识符                                      |
+    | `id`                | `string`  | 是   | -           | 数据集的唯一标识符                                      |
     | `keywords`          | `string`  | 否   | ""          | 搜索关键词，支持文档名称模糊匹配                        |
     | `page`              | `int`     | 否   | 0           | 页码，从0开始，0表示不分页                              |
     | `page_size`         | `int`     | 否   | 0           | 每页返回的文档数量，0表示不分页                          |
@@ -1300,11 +1301,11 @@ def list_docs(
 
     #### 错误响应
 
-    - **400: 知识库ID缺失**
+    - **400: 数据集ID缺失**
         ```json
         {
             "retcode": 400,
-            "retmsg": "Lack of \"KB ID\"",
+            "retmsg": "Dataset ID is required for listing files.",
             "data": false
         }
         ```
@@ -1383,37 +1384,37 @@ def list_docs(
 
     #### 基本查询
     ```
-    POST /v1/document/list?kb_id=kb_123456
+    POST /v1/document/list?id=kb_123456
     Body: {}
     ```
 
     #### 关键词搜索
     ```
-    POST /v1/document/list?kb_id=kb_123456&keywords=技术文档
+    POST /v1/document/list?id=kb_123456&keywords=技术文档
     Body: {}
     ```
 
     #### 分页查询
     ```
-    POST /v1/document/list?kb_id=kb_123456&page=2&page_size=20
+    POST /v1/document/list?id=kb_123456&page=2&page_size=20
     Body: {}
     ```
 
     #### 自定义排序
     ```
-    POST /v1/document/list?kb_id=kb_123456&orderby=size&desc=false
+    POST /v1/document/list?id=kb_123456&orderby=size&desc=false
     Body: {}
     ```
 
     #### 按时间范围筛选
     ```
-    POST /v1/document/list?kb_id=kb_123456&create_time_from=1700000000&create_time_to=1700500000
+    POST /v1/document/list?id=kb_123456&create_time_from=1700000000&create_time_to=1700500000
     Body: {}
     ```
 
     #### 多条件过滤
     ```
-    POST /v1/document/list?kb_id=kb_123456
+    POST /v1/document/list?id=kb_123456
     Body: {
         "run_status": ["done", "running"],
         "types": ["pdf", "docx"],
@@ -1431,9 +1432,22 @@ def list_docs(
     - **性能优化**: 建议合理设置page_size，避免单次查询过多数据
     - **搜索范围**: 关键词搜索仅匹配文档名称，不包含文档内容
     - **时间过滤**: `create_time_from` 和 `create_time_to` 为 Unix 时间戳，0 表示不限制
+    - **兼容参数**: 旧参数 `kb_id` 暂时兼容，推荐新调用方使用 `id`
     """
+    if dataset_id and legacy_kb_id and dataset_id != legacy_kb_id:
+        return construct_json_result(
+            data=False,
+            message='Query parameters "id" and "kb_id" must match.',
+            code=RetCode.ARGUMENT_ERROR,
+        )
+
+    kb_id = dataset_id or legacy_kb_id
     if not kb_id:
-        return construct_json_result(data=False, message='Lack of "KB ID"', code=RetCode.ARGUMENT_ERROR)
+        return construct_json_result(
+            data=False,
+            message="Dataset ID is required for listing files.",
+            code=RetCode.ARGUMENT_ERROR,
+        )
 
     tenants = UserTenantService.query(db, user_id=user.id)
     for tenant in tenants:

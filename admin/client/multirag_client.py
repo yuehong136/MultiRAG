@@ -1732,7 +1732,7 @@ class MultiRAGClient:
         return None
 
     def _list_documents(self, dataset_name: str, dataset_id: str) -> list | None:
-        response = self.http_client.request("POST", f"document/list?kb_id={dataset_id}", json_body={},
+        response = self.http_client.request("POST", f"document/list?id={dataset_id}", json_body={},
                                             use_api_base=False, auth_kind="web")
         res_json = response.json()
         if response.status_code != 200:
