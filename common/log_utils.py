@@ -5,9 +5,10 @@ from logging.handlers import RotatingFileHandler
 from common.file_utils import get_project_base_directory
 
 initialized_root_logger = False
+pkg_levels = {}  # 提为模块级，以支持运行时动态修改
 
 def init_root_logger(logfile_basename: str, log_format: str = "%(asctime)-15s %(levelname)-8s %(process)d %(message)s"):
-    global initialized_root_logger
+    global initialized_root_logger, pkg_levels
     if initialized_root_logger:
         return
     initialized_root_logger = True
@@ -30,7 +31,6 @@ def init_root_logger(logfile_basename: str, log_format: str = "%(asctime)-15s %(
     logging.captureWarnings(True)
 
     LOG_LEVELS = os.environ.get("LOG_LEVELS", "")
-    pkg_levels = {}
     for pkg_name_level in LOG_LEVELS.split(","):
         terms = pkg_name_level.split("=")
         if len(terms) != 2:
@@ -54,6 +54,24 @@ def init_root_logger(logfile_basename: str, log_format: str = "%(asctime)-15s %(
 
     msg = f"{logfile_basename} log path: {log_path}, log levels: {pkg_levels}"
     logger.info(msg)
+
+
+def set_log_level(pkg_name: str, level: str) -> bool:
+    """运行时设置指定包的日志级别，成功返回 True。"""
+    global pkg_levels
+    level_value = logging.getLevelName(level.strip().upper())
+    if not isinstance(level_value, int):
+        return False
+    pkg_levels[pkg_name] = logging.getLevelName(level_value)
+    pkg_logger = logging.getLogger(pkg_name)
+    pkg_logger.setLevel(level_value)
+    return True
+
+
+def get_log_levels() -> dict:
+    """获取所有包的当前日志级别。"""
+    global pkg_levels
+    return dict(pkg_levels)
 
 
 def log_exception(e, *args):

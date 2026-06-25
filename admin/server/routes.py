@@ -13,6 +13,7 @@ from api.db.db_models import get_db
 from api.utils.api_utils import generate_confirmation_token
 from common.time_utils import current_timestamp, datetime_format
 from common.versions import get_multirag_version
+from common.log_utils import get_log_levels, set_log_level
 
 
 # ========== 请求/响应模型定义 ==========
@@ -940,5 +941,50 @@ def test_sandbox_connection(
         return success_response(res)
     except AdminException as e:
         return error_response(e.message, e.code)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+class LogLevelRequest(BaseModel):
+    """设置日志级别请求"""
+    pkg_name: str = Field(..., description='包名 (如 "core.utils.es_conn")')
+    level: str = Field(..., description="日志级别 (DEBUG, INFO, WARNING, ERROR)")
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {"pkg_name": "core.utils.es_conn", "level": "DEBUG"}
+    })
+
+
+@admin_router.get(
+    "/log_levels",
+    response_model=APIResponse[dict],
+    summary="获取日志级别",
+    description="获取所有包的当前日志级别"
+)
+def get_logger_levels(user=Depends(admin_manager)) -> APIResponse[dict]:
+    """获取所有包的当前日志级别"""
+    try:
+        res = get_log_levels()
+        return success_response(res, "Get log levels")
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+@admin_router.put(
+    "/log_levels",
+    response_model=APIResponse[dict],
+    summary="设置日志级别",
+    description="设置指定包的日志级别"
+)
+def set_logger_level(
+    data: LogLevelRequest,
+    user=Depends(admin_manager)
+) -> APIResponse[dict]:
+    """设置指定包的日志级别"""
+    try:
+        success = set_log_level(data.pkg_name, data.level)
+        if success:
+            return success_response({"pkg_name": data.pkg_name, "level": data.level}, "Log level updated successfully")
+        return error_response(f"Invalid log level: {data.level}", 400)
     except Exception as e:
         return error_response(str(e), 500)

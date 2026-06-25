@@ -27,6 +27,7 @@ from api.utils.api_utils import get_json_result, get_data_error_result, server_e
 from api.utils.health_utils import run_health_checks, is_health_result_ok, get_oceanbase_status
 from common.versions import get_multirag_version
 from common.time_utils import current_timestamp, datetime_format
+from common.log_utils import get_log_levels, set_log_level
 from common import settings
 from core.utils.redis_conn import REDIS_CONN
 
@@ -415,3 +416,41 @@ def get_config():
         "registerEnabled": settings.REGISTER_ENABLED,
         "disablePasswordLogin": settings.DISABLE_PASSWORD_LOGIN,
     })
+
+
+class LogLevelRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    pkg_name: Annotated[str, Field(min_length=1, description='包名 (如 "core.utils.es_conn")')]
+    level: Annotated[str, Field(min_length=1, description="日志级别 (DEBUG, INFO, WARNING, ERROR)")]
+
+
+@router.get('/log_levels', summary="获取日志级别")  # noqa: F821
+def get_logger_levels(user=Depends(manager)):
+    """
+    Get current log levels for all packages.
+    ---
+    tags:
+        - System
+    responses:
+        200:
+            description: Return current log levels
+    """
+    return get_json_result(data=get_log_levels())
+
+
+@router.put('/log_levels', summary="设置日志级别")  # noqa: F821
+def set_logger_level(request: LogLevelRequest, user=Depends(manager)):
+    """
+    Set log level for a package.
+    ---
+    tags:
+        - System
+    responses:
+        200:
+            description: Log level updated successfully
+    """
+    success = set_log_level(request.pkg_name, request.level)
+    if success:
+        return get_json_result(data={"pkg_name": request.pkg_name, "level": request.level})
+    return get_data_error_result(message=f"Invalid log level: {request.level}")
