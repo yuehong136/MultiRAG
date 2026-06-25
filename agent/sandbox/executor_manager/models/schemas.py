@@ -14,7 +14,7 @@
 #  limitations under the License.
 #
 import base64
-from typing import Optional
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -28,30 +28,39 @@ class ArtifactItem(BaseModel):
     content_b64: str
 
 
+class ExecutionStructuredResult(BaseModel):
+    present: bool
+    value: Any = None
+    type: str = "json"
+
+
 class CodeExecutionResult(BaseModel):
     status: ResultStatus
     stdout: str
     stderr: str
     exit_code: int
-    detail: Optional[str] = None
+    detail: str | None = None
 
     # Resource usage
-    time_used_ms: Optional[float] = None
-    memory_used_kb: Optional[float] = None
+    time_used_ms: float | None = None
+    memory_used_kb: float | None = None
 
     # Error details
-    resource_limit_type: Optional[ResourceLimitType] = None
-    unauthorized_access_type: Optional[UnauthorizedAccessType] = None
-    runtime_error_type: Optional[RuntimeErrorType] = None
+    resource_limit_type: ResourceLimitType | None = None
+    unauthorized_access_type: UnauthorizedAccessType | None = None
+    runtime_error_type: RuntimeErrorType | None = None
 
     # File artifacts produced by code execution (images, PDFs, CSVs, etc.)
     artifacts: list[ArtifactItem] = []
+
+    # Structured return value produced by main()
+    result: ExecutionStructuredResult | None = None
 
 
 class CodeExecutionRequest(BaseModel):
     code_b64: str = Field(..., description="Base64 encoded code string")
     language: SupportLanguage = Field(default=SupportLanguage.PYTHON, description="Programming language")
-    arguments: Optional[dict] = Field(default={}, description="Arguments")
+    arguments: dict | None = Field(default={}, description="Arguments")
 
     @field_validator("code_b64")
     @classmethod

@@ -24,7 +24,7 @@ a pool of Docker containers with gVisor for secure code execution.
 import base64
 import time
 import uuid
-from typing import Dict, Any, List, Optional
+from typing import Any
 
 import requests
 
@@ -46,7 +46,7 @@ class SelfManagedProvider(SandboxProvider):
         self.pool_size: int = 10
         self._initialized: bool = False
 
-    def initialize(self, config: Dict[str, Any]) -> bool:
+    def initialize(self, config: dict[str, Any]) -> bool:
         """
         Initialize the provider with configuration.
 
@@ -133,7 +133,7 @@ class SelfManagedProvider(SandboxProvider):
         code: str,
         language: str,
         timeout: int = 10,
-        arguments: Optional[Dict[str, Any]] = None
+        arguments: dict[str, Any] | None = None
     ) -> ExecutionResult:
         """
         Execute code in the sandbox.
@@ -187,6 +187,7 @@ class SelfManagedProvider(SandboxProvider):
                 )
 
             result = response.json()
+            structured_result = result.get("result") or {}
 
             return ExecutionResult(
                 stdout=result.get("stdout", ""),
@@ -200,6 +201,9 @@ class SelfManagedProvider(SandboxProvider):
                     "detail": result.get("detail"),
                     "instance_id": instance_id,
                     "artifacts": result.get("artifacts", []),
+                    "result_present": structured_result.get("present", False),
+                    "result_value": structured_result.get("value"),
+                    "result_type": structured_result.get("type"),
                 }
             )
 
@@ -244,7 +248,7 @@ class SelfManagedProvider(SandboxProvider):
         except Exception:
             return False
 
-    def get_supported_languages(self) -> List[str]:
+    def get_supported_languages(self) -> list[str]:
         """
         Get list of supported programming languages.
 
@@ -254,7 +258,7 @@ class SelfManagedProvider(SandboxProvider):
         return ["python", "nodejs", "javascript"]
 
     @staticmethod
-    def get_config_schema() -> Dict[str, Dict]:
+    def get_config_schema() -> dict[str, dict]:
         """
         Return configuration schema for self-managed provider.
 
@@ -320,7 +324,7 @@ class SelfManagedProvider(SandboxProvider):
         else:
             return language
 
-    def validate_config(self, config: dict) -> tuple[bool, Optional[str]]:
+    def validate_config(self, config: dict) -> tuple[bool, str | None]:
         """
         Validate self-managed provider configuration.
 
