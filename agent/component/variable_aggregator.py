@@ -71,7 +71,7 @@ class VariableAggregator(ComponentBase):
                 if val:
                     self.set_output(gname, val)
                     break
-            
+
     @staticmethod
     def _to_object(value: Any) -> Any:
         # Try to convert value to serializable object if it has to_object()
