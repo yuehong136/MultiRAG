@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"multirag/internal/model"
+	"multirag/internal/entity"
 	"strings"
 )
 
@@ -112,7 +112,7 @@ func (m *openAIEmbeddingModel) EncodeQuery(query string) ([]float64, error) {
 
 // init registers the OpenAI embedding model factory
 func init() {
-	RegisterEmbeddingModelFactory("OpenAI", func(apiKey, apiBase, modelName string, httpClient *http.Client) model.EmbeddingModel {
+	RegisterEmbeddingModelFactory("OpenAI", func(apiKey, apiBase, modelName string, httpClient *http.Client) entity.EmbeddingModel {
 		return &openAIEmbeddingModel{
 			apiKey:     apiKey,
 			apiBase:    apiBase,

@@ -23,7 +23,7 @@ import (
 	"fmt"
 	"strings"
 
-	"multirag/internal/model"
+	"multirag/internal/entity"
 )
 
 // Memory type bit flag constants, consistent with Python MemoryType enum
@@ -111,7 +111,7 @@ func NewMemoryDAO() *MemoryDAO {
 //
 // Returns:
 //   - error: Database operation error
-func (dao *MemoryDAO) Create(memory *model.Memory) error {
+func (dao *MemoryDAO) Create(memory *entity.Memory) error {
 	return DB.Create(memory).Error
 }
 
@@ -121,10 +121,10 @@ func (dao *MemoryDAO) Create(memory *model.Memory) error {
 //   - id: Memory ID
 //
 // Returns:
-//   - *model.Memory: Memory model pointer
+//   - *entity.Memory: Memory model pointer
 //   - error: Database operation error
-func (dao *MemoryDAO) GetByID(id string) (*model.Memory, error) {
-	var memory model.Memory
+func (dao *MemoryDAO) GetByID(id string) (*entity.Memory, error) {
+	var memory entity.Memory
 	err := DB.Where("id = ?", id).First(&memory).Error
 	if err != nil {
 		return nil, err
@@ -138,10 +138,10 @@ func (dao *MemoryDAO) GetByID(id string) (*model.Memory, error) {
 //   - tenantID: Tenant ID
 //
 // Returns:
-//   - []*model.Memory: Memory model pointer array
+//   - []*entity.Memory: Memory model pointer array
 //   - error: Database operation error
-func (dao *MemoryDAO) GetByTenantID(tenantID string) ([]*model.Memory, error) {
-	var memories []*model.Memory
+func (dao *MemoryDAO) GetByTenantID(tenantID string) ([]*entity.Memory, error) {
+	var memories []*entity.Memory
 	err := DB.Where("tenant_id = ?", tenantID).Find(&memories).Error
 	return memories, err
 }
@@ -154,10 +154,10 @@ func (dao *MemoryDAO) GetByTenantID(tenantID string) ([]*model.Memory, error) {
 //   - tenantID: Tenant ID
 //
 // Returns:
-//   - []*model.Memory: Matching memory list (for existence check)
+//   - []*entity.Memory: Matching memory list (for existence check)
 //   - error: Database operation error
-func (dao *MemoryDAO) GetByNameAndTenant(name string, tenantID string) ([]*model.Memory, error) {
-	var memories []*model.Memory
+func (dao *MemoryDAO) GetByNameAndTenant(name string, tenantID string) ([]*entity.Memory, error) {
+	var memories []*entity.Memory
 	err := DB.Where("name = ? AND tenant_id = ?", name, tenantID).Find(&memories).Error
 	return memories, err
 }
@@ -168,10 +168,10 @@ func (dao *MemoryDAO) GetByNameAndTenant(name string, tenantID string) ([]*model
 //   - ids: Memory ID list
 //
 // Returns:
-//   - []*model.Memory: Memory model pointer array
+//   - []*entity.Memory: Memory model pointer array
 //   - error: Database operation error
-func (dao *MemoryDAO) GetByIDs(ids []string) ([]*model.Memory, error) {
-	var memories []*model.Memory
+func (dao *MemoryDAO) GetByIDs(ids []string) ([]*entity.Memory, error) {
+	var memories []*entity.Memory
 	err := DB.Where("id IN ?", ids).Find(&memories).Error
 	return memories, err
 }
@@ -217,7 +217,7 @@ func (dao *MemoryDAO) UpdateByID(id string, updates map[string]interface{}) erro
 		}
 	}
 
-	return DB.Model(&model.Memory{}).Where("id = ?", id).Updates(updates).Error
+	return DB.Model(&entity.Memory{}).Where("id = ?", id).Updates(updates).Error
 }
 
 // DeleteByID deletes a memory by ID
@@ -232,7 +232,7 @@ func (dao *MemoryDAO) UpdateByID(id string, updates map[string]interface{}) erro
 //
 //	err := dao.DeleteByID("memory123")
 func (dao *MemoryDAO) DeleteByID(id string) error {
-	return DB.Where("id = ?", id).Delete(&model.Memory{}).Error
+	return DB.Where("id = ?", id).Delete(&entity.Memory{}).Error
 }
 
 // GetWithOwnerNameByID retrieves a memory with owner name by ID
@@ -242,13 +242,13 @@ func (dao *MemoryDAO) DeleteByID(id string) error {
 //   - id: Memory ID
 //
 // Returns:
-//   - *model.MemoryListItem: Memory detail with owner name populated
+//   - *entity.MemoryListItem: Memory detail with owner name populated
 //   - error: Database operation error
 //
 // Example:
 //
 //	memory, err := dao.GetWithOwnerNameByID("memory123")
-func (dao *MemoryDAO) GetWithOwnerNameByID(id string) (*model.MemoryListItem, error) {
+func (dao *MemoryDAO) GetWithOwnerNameByID(id string) (*entity.MemoryListItem, error) {
 	querySQL := `
 		SELECT m.id, m.name, m.avatar, m.tenant_id, m.memory_type,
 			m.storage_type, m.embd_id, m.tenant_embd_id, m.llm_id, m.tenant_llm_id,
@@ -262,7 +262,7 @@ func (dao *MemoryDAO) GetWithOwnerNameByID(id string) (*model.MemoryListItem, er
 	`
 
 	var rawResult struct {
-		model.Memory
+		entity.Memory
 		OwnerName *string `gorm:"column:owner_name"`
 	}
 
@@ -270,7 +270,7 @@ func (dao *MemoryDAO) GetWithOwnerNameByID(id string) (*model.MemoryListItem, er
 		return nil, err
 	}
 
-	return &model.MemoryListItem{
+	return &entity.MemoryListItem{
 		Memory:    rawResult.Memory,
 		OwnerName: rawResult.OwnerName,
 	}, nil
@@ -289,14 +289,14 @@ func (dao *MemoryDAO) GetWithOwnerNameByID(id string) (*model.MemoryListItem, er
 //   - pageSize: Number of items per page
 //
 // Returns:
-//   - []*model.MemoryListItem: Memory list items with owner name populated
+//   - []*entity.MemoryListItem: Memory list items with owner name populated
 //   - int64: Total count of matching memories
 //   - error: Database operation error
 //
 // Example:
 //
 //	memories, total, err := dao.GetByFilter([]string{"tenant1"}, []string{"semantic"}, "table", "test", 1, 10)
-func (dao *MemoryDAO) GetByFilter(tenantIDs []string, memoryTypes []string, storageType string, keywords string, page int, pageSize int) ([]*model.MemoryListItem, int64, error) {
+func (dao *MemoryDAO) GetByFilter(tenantIDs []string, memoryTypes []string, storageType string, keywords string, page int, pageSize int) ([]*entity.MemoryListItem, int64, error) {
 	var conditions []string
 	var args []interface{}
 
@@ -350,7 +350,7 @@ func (dao *MemoryDAO) GetByFilter(tenantIDs []string, memoryTypes []string, stor
 	queryArgs := append(args, pageSize, offset)
 
 	var rawResults []struct {
-		model.Memory
+		entity.Memory
 		OwnerName *string `gorm:"column:owner_name"`
 	}
 
@@ -358,9 +358,9 @@ func (dao *MemoryDAO) GetByFilter(tenantIDs []string, memoryTypes []string, stor
 		return nil, 0, err
 	}
 
-	memories := make([]*model.MemoryListItem, len(rawResults))
+	memories := make([]*entity.MemoryListItem, len(rawResults))
 	for i, r := range rawResults {
-		memories[i] = &model.MemoryListItem{
+		memories[i] = &entity.MemoryListItem{
 			Memory:    r.Memory,
 			OwnerName: r.OwnerName,
 		}

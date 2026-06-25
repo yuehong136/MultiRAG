@@ -18,7 +18,7 @@ package service
 
 import (
 	"multirag/internal/dao"
-	"multirag/internal/model"
+	"multirag/internal/entity"
 )
 
 // FileService file service
@@ -37,7 +37,7 @@ func NewFileService() *FileService {
 
 // FileInfo file info with additional fields
 type FileInfo struct {
-	*model.File
+	*entity.File
 	Size           int64                    `json:"size"`
 	KbsInfo        []map[string]interface{} `json:"kbs_info"`
 	HasChildFolder bool                     `json:"has_child_folder,omitempty"`
@@ -123,7 +123,7 @@ func (s *FileService) ListFiles(tenantID, pfID string, page, pageSize int, order
 }
 
 // toFileResponse converts file model to response format
-func (s *FileService) toFileResponse(file *model.File) map[string]interface{} {
+func (s *FileService) toFileResponse(file *entity.File) map[string]interface{} {
 	result := map[string]interface{}{
 		"id":         file.ID,
 		"parent_id":  file.ParentID,
@@ -145,7 +145,7 @@ func (s *FileService) toFileResponse(file *model.File) map[string]interface{} {
 }
 
 // toFileInfo converts file model to FileInfo
-func (s *FileService) toFileInfo(file *model.File) *FileInfo {
+func (s *FileService) toFileInfo(file *entity.File) *FileInfo {
 	return &FileInfo{
 		File:           file,
 		Size:           file.Size,

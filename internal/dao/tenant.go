@@ -17,7 +17,7 @@
 package dao
 
 import (
-	"multirag/internal/model"
+	"multirag/internal/entity"
 )
 
 // TenantDAO tenant data access object
@@ -32,7 +32,7 @@ func NewTenantDAO() *TenantDAO {
 func (dao *TenantDAO) GetJoinedTenantsByUserID(userID string) ([]*TenantWithRole, error) {
 	var results []*TenantWithRole
 
-	err := DB.Model(&model.Tenant{}).
+	err := DB.Model(&entity.Tenant{}).
 		Select("t_ai_tenants.id as tenant_id, t_ai_tenants.name, t_ai_tenants.llm_id, t_ai_tenants.embd_id, t_ai_tenants.asr_id, t_ai_tenants.img2txt_id, t_ai_user_tenants.role").
 		Joins("INNER JOIN t_ai_user_tenants ON t_ai_user_tenants.tenant_id = t_ai_tenants.id").
 		Where("t_ai_user_tenants.user_id = ? AND t_ai_user_tenants.status = ? AND t_ai_user_tenants.role IN ? AND t_ai_tenants.status = ?", userID, "1", []string{"normal", "admin"}, "1").
@@ -70,7 +70,7 @@ type TenantInfo struct {
 func (dao *TenantDAO) GetInfoByUserID(userID string) ([]*TenantInfo, error) {
 	var results []*TenantInfo
 
-	err := DB.Model(&model.Tenant{}).
+	err := DB.Model(&entity.Tenant{}).
 		Select("t_ai_tenants.id as tenant_id, t_ai_tenants.name, t_ai_tenants.llm_id, t_ai_tenants.embd_id, t_ai_tenants.rerank_id, t_ai_tenants.asr_id, t_ai_tenants.img2txt_id, t_ai_tenants.tts_id, t_ai_tenants.parser_ids, t_ai_user_tenants.role").
 		Joins("INNER JOIN t_ai_user_tenants ON t_ai_user_tenants.tenant_id = t_ai_tenants.id").
 		Where("t_ai_user_tenants.user_id = ? AND t_ai_user_tenants.status = ? AND t_ai_user_tenants.role = ? AND t_ai_tenants.status = ?", userID, "1", "owner", "1").
@@ -80,8 +80,8 @@ func (dao *TenantDAO) GetInfoByUserID(userID string) ([]*TenantInfo, error) {
 }
 
 // GetByID gets tenant by ID
-func (dao *TenantDAO) GetByID(id string) (*model.Tenant, error) {
-	var tenant model.Tenant
+func (dao *TenantDAO) GetByID(id string) (*entity.Tenant, error) {
+	var tenant entity.Tenant
 	err := DB.Where("id = ? AND status = ?", id, "1").First(&tenant).Error
 	if err != nil {
 		return nil, err
@@ -90,21 +90,21 @@ func (dao *TenantDAO) GetByID(id string) (*model.Tenant, error) {
 }
 
 // Create creates a new tenant
-func (dao *TenantDAO) Create(tenant *model.Tenant) error {
+func (dao *TenantDAO) Create(tenant *entity.Tenant) error {
 	return DB.Create(tenant).Error
 }
 
 // Delete deletes a tenant by ID (soft delete)
 func (dao *TenantDAO) Delete(id string) error {
-	return DB.Model(&model.Tenant{}).Where("id = ?", id).Update("status", "0").Error
+	return DB.Model(&entity.Tenant{}).Where("id = ?", id).Update("status", "0").Error
 }
 
 // Update updates a tenant by ID
 func (dao *TenantDAO) Update(id string, updates map[string]interface{}) error {
-	return DB.Model(&model.Tenant{}).Where("id = ?", id).Updates(updates).Error
+	return DB.Model(&entity.Tenant{}).Where("id = ?", id).Updates(updates).Error
 }
 
 // HardDelete hard deletes a tenant by ID
 func (dao *TenantDAO) HardDelete(id string) error {
-	return DB.Unscoped().Where("id = ?", id).Delete(&model.Tenant{}).Error
+	return DB.Unscoped().Where("id = ?", id).Delete(&entity.Tenant{}).Error
 }

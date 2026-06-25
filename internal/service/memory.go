@@ -28,7 +28,7 @@ import (
 	"github.com/google/uuid"
 
 	"multirag/internal/dao"
-	"multirag/internal/model"
+	"multirag/internal/entity"
 )
 
 const (
@@ -324,7 +324,7 @@ type UpdateMemoryRequest struct {
 // CreateMemoryResponse defines the response structure for memory operations
 // Uses struct embedding to extend Memory struct with API-specific fields
 type CreateMemoryResponse struct {
-	model.Memory
+	entity.Memory
 	OwnerName  *string  `json:"owner_name,omitempty"`
 	MemoryType []string `json:"memory_type"`
 }
@@ -411,7 +411,7 @@ func (s *MemoryService) CreateMemory(tenantID string, req *CreateMemoryRequest) 
 		newID = newID[:32]
 	}
 
-	memory := &model.Memory{
+	memory := &entity.Memory{
 		ID:               newID,
 		Name:             memoryName,
 		TenantID:         tenantID,
@@ -769,7 +769,7 @@ func isList(v interface{}) bool {
 
 // formatRetDataFromMemory converts a Memory model to CreateMemoryResponse format
 // This is a utility function for formatting memory data for API responses
-func formatRetDataFromMemory(memory *model.Memory) *CreateMemoryResponse {
+func formatRetDataFromMemory(memory *entity.Memory) *CreateMemoryResponse {
 	memoryTypes := dao.GetMemoryTypeHuman(memory.MemoryType)
 
 	resp := &CreateMemoryResponse{
@@ -795,7 +795,7 @@ func formatDateToString(t int64) *string {
 
 // formatRetDataFromMemoryListItem converts a MemoryListItem to CreateMemoryResponse
 // This function is used for both list and detail memory responses where owner_name is from JOIN query
-func formatRetDataFromMemoryListItem(memory *model.MemoryListItem) *CreateMemoryResponse {
+func formatRetDataFromMemoryListItem(memory *entity.MemoryListItem) *CreateMemoryResponse {
 	memoryTypes := dao.GetMemoryTypeHuman(memory.MemoryType)
 	resp := &CreateMemoryResponse{
 		Memory:     memory.Memory,

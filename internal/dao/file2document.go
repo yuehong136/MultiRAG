@@ -17,7 +17,7 @@
 package dao
 
 import (
-	"multirag/internal/model"
+	"multirag/internal/entity"
 )
 
 // File2DocumentDAO file to document mapping data access object
@@ -32,7 +32,7 @@ func NewFile2DocumentDAO() *File2DocumentDAO {
 func (dao *File2DocumentDAO) GetKBInfoByFileID(fileID string) ([]map[string]interface{}, error) {
 	var results []map[string]interface{}
 
-	rows, err := DB.Model(&model.File{}).
+	rows, err := DB.Model(&entity.File{}).
 		Select("t_ai_knowledgebases.id, t_ai_knowledgebases.name, t_ai_file2documents.document_id").
 		Joins("JOIN t_ai_file2documents ON t_ai_file2documents.file_id = ?", fileID).
 		Joins("JOIN t_ai_documents ON t_ai_documents.id = t_ai_file2documents.document_id").

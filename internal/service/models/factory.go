@@ -19,12 +19,12 @@ package models
 import (
 	"fmt"
 	"net/http"
-	"multirag/internal/model"
+	"multirag/internal/entity"
 	"sync"
 )
 
 // EmbeddingModelFactory creates an EmbeddingModel instance
-type EmbeddingModelFactory func(apiKey, apiBase, modelName string, httpClient *http.Client) model.EmbeddingModel
+type EmbeddingModelFactory func(apiKey, apiBase, modelName string, httpClient *http.Client) entity.EmbeddingModel
 
 var (
 	embeddingModelFactories = make(map[string]EmbeddingModelFactory)
@@ -49,7 +49,7 @@ func GetEmbeddingModelFactory(providerName string) EmbeddingModelFactory {
 
 // CreateEmbeddingModel creates an EmbeddingModel instance for the given provider.
 // Returns error if provider not registered.
-func CreateEmbeddingModel(providerName, apiKey, apiBase, modelName string, httpClient *http.Client) (model.EmbeddingModel, error) {
+func CreateEmbeddingModel(providerName, apiKey, apiBase, modelName string, httpClient *http.Client) (entity.EmbeddingModel, error) {
 	factory := GetEmbeddingModelFactory(providerName)
 	if factory == nil {
 		return nil, fmt.Errorf("no embedding model factory registered for provider %s", providerName)

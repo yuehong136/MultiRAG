@@ -14,7 +14,7 @@
 //  limitations under the License.
 //
 
-package model
+package entity
 
 // Tenant tenant model
 type Tenant struct {

@@ -25,7 +25,7 @@ import (
 	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/engine"
-	"multirag/internal/model"
+	"multirag/internal/entity"
 )
 
 // TenantService tenant service
@@ -117,12 +117,12 @@ func NewTenantLLMService() *TenantLLMService {
 //   - modelName: the model name, optionally including factory suffix (e.g., "gpt-4@OpenAI")
 //
 // Returns:
-//   - *model.TenantLLM: the tenant LLM record if found, nil otherwise
+//   - *entity.TenantLLM: the tenant LLM record if found, nil otherwise
 //   - error: an error if the query fails, nil otherwise
-func (s *TenantLLMService) GetAPIKey(tenantID, modelName string) (*model.TenantLLM, error) {
+func (s *TenantLLMService) GetAPIKey(tenantID, modelName string) (*entity.TenantLLM, error) {
 	modelName, factory := s.SplitModelNameAndFactory(modelName)
 
-	var tenantLLM *model.TenantLLM
+	var tenantLLM *entity.TenantLLM
 	var err error
 
 	if factory == "" {

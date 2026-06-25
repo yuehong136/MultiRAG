@@ -14,7 +14,7 @@
 //  limitations under the License.
 //
 
-package model
+package entity
 
 // EvaluationDataset evaluation dataset model
 // Note: Python defines custom create_time/update_time (not null) instead of using BaseModel's

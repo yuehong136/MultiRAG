@@ -23,7 +23,7 @@ import (
 	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/engine"
-	"multirag/internal/model"
+	"multirag/internal/entity"
 	"multirag/internal/utility"
 	"strings"
 	"time"
@@ -122,8 +122,8 @@ func (s *KnowledgebaseService) CreateKB(req *CreateKBRequest, tenantID string) (
 	}
 
 	// Check name length (using UTF-8 byte length like Python)
-	if len(name) > model.DatasetNameLimit {
-		return nil, common.CodeDataError, fmt.Errorf("Dataset name length is %d which is large than %d", len(name), model.DatasetNameLimit)
+	if len(name) > entity.DatasetNameLimit {
+		return nil, common.CodeDataError, fmt.Errorf("Dataset name length is %d which is large than %d", len(name), entity.DatasetNameLimit)
 	}
 
 	// Verify tenant exists
@@ -151,7 +151,7 @@ func (s *KnowledgebaseService) CreateKB(req *CreateKBRequest, tenantID string) (
 	// Create knowledge base model
 	now := time.Now().Unix()
 	nowDate := time.Now().Truncate(time.Second)
-	kb := &model.Knowledgebase{
+	kb := &entity.Knowledgebase{
 		ID:           kbID,
 		Name:         duplicateName,
 		TenantID:     tenantID,
@@ -165,7 +165,7 @@ func (s *KnowledgebaseService) CreateKB(req *CreateKBRequest, tenantID string) (
 	kb.UpdateTime = &now
 	kb.CreateDate = &nowDate
 	kb.UpdateDate = &nowDate
-	status := string(model.StatusValid)
+	status := string(entity.StatusValid)
 	kb.Status = &status
 
 	// Set optional fields
@@ -270,8 +270,8 @@ func (s *KnowledgebaseService) UpdateKB(req *UpdateKBRequest, userID string) (ma
 	}
 
 	// Check name length
-	if len(name) > model.DatasetNameLimit {
-		return nil, common.CodeDataError, fmt.Errorf("Dataset name length is %d which is large than %d", len(name), model.DatasetNameLimit)
+	if len(name) > entity.DatasetNameLimit {
+		return nil, common.CodeDataError, fmt.Errorf("Dataset name length is %d which is large than %d", len(name), entity.DatasetNameLimit)
 	}
 
 	// Check authorization
@@ -377,7 +377,7 @@ func (s *KnowledgebaseService) UpdateMetadataSetting(req *UpdateMetadataSettingR
 
 // GetDetail retrieves detailed information about a knowledge base
 // This matches the Python kb_detail endpoint in kb_app.py
-func (s *KnowledgebaseService) GetDetail(kbID, userID string) (*model.KnowledgebaseDetail, common.ErrorCode, error) {
+func (s *KnowledgebaseService) GetDetail(kbID, userID string) (*entity.KnowledgebaseDetail, common.ErrorCode, error) {
 	// Check authorization
 	if !s.kbDAO.Accessible(kbID, userID) {
 		return nil, common.CodeOperatingError, errors.New("only owner of dataset authorized for this operation")
@@ -398,7 +398,7 @@ func (s *KnowledgebaseService) GetDetail(kbID, userID string) (*model.Knowledgeb
 // ListKbs lists knowledge bases with pagination and filtering
 // This matches the Python list endpoint in kb_app.py
 func (s *KnowledgebaseService) ListKbs(keywords string, page int, pageSize int, parserID string, orderby string, desc bool, ownerIDs []string, userID string) (*ListKbsResponse, common.ErrorCode, error) {
-	var kbs []*model.KnowledgebaseListItem
+	var kbs []*entity.KnowledgebaseListItem
 	var total int64
 	var err error
 
@@ -475,7 +475,7 @@ func (s *KnowledgebaseService) Accessible(kbID, userID string) bool {
 }
 
 // GetByID retrieves a knowledge base by ID
-func (s *KnowledgebaseService) GetByID(kbID string) (*model.Knowledgebase, error) {
+func (s *KnowledgebaseService) GetByID(kbID string) (*entity.Knowledgebase, error) {
 	return s.kbDAO.GetByID(kbID)
 }
 
@@ -551,13 +551,13 @@ func GenerateUUID() string {
 }
 
 // GetUserByToken gets user by authorization token
-func (s *KnowledgebaseService) GetUserByToken(authorization string) (*model.User, common.ErrorCode, error) {
+func (s *KnowledgebaseService) GetUserByToken(authorization string) (*entity.User, common.ErrorCode, error) {
 	userService := NewUserService()
 	return userService.GetUserByToken(authorization)
 }
 
 // GetUserByID gets user by ID
-func (s *KnowledgebaseService) GetUserByID(id string) (*model.User, error) {
+func (s *KnowledgebaseService) GetUserByID(id string) (*entity.User, error) {
 	return s.userDAO.GetByAccessToken(id)
 }
 
@@ -572,7 +572,7 @@ func (s *KnowledgebaseService) GetConnectorsByTenantID(tenantID string) ([]*dao.
 }
 
 // GetKBList retrieves knowledge bases with ID and name filtering
-func (s *KnowledgebaseService) GetKBList(tenantIDs []string, userID string, page, pageSize int, orderby string, desc bool, id, name string) ([]*model.Knowledgebase, int64, common.ErrorCode, error) {
+func (s *KnowledgebaseService) GetKBList(tenantIDs []string, userID string, page, pageSize int, orderby string, desc bool, id, name string) ([]*entity.Knowledgebase, int64, common.ErrorCode, error) {
 	kbs, total, err := s.kbDAO.GetList(tenantIDs, userID, page, pageSize, orderby, desc, id, name)
 	if err != nil {
 		return nil, 0, common.CodeServerError, err
@@ -581,12 +581,12 @@ func (s *KnowledgebaseService) GetKBList(tenantIDs []string, userID string, page
 }
 
 // GetKBByIDAndUserID retrieves a knowledge base by ID and user ID
-func (s *KnowledgebaseService) GetKBByIDAndUserID(kbID, userID string) ([]*model.Knowledgebase, error) {
+func (s *KnowledgebaseService) GetKBByIDAndUserID(kbID, userID string) ([]*entity.Knowledgebase, error) {
 	return s.kbDAO.GetKBByIDAndUserID(kbID, userID)
 }
 
 // GetKBByNameAndUserID retrieves a knowledge base by name and user ID
-func (s *KnowledgebaseService) GetKBByNameAndUserID(kbName, userID string) ([]*model.Knowledgebase, error) {
+func (s *KnowledgebaseService) GetKBByNameAndUserID(kbName, userID string) ([]*entity.Knowledgebase, error) {
 	return s.kbDAO.GetKBByNameAndUserID(kbName, userID)
 }
 

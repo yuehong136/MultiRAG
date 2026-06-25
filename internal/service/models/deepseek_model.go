@@ -18,11 +18,11 @@ package models
 
 import (
 	"net/http"
-	"multirag/internal/model"
+	"multirag/internal/entity"
 )
 
 func init() {
-	RegisterEmbeddingModelFactory("DeepSeek", func(apiKey, apiBase, modelName string, httpClient *http.Client) model.EmbeddingModel {
+	RegisterEmbeddingModelFactory("DeepSeek", func(apiKey, apiBase, modelName string, httpClient *http.Client) entity.EmbeddingModel {
 		return &openAIEmbeddingModel{
 			apiKey:     apiKey,
 			apiBase:    apiBase,

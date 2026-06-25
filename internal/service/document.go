@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"multirag/internal/dao"
-	"multirag/internal/model"
+	"multirag/internal/entity"
 )
 
 // DocumentService document service
@@ -81,8 +81,8 @@ type DocumentResponse struct {
 }
 
 // CreateDocument create document
-func (s *DocumentService) CreateDocument(req *CreateDocumentRequest) (*model.Document, error) {
-	document := &model.Document{
+func (s *DocumentService) CreateDocument(req *CreateDocumentRequest) (*entity.Document, error) {
+	document := &entity.Document{
 		Name:       &req.Name,
 		KbID:       req.KbID,
 		ParserID:   req.ParserID,
@@ -176,8 +176,8 @@ func (s *DocumentService) GetDocumentsByAuthorID(authorID, page, pageSize int) (
 	return responses, total, nil
 }
 
-// toResponse convert model.Document to DocumentResponse
-func (s *DocumentService) toResponse(doc *model.Document) *DocumentResponse {
+// toResponse convert entity.Document to DocumentResponse
+func (s *DocumentService) toResponse(doc *entity.Document) *DocumentResponse {
 	createdAt := ""
 	if doc.CreateTime != nil {
 		createdAt = time.Unix(*doc.CreateTime, 0).Format("2006-01-02 15:04:05")

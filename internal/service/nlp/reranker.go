@@ -23,7 +23,7 @@ import (
 )
 
 // RerankModel defines the interface for reranker models
-// This matches model.RerankModel interface
+// This matches entity.RerankModel interface
 type RerankModel interface {
 	// Similarity calculates similarity between query and texts
 	Similarity(query string, texts []string) ([]float64, error)

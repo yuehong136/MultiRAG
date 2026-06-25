@@ -22,7 +22,7 @@ import (
 	"strings"
 
 	"multirag/internal/dao"
-	"multirag/internal/model"
+	"multirag/internal/entity"
 )
 
 var DB = dao.DB
@@ -381,13 +381,13 @@ func (s *LLMService) SetAPIKey(tenantID string, req *SetAPIKeyRequest) (*SetAPIK
 				"api_base":   baseURL,
 				"max_tokens": maxTokens,
 			}
-			DB.Model(&model.TenantLLM{}).
+			DB.Model(&entity.TenantLLM{}).
 				Where("tenant_id = ? AND llm_factory = ? AND llm_name = ?", tenantID, factory, llm.LLMName).
 				Updates(updates)
 		} else {
 			modelType := llm.ModelType
 			llmName := llm.LLMName
-			tenantLLM := &model.TenantLLM{
+			tenantLLM := &entity.TenantLLM{
 				TenantID:   tenantID,
 				LLMFactory: factory,
 				ModelType:  &modelType,

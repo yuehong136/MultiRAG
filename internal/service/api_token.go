@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"multirag/internal/dao"
-	"multirag/internal/model"
+	"multirag/internal/entity"
 	"multirag/internal/utility"
 )
 
@@ -77,7 +77,7 @@ func (s *SystemService) CreateAPIToken(tenantID string, req *CreateAPITokenReque
 	// beta: generate_confirmation_token().replace("multirag-", "")[:32]
 	betaAPIKey := utility.GenerateBetaAPIToken(apiToken)
 
-	apiTokenData := &model.APIToken{
+	apiTokenData := &entity.APIToken{
 		TenantID: tenantID,
 		Token:    apiToken,
 		Beta:     &betaAPIKey,

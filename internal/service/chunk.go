@@ -28,7 +28,7 @@ import (
 	"multirag/internal/dao"
 	"multirag/internal/engine"
 	"multirag/internal/logger"
-	"multirag/internal/model"
+	"multirag/internal/entity"
 	"multirag/internal/service/nlp"
 	"multirag/internal/utility"
 )
@@ -130,7 +130,7 @@ func (s *ChunkService) RetrievalTest(req *RetrievalTestRequest, userID string) (
 
 	// Check permission for each kb_id
 	var tenantIDs []string
-	var kbRecords []*model.Knowledgebase
+	var kbRecords []*entity.Knowledgebase
 
 	for _, kbID := range kbIDs {
 		found := false
