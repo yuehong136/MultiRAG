@@ -30,7 +30,7 @@ from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.connector_service import Connector2KbService
 from api.db.services.user_service import TenantService, UserService
-from api.utils.api_utils import deep_merge, get_parser_config, remap_dictionary_keys, verify_embedding_availability
+from api.utils.api_utils import deep_merge, flatten_parent_child_config, get_parser_config, remap_dictionary_keys, verify_embedding_availability
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from core.nlp import search
 
@@ -237,7 +237,7 @@ def update_dataset(db: Session, tenant_id: str, dataset_id: str, req: dict) -> t
     if req.get("parser_config"):
         parser_config = req["parser_config"]
         parser_config.update(parser_config.pop("ext", {}) or {})
-        req["parser_config"] = deep_merge(kb.parser_config, parser_config)
+        req["parser_config"] = flatten_parent_child_config(deep_merge(kb.parser_config, parser_config))
 
     if (chunk_method := req.get("parser_id")) and chunk_method != kb.parser_id:
         if not req.get("parser_config"):
