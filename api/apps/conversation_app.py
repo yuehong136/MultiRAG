@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, model_validator, Discriminator, field_val
 from typing import Generator, Literal, Annotated, Any
 
 from api.apps import manager
+from api.apps.restful_apis.chat_api import apply_feedback_to_session_payload
 from api.db.db_models import APIToken, get_db
 from api.db.services.conversation_service import ConversationService, structure_answer
 from api.db.services.dialog_service import DialogService, async_chat, async_ask, gen_mindmap
@@ -829,20 +830,12 @@ def thumbup(request: ThumbupRequest, db: Session = Depends(get_db), user=Depends
     conv = ConversationService.get_by_id(db, req["conversation_id"])
     if not conv:
         return get_data_error_result(retmsg="Conversation not found!")
-    up_down = req.get("thumbup")
+    thumbup = req.get("thumbup")
+    if not isinstance(thumbup, bool):
+        return get_data_error_result(retmsg="thumbup must be a boolean")
     feedback = req.get("feedback", "")
     conv = conv.to_dict()
-    for i, msg in enumerate(conv["message"]):
-        if req["message_id"] == msg.get("id", "") and msg.get("role", "") == "assistant":
-            if up_down:
-                msg["thumbup"] = True
-                if "feedback" in msg:
-                    del msg["feedback"]
-            else:
-                msg["thumbup"] = False
-                if feedback:
-                    msg["feedback"] = feedback
-            break
+    apply_feedback_to_session_payload(user.id, conv, req["message_id"], thumbup, feedback)
 
     ConversationService.update_by_id(db, conv["id"], conv)
     return get_json_result(data=conv)

@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.db_models import get_db
+from api.db.services.chunk_feedback_service import ChunkFeedbackService
 from api.db.services.conversation_service import ConversationService, structure_answer
 from api.db.services.dialog_service import DialogService, async_ask, async_chat, gen_mindmap
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -159,6 +160,62 @@ def build_session_response(session: Any) -> dict[str, Any]:
     data["chat_id"] = data.pop("dialog_id", data.get("chat_id"))
     data["messages"] = data.pop("message", data.get("messages") or [])
     return data
+
+
+def apply_feedback_to_session_payload(
+    tenant_id: str,
+    payload: dict[str, Any],
+    msg_id: str,
+    thumbup: bool,
+    feedback: str = "",
+) -> bool:
+    """Update message feedback and apply chunk feedback when the state changes."""
+    messages = payload.get("message") or payload.get("messages") or []
+    if not isinstance(messages, list):
+        return False
+
+    for message_index, msg in enumerate(messages):
+        if msg_id != msg.get("id", "") or msg.get("role", "") != "assistant":
+            continue
+
+        prior_thumb = msg.get("thumbup")
+        if thumbup is True:
+            msg["thumbup"] = True
+            msg.pop("feedback", None)
+            apply_chunk_feedback = prior_thumb is not True
+        else:
+            msg["thumbup"] = False
+            if feedback:
+                msg["feedback"] = feedback
+            apply_chunk_feedback = prior_thumb is not False
+
+        if apply_chunk_feedback:
+            references = payload.get("reference") or []
+            ref_index = (message_index - 1) // 2
+            if isinstance(references, list) and 0 <= ref_index < len(references):
+                reference = references[ref_index]
+                if isinstance(reference, dict) and reference:
+                    try:
+                        if isinstance(prior_thumb, bool) and prior_thumb != thumbup:
+                            ChunkFeedbackService.apply_feedback(
+                                tenant_id=tenant_id,
+                                reference=reference,
+                                is_positive=not prior_thumb,
+                            )
+                        result = ChunkFeedbackService.apply_feedback(
+                            tenant_id=tenant_id,
+                            reference=reference,
+                            is_positive=thumbup is True,
+                        )
+                        logger.debug(
+                            "Chunk feedback applied: %s succeeded, %s failed",
+                            result.get("success_count", 0),
+                            result.get("fail_count", 0),
+                        )
+                    except Exception:
+                        logger.warning("Failed to apply chunk feedback", exc_info=True)
+        return True
+    return False
 
 
 def _has_knowledge_placeholder(prompt_config: dict[str, Any] | None) -> bool:
@@ -1038,18 +1095,11 @@ def update_message_feedback(
             return _error("Session not found!")
 
         payload = conv.to_dict()
-        up_down = req.get("thumbup")
+        thumbup = req.get("thumbup")
+        if not isinstance(thumbup, bool):
+            return _error("thumbup must be a boolean")
         feedback = req.get("feedback", "")
-        for msg in payload.get("message") or []:
-            if msg_id == msg.get("id", "") and msg.get("role", "") == "assistant":
-                if up_down:
-                    msg["thumbup"] = True
-                    msg.pop("feedback", None)
-                else:
-                    msg["thumbup"] = False
-                    if feedback:
-                        msg["feedback"] = feedback
-                break
+        apply_feedback_to_session_payload(tenant_id, payload, msg_id, thumbup, feedback)
 
         ConversationService.update_by_id(db, payload["id"], payload)
         return get_result(data=build_session_response(payload))

@@ -564,6 +564,61 @@ class InfinityConnection(InfinityConnectionBase):
         finally:
             self.connPool.release_conn(inf_conn)
 
+    def adjust_chunk_pagerank_fea(
+        self,
+        chunk_id: str,
+        index_name: str,
+        knowledgebase_id: str,
+        delta: int,
+        min_weight: int = 0,
+        max_weight: int = 100,
+        row_id: int | None = None,
+        max_retries: int = 2,
+    ) -> bool:
+        table_name = index_name if not knowledgebase_id else f"{index_name}_{knowledgebase_id}"
+        safe_chunk_id = chunk_id.replace("'", "''")
+        for attempt in range(max_retries + 1):
+            inf_conn = self.connPool.get_conn()
+            try:
+                db_instance = inf_conn.get_database(self.dbName)
+                table_instance = db_instance.get_table(table_name)
+
+                if row_id is None:
+                    df, _ = table_instance.output([PAGERANK_FLD, "row_id()"]).filter(f"id = '{safe_chunk_id}'").to_df()
+                    if df.empty:
+                        self.logger.warning("Chunk %s not found in %s for pagerank adjust", chunk_id, table_name)
+                        return False
+                    current_weight = int(float(df[PAGERANK_FLD].iloc[0] or 0))
+                    row_column = "row_id" if "row_id" in df.columns else "row_id()"
+                    row_id = int(df[row_column].iloc[0])
+                else:
+                    df, _ = table_instance.output([PAGERANK_FLD]).filter(f"id = '{safe_chunk_id}'").to_df()
+                    if df.empty:
+                        return False
+                    current_weight = int(float(df[PAGERANK_FLD].iloc[0] or 0))
+
+                new_weight = max(int(min_weight), min(int(max_weight), current_weight + int(delta)))
+                table_instance.update(f"_row_id = {row_id}", {PAGERANK_FLD: new_weight})
+                return True
+            except InfinityException as e:
+                if attempt < max_retries:
+                    self.logger.warning(
+                        "Retrying Infinity pagerank adjust for stale row_id=%s chunk=%s: %s",
+                        row_id,
+                        chunk_id,
+                        e,
+                    )
+                    row_id = None
+                    continue
+                self.logger.error("Infinity pagerank adjust failed for chunk %s: %s", chunk_id, e)
+                return False
+            except Exception as e:
+                self.logger.error("Infinity pagerank adjust error for chunk %s: %s", chunk_id, e)
+                return False
+            finally:
+                self.connPool.release_conn(inf_conn)
+        return False
+
     """
     Helper functions for search result
     """

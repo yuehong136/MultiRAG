@@ -717,6 +717,77 @@ class MilvusConnection(MilvusConnectionBase):
 
         return False
 
+    def adjust_chunk_pagerank_fea(
+        self,
+        chunk_id: str,
+        index_name: str | list[str],
+        knowledgebase_id: str,
+        delta: int,
+        min_w: int = 0,
+        max_w: int = 100,
+        row_id: int | None = None,
+    ) -> bool:
+        _ = row_id
+        if isinstance(index_name, list):
+            if not index_name:
+                self.logger.error("Index name list is empty")
+                return False
+            collection_name = index_name[0]
+        elif isinstance(index_name, str):
+            collection_name = index_name
+        else:
+            self.logger.error(f"Index name must be string or list of strings, got: {type(index_name)}")
+            return False
+
+        conn = self._get_connection()
+        try:
+            if not conn.has_collection(collection_name):
+                return False
+
+            schema_dict = conn.describe_collection(collection_name)
+            schema_fields = {field.get("name"): field for field in schema_dict.get("fields", []) if field.get("name")}
+            primary_field = self._extract_primary_field(schema_dict)
+            primary_name = primary_field.get("name") or ("pk" if "pk" in schema_fields else "id")
+
+            filter_parts = [build_milvus_filter_clause(primary_name, chunk_id)]
+            if knowledgebase_id and "kb_id" in schema_fields:
+                filter_parts.append(build_milvus_filter_clause("kb_id", knowledgebase_id))
+            filter_expr = " && ".join(filter_parts)
+
+            records = conn.query(collection_name, filter_expr, output_fields=["*"])
+            if not records:
+                return False
+
+            pagerank_field = schema_fields.get(PAGERANK_FLD, {})
+            pagerank_type = pagerank_field.get("type")
+            updated_records = []
+            for record in records:
+                current_weight = float(record.get(PAGERANK_FLD, 0) or 0)
+                new_weight = max(float(min_w), min(float(max_w), current_weight + float(delta)))
+                updated_record = copy.deepcopy(record)
+                if pagerank_type in {
+                    getattr(DataType, "INT8", object()),
+                    getattr(DataType, "INT16", object()),
+                    getattr(DataType, "INT32", object()),
+                    getattr(DataType, "INT64", object()),
+                }:
+                    updated_record[PAGERANK_FLD] = int(new_weight)
+                else:
+                    updated_record[PAGERANK_FLD] = float(new_weight)
+                updated_records.append(updated_record)
+
+            conn.delete(collection_name, expression=filter_expr)
+            conn.insert_rows(collection_name, updated_records)
+            return True
+        except Exception as e:
+            self.logger.error(
+                "Milvus adjust_chunk_pagerank_fea failed: collection=%s chunk=%s error=%s",
+                collection_name,
+                chunk_id,
+                e,
+            )
+            return False
+
     def delete(self, condition: dict, index_name: str | list[str], dataset_id: str | None = None) -> int:
         """Delete documents from collection."""
         if isinstance(index_name, list):
