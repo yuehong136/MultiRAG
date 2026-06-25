@@ -372,6 +372,83 @@ func (p *Parser) parseLogout() (*Command, error) {
 	return cmd, nil
 }
 
+// parseCommonListPoolModels parses (shared by admin and user LIST):
+//
+//	LIST POOL PROVIDERS;
+//	LIST POOL MODELS FROM '<provider>';
+func (p *Parser) parseCommonListPoolModels() (*Command, error) {
+	p.nextToken() // consume POOL
+	if p.curToken.Type == TokenProviders {
+		return NewCommand("list_pool_providers"), nil
+	} else if p.curToken.Type == TokenModels {
+		p.nextToken()
+		if p.curToken.Type != TokenFrom {
+			return nil, fmt.Errorf("expected FROM")
+		}
+		p.nextToken()
+		providerName, err := p.parseQuotedString()
+		if err != nil {
+			return nil, err
+		}
+		cmd := NewCommand("list_pool_models")
+		cmd.Params["provider_name"] = providerName
+		p.nextToken()
+		if p.curToken.Type == TokenSemicolon {
+			p.nextToken()
+		}
+		return cmd, nil
+	} else {
+		return nil, fmt.Errorf("expected PROVIDERS or MODELS")
+	}
+}
+
+// parseCommonShowPoolModel parses (shared by admin and user SHOW):
+//
+//	SHOW POOL PROVIDER '<provider>';
+//	SHOW POOL MODEL '<model>' FROM '<provider>';
+func (p *Parser) parseCommonShowPoolModel() (*Command, error) {
+	p.nextToken() // consume POOL
+	if p.curToken.Type == TokenProvider {
+		p.nextToken()
+		providerName, err := p.parseQuotedString()
+		if err != nil {
+			return nil, err
+		}
+		cmd := NewCommand("show_pool_provider")
+		cmd.Params["provider_name"] = providerName
+		p.nextToken()
+		if p.curToken.Type == TokenSemicolon {
+			p.nextToken()
+		}
+		return cmd, nil
+	} else if p.curToken.Type == TokenModel {
+		p.nextToken() // skip model
+		modelName, err := p.parseQuotedString()
+		if err != nil {
+			return nil, err
+		}
+		p.nextToken() // skip model name
+		if p.curToken.Type != TokenFrom {
+			return nil, fmt.Errorf("expected FROM")
+		}
+		p.nextToken() // skip from
+		providerName, err := p.parseQuotedString()
+		if err != nil {
+			return nil, err
+		}
+		p.nextToken() // skip provider name
+		cmd := NewCommand("show_pool_model")
+		cmd.Params["provider_name"] = providerName
+		cmd.Params["model_name"] = modelName
+		if p.curToken.Type == TokenSemicolon {
+			p.nextToken()
+		}
+		return cmd, nil
+	} else {
+		return nil, fmt.Errorf("expected PROVIDER or MODEL")
+	}
+}
+
 func (p *Parser) parsePingServer() (*Command, error) {
 	cmd := NewCommand("ping_server")
 	p.nextToken()
@@ -382,8 +459,9 @@ func (p *Parser) parsePingServer() (*Command, error) {
 }
 
 // parseListDatasets parses:
-//   LIST DATASETS;                 (user mode, self-service -> list_user_datasets)
-//   LIST DATASETS OF '<email>';    (admin mode, on behalf of a user -> list_datasets)
+//
+//	LIST DATASETS;                 (user mode, self-service -> list_user_datasets)
+//	LIST DATASETS OF '<email>';    (admin mode, on behalf of a user -> list_datasets)
 func (p *Parser) parseListDatasets() (*Command, error) {
 	cmd := NewCommand("list_user_datasets")
 	p.nextToken() // consume DATASETS
@@ -438,8 +516,9 @@ func (p *Parser) parseListAgents() (*Command, error) {
 }
 
 // parseListTokens parses:
-//   LIST TOKENS;                 (user mode, self-service)
-//   LIST TOKENS OF '<email>';    (admin mode, on behalf of a user)
+//
+//	LIST TOKENS;                 (user mode, self-service)
+//	LIST TOKENS OF '<email>';    (admin mode, on behalf of a user)
 func (p *Parser) parseListTokens() (*Command, error) {
 	p.nextToken() // consume TOKENS
 	cmd := NewCommand("list_tokens")
@@ -461,8 +540,9 @@ func (p *Parser) parseListTokens() (*Command, error) {
 }
 
 // parseDropToken parses:
-//   DROP TOKEN '<token>';                 (user mode, self-service)
-//   DROP TOKEN '<token>' OF '<email>';    (admin mode, on behalf of a user)
+//
+//	DROP TOKEN '<token>';                 (user mode, self-service)
+//	DROP TOKEN '<token>' OF '<email>';    (admin mode, on behalf of a user)
 func (p *Parser) parseDropToken() (*Command, error) {
 	p.nextToken() // consume TOKEN
 	token, err := p.parseQuotedString()

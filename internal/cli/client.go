@@ -139,6 +139,14 @@ func (c *MultiRAGClient) ExecuteAdminCommand(cmd *Command) (ResponseIf, error) {
 		return c.ListAdminTokens(cmd)
 	case "drop_token":
 		return c.DropAdminToken(cmd)
+	case "list_pool_providers":
+		return c.ListPoolProviders(cmd)
+	case "show_pool_provider":
+		return c.ShowPoolProvider(cmd)
+	case "list_pool_models":
+		return c.ListPoolModels(cmd)
+	case "show_pool_model":
+		return c.ShowPoolModel(cmd)
 	// TODO: Implement other admin commands
 	default:
 		return nil, fmt.Errorf("command '%s' would be executed with API", cmd.Type)
@@ -176,6 +184,14 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 		return c.CreateDocMetaIndex(cmd)
 	case "drop_doc_meta_index":
 		return c.DropDocMetaIndex(cmd)
+	case "list_pool_providers":
+		return c.ListPoolProviders(cmd)
+	case "show_pool_provider":
+		return c.ShowPoolProvider(cmd)
+	case "list_pool_models":
+		return c.ListPoolModels(cmd)
+	case "show_pool_model":
+		return c.ShowPoolModel(cmd)
 	// Context Engine commands (SQL-parser path)
 	case "ce_ls":
 		return c.CEList(cmd)

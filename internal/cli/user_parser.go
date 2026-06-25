@@ -86,6 +86,8 @@ func (p *Parser) parseListCommand() (*Command, error) {
 		return p.parseListModelProviders()
 	case TokenDefault:
 		return p.parseListDefaultModels()
+	case TokenPool:
+		return p.parseCommonListPoolModels()
 	case TokenChats:
 		p.nextToken()
 		if err := p.expectSemicolon(); err != nil {
@@ -171,6 +173,8 @@ func (p *Parser) parseShowCommand() (*Command, error) {
 			return nil, err
 		}
 		return NewCommand("show_current_user"), nil
+	case TokenPool:
+		return p.parseCommonShowPoolModel()
 	default:
 		return nil, fmt.Errorf("unknown SHOW target: %s", p.curToken.Value)
 	}

@@ -25,8 +25,8 @@ import (
 	"strings"
 	"time"
 
-	"multirag/internal/logger"
 	"multirag/internal/entity"
+	"multirag/internal/logger"
 	"multirag/internal/server"
 	"multirag/internal/utility"
 
@@ -41,6 +41,7 @@ import (
 )
 
 var DB *gorm.DB
+var modelProviderManager *entity.ProviderManager
 
 // LLMFactoryConfig represents a single LLM factory configuration
 type LLMFactoryConfig struct {
@@ -172,12 +173,23 @@ func InitDB() error {
 	}
 
 	logger.Info("Database connected and migrated successfully")
+
+	modelProviderManager, err = entity.NewProviderManager(filepath.Join(utility.GetProjectBaseDirectory(), "configs", "models"))
+	if err != nil {
+		log.Fatal("Failed to load model providers:", err)
+	}
+	logger.Info("Model providers loaded successfully")
 	return nil
 }
 
 // GetDB get database instance
 func GetDB() *gorm.DB {
 	return DB
+}
+
+// GetModelProviderManager get model provider manager instance
+func GetModelProviderManager() *entity.ProviderManager {
+	return modelProviderManager
 }
 
 // autoMigrateSafely runs AutoMigrate and ignores duplicate index errors
@@ -290,7 +302,7 @@ func InitLLMFactory() error {
 				}
 			} else {
 				if err := db.Model(&entity.LLM{}).Where("llm_name = ? AND fid = ?", llm.LLMName, factory.Name).Updates(map[string]interface{}{
-					"mdl_type": llmModel.ModelType,
+					"mdl_type":   llmModel.ModelType,
 					"max_tokens": llmModel.MaxTokens,
 					"tags":       llmModel.Tags,
 					"is_tools":   llmModel.IsTools,

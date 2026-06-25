@@ -18,6 +18,7 @@ package cli
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -307,4 +308,133 @@ func readPasswordFallback() (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(password), nil
+}
+
+// ==================== Model provider pool ====================
+
+func (c *MultiRAGClient) ListPoolProviders(cmd *Command) (ResponseIf, error) {
+	endPoint := "/providers"
+	if c.ServerType == "admin" {
+		endPoint = "/admin/providers"
+	}
+
+	resp, err := c.HTTPClient.Request("GET", endPoint, true, "web", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list providers: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to list providers: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	var result CommonResponse
+	if err = json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("failed to list providers: invalid JSON (%w)", err)
+	}
+
+	if result.Code != 0 {
+		return nil, fmt.Errorf("%s", result.Message)
+	}
+	result.Duration = 0
+	return &result, nil
+}
+
+func (c *MultiRAGClient) ShowPoolProvider(cmd *Command) (ResponseIf, error) {
+	providerName, ok := cmd.Params["provider_name"].(string)
+	if !ok {
+		return nil, fmt.Errorf("provider_name not provided")
+	}
+
+	endPoint := fmt.Sprintf("/providers/%s", providerName)
+	if c.ServerType == "admin" {
+		endPoint = fmt.Sprintf("/admin/providers/%s", providerName)
+	}
+
+	resp, err := c.HTTPClient.Request("GET", endPoint, true, "web", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to show provider: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to show provider: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	var result CommonDataResponse
+	if err = json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("failed to show provider: invalid JSON (%w)", err)
+	}
+
+	if result.Code != 0 {
+		return nil, fmt.Errorf("%s", result.Message)
+	}
+	result.Duration = 0
+	return &result, nil
+}
+
+func (c *MultiRAGClient) ListPoolModels(cmd *Command) (ResponseIf, error) {
+	providerName, ok := cmd.Params["provider_name"].(string)
+	if !ok {
+		return nil, fmt.Errorf("provider_name not provided")
+	}
+
+	endPoint := fmt.Sprintf("/providers/%s/models", providerName)
+	if c.ServerType == "admin" {
+		endPoint = fmt.Sprintf("/admin/providers/%s/models", providerName)
+	}
+
+	resp, err := c.HTTPClient.Request("GET", endPoint, true, "web", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list models: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to list models: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	var result CommonResponse
+	if err = json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("failed to list models: invalid JSON (%w)", err)
+	}
+
+	if result.Code != 0 {
+		return nil, fmt.Errorf("%s", result.Message)
+	}
+	result.Duration = 0
+	return &result, nil
+}
+
+func (c *MultiRAGClient) ShowPoolModel(cmd *Command) (ResponseIf, error) {
+	providerName, ok := cmd.Params["provider_name"].(string)
+	if !ok {
+		return nil, fmt.Errorf("provider_name not provided")
+	}
+	modelName, ok := cmd.Params["model_name"].(string)
+	if !ok {
+		return nil, fmt.Errorf("model_name not provided")
+	}
+
+	endPoint := fmt.Sprintf("/providers/%s/models/%s", providerName, modelName)
+	if c.ServerType == "admin" {
+		endPoint = fmt.Sprintf("/admin/providers/%s/models/%s", providerName, modelName)
+	}
+
+	resp, err := c.HTTPClient.Request("GET", endPoint, true, "web", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to show model: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to show model: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	var result CommonDataResponse
+	if err = json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("failed to show model: invalid JSON (%w)", err)
+	}
+
+	if result.Code != 0 {
+		return nil, fmt.Errorf("%s", result.Message)
+	}
+	result.Duration = 0
+	return &result, nil
 }
