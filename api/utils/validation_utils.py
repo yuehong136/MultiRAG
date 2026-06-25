@@ -15,6 +15,9 @@
 #
 from collections import Counter
 import json
+import math
+import pathlib
+import re
 import string
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -31,7 +34,9 @@ from pydantic import (
 )
 from pydantic_core import PydanticCustomError
 
-from api.constants import DATASET_NAME_LIMIT
+from api.constants import DATASET_NAME_LIMIT, FILE_NAME_LEN_LIMIT
+from api.db import FileType
+from common.constants import RetCode
 
 
 async def validate_and_parse_json_request(
@@ -377,6 +382,57 @@ class ParserConfig(Base):
     filename_embd_weight: Annotated[float | None, Field(default=0.1, ge=0.0, le=1.0)]
     task_page_size: Annotated[int | None, Field(default=None, ge=1)]
     pages: Annotated[list[list[int]] | None, Field(default=None)]
+
+
+VALID_UPDATE_CHUNK_METHODS = {
+    "naive",
+    "manual",
+    "qa",
+    "table",
+    "paper",
+    "book",
+    "laws",
+    "presentation",
+    "picture",
+    "one",
+    "knowledge_graph",
+    "email",
+    "tag",
+}
+
+
+class UpdateDocumentReq(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    name: Annotated[str | None, Field(default=None)]
+    chunk_method: Annotated[str | None, Field(default=None, max_length=65535)]
+    enabled: Annotated[bool | int | None, Field(default=None)]
+    chunk_count: Annotated[int | None, Field(default=None, ge=0)]
+    token_count: Annotated[int | None, Field(default=None, ge=0)]
+    progress: Annotated[float | None, Field(default=None, ge=0.0, le=1.0)]
+    parser_config: Annotated[ParserConfig | None, Field(default=None)]
+    meta_fields: Annotated[dict[str, Any] | None, Field(default=None)]
+
+    @field_validator("chunk_method", mode="after")
+    @classmethod
+    def validate_document_chunk_method(cls, chunk_method: str | None) -> str | None:
+        if chunk_method is None:
+            return None
+        if not chunk_method:
+            raise PydanticCustomError("format_invalid", "`chunk_method` (empty string) is not valid")
+        if chunk_method not in VALID_UPDATE_CHUNK_METHODS:
+            raise PydanticCustomError("format_invalid", "`chunk_method` {chunk_method} doesn't exist", {"chunk_method": chunk_method})
+        return chunk_method
+
+    @field_validator("enabled", mode="after")
+    @classmethod
+    def validate_document_enabled(cls, enabled: bool | int | None) -> bool | int | None:
+        if enabled is None:
+            return None
+        converted = int(enabled)
+        if converted not in (0, 1):
+            raise PydanticCustomError("format_invalid", "`enabled` value invalid, only accept 0 or 1 but is {enabled}", {"enabled": enabled})
+        return enabled
 
 
 class CreateDatasetReq(Base):
@@ -755,3 +811,49 @@ class BaseListReq(BaseModel):
 
 class ListDatasetReq(BaseListReq):
     include_parsing_status: Annotated[bool, Field(default=False)]
+
+
+def validate_immutable_fields(update_doc_req: UpdateDocumentReq, doc):
+    """Validate that immutable document fields have not been changed."""
+    fields_set = update_doc_req.model_fields_set
+
+    if "chunk_count" in fields_set and update_doc_req.chunk_count is not None and update_doc_req.chunk_count != int(getattr(doc, "chunk_num", -1)):
+        return "Can't change `chunk_count`.", RetCode.DATA_ERROR
+
+    if "token_count" in fields_set and update_doc_req.token_count is not None and update_doc_req.token_count != int(getattr(doc, "token_num", -1)):
+        return "Can't change `token_count`.", RetCode.DATA_ERROR
+
+    if "progress" in fields_set and update_doc_req.progress is not None:
+        progress_from_db = float(getattr(doc, "progress", -1.0))
+        if not math.isclose(update_doc_req.progress, progress_from_db):
+            return "Can't change `progress`.", RetCode.DATA_ERROR
+
+    return None, None
+
+
+def validate_document_name(req_doc_name: str, doc, docs_from_name):
+    """Validate document name update."""
+    if not isinstance(req_doc_name, str):
+        return f"AttributeError('{type(req_doc_name).__name__}' object has no attribute 'encode')", RetCode.EXCEPTION_ERROR
+    if len(req_doc_name.encode("utf-8")) > FILE_NAME_LEN_LIMIT:
+        return f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.", RetCode.ARGUMENT_ERROR
+    if pathlib.Path(req_doc_name.lower()).suffix != pathlib.Path(doc.name.lower()).suffix:
+        return "The extension of file can't be changed", RetCode.ARGUMENT_ERROR
+
+    for doc_from_name in docs_from_name:
+        if doc_from_name.name == req_doc_name:
+            return "Duplicated document name in the same dataset.", RetCode.DATA_ERROR
+    return None, None
+
+
+def validate_chunk_method(doc, chunk_method: str | None = None):
+    """Validate document state for chunk method updates."""
+    if chunk_method is not None and len(chunk_method) == 0:
+        return "`chunk_method` (empty string) is not valid", RetCode.DATA_ERROR
+
+    doc_type = getattr(doc, "type", None)
+    doc_name = getattr(doc, "name", "") or ""
+    if doc_type in (FileType.VISUAL, FileType.VISUAL.value) or re.search(r"\.(ppt|pptx|pages)$", doc_name):
+        return "Not supported yet!", RetCode.DATA_ERROR
+
+    return None, None

@@ -2,7 +2,6 @@ import base64
 import datetime
 import json
 import logging
-import pathlib
 import re
 from io import BytesIO
 from typing import Any, Literal, Annotated
@@ -16,7 +15,6 @@ from sqlalchemy.orm import Session
 from urllib.parse import quote
 
 from api.constants import FILE_NAME_LEN_LIMIT
-from api.db import FileType
 from api.db.db_models import APIToken, Document, Task, get_db
 from api.db.services.document_service import DocumentService
 from api.db.services.doc_metadata_service import DocMetadataService
@@ -29,6 +27,8 @@ from api.db.joint_services.tenant_model_service import get_model_config_by_id, g
 from api.db.services.task_service import TaskService, queue_tasks, cancel_all_task_of
 from api.utils.api_utils import check_duplicate_ids, construct_json_result, get_error_data_result, get_parser_config, get_result, server_error_response, token_required
 from api.utils.image_utils import store_chunk_image
+from api.utils import validation_utils
+from api.utils.validation_utils import UpdateDocumentReq
 from core.app.tag import label_question
 from core.nlp import rag_tokenizer, search
 from core.prompts.generator import cross_languages, keyword_extraction
@@ -56,8 +56,8 @@ class HybridSearchMode(BaseModel):
     weight_dense: float = Field(default=0.7, ge=0.0, le=1.0)
     weight_sparse: float = Field(default=0.3, ge=0.0, le=1.0)
 
-    @model_validator(mode='after')
-    def validate_weights(self) -> 'HybridSearchMode':
+    @model_validator(mode="after")
+    def validate_weights(self) -> "HybridSearchMode":
         """确保权重和为1，如果不是则自动调整"""
         total = self.weight_dense + self.weight_sparse
         if abs(total - 1.0) > 0.001:
@@ -71,11 +71,11 @@ class FusionSearchMode(BaseModel):
     type: Literal["fusion"] = "fusion"
     weights: str = Field(default="0.05,0.95")
 
-    @model_validator(mode='after')
-    def validate_weights_format(self) -> 'FusionSearchMode':
+    @model_validator(mode="after")
+    def validate_weights_format(self) -> "FusionSearchMode":
         """验证weights格式"""
         try:
-            parts = self.weights.split(',')
+            parts = self.weights.split(",")
             if len(parts) != 2:
                 raise ValueError("weights must contain exactly two comma-separated values")
             float(parts[0].strip())
@@ -86,10 +86,8 @@ class FusionSearchMode(BaseModel):
 
 
 # 使用 Discriminator 的高效版本
-SearchModeType = Annotated[
-    SparseSearchMode | DenseSearchMode | HybridSearchMode | FusionSearchMode,
-    Discriminator('type')
-]
+SearchModeType = Annotated[SparseSearchMode | DenseSearchMode | HybridSearchMode | FusionSearchMode, Discriminator("type")]
+
 
 class ChunkModel(BaseModel):
     id: str = ""
@@ -114,12 +112,8 @@ class ChunkModel(BaseModel):
         return value
 
 
-class UpdateDocumentRequest(BaseModel):
-    name: str | None = None
-    parser_config: dict[str, Any] | None = None
-    chunk_method: str | None = None
-    enabled: bool | None = None
-    meta_fields: dict[str, Any] | None = None
+class UpdateDocumentRequest(UpdateDocumentReq):
+    pass
 
 
 class DeleteDocumentsRequest(BaseModel):
@@ -186,7 +180,7 @@ class RetrievalTestRequest(BaseModel):
             return None
 
         mode_data = self.search_mode.model_dump()
-        mode_type = mode_data.pop('type')
+        mode_type = mode_data.pop("type")
         return {mode_type: mode_data}
 
 
@@ -196,7 +190,7 @@ def upload_documents(
     files: list[UploadFile] = File(...),
     parent_path: str | None = Form(None, description="Optional nested path under the parent folder. Uses '/' separators."),
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
+    tenant_id: str = Depends(token_required),
 ):
     """
     上传文档到数据集
@@ -213,10 +207,10 @@ def upload_documents(
     """
     if not files:
         return get_error_data_result(retmsg="No file part!", retcode=RetCode.ARGUMENT_ERROR)
-    
+
     if len(files) > MAXIMUM_OF_UPLOADING_FILES:
         return get_error_data_result(retmsg=f"You try to upload {len(files)} files, which exceeds the maximum number: {MAXIMUM_OF_UPLOADING_FILES}")
-    
+
     # 验证文件并读取内容
     file_contents = []
     for file_obj in files:
@@ -226,15 +220,15 @@ def upload_documents(
             return get_result(retmsg=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.", retcode=RetCode.ARGUMENT_ERROR)
         # 读取文件内容并转换为 (bytes, filename) 元组
         file_contents.append((file_obj.file.read(), file_obj.filename))
-    
+
     kb = KnowledgebaseService.get_by_id(db, dataset_id)
     if not kb:
         raise HTTPException(status_code=RetCode.NOT_FOUND, detail=f"Can't find the dataset with ID {dataset_id}!")
-    
+
     err, uploaded_files = FileService.upload_document(db, kb, file_contents, tenant_id, parent_path=parent_path)
     if err:
         return get_result(retmsg="\n".join(err), retcode=RetCode.SERVER_ERROR)
-    
+
     # 重命名键名
     renamed_doc_list = []
     for file in uploaded_files:
@@ -251,143 +245,147 @@ def upload_documents(
             renamed_doc[new_key] = value
         renamed_doc["run"] = "UNSTART"
         renamed_doc_list.append(renamed_doc)
-    
+
     return get_result(data=renamed_doc_list)
 
 
+def _update_document_name_only(db: Session, document_id: str, req_doc_name: str):
+    if not DocumentService.update_by_id(db, document_id, {"name": req_doc_name}):
+        return get_error_data_result(retmsg="Database error (Document rename)!")
+
+    informs = File2DocumentService.get_by_document_id(db, document_id)
+    if informs:
+        file = FileService.get_by_id(db, informs[0].file_id)
+        if file:
+            FileService.update_by_id(db, file.id, {"name": req_doc_name})
+    return None
+
+
+def _update_chunk_method_only(db: Session, req: dict[str, Any], doc: Document, dataset_id: str, tenant_id: str):
+    if str(doc.parser_id).lower() != req["chunk_method"].lower():
+        e = DocumentService.update_by_id(
+            db,
+            doc.id,
+            {
+                "parser_id": req["chunk_method"],
+                "progress": 0,
+                "progress_msg": "",
+                "run": TaskStatus.UNSTART.value,
+            },
+        )
+        if not e:
+            return get_error_data_result(retmsg="Document not found!")
+
+    if not req.get("parser_config"):
+        req["parser_config"] = get_parser_config(req["chunk_method"], req.get("parser_config"))
+        DocumentService.update_parser_config(db, doc.id, req["parser_config"])
+
+    if doc.token_num > 0:
+        e = DocumentService.increment_chunk_num(
+            db,
+            doc.id,
+            doc.kb_id,
+            doc.token_num * -1,
+            doc.chunk_num * -1,
+            doc.process_duration * -1,
+        )
+        if not e:
+            return get_error_data_result(retmsg="Document not found!")
+        settings.docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id), dataset_id)
+    return None
+
+
+def _update_document_status_only(db: Session, status: int, doc: Document, kb):
+    current_status = None if doc.status is None else int(doc.status)
+    if current_status == status:
+        return None
+
+    try:
+        if not DocumentService.update_by_id(db, doc.id, {"status": str(status)}):
+            return get_error_data_result(retmsg="Database error (Document update)!")
+        settings.docStoreConn.update({"doc_id": doc.id}, {"available_int": status}, search.index_name(kb.tenant_id, [kb.name]), doc.kb_id)
+    except Exception as e:
+        return server_error_response(e)
+    return None
+
+
+def _validate_document_update_fields(db: Session, update_doc_req: UpdateDocumentReq, doc: Document, req: dict[str, Any]):
+    error_msg, error_code = validation_utils.validate_immutable_fields(update_doc_req, doc)
+    if error_msg:
+        return error_msg, error_code
+
+    if "name" in req and req["name"] != doc.name:
+        docs_from_name = DocumentService.query(db, name=req["name"], kb_id=doc.kb_id)
+        error_msg, error_code = validation_utils.validate_document_name(req["name"], doc, docs_from_name)
+        if error_msg:
+            return error_msg, error_code
+
+    if "chunk_method" in req and req["chunk_method"] is not None:
+        error_msg, error_code = validation_utils.validate_chunk_method(doc, req["chunk_method"])
+        if error_msg:
+            return error_msg, error_code
+
+    return None, None
+
+
 @router.put("/datasets/{dataset_id}/documents/{document_id}", summary="更新文档")
-def update_document(
-    dataset_id: str,
-    document_id: str,
-    request: UpdateDocumentRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
+def update_document(dataset_id: str, document_id: str, request: UpdateDocumentRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     """
     更新数据集中的文档
-    
+
     Args:
         dataset_id: 数据集ID
         document_id: 文档ID
         request: 更新请求参数
         db: 数据库会话
         tenant_id: 租户ID
-    
+
     Returns:
         更新后的文档信息
     """
     req = request.model_dump(exclude_unset=True)
-    
+
     if not KnowledgebaseService.query(db, id=dataset_id, tenant_id=tenant_id):
         return get_error_data_result(retmsg="You don't own the dataset.")
-    
+
     kb = KnowledgebaseService.get_by_id(db, dataset_id)
     if not kb:
         return get_error_data_result(retmsg="Can't find this dataset!")
-    
+
     doc = DocumentService.query(db, kb_id=dataset_id, id=document_id)
     if not doc:
         return get_error_data_result(retmsg="The dataset doesn't own the document.")
     doc = doc[0]
-    
-    # 检查不可更改的字段
-    if "chunk_count" in req and req["chunk_count"] != doc.chunk_num:
-        return get_error_data_result(retmsg="Can't change `chunk_count`.")
-    if "token_count" in req and req["token_count"] != doc.token_num:
-        return get_error_data_result(retmsg="Can't change `token_count`.")
-    if "progress" in req and req["progress"] != doc.progress:
-        return get_error_data_result(retmsg="Can't change `progress`.")
-    
+
+    error_msg, error_code = _validate_document_update_fields(db, request, doc, req)
+    if error_msg:
+        return get_error_data_result(retmsg=error_msg, retcode=error_code)
+
     # 更新元数据字段
     if "meta_fields" in req:
-        if not isinstance(req["meta_fields"], dict):
-            return get_error_data_result(retmsg="meta_fields must be a dictionary")
         if not DocMetadataService.update_document_metadata(db, document_id, req["meta_fields"]):
             return get_error_data_result(retmsg="Failed to update metadata")
-    
+
     # 更新文档名称
     if "name" in req and req["name"] != doc.name:
-        if not isinstance(req["name"], str):
-            return server_error_response(AttributeError(f"'{type(req['name']).__name__}' object has no attribute 'encode'"))
-        if len(req["name"].encode("utf-8")) > FILE_NAME_LEN_LIMIT:
-            return get_result(
-                retmsg=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.",
-                retcode=RetCode.ARGUMENT_ERROR,
-            )
-        if pathlib.Path(req["name"].lower()).suffix != pathlib.Path(doc.name.lower()).suffix:
-            return get_result(
-                retmsg="The extension of file can't be changed",
-                retcode=RetCode.ARGUMENT_ERROR,
-            )
-        
-        for d in DocumentService.query(db, name=req["name"], kb_id=doc.kb_id):
-            if d.name == req["name"]:
-                return get_error_data_result(retmsg="Duplicated document name in the same dataset.")
-        
-        if not DocumentService.update_by_id(db, document_id, {"name": req["name"]}):
-            return get_error_data_result(retmsg="Database error (Document rename)!")
-        
-        informs = File2DocumentService.get_by_document_id(db, document_id)
-        if informs:
-            file = FileService.get_by_id(db, informs[0].file_id)
-            if file:
-                FileService.update_by_id(db, file.id, {"name": req["name"]})
-    
+        if error := _update_document_name_only(db, document_id, req["name"]):
+            return error
+
     # 更新解析配置
     if "parser_config" in req:
         DocumentService.update_parser_config(db, doc.id, req["parser_config"])
-    
+
     # 更新分块方法
-    if "chunk_method" in req:
-        valid_chunk_method = {"naive", "manual", "qa", "table", "paper", "book", "laws", "presentation", "picture", "one", "knowledge_graph", "email", "tag"}
-        if req.get("chunk_method") not in valid_chunk_method:
-            return get_error_data_result(retmsg=f"`chunk_method` {req['chunk_method']} doesn't exist")
-        
-        if doc.type == FileType.VISUAL or re.search(r"\.(ppt|pptx|pages)$", doc.name):
-            return get_error_data_result(retmsg="Not supported yet!")
-        
-        if doc.parser_id.lower() != req["chunk_method"].lower():
-            e = DocumentService.update_by_id(
-                db,
-                doc.id,
-                {
-                    "parser_id": req["chunk_method"],
-                    "progress": 0,
-                    "progress_msg": "",
-                    "run": TaskStatus.UNSTART.value,
-                },
-            )
-            if not e:
-                return get_error_data_result(retmsg="Document not found!")
-        
-        if not req.get("parser_config"):
-            req["parser_config"] = get_parser_config(req["chunk_method"], req.get("parser_config"))
-            DocumentService.update_parser_config(db, doc.id, req["parser_config"])
-        
-        if doc.token_num > 0:
-            e = DocumentService.increment_chunk_num(
-                db,
-                doc.id,
-                doc.kb_id,
-                doc.token_num * -1,
-                doc.chunk_num * -1,
-                doc.process_duration * -1,
-            )
-            if not e:
-                return get_error_data_result(retmsg="Document not found!")
-            settings.docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id), dataset_id)
-    
+    if "chunk_method" in req and req["chunk_method"] is not None:
+        if error := _update_chunk_method_only(db, req, doc, dataset_id, tenant_id):
+            return error
+
     # 更新启用状态
-    if "enabled" in req:
+    if "enabled" in req and req["enabled"] is not None:
         status = int(req["enabled"])
-        if doc.status != req["enabled"]:
-            try:
-                if not DocumentService.update_by_id(db, doc.id, {"status": str(status)}):
-                    return get_error_data_result(retmsg="Database error (Document update)!")
-                settings.docStoreConn.update({"doc_id": doc.id}, {"available_int": status}, search.index_name(kb.tenant_id, [kb.name]), doc.kb_id)
-            except Exception as e:
-                return server_error_response(e)
-    
+        if error := _update_document_status_only(db, status, doc, kb):
+            return error
+
     try:
         doc = DocumentService.get_by_id(db, doc.id)
         if not doc:
@@ -395,7 +393,7 @@ def update_document(
     except OperationalError as e:
         logging.exception(e)
         return get_error_data_result(retmsg="Database operation failed")
-    
+
     # 重命名键名
     key_mapping = {
         "chunk_num": "chunk_count",
@@ -417,64 +415,55 @@ def update_document(
             renamed_doc[new_key] = run_mapping.get(str(value), str(value))
         else:
             renamed_doc[new_key] = value
-    
+
     return get_result(data=renamed_doc)
 
 
 @router.get("/datasets/{dataset_id}/documents/{document_id}", summary="下载文档")
-def download_document(
-    dataset_id: str,
-    document_id: str,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
+def download_document(dataset_id: str, document_id: str, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     """
     从数据集下载文档
-    
+
     Args:
         dataset_id: 数据集ID
         document_id: 文档ID
         db: 数据库会话
         tenant_id: 租户ID
-    
+
     Returns:
         文档文件流
     """
     if not document_id:
         return get_error_data_result(retmsg="Specify document_id please.")
-    
+
     if not KnowledgebaseService.query(db, id=dataset_id, tenant_id=tenant_id):
         return get_error_data_result(retmsg=f"You do not own the dataset {dataset_id}.")
-    
+
     doc = DocumentService.query(db, kb_id=dataset_id, id=document_id)
     if not doc:
         return get_error_data_result(retmsg=f"The dataset not own the document {document_id}.")
-    
+
     doc = doc[0]
     informs = File2DocumentService.get_by_document_id(db, document_id)
     if not informs:
         return get_error_data_result(retmsg="This document has been deleted")
-    
+
     file = FileService.get_by_id(db, informs[0].file_id)
     if not file:
         return get_error_data_result(retmsg="This document has been deleted")
-    
+
     try:
         settings.STORAGE_IMPL.obj_exist(file.location)
-        
+
         def file_generator():
             try:
                 for chunk in settings.STORAGE_IMPL.get(file.location):
                     yield chunk
             except Exception:
                 yield b""
-        
+
         encoded_filename = quote(doc.name)
-        return StreamingResponse(
-            file_generator(),
-            media_type="application/octet-stream",
-            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"}
-        )
+        return StreamingResponse(file_generator(), media_type="application/octet-stream", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"})
     except Exception:
         return get_error_data_result(retmsg="This document has been deleted")
 
@@ -508,11 +497,7 @@ def download_doc(
         return construct_json_result(message="This file is empty.", code=RetCode.DATA_ERROR)
     file = BytesIO(file_stream)
     encoded_filename = quote(doc[0].name)
-    return StreamingResponse(
-        file,
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"}
-    )
+    return StreamingResponse(file, media_type="application/octet-stream", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"})
 
 
 @router.get("/datasets/{dataset_id}/documents", summary="获取文档列表")
@@ -531,11 +516,11 @@ def list_documents(
     create_time_to: int = Query(0),
     metadata_condition: str | None = Query(None, description="元数据过滤条件（JSON格式）"),
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
+    tenant_id: str = Depends(token_required),
 ):
     """
     获取数据集中的文档列表
-    
+
     Args:
         dataset_id: 数据集ID
         page: 页码
@@ -551,27 +536,21 @@ def list_documents(
         create_time_to: Unix时间戳，过滤此时间之前创建的文档（0表示无过滤）
         db: 数据库会话
         tenant_id: 租户ID
-    
+
     Returns:
         文档列表
     """
     if not KnowledgebaseService.query(db, id=dataset_id, tenant_id=tenant_id):
         return get_error_data_result(retmsg="You don't own the dataset.")
-    
+
     # 检查文档ID
     if id and not DocumentService.query(db, id=id, kb_id=dataset_id):
         return get_error_data_result(retmsg=f"You don't own the document {id}.")
     if name and not DocumentService.query(db, name=name, kb_id=dataset_id):
         return get_error_data_result(retmsg=f"You don't own the document {name}.")
-    
+
     # 映射 run 状态（接受文本或数字格式）
-    run_status_text_to_numeric = {
-        "UNSTART": "0",
-        "RUNNING": "1", 
-        "CANCEL": "2",
-        "DONE": "3",
-        "FAIL": "4"
-    }
+    run_status_text_to_numeric = {"UNSTART": "0", "RUNNING": "1", "CANCEL": "2", "DONE": "3", "FAIL": "4"}
     run_status_converted = None
     if run:
         run_status_converted = [run_status_text_to_numeric.get(v, v) for v in run]
@@ -594,51 +573,34 @@ def list_documents(
             return get_result(data={"total": 0, "docs": []})
 
     try:
-        docs, total = DocumentService.get_list(
-            db,
-            dataset_id,
-            page,
-            page_size,
-            orderby,
-            desc,
-            keywords=keywords,
-            id=id,
-            name=name,
-            suffix=suffix,
-            run=run_status_converted,
-            doc_ids=doc_ids_filter
-        )
-        
+        docs, total = DocumentService.get_list(db, dataset_id, page, page_size, orderby, desc, keywords=keywords, id=id, name=name, suffix=suffix, run=run_status_converted, doc_ids=doc_ids_filter)
+
         # 时间范围过滤（0表示无限制）
         if create_time_from or create_time_to:
-            docs = [
-                d for d in docs
-                if (create_time_from == 0 or d.get("create_time", 0) >= create_time_from)
-                and (create_time_to == 0 or d.get("create_time", 0) <= create_time_to)
-            ]
-        
+            docs = [d for d in docs if (create_time_from == 0 or d.get("create_time", 0) >= create_time_from) and (create_time_to == 0 or d.get("create_time", 0) <= create_time_to)]
+
         # 重命名键名 + 映射 run 状态回文本格式输出
         key_mapping = {
             "chunk_num": "chunk_count",
-            "kb_id": "dataset_id", 
+            "kb_id": "dataset_id",
             "token_num": "token_count",
             "parser_id": "chunk_method",
         }
         run_status_numeric_to_text = {
             "0": "UNSTART",
-            "1": "RUNNING", 
+            "1": "RUNNING",
             "2": "CANCEL",
             "3": "DONE",
             "4": "FAIL",
         }
-        
+
         output_docs = []
         for d in docs:
             renamed_doc = {key_mapping.get(k, k): v for k, v in d.items()}
             if "run" in d:
                 renamed_doc["run"] = run_status_numeric_to_text.get(str(d["run"]), d["run"])
             output_docs.append(renamed_doc)
-        
+
         return get_result(data={"total": total, "docs": output_docs})
     except Exception as e:
         logging.exception(e)
@@ -646,11 +608,7 @@ def list_documents(
 
 
 @router.get("/datasets/{dataset_id}/metadata/summary", summary="获取元数据汇总")
-def metadata_summary(
-    dataset_id: str,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
+def metadata_summary(dataset_id: str, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     """
     获取数据集中文档元数据的汇总统计。
 
@@ -674,24 +632,21 @@ def metadata_summary(
 
 class MetadataUpdateSelectorSDK(BaseModel):
     """元数据批量更新的选择器"""
+
     document_ids: list[str] | None = None
     metadata_condition: dict | None = None
 
 
 class MetadataUpdateRequestSDK(BaseModel):
     """元数据批量更新请求"""
+
     selector: MetadataUpdateSelectorSDK | None = None
     updates: list[dict] = []
     deletes: list[dict] = []
 
 
 @router.post("/datasets/{dataset_id}/metadata/update", summary="批量更新元数据")
-async def metadata_batch_update(
-    dataset_id: str,
-    request: MetadataUpdateRequestSDK,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
+async def metadata_batch_update(dataset_id: str, request: MetadataUpdateRequestSDK, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     """
     批量更新或删除文档元数据。
 
@@ -761,29 +716,24 @@ async def metadata_batch_update(
 
 
 @router.delete("/datasets/{dataset_id}/documents", summary="批量删除文档")
-def delete_documents(
-    dataset_id: str,
-    request: DeleteDocumentsRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
+def delete_documents(dataset_id: str, request: DeleteDocumentsRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     """
     批量删除数据集中的文档
-    
+
     Args:
         dataset_id: 数据集ID
         request: 删除请求参数
         db: 数据库会话
         tenant_id: 租户ID
-    
+
     Returns:
         删除结果
     """
     req = request.model_dump()
-    
+
     if not KnowledgebaseService.query(db, id=dataset_id, tenant_id=tenant_id):
         return get_error_data_result(retmsg="You don't own the dataset.")
-    
+
     ids = req.get("ids")
     if not ids:
         if req.get("delete_all") is True:
@@ -794,17 +744,17 @@ def delete_documents(
             return get_result()
 
     doc_ids = ids
-    
+
     unique_doc_ids, duplicate_messages = check_duplicate_ids(doc_ids, "document")
     errors = []
     success_count = 0
-    
+
     for doc_id in unique_doc_ids:
         doc = DocumentService.query(db, kb_id=dataset_id, id=doc_id)
         if not doc:
             errors.append(f"Document {doc_id} not found")
             continue
-        
+
         try:
             if not DocumentService.remove_document(db, doc[0], tenant_id):
                 errors.append(f"Failed to remove document {doc_id}")
@@ -812,59 +762,48 @@ def delete_documents(
             success_count += 1
         except Exception as e:
             errors.append(f"Error deleting document {doc_id}: {str(e)}")
-    
+
     if errors:
         if success_count > 0:
-            return get_result(
-                data={"success_count": success_count, "errors": errors[:5]},
-                retmsg=f"Partially deleted {success_count} documents with {len(errors)} errors"
-            )
+            return get_result(data={"success_count": success_count, "errors": errors[:5]}, retmsg=f"Partially deleted {success_count} documents with {len(errors)} errors")
         else:
             return get_error_data_result(retmsg=f"Failed to delete documents: {'; '.join(errors)}")
-    
+
     if duplicate_messages:
         if success_count > 0:
-            return get_result(
-                data={"success_count": success_count, "errors": duplicate_messages},
-                retmsg=f"Partially deleted {success_count} documents with {len(duplicate_messages)} errors"
-            )
+            return get_result(data={"success_count": success_count, "errors": duplicate_messages}, retmsg=f"Partially deleted {success_count} documents with {len(duplicate_messages)} errors")
         else:
             return get_error_data_result(retmsg=";".join(duplicate_messages))
-    
+
     return get_result(retmsg=f"Successfully deleted {success_count} documents")
 
 
 @router.post("/datasets/{dataset_id}/chunks", summary="解析文档")
-def parse_documents(
-    dataset_id: str,
-    request: ParseDocumentRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
+def parse_documents(dataset_id: str, request: ParseDocumentRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     """
     解析数据集中的文档为chunks
-    
+
     Args:
         dataset_id: 数据集ID
         request: 解析请求参数
         db: 数据库会话
         tenant_id: 租户ID
-    
+
     Returns:
         解析任务结果
     """
     req = request.model_dump()
-    
+
     if not KnowledgebaseService.query(db, id=dataset_id, tenant_id=tenant_id):
         return get_error_data_result(retmsg="You don't own the dataset.")
-    
+
     document_ids = req["document_ids"]
     if not document_ids:
         return get_error_data_result(retmsg="document_ids is required")
-    
+
     # 检查重复ID
     unique_doc_ids, duplicate_messages = check_duplicate_ids(document_ids, "document")
-    
+
     try:
         docs = []
         for doc_id in unique_doc_ids:
@@ -872,7 +811,7 @@ def parse_documents(
             if not doc:
                 return get_error_data_result(retmsg=f"Document {doc_id} not found")
             docs.append(doc[0])
-        
+
         # 队列解析任务
         for doc in docs:
             if doc.status == "0":  # 未启用的文档不解析
@@ -901,11 +840,11 @@ def parse_documents(
             doc_dict["tenant_id"] = tenant_id
             bucket, name = File2DocumentService.get_storage_address(db, doc_id=doc_dict["id"])
             queue_tasks(db, doc_dict, bucket, name, 0)
-        
+
         message = "Documents queued for parsing"
         if duplicate_messages:
             message += f" (with {len(duplicate_messages)} duplicate IDs ignored)"
-            
+
         return get_result(retmsg=message)
     except Exception as e:
         logging.exception(e)
@@ -917,36 +856,31 @@ DOC_STOP_PARSING_INVALID_STATE_ERROR_CODE = "DOC_STOP_PARSING_INVALID_STATE"
 
 
 @router.delete("/datasets/{dataset_id}/chunks", summary="停止解析")
-def stop_parsing_documents(
-    dataset_id: str,
-    request: StopParsingRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
+def stop_parsing_documents(dataset_id: str, request: StopParsingRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     """
     停止解析数据集中的文档
-    
+
     Args:
         dataset_id: 数据集ID
         request: 停止解析请求参数
         db: 数据库会话
         tenant_id: 租户ID
-    
+
     Returns:
         停止解析结果
     """
     req = request.model_dump()
-    
+
     if not KnowledgebaseService.query(db, id=dataset_id, tenant_id=tenant_id):
         return get_error_data_result(retmsg="You don't own the dataset.")
-    
+
     document_ids = req["document_ids"]
     if not document_ids:
         return get_error_data_result(retmsg="document_ids is required")
-    
+
     # 检查重复ID
     unique_doc_ids, duplicate_messages = check_duplicate_ids(document_ids, "document")
-    
+
     try:
         success_count = 0
         for doc_id in unique_doc_ids:
@@ -962,24 +896,16 @@ def stop_parsing_documents(
             # Send cancellation signal via Redis to stop background task
             cancel_all_task_of(doc_id)
             # 更新文档状态为取消
-            DocumentService.update_by_id(
-                db,
-                doc_id,
-                {
-                    "run": TaskStatus.CANCEL.value,
-                    "progress": 0,
-                    "progress_msg": "Cancelled by user"
-                }
-            )
-            
+            DocumentService.update_by_id(db, doc_id, {"run": TaskStatus.CANCEL.value, "progress": 0, "progress_msg": "Cancelled by user"})
+
             # 删除相关任务
             TaskService.filter_delete(db, [Task.doc_id == doc_id])
             success_count += 1
-        
+
         message = f"Parsing stopped for {success_count} documents"
         if duplicate_messages:
             message += f" (with {len(duplicate_messages)} duplicate IDs ignored)"
-            
+
         return get_result(retmsg=message)
     except Exception as e:
         logging.exception(e)
@@ -996,7 +922,7 @@ async def list_chunks(
     id: str | None = Query(None, description="Chunk ID to retrieve a specific chunk"),
     available: bool | None = Query(None, description="Filter by availability status"),
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
+    tenant_id: str = Depends(token_required),
 ):
     """
     获取文档的分块列表
@@ -1101,11 +1027,7 @@ async def list_chunks(
             chunk_data = sres.field[chunk_id]
             d = {
                 "id": chunk_id,
-                "content": (
-                    remove_redundant_spaces(sres.highlight[chunk_id])
-                    if keywords and chunk_id in sres.highlight
-                    else chunk_data.get("content_with_weight", "")
-                ),
+                "content": (remove_redundant_spaces(sres.highlight[chunk_id]) if keywords and chunk_id in sres.highlight else chunk_data.get("content_with_weight", "")),
                 "document_id": chunk_data.get("doc_id", ""),
                 "docnm_kwd": chunk_data.get("docnm_kwd", ""),
                 "important_keywords": chunk_data.get("important_kwd", []),
@@ -1124,44 +1046,38 @@ async def list_chunks(
 
 
 @router.post("/datasets/{dataset_id}/documents/{document_id}/chunks", summary="添加文档分块")
-def add_chunk(
-    dataset_id: str,
-    document_id: str,
-    request: AddChunkRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
+def add_chunk(dataset_id: str, document_id: str, request: AddChunkRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     """
     为文档添加新的分块
-    
+
     Args:
         dataset_id: 数据集ID
         document_id: 文档ID
         request: 添加分块请求参数
         db: 数据库会话
         tenant_id: 租户ID
-    
+
     Returns:
         添加的分块信息
     """
     req = request.model_dump()
-    
+
     if not KnowledgebaseService.query(db, id=dataset_id, tenant_id=tenant_id):
         return get_error_data_result(retmsg="You don't own the dataset.")
-    
+
     doc = DocumentService.query(db, kb_id=dataset_id, id=document_id)
     if not doc:
         return get_error_data_result(retmsg="Document not found.")
-    
+
     try:
         doc = doc[0]
         kb = KnowledgebaseService.get_by_id(db, dataset_id)
         if not kb:
             return get_error_data_result(retmsg="Dataset not found.")
-        
+
         # 生成chunk ID
         chunk_id = xxhash.xxh64(f"{document_id}-{req['content']}").hexdigest()
-        
+
         # 准备chunk数据
         if kb.tenant_embd_id:
             embd_config = get_model_config_by_id(db, kb.tenant_embd_id)
@@ -1169,7 +1085,7 @@ def add_chunk(
             embd_config = get_model_config_by_type_and_name(db, kb.tenant_id, LLMType.EMBEDDING.value, kb.embd_id)
         embd_mdl = LLMBundle(db, kb.tenant_id, embd_config)
         tks = rag_tokenizer.tokenize(req["content"])
-        
+
         chunk_data = {
             "content_with_weight": req["content"],
             "content_ltks": tks,
@@ -1198,13 +1114,13 @@ def add_chunk(
         # 生成embedding
         v, c = embd_mdl.encode([req["content"]])
         chunk_data["q_%d_vec" % len(v[0])] = v[0]
-        
+
         # 保存到搜索引擎
         settings.docStoreConn.upsert([chunk_id], [chunk_data], search.index_name(kb.tenant_id), dataset_id)
 
         if image_base64:
             store_chunk_image(dataset_id, chunk_id, base64.b64decode(image_base64))
-        
+
         # 更新文档统计
         DocumentService.increment_chunk_num(
             db,
@@ -1212,9 +1128,9 @@ def add_chunk(
             dataset_id,
             c,  # token count
             1,  # chunk count
-            0   # process duration
+            0,  # process duration
         )
-        
+
         renamed_chunk = {
             "id": chunk_id,
             "content": req["content"],
@@ -1237,23 +1153,17 @@ def add_chunk(
 
 
 @router.delete("/datasets/{dataset_id}/documents/{document_id}/chunks", summary="批量删除文档分块")
-def rm_chunk(
-    dataset_id: str,
-    document_id: str,
-    request: DeleteChunksRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
+def rm_chunk(dataset_id: str, document_id: str, request: DeleteChunksRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     """批量删除文档分块"""
     req = request.model_dump()
-    
+
     if not KnowledgebaseService.query(db, id=dataset_id, tenant_id=tenant_id):
         return get_error_data_result(retmsg="You don't own the dataset.")
-    
+
     doc = DocumentService.query(db, kb_id=dataset_id, id=document_id)
     if not doc:
         return get_error_data_result(retmsg="Document not found.")
-    
+
     chunk_ids = req.get("chunk_ids")
     if not chunk_ids:
         if req.get("delete_all") is True:
@@ -1277,31 +1187,23 @@ def rm_chunk(
         dataset_id,
         0,  # token count (需要重新计算)
         -len(chunk_ids),  # chunk count
-        0   # process duration
+        0,  # process duration
     )
 
     return get_result(retmsg=f"Successfully deleted {len(chunk_ids)} chunks")
 
 
 @router.put("/datasets/{dataset_id}/documents/{document_id}/chunks/{chunk_id}", summary="更新文档分块")
-def update_chunk(
-    dataset_id: str,
-    document_id: str,
-    chunk_id: str,
-    request: UpdateChunkRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
+def update_chunk(dataset_id: str, document_id: str, chunk_id: str, request: UpdateChunkRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     """更新文档分块"""
     req = request.model_dump(exclude_unset=True)
-    
+
     if not KnowledgebaseService.query(db, id=dataset_id, tenant_id=tenant_id):
         return get_error_data_result(retmsg="You don't own the dataset.")
-    
+
     doc = DocumentService.query(db, kb_id=dataset_id, id=document_id)
     if not doc:
         return get_error_data_result(retmsg="Document not found.")
-    
 
     res = settings.docStoreConn.get(chunk_id, search.index_name(tenant_id), dataset_id)
     if not res:
@@ -1365,13 +1267,7 @@ def update_chunk(
 
 
 @router.post("/datasets/{dataset_id}/documents/{document_id}/chunks/switch", summary="切换分块可用状态")
-def switch_chunks(
-    dataset_id: str,
-    document_id: str,
-    request: SwitchChunksRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
+def switch_chunks(dataset_id: str, document_id: str, request: SwitchChunksRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     """批量切换指定文档中分块的可用状态"""
     if not KnowledgebaseService.query(db, id=dataset_id, tenant_id=tenant_id):
         return get_error_data_result(retmsg=f"You don't own the dataset {dataset_id}.")
@@ -1404,52 +1300,48 @@ def switch_chunks(
 
 
 @router.post("/retrieval", summary="检索测试")
-async def retrieval_test(
-    request: RetrievalTestRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
+async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     """
     测试检索功能
-    
+
     Args:
         request: 检索测试请求参数
         db: 数据库会话
         tenant_id: 租户ID
-    
+
     Returns:
         检索结果
     """
     req = request.model_dump()
-    
+
     # 验证必填参数
     if not req.get("dataset_ids"):
         return get_error_data_result(retmsg="`dataset_ids` is required.")
-    
+
     kb_ids = req["dataset_ids"]
     if not isinstance(kb_ids, list):
         return get_error_data_result(retmsg="`dataset_ids` should be a list")
-    
+
     # 验证数据集权限
     for kb_id in kb_ids:
         if not KnowledgebaseService.query(db, id=kb_id, tenant_id=tenant_id):
             return get_error_data_result(retmsg=f"You don't own the dataset {kb_id}.")
-    
+
     # 获取所有知识库
     kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
     kb_names = list([kb.name for kb in kbs])
-    
+
     # 验证所有数据集使用相同的embedding模型
     embd_keys = list(set([kb.tenant_embd_id or TenantLLMService.split_model_name_and_factory(kb.embd_id)[0] for kb in kbs]))
     if len(embd_keys) != 1:
         return get_result(
-            retmsg='Datasets use different embedding models.',
+            retmsg="Datasets use different embedding models.",
             retcode=RetCode.DATA_ERROR,
         )
-    
+
     if "question" not in req:
         return get_error_data_result(retmsg="`question` is required.")
-    
+
     page = int(req.get("page", 1))
     size = int(req.get("page_size", 30))
     question = req["question"]
@@ -1467,14 +1359,14 @@ async def retrieval_test(
 
     if not isinstance(doc_ids, list):
         return get_error_data_result(retmsg="`document_ids` should be a list")
-    
+
     # 验证文档ID
     if doc_ids:
         doc_ids_list = KnowledgebaseService.list_documents_by_ids(db, kb_ids)
         for doc_id in doc_ids:
             if doc_id not in doc_ids_list:
                 return get_error_data_result(retmsg=f"The datasets don't own the document {doc_id}")
-    
+
     # 处理元数据过滤
     if not doc_ids:
         metadata_condition = req.get("metadata_condition")
@@ -1492,7 +1384,7 @@ async def retrieval_test(
     similarity_threshold = float(req.get("similarity_threshold", 0.2))
     vector_similarity_weight = float(req.get("vector_similarity_weight", 0.3))
     top = int(req.get("top_k", 1024))
-    
+
     # 处理highlight参数
     highlight_val = req.get("highlight", None)
     if highlight_val is None:
@@ -1506,13 +1398,13 @@ async def retrieval_test(
             return get_error_data_result(retmsg="`highlight` should be a boolean")
     else:
         return get_error_data_result(retmsg="`highlight` should be a boolean")
-    
+
     try:
         tenant_ids = list(set([kb.tenant_id for kb in kbs]))
         kb = KnowledgebaseService.get_by_id(db, kb_ids[0])
         if not kb:
             return get_error_data_result(retmsg="Dataset not found!")
-        
+
         if kb.tenant_embd_id:
             embd_config = get_model_config_by_id(db, kb.tenant_embd_id)
         else:
@@ -1536,7 +1428,7 @@ async def retrieval_test(
             chat_config = get_tenant_default_model_by_type(db, kb.tenant_id, LLMType.CHAT)
             chat_mdl = LLMBundle(db, kb.tenant_id, chat_config)
             question += await keyword_extraction(chat_mdl, question)
-        
+
         # 执行检索
         filter_exp = ""
         ranks = await settings.retriever.retrieval(
@@ -1554,7 +1446,7 @@ async def retrieval_test(
             rerank_mdl=rerank_mdl,
             highlight=highlight,
             rank_feature=label_question(db, question, kbs),
-            search_mode=search_mode_dict
+            search_mode=search_mode_dict,
         )
         if toc_enhance:
             toc_chat_config = get_tenant_default_model_by_type(db, kb.tenant_id, LLMType.CHAT)
@@ -1566,20 +1458,14 @@ async def retrieval_test(
         # 知识图谱增强
         if use_kg:
             kg_chat_config = get_tenant_default_model_by_type(db, kb.tenant_id, LLMType.CHAT)
-            ck = await settings.kg_retriever.retrieval(
-                question,
-                [k.tenant_id for k in kbs],
-                kb_ids,
-                embd_mdl,
-                LLMBundle(db, kb.tenant_id, kg_chat_config)
-            )
+            ck = await settings.kg_retriever.retrieval(question, [k.tenant_id for k in kbs], kb_ids, embd_mdl, LLMBundle(db, kb.tenant_id, kg_chat_config))
             if ck["content_with_weight"]:
                 ranks["chunks"].insert(0, ck)
-        
+
         # 移除向量数据
         for c in ranks["chunks"]:
             c.pop("vector", None)
-        
+
         # 重命名键名
         renamed_chunks = []
         for chunk in ranks["chunks"]:
@@ -1598,7 +1484,7 @@ async def retrieval_test(
                 rename_chunk[new_key] = value
             renamed_chunks.append(rename_chunk)
         ranks["chunks"] = renamed_chunks
-        
+
         return get_result(data=ranks)
     except Exception as e:
         if str(e).find("not_found") > 0:
