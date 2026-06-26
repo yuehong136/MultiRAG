@@ -1462,6 +1462,40 @@ class MultiRAGClient:
         else:
             print(f"Fail to drop doc meta index, code: {res_json.get('code')}, message: {res_json.get('message')}")
 
+    # Internal CLI for GO
+    def insert_dataset_from_file(self, command: dict):
+        if self.server_type != "user":
+            print("This command is only allowed in USER mode")
+            return
+        file_path = command["file_path"]
+        payload = {"file_path": file_path}
+        response = self.http_client.request("POST", "kb/insert_from_file", json_body=payload,
+                                            use_api_base=False, auth_kind="web")
+        res_json = response.json()
+        if response.status_code == 200 and res_json.get("code") == 0:
+            print(f"Success to insert dataset from file: {file_path}")
+            if res_json.get("data"):
+                self._print_key_value(res_json["data"])
+        else:
+            print(f"Fail to insert dataset from file, code: {res_json.get('code')}, message: {res_json.get('message')}")
+
+    # Internal CLI for GO
+    def insert_metadata_from_file(self, command: dict):
+        if self.server_type != "user":
+            print("This command is only allowed in USER mode")
+            return
+        file_path = command["file_path"]
+        payload = {"file_path": file_path}
+        response = self.http_client.request("POST", "tenant/insert_metadata_from_file", json_body=payload,
+                                            use_api_base=False, auth_kind="web")
+        res_json = response.json()
+        if response.status_code == 200 and res_json.get("code") == 0:
+            print(f"Success to insert metadata from file: {file_path}")
+            if res_json.get("data"):
+                self._print_key_value(res_json["data"])
+        else:
+            print(f"Fail to insert metadata from file, code: {res_json.get('code')}, message: {res_json.get('message')}")
+
     def create_chat_session(self, command: dict):
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
@@ -1970,6 +2004,10 @@ def run_command(client: MultiRAGClient, command_dict: dict):
             client.create_doc_meta_index(command_dict)
         case "drop_doc_meta_index":
             client.drop_doc_meta_index(command_dict)
+        case "insert_dataset_from_file":
+            client.insert_dataset_from_file(command_dict)
+        case "insert_metadata_from_file":
+            client.insert_metadata_from_file(command_dict)
         case "create_chat_session":
             client.create_chat_session(command_dict)
         case "drop_chat_session":

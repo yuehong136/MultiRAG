@@ -84,6 +84,8 @@ sql_command: login_user
            | list_chat_sessions
            | chat_on_session
            | import_docs_into_dataset
+           | insert_dataset_from_file
+           | insert_metadata_from_file
            | search_on_datasets
            | parse_dataset_docs
            | parse_dataset_sync
@@ -175,6 +177,8 @@ RERANKER: "RERANKER"i
 ASR: "ASR"i
 TTS: "TTS"i
 IMPORT: "IMPORT"i
+INSERT: "INSERT"i
+FILE: "FILE"i
 INTO: "INTO"i
 WITH: "WITH"i
 VECTOR_SIZE: "VECTOR_SIZE"i
@@ -296,6 +300,9 @@ drop_chat_session: DROP CHAT quoted_string SESSION quoted_string ";"
 list_chat_sessions: LIST CHAT quoted_string SESSIONS ";"
 chat_on_session: CHAT quoted_string ON quoted_string SESSION quoted_string ";"
 import_docs_into_dataset: IMPORT quoted_string INTO DATASET quoted_string ";"
+// Internal CLI for GO
+insert_dataset_from_file: INSERT DATASET FROM FILE quoted_string ";"
+insert_metadata_from_file: INSERT METADATA FROM FILE quoted_string ";"
 search_on_datasets: SEARCH quoted_string ON DATASETS quoted_string ";"
 parse_dataset_docs: PARSE quoted_string OF DATASET quoted_string ";"
 parse_dataset_sync: PARSE DATASET quoted_string SYNC ";"
@@ -701,6 +708,14 @@ class MultiRAGCLITransformer(Transformer):
         document_paths = [p.strip() for p in document_list_str.split(",")]
         dataset_name = items[4].children[0].strip("'\"")
         return {"type": "import_docs_into_dataset", "dataset_name": dataset_name, "document_paths": document_paths}
+
+    def insert_dataset_from_file(self, items):
+        file_path = items[4].children[0].strip("'\"")
+        return {"type": "insert_dataset_from_file", "file_path": file_path}
+
+    def insert_metadata_from_file(self, items):
+        file_path = items[4].children[0].strip("'\"")
+        return {"type": "insert_metadata_from_file", "file_path": file_path}
 
     def search_on_datasets(self, items):
         question = items[1].children[0].strip("'\"")

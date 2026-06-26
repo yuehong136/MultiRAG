@@ -772,3 +772,85 @@ func (p *Parser) parseParseDocs() (*Command, error) {
 	}
 	return cmd, nil
 }
+
+// ==================== Internal CLI for GO ====================
+
+// parseInsertCommand parses INSERT command and dispatches to specific handler
+func (p *Parser) parseInsertCommand() (*Command, error) {
+	p.nextToken() // consume INSERT
+
+	// Expect DATASET or METADATA
+	if p.curToken.Type == TokenDataset {
+		return p.parseInsertDatasetFromFile()
+	}
+	if p.curToken.Type == TokenMetadata {
+		return p.parseInsertMetadataFromFile()
+	}
+	return nil, fmt.Errorf("expected DATASET or METADATA after INSERT, got %s", p.curToken.Value)
+}
+
+// parseInsertDatasetFromFile parses: INSERT DATASET FROM FILE "file_path"
+func (p *Parser) parseInsertDatasetFromFile() (*Command, error) {
+	p.nextToken() // consume DATASET
+
+	// Expect FROM
+	if p.curToken.Type != TokenFrom {
+		return nil, fmt.Errorf("expected FROM, got %s", p.curToken.Value)
+	}
+	p.nextToken()
+
+	// Expect FILE
+	if p.curToken.Type != TokenFile {
+		return nil, fmt.Errorf("expected FILE, got %s", p.curToken.Value)
+	}
+	p.nextToken()
+
+	// Get file path (quoted string)
+	filePath, err := p.parseQuotedString()
+	if err != nil {
+		return nil, err
+	}
+
+	cmd := NewCommand("insert_dataset_from_file")
+	cmd.Params["file_path"] = filePath
+
+	p.nextToken()
+	// Semicolon is optional
+	if p.curToken.Type == TokenSemicolon {
+		p.nextToken()
+	}
+	return cmd, nil
+}
+
+// parseInsertMetadataFromFile parses: INSERT METADATA FROM FILE "file_path"
+func (p *Parser) parseInsertMetadataFromFile() (*Command, error) {
+	p.nextToken() // consume METADATA
+
+	// Expect FROM
+	if p.curToken.Type != TokenFrom {
+		return nil, fmt.Errorf("expected FROM, got %s", p.curToken.Value)
+	}
+	p.nextToken()
+
+	// Expect FILE
+	if p.curToken.Type != TokenFile {
+		return nil, fmt.Errorf("expected FILE, got %s", p.curToken.Value)
+	}
+	p.nextToken()
+
+	// Get file path (quoted string)
+	filePath, err := p.parseQuotedString()
+	if err != nil {
+		return nil, err
+	}
+
+	cmd := NewCommand("insert_metadata_from_file")
+	cmd.Params["file_path"] = filePath
+
+	p.nextToken()
+	// Semicolon is optional
+	if p.curToken.Type == TokenSemicolon {
+		p.nextToken()
+	}
+	return cmd, nil
+}

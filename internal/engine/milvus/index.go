@@ -35,6 +35,18 @@ func (e *milvusEngine) CreateDocMetaIndex(ctx context.Context, indexName string)
 	return nil
 }
 
+// InsertDataset inserts documents into a dataset collection in Milvus
+func (e *milvusEngine) InsertDataset(ctx context.Context, documents []map[string]interface{}, indexName string, knowledgebaseID string) ([]string, error) {
+	// TODO: implement dataset insert for Milvus
+	return []string{}, nil
+}
+
+// InsertMetadata inserts documents into tenant's metadata collection in Milvus
+func (e *milvusEngine) InsertMetadata(ctx context.Context, documents []map[string]interface{}, tenantID string) ([]string, error) {
+	// TODO: implement metadata insert for Milvus
+	return []string{}, nil
+}
+
 // DeleteIndex drops a collection in Milvus
 func (e *milvusEngine) DeleteIndex(ctx context.Context, indexName string) error {
 	return e.client.DropCollection(ctx, milvusclient.NewDropCollectionOption(indexName))

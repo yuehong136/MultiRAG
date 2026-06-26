@@ -116,6 +116,8 @@ func (r *Router) Setup(engine *gin.Engine) {
 		// Tenant doc meta index endpoints (per-tenant resources)
 		authorized.POST("/v1/tenant/doc_meta_index", r.tenantHandler.CreateDocMetaIndex)
 		authorized.DELETE("/v1/tenant/doc_meta_index", r.tenantHandler.DeleteDocMetaIndex)
+		// Tenant metadata insert from file (internal)
+		authorized.POST("/v1/tenant/insert_metadata_from_file", r.tenantHandler.InsertMetadataFromFile)
 		// User settings endpoint
 		authorized.POST("/v1/user/setting", r.userHandler.Setting)
 		// User change password endpoint
@@ -218,6 +220,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 			kb.GET("/basic_info", r.knowledgebaseHandler.GetBasicInfo)
 			kb.POST("/index", r.knowledgebaseHandler.CreateIndex)
 			kb.DELETE("/index", r.knowledgebaseHandler.DeleteIndex)
+			kb.POST("/insert_from_file", r.knowledgebaseHandler.InsertDatasetFromFile)
 
 			// KB ID specific routes
 			kbByID := kb.Group("/:kb_id")

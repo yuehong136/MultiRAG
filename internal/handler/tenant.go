@@ -177,3 +177,43 @@ func (h *TenantHandler) DeleteDocMetaIndex(c *gin.Context) {
 		"data":    nil,
 	})
 }
+
+// InsertMetadataFromFileRequest represents the request for inserting metadata from a file
+type InsertMetadataFromFileRequest struct {
+	FilePath string `json:"file_path" binding:"required"`
+}
+
+// InsertMetadataFromFile handles inserting document metadata from a JSON file
+// @Summary Insert document metadata from JSON file
+// @Description Internal: Insert metadata into tenant's metadata table from a JSON file
+// @Tags tenants
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body InsertMetadataFromFileRequest true "insert metadata request"
+// @Success 200 {object} map[string]interface{}
+// @Router /v1/tenant/insert_metadata_from_file [post]
+func (h *TenantHandler) InsertMetadataFromFile(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	var req InsertMetadataFromFileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		jsonError(c, common.CodeDataError, err.Error())
+		return
+	}
+
+	// Use user.ID as tenant ID (user IS the tenant in user mode)
+	tenantID := user.ID
+
+	result, code, err := h.tenantService.InsertMetadataFromFile(tenantID, req.FilePath)
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+
+	jsonResponse(c, common.CodeSuccess, result, "success")
+}

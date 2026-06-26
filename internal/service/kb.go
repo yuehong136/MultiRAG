@@ -18,6 +18,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"multirag/internal/common"
@@ -25,6 +26,7 @@ import (
 	"multirag/internal/engine"
 	"multirag/internal/entity"
 	"multirag/internal/utility"
+	"os"
 	"strings"
 	"time"
 
@@ -253,6 +255,34 @@ func (s *KnowledgebaseService) DeleteIndex(kbID string) (common.ErrorCode, error
 	}
 
 	return common.CodeSuccess, nil
+}
+
+// InsertDatasetFromFile reads a JSON file and inserts the chunks into the dataset table.
+// The file format is: {"table_name": ..., "knowledgebase_id": ..., "chunks": [...]}
+func (s *KnowledgebaseService) InsertDatasetFromFile(filePath string) (interface{}, common.ErrorCode, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, common.CodeDataError, fmt.Errorf("failed to read file: %w", err)
+	}
+
+	var input struct {
+		TableNamePrefix string                   `json:"table_name"`
+		KnowledgebaseID string                   `json:"knowledgebase_id"`
+		Chunks          []map[string]interface{} `json:"chunks"`
+	}
+	if err := json.Unmarshal(data, &input); err != nil || input.Chunks == nil {
+		return nil, common.CodeDataError, fmt.Errorf(`invalid JSON format: expected {"table_name": ..., "knowledgebase_id": ..., "chunks": [...]}`)
+	}
+	if len(input.Chunks) == 0 {
+		return nil, common.CodeDataError, fmt.Errorf("no chunks found in file")
+	}
+
+	result, err := s.docEngine.InsertDataset(context.Background(), input.Chunks, input.TableNamePrefix, input.KnowledgebaseID)
+	if err != nil {
+		return nil, common.CodeServerError, fmt.Errorf("failed to insert into dataset: %w", err)
+	}
+
+	return result, common.CodeSuccess, nil
 }
 
 // UpdateKB updates an existing knowledge base

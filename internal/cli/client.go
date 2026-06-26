@@ -204,6 +204,11 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 		return c.CEList(cmd)
 	case "ce_search":
 		return c.CESearch(cmd)
+	// Internal CLI for GO
+	case "insert_dataset_from_file":
+		return c.InsertDatasetFromFile(cmd)
+	case "insert_metadata_from_file":
+		return c.InsertMetadataFromFile(cmd)
 	// TODO: Implement other user commands
 	default:
 		return nil, fmt.Errorf("command '%s' would be executed with API", cmd.Type)

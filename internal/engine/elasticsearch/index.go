@@ -151,3 +151,15 @@ func (e *elasticsearchEngine) CreateDocMetaIndex(ctx context.Context, indexName 
 	// TODO: implement doc meta index for Elasticsearch
 	return nil
 }
+
+// InsertDataset inserts documents into a dataset index
+func (e *elasticsearchEngine) InsertDataset(ctx context.Context, documents []map[string]interface{}, indexName string, knowledgebaseID string) ([]string, error) {
+	// TODO: implement dataset insert for Elasticsearch
+	return []string{}, nil
+}
+
+// InsertMetadata inserts documents into tenant's metadata index
+func (e *elasticsearchEngine) InsertMetadata(ctx context.Context, documents []map[string]interface{}, tenantID string) ([]string, error) {
+	// TODO: implement metadata insert for Elasticsearch
+	return []string{}, nil
+}

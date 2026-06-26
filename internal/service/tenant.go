@@ -18,7 +18,9 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -252,4 +254,30 @@ func (s *TenantService) DeleteDocMetaIndex(tenantID string) (common.ErrorCode, e
 	}
 
 	return common.CodeSuccess, nil
+}
+
+// InsertMetadataFromFile reads a JSON file and inserts the metadata into the tenant's metadata table.
+// The file format is: {"chunks": [...]}
+func (s *TenantService) InsertMetadataFromFile(tenantID, filePath string) (interface{}, common.ErrorCode, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, common.CodeDataError, fmt.Errorf("failed to read file: %w", err)
+	}
+
+	var input struct {
+		Chunks []map[string]interface{} `json:"chunks"`
+	}
+	if err := json.Unmarshal(data, &input); err != nil || input.Chunks == nil {
+		return nil, common.CodeDataError, fmt.Errorf(`invalid JSON format: expected {"chunks": [...]}`)
+	}
+	if len(input.Chunks) == 0 {
+		return nil, common.CodeDataError, fmt.Errorf("no chunks found in file")
+	}
+
+	result, err := s.docEngine.InsertMetadata(context.Background(), input.Chunks, tenantID)
+	if err != nil {
+		return nil, common.CodeServerError, fmt.Errorf("failed to insert metadata: %w", err)
+	}
+
+	return result, common.CodeSuccess, nil
 }

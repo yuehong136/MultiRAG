@@ -103,6 +103,9 @@ const (
 	TokenVectorSize
 	TokenDocMeta
 	TokenName // For ALTER PROVIDER <name> NAME <new_name>
+	TokenInsert
+	TokenFile
+	TokenMetadata
 
 	// Literals
 	TokenIdentifier

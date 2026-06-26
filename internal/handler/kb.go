@@ -695,3 +695,40 @@ func (h *KnowledgebaseHandler) DeleteIndex(c *gin.Context) {
 
 	jsonResponse(c, common.CodeSuccess, nil, "success")
 }
+
+// InsertDatasetFromFileRequest represents the request for inserting chunks into a dataset from a file
+type InsertDatasetFromFileRequest struct {
+	FilePath string `json:"file_path" binding:"required"`
+}
+
+// InsertDatasetFromFile handles inserting chunks into a dataset from a JSON file
+// @Summary Insert chunks into dataset from file
+// @Description Internal: Insert into dataset table from a JSON file (table name extracted from file)
+// @Tags knowledgebase
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body InsertDatasetFromFileRequest true "insert dataset request"
+// @Success 200 {object} map[string]interface{}
+// @Router /v1/kb/insert_from_file [post]
+func (h *KnowledgebaseHandler) InsertDatasetFromFile(c *gin.Context) {
+	_, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	var req InsertDatasetFromFileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		jsonError(c, common.CodeDataError, err.Error())
+		return
+	}
+
+	result, code, err := h.kbService.InsertDatasetFromFile(req.FilePath)
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+
+	jsonResponse(c, common.CodeSuccess, result, "success")
+}

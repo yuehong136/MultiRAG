@@ -166,6 +166,8 @@ func (p *Parser) parseUserCommand() (*Command, error) {
 		return p.parseResetCommand()
 	case TokenImport:
 		return p.parseImportCommand()
+	case TokenInsert:
+		return p.parseInsertCommand()
 	case TokenSearch:
 		return p.parseSearchCommand()
 	case TokenParse:
@@ -197,7 +199,7 @@ func (p *Parser) expectSemicolon() error {
 }
 
 func isKeyword(tokenType int) bool {
-	return tokenType >= TokenLogin && tokenType <= TokenDocMeta
+	return tokenType >= TokenLogin && tokenType <= TokenMetadata
 }
 
 // isCECommand reports whether the given word selects a Context Engine command.
@@ -356,6 +358,21 @@ func (p *Parser) parseLoginUser() (*Command, error) {
 	cmd.Params["email"] = email
 
 	p.nextToken()
+	// Optional: WITH PASSWORD 'password'
+	if p.curToken.Type == TokenWith {
+		p.nextToken()
+		if p.curToken.Type != TokenPassword {
+			return nil, fmt.Errorf("expected PASSWORD after WITH")
+		}
+		p.nextToken()
+		password, err := p.parseQuotedString()
+		if err != nil {
+			return nil, err
+		}
+		cmd.Params["password"] = password
+		p.nextToken()
+	}
+
 	if err := p.expectSemicolon(); err != nil {
 		return nil, err
 	}
@@ -637,6 +654,8 @@ func (p *Parser) parseUserStatement() (*Command, error) {
 		return p.parseParseCommand()
 	case TokenImport:
 		return p.parseImportCommand()
+	case TokenInsert:
+		return p.parseInsertCommand()
 	case TokenSearch:
 		return p.parseSearchCommand()
 	default:
