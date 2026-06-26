@@ -1161,11 +1161,23 @@ SQL Commands (User Mode):
   LIST DEFAULT MODELS;                                   - List default models
   LIST PROVIDERS;                                        - List configured LLM providers
   LIST AVAILABLE PROVIDERS;                              - List available LLM providers
+  LIST INSTANCES FROM PROVIDER 'name';                   - List provider instances
+  LIST MODELS FROM 'provider' 'instance';                - List models of a provider instance
   SHOW PROVIDER 'name';                                  - Show provider details
-  CREATE PROVIDER 'name';                                - Create a provider without API key
-  CREATE PROVIDER 'name' 'api_key';                      - Create a provider with API key
-  DROP PROVIDER 'name';                                  - Delete a provider
+  SHOW CURRENT MODEL;                                    - Show current model settings
+  SHOW INSTANCE 'name' FROM PROVIDER 'provider';         - Show provider instance details
+  ADD PROVIDER 'name';                                   - Add a provider without API key
+  ADD PROVIDER 'name' 'api_key';                         - Add a provider with API key
+  DELETE PROVIDER 'name';                                - Delete a provider
   ALTER PROVIDER 'name' NAME 'new_name';                 - Rename a provider (server-side pending)
+  CREATE PROVIDER 'name' INSTANCE 'instance' 'api_key';  - Create a provider instance
+  ALTER INSTANCE 'name' NAME 'new' FROM PROVIDER 'p';    - Rename a provider instance
+  DROP INSTANCE 'name' FROM PROVIDER 'provider';         - Delete a provider instance
+  ENABLE MODEL 'model' FROM 'provider' 'instance';       - Enable a model on an instance
+  DISABLE MODEL 'model' FROM 'provider' 'instance';      - Disable a model on an instance
+  USE MODEL 'provider/instance/model';                   - Set current model for chat
+  CHAT 'message';                                        - Chat using current model
+  CHAT 'provider/instance/model' 'message';              - Chat with specified model
   CREATE INDEX FOR DATASET 'name' VECTOR_SIZE N;         - Create index for dataset
   DROP INDEX FOR DATASET 'name';                         - Drop index for dataset
   CREATE INDEX DOC_META;                                 - Create doc meta index

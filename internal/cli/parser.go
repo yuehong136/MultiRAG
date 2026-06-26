@@ -158,6 +158,10 @@ func (p *Parser) parseUserCommand() (*Command, error) {
 		return p.parseCreateCommand()
 	case TokenDrop:
 		return p.parseDropCommand()
+	case TokenAdd:
+		return p.parseAddCommand()
+	case TokenDelete:
+		return p.parseDeleteCommand()
 	case TokenAlter:
 		return p.parseUserAlterCommand()
 	case TokenSet:
@@ -174,6 +178,14 @@ func (p *Parser) parseUserCommand() (*Command, error) {
 		return p.parseParseCommand()
 	case TokenBenchmark:
 		return p.parseBenchmarkCommand()
+	case TokenEnable:
+		return p.parseEnableCommand()
+	case TokenDisable:
+		return p.parseDisableCommand()
+	case TokenChat:
+		return p.parseChatCommand()
+	case TokenUse:
+		return p.parseUseCommand()
 	default:
 		return nil, fmt.Errorf("unknown command: %s", p.curToken.Value)
 	}
@@ -407,6 +419,7 @@ func (p *Parser) parseCommonListProviders() (*Command, error) {
 // parseListModelsOfProvider parses (shared by admin and user LIST):
 //
 //	LIST MODELS FROM '<provider>';
+//	LIST MODELS FROM '<provider>' '<instance>';
 func (p *Parser) parseListModelsOfProvider() (*Command, error) {
 	if p.curToken.Type != TokenModels {
 		return nil, fmt.Errorf("expected MODELS")
@@ -417,13 +430,36 @@ func (p *Parser) parseListModelsOfProvider() (*Command, error) {
 		return nil, fmt.Errorf("expected FROM")
 	}
 	p.nextToken()
-	providerName, err := p.parseQuotedString()
+
+	// Parse first quoted string (could be instance_name or provider_name)
+	firstName, err := p.parseQuotedString()
 	if err != nil {
 		return nil, err
 	}
-	cmd := NewCommand("list_provider_models")
-	cmd.Params["provider_name"] = providerName
 	p.nextToken()
+
+	// Check if there's a second quoted string (instance_name)
+	// If so, format is: LIST MODELS FROM <provider_name> <instance_name>
+	// If not, format is: LIST MODELS FROM <provider_name>
+	if p.curToken.Type == TokenQuotedString {
+		// Two arguments: provider_name and instance_name
+		instanceName, err := p.parseQuotedString()
+		if err != nil {
+			return nil, err
+		}
+		cmd := NewCommand("list_instance_models")
+		cmd.Params["instance_name"] = instanceName
+		cmd.Params["provider_name"] = firstName
+		p.nextToken()
+		if p.curToken.Type == TokenSemicolon {
+			p.nextToken()
+		}
+		return cmd, nil
+	}
+
+	// Only one argument: provider_name
+	cmd := NewCommand("list_provider_models")
+	cmd.Params["provider_name"] = firstName
 	if p.curToken.Type == TokenSemicolon {
 		p.nextToken()
 	}

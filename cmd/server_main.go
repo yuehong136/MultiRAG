@@ -4,14 +4,14 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"net/http"
-	"os"
-	"os/signal"
 	"multirag/internal/common"
 	"multirag/internal/server"
 	"multirag/internal/server/local"
 	"multirag/internal/storage"
 	"multirag/internal/utility"
+	"net/http"
+	"os"
+	"os/signal"
 	"strings"
 	"syscall"
 	"time"
@@ -173,6 +173,7 @@ func startServer(config *server.Config) {
 	searchService := service.NewSearchService()
 	fileService := service.NewFileService()
 	memoryService := service.NewMemoryService()
+	modelProviderService := service.NewModelProviderService()
 
 	// Suppress unused variable warnings
 	_ = documentService
@@ -193,7 +194,7 @@ func startServer(config *server.Config) {
 	searchHandler := handler.NewSearchHandler(searchService, userService)
 	fileHandler := handler.NewFileHandler(fileService, userService)
 	memoryHandler := handler.NewMemoryHandler(memoryService)
-	providerHandler := handler.NewProviderHandler(userService)
+	providerHandler := handler.NewProviderHandler(userService, modelProviderService)
 
 	// Initialize router
 	r := router.NewRouter(authHandler, userHandler, tenantHandler, documentHandler, datasetsHandler, systemHandler, kbHandler, chunkHandler, llmHandler, chatHandler, chatSessionHandler, connectorHandler, searchHandler, fileHandler, memoryHandler, providerHandler)

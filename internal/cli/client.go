@@ -26,6 +26,13 @@ import (
 // PasswordPromptFunc is a function type for password input
 type PasswordPromptFunc func(prompt string) (string, error)
 
+// CurrentModel holds the current model configuration
+type CurrentModel struct {
+	Provider string
+	Instance string
+	Model    string
+}
+
 // httpClientAdapter adapts *HTTPClient to ce.HTTPClientInterface so the Context
 // Engine providers can issue requests through the CLI's HTTP client.
 type httpClientAdapter struct {
@@ -60,6 +67,7 @@ type MultiRAGClient struct {
 	PasswordPrompt PasswordPromptFunc // Function for password input
 	OutputFormat   OutputFormat       // Output format used when rendering CE results
 	ContextEngine  *ce.Engine         // Context Engine for the SQL-parser ls/search path
+	CurrentModel   *CurrentModel      // Current model configuration
 }
 
 // NewMultiRAGClient creates a new MultiRAG client
@@ -145,6 +153,8 @@ func (c *MultiRAGClient) ExecuteAdminCommand(cmd *Command) (ResponseIf, error) {
 		return c.ShowProvider(cmd)
 	case "list_provider_models":
 		return c.ListModels(cmd)
+	case "list_instance_models":
+		return c.ListInstanceModels(cmd)
 	case "show_model":
 		return c.ShowModel(cmd)
 	// TODO: Implement other admin commands
@@ -190,15 +200,38 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 		return c.ShowProvider(cmd)
 	case "list_provider_models":
 		return c.ListModels(cmd)
+	case "list_instance_models":
+		return c.ListInstanceModels(cmd)
 	case "show_model":
 		return c.ShowModel(cmd)
 	// Provider commands
-	case "create_provider":
-		return c.CreateProvider(cmd)
+	case "add_provider":
+		return c.AddProvider(cmd)
 	case "list_providers":
 		return c.ListProviders(cmd)
-	case "drop_provider":
-		return c.DropProvider(cmd)
+	case "delete_provider":
+		return c.DeleteProvider(cmd)
+	// Provider instance commands
+	case "create_provider_instance":
+		return c.CreateProviderInstance(cmd)
+	case "list_provider_instances":
+		return c.ListProviderInstances(cmd)
+	case "show_provider_instance":
+		return c.ShowProviderInstance(cmd)
+	case "alter_provider_instance":
+		return c.AlterProviderInstance(cmd)
+	case "drop_provider_instance":
+		return c.DropProviderInstance(cmd)
+	case "enable_model":
+		return c.EnableOrDisableModel(cmd, "enable")
+	case "disable_model":
+		return c.EnableOrDisableModel(cmd, "disable")
+	case "chat_to_model":
+		return c.ChatToModel(cmd)
+	case "use_model":
+		return c.UseModel(cmd)
+	case "show_current_model":
+		return c.ShowCurrentModel(cmd)
 	// Context Engine commands (SQL-parser path)
 	case "ce_ls":
 		return c.CEList(cmd)
