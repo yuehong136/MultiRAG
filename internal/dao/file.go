@@ -303,3 +303,133 @@ func generateUUID() string {
 	id := uuid.New().String()
 	return strings.ReplaceAll(id, "-", "")
 }
+
+// KnowledgebaseFolderName is the virtual folder that mirrors knowledgebase documents.
+const KnowledgebaseFolderName = ".knowledgebase"
+
+// InitKnowledgebaseDocs initializes knowledgebase documents for a tenant.
+// Mirrors Python FileService.init_knowledgebase_docs: on first listing of the
+// root folder, create the .knowledgebase folder and mirror every KB document
+// into it (one folder per KB, one file + file2document mapping per document).
+func (dao *FileDAO) InitKnowledgebaseDocs(rootID, tenantID string) error {
+	var count int64
+	if err := DB.Model(&entity.File{}).
+		Where("name = ? AND parent_id = ?", KnowledgebaseFolderName, rootID).
+		Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+
+	kbFolder, err := dao.newAFileFromKB(tenantID, KnowledgebaseFolderName, rootID)
+	if err != nil {
+		return err
+	}
+
+	var knowledgebases []entity.Knowledgebase
+	if err := DB.Select("id", "name").
+		Where("tenant_id = ?", tenantID).
+		Find(&knowledgebases).Error; err != nil {
+		return err
+	}
+
+	for _, kb := range knowledgebases {
+		kbFolderForKB, err := dao.newAFileFromKB(tenantID, kb.Name, kbFolder.ID)
+		if err != nil {
+			continue
+		}
+
+		var documents []entity.Document
+		if err := DB.Where("kb_id = ?", kb.ID).Find(&documents).Error; err != nil {
+			continue
+		}
+
+		for i := range documents {
+			dao.addFileFromKB(&documents[i], kbFolderForKB.ID, tenantID)
+		}
+	}
+
+	return nil
+}
+
+// newAFileFromKB returns the existing folder/file under (tenant, parent, name)
+// or creates a new knowledgebase-sourced folder record.
+// Mirrors Python FileService.new_a_file_from_kb.
+func (dao *FileDAO) newAFileFromKB(tenantID, name, parentID string) (*entity.File, error) {
+	var existingFiles []*entity.File
+	if err := DB.Where("tenant_id = ? AND parent_id = ? AND name = ?", tenantID, parentID, name).
+		Find(&existingFiles).Error; err != nil {
+		return nil, err
+	}
+	if len(existingFiles) > 0 {
+		return existingFiles[0], nil
+	}
+
+	file := &entity.File{
+		ID:         generateUUID(),
+		ParentID:   parentID,
+		TenantID:   tenantID,
+		CreatedBy:  tenantID,
+		Name:       name,
+		Type:       "folder",
+		Size:       0,
+		SourceType: "knowledgebase",
+	}
+	if err := DB.Create(file).Error; err != nil {
+		return nil, err
+	}
+	return file, nil
+}
+
+// addFileFromKB mirrors a single KB document into the file tree and records the
+// file2document mapping. It is a no-op when the document is already mapped.
+// Mirrors Python FileService.add_file_from_kb.
+func (dao *FileDAO) addFileFromKB(doc *entity.Document, kbFolderID, tenantID string) error {
+	var f2dCount int64
+	if err := DB.Model(&entity.File2Document{}).
+		Where("document_id = ?", doc.ID).
+		Count(&f2dCount).Error; err != nil {
+		return err
+	}
+	if f2dCount > 0 {
+		return nil
+	}
+
+	docName := ""
+	if doc.Name != nil {
+		docName = *doc.Name
+	}
+	docLocation := ""
+	if doc.Location != nil {
+		docLocation = *doc.Location
+	}
+
+	fileID := generateUUID()
+	file := &entity.File{
+		ID:         fileID,
+		ParentID:   kbFolderID,
+		TenantID:   tenantID,
+		CreatedBy:  tenantID,
+		Name:       docName,
+		Type:       doc.Type,
+		Size:       doc.Size,
+		Location:   &docLocation,
+		SourceType: "knowledgebase",
+	}
+	if err := DB.Create(file).Error; err != nil {
+		return err
+	}
+
+	docID := doc.ID
+	f2d := &entity.File2Document{
+		ID:         generateUUID(),
+		FileID:     &fileID,
+		DocumentID: &docID,
+	}
+	if err := DB.Create(f2d).Error; err != nil {
+		return err
+	}
+
+	return nil
+}

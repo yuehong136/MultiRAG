@@ -204,6 +204,13 @@ func (r *Router) Setup(engine *gin.Engine) {
 				provider.POST("/:provider_name/instances/:instance_name/models/:model_name", r.providerHandler.ChatToModel)
 			}
 
+			// File routes (RESTful, aligned with Python /api/v1/files)
+			files := v1.Group("/files")
+			{
+				files.POST("", r.fileHandler.UploadFile)
+				files.GET("", r.fileHandler.ListFiles)
+			}
+
 			// TODO: Message routes - Implementation pending - depends on CanvasService, TaskService and embedding engine
 			// message := v1.Group("/messages")
 			// {
@@ -290,18 +297,12 @@ func (r *Router) Setup(engine *gin.Engine) {
 			search.POST("/list", r.searchHandler.ListSearchApps)
 		}
 
-		// File routes
+		// File routes (legacy helpers; list/upload migrated to /api/v1/files)
 		file := authorized.Group("/v1/file")
 		{
-			file.GET("/list", r.fileHandler.ListFiles)
 			file.GET("/root_folder", r.fileHandler.GetRootFolder)
 			file.GET("/parent_folder", r.fileHandler.GetParentFolder)
 			file.GET("/all_parent_folder", r.fileHandler.GetAllParentFolders)
-		}
-
-		files := authorized.Group("/v1/files")
-		{
-			files.POST("", r.fileHandler.UploadFile)
 		}
 	}
 
