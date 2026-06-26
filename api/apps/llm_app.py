@@ -1249,6 +1249,12 @@ def delete_factory(request: DeleteFactoryRequest, db: Session = Depends(get_db),
     return get_json_result(data=True)
 
 
+@router.delete('/factory', summary="删除模型厂商", response_description="成功删除模型厂商")
+def delete_factory_restful(request: DeleteFactoryRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    """RESTful 别名：等价于 POST /delete_factory，供 CLI 的 DROP PROVIDER（DELETE /llm/factory）调用。"""
+    return delete_factory(request, db, user)
+
+
 @router.get('/my_llms', summary="获取用户的所有模型", response_description="成功获取到用户的所有模型")
 def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=Depends(manager), request: Request = None):
     try:
