@@ -928,6 +928,67 @@ class AskdataService:
             value = convert_where_condition_value(value, data_type, operator)
         assembler.add_having(sql_column, FilterOperator.from_value(operator), value)
 
+    def _normalize_cap(self, cap) -> Optional[int]:
+        """把可能来自前端回传的行数上限归一成「正整数或 None」。
+
+        cap 类型不固定：int 30 / 数字字符串 "30" / None / 空串 / bool。
+        bool 是 int 子类必须排除（True 会被当 1）；字符串按纯数字解析；其余非正数归 None。
+        """
+        if isinstance(cap, bool):
+            return None
+        if isinstance(cap, str):
+            cap = int(cap.strip()) if cap.strip().isdigit() else None
+        return cap if isinstance(cap, int) and cap > 0 else None
+
+    def _effective_limit(self, cap: Optional[int], ceiling: Optional[int]) -> Optional[int]:
+        """导出行数上限 = min(用户 N 上限, ceiling 安全阈值)。
+
+        只有 cap → cap；只有 ceiling → ceiling；两者都有 → min；两者都无 → None
+        （调用方须保证 ceiling 非空，避免真·无界全量导出，见计划风险 R-上限）。
+        """
+        candidates = [v for v in (cap, ceiling) if isinstance(v, int) and v > 0]
+        return min(candidates) if candidates else None
+
+    def _export_label(self, semantic_field, fallback: str) -> str:
+        """导出表头的中文显示名：优先 field_detail 的中文名，缺失回退裸列名/sql_column。"""
+        fd = (semantic_field or {}).get("field_detail") or {}
+        for k in ("dimensionName", "semanticName", "metricName", "name"):
+            if fd.get(k):
+                return fd[k]
+        for k in ("dimensionName", "semanticName", "name"):
+            if (semantic_field or {}).get(k):
+                return semantic_field[k]
+        return fallback
+
+    def _label_from_sql_column(self, sql_column: str) -> str:
+        """从非语义列的原始表达式里取展示用表头。
+
+        非语义列(unmatched)的 sql_column 往往是「整段表达式 + AS 别名」,例如
+        `COUNT(t1."zgh") AS "50岁以上老师数量"`——直接当表头会把整串塞进单元格。
+        这里优先取最后一个 `AS` 后的别名(去成对引号,即 LLM 起的中文名);无别名则取
+        裸列名末段去引号(如 `t1."xm"` → `xm`,与页面现有列身份一致)。
+        """
+        s = (sql_column or "").strip().rstrip(";").strip()
+        idx = s.lower().rfind(" as ")  # 取最后一个顶层 AS,避开 CAST(x AS int) 之类内层 AS
+        if idx != -1:
+            alias = s[idx + 4:].strip()
+            if len(alias) >= 2 and alias[0] in "\"'`" and alias[-1] == alias[0]:
+                alias = alias[1:-1]
+            if alias:
+                return alias.strip()
+        return s.split(".")[-1].strip().strip("\"'`")
+
+    def _finalize_requery(self, assembler, cap, export_mode, export_ceiling, export_headers):
+        """re-query 无分页分支收尾：导出模式套 effective_limit 并回传中文表头，否则原样全量。"""
+        if not export_mode:
+            sql, params = assembler.build_sql_for_jdbc()
+            return {"sql": sql, "params": params}
+        eff = self._effective_limit(self._normalize_cap(cap), export_ceiling)
+        if isinstance(eff, int) and eff > 0:
+            assembler.set_limit(eff)
+        sql, params = assembler.build_sql_for_jdbc()
+        return {"sql": sql, "params": params, "headers": export_headers, "effective_limit": eff}
+
     def _build_requery_pagination_result(self, assembler, pagination_info, cap):
         """构建 re-query 的分页 count_sql/data_sql（table-row 与聚合两分支共用，杜绝形状漂移）。
 
@@ -940,12 +1001,8 @@ class AskdataService:
         """
         page_size = int(pagination_info["page_size"])
         page_index = int(pagination_info["page_index"])
-        # cap 可能来自前端回传，类型不固定：int 30 / 数字字符串 "30" / None / 空串。
-        # 统一归一成「正整数或 None」——bool 是 int 子类要排除，字符串按数字解析。
-        if isinstance(cap, bool):
-            cap = None
-        elif isinstance(cap, str):
-            cap = int(cap.strip()) if cap.strip().isdigit() else None
+        # cap 可能来自前端回传，类型不固定（int/数字串/None/空串/bool），统一归一。
+        cap = self._normalize_cap(cap)
         has_cap = isinstance(cap, int) and cap > 0
         count_sql, count_sql_params = assembler.build_count_sql_for_jdbc(cap=cap if has_cap else None)
         if has_cap:
@@ -964,8 +1021,17 @@ class AskdataService:
 
     async def generate_requery_sql(self, chart_type: str, table_config: Dict[str, Any], sql_components: Dict[str, Any],
                                    model_table_alias_mapping_list: List[Dict[str, Any]],
-                                   pagination_info: Optional[Dict[str, Any]], user_id: str):
-        """生成重新查询的SQL语句。"""
+                                   pagination_info: Optional[Dict[str, Any]], user_id: str,
+                                   export_mode: bool = False, export_ceiling: Optional[int] = None):
+        """生成重新查询的SQL语句。
+
+        export_mode=True（导出全部数据）时：不分页，按 effective_limit=min(用户N上限, ceiling)
+        套 LIMIT，并按 SELECT 顺序收集中文表头 export_headers 一并返回。默认 False ⇒ 现有
+        re-query 调用行为字节级不变。
+        """
+        # 仅 export_mode 收集；按 add_column/add_raw_column 的 SELECT 顺序逐列追加中文显示名，
+        # 与中台 getColumnName 有序列按「位置」对齐（不依赖 key 名）。
+        export_headers: list[str] = []
         base_from = sql_components["from"]
         all_semantic_fields = table_config["all_semantic_fields"]
         # 用户给定的行数上限（如「30 条」）；翻页时作为硬封顶，缺省/非正整数则全量分页
@@ -1082,9 +1148,13 @@ class AskdataService:
                     else:
                         column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
                     assembler.add_column(column_name)
+                    if export_mode:
+                        export_headers.append(self._export_label(semantic_field, column_name.split(".")[-1]))
                 else:
                     column_name = column["sql_column"]
                     assembler.add_raw_column(column_name)
+                    if export_mode:
+                        export_headers.append(self._label_from_sql_column(column_name))
 
             for filter in table_config["filters"]:
                 if filter["is_semantic_field"]:
@@ -1125,12 +1195,7 @@ class AskdataService:
 
             if pagination_info:
                 return self._build_requery_pagination_result(assembler, pagination_info, cap)
-            else:
-                sql, params = assembler.build_sql_for_jdbc()
-                return {
-                    "sql": sql,
-                    "params": params
-                }
+            return self._finalize_requery(assembler, cap, export_mode, export_ceiling, export_headers)
 
         elif chart_type == "table-aggr" or chart_type == "bar" or chart_type == "pie" or chart_type == "line" or chart_type == "area" or chart_type == "matrix" or chart_type == "bubble":
             for dimension in table_config["dimensions"]:
@@ -1141,9 +1206,13 @@ class AskdataService:
                     column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
                     assembler.add_column(column_name)
                     assembler.add_group_by(column_name)
+                    if export_mode:
+                        export_headers.append(self._export_label(semantic_field, column_name.split(".")[-1]))
                 else:
                     assembler.add_raw_column(dimension["sql_column"])
                     assembler.add_raw_group_by(dimension["sql_column"])
+                    if export_mode:
+                        export_headers.append(self._label_from_sql_column(dimension["sql_column"]))
 
             for metric in table_config["metrics"]:
                 if metric["is_semantic_field"]:
@@ -1167,13 +1236,19 @@ class AskdataService:
                             alias = f"{aggr_type}_{model_name}_{semantic_name}"
                             assembler.add_raw_column(f"{aggr_type}({column_name})",
                                                      alias)
+                        if export_mode:
+                            export_headers.append(semantic_name or alias)
                     elif metric["semantic_type"] == "metric":
                         expression = semantic_field["field_detail"]["expression"]
                         processor = SQLFieldAliasProcessor()
                         new_expression = processor.add_table_alias_to_expression(expression, table_alias)
                         assembler.add_raw_column(new_expression)
+                        if export_mode:
+                            export_headers.append(self._export_label(semantic_field, expression))
                 else:
                     assembler.add_raw_column(metric["sql_column"])
+                    if export_mode:
+                        export_headers.append(self._label_from_sql_column(metric["sql_column"]))
 
             # 兜底：前端聚合表分页/刷新路径可能只回传 dimensions/metrics，漏掉
             # where_conditions/having_conditions/order_by。此时退回到 sql_components
@@ -1264,12 +1339,7 @@ class AskdataService:
 
             if pagination_info:
                 return self._build_requery_pagination_result(assembler, pagination_info, cap)
-            else:
-                sql, params = assembler.build_sql_for_jdbc()
-                return {
-                    "sql": sql,
-                    "params": params
-                }
+            return self._finalize_requery(assembler, cap, export_mode, export_ceiling, export_headers)
 
     async def get_hc_dim_values_by_dim_value(
             self,
