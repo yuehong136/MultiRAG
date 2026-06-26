@@ -29,6 +29,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/peterh/liner"
+	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 
 	"multirag/internal/cli/contextengine"
@@ -1253,7 +1254,7 @@ func (c *CLI) verifyPassword() error {
 		var input string
 		var err error
 
-		if isTerminal() {
+		if term.IsTerminal(int(os.Stdin.Fd())) {
 			input, err = c.line.PasswordPrompt("Please input your password: ")
 		} else {
 			fmt.Println("Warning: this terminal does not support secure password input")
