@@ -71,7 +71,7 @@ const (
 	TokenToken
 	TokenTokens
 	TokenGenerate
-	TokenPool
+	TokenAvailable
 	TokenModel
 	TokenModels
 	TokenProvider
@@ -102,6 +102,7 @@ const (
 	TokenIndex
 	TokenVectorSize
 	TokenDocMeta
+	TokenName // For ALTER PROVIDER <name> NAME <new_name>
 
 	// Literals
 	TokenIdentifier

@@ -39,6 +39,7 @@ type Router struct {
 	searchHandler        *handler.SearchHandler
 	fileHandler          *handler.FileHandler
 	memoryHandler        *handler.MemoryHandler
+	providerHandler      *handler.ProviderHandler
 }
 
 // NewRouter create router
@@ -58,6 +59,7 @@ func NewRouter(
 	searchHandler *handler.SearchHandler,
 	fileHandler *handler.FileHandler,
 	memoryHandler *handler.MemoryHandler,
+	providerHandler *handler.ProviderHandler,
 ) *Router {
 	return &Router{
 		authHandler:          authHandler,
@@ -75,6 +77,7 @@ func NewRouter(
 		searchHandler:        searchHandler,
 		fileHandler:          fileHandler,
 		memoryHandler:        memoryHandler,
+		providerHandler:      providerHandler,
 	}
 }
 
@@ -99,15 +102,6 @@ func (r *Router) Setup(engine *gin.Engine) {
 
 	// User logout endpoint
 	engine.GET("/v1/user/logout", r.userHandler.Logout)
-
-	// provider pool route group
-	provider := engine.Group("/api/v1/providers")
-	{
-		provider.GET("/", handler.ListPoolProviders)
-		provider.GET("/:provider_name", handler.ShowPoolProvider)
-		provider.GET("/:provider_name/models", handler.ListPoolModels)
-		provider.GET("/:provider_name/models/:model_name", handler.ShowPoolModel)
-	}
 
 	// Protected routes
 	authorized := engine.Group("")
@@ -187,6 +181,15 @@ func (r *Router) Setup(engine *gin.Engine) {
 				memory.GET("", r.memoryHandler.ListMemories)
 				memory.GET("/:memory_id/config", r.memoryHandler.GetMemoryConfig)
 				memory.GET("/:memory_id", r.memoryHandler.GetMemoryMessages)
+			}
+
+			// provider pool route group
+			provider := v1.Group("/providers")
+			{
+				provider.GET("/", r.providerHandler.ListProviders)
+				provider.GET("/:provider_name", r.providerHandler.ShowProvider)
+				provider.GET("/:provider_name/models", r.providerHandler.ListModels)
+				provider.GET("/:provider_name/models/:model_name", r.providerHandler.ShowModel)
 			}
 
 			// TODO: Message routes - Implementation pending - depends on CanvasService, TaskService and embedding engine

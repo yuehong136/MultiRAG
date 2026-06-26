@@ -17,6 +17,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -568,6 +569,122 @@ func (c *MultiRAGClient) DropDocMetaIndex(cmd *Command) (ResponseIf, error) {
 	} else {
 		result.Message = fmt.Sprintf("Failed to drop doc meta index: %v", resJSON)
 	}
+	result.Duration = 0
+	return &result, nil
+}
+
+// ==================== Model provider management ====================
+
+// CreateProvider creates a new model provider.
+//
+//	CREATE PROVIDER <name>
+//	CREATE PROVIDER <name> <api_key>
+func (c *MultiRAGClient) CreateProvider(cmd *Command) (ResponseIf, error) {
+	if c.ServerType != "user" {
+		return nil, fmt.Errorf("this command is only allowed in USER mode")
+	}
+
+	providerName, ok := cmd.Params["provider_name"].(string)
+	if !ok {
+		return nil, fmt.Errorf("provider name not provided")
+	}
+
+	// Optional api_key
+	apiKey, _ := cmd.Params["api_key"].(string)
+
+	payload := map[string]interface{}{
+		"llm_factory": providerName,
+		"api_key":     apiKey,
+		"verify":      apiKey != "", // Only verify if api_key is provided
+	}
+
+	resp, err := c.HTTPClient.Request("POST", "/llm/set_api_key", true, "web", nil, payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create provider: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to create provider: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	var result CommonDataResponse
+	if err = json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("create provider failed: invalid JSON (%w)", err)
+	}
+
+	if result.Code != 0 {
+		return nil, fmt.Errorf("%s", result.Message)
+	}
+
+	result.Duration = 0
+	return &result, nil
+}
+
+// ListProviders lists all providers configured by the current user.
+//
+//	LIST PROVIDERS
+func (c *MultiRAGClient) ListProviders(cmd *Command) (ResponseIf, error) {
+	if c.ServerType != "user" {
+		return nil, fmt.Errorf("this command is only allowed in USER mode")
+	}
+
+	resp, err := c.HTTPClient.Request("GET", "/llm/factories", true, "web", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list providers: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to list providers: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	var result CommonResponse
+	if err = json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("list providers failed: invalid JSON (%w)", err)
+	}
+
+	if result.Code != 0 {
+		return nil, fmt.Errorf("%s", result.Message)
+	}
+
+	result.Duration = 0
+	return &result, nil
+}
+
+// DropProvider deletes a provider.
+//
+//	DROP PROVIDER <name>
+func (c *MultiRAGClient) DropProvider(cmd *Command) (ResponseIf, error) {
+	if c.ServerType != "user" {
+		return nil, fmt.Errorf("this command is only allowed in USER mode")
+	}
+
+	providerName, ok := cmd.Params["provider_name"].(string)
+	if !ok {
+		return nil, fmt.Errorf("provider name not provided")
+	}
+
+	payload := map[string]interface{}{
+		"llm_factory": providerName,
+	}
+
+	resp, err := c.HTTPClient.Request("DELETE", "/llm/factory", true, "web", nil, payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to drop provider: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to drop provider: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	var result SimpleResponse
+	if err = json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("drop provider failed: invalid JSON (%w)", err)
+	}
+
+	if result.Code != 0 {
+		return nil, fmt.Errorf("%s", result.Message)
+	}
+
 	result.Duration = 0
 	return &result, nil
 }

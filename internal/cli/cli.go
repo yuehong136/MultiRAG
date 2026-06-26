@@ -1159,6 +1159,13 @@ SQL Commands (User Mode):
   LIST CHATS;                                            - List user chats
   LIST MODEL PROVIDERS;                                  - List model providers
   LIST DEFAULT MODELS;                                   - List default models
+  LIST PROVIDERS;                                        - List configured LLM providers
+  LIST AVAILABLE PROVIDERS;                              - List available LLM providers
+  SHOW PROVIDER 'name';                                  - Show provider details
+  CREATE PROVIDER 'name';                                - Create a provider without API key
+  CREATE PROVIDER 'name' 'api_key';                      - Create a provider with API key
+  DROP PROVIDER 'name';                                  - Delete a provider
+  ALTER PROVIDER 'name' NAME 'new_name';                 - Rename a provider (server-side pending)
   CREATE INDEX FOR DATASET 'name' VECTOR_SIZE N;         - Create index for dataset
   DROP INDEX FOR DATASET 'name';                         - Drop index for dataset
   CREATE INDEX DOC_META;                                 - Create doc meta index

@@ -84,10 +84,14 @@ func (p *Parser) parseListCommand() (*Command, error) {
 		return p.parseListTokens()
 	case TokenModel:
 		return p.parseListModelProviders()
+	case TokenModels:
+		return p.parseListModelsOfProvider()
+	case TokenProviders:
+		return p.parseListProviders()
 	case TokenDefault:
 		return p.parseListDefaultModels()
-	case TokenPool:
-		return p.parseCommonListPoolModels()
+	case TokenAvailable:
+		return p.parseCommonListProviders()
 	case TokenChats:
 		p.nextToken()
 		if err := p.expectSemicolon(); err != nil {
@@ -173,8 +177,10 @@ func (p *Parser) parseShowCommand() (*Command, error) {
 			return nil, err
 		}
 		return NewCommand("show_current_user"), nil
-	case TokenPool:
-		return p.parseCommonShowPoolModel()
+	case TokenProvider:
+		return p.parseShowProvider()
+	case TokenModel:
+		return p.parseShowModel()
 	default:
 		return nil, fmt.Errorf("unknown SHOW target: %s", p.curToken.Value)
 	}
@@ -194,6 +200,8 @@ func (p *Parser) parseCreateCommand() (*Command, error) {
 		return p.parseCreateToken()
 	case TokenIndex:
 		return p.parseCreateIndex()
+	case TokenProvider:
+		return p.parseCreateProvider()
 	default:
 		return nil, fmt.Errorf("unknown CREATE target: %s", p.curToken.Value)
 	}
@@ -350,6 +358,8 @@ func (p *Parser) parseDropCommand() (*Command, error) {
 		return p.parseDropToken()
 	case TokenIndex:
 		return p.parseDropIndex()
+	case TokenProvider:
+		return p.parseDropProvider()
 	default:
 		return nil, fmt.Errorf("unknown DROP target: %s", p.curToken.Value)
 	}
@@ -427,6 +437,112 @@ func (p *Parser) parseDropChat() (*Command, error) {
 	p.nextToken()
 	if err := p.expectSemicolon(); err != nil {
 		return nil, err
+	}
+	return cmd, nil
+}
+
+// ==================== User PROVIDER ====================
+
+// parseListProviders parses: LIST PROVIDERS;
+func (p *Parser) parseListProviders() (*Command, error) {
+	p.nextToken() // consume PROVIDERS
+	if p.curToken.Type == TokenSemicolon {
+		p.nextToken()
+	}
+	return NewCommand("list_providers"), nil
+}
+
+// parseCreateProvider parses:
+//
+//	CREATE PROVIDER '<name>';
+//	CREATE PROVIDER '<name>' '<api_key>';
+func (p *Parser) parseCreateProvider() (*Command, error) {
+	p.nextToken() // consume PROVIDER
+
+	providerName, err := p.parseQuotedString()
+	if err != nil {
+		return nil, fmt.Errorf("expected provider name: %w", err)
+	}
+
+	cmd := NewCommand("create_provider")
+	cmd.Params["provider_name"] = providerName
+
+	p.nextToken()
+
+	// Optional api_key
+	if p.curToken.Type == TokenQuotedString {
+		apiKey, err := p.parseQuotedString()
+		if err != nil {
+			return nil, fmt.Errorf("expected api key: %w", err)
+		}
+		cmd.Params["api_key"] = apiKey
+		p.nextToken()
+	}
+
+	if p.curToken.Type == TokenSemicolon {
+		p.nextToken()
+	}
+	return cmd, nil
+}
+
+// parseDropProvider parses: DROP PROVIDER '<name>';
+func (p *Parser) parseDropProvider() (*Command, error) {
+	p.nextToken() // consume PROVIDER
+
+	providerName, err := p.parseQuotedString()
+	if err != nil {
+		return nil, fmt.Errorf("expected provider name: %w", err)
+	}
+
+	cmd := NewCommand("drop_provider")
+	cmd.Params["provider_name"] = providerName
+
+	p.nextToken()
+	if p.curToken.Type == TokenSemicolon {
+		p.nextToken()
+	}
+	return cmd, nil
+}
+
+// parseUserAlterCommand dispatches user-mode ALTER commands.
+func (p *Parser) parseUserAlterCommand() (*Command, error) {
+	p.nextToken() // consume ALTER
+
+	switch p.curToken.Type {
+	case TokenProvider:
+		return p.parseAlterProvider()
+	default:
+		return nil, fmt.Errorf("unknown ALTER target: %s", p.curToken.Value)
+	}
+}
+
+// parseAlterProvider parses: ALTER PROVIDER '<name>' NAME '<new_name>';
+func (p *Parser) parseAlterProvider() (*Command, error) {
+	p.nextToken() // consume PROVIDER
+
+	providerName, err := p.parseQuotedString()
+	if err != nil {
+		return nil, fmt.Errorf("expected provider name: %w", err)
+	}
+
+	p.nextToken()
+	if p.curToken.Type != TokenName {
+		return nil, fmt.Errorf("expected NAME")
+	}
+	p.nextToken()
+
+	newName, err := p.parseQuotedString()
+	if err != nil {
+		return nil, fmt.Errorf("expected new provider name: %w", err)
+	}
+
+	cmd := NewCommand("alter_provider")
+	cmd.Params["provider_name"] = providerName
+	cmd.Params["new_name"] = newName
+
+	p.nextToken()
+	if p.curToken.Type == TokenSemicolon {
+		p.nextToken()
 	}
 	return cmd, nil
 }

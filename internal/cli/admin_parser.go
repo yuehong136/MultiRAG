@@ -66,8 +66,10 @@ func (p *Parser) parseAdminListCommand() (*Command, error) {
 		return p.parseListAgents()
 	case TokenTokens:
 		return p.parseListTokens()
-	case TokenPool:
-		return p.parseCommonListPoolModels()
+	case TokenAvailable:
+		return p.parseCommonListProviders()
+	case TokenModels:
+		return p.parseListModelsOfProvider()
 	default:
 		return nil, fmt.Errorf("unknown LIST target: %s", p.curToken.Value)
 	}
@@ -103,8 +105,10 @@ func (p *Parser) parseAdminShowCommand() (*Command, error) {
 		return p.parseShowVariable()
 	case TokenService:
 		return p.parseShowService()
-	case TokenPool:
-		return p.parseCommonShowPoolModel()
+	case TokenProvider:
+		return p.parseShowProvider()
+	case TokenModel:
+		return p.parseShowModel()
 	default:
 		return nil, fmt.Errorf("unknown SHOW target: %s", p.curToken.Value)
 	}

@@ -19,29 +19,63 @@ package handler
 import (
 	"multirag/internal/common"
 	"multirag/internal/dao"
+	"multirag/internal/service"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
 
-func ListPoolProviders(c *gin.Context) {
-	providers, err := dao.GetModelProviderManager().ListProviders()
-	if err != nil {
+// ProviderHandler provider handler
+type ProviderHandler struct {
+	userService *service.UserService
+}
+
+// NewProviderHandler create provider handler
+func NewProviderHandler(userService *service.UserService) *ProviderHandler {
+	return &ProviderHandler{
+		userService: userService,
+	}
+}
+
+func (h *ProviderHandler) ListProviders(c *gin.Context) {
+	keywords := ""
+	if queryKeywords := c.Query("available"); queryKeywords != "" {
+		keywords = queryKeywords
+	}
+
+	// convert keywords to small case
+	keywords = strings.ToLower(keywords)
+	if keywords == "true" {
+		// list pool providers
+		providers, err := dao.GetModelProviderManager().ListProviders()
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"code":    common.CodeNotFound,
+				"message": err.Error(),
+			})
+			return
+		}
+
 		c.JSON(http.StatusOK, gin.H{
-			"code":    common.CodeNotFound,
-			"message": err.Error(),
+			"code":    0,
+			"message": "success",
+			"data":    providers,
 		})
 		return
 	}
 
+	// TODO(#16243): list providers configured by the current tenant. ragflow's
+	// upstream relies on modelProviderService.ListProvidersOfTenant, which has
+	// not been ported yet; return an empty list to avoid a missing response.
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
 		"message": "success",
-		"data":    providers,
+		"data":    []any{},
 	})
 }
 
-func ShowPoolProvider(c *gin.Context) {
+func (h *ProviderHandler) ShowProvider(c *gin.Context) {
 	providerName := c.Param("provider_name")
 	if providerName == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -66,7 +100,7 @@ func ShowPoolProvider(c *gin.Context) {
 	})
 }
 
-func ListPoolModels(c *gin.Context) {
+func (h *ProviderHandler) ListModels(c *gin.Context) {
 	providerName := c.Param("provider_name")
 	if providerName == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -90,7 +124,7 @@ func ListPoolModels(c *gin.Context) {
 	})
 }
 
-func ShowPoolModel(c *gin.Context) {
+func (h *ProviderHandler) ShowModel(c *gin.Context) {
 	providerName := c.Param("provider_name")
 	if providerName == "" {
 		c.JSON(http.StatusBadRequest, gin.H{

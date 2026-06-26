@@ -312,10 +312,10 @@ func readPasswordFallback() (string, error) {
 
 // ==================== Model provider pool ====================
 
-func (c *MultiRAGClient) ListPoolProviders(cmd *Command) (ResponseIf, error) {
-	endPoint := "/providers"
+func (c *MultiRAGClient) ListAvailableProviders(cmd *Command) (ResponseIf, error) {
+	endPoint := "/providers?available=true"
 	if c.ServerType == "admin" {
-		endPoint = "/admin/providers"
+		endPoint = "/admin/providers?available=true"
 	}
 
 	resp, err := c.HTTPClient.Request("GET", endPoint, true, "web", nil, nil)
@@ -339,7 +339,7 @@ func (c *MultiRAGClient) ListPoolProviders(cmd *Command) (ResponseIf, error) {
 	return &result, nil
 }
 
-func (c *MultiRAGClient) ShowPoolProvider(cmd *Command) (ResponseIf, error) {
+func (c *MultiRAGClient) ShowProvider(cmd *Command) (ResponseIf, error) {
 	providerName, ok := cmd.Params["provider_name"].(string)
 	if !ok {
 		return nil, fmt.Errorf("provider_name not provided")
@@ -371,7 +371,7 @@ func (c *MultiRAGClient) ShowPoolProvider(cmd *Command) (ResponseIf, error) {
 	return &result, nil
 }
 
-func (c *MultiRAGClient) ListPoolModels(cmd *Command) (ResponseIf, error) {
+func (c *MultiRAGClient) ListModels(cmd *Command) (ResponseIf, error) {
 	providerName, ok := cmd.Params["provider_name"].(string)
 	if !ok {
 		return nil, fmt.Errorf("provider_name not provided")
@@ -403,7 +403,7 @@ func (c *MultiRAGClient) ListPoolModels(cmd *Command) (ResponseIf, error) {
 	return &result, nil
 }
 
-func (c *MultiRAGClient) ShowPoolModel(cmd *Command) (ResponseIf, error) {
+func (c *MultiRAGClient) ShowModel(cmd *Command) (ResponseIf, error) {
 	providerName, ok := cmd.Params["provider_name"].(string)
 	if !ok {
 		return nil, fmt.Errorf("provider_name not provided")
