@@ -1208,7 +1208,19 @@ func (p *Parser) parseChatCommand() (*Command, error) {
 		cmd.Params["model_name"] = modelName
 	}
 	cmd.Params["message"] = message
+	cmd.Params["reasoning"] = false
 	return cmd, nil
+}
+
+func (p *Parser) parseThinkCommand() (*Command, error) {
+	p.nextToken() // consume THINK
+	command, err := p.parseChatCommand()
+	if err != nil {
+		return nil, err
+	}
+	command.Type = "think_chat_to_model"
+	command.Params["reasoning"] = true
+	return command, nil
 }
 
 func (p *Parser) parseUseCommand() (*Command, error) {

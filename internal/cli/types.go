@@ -110,6 +110,7 @@ const (
 	TokenDisable
 	TokenEnable
 	TokenUse
+	TokenThink
 	TokenInsert
 	TokenFile
 	TokenMetadata
