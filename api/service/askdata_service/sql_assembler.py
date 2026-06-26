@@ -945,19 +945,28 @@ class FlexibleSQLAssembler:
         jdbc_sql = sql.replace('%s', '?')
         return jdbc_sql, params
 
-    def build_count_sql_for_jdbc(self) -> Tuple[str, List[Any]]:
+    def build_count_sql_for_jdbc(self, cap: Optional[int] = None) -> Tuple[str, List[Any]]:
         """
         构建用于获取总数的JDBC格式SQL语句
         将当前SQL作为子查询，外层包装COUNT(*)
 
+        Args:
+            cap: 用户给定的行数上限（如自然语言里的「30 条」）。为正整数时，内层子查询保留
+                 `LIMIT cap`，使 COUNT 返回 min(实际, cap)（且在大表上短路，不做全表 COUNT）；
+                 为 None / 非正时维持原行为——清空 limit/offset，对全集计数。
+
         Returns:
             (JDBC格式的COUNT SQL, 参数列表)
         """
-        # 临时保存并清除limit设置（确保子查询中没有limit）
+        # 临时保存 limit/offset；带 cap 时把内层封顶到 cap，否则清除（确保子查询不带分页窗口）
         temp_limit = self.limit_count
         temp_offset = self.offset_count
-        self.limit_count = None
-        self.offset_count = None
+        if isinstance(cap, int) and cap > 0:
+            self.limit_count = cap
+            self.offset_count = None
+        else:
+            self.limit_count = None
+            self.offset_count = None
 
         try:
             # 构建内部子查询SQL

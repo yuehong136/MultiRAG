@@ -28,7 +28,7 @@ from api.service.askdata_service.util.append_join_clauses import append_join_cla
 from api.service.askdata_service.util.apply_permissions import apply_permissions_to_assembler
 from api.service.askdata_service.util.build_model_permissions_map import build_model_permissions_map
 from api.service.askdata_service.util.convert_aggregation_value import convert_aggregation_value
-from api.service.askdata_service.util.convert_where_condition_value import process_where_condition
+from api.service.askdata_service.util.convert_where_condition_value import process_where_condition, convert_where_condition_value
 from api.service.askdata_service.util.extract_manually_adjusted_field_ids import extract_manually_adjusted_field_ids
 from api.service.askdata_service.util.filter_model_relations_by_ids import filter_model_relations_by_ids
 from api.service.askdata_service.util.merge_dimensions_and_metrics import merge_dimensions_and_metrics
@@ -421,8 +421,22 @@ class AskdataService:
             model_details, model_relations, business_term_rows = await asyncio.gather(
                 model_details_task,
                 model_relations_task,
-                business_term_task
+                business_term_task,
+                return_exceptions=True,
             )
+            # 模型关系是「非关键、可降级」依赖：中台 getModelRelationships 接口超时/失败时
+            # 降级为空关系继续（单模型本就常无跨模型关系），避免这一路抖动把已成功的
+            # 模型详情/业务术语连同整个语义层一起拖垮。
+            # ⚠ 降级值必须是 []，绝不能是 None——下游 table_config 对 None 会在 get-sql 阶段
+            #    重新去打这个会超时的接口，等于把 30s 超时挪到下一步。
+            if isinstance(model_relations, BaseException):
+                logger.warning("[semantic_layer] 获取模型关系失败，降级为空关系继续: %r", model_relations)
+                model_relations = []
+            # 模型详情 / 业务术语仍是硬依赖：失败保持原有「整层中止」行为，显式重抛。
+            if isinstance(model_details, BaseException):
+                raise model_details
+            if isinstance(business_term_rows, BaseException):
+                raise business_term_rows
             logger.debug("[semantic_layer] model_ids=%s, model_relations=%d个, business_terms=%d个",
                          model_ids, len(model_relations), len(business_term_rows))
 
@@ -521,10 +535,23 @@ class AskdataService:
                 for model_detail in model_details
             ]
             if dims_metrics_tasks:
-                dims_metrics_results = await asyncio.gather(*dims_metrics_tasks)
+                # 与上面的模型关系 gather 同理：dims/metrics 是可降级依赖，单个模型打中台
+                # getModelIndsAndDimsByModelId 超时/失败时降级为空，绝不让它掀翻整个语义层。
+                # 降级值必须是 dict（{"dimensions": [], "metrics": []}）不能是 None——理由见
+                # model_dataset_resolver._ensure_dims_and_metrics 的说明。每模型用新字面量防串改。
+                dims_metrics_results = await asyncio.gather(*dims_metrics_tasks, return_exceptions=True)
+                _degraded = 0
                 for model_detail, dims_metrics in zip(model_details, dims_metrics_results):
+                    if isinstance(dims_metrics, BaseException):
+                        logger.warning("[dims_metrics] 预拉模型 %s 的维度/指标失败，降级为空继续: %r",
+                                       model_detail.get("modelId"), dims_metrics)
+                        dims_metrics = {"dimensions": [], "metrics": []}
+                        _degraded += 1
+                    elif not isinstance(dims_metrics, dict):
+                        dims_metrics = {"dimensions": [], "metrics": []}
                     model_detail['dimsAndMetrics'] = dims_metrics
-                logger.info(f"预拉 {len(dims_metrics_tasks)} 个模型的 dimsAndMetrics 完成")
+                logger.info(f"预拉 {len(dims_metrics_tasks)} 个模型的 dimsAndMetrics 完成"
+                            + (f"（其中 {_degraded} 个降级为空）" if _degraded else ""))
 
             # 9. 构建最终的语义层
             semantic_layer_original = dict(
@@ -779,12 +806,236 @@ class AskdataService:
         """从数据集详情列表中提取所有domainId并去重。"""
         return list(set(d.get('domainId') for d in dataset_details if d.get('domainId')))
 
+    def _apply_nonsemantic_where(self, assembler, cond: Dict[str, Any]) -> None:
+        """把一条「非语义」WHERE 条件应用到 assembler —— table-row 与聚合分支共用，杜绝两套漂移。
+
+        优先级：raw_condition(has_or/复杂表达式) > 结构化(operator+value 分开)重组 > 整条 sql_column 正则兜底 > 裸列兜底。
+        构建器(table_config_generator._process_where_conditions)对普通非语义条件只存「字段名 + 独立 operator/value」，
+        聚合分支历史上却把 sql_column 当整条 'field op value' 正则重解析、无视 operator/value，
+        裸字段名解析不出 → add_raw_where(裸列) 生成非法 WHERE。这里统一成「有 operator 就分开重组」，
+        与 table-row 一致；仅在缺 operator(用户自定义/历史前端打包整条)时才退回正则解析。
+        结构化分支按 dataType 把数值串转成数值，避免数值列被字符串参数绑定(integer > character varying)。
+        """
+        import re
+
+        raw_condition = cond.get("raw_condition")
+        if raw_condition:
+            assembler.add_raw_where(raw_condition)
+            return
+
+        sql_column = cond.get("sql_column")
+        if not sql_column:
+            return
+
+        operator = (cond.get("operator") or "").strip()
+        data_type = cond.get("dataType")
+
+        # 结构化条目（构建器/前端常规形状）：operator、value 分开带，直接重组，绝不把 sql_column 当整条解析。
+        if operator:
+            value = cond.get("value")
+            op_up = operator.upper()
+            if op_up in ('IS NULL', 'IS NOT NULL'):
+                assembler.add_raw_where(f"{sql_column} {operator}")
+            elif op_up in ('IN', 'NOT IN'):
+                if isinstance(value, str):
+                    try:
+                        value_list = json.loads(value)
+                    except Exception:
+                        value_list = [v.strip().strip("'\"") for v in value.split(',')]
+                else:
+                    value_list = value if isinstance(value, list) else [value]
+                if data_type:
+                    value_list = [convert_where_condition_value(v, data_type, '=') for v in value_list]
+                placeholders = ','.join(['%s'] * len(value_list))
+                assembler.add_parameterized_where(f"{sql_column} {operator} ({placeholders})", value_list)
+            elif op_up == 'BETWEEN':
+                value2 = cond.get('value2', value)
+                if data_type:
+                    value = convert_where_condition_value(value, data_type, operator)
+                    value2 = convert_where_condition_value(value2, data_type, operator)
+                assembler.add_parameterized_where(f"{sql_column} BETWEEN %s AND %s", [value, value2])
+            else:
+                if data_type:
+                    value = convert_where_condition_value(value, data_type, operator)
+                assembler.add_parameterized_where(f"{sql_column} {operator} %s", [value])
+            return
+
+        # 无 operator：sql_column 可能是用户自定义/历史前端打包的整条 "field op value"，用正则兜底解析。
+        patterns = [
+            (r'^(.+?)\s+(IS\s+NULL|IS\s+NOT\s+NULL)\s*$', lambda m: (m.group(1), m.group(2), None)),
+            (r'^(.+?)\s+(IN|NOT\s+IN)\s*\((.+)\)\s*$', lambda m: (m.group(1), m.group(2), m.group(3))),
+            (r'^(.+?)\s+(BETWEEN)\s+(.+?)\s+AND\s+(.+)\s*$', lambda m: (m.group(1), m.group(2), (m.group(3), m.group(4)))),
+            (r'^(.+?)\s*(=|!=|<>|>=|<=|>|<|LIKE|NOT\s+LIKE)\s*(.+)\s*$', lambda m: (m.group(1), m.group(2), m.group(3))),
+        ]
+        for pattern, extractor in patterns:
+            match = re.match(pattern, sql_column, re.IGNORECASE)
+            if not match:
+                continue
+            field, op, val = extractor(match)
+            op_up = op.upper()
+            if op_up in ('IS NULL', 'IS NOT NULL'):
+                assembler.add_raw_where(f"{field} {op}")
+            elif op_up in ('IN', 'NOT IN'):
+                val_list = [v.strip().strip("'\"") for v in val.split(',')]
+                if data_type:
+                    val_list = [convert_where_condition_value(v, data_type, '=') for v in val_list]
+                placeholders = ','.join(['%s'] * len(val_list))
+                assembler.add_parameterized_where(f"{field} {op} ({placeholders})", val_list)
+            elif op_up == 'BETWEEN':
+                val1, val2 = val
+                val1, val2 = val1.strip().strip("'\""), val2.strip().strip("'\"")
+                if data_type:
+                    val1 = convert_where_condition_value(val1, data_type, op)
+                    val2 = convert_where_condition_value(val2, data_type, op)
+                assembler.add_parameterized_where(f"{field} BETWEEN %s AND %s", [val1, val2])
+            else:
+                val = val.strip().strip("'\"")
+                if data_type:
+                    val = convert_where_condition_value(val, data_type, op)
+                assembler.add_parameterized_where(f"{field} {op} %s", [val])
+            return
+
+        logger.warning(f"[re-query] 无法解析非语义 where 条件，按原始 SQL 添加(可能非法): {sql_column}")
+        assembler.add_raw_where(sql_column)
+
+    def _apply_nonsemantic_having(self, assembler, cond: Dict[str, Any]) -> None:
+        """把一条「非语义」HAVING 条件应用到 assembler，与非语义 where 同源对齐。
+
+        构建器非语义 having 同样只存「字段名 + 独立 operator/value」，原先 add_raw_having(sql_column) 把裸字段名
+        当整条 HAVING → 非法/丢过滤。这里有 operator 就用 add_having 正常重组(IN 解析、标量按 dataType 转换)；
+        raw_condition 走 add_raw_having；缺 operator 才原样兜底。
+        """
+        raw_condition = cond.get("raw_condition")
+        if raw_condition:
+            assembler.add_raw_having(raw_condition)
+            return
+
+        sql_column = cond.get("sql_column")
+        if not sql_column:
+            return
+
+        operator = (cond.get("operator") or "").strip()
+        if not operator:
+            assembler.add_raw_having(sql_column)
+            return
+
+        value = cond.get("value")
+        data_type = cond.get("dataType")
+        op_up = operator.upper()
+        if op_up == 'IN':
+            value = parse_sql_in_values(value) if isinstance(value, str) else value
+        elif op_up not in ('IS NULL', 'IS NOT NULL', 'NOT IN', 'BETWEEN') and data_type:
+            value = convert_where_condition_value(value, data_type, operator)
+        assembler.add_having(sql_column, FilterOperator.from_value(operator), value)
+
+    def _normalize_cap(self, cap) -> Optional[int]:
+        """把可能来自前端回传的行数上限归一成「正整数或 None」。
+
+        cap 类型不固定：int 30 / 数字字符串 "30" / None / 空串 / bool。
+        bool 是 int 子类必须排除（True 会被当 1）；字符串按纯数字解析；其余非正数归 None。
+        """
+        if isinstance(cap, bool):
+            return None
+        if isinstance(cap, str):
+            cap = int(cap.strip()) if cap.strip().isdigit() else None
+        return cap if isinstance(cap, int) and cap > 0 else None
+
+    def _effective_limit(self, cap: Optional[int], ceiling: Optional[int]) -> Optional[int]:
+        """导出行数上限 = min(用户 N 上限, ceiling 安全阈值)。
+
+        只有 cap → cap；只有 ceiling → ceiling；两者都有 → min；两者都无 → None
+        （调用方须保证 ceiling 非空，避免真·无界全量导出，见计划风险 R-上限）。
+        """
+        candidates = [v for v in (cap, ceiling) if isinstance(v, int) and v > 0]
+        return min(candidates) if candidates else None
+
+    def _export_label(self, semantic_field, fallback: str) -> str:
+        """导出表头的中文显示名：优先 field_detail 的中文名，缺失回退裸列名/sql_column。"""
+        fd = (semantic_field or {}).get("field_detail") or {}
+        for k in ("dimensionName", "semanticName", "metricName", "name"):
+            if fd.get(k):
+                return fd[k]
+        for k in ("dimensionName", "semanticName", "name"):
+            if (semantic_field or {}).get(k):
+                return semantic_field[k]
+        return fallback
+
+    def _label_from_sql_column(self, sql_column: str) -> str:
+        """从非语义列的原始表达式里取展示用表头。
+
+        非语义列(unmatched)的 sql_column 往往是「整段表达式 + AS 别名」,例如
+        `COUNT(t1."zgh") AS "50岁以上老师数量"`——直接当表头会把整串塞进单元格。
+        这里优先取最后一个 `AS` 后的别名(去成对引号,即 LLM 起的中文名);无别名则取
+        裸列名末段去引号(如 `t1."xm"` → `xm`,与页面现有列身份一致)。
+        """
+        s = (sql_column or "").strip().rstrip(";").strip()
+        idx = s.lower().rfind(" as ")  # 取最后一个顶层 AS,避开 CAST(x AS int) 之类内层 AS
+        if idx != -1:
+            alias = s[idx + 4:].strip()
+            if len(alias) >= 2 and alias[0] in "\"'`" and alias[-1] == alias[0]:
+                alias = alias[1:-1]
+            if alias:
+                return alias.strip()
+        return s.split(".")[-1].strip().strip("\"'`")
+
+    def _finalize_requery(self, assembler, cap, export_mode, export_ceiling, export_headers):
+        """re-query 无分页分支收尾：导出模式套 effective_limit 并回传中文表头，否则原样全量。"""
+        if not export_mode:
+            sql, params = assembler.build_sql_for_jdbc()
+            return {"sql": sql, "params": params}
+        eff = self._effective_limit(self._normalize_cap(cap), export_ceiling)
+        if isinstance(eff, int) and eff > 0:
+            assembler.set_limit(eff)
+        sql, params = assembler.build_sql_for_jdbc()
+        return {"sql": sql, "params": params, "headers": export_headers, "effective_limit": eff}
+
+    def _build_requery_pagination_result(self, assembler, pagination_info, cap):
+        """构建 re-query 的分页 count_sql/data_sql（table-row 与聚合两分支共用，杜绝形状漂移）。
+
+        cap 为用户在自然语言里给定的行数上限（table_config['limit']）。仅当 cap 为正整数时按
+        「硬上限 + 页内分页」处理：
+          - count：对带 `LIMIT cap` 的子查询计数 → min(实际, cap)，与首屏 data_count 口径一致；
+          - data：把页窗钳到 [offset, offset+page_size) ∩ [0, cap)。越过上限的页返回 0 行
+            （合法 `LIMIT 0`），不会泄露 cap 之外的数据。
+        cap 为 None / 非正整数时维持原行为（全量分页），输出 SQL 字节级不变（零回归）。
+        """
+        page_size = int(pagination_info["page_size"])
+        page_index = int(pagination_info["page_index"])
+        # cap 可能来自前端回传，类型不固定（int/数字串/None/空串/bool），统一归一。
+        cap = self._normalize_cap(cap)
+        has_cap = isinstance(cap, int) and cap > 0
+        count_sql, count_sql_params = assembler.build_count_sql_for_jdbc(cap=cap if has_cap else None)
+        if has_cap:
+            offset = (page_index - 1) * page_size
+            # max(0, ...) 承重：offset≥cap 时算出 0，发合法 `LIMIT 0`，绝不能传负数
+            assembler.set_limit(max(0, min(page_size, cap - offset)), offset)
+        else:
+            assembler.set_pagination(page_index, page_size)
+        sql, params = assembler.build_sql_for_jdbc()
+        return {
+            "sql": sql,
+            "params": params,
+            "count_sql": count_sql,
+            "count_sql_params": count_sql_params,
+        }
+
     async def generate_requery_sql(self, chart_type: str, table_config: Dict[str, Any], sql_components: Dict[str, Any],
                                    model_table_alias_mapping_list: List[Dict[str, Any]],
-                                   pagination_info: Optional[Dict[str, Any]], user_id: str):
-        """生成重新查询的SQL语句。"""
+                                   pagination_info: Optional[Dict[str, Any]], user_id: str,
+                                   export_mode: bool = False, export_ceiling: Optional[int] = None):
+        """生成重新查询的SQL语句。
+
+        export_mode=True（导出全部数据）时：不分页，按 effective_limit=min(用户N上限, ceiling)
+        套 LIMIT，并按 SELECT 顺序收集中文表头 export_headers 一并返回。默认 False ⇒ 现有
+        re-query 调用行为字节级不变。
+        """
+        # 仅 export_mode 收集；按 add_column/add_raw_column 的 SELECT 顺序逐列追加中文显示名，
+        # 与中台 getColumnName 有序列按「位置」对齐（不依赖 key 名）。
+        export_headers: list[str] = []
         base_from = sql_components["from"]
         all_semantic_fields = table_config["all_semantic_fields"]
+        # 用户给定的行数上限（如「30 条」）；翻页时作为硬封顶，缺省/非正整数则全量分页
+        cap = table_config.get("limit")
         from_sentence = ""
         if base_from.lower().startswith("from"):
             from_sentence = base_from.split("FROM")[1]
@@ -897,9 +1148,13 @@ class AskdataService:
                     else:
                         column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
                     assembler.add_column(column_name)
+                    if export_mode:
+                        export_headers.append(self._export_label(semantic_field, column_name.split(".")[-1]))
                 else:
                     column_name = column["sql_column"]
                     assembler.add_raw_column(column_name)
+                    if export_mode:
+                        export_headers.append(self._label_from_sql_column(column_name))
 
             for filter in table_config["filters"]:
                 if filter["is_semantic_field"]:
@@ -917,44 +1172,8 @@ class AskdataService:
                         # 普通情况
                         assembler.add_filter(column_name, FilterOperator.from_value(operator), converted_value)
                 else:
-                    raw_condition = filter.get("raw_condition", None)
-                    if raw_condition:
-                        assembler.add_raw_where(raw_condition)
-                    else:
-                        sql_column = filter['sql_column']
-                        operator = filter['operator']
-                        value = filter['value']
-
-                        # 处理不同的操作符
-                        if operator.upper() in ['IS NULL', 'IS NOT NULL']:
-                            # NULL 检查不需要参数
-                            assembler.add_raw_where(f"{sql_column} {operator}")
-                        elif operator.upper() in ['IN', 'NOT IN']:
-                            # IN 操作符需要特殊处理
-                            if isinstance(value, str):
-                                # 如果是字符串，尝试解析为列表
-                                import json
-                                try:
-                                    value_list = json.loads(value)
-                                except:
-                                    # 如果不是 JSON，尝试分割
-                                    value_list = [v.strip().strip("'\"") for v in value.split(',')]
-                            else:
-                                value_list = value if isinstance(value, list) else [value]
-
-                            placeholders = ','.join(['%s'] * len(value_list))
-                            assembler.add_parameterized_where(
-                                f"{sql_column} {operator} ({placeholders})",
-                                value_list
-                            )
-                        elif operator.upper() == 'BETWEEN':
-                            # BETWEEN 需要两个值
-                            # 这里假设 value 包含两个值，可能需要根据实际情况调整
-                            assembler.add_raw_where(f"{sql_column} BETWEEN %s AND %s",
-                                                    [value, filter.get('value2', value)])
-                        else:
-                            # 普通操作符，使用参数化查询
-                            assembler.add_parameterized_where(f"{sql_column} {operator} %s", [value])
+                    # 非语义条件统一走共享 helper（与聚合分支同一套逻辑，杜绝漂移）
+                    self._apply_nonsemantic_where(assembler, filter)
 
             # 注入权限条件
             apply_permissions_to_assembler(
@@ -975,23 +1194,8 @@ class AskdataService:
                     assembler.add_order_by(order_by["sql_column"], OrderDirection.from_value(order_by["direction"]))
 
             if pagination_info:
-                count_sql, count_sql_params = assembler.build_count_sql_for_jdbc()
-                page_size = int(pagination_info["page_size"])
-                page_index = int(pagination_info["page_index"])
-                assembler.set_pagination(page_index, page_size)
-                sql, params = assembler.build_sql_for_jdbc()
-                return {
-                    "sql": sql,
-                    "params": params,
-                    "count_sql": count_sql,
-                    "count_sql_params": count_sql_params,
-                }
-            else:
-                sql, params = assembler.build_sql_for_jdbc()
-                return {
-                    "sql": sql,
-                    "params": params
-                }
+                return self._build_requery_pagination_result(assembler, pagination_info, cap)
+            return self._finalize_requery(assembler, cap, export_mode, export_ceiling, export_headers)
 
         elif chart_type == "table-aggr" or chart_type == "bar" or chart_type == "pie" or chart_type == "line" or chart_type == "area" or chart_type == "matrix" or chart_type == "bubble":
             for dimension in table_config["dimensions"]:
@@ -1002,9 +1206,13 @@ class AskdataService:
                     column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
                     assembler.add_column(column_name)
                     assembler.add_group_by(column_name)
+                    if export_mode:
+                        export_headers.append(self._export_label(semantic_field, column_name.split(".")[-1]))
                 else:
                     assembler.add_raw_column(dimension["sql_column"])
                     assembler.add_raw_group_by(dimension["sql_column"])
+                    if export_mode:
+                        export_headers.append(self._label_from_sql_column(dimension["sql_column"]))
 
             for metric in table_config["metrics"]:
                 if metric["is_semantic_field"]:
@@ -1028,13 +1236,19 @@ class AskdataService:
                             alias = f"{aggr_type}_{model_name}_{semantic_name}"
                             assembler.add_raw_column(f"{aggr_type}({column_name})",
                                                      alias)
+                        if export_mode:
+                            export_headers.append(semantic_name or alias)
                     elif metric["semantic_type"] == "metric":
                         expression = semantic_field["field_detail"]["expression"]
                         processor = SQLFieldAliasProcessor()
                         new_expression = processor.add_table_alias_to_expression(expression, table_alias)
                         assembler.add_raw_column(new_expression)
+                        if export_mode:
+                            export_headers.append(self._export_label(semantic_field, expression))
                 else:
                     assembler.add_raw_column(metric["sql_column"])
+                    if export_mode:
+                        export_headers.append(self._label_from_sql_column(metric["sql_column"]))
 
             # 兜底：前端聚合表分页/刷新路径可能只回传 dimensions/metrics，漏掉
             # where_conditions/having_conditions/order_by。此时退回到 sql_components
@@ -1066,63 +1280,10 @@ class AskdataService:
                         # 普通情况
                         assembler.add_filter(column_name, FilterOperator.from_value(operator), converted_value)
                 else:
-                    raw_condition = where_condition.get("raw_condition", None)
-                    sql_column = where_condition.get("sql_column", None)
-
-                    if raw_condition:
-                        # 如果有 raw_condition，直接使用
-                        assembler.add_raw_where(raw_condition)
-                    elif sql_column:
-                        # 如果有 sql_column，需要解析并参数化
-                        # sql_column 可能包含完整的条件表达式
-                        # 尝试解析操作符和值
-                        import re
-
-                        # 尝试匹配常见的 SQL 条件模式
-                        patterns = [
-                            (r'^(.+?)\s+(IS\s+NULL|IS\s+NOT\s+NULL)\s*$', lambda m: (m.group(1), m.group(2), None)),
-                            (r'^(.+?)\s+(IN|NOT\s+IN)\s*\((.+)\)\s*$', lambda m: (m.group(1), m.group(2), m.group(3))),
-                            (r'^(.+?)\s+(BETWEEN)\s+(.+?)\s+AND\s+(.+)\s*$',
-                             lambda m: (m.group(1), m.group(2), (m.group(3), m.group(4)))),
-                            (r'^(.+?)\s*(=|!=|<>|>=|<=|>|<|LIKE|NOT\s+LIKE)\s*(.+)\s*$',
-                             lambda m: (m.group(1), m.group(2), m.group(3))),
-                        ]
-
-                        matched = False
-                        for pattern, extractor in patterns:
-                            match = re.match(pattern, sql_column, re.IGNORECASE)
-                            if match:
-                                result = extractor(match)
-                                if len(result) == 3:
-                                    field, op, val = result
-
-                                    if op.upper() in ['IS NULL', 'IS NOT NULL']:
-                                        assembler.add_raw_where(f"{field} {op}")
-                                    elif op.upper() in ['IN', 'NOT IN']:
-                                        # 解析 IN 列表
-                                        val_list = [v.strip().strip("'\"") for v in val.split(',')]
-                                        placeholders = ','.join(['%s'] * len(val_list))
-                                        assembler.add_parameterized_where(f"{field} {op} ({placeholders})", val_list)
-                                    elif op.upper() == 'BETWEEN':
-                                        # BETWEEN 有两个值
-                                        val1, val2 = val
-                                        val1 = val1.strip().strip("'\"")
-                                        val2 = val2.strip().strip("'\"")
-                                        assembler.add_parameterized_where(f"{field} BETWEEN %s AND %s", [val1, val2])
-                                    else:
-                                        # 普通比较操作符
-                                        val = val.strip().strip("'\"")
-                                        assembler.add_parameterized_where(f"{field} {op} %s", [val])
-
-                                    matched = True
-                                    break
-
-                        if not matched:
-                            logger.warning(f"无法解析 where 条件，将作为原始 SQL 添加: {sql_column}")
-                            assembler.add_raw_where(sql_column)
-                    else:
-                        # 既没有 raw_condition 也没有 sql_column，跳过
-                        pass
+                    # 非语义条件统一走共享 helper：原先把 sql_column 当整条 'field op value' 正则重解析、
+                    # 无视同级 operator/value，构建器存的是「裸字段名 + 独立 operator/value」→ 解析不出 →
+                    # add_raw_where(裸列) 生成非法 WHERE。改为与 table-row 同一套：有 operator 就分开重组。
+                    self._apply_nonsemantic_where(assembler, where_condition)
 
             # 注入权限条件
             apply_permissions_to_assembler(
@@ -1154,7 +1315,8 @@ class AskdataService:
                         value = convert_aggregation_value(column_name, value)
                     assembler.add_having(column_name, FilterOperator.from_value(operator), value)
                 else:
-                    assembler.add_raw_having(having_condition["sql_column"])
+                    # 非语义 having 同源对齐：有 operator 就分开重组(add_having)，不再把裸字段名当整条 HAVING
+                    self._apply_nonsemantic_having(assembler, having_condition)
 
             order_by_cfg = table_config.get("order_by")
             if order_by_cfg is None:
@@ -1176,23 +1338,8 @@ class AskdataService:
                     assembler.add_order_by(order_by["sql_column"], order_by["direction"])
 
             if pagination_info:
-                count_sql, count_sql_params = assembler.build_count_sql_for_jdbc()
-                page_size = int(pagination_info["page_size"])
-                page_index = int(pagination_info["page_index"])
-                assembler.set_pagination(page_index, page_size)
-                sql, params = assembler.build_sql_for_jdbc()
-                return {
-                    "sql": sql,
-                    "params": params,
-                    "count_sql": count_sql,
-                    "count_sql_params": count_sql_params,
-                }
-            else:
-                sql, params = assembler.build_sql_for_jdbc()
-                return {
-                    "sql": sql,
-                    "params": params
-                }
+                return self._build_requery_pagination_result(assembler, pagination_info, cap)
+            return self._finalize_requery(assembler, cap, export_mode, export_ceiling, export_headers)
 
     async def get_hc_dim_values_by_dim_value(
             self,

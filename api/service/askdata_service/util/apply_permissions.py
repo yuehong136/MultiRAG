@@ -4,12 +4,49 @@
 用于将模型的行级权限条件注入到 SQL 组装器中
 """
 
+import re
 from typing import Dict, Any, List
 
 from api.service.askdata_service.util.build_model_permissions_map import convert_row_filter_to_sql_conditions
+from api.service.askdata_service.util.identifier_utils import strip_identifier_quotes
+from api.service.askdata_service.sql_components_parser import SQLComponentsParser
 
 from api.service.askdata_service.util.askdata_logger import get_askdata_logger
 logger = get_askdata_logger()
+
+
+def _from_clause_aliases(assembler) -> set:
+    """抽取 assembler 当前 FROM 子句里真实存在的表别名集合（去引号+小写）。
+    用于校验「权限要注入到的别名」是否真的在 FROM 里——否则注入会产生悬空别名
+    （PG: missing FROM-clause entry for table "t4"）。解析失败返回空集（调用方据此 fail-open）。"""
+    from_clause = getattr(assembler, "base_from_clause", "") or ""
+    if not from_clause:
+        return set()
+    try:
+        tables = SQLComponentsParser({"from": from_clause}).parse_from_tables()
+    except Exception:
+        return set()
+    return {
+        strip_identifier_quotes(t["alias"]).casefold()
+        for t in tables
+        if t.get("alias")
+    }
+
+
+def _existing_where_text(assembler) -> str:
+    """把 assembler 已累积的 WHERE 原始片段拼成一段文本，供「条件是否已存在」去重判断。"""
+    parts = []
+    for frag in getattr(assembler, "where_conditions", []) or []:
+        content = getattr(frag, "sql_content", "")
+        if content:
+            parts.append(content)
+    return " ".join(parts)
+
+
+def _normalize_condition(s: str) -> str:
+    """归一化条件文本用于去重：去掉空白与标识符引号（`"`、反引号、方括号），保留单引号字符串字面量。
+    使 (t2."mc" = '男') 与 (t2.mc='男') 视为同一条件。"""
+    return re.sub(r"[\s`\"\[\]]", "", s or "")
 
 
 def apply_permissions_to_assembler(
@@ -46,6 +83,10 @@ def apply_permissions_to_assembler(
         logger.info("没有需要应用的权限条件")
         return
 
+    # 纵深防御所需的两份快照：FROM 里真实别名、已累积的 WHERE 文本
+    from_aliases = _from_clause_aliases(assembler)
+    existing_where = _normalize_condition(_existing_where_text(assembler))
+
     for model_id, perm_info in model_permissions_map.items():
         alias = perm_info["alias"]
         table = perm_info["table"]
@@ -54,12 +95,28 @@ def apply_permissions_to_assembler(
         # 构建该模型的权限条件
         permission_condition = build_permission_condition(row_filter, alias)
 
-        if permission_condition:
-            logger.info(f"为表 {table}({alias}) 添加权限条件: {permission_condition}")
-            # 添加为原始 WHERE 条件（已经是完整的条件，包含括号）
-            assembler.add_raw_where(permission_condition)
-        else:
+        if not permission_condition:
             logger.warning(f"表 {table}({alias}) 的权限条件为空，跳过")
+            continue
+
+        # 防御1：别名必须真的出现在 FROM 里，否则注入会产生悬空别名（missing FROM-clause entry）。
+        # from_aliases 为空（解析失败）时 fail-open，保持原行为不误杀。
+        if from_aliases and strip_identifier_quotes(alias).casefold() not in from_aliases:
+            logger.warning(
+                f"跳过权限注入：别名 {alias}(表 {table}) 不在实际 FROM 别名集合 {sorted(from_aliases)} 中，"
+                f"避免悬空别名；条件={permission_condition}")
+            continue
+
+        # 防御2：同一行权限可能已被 LLM 内嵌进 WHERE（如 (t2.\"mc\"='男')），去重避免重复注入。
+        if existing_where and _normalize_condition(permission_condition) in existing_where:
+            logger.info(f"跳过权限注入：条件已存在于 WHERE，避免重复: {permission_condition}")
+            continue
+
+        logger.info(f"为表 {table}({alias}) 添加权限条件: {permission_condition}")
+        # 添加为原始 WHERE 条件（已经是完整的条件，包含括号）
+        assembler.add_raw_where(permission_condition)
+        # 纳入快照，避免同一批内多个模型注入彼此重复的条件
+        existing_where += _normalize_condition(permission_condition)
 
 
 def build_permission_condition(row_filter: Dict[str, Any], table_alias: str) -> str:

@@ -5,6 +5,7 @@ from typing import Any, List, Dict, Tuple, Optional
 
 from api.service.askdata_service.sql_components_parser import SQLComponentsParser
 from api.service.askdata_service.util.are_expressions_equal_ignore_quotes import are_expressions_equal_ignore_quotes
+from api.service.askdata_service.util.identifier_utils import strip_identifier_quotes, identifiers_equal
 from api.service.askdata_service.util.find_aggregate_columns import find_aggregate_columns
 from api.service.askdata_service.util.parse_sql_extract import parse_sql_extract
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
@@ -122,8 +123,17 @@ class TableConfigGenerator:
                         )
                         for m in models_needing_dims
                     ]
-                    dims_results = await asyncio.gather(*dims_tasks)
+                    # return_exceptions：一个关联模型的 dims/metrics 超时不再连累整批关联模型
+                    # （外层 try/except 是粗粒度兜底，这里做细粒度逐元素降级）。降级值用 dict 不用 None，
+                    # 理由见 model_dataset_resolver._ensure_dims_and_metrics。每模型用新字面量防串改。
+                    dims_results = await asyncio.gather(*dims_tasks, return_exceptions=True)
                     for model_detail, dims_metrics in zip(models_needing_dims, dims_results):
+                        if isinstance(dims_metrics, BaseException):
+                            logger.warning("[dims_metrics] 获取关联模型 %s 的维度/指标失败，降级为空继续: %r",
+                                           model_detail.get("modelId"), dims_metrics)
+                            dims_metrics = {"dimensions": [], "metrics": []}
+                        elif not isinstance(dims_metrics, dict):
+                            dims_metrics = {"dimensions": [], "metrics": []}
                         model_detail['dimsAndMetrics'] = dims_metrics
 
                 for model_detail in missing_models_details:
@@ -164,8 +174,10 @@ class TableConfigGenerator:
         for model in model_list:
             alias = ""
             # 首先尝试从已有的from_tables中找到别名
+            # 用引号/大小写无关比较：from_tables 的表名带引号（"t_jzg_jbxx"），model["tableName"] 是裸名，
+            # 原先直接 == 永不相等 → 误判为「新增模型」生成幻影别名 t3/t4，导致权限注入挂到 FROM 里不存在的别名。
             for alias_and_table in parts["from_tables"]:
-                if alias_and_table["table"] == model["tableName"]:
+                if identifiers_equal(alias_and_table["table"], model["tableName"]):
                     alias = alias_and_table["alias"]
                     break
 
@@ -293,7 +305,7 @@ class TableConfigGenerator:
                      "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())})
                 continue
             for metric in table_detail['dimsAndMetrics']['metrics']:
-                if metric['expression'].lower() == table_name+'.'+column_name.lower():
+                if identifiers_equal(metric['expression'], f"{table_name}.{column_name}"):
                     filter_columns.append(
                         {"is_semantic_field": True, "semantic_type": "metric", "id": metric["metricId"],
                          "metric_name": metric["metricName"], "operator": operator, "value": value,
@@ -303,8 +315,12 @@ class TableConfigGenerator:
                     break
             if is_matched_semantic_field:
                 continue
+            # 非语义但能定位到真实表的列：补 dataType，供 re-query 非语义分支按真实类型转换数值，
+            # 避免数值列被字符串参数绑定（integer > character varying）。查不到类型则为 None、维持现状。
+            data_type = self._lookup_field_data_type(table_detail, column_name)
             filter_columns.append(
                 {"is_semantic_field": False, "sql_column": cond["field"], "operator": operator, "value": value,
+                 "dataType": data_type,
                  "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())})
 
         return filter_columns
@@ -579,7 +595,7 @@ class TableConfigGenerator:
                 if is_matched_semantic_field:
                     continue
                 for metric in table_detail['dimsAndMetrics']['metrics']:
-                    if metric['expression'].lower() == table_name+'.'+column_name.lower():
+                    if identifiers_equal(metric['expression'], f"{table_name}.{column_name}"):
                         selected_columns.append(
                             {"is_semantic_field": True, "semantic_type": "metric", "id": metric["metricId"],
                              "metric_name": metric["metricName"], "wid": str(uuid.uuid4())}
@@ -629,9 +645,10 @@ class TableConfigGenerator:
           3) 别名为空/未命中且为多表 → 按列名在「本次真实 FROM 表」里反查唯一拥有者
              （详见 _resolve_multi_table_owner 的意图说明）。
 
-        校验 dimsAndMetrics：getModelIndsAndDims 空返回会被直接赋成 None
-        （见 model_dataset_resolver._ensure_dims_and_metrics），裸取其 dimensions/metrics
-        会 TypeError，这里一并拦下并降级。
+        校验 dimsAndMetrics：getModelIndsAndDims 空返回/失败现已被三处赋值点统一降级为
+        {"dimensions": [], "metrics": []}（见 model_dataset_resolver._ensure_dims_and_metrics
+        及 askdata_service / 本文件的关联模型补全），正常情况下不再出现 None；这里仍保留
+        isinstance(dict)+键存在校验作为纵深防御，万一拿到 None/畸形也降级为非语义字段不抛异常。
         """
         table_name = None
         if alias and alias in table_alias_mapping:
@@ -655,7 +672,9 @@ class TableConfigGenerator:
                 or "dimensions" not in dims_and_metrics
                 or "metrics" not in dims_and_metrics):
             return None, None
-        return table_name, detail
+        # 返回裸表名：调用方会用 table_name + '.' + column_name 与 metric['expression']（裸名）比较，
+        # 若带引号（"t_jzg_jbxx"）会比不上 → 指标被误判为非语义。仅用于比较，不影响输出 SQL。
+        return strip_identifier_quotes(table_name), detail
 
     def _resolve_multi_table_owner(self, column_name, candidate_tables, used_table_detail_dict):
         """
@@ -708,6 +727,21 @@ class TableConfigGenerator:
             for dim in (dims_and_metrics.get("dimensions") or [])
         )
 
+    def _lookup_field_data_type(self, table_detail: Any, column_name: str) -> Optional[str]:
+        """从模型物理字段表（table_detail["fields"]，含 fieldName/dataType）按列名查 SQL 数据类型。
+        去引号/大小写无关；查不到返回 None。仅用于给「非语义但能定位到真实表的列」补类型，
+        让 re-query 非语义分支能按真实类型转换（避免数值列被绑成字符串参数 → integer > varchar）。
+        绝不抛异常。"""
+        if not isinstance(table_detail, dict):
+            return None
+        target = (strip_identifier_quotes(column_name) or "").casefold()
+        if not target:
+            return None
+        for f in table_detail.get("fields") or []:
+            if (strip_identifier_quotes(f.get("fieldName")) or "").casefold() == target:
+                return f.get("dataType")
+        return None
+
     def _process_where_conditions(self, parts: Dict[str, Any], used_table_detail_dict: Dict[str, Any]) -> List[
         Dict[str, Any]]:
         """处理WHERE条件"""
@@ -757,7 +791,7 @@ class TableConfigGenerator:
             if is_matched_semantic_field:
                 continue
             for metric in table_detail['dimsAndMetrics']['metrics']:
-                if metric['expression'].lower() == table_name+'.'+column_name.lower():
+                if identifiers_equal(metric['expression'], f"{table_name}.{column_name}"):
                     filter_columns.append(
                         {"is_semantic_field": True, "semantic_type": "metric", "id": metric["metricId"],
                          "metric_name": metric["metricName"], "operator": operator, "value": value,
@@ -767,8 +801,12 @@ class TableConfigGenerator:
                     break
             if is_matched_semantic_field:
                 continue
+            # 非语义但能定位到真实表的列：补 dataType，供 re-query 非语义分支按真实类型转换数值，
+            # 避免数值列被字符串参数绑定（integer > character varying）。查不到类型则为 None、维持现状。
+            data_type = self._lookup_field_data_type(table_detail, column_name)
             filter_columns.append(
                 {"is_semantic_field": False, "sql_column": cond["field"], "operator": operator, "value": value,
+                 "dataType": data_type,
                  "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())})
 
         return filter_columns
@@ -790,7 +828,7 @@ class TableConfigGenerator:
                      "direction": direction, "wid": str(uuid.uuid4())})
                 continue
             for metric in table_detail['dimsAndMetrics']['metrics']:
-                if metric['expression'].lower() == table_name+'.'+column_name.lower():
+                if identifiers_equal(metric['expression'], f"{table_name}.{column_name}"):
                     order_by_columns.append(
                         {"is_semantic_field": True, "semantic_type": "metric", "id": metric["metricId"],
                          "metric_name": metric["metricName"], "direction": direction, "wid": str(uuid.uuid4()),
@@ -825,6 +863,17 @@ class TableConfigGenerator:
         return int(limit)
 
     def _get_table_alias_and_field_by_split_column(self, column: str) -> Tuple[str, str]:
+        """拆出 (table_alias, column_name) 并对二者做引号归一化。
+
+        column_name/table_alias 仅用于「语义匹配」（与 dim['dimensionEnName']、metric['expression']、
+        table_alias_mapping 的键比较），不参与输出 SQL 的构造（非语义兜底输出用 cond["field"] 等原值）。
+        故这里去引号是安全的，且是把 LLM 的 `"t1"."nl"` 对齐到 schema 裸名 `nl` 的唯一口径。
+        对函数/复杂表达式（COUNT(field)、CASE…）strip 仅作用于首尾，不会破坏内部结构。
+        """
+        table_alias, column_name = self._split_column_raw(column)
+        return strip_identifier_quotes(table_alias), strip_identifier_quotes(column_name)
+
+    def _split_column_raw(self, column: str) -> Tuple[str, str]:
         """
         将列名分割为 (table, field)
         支持以下格式：

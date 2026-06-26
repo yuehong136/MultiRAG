@@ -314,6 +314,13 @@ async def get_sql_and_table_config(
         sql_components = try_extract_components(sql, dialect="postgres")
         sql_components = normalize_sql_components(sql_components) or sql_components
 
+        # 用户在自然语言里给定的固定行数 N（如「30条」→ LLM 生成的 SQL 带 LIMIT 30）。
+        # 必须在下面用 page_size 覆盖 pagination 之前抓取——它是「总量上限」，与「每页行数」是两个正交概念，
+        # 不能让分页 page_size 把它顶掉（顶掉会导致 table_config["limit"] 拿到 20 而非用户的 30，
+        # 进而 re-query 误按 20 封顶、前端「显示行数」误回显 20）。无显式条数则为 None（普通问法不封顶）。
+        _user_limit_str = str(((sql_components or {}).get("pagination") or {}).get("limit", "")).strip()
+        user_row_limit = int(_user_limit_str) if _user_limit_str.isdigit() and int(_user_limit_str) > 0 else None
+
         if _components_valid(sql_components):
             # 如果有分页，补上 pagination 信息
             if pagination_sql:
@@ -388,6 +395,12 @@ async def get_sql_and_table_config(
             logger.exception("[get-sql] 生成表格配置失败，降级为最小可用配置（数据与图表不受影响）")
             model_table_alias_mapping_list = []
             table_config = _minimal_table_config(recommended_chart)
+        # 解耦纠正：table_config["limit"] 必须是用户的真实「总量上限」N（或 None），而非分页 page_size。
+        # generate_table_config 内部 _process_limit 读到的是上面被 page_size 覆盖后的 pagination.limit（如 20），
+        # 这里用覆盖前抓取的 user_row_limit 纠正，确保前端「显示行数」回显真实 N、re-query 按真实 N 封顶；
+        # 普通问法 N=None → 不封顶（避免把 >20 行的普通查询误封成 20 行的回归）。
+        if isinstance(table_config, dict):
+            table_config["limit"] = user_row_limit
         logger.debug("[get-sql] table_config keys=%s, model_table_alias_mapping=%s",
                      list(table_config.keys()) if table_config else [],
                      model_table_alias_mapping_list)
@@ -920,10 +933,13 @@ async def re_query(
     # re-query 请求体不含 user_query：靠 ask_id 归并到原问题文件，缺失则用占位名
     q_token = askdata_query.set("")
     try:
+        _tc_limit = (body.table_config or {}).get("limit")
         logger.info(
-            "[re-query] 入参: chart_type=%s, dataset_id=%s, pagination_info=%s, table_config_keys=%s",
+            "[re-query] 入参: chart_type=%s, dataset_id=%s, pagination_info=%s, table_config_keys=%s, "
+            "table_config.limit=%r(type=%s)",
             body.chart_type, body.dataset_id, body.pagination_info,
             list((body.table_config or {}).keys()),
+            _tc_limit, type(_tc_limit).__name__,
         )
 
         requery_sql_result = await service.generate_requery_sql(body.chart_type, body.table_config,
@@ -1003,6 +1019,74 @@ async def re_query(
         return ResponseSchema(
             status=StatusEnum.ERROR,
             message=f"生成re-query SQL失败：{str(e)}"
+        )
+    finally:
+        askdata_query.reset(q_token)
+
+
+class ExportSqlRequest(ReQueryRequest):
+    # 与 re-query 同一份入参（chart_type/table_config/sql_components/.../dataset_id/userid），
+    # 仅多一个由中台透传的导出行数安全上限。pagination_info 字段在导出场景被忽略（恒为不分页）。
+    export_ceiling: Optional[int] = Field(None, description="导出行数安全上限（中台透传系统参数，缺省时引擎不额外封顶，依赖用户N上限）")
+
+
+@router.post("/export-sql", response_model=ResponseSchema,
+             summary="导出：生成带权限过滤的全量data SQL + 有序中文表头（不执行，执行交中台）")
+async def export_sql(
+        db: Session = Depends(get_db),
+        user=Depends(manager),
+        body: ExportSqlRequest = Body(
+            ...,
+            title="导出SQL生成",
+            description="生成导出全部数据所需的全量 data SQL 与中文表头"
+        ),
+        service: AskdataService = Depends(get_askdata_service)
+) -> ResponseSchema:
+    token = askdata_ask_id.set(body.ask_id or "-")
+    q_token = askdata_query.set("")
+    try:
+        logger.info(
+            "[export-sql] 入参: chart_type=%s, dataset_id=%s, export_ceiling=%s, table_config.limit=%r",
+            body.chart_type, body.dataset_id, body.export_ceiling,
+            (body.table_config or {}).get("limit"),
+        )
+        # 导出恒为「无分页」：复用 generate_requery_sql 的无分页分支，权限/脱敏已在其内注入 SQL；
+        # export_mode 让其按 effective_limit=min(用户N上限, ceiling) 套 LIMIT 并回传有序中文表头。
+        res = await service.generate_requery_sql(
+            body.chart_type, body.table_config,
+            sql_components=body.sql_components,
+            model_table_alias_mapping_list=body.model_table_alias_mapping_list,
+            pagination_info=None, user_id=body.userid,
+            export_mode=True, export_ceiling=body.export_ceiling,
+        )
+        logger.info(
+            "[export-sql] 生成: effective_limit=%s, headers=%s, data_sql=%s, params=%s",
+            res.get("effective_limit"), res.get("headers"), res.get("sql"), res.get("params"),
+        )
+        # 用户把列/维度/指标全清空 → 无显式 SELECT 列,build_sql 会退化成 SELECT * 全表 dump,
+        # 且联表同名列在中台按列名建行 Map 时互相覆盖丢数据。直接拦下,提示至少保留一列。
+        if not res.get("headers"):
+            logger.warning("[export-sql] 无可导出列(维度/指标/列被清空),拒绝导出 SELECT *")
+            return ResponseSchema(
+                status=StatusEnum.ERROR,
+                message="没有可导出的列，请至少保留一列（或一个维度/指标）后再导出",
+            )
+        return ResponseSchema(
+            status=StatusEnum.SUCCESS,
+            message="生成导出SQL成功",
+            data={
+                "sql": res["sql"],
+                "params": res["params"],
+                "headers": res.get("headers", []),
+                "effective_limit": res.get("effective_limit"),
+            },
+        )
+    except Exception as e:
+        logger.exception("生成导出SQL失败")
+        log_incident("export-sql", e, chart_type=body.chart_type)
+        return ResponseSchema(
+            status=StatusEnum.ERROR,
+            message=f"生成导出SQL失败：{str(e)}"
         )
     finally:
         askdata_query.reset(q_token)
