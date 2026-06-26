@@ -298,6 +298,11 @@ func (r *Router) Setup(engine *gin.Engine) {
 			file.GET("/parent_folder", r.fileHandler.GetParentFolder)
 			file.GET("/all_parent_folder", r.fileHandler.GetAllParentFolders)
 		}
+
+		files := authorized.Group("/v1/files")
+		{
+			files.POST("", r.fileHandler.UploadFile)
+		}
 	}
 
 	// API routes listing
