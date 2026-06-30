@@ -28,15 +28,17 @@ import (
 
 // KnowledgebaseHandler handles knowledge base HTTP requests
 type KnowledgebaseHandler struct {
-	kbService   *service.KnowledgebaseService
-	userService *service.UserService
+	kbService       *service.KnowledgebaseService
+	userService     *service.UserService
+	documentService *service.DocumentService
 }
 
 // NewKnowledgebaseHandler creates a new knowledge base handler
-func NewKnowledgebaseHandler(kbService *service.KnowledgebaseService, userService *service.UserService) *KnowledgebaseHandler {
+func NewKnowledgebaseHandler(kbService *service.KnowledgebaseService, userService *service.UserService, documentService *service.DocumentService) *KnowledgebaseHandler {
 	return &KnowledgebaseHandler{
-		kbService:   kbService,
-		userService: userService,
+		kbService:       kbService,
+		userService:     userService,
+		documentService: documentService,
 	}
 }
 
@@ -439,6 +441,34 @@ func (h *KnowledgebaseHandler) RemoveTags(c *gin.Context) {
 		return
 	}
 
+	// Get KB to find tenant_id and build index name
+	kb, err := h.kbService.GetByID(kbID)
+	if err != nil {
+		jsonError(c, common.CodeDataError, "knowledge base not found")
+		return
+	}
+
+	// Build index name prefix: multirag_<tenant_id>
+	indexName := "multirag_" + kb.TenantID
+
+	// For each tag, call UpdateDataset to remove it from documents
+	for _, tag := range req.Tags {
+		condition := map[string]interface{}{
+			"tag_kwd": tag,
+			"kb_id":   kbID,
+		}
+		newValue := map[string]interface{}{
+			"remove": map[string]interface{}{
+				"tag_kwd": tag,
+			},
+		}
+		err := h.kbService.RemoveTag(condition, newValue, indexName, kbID)
+		if err != nil {
+			jsonError(c, common.CodeServerError, "Failed to remove tag: "+err.Error())
+			return
+		}
+	}
+
 	jsonResponse(c, common.CodeSuccess, true, "success")
 }
 
@@ -581,7 +611,13 @@ func (h *KnowledgebaseHandler) GetMeta(c *gin.Context) {
 		}
 	}
 
-	jsonResponse(c, common.CodeSuccess, map[string]interface{}{}, "success")
+	meta, err := h.documentService.GetMetadataByKBs(kbIDs)
+	if err != nil {
+		jsonError(c, common.CodeExceptionError, err.Error())
+		return
+	}
+
+	jsonResponse(c, common.CodeSuccess, meta, "success")
 }
 
 // GetBasicInfo handles the get basic info request

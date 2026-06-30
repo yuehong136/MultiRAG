@@ -244,6 +244,12 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 		return c.InsertDatasetFromFile(cmd)
 	case "insert_metadata_from_file":
 		return c.InsertMetadataFromFile(cmd)
+	case "update_chunk":
+		return c.UpdateChunk(cmd)
+	case "rm_tags":
+		return c.RmTags(cmd)
+	case "set_meta":
+		return c.SetMeta(cmd)
 	// TODO: Implement other user commands
 	default:
 		return nil, fmt.Errorf("command '%s' would be executed with API", cmd.Type)

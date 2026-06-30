@@ -163,3 +163,15 @@ func (e *elasticsearchEngine) InsertMetadata(ctx context.Context, documents []ma
 	// TODO: implement metadata insert for Elasticsearch
 	return []string{}, nil
 }
+
+// UpdateDataset updates chunks by condition
+func (e *elasticsearchEngine) UpdateDataset(ctx context.Context, condition map[string]interface{}, newValue map[string]interface{}, tableNamePrefix string, knowledgebaseID string) error {
+	// TODO: implement dataset update for Elasticsearch
+	return nil
+}
+
+// UpdateMetadata updates document metadata in tenant's metadata index
+func (e *elasticsearchEngine) UpdateMetadata(ctx context.Context, docID string, kbID string, metaFields map[string]interface{}, tenantID string) error {
+	// TODO: implement metadata update for Elasticsearch
+	return nil
+}

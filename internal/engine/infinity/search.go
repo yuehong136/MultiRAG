@@ -344,6 +344,7 @@ func convertMatchingField(fieldWeightStr string) string {
 		"content_sm_ltks":     "content@ft_content_rag_fine",
 		"authors_tks":         "authors@ft_authors_rag_coarse",
 		"authors_sm_tks":      "authors@ft_authors_rag_fine",
+		"tag_kwd":             "tag_kwd@ft_tag_kwd_whitespace__",
 	}
 
 	if newField, ok := fieldMapping[field]; ok {
@@ -381,25 +382,40 @@ func (e *infinityEngine) searchUnified(ctx context.Context, req *types.SearchReq
 		return nil, fmt.Errorf("failed to get database: %w", err)
 	}
 
+	// Determine if this is a metadata table search (multirag_doc_meta_<tenant>)
+	isMetadataTable := false
+	for _, idx := range req.IndexNames {
+		if strings.HasPrefix(idx, "multirag_doc_meta_") {
+			isMetadataTable = true
+			break
+		}
+	}
+
 	// Build output columns
-	// Include all fields needed for retrieval test results
-	outputColumns := []string{
-		"id",
-		"doc_id",
-		"kb_id",
-		"content",
-		"content_ltks",
-		"content_with_weight",
-		"title_tks",
-		"docnm_kwd",
-		"img_id",
-		"available_int",
-		"important_kwd",
-		"position_int",
-		"page_num_int",
-		"doc_type_kwd",
-		"mom_id",
-		"question_tks",
+	// For metadata tables, only use: id, kb_id, meta_fields
+	// For chunk tables, use all the standard fields needed for retrieval test results
+	var outputColumns []string
+	if isMetadataTable {
+		outputColumns = []string{"id", "kb_id", "meta_fields"}
+	} else {
+		outputColumns = []string{
+			"id",
+			"doc_id",
+			"kb_id",
+			"content",
+			"content_ltks",
+			"content_with_weight",
+			"title_tks",
+			"docnm_kwd",
+			"img_id",
+			"available_int",
+			"important_kwd",
+			"position_int",
+			"page_num_int",
+			"doc_type_kwd",
+			"mom_id",
+			"question_tks",
+		}
 	}
 	outputColumns = convertSelectFields(outputColumns)
 
@@ -431,18 +447,39 @@ func (e *infinityEngine) searchUnified(ctx context.Context, req *types.SearchReq
 
 	// Build filter string
 	var filterParts []string
-	if len(req.DocIDs) > 0 {
-		if len(req.DocIDs) == 1 {
-			filterParts = append(filterParts, fmt.Sprintf("doc_id = '%s'", req.DocIDs[0]))
+
+	// For metadata tables, add kb_id filter if provided
+	if isMetadataTable && len(req.KbIDs) > 0 && req.KbIDs[0] != "" {
+		if len(req.KbIDs) == 1 {
+			filterParts = append(filterParts, fmt.Sprintf("kb_id = '%s'", req.KbIDs[0]))
 		} else {
-			docIDs := strings.Join(req.DocIDs, "', '")
-			filterParts = append(filterParts, fmt.Sprintf("doc_id IN ('%s')", docIDs))
+			kbIDStr := strings.Join(req.KbIDs, "', '")
+			filterParts = append(filterParts, fmt.Sprintf("kb_id IN ('%s')", kbIDStr))
+		}
+	}
+
+	if len(req.DocIDs) > 0 {
+		if isMetadataTable {
+			// Metadata table primary key is the doc id stored in the "id" column
+			if len(req.DocIDs) == 1 {
+				filterParts = append(filterParts, fmt.Sprintf("id = '%s'", req.DocIDs[0]))
+			} else {
+				docIDs := strings.Join(req.DocIDs, "', '")
+				filterParts = append(filterParts, fmt.Sprintf("id IN ('%s')", docIDs))
+			}
+		} else {
+			if len(req.DocIDs) == 1 {
+				filterParts = append(filterParts, fmt.Sprintf("doc_id = '%s'", req.DocIDs[0]))
+			} else {
+				docIDs := strings.Join(req.DocIDs, "', '")
+				filterParts = append(filterParts, fmt.Sprintf("doc_id IN ('%s')", docIDs))
+			}
 		}
 	}
 	// Only add the available_int filter when there's a text/vector match or
 	// AvailableInt is explicitly set, so chunk listing (doc_id only) returns
-	// all chunks of a document.
-	if hasTextMatch || hasVectorMatch || req.AvailableInt != nil {
+	// all chunks of a document. Metadata tables have no available_int column.
+	if !isMetadataTable && (hasTextMatch || hasVectorMatch || req.AvailableInt != nil) {
 		if req.AvailableInt != nil {
 			filterParts = append(filterParts, fmt.Sprintf("available_int=%d", *req.AvailableInt))
 		} else {
@@ -791,6 +828,14 @@ func (e *infinityEngine) executeTableSearch(db *infinity.Database, tableName str
 			sortFields = append(sortFields, [2]interface{}{field.Field, sortType})
 		}
 		table = table.Sort(sortFields)
+	}
+
+	// Add filter when there's no text/vector match (like metadata queries or
+	// doc_id-only chunk listing). For matched queries the filter is carried via
+	// MatchDense extra_options instead.
+	if !hasTextMatch && !hasVectorMatch && filterStr != "" {
+		fmt.Printf("[DEBUG] Adding filter for no-match query: %s\n", filterStr)
+		table = table.Filter(filterStr)
 	}
 
 	// Set limit and offset

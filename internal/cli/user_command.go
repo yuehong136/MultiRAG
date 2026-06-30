@@ -1263,3 +1263,195 @@ func (c *MultiRAGClient) InsertMetadataFromFile(cmd *Command) (ResponseIf, error
 	result.Duration = 0
 	return &result, nil
 }
+
+// UpdateChunk updates a chunk in a dataset
+func (c *MultiRAGClient) UpdateChunk(cmd *Command) (ResponseIf, error) {
+	if c.ServerType != "user" {
+		return nil, fmt.Errorf("this command is only allowed in USER mode")
+	}
+
+	chunkID, ok := cmd.Params["chunk_id"].(string)
+	if !ok {
+		return nil, fmt.Errorf("chunk_id not provided")
+	}
+
+	datasetName, ok := cmd.Params["dataset_name"].(string)
+	if !ok {
+		return nil, fmt.Errorf("dataset_name not provided")
+	}
+
+	jsonBody, ok := cmd.Params["json_body"].(string)
+	if !ok {
+		return nil, fmt.Errorf("json_body not provided")
+	}
+
+	// Look up dataset_id from dataset_name
+	datasetID, err := c.getDatasetID(datasetName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get dataset ID: %w", err)
+	}
+
+	// Try to get doc_id from the chunk get endpoint
+	getResp, err := c.HTTPClient.Request("GET", "/chunk/get?chunk_id="+chunkID, false, "web", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get chunk info: %w", err)
+	}
+
+	var docID string
+	if getResp.StatusCode == 200 {
+		getJSON, err := getResp.JSON()
+		if err == nil {
+			if data, ok := getJSON["data"].(map[string]interface{}); ok {
+				if d, ok := data["doc_id"].(string); ok {
+					docID = d
+				}
+			}
+		}
+	}
+
+	if docID == "" {
+		return nil, fmt.Errorf("could not find document_id for chunk %s. Please provide document_id explicitly", chunkID)
+	}
+
+	// Parse the JSON body
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(jsonBody), &payload); err != nil {
+		return nil, fmt.Errorf("invalid JSON body: %w", err)
+	}
+
+	path := fmt.Sprintf("/datasets/%s/documents/%s/chunks/%s", datasetID, docID, chunkID)
+	resp, err := c.HTTPClient.Request("PUT", path, true, "api", nil, payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update chunk: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to update chunk: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	resJSON, err := resp.JSON()
+	if err != nil {
+		return nil, fmt.Errorf("invalid JSON response: %w", err)
+	}
+
+	code, ok := resJSON["code"].(float64)
+	if !ok {
+		return nil, fmt.Errorf("invalid response format: code is not a number")
+	}
+
+	var result SimpleResponse
+	result.Code = int(code)
+	if result.Code == 0 {
+		result.Message = fmt.Sprintf("Success to update chunk: %s", chunkID)
+	} else {
+		result.Message = fmt.Sprintf("Failed to update chunk: %v", resJSON)
+	}
+	result.Duration = 0
+	return &result, nil
+}
+
+// RmTags removes tags from chunks in a dataset
+func (c *MultiRAGClient) RmTags(cmd *Command) (ResponseIf, error) {
+	if c.ServerType != "user" {
+		return nil, fmt.Errorf("this command is only allowed in USER mode")
+	}
+
+	datasetName, ok := cmd.Params["dataset_name"].(string)
+	if !ok {
+		return nil, fmt.Errorf("dataset_name not provided")
+	}
+
+	kbID, err := c.getDatasetID(datasetName)
+	if err != nil {
+		return nil, err
+	}
+
+	tags, ok := cmd.Params["tags"].([]string)
+	if !ok {
+		return nil, fmt.Errorf("tags not provided")
+	}
+
+	payload := map[string]interface{}{
+		"tags": tags,
+	}
+
+	resp, err := c.HTTPClient.Request("POST", "/kb/"+kbID+"/rm_tags", false, "web", nil, payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to remove tags: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to remove tags: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	resJSON, err := resp.JSON()
+	if err != nil {
+		return nil, fmt.Errorf("invalid JSON response: %w", err)
+	}
+
+	code, ok := resJSON["code"].(float64)
+	if !ok {
+		return nil, fmt.Errorf("invalid response format: code is not a number")
+	}
+
+	var result SimpleResponse
+	result.Code = int(code)
+	if result.Code == 0 {
+		result.Message = fmt.Sprintf("Success to remove tags from dataset: %s", kbID)
+	} else {
+		result.Message = fmt.Sprintf("Failed to remove tags: %v", resJSON)
+	}
+	result.Duration = 0
+	return &result, nil
+}
+
+// SetMeta sets (merges) metadata for a document
+func (c *MultiRAGClient) SetMeta(cmd *Command) (ResponseIf, error) {
+	if c.ServerType != "user" {
+		return nil, fmt.Errorf("this command is only allowed in USER mode")
+	}
+
+	docID, ok := cmd.Params["doc_id"].(string)
+	if !ok {
+		return nil, fmt.Errorf("doc_id not provided")
+	}
+
+	metaJSON, ok := cmd.Params["meta"].(string)
+	if !ok {
+		return nil, fmt.Errorf("meta not provided")
+	}
+
+	payload := map[string]interface{}{
+		"doc_id": docID,
+		"meta":   metaJSON,
+	}
+
+	resp, err := c.HTTPClient.Request("POST", "/document/set_meta", false, "web", nil, payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to set metadata: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to set metadata: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	resJSON, err := resp.JSON()
+	if err != nil {
+		return nil, fmt.Errorf("invalid JSON response: %w", err)
+	}
+
+	code, ok := resJSON["code"].(float64)
+	if !ok {
+		return nil, fmt.Errorf("invalid response format: code is not a number")
+	}
+
+	var result SimpleResponse
+	result.Code = int(code)
+	if result.Code == 0 {
+		result.Message = fmt.Sprintf("Success to set metadata for document: %s", docID)
+	} else {
+		result.Message = fmt.Sprintf("Failed to set metadata: %v", resJSON)
+	}
+	result.Duration = 0
+	return &result, nil
+}

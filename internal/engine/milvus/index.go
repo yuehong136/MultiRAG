@@ -47,6 +47,18 @@ func (e *milvusEngine) InsertMetadata(ctx context.Context, documents []map[strin
 	return []string{}, nil
 }
 
+// UpdateDataset updates chunks by condition in Milvus
+func (e *milvusEngine) UpdateDataset(ctx context.Context, condition map[string]interface{}, newValue map[string]interface{}, tableNamePrefix string, knowledgebaseID string) error {
+	// TODO: implement dataset update for Milvus
+	return nil
+}
+
+// UpdateMetadata updates document metadata in tenant's metadata collection in Milvus
+func (e *milvusEngine) UpdateMetadata(ctx context.Context, docID string, kbID string, metaFields map[string]interface{}, tenantID string) error {
+	// TODO: implement metadata update for Milvus
+	return nil
+}
+
 // DeleteIndex drops a collection in Milvus
 func (e *milvusEngine) DeleteIndex(ctx context.Context, indexName string) error {
 	return e.client.DropCollection(ctx, milvusclient.NewDropCollectionOption(indexName))

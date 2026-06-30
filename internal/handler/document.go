@@ -17,6 +17,8 @@
 package handler
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"multirag/internal/common"
 	"strconv"
@@ -291,5 +293,243 @@ func (h *DocumentHandler) GetDocumentsByAuthorID(c *gin.Context) {
 			"page":      page,
 			"page_size": pageSize,
 		},
+	})
+}
+
+// ListDocumentsByKB lists documents of a knowledge base with their metadata
+// @Summary List Documents of a Dataset
+// @Description List documents (with meta_fields) belonging to a knowledge base
+// @Tags documents
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id query string true "Knowledge Base ID"
+// @Param page query int false "page number" default(1)
+// @Param page_size query int false "items per page" default(10)
+// @Success 200 {object} map[string]interface{}
+// @Router /v1/document/list [post]
+func (h *DocumentHandler) ListDocumentsByKB(c *gin.Context) {
+	_, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	// Accept both "id" (multirag CLI convention) and "kb_id"
+	kbID := c.Query("id")
+	if kbID == "" {
+		kbID = c.Query("kb_id")
+	}
+	if kbID == "" {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    1,
+			"message": "Lack of KB ID",
+			"data":    false,
+		})
+		return
+	}
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 10
+	}
+
+	documents, total, err := h.documentService.ListDocumentsByKBID(kbID, page, pageSize)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    1,
+			"message": "failed to get documents",
+			"data":    map[string]interface{}{"total": 0, "docs": []interface{}{}},
+		})
+		return
+	}
+
+	docs := make([]map[string]interface{}, 0, len(documents))
+	for _, doc := range documents {
+		metaFields, err := h.documentService.GetDocumentMetadataByID(doc.ID)
+		if err != nil {
+			metaFields = make(map[string]interface{})
+		}
+
+		docs = append(docs, map[string]interface{}{
+			"id":          doc.ID,
+			"name":        doc.Name,
+			"size":        doc.Size,
+			"type":        doc.Type,
+			"status":      doc.Status,
+			"created_at":  doc.CreatedAt,
+			"meta_fields": metaFields,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data": gin.H{
+			"total": total,
+			"docs":  docs,
+		},
+	})
+}
+
+// MetadataSummary handles the metadata summary request
+// @Summary Document Metadata Summary
+// @Description Aggregate metadata across documents of a knowledge base
+// @Tags documents
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body service.GetMetadataSummaryRequest true "metadata summary parameters"
+// @Success 200 {object} map[string]interface{}
+// @Router /v1/document/metadata/summary [post]
+func (h *DocumentHandler) MetadataSummary(c *gin.Context) {
+	_, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	var requestBody struct {
+		KBID   string   `json:"kb_id" binding:"required"`
+		DocIDs []string `json:"doc_ids"`
+	}
+
+	if err := c.ShouldBindJSON(&requestBody); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    1,
+			"message": "kb_id is required",
+		})
+		return
+	}
+
+	kbID := requestBody.KBID
+	if kbID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    1,
+			"message": "kb_id is required",
+		})
+		return
+	}
+
+	summary, err := h.documentService.GetMetadataSummary(kbID, requestBody.DocIDs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    1,
+			"message": "Failed to get metadata summary: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data": gin.H{
+			"summary": summary,
+		},
+	})
+}
+
+// SetMetaRequest represents the request for setting document metadata
+type SetMetaRequest struct {
+	DocID string `json:"doc_id" binding:"required"`
+	Meta  string `json:"meta" binding:"required"`
+}
+
+// SetMeta handles the set metadata request for a document
+// @Summary Set Document Metadata
+// @Description Set (merge) metadata for a specific document
+// @Tags documents
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param request body SetMetaRequest true "metadata info"
+// @Success 200 {object} map[string]interface{}
+// @Router /v1/document/set_meta [post]
+func (h *DocumentHandler) SetMeta(c *gin.Context) {
+	_, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	var req SetMetaRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    1,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	if req.DocID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    1,
+			"message": "doc_id is required",
+		})
+		return
+	}
+
+	// Parse meta JSON string
+	var meta map[string]interface{}
+	if err := json.Unmarshal([]byte(req.Meta), &meta); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    1,
+			"message": "Json syntax error: " + err.Error(),
+		})
+		return
+	}
+
+	if meta == nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    1,
+			"message": "meta is required",
+		})
+		return
+	}
+
+	// Validate meta values - must be str, int, float, or list of those
+	for k, v := range meta {
+		switch val := v.(type) {
+		case string, int, float64:
+			// Valid
+		case []interface{}:
+			for _, item := range val {
+				if _, ok := item.(string); !ok {
+					if _, ok := item.(float64); !ok {
+						c.JSON(http.StatusBadRequest, gin.H{
+							"code":    1,
+							"message": fmt.Sprintf("Unsupported type in list for key %s: %T", k, item),
+						})
+						return
+					}
+				}
+			}
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    1,
+				"message": fmt.Sprintf("Unsupported type for key %s: %T", k, v),
+			})
+			return
+		}
+	}
+
+	err := h.documentService.SetDocumentMetadata(req.DocID, meta)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    1,
+			"message": "Failed to set metadata: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data":    true,
 	})
 }

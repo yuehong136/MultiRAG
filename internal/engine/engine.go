@@ -51,6 +51,14 @@ type DocEngine interface {
 	InsertDataset(ctx context.Context, documents []map[string]interface{}, indexName string, knowledgebaseID string) ([]string, error)
 	InsertMetadata(ctx context.Context, documents []map[string]interface{}, tenantID string) ([]string, error)
 
+	// Update operations
+	UpdateDataset(ctx context.Context, condition map[string]interface{}, newValue map[string]interface{}, tableNamePrefix string, knowledgebaseID string) error
+	// UpdateMetadata merges metaFields into a document's row in the per-tenant metadata table
+	// (multirag_doc_meta_<tenant>). Infinity is fully implemented; ES/Milvus are stubs, matching
+	// the rest of the metadata write path (InsertMetadata). This is the Go (#13928) SetMeta
+	// write side; production doc-metadata source of truth remains the Python DocMetadataService.
+	UpdateMetadata(ctx context.Context, docID string, kbID string, metaFields map[string]interface{}, tenantID string) error
+
 	// Document operations
 	IndexDocument(ctx context.Context, indexName, docID string, doc interface{}) error
 	BulkIndex(ctx context.Context, indexName string, docs []interface{}) (interface{}, error)

@@ -1183,6 +1183,9 @@ SQL Commands (User Mode):
   DROP INDEX FOR DATASET 'name';                         - Drop index for dataset
   CREATE INDEX DOC_META;                                 - Create doc meta index
   DROP INDEX DOC_META;                                   - Drop doc meta index
+  UPDATE CHUNK 'id' OF DATASET 'name' SET '{...}';       - Update chunk fields (JSON)
+  REMOVE TAGS 'tag1','tag2' FROM DATASET 'name';         - Remove tags from a dataset
+  SET METADATA OF DOCUMENT 'doc_id' TO '{...}';          - Set/merge document metadata (JSON)
 
 SQL Commands (Admin Mode):
   LOGIN USER 'email';                                    - Login as admin

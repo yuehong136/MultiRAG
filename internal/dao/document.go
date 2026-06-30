@@ -80,6 +80,19 @@ func (dao *DocumentDAO) List(offset, limit int) ([]*entity.Document, int64, erro
 	return documents, total, err
 }
 
+// ListByKBID list documents by knowledge base ID
+func (dao *DocumentDAO) ListByKBID(kbID string, offset, limit int) ([]*entity.Document, int64, error) {
+	var documents []*entity.Document
+	var total int64
+
+	if err := DB.Model(&entity.Document{}).Where("kb_id = ?", kbID).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	err := DB.Where("kb_id = ?", kbID).Offset(offset).Limit(limit).Find(&documents).Error
+	return documents, total, err
+}
+
 // DeleteByTenantID deletes all documents by tenant ID (hard delete)
 func (dao *DocumentDAO) DeleteByTenantID(tenantID string) (int64, error) {
 	result := DB.Unscoped().Where("tenant_id = ?", tenantID).Delete(&entity.Document{})
