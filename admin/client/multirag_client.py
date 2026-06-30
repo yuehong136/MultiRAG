@@ -666,7 +666,7 @@ class MultiRAGClient:
         if self.server_type == "admin":
             response = self.http_client.request("GET", "admin/version", use_api_base=True, auth_kind="admin")
         else:
-            response = self.http_client.request("GET", "system/version", use_api_base=False, auth_kind="web")
+            response = self.http_client.request("GET", "system/version", use_api_base=True, auth_kind="web")
 
         res_json = response.json()
         if response.status_code == 200:

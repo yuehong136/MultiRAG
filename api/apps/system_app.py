@@ -70,7 +70,7 @@ class TokenResponse(BaseModel):
     update_date: str
     update_time: int
 
-@router.get("/version", summary="获取版本", response_description="成功获取版本")
+@router.get("/version", summary="获取版本", response_description="成功获取版本", deprecated=True)
 def version(user=Depends(manager)):
     """
     获取系统版本信息的接口说明文档。

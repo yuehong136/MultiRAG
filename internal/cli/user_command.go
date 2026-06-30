@@ -51,6 +51,40 @@ func (c *MultiRAGClient) PingServer(cmd *Command) (ResponseIf, error) {
 	return nil, fmt.Errorf("server is down: HTTP %d", resp.StatusCode)
 }
 
+// ShowServerVersion shows the API server version (user mode).
+// Aligned with Python /api/v1/system/version (RESTful), so useAPIBase=true.
+func (c *MultiRAGClient) ShowServerVersion(cmd *Command) (ResponseIf, error) {
+	// Get iterations from command params (for benchmark)
+	iterations := 1
+	if val, ok := cmd.Params["iterations"].(int); ok && val > 1 {
+		iterations = val
+	}
+
+	if iterations > 1 {
+		// Benchmark mode: multiple iterations
+		return c.HTTPClient.RequestWithIterations("GET", "/system/version", true, "web", nil, nil, iterations)
+	}
+
+	// Single mode
+	resp, err := c.HTTPClient.Request("GET", "/system/version", true, "web", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to show version: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to show version: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	var result KeyValueResponse
+	if err = json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("show version failed: invalid JSON (%w)", err)
+	}
+	result.Key = "version"
+	result.Duration = 0
+
+	return &result, nil
+}
+
 // ListUserDatasets lists datasets for current user (user mode)
 func (c *MultiRAGClient) ListUserDatasets(cmd *Command) (ResponseIf, error) {
 	if c.ServerType != "user" {

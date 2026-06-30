@@ -217,6 +217,24 @@ func (r *Router) Setup(engine *gin.Engine) {
 				files.GET("", r.fileHandler.ListFiles)
 			}
 
+			// Chat routes (RESTful, aligned with Python /api/v1/chats)
+			chats := v1.Group("/chats")
+			{
+				chats.GET("", r.chatHandler.ListChats)
+			}
+
+			// Search routes (RESTful, aligned with Python /api/v1/searches)
+			searches := v1.Group("/searches")
+			{
+				searches.GET("", r.searchHandler.ListSearches)
+			}
+
+			// System routes (RESTful, aligned with Python /api/v1/system)
+			system := v1.Group("/system")
+			{
+				system.GET("/version", r.systemHandler.GetVersion)
+			}
+
 			// TODO: Message routes - Implementation pending - depends on CanvasService, TaskService and embedding engine
 			// message := v1.Group("/messages")
 			// {
@@ -305,10 +323,10 @@ func (r *Router) Setup(engine *gin.Engine) {
 			connector.GET("/list", r.connectorHandler.ListConnectors)
 		}
 
-		// Search routes
+		// Search routes (legacy; list migrated to /api/v1/searches)
 		search := authorized.Group("/v1/search")
 		{
-			search.POST("/list", r.searchHandler.ListSearchApps)
+			search.POST("/list", r.searchHandler.ListSearches)
 		}
 
 		// File routes (legacy helpers; list/upload migrated to /api/v1/files)

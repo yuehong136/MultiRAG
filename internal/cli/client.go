@@ -172,6 +172,8 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 		return c.Logout()
 	case "ping_server":
 		return c.PingServer(cmd)
+	case "show_version":
+		return c.ShowServerVersion(cmd)
 	case "benchmark":
 		return c.RunBenchmark(cmd)
 	case "show_current_user":
