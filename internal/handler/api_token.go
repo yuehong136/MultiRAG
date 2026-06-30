@@ -34,7 +34,7 @@ import (
 // @Produce json
 // @Security ApiKeyAuth
 // @Success 200 {object} map[string]interface{}
-// @Router /v1/system/token_list [get]
+// @Router /api/v1/system/tokens [get]
 func (h *SystemHandler) ListTokens(c *gin.Context) {
 	user, code, message := GetUser(c)
 	if code != common.CodeSuccess {
@@ -73,7 +73,7 @@ func (h *SystemHandler) ListTokens(c *gin.Context) {
 // @Security ApiKeyAuth
 // @Param name query string false "Name of the token"
 // @Success 200 {object} map[string]interface{}
-// @Router /v1/system/new_token [post]
+// @Router /api/v1/system/tokens [post]
 func (h *SystemHandler) CreateToken(c *gin.Context) {
 	user, code, message := GetUser(c)
 	if code != common.CodeSuccess {
@@ -116,7 +116,7 @@ func (h *SystemHandler) CreateToken(c *gin.Context) {
 // @Security ApiKeyAuth
 // @Param token path string true "The API token to remove"
 // @Success 200 {object} map[string]interface{}
-// @Router /v1/system/token/{token} [delete]
+// @Router /api/v1/system/tokens/{token} [delete]
 func (h *SystemHandler) DeleteToken(c *gin.Context) {
 	user, code, message := GetUser(c)
 	if code != common.CodeSuccess {

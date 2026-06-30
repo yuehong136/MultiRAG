@@ -236,7 +236,7 @@ def status(db: Session = Depends(get_db), user=Depends(manager)):
     return get_json_result(data=res)
 
 
-@router.get("/healthz", summary="健康检查", response_description="返回系统健康状态")
+@router.get("/healthz", summary="健康检查", response_description="返回系统健康状态", deprecated=True)
 def healthz(response: Response):
     """
     健康检查接口
@@ -277,12 +277,12 @@ def oceanbase_status(user=Depends(manager)):
         )
 
 
-@router.get("/ping", summary="连通测试") # noqa: F821
+@router.get("/ping", summary="连通测试", deprecated=True) # noqa: F821
 async def ping():
     return PlainTextResponse("pong")
 
 
-@router.post('/new_token', summary="创建新访问令牌", response_description="成功创建并返回新令牌", response_model=dict[str, Any])
+@router.post('/new_token', summary="创建新访问令牌", response_description="成功创建并返回新令牌", response_model=dict[str, Any], deprecated=True)
 def new_token(request: TokenCreateRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     创建新的API访问令牌
@@ -320,7 +320,7 @@ def new_token(request: TokenCreateRequest, db: Session = Depends(get_db), user=D
         return server_error_response(e)
 
 
-@router.get('/token_list', summary="获取API访问令牌列表", response_description="成功获取并返回令牌列表")
+@router.get('/token_list', summary="获取API访问令牌列表", response_description="成功获取并返回令牌列表", deprecated=True)
 def token_list(db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取API访问令牌列表的接口说明文档。
@@ -365,7 +365,7 @@ def token_list(db: Session = Depends(get_db), user=Depends(manager)):
         return server_error_response(e)
 
 
-@router.post("/rm", summary="删除API访问令牌", response_description="成功删除指定的令牌")
+@router.post("/rm", summary="删除API访问令牌", response_description="成功删除指定的令牌", deprecated=True)
 def rm(
     token: str = Body(..., description="要删除的令牌"),
     db: Session = Depends(get_db),
@@ -425,7 +425,7 @@ class LogLevelRequest(BaseModel):
     level: Annotated[str, Field(min_length=1, description="日志级别 (DEBUG, INFO, WARNING, ERROR)")]
 
 
-@router.get('/log_levels', summary="获取日志级别")  # noqa: F821
+@router.get('/log_levels', summary="获取日志级别", deprecated=True)  # noqa: F821
 def get_logger_levels(user=Depends(manager)):
     """
     Get current log levels for all packages.
@@ -439,7 +439,7 @@ def get_logger_levels(user=Depends(manager)):
     return get_json_result(data=get_log_levels())
 
 
-@router.put('/log_levels', summary="设置日志级别")  # noqa: F821
+@router.put('/log_levels', summary="设置日志级别", deprecated=True)  # noqa: F821
 def set_logger_level(request: LogLevelRequest, user=Depends(manager)):
     """
     Set log level for a package.
@@ -453,4 +453,4 @@ def set_logger_level(request: LogLevelRequest, user=Depends(manager)):
     success = set_log_level(request.pkg_name, request.level)
     if success:
         return get_json_result(data={"pkg_name": request.pkg_name, "level": request.level})
-    return get_data_error_result(message=f"Invalid log level: {request.level}")
+    return get_data_error_result(retmsg=f"Invalid log level: {request.level}")

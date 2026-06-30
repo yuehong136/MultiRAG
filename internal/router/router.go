@@ -88,6 +88,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 
 	// System endpoints
 	engine.GET("/v1/system/ping", r.systemHandler.Ping)
+	engine.GET("/api/v1/system/ping", r.systemHandler.Ping)
 	engine.GET("/v1/system/config", r.systemHandler.GetConfig)
 	engine.GET("/v1/system/configs", r.systemHandler.GetConfigs)
 	engine.GET("/v1/system/version", r.systemHandler.GetVersion)
@@ -125,7 +126,8 @@ func (r *Router) Setup(engine *gin.Engine) {
 		// User set tenant info endpoint
 		authorized.POST("/v1/user/set_tenant_info", r.userHandler.SetTenantInfo)
 
-		// System token endpoints (requires authentication)
+		// Legacy system token aliases kept for /v1 clients. New clients should use
+		// /api/v1/system/tokens; Swagger annotations live on the RESTful path.
 		authorized.GET("/v1/system/token_list", r.systemHandler.ListTokens)
 		authorized.POST("/v1/system/new_token", r.systemHandler.CreateToken)
 		authorized.DELETE("/v1/system/token/:token", r.systemHandler.DeleteToken)
@@ -233,6 +235,9 @@ func (r *Router) Setup(engine *gin.Engine) {
 			system := v1.Group("/system")
 			{
 				system.GET("/version", r.systemHandler.GetVersion)
+				system.GET("/tokens", r.systemHandler.ListTokens)
+				system.POST("/tokens", r.systemHandler.CreateToken)
+				system.DELETE("/tokens/:token", r.systemHandler.DeleteToken)
 			}
 
 			// TODO: Message routes - Implementation pending - depends on CanvasService, TaskService and embedding engine

@@ -852,14 +852,14 @@ class MultiRAGClient:
             print(f"Failed to drop key for user {user_name}, code: {res_json['code']}, message: {res_json['message']}")
 
     def create_token(self, command: dict[str, Any]) -> None:
-        """USER 模式：为当前登录用户创建一个 API token。对接主 API POST /v1/system/new_token。"""
+        """USER 模式：为当前登录用户创建一个 API token。对接主 API POST /api/v1/system/tokens。"""
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
         name_tree: Tree = command["name"]
         name: str = name_tree.children[0].strip("'\"")
         response = self.http_client.request(
-            "POST", "system/new_token", use_api_base=False, auth_kind="web", json_body={"name": name}
+            "POST", "system/tokens", use_api_base=True, auth_kind="web", json_body={"name": name}
         )
         res_json = response.json()
         if response.status_code == 200:
@@ -868,12 +868,12 @@ class MultiRAGClient:
             print(f"Failed to create token, code: {res_json.get('code', res_json.get('retcode'))}, message: {res_json.get('message', res_json.get('retmsg'))}")
 
     def list_tokens(self, command: dict[str, Any]) -> None:
-        """USER 模式：列出当前登录用户的所有 API token。对接主 API GET /v1/system/token_list。"""
+        """USER 模式：列出当前登录用户的所有 API token。对接主 API GET /api/v1/system/tokens。"""
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
         response = self.http_client.request(
-            "GET", "system/token_list", use_api_base=False, auth_kind="web"
+            "GET", "system/tokens", use_api_base=True, auth_kind="web"
         )
         res_json = response.json()
         if response.status_code == 200:
@@ -882,14 +882,15 @@ class MultiRAGClient:
             print(f"Failed to list tokens, code: {res_json.get('code', res_json.get('retcode'))}, message: {res_json.get('message', res_json.get('retmsg'))}")
 
     def drop_token(self, command: dict[str, Any]) -> None:
-        """USER 模式：删除当前登录用户的某个 API token。对接主 API POST /v1/system/rm。"""
+        """USER 模式：删除当前登录用户的某个 API token。对接主 API DELETE /api/v1/system/tokens/{token}。"""
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
         token_tree: Tree = command["token"]
         token: str = token_tree.children[0].strip("'\"")
+        encoded_token: str = urllib.parse.quote(token, safe="")
         response = self.http_client.request(
-            "POST", "system/rm", use_api_base=False, auth_kind="web", json_body=token
+            "DELETE", f"system/tokens/{encoded_token}", use_api_base=True, auth_kind="web"
         )
         res_json = response.json()
         if response.status_code == 200:
