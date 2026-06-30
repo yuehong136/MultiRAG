@@ -44,6 +44,10 @@ class HttpClient:
         headers = {"User-Agent": "MultiRAG-CLI/0.9.9"}
         if auth_kind == "api" and self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
+        elif auth_kind == "api" and self.login_token:
+            # Fallback: use login token as Bearer for API requests in user mode.
+            # The Go server's ExtractAccessToken strips the "Bearer " prefix.
+            headers["Authorization"] = f"Bearer {self.login_token}"
         elif auth_kind == "web" and self.login_token:
             headers["Authorization"] = self.login_token
         elif auth_kind == "admin" and self.login_token:

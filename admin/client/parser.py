@@ -86,6 +86,9 @@ sql_command: login_user
            | import_docs_into_dataset
            | insert_dataset_from_file
            | insert_metadata_from_file
+           | update_chunk
+           | set_metadata
+           | remove_tags
            | search_on_datasets
            | parse_dataset_docs
            | parse_dataset_sync
@@ -179,6 +182,9 @@ TTS: "TTS"i
 IMPORT: "IMPORT"i
 INSERT: "INSERT"i
 FILE: "FILE"i
+UPDATE: "UPDATE"i
+REMOVE: "REMOVE"i
+TAGS: "TAGS"i
 INTO: "INTO"i
 WITH: "WITH"i
 VECTOR_SIZE: "VECTOR_SIZE"i
@@ -303,6 +309,9 @@ import_docs_into_dataset: IMPORT quoted_string INTO DATASET quoted_string ";"
 // Internal CLI for GO
 insert_dataset_from_file: INSERT DATASET FROM FILE quoted_string ";"
 insert_metadata_from_file: INSERT METADATA FROM FILE quoted_string ";"
+update_chunk: UPDATE CHUNK quoted_string OF DATASET quoted_string SET quoted_string ";"
+set_metadata: SET METADATA OF DOCUMENT quoted_string TO quoted_string ";"
+remove_tags: REMOVE TAGS quoted_string (COMMA quoted_string)* FROM DATASET quoted_string ";"
 search_on_datasets: SEARCH quoted_string ON DATASETS quoted_string ";"
 parse_dataset_docs: PARSE quoted_string OF DATASET quoted_string ";"
 parse_dataset_sync: PARSE DATASET quoted_string SYNC ";"
@@ -716,6 +725,44 @@ class MultiRAGCLITransformer(Transformer):
     def insert_metadata_from_file(self, items):
         file_path = items[4].children[0].strip("'\"")
         return {"type": "insert_metadata_from_file", "file_path": file_path}
+
+    def update_chunk(self, items):
+        def get_quoted_value(item):
+            if hasattr(item, 'children') and item.children:
+                return item.children[0].strip("'\"")
+            return str(item).strip("'\"")
+
+        chunk_id = get_quoted_value(items[2])
+        dataset_name = get_quoted_value(items[5])
+        json_body = get_quoted_value(items[7])
+        return {"type": "update_chunk", "chunk_id": chunk_id, "dataset_name": dataset_name, "json_body": json_body}
+
+    def set_metadata(self, items):
+        doc_id = items[4].children[0].strip("'\"")
+        meta_json = items[6].children[0].strip("'\"")
+        return {"type": "set_metadata", "doc_id": doc_id, "meta": meta_json}
+
+    def remove_tags(self, items):
+        # items: REMOVE, TAGS, quoted_string(tag1), quoted_string(tag2), ..., FROM, DATASET, quoted_string(dataset_name)
+        tags = []
+        # Start from index 2 (after TAGS keyword) and parse quoted strings until FROM
+        for i in range(2, len(items)):
+            item = items[i]
+            # Check for FROM token to stop
+            if hasattr(item, 'type') and item.type == 'FROM':
+                break
+            if hasattr(item, 'children') and item.children:
+                tag = item.children[0].strip("'\"")
+                tags.append(tag)
+        # Find dataset_name: quoted_string after DATASET
+        dataset_name = None
+        for i, item in enumerate(items):
+            # Check if item is a DATASET token
+            if hasattr(item, 'type') and item.type == 'DATASET':
+                # Next item should be quoted_string
+                dataset_name = items[i + 1].children[0].strip("'\"")
+                break
+        return {"type": "remove_tags", "dataset_name": dataset_name, "tags": tags}
 
     def search_on_datasets(self, items):
         question = items[1].children[0].strip("'\"")

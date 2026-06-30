@@ -1496,6 +1496,108 @@ class MultiRAGClient:
         else:
             print(f"Fail to insert metadata from file, code: {res_json.get('code')}, message: {res_json.get('message')}")
 
+    def update_chunk(self, command_dict):
+        if self.server_type != "user":
+            print("This command is only allowed in USER mode")
+            return
+
+        chunk_id = command_dict["chunk_id"]
+        dataset_name = command_dict["dataset_name"]
+        json_body_str = command_dict["json_body"]
+
+        # Get dataset_id from dataset_name
+        dataset_id = self._get_dataset_id(dataset_name)
+        if dataset_id is None:
+            return
+
+        # Get doc_id from chunk_id via GET chunk/get
+        response = self.http_client.request("GET", f"chunk/get?chunk_id={chunk_id}",
+                                            use_api_base=False, auth_kind="web")
+        res_json = response.json()
+        if response.status_code != 200:
+            print(f"Fail to get chunk info, code: {res_json.get('code')}, message: {res_json.get('message')}")
+            return
+
+        doc_id = None
+        if res_json.get("code") == 0 and res_json.get("data"):
+            doc_id = res_json["data"].get("doc_id")
+
+        if not doc_id:
+            print(f"Could not find document_id for chunk {chunk_id}")
+            return
+
+        # Parse json_body
+        try:
+            payload = json.loads(json_body_str)
+        except json.JSONDecodeError as e:
+            print(f"Invalid JSON body: {e}")
+            return
+
+        # Call PUT datasets/{dataset_id}/documents/{doc_id}/chunks/{chunk_id}
+        path = f"datasets/{dataset_id}/documents/{doc_id}/chunks/{chunk_id}"
+        response = self.http_client.request("PUT", path, json_body=payload, use_api_base=True, auth_kind="api")
+        res_json = response.json()
+        if response.status_code == 200:
+            if res_json.get("code") == 0:
+                print(f"Success to update chunk: {chunk_id}")
+            else:
+                print(f"Fail to update chunk, code: {res_json.get('code')}, message: {res_json.get('message')}")
+        else:
+            print(f"Fail to update chunk, HTTP {response.status_code}")
+
+    def set_metadata(self, command_dict):
+        if self.server_type != "user":
+            print("This command is only allowed in USER mode")
+            return
+
+        doc_id = command_dict["doc_id"]
+        meta_json_str = command_dict["meta"]
+
+        # Send meta as JSON string
+        payload = {
+            "doc_id": doc_id,
+            "meta": meta_json_str,
+        }
+
+        response = self.http_client.request("POST", "document/set_meta", json_body=payload,
+                                            use_api_base=False, auth_kind="web")
+        res_json = response.json()
+        if response.status_code == 200:
+            if res_json.get("code") == 0:
+                print(f"Success to set metadata for document: {doc_id}")
+            else:
+                print(f"Fail to set metadata, code: {res_json.get('code')}, message: {res_json.get('message')}")
+        else:
+            print(f"Fail to set metadata, HTTP {response.status_code}")
+
+    def remove_tags(self, command_dict):
+        if self.server_type != "user":
+            print("This command is only allowed in USER mode")
+            return
+
+        dataset_name = command_dict["dataset_name"]
+        dataset_id = self._get_dataset_id(dataset_name)
+        if dataset_id is None:
+            print(f"Dataset not found: {dataset_name}")
+            return
+
+        tags = command_dict["tags"]
+
+        payload = {
+            "tags": tags,
+        }
+
+        response = self.http_client.request("POST", f"kb/{dataset_id}/rm_tags", json_body=payload,
+                                            use_api_base=False, auth_kind="web")
+        res_json = response.json()
+        if response.status_code == 200:
+            if res_json.get("code") == 0:
+                print(f"Success to remove tags from dataset: {dataset_name}")
+            else:
+                print(f"Fail to remove tags, code: {res_json.get('code')}, message: {res_json.get('message')}")
+        else:
+            print(f"Fail to remove tags, HTTP {response.status_code}")
+
     def create_chat_session(self, command: dict):
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
@@ -2008,6 +2110,12 @@ def run_command(client: MultiRAGClient, command_dict: dict):
             client.insert_dataset_from_file(command_dict)
         case "insert_metadata_from_file":
             client.insert_metadata_from_file(command_dict)
+        case "update_chunk":
+            client.update_chunk(command_dict)
+        case "set_metadata":
+            client.set_metadata(command_dict)
+        case "remove_tags":
+            client.remove_tags(command_dict)
         case "create_chat_session":
             client.create_chat_session(command_dict)
         case "drop_chat_session":
