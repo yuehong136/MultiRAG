@@ -88,6 +88,11 @@ func main() {
 		}
 	}
 	server.SetLogger(logger.Logger)
+	// Seed the log level from the active logger so `list configs` reports a value
+	// even when it is omitted from the config file.
+	if config.Log.Level == "" {
+		config.Log.Level = logger.GetLevel()
+	}
 
 	logger.Info("Server mode", zap.String("mode", config.Server.Mode))
 

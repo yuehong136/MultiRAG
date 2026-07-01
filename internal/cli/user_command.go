@@ -85,6 +85,212 @@ func (c *MultiRAGClient) ShowServerVersion(cmd *Command) (ResponseIf, error) {
 	return &result, nil
 }
 
+// ListConfigs lists the server configuration as key/value rows (user mode).
+func (c *MultiRAGClient) ListConfigs(cmd *Command) (ResponseIf, error) {
+	if c.ServerType != "user" {
+		return nil, fmt.Errorf("this command is only allowed in USER mode")
+	}
+
+	// Get iterations from command params (for benchmark)
+	iterations := 1
+	if val, ok := cmd.Params["iterations"].(int); ok && val > 1 {
+		iterations = val
+	}
+
+	if iterations > 1 {
+		// Benchmark mode: multiple iterations
+		return c.HTTPClient.RequestWithIterations("GET", "/system/configs", true, "web", nil, nil, iterations)
+	}
+
+	// Single mode
+	resp, err := c.HTTPClient.Request("GET", "/system/configs", true, "web", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list configs: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to list configs: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	var response CommonDataResponse
+	if err = json.Unmarshal(resp.Body, &response); err != nil {
+		return nil, fmt.Errorf("list configs failed: invalid JSON (%w)", err)
+	}
+
+	var result CommonResponse
+	result.Code = 0
+	result.Data, err = GetConfigs(&response.Data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list configs: %w", err)
+	}
+	result.Duration = 0
+	return &result, nil
+}
+
+// GetConfigs flattens the server configuration payload into key/value rows.
+// The payload mirrors the Go Config struct, so JSON keys are the exported
+// field names (PascalCase) and ports decode as float64.
+func GetConfigs(config *map[string]interface{}) ([]map[string]interface{}, error) {
+	if config == nil {
+		return nil, fmt.Errorf("config is nil")
+	}
+	result := []map[string]interface{}{}
+
+	result = append(result, map[string]interface{}{
+		"key":   "redis_host",
+		"value": GetHost(config, "Redis", "Host", "Port"),
+	})
+
+	if docEngine, ok := (*config)["DocEngine"].(map[string]interface{}); ok {
+		engineType, _ := docEngine["Type"].(string)
+		result = append(result, map[string]interface{}{
+			"key":   "doc_engine",
+			"value": engineType,
+		})
+		switch engineType {
+		case "elasticsearch":
+			esCfg, _ := docEngine["ES"].(map[string]interface{})
+			esHost, _ := esCfg["Hosts"].(string)
+			result = append(result, map[string]interface{}{
+				"key":   "elasticsearch_host",
+				"value": esHost,
+			})
+		case "infinity":
+			infinityCfg, _ := docEngine["Infinity"].(map[string]interface{})
+			infinityHost, _ := infinityCfg["URI"].(string)
+			result = append(result, map[string]interface{}{
+				"key":   "infinity_host",
+				"value": infinityHost,
+			})
+		case "milvus":
+			milvusCfg, _ := docEngine["Milvus"].(map[string]interface{})
+			milvusHost, _ := milvusCfg["Hosts"].(string)
+			result = append(result, map[string]interface{}{
+				"key":   "milvus_host",
+				"value": milvusHost,
+			})
+		default:
+			return nil, fmt.Errorf("unknown doc engine: %s", engineType)
+		}
+	}
+
+	if logConfig, ok := (*config)["Log"].(map[string]interface{}); ok {
+		level, _ := logConfig["Level"].(string)
+		result = append(result, map[string]interface{}{
+			"key":   "log_level",
+			"value": level,
+		})
+	}
+
+	if databaseConfig, ok := (*config)["Database"].(map[string]interface{}); ok {
+		driver, _ := databaseConfig["Driver"].(string)
+		result = append(result, map[string]interface{}{
+			"key":   "database",
+			"value": driver,
+		})
+		result = append(result, map[string]interface{}{
+			"key":   "database_host",
+			"value": GetHost(config, "Database", "Host", "Port"),
+		})
+	}
+
+	if language, ok := (*config)["Language"].(string); ok {
+		result = append(result, map[string]interface{}{
+			"key":   "language",
+			"value": language,
+		})
+	}
+
+	result = append(result, map[string]interface{}{
+		"key":   "admin",
+		"value": GetHost(config, "Admin", "Host", "Port"),
+	})
+
+	if storageEngineConfig, ok := (*config)["StorageEngine"].(map[string]interface{}); ok {
+		engineType, _ := storageEngineConfig["Type"].(string)
+		result = append(result, map[string]interface{}{
+			"key":   "storage_engine",
+			"value": engineType,
+		})
+		switch engineType {
+		case "minio":
+			minioCfg, _ := storageEngineConfig["Minio"].(map[string]interface{})
+			minioHost, _ := minioCfg["Host"].(string)
+			result = append(result, map[string]interface{}{
+				"key":   "minio_host",
+				"value": minioHost,
+			})
+		case "s3":
+			s3Cfg, _ := storageEngineConfig["S3"].(map[string]interface{})
+			s3Host, _ := s3Cfg["EndpointURL"].(string)
+			result = append(result, map[string]interface{}{
+				"key":   "s3_host",
+				"value": s3Host,
+			})
+		case "oss":
+			ossCfg, _ := storageEngineConfig["OSS"].(map[string]interface{})
+			ossHost, _ := ossCfg["EndpointURL"].(string)
+			result = append(result, map[string]interface{}{
+				"key":   "oss_host",
+				"value": ossHost,
+			})
+		default:
+			return nil, fmt.Errorf("unknown storage engine: %s", engineType)
+		}
+	}
+
+	return result, nil
+}
+
+// GetHost builds a "host:port" string from a nested config section.
+// Returns an empty string when the section or its host/port fields are absent.
+func GetHost(config *map[string]interface{}, section, hostKey, portKey string) string {
+	if config == nil {
+		return ""
+	}
+	if sub, ok := (*config)[section].(map[string]interface{}); ok {
+		host, hostOk := sub[hostKey].(string)
+		port, portOk := sub[portKey].(float64)
+		if hostOk && portOk {
+			return fmt.Sprintf("%s:%.0f", host, port)
+		}
+	}
+	return ""
+}
+
+// SetLogLevel changes the server log level at runtime (user mode).
+func (c *MultiRAGClient) SetLogLevel(cmd *Command) (ResponseIf, error) {
+	if c.ServerType != "user" {
+		return nil, fmt.Errorf("this command is only allowed in USER mode")
+	}
+
+	logLevel, ok := cmd.Params["level"].(string)
+	if !ok {
+		return nil, fmt.Errorf("no log level")
+	}
+
+	payload := map[string]interface{}{
+		"level": logLevel,
+	}
+
+	resp, err := c.HTTPClient.Request("PUT", "/system/log", true, "web", nil, payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to change log level: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to change log level: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	var result SimpleResponse
+	if err = json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("change log level failed: invalid JSON (%w)", err)
+	}
+	result.Code = 0
+	result.Duration = 0
+	return &result, nil
+}
+
 // ListUserDatasets lists datasets for current user (user mode)
 func (c *MultiRAGClient) ListUserDatasets(cmd *Command) (ResponseIf, error) {
 	if c.ServerType != "user" {
@@ -341,7 +547,7 @@ func (c *MultiRAGClient) CreateToken(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("this command is only allowed in USER mode")
 	}
 
-	resp, err := c.HTTPClient.Request("POST", "/tokens", true, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("POST", "/system/tokens", true, "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create token: %w", err)
 	}
@@ -370,7 +576,7 @@ func (c *MultiRAGClient) ListTokens(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("this command is only allowed in USER mode")
 	}
 
-	resp, err := c.HTTPClient.Request("GET", "/tokens", true, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", "/system/tokens", true, "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tokens: %w", err)
 	}
@@ -409,7 +615,7 @@ func (c *MultiRAGClient) DropToken(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("token not provided")
 	}
 
-	resp, err := c.HTTPClient.Request("DELETE", fmt.Sprintf("/tokens/%s", token), true, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("DELETE", fmt.Sprintf("/system/tokens/%s", token), true, "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to drop token: %w", err)
 	}

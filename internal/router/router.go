@@ -92,8 +92,6 @@ func (r *Router) Setup(engine *gin.Engine) {
 	engine.GET("/v1/system/config", r.systemHandler.GetConfig)
 	engine.GET("/v1/system/configs", r.systemHandler.GetConfigs)
 	engine.GET("/v1/system/version", r.systemHandler.GetVersion)
-	engine.GET("/v1/system/log_level", r.systemHandler.GetLogLevel)
-	engine.PUT("/v1/system/log_level", r.systemHandler.SetLogLevel)
 	engine.POST("/v1/user/register", r.userHandler.Register)
 	// User login channels endpoint
 	engine.GET("/v1/user/login/channels", r.userHandler.GetLoginChannels)
@@ -135,14 +133,6 @@ func (r *Router) Setup(engine *gin.Engine) {
 		// API v1 route group
 		v1 := authorized.Group("/api/v1")
 		{
-			// API token routes
-			apiTokens := v1.Group("/tokens")
-			{
-				apiTokens.POST("", r.systemHandler.CreateToken)
-				apiTokens.GET("", r.systemHandler.ListTokens)
-				apiTokens.DELETE("/:token", r.systemHandler.DeleteToken)
-			}
-
 			// User routes
 			//users := v1.Group("/users")
 			//{
@@ -235,9 +225,17 @@ func (r *Router) Setup(engine *gin.Engine) {
 			system := v1.Group("/system")
 			{
 				system.GET("/version", r.systemHandler.GetVersion)
+				system.GET("/configs", r.systemHandler.GetConfigs)
 				system.GET("/tokens", r.systemHandler.ListTokens)
 				system.POST("/tokens", r.systemHandler.CreateToken)
 				system.DELETE("/tokens/:token", r.systemHandler.DeleteToken)
+
+				// Runtime log level: GET reads, PUT updates
+				log := system.Group("/log")
+				{
+					log.GET("", r.systemHandler.GetLogLevel)
+					log.PUT("", r.systemHandler.SetLogLevel)
+				}
 			}
 
 			// TODO: Message routes - Implementation pending - depends on CanvasService, TaskService and embedding engine

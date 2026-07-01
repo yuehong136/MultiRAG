@@ -119,6 +119,14 @@ const (
 	TokenChunk
 	TokenDocument
 	TokenTag
+	TokenLog
+	TokenLevel
+	TokenDebug
+	TokenInfo
+	TokenWarn
+	TokenError
+	TokenFatal
+	TokenPanic
 
 	// Literals
 	TokenIdentifier

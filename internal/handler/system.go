@@ -166,6 +166,12 @@ func (h *SystemHandler) SetLogLevel(c *gin.Context) {
 		return
 	}
 
+	// Keep the in-memory config in sync so that `list configs` reflects the
+	// runtime change.
+	if cfg := server.GetConfig(); cfg != nil {
+		cfg.Log.Level = req.Level
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
 		"message": "Log level updated successfully",

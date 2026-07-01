@@ -83,6 +83,12 @@ func (p *Parser) parseListCommand() (*Command, error) {
 		return p.parseListAgents()
 	case TokenTokens:
 		return p.parseListTokens()
+	case TokenConfigs:
+		p.nextToken() // consume CONFIGS
+		if err := p.expectSemicolon(); err != nil {
+			return nil, err
+		}
+		return NewCommand("list_configs"), nil
 	case TokenModel:
 		return p.parseListModelProviders()
 	case TokenModels:
@@ -593,8 +599,52 @@ func (p *Parser) parseSetCommand() (*Command, error) {
 	if p.curToken.Type == TokenMetadata {
 		return p.parseSetMeta()
 	}
+	if p.curToken.Type == TokenLog {
+		return p.parseSetLog()
+	}
 
 	return nil, fmt.Errorf("unknown SET target: %s", p.curToken.Value)
+}
+
+// parseSetLog parses: SET LOG LEVEL <debug|info|warn|error|fatal|panic>;
+func (p *Parser) parseSetLog() (*Command, error) {
+	p.nextToken() // consume LOG
+
+	switch p.curToken.Type {
+	case TokenLevel:
+		return p.parseSetLogLevel()
+	default:
+		return nil, fmt.Errorf("unknown LOG target: %s", p.curToken.Value)
+	}
+}
+
+// parseSetLogLevel parses: SET LOG LEVEL <level>;
+func (p *Parser) parseSetLogLevel() (*Command, error) {
+	p.nextToken() // consume LEVEL
+
+	cmd := NewCommand("set_log_level")
+	switch p.curToken.Type {
+	case TokenDebug:
+		cmd.Params["level"] = "debug"
+	case TokenInfo:
+		cmd.Params["level"] = "info"
+	case TokenWarn:
+		cmd.Params["level"] = "warn"
+	case TokenError:
+		cmd.Params["level"] = "error"
+	case TokenFatal:
+		cmd.Params["level"] = "fatal"
+	case TokenPanic:
+		cmd.Params["level"] = "panic"
+	default:
+		return nil, fmt.Errorf("unknown log level: %s", p.curToken.Value)
+	}
+	p.nextToken() // consume level token
+
+	if err := p.expectSemicolon(); err != nil {
+		return nil, err
+	}
+	return cmd, nil
 }
 
 // parseSetMeta parses: SET METADATA OF DOCUMENT 'doc_id' TO '{"key": "value"}'
