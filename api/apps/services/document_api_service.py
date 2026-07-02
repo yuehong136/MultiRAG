@@ -1,0 +1,146 @@
+# coding=utf-8
+"""Document API business logic for RESTful document update endpoints."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+from api.db.db_models import Document
+from api.db.services.document_service import DocumentService
+from api.db.services.file2document_service import File2DocumentService
+from api.db.services.file_service import FileService
+from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.user_service import UserTenantService
+from api.utils import validation_utils
+from api.utils.api_utils import get_error_data_result, get_parser_config, server_error_response
+from api.utils.validation_utils import UpdateDocumentReq
+from common import settings
+from common.constants import TaskStatus
+from core.nlp import rag_tokenizer, search
+
+
+def can_update_dataset(db: Session, user_id: str, kb) -> bool:
+    role = UserTenantService.get_role_in_tenant(db, user_id=user_id, tenant_id=kb.tenant_id)
+    return UserTenantService.can_update_tenant_resources(role)
+
+
+def update_document_name_only(db: Session, document_id: str, req_doc_name: str):
+    if not DocumentService.update_by_id(db, document_id, {"name": req_doc_name}):
+        return get_error_data_result(retmsg="Database error (Document rename)!")
+
+    informs = File2DocumentService.get_by_document_id(db, document_id)
+    if informs:
+        file = FileService.get_by_id(db, informs[0].file_id)
+        if file:
+            FileService.update_by_id(db, file.id, {"name": req_doc_name})
+
+    tenant_id = DocumentService.get_tenant_id(db, document_id)
+    doc = DocumentService.get_by_id(db, document_id)
+    if not doc:
+        return get_error_data_result(retmsg=f"Not able to find document by id:{document_id}")
+    kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
+    if not kb:
+        return get_error_data_result(retmsg=f"Can't find the dataset with ID {doc.kb_id}!")
+    title_tks = rag_tokenizer.tokenize(req_doc_name)
+    doc_store_body = {
+        "docnm_kwd": req_doc_name,
+        "title_tks": title_tks,
+        "title_sm_tks": rag_tokenizer.fine_grained_tokenize(title_tks),
+    }
+    index_name = search.index_name_one(tenant_id, kb.name)
+    if settings.docStoreConn.index_exist(index_name, doc.kb_id):
+        settings.docStoreConn.update({"doc_id": document_id}, doc_store_body, index_name, doc.kb_id)
+    return None
+
+
+def update_chunk_method_only(db: Session, req: dict[str, Any], doc: Document, dataset_id: str, tenant_id: str):
+    if str(doc.parser_id).lower() != req["chunk_method"].lower():
+        updated = DocumentService.update_by_id(
+            db,
+            doc.id,
+            {
+                "parser_id": req["chunk_method"],
+                "progress": 0,
+                "progress_msg": "",
+                "run": TaskStatus.UNSTART.value,
+            },
+        )
+        if not updated:
+            return get_error_data_result(retmsg="Document not found!")
+
+    if not req.get("parser_config"):
+        req["parser_config"] = get_parser_config(req["chunk_method"], req.get("parser_config"))
+        DocumentService.update_parser_config(db, doc.id, req["parser_config"])
+
+    if doc.token_num > 0:
+        updated = DocumentService.increment_chunk_num(
+            db,
+            doc.id,
+            doc.kb_id,
+            doc.token_num * -1,
+            doc.chunk_num * -1,
+            doc.process_duration * -1,
+        )
+        if not updated:
+            return get_error_data_result(retmsg="Document not found!")
+        settings.docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id), dataset_id)
+    return None
+
+
+def update_document_status_only(db: Session, status: int, doc: Document, kb):
+    current_status = None if doc.status is None else int(doc.status)
+    if current_status == status:
+        return None
+
+    try:
+        if not DocumentService.update_by_id(db, doc.id, {"status": str(status)}):
+            return get_error_data_result(retmsg="Database error (Document update)!")
+        settings.docStoreConn.update({"doc_id": doc.id}, {"available_int": status}, search.index_name(kb.tenant_id, [kb.name]), doc.kb_id)
+    except Exception as e:
+        return server_error_response(e)
+    return None
+
+
+def validate_document_update_fields(db: Session, update_doc_req: UpdateDocumentReq, doc: Document, req: dict[str, Any]):
+    error_msg, error_code = validation_utils.validate_immutable_fields(update_doc_req, doc)
+    if error_msg:
+        return error_msg, error_code
+
+    if "name" in req and req["name"] != doc.name:
+        docs_from_name = DocumentService.query(db, name=req["name"], kb_id=doc.kb_id)
+        error_msg, error_code = validation_utils.validate_document_name(req["name"], doc, docs_from_name)
+        if error_msg:
+            return error_msg, error_code
+
+    if "chunk_method" in req and req["chunk_method"] is not None:
+        error_msg, error_code = validation_utils.validate_chunk_method(doc, req["chunk_method"])
+        if error_msg:
+            return error_msg, error_code
+
+    return None, None
+
+
+def rename_doc_key(db: Session, doc: Document) -> dict[str, Any]:
+    key_mapping = {
+        "chunk_num": "chunk_count",
+        "kb_id": "dataset_id",
+        "token_num": "token_count",
+        "parser_id": "chunk_method",
+    }
+    run_mapping = {
+        "0": "UNSTART",
+        "1": "RUNNING",
+        "2": "CANCEL",
+        "3": "DONE",
+        "4": "FAIL",
+    }
+    renamed_doc = {}
+    for key, value in DocumentService.serialize_document(db, doc).items():
+        new_key = key_mapping.get(key, key)
+        if key == "run":
+            renamed_doc[new_key] = run_mapping.get(str(value), str(value))
+        else:
+            renamed_doc[new_key] = value
+    return renamed_doc

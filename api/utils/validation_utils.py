@@ -440,6 +440,21 @@ class UpdateDocumentReq(BaseModel):
             raise PydanticCustomError("format_invalid", "`enabled` value invalid, only accept 0 or 1 but is {enabled}", {"enabled": enabled})
         return enabled
 
+    @field_validator("meta_fields", mode="before")
+    @classmethod
+    def validate_document_meta_fields(cls, meta_fields: Any) -> Any:
+        if meta_fields is None:
+            return None
+        if not isinstance(meta_fields, dict):
+            raise PydanticCustomError("format_invalid", "Only dictionary type supported")
+        for value in meta_fields.values():
+            if isinstance(value, list):
+                if not all(isinstance(item, (str, int, float)) for item in value):
+                    raise PydanticCustomError("format_invalid", "The type is not supported in list: {v}", {"v": value})
+            elif not isinstance(value, (str, int, float)):
+                raise PydanticCustomError("format_invalid", "The type is not supported: {v}", {"v": value})
+        return meta_fields
+
 
 class CreateDatasetReq(Base):
     name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=DATASET_NAME_LIMIT), Field(...)]

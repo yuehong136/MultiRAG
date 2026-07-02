@@ -2736,7 +2736,7 @@ def run(
         return construct_error_response(e)
 
 
-@router.post("/rename", summary="重命名文档", response_description="成功重命名文档")
+@router.post("/rename", summary="[Deprecated] 重命名文档", response_description="成功重命名文档", deprecated=True)
 def rename(
         request_body: RenameRequest,
         db: Session = Depends(get_db),

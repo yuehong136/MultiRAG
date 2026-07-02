@@ -298,6 +298,10 @@ class UserTenantService(CommonService):
         return role in {UserTenantRole.OWNER, UserTenantRole.ADMIN}
 
     @staticmethod
+    def can_update_tenant_resources(role: str | None) -> bool:
+        return role in {UserTenantRole.OWNER, UserTenantRole.ADMIN}
+
+    @staticmethod
     def can_manage_roles(role: str | None) -> bool:
         return role == UserTenantRole.OWNER
 

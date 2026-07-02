@@ -10,7 +10,6 @@ import xxhash
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator, Discriminator, model_validator
-from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 from urllib.parse import quote
 
@@ -25,10 +24,8 @@ from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.task_service import TaskService, queue_tasks, cancel_all_task_of
-from api.utils.api_utils import check_duplicate_ids, construct_json_result, get_error_data_result, get_parser_config, get_result, server_error_response, token_required
+from api.utils.api_utils import check_duplicate_ids, construct_json_result, get_error_data_result, get_result, server_error_response, token_required
 from api.utils.image_utils import store_chunk_image
-from api.utils import validation_utils
-from api.utils.validation_utils import UpdateDocumentReq
 from core.app.tag import label_question
 from core.nlp import rag_tokenizer, search
 from core.prompts.generator import cross_languages, keyword_extraction
@@ -101,7 +98,7 @@ class ChunkModel(BaseModel):
     available: bool = True
     positions: list[list[int]] = Field(default_factory=list)
     tag_kwd: list[str] = Field(default_factory=list)
-    tag_feas: dict = Field(default_factory=dict)
+    tag_feas: Any = Field(default_factory=dict)
 
     @field_validator("positions")
     @classmethod
@@ -110,10 +107,6 @@ class ChunkModel(BaseModel):
             if len(sublist) != 5:
                 raise ValueError("Each sublist in positions must have a length of 5")
         return value
-
-
-class UpdateDocumentRequest(UpdateDocumentReq):
-    pass
 
 
 class DeleteDocumentsRequest(BaseModel):
@@ -247,176 +240,6 @@ def upload_documents(
         renamed_doc_list.append(renamed_doc)
 
     return get_result(data=renamed_doc_list)
-
-
-def _update_document_name_only(db: Session, document_id: str, req_doc_name: str):
-    if not DocumentService.update_by_id(db, document_id, {"name": req_doc_name}):
-        return get_error_data_result(retmsg="Database error (Document rename)!")
-
-    informs = File2DocumentService.get_by_document_id(db, document_id)
-    if informs:
-        file = FileService.get_by_id(db, informs[0].file_id)
-        if file:
-            FileService.update_by_id(db, file.id, {"name": req_doc_name})
-    return None
-
-
-def _update_chunk_method_only(db: Session, req: dict[str, Any], doc: Document, dataset_id: str, tenant_id: str):
-    if str(doc.parser_id).lower() != req["chunk_method"].lower():
-        e = DocumentService.update_by_id(
-            db,
-            doc.id,
-            {
-                "parser_id": req["chunk_method"],
-                "progress": 0,
-                "progress_msg": "",
-                "run": TaskStatus.UNSTART.value,
-            },
-        )
-        if not e:
-            return get_error_data_result(retmsg="Document not found!")
-
-    if not req.get("parser_config"):
-        req["parser_config"] = get_parser_config(req["chunk_method"], req.get("parser_config"))
-        DocumentService.update_parser_config(db, doc.id, req["parser_config"])
-
-    if doc.token_num > 0:
-        e = DocumentService.increment_chunk_num(
-            db,
-            doc.id,
-            doc.kb_id,
-            doc.token_num * -1,
-            doc.chunk_num * -1,
-            doc.process_duration * -1,
-        )
-        if not e:
-            return get_error_data_result(retmsg="Document not found!")
-        settings.docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id), dataset_id)
-    return None
-
-
-def _update_document_status_only(db: Session, status: int, doc: Document, kb):
-    current_status = None if doc.status is None else int(doc.status)
-    if current_status == status:
-        return None
-
-    try:
-        if not DocumentService.update_by_id(db, doc.id, {"status": str(status)}):
-            return get_error_data_result(retmsg="Database error (Document update)!")
-        settings.docStoreConn.update({"doc_id": doc.id}, {"available_int": status}, search.index_name(kb.tenant_id, [kb.name]), doc.kb_id)
-    except Exception as e:
-        return server_error_response(e)
-    return None
-
-
-def _validate_document_update_fields(db: Session, update_doc_req: UpdateDocumentReq, doc: Document, req: dict[str, Any]):
-    error_msg, error_code = validation_utils.validate_immutable_fields(update_doc_req, doc)
-    if error_msg:
-        return error_msg, error_code
-
-    if "name" in req and req["name"] != doc.name:
-        docs_from_name = DocumentService.query(db, name=req["name"], kb_id=doc.kb_id)
-        error_msg, error_code = validation_utils.validate_document_name(req["name"], doc, docs_from_name)
-        if error_msg:
-            return error_msg, error_code
-
-    if "chunk_method" in req and req["chunk_method"] is not None:
-        error_msg, error_code = validation_utils.validate_chunk_method(doc, req["chunk_method"])
-        if error_msg:
-            return error_msg, error_code
-
-    return None, None
-
-
-@router.put("/datasets/{dataset_id}/documents/{document_id}", summary="更新文档")
-def update_document(dataset_id: str, document_id: str, request: UpdateDocumentRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
-    """
-    更新数据集中的文档
-
-    Args:
-        dataset_id: 数据集ID
-        document_id: 文档ID
-        request: 更新请求参数
-        db: 数据库会话
-        tenant_id: 租户ID
-
-    Returns:
-        更新后的文档信息
-    """
-    req = request.model_dump(exclude_unset=True)
-
-    if not KnowledgebaseService.query(db, id=dataset_id, tenant_id=tenant_id):
-        return get_error_data_result(retmsg="You don't own the dataset.")
-
-    kb = KnowledgebaseService.get_by_id(db, dataset_id)
-    if not kb:
-        return get_error_data_result(retmsg="Can't find this dataset!")
-
-    doc = DocumentService.query(db, kb_id=dataset_id, id=document_id)
-    if not doc:
-        return get_error_data_result(retmsg="The dataset doesn't own the document.")
-    doc = doc[0]
-
-    error_msg, error_code = _validate_document_update_fields(db, request, doc, req)
-    if error_msg:
-        return get_error_data_result(retmsg=error_msg, retcode=error_code)
-
-    # 更新元数据字段
-    if "meta_fields" in req:
-        if not DocMetadataService.update_document_metadata(db, document_id, req["meta_fields"]):
-            return get_error_data_result(retmsg="Failed to update metadata")
-
-    # 更新文档名称
-    if "name" in req and req["name"] != doc.name:
-        if error := _update_document_name_only(db, document_id, req["name"]):
-            return error
-
-    # 更新解析配置
-    if "parser_config" in req:
-        DocumentService.update_parser_config(db, doc.id, req["parser_config"])
-
-    # 更新分块方法
-    if "chunk_method" in req and req["chunk_method"] is not None:
-        if error := _update_chunk_method_only(db, req, doc, dataset_id, tenant_id):
-            return error
-
-    # 更新启用状态
-    if "enabled" in req and req["enabled"] is not None:
-        status = int(req["enabled"])
-        if error := _update_document_status_only(db, status, doc, kb):
-            return error
-
-    try:
-        doc = DocumentService.get_by_id(db, doc.id)
-        if not doc:
-            return get_error_data_result(retmsg="Document update failed")
-    except OperationalError as e:
-        logging.exception(e)
-        return get_error_data_result(retmsg="Database operation failed")
-
-    # 重命名键名
-    key_mapping = {
-        "chunk_num": "chunk_count",
-        "kb_id": "dataset_id",
-        "token_num": "token_count",
-        "parser_id": "chunk_method",
-    }
-    run_mapping = {
-        "0": "UNSTART",
-        "1": "RUNNING",
-        "2": "CANCEL",
-        "3": "DONE",
-        "4": "FAIL",
-    }
-    renamed_doc = {}
-    for key, value in DocumentService.serialize_document(db, doc).items():
-        new_key = key_mapping.get(key, key)
-        if key == "run":
-            renamed_doc[new_key] = run_mapping.get(str(value), str(value))
-        else:
-            renamed_doc[new_key] = value
-
-    return get_result(data=renamed_doc)
 
 
 @router.get("/datasets/{dataset_id}/documents/{document_id}", summary="下载文档")
@@ -940,7 +763,7 @@ async def list_chunks(
     Returns:
         文档分块列表，包含total、chunks和doc信息
     """
-    kb = KnowledgebaseService.get_by_id(db, id=dataset_id)
+    kb = KnowledgebaseService.get_by_id(db, dataset_id)
     if not kb:
         return get_error_data_result(retmsg=f"You don't own the dataset {dataset_id}.")
 

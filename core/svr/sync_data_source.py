@@ -94,10 +94,16 @@ class SyncBase:
             SyncLogsService.schedule(db, task["connector_id"], task["kb_id"], task["poll_range_start"])
 
     async def _run_task_logic(self, task: dict):
-        document_batch_generator = await self._generate(task)
+        generate_output = await self._generate(task)
+        if isinstance(generate_output, tuple):
+            document_batch_generator, file_list = generate_output
+        else:
+            document_batch_generator = generate_output
+            file_list = None
 
         doc_num = 0
         failed_docs = 0
+        removed_docs = 0
         next_update = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
         if task["poll_range_start"]:
@@ -156,10 +162,22 @@ class SyncBase:
                 continue
 
         prefix = self._get_source_prefix()
+        if file_list is not None:
+            with db_connection() as db:
+                removed_docs, _ = ConnectorService.cleanup_stale_documents_for_task(
+                    db,
+                    task["id"],
+                    task["connector_id"],
+                    task["kb_id"],
+                    task["tenant_id"],
+                    file_list,
+                )
+
+        removed_info = f", {removed_docs} deleted" if file_list is not None else ""
         if failed_docs > 0:
-            logging.info(f"{prefix}{doc_num} docs synchronized till {next_update} ({failed_docs} skipped)")
+            logging.info(f"{prefix}{doc_num} docs synchronized till {next_update} ({failed_docs} skipped{removed_info})")
         else:
-            logging.info(f"{prefix}{doc_num} docs synchronized till {next_update}")
+            logging.info(f"{prefix}{doc_num} docs synchronized till {next_update}{removed_info}")
         with db_connection() as db:
             SyncLogsService.done(db, task["id"], task["connector_id"])
         task["poll_range_start"] = next_update
@@ -1048,12 +1066,17 @@ class Github(SyncBase):
             {"github_access_token": credentials["github_access_token"]}
         )
 
+        file_list = None
         if task.get("reindex") == "1" or not task.get("poll_range_start"):
             start_time = datetime.fromtimestamp(0, tz=timezone.utc)
             begin_info = "totally"
         else:
             start_time = task.get("poll_range_start")
             begin_info = f"from {start_time}"
+            if self.conf.get("sync_deleted_files"):
+                file_list = []
+                for slim_batch in self.connector.retrieve_all_slim_docs_perm_sync():
+                    file_list.extend(slim_batch)
 
         end_time = datetime.now(timezone.utc)
 
@@ -1091,6 +1114,8 @@ class Github(SyncBase):
             begin_info,
         )
 
+        if file_list is not None:
+            return wrapper(), file_list
         return wrapper()
 
 
