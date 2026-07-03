@@ -18,6 +18,11 @@ import uuid
 
 import uvicorn
 
+# 承重的副作用导入，不可删除（F401 误报）：
+# 1. 导入 api.apps 时在模块级执行 settings.init_settings()，
+#    init_web_data() 等后续启动步骤依赖其加载的全局配置；
+# 2. uvicorn.run("api.multirag_server:app", ...) 按字符串引用本模块的 app 属性。
+from api.apps import app  # noqa: F401
 from api.db.db_models import SessionLocal, db_connection, engine
 from api.db.db_models import init_database_tables as init_web_db
 from api.db.db_models import upgrade_database_tables as upgrade_database
