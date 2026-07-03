@@ -6,7 +6,7 @@ from logging.handlers import RotatingFileHandler
 from common.file_utils import get_project_base_directory
 
 initialized_root_logger = False
-pkg_levels = {}  # 提为模块级，以支持运行时动态修改
+pkg_levels: dict[str, str] = {}  # 提为模块级，以支持运行时动态修改
 
 
 def init_root_logger(logfile_basename: str, log_format: str = "%(asctime)-15s %(levelname)-8s %(process)d %(message)s"):
@@ -37,12 +37,12 @@ def init_root_logger(logfile_basename: str, log_format: str = "%(asctime)-15s %(
         terms = pkg_name_level.split("=")
         if len(terms) != 2:
             continue
-        pkg_name, pkg_level = terms[0], terms[1]
+        pkg_name, pkg_level_raw = terms[0], terms[1]
         pkg_name = pkg_name.strip()
-        pkg_level = logging.getLevelName(pkg_level.strip().upper())
-        if not isinstance(pkg_level, int):
-            pkg_level = logging.INFO
-        pkg_levels[pkg_name] = logging.getLevelName(pkg_level)
+        level_no = logging.getLevelName(pkg_level_raw.strip().upper())
+        if not isinstance(level_no, int):
+            level_no = logging.INFO
+        pkg_levels[pkg_name] = logging.getLevelName(level_no)
 
     for pkg_name in ["sqlalchemy", "pdfminer"]:
         if pkg_name not in pkg_levels:

@@ -8,7 +8,9 @@
 
 import logging
 import operator
+from collections.abc import Callable
 from functools import reduce
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
@@ -79,7 +81,7 @@ def fill_db_model_object(model_object, human_model_dict):
 
 
 # https://docs.sqlalchemy.org/en/14/core/operators.html
-supported_operators = {
+supported_operators: dict[str, Callable[..., Any]] = {
     "==": operator.eq,
     "<": operator.lt,
     "<=": operator.le,

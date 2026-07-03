@@ -307,8 +307,8 @@ if __name__ == "__main__":
     decrypted = crypto.decrypt(encrypted)
 
     print("AES Test:")
-    print(f"Original: {test_data}")
-    print(f"Encrypted: {encrypted}")
+    print(f"Original: {test_data!r}")
+    print(f"Encrypted: {encrypted!r}")
     print(f"Decrypted: {decrypted}")
     print(f"Success: {test_data == decrypted}")
     print()
@@ -320,8 +320,8 @@ if __name__ == "__main__":
         decrypted_sm4 = crypto_sm4.decrypt(encrypted_sm4)
 
         print("SM4 Test:")
-        print(f"Original: {test_data}")
-        print(f"Encrypted: {encrypted_sm4}")
+        print(f"Original: {test_data!r}")
+        print(f"Encrypted: {encrypted_sm4!r}")
         print(f"Decrypted: {decrypted_sm4}")
         print(f"Success: {test_data == decrypted_sm4}")
     except Exception as e:

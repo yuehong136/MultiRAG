@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import secrets
+from typing import Any
 
 import core.utils
 import core.utils.es_conn
@@ -69,7 +70,7 @@ OAUTH_CONFIG = None
 DOC_ENGINE = os.getenv("DOC_ENGINE", "milvus")
 DOC_ENGINE_INFINITY = DOC_ENGINE.lower() == "infinity"
 DOC_ENGINE_OCEANBASE = DOC_ENGINE.lower() == "oceanbase"
-docStoreConn = None
+docStoreConn: Any = None
 msgStoreConn = None
 retriever = None
 kg_retriever = None
@@ -99,17 +100,17 @@ MAIL_DEFAULT_SENDER = ()
 MAIL_FRONTEND_URL = ""
 
 # Storage and database configurations
-ES = {}
-MILVUS = {}
-VASTBASE = {}
-INFINITY = {}
-AZURE = {}
-S3 = {}
-MINIO = {}
-OB = {}
-OSS = {}
-OS = {}
-GCS = {}
+ES: dict = {}
+MILVUS: dict = {}
+VASTBASE: dict = {}
+INFINITY: dict = {}
+AZURE: dict = {}
+S3: dict = {}
+MINIO: dict = {}
+OB: dict = {}
+OSS: dict = {}
+OS: dict = {}
+GCS: dict = {}
 
 # Core settings (from core/settings.py)
 RAG_CONF_PATH = os.path.join(get_project_base_directory(), "configs")
@@ -120,7 +121,7 @@ PARALLEL_DEVICES: int = 0
 
 # Storage factory settings
 STORAGE_IMPL_TYPE = os.getenv("STORAGE_IMPL", "MINIO")
-STORAGE_IMPL = None
+STORAGE_IMPL: Any = None
 
 
 class StorageFactory:

@@ -421,7 +421,7 @@ def current_tenant_id(request: Request, db: Session = Depends(get_db)) -> str:
         payload = manager._get_payload(token)
         email = payload.get("sub")
         if email:
-            user = load_user(email, db)
+            user = load_user(email, db)  # type: ignore[operator]  # fastapi-login user_loader 装饰器的标注 artifact，运行时为同步函数
             if user is not None:
                 return user.id
     except Exception:
@@ -841,7 +841,7 @@ def group_by(list_of_dict, key):
 
 
 def get_mcp_tools(mcp_servers: list, timeout: float | int = 10) -> tuple[dict, str]:
-    results = {}
+    results: dict = {}
     tool_call_sessions = []
     try:
         for mcp_server in mcp_servers:

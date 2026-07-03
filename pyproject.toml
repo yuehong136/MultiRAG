@@ -181,10 +181,15 @@ dependencies = [
 dev = [
     "codecov>=2.1.13",
     "debugpy>=1.8.13",
+    "mypy>=1.14",
+    "pre-commit>=4.0",
     "pytest>=8.3.4",
+    "pytest-asyncio>=0.25",
     "pytest-cov>=6.0.0",
     "pytest-playwright>=0.7.2",
     "ruff",
+    "types-python-dateutil>=2.9.0.20241206",
+    "types-requests>=2.32.0.20250306",
 ]
 
 test = [
@@ -265,6 +270,36 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["api", "common", "core", "agent", "deepdoc", "workflow", "workflow_v2", "memory", "mcp", "admin", "configs"]
+
+# ============================================================
+# mypy —— 渐进式静态类型检查（棘轮策略）
+#
+# 起步集 = files 列表。某个包清理干净后：
+#   1. 将其加入 files（纳入检查范围，CI 从此保绿）
+#   2. 用 [[tool.mypy.overrides]] 按模块逐步提升严格度
+#      （check_untyped_defs → disallow_untyped_defs）
+# 新增/修改的代码必须写完整类型注解（见 AGENTS.md）。
+# 禁止为换绿而扩 exclude 或降低严格度。
+# ============================================================
+[tool.mypy]
+python_version = "3.12"
+files = ["common", "api/utils", "scripts"]
+exclude = [
+    "^server/", "^internal/", "^tests/", "^docker/", "^temp/", "^tmp/",
+    # 燃尽目标：SaaS 连接器与向量库后端存量类型问题较多（各约 60/30 个），
+    # 按连接器逐个清理后从此列表移出，纳入检查范围。
+    "^common/data_source/",
+    "^common/doc_store/",
+]
+follow_imports = "silent"
+ignore_missing_imports = true
+check_untyped_defs = false        # 第一阶段：只检查有注解的函数体
+implicit_optional = true          # 存量隐式 Optional（x: str = None）较多，清理后移除本行
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = false       # 检查范围稳定后翻转
+show_error_codes = true
+pretty = true
 
 [tool.pytest.ini_options]
 pythonpath = [

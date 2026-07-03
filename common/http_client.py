@@ -149,7 +149,7 @@ async def async_request(
                     log_url = _redact_sensitive_url_params(url)
                     logger.warning(f"async_request attempt {attempt + 1}/{retries + 1} failed for {method} {log_url}; retrying in {delay:.2f}s")
                 await asyncio.sleep(delay)
-        raise last_exc  # pragma: no cover
+        raise last_exc  # type: ignore[misc]  # pragma: no cover（重试循环保证非 None）
 
 
 def sync_request(
@@ -202,7 +202,7 @@ def sync_request(
                     log_url = _redact_sensitive_url_params(url)
                     logger.warning(f"sync_request attempt {attempt + 1}/{retries + 1} failed for {method} {log_url}; retrying in {delay:.2f}s")
                 time.sleep(delay)
-        raise last_exc  # pragma: no cover
+        raise last_exc  # type: ignore[misc]  # pragma: no cover（重试循环保证非 None）
 
 
 __all__ = [

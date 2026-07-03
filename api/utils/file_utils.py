@@ -23,7 +23,7 @@ GHOSTSCRIPT_TIMEOUT_SEC = 120  # Timeout for Ghostscript subprocess
 
 LOCK_KEY_pdfplumber = "global_shared_lock_pdfplumber"
 if LOCK_KEY_pdfplumber not in sys.modules:
-    sys.modules[LOCK_KEY_pdfplumber] = threading.Lock()
+    sys.modules[LOCK_KEY_pdfplumber] = threading.Lock()  # type: ignore[assignment]  # 跨模块共享锁的单例 hack
 
 
 def get_home_cache_dir():

@@ -78,8 +78,8 @@ def parse_ref(ref: str) -> tuple[str | None, str | None, str | None]:
 
     # 分离外部文档引用和内部路径
     if "#" in ref:
-        external_doc, internal_path = ref.split("#", 1)
-        external_doc = external_doc if external_doc else None
+        external_part, internal_path = ref.split("#", 1)
+        external_doc = external_part if external_part else None
     else:
         external_doc = ref
         internal_path = ""

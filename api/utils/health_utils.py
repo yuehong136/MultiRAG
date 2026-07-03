@@ -2,6 +2,7 @@ import json
 import os
 from datetime import datetime
 from timeit import default_timer as timer
+from typing import Any
 
 import requests
 from sqlalchemy import text
@@ -119,7 +120,7 @@ def check_storage() -> tuple[bool, dict]:
     try:
         health_result = settings.STORAGE_IMPL.health()
         ok = is_health_result_ok(health_result)
-        meta = {"elapsed": f"{(timer() - st) * 1000.0:.1f}"}
+        meta: dict[str, Any] = {"elapsed": f"{(timer() - st) * 1000.0:.1f}"}
 
         if isinstance(health_result, dict):
             meta["health"] = health_result
@@ -486,7 +487,7 @@ def run_health_checks() -> tuple[dict, bool]:
             - 结果包含各个组件的状态 (ok/nok)
             - 如果关键组件（db, chat）都正常，则返回 True
     """
-    result: dict[str, str | dict] = {}
+    result: dict[str, Any] = {}
 
     # 关键组件检查
     db_ok, db_meta = check_db()

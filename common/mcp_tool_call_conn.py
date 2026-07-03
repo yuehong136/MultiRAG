@@ -104,7 +104,7 @@ class MCPToolCallSession(ToolCallSession):
             # SSE transport
             try:
                 async with sse_client(url, headers) as stream:
-                    async with ClientSession(*stream, logging_callback=self._on_logging) as client_session:
+                    async with ClientSession(*stream, logging_callback=self._on_logging) as client_session:  # type: ignore[misc]
                         try:
                             init_result = await asyncio.wait_for(client_session.initialize(), timeout=MCP_INIT_TIMEOUT)
                             self._save_init_result(init_result)
@@ -229,7 +229,7 @@ class MCPToolCallSession(ToolCallSession):
         if self._close:
             raise ValueError("Session is closed")
 
-        results = asyncio.Queue()
+        results: asyncio.Queue = asyncio.Queue()
         await self._queue.put((task_type, kwargs, results))
 
         try:

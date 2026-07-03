@@ -29,7 +29,7 @@ def convert_conditions(metadata_condition):
 
 
 def meta_filter(metas: dict, filters: list[dict], logic: str = "and"):
-    doc_ids = set()
+    doc_ids: set[str] = set()
 
     def filter_out(v2docs, operator, value):
         ids = []
@@ -175,6 +175,8 @@ async def apply_meta_data_filter(
                 selected_keys.append(item)
             elif isinstance(item, dict):
                 key = item.get("key")
+                if not key:
+                    continue
                 op = item.get("op")
                 selected_keys.append(key)
                 if op:
@@ -183,16 +185,16 @@ async def apply_meta_data_filter(
         if selected_keys:
             filtered_metas = {key: metas[key] for key in selected_keys if key in metas}
             if filtered_metas:
-                filters: dict = await gen_meta_filter(chat_mdl, filtered_metas, question, constraints=constraints)
+                filters = await gen_meta_filter(chat_mdl, filtered_metas, question, constraints=constraints)
                 doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
                 if not doc_ids:
                     return None
     elif method == "manual":
-        filters = meta_data_filter.get("manual", [])
+        manual_filters = meta_data_filter.get("manual", [])
         if manual_value_resolver:
-            filters = [manual_value_resolver(flt) for flt in filters]
-        doc_ids.extend(meta_filter(metas, filters, meta_data_filter.get("logic", "and")))
-        if filters and not doc_ids:
+            manual_filters = [manual_value_resolver(flt) for flt in manual_filters]
+        doc_ids.extend(meta_filter(metas, manual_filters, meta_data_filter.get("logic", "and")))
+        if manual_filters and not doc_ids:
             doc_ids = ["-999"]
 
     return doc_ids
@@ -262,7 +264,7 @@ def metadata_schema(metadata: dict | list | None) -> dict[str, Any]:
 
         properties[key] = prop_schema
 
-    json_schema = {
+    json_schema: dict[str, Any] = {
         "type": "object",
         "properties": properties,
     }

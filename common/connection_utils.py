@@ -15,7 +15,7 @@ TimeoutException = type[BaseException] | BaseException
 OnTimeoutCallback = Callable[..., Any] | Coroutine[Any, Any, Any]
 
 
-def timeout(seconds: float | int | str = None, attempts: int = 2, *, exception: TimeoutException | None = None, on_timeout: OnTimeoutCallback | None = None):
+def timeout(seconds: float | int | str | None = None, attempts: int = 2, *, exception: TimeoutException | None = None, on_timeout: OnTimeoutCallback | None = None):
     if isinstance(seconds, str):
         seconds = float(seconds)
 

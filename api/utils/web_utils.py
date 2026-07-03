@@ -222,7 +222,7 @@ def __send_devtools(driver, cmd, params=None):
 
 def __get_pdf_from_html(path: str, timeout: int, install_driver: bool, print_options: dict):
     webdriver_options = Options()
-    webdriver_prefs = {}
+    webdriver_prefs: dict = {}
     webdriver_options.add_argument("--headless")
     webdriver_options.add_argument("--disable-gpu")
     webdriver_options.add_argument("--no-sandbox")
