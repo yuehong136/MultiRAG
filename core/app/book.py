@@ -78,10 +78,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
     please set up the page ranges for every book in order eliminate negative effects and save elapsed computing time.
     """
     parser_config = kwargs.get("parser_config", {"chunk_token_num": 512, "delimiter": "\n!?。；！？", "layout_recognize": "DeepDOC"})
-    doc = {
-        "docnm_kwd": filename,
-        "title_tks": rag_tokenizer.tokenize(re.sub(r"\.[a-zA-Z]+$", "", filename))
-    }
+    doc = {"docnm_kwd": filename, "title_tks": rag_tokenizer.tokenize(re.sub(r"\.[a-zA-Z]+$", "", filename))}
     doc["title_sm_tks"] = rag_tokenizer.fine_grained_tokenize(doc["title_tks"])
     pdf_parser = None
     sections, tbls = [], []
@@ -101,17 +98,11 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
 
         tbls = vision_figure_parser_docx_wrapper(sections=sections, tbls=tbls, callback=callback, **kwargs)
         # tbls = [((None, lns), None) for lns in tbls]
-        sections = [
-            (item[0], item[1] if item[1] is not None else "")
-            for item in sections
-            if not isinstance(item[1], (Image.Image, LazyImage))
-        ]
+        sections = [(item[0], item[1] if item[1] is not None else "") for item in sections if not isinstance(item[1], (Image.Image, LazyImage))]
         callback(0.8, "Finish parsing.")
 
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
-        layout_recognizer, parser_model_name = normalize_layout_recognizer(
-            parser_config.get("layout_recognize", "DeepDOC")
-        )
+        layout_recognizer, parser_model_name = normalize_layout_recognizer(parser_config.get("layout_recognize", "DeepDOC"))
 
         if isinstance(layout_recognizer, bool):
             layout_recognizer = "DeepDOC" if layout_recognizer else "Plain Text"
@@ -131,7 +122,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
             layout_recognizer=layout_recognizer,
             mineru_llm_name=parser_model_name,
             paddleocr_llm_name=parser_model_name,
-            **kwargs
+            **kwargs,
         )
 
         if not sections and not tables:
@@ -147,16 +138,14 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
         txt = get_text(filename, binary)
         sections = txt.split("\n")
         sections = [(line, "") for line in sections if line]
-        remove_contents_table(sections, eng=is_english(
-            random_choices([t for t, _ in sections], k=200)))
+        remove_contents_table(sections, eng=is_english(random_choices([t for t, _ in sections], k=200)))
         callback(0.8, "Finish parsing.")
 
     elif re.search(r"\.(htm|html)$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
         sections = HtmlParser()(filename, binary)
         sections = [(line, "") for line in sections if line]
-        remove_contents_table(sections, eng=is_english(
-            random_choices([t for t, _ in sections], k=200)))
+        remove_contents_table(sections, eng=is_english(random_choices([t for t, _ in sections], k=200)))
         callback(0.8, "Finish parsing.")
 
     elif re.search(r"\.doc$", filename, re.IGNORECASE):
@@ -171,7 +160,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
         binary = BytesIO(binary)
         doc_parsed = tika_parser.from_buffer(binary)
         if doc_parsed.get("content", None) is not None:
-            sections = doc_parsed["content"].split('\n')
+            sections = doc_parsed["content"].split("\n")
             sections = [(line, "") for line in sections if line]
             remove_contents_table(sections, eng=is_english(random_choices([t for t, _ in sections], k=200)))
             callback(0.8, "Finish parsing.")
@@ -185,12 +174,8 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
         chunks = ["\n".join(ck) for ck in hierarchical_merge(bull, sections, 5)]
     else:
         sections = [s.split("@") for s, _ in sections]
-        sections = [(pr[0], "@" + pr[1]) if len(pr) == 2 else (pr[0], '') for pr in sections]
-        chunks = naive_merge(
-            sections,
-            parser_config.get("chunk_token_num", 256),
-            parser_config.get("delimiter", "\n。；！？")
-        )
+        sections = [(pr[0], "@" + pr[1]) if len(pr) == 2 else (pr[0], "") for pr in sections]
+        chunks = naive_merge(sections, parser_config.get("chunk_token_num", 256), parser_config.get("delimiter", "\n。；！？"))
 
     # is it English
     # is_english(random_choices([t for t, _ in sections], k=218))

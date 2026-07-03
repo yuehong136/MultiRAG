@@ -5,6 +5,7 @@
 @date：2025/9/23 10:00
 @desc: MCP工具数据接口
 """
+
 import json
 from typing import Any
 
@@ -51,12 +52,8 @@ class CreateToolsDataRequest(ToolsDataKey):
     final_data: Any | None = Field(None, description="工具最终输出数据")
 
 
-@router.get('/detail', summary="查询工具数据", response_description="查询成功返回数据详情")
-def get_tools_data(
-    flow_id: str = Query(..., description="数据对应的流程ID"),
-    user_id: str | None = Query(None, description="用户ID，不传则默认当前登录用户"),
-    db: Session = Depends(get_db)
-):
+@router.get("/detail", summary="查询工具数据", response_description="查询成功返回数据详情")
+def get_tools_data(flow_id: str = Query(..., description="数据对应的流程ID"), user_id: str | None = Query(None, description="用户ID，不传则默认当前登录用户"), db: Session = Depends(get_db)):
     """
     ### GET `/detail` 查询工具数据
 
@@ -106,11 +103,8 @@ def get_tools_data(
         return server_error_response(e)
 
 
-@router.post('/create', summary="新增或更新工具数据", response_description="成功创建或更新数据")
-def create_tools_data(
-    request: CreateToolsDataRequest,
-    db: Session = Depends(get_db)
-):
+@router.post("/create", summary="新增或更新工具数据", response_description="成功创建或更新数据")
+def create_tools_data(request: CreateToolsDataRequest, db: Session = Depends(get_db)):
     """
     ### POST `/create` 新增或更新工具数据
 
@@ -173,11 +167,8 @@ def create_tools_data(
         return server_error_response(e)
 
 
-@router.delete('/remove', summary="删除工具数据", response_description="成功删除返回True")
-def delete_tools_data(
-    request: ToolsDataKey,
-    db: Session = Depends(get_db)
-):
+@router.delete("/remove", summary="删除工具数据", response_description="成功删除返回True")
+def delete_tools_data(request: ToolsDataKey, db: Session = Depends(get_db)):
     """
     ### DELETE `/remove` 删除工具数据
 

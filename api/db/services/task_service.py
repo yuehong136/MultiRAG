@@ -5,6 +5,7 @@
 @date：2024/7/22 15:10
 @desc:
 """
+
 import logging
 import os
 import random
@@ -31,13 +32,14 @@ from deepdoc.parser.excel_parser import RAGFlowExcelParser
 CANVAS_DEBUG_DOC_ID = "dataflow_x"
 GRAPH_RAPTOR_FAKE_DOC_ID = "graph_raptor_x"
 
+
 def trim_header_by_lines(text: str, max_length) -> str:
     len_text = len(text)
     if len_text <= max_length:
         return text
     for i in range(len_text):
-        if text[i] == '\n' and len_text - i <= max_length:
-            return text[i+1:]
+        if text[i] == "\n" and len_text - i <= max_length:
+            return text[i + 1 :]
     return text
 
 
@@ -63,6 +65,7 @@ class TaskService(CommonService):
     Attributes:
         model: The Task model class for database operations.
     """
+
     model = Task
 
     @staticmethod
@@ -167,11 +170,7 @@ class TaskService(CommonService):
         # task["progress"] = prog
 
         # 将更新写入数据库
-        stmt = (
-            update(cls.model)
-            .where(cls.model.id == task["id"])
-            .values(progress_msg=cls.model.progress_msg + msg, progress=prog)
-        )
+        stmt = update(cls.model).where(cls.model.id == task["id"]).values(progress_msg=cls.model.progress_msg + msg, progress=prog)
         db.execute(stmt)
 
         db.commit()
@@ -190,11 +189,7 @@ class TaskService(CommonService):
             cls.model.digest,
             cls.model.chunk_ids,
         ]
-        stmt = (
-            select(*fields)
-            .where(cls.model.doc_id == doc_id)
-            .order_by(asc(cls.model.from_page), desc(cls.model.create_time))
-        )
+        stmt = select(*fields).where(cls.model.doc_id == doc_id).order_by(asc(cls.model.from_page), desc(cls.model.create_time))
         tasks = db.execute(stmt).mappings().all()
         if not tasks:
             return None
@@ -202,11 +197,7 @@ class TaskService(CommonService):
 
     @classmethod
     def update_chunk_ids(cls, db: Session, id: str, chunk_ids: str):
-        stmt = (
-            update(cls.model)
-            .where(cls.model.id == id)
-            .values(chunk_ids=chunk_ids)
-        )
+        stmt = update(cls.model).where(cls.model.id == id).values(chunk_ids=chunk_ids)
         db.execute(stmt)
         db.commit()
 
@@ -214,12 +205,7 @@ class TaskService(CommonService):
     def get_ongoing_doc_name(cls, db: Session):
         with db.begin():
             stmt = (
-                select(
-                    Document.id,
-                    Document.kb_id,
-                    Document.location,
-                    File.parent_id
-                )
+                select(Document.id, Document.kb_id, Document.location, File.parent_id)
                 .join(File2Document, File2Document.document_id == Document.id, isouter=True)
                 .join(File, File2Document.file_id == File.id, isouter=True)
                 .where(
@@ -233,20 +219,15 @@ class TaskService(CommonService):
             docs = db.execute(stmt).all()
             # Assuming docs = list(docs.dicts())
             if docs:
-                kb_config = docs[0]['kb_parser_config']  # Dict from Knowledgebase.parser_config
-                mineru_method = kb_config.get('mineru_parse_method', 'auto')
-                mineru_formula = kb_config.get('mineru_formula_enable', True)
-                mineru_table = kb_config.get('mineru_table_enable', True)
+                kb_config = docs[0]["kb_parser_config"]  # Dict from Knowledgebase.parser_config
+                mineru_method = kb_config.get("mineru_parse_method", "auto")
+                mineru_formula = kb_config.get("mineru_formula_enable", True)
+                mineru_table = kb_config.get("mineru_table_enable", True)
                 print(mineru_method, mineru_formula, mineru_table)
             if not docs:
                 return []
 
-            return list(
-                {
-                    (d.parent_id if d.parent_id else d.kb_id, d.location)
-                    for d in docs
-                }
-            )
+            return list({(d.parent_id if d.parent_id else d.kb_id, d.location) for d in docs})
 
     @classmethod
     def do_cancel(cls, db: Session, task_id):
@@ -336,11 +317,7 @@ class TaskService(CommonService):
 
             if info.get("progress_msg"):
                 progress_msg = trim_header_by_lines((task.progress_msg or "") + "\n" + str(info["progress_msg"]), 3000)
-                db.execute(
-                    update(cls.model)
-                    .where(cls.model.id == id)
-                    .values(progress_msg=progress_msg)
-                )
+                db.execute(update(cls.model).where(cls.model.id == id).values(progress_msg=progress_msg))
 
             if "progress" in info:
                 prog = info["progress"]
@@ -349,21 +326,13 @@ class TaskService(CommonService):
                     progress_filters.append(cls.model.progress != -1)
                     if prog != -1:
                         progress_filters.append(cls.model.progress < prog)
-                db.execute(
-                    update(cls.model)
-                    .where(*progress_filters)
-                    .values(progress=prog)
-                )
+                db.execute(update(cls.model).where(*progress_filters).values(progress=prog))
 
             # Update process_duration after progress updates.
             begin_at = cls._coerce_begin_at(task.begin_at)
             if begin_at:
                 process_duration = (datetime.now() - begin_at).total_seconds()
-                db.execute(
-                    update(cls.model)
-                    .where(cls.model.id == id)
-                    .values(process_duration=process_duration)
-                )
+                db.execute(update(cls.model).where(cls.model.id == id).values(process_duration=process_duration))
 
         if os.environ.get("MACOS"):
             do_update()
@@ -398,11 +367,7 @@ class TaskService(CommonService):
             cls.model.chunk_ids,
             cls.model.create_time,
         ]
-        stmt = (
-            select(*fields)
-            .where(cls.model.doc_id.in_(doc_ids))
-            .order_by(desc(cls.model.create_time))
-        )
+        stmt = select(*fields).where(cls.model.doc_id.in_(doc_ids)).order_by(desc(cls.model.create_time))
         tasks = db.execute(stmt).mappings().all()
         if not tasks:
             return None
@@ -443,6 +408,7 @@ def queue_tasks(db: Session, doc: dict, bucket: str, name: str, priority: int):
         - Task digests are calculated for optimization and reuse
         - Previous task chunks may be reused if available
     """
+
     def new_task():
         return {
             "id": get_uuid(),
@@ -519,8 +485,7 @@ def queue_tasks(db: Session, doc: dict, bucket: str, name: str, priority: int):
             if pre_task["chunk_ids"]:
                 pre_chunk_ids.extend(pre_task["chunk_ids"].split())
         if pre_chunk_ids:
-            settings.docStoreConn.delete({"id": pre_chunk_ids}, search.index_name_one(chunking_config["tenant_id"], chunking_config["name"]),
-                                         chunking_config["kb_id"])
+            settings.docStoreConn.delete({"id": pre_chunk_ids}, search.index_name_one(chunking_config["tenant_id"], chunking_config["name"]), chunking_config["kb_id"])
     DocumentService.update_by_id(db, doc["id"], {"chunk_num": ck_num})
 
     bulk_insert_into_db(db, Task, parse_task_array, True)
@@ -528,16 +493,14 @@ def queue_tasks(db: Session, doc: dict, bucket: str, name: str, priority: int):
 
     unfinished_task_array = [task for task in parse_task_array if task["progress"] < 1.0]
     for unfinished_task in unfinished_task_array:
-        assert REDIS_CONN.queue_product(
-            settings.get_svr_queue_name(priority), message=_task_queue_payload(unfinished_task)
-        ), "Can't access Redis. Please check the Redis' status."
+        assert REDIS_CONN.queue_product(settings.get_svr_queue_name(priority), message=_task_queue_payload(unfinished_task)), "Can't access Redis. Please check the Redis' status."
+
 
 def reuse_prev_task_chunks(task: dict, prev_tasks: list[dict], chunking_config: dict):
     idx = 0
     while idx < len(prev_tasks):
         prev_task = prev_tasks[idx]
-        if prev_task.get("from_page", 0) == task.get("from_page", 0) \
-                and prev_task.get("digest", 0) == task.get("digest", ""):
+        if prev_task.get("from_page", 0) == task.get("from_page", 0) and prev_task.get("digest", 0) == task.get("digest", ""):
             break
         idx += 1
 
@@ -548,12 +511,11 @@ def reuse_prev_task_chunks(task: dict, prev_tasks: list[dict], chunking_config: 
         return 0
     task["chunk_ids"] = prev_task["chunk_ids"]
     task["progress"] = 1.0
-    if "from_page" in task and "to_page" in task and int(task['to_page']) - int(task['from_page']) >= 10 ** 6:
+    if "from_page" in task and "to_page" in task and int(task["to_page"]) - int(task["from_page"]) >= 10**6:
         task["progress_msg"] = f"Page({task['from_page']}~{task['to_page']}): "
     else:
         task["progress_msg"] = ""
-    task["progress_msg"] = " ".join(
-        [datetime.now().strftime("%H:%M:%S"), task["progress_msg"], "Reused previous task's chunks."])
+    task["progress_msg"] = " ".join([datetime.now().strftime("%H:%M:%S"), task["progress_msg"], "Reused previous task's chunks."])
     prev_task["chunk_ids"] = ""
 
     return len(task["chunk_ids"].split())
@@ -577,7 +539,9 @@ def has_canceled(task_id: str) -> bool:
     return False
 
 
-def queue_dataflow(db: Session, tenant_id: str, flow_id: str, task_id: str, doc_id: str = CANVAS_DEBUG_DOC_ID, file: list[dict] | None = None, priority: int = 0, rerun: bool = False) -> tuple[bool, str]:
+def queue_dataflow(
+    db: Session, tenant_id: str, flow_id: str, task_id: str, doc_id: str = CANVAS_DEBUG_DOC_ID, file: list[dict] | None = None, priority: int = 0, rerun: bool = False
+) -> tuple[bool, str]:
     """
     Returns a tuple (success: bool, error_message: str).
     """
@@ -602,9 +566,7 @@ def queue_dataflow(db: Session, tenant_id: str, flow_id: str, task_id: str, doc_
     task["dataflow_id"] = flow_id
     task["file"] = file
 
-    if not REDIS_CONN.queue_product(
-        settings.get_svr_queue_name(priority), message=_task_queue_payload(task)
-    ):
+    if not REDIS_CONN.queue_product(settings.get_svr_queue_name(priority), message=_task_queue_payload(task)):
         return False, "Can't access Redis. Please check the Redis' status."
 
     return True, ""

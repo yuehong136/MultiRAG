@@ -39,7 +39,7 @@ def conf_realpath(conf_name):
 
 def read_config(conf_name=SERVICE_CONF):
     local_config = {}
-    local_path = conf_realpath(f'local.{conf_name}')
+    local_path = conf_realpath(f"local.{conf_name}")
 
     # load local config file
     if os.path.exists(local_path):
@@ -59,6 +59,7 @@ def read_config(conf_name=SERVICE_CONF):
 
 CONFIGS = read_config()
 
+
 def _mask_sensitive_fields(config, _already_copied=False):
     """递归处理配置字典，将敏感字段替换为 *
 
@@ -74,16 +75,7 @@ def _mask_sensitive_fields(config, _already_copied=False):
         config = copy.deepcopy(config)
 
     # 定义需要脱敏的字段列表
-    sensitive_fields = {
-        "password",
-        "api_key",
-        "access_key",
-        "secret_key",
-        "secret",
-        "sas_token",
-        "client_secret",
-        "http_secret_key"
-    }
+    sensitive_fields = {"password", "api_key", "access_key", "secret_key", "secret", "sas_token", "client_secret", "http_secret_key"}
 
     for key, value in config.items():
         # 如果值是字典，递归处理（传入 True 表示已经拷贝过）
@@ -104,6 +96,8 @@ def show_configs():
         msg += f"\n\t{k}: {masked_v}"
     # logging.info("默认不展示service_conf.yaml,如有需要,请至 api/utils/__init__.py 解开注释")
     logging.info(msg)
+
+
 # def show_configs():
 #     msg = f"Current configs, from {conf_realpath(SERVICE_CONF)}:"
 #     for k, v in CONFIGS.items():
@@ -157,10 +151,7 @@ def decrypt_database_password(password):
         raise ValueError("No private key")
 
     module_fun = encrypt_module.split("#")
-    pwdecrypt_fun = getattr(
-        importlib.import_module(
-            module_fun[0]),
-        module_fun[1])
+    pwdecrypt_fun = getattr(importlib.import_module(module_fun[0]), module_fun[1])
 
     return pwdecrypt_fun(private_key, password)
 

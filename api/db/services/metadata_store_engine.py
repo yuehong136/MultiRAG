@@ -32,7 +32,6 @@ logger = logging.getLogger(__name__)
 
 
 class EngineMetadataStore(MetadataStore):
-
     # ── helpers ────────────────────────────────────────────────────────────────
 
     @staticmethod
@@ -74,7 +73,7 @@ class EngineMetadataStore(MetadataStore):
                 if doc_id:
                     yield doc_id, doc
         # Check if OceanBase SearchResult format
-        elif hasattr(results, 'chunks') and hasattr(results, 'total'):
+        elif hasattr(results, "chunks") and hasattr(results, "total"):
             for doc in results.chunks:
                 doc_id = cls._extract_doc_id(doc)
                 if doc_id:
@@ -109,16 +108,22 @@ class EngineMetadataStore(MetadataStore):
                     settings.docStoreConn.delete_idx(index_name, "")
             else:
                 from common.doc_store.doc_store_base import OrderByExpr
+
                 results = settings.docStoreConn.search(
-                    select_fields=["id"], highlight_fields=[],
-                    condition={}, match_expressions=[],
-                    order_by=OrderByExpr(), offset=0, limit=1,
-                    index_names=index_name, knowledgebase_ids=[""],
+                    select_fields=["id"],
+                    highlight_fields=[],
+                    condition={},
+                    match_expressions=[],
+                    order_by=OrderByExpr(),
+                    offset=0,
+                    limit=1,
+                    index_names=index_name,
+                    knowledgebase_ids=[""],
                 )
                 total = None
                 if isinstance(results, tuple):
                     _, total = results
-                elif hasattr(results, 'total'):
+                elif hasattr(results, "total"):
                     total = results.total
                 if total is not None and total == 0:
                     settings.docStoreConn.delete_idx(index_name, "")
@@ -126,8 +131,7 @@ class EngineMetadataStore(MetadataStore):
             logger.warning("Failed to check/drop empty metadata index %s: %s", index_name, e)
 
     @classmethod
-    def _search_all(cls, index_name: str, condition: dict | None,
-                    kb_ids: list[str]) -> list[dict]:
+    def _search_all(cls, index_name: str, condition: dict | None, kb_ids: list[str]) -> list[dict]:
         if not settings.docStoreConn.index_exist(index_name, ""):
             logger.debug("Metadata index %s does not exist, skipping search", index_name)
             return []
@@ -166,7 +170,7 @@ class EngineMetadataStore(MetadataStore):
                     page_docs = df.to_dict("records")
                 else:
                     page_docs = list(df) if df else []
-            elif hasattr(results, 'chunks') and hasattr(results, 'total'):
+            elif hasattr(results, "chunks") and hasattr(results, "total"):
                 # OceanBase SearchResult format
                 page_docs = results.chunks
                 total_count = results.total
@@ -212,8 +216,7 @@ class EngineMetadataStore(MetadataStore):
             logger.error("Error getting metadata for doc %s: %s", doc_id, e)
         return {}
 
-    def upsert(self, db: Session, doc_id: str, tenant_id: str, kb_id: str,
-               meta_fields: dict) -> bool:
+    def upsert(self, db: Session, doc_id: str, tenant_id: str, kb_id: str, meta_fields: dict) -> bool:
         index_name = self._index_name(tenant_id)
 
         if not settings.DOC_ENGINE_INFINITY and not settings.DOC_ENGINE_OCEANBASE:
@@ -224,10 +227,7 @@ class EngineMetadataStore(MetadataStore):
             try:
                 doc_exists = settings.docStoreConn.get(doc_id, index_name, [kb_id])
                 if doc_exists:
-                    settings.docStoreConn.es.update(
-                        index=index_name, id=doc_id, refresh=True,
-                        doc={"meta_fields": meta_fields}
-                    )
+                    settings.docStoreConn.es.update(index=index_name, id=doc_id, refresh=True, doc={"meta_fields": meta_fields})
                     return True
             except Exception:
                 pass
@@ -237,8 +237,7 @@ class EngineMetadataStore(MetadataStore):
         self._delete_from_store(index_name, doc_id, kb_id)
         return self._insert(index_name, doc_id, kb_id, meta_fields)
 
-    def _insert(self, index_name: str, doc_id: str, kb_id: str,
-                meta_fields: dict) -> bool:
+    def _insert(self, index_name: str, doc_id: str, kb_id: str, meta_fields: dict) -> bool:
         if not self._ensure_index(index_name):
             return False
         doc_meta = {"id": doc_id, "kb_id": kb_id, "meta_fields": meta_fields or {}}
@@ -264,8 +263,7 @@ class EngineMetadataStore(MetadataStore):
         settings.docStoreConn.delete({"id": doc_id}, index_name, kb_id)
         return True
 
-    def list_by_kb_ids(self, db: Session, tenant_id: str,
-                       kb_ids: list[str]) -> list[tuple[str, dict]]:
+    def list_by_kb_ids(self, db: Session, tenant_id: str, kb_ids: list[str]) -> list[tuple[str, dict]]:
         index_name = self._index_name(tenant_id)
         out: list[tuple[str, dict]] = []
         results = self._search_all(index_name, {"kb_id": kb_ids}, kb_ids)
@@ -283,11 +281,7 @@ class EngineMetadataStore(MetadataStore):
         from api.db.db_models import Document, Knowledgebase
         from common.doc_store.doc_store_base import OrderByExpr
 
-        rows = db.execute(
-            select(Document.id, Document.kb_id, Knowledgebase.tenant_id)
-            .join(Knowledgebase, Knowledgebase.id == Document.kb_id)
-            .where(Document.id.in_(doc_ids))
-        ).all()
+        rows = db.execute(select(Document.id, Document.kb_id, Knowledgebase.tenant_id).join(Knowledgebase, Knowledgebase.id == Document.kb_id).where(Document.id.in_(doc_ids))).all()
 
         grouped: dict[tuple[str, str], list[str]] = {}
         for row in rows:

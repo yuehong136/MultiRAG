@@ -1,12 +1,23 @@
-
 # 常见的SQL聚合函数列表 (可以根据你使用的数据库方言进行增删)
 # 列表已转为大写，以匹配后续处理逻辑
 AGGREGATE_FUNCTIONS: list[str] = [
-    'COUNT', 'SUM', 'AVG', 'MIN', 'MAX',
-    'ARRAY_AGG', 'STRING_AGG', 'GROUP_CONCAT',
-    'BIT_AND', 'BIT_OR', 'BIT_XOR',
-    'STDDEV', 'STDDEV_POP', 'STDDEV_SAMP',
-    'VARIANCE', 'VAR_POP', 'VAR_SAMP'
+    "COUNT",
+    "SUM",
+    "AVG",
+    "MIN",
+    "MAX",
+    "ARRAY_AGG",
+    "STRING_AGG",
+    "GROUP_CONCAT",
+    "BIT_AND",
+    "BIT_OR",
+    "BIT_XOR",
+    "STDDEV",
+    "STDDEV_POP",
+    "STDDEV_SAMP",
+    "VARIANCE",
+    "VAR_POP",
+    "VAR_SAMP",
 ]
 
 
@@ -28,7 +39,7 @@ def find_aggregate_columns(selected_columns: list[str]) -> list[str]:
 
         # 检查表达式是否以列表中的某个聚合函数和左括号'('开头
         for func in AGGREGATE_FUNCTIONS:
-            if trimmed_expr.startswith(func + '('):
+            if trimmed_expr.startswith(func + "("):
                 aggregate_columns.append(col_expr)
                 # 找到一个匹配后，就可以停止对当前列的检查，继续检查下一列
                 break
@@ -37,43 +48,19 @@ def find_aggregate_columns(selected_columns: list[str]) -> list[str]:
 
 
 # 使用 __name__ == '__main__' 是Python的最佳实践，确保代码只在直接运行时执行
-if __name__ == '__main__':
+if __name__ == "__main__":
     print("--- 开始进行聚合列识别测试 ---\n")
 
     # 定义一系列测试用例
     test_cases = {
-        "原始问题": {
-            "input": ['EXTRACT(YEAR FROM t1.hire_date) AS hire_year', 'COUNT(*) AS teacher_count'],
-            "expected": ['COUNT(*) AS teacher_count']
-        },
-        "简单聚合": {
-            "input": ['SUM(salary)', 'department_id'],
-            "expected": ['SUM(salary)']
-        },
-        "包含大小写和空格": {
-            "input": ['  avg( score ) AS average_score', 'student_name'],
-            "expected": ['  avg( score ) AS average_score']
-        },
-        "多个聚合和普通列": {
-            "input": ['department', 'MAX(hire_date)', 'MIN(salary)'],
-            "expected": ['MAX(hire_date)', 'MIN(salary)']
-        },
-        "不含聚合列": {
-            "input": ['id', 'name', 'email'],
-            "expected": []
-        },
-        "包含非聚合函数": {
-            "input": ['LOWER(name)', 'TRIM(email)', 'MAX(login_attempts)'],
-            "expected": ['MAX(login_attempts)']
-        },
-        "空列表输入": {
-            "input": [],
-            "expected": []
-        },
-        "一个已知的局限（窗口函数）": {
-            "input": ['name', 'COUNT(*) OVER (PARTITION BY department)'],
-            "expected": ['COUNT(*) OVER (PARTITION BY department)']
-        }
+        "原始问题": {"input": ["EXTRACT(YEAR FROM t1.hire_date) AS hire_year", "COUNT(*) AS teacher_count"], "expected": ["COUNT(*) AS teacher_count"]},
+        "简单聚合": {"input": ["SUM(salary)", "department_id"], "expected": ["SUM(salary)"]},
+        "包含大小写和空格": {"input": ["  avg( score ) AS average_score", "student_name"], "expected": ["  avg( score ) AS average_score"]},
+        "多个聚合和普通列": {"input": ["department", "MAX(hire_date)", "MIN(salary)"], "expected": ["MAX(hire_date)", "MIN(salary)"]},
+        "不含聚合列": {"input": ["id", "name", "email"], "expected": []},
+        "包含非聚合函数": {"input": ["LOWER(name)", "TRIM(email)", "MAX(login_attempts)"], "expected": ["MAX(login_attempts)"]},
+        "空列表输入": {"input": [], "expected": []},
+        "一个已知的局限（窗口函数）": {"input": ["name", "COUNT(*) OVER (PARTITION BY department)"], "expected": ["COUNT(*) OVER (PARTITION BY department)"]},
     }
 
     # 遍历并执行所有测试用例

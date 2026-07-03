@@ -62,11 +62,7 @@ class _ChunkNode:
             elif not self.children and 1 <= self.level <= depth:
                 chunk_paths.append(path_titles)
         else:
-            path_titles = (
-                titles + self.title_indexes + self.body_indexes
-                if 1 <= self.level <= depth
-                else titles
-            )
+            path_titles = titles + self.title_indexes + self.body_indexes if 1 <= self.level <= depth else titles
 
             if not self.children and 1 <= self.level <= depth:
                 chunk_paths.append(path_titles)

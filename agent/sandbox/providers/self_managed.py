@@ -71,16 +71,18 @@ class SelfManagedProvider(SandboxProvider):
             if "localhost" in self.endpoint or "127.0.0.1" in self.endpoint:
                 try:
                     from common import settings
+
                     if settings.SANDBOX_HOST and settings.SANDBOX_HOST not in self.endpoint:
                         original_endpoint = self.endpoint
                         self.endpoint = f"http://{settings.SANDBOX_HOST}:9385"
                         if self.health_check():
                             import logging
+
                             logging.warning(f"Sandbox self_managed: Connected using settings.SANDBOX_HOST fallback: {self.endpoint} (original: {original_endpoint})")
                             self._initialized = True
                             return True
                         else:
-                            self.endpoint = original_endpoint # Restore if fallback also fails
+                            self.endpoint = original_endpoint  # Restore if fallback also fails
                 except ImportError:
                     pass
 
@@ -124,17 +126,10 @@ class SelfManagedProvider(SandboxProvider):
                 "language": language,
                 "endpoint": self.endpoint,
                 "pool_size": self.pool_size,
-            }
+            },
         )
 
-    def execute_code(
-        self,
-        instance_id: str,
-        code: str,
-        language: str,
-        timeout: int = 10,
-        arguments: dict[str, Any] | None = None
-    ) -> ExecutionResult:
+    def execute_code(self, instance_id: str, code: str, language: str, timeout: int = 10, arguments: dict[str, Any] | None = None) -> ExecutionResult:
         """
         Execute code in the sandbox.
 
@@ -160,11 +155,7 @@ class SelfManagedProvider(SandboxProvider):
 
         # Prepare request
         code_b64 = base64.b64encode(code.encode("utf-8")).decode("utf-8")
-        payload = {
-            "code_b64": code_b64,
-            "language": normalized_lang,
-            "arguments": arguments or {}
-        }
+        payload = {"code_b64": code_b64, "language": normalized_lang, "arguments": arguments or {}}
 
         url = f"{self.endpoint}/run"
         exec_timeout = timeout or self.timeout
@@ -172,19 +163,12 @@ class SelfManagedProvider(SandboxProvider):
         start_time = time.time()
 
         try:
-            response = requests.post(
-                url,
-                json=payload,
-                timeout=exec_timeout,
-                headers={"Content-Type": "application/json"}
-            )
+            response = requests.post(url, json=payload, timeout=exec_timeout, headers={"Content-Type": "application/json"})
 
             execution_time = time.time() - start_time
 
             if response.status_code != 200:
-                raise RuntimeError(
-                    f"HTTP {response.status_code}: {response.text}"
-                )
+                raise RuntimeError(f"HTTP {response.status_code}: {response.text}")
 
             result = response.json()
             structured_result = result.get("result") or {}
@@ -204,14 +188,12 @@ class SelfManagedProvider(SandboxProvider):
                     "result_present": structured_result.get("present", False),
                     "result_value": structured_result.get("value"),
                     "result_type": structured_result.get("type"),
-                }
+                },
             )
 
         except requests.Timeout:
             execution_time = time.time() - start_time
-            raise TimeoutError(
-                f"Execution timed out after {exec_timeout} seconds"
-            )
+            raise TimeoutError(f"Execution timed out after {exec_timeout} seconds")
 
         except requests.RequestException as e:
             raise RuntimeError(f"HTTP request failed: {str(e)}")
@@ -272,26 +254,10 @@ class SelfManagedProvider(SandboxProvider):
                 "label": "Executor Manager Endpoint",
                 "placeholder": "http://localhost:9385",
                 "default": "http://localhost:9385",
-                "description": "HTTP endpoint of the executor_manager service"
+                "description": "HTTP endpoint of the executor_manager service",
             },
-            "timeout": {
-                "type": "integer",
-                "required": False,
-                "label": "Request Timeout (seconds)",
-                "default": 30,
-                "min": 5,
-                "max": 300,
-                "description": "HTTP request timeout for code execution"
-            },
-            "max_retries": {
-                "type": "integer",
-                "required": False,
-                "label": "Max Retries",
-                "default": 3,
-                "min": 0,
-                "max": 10,
-                "description": "Maximum number of retry attempts for failed requests"
-            },
+            "timeout": {"type": "integer", "required": False, "label": "Request Timeout (seconds)", "default": 30, "min": 5, "max": 300, "description": "HTTP request timeout for code execution"},
+            "max_retries": {"type": "integer", "required": False, "label": "Max Retries", "default": 3, "min": 0, "max": 10, "description": "Maximum number of retry attempts for failed requests"},
             "pool_size": {
                 "type": "integer",
                 "required": False,
@@ -299,8 +265,8 @@ class SelfManagedProvider(SandboxProvider):
                 "default": 10,
                 "min": 1,
                 "max": 100,
-                "description": "Size of the container pool (configured in executor_manager)"
-            }
+                "description": "Size of the container pool (configured in executor_manager)",
+            },
         }
 
     def _normalize_language(self, language: str) -> str:
@@ -342,7 +308,8 @@ class SelfManagedProvider(SandboxProvider):
         if endpoint:
             # Check if it's a valid HTTP/HTTPS URL or localhost
             import re
-            url_pattern = r'^(https?://|http://localhost|http://[\d\.]+:[a-z]+:[/]|http://[\w\.]+:)'
+
+            url_pattern = r"^(https?://|http://localhost|http://[\d\.]+:[a-z]+:[/]|http://[\w\.]+:)"
             if not re.match(url_pattern, endpoint):
                 return False, f"Invalid endpoint format: {endpoint}. Must start with http:// or https://"
 

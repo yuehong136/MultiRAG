@@ -11,10 +11,7 @@ import jieba
 from common.settings import DCS_SEMANTIC_SERVER_ACCESS_KEY, DCS_SEMANTIC_SERVER_SECRET_KEY, DCS_SERVER_HOST, DCS_SERVER_PORT, DCS_SERVER_PROTOCOL
 
 # 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("tokenizer")
 
 CURRENT_DIR = Path(os.path.dirname(__file__))
@@ -31,15 +28,11 @@ def _generate_signature() -> dict[str, str]:
 
     # Using HMAC-SHA256 for the signature
     message = f"{access_key}{timestamp}".encode()
-    secret = secret_key.encode('utf-8')
+    secret = secret_key.encode("utf-8")
 
     signature = hmac.new(secret, message, digestmod=hashlib.sha256).hexdigest()
 
-    return {
-        "accessKey": access_key,
-        "timestamp": timestamp,
-        "signature": signature
-    }
+    return {"accessKey": access_key, "timestamp": timestamp, "signature": signature}
 
 
 def load_stopwords(file_path: str | None = None) -> set[str]:
@@ -60,7 +53,7 @@ def load_stopwords(file_path: str | None = None) -> set[str]:
 
     try:
         logger.info(f"尝试从 {file_path} 加载停用词")
-        with open(file_path, encoding='utf-8') as f:
+        with open(file_path, encoding="utf-8") as f:
             for line in f:
                 word = line.strip()
                 if word:
@@ -72,8 +65,7 @@ def load_stopwords(file_path: str | None = None) -> set[str]:
         return set()
 
 
-async def custom_tokenize_with_semantic_words(text: str, dataset_id_list: list[str], remove_stopwords: bool = True,
-                                              stopwords_path: str = None) -> list[str]:
+async def custom_tokenize_with_semantic_words(text: str, dataset_id_list: list[str], remove_stopwords: bool = True, stopwords_path: str = None) -> list[str]:
     """
     使用自定义词典对文本进行分词（异步版本）
 
@@ -110,20 +102,13 @@ async def custom_tokenize_with_semantic_words(text: str, dataset_id_list: list[s
                 # 循环获取所有页的数据
                 while True:
                     # 构造API请求参数
-                    params = {
-                        "pi": page_num,
-                        "ps": page_size
-                    }
+                    params = {"pi": page_num, "ps": page_size}
 
                     # 构造请求体
-                    payload = {
-                        "datasetIds": dataset_id_list
-                    }
+                    payload = {"datasetIds": dataset_id_list}
 
                     # 构造请求头
-                    headers = {
-                        "Content-Type": "application/json"
-                    }
+                    headers = {"Content-Type": "application/json"}
                     headers.update(_generate_signature())
 
                     # 发送异步POST请求

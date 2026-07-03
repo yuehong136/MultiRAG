@@ -6,7 +6,8 @@ from api.service.askdata_service.util.askdata_logger import get_askdata_logger
 
 logger = get_askdata_logger()
 
-T = TypeVar('T')
+T = TypeVar("T")
+
 
 async def time_task(coro: Coroutine[Any, Any, T], name: str, log_level: str = "INFO") -> T:
     """

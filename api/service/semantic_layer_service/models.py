@@ -1,14 +1,12 @@
 """
 Shared data models for semantic layer services
 """
+
 from enum import Enum
 
 
 class SemanticTextData:
-    def __init__(
-            self, text: str, element_type: str, original_id: str, embedding_model: str,
-            model_id: str | None = None, dataset_id: str | None = None, theme_domain_id: str | None = None
-    ):
+    def __init__(self, text: str, element_type: str, original_id: str, embedding_model: str, model_id: str | None = None, dataset_id: str | None = None, theme_domain_id: str | None = None):
         self.text = text
         self.element_type = element_type
         self.original_id = original_id

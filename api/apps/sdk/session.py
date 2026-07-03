@@ -136,16 +136,20 @@ def build_sse_error_payload(error: Exception) -> str:
         "code": RetCode.EXCEPTION_ERROR,
         "message": message,
     }
-    return "data:" + json.dumps(
-        {
-            "event": "message",
-            "data": {
-                "content": f"Error {error_result['code']}: {message}\n\n",
+    return (
+        "data:"
+        + json.dumps(
+            {
+                "event": "message",
+                "data": {
+                    "content": f"Error {error_result['code']}: {message}\n\n",
+                },
+                **error_result,
             },
-            **error_result,
-        },
-        ensure_ascii=False,
-    ) + "\n\n"
+            ensure_ascii=False,
+        )
+        + "\n\n"
+    )
 
 
 class CreateAgentSessionRequest(BaseModel):
@@ -154,12 +158,7 @@ class CreateAgentSessionRequest(BaseModel):
 
 
 @router.post("/agents/{agent_id}/sessions", summary="创建代理会话")
-def create_agent_session(
-    agent_id: str,
-    request_body: CreateAgentSessionRequest = None,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
+def create_agent_session(agent_id: str, request_body: CreateAgentSessionRequest = None, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     user_id = (request_body.user_id if request_body and request_body.user_id else None) or tenant_id
     release_mode = request_body.release if request_body else False
 
@@ -192,7 +191,7 @@ def create_agent_session(
         "message": [{"role": "assistant", "content": canvas.get_prologue()}],
         "source": "agent",
         "dsl": cvs.dsl,
-        "version_title": version_title
+        "version_title": version_title,
     }
     API4ConversationService.save(db, **conv)
     conv["agent_id"] = conv.pop("dialog_id")
@@ -200,12 +199,7 @@ def create_agent_session(
 
 
 @router.post("/chats/{chat_id}/completions", summary="聊天补全")
-async def chat_completion(
-    chat_id: str,
-    request: ChatCompletionRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
+async def chat_completion(chat_id: str, request: ChatCompletionRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     req = request.model_dump()
     if not req:
         req = {"question": ""}
@@ -255,12 +249,7 @@ async def chat_completion(
 
 
 @router.post("/chats_openai/{chat_id}/chat/completions", summary="OpenAI兼容的聊天补全")
-async def chat_completion_openai_like(
-    chat_id: str,
-    request: ChatCompletionOpenAIRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
+async def chat_completion_openai_like(chat_id: str, request: ChatCompletionOpenAIRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     """
     OpenAI-like chat completion API that simulates the behavior of OpenAI's completions endpoint.
 
@@ -539,12 +528,7 @@ async def chat_completion_openai_like(
 
 
 @router.post("/agents_openai/{agent_id}/chat/completions", summary="代理OpenAI兼容补全")
-async def agents_completion_openai_compatibility(
-    agent_id: str,
-    request: ChatCompletionOpenAIRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
+async def agents_completion_openai_compatibility(agent_id: str, request: ChatCompletionOpenAIRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     req = request.model_dump()
     messages = req.get("messages", [])
     if not messages:
@@ -600,16 +584,12 @@ async def agents_completion_openai_compatibility(
 
 
 @router.post("/agents/{agent_id}/completions", summary="代理补全")
-async def agent_completions(
-    agent_id: str,
-    request: AgentCompletionRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
+async def agent_completions(agent_id: str, request: AgentCompletionRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     req = request.model_dump()
     return_trace = bool(req.get("return_trace", False))
 
     if req.get("stream", True):
+
         async def generate():
             trace_items = []
             async for answer in agent_completion(db=db, tenant_id=tenant_id, agent_id=agent_id, **req):
@@ -699,7 +679,7 @@ def list_agent_sessions(
     desc: bool = Query(True),
     dsl: bool = Query(True),
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
+    tenant_id: str = Depends(token_required),
 ):
     if not UserCanvasService.query(db, user_id=tenant_id, id=agent_id):
         return get_error_data_result(retmsg=f"You don't own the agent {agent_id}.")
@@ -755,12 +735,7 @@ def list_agent_sessions(
 
 
 @router.delete("/agents/{agent_id}/sessions", summary="批量删除代理会话")
-def delete_agent_sessions(
-    agent_id: str,
-    request: DeleteSessionsRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
+def delete_agent_sessions(agent_id: str, request: DeleteSessionsRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     errors = []
     success_count = 0
     req = request.model_dump()
@@ -806,11 +781,7 @@ def delete_agent_sessions(
 
 
 @router.post("/sessions/ask", summary="询问知识库")
-async def ask_about(
-    request: AskRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
+async def ask_about(request: AskRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     req = request.model_dump()
     if not req.get("question"):
         return get_error_data_result(retmsg="`question` is required.")
@@ -848,11 +819,7 @@ async def ask_about(
 
 
 @router.post("/sessions/related_questions", summary="获取相关问题")
-async def related_questions(
-    request: RelatedQuestionsRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
+async def related_questions(request: RelatedQuestionsRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     req = request.model_dump()
     if not req.get("question"):
         return get_error_data_result(retmsg="`question` is required.")
@@ -961,6 +928,7 @@ async def agent_bot_completions(
         req["release"] = release
 
     if req.get("stream", True):
+
         async def stream():
             try:
                 async for answer in agent_completion(db=db, tenant_id=tenant_id, agent_id=agent_id, **req):
@@ -1005,13 +973,15 @@ def begin_inputs(
         return get_error_data_result(retmsg=str(e))
 
     canvas = Canvas(dsl, tenant_id, canvas_id=cvs.id)
-    return get_result(data={
-        "title": cvs.title,
-        "avatar": cvs.avatar,
-        "inputs": canvas.get_component_input_form("begin"),
-        "prologue": canvas.get_prologue(),
-        "mode": canvas.get_mode(),
-    })
+    return get_result(
+        data={
+            "title": cvs.title,
+            "avatar": cvs.avatar,
+            "inputs": canvas.get_component_input_form("begin"),
+            "prologue": canvas.get_prologue(),
+            "mode": canvas.get_mode(),
+        }
+    )
 
 
 @router.get("/agentbots/{agent_id}/persondataList", summary="获取代理机器人 inputPlugin 人员数据列表")
@@ -1031,6 +1001,7 @@ def agentbot_persondata_list(
 
     try:
         from api.apps.datav_app import fetch_persondata_list
+
         return get_result(data=fetch_persondata_list(agent_id))
     except ValueError as e:
         return get_error_data_result(retmsg=str(e))
@@ -1117,7 +1088,7 @@ async def retrieval_test_embedded(
     if isinstance(kb_ids, str):
         kb_ids = [kb_ids]
     if not kb_ids:
-        return get_json_result(data=False, retmsg='Please specify dataset firstly.', retcode=RetCode.DATA_ERROR)
+        return get_json_result(data=False, retmsg="Please specify dataset firstly.", retcode=RetCode.DATA_ERROR)
     doc_ids = req.get("doc_ids", [])
     similarity_threshold = float(req.get("similarity_threshold", 0.0))
     vector_similarity_weight = float(req.get("vector_similarity_weight", 0.3))
@@ -1301,9 +1272,7 @@ async def sequence2txt(
     filename = file.filename or ""
     suffix = os.path.splitext(filename)[-1].lower()
     if suffix not in ALLOWED_EXTS:
-        return get_error_data_result(
-            retmsg=f"Unsupported audio format: {suffix}. Allowed: {', '.join(sorted(ALLOWED_EXTS))}"
-        )
+        return get_error_data_result(retmsg=f"Unsupported audio format: {suffix}. Allowed: {', '.join(sorted(ALLOWED_EXTS))}")
 
     fd, temp_audio_path = tempfile.mkstemp(suffix=suffix)
     os.close(fd)

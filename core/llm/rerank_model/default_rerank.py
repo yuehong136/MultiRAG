@@ -30,20 +30,17 @@ class DefaultRerank(Base):
 
         """
         from common import settings
+
         if not settings.LIGHTEN and not DefaultRerank._model:
             import torch
             from FlagEmbedding import FlagReranker
+
             with DefaultRerank._model_lock:
                 if not DefaultRerank._model:
                     try:
-                        DefaultRerank._model = FlagReranker(
-                            os.path.join(get_home_cache_dir(), re.sub(r"^[a-zA-Z0-9]+/", "", model_name)),
-                            use_fp16=torch.cuda.is_available())
+                        DefaultRerank._model = FlagReranker(os.path.join(get_home_cache_dir(), re.sub(r"^[a-zA-Z0-9]+/", "", model_name)), use_fp16=torch.cuda.is_available())
                     except Exception:
-                        model_dir = snapshot_download(repo_id=model_name,
-                                                      local_dir=os.path.join(get_home_cache_dir(),
-                                                                             re.sub(r"^[a-zA-Z0-9]+/", "", model_name)),
-                                                      local_dir_use_symlinks=False)
+                        model_dir = snapshot_download(repo_id=model_name, local_dir=os.path.join(get_home_cache_dir(), re.sub(r"^[a-zA-Z0-9]+/", "", model_name)), local_dir_use_symlinks=False)
                         DefaultRerank._model = FlagReranker(model_dir, use_fp16=torch.cuda.is_available())
         self._model = DefaultRerank._model
         self._dynamic_batch_size = 8
@@ -52,6 +49,7 @@ class DefaultRerank(Base):
     def torch_empty_cache(self):
         try:
             import torch
+
             torch.cuda.empty_cache()
         except Exception as e:
             log_exception(e)
@@ -80,7 +78,7 @@ class DefaultRerank(Base):
                     if "CUDA out of memory" in str(e) and current_batch > self._min_batch_size:
                         current_batch = max(current_batch // 2, self._min_batch_size)
                         self.torch_empty_cache()
-                        i = cur_i # reset i to the start of the current batch
+                        i = cur_i  # reset i to the start of the current batch
                         retry_count += 1
                     else:
                         raise

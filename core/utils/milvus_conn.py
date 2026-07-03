@@ -51,11 +51,7 @@ from common.string_utils import truncate_utf8_bytes
 ATTEMPT_TIME = 2
 ARRAY_FILTER_FIELDS = {"important_kwd", "question_kwd", "entities_kwd"}
 UNSUPPORTED_OUTPUT_FIELDS = {"row_id()"}
-MILVUS_NATIVE_ORDERABLE_TYPES = {
-    getattr(DataType, type_name)
-    for type_name in ("INT8", "INT16", "INT32", "INT64", "FLOAT", "DOUBLE", "VARCHAR")
-    if hasattr(DataType, type_name)
-}
+MILVUS_NATIVE_ORDERABLE_TYPES = {getattr(DataType, type_name) for type_name in ("INT8", "INT16", "INT32", "INT64", "FLOAT", "DOUBLE", "VARCHAR") if hasattr(DataType, type_name)}
 
 
 def quote_milvus_filter_value(value) -> str:
@@ -177,11 +173,7 @@ class MilvusConnection(MilvusConnectionBase):
     @staticmethod
     def field_keyword(field_name: str) -> bool:
         """Check if a field is a keyword field."""
-        if field_name == "source_id" or (
-            field_name.endswith("_kwd")
-            and field_name != "docnm_kwd"
-            and field_name != "knowledge_graph_kwd"
-        ):
+        if field_name == "source_id" or (field_name.endswith("_kwd") and field_name != "docnm_kwd" and field_name != "knowledge_graph_kwd"):
             return True
         return False
 
@@ -409,12 +401,7 @@ class MilvusConnection(MilvusConnectionBase):
 
         return None
 
-    def insert(
-        self,
-        documents: list[dict] | dict | str,
-        index_name: str | list[str] | dict | list[dict],
-        dataset_id: str | None = None
-    ) -> list[str]:
+    def insert(self, documents: list[dict] | dict | str, index_name: str | list[str] | dict | list[dict], dataset_id: str | None = None) -> list[str]:
         """
         Insert documents into collection.
 
@@ -423,10 +410,7 @@ class MilvusConnection(MilvusConnectionBase):
         2) Legacy: insert(collection_name, data, partition_name) - auto-corrected
         """
         # Handle legacy calling convention: insert(collection_name, data, partition_name)
-        if isinstance(documents, str) and (
-            isinstance(index_name, dict)
-            or (isinstance(index_name, list) and (len(index_name) == 0 or isinstance(index_name[0], dict)))
-        ):
+        if isinstance(documents, str) and (isinstance(index_name, dict) or (isinstance(index_name, list) and (len(index_name) == 0 or isinstance(index_name[0], dict)))):
             collection_name = documents
             data = index_name
             partition_name = dataset_id
@@ -912,11 +896,11 @@ class MilvusConnection(MilvusConnectionBase):
                 elif field == "position_int" and isinstance(value, str):
                     if value:
                         try:
-                            if value.startswith('[') and value.endswith(']'):
-                                value = eval(value) if value != '[]' else []
+                            if value.startswith("[") and value.endswith("]"):
+                                value = eval(value) if value != "[]" else []
                             else:
-                                arr = [int(hex_val, 16) for hex_val in value.split('_')]
-                                value = [arr[i:i + 5] for i in range(0, len(arr), 5)]
+                                arr = [int(hex_val, 16) for hex_val in value.split("_")]
+                                value = [arr[i : i + 5] for i in range(0, len(arr), 5)]
                         except Exception:
                             value = []
                     else:
@@ -924,10 +908,10 @@ class MilvusConnection(MilvusConnectionBase):
                 elif field in ["page_num_int", "top_int"] and isinstance(value, str):
                     if value:
                         try:
-                            if value.startswith('[') and value.endswith(']'):
-                                value = eval(value) if value != '[]' else []
+                            if value.startswith("[") and value.endswith("]"):
+                                value = eval(value) if value != "[]" else []
                             else:
-                                value = [int(hex_val, 16) for hex_val in value.split('_')]
+                                value = [int(hex_val, 16) for hex_val in value.split("_")]
                         except Exception:
                             value = []
                     else:
@@ -980,9 +964,7 @@ class MilvusConnection(MilvusConnectionBase):
                 **kwargs,
             )
 
-        return self._create_collection_with_schema(
-            collection_name, schema, index_params, timeout=timeout, **kwargs
-        )
+        return self._create_collection_with_schema(collection_name, schema, index_params, timeout=timeout, **kwargs)
 
     def _fast_create_collection(
         self,
@@ -1087,9 +1069,7 @@ class MilvusConnection(MilvusConnectionBase):
 
         self._create_index(collection_name, index_params, timeout=timeout, **kwargs)
 
-    def _create_index(
-        self, collection_name: str, index_param, timeout: float | None = None, **kwargs
-    ):
+    def _create_index(self, collection_name: str, index_param, timeout: float | None = None, **kwargs):
         """Create single index on collection."""
         conn = self._get_connection()
         try:
@@ -1163,6 +1143,7 @@ class MilvusConnection(MilvusConnectionBase):
 
         if costs:
             from pymilvus.client.types import construct_cost_extra
+
             extras = [construct_cost_extra(c) for c in costs]
             extra_val = extras[0] if len(extras) == 1 else extras
             return type("ExtraList", (list,), {"extra": extra_val})(result)
@@ -1191,9 +1172,7 @@ class MilvusConnection(MilvusConnectionBase):
 
         conn = self._get_connection()
         try:
-            res = conn.upsert_rows(
-                collection_name, data, partition_name=partition_name, timeout=timeout, **kwargs
-            )
+            res = conn.upsert_rows(collection_name, data, partition_name=partition_name, timeout=timeout, **kwargs)
         except Exception as ex:
             raise ex from ex
 
@@ -1273,11 +1252,7 @@ class MilvusConnection(MilvusConnectionBase):
                             "input_field": match,
                             "sparse_field": sparse_field,
                             "search_params": copy.deepcopy(bm25_cfg.get("search_params", {"drop_ratio_search": 0.1})),
-                            "index_params": copy.deepcopy(bm25_cfg.get("index_params", {
-                                "inverted_index_algo": "DAAT_WAND",
-                                "bm25_k1": 1.5,
-                                "bm25_b": 0.75
-                            }))
+                            "index_params": copy.deepcopy(bm25_cfg.get("index_params", {"inverted_index_algo": "DAAT_WAND", "bm25_k1": 1.5, "bm25_b": 0.75})),
                         }
                         bm25_configs.append(cfg_entry)
                         bm25_config_map[sparse_field] = cfg_entry
@@ -1294,21 +1269,23 @@ class MilvusConnection(MilvusConnectionBase):
                     element_type = mapping_cfg.get("element_type", DataType.VARCHAR)
                     max_length = mapping_cfg.get("max_length", 256)
                     max_capacity = mapping_cfg.get("max_capacity", 4096)
-                    fields.append(FieldSchema(
-                        name=match,
-                        dtype=DataType.ARRAY,
-                        element_type=getattr(DataType, element_type) if isinstance(element_type, str) else element_type,
-                        max_length=max_length,
-                        max_capacity=max_capacity,
-                        nullable=True
-                    ))
+                    fields.append(
+                        FieldSchema(
+                            name=match,
+                            dtype=DataType.ARRAY,
+                            element_type=getattr(DataType, element_type) if isinstance(element_type, str) else element_type,
+                            max_length=max_length,
+                            max_capacity=max_capacity,
+                            nullable=True,
+                        )
+                    )
                     existing_field_names.add(match)
 
         # Add dimension-specific vector fields
         for vector_field, dim in auto_dimensions.items():
             if vector_field in existing_field_names:
                 continue
-            if re.match(r'q_\d+_vec', vector_field):
+            if re.match(r"q_\d+_vec", vector_field):
                 fields.append(FieldSchema(name=vector_field, dtype=DataType.FLOAT_VECTOR, dim=dim))
                 existing_field_names.add(vector_field)
 
@@ -1316,18 +1293,11 @@ class MilvusConnection(MilvusConnectionBase):
         for cfg in bm25_configs:
             if cfg["sparse_field"] in existing_field_names:
                 continue
-            fields.append(FieldSchema(
-                name=cfg["sparse_field"],
-                dtype=DataType.SPARSE_FLOAT_VECTOR
-            ))
+            fields.append(FieldSchema(name=cfg["sparse_field"], dtype=DataType.SPARSE_FLOAT_VECTOR))
             existing_field_names.add(cfg["sparse_field"])
 
         # Create collection schema
-        schema = CollectionSchema(
-            fields=fields,
-            description="Created from mapping.json, supports hybrid search",
-            enable_dynamic_field=True
-        )
+        schema = CollectionSchema(fields=fields, description="Created from mapping.json, supports hybrid search", enable_dynamic_field=True)
         for cfg in bm25_configs:
             bm25_function = Function(
                 name=f"bm25_function_{cfg['sparse_field']}",
@@ -1344,13 +1314,7 @@ class MilvusConnection(MilvusConnectionBase):
         for field in fields:
             if field.dtype == DataType.FLOAT_VECTOR:
                 index_params = IndexParams()
-                index_params.add_index(
-                    field.name,
-                    "IVF_FLAT",
-                    field.name,
-                    metric_type="COSINE",
-                    params={"nlist": 128}
-                )
+                index_params.add_index(field.name, "IVF_FLAT", field.name, metric_type="COSINE", params={"nlist": 128})
                 try:
                     self.create_index(collection_name, index_params)
                     self.logger.info(f"Index created | collection: {collection_name} | index config: {index_params}")
@@ -1369,7 +1333,7 @@ class MilvusConnection(MilvusConnectionBase):
                         "inverted_index_algo": idx_params.get("inverted_index_algo", "DAAT_WAND"),
                         "bm25_k1": idx_params.get("bm25_k1", 1.5),
                         "bm25_b": idx_params.get("bm25_b", 0.75),
-                    }
+                    },
                 )
                 try:
                     self.create_index(collection_name, sparse_index_params)
@@ -1390,27 +1354,21 @@ class MilvusConnection(MilvusConnectionBase):
             server_version = utility.get_server_version(using=self._using)
             server_type = utility.get_server_type(using=self._using)
 
-            res = {
-                'cluster_name': settings.MILVUS.get("hosts", "milvus"),
-                'status': 'green',
-                'server_version': server_version,
-                'server_type': server_type,
-                'is_self_hosted': self.is_self_hosted
-            }
+            res = {"cluster_name": settings.MILVUS.get("hosts", "milvus"), "status": "green", "server_version": server_version, "server_type": server_type, "is_self_hosted": self.is_self_hosted}
 
             # Get resource groups info
             try:
                 resource_groups = utility.list_resource_groups(using=self._using)
-                res['resource_groups'] = resource_groups
-                res['resource_groups_count'] = len(resource_groups)
+                res["resource_groups"] = resource_groups
+                res["resource_groups_count"] = len(resource_groups)
             except Exception as e:
                 self.logger.debug(f"Cannot get resource groups (may be cloud version): {e}")
-                res['resource_groups'] = []
-                res['resource_groups_count'] = 0
+                res["resource_groups"] = []
+                res["resource_groups_count"] = 0
 
             # Get all collections
             collections = self.list_collections()
-            res['collections'] = len(collections)
+            res["collections"] = len(collections)
 
             # Collection statistics
             total_rows = 0
@@ -1430,12 +1388,12 @@ class MilvusConnection(MilvusConnectionBase):
                     conn = self._get_connection()
                     stats = conn.get_collection_stats(collection_name)
                     stat_dict = {stat.key: stat.value for stat in stats}
-                    row_count = int(stat_dict.get('row_count', 0))
+                    row_count = int(stat_dict.get("row_count", 0))
                     total_rows += row_count
 
                     # Collection description
                     desc = self.describe_collection(collection_name)
-                    field_count = len(desc.get('fields', []))
+                    field_count = len(desc.get("fields", []))
                     total_fields += field_count
 
                     # Shards
@@ -1455,18 +1413,14 @@ class MilvusConnection(MilvusConnectionBase):
                     index_details = []
                     for idx in indexes:
                         try:
-                            index_details.append({
-                                'field_name': idx.field_name,
-                                'index_type': idx.params.get('index_type', 'Unknown'),
-                                'metric_type': idx.params.get('metric_type', 'Unknown')
-                            })
+                            index_details.append({"field_name": idx.field_name, "index_type": idx.params.get("index_type", "Unknown"), "metric_type": idx.params.get("metric_type", "Unknown")})
                         except Exception:
                             pass
 
                     # Load status
                     try:
                         load_status = utility.load_state(collection_name, using=self._using)
-                        is_loaded = (load_status.name == 'Loaded')
+                        is_loaded = load_status.name == "Loaded"
                         if is_loaded:
                             total_loaded_collections += 1
                     except Exception:
@@ -1482,42 +1436,42 @@ class MilvusConnection(MilvusConnectionBase):
                             replica_count = len(replicas.groups)
                             total_replicas += replica_count
                             for replica in replicas.groups:
-                                replica_info.append({
-                                    'replica_id': replica.id,
-                                    'shard_count': len(replica.shards),
-                                    'node_ids': replica.node_ids
-                                })
+                                replica_info.append({"replica_id": replica.id, "shard_count": len(replica.shards), "node_ids": replica.node_ids})
                     except Exception as e:
                         self.logger.debug(f"Get replicas for {collection_name} failed: {e}")
 
-                    collection_details.append({
-                        'name': collection_name,
-                        'row_count': row_count,
-                        'field_count': field_count,
-                        'shard_count': num_shards,
-                        'partition_count': partition_count,
-                        'index_count': index_count,
-                        'indexes': index_details,
-                        'is_loaded': is_loaded,
-                        'load_state': load_status.name if load_status else 'Unknown',
-                        'replica_count': replica_count,
-                        'replicas': replica_info,
-                    })
+                    collection_details.append(
+                        {
+                            "name": collection_name,
+                            "row_count": row_count,
+                            "field_count": field_count,
+                            "shard_count": num_shards,
+                            "partition_count": partition_count,
+                            "index_count": index_count,
+                            "indexes": index_details,
+                            "is_loaded": is_loaded,
+                            "load_state": load_status.name if load_status else "Unknown",
+                            "replica_count": replica_count,
+                            "replicas": replica_info,
+                        }
+                    )
 
                 except Exception as e:
                     self.logger.warning(f"Get stats for collection {collection_name} failed: {e}")
                     continue
 
-            res.update({
-                'total_rows': total_rows,
-                'total_fields': total_fields,
-                'total_shards': total_shards,
-                'total_partitions': total_partitions,
-                'total_indexes': total_indexes,
-                'total_replicas': total_replicas,
-                'loaded_collections': total_loaded_collections,
-                'collection_details': collection_details
-            })
+            res.update(
+                {
+                    "total_rows": total_rows,
+                    "total_fields": total_fields,
+                    "total_shards": total_shards,
+                    "total_partitions": total_partitions,
+                    "total_indexes": total_indexes,
+                    "total_replicas": total_replicas,
+                    "loaded_collections": total_loaded_collections,
+                    "collection_details": collection_details,
+                }
+            )
 
             self.logger.debug(f"MilvusConnection.get_cluster_stats: {res}")
             return res

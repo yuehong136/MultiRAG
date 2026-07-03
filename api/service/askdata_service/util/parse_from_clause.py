@@ -22,16 +22,13 @@ def parse_from_clause(from_sentence: str) -> dict[str, Any]:
     from_sentence = from_sentence.strip()
 
     if not from_sentence:
-        return {
-            "main_table": None,
-            "existing_tables": []
-        }
+        return {"main_table": None, "existing_tables": []}
 
     tables = []
 
     # 按各种 JOIN 关键字分割
     # 支持: LEFT JOIN, RIGHT JOIN, INNER JOIN, OUTER JOIN, FULL JOIN, JOIN
-    join_pattern = r'\s+(?:LEFT\s+(?:OUTER\s+)?JOIN|RIGHT\s+(?:OUTER\s+)?JOIN|INNER\s+JOIN|OUTER\s+JOIN|FULL\s+(?:OUTER\s+)?JOIN|CROSS\s+JOIN|JOIN)\s+'
+    join_pattern = r"\s+(?:LEFT\s+(?:OUTER\s+)?JOIN|RIGHT\s+(?:OUTER\s+)?JOIN|INNER\s+JOIN|OUTER\s+JOIN|FULL\s+(?:OUTER\s+)?JOIN|CROSS\s+JOIN|JOIN)\s+"
     parts = re.split(join_pattern, from_sentence, flags=re.IGNORECASE)
 
     for part in parts:
@@ -39,7 +36,7 @@ def parse_from_clause(from_sentence: str) -> dict[str, Any]:
             continue
 
         # 移除 ON 条件部分（ON 后面的内容）
-        part_without_on = re.split(r'\s+ON\s+', part, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+        part_without_on = re.split(r"\s+ON\s+", part, maxsplit=1, flags=re.IGNORECASE)[0].strip()
 
         if part_without_on:
             # 提取表名（第一个词，忽略别名）
@@ -47,10 +44,7 @@ def parse_from_clause(from_sentence: str) -> dict[str, Any]:
             tokens = part_without_on.split()
             if tokens:
                 # 表名是第一个 token，可能包含引号或方括号
-                table_name = tokens[0].strip('`[]"\'')
+                table_name = tokens[0].strip("`[]\"'")
                 tables.append(table_name)
 
-    return {
-        "main_table": tables[0] if tables else None,
-        "existing_tables": tables
-    }
+    return {"main_table": tables[0] if tables else None, "existing_tables": tables}

@@ -48,13 +48,13 @@ class FirecrawlProcessor:
             return ""
 
         # Remove excessive whitespace
-        content = re.sub(r'\s+', ' ', content)
+        content = re.sub(r"\s+", " ", content)
 
         # Remove HTML tags if present
-        content = re.sub(r'<[^>]+>', '', content)
+        content = re.sub(r"<[^>]+>", "", content)
 
         # Remove special characters that might cause issues
-        content = re.sub(r'[^\w\s\.\,\!\?\;\:\-\(\)\[\]\"\']', '', content)
+        content = re.sub(r"[^\w\s\.\,\!\?\;\:\-\(\)\[\]\"\']", "", content)
 
         return content.strip()
 
@@ -68,12 +68,12 @@ class FirecrawlProcessor:
 
         # Extract title from markdown if available
         if content.markdown:
-            title_match = re.search(r'^#\s+(.+)$', content.markdown, re.MULTILINE)
+            title_match = re.search(r"^#\s+(.+)$", content.markdown, re.MULTILINE)
             if title_match:
                 return title_match.group(1).strip()
 
         # Fallback to URL
-        return content.url.split('/')[-1] or content.url
+        return content.url.split("/")[-1] or content.url
 
     def extract_description(self, content: ScrapedContent) -> str:
         """Extract description from scraped content."""
@@ -86,8 +86,8 @@ class FirecrawlProcessor:
         # Extract first paragraph from markdown
         if content.markdown:
             # Remove headers and get first paragraph
-            text = re.sub(r'^#+\s+.*$', '', content.markdown, flags=re.MULTILINE)
-            paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+            text = re.sub(r"^#+\s+.*$", "", content.markdown, flags=re.MULTILINE)
+            paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
             if paragraphs:
                 return paragraphs[0][:200] + "..." if len(paragraphs[0]) > 200 else paragraphs[0]
 
@@ -122,22 +122,24 @@ class FirecrawlProcessor:
             "status_code": content.status_code,
             "content_length": len(content.markdown or ""),
             "has_html": bool(content.html),
-            "has_markdown": bool(content.markdown)
+            "has_markdown": bool(content.markdown),
         }
 
         # Add original metadata if available
         if content.metadata:
-            metadata.update({
-                "original_title": content.metadata.get("title"),
-                "original_description": content.metadata.get("description"),
-                "original_language": content.metadata.get("language"),
-                "original_keywords": content.metadata.get("keywords"),
-                "original_robots": content.metadata.get("robots"),
-                "og_title": content.metadata.get("ogTitle"),
-                "og_description": content.metadata.get("ogDescription"),
-                "og_image": content.metadata.get("ogImage"),
-                "og_url": content.metadata.get("ogUrl")
-            })
+            metadata.update(
+                {
+                    "original_title": content.metadata.get("title"),
+                    "original_description": content.metadata.get("description"),
+                    "original_language": content.metadata.get("language"),
+                    "original_keywords": content.metadata.get("keywords"),
+                    "original_robots": content.metadata.get("robots"),
+                    "og_title": content.metadata.get("ogTitle"),
+                    "og_description": content.metadata.get("ogDescription"),
+                    "og_image": content.metadata.get("ogImage"),
+                    "og_url": content.metadata.get("ogUrl"),
+                }
+            )
 
         return metadata
 
@@ -145,6 +147,7 @@ class FirecrawlProcessor:
         """Extract domain from URL."""
         try:
             from urllib.parse import urlparse
+
             return urlparse(url).netloc
         except Exception:
             return ""
@@ -180,7 +183,7 @@ class FirecrawlProcessor:
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
             content_type="text",
-            language=language
+            language=language,
         )
 
         return document
@@ -199,23 +202,13 @@ class FirecrawlProcessor:
 
         return documents
 
-    def chunk_content(self, document: MultiRAGDocument,
-                     chunk_size: int = 1000,
-                     chunk_overlap: int = 200) -> list[dict[str, Any]]:
+    def chunk_content(self, document: MultiRAGDocument, chunk_size: int = 1000, chunk_overlap: int = 200) -> list[dict[str, Any]]:
         """Chunk document content for RAG processing."""
         content = document.content
         chunks = []
 
         if len(content) <= chunk_size:
-            return [{
-                "id": f"{document.id}_chunk_0",
-                "content": content,
-                "metadata": {
-                    **document.metadata,
-                    "chunk_index": 0,
-                    "total_chunks": 1
-                }
-            }]
+            return [{"id": f"{document.id}_chunk_0", "content": content, "metadata": {**document.metadata, "chunk_index": 0, "total_chunks": 1}}]
 
         # Split content into chunks
         start = 0
@@ -227,24 +220,26 @@ class FirecrawlProcessor:
             # Try to break at sentence boundary
             if end < len(content):
                 # Look for sentence endings
-                sentence_end = content.rfind('.', start, end)
+                sentence_end = content.rfind(".", start, end)
                 if sentence_end > start + chunk_size // 2:
                     end = sentence_end + 1
 
             chunk_content = content[start:end].strip()
 
             if chunk_content:
-                chunks.append({
-                    "id": f"{document.id}_chunk_{chunk_index}",
-                    "content": chunk_content,
-                    "metadata": {
-                        **document.metadata,
-                        "chunk_index": chunk_index,
-                        "total_chunks": len(chunks) + 1,  # Will be updated
-                        "chunk_start": start,
-                        "chunk_end": end
+                chunks.append(
+                    {
+                        "id": f"{document.id}_chunk_{chunk_index}",
+                        "content": chunk_content,
+                        "metadata": {
+                            **document.metadata,
+                            "chunk_index": chunk_index,
+                            "total_chunks": len(chunks) + 1,  # Will be updated
+                            "chunk_start": start,
+                            "chunk_end": end,
+                        },
                     }
-                })
+                )
                 chunk_index += 1
 
             # Move start position with overlap

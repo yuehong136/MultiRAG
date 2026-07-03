@@ -22,4 +22,3 @@ class Base(ABC):
 
     def total_token_count(self, resp):
         return total_token_count_from_response(resp)
-

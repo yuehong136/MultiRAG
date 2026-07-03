@@ -334,7 +334,6 @@ NUMBER: /[0-9]+/
 
 
 class MultiRAGCLITransformer(Transformer):
-
     def start(self, items):
         return items[0]
 
@@ -429,11 +428,7 @@ class MultiRAGCLITransformer(Transformer):
         action_list = items[1]
         resource = items[3]
         role_name = items[6]
-        return {
-            "type": "revoke_permission",
-            "role_name": role_name,
-            "resource": resource, "actions": action_list
-        }
+        return {"type": "revoke_permission", "role_name": role_name, "resource": resource, "actions": action_list}
 
     def alter_user_role(self, items):
         user_name = items[2]
@@ -673,17 +668,17 @@ class MultiRAGCLITransformer(Transformer):
         dataset_name = None
         vector_size = None
         for i, item in enumerate(items):
-            if hasattr(item, 'data') and item.data == 'quoted_string':
+            if hasattr(item, "data") and item.data == "quoted_string":
                 dataset_name = item.children[0].strip("'\"")
-            if hasattr(item, 'type') and item.type == 'NUMBER':
-                if i > 0 and items[i - 1].type == 'VECTOR_SIZE':
+            if hasattr(item, "type") and item.type == "NUMBER":
+                if i > 0 and items[i - 1].type == "VECTOR_SIZE":
                     vector_size = int(item)
         return {"type": "create_index", "dataset_name": dataset_name, "vector_size": vector_size}
 
     def drop_index(self, items):
         dataset_name = None
         for item in items:
-            if hasattr(item, 'data') and item.data == 'quoted_string':
+            if hasattr(item, "data") and item.data == "quoted_string":
                 dataset_name = item.children[0].strip("'\"")
         return {"type": "drop_index", "dataset_name": dataset_name}
 
@@ -728,7 +723,7 @@ class MultiRAGCLITransformer(Transformer):
 
     def update_chunk(self, items):
         def get_quoted_value(item):
-            if hasattr(item, 'children') and item.children:
+            if hasattr(item, "children") and item.children:
                 return item.children[0].strip("'\"")
             return str(item).strip("'\"")
 
@@ -749,16 +744,16 @@ class MultiRAGCLITransformer(Transformer):
         for i in range(2, len(items)):
             item = items[i]
             # Check for FROM token to stop
-            if hasattr(item, 'type') and item.type == 'FROM':
+            if hasattr(item, "type") and item.type == "FROM":
                 break
-            if hasattr(item, 'children') and item.children:
+            if hasattr(item, "children") and item.children:
                 tag = item.children[0].strip("'\"")
                 tags.append(tag)
         # Find dataset_name: quoted_string after DATASET
         dataset_name = None
         for i, item in enumerate(items):
             # Check if item is a DATASET token
-            if hasattr(item, 'type') and item.type == 'DATASET':
+            if hasattr(item, "type") and item.type == "DATASET":
                 # Next item should be quoted_string
                 dataset_name = items[i + 1].children[0].strip("'\"")
                 break

@@ -5,6 +5,7 @@
 @date：2025/7/16 18:00
 @desc:
 """
+
 from dashscope import Generation
 
 from core.llm.chat_model.base import Base

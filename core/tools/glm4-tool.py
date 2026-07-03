@@ -1,6 +1,6 @@
 from zhipuai import ZhipuAI
 
-client = ZhipuAI(api_key="7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv") # 请填写您自己的APIKey
+client = ZhipuAI(api_key="7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv")  # 请填写您自己的APIKey
 
 tools = [
     {
@@ -26,17 +26,12 @@ tools = [
                 },
                 "required": ["departure", "destination", "date"],
             },
-        }
+        },
     }
 ]
-messages = [
-    {
-        "role": "user",
-        "content": "你能帮我查询2024年1月1日从北京南站到上海的火车票吗？"
-    }
-]
+messages = [{"role": "user", "content": "你能帮我查询2024年1月1日从北京南站到上海的火车票吗？"}]
 response = client.chat.completions.create(
-    model="glm-4", # 填写需要调用的模型名称
+    model="glm-4",  # 填写需要调用的模型名称
     messages=messages,
     tools=tools,
     tool_choice="auto",

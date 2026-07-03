@@ -80,12 +80,7 @@ class EventManager:
             return
 
         # 构建统一的事件数据格式
-        event_data = {
-            "event_id": event_id,
-            "event_type": event_type,
-            "data": data,
-            "timestamp": datetime.utcnow().isoformat()
-        }
+        event_data = {"event_id": event_id, "event_type": event_type, "data": data, "timestamp": datetime.utcnow().isoformat()}
 
         # 使用自定义编码器处理NumPy类型
         serialized_data = json.dumps(event_data, cls=NumpyEncoder)
@@ -93,10 +88,7 @@ class EventManager:
         async with self._lock:
             if event_id in self._subscribers:
                 # 使用gather并发发送给所有订阅者
-                await asyncio.gather(
-                    *[callback(serialized_data) for callback in self._subscribers[event_id]],
-                    return_exceptions=True
-                )
+                await asyncio.gather(*[callback(serialized_data) for callback in self._subscribers[event_id]], return_exceptions=True)
 
     def get_active_events(self) -> list[str]:
         """

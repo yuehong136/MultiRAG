@@ -525,7 +525,13 @@ class NotionConnector(LoadConnector, PollConnector):
             joined_text = "\n".join(sec.text for sec in sections)
             blob = joined_text.encode("utf-8")
             yield Document(
-                id=page.id, blob=blob, source=DocumentSource.NOTION, semantic_identifier=semantic_identifier, extension=".txt", size_bytes=len(blob), doc_updated_at=datetime_from_string(page.last_edited_time)
+                id=page.id,
+                blob=blob,
+                source=DocumentSource.NOTION,
+                semantic_identifier=semantic_identifier,
+                extension=".txt",
+                size_bytes=len(blob),
+                doc_updated_at=datetime_from_string(page.last_edited_time),
             )
 
             yield from attachment_docs

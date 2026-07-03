@@ -48,6 +48,7 @@ router = APIRouter()
 
 # ==================== Pydantic Models ====================
 
+
 class SaveCanvasRequest(BaseModel):
     id: str | None = Field(None, description="Canvas ID，更新时必填")
     dsl: str | dict = Field(..., description="Canvas DSL配置")
@@ -106,11 +107,9 @@ class CanvasSettingRequest(BaseModel):
 
 # ==================== API Endpoints ====================
 
-@router.get('/templates', summary="获取Canvas模板列表", response_description="成功获取模板列表")
-def templates(
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+
+@router.get("/templates", summary="获取Canvas模板列表", response_description="成功获取模板列表")
+def templates(db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取所有Agent类型的Canvas模板
 
@@ -138,12 +137,8 @@ def templates(
     return get_json_result(data=[c.to_dict() for c in templates_list])
 
 
-@router.post('/rm', summary="删除Canvas", response_description="成功删除Canvas")
-def rm(
-        request_body: RemoveCanvasRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+@router.post("/rm", summary="删除Canvas", response_description="成功删除Canvas")
+def rm(request_body: RemoveCanvasRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     批量删除Canvas
 
@@ -175,21 +170,13 @@ def rm(
     """
     for canvas_id in request_body.canvas_ids:
         if not UserCanvasService.accessible(db, canvas_id, user.id):
-            return get_json_result(
-                data=False,
-                retmsg='Only owner of canvas authorized for this operation.',
-                retcode=RetCode.OPERATING_ERROR
-            )
+            return get_json_result(data=False, retmsg="Only owner of canvas authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
         UserCanvasService.delete_by_id(db, canvas_id)
     return get_json_result(data=True)
 
 
-@router.post('/set', summary="保存Canvas", response_description="成功保存Canvas")
-def save(
-        request_body: SaveCanvasRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+@router.post("/set", summary="保存Canvas", response_description="成功保存Canvas")
+def save(request_body: SaveCanvasRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     创建或更新Canvas配置
 
@@ -244,7 +231,7 @@ def save(
     - 支持增量更新（只传需要更新的字段）
     """
     req = request_body.model_dump()
-    req['release'] = bool(req.get("release", ""))
+    req["release"] = bool(req.get("release", ""))
 
     # 处理DSL格式
     try:
@@ -265,11 +252,7 @@ def save(
     else:
         # 更新现有Canvas
         if not UserCanvasService.accessible(db, req["id"], user.id):
-            return get_json_result(
-                data=False,
-                retmsg='Only owner of canvas authorized for this operation.',
-                retcode=RetCode.OPERATING_ERROR
-            )
+            return get_json_result(data=False, retmsg="Only owner of canvas authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
         # 获取现有Canvas数据
         canvas = UserCanvasService.get_by_id(db, req["id"])
@@ -314,12 +297,8 @@ def save(
     return get_json_result(data=req)
 
 
-@router.get('/get/{canvas_id}', summary="获取Canvas详情", response_description="成功获取Canvas详情")
-def get(
-        canvas_id: str,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+@router.get("/get/{canvas_id}", summary="获取Canvas详情", response_description="成功获取Canvas详情")
+def get(canvas_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取指定Canvas的详细信息
 
@@ -369,20 +348,13 @@ def get(
 
     if canvas.get("canvas_category") == CanvasCategory.DataFlow:
         datasets = KnowledgebaseService.query(db, pipeline_id=canvas_id)
-        canvas["datasets"] = [
-            {"id": dataset.id, "name": dataset.name, "avatar": dataset.avatar}
-            for dataset in datasets
-        ]
+        canvas["datasets"] = [{"id": dataset.id, "name": dataset.name, "avatar": dataset.avatar} for dataset in datasets]
 
     return get_json_result(data=canvas)
 
 
-@router.get('/getsse/{canvas_id}', summary="通过API Token获取Canvas", response_description="成功获取Canvas")
-def getsse(
-        canvas_id: str,
-        authorization: str = Header(...),
-        db: Session = Depends(get_db)
-):
+@router.get("/getsse/{canvas_id}", summary="通过API Token获取Canvas", response_description="成功获取Canvas")
+def getsse(canvas_id: str, authorization: str = Header(...), db: Session = Depends(get_db)):
     """
     使用API Token获取Canvas信息（用于SSE连接）
 
@@ -413,20 +385,16 @@ def getsse(
     """
     token_parts = authorization.split()
     if len(token_parts) != 2:
-        return get_data_error_result(retmsg='Authorization is not valid!')
+        return get_data_error_result(retmsg="Authorization is not valid!")
 
     token = token_parts[1]
     objs = db.query(APIToken).filter_by(token=token).all()
     if not objs:
-        return get_data_error_result(retmsg='Authentication error: API key is invalid!')
+        return get_data_error_result(retmsg="Authentication error: API key is invalid!")
 
     tenant_id = objs[0].tenant_id
     if not UserCanvasService.query(db, user_id=tenant_id, id=canvas_id):
-        return get_json_result(
-            data=False,
-            retmsg='Only owner of canvas authorized for this operation.',
-            retcode=RetCode.OPERATING_ERROR
-        )
+        return get_json_result(data=False, retmsg="Only owner of canvas authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
     canvas = UserCanvasService.get_by_id(db, canvas_id)
     if not canvas or canvas.user_id != tenant_id:
@@ -435,12 +403,8 @@ def getsse(
     return get_json_result(data=canvas.to_dict())
 
 
-@router.post('/completion', summary="运行Canvas", response_description="成功执行Canvas")
-async def run(
-        request_body: CompletionRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+@router.post("/completion", summary="运行Canvas", response_description="成功执行Canvas")
+async def run(request_body: CompletionRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     执行Canvas推理任务
 
@@ -499,11 +463,7 @@ async def run(
     user_id = str(runtime_user_id)
 
     if not await thread_pool_exec(UserCanvasService.accessible, db, req["id"], tenant_id):
-        return get_json_result(
-            data=False,
-            retmsg='Only owner of canvas authorized for this operation.',
-            retcode=RetCode.OPERATING_ERROR
-        )
+        return get_json_result(data=False, retmsg="Only owner of canvas authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
     replica_payload = CanvasReplicaService.load_for_run(
         canvas_id=req["id"],
@@ -524,16 +484,7 @@ async def run(
     if cvs.canvas_category == CanvasCategory.DataFlow:
         task_id = get_uuid()
         Pipeline(dsl_str, tenant_id=tenant_id, doc_id=CANVAS_DEBUG_DOC_ID, task_id=task_id, flow_id=req["id"])
-        ok, error_message = await thread_pool_exec(
-            queue_dataflow,
-            db,
-            user_id,
-            req["id"],
-            task_id,
-            CANVAS_DEBUG_DOC_ID,
-            files if files else None,
-            0
-        )
+        ok, error_message = await thread_pool_exec(queue_dataflow, db, user_id, req["id"], task_id, CANVAS_DEBUG_DOC_ID, files if files else None, 0)
         if not ok:
             return get_data_error_result(retmsg=error_message)
         return get_json_result(data={"message_id": task_id})
@@ -572,23 +523,15 @@ async def run(
         finally:
             canvas.cancel_task()
 
-    return StreamingResponse(
-        sse(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
-    )
+    return StreamingResponse(sse(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})
 
 
-@router.post('/{canvas_id}/completion', summary="Agent Completion (实验性)", response_description="SSE流式返回Agent推理结果")
+@router.post("/{canvas_id}/completion", summary="Agent Completion (实验性)", response_description="SSE流式返回Agent推理结果")
 async def exp_agent_completion(
-        canvas_id: str,
-        request_body: dict,
-        db: Session = Depends(get_db),
-        user=Depends(manager),
+    canvas_id: str,
+    request_body: dict,
+    db: Session = Depends(get_db),
+    user=Depends(manager),
 ):
     """
     实验性Agent Completion端点，支持trace返回。
@@ -640,12 +583,8 @@ async def exp_agent_completion(
     )
 
 
-@router.post('/rerun', summary="重新运行Pipeline", response_description="成功重新运行")
-def rerun(
-        request_body: RerunRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+@router.post("/rerun", summary="重新运行Pipeline", response_description="成功重新运行")
+def rerun(request_body: RerunRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     重新运行Pipeline处理任务
 
@@ -696,11 +635,7 @@ def rerun(
 
     # 删除向量数据库中的数据
     if settings.docStoreConn.index_exist(search.index_name(user.id, [doc["kb_name"]]), doc["kb_id"]):
-        settings.docStoreConn.delete(
-            {"doc_id": doc["id"]},
-            search.index_name(user.id, [doc["kb_name"]]),
-            doc["kb_id"]
-        )
+        settings.docStoreConn.delete({"doc_id": doc["id"]}, search.index_name(user.id, [doc["kb_name"]]), doc["kb_id"])
 
     # 清空统计数据
     doc["progress_msg"] = ""
@@ -718,25 +653,13 @@ def rerun(
     PipelineOperationLogService.update_by_id(db, req["id"], {"dsl": dsl})
 
     # 提交新任务
-    queue_dataflow(
-        db,
-        tenant_id=user.id,
-        flow_id=req["id"],
-        task_id=get_uuid(),
-        doc_id=doc["id"],
-        priority=0,
-        rerun=True
-    )
+    queue_dataflow(db, tenant_id=user.id, flow_id=req["id"], task_id=get_uuid(), doc_id=doc["id"], priority=0, rerun=True)
 
     return get_json_result(data=True)
 
 
-@router.put('/cancel/{task_id}', summary="取消任务", response_description="成功取消任务")
-def cancel(
-        task_id: str,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+@router.put("/cancel/{task_id}", summary="取消任务", response_description="成功取消任务")
+def cancel(task_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     取消正在运行的任务
 
@@ -765,12 +688,8 @@ def cancel(
     return get_json_result(data=True)
 
 
-@router.post('/reset', summary="重置Canvas", response_description="成功重置Canvas")
-def reset(
-        request_body: ResetRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+@router.post("/reset", summary="重置Canvas", response_description="成功重置Canvas")
+def reset(request_body: ResetRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     重置Canvas状态
 
@@ -810,11 +729,7 @@ def reset(
     req = request_body.model_dump()
 
     if not UserCanvasService.accessible(db, req["id"], user.id):
-        return get_json_result(
-            data=False,
-            retmsg='Only owner of canvas authorized for this operation.',
-            retcode=RetCode.OPERATING_ERROR
-        )
+        return get_json_result(data=False, retmsg="Only owner of canvas authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
     try:
         user_canvas = UserCanvasService.get_by_id(db, req["id"])
@@ -832,12 +747,7 @@ def reset(
 
 
 @router.post("/upload/{canvas_id}", summary="上传文件到Canvas", response_description="成功上传文件")
-async def upload(
-        canvas_id: str,
-        url: str | None = Query(None, description="URL地址，用于下载网页内容"),
-        file: list[UploadFile] | None = File(None),
-        db: Session = Depends(get_db)
-):
+async def upload(canvas_id: str, url: str | None = Query(None, description="URL地址，用于下载网页内容"), file: list[UploadFile] | None = File(None), db: Session = Depends(get_db)):
     """
     上传文件到Canvas或从URL下载内容
 
@@ -910,13 +820,8 @@ async def upload(
         return server_error_response(e)
 
 
-@router.get('/input_form', summary="获取组件输入表单", response_description="成功获取输入表单")
-def input_form(
-        id: str = Query(..., description="Canvas ID"),
-        component_id: str = Query(..., description="组件ID"),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+@router.get("/input_form", summary="获取组件输入表单", response_description="成功获取输入表单")
+def input_form(id: str = Query(..., description="Canvas ID"), component_id: str = Query(..., description="组件ID"), db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取Canvas组件的输入表单配置
 
@@ -957,11 +862,7 @@ def input_form(
             return get_data_error_result(retmsg="canvas not found.")
 
         if not UserCanvasService.query(db, user_id=user.id, id=id):
-            return get_json_result(
-                data=False,
-                retmsg='Only owner of canvas authorized for this operation.',
-                retcode=RetCode.OPERATING_ERROR
-            )
+            return get_json_result(data=False, retmsg="Only owner of canvas authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
         canvas = Canvas(json.dumps(user_canvas.dsl), user.id, canvas_id=user_canvas.id)
         return get_json_result(data=canvas.get_component_input_form(component_id))
@@ -969,12 +870,8 @@ def input_form(
         return server_error_response(e)
 
 
-@router.post('/debug', summary="调试组件", response_description="成功执行组件调试")
-async def debug(
-        request_body: DebugRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+@router.post("/debug", summary="调试组件", response_description="成功执行组件调试")
+async def debug(request_body: DebugRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     调试单个Canvas组件
 
@@ -1017,11 +914,7 @@ async def debug(
     req = request_body.model_dump()
 
     if not UserCanvasService.accessible(db, req["id"], user.id):
-        return get_json_result(
-            data=False,
-            retmsg='Only owner of canvas authorized for this operation.',
-            retcode=RetCode.OPERATING_ERROR
-        )
+        return get_json_result(data=False, retmsg="Only owner of canvas authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
     try:
         user_canvas = UserCanvasService.get_by_id(db, req["id"])
@@ -1056,12 +949,8 @@ async def debug(
         return server_error_response(e)
 
 
-@router.post('/test_db_connect', summary="测试数据库连接", response_description="成功测试数据库连接")
-def test_db_connect(
-        request_body: TestDBConnectRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+@router.post("/test_db_connect", summary="测试数据库连接", response_description="成功测试数据库连接")
+def test_db_connect(request_body: TestDBConnectRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     测试数据库连接配置是否正确
 
@@ -1115,47 +1004,30 @@ def test_db_connect(
         elif req["db_type"] == "oceanbase":
             url = f"mysql+pymysql://{quote_plus(req['username'])}:{quote_plus(req['password'])}@{req['host']}:{req['port']}/{req['database']}?charset=utf8mb4"
             engine = create_engine(url)
-        elif req["db_type"] == 'postgres':
+        elif req["db_type"] == "postgres":
             url = f"postgresql+psycopg2://{quote_plus(req['username'])}:{quote_plus(req['password'])}@{req['host']}:{req['port']}/{req['database']}"
             engine = create_engine(url)
-        elif req["db_type"] == 'mssql':
+        elif req["db_type"] == "mssql":
             import pyodbc
-            connection_string = (
-                f"DRIVER={{ODBC Driver 17 for SQL Server}};"
-                f"SERVER={req['host']},{req['port']};"
-                f"DATABASE={req['database']};"
-                f"UID={req['username']};"
-                f"PWD={req['password']};"
-            )
+
+            connection_string = f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={req['host']},{req['port']};DATABASE={req['database']};UID={req['username']};PWD={req['password']};"
             db_conn = pyodbc.connect(connection_string)
             cursor = db_conn.cursor()
             cursor.execute("SELECT 1")
             cursor.close()
-        elif req["db_type"] == 'IBM DB2':
+        elif req["db_type"] == "IBM DB2":
             import ibm_db
-            conn_str = (
-                f"DATABASE={req['database']};"
-                f"HOSTNAME={req['host']};"
-                f"PORT={req['port']};"
-                f"PROTOCOL=TCPIP;"
-                f"UID={req['username']};"
-                f"PWD={req['password']};"
-            )
-            redacted_conn_str = (
-                f"DATABASE={req['database']};"
-                f"HOSTNAME={req['host']};"
-                f"PORT={req['port']};"
-                f"PROTOCOL=TCPIP;"
-                f"UID={req['username']};"
-                f"PWD=****;"
-            )
+
+            conn_str = f"DATABASE={req['database']};HOSTNAME={req['host']};PORT={req['port']};PROTOCOL=TCPIP;UID={req['username']};PWD={req['password']};"
+            redacted_conn_str = f"DATABASE={req['database']};HOSTNAME={req['host']};PORT={req['port']};PROTOCOL=TCPIP;UID={req['username']};PWD=****;"
             logging.info(redacted_conn_str)
             conn = ibm_db.connect(conn_str, "", "")
             stmt = ibm_db.exec_immediate(conn, "SELECT 1 FROM sysibm.sysdummy1")
             ibm_db.fetch_assoc(stmt)
             ibm_db.close(conn)
             return get_json_result(data="Database Connection Successful!")
-        elif req["db_type"] == 'trino':
+        elif req["db_type"] == "trino":
+
             def _parse_catalog_schema(db_name: str):
                 if not db_name:
                     return None, None
@@ -1172,8 +1044,7 @@ def test_db_connect(
 
                 import trino
             except Exception as e:
-                return server_error_response(
-                    f"Missing dependency 'trino'. Please install: pip install trino, detail: {e}")
+                return server_error_response(f"Missing dependency 'trino'. Please install: pip install trino, detail: {e}")
 
             catalog, schema = _parse_catalog_schema(req["database"])
             if not catalog:
@@ -1186,13 +1057,7 @@ def test_db_connect(
                 auth = trino.auth.BasicAuthentication(req.get("username") or "ragflow", req["password"])
 
             conn = trino.dbapi.connect(
-                host=req["host"],
-                port=int(req["port"] or 8080),
-                user=req["username"] or "ragflow",
-                catalog=catalog,
-                schema=schema or "default",
-                http_scheme=http_scheme,
-                auth=auth
+                host=req["host"], port=int(req["port"] or 8080), user=req["username"] or "ragflow", catalog=catalog, schema=schema or "default", http_scheme=http_scheme, auth=auth
             )
             cur = conn.cursor()
             cur.execute("SELECT 1")
@@ -1203,7 +1068,7 @@ def test_db_connect(
         else:
             return server_error_response("Unsupported database type.")
 
-        if req["db_type"] != 'mssql':
+        if req["db_type"] != "mssql":
             with engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
             engine.dispose()
@@ -1213,12 +1078,8 @@ def test_db_connect(
         return server_error_response(e)
 
 
-@router.get('/getlistversion/{canvas_id}', summary="获取Canvas版本历史", response_description="成功获取版本列表")
-def getlistversion(
-        canvas_id: str,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+@router.get("/getlistversion/{canvas_id}", summary="获取Canvas版本历史", response_description="成功获取版本列表")
+def getlistversion(canvas_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取Canvas的所有历史版本
 
@@ -1259,21 +1120,14 @@ def getlistversion(
     """
     try:
         versions = UserCanvasVersionService.list_by_canvas_id(db, canvas_id)
-        version_list = sorted(
-            [v.to_dict() for v in versions],
-            key=lambda x: x["update_time"] * -1
-        )
+        version_list = sorted([v.to_dict() for v in versions], key=lambda x: x["update_time"] * -1)
         return get_json_result(data=version_list)
     except Exception as e:
         return get_data_error_result(retmsg=f"Error getting history files: {e}")
 
 
-@router.get('/getversion/{version_id}', summary="获取特定版本详情", response_description="成功获取版本详情")
-def getversion(
-        version_id: str,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+@router.get("/getversion/{version_id}", summary="获取特定版本详情", response_description="成功获取版本详情")
+def getversion(version_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取Canvas特定版本的详细配置
 
@@ -1303,17 +1157,17 @@ def getversion(
         return get_json_result(data=f"Error getting history file: {e}")
 
 
-@router.get('/list', summary="列出Canvas", response_description="成功获取Canvas列表")
+@router.get("/list", summary="列出Canvas", response_description="成功获取Canvas列表")
 def list_canvas(
-        keywords: str = Query("", description="搜索关键词"),
-        page: int = Query(0, description="页码"),
-        page_size: int = Query(0, description="每页数量"),
-        orderby: str = Query("create_time", description="排序字段"),
-        desc: bool = Query(True, description="是否降序"),
-        canvas_category: str | None = Query(None, description="Canvas类别"),
-        owner_ids: str = Query("", description="所有者ID列表，逗号分隔"),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
+    keywords: str = Query("", description="搜索关键词"),
+    page: int = Query(0, description="页码"),
+    page_size: int = Query(0, description="每页数量"),
+    orderby: str = Query("create_time", description="排序字段"),
+    desc: bool = Query(True, description="是否降序"),
+    canvas_category: str | None = Query(None, description="Canvas类别"),
+    owner_ids: str = Query("", description="所有者ID列表，逗号分隔"),
+    db: Session = Depends(get_db),
+    user=Depends(manager),
 ):
     """
     获取Canvas列表
@@ -1364,30 +1218,16 @@ def list_canvas(
         tenants = TenantService.get_joined_tenants_by_user_id(db, user.id)
         tenant_ids = [m.tenant_id for m in tenants]
         tenant_ids.append(user.id)
-        canvas, total = UserCanvasService.get_by_tenant_ids(
-            db, tenant_ids, user.id,
-            page, page_size,
-            orderby, desc, keywords,
-            canvas_category
-        )
+        canvas, total = UserCanvasService.get_by_tenant_ids(db, tenant_ids, user.id, page, page_size, orderby, desc, keywords, canvas_category)
     else:
         # 指定所有者模式
-        canvas, total = UserCanvasService.get_by_tenant_ids(
-            db, owner_id_list, user.id,
-            0, 0,
-            orderby, desc, keywords,
-            canvas_category
-        )
+        canvas, total = UserCanvasService.get_by_tenant_ids(db, owner_id_list, user.id, 0, 0, orderby, desc, keywords, canvas_category)
 
     return get_json_result(data={"canvas": canvas, "total": total})
 
 
-@router.post('/setting', summary="更新Canvas设置", response_description="成功更新设置")
-def setting(
-        request_body: CanvasSettingRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+@router.post("/setting", summary="更新Canvas设置", response_description="成功更新设置")
+def setting(request_body: CanvasSettingRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     更新Canvas的基本设置
 
@@ -1431,11 +1271,7 @@ def setting(
     req["user_id"] = user.id
 
     if not UserCanvasService.accessible(db, req["id"], user.id):
-        return get_json_result(
-            data=False,
-            retmsg='Only owner of canvas authorized for this operation.',
-            retcode=RetCode.OPERATING_ERROR
-        )
+        return get_json_result(data=False, retmsg="Only owner of canvas authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
     flow = UserCanvasService.get_by_id(db, req["id"])
     if not flow:
@@ -1452,12 +1288,8 @@ def setting(
     return get_json_result(data=num)
 
 
-@router.get('/trace', summary="追踪Canvas执行日志", response_description="成功获取执行日志")
-def trace(
-        canvas_id: str = Query(..., description="Canvas ID"),
-        message_id: str = Query(..., description="消息ID"),
-        db: Session = Depends(get_db)
-):
+@router.get("/trace", summary="追踪Canvas执行日志", response_description="成功获取执行日志")
+def trace(canvas_id: str = Query(..., description="Canvas ID"), message_id: str = Query(..., description="消息ID"), db: Session = Depends(get_db)):
     """
     获取Canvas执行过程的详细日志
 
@@ -1505,21 +1337,21 @@ def trace(
         return get_json_result(data={})
 
 
-@router.get('/{canvas_id}/sessions', summary="获取Canvas会话列表", response_description="成功获取会话列表")
+@router.get("/{canvas_id}/sessions", summary="获取Canvas会话列表", response_description="成功获取会话列表")
 def sessions(
-        canvas_id: str,
-        user_id: str | None = Query(None, description="用户ID筛选"),
-        exp_user_id: str | None = Query(None, description="实验用户ID筛选"),
-        page: int = Query(1, description="页码"),
-        page_size: int = Query(30, description="每页数量"),
-        orderby: str = Query("update_time", description="排序字段"),
-        desc: bool = Query(True, description="是否降序"),
-        keywords: str | None = Query(None, description="搜索关键词"),
-        from_date: str | None = Query(None, description="开始日期"),
-        to_date: str | None = Query(None, description="结束日期"),
-        dsl: bool = Query(True, description="是否包含DSL"),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
+    canvas_id: str,
+    user_id: str | None = Query(None, description="用户ID筛选"),
+    exp_user_id: str | None = Query(None, description="实验用户ID筛选"),
+    page: int = Query(1, description="页码"),
+    page_size: int = Query(30, description="每页数量"),
+    orderby: str = Query("update_time", description="排序字段"),
+    desc: bool = Query(True, description="是否降序"),
+    keywords: str | None = Query(None, description="搜索关键词"),
+    from_date: str | None = Query(None, description="开始日期"),
+    to_date: str | None = Query(None, description="结束日期"),
+    dsl: bool = Query(True, description="是否包含DSL"),
+    db: Session = Depends(get_db),
+    user=Depends(manager),
 ):
     """
     获取Canvas的会话历史
@@ -1574,11 +1406,7 @@ def sessions(
     tenant_id = user.id
 
     if not UserCanvasService.accessible(db, canvas_id, tenant_id):
-        return get_json_result(
-            data=False,
-            retmsg='Only owner of canvas authorized for this operation.',
-            retcode=RetCode.OPERATING_ERROR
-        )
+        return get_json_result(data=False, retmsg="Only owner of canvas authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
     if exp_user_id:
         sess = API4ConversationService.get_names(db, canvas_id, exp_user_id)
@@ -1588,12 +1416,19 @@ def sessions(
 
     try:
         total, sess = API4ConversationService.get_list(
-            db, canvas_id, tenant_id,
-            page, page_size,
-            orderby, desc,
-            None, user_id,
+            db,
+            canvas_id,
+            tenant_id,
+            page,
+            page_size,
+            orderby,
+            desc,
+            None,
+            user_id,
             include_dsl,
-            keywords or "", from_date, to_date,
+            keywords or "",
+            from_date,
+            to_date,
             exp_user_id=exp_user_id,
         )
         return get_json_result(data={"total": total, "sessions": sess})
@@ -1601,12 +1436,12 @@ def sessions(
         return server_error_response(e)
 
 
-@router.put('/{canvas_id}/sessions', summary="创建Canvas会话", response_description="成功创建会话")
+@router.put("/{canvas_id}/sessions", summary="创建Canvas会话", response_description="成功创建会话")
 async def set_session(
-        canvas_id: str,
-        request_body: dict,
-        db: Session = Depends(get_db),
-        user=Depends(manager),
+    canvas_id: str,
+    request_body: dict,
+    db: Session = Depends(get_db),
+    user=Depends(manager),
 ):
     """
     为指定Canvas创建一个新的会话。
@@ -1644,12 +1479,12 @@ async def set_session(
     return get_json_result(data=conv)
 
 
-@router.get('/{canvas_id}/sessions/{session_id}', summary="获取单个Canvas会话", response_description="成功获取会话详情")
+@router.get("/{canvas_id}/sessions/{session_id}", summary="获取单个Canvas会话", response_description="成功获取会话详情")
 def get_session(
-        canvas_id: str,
-        session_id: str,
-        db: Session = Depends(get_db),
-        user=Depends(manager),
+    canvas_id: str,
+    session_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(manager),
 ):
     """
     获取指定Canvas下的单个会话详情。
@@ -1665,35 +1500,32 @@ def get_session(
     if not UserCanvasService.accessible(db, canvas_id, tenant_id):
         return get_json_result(
             data=False,
-            retmsg='Only owner of canvas authorized for this operation.',
+            retmsg="Only owner of canvas authorized for this operation.",
             retcode=RetCode.OPERATING_ERROR,
         )
     conv = API4ConversationService.get_by_id(db, session_id)
     return get_json_result(data=conv.to_dict())
 
 
-@router.delete('/{canvas_id}/sessions/{session_id}', summary="删除Canvas会话", response_description="成功删除会话")
+@router.delete("/{canvas_id}/sessions/{session_id}", summary="删除Canvas会话", response_description="成功删除会话")
 def del_session(
-        canvas_id: str,
-        session_id: str,
-        db: Session = Depends(get_db),
-        user=Depends(manager),
+    canvas_id: str,
+    session_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(manager),
 ):
     tenant_id = user.id
     if not UserCanvasService.accessible(db, canvas_id, tenant_id):
         return get_json_result(
             data=False,
-            retmsg='Only owner of canvas authorized for this operation.',
+            retmsg="Only owner of canvas authorized for this operation.",
             retcode=RetCode.OPERATING_ERROR,
         )
     return get_json_result(data=API4ConversationService.delete_by_id(db, session_id))
 
 
-@router.get('/prompts', summary="获取系统提示词", response_description="成功获取提示词")
-def prompts(
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+@router.get("/prompts", summary="获取系统提示词", response_description="成功获取提示词")
+def prompts(db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取系统预定义的提示词模板
 
@@ -1727,20 +1559,13 @@ def prompts(
     """
     from core.prompts.generator import ANALYZE_TASK_SYSTEM, ANALYZE_TASK_USER, CITATION_PROMPT_TEMPLATE, NEXT_STEP, REFLECT
 
-    return get_json_result(data={
-        "task_analysis": ANALYZE_TASK_SYSTEM + "\n\n" + ANALYZE_TASK_USER,
-        "plan_generation": NEXT_STEP,
-        "reflection": REFLECT,
-        "citation_guidelines": CITATION_PROMPT_TEMPLATE
-    })
+    return get_json_result(
+        data={"task_analysis": ANALYZE_TASK_SYSTEM + "\n\n" + ANALYZE_TASK_USER, "plan_generation": NEXT_STEP, "reflection": REFLECT, "citation_guidelines": CITATION_PROMPT_TEMPLATE}
+    )
 
 
-@router.get('/download', summary="下载文件", response_description="成功下载文件")
-def download(
-        id: str = Query(..., description="文件ID"),
-        created_by: str = Query(..., description="创建者ID"),
-        db: Session = Depends(get_db)
-):
+@router.get("/download", summary="下载文件", response_description="成功下载文件")
+def download(id: str = Query(..., description="文件ID"), created_by: str = Query(..., description="创建者ID"), db: Session = Depends(get_db)):
     """
     下载Canvas中上传的文件
 

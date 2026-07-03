@@ -2,8 +2,7 @@ import json
 from typing import Any
 
 
-def filter_dimension_values_by_segmented_words(dimension_values: list[dict[str, Any]], segmented_words: list[str]) -> \
-list[dict[str, Any]]:
+def filter_dimension_values_by_segmented_words(dimension_values: list[dict[str, Any]], segmented_words: list[str]) -> list[dict[str, Any]]:
     """
     根据分词列表对维度值进行模糊匹配、评分和排序
 
@@ -21,8 +20,8 @@ list[dict[str, Any]]:
     scored_values = []
 
     for dim_value in dimension_values:
-        value = dim_value.get('value', '')
-        synonyms = dim_value.get('synonyms', [])
+        value = dim_value.get("value", "")
+        synonyms = dim_value.get("synonyms", [])
 
         # 将 value 和 synonyms 放入一个列表中统一处理
         texts_to_check = [value] + (synonyms or [])
@@ -76,24 +75,17 @@ list[dict[str, Any]]:
 
         # 如果有任何匹配，则将其及得分加入列表
         if matched:
-            scored_values.append({
-                "score": max_score,
-                "data": dim_value
-            })
+            scored_values.append({"score": max_score, "data": dim_value})
 
     # 根据得分从高到低排序
-    sorted_values = sorted(scored_values, key=lambda x: x['score'], reverse=True)
+    sorted_values = sorted(scored_values, key=lambda x: x["score"], reverse=True)
 
     # 返回排序后的数据
-    return [item['data'] for item in sorted_values]
+    return [item["data"] for item in sorted_values]
 
 
 def process_data_models(
-        models: list[dict[str, Any]],
-        user_semantic_permissions: dict[str, Any],
-        dimensions: list[dict[str, Any]],
-        metrics: list[dict[str, Any]],
-        model_relations: list[dict[str, Any]]
+    models: list[dict[str, Any]], user_semantic_permissions: dict[str, Any], dimensions: list[dict[str, Any]], metrics: list[dict[str, Any]], model_relations: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
     """
     处理数据模型，只保留被维度、指标、关联关系和行级权限引用的字段
@@ -201,12 +193,7 @@ def process_data_models(
         model_id = model_data.get("modelId")
 
         # 构建每个 dataModel 的基本结构
-        data_model = {
-            "modelId": model_id,
-            "name": model_data.get("modelName"),
-            "table": model_data.get("tableName"),
-            "fields": []
-        }
+        data_model = {"modelId": model_id, "name": model_data.get("modelName"), "table": model_data.get("tableName"), "fields": []}
 
         # 获取该模型需要保留的字段集合
         used_fields = model_used_fields.get(model_id, set())
@@ -215,14 +202,11 @@ def process_data_models(
         if model_data.get("fields"):
             for field_data in model_data["fields"]:
                 field_name = field_data.get("fieldName")
-                is_primary = field_data.get("is_pk") == '1'
+                is_primary = field_data.get("is_pk") == "1"
 
                 # 只保留：1) 被引用的字段 2) 主键字段
                 if field_name in used_fields or is_primary:
-                    processed_field = {
-                        "name": field_name,
-                        "type": field_data.get("dataType")
-                    }
+                    processed_field = {"name": field_name, "type": field_data.get("dataType")}
 
                     # 添加主键标记
                     if is_primary:
@@ -242,10 +226,7 @@ def process_data_models(
             row_filter = permission_model.get("rowFilter")
 
             if row_filter and row_filter.get("rules"):
-                processed_row_filter = {
-                    "logicalOperator": row_filter.get("logicalOperator", "OR"),
-                    "rules": []
-                }
+                processed_row_filter = {"logicalOperator": row_filter.get("logicalOperator", "OR"), "rules": []}
 
                 for rule in row_filter["rules"]:
                     processed_rule = {}
@@ -265,13 +246,7 @@ def process_data_models(
     return data_models_output
 
 
-def process_business_datasets(
-        dataset_details,
-        dimensions,
-        metrics,
-        dimension_values,
-        segmented_words
-) -> list[dict[str, Any]]:
+def process_business_datasets(dataset_details, dimensions, metrics, dimension_values, segmented_words) -> list[dict[str, Any]]:
     business_datasets_output = []
     for dataset_detail in dataset_details:
         business_dataset = {}
@@ -291,7 +266,7 @@ def process_business_datasets(
                 dimension_output["name"] = dimension.get("dimensionName")
                 dimension_output["dimType"] = dimension.get("dimtype")
                 if dimension_output["dimType"].lower() == "time":
-                    semanticsformat = dimension.get('semanticsformat', {})
+                    semanticsformat = dimension.get("semanticsformat", {})
                     if semanticsformat:
                         dimension_output["timeFormat"] = json.loads(semanticsformat).get("timeFormat")
                 dimension_output["field"] = dimension.get("dimensionEnName")
@@ -373,8 +348,7 @@ def process_business_terms(business_term_rows) -> list[dict[str, Any]]:
     return business_terms
 
 
-def process_semantic_layer(semantic_layer: dict[str, Any], user_semantic_permissions: dict[str, Any],
-                           segmented_words: list[str]) -> dict[str, Any]:
+def process_semantic_layer(semantic_layer: dict[str, Any], user_semantic_permissions: dict[str, Any], segmented_words: list[str]) -> dict[str, Any]:
     dataset_details = semantic_layer.get("dataset_details")
     dimensions = semantic_layer.get("dimensions")
     dimension_values = semantic_layer.get("dimension_values")
@@ -383,23 +357,11 @@ def process_semantic_layer(semantic_layer: dict[str, Any], user_semantic_permiss
     model_relations = semantic_layer.get("model_relations")
     business_term_rows = semantic_layer.get("business_term_rows")
 
-    semantic_structure = {
-        "dataModels": [],
-        "businessDatasets": [],
-        "relationships": [],
-        "businessTerms": []
-    }
+    semantic_structure = {"dataModels": [], "businessDatasets": [], "relationships": [], "businessTerms": []}
 
-    semantic_structure["dataModels"] = process_data_models(
-        model_details,
-        user_semantic_permissions,
-        dimensions,
-        metrics,
-        model_relations
-    )
+    semantic_structure["dataModels"] = process_data_models(model_details, user_semantic_permissions, dimensions, metrics, model_relations)
 
-    semantic_structure["businessDatasets"] = process_business_datasets(dataset_details, dimensions, metrics,
-                                                                       dimension_values, segmented_words)
+    semantic_structure["businessDatasets"] = process_business_datasets(dataset_details, dimensions, metrics, dimension_values, segmented_words)
     semantic_structure["relationships"] = process_relationships(model_relations)
     semantic_structure["businessTerms"] = process_business_terms(business_term_rows)
 

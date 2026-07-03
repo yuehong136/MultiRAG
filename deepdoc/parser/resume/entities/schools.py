@@ -19,9 +19,7 @@ import re
 import pandas as pd
 
 current_file_path = os.path.dirname(os.path.abspath(__file__))
-TBL = pd.read_csv(
-    os.path.join(current_file_path, "res/schools.csv"), sep="\t", header=0
-).fillna("")
+TBL = pd.read_csv(os.path.join(current_file_path, "res/schools.csv"), sep="\t", header=0).fillna("")
 TBL["name_en"] = TBL["name_en"].map(lambda x: x.lower().strip())
 GOOD_SCH = json.load(open(os.path.join(current_file_path, "res/good_sch.json"), encoding="utf-8"))
 GOOD_SCH = {re.sub(r"[,. &（）()]+", "", c) for c in GOOD_SCH}
@@ -50,12 +48,7 @@ loadRank(os.path.join(current_file_path, "res/school.rank.csv"))
 def split(txt):
     tks = []
     for t in re.sub(r"[ \t]+", " ", txt).split():
-        if (
-            tks
-            and re.match(r".*[a-zA-Z]$", tks[-1])
-            and re.match(r"[a-zA-Z]", t)
-            and tks
-        ):
+        if tks and re.match(r".*[a-zA-Z]$", tks[-1]) and re.match(r"[a-zA-Z]", t) and tks:
             tks[-1] = tks[-1] + " " + t
         else:
             tks.append(t)

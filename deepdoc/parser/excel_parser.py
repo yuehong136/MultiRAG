@@ -42,7 +42,7 @@ class RAGFlowExcelParser:
 
             try:
                 file_like_object.seek(0)
-                df = pd.read_csv(file_like_object, on_bad_lines='skip')
+                df = pd.read_csv(file_like_object, on_bad_lines="skip")
                 return RAGFlowExcelParser._dataframe_to_workbook(df)
 
             except Exception as e_csv:
@@ -253,7 +253,7 @@ class RAGFlowExcelParser:
                 tb = ""
                 tb += f"<table><caption>{sheetname}</caption>"
                 tb += tb_rows_0
-                for r in list(rows[1 + chunk_i * chunk_rows: min(1 + (chunk_i + 1) * chunk_rows, len(rows))]):
+                for r in list(rows[1 + chunk_i * chunk_rows : min(1 + (chunk_i + 1) * chunk_rows, len(rows))]):
                     tb += "<tr>"
                     for i, c in enumerate(r):
                         if c.value is None:
@@ -276,7 +276,7 @@ class RAGFlowExcelParser:
         except Exception as e:
             logging.warning(f"Parse spreadsheet error: {e}, trying to interpret as CSV file")
             file_like_object.seek(0)
-            df = pd.read_csv(file_like_object, on_bad_lines='skip')
+            df = pd.read_csv(file_like_object, on_bad_lines="skip")
         df = df.replace(r"^\s*$", "", regex=True)
         return df.to_markdown(index=False)
 

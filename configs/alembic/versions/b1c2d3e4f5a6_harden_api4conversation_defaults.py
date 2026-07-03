@@ -38,13 +38,7 @@ def upgrade() -> None:
         if column_name not in columns:
             continue
 
-        op.execute(
-            sa.text(
-                f'UPDATE "{SCHEMA}"."{TABLE}" '
-                f'SET "{column_name}" = 0 '
-                f'WHERE "{column_name}" IS NULL'
-            )
-        )
+        op.execute(sa.text(f'UPDATE "{SCHEMA}"."{TABLE}" SET "{column_name}" = 0 WHERE "{column_name}" IS NULL'))
         with op.batch_alter_table(TABLE, schema=SCHEMA) as batch_op:
             batch_op.alter_column(
                 column_name,

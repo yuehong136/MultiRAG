@@ -5,6 +5,7 @@ Revises: b362b0a788fb
 Create Date: 2025-09-03 11:16:25.654563
 
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -12,8 +13,8 @@ from alembic import op
 from sqlalchemy.engine.reflection import Inspector
 
 # revision identifiers, used by Alembic.
-revision: str = '419b906f1434'
-down_revision: str | None = 'b362b0a788fb'
+revision: str = "419b906f1434"
+down_revision: str | None = "b362b0a788fb"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -28,28 +29,12 @@ def upgrade() -> None:
     if "name" not in cols:
         with op.batch_alter_table("t_ai_api_tokens", schema="usr_ai") as batch_op:
             # 添加 name 列并给已有数据一个默认值
-            batch_op.add_column(
-                sa.Column(
-                    "name",
-                    sa.String(length=20),
-                    nullable=False,
-                    index=True,
-                    server_default="",
-                    doc="Token名称"
-                )
-            )
+            batch_op.add_column(sa.Column("name", sa.String(length=20), nullable=False, index=True, server_default="", doc="Token名称"))
 
     if "description" not in cols:
         with op.batch_alter_table("t_ai_api_tokens", schema="usr_ai") as batch_op:
             # 添加 description 列
-            batch_op.add_column(
-                sa.Column(
-                    "description",
-                    sa.Text(),
-                    nullable=True,
-                    doc="Token描述"
-                )
-            )
+            batch_op.add_column(sa.Column("description", sa.Text(), nullable=True, doc="Token描述"))
 
 
 def downgrade() -> None:

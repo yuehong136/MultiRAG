@@ -19,6 +19,7 @@ class MemoryService(CommonService):
 
     提供Memory的CRUD操作，采用SQLAlchemy 2.0风格
     """
+
     model = Memory
 
     @classmethod
@@ -101,7 +102,7 @@ class MemoryService(CommonService):
                 cls.model.system_prompt,
                 cls.model.user_prompt,
                 cls.model.create_date,
-                cls.model.create_time
+                cls.model.create_time,
             )
             .join(User, cls.model.tenant_id == User.id)
             .where(cls.model.id == memory_id)
@@ -109,14 +110,7 @@ class MemoryService(CommonService):
         return db.execute(stmt).one_or_none()
 
     @classmethod
-    def get_by_filter(
-        cls,
-        db: Session,
-        filter_dict: dict,
-        keywords: str = "",
-        page: int = 1,
-        page_size: int = 50
-    ) -> tuple[list[dict], int]:
+    def get_by_filter(cls, db: Session, filter_dict: dict, keywords: str = "", page: int = 1, page_size: int = 50) -> tuple[list[dict], int]:
         """
         根据过滤条件获取Memory列表
 
@@ -131,26 +125,23 @@ class MemoryService(CommonService):
             tuple: (Memory列表, 总数)
         """
         # 构建查询
-        stmt = (
-            select(
-                cls.model.id,
-                cls.model.name,
-                cls.model.avatar,
-                cls.model.tenant_id,
-                User.nickname.label("owner_name"),
-                cls.model.memory_type,
-                cls.model.storage_type,
-                cls.model.embd_id,
-                cls.model.tenant_embd_id,
-                cls.model.llm_id,
-                cls.model.tenant_llm_id,
-                cls.model.permissions,
-                cls.model.description,
-                cls.model.create_time,
-                cls.model.create_date
-            )
-            .join(User, cls.model.tenant_id == User.id)
-        )
+        stmt = select(
+            cls.model.id,
+            cls.model.name,
+            cls.model.avatar,
+            cls.model.tenant_id,
+            User.nickname.label("owner_name"),
+            cls.model.memory_type,
+            cls.model.storage_type,
+            cls.model.embd_id,
+            cls.model.tenant_embd_id,
+            cls.model.llm_id,
+            cls.model.tenant_llm_id,
+            cls.model.permissions,
+            cls.model.description,
+            cls.model.create_time,
+            cls.model.create_date,
+        ).join(User, cls.model.tenant_id == User.id)
 
         # 应用过滤条件
         if filter_dict.get("tenant_id"):
@@ -225,20 +216,14 @@ class MemoryService(CommonService):
         Returns:
             tuple: (是否成功, Memory对象或错误信息)
         """
+
         # 检查名称重复
         def name_exists(name: str, tenant_id: str) -> bool:
-            stmt = select(cls.model.id).where(
-                cls.model.name == name,
-                cls.model.tenant_id == tenant_id
-            )
+            stmt = select(cls.model.id).where(cls.model.name == name, cls.model.tenant_id == tenant_id)
             return db.scalars(stmt).first() is not None
 
         # 生成唯一名称
-        memory_name = duplicate_name(
-            lambda **kw: name_exists(kw["name"], kw["tenant_id"]),
-            name=name,
-            tenant_id=tenant_id
-        )
+        memory_name = duplicate_name(lambda **kw: name_exists(kw["name"], kw["tenant_id"]), name=name, tenant_id=tenant_id)
 
         if len(memory_name) > MEMORY_NAME_LIMIT:
             return False, f"Memory name '{memory_name}' exceeds limit of {MEMORY_NAME_LIMIT}."
@@ -297,26 +282,19 @@ class MemoryService(CommonService):
 
         # 处理名称重复
         if "name" in update_dict:
+
             def name_exists(name: str, tenant_id: str) -> bool:
                 stmt = select(cls.model.id).where(
                     cls.model.name == name,
                     cls.model.tenant_id == tenant_id,
-                    cls.model.id != memory_id  # 排除自身
+                    cls.model.id != memory_id,  # 排除自身
                 )
                 return db.scalars(stmt).first() is not None
 
-            update_dict["name"] = duplicate_name(
-                lambda **kw: name_exists(kw["name"], kw["tenant_id"]),
-                name=update_dict["name"],
-                tenant_id=tenant_id
-            )
+            update_dict["name"] = duplicate_name(lambda **kw: name_exists(kw["name"], kw["tenant_id"]), name=update_dict["name"], tenant_id=tenant_id)
 
         # 更新时间由BaseModel的before_update事件处理
-        stmt = (
-            update(cls.model)
-            .where(cls.model.id == memory_id)
-            .values(**update_dict)
-        )
+        stmt = update(cls.model).where(cls.model.id == memory_id).values(**update_dict)
         result = db.execute(stmt)
         db.commit()
         return result.rowcount

@@ -9,18 +9,18 @@ class OllamaCV(Base):
 
     def __init__(self, key, model_name, lang="Chinese", **kwargs):
         from ollama import Client
+
         self.client = Client(host=kwargs["base_url"])
         self.model_name = model_name
         self.lang = lang
         self.keep_alive = kwargs.get("ollama_keep_alive", int(os.environ.get("OLLAMA_KEEP_ALIVE", -1)))
         Base.__init__(self, **kwargs)
 
-
     def _clean_img(self, img):
         if not isinstance(img, str):
             return img
 
-        #remove the header like "data/*;base64,"
+        # remove the header like "data/*;base64,"
         if img.startswith("data:") and ";base64," in img:
             img = img.split(";base64,")[1]
         return img
@@ -84,12 +84,7 @@ class OllamaCV(Base):
         if images is None:
             images = []
         try:
-            response = self.client.chat(
-                model=self.model_name,
-                messages=self._form_history(system, history, images),
-                options=self._clean_conf(gen_conf),
-                keep_alive=self.keep_alive
-            )
+            response = self.client.chat(model=self.model_name, messages=self._form_history(system, history, images), options=self._clean_conf(gen_conf), keep_alive=self.keep_alive)
 
             ans = response["message"]["content"].strip()
             return ans, response["eval_count"] + response.get("prompt_eval_count", 0)
@@ -101,13 +96,7 @@ class OllamaCV(Base):
             images = []
         ans = ""
         try:
-            response = self.client.chat(
-                model=self.model_name,
-                messages=self._form_history(system, history, images),
-                stream=True,
-                options=self._clean_conf(gen_conf),
-                keep_alive=self.keep_alive
-            )
+            response = self.client.chat(model=self.model_name, messages=self._form_history(system, history, images), stream=True, options=self._clean_conf(gen_conf), keep_alive=self.keep_alive)
             for resp in response:
                 if resp["done"]:
                     yield resp.get("prompt_eval_count", 0) + resp.get("eval_count", 0)

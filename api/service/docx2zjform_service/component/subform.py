@@ -6,6 +6,7 @@ from .input import InputComponent
 
 class SubFormComponent(Component):
     """表格组件"""
+
     _json_str = """
     {
   "val": "子表单",
@@ -271,30 +272,17 @@ class SubFormComponent(Component):
         wid = "tmp" + index
         key = index
 
-        self.json_data["edit"]["dataSource"].append({
-            "index": index,
-            "wid": wid,
-            "key": key
-        })
+        self.json_data["edit"]["dataSource"].append({"index": index, "wid": wid, "key": key})
 
-        self.json_data["edit"]["dataTemplate"].update({
-            "index": index,
-            "wid": wid,
-            "key": key
-        })
+        self.json_data["edit"]["dataTemplate"].update({"index": index, "wid": wid, "key": key})
 
     def add_input_component(self, input_component: InputComponent):
         columns = self.json_data["edit"]["columns"]
         columns_count = len(columns)
         data_index = "option" + str(columns_count + 1)
-        columns.append({
-            "dataIndex": data_index,
-            "key": columns_count + 1,
-            "index": columns_count + 1,
-            "title": input_component.json_data["edit"]["title"],
-            "requiredCol": False,
-            "requiredType": "sign"
-        })
+        columns.append(
+            {"dataIndex": data_index, "key": columns_count + 1, "index": columns_count + 1, "title": input_component.json_data["edit"]["title"], "requiredCol": False, "requiredType": "sign"}
+        )
 
         data_source = self.json_data["edit"]["dataSource"][0]
         data_source[data_index] = input_component.json_data

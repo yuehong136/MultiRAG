@@ -17,7 +17,7 @@ def convert_aggregation_value(column_name: str, value: Any) -> Any:
         return value
 
     # 提取函数名（不区分大小写）
-    func_match = re.match(r'(\w+)\s*\(', column_name.upper().strip())
+    func_match = re.match(r"(\w+)\s*\(", column_name.upper().strip())
     if not func_match:
         return value
 
@@ -64,7 +64,7 @@ def _smart_convert_value(value: str) -> Any:
 
     # 尝试转为整数
     try:
-        if '.' not in value and 'e' not in value.lower():
+        if "." not in value and "e" not in value.lower():
             return int(value)
     except ValueError:
         pass
@@ -80,14 +80,14 @@ def _smart_convert_value(value: str) -> Any:
         pass
 
     # 尝试转为布尔值
-    if value.lower() in ('true', 'false'):
-        return value.lower() == 'true'
+    if value.lower() in ("true", "false"):
+        return value.lower() == "true"
 
     # 日期格式检查（简单的格式）
     date_patterns = [
-        r'^\d{4}-\d{2}-\d{2}$',  # YYYY-MM-DD
-        r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$',  # YYYY-MM-DD HH:MM:SS
-        r'^\d{2}/\d{2}/\d{4}$',  # MM/DD/YYYY
+        r"^\d{4}-\d{2}-\d{2}$",  # YYYY-MM-DD
+        r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$",  # YYYY-MM-DD HH:MM:SS
+        r"^\d{2}/\d{2}/\d{4}$",  # MM/DD/YYYY
     ]
 
     for pattern in date_patterns:
@@ -104,23 +104,19 @@ if __name__ == "__main__":
         # COUNT 测试
         ("COUNT(id)", "123", 123),
         ("count(user_id)", "0", 0),
-
         # SUM 测试
         ("SUM(amount)", "1000", 1000),
         ("SUM(price)", "123.45", 123.45),
         ("SUM(quantity)", "100.0", 100),
-
         # AVG 测试
         ("AVG(score)", "85.5", 85.5),
         ("AVG(age)", "25.0", 25),
-
         # MAX/MIN 测试
         ("MAX(price)", "999.99", 999.99),
         ("MAX(price)", "1000", 1000),
         ("MAX(created_at)", "2023-12-01", "2023-12-01"),
         ("MIN(name)", "Alice", "Alice"),
         ("MAX(is_active)", "true", True),
-
         # 边界情况
         ("CUSTOM_FUNC(field)", "123", "123"),  # 未知函数保持原值
         ("COUNT(id)", 123, 123),  # 非字符串输入

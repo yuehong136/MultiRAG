@@ -17,7 +17,7 @@ warnings.filterwarnings("ignore", category=getpass.GetPassWarning)
 class MultiRAGCLI(Cmd):
     def __init__(self):
         super().__init__()
-        self.parser = Lark(GRAMMAR, start='start', parser='lalr', transformer=MultiRAGCLITransformer())
+        self.parser = Lark(GRAMMAR, start="start", parser="lalr", transformer=MultiRAGCLITransformer())
         self.command_history = []
         self.account = "admin@datav.com"
         self.account_password: str = "admin"
@@ -32,7 +32,7 @@ class MultiRAGCLI(Cmd):
             result = self.parse_command(command)
 
             if isinstance(result, dict):
-                if 'type' in result and result.get('type') == 'empty':
+                if "type" in result and result.get("type") == "empty":
                     return False
 
             self.execute_command(result)
@@ -40,7 +40,7 @@ class MultiRAGCLI(Cmd):
             if isinstance(result, Tree):
                 return False
 
-            if result.get('type') == 'meta' and result.get('command') in ['q', 'quit', 'exit']:
+            if result.get("type") == "meta" and result.get("command") in ["q", "quit", "exit"]:
                 return True
 
         except KeyboardInterrupt:
@@ -58,7 +58,7 @@ class MultiRAGCLI(Cmd):
 
     def parse_command(self, command_str: str) -> dict[str, str]:
         if not command_str.strip():
-            return {'type': 'empty'}
+            return {"type": "empty"}
 
         self.command_history.append(command_str)
 
@@ -66,7 +66,7 @@ class MultiRAGCLI(Cmd):
             result = self.parser.parse(command_str)
             return result
         except Exception as e:
-            return {'type': 'error', 'message': f'Parse error: {e!s}'}
+            return {"type": "error", "message": f"Parse error: {e!s}"}
 
     def verify_auth(self, arguments: dict[str, str | int], single_command: bool, auth: bool = True) -> bool:
         host = str(arguments["host"])
@@ -96,9 +96,7 @@ class MultiRAGCLI(Cmd):
             if try_count > attempt_count:
                 return False
 
-            account_passwd = str(arguments["password"]) if single_command else getpass.getpass(
-                f"password for {self.account}: "
-            ).strip()
+            account_passwd = str(arguments["password"]) if single_command else getpass.getpass(f"password for {self.account}: ").strip()
             try:
                 token = login_user(http_client, server_type, self.account, account_passwd)
                 if not token.startswith("Bearer "):
@@ -137,7 +135,7 @@ class MultiRAGCLI(Cmd):
 
     def run_single_command(self, args: dict[str, Any]):
         if self.verify_auth(args, single_command=True, auth=args.get("auth", True)):
-            command: str = args['command']
+            command: str = args["command"]
             result = self.parse_command(command)
             self.execute_command(result)
 
@@ -147,10 +145,7 @@ class MultiRAGCLI(Cmd):
         parser.add_argument("-p", "--port", type=int, default=None, help="Service port (default: 8130 for admin mode, 8123 for user mode)")
         parser.add_argument("-w", "--password", default="admin", type=str, help="Account password")
         parser.add_argument("-t", "--type", default="admin", type=str, help="CLI mode: admin or user")
-        parser.add_argument(
-            "-u", "--username", default=None,
-            help="Username. In admin mode default is admin@datav.com, in user mode this is required."
-        )
+        parser.add_argument("-u", "--username", default=None, help="Username. In admin mode default is admin@datav.com, in user mode this is required.")
         parser.add_argument("command", nargs="?", help="Single command")
 
         try:
@@ -192,13 +187,13 @@ def main():
     cli = MultiRAGCLI()
 
     args = cli.parse_connection_args(sys.argv)
-    if 'error' in args:
+    if "error" in args:
         print("Error: Invalid connection arguments")
         return
 
-    if 'command' in args:
+    if "command" in args:
         # single command mode
-        if 'password' not in args:
+        if "password" not in args:
             print("Error: password is missing")
             return
         cli.run_single_command(args)
@@ -207,5 +202,5 @@ def main():
         cli.run_interactive(args)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

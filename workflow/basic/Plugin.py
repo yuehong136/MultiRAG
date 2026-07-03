@@ -8,7 +8,7 @@ class PluginParameter(NodeParameter):
     pass
 
 
-P = TypeVar('P', bound=PluginParameter)
+P = TypeVar("P", bound=PluginParameter)
 
 
 class Plugin(Node[P], ABC):

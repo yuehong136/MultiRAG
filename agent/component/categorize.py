@@ -50,12 +50,7 @@ class CategorizeParam(LLMParam):
                 raise ValueError(f"[Categorize] 'To' of category {k} can not be empty!")
 
     def get_input_form(self) -> dict[str, dict]:
-        return {
-            "query": {
-                "type": "line",
-                "name": "Query"
-            }
-        }
+        return {"query": {"type": "line", "name": "Query"}}
 
     def update_prompt(self):
         cate_lines = []
@@ -63,13 +58,12 @@ class CategorizeParam(LLMParam):
             for line in desc.get("examples", []):
                 if not line:
                     continue
-                cate_lines.append("USER: \"" + re.sub(r"\n", "    ", line, flags=re.DOTALL) + "\" → " + c)
+                cate_lines.append('USER: "' + re.sub(r"\n", "    ", line, flags=re.DOTALL) + '" → ' + c)
 
         descriptions = []
         for c, desc in self.category_description.items():
             if desc.get("description"):
-                descriptions.append(
-                    "\n------\nCategory: {}\nDescription: {}".format(c, desc["description"]))
+                descriptions.append("\n------\nCategory: {}\nDescription: {}".format(c, desc["description"]))
 
         self.sys_prompt = """
 You are an advanced classification system that categorizes user questions into specific types. Analyze the input question and classify it into ONE of the following categories:
@@ -84,10 +78,7 @@ Here's description of each category:
  - Return only the category name without explanations
  - Use "Other" only when no other category fits
 
- """.format(
-            "\n - ".join(list(self.category_description.keys())),
-            "\n".join(descriptions)
-        )
+ """.format("\n - ".join(list(self.category_description.keys())), "\n".join(descriptions))
 
         if cate_lines:
             self.sys_prompt += """
@@ -106,7 +97,7 @@ class Categorize(LLM, ABC):
             logging.warning(f"[Categorize] input element not detected for query key: {query_key}")
         return elements
 
-    @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10*60)))
+    @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10 * 60)))
     async def _invoke_async(self, **kwargs):
         if self.check_if_canceled("Categorize processing"):
             return
@@ -126,14 +117,17 @@ class Categorize(LLM, ABC):
         self._param.update_prompt()
         with db_connection() as db:
             model_config = get_model_config_by_type_and_name(
-                db, self._canvas.get_tenant_id(), LLMType.CHAT.value, self._param.llm_id,
+                db,
+                self._canvas.get_tenant_id(),
+                LLMType.CHAT.value,
+                self._param.llm_id,
             )
             chat_mdl = LLMBundle(db, self._canvas.get_tenant_id(), model_config)
 
         user_prompt = """
 ---- Real Data ----
 {} →
-""".format(" | ".join(["{}: \"{}\"".format(c["role"].upper(), re.sub(r"\n", "", c["content"], flags=re.DOTALL)) for c in msg]))
+""".format(" | ".join(['{}: "{}"'.format(c["role"].upper(), re.sub(r"\n", "", c["content"], flags=re.DOTALL)) for c in msg]))
 
         if self.check_if_canceled("Categorize processing"):
             return

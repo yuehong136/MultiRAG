@@ -104,8 +104,8 @@ class HybridSearchMode(BaseModel):
     weight_dense: float = Field(default=0.7, ge=0.0, le=1.0)
     weight_sparse: float = Field(default=0.3, ge=0.0, le=1.0)
 
-    @model_validator(mode='after')
-    def validate_weights(self) -> 'HybridSearchMode':
+    @model_validator(mode="after")
+    def validate_weights(self) -> "HybridSearchMode":
         """确保权重和为1，如果不是则自动调整"""
         total = self.weight_dense + self.weight_sparse
         if abs(total - 1.0) > 0.001:
@@ -119,11 +119,11 @@ class FusionSearchMode(BaseModel):
     type: Literal["fusion"] = "fusion"
     weights: str = Field(default="0.05,0.95")
 
-    @model_validator(mode='after')
-    def validate_weights_format(self) -> 'FusionSearchMode':
+    @model_validator(mode="after")
+    def validate_weights_format(self) -> "FusionSearchMode":
         """验证weights格式"""
         try:
-            parts = self.weights.split(',')
+            parts = self.weights.split(",")
             if len(parts) != 2:
                 raise ValueError("weights must contain exactly two comma-separated values")
             float(parts[0].strip())
@@ -134,10 +134,7 @@ class FusionSearchMode(BaseModel):
 
 
 # 使用 Discriminator 的高效版本
-SearchModeType = Annotated[
-    SparseSearchMode | DenseSearchMode | HybridSearchMode | FusionSearchMode,
-    Discriminator('type')
-]
+SearchModeType = Annotated[SparseSearchMode | DenseSearchMode | HybridSearchMode | FusionSearchMode, Discriminator("type")]
 
 
 class RetrievalTestRequest(BaseModel):
@@ -165,37 +162,158 @@ class RetrievalTestRequest(BaseModel):
             return None
 
         mode_data = self.search_mode.model_dump()
-        mode_type = mode_data.pop('type')
+        mode_type = mode_data.pop("type")
         return {mode_type: mode_data}
 
 
-@router.post('/list', summary="列出文档块")
+@router.post("/list", summary="列出文档块")
 async def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
-    ### POST `/list` 列出文档块接口
+        ### POST `/list` 列出文档块接口
 
-**功能描述**:
-此接口用于根据文档 ID 列出文档块，支持分页查询、关键词搜索和高亮显示内容，返回匹配的文档块信息。
+    **功能描述**:
+    此接口用于根据文档 ID 列出文档块，支持分页查询、关键词搜索和高亮显示内容，返回匹配的文档块信息。
 
----
+    ---
 
-### 请求体 (Request Body)
+    ### 请求体 (Request Body)
 
-| 字段          | 类型          | 必填 | 描述                                                                                 |
-|---------------|---------------|------|--------------------------------------------------------------------------------------|
-| `doc_id`      | `string`      | 是   | 文档的唯一标识符。                                                                   |
-| `page`        | `int`         | 是   | 当前页码，用于分页查询。                                                             |
-| `size`        | `int`         | 是   | 每页返回的文档块数量。                                                               |
-| `keywords`    | `string`      | 否   | 搜索关键词，用于高亮匹配文档块的内容。                                               |
+    | 字段          | 类型          | 必填 | 描述                                                                                 |
+    |---------------|---------------|------|--------------------------------------------------------------------------------------|
+    | `doc_id`      | `string`      | 是   | 文档的唯一标识符。                                                                   |
+    | `page`        | `int`         | 是   | 当前页码，用于分页查询。                                                             |
+    | `size`        | `int`         | 是   | 每页返回的文档块数量。                                                               |
+    | `keywords`    | `string`      | 否   | 搜索关键词，用于高亮匹配文档块的内容。                                               |
 
----
+    ---
 
-### 响应 (Response)
+    ### 响应 (Response)
 
-#### 成功响应 (200)
+    #### 成功响应 (200)
 
-- **`Content-Type: application/json`**
-- **示例**:
+    - **`Content-Type: application/json`**
+    - **示例**:
+        ```json
+        {
+            "retcode": 0,
+            "retmsg": "success",
+            "data": {
+                "total": 2,
+                "chunks": [
+                    {
+                        "chunk_id": "chunk_001",
+                        "content_with_weight": "问题：人工智能是什么？ 答案：人工智能是计算机科学的一个分支。",
+                        "doc_id": "67890",
+                        "docnm_kwd": ["人工智能"],
+                        "important_kwd": ["计算机科学"],
+                        "img_id": "img_123",
+                        "available_int": 1,
+                        "positions": [
+                            [0.1, 0.2, 0.3, 0.4, 0.5]
+                        ]
+                    },
+                    {
+                        "chunk_id": "chunk_002",
+                        "content_with_weight": "人工智能涉及机器学习和深度学习。",
+                        "doc_id": "67890",
+                        "docnm_kwd": ["机器学习"],
+                        "important_kwd": ["深度学习"],
+                        "img_id": "img_124",
+                        "available_int": 1,
+                        "positions": []
+                    }
+                ],
+                "doc": {
+                    "doc_id": "67890",
+                    "name": "人工智能概述",
+                    "kb_id": "kb_001"
+                }
+            }
+        }
+        ```
+
+    #### 错误响应
+
+    - **404: Tenant not found**
+        - **描述**: 当根据 `doc_id` 查询租户信息失败时，返回此错误。
+        - **示例**:
+            ```json
+            {
+                "detail": "Tenant not found!"
+            }
+            ```
+
+    - **404: Document not found**
+        - **描述**: 当根据 `doc_id` 查询文档信息失败时，返回此错误。
+        - **示例**:
+            ```json
+            {
+                "detail": "Document not found!"
+            }
+            ```
+
+    - **404: No chunk found**
+        - **描述**: 当没有找到匹配的文档块时，返回此错误。
+        - **示例**:
+            ```json
+            {
+                "retcode": 404,
+                "retmsg": "No chunk found!",
+                "data": false
+            }
+            ```
+
+    - **500: 内部错误**
+        - **描述**: 当发生意外错误时，返回此错误。
+        - **示例**:
+            ```json
+            {
+                "retcode": 500,
+                "retmsg": "Internal server error",
+                "detail": "具体错误信息"
+            }
+            ```
+
+    ---
+
+    ### 主要流程
+
+    1. 从请求体提取 `doc_id`、`page`、`size` 和 `keywords`。
+    2. 验证文档块所属的租户 (`tenant_id`) 和文档是否存在。
+    3. 根据分页参数和关键词搜索查询文档块数据。
+    4. 处理搜索结果：
+        - 如果 `keywords` 存在，则高亮显示匹配的内容。
+        - 将位置信息按每 5 个数值分组，解析为数组结构。
+    5. 返回文档块列表和文档基本信息。
+
+    ---
+
+    ### 注意事项
+
+    - **关键词搜索**:
+        - 如果传入 `keywords`，将匹配的内容高亮显示。
+    - **位置信息解析**:
+        - 位置信息字段 `positions` 的值按 5 个一组解析为数组结构，用于表示块的坐标或其他标记。
+    - **分页查询**:
+        - `page` 和 `size` 字段控制分页查询，每次返回指定页码的文档块集合。
+    - **高亮内容**:
+        - 若存在匹配的关键词，高亮显示结果会替换原始 `content_with_weight`。
+
+    ---
+
+    ### 示例请求
+
+    #### 请求体:
+    ```json
+    {
+        "doc_id": "67890",
+        "page": 1,
+        "size": 10,
+        "keywords": "人工智能"
+    }
+    ```
+
+    - **成功响应**:
     ```json
     {
         "retcode": 0,
@@ -214,16 +332,6 @@ async def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), u
                     "positions": [
                         [0.1, 0.2, 0.3, 0.4, 0.5]
                     ]
-                },
-                {
-                    "chunk_id": "chunk_002",
-                    "content_with_weight": "人工智能涉及机器学习和深度学习。",
-                    "doc_id": "67890",
-                    "docnm_kwd": ["机器学习"],
-                    "important_kwd": ["深度学习"],
-                    "img_id": "img_124",
-                    "available_int": 1,
-                    "positions": []
                 }
             ],
             "doc": {
@@ -235,125 +343,14 @@ async def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), u
     }
     ```
 
-#### 错误响应
-
-- **404: Tenant not found**
-    - **描述**: 当根据 `doc_id` 查询租户信息失败时，返回此错误。
-    - **示例**:
-        ```json
-        {
-            "detail": "Tenant not found!"
-        }
-        ```
-
-- **404: Document not found**
-    - **描述**: 当根据 `doc_id` 查询文档信息失败时，返回此错误。
-    - **示例**:
-        ```json
-        {
-            "detail": "Document not found!"
-        }
-        ```
-
-- **404: No chunk found**
-    - **描述**: 当没有找到匹配的文档块时，返回此错误。
-    - **示例**:
-        ```json
-        {
-            "retcode": 404,
-            "retmsg": "No chunk found!",
-            "data": false
-        }
-        ```
-
-- **500: 内部错误**
-    - **描述**: 当发生意外错误时，返回此错误。
-    - **示例**:
-        ```json
-        {
-            "retcode": 500,
-            "retmsg": "Internal server error",
-            "detail": "具体错误信息"
-        }
-        ```
-
----
-
-### 主要流程
-
-1. 从请求体提取 `doc_id`、`page`、`size` 和 `keywords`。
-2. 验证文档块所属的租户 (`tenant_id`) 和文档是否存在。
-3. 根据分页参数和关键词搜索查询文档块数据。
-4. 处理搜索结果：
-    - 如果 `keywords` 存在，则高亮显示匹配的内容。
-    - 将位置信息按每 5 个数值分组，解析为数组结构。
-5. 返回文档块列表和文档基本信息。
-
----
-
-### 注意事项
-
-- **关键词搜索**:
-    - 如果传入 `keywords`，将匹配的内容高亮显示。
-- **位置信息解析**:
-    - 位置信息字段 `positions` 的值按 5 个一组解析为数组结构，用于表示块的坐标或其他标记。
-- **分页查询**:
-    - `page` 和 `size` 字段控制分页查询，每次返回指定页码的文档块集合。
-- **高亮内容**:
-    - 若存在匹配的关键词，高亮显示结果会替换原始 `content_with_weight`。
-
----
-
-### 示例请求
-
-#### 请求体:
-```json
-{
-    "doc_id": "67890",
-    "page": 1,
-    "size": 10,
-    "keywords": "人工智能"
-}
-```
-
-- **成功响应**:
-```json
-{
-    "retcode": 0,
-    "retmsg": "success",
-    "data": {
-        "total": 2,
-        "chunks": [
-            {
-                "chunk_id": "chunk_001",
-                "content_with_weight": "问题：人工智能是什么？ 答案：人工智能是计算机科学的一个分支。",
-                "doc_id": "67890",
-                "docnm_kwd": ["人工智能"],
-                "important_kwd": ["计算机科学"],
-                "img_id": "img_123",
-                "available_int": 1,
-                "positions": [
-                    [0.1, 0.2, 0.3, 0.4, 0.5]
-                ]
-            }
-        ],
-        "doc": {
-            "doc_id": "67890",
-            "name": "人工智能概述",
-            "kb_id": "kb_001"
-        }
+    - **错误响应 (无匹配文档块)**:
+    ```json
+    {
+        "retcode": 404,
+        "retmsg": "No chunk found!",
+        "data": false
     }
-}
-```
-
-- **错误响应 (无匹配文档块)**:
-```json
-{
-    "retcode": 404,
-    "retmsg": "No chunk found!",
-    "data": false
-}
-```
+    ```
     """
     try:
         tenant_id = DocumentService.get_tenant_id(db, request.doc_id)
@@ -364,10 +361,7 @@ async def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), u
             return get_data_error_result(retmsg="Document not found!")
         kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
         kb_ids = KnowledgebaseService.get_kb_ids(db, tenant_id)
-        query = {
-            "doc_ids": [request.doc_id], "page": request.page, "size": request.size, "question": request.keywords,
-            "sort": True
-        }
+        query = {"doc_ids": [request.doc_id], "page": request.page, "size": request.size, "question": request.keywords, "sort": True}
         if request.keywords:
             query["filter_exp"] = f"content_with_weight like '%{request.keywords}%'" if request.keywords else None
 
@@ -387,9 +381,7 @@ async def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), u
         for id in sres.ids:
             d = {
                 "chunk_id": id,
-                "content_with_weight": remove_redundant_spaces(sres.highlight[id]) if request.keywords and id in sres.highlight else
-                sres.field[id].get(
-                    "content_with_weight", ""),
+                "content_with_weight": remove_redundant_spaces(sres.highlight[id]) if request.keywords and id in sres.highlight else sres.field[id].get("content_with_weight", ""),
                 "doc_id": sres.field[id]["doc_id"],
                 "docnm_kwd": sres.field[id]["docnm_kwd"],
                 "important_kwd": sres.field[id].get("important_kwd", []),
@@ -398,7 +390,7 @@ async def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), u
                 "img_id": sres.field[id].get("img_id", ""),
                 "available_int": int(sres.field[id].get("available_int", 1)),
                 "positions": sres.field[id].get("position_int", []),
-                "doc_type_kwd": sres.field[id].get("doc_type_kwd")
+                "doc_type_kwd": sres.field[id].get("doc_type_kwd"),
             }
             # if len(d["positions"]) % 5 == 0:
             #     poss = []
@@ -417,12 +409,11 @@ async def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), u
         return get_json_result(data=res)
     except Exception as e:
         if str(e).find("not_found") > 0:
-            return get_json_result(data=False, retmsg='No chunk found!',
-                                   retcode=RetCode.DATA_ERROR)
+            return get_json_result(data=False, retmsg="No chunk found!", retcode=RetCode.DATA_ERROR)
         return server_error_response(e)
 
 
-@router.get('/get', summary="获取文档块")
+@router.get("/get", summary="获取文档块")
 def get(chunk_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### GET `/get` 获取文档块详细信息接口
@@ -568,12 +559,11 @@ def get(chunk_id: str, db: Session = Depends(get_db), user=Depends(manager)):
         return get_json_result(data=converted_chunk)
     except Exception as e:
         if str(e).find("NotFoundError") >= 0:
-            return get_json_result(data=False, retmsg='Chunk not found!',
-                                   retcode=RetCode.DATA_ERROR)
+            return get_json_result(data=False, retmsg="Chunk not found!", retcode=RetCode.DATA_ERROR)
         return server_error_response(e)
 
 
-@router.post('/vector_store/query', summary="向量存储字段查询（可选语义检索）")
+@router.post("/vector_store/query", summary="向量存储字段查询（可选语义检索）")
 async def query_vector_store(request: VectorStoreQueryRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     根据 `doc_id` 或自定义过滤条件从向量存储中查询指定字段。
@@ -641,14 +631,7 @@ async def query_vector_store(request: VectorStoreQueryRequest, db: Session = Dep
             embd_mdl = LLMBundle(db, tenant_id, embd_config)
             dealer = search.Dealer(settings.docStoreConn)
             # 使用固定的 topk 以确保 total 保持一致
-            match_exprs.append(
-                await dealer.get_vector(
-                    request.question,
-                    embd_mdl,
-                    topk=1024,
-                    similarity=request.similarity if request.similarity is not None else 0.1
-                )
-            )
+            match_exprs.append(await dealer.get_vector(request.question, embd_mdl, topk=1024, similarity=request.similarity if request.similarity is not None else 0.1))
 
         search_res = await thread_pool_exec(
             settings.docStoreConn.search,
@@ -680,7 +663,7 @@ async def query_vector_store(request: VectorStoreQueryRequest, db: Session = Dep
         return server_error_response(e)
 
 
-@router.post('/set', summary="设置文档块")
+@router.post("/set", summary="设置文档块")
 def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/set` 更新文档块
@@ -813,17 +796,12 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
         embd_mdl = LLMBundle(db, tenant_id, embd_config)
 
         if doc.parser_id == ParserType.QA:
-            arr = [
-                t for t in re.split(
-                    r"[\n\t]",
-                    request.content_with_weight) if len(t) > 1]
+            arr = [t for t in re.split(r"[\n\t]", request.content_with_weight) if len(t) > 1]
             q, a = rmPrefix(arr[0]), rmPrefix("\n".join(arr[1:]))
-            d = beAdoc(d, q, a, not any(
-                rag_tokenizer.is_chinese(t) for t in q + a))
+            d = beAdoc(d, q, a, not any(rag_tokenizer.is_chinese(t) for t in q + a))
 
         # 计算向量
-        v, c = embd_mdl.encode(
-            [doc.name, request.content_with_weight if not d["question_kwd"] else "\n".join(d["question_kwd"])])
+        v, c = embd_mdl.encode([doc.name, request.content_with_weight if not d["question_kwd"] else "\n".join(d["question_kwd"])])
         v = 0.1 * v[0] + 0.9 * v[1] if doc.parser_id != ParserType.QA else v[1]
 
         # 同时存储到标准vector字段和维度特定字段
@@ -848,7 +826,7 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
         return server_error_response(e)
 
 
-@router.post('/switch', summary="切换文档块状态")
+@router.post("/switch", summary="切换文档块状态")
 def switch(request: SwitchChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/switch` 切换文档块状态接口
@@ -918,7 +896,6 @@ def switch(request: SwitchChunkRequest, db: Session = Depends(get_db), user=Depe
     ```
     """
 
-
     req = request.model_dump()
     try:
         doc = DocumentService.get_by_id(db, req["doc_id"])
@@ -926,41 +903,124 @@ def switch(request: SwitchChunkRequest, db: Session = Depends(get_db), user=Depe
         if not doc:
             return get_data_error_result(retmsg="Document not found!")
         for cid in req["chunk_ids"]:
-            if not settings.docStoreConn.update({"id": cid},
-                                                {"available_int": int(req["available_int"])},
-                                                search.index_name_one(DocumentService.get_tenant_id(db, req["doc_id"]), kb.name),
-                                                doc.kb_id):
+            if not settings.docStoreConn.update({"id": cid}, {"available_int": int(req["available_int"])}, search.index_name_one(DocumentService.get_tenant_id(db, req["doc_id"]), kb.name), doc.kb_id):
                 return get_data_error_result(retmsg="Index updating failure")
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)
 
 
-@router.post('/rm', summary="删除文档块")
+@router.post("/rm", summary="删除文档块")
 def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
-    ### POST `/rm` 删除文档块接口
+        ### POST `/rm` 删除文档块接口
 
-**功能描述**:
-此接口用于删除指定文档的块数据，同时更新相关的索引和文档统计信息。
+    **功能描述**:
+    此接口用于删除指定文档的块数据，同时更新相关的索引和文档统计信息。
 
----
+    ---
 
-### 请求体 (Request Body)
+    ### 请求体 (Request Body)
 
-| 字段       | 类型          | 必填 | 描述                     |
-|------------|---------------|------|--------------------------|
-| `doc_id`   | `string`      | 是   | 需要操作的文档唯一标识符 |
-| `chunk_ids`| `list[string]`| 是   | 要删除的文档块 ID 列表   |
+    | 字段       | 类型          | 必填 | 描述                     |
+    |------------|---------------|------|--------------------------|
+    | `doc_id`   | `string`      | 是   | 需要操作的文档唯一标识符 |
+    | `chunk_ids`| `list[string]`| 是   | 要删除的文档块 ID 列表   |
 
----
+    ---
 
-### 响应 (Response)
+    ### 响应 (Response)
 
-#### 成功响应 (200)
+    #### 成功响应 (200)
 
-- **`Content-Type: application/json`**
-- **示例**:
+    - **`Content-Type: application/json`**
+    - **示例**:
+        ```json
+        {
+            "retcode": 0,
+            "retmsg": "success",
+            "data": true
+        }
+        ```
+
+    #### 错误响应
+
+    - **404: Document not found**
+        - **描述**: 当根据 `doc_id` 查询不到对应文档时返回此错误。
+        - **示例**:
+            ```json
+            {
+                "retcode": 404,
+                "retmsg": "Document not found!"
+            }
+            ```
+
+    - **404: KnowledgeBase not found**
+        - **描述**: 当文档对应的知识库不存在时返回此错误。
+        - **示例**:
+            ```json
+            {
+                "retcode": 404,
+                "retmsg": "KnowledgeBase not found!"
+            }
+            ```
+
+    - **400: Index updating failure**
+        - **描述**: 当删除索引中的文档块失败时返回此错误。
+        - **示例**:
+            ```json
+            {
+                "retcode": 400,
+                "retmsg": "Index updating failure"
+            }
+            ```
+
+    - **500: 内部错误**
+        - **描述**: 当发生意外错误时返回此错误。
+        - **示例**:
+            ```json
+            {
+                "retcode": 500,
+                "retmsg": "Internal server error",
+                "detail": "具体错误信息"
+            }
+            ```
+
+    ---
+
+    ### 主要流程
+
+    1. 验证文档和知识库的存在性：
+        - 根据 `doc_id` 获取文档信息。
+        - 根据文档的 `kb_id` 获取知识库信息。
+    2. 删除索引中的指定文档块：
+        - 调用 `delete` 方法从索引中删除文档块。
+    3. 更新文档的块统计信息：
+        - 调用 `DocumentService.decrement_chunk_num` 减少文档的块数量统计。
+    4. 返回操作结果。
+
+    ---
+
+    ### 注意事项
+
+    - **索引删除**:
+      文档块的删除操作会同步影响索引中的数据，确保 `chunk_ids` 的完整性和正确性。
+    - **统计更新**:
+      删除操作会调整文档的块数量统计，若删除操作失败，将不更新统计信息。
+
+    ---
+
+    ### 示例请求
+
+    #### 请求体:
+    ```json
+    {
+        "doc_id": "12345",
+        "chunk_ids": ["67890", "98765"]
+    }
+    ```
+
+    - **成功响应**:
     ```json
     {
         "retcode": 0,
@@ -969,112 +1029,26 @@ def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(mana
     }
     ```
 
-#### 错误响应
-
-- **404: Document not found**
-    - **描述**: 当根据 `doc_id` 查询不到对应文档时返回此错误。
-    - **示例**:
-        ```json
-        {
-            "retcode": 404,
-            "retmsg": "Document not found!"
-        }
-        ```
-
-- **404: KnowledgeBase not found**
-    - **描述**: 当文档对应的知识库不存在时返回此错误。
-    - **示例**:
-        ```json
-        {
-            "retcode": 404,
-            "retmsg": "KnowledgeBase not found!"
-        }
-        ```
-
-- **400: Index updating failure**
-    - **描述**: 当删除索引中的文档块失败时返回此错误。
-    - **示例**:
-        ```json
-        {
-            "retcode": 400,
-            "retmsg": "Index updating failure"
-        }
-        ```
-
-- **500: 内部错误**
-    - **描述**: 当发生意外错误时返回此错误。
-    - **示例**:
-        ```json
-        {
-            "retcode": 500,
-            "retmsg": "Internal server error",
-            "detail": "具体错误信息"
-        }
-        ```
-
----
-
-### 主要流程
-
-1. 验证文档和知识库的存在性：
-    - 根据 `doc_id` 获取文档信息。
-    - 根据文档的 `kb_id` 获取知识库信息。
-2. 删除索引中的指定文档块：
-    - 调用 `delete` 方法从索引中删除文档块。
-3. 更新文档的块统计信息：
-    - 调用 `DocumentService.decrement_chunk_num` 减少文档的块数量统计。
-4. 返回操作结果。
-
----
-
-### 注意事项
-
-- **索引删除**:
-  文档块的删除操作会同步影响索引中的数据，确保 `chunk_ids` 的完整性和正确性。
-- **统计更新**:
-  删除操作会调整文档的块数量统计，若删除操作失败，将不更新统计信息。
-
----
-
-### 示例请求
-
-#### 请求体:
-```json
-{
-    "doc_id": "12345",
-    "chunk_ids": ["67890", "98765"]
-}
-```
-
-- **成功响应**:
-```json
-{
-    "retcode": 0,
-    "retmsg": "success",
-    "data": true
-}
-```
-
-- **错误响应 (文档不存在)**:
-```json
-{
-    "retcode": 404,
-    "retmsg": "Document not found!"
-}
-```
-```json
-{
-    "retcode": 400,
-    "retmsg": "Index updating failure"
-}
-```
-```json
-{
-    "retcode": 500,
-    "retmsg": "Internal server error",
-    "detail": "详细的错误信息"
-}
-```
+    - **错误响应 (文档不存在)**:
+    ```json
+    {
+        "retcode": 404,
+        "retmsg": "Document not found!"
+    }
+    ```
+    ```json
+    {
+        "retcode": 400,
+        "retmsg": "Index updating failure"
+    }
+    ```
+    ```json
+    {
+        "retcode": 500,
+        "retmsg": "Internal server error",
+        "detail": "详细的错误信息"
+    }
+    ```
     """
     req = request.model_dump()
     try:
@@ -1122,17 +1096,9 @@ def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(mana
         condition = {"id": req["chunk_ids"], "doc_id": req["doc_id"]}
         try:
             if db_type == "milvus":
-                deleted_count = settings.docStoreConn.delete(
-                    condition=condition,
-                    index_name=collection_name,
-                    dataset_id=kb.id
-                )
+                deleted_count = settings.docStoreConn.delete(condition=condition, index_name=collection_name, dataset_id=kb.id)
             else:
-                deleted_count = settings.docStoreConn.delete(
-                    condition,
-                    collection_name,
-                    kb.id
-                )
+                deleted_count = settings.docStoreConn.delete(condition, collection_name, kb.id)
         except Exception:
             return get_data_error_result(retmsg="Chunk deleting failure")
         if has_ids and deleted_count == 0:
@@ -1146,7 +1112,8 @@ def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(mana
     except Exception as e:
         return server_error_response(e)
 
-@router.post('/create', summary="创建文档块")
+
+@router.post("/create", summary="创建文档块")
 def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/create` 创建文档块接口
@@ -1290,8 +1257,7 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
     """
     req = request.model_dump()
     chunk_id = xxhash.xxh64((request.content_with_weight + request.doc_id).encode("utf-8")).hexdigest()
-    d = {"id": chunk_id, "content_ltks": rag_tokenizer.tokenize(req["content_with_weight"]),
-         "content_with_weight": req["content_with_weight"]}
+    d = {"id": chunk_id, "content_ltks": rag_tokenizer.tokenize(req["content_with_weight"]), "content_with_weight": req["content_with_weight"]}
     d["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(d["content_ltks"])
     d["important_kwd"] = req.get("important_kwd", [])
     if not isinstance(d["important_kwd"], list):
@@ -1356,8 +1322,7 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
                 embd_config = get_tenant_default_model_by_type(db, tenant_id, LLMType.EMBEDDING)
         embd_mdl = LLMBundle(db, tenant_id, embd_config)
 
-        v, c = embd_mdl.encode(
-            [doc.name, req["content_with_weight"] if not d["question_kwd"] else "\n".join(d["question_kwd"])])
+        v, c = embd_mdl.encode([doc.name, req["content_with_weight"] if not d["question_kwd"] else "\n".join(d["question_kwd"])])
         v = 0.1 * v[0] + 0.9 * v[1]
 
         # 同时存储到标准vector字段和维度特定字段
@@ -1370,14 +1335,13 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
         if image_base64:
             store_chunk_image(doc.kb_id, chunk_id, base64.b64decode(image_base64))
 
-        DocumentService.increment_chunk_num(
-            db, doc.id, doc.kb_id, c, 1, 0)
+        DocumentService.increment_chunk_num(db, doc.id, doc.kb_id, c, 1, 0)
         return get_json_result(data={"chunk_id": chunk_id, "image_id": d.get("img_id", "")})
     except Exception as e:
         return server_error_response(e)
 
 
-@router.post('/retrieval_test', summary="检索测试")
+@router.post("/retrieval_test", summary="检索测试")
 async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     检索测试接口
@@ -1586,7 +1550,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
     kb_ids = request.kb_ids
     question = request.question
     if not kb_ids:
-        return get_json_result(data=False, retmsg='Please specify dataset firstly.', retcode=RetCode.DATA_ERROR)
+        return get_json_result(data=False, retmsg="Please specify dataset firstly.", retcode=RetCode.DATA_ERROR)
 
     meta_data_filter = {}
     chat_mdl = None
@@ -1614,13 +1578,10 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
         tenants = UserTenantService.query(db, user_id=user.id)
         for kid in request.kb_ids:
             for tenant in tenants:
-                if KnowledgebaseService.query(
-                        db, tenant_id=tenant.tenant_id, id=kid):
+                if KnowledgebaseService.query(db, tenant_id=tenant.tenant_id, id=kid):
                     break
             else:
-                return get_json_result(
-                    data=False, retmsg='Only owner of dataset authorized for this operation.',
-                    retcode=RetCode.OPERATING_ERROR)
+                return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
         kb = KnowledgebaseService.get_by_id(db, request.kb_ids[0])
         if not kb:
@@ -1656,17 +1617,26 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
 
         # 当调用retrieval函数时，传递维度信息
         # 注意：kb_ids 参数应传递知识库 ID 列表，而不是名称列表，用于 ES 的 kb_id 过滤
-        ranks = await settings.retriever.retrieval(question, filter_exp, embd_mdl, kb.tenant_id, [kb.name], request.page,
-                               request.size, request.similarity_threshold, request.vector_similarity_weight,
-                               request.top_k, doc_ids, rerank_mdl=rerank_mdl,
-                               highlight=request.highlight if request.highlight is not None else False,
-                               rank_feature=labels, search_mode=search_mode_dict, kb_ids=request.kb_ids)
+        ranks = await settings.retriever.retrieval(
+            question,
+            filter_exp,
+            embd_mdl,
+            kb.tenant_id,
+            [kb.name],
+            request.page,
+            request.size,
+            request.similarity_threshold,
+            request.vector_similarity_weight,
+            request.top_k,
+            doc_ids,
+            rerank_mdl=rerank_mdl,
+            highlight=request.highlight if request.highlight is not None else False,
+            rank_feature=labels,
+            search_mode=search_mode_dict,
+            kb_ids=request.kb_ids,
+        )
         if request.use_kg:
-            ck = await settings.kg_retriever.retrieval(question,
-                                                   kb.tenant_id,
-                                                   request.kb_ids,
-                                                   embd_mdl,
-                                                   LLMBundle(db, kb.tenant_id, get_tenant_default_model_by_type(db, kb.tenant_id, LLMType.CHAT)))
+            ck = await settings.kg_retriever.retrieval(question, kb.tenant_id, request.kb_ids, embd_mdl, LLMBundle(db, kb.tenant_id, get_tenant_default_model_by_type(db, kb.tenant_id, LLMType.CHAT)))
             if ck["content_with_weight"]:
                 ranks["chunks"].insert(0, ck)
         ranks["chunks"] = settings.retriever.retrieval_by_children(ranks["chunks"], [kb.tenant_id])
@@ -1678,12 +1648,11 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
         return get_json_result(data=ranks)
     except Exception as e:
         if str(e).find("not_found") > 0:
-            return get_json_result(data=False, retmsg='No chunk found! Check the chunk status please!',
-                                   retcode=RetCode.DATA_ERROR)
+            return get_json_result(data=False, retmsg="No chunk found! Check the chunk status please!", retcode=RetCode.DATA_ERROR)
         return server_error_response(e)
 
 
-@router.get('/knowledge_graph', summary="获取知识图谱")
+@router.get("/knowledge_graph", summary="获取知识图谱")
 async def knowledge_graph(doc_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### GET `/knowledge_graph` 获取文档知识图谱接口
@@ -1858,15 +1827,15 @@ async def knowledge_graph(doc_id: str, db: Session = Depends(get_db), user=Depen
                 node_dict = {}
 
                 def repeat_deal(content_json, node_dict):
-                    if 'id' in content_json:
-                        if content_json['id'] in node_dict:
-                            node_name = content_json['id']
-                            content_json['id'] += f"({node_dict[content_json['id']]})"
+                    if "id" in content_json:
+                        if content_json["id"] in node_dict:
+                            node_name = content_json["id"]
+                            content_json["id"] += f"({node_dict[content_json['id']]})"
                             node_dict[node_name] += 1
                         else:
-                            node_dict[content_json['id']] = 1
-                    if content_json.get('children'):
-                        for item in content_json['children']:
+                            node_dict[content_json["id"]] = 1
+                    if content_json.get("children"):
+                        for item in content_json["children"]:
                             repeat_deal(item, node_dict)
 
                 repeat_deal(content_json, node_dict)

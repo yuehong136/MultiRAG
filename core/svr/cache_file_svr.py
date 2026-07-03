@@ -18,6 +18,7 @@ def collect(db: Session):
         return None
     return doc_locations
 
+
 def main(db: Session):
     locations = collect(db)
     if not locations:
@@ -39,7 +40,6 @@ def main(db: Session):
         except Exception as e:
             logging.error(f"Error to check REDIS connection: {e}")
             traceback.print_stack()
-
 
 
 if __name__ == "__main__":

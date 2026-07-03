@@ -12,6 +12,7 @@ from core.llm.embedding_model.youdao_embedding import YoudaoEmbed
 
 # from llm.embedding_model.jina_embedding import JinaEmbed
 
+
 class EmbeddingFactory:
     def __init__(self, key, model_name, base_url=None):
         self.key = key

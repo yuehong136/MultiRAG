@@ -7,8 +7,7 @@ from core.llm.embedding_model.base import Base
 
 
 class OpenAIEmbed(Base):
-    def __init__(self, key, model_name="text-embedding-ada-002",
-                 base_url="https://api.openai.com/v1"):
+    def __init__(self, key, model_name="text-embedding-ada-002", base_url="https://api.openai.com/v1"):
         if not base_url:
             base_url = "https://api.openai.com/v1"
         self.client = OpenAI(api_key=key, base_url=base_url)

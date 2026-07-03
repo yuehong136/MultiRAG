@@ -34,12 +34,7 @@ class VariableAssignerParam(ComponentParamBase):
         return True
 
     def get_input_form(self) -> dict[str, dict]:
-        return {
-            "items": {
-                "type": "json",
-                "name": "Items"
-            }
-        }
+        return {"items": {"type": "json", "name": "Items"}}
 
 
 class VariableAssigner(ComponentBase, ABC):

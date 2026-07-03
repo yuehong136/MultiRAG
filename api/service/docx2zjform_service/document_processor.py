@@ -9,10 +9,7 @@ class DocumentProcessor:
     """文档处理器，负责整个转换流程"""
 
     def __init__(self):
-        self.analyzers = [
-            TableElementAnalyzer(),
-            ParagraphElementAnalyzer()
-        ]
+        self.analyzers = [TableElementAnalyzer(), ParagraphElementAnalyzer()]
 
     def process(self, elements: list[Element]) -> list[Component]:
         """处理文档元素并返回表单组件"""

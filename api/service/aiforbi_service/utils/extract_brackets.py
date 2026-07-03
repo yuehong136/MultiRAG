@@ -25,8 +25,8 @@ def extract_brackets(text: str, merge: bool = True) -> list[Any]:
                 yield from flatten(item)
             else:
                 # 如果是字符串且包含逗号，进行分割
-                if isinstance(item, str) and ',' in item:
-                    yield from [x.strip() for x in item.split(',')]
+                if isinstance(item, str) and "," in item:
+                    yield from [x.strip() for x in item.split(",")]
                 else:
                     yield item
 
@@ -48,7 +48,7 @@ def extract_brackets(text: str, merge: bool = True) -> list[Any]:
 
     # 如果直接解析失败，使用正则表达式查找所有可能的列表
     results = []
-    pattern = r'\[((?:[^\[\]]|\[(?:[^\[\]]|\[[^\[\]]*\])*\])*)\]'
+    pattern = r"\[((?:[^\[\]]|\[(?:[^\[\]]|\[[^\[\]]*\])*\])*)\]"
     matches = re.finditer(pattern, text)
 
     for match in matches:
@@ -89,18 +89,18 @@ if __name__ == "__main__":
     print("不合并结果:", extract_brackets(text3, merge=False))
 
     # 测试用例4
-    text4 = '''
+    text4 = """
         [["柱状图", "饼图"]]
-    '''
+    """
     print("\n测试用例4 - 原始测试用例:")
     print("原始文本:", text4)
     print("合并去重结果:", extract_brackets(text4))
     print("不合并结果:", extract_brackets(text4, merge=False))
 
     # 测试用例5
-    text5 = '''
+    text5 = """
     ['折线图,柱状图']
-    '''
+    """
     print("\n测试用例5 - 逗号分隔字符串:")
     print("原始文本:", text5)
     print("合并去重结果:", extract_brackets(text5))

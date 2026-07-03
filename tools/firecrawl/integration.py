@@ -44,7 +44,7 @@ class FirecrawlMultiRAGPlugin:
             "category": self.category,
             "icon": self.icon,
             "supported_formats": ["markdown", "html", "links", "screenshot"],
-            "supported_scrape_types": ["single", "crawl", "batch"]
+            "supported_scrape_types": ["single", "crawl", "batch"],
         }
 
     def get_config_schema(self) -> dict[str, Any]:
@@ -70,14 +70,11 @@ class FirecrawlMultiRAGPlugin:
             integration = create_firecrawl_integration(config)
             # Run the async test_connection method
             import asyncio
+
             return asyncio.run(integration.test_connection())
         except Exception as e:
             logger.error(f"Connection test error: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "message": "Connection test failed"
-            }
+            return {"success": False, "error": str(e), "message": "Connection test failed"}
 
     def create_integration(self, config: dict[str, Any]) -> MultiRAGFirecrawlIntegration:
         """Create and return a Firecrawl integration instance."""
@@ -128,11 +125,7 @@ def test_connection(config: dict[str, Any]) -> dict[str, Any]:
         integration = create_firecrawl_integration(config)
         return integration.test_connection()
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "message": "Connection test failed"
-        }
+        return {"success": False, "error": str(e), "message": "Connection test failed"}
 
 
 # Export main functions and classes
@@ -145,5 +138,5 @@ __all__ = [
     "get_plugin",
     "get_ui_schema",
     "test_connection",
-    "validate_config"
+    "validate_config",
 ]

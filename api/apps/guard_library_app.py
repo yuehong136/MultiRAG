@@ -5,6 +5,7 @@
 @date：2025/01/11 18:10
 @desc: AI安全护栏词库管理接口
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -24,6 +25,7 @@ router = APIRouter()
 
 class CreateLibraryRequest(BaseModel):
     """创建词库请求模型"""
+
     library_type: str = Field("custom", description="词库类型: blacklist/whitelist/reply/pattern/custom")
     name: str = Field(..., description="词库名称")
     description: str | None = Field(None, description="词库描述")
@@ -34,6 +36,7 @@ class CreateLibraryRequest(BaseModel):
 
 class UpdateLibraryRequest(BaseModel):
     """更新词库请求模型"""
+
     library_id: str = Field(..., description="词库ID")
     name: str | None = Field(None, description="词库名称")
     description: str | None = Field(None, description="词库描述")
@@ -44,6 +47,7 @@ class UpdateLibraryRequest(BaseModel):
 
 class CreateLibraryItemRequest(BaseModel):
     """创建词库项请求模型"""
+
     library_id: str = Field(..., description="词库ID")
     content: str = Field(..., description="内容")
     content_type: str = Field("text", description="内容类型")
@@ -53,6 +57,7 @@ class CreateLibraryItemRequest(BaseModel):
 
 class BatchCreateItemsRequest(BaseModel):
     """批量创建词库项请求模型"""
+
     library_id: str = Field(..., description="词库ID")
     contents: list[str] = Field(..., description="内容列表")
     content_type: str = Field("text", description="内容类型")
@@ -61,6 +66,7 @@ class BatchCreateItemsRequest(BaseModel):
 
 class UpdateLibraryItemByHashRequest(BaseModel):
     """根据哈希更新词库项请求模型"""
+
     content: str | None = Field(None, description="内容")
     content_type: str | None = Field(None, description="内容类型")
     item_metadata: dict | None = Field(None, description="元数据")
@@ -69,22 +75,26 @@ class UpdateLibraryItemByHashRequest(BaseModel):
 
 class BatchGetItemsRequest(BaseModel):
     """批量获取词库项请求模型"""
+
     item_ids: list[str] = Field(..., description="词库项ID列表")
 
 
 class DeleteItemsRequest(BaseModel):
     """删除词库项请求模型"""
+
     item_ids: list[str] = Field(..., description="词库项ID列表")
 
 
 class UpdateItemsStatusRequest(BaseModel):
     """更新词库项状态请求模型"""
+
     item_ids: list[str] = Field(..., description="词库项ID列表")
     status: str = Field(..., description="状态值: 1-启用, 0-禁用")
 
 
 class UpdateItemByIdRequest(BaseModel):
     """根据ID更新词库项请求模型"""
+
     content: str | None = Field(None, description="内容")
     content_type: str | None = Field(None, description="内容类型")
     item_metadata: dict | None = Field(None, description="元数据")
@@ -92,12 +102,8 @@ class UpdateItemByIdRequest(BaseModel):
 
 
 # 词库管理接口
-@router.post('/create', summary="创建词库")
-def create_library(
-    request: CreateLibraryRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/create", summary="创建词库")
+def create_library(request: CreateLibraryRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### POST `/create` 创建词库
 
@@ -163,7 +169,7 @@ def create_library(
             created_by=user.id,
             category=request.category,
             tags=request.tags,
-            config=request.config
+            config=request.config,
         )
 
         if library_id:
@@ -175,13 +181,8 @@ def create_library(
         return server_error_response(e)
 
 
-@router.get('/list', summary="获取词库列表")
-def list_libraries(
-    library_type: str | None = None,
-    category: str | None = None,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/list", summary="获取词库列表")
+def list_libraries(library_type: str | None = None, category: str | None = None, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### GET `/list` 获取词库列表
 
@@ -231,9 +232,7 @@ def list_libraries(
     ```
     """
     try:
-        libraries = GuardLibraryService.get_libraries_by_tenant(
-            db, user.id, library_type, category
-        )
+        libraries = GuardLibraryService.get_libraries_by_tenant(db, user.id, library_type, category)
 
         return get_json_result(data=[lib.to_dict() for lib in libraries])
 
@@ -241,12 +240,8 @@ def list_libraries(
         return server_error_response(e)
 
 
-@router.put('/update', summary="更新词库")
-def update_library(
-    request: UpdateLibraryRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.put("/update", summary="更新词库")
+def update_library(request: UpdateLibraryRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### PUT `/update` 更新词库
 
@@ -296,12 +291,9 @@ def update_library(
     ```
     """
     try:
-        update_data = {k: v for k, v in request.model_dump().items()
-                      if v is not None and k != "library_id"}
+        update_data = {k: v for k, v in request.model_dump().items() if v is not None and k != "library_id"}
 
-        success = GuardLibraryService.update_library(
-            db, request.library_id, update_data
-        )
+        success = GuardLibraryService.update_library(db, request.library_id, update_data)
 
         if success:
             return get_json_result(data=True)
@@ -312,12 +304,8 @@ def update_library(
         return server_error_response(e)
 
 
-@router.delete('/{library_id}', summary="删除词库")
-def delete_library(
-    library_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.delete("/{library_id}", summary="删除词库")
+def delete_library(library_id: str, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### DELETE `/{library_id}` 删除词库
 
@@ -370,13 +358,8 @@ def delete_library(
 
 
 # 词库项管理接口
-@router.post('/{library_id}/items/create', summary="创建词库项")
-def create_library_item(
-    library_id: str,
-    request: CreateLibraryItemRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/{library_id}/items/create", summary="创建词库项")
+def create_library_item(library_id: str, request: CreateLibraryItemRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### POST `/{library_id}/items/create` 创建词库项
 
@@ -446,13 +429,7 @@ def create_library_item(
             return get_data_error_result(retmsg="无权访问此词库")
 
         item_id = GuardLibraryItemService.create_item(
-            db=db,
-            library_id=library_id,
-            content=request.content,
-            content_type=request.content_type,
-            item_metadata=request.item_metadata,
-            tenant_id=user.id,
-            sort_order=request.sort_order
+            db=db, library_id=library_id, content=request.content, content_type=request.content_type, item_metadata=request.item_metadata, tenant_id=user.id, sort_order=request.sort_order
         )
 
         if item_id:
@@ -464,15 +441,8 @@ def create_library_item(
         return server_error_response(e)
 
 
-@router.get('/{library_id}/items', summary="获取词库项列表")
-def get_library_items(
-    library_id: str,
-    page: int = 1,
-    page_size: int = 50,
-    keyword: str | None = None,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/{library_id}/items", summary="获取词库项列表")
+def get_library_items(library_id: str, page: int = 1, page_size: int = 50, keyword: str | None = None, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### GET `/{library_id}/items` 获取词库项列表
 
@@ -542,13 +512,9 @@ def get_library_items(
             return get_data_error_result(retmsg="无权访问此词库")
 
         if keyword:
-            result = GuardLibraryItemService.search_items(
-                db, library_id, keyword, page, page_size
-            )
+            result = GuardLibraryItemService.search_items(db, library_id, keyword, page, page_size)
         else:
-            result = GuardLibraryItemService.get_items_by_library(
-                db, library_id, page, page_size
-            )
+            result = GuardLibraryItemService.get_items_by_library(db, library_id, page, page_size)
 
         # 转换为字典格式
         items_data = []
@@ -562,13 +528,8 @@ def get_library_items(
         return server_error_response(e)
 
 
-@router.post('/{library_id}/items/batch', summary="批量创建词库项")
-def batch_create_items(
-    library_id: str,
-    request: BatchCreateItemsRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/{library_id}/items/batch", summary="批量创建词库项")
+def batch_create_items(library_id: str, request: BatchCreateItemsRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### POST `/{library_id}/items/batch` 批量创建词库项
 
@@ -633,12 +594,7 @@ def batch_create_items(
             return get_data_error_result(retmsg="无权访问此词库")
 
         result = GuardLibraryItemService.batch_create_items(
-            db=db,
-            library_id=library_id,
-            contents=request.contents,
-            content_type=request.content_type,
-            tenant_id=user.id,
-            item_metadata=request.item_metadata
+            db=db, library_id=library_id, contents=request.contents, content_type=request.content_type, tenant_id=user.id, item_metadata=request.item_metadata
         )
 
         return get_json_result(data=result)
@@ -647,12 +603,8 @@ def batch_create_items(
         return server_error_response(e)
 
 
-@router.post('/items/delete', summary="批量删除词库项")
-def delete_library_items(
-    request: DeleteItemsRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/items/delete", summary="批量删除词库项")
+def delete_library_items(request: DeleteItemsRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### POST `/items/delete` 批量删除词库项
 
@@ -716,9 +668,7 @@ def delete_library_items(
         if not request.item_ids:
             return get_data_error_result(retmsg="词库项ID列表不能为空")
 
-        result = GuardLibraryItemService.delete_items(
-            db, request.item_ids, user.id
-        )
+        result = GuardLibraryItemService.delete_items(db, request.item_ids, user.id)
 
         return get_json_result(data=result)
 
@@ -726,12 +676,8 @@ def delete_library_items(
         return server_error_response(e)
 
 
-@router.put('/items/status', summary="批量更新词库项状态")
-def update_items_status(
-    request: UpdateItemsStatusRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.put("/items/status", summary="批量更新词库项状态")
+def update_items_status(request: UpdateItemsStatusRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### PUT `/items/status` 批量更新词库项状态
 
@@ -801,9 +747,7 @@ def update_items_status(
         if request.status not in ["0", "1"]:
             return get_data_error_result(retmsg="状态值必须是 '0' 或 '1'")
 
-        result = GuardLibraryItemService.update_items_status(
-            db, request.item_ids, request.status, user.id
-        )
+        result = GuardLibraryItemService.update_items_status(db, request.item_ids, request.status, user.id)
 
         return get_json_result(data=result)
 
@@ -811,13 +755,8 @@ def update_items_status(
         return server_error_response(e)
 
 
-@router.put('/items/{item_id}', summary="根据ID更新词库项")
-def update_library_item_by_id(
-    item_id: str,
-    request: UpdateItemByIdRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.put("/items/{item_id}", summary="根据ID更新词库项")
+def update_library_item_by_id(item_id: str, request: UpdateItemByIdRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### PUT `/items/{item_id}` 根据ID更新词库项
 
@@ -887,9 +826,7 @@ def update_library_item_by_id(
         if not update_data:
             return get_data_error_result(retmsg="没有提供更新数据")
 
-        success = GuardLibraryItemService.update_item_by_id(
-            db, item_id, update_data, user.id
-        )
+        success = GuardLibraryItemService.update_item_by_id(db, item_id, update_data, user.id)
 
         if success:
             return get_json_result(data=True)
@@ -900,14 +837,8 @@ def update_library_item_by_id(
         return server_error_response(e)
 
 
-@router.put('/{library_id}/items/hash/{content_hash}', summary="根据哈希更新词库项")
-def update_library_item_by_hash(
-    library_id: str,
-    content_hash: str,
-    request: UpdateLibraryItemByHashRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.put("/{library_id}/items/hash/{content_hash}", summary="根据哈希更新词库项")
+def update_library_item_by_hash(library_id: str, content_hash: str, request: UpdateLibraryItemByHashRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### PUT `/{library_id}/items/hash/{content_hash}` 根据哈希更新词库项
 
@@ -978,9 +909,7 @@ def update_library_item_by_hash(
         if not update_data:
             return get_data_error_result(retmsg="没有提供更新数据")
 
-        success = GuardLibraryItemService.update_item_by_hash(
-            db, library_id, content_hash, update_data
-        )
+        success = GuardLibraryItemService.update_item_by_hash(db, library_id, content_hash, update_data)
 
         if success:
             return get_json_result(data=True)
@@ -991,13 +920,8 @@ def update_library_item_by_hash(
         return server_error_response(e)
 
 
-@router.delete('/{library_id}/items/hash/{content_hash}', summary="根据哈希删除词库项")
-def delete_library_item_by_hash(
-    library_id: str,
-    content_hash: str,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.delete("/{library_id}/items/hash/{content_hash}", summary="根据哈希删除词库项")
+def delete_library_item_by_hash(library_id: str, content_hash: str, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### DELETE `/{library_id}/items/hash/{content_hash}` 根据哈希删除词库项
 
@@ -1039,9 +963,7 @@ def delete_library_item_by_hash(
     ```
     """
     try:
-        success = GuardLibraryItemService.delete_item_by_hash(
-            db, library_id, content_hash
-        )
+        success = GuardLibraryItemService.delete_item_by_hash(db, library_id, content_hash)
 
         if success:
             return get_json_result(data=True)
@@ -1052,12 +974,8 @@ def delete_library_item_by_hash(
         return server_error_response(e)
 
 
-@router.get('/{library_id}/items/export', summary="导出词库所有项")
-def export_library_items(
-    library_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/{library_id}/items/export", summary="导出词库所有项")
+def export_library_items(library_id: str, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### GET `/{library_id}/items/export` 导出词库所有项
 
@@ -1123,21 +1041,14 @@ def export_library_items(
         for item in items:
             items_data.append(item.to_dict())
 
-        return get_json_result(data={
-            "items": items_data,
-            "total": len(items_data)
-        })
+        return get_json_result(data={"items": items_data, "total": len(items_data)})
 
     except Exception as e:
         return server_error_response(e)
 
 
-@router.post('/items/batch-get', summary="批量获取词库项")
-def batch_get_items(
-    request: BatchGetItemsRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/items/batch-get", summary="批量获取词库项")
+def batch_get_items(request: BatchGetItemsRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### POST `/items/batch-get` 批量获取词库项
 
@@ -1199,9 +1110,7 @@ def batch_get_items(
         if not request.item_ids:
             return get_data_error_result(retmsg="词库项ID列表不能为空")
 
-        items = GuardLibraryItemService.get_items_by_ids(
-            db, request.item_ids, user.id
-        )
+        items = GuardLibraryItemService.get_items_by_ids(db, request.item_ids, user.id)
 
         # 转换为字典格式
         items_data = []
@@ -1212,22 +1121,14 @@ def batch_get_items(
         found_count = len(items_data)
         not_found_count = len(request.item_ids) - found_count
 
-        return get_json_result(data={
-            "items": items_data,
-            "total": len(request.item_ids),
-            "found_count": found_count,
-            "not_found_count": not_found_count
-        })
+        return get_json_result(data={"items": items_data, "total": len(request.item_ids), "found_count": found_count, "not_found_count": not_found_count})
 
     except Exception as e:
         return server_error_response(e)
 
 
-@router.get('/stats', summary="获取词库统计")
-def get_library_stats(
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/stats", summary="获取词库统计")
+def get_library_stats(db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### GET `/stats` 获取词库统计信息
 
@@ -1283,11 +1184,8 @@ def get_library_stats(
         return server_error_response(e)
 
 
-@router.post('/init', summary="初始化默认词库")
-def init_default_libraries(
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/init", summary="初始化默认词库")
+def init_default_libraries(db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### POST `/init` 初始化默认词库
 
@@ -1333,14 +1231,9 @@ def init_default_libraries(
     ```
     """
     try:
-        library_ids = GuardLibraryService.init_default_libraries(
-            db, user.id, user.id
-        )
+        library_ids = GuardLibraryService.init_default_libraries(db, user.id, user.id)
 
-        return get_json_result(data={
-            "created_count": len(library_ids),
-            "library_ids": library_ids
-        })
+        return get_json_result(data={"created_count": len(library_ids), "library_ids": library_ids})
 
     except Exception as e:
         return server_error_response(e)

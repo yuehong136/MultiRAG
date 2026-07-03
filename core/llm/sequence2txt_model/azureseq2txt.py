@@ -5,6 +5,7 @@
 @date：2024/7/9 9:00
 @desc:
 """
+
 from openai.lib.azure import AzureOpenAI
 
 from core.llm.sequence2txt_model.base import Base

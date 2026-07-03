@@ -6,5 +6,5 @@ def safe_format_double_braces(template, **kwargs):
         key = match.group(1)
         return str(kwargs.get(key, f"{{{{{key}}}}}"))
 
-    pattern = r'\{\{(\w+)\}\}'
+    pattern = r"\{\{(\w+)\}\}"
     return re.sub(pattern, replacer, template)

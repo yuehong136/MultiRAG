@@ -117,12 +117,10 @@ def thread_to_document(full_thread: dict[str, Any], email_used_to_fetch_thread: 
     if not semantic_identifier:
         semantic_identifier = "(no subject)"
 
-    combined_sections = "\n\n".join(
-        sec.text for sec in sections if hasattr(sec, "text")
-    )
+    combined_sections = "\n\n".join(sec.text for sec in sections if hasattr(sec, "text"))
     blob = combined_sections
     size_bytes = len(blob)
-    extension = '.txt'
+    extension = ".txt"
 
     return Document(
         id=thread_id,
@@ -323,6 +321,7 @@ if __name__ == "__main__":
     import time
 
     from common.data_source.google_util.util import get_credentials_from_env
+
     logging.basicConfig(level=logging.INFO)
     try:
         email = os.environ.get("GMAIL_TEST_EMAIL", "test@gmail.com")

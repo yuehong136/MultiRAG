@@ -25,6 +25,7 @@ EXCEL_EXTENSIONS = {".xls", ".xlsx", ".xlsm", ".xlsb"}
 CSV_EXTENSIONS = {".csv", ".tsv"}
 STRUCTURED_EXTENSIONS = EXCEL_EXTENSIONS | CSV_EXTENSIONS
 
+
 def is_structured_file_type(file_type: str | None) -> bool:
     """
     Check if a file type is structured data (Excel, CSV, etc.)
@@ -70,12 +71,7 @@ def is_tabular_pdf(parser_id: str = "", parser_config: dict | None = None) -> bo
     return False
 
 
-def should_skip_raptor(
-    file_type: str | None = None,
-    parser_id: str = "",
-    parser_config: dict | None = None,
-    raptor_config: dict | None = None
-) -> bool:
+def should_skip_raptor(file_type: str | None = None, parser_id: str = "", parser_config: dict | None = None, raptor_config: dict | None = None) -> bool:
     """
     Determine if Raptor should be skipped for a given document.
 
@@ -114,11 +110,7 @@ def should_skip_raptor(
     return False
 
 
-def get_skip_reason(
-    file_type: str | None = None,
-    parser_id: str = "",
-    parser_config: dict | None = None
-) -> str:
+def get_skip_reason(file_type: str | None = None, parser_id: str = "", parser_config: dict | None = None) -> str:
     """
     Get a human-readable reason why Raptor was skipped.
 

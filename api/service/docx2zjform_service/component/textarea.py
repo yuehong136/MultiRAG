@@ -4,6 +4,7 @@ from .base import Component
 
 class TextareaComponent(Component):
     """多行文本组件"""
+
     _json_str = """
     {
   "val": "多行文本",

@@ -15,27 +15,23 @@ from workflow_v2.workflow_logging_config import WorkflowContextLogger
 @dataclass
 class BatchConfig:
     """批处理配置类"""
+
     batch_enable: bool = False
     batch_size: int = 100
     concurrent_size: int = 10
     input_lists: list[dict[str, Any]] = None
 
     @classmethod
-    def from_batch_config(cls, config: dict[str, Any]) -> 'BatchConfig':
+    def from_batch_config(cls, config: dict[str, Any]) -> "BatchConfig":
         """从批处理配置创建实例"""
         if not config:
             return cls()
 
-        input_lists = config.get('inputLists', [])
+        input_lists = config.get("inputLists", [])
         if not isinstance(input_lists, list):
             input_lists = [input_lists]
 
-        return cls(
-            batch_enable=config.get('batchEnable', False),
-            batch_size=config.get('batchSize', 100),
-            concurrent_size=config.get('concurrentSize', 10),
-            input_lists=input_lists
-        )
+        return cls(batch_enable=config.get("batchEnable", False), batch_size=config.get("batchSize", 100), concurrent_size=config.get("concurrentSize", 10), input_lists=input_lists)
 
 
 class PluginComponent(BaseComponent):
@@ -44,15 +40,15 @@ class PluginComponent(BaseComponent):
     def __init__(self, component_id: str, title: str, node_data: dict[str, Any], logger: WorkflowContextLogger):
         super().__init__(component_id, title, logger)
         self.batch_config: BatchConfig = self._extract_batch_config(node_data)
-        self.plugin_info = node_data['data']['inputs'].get('pluginInfo', {})
-        self.output_definition = node_data['data']['outputs']
+        self.plugin_info = node_data["data"]["inputs"].get("pluginInfo", {})
+        self.output_definition = node_data["data"]["outputs"]
         self.timeout = 30  # 默认超时时间
         # 添加 session 属性以便复用 HTTP 连接
         self._session = None
 
     def _extract_batch_config(self, node_data: dict[str, Any]) -> BatchConfig:
         """从节点数据中提取批处理配置"""
-        batch_data = node_data['data']['inputs'].get('batch', {})
+        batch_data = node_data["data"]["inputs"].get("batch", {})
         return BatchConfig.from_batch_config(batch_data)
 
     async def execute(self) -> dict[str, Any]:
@@ -63,8 +59,7 @@ class PluginComponent(BaseComponent):
             if self.batch_config.batch_enable:
                 input_value_dict_list = []
 
-                batch_param_list = dict_arrays_to_array_dicts(
-                    match_parameters(self.batch_config.input_lists, self.nodes))
+                batch_param_list = dict_arrays_to_array_dicts(match_parameters(self.batch_config.input_lists, self.nodes))
                 for batch_param_value in batch_param_list:
                     temp_nodes = copy.deepcopy(self.nodes)
                     temp_node_output = temp_nodes.get(self.workflow_node.id).output
@@ -86,20 +81,15 @@ class PluginComponent(BaseComponent):
 
                 async def execute_single_plugin_async(input_value: dict[str, Any]) -> dict[str, Any]:
                     async with sem:  # 使用信号量控制并发
-                        code_execute_resp = await self.run_plugin_script(
-                            self.plugin_info.get('script', ''),
-                            input_value,
-                            self.plugin_info.get('pluginId', '')
-                        )
-                        if code_execute_resp.get('status') != 'success':
+                        code_execute_resp = await self.run_plugin_script(self.plugin_info.get("script", ""), input_value, self.plugin_info.get("pluginId", ""))
+                        if code_execute_resp.get("status") != "success":
                             self.logger.error(f"Plugin code execution failed: {code_execute_resp.get('message')}")
                             raise Exception(f"Plugin code execution failed: {code_execute_resp.get('message')}")
 
                         # 对于批量执行，我们需要解析单个输出的结构
-                        list_schema = next((item for item in self.output_definition if item['name'] == 'outputList'),
-                                           None)
-                        if list_schema and list_schema.get('type') == 'list':
-                            single_output_schema = list_schema.get('schema', {}).get('schema', [])
+                        list_schema = next((item for item in self.output_definition if item["name"] == "outputList"), None)
+                        if list_schema and list_schema.get("type") == "list":
+                            single_output_schema = list_schema.get("schema", {}).get("schema", [])
                             return self.parse_output(single_output_schema, code_execute_resp.get("data"))
                         return {}
 
@@ -110,12 +100,8 @@ class PluginComponent(BaseComponent):
                 # 返回正确的输出格式
                 return {"outputList": parsed_outputs}
             else:
-                code_execute_resp = await self.run_plugin_script(
-                    self.plugin_info.get('script', ''),
-                    self.inputs,
-                    self.plugin_info.get('pluginId', '')
-                )
-                if code_execute_resp.get('status') != 'success':
+                code_execute_resp = await self.run_plugin_script(self.plugin_info.get("script", ""), self.inputs, self.plugin_info.get("pluginId", ""))
+                if code_execute_resp.get("status") != "success":
                     self.logger.error(f"Plugin code execution failed: {code_execute_resp.get('message')}")
                     raise Exception(f"Plugin code execution failed: {code_execute_resp.get('message')}")
                 original_outputs = code_execute_resp.get("data")
@@ -140,8 +126,7 @@ class PluginComponent(BaseComponent):
 
             if self.batch_config.batch_enable:
                 # 使用辅助函数生成批量输入参数列表
-                input_value_dict_list = map_schema_with_values(self.workflow_node.input_schema, input_value,
-                                                               batch_value)
+                input_value_dict_list = map_schema_with_values(self.workflow_node.input_schema, input_value, batch_value)
                 self.inputs = input_value_dict_list
 
                 # 使用 asyncio 并发执行
@@ -153,20 +138,15 @@ class PluginComponent(BaseComponent):
 
                 async def execute_single_plugin_async(input_value: dict[str, Any]) -> dict[str, Any]:
                     async with sem:  # 使用信号量控制并发
-                        code_execute_resp = await self.run_plugin_script(
-                            self.plugin_info.get('script', ''),
-                            input_value,
-                            self.plugin_info.get('pluginId', '')
-                        )
-                        if code_execute_resp.get('status') != 'success':
+                        code_execute_resp = await self.run_plugin_script(self.plugin_info.get("script", ""), input_value, self.plugin_info.get("pluginId", ""))
+                        if code_execute_resp.get("status") != "success":
                             self.logger.error(f"Plugin code execution failed: {code_execute_resp.get('message')}")
                             raise Exception(f"Plugin code execution failed: {code_execute_resp.get('message')}")
 
                         # 对于批量执行，我们需要解析单个输出的结构
-                        list_schema = next((item for item in self.output_definition if item['name'] == 'outputList'),
-                                           None)
-                        if list_schema and list_schema.get('type') == 'list':
-                            single_output_schema = list_schema.get('schema', {}).get('schema', [])
+                        list_schema = next((item for item in self.output_definition if item["name"] == "outputList"), None)
+                        if list_schema and list_schema.get("type") == "list":
+                            single_output_schema = list_schema.get("schema", {}).get("schema", [])
                             return self.parse_output(single_output_schema, code_execute_resp.get("data"))
                         return {}
 
@@ -179,19 +159,14 @@ class PluginComponent(BaseComponent):
             else:
                 # 单次执行模式
                 self.inputs = input_value
-                code_execute_resp = await self.run_plugin_script(
-                    self.plugin_info.get('script', ''),
-                    self.inputs,
-                    self.plugin_info.get('pluginId', '')
-                )
-                if code_execute_resp.get('status') != 'success':
+                code_execute_resp = await self.run_plugin_script(self.plugin_info.get("script", ""), self.inputs, self.plugin_info.get("pluginId", ""))
+                if code_execute_resp.get("status") != "success":
                     self.logger.error(f"Plugin code execution failed: {code_execute_resp.get('message')}")
                     raise Exception(f"Plugin code execution failed: {code_execute_resp.get('message')}")
                 original_outputs = code_execute_resp.get("data")
                 return self.parse_output(self.output_definition, original_outputs)
 
-    async def run_plugin_script(self, script: str, args: dict[str, Any], plugin_id: str,
-                                base_url: str = f"http://{SCRIPT_SCHEDULER_HOST}:{SCRIPT_SCHEDULER_PORT}") -> dict:
+    async def run_plugin_script(self, script: str, args: dict[str, Any], plugin_id: str, base_url: str = f"http://{SCRIPT_SCHEDULER_HOST}:{SCRIPT_SCHEDULER_PORT}") -> dict:
         """
         异步发送请求执行临时脚本并传入参数。
 
@@ -211,28 +186,17 @@ class PluginComponent(BaseComponent):
         endpoint = f"{base_url}/api/v1/script-scheduler/run-plugin-script"
 
         # 准备请求头
-        headers = {
-            "Content-Type": "application/json"
-        }
+        headers = {"Content-Type": "application/json"}
 
         # 准备请求载荷
-        payload = {
-            "script": script,
-            "args": args,
-            "plugin_id": str(plugin_id)
-        }
+        payload = {"script": script, "args": args, "plugin_id": str(plugin_id)}
 
         try:
             # 创建请求超时
             timeout = ClientTimeout(total=self.timeout)
 
             # 发送POST请求
-            async with self._session.post(
-                    url=endpoint,
-                    headers=headers,
-                    json=payload,
-                    timeout=timeout
-            ) as response:
+            async with self._session.post(url=endpoint, headers=headers, json=payload, timeout=timeout) as response:
                 # 检查状态码
                 response.raise_for_status()
 
@@ -269,7 +233,7 @@ class PluginComponent(BaseComponent):
             if value is None:
                 return None
 
-            type_name = type_def.get('type', '').lower()
+            type_name = type_def.get("type", "").lower()
 
             # Handle basic types
             if type_name == "string":
@@ -291,17 +255,16 @@ class PluginComponent(BaseComponent):
                     return None
 
                 # Get schema for list elements
-                element_schema = type_def.get('schema', {})
+                element_schema = type_def.get("schema", {})
 
                 # Convert each element in the list
                 try:
-                    if element_schema.get('type') == 'object':
-                        nested_schema = element_schema.get('schema', [])
+                    if element_schema.get("type") == "object":
+                        nested_schema = element_schema.get("schema", [])
                         # If the schema is empty, preserve the original elements
                         if not nested_schema:
                             return value
-                        return [parse_schema_recursively(nested_schema, item)
-                                for item in value]
+                        return [parse_schema_recursively(nested_schema, item) for item in value]
                     else:
                         return [convert_value(item, element_schema) for item in value]
                 except (ValueError, TypeError):
@@ -310,7 +273,7 @@ class PluginComponent(BaseComponent):
                 if not isinstance(value, dict):
                     return None
 
-                nested_schema = type_def.get('schema', [])
+                nested_schema = type_def.get("schema", [])
                 # If the schema is empty, preserve the original object
                 if not nested_schema:
                     return value
@@ -330,7 +293,7 @@ class PluginComponent(BaseComponent):
                 dict: Parsed data according to schema
             """
             result = {}
-            schema_map = {item['name']: item for item in schema}
+            schema_map = {item["name"]: item for item in schema}
 
             for name, schema_item in schema_map.items():
                 value = data.get(name) if isinstance(data, dict) else None
@@ -341,10 +304,8 @@ class PluginComponent(BaseComponent):
         # Special case for list outputs:
         # When the output definition has a single field of type list
         # and the actual output is already a list
-        if (len(output_structure) == 1 and
-                output_structure[0].get('type') == 'list' and
-                isinstance(actual_output, list)):
-            field_name = output_structure[0].get('name')
+        if len(output_structure) == 1 and output_structure[0].get("type") == "list" and isinstance(actual_output, list):
+            field_name = output_structure[0].get("name")
             return {field_name: convert_value(actual_output, output_structure[0])}
 
         return parse_schema_recursively(output_structure, actual_output)

@@ -58,8 +58,7 @@ def parse_paragraph(para, path: str) -> Paragraph:
     )
 
 
-def parse_cell(cell, path: str, row_span: int = 1, col_span: int = 1,
-               is_merged_origin: bool = True, merge_origin_path: str | None = None) -> Cell:
+def parse_cell(cell, path: str, row_span: int = 1, col_span: int = 1, is_merged_origin: bool = True, merge_origin_path: str | None = None) -> Cell:
     """解析表格单元格"""
     paragraphs = []
     for i, para in enumerate(cell.paragraphs):
@@ -133,18 +132,18 @@ def get_cell_merge_info(table: DocxTable) -> dict:
                         break
 
                 merge_info[(row_idx, col_idx)] = {
-                    'row_span': row_span,
-                    'col_span': col_span,
-                    'is_origin': True,
-                    'origin': None,
+                    "row_span": row_span,
+                    "col_span": col_span,
+                    "is_origin": True,
+                    "origin": None,
                 }
             else:
                 # 这是被合并的单元格
                 merge_info[(row_idx, col_idx)] = {
-                    'row_span': 1,
-                    'col_span': 1,
-                    'is_origin': False,
-                    'origin': origin,
+                    "row_span": 1,
+                    "col_span": 1,
+                    "is_origin": False,
+                    "origin": origin,
                 }
 
     return merge_info
@@ -161,26 +160,31 @@ def parse_table(table: DocxTable, path: str) -> Table:
 
         for j, cell in enumerate(row.cells):
             cell_path = f"{row_path}/cell[{j}]"
-            info = merge_info.get((i, j), {
-                'row_span': 1,
-                'col_span': 1,
-                'is_origin': True,
-                'origin': None,
-            })
+            info = merge_info.get(
+                (i, j),
+                {
+                    "row_span": 1,
+                    "col_span": 1,
+                    "is_origin": True,
+                    "origin": None,
+                },
+            )
 
             origin_path = None
-            if info['origin']:
-                origin_row, origin_col = info['origin']
+            if info["origin"]:
+                origin_row, origin_col = info["origin"]
                 origin_path = f"{path}/row[{origin_row}]/cell[{origin_col}]"
 
-            cells.append(parse_cell(
-                cell,
-                cell_path,
-                row_span=info['row_span'],
-                col_span=info['col_span'],
-                is_merged_origin=info['is_origin'],
-                merge_origin_path=origin_path,
-            ))
+            cells.append(
+                parse_cell(
+                    cell,
+                    cell_path,
+                    row_span=info["row_span"],
+                    col_span=info["col_span"],
+                    is_merged_origin=info["is_origin"],
+                    merge_origin_path=origin_path,
+                )
+            )
 
         rows.append(Row(path=row_path, cells=cells))
 
@@ -202,9 +206,9 @@ def parse_docx(file_path: str, filename: str) -> ParsedDocument:
     element_index = 0
 
     def process_element(child, index):
-        tag = child.tag.split('}')[-1]
+        tag = child.tag.split("}")[-1]
 
-        if tag == 'p':  # 段落
+        if tag == "p":  # 段落
             path = f"body[{index}]"
             para = None
             for p in doc.paragraphs:
@@ -213,27 +217,31 @@ def parse_docx(file_path: str, filename: str) -> ParsedDocument:
                     break
 
             if para:
-                elements.append(DocumentElement(
-                    type="paragraph",
-                    path=path,
-                    paragraph=parse_paragraph(para, path),
-                ))
+                elements.append(
+                    DocumentElement(
+                        type="paragraph",
+                        path=path,
+                        paragraph=parse_paragraph(para, path),
+                    )
+                )
                 return True
 
-        elif tag == 'tbl':  # 表格
+        elif tag == "tbl":  # 表格
             path = f"body[{index}]"
             for tbl in doc.tables:
                 if tbl._element == child:
-                    elements.append(DocumentElement(
-                        type="table",
-                        path=path,
-                        table=parse_table(tbl, path),
-                    ))
+                    elements.append(
+                        DocumentElement(
+                            type="table",
+                            path=path,
+                            table=parse_table(tbl, path),
+                        )
+                    )
                     return True
 
-        elif tag == 'sdt':  # 内容控制
+        elif tag == "sdt":  # 内容控制
             # 递归处理 sdtContent
-            sdt_content = child.find(qn('w:sdtContent'))
+            sdt_content = child.find(qn("w:sdtContent"))
             if sdt_content is not None:
                 nonlocal element_index
                 for sdt_child in sdt_content:

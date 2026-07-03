@@ -317,10 +317,7 @@ def _open_region_sections(n: int) -> dict:
     """n 个小节,各含一个 open-region;节标题 节{i} 供桩按内容寻址。"""
     return {
         "title": "t",
-        "sections": [
-            {"id": f"s{i}", "layout": "full", "title": f"节{i}", "blocks": [{"id": f"og{i}", "type": "open-region", "annotation": "指标"}]}
-            for i in range(n)
-        ],
+        "sections": [{"id": f"s{i}", "layout": "full", "title": f"节{i}", "blocks": [{"id": f"og{i}", "type": "open-region", "annotation": "指标"}]} for i in range(n)],
     }
 
 

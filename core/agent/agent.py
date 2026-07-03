@@ -22,7 +22,4 @@ class Agent:
         return self.profile.get_profile()
 
     def get_memory(self):
-        return {
-            "short_term": self.memory.get_recent_memory(),
-            "long_term": self.memory.get_all_memory()
-        }
+        return {"short_term": self.memory.get_recent_memory(), "long_term": self.memory.get_all_memory()}

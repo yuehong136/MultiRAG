@@ -5,6 +5,7 @@
 @date：2024/7/9 9:00
 @desc:
 """
+
 from openai import OpenAI
 
 from core.llm.cv_model.base import Base

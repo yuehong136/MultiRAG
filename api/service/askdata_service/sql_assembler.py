@@ -6,6 +6,7 @@ from typing import Any
 
 class DatabaseType(Enum):
     """数据库类型枚举"""
+
     MYSQL = "mysql"
     POSTGRESQL = "postgresql"
     SQLITE = "sqlite"
@@ -15,6 +16,7 @@ class DatabaseType(Enum):
 
 class FilterOperator(Enum):
     """过滤操作符枚举"""
+
     EQUALS = "="
     NOT_EQUALS = "!="
     GREATER_THAN = ">"
@@ -39,6 +41,7 @@ class FilterOperator(Enum):
 
 class OrderDirection(Enum):
     """排序方向枚举"""
+
     ASC = "ASC"
     DESC = "DESC"
 
@@ -56,14 +59,8 @@ class DatabaseDialect:
     @staticmethod
     def get_identifier_quote(db_type: DatabaseType) -> tuple[str, str]:
         """获取标识符引用符号"""
-        quote_map = {
-            DatabaseType.MYSQL: ('`', '`'),
-            DatabaseType.POSTGRESQL: ('"', '"'),
-            DatabaseType.SQLITE: ('"', '"'),
-            DatabaseType.SQL_SERVER: ('[', ']'),
-            DatabaseType.ORACLE: ('"', '"')
-        }
-        return quote_map.get(db_type, ('`', '`'))
+        quote_map = {DatabaseType.MYSQL: ("`", "`"), DatabaseType.POSTGRESQL: ('"', '"'), DatabaseType.SQLITE: ('"', '"'), DatabaseType.SQL_SERVER: ("[", "]"), DatabaseType.ORACLE: ('"', '"')}
+        return quote_map.get(db_type, ("`", "`"))
 
     @staticmethod
     def escape_identifier(identifier: str, db_type: DatabaseType) -> str:
@@ -72,7 +69,7 @@ class DatabaseDialect:
 
         改进版本：能够智能处理已经部分或完全转义的标识符
         """
-        if not identifier or identifier.strip() == '':
+        if not identifier or identifier.strip() == "":
             return identifier
 
         # 清理标识符，移除多余空格
@@ -89,7 +86,7 @@ class DatabaseDialect:
             if s.startswith(left_quote) and s.endswith(right_quote):
                 return True
             # 也检查其他常见的引号
-            quote_pairs = [('`', '`'), ('"', '"'), ('[', ']')]
+            quote_pairs = [("`", "`"), ('"', '"'), ("[", "]")]
             for lq, rq in quote_pairs:
                 if s.startswith(lq) and s.endswith(rq):
                     return True
@@ -100,21 +97,21 @@ class DatabaseDialect:
             if not s:
                 return s
             # 移除各种可能的引号
-            quote_pairs = [('`', '`'), ('"', '"'), ('[', ']')]
+            quote_pairs = [("`", "`"), ('"', '"'), ("[", "]")]
             for lq, rq in quote_pairs:
                 if s.startswith(lq) and s.endswith(rq):
-                    return s[len(lq):-len(rq)]
+                    return s[len(lq) : -len(rq)]
             return s
 
         def add_quotes(s: str) -> str:
             """给字符串添加适当的引号"""
             if not s:
                 return s
-            return f'{left_quote}{s}{right_quote}'
+            return f"{left_quote}{s}{right_quote}"
 
         # 处理复合标识符（如 table.column）
-        if '.' in identifier:
-            parts = identifier.split('.')
+        if "." in identifier:
+            parts = identifier.split(".")
             escaped_parts = []
 
             for part in parts:
@@ -131,7 +128,7 @@ class DatabaseDialect:
                     # 没有引号的部分，直接添加引号
                     escaped_parts.append(add_quotes(part))
 
-            return '.'.join(escaped_parts)
+            return ".".join(escaped_parts)
         else:
             # 单个标识符
             if is_fully_quoted(identifier):
@@ -173,10 +170,10 @@ class FilterCondition(SQLFragment):
 
         elif self.operator in [FilterOperator.IN, FilterOperator.NOT_IN]:
             if isinstance(self.value, (list, tuple)):
-                placeholders = ','.join(['%s'] * len(self.value))
+                placeholders = ",".join(["%s"] * len(self.value))
                 return f"{escaped_field} {self.operator.value} ({placeholders})", list(self.value)
             else:
-                placeholders = '%s'
+                placeholders = "%s"
                 return f"{escaped_field} {self.operator.value} ({placeholders})", [self.value]
 
         else:
@@ -198,7 +195,7 @@ class RawSQLFragment(SQLFragment):
         self.parameters = parameters or []
 
         # 验证参数占位符数量
-        placeholder_count = self.sql_content.count('%s')
+        placeholder_count = self.sql_content.count("%s")
         if placeholder_count != len(self.parameters):
             if placeholder_count > 0 and len(self.parameters) == 0:
                 # 如果有占位符但没有参数，可能用户想要纯SQL，给出提示
@@ -213,15 +210,15 @@ class RawSQLFragment(SQLFragment):
         """基本的SQL安全检查"""
         # 检查危险关键字（仅针对明显危险的操作）
         dangerous_patterns = [
-            r'\bDROP\s+TABLE\b',
-            r'\bDELETE\s+FROM\b',
-            r'\bTRUNCATE\b',
-            r'\bINSERT\s+INTO\b',
-            r'\bUPDATE\s+\w+\s+SET\b',
-            r'\bCREATE\s+TABLE\b',
-            r'\bALTER\s+TABLE\b',
-            r'--',  # SQL注释
-            r'/\*.*?\*/',  # 多行注释
+            r"\bDROP\s+TABLE\b",
+            r"\bDELETE\s+FROM\b",
+            r"\bTRUNCATE\b",
+            r"\bINSERT\s+INTO\b",
+            r"\bUPDATE\s+\w+\s+SET\b",
+            r"\bCREATE\s+TABLE\b",
+            r"\bALTER\s+TABLE\b",
+            r"--",  # SQL注释
+            r"/\*.*?\*/",  # 多行注释
         ]
 
         sql_upper = self.sql_content.upper()
@@ -309,10 +306,10 @@ class HavingCondition(SQLFragment):
 
         elif self.operator in [FilterOperator.IN, FilterOperator.NOT_IN]:
             if isinstance(self.value, (list, tuple)):
-                placeholders = ','.join(['%s'] * len(self.value))
+                placeholders = ",".join(["%s"] * len(self.value))
                 return f"{self.aggregate_expression} {self.operator.value} ({placeholders})", list(self.value)
             else:
-                placeholders = '%s'
+                placeholders = "%s"
                 return f"{self.aggregate_expression} {self.operator.value} ({placeholders})", [self.value]
 
         else:
@@ -342,8 +339,7 @@ class FlexibleSQLAssembler:
         self.additional_clauses: dict[str, str] = {}
 
     @staticmethod
-    def _clean_sql_clause(sql_input: str, clause_keywords: list[str],
-                          clause_name: str = "条件") -> tuple[str, bool]:
+    def _clean_sql_clause(sql_input: str, clause_keywords: list[str], clause_name: str = "条件") -> tuple[str, bool]:
         """
         清理SQL子句，移除不必要的关键字
 
@@ -363,10 +359,10 @@ class FlexibleSQLAssembler:
 
         # 检查是否以任何关键字开头（忽略大小写）
         for keyword in clause_keywords:
-            pattern = rf'^\s*{re.escape(keyword)}\s+'
+            pattern = rf"^\s*{re.escape(keyword)}\s+"
             if re.match(pattern, cleaned_sql, re.IGNORECASE):
                 # 移除关键字
-                cleaned_sql = re.sub(pattern, '', cleaned_sql, flags=re.IGNORECASE).strip()
+                cleaned_sql = re.sub(pattern, "", cleaned_sql, flags=re.IGNORECASE).strip()
                 was_cleaned = True
                 print(f"警告: 已自动移除{clause_name}中的 '{keyword}' 关键字")
                 break
@@ -398,18 +394,18 @@ class FlexibleSQLAssembler:
             raise ValueError(f"{clause_name}必须包含实际的条件内容")
 
         # 基本的语法检查
-        if cleaned_content.count('(') != cleaned_content.count(')'):
+        if cleaned_content.count("(") != cleaned_content.count(")"):
             raise ValueError(f"{clause_name}中的括号不匹配")
 
         return cleaned_content
 
-    def set_database_type(self, db_type: DatabaseType) -> 'FlexibleSQLAssembler':
+    def set_database_type(self, db_type: DatabaseType) -> "FlexibleSQLAssembler":
         """设置数据库类型"""
         self.db_type = db_type
         return self
 
     # ============ SELECT相关方法 ============
-    def add_column(self, column: str) -> 'FlexibleSQLAssembler':
+    def add_column(self, column: str) -> "FlexibleSQLAssembler":
         """添加普通列"""
         # 使用DatabaseDialect来正确转义标识符
         escaped_column = DatabaseDialect.escape_identifier(column, self.db_type)
@@ -417,7 +413,7 @@ class FlexibleSQLAssembler:
         self.select_parts.append(raw_fragment)
         return self
 
-    def add_raw_column(self, sql_expression: str, alias: str = None) -> 'FlexibleSQLAssembler':
+    def add_raw_column(self, sql_expression: str, alias: str = None) -> "FlexibleSQLAssembler":
         """
         添加原始SQL表达式作为列
 
@@ -433,8 +429,7 @@ class FlexibleSQLAssembler:
         self.select_parts.append(raw_fragment)
         return self
 
-    def add_parameterized_column(self, sql_template: str, parameters: list[Any],
-                                 alias: str = None) -> 'FlexibleSQLAssembler':
+    def add_parameterized_column(self, sql_template: str, parameters: list[Any], alias: str = None) -> "FlexibleSQLAssembler":
         """
         添加带参数的列表达式（用于动态值）
 
@@ -451,8 +446,7 @@ class FlexibleSQLAssembler:
         self.select_parts.append(raw_fragment)
         return self
 
-    def add_dynamic_column(self, sql_template: str, dynamic_values: dict[str, Any],
-                           alias: str = None) -> 'FlexibleSQLAssembler':
+    def add_dynamic_column(self, sql_template: str, dynamic_values: dict[str, Any], alias: str = None) -> "FlexibleSQLAssembler":
         """
         添加动态列表达式（用于配置驱动的场景）
 
@@ -470,14 +464,13 @@ class FlexibleSQLAssembler:
         return self
 
     # ============ WHERE相关方法 ============
-    def add_filter(self, field: str, operator: FilterOperator, value: Any = None,
-                   value2: Any = None) -> 'FlexibleSQLAssembler':
+    def add_filter(self, field: str, operator: FilterOperator, value: Any = None, value2: Any = None) -> "FlexibleSQLAssembler":
         """添加标准过滤条件"""
         condition = FilterCondition(field, operator, value, value2)
         self.where_conditions.append(condition)
         return self
 
-    def add_raw_where(self, sql_condition: str, validate: bool = True) -> 'FlexibleSQLAssembler':
+    def add_raw_where(self, sql_condition: str, validate: bool = True) -> "FlexibleSQLAssembler":
         """
         添加原始WHERE条件（增强版）
 
@@ -489,18 +482,11 @@ class FlexibleSQLAssembler:
         """
         try:
             # 清理可能的WHERE关键字
-            cleaned_condition, was_cleaned = self._clean_sql_clause(
-                sql_condition,
-                ['WHERE'],
-                'WHERE条件'
-            )
+            cleaned_condition, was_cleaned = self._clean_sql_clause(sql_condition, ["WHERE"], "WHERE条件")
 
             # 验证条件内容
             if validate:
-                cleaned_condition = self._validate_condition_content(
-                    cleaned_condition,
-                    'WHERE条件'
-                )
+                cleaned_condition = self._validate_condition_content(cleaned_condition, "WHERE条件")
 
             if was_cleaned:
                 print(f"处理后的WHERE条件: {cleaned_condition}")
@@ -513,7 +499,7 @@ class FlexibleSQLAssembler:
 
         return self
 
-    def add_parameterized_where(self, sql_template: str, parameters: list[Any]) -> 'FlexibleSQLAssembler':
+    def add_parameterized_where(self, sql_template: str, parameters: list[Any]) -> "FlexibleSQLAssembler":
         """
         添加带参数的WHERE条件
 
@@ -526,13 +512,13 @@ class FlexibleSQLAssembler:
         return self
 
     # ============ GROUP BY相关方法 ============
-    def add_group_by(self, field: str) -> 'FlexibleSQLAssembler':
+    def add_group_by(self, field: str) -> "FlexibleSQLAssembler":
         """添加标准分组字段"""
         group_clause = GroupByClause(field)
         self.group_by_parts.append(group_clause)
         return self
 
-    def add_raw_group_by(self, sql_expression: str, validate: bool = True) -> 'FlexibleSQLAssembler':
+    def add_raw_group_by(self, sql_expression: str, validate: bool = True) -> "FlexibleSQLAssembler":
         """
         添加原始GROUP BY表达式（增强版）
 
@@ -544,18 +530,11 @@ class FlexibleSQLAssembler:
         """
         try:
             # 清理可能的GROUP BY关键字
-            cleaned_expression, was_cleaned = self._clean_sql_clause(
-                sql_expression,
-                ['GROUP BY'],
-                'GROUP BY表达式'
-            )
+            cleaned_expression, was_cleaned = self._clean_sql_clause(sql_expression, ["GROUP BY"], "GROUP BY表达式")
 
             # 验证表达式内容
             if validate:
-                cleaned_expression = self._validate_condition_content(
-                    cleaned_expression,
-                    'GROUP BY表达式'
-                )
+                cleaned_expression = self._validate_condition_content(cleaned_expression, "GROUP BY表达式")
 
             if was_cleaned:
                 print(f"处理后的GROUP BY表达式: {cleaned_expression}")
@@ -569,7 +548,7 @@ class FlexibleSQLAssembler:
         return self
 
     # 添加便捷方法，支持多种输入方式
-    def add_where_condition(self, condition: str | FilterCondition) -> 'FlexibleSQLAssembler':
+    def add_where_condition(self, condition: str | FilterCondition) -> "FlexibleSQLAssembler":
         """
         智能添加WHERE条件，支持字符串和FilterCondition对象
 
@@ -584,7 +563,7 @@ class FlexibleSQLAssembler:
         else:
             raise ValueError("条件必须是字符串或FilterCondition对象")
 
-    def add_having_condition(self, condition: str | HavingCondition) -> 'FlexibleSQLAssembler':
+    def add_having_condition(self, condition: str | HavingCondition) -> "FlexibleSQLAssembler":
         """
         智能添加HAVING条件，支持字符串和HavingCondition对象
 
@@ -599,15 +578,14 @@ class FlexibleSQLAssembler:
         else:
             raise ValueError("条件必须是字符串或HavingCondition对象")
 
-    def add_multiple_group_by(self, fields: list[str]) -> 'FlexibleSQLAssembler':
+    def add_multiple_group_by(self, fields: list[str]) -> "FlexibleSQLAssembler":
         """批量添加分组字段"""
         for field in fields:
             self.add_group_by(field)
         return self
 
     # ============ HAVING相关方法 ============
-    def add_having(self, aggregate_expression: str, operator: FilterOperator, value: Any = None,
-                   value2: Any = None) -> 'FlexibleSQLAssembler':
+    def add_having(self, aggregate_expression: str, operator: FilterOperator, value: Any = None, value2: Any = None) -> "FlexibleSQLAssembler":
         """
         添加标准HAVING条件
 
@@ -621,7 +599,7 @@ class FlexibleSQLAssembler:
         self.having_conditions.append(having_condition)
         return self
 
-    def add_raw_having(self, sql_condition: str, validate: bool = True) -> 'FlexibleSQLAssembler':
+    def add_raw_having(self, sql_condition: str, validate: bool = True) -> "FlexibleSQLAssembler":
         """
         添加原始HAVING条件（增强版）
 
@@ -633,18 +611,11 @@ class FlexibleSQLAssembler:
         """
         try:
             # 清理可能的HAVING关键字
-            cleaned_condition, was_cleaned = self._clean_sql_clause(
-                sql_condition,
-                ['HAVING'],
-                'HAVING条件'
-            )
+            cleaned_condition, was_cleaned = self._clean_sql_clause(sql_condition, ["HAVING"], "HAVING条件")
 
             # 验证条件内容
             if validate:
-                cleaned_condition = self._validate_condition_content(
-                    cleaned_condition,
-                    'HAVING条件'
-                )
+                cleaned_condition = self._validate_condition_content(cleaned_condition, "HAVING条件")
 
             if was_cleaned:
                 print(f"处理后的HAVING条件: {cleaned_condition}")
@@ -657,7 +628,7 @@ class FlexibleSQLAssembler:
 
         return self
 
-    def add_parameterized_having(self, sql_template: str, parameters: list[Any]) -> 'FlexibleSQLAssembler':
+    def add_parameterized_having(self, sql_template: str, parameters: list[Any]) -> "FlexibleSQLAssembler":
         """
         添加带参数的HAVING条件
 
@@ -670,8 +641,7 @@ class FlexibleSQLAssembler:
         return self
 
     # ============ ORDER BY相关方法 ============
-    def add_order_by(self, field: str,
-                     direction: OrderDirection | str = OrderDirection.ASC) -> 'FlexibleSQLAssembler':
+    def add_order_by(self, field: str, direction: OrderDirection | str = OrderDirection.ASC) -> "FlexibleSQLAssembler":
         """
         添加标准排序
 
@@ -687,7 +657,7 @@ class FlexibleSQLAssembler:
         self.order_by_parts.append(order_clause)
         return self
 
-    def add_raw_order_by(self, sql_expression: str, validate: bool = True) -> 'FlexibleSQLAssembler':
+    def add_raw_order_by(self, sql_expression: str, validate: bool = True) -> "FlexibleSQLAssembler":
         """
         添加原始ORDER BY表达式（增强版）
 
@@ -699,18 +669,11 @@ class FlexibleSQLAssembler:
         """
         try:
             # 清理可能的ORDER BY关键字
-            cleaned_expression, was_cleaned = self._clean_sql_clause(
-                sql_expression,
-                ['ORDER BY'],
-                'ORDER BY表达式'
-            )
+            cleaned_expression, was_cleaned = self._clean_sql_clause(sql_expression, ["ORDER BY"], "ORDER BY表达式")
 
             # 验证表达式内容
             if validate:
-                cleaned_expression = self._validate_condition_content(
-                    cleaned_expression,
-                    'ORDER BY表达式'
-                )
+                cleaned_expression = self._validate_condition_content(cleaned_expression, "ORDER BY表达式")
 
             if was_cleaned:
                 print(f"处理后的ORDER BY表达式: {cleaned_expression}")
@@ -724,13 +687,13 @@ class FlexibleSQLAssembler:
         return self
 
     # ============ 其他方法 ============
-    def set_limit(self, limit: int, offset: int = 0) -> 'FlexibleSQLAssembler':
+    def set_limit(self, limit: int, offset: int = 0) -> "FlexibleSQLAssembler":
         """设置LIMIT和OFFSET"""
         self.limit_count = limit
         self.offset_count = offset if offset > 0 else None
         return self
 
-    def set_offset(self, offset: int) -> 'FlexibleSQLAssembler':
+    def set_offset(self, offset: int) -> "FlexibleSQLAssembler":
         """
         单独设置OFFSET值
 
@@ -754,7 +717,7 @@ class FlexibleSQLAssembler:
         self.offset_count = offset if offset > 0 else None
         return self
 
-    def set_pagination(self, page: int, page_size: int) -> 'FlexibleSQLAssembler':
+    def set_pagination(self, page: int, page_size: int) -> "FlexibleSQLAssembler":
         """
         便捷的分页设置方法
 
@@ -783,7 +746,7 @@ class FlexibleSQLAssembler:
         self.offset_count = offset if offset > 0 else None
         return self
 
-    def clear_pagination(self) -> 'FlexibleSQLAssembler':
+    def clear_pagination(self) -> "FlexibleSQLAssembler":
         """
         清除分页设置（LIMIT和OFFSET）
 
@@ -799,7 +762,7 @@ class FlexibleSQLAssembler:
         self.offset_count = None
         return self
 
-    def add_clause(self, clause_name: str, sql_content: str) -> 'FlexibleSQLAssembler':
+    def add_clause(self, clause_name: str, sql_content: str) -> "FlexibleSQLAssembler":
         """
         添加其他自定义子句
 
@@ -829,7 +792,7 @@ class FlexibleSQLAssembler:
         from_clause = f"FROM {self.base_from_clause}"
 
         # 添加额外的JOIN
-        if 'additional_joins' in self.additional_clauses:
+        if "additional_joins" in self.additional_clauses:
             from_clause += f" {self.additional_clauses['additional_joins']}"
 
         # 构建WHERE子句
@@ -942,7 +905,7 @@ class FlexibleSQLAssembler:
     def build_sql_for_jdbc(self) -> tuple[str, list[Any]]:
         """构建JDBC格式的SQL语句（使用?作为占位符）"""
         sql, params = self.build_sql()
-        jdbc_sql = sql.replace('%s', '?')
+        jdbc_sql = sql.replace("%s", "?")
         return jdbc_sql, params
 
     def build_count_sql_for_jdbc(self, cap: int | None = None) -> tuple[str, list[Any]]:
@@ -973,7 +936,7 @@ class FlexibleSQLAssembler:
             inner_sql, params = self.build_sql()
 
             # 将%s替换为?（JDBC格式）
-            jdbc_inner_sql = inner_sql.replace('%s', '?')
+            jdbc_inner_sql = inner_sql.replace("%s", "?")
 
             # 构建COUNT查询，将原SQL作为子查询
             count_sql = f"SELECT COUNT(*) FROM ({jdbc_inner_sql}) AS count_subquery"
@@ -985,7 +948,7 @@ class FlexibleSQLAssembler:
             self.limit_count = temp_limit
             self.offset_count = temp_offset
 
-    def clear_all(self) -> 'FlexibleSQLAssembler':
+    def clear_all(self) -> "FlexibleSQLAssembler":
         """清空所有设置"""
         self.select_parts.clear()
         self.where_conditions.clear()

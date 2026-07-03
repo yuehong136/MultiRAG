@@ -24,9 +24,9 @@ class GeminiCV(Base):
         if system:
             hist.append({"role": "user", "parts": [system, history[0]["content"]]})
         for img in images:
-            hist[0]["parts"].append(("data:image/jpeg;base64," + img) if img[:4]!="data" else img)
+            hist[0]["parts"].append(("data:image/jpeg;base64," + img) if img[:4] != "data" else img)
         for h in history[1:]:
-            hist.append({"role": "user" if h["role"]=="user" else "model", "parts": [h["content"]]})
+            hist.append({"role": "user" if h["role"] == "user" else "model", "parts": [h["content"]]})
         return hist
 
     def describe(self, image):
@@ -60,9 +60,7 @@ class GeminiCV(Base):
     def chat(self, system, history, gen_conf, images=[]):
         generation_config = {"temperature": gen_conf.get("temperature", 0.3), "top_p": gen_conf.get("top_p", 0.7)}
         try:
-            response = self.model.generate_content(
-                self._form_history(system, history, images),
-                generation_config=generation_config)
+            response = self.model.generate_content(self._form_history(system, history, images), generation_config=generation_config)
             ans = response.text
             return ans, response.usage_metadata.total_token_count
         except Exception as e:

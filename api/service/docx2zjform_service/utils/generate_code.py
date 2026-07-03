@@ -11,7 +11,7 @@ def generate_code(length: int = 8) -> str:
     # 大写字母和数字的字符集
     characters = string.ascii_uppercase + string.digits
     # 使用 random.choices 随机选择字符
-    return ''.join(random.choices(characters, k=length))
+    return "".join(random.choices(characters, k=length))
 
 
 def generate_code_v2(length: int = 8) -> str:
@@ -21,13 +21,13 @@ def generate_code_v2(length: int = 8) -> str:
     :return: 随机字符串
     """
     # 确保至少包含一个字母和一个数字
-    letters = ''.join(random.choices(string.ascii_uppercase, k=length - 1))
-    digits = ''.join(random.choices(string.digits, k=1))
+    letters = "".join(random.choices(string.ascii_uppercase, k=length - 1))
+    digits = "".join(random.choices(string.digits, k=1))
 
     # 组合并打乱顺序
     combined = list(letters + digits)
     random.shuffle(combined)
-    return ''.join(combined)
+    return "".join(combined)
 
 
 # 使用示例

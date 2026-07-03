@@ -5,6 +5,7 @@
 @date：2024/7/19 14:00
 @desc:
 """
+
 import logging
 import ssl
 import time
@@ -36,8 +37,8 @@ class MultiRAGMinio:
         self.conn = None
         # Use `or None` to convert empty strings to None, ensuring single-bucket
         # mode is truly disabled when not configured
-        self.bucket = settings.MINIO.get('bucket', None) or None
-        self.prefix_path = settings.MINIO.get('prefix_path', None) or None
+        self.bucket = settings.MINIO.get("bucket", None) or None
+        self.prefix_path = settings.MINIO.get("prefix_path", None) or None
         self.__open__()
 
     @staticmethod
@@ -50,7 +51,7 @@ class MultiRAGMinio:
             actual_bucket = self.bucket if self.bucket else bucket
             if self.bucket:
                 # pass original identifier forward for use by other decorators
-                kwargs['_orig_bucket'] = original_bucket
+                kwargs["_orig_bucket"] = original_bucket
             return method(self, actual_bucket, *args, **kwargs)
 
         return wrapper
@@ -63,7 +64,7 @@ class MultiRAGMinio:
             # bucket name and forwarded the original identifier as `_orig_bucket`.
             # Prefer that original identifier when constructing the key path so
             # objects are stored under <physical-bucket>/<identifier>/...
-            orig_bucket = kwargs.pop('_orig_bucket', None)
+            orig_bucket = kwargs.pop("_orig_bucket", None)
 
             if self.prefix_path:
                 # If a prefix_path is configured, include it and then the identifier
@@ -111,8 +112,7 @@ class MultiRAGMinio:
             # Initialize MinIO client with the parameters
             self.conn = Minio(**conn_params)
         except Exception:
-            logging.exception(
-                "Fail to connect %s " % settings.MINIO["host"])
+            logging.exception("Fail to connect %s " % settings.MINIO["host"])
 
     def __close__(self):
         del self.conn
@@ -151,12 +151,7 @@ class MultiRAGMinio:
                 if not self.bucket and not self.conn.bucket_exists(bucket):
                     self.conn.make_bucket(bucket)
 
-                put_args = {
-                    "bucket_name": bucket,
-                    "object_name": fnm,
-                    "data": BytesIO(binary),
-                    "length": len(binary)
-                }
+                put_args = {"bucket_name": bucket, "object_name": fnm, "data": BytesIO(binary), "length": len(binary)}
                 if content_type:
                     put_args["content_type"] = content_type
 
@@ -226,6 +221,7 @@ class MultiRAGMinio:
             try:
                 # Convert expires (int seconds) to timedelta as expected by Minio
                 from datetime import timedelta
+
                 expiry_delta = timedelta(seconds=expires)
                 return self.conn.get_presigned_url("GET", bucket, fnm, expires=expiry_delta)
             except Exception:
@@ -236,7 +232,7 @@ class MultiRAGMinio:
 
     @use_default_bucket
     def remove_bucket(self, bucket, **kwargs):
-        orig_bucket = kwargs.pop('_orig_bucket', None)
+        orig_bucket = kwargs.pop("_orig_bucket", None)
         try:
             if self.bucket:
                 # Single bucket mode: remove objects with prefix

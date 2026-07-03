@@ -45,27 +45,23 @@ class KnowledgebaseService(CommonService):
         # Check parsing status of each document
         for doc in docs:
             # If document is being parsed, don't allow chat creation
-            if doc['run'] == TaskStatus.RUNNING.value or doc['run'] == TaskStatus.CANCEL.value or doc[
-                'run'] == TaskStatus.FAIL.value:
+            if doc["run"] == TaskStatus.RUNNING.value or doc["run"] == TaskStatus.CANCEL.value or doc["run"] == TaskStatus.FAIL.value:
                 return False, f"Document '{doc['name']}' in dataset '{kb.name}' is still being parsed. Please wait until all documents are parsed before starting a chat."
             # If document is not yet parsed and has no chunks, don't allow chat creation
-            if doc['run'] == TaskStatus.UNSTART.value and doc['chunk_num'] == 0:
+            if doc["run"] == TaskStatus.UNSTART.value and doc["chunk_num"] == 0:
                 return False, f"Document '{doc['name']}' in dataset '{kb.name}' has not been parsed yet. Please parse all documents before starting a chat."
 
         return True, None
 
     @classmethod
     def list_documents_by_ids(cls, db: Session, kb_ids):
-        doc_ids = db.query(Document.id.label("document_id")).filter(
-            Document.kb_id.in_(kb_ids)
-        ).all()
+        doc_ids = db.query(Document.id.label("document_id")).filter(Document.kb_id.in_(kb_ids)).all()
 
         # 提取查询结果中的文档ID并返回列表
         return [doc.document_id for doc in doc_ids]
 
     @classmethod
-    def get_by_tenant_ids(cls, db: Session, joined_tenant_ids, user_id, page_number, items_per_page, orderby, desc,
-                          keywords=None, parser_id=None):
+    def get_by_tenant_ids(cls, db: Session, joined_tenant_ids, user_id, page_number, items_per_page, orderby, desc, keywords=None, parser_id=None):
         fields = [
             cls.model.id,
             cls.model.avatar,
@@ -80,15 +76,17 @@ class KnowledgebaseService(CommonService):
             cls.model.parser_id,
             cls.model.embd_id,
             User.nickname,
-            User.avatar.label('tenant_avatar'),
-            cls.model.update_time
+            User.avatar.label("tenant_avatar"),
+            cls.model.update_time,
         ]
 
         # 构建查询表达式
-        query = db.query(*fields).join(User, cls.model.tenant_id == User.id).filter(
-            ((cls.model.tenant_id.in_(joined_tenant_ids) & (cls.model.permission == TenantPermission.TEAM.value)) |
-             (cls.model.tenant_id == user_id)) &
-            (cls.model.status == StatusEnum.VALID.value)
+        query = (
+            db.query(*fields)
+            .join(User, cls.model.tenant_id == User.id)
+            .filter(
+                ((cls.model.tenant_id.in_(joined_tenant_ids) & (cls.model.permission == TenantPermission.TEAM.value)) | (cls.model.tenant_id == user_id)) & (cls.model.status == StatusEnum.VALID.value)
+            )
         )
         if parser_id:
             query = query.filter(cls.model.parser_id == parser_id)
@@ -115,21 +113,21 @@ class KnowledgebaseService(CommonService):
         result = []
         for kb in kbs:
             kb_dict = {
-                'id': kb[0],
-                'avatar': kb[1],
-                'name': kb[2],
-                'language': kb[3],
-                'description': kb[4],
-                'tenant_id': kb[5],
-                'permission': kb[6],
-                'doc_num': kb[7],
-                'token_num': kb[8],
-                'chunk_num': kb[9],
-                'parser_id': kb[10],
-                'embd_id': kb[11],
-                'nickname': kb[12],
-                'tenant_avatar': kb[13],
-                'update_time': kb[14],
+                "id": kb[0],
+                "avatar": kb[1],
+                "name": kb[2],
+                "language": kb[3],
+                "description": kb[4],
+                "tenant_id": kb[5],
+                "permission": kb[6],
+                "doc_num": kb[7],
+                "token_num": kb[8],
+                "chunk_num": kb[9],
+                "parser_id": kb[10],
+                "embd_id": kb[11],
+                "nickname": kb[12],
+                "tenant_avatar": kb[13],
+                "update_time": kb[14],
             }
             result.append(kb_dict)
 
@@ -152,9 +150,7 @@ class KnowledgebaseService(CommonService):
         """
         # 根据条件构建查询表达式
         query = db.query(cls.model).filter(
-            ((cls.model.tenant_id.in_(joined_tenant_ids) & (cls.model.permission == TenantPermission.TEAM.value)) |
-             (cls.model.tenant_id == user_id)) &
-            (cls.model.status == StatusEnum.VALID.value)
+            ((cls.model.tenant_id.in_(joined_tenant_ids) & (cls.model.permission == TenantPermission.TEAM.value)) | (cls.model.tenant_id == user_id)) & (cls.model.status == StatusEnum.VALID.value)
         )
 
         # 根据desc参数确定排序方式
@@ -174,7 +170,7 @@ class KnowledgebaseService(CommonService):
         # 根据count参数返回数据子集的字典形式
         if count == -1:
             return [kb.to_dict() for kb in kbs[offset:]]
-        return [kb.to_dict() for kb in kbs[offset:offset + count]]
+        return [kb.to_dict() for kb in kbs[offset : offset + count]]
 
     @classmethod
     def get_all_kb_by_tenant_ids(cls, db: Session, tenant_ids: list, user_id: str):
@@ -200,18 +196,14 @@ class KnowledgebaseService(CommonService):
             cls.model.chunk_num,
             cls.model.status,
             cls.model.create_date,
-            cls.model.update_date
+            cls.model.update_date,
         ]
         # find team kb and owned kb
-        query = db.query(*fields).filter(
-            or_(
-                and_(
-                    cls.model.tenant_id.in_(tenant_ids),
-                    cls.model.permission == TenantPermission.TEAM.value
-                ),
-                cls.model.tenant_id == user_id
-            )
-        ).order_by(cls.model.create_time.asc())
+        query = (
+            db.query(*fields)
+            .filter(or_(and_(cls.model.tenant_id.in_(tenant_ids), cls.model.permission == TenantPermission.TEAM.value), cls.model.tenant_id == user_id))
+            .order_by(cls.model.create_time.asc())
+        )
         # maybe cause slow query by deep paginate, optimize later.
         offset, limit = 0, 50
         res = []
@@ -221,18 +213,20 @@ class KnowledgebaseService(CommonService):
                 break
             # 将查询结果转换为字典
             for kb in kb_batch:
-                res.append({
-                    "name": kb.name,
-                    "avatar": kb.avatar,
-                    "language": kb.language,
-                    "permission": kb.permission,
-                    "doc_num": kb.doc_num,
-                    "token_num": kb.token_num,
-                    "chunk_num": kb.chunk_num,
-                    "status": kb.status,
-                    "create_date": kb.create_date,
-                    "update_date": kb.update_date
-                })
+                res.append(
+                    {
+                        "name": kb.name,
+                        "avatar": kb.avatar,
+                        "language": kb.language,
+                        "permission": kb.permission,
+                        "doc_num": kb.doc_num,
+                        "token_num": kb.token_num,
+                        "chunk_num": kb.chunk_num,
+                        "status": kb.status,
+                        "create_date": kb.create_date,
+                        "update_date": kb.update_date,
+                    }
+                )
             offset += limit
         return res
 
@@ -288,19 +282,11 @@ class KnowledgebaseService(CommonService):
             cls.model.mindmap_task_id,
             cls.model.mindmap_task_finish_at,
             cls.model.create_time,
-            cls.model.update_time
+            cls.model.update_time,
         ]
 
         # LEFT JOIN UserCanvas to get pipeline information
-        query = (
-            db.query(*fields)
-            .outerjoin(UserCanvas, cls.model.pipeline_id == UserCanvas.id)
-            .filter(
-                cls.model.id == kb_id,
-                cls.model.status == StatusEnum.VALID.value
-            )
-            .first()
-        )
+        query = db.query(*fields).outerjoin(UserCanvas, cls.model.pipeline_id == UserCanvas.id).filter(cls.model.id == kb_id, cls.model.status == StatusEnum.VALID.value).first()
 
         # 返回查询结果的字典形式
         if not query:
@@ -389,11 +375,7 @@ class KnowledgebaseService(CommonService):
         :return: 如果知识库存在，返回(True, dataset实例)；否则返回(False, None)。
         """
         # 根据名称、租户ID和状态查询知识库
-        kb = db.query(cls.model).filter(
-            cls.model.name == kb_name,
-            cls.model.tenant_id == tenant_id,
-            cls.model.status == StatusEnum.VALID.value
-        ).first()
+        kb = db.query(cls.model).filter(cls.model.name == kb_name, cls.model.tenant_id == tenant_id, cls.model.status == StatusEnum.VALID.value).first()
         if kb:
             return True, kb
         return False, None
@@ -410,17 +392,7 @@ class KnowledgebaseService(CommonService):
         return [id[0] for id in ids]
 
     @classmethod
-    def create_with_name(
-        cls,
-        db: Session,
-        *,
-        name: str,
-        tenant_id: str,
-        parser_id: str | None = None,
-        embd_id: str | None = None,
-        parser_config: dict | None = None,
-        **kwargs
-    ):
+    def create_with_name(cls, db: Session, *, name: str, tenant_id: str, parser_id: str | None = None, embd_id: str | None = None, parser_config: dict | None = None, **kwargs):
         """Create a dataset (dataset) by name with kb_app defaults.
 
         This encapsulates the creation logic used in kb_app.create so other callers
@@ -456,14 +428,7 @@ class KnowledgebaseService(CommonService):
 
         # Build payload
         kb_id = get_uuid()
-        payload = {
-            "id": kb_id,
-            "name": dataset_name,
-            "tenant_id": tenant_id,
-            "created_by": tenant_id,
-            "parser_id": (parser_id or "naive"),
-            **kwargs
-        }
+        payload = {"id": kb_id, "name": dataset_name, "tenant_id": tenant_id, "created_by": tenant_id, "parser_id": (parser_id or "naive"), **kwargs}
 
         # Handle embd_id: use tenant default if not provided
         if embd_id is None:
@@ -479,8 +444,7 @@ class KnowledgebaseService(CommonService):
         return True, payload
 
     @classmethod
-    def get_list(cls, db: Session, joined_tenant_ids, user_id, page_number, items_per_page, orderby, desc, id, name,
-                 keywords=None, parser_id=None):
+    def get_list(cls, db: Session, joined_tenant_ids, user_id, page_number, items_per_page, orderby, desc, id, name, keywords=None, parser_id=None):
         """
         # Get list of datasets with filtering and pagination
         # Args:
@@ -499,9 +463,7 @@ class KnowledgebaseService(CommonService):
         """
         # 构建基础查询条件
         query = db.query(cls.model).filter(
-            ((cls.model.tenant_id.in_(joined_tenant_ids) & (cls.model.permission == TenantPermission.TEAM.value)) |
-             (cls.model.tenant_id == user_id)) &
-            (cls.model.status == StatusEnum.VALID.value)
+            ((cls.model.tenant_id.in_(joined_tenant_ids) & (cls.model.permission == TenantPermission.TEAM.value)) | (cls.model.tenant_id == user_id)) & (cls.model.status == StatusEnum.VALID.value)
         )
 
         # 根据ID和名称进行进一步过滤（如果有提供）
@@ -545,28 +507,19 @@ class KnowledgebaseService(CommonService):
 
     @classmethod
     def get_kb_by_id(cls, db: Session, kb_id, user_id):
-        query = db.query(cls.model).join(UserTenant, UserTenant.tenant_id == cls.model.tenant_id).filter(
-            cls.model.id == kb_id,
-            UserTenant.user_id == user_id
-        ).limit(1)
+        query = db.query(cls.model).join(UserTenant, UserTenant.tenant_id == cls.model.tenant_id).filter(cls.model.id == kb_id, UserTenant.user_id == user_id).limit(1)
 
         return [kb.to_dict() for kb in query]
 
     @classmethod
     def get_kb_by_name(cls, db: Session, kb_name, user_id):
-        query = db.query(cls.model).join(UserTenant, UserTenant.tenant_id == cls.model.tenant_id).filter(
-            cls.model.name == kb_name,
-            UserTenant.user_id == user_id
-        ).limit(1)
+        query = db.query(cls.model).join(UserTenant, UserTenant.tenant_id == cls.model.tenant_id).filter(cls.model.name == kb_name, UserTenant.user_id == user_id).limit(1)
 
         return [kb.to_dict() for kb in query]
 
     @classmethod
     def accessible4deletion(cls, db: Session, kb_id, user_id):
-        docs = db.query(cls.model.id).filter(
-            cls.model.id == kb_id,
-            cls.model.created_by == user_id
-        ).limit(1).all()
+        docs = db.query(cls.model.id).filter(cls.model.id == kb_id, cls.model.created_by == user_id).limit(1).all()
 
         if not docs:
             return False
@@ -576,19 +529,11 @@ class KnowledgebaseService(CommonService):
     def atomic_increase_doc_num_by_id(cls, db: Session, kb_id):
         current_ts = current_timestamp()
         current_date = datetime_format(datetime.now())
-        data = {
-            "update_time": current_ts,
-            "update_date": current_date
-        }
+        data = {"update_time": current_ts, "update_date": current_date}
         # 在SQLAlchemy中，直接使用表达式来原子递增
         from sqlalchemy import update
 
-        update_stmt = update(cls.model).where(
-            cls.model.id == kb_id
-        ).values(
-            doc_num=cls.model.doc_num + 1,
-            **data
-        )
+        update_stmt = update(cls.model).where(cls.model.id == kb_id).values(doc_num=cls.model.doc_num + 1, **data)
         result = db.execute(update_stmt)
         db.commit()
         return result.rowcount > 0
@@ -611,11 +556,7 @@ class KnowledgebaseService(CommonService):
             # 不使用 get_by_id 加载对象，避免将对象放入 session 导致误触发 before_update 事件
             # 这样可以完全避免触发 ORM 事件和时间戳自动更新
 
-            update_stmt = update(cls.model).where(
-                cls.model.id == kb_id
-            ).values(
-                doc_num=doc_num
-            )
+            update_stmt = update(cls.model).where(cls.model.id == kb_id).values(doc_num=doc_num)
 
             result = db.execute(update_stmt)
             db.commit()
@@ -642,11 +583,11 @@ class KnowledgebaseService(CommonService):
             current_ts = current_timestamp()
             current_date = datetime_format(datetime.now())
             update_dict = {
-                'doc_num': kb_row.doc_num - doc_num_info['doc_num'],
-                'chunk_num': kb_row.chunk_num - doc_num_info['chunk_num'],
-                'token_num': kb_row.token_num - doc_num_info['token_num'],
-                'update_time': current_ts,
-                'update_date': current_date
+                "doc_num": kb_row.doc_num - doc_num_info["doc_num"],
+                "chunk_num": kb_row.chunk_num - doc_num_info["chunk_num"],
+                "token_num": kb_row.token_num - doc_num_info["token_num"],
+                "update_time": current_ts,
+                "update_date": current_date,
             }
 
             # 执行更新

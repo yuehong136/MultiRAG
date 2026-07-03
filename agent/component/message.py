@@ -45,6 +45,7 @@ class MessageParam(ComponentParamBase):
     """
     Define the Message component parameters.
     """
+
     def __init__(self):
         super().__init__()
         self.content = []
@@ -52,11 +53,7 @@ class MessageParam(ComponentParamBase):
         self.output_format = None  # default output format
         self.auto_play = False
         self.memory_ids = []  # Memory IDs to save conversation
-        self.outputs = {
-            "content": {
-                "type": "str"
-            }
-        }
+        self.outputs = {"content": {"type": "str"}}
 
     def check(self):
         self.check_empty(self.content, "[Message] Content")
@@ -70,8 +67,8 @@ class Message(ComponentBase):
     def get_input_elements(self) -> dict[str, Any]:
         return self.get_input_elements_from_text("".join(self._param.content))
 
-    def get_kwargs(self, script: str, kwargs: dict = {}, delimiter: str=None) -> tuple[str, dict[str, str | list | Any]]:
-        for k,v in self.get_input_elements_from_text(script).items():
+    def get_kwargs(self, script: str, kwargs: dict = {}, delimiter: str = None) -> tuple[str, dict[str, str | list | Any]]:
+        for k, v in self.get_input_elements_from_text(script).items():
             if k in kwargs:
                 continue
             v = v["value"]
@@ -113,7 +110,7 @@ class Message(ComponentBase):
             buf += t
         return buf
 
-    async def _stream(self, rand_cnt:str):
+    async def _stream(self, rand_cnt: str):
         s = 0
         all_content = ""
         cache = {}
@@ -121,8 +118,8 @@ class Message(ComponentBase):
             if self.check_if_canceled("Message streaming"):
                 return
 
-            all_content += rand_cnt[s: r.start()]
-            yield rand_cnt[s: r.start()]
+            all_content += rand_cnt[s : r.start()]
+            yield rand_cnt[s : r.start()]
             s = r.end()
             exp = r.group(1)
             if exp in cache:
@@ -170,20 +167,18 @@ class Message(ComponentBase):
             if self.check_if_canceled("Message streaming"):
                 return
 
-            all_content += rand_cnt[s: ]
-            yield rand_cnt[s: ]
+            all_content += rand_cnt[s:]
+            yield rand_cnt[s:]
 
         self.set_output("content", all_content)
         self._convert_content(all_content)
         await self._save_to_memory(all_content)
 
-    def _is_jinjia2(self, content:str) -> bool:
-        patt = [
-            r"\{%.*%\}", "{{", "}}"
-        ]
+    def _is_jinjia2(self, content: str) -> bool:
+        patt = [r"\{%.*%\}", "{{", "}}"]
         return any(re.search(p, content) for p in patt)
 
-    @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10*60)))
+    @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10 * 60)))
     def _invoke(self, **kwargs):
         if self.check_if_canceled("Message processing"):
             return
@@ -234,7 +229,7 @@ class Message(ComponentBase):
 
         for line in table_lines:
             # Split by | and clean up
-            cells = [cell.strip() for cell in line.split('|')]
+            cells = [cell.strip() for cell in line.split("|")]
             # Remove empty first and last elements from split (caused by leading/trailing |)
             cells = [c for c in cells if c]
 
@@ -248,8 +243,8 @@ class Message(ComponentBase):
             normalized_rows = []
             for row in rows:
                 while len(row) < len(headers):
-                    row.append('')
-                normalized_rows.append(row[:len(headers)])
+                    row.append("")
+                normalized_rows.append(row[: len(headers)])
 
             return pd.DataFrame(normalized_rows, columns=headers)
 
@@ -260,6 +255,7 @@ class Message(ComponentBase):
             return
 
         import pypandoc
+
         doc_id = get_uuid()
 
         if self._param.output_format.lower() not in {"markdown", "html", "pdf", "docx", "xlsx"}:
@@ -288,17 +284,15 @@ class Message(ComponentBase):
                 import pandas as pd
 
                 # Debug: log the content being parsed
-                logging.info(
-                    f"XLSX Parser: Content length={len(content) if content else 0}, first 500 chars: {content[:500] if content else 'None'}")
+                logging.info(f"XLSX Parser: Content length={len(content) if content else 0}, first 500 chars: {content[:500] if content else 'None'}")
 
                 # Try to parse ALL Markdown tables from the content
                 # Each table will be written to a separate sheet
                 tables = []  # List of (sheet_name, dataframe)
 
                 if isinstance(content, str):
-                    lines = content.strip().split('\n')
-                    logging.info(
-                        f"XLSX Parser: Total lines={len(lines)}, lines starting with '|': {sum(1 for line in lines if line.strip().startswith('|'))}")
+                    lines = content.strip().split("\n")
+                    logging.info(f"XLSX Parser: Total lines={len(lines)}, lines starting with '|': {sum(1 for line in lines if line.strip().startswith('|'))}")
                     current_table_lines = []
                     current_table_title = None
                     pending_title = None
@@ -310,18 +304,16 @@ class Message(ComponentBase):
 
                         # Check for potential table title (lines before a table)
                         # Look for patterns like "Table 1:", "## Table", or markdown headers
-                        if not in_table and stripped and not stripped.startswith('|'):
+                        if not in_table and stripped and not stripped.startswith("|"):
                             # Check if this could be a table title
                             lower_stripped = stripped.lower()
-                            if (lower_stripped.startswith('table') or
-                                    stripped.startswith('#') or
-                                    ':' in stripped):
-                                pending_title = stripped.lstrip('#').strip()
+                            if lower_stripped.startswith("table") or stripped.startswith("#") or ":" in stripped:
+                                pending_title = stripped.lstrip("#").strip()
 
-                        if stripped.startswith('|') and '|' in stripped[1:]:
+                        if stripped.startswith("|") and "|" in stripped[1:]:
                             # Check if this is a separator line (|---|---|)
-                            cleaned = stripped.replace(' ', '').replace('|', '').replace('-', '').replace(':', '')
-                            if cleaned == '':
+                            cleaned = stripped.replace(" ", "").replace("|", "").replace("-", "").replace(":", "")
+                            if cleaned == "":
                                 continue  # Skip separator line
 
                             if not in_table:
@@ -333,7 +325,7 @@ class Message(ComponentBase):
 
                             current_table_lines.append(stripped)
 
-                        elif in_table and not stripped.startswith('|'):
+                        elif in_table and not stripped.startswith("|"):
                             # End of current table - save it
                             if current_table_lines:
                                 df = self._parse_markdown_table_lines(current_table_lines)
@@ -343,9 +335,7 @@ class Message(ComponentBase):
                                     if current_table_title:
                                         # Clean and truncate title for sheet name
                                         sheet_name = current_table_title[:31]
-                                        sheet_name = sheet_name.replace('/', '_').replace('\\', '_').replace('*',
-                                                                                                             '').replace(
-                                            '?', '').replace('[', '').replace(']', '').replace(':', '')
+                                        sheet_name = sheet_name.replace("/", "_").replace("\\", "_").replace("*", "").replace("?", "").replace("[", "").replace("]", "").replace(":", "")
                                     else:
                                         sheet_name = f"Table_{table_count}"
                                     tables.append((sheet_name, df))
@@ -358,10 +348,8 @@ class Message(ComponentBase):
                             # Check if this line could be a title for the next table
                             if stripped:
                                 lower_stripped = stripped.lower()
-                                if (lower_stripped.startswith('table') or
-                                        stripped.startswith('#') or
-                                        ':' in stripped):
-                                    pending_title = stripped.lstrip('#').strip()
+                                if lower_stripped.startswith("table") or stripped.startswith("#") or ":" in stripped:
+                                    pending_title = stripped.lstrip("#").strip()
 
                     # Don't forget the last table if content ends with a table
                     if in_table and current_table_lines:
@@ -370,8 +358,7 @@ class Message(ComponentBase):
                             table_count += 1
                             if current_table_title:
                                 sheet_name = current_table_title[:31]
-                                sheet_name = sheet_name.replace('/', '_').replace('\\', '_').replace('*', '').replace(
-                                    '?', '').replace('[', '').replace(']', '').replace(':', '')
+                                sheet_name = sheet_name.replace("/", "_").replace("\\", "_").replace("*", "").replace("?", "").replace("[", "").replace("]", "").replace(":", "")
                             else:
                                 sheet_name = f"Table_{table_count}"
                             tables.append((sheet_name, df))
@@ -383,7 +370,7 @@ class Message(ComponentBase):
 
                 # Write all tables to Excel, each in a separate sheet
                 excel_io = BytesIO()
-                with pd.ExcelWriter(excel_io, engine='openpyxl') as writer:
+                with pd.ExcelWriter(excel_io, engine="openpyxl") as writer:
                     used_names = set()
                     for sheet_name, df in tables:
                         # Ensure unique sheet names
@@ -391,7 +378,7 @@ class Message(ComponentBase):
                         counter = 1
                         while sheet_name in used_names:
                             suffix = f"_{counter}"
-                            sheet_name = original_name[:31 - len(suffix)] + suffix
+                            sheet_name = original_name[: 31 - len(suffix)] + suffix
                             counter += 1
                         used_names.add(sheet_name)
                         df.to_excel(writer, sheet_name=sheet_name, index=False)
@@ -429,10 +416,7 @@ class Message(ComponentBase):
                         os.remove(tmp_name)
 
             settings.STORAGE_IMPL.put(self._canvas._tenant_id, doc_id, binary_content)
-            self.set_output("attachment", {
-                "doc_id":doc_id,
-                "format":self._param.output_format,
-                "file_name":f"{doc_id[:8]}.{self._param.output_format}"})
+            self.set_output("attachment", {"doc_id": doc_id, "format": self._param.output_format, "file_name": f"{doc_id[:8]}.{self._param.output_format}"})
 
             logging.info(f"Converted content uploaded as {doc_id} (format={self._param.output_format})")
 
@@ -448,12 +432,6 @@ class Message(ComponentBase):
         if user_id and re.match(r"^{.*}$", user_id):
             user_id = self._canvas.get_variable_value(user_id)
 
-        message_dict = {
-            "user_id": user_id or "",
-            "agent_id": self._canvas._id,
-            "session_id": self._canvas.task_id,
-            "user_input": self._canvas.get_sys_query(),
-            "agent_response": content
-        }
+        message_dict = {"user_id": user_id or "", "agent_id": self._canvas._id, "session_id": self._canvas.task_id, "user_input": self._canvas.get_sys_query(), "agent_response": content}
         with db_connection() as db:
             return await queue_save_to_memory_task(db, self._param.memory_ids, message_dict)

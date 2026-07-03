@@ -26,9 +26,10 @@ from sqlalchemy.orm.attributes import get_history
 from common.config_utils import decrypt_database_config
 from common.constants import ParserType
 
-DATABASE_TYPE = os.getenv("DB_TYPE", 'postgresql')
+DATABASE_TYPE = os.getenv("DB_TYPE", "postgresql")
 DATABASE = decrypt_database_config(name=DATABASE_TYPE)
 database_config = DATABASE
+
 
 def build_database_url(db_config: dict[str, Any]) -> str:
     """
@@ -39,9 +40,7 @@ def build_database_url(db_config: dict[str, Any]) -> str:
 
     if drivername_lower.startswith("sqlite"):
         sqlite_db = db_config.get("dbname") or db_config.get("database") or ":memory:"
-        return URL.create(drivername="sqlite+pysqlite", database=str(sqlite_db)).render_as_string(
-            hide_password=False
-        )
+        return URL.create(drivername="sqlite+pysqlite", database=str(sqlite_db)).render_as_string(hide_password=False)
 
     # OceanBase is MySQL-compatible; map to mysql+pymysql driver
     if drivername_lower == "oceanbase":
@@ -83,43 +82,40 @@ def get_engine_config(db_config: dict) -> dict:
     Returns:
         SQLAlchemy 引擎配置字典
     """
-    max_connections = db_config.get('max_connections', 100)
-    stale_timeout = db_config.get('stale_timeout', 30)
+    max_connections = db_config.get("max_connections", 100)
+    stale_timeout = db_config.get("stale_timeout", 30)
 
     # 基础连接池配置
     engine_config = {
         # 连接池大小配置
-        'pool_size': max_connections,              # 常驻连接数
-        'max_overflow': max_connections // 2,      # 最大溢出连接数
-        'pool_timeout': stale_timeout,             # 获取连接的超时时间（秒）
-
+        "pool_size": max_connections,  # 常驻连接数
+        "max_overflow": max_connections // 2,  # 最大溢出连接数
+        "pool_timeout": stale_timeout,  # 获取连接的超时时间（秒）
         # 连接健康检查（关键配置）
-        'pool_pre_ping': True,                     # 使用前自动ping检测连接
-
+        "pool_pre_ping": True,  # 使用前自动ping检测连接
         # 连接回收配置
-        'pool_recycle': min(stale_timeout * 60, 1800),  # 30分钟或配置值，防止连接超时
-
+        "pool_recycle": min(stale_timeout * 60, 1800),  # 30分钟或配置值，防止连接超时
         # 日志配置
-        'echo': False,                             # 生产环境关闭SQL日志
-        'echo_pool': False,                        # 关闭连接池日志
+        "echo": False,  # 生产环境关闭SQL日志
+        "echo_pool": False,  # 关闭连接池日志
     }
 
     # 根据数据库类型添加特定连接参数
-    db_type = db_config.get('name', 'postgresql').lower()
+    db_type = db_config.get("name", "postgresql").lower()
 
-    if db_type in ('mysql', 'oceanbase'):
+    if db_type in ("mysql", "oceanbase"):
         # MySQL/OceanBase 特定配置（OceanBase 兼容 MySQL 协议）
-        engine_config['connect_args'] = {
-            'connect_timeout': 10,      # 连接超时（秒）
-            'read_timeout': 30,         # 读取超时（秒）
-            'write_timeout': 30,        # 写入超时（秒）
-            'charset': 'utf8mb4',
+        engine_config["connect_args"] = {
+            "connect_timeout": 10,  # 连接超时（秒）
+            "read_timeout": 30,  # 读取超时（秒）
+            "write_timeout": 30,  # 写入超时（秒）
+            "charset": "utf8mb4",
         }
-    elif db_type == 'postgresql':
+    elif db_type == "postgresql":
         # PostgreSQL 特定配置
-        engine_config['connect_args'] = {
-            'connect_timeout': 10,      # 连接超时（秒）
-            'options': '-c statement_timeout=30000',  # 30秒语句超时
+        engine_config["connect_args"] = {
+            "connect_timeout": 10,  # 连接超时（秒）
+            "options": "-c statement_timeout=30000",  # 30秒语句超时
         }
 
     return engine_config
@@ -136,6 +132,7 @@ engine = create_engine(DATABASE_URL, **engine_kwargs)
 # ==================== 连接池事件监听器 ====================
 # 用于监控和记录连接池状态
 
+
 @event.listens_for(engine, "connect")
 def receive_connect(dbapi_conn, connection_record):
     """
@@ -145,7 +142,7 @@ def receive_connect(dbapi_conn, connection_record):
     - 记录新连接的创建
     - 设置连接级别的参数
     """
-    connection_record.info['pid'] = os.getpid()
+    connection_record.info["pid"] = os.getpid()
     logging.debug(f"[连接池] 新数据库连接已建立 | 进程PID: {os.getpid()}")
 
 
@@ -158,19 +155,15 @@ def receive_checkout(dbapi_conn, connection_record, connection_proxy):
     - 验证连接的有效性（pool_pre_ping 会在这之前自动检查）
     - 记录连接使用情况
     """
-    pid = connection_record.info.get('pid')
+    pid = connection_record.info.get("pid")
     if pid != os.getpid():
         # 检测连接是否在不同进程中使用（多进程场景）
-        logging.warning(
-            f"[连接池] 连接跨进程使用 | 创建进程: {pid}, 当前进程: {os.getpid()}"
-        )
+        logging.warning(f"[连接池] 连接跨进程使用 | 创建进程: {pid}, 当前进程: {os.getpid()}")
         # ⚠️ 关键：跨进程复用连接会导致连接异常/莫名断开。
         # 使用 SQLAlchemy 官方推荐的 invalidate() 方法使连接失效，
         # 连接池会自动丢弃该连接并新建连接（自愈机制）
         connection_record.invalidate()
-        raise DisconnectionError(
-            f"DB connection belongs to PID {pid}, cannot be used in PID {os.getpid()}"
-        )
+        raise DisconnectionError(f"DB connection belongs to PID {pid}, cannot be used in PID {os.getpid()}")
 
 
 @event.listens_for(engine, "checkin")
@@ -203,16 +196,14 @@ def receive_close(dbapi_conn, connection_record):
     logging.debug(f"[连接池] 数据库连接已关闭 | 进程PID: {os.getpid()}")
 
 
-SessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    expire_on_commit=False,
-    bind=engine
-)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, expire_on_commit=False, bind=engine)
+
 
 class Base(DeclarativeBase):
     """SQLAlchemy 2.0 风格的声明式基类"""
+
     pass
+
 
 from contextlib import contextmanager
 
@@ -277,6 +268,7 @@ def get_db():
 
 # ==================== 连接池状态监控工具 ====================
 
+
 def get_pool_status() -> dict:
     """
     获取数据库连接池的状态信息
@@ -308,17 +300,17 @@ def get_pool_status() -> dict:
     total = checked_out + checked_in
 
     # 计算使用率
-    max_connections = pool_size + (pool._max_overflow if hasattr(pool, '_max_overflow') else 0)
+    max_connections = pool_size + (pool._max_overflow if hasattr(pool, "_max_overflow") else 0)
     usage_rate = (checked_out / max_connections * 100) if max_connections > 0 else 0
 
     return {
-        'pool_size': pool_size,           # 连接池大小
-        'checked_out': checked_out,       # 已取出连接数
-        'overflow': overflow,             # 溢出连接数
-        'checked_in': checked_in,         # 池中空闲连接数
-        'total_connections': total,       # 总连接数
-        'usage_rate': round(usage_rate, 2),  # 使用率（%）
-        'status': 'warning' if usage_rate > 80 else 'healthy'
+        "pool_size": pool_size,  # 连接池大小
+        "checked_out": checked_out,  # 已取出连接数
+        "overflow": overflow,  # 溢出连接数
+        "checked_in": checked_in,  # 池中空闲连接数
+        "total_connections": total,  # 总连接数
+        "usage_rate": round(usage_rate, 2),  # 使用率（%）
+        "status": "warning" if usage_rate > 80 else "healthy",
     }
 
 
@@ -367,13 +359,7 @@ def close_stale_connections(age: int = 30):
 
 # 保留原代码中的常量和辅助函数
 CONTINUOUS_FIELD_TYPE = {int, float, datetime}
-AUTO_DATE_TIMESTAMP_FIELD_PREFIX = {
-    "create",
-    "start",
-    "end",
-    "update",
-    "read_access",
-    "write_access"}
+AUTO_DATE_TIMESTAMP_FIELD_PREFIX = {"create", "start", "end", "update", "read_access", "write_access"}
 
 
 def is_continuous_field(cls: type[Any]) -> bool:
@@ -453,8 +439,8 @@ def normalize_update_data(model, values: dict) -> dict:
     now_ts = get_timestamp_ms()
 
     # 1. 自动设置 update_time（如果未显式设置）
-    if hasattr(model, 'update_time'):
-        if 'update_time' not in result and model.update_time not in result:
+    if hasattr(model, "update_time"):
+        if "update_time" not in result and model.update_time not in result:
             result[model.update_time] = now_ts
 
     # 2. 自动同步 *_time 和 *_date 字段
@@ -546,7 +532,7 @@ class BaseModel(Base):
 
 
 # 使用SQLAlchemy事件来确保时间戳和日期时间的一致性
-@event.listens_for(BaseModel, 'before_insert', propagate=True)
+@event.listens_for(BaseModel, "before_insert", propagate=True)
 def before_insert(mapper, connection, target):
     """在插入前同步时间字段"""
     now = get_utc_now()
@@ -558,7 +544,7 @@ def before_insert(mapper, connection, target):
     target.update_time = timestamp
 
 
-@event.listens_for(BaseModel, 'before_update', propagate=True)
+@event.listens_for(BaseModel, "before_update", propagate=True)
 def before_update(mapper, connection, target):
     """在更新前同步更新时间字段
 
@@ -575,7 +561,7 @@ def before_update(mapper, connection, target):
         return
 
     # 检查是否有真正的变更（排除时间戳字段本身）
-    time_fields = {'update_time', 'update_date', 'create_time', 'create_date'}
+    time_fields = {"update_time", "update_date", "create_time", "create_date"}
     has_real_changes = False
 
     # 获取 mapper 中定义的所有列属性
@@ -651,7 +637,7 @@ class User(BaseModel):
             "status": self.status,
             "timezone": self.timezone,
             "last_login_time": self.last_login_time,
-            "is_superuser": self.is_superuser
+            "is_superuser": self.is_superuser,
         }
 
 
@@ -694,7 +680,7 @@ class Tenant(BaseModel):
             "tenant_img2txt_id": self.tenant_img2txt_id,
             "tts_id": self.tts_id,
             "tenant_tts_id": self.tenant_tts_id,
-            "parser_ids": self.parser_ids
+            "parser_ids": self.parser_ids,
         }
 
 
@@ -710,11 +696,7 @@ class UserTenant(BaseModel):
     status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1")
 
     def to_dict(self):
-        return {
-            "tenant_id": self.tenant_id,
-            "user_id": self.user_id,
-            "role": self.role
-        }
+        return {"tenant_id": self.tenant_id, "user_id": self.user_id, "role": self.role}
 
 
 class LLMFactories(BaseModel):
@@ -779,11 +761,7 @@ class TenantLangfuse(BaseModel):
         # You can customize this if you want a different representation
         # than the default BaseModel.to_dict() or if you want to exclude sensitive fields.
         # For example, to exclude secret_key from general dictionary conversions:
-        return {
-            "tenant_id": self.tenant_id,
-            "public_key": self.public_key,
-            "host": self.host
-        }
+        return {"tenant_id": self.tenant_id, "public_key": self.public_key, "host": self.host}
 
 
 # ===== AI Guard domain models =====
@@ -1020,8 +998,7 @@ class Document(BaseModel):
     parser_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="default parser ID")
     pipeline_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="Pipeline ID")
     parser_config: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default={"pages": [[1, 1000000]], "table_context_size": 0, "image_context_size": 0})
-    source_type: Mapped[str] = mapped_column(String(128), index=True, nullable=False, default="local",
-                         doc="where dose this document come from")
+    source_type: Mapped[str] = mapped_column(String(128), index=True, nullable=False, default="local", doc="where dose this document come from")
     type: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="file extension")
     created_by: Mapped[str] = mapped_column(String, index=True, nullable=False, doc="who created it")
     name: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True, doc="file name")
@@ -1048,14 +1025,14 @@ class DocumentMetadata(BaseModel):
     For ES/Infinity backends: metadata lives in docStoreConn sidecar index, but this
     table is still the canonical model definition.
     """
+
     __tablename__ = "t_ai_document_metadata"
     __table_args__ = (
         sa.Index("ix_doc_meta_tenant_kb", "tenant_id", "kb_id"),
         sa.Index("ix_doc_meta_kb", "kb_id"),
         {"schema": "usr_ai"},
     )
-    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False,
-                                    doc="same as document id")
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False, doc="same as document id")
     tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
     kb_id: Mapped[str] = mapped_column(String(32), nullable=False)
     meta_fields: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default={})
@@ -1084,7 +1061,7 @@ class File(BaseModel):
             "location": self.location,
             "size": self.size,
             "type": self.type,
-            "source_type": self.source_type
+            "source_type": self.source_type,
         }
 
 
@@ -1126,26 +1103,24 @@ class Dialog(BaseModel):
     language: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, default="English", doc="English|Chinese")
     llm_id: Mapped[str] = mapped_column(String(128), index=False, nullable=False, doc="default llm ID")
     tenant_llm_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="default tenant llm row id")
-    llm_setting: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False,
-                         default={"temperature": 0.1, "top_p": 0.3, "frequency_penalty": 0.7, "presence_penalty": 0.4,
-                                  "max_tokens": 512})
+    llm_setting: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default={"temperature": 0.1, "top_p": 0.3, "frequency_penalty": 0.7, "presence_penalty": 0.4, "max_tokens": 512})
     prompt_type: Mapped[str] = mapped_column(String(16), index=True, nullable=False, default="simple", doc="simple|advanced")
-    prompt_config: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False,
-                           default={"system": "", "prologue": "Hi! I'm your assistant. What can I do for you?",
-                                    "parameters": [],
-                                    "empty_response": "Sorry! No relevant content was found in the knowledge base!"})
+    prompt_config: Mapped[dict] = mapped_column(
+        JSONB,
+        index=False,
+        nullable=False,
+        default={"system": "", "prologue": "Hi! I'm your assistant. What can I do for you?", "parameters": [], "empty_response": "Sorry! No relevant content was found in the knowledge base!"},
+    )
     meta_data_filter: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True, default={})
     similarity_threshold: Mapped[float] = mapped_column(Float, index=False, nullable=False, default=0.2)
     vector_similarity_weight: Mapped[float] = mapped_column(Float, index=False, nullable=False, default=0.3)
     top_n: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=6)
     top_k: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=1024)
-    do_refer: Mapped[str] = mapped_column(String(1), index=False, nullable=False, default="1",
-                      doc="it needs to insert reference index into answer or not")
+    do_refer: Mapped[str] = mapped_column(String(1), index=False, nullable=False, default="1", doc="it needs to insert reference index into answer or not")
     rerank_id: Mapped[str | None] = mapped_column(String(128), index=False, nullable=True, doc="default rerank model ID")
     tenant_rerank_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="default tenant rerank row id")
     kb_ids: Mapped[list] = mapped_column(JSONB, index=False, nullable=False, default=[])
-    search_mode: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True,
-                          doc="search mode configuration: hybrid, sparse, dense, or fusion")
+    search_mode: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True, doc="search mode configuration: hybrid, sparse, dense, or fusion")
     status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
 
 
@@ -1249,7 +1224,7 @@ class WritingProject(BaseModel):
             "model": self.model,
             "title": self.title,
             "reference": self.reference,
-            "user_id": self.user_id
+            "user_id": self.user_id,
         }
 
 
@@ -1267,15 +1242,7 @@ class WritingChapter(BaseModel):
     status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="状态(0:已删除,1:有效)")
 
     def to_dict(self):
-        return {
-            "id": self.id,
-            "project_id": self.project_id,
-            "title": self.title,
-            "summary": self.summary,
-            "level": self.level,
-            "parent_id": self.parent_id,
-            "order_index": self.order_index
-        }
+        return {"id": self.id, "project_id": self.project_id, "title": self.title, "summary": self.summary, "level": self.level, "parent_id": self.parent_id, "order_index": self.order_index}
 
 
 class WritingReferenceMaterial(BaseModel):
@@ -1292,15 +1259,7 @@ class WritingReferenceMaterial(BaseModel):
     status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="状态(0:已删除,1:有效)")
 
     def to_dict(self):
-        return {
-            "id": self.id,
-            "chapter_id": self.chapter_id,
-            "title": self.title,
-            "content": self.content,
-            "source": self.source,
-            "type": self.type,
-            "order_index": self.order_index
-        }
+        return {"id": self.id, "chapter_id": self.chapter_id, "title": self.title, "content": self.content, "source": self.source, "type": self.type, "order_index": self.order_index}
 
 
 class WritingChapterContent(BaseModel):
@@ -1313,11 +1272,7 @@ class WritingChapterContent(BaseModel):
     status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="状态(0:已删除,1:有效)")
 
     def to_dict(self):
-        return {
-            "id": self.id,
-            "chapter_id": self.chapter_id,
-            "content": self.content
-        }
+        return {"id": self.id, "chapter_id": self.chapter_id, "content": self.content}
 
 
 class AskDataHistory(BaseModel):
@@ -1349,14 +1304,16 @@ class AskDataHistory(BaseModel):
             "user_question": self.user_question,
             "round_id": self.round_id,
             "processed_semantic_layer": self.processed_semantic_layer,
-            "sql_info": self.sql_info
+            "sql_info": self.sql_info,
         }
 
 
 # ===== API环境管理相关表 =====
 
+
 class ApiEnvironment(BaseModel):
     """API环境表"""
+
     __tablename__ = "t_ai_api_environments"
     __table_args__ = {"schema": "usr_ai"}
 
@@ -1382,12 +1339,13 @@ class ApiEnvironment(BaseModel):
             "create_time": self.create_time,
             "update_time": self.update_time,
             "create_date": self.create_date,
-            "update_date": self.update_date
+            "update_date": self.update_date,
         }
 
 
 class ApiEnvironmentVariable(BaseModel):
     """API环境变量表"""
+
     __tablename__ = "t_ai_api_environment_variables"
     __table_args__ = {"schema": "usr_ai"}
 
@@ -1413,12 +1371,13 @@ class ApiEnvironmentVariable(BaseModel):
             "create_time": self.create_time,
             "update_time": self.update_time,
             "create_date": self.create_date,
-            "update_date": self.update_date
+            "update_date": self.update_date,
         }
 
 
 class GlobalApiEnvironment(BaseModel):
     """全局预设API环境表"""
+
     __tablename__ = "t_ai_global_api_environments"
     __table_args__ = {"schema": "usr_ai"}
 
@@ -1442,7 +1401,7 @@ class GlobalApiEnvironment(BaseModel):
             "create_time": self.create_time,
             "update_time": self.update_time,
             "create_date": self.create_date,
-            "update_date": self.update_date
+            "update_date": self.update_date,
         }
 
 
@@ -1487,6 +1446,7 @@ class Search(BaseModel):
     """
     搜索配置表
     """
+
     __tablename__ = "t_ai_search"
     __table_args__ = {"schema": "usr_ai"}
 
@@ -1496,34 +1456,39 @@ class Search(BaseModel):
     name: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="Search name")
     description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="Search description")
     created_by: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="创建人")
-    search_config: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default=lambda: {
-        "kb_ids": [],
-        "doc_ids": [],
-        "similarity_threshold": 0.2,
-        "vector_similarity_weight": 0.3,
-        "use_kg": False,
-        # rerank settings
-        "rerank_id": "",
-        "top_k": 1024,
-        # chat settings
-        "summary": False,
-        "chat_id": "",
-        # Leave it here for reference, don't need to set default values
-        "llm_setting": {
-            # "temperature": 0.1,
-            # "top_p": 0.3,
-            # "frequency_penalty": 0.7,
-            # "presence_penalty": 0.4,
+    search_config: Mapped[dict] = mapped_column(
+        JSONB,
+        index=False,
+        nullable=False,
+        default=lambda: {
+            "kb_ids": [],
+            "doc_ids": [],
+            "similarity_threshold": 0.2,
+            "vector_similarity_weight": 0.3,
+            "use_kg": False,
+            # rerank settings
+            "rerank_id": "",
+            "top_k": 1024,
+            # chat settings
+            "summary": False,
+            "chat_id": "",
+            # Leave it here for reference, don't need to set default values
+            "llm_setting": {
+                # "temperature": 0.1,
+                # "top_p": 0.3,
+                # "frequency_penalty": 0.7,
+                # "presence_penalty": 0.4,
+            },
+            "chat_settingcross_languages": [],
+            "highlight": False,
+            "keyword": False,
+            "web_search": False,
+            "related_search": False,
+            "query_mindmap": False,
         },
-        "chat_settingcross_languages": [],
-        "highlight": False,
-        "keyword": False,
-        "web_search": False,
-        "related_search": False,
-        "query_mindmap": False,
-    }, doc="搜索配置")
-    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1",
-                    doc="是否有效(0: 已删除, 1: 有效)")
+        doc="搜索配置",
+    )
+    status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="是否有效(0: 已删除, 1: 有效)")
 
     def to_dict(self):
         return {
@@ -1536,7 +1501,7 @@ class Search(BaseModel):
             "search_config": self.search_config,
             "status": self.status,
             "create_time": self.create_time,
-            "update_time": self.update_time
+            "update_time": self.update_time,
         }
 
     def __str__(self):
@@ -1570,6 +1535,7 @@ class PipelineOperationLog(BaseModel):
 
 class Connector(BaseModel):
     """数据源连接器"""
+
     __tablename__ = "t_ai_connectors"
     __table_args__ = {"schema": "usr_ai"}
 
@@ -1602,12 +1568,13 @@ class Connector(BaseModel):
             "indexing_start": self.indexing_start,
             "status": self.status,
             "create_time": self.create_time,
-            "update_time": self.update_time
+            "update_time": self.update_time,
         }
 
 
 class Connector2Kb(BaseModel):
     """连接器与知识库关联表"""
+
     __tablename__ = "t_ai_connector2kb"
     __table_args__ = {"schema": "usr_ai"}
 
@@ -1617,18 +1584,15 @@ class Connector2Kb(BaseModel):
     auto_parse: Mapped[str] = mapped_column(String(1), nullable=False, default="1", doc="Auto parse (0: disabled, 1: enabled)")
 
     def to_dict(self):
-        return {
-            "id": self.id,
-            "connector_id": self.connector_id,
-            "kb_id": self.kb_id,
-            "auto_parse": self.auto_parse
-        }
+        return {"id": self.id, "connector_id": self.connector_id, "kb_id": self.kb_id, "auto_parse": self.auto_parse}
 
 
 # ==================== RAG Evaluation Tables ====================
 
+
 class EvaluationDataset(BaseModel):
     """Ground truth dataset for RAG evaluation"""
+
     __tablename__ = "t_ai_evaluation_datasets"
     __table_args__ = {"schema": "usr_ai"}
 
@@ -1650,12 +1614,13 @@ class EvaluationDataset(BaseModel):
             "created_by": self.created_by,
             "status": self.status,
             "create_time": self.create_time,
-            "update_time": self.update_time
+            "update_time": self.update_time,
         }
 
 
 class EvaluationCase(BaseModel):
     """Individual test case in an evaluation dataset"""
+
     __tablename__ = "t_ai_evaluation_cases"
     __table_args__ = {"schema": "usr_ai"}
 
@@ -1676,12 +1641,13 @@ class EvaluationCase(BaseModel):
             "relevant_doc_ids": self.relevant_doc_ids,
             "relevant_chunk_ids": self.relevant_chunk_ids,
             "case_metadata": self.case_metadata,
-            "create_time": self.create_time
+            "create_time": self.create_time,
         }
 
 
 class EvaluationRun(BaseModel):
     """A single evaluation run"""
+
     __tablename__ = "t_ai_evaluation_runs"
     __table_args__ = {"schema": "usr_ai"}
 
@@ -1706,12 +1672,13 @@ class EvaluationRun(BaseModel):
             "run_status": self.run_status,
             "created_by": self.created_by,
             "create_time": self.create_time,
-            "complete_time": self.complete_time
+            "complete_time": self.complete_time,
         }
 
 
 class EvaluationResult(BaseModel):
     """Result for a single test case in an evaluation run"""
+
     __tablename__ = "t_ai_evaluation_results"
     __table_args__ = {"schema": "usr_ai"}
 
@@ -1734,12 +1701,13 @@ class EvaluationResult(BaseModel):
             "metrics": self.metrics,
             "execution_time": self.execution_time,
             "token_usage": self.token_usage,
-            "create_time": self.create_time
+            "create_time": self.create_time,
         }
 
 
 class SyncLogs(BaseModel):
     """同步日志表"""
+
     __tablename__ = "t_ai_sync_logs"
     __table_args__ = {"schema": "usr_ai"}
 
@@ -1775,7 +1743,7 @@ class SyncLogs(BaseModel):
             "poll_range_end": self.poll_range_end,
             "kb_id": self.kb_id,
             "create_time": self.create_time,
-            "update_time": self.update_time
+            "update_time": self.update_time,
         }
 
 
@@ -1784,6 +1752,7 @@ class Memory(BaseModel):
 
     用于管理和存储AI记忆数据集，支持多种记忆类型（raw/semantic/episodic/procedural）
     """
+
     __tablename__ = "t_ai_memories"
     __table_args__ = {"schema": "usr_ai"}
 
@@ -1791,31 +1760,16 @@ class Memory(BaseModel):
     name: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="Memory name")
     avatar: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="Avatar base64 string")
     tenant_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="Tenant ID")
-    memory_type: Mapped[int] = mapped_column(
-        Integer, index=True, nullable=False, default=1,
-        doc="Bit flags (LSB->MSB): 1=raw, 2=semantic, 4=episodic, 8=procedural. E.g., 5 enables raw + episodic."
-    )
-    storage_type: Mapped[str] = mapped_column(
-        String(32), index=True, nullable=False, default="table",
-        doc="Storage type: table|graph"
-    )
+    memory_type: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=1, doc="Bit flags (LSB->MSB): 1=raw, 2=semantic, 4=episodic, 8=procedural. E.g., 5 enables raw + episodic.")
+    storage_type: Mapped[str] = mapped_column(String(32), index=True, nullable=False, default="table", doc="Storage type: table|graph")
     embd_id: Mapped[str] = mapped_column(String(128), index=False, nullable=False, doc="Embedding model ID")
     tenant_embd_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="tenant embedding row id")
     llm_id: Mapped[str] = mapped_column(String(128), index=False, nullable=False, doc="Chat model ID")
     tenant_llm_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="tenant llm row id")
-    permissions: Mapped[str] = mapped_column(
-        String(16), index=True, nullable=False, default="me",
-        doc="Permission scope: me|team"
-    )
+    permissions: Mapped[str] = mapped_column(String(16), index=True, nullable=False, default="me", doc="Permission scope: me|team")
     description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="Memory description")
-    memory_size: Mapped[int] = mapped_column(
-        Integer, index=False, nullable=False, default=5242880,
-        doc="Maximum memory size in bytes (default 5MB)"
-    )
-    forgetting_policy: Mapped[str] = mapped_column(
-        String(32), index=False, nullable=False, default="FIFO",
-        doc="Forgetting policy: LRU|FIFO"
-    )
+    memory_size: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=5242880, doc="Maximum memory size in bytes (default 5MB)")
+    forgetting_policy: Mapped[str] = mapped_column(String(32), index=False, nullable=False, default="FIFO", doc="Forgetting policy: LRU|FIFO")
     temperature: Mapped[float] = mapped_column(Float, index=False, nullable=False, default=0.5, doc="LLM temperature")
     system_prompt: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="System prompt")
     user_prompt: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="User prompt")
@@ -1842,7 +1796,7 @@ class Memory(BaseModel):
             "create_time": self.create_time,
             "create_date": self.create_date,
             "update_time": self.update_time,
-            "update_date": self.update_date
+            "update_date": self.update_date,
         }
 
 
@@ -1851,6 +1805,7 @@ class SystemSettings(BaseModel):
 
     用于存储全局系统配置项，支持按名称查询和更新
     """
+
     __tablename__ = "t_ai_system_settings"
     __table_args__ = {"schema": "usr_ai"}
 
@@ -1860,9 +1815,9 @@ class SystemSettings(BaseModel):
     value: Mapped[str] = mapped_column(Text, nullable=False, doc="Configuration value (JSON, string, etc.)")
 
 
-'''
+"""
 拥有权限，采用这种方式
-'''
+"""
 # def init_database_tables():
 #     # 需要创建的 schema 名称
 #     schema_name = 'usr_ai'
@@ -1942,20 +1897,20 @@ class SystemSettings(BaseModel):
 #         logging.error(f"Failed to create tables: {create_failed_list}")
 #         raise Exception(f"Failed to create tables: {create_failed_list}")
 
-'''
+"""
 没有权限，采用这种方式
-'''
+"""
+
+
 def init_database_tables():
     # 需要检查的 schema 名称
-    schema_name = 'usr_ai'
+    schema_name = "usr_ai"
 
     # 检查 schema 是否存在
     schema_exists = False
     try:
         with engine.connect() as connection:
-            result = connection.execute(text(
-                "SELECT schema_name FROM information_schema.schemata WHERE schema_name = :schema_name"
-            ), {"schema_name": schema_name})
+            result = connection.execute(text("SELECT schema_name FROM information_schema.schemata WHERE schema_name = :schema_name"), {"schema_name": schema_name})
             schema_exists = result.fetchone() is not None
 
         # 如果 schema 不存在，则返回报错提示
@@ -2012,6 +1967,7 @@ def init_database_tables():
     logging.info("Database table initialization completed successfully")
     return "Success"
 
+
 def upgrade_database_tables(is_fresh_install: bool = False):
     logging.info("开始执行数据库结构升级...")
 
@@ -2041,7 +1997,7 @@ def upgrade_database_tables(is_fresh_install: bool = False):
         with engine.begin() as connection:
             alembic_cfg.attributes["connection"] = connection
             # 检查schema是否存在
-            schema_name = 'usr_ai'
+            schema_name = "usr_ai"
 
             # 获取当前数据库版本
             context = MigrationContext.configure(connection, opts={"version_table_schema": schema_name})
@@ -2078,6 +2034,7 @@ def upgrade_database_tables(is_fresh_install: bool = False):
         error_msg = f"数据库迁移过程中发生错误: {e!s}"
         logging.error(error_msg)
         import traceback
+
         logging.error(traceback.format_exc())
         raise RuntimeError(error_msg) from e
 
@@ -2105,10 +2062,10 @@ def with_retry(max_retries=3, retry_delay=1.0):
                     # 获取self和方法名用于日志记录
                     self_obj = args[0] if args else None
                     func_name = func.__name__
-                    lock_name = getattr(self_obj, 'lock_name', 'unknown') if self_obj else 'unknown'
+                    lock_name = getattr(self_obj, "lock_name", "unknown") if self_obj else "unknown"
 
                     if retry < max_retries - 1:
-                        current_delay = retry_delay * (2 ** retry)
+                        current_delay = retry_delay * (2**retry)
                         logging.warning(f"{func_name} {lock_name} 失败: {e!s}, 重试中 ({retry + 1}/{max_retries})")
                         time.sleep(current_delay)
                     else:
@@ -2136,7 +2093,7 @@ class PostgreSQLDatabaseLock:
         """
         self.session = session
         self.lock_name = lock_name
-        self.lock_id = int(hashlib.md5(lock_name.encode()).hexdigest(), 16) % (2 ** 31 - 1)
+        self.lock_id = int(hashlib.md5(lock_name.encode()).hexdigest(), 16) % (2**31 - 1)
         self.timeout = int(timeout)
 
     @with_retry(max_retries=3, retry_delay=1.0)
@@ -2149,10 +2106,7 @@ class PostgreSQLDatabaseLock:
         Raises:
             Exception: 获取锁失败时抛出异常
         """
-        result = self.session.execute(
-            text("SELECT pg_try_advisory_lock(:lock_id)"),
-            {"lock_id": self.lock_id}
-        )
+        result = self.session.execute(text("SELECT pg_try_advisory_lock(:lock_id)"), {"lock_id": self.lock_id})
         row = result.fetchone()
 
         if not row or row[0] == 0:
@@ -2172,10 +2126,7 @@ class PostgreSQLDatabaseLock:
         Raises:
             Exception: 释放锁失败时抛出异常
         """
-        result = self.session.execute(
-            text("SELECT pg_advisory_unlock(:lock_id)"),
-            {"lock_id": self.lock_id}
-        )
+        result = self.session.execute(text("SELECT pg_advisory_unlock(:lock_id)"), {"lock_id": self.lock_id})
         row = result.fetchone()
 
         if not row or row[0] == 0:
@@ -2230,10 +2181,7 @@ class MySQLDatabaseLock:
         Raises:
             Exception: 获取锁失败时抛出异常
         """
-        result = self.session.execute(
-            text("SELECT GET_LOCK(:lock_name, :timeout)"),
-            {"lock_name": self.lock_name, "timeout": self.timeout}
-        )
+        result = self.session.execute(text("SELECT GET_LOCK(:lock_name, :timeout)"), {"lock_name": self.lock_name, "timeout": self.timeout})
         row = result.fetchone()
 
         if not row or row[0] is None:
@@ -2255,10 +2203,7 @@ class MySQLDatabaseLock:
         Raises:
             Exception: 释放锁失败时抛出异常
         """
-        result = self.session.execute(
-            text("SELECT RELEASE_LOCK(:lock_name)"),
-            {"lock_name": self.lock_name}
-        )
+        result = self.session.execute(text("SELECT RELEASE_LOCK(:lock_name)"), {"lock_name": self.lock_name})
         row = result.fetchone()
 
         if not row or row[0] is None:
@@ -2309,7 +2254,8 @@ class SQLiteDatabaseLock:
     def _ensure_lock_table(self):
         """确保锁表存在"""
         try:
-            self.session.execute(text("""
+            self.session.execute(
+                text("""
                                       CREATE TABLE IF NOT EXISTS advisory_locks
                                       (
                                           lock_name
@@ -2323,7 +2269,8 @@ class SQLiteDatabaseLock:
                                           DEFAULT
                                           CURRENT_TIMESTAMP
                                       )
-                                      """))
+                                      """)
+            )
             self.session.commit()
         except SQLAlchemyError:
             self.session.rollback()
@@ -2337,10 +2284,7 @@ class SQLiteDatabaseLock:
 
         while time.time() - start_time < self.timeout:
             try:
-                self.session.execute(
-                    text("INSERT INTO advisory_locks (lock_name, session_id) VALUES (:lock_name, :session_id)"),
-                    {"lock_name": self.lock_name, "session_id": session_id}
-                )
+                self.session.execute(text("INSERT INTO advisory_locks (lock_name, session_id) VALUES (:lock_name, :session_id)"), {"lock_name": self.lock_name, "session_id": session_id})
                 self.session.commit()
                 return True
             except SQLAlchemyError:
@@ -2355,10 +2299,7 @@ class SQLiteDatabaseLock:
         """释放锁"""
         session_id = str(id(self.session))
         try:
-            result = self.session.execute(
-                text("DELETE FROM advisory_locks WHERE lock_name = :lock_name AND session_id = :session_id"),
-                {"lock_name": self.lock_name, "session_id": session_id}
-            )
+            result = self.session.execute(text("DELETE FROM advisory_locks WHERE lock_name = :lock_name AND session_id = :session_id"), {"lock_name": self.lock_name, "session_id": session_id})
             self.session.commit()
 
             if result.rowcount == 0:
@@ -2410,12 +2351,12 @@ class DatabaseLock:
             # 自动检测数据库类型
             db_type = session.bind.dialect.name.lower()
 
-        if db_type.lower() == 'postgresql':
+        if db_type.lower() == "postgresql":
             return PostgreSQLDatabaseLock(session, lock_name, timeout)
-        elif db_type.lower() in ('mysql', 'oceanbase'):
+        elif db_type.lower() in ("mysql", "oceanbase"):
             # OceanBase 兼容 MySQL 协议，使用相同的锁实现
             return MySQLDatabaseLock(session, lock_name, timeout)
-        elif db_type.lower() == 'sqlite':
+        elif db_type.lower() == "sqlite":
             return SQLiteDatabaseLock(session, lock_name, timeout)
         else:
             # 对于其他数据库类型，使用 SQLite 的模拟实现

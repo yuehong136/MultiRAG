@@ -79,15 +79,14 @@ class PDFGeneratorParam(ComponentParamBase):
             "file_path": {"value": "", "type": "string"},
             "pdf_base64": {"value": "", "type": "string"},
             "download": {"value": "", "type": "string"},
-            "success": {"value": False, "type": "boolean"}
+            "success": {"value": False, "type": "boolean"},
         }
 
     def check(self):
         self.check_empty(self.content, "[PDFGenerator] Content")
         self.check_valid_value(self.output_format, "[PDFGenerator] Output format", ["pdf", "docx", "txt"])
         self.check_valid_value(self.logo_position, "[PDFGenerator] Logo position", ["left", "center", "right"])
-        self.check_valid_value(self.font_family, "[PDFGenerator] Font family",
-                             ["Helvetica", "Times-Roman", "Courier", "Helvetica-Bold", "Times-Bold"])
+        self.check_valid_value(self.font_family, "[PDFGenerator] Font family", ["Helvetica", "Times-Roman", "Courier", "Helvetica-Bold", "Times-Bold"])
         self.check_valid_value(self.page_size, "[PDFGenerator] Page size", ["A4", "Letter"])
         self.check_valid_value(self.orientation, "[PDFGenerator] Orientation", ["portrait", "landscape"])
         self.check_positive_number(self.font_size, "[PDFGenerator] Font size")
@@ -128,9 +127,9 @@ class PDFGenerator(Message, ABC):
         # Use CID fonts for reliable CJK support
         # These are built into ReportLab and work reliably across all platforms
         cid_fonts = [
-            'STSong-Light',      # Simplified Chinese
-            'HeiseiMin-W3',      # Japanese
-            'HYSMyeongJo-Medium', # Korean
+            "STSong-Light",  # Simplified Chinese
+            "HeiseiMin-W3",  # Japanese
+            "HYSMyeongJo-Medium",  # Korean
         ]
 
         for cid_font in cid_fonts:
@@ -147,21 +146,22 @@ class PDFGenerator(Message, ABC):
         # If CID fonts fail, try TTF fonts as fallback
         if not cls._unicode_font_name:
             font_paths = [
-                '/usr/share/fonts/truetype/freefont/FreeSans.ttf',
-                '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+                "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             ]
 
             for font_path in font_paths:
                 if os.path.exists(font_path):
                     try:
-                        pdfmetrics.registerFont(TTFont('UnicodeFont', font_path))
-                        cls._unicode_font_name = 'UnicodeFont'
-                        cls._unicode_font_bold_name = 'UnicodeFont'
+                        pdfmetrics.registerFont(TTFont("UnicodeFont", font_path))
+                        cls._unicode_font_name = "UnicodeFont"
+                        cls._unicode_font_bold_name = "UnicodeFont"
                         print(f"Registered TTF font from: {font_path}")
 
                         # Register font family
                         from reportlab.pdfbase.pdfmetrics import registerFontFamily
-                        registerFontFamily('UnicodeFont', normal='UnicodeFont', bold='UnicodeFont')
+
+                        registerFontFamily("UnicodeFont", normal="UnicodeFont", bold="UnicodeFont")
                         break
                     except Exception as e:
                         print(f"Failed to register TTF font {font_path}: {e}")
@@ -230,41 +230,28 @@ class PDFGenerator(Message, ABC):
 
     def _get_active_font(self) -> str:
         """Get the currently active font (Unicode or configured)"""
-        return getattr(self, '_active_font', self._param.font_family)
+        return getattr(self, "_active_font", self._param.font_family)
 
     def _get_active_bold_font(self) -> str:
         """Get the currently active bold font (Unicode or configured)"""
-        return getattr(self, '_active_bold_font', self._get_bold_font_name())
+        return getattr(self, "_active_bold_font", self._get_bold_font_name())
 
     def _get_bold_font_name(self) -> str:
         """Get the correct bold variant of the current font family"""
         font_map = {
-            'Helvetica': 'Helvetica-Bold',
-            'Times-Roman': 'Times-Bold',
-            'Courier': 'Courier-Bold',
+            "Helvetica": "Helvetica-Bold",
+            "Times-Roman": "Times-Bold",
+            "Courier": "Courier-Bold",
         }
-        font_family = getattr(self._param, 'font_family', 'Helvetica')
-        if 'Bold' in font_family:
+        font_family = getattr(self._param, "font_family", "Helvetica")
+        if "Bold" in font_family:
             return font_family
-        return font_map.get(font_family, 'Helvetica-Bold')
+        return font_map.get(font_family, "Helvetica-Bold")
 
     def get_input_form(self) -> dict[str, dict]:
-        return {
-            "content": {
-                "name": "Content",
-                "type": "text"
-            },
-            "title": {
-                "name": "Title",
-                "type": "line"
-            },
-            "subtitle": {
-                "name": "Subtitle",
-                "type": "line"
-            }
-        }
+        return {"content": {"name": "Content", "type": "text"}, "title": {"name": "Title", "type": "line"}, "subtitle": {"name": "Subtitle", "type": "line"}}
 
-    @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10*60)))
+    @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10 * 60)))
     def _invoke(self, **kwargs):
         import traceback
 
@@ -281,6 +268,7 @@ class PDFGenerator(Message, ABC):
             if content and self._canvas.is_reff(content.strip()):
                 # Extract the variable reference and get its value
                 import re
+
                 matches = re.findall(self.variable_ref_patt, content, flags=re.DOTALL)
                 for match in matches:
                     try:
@@ -377,13 +365,7 @@ class PDFGenerator(Message, ABC):
                 self.set_output("success", True)
 
                 # Create download info object
-                download_info = {
-                    "filename": filename,
-                    "path": file_path,
-                    "base64": doc_base64,
-                    "mime_type": mime_type,
-                    "size": file_size
-                }
+                download_info = {"filename": filename, "path": file_path, "base64": doc_base64, "mime_type": mime_type, "size": file_size}
                 # Output download info as JSON string so it can be used in Message block
                 download_json = json.dumps(download_info)
                 self.set_output("download", download_json)
@@ -442,7 +424,7 @@ class PDFGenerator(Message, ABC):
                 topMargin=self._param.margin_top * inch,
                 bottomMargin=self._param.margin_bottom * inch,
                 leftMargin=self._param.margin_left * inch,
-                rightMargin=self._param.margin_right * inch
+                rightMargin=self._param.margin_right * inch,
             )
 
             # Build story (content elements)
@@ -466,20 +448,20 @@ class PDFGenerator(Message, ABC):
 
             # Add title
             if title:
-                title_para = Paragraph(self._escape_html(title), styles['PDFTitle'])
+                title_para = Paragraph(self._escape_html(title), styles["PDFTitle"])
                 story.append(title_para)
                 story.append(Spacer(1, 0.2 * inch))
 
             # Add subtitle
             if subtitle:
-                subtitle_para = Paragraph(self._escape_html(subtitle), styles['PDFSubtitle'])
+                subtitle_para = Paragraph(self._escape_html(subtitle), styles["PDFSubtitle"])
                 story.append(subtitle_para)
                 story.append(Spacer(1, 0.3 * inch))
 
             # Add timestamp if enabled
             if self._param.add_timestamp:
                 timestamp_text = f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                timestamp_para = Paragraph(timestamp_text, styles['Italic'])
+                timestamp_para = Paragraph(timestamp_text, styles["Italic"])
                 story.append(timestamp_para)
                 story.append(Spacer(1, 0.2 * inch))
 
@@ -494,7 +476,7 @@ class PDFGenerator(Message, ABC):
             pdf_bytes = buffer.getvalue()
 
             # Write to temporary file first
-            with open(temp_file_path, 'wb') as f:
+            with open(temp_file_path, "wb") as f:
                 f.write(pdf_bytes)
 
             # Atomic rename to final filename (works across different filesystems)
@@ -511,7 +493,7 @@ class PDFGenerator(Message, ABC):
                 raise Exception(f"Generated PDF is empty: {file_path}")
 
             # Convert to base64
-            pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
+            pdf_base64 = base64.b64encode(pdf_bytes).decode("utf-8")
 
             return file_path, pdf_base64
 
@@ -568,16 +550,16 @@ class PDFGenerator(Message, ABC):
         def get_bold_font(font_family):
             """Get the correct bold variant of a font family"""
             # If using Unicode font, return the Unicode bold
-            if font_family in ('UnicodeFont', self._unicode_font_name):
+            if font_family in ("UnicodeFont", self._unicode_font_name):
                 return bold_font
             font_map = {
-                'Helvetica': 'Helvetica-Bold',
-                'Times-Roman': 'Times-Bold',
-                'Courier': 'Courier-Bold',
+                "Helvetica": "Helvetica-Bold",
+                "Times-Roman": "Times-Bold",
+                "Courier": "Courier-Bold",
             }
-            if 'Bold' in font_family:
+            if "Bold" in font_family:
                 return font_family
-            return font_map.get(font_family, 'Helvetica-Bold')
+            return font_map.get(font_family, "Helvetica-Bold")
 
         # Use detected font instead of configured font for non-Latin content
         active_font = regular_font
@@ -596,116 +578,104 @@ class PDFGenerator(Message, ABC):
 
         # IMPORTANT: Update base styles to use Unicode font for non-Latin content
         # This ensures ALL text uses the correct font, not just our custom styles
-        add_or_update_style('Normal', fontName=active_font)
-        add_or_update_style('BodyText', fontName=active_font)
-        add_or_update_style('Bullet', fontName=active_font)
-        add_or_update_style('Heading1', fontName=active_bold_font)
-        add_or_update_style('Heading2', fontName=active_bold_font)
-        add_or_update_style('Heading3', fontName=active_bold_font)
-        add_or_update_style('Title', fontName=active_bold_font)
+        add_or_update_style("Normal", fontName=active_font)
+        add_or_update_style("BodyText", fontName=active_font)
+        add_or_update_style("Bullet", fontName=active_font)
+        add_or_update_style("Heading1", fontName=active_bold_font)
+        add_or_update_style("Heading2", fontName=active_bold_font)
+        add_or_update_style("Heading3", fontName=active_bold_font)
+        add_or_update_style("Title", fontName=active_bold_font)
 
         # Title style
         add_or_update_style(
-            'PDFTitle',
-            parent=styles['Heading1'],
+            "PDFTitle",
+            parent=styles["Heading1"],
             fontSize=self._param.title_font_size,
             textColor=colors.HexColor(self._param.title_color),
             fontName=active_bold_font,
             alignment=TA_CENTER,
-            spaceAfter=12
+            spaceAfter=12,
         )
 
         # Subtitle style
         add_or_update_style(
-            'PDFSubtitle',
-            parent=styles['Heading2'],
+            "PDFSubtitle",
+            parent=styles["Heading2"],
             fontSize=self._param.heading2_font_size,
             textColor=colors.HexColor(self._param.text_color),
             fontName=active_font,
             alignment=TA_CENTER,
-            spaceAfter=12
+            spaceAfter=12,
         )
 
         # Custom heading styles
         add_or_update_style(
-            'CustomHeading1',
-            parent=styles['Heading1'],
+            "CustomHeading1",
+            parent=styles["Heading1"],
             fontSize=self._param.heading1_font_size,
             fontName=active_bold_font,
             textColor=colors.HexColor(self._param.text_color),
             spaceAfter=12,
-            spaceBefore=12
+            spaceBefore=12,
         )
 
         add_or_update_style(
-            'CustomHeading2',
-            parent=styles['Heading2'],
+            "CustomHeading2",
+            parent=styles["Heading2"],
             fontSize=self._param.heading2_font_size,
             fontName=active_bold_font,
             textColor=colors.HexColor(self._param.text_color),
             spaceAfter=10,
-            spaceBefore=10
+            spaceBefore=10,
         )
 
         add_or_update_style(
-            'CustomHeading3',
-            parent=styles['Heading3'],
+            "CustomHeading3",
+            parent=styles["Heading3"],
             fontSize=self._param.heading3_font_size,
             fontName=active_bold_font,
             textColor=colors.HexColor(self._param.text_color),
             spaceAfter=8,
-            spaceBefore=8
+            spaceBefore=8,
         )
 
         # Body text style
         add_or_update_style(
-            'CustomBody',
-            parent=styles['BodyText'],
+            "CustomBody",
+            parent=styles["BodyText"],
             fontSize=self._param.font_size,
             fontName=active_font,
             textColor=colors.HexColor(self._param.text_color),
             leading=self._param.font_size * self._param.line_spacing,
-            alignment=TA_JUSTIFY
+            alignment=TA_JUSTIFY,
         )
 
         # Bullet style
         add_or_update_style(
-            'CustomBullet',
-            parent=styles['BodyText'],
-            fontSize=self._param.font_size,
-            fontName=active_font,
-            textColor=colors.HexColor(self._param.text_color),
-            leftIndent=20,
-            bulletIndent=10
+            "CustomBullet", parent=styles["BodyText"], fontSize=self._param.font_size, fontName=active_font, textColor=colors.HexColor(self._param.text_color), leftIndent=20, bulletIndent=10
         )
 
         # Code style (keep Courier for code blocks)
         add_or_update_style(
-            'PDFCode',
-            parent=styles.get('Code', styles['Normal']),
+            "PDFCode",
+            parent=styles.get("Code", styles["Normal"]),
             fontSize=self._param.font_size - 1,
-            fontName='Courier',
-            textColor=colors.HexColor('#333333'),
-            backColor=colors.HexColor('#f5f5f5'),
+            fontName="Courier",
+            textColor=colors.HexColor("#333333"),
+            backColor=colors.HexColor("#f5f5f5"),
             leftIndent=20,
-            rightIndent=20
+            rightIndent=20,
         )
 
         # Italic style
-        add_or_update_style(
-            'Italic',
-            parent=styles['Normal'],
-            fontSize=self._param.font_size,
-            fontName=active_font,
-            textColor=colors.HexColor(self._param.text_color)
-        )
+        add_or_update_style("Italic", parent=styles["Normal"], fontSize=self._param.font_size, fontName=active_font, textColor=colors.HexColor(self._param.text_color))
 
         return styles
 
     def _parse_markdown_content(self, content: str, styles):
         """Parse markdown-style content and convert to PDF elements"""
         elements = []
-        lines = content.split('\n')
+        lines = content.split("\n")
 
         i = 0
         while i < len(lines):
@@ -718,7 +688,7 @@ class PDFGenerator(Message, ABC):
                 continue
 
             # Horizontal rule
-            if line == '---' or line == '___':
+            if line == "---" or line == "___":
                 elements.append(Spacer(1, 0.1 * inch))
                 elements.append(self._create_horizontal_line())
                 elements.append(Spacer(1, 0.1 * inch))
@@ -726,56 +696,56 @@ class PDFGenerator(Message, ABC):
                 continue
 
             # Heading 1
-            if line.startswith('# ') and not line.startswith('## '):
+            if line.startswith("# ") and not line.startswith("## "):
                 text = line[2:].strip()
-                elements.append(Paragraph(self._format_inline(text), styles['CustomHeading1']))
+                elements.append(Paragraph(self._format_inline(text), styles["CustomHeading1"]))
                 i += 1
                 continue
 
             # Heading 2
-            if line.startswith('## ') and not line.startswith('### '):
+            if line.startswith("## ") and not line.startswith("### "):
                 text = line[3:].strip()
-                elements.append(Paragraph(self._format_inline(text), styles['CustomHeading2']))
+                elements.append(Paragraph(self._format_inline(text), styles["CustomHeading2"]))
                 i += 1
                 continue
 
             # Heading 3
-            if line.startswith('### '):
+            if line.startswith("### "):
                 text = line[4:].strip()
-                elements.append(Paragraph(self._format_inline(text), styles['CustomHeading3']))
+                elements.append(Paragraph(self._format_inline(text), styles["CustomHeading3"]))
                 i += 1
                 continue
 
             # Bullet list
-            if line.startswith('- ') or line.startswith('* '):
+            if line.startswith("- ") or line.startswith("* "):
                 bullet_items = []
-                while i < len(lines) and (lines[i].strip().startswith('- ') or lines[i].strip().startswith('* ')):
+                while i < len(lines) and (lines[i].strip().startswith("- ") or lines[i].strip().startswith("* ")):
                     item_text = lines[i].strip()[2:].strip()
                     formatted = self._format_inline(item_text)
                     bullet_items.append(f"• {formatted}")
                     i += 1
                 for item in bullet_items:
-                    elements.append(Paragraph(item, styles['CustomBullet']))
+                    elements.append(Paragraph(item, styles["CustomBullet"]))
                 continue
 
             # Numbered list
-            if re.match(r'^\d+\.\s', line):
+            if re.match(r"^\d+\.\s", line):
                 numbered_items = []
                 counter = 1
-                while i < len(lines) and re.match(r'^\d+\.\s', lines[i].strip()):
-                    item_text = re.sub(r'^\d+\.\s', '', lines[i].strip())
+                while i < len(lines) and re.match(r"^\d+\.\s", lines[i].strip()):
+                    item_text = re.sub(r"^\d+\.\s", "", lines[i].strip())
                     numbered_items.append(f"{counter}. {self._format_inline(item_text)}")
                     counter += 1
                     i += 1
                 for item in numbered_items:
-                    elements.append(Paragraph(item, styles['CustomBullet']))
+                    elements.append(Paragraph(item, styles["CustomBullet"]))
                 continue
 
             # Table detection (markdown table must start with |)
-            if line.startswith('|') and '|' in line:
+            if line.startswith("|") and "|" in line:
                 table_lines = []
                 # Collect all consecutive lines that look like table rows
-                while i < len(lines) and lines[i].strip() and '|' in lines[i]:
+                while i < len(lines) and lines[i].strip() and "|" in lines[i]:
                     table_lines.append(lines[i].strip())
                     i += 1
 
@@ -792,16 +762,16 @@ class PDFGenerator(Message, ABC):
                     i -= len(table_lines)  # Reset position
 
             # Code block
-            if line.startswith('```'):
+            if line.startswith("```"):
                 code_lines = []
                 i += 1
-                while i < len(lines) and not lines[i].strip().startswith('```'):
+                while i < len(lines) and not lines[i].strip().startswith("```"):
                     code_lines.append(lines[i])
                     i += 1
                 if i < len(lines):
                     i += 1
-                code_text = '\n'.join(code_lines)
-                elements.append(Paragraph(self._escape_html(code_text), styles['PDFCode']))
+                code_text = "\n".join(code_lines)
+                elements.append(Paragraph(self._escape_html(code_text), styles["PDFCode"]))
                 elements.append(Spacer(1, 0.1 * inch))
                 continue
 
@@ -812,9 +782,9 @@ class PDFGenerator(Message, ABC):
                 paragraph_lines.append(lines[i].strip())
                 i += 1
 
-            paragraph_text = ' '.join(paragraph_lines)
+            paragraph_text = " ".join(paragraph_lines)
             formatted_text = self._format_inline(paragraph_text)
-            elements.append(Paragraph(formatted_text, styles['CustomBody']))
+            elements.append(Paragraph(formatted_text, styles["CustomBody"]))
             elements.append(Spacer(1, 0.1 * inch))
 
         return elements
@@ -822,13 +792,7 @@ class PDFGenerator(Message, ABC):
     def _is_special_line(self, line: str) -> bool:
         """Check if line is a special markdown element"""
         line = line.strip()
-        return (line.startswith('#') or
-                line.startswith('- ') or
-                line.startswith('* ') or
-                re.match(r'^\d+\.\s', line) or
-                line in ['---', '___'] or
-                line.startswith('```') or
-                '|' in line)
+        return line.startswith("#") or line.startswith("- ") or line.startswith("* ") or re.match(r"^\d+\.\s", line) or line in ["---", "___"] or line.startswith("```") or "|" in line
 
     def _format_inline(self, text: str) -> str:
         """Format inline markdown (bold, italic, code)"""
@@ -838,27 +802,28 @@ class PDFGenerator(Message, ABC):
         # IMPORTANT: Process inline code FIRST to protect underscores inside code blocks
         # Use a placeholder to protect code blocks from italic/bold processing
         code_blocks = []
+
         def save_code(match):
             code_blocks.append(match.group(1))
-            return f"__CODE_BLOCK_{len(code_blocks)-1}__"
+            return f"__CODE_BLOCK_{len(code_blocks) - 1}__"
 
-        text = re.sub(r'`(.+?)`', save_code, text)
+        text = re.sub(r"`(.+?)`", save_code, text)
 
         # Then, apply markdown formatting.
         # The order is important: from most specific to least specific.
 
         # Bold and italic combined: ***text*** or ___text___
-        text = re.sub(r'\*\*\*(.+?)\*\*\*', r'<b><i>\1</i></b>', text)
-        text = re.sub(r'___(.+?)___', r'<b><i>\1</i></b>', text)
+        text = re.sub(r"\*\*\*(.+?)\*\*\*", r"<b><i>\1</i></b>", text)
+        text = re.sub(r"___(.+?)___", r"<b><i>\1</i></b>", text)
 
         # Bold: **text** or __text__
-        text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
-        text = re.sub(r'__([^_]+?)__', r'<b>\1</b>', text)  # More restrictive to avoid matching placeholders
+        text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+        text = re.sub(r"__([^_]+?)__", r"<b>\1</b>", text)  # More restrictive to avoid matching placeholders
 
         # Italic: *text* or _text_ (but not underscores in words like variable_name)
-        text = re.sub(r'\*([^*]+?)\*', r'<i>\1</i>', text)
+        text = re.sub(r"\*([^*]+?)\*", r"<i>\1</i>", text)
         # Only match _text_ when surrounded by spaces or at start/end, not mid-word underscores
-        text = re.sub(r'(?<![a-zA-Z0-9])_([^_]+?)_(?![a-zA-Z0-9])', r'<i>\1</i>', text)
+        text = re.sub(r"(?<![a-zA-Z0-9])_([^_]+?)_(?![a-zA-Z0-9])", r"<i>\1</i>", text)
 
         # Restore code blocks with proper formatting
         for i, code in enumerate(code_blocks):
@@ -882,76 +847,69 @@ class PDFGenerator(Message, ABC):
         text = str(text)
 
         # Remove HTML form elements and tags
-        text = re.sub(r'<input[^>]*>', '', text, flags=re.IGNORECASE)  # Remove input tags
-        text = re.sub(r'<textarea[^>]*>.*?</textarea>', '', text, flags=re.IGNORECASE | re.DOTALL)  # Remove textarea
-        text = re.sub(r'<select[^>]*>.*?</select>', '', text, flags=re.IGNORECASE | re.DOTALL)  # Remove select
-        text = re.sub(r'<button[^>]*>.*?</button>', '', text, flags=re.IGNORECASE | re.DOTALL)  # Remove buttons
-        text = re.sub(r'<form[^>]*>.*?</form>', '', text, flags=re.IGNORECASE | re.DOTALL)  # Remove forms
+        text = re.sub(r"<input[^>]*>", "", text, flags=re.IGNORECASE)  # Remove input tags
+        text = re.sub(r"<textarea[^>]*>.*?</textarea>", "", text, flags=re.IGNORECASE | re.DOTALL)  # Remove textarea
+        text = re.sub(r"<select[^>]*>.*?</select>", "", text, flags=re.IGNORECASE | re.DOTALL)  # Remove select
+        text = re.sub(r"<button[^>]*>.*?</button>", "", text, flags=re.IGNORECASE | re.DOTALL)  # Remove buttons
+        text = re.sub(r"<form[^>]*>.*?</form>", "", text, flags=re.IGNORECASE | re.DOTALL)  # Remove forms
 
         # Remove other common HTML tags (but preserve content)
-        text = re.sub(r'<div[^>]*>', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'</div>', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'<span[^>]*>', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'</span>', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'<p[^>]*>', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'</p>', '\n', text, flags=re.IGNORECASE)
+        text = re.sub(r"<div[^>]*>", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"</div>", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"<span[^>]*>", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"</span>", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"<p[^>]*>", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"</p>", "\n", text, flags=re.IGNORECASE)
 
         # First, handle common markdown table artifacts
-        text = re.sub(r'^[|\-\s:]+$', '', text, flags=re.MULTILINE)  # Remove separator lines
-        text = re.sub(r'^\s*\|\s*|\s*\|\s*$', '', text)  # Remove leading/trailing pipes
-        text = re.sub(r'\s*\|\s*', ' | ', text)  # Normalize pipes
+        text = re.sub(r"^[|\-\s:]+$", "", text, flags=re.MULTILINE)  # Remove separator lines
+        text = re.sub(r"^\s*\|\s*|\s*\|\s*$", "", text)  # Remove leading/trailing pipes
+        text = re.sub(r"\s*\|\s*", " | ", text)  # Normalize pipes
 
         # Remove markdown links, but keep other formatting characters for _format_inline
-        text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)  # Remove markdown links
+        text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)  # Remove markdown links
 
         # Escape HTML special characters
-        text = text.replace('&', '&amp;')
-        text = text.replace('<', '&lt;')
-        text = text.replace('>', '&gt;')
+        text = text.replace("&", "&amp;")
+        text = text.replace("<", "&lt;")
+        text = text.replace(">", "&gt;")
 
         # Clean up excessive whitespace
-        text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)  # Multiple blank lines to double
-        text = re.sub(r' +', ' ', text)  # Multiple spaces to single
+        text = re.sub(r"\n\s*\n\s*\n+", "\n\n", text)  # Multiple blank lines to double
+        text = re.sub(r" +", " ", text)  # Multiple spaces to single
 
         return text.strip()
 
-    def _get_cell_style(self, row_idx: int, is_header: bool = False, font_size: int = None) -> 'ParagraphStyle':
+    def _get_cell_style(self, row_idx: int, is_header: bool = False, font_size: int = None) -> "ParagraphStyle":
         """Get the appropriate style for a table cell."""
         styles = getSampleStyleSheet()
 
         # Helper function to get the correct bold font name
         def get_bold_font(font_family):
             font_map = {
-                'Helvetica': 'Helvetica-Bold',
-                'Times-Roman': 'Times-Bold',
-                'Courier': 'Courier-Bold',
+                "Helvetica": "Helvetica-Bold",
+                "Times-Roman": "Times-Bold",
+                "Courier": "Courier-Bold",
             }
-            if 'Bold' in font_family:
+            if "Bold" in font_family:
                 return font_family
-            return font_map.get(font_family, 'Helvetica-Bold')
+            return font_map.get(font_family, "Helvetica-Bold")
 
         if is_header:
             return ParagraphStyle(
-                'TableHeader',
-                parent=styles['Normal'],
+                "TableHeader",
+                parent=styles["Normal"],
                 fontSize=self._param.font_size,
                 fontName=self._get_active_bold_font(),
                 textColor=colors.whitesmoke,
                 alignment=TA_CENTER,
                 leading=self._param.font_size * 1.2,
-                wordWrap='CJK'
+                wordWrap="CJK",
             )
         else:
             font_size = font_size or (self._param.font_size - 1)
             return ParagraphStyle(
-                'TableCell',
-                parent=styles['Normal'],
-                fontSize=font_size,
-                fontName=self._get_active_font(),
-                textColor=colors.black,
-                alignment=TA_LEFT,
-                leading=font_size * 1.15,
-                wordWrap='CJK'
+                "TableCell", parent=styles["Normal"], fontSize=font_size, fontName=self._get_active_font(), textColor=colors.black, alignment=TA_LEFT, leading=font_size * 1.15, wordWrap="CJK"
             )
 
     def _convert_table_to_definition_list(self, data: list[list[str]]) -> list:
@@ -964,41 +922,41 @@ class PDFGenerator(Message, ABC):
         styles = getSampleStyleSheet()
 
         # Base styles
-        base_font_size = getattr(self._param, 'font_size', 10)
+        base_font_size = getattr(self._param, "font_size", 10)
 
         # Body style
         body_style = ParagraphStyle(
-            'TableBody',
-            parent=styles['Normal'],
+            "TableBody",
+            parent=styles["Normal"],
             fontSize=base_font_size,
             fontName=self._get_active_font(),
-            textColor=colors.HexColor(getattr(self._param, 'text_color', '#000000')),
+            textColor=colors.HexColor(getattr(self._param, "text_color", "#000000")),
             spaceAfter=6,
-            leading=base_font_size * 1.2
+            leading=base_font_size * 1.2,
         )
 
         # Label style (for field names)
         label_style = ParagraphStyle(
-            'LabelStyle',
+            "LabelStyle",
             parent=body_style,
             fontName=self._get_active_bold_font(),
-            textColor=colors.HexColor('#2c3e50'),
+            textColor=colors.HexColor("#2c3e50"),
             fontSize=base_font_size,
             spaceAfter=4,
             leftIndent=0,
-            leading=base_font_size * 1.3
+            leading=base_font_size * 1.3,
         )
 
         # Value style (for cell content) - clean, no borders
         value_style = ParagraphStyle(
-            'ValueStyle',
+            "ValueStyle",
             parent=body_style,
             leftIndent=15,
             rightIndent=0,
             spaceAfter=8,
             spaceBefore=2,
             fontSize=base_font_size,
-            textColor=colors.HexColor('#333333'),
+            textColor=colors.HexColor("#333333"),
             alignment=TA_JUSTIFY,
             leading=base_font_size * 1.4,
             # No borders or background - clean text only
@@ -1016,7 +974,7 @@ class PDFGenerator(Message, ABC):
 
             # If no headers or empty headers, generate them
             if not any(headers):
-                headers = [f"Column {i+1}" for i in range(len(data[0]) if data and len(data) > 0 else 0)]
+                headers = [f"Column {i + 1}" for i in range(len(data[0]) if data and len(data) > 0 else 0)]
 
             # Process each data row (skip header if it exists)
             start_row = 1 if len(data) > 1 and any(data[0]) else 0
@@ -1045,33 +1003,33 @@ class PDFGenerator(Message, ABC):
                     cell_text = str(cell_text)  # Ensure it's a string
 
                     # Remove markdown table formatting
-                    cell_text = re.sub(r'^[|\-\s:]+$', '', cell_text, flags=re.MULTILINE)  # Remove separator lines
-                    cell_text = re.sub(r'^\s*\|\s*|\s*\|\s*$', '', cell_text)  # Remove leading/trailing pipes
-                    cell_text = re.sub(r'\s*\|\s*', ' | ', cell_text)  # Normalize pipes
-                    cell_text = re.sub(r'\s+', ' ', cell_text).strip()  # Normalize whitespace
+                    cell_text = re.sub(r"^[|\-\s:]+$", "", cell_text, flags=re.MULTILINE)  # Remove separator lines
+                    cell_text = re.sub(r"^\s*\|\s*|\s*\|\s*$", "", cell_text)  # Remove leading/trailing pipes
+                    cell_text = re.sub(r"\s*\|\s*", " | ", cell_text)  # Normalize pipes
+                    cell_text = re.sub(r"\s+", " ", cell_text).strip()  # Normalize whitespace
 
                     # Remove any remaining markdown formatting
-                    cell_text = re.sub(r'`(.*?)`', r'\1', cell_text)  # Remove code ticks
-                    cell_text = re.sub(r'\*\*(.*?)\*\*', r'\1', cell_text)  # Remove bold
-                    cell_text = re.sub(r'\*(.*?)\*', r'\1', cell_text)  # Remove italic
+                    cell_text = re.sub(r"`(.*?)`", r"\1", cell_text)  # Remove code ticks
+                    cell_text = re.sub(r"\*\*(.*?)\*\*", r"\1", cell_text)  # Remove bold
+                    cell_text = re.sub(r"\*(.*?)\*", r"\1", cell_text)  # Remove italic
 
                     # Clean up any HTML entities or special characters
                     cell_text = self._escape_html(cell_text)
 
                     # If content still looks like a table, convert it to plain text
-                    if '|' in cell_text and ('--' in cell_text or any(cell_text.count('|') > 2 for line in cell_text.split('\n') if line.strip())):
+                    if "|" in cell_text and ("--" in cell_text or any(cell_text.count("|") > 2 for line in cell_text.split("\n") if line.strip())):
                         # Convert to a simple text format
-                        lines = [line.strip() for line in cell_text.split('\n') if line.strip()]
-                        cell_text = ' | '.join(lines[:5])  # Join first 5 lines with pipe
+                        lines = [line.strip() for line in cell_text.split("\n") if line.strip()]
+                        cell_text = " | ".join(lines[:5])  # Join first 5 lines with pipe
                         if len(lines) > 5:
-                            cell_text += '...'
+                            cell_text += "..."
 
                     # Process long content with better wrapping
                     max_chars_per_line = 100  # Reduced for better readability
                     max_paragraphs = 3  # Maximum number of paragraphs to show initially
 
                     # Split into paragraphs
-                    paragraphs = [p for p in cell_text.split('\n\n') if p.strip()]
+                    paragraphs = [p for p in cell_text.split("\n\n") if p.strip()]
 
                     # If content is too long, truncate with "show more" indicator
                     if len(paragraphs) > max_paragraphs or any(len(p) > max_chars_per_line * 3 for p in paragraphs):
@@ -1086,7 +1044,7 @@ class PDFGenerator(Message, ABC):
 
                                 for word in words:
                                     if current_line and current_length + len(word) + 1 > max_chars_per_line:
-                                        wrapped_paragraphs.append(' '.join(current_line))
+                                        wrapped_paragraphs.append(" ".join(current_line))
                                         current_line = [word]
                                         current_length = len(word)
                                     else:
@@ -1094,7 +1052,7 @@ class PDFGenerator(Message, ABC):
                                         current_length += len(word) + (1 if current_line else 0)
 
                                 if current_line:
-                                    wrapped_paragraphs.append(' '.join(current_line))
+                                    wrapped_paragraphs.append(" ".join(current_line))
                             else:
                                 wrapped_paragraphs.append(para)
 
@@ -1102,7 +1060,7 @@ class PDFGenerator(Message, ABC):
                         if len(paragraphs) > max_paragraphs:
                             wrapped_paragraphs.append(f"... and {len(paragraphs) - max_paragraphs} more paragraphs")
 
-                        cell_text = '\n\n'.join(wrapped_paragraphs)
+                        cell_text = "\n\n".join(wrapped_paragraphs)
 
                     # Add label and content with clean formatting (no borders)
                     label_para = Paragraph(f"<b>{self._escape_html(headers[col_idx])}:</b>", label_style)
@@ -1117,7 +1075,7 @@ class PDFGenerator(Message, ABC):
                 if row_elements and row_idx < len(data) - 1:
                     # Add a subtle horizontal line as separator
                     row_elements.append(Spacer(1, 0.1 * 72))
-                    row_elements.append(self._create_horizontal_line(width=0.5, color='#e0e0e0'))
+                    row_elements.append(self._create_horizontal_line(width=0.5, color="#e0e0e0"))
                     row_elements.append(Spacer(1, 0.15 * 72))
 
                 elements.extend(row_elements)
@@ -1129,21 +1087,10 @@ class PDFGenerator(Message, ABC):
         except Exception as e:
             # Fallback to simple text representation if something goes wrong
             error_style = ParagraphStyle(
-                'ErrorStyle',
-                parent=styles['Normal'],
-                fontSize=base_font_size - 1,
-                textColor=colors.red,
-                backColor=colors.HexColor('#fff0f0'),
-                borderWidth=1,
-                borderColor=colors.red,
-                borderPadding=5
+                "ErrorStyle", parent=styles["Normal"], fontSize=base_font_size - 1, textColor=colors.red, backColor=colors.HexColor("#fff0f0"), borderWidth=1, borderColor=colors.red, borderPadding=5
             )
 
-            error_msg = [
-                Paragraph("<b>Error processing table:</b>", error_style),
-                Paragraph(str(e), error_style),
-                Spacer(1, 0.2 * 72)
-            ]
+            error_msg = [Paragraph("<b>Error processing table:</b>", error_style), Paragraph(str(e), error_style), Spacer(1, 0.2 * 72)]
 
             # Add a simplified version of the table
             try:
@@ -1177,7 +1124,7 @@ class PDFGenerator(Message, ABC):
 
             for line in table_lines:
                 # Skip separator lines (e.g., |---|---|)
-                if re.match(r'^\|[\s\-:]+\|$', line):
+                if re.match(r"^\|[\s\-:]+\|$", line):
                     continue
 
                 # Handle empty lines within tables
@@ -1191,13 +1138,13 @@ class PDFGenerator(Message, ABC):
 
                 # Custom split to handle escaped pipes and quoted content
                 for char in line[1:]:  # Skip initial |
-                    if char == '|' and not in_quotes:
+                    if char == "|" and not in_quotes:
                         cells.append(current_cell.strip())
                         current_cell = ""
                     elif char == '"':
                         in_quotes = not in_quotes
                         current_cell += char
-                    elif char == '\\' and not in_quotes:
+                    elif char == "\\" and not in_quotes:
                         # Handle escaped characters
                         pass
                     else:
@@ -1223,11 +1170,12 @@ class PDFGenerator(Message, ABC):
             # Ensure all rows have the same number of columns
             for row in data:
                 while len(row) < max_columns:
-                    row.append('')
+                    row.append("")
 
             # Calculate available width for table
             from reportlab.lib.pagesizes import A4
-            page_width = A4[0] if self._param.orientation == 'portrait' else A4[1]
+
+            page_width = A4[0] if self._param.orientation == "portrait" else A4[1]
             available_width = page_width - (self._param.margin_left + self._param.margin_right) * inch
 
             # Check if we should use definition list format
@@ -1239,16 +1187,10 @@ class PDFGenerator(Message, ABC):
             # - More than 6 columns, OR
             # - More than 20 rows, OR
             # - Contains nested tables or complex structures
-            has_nested_tables = any('|' in cell and '---' in cell for row in data for cell in row)
+            has_nested_tables = any("|" in cell and "---" in cell for row in data for cell in row)
             has_complex_cells = any(len(str(cell)) > 150 for row in data for cell in row)
 
-            should_use_list_format = (
-                max_cell_length > 300 or
-                max_columns > 6 or
-                total_rows > 20 or
-                has_nested_tables or
-                has_complex_cells
-            )
+            should_use_list_format = max_cell_length > 300 or max_columns > 6 or total_rows > 20 or has_nested_tables or has_complex_cells
 
             if should_use_list_format:
                 return self._convert_table_to_definition_list(data)
@@ -1266,13 +1208,13 @@ class PDFGenerator(Message, ABC):
                         continue
 
                     # Clean up markdown table artifacts
-                    cell_text = re.sub(r'\\\|', '|', cell_text)  # Unescape pipes
-                    cell_text = re.sub(r'\\n', '\n', cell_text)  # Handle explicit newlines
+                    cell_text = re.sub(r"\\\|", "|", cell_text)  # Unescape pipes
+                    cell_text = re.sub(r"\\n", "\n", cell_text)  # Handle explicit newlines
 
                     # Check for nested tables
-                    if '|' in cell_text and '---' in cell_text:
+                    if "|" in cell_text and "---" in cell_text:
                         # This cell contains a nested table
-                        nested_lines = [line.strip() for line in cell_text.split('\n') if line.strip()]
+                        nested_lines = [line.strip() for line in cell_text.split("\n") if line.strip()]
                         nested_table = self._create_table(nested_lines)
                         if nested_table:
                             processed_row.append(nested_table[0])  # Add the nested table
@@ -1305,25 +1247,25 @@ class PDFGenerator(Message, ABC):
 
                 # Define table style
                 table_style = [
-                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),  # Darker header
-                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                    ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-                    ('FONTNAME', (0, 0), (-1, 0), self._get_active_bold_font()),
-                    ('FONTSIZE', (0, 0), (-1, -1), self._param.font_size - 1),
-                    ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                    ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#f8f9fa')),  # Lighter background
-                    ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#dee2e6')),  # Lighter grid
-                    ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                    ('TOPPADDING', (0, 0), (-1, -1), 8),
-                    ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
-                    ('LEFTPADDING', (0, 0), (-1, -1), 8),
-                    ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),  # Darker header
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+                    ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+                    ("FONTNAME", (0, 0), (-1, 0), self._get_active_bold_font()),
+                    ("FONTSIZE", (0, 0), (-1, -1), self._param.font_size - 1),
+                    ("BOTTOMPADDING", (0, 0), (-1, 0), 12),
+                    ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#f8f9fa")),  # Lighter background
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#dee2e6")),  # Lighter grid
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("TOPPADDING", (0, 0), (-1, -1), 8),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 8),
                 ]
 
                 # Add zebra striping for better readability
                 for i in range(1, len(processed_data)):
                     if i % 2 == 0:
-                        table_style.append(('BACKGROUND', (0, i), (-1, i), colors.HexColor('#f1f3f5')))
+                        table_style.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#f1f3f5")))
 
                 table.setStyle(TableStyle(table_style))
 
@@ -1356,6 +1298,7 @@ class PDFGenerator(Message, ABC):
             HRFlowable: Horizontal line element
         """
         from reportlab.platypus import HRFlowable
+
         line_color = colors.HexColor(color) if color else colors.grey
         return HRFlowable(width="100%", thickness=width, color=line_color, spaceBefore=0, spaceAfter=0)
 
@@ -1363,9 +1306,9 @@ class PDFGenerator(Message, ABC):
         """Add logo image to PDF"""
         try:
             # Check if it's base64 or file path
-            if self._param.logo_image.startswith('data:image'):
+            if self._param.logo_image.startswith("data:image"):
                 # Extract base64 data
-                base64_data = self._param.logo_image.split(',')[1]
+                base64_data = self._param.logo_image.split(",")[1]
                 image_data = base64.b64decode(base64_data)
                 img = Image(BytesIO(image_data))
             elif os.path.exists(self._param.logo_image):
@@ -1378,12 +1321,12 @@ class PDFGenerator(Message, ABC):
             img.drawHeight = self._param.logo_height * inch
 
             # Set alignment
-            if self._param.logo_position == 'center':
-                img.hAlign = 'CENTER'
-            elif self._param.logo_position == 'right':
-                img.hAlign = 'RIGHT'
+            if self._param.logo_position == "center":
+                img.hAlign = "CENTER"
+            elif self._param.logo_position == "right":
+                img.hAlign = "RIGHT"
             else:
-                img.hAlign = 'LEFT'
+                img.hAlign = "LEFT"
 
             return img
         except Exception as e:
@@ -1475,7 +1418,7 @@ class PDFGenerator(Message, ABC):
                 ts_para.runs[0].font.size = Pt(9)
 
             # Parse and add content
-            lines = content.split('\n')
+            lines = content.split("\n")
             i = 0
             while i < len(lines):
                 line = lines[i].strip()
@@ -1485,19 +1428,19 @@ class PDFGenerator(Message, ABC):
                     continue
 
                 # Headings
-                if line.startswith('# ') and not line.startswith('## '):
+                if line.startswith("# ") and not line.startswith("## "):
                     doc.add_heading(line[2:].strip(), level=1)
-                elif line.startswith('## ') and not line.startswith('### '):
+                elif line.startswith("## ") and not line.startswith("### "):
                     doc.add_heading(line[3:].strip(), level=2)
-                elif line.startswith('### '):
+                elif line.startswith("### "):
                     doc.add_heading(line[4:].strip(), level=3)
                 # Bullet list
-                elif line.startswith('- ') or line.startswith('* '):
-                    doc.add_paragraph(line[2:].strip(), style='List Bullet')
+                elif line.startswith("- ") or line.startswith("* "):
+                    doc.add_paragraph(line[2:].strip(), style="List Bullet")
                 # Numbered list
-                elif re.match(r'^\d+\.\s', line):
-                    text = re.sub(r'^\d+\.\s', '', line)
-                    doc.add_paragraph(text, style='List Number')
+                elif re.match(r"^\d+\.\s", line):
+                    text = re.sub(r"^\d+\.\s", "", line)
+                    doc.add_paragraph(text, style="List Number")
                 # Regular paragraph
                 else:
                     para = doc.add_paragraph(line)
@@ -1509,9 +1452,9 @@ class PDFGenerator(Message, ABC):
             doc.save(file_path)
 
             # Read and encode to base64
-            with open(file_path, 'rb') as f:
+            with open(file_path, "rb") as f:
                 doc_bytes = f.read()
-            doc_base64 = base64.b64encode(doc_bytes).decode('utf-8')
+            doc_base64 = base64.b64encode(doc_bytes).decode("utf-8")
 
             return file_path, doc_base64
 
@@ -1558,13 +1501,13 @@ class PDFGenerator(Message, ABC):
             text_content.append(content)
 
             # Join and save
-            final_text = '\n'.join(text_content)
+            final_text = "\n".join(text_content)
 
-            with open(file_path, 'w', encoding='utf-8') as f:
+            with open(file_path, "w", encoding="utf-8") as f:
                 f.write(final_text)
 
             # Encode to base64
-            txt_base64 = base64.b64encode(final_text.encode('utf-8')).decode('utf-8')
+            txt_base64 = base64.b64encode(final_text.encode("utf-8")).decode("utf-8")
 
             return file_path, txt_base64
 

@@ -6,9 +6,7 @@ from core.llm.sequence2txt_model.base import Base
 
 
 class TencentCloudSeq2txt(Base):
-    def __init__(
-            self, key, model_name="16k_zh", base_url="https://asr.tencentcloudapi.com"
-    ):
+    def __init__(self, key, model_name="16k_zh", base_url="https://asr.tencentcloudapi.com"):
         from tencentcloud.asr.v20190614 import asr_client
         from tencentcloud.common import credential
 
@@ -49,9 +47,7 @@ class TencentCloudSeq2txt(Base):
             while retries < max_retries:
                 resp = self.client.DescribeTaskStatus(req)
                 if resp.Data.StatusStr == "success":
-                    text = re.sub(
-                        r"\[\d+:\d+\.\d+,\d+:\d+\.\d+\]\s*", "", resp.Data.Result
-                    ).strip()
+                    text = re.sub(r"\[\d+:\d+\.\d+,\d+:\d+\.\d+\]\s*", "", resp.Data.Result).strip()
                     return text, num_tokens_from_string(text)
                 elif resp.Data.StatusStr == "failed":
                     return (

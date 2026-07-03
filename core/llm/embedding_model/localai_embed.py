@@ -19,7 +19,7 @@ class LocalAIEmbed(Base):
         batch_size = 16
         ress = []
         for i in range(0, len(texts), batch_size):
-            res = self.client.embeddings.create(input=texts[i:i + batch_size], model=self.model_name)
+            res = self.client.embeddings.create(input=texts[i : i + batch_size], model=self.model_name)
             try:
                 ress.extend([d.embedding for d in res.data])
             except Exception as _e:

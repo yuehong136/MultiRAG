@@ -5,6 +5,7 @@ from typing import Any
 
 class ErrorCode(Enum):
     """错误码枚举"""
+
     UNKNOWN_ERROR = 1000
     TIMEOUT_ERROR = 1001
     INVALID_INPUT = 1002
@@ -18,12 +19,7 @@ class ErrorCode(Enum):
 class WorkflowError(Exception):
     """工作流基础异常类"""
 
-    def __init__(self,
-                 message: str,
-                 error_code: ErrorCode = ErrorCode.UNKNOWN_ERROR,
-                 node_id: str | None = None,
-                 node_title: str | None = None,
-                 details: dict[str, Any] | None = None):
+    def __init__(self, message: str, error_code: ErrorCode = ErrorCode.UNKNOWN_ERROR, node_id: str | None = None, node_title: str | None = None, details: dict[str, Any] | None = None):
         self.message = message
         self.error_code = error_code
         self.node_id = node_id
@@ -35,33 +31,15 @@ class WorkflowError(Exception):
 class NodeError(WorkflowError):
     """节点相关的基础异常类"""
 
-    def __init__(self,
-                 node_id: str,
-                 node_title: str,
-                 message: str,
-                 error_code: ErrorCode = ErrorCode.UNKNOWN_ERROR,
-                 details: dict[str, Any] | None = None):
-        super().__init__(
-            message=message,
-            error_code=error_code,
-            node_id=node_id,
-            node_title=node_title,
-            details=details
-        )
+    def __init__(self, node_id: str, node_title: str, message: str, error_code: ErrorCode = ErrorCode.UNKNOWN_ERROR, details: dict[str, Any] | None = None):
+        super().__init__(message=message, error_code=error_code, node_id=node_id, node_title=node_title, details=details)
 
 
 class NodeExecutionError(NodeError):
     """节点执行异常"""
 
-    def __init__(self, node_id: str, node_title: str, message: str, details: dict[str, Any] | None = None,
-                 workflow_exe_data: dict[str, Any] | None = None):
-        super().__init__(
-            node_id=node_id,
-            node_title=node_title,
-            message=f"node: {node_id} {node_title} execution failed: {message}",
-            error_code=ErrorCode.UNKNOWN_ERROR,
-            details=details
-        )
+    def __init__(self, node_id: str, node_title: str, message: str, details: dict[str, Any] | None = None, workflow_exe_data: dict[str, Any] | None = None):
+        super().__init__(node_id=node_id, node_title=node_title, message=f"node: {node_id} {node_title} execution failed: {message}", error_code=ErrorCode.UNKNOWN_ERROR, details=details)
         self.workflow_exe_data = workflow_exe_data
 
 
@@ -69,26 +47,14 @@ class NodeTimeoutError(NodeError):
     """节点执行超时异常"""
 
     def __init__(self, node_id: str, node_title: str, timeout: int, details: dict[str, Any] | None = None):
-        super().__init__(
-            node_id=node_id,
-            node_title=node_title,
-            message=f"execution timed out after {timeout} seconds",
-            error_code=ErrorCode.TIMEOUT_ERROR,
-            details=details
-        )
+        super().__init__(node_id=node_id, node_title=node_title, message=f"execution timed out after {timeout} seconds", error_code=ErrorCode.TIMEOUT_ERROR, details=details)
 
 
 class NodeInputError(NodeError):
     """节点输入参数异常"""
 
     def __init__(self, node_id: str, node_title: str, param_name: str, message: str):
-        super().__init__(
-            node_id=node_id,
-            node_title=node_title,
-            message=f"invalid input parameter '{param_name}': {message}",
-            error_code=ErrorCode.INVALID_INPUT,
-            details={'parameter': param_name}
-        )
+        super().__init__(node_id=node_id, node_title=node_title, message=f"invalid input parameter '{param_name}': {message}", error_code=ErrorCode.INVALID_INPUT, details={"parameter": param_name})
 
 
 class DependencyError(NodeError):
@@ -96,11 +62,7 @@ class DependencyError(NodeError):
 
     def __init__(self, node_id: str, node_title: str, dep_node_id: str, message: str):
         super().__init__(
-            node_id=node_id,
-            node_title=node_title,
-            message=f"dependency error with node {dep_node_id}: {message}",
-            error_code=ErrorCode.DEPENDENCY_ERROR,
-            details={'dependent_node': dep_node_id}
+            node_id=node_id, node_title=node_title, message=f"dependency error with node {dep_node_id}: {message}", error_code=ErrorCode.DEPENDENCY_ERROR, details={"dependent_node": dep_node_id}
         )
 
 
@@ -109,11 +71,7 @@ class LLMServiceError(NodeError):
 
     def __init__(self, node_id: str, node_title: str, service_name: str, message: str):
         super().__init__(
-            node_id=node_id,
-            node_title=node_title,
-            message=f"LLM service '{service_name}' error: {message}",
-            error_code=ErrorCode.LLM_SERVICE_ERROR,
-            details={'service_name': service_name}
+            node_id=node_id, node_title=node_title, message=f"LLM service '{service_name}' error: {message}", error_code=ErrorCode.LLM_SERVICE_ERROR, details={"service_name": service_name}
         )
 
 
@@ -129,8 +87,4 @@ class CyclicDependencyError(WorkflowError):
     """工作流环形依赖异常"""
 
     def __init__(self, cycle_nodes: list):
-        super().__init__(
-            message=f"Cyclic dependency detected: {' -> '.join(cycle_nodes)}",
-            error_code=ErrorCode.GRAPH_CYCLE_ERROR,
-            details={'cycle_nodes': cycle_nodes}
-        )
+        super().__init__(message=f"Cyclic dependency detected: {' -> '.join(cycle_nodes)}", error_code=ErrorCode.GRAPH_CYCLE_ERROR, details={"cycle_nodes": cycle_nodes})

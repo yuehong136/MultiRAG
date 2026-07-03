@@ -126,15 +126,11 @@ class ComponentParamBase(ABC):
         update_from_raw_conf = conf.get(_IS_RAW_CONF, True)
         if update_from_raw_conf:
             deprecated_params_set = self._get_or_init_deprecated_params_set()
-            feeded_deprecated_params_set = (
-                self._get_or_init_feeded_deprecated_params_set()
-            )
+            feeded_deprecated_params_set = self._get_or_init_feeded_deprecated_params_set()
             user_feeded_params_set = self._get_or_init_user_feeded_params_set()
             setattr(self, _IS_RAW_CONF, False)
         else:
-            feeded_deprecated_params_set = (
-                self._get_or_init_feeded_deprecated_params_set(conf)
-            )
+            feeded_deprecated_params_set = self._get_or_init_feeded_deprecated_params_set(conf)
             user_feeded_params_set = self._get_or_init_user_feeded_params_set(conf)
 
         def _recursive_update_param(param, config, depth, prefix):
@@ -170,15 +166,11 @@ class ComponentParamBase(ABC):
 
                 else:
                     # recursive set obj attr
-                    sub_params = _recursive_update_param(
-                        attr, config_value, depth + 1, prefix=f"{prefix}{config_key}."
-                    )
+                    sub_params = _recursive_update_param(attr, config_value, depth + 1, prefix=f"{prefix}{config_key}.")
                     setattr(param, config_key, sub_params)
 
             if not allow_redundant and redundant_attrs:
-                raise ValueError(
-                    f"cpn `{getattr(self, '_name', type(self))}` has redundant parameters: `{[redundant_attrs]}`"
-                )
+                raise ValueError(f"cpn `{getattr(self, '_name', type(self))}` has redundant parameters: `{[redundant_attrs]}`")
 
             return param
 
@@ -209,9 +201,7 @@ class ComponentParamBase(ABC):
         param_validation_path_prefix = home_dir + "/param_validation/"
 
         param_name = type(self).__name__
-        param_validation_path = "/".join(
-            [param_validation_path_prefix, param_name + ".json"]
-        )
+        param_validation_path = "/".join([param_validation_path_prefix, param_name + ".json"])
 
         validation_json = None
 
@@ -292,7 +282,7 @@ class ComponentParamBase(ABC):
     @staticmethod
     def check_valid_value(param, description, valid_values):
         if param not in valid_values:
-            raise ValueError(description+ f" {param} is not supported, it should be in {valid_values}")
+            raise ValueError(description + f" {param} is not supported, it should be in {valid_values}")
 
     @staticmethod
     def check_defined_type(param, description, types):
@@ -322,11 +312,7 @@ class ComponentParamBase(ABC):
     def _range(value, ranges):
         in_range = False
         for left_limit, right_limit in ranges:
-            if (
-                    left_limit - settings.FLOAT_ZERO
-                    <= value
-                    <= right_limit + settings.FLOAT_ZERO
-            ):
+            if left_limit - settings.FLOAT_ZERO <= value <= right_limit + settings.FLOAT_ZERO:
                 in_range = True
                 break
 
@@ -346,10 +332,7 @@ class ComponentParamBase(ABC):
 
     def _warn_to_deprecate_param(self, param_name, description, new_param):
         if self._deprecated_params_set.get(param_name):
-            logging.warning(
-                f"{description} {param_name} will be deprecated in future release; "
-                f"please use {new_param} instead."
-            )
+            logging.warning(f"{description} {param_name} will be deprecated in future release; please use {new_param} instead.")
             return True
         return False
 
@@ -385,7 +368,7 @@ class ComponentBase(ABC):
 
     def check_if_canceled(self, message: str = "") -> bool:
         if self.is_canceled():
-            task_id = getattr(self._canvas, 'task_id', 'unknown')
+            task_id = getattr(self._canvas, "task_id", "unknown")
             log_message = f"Task {task_id} has been canceled"
             if message:
                 log_message += f" during {message}"
@@ -496,7 +479,7 @@ class ComponentBase(ABC):
                 "name": (self._canvas.get_component_name(cpn_id) + f"@{var_nm}") if cpn_id else exp,
                 "value": self._canvas.get_variable_value(exp),
                 "_retrieval": self._canvas.get_variable_value(f"{cpn_id}@_references") if cpn_id else None,
-                "_cpn_id": cpn_id
+                "_cpn_id": cpn_id,
             }
         return res
 
@@ -534,33 +517,27 @@ class ComponentBase(ABC):
         return self._canvas.get_component(pid)["obj"]
 
     def get_upstream(self) -> list[str]:
-        cpn_nms = self._canvas.get_component(self._id)['upstream']
+        cpn_nms = self._canvas.get_component(self._id)["upstream"]
         return cpn_nms
 
     def get_downstream(self) -> list[str]:
-        cpn_nms = self._canvas.get_component(self._id)['downstream']
+        cpn_nms = self._canvas.get_component(self._id)["downstream"]
         return cpn_nms
 
     @staticmethod
     def string_format(content: str, kv: dict[str, str]) -> str:
         for n, v in kv.items():
+
             def repl(_match, val=v):
                 return str(val) if val is not None else ""
 
-            content = re.sub(
-                r"\{%s\}" % re.escape(n),
-                repl,
-                content
-            )
+            content = re.sub(r"\{%s\}" % re.escape(n), repl, content)
         return content
 
     def exception_handler(self):
         if not self._param.exception_method:
             return None
-        return {
-            "goto": self._param.exception_goto,
-            "default_value": self._param.exception_default_value
-        }
+        return {"goto": self._param.exception_goto, "default_value": self._param.exception_default_value}
 
     def get_exception_default_value(self):
         if self._param.exception_method != "comment":

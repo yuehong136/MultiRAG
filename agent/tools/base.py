@@ -90,28 +90,25 @@ class LLMToolPluginCallSession(ToolCallSession):
 
 class ToolParamBase(ComponentParamBase):
     def __init__(self):
-        #self.meta:ToolMeta = None
+        # self.meta:ToolMeta = None
         super().__init__()
         self._init_inputs()
         self._init_attr_by_meta()
 
     def _init_inputs(self):
         self.inputs = {}
-        for k,p in self.meta["parameters"].items():
+        for k, p in self.meta["parameters"].items():
             self.inputs[k] = deepcopy(p)
 
     def _init_attr_by_meta(self):
-        for k,p in self.meta["parameters"].items():
+        for k, p in self.meta["parameters"].items():
             if not hasattr(self, k):
                 setattr(self, k, p.get("default"))
 
     def get_meta(self):
         params = {}
         for k, p in self.meta["parameters"].items():
-            params[k] = {
-                "type": p["type"],
-                "description": p["description"]
-            }
+            params[k] = {"type": p["type"], "description": p["description"]}
             if "enum" in p:
                 params[k]["enum"] = p["enum"]
 
@@ -123,12 +120,8 @@ class ToolParamBase(ComponentParamBase):
             "function": {
                 "name": function_name,
                 "description": desc,
-                "parameters": {
-                    "type": "object",
-                    "properties": params,
-                    "required": [k for k, p in self.meta["parameters"].items() if p["required"]]
-                }
-            }
+                "parameters": {"type": "object", "properties": params, "required": [k for k, p in self.meta["parameters"].items() if p["required"]]},
+            },
         }
 
 
@@ -203,20 +196,8 @@ class ToolBase(ComponentBase):
             title = get_title(r)
             url = get_url(r)
             score = get_score(r) if get_score else 1
-            chunks.append({
-                "chunk_id": id,
-                "content": content,
-                "doc_id": id,
-                "docnm_kwd": title,
-                "similarity": score,
-                "url": url
-            })
-            aggs.append({
-                "doc_name": title,
-                "doc_id": id,
-                "count": 1,
-                "url": url
-            })
+            chunks.append({"chunk_id": id, "content": content, "doc_id": id, "docnm_kwd": title, "similarity": score, "url": url})
+            aggs.append({"doc_name": title, "doc_id": id, "count": 1, "url": url})
         self._canvas.add_reference(chunks, aggs)
         self.set_output("formalized_content", "\n".join(kb_prompt({"chunks": chunks, "doc_aggs": aggs}, 200000, True)))
 

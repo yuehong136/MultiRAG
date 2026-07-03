@@ -10,18 +10,12 @@ import streamlit as st
 from .config import IPYKERNEL
 from .interface import ToolObservation
 
-ANSI_ESCAPE = re.compile(r'(\x9B|\x1B\[|\u001b\[)[0-?]*[ -/]*[@-~]')
-CODE = re.compile(r'```([^\n]*)\n(.*?)```')
+ANSI_ESCAPE = re.compile(r"(\x9B|\x1B\[|\u001b\[)[0-?]*[ -/]*[@-~]")
+CODE = re.compile(r"```([^\n]*)\n(.*?)```")
+
 
 class CodeKernel:
-    def __init__(self,
-                 kernel_name='kernel',
-                 kernel_id=None,
-                 kernel_config_path="",
-                 python_path=None,
-                 ipython_path=None,
-                 init_file_path="./startup.py",
-                 verbose=1):
+    def __init__(self, kernel_name="kernel", kernel_id=None, kernel_config_path="", python_path=None, ipython_path=None, init_file_path="./startup.py", verbose=1):
 
         self.kernel_name = kernel_name
         self.kernel_id = kernel_id
@@ -37,10 +31,7 @@ class CodeKernel:
             env = {"PATH": self.python_path + ":$PATH", "PYTHONPATH": self.python_path}
 
         # Initialize the backend kernel
-        self.kernel_manager = jupyter_client.KernelManager(kernel_name=IPYKERNEL,
-                                                           connection_file=self.kernel_config_path,
-                                                           exec_files=[self.init_file_path],
-                                                           env=env)
+        self.kernel_manager = jupyter_client.KernelManager(kernel_name=IPYKERNEL, connection_file=self.kernel_config_path, exec_files=[self.init_file_path], env=env)
         if self.kernel_config_path:
             self.kernel_manager.load_connection_file()
             self.kernel_manager.start_kernel(stdout=PIPE, stderr=PIPE)
@@ -62,13 +53,13 @@ class CodeKernel:
         self.kernel.execute(code)
         try:
             shell_msg = self.kernel.get_shell_msg(timeout=30)
-            io_msg_content = self.kernel.get_iopub_msg(timeout=30)['content']
+            io_msg_content = self.kernel.get_iopub_msg(timeout=30)["content"]
             while True:
                 msg_out = io_msg_content
                 ### Poll the message
                 try:
-                    io_msg_content = self.kernel.get_iopub_msg(timeout=30)['content']
-                    if 'execution_state' in io_msg_content and io_msg_content['execution_state'] == 'idle':
+                    io_msg_content = self.kernel.get_iopub_msg(timeout=30)["content"]
+                    if "execution_state" in io_msg_content and io_msg_content["execution_state"] == "idle":
                         break
                 except queue.Empty:
                     break
@@ -98,12 +89,12 @@ class CodeKernel:
         return shell_msg
 
     def get_error_msg(self, msg, verbose=False) -> str | None:
-        if msg['content']['status'] == 'error':
+        if msg["content"]["status"] == "error":
             try:
-                error_msg = msg['content']['traceback']
+                error_msg = msg["content"]["traceback"]
             except:
                 try:
-                    error_msg = msg['content']['traceback'][-1].strip()
+                    error_msg = msg["content"]["traceback"][-1].strip()
                 except:
                     error_msg = "Traceback Error"
             if verbose:
@@ -112,12 +103,12 @@ class CodeKernel:
         return None
 
     def check_msg(self, msg, verbose=False):
-        status = msg['content']['status']
-        if status == 'ok':
+        status = msg["content"]["status"]
+        if status == "ok":
             if verbose:
                 print("Execution succeeded.")
-        elif status == 'error':
-            for line in msg['content']['traceback']:
+        elif status == "error":
+            for line in msg["content"]["traceback"]:
                 if verbose:
                     print(line)
 
@@ -142,17 +133,17 @@ class CodeKernel:
     def is_alive(self):
         return self.kernel.is_alive()
 
+
 def clean_ansi_codes(input_string):
-    return ANSI_ESCAPE.sub('', input_string)
+    return ANSI_ESCAPE.sub("", input_string)
+
 
 def extract_code(text: str) -> str:
     matches = CODE.findall(text, re.DOTALL)
     return matches[-1][1]
 
-def execute(
-    code: str,
-    kernel: CodeKernel
-) -> tuple[Literal['text', 'image'] | None, str]:
+
+def execute(code: str, kernel: CodeKernel) -> tuple[Literal["text", "image"] | None, str]:
     res = ""
     res_type = None
     code = code.replace("<|observation|>", "")
@@ -162,37 +153,38 @@ def execute(
     code = code.replace("<|system|>", "")
     msg, output = kernel.execute(code)
 
-    if msg['metadata']['status'] == "timeout":
-        return res_type, 'Timed out'
-    elif msg['metadata']['status'] == 'error':
-        return res_type, clean_ansi_codes('\n'.join(kernel.get_error_msg(msg, verbose=True)))
+    if msg["metadata"]["status"] == "timeout":
+        return res_type, "Timed out"
+    elif msg["metadata"]["status"] == "error":
+        return res_type, clean_ansi_codes("\n".join(kernel.get_error_msg(msg, verbose=True)))
 
-    if 'text' in output:
+    if "text" in output:
         res_type = "text"
-        res = output['text']
-    elif 'data' in output:
-        for key in output['data']:
-            if 'text/plain' in key:
+        res = output["text"]
+    elif "data" in output:
+        for key in output["data"]:
+            if "text/plain" in key:
                 res_type = "text"
-                res = output['data'][key]
-            elif 'image/png' in key:
+                res = output["data"][key]
+            elif "image/png" in key:
                 res_type = "image"
-                res = output['data'][key]
+                res = output["data"][key]
                 break
 
     return res_type, res
 
+
 @st.cache_resource
 def get_kernel() -> CodeKernel:
     return CodeKernel()
+
 
 def tool_call(code: str, session_id: str) -> list[ToolObservation]:
     kernel = get_kernel()
     res_type, res = execute(code, kernel)
 
     # Convert base64 to data uri
-    text = '[Image]' if res_type == 'image' else res
-    image = f'data:image/png;base64,{res}' if res_type == 'image' else None
+    text = "[Image]" if res_type == "image" else res
+    image = f"data:image/png;base64,{res}" if res_type == "image" else None
 
     return [ToolObservation(res_type, text, image)]
-

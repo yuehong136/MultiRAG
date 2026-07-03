@@ -16,6 +16,7 @@ app = FastAPI()
 DEFAULT_WORKFLOW_PATH = Path(r"/workflow.json")
 UPLOADED_WORKFLOW_PATH = Path(r"./workflow.json")
 
+
 def read_workflow(use_uploaded: bool = False):
     path = UPLOADED_WORKFLOW_PATH if use_uploaded and UPLOADED_WORKFLOW_PATH.exists() else DEFAULT_WORKFLOW_PATH
     try:
@@ -27,23 +28,24 @@ def read_workflow(use_uploaded: bool = False):
         raise HTTPException(status_code=404, detail="Workflow file not found")
 
 
-
 @app.get("/")
 def read_root():
     logger.info("根路径被访问")
     return {"message": "欢迎使用工作流API"}
+
 
 @app.post("/upload-workflow")
 async def upload_workflow(file: UploadFile = File(...)):
     try:
         content = await file.read()
         with UPLOADED_WORKFLOW_PATH.open("w", encoding="utf-8") as f:
-            f.write(content.decode('utf-8'))
+            f.write(content.decode("utf-8"))
         logger.info(f"上传并保存工作流文件: {UPLOADED_WORKFLOW_PATH}")
         return {"message": "工作流上传成功"}
     except Exception as e:
         logger.error(f"上传工作流文件时出错: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="内部服务器错误")
+
 
 @app.post("/execute")
 async def execute_workflow(file: UploadFile = File(None), use_uploaded: bool = Depends(lambda: UPLOADED_WORKFLOW_PATH.exists())):
@@ -77,6 +79,7 @@ async def execute_workflow(file: UploadFile = File(None), use_uploaded: bool = D
     except Exception as e:
         logger.error(f"执行工作流时出错: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="内部服务器错误")
+
 
 # def get_action_handlers():
 #     """

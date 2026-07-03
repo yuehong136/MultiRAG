@@ -45,7 +45,7 @@ def normalize_chunker_dsl(dsl: dict) -> dict:
         for old_name, new_name in COMPONENT_RENAMES.items():
             prefix = f"{old_name}:"
             if component_id.startswith(prefix):
-                new_component_id = f"{new_name}:{component_id[len(prefix):]}"
+                new_component_id = f"{new_name}:{component_id[len(prefix) :]}"
                 break
         component_id_map[component_id] = new_component_id
 
@@ -88,10 +88,7 @@ def normalize_chunker_dsl(dsl: dict) -> dict:
 
             for key in ("downstream", "upstream"):
                 if isinstance(new_component.get(key), list):
-                    new_component[key] = [
-                        component_id_map.get(component_id, component_id)
-                        for component_id in new_component[key]
-                    ]
+                    new_component[key] = [component_id_map.get(component_id, component_id) for component_id in new_component[key]]
 
             parent_id = new_component.get("parent_id")
             if isinstance(parent_id, str):
@@ -102,10 +99,7 @@ def normalize_chunker_dsl(dsl: dict) -> dict:
     normalized["components"] = rewritten_components
 
     if isinstance(normalized.get("path"), list):
-        normalized["path"] = [
-            component_id_map.get(component_id, component_id)
-            for component_id in normalized["path"]
-        ]
+        normalized["path"] = [component_id_map.get(component_id, component_id) for component_id in normalized["path"]]
 
     graph = normalized.get("graph")
     if isinstance(graph, dict):

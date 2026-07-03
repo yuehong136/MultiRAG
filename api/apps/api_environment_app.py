@@ -5,6 +5,7 @@
 @date：2025/1/15 10:00
 @desc: 环境管理API接口
 """
+
 import logging
 
 from fastapi import APIRouter, Body, Depends, Query
@@ -46,17 +47,14 @@ def get_user_tenant_id(db, user_id: str) -> str:
         return user_id
 
 
-@router.get("/environments",
-            summary="获取环境列表",
-            response_description="返回用户的环境列表",
-            response_model=PaginatedEnvironmentResponse)
+@router.get("/environments", summary="获取环境列表", response_description="返回用户的环境列表", response_model=PaginatedEnvironmentResponse)
 def get_environments(
     page: int = Query(1, description="页码", ge=1),
     page_size: int = Query(20, description="每页数量", ge=1, le=100),
     search: str = Query(None, description="搜索关键字"),
     is_default: bool = Query(None, description="筛选默认环境"),
     user=Depends(manager),
-    db=Depends(get_db)
+    db=Depends(get_db),
 ):
     """
     获取当前用户的所有环境列表
@@ -67,12 +65,7 @@ def get_environments(
     - 按默认环境优先、创建时间倒序排列
     """
     try:
-        params = EnvironmentQueryParams(
-            page=page,
-            page_size=page_size,
-            search=search,
-            is_default=is_default
-        )
+        params = EnvironmentQueryParams(page=page, page_size=page_size, search=search, is_default=is_default)
 
         tenant_id = get_user_tenant_id(db, user.id)
         result = environment_service.get_environments(db, tenant_id, params)
@@ -83,15 +76,8 @@ def get_environments(
         return get_data_error_result(retmsg=str(e))
 
 
-@router.get("/environments/{environment_id}",
-            summary="获取环境详情",
-            response_description="返回环境的详细信息",
-            response_model=EnvironmentDetailResponse)
-def get_environment_detail(
-    environment_id: str,
-    user=Depends(manager),
-    db=Depends(get_db)
-):
+@router.get("/environments/{environment_id}", summary="获取环境详情", response_description="返回环境的详细信息", response_model=EnvironmentDetailResponse)
+def get_environment_detail(environment_id: str, user=Depends(manager), db=Depends(get_db)):
     """
     获取指定环境的详细信息，包括所有环境变量
 
@@ -107,15 +93,8 @@ def get_environment_detail(
         return get_data_error_result(retmsg=str(e))
 
 
-@router.post("/environments",
-             summary="创建环境",
-             response_description="返回创建的环境详情",
-             response_model=EnvironmentDetailResponse)
-def create_environment(
-    env_data: EnvironmentCreate = Body(..., description="环境数据"),
-    user=Depends(manager),
-    db=Depends(get_db)
-):
+@router.post("/environments", summary="创建环境", response_description="返回创建的环境详情", response_model=EnvironmentDetailResponse)
+def create_environment(env_data: EnvironmentCreate = Body(..., description="环境数据"), user=Depends(manager), db=Depends(get_db)):
     """
     创建新的环境
 
@@ -135,16 +114,8 @@ def create_environment(
         return get_data_error_result(retmsg=str(e))
 
 
-@router.put("/environments/{environment_id}",
-            summary="更新环境",
-            response_description="返回更新后的环境详情",
-            response_model=EnvironmentDetailResponse)
-def update_environment(
-    environment_id: str,
-    env_data: EnvironmentUpdate = Body(..., description="更新数据"),
-    user=Depends(manager),
-    db=Depends(get_db)
-):
+@router.put("/environments/{environment_id}", summary="更新环境", response_description="返回更新后的环境详情", response_model=EnvironmentDetailResponse)
+def update_environment(environment_id: str, env_data: EnvironmentUpdate = Body(..., description="更新数据"), user=Depends(manager), db=Depends(get_db)):
     """
     更新环境基本信息
 
@@ -161,14 +132,8 @@ def update_environment(
         return get_data_error_result(retmsg=str(e))
 
 
-@router.delete("/environments/{environment_id}",
-               summary="删除环境",
-               response_description="返回删除结果")
-def delete_environment(
-    environment_id: str,
-    user=Depends(manager),
-    db=Depends(get_db)
-):
+@router.delete("/environments/{environment_id}", summary="删除环境", response_description="返回删除结果")
+def delete_environment(environment_id: str, user=Depends(manager), db=Depends(get_db)):
     """
     删除指定环境
 
@@ -183,16 +148,8 @@ def delete_environment(
         return get_data_error_result(retmsg=str(e))
 
 
-@router.post("/environments/{environment_id}/duplicate",
-             summary="复制环境",
-             response_description="返回复制的环境详情",
-             response_model=EnvironmentDetailResponse)
-def duplicate_environment(
-    environment_id: str,
-    duplicate_data: EnvironmentDuplicateRequest = Body(..., description="复制请求数据"),
-    user=Depends(manager),
-    db=Depends(get_db)
-):
+@router.post("/environments/{environment_id}/duplicate", summary="复制环境", response_description="返回复制的环境详情", response_model=EnvironmentDetailResponse)
+def duplicate_environment(environment_id: str, duplicate_data: EnvironmentDuplicateRequest = Body(..., description="复制请求数据"), user=Depends(manager), db=Depends(get_db)):
     """
     复制现有环境
 
@@ -209,15 +166,8 @@ def duplicate_environment(
         return get_data_error_result(retmsg=str(e))
 
 
-@router.post("/environments/{environment_id}/set-default",
-             summary="设置默认环境",
-             response_description="返回设置后的环境详情",
-             response_model=EnvironmentDetailResponse)
-def set_default_environment(
-    environment_id: str,
-    user=Depends(manager),
-    db=Depends(get_db)
-):
+@router.post("/environments/{environment_id}/set-default", summary="设置默认环境", response_description="返回设置后的环境详情", response_model=EnvironmentDetailResponse)
+def set_default_environment(environment_id: str, user=Depends(manager), db=Depends(get_db)):
     """
     将指定环境设为默认环境
 
@@ -232,16 +182,8 @@ def set_default_environment(
         return get_data_error_result(retmsg=str(e))
 
 
-@router.post("/environments/{environment_id}/variables",
-             summary="创建环境变量",
-             response_description="返回创建的变量",
-             response_model=EnvironmentVariableResponse)
-def create_variable(
-    environment_id: str,
-    var_data: EnvironmentVariableCreate = Body(..., description="变量数据"),
-    user=Depends(manager),
-    db=Depends(get_db)
-):
+@router.post("/environments/{environment_id}/variables", summary="创建环境变量", response_description="返回创建的变量", response_model=EnvironmentVariableResponse)
+def create_variable(environment_id: str, var_data: EnvironmentVariableCreate = Body(..., description="变量数据"), user=Depends(manager), db=Depends(get_db)):
     """
     在指定环境中添加变量
 
@@ -256,17 +198,8 @@ def create_variable(
         return get_data_error_result(retmsg=str(e))
 
 
-@router.put("/environments/{environment_id}/variables/{variable_id}",
-            summary="更新环境变量",
-            response_description="返回更新后的变量",
-            response_model=EnvironmentVariableResponse)
-def update_variable(
-    environment_id: str,
-    variable_id: str,
-    var_data: EnvironmentVariableUpdate = Body(..., description="更新数据"),
-    user=Depends(manager),
-    db=Depends(get_db)
-):
+@router.put("/environments/{environment_id}/variables/{variable_id}", summary="更新环境变量", response_description="返回更新后的变量", response_model=EnvironmentVariableResponse)
+def update_variable(environment_id: str, variable_id: str, var_data: EnvironmentVariableUpdate = Body(..., description="更新数据"), user=Depends(manager), db=Depends(get_db)):
     """
     更新指定变量
 
@@ -281,15 +214,8 @@ def update_variable(
         return get_data_error_result(retmsg=str(e))
 
 
-@router.delete("/environments/{environment_id}/variables/{variable_id}",
-               summary="删除环境变量",
-               response_description="返回删除结果")
-def delete_variable(
-    environment_id: str,
-    variable_id: str,
-    user=Depends(manager),
-    db=Depends(get_db)
-):
+@router.delete("/environments/{environment_id}/variables/{variable_id}", summary="删除环境变量", response_description="返回删除结果")
+def delete_variable(environment_id: str, variable_id: str, user=Depends(manager), db=Depends(get_db)):
     """
     删除指定变量
     """
@@ -302,16 +228,8 @@ def delete_variable(
         return get_data_error_result(retmsg=str(e))
 
 
-@router.put("/environments/{environment_id}/variables/batch",
-            summary="批量更新变量",
-            response_description="返回更新后的变量列表",
-            response_model=list[EnvironmentVariableResponse])
-def batch_update_variables(
-    environment_id: str,
-    batch_data: BatchVariablesRequest = Body(..., description="批量数据"),
-    user=Depends(manager),
-    db=Depends(get_db)
-):
+@router.put("/environments/{environment_id}/variables/batch", summary="批量更新变量", response_description="返回更新后的变量列表", response_model=list[EnvironmentVariableResponse])
+def batch_update_variables(environment_id: str, batch_data: BatchVariablesRequest = Body(..., description="批量数据"), user=Depends(manager), db=Depends(get_db)):
     """
     批量更新环境的所有变量
 
@@ -326,16 +244,8 @@ def batch_update_variables(
         return get_data_error_result(retmsg=str(e))
 
 
-@router.post("/environments/{environment_id}/resolve",
-             summary="变量解析预览",
-             response_description="返回变量解析结果",
-             response_model=VariableResolveResponse)
-def resolve_variables(
-    environment_id: str,
-    resolve_data: VariableResolveRequest = Body(..., description="解析请求数据"),
-    user=Depends(manager),
-    db=Depends(get_db)
-):
+@router.post("/environments/{environment_id}/resolve", summary="变量解析预览", response_description="返回变量解析结果", response_model=VariableResolveResponse)
+def resolve_variables(environment_id: str, resolve_data: VariableResolveRequest = Body(..., description="解析请求数据"), user=Depends(manager), db=Depends(get_db)):
     """
     预览变量解析结果
 
@@ -354,14 +264,8 @@ def resolve_variables(
         return get_data_error_result(retmsg=str(e))
 
 
-@router.get("/environments/global",
-            summary="获取全局预设环境",
-            response_description="返回系统预设的环境模板",
-            response_model=list[GlobalEnvironmentResponse])
-def get_global_environments(
-    user=Depends(manager),
-    db=Depends(get_db)
-):
+@router.get("/environments/global", summary="获取全局预设环境", response_description="返回系统预设的环境模板", response_model=list[GlobalEnvironmentResponse])
+def get_global_environments(user=Depends(manager), db=Depends(get_db)):
     """
     获取系统预设的环境模板
 

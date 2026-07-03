@@ -5,6 +5,7 @@
 @date：2025/1/15 10:00
 @desc: 环境管理服务核心实现
 """
+
 import logging
 import re
 from datetime import datetime
@@ -40,14 +41,9 @@ class ApiEnvironmentService:
 
     def __init__(self):
         """初始化环境服务"""
-        self.variable_pattern = re.compile(r'\{\{(\w+)\}\}')
+        self.variable_pattern = re.compile(r"\{\{(\w+)\}\}")
 
-    def get_environments(
-        self,
-        db: Session,
-        tenant_id: str,
-        params: EnvironmentQueryParams
-    ) -> PaginatedEnvironmentResponse:
+    def get_environments(self, db: Session, tenant_id: str, params: EnvironmentQueryParams) -> PaginatedEnvironmentResponse:
         """
         获取用户的环境列表
 
@@ -66,12 +62,7 @@ class ApiEnvironmentService:
             # 搜索过滤
             if params.search:
                 search_term = f"%{params.search}%"
-                query = query.filter(
-                    or_(
-                        ApiEnvironment.name.ilike(search_term),
-                        ApiEnvironment.description.ilike(search_term)
-                    )
-                )
+                query = query.filter(or_(ApiEnvironment.name.ilike(search_term), ApiEnvironment.description.ilike(search_term)))
 
             # 默认环境过滤
             if params.is_default is not None:
@@ -81,20 +72,17 @@ class ApiEnvironmentService:
             total = query.count()
 
             # 分页和排序
-            environments = query.order_by(
-                desc(ApiEnvironment.is_default),
-                desc(ApiEnvironment.create_date)
-            ).offset((params.page - 1) * params.page_size).limit(params.page_size).all()
+            environments = query.order_by(desc(ApiEnvironment.is_default), desc(ApiEnvironment.create_date)).offset((params.page - 1) * params.page_size).limit(params.page_size).all()
 
             # 统计每个环境的变量数量
             env_ids = [env.id for env in environments]
             if env_ids:
-                var_counts = db.query(
-                    ApiEnvironmentVariable.environment_id,
-                    func.count(ApiEnvironmentVariable.id).label('count')
-                ).filter(ApiEnvironmentVariable.environment_id.in_(env_ids)).group_by(
-                    ApiEnvironmentVariable.environment_id
-                ).all()
+                var_counts = (
+                    db.query(ApiEnvironmentVariable.environment_id, func.count(ApiEnvironmentVariable.id).label("count"))
+                    .filter(ApiEnvironmentVariable.environment_id.in_(env_ids))
+                    .group_by(ApiEnvironmentVariable.environment_id)
+                    .all()
+                )
 
                 var_count_map = {vc.environment_id: vc.count for vc in var_counts}
             else:
@@ -104,19 +92,13 @@ class ApiEnvironmentService:
             items = []
             for env in environments:
                 env_dict = env.to_dict()
-                env_dict['variables_count'] = var_count_map.get(env.id, 0)
+                env_dict["variables_count"] = var_count_map.get(env.id, 0)
                 env_data = EnvironmentListResponse.model_validate(env_dict)
                 items.append(env_data)
 
             total_pages = (total + params.page_size - 1) // params.page_size
 
-            return PaginatedEnvironmentResponse(
-                items=items,
-                total=total,
-                page=params.page,
-                page_size=params.page_size,
-                total_pages=total_pages
-            )
+            return PaginatedEnvironmentResponse(items=items, total=total, page=params.page, page_size=params.page_size, total_pages=total_pages)
 
         except SQLAlchemyError as e:
             logger.error(f"获取环境列表失败: {e!s}")
@@ -136,21 +118,17 @@ class ApiEnvironmentService:
         """
         try:
             # 查询环境
-            environment = db.query(ApiEnvironment).filter(
-                and_(ApiEnvironment.id == environment_id, ApiEnvironment.tenant_id == tenant_id)
-            ).first()
+            environment = db.query(ApiEnvironment).filter(and_(ApiEnvironment.id == environment_id, ApiEnvironment.tenant_id == tenant_id)).first()
 
             if not environment:
                 raise Exception("环境不存在")
 
             # 查询环境变量
-            variables = db.query(ApiEnvironmentVariable).filter(
-                ApiEnvironmentVariable.environment_id == environment_id
-            ).order_by(ApiEnvironmentVariable.key_name).all()
+            variables = db.query(ApiEnvironmentVariable).filter(ApiEnvironmentVariable.environment_id == environment_id).order_by(ApiEnvironmentVariable.key_name).all()
 
             # 构建响应
             env_dict = environment.to_dict()
-            env_dict['variables'] = [EnvironmentVariableResponse.model_validate(var.to_dict()) for var in variables]
+            env_dict["variables"] = [EnvironmentVariableResponse.model_validate(var.to_dict()) for var in variables]
             env_data = EnvironmentDetailResponse.model_validate(env_dict)
 
             return env_data
@@ -173,28 +151,17 @@ class ApiEnvironmentService:
         """
         try:
             # 检查环境名称是否已存在
-            existing = db.query(ApiEnvironment).filter(
-                and_(ApiEnvironment.tenant_id == tenant_id, ApiEnvironment.name == env_data.name)
-            ).first()
+            existing = db.query(ApiEnvironment).filter(and_(ApiEnvironment.tenant_id == tenant_id, ApiEnvironment.name == env_data.name)).first()
 
             if existing:
                 raise Exception("环境名称已存在")
 
             # 如果设为默认环境，需要先取消其他默认环境
             if env_data.is_default:
-                db.query(ApiEnvironment).filter(
-                    and_(ApiEnvironment.tenant_id == tenant_id, ApiEnvironment.is_default == True)
-                ).update({'is_default': False})
+                db.query(ApiEnvironment).filter(and_(ApiEnvironment.tenant_id == tenant_id, ApiEnvironment.is_default == True)).update({"is_default": False})
 
             # 创建环境
-            environment = ApiEnvironment(
-                id=get_uuid(),
-                tenant_id=tenant_id,
-                name=env_data.name,
-                description=env_data.description,
-                is_default=env_data.is_default,
-                is_global=env_data.is_global
-            )
+            environment = ApiEnvironment(id=get_uuid(), tenant_id=tenant_id, name=env_data.name, description=env_data.description, is_default=env_data.is_default, is_global=env_data.is_global)
 
             db.add(environment)
             db.flush()  # 获取ID
@@ -203,12 +170,7 @@ class ApiEnvironmentService:
             variables = []
             for var_data in env_data.variables:
                 # 检查变量名是否重复
-                existing_var = db.query(ApiEnvironmentVariable).filter(
-                    and_(
-                        ApiEnvironmentVariable.environment_id == environment.id,
-                        ApiEnvironmentVariable.key_name == var_data.key_name
-                    )
-                ).first()
+                existing_var = db.query(ApiEnvironmentVariable).filter(and_(ApiEnvironmentVariable.environment_id == environment.id, ApiEnvironmentVariable.key_name == var_data.key_name)).first()
 
                 if existing_var:
                     raise Exception(f"变量名 '{var_data.key_name}' 已存在")
@@ -220,7 +182,7 @@ class ApiEnvironmentService:
                     key_value=var_data.key_value,
                     description=var_data.description,
                     is_secret=var_data.is_secret,
-                    variable_type=var_data.variable_type.value
+                    variable_type=var_data.variable_type.value,
                 )
 
                 db.add(variable)
@@ -230,7 +192,7 @@ class ApiEnvironmentService:
 
             # 构建响应
             env_dict = environment.to_dict()
-            env_dict['variables'] = [EnvironmentVariableResponse.model_validate(var.to_dict()) for var in variables]
+            env_dict["variables"] = [EnvironmentVariableResponse.model_validate(var.to_dict()) for var in variables]
             env_response = EnvironmentDetailResponse.model_validate(env_dict)
 
             return env_response
@@ -244,13 +206,7 @@ class ApiEnvironmentService:
             logger.error(f"创建环境失败: {e!s}")
             raise Exception(f"创建环境失败: {e!s}")
 
-    def update_environment(
-        self,
-        db: Session,
-        tenant_id: str,
-        environment_id: str,
-        env_data: EnvironmentUpdate
-    ) -> EnvironmentDetailResponse:
+    def update_environment(self, db: Session, tenant_id: str, environment_id: str, env_data: EnvironmentUpdate) -> EnvironmentDetailResponse:
         """
         更新环境
 
@@ -265,40 +221,26 @@ class ApiEnvironmentService:
         """
         try:
             # 查询环境
-            environment = db.query(ApiEnvironment).filter(
-                and_(ApiEnvironment.id == environment_id, ApiEnvironment.tenant_id == tenant_id)
-            ).first()
+            environment = db.query(ApiEnvironment).filter(and_(ApiEnvironment.id == environment_id, ApiEnvironment.tenant_id == tenant_id)).first()
 
             if not environment:
                 raise Exception("环境不存在")
 
             # 检查环境名称是否已存在（排除当前环境）
             if env_data.name and env_data.name != environment.name:
-                existing = db.query(ApiEnvironment).filter(
-                    and_(
-                        ApiEnvironment.tenant_id == tenant_id,
-                        ApiEnvironment.name == env_data.name,
-                        ApiEnvironment.id != environment_id
-                    )
-                ).first()
+                existing = db.query(ApiEnvironment).filter(and_(ApiEnvironment.tenant_id == tenant_id, ApiEnvironment.name == env_data.name, ApiEnvironment.id != environment_id)).first()
 
                 if existing:
                     raise Exception("环境名称已存在")
 
             # 如果设为默认环境，需要先取消其他默认环境
             if env_data.is_default:
-                db.query(ApiEnvironment).filter(
-                    and_(
-                        ApiEnvironment.tenant_id == tenant_id,
-                        ApiEnvironment.is_default == True,
-                        ApiEnvironment.id != environment_id
-                    )
-                ).update({'is_default': False})
+                db.query(ApiEnvironment).filter(and_(ApiEnvironment.tenant_id == tenant_id, ApiEnvironment.is_default == True, ApiEnvironment.id != environment_id)).update({"is_default": False})
 
             # 更新环境
             update_data = env_data.model_dump(exclude_unset=True)
             if update_data:
-                update_data['update_date'] = datetime.now()
+                update_data["update_date"] = datetime.now()
                 db.query(ApiEnvironment).filter(ApiEnvironment.id == environment_id).update(update_data)
 
             db.commit()
@@ -329,31 +271,23 @@ class ApiEnvironmentService:
         """
         try:
             # 查询环境
-            environment = db.query(ApiEnvironment).filter(
-                and_(ApiEnvironment.id == environment_id, ApiEnvironment.tenant_id == tenant_id)
-            ).first()
+            environment = db.query(ApiEnvironment).filter(and_(ApiEnvironment.id == environment_id, ApiEnvironment.tenant_id == tenant_id)).first()
 
             if not environment:
                 raise Exception("环境不存在")
 
             # 先查询要删除的环境变量数量
-            variables_count = db.query(ApiEnvironmentVariable).filter(
-                ApiEnvironmentVariable.environment_id == environment_id
-            ).count()
+            variables_count = db.query(ApiEnvironmentVariable).filter(ApiEnvironmentVariable.environment_id == environment_id).count()
 
             logger.info(f"准备删除环境 {environment_id}，包含 {variables_count} 个环境变量")
 
             # 删除环境变量
-            deleted_variables = db.query(ApiEnvironmentVariable).filter(
-                ApiEnvironmentVariable.environment_id == environment_id
-            ).delete(synchronize_session=False)
+            deleted_variables = db.query(ApiEnvironmentVariable).filter(ApiEnvironmentVariable.environment_id == environment_id).delete(synchronize_session=False)
 
             logger.info(f"成功删除 {deleted_variables} 个环境变量")
 
             # 删除环境
-            deleted_environments = db.query(ApiEnvironment).filter(
-                ApiEnvironment.id == environment_id
-            ).delete(synchronize_session=False)
+            deleted_environments = db.query(ApiEnvironment).filter(ApiEnvironment.id == environment_id).delete(synchronize_session=False)
 
             if deleted_environments == 0:
                 raise Exception("环境删除失败，可能已被其他操作删除")
@@ -368,13 +302,7 @@ class ApiEnvironmentService:
             logger.error(f"删除环境失败: {e!s}")
             raise Exception(f"删除环境失败: {e!s}")
 
-    def duplicate_environment(
-        self,
-        db: Session,
-        tenant_id: str,
-        environment_id: str,
-        duplicate_data: EnvironmentDuplicateRequest
-    ) -> EnvironmentDetailResponse:
+    def duplicate_environment(self, db: Session, tenant_id: str, environment_id: str, duplicate_data: EnvironmentDuplicateRequest) -> EnvironmentDetailResponse:
         """
         复制环境
 
@@ -389,17 +317,13 @@ class ApiEnvironmentService:
         """
         try:
             # 查询原环境
-            original_env = db.query(ApiEnvironment).filter(
-                and_(ApiEnvironment.id == environment_id, ApiEnvironment.tenant_id == tenant_id)
-            ).first()
+            original_env = db.query(ApiEnvironment).filter(and_(ApiEnvironment.id == environment_id, ApiEnvironment.tenant_id == tenant_id)).first()
 
             if not original_env:
                 raise Exception("原环境不存在")
 
             # 检查新环境名称是否已存在
-            existing = db.query(ApiEnvironment).filter(
-                and_(ApiEnvironment.tenant_id == tenant_id, ApiEnvironment.name == duplicate_data.new_name)
-            ).first()
+            existing = db.query(ApiEnvironment).filter(and_(ApiEnvironment.tenant_id == tenant_id, ApiEnvironment.name == duplicate_data.new_name)).first()
 
             if existing:
                 raise Exception("环境名称已存在")
@@ -411,27 +335,19 @@ class ApiEnvironmentService:
                 name=duplicate_data.new_name,
                 description=original_env.description,
                 is_default=False,  # 复制的环境不设为默认
-                is_global=original_env.is_global
+                is_global=original_env.is_global,
             )
 
             db.add(new_env)
             db.flush()
 
             # 复制环境变量
-            original_vars = db.query(ApiEnvironmentVariable).filter(
-                ApiEnvironmentVariable.environment_id == environment_id
-            ).all()
+            original_vars = db.query(ApiEnvironmentVariable).filter(ApiEnvironmentVariable.environment_id == environment_id).all()
 
             new_vars = []
             for var in original_vars:
                 new_var = ApiEnvironmentVariable(
-                    id=get_uuid(),
-                    environment_id=new_env.id,
-                    key_name=var.key_name,
-                    key_value=var.key_value,
-                    description=var.description,
-                    is_secret=var.is_secret,
-                    variable_type=var.variable_type
+                    id=get_uuid(), environment_id=new_env.id, key_name=var.key_name, key_value=var.key_value, description=var.description, is_secret=var.is_secret, variable_type=var.variable_type
                 )
 
                 db.add(new_var)
@@ -441,7 +357,7 @@ class ApiEnvironmentService:
 
             # 构建响应
             env_dict = new_env.to_dict()
-            env_dict['variables'] = [EnvironmentVariableResponse.model_validate(var.to_dict()) for var in new_vars]
+            env_dict["variables"] = [EnvironmentVariableResponse.model_validate(var.to_dict()) for var in new_vars]
             env_response = EnvironmentDetailResponse.model_validate(env_dict)
 
             return env_response
@@ -469,23 +385,16 @@ class ApiEnvironmentService:
         """
         try:
             # 查询环境
-            environment = db.query(ApiEnvironment).filter(
-                and_(ApiEnvironment.id == environment_id, ApiEnvironment.tenant_id == tenant_id)
-            ).first()
+            environment = db.query(ApiEnvironment).filter(and_(ApiEnvironment.id == environment_id, ApiEnvironment.tenant_id == tenant_id)).first()
 
             if not environment:
                 raise Exception("环境不存在")
 
             # 取消其他默认环境
-            db.query(ApiEnvironment).filter(
-                and_(ApiEnvironment.tenant_id == tenant_id, ApiEnvironment.is_default == True)
-            ).update({'is_default': False})
+            db.query(ApiEnvironment).filter(and_(ApiEnvironment.tenant_id == tenant_id, ApiEnvironment.is_default == True)).update({"is_default": False})
 
             # 设置当前环境为默认
-            db.query(ApiEnvironment).filter(ApiEnvironment.id == environment_id).update({
-                'is_default': True,
-                'update_date': datetime.now()
-            })
+            db.query(ApiEnvironment).filter(ApiEnvironment.id == environment_id).update({"is_default": True, "update_date": datetime.now()})
 
             db.commit()
 
@@ -497,13 +406,7 @@ class ApiEnvironmentService:
             logger.error(f"设置默认环境失败: {e!s}")
             raise Exception(f"设置默认环境失败: {e!s}")
 
-    def create_variable(
-        self,
-        db: Session,
-        tenant_id: str,
-        environment_id: str,
-        var_data: EnvironmentVariableCreate
-    ) -> EnvironmentVariableResponse:
+    def create_variable(self, db: Session, tenant_id: str, environment_id: str, var_data: EnvironmentVariableCreate) -> EnvironmentVariableResponse:
         """
         创建环境变量
 
@@ -518,20 +421,13 @@ class ApiEnvironmentService:
         """
         try:
             # 验证环境是否存在且属于用户
-            environment = db.query(ApiEnvironment).filter(
-                and_(ApiEnvironment.id == environment_id, ApiEnvironment.tenant_id == tenant_id)
-            ).first()
+            environment = db.query(ApiEnvironment).filter(and_(ApiEnvironment.id == environment_id, ApiEnvironment.tenant_id == tenant_id)).first()
 
             if not environment:
                 raise Exception("环境不存在")
 
             # 检查变量名是否已存在
-            existing = db.query(ApiEnvironmentVariable).filter(
-                and_(
-                    ApiEnvironmentVariable.environment_id == environment_id,
-                    ApiEnvironmentVariable.key_name == var_data.key_name
-                )
-            ).first()
+            existing = db.query(ApiEnvironmentVariable).filter(and_(ApiEnvironmentVariable.environment_id == environment_id, ApiEnvironmentVariable.key_name == var_data.key_name)).first()
 
             if existing:
                 raise Exception("变量名已存在")
@@ -544,7 +440,7 @@ class ApiEnvironmentService:
                 key_value=var_data.key_value,
                 description=var_data.description,
                 is_secret=var_data.is_secret,
-                variable_type=var_data.variable_type.value
+                variable_type=var_data.variable_type.value,
             )
 
             db.add(variable)
@@ -561,14 +457,7 @@ class ApiEnvironmentService:
             logger.error(f"创建变量失败: {e!s}")
             raise Exception(f"创建变量失败: {e!s}")
 
-    def update_variable(
-        self,
-        db: Session,
-        tenant_id: str,
-        environment_id: str,
-        variable_id: str,
-        var_data: EnvironmentVariableUpdate
-    ) -> EnvironmentVariableResponse:
+    def update_variable(self, db: Session, tenant_id: str, environment_id: str, variable_id: str, var_data: EnvironmentVariableUpdate) -> EnvironmentVariableResponse:
         """
         更新环境变量
 
@@ -584,33 +473,24 @@ class ApiEnvironmentService:
         """
         try:
             # 验证环境是否存在且属于用户
-            environment = db.query(ApiEnvironment).filter(
-                and_(ApiEnvironment.id == environment_id, ApiEnvironment.tenant_id == tenant_id)
-            ).first()
+            environment = db.query(ApiEnvironment).filter(and_(ApiEnvironment.id == environment_id, ApiEnvironment.tenant_id == tenant_id)).first()
 
             if not environment:
                 raise Exception("环境不存在")
 
             # 查询变量
-            variable = db.query(ApiEnvironmentVariable).filter(
-                and_(
-                    ApiEnvironmentVariable.id == variable_id,
-                    ApiEnvironmentVariable.environment_id == environment_id
-                )
-            ).first()
+            variable = db.query(ApiEnvironmentVariable).filter(and_(ApiEnvironmentVariable.id == variable_id, ApiEnvironmentVariable.environment_id == environment_id)).first()
 
             if not variable:
                 raise Exception("变量不存在")
 
             # 检查变量名是否已存在（排除当前变量）
             if var_data.key_name and var_data.key_name != variable.key_name:
-                existing = db.query(ApiEnvironmentVariable).filter(
-                    and_(
-                        ApiEnvironmentVariable.environment_id == environment_id,
-                        ApiEnvironmentVariable.key_name == var_data.key_name,
-                        ApiEnvironmentVariable.id != variable_id
-                    )
-                ).first()
+                existing = (
+                    db.query(ApiEnvironmentVariable)
+                    .filter(and_(ApiEnvironmentVariable.environment_id == environment_id, ApiEnvironmentVariable.key_name == var_data.key_name, ApiEnvironmentVariable.id != variable_id))
+                    .first()
+                )
 
                 if existing:
                     raise Exception("变量名已存在")
@@ -618,9 +498,9 @@ class ApiEnvironmentService:
             # 更新变量
             update_data = var_data.model_dump(exclude_unset=True)
             if update_data:
-                if 'variable_type' in update_data:
-                    update_data['variable_type'] = update_data['variable_type'].value
-                update_data['update_date'] = datetime.now()
+                if "variable_type" in update_data:
+                    update_data["variable_type"] = update_data["variable_type"].value
+                update_data["update_date"] = datetime.now()
                 db.query(ApiEnvironmentVariable).filter(ApiEnvironmentVariable.id == variable_id).update(update_data)
 
             db.commit()
@@ -653,20 +533,13 @@ class ApiEnvironmentService:
         """
         try:
             # 验证环境是否存在且属于用户
-            environment = db.query(ApiEnvironment).filter(
-                and_(ApiEnvironment.id == environment_id, ApiEnvironment.tenant_id == tenant_id)
-            ).first()
+            environment = db.query(ApiEnvironment).filter(and_(ApiEnvironment.id == environment_id, ApiEnvironment.tenant_id == tenant_id)).first()
 
             if not environment:
                 raise Exception("环境不存在")
 
             # 删除变量
-            deleted_count = db.query(ApiEnvironmentVariable).filter(
-                and_(
-                    ApiEnvironmentVariable.id == variable_id,
-                    ApiEnvironmentVariable.environment_id == environment_id
-                )
-            ).delete()
+            deleted_count = db.query(ApiEnvironmentVariable).filter(and_(ApiEnvironmentVariable.id == variable_id, ApiEnvironmentVariable.environment_id == environment_id)).delete()
 
             if deleted_count == 0:
                 raise Exception("变量不存在")
@@ -679,13 +552,7 @@ class ApiEnvironmentService:
             logger.error(f"删除变量失败: {e!s}")
             raise Exception(f"删除变量失败: {e!s}")
 
-    def batch_update_variables(
-        self,
-        db: Session,
-        tenant_id: str,
-        environment_id: str,
-        batch_data: BatchVariablesRequest
-    ) -> list[EnvironmentVariableResponse]:
+    def batch_update_variables(self, db: Session, tenant_id: str, environment_id: str, batch_data: BatchVariablesRequest) -> list[EnvironmentVariableResponse]:
         """
         批量更新环境变量
 
@@ -700,17 +567,13 @@ class ApiEnvironmentService:
         """
         try:
             # 验证环境是否存在且属于用户
-            environment = db.query(ApiEnvironment).filter(
-                and_(ApiEnvironment.id == environment_id, ApiEnvironment.tenant_id == tenant_id)
-            ).first()
+            environment = db.query(ApiEnvironment).filter(and_(ApiEnvironment.id == environment_id, ApiEnvironment.tenant_id == tenant_id)).first()
 
             if not environment:
                 raise Exception("环境不存在")
 
             # 删除现有变量
-            db.query(ApiEnvironmentVariable).filter(
-                ApiEnvironmentVariable.environment_id == environment_id
-            ).delete()
+            db.query(ApiEnvironmentVariable).filter(ApiEnvironmentVariable.environment_id == environment_id).delete()
 
             # 检查变量名重复
             var_names = [var.key_name for var in batch_data.variables]
@@ -727,7 +590,7 @@ class ApiEnvironmentService:
                     key_value=var_data.key_value,
                     description=var_data.description,
                     is_secret=var_data.is_secret,
-                    variable_type=var_data.variable_type.value
+                    variable_type=var_data.variable_type.value,
                 )
 
                 db.add(variable)
@@ -742,13 +605,7 @@ class ApiEnvironmentService:
             logger.error(f"批量更新变量失败: {e!s}")
             raise Exception(f"批量更新变量失败: {e!s}")
 
-    def resolve_variables(
-        self,
-        db: Session,
-        tenant_id: str,
-        environment_id: str,
-        text: str
-    ) -> VariableResolveResponse:
+    def resolve_variables(self, db: Session, tenant_id: str, environment_id: str, text: str) -> VariableResolveResponse:
         """
         解析变量
 
@@ -763,17 +620,13 @@ class ApiEnvironmentService:
         """
         try:
             # 验证环境是否存在且属于用户
-            environment = db.query(ApiEnvironment).filter(
-                and_(ApiEnvironment.id == environment_id, ApiEnvironment.tenant_id == tenant_id)
-            ).first()
+            environment = db.query(ApiEnvironment).filter(and_(ApiEnvironment.id == environment_id, ApiEnvironment.tenant_id == tenant_id)).first()
 
             if not environment:
                 raise Exception("环境不存在")
 
             # 获取环境变量
-            variables = db.query(ApiEnvironmentVariable).filter(
-                ApiEnvironmentVariable.environment_id == environment_id
-            ).all()
+            variables = db.query(ApiEnvironmentVariable).filter(ApiEnvironmentVariable.environment_id == environment_id).all()
 
             var_map = {var.key_name: var.key_value for var in variables}
 
@@ -793,11 +646,7 @@ class ApiEnvironmentService:
                     if var_name not in missing_variables:
                         missing_variables.append(var_name)
 
-            return VariableResolveResponse(
-                resolved_text=resolved_text,
-                variables_used=variables_used,
-                missing_variables=missing_variables
-            )
+            return VariableResolveResponse(resolved_text=resolved_text, variables_used=variables_used, missing_variables=missing_variables)
 
         except SQLAlchemyError as e:
             logger.error(f"解析变量失败: {e!s}")
@@ -814,9 +663,7 @@ class ApiEnvironmentService:
             全局环境列表
         """
         try:
-            global_envs = db.query(GlobalApiEnvironment).filter(
-                GlobalApiEnvironment.is_active == True
-            ).order_by(GlobalApiEnvironment.name).all()
+            global_envs = db.query(GlobalApiEnvironment).filter(GlobalApiEnvironment.is_active == True).order_by(GlobalApiEnvironment.name).all()
 
             return [GlobalEnvironmentResponse.model_validate(env.to_dict()) for env in global_envs]
 

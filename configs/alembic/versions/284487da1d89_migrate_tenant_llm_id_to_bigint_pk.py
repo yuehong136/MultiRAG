@@ -5,6 +5,7 @@ Revises: aae5b5f0d916
 Create Date: 2026-03-23 16:03:55.917868
 
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -12,8 +13,8 @@ from alembic import op
 from sqlalchemy.engine.reflection import Inspector
 
 # revision identifiers, used by Alembic.
-revision: str = '284487da1d89'
-down_revision: str | None = 'aae5b5f0d916'
+revision: str = "284487da1d89"
+down_revision: str | None = "aae5b5f0d916"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -98,24 +99,26 @@ def upgrade() -> None:
 
     if pk_columns != BUSINESS_KEY or not _is_varchar_id(id_column):
         raise RuntimeError(
-            f"Unexpected {TABLE} schema before migration: pk={pk_columns}, "
-            f"id_type={id_column.get('type') if id_column else None}. "
-            "This migration expects the legacy Python-only schema."
+            f"Unexpected {TABLE} schema before migration: pk={pk_columns}, id_type={id_column.get('type') if id_column else None}. This migration expects the legacy Python-only schema."
         )
 
     _drop_pk_if_present(pk_name)
     op.drop_column(TABLE, "id", schema=SCHEMA)
 
     if dialect_name == "postgresql":
-        op.execute(sa.text(f"""
+        op.execute(
+            sa.text(f"""
             ALTER TABLE {SCHEMA}.{TABLE}
             ADD COLUMN id BIGSERIAL PRIMARY KEY
-        """))
+        """)
+        )
     elif dialect_name == "mysql":
-        op.execute(sa.text(f"""
+        op.execute(
+            sa.text(f"""
             ALTER TABLE {SCHEMA}.{TABLE}
             ADD COLUMN id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY FIRST
-        """))
+        """)
+        )
     else:
         raise RuntimeError(f"Unsupported dialect for migration: {dialect_name}")
 
@@ -133,10 +136,7 @@ def downgrade() -> None:
     id_column = columns.get("id")
 
     if pk_columns != ("id",) or not _is_integer_id(id_column):
-        raise RuntimeError(
-            f"Unexpected {TABLE} schema before downgrade: pk={pk_columns}, "
-            f"id_type={id_column.get('type') if id_column else None}."
-        )
+        raise RuntimeError(f"Unexpected {TABLE} schema before downgrade: pk={pk_columns}, id_type={id_column.get('type') if id_column else None}.")
 
     _drop_business_key_index_if_present(insp)
     _drop_pk_if_present(pk_name)
@@ -145,17 +145,21 @@ def downgrade() -> None:
     op.add_column(TABLE, sa.Column("id", sa.String(length=128), nullable=True), schema=SCHEMA)
 
     if dialect_name == "postgresql":
-        op.execute(sa.text(f"""
+        op.execute(
+            sa.text(f"""
             UPDATE {SCHEMA}.{TABLE}
             SET id = md5(random()::text || clock_timestamp()::text || tenant_id || llm_factory || coalesce(llm_name, ''))
             WHERE id IS NULL
-        """))
+        """)
+        )
     elif dialect_name == "mysql":
-        op.execute(sa.text(f"""
+        op.execute(
+            sa.text(f"""
             UPDATE {SCHEMA}.{TABLE}
             SET id = REPLACE(UUID(), '-', '')
             WHERE id IS NULL
-        """))
+        """)
+        )
     else:
         raise RuntimeError(f"Unsupported dialect for migration: {dialect_name}")
 

@@ -26,7 +26,6 @@ from common.decorator import singleton
 
 @singleton
 class InfinityConnectionPool:
-
     def __init__(self):
         if hasattr(settings, "INFINITY"):
             self.INFINITY_CONFIG = settings.INFINITY

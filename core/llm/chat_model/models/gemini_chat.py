@@ -30,6 +30,7 @@ class GeminiChat(Base):
         if gen_conf is None:
             gen_conf = {}
         from google.generativeai.types import content_types
+
         system = history[0]["content"] if history and history[0]["role"] == "system" else ""
         hist = []
         for item in history:
@@ -59,6 +60,7 @@ class GeminiChat(Base):
                     raise e
                 else:
                     import time
+
                     time.sleep(50)
 
     def chat_streamly(self, system, history, gen_conf=None, **kwargs):

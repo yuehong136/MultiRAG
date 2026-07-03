@@ -108,8 +108,8 @@ class DropboxConnector(LoadConnector, PollConnector):
             # Use full path only if filename appears multiple times
             if filename_counts.get(entry.name, 0) > 1:
                 # Remove leading slash and replace slashes with ' / '
-                relative_path = entry.path_display.lstrip('/')
-                semantic_id = relative_path.replace('/', ' / ') if relative_path else entry.name
+                relative_path = entry.path_display.lstrip("/")
+                semantic_id = relative_path.replace("/", " / ") if relative_path else entry.name
             else:
                 semantic_id = entry.name
 

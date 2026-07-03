@@ -25,7 +25,6 @@ def index_name(uid: str):
 
 
 class MessageService:
-
     @classmethod
     def has_index(cls, uid: str, memory_id: str):
         index = index_name(uid)
@@ -44,10 +43,7 @@ class MessageService:
     @classmethod
     def insert_message(cls, messages: list[dict], uid: str, memory_id: str):
         index = index_name(uid)
-        [
-            m.update({"id": f'{memory_id}_{m["message_id"]}', "status": 1 if m["status"] else 0})
-            for m in messages
-        ]
+        [m.update({"id": f"{memory_id}_{m['message_id']}", "status": 1 if m["status"] else 0}) for m in messages]
         return settings.msgStoreConn.insert(messages, index, memory_id)
 
     @classmethod
@@ -154,9 +150,7 @@ class MessageService:
         return {"message_list": raw_messages, "total_count": total_count}
 
     @classmethod
-    def get_recent_messages(
-        cls, uid_list: list[str], memory_ids: list[str], agent_id: str, session_id: str, limit: int
-    ):
+    def get_recent_messages(cls, uid_list: list[str], memory_ids: list[str], agent_id: str, session_id: str, limit: int):
         index_names = [index_name(uid) for uid in uid_list]
         condition_dict = {"agent_id": agent_id, "session_id": session_id}
         order_by = OrderByExpr()
@@ -361,12 +355,7 @@ class MessageService:
     def get_missing_field_messages(cls, memory_id: str, uid: str, field_name: str):
         select_fields = ["message_id", "content"]
         _index_name = index_name(uid)
-        res = settings.msgStoreConn.get_missing_field_message(
-            select_fields=select_fields,
-            index_name=_index_name,
-            memory_id=memory_id,
-            field_name=field_name
-        )
+        res = settings.msgStoreConn.get_missing_field_message(select_fields=select_fields, index_name=_index_name, memory_id=memory_id, field_name=field_name)
         if not res:
             return []
         docs = settings.msgStoreConn.get_fields(res, select_fields)

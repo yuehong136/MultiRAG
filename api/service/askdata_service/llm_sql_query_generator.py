@@ -21,8 +21,8 @@ class NLQToInitialSQLGenerator:
     """使用大语言模型生成SQL查询的服务类，基于语义层和用户问题"""
 
     # JSON模式，匹配JSON代码块
-    JSON_PATTERN = re.compile(r'```json\s*([\s\S]*?)```')
-    PERMISSION_FIELD_PATTERN = re.compile(r'\[([^\[\]]+)\]')
+    JSON_PATTERN = re.compile(r"```json\s*([\s\S]*?)```")
+    PERMISSION_FIELD_PATTERN = re.compile(r"\[([^\[\]]+)\]")
 
     def __init__(self, db: Session, user_id: Any, prompt_dir: str = None, database_type: str = "PostgreSQL"):
         """
@@ -40,9 +40,9 @@ class NLQToInitialSQLGenerator:
         if not sql:
             return sql
         sql = sql.strip()
-        if not sql.endswith(';'):
-            sql += ';'
-        sql = re.sub(r'\n\s*\n', '\n', sql)
+        if not sql.endswith(";"):
+            sql += ";"
+        sql = re.sub(r"\n\s*\n", "\n", sql)
         return sql
 
     def _extract_llm_response_json(self, response: str) -> dict | None:
@@ -71,10 +71,10 @@ class NLQToInitialSQLGenerator:
 
         # 3. 尝试查找以'{'开头, '}'结尾的最大块
         try:
-            start = response.find('{')
-            end = response.rfind('}')
+            start = response.find("{")
+            end = response.rfind("}")
             if start != -1 and end != -1 and end > start:
-                json_str = response[start:end + 1]
+                json_str = response[start : end + 1]
                 return json.loads(json_str)
         except json.JSONDecodeError:
             logger.warning("无法从LLM响应中提取任何有效的JSON数据")
@@ -89,7 +89,7 @@ class NLQToInitialSQLGenerator:
             logger.warning(f"期望得到字典格式的JSON，但实际类型为 {type(json_data)}")
             return None
 
-        sql = json_data.get('sql')
+        sql = json_data.get("sql")
         if not sql or not isinstance(sql, str):
             logger.warning("JSON中缺少必须的'sql'字段或其类型不是字符串。")
             return None
@@ -98,7 +98,7 @@ class NLQToInitialSQLGenerator:
         component_keys = ["select", "from", "where", "groupBy", "having", "orderBy", "limit"]
 
         # 获取sqlComponents，如果不存在则为空字典
-        sql_components = json_data.get('sqlComponents', {})
+        sql_components = json_data.get("sqlComponents", {})
         if not isinstance(sql_components, dict):
             logger.warning("sqlComponents不是一个字典，将视为空处理。")
             sql_components = {}
@@ -109,11 +109,7 @@ class NLQToInitialSQLGenerator:
                 sql_components[key] = ""
 
         # 构建返回数据，保留所有原始字段
-        result = {
-            "sql": self._clean_sql(sql),
-            "usedModels": json_data.get('usedModels', []) or [],
-            "sqlComponents": sql_components
-        }
+        result = {"sql": self._clean_sql(sql), "usedModels": json_data.get("usedModels", []) or [], "sqlComponents": sql_components}
 
         # 保留其他可能的字段（如 queryComplexity 等）
         for key, value in json_data.items():
@@ -151,11 +147,7 @@ class NLQToInitialSQLGenerator:
             return False
 
         error_message = json_data.get("errorMessage") or ""
-        referenced_fields = {
-            field_name.strip()
-            for field_name in self.PERMISSION_FIELD_PATTERN.findall(error_message)
-            if field_name and field_name.strip()
-        }
+        referenced_fields = {field_name.strip() for field_name in self.PERMISSION_FIELD_PATTERN.findall(error_message) if field_name and field_name.strip()}
         if not referenced_fields:
             return False
 
@@ -176,15 +168,9 @@ class NLQToInitialSQLGenerator:
                 "你所引用的字段并不在此列表中，不能返回 CRITICAL_PERMISSION_DENIED。"
                 "请基于上述语义层信息重新生成可执行的 SQL 查询 JSON。"
             )
-        return (
-            "你的回答有误。语义层中所有维度和指标的 hasPermission 均为 true，"
-            "没有任何字段被标记为无权限。你不能返回 CRITICAL_PERMISSION_DENIED。"
-            "请基于上述语义层信息重新生成可执行的 SQL 查询 JSON。"
-        )
+        return "你的回答有误。语义层中所有维度和指标的 hasPermission 均为 true，没有任何字段被标记为无权限。你不能返回 CRITICAL_PERMISSION_DENIED。请基于上述语义层信息重新生成可执行的 SQL 查询 JSON。"
 
-    async def generate_sql_query(self, user_query: str, semantic_layer: dict[str, Any],
-                                llm_name: str, recommended_chart: str) -> \
-            dict[str, Any] | None:
+    async def generate_sql_query(self, user_query: str, semantic_layer: dict[str, Any], llm_name: str, recommended_chart: str) -> dict[str, Any] | None:
         """
         根据用户问题和语义层信息生成SQL查询及使用的模型信息。
 
@@ -197,59 +183,36 @@ class NLQToInitialSQLGenerator:
             包含sql, usedModels, 和 sqlComponents 的字典, 如果生成失败则返回None
         """
         try:
-
             prompt_template = None
             if recommended_chart == "明细表":
-                prompt_template = PromptTemplateUtil.load_template_from_file(
-                    os.path.join(self.prompt_dir, "nlq_to_initial_sql.txt")
-                )
+                prompt_template = PromptTemplateUtil.load_template_from_file(os.path.join(self.prompt_dir, "nlq_to_initial_sql.txt"))
             elif recommended_chart == "聚合表":
-                prompt_template = PromptTemplateUtil.load_template_from_file(
-                    os.path.join(self.prompt_dir, "nlq_to_initial_sql_table-aggr.txt")
-                )
+                prompt_template = PromptTemplateUtil.load_template_from_file(os.path.join(self.prompt_dir, "nlq_to_initial_sql_table-aggr.txt"))
             semantic_layer_str = json.dumps(semantic_layer, ensure_ascii=False, indent=2)
 
             prompt = PromptTemplateUtil.fill_template(
-                prompt_template,
-                {
-                    "user_query": user_query,
-                    "semantic_layer": semantic_layer_str,
-                    "current_date": date.today().strftime("%Y-%m-%d"),
-                    "database_type": self.database_type
-                }
+                prompt_template, {"user_query": user_query, "semantic_layer": semantic_layer_str, "current_date": date.today().strftime("%Y-%m-%d"), "database_type": self.database_type}
             )
             logger.debug("[sql_generation] user_query=%s, chart=%s", user_query, recommended_chart)
 
             # 检查性能缓存
             from api.service.askdata_service.cache import perf_cache
+
             cached = perf_cache.get(prompt, namespace="sql_generation")
             if cached is not None:
                 logger.info("PerfCache命中，跳过LLM调用 [sql_generation]")
                 return cached
 
-            gen_conf = {
-                "temperature": 0.1,
-                "top_p": 0.9,
-                "max_tokens": 4096
-            }
+            gen_conf = {"temperature": 0.1, "top_p": 0.9, "max_tokens": 4096}
 
             async def _request_llm(history: list[dict[str, str]]) -> str:
                 def _chat_in_thread():
                     # 在线程中创建独立的数据库会话和LLM实例
                     # 这样可以避免多线程共享数据库会话导致的事务状态冲突
                     with db_connection() as thread_db:
-                        model_config = get_model_config_by_type_and_name(
-                            thread_db,
-                            self.user_id,
-                            LLMType.CHAT.value,
-                            llm_name
-                        )
+                        model_config = get_model_config_by_type_and_name(thread_db, self.user_id, LLMType.CHAT.value, llm_name)
                         thread_llm_instance = LLMBundle(thread_db, self.user_id, model_config)
-                        return thread_llm_instance.chat(
-                            system="你是一个专业的SQL专家。请根据用户需求和语义层信息生成准确的SQL查询JSON对象。",
-                            history=history,
-                            gen_conf=gen_conf
-                        )
+                        return thread_llm_instance.chat(system="你是一个专业的SQL专家。请根据用户需求和语义层信息生成准确的SQL查询JSON对象。", history=history, gen_conf=gen_conf)
 
                 return await thread_pool_exec(_chat_in_thread)
 
@@ -263,10 +226,7 @@ class NLQToInitialSQLGenerator:
                 return None
             if json_response.get("status") == "failed":
                 if not self._is_permission_denial_grounded(json_response, semantic_layer):
-                    logger.warning(
-                        "检测到未经语义层权限支持的权限拒绝，触发多轮纠正重试。error=%s",
-                        json_response.get("errorMessage")
-                    )
+                    logger.warning("检测到未经语义层权限支持的权限拒绝，触发多轮纠正重试。error=%s", json_response.get("errorMessage"))
                     correction = self._build_permission_correction_prompt(semantic_layer)
                     retry_history = [
                         {"role": "user", "content": prompt},
@@ -288,10 +248,13 @@ class NLQToInitialSQLGenerator:
                 logger.error(f"提取的JSON未能通过验证。原始JSON: {json_response}")
                 return None
 
-            logger.debug("[sql_generation] 生成结果: sql=%s, usedModels=%s, complexity=%s, components=%s",
-                         validated_data.get('sql'), validated_data.get('usedModels'),
-                         validated_data.get('queryComplexity'),
-                         json.dumps(validated_data.get('sqlComponents', {}), ensure_ascii=False))
+            logger.debug(
+                "[sql_generation] 生成结果: sql=%s, usedModels=%s, complexity=%s, components=%s",
+                validated_data.get("sql"),
+                validated_data.get("usedModels"),
+                validated_data.get("queryComplexity"),
+                json.dumps(validated_data.get("sqlComponents", {}), ensure_ascii=False),
+            )
             logger.info("成功生成并验证了SQL及其组件。")
             # 缓存成功的结果（failed 不缓存）
             perf_cache.set(prompt, validated_data, namespace="sql_generation")
@@ -313,13 +276,13 @@ class NLQToInitialSQLGenerator:
 
         sql_upper = sql.upper().strip()
 
-        if not sql_upper.startswith('SELECT'):
+        if not sql_upper.startswith("SELECT"):
             return False, "SQL查询必须以SELECT开头"
 
-        if 'FROM' not in sql_upper:
+        if "FROM" not in sql_upper:
             return False, "SQL查询缺少必需的关键字: FROM"
 
-        if sql.count('(') != sql.count(')'):
+        if sql.count("(") != sql.count(")"):
             return False, "SQL查询中括号不匹配"
 
         return True, "SQL语法验证通过"
@@ -343,8 +306,7 @@ class NLQToInitialSQLGenerator:
     #
     #     return result, is_valid, message
 
-    async def fix_sql_query_with_components(self, user_query: str, original_sql: str, error_message: str,
-                                            semantic_layer: dict[str, Any], llm_name: str) -> dict[str, Any] | None:
+    async def fix_sql_query_with_components(self, user_query: str, original_sql: str, error_message: str, semantic_layer: dict[str, Any], llm_name: str) -> dict[str, Any] | None:
         """
         修复执行失败的SQL查询
 
@@ -358,9 +320,7 @@ class NLQToInitialSQLGenerator:
             包含修复后sql, usedModels, 和 sqlComponents 的字典, 如果修复失败则返回None
         """
         try:
-            prompt_template = PromptTemplateUtil.load_template_from_file(
-                os.path.join(self.prompt_dir, "sql_error_fix.txt")
-            )
+            prompt_template = PromptTemplateUtil.load_template_from_file(os.path.join(self.prompt_dir, "sql_error_fix.txt"))
 
             semantic_layer_str = json.dumps(semantic_layer, ensure_ascii=False, indent=2)
 
@@ -372,8 +332,8 @@ class NLQToInitialSQLGenerator:
                     "error_message": error_message,
                     "semantic_layer": semantic_layer_str,
                     "current_date": date.today().strftime("%Y-%m-%d"),
-                    "database_type": self.database_type
-                }
+                    "database_type": self.database_type,
+                },
             )
             logger.debug("[sql_fix] original_sql=%s, error=%s", original_sql, error_message)
 
@@ -381,7 +341,7 @@ class NLQToInitialSQLGenerator:
             gen_conf = {
                 "temperature": 0.1,  # 低温度以确保修复的准确性
                 "top_p": 0.9,
-                "max_tokens": 4096
+                "max_tokens": 4096,
             }
 
             # 定义在独立线程中执行的函数，使用独立的数据库会话
@@ -391,11 +351,7 @@ class NLQToInitialSQLGenerator:
                 with db_connection() as thread_db:
                     model_config = get_model_config_by_type_and_name(thread_db, self.user_id, LLMType.CHAT.value, llm_name)
                     thread_llm_instance = LLMBundle(thread_db, self.user_id, model_config)
-                    return thread_llm_instance.chat(
-                        system="你是一个专业的SQL修复专家。请根据错误信息和语义层信息修复SQL查询，输出JSON格式的结果。",
-                        history=history,
-                        gen_conf=gen_conf
-                    )
+                    return thread_llm_instance.chat(system="你是一个专业的SQL修复专家。请根据错误信息和语义层信息修复SQL查询，输出JSON格式的结果。", history=history, gen_conf=gen_conf)
 
             response = await thread_pool_exec(_chat_in_thread)
             logger.debug("[sql_fix] LLM原始响应: %s", response)
@@ -410,8 +366,7 @@ class NLQToInitialSQLGenerator:
                 logger.error(f"提取的JSON未能通过验证。原始JSON: {json_response}")
                 return None
 
-            logger.debug("[sql_fix] 修复结果: sql=%s, usedModels=%s",
-                         validated_data.get('sql'), validated_data.get('usedModels'))
+            logger.debug("[sql_fix] 修复结果: sql=%s, usedModels=%s", validated_data.get("sql"), validated_data.get("usedModels"))
             logger.info("成功修复SQL查询。")
             return validated_data
 

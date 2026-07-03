@@ -16,13 +16,7 @@ router = APIRouter()
 
 
 @router.post("/convert", summary="转换文件", response_description="成功转换文件")
-def convert(
-        kb_ids: list[str],
-        file_ids: list[str],
-        background_tasks: BackgroundTasks,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def convert(kb_ids: list[str], file_ids: list[str], background_tasks: BackgroundTasks, db: Session = Depends(get_db), user=Depends(manager)):
     """
     转换文件。
 
@@ -61,11 +55,7 @@ def convert(
 
 
 @router.post("/rm", summary="删除文件", response_description="成功删除文件")
-def rm(
-        file_ids: list[str],
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def rm(file_ids: list[str], db: Session = Depends(get_db), user=Depends(manager)):
     """
     删除文件。
 
@@ -76,8 +66,7 @@ def rm(
     - JSON: 文件删除结果的JSON响应。
     """
     if not file_ids:
-        return get_json_result(
-            data=False, retmsg='Lack of "Files ID"', retcode=RetCode.ARGUMENT_ERROR)
+        return get_json_result(data=False, retmsg='Lack of "Files ID"', retcode=RetCode.ARGUMENT_ERROR)
     try:
         for file_id in file_ids:
             informs = File2DocumentService.get_by_file_id(db, file_id)
@@ -94,8 +83,7 @@ def rm(
                 if not tenant_id:
                     return get_data_error_result(retmsg="Tenant not found!")
                 if not DocumentService.remove_document(db, doc, tenant_id):
-                    return get_data_error_result(
-                        retmsg="Database error (Document removal)!")
+                    return get_data_error_result(retmsg="Database error (Document removal)!")
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)

@@ -67,9 +67,7 @@ async def run_graphrag(
     try:
         subgraph = await asyncio.wait_for(
             generate_subgraph(
-                LightKGExt if "method" not in row["kb_parser_config"].get("graphrag", {})
-                    or row["kb_parser_config"]["graphrag"]["method"] != "general"
-                else GeneralKGExt,
+                LightKGExt if "method" not in row["kb_parser_config"].get("graphrag", {}) or row["kb_parser_config"]["graphrag"]["method"] != "general" else GeneralKGExt,
                 tenant_id,
                 kb_id,
                 doc_id,
@@ -143,17 +141,17 @@ async def run_graphrag(
 
 
 async def run_graphrag_for_kb(
-        row: dict,
-        doc_ids: list[str],
-        language: str,
-        kb_parser_config: dict,
-        chat_model,
-        embedding_model,
-        callback,
-        *,
-        with_resolution: bool = True,
-        with_community: bool = True,
-        max_parallel_docs: int = 4,
+    row: dict,
+    doc_ids: list[str],
+    language: str,
+    kb_parser_config: dict,
+    chat_model,
+    embedding_model,
+    callback,
+    *,
+    with_resolution: bool = True,
+    with_community: bool = True,
+    max_parallel_docs: int = 4,
 ) -> dict:
     tenant_id, kb_id = row["tenant_id"], row["kb_id"]
     enable_timeout_assertion = os.environ.get("ENABLE_TIMEOUT_ASSERTION")
@@ -189,14 +187,16 @@ async def run_graphrag_for_kb(
         current_chunk = ""
 
         # DEBUG: Obtener todos los chunks primero
-        raw_chunks = list(settings.retriever.chunk_list(
-            doc_id,
-            tenant_id,
-            [kb_id],
-            max_count=10000,  # FIX: Aumentar límite para procesar todos los chunks
-            fields=fields_for_chunks,
-            sort_by_position=True,
-        ))
+        raw_chunks = list(
+            settings.retriever.chunk_list(
+                doc_id,
+                tenant_id,
+                [kb_id],
+                max_count=10000,  # FIX: Aumentar límite para procesar todos los chunks
+                fields=fields_for_chunks,
+                sort_by_position=True,
+            )
+        )
 
         callback(msg=f"[DEBUG] chunk_list() returned {len(raw_chunks)} raw chunks for doc {doc_id}")
 
@@ -240,9 +240,7 @@ async def run_graphrag_for_kb(
             callback(msg=f"[GraphRAG] doc:{doc_id} has no available chunks, skip generation.")
             return
 
-        kg_extractor = LightKGExt if (
-                    "method" not in kb_parser_config.get("graphrag", {}) or kb_parser_config["graphrag"][
-                "method"] != "general") else GeneralKGExt
+        kg_extractor = LightKGExt if ("method" not in kb_parser_config.get("graphrag", {}) or kb_parser_config["graphrag"]["method"] != "general") else GeneralKGExt
 
         deadline = max(120, len(chunks) * 60 * 10) if enable_timeout_assertion else 10000000000
 
@@ -264,7 +262,7 @@ async def run_graphrag_for_kb(
                             chat_model,
                             embedding_model,
                             callback,
-                            task_id=row["id"]
+                            task_id=row["id"],
                         ),
                         timeout=deadline,
                     )
@@ -306,8 +304,7 @@ async def run_graphrag_for_kb(
     if not ok_docs:
         callback(msg=f"[GraphRAG] kb:{kb_id} no subgraphs generated successfully, end.")
         now = asyncio.get_running_loop().time()
-        return {"ok_docs": [], "failed_docs": failed_docs, "total_docs": len(doc_ids), "total_chunks": total_chunks,
-                "seconds": now - start}
+        return {"ok_docs": [], "failed_docs": failed_docs, "total_docs": len(doc_ids), "total_chunks": total_chunks, "seconds": now - start}
 
     kb_lock = RedisDistributedLock(f"graphrag_task_{kb_id}", lock_value="batch_merge", timeout=1200)
     await kb_lock.spin_acquire()
@@ -388,8 +385,7 @@ async def run_graphrag_for_kb(
         kb_lock.release()
 
     now = asyncio.get_running_loop().time()
-    callback(
-        msg=f"[GraphRAG] GraphRAG for KB {kb_id} done in {now - start:.2f} seconds. ok={len(ok_docs)} failed={len(failed_docs)} total_docs={len(doc_ids)} total_chunks={total_chunks}")
+    callback(msg=f"[GraphRAG] GraphRAG for KB {kb_id} done in {now - start:.2f} seconds. ok={len(ok_docs)} failed={len(failed_docs)} total_docs={len(doc_ids)} total_chunks={total_chunks}")
     return {
         "ok_docs": ok_docs,
         "failed_docs": failed_docs,  # [(doc_id, error), ...]
@@ -473,8 +469,18 @@ async def generate_subgraph(
         kb_name = kb.name
 
     index_name = search.index_name(tenant_id, [kb_name])
-    await thread_pool_exec(settings.docStoreConn.delete,{"knowledge_graph_kwd": "subgraph", "source_id": doc_id}, index_name, kb_id,)
-    await thread_pool_exec(settings.docStoreConn.insert,[{"id": cid, **chunk}], index_name, kb_id,)
+    await thread_pool_exec(
+        settings.docStoreConn.delete,
+        {"knowledge_graph_kwd": "subgraph", "source_id": doc_id},
+        index_name,
+        kb_id,
+    )
+    await thread_pool_exec(
+        settings.docStoreConn.insert,
+        [{"id": cid, **chunk}],
+        index_name,
+        kb_id,
+    )
     now = asyncio.get_running_loop().time()
     callback(msg=f"generated subgraph for doc {doc_id} in {now - start:.2f} seconds.")
     return subgraph
@@ -482,12 +488,12 @@ async def generate_subgraph(
 
 @timeout(60 * 3)
 async def merge_subgraph(
-        tenant_id: str,
-        kb_id: str,
-        doc_id: str,
-        subgraph: nx.Graph,
-        embedding_model,
-        callback,
+    tenant_id: str,
+    kb_id: str,
+    doc_id: str,
+    subgraph: nx.Graph,
+    embedding_model,
+    callback,
 ):
     start = asyncio.get_running_loop().time()
     change = GraphChange()
@@ -610,10 +616,20 @@ async def extract_community(
         kb_name = kb.name
 
     index_name = search.index_name(tenant_id, [kb_name])
-    await thread_pool_exec(settings.docStoreConn.delete,{"knowledge_graph_kwd": "community_report", "kb_id": kb_id}, index_name, kb_id,)
+    await thread_pool_exec(
+        settings.docStoreConn.delete,
+        {"knowledge_graph_kwd": "community_report", "kb_id": kb_id},
+        index_name,
+        kb_id,
+    )
     es_bulk_size = 4
     for b in range(0, len(chunks), es_bulk_size):
-        doc_store_result = await thread_pool_exec(settings.docStoreConn.insert,chunks[b : b + es_bulk_size], index_name, kb_id,)
+        doc_store_result = await thread_pool_exec(
+            settings.docStoreConn.insert,
+            chunks[b : b + es_bulk_size],
+            index_name,
+            kb_id,
+        )
         if doc_store_result:
             error_message = f"Insert chunk error: {doc_store_result}, please check log file and Elasticsearch/Infinity status!"
             raise Exception(error_message)

@@ -5,6 +5,7 @@
 @date：2024/7/22 16:02
 @desc: API 管理接口
 """
+
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -39,7 +40,7 @@ class RemoveTokenRequest(BaseModel):
 router = APIRouter()
 
 
-@router.post('/new_token', summary="生成新的API令牌", response_description="成功生成新的API令牌")
+@router.post("/new_token", summary="生成新的API令牌", response_description="成功生成新的API令牌")
 def new_token(request: NewTokenRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     生成新的API令牌
@@ -62,13 +63,15 @@ def new_token(request: NewTokenRequest, db: Session = Depends(get_db), user=Depe
         tenant_id = tenants[0].tenant_id
         current_ts = current_timestamp()
         current_date = datetime_format(datetime.now())
-        obj = {"tenant_id": tenant_id, "token": generate_confirmation_token(),
-               "dialog_id": request.tenant_id,
-               "create_time": current_ts,
-               "create_date": current_date,
-               "update_time": None,
-               "update_date": None
-               }
+        obj = {
+            "tenant_id": tenant_id,
+            "token": generate_confirmation_token(),
+            "dialog_id": request.tenant_id,
+            "create_time": current_ts,
+            "create_date": current_date,
+            "update_time": None,
+            "update_date": None,
+        }
         if request.canvas_id:
             obj["dialog_id"] = request.canvas_id
             obj["source"] = "agent"
@@ -82,13 +85,8 @@ def new_token(request: NewTokenRequest, db: Session = Depends(get_db), user=Depe
         return server_error_response(e)
 
 
-@router.get('/token_list', summary="获取API令牌列表", response_description="成功获取API令牌列表")
-def token_list(
-    dialog_id: str | None = Query(None, alias="dialog_id"),
-    canvas_id: str | None = Query(None, alias="canvas_id"),
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-):
+@router.get("/token_list", summary="获取API令牌列表", response_description="成功获取API令牌列表")
+def token_list(dialog_id: str | None = Query(None, alias="dialog_id"), canvas_id: str | None = Query(None, alias="canvas_id"), db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取API令牌列表
 
@@ -118,47 +116,45 @@ def token_list(
         return server_error_response(e)
 
 
-@router.post('/rm', summary="删除API令牌", response_description="成功删除API令牌")
+@router.post("/rm", summary="删除API令牌", response_description="成功删除API令牌")
 def rm(request: RemoveTokenRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
-   删除API令牌
+    删除API令牌
 
-   该接口用于删除指定租户的API令牌。
+    该接口用于删除指定租户的API令牌。
 
-   参数:
-   - request: RemoveTokenRequest对象，包含要删除的API令牌和租户的唯一标识符
-       - tokens: List[str] 要删除的API令牌列表
-       - tenant_id: str 租户的唯一标识符
+    参数:
+    - request: RemoveTokenRequest对象，包含要删除的API令牌和租户的唯一标识符
+        - tokens: List[str] 要删除的API令牌列表
+        - tenant_id: str 租户的唯一标识符
 
-   返回:
-   - 成功时返回成功删除的JSON结果
-   - 失败时返回错误信息
-   """
+    返回:
+    - 成功时返回成功删除的JSON结果
+    - 失败时返回错误信息
+    """
     try:
         for token in request.tokens:
-            APITokenService.filter_delete(
-                db,
-                [APIToken.tenant_id == request.tenant_id, APIToken.token == token])
+            APITokenService.filter_delete(db, [APIToken.tenant_id == request.tenant_id, APIToken.token == token])
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)
 
 
-@router.get('/stats', summary="获取API使用统计", response_description="成功获取API使用统计")
+@router.get("/stats", summary="获取API使用统计", response_description="成功获取API使用统计")
 def stats(from_date: str = None, to_date: str = None, canvas_id: str = None, db: Session = Depends(get_db), user=Depends(manager)):
     """
-   获取API使用统计
+    获取API使用统计
 
-   该接口用于获取API的使用统计信息。
+    该接口用于获取API的使用统计信息。
 
-   参数:
-   - from_date: str 起始日期，格式为 YYYY-MM-DD，默认为过去7天
-   - to_date: str 结束日期，格式为 YYYY-MM-DD，默认为当前日期
+    参数:
+    - from_date: str 起始日期，格式为 YYYY-MM-DD，默认为过去7天
+    - to_date: str 结束日期，格式为 YYYY-MM-DD，默认为当前日期
 
-   返回:
-   - 成功时返回包含API使用统计的JSON结果
-   - 失败时返回错误信息
-   """
+    返回:
+    - 成功时返回包含API使用统计的JSON结果
+    - 失败时返回错误信息
+    """
     try:
         tenants = UserTenantService.query(db, user_id=user.id)
         if not tenants:
@@ -174,8 +170,8 @@ def stats(from_date: str = None, to_date: str = None, canvas_id: str = None, db:
             dt = obj["dt"]
             res["pv"].append((dt, obj["pv"]))
             res["uv"].append((dt, obj["uv"]))
-            res["speed"].append((dt, float(obj["tokens"]) / (float(obj["duration"]) + 0.1))) # +0.1 to avoid division by zero
-            res["tokens"].append((dt, float(obj["tokens"]) / 1000.0)) # convert to thousands
+            res["speed"].append((dt, float(obj["tokens"]) / (float(obj["duration"]) + 0.1)))  # +0.1 to avoid division by zero
+            res["tokens"].append((dt, float(obj["tokens"]) / 1000.0))  # convert to thousands
             res["round"].append((dt, obj["round"]))
             res["thumb_up"].append((dt, obj["thumb_up"]))
 

@@ -5,11 +5,7 @@ from typing import Any
 from api.utils.prompt_template_util import PromptTemplateUtil
 
 
-def generate_nl2sql_prompt(
-        user_question: str,
-        query_intents: list[dict[str, str]],
-        semantic_layer: dict[str, Any]
-):
+def generate_nl2sql_prompt(user_question: str, query_intents: list[dict[str, str]], semantic_layer: dict[str, Any]):
     # 确定模板完整路径
     prompt_dir = os.path.join(os.path.dirname(__file__), "prompt")
 
@@ -46,21 +42,14 @@ def process_data_models(models: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     for model_data in models:
         # 构建每个 dataModel 的基本结构
-        data_model = {
-            "name": model_data.get("modelName"),
-            "table": model_data.get("tableName"),
-            "fields": []
-        }
+        data_model = {"name": model_data.get("modelName"), "table": model_data.get("tableName"), "fields": []}
 
         # 处理 fields
         if model_data.get("fields"):
             for field_data in model_data["fields"]:
-                processed_field = {
-                    "name": field_data.get("fieldName"),
-                    "type": field_data.get("dataType")
-                }
+                processed_field = {"name": field_data.get("fieldName"), "type": field_data.get("dataType")}
                 # 检查 is_pk 字段并转换为布尔值
-                if field_data.get("is_pk") == '1':
+                if field_data.get("is_pk") == "1":
                     processed_field["isPrimary"] = True
                 else:
                     # 如果 is_pk 不是 '1'，则不包含 isPrimary 字段或设为 False
@@ -78,12 +67,7 @@ def process_data_models(models: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return data_models_output
 
 
-def process_business_datasets(
-        dataset_details,
-        dimensions,
-        metrics,
-        dimension_values
-) -> list[dict[str, Any]]:
+def process_business_datasets(dataset_details, dimensions, metrics, dimension_values) -> list[dict[str, Any]]:
     business_datasets_output = []
     for dataset_detail in dataset_details:
         business_dataset = {}
@@ -162,16 +146,10 @@ def process_semantic_layer(semantic_layer: dict[str, Any]) -> dict[str, Any]:
     model_relations = semantic_layer.get("model_relations")
     business_term_rows = semantic_layer.get("business_term_rows")
 
-    semantic_structure = {
-        "dataModels": [],
-        "businessDatasets": [],
-        "relationships": [],
-        "businessTerms": []
-    }
+    semantic_structure = {"dataModels": [], "businessDatasets": [], "relationships": [], "businessTerms": []}
 
     semantic_structure["dataModels"] = process_data_models(model_details)
-    semantic_structure["businessDatasets"] = process_business_datasets(dataset_details, dimensions, metrics,
-                                                                       dimension_values)
+    semantic_structure["businessDatasets"] = process_business_datasets(dataset_details, dimensions, metrics, dimension_values)
     semantic_structure["relationships"] = process_relationships(model_relations)
     semantic_structure["businessTerms"] = process_business_terms(business_term_rows)
 

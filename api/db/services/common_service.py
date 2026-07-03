@@ -73,13 +73,10 @@ def retry_db_operation(max_attempts=3, min_wait=1, max_wait=5):
             # 关键业务操作
             pass
     """
+
     def decorator(func):
         def _before_sleep(retry_state):
-            logger.warning(
-                f"[DB Retry] {func.__name__} 执行失败，"
-                f"{retry_state.next_action.sleep:.1f}秒后重试 "
-                f"(第 {retry_state.attempt_number}/{max_attempts} 次重试)"
-            )
+            logger.warning(f"[DB Retry] {func.__name__} 执行失败，{retry_state.next_action.sleep:.1f}秒后重试 (第 {retry_state.attempt_number}/{max_attempts} 次重试)")
 
         @retry(
             stop=stop_after_attempt(max_attempts),
@@ -97,7 +94,9 @@ def retry_db_operation(max_attempts=3, min_wait=1, max_wait=5):
                 if db is not None:
                     _safe_rollback(db, func.__name__)
                 raise
+
         return wrapper
+
     return decorator
 
 
@@ -176,6 +175,7 @@ def retry_transient_tx_conflict(max_attempts: int = 3, base_delay: float = 0.1, 
 # Define a TypeVar bound to db_models.BaseModel for better type hinting
 ModelType = TypeVar("ModelType", bound=db_models.BaseModel)
 
+
 class CommonService(Generic[ModelType]):
     model: type[ModelType]
 
@@ -191,8 +191,7 @@ class CommonService(Generic[ModelType]):
         return datetime.now(UTC)
 
     @classmethod
-    def query(cls, db: Session, cols: list[str] | None = None, reverse: bool | None = None,
-              order_by: str | InstrumentedAttribute | None = None, **kwargs) -> list[ModelType] | list[Row]:
+    def query(cls, db: Session, cols: list[str] | None = None, reverse: bool | None = None, order_by: str | InstrumentedAttribute | None = None, **kwargs) -> list[ModelType] | list[Row]:
         """
         根据条件查询数据库中的记录（SQLAlchemy 2.0 Core 风格）。
 
@@ -356,7 +355,7 @@ class CommonService(Generic[ModelType]):
 
         # SQLAlchemy 2.0 Core 风格：使用 insert().values() 批量插入
         for i in range(0, len(data_list), batch_size):
-            batch = data_list[i:i + batch_size]
+            batch = data_list[i : i + batch_size]
             stmt = insert(cls.model).values(batch)
             db.execute(stmt)
             db.commit()
@@ -511,11 +510,10 @@ class CommonService(Generic[ModelType]):
 
     @classmethod
     def cut_list(cls, tar_list: list[Any], n: int) -> list[tuple]:
-        return [tuple(tar_list[i:i + n]) for i in range(0, len(tar_list), n)]
+        return [tuple(tar_list[i : i + n]) for i in range(0, len(tar_list), n)]
 
     @classmethod
-    def filter_scope_list(cls, db: Session, in_key: str, in_filters_list: list[Any], filters: list | None = None,
-                          cols: list[str] | None = None) -> list[Row] | list[ModelType]:
+    def filter_scope_list(cls, db: Session, in_key: str, in_filters_list: list[Any], filters: list | None = None, cols: list[str] | None = None) -> list[Row] | list[ModelType]:
         """
         根据 IN 条件和其他过滤条件批量查询记录（SQLAlchemy 2.0 Core 风格）。
         """

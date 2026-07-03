@@ -262,11 +262,7 @@ class GptV4(Base):
 
     def describe(self, image):
         b64 = self.image2base64(image)
-        res = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=self.prompt(b64),
-            extra_body=self.extra_body
-        )
+        res = self.client.chat.completions.create(model=self.model_name, messages=self.prompt(b64), extra_body=self.extra_body)
         return res.choices[0].message.content.strip(), total_token_count_from_response(res)
 
     def describe_with_prompt(self, image, prompt=None):
@@ -720,7 +716,7 @@ class OllamaCV(Base):
         if not isinstance(img, str):
             return img
 
-        #remove the header like "data/*;base64,"
+        # remove the header like "data/*;base64,"
         if img.startswith("data:") and ";base64," in img:
             img = img.split(";base64,")[1]
         return img
@@ -780,7 +776,9 @@ class OllamaCV(Base):
 
     async def async_chat(self, system, history, gen_conf, images=None, **kwargs):
         try:
-            response = await thread_pool_exec(self.client.chat, model=self.model_name, messages=self._form_history(system, history, images), options=self._clean_conf(gen_conf), keep_alive=self.keep_alive)
+            response = await thread_pool_exec(
+                self.client.chat, model=self.model_name, messages=self._form_history(system, history, images), options=self._clean_conf(gen_conf), keep_alive=self.keep_alive
+            )
 
             ans = response["message"]["content"].strip()
             return ans, response["eval_count"] + response.get("prompt_eval_count", 0)
@@ -790,7 +788,9 @@ class OllamaCV(Base):
     async def async_chat_streamly(self, system, history, gen_conf, images=None, **kwargs):
         ans = ""
         try:
-            response = await thread_pool_exec(self.client.chat, model=self.model_name, messages=self._form_history(system, history, images), stream=True, options=self._clean_conf(gen_conf), keep_alive=self.keep_alive)
+            response = await thread_pool_exec(
+                self.client.chat, model=self.model_name, messages=self._form_history(system, history, images), stream=True, options=self._clean_conf(gen_conf), keep_alive=self.keep_alive
+            )
             for resp in response:
                 if resp["done"]:
                     yield resp.get("prompt_eval_count", 0) + resp.get("eval_count", 0)
@@ -1240,6 +1240,7 @@ class GoogleCV(AnthropicCV, GeminiCV):
                 self.client = AnthropicVertex(region=region, project_id=project_id)
         else:
             from google import genai
+
             if access_token:
                 credits = service_account.Credentials.from_service_account_info(access_token, scopes=scopes)
                 self.client = genai.Client(vertexai=True, project=project_id, location=region, credentials=credits)
@@ -1290,6 +1291,7 @@ class RAGconCV(GptV4):
     Supports vision models through LiteLLM.
     Default Base URL: https://connect.ragcon.ai/v1
     """
+
     _FACTORY_NAME = "RAGcon"
 
     def __init__(self, key, model_name, lang="Chinese", base_url="", **kwargs):

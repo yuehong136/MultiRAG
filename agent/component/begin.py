@@ -19,10 +19,10 @@ from api.db.services.file_service import FileService
 
 
 class BeginParam(UserFillUpParam):
-
     """
     Define the Begin component parameters.
     """
+
     def __init__(self):
         super().__init__()
         self.mode = "conversational"

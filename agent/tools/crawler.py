@@ -32,7 +32,7 @@ class CrawlerParam(ToolParamBase):
         self.extract_type = "markdown"
 
     def check(self):
-        self.check_valid_value(self.extract_type, "Type of content from the crawler", ['html', 'markdown', 'content'])
+        self.check_valid_value(self.extract_type, "Type of content from the crawler", ["html", "markdown", "content"])
 
 
 class Crawler(ToolBase, ABC):
@@ -40,6 +40,7 @@ class Crawler(ToolBase, ABC):
 
     def _run(self, history, **kwargs):
         from api.utils.web_utils import is_valid_url
+
         ans = self.get_input()
         ans = " - ".join(ans["content"]) if "content" in ans else ""
         if not is_valid_url(ans):
@@ -58,18 +59,15 @@ class Crawler(ToolBase, ABC):
 
         proxy = self._param.proxy if self._param.proxy else None
         async with AsyncWebCrawler(verbose=True, proxy=proxy) as crawler:
-            result = await crawler.arun(
-                url=url,
-                bypass_cache=True
-            )
+            result = await crawler.arun(url=url, bypass_cache=True)
 
             if self.check_if_canceled("Crawler async operation"):
                 return
 
-            if self._param.extract_type == 'html':
+            if self._param.extract_type == "html":
                 return result.cleaned_html
-            elif self._param.extract_type == 'markdown':
+            elif self._param.extract_type == "markdown":
                 return result.markdown
-            elif self._param.extract_type == 'content':
+            elif self._param.extract_type == "content":
                 return result.extracted_content
             return result.markdown

@@ -65,14 +65,7 @@ class GroupTitleChunker(BaseTitleChunker):
                 continue
 
             token_count = num_tokens_from_string(text)
-            should_merge = (
-                record_groups
-                and record_groups[-1][0]["doc_type_kwd"] == "text"
-                and (
-                    tk_cnt < MIN_GROUP_TOKENS
-                    or (tk_cnt < MAX_GROUP_TOKENS and sec_id == last_sid)
-                )
-            )
+            should_merge = record_groups and record_groups[-1][0]["doc_type_kwd"] == "text" and (tk_cnt < MIN_GROUP_TOKENS or (tk_cnt < MAX_GROUP_TOKENS and sec_id == last_sid))
 
             if should_merge:
                 record_groups[-1].append(record)

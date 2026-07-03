@@ -5,6 +5,7 @@ Revises: ed48e0b671e8
 Create Date: 2025-10-20 11:06:41.926684
 
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -12,8 +13,8 @@ from alembic import op
 from sqlalchemy import Inspector, String, Text
 
 # revision identifiers, used by Alembic.
-revision: str = '670aba2a7087'
-down_revision: str | None = 'ed48e0b671e8'
+revision: str = "670aba2a7087"
+down_revision: str | None = "ed48e0b671e8"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -23,18 +24,19 @@ TABLE_NAME = "t_ai_canvas_templates"
 SCHEMA = "usr_ai"
 # =====================================
 
+
 def _json_type_for(dialect_name: str):
     """选择合适的 JSON 类型（示例代码风格保留多方言处理）"""
-    if dialect_name == 'postgresql':
+    if dialect_name == "postgresql":
         return sa.dialects.postgresql.JSONB
-    elif dialect_name == 'mysql':
+    elif dialect_name == "mysql":
         return sa.JSON
-    elif dialect_name == 'sqlite':
+    elif dialect_name == "sqlite":
         # sqlite 无原生 JSON 类型，通常以 TEXT 存储
         return sa.Text
-    elif dialect_name == 'oracle':
+    elif dialect_name == "oracle":
         return sa.CLOB
-    elif dialect_name == 'mssql':
+    elif dialect_name == "mssql":
         # SQL Server 以 NVARCHAR/TEXT 形式存 JSON 字符串
         return sa.Text
     return sa.JSON
@@ -54,25 +56,11 @@ def upgrade() -> None:
         # 如果列存在，则删除后用 JSON 类型重建（无数据时最简单稳妥）
         if "title" in cols:
             batch.drop_column("title")
-        batch.add_column(
-            sa.Column(
-                "title",
-                json_type,
-                nullable=True,
-                comment="Canvas title (JSON)"
-            )
-        )
+        batch.add_column(sa.Column("title", json_type, nullable=True, comment="Canvas title (JSON)"))
 
         if "description" in cols:
             batch.drop_column("description")
-        batch.add_column(
-            sa.Column(
-                "description",
-                json_type,
-                nullable=True,
-                comment="Canvas description (JSON)"
-            )
-        )
+        batch.add_column(sa.Column("description", json_type, nullable=True, comment="Canvas description (JSON)"))
 
     # 说明：默认值建议仍在 ORM 层使用 default=lambda: {}（而非 DB 层默认）
 

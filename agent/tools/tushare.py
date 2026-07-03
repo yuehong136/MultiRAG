@@ -37,8 +37,7 @@ class TuShareParam(ComponentParamBase):
         self.keyword = ""
 
     def check(self):
-        self.check_valid_value(self.src, "Quick News Source",
-                               ["sina", "wallstreetcn", "10jqka", "eastmoney", "yuncaijing", "fenghuang", "jinrongjie"])
+        self.check_valid_value(self.src, "Quick News Source", ["sina", "wallstreetcn", "10jqka", "eastmoney", "yuncaijing", "fenghuang", "jinrongjie"])
 
 
 class TuShare(ComponentBase, ABC):
@@ -58,23 +57,18 @@ class TuShare(ComponentBase, ABC):
                 return
 
             tus_res = []
-            params = {
-                "api_name": "news",
-                "token": self._param.token,
-                "params": {"src": self._param.src, "start_date": self._param.start_date,
-                           "end_date": self._param.end_date}
-            }
-            response = requests.post(url="http://api.tushare.pro", data=json.dumps(params).encode('utf-8'))
+            params = {"api_name": "news", "token": self._param.token, "params": {"src": self._param.src, "start_date": self._param.start_date, "end_date": self._param.end_date}}
+            response = requests.post(url="http://api.tushare.pro", data=json.dumps(params).encode("utf-8"))
             response = response.json()
             if self.check_if_canceled("TuShare processing"):
                 return
-            if response['code'] != 0:
-                return TuShare.be_output(response['msg'])
-            df = pd.DataFrame(response['data']['items'])
-            df.columns = response['data']['fields']
+            if response["code"] != 0:
+                return TuShare.be_output(response["msg"])
+            df = pd.DataFrame(response["data"]["items"])
+            df.columns = response["data"]["fields"]
             if self.check_if_canceled("TuShare processing"):
                 return
-            tus_res.append({"content": (df[df['content'].str.contains(self._param.keyword, case=False)]).to_markdown()})
+            tus_res.append({"content": (df[df["content"].str.contains(self._param.keyword, case=False)]).to_markdown()})
         except Exception as e:
             if self.check_if_canceled("TuShare processing"):
                 return

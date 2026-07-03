@@ -192,23 +192,11 @@ class PipelineOperationLogService(CommonService):
 
             if total > limit:
                 # Get IDs to keep
-                keep_ids_query = (
-                    db.query(cls.model.id)
-                    .filter(cls.model.kb_id == document.kb_id)
-                    .order_by(sa_desc(cls.model.create_time))
-                    .limit(limit)
-                )
+                keep_ids_query = db.query(cls.model.id).filter(cls.model.kb_id == document.kb_id).order_by(sa_desc(cls.model.create_time)).limit(limit)
                 keep_ids = [row.id for row in keep_ids_query.all()]
 
                 # Delete old logs
-                deleted = (
-                    db.query(cls.model)
-                    .filter(
-                        cls.model.kb_id == document.kb_id,
-                        cls.model.id.notin_(keep_ids)
-                    )
-                    .delete(synchronize_session=False)
-                )
+                deleted = db.query(cls.model).filter(cls.model.kb_id == document.kb_id, cls.model.id.notin_(keep_ids)).delete(synchronize_session=False)
                 logging.info(f"[PipelineOperationLogService] Cleaned {deleted} old logs, kept latest {limit} for {document.kb_id}")
 
             db.commit()
@@ -232,10 +220,7 @@ class PipelineOperationLogService(CommonService):
 
         # Apply filters
         if keywords:
-            query = query.filter(
-                cls.model.kb_id == kb_id,
-                func.lower(cls.model.document_name).contains(keywords.lower())
-            )
+            query = query.filter(cls.model.kb_id == kb_id, func.lower(cls.model.document_name).contains(keywords.lower()))
         else:
             query = query.filter(cls.model.kb_id == kb_id)
 
@@ -274,24 +259,16 @@ class PipelineOperationLogService(CommonService):
     @classmethod
     def get_documents_info(cls, db: Session, id):
         fields = [Document.id, Document.name, Document.progress, Document.kb_id]
-        query = (
-            db.query(*fields)
-            .select_from(cls.model)
-            .join(Document, cls.model.document_id == Document.id)
-            .filter(cls.model.id == id)
-        )
+        query = db.query(*fields).select_from(cls.model).join(Document, cls.model.document_id == Document.id).filter(cls.model.id == id)
         results = query.all()
-        return [dict(zip(['id', 'name', 'progress', 'kb_id'], row)) for row in results]
+        return [dict(zip(["id", "name", "progress", "kb_id"], row)) for row in results]
 
     @classmethod
     def get_dataset_logs_by_kb_id(cls, db: Session, kb_id, page_number, items_per_page, orderby, is_desc, operation_status, create_date_from=None, create_date_to=None):
         fields = cls.get_dataset_logs_fields()
 
         # Build query
-        query = db.query(*fields).filter(
-            cls.model.kb_id == kb_id,
-            cls.model.document_id == GRAPH_RAPTOR_FAKE_DOC_ID
-        )
+        query = db.query(*fields).filter(cls.model.kb_id == kb_id, cls.model.document_id == GRAPH_RAPTOR_FAKE_DOC_ID)
 
         # Apply filters
         if operation_status:

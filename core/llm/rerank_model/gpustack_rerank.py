@@ -9,9 +9,7 @@ from core.llm.rerank_model.base import Base
 
 
 class GPUStackRerank(Base):
-    def __init__(
-            self, key, model_name, base_url
-    ):
+    def __init__(self, key, model_name, base_url):
         if not base_url:
             raise ValueError("url cannot be None")
 
@@ -32,9 +30,7 @@ class GPUStackRerank(Base):
         }
 
         try:
-            response = requests.post(
-                self.base_url, json=payload, headers=self.headers
-            )
+            response = requests.post(self.base_url, json=payload, headers=self.headers)
             response.raise_for_status()
             response_json = response.json()
 
@@ -55,6 +51,4 @@ class GPUStackRerank(Base):
             )
 
         except httpx.HTTPStatusError as e:
-            raise ValueError(
-                f"Error calling GPUStackRerank model {self.model_name}: {e.response.status_code} - {e.response.text}")
-
+            raise ValueError(f"Error calling GPUStackRerank model {self.model_name}: {e.response.status_code} - {e.response.text}")

@@ -5,6 +5,7 @@
 @date：2025/01/11 16:00
 @desc: AI安全护栏维度管理服务
 """
+
 import logging
 from typing import Any
 
@@ -18,12 +19,11 @@ from common.misc_utils import get_uuid
 
 class GuardDimensionService(CommonService):
     """AI安全护栏维度管理服务"""
+
     model = GuardDimension
 
     @classmethod
-    def create_dimension(cls, db: Session, code: str, name: str,
-                        description: str | None = None, tenant_id: str | None = None,
-                        created_by: str | None = None, **kwargs) -> str | None:
+    def create_dimension(cls, db: Session, code: str, name: str, description: str | None = None, tenant_id: str | None = None, created_by: str | None = None, **kwargs) -> str | None:
         """
         创建护栏维度
 
@@ -56,7 +56,7 @@ class GuardDimensionService(CommonService):
                 "enabled": kwargs.get("enabled", True),
                 "config": kwargs.get("config", {}),
                 "sort_order": kwargs.get("sort_order", 0),
-                "status": kwargs.get("status", "1")
+                "status": kwargs.get("status", "1"),
             }
 
             dimension = cls.save(db, **dimension_data)
@@ -67,8 +67,7 @@ class GuardDimensionService(CommonService):
             return None
 
     @classmethod
-    def get_dimension_by_code(cls, db: Session, code: str,
-                             tenant_id: str) -> GuardDimension | None:
+    def get_dimension_by_code(cls, db: Session, code: str, tenant_id: str) -> GuardDimension | None:
         """
         根据代码获取维度
 
@@ -81,13 +80,7 @@ class GuardDimensionService(CommonService):
             维度对象或None
         """
         try:
-            return db.query(cls.model).filter(
-                and_(
-                    cls.model.code == code,
-                    cls.model.tenant_id == tenant_id,
-                    cls.model.status == "1"
-                )
-            ).first()
+            return db.query(cls.model).filter(and_(cls.model.code == code, cls.model.tenant_id == tenant_id, cls.model.status == "1")).first()
         except Exception as e:
             logging.error(f"获取维度失败: {e}")
             return None
@@ -105,20 +98,13 @@ class GuardDimensionService(CommonService):
             启用的维度列表
         """
         try:
-            return db.query(cls.model).filter(
-                and_(
-                    cls.model.tenant_id == tenant_id,
-                    cls.model.enabled == True,
-                    cls.model.status == "1"
-                )
-            ).order_by(cls.model.sort_order.asc()).all()
+            return db.query(cls.model).filter(and_(cls.model.tenant_id == tenant_id, cls.model.enabled == True, cls.model.status == "1")).order_by(cls.model.sort_order.asc()).all()
         except Exception as e:
             logging.error(f"获取启用维度失败: {e}")
             return []
 
     @classmethod
-    def get_dimensions_by_tenant(cls, db: Session, tenant_id: str,
-                                enabled_only: bool = False) -> list[GuardDimension]:
+    def get_dimensions_by_tenant(cls, db: Session, tenant_id: str, enabled_only: bool = False) -> list[GuardDimension]:
         """
         获取租户的维度列表
 
@@ -131,12 +117,7 @@ class GuardDimensionService(CommonService):
             维度列表
         """
         try:
-            query = db.query(cls.model).filter(
-                and_(
-                    cls.model.tenant_id == tenant_id,
-                    cls.model.status == "1"
-                )
-            )
+            query = db.query(cls.model).filter(and_(cls.model.tenant_id == tenant_id, cls.model.status == "1"))
 
             if enabled_only:
                 query = query.filter(cls.model.enabled == True)
@@ -147,8 +128,7 @@ class GuardDimensionService(CommonService):
             return []
 
     @classmethod
-    def update_dimension(cls, db: Session, dimension_id: str,
-                        update_data: dict[str, Any]) -> int:
+    def update_dimension(cls, db: Session, dimension_id: str, update_data: dict[str, Any]) -> int:
         """
         更新维度信息
 
@@ -228,15 +208,14 @@ class GuardDimensionService(CommonService):
                 "total_dimensions": len(dimensions),
                 "enabled_dimensions": enabled_count,
                 "disabled_dimensions": len(dimensions) - enabled_count,
-                "dimension_codes": [d.code for d in dimensions if d.enabled]
+                "dimension_codes": [d.code for d in dimensions if d.enabled],
             }
         except Exception as e:
             logging.error(f"获取维度统计失败: {e}")
             return {}
 
     @classmethod
-    def init_default_dimensions(cls, db: Session, tenant_id: str,
-                               created_by: str) -> list[str]:
+    def init_default_dimensions(cls, db: Session, tenant_id: str, created_by: str) -> list[str]:
         """
         初始化默认维度
 
@@ -254,44 +233,27 @@ class GuardDimensionService(CommonService):
                 "name": "内容合规",
                 "description": "检测政治、色情、暴力等不合规内容",
                 "sort_order": 1,
-                "config": {
-                    "detection_types": ["political", "pornographic", "violent"],
-                    "default_action": "block",
-                    "risk_threshold": 80
-                }
+                "config": {"detection_types": ["political", "pornographic", "violent"], "default_action": "block", "risk_threshold": 80},
             },
             {
                 "code": "SENSITIVE_CONTENT",
                 "name": "敏感内容",
                 "description": "检测个人隐私信息、敏感数据等",
                 "sort_order": 2,
-                "config": {
-                    "detection_types": ["pii", "credentials", "financial"],
-                    "default_action": "replace",
-                    "risk_threshold": 70
-                }
+                "config": {"detection_types": ["pii", "credentials", "financial"], "default_action": "replace", "risk_threshold": 70},
             },
             {
                 "code": "PROMPT_ATTACK",
                 "name": "提示词攻击",
                 "description": "检测提示词注入、越狱等攻击行为",
                 "sort_order": 3,
-                "config": {
-                    "detection_types": ["injection", "jailbreak", "manipulation"],
-                    "default_action": "block",
-                    "risk_threshold": 90
-                }
-            }
+                "config": {"detection_types": ["injection", "jailbreak", "manipulation"], "default_action": "block", "risk_threshold": 90},
+            },
         ]
 
         created_ids = []
         for dimension_data in default_dimensions:
-            dimension_id = cls.create_dimension(
-                db=db,
-                tenant_id=tenant_id,
-                created_by=created_by,
-                **dimension_data
-            )
+            dimension_id = cls.create_dimension(db=db, tenant_id=tenant_id, created_by=created_by, **dimension_data)
             if dimension_id:
                 created_ids.append(dimension_id)
 

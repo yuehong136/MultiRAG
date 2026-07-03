@@ -19,6 +19,7 @@ from core.llm import ChatModel, CvModel, EmbeddingModel, OcrModel, RerankModel, 
 
 class LLMFactoriesService(CommonService):
     model = LLMFactories
+
     def __init__(self):
         super().__init__(TenantLLM)
 
@@ -64,13 +65,10 @@ class TenantLLMService(CommonService):
         obj = db.execute(stmt).scalars().first()
 
         if obj is None and fid and (suffix := cls._FACTORY_SUFFIX.get(fid)):
-            stmt = (
-                select(cls.model)
-                .where(
-                    cls.model.tenant_id == tenant_id,
-                    cls.model.llm_name == mdlnm + suffix,
-                    cls.model.llm_factory == fid,
-                )
+            stmt = select(cls.model).where(
+                cls.model.tenant_id == tenant_id,
+                cls.model.llm_name == mdlnm + suffix,
+                cls.model.llm_factory == fid,
             )
             if model_type_value is not None:
                 stmt = stmt.where(cls.model.mdl_type == model_type_value)
@@ -121,6 +119,7 @@ class TenantLLMService(CommonService):
     @classmethod
     def get_model_config(cls, db: Session, tenant_id, llm_type, llm_name=None):
         from api.db.services.llm_service import LLMService
+
         tenant = TenantService.get_by_id(db, tenant_id)
         if not tenant:
             raise LookupError("Tenant not found")
@@ -150,7 +149,7 @@ class TenantLLMService(CommonService):
             model_config = cls.get_api_key(db, tenant_id, mdlnm, llm_type)
         if model_config:
             model_config = model_config.to_dict()
-        elif llm_type == LLMType.EMBEDDING.value and fid == "Builtin" and "tei-" in os.getenv("COMPOSE_PROFILES", "") and mdlnm == os.getenv("TEI_MODEL", ''):
+        elif llm_type == LLMType.EMBEDDING.value and fid == "Builtin" and "tei-" in os.getenv("COMPOSE_PROFILES", "") and mdlnm == os.getenv("TEI_MODEL", ""):
             embedding_cfg = settings.EMBEDDING_CFG
             model_config = {"llm_factory": "Builtin", "api_key": embedding_cfg["api_key"], "llm_name": mdlnm, "api_base": embedding_cfg["base_url"]}
         else:
@@ -247,16 +246,12 @@ class TenantLLMService(CommonService):
             mdlnm = llm_map.get(llm_type)
 
         if not mdlnm:
-            logging.error(
-                f"LLM type error or empty model: llm_type={llm_type}, tenant_id={tenant_id}, llm_name={llm_name}"
-            )
+            logging.error(f"LLM type error or empty model: llm_type={llm_type}, tenant_id={tenant_id}, llm_name={llm_name}")
             return None
 
         model_name, llm_factory = TenantLLMService.split_model_name_and_factory(mdlnm)
         if not model_name:
-            logging.error(
-                f"Resolved empty model name: llm_type={llm_type}, tenant_id={tenant_id}, llm_name={mdlnm}"
-            )
+            logging.error(f"Resolved empty model name: llm_type={llm_type}, tenant_id={tenant_id}, llm_name={mdlnm}")
             return None
 
         return cls.UsageIdentity(
@@ -290,10 +285,7 @@ class TenantLLMService(CommonService):
 
         except Exception as e:
             # 任何异常都不应向上抛出
-            logging.error(
-                f"TenantLLMService.increase_usage unexpected error (ignored), "
-                f"tenant_id={tenant_id}, llm_type={llm_type}, llm_name={llm_name}, used_tokens={used_tokens}: {e}"
-            )
+            logging.error(f"TenantLLMService.increase_usage unexpected error (ignored), tenant_id={tenant_id}, llm_type={llm_type}, llm_name={llm_name}, used_tokens={used_tokens}: {e}")
             return 0
 
     @classmethod
@@ -326,19 +318,12 @@ class TenantLLMService(CommonService):
                 return 0
 
             with db_connection() as usage_db:
-                stmt = (
-                    update(cls.model)
-                    .where(cls.model.id == tenant_model_id)
-                    .values(used_tokens=cls.model.used_tokens + used_tokens)
-                )
+                stmt = update(cls.model).where(cls.model.id == tenant_model_id).values(used_tokens=cls.model.used_tokens + used_tokens)
                 result = usage_db.execute(stmt)
                 usage_db.commit()
                 return result.rowcount
         except Exception as e:
-            logging.error(
-                "TenantLLMService.increase_usage_by_id unexpected error (ignored), "
-                f"id={tenant_model_id}, used_tokens={used_tokens}: {e}"
-            )
+            logging.error(f"TenantLLMService.increase_usage_by_id unexpected error (ignored), id={tenant_model_id}, used_tokens={used_tokens}: {e}")
             return 0
 
     @classmethod
@@ -376,12 +361,10 @@ class TenantLLMService(CommonService):
                 error_msg = str(e)
                 if "IndexCorrupted" in error_msg or "invalid duplicate tuple" in error_msg:
                     if attempt < max_retries - 1:
-                        logging.warning(
-                            f"索引损坏错误,正在重试 ({attempt + 1}/{max_retries}): "
-                            f"tenant_id={identity.tenant_id}, llm_name={identity.model_name}"
-                        )
+                        logging.warning(f"索引损坏错误,正在重试 ({attempt + 1}/{max_retries}): tenant_id={identity.tenant_id}, llm_name={identity.model_name}")
                         import time
-                        time.sleep(0.1 * (2 ** attempt))
+
+                        time.sleep(0.1 * (2**attempt))
                         continue
 
                     logging.error(
@@ -393,10 +376,7 @@ class TenantLLMService(CommonService):
                     return 0
 
                 # 其他错误：best-effort，不影响主链路
-                logging.exception(
-                    "TenantLLMService.increase_usage 记录用量失败（已忽略），"
-                    f"tenant_id={identity.tenant_id}, llm_name={identity.model_name}"
-                )
+                logging.exception(f"TenantLLMService.increase_usage 记录用量失败（已忽略），tenant_id={identity.tenant_id}, llm_name={identity.model_name}")
                 return 0
 
         return 0
@@ -410,9 +390,7 @@ class TenantLLMService(CommonService):
     def delete_by_tenant_id(cls, db: Session, tenant_id: str) -> int:
         """根据tenant_id删除所有相关的LLM配置记录"""
         try:
-            result = db.query(cls.model).filter(
-                cls.model.tenant_id == tenant_id
-            ).delete(synchronize_session=False)
+            result = db.query(cls.model).filter(cls.model.tenant_id == tenant_id).delete(synchronize_session=False)
             db.commit()
             return result
         except Exception as e:
@@ -423,6 +401,7 @@ class TenantLLMService(CommonService):
     @staticmethod
     def llm_id2llm_type(llm_id: str) -> str | None:
         from api.db.services.llm_service import LLMService
+
         llm_id, *_ = TenantLLMService.split_model_name_and_factory(llm_id)
         llm_factories = settings.FACTORY_LLM_INFOS
         for llm_factory in llm_factories:
@@ -500,7 +479,6 @@ class TenantLLMService(CommonService):
                 used_names.add(candidate)
                 idx += 1
                 continue
-
 
     @classmethod
     def _collect_paddleocr_env_config(cls) -> dict | None:
@@ -619,13 +597,7 @@ class LLM4Tenant:
         - 这里仅在 Session *没有待提交变更* 时 rollback，避免影响上层显式写事务
         """
         try:
-            if (
-                self.db is not None
-                and self.db.in_transaction()
-                and not self.db.dirty
-                and not self.db.new
-                and not self.db.deleted
-            ):
+            if self.db is not None and self.db.in_transaction() and not self.db.dirty and not self.db.new and not self.db.deleted:
                 self.db.rollback()
         except Exception as e:
             logging.debug(f"_release_db_before_long_io ignored: {type(e).__name__}: {e}")

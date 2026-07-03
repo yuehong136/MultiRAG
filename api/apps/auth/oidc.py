@@ -32,18 +32,19 @@ class OIDCClient(OAuthClient):
             raise ValueError("Missing issuer in configuration.")
 
         oidc_metadata = self._load_oidc_metadata(self.issuer)
-        config.update({
-            'issuer': oidc_metadata['issuer'],
-            'jwks_uri': oidc_metadata['jwks_uri'],
-            'authorization_url': oidc_metadata['authorization_endpoint'],
-            'token_url': oidc_metadata['token_endpoint'],
-            'userinfo_url': oidc_metadata['userinfo_endpoint']
-        })
+        config.update(
+            {
+                "issuer": oidc_metadata["issuer"],
+                "jwks_uri": oidc_metadata["jwks_uri"],
+                "authorization_url": oidc_metadata["authorization_endpoint"],
+                "token_url": oidc_metadata["token_endpoint"],
+                "userinfo_url": oidc_metadata["userinfo_endpoint"],
+            }
+        )
 
         super().__init__(config)
-        self.issuer = config['issuer']
-        self.jwks_uri = config['jwks_uri']
-
+        self.issuer = config["issuer"]
+        self.jwks_uri = config["jwks_uri"]
 
     @staticmethod
     def _load_oidc_metadata(issuer):
@@ -57,7 +58,6 @@ class OIDCClient(OAuthClient):
             return response.json()
         except Exception as e:
             raise ValueError(f"Failed to fetch OIDC metadata: {e}")
-
 
     def parse_id_token(self, id_token):
         """
@@ -86,7 +86,6 @@ class OIDCClient(OAuthClient):
         except Exception as e:
             raise ValueError(f"Error parsing ID Token: {e}")
 
-
     def fetch_user_info(self, access_token, id_token=None, **kwargs):
         """
         Fetch user info (synchronous).
@@ -108,7 +107,6 @@ class OIDCClient(OAuthClient):
         oauth_user_info = await super().async_fetch_user_info(access_token)
         user_info.update(oauth_user_info.to_dict())
         return self.normalize_user_info(user_info)
-
 
     def normalize_user_info(self, user_info):
         email = user_info.get("email")

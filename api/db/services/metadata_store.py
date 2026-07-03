@@ -36,8 +36,7 @@ class MetadataStore(ABC):
         """Return meta_fields dict for a single document, or {} if not found."""
 
     @abstractmethod
-    def upsert(self, db: Session, doc_id: str, tenant_id: str, kb_id: str,
-               meta_fields: dict) -> bool:
+    def upsert(self, db: Session, doc_id: str, tenant_id: str, kb_id: str, meta_fields: dict) -> bool:
         """Insert or update metadata for a document. Return True on success."""
 
     @abstractmethod
@@ -45,8 +44,7 @@ class MetadataStore(ABC):
         """Delete metadata for a document. Return True on success."""
 
     @abstractmethod
-    def list_by_kb_ids(self, db: Session, tenant_id: str,
-                       kb_ids: list[str]) -> list[tuple[str, dict]]:
+    def list_by_kb_ids(self, db: Session, tenant_id: str, kb_ids: list[str]) -> list[tuple[str, dict]]:
         """Return [(doc_id, meta_fields), ...] for all docs in the given kb_ids."""
 
     @abstractmethod

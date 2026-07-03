@@ -10,7 +10,7 @@ class StartNodeInputDefinition:
     variable_type: str
     required: bool
     description: str | None = None
-    schema: 'StartNodeInputDefinition' = None
+    schema: "StartNodeInputDefinition" = None
 
 
 @dataclass
@@ -34,15 +34,13 @@ class StartNode(Node[StartNodeParam]):
     def get_output_schema(self):
         pass
 
-    def decode(self, json: str) -> 'StartNode':
+    def decode(self, json: str) -> "StartNode":
         return self
 
 
 if __name__ == "__main__":
-    inputde1 = StartNodeInputDefinition(variable_name="BOT_USER_INPUT", variable_type="string",
-                                        description="用户本轮对话输入内容", required=False)
-    inputde2 = StartNodeInputDefinition(variable_name="INPUT", variable_type="string", description="测试input",
-                                        required=True)
+    inputde1 = StartNodeInputDefinition(variable_name="BOT_USER_INPUT", variable_type="string", description="用户本轮对话输入内容", required=False)
+    inputde2 = StartNodeInputDefinition(variable_name="INPUT", variable_type="string", description="测试input", required=True)
     input_definition = [inputde1, inputde2]
 
     node_param = StartNodeParam(input_definition_list=input_definition)

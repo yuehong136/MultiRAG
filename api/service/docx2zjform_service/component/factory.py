@@ -10,6 +10,7 @@ from .textarea import TextareaComponent
 
 class ComponentFactory:
     """组件工厂，负责创建各种类型的组件"""
+
     _component_types: dict[ComponentType, type[Component]] = {
         ComponentType.INPUT: InputComponent,
         ComponentType.DESCRIPTION: DescriptionComponent,

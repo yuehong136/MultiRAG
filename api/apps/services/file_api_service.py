@@ -12,6 +12,7 @@
     - success=False -> result 为错误信息字符串
   本层不返回 HTTP 响应对象（HTTP 包装交由 restful_apis/file_api.py 网关层完成）。
 """
+
 from __future__ import annotations
 
 import logging
@@ -120,16 +121,19 @@ def create_folder(db: Session, tenant_id: str, name: str, pf_id: str | None = No
     else:
         ft = FileType.VIRTUAL.value
 
-    file = FileService.insert(db, {
-        "id": get_uuid(),
-        "parent_id": pf_id,
-        "tenant_id": tenant_id,
-        "created_by": tenant_id,
-        "name": name,
-        "location": "",
-        "size": 0,
-        "type": ft,
-    })
+    file = FileService.insert(
+        db,
+        {
+            "id": get_uuid(),
+            "parent_id": pf_id,
+            "tenant_id": tenant_id,
+            "created_by": tenant_id,
+            "name": name,
+            "location": "",
+            "size": 0,
+            "type": ft,
+        },
+    )
     return True, file.to_dict()
 
 
@@ -189,6 +193,7 @@ def delete_files(db: Session, uid: str, file_ids: list[str]) -> tuple[bool, Any]
 
     :return: (True, True) 或 (False, error_message)
     """
+
     def _delete_single_file(file):
         try:
             if file.location:
@@ -269,8 +274,7 @@ def move_files(db: Session, uid: str, src_file_ids: list[str], dest_file_id: str
 
     if new_name:
         file = files_dict[src_file_ids[0]]
-        if file.type != FileType.FOLDER.value and \
-                pathlib.Path(new_name.lower()).suffix != pathlib.Path(file.name.lower()).suffix:
+        if file.type != FileType.FOLDER.value and pathlib.Path(new_name.lower()).suffix != pathlib.Path(file.name.lower()).suffix:
             return False, "The extension of file can't be changed"
         target_parent_id = dest_folder.id if dest_folder else file.parent_id
         for f in FileService.query(db, name=new_name, parent_id=target_parent_id):
@@ -285,16 +289,19 @@ def move_files(db: Session, uid: str, src_file_ids: list[str], dest_file_id: str
             if existing_folder:
                 new_folder = existing_folder[0]
             else:
-                new_folder = FileService.insert(db, {
-                    "id": get_uuid(),
-                    "parent_id": dest_folder_entry.id,
-                    "tenant_id": source_file_entry.tenant_id,
-                    "created_by": source_file_entry.tenant_id,
-                    "name": effective_name,
-                    "location": "",
-                    "size": 0,
-                    "type": FileType.FOLDER.value,
-                })
+                new_folder = FileService.insert(
+                    db,
+                    {
+                        "id": get_uuid(),
+                        "parent_id": dest_folder_entry.id,
+                        "tenant_id": source_file_entry.tenant_id,
+                        "created_by": source_file_entry.tenant_id,
+                        "name": effective_name,
+                        "location": "",
+                        "size": 0,
+                        "type": FileType.FOLDER.value,
+                    },
+                )
 
             sub_files = FileService.list_all_files_by_parent_id(db, source_file_entry.id)
             for sub_file in sub_files:
@@ -313,8 +320,10 @@ def move_files(db: Session, uid: str, src_file_ids: list[str], dest_file_id: str
                 new_location += "_"
             try:
                 settings.STORAGE_IMPL.move(
-                    source_file_entry.parent_id, source_file_entry.location,
-                    dest_folder_entry.id, new_location,
+                    source_file_entry.parent_id,
+                    source_file_entry.location,
+                    dest_folder_entry.id,
+                    new_location,
                 )
             except Exception as storage_err:
                 raise RuntimeError(f"Move file failed at storage layer: {storage_err!s}")

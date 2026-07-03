@@ -20,7 +20,7 @@ class QueryIntentAnalyzer:
     """负责分析用户查询意图并推荐合适图表类型的服务类"""
 
     # 编译正则表达式以提高性能
-    JSON_PATTERN = re.compile(r'```json\s*([\s\S]*?)```')
+    JSON_PATTERN = re.compile(r"```json\s*([\s\S]*?)```")
 
     def __init__(self, db: Session, user_id: Any, prompt_dir: str = None):
         """
@@ -113,13 +113,7 @@ class QueryIntentAnalyzer:
         chart_type, _ = self._extract_chart_recommendation(data, response, supported_charts)
         return chart_type
 
-    async def recommend_chart_with_reason(
-            self,
-            user_question: str,
-            supported_charts_list: list[str],
-            semantic_layer_info: dict,
-            llm_name: str
-    ) -> tuple[str, str | None]:
+    async def recommend_chart_with_reason(self, user_question: str, supported_charts_list: list[str], semantic_layer_info: dict, llm_name: str) -> tuple[str, str | None]:
         """
         分析用户查询意图并推荐合适的图表类型，同时返回推荐理由。
 
@@ -141,7 +135,7 @@ class QueryIntentAnalyzer:
             template_values = {
                 "USER_QUESTION": user_question,
                 "SUPPORTED_CHARTS_LIST": json.dumps(supported_charts_list, ensure_ascii=False),
-                "SEMANTIC_LAYER_INFO": json.dumps(semantic_layer_info, ensure_ascii=False, indent=2)
+                "SEMANTIC_LAYER_INFO": json.dumps(semantic_layer_info, ensure_ascii=False, indent=2),
             }
 
             # 填充模板
@@ -151,11 +145,7 @@ class QueryIntentAnalyzer:
             history = [{"role": "user", "content": prompt}]
 
             # LLM配置
-            gen_conf = {
-                "temperature": 0.1,
-                "top_p": 0.8,
-                "max_tokens": 1024
-            }
+            gen_conf = {"temperature": 0.1, "top_p": 0.8, "max_tokens": 1024}
 
             # 定义在独立线程中执行的函数，使用独立的数据库会话
             def _chat_in_thread():
@@ -164,11 +154,7 @@ class QueryIntentAnalyzer:
                 with db_connection() as thread_db:
                     model_config = get_model_config_by_type_and_name(thread_db, self.user_id, LLMType.CHAT.value, llm_name)
                     thread_llm_instance = LLMBundle(thread_db, self.user_id, model_config)
-                    return thread_llm_instance.chat(
-                        system="",
-                        history=history,
-                        gen_conf=gen_conf
-                    )
+                    return thread_llm_instance.chat(system="", history=history, gen_conf=gen_conf)
 
             # 调用LLM处理我们的提示词
             response = await thread_pool_exec(_chat_in_thread)
@@ -184,12 +170,7 @@ class QueryIntentAnalyzer:
             default_chart = supported_charts_list[0] if supported_charts_list else "指标卡"
             return default_chart, f"分析过程中发生错误: {e!s}"
 
-    async def recommend_chart_without_semantic(
-            self,
-            user_question: str,
-            supported_charts_list: list[str],
-            llm_name: str
-    ) -> tuple[str, str | None]:
+    async def recommend_chart_without_semantic(self, user_question: str, supported_charts_list: list[str], llm_name: str) -> tuple[str, str | None]:
         """
         不依赖语义层信息，仅基于用户问题推荐合适的图表类型。
 
@@ -207,16 +188,14 @@ class QueryIntentAnalyzer:
             prompt_template = PromptTemplateUtil.load_template_from_file(template_path)
 
             # 准备模板参数
-            template_values = {
-                "USER_QUESTION": user_question,
-                "SUPPORTED_CHARTS_LIST": json.dumps(supported_charts_list, ensure_ascii=False)
-            }
+            template_values = {"USER_QUESTION": user_question, "SUPPORTED_CHARTS_LIST": json.dumps(supported_charts_list, ensure_ascii=False)}
 
             # 填充模板
             prompt = PromptTemplateUtil.fill_template(prompt_template, template_values)
 
             # 检查性能缓存
             from api.service.askdata_service.cache import perf_cache
+
             cached = perf_cache.get(prompt, namespace="chart_recommendation")
             if cached is not None:
                 logger.info("PerfCache命中，跳过LLM调用 [chart_recommendation]")
@@ -226,11 +205,7 @@ class QueryIntentAnalyzer:
             history = [{"role": "user", "content": prompt}]
 
             # LLM配置
-            gen_conf = {
-                "temperature": 0.1,
-                "top_p": 0.8,
-                "max_tokens": 1024
-            }
+            gen_conf = {"temperature": 0.1, "top_p": 0.8, "max_tokens": 1024}
 
             # 定义在独立线程中执行的函数，使用独立的数据库会话
             def _chat_in_thread():
@@ -239,11 +214,7 @@ class QueryIntentAnalyzer:
                 with db_connection() as thread_db:
                     model_config = get_model_config_by_type_and_name(thread_db, self.user_id, LLMType.CHAT.value, llm_name)
                     thread_llm_instance = LLMBundle(thread_db, self.user_id, model_config)
-                    return thread_llm_instance.chat(
-                        system="",
-                        history=history,
-                        gen_conf=gen_conf
-                    )
+                    return thread_llm_instance.chat(system="", history=history, gen_conf=gen_conf)
 
             # 调用LLM处理我们的提示词
             response = await thread_pool_exec(_chat_in_thread)
@@ -263,13 +234,7 @@ class QueryIntentAnalyzer:
             default_chart = supported_charts_list[0] if supported_charts_list else "指标卡"
             return default_chart, f"分析过程中发生错误: {e!s}"
 
-    async def analyze_query_intent_with_details(
-            self,
-            user_question: str,
-            supported_charts_list: list[str],
-            semantic_layer_info: dict,
-            llm_name: str
-    ) -> dict[str, Any]:
+    async def analyze_query_intent_with_details(self, user_question: str, supported_charts_list: list[str], semantic_layer_info: dict, llm_name: str) -> dict[str, Any]:
         """
         分析用户查询意图并返回详细结果，包括推荐的图表类型、推荐理由和原始响应。
 
@@ -291,7 +256,7 @@ class QueryIntentAnalyzer:
             template_values = {
                 "USER_QUESTION": user_question,
                 "SUPPORTED_CHARTS_LIST": json.dumps(supported_charts_list, ensure_ascii=False),
-                "SEMANTIC_LAYER_INFO": json.dumps(semantic_layer_info, ensure_ascii=False, indent=2)
+                "SEMANTIC_LAYER_INFO": json.dumps(semantic_layer_info, ensure_ascii=False, indent=2),
             }
 
             # 填充模板
@@ -301,11 +266,7 @@ class QueryIntentAnalyzer:
             history = [{"role": "user", "content": prompt}]
 
             # LLM配置
-            gen_conf = {
-                "temperature": 0.1,
-                "top_p": 0.8,
-                "max_tokens": 1024
-            }
+            gen_conf = {"temperature": 0.1, "top_p": 0.8, "max_tokens": 1024}
 
             # 定义在独立线程中执行的函数，使用独立的数据库会话
             def _chat_in_thread():
@@ -314,20 +275,14 @@ class QueryIntentAnalyzer:
                 with db_connection() as thread_db:
                     model_config = get_model_config_by_type_and_name(thread_db, self.user_id, LLMType.CHAT.value, llm_name)
                     thread_llm_instance = LLMBundle(thread_db, self.user_id, model_config)
-                    return thread_llm_instance.chat(
-                        system="",
-                        history=history,
-                        gen_conf=gen_conf
-                    )
+                    return thread_llm_instance.chat(system="", history=history, gen_conf=gen_conf)
 
             # 调用LLM处理我们的提示词
             response = await thread_pool_exec(_chat_in_thread)
 
             # 提取和处理响应
             parsed_data, success = self._extract_json_from_response(response)
-            recommended_chart, recommendation_reason = self._extract_chart_recommendation(
-                parsed_data, response, supported_charts_list
-            )
+            recommended_chart, recommendation_reason = self._extract_chart_recommendation(parsed_data, response, supported_charts_list)
 
             return {
                 "recommended_chart": recommended_chart,
@@ -335,18 +290,11 @@ class QueryIntentAnalyzer:
                 "raw_response": response,
                 "parsed_data": parsed_data,
                 "parse_success": success,
-                "prompt_used": prompt
+                "prompt_used": prompt,
             }
 
         except Exception as e:
             logger.error(f"Error in analyze_query_intent_with_details: {e}", exc_info=True)
             # 发生错误时，返回默认结果
             default_chart = supported_charts_list[0] if supported_charts_list else "指标卡"
-            return {
-                "recommended_chart": default_chart,
-                "recommendation_reason": f"分析过程中发生错误: {e!s}",
-                "raw_response": "",
-                "parsed_data": None,
-                "parse_success": False,
-                "error": str(e)
-            }
+            return {"recommended_chart": default_chart, "recommendation_reason": f"分析过程中发生错误: {e!s}", "raw_response": "", "parsed_data": None, "parse_success": False, "error": str(e)}

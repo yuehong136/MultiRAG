@@ -5,12 +5,13 @@
 @date：2025/01/11 17:30
 @desc: 初始化AI安全护栏系统
 """
+
 import logging
 import os
 import sys
 
 # 添加项目根目录到Python路径
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from api.db.db_models import SessionLocal
 from api.db.services.guard_dimension_service import GuardDimensionService
@@ -20,10 +21,7 @@ from api.db.services.guard_rule_service import GuardRuleService
 from api.db.services.guard_service_service import GuardServiceService
 
 # 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -127,10 +125,7 @@ def main():
     args = parser.parse_args()
 
     try:
-        init_ai_guard_system(
-            tenant_id=args.tenant_id,
-            created_by=args.created_by
-        )
+        init_ai_guard_system(tenant_id=args.tenant_id, created_by=args.created_by)
     except Exception as e:
         logger.error(f"初始化失败: {e}")
         sys.exit(1)

@@ -95,7 +95,7 @@ def dict_has_keys_with_types(data: dict, expected_fields: list[tuple[str, type]]
 
 def get_llm_cache(llmnm, txt, history, genconf):
     hasher = xxhash.xxh64()
-    hasher.update((str(llmnm)+str(txt)+str(history)+str(genconf)).encode("utf-8"))
+    hasher.update((str(llmnm) + str(txt) + str(history) + str(genconf)).encode("utf-8"))
 
     k = hasher.hexdigest()
     bin = REDIS_CONN.get(k)
@@ -106,7 +106,7 @@ def get_llm_cache(llmnm, txt, history, genconf):
 
 def set_llm_cache(llmnm, txt, v, history, genconf):
     hasher = xxhash.xxh64()
-    hasher.update((str(llmnm)+str(txt)+str(history)+str(genconf)).encode("utf-8"))
+    hasher.update((str(llmnm) + str(txt) + str(history) + str(genconf)).encode("utf-8"))
     k = hasher.hexdigest()
     REDIS_CONN.set(k, v.encode("utf-8"), 24 * 3600)
 
@@ -318,10 +318,7 @@ async def graph_node_to_chunk(kb_id, embd_mdl, ent_name, meta, chunks):
     if ebd is None:
         async with chat_limiter:
             timeout = 3 if enable_timeout_assertion else 30000000
-            ebd, _ = await asyncio.wait_for(
-                thread_pool_exec(embd_mdl.encode, [ent_name]),
-                timeout=timeout
-            )
+            ebd, _ = await asyncio.wait_for(thread_pool_exec(embd_mdl.encode, [ent_name]), timeout=timeout)
         ebd = ebd[0]
         set_embed_cache(embd_mdl.llm_name, ent_name, ebd)
     assert ebd is not None
@@ -378,13 +375,7 @@ async def graph_edge_to_chunk(kb_id, embd_mdl, from_ent_name, to_ent_name, meta,
     if ebd is None:
         async with chat_limiter:
             timeout = 3 if enable_timeout_assertion else 300000000
-            ebd, _ = await asyncio.wait_for(
-                thread_pool_exec(
-                    embd_mdl.encode,
-                    [txt + f": {meta['description']}"]
-                ),
-                timeout=timeout
-            )
+            ebd, _ = await asyncio.wait_for(thread_pool_exec(embd_mdl.encode, [txt + f": {meta['description']}"]), timeout=timeout)
         ebd = ebd[0]
         set_embed_cache(embd_mdl.llm_name, txt, ebd)
     assert ebd is not None
@@ -404,11 +395,7 @@ async def does_graph_contains(tenant_id, kb_id, doc_id):
         kb_name = kb.name
 
     index_name = search.index_name(tenant_id, [kb_name])
-    res = await thread_pool_exec(
-        settings.docStoreConn.search,
-        fields, [], condition, [], OrderByExpr(),
-        0, 1, index_name, [kb_id]
-    )
+    res = await thread_pool_exec(settings.docStoreConn.search, fields, [], condition, [], OrderByExpr(), 0, 1, index_name, [kb_id])
     fields2 = settings.docStoreConn.get_fields(res, fields)
     graph_doc_ids = set()
     for chunk_id, chunk_data in fields2.items():
@@ -467,31 +454,16 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
 
     index_name = search.index_name(tenant_id, [kb_name])
 
-    await thread_pool_exec(
-        settings.docStoreConn.delete,
-        {"knowledge_graph_kwd": ["graph", "subgraph"]},
-        index_name,
-        kb_id
-    )
+    await thread_pool_exec(settings.docStoreConn.delete, {"knowledge_graph_kwd": ["graph", "subgraph"]}, index_name, kb_id)
 
     if change.removed_nodes:
-        await thread_pool_exec(
-            settings.docStoreConn.delete,
-            {"knowledge_graph_kwd": ["entity"], "entity_kwd": sorted(change.removed_nodes)},
-            index_name,
-            kb_id
-        )
+        await thread_pool_exec(settings.docStoreConn.delete, {"knowledge_graph_kwd": ["entity"], "entity_kwd": sorted(change.removed_nodes)}, index_name, kb_id)
 
     if change.removed_edges:
 
         async def del_edges(from_node, to_node):
             async with chat_limiter:
-                await thread_pool_exec(
-                    settings.docStoreConn.delete,
-                    {"knowledge_graph_kwd": ["relation"], "from_entity_kwd": from_node, "to_entity_kwd": to_node},
-                    index_name,
-                    kb_id
-                )
+                await thread_pool_exec(settings.docStoreConn.delete, {"knowledge_graph_kwd": ["relation"], "from_entity_kwd": from_node, "to_entity_kwd": to_node}, index_name, kb_id)
 
         tasks = []
         for from_node, to_node in change.removed_edges:
@@ -544,9 +516,7 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
     tasks = []
     for ii, node in enumerate(change.added_updated_nodes):
         node_attrs = graph.nodes[node]
-        tasks.append(asyncio.create_task(
-            graph_node_to_chunk(kb_id, embd_mdl, node, node_attrs, chunks)
-        ))
+        tasks.append(asyncio.create_task(graph_node_to_chunk(kb_id, embd_mdl, node, node_attrs, chunks)))
         if ii % 100 == 9 and callback:
             callback(msg=f"Get embedding of nodes: {ii}/{len(change.added_updated_nodes)}")
     try:
@@ -563,9 +533,7 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
         edge_attrs = graph.get_edge_data(from_node, to_node)
         if not edge_attrs:
             continue
-        tasks.append(asyncio.create_task(
-            graph_edge_to_chunk(kb_id, embd_mdl, from_node, to_node, edge_attrs, chunks)
-        ))
+        tasks.append(asyncio.create_task(graph_edge_to_chunk(kb_id, embd_mdl, from_node, to_node, edge_attrs, chunks)))
         if ii % 100 == 9 and callback:
             callback(msg=f"Get embedding of edges: {ii}/{len(change.added_updated_edges)}")
     try:
@@ -586,15 +554,7 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
     es_bulk_size = 4
     for b in range(0, len(chunks), es_bulk_size):
         timeout = 3 if enable_timeout_assertion else 30000000
-        doc_store_result = await asyncio.wait_for(
-            thread_pool_exec(
-                settings.docStoreConn.insert,
-                chunks[b : b + es_bulk_size],
-                index_name,
-                kb_id
-            ),
-            timeout=timeout
-        )
+        doc_store_result = await asyncio.wait_for(thread_pool_exec(settings.docStoreConn.insert, chunks[b : b + es_bulk_size], index_name, kb_id), timeout=timeout)
         if b % 100 == es_bulk_size and callback:
             callback(msg=f"Insert chunks: {b}/{len(chunks)}")
         if doc_store_result:
@@ -697,11 +657,7 @@ async def rebuild_graph(tenant_id, kb_id, exclude_rebuild=None):
     index_name = search.index_name(tenant_id, [kb_name])
 
     for i in range(0, 1024 * bs, bs):
-        es_res = await thread_pool_exec(
-            settings.docStoreConn.search,
-            flds, [], {"kb_id": kb_id, "knowledge_graph_kwd": ["subgraph"]},
-            [], OrderByExpr(), i, bs, index_name, [kb_id]
-        )
+        es_res = await thread_pool_exec(settings.docStoreConn.search, flds, [], {"kb_id": kb_id, "knowledge_graph_kwd": ["subgraph"]}, [], OrderByExpr(), i, bs, index_name, [kb_id])
         # tot = settings.docStoreConn.get_total(es_res)
         es_res = settings.docStoreConn.get_fields(es_res, flds)
         es_res = {k: v for k, v in es_res.items() if isinstance(v, dict)}

@@ -18,7 +18,7 @@ class ExcelGeneratorComponentInputDefinition:
     parameter_name: str
     value_type: ValueTypeOfIODefinition
     content: list[str] | str
-    schema: 'ExcelGeneratorComponentInputDefinition' = None
+    schema: "ExcelGeneratorComponentInputDefinition" = None
 
 
 @dataclass
@@ -42,26 +42,25 @@ class ExcelGeneratorComponent(Component[ExcelGeneratorComponentParam]):
         self.component_parameter = component_parameter
         super().__init__(component_parameter, node_id)
 
-    async def process(self, input_data: dict | None = None, context: WorkflowContext | None = None,
-                      **kwargs) -> dict:
+    async def process(self, input_data: dict | None = None, context: WorkflowContext | None = None, **kwargs) -> dict:
         headers = []
         parameter_dict = {}
         for input_definition in self.node_parameter.input_definition_list:
-            parameter_name = input_definition['parameter_name']
+            parameter_name = input_definition["parameter_name"]
             headers.append(parameter_name)
-            if input_definition['value_type'] == ValueTypeOfIODefinition.REF.value:
-                ref_node_id = input_definition['content'][0]
-                ref_name = input_definition['content'][1]
+            if input_definition["value_type"] == ValueTypeOfIODefinition.REF.value:
+                ref_node_id = input_definition["content"][0]
+                ref_name = input_definition["content"][1]
                 ref_node_data = context.get(str(ref_node_id)).output_data
-                parsed = parse('$.' + ref_name)
+                parsed = parse("$." + ref_name)
                 actual_ref_value = parsed.find(ref_node_data)[0].value
                 input_value: list[str] = []
                 if type(actual_ref_value) is list:
                     for ref_value in actual_ref_value:
-                        input_value.append(ref_value[input_definition['content'][2]])
+                        input_value.append(ref_value[input_definition["content"][2]])
                     parameter_dict[parameter_name] = input_value
                 else:
-                    parameter_dict[parameter_name] = actual_ref_value[input_definition['content'][2]]
+                    parameter_dict[parameter_name] = actual_ref_value[input_definition["content"][2]]
 
             elif input_definition.value_type == ValueTypeOfIODefinition.LITERAL:
                 parameter_dict[parameter_name] = input_definition.content
@@ -75,21 +74,15 @@ class ExcelGeneratorComponent(Component[ExcelGeneratorComponentParam]):
         minio_operator = MinioOperator()
         minio_operator.create_bucket(bucket_name=settings.MINIO["workflow_bucket"])
         if excel_file[1] is not None:
-            minio_operator.upload_file_from_memory(bucket_name=settings.MINIO["workflow_bucket"],
-                                                   object_name=complete_file_name,
-                                                   file_data=excel_file[1])
+            minio_operator.upload_file_from_memory(bucket_name=settings.MINIO["workflow_bucket"], object_name=complete_file_name, file_data=excel_file[1])
         else:
             raise Exception("无法生成Excel文件，请检查输入数据是否正确")
-        file_info = {
-            "bucket_name": settings.MINIO["workflow_bucket"],
-            "object_name": complete_file_name
-        }
+        file_info = {"bucket_name": settings.MINIO["workflow_bucket"], "object_name": complete_file_name}
         json_str = json.dumps(file_info)
         encrypted_url = string_cipher.encrypt(json_str, "DATAV-SK-666")
 
         download_url = f"http://0.0.0.0:80/api/cmai/workflowManagement/workflowManagement/downloadAiWorkFlowReport/{encrypted_url}_xlsx"
-        context.set(str(self.node_id),
-                    NodeIOData(output_data={self.component_parameter.output_definition['variable_name']: download_url}))
+        context.set(str(self.node_id), NodeIOData(output_data={self.component_parameter.output_definition["variable_name"]: download_url}))
 
     def validate_inputs(self):
         pass
@@ -98,15 +91,14 @@ class ExcelGeneratorComponent(Component[ExcelGeneratorComponentParam]):
         pass
 
     @staticmethod
-    def decode(json: json) -> 'ExcelGeneratorComponent':
-        node_json = json['node']
-        node_id = node_json['id']
-        component_param = node_json['data']['componentParam']
-        input_definition = component_param['input_definition']
-        output_definition = component_param['output_definition']
+    def decode(json: json) -> "ExcelGeneratorComponent":
+        node_json = json["node"]
+        node_id = node_json["id"]
+        component_param = node_json["data"]["componentParam"]
+        input_definition = component_param["input_definition"]
+        output_definition = component_param["output_definition"]
 
-        llm_component_param = ExcelGeneratorComponentParam(output_definition=output_definition,
-                                                           input_definition_list=input_definition)
+        llm_component_param = ExcelGeneratorComponentParam(output_definition=output_definition, input_definition_list=input_definition)
         return ExcelGeneratorComponent(llm_component_param, node_id)
 
     @staticmethod
@@ -189,8 +181,8 @@ def create_excel_in_memory(headers, data, filename=None):
     if filename is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"excel_report_{timestamp}.xlsx"
-    elif not filename.endswith('.xlsx'):
-        filename += '.xlsx'
+    elif not filename.endswith(".xlsx"):
+        filename += ".xlsx"
 
     # 创建一个新的工作簿
     wb = Workbook()
@@ -223,11 +215,7 @@ if __name__ == "__main__":
     headers = ["姓名", "年龄", "城市"]
 
     # 示例数据
-    data = [
-        ["张三", 25, "北京"],
-        ["李四", 30, "上海"],
-        ["王五", 28, "广州"]
-    ]
+    data = [["张三", 25, "北京"], ["李四", 30, "上海"], ["王五", 28, "广州"]]
 
     # 输出路径
     output_path = "output.xlsx"

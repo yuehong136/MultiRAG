@@ -7,11 +7,12 @@ from api.service.docx2zjform_service.component import Component
 
 class ElementType(Enum):
     """元素类型枚举"""
+
     PARAGRAPH = "paragraph"
     TABLE = "table"
 
     @classmethod
-    def get_type(cls, type_str: str) -> 'ElementType':
+    def get_type(cls, type_str: str) -> "ElementType":
         try:
             return cls(type_str)
         except ValueError:
@@ -32,6 +33,6 @@ class Element(ABC):
 
     @classmethod
     @abstractmethod
-    def from_dict(cls, data: dict[str, Any]) -> 'Element':
+    def from_dict(cls, data: dict[str, Any]) -> "Element":
         """从字典创建元素"""
         pass

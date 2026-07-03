@@ -3,6 +3,7 @@
 @file： chapter_service.py
 @desc: 写作章节服务类
 """
+
 import logging
 from datetime import UTC, datetime
 
@@ -34,13 +35,7 @@ class ChapterService(CommonService):
         返回:
             list: 章节列表
         """
-        chapters = db.query(cls.model).filter(
-            cls.model.project_id == project_id,
-            cls.model.status == StatusEnum.VALID.value
-        ).order_by(
-            cls.model.level.asc(),
-            cls.model.order_index.asc()
-        ).all()
+        chapters = db.query(cls.model).filter(cls.model.project_id == project_id, cls.model.status == StatusEnum.VALID.value).order_by(cls.model.level.asc(), cls.model.order_index.asc()).all()
 
         return [chapter.to_dict() for chapter in chapters]
 
@@ -57,10 +52,7 @@ class ChapterService(CommonService):
             dict: 章节信息及内容
         """
         # 获取章节信息
-        chapter = db.query(cls.model).filter(
-            cls.model.id == chapter_id,
-            cls.model.status == StatusEnum.VALID.value
-        ).first()
+        chapter = db.query(cls.model).filter(cls.model.id == chapter_id, cls.model.status == StatusEnum.VALID.value).first()
 
         if not chapter:
             raise NoResultFound(f"未找到章节 ID: {chapter_id}")
@@ -68,15 +60,12 @@ class ChapterService(CommonService):
         result = chapter.to_dict()
 
         # 获取章节内容
-        content = db.query(WritingChapterContent).filter(
-            WritingChapterContent.chapter_id == chapter_id,
-            WritingChapterContent.status == StatusEnum.VALID.value
-        ).first()
+        content = db.query(WritingChapterContent).filter(WritingChapterContent.chapter_id == chapter_id, WritingChapterContent.status == StatusEnum.VALID.value).first()
 
         if content:
-            result['content'] = content.content
+            result["content"] = content.content
         else:
-            result['content'] = None
+            result["content"] = None
 
         return result
 
@@ -107,17 +96,13 @@ class ChapterService(CommonService):
             if "order_index" not in chapter_data:
                 if chapter_data.get("parent_id"):
                     # 子章节
-                    max_order = db.query(func.max(cls.model.order_index)).filter(
-                        cls.model.parent_id == chapter_data["parent_id"],
-                        cls.model.status == StatusEnum.VALID.value
-                    ).scalar() or -1
+                    max_order = db.query(func.max(cls.model.order_index)).filter(cls.model.parent_id == chapter_data["parent_id"], cls.model.status == StatusEnum.VALID.value).scalar() or -1
                 else:
                     # 主章节
-                    max_order = db.query(func.max(cls.model.order_index)).filter(
-                        cls.model.project_id == chapter_data["project_id"],
-                        cls.model.level == 1,
-                        cls.model.status == StatusEnum.VALID.value
-                    ).scalar() or -1
+                    max_order = (
+                        db.query(func.max(cls.model.order_index)).filter(cls.model.project_id == chapter_data["project_id"], cls.model.level == 1, cls.model.status == StatusEnum.VALID.value).scalar()
+                        or -1
+                    )
 
                 chapter_data["order_index"] = max_order + 1
 
@@ -136,22 +121,18 @@ class ChapterService(CommonService):
     @classmethod
     def update_chapter(cls, db: Session, chapter_id: str, chapter_data: dict) -> WritingChapter:
         """更新章节信息"""
-        chapter = db.query(cls.model).filter(
-            cls.model.id == chapter_id,
-            cls.model.status == StatusEnum.VALID.value
-        ).first()
+        chapter = db.query(cls.model).filter(cls.model.id == chapter_id, cls.model.status == StatusEnum.VALID.value).first()
 
         if not chapter:
             raise NoResultFound(f"未找到章节 ID: {chapter_id}")
 
         try:
             for key, value in chapter_data.items():
-                if hasattr(chapter, key) and key not in ['id', 'project_id', 'create_time', 'update_time',
-                                                         'create_date', 'update_date', 'status']:
+                if hasattr(chapter, key) and key not in ["id", "project_id", "create_time", "update_time", "create_date", "update_date", "status"]:
                     setattr(chapter, key, value)
 
-            if 'parent_id' in chapter_data:
-                chapter.level = 2 if chapter_data['parent_id'] else 1
+            if "parent_id" in chapter_data:
+                chapter.level = 2 if chapter_data["parent_id"] else 1
 
             # 手动更新时间戳
             now = datetime.now()
@@ -173,10 +154,7 @@ class ChapterService(CommonService):
     @classmethod
     def delete_chapter(cls, db: Session, chapter_id: str) -> bool:
         """删除章节（逻辑删除）并处理子章节"""
-        chapter = db.query(cls.model).filter(
-            cls.model.id == chapter_id,
-            cls.model.status == StatusEnum.VALID.value
-        ).first()
+        chapter = db.query(cls.model).filter(cls.model.id == chapter_id, cls.model.status == StatusEnum.VALID.value).first()
 
         if not chapter:
             return False
@@ -190,10 +168,7 @@ class ChapterService(CommonService):
                 now_utc = datetime.now(UTC)
 
                 # 更新子章节
-                sub_chapters = db.query(cls.model).filter(
-                    cls.model.parent_id == chapter_id,
-                    cls.model.status == StatusEnum.VALID.value
-                ).all()
+                sub_chapters = db.query(cls.model).filter(cls.model.parent_id == chapter_id, cls.model.status == StatusEnum.VALID.value).all()
 
                 for sub in sub_chapters:
                     sub.status = StatusEnum.INVALID.value
@@ -206,10 +181,7 @@ class ChapterService(CommonService):
             chapter.update_date = datetime.now(UTC)
 
             # 删除章节内容
-            content = db.query(WritingChapterContent).filter(
-                WritingChapterContent.chapter_id == chapter_id,
-                WritingChapterContent.status == StatusEnum.VALID.value
-            ).first()
+            content = db.query(WritingChapterContent).filter(WritingChapterContent.chapter_id == chapter_id, WritingChapterContent.status == StatusEnum.VALID.value).first()
 
             if content:
                 content.status = StatusEnum.INVALID.value
@@ -246,10 +218,7 @@ class ChapterService(CommonService):
                 new_order = chapter_data.get("order_index")
                 new_parent_id = chapter_data.get("parent_id")
 
-                chapter = db.query(cls.model).filter(
-                    cls.model.id == chapter_id,
-                    cls.model.status == StatusEnum.VALID.value
-                ).first()
+                chapter = db.query(cls.model).filter(cls.model.id == chapter_id, cls.model.status == StatusEnum.VALID.value).first()
 
                 if chapter:
                     # 更新order
@@ -293,10 +262,7 @@ class ChapterService(CommonService):
         """
         try:
             # 查找是否已经存在内容
-            content_obj = db.query(WritingChapterContent).filter(
-                WritingChapterContent.chapter_id == chapter_id,
-                WritingChapterContent.status == StatusEnum.VALID.value
-            ).first()
+            content_obj = db.query(WritingChapterContent).filter(WritingChapterContent.chapter_id == chapter_id, WritingChapterContent.status == StatusEnum.VALID.value).first()
 
             if content_obj:
                 # 更新现有内容
@@ -304,11 +270,7 @@ class ChapterService(CommonService):
                 content_obj.update_time = datetime.now()
             else:
                 # 创建新内容
-                content_obj = WritingChapterContent(
-                    id=get_uuid(),
-                    chapter_id=chapter_id,
-                    content=content
-                )
+                content_obj = WritingChapterContent(id=get_uuid(), chapter_id=chapter_id, content=content)
                 db.add(content_obj)
 
             # 更新章节的更新时间
@@ -338,28 +300,18 @@ class ChapterService(CommonService):
             dict: 大纲结构，包含章节树
         """
         # 获取项目信息
-        project = db.query(WritingProject).filter(
-            WritingProject.id == project_id,
-            WritingProject.status == StatusEnum.VALID.value
-        ).first()
+        project = db.query(WritingProject).filter(WritingProject.id == project_id, WritingProject.status == StatusEnum.VALID.value).first()
 
         if not project:
             raise NoResultFound(f"未找到项目 ID: {project_id}")
 
         # 获取所有章节
-        chapters = db.query(cls.model).filter(
-            cls.model.project_id == project_id,
-            cls.model.status == StatusEnum.VALID.value
-        ).order_by(
-            cls.model.level.asc(),
-            cls.model.order_index.asc()
-        ).all()
+        chapters = db.query(cls.model).filter(cls.model.project_id == project_id, cls.model.status == StatusEnum.VALID.value).order_by(cls.model.level.asc(), cls.model.order_index.asc()).all()
 
         # 获取已经有内容的章节ID列表
-        completed_chapter_ids = db.query(WritingChapterContent.chapter_id).filter(
-            WritingChapterContent.status == StatusEnum.VALID.value,
-            WritingChapterContent.chapter_id.in_([ch.id for ch in chapters])
-        ).all()
+        completed_chapter_ids = (
+            db.query(WritingChapterContent.chapter_id).filter(WritingChapterContent.status == StatusEnum.VALID.value, WritingChapterContent.chapter_id.in_([ch.id for ch in chapters])).all()
+        )
 
         completed_ids = [str(row.chapter_id) for row in completed_chapter_ids]
 
@@ -369,8 +321,8 @@ class ChapterService(CommonService):
 
         for chapter in chapters:
             chapter_data = chapter.to_dict()
-            chapter_data['completed'] = chapter.id in completed_ids
-            chapter_data['children'] = []
+            chapter_data["completed"] = chapter.id in completed_ids
+            chapter_data["children"] = []
             chapters_map[chapter.id] = chapter_data
 
             if chapter.level == 1:
@@ -378,23 +330,23 @@ class ChapterService(CommonService):
 
         # 关联子章节
         for chapter_id, chapter_data in chapters_map.items():
-            if chapter_data.get('parent_id') and chapter_data['parent_id'] in chapters_map:
-                parent_data = chapters_map[chapter_data['parent_id']]
-                parent_data['children'].append(chapter_data)
+            if chapter_data.get("parent_id") and chapter_data["parent_id"] in chapters_map:
+                parent_data = chapters_map[chapter_data["parent_id"]]
+                parent_data["children"].append(chapter_data)
 
         # 使用项目的title字段，如果为空则使用原来的拼接方式作为后备
         article_title = project.title if project.title else f"{project.content_type}（{project.language_style}风格）"
 
         result = {
-            'id': project.id,
-            'title': article_title,
-            'content_type': project.content_type,
-            'language_style': project.language_style,
-            'user_input': project.user_input,
-            'word_count': project.word_count,
-            'sections': main_chapters,
-            'total_sections': len(chapters),
-            'completed_sections': len(completed_ids)
+            "id": project.id,
+            "title": article_title,
+            "content_type": project.content_type,
+            "language_style": project.language_style,
+            "user_input": project.user_input,
+            "word_count": project.word_count,
+            "sections": main_chapters,
+            "total_sections": len(chapters),
+            "completed_sections": len(completed_ids),
         }
 
         return result
@@ -433,10 +385,7 @@ class ChapterService(CommonService):
         """
         try:
             # 获取项目所有现有章节
-            existing_chapters = db.query(cls.model).filter(
-                cls.model.project_id == project_id,
-                cls.model.status == StatusEnum.VALID.value
-            ).all()
+            existing_chapters = db.query(cls.model).filter(cls.model.project_id == project_id, cls.model.status == StatusEnum.VALID.value).all()
 
             # 构建现有章节ID映射，用于快速查找
             existing_chapter_map = {chapter.id: chapter for chapter in existing_chapters}
@@ -461,13 +410,7 @@ class ChapterService(CommonService):
                     # 创建新主章节
                     main_chapter_id = get_uuid()
                     main_chapter = cls.model(
-                        id=main_chapter_id,
-                        project_id=project_id,
-                        title=section_data.get("title", "未命名章节"),
-                        summary=section_data.get("summary", ""),
-                        level=1,
-                        parent_id=None,
-                        order_index=index
+                        id=main_chapter_id, project_id=project_id, title=section_data.get("title", "未命名章节"), summary=section_data.get("summary", ""), level=1, parent_id=None, order_index=index
                     )
                     db.add(main_chapter)
                     db.flush()  # 刷新以获取ID
@@ -475,7 +418,7 @@ class ChapterService(CommonService):
 
                 # 处理子章节
                 children = section_data.get("children", [])
-                main_chapter_id = main_chapter.id if hasattr(main_chapter, 'id') else main_chapter_id
+                main_chapter_id = main_chapter.id if hasattr(main_chapter, "id") else main_chapter_id
 
                 for child_index, child_data in enumerate(children):
                     child_id = child_data.get("id")
@@ -499,7 +442,7 @@ class ChapterService(CommonService):
                             summary=child_data.get("summary", ""),
                             level=2,
                             parent_id=main_chapter_id,
-                            order_index=child_index
+                            order_index=child_index,
                         )
                         db.add(sub_chapter)
                         db.flush()
@@ -534,10 +477,7 @@ class ChapterService(CommonService):
             str: Markdown格式的大纲
         """
         # 获取项目信息
-        project = db.query(WritingProject).filter(
-            WritingProject.id == project_id,
-            WritingProject.status == StatusEnum.VALID.value
-        ).first()
+        project = db.query(WritingProject).filter(WritingProject.id == project_id, WritingProject.status == StatusEnum.VALID.value).first()
 
         if not project:
             raise NoResultFound(f"未找到项目 ID: {project_id}")
@@ -546,13 +486,7 @@ class ChapterService(CommonService):
         article_title = project.title if project.title else f"{project.content_type}（{project.language_style}风格）"
 
         # 获取所有章节
-        chapters = db.query(cls.model).filter(
-            cls.model.project_id == project_id,
-            cls.model.status == StatusEnum.VALID.value
-        ).order_by(
-            cls.model.level.asc(),
-            cls.model.order_index.asc()
-        ).all()
+        chapters = db.query(cls.model).filter(cls.model.project_id == project_id, cls.model.status == StatusEnum.VALID.value).order_by(cls.model.level.asc(), cls.model.order_index.asc()).all()
 
         # 构建Markdown文本
         markdown = f"# {article_title}\n\n"
@@ -574,20 +508,14 @@ class ChapterService(CommonService):
                 sub_chapters[chapter.parent_id].append(chapter)
 
         # 按顺序生成Markdown
-        for main_id, main_chapter in sorted(
-                main_chapters.items(),
-                key=lambda x: x[1].order_index
-        ):
+        for main_id, main_chapter in sorted(main_chapters.items(), key=lambda x: x[1].order_index):
             markdown += f"## {main_chapter.order_index + 1}. {main_chapter.title}\n"
             if main_chapter.summary:
                 markdown += f"摘要：{main_chapter.summary}\n"
 
             # 添加子章节
             if main_id in sub_chapters:
-                for sub_chapter in sorted(
-                        sub_chapters[main_id],
-                        key=lambda x: x.order_index
-                ):
+                for sub_chapter in sorted(sub_chapters[main_id], key=lambda x: x.order_index):
                     markdown += f"- {main_chapter.order_index + 1}.{sub_chapter.order_index + 1} {sub_chapter.title}"
                     if sub_chapter.summary:
                         markdown += f" (摘要：{sub_chapter.summary})"

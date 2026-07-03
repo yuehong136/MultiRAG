@@ -15,6 +15,7 @@ _SLIM_DOC_BATCH_SIZE = 5000
 
 class TeamsCheckpoint(ConnectorCheckpoint):
     """Teams-specific checkpoint"""
+
     todo_team_ids: list[str] | None = None
 
 
@@ -36,11 +37,7 @@ class TeamsConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPermSyn
                 raise ConnectorMissingCredentialError("Microsoft Teams credentials are incomplete")
 
             # Create MSAL confidential client
-            app = msal.ConfidentialClientApplication(
-                client_id=client_id,
-                client_credential=client_secret,
-                authority=f"https://login.microsoftonline.com/{tenant_id}"
-            )
+            app = msal.ConfidentialClientApplication(client_id=client_id, client_credential=client_secret, authority=f"https://login.microsoftonline.com/{tenant_id}")
 
             # Get access token
             result = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])

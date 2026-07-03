@@ -10,6 +10,7 @@
        本文件保留空 router 占位，仅为兼容应用启动时的 sdk 路由自动加载逻辑，
        不再注册任何路由；待后续 SDK 整体重构时一并清理。
 """
+
 from fastapi import APIRouter
 
 router = APIRouter()

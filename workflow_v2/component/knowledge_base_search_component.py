@@ -13,22 +13,20 @@ from workflow_v2.workflow_logging_config import WorkflowContextLogger
 class KnowledgeBaseSearchComponent(BaseComponent):
     """知识库搜索组件"""
 
-    def __init__(self, component_id: str, title: str, node_data: dict[str, Any], logger: WorkflowContextLogger,
-                 **kwargs):
+    def __init__(self, component_id: str, title: str, node_data: dict[str, Any], logger: WorkflowContextLogger, **kwargs):
         super().__init__(component_id, title, logger)
-        self.kb_ids = node_data['data']['inputs'].get('datasetParam', '').get("kb_ids", [])
-        self.similarity_threshold = node_data['data']['inputs'].get('datasetParam', '').get("similarity_threshold", 0.2)
-        self.keywords_similarity_weight = node_data['data']['inputs'].get('datasetParam', '').get(
-            "keywords_similarity_weight", 0.5)
-        self.top_n = node_data['data']['inputs'].get('datasetParam', '').get("top_n", 8)
-        self.top_k = node_data['data']['inputs'].get('datasetParam', '').get("top_k", 1024)
-        self.enable_rerank = node_data['data']['inputs'].get('datasetParam', '').get("enable_rerank", False)
-        self.rerank_id = node_data['data']['inputs'].get('datasetParam', '').get("rerank_id", "")
-        self.empty_response = node_data['data']['inputs'].get('datasetParam', '').get("empty_response", "未找到相似结果")
+        self.kb_ids = node_data["data"]["inputs"].get("datasetParam", "").get("kb_ids", [])
+        self.similarity_threshold = node_data["data"]["inputs"].get("datasetParam", "").get("similarity_threshold", 0.2)
+        self.keywords_similarity_weight = node_data["data"]["inputs"].get("datasetParam", "").get("keywords_similarity_weight", 0.5)
+        self.top_n = node_data["data"]["inputs"].get("datasetParam", "").get("top_n", 8)
+        self.top_k = node_data["data"]["inputs"].get("datasetParam", "").get("top_k", 1024)
+        self.enable_rerank = node_data["data"]["inputs"].get("datasetParam", "").get("enable_rerank", False)
+        self.rerank_id = node_data["data"]["inputs"].get("datasetParam", "").get("rerank_id", "")
+        self.empty_response = node_data["data"]["inputs"].get("datasetParam", "").get("empty_response", "未找到相似结果")
         self.timeout = 30
 
-        self.db = kwargs.get('db', None)
-        self.user = kwargs.get('user', None)
+        self.db = kwargs.get("db", None)
+        self.user = kwargs.get("user", None)
 
     def _build_embedding_model(self, kbs: list[Any]) -> LLMBundle:
         embd_keys = list({kb.tenant_embd_id or kb.embd_id for kb in kbs})
@@ -37,18 +35,14 @@ class KnowledgeBaseSearchComponent(BaseComponent):
         if kbs[0].tenant_embd_id:
             embd_config = get_model_config_by_id(self.db, kbs[0].tenant_embd_id)
         else:
-            embd_config = get_model_config_by_type_and_name(
-                self.db, kbs[0].tenant_id, LLMType.EMBEDDING.value, kbs[0].embd_id
-            )
+            embd_config = get_model_config_by_type_and_name(self.db, kbs[0].tenant_id, LLMType.EMBEDDING.value, kbs[0].embd_id)
         return LLMBundle(self.db, kbs[0].tenant_id, embd_config)
 
     def _build_rerank_model(self, kbs: list[Any]) -> LLMBundle | None:
         if not (self.enable_rerank and self.rerank_id):
             return None
 
-        rerank_config = get_model_config_by_type_and_name(
-            self.db, kbs[0].tenant_id, LLMType.RERANK.value, self.rerank_id
-        )
+        rerank_config = get_model_config_by_type_and_name(self.db, kbs[0].tenant_id, LLMType.RERANK.value, self.rerank_id)
         return LLMBundle(self.db, kbs[0].tenant_id, rerank_config)
 
     async def _retrieve(self, query: str, kbs: list[Any]) -> dict[str, Any]:

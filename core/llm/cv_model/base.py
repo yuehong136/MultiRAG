@@ -5,6 +5,7 @@
 @date：2024/7/22 9:30
 @desc:
 """
+
 import base64
 import logging
 import os
@@ -65,10 +66,7 @@ class Base(ABC):
         if images is None:
             images = []
         try:
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=self._form_history(system, history, images)
-            )
+            response = self.client.chat.completions.create(model=self.model_name, messages=self._form_history(system, history, images))
             return response.choices[0].message.content.strip(), response.usage.total_tokens
         except Exception as e:
             return "**ERROR**: " + str(e), 0
@@ -79,11 +77,7 @@ class Base(ABC):
         ans = ""
         tk_count = 0
         try:
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=self._form_history(system, history, images),
-                stream=True
-            )
+            response = self.client.chat.completions.create(model=self.model_name, messages=self._form_history(system, history, images), stream=True)
             for resp in response:
                 if not resp.choices[0].delta.content:
                     continue
@@ -121,7 +115,7 @@ class Base(ABC):
             try:
                 image.save(buffered, format="JPEG")
             except Exception:
-                 # reset buffer before saving PNG
+                # reset buffer before saving PNG
                 buffered.seek(0)
                 buffered.truncate()
                 image.save(buffered, format="PNG")
@@ -194,18 +188,13 @@ class Base(ABC):
                     "请用中文详细描述一下图中的内容，比如时间，地点，人物，事情，人物心情等，如果有数据请提取出数据。"
                     if self.lang.lower() == "chinese"
                     else "Please describe the content of this picture, like where, when, who, what happen. If it has number data, please extract them out.",
-                    b64
-                )
+                    b64,
+                ),
             }
         ]
 
     def vision_llm_prompt(self, b64, prompt=None):
-        return [
-            {
-                "role": "user",
-                "content": self._image_prompt(prompt if prompt else vision_llm_describe_prompt(), b64)
-            }
-        ]
+        return [{"role": "user", "content": self._image_prompt(prompt if prompt else vision_llm_describe_prompt(), b64)}]
 
     def chat_prompt(self, text: str, b64: str) -> list[dict[str, Any]]:
         return [
@@ -216,16 +205,10 @@ class Base(ABC):
                     "url": f"{b64}",
                 },
             },
-            {
-                "type": "text",
-                "text": text
-            },
+            {"type": "text", "text": text},
         ]
 
     def chat_onlytext(self, text: str) -> list[dict[str, Any]]:
         return [
-            {
-                "type": "text",
-                "text": text
-            },
+            {"type": "text", "text": text},
         ]

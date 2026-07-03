@@ -18,7 +18,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from api.db import FileType, UserTenantRole  #, ActiveEnum
+from api.db import FileType, UserTenantRole  # , ActiveEnum
 from api.db.services.api_service import API4ConversationService, APITokenService
 from api.db.services.canvas_service import UserCanvasService
 from api.db.services.conversation_service import ConversationService
@@ -66,8 +66,8 @@ def create_new_user(db: Session, user_info: dict) -> dict:
     """
     # generate user_id and access_token for user
     user_id = uuid.uuid1().hex
-    user_info['id'] = user_id
-    user_info['access_token'] = uuid.uuid1().hex
+    user_info["id"] = user_id
+    user_info["access_token"] = uuid.uuid1().hex
 
     # construct tenant info
     tenant = {
@@ -191,7 +191,7 @@ def delete_user_data(db: Session, user_id: str) -> dict:
     tenants = UserTenantService.get_user_tenant_relation_by_user_id(db, usr.id)
     owned_tenant = [t for t in tenants if t["role"] == UserTenantRole.OWNER.value]
 
-    done_msg = ''
+    done_msg = ""
     try:
         # step1. delete owned tenant info
         if owned_tenant:
@@ -223,11 +223,7 @@ def delete_user_data(db: Session, user_id: str) -> dict:
                     file_delete_res = FileService.delete_by_ids(db, [f["id"] for f in file_ids])
                     done_msg += f"- Deleted {file_delete_res} file records.\n"
                 if doc_ids or file_ids:
-                    file2doc_delete_res = File2DocumentService.delete_by_document_ids_or_file_ids(
-                        db,
-                        [i["id"] for i in doc_ids],
-                        [f["id"] for f in file_ids]
-                    )
+                    file2doc_delete_res = File2DocumentService.delete_by_document_ids_or_file_ids(db, [i["id"] for i in doc_ids], [f["id"] for f in file_ids])
                     done_msg += f"- Deleted {file2doc_delete_res} document-file relation records.\n"
                 # step1.1.3 delete chunk in es
                 chunk_delete_count = 0
@@ -236,19 +232,11 @@ def delete_user_data(db: Session, user_id: str) -> dict:
                     collection_name = search.index_name_one(tenant_id, kb_name)
                     if settings.docStoreConn.has_collection(collection_name):
                         if db_type == "milvus":
-                            result = settings.docStoreConn.delete(
-                                condition={"kb_id": kb_id},
-                                index_name=collection_name,
-                                dataset_id=kb_id
-                            )
+                            result = settings.docStoreConn.delete(condition={"kb_id": kb_id}, index_name=collection_name, dataset_id=kb_id)
                         else:
                             # ES/OpenSearch/Infinity 使用位置参数: condition, index_name, knowledgebase_id
-                            result = settings.docStoreConn.delete(
-                                {"kb_id": kb_id},
-                                collection_name,
-                                kb_id
-                            )
-                        chunk_delete_count += result.get('delete_count', 0) if isinstance(result, dict) else 0
+                            result = settings.docStoreConn.delete({"kb_id": kb_id}, collection_name, kb_id)
+                        chunk_delete_count += result.get("delete_count", 0) if isinstance(result, dict) else 0
                 done_msg += f"- Deleted {chunk_delete_count} chunk records.\n"
                 kb_delete_res = KnowledgebaseService.delete_by_ids(db, kb_ids)
                 done_msg += f"- Deleted {kb_delete_res} dataset records.\n"
@@ -288,18 +276,14 @@ def delete_user_data(db: Session, user_id: str) -> dict:
         # step2 delete user-tenant relation
         if tenants:
             # step2.1 delete docs and files in joined team
-            joined_tenants = [
-                t
-                for t in tenants
-                if UserTenantService.is_joined_member(t["role"])
-            ]
+            joined_tenants = [t for t in tenants if UserTenantService.is_joined_member(t["role"])]
             if joined_tenants:
                 done_msg += "Start to delete data in joined tenants.\n"
                 created_documents = DocumentService.get_all_docs_by_creator_id(db, usr.id)
                 if created_documents:
                     # step2.1.1 delete files
-                    doc_file_info = File2DocumentService.get_by_document_ids(db, [d['id'] for d in created_documents])
-                    created_files = FileService.get_by_ids(db, [f['file_id'] for f in doc_file_info])
+                    doc_file_info = File2DocumentService.get_by_document_ids(db, [d["id"] for d in created_documents])
+                    created_files = FileService.get_by_ids(db, [f["file_id"] for f in doc_file_info])
                     if created_files:
                         # step2.1.1.1 delete file in storage
                         for f in created_files:
@@ -309,11 +293,7 @@ def delete_user_data(db: Session, user_id: str) -> dict:
                         file_delete_res = FileService.delete_by_ids(db, [f.id for f in created_files])
                         done_msg += f"- Deleted {file_delete_res} file records.\n"
                     # step2.1.2 delete document-file relation record
-                    file2doc_delete_res = File2DocumentService.delete_by_document_ids_or_file_ids(
-                        db,
-                        [d['id'] for d in created_documents],
-                        [f.id for f in created_files]
-                    )
+                    file2doc_delete_res = File2DocumentService.delete_by_document_ids_or_file_ids(db, [d["id"] for d in created_documents], [f.id for f in created_files])
                     done_msg += f"- Deleted {file2doc_delete_res} document-file relation records.\n"
                     # step2.1.3 delete chunks
                     doc_groups = group_by(created_documents, "tenant_id")
@@ -331,36 +311,24 @@ def delete_user_data(db: Session, user_id: str) -> dict:
                                 doc_ids = [d["id"] for d in docs]
                                 if db_type == "milvus":
                                     # doc_id_list = "', '".join(doc_ids)
-                                    result = settings.docStoreConn.delete(
-                                        condition={"doc_id": doc_ids},
-                                        index_name=collection_name,
-                                        dataset_id=_kb_id
-                                    )
+                                    result = settings.docStoreConn.delete(condition={"doc_id": doc_ids}, index_name=collection_name, dataset_id=_kb_id)
                                 else:
                                     # ES/OpenSearch/Infinity 使用位置参数: condition, index_name, knowledgebase_id
-                                    result = settings.docStoreConn.delete(
-                                        {"doc_id": doc_ids},
-                                        collection_name,
-                                        _kb_id
-                                    )
-                                chunk_delete_res += result.get('delete_count', 0) if isinstance(result, dict) else 0
+                                    result = settings.docStoreConn.delete({"doc_id": doc_ids}, collection_name, _kb_id)
+                                chunk_delete_res += result.get("delete_count", 0) if isinstance(result, dict) else 0
                             # record doc info
                             if _kb_id in kb_doc_info.keys():
-                                kb_doc_info[_kb_id]['doc_num'] += 1
-                                kb_doc_info[_kb_id]['token_num'] += sum([d["token_num"] for d in docs])
-                                kb_doc_info[_kb_id]['chunk_num'] += sum([d["chunk_num"] for d in docs])
+                                kb_doc_info[_kb_id]["doc_num"] += 1
+                                kb_doc_info[_kb_id]["token_num"] += sum([d["token_num"] for d in docs])
+                                kb_doc_info[_kb_id]["chunk_num"] += sum([d["chunk_num"] for d in docs])
                             else:
-                                kb_doc_info[_kb_id] = {
-                                    'doc_num': 1,
-                                    'token_num': sum([d["token_num"] for d in docs]),
-                                    'chunk_num': sum([d["chunk_num"] for d in docs])
-                                }
+                                kb_doc_info[_kb_id] = {"doc_num": 1, "token_num": sum([d["token_num"] for d in docs]), "chunk_num": sum([d["chunk_num"] for d in docs])}
                     done_msg += f"- Deleted {chunk_delete_res} chunks.\n"
                     # step2.1.4 delete tasks
-                    task_delete_res = TaskService.delete_by_doc_ids(db, [d['id'] for d in created_documents])
+                    task_delete_res = TaskService.delete_by_doc_ids(db, [d["id"] for d in created_documents])
                     done_msg += f"- Deleted {task_delete_res} tasks.\n"
                     # step2.1.5 delete document record
-                    doc_delete_res = DocumentService.delete_by_ids(db, [d['id'] for d in created_documents])
+                    doc_delete_res = DocumentService.delete_by_ids(db, [d["id"] for d in created_documents])
                     done_msg += f"- Deleted {doc_delete_res} documents.\n"
                     # step2.1.6 update dataset base doc&chunk&token cnt
                     for kb_id, doc_num in kb_doc_info.items():
@@ -377,7 +345,7 @@ def delete_user_data(db: Session, user_id: str) -> dict:
 
     except Exception as e:
         logging.exception(e)
-        return {"success": False, "message": "An internal error occurred during user deletion. Some operations may have completed.","details": done_msg}
+        return {"success": False, "message": "An internal error occurred during user deletion. Some operations may have completed.", "details": done_msg}
 
 
 def delete_user_agents(db: Session, user_id: str) -> dict:
@@ -391,13 +359,10 @@ def delete_user_agents(db: Session, user_id: str) -> dict:
     agents_deleted_count, agents_version_deleted_count = 0, 0
     user_agents = UserCanvasService.get_all_agents_by_tenant_ids(db, [user_id], user_id)
     if user_agents:
-        agents_version = UserCanvasVersionService.get_all_canvas_version_by_canvas_ids(db, [a['id'] for a in user_agents])
-        agents_version_deleted_count = UserCanvasVersionService.delete_by_ids(db, [v['id'] for v in agents_version])
-        agents_deleted_count = UserCanvasService.delete_by_ids(db, [a['id'] for a in user_agents])
-    return {
-        "agents_deleted_count": agents_deleted_count,
-        "version_deleted_count": agents_version_deleted_count
-    }
+        agents_version = UserCanvasVersionService.get_all_canvas_version_by_canvas_ids(db, [a["id"] for a in user_agents])
+        agents_version_deleted_count = UserCanvasVersionService.delete_by_ids(db, [v["id"] for v in agents_version])
+        agents_deleted_count = UserCanvasService.delete_by_ids(db, [a["id"] for a in user_agents])
+    return {"agents_deleted_count": agents_deleted_count, "version_deleted_count": agents_version_deleted_count}
 
 
 def delete_user_dialogs(db: Session, user_id: str) -> dict:
@@ -414,17 +379,17 @@ def delete_user_dialogs(db: Session, user_id: str) -> dict:
     user_dialogs = DialogService.get_all_dialogs_by_tenant_id(db, user_id)
     if user_dialogs:
         # delete conversation
-        conversations = ConversationService.get_all_conversation_by_dialog_ids(db, [ud['id'] for ud in user_dialogs])
-        conversations_deleted_count = ConversationService.delete_by_ids(db, [c['id'] for c in conversations])
+        conversations = ConversationService.get_all_conversation_by_dialog_ids(db, [ud["id"] for ud in user_dialogs])
+        conversations_deleted_count = ConversationService.delete_by_ids(db, [c["id"] for c in conversations])
         # delete api token
         api_token_deleted_count = APITokenService.delete_by_tenant_id(db, user_id)
         # delete api for conversation
-        api4conversation_deleted_count = API4ConversationService.delete_by_dialog_ids(db, [ud['id'] for ud in user_dialogs])
+        api4conversation_deleted_count = API4ConversationService.delete_by_dialog_ids(db, [ud["id"] for ud in user_dialogs])
         # delete dialog at last
-        dialog_deleted_count = DialogService.delete_by_ids(db, [ud['id'] for ud in user_dialogs])
+        dialog_deleted_count = DialogService.delete_by_ids(db, [ud["id"] for ud in user_dialogs])
     return {
         "dialogs_deleted_count": dialog_deleted_count,
         "conversations_deleted_count": conversations_deleted_count,
         "api_token_deleted_count": api_token_deleted_count,
-        "api4conversation_deleted_count": api4conversation_deleted_count
+        "api4conversation_deleted_count": api4conversation_deleted_count,
     }

@@ -19,7 +19,7 @@ class QueryRewriter:
     """负责将自然语言查询重写为多种变体的服务类"""
 
     # 编译正则表达式以提高性能
-    JSON_PATTERN = re.compile(r'```json\s*([\s\S]*?)```')
+    JSON_PATTERN = re.compile(r"```json\s*([\s\S]*?)```")
 
     def __init__(self, db: Session, user_id: Any, prompt_dir: str = None):
         """
@@ -112,28 +112,16 @@ class QueryRewriter:
             prompt_template = PromptTemplateUtil.load_template_from_file(template_path)
 
             # 用查询文本填充模板
-            prompt = PromptTemplateUtil.fill_template(
-                prompt_template,
-                {"query_text": query_text}
-            )
+            prompt = PromptTemplateUtil.fill_template(prompt_template, {"query_text": query_text})
 
             # 创建包含我们提示词的对话历史
             history = [{"role": "user", "content": prompt}]
 
             # LLM配置
-            gen_conf = {
-                "temperature": 1,
-                "top_p": 0.7,
-                "max_tokens": 4096
-            }
+            gen_conf = {"temperature": 1, "top_p": 0.7, "max_tokens": 4096}
 
             # 调用LLM处理我们的提示词
-            response = await thread_pool_exec(
-                llm_model_instance.chat,
-                system="",
-                history=history,
-                gen_conf=gen_conf
-            )
+            response = await thread_pool_exec(llm_model_instance.chat, system="", history=history, gen_conf=gen_conf)
 
             # 提取和处理响应
             parsed_data, success = self._extract_json_from_response(response)

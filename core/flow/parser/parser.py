@@ -80,10 +80,7 @@ class ParserParam(ProcessParamBase):
                 "json",
             ],
             "email": ["text", "json"],
-            "text&markdown": [
-                "text",
-                "json"
-            ],
+            "text&markdown": ["text", "json"],
             "code": [
                 "text",
                 "json",
@@ -92,9 +89,7 @@ class ParserParam(ProcessParamBase):
                 "text",
                 "json",
             ],
-            "audio": [
-                "json"
-            ],
+            "audio": ["json"],
             "video": [],
             "epub": [
                 "text",
@@ -174,38 +169,16 @@ class ParserParam(ProcessParamBase):
                 "output_format": "json",
             },
             "email": {
-                "suffix": [
-                  "eml", "msg"
-                ],
+                "suffix": ["eml", "msg"],
                 "fields": ["from", "to", "cc", "bcc", "date", "subject", "body", "attachments", "metadata"],
                 "output_format": "json",
             },
             "audio": {
-                "suffix":[
-                    "da",
-                    "wave",
-                    "wav",
-                    "mp3",
-                    "aac",
-                    "flac",
-                    "ogg",
-                    "aiff",
-                    "au",
-                    "midi",
-                    "wma",
-                    "realaudio",
-                    "vqf",
-                    "oggvorbis",
-                    "ape"
-                ],
+                "suffix": ["da", "wave", "wav", "mp3", "aac", "flac", "ogg", "aiff", "au", "midi", "wma", "realaudio", "vqf", "oggvorbis", "ape"],
                 "output_format": "text",
             },
             "video": {
-                "suffix":[
-                    "mp4",
-                    "avi",
-                    "mkv"
-                ],
+                "suffix": ["mp4", "avi", "mkv"],
                 "output_format": "text",
                 "prompt": "",
             },
@@ -729,10 +702,7 @@ class Parser(ProcessBase):
         if parse_method.lower() == "tcadp parser":
             table_result_type = conf.get("table_result_type", "1")
             markdown_image_response_type = conf.get("markdown_image_response_type", "1")
-            tcadp_parser = TCADPParser(
-                table_result_type=table_result_type,
-                markdown_image_response_type=markdown_image_response_type
-            )
+            tcadp_parser = TCADPParser(table_result_type=table_result_type, markdown_image_response_type=markdown_image_response_type)
             if not tcadp_parser.check_installation():
                 raise RuntimeError("TCADP parser not available. Please check Tencent Cloud API configuration.")
 
@@ -743,14 +713,7 @@ class Parser(ProcessBase):
                 file_type = "CSV"
 
             self.callback(0.2, f"Using TCADP parser for {file_type} file.")
-            sections, tables = tcadp_parser.parse_pdf(
-                filepath=name,
-                binary=blob,
-                callback=self.callback,
-                file_type=file_type,
-                file_start_page=1,
-                file_end_page=1000
-            )
+            sections, tables = tcadp_parser.parse_pdf(filepath=name, binary=blob, callback=self.callback, file_type=file_type, file_start_page=1, file_end_page=1000)
 
             # Process TCADP parser output based on configured output_format
             output_format = conf.get("output_format", "html")
@@ -853,10 +816,7 @@ class Parser(ProcessBase):
         if parse_method.lower() == "tcadp parser":
             table_result_type = conf.get("table_result_type", "1")
             markdown_image_response_type = conf.get("markdown_image_response_type", "1")
-            tcadp_parser = TCADPParser(
-                table_result_type=table_result_type,
-                markdown_image_response_type=markdown_image_response_type
-            )
+            tcadp_parser = TCADPParser(table_result_type=table_result_type, markdown_image_response_type=markdown_image_response_type)
             if not tcadp_parser.check_installation():
                 raise RuntimeError("TCADP parser not available. Please check Tencent Cloud API configuration.")
 
@@ -868,14 +828,7 @@ class Parser(ProcessBase):
 
             self.callback(0.2, f"Using TCADP parser for {file_type} file.")
 
-            sections, tables = tcadp_parser.parse_pdf(
-                filepath=name,
-                binary=blob,
-                callback=self.callback,
-                file_type=file_type,
-                file_start_page=1,
-                file_end_page=1000
-            )
+            sections, tables = tcadp_parser.parse_pdf(filepath=name, binary=blob, callback=self.callback, file_type=file_type, file_start_page=1, file_end_page=1000)
 
             # Process TCADP parser output - PPT only supports json format
             output_format = conf.get("output_format", "json")
@@ -1079,7 +1032,7 @@ class Parser(ProcessBase):
             from email.parser import BytesParser
 
             msg = BytesParser(policy=policy.default).parse(io.BytesIO(blob))
-            email_content['metadata'] = {}
+            email_content["metadata"] = {}
             # handle header info
             for header, value in msg.items():
                 # get fields like from, to, cc, bcc, date, subject
@@ -1091,6 +1044,7 @@ class Parser(ProcessBase):
             # get body
             if "body" in target_fields:
                 body_text, body_html = [], []
+
                 def _add_content(m, content_type):
                     def _decode_payload(payload, charset, target_list):
                         try:
@@ -1132,14 +1086,17 @@ class Parser(ProcessBase):
                         if dispositions[0].lower() == "attachment":
                             filename = part.get_filename()
                             payload = part.get_payload(decode=True).decode(part.get_content_charset())
-                            attachments.append({
-                                "filename": filename,
-                                "payload": payload,
-                            })
+                            attachments.append(
+                                {
+                                    "filename": filename,
+                                    "payload": payload,
+                                }
+                            )
                 email_content["attachments"] = attachments
         else:
             # handle msg file
             import extract_msg
+
             msg = extract_msg.Message(blob)
             # handle header info
             basic_content = {
@@ -1152,9 +1109,9 @@ class Parser(ProcessBase):
             }
             email_content.update({k: v for k, v in basic_content.items() if k in target_fields})
             # get metadata
-            email_content['metadata'] = {
-                'message_id': msg.messageId,
-                'in_reply_to': msg.inReplyTo,
+            email_content["metadata"] = {
+                "message_id": msg.messageId,
+                "in_reply_to": msg.inReplyTo,
             }
             # get body
             if "body" in target_fields:
@@ -1165,30 +1122,27 @@ class Parser(ProcessBase):
             if "attachments" in target_fields:
                 attachments = []
                 for t in msg.attachments:
-                    attachments.append({
-                        "filename": t.name,
-                        "payload": t.data.decode("utf-8")
-                    })
+                    attachments.append({"filename": t.name, "payload": t.data.decode("utf-8")})
                 email_content["attachments"] = attachments
 
         if conf["output_format"] == "json":
             email_content["doc_type_kwd"] = "text"
             self.set_output("json", [email_content])
         else:
-            content_txt = ''
+            content_txt = ""
             for k, v in email_content.items():
                 if isinstance(v, str):
                     # basic info
-                    content_txt += f'{k}:{v}' + "\n"
+                    content_txt += f"{k}:{v}" + "\n"
                 elif isinstance(v, dict):
                     # metadata
-                    content_txt += f'{k}:{json.dumps(v)}' + "\n"
+                    content_txt += f"{k}:{json.dumps(v)}" + "\n"
                 elif isinstance(v, list):
                     # attachments or others
                     for fb in v:
                         if isinstance(fb, dict):
                             # attachments
-                            content_txt += f'{fb["filename"]}:{fb["payload"]}' + "\n"
+                            content_txt += f"{fb['filename']}:{fb['payload']}" + "\n"
                         else:
                             # str, usually plain text
                             content_txt += fb
@@ -1258,7 +1212,7 @@ class Parser(ProcessBase):
         outs = self.output()
         tasks = []
         for d in outs.get("json", []):
-            tasks.append(asyncio.create_task(image2id(d, partial(settings.STORAGE_IMPL.put, tenant_id=self._canvas._tenant_id),get_uuid())))
+            tasks.append(asyncio.create_task(image2id(d, partial(settings.STORAGE_IMPL.put, tenant_id=self._canvas._tenant_id), get_uuid())))
 
         try:
             await asyncio.gather(*tasks, return_exceptions=False)

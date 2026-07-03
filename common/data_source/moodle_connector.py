@@ -47,9 +47,7 @@ class MoodleConnector(LoadConnector, PollConnector):
         delimiter = "&" if "?" in file_url else "?"
         return f"{file_url}{delimiter}token={token}"
 
-    def _log_error(
-        self, context: str, error: Exception, level: str = "warning"
-    ) -> None:
+    def _log_error(self, context: str, error: Exception, level: str = "warning") -> None:
         """Simplified logging wrapper"""
         msg = f"{context}: {error}"
         if level == "error":
@@ -61,9 +59,7 @@ class MoodleConnector(LoadConnector, PollConnector):
         """Return latest valid timestamp"""
         return max((t for t in timestamps if t and t > 0), default=0)
 
-    def _yield_in_batches(
-        self, generator: Generator[Document, None, None]
-    ) -> Generator[list[Document], None, None]:
+    def _yield_in_batches(self, generator: Generator[Document, None, None]) -> Generator[list[Document], None, None]:
         yield from batch_generator(generator, self.batch_size)
 
     def load_credentials(self, credentials: dict[str, Any]) -> None:
@@ -72,16 +68,12 @@ class MoodleConnector(LoadConnector, PollConnector):
             raise ConnectorMissingCredentialError("Moodle API token is required")
 
         try:
-            self.moodle_client = MoodleClient(
-                self.moodle_url + "/webservice/rest/server.php", token
-            )
+            self.moodle_client = MoodleClient(self.moodle_url + "/webservice/rest/server.php", token)
             self.moodle_client.core.webservice.get_site_info()
         except MoodleException as e:
             if "invalidtoken" in str(e).lower():
                 raise CredentialExpiredError("Moodle token is invalid or expired")
-            raise ConnectorMissingCredentialError(
-                f"Failed to initialize Moodle client: {e}"
-            )
+            raise ConnectorMissingCredentialError(f"Failed to initialize Moodle client: {e}")
 
     def validate_connector_settings(self) -> None:
         if not self.moodle_client:
@@ -96,9 +88,7 @@ class MoodleConnector(LoadConnector, PollConnector):
             if "invalidtoken" in msg:
                 raise CredentialExpiredError("Moodle token is invalid or expired")
             if "accessexception" in msg:
-                raise InsufficientPermissionsError(
-                    "Insufficient permissions. Ensure web services are enabled and permissions are correct."
-                )
+                raise InsufficientPermissionsError("Insufficient permissions. Ensure web services are enabled and permissions are correct.")
             raise ConnectorValidationError(f"Moodle validation error: {e}")
         except Exception as e:
             raise ConnectorValidationError(f"Unexpected validation error: {e}")
@@ -119,23 +109,17 @@ class MoodleConnector(LoadConnector, PollConnector):
 
         yield from self._yield_in_batches(self._process_courses(courses))
 
-    def poll_source(
-        self, start: SecondsSinceUnixEpoch, end: SecondsSinceUnixEpoch
-    ) -> Generator[list[Document], None, None]:
+    def poll_source(self, start: SecondsSinceUnixEpoch, end: SecondsSinceUnixEpoch) -> Generator[list[Document], None, None]:
         if not self.moodle_client:
             raise ConnectorMissingCredentialError("Moodle client not initialized")
 
-        logger.info(
-            f"Polling Moodle updates between {datetime.fromtimestamp(start)} and {datetime.fromtimestamp(end)}"
-        )
+        logger.info(f"Polling Moodle updates between {datetime.fromtimestamp(start)} and {datetime.fromtimestamp(end)}")
         courses = self._get_enrolled_courses()
         if not courses:
             logger.warning("No courses found to poll")
             return
 
-        yield from self._yield_in_batches(
-            self._get_updated_content(courses, start, end)
-        )
+        yield from self._yield_in_batches(self._get_updated_content(courses, start, end))
 
     @retry(tries=3, delay=1, backoff=2)
     def _get_enrolled_courses(self) -> list:
@@ -171,9 +155,7 @@ class MoodleConnector(LoadConnector, PollConnector):
             except Exception as e:
                 self._log_error(f"processing course {course.fullname}", e)
 
-    def _get_updated_content(
-        self, courses, start: float, end: float
-    ) -> Generator[Document, None, None]:
+    def _get_updated_content(self, courses, start: float, end: float) -> Generator[Document, None, None]:
         for course in courses:
             try:
                 contents = self._get_course_contents(course.id)
@@ -184,11 +166,7 @@ class MoodleConnector(LoadConnector, PollConnector):
                             getattr(module, "timemodified", 0),
                         ]
                         if hasattr(module, "contents"):
-                            times.extend(
-                                getattr(c, "timemodified", 0)
-                                for c in module.contents
-                                if c and getattr(c, "timemodified", 0)
-                            )
+                            times.extend(getattr(c, "timemodified", 0) for c in module.contents if c and getattr(c, "timemodified", 0))
                         last_mod = self._get_latest_timestamp(*times)
                         if start < last_mod <= end:
                             doc = self._process_module(course, section, module)
@@ -232,9 +210,7 @@ class MoodleConnector(LoadConnector, PollConnector):
         )
 
         try:
-            resp = rl_requests.get(
-                self._add_token_to_url(file_info.fileurl), timeout=60
-            )
+            resp = rl_requests.get(self._add_token_to_url(file_info.fileurl), timeout=60)
             resp.raise_for_status()
             blob = resp.content
             ext = os.path.splitext(file_name)[1] or ".bin"
@@ -282,9 +258,7 @@ class MoodleConnector(LoadConnector, PollConnector):
             return None
 
         try:
-            result = self.moodle_client.mod.forum.get_forum_discussions(
-                forumid=module.instance
-            )
+            result = self.moodle_client.mod.forum.get_forum_discussions(forumid=module.instance)
             disc_list = getattr(result, "discussions", [])
             if not disc_list:
                 return None
@@ -363,9 +337,7 @@ class MoodleConnector(LoadConnector, PollConnector):
         )
 
         try:
-            resp = rl_requests.get(
-                self._add_token_to_url(file_info.fileurl), timeout=60
-            )
+            resp = rl_requests.get(self._add_token_to_url(file_info.fileurl), timeout=60)
             resp.raise_for_status()
             blob = resp.content
             ext = os.path.splitext(file_name)[1] or ".html"
@@ -462,12 +434,7 @@ class MoodleConnector(LoadConnector, PollConnector):
             return None
 
         contents = module.contents
-        chapters = [
-            c
-            for c in contents
-            if getattr(c, "fileurl", None)
-            and os.path.basename(c.filename) == "index.html"
-        ]
+        chapters = [c for c in contents if getattr(c, "fileurl", None) and os.path.basename(c.filename) == "index.html"]
         if not chapters:
             return None
 

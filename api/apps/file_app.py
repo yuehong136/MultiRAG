@@ -69,11 +69,7 @@ class MoveRequest(BaseModel):
 
 
 @router.post("/upload_media_redirect", summary="上传媒体并获取临时URL", response_description="成功获取临时公网URL")
-async def upload_media_redirect(
-        file: UploadFile = File(...),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+async def upload_media_redirect(file: UploadFile = File(...), db: Session = Depends(get_db), user=Depends(manager)):
     """
     上传媒体文件（如视频、图片）到对象存储，并返回临时公网可访问的 URL。
     该 URL 可用于传递给火山引擎等 AI 服务进行多模态分析。
@@ -88,7 +84,7 @@ async def upload_media_redirect(
         # 异步读取文件内容
         content = await file.read()
         if not content:
-            return get_json_result(data=False, retmsg='No file content!', retcode=RetCode.ARGUMENT_ERROR)
+            return get_json_result(data=False, retmsg="No file content!", retcode=RetCode.ARGUMENT_ERROR)
 
         filename = file.filename
 
@@ -99,7 +95,7 @@ async def upload_media_redirect(
             # 注意：MinIO/OSS 的 bucket 名称通常有格式要求
             bucket = settings.OSS.get("bucket") or settings.MINIO.get("bucket") or "multimodal-temp"
 
-            ext = filename.split('.')[-1].lower() if '.' in filename else "bin"
+            ext = filename.split(".")[-1].lower() if "." in filename else "bin"
             unique_filename = f"volc_upload/{get_uuid()}.{ext}"
 
             # Get content type
@@ -121,11 +117,7 @@ async def upload_media_redirect(
             if not url:
                 raise Exception("Failed to generate presigned URL")
 
-            return get_json_result(data={
-                "url": url,
-                "expires_in": expires,
-                "filename": unique_filename
-            })
+            return get_json_result(data={"url": url, "expires_in": expires, "filename": unique_filename})
 
         return await thread_pool_exec(_upload_sync)
 
@@ -135,12 +127,7 @@ async def upload_media_redirect(
 
 
 @router.post("/upload", summary="上传文件", response_description="成功上传文件", deprecated=True)
-async def upload(
-        parent_id: str,
-        files: list[UploadFile] = File(...),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+async def upload(parent_id: str, files: list[UploadFile] = File(...), db: Session = Depends(get_db), user=Depends(manager)):
     """
     上传文件。
 
@@ -152,11 +139,11 @@ async def upload(
     - JSON: 上传文件结果的JSON响应。
     """
     if not files:
-        return get_json_result(data=False, retmsg='No file part!', retcode=RetCode.ARGUMENT_ERROR)
+        return get_json_result(data=False, retmsg="No file part!", retcode=RetCode.ARGUMENT_ERROR)
 
     for file_obj in files:
-        if file_obj.filename == '':
-            return get_json_result(data=False, retmsg='No file selected!', retcode=RetCode.ARGUMENT_ERROR)
+        if file_obj.filename == "":
+            return get_json_result(data=False, retmsg="No file selected!", retcode=RetCode.ARGUMENT_ERROR)
 
     # 异步读取所有文件内容
     file_contents = []
@@ -178,15 +165,15 @@ async def upload(
 
         file_dict = None
         for blob, filename in file_contents:
-            MAX_FILE_NUM_PER_USER: int = int(os.environ.get('MAX_FILE_NUM_PER_USER', 0))
+            MAX_FILE_NUM_PER_USER: int = int(os.environ.get("MAX_FILE_NUM_PER_USER", 0))
             if 0 < MAX_FILE_NUM_PER_USER <= DocumentService.get_doc_count(db, user.id):
                 return get_data_error_result(retmsg="Exceed the maximum file number of a free user!")
 
             if not filename:
                 file_obj_names = [pf_folder.name, filename]
             else:
-                full_path = '/' + filename
-                file_obj_names = full_path.split('/')
+                full_path = "/" + filename
+                file_obj_names = full_path.split("/")
             file_len = len(file_obj_names)
 
             file_id_list = FileService.get_id_list_by_id(db, pf_id, file_obj_names, 1, [pf_id])
@@ -196,22 +183,19 @@ async def upload(
                 file = FileService.get_by_id(db, file_id_list[len_id_list - 1])
                 if not file:
                     return get_data_error_result(retmsg="Folder not found!")
-                last_folder = FileService.create_folder(db, file, file_id_list[len_id_list - 1], file_obj_names,
-                                                        len_id_list)
+                last_folder = FileService.create_folder(db, file, file_id_list[len_id_list - 1], file_obj_names, len_id_list)
             else:
                 file = FileService.get_by_id(db, file_id_list[len_id_list - 2])
                 if not file:
                     return get_data_error_result(retmsg="Folder not found!")
-                last_folder = FileService.create_folder(db, file, file_id_list[len_id_list - 2], file_obj_names,
-                                                        len_id_list)
+                last_folder = FileService.create_folder(db, file, file_id_list[len_id_list - 2], file_obj_names, len_id_list)
 
             filetype = filename_type(file_obj_names[file_len - 1])
             location = file_obj_names[file_len - 1]
             while settings.STORAGE_IMPL.obj_exist(last_folder.id, location):
                 location += "_"
 
-            final_filename = duplicate_name(FileService.query, db=db, name=file_obj_names[file_len - 1],
-                                      parent_id=last_folder.id)
+            final_filename = duplicate_name(FileService.query, db=db, name=file_obj_names[file_len - 1], parent_id=last_folder.id)
             settings.STORAGE_IMPL.put(last_folder.id, location, blob)
             file_data = {
                 "id": get_uuid(),
@@ -232,7 +216,7 @@ async def upload(
                 "name": file.name,
                 "location": file.location,
                 "size": file.size,
-                "type": file.type
+                "type": file.type,
             }
         return get_json_result(data=file_dict)
 
@@ -243,11 +227,7 @@ async def upload(
 
 
 @router.post("/create", summary="创建文件或文件夹", response_description="成功创建文件或文件夹", deprecated=True)
-def create(
-        request_body: CreateRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def create(request_body: CreateRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     创建文件或文件夹。
 
@@ -275,16 +255,7 @@ def create(
         else:
             file_type = FileType.VIRTUAL.value
 
-        file = FileService.insert(db, {
-            "id": get_uuid(),
-            "parent_id": pf_id,
-            "tenant_id": user.id,
-            "created_by": user.id,
-            "name": req["name"],
-            "location": "",
-            "size": 0,
-            "type": file_type
-        })
+        file = FileService.insert(db, {"id": get_uuid(), "parent_id": pf_id, "tenant_id": user.id, "created_by": user.id, "name": req["name"], "location": "", "size": 0, "type": file_type})
         # 手动转换对象为字典格式
         file_dict = {
             "id": file.id,
@@ -294,7 +265,7 @@ def create(
             "name": file.name,
             "location": file.location,
             "size": file.size,
-            "type": file.type
+            "type": file.type,
         }
 
         return get_json_result(data=file_dict)
@@ -304,14 +275,7 @@ def create(
 
 @router.get("/list", summary="列出文件或文件夹", response_description="成功列出文件或文件夹", deprecated=True)
 def list_files(
-        parent_id: str | None = None,
-        keywords: str = "",
-        page: int = 1,
-        page_size: int = 15,
-        orderby: str = "create_time",
-        desc: bool = True,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
+    parent_id: str | None = None, keywords: str = "", page: int = 1, page_size: int = 15, orderby: str = "create_time", desc: bool = True, db: Session = Depends(get_db), user=Depends(manager)
 ):
     """
     列出文件或文件夹。
@@ -348,10 +312,7 @@ def list_files(
 
 
 @router.get("/root_folder", summary="获取根文件夹", response_description="成功获取根文件夹")
-def get_root_folder(
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def get_root_folder(db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取根文件夹。
 
@@ -366,11 +327,7 @@ def get_root_folder(
 
 
 @router.get("/parent_folder", summary="获取父文件夹", response_description="成功获取父文件夹", deprecated=True)
-def get_parent_folder(
-        file_id: str,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def get_parent_folder(file_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取父文件夹。
 
@@ -392,11 +349,7 @@ def get_parent_folder(
 
 
 @router.get("/all_parent_folder", summary="获取所有父文件夹", response_description="成功获取所有父文件夹", deprecated=True)
-def get_all_parent_folders(
-        file_id: str,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def get_all_parent_folders(file_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取所有父文件夹。
 
@@ -419,11 +372,7 @@ def get_all_parent_folders(
 
 
 @router.post("/rm", summary="删除文件或文件夹", response_description="成功删除文件或文件夹", deprecated=True)
-def rm(
-        request_body: RemoveRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def rm(request_body: RemoveRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     删除文件或文件夹。
 
@@ -491,11 +440,7 @@ def rm(
 
 
 @router.post("/rename", summary="重命名文件或文件夹", response_description="成功重命名文件或文件夹", deprecated=True)
-def rename(
-        request_body: RenameRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def rename(request_body: RenameRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     重命名文件或文件夹。
 
@@ -511,11 +456,9 @@ def rename(
         if not file:
             return get_data_error_result(retmsg="File not found!")
         if not check_file_team_permission(db, file, user.id):
-            return get_json_result(data=False, retmsg='No authorization.', retcode=RetCode.AUTHENTICATION_ERROR)
-        if file.type != FileType.FOLDER.value \
-                and pathlib.Path(req["name"].lower()).suffix != pathlib.Path(file.name.lower()).suffix:
-            return get_json_result(data=False, retmsg="The extension of file can't be changed",
-                                   retcode=RetCode.ARGUMENT_ERROR)
+            return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
+        if file.type != FileType.FOLDER.value and pathlib.Path(req["name"].lower()).suffix != pathlib.Path(file.name.lower()).suffix:
+            return get_json_result(data=False, retmsg="The extension of file can't be changed", retcode=RetCode.ARGUMENT_ERROR)
         for f in FileService.query(db, name=req["name"], pf_id=file.parent_id):
             if f.name == req["name"]:
                 return get_data_error_result(retmsg="Duplicated file name in the same folder.")
@@ -534,11 +477,7 @@ def rename(
 
 
 @router.get("/get/{file_id}", summary="获取文件", response_description="成功获取文件", deprecated=True)
-def get_file(
-        file_id: str,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def get_file(file_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取文件。
 
@@ -553,7 +492,7 @@ def get_file(
         if not file:
             return get_data_error_result(retmsg="Document not found!")
         if not check_file_team_permission(db, file, user.id):
-            return get_json_result(data=False, retmsg='No authorization.', retcode=RetCode.AUTHENTICATION_ERROR)
+            return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
 
         b, n = File2DocumentService.get_storage_address(db, file_id=file_id)
         file_content = settings.STORAGE_IMPL.get(b, n)
@@ -579,11 +518,7 @@ def get_file(
 
 
 @router.post("/mv", summary="移动文件或文件夹", response_description="成功移动文件或文件夹", deprecated=True)
-def move(
-        request_body: MoveRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def move(request_body: MoveRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     移动文件或文件夹。
 
@@ -620,11 +555,7 @@ def move(
             if not file.tenant_id:
                 return get_data_error_result(retmsg="Tenant not found!")
             if not check_file_team_permission(db, file, user.id):
-                return get_json_result(
-                    data=False,
-                    retmsg="No authorization.",
-                    retcode=RetCode.AUTHENTICATION_ERROR
-                )
+                return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
 
         def _move_entry_recursive(source_file_entry, dest_folder):
             """递归移动文件或文件夹"""
@@ -636,16 +567,19 @@ def move(
                     new_folder = existing_folder[0]
                 else:
                     # 在目标位置创建新文件夹
-                    new_folder = FileService.insert(db, {
-                        "id": get_uuid(),
-                        "parent_id": dest_folder.id,
-                        "tenant_id": source_file_entry.tenant_id,
-                        "created_by": user.id,
-                        "name": source_file_entry.name,
-                        "location": "",
-                        "size": 0,
-                        "type": FileType.FOLDER.value,
-                    })
+                    new_folder = FileService.insert(
+                        db,
+                        {
+                            "id": get_uuid(),
+                            "parent_id": dest_folder.id,
+                            "tenant_id": source_file_entry.tenant_id,
+                            "created_by": user.id,
+                            "name": source_file_entry.name,
+                            "location": "",
+                            "size": 0,
+                            "type": FileType.FOLDER.value,
+                        },
+                    )
 
                 # 递归移动所有子文件
                 sub_files = FileService.list_all_files_by_parent_id(db, source_file_entry.id)
@@ -673,10 +607,14 @@ def move(
                 raise RuntimeError(f"Move file failed at storage layer: {storage_err!s}")
 
             # 更新数据库记录
-            FileService.update_by_id(db, source_file_entry.id, {
-                "parent_id": dest_folder.id,
-                "location": new_location,
-            })
+            FileService.update_by_id(
+                db,
+                source_file_entry.id,
+                {
+                    "parent_id": dest_folder.id,
+                    "location": new_location,
+                },
+            )
 
         # 移动所有选中的文件/文件夹
         for file in files:

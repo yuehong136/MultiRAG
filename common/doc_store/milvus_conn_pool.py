@@ -30,15 +30,11 @@ ATTEMPT_TIME = 2
 
 @singleton
 class MilvusConnectionPool:
-
     def __init__(self):
         if hasattr(settings, "MILVUS"):
             self.MILVUS_CONFIG = settings.MILVUS
         else:
-            self.MILVUS_CONFIG = settings.get_base_config("milvus", {
-                "hosts": "http://localhost:19530",
-                "db_name": "default"
-            })
+            self.MILVUS_CONFIG = settings.get_base_config("milvus", {"hosts": "http://localhost:19530", "db_name": "default"})
 
         uri = self.MILVUS_CONFIG.get("hosts", "http://localhost:19530")
         user = self.MILVUS_CONFIG.get("username", "")
@@ -56,9 +52,7 @@ class MilvusConnectionPool:
 
         for _ in range(ATTEMPT_TIME):
             try:
-                self._using = self._create_connection(
-                    uri, user, password, db_name, token, timeout=timeout, alias=self._default_alias, **kwargs
-                )
+                self._using = self._create_connection(uri, user, password, db_name, token, timeout=timeout, alias=self._default_alias, **kwargs)
                 version = utility.get_server_version(using=self._using)
                 self.is_self_hosted = bool(utility.get_server_type(using=self._using) == "milvus")
                 logging.info(f"Milvus {uri} connected, server version: {version}")
@@ -211,9 +205,7 @@ class MilvusConnectionPool:
             timeout = self.MILVUS_CONFIG.get("timeout", None)
             kwargs = self.MILVUS_CONFIG.get("kwargs", {})
 
-            self._using = self._create_connection(
-                uri, user, password, db_name, token, timeout=timeout, alias=self._default_alias, **kwargs
-            )
+            self._using = self._create_connection(uri, user, password, db_name, token, timeout=timeout, alias=self._default_alias, **kwargs)
             return self._using
 
     def __del__(self):

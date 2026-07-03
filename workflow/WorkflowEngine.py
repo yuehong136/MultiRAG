@@ -31,14 +31,12 @@ class WorkflowEngine:
     def add_edge(self, source_id: str, target_id: str):
         self.edges.append((source_id, target_id))
 
-    async def execute(self, input_data: dict | None = None, db: Session = Depends(get_db), user=Depends(manager)) -> \
-            dict[str, Any]:
+    async def execute(self, input_data: dict | None = None, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
         self.context.clear()  # 清除之前可能存在的上下文数据
         for i in range(len(self.node_list)):
             node = self.node_list[i]
 
-            output_data = await node.process(input_data=input_data, context=self.context, db=db,
-                                             user=user)
+            output_data = await node.process(input_data=input_data, context=self.context, db=db, user=user)
             if output_data is not None:
                 self.context.set(str(node.node_id), NodeIOData(output_data=output_data))
 
@@ -58,20 +56,14 @@ if __name__ == "__main__":
     fileSelectionComponent = FileSelectionComponent(fileSelectionComponentParam, "100002")
     workflowEngine.add_node_to_list(fileSelectionComponent)
 
-    fileReaderComponentInputDefinition = FileReaderComponentInputDefinition(parameter_name="FILE_PATH",
-                                                                            value_type=ValueTypeOfIODefinition.REF,
-                                                                            content=["100002", "FILE_PATH"])
+    fileReaderComponentInputDefinition = FileReaderComponentInputDefinition(parameter_name="FILE_PATH", value_type=ValueTypeOfIODefinition.REF, content=["100002", "FILE_PATH"])
     fileReaderComponentOutputDefinition = FileReaderComponentOutputDefinition("FILE_CONTENT")
-    fileReaderComponentParam = FileReaderComponentParam(output_definition=fileReaderComponentOutputDefinition,
-                                                        input_definition=fileReaderComponentInputDefinition)
+    fileReaderComponentParam = FileReaderComponentParam(output_definition=fileReaderComponentOutputDefinition, input_definition=fileReaderComponentInputDefinition)
     fileReaderComponent = FileReaderComponent(fileReaderComponentParam, "100004")
     workflowEngine.add_node_to_list(fileReaderComponent)
 
-    llmComponentInputDefinition = LLMComponentInputDefinition(parameter_name="FILE_CONTENT",
-                                                              value_type=ValueTypeOfIODefinition.LITERAL,
-                                                              content=["100004", "FILE_CONTENT"])
-    llmComponentOutputDefinition = LLMComponentOutputDefinition(variable_name="LLM_OUTPUT", variable_type="string",
-                                                                description="llm output")
+    llmComponentInputDefinition = LLMComponentInputDefinition(parameter_name="FILE_CONTENT", value_type=ValueTypeOfIODefinition.LITERAL, content=["100004", "FILE_CONTENT"])
+    llmComponentOutputDefinition = LLMComponentOutputDefinition(variable_name="LLM_OUTPUT", variable_type="string", description="llm output")
     prompt = """
     你是一位智能的文档判断专家，主要工作就是根据我传输给你的文本内容来确定这份文档的秘密级别，有三种秘密级别：秘密、机密，绝密。
 文档内容：
@@ -79,9 +71,9 @@ if __name__ == "__main__":
 {{FILE_CONTENT}}
 ----
     """
-    llmComponent = LLMComponent(LLMComponentParam(model="ep-20240808173556-h7vxq", prompt=prompt,
-                                                  output_definition=llmComponentOutputDefinition,
-                                                  input_definition_list=[llmComponentInputDefinition]), "100003")
+    llmComponent = LLMComponent(
+        LLMComponentParam(model="ep-20240808173556-h7vxq", prompt=prompt, output_definition=llmComponentOutputDefinition, input_definition_list=[llmComponentInputDefinition]), "100003"
+    )
     workflowEngine.add_node_to_list(llmComponent)
 
     workflowEngine.execute()

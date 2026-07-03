@@ -33,11 +33,7 @@ class SharePointConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPe
                 raise ConnectorMissingCredentialError("SharePoint credentials are incomplete")
 
             # Create MSAL confidential client
-            app = msal.ConfidentialClientApplication(
-                client_id=client_id,
-                client_credential=client_secret,
-                authority=f"https://login.microsoftonline.com/{tenant_id}"
-            )
+            app = msal.ConfidentialClientApplication(client_id=client_id, client_credential=client_secret, authority=f"https://login.microsoftonline.com/{tenant_id}")
 
             # Get access token
             result = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])

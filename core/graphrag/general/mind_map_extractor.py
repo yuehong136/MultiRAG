@@ -36,6 +36,7 @@ from core.graphrag.utils import ErrorHandlerFn, chat_limiter, perform_variable_r
 @dataclass
 class MindMapResult:
     """Unipartite Mind Graph result class definition."""
+
     output: dict
 
 
@@ -77,12 +78,7 @@ class MindMapExtractor(Extractor):
             k = self._key(k)
             if k and k not in keyset:
                 keyset.add(k)
-                arr.append(
-                    {
-                        "id": k,
-                        "children": self._be_children(v, keyset)
-                    }
-                )
+                arr.append({"id": k, "children": self._be_children(v, keyset)})
         return arr
 
     async def __call__(self, sections: list[str], prompt_variables: dict[str, Any] | None = None) -> MindMapResult:
@@ -98,18 +94,14 @@ class MindMapExtractor(Extractor):
         for i in range(len(sections)):
             section_cnt = num_tokens_from_string(sections[i])
             if cnt + section_cnt >= token_count and texts:
-                tasks.append(asyncio.create_task(
-                    self._process_document("".join(texts), prompt_variables, res)
-                ))
+                tasks.append(asyncio.create_task(self._process_document("".join(texts), prompt_variables, res)))
                 texts = []
                 cnt = 0
 
             texts.append(sections[i])
             cnt += section_cnt
         if texts:
-            tasks.append(asyncio.create_task(
-                self._process_document("".join(texts), prompt_variables, res)
-            ))
+            tasks.append(asyncio.create_task(self._process_document("".join(texts), prompt_variables, res)))
         try:
             await asyncio.gather(*tasks, return_exceptions=False)
         except Exception as e:
@@ -124,16 +116,7 @@ class MindMapExtractor(Extractor):
         if len(merge_json) > 1:
             keys = [re.sub(r"\*+", "", k) for k, v in merge_json.items() if isinstance(v, dict)]
             keyset = {i for i in keys if i}
-            merge_json = {
-                "id": "root",
-                "children": [
-                    {
-                        "id": self._key(k),
-                        "children": self._be_children(v, keyset)
-                    }
-                    for k, v in merge_json.items() if isinstance(v, dict) and self._key(k)
-                ]
-            }
+            merge_json = {"id": "root", "children": [{"id": self._key(k), "children": self._be_children(v, keyset)} for k, v in merge_json.items() if isinstance(v, dict) and self._key(k)]}
         else:
             k = self._key(next(iter(merge_json.keys())))
             merge_json = {"id": k, "children": self._be_children(next(iter(merge_json.items()))[1], {k})}
@@ -179,10 +162,7 @@ class MindMapExtractor(Extractor):
             return self._list_to_kv(to_ret)
 
         if isinstance(layer, list):
-            return [
-                self._todict(value) if isinstance(value, (collections.OrderedDict, Mapping, list)) else value
-                for value in layer
-            ]
+            return [self._todict(value) if isinstance(value, (collections.OrderedDict, Mapping, list)) else value for value in layer]
 
         return layer
 
@@ -198,7 +178,7 @@ class MindMapExtractor(Extractor):
         }
         text = perform_variable_replacements(self._mind_map_prompt, variables=variables)
         async with chat_limiter:
-            response = await thread_pool_exec(self._chat,text,[{"role": "user", "content": "Output:"}],{})
+            response = await thread_pool_exec(self._chat, text, [{"role": "user", "content": "Output:"}], {})
         response = re.sub(r"```[^\n]*", "", response)
         logging.debug(response)
         logging.debug(self._todict(markdown_to_json.dictify(response)))

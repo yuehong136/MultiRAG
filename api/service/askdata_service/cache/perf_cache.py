@@ -18,6 +18,7 @@ logger = get_askdata_logger()
 @dataclass
 class PerfCacheEntry:
     """缓存条目"""
+
     value: Any
     namespace: str
     created_at: float
@@ -32,6 +33,7 @@ class PerfCacheEntry:
 @dataclass
 class NamespaceStats:
     """命名空间统计"""
+
     hits: int = 0
     misses: int = 0
 

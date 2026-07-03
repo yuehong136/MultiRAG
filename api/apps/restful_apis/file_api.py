@@ -19,6 +19,7 @@
     GET    /files/{id}/ancestors <- /all_parent_folder
 旧路由保留并标 deprecated（生产仍在用），见 file_app.py。
 """
+
 from __future__ import annotations
 
 import logging
@@ -52,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 # ==================== Pydantic Models (V2 风格) ====================
 
+
 class CreateFolderReq(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, description="文件夹名")
     parent_id: str | None = Field(None, description="父文件夹ID")
@@ -78,6 +80,7 @@ class MoveFileReq(BaseModel):
 
 # ==================== 响应映射 ====================
 
+
 def _respond(success: bool, result: Any):
     """成功 -> get_result(data)，失败 -> get_error_data_result(retmsg)。"""
     if success:
@@ -88,6 +91,7 @@ def _respond(success: bool, result: Any):
 
 
 # ==================== API Endpoints ====================
+
 
 @router.post("/files", summary="上传文件或创建文件夹")
 async def create_or_upload(
@@ -112,9 +116,7 @@ async def create_or_upload(
                 blob = await file_obj.read()
                 file_contents.append((blob, file_obj.filename))
 
-            success, result = await thread_pool_exec(
-                file_api_service.upload_file, db, tenant_id, pf_id, file_contents
-            )
+            success, result = await thread_pool_exec(file_api_service.upload_file, db, tenant_id, pf_id, file_contents)
             return _respond(success, result)
 
         body = await request.json()
@@ -123,9 +125,7 @@ async def create_or_upload(
         except ValidationError as ve:
             return get_error_argument_result(str(ve))
 
-        success, result = await thread_pool_exec(
-            file_api_service.create_folder, db, tenant_id, req.name, req.parent_id, req.type
-        )
+        success, result = await thread_pool_exec(file_api_service.create_folder, db, tenant_id, req.name, req.parent_id, req.type)
         return _respond(success, result)
     except Exception as e:
         logger.exception(e)
@@ -164,6 +164,7 @@ def list_files(
 # 鉴权统一为 current_tenant_id（web 会话 + SDK key 皆可）。
 # 注意：GET /files/root 必须在 GET /files/{file_id} 之前注册，否则会被路径参数吞掉。
 # ---------------------------------------------------------------------------
+
 
 @router.post("/files/upload_info", summary="上传运行时文件元数据（SDK 会话用）")
 async def upload_info(
@@ -230,9 +231,7 @@ def move(
     - 两者都给：同时移动并重命名
     """
     try:
-        success, result = file_api_service.move_files(
-            db, tenant_id, request_body.src_file_ids, request_body.dest_file_id, request_body.new_name
-        )
+        success, result = file_api_service.move_files(db, tenant_id, request_body.src_file_ids, request_body.dest_file_id, request_body.new_name)
         return _respond(success, result)
     except Exception as e:
         logger.exception(e)
@@ -307,6 +306,7 @@ def ancestors(
 # multirag 专有端点（ragflow #13741 无对应，路径在 /file 单数下），收编自退役的
 # sdk/files.py，鉴权统一为 current_tenant_id。
 # ---------------------------------------------------------------------------
+
 
 @router.post("/file/convert", summary="文件转换为知识库文档（SDK）")
 def convert(

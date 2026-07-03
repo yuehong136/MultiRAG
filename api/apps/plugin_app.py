@@ -52,48 +52,24 @@ class UninstallDepRequest(BaseModel):
 
 
 @router.post("/run-plugin-script", summary="运行插件脚本")
-async def run_plugin_script(
-        body: RunPluginScriptRequest = Body(...),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
-    result = await ScriptSchedulerService.run_plugin_script(
-        plugin_id=body.plugin_id,
-        script=body.script,
-        args=body.args,
-        user_id=user.id
-    )
+async def run_plugin_script(body: RunPluginScriptRequest = Body(...), db: Session = Depends(get_db), user=Depends(manager)):
+    result = await ScriptSchedulerService.run_plugin_script(plugin_id=body.plugin_id, script=body.script, args=body.args, user_id=user.id)
     return ResponseSchema(message="运行插件脚本成功", data=result)
 
 
 @router.post("/install-dep", summary="安装插件依赖")
-async def install_dep(
-        body: InstallDepRequest = Body(...),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
-    result = await PluginService.install_dep(
-        plugin_id=body.plugin_id,
-        package_name=body.package_name,
-        package_version=body.package_version
-    )
+async def install_dep(body: InstallDepRequest = Body(...), db: Session = Depends(get_db), user=Depends(manager)):
+    result = await PluginService.install_dep(plugin_id=body.plugin_id, package_name=body.package_name, package_version=body.package_version)
     return ResponseSchema(message="安装依赖成功", data=result)
 
 
 @router.post("/uninstall-dep", summary="卸载插件依赖")
-async def uninstall_dep(
-        body: UninstallDepRequest = Body(...),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
-    result = await PluginService.uninstall_dep(
-        plugin_id=body.plugin_id,
-        package_name=body.package_name
-    )
+async def uninstall_dep(body: UninstallDepRequest = Body(...), db: Session = Depends(get_db), user=Depends(manager)):
+    result = await PluginService.uninstall_dep(plugin_id=body.plugin_id, package_name=body.package_name)
     return ResponseSchema(message="卸载依赖成功", data=result)
 
 
-@router.get('/llm_tools', summary="获取LLM工具列表", response_description="成功获取LLM工具列表")
+@router.get("/llm_tools", summary="获取LLM工具列表", response_description="成功获取LLM工具列表")
 def llm_tools(user=Depends(manager)):
     tools = GlobalPluginManager.get_llm_tools()
     tools_metadata = [t.get_metadata() for t in tools]

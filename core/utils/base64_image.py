@@ -11,6 +11,7 @@ from core.utils.lazy_image import open_image_for_processing
 test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAIAAAD/gAIDAAAA6ElEQVR4nO3QwQ3AIBDAsIP9d25XIC+EZE8QZc18w5l9O+AlZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBWYFZgVmBT+IYAHHLHkdEgAAAABJRU5ErkJggg=="
 test_image = base64.b64decode(test_image_base64)
 
+
 async def image2id(d: dict, storage_put_func: partial, objname: str, bucket: str = "imagetemps"):
     import logging
     from io import BytesIO
@@ -64,9 +65,7 @@ async def image2id(d: dict, storage_put_func: partial, objname: str, bucket: str
         return
 
     async with minio_limiter:
-        await thread_pool_exec(
-            lambda: storage_put_func(bucket=bucket, fnm=objname, binary=jpeg_binary)
-        )
+        await thread_pool_exec(lambda: storage_put_func(bucket=bucket, fnm=objname, binary=jpeg_binary))
 
     d["img_id"] = f"{bucket}-{objname}"
 
@@ -89,4 +88,3 @@ def id2image(image_id: str | None, storage_get_func: partial):
         return Image.open(BytesIO(blob))
     except Exception as e:
         logging.exception(e)
-

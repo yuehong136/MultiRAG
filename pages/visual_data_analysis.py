@@ -1,4 +1,3 @@
-
 import pandas as pd
 import streamlit as st
 from pygwalker.api.streamlit import StreamlitRenderer
@@ -11,15 +10,12 @@ st.set_page_config(
     page_icon="🔎️",
     layout="wide",
     initial_sidebar_state="auto",
-    menu_items={
-        'Get Help': 'https://www.extremelycoolapp.com/help',
-        'Report a bug': "https://www.extremelycoolapp.com/bug",
-        'About': "- 在此进行数据可视化分析!"
-    }
+    menu_items={"Get Help": "https://www.extremelycoolapp.com/help", "Report a bug": "https://www.extremelycoolapp.com/bug", "About": "- 在此进行数据可视化分析!"},
 )
 
 # 自定义CSS样式
-st.markdown("""
+st.markdown(
+    """
     <style>
         .sidebar .sidebar-content {
             padding: 10px;
@@ -32,7 +28,9 @@ st.markdown("""
             border-radius: 8px;
         }
     </style>
-    """, unsafe_allow_html=True)
+    """,
+    unsafe_allow_html=True,
+)
 
 # 页面标题和说明
 st.markdown("# " + "***" + "可视化数据分析" + "***")
@@ -40,10 +38,7 @@ st.markdown("*" + "使用此工具，允许数据科学家通过简单的拖放�
 
 # 侧边栏
 with st.sidebar:
-    st.image(
-        r"E:\Project\python\study\RAG\assets\imgs\logo2.png",
-        use_column_width=True
-    )
+    st.image(r"E:\Project\python\study\RAG\assets\imgs\logo2.png", use_column_width=True)
     st.caption(
         f"""<p align="right">当前版本：{VERSION}</p>""",
         unsafe_allow_html=True,
@@ -60,10 +55,11 @@ with st.sidebar:
     uploaded_file = st.file_uploader("上传 CSV 或 Excel 文件", type=["csv", "xlsx"])
     if uploaded_file:
         # 读取上传的文件
-        if uploaded_file.name.endswith('.csv'):
+        if uploaded_file.name.endswith(".csv"):
             df = pd.read_csv(uploaded_file)
         else:
             df = pd.read_excel(uploaded_file)
+
 
 @st.cache_resource
 def get_pyg_renderer(dataframe: pd.DataFrame) -> "StreamlitRenderer":
@@ -71,7 +67,7 @@ def get_pyg_renderer(dataframe: pd.DataFrame) -> "StreamlitRenderer":
     return StreamlitRenderer(dataframe, spec="./gw_config.json", spec_io_mode="rw", encoding="utf-8")
 
 
-if 'df' in locals():
+if "df" in locals():
     renderer = get_pyg_renderer(df)
     renderer.explorer()
 else:

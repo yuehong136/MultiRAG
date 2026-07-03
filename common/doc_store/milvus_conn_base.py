@@ -17,6 +17,7 @@
 Milvus connection base class.
 This module provides the base class for Milvus connections with common operations.
 """
+
 import copy
 import json
 import logging
@@ -138,7 +139,7 @@ class MilvusConnectionBase(DocStoreConnection):
                 self.logger.warning(f"Milvus mapping file not found, using default fields: {mapping_path}")
                 return self._create_default_collection(index_name, dataset_id, vector_size)
 
-            with open(mapping_path, encoding='utf-8') as f:
+            with open(mapping_path, encoding="utf-8") as f:
                 mapping = json.load(f)
 
             fields = []
@@ -158,12 +159,7 @@ class MilvusConnectionBase(DocStoreConnection):
 
                     if value.get("mapping", {}).get("is_primary", False):
                         max_length = value.get("mapping", {}).get("max_length", 512)
-                        fields.append(FieldSchema(
-                            name=match,
-                            dtype=DataType.VARCHAR,
-                            max_length=max_length,
-                            is_primary=True
-                        ))
+                        fields.append(FieldSchema(name=match, dtype=DataType.VARCHAR, max_length=max_length, is_primary=True))
                         primary_field_added = True
                         continue
 
@@ -171,11 +167,7 @@ class MilvusConnectionBase(DocStoreConnection):
                         dims = value.get("mapping", {}).get("dims", vector_size)
                         if dims == "auto":
                             dims = auto_dimensions.get(match, vector_size)
-                        fields.append(FieldSchema(
-                            name=match,
-                            dtype=DataType.FLOAT_VECTOR,
-                            dim=dims
-                        ))
+                        fields.append(FieldSchema(name=match, dtype=DataType.FLOAT_VECTOR, dim=dims))
                         vector_field_added = True
                         continue
 
@@ -193,13 +185,7 @@ class MilvusConnectionBase(DocStoreConnection):
                         max_length = value.get("mapping", {}).get("max_length", 256)
                         max_capacity = value.get("mapping", {}).get("max_capacity", 100)
                         element_data_type = getattr(DataType, element_type) if isinstance(element_type, str) else element_type
-                        fields.append(FieldSchema(
-                            name=match,
-                            dtype=DataType.ARRAY,
-                            element_type=element_data_type,
-                            max_length=max_length,
-                            max_capacity=max_capacity
-                        ))
+                        fields.append(FieldSchema(name=match, dtype=DataType.ARRAY, element_type=element_data_type, max_length=max_length, max_capacity=max_capacity))
 
             if not vector_field_added:
                 fields.append(FieldSchema(name=f"q_{vector_size}_vec", dtype=DataType.FLOAT_VECTOR, dim=vector_size))
@@ -210,22 +196,14 @@ class MilvusConnectionBase(DocStoreConnection):
             if not any(field.name == PAGERANK_FLD for field in fields):
                 fields.append(FieldSchema(name=PAGERANK_FLD, dtype=DataType.FLOAT))
 
-            schema = CollectionSchema(
-                fields=fields,
-                description=f"Collection for {index_name} with {dataset_id}",
-                enable_dynamic_field=True
-            )
+            schema = CollectionSchema(fields=fields, description=f"Collection for {index_name} with {dataset_id}", enable_dynamic_field=True)
 
             conn = self._get_connection()
             conn.create_collection(collection_name, schema, consistency_level=DEFAULT_CONSISTENCY_LEVEL)
 
             for field in fields:
                 if field.dtype == DataType.FLOAT_VECTOR:
-                    index_params = {
-                        "index_type": "IVF_FLAT",
-                        "metric_type": "COSINE",
-                        "params": {"nlist": 1024}
-                    }
+                    index_params = {"index_type": "IVF_FLAT", "metric_type": "COSINE", "params": {"nlist": 1024}}
                     conn.create_index(collection_name, field.name, index_params)
 
             conn.load_collection(collection_name)
@@ -267,19 +245,11 @@ class MilvusConnectionBase(DocStoreConnection):
             FieldSchema(name="doc_id", dtype=DataType.VARCHAR, max_length=128),
         ]
 
-        schema = CollectionSchema(
-            fields=fields,
-            description=f"Default collection for {index_name} with {dataset_id}",
-            enable_dynamic_field=True
-        )
+        schema = CollectionSchema(fields=fields, description=f"Default collection for {index_name} with {dataset_id}", enable_dynamic_field=True)
 
         conn = self._get_connection()
         conn.create_collection(collection_name, schema, consistency_level=DEFAULT_CONSISTENCY_LEVEL)
-        conn.create_index(
-            collection_name,
-            f"q_{vector_size}_vec",
-            {"index_type": "IVF_FLAT", "metric_type": "COSINE", "params": {"nlist": 1024}}
-        )
+        conn.create_index(collection_name, f"q_{vector_size}_vec", {"index_type": "IVF_FLAT", "metric_type": "COSINE", "params": {"nlist": 1024}})
         conn.load_collection(collection_name)
         self.logger.info(f"Successfully created collection {collection_name} (default fields), vector size {vector_size}")
         return True
@@ -521,6 +491,7 @@ class MilvusConnectionBase(DocStoreConnection):
         Aggregations (COUNT/SUM/AVG/MIN/MAX) are computed in Python via pandas.
         """
         import pandas as pd
+
         self.logger.debug(f"Milvus sql() input: {sql}")
 
         try:
@@ -600,9 +571,7 @@ class MilvusConnectionBase(DocStoreConnection):
 
             # Expand chunk_data JSON into columns
             if "chunk_data" in df.columns:
-                json_expanded = df["chunk_data"].apply(
-                    lambda v: v if isinstance(v, dict) else (json.loads(v) if isinstance(v, str) and v else {})
-                )
+                json_expanded = df["chunk_data"].apply(lambda v: v if isinstance(v, dict) else (json.loads(v) if isinstance(v, str) and v else {}))
                 json_df = pd.json_normalize(json_expanded)
                 df = pd.concat([df.drop(columns=["chunk_data"]), json_df], axis=1)
 
@@ -663,13 +632,13 @@ class MilvusConnectionBase(DocStoreConnection):
                 in_quotes = False
                 quote_char = None
                 current += ch
-            elif ch == '(' and not in_quotes:
+            elif ch == "(" and not in_quotes:
                 depth += 1
                 current += ch
-            elif ch == ')' and not in_quotes:
+            elif ch == ")" and not in_quotes:
                 depth -= 1
                 current += ch
-            elif ch == ',' and depth == 0 and not in_quotes:
+            elif ch == "," and depth == 0 and not in_quotes:
                 fields.append(current.strip())
                 current = ""
             else:
@@ -689,18 +658,15 @@ class MilvusConnectionBase(DocStoreConnection):
         expr = re.sub(r"\bOR\b", "||", expr, flags=re.IGNORECASE)
         expr = re.sub(r"\bNOT\b", "!", expr, flags=re.IGNORECASE)
         # IS NOT NULL → field != ""
-        expr = re.sub(r'(\S+)\s+IS\s+NOT\s+NULL', r'\1 != ""', expr, flags=re.IGNORECASE)
-        expr = re.sub(r'(\S+)\s+IS\s+NULL', r'\1 == ""', expr, flags=re.IGNORECASE)
+        expr = re.sub(r"(\S+)\s+IS\s+NOT\s+NULL", r'\1 != ""', expr, flags=re.IGNORECASE)
+        expr = re.sub(r"(\S+)\s+IS\s+NULL", r'\1 == ""', expr, flags=re.IGNORECASE)
 
         return expr
 
     def _execute_aggregate(self, select_raw: str, df, group_by_field: str | None, format: str, fetch_size: int) -> dict:
         """Execute aggregate functions (COUNT/SUM/AVG/MIN/MAX) in Python using pandas."""
         # Parse aggregate expressions: COUNT(*), SUM(chunk_data["field"]), etc.
-        agg_pattern = re.compile(
-            r'(COUNT|SUM|AVG|MIN|MAX)\s*\(\s*(\*|(?:DISTINCT\s+)?[\w\"\[\]\.]+)\s*\)(?:\s+AS\s+(\w+))?',
-            re.IGNORECASE
-        )
+        agg_pattern = re.compile(r"(COUNT|SUM|AVG|MIN|MAX)\s*\(\s*(\*|(?:DISTINCT\s+)?[\w\"\[\]\.]+)\s*\)(?:\s+AS\s+(\w+))?", re.IGNORECASE)
 
         agg_exprs = []
         for m in agg_pattern.finditer(select_raw):
@@ -779,6 +745,7 @@ class MilvusConnectionBase(DocStoreConnection):
     def _compute_agg(func: str, col: str, df) -> int | float | None:
         """Compute a single aggregate function on a DataFrame."""
         import pandas as pd
+
         if func == "COUNT":
             if col == "*":
                 return len(df)
@@ -902,10 +869,7 @@ class MilvusConnectionBase(DocStoreConnection):
 
                 sparse_field = cfg["sparse_field"]
                 final_weight = boost
-                search_params = {
-                    "metric_type": "BM25",
-                    "params": copy.deepcopy(cfg.get("search_params", {"drop_ratio_search": 0.1}))
-                }
+                search_params = {"metric_type": "BM25", "params": copy.deepcopy(cfg.get("search_params", {"drop_ratio_search": 0.1}))}
 
                 for collection in collection_names:
                     try:
@@ -932,11 +896,14 @@ class MilvusConnectionBase(DocStoreConnection):
                         if not doc_id:
                             continue
                         distance = get_float(hit_dict.get("distance", 0.0))
-                        entry = aggregated.setdefault(doc_id, {
-                            "hit": {"id": doc_id, "pk": doc_id},
-                            "entity": {},
-                            "distance": 0.0,
-                        })
+                        entry = aggregated.setdefault(
+                            doc_id,
+                            {
+                                "hit": {"id": doc_id, "pk": doc_id},
+                                "entity": {},
+                                "distance": 0.0,
+                            },
+                        )
                         entry["distance"] += final_weight * distance
                         score_map[doc_id] = entry["distance"]
 
@@ -1059,13 +1026,9 @@ class MilvusConnectionBase(DocStoreConnection):
         rank_boost: dict,
     ):
         """Perform hybrid search combining text and vector search."""
-        text_results, text_scores, _ = self._execute_text_queries(
-            index_names, text_exprs, filter_expr, select_fields, limit, offset
-        )
+        text_results, text_scores, _ = self._execute_text_queries(index_names, text_exprs, filter_expr, select_fields, limit, offset)
 
-        vector_results, vector_scores, _ = self._execute_dense_query(
-            index_names, dense_expr, filter_expr, select_fields, limit, offset
-        )
+        vector_results, vector_scores, _ = self._execute_dense_query(index_names, dense_expr, filter_expr, select_fields, limit, offset)
 
         combined_results = []
         if text_results and vector_results:
@@ -1078,10 +1041,7 @@ class MilvusConnectionBase(DocStoreConnection):
 
             final_scores = {}
             for doc_id in set(norm_text.keys()) | set(norm_vector.keys()):
-                final_scores[doc_id] = (
-                    text_weight * norm_text.get(doc_id, 0.0) +
-                    vector_weight * norm_vector.get(doc_id, 0.0)
-                )
+                final_scores[doc_id] = text_weight * norm_text.get(doc_id, 0.0) + vector_weight * norm_vector.get(doc_id, 0.0)
 
             lookup = {}
             for hit in vector_results + text_results:
@@ -1314,6 +1274,7 @@ class MilvusConnectionBase(DocStoreConnection):
             extra = None
             if costs:
                 from pymilvus.client.types import construct_cost_extra
+
                 extras = [construct_cost_extra(c) for c in costs]
                 extra = extras[0] if len(extras) == 1 else extras
             recalls_val = None

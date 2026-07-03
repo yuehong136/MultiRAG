@@ -31,21 +31,25 @@ from common.time_utils import current_timestamp
 
 class EvaluationDatasetService(CommonService):
     """Service for managing evaluation datasets"""
+
     model = EvaluationDataset
 
 
 class EvaluationCaseService(CommonService):
     """Service for managing evaluation test cases"""
+
     model = EvaluationCase
 
 
 class EvaluationRunService(CommonService):
     """Service for managing evaluation runs"""
+
     model = EvaluationRun
 
 
 class EvaluationResultService(CommonService):
     """Service for managing evaluation results"""
+
     model = EvaluationResult
 
 
@@ -55,15 +59,7 @@ class EvaluationService:
     # ==================== Dataset Management ====================
 
     @classmethod
-    def create_dataset(
-        cls,
-        db: Session,
-        name: str,
-        description: str,
-        kb_ids: list[str],
-        tenant_id: str,
-        user_id: str
-    ) -> tuple[bool, str]:
+    def create_dataset(cls, db: Session, name: str, description: str, kb_ids: list[str], tenant_id: str, user_id: str) -> tuple[bool, str]:
         """
         Create a new evaluation dataset.
 
@@ -80,16 +76,7 @@ class EvaluationService:
         """
         try:
             dataset_id = get_uuid()
-            EvaluationDatasetService.insert(
-                db,
-                id=dataset_id,
-                tenant_id=tenant_id,
-                name=name,
-                description=description,
-                kb_ids=kb_ids,
-                created_by=user_id,
-                status=StatusEnum.VALID.value
-            )
+            EvaluationDatasetService.insert(db, id=dataset_id, tenant_id=tenant_id, name=name, description=description, kb_ids=kb_ids, created_by=user_id, status=StatusEnum.VALID.value)
             return True, dataset_id
         except Exception as e:
             logging.error(f"Error creating evaluation dataset: {e}")
@@ -108,27 +95,15 @@ class EvaluationService:
             return None
 
     @classmethod
-    def list_datasets(
-        cls,
-        db: Session,
-        tenant_id: str,
-        page: int = 1,
-        page_size: int = 20
-    ) -> dict[str, Any]:
+    def list_datasets(cls, db: Session, tenant_id: str, page: int = 1, page_size: int = 20) -> dict[str, Any]:
         """List datasets for a tenant"""
         try:
-            query = db.query(EvaluationDataset).filter(
-                (EvaluationDataset.tenant_id == tenant_id) &
-                (EvaluationDataset.status == StatusEnum.VALID.value)
-            ).order_by(EvaluationDataset.create_time.desc())
+            query = db.query(EvaluationDataset).filter((EvaluationDataset.tenant_id == tenant_id) & (EvaluationDataset.status == StatusEnum.VALID.value)).order_by(EvaluationDataset.create_time.desc())
 
             total = query.count()
             datasets = query.offset((page - 1) * page_size).limit(page_size).all()
 
-            return {
-                "total": total,
-                "datasets": [d.to_dict() for d in datasets]
-            }
+            return {"total": total, "datasets": [d.to_dict() for d in datasets]}
         except Exception as e:
             logging.error(f"Error listing datasets: {e}")
             return {"total": 0, "datasets": []}
@@ -146,11 +121,7 @@ class EvaluationService:
     def delete_dataset(cls, db: Session, dataset_id: str) -> bool:
         """Soft delete dataset"""
         try:
-            return EvaluationDatasetService.update_by_id(
-                db,
-                dataset_id,
-                {"status": StatusEnum.INVALID.value}
-            ) > 0
+            return EvaluationDatasetService.update_by_id(db, dataset_id, {"status": StatusEnum.INVALID.value}) > 0
         except Exception as e:
             logging.error(f"Error deleting dataset {dataset_id}: {e}")
             return False
@@ -166,7 +137,7 @@ class EvaluationService:
         reference_answer: str | None = None,
         relevant_doc_ids: list[str] | None = None,
         relevant_chunk_ids: list[str] | None = None,
-        case_metadata: dict[str, Any] | None = None
+        case_metadata: dict[str, Any] | None = None,
     ) -> tuple[bool, str]:
         """
         Add a test case to a dataset.
@@ -193,7 +164,7 @@ class EvaluationService:
                 reference_answer=reference_answer,
                 relevant_doc_ids=relevant_doc_ids,
                 relevant_chunk_ids=relevant_chunk_ids,
-                case_metadata=case_metadata
+                case_metadata=case_metadata,
             )
             return True, case_id
         except Exception as e:
@@ -204,9 +175,7 @@ class EvaluationService:
     def get_test_cases(cls, db: Session, dataset_id: str) -> list[dict[str, Any]]:
         """Get all test cases for a dataset"""
         try:
-            cases = db.query(EvaluationCase).filter(
-                EvaluationCase.dataset_id == dataset_id
-            ).order_by(EvaluationCase.create_time).all()
+            cases = db.query(EvaluationCase).filter(EvaluationCase.dataset_id == dataset_id).order_by(EvaluationCase.create_time).all()
             return [c.to_dict() for c in cases]
         except Exception as e:
             logging.error(f"Error getting test cases for dataset {dataset_id}: {e}")
@@ -222,12 +191,7 @@ class EvaluationService:
             return False
 
     @classmethod
-    def import_test_cases(
-        cls,
-        db: Session,
-        dataset_id: str,
-        cases: list[dict[str, Any]]
-    ) -> tuple[int, int]:
+    def import_test_cases(cls, db: Session, dataset_id: str, cases: list[dict[str, Any]]) -> tuple[int, int]:
         """
         Bulk import test cases from a list.
 
@@ -258,7 +222,7 @@ class EvaluationService:
                     "relevant_doc_ids": case_data.get("relevant_doc_ids"),
                     "relevant_chunk_ids": case_data.get("relevant_chunk_ids"),
                     "metadata": case_data.get("metadata"),
-                    "create_time": cur_timestamp
+                    "create_time": cur_timestamp,
                 }
 
                 case_instances.append(EvaluationCase(**case_info))
@@ -276,14 +240,7 @@ class EvaluationService:
     # ==================== Evaluation Execution ====================
 
     @classmethod
-    def start_evaluation(
-        cls,
-        db: Session,
-        dataset_id: str,
-        dialog_id: str,
-        user_id: str,
-        name: str | None = None
-    ) -> tuple[bool, str]:
+    def start_evaluation(cls, db: Session, dataset_id: str, dialog_id: str, user_id: str, name: str | None = None) -> tuple[bool, str]:
         """
         Start an evaluation run.
 
@@ -332,7 +289,7 @@ class EvaluationService:
                 metrics_summary=None,
                 run_status="RUNNING",
                 created_by=user_id,
-                complete_time=None
+                complete_time=None,
             )
 
             # Execute evaluation (in a background task for production)
@@ -355,10 +312,7 @@ class EvaluationService:
             test_cases = cls.get_test_cases(db, dataset_id)
 
             if not test_cases:
-                EvaluationRunService.update_by_id(
-                    db, run_id,
-                    {"run_status": "FAILED", "complete_time": current_timestamp()}
-                )
+                EvaluationRunService.update_by_id(db, run_id, {"run_status": "FAILED", "complete_time": current_timestamp()})
                 return
 
             # Execute each test case
@@ -372,30 +326,14 @@ class EvaluationService:
             metrics_summary = cls._compute_summary_metrics(results)
 
             # Update run status
-            EvaluationRunService.update_by_id(
-                db, run_id,
-                {
-                    "run_status": "COMPLETED",
-                    "metrics_summary": metrics_summary,
-                    "complete_time": current_timestamp()
-                }
-            )
+            EvaluationRunService.update_by_id(db, run_id, {"run_status": "COMPLETED", "metrics_summary": metrics_summary, "complete_time": current_timestamp()})
 
         except Exception as e:
             logging.error(f"Error executing evaluation {run_id}: {e}")
-            EvaluationRunService.update_by_id(
-                db, run_id,
-                {"run_status": "FAILED", "complete_time": current_timestamp()}
-            )
+            EvaluationRunService.update_by_id(db, run_id, {"run_status": "FAILED", "complete_time": current_timestamp()})
 
     @classmethod
-    def _evaluate_single_case(
-        cls,
-        db: Session,
-        run_id: str,
-        case: dict[str, Any],
-        dialog: Any
-    ) -> dict[str, Any] | None:
+    def _evaluate_single_case(cls, db: Session, run_id: str, case: dict[str, Any], dialog: Any) -> dict[str, Any] | None:
         """
         Evaluate a single test case.
 
@@ -526,11 +464,7 @@ class EvaluationService:
         return metrics
 
     @classmethod
-    def _compute_retrieval_metrics(
-        cls,
-        retrieved_ids: list[str],
-        relevant_ids: list[str]
-    ) -> dict[str, float]:
+    def _compute_retrieval_metrics(cls, retrieved_ids: list[str], relevant_ids: list[str]) -> dict[str, float]:
         """
         Compute retrieval metrics.
 
@@ -566,13 +500,7 @@ class EvaluationService:
                 mrr = 1.0 / i
                 break
 
-        return {
-            "precision": precision,
-            "recall": recall,
-            "f1_score": f1,
-            "hit_rate": hit_rate,
-            "mrr": mrr
-        }
+        return {"precision": precision, "recall": recall, "f1_score": f1, "hit_rate": hit_rate, "mrr": mrr}
 
     @classmethod
     def _compute_summary_metrics(cls, results: list[dict[str, Any]]) -> dict[str, Any]:
@@ -600,10 +528,7 @@ class EvaluationService:
                     metric_counts[key] = metric_counts.get(key, 0) + 1
 
         # Compute averages
-        summary: dict[str, Any] = {
-            "total_cases": len(results),
-            "avg_execution_time": sum(r.get("execution_time", 0) for r in results) / len(results)
-        }
+        summary: dict[str, Any] = {"total_cases": len(results), "avg_execution_time": sum(r.get("execution_time", 0) for r in results) / len(results)}
 
         for key in metric_sums:
             summary[f"avg_{key}"] = metric_sums[key] / metric_counts[key]
@@ -620,34 +545,18 @@ class EvaluationService:
             if not run:
                 return {}
 
-            results = db.query(EvaluationResult).filter(
-                EvaluationResult.run_id == run_id
-            ).order_by(EvaluationResult.create_time).all()
+            results = db.query(EvaluationResult).filter(EvaluationResult.run_id == run_id).order_by(EvaluationResult.create_time).all()
 
-            return {
-                "run": run.to_dict(),
-                "results": [r.to_dict() for r in results]
-            }
+            return {"run": run.to_dict(), "results": [r.to_dict() for r in results]}
         except Exception as e:
             logging.error(f"Error getting run results {run_id}: {e}")
             return {}
 
     @classmethod
-    def list_runs(
-        cls,
-        db: Session,
-        tenant_id: str,
-        dataset_id: str | None = None,
-        dialog_id: str | None = None,
-        page: int = 1,
-        page_size: int = 20
-    ) -> dict[str, Any]:
+    def list_runs(cls, db: Session, tenant_id: str, dataset_id: str | None = None, dialog_id: str | None = None, page: int = 1, page_size: int = 20) -> dict[str, Any]:
         """List evaluation runs"""
         try:
-            query = db.query(EvaluationRun).join(
-                EvaluationDataset,
-                EvaluationRun.dataset_id == EvaluationDataset.id
-            ).filter(EvaluationDataset.tenant_id == tenant_id)
+            query = db.query(EvaluationRun).join(EvaluationDataset, EvaluationRun.dataset_id == EvaluationDataset.id).filter(EvaluationDataset.tenant_id == tenant_id)
 
             if dataset_id:
                 query = query.filter(EvaluationRun.dataset_id == dataset_id)
@@ -659,10 +568,7 @@ class EvaluationService:
             total = query.count()
             runs = query.offset((page - 1) * page_size).limit(page_size).all()
 
-            return {
-                "total": total,
-                "runs": [r.to_dict() for r in runs]
-            }
+            return {"total": total, "runs": [r.to_dict() for r in runs]}
         except Exception as e:
             logging.error(f"Error listing runs: {e}")
             return {"total": 0, "runs": []}
@@ -672,9 +578,7 @@ class EvaluationService:
         """Delete an evaluation run and its results"""
         try:
             # Delete results first
-            db.query(EvaluationResult).filter(
-                EvaluationResult.run_id == run_id
-            ).delete(synchronize_session=False)
+            db.query(EvaluationResult).filter(EvaluationResult.run_id == run_id).delete(synchronize_session=False)
 
             # Delete run
             EvaluationRunService.delete_by_id(db, run_id)
@@ -707,69 +611,63 @@ class EvaluationService:
 
             # Low precision: retrieving irrelevant chunks
             if metrics.get("avg_precision", 1.0) < 0.7:
-                recommendations.append({
-                    "issue": "Low Precision",
-                    "severity": "high",
-                    "description": "System is retrieving many irrelevant chunks",
-                    "suggestions": [
-                        "Increase similarity_threshold to filter out less relevant chunks",
-                        "Enable reranking to improve chunk ordering",
-                        "Reduce top_k to return fewer chunks"
-                    ]
-                })
+                recommendations.append(
+                    {
+                        "issue": "Low Precision",
+                        "severity": "high",
+                        "description": "System is retrieving many irrelevant chunks",
+                        "suggestions": ["Increase similarity_threshold to filter out less relevant chunks", "Enable reranking to improve chunk ordering", "Reduce top_k to return fewer chunks"],
+                    }
+                )
 
             # Low recall: missing relevant chunks
             if metrics.get("avg_recall", 1.0) < 0.7:
-                recommendations.append({
-                    "issue": "Low Recall",
-                    "severity": "high",
-                    "description": "System is missing relevant chunks",
-                    "suggestions": [
-                        "Increase top_k to retrieve more chunks",
-                        "Lower similarity_threshold to be more inclusive",
-                        "Enable hybrid search (keyword + semantic)",
-                        "Check chunk size - may be too large or too small"
-                    ]
-                })
+                recommendations.append(
+                    {
+                        "issue": "Low Recall",
+                        "severity": "high",
+                        "description": "System is missing relevant chunks",
+                        "suggestions": [
+                            "Increase top_k to retrieve more chunks",
+                            "Lower similarity_threshold to be more inclusive",
+                            "Enable hybrid search (keyword + semantic)",
+                            "Check chunk size - may be too large or too small",
+                        ],
+                    }
+                )
 
             # Low F1 score
             if metrics.get("avg_f1_score", 1.0) < 0.5:
-                recommendations.append({
-                    "issue": "Low F1 Score",
-                    "severity": "high",
-                    "description": "Poor balance between precision and recall",
-                    "suggestions": [
-                        "Review knowledge base content quality",
-                        "Consider adjusting chunk overlap",
-                        "Try different embedding models"
-                    ]
-                })
+                recommendations.append(
+                    {
+                        "issue": "Low F1 Score",
+                        "severity": "high",
+                        "description": "Poor balance between precision and recall",
+                        "suggestions": ["Review knowledge base content quality", "Consider adjusting chunk overlap", "Try different embedding models"],
+                    }
+                )
 
             # Low hit rate
             if metrics.get("avg_hit_rate", 1.0) < 0.8:
-                recommendations.append({
-                    "issue": "Low Hit Rate",
-                    "severity": "medium",
-                    "description": "Often failing to retrieve any relevant chunks",
-                    "suggestions": [
-                        "Increase top_k significantly",
-                        "Review knowledge base coverage",
-                        "Consider query expansion or rewriting"
-                    ]
-                })
+                recommendations.append(
+                    {
+                        "issue": "Low Hit Rate",
+                        "severity": "medium",
+                        "description": "Often failing to retrieve any relevant chunks",
+                        "suggestions": ["Increase top_k significantly", "Review knowledge base coverage", "Consider query expansion or rewriting"],
+                    }
+                )
 
             # Slow response time
             if metrics.get("avg_execution_time", 0) > 5.0:
-                recommendations.append({
-                    "issue": "Slow Response Time",
-                    "severity": "medium",
-                    "description": f"Average response time is {metrics['avg_execution_time']:.2f}s",
-                    "suggestions": [
-                        "Reduce top_k to retrieve fewer chunks",
-                        "Optimize embedding model selection",
-                        "Consider caching frequently asked questions"
-                    ]
-                })
+                recommendations.append(
+                    {
+                        "issue": "Slow Response Time",
+                        "severity": "medium",
+                        "description": f"Average response time is {metrics['avg_execution_time']:.2f}s",
+                        "suggestions": ["Reduce top_k to retrieve fewer chunks", "Optimize embedding model selection", "Consider caching frequently asked questions"],
+                    }
+                )
 
             return recommendations
         except Exception as e:

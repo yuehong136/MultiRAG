@@ -3,6 +3,7 @@
 
 # app/core/exceptions.py
 
+
 class CustomException(Exception):
     def __init__(self, message: str):
         self.message = message

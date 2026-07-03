@@ -5,6 +5,7 @@
 @date：2025/7/16 10:00
 @desc: MCP服务器应用接口
 """
+
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -86,7 +87,7 @@ class TestMCPRequest(BaseModel):
     variables: dict | None = None
 
 
-@router.post('/list', summary="获取MCP服务器列表", response_description="成功获取MCP服务器列表")
+@router.post("/list", summary="获取MCP服务器列表", response_description="成功获取MCP服务器列表")
 def list_mcp(
     request: ListMCPServerRequest,
     keywords: str = Query("", description="关键词搜索"),
@@ -95,7 +96,7 @@ def list_mcp(
     orderby: str = Query("create_time", description="排序字段"),
     desc: bool = Query(True, description="是否降序"),
     db: Session = Depends(get_db),
-    user=Depends(manager)
+    user=Depends(manager),
 ):
     """
     ### POST `/list` 获取MCP服务器列表
@@ -157,9 +158,7 @@ def list_mcp(
     mcp_ids = req_data.get("mcp_ids", [])
 
     try:
-        servers = MCPServerService.get_servers(
-            db, user.id, mcp_ids, 0, 0, orderby, desc, keywords
-        ) or []
+        servers = MCPServerService.get_servers(db, user.id, mcp_ids, 0, 0, orderby, desc, keywords) or []
         total = len(servers)
 
         if page and page_size:
@@ -170,12 +169,8 @@ def list_mcp(
         return server_error_response(e)
 
 
-@router.get('/detail', summary="获取MCP服务器详情", response_description="成功获取MCP服务器详情")
-def detail(
-    mcp_id: str = Query(..., description="MCP服务器ID"),
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-):
+@router.get("/detail", summary="获取MCP服务器详情", response_description="成功获取MCP服务器详情")
+def detail(mcp_id: str = Query(..., description="MCP服务器ID"), db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### GET `/detail` 获取MCP服务器详情
 
@@ -242,7 +237,7 @@ def detail(
         return server_error_response(e)
 
 
-@router.post('/create', summary="创建MCP服务器", response_description="成功创建MCP服务器")
+@router.post("/create", summary="创建MCP服务器", response_description="成功创建MCP服务器")
 def create(request: CreateMCPServerRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/create` 创建MCP服务器
@@ -370,7 +365,7 @@ def create(request: CreateMCPServerRequest, db: Session = Depends(get_db), user=
         return server_error_response(e)
 
 
-@router.post('/update', summary="更新MCP服务器", response_description="成功更新MCP服务器")
+@router.post("/update", summary="更新MCP服务器", response_description="成功更新MCP服务器")
 def update(request: UpdateMCPServerRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/update` 更新MCP服务器
@@ -515,7 +510,7 @@ def update(request: UpdateMCPServerRequest, db: Session = Depends(get_db), user=
         return server_error_response(e)
 
 
-@router.post('/get_multiple', summary="批量获取MCP服务器", response_description="成功批量获取MCP服务器")
+@router.post("/get_multiple", summary="批量获取MCP服务器", response_description="成功批量获取MCP服务器")
 def get_multiple(request: GetMultipleMCPServerRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/get_multiple` 批量获取MCP服务器
@@ -568,16 +563,14 @@ def get_multiple(request: GetMultipleMCPServerRequest, db: Session = Depends(get
 
     try:
         # 使用get_servers方法，传入id_list
-        servers = MCPServerService.get_servers(
-            db, user.id, id_list, 0, 0, "create_time", True, ""
-        ) or []
+        servers = MCPServerService.get_servers(db, user.id, id_list, 0, 0, "create_time", True, "") or []
 
         return get_json_result(data=servers)
     except Exception as e:
         return server_error_response(e)
 
 
-@router.post('/rm', summary="删除MCP服务器", response_description="成功删除MCP服务器")
+@router.post("/rm", summary="删除MCP服务器", response_description="成功删除MCP服务器")
 def rm(request: RemoveMCPServerRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/rm` 删除MCP服务器
@@ -633,7 +626,7 @@ def rm(request: RemoveMCPServerRequest, db: Session = Depends(get_db), user=Depe
         return server_error_response(e)
 
 
-@router.post('/import', summary="批量导入MCP服务器", response_description="成功批量导入MCP服务器")
+@router.post("/import", summary="批量导入MCP服务器", response_description="成功批量导入MCP服务器")
 def import_multiple(request: ImportMCPServerRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/import` 批量导入MCP服务器
@@ -766,7 +759,7 @@ def import_multiple(request: ImportMCPServerRequest, db: Session = Depends(get_d
         return server_error_response(e)
 
 
-@router.post('/export', summary="批量导出MCP服务器", response_description="成功批量导出MCP服务器")
+@router.post("/export", summary="批量导出MCP服务器", response_description="成功批量导出MCP服务器")
 def export_multiple(request: ExportMCPServerRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/export` 批量导出MCP服务器
@@ -858,7 +851,7 @@ def export_multiple(request: ExportMCPServerRequest, db: Session = Depends(get_d
         return server_error_response(e)
 
 
-@router.post('/list_tools', summary="获取MCP服务器工具列表", response_description="成功获取MCP服务器工具列表")
+@router.post("/list_tools", summary="获取MCP服务器工具列表", response_description="成功获取MCP服务器工具列表")
 def list_tools(request: ListToolsRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/list_tools` 获取MCP服务器工具列表
@@ -1021,7 +1014,7 @@ def list_tools(request: ListToolsRequest, db: Session = Depends(get_db), user=De
         close_multiple_mcp_toolcall_sessions(tool_call_sessions)
 
 
-@router.post('/test_tool', summary="测试MCP工具", response_description="成功测试MCP工具")
+@router.post("/test_tool", summary="测试MCP工具", response_description="成功测试MCP工具")
 def test_tool(request: TestToolRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/test_tool` 测试MCP工具
@@ -1161,7 +1154,7 @@ def test_tool(request: TestToolRequest, db: Session = Depends(get_db), user=Depe
         return server_error_response(e)
 
 
-@router.post('/cache_tools', summary="缓存MCP工具配置", response_description="成功缓存MCP工具配置")
+@router.post("/cache_tools", summary="缓存MCP工具配置", response_description="成功缓存MCP工具配置")
 def cache_tools(request: CacheToolsRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/cache_tools` 缓存MCP工具配置

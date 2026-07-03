@@ -16,10 +16,7 @@ def dict_arrays_to_array_dicts(data):
 
 if __name__ == "__main__":
     # 测试数据
-    data = {
-        "a": [1, 2, 3],
-        "b": ["b", "b1"]
-    }
+    data = {"a": [1, 2, 3], "b": ["b", "b1"]}
 
     # 转换并打印结果
     result = dict_arrays_to_array_dicts(data)

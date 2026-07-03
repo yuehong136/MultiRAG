@@ -32,14 +32,17 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
             "/auth/",
             "/v1/sensitive_word/",  # 敏感词管理接口本身不检查
             "/health",
-            "/metrics"
+            "/metrics",
         ]
 
         # 严格模式路径（检测到敏感词直接拒绝）
-        self.strict_paths = strict_paths or [
-            # 注意：SSE接口不应该在严格模式路径中
-            # 它们应该使用过滤模式，让应用层处理过滤后的内容
-        ]
+        self.strict_paths = (
+            strict_paths
+            or [
+                # 注意：SSE接口不应该在严格模式路径中
+                # 它们应该使用过滤模式，让应用层处理过滤后的内容
+            ]
+        )
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         """中间件处理逻辑"""
@@ -55,10 +58,7 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
         logging.info(f"[敏感词中间件] 需要过滤: {request.url.path}")
 
         # 判断是否为SSE接口
-        is_sse_endpoint = (request.url.path.endswith("_sse") or
-                          "stream" in str(request.url) or
-                          "completion" in request.url.path or
-                          request.headers.get("accept") == "text/event-stream")
+        is_sse_endpoint = request.url.path.endswith("_sse") or "stream" in str(request.url) or "completion" in request.url.path or request.headers.get("accept") == "text/event-stream"
 
         # 获取用户信息
         user_info = await self._get_user_info(request)
@@ -92,11 +92,11 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
             source_type="api_request",
             source_id=str(request.url),
             ip_address=self._get_client_ip(request),
-            user_agent=request.headers.get("user-agent")
+            user_agent=request.headers.get("user-agent"),
         )
 
         logging.info(f"[敏感词中间件] 过滤结果: is_sensitive={filter_result.get('is_sensitive')}, action={filter_result.get('action')}")
-        if filter_result.get('matched_words'):
+        if filter_result.get("matched_words"):
             logging.info(f"[敏感词中间件] 匹配的敏感词: {[w.get('word') for w in filter_result.get('matched_words', [])]}")
 
         # 处理过滤结果
@@ -111,30 +111,14 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
                 from fastapi.responses import StreamingResponse
 
                 async def error_generator():
-                    error_msg = {
-                        "error": "内容包含敏感信息，请修改后重试",
-                        "code": RetCode.OPERATING_ERROR,
-                        "sensitive_words": [w.get('word', '') for w in filter_result.get('matched_words', [])]
-                    }
+                    error_msg = {"error": "内容包含敏感信息，请修改后重试", "code": RetCode.OPERATING_ERROR, "sensitive_words": [w.get("word", "") for w in filter_result.get("matched_words", [])]}
                     yield f"data: {json.dumps(error_msg, ensure_ascii=False)}\n\n"
                     yield "data: [DONE]\n\n"
 
-                return StreamingResponse(
-                    error_generator(),
-                    media_type="text/event-stream",
-                    headers={
-                        "Cache-Control": "no-cache",
-                        "Connection": "keep-alive",
-                        "Access-Control-Allow-Origin": "*"
-                    }
-                )
+                return StreamingResponse(error_generator(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "Access-Control-Allow-Origin": "*"})
             else:
                 # 普通接口返回JSON响应
-                return get_json_result(
-                    data=False,
-                    retmsg="内容包含敏感信息，请修改后重试",
-                    retcode=RetCode.OPERATING_ERROR
-                )
+                return get_json_result(data=False, retmsg="内容包含敏感信息，请修改后重试", retcode=RetCode.OPERATING_ERROR)
 
         # 如果内容被过滤且不是SSE接口，修改请求体
         # 注意：对于SSE接口，不修改请求体，让应用层自行处理过滤后的内容
@@ -152,17 +136,9 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
                 nonlocal message_sent
                 if not message_sent:
                     message_sent = True
-                    return {
-                        "type": "http.request",
-                        "body": modified_body.encode("utf-8") if isinstance(modified_body, str) else modified_body,
-                        "more_body": False
-                    }
+                    return {"type": "http.request", "body": modified_body.encode("utf-8") if isinstance(modified_body, str) else modified_body, "more_body": False}
                 # 后续调用返回空body
-                return {
-                    "type": "http.request",
-                    "body": b"",
-                    "more_body": False
-                }
+                return {"type": "http.request", "body": b"", "more_body": False}
 
             # 替换原始receive函数
             request._receive = new_receive
@@ -208,12 +184,9 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
         """获取用户信息"""
         try:
             # 从request.state中获取用户信息（假设认证中间件已经设置）
-            if hasattr(request.state, 'user'):
+            if hasattr(request.state, "user"):
                 user = request.state.user
-                return {
-                    "id": getattr(user, 'id', None),
-                    "email": getattr(user, 'email', None)
-                }
+                return {"id": getattr(user, "id", None), "email": getattr(user, "email", None)}
 
             # 尝试从JWT token中解析用户信息
             auth_header = request.headers.get("Authorization")
@@ -235,10 +208,7 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
                         try:
                             user = UserService.query_user_onlywith_email(db, email)
                             if user:
-                                return {
-                                    "id": user.id,
-                                    "email": user.email
-                                }
+                                return {"id": user.id, "email": user.email}
                         finally:
                             db.close()
                 except Exception as token_error:
@@ -253,8 +223,8 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
         """获取请求体内容"""
         try:
             # 检查是否已经读取过
-            if hasattr(request, '_body'):
-                return request._body.decode('utf-8')
+            if hasattr(request, "_body"):
+                return request._body.decode("utf-8")
 
             # 读取原始请求体
             body = await request.body()
@@ -269,31 +239,20 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
                 nonlocal message_sent
                 if not message_sent:
                     message_sent = True
-                    return {
-                        "type": "http.request",
-                        "body": body,
-                        "more_body": False
-                    }
+                    return {"type": "http.request", "body": body, "more_body": False}
                 # 后续调用返回空body
-                return {
-                    "type": "http.request",
-                    "body": b"",
-                    "more_body": False
-                }
+                return {"type": "http.request", "body": b"", "more_body": False}
 
             # 只在非SSE接口时替换receive函数
             # SSE接口可能需要特殊的receive处理
             # 检查更多SSE相关路径标识
-            is_sse = (request.url.path.endswith("_sse") or
-                     "stream" in str(request.url) or
-                     "completion" in request.url.path or
-                     request.headers.get("accept") == "text/event-stream")
+            is_sse = request.url.path.endswith("_sse") or "stream" in str(request.url) or "completion" in request.url.path or request.headers.get("accept") == "text/event-stream"
 
             if not is_sse:
                 request._receive = receive
 
             if body:
-                return body.decode('utf-8')
+                return body.decode("utf-8")
         except Exception as e:
             logging.warning(f"读取请求体失败: {e}")
 
@@ -309,11 +268,7 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
             data = json.loads(body)
 
             # 定义需要检查的字段
-            check_fields = [
-                "content", "message", "text", "description",
-                "title", "summary", "prompt", "question",
-                "answer", "comment", "remark", "note"
-            ]
+            check_fields = ["content", "message", "text", "description", "title", "summary", "prompt", "question", "answer", "comment", "remark", "note"]
 
             extracted_texts = []
 
@@ -361,19 +316,19 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
             from api.db.services.ai_guard_engine_service import AIGuardEngineService
 
             # 根据请求路径确定服务代码
-            service_code = self._determine_service_code(kwargs.get('source_id', ''))
+            service_code = self._determine_service_code(kwargs.get("source_id", ""))
 
             detection_result = AIGuardEngineService.detect_content(
                 db=db,
                 content=content,
                 service_code=service_code,
                 tenant_id=tenant_id,
-                user_id=kwargs.get('user_id'),
-                request_id=kwargs.get('request_id'),
-                source_type=kwargs.get('source_type'),
-                source_id=kwargs.get('source_id'),
-                client_ip=kwargs.get('ip_address'),
-                user_agent=kwargs.get('user_agent')
+                user_id=kwargs.get("user_id"),
+                request_id=kwargs.get("request_id"),
+                source_type=kwargs.get("source_type"),
+                source_id=kwargs.get("source_id"),
+                client_ip=kwargs.get("ip_address"),
+                user_agent=kwargs.get("user_agent"),
             )
 
             # 转换为中间件兼容格式
@@ -382,16 +337,11 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
                 "filtered_content": content,  # 新系统暂时不修改内容
                 "matched_words": self._extract_matched_words(detection_result.get("matched_items", [])),
                 "action": detection_result.get("action", "pass"),
-                "risk_score": detection_result.get("overall_risk_score", 0.0)
+                "risk_score": detection_result.get("overall_risk_score", 0.0),
             }
         except Exception as e:
             logging.error(f"AI安全护栏检测失败: {e}")
-            return {
-                "is_sensitive": False,
-                "filtered_content": content,
-                "matched_words": [],
-                "action": "error"
-            }
+            return {"is_sensitive": False, "filtered_content": content, "matched_words": [], "action": "error"}
         finally:
             db.close()
 
@@ -417,11 +367,7 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
             matched_words = []
             for item in matched_items:
                 if isinstance(item, dict):
-                    matched_words.append({
-                        "word": item.get("content", ""),
-                        "type": item.get("type", "unknown"),
-                        "weight": item.get("weight", 1.0)
-                    })
+                    matched_words.append({"word": item.get("content", ""), "type": item.get("type", "unknown"), "weight": item.get("weight", 1.0)})
             return matched_words
         except Exception as e:
             logging.warning(f"提取匹配词汇失败: {e}")
@@ -488,21 +434,16 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
     def _get_client_ip(self, request: Request) -> str:
         """获取客户端IP"""
         # 尝试从各种header中获取真实IP
-        headers_to_check = [
-            "X-Forwarded-For",
-            "X-Real-IP",
-            "X-Client-IP",
-            "CF-Connecting-IP"
-        ]
+        headers_to_check = ["X-Forwarded-For", "X-Real-IP", "X-Client-IP", "CF-Connecting-IP"]
 
         for header in headers_to_check:
             ip = request.headers.get(header)
             if ip:
                 # X-Forwarded-For可能包含多个IP，取第一个
-                return ip.split(',')[0].strip()
+                return ip.split(",")[0].strip()
 
         # fallback到直连IP
-        if hasattr(request.client, 'host'):
+        if hasattr(request.client, "host"):
             return request.client.host
 
         return "unknown"
@@ -510,10 +451,7 @@ class SensitiveWordFilterMiddleware(BaseHTTPMiddleware):
     async def _log_filter_action(self, user_info: dict, filter_result: dict, request: Request):
         """记录过滤行为日志"""
         try:
-            logging.info(f"敏感词过滤: 用户{user_info.get('email')} "
-                        f"在{request.url.path}触发敏感词过滤，"
-                        f"动作: {filter_result.get('action')}，"
-                        f"匹配词数: {len(filter_result.get('matched_words', []))}")
+            logging.info(f"敏感词过滤: 用户{user_info.get('email')} 在{request.url.path}触发敏感词过滤，动作: {filter_result.get('action')}，匹配词数: {len(filter_result.get('matched_words', []))}")
         except Exception as e:
             logging.warning(f"记录过滤日志失败: {e}")
 
@@ -525,18 +463,7 @@ class SensitiveWordMiddlewareConfig:
     @staticmethod
     def get_default_excluded_paths():
         """获取默认排除路径"""
-        return [
-            "/docs",
-            "/redoc",
-            "/openapi.json",
-            "/auth/",
-            "/v1/sensitive_word/",
-            "/health",
-            "/metrics",
-            "/static/",
-            "/favicon.ico",
-            "/v1/conversation/set"
-        ]
+        return ["/docs", "/redoc", "/openapi.json", "/auth/", "/v1/sensitive_word/", "/health", "/metrics", "/static/", "/favicon.ico", "/v1/conversation/set"]
 
     @staticmethod
     def get_default_strict_paths():
@@ -556,8 +483,4 @@ class SensitiveWordMiddlewareConfig:
         excluded_paths = config.get("excluded_paths", cls.get_default_excluded_paths())
         strict_paths = config.get("strict_paths", cls.get_default_strict_paths())
 
-        return SensitiveWordFilterMiddleware(
-            app=app,
-            excluded_paths=excluded_paths,
-            strict_paths=strict_paths
-        )
+        return SensitiveWordFilterMiddleware(app=app, excluded_paths=excluded_paths, strict_paths=strict_paths)

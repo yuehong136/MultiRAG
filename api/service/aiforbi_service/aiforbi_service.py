@@ -17,7 +17,6 @@ from common.constants import LLMType
 
 
 class AIForBIService:
-
     @staticmethod
     async def nl2sql(nl2sql_req_body, db, user_id, llm_name):
         loader = PromptTemplateLoader()
@@ -37,14 +36,12 @@ class AIForBIService:
 
     @staticmethod
     async def chart_type(chart_type_req_body, db, user_id, llm_name):
-        pd_df = pd.DataFrame(chart_type_req_body.sql_result['data'])
-        columns = chart_type_req_body.sql_result['metadata']['columns']
+        pd_df = pd.DataFrame(chart_type_req_body.sql_result["data"])
+        columns = chart_type_req_body.sql_result["metadata"]["columns"]
         loader = PromptTemplateLoader()
-        prompt = loader.fill_template("chart_type_temp.txt",
-                                      user_question=chart_type_req_body.user_question,
-                                      columns=columns,
-                                      sql_result=chart_type_req_body.sql_result['data'],
-                                      sql_result_pandas=pd_df)
+        prompt = loader.fill_template(
+            "chart_type_temp.txt", user_question=chart_type_req_body.user_question, columns=columns, sql_result=chart_type_req_body.sql_result["data"], sql_result_pandas=pd_df
+        )
         logging.info(f"====chart_type prompt:\n {prompt}")
         tenants = TenantService.get_info_by(db, user_id)
         if not tenants:
@@ -72,17 +69,15 @@ class AIForBIService:
         logging.info(f"is_local_llm: {is_local_llm}")
 
         # 本地模型和在线模型都使用dynamic_chart_option_function_temp_for_local_llm.txt
-        chart_data = {
-            "columns": dynamic_chart_option_function_req_body.sql_result["metadata"]["columns"],
-            "data": dynamic_chart_option_function_req_body.sql_result["data"]
-        }
-        prompt = loader.fill_template("dynamic_chart_option_function_temp_for_local_llm.txt",
-                                      user_question=dynamic_chart_option_function_req_body.user_question,
-                                      chart_type=dynamic_chart_option_function_req_body.chart_type,
-                                      columns=dynamic_chart_option_function_req_body.sql_result['metadata'][
-                                          'columns'],
-                                      chart_template=chart_template,
-                                      chart_data=chart_data)
+        chart_data = {"columns": dynamic_chart_option_function_req_body.sql_result["metadata"]["columns"], "data": dynamic_chart_option_function_req_body.sql_result["data"]}
+        prompt = loader.fill_template(
+            "dynamic_chart_option_function_temp_for_local_llm.txt",
+            user_question=dynamic_chart_option_function_req_body.user_question,
+            chart_type=dynamic_chart_option_function_req_body.chart_type,
+            columns=dynamic_chart_option_function_req_body.sql_result["metadata"]["columns"],
+            chart_template=chart_template,
+            chart_data=chart_data,
+        )
 
         logging.info(f"====dynamic_chart_option_function prompt: {prompt}")
 
@@ -115,23 +110,18 @@ class AIForBIService:
         # 去除最后多余的换行符
         tab = tab.strip()
         header_line = tab.splitlines()[0]
-        header_elements = header_line.split('|')[1:-1]  # 去掉前后边界的 '|'
+        header_elements = header_line.split("|")[1:-1]  # 去掉前后边界的 '|'
         columns = [element.strip() for element in header_elements]  # 去除空格
         print(columns)
         loader = PromptTemplateLoader()
         prompt4ChartType = loader.fill_template("static_chart_type.txt", tab=tab)
         logging.info(f"chart_type prompt: {prompt4ChartType}")
 
-        chart_type_res = chat_model.chat(system="", history=[{"role": "user", "content": prompt4ChartType}],
-                                         gen_conf={})
+        chart_type_res = chat_model.chat(system="", history=[{"role": "user", "content": prompt4ChartType}], gen_conf={})
         logging.info(f"大模型返回的图表类型：{chart_type_res}")
         chart_type_list = extract_brackets(chart_type_res)
         chart_template = load_chart_template(chart_type_list[0])
-        prompt4Option = loader.fill_template("static_chart_option.txt",
-                                             chart_type=chart_type_list[0],
-                                             columns=columns,
-                                             tab=tab,
-                                             chart_template=chart_template)
+        prompt4Option = loader.fill_template("static_chart_option.txt", chart_type=chart_type_list[0], columns=columns, tab=tab, chart_template=chart_template)
         logging.info(f"static_chart_option prompt: {prompt4Option}")
 
         option = chat_model.chat(system="", history=[{"role": "user", "content": prompt4Option}], gen_conf={})

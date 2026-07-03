@@ -27,11 +27,7 @@ async def event_generator(request: Request, event_id: str) -> AsyncGenerator[byt
     queue = await event_manager.subscribe(event_id)
 
     # 发送初始连接成功消息（使用统一的格式）
-    await event_manager.publish(
-        event_id=event_id,
-        data={"status": "connected"},
-        event_type="connection"
-    )
+    await event_manager.publish(event_id=event_id, data={"status": "connected"}, event_type="connection")
 
     try:
         # 持续监听队列，直到客户端断开连接
@@ -45,20 +41,15 @@ async def event_generator(request: Request, event_id: str) -> AsyncGenerator[byt
                 data = await asyncio.wait_for(queue.get(), timeout=1.0)
                 # 直接将数据作为SSE消息发送
                 message = f"data: {data}\n\n"
-                yield message.encode('utf-8')
+                yield message.encode("utf-8")
             except TimeoutError:
                 # 超时后发送心跳包，保持连接活跃
                 yield b": heartbeat\n\n"
             except Exception as e:
                 # 发生错误，发送错误消息并中断连接
-                error_data = {
-                    "event_id": event_id,
-                    "event_type": "error",
-                    "data": {"error": str(e)},
-                    "timestamp": datetime.utcnow().isoformat()
-                }
+                error_data = {"event_id": event_id, "event_type": "error", "data": {"error": str(e)}, "timestamp": datetime.utcnow().isoformat()}
                 error_message = f"data: {json.dumps(error_data)}\n\n"
-                yield error_message.encode('utf-8')
+                yield error_message.encode("utf-8")
                 break
     finally:
         # 确保在函数结束时取消订阅，防止内存泄漏
@@ -66,11 +57,7 @@ async def event_generator(request: Request, event_id: str) -> AsyncGenerator[byt
 
         # 可选：发送断开连接消息
         try:
-            await event_manager.publish(
-                event_id=event_id,
-                data={"status": "disconnected"},
-                event_type="connection"
-            )
+            await event_manager.publish(event_id=event_id, data={"status": "disconnected"}, event_type="connection")
         except:
             # 忽略断开连接时的错误
             pass
@@ -87,10 +74,7 @@ def create_sse_response(request: Request, event_id: str) -> StreamingResponse:
     Returns:
         StreamingResponse: SSE流响应
     """
-    response = StreamingResponse(
-        event_generator(request, event_id),
-        media_type="text/event-stream"
-    )
+    response = StreamingResponse(event_generator(request, event_id), media_type="text/event-stream")
 
     # 设置SSE相关的响应头
     response.headers["Cache-Control"] = "no-cache"

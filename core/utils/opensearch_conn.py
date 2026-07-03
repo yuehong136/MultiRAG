@@ -56,7 +56,7 @@ if (nw <= 0.0) {
 }
 """
 
-logger = logging.getLogger('multirag.opensearch_conn')
+logger = logging.getLogger("multirag.opensearch_conn")
 
 
 @singleton
@@ -68,10 +68,9 @@ class OSConnection(DocStoreConnection):
             try:
                 self.os = OpenSearch(
                     settings.OS["hosts"].split(","),
-                    http_auth=(settings.OS["username"], settings.OS[
-                        "password"]) if "username" in settings.OS and "password" in settings.OS else None,
+                    http_auth=(settings.OS["username"], settings.OS["password"]) if "username" in settings.OS and "password" in settings.OS else None,
                     verify_certs=False,
-                    timeout=600
+                    timeout=600,
                 )
                 if self.os:
                     self.info = self.os.info()
@@ -119,8 +118,8 @@ class OSConnection(DocStoreConnection):
             return True
         try:
             from opensearchpy.client import IndicesClient
-            return IndicesClient(self.os).create(index=indexName,
-                                                 body=self.mapping)
+
+            return IndicesClient(self.os).create(index=indexName, body=self.mapping)
         except Exception:
             logger.exception("OSConnection.createIndex error %s" % (indexName))
 
@@ -152,17 +151,18 @@ class OSConnection(DocStoreConnection):
     """
 
     def search(
-            self, selectFields: list[str],
-            highlightFields: list[str],
-            condition: dict,
-            matchExprs: list[MatchExpr],
-            orderBy: OrderByExpr,
-            offset: int,
-            limit: int,
-            indexNames: str | list[str],
-            knowledgebaseIds: list[str],
-            aggFields: list[str] = [],
-            rank_feature: dict | None = None
+        self,
+        selectFields: list[str],
+        highlightFields: list[str],
+        condition: dict,
+        matchExprs: list[MatchExpr],
+        orderBy: OrderByExpr,
+        offset: int,
+        limit: int,
+        indexNames: str | list[str],
+        knowledgebaseIds: list[str],
+        aggFields: list[str] = [],
+        rank_feature: dict | None = None,
     ):
         """
         Refers to https://github.com/opensearch-project/opensearch-py/blob/main/guides/dsl.md
@@ -189,8 +189,7 @@ class OSConnection(DocStoreConnection):
             elif isinstance(v, str) or isinstance(v, int):
                 bqry.filter.append(Q("term", **{k: v}))
             else:
-                raise Exception(
-                    f"Condition `{k!s}={v!s}` value type is {type(v)!s}, expected to be int, str or list.")
+                raise Exception(f"Condition `{k!s}={v!s}` value type is {type(v)!s}, expected to be int, str or list.")
 
         s = Search()
         vector_similarity_weight = 0.5
@@ -205,10 +204,7 @@ class OSConnection(DocStoreConnection):
                 minimum_should_match = m.extra_options.get("minimum_should_match", 0.0)
                 if isinstance(minimum_should_match, float):
                     minimum_should_match = str(int(minimum_should_match * 100)) + "%"
-                bqry.must.append(Q("query_string", fields=m.fields,
-                                   type="best_fields", query=m.matching_text,
-                                   minimum_should_match=minimum_should_match,
-                                   boost=1))
+                bqry.must.append(Q("query_string", fields=m.fields, type="best_fields", query=m.matching_text, minimum_should_match=minimum_should_match, boost=1))
                 bqry.boost = 1.0 - vector_similarity_weight
 
             # Elasticsearch has the encapsulation of KNN_search in python sdk
@@ -216,7 +212,7 @@ class OSConnection(DocStoreConnection):
             # the following codes implement KNN_search in OpenSearch using DSL
             # Besides, Opensearch's DSL for KNN_search query syntax differs from that in Elasticsearch, I also made some adaptions for it
             elif isinstance(m, MatchDenseExpr):
-                assert (bqry is not None)
+                assert bqry is not None
                 similarity = 0.0
                 if "similarity" in m.extra_options:
                     similarity = m.extra_options["similarity"]
@@ -253,10 +249,10 @@ class OSConnection(DocStoreConnection):
             s = s.sort(*orders)
 
         for fld in aggFields:
-            s.aggs.bucket(f'aggs_{fld}', 'terms', field=fld, size=1000000)
+            s.aggs.bucket(f"aggs_{fld}", "terms", field=fld, size=1000000)
 
         if limit > 0:
-            s = s[offset:offset + limit]
+            s = s[offset : offset + limit]
         q = s.to_dict()
         logger.debug(f"OSConnection.search {indexNames!s} query: " + json.dumps(q))
 
@@ -266,12 +262,14 @@ class OSConnection(DocStoreConnection):
 
         for i in range(ATTEMPT_TIME):
             try:
-                res = self.os.search(index=indexNames,
-                                     body=q,
-                                     timeout=600,
-                                     # search_type="dfs_query_then_fetch",
-                                     track_total_hits=True,
-                                     _source=True)
+                res = self.os.search(
+                    index=indexNames,
+                    body=q,
+                    timeout=600,
+                    # search_type="dfs_query_then_fetch",
+                    track_total_hits=True,
+                    _source=True,
+                )
                 if str(res.get("timed_out", "")).lower() == "true":
                     raise Exception("OpenSearch Timeout.")
                 logger.debug(f"OSConnection.search {indexNames!s} res: " + str(res))
@@ -287,7 +285,11 @@ class OSConnection(DocStoreConnection):
     def get(self, chunkId: str, indexName: str, knowledgebaseIds: list[str]) -> dict | None:
         for i in range(ATTEMPT_TIME):
             try:
-                res = self.os.get(index=(indexName), id=chunkId, _source=True, )
+                res = self.os.get(
+                    index=(indexName),
+                    id=chunkId,
+                    _source=True,
+                )
                 if str(res.get("timed_out", "")).lower() == "true":
                     raise Exception("Es Timeout.")
                 chunk = res["_source"]
@@ -311,16 +313,14 @@ class OSConnection(DocStoreConnection):
             assert "id" in d
             d_copy = copy.deepcopy(d)
             meta_id = d_copy.pop("id", "")
-            operations.append(
-                {"index": {"_index": indexName, "_id": meta_id}})
+            operations.append({"index": {"_index": indexName, "_id": meta_id}})
             operations.append(d_copy)
 
         res = []
         for _ in range(ATTEMPT_TIME):
             try:
                 res = []
-                r = self.os.bulk(index=(indexName), body=operations,
-                                 refresh=False, timeout=60)
+                r = self.os.bulk(index=(indexName), body=operations, refresh=False, timeout=60)
                 if re.search(r"False", str(r["errors"]), re.IGNORECASE):
                     return res
 
@@ -350,8 +350,7 @@ class OSConnection(DocStoreConnection):
                     self.os.update(index=indexName, id=chunkId, body={"doc": doc})
                     return True
                 except Exception as e:
-                    logger.exception(
-                        f"OSConnection.update(index={indexName}, id={id}, doc={json.dumps(condition, ensure_ascii=False)}) got exception")
+                    logger.exception(f"OSConnection.update(index={indexName}, id={id}, doc={json.dumps(condition, ensure_ascii=False)}) got exception")
                     if re.search(r"(timeout|connection)", str(e).lower()):
                         continue
                     break
@@ -370,8 +369,7 @@ class OSConnection(DocStoreConnection):
             elif isinstance(v, str) or isinstance(v, int):
                 bqry.filter.append(Q("term", **{k: v}))
             else:
-                raise Exception(
-                    f"Condition `{k!s}={v!s}` value type is {type(v)!s}, expected to be int, str or list.")
+                raise Exception(f"Condition `{k!s}={v!s}` value type is {type(v)!s}, expected to be int, str or list.")
         scripts = []
         params = {}
         for k, v in newValue.items():
@@ -401,11 +399,8 @@ class OSConnection(DocStoreConnection):
                 scripts.append(f"ctx._source.{k}=params.pp_{k};")
                 params[f"pp_{k}"] = json.dumps(v, ensure_ascii=False)
             else:
-                raise Exception(
-                    f"newValue `{k!s}={v!s}` value type is {type(v)!s}, expected to be int, str.")
-        ubq = UpdateByQuery(
-            index=indexName).using(
-            self.os).query(bqry)
+                raise Exception(f"newValue `{k!s}={v!s}` value type is {type(v)!s}, expected to be int, str.")
+        ubq = UpdateByQuery(index=indexName).using(self.os).query(bqry)
         ubq = ubq.script(source="".join(scripts), params=params)
         ubq = ubq.params(refresh=True)
         ubq = ubq.params(slices=5)
@@ -509,10 +504,7 @@ class OSConnection(DocStoreConnection):
         for _ in range(ATTEMPT_TIME):
             try:
                 # print(Search().query(qry).to_dict(), flush=True)
-                res = self.os.delete_by_query(
-                    index=indexName,
-                    body=Search().query(qry).to_dict(),
-                    refresh=True)
+                res = self.os.delete_by_query(index=indexName, body=Search().query(qry).to_dict(), refresh=True)
                 return res["deleted"]
             except Exception as e:
                 logger.warning("OSConnection.delete got exception: " + str(e))
@@ -605,9 +597,7 @@ class OSConnection(DocStoreConnection):
         for r in re.finditer(r" ([a-z_]+_l?tks)( like | ?= ?)'([^']+)'", sql):
             fld, v = r.group(1), r.group(3)
             match = f" MATCH({fld}, '{rag_tokenizer.fine_grained_tokenize(rag_tokenizer.tokenize(v))}', 'operator=OR;minimum_should_match=30%') "
-            replaces.append(
-                (f"{r.group(1)}{r.group(2)}'{r.group(3)}'",
-                 match))
+            replaces.append((f"{r.group(1)}{r.group(2)}'{r.group(3)}'", match))
 
         for p, r in replaces:
             sql = sql.replace(p, r, 1)
@@ -615,8 +605,7 @@ class OSConnection(DocStoreConnection):
 
         for i in range(ATTEMPT_TIME):
             try:
-                res = self.os.sql.query(body={"query": sql, "fetch_size": fetch_size}, format=format,
-                                        request_timeout="2s")
+                res = self.os.sql.query(body={"query": sql, "fetch_size": fetch_size}, format=format, request_timeout="2s")
                 return res
             except ConnectionTimeout:
                 logger.exception("OSConnection.sql timeout")

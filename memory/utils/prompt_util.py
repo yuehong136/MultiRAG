@@ -18,7 +18,6 @@ from common.time_utils import current_timestamp
 
 
 class PromptAssembler:
-
     SYSTEM_BASE_TEMPLATE = """**Memory Extraction Specialist**
 You are an expert at analyzing conversations to extract structured memory.
 
@@ -46,7 +45,6 @@ You are an expert at analyzing conversations to extract structured memory.
         - invalid_at: When it becomes false (e.g., repeal, disproven) or empty if still true
         - Default: valid_at = conversation time, invalid_at = "" for timeless facts
         """,
-
         MemoryType.EPISODIC.name.lower(): """
         **EXTRACT EPISODIC KNOWLEDGE:**
         - Specific experiences, events, personal stories
@@ -58,7 +56,6 @@ You are an expert at analyzing conversations to extract structured memory.
         - invalid_at: Event end time or empty if instantaneous
         - Extract explicit times: "at 3 PM", "last Monday", "from X to Y"
         """,
-
         MemoryType.PROCEDURAL.name.lower(): """
         **EXTRACT PROCEDURAL KNOWLEDGE:**
         - Processes, methods, step-by-step instructions
@@ -70,7 +67,7 @@ You are an expert at analyzing conversations to extract structured memory.
         - invalid_at: When it expires/becomes obsolete or empty if current
         - For version-specific: use release dates
         - For best practices: invalid_at = ""
-        """
+        """,
     }
 
     OUTPUT_TEMPLATES = {
@@ -83,7 +80,6 @@ You are an expert at analyzing conversations to extract structured memory.
             }
         ]
         """,
-
         MemoryType.EPISODIC.name.lower(): """
         "episodic": [
             {
@@ -93,7 +89,6 @@ You are an expert at analyzing conversations to extract structured memory.
             }
         ]
         """,
-
         MemoryType.PROCEDURAL.name.lower(): """
         "procedural": [
             {
@@ -102,7 +97,7 @@ You are an expert at analyzing conversations to extract structured memory.
                 "invalid_at": "procedure expiration timestamp or empty"
             }
         ]
-        """
+        """,
     }
 
     BASE_USER_PROMPT = """
@@ -122,9 +117,7 @@ You are an expert at analyzing conversations to extract structured memory.
         output_format = cls._generate_output_format(types_to_extract)
 
         full_prompt = cls.SYSTEM_BASE_TEMPLATE.format(
-            type_specific_instructions=type_instructions,
-            timestamp_format=config.get("timestamp_format", "ISO 8601"),
-            max_items=config.get("max_items_per_type", 5)
+            type_specific_instructions=type_instructions, timestamp_format=config.get("timestamp_format", "ISO 8601"), max_items=config.get("max_items_per_type", 5)
         )
 
         full_prompt += f"\n**REQUIRED OUTPUT FORMAT (JSON):**\n```json\n{{\n{output_format}\n}}\n```\n"
@@ -139,7 +132,7 @@ You are an expert at analyzing conversations to extract structured memory.
     def _get_types_to_extract(requested_types: list[str]) -> list[str]:
         types = set()
         for rt in requested_types:
-            if rt in [e.name.lower()  for e in MemoryType] and rt != MemoryType.RAW.name.lower():
+            if rt in [e.name.lower() for e in MemoryType] and rt != MemoryType.RAW.name.lower():
                 types.add(rt)
         return list(types)
 
@@ -183,12 +176,7 @@ You are an expert at analyzing conversations to extract structured memory.
         return "\n".join(examples)
 
     @classmethod
-    def assemble_user_prompt(
-            cls,
-            conversation: str,
-            conversation_time: str | None = None,
-            current_time: str | None = None
-    ) -> str:
+    def assemble_user_prompt(cls, conversation: str, conversation_time: str | None = None, current_time: str | None = None) -> str:
         return cls.BASE_USER_PROMPT.format(
             conversation=conversation,
             conversation_time=conversation_time or "Not specified",
@@ -198,4 +186,3 @@ You are an expert at analyzing conversations to extract structured memory.
     @classmethod
     def get_raw_user_prompt(cls):
         return cls.BASE_USER_PROMPT
-

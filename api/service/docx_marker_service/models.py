@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 class RunStyle(BaseModel):
     """Run 的样式信息"""
+
     bold: bool = False
     italic: bool = False
     underline: bool = False
@@ -19,6 +20,7 @@ class RunStyle(BaseModel):
 
 class Run(BaseModel):
     """文本片段"""
+
     path: str
     text: str
     style: RunStyle
@@ -26,6 +28,7 @@ class Run(BaseModel):
 
 class Paragraph(BaseModel):
     """段落"""
+
     path: str
     runs: list[Run]
     alignment: str | None = None  # left, center, right, justify
@@ -33,6 +36,7 @@ class Paragraph(BaseModel):
 
 class Cell(BaseModel):
     """表格单元格"""
+
     path: str
     paragraphs: list[Paragraph]
     row_span: int = 1
@@ -43,18 +47,21 @@ class Cell(BaseModel):
 
 class Row(BaseModel):
     """表格行"""
+
     path: str
     cells: list[Cell]
 
 
 class Table(BaseModel):
     """表格"""
+
     path: str
     rows: list[Row]
 
 
 class DocumentElement(BaseModel):
     """文档块级元素"""
+
     type: Literal["paragraph", "table"]
     path: str
     paragraph: Paragraph | None = None
@@ -63,6 +70,7 @@ class DocumentElement(BaseModel):
 
 class ParsedDocument(BaseModel):
     """解析后的文档"""
+
     filename: str
     elements: list[DocumentElement]
 
@@ -72,6 +80,7 @@ PlaceholderType = Literal["cell", "summary", "table", "dynamic_table"]
 
 class TableColumn(BaseModel):
     """表格列配置"""
+
     cell_index: int  # 单元格索引（在行内的位置）
     name: str  # 列名称（从表头提取或用户输入）
     prompt_for_ai: str = ""  # 该列的 AI 提示词
@@ -79,6 +88,7 @@ class TableColumn(BaseModel):
 
 class TableConfig(BaseModel):
     """表格类型待填项的配置"""
+
     dynamic: bool = False  # 是否为动态表格
     header_row: int  # 表头所在行（Word 表格内的行索引，0-based）
     data_start_row: int  # 数据起始行（Word 表格内的行索引，0-based）
@@ -91,6 +101,7 @@ class TableConfig(BaseModel):
 
 class Placeholder(BaseModel):
     """待填项"""
+
     path: str
     label: str
     field_key: str  # 自动生成的唯一标识，如 $1, $2, $3...
@@ -103,6 +114,7 @@ class Placeholder(BaseModel):
 
 class PlaceholderRequest(BaseModel):
     """添加/更新待填项的请求"""
+
     path: str
     label: str
     field_key: str | None = None  # 可选，如果不提供则自动生成
@@ -115,6 +127,7 @@ class PlaceholderRequest(BaseModel):
 
 class FieldValue(BaseModel):
     """单个字段的值"""
+
     id: str  # 字段 ID，如 $1, $2
     value: str = ""  # 填充的值（普通类型使用）
     custom_fields: dict[str, str] = {}  # 用户自定义的 key-value 字段
@@ -123,4 +136,5 @@ class FieldValue(BaseModel):
 
 class FillRequest(BaseModel):
     """填充数据的请求"""
+
     fields: list[FieldValue]  # 数组格式：[{"id": "$1", "value": "..."}, ...]

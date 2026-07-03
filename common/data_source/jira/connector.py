@@ -128,9 +128,7 @@ class JiraConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPermSync
             try:
                 buffer_value = int(time_buffer_seconds)
             except (TypeError, ValueError) as exc:
-                raise ConnectorValidationError(
-                    f"Invalid time_buffer_seconds value ({time_buffer_seconds!r}); expected an integer."
-                ) from exc
+                raise ConnectorValidationError(f"Invalid time_buffer_seconds value ({time_buffer_seconds!r}); expected an integer.") from exc
         self.time_buffer_seconds = max(0, buffer_value)
 
     # -------------------------------------------------------------------------

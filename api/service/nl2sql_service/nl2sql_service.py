@@ -73,21 +73,15 @@ class NL2SQLService:
         segmented_words = await custom_tokenize_with_semantic_words(text=query_text, dataset_id_list=dataset_id_list)
         # 4. 将分词到语义层结构化数据中进行检索得到相关数据
         # 4.1 根据分词关键字获得维度列表
-        dimensions_by_keyword = await self.semantic_api_client.get_dimension_info_by_keyword_async(
-            keyword=segmented_words,
-            dataset_ids=dataset_id_list)
+        dimensions_by_keyword = await self.semantic_api_client.get_dimension_info_by_keyword_async(keyword=segmented_words, dataset_ids=dataset_id_list)
         # 4.2 分词关键字作为维度值关键字获得获得维度列表
-        dimensions_by_value = await self.semantic_api_client.get_dimension_by_dimension_value_async(
-            keyword=segmented_words,
-            dataset_ids=dataset_id_list)
+        dimensions_by_value = await self.semantic_api_client.get_dimension_by_dimension_value_async(keyword=segmented_words, dataset_ids=dataset_id_list)
         # 4.3 根据dimensionId对dimensions_by_keyword和dimensions_by_value进行维度去重，获得最终维度列表
         unique_dimensions = self._deduplicate_dimensions(dimensions_by_keyword, dimensions_by_value)
         dimension_values = await self.semantic_api_client.get_dimension_values_async(dimension_ids=unique_dimensions)
         dimensions = await self.semantic_api_client.get_dimension_info_by_id_async(dimension_ids=unique_dimensions)
         # 4.4 根据分词关键字获得指标列表
-        metrics = await self.semantic_api_client.get_metric_info_by_keyword_async(
-            keyword=segmented_words,
-            dataset_ids=dataset_id_list)
+        metrics = await self.semantic_api_client.get_metric_info_by_keyword_async(keyword=segmented_words, dataset_ids=dataset_id_list)
 
         # 4.5 从维度和指标中提取所有modelId并去重，获得模型ID列表
         model_ids = self._extract_unique_model_ids(dimensions, metrics)
@@ -99,13 +93,17 @@ class NL2SQLService:
         # 4.7 查询业务术语
         dataset_details = await self.semantic_api_client.get_dataset_detail_async(dataset_ids=dataset_id_list)
         domain_ids = self._extract_unique_domain_ids(dataset_details)
-        business_term_rows = await self.semantic_api_client.get_business_term_info_async(keyword=segmented_words,
-                                                                                         domain_ids=domain_ids)
-        semantic_layer = {"dataset_details": dataset_details, "dimensions": dimensions, "dimension_values": dimension_values,
-                              "metrics": metrics, "model_details": model_details,
-                              "model_relations": model_relations, "business_term_rows": business_term_rows}
-        prompt, semantic_layer_struct = generate_nl2sql_prompt(user_question=query_text, query_intents=intents,
-                                                               semantic_layer=semantic_layer)
+        business_term_rows = await self.semantic_api_client.get_business_term_info_async(keyword=segmented_words, domain_ids=domain_ids)
+        semantic_layer = {
+            "dataset_details": dataset_details,
+            "dimensions": dimensions,
+            "dimension_values": dimension_values,
+            "metrics": metrics,
+            "model_details": model_details,
+            "model_relations": model_relations,
+            "business_term_rows": business_term_rows,
+        }
+        prompt, semantic_layer_struct = generate_nl2sql_prompt(user_question=query_text, query_intents=intents, semantic_layer=semantic_layer)
         sql = await self.llm_sql_generator.generate_sql(prompt=prompt, llm_name=llm_name)
 
         return sql, semantic_layer_struct
@@ -126,13 +124,13 @@ class NL2SQLService:
 
         # 从维度列表中提取modelId
         for dimension in dimensions:
-            model_id = dimension.get('modelId')
+            model_id = dimension.get("modelId")
             if model_id:
                 unique_model_ids.add(model_id)
 
         # 从指标列表中提取modelId
         for metric in metrics:
-            model_id = metric.get('modelId')
+            model_id = metric.get("modelId")
             if model_id:
                 unique_model_ids.add(model_id)
 
@@ -155,13 +153,13 @@ class NL2SQLService:
 
         # 首先处理关键字搜索结果
         for dimension in dimensions_by_keyword:
-            dimension_id = dimension.get('dimensionId')
+            dimension_id = dimension.get("dimensionId")
             if dimension_id:
                 unique_dimension_ids.add(dimension_id)
 
         # 然后处理维度值搜索结果
         for dimension in dimensions_by_value:
-            dimension_id = dimension.get('dimensionId')
+            dimension_id = dimension.get("dimensionId")
             if dimension_id:
                 unique_dimension_ids.add(dimension_id)
 
@@ -183,53 +181,44 @@ class NL2SQLService:
 
         # 从数据集详情列表中提取domainId
         for dataset in dataset_details:
-            domain_id = dataset.get('domainId')
+            domain_id = dataset.get("domainId")
             if domain_id:
                 unique_domain_ids.add(domain_id)
 
         # 将集合转换为列表并返回
         return list(unique_domain_ids)
 
-    async def sql_templating(self, original_question: str, llm_name: str, sql: str,
-                             semantic_layer: dict[str, Any]):
+    async def sql_templating(self, original_question: str, llm_name: str, sql: str, semantic_layer: dict[str, Any]):
         """
         SQL模板化
         """
         # 1. 识别可参数化的内容，返回json
-        sql_template_data = await self.llm_sql_templating.generate_sql_template(original_question=original_question,
-                                                                                sql=sql,
-                                                                                semantic_layer=semantic_layer,
-                                                                                llm_name=llm_name)
+        sql_template_data = await self.llm_sql_templating.generate_sql_template(original_question=original_question, sql=sql, semantic_layer=semantic_layer, llm_name=llm_name)
         # 2. 解析json，填充参数点对应的值
         parameters = sql_template_data["parameters"]
         for parameter in parameters:
             if parameter["type"] == "DIMENSION_FILTER":
                 dimension_id = parameter["semantic_info"]["dimension_id"]
-                dimension_values = await self.semantic_api_client.get_dimension_values_async(
-                    dimension_ids=[dimension_id])
+                dimension_values = await self.semantic_api_client.get_dimension_values_async(dimension_ids=[dimension_id])
                 parameter["possible_values"] = dimension_values[dimension_id]
 
         return sql_template_data
 
-    async def fill_sql_template(self, templated_sql: str, parameter_definitions: list,
-                                user_selected_values: dict) -> str:
+    async def fill_sql_template(self, templated_sql: str, parameter_definitions: list, user_selected_values: dict) -> str:
         """
         根据用户选择的值填充SQL模板。
         """
         sql = fill_sql_template(templated_sql, parameter_definitions, user_selected_values)
         return sql
 
-    async def generate_echarts(self, user_question: str, sql: str, column_and_type, sample_data,
-                               llm_name: str):
+    async def generate_echarts(self, user_question: str, sql: str, column_and_type, sample_data, llm_name: str):
         """
         生成 ECharts配置的 JavaScript 代码
         """
-        js_code = await self.echarts_generator.generate_echarts_config(user_question, sql, column_and_type, sample_data,
-                                                                       llm_name=llm_name)
+        js_code = await self.echarts_generator.generate_echarts_config(user_question, sql, column_and_type, sample_data, llm_name=llm_name)
         return js_code
 
-    async def nl2sql_for_whole_process(self, query_text: str, llm_name: str, dataset_id_list: list[str],
-                                       request_id: str):
+    async def nl2sql_for_whole_process(self, query_text: str, llm_name: str, dataset_id_list: list[str], request_id: str):
         """
         使用LLM转换自然语言查询为SQL
         """
@@ -248,13 +237,9 @@ class NL2SQLService:
         # 4. 将分词到语义层结构化数据中进行检索得到相关数据
         await send_event(request_id, {"message": "获取维度信息", "action": "start"}, "message")
         # 4.1 根据分词关键字获得维度列表
-        dimensions_by_keyword = await self.semantic_api_client.get_dimension_info_by_keyword_async(
-            keyword=segmented_words,
-            dataset_ids=dataset_id_list)
+        dimensions_by_keyword = await self.semantic_api_client.get_dimension_info_by_keyword_async(keyword=segmented_words, dataset_ids=dataset_id_list)
         # 4.2 分词关键字作为维度值关键字获得获得维度列表
-        dimensions_by_value = await self.semantic_api_client.get_dimension_by_dimension_value_async(
-            keyword=segmented_words,
-            dataset_ids=dataset_id_list)
+        dimensions_by_value = await self.semantic_api_client.get_dimension_by_dimension_value_async(keyword=segmented_words, dataset_ids=dataset_id_list)
         # 4.3 根据dimensionId对dimensions_by_keyword和dimensions_by_value进行维度去重，获得最终维度列表
         unique_dimensions = self._deduplicate_dimensions(dimensions_by_keyword, dimensions_by_value)
         dimension_values = await self.semantic_api_client.get_dimension_values_async(dimension_ids=unique_dimensions)
@@ -263,9 +248,7 @@ class NL2SQLService:
         await send_event(request_id, {"message": "维度信息", "data": dimensions}, "data")
         # 4.4 根据分词关键字获得指标列表
         await send_event(request_id, {"message": "获取指标信息", "action": "start"}, "message")
-        metrics = await self.semantic_api_client.get_metric_info_by_keyword_async(
-            keyword=segmented_words,
-            dataset_ids=dataset_id_list)
+        metrics = await self.semantic_api_client.get_metric_info_by_keyword_async(keyword=segmented_words, dataset_ids=dataset_id_list)
         await send_event(request_id, {"message": "获取指标信息", "action": "complete"}, "message")
         await send_event(request_id, {"message": "指标信息", "data": metrics}, "data")
 
@@ -282,13 +265,17 @@ class NL2SQLService:
         # 4.7 查询业务术语
         dataset_details = await self.semantic_api_client.get_dataset_detail_async(dataset_ids=dataset_id_list)
         domain_ids = self._extract_unique_domain_ids(dataset_details)
-        business_term_rows = await self.semantic_api_client.get_business_term_info_async(keyword=segmented_words,
-                                                                                         domain_ids=domain_ids)
-        semantic_layer = {"dataset_details": dataset_details, "dimensions": dimensions, "dimension_values": dimension_values,
-                              "metrics": metrics, "model_details": model_details,
-                              "model_relations": model_relations, "business_term_rows": business_term_rows}
-        prompt, semantic_layer_struct = generate_nl2sql_prompt(user_question=query_text, query_intents=intents,
-                                                               semantic_layer=semantic_layer)
+        business_term_rows = await self.semantic_api_client.get_business_term_info_async(keyword=segmented_words, domain_ids=domain_ids)
+        semantic_layer = {
+            "dataset_details": dataset_details,
+            "dimensions": dimensions,
+            "dimension_values": dimension_values,
+            "metrics": metrics,
+            "model_details": model_details,
+            "model_relations": model_relations,
+            "business_term_rows": business_term_rows,
+        }
+        prompt, semantic_layer_struct = generate_nl2sql_prompt(user_question=query_text, query_intents=intents, semantic_layer=semantic_layer)
         await send_event(request_id, {"message": "生成SQL", "action": "start"}, "message")
         sql = await self.llm_sql_generator.generate_sql(prompt=prompt, llm_name=llm_name)
         await send_event(request_id, {"message": "生成SQL", "action": "complete"}, "message")
@@ -301,49 +288,34 @@ class NL2SQLService:
         全流程都在AI平台上完成
         """
 
-        sql, semantic_layer_struct = await self.nl2sql_for_whole_process(user_question, llm_name, dataset_id_list,
-                                                                         request_id)
+        sql, semantic_layer_struct = await self.nl2sql_for_whole_process(user_question, llm_name, dataset_id_list, request_id)
         await send_event(request_id, {"message": "查询数据", "action": "start"}, "message")
         result = execute_sql_and_format_result(sql=sql, db_config={})  # 假设此函数足够快或已优化
         await send_event(request_id, {"message": "查询数据", "action": "complete"}, "message")
         await send_event(request_id, {"message": "数据查询结果", "data": result}, "data")
 
-        column_and_type = result['column_and_type']
-        data = result['sql_result']['data']
+        column_and_type = result["column_and_type"]
+        data = result["sql_result"]["data"]
         sample_data = data[:5]
 
         # --- 开始独立的并发流程 ---
         # 发送一个总的开始事件，表明后续步骤将并行启动
 
         # 为每个包含其自身后续逻辑的流程创建任务
-        sql_templating_task = asyncio.create_task(
-            self._handle_sql_templating_flow(
-                user_question, sql, semantic_layer_struct, request_id, llm_name
-            )
-        )
+        sql_templating_task = asyncio.create_task(self._handle_sql_templating_flow(user_question, sql, semantic_layer_struct, request_id, llm_name))
 
-        echarts_generation_task = asyncio.create_task(
-            self._handle_echarts_generation_flow(
-                user_question, sql, column_and_type, sample_data, llm_name, request_id
-            )
-        )
+        echarts_generation_task = asyncio.create_task(self._handle_echarts_generation_flow(user_question, sql, column_and_type, sample_data, llm_name, request_id))
 
         # 等待这两个独立的、包含各自后续逻辑的流程全部完成
         # 如果其中一个流程内部发生异常且未被捕获，gather会传播该异常
         try:
-            await asyncio.gather(
-                sql_templating_task,
-                echarts_generation_task
-            )
+            await asyncio.gather(sql_templating_task, echarts_generation_task)
         except Exception as e:
-            logger.error(f"Error during concurrent processing of SQL templating or ECharts generation: {e}",
-                         exc_info=True)
+            logger.error(f"Error during concurrent processing of SQL templating or ECharts generation: {e}", exc_info=True)
             # 根据需要，可以发送一个总体的错误事件
             await send_event(request_id, {"message": f"处理过程中发生错误: {e}"}, "error")
 
-    async def _handle_sql_templating_flow(self, user_question: str, sql: str,
-                                          semantic_layer_struct: dict[str, Any],
-                                          request_id: str, llm_name: str):
+    async def _handle_sql_templating_flow(self, user_question: str, sql: str, semantic_layer_struct: dict[str, Any], request_id: str, llm_name: str):
         """处理SQL模板化并发送相关事件"""
         await send_event(request_id, {"message": "生成SQL模板", "action": "start"}, "message")
         try:
@@ -360,14 +332,11 @@ class NL2SQLService:
             await send_event(request_id, {"message": f"SQL模板生成失败: {e}"}, "error")
             # 或者根据需要抛出异常，让 gather 捕获
 
-    async def _handle_echarts_generation_flow(self, user_question: str, sql: str,
-                                              column_and_type, sample_data,
-                                              llm_name: str, request_id: str):
+    async def _handle_echarts_generation_flow(self, user_question: str, sql: str, column_and_type, sample_data, llm_name: str, request_id: str):
         """处理ECharts配置生成并发送相关事件"""
         await send_event(request_id, {"message": "生成ECharts配置代码", "action": "start"}, "message")
         try:
-            echarts_js_code = await self.echarts_generator.generate_echarts_config(user_question, sql, column_and_type,
-                                                                                   sample_data, llm_name)
+            echarts_js_code = await self.echarts_generator.generate_echarts_config(user_question, sql, column_and_type, sample_data, llm_name)
             await send_event(request_id, {"message": "生成ECharts配置代码", "action": "complete"}, "message")
             await send_event(request_id, {"message": "ECharts配置代码", "data": echarts_js_code}, "data")
             logger.info(f"ECharts配置代码：{echarts_js_code}")
@@ -376,8 +345,7 @@ class NL2SQLService:
             await send_event(request_id, {"message": f"ECharts配置代码生成失败: {e}"}, "error")
             # 或者根据需要抛出异常
 
-    async def re_query(self, templated_sql: str, parameter_definitions: list,
-                       user_selected_values: dict):
+    async def re_query(self, templated_sql: str, parameter_definitions: list, user_selected_values: dict):
         """
         根据用户选择的值填充SQL模板。
         """

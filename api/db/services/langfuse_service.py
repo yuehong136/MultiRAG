@@ -45,21 +45,14 @@ class TenantLangfuseService(CommonService):
         result = db.query(*fields).filter(cls.model.tenant_id == tenant_id).first()
         if result:
             # 将结果转换为字典形式
-            return {
-                'tenant_id': result[0],
-                'host': result[1],
-                'secret_key': result[2],
-                'public_key': result[3]
-            }
+            return {"tenant_id": result[0], "host": result[1], "secret_key": result[2], "public_key": result[3]}
         return None
 
     @classmethod
     def delete_by_tenant_id(cls, db: Session, tenant_id: str) -> int:
         """根据tenant_id删除所有相关的Langfuse配置记录"""
         try:
-            result = db.query(cls.model).filter(
-                cls.model.tenant_id == tenant_id
-            ).delete(synchronize_session=False)
+            result = db.query(cls.model).filter(cls.model.tenant_id == tenant_id).delete(synchronize_session=False)
             db.commit()
             return result
         except Exception as e:
@@ -84,10 +77,7 @@ class TenantLangfuseService(CommonService):
         langfuse_keys["update_time"] = current_ts
         langfuse_keys["update_date"] = current_date
 
-        result = db.query(cls.model).filter(cls.model.tenant_id == tenant_id).update(
-            langfuse_keys,
-            synchronize_session=False
-        )
+        result = db.query(cls.model).filter(cls.model.tenant_id == tenant_id).update(langfuse_keys, synchronize_session=False)
         db.commit()
         return result > 0
 

@@ -99,5 +99,6 @@ async def main():
 
     print(json.dumps(nx.node_link_data(graph), ensure_ascii=False, indent=2))
 
+
 if __name__ == "__main__":
     asyncio.run(main)

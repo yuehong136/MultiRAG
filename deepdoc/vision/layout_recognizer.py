@@ -23,8 +23,8 @@ import numpy as np
 from huggingface_hub import snapshot_download
 
 from common.file_utils import get_project_base_directory
-from deepdoc.vision.recognizer import Recognizer
 from deepdoc.vision.operators import nms
+from deepdoc.vision.recognizer import Recognizer
 
 
 class LayoutRecognizer(Recognizer):
@@ -155,6 +155,7 @@ class LayoutRecognizer(Recognizer):
 
     def forward(self, image_list, thr=0.7, batch_size=16):
         return super().__call__(image_list, thr, batch_size)
+
 
 class LayoutRecognizer4YOLOv10(LayoutRecognizer):
     labels = [

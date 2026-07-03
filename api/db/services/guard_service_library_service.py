@@ -5,6 +5,7 @@
 @date：2025/01/11 18:30
 @desc: AI安全护栏服务词库关系管理服务
 """
+
 import logging
 from typing import Any
 
@@ -18,13 +19,13 @@ from common.misc_utils import get_uuid
 
 class GuardServiceLibraryService(CommonService):
     """AI安全护栏服务词库关系管理服务"""
+
     model = GuardServiceLibrary
 
     @classmethod
-    def bind_library_to_service(cls, db: Session, service_id: str, library_id: str,
-                               priority: int = 0, enabled: bool = True,
-                               tenant_id: str = None, created_by: str = None,
-                               library_type: str = None) -> str | None:
+    def bind_library_to_service(
+        cls, db: Session, service_id: str, library_id: str, priority: int = 0, enabled: bool = True, tenant_id: str = None, created_by: str = None, library_type: str = None
+    ) -> str | None:
         """
         绑定词库到服务
 
@@ -57,7 +58,7 @@ class GuardServiceLibraryService(CommonService):
                 "library_type": library_type,
                 "tenant_id": tenant_id,
                 "created_by": created_by,
-                "status": "1"
+                "status": "1",
             }
 
             binding = cls.save(db, **binding_data)
@@ -81,20 +82,13 @@ class GuardServiceLibraryService(CommonService):
             绑定关系对象或None
         """
         try:
-            return db.query(cls.model).filter(
-                and_(
-                    cls.model.service_id == service_id,
-                    cls.model.library_id == library_id,
-                    cls.model.status == "1"
-                )
-            ).first()
+            return db.query(cls.model).filter(and_(cls.model.service_id == service_id, cls.model.library_id == library_id, cls.model.status == "1")).first()
         except Exception as e:
             logging.error(f"获取服务词库绑定关系失败: {e}")
             return None
 
     @classmethod
-    def get_libraries_by_service(cls, db: Session, service_id: str,
-                               enabled_only: bool = True) -> list[dict[str, Any]]:
+    def get_libraries_by_service(cls, db: Session, service_id: str, enabled_only: bool = True) -> list[dict[str, Any]]:
         """
         获取服务绑定的词库列表
 
@@ -110,13 +104,15 @@ class GuardServiceLibraryService(CommonService):
             logging.info(f"查询服务词库绑定，service_id: {service_id}, enabled_only: {enabled_only}")
 
             # 执行JOIN查询
-            query = db.query(cls.model, GuardLibrary).join(
-                GuardLibrary, cls.model.library_id == GuardLibrary.id
-            ).filter(
-                and_(
-                    cls.model.service_id == service_id,
-                    cls.model.status == "1"  # 只过滤绑定表status，词库表已改为硬删除
-                    # 移除 GuardLibrary.status == "1" 过滤条件
+            query = (
+                db.query(cls.model, GuardLibrary)
+                .join(GuardLibrary, cls.model.library_id == GuardLibrary.id)
+                .filter(
+                    and_(
+                        cls.model.service_id == service_id,
+                        cls.model.status == "1",  # 只过滤绑定表status，词库表已改为硬删除
+                        # 移除 GuardLibrary.status == "1" 过滤条件
+                    )
                 )
             )
 
@@ -141,7 +137,7 @@ class GuardServiceLibraryService(CommonService):
                     "priority": binding.priority,
                     "enabled": binding.enabled,
                     "library_type": binding.library_type,  # 绑定表中的类型
-                    "create_time": binding.create_time.isoformat() if hasattr(binding.create_time, 'isoformat') and binding.create_time else str(binding.create_time) if binding.create_time else None
+                    "create_time": binding.create_time.isoformat() if hasattr(binding.create_time, "isoformat") and binding.create_time else str(binding.create_time) if binding.create_time else None,
                 }
                 # 优先使用绑定表中的library_type，如果没有则使用词库表中的
                 effective_library_type = binding.library_type or library.library_type
@@ -157,8 +153,7 @@ class GuardServiceLibraryService(CommonService):
             return []
 
     @classmethod
-    def get_services_by_library(cls, db: Session, library_id: str,
-                              enabled_only: bool = True) -> list[dict[str, Any]]:
+    def get_services_by_library(cls, db: Session, library_id: str, enabled_only: bool = True) -> list[dict[str, Any]]:
         """
         获取使用此词库的服务列表
 
@@ -171,14 +166,10 @@ class GuardServiceLibraryService(CommonService):
             服务列表（包含绑定信息）
         """
         try:
-            query = db.query(cls.model, GuardService).join(
-                GuardService, cls.model.service_id == GuardService.id
-            ).filter(
-                and_(
-                    cls.model.library_id == library_id,
-                    cls.model.status == "1",
-                    GuardService.status == "1"
-                )
+            query = (
+                db.query(cls.model, GuardService)
+                .join(GuardService, cls.model.service_id == GuardService.id)
+                .filter(and_(cls.model.library_id == library_id, cls.model.status == "1", GuardService.status == "1"))
             )
 
             if enabled_only:
@@ -189,12 +180,7 @@ class GuardServiceLibraryService(CommonService):
             services = []
             for binding, service in results:
                 service_dict = service.to_dict()
-                service_dict["binding"] = {
-                    "id": binding.id,
-                    "priority": binding.priority,
-                    "enabled": binding.enabled,
-                    "create_time": binding.create_time.isoformat() if binding.create_time else None
-                }
+                service_dict["binding"] = {"id": binding.id, "priority": binding.priority, "enabled": binding.enabled, "create_time": binding.create_time.isoformat() if binding.create_time else None}
                 services.append(service_dict)
 
             return services
@@ -204,8 +190,7 @@ class GuardServiceLibraryService(CommonService):
             return []
 
     @classmethod
-    def update_binding(cls, db: Session, binding_id: str,
-                      update_data: dict[str, Any]) -> int:
+    def update_binding(cls, db: Session, binding_id: str, update_data: dict[str, Any]) -> int:
         """
         更新服务词库绑定关系
 
@@ -224,8 +209,7 @@ class GuardServiceLibraryService(CommonService):
             return False
 
     @classmethod
-    def unbind_library_from_service(cls, db: Session, service_id: str,
-                                  library_id: str) -> int:
+    def unbind_library_from_service(cls, db: Session, service_id: str, library_id: str) -> int:
         """
         解绑服务词库关系
 
@@ -249,9 +233,7 @@ class GuardServiceLibraryService(CommonService):
             return False
 
     @classmethod
-    def batch_bind_libraries(cls, db: Session, service_id: str,
-                           library_ids: list[str], tenant_id: str = None,
-                           created_by: str = None, library_type: str = None) -> dict[str, Any]:
+    def batch_bind_libraries(cls, db: Session, service_id: str, library_ids: list[str], tenant_id: str = None, created_by: str = None, library_type: str = None) -> dict[str, Any]:
         """
         批量绑定词库到服务
 
@@ -273,11 +255,7 @@ class GuardServiceLibraryService(CommonService):
 
         for library_id in library_ids:
             # 绑定词库到服务，包含library_type
-            binding_id = cls.bind_library_to_service(
-                db, service_id, library_id,
-                tenant_id=tenant_id, created_by=created_by,
-                library_type=library_type
-            )
+            binding_id = cls.bind_library_to_service(db, service_id, library_id, tenant_id=tenant_id, created_by=created_by, library_type=library_type)
 
             if binding_id:
                 success_count += 1
@@ -287,11 +265,7 @@ class GuardServiceLibraryService(CommonService):
                 failed_count += 1
                 failed_libraries.append(library_id)
 
-        result = {
-            "success_count": success_count,
-            "failed_count": failed_count,
-            "failed_libraries": failed_libraries
-        }
+        result = {"success_count": success_count, "failed_count": failed_count, "failed_libraries": failed_libraries}
 
         # 如果有设置library_type，添加统计信息
         if library_type:
@@ -301,8 +275,7 @@ class GuardServiceLibraryService(CommonService):
         return result
 
     @classmethod
-    def batch_unbind_libraries(cls, db: Session, service_id: str,
-                             library_ids: list[str]) -> dict[str, Any]:
+    def batch_unbind_libraries(cls, db: Session, service_id: str, library_ids: list[str]) -> dict[str, Any]:
         """
         批量解绑服务词库关系
 
@@ -325,11 +298,7 @@ class GuardServiceLibraryService(CommonService):
                 failed_count += 1
                 failed_libraries.append(library_id)
 
-        return {
-            "success_count": success_count,
-            "failed_count": failed_count,
-            "failed_libraries": failed_libraries
-        }
+        return {"success_count": success_count, "failed_count": failed_count, "failed_libraries": failed_libraries}
 
     @classmethod
     def get_binding_stats(cls, db: Session, tenant_id: str = None) -> dict[str, Any]:
@@ -369,7 +338,7 @@ class GuardServiceLibraryService(CommonService):
                 "enabled_bindings": enabled_bindings,
                 "disabled_bindings": total_bindings - enabled_bindings,
                 "service_count": len(service_stats),
-                "service_stats": service_stats
+                "service_stats": service_stats,
             }
 
         except Exception as e:
@@ -377,8 +346,7 @@ class GuardServiceLibraryService(CommonService):
             return {}
 
     @classmethod
-    def set_binding_priority(cls, db: Session, binding_id: str,
-                           priority: int) -> int:
+    def set_binding_priority(cls, db: Session, binding_id: str, priority: int) -> int:
         """
         设置绑定关系优先级
 

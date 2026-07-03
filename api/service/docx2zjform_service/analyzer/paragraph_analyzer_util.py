@@ -15,7 +15,7 @@ def identify_input(text: str) -> list:
     # 修改正则表达式模式：
     # ([^：:]+) 匹配除冒号外的任何字符（一个或多个）
     # (?:：|:) 匹配中文或英文冒号（非捕获组）
-    pattern = r'([^：:]+)(?:：|:)'
+    pattern = r"([^：:]+)(?:：|:)"
 
     # 查找所有匹配项
     matches = re.findall(pattern, text)
@@ -35,10 +35,10 @@ def extract_br_separated_content(html_text):
         list: 从<br/>标签之间提取的非空字符串列表
     """
     # 将所有<br>标签的变体替换为标准形式
-    standardized_text = re.sub(r'<br\s*/?>', '<br/>', html_text)
+    standardized_text = re.sub(r"<br\s*/?>", "<br/>", html_text)
 
     # 按<br/>标签拆分文本
-    parts = re.split(r'<br/>', standardized_text)
+    parts = re.split(r"<br/>", standardized_text)
 
     # 清理每个部分（去除空白）并过滤掉空字符串
     result = [part.strip() for part in parts if part.strip()]

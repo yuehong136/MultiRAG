@@ -8,6 +8,7 @@ Revises: 315b233f4811
 Create Date: 2025-12-04 10:37:46.891276
 
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -15,8 +16,8 @@ from alembic import op
 from sqlalchemy.engine.reflection import Inspector
 
 # revision identifiers, used by Alembic.
-revision: str = '0f76479f4ec9'
-down_revision: str | None = '315b233f4811'
+revision: str = "0f76479f4ec9"
+down_revision: str | None = "315b233f4811"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -46,36 +47,44 @@ def _get_pk_columns(insp: Inspector, table_name: str) -> set:
 def _clean_duplicate_factories(dialect_name: str) -> None:
     """清理 t_ai_llm_factories 表的重复数据"""
     if dialect_name == "postgresql":
-        op.execute(sa.text("""
+        op.execute(
+            sa.text("""
             DELETE FROM usr_ai.t_ai_llm_factories
             WHERE ctid NOT IN (
                 SELECT MIN(ctid) FROM usr_ai.t_ai_llm_factories GROUP BY name
             )
-        """))
+        """)
+        )
     elif dialect_name == "mysql":
-        op.execute(sa.text("""
+        op.execute(
+            sa.text("""
             DELETE t1 FROM usr_ai.t_ai_llm_factories t1
             INNER JOIN usr_ai.t_ai_llm_factories t2
             WHERE t1.name = t2.name AND t1.create_time > t2.create_time
-        """))
+        """)
+        )
 
 
 def _clean_duplicate_llms(dialect_name: str) -> None:
     """清理 t_ai_llms 表的重复数据"""
     if dialect_name == "postgresql":
-        op.execute(sa.text("""
+        op.execute(
+            sa.text("""
             DELETE FROM usr_ai.t_ai_llms
             WHERE ctid NOT IN (
                 SELECT MIN(ctid) FROM usr_ai.t_ai_llms GROUP BY fid, llm_name
             )
-        """))
+        """)
+        )
     elif dialect_name == "mysql":
-        op.execute(sa.text("""
+        op.execute(
+            sa.text("""
             DELETE t1 FROM usr_ai.t_ai_llms t1
             INNER JOIN usr_ai.t_ai_llms t2
             WHERE t1.fid = t2.fid AND t1.llm_name = t2.llm_name
             AND t1.create_time > t2.create_time
-        """))
+        """)
+        )
 
 
 def upgrade() -> None:
@@ -96,18 +105,8 @@ def upgrade() -> None:
 
         if current_pk != target_pk:
             # 使用 Alembic 的 op 函数修改主键
-            op.drop_constraint(
-                constraint_name="t_ai_llms_pkey",
-                table_name=TABLE_LLMS,
-                schema=SCHEMA,
-                type_="primary"
-            )
-            op.create_primary_key(
-                constraint_name="t_ai_llms_pkey",
-                table_name=TABLE_LLMS,
-                columns=["fid", "llm_name"],
-                schema=SCHEMA
-            )
+            op.drop_constraint(constraint_name="t_ai_llms_pkey", table_name=TABLE_LLMS, schema=SCHEMA, type_="primary")
+            op.create_primary_key(constraint_name="t_ai_llms_pkey", table_name=TABLE_LLMS, columns=["fid", "llm_name"], schema=SCHEMA)
 
 
 def downgrade() -> None:
@@ -119,15 +118,5 @@ def downgrade() -> None:
         current_pk = _get_pk_columns(insp, TABLE_LLMS)
 
         if current_pk == {"fid", "llm_name"}:
-            op.drop_constraint(
-                constraint_name="t_ai_llms_pkey",
-                table_name=TABLE_LLMS,
-                schema=SCHEMA,
-                type_="primary"
-            )
-            op.create_primary_key(
-                constraint_name="t_ai_llms_pkey",
-                table_name=TABLE_LLMS,
-                columns=["llm_name"],
-                schema=SCHEMA
-            )
+            op.drop_constraint(constraint_name="t_ai_llms_pkey", table_name=TABLE_LLMS, schema=SCHEMA, type_="primary")
+            op.create_primary_key(constraint_name="t_ai_llms_pkey", table_name=TABLE_LLMS, columns=["llm_name"], schema=SCHEMA)

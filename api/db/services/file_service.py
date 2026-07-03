@@ -33,13 +33,8 @@ class FileService(CommonService):
         super().__init__(File)
 
     @classmethod
-    def get_by_pf_id(cls, db: Session, tenant_id: str, pf_id: str, page_number: int, items_per_page: int,
-                     orderby: str, desc: bool, keywords: str | None = None) -> tuple[list[dict], int]:
-        query = db.query(cls.model).filter(
-            cls.model.tenant_id == tenant_id,
-            cls.model.parent_id == pf_id,
-            cls.model.id != pf_id
-        )
+    def get_by_pf_id(cls, db: Session, tenant_id: str, pf_id: str, page_number: int, items_per_page: int, orderby: str, desc: bool, keywords: str | None = None) -> tuple[list[dict], int]:
+        query = db.query(cls.model).filter(cls.model.tenant_id == tenant_id, cls.model.parent_id == pf_id, cls.model.id != pf_id)
 
         if keywords:
             query = query.filter(func.lower(cls.model.name).contains(keywords.lower()))
@@ -59,11 +54,7 @@ class FileService(CommonService):
                 file["size"] = cls.get_folder_size(db, file["id"])
                 file["kbs_info"] = []
                 # 检查该文件夹是否有子文件夹
-                children = db.query(cls.model).filter(
-                    cls.model.tenant_id == tenant_id,
-                    cls.model.parent_id == file["id"],
-                    cls.model.id != file["id"]
-                ).all()
+                children = db.query(cls.model).filter(cls.model.tenant_id == tenant_id, cls.model.parent_id == file["id"], cls.model.id != file["id"]).all()
 
                 file["has_child_folder"] = any(child.to_dict()["type"] == FileType.FOLDER.value for child in children)
             else:
@@ -128,20 +119,14 @@ class FileService(CommonService):
     @classmethod
     def get_all_file_ids_by_tenant_id(cls, db: Session, tenant_id: str) -> list[dict]:
         """根据tenant_id批量查询所有文件ID，使用分页避免内存溢出"""
-        stmt = (
-            select(cls.model.id)
-            .where(cls.model.tenant_id == tenant_id)
-            .order_by(cls.model.create_time.asc())
-        )
+        stmt = select(cls.model.id).where(cls.model.tenant_id == tenant_id).order_by(cls.model.create_time.asc())
 
         offset, limit = 0, 100
         res = []
 
         while True:
             try:
-                file_batch = db.execute(
-                    stmt.offset(offset).limit(limit)
-                ).scalars().all()
+                file_batch = db.execute(stmt.offset(offset).limit(limit)).scalars().all()
 
                 if not file_batch:
                     break
@@ -159,16 +144,10 @@ class FileService(CommonService):
         if count > len(name) - 2:
             return file
         else:
-            new_file = cls.insert(db, {
-                "id": get_uuid(),
-                "parent_id": parent_id,
-                "tenant_id": file.tenant_id,
-                "created_by": file.created_by,
-                "name": name[count],
-                "location": "",
-                "size": 0,
-                "type": FileType.FOLDER.value
-            })
+            new_file = cls.insert(
+                db,
+                {"id": get_uuid(), "parent_id": parent_id, "tenant_id": file.tenant_id, "created_by": file.created_by, "name": name[count], "location": "", "size": 0, "type": FileType.FOLDER.value},
+            )
             return cls.create_folder(db, new_file, new_file.id, name, count + 1)
 
     @classmethod
@@ -214,11 +193,7 @@ class FileService(CommonService):
         root_folder = cls.get_root_folder(db, tenant_id)
         root_id = root_folder["id"]
 
-        kb_folder = db.query(cls.model).filter_by(
-            tenant_id=tenant_id,
-            parent_id=root_id,
-            name=KNOWLEDGEBASE_FOLDER_NAME
-        ).first()
+        kb_folder = db.query(cls.model).filter_by(tenant_id=tenant_id, parent_id=root_id, name=KNOWLEDGEBASE_FOLDER_NAME).first()
 
         if not kb_folder:
             kb_folder = cls.new_a_file_from_kb(db, tenant_id, KNOWLEDGEBASE_FOLDER_NAME, root_id)
@@ -227,8 +202,7 @@ class FileService(CommonService):
         return kb_folder.to_dict()
 
     @classmethod
-    def new_a_file_from_kb(cls, db: Session, tenant_id: str, name: str, parent_id: str, ty=FileType.FOLDER.value,
-                           size=0, location="") -> dict:
+    def new_a_file_from_kb(cls, db: Session, tenant_id: str, name: str, parent_id: str, ty=FileType.FOLDER.value, size=0, location="") -> dict:
         existing_files = cls.query(db, tenant_id=tenant_id, parent_id=parent_id, name=name)
         if existing_files:
             # 处理查询返回的列表
@@ -243,7 +217,7 @@ class FileService(CommonService):
             "type": ty,
             "size": size,
             "location": location,
-            "source_type": FileSource.KNOWLEDGEBASE
+            "source_type": FileSource.KNOWLEDGEBASE,
         }
         new_file = cls.insert(db, file_data)
         return new_file.to_dict()
@@ -342,7 +316,7 @@ class FileService(CommonService):
             "type": doc["type"],
             "size": doc["size"],
             "location": doc["location"],
-            "source_type": FileSource.KNOWLEDGEBASE
+            "source_type": FileSource.KNOWLEDGEBASE,
         }
         file = cls.save(db, **file_data)
         File2DocumentService.save(db, **{"id": get_uuid(), "file_id": file.id, "document_id": doc["id"]})
@@ -350,13 +324,15 @@ class FileService(CommonService):
     @classmethod
     def move_file(cls, db: Session, file_ids: list[str], folder_id: str):
         try:
-            cls.filter_update(db, [cls.model.id.in_(file_ids)], {'parent_id': folder_id})
+            cls.filter_update(db, [cls.model.id.in_(file_ids)], {"parent_id": folder_id})
         except Exception:
             logging.exception("move_file")
             raise RuntimeError("Database error (File move)!")
 
     @classmethod
-    def upload_document(cls, db: Session, kb: Knowledgebase, file_objs: list, user_id, labels: list[str] | None = None, src: str="local", parent_path: str | None = None) -> tuple[list[str], list[tuple[dict, bytes]]]:
+    def upload_document(
+        cls, db: Session, kb: Knowledgebase, file_objs: list, user_id, labels: list[str] | None = None, src: str = "local", parent_path: str | None = None
+    ) -> tuple[list[str], list[tuple[dict, bytes]]]:
         # 初始化根文件夹和知识库文件夹
         root_folder = cls.get_root_folder(db, user_id)
         pf_id = root_folder["id"]
@@ -384,8 +360,7 @@ class FileService(CommonService):
                     try:
                         if str(existing_doc.kb_id) != str(kb.id):
                             logging.warning(
-                                "Existing document id collision detected for %s: belongs to kb_id=%s, incoming kb_id=%s. "
-                                "Skipping update to avoid cross-KB overwrite.",
+                                "Existing document id collision detected for %s: belongs to kb_id=%s, incoming kb_id=%s. Skipping update to avoid cross-KB overwrite.",
                                 file_id,
                                 existing_doc.kb_id,
                                 kb.id,
@@ -409,10 +384,7 @@ class FileService(CommonService):
 
             try:
                 DocumentService.check_doc_health(db, kb.tenant_id, filename)
-                filename = duplicate_name(
-                    lambda *args, **kwargs: DocumentService.query(db, *args, **kwargs),
-                    name=filename,
-                    kb_id=kb.id)
+                filename = duplicate_name(lambda *args, **kwargs: DocumentService.query(db, *args, **kwargs), name=filename, kb_id=kb.id)
 
                 filetype = filename_type(filename)
                 if filetype == FileType.OTHER.value:
@@ -452,7 +424,7 @@ class FileService(CommonService):
                     "size": len(file_blob),
                     "thumbnail": thumbnail_location,
                     "content_hash": xxhash.xxh128(file_blob).hexdigest(),
-                    "auth": json.dumps(labels) if labels else None  # 将 labels 转换为 JSON 字符串
+                    "auth": json.dumps(labels) if labels else None,  # 将 labels 转换为 JSON 字符串
                 }
                 DocumentService.insert(db, doc)
 
@@ -476,13 +448,7 @@ class FileService(CommonService):
             文件列表
         """
         try:
-            stmt = (
-                select(cls.model)
-                .where(
-                    cls.model.parent_id == parent_id,
-                    cls.model.id != parent_id
-                )
-            )
+            stmt = select(cls.model).where(cls.model.parent_id == parent_id, cls.model.id != parent_id)
             files = db.execute(stmt).scalars().all()
             return list(files)
         except Exception:
@@ -534,12 +500,12 @@ class FileService(CommonService):
     @staticmethod
     def get_blob(user_id, location):
         bname = f"{user_id}-downloads"
-        return  settings.STORAGE_IMPL.get(bname, location)
+        return settings.STORAGE_IMPL.get(bname, location)
 
     @staticmethod
     def put_blob(user_id, location, blob):
         bname = f"{user_id}-downloads"
-        return  settings.STORAGE_IMPL.put(bname, location, blob)
+        return settings.STORAGE_IMPL.put(bname, location, blob)
 
     @classmethod
     def delete_docs(cls, db: Session, doc_ids, tenant_id):
@@ -587,6 +553,7 @@ class FileService(CommonService):
             file: 文件对象（可以是 FastAPI UploadFile 或普通文件对象，也可以是 None）
             url: URL地址（可选），用于爬取网页内容
         """
+
         def structured(filename, filetype, blob, content_type):
             nonlocal user_id
             if filetype == FileType.PDF.value:
@@ -603,11 +570,12 @@ class FileService(CommonService):
                 "mime_type": content_type,
                 "created_by": user_id,
                 "created_at": time.time(),
-                "preview_url": None
+                "preview_url": None,
             }
 
         if url:
             from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CrawlResult, DefaultMarkdownGenerator, PruningContentFilter
+
             filename = re.sub(r"\?.*", "", url.split("/")[-1])
 
             browser_config = BrowserConfig(
@@ -615,17 +583,8 @@ class FileService(CommonService):
                 verbose=False,
             )
             async with AsyncWebCrawler(config=browser_config) as crawler:
-                crawler_config = CrawlerRunConfig(
-                    markdown_generator=DefaultMarkdownGenerator(
-                        content_filter=PruningContentFilter()
-                    ),
-                    pdf=True,
-                    screenshot=False
-                )
-                page: CrawlResult = await crawler.arun(
-                    url=url,
-                    config=crawler_config
-                )
+                crawler_config = CrawlerRunConfig(markdown_generator=DefaultMarkdownGenerator(content_filter=PruningContentFilter()), pdf=True, screenshot=False)
+                page: CrawlResult = await crawler.arun(url=url, config=crawler_config)
 
             if page.pdf:
                 if filename.split(".")[-1].lower() != "pdf":
@@ -635,7 +594,7 @@ class FileService(CommonService):
             return structured(filename, "html", str(page.markdown).encode("utf-8"), page.response_headers.get("content-type", "text/html"))
 
         # 处理文件上传
-        if hasattr(file, 'read'):
+        if hasattr(file, "read"):
             # 支持异步和同步读取
             if asyncio.iscoroutinefunction(file.read):
                 file_content = await file.read()
@@ -653,10 +612,7 @@ class FileService(CommonService):
             return ([], []) if raw else []
 
         def image_to_base64(file):
-            return "data:{};base64,{}".format(
-                file["mime_type"],
-                base64.b64encode(FileService.get_blob(file["created_by"], file["id"])).decode("utf-8")
-            )
+            return "data:{};base64,{}".format(file["mime_type"], base64.b64encode(FileService.get_blob(file["created_by"], file["id"])).decode("utf-8"))
 
         exe = ThreadPoolExecutor(max_workers=5)
         threads = []
@@ -668,14 +624,7 @@ class FileService(CommonService):
                 else:
                     threads.append(exe.submit(image_to_base64, file))
                 continue
-            threads.append(exe.submit(
-                FileService.parse,
-                file["name"],
-                FileService.get_blob(file["created_by"], file["id"]),
-                True,
-                file["created_by"],
-                layout_recognize
-            ))
+            threads.append(exe.submit(FileService.parse, file["name"], FileService.get_blob(file["created_by"], file["id"]), True, file["created_by"], layout_recognize))
 
         if raw:
             return [th.result() for th in threads], imgs

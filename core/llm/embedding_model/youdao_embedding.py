@@ -15,8 +15,10 @@ class YoudaoEmbed(Base):
         # super().__init__(key, model_name)
         model_path = self.get_model_path(model_name.split("/")[-1] if "/" in model_name else model_name)
         from common import settings
+
         if not settings.LIGHTEN and not YoudaoEmbed._client:
             from BCEmbedding import EmbeddingModel as qanthing
+
             try:
                 YoudaoEmbed._client = qanthing(model_name_or_path=model_path, **kwargs)
             except Exception as e:
@@ -33,7 +35,7 @@ class YoudaoEmbed(Base):
         :return: 模型的路径。
         """
         project_base = os.path.dirname(os.path.abspath(__file__))
-        models_path = os.path.join(project_base, 'models', model_name)
+        models_path = os.path.join(project_base, "models", model_name)
         if os.path.exists(models_path):
             return models_path
         return os.path.join(get_home_cache_dir(), model_name)
@@ -56,7 +58,7 @@ class YoudaoEmbed(Base):
             # 禁用tqdm进度条以避免BrokenPipeError
             # encode_kwargs = {**kwargs, 'enable_tqdm': False}
             # embds = YoudaoEmbed._client.encode(texts[i:i + batch_size], **encode_kwargs)
-            embds = YoudaoEmbed._client.encode(texts[i:i + batch_size], **{**kwargs, **kwargs})
+            embds = YoudaoEmbed._client.encode(texts[i : i + batch_size], **{**kwargs, **kwargs})
             res.extend(embds)
         return np.array(res), token_count
 
@@ -74,13 +76,10 @@ class YoudaoEmbed(Base):
         embds = YoudaoEmbed._client.encode([text], **{**kwargs, **kwargs})
         return np.array(embds[0]), num_tokens_from_string(text)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     embedder = YoudaoEmbed()
-    texts = [
-        "这是一个测试文本。",
-        "我们正在测试YoudaoEmbed的编码功能。",
-        "希望这个测试能够顺利通过。"
-    ]
+    texts = ["这是一个测试文本。", "我们正在测试YoudaoEmbed的编码功能。", "希望这个测试能够顺利通过。"]
     qv, c = embedder.encode(texts)
     print("Embeddings:", qv)
     print("Count:", c)

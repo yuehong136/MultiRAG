@@ -39,8 +39,10 @@ except Exception:
 try:
     from deepdoc.parser.pdf_parser import RAGFlowPdfParser
 except Exception:
+
     class RAGFlowPdfParser:
         pass
+
 
 from deepdoc.parser.utils import extract_pdf_outlines
 
@@ -90,9 +92,7 @@ class DoclingParser(RAGFlowPdfParser):
         self.request_timeout = request_timeout
 
     def _effective_server_url(self, docling_server_url: str | None = None) -> str:
-        return (docling_server_url or self.docling_server_url or "").rstrip("/") or (
-            os.environ.get("DOCLING_SERVER_URL", "").rstrip("/")
-        )
+        return (docling_server_url or self.docling_server_url or "").rstrip("/") or (os.environ.get("DOCLING_SERVER_URL", "").rstrip("/"))
 
     @staticmethod
     def _is_http_endpoint_valid(url: str, timeout: int = 5) -> bool:
@@ -144,7 +144,7 @@ class DoclingParser(RAGFlowPdfParser):
             if bytes_io:
                 bytes_io.close()
 
-    def _make_line_tag(self,bbox: _BBox) -> str:
+    def _make_line_tag(self, bbox: _BBox) -> str:
         if bbox is None:
             return ""
         x0, x1, top, bott = bbox.x0, bbox.x1, bbox.y0, bbox.y1
@@ -172,8 +172,7 @@ class DoclingParser(RAGFlowPdfParser):
         pos = poss[0]
         poss.insert(0, ([pos[0][0]], pos[1], pos[2], max(0, pos[3] - 120), max(pos[3] - GAP, 0)))
         pos = poss[-1]
-        poss.append(([pos[0][-1]], pos[1], pos[2], min(self.page_images[pos[0][-1]].size[1], pos[4] + GAP),
-                     min(self.page_images[pos[0][-1]].size[1], pos[4] + 120)))
+        poss.append(([pos[0][-1]], pos[1], pos[2], min(self.page_images[pos[0][-1]].size[1], pos[4] + GAP), min(self.page_images[pos[0][-1]].size[1], pos[4] + 120)))
         positions = []
         for ii, (pns, left, right, top, bottom) in enumerate(poss):
             if bottom <= top:

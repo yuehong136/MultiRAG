@@ -25,19 +25,19 @@ class UserService(CommonService):
         # 生成盐值
         salt = bcrypt.gensalt()
         # 哈希密码
-        hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
+        hashed = bcrypt.hashpw(password.encode("utf-8"), salt)
         # 返回哈希后的密码，解码为字符串
-        return hashed.decode('utf-8')
+        return hashed.decode("utf-8")
 
     @staticmethod
     def verify_password(password: str, hashed_password: str) -> bool:
         # 验证密码
-        return bcrypt.checkpw(password.encode('utf-8'), hashed_password.encode('utf-8'))
+        return bcrypt.checkpw(password.encode("utf-8"), hashed_password.encode("utf-8"))
 
     @classmethod
     def query(cls, db: Session, cols: list[str] | None = None, reverse: bool | None = None, order_by: str | None = None, **kwargs):
-        if 'access_token' in kwargs:
-            access_token = kwargs['access_token']
+        if "access_token" in kwargs:
+            access_token = kwargs["access_token"]
 
             # Reject empty, None, or whitespace-only access tokens
             if not access_token or not str(access_token).strip():
@@ -64,10 +64,7 @@ class UserService(CommonService):
 
     @classmethod
     def query_user(cls, db: Session, email: str, password: str):
-        stmt = select(cls.model).where(
-            cls.model.email == email,
-            cls.model.status == StatusEnum.VALID.value
-        )
+        stmt = select(cls.model).where(cls.model.email == email, cls.model.status == StatusEnum.VALID.value)
         user = db.scalars(stmt).first()
         if user and cls.verify_password(password, user.password):
             return user
@@ -75,10 +72,7 @@ class UserService(CommonService):
 
     @classmethod
     def query_user_onlywith_email(cls, db: Session, email: str):
-        stmt = select(cls.model).where(
-            cls.model.email == email,
-            cls.model.status == StatusEnum.VALID.value
-        )
+        stmt = select(cls.model).where(cls.model.email == email, cls.model.status == StatusEnum.VALID.value)
         return db.scalars(stmt).first()
 
     @classmethod
@@ -146,11 +140,7 @@ class UserService(CommonService):
         try:
             current_ts = current_timestamp()
             current_date = datetime_format(datetime.now())
-            stmt = update(cls.model).where(cls.model.id == user_id).values(
-                password=cls.hash_password(str(new_password)),
-                update_time=current_ts,
-                update_date=current_date
-            )
+            stmt = update(cls.model).where(cls.model.id == user_id).values(password=cls.hash_password(str(new_password)), update_time=current_ts, update_date=current_date)
             db.execute(stmt)
             db.commit()
         except Exception as e:
@@ -159,10 +149,7 @@ class UserService(CommonService):
 
     @classmethod
     def is_admin(cls, db: Session, user_id):
-        stmt = select(func.count()).select_from(cls.model).where(
-            cls.model.id == user_id,
-            cls.model.is_superuser == 1
-        )
+        stmt = select(func.count()).select_from(cls.model).where(cls.model.id == user_id, cls.model.is_superuser == 1)
         return db.scalar(stmt) > 0
 
     @classmethod
@@ -176,31 +163,27 @@ class TenantService(CommonService):
 
     @classmethod
     def get_info_by(cls, db: Session, user_id: str):
-        stmt = select(
-            cls.model.id.label("tenant_id"),
-            cls.model.name,
-            cls.model.llm_id,
-            cls.model.tenant_llm_id,
-            cls.model.embd_id,
-            cls.model.tenant_embd_id,
-            cls.model.rerank_id,
-            cls.model.tenant_rerank_id,
-            cls.model.asr_id,
-            cls.model.tenant_asr_id,
-            cls.model.img2txt_id,
-            cls.model.tenant_img2txt_id,
-            cls.model.tts_id,
-            cls.model.tenant_tts_id,
-            cls.model.parser_ids,
-            UserTenant.role.label("role")
-        ).join(
-            UserTenant,
-            cls.model.id == UserTenant.tenant_id
-        ).where(
-            UserTenant.user_id == user_id,
-            UserTenant.status == StatusEnum.VALID.value,
-            UserTenant.role == UserTenantRole.OWNER,
-            cls.model.status == StatusEnum.VALID.value
+        stmt = (
+            select(
+                cls.model.id.label("tenant_id"),
+                cls.model.name,
+                cls.model.llm_id,
+                cls.model.tenant_llm_id,
+                cls.model.embd_id,
+                cls.model.tenant_embd_id,
+                cls.model.rerank_id,
+                cls.model.tenant_rerank_id,
+                cls.model.asr_id,
+                cls.model.tenant_asr_id,
+                cls.model.img2txt_id,
+                cls.model.tenant_img2txt_id,
+                cls.model.tts_id,
+                cls.model.tenant_tts_id,
+                cls.model.parser_ids,
+                UserTenant.role.label("role"),
+            )
+            .join(UserTenant, cls.model.id == UserTenant.tenant_id)
+            .where(UserTenant.user_id == user_id, UserTenant.status == StatusEnum.VALID.value, UserTenant.role == UserTenantRole.OWNER, cls.model.status == StatusEnum.VALID.value)
         )
         tenants = db.execute(stmt).all()
 
@@ -221,7 +204,7 @@ class TenantService(CommonService):
                 "tts_id": tenant.tts_id,
                 "tenant_tts_id": tenant.tenant_tts_id,
                 "parser_ids": tenant.parser_ids,
-                "role": tenant.role
+                "role": tenant.role,
             }
             for tenant in tenants
         ]
@@ -248,29 +231,21 @@ class TenantService(CommonService):
 
     @classmethod
     def get_joined_tenants_by_user_id(cls, db: Session, user_id: str):
-        stmt = select(
-            cls.model.id.label("tenant_id"),
-            cls.model.name,
-            cls.model.llm_id,
-            cls.model.embd_id,
-            cls.model.asr_id,
-            cls.model.img2txt_id,
-            UserTenant.role
-        ).join(
-            UserTenant, cls.model.id == UserTenant.tenant_id
-        ).where(
-            UserTenant.user_id == user_id,
-            UserTenant.status == StatusEnum.VALID.value,
-            UserTenant.role.in_([UserTenantRole.NORMAL, UserTenantRole.ADMIN]),
-            cls.model.status == StatusEnum.VALID.value
+        stmt = (
+            select(cls.model.id.label("tenant_id"), cls.model.name, cls.model.llm_id, cls.model.embd_id, cls.model.asr_id, cls.model.img2txt_id, UserTenant.role)
+            .join(UserTenant, cls.model.id == UserTenant.tenant_id)
+            .where(
+                UserTenant.user_id == user_id,
+                UserTenant.status == StatusEnum.VALID.value,
+                UserTenant.role.in_([UserTenantRole.NORMAL, UserTenantRole.ADMIN]),
+                cls.model.status == StatusEnum.VALID.value,
+            )
         )
         return db.execute(stmt).all()
 
     @classmethod
     def decrease(cls, db: Session, user_id: str, num: int):
-        stmt = update(cls.model).where(cls.model.id == user_id).values(
-            credit=cls.model.credit - num
-        )
+        stmt = update(cls.model).where(cls.model.id == user_id).values(credit=cls.model.credit - num)
         result = db.execute(stmt)
         db.commit()
         if result.rowcount == 0:
@@ -279,7 +254,7 @@ class TenantService(CommonService):
     @classmethod
     def user_gateway(cls, db: Session, tenant_id):
         hash_obj = hashlib.sha256(tenant_id.encode("utf-8"))
-        return int(hash_obj.hexdigest(), 16)%len(settings.MINIO)
+        return int(hash_obj.hexdigest(), 16) % len(settings.MINIO)
 
 
 class UserTenantService(CommonService):
@@ -325,10 +300,7 @@ class UserTenantService(CommonService):
     def filter_by_id(cls, db: Session, user_tenant_id: str):
         """根据user_tenant_id查找有效的UserTenant记录"""
         try:
-            stmt = select(cls.model).where(
-                cls.model.id == user_tenant_id,
-                cls.model.status == StatusEnum.VALID.value
-            )
+            stmt = select(cls.model).where(cls.model.id == user_tenant_id, cls.model.status == StatusEnum.VALID.value)
             return db.scalars(stmt).one()
         except NoResultFound:
             return None
@@ -349,26 +321,24 @@ class UserTenantService(CommonService):
 
     @classmethod
     def get_by_tenant_id(cls, db: Session, tenant_id):
-        stmt = select(
-            cls.model.id,
-            cls.model.user_id,
-            cls.model.status,
-            cls.model.role,
-            User.nickname,
-            User.email,
-            User.avatar,
-            User.is_authenticated,
-            User.is_active,
-            User.is_anonymous,
-            User.status,
-            User.update_date,
-            User.is_superuser,
-        ).join(
-            User, cls.model.user_id == User.id
-        ).where(
-            cls.model.tenant_id == tenant_id,
-            cls.model.status == StatusEnum.VALID.value,
-            cls.model.role != UserTenantRole.OWNER
+        stmt = (
+            select(
+                cls.model.id,
+                cls.model.user_id,
+                cls.model.status,
+                cls.model.role,
+                User.nickname,
+                User.email,
+                User.avatar,
+                User.is_authenticated,
+                User.is_active,
+                User.is_anonymous,
+                User.status,
+                User.update_date,
+                User.is_superuser,
+            )
+            .join(User, cls.model.user_id == User.id)
+            .where(cls.model.tenant_id == tenant_id, cls.model.status == StatusEnum.VALID.value, cls.model.role != UserTenantRole.OWNER)
         )
         results = db.execute(stmt).all()
         return [
@@ -391,53 +361,24 @@ class UserTenantService(CommonService):
 
     @classmethod
     def get_tenants_by_user_id(cls, db: Session, user_id: str):
-        stmt = select(
-            cls.model.tenant_id.label("tenant_id"),
-            cls.model.role.label("role"),
-            User.nickname,
-            User.email,
-            User.avatar,
-            User.update_date
-        ).join(
-            User, cls.model.tenant_id == User.id
-        ).where(
-            cls.model.user_id == user_id,
-            cls.model.status == StatusEnum.VALID.value
+        stmt = (
+            select(cls.model.tenant_id.label("tenant_id"), cls.model.role.label("role"), User.nickname, User.email, User.avatar, User.update_date)
+            .join(User, cls.model.tenant_id == User.id)
+            .where(cls.model.user_id == user_id, cls.model.status == StatusEnum.VALID.value)
         )
         tenants = db.execute(stmt).all()
 
         return [
-            {
-                "tenant_id": tenant.tenant_id,
-                "role": tenant.role,
-                "nickname": tenant.nickname,
-                "email": tenant.email,
-                "avatar": tenant.avatar,
-                "update_date": tenant.update_date
-            }
-            for tenant in tenants
+            {"tenant_id": tenant.tenant_id, "role": tenant.role, "nickname": tenant.nickname, "email": tenant.email, "avatar": tenant.avatar, "update_date": tenant.update_date} for tenant in tenants
         ]
 
     @classmethod
     def get_user_tenant_relation_by_user_id(cls, db: Session, user_id: str):
         """根据user_id查询用户租户关系"""
-        stmt = select(
-            cls.model.id,
-            cls.model.user_id,
-            cls.model.tenant_id,
-            cls.model.role
-        ).where(cls.model.user_id == user_id)
+        stmt = select(cls.model.id, cls.model.user_id, cls.model.tenant_id, cls.model.role).where(cls.model.user_id == user_id)
         results = db.execute(stmt).all()
 
-        return [
-            {
-                "id": result.id,
-                "user_id": result.user_id,
-                "tenant_id": result.tenant_id,
-                "role": result.role
-            }
-            for result in results
-        ]
+        return [{"id": result.id, "user_id": result.user_id, "tenant_id": result.tenant_id, "role": result.role} for result in results]
 
     @classmethod
     def get_num_members(cls, db: Session, user_id: str):
@@ -448,11 +389,7 @@ class UserTenantService(CommonService):
     @classmethod
     def filter_by_tenant_and_user_id(cls, db: Session, tenant_id: str, user_id: str):
         """根据tenant_id和user_id查找有效的UserTenant记录"""
-        stmt = select(cls.model).where(
-            cls.model.tenant_id == tenant_id,
-            cls.model.status == StatusEnum.VALID.value,
-            cls.model.user_id == user_id
-        )
+        stmt = select(cls.model).where(cls.model.tenant_id == tenant_id, cls.model.status == StatusEnum.VALID.value, cls.model.user_id == user_id)
         return db.scalars(stmt).first()
 
     @classmethod

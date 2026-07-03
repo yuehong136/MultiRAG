@@ -10,9 +10,9 @@ class EndComponent(BaseComponent):
 
     def __init__(self, component_id: str, title: str, node_data: dict[str, Any], logger: WorkflowContextLogger):
         super().__init__(component_id, title, logger)
-        self.terminate_plan = node_data['data']['inputs'].get('terminatePlan', 'useAnswerContent')
-        self.streaming_output = node_data['data']['inputs'].get('streamingOutput', False)
-        self.content_template = node_data['data']['inputs'].get('content', {}).get('value', {}).get('content', '')
+        self.terminate_plan = node_data["data"]["inputs"].get("terminatePlan", "useAnswerContent")
+        self.streaming_output = node_data["data"]["inputs"].get("streamingOutput", False)
+        self.content_template = node_data["data"]["inputs"].get("content", {}).get("value", {}).get("content", "")
 
     async def execute(self) -> dict[str, Any]:
         return {"output": parse_template(self.content_template, self.inputs)}

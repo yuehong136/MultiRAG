@@ -5,6 +5,7 @@
 @date：2025/9/04 10:00
 @desc: OpenAPI 过滤服务相关模型定义
 """
+
 import re
 from enum import Enum
 from typing import Any
@@ -14,26 +15,25 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
 class MatchMode(str, Enum):
     """路径匹配模式"""
-    EXACT = "exact"      # 精确匹配
-    PREFIX = "prefix"    # 前缀匹配
-    GLOB = "glob"       # 通配符匹配
-    REGEX = "regex"     # 正则匹配
+
+    EXACT = "exact"  # 精确匹配
+    PREFIX = "prefix"  # 前缀匹配
+    GLOB = "glob"  # 通配符匹配
+    REGEX = "regex"  # 正则匹配
 
 
 class OASVersionTarget(str, Enum):
     """OpenAPI 规范版本目标"""
-    KEEP = "keep"       # 保持原版本
-    V30 = "3.0"         # 转换为 3.0
-    V31 = "3.1"         # 转换为 3.1
+
+    KEEP = "keep"  # 保持原版本
+    V30 = "3.0"  # 转换为 3.0
+    V31 = "3.1"  # 转换为 3.1
 
 
 class FilterRule(BaseModel):
     """过滤规则配置"""
-    model_config = ConfigDict(
-        str_strip_whitespace=True,
-        validate_assignment=True,
-        extra='forbid'
-    )
+
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True, extra="forbid")
 
     paths: list[str] = Field(..., description="要保留的路径列表", min_length=1)
     source: HttpUrl | None = Field(None, description="OpenAPI 文档源URL，为空时使用本服务的 OpenAPI")
@@ -46,18 +46,18 @@ class FilterRule(BaseModel):
     oas_version_target: OASVersionTarget = Field(OASVersionTarget.KEEP, description="目标OAS版本")
     max_depth: int = Field(10, description="$ref 递归的最大深度，防止无限递归", ge=1, le=50)
 
-    @field_validator('paths')
+    @field_validator("paths")
     @classmethod
     def validate_paths(cls, v: list[str]) -> list[str]:
         if not v:
-            raise ValueError('paths 不能为空')
+            raise ValueError("paths 不能为空")
         # 验证路径格式
         for path in v:
             if not path.strip():
-                raise ValueError('路径不能为空字符串')
+                raise ValueError("路径不能为空字符串")
         return v
 
-    @field_validator('source')
+    @field_validator("source")
     @classmethod
     def validate_source(cls, v: HttpUrl | None) -> HttpUrl | None:
         if v is not None:
@@ -65,27 +65,21 @@ class FilterRule(BaseModel):
             host = v.host
             if host:
                 # 禁止内网地址
-                internal_patterns = [
-                    r'^10\.',
-                    r'^172\.(1[6-9]|2[0-9]|3[01])\.',
-                    r'^192\.168\.',
-                    r'^127\.',
-                    r'^localhost$',
-                    r'^0\.0\.0\.0$'
-                ]
+                internal_patterns = [r"^10\.", r"^172\.(1[6-9]|2[0-9]|3[01])\.", r"^192\.168\.", r"^127\.", r"^localhost$", r"^0\.0\.0\.0$"]
                 for pattern in internal_patterns:
                     if re.match(pattern, host):
-                        raise ValueError(f'不允许访问内网地址: {host}')
+                        raise ValueError(f"不允许访问内网地址: {host}")
 
             # 只允许 http/https 协议
-            if v.scheme not in ['http', 'https']:
-                raise ValueError(f'不支持的协议: {v.scheme}，仅支持 http/https')
+            if v.scheme not in ["http", "https"]:
+                raise ValueError(f"不支持的协议: {v.scheme}，仅支持 http/https")
 
         return v
 
 
 class FilterWarning(BaseModel):
     """过滤警告信息"""
+
     model_config = ConfigDict(frozen=True)
 
     type: str = Field(..., description="警告类型")
@@ -95,6 +89,7 @@ class FilterWarning(BaseModel):
 
 class FilterMeta(BaseModel):
     """过滤元信息"""
+
     model_config = ConfigDict(frozen=True)
 
     rules: dict[str, Any] = Field(..., description="应用的过滤规则摘要")
@@ -109,6 +104,7 @@ class FilterMeta(BaseModel):
 
 class FilterResponse(BaseModel):
     """过滤结果响应"""
+
     model_config = ConfigDict(populate_by_name=True)
 
     openapi: str = Field(..., description="OpenAPI 版本")
@@ -127,6 +123,7 @@ class FilterResponse(BaseModel):
 
 class RefInfo(BaseModel):
     """$ref 引用信息"""
+
     model_config = ConfigDict(frozen=True)
 
     ref: str = Field(..., description="$ref 值")
@@ -136,6 +133,7 @@ class RefInfo(BaseModel):
 
 class ComponentStats(BaseModel):
     """组件统计信息"""
+
     schemas: int = 0
     responses: int = 0
     parameters: int = 0
@@ -149,15 +147,12 @@ class ComponentStats(BaseModel):
 
     @property
     def total(self) -> int:
-        return sum([
-            self.schemas, self.responses, self.parameters, self.examples,
-            self.request_bodies, self.headers, self.security_schemes,
-            self.links, self.callbacks, self.path_items
-        ])
+        return sum([self.schemas, self.responses, self.parameters, self.examples, self.request_bodies, self.headers, self.security_schemes, self.links, self.callbacks, self.path_items])
 
 
 class FilterResult(BaseModel):
     """内部过滤结果（用于缓存和处理）"""
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     filtered_doc: dict[str, Any] = Field(..., description="过滤后的文档")

@@ -66,8 +66,7 @@ class TencentCloudAPIClient:
         # Instantiate the client object for the product to be requested, clientProfile is optional
         self.client = lkeap_client.LkeapClient(self.cred, region, self.clientProfile)
 
-    def reconstruct_document_sse(self, file_type, file_url=None, file_base64=None, file_start_page=1,
-                                 file_end_page=1000, config=None):
+    def reconstruct_document_sse(self, file_type, file_url=None, file_base64=None, file_start_page=1, file_end_page=1000, config=None):
         """Call document parsing API using official SDK"""
         try:
             # Instantiate a request object, each interface corresponds to a request object
@@ -104,12 +103,12 @@ class TencentCloudAPIClient:
                 logging.info("[TCADP] Detected streaming response")
                 for event in resp:
                     logging.info(f"[TCADP] Received event: {event}")
-                    if event.get('data'):
+                    if event.get("data"):
                         try:
-                            data_dict = json.loads(event['data'])
+                            data_dict = json.loads(event["data"])
                             logging.info(f"[TCADP] Parsed data: {data_dict}")
 
-                            if data_dict.get('Progress') == "100":
+                            if data_dict.get("Progress") == "100":
                                 parser_result = data_dict
                                 logging.info("[TCADP] Document parsing completed!")
                                 logging.info(f"[TCADP] Task ID: {data_dict.get('TaskId')}")
@@ -121,8 +120,7 @@ class TencentCloudAPIClient:
                                 if failed_pages:
                                     logging.warning("[TCADP] Failed parsing pages:")
                                     for page in failed_pages:
-                                        logging.warning(
-                                            f"[TCADP]   Page number: {page.get('PageNumber')}, Error: {page.get('ErrorMsg')}")
+                                        logging.warning(f"[TCADP]   Page number: {page.get('PageNumber')}, Error: {page.get('ErrorMsg')}")
 
                                 # Check if there is a download link
                                 download_url = data_dict.get("DocumentRecognizeResultUrl")
@@ -144,7 +142,7 @@ class TencentCloudAPIClient:
                         logging.info(f"[TCADP] Event without data: {event}")
             else:  # Non-streaming response
                 logging.info("[TCADP] Detected non-streaming response")
-                if hasattr(resp, 'data') and resp.data:
+                if hasattr(resp, "data") and resp.data:
                     try:
                         data_dict = json.loads(resp.data)
                         parser_result = data_dict
@@ -201,8 +199,7 @@ class TencentCloudAPIClient:
 
 
 class TCADPParser(RAGFlowPdfParser):
-    def __init__(self, secret_id: str = None, secret_key: str = None, region: str = "ap-guangzhou",
-                 table_result_type: str = None, markdown_image_response_type: str = None):
+    def __init__(self, secret_id: str = None, secret_key: str = None, region: str = "ap-guangzhou", table_result_type: str = None, markdown_image_response_type: str = None):
         super().__init__()
 
         # First initialize logger
@@ -219,8 +216,7 @@ class TCADPParser(RAGFlowPdfParser):
                 self.secret_key = secret_key or tcadp_parser.get("secret_key")
                 self.region = region or tcadp_parser.get("region", "ap-guangzhou")
                 # Set table_result_type and markdown_image_response_type from config or parameters
-                self.table_result_type = table_result_type if table_result_type is not None else tcadp_parser.get(
-                    "table_result_type", "1")
+                self.table_result_type = table_result_type if table_result_type is not None else tcadp_parser.get("table_result_type", "1")
                 self.markdown_image_response_type = markdown_image_response_type if markdown_image_response_type is not None else tcadp_parser.get("markdown_image_response_type", "1")
 
             else:
@@ -272,12 +268,12 @@ class TCADPParser(RAGFlowPdfParser):
 
         if binary:
             # If binary data is directly available, convert directly
-            return base64.b64encode(binary).decode('utf-8')
+            return base64.b64encode(binary).decode("utf-8")
         else:
             # Read from file path and convert
-            with open(file_path, 'rb') as f:
+            with open(file_path, "rb") as f:
                 file_data = f.read()
-                return base64.b64encode(file_data).decode('utf-8')
+                return base64.b64encode(file_data).decode("utf-8")
 
     def _extract_content_from_zip(self, zip_path: str) -> list[dict[str, Any]]:
         """Extract parsing results from downloaded ZIP file"""
@@ -383,17 +379,17 @@ class TCADPParser(RAGFlowPdfParser):
         return tables
 
     def parse_pdf(
-            self,
-            filepath: str | PathLike[str],
-            binary: BytesIO | bytes,
-            callback: Callable | None = None,
-            *,
-            output_dir: str | None = None,
-            file_type: str = "PDF",
-            file_start_page: int | None = 1,
-            file_end_page: int | None = 1000,
-            delete_output: bool | None = True,
-            max_retries: int | None = 1,
+        self,
+        filepath: str | PathLike[str],
+        binary: BytesIO | bytes,
+        callback: Callable | None = None,
+        *,
+        output_dir: str | None = None,
+        file_type: str = "PDF",
+        file_start_page: int | None = 1,
+        file_end_page: int | None = 1000,
+        delete_output: bool | None = True,
+        max_retries: int | None = 1,
     ) -> tuple:
         """Parse PDF document"""
 
@@ -440,22 +436,13 @@ class TCADPParser(RAGFlowPdfParser):
                         self.logger.info(f"[TCADP] Retry attempt {attempt + 1}")
                         if callback:
                             callback(0.3 + attempt * 0.1, f"[TCADP] Retry attempt {attempt + 1}")
-                        time.sleep(2 ** attempt)  # Exponential backoff
+                        time.sleep(2**attempt)  # Exponential backoff
 
-                    config = {
-                        "TableResultType": self.table_result_type,
-                        "MarkdownImageResponseType": self.markdown_image_response_type
-                    }
+                    config = {"TableResultType": self.table_result_type, "MarkdownImageResponseType": self.markdown_image_response_type}
 
                     self.logger.info(f"[TCADP] API request config - TableResultType: {self.table_result_type}, MarkdownImageResponseType: {self.markdown_image_response_type}")
 
-                    result = client.reconstruct_document_sse(
-                        file_type=file_type,
-                        file_base64=file_base64,
-                        file_start_page=file_start_page,
-                        file_end_page=file_end_page,
-                        config=config
-                    )
+                    result = client.reconstruct_document_sse(file_type=file_type, file_base64=file_base64, file_start_page=file_start_page, file_end_page=file_end_page, config=config)
 
                     if result:
                         self.logger.info(f"[TCADP] Attempt {attempt + 1} successful")

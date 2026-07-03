@@ -26,7 +26,6 @@ ATTEMPT_TIME = 2
 
 @singleton
 class ElasticSearchConnectionPool:
-
     def __init__(self):
         if hasattr(settings, "ES"):
             self.ES_CONFIG = settings.ES
@@ -56,8 +55,9 @@ class ElasticSearchConnectionPool:
         self.es_conn = Elasticsearch(
             self.ES_CONFIG["hosts"].split(","),
             basic_auth=(self.ES_CONFIG["username"], self.ES_CONFIG["password"]) if "username" in self.ES_CONFIG and "password" in self.ES_CONFIG else None,
-            verify_certs= self.ES_CONFIG.get("verify_certs", False),
-            timeout=600 )
+            verify_certs=self.ES_CONFIG.get("verify_certs", False),
+            timeout=600,
+        )
         if self.es_conn:
             self.info = self.es_conn.info()
             return True

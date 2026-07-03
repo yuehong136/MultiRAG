@@ -38,15 +38,15 @@ class SearXNGParam(ToolParamBase):
                     "type": "string",
                     "description": "The search keywords to execute with SearXNG. The keywords should be the most important words/terms(includes synonyms) from the original request.",
                     "default": "{sys.query}",
-                    "required": True
+                    "required": True,
                 },
                 "searxng_url": {
                     "type": "string",
                     "description": "The base URL of your SearXNG instance (e.g., http://localhost:4000). This is required to connect to your SearXNG server.",
                     "required": False,
-                    "default": ""
-                }
-            }
+                    "default": "",
+                },
+            },
         }
         super().__init__()
         self.top_n = 10
@@ -63,17 +63,7 @@ class SearXNGParam(ToolParamBase):
         self.check_positive_integer(self.top_n, "Top N")
 
     def get_input_form(self) -> dict[str, dict]:
-        return {
-            "query": {
-                "name": "Query",
-                "type": "line"
-            },
-            "searxng_url": {
-                "name": "SearXNG URL",
-                "type": "line",
-                "placeholder": "http://localhost:4000"
-            }
-        }
+        return {"query": {"name": "Query", "type": "line"}, "searxng_url": {"name": "SearXNG URL", "type": "line", "placeholder": "http://localhost:4000"}}
 
 
 class SearXNG(ToolBase, ABC):
@@ -102,20 +92,9 @@ class SearXNG(ToolBase, ABC):
                 return
 
             try:
-                search_params = {
-                    'q': query,
-                    'format': 'json',
-                    'categories': 'general',
-                    'language': 'auto',
-                    'safesearch': 1,
-                    'pageno': 1
-                }
+                search_params = {"q": query, "format": "json", "categories": "general", "language": "auto", "safesearch": 1, "pageno": 1}
 
-                response = requests.get(
-                    f"{searxng_url}/search",
-                    params=search_params,
-                    timeout=10
-                )
+                response = requests.get(f"{searxng_url}/search", params=search_params, timeout=10)
                 response.raise_for_status()
 
                 if self.check_if_canceled("SearXNG processing"):
@@ -130,15 +109,12 @@ class SearXNG(ToolBase, ABC):
                 if not isinstance(results, list):
                     raise ValueError("Invalid results format from SearXNG")
 
-                results = results[:self._param.top_n]
+                results = results[: self._param.top_n]
 
                 if self.check_if_canceled("SearXNG processing"):
                     return
 
-                self._retrieve_chunks(results,
-                                      get_title=lambda r: r.get("title", ""),
-                                      get_url=lambda r: r.get("url", ""),
-                                      get_content=lambda r: r.get("content", ""))
+                self._retrieve_chunks(results, get_title=lambda r: r.get("title", ""), get_url=lambda r: r.get("url", ""), get_content=lambda r: r.get("content", ""))
 
                 self.set_output("json", results)
                 return self.output("formalized_content")

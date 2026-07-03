@@ -18,23 +18,15 @@ class ProjectService(CommonService):
         super().__init__(WritingProject)
 
     @classmethod
-    def get_list(cls, db: Session, user_id: str, page_number: int, items_per_page: int,
-                 orderby: str = "create_time", sort_desc: bool = True, keywords: str = None) -> tuple[list[dict], int]:
+    def get_list(cls, db: Session, user_id: str, page_number: int, items_per_page: int, orderby: str = "create_time", sort_desc: bool = True, keywords: str = None) -> tuple[list[dict], int]:
         """
         获取用户的写作项目列表
         """
         # 直接使用CommonService的查询功能，添加自定义过滤条件
-        filters = [
-            cls.model.status == StatusEnum.VALID.value,
-            cls.model.user_id == user_id
-        ]
+        filters = [cls.model.status == StatusEnum.VALID.value, cls.model.user_id == user_id]
 
         if keywords:
-            filters.append(
-                cls.model.user_input.ilike(f'%{keywords}%') |
-                cls.model.content_type.ilike(f'%{keywords}%') |
-                cls.model.language_style.ilike(f'%{keywords}%')
-            )
+            filters.append(cls.model.user_input.ilike(f"%{keywords}%") | cls.model.content_type.ilike(f"%{keywords}%") | cls.model.language_style.ilike(f"%{keywords}%"))
 
         # 使用内置分页查询
         query = db.query(cls.model).filter(*filters)
@@ -70,10 +62,7 @@ class ProjectService(CommonService):
     def get_project_details(cls, db: Session, project_id: str, user_id: str = None) -> dict:
         """获取项目详情"""
         # 获取项目
-        project = db.query(cls.model).filter(
-            cls.model.id == project_id,
-            cls.model.status == StatusEnum.VALID.value
-        ).first()
+        project = db.query(cls.model).filter(cls.model.id == project_id, cls.model.status == StatusEnum.VALID.value).first()
 
         if not project:
             raise NoResultFound(f"未找到项目 ID: {project_id}")
@@ -83,13 +72,12 @@ class ProjectService(CommonService):
             raise PermissionError(f"用户 {user_id} 无权访问此项目")
 
         # 获取项目关联的所有章节
-        chapters = db.query(WritingChapter).filter(
-            WritingChapter.project_id == project_id,
-            WritingChapter.status == StatusEnum.VALID.value
-        ).order_by(
-            WritingChapter.level.asc(),
-            WritingChapter.order_index.asc()
-        ).all()
+        chapters = (
+            db.query(WritingChapter)
+            .filter(WritingChapter.project_id == project_id, WritingChapter.status == StatusEnum.VALID.value)
+            .order_by(WritingChapter.level.asc(), WritingChapter.order_index.asc())
+            .all()
+        )
 
         # 构建章节树结构
         chapters_dict = {}
@@ -97,7 +85,7 @@ class ProjectService(CommonService):
 
         for chapter in chapters:
             chapter_data = chapter.to_dict()
-            chapter_data['children'] = []
+            chapter_data["children"] = []
             chapters_dict[chapter.id] = chapter_data
 
             if chapter.level == 1:  # 主章节
@@ -108,13 +96,13 @@ class ProjectService(CommonService):
             if chapter.parent_id and chapter.parent_id in chapters_dict:
                 parent = chapters_dict[chapter.parent_id]
                 chapter_data = chapters_dict[chapter.id]
-                if chapter_data not in parent['children']:
-                    parent['children'].append(chapter_data)
+                if chapter_data not in parent["children"]:
+                    parent["children"].append(chapter_data)
 
         # 构建结果
         result = project.to_dict()
-        result['chapters'] = main_chapters
-        result['chapter_count'] = len(chapters)
+        result["chapters"] = main_chapters
+        result["chapter_count"] = len(chapters)
 
         return result
 
@@ -122,10 +110,7 @@ class ProjectService(CommonService):
     def update_project(cls, db: Session, project_id: str, project_data: dict, user_id: str = None) -> WritingProject:
         """更新项目信息"""
         # 获取项目
-        project = db.query(cls.model).filter(
-            cls.model.id == project_id,
-            cls.model.status == StatusEnum.VALID.value
-        ).first()
+        project = db.query(cls.model).filter(cls.model.id == project_id, cls.model.status == StatusEnum.VALID.value).first()
 
         if not project:
             raise NoResultFound(f"未找到项目 ID: {project_id}")
@@ -152,10 +137,7 @@ class ProjectService(CommonService):
     def delete_project(cls, db: Session, project_id: str, user_id: str = None) -> bool:
         """删除项目（逻辑删除）"""
         # 获取项目
-        project = db.query(cls.model).filter(
-            cls.model.id == project_id,
-            cls.model.status == StatusEnum.VALID.value
-        ).first()
+        project = db.query(cls.model).filter(cls.model.id == project_id, cls.model.status == StatusEnum.VALID.value).first()
 
         if not project:
             logging.warning(f"项目不存在或已删除: {project_id}")
@@ -183,23 +165,18 @@ class ProjectService(CommonService):
             from api.db.services.chapter_service import ChapterService
 
             # 获取所有相关章节
-            chapters = db.query(WritingChapter).filter(
-                WritingChapter.project_id == project_id,
-                WritingChapter.status == StatusEnum.VALID.value
-            ).all()
+            chapters = db.query(WritingChapter).filter(WritingChapter.project_id == project_id, WritingChapter.status == StatusEnum.VALID.value).all()
 
             # 逐个更新章节状态
             for chapter in chapters:
                 ChapterService.update_by_id(db, chapter.id, {"status": StatusEnum.INVALID.value})
 
                 # 同时更新章节内容状态
-                content = db.query(WritingChapterContent).filter(
-                    WritingChapterContent.chapter_id == chapter.id,
-                    WritingChapterContent.status == StatusEnum.VALID.value
-                ).first()
+                content = db.query(WritingChapterContent).filter(WritingChapterContent.chapter_id == chapter.id, WritingChapterContent.status == StatusEnum.VALID.value).first()
 
                 if content:
                     from api.db.services.chapter_service import ChapterContentService
+
                     ChapterContentService.update_by_id(db, content.id, {"status": StatusEnum.INVALID.value})
 
             logging.info(f"已更新 {len(chapters)} 个相关章节")
@@ -223,10 +200,7 @@ class ProjectService(CommonService):
     def duplicate_project(cls, db: Session, project_id: str, user_id: str) -> WritingProject:
         """复制项目及其所有章节"""
         # 获取原项目
-        project = db.query(cls.model).filter(
-            cls.model.id == project_id,
-            cls.model.status == StatusEnum.VALID.value
-        ).first()
+        project = db.query(cls.model).filter(cls.model.id == project_id, cls.model.status == StatusEnum.VALID.value).first()
 
         if not project:
             raise NoResultFound(f"未找到项目 ID: {project_id}")
@@ -235,23 +209,20 @@ class ProjectService(CommonService):
             # 创建新项目
             new_project_id = get_uuid()
             new_project_data = project.to_dict()
-            new_project_data.pop('id', None)
-            new_project_data.pop('create_time', None)
-            new_project_data.pop('update_time', None)
-            new_project_data.pop('create_date', None)
-            new_project_data.pop('update_date', None)
+            new_project_data.pop("id", None)
+            new_project_data.pop("create_time", None)
+            new_project_data.pop("update_time", None)
+            new_project_data.pop("create_date", None)
+            new_project_data.pop("update_date", None)
 
-            new_project_data['id'] = new_project_id
-            new_project_data['user_id'] = user_id
+            new_project_data["id"] = new_project_id
+            new_project_data["user_id"] = user_id
 
             # 使用CommonService的insert方法创建新项目
             new_project = cls.insert(db, **new_project_data)
 
             # 获取原项目的所有章节
-            chapters = db.query(WritingChapter).filter(
-                WritingChapter.project_id == project_id,
-                WritingChapter.status == StatusEnum.VALID.value
-            ).order_by(WritingChapter.level.asc()).all()
+            chapters = db.query(WritingChapter).filter(WritingChapter.project_id == project_id, WritingChapter.status == StatusEnum.VALID.value).order_by(WritingChapter.level.asc()).all()
 
             # 建立新旧章节ID的映射
             id_mapping = {}
@@ -263,26 +234,27 @@ class ProjectService(CommonService):
                 id_mapping[old_id] = new_id
 
                 new_chapter_data = chapter.to_dict()
-                new_chapter_data.pop('id', None)
-                new_chapter_data.pop('create_time', None)
-                new_chapter_data.pop('update_time', None)
-                new_chapter_data.pop('create_date', None)
-                new_chapter_data.pop('update_date', None)
+                new_chapter_data.pop("id", None)
+                new_chapter_data.pop("create_time", None)
+                new_chapter_data.pop("update_time", None)
+                new_chapter_data.pop("create_date", None)
+                new_chapter_data.pop("update_date", None)
 
-                new_chapter_data['id'] = new_id
-                new_chapter_data['project_id'] = new_project_id
+                new_chapter_data["id"] = new_id
+                new_chapter_data["project_id"] = new_project_id
 
                 # 处理父章节ID
                 if chapter.parent_id:
                     if chapter.parent_id in id_mapping:
-                        new_chapter_data['parent_id'] = id_mapping[chapter.parent_id]
+                        new_chapter_data["parent_id"] = id_mapping[chapter.parent_id]
                     else:
                         # 父章节还没有映射，这是一个错误
                         logging.warning(f"复制章节 {chapter.id} 时未找到父章节 {chapter.parent_id} 的映射")
-                        new_chapter_data['parent_id'] = None
+                        new_chapter_data["parent_id"] = None
 
                 # 使用ChapterService的insert方法
                 from api.db.services.chapter_service import ChapterService
+
                 ChapterService.insert(db, **new_chapter_data)
 
             return new_project

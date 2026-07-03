@@ -1,8 +1,7 @@
 import re
 
 
-def add_table_alias_to_fields(expressions: str | list[str],
-                              table_alias: str) -> str | list[str]:
+def add_table_alias_to_fields(expressions: str | list[str], table_alias: str) -> str | list[str]:
     """
     为SQL表达式中的字段添加表别名前缀
 
@@ -20,14 +19,14 @@ def add_table_alias_to_fields(expressions: str | list[str],
         """处理单个SQL表达式"""
         # 匹配SQL函数中的字段名
         # 匹配模式：函数名(字段名) 或 函数名(表名.字段名)
-        pattern = r'(\w+)\s*\(\s*(\w+(?:\.\w+)?)\s*\)'
+        pattern = r"(\w+)\s*\(\s*(\w+(?:\.\w+)?)\s*\)"
 
         def replace_field(match):
             func_name = match.group(1)  # 函数名如count, max等
             field_part = match.group(2)  # 字段部分
 
             # 如果已经有表名前缀（包含点号），保持原样
-            if '.' in field_part:
+            if "." in field_part:
                 return match.group(0)
             else:
                 # 没有表名前缀的情况，添加表别名

@@ -26,11 +26,7 @@ def _from_clause_aliases(assembler) -> set:
         tables = SQLComponentsParser({"from": from_clause}).parse_from_tables()
     except Exception:
         return set()
-    return {
-        strip_identifier_quotes(t["alias"]).casefold()
-        for t in tables
-        if t.get("alias")
-    }
+    return {strip_identifier_quotes(t["alias"]).casefold() for t in tables if t.get("alias")}
 
 
 def _existing_where_text(assembler) -> str:
@@ -49,11 +45,7 @@ def _normalize_condition(s: str) -> str:
     return re.sub(r"[\s`\"\[\]]", "", s or "")
 
 
-def apply_permissions_to_assembler(
-        assembler,
-        model_permissions_map: dict[str, dict[str, Any]],
-        model_table_alias_mapping_list: list[dict[str, Any]]
-):
+def apply_permissions_to_assembler(assembler, model_permissions_map: dict[str, dict[str, Any]], model_table_alias_mapping_list: list[dict[str, Any]]):
     """
     将所有模型的权限条件应用到 SQL 组装器
 
@@ -102,9 +94,7 @@ def apply_permissions_to_assembler(
         # 防御1：别名必须真的出现在 FROM 里，否则注入会产生悬空别名（missing FROM-clause entry）。
         # from_aliases 为空（解析失败）时 fail-open，保持原行为不误杀。
         if from_aliases and strip_identifier_quotes(alias).casefold() not in from_aliases:
-            logger.warning(
-                f"跳过权限注入：别名 {alias}(表 {table}) 不在实际 FROM 别名集合 {sorted(from_aliases)} 中，"
-                f"避免悬空别名；条件={permission_condition}")
+            logger.warning(f"跳过权限注入：别名 {alias}(表 {table}) 不在实际 FROM 别名集合 {sorted(from_aliases)} 中，避免悬空别名；条件={permission_condition}")
             continue
 
         # 防御2：同一行权限可能已被 LLM 内嵌进 WHERE（如 (t2.\"mc\"='男')），去重避免重复注入。
@@ -171,11 +161,7 @@ def build_permission_condition(row_filter: dict[str, Any], table_alias: str) -> 
     return f"({combined})"
 
 
-def get_involved_model_ids_from_query(
-        table_config: dict[str, Any],
-        all_semantic_fields: list[dict[str, Any]],
-        chart_type: str
-) -> list[str]:
+def get_involved_model_ids_from_query(table_config: dict[str, Any], all_semantic_fields: list[dict[str, Any]], chart_type: str) -> list[str]:
     """
     从查询配置中提取所有涉及的模型ID
 
@@ -223,12 +209,7 @@ if __name__ == "__main__":
     print("=" * 60)
 
     # 测试用例1：单个规则
-    row_filter1 = {
-        "logicalOperator": "OR",
-        "rules": [
-            {"expression": "mc = '男'"}
-        ]
-    }
+    row_filter1 = {"logicalOperator": "OR", "rules": [{"expression": "mc = '男'"}]}
     result1 = build_permission_condition(row_filter1, "t1")
     print("\n✓ 单个规则:")
     print(f"  输入: {row_filter1}")
@@ -236,13 +217,7 @@ if __name__ == "__main__":
     print("  期望: (t1.mc = '男')")
 
     # 测试用例2：多个规则 - OR
-    row_filter2 = {
-        "logicalOperator": "OR",
-        "rules": [
-            {"expression": "byxx = '南京大学'"},
-            {"expression": "age > 25"}
-        ]
-    }
+    row_filter2 = {"logicalOperator": "OR", "rules": [{"expression": "byxx = '南京大学'"}, {"expression": "age > 25"}]}
     result2 = build_permission_condition(row_filter2, "t4")
     print("\n✓ 多个规则 (OR):")
     print(f"  输入: {row_filter2}")
@@ -250,14 +225,7 @@ if __name__ == "__main__":
     print("  期望: ((t4.byxx = '南京大学') OR (t4.age > 25))")
 
     # 测试用例3：多个规则 - AND
-    row_filter3 = {
-        "logicalOperator": "AND",
-        "rules": [
-            {"expression": "byxx = '南京大学'"},
-            {"expression": "age > 25"},
-            {"expression": "status = 'active'"}
-        ]
-    }
+    row_filter3 = {"logicalOperator": "AND", "rules": [{"expression": "byxx = '南京大学'"}, {"expression": "age > 25"}, {"expression": "status = 'active'"}]}
     result3 = build_permission_condition(row_filter3, "t4")
     print("\n✓ 多个规则 (AND):")
     print(f"  输入: {row_filter3}")

@@ -71,16 +71,10 @@ class GraphExtractor(Extractor):
         self._input_text_key = input_text_key or "input_text"
         self._tuple_delimiter_key = tuple_delimiter_key or "tuple_delimiter"
         self._record_delimiter_key = record_delimiter_key or "record_delimiter"
-        self._completion_delimiter_key = (
-            completion_delimiter_key or "completion_delimiter"
-        )
+        self._completion_delimiter_key = completion_delimiter_key or "completion_delimiter"
         self._entity_types_key = entity_types_key or "entity_types"
         self._extraction_prompt = GRAPH_EXTRACTION_PROMPT
-        self._max_gleanings = (
-            max_gleanings
-            if max_gleanings is not None
-            else ENTITY_EXTRACTION_MAX_GLEANINGS
-        )
+        self._max_gleanings = max_gleanings if max_gleanings is not None else ENTITY_EXTRACTION_MAX_GLEANINGS
         self._on_error = on_error or (lambda _e, _s, _d: None)
         self.prompt_token_count = num_tokens_from_string(self._extraction_prompt)
 
@@ -108,7 +102,7 @@ class GraphExtractor(Extractor):
         }
         hint_prompt = perform_variable_replacements(self._extraction_prompt, variables=variables)
         async with chat_limiter:
-            response = await thread_pool_exec(self._chat,hint_prompt,[{"role": "user", "content": "Output:"}],{},task_id)
+            response = await thread_pool_exec(self._chat, hint_prompt, [{"role": "user", "content": "Output:"}], {}, task_id)
         token_count += num_tokens_from_string(hint_prompt + response)
 
         results = response or ""
@@ -148,4 +142,7 @@ class GraphExtractor(Extractor):
         maybe_nodes, maybe_edges = self._entities_and_relations(chunk_key, records, self._prompt_variables[self._tuple_delimiter_key])
         out_results.append((maybe_nodes, maybe_edges, token_count))
         if self.callback:
-            self.callback(0.5+0.1*len(out_results)/num_chunks, msg = f"Entities extraction of chunk {chunk_seq} {len(out_results)}/{num_chunks} done, {len(maybe_nodes)} nodes, {len(maybe_edges)} edges, {token_count} tokens.")
+            self.callback(
+                0.5 + 0.1 * len(out_results) / num_chunks,
+                msg=f"Entities extraction of chunk {chunk_seq} {len(out_results)}/{num_chunks} done, {len(maybe_nodes)} nodes, {len(maybe_edges)} edges, {token_count} tokens.",
+            )

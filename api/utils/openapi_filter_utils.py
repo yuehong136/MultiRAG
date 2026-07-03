@@ -5,6 +5,7 @@
 @date：2024/12/10 10:00
 @desc: OpenAPI 过滤服务工具函数
 """
+
 import fnmatch
 import hashlib
 import json
@@ -100,8 +101,7 @@ def is_internal_ref(ref: str) -> bool:
     return ref.startswith("#/")
 
 
-def match_paths(paths: dict[str, Any], include_patterns: list[str],
-               exclude_patterns: list[str], match_mode: MatchMode) -> dict[str, Any]:
+def match_paths(paths: dict[str, Any], include_patterns: list[str], exclude_patterns: list[str], match_mode: MatchMode) -> dict[str, Any]:
     """
     根据模式匹配路径
 
@@ -208,8 +208,7 @@ def filter_by_tags(paths: dict[str, Any], include_tags: list[str], exclude_tags:
     return filtered_paths
 
 
-def build_components_closure(components: dict[str, Any], seed_refs: set[str],
-                           strict: bool = True, max_depth: int = 10) -> tuple[set[str], list[FilterWarning]]:
+def build_components_closure(components: dict[str, Any], seed_refs: set[str], strict: bool = True, max_depth: int = 10) -> tuple[set[str], list[FilterWarning]]:
     """
     构建组件引用闭包
 
@@ -247,11 +246,7 @@ def build_components_closure(components: dict[str, Any], seed_refs: set[str],
                 if strict:
                     raise ValueError(f"无效的 $ref 格式: {ref}")
                 else:
-                    warnings.append(FilterWarning(
-                        type="invalid_ref",
-                        message=f"无效的 $ref 格式: {ref}",
-                        path=ref
-                    ))
+                    warnings.append(FilterWarning(type="invalid_ref", message=f"无效的 $ref 格式: {ref}", path=ref))
                     continue
 
             # 查找组件
@@ -259,11 +254,7 @@ def build_components_closure(components: dict[str, Any], seed_refs: set[str],
                 if strict:
                     raise ValueError(f"组件类型不存在: {component_type}")
                 else:
-                    warnings.append(FilterWarning(
-                        type="missing_component_type",
-                        message=f"组件类型不存在: {component_type}",
-                        path=ref
-                    ))
+                    warnings.append(FilterWarning(type="missing_component_type", message=f"组件类型不存在: {component_type}", path=ref))
                     continue
 
             component_section = components[component_type]
@@ -271,11 +262,7 @@ def build_components_closure(components: dict[str, Any], seed_refs: set[str],
                 if strict:
                     raise ValueError(f"组件不存在: {ref}")
                 else:
-                    warnings.append(FilterWarning(
-                        type="missing_component",
-                        message=f"组件不存在: {ref}",
-                        path=ref
-                    ))
+                    warnings.append(FilterWarning(type="missing_component", message=f"组件不存在: {ref}", path=ref))
                     continue
 
             # 收集组件中的新引用
@@ -354,13 +341,13 @@ def generate_cache_key(rule_dict: dict[str, Any], source_etag: str | None = None
         str: 缓存键
     """
     # 标准化规则字典（排序确保一致性）
-    normalized_rule = json.dumps(rule_dict, sort_keys=True, separators=(',', ':'))
+    normalized_rule = json.dumps(rule_dict, sort_keys=True, separators=(",", ":"))
 
     # 组合规则和源ETag
     cache_input = f"{normalized_rule}:{source_etag or 'local'}"
 
     # 计算SHA256哈希
-    return hashlib.sha256(cache_input.encode('utf-8')).hexdigest()[:32]
+    return hashlib.sha256(cache_input.encode("utf-8")).hexdigest()[:32]
 
 
 def generate_etag(content: dict[str, Any]) -> str:
@@ -373,8 +360,8 @@ def generate_etag(content: dict[str, Any]) -> str:
     Returns:
         str: ETag 值
     """
-    content_json = json.dumps(content, sort_keys=True, separators=(',', ':'))
-    hash_value = hashlib.sha256(content_json.encode('utf-8')).hexdigest()
+    content_json = json.dumps(content, sort_keys=True, separators=(",", ":"))
+    hash_value = hashlib.sha256(content_json.encode("utf-8")).hexdigest()
     return f'W/"{hash_value[:16]}"'
 
 
@@ -419,31 +406,19 @@ def validate_openapi_structure(doc: dict[str, Any]) -> list[FilterWarning]:
     required_fields = ["openapi", "info", "paths"]
     for field in required_fields:
         if field not in doc:
-            warnings.append(FilterWarning(
-                type="missing_required_field",
-                message=f"缺少必需字段: {field}",
-                path=field
-            ))
+            warnings.append(FilterWarning(type="missing_required_field", message=f"缺少必需字段: {field}", path=field))
 
     # 检查版本格式
     if "openapi" in doc:
         version = doc["openapi"]
         if not isinstance(version, str) or not re.match(r"^3\.[01]\.\d+$", version):
-            warnings.append(FilterWarning(
-                type="invalid_version",
-                message=f"无效的 OpenAPI 版本: {version}",
-                path="openapi"
-            ))
+            warnings.append(FilterWarning(type="invalid_version", message=f"无效的 OpenAPI 版本: {version}", path="openapi"))
 
     # 检查路径格式
     if "paths" in doc and isinstance(doc["paths"], dict):
         for path_key in doc["paths"].keys():
             if not path_key.startswith("/"):
-                warnings.append(FilterWarning(
-                    type="invalid_path_format",
-                    message=f"路径应以 '/' 开头: {path_key}",
-                    path=f"paths.{path_key}"
-                ))
+                warnings.append(FilterWarning(type="invalid_path_format", message=f"路径应以 '/' 开头: {path_key}", path=f"paths.{path_key}"))
 
     return warnings
 
@@ -462,7 +437,7 @@ def is_safe_url(url: str) -> bool:
         parsed = urlparse(url)
 
         # 只允许 http/https
-        if parsed.scheme not in ['http', 'https']:
+        if parsed.scheme not in ["http", "https"]:
             return False
 
         host = parsed.hostname
@@ -470,14 +445,7 @@ def is_safe_url(url: str) -> bool:
             return False
 
         # 禁止内网地址
-        internal_patterns = [
-            r'^10\.',
-            r'^172\.(1[6-9]|2[0-9]|3[01])\.',
-            r'^192\.168\.',
-            r'^127\.',
-            r'^localhost$',
-            r'^0\.0\.0\.0$'
-        ]
+        internal_patterns = [r"^10\.", r"^172\.(1[6-9]|2[0-9]|3[01])\.", r"^192\.168\.", r"^127\.", r"^localhost$", r"^0\.0\.0\.0$"]
 
         for pattern in internal_patterns:
             if re.match(pattern, host):

@@ -26,9 +26,10 @@ def parse_sql_extract(extract_string: str) -> dict:
     if match:
         unit = match.group(1).upper()  # 将 unit 转换为大写，保持一致性
         source = match.group(2)
-        return {'unit': unit, 'source': source}
+        return {"unit": unit, "source": source}
     else:
-        return {'unit': None, 'source': None}
+        return {"unit": None, "source": None}
+
 
 # --- 示例用法 ---
 if __name__ == "__main__":
@@ -54,8 +55,8 @@ if __name__ == "__main__":
     print(parse_sql_extract("NOT_AN_EXTRACT_FUNCTION"))
     # 输出: {'unit': None, 'source': None}
 
-    print(parse_sql_extract("EXTRACT(FROM order_date)")) # 缺少 unit
+    print(parse_sql_extract("EXTRACT(FROM order_date)"))  # 缺少 unit
     # 输出: {'unit': None, 'source': None}
 
-    print(parse_sql_extract("EXTRACT(YEAR FROM)")) # 缺少 source
+    print(parse_sql_extract("EXTRACT(YEAR FROM)"))  # 缺少 source
     # 输出: {'unit': None, 'source': None}

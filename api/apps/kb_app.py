@@ -109,7 +109,7 @@ class UpdateMetadataSettingRequest(BaseModel):
 
 # @deprecated —— 已迁移至 RESTful 端点 POST /api/v1/datasets（restful_apis/dataset_api.py）。
 # 保留原因：生产环境前端仍在调用；待前端迁移完成后于下一版本删除/注释。
-@router.post('/create', summary="创建知识库", response_description="成功创建知识库", deprecated=True)
+@router.post("/create", summary="创建知识库", response_description="成功创建知识库", deprecated=True)
 def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req_data = request.model_dump()
     dataset_name = req_data["name"]
@@ -120,24 +120,16 @@ def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), u
     if dataset_name.strip() == "":
         return get_data_error_result(retmsg="Dataset name can't be empty.")
     if len(dataset_name.encode("utf-8")) > DATASET_NAME_LIMIT:
-        return get_data_error_result(
-            retmsg=f"Dataset name length is {len(dataset_name)} which is larger than {DATASET_NAME_LIMIT}")
+        return get_data_error_result(retmsg=f"Dataset name length is {len(dataset_name)} which is larger than {DATASET_NAME_LIMIT}")
 
     # 验证 Milvus 集合名逻辑
     if not re.match(MILVUS_NAME_PATTERN, dataset_name):
-        return get_data_error_result(
-            retmsg="Dataset name must start with a letter and contain only letters, numbers, and underscores."
-        )
+        return get_data_error_result(retmsg="Dataset name must start with a letter and contain only letters, numbers, and underscores.")
 
     dataset_name = dataset_name.strip()
 
     # 检查数据库中是否已存在同名知识库（直接报错，不自动去重）
-    existing_kb = KnowledgebaseService.query(
-        db=db,
-        name=dataset_name,
-        tenant_id=user.id,
-        status=StatusEnum.VALID.value
-    )
+    existing_kb = KnowledgebaseService.query(db=db, name=dataset_name, tenant_id=user.id, status=StatusEnum.VALID.value)
     if existing_kb:
         return get_data_error_result(retmsg=f"已存在该知识库名: {existing_kb[0].name}，请调整！")
 
@@ -155,7 +147,7 @@ def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), u
             embd_id=req_data.get("embd_id"),
             parser_config=parser_config,
             description=req_data.get("description"),
-            permission=req_data.get("permission")
+            permission=req_data.get("permission"),
         )
 
         if not e:
@@ -171,7 +163,7 @@ def create(request: CreateKnowledgebaseRequest, db: Session = Depends(get_db), u
 
 # @deprecated —— 已迁移至 RESTful 端点 PUT /api/v1/datasets/{dataset_id}（restful_apis/dataset_api.py）。
 # 保留原因：生产环境前端仍在调用；待前端迁移完成后于下一版本删除/注释。
-@router.post('/update', summary="更新知识库", response_description="成功更新知识库", deprecated=True)
+@router.post("/update", summary="更新知识库", response_description="成功更新知识库", deprecated=True)
 def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req_data = request.model_dump()
     if not isinstance(req_data["name"], str):
@@ -179,8 +171,7 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
     if req_data["name"].strip() == "":
         return get_data_error_result(retmsg="Dataset name can't be empty.")
     if len(req_data["name"].encode("utf-8")) > DATASET_NAME_LIMIT:
-        return get_data_error_result(
-            retmsg=f"Dataset name length is {len(req_data['name'])} which is large than {DATASET_NAME_LIMIT}")
+        return get_data_error_result(retmsg=f"Dataset name length is {len(req_data['name'])} which is large than {DATASET_NAME_LIMIT}")
     req_data["name"] = req_data["name"].strip()
     if settings.DOC_ENGINE_INFINITY:
         parser_id = req_data.get("parser_id")
@@ -198,16 +189,10 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
             )
 
     if not KnowledgebaseService.accessible4deletion(db, req_data["kb_id"], user.id):
-        return get_json_result(
-            data=False,
-            retmsg='No authorization.',
-            retcode=RetCode.AUTHENTICATION_ERROR
-        )
+        return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
     try:
         if not KnowledgebaseService.query(db, created_by=user.id, id=req_data["kb_id"]):
-            return get_json_result(
-                data=False, retmsg='Only owner of dataset authorized for this operation.',
-                retcode=RetCode.OPERATING_ERROR)
+            return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
         kb = KnowledgebaseService.get_by_id(db, req_data["kb_id"])
 
@@ -227,16 +212,10 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
         if not kb:
             return get_data_error_result(retmsg="Can't find this dataset!")
 
-        if req_data["parser_id"] == "tag" and os.environ.get('DOC_ENGINE', "milvus") == "milvus":
-            return get_json_result(
-                data=False,
-                retmsg='The chunking method Tag has not been supported by milvus yet.',
-                retcode=RetCode.OPERATING_ERROR
-            )
+        if req_data["parser_id"] == "tag" and os.environ.get("DOC_ENGINE", "milvus") == "milvus":
+            return get_json_result(data=False, retmsg="The chunking method Tag has not been supported by milvus yet.", retcode=RetCode.OPERATING_ERROR)
 
-        if req_data["name"].lower() != kb.name.lower() \
-                and len(KnowledgebaseService.query(db, name=req_data["name"], tenant_id=user.id,
-                                                   status=StatusEnum.VALID.value)) > 1:
+        if req_data["name"].lower() != kb.name.lower() and len(KnowledgebaseService.query(db, name=req_data["name"], tenant_id=user.id, status=StatusEnum.VALID.value)) > 1:
             return get_data_error_result(retmsg="Duplicated dataset name.")
 
         # 提取 connectors 字段，不写入知识库表
@@ -267,10 +246,7 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
             else:
                 # Elasticsearch/OpenSearch/Infinity 等暂不支持集合重命名
                 # 因为 ES 需要 reindex 操作，其他数据库也没有原生重命名支持
-                logging.warning(
-                    f"Collection rename not supported for {db_type}. "
-                    f"Old collection '{old_coll}' will remain, new data will use '{new_coll}'."
-                )
+                logging.warning(f"Collection rename not supported for {db_type}. Old collection '{old_coll}' will remain, new data will use '{new_coll}'.")
 
         if kb.pagerank != req_data.get("pagerank", 0):
             # todo 测试 milvus 能否利用 pagerank【20250715】
@@ -280,12 +256,7 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
 
             if req_data.get("pagerank", 0) > 0:
                 try:
-                    settings.docStoreConn.update(
-                        {"kb_id": kb.id},
-                        {"pagerank_fea": req_data["pagerank"]},
-                        search.index_name_one(kb.tenant_id, kb.name),
-                        kb.id
-                    )
+                    settings.docStoreConn.update({"kb_id": kb.id}, {"pagerank_fea": req_data["pagerank"]}, search.index_name_one(kb.tenant_id, kb.name), kb.id)
                     logging.info(f"已更新知识库 {kb.id} 的 PageRank 值为 {req_data['pagerank']}")
                 except Exception as e:
                     logging.error(f"更新知识库 {kb.id} 的 PageRank 失败: {e!s}")
@@ -296,7 +267,7 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
                         {"kb_id": id},
                         {"remove": "pagerank_fea"},  # 使用与ES相同的格式
                         search.index_name_one(kb.tenant_id, kb.name),
-                        kb.id
+                        kb.id,
                     )
                     logging.info(f"已移除知识库 {kb.id} 的 PageRank 值")
                 except Exception as e:
@@ -321,7 +292,7 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
         return server_error_response(e)
 
 
-@router.post('/update_metadata_setting', summary="更新知识库元数据配置")
+@router.post("/update_metadata_setting", summary="更新知识库元数据配置")
 def update_metadata_setting(request: UpdateMetadataSettingRequest, db: Session = Depends(get_db), user=Depends(manager)):
     kb = KnowledgebaseService.get_by_id(db, request.kb_id)
     if not kb:
@@ -335,22 +306,19 @@ def update_metadata_setting(request: UpdateMetadataSettingRequest, db: Session =
     return get_json_result(data=kb_dict)
 
 
-@router.get('/detail', summary="获取知识库详情", response_description="成功获取知识库详情")
+@router.get("/detail", summary="获取知识库详情", response_description="成功获取知识库详情")
 def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     try:
         tenants = UserTenantService.query(db, user_id=user.id)
         for tenant in tenants:
-            if KnowledgebaseService.query(
-                    db, tenant_id=tenant.tenant_id, id=kb_id):
+            if KnowledgebaseService.query(db, tenant_id=tenant.tenant_id, id=kb_id):
                 break
         else:
-            return get_json_result(
-                data=False, retmsg='Only owner of dataset authorized for this operation.',
-                retcode=RetCode.OPERATING_ERROR)
+            return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
         kb = KnowledgebaseService.get_detail(db, kb_id)
         if not kb:
             return get_data_error_result(retmsg="Can't find this dataset!")
-        kb["size"] = DocumentService.get_total_size_by_kb_id(db, kb_id=kb["id"],keywords="", run_status=[], types=[])
+        kb["size"] = DocumentService.get_total_size_by_kb_id(db, kb_id=kb["id"], keywords="", run_status=[], types=[])
         kb["connectors"] = Connector2KbService.list_connectors(db, kb_id)
         if kb.get("parser_config", {}).get("metadata"):
             kb["parser_config"]["metadata"] = turn2jsonschema(kb["parser_config"]["metadata"])
@@ -365,16 +333,9 @@ def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
 
 # @deprecated —— 已迁移至 RESTful 端点 GET /api/v1/datasets（restful_apis/dataset_api.py）。
 # 保留原因：生产环境前端仍在调用；待前端迁移完成后于下一版本删除/注释。
-@router.post('/list', summary="列出知识库", response_description="成功列出知识库", deprecated=True)
+@router.post("/list", summary="列出知识库", response_description="成功列出知识库", deprecated=True)
 def list_kbs(
-        request_body: ListKbsRequest,
-        page: int = 0,
-        page_size: int = 0,
-        orderby: str = "create_time",
-        desc: bool = True,
-        keywords: str = "",
-        db: Session = Depends(get_db),
-        user=Depends(manager)
+    request_body: ListKbsRequest, page: int = 0, page_size: int = 0, orderby: str = "create_time", desc: bool = True, keywords: str = "", db: Session = Depends(get_db), user=Depends(manager)
 ):
     page_number = int(page)
     items_per_page = int(page_size)
@@ -389,14 +350,12 @@ def list_kbs(
             # 原有逻辑：获取用户加入的租户
             tenants = TenantService.get_joined_tenants_by_user_id(db, user.id)
             tenants = [m.tenant_id for m in tenants]
-            kbs, total = KnowledgebaseService.get_by_tenant_ids(
-                db, tenants, user.id, page_number, items_per_page, orderby, desc, keywords)
+            kbs, total = KnowledgebaseService.get_by_tenant_ids(db, tenants, user.id, page_number, items_per_page, orderby, desc, keywords)
         else:
             # 新逻辑：使用指定的owner_ids
             tenants = owner_ids
             # 先获取所有数据（page=0, page_size=0）
-            kbs, total = KnowledgebaseService.get_by_tenant_ids(
-                db, tenants, user.id, 0, 0, orderby, desc, keywords)
+            kbs, total = KnowledgebaseService.get_by_tenant_ids(db, tenants, user.id, 0, 0, orderby, desc, keywords)
 
             # 过滤出指定租户的知识库
             kbs = [kb for kb in kbs if kb["tenant_id"] in tenants]
@@ -417,7 +376,7 @@ def list_kbs(
 
 # @deprecated —— 已迁移至 RESTful 端点 DELETE /api/v1/datasets（restful_apis/dataset_api.py）。
 # 保留原因：生产环境前端仍在调用；待前端迁移完成后于下一版本删除/注释。
-@router.post('/rm', summary="删除知识库", response_description="成功删除知识库", deprecated=True)
+@router.post("/rm", summary="删除知识库", response_description="成功删除知识库", deprecated=True)
 def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     删除知识库
@@ -432,19 +391,13 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
     # 将请求体转换为字典
     req_data = request.model_dump()
     if not KnowledgebaseService.accessible4deletion(db, req_data["kb_id"], user.id):
-        return get_json_result(
-            data=False,
-            retmsg='No authorization.',
-            retcode=RetCode.AUTHENTICATION_ERROR
-        )
+        return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
     try:
         # 查询知识库，确保只有知识库的创建者有权限删除
         kbs = KnowledgebaseService.query(db, created_by=user.id, id=req_data["kb_id"])
         if not kbs:
             # 如果知识库不存在或用户无权限删除，返回错误信息
-            return get_json_result(
-                data=False, retmsg='Only owner of dataset authorized for this operation.',
-                retcode=RetCode.OPERATING_ERROR)
+            return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
         # 提前保存知识库名称，避免访问被删除对象
         kb_name = kbs[0].name
@@ -464,7 +417,7 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
                 File.source_type == FileSource.KNOWLEDGEBASE,
                 File.type == "folder",
                 File.name == kb_name,
-            ]
+            ],
         )
         if hasattr(settings.STORAGE_IMPL, "remove_bucket"):
             try:
@@ -498,11 +451,7 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
 @router.get("/{kb_id}/tags", summary="获取知识库标签")
 def list_tags(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     if not KnowledgebaseService.accessible(db, kb_id, user.id):
-        return get_json_result(
-            data=False,
-            retmsg='No authorization.',
-            retcode=RetCode.AUTHENTICATION_ERROR
-        )
+        return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
     tenants = UserTenantService.get_tenants_by_user_id(db, user.id)
     tags = []
     for tenant in tenants:
@@ -515,11 +464,7 @@ def list_tags_from_kbs(kb_ids: str, db: Session = Depends(get_db), user=Depends(
     kb_id_list = kb_ids.split(",")
     for kb_id in kb_id_list:
         if not KnowledgebaseService.accessible(db, kb_id, user.id):
-            return get_json_result(
-                data=False,
-                retmsg='No authorization.',
-                retcode=RetCode.AUTHENTICATION_ERROR
-            )
+            return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
     tenants = UserTenantService.get_tenants_by_user_id(db, user.id)
     tags = []
     for tenant in tenants:
@@ -530,11 +475,7 @@ def list_tags_from_kbs(kb_ids: str, db: Session = Depends(get_db), user=Depends(
 @router.post("/{kb_id}/rm_tags", summary="删除知识库标签")
 def rm_tags(kb_id: str, request: RemoveTagsRequest, db: Session = Depends(get_db), user=Depends(manager)):
     if not KnowledgebaseService.accessible(db, kb_id, user.id):
-        return get_json_result(
-            data=False,
-            retmsg='No authorization.',
-            retcode=RetCode.AUTHENTICATION_ERROR
-        )
+        return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
     kb = KnowledgebaseService.get_by_id(db, kb_id)
 
     for tag in request.tags:
@@ -550,11 +491,7 @@ def rm_tags(kb_id: str, request: RemoveTagsRequest, db: Session = Depends(get_db
 @router.post("/{kb_id}/rename_tag", summary="重命名知识库标签")
 def rename_tags(kb_id: str, request: RenameTagRequest, db: Session = Depends(get_db), user=Depends(manager)):
     if not KnowledgebaseService.accessible(db, kb_id, user.id):
-        return get_json_result(
-            data=False,
-            retmsg='No authorization.',
-            retcode=RetCode.AUTHENTICATION_ERROR
-        )
+        return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
     kb = KnowledgebaseService.get_by_id(db, kb_id)
 
     settings.docStoreConn.update(
@@ -574,16 +511,9 @@ def rename_tags(kb_id: str, request: RenameTagRequest, db: Session = Depends(get
 @router.get("/{kb_id}/knowledge_graph", summary="获取知识图谱", deprecated=True)
 async def knowledge_graph(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     if not KnowledgebaseService.accessible(db, kb_id, user.id):
-        return get_json_result(
-            data=False,
-            retmsg='No authorization.',
-            retcode=RetCode.AUTHENTICATION_ERROR
-        )
+        return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
     kb = KnowledgebaseService.get_by_id(db, kb_id)
-    req = {
-        "kb_id": [kb_id],
-        "knowledge_graph_kwd": ["graph"]
-    }
+    req = {"kb_id": [kb_id], "knowledge_graph_kwd": ["graph"]}
     obj = {"graph": {}, "mind_map": {}}
     if not settings.docStoreConn.index_exist(search.index_name(kb.tenant_id, [kb.name]), kb_id):
         return get_json_result(data=obj)
@@ -611,14 +541,10 @@ async def knowledge_graph(kb_id: str, db: Session = Depends(get_db), user=Depend
 
 # @deprecated —— 已迁移至 RESTful 端点 DELETE /api/v1/datasets/{dataset_id}/knowledge_graph（restful_apis/dataset_api.py）。
 # 保留原因：生产环境前端仍在调用；待前端迁移完成后于下一版本删除/注释。
-@router.delete('/{kb_id}/knowledge_graph', summary="删除知识图谱", deprecated=True)
+@router.delete("/{kb_id}/knowledge_graph", summary="删除知识图谱", deprecated=True)
 def delete_knowledge_graph(kb_id, db: Session = Depends(get_db), user=Depends(manager)):
     if not KnowledgebaseService.accessible(db, kb_id, user.id):
-        return get_json_result(
-            data=False,
-            retmsg='No authorization.',
-            retcode=RetCode.AUTHENTICATION_ERROR
-        )
+        return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
     kb = KnowledgebaseService.get_by_id(db, kb_id)
 
     settings.docStoreConn.delete({"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation"]}, search.index_name(kb.tenant_id, [kb.name]), kb_id)
@@ -627,11 +553,7 @@ def delete_knowledge_graph(kb_id, db: Session = Depends(get_db), user=Depends(ma
 
 
 @router.get("/get_meta", summary="查询知识库元数据聚合", response_description="元数据聚合结果")
-def get_meta(
-        kb_ids: str = Query(default="", description="知识库ID列表，逗号分隔"),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def get_meta(kb_ids: str = Query(default="", description="知识库ID列表，逗号分隔"), db: Session = Depends(get_db), user=Depends(manager)):
     """汇总指定知识库中文档元数据字段的取值分布，便于在 Apifox 等工具中查看筛选项。
 
     - **kb_ids**: 多个知识库ID，使用英文逗号分隔。
@@ -644,11 +566,7 @@ def get_meta(
 
     for kb_id in kb_id_list:
         if not KnowledgebaseService.accessible(db, kb_id, user.id):
-            return get_json_result(
-                data=False,
-                retmsg='No authorization.',
-                retcode=RetCode.AUTHENTICATION_ERROR
-            )
+            return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
 
     try:
         meta = DocMetadataService.get_flatted_meta_by_kbs(db, kb_id_list)
@@ -658,11 +576,7 @@ def get_meta(
 
 
 @router.get("/basic_info", summary="获取知识库文档处理统计信息", response_description="返回文档处理状态统计")
-def get_basic_info(
-    kb_id: str = Query(..., description="知识库ID"),
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-):
+def get_basic_info(kb_id: str = Query(..., description="知识库ID"), db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取知识库的文档处理基本统计信息
 
@@ -697,11 +611,7 @@ def get_basic_info(
     try:
         # 检查用户权限
         if not KnowledgebaseService.accessible(db, kb_id, user.id):
-            return get_json_result(
-                data=False,
-                retmsg='No authorization.',
-                retcode=RetCode.AUTHENTICATION_ERROR
-            )
+            return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
 
         # 获取统计信息
         basic_info = DocumentService.knowledgebase_basic_info(db, kb_id)
@@ -713,17 +623,17 @@ def get_basic_info(
 
 @router.post("/list_pipeline_logs", summary="列出Pipeline日志", response_description="成功获取Pipeline日志列表")
 def list_pipeline_logs(
-        request_body: ListPipelineLogsRequest,
-        kb_id: str = Query(..., description="知识库ID"),
-        keywords: str = Query("", description="关键词搜索"),
-        page: int = Query(0, description="页码"),
-        page_size: int = Query(0, description="每页数量"),
-        orderby: str = Query("create_time", description="排序字段"),
-        desc: bool = Query(True, description="是否降序"),
-        create_date_from: str = Query("", description="创建日期起始"),
-        create_date_to: str = Query("", description="创建日期结束"),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
+    request_body: ListPipelineLogsRequest,
+    kb_id: str = Query(..., description="知识库ID"),
+    keywords: str = Query("", description="关键词搜索"),
+    page: int = Query(0, description="页码"),
+    page_size: int = Query(0, description="每页数量"),
+    orderby: str = Query("create_time", description="排序字段"),
+    desc: bool = Query(True, description="是否降序"),
+    create_date_from: str = Query("", description="创建日期起始"),
+    create_date_to: str = Query("", description="创建日期结束"),
+    db: Session = Depends(get_db),
+    user=Depends(manager),
 ):
     """
     获取指定知识库的文件级Pipeline处理日志列表
@@ -801,7 +711,9 @@ def list_pipeline_logs(
     suffix = request_body.suffix or []
 
     try:
-        logs, tol = PipelineOperationLogService.get_file_logs_by_kb_id(db, kb_id, page_number, items_per_page, orderby, desc, keywords, operation_status, types, suffix, create_date_from, create_date_to)
+        logs, tol = PipelineOperationLogService.get_file_logs_by_kb_id(
+            db, kb_id, page_number, items_per_page, orderby, desc, keywords, operation_status, types, suffix, create_date_from, create_date_to
+        )
         return get_json_result(data={"total": tol, "logs": logs})
     except Exception as e:
         return server_error_response(e)
@@ -809,16 +721,16 @@ def list_pipeline_logs(
 
 @router.post("/list_pipeline_dataset_logs", summary="列出Pipeline数据集日志", response_description="成功获取Pipeline数据集日志列表")
 def list_pipeline_dataset_logs(
-        request_body: ListPipelineLogsRequest,
-        kb_id: str = Query(..., description="知识库ID"),
-        page: int = Query(0, description="页码"),
-        page_size: int = Query(0, description="每页数量"),
-        orderby: str = Query("create_time", description="排序字段"),
-        desc: bool = Query(True, description="是否降序"),
-        create_date_from: str = Query("", description="创建日期起始"),
-        create_date_to: str = Query("", description="创建日期结束"),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
+    request_body: ListPipelineLogsRequest,
+    kb_id: str = Query(..., description="知识库ID"),
+    page: int = Query(0, description="页码"),
+    page_size: int = Query(0, description="每页数量"),
+    orderby: str = Query("create_time", description="排序字段"),
+    desc: bool = Query(True, description="是否降序"),
+    create_date_from: str = Query("", description="创建日期起始"),
+    create_date_to: str = Query("", description="创建日期结束"),
+    db: Session = Depends(get_db),
+    user=Depends(manager),
 ):
     """
     获取指定知识库的数据集级Pipeline处理日志列表
@@ -895,12 +807,7 @@ def list_pipeline_dataset_logs(
 
 
 @router.post("/delete_pipeline_logs", summary="删除Pipeline日志", response_description="成功删除Pipeline日志")
-def delete_pipeline_logs(
-        request_body: DeletePipelineLogsRequest,
-        kb_id: str = Query(..., description="知识库ID"),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def delete_pipeline_logs(request_body: DeletePipelineLogsRequest, kb_id: str = Query(..., description="知识库ID"), db: Session = Depends(get_db), user=Depends(manager)):
     """
     批量删除指定的Pipeline处理日志
 
@@ -952,11 +859,7 @@ def delete_pipeline_logs(
 
 
 @router.get("/pipeline_log_detail", summary="获取Pipeline日志详情", response_description="成功获取Pipeline日志详情")
-def pipeline_log_detail(
-        log_id: str = Query(..., description="日志ID"),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def pipeline_log_detail(log_id: str = Query(..., description="日志ID"), db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取单条Pipeline日志的详细信息
 
@@ -1018,11 +921,7 @@ def pipeline_log_detail(
 # @deprecated —— 已迁移至 RESTful 端点 POST /api/v1/datasets/{dataset_id}/run_graphrag（restful_apis/dataset_api.py）。
 # 保留原因：生产环境前端仍在调用；待前端迁移完成后于下一版本删除/注释。
 @router.post("/run_graphrag", summary="运行GraphRAG", response_description="成功启动GraphRAG任务", deprecated=True)
-def run_graphrag(
-        request: RunGraphRagRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def run_graphrag(request: RunGraphRagRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     为指定知识库启动GraphRAG知识图谱构建任务
 
@@ -1129,11 +1028,7 @@ def run_graphrag(
 # @deprecated —— 已迁移至 RESTful 端点 GET /api/v1/datasets/{dataset_id}/trace_graphrag（restful_apis/dataset_api.py）。
 # 保留原因：生产环境前端仍在调用；待前端迁移完成后于下一版本删除/注释。
 @router.get("/trace_graphrag", summary="追踪GraphRAG任务", response_description="成功获取GraphRAG任务状态", deprecated=True)
-def trace_graphrag(
-        kb_id: str = Query(..., description="知识库ID"),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def trace_graphrag(kb_id: str = Query(..., description="知识库ID"), db: Session = Depends(get_db), user=Depends(manager)):
     """
     追踪指定知识库的GraphRAG任务执行状态
 
@@ -1221,11 +1116,7 @@ def trace_graphrag(
 # @deprecated —— 已迁移至 RESTful 端点 POST /api/v1/datasets/{dataset_id}/run_raptor（restful_apis/dataset_api.py）。
 # 保留原因：生产环境前端仍在调用；待前端迁移完成后于下一版本删除/注释。
 @router.post("/run_raptor", summary="运行RAPTOR", response_description="成功启动RAPTOR任务", deprecated=True)
-def run_raptor(
-        request: RunRaptorRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def run_raptor(request: RunRaptorRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     为指定知识库启动RAPTOR递归摘要任务
 
@@ -1334,11 +1225,7 @@ def run_raptor(
 # @deprecated —— 已迁移至 RESTful 端点 GET /api/v1/datasets/{dataset_id}/trace_raptor（restful_apis/dataset_api.py）。
 # 保留原因：生产环境前端仍在调用；待前端迁移完成后于下一版本删除/注释。
 @router.get("/trace_raptor", summary="追踪RAPTOR任务", response_description="成功获取RAPTOR任务状态", deprecated=True)
-def trace_raptor(
-        kb_id: str = Query(..., description="知识库ID"),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def trace_raptor(kb_id: str = Query(..., description="知识库ID"), db: Session = Depends(get_db), user=Depends(manager)):
     """
     追踪指定知识库的RAPTOR任务执行状态
 
@@ -1373,11 +1260,7 @@ def trace_raptor(
 
 
 @router.post("/run_mindmap", summary="运行思维导图", response_description="成功启动思维导图任务")
-def run_mindmap(
-        request: RunMindmapRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def run_mindmap(request: RunMindmapRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     为指定知识库启动思维导图生成任务
 
@@ -1476,11 +1359,7 @@ def run_mindmap(
 
 
 @router.get("/trace_mindmap", summary="追踪思维导图任务", response_description="成功获取思维导图任务状态")
-def trace_mindmap(
-        kb_id: str = Query(..., description="知识库ID"),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def trace_mindmap(kb_id: str = Query(..., description="知识库ID"), db: Session = Depends(get_db), user=Depends(manager)):
     """
     追踪指定知识库的Mindmap任务执行状态
 
@@ -1515,12 +1394,7 @@ def trace_mindmap(
 
 
 @router.delete("/unbind_task", summary="解绑知识库任务", response_description="成功解绑任务")
-def delete_kb_task(
-        kb_id: str = Query(..., description="知识库ID"),
-        pipeline_task_type: str = Query(..., description="Pipeline任务类型"),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def delete_kb_task(kb_id: str = Query(..., description="知识库ID"), pipeline_task_type: str = Query(..., description="Pipeline任务类型"), db: Session = Depends(get_db), user=Depends(manager)):
     """
     解绑知识库与Pipeline任务的关联关系，并清理相关数据
 
@@ -1629,11 +1503,7 @@ def delete_kb_task(
 
 
 @router.post("/check_embedding", summary="抽样校验知识库向量一致性")
-def check_embedding(
-        request: CheckEmbeddingRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def check_embedding(request: CheckEmbeddingRequest, db: Session = Depends(get_db), user=Depends(manager)):
 
     def _guess_vec_field(src: dict) -> str | None:
         for k in src or {}:
@@ -1674,11 +1544,15 @@ def check_embedding(
         idx_names = search.index_name(tenant_id, [kb_name])
 
         res0 = doc_store_conn.search(
-            select_fields=[], highlight_fields=[],
+            select_fields=[],
+            highlight_fields=[],
             condition={"kb_id": kb_id, "available_int": 1},
-            match_expressions=[], order_by=OrderByExpr(),
-            offset=0, limit=1,
-            index_names=idx_names, knowledgebase_ids=[kb_id]
+            match_expressions=[],
+            order_by=OrderByExpr(),
+            offset=0,
+            limit=1,
+            index_names=idx_names,
+            knowledgebase_ids=[kb_id],
         )
         total = doc_store_conn.get_total(res0)
         if total <= 0:
@@ -1693,9 +1567,12 @@ def check_embedding(
                 select_fields=list(base_fields),
                 highlight_fields=[],
                 condition={"kb_id": kb_id, "available_int": 1},
-                match_expressions=[], order_by=OrderByExpr(),
-                offset=off, limit=1,
-                index_names=idx_names, knowledgebase_ids=[kb_id]
+                match_expressions=[],
+                order_by=OrderByExpr(),
+                offset=off,
+                limit=1,
+                index_names=idx_names,
+                knowledgebase_ids=[kb_id],
             )
             ids = doc_store_conn.get_doc_ids(res1)
             if not ids:
@@ -1706,25 +1583,28 @@ def check_embedding(
             vec_field = _guess_vec_field(full_doc)
             vec = _as_float_vec(full_doc.get(vec_field))
 
-            out.append({
-                "chunk_id": cid,
-                "kb_id": kb_id,
-                "doc_id": full_doc.get("doc_id"),
-                "doc_name": full_doc.get("docnm_kwd"),
-                "vector_field": vec_field,
-                "vector_dim": len(vec),
-                "vector": vec,
-                "page_num_int": full_doc.get("page_num_int"),
-                "position_int": full_doc.get("position_int"),
-                "top_int": full_doc.get("top_int"),
-                "content_with_weight": full_doc.get("content_with_weight") or "",
-                "question_kwd": full_doc.get("question_kwd") or []
-            })
+            out.append(
+                {
+                    "chunk_id": cid,
+                    "kb_id": kb_id,
+                    "doc_id": full_doc.get("doc_id"),
+                    "doc_name": full_doc.get("docnm_kwd"),
+                    "vector_field": vec_field,
+                    "vector_dim": len(vec),
+                    "vector": vec,
+                    "page_num_int": full_doc.get("page_num_int"),
+                    "position_int": full_doc.get("position_int"),
+                    "top_int": full_doc.get("top_int"),
+                    "content_with_weight": full_doc.get("content_with_weight") or "",
+                    "question_kwd": full_doc.get("question_kwd") or [],
+                }
+            )
         return out
 
     def _clean(s: str) -> str:
         s = re.sub(r"</?(table|td|caption|tr|th)( [^<>]{0,12})?>", " ", s or "")
         return s if s else "None"
+
     req = request.model_dump()
     kb_id = req.get("kb_id", "")
     tenant_embd_id = req.get("tenant_embd_id")
@@ -1732,11 +1612,7 @@ def check_embedding(
     n = int(req.get("check_num", 5) or 5)
 
     if not KnowledgebaseService.accessible(db, kb_id, user.id):
-        return get_json_result(
-            data=False,
-            retmsg='No authorization.',
-            retcode=RetCode.AUTHENTICATION_ERROR
-        )
+        return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
 
     kb = KnowledgebaseService.get_by_id(db, kb_id)
     if not kb:
@@ -1744,9 +1620,11 @@ def check_embedding(
 
     if tenant_embd_id:
         from api.db.joint_services.tenant_model_service import get_model_config_by_id
+
         embd_config = get_model_config_by_id(db, tenant_embd_id)
     elif kb.tenant_embd_id:
         from api.db.joint_services.tenant_model_service import get_model_config_by_id
+
         embd_config = get_model_config_by_id(db, kb.tenant_embd_id)
     else:
         embd_config = get_model_config_by_type_and_name(db, kb.tenant_id, LLMType.EMBEDDING.value, embd_id or kb.embd_id)
@@ -1782,14 +1660,16 @@ def check_embedding(
             return get_error_data_result(retmsg=f"Embedding failure. {e}")
 
         eff_sims.append(sim)
-        results.append({
-            "chunk_id": ck["chunk_id"],
-            "doc_id": ck["doc_id"],
-            "doc_name": ck["doc_name"],
-            "vector_field": ck["vector_field"],
-            "vector_dim": ck["vector_dim"],
-            "cos_sim": round(sim, 6),
-        })
+        results.append(
+            {
+                "chunk_id": ck["chunk_id"],
+                "doc_id": ck["doc_id"],
+                "doc_name": ck["doc_name"],
+                "vector_field": ck["vector_field"],
+                "vector_dim": ck["vector_dim"],
+                "cos_sim": round(sim, 6),
+            }
+        )
 
     summary = {
         "kb_id": kb_id,
@@ -1803,4 +1683,8 @@ def check_embedding(
     }
     if summary["avg_cos_sim"] > 0.9:
         return get_json_result(data={"summary": summary, "results": results})
-    return get_json_result(retcode=RetCode.NOT_EFFECTIVE, retmsg="Embedding model switch failed: the average similarity between old and new vectors is below 0.9, indicating incompatible vector spaces.", data={"summary": summary, "results": results})
+    return get_json_result(
+        retcode=RetCode.NOT_EFFECTIVE,
+        retmsg="Embedding model switch failed: the average similarity between old and new vectors is below 0.9, indicating incompatible vector spaces.",
+        data={"summary": summary, "results": results},
+    )

@@ -66,13 +66,7 @@ class OAuthClient:
         Exchange authorization code for access token (synchronous).
         """
         try:
-            payload = {
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
-                "code": code,
-                "redirect_uri": self.redirect_uri,
-                "grant_type": "authorization_code"
-            }
+            payload = {"client_id": self.client_id, "client_secret": self.client_secret, "code": code, "redirect_uri": self.redirect_uri, "grant_type": "authorization_code"}
             response = sync_request(
                 "POST",
                 self.token_url,

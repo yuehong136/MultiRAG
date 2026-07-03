@@ -50,9 +50,9 @@ class RetrievalParam(ToolParamBase):
                     "type": "string",
                     "description": "The keywords to search the dataset. The keywords should be the most important words/terms(includes synonyms) from the original request.",
                     "default": "",
-                    "required": True
+                    "required": True,
                 }
-            }
+            },
         }
         super().__init__()
         self.function_name = "search_my_dateset"
@@ -78,12 +78,7 @@ class RetrievalParam(ToolParamBase):
         self.check_positive_number(self.top_n, "[Retrieval] Top N")
 
     def get_input_form(self) -> dict[str, dict]:
-        return {
-            "query": {
-                "name": "Query",
-                "type": "line"
-            }
-        }
+        return {"query": {"name": "Query", "type": "line"}}
 
 
 class Retrieval(ToolBase, ABC):
@@ -189,14 +184,20 @@ class Retrieval(ToolBase, ABC):
                     embd_model_config = get_model_config_by_id(db, kbs[0].tenant_embd_id)
                 else:
                     embd_model_config = get_model_config_by_type_and_name(
-                        db, self._canvas.get_tenant_id(), LLMType.EMBEDDING.value, kbs[0].embd_id,
+                        db,
+                        self._canvas.get_tenant_id(),
+                        LLMType.EMBEDDING.value,
+                        kbs[0].embd_id,
                     )
                 embd_mdl = LLMBundle(db, self._canvas.get_tenant_id(), embd_model_config)
 
             rerank_mdl = None
             if self._param.rerank_id:
                 rerank_model_config = get_model_config_by_type_and_name(
-                    db, kbs[0].tenant_id, LLMType.RERANK.value, self._param.rerank_id,
+                    db,
+                    kbs[0].tenant_id,
+                    LLMType.RERANK.value,
+                    self._param.rerank_id,
                 )
                 rerank_mdl = LLMBundle(db, kbs[0].tenant_id, rerank_model_config)
 
@@ -215,7 +216,7 @@ class Retrieval(ToolBase, ABC):
                     last = 0
 
                     for m in pat.finditer(s):
-                        out_parts.append(s[last:m.start()])
+                        out_parts.append(s[last : m.start()])
                         key = m.group(1)
                         v = self._canvas.get_variable_value(key)
                         if v is None:
@@ -290,11 +291,7 @@ class Retrieval(ToolBase, ABC):
                 kbinfos["chunks"] = settings.retriever.retrieval_by_children(kbinfos["chunks"], [kb.tenant_id for kb in kbs])
                 if self._param.use_kg:
                     kg_chat_config = get_tenant_default_model_by_type(db, self._canvas.get_tenant_id(), LLMType.CHAT)
-                    ck = await settings.kg_retriever.retrieval(query,
-                                                           tenant_ids,
-                                                           kb_ids,
-                                                           embd_mdl,
-                                                           LLMBundle(db, self._canvas.get_tenant_id(), kg_chat_config))
+                    ck = await settings.kg_retriever.retrieval(query, tenant_ids, kb_ids, embd_mdl, LLMBundle(db, self._canvas.get_tenant_id(), kg_chat_config))
                     if self.check_if_canceled("Retrieval processing"):
                         return
                     if ck["content_with_weight"]:

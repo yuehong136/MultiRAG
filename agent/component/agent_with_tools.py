@@ -85,7 +85,8 @@ class Agent(LLM, ToolBase):
         try:
             with db_connection() as db:
                 model_config = get_model_config_by_type_and_name(
-                    db, self._canvas.get_tenant_id(),
+                    db,
+                    self._canvas.get_tenant_id(),
                     TenantLLMService.llm_id2llm_type(self._param.llm_id),
                     self._param.llm_id,
                 )
@@ -99,8 +100,7 @@ class Agent(LLM, ToolBase):
                     verbose_tool_use=False,
                 )
         except LookupError as e:
-            logging.warning("Agent component %s: model '%s' not found, will fail at run time: %s",
-                            id, self._param.llm_id, e)
+            logging.warning("Agent component %s: model '%s' not found, will fail at run time: %s", id, self._param.llm_id, e)
         self.tool_meta = []
         for indexed_name, tool_obj in self.tools.items():
             original_meta = tool_obj.get_meta()
@@ -209,8 +209,7 @@ class Agent(LLM, ToolBase):
     async def _invoke_async(self, **kwargs):
         """异步版本 - 主要实现"""
         if self.chat_mdl is None:
-            raise LookupError(f"Agent model '{self._param.llm_id}' is not available. "
-                              "Please configure the model API key in the model management page.")
+            raise LookupError(f"Agent model '{self._param.llm_id}' is not available. Please configure the model API key in the model management page.")
         if self.check_if_canceled("Agent processing"):
             return
 

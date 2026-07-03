@@ -10,12 +10,7 @@ from workflow.components.MinIOSelectionComponent import MinIOSelectionComponent
 from workflow.components.UserFileSelectionComponent import UserFileSelectionComponent
 from workflow.WorkflowEngine import WorkflowEngine
 
-class_map = {
-    "UserFileSelectionComponent": UserFileSelectionComponent,
-    "FileReaderComponent": FileReaderComponent,
-    "LLMComponent": LLMComponent,
-    "EndNode": EndNode
-}
+class_map = {"UserFileSelectionComponent": UserFileSelectionComponent, "FileReaderComponent": FileReaderComponent, "LLMComponent": LLMComponent, "EndNode": EndNode}
 
 
 class WorkflowParser:
@@ -25,20 +20,20 @@ class WorkflowParser:
         node_id_ordered_list = WorkflowParser.get_ordered_nodes(workflow_json)
 
         node_json_list: list[dict] = []
-        for node in workflow_json['nodes']:
-            node_id = node['id']
-            node_json_list.append({'id': node_id, 'node': node})
+        for node in workflow_json["nodes"]:
+            node_id = node["id"]
+            node_json_list.append({"id": node_id, "node": node})
 
         # 创建一个字典，将 node_id 映射到其在 node_id_ordered_list 中的索引
         node_order = {node_id: index for index, node_id in enumerate(node_id_ordered_list)}
 
         # 使用 sorted() 函数对 node_list 进行排序
-        sorted_node_json_list = sorted(node_json_list, key=lambda x: node_order[str(x['id'])])
+        sorted_node_json_list = sorted(node_json_list, key=lambda x: node_order[str(x["id"])])
 
         node_list: list[Node] = []
         for node_json in sorted_node_json_list:
-            node_data = node_json['node']['data']
-            name = node_data['componentName']
+            node_data = node_json["node"]["data"]
+            name = node_data["componentName"]
             if name == "UserFileSelectionComponent":
                 userFileSelectionComponent = UserFileSelectionComponent.decode(node_json)
                 node_list.append(userFileSelectionComponent)
@@ -64,14 +59,13 @@ class WorkflowParser:
 
     @staticmethod
     def get_ordered_nodes(workflow_json: json) -> list[str]:
-        edges = [Edge(edge['source'], edge['target']) for edge in workflow_json['edges']]
+        edges = [Edge(edge["source"], edge["target"]) for edge in workflow_json["edges"]]
 
         graph = {}
         for edge in edges:
             graph[edge.source] = edge.target
 
-        start_node = next(node for node in {edge.source for edge in edges}
-                          if node not in {edge.target for edge in edges})
+        start_node = next(node for node in {edge.source for edge in edges} if node not in {edge.target for edge in edges})
 
         ordered_nodes = [start_node]
         current_node = start_node
@@ -208,6 +202,6 @@ if __name__ == "__main__":
 
     # 读取文件
     workflow_json_str = ""
-    with open('/Users/naimehao/Desktop/workflowSampleData.json') as f:
+    with open("/Users/naimehao/Desktop/workflowSampleData.json") as f:
         workflow_json_str = f.read()
     workflowEngine = WorkflowParser.parse(workflow_json_str=workflow_json_str)

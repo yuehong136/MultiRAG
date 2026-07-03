@@ -60,7 +60,7 @@ def list_agents(
     order_by: str = Query("update_time"),
     desc: bool = Query(True),
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
+    tenant_id: str = Depends(token_required),
 ):
     """
     获取代理列表
@@ -88,11 +88,7 @@ def list_agents(
 
 
 @router.post("/agents", summary="创建代理")
-def create_agent(
-    request: CreateAgentRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
+def create_agent(request: CreateAgentRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     """
     创建新的代理
 
@@ -130,23 +126,13 @@ def create_agent(
         return get_error_data_result(retmsg="Fail to create agent.")
 
     owner_nickname = _get_user_nickname(db, tenant_id)
-    UserCanvasVersionService.save_or_replace_latest(
-        db,
-        user_canvas_id=agent_id,
-        title=UserCanvasVersionService.build_version_title(owner_nickname, req.get("title")),
-        dsl=req["dsl"]
-    )
+    UserCanvasVersionService.save_or_replace_latest(db, user_canvas_id=agent_id, title=UserCanvasVersionService.build_version_title(owner_nickname, req.get("title")), dsl=req["dsl"])
 
     return get_result(data=True)
 
 
 @router.put("/agents/{agent_id}", summary="更新代理")
-def update_agent(
-    agent_id: str,
-    request: UpdateAgentRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
+def update_agent(agent_id: str, request: UpdateAgentRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     """
     更新代理
 
@@ -181,22 +167,13 @@ def update_agent(
     UserCanvasService.update_by_id(db, agent_id, req)
 
     if req.get("dsl") is not None:
-        UserCanvasVersionService.save_or_replace_latest(
-            db,
-            user_canvas_id=agent_id,
-            title=UserCanvasVersionService.build_version_title(owner_nickname, agent_title_for_version),
-            dsl=req["dsl"]
-        )
+        UserCanvasVersionService.save_or_replace_latest(db, user_canvas_id=agent_id, title=UserCanvasVersionService.build_version_title(owner_nickname, agent_title_for_version), dsl=req["dsl"])
 
     return get_result(data=True)
 
 
 @router.delete("/agents/{agent_id}", summary="删除代理")
-def delete_agent(
-    agent_id: str,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required)
-):
+def delete_agent(agent_id: str, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     """
     删除代理
 
@@ -217,11 +194,7 @@ def delete_agent(
 
 @router.api_route("/webhook/{agent_id}", methods=["POST", "GET", "PUT", "PATCH", "DELETE", "HEAD"], summary="Webhook触发代理")
 @router.api_route("/webhook_test/{agent_id}", methods=["POST", "GET", "PUT", "PATCH", "DELETE", "HEAD"], summary="Webhook测试")
-async def webhook(
-    agent_id: str,
-    request: Request,
-    db: Session = Depends(get_db)
-):
+async def webhook(agent_id: str, request: Request, db: Session = Depends(get_db)):
     """
     通过Webhook触发代理执行（增强版）
 
@@ -274,10 +247,7 @@ async def webhook(
     allowed_methods = webhook_cfg.get("methods", [])
     request_method = request.method.upper()
     if allowed_methods and request_method not in allowed_methods:
-        return get_error_data_result(
-            retcode=RetCode.BAD_REQUEST,
-            retmsg=f"HTTP method '{request_method}' not allowed for this webhook."
-        )
+        return get_error_data_result(retcode=RetCode.BAD_REQUEST, retmsg=f"HTTP method '{request_method}' not allowed for this webhook.")
 
     # 6. Validate webhook security
     async def validate_webhook_security(security_cfg: dict):
@@ -438,7 +408,7 @@ async def webhook(
         if not auth_header.startswith("Bearer "):
             raise Exception("Missing Bearer token")
 
-        token = auth_header[len("Bearer "):].strip()
+        token = auth_header[len("Bearer ") :].strip()
         if not token:
             raise Exception("Empty Bearer token")
 
@@ -478,10 +448,7 @@ async def webhook(
         else:
             required_claims = []
 
-        required_claims = [
-            c for c in required_claims
-            if isinstance(c, str) and c.strip()
-        ]
+        required_claims = [c for c in required_claims if isinstance(c, str) and c.strip()]
 
         RESERVED_CLAIMS = {"exp", "sub", "aud", "iss", "nbf", "iat"}
         for claim in required_claims:
@@ -522,9 +489,7 @@ async def webhook(
         # 3. Body
         ctype = request.headers.get("content-type", "").split(";")[0].strip()
         if ctype and content_type and ctype != content_type:
-            raise ValueError(
-                f"Invalid Content-Type: expect '{content_type}', got '{ctype}'"
-            )
+            raise ValueError(f"Invalid Content-Type: expect '{content_type}', got '{ctype}'")
 
         body_data: dict = {}
 
@@ -550,12 +515,7 @@ async def webhook(
                         if len(files_list) >= 10:
                             raise Exception("Too many uploaded files")
 
-                        desc = await thread_pool_exec(
-                            FileService.upload_info,
-                            cvs.user_id,
-                            value,
-                            None
-                        )
+                        desc = await thread_pool_exec(FileService.upload_info, cvs.user_id, value, None)
                         file_parsed = await canvas.get_files_async([desc])
                         body_data[key] = file_parsed
 
@@ -618,9 +578,7 @@ async def webhook(
 
             # 4. Type validation
             if not validate_type(value, field_type):
-                raise Exception(
-                    f"{name}.{field} type mismatch: expected {field_type}, got {type(value).__name__}"
-                )
+                raise Exception(f"{name}.{field} type mismatch: expected {field_type}, got {type(value).__name__}")
 
             extracted[field] = value
 
@@ -750,12 +708,7 @@ async def webhook(
     except Exception as e:
         return get_error_data_result(retcode=RetCode.BAD_REQUEST, retmsg=str(e))
 
-    clean_request = {
-        "query": query_clean,
-        "headers": header_clean,
-        "body": body_clean,
-        "input": parsed
-    }
+    clean_request = {"query": query_clean, "headers": header_clean, "body": body_clean, "input": parsed}
 
     execution_mode = webhook_cfg.get("execution_mode", "Immediately")
     response_cfg = webhook_cfg.get("response", {})
@@ -767,15 +720,9 @@ async def webhook(
         raw = REDIS_CONN.get(key)
         obj = json.loads(raw) if raw else {"webhooks": {}}
 
-        ws = obj["webhooks"].setdefault(
-            str(start_ts),
-            {"start_ts": start_ts, "events": []}
-        )
+        ws = obj["webhooks"].setdefault(str(start_ts), {"start_ts": start_ts, "events": []})
 
-        ws["events"].append({
-            "ts": time.time(),
-            **event
-        })
+        ws["events"].append({"ts": time.time(), **event})
 
         REDIS_CONN.set_obj(key, obj, ttl)
 
@@ -784,16 +731,10 @@ async def webhook(
         try:
             status = int(status)
         except (TypeError, ValueError):
-            return get_error_data_result(
-                retcode=RetCode.BAD_REQUEST,
-                retmsg=f"Invalid response status code: {status}"
-            )
+            return get_error_data_result(retcode=RetCode.BAD_REQUEST, retmsg=f"Invalid response status code: {status}")
 
         if not (200 <= status <= 399):
-            return get_error_data_result(
-                retcode=RetCode.BAD_REQUEST,
-                retmsg=f"Invalid response status code: {status}, must be between 200 and 399"
-            )
+            return get_error_data_result(retcode=RetCode.BAD_REQUEST, retmsg=f"Invalid response status code: {status}, must be between 200 and 399")
 
         body_tpl = response_cfg.get("body_template", "")
 
@@ -811,11 +752,7 @@ async def webhook(
 
         async def background_run():
             try:
-                async for ans in canvas.run(
-                    query="",
-                    user_id=cvs.user_id,
-                    webhook_payload=clean_request
-                ):
+                async for ans in canvas.run(query="", user_id=cvs.user_id, webhook_payload=clean_request):
                     if is_test:
                         append_webhook_trace(agent_id, start_ts, ans)
 
@@ -827,7 +764,7 @@ async def webhook(
                             "event": "finished",
                             "elapsed_time": time.time() - start_ts,
                             "success": True,
-                        }
+                        },
                     )
 
                 cvs.dsl = json.loads(str(canvas))
@@ -844,7 +781,7 @@ async def webhook(
                                 "event": "error",
                                 "message": str(e),
                                 "error_type": type(e).__name__,
-                            }
+                            },
                         )
                         append_webhook_trace(
                             agent_id,
@@ -853,7 +790,7 @@ async def webhook(
                                 "event": "finished",
                                 "elapsed_time": time.time() - start_ts,
                                 "success": False,
-                            }
+                            },
                         )
                     except Exception:
                         logging.exception("Failed to append webhook trace")
@@ -866,6 +803,7 @@ async def webhook(
             return Response(content=body, status_code=status, media_type=content_type)
 
     else:  # Streaming mode
+
         async def sse():
             nonlocal canvas
             contents: list[str] = []
@@ -897,7 +835,7 @@ async def webhook(
                             "event": "finished",
                             "elapsed_time": time.time() - start_ts,
                             "success": True,
-                        }
+                        },
                     )
 
                 final_content = "".join(contents)
@@ -916,7 +854,7 @@ async def webhook(
                             "event": "error",
                             "message": str(e),
                             "error_type": type(e).__name__,
-                        }
+                        },
                     )
                     append_webhook_trace(
                         agent_id,
@@ -925,7 +863,7 @@ async def webhook(
                             "event": "finished",
                             "elapsed_time": time.time() - start_ts,
                             "success": False,
-                        }
+                        },
                     )
                 return {"code": 400, "message": str(e), "success": False}
 
@@ -949,6 +887,7 @@ async def webhook_trace(agent_id: str, request: Request):
     Returns:
         包含webhook执行事件的JSON响应
     """
+
     def encode_webhook_id(start_ts: str) -> str:
         WEBHOOK_ID_SECRET = "webhook_id_secret"
         sig = hmac.new(
@@ -997,9 +936,7 @@ async def webhook_trace(agent_id: str, request: Request):
     webhooks = obj.get("webhooks", {})
 
     if webhook_id is None:
-        candidates = [
-            float(k) for k in webhooks.keys() if float(k) > since_ts
-        ]
+        candidates = [float(k) for k in webhooks.keys() if float(k) > since_ts]
 
         if not candidates:
             return get_result(

@@ -12,36 +12,38 @@ from core.nlp import rag_tokenizer
 
 class Dealer:
     def __init__(self):
-        self.stop_words = {"请问",
-                               "您",
-                               "你",
-                               "我",
-                               "他",
-                               "是",
-                               "的",
-                               "就",
-                               "有",
-                               "于",
-                               "及",
-                               "即",
-                               "在",
-                               "为",
-                               "最",
-                               "从",
-                               "以",
-                               "了",
-                               "将",
-                               "与",
-                               "吗",
-                               "吧",
-                               "中",
-                               "#",
-                               "什么",
-                               "怎么",
-                               "哪个",
-                               "哪些",
-                               "啥",
-                               "相关"}
+        self.stop_words = {
+            "请问",
+            "您",
+            "你",
+            "我",
+            "他",
+            "是",
+            "的",
+            "就",
+            "有",
+            "于",
+            "及",
+            "即",
+            "在",
+            "为",
+            "最",
+            "从",
+            "以",
+            "了",
+            "将",
+            "与",
+            "吗",
+            "吧",
+            "中",
+            "#",
+            "什么",
+            "怎么",
+            "哪个",
+            "哪些",
+            "啥",
+            "相关",
+        }
 
         def load_dict(fnm):
             res = {}
@@ -76,19 +78,15 @@ class Dealer:
             logging.warning("Load term.freq FAIL!")
 
     def pretoken(self, txt, num=False, stpwd=True):
-        patt = [
-            r"[~—\t @#%!<>,\.\?\":;'\{\}\[\]_=\(\)\|，。？》•●○↓《；‘’：“”【¥ 】…￥！、·（）×`&\\/「」\\]"
-        ]
-        rewt = [
-        ]
+        patt = [r"[~—\t @#%!<>,\.\?\":;'\{\}\[\]_=\(\)\|，。？》•●○↓《；‘’：“”【¥ 】…￥！、·（）×`&\\/「」\\]"]
+        rewt = []
         for p, r in rewt:
             txt = re.sub(p, r, txt)
 
         res = []
         for t in rag_tokenizer.tokenize(txt).split():
             tk = t
-            if (stpwd and tk in self.stop_words) or (
-                    re.match(r"[0-9]$", tk) and not num):
+            if (stpwd and tk in self.stop_words) or (re.match(r"[0-9]$", tk) and not num):
                 continue
             for p in patt:
                 if re.match(p, t):
@@ -106,21 +104,19 @@ class Dealer:
         res, i = [], 0
         while i < len(tks):
             j = i
-            if i == 0 and one_term(tks[i]) and len(
-                    tks) > 1 and (len(tks[i + 1]) > 1 and not re.match(r"[0-9a-zA-Z]", tks[i + 1])):  # 多 工位
+            if i == 0 and one_term(tks[i]) and len(tks) > 1 and (len(tks[i + 1]) > 1 and not re.match(r"[0-9a-zA-Z]", tks[i + 1])):  # 多 工位
                 res.append(" ".join(tks[0:2]))
                 i = 2
                 continue
 
-            while j < len(
-                    tks) and tks[j] and tks[j] not in self.stop_words and one_term(tks[j]):
+            while j < len(tks) and tks[j] and tks[j] not in self.stop_words and one_term(tks[j]):
                 j += 1
             if j - i > 1:
                 if j - i < 5:
                     res.append(" ".join(tks[i:j]))
                     i = j
                 else:
-                    res.append(" ".join(tks[i:i + 2]))
+                    res.append(" ".join(tks[i : i + 2]))
                     i = i + 2
             else:
                 if len(tks[i]) > 0:
@@ -157,8 +153,7 @@ class Dealer:
                 return 0.01
             if not self.ne or t not in self.ne:
                 return 1
-            m = {"toxic": 2, "func": 1, "corp": 3, "loca": 3, "sch": 3, "stock": 3,
-                 "firstnm": 1}
+            m = {"toxic": 2, "func": 1, "corp": 3, "loca": 3, "sch": 3, "stock": 3, "firstnm": 1}
             return m[self.ne[t]]
 
         def postag(t):
@@ -185,7 +180,7 @@ class Dealer:
             if not s and len(t) >= 4:
                 s = [tt for tt in rag_tokenizer.fine_grained_tokenize(t).split() if len(tt) > 1]
                 if len(s) > 1:
-                    s = np.min([freq(tt) for tt in s]) / 6.
+                    s = np.min([freq(tt) for tt in s]) / 6.0
                 else:
                     s = 0
 
@@ -201,7 +196,7 @@ class Dealer:
             elif len(t) >= 4:
                 s = [tt for tt in rag_tokenizer.fine_grained_tokenize(t).split() if len(tt) > 1]
                 if len(s) > 1:
-                    return max(3, np.min([df(tt) for tt in s]) / 6.)
+                    return max(3, np.min([df(tt) for tt in s]) / 6.0)
 
             return 3
 

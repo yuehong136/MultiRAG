@@ -25,7 +25,7 @@ def parse_template(template: str, values: dict[str, Any]) -> str:
     def get_nested_value(key_path: str, data: dict[str, Any]) -> str | Any:
         """Helper function to get nested dictionary values."""
         # Handle array index access (e.g., key[0])
-        array_index_match = re.match(r'(.+)\[(\d+)\]$', key_path)
+        array_index_match = re.match(r"(.+)\[(\d+)\]$", key_path)
         if array_index_match:
             key = array_index_match.group(1)
             index = int(array_index_match.group(2))
@@ -35,8 +35,8 @@ def parse_template(template: str, values: dict[str, Any]) -> str:
                 return f"{{{{Invalid array index: {key_path}}}}}"
 
         # Handle nested dictionary access (e.g., key.subkey)
-        if '.' in key_path:
-            parts = key_path.split('.')
+        if "." in key_path:
+            parts = key_path.split(".")
             current = data
             for part in parts:
                 if isinstance(current, dict):
@@ -61,10 +61,11 @@ def parse_template(template: str, values: dict[str, Any]) -> str:
         return str(value)
 
     # Find all placeholders {{...}} and replace them
-    pattern = r'\{\{([^}]+)\}\}'
+    pattern = r"\{\{([^}]+)\}\}"
     result = re.sub(pattern, replace_placeholder, template)
 
     return result
+
 
 # # Example usage and test cases
 # if __name__ == "__main__":

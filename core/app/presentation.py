@@ -61,12 +61,7 @@ class Pdf(PdfParser):
             global_page_num = b["page_number"] + from_page
             if not (from_page < global_page_num <= to_page + from_page):
                 continue
-            page_items[global_page_num].append({
-                "top": b["top"],
-                "x0": b["x0"],
-                "text": b["text"],
-                "type": "text"
-            })
+            page_items[global_page_num].append({"top": b["top"], "x0": b["x0"], "text": b["text"], "type": "text"})
 
         # (B) Add table and figure
         for (img, content), positions in tbls:
@@ -97,12 +92,7 @@ class Pdf(PdfParser):
             top = positions[0][3]
             left = positions[0][1]
 
-            page_items[current_page_num].append({
-                "top": top,
-                "x0": left,
-                "text": final_text,
-                "type": "table_or_figure"
-            })
+            page_items[current_page_num].append({"top": top, "x0": left, "text": final_text, "type": "table_or_figure"})
 
         # 7. Generate result
         res = []
@@ -126,7 +116,7 @@ class PlainPdf(PlainParser):
     def __call__(self, filename, binary=None, from_page=0, to_page=100000, callback=None, **kwargs):
         self.pdf = pdf2_read(filename if not binary else BytesIO(binary))
         page_txt = []
-        for page in self.pdf.pages[from_page: to_page]:
+        for page in self.pdf.pages[from_page:to_page]:
             page_txt.append(page.extract_text())
         callback(0.9, "Parsing finished")
         return [(txt, None) for txt in page_txt], []
@@ -141,10 +131,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
     if parser_config is None:
         parser_config = {}
     eng = lang.lower() == "english"
-    doc = {
-        "docnm_kwd": filename,
-        "title_tks": rag_tokenizer.tokenize(re.sub(r"\.[a-zA-Z]+$", "", filename))
-    }
+    doc = {"docnm_kwd": filename, "title_tks": rag_tokenizer.tokenize(re.sub(r"\.[a-zA-Z]+$", "", filename))}
     doc["title_sm_tks"] = rag_tokenizer.fine_grained_tokenize(doc["title_tks"])
     res = []
     if re.search(r"\.pptx?$", filename, re.IGNORECASE):
@@ -205,9 +192,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
             logging.warning(error_msg)
             raise NotImplementedError(error_msg)
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
-        layout_recognizer, parser_model_name = normalize_layout_recognizer(
-            parser_config.get("layout_recognize", "DeepDOC")
-        )
+        layout_recognizer, parser_model_name = normalize_layout_recognizer(parser_config.get("layout_recognize", "DeepDOC"))
 
         if isinstance(layout_recognizer, bool):
             layout_recognizer = "DeepDOC" if layout_recognizer else "Plain Text"

@@ -4,6 +4,7 @@ Reference:
  - [LightRag](https://github.com/HKUDS/LightRAG)
  - [MiniRAG](https://github.com/HKUDS/MiniRAG)
 """
+
 PROMPTS = {}
 
 PROMPTS["minirag_query2kwd"] = """---Role---

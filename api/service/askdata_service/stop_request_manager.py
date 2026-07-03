@@ -193,21 +193,11 @@ class StopRequestManager:
                     if current_time - stop_time > self._expire_seconds:
                         expired_count += 1
 
-                return {
-                    "total_records": total_records,
-                    "active_records": total_records - expired_count,
-                    "expired_records": expired_count,
-                    "expire_seconds": self._expire_seconds
-                }
+                return {"total_records": total_records, "active_records": total_records - expired_count, "expired_records": expired_count, "expire_seconds": self._expire_seconds}
 
         except Exception as e:
             logger.error(f"获取统计信息时发生错误: {e!s}")
-            return {
-                "total_records": 0,
-                "active_records": 0,
-                "expired_records": 0,
-                "expire_seconds": self._expire_seconds
-            }
+            return {"total_records": 0, "active_records": 0, "expired_records": 0, "expire_seconds": self._expire_seconds}
 
 
 # 创建全局实例

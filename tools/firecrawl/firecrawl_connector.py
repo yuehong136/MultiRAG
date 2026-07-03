@@ -59,17 +59,10 @@ class FirecrawlConnector:
 
     async def _create_session(self):
         """Create aiohttp session with proper headers."""
-        headers = {
-            "Authorization": f"Bearer {self.config.api_key}",
-            "Content-Type": "application/json",
-            "User-Agent": "MultiRAG-Firecrawl-Plugin/1.0.0"
-        }
+        headers = {"Authorization": f"Bearer {self.config.api_key}", "Content-Type": "application/json", "User-Agent": "MultiRAG-Firecrawl-Plugin/1.0.0"}
 
         timeout = aiohttp.ClientTimeout(total=self.config.timeout)
-        self.session = aiohttp.ClientSession(
-            headers=headers,
-            timeout=timeout
-        )
+        self.session = aiohttp.ClientSession(headers=headers, timeout=timeout)
 
     async def _close_session(self):
         """Close aiohttp session."""
@@ -88,7 +81,7 @@ class FirecrawlConnector:
                 try:
                     async with self.session.request(method, url, **kwargs) as response:
                         if response.status == 429:  # Rate limited
-                            wait_time = 2 ** attempt
+                            wait_time = 2**attempt
                             self.logger.warning(f"Rate limited, waiting {wait_time}s")
                             await asyncio.sleep(wait_time)
                             continue
@@ -100,20 +93,16 @@ class FirecrawlConnector:
                     self.logger.error(f"Request failed (attempt {attempt + 1}): {e}")
                     if attempt == self.config.max_retries - 1:
                         raise
-                    await asyncio.sleep(2 ** attempt)
+                    await asyncio.sleep(2**attempt)
 
             raise Exception("Max retries exceeded")
 
-    async def scrape_url(self, url: str, formats: list[str] = None,
-                        extract_options: dict[str, Any] = None) -> ScrapedContent:
+    async def scrape_url(self, url: str, formats: list[str] = None, extract_options: dict[str, Any] = None) -> ScrapedContent:
         """Scrape a single URL."""
         if formats is None:
             formats = ["markdown", "html"]
 
-        payload = {
-            "url": url,
-            "formats": formats
-        }
+        payload = {"url": url, "formats": formats}
 
         if extract_options:
             payload["extractOptions"] = extract_options
@@ -134,34 +123,25 @@ class FirecrawlConnector:
                 metadata=metadata,
                 title=metadata.get("title"),
                 description=metadata.get("description"),
-                status_code=metadata.get("statusCode")
+                status_code=metadata.get("statusCode"),
             )
 
         except Exception as e:
             self.logger.error(f"Failed to scrape {url}: {e}")
             return ScrapedContent(url=url, error=str(e))
 
-    async def start_crawl(self, url: str, limit: int = 100,
-                         scrape_options: dict[str, Any] = None) -> CrawlJob:
+    async def start_crawl(self, url: str, limit: int = 100, scrape_options: dict[str, Any] = None) -> CrawlJob:
         """Start a crawl job."""
         if scrape_options is None:
             scrape_options = {"formats": ["markdown", "html"]}
 
-        payload = {
-            "url": url,
-            "limit": limit,
-            "scrapeOptions": scrape_options
-        }
+        payload = {"url": url, "limit": limit, "scrapeOptions": scrape_options}
 
         try:
             response = await self._make_request("POST", "/v2/crawl", json=payload)
 
             if not response.get("success"):
-                return CrawlJob(
-                    job_id="",
-                    status="failed",
-                    error=response.get("error", "Unknown error")
-                )
+                return CrawlJob(job_id="", status="failed", error=response.get("error", "Unknown error"))
 
             job_id = response.get("id")
             return CrawlJob(job_id=job_id, status="started")
@@ -176,11 +156,7 @@ class FirecrawlConnector:
             response = await self._make_request("GET", f"/v2/crawl/{job_id}")
 
             if not response.get("success"):
-                return CrawlJob(
-                    job_id=job_id,
-                    status="failed",
-                    error=response.get("error", "Unknown error")
-                )
+                return CrawlJob(job_id=job_id, status="failed", error=response.get("error", "Unknown error"))
 
             status = response.get("status", "unknown")
             total = response.get("total")
@@ -190,30 +166,25 @@ class FirecrawlConnector:
             scraped_content = []
             for item in data:
                 metadata = item.get("metadata", {})
-                scraped_content.append(ScrapedContent(
-                    url=metadata.get("sourceURL", ""),
-                    markdown=item.get("markdown"),
-                    html=item.get("html"),
-                    metadata=metadata,
-                    title=metadata.get("title"),
-                    description=metadata.get("description"),
-                    status_code=metadata.get("statusCode")
-                ))
+                scraped_content.append(
+                    ScrapedContent(
+                        url=metadata.get("sourceURL", ""),
+                        markdown=item.get("markdown"),
+                        html=item.get("html"),
+                        metadata=metadata,
+                        title=metadata.get("title"),
+                        description=metadata.get("description"),
+                        status_code=metadata.get("statusCode"),
+                    )
+                )
 
-            return CrawlJob(
-                job_id=job_id,
-                status=status,
-                total=total,
-                completed=len(scraped_content),
-                data=scraped_content
-            )
+            return CrawlJob(job_id=job_id, status=status, total=total, completed=len(scraped_content), data=scraped_content)
 
         except Exception as e:
             self.logger.error(f"Failed to get crawl status for {job_id}: {e}")
             return CrawlJob(job_id=job_id, status="failed", error=str(e))
 
-    async def wait_for_crawl_completion(self, job_id: str,
-                                      poll_interval: int = 30) -> CrawlJob:
+    async def wait_for_crawl_completion(self, job_id: str, poll_interval: int = 30) -> CrawlJob:
         """Wait for a crawl job to complete."""
         while True:
             job = await self.get_crawl_status(job_id)
@@ -224,8 +195,7 @@ class FirecrawlConnector:
             self.logger.info(f"Crawl {job_id} status: {job.status}")
             await asyncio.sleep(poll_interval)
 
-    async def batch_scrape(self, urls: list[str],
-                          formats: list[str] = None) -> list[ScrapedContent]:
+    async def batch_scrape(self, urls: list[str], formats: list[str] = None) -> list[ScrapedContent]:
         """Scrape multiple URLs concurrently."""
         if formats is None:
             formats = ["markdown", "html"]
@@ -237,10 +207,7 @@ class FirecrawlConnector:
         processed_results = []
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                processed_results.append(ScrapedContent(
-                    url=urls[i],
-                    error=str(result)
-                ))
+                processed_results.append(ScrapedContent(url=urls[i], error=str(result)))
             else:
                 processed_results.append(result)
 

@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 class QueryIntentType(Enum):
     """查询意图类型枚举（细化版）"""
+
     # 详情查询系列
     SPECIFIC_ENTITY = "Specific Entity/Record Lookup"  # 查找特定实体/记录的详细信息
     CONDITIONAL_LIST = "Conditional List Retrieval"  # 获取满足特定条件的一组记录列表
@@ -54,7 +55,7 @@ class QueryIntentType(Enum):
     AMBIGUOUS = "Ambiguous Query"  # 问题表达不清或信息不足
 
     @classmethod
-    def get_chinese_description(cls, intent_type: 'QueryIntentType') -> str:
+    def get_chinese_description(cls, intent_type: "QueryIntentType") -> str:
         """
         获取查询意图类型的中文描述
 
@@ -69,36 +70,28 @@ class QueryIntentType(Enum):
             cls.SPECIFIC_ENTITY: "特定实体查询 - 查找特定记录的详细信息，如'张三的订单'、'产品A001的详情'",
             cls.CONDITIONAL_LIST: "条件列表查询 - 获取满足特定条件的记录列表，如'所有价格高于100元的商品'",
             cls.SIMPLE_LIST: "简单列表查询 - 获取数据表的记录列表，如'显示所有员工名单'",
-
             # 统计/聚合查询系列
             cls.COUNTING: "计数查询 - 计算满足条件的记录数量，如'有多少个活跃用户'",
             cls.SUMMATION: "求和查询 - 计算某个数值列的总和，如'本月总销售额是多少'",
             cls.AVERAGE: "平均值查询 - 计算某个数值列的平均值，如'平均订单价格是多少'",
             cls.MIN_MAX: "最值查询 - 查找最大值或最小值，如'哪个产品价格最高'",
             cls.GROUPED_AGGREGATION: "分组统计查询 - 按维度分组后进行聚合计算，如'每个部门的员工人数'",
-
             # 比较查询系列
             cls.DIRECT_COMPARISON: "直接比较查询 - 比较两个或多个实体/组的指标，如'A产品和B产品的销量哪个高'",
             cls.THRESHOLD_COMPARISON: "阈值比较查询 - 与阈值或平均值比较，如'哪些产品的利润率高于20%'",
-
             # 排序/排名查询系列
             cls.TOP_BOTTOM_N: "TopN/BottomN查询 - 找出排在前面或后面的N条记录，如'销量最高的10个产品'",
             cls.SIMPLE_ORDERING: "简单排序查询 - 按特定字段排序，如'按价格从低到高显示所有商品'",
-
             # 趋势/时间序列分析
             cls.TIME_SERIES: "时间序列分析 - 分析指标随时间的变化情况，如'过去一年月度销售额变化趋势'",
-
             # 存在性/布尔查询
             cls.EXISTENCE: "存在性查询 - 确认条件是否满足，如'张三有没有下过单'",
-
             # 关联/复杂查询
             cls.RELATIONAL: "关联复杂查询 - 涉及多表关联或复杂逻辑，如'购买了A产品也购买了B产品的客户'",
-
             # 元数据查询
             cls.METADATA: "元数据查询 - 询问表结构、字段含义等，如'用户表有哪些字段'",
-
             # 模糊查询
-            cls.AMBIGUOUS: "模糊查询 - 问题表达不清或信息不足，如'那个数据怎么样了'"
+            cls.AMBIGUOUS: "模糊查询 - 问题表达不清或信息不足，如'那个数据怎么样了'",
         }
 
         return descriptions.get(intent_type, "未知查询类型")
@@ -115,7 +108,7 @@ class QueryIntentType(Enum):
             匹配的枚举值，如果没有匹配则返回None
         """
         # 标准化字符串（移除多余空格、引号等）
-        normalized = intent_str.strip().strip('"\'').strip()
+        normalized = intent_str.strip().strip("\"'").strip()
 
         # 尝试直接匹配枚举值
         for intent_type in cls:
@@ -150,8 +143,8 @@ class QueryIntentAnalyzer:
     """负责分析和识别用户自然语言查询意图的服务类"""
 
     # 编译正则表达式以提高性能
-    JSON_PATTERN = re.compile(r'```json\s*([\s\S]*?)```')
-    LIST_PATTERN = re.compile(r'\[(.*?)]')  # 方括号在字符类外不需要转义
+    JSON_PATTERN = re.compile(r"```json\s*([\s\S]*?)```")
+    LIST_PATTERN = re.compile(r"\[(.*?)]")  # 方括号在字符类外不需要转义
     QUOTED_ITEM_PATTERN = re.compile(r'"([^"]*)"')
 
     def __init__(self, db: Session, user_id: Any, prompt_dir: str = None):
@@ -207,20 +200,20 @@ class QueryIntentAnalyzer:
                 return [item.strip() for item in items], True
 
             # 如果没有引号，则按逗号分隔
-            items = [item.strip() for item in items_str.split(',') if item.strip()]
+            items = [item.strip() for item in items_str.split(",") if item.strip()]
             if items:
                 return items, True
 
         # 尝试从逗号分隔的字符串中提取，如 "List/Detail Query", "Temporal Trend/Periodic Query"
         if "," in response:
             items = []
-            for item in response.split(','):
+            for item in response.split(","):
                 # 提取引号中的内容或直接使用清理后的文本
                 quoted_items = self.QUOTED_ITEM_PATTERN.findall(item)
                 if quoted_items:
                     items.extend([qi.strip() for qi in quoted_items])
                 else:
-                    cleaned_item = item.strip().strip('"\'')
+                    cleaned_item = item.strip().strip("\"'")
                     if cleaned_item:
                         items.append(cleaned_item)
 
@@ -228,13 +221,13 @@ class QueryIntentAnalyzer:
                 return items, True
 
         # 如果上述方法都失败了，尝试按行分割
-        lines = [line.strip() for line in response.split('\n')]
+        lines = [line.strip() for line in response.split("\n")]
         cleaned_lines = []
         for line in lines:
-            if line and not line.startswith('```') and not line.endswith('```'):
+            if line and not line.startswith("```") and not line.endswith("```"):
                 # 移除可能的列表标记、引号等
-                cleaned_line = re.sub(r'^[*\-\d.\s]+', '', line).strip()
-                cleaned_line = cleaned_line.strip('"\'').strip()
+                cleaned_line = re.sub(r"^[*\-\d.\s]+", "", line).strip()
+                cleaned_line = cleaned_line.strip("\"'").strip()
                 if cleaned_line:
                     cleaned_lines.append(cleaned_line)
 
@@ -308,28 +301,16 @@ class QueryIntentAnalyzer:
             prompt_template = PromptTemplateUtil.load_template_from_file(template_path)
 
             # 用查询文本填充模板
-            prompt = PromptTemplateUtil.fill_template(
-                prompt_template,
-                {"query_text": query_text}
-            )
+            prompt = PromptTemplateUtil.fill_template(prompt_template, {"query_text": query_text})
 
             # 创建包含我们提示词的对话历史
             history = [{"role": "user", "content": prompt}]
 
             # LLM配置
-            gen_conf = {
-                "temperature": 0.4,
-                "top_p": 0.9,
-                "max_tokens": 1024
-            }
+            gen_conf = {"temperature": 0.4, "top_p": 0.9, "max_tokens": 1024}
 
             # 调用LLM处理我们的提示词
-            response = await thread_pool_exec(
-                llm_model_instance.chat,
-                system="",
-                history=history,
-                gen_conf=gen_conf
-            )
+            response = await thread_pool_exec(llm_model_instance.chat, system="", history=history, gen_conf=gen_conf)
 
             # 提取和处理响应
             extracted_data, success = self._extract_data_from_response(response)
@@ -368,11 +349,13 @@ class QueryIntentAnalyzer:
         result = []
 
         for intent in intents:
-            result.append({
-                "intent_type": intent.name,  # 枚举名称，如 SPECIFIC_ENTITY
-                "intent_label": intent.value,  # 英文标签，如 "Specific Entity/Record Lookup"
-                "description": QueryIntentType.get_chinese_description(intent)  # 中文描述
-            })
+            result.append(
+                {
+                    "intent_type": intent.name,  # 枚举名称，如 SPECIFIC_ENTITY
+                    "intent_label": intent.value,  # 英文标签，如 "Specific Entity/Record Lookup"
+                    "description": QueryIntentType.get_chinese_description(intent),  # 中文描述
+                }
+            )
 
         return result
 
@@ -386,10 +369,12 @@ class QueryIntentAnalyzer:
         result = []
 
         for intent in QueryIntentType:
-            result.append({
-                "intent_type": intent.name,  # 枚举名称
-                "intent_label": intent.value,  # 英文标签
-                "description": QueryIntentType.get_chinese_description(intent)  # 中文描述
-            })
+            result.append(
+                {
+                    "intent_type": intent.name,  # 枚举名称
+                    "intent_label": intent.value,  # 英文标签
+                    "description": QueryIntentType.get_chinese_description(intent),  # 中文描述
+                }
+            )
 
         return result

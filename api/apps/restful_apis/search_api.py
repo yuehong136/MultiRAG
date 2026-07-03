@@ -9,6 +9,7 @@ Routes are mounted under ``/api/v1`` by ``api.apps.register_page``:
 
 The legacy ``/v1/search/*`` endpoints remain in ``api/apps/search_app.py``.
 """
+
 from __future__ import annotations
 
 import logging
@@ -102,17 +103,13 @@ def _list_searches(
     owner_ids = owner_ids or []
 
     if not owner_ids:
-        search_apps, total = SearchService.get_by_tenant_ids(
-            db, [], tenant_id, page, page_size, orderby, desc, keywords
-        )
+        search_apps, total = SearchService.get_by_tenant_ids(db, [], tenant_id, page, page_size, orderby, desc, keywords)
     else:
-        search_apps, _ = SearchService.get_by_tenant_ids(
-            db, owner_ids, tenant_id, 0, 0, orderby, desc, keywords
-        )
+        search_apps, _ = SearchService.get_by_tenant_ids(db, owner_ids, tenant_id, 0, 0, orderby, desc, keywords)
         search_apps = [search_app for search_app in search_apps if search_app["tenant_id"] in owner_ids]
         total = len(search_apps)
         if page and page_size:
-            search_apps = search_apps[(page - 1) * page_size: page * page_size]
+            search_apps = search_apps[(page - 1) * page_size : page * page_size]
 
     return True, {"search_apps": search_apps, "total": total}, None
 
@@ -159,9 +156,7 @@ def _update_search(
         return False, f"Cannot find search {search_id}", RetCode.DATA_ERROR
 
     if req["name"].lower() != search_app.name.lower():
-        existing_searches = SearchService.query(
-            db, name=req["name"], tenant_id=tenant_id, status=StatusEnum.VALID.value
-        )
+        existing_searches = SearchService.query(db, name=req["name"], tenant_id=tenant_id, status=StatusEnum.VALID.value)
         if existing_searches:
             return False, "Duplicated search name.", RetCode.DATA_ERROR
 
@@ -257,9 +252,7 @@ def update_search(
     tenant_id: str = Depends(current_tenant_id),
 ):
     try:
-        success, result, retcode = _update_search(
-            db, tenant_id, search_id, request.model_dump(exclude_unset=True)
-        )
+        success, result, retcode = _update_search(db, tenant_id, search_id, request.model_dump(exclude_unset=True))
         return _respond(success, result, retcode)
     except Exception as e:
         logger.exception(e)

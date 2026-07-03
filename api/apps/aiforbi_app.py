@@ -100,8 +100,7 @@ async def chart_type(body: ChartTypeReqBody = Body(...), db: Session = Depends(g
 
 
 @router.post("/dynamic-chart-option-function", summary="动态生成图表配置", response_description="成功生成动态图表配置函数")
-async def dynamic_chart_option_function(body: DynamicChartOptionFunctionReqBody = Body(...),
-                                        db: Session = Depends(get_db), user=Depends(manager)):
+async def dynamic_chart_option_function(body: DynamicChartOptionFunctionReqBody = Body(...), db: Session = Depends(get_db), user=Depends(manager)):
     """
     动态图表选项生成接口
 
@@ -121,14 +120,12 @@ async def dynamic_chart_option_function(body: DynamicChartOptionFunctionReqBody 
       - status: 操作状态（成功/失败）
       - data: 生成的动态图表选项函数
     """
-    func = await AIForBIService.dynamic_chart_option_function(dynamic_chart_option_function_req_body=body, db=db,
-                                                              user_id=user.id, llm_name=body.llm_name)
+    func = await AIForBIService.dynamic_chart_option_function(dynamic_chart_option_function_req_body=body, db=db, user_id=user.id, llm_name=body.llm_name)
     return ResponseSchema(data=func)
 
 
 @router.post("/static-chart-option", summary="静态生成图表配置", response_description="成功生成静态图表配置")
-async def static_chart_option(body: StaticChartOptionReqBody = Body(...),
-                                        db: Session = Depends(get_db), user=Depends(manager)):
+async def static_chart_option(body: StaticChartOptionReqBody = Body(...), db: Session = Depends(get_db), user=Depends(manager)):
     """
     静态生成图表配置的接口。
 
@@ -148,6 +145,5 @@ async def static_chart_option(body: StaticChartOptionReqBody = Body(...),
     注意：
     - 静态图表配置适用于结构已确定的数据源。
     """
-    func = await AIForBIService.static_chart_option(static_chart_option_req_body=body, db=db,
-                                                    user_id=user.id, llm_name=body.llm_name)
+    func = await AIForBIService.static_chart_option(static_chart_option_req_body=body, db=db, user_id=user.id, llm_name=body.llm_name)
     return ResponseSchema(data=func)

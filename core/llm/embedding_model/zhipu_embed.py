@@ -23,8 +23,7 @@ class ZhipuEmbed(Base):
             texts = [truncate(t, MAX_LEN) for t in texts]
 
         for txt in texts:
-            res = self.client.embeddings.create(input=txt,
-                                                model=self.model_name)
+            res = self.client.embeddings.create(input=txt, model=self.model_name)
             try:
                 arr.append(res.data[0].embedding)
                 tks_num += self.total_token_count(res)
@@ -33,8 +32,7 @@ class ZhipuEmbed(Base):
         return np.array(arr), tks_num
 
     def encode_queries(self, text):
-        res = self.client.embeddings.create(input=text,
-                                            model=self.model_name)
+        res = self.client.embeddings.create(input=text, model=self.model_name)
         try:
             return np.array(res.data[0].embedding), self.total_token_count(res)
         except Exception as _e:

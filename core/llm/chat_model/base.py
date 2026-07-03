@@ -37,6 +37,7 @@ class ReActMode(StrEnum):
     FUNCTION_CALL = "function_call"
     REACT = "react"
 
+
 ERROR_PREFIX = "**ERROR**"
 LENGTH_NOTIFICATION_CN = "······\n由于大模型的上下文窗口大小限制，回答已经被大模型截断。"
 LENGTH_NOTIFICATION_EN = "...\nThe answer is truncated by your chosen LLM due to its limitation on context length."
@@ -110,7 +111,7 @@ class Base(ABC):
             "logprobs",
             "top_logprobs",
             "extra_headers",
-            "enable_thinking"
+            "enable_thinking",
         }
 
         gen_conf = {k: v for k, v in gen_conf.items() if k in allowed_conf}
@@ -119,7 +120,7 @@ class Base(ABC):
 
     def _chat(self, history, gen_conf, **kwargs):
         logging.info("[HISTORY]" + json.dumps(history, ensure_ascii=False, indent=2))
-        if self.model_name.lower().find("qwen3") >=0:
+        if self.model_name.lower().find("qwen3") >= 0:
             kwargs["extra_body"] = {"enable_thinking": False}
         response = self.client.chat.completions.create(model=self.model_name, messages=history, **gen_conf, **kwargs)
 
@@ -142,8 +143,7 @@ class Base(ABC):
                 continue
             if not resp.choices[0].delta.content:
                 resp.choices[0].delta.content = ""
-            if kwargs.get("with_reasoning", True) and hasattr(resp.choices[0].delta, "reasoning_content") and \
-                    resp.choices[0].delta.reasoning_content:
+            if kwargs.get("with_reasoning", True) and hasattr(resp.choices[0].delta, "reasoning_content") and resp.choices[0].delta.reasoning_content:
                 ans = ""
                 if not reasoning_start:
                     reasoning_start = True
@@ -195,11 +195,7 @@ class Base(ABC):
         return f"{ERROR_PREFIX}: {error_code} - {e!s}"
 
     def _verbose_tool_use(self, name, args, res):
-        return "<tool_call>" + json.dumps({
-            "name": name,
-            "args": args,
-            "result": res
-        }, ensure_ascii=False, indent=2) + "</tool_call>"
+        return "<tool_call>" + json.dumps({"name": name, "args": args, "result": res}, ensure_ascii=False, indent=2) + "</tool_call>"
 
     def _append_history(self, hist, tool_call, tool_res):
         hist.append(
@@ -232,7 +228,7 @@ class Base(ABC):
         self.toolcall_sessions = toolcall_session
         self.tools = tools
 
-    def chat_with_tools(self, system: str, history: list, gen_conf: dict | None=None):
+    def chat_with_tools(self, system: str, history: list, gen_conf: dict | None = None):
         if gen_conf is None:
             gen_conf = {}
         if system:
@@ -245,7 +241,7 @@ class Base(ABC):
         for attempt in range(self.max_retries + 1):
             history = hist
             try:
-                for _ in range(self.max_rounds+1):
+                for _ in range(self.max_rounds + 1):
                     logging.info(f"{self.tools=}")
                     response = self.client.chat.completions.create(model=self.model_name, messages=history, tools=self.tools, tool_choice="auto", **gen_conf)
                     tk_count += self.total_token_count(response)
@@ -275,7 +271,7 @@ class Base(ABC):
                             history.append({"role": "tool", "tool_call_id": tool_call.id, "content": f"Tool call error: \n{tool_call}\nException:\n" + str(e)})
                             ans += self._verbose_tool_use(name, {}, str(e))
 
-                logging.warning( f"Exceed max rounds: {self.max_rounds}")
+                logging.warning(f"Exceed max rounds: {self.max_rounds}")
                 history.append({"role": "user", "content": f"Exceed max rounds: {self.max_rounds}"})
                 response, token_count = self._chat(history, gen_conf)
                 ans += response
@@ -352,15 +348,13 @@ class Base(ABC):
                                     final_tool_calls[index].function.arguments += tool_call.function.arguments if tool_call.function.arguments else ""
                             continue
 
-                        if any([not resp.choices, not resp.choices[0].delta,
-                                not hasattr(resp.choices[0].delta, "content")]):
+                        if any([not resp.choices, not resp.choices[0].delta, not hasattr(resp.choices[0].delta, "content")]):
                             raise Exception("500 response structure error.")
 
                         if not resp.choices[0].delta.content:
                             resp.choices[0].delta.content = ""
 
-                        if hasattr(resp.choices[0].delta, "reasoning_content") and resp.choices[
-                            0].delta.reasoning_content:
+                        if hasattr(resp.choices[0].delta, "reasoning_content") and resp.choices[0].delta.reasoning_content:
                             ans = ""
                             if not reasoning_start:
                                 reasoning_start = True
@@ -396,17 +390,14 @@ class Base(ABC):
                             yield self._verbose_tool_use(name, args, tool_response)
                         except Exception as e:
                             logging.exception(msg=f"Wrong JSON argument format in LLM tool call response: {tool_call}")
-                            history.append({"role": "tool", "tool_call_id": tool_call.id,
-                                            "content": f"Tool call error: \n{tool_call}\nException:\n" + str(e)})
+                            history.append({"role": "tool", "tool_call_id": tool_call.id, "content": f"Tool call error: \n{tool_call}\nException:\n" + str(e)})
                             yield self._verbose_tool_use(name, {}, str(e))
 
                 logging.warning(f"Exceed max rounds: {self.max_rounds}")
                 history.append({"role": "user", "content": f"Exceed max rounds: {self.max_rounds}"})
-                response = self.client.chat.completions.create(model=self.model_name, messages=history, stream=True,
-                                                               **gen_conf)
+                response = self.client.chat.completions.create(model=self.model_name, messages=history, stream=True, **gen_conf)
                 for resp in response:
-                    if any([not resp.choices, not resp.choices[0].delta,
-                            not hasattr(resp.choices[0].delta, "content")]):
+                    if any([not resp.choices, not resp.choices[0].delta, not hasattr(resp.choices[0].delta, "content")]):
                         raise Exception("500 response structure error.")
                     if not resp.choices[0].delta.content:
                         resp.choices[0].delta.content = ""
@@ -431,7 +422,7 @@ class Base(ABC):
 
         raise AssertionError("Shouldn't be here.")
 
-    def chat_streamly(self, system, history, gen_conf: dict={}, **kwargs):
+    def chat_streamly(self, system, history, gen_conf: dict = {}, **kwargs):
         if system:
             history.insert(0, {"role": "system", "content": system})
         gen_conf = self._clean_conf(gen_conf)

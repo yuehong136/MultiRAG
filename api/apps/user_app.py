@@ -105,18 +105,21 @@ class UserUpdateRequest(BaseModel):
 
 class SendOtpRequest(BaseModel):
     """发送OTP请求模型"""
+
     email: str = Field(..., description="用户邮箱地址")
     captcha: str = Field(..., description="图片验证码")
 
 
 class VerifyOtpRequest(BaseModel):
     """验证OTP请求模型"""
+
     email: str = Field(..., description="用户邮箱地址")
     otp: str = Field(..., description="邮箱验证码")
 
 
 class ResetPasswordRequest(BaseModel):
     """重置密码请求模型"""
+
     email: str = Field(..., description="用户邮箱地址")
     new_password: str = Field(..., description="新密码")
     confirm_new_password: str = Field(..., description="确认新密码")
@@ -136,19 +139,17 @@ def get_login_channels():
     try:
         channels = []
         for channel, config in settings.OAUTH_CONFIG.items():
-            channels.append({
-                "channel": channel,
-                "display_name": config.get("display_name", channel.title()),
-                "icon": config.get("icon", "sso"),
-            })
+            channels.append(
+                {
+                    "channel": channel,
+                    "display_name": config.get("display_name", channel.title()),
+                    "icon": config.get("icon", "sso"),
+                }
+            )
         return get_json_result(data=channels)
     except Exception as e:
         logging.exception(e)
-        return get_json_result(
-            data=[],
-            retmsg=f"Load channels failure, error: {e!s}",
-            retcode=RetCode.EXCEPTION_ERROR
-        )
+        return get_json_result(data=[], retmsg=f"Load channels failure, error: {e!s}", retcode=RetCode.EXCEPTION_ERROR)
 
 
 @router.post("/login", summary="登录")
@@ -170,19 +171,17 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
     email = request.username
     users = UserService.query(db, email=email)
     if not users:
-        return get_json_result(data=False,
-                               retcode=RetCode.AUTHENTICATION_ERROR,
-                               retmsg=f'Email: {email} is not registered!')
+        return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg=f"Email: {email} is not registered!")
 
     password = request.password
     try:
-        password = b64decode(decrypt(password)).decode('utf-8')
+        password = b64decode(decrypt(password)).decode("utf-8")
     except Exception:
-        return get_json_result(data=False, retcode=RetCode.SERVER_ERROR, retmsg='Fail to crypt password')
+        return get_json_result(data=False, retcode=RetCode.SERVER_ERROR, retmsg="Fail to crypt password")
 
     user = UserService.query_user(db, email, password)
 
-    if user and hasattr(user, 'is_active') and not user.is_active:
+    if user and hasattr(user, "is_active") and not user.is_active:
         return get_json_result(
             data=False,
             retcode=RetCode.FORBIDDEN,
@@ -205,9 +204,7 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
             db.rollback()
             raise HTTPException(status_code=500, detail=f"Login error: {e!s}")
     else:
-        return get_json_result(data=False,
-                               retcode=RetCode.AUTHENTICATION_ERROR,
-                               retmsg='Email and password do not match!')
+        return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg="Email and password do not match!")
 
 
 @router.get("/github_callback", summary="GitHub 回调")
@@ -249,15 +246,19 @@ async def github_callback(code: str, db: Session = Depends(get_db)):
     if not users:
         try:
             avatar = await download_img(userinfo["avatar_url"])
-            users = user_register(db, user_id, {
-                "access_token": get_uuid(),
-                "email": userinfo["email"],
-                "avatar": avatar,
-                "nickname": userinfo["login"],
-                "login_channel": "github",
-                "last_login_time": get_format_time(),
-                "is_superuser": False,
-            })
+            users = user_register(
+                db,
+                user_id,
+                {
+                    "access_token": get_uuid(),
+                    "email": userinfo["email"],
+                    "avatar": avatar,
+                    "nickname": userinfo["login"],
+                    "login_channel": "github",
+                    "last_login_time": get_format_time(),
+                    "is_superuser": False,
+                },
+            )
             if not users:
                 raise HTTPException(status_code=500, detail="Register user failure.")
             if len(users) > 1:
@@ -276,7 +277,7 @@ async def github_callback(code: str, db: Session = Depends(get_db)):
     # User exists, try to log in
     user = users[0]
     user.access_token = get_uuid()
-    if user and hasattr(user, 'is_active') and not user.is_active:
+    if user and hasattr(user, "is_active") and not user.is_active:
         return RedirectResponse(url="/?error=user_inactive")
 
     login_user(user)
@@ -309,7 +310,7 @@ async def feishu_callback(code: str, db: Session = Depends(get_db)):
         headers={"Content-Type": "application/json; charset=utf-8"},
     )
     app_access_token_res = app_access_token_res.json()
-    if app_access_token_res['code'] != 0:
+    if app_access_token_res["code"] != 0:
         return HTTPException(status_code=400, detail=app_access_token_res)
 
     res = await async_request(
@@ -325,7 +326,7 @@ async def feishu_callback(code: str, db: Session = Depends(get_db)):
         },
     )
     res = res.json()
-    if res['code'] != 0:
+    if res["code"] != 0:
         return HTTPException(status_code=400, detail=res["message"])
 
     if "contact:user.email:readonly" not in res["data"]["scope"].split():
@@ -337,15 +338,19 @@ async def feishu_callback(code: str, db: Session = Depends(get_db)):
     if not users:
         try:
             avatar = await download_img(userinfo["avatar_url"])
-            users = user_register(db, user_id, {
-                "access_token": get_uuid(),
-                "email": userinfo["email"],
-                "avatar": avatar,
-                "nickname": userinfo["en_name"],
-                "login_channel": "feishu",
-                "last_login_time": get_format_time(),
-                "is_superuser": False,
-            })
+            users = user_register(
+                db,
+                user_id,
+                {
+                    "access_token": get_uuid(),
+                    "email": userinfo["email"],
+                    "avatar": avatar,
+                    "nickname": userinfo["en_name"],
+                    "login_channel": "feishu",
+                    "last_login_time": get_format_time(),
+                    "is_superuser": False,
+                },
+            )
             if not users:
                 raise HTTPException(status_code=500, detail="Register user failure.")
             if len(users) > 1:
@@ -364,7 +369,7 @@ async def feishu_callback(code: str, db: Session = Depends(get_db)):
     # User exists, try to log in
     user = users[0]
     user.access_token = get_uuid()
-    if user and hasattr(user, 'is_active') and not user.is_active:
+    if user and hasattr(user, "is_active") and not user.is_active:
         return RedirectResponse(url="/?error=user_inactive")
     login_user(user)
     db.add(user)
@@ -523,7 +528,7 @@ async def oauth_callback(channel: str, code: str, state: str = None, request: Re
 
         # 用户已存在，尝试登录
         user = users[0]
-        if user and hasattr(user, 'is_active') and not user.is_active:
+        if user and hasattr(user, "is_active") and not user.is_active:
             return RedirectResponse(url="/?error=user_inactive")
         user.access_token = get_uuid()
         login_user(user)
@@ -585,7 +590,7 @@ def setting_user(request: UserUpdateRequest, db: Session = Depends(get_db), user
     if request_data.get("password"):
         new_password = request_data.get("new_password")
         if not UserService.verify_password(request_data["password"], user.password):
-            return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg='Password error!')
+            return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg="Password error!")
         if new_password:
             update_dict["password"] = UserService.hash_password(new_password)
 
@@ -601,7 +606,7 @@ def setting_user(request: UserUpdateRequest, db: Session = Depends(get_db), user
         return get_json_result(data=True)
     except Exception as e:
         logging.exception(e)
-        return get_json_result(data=False, retmsg='Update failure!', retcode=RetCode.EXCEPTION_ERROR)
+        return get_json_result(data=False, retmsg="Update failure!", retcode=RetCode.EXCEPTION_ERROR)
 
 
 @router.get("/info", summary="获取用户信息")
@@ -650,14 +655,9 @@ def user_register(db: Session, user_id: str, user: dict):
         "asr_id": settings.ASR_MDL,
         "parser_ids": settings.PARSERS,
         "img2txt_id": settings.IMAGE2TEXT_MDL,
-        "rerank_id": settings.RERANK_MDL
+        "rerank_id": settings.RERANK_MDL,
     }
-    usr_tenant = {
-        "tenant_id": user_id,
-        "user_id": user_id,
-        "invited_by": user_id,
-        "role": UserTenantRole.OWNER
-    }
+    usr_tenant = {"tenant_id": user_id, "user_id": user_id, "invited_by": user_id, "role": UserTenantRole.OWNER}
     file_id = get_uuid()
     file = {
         "id": file_id,
@@ -700,23 +700,18 @@ def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
     email_address = req["email"]
     # Validate the email address
     if not re.match(r"^[\w\._-]+@([\w_-]+\.)+[\w-]{2,}$", email_address):
-        return get_json_result(data=False,
-                               retmsg=f'Invalid email address: {email_address}!',
-                               retcode=RetCode.OPERATING_ERROR)
+        return get_json_result(data=False, retmsg=f"Invalid email address: {email_address}!", retcode=RetCode.OPERATING_ERROR)
 
     # Check if the email address is already used
     if UserService.query(db, email=email_address):
-        return get_json_result(
-            data=False,
-            retmsg=f'Email: {email_address} has already registered!',
-            retcode=RetCode.OPERATING_ERROR)
+        return get_json_result(data=False, retmsg=f"Email: {email_address} has already registered!", retcode=RetCode.OPERATING_ERROR)
 
     # Construct user info data
     nickname = req["nickname"]
     try:
-        decrypted_password = b64decode(decrypt(req["password"])).decode('utf-8')
+        decrypted_password = b64decode(decrypt(req["password"])).decode("utf-8")
     except Exception:
-        return get_json_result(data=False, retcode=RetCode.SERVER_ERROR, retmsg='Fail to decrypt password')
+        return get_json_result(data=False, retcode=RetCode.SERVER_ERROR, retmsg="Fail to decrypt password")
 
     user_dict = {
         "access_token": get_uuid(),
@@ -732,18 +727,16 @@ def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
     try:
         users = user_register(db, user_id, user_dict)
         if not users:
-            raise Exception(f'Fail to register {email_address}.')
+            raise Exception(f"Fail to register {email_address}.")
         if len(users) > 1:
-            raise Exception(f'Same email: {email_address} exists!')
+            raise Exception(f"Same email: {email_address} exists!")
         user = users[0]
         access_token = manager.create_access_token(data={"sub": user.email})
         return construct_response(data=user.to_dict(), auth=access_token, retmsg=f"{nickname}, welcome aboard!")
     except Exception as e:
         rollback_user_registration(db, user_id)
         logging.exception(e)
-        return get_json_result(data=False,
-                               retmsg=f'User registration failure, error: {e!s}',
-                               retcode=RetCode.EXCEPTION_ERROR)
+        return get_json_result(data=False, retmsg=f"User registration failure, error: {e!s}", retcode=RetCode.EXCEPTION_ERROR)
 
 
 @router.get("/tenant_info", summary="获取租户信息")
@@ -783,9 +776,7 @@ async def user_info_from_github(access_token: str):
         headers=headers,
     )
     email_info = email_info_response.json()
-    user_info["email"] = next(
-        (email for email in email_info if email["primary"]), None
-    )["email"]
+    user_info["email"] = next((email for email in email_info if email["primary"]), None)["email"]
     return user_info
 
 
@@ -812,19 +803,11 @@ def forget_get_captcha(email: str, db: Session = Depends(get_db)):
     - 失败时返回错误信息
     """
     if not email:
-        return get_json_result(
-            data=False,
-            retcode=RetCode.ARGUMENT_ERROR,
-            retmsg="email is required"
-        )
+        return get_json_result(data=False, retcode=RetCode.ARGUMENT_ERROR, retmsg="email is required")
 
     users = UserService.query(db, email=email)
     if not users:
-        return get_json_result(
-            data=False,
-            retcode=RetCode.DATA_ERROR,
-            retmsg="invalid email"
-        )
+        return get_json_result(data=False, retcode=RetCode.DATA_ERROR, retmsg="invalid email")
 
     # Generate captcha text
     allowed = string.ascii_uppercase + string.digits
@@ -859,34 +842,18 @@ async def forget_send_otp(request: SendOtpRequest, db: Session = Depends(get_db)
     captcha = request.captcha.strip() if request.captcha else ""
 
     if not email or not captcha:
-        return get_json_result(
-            data=False,
-            retcode=RetCode.ARGUMENT_ERROR,
-            retmsg="email and captcha required"
-        )
+        return get_json_result(data=False, retcode=RetCode.ARGUMENT_ERROR, retmsg="email and captcha required")
 
     users = UserService.query(db, email=email)
     if not users:
-        return get_json_result(
-            data=False,
-            retcode=RetCode.DATA_ERROR,
-            retmsg="invalid email"
-        )
+        return get_json_result(data=False, retcode=RetCode.DATA_ERROR, retmsg="invalid email")
 
     stored_captcha = REDIS_CONN.get(captcha_key(email))
     if not stored_captcha:
-        return get_json_result(
-            data=False,
-            retcode=RetCode.NOT_EFFECTIVE,
-            retmsg="invalid or expired captcha"
-        )
+        return get_json_result(data=False, retcode=RetCode.NOT_EFFECTIVE, retmsg="invalid or expired captcha")
 
     if (stored_captcha or "").strip().lower() != captcha.lower():
-        return get_json_result(
-            data=False,
-            retcode=RetCode.AUTHENTICATION_ERROR,
-            retmsg="invalid or expired captcha"
-        )
+        return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg="invalid or expired captcha")
 
     # Delete captcha to prevent reuse
     REDIS_CONN.delete(captcha_key(email))
@@ -903,11 +870,7 @@ async def forget_send_otp(request: SendOtpRequest, db: Session = Depends(get_db)
 
         remaining = RESEND_COOLDOWN_SECONDS - elapsed
         if remaining > 0:
-            return get_json_result(
-                data=False,
-                retcode=RetCode.NOT_EFFECTIVE,
-                retmsg=f"you still have to wait {remaining} seconds"
-            )
+            return get_json_result(data=False, retcode=RetCode.NOT_EFFECTIVE, retmsg=f"you still have to wait {remaining} seconds")
 
     # Generate OTP (uppercase letters only) and store hashed
     otp = "".join(secrets.choice(string.ascii_uppercase) for _ in range(OTP_LENGTH))
@@ -931,17 +894,9 @@ async def forget_send_otp(request: SendOtpRequest, db: Session = Depends(get_db)
         )
     except Exception as e:
         logging.exception(e)
-        return get_json_result(
-            data=False,
-            retcode=RetCode.SERVER_ERROR,
-            retmsg="failed to send email"
-        )
+        return get_json_result(data=False, retcode=RetCode.SERVER_ERROR, retmsg="failed to send email")
 
-    return get_json_result(
-        data=True,
-        retcode=RetCode.SUCCESS,
-        retmsg="verification passed, email sent"
-    )
+    return get_json_result(data=True, retcode=RetCode.SUCCESS, retmsg="verification passed, email sent")
 
 
 @router.post("/forget/verify-otp", summary="验证OTP")
@@ -965,47 +920,27 @@ def forget_verify_otp(request: VerifyOtpRequest, db: Session = Depends(get_db)):
     otp = request.otp.strip() if request.otp else ""
 
     if not all([email, otp]):
-        return get_json_result(
-            data=False,
-            retcode=RetCode.ARGUMENT_ERROR,
-            retmsg="email and otp are required"
-        )
+        return get_json_result(data=False, retcode=RetCode.ARGUMENT_ERROR, retmsg="email and otp are required")
 
     users = UserService.query(db, email=email)
     if not users:
-        return get_json_result(
-            data=False,
-            retcode=RetCode.DATA_ERROR,
-            retmsg="invalid email"
-        )
+        return get_json_result(data=False, retcode=RetCode.DATA_ERROR, retmsg="invalid email")
 
     # Verify OTP from Redis
     k_code, k_attempts, k_last, k_lock = otp_keys(email)
 
     if REDIS_CONN.get(k_lock):
-        return get_json_result(
-            data=False,
-            retcode=RetCode.NOT_EFFECTIVE,
-            retmsg="too many attempts, try later"
-        )
+        return get_json_result(data=False, retcode=RetCode.NOT_EFFECTIVE, retmsg="too many attempts, try later")
 
     stored = REDIS_CONN.get(k_code)
     if not stored:
-        return get_json_result(
-            data=False,
-            retcode=RetCode.NOT_EFFECTIVE,
-            retmsg="expired otp"
-        )
+        return get_json_result(data=False, retcode=RetCode.NOT_EFFECTIVE, retmsg="expired otp")
 
     try:
         stored_hash, salt_hex = str(stored).split(":", 1)
         salt = bytes.fromhex(salt_hex)
     except Exception:
-        return get_json_result(
-            data=False,
-            retcode=RetCode.EXCEPTION_ERROR,
-            retmsg="otp storage corrupted"
-        )
+        return get_json_result(data=False, retcode=RetCode.EXCEPTION_ERROR, retmsg="otp storage corrupted")
 
     # Case-insensitive verification: OTP generated uppercase
     calc = hash_code(otp.upper(), salt)
@@ -1021,11 +956,7 @@ def forget_verify_otp(request: VerifyOtpRequest, db: Session = Depends(get_db)):
         if attempts >= ATTEMPT_LIMIT:
             REDIS_CONN.set(k_lock, int(time.time()), ATTEMPT_LOCK_SECONDS)
 
-        return get_json_result(
-            data=False,
-            retcode=RetCode.AUTHENTICATION_ERROR,
-            retmsg="invalid otp"
-        )
+        return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg="invalid otp")
 
     # Success: consume OTP and set verified flag
     REDIS_CONN.delete(k_code)
@@ -1037,17 +968,9 @@ def forget_verify_otp(request: VerifyOtpRequest, db: Session = Depends(get_db)):
     try:
         REDIS_CONN.set(verified_key(email), "1", OTP_TTL_SECONDS)
     except Exception:
-        return get_json_result(
-            data=False,
-            retcode=RetCode.SERVER_ERROR,
-            retmsg="failed to set verification state"
-        )
+        return get_json_result(data=False, retcode=RetCode.SERVER_ERROR, retmsg="failed to set verification state")
 
-    return get_json_result(
-        data=True,
-        retcode=RetCode.SUCCESS,
-        retmsg="otp verified"
-    )
+    return get_json_result(data=True, retcode=RetCode.SUCCESS, retmsg="otp verified")
 
 
 @router.post("/forget/reset-password", summary="重置密码")
@@ -1073,33 +996,17 @@ def forget_reset_password(request: ResetPasswordRequest, db: Session = Depends(g
 
     # Check verified flag first
     if not REDIS_CONN.get(verified_key(email)):
-        return get_json_result(
-            data=False,
-            retcode=RetCode.AUTHENTICATION_ERROR,
-            retmsg="email not verified"
-        )
+        return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg="email not verified")
 
     if not all([email, new_pwd, new_pwd2]):
-        return get_json_result(
-            data=False,
-            retcode=RetCode.ARGUMENT_ERROR,
-            retmsg="email and passwords are required"
-        )
+        return get_json_result(data=False, retcode=RetCode.ARGUMENT_ERROR, retmsg="email and passwords are required")
 
     if new_pwd != new_pwd2:
-        return get_json_result(
-            data=False,
-            retcode=RetCode.ARGUMENT_ERROR,
-            retmsg="passwords do not match"
-        )
+        return get_json_result(data=False, retcode=RetCode.ARGUMENT_ERROR, retmsg="passwords do not match")
 
     users = UserService.query(db, email=email)
     if not users:
-        return get_json_result(
-            data=False,
-            retcode=RetCode.DATA_ERROR,
-            retmsg="invalid email"
-        )
+        return get_json_result(data=False, retcode=RetCode.DATA_ERROR, retmsg="invalid email")
 
     user = users[0]
 
@@ -1108,11 +1015,7 @@ def forget_reset_password(request: ResetPasswordRequest, db: Session = Depends(g
         UserService.update_user_password(db, user.id, new_pwd)
     except Exception as e:
         logging.exception(e)
-        return get_json_result(
-            data=False,
-            retcode=RetCode.EXCEPTION_ERROR,
-            retmsg="failed to reset password"
-        )
+        return get_json_result(data=False, retcode=RetCode.EXCEPTION_ERROR, retmsg="failed to reset password")
 
     # Clear verified flag
     try:
@@ -1120,8 +1023,4 @@ def forget_reset_password(request: ResetPasswordRequest, db: Session = Depends(g
     except Exception:
         pass
 
-    return get_json_result(
-        data=True,
-        retcode=RetCode.SUCCESS,
-        retmsg="Password reset successful."
-    )
+    return get_json_result(data=True, retcode=RetCode.SUCCESS, retmsg="Password reset successful.")

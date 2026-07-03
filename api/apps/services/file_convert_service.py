@@ -40,24 +40,30 @@ def convert_files(db: Session, file_ids: list[str], kb_ids: list[str], user_id: 
                 logging.warning("Knowledgebase not found for kb_id=%s, skipping insert", kb_id)
                 continue
 
-            doc = DocumentService.insert(db, {
-                "id": get_uuid(),
-                "kb_id": kb.id,
-                "parser_id": FileService.get_parser(file.type, file.name, kb.parser_id),
-                "pipeline_id": kb.pipeline_id,
-                "parser_config": kb.parser_config,
-                "created_by": user_id,
-                "type": file.type,
-                "name": file.name,
-                "suffix": Path(file.name).suffix.lstrip("."),
-                "location": file.location,
-                "size": file.size
-            })
-            File2DocumentService.insert(db, {
-                "id": get_uuid(),
-                "file_id": file_id,
-                "document_id": doc.id,
-            })
+            doc = DocumentService.insert(
+                db,
+                {
+                    "id": get_uuid(),
+                    "kb_id": kb.id,
+                    "parser_id": FileService.get_parser(file.type, file.name, kb.parser_id),
+                    "pipeline_id": kb.pipeline_id,
+                    "parser_config": kb.parser_config,
+                    "created_by": user_id,
+                    "type": file.type,
+                    "name": file.name,
+                    "suffix": Path(file.name).suffix.lstrip("."),
+                    "location": file.location,
+                    "size": file.size,
+                },
+            )
+            File2DocumentService.insert(
+                db,
+                {
+                    "id": get_uuid(),
+                    "file_id": file_id,
+                    "document_id": doc.id,
+                },
+            )
 
 
 def convert_files_with_new_session(file_ids: list[str], kb_ids: list[str], user_id: str) -> None:

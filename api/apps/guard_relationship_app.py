@@ -5,6 +5,7 @@
 @date：2025/01/11 18:40
 @desc: AI安全护栏关系管理接口
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -24,6 +25,7 @@ router = APIRouter()
 
 class BindServiceLibraryRequest(BaseModel):
     """服务词库绑定请求模型"""
+
     service_id: str = Field(..., description="服务ID")
     library_id: str = Field(..., description="词库ID")
     priority: int = Field(0, description="优先级")
@@ -33,6 +35,7 @@ class BindServiceLibraryRequest(BaseModel):
 
 class BindLabelLibraryRequest(BaseModel):
     """标签词库绑定请求模型"""
+
     label_id: str = Field(..., description="标签ID")
     library_id: str = Field(..., description="词库ID")
     priority: int = Field(0, description="优先级")
@@ -41,6 +44,7 @@ class BindLabelLibraryRequest(BaseModel):
 
 class BatchBindRequest(BaseModel):
     """批量绑定请求模型"""
+
     target_id: str = Field(..., description="目标ID（服务ID或标签ID）")
     library_ids: list[str] = Field(..., description="词库ID列表")
     library_type: str | None = Field(None, description="词库类型: blacklist/whitelist/reply/pattern/custom")
@@ -48,18 +52,15 @@ class BatchBindRequest(BaseModel):
 
 class UpdateBindingRequest(BaseModel):
     """更新绑定请求模型"""
+
     binding_id: str = Field(..., description="绑定关系ID")
     priority: int | None = Field(None, description="优先级")
     enabled: bool | None = Field(None, description="是否启用")
 
 
 # 服务词库关系管理
-@router.post('/service-library/bind', summary="绑定词库到服务")
-def bind_service_library(
-    request: BindServiceLibraryRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/service-library/bind", summary="绑定词库到服务")
+def bind_service_library(request: BindServiceLibraryRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     绑定词库到服务
 
@@ -80,7 +81,7 @@ def bind_service_library(
             enabled=request.enabled,
             library_type=request.library_type,
             tenant_id=user.id,
-            created_by=user.id
+            created_by=user.id,
         )
 
         if binding_id:
@@ -92,13 +93,8 @@ def bind_service_library(
         return server_error_response(e)
 
 
-@router.get('/service-library/service/{service_id}', summary="获取服务绑定的词库")
-def get_service_libraries(
-    service_id: str,
-    enabled_only: bool = True,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/service-library/service/{service_id}", summary="获取服务绑定的词库")
+def get_service_libraries(service_id: str, enabled_only: bool = True, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     获取服务绑定的词库列表
 
@@ -112,9 +108,7 @@ def get_service_libraries(
         dict[str, Any]: 词库列表
     """
     try:
-        libraries = GuardServiceLibraryService.get_libraries_by_service(
-            db, service_id, enabled_only
-        )
+        libraries = GuardServiceLibraryService.get_libraries_by_service(db, service_id, enabled_only)
 
         return get_json_result(data=libraries)
 
@@ -122,13 +116,8 @@ def get_service_libraries(
         return server_error_response(e)
 
 
-@router.get('/service-library/library/{library_id}', summary="获取使用词库的服务")
-def get_library_services(
-    library_id: str,
-    enabled_only: bool = True,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/service-library/library/{library_id}", summary="获取使用词库的服务")
+def get_library_services(library_id: str, enabled_only: bool = True, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     获取使用词库的服务列表
 
@@ -142,9 +131,7 @@ def get_library_services(
         dict[str, Any]: 服务列表
     """
     try:
-        services = GuardServiceLibraryService.get_services_by_library(
-            db, library_id, enabled_only
-        )
+        services = GuardServiceLibraryService.get_services_by_library(db, library_id, enabled_only)
 
         return get_json_result(data=services)
 
@@ -152,12 +139,8 @@ def get_library_services(
         return server_error_response(e)
 
 
-@router.post('/service-library/batch-bind', summary="批量绑定词库到服务")
-def batch_bind_service_libraries(
-    request: BatchBindRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/service-library/batch-bind", summary="批量绑定词库到服务")
+def batch_bind_service_libraries(request: BatchBindRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### POST `/service-library/batch-bind` 批量绑定词库到服务
 
@@ -231,10 +214,7 @@ def batch_bind_service_libraries(
     ```
     """
     try:
-        result = GuardServiceLibraryService.batch_bind_libraries(
-            db, request.target_id, request.library_ids,
-            tenant_id=user.id, created_by=user.id, library_type=request.library_type
-        )
+        result = GuardServiceLibraryService.batch_bind_libraries(db, request.target_id, request.library_ids, tenant_id=user.id, created_by=user.id, library_type=request.library_type)
 
         return get_json_result(data=result)
 
@@ -242,13 +222,8 @@ def batch_bind_service_libraries(
         return server_error_response(e)
 
 
-@router.delete('/service-library/unbind', summary="解绑服务词库")
-def unbind_service_library(
-    service_id: str,
-    library_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.delete("/service-library/unbind", summary="解绑服务词库")
+def unbind_service_library(service_id: str, library_id: str, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     解绑服务词库关系
 
@@ -262,9 +237,7 @@ def unbind_service_library(
         dict[str, Any]: 解绑结果
     """
     try:
-        success = GuardServiceLibraryService.unbind_library_from_service(
-            db, service_id, library_id
-        )
+        success = GuardServiceLibraryService.unbind_library_from_service(db, service_id, library_id)
 
         if success:
             return get_json_result(data=True)
@@ -276,12 +249,8 @@ def unbind_service_library(
 
 
 # 标签词库关系管理
-@router.post('/label-library/bind', summary="绑定词库到标签")
-def bind_label_library(
-    request: BindLabelLibraryRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/label-library/bind", summary="绑定词库到标签")
+def bind_label_library(request: BindLabelLibraryRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     绑定词库到标签
 
@@ -295,13 +264,7 @@ def bind_label_library(
     """
     try:
         binding_id = GuardLabelLibraryService.bind_library_to_label(
-            db=db,
-            label_id=request.label_id,
-            library_id=request.library_id,
-            priority=request.priority,
-            enabled=request.enabled,
-            tenant_id=user.id,
-            created_by=user.id
+            db=db, label_id=request.label_id, library_id=request.library_id, priority=request.priority, enabled=request.enabled, tenant_id=user.id, created_by=user.id
         )
 
         if binding_id:
@@ -313,13 +276,8 @@ def bind_label_library(
         return server_error_response(e)
 
 
-@router.get('/label-library/label/{label_id}', summary="获取标签绑定的词库")
-def get_label_libraries(
-    label_id: str,
-    enabled_only: bool = True,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/label-library/label/{label_id}", summary="获取标签绑定的词库")
+def get_label_libraries(label_id: str, enabled_only: bool = True, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     获取标签绑定的词库列表
 
@@ -333,9 +291,7 @@ def get_label_libraries(
         dict[str, Any]: 词库列表
     """
     try:
-        libraries = GuardLabelLibraryService.get_libraries_by_label(
-            db, label_id, enabled_only
-        )
+        libraries = GuardLabelLibraryService.get_libraries_by_label(db, label_id, enabled_only)
 
         return get_json_result(data=libraries)
 
@@ -343,13 +299,8 @@ def get_label_libraries(
         return server_error_response(e)
 
 
-@router.get('/label-library/library/{library_id}', summary="获取使用词库的标签")
-def get_library_labels(
-    library_id: str,
-    enabled_only: bool = True,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/label-library/library/{library_id}", summary="获取使用词库的标签")
+def get_library_labels(library_id: str, enabled_only: bool = True, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     获取使用词库的标签列表
 
@@ -363,9 +314,7 @@ def get_library_labels(
         dict[str, Any]: 标签列表
     """
     try:
-        labels = GuardLabelLibraryService.get_labels_by_library(
-            db, library_id, enabled_only
-        )
+        labels = GuardLabelLibraryService.get_labels_by_library(db, library_id, enabled_only)
 
         return get_json_result(data=labels)
 
@@ -373,12 +322,8 @@ def get_library_labels(
         return server_error_response(e)
 
 
-@router.post('/label-library/batch-bind', summary="批量绑定词库到标签")
-def batch_bind_label_libraries(
-    request: BatchBindRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/label-library/batch-bind", summary="批量绑定词库到标签")
+def batch_bind_label_libraries(request: BatchBindRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     批量绑定词库到标签
 
@@ -391,10 +336,7 @@ def batch_bind_label_libraries(
         dict[str, Any]: 绑定结果
     """
     try:
-        result = GuardLabelLibraryService.batch_bind_libraries(
-            db, request.target_id, request.library_ids,
-            tenant_id=user.id, created_by=user.id
-        )
+        result = GuardLabelLibraryService.batch_bind_libraries(db, request.target_id, request.library_ids, tenant_id=user.id, created_by=user.id)
 
         return get_json_result(data=result)
 
@@ -402,13 +344,8 @@ def batch_bind_label_libraries(
         return server_error_response(e)
 
 
-@router.delete('/label-library/unbind', summary="解绑标签词库")
-def unbind_label_library(
-    label_id: str,
-    library_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.delete("/label-library/unbind", summary="解绑标签词库")
+def unbind_label_library(label_id: str, library_id: str, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     解绑标签词库关系
 
@@ -422,9 +359,7 @@ def unbind_label_library(
         dict[str, Any]: 解绑结果
     """
     try:
-        success = GuardLabelLibraryService.unbind_library_from_label(
-            db, label_id, library_id
-        )
+        success = GuardLabelLibraryService.unbind_library_from_label(db, label_id, library_id)
 
         if success:
             return get_json_result(data=True)
@@ -436,12 +371,12 @@ def unbind_label_library(
 
 
 # 通用绑定管理
-@router.put('/binding/update', summary="更新绑定关系")
+@router.put("/binding/update", summary="更新绑定关系")
 def update_binding(
     request: UpdateBindingRequest,
     binding_type: str,  # service-library 或 label-library
     db: Session = Depends(get_db),
-    user=Depends(manager)
+    user=Depends(manager),
 ) -> dict[str, Any]:
     """
     更新绑定关系
@@ -456,17 +391,12 @@ def update_binding(
         dict[str, Any]: 更新结果
     """
     try:
-        update_data = {k: v for k, v in request.model_dump().items()
-                      if v is not None and k != "binding_id"}
+        update_data = {k: v for k, v in request.model_dump().items() if v is not None and k != "binding_id"}
 
         if binding_type == "service-library":
-            success = GuardServiceLibraryService.update_binding(
-                db, request.binding_id, update_data
-            )
+            success = GuardServiceLibraryService.update_binding(db, request.binding_id, update_data)
         elif binding_type == "label-library":
-            success = GuardLabelLibraryService.update_binding(
-                db, request.binding_id, update_data
-            )
+            success = GuardLabelLibraryService.update_binding(db, request.binding_id, update_data)
         else:
             return get_data_error_result(retmsg="无效的绑定类型")
 
@@ -479,11 +409,8 @@ def update_binding(
         return server_error_response(e)
 
 
-@router.get('/stats', summary="获取关系统计")
-def get_relationship_stats(
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/stats", summary="获取关系统计")
+def get_relationship_stats(db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     获取关系统计信息
 
@@ -498,21 +425,14 @@ def get_relationship_stats(
         service_stats = GuardServiceLibraryService.get_binding_stats(db, user.id)
         label_stats = GuardLabelLibraryService.get_binding_stats(db, user.id)
 
-        return get_json_result(data={
-            "service_library_stats": service_stats,
-            "label_library_stats": label_stats
-        })
+        return get_json_result(data={"service_library_stats": service_stats, "label_library_stats": label_stats})
 
     except Exception as e:
         return server_error_response(e)
 
 
-@router.get('/library/{library_id}/usage', summary="获取词库使用情况")
-def get_library_usage(
-    library_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/library/{library_id}/usage", summary="获取词库使用情况")
+def get_library_usage(library_id: str, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     获取词库使用情况
 
@@ -526,44 +446,35 @@ def get_library_usage(
     """
     try:
         # 获取使用此词库的服务
-        services = GuardServiceLibraryService.get_services_by_library(
-            db, library_id, enabled_only=False
-        )
+        services = GuardServiceLibraryService.get_services_by_library(db, library_id, enabled_only=False)
 
         # 获取使用此词库的标签
-        labels = GuardLabelLibraryService.get_labels_by_library(
-            db, library_id, enabled_only=False
-        )
+        labels = GuardLabelLibraryService.get_labels_by_library(db, library_id, enabled_only=False)
 
         # 获取词库在各维度的使用统计
-        dimension_usage = GuardLabelLibraryService.get_library_usage_by_dimensions(
-            db, library_id, user.id
-        )
+        dimension_usage = GuardLabelLibraryService.get_library_usage_by_dimensions(db, library_id, user.id)
 
-        return get_json_result(data={
-            "library_id": library_id,
-            "services": services,
-            "labels": labels,
-            "dimension_usage": dimension_usage,
-            "summary": {
-                "total_services": len(services),
-                "total_labels": len(labels),
-                "enabled_services": len([s for s in services if s.get("binding", {}).get("enabled", False)]),
-                "enabled_labels": len([l for l in labels if l.get("binding", {}).get("enabled", False)])
+        return get_json_result(
+            data={
+                "library_id": library_id,
+                "services": services,
+                "labels": labels,
+                "dimension_usage": dimension_usage,
+                "summary": {
+                    "total_services": len(services),
+                    "total_labels": len(labels),
+                    "enabled_services": len([s for s in services if s.get("binding", {}).get("enabled", False)]),
+                    "enabled_labels": len([l for l in labels if l.get("binding", {}).get("enabled", False)]),
+                },
             }
-        })
+        )
 
     except Exception as e:
         return server_error_response(e)
 
 
-@router.post('/label-library/sync-to-dimension', summary="同步词库到维度所有标签")
-def sync_library_to_dimension(
-    library_id: str,
-    dimension_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/label-library/sync-to-dimension", summary="同步词库到维度所有标签")
+def sync_library_to_dimension(library_id: str, dimension_id: str, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     将词库同步到指定维度的所有标签
 
@@ -577,9 +488,7 @@ def sync_library_to_dimension(
         dict[str, Any]: 同步结果
     """
     try:
-        result = GuardLabelLibraryService.sync_library_to_all_labels_in_dimension(
-            db, library_id, dimension_id, user.id, user.id
-        )
+        result = GuardLabelLibraryService.sync_library_to_all_labels_in_dimension(db, library_id, dimension_id, user.id, user.id)
 
         return get_json_result(data=result)
 

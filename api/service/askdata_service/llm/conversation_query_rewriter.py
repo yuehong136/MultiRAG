@@ -19,7 +19,7 @@ logger = get_askdata_logger()
 class ConversationQueryRewriter:
     """基于对话上下文改写用户追问的服务类"""
 
-    JSON_PATTERN = re.compile(r'```json\s*([\s\S]*?)```')
+    JSON_PATTERN = re.compile(r"```json\s*([\s\S]*?)```")
 
     def __init__(self, db: Session, user_id: Any, prompt_dir: str | None = None):
         """初始化会话查询改写器"""
@@ -65,10 +65,7 @@ class ConversationQueryRewriter:
 
     def _normalize_result(self, result: dict[str, Any]) -> dict[str, Any]:
         """验证并规整LLM返回的结构"""
-        normalized: dict[str, Any] = {
-            "is_related": False,
-            "rewritten_question": ""
-        }
+        normalized: dict[str, Any] = {"is_related": False, "rewritten_question": ""}
 
         if not isinstance(result, dict):
             logger.warning(f"Unexpected result type: {type(result)}")
@@ -91,12 +88,7 @@ class ConversationQueryRewriter:
 
         return normalized
 
-    async def rewrite_question(
-            self,
-            conversation_history: list[dict[str, Any]],
-            new_user_question: str,
-            llm_name: str
-    ) -> dict[str, Any]:
+    async def rewrite_question(self, conversation_history: list[dict[str, Any]], new_user_question: str, llm_name: str) -> dict[str, Any]:
         """调用LLM判断新问题是否与上下文相关并进行改写"""
         try:
             template_path = os.path.join(self.prompt_dir, "conversation_query_rewriter_prompt.txt")
@@ -110,21 +102,13 @@ class ConversationQueryRewriter:
 
             question_text = new_user_question if isinstance(new_user_question, str) else str(new_user_question or "")
 
-            template_values = {
-                "conversation_history": json.dumps(history_payload, ensure_ascii=False, indent=2),
-                "new_user_question": question_text
-            }
+            template_values = {"conversation_history": json.dumps(history_payload, ensure_ascii=False, indent=2), "new_user_question": question_text}
 
             prompt = PromptTemplateUtil.fill_template(prompt_template, template_values)
-            logger.debug("[query_rewriter] new_question=%s, history_count=%d",
-                         question_text, len(history_payload))
+            logger.debug("[query_rewriter] new_question=%s, history_count=%d", question_text, len(history_payload))
             history = [{"role": "user", "content": prompt}]
 
-            gen_conf = {
-                "temperature": 0.0,
-                "top_p": 0.9,
-                "max_tokens": 1024
-            }
+            gen_conf = {"temperature": 0.0, "top_p": 0.9, "max_tokens": 1024}
 
             # 定义在独立线程中执行的函数，使用独立的数据库会话
             def _chat_in_thread():
@@ -133,11 +117,7 @@ class ConversationQueryRewriter:
                 with db_connection() as thread_db:
                     model_config = get_model_config_by_type_and_name(thread_db, self.user_id, LLMType.CHAT.value, llm_name)
                     thread_llm_instance = LLMBundle(thread_db, self.user_id, model_config)
-                    return thread_llm_instance.chat(
-                        system="",
-                        history=history,
-                        gen_conf=gen_conf
-                    )
+                    return thread_llm_instance.chat(system="", history=history, gen_conf=gen_conf)
 
             response = await thread_pool_exec(_chat_in_thread)
             logger.debug("[query_rewriter] LLM原始响应: %s", response)
@@ -146,19 +126,12 @@ class ConversationQueryRewriter:
 
             if success:
                 normalized = self._normalize_result(extracted_result)
-                logger.debug("[query_rewriter] 改写结果: is_related=%s, rewritten=%s",
-                             normalized.get('is_related'), normalized.get('rewritten_question'))
+                logger.debug("[query_rewriter] 改写结果: is_related=%s, rewritten=%s", normalized.get("is_related"), normalized.get("rewritten_question"))
                 return normalized
 
             logger.error("Failed to extract valid JSON from LLM response for conversation rewrite")
-            return {
-                "is_related": False,
-                "rewritten_question": ""
-            }
+            return {"is_related": False, "rewritten_question": ""}
 
         except Exception as error:
             logger.error(f"Error in rewrite_question: {error}", exc_info=True)
-            return {
-                "is_related": False,
-                "rewritten_question": ""
-            }
+            return {"is_related": False, "rewritten_question": ""}

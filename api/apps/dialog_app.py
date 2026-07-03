@@ -24,19 +24,22 @@ from common.misc_utils import get_uuid
 
 router = APIRouter()
 
+
 class SparseSearchMode(BaseModel):
     type: Literal["sparse"] = "sparse"
 
+
 class DenseSearchMode(BaseModel):
     type: Literal["dense"] = "dense"
+
 
 class HybridSearchMode(BaseModel):
     type: Literal["hybrid"] = "hybrid"
     weight_dense: float = Field(default=0.7, ge=0.0, le=1.0, description="向量检索权重")
     weight_sparse: float = Field(default=0.3, ge=0.0, le=1.0, description="全文检索权重")
 
-    @model_validator(mode='after')
-    def validate_weights(self) -> 'HybridSearchMode':
+    @model_validator(mode="after")
+    def validate_weights(self) -> "HybridSearchMode":
         """确保权重和为1，如果不是则自动调整"""
         total = self.weight_dense + self.weight_sparse
         if abs(total - 1.0) > 0.001:
@@ -44,15 +47,16 @@ class HybridSearchMode(BaseModel):
             self.weight_sparse = self.weight_sparse / total
         return self
 
+
 class FusionSearchMode(BaseModel):
     type: Literal["fusion"] = "fusion"
     weights: str = Field(default="0.05,0.95", description="文本权重,向量权重")
 
-    @model_validator(mode='after')
-    def validate_weights_format(self) -> 'FusionSearchMode':
+    @model_validator(mode="after")
+    def validate_weights_format(self) -> "FusionSearchMode":
         """验证weights格式"""
         try:
-            parts = self.weights.split(',')
+            parts = self.weights.split(",")
             if len(parts) != 2:
                 raise ValueError("weights must contain exactly two comma-separated values")
             float(parts[0].strip())
@@ -61,16 +65,16 @@ class FusionSearchMode(BaseModel):
             raise ValueError("weights must be in format 'float,float' (e.g., '0.05,0.95')")
         return self
 
+
 # 搜索模式联合类型
-SearchModeType = Annotated[
-    SparseSearchMode | DenseSearchMode | HybridSearchMode | FusionSearchMode,
-    Discriminator('type')
-]
+SearchModeType = Annotated[SparseSearchMode | DenseSearchMode | HybridSearchMode | FusionSearchMode, Discriminator("type")]
+
 
 # 提示配置的子模型
 class PromptParameter(BaseModel):
     key: str = Field(..., description="参数键名")
     optional: bool = Field(default=False, description="是否为可选参数")
+
 
 class PromptConfig(BaseModel):
     system: str = Field(
@@ -78,20 +82,11 @@ class PromptConfig(BaseModel):
 以下是知识库：
 {knowledge}
 以上是知识库。""",
-        description="系统提示模板"
+        description="系统提示模板",
     )
-    prologue: str = Field(
-        default="您好，我是您的助手小樱，长得可爱又善良，can I help you?",
-        description="开场白"
-    )
-    parameters: list[PromptParameter] = Field(
-        default=[{"key": "knowledge", "optional": False}],
-        description="参数列表"
-    )
-    empty_response: str = Field(
-        default="Sorry! 知识库中未找到相关内容！",
-        description="空响应消息"
-    )
+    prologue: str = Field(default="您好，我是您的助手小樱，长得可爱又善良，can I help you?", description="开场白")
+    parameters: list[PromptParameter] = Field(default=[{"key": "knowledge", "optional": False}], description="参数列表")
+    empty_response: str = Field(default="Sorry! 知识库中未找到相关内容！", description="空响应消息")
 
 
 # 改进后的 DialogRequest
@@ -100,46 +95,14 @@ class DialogRequest(BaseModel):
     name: str = Field(default="New Dialog", max_length=100, description="对话的名称")
     description: str = Field(default="A helpful dialog", max_length=500, description="对话的描述")
     icon: str = Field(default="", description="对话的图标URL")
-    top_n: int = Field(
-        default=6,
-        ge=1,
-        le=50,
-        description="从知识库中返回给用户的最大条目数"
-    )
-    top_k: int = Field(
-        default=1024,
-        ge=1,
-        le=10000,
-        description="从知识库中检索的最大条目数"
-    )
-    rerank_id: str | None = Field(
-        default=None,
-        description="重新排序模型的ID，用于对检索结果进行重新排序"
-    )
-    meta_data_filter: dict[str, Any] | None = Field(
-        default={},
-        description="元数据过滤器，用于过滤知识库中的条目"
-    )
-    similarity_threshold: float = Field(
-        default=0.1,
-        ge=0.0,
-        le=1.0,
-        description="相似度阈值，低于此阈值的结果将被过滤"
-    )
-    vector_similarity_weight: float = Field(
-        default=0.3,
-        ge=0.0,
-        le=1.0,
-        description="向量相似度权重，用于重新排序阶段"
-    )
-    llm_id: str | None = Field(
-        default=None,
-        description="大语言模型的ID，如果不指定则使用租户默认模型"
-    )
-    llm_setting: dict[str, Any] | None = Field(
-        default=None,
-        description="大语言模型的配置参数"
-    )
+    top_n: int = Field(default=6, ge=1, le=50, description="从知识库中返回给用户的最大条目数")
+    top_k: int = Field(default=1024, ge=1, le=10000, description="从知识库中检索的最大条目数")
+    rerank_id: str | None = Field(default=None, description="重新排序模型的ID，用于对检索结果进行重新排序")
+    meta_data_filter: dict[str, Any] | None = Field(default={}, description="元数据过滤器，用于过滤知识库中的条目")
+    similarity_threshold: float = Field(default=0.1, ge=0.0, le=1.0, description="相似度阈值，低于此阈值的结果将被过滤")
+    vector_similarity_weight: float = Field(default=0.3, ge=0.0, le=1.0, description="向量相似度权重，用于重新排序阶段")
+    llm_id: str | None = Field(default=None, description="大语言模型的ID，如果不指定则使用租户默认模型")
+    llm_setting: dict[str, Any] | None = Field(default=None, description="大语言模型的配置参数")
     prompt_config: dict[str, Any] | None = Field(
         default=None,
         description="""提示配置字典，建议包含以下字段：
@@ -147,20 +110,14 @@ class DialogRequest(BaseModel):
         - prologue: 对话开场白
         - parameters: 参数列表，每项包含 key 和 optional 属性
         - empty_response: 未找到相关内容时的回复
-        """
+        """,
     )
-    kb_ids: list[str] | None = Field(
-        default=None,
-        description="知识库的ID列表"
-    )
+    kb_ids: list[str] | None = Field(default=None, description="知识库的ID列表")
     # 新增的搜索模式参数
-    search_mode: SearchModeType | None = Field(
-        default=None,
-        description="检索模式配置，决定对话中检索知识库时使用的策略"
-    )
+    search_mode: SearchModeType | None = Field(default=None, description="检索模式配置，决定对话中检索知识库时使用的策略")
 
     # 字段验证器 - 验证name字段
-    @field_validator('name')
+    @field_validator("name")
     def validate_name(cls, v: str) -> str:  # ✅ 直接使用 cls，Pydantic会自动处理
         """验证对话名称"""
         if v.strip() == "":
@@ -172,16 +129,16 @@ class DialogRequest(BaseModel):
         return v
 
     # 模型验证器
-    @model_validator(mode='after')
-    def validate_top_n_not_greater_than_top_k(self) -> 'DialogRequest':
+    @model_validator(mode="after")
+    def validate_top_n_not_greater_than_top_k(self) -> "DialogRequest":
         """确保 top_n 不大于 top_k"""
         if self.top_n > self.top_k:
             raise ValueError("top_n cannot be greater than top_k")
         return self
 
     # 验证 prompt_config 中的参数
-    @model_validator(mode='after')
-    def validate_prompt_config(self) -> 'DialogRequest':
+    @model_validator(mode="after")
+    def validate_prompt_config(self) -> "DialogRequest":
         """验证提示配置中的参数使用情况"""
         if not self.prompt_config:
             return self
@@ -211,7 +168,7 @@ class DialogRequest(BaseModel):
             return None
 
         mode_data = self.search_mode.model_dump()
-        mode_type = mode_data.pop('type')
+        mode_type = mode_data.pop("type")
         return {mode_type: mode_data}
 
 
@@ -222,6 +179,7 @@ class RemoveDialogRequest(BaseModel):
 
 class ListDialogsRequest(BaseModel):
     owner_ids: list[int] = Field(default_factory=list)
+
 
 class ListDialogsResponse(BaseModel):
     model_config = ConfigDict(extra="allow")  # 允许 dialogs 内部是任意字段字典
@@ -239,116 +197,117 @@ def get_kb_names(kb_ids, db: Session):
         nms.append(kb.name)
     return ids, nms
 
+
 @router.post(
-    '/set',
+    "/set",
     summary="已过时：设置对话，请使用 /api/v1/chats",
     response_description="成功设置对话",
     deprecated=True,
 )
 def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
-        设置对话
+    设置对话
 
-        该接口用于创建或更新对话信息，包括检索配置、模型设置和搜索模式。
+    该接口用于创建或更新对话信息，包括检索配置、模型设置和搜索模式。
 
-        ## 参数说明
+    ## 参数说明
 
-        ### 基础信息
-        - **dialog_id**: 对话的唯一标识符，如果为空则创建新对话，否则更新已有对话
-        - **name**: 对话名称，最大长度100个字符，默认为 'New Dialog'
-        - **description**: 对话描述，最大长度500个字符，默认为 'A helpful dialog'
-        - **icon**: 对话图标URL，最大长度200个字符
+    ### 基础信息
+    - **dialog_id**: 对话的唯一标识符，如果为空则创建新对话，否则更新已有对话
+    - **name**: 对话名称，最大长度100个字符，默认为 'New Dialog'
+    - **description**: 对话描述，最大长度500个字符，默认为 'A helpful dialog'
+    - **icon**: 对话图标URL，最大长度200个字符
 
-        ### 检索配置
-        - **kb_ids**: 知识库ID列表，指定对话可以访问的知识库
-        - **top_n**: 返回给用户的最大结果数 (1-50)，默认为6
-        - **top_k**: 检索阶段的最大召回数 (1-10000)，默认为1024
-        - **similarity_threshold**: 相似度阈值 (0.0-1.0)，低于此值的结果将被过滤，默认为0.1
-        - **vector_similarity_weight**: 向量相似度权重 (0.0-1.0)，用于重排序，默认为0.3
+    ### 检索配置
+    - **kb_ids**: 知识库ID列表，指定对话可以访问的知识库
+    - **top_n**: 返回给用户的最大结果数 (1-50)，默认为6
+    - **top_k**: 检索阶段的最大召回数 (1-10000)，默认为1024
+    - **similarity_threshold**: 相似度阈值 (0.0-1.0)，低于此值的结果将被过滤，默认为0.1
+    - **vector_similarity_weight**: 向量相似度权重 (0.0-1.0)，用于重排序，默认为0.3
 
-        ### 模型配置
-        - **llm_id**: 大语言模型ID，如果不指定则使用租户默认模型
-        - **llm_setting**: 模型参数配置，如温度、最大长度等
-        - **rerank_id**: 重排序模型ID，用于优化检索结果排序
+    ### 模型配置
+    - **llm_id**: 大语言模型ID，如果不指定则使用租户默认模型
+    - **llm_setting**: 模型参数配置，如温度、最大长度等
+    - **rerank_id**: 重排序模型ID，用于优化检索结果排序
 
-        ### 提示配置 (prompt_config)
-        提示配置是一个灵活的字典，建议包含以下字段：
-        ```json
-        {
-            "system": "你是一个智能助手，请总结知识库的内容来回答问题，请列举知识库中的数据详细回答。当所有知识库内容都与问题无关时，你的回答必须包括"知识库中未找到您要的答案！"这句话。回答需要考虑聊天历史。\n以下是知识库：\n{knowledge}\n以上是知识库。",
-            "prologue": "您好，我是您的助手小樱，长得可爱又善良，can I help you?",
-            "parameters": [
-                {"key": "knowledge", "optional": false}
-            ],
-            "empty_response": "Sorry! 知识库中未找到相关内容！"
-        }
-        ```
-        - **system**: 必填，系统提示模板，支持参数插值，例如 {knowledge}
-        - **prologue**: 可选，对话开场白
-        - **parameters**: 可选，参数列表，每项包含 key 和 optional 属性
-        - **empty_response**: 可选，未找到相关内容时的回复
-        - 可以包含其他自定义字段，系统不会做特殊处理
+    ### 提示配置 (prompt_config)
+    提示配置是一个灵活的字典，建议包含以下字段：
+    ```json
+    {
+        "system": "你是一个智能助手，请总结知识库的内容来回答问题，请列举知识库中的数据详细回答。当所有知识库内容都与问题无关时，你的回答必须包括"知识库中未找到您要的答案！"这句话。回答需要考虑聊天历史。\n以下是知识库：\n{knowledge}\n以上是知识库。",
+        "prologue": "您好，我是您的助手小樱，长得可爱又善良，can I help you?",
+        "parameters": [
+            {"key": "knowledge", "optional": false}
+        ],
+        "empty_response": "Sorry! 知识库中未找到相关内容！"
+    }
+    ```
+    - **system**: 必填，系统提示模板，支持参数插值，例如 {knowledge}
+    - **prologue**: 可选，对话开场白
+    - **parameters**: 可选，参数列表，每项包含 key 和 optional 属性
+    - **empty_response**: 可选，未找到相关内容时的回复
+    - 可以包含其他自定义字段，系统不会做特殊处理
 
-        ### 搜索模式 (search_mode)
-        控制对话中检索知识库时使用的策略：
+    ### 搜索模式 (search_mode)
+    控制对话中检索知识库时使用的策略：
 
-        #### 1. 混合检索（推荐）
-        ```json
-        {
+    #### 1. 混合检索（推荐）
+    ```json
+    {
+        "type": "hybrid",
+        "weight_dense": 0.7,
+        "weight_sparse": 0.3
+    }
+    ```
+
+    #### 2. 纯语义检索
+    ```json
+    {
+        "type": "dense"
+    }
+    ```
+
+    #### 3. 纯关键词检索
+    ```json
+    {
+        "type": "sparse"
+    }
+    ```
+
+    #### 4. 融合检索
+    ```json
+    {
+        "type": "fusion",
+        "weights": "0.05,0.95"
+    }
+    ```
+
+    ## 使用示例
+
+    ### 创建新对话（带自定义提示配置）
+    ```json
+    {
+        "name": "技术支持助手",
+        "description": "专门用于技术问题解答的对话",
+        "kb_ids": ["tech_kb_001", "faq_kb_002"],
+        "search_mode": {
             "type": "hybrid",
-            "weight_dense": 0.7,
-            "weight_sparse": 0.3
+            "weight_dense": 0.6,
+            "weight_sparse": 0.4
+        },
+        "prompt_config": {
+            "system": "你是一位专业的技术支持专家。基于以下知识库内容回答用户问题：\\n{knowledge}\\n{history}",
+            "prologue": "您好！我是技术支持助手，请问有什么技术问题需要帮助吗？",
+            "parameters": [
+                {"key": "knowledge", "optional": false},
+                {"key": "history", "optional": true}
+            ],
+            "empty_response": "很抱歉，我没有找到相关的技术资料。请提供更多细节，我会尽力帮助您。",
+            "custom_field": "可以添加自定义字段"
         }
-        ```
-
-        #### 2. 纯语义检索
-        ```json
-        {
-            "type": "dense"
-        }
-        ```
-
-        #### 3. 纯关键词检索
-        ```json
-        {
-            "type": "sparse"
-        }
-        ```
-
-        #### 4. 融合检索
-        ```json
-        {
-            "type": "fusion",
-            "weights": "0.05,0.95"
-        }
-        ```
-
-        ## 使用示例
-
-        ### 创建新对话（带自定义提示配置）
-        ```json
-        {
-            "name": "技术支持助手",
-            "description": "专门用于技术问题解答的对话",
-            "kb_ids": ["tech_kb_001", "faq_kb_002"],
-            "search_mode": {
-                "type": "hybrid",
-                "weight_dense": 0.6,
-                "weight_sparse": 0.4
-            },
-            "prompt_config": {
-                "system": "你是一位专业的技术支持专家。基于以下知识库内容回答用户问题：\\n{knowledge}\\n{history}",
-                "prologue": "您好！我是技术支持助手，请问有什么技术问题需要帮助吗？",
-                "parameters": [
-                    {"key": "knowledge", "optional": false},
-                    {"key": "history", "optional": true}
-                ],
-                "empty_response": "很抱歉，我没有找到相关的技术资料。请提供更多细节，我会尽力帮助您。",
-                "custom_field": "可以添加自定义字段"
-            }
-        }
-        ```
-        """
+    }
+    ```
+    """
     try:
         # 获取默认提示配置
         default_prompt_config = {
@@ -357,10 +316,8 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
         {knowledge}
         以上是知识库。""",
             "prologue": "您好，我是您的助手小樱，长得可爱又善良，can I help you?",
-            "parameters": [
-                {"key": "knowledge", "optional": False}
-            ],
-            "empty_response": "Sorry! 知识库中未找到相关内容！"
+            "parameters": [{"key": "knowledge", "optional": False}],
+            "empty_response": "Sorry! 知识库中未找到相关内容！",
         }
 
         prompt_config = request.prompt_config or default_prompt_config
@@ -414,7 +371,7 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
                 "similarity_threshold": request.similarity_threshold,
                 "vector_similarity_weight": request.vector_similarity_weight,
                 "icon": request.icon,
-                "search_mode": search_mode_dict
+                "search_mode": search_mode_dict,
             }
             dia = ensure_tenant_model_id_for_params(db, user.id, dia)
             if not DialogService.save(db, **dia):
@@ -447,7 +404,7 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
 
 
 @router.get(
-    '/get',
+    "/get",
     summary="已过时：获取对话，请使用 /api/v1/chats/{chat_id}",
     response_description="成功获取对话",
     deprecated=True,
@@ -463,20 +420,16 @@ def get(dialog_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     except Exception as e:
         return server_error_response(e)
 
+
 @router.get(
-    '/list',
+    "/list",
     summary="已过时：列出对话，请使用 /api/v1/chats",
     response_description="成功列出对话",
     deprecated=True,
 )
 def list_dialogs(db: Session = Depends(get_db), user=Depends(manager)):
     try:
-        conversations = DialogService.query(
-            db,
-            tenant_id=user.id,
-            status=StatusEnum.VALID.value,
-            reverse=True,
-            order_by="create_time")
+        conversations = DialogService.query(db, tenant_id=user.id, status=StatusEnum.VALID.value, reverse=True, order_by="create_time")
         conversations = [d.to_dict() for d in conversations]
         for conversation in conversations:
             conversation["kb_ids"], conversation["kb_names"] = get_kb_names(conversation["kb_ids"], db)
@@ -501,7 +454,7 @@ def list_dialogs_next(
     desc: Annotated[bool, Query(alias="desc", description="是否降序")] = True,
     body: ListDialogsRequest = Body(default=ListDialogsRequest()),
     db: Session = Depends(get_db),
-    user=Depends(manager)
+    user=Depends(manager),
 ):
     try:
         owner_ids = body.owner_ids or []
@@ -511,13 +464,13 @@ def list_dialogs_next(
             tenants: list[int] = []  # 与原注释保持一致：keep it here
             dialogs, total = DialogService.get_by_tenant_ids(
                 db,
-                tenants,                      # joined_tenant_ids
-                user.id,              # user_id
-                page_number,                  # page_number
-                items_per_page,               # items_per_page
-                orderby,                      # orderby
-                desc,                         # desc
-                keywords                      # keywords
+                tenants,  # joined_tenant_ids
+                user.id,  # user_id
+                page_number,  # page_number
+                items_per_page,  # items_per_page
+                orderby,  # orderby
+                desc,  # desc
+                keywords,  # keywords
             )
         else:
             tenants = owner_ids
@@ -526,11 +479,11 @@ def list_dialogs_next(
                 db,
                 tenants,
                 user.id,
-                0,            # page_number=0 -> 不分页
-                0,            # items_per_page=0 -> 不分页
+                0,  # page_number=0 -> 不分页
+                0,  # items_per_page=0 -> 不分页
                 orderby,
                 desc,
-                keywords
+                keywords,
             )
             # 过滤 tenant_id
             dialogs = [d for d in dialogs if d.get("tenant_id") in tenants]
@@ -550,13 +503,13 @@ def list_dialogs_next(
 
 
 @router.post(
-    '/rm',
+    "/rm",
     summary="已过时：删除对话应用，请使用 /api/v1/chats 或 /api/v1/chats/{chat_id}",
     response_description="成功删除对话应用",
     deprecated=True,
 )
 def rm(request: RemoveDialogRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    dialog_list=[]
+    dialog_list = []
     tenants = UserTenantService.query(db, user_id=user.id)
     try:
         for id in request.dialog_ids:
@@ -564,9 +517,7 @@ def rm(request: RemoveDialogRequest, db: Session = Depends(get_db), user=Depends
                 if DialogService.query(db, tenant_id=tenant.tenant_id, id=id):
                     break
             else:
-                return get_json_result(
-                    data=False, retmsg='Only owner of dialog authorized for this operation.',
-                    retcode=RetCode.OPERATING_ERROR)
+                return get_json_result(data=False, retmsg="Only owner of dialog authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
             dialog_list.append({"id": id, "status": StatusEnum.INVALID.value})
         DialogService.update_many_by_id(db, dialog_list)
         return get_json_result(data=True)
@@ -581,9 +532,17 @@ TEMPLATE_BUNDLE_FORMAT = "multirag_dialog_template_bundle"
 TEMPLATE_VERSION = "1.0"
 
 _STRIP_FIELDS = {
-    "id", "tenant_id", "user_id", "tenant_llm_id", "tenant_rerank_id",
+    "id",
+    "tenant_id",
+    "user_id",
+    "tenant_llm_id",
+    "tenant_rerank_id",
     "icon",
-    "status", "create_date", "update_date", "create_time", "update_time",
+    "status",
+    "create_date",
+    "update_date",
+    "create_time",
+    "update_time",
 }
 
 _PROMPT_SENSITIVE_KEYS = {"tavily_api_key"}
@@ -615,12 +574,13 @@ def _safe_filename(name: str) -> str:
 def _content_disposition(filename: str) -> str:
     """Build a Content-Disposition header value safe for non-ASCII filenames (RFC 5987)."""
     from urllib.parse import quote
+
     ascii_name = filename.encode("ascii", errors="replace").decode("ascii")
     utf8_name = quote(filename, safe="")
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{utf8_name}"
 
 
-@router.get('/export', summary="导出对话应用模版", response_description="返回模版 JSON 或 ZIP 文件")
+@router.get("/export", summary="导出对话应用模版", response_description="返回模版 JSON 或 ZIP 文件")
 def export_templates(
     dialog_ids: str = Query(..., description="逗号分隔的对话 ID 列表"),
     db: Session = Depends(get_db),
@@ -713,7 +673,7 @@ def _deduplicate_name(db: Session, tenant_id: str, name: str) -> str:
         counter += 1
 
 
-@router.post('/import', summary="导入对话应用模版", response_description="返回导入结果")
+@router.post("/import", summary="导入对话应用模版", response_description="返回导入结果")
 async def import_templates(
     file: UploadFile = File(..., description="模版文件 (.json 或 .zip)"),
     db: Session = Depends(get_db),
@@ -822,10 +782,12 @@ async def import_templates(
             except Exception as ex:
                 failed.append({"name": app_data.get("name", "unknown"), "error": str(ex)})
 
-        return get_json_result(data={
-            "imported": imported,
-            "failed": failed,
-            "total": len(imported) + len(failed),
-        })
+        return get_json_result(
+            data={
+                "imported": imported,
+                "failed": failed,
+                "total": len(imported) + len(failed),
+            }
+        )
     except Exception as e:
         return server_error_response(e)

@@ -36,12 +36,7 @@ def get_model_config_by_type_and_name(
     if not model_config:
         pure_model_name, fid = TenantLLMService.split_model_name_and_factory(model_name)
         compose_profiles = os.getenv("COMPOSE_PROFILES", "")
-        is_tei_builtin_embedding = (
-            model_type_value == LLMType.EMBEDDING.value
-            and "tei-" in compose_profiles
-            and pure_model_name == os.getenv("TEI_MODEL", "")
-            and (fid == "Builtin" or fid is None)
-        )
+        is_tei_builtin_embedding = model_type_value == LLMType.EMBEDDING.value and "tei-" in compose_profiles and pure_model_name == os.getenv("TEI_MODEL", "") and (fid == "Builtin" or fid is None)
         if is_tei_builtin_embedding:
             embedding_cfg = settings.EMBEDDING_CFG
             config_dict = {
@@ -64,9 +59,7 @@ def get_model_config_by_type_and_name(
     config_model_type = config_dict.get("mdl_type") or config_dict.get("model_type")
     config_model_type = config_model_type.value if hasattr(config_model_type, "value") else config_model_type
     if config_model_type != model_type_value:
-        raise LookupError(
-            f"Tenant Model with name {model_name} has type {config_model_type}, expected {model_type_value}"
-        )
+        raise LookupError(f"Tenant Model with name {model_name} has type {config_model_type}, expected {model_type_value}")
 
     pure_model_name, fid = TenantLLMService.split_model_name_and_factory(config_dict["llm_name"])
     llms = LLMService.query(db, llm_name=pure_model_name, fid=fid) if fid else LLMService.query(db, llm_name=pure_model_name)

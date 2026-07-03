@@ -5,6 +5,7 @@
 @date：2026/03/18
 @desc: Memory API 网关层 - 负责路由和参数解析，业务逻辑委托给service层
 """
+
 from __future__ import annotations
 
 import logging
@@ -29,8 +30,10 @@ MEMORY_LIST_MAX_PAGE_SIZE = 1000
 
 # ==================== Pydantic Models (V2 风格) ====================
 
+
 class CreateMemoryRequest(BaseModel):
     """创建Memory请求模型"""
+
     model_config = ConfigDict(str_strip_whitespace=True)
 
     name: str = Field(..., min_length=1, max_length=MEMORY_NAME_LIMIT, description="Memory名称")
@@ -41,6 +44,7 @@ class CreateMemoryRequest(BaseModel):
 
 class UpdateMemoryRequest(BaseModel):
     """更新Memory请求模型"""
+
     model_config = ConfigDict(str_strip_whitespace=True)
 
     name: str | None = Field(None, max_length=MEMORY_NAME_LIMIT, description="Memory名称")
@@ -61,12 +65,9 @@ class UpdateMemoryRequest(BaseModel):
 
 # ==================== API Endpoints ====================
 
-@router.post('/memories', summary="创建Memory", response_description="成功创建Memory")
-def create_memory(
-    request_body: CreateMemoryRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-):
+
+@router.post("/memories", summary="创建Memory", response_description="成功创建Memory")
+def create_memory(request_body: CreateMemoryRequest, db: Session = Depends(get_db), user=Depends(manager)):
     memory_info = {
         "name": request_body.name,
         "memory_type": request_body.memory_type,
@@ -88,13 +89,8 @@ def create_memory(
         return get_json_result(data=False, retmsg="Internal server error", retcode=RetCode.SERVER_ERROR)
 
 
-@router.put('/memories/{memory_id}', summary="更新Memory", response_description="成功更新Memory")
-def update_memory(
-    memory_id: str,
-    request_body: UpdateMemoryRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-):
+@router.put("/memories/{memory_id}", summary="更新Memory", response_description="成功更新Memory")
+def update_memory(memory_id: str, request_body: UpdateMemoryRequest, db: Session = Depends(get_db), user=Depends(manager)):
     new_settings = dict(request_body.model_dump(exclude_unset=True).items())
     try:
         success, result = memory_api_service.update_memory(db, memory_id, new_settings)
@@ -113,12 +109,8 @@ def update_memory(
         return get_json_result(data=False, retmsg="Internal server error", retcode=RetCode.SERVER_ERROR)
 
 
-@router.delete('/memories/{memory_id}', summary="删除Memory", response_description="成功删除Memory")
-def delete_memory(
-    memory_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-):
+@router.delete("/memories/{memory_id}", summary="删除Memory", response_description="成功删除Memory")
+def delete_memory(memory_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     try:
         memory_api_service.delete_memory(db, memory_id)
         return get_json_result(data=True)
@@ -130,7 +122,7 @@ def delete_memory(
         return get_json_result(data=False, retmsg="Internal server error", retcode=RetCode.SERVER_ERROR)
 
 
-@router.get('/memories', summary="获取Memory列表", response_description="成功获取Memory列表")
+@router.get("/memories", summary="获取Memory列表", response_description="成功获取Memory列表")
 def list_memory(
     tenant_id: list[str] | None = Query(None, description="租户ID列表"),
     memory_type: list[str] | None = Query(None, description="Memory类型列表"),
@@ -139,7 +131,7 @@ def list_memory(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(50, ge=1, description="每页数量"),
     db: Session = Depends(get_db),
-    user=Depends(manager)
+    user=Depends(manager),
 ):
     effective_page_size = min(page_size, MEMORY_LIST_MAX_PAGE_SIZE)
     filter_params = {}
@@ -157,12 +149,8 @@ def list_memory(
         return get_json_result(data=False, retmsg="Internal server error", retcode=RetCode.SERVER_ERROR)
 
 
-@router.get('/memories/{memory_id}/config', summary="获取Memory配置", response_description="成功获取Memory配置")
-def get_memory_config(
-    memory_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-):
+@router.get("/memories/{memory_id}/config", summary="获取Memory配置", response_description="成功获取Memory配置")
+def get_memory_config(memory_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     try:
         result = memory_api_service.get_memory_config(db, memory_id)
         return get_json_result(data=result)
@@ -174,7 +162,7 @@ def get_memory_config(
         return get_json_result(data=False, retmsg="Internal server error", retcode=RetCode.SERVER_ERROR)
 
 
-@router.get('/memories/{memory_id}', summary="获取Memory详情", response_description="成功获取Memory详情及消息列表")
+@router.get("/memories/{memory_id}", summary="获取Memory详情", response_description="成功获取Memory详情及消息列表")
 def get_memory_messages(
     memory_id: str,
     agent_id: list[str] | None = Query(None, description="Agent ID列表"),
@@ -182,15 +170,13 @@ def get_memory_messages(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(50, ge=1, description="每页数量"),
     db: Session = Depends(get_db),
-    user=Depends(manager)
+    user=Depends(manager),
 ):
     effective_page_size = min(page_size, MEMORY_LIST_MAX_PAGE_SIZE)
-    if agent_id and len(agent_id) == 1 and ',' in agent_id[0]:
-        agent_id = agent_id[0].split(',')
+    if agent_id and len(agent_id) == 1 and "," in agent_id[0]:
+        agent_id = agent_id[0].split(",")
     try:
-        result = memory_api_service.get_memory_messages(
-            db, memory_id, agent_id or [], keywords.strip() if keywords else "", page, effective_page_size
-        )
+        result = memory_api_service.get_memory_messages(db, memory_id, agent_id or [], keywords.strip() if keywords else "", page, effective_page_size)
         return get_json_result(data=result)
     except NotFoundException as e:
         logger.error(e)
@@ -202,8 +188,10 @@ def get_memory_messages(
 
 # ==================== Message Endpoints ====================
 
+
 class AddMessageRequest(BaseModel):
     """添加消息请求模型"""
+
     memory_id: str | list[str] = Field(..., description="Memory ID or list of Memory IDs")
     agent_id: str = Field(..., description="Agent ID")
     session_id: str = Field(..., description="Session ID")
@@ -214,10 +202,11 @@ class AddMessageRequest(BaseModel):
 
 class UpdateMessageRequest(BaseModel):
     """更新消息状态请求模型"""
+
     status: bool = Field(..., description="Message status (True=active, False=inactive)")
 
 
-@router.post('/messages', summary="添加消息到记忆")
+@router.post("/messages", summary="添加消息到记忆")
 async def add_message(
     request_body: AddMessageRequest,
     db: Session = Depends(get_db),
@@ -241,7 +230,7 @@ async def add_message(
     return get_json_result(retcode=RetCode.SERVER_ERROR, retmsg="Some messages failed to add. Detail:" + msg)
 
 
-@router.delete('/messages/{memory_id}:{message_id}', summary="忘记（软删除）消息")
+@router.delete("/messages/{memory_id}:{message_id}", summary="忘记（软删除）消息")
 def forget_message(
     memory_id: str,
     message_id: int,
@@ -259,7 +248,7 @@ def forget_message(
         return get_json_result(data=False, retmsg="Internal server error", retcode=RetCode.SERVER_ERROR)
 
 
-@router.put('/messages/{memory_id}:{message_id}', summary="更新消息状态")
+@router.put("/messages/{memory_id}:{message_id}", summary="更新消息状态")
 def update_message(
     memory_id: str,
     message_id: int,
@@ -283,7 +272,7 @@ def update_message(
         return get_json_result(data=False, retmsg="Internal server error", retcode=RetCode.SERVER_ERROR)
 
 
-@router.get('/messages/search', summary="搜索记忆中的消息")
+@router.get("/messages/search", summary="搜索记忆中的消息")
 def search_message(
     memory_id: list[str] = Query(..., description="List of Memory IDs"),
     query: str = Query(..., description="Search query"),
@@ -296,8 +285,8 @@ def search_message(
     db: Session = Depends(get_db),
     user=Depends(manager),
 ):
-    if len(memory_id) == 1 and ',' in memory_id[0]:
-        memory_id = memory_id[0].split(',')
+    if len(memory_id) == 1 and "," in memory_id[0]:
+        memory_id = memory_id[0].split(",")
     filter_dict = {"memory_id": memory_id, "agent_id": agent_id, "session_id": session_id, "user_id": user_id}
     params = {
         "query": query,
@@ -309,7 +298,7 @@ def search_message(
     return get_json_result(data=res)
 
 
-@router.get('/messages', summary="获取最近的消息")
+@router.get("/messages", summary="获取最近的消息")
 def get_messages(
     memory_id: list[str] = Query(..., description="List of Memory IDs"),
     agent_id: str = Query(default="", description="Agent ID"),
@@ -318,8 +307,8 @@ def get_messages(
     db: Session = Depends(get_db),
     user=Depends(manager),
 ):
-    if len(memory_id) == 1 and ',' in memory_id[0]:
-        memory_id = memory_id[0].split(',')
+    if len(memory_id) == 1 and "," in memory_id[0]:
+        memory_id = memory_id[0].split(",")
     if not memory_id:
         return get_error_argument_result("memory_ids is required.")
     try:
@@ -330,7 +319,7 @@ def get_messages(
         return get_json_result(data=False, retmsg="Internal server error", retcode=RetCode.SERVER_ERROR)
 
 
-@router.get('/messages/{memory_id}:{message_id}/content', summary="获取消息内容")
+@router.get("/messages/{memory_id}:{message_id}/content", summary="获取消息内容")
 def get_message_content(
     memory_id: str,
     message_id: int,

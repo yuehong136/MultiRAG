@@ -5,6 +5,7 @@
 @date：2026/03/18
 @desc: Memory API 业务逻辑层 - 从gateway层解耦的业务处理
 """
+
 from sqlalchemy.orm import Session
 
 from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
@@ -160,12 +161,8 @@ def update_memory(db: Session, memory_id: str, new_settings: dict):
         raise ArgumentException(f"Can't update {not_allowed_update} when memory isn't empty.")
 
     if "memory_type" in to_update:
-        if "system_prompt" not in to_update and judge_system_prompt_is_default(
-            current_memory.system_prompt, current_memory.memory_type
-        ):
-            to_update["system_prompt"] = PromptAssembler.assemble_system_prompt(
-                {"memory_type": to_update["memory_type"]}
-            )
+        if "system_prompt" not in to_update and judge_system_prompt_is_default(current_memory.system_prompt, current_memory.memory_type):
+            to_update["system_prompt"] = PromptAssembler.assemble_system_prompt({"memory_type": to_update["memory_type"]})
 
     to_update = ensure_tenant_model_id_for_params(db, current_memory.tenant_id, to_update)
     MemoryService.update_memory(db, current_memory.tenant_id, memory_id, to_update)
@@ -193,13 +190,13 @@ def list_memory(db: Session, user_id: str, filter_params: dict, keywords: str, p
         user_tenants = UserTenantService.get_user_tenant_relation_by_user_id(db, user_id)
         filter_dict["tenant_id"] = [tenant["tenant_id"] for tenant in user_tenants]
     else:
-        if len(tenant_ids) == 1 and ',' in tenant_ids[0]:
-            tenant_ids = tenant_ids[0].split(',')
+        if len(tenant_ids) == 1 and "," in tenant_ids[0]:
+            tenant_ids = tenant_ids[0].split(",")
         filter_dict["tenant_id"] = tenant_ids
 
     memory_types = filter_params.get("memory_type")
-    if memory_types and len(memory_types) == 1 and ',' in memory_types[0]:
-        memory_types = memory_types[0].split(',')
+    if memory_types and len(memory_types) == 1 and "," in memory_types[0]:
+        memory_types = memory_types[0].split(",")
     filter_dict["memory_type"] = memory_types
 
     memory_list, count = MemoryService.get_by_filter(db, filter_dict, keywords, page, page_size)
@@ -223,9 +220,7 @@ def get_memory_messages(db: Session, memory_id: str, agent_ids: list[str], keywo
     if not memory:
         raise NotFoundException(f"Memory '{memory_id}' not found.")
 
-    messages = MessageService.list_message(
-        memory.tenant_id, memory_id, agent_ids, keywords, page, page_size
-    )
+    messages = MessageService.list_message(memory.tenant_id, memory_id, agent_ids, keywords, page, page_size)
 
     agent_name_mapping = {}
     extract_task_mapping = {}
@@ -272,10 +267,7 @@ def forget_message(db: Session, memory_id: str, message_id: int):
         raise NotFoundException(f"Memory '{memory_id}' not found.")
 
     forget_time = timestamp_to_date(current_timestamp())
-    update_succeed = MessageService.update_message(
-        {"memory_id": memory_id, "message_id": int(message_id)},
-        {"forget_at": forget_time},
-        memory.tenant_id, memory_id)
+    update_succeed = MessageService.update_message({"memory_id": memory_id, "message_id": int(message_id)}, {"forget_at": forget_time}, memory.tenant_id, memory_id)
     if update_succeed:
         return True
     raise Exception(f"Failed to forget message '{message_id}' in memory '{memory_id}'.")
@@ -287,10 +279,7 @@ def update_message_status(db: Session, memory_id: str, message_id: int, status: 
     if not memory:
         raise NotFoundException(f"Memory '{memory_id}' not found.")
 
-    update_succeed = MessageService.update_message(
-        {"memory_id": memory_id, "message_id": int(message_id)},
-        {"status": status},
-        memory.tenant_id, memory_id)
+    update_succeed = MessageService.update_message({"memory_id": memory_id, "message_id": int(message_id)}, {"status": status}, memory.tenant_id, memory_id)
     if update_succeed:
         return True
     raise Exception(f"Failed to set status for message '{message_id}' in memory '{memory_id}'.")

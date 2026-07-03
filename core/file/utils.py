@@ -4,22 +4,25 @@ from pptx import Presentation
 
 
 def extract_text(path):
-    return open(path, encoding='utf-8').read()
+    return open(path, encoding="utf-8").read()
+
 
 def extract_pdf(path):
     loader = PyMuPDFLoader(path)
     data = loader.load()
     data = [x.page_content for x in data]
-    content = '\n\n'.join(data)
+    content = "\n\n".join(data)
     return content
+
 
 def extract_docx(path):
     doc = docx.Document(path)
     data = []
     for paragraph in doc.paragraphs:
         data.append(paragraph.text)
-    content = '\n\n'.join(data)
+    content = "\n\n".join(data)
     return content
+
 
 def extract_pptx(path):
     prs = Presentation(path)

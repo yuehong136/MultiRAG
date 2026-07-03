@@ -66,9 +66,7 @@ def select_business_output(outputs: Mapping[str, object]) -> tuple[str, object]:
 
     business_outputs = [(name, meta) for name, meta in outputs.items() if name not in SYSTEM_OUTPUT_KEYS]
     if len(business_outputs) != 1:
-        raise ContractError(
-            f"CodeExec contract must contain exactly one business output, got {len(business_outputs)}"
-        )
+        raise ContractError(f"CodeExec contract must contain exactly one business output, got {len(business_outputs)}")
     _validate_business_output_name(business_outputs[0][0])
     return business_outputs[0]
 
@@ -121,10 +119,7 @@ def _is_number(value) -> bool:
 def _validate_top_level_value_domain(value) -> None:
     allowed = value is None or isinstance(value, (bool, str, dict, list)) or _is_number(value)
     if not allowed:
-        raise ContractError(
-            f"CodeExec unsupported top-level result type: {type(value).__name__}. "
-            "Allowed top-level values are String, Number, Boolean, Object, Array, or Null."
-        )
+        raise ContractError(f"CodeExec unsupported top-level result type: {type(value).__name__}. Allowed top-level values are String, Number, Boolean, Object, Array, or Null.")
 
 
 def _normalize_expected_type(expected_type: str) -> str:
@@ -158,9 +153,7 @@ def _validate_expected_type(expected_type: str, value, path: str = "") -> None:
     if etype.startswith("Array<") and etype.endswith(">"):
         inner_type = etype[6:-1].strip()
         if not isinstance(value, list):
-            raise ContractError(
-                f"CodeExec contract mismatch at {path or 'value'}: expected type {etype}, got {infer_actual_type(value)}"
-            )
+            raise ContractError(f"CodeExec contract mismatch at {path or 'value'}: expected type {etype}, got {infer_actual_type(value)}")
         for index, item in enumerate(value):
             child_path = f"{path}[{index}]" if path else f"[{index}]"
             _validate_expected_type(inner_type, item, child_path)
@@ -181,9 +174,7 @@ def _validate_expected_type(expected_type: str, value, path: str = "") -> None:
         raise ContractError(f"Unsupported expected type: {expected_type}")
 
     if not valid:
-        raise ContractError(
-            f"CodeExec contract mismatch at {path or 'value'}: expected type {etype}, got {actual_type}"
-        )
+        raise ContractError(f"CodeExec contract mismatch at {path or 'value'}: expected type {etype}, got {actual_type}")
 
 
 def build_code_exec_contract(outputs: Mapping[str, object], raw_result) -> dict[str, object]:

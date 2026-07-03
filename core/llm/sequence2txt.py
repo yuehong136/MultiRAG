@@ -84,26 +84,9 @@ class QWenSeq2txt(Base):
         else:
             audio_input = f"file://{audio_path}"
 
-        messages = [
-            {
-                "role": "system",
-                "content": [{"text": ""}]
-            },
-            {
-                "role": "user",
-                "content": [{"audio": audio_input}]
-            }
-        ]
+        messages = [{"role": "system", "content": [{"text": ""}]}, {"role": "user", "content": [{"audio": audio_input}]}]
 
-        resp = dashscope.MultiModalConversation.call(
-            model=self.model_name,
-            messages=messages,
-            result_format="message",
-            asr_options={
-                "enable_lid": True,
-                "enable_itn": False
-            }
-        )
+        resp = dashscope.MultiModalConversation.call(model=self.model_name, messages=messages, result_format="message", asr_options={"enable_lid": True, "enable_itn": False})
 
         try:
             text = resp["output"]["choices"][0]["message"].content[0]["text"]
@@ -119,27 +102,9 @@ class QWenSeq2txt(Base):
         else:
             audio_input = f"file://{audio_path}"
 
-        messages = [
-            {
-                "role": "system",
-                "content": [{"text": ""}]
-            },
-            {
-                "role": "user",
-                "content": [{"audio": audio_input}]
-            }
-        ]
+        messages = [{"role": "system", "content": [{"text": ""}]}, {"role": "user", "content": [{"audio": audio_input}]}]
 
-        stream = dashscope.MultiModalConversation.call(
-            model=self.model_name,
-            messages=messages,
-            result_format="message",
-            stream=True,
-            asr_options={
-                "enable_lid": True,
-                "enable_itn": False
-            }
-        )
+        stream = dashscope.MultiModalConversation.call(model=self.model_name, messages=messages, result_format="message", stream=True, asr_options={"enable_lid": True, "enable_itn": False})
 
         full = ""
         for chunk in stream:
@@ -329,6 +294,7 @@ class ZhipuSeq2txt(Base):
     def _convert_to_wav(self, input_path):
         """将音频文件转换为 wav 格式（如果需要）"""
         import tempfile
+
         ext = os.path.splitext(input_path)[1].lower()
         if ext in [".wav", ".mp3"]:
             return input_path
@@ -337,14 +303,9 @@ class ZhipuSeq2txt(Base):
         try:
             import ffmpeg
             import imageio_ffmpeg as ffmpeg_exe
+
             ffmpeg_path = ffmpeg_exe.get_ffmpeg_exe()
-            (
-                ffmpeg
-                .input(input_path)
-                .output(out_path, ar=16000, ac=1)
-                .overwrite_output()
-                .run(cmd=ffmpeg_path, quiet=True)
-            )
+            (ffmpeg.input(input_path).output(out_path, ar=16000, ac=1).overwrite_output().run(cmd=ffmpeg_path, quiet=True))
             return out_path
         except Exception as e:
             raise RuntimeError(f"audio convert failed: {e}")
@@ -387,6 +348,7 @@ class RAGconSeq2txt(Base):
     Speech-to-text models routed through LiteLLM.
     Default Base URL: https://connect.ragcon.com/v1
     """
+
     _FACTORY_NAME = "RAGcon"
 
     def __init__(self, key, model_name, base_url=None, lang="English", **kwargs):
@@ -415,10 +377,7 @@ class RAGconSeq2txt(Base):
         """
         with open(audio_path, "rb") as audio_file:
             # Call RAGcon API - Whisper will auto-detect language
-            transcription = self.client.audio.transcriptions.create(
-                model=self.model_name,
-                file=audio_file
-            )
+            transcription = self.client.audio.transcriptions.create(model=self.model_name, file=audio_file)
 
         # Return text and token count
         text = transcription.text.strip()

@@ -22,7 +22,7 @@ DOCX_LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__fi
 DOCX_LOG_MAX_REQUESTS = 10
 
 # 占位符匹配模式：{{$数字}}
-PLACEHOLDER_PATTERN = re.compile(r'\{\{\$(\d+)\}\}')
+PLACEHOLDER_PATTERN = re.compile(r"\{\{\$(\d+)\}\}")
 
 
 def ensure_log_dir():
@@ -121,7 +121,7 @@ def analyze_document_structure(doc: Document) -> dict:
             "total_table_cells": 0,
             "placeholders_found": [],
             "potentially_split_placeholders": [],
-        }
+        },
     }
 
     all_placeholders = set()
@@ -138,30 +138,23 @@ def analyze_document_structure(doc: Document) -> dict:
 
         # 检查是否有拆分的占位符
         if para_info["is_split"]:
-            structure["summary"]["potentially_split_placeholders"].append({
-                "location": para_info["location"],
-                "full_text": para_info["full_text"],
-                "runs_detail": para_info["runs_detail"],
-            })
+            structure["summary"]["potentially_split_placeholders"].append(
+                {
+                    "location": para_info["location"],
+                    "full_text": para_info["full_text"],
+                    "runs_detail": para_info["runs_detail"],
+                }
+            )
 
     # 分析表格
     for table_idx, table in enumerate(doc.tables):
-        table_info = {
-            "table_index": table_idx,
-            "rows": []
-        }
+        table_info = {"table_index": table_idx, "rows": []}
 
         for row_idx, row in enumerate(table.rows):
-            row_info = {
-                "row_index": row_idx,
-                "cells": []
-            }
+            row_info = {"row_index": row_idx, "cells": []}
 
             for cell_idx, cell in enumerate(row.cells):
-                cell_info = {
-                    "cell_index": cell_idx,
-                    "paragraphs": []
-                }
+                cell_info = {"cell_index": cell_idx, "paragraphs": []}
 
                 for para_idx, paragraph in enumerate(cell.paragraphs):
                     location = f"table{table_idx}_row{row_idx}_cell{cell_idx}_para{para_idx}"
@@ -175,11 +168,13 @@ def analyze_document_structure(doc: Document) -> dict:
 
                     # 检查是否有拆分的占位符
                     if para_info["is_split"]:
-                        structure["summary"]["potentially_split_placeholders"].append({
-                            "location": para_info["location"],
-                            "full_text": para_info["full_text"],
-                            "runs_detail": para_info["runs_detail"],
-                        })
+                        structure["summary"]["potentially_split_placeholders"].append(
+                            {
+                                "location": para_info["location"],
+                                "full_text": para_info["full_text"],
+                                "runs_detail": para_info["runs_detail"],
+                            }
+                        )
 
                 row_info["cells"].append(cell_info)
                 structure["summary"]["total_table_cells"] += 1
@@ -227,9 +222,7 @@ def _analyze_paragraph(paragraph, location: str) -> dict:
     is_split = False
     if contains_placeholder:
         # 检查是否有任何单个 run 包含完整的占位符
-        has_complete_in_run = any(
-            PLACEHOLDER_PATTERN.search(run["text"]) for run in runs_detail
-        )
+        has_complete_in_run = any(PLACEHOLDER_PATTERN.search(run["text"]) for run in runs_detail)
         if not has_complete_in_run:
             is_split = True
 
@@ -394,7 +387,7 @@ def fill_placeholders_in_paragraph(paragraph, fill_dict: dict) -> bool:
             # 占位符在单个 run 内，直接替换
             run = runs[start_run_idx]
             original_text = run.text
-            new_text = original_text[:start_char_idx] + str(value) + original_text[end_char_idx + 1:]
+            new_text = original_text[:start_char_idx] + str(value) + original_text[end_char_idx + 1 :]
             run.text = new_text
         else:
             # 占位符跨越多个 run
@@ -410,7 +403,7 @@ def fill_placeholders_in_paragraph(paragraph, fill_dict: dict) -> bool:
 
             # 处理最后一个 run：保留占位符之后的内容
             last_run = runs[end_run_idx]
-            last_run.text = last_run.text[end_char_idx + 1:]
+            last_run.text = last_run.text[end_char_idx + 1 :]
 
         replaced = True
 
@@ -478,11 +471,8 @@ def fill_placeholders_in_document(doc: Document, fill_data: list) -> int:
     return replace_count
 
 
-@router.post("/extract_placeholders", summary="提取 Word 文档中的占位符",
-             response_description="返回占位符列表")
-async def extract_placeholders(
-        file: UploadFile = File(...)
-):
+@router.post("/extract_placeholders", summary="提取 Word 文档中的占位符", response_description="返回占位符列表")
+async def extract_placeholders(file: UploadFile = File(...)):
     """
     ### POST `/v1/docx_placeholder/extract_placeholders` 提取 Word 文档占位符接口
 
@@ -579,12 +569,8 @@ async def extract_placeholders(
     return get_json_result(retmsg="Placeholders extracted successfully.", data=placeholders)
 
 
-@router.post("/fill_placeholders", summary="填充 Word 文档中的占位符",
-             response_description="返回填充后的文档 Base64 数据")
-async def fill_placeholders(
-        file: UploadFile = File(...),
-        data: str = Form(...)
-):
+@router.post("/fill_placeholders", summary="填充 Word 文档中的占位符", response_description="返回填充后的文档 Base64 数据")
+async def fill_placeholders(file: UploadFile = File(...), data: str = Form(...)):
     """
     ### POST `/v1/docx_placeholder/fill_placeholders` 填充 Word 文档占位符接口
 
@@ -708,9 +694,7 @@ async def fill_placeholders(
         base64_encoded_file = base64.b64encode(output_file_content).decode("utf-8")
 
         # Step 8: 返回结果
-        response_data = {
-            "file": base64_encoded_file
-        }
+        response_data = {"file": base64_encoded_file}
         return get_json_result(retmsg="File filled successfully.", data=response_data)
 
     except json.JSONDecodeError:

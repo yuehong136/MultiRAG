@@ -7,11 +7,13 @@ import os
 class WorkflowLogger:
     """工作流日志管理类"""
 
-    def __init__(self,
-                 log_dir: str = "logs",
-                 log_level: int = logging.INFO,
-                 max_bytes: int = 10 * 1024 * 1024,  # 10MB
-                 backup_count: int = 5):
+    def __init__(
+        self,
+        log_dir: str = "logs",
+        log_level: int = logging.INFO,
+        max_bytes: int = 10 * 1024 * 1024,  # 10MB
+        backup_count: int = 5,
+    ):
         self.log_dir = log_dir
         self.log_level = log_level
         self.max_bytes = max_bytes
@@ -33,23 +35,13 @@ class WorkflowLogger:
     def _setup_handlers(self):
         """设置日志处理器"""
         # 1. 文件处理器 - 所有日志
-        all_handler = logging.handlers.RotatingFileHandler(
-            filename=os.path.join(self.log_dir, "workflow.log"),
-            maxBytes=self.max_bytes,
-            backupCount=self.backup_count,
-            encoding='utf-8'
-        )
+        all_handler = logging.handlers.RotatingFileHandler(filename=os.path.join(self.log_dir, "workflow.log"), maxBytes=self.max_bytes, backupCount=self.backup_count, encoding="utf-8")
         all_handler.setLevel(self.log_level)
         all_handler.setFormatter(self._get_formatter())
         self.logger.addHandler(all_handler)
 
         # 2. 文件处理器 - 只记录错误
-        error_handler = logging.handlers.RotatingFileHandler(
-            filename=os.path.join(self.log_dir, "workflow_error.log"),
-            maxBytes=self.max_bytes,
-            backupCount=self.backup_count,
-            encoding='utf-8'
-        )
+        error_handler = logging.handlers.RotatingFileHandler(filename=os.path.join(self.log_dir, "workflow_error.log"), maxBytes=self.max_bytes, backupCount=self.backup_count, encoding="utf-8")
         error_handler.setLevel(logging.ERROR)
         error_handler.setFormatter(self._get_formatter())
         self.logger.addHandler(error_handler)
@@ -62,10 +54,7 @@ class WorkflowLogger:
 
     def _get_formatter(self) -> logging.Formatter:
         """获取日志格式器"""
-        return logging.Formatter(
-            '[%(asctime)s] %(levelname)s [%(name)s]'
-            '%(message)s'
-        )
+        return logging.Formatter("[%(asctime)s] %(levelname)s [%(name)s]%(message)s")
 
 
 class WorkflowContextLogger:

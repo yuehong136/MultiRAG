@@ -19,7 +19,7 @@ class SQLPaginationConverter:
     """负责将SQL语句转换为分页查询的服务类"""
 
     # 编译正则表达式以提高性能
-    SQL_BLOCK_PATTERN = re.compile(r'```sql\s*([\s\S]*?)```', re.IGNORECASE)
+    SQL_BLOCK_PATTERN = re.compile(r"```sql\s*([\s\S]*?)```", re.IGNORECASE)
 
     def __init__(self, db: Session, user_id: Any, prompt_dir: str = None):
         """
@@ -60,12 +60,7 @@ class SQLPaginationConverter:
         # 如果没有找到代码块，直接返回响应（假设整个响应就是SQL）
         return response.strip()
 
-    async def convert_to_pagination(
-            self,
-            sql_query: str,
-            database_type,
-            llm_name: str
-    ) -> str:
+    async def convert_to_pagination(self, sql_query: str, database_type, llm_name: str) -> str:
         """
         将SQL语句转换为分页查询
 
@@ -83,10 +78,7 @@ class SQLPaginationConverter:
             prompt_template = PromptTemplateUtil.load_template_from_file(template_path)
 
             # 准备模板参数
-            template_values = {
-                "sql": sql_query,
-                "database_type": database_type
-            }
+            template_values = {"sql": sql_query, "database_type": database_type}
 
             # 填充模板
             prompt = PromptTemplateUtil.fill_template(prompt_template, template_values)
@@ -99,7 +91,7 @@ class SQLPaginationConverter:
             gen_conf = {
                 "temperature": 0.0,  # 使用0以获得更确定性的结果
                 "top_p": 0.9,
-                "max_tokens": 2048
+                "max_tokens": 2048,
             }
 
             # 定义在独立线程中执行的函数，使用独立的数据库会话
@@ -109,11 +101,7 @@ class SQLPaginationConverter:
                 with db_connection() as thread_db:
                     model_config = get_model_config_by_type_and_name(thread_db, self.user_id, LLMType.CHAT.value, llm_name)
                     thread_llm_instance = LLMBundle(thread_db, self.user_id, model_config)
-                    return thread_llm_instance.chat(
-                        system="",
-                        history=history,
-                        gen_conf=gen_conf
-                    )
+                    return thread_llm_instance.chat(system="", history=history, gen_conf=gen_conf)
 
             # 调用LLM处理我们的提示词
             response = await thread_pool_exec(_chat_in_thread)

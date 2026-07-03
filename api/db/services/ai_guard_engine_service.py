@@ -5,6 +5,7 @@
 @date：2025/01/31
 @desc: 渐进式AI安全护栏检测引擎服务 - 优先词库检测，预留完整流程兼容
 """
+
 import logging
 import re
 import time
@@ -20,11 +21,11 @@ from api.db.services.guard_service_service import GuardServiceService
 
 class AiGuardEngineService:
     """渐进式AI安全护栏检测引擎服务"""
+
     _regex_cache: dict[str, tuple[str, re.Pattern | None]] = {}
 
     @classmethod
-    def detect_content(cls, db: Session, content: str, service_id: str,
-                       tenant_id: str, user_id: str = None, **kwargs) -> dict[str, Any]:
+    def detect_content(cls, db: Session, content: str, service_id: str, tenant_id: str, user_id: str = None, **kwargs) -> dict[str, Any]:
         """
         统一内容检测接口（渐进式实现）
 
@@ -66,16 +67,11 @@ class AiGuardEngineService:
             detection_results["detection_mode"] = detection_mode
 
             # 5. 记录日志
-            log_id = cls._log_detection_result(
-                db, service, content, detection_results,
-                tenant_id, user_id, process_time_ms, **kwargs
-            )
+            log_id = cls._log_detection_result(db, service, content, detection_results, tenant_id, user_id, process_time_ms, **kwargs)
             detection_results["log_id"] = log_id
 
             # 6. 更新服务统计
-            GuardServiceService.increment_request_count(
-                db, service_id, detection_results["is_blocked"]
-            )
+            GuardServiceService.increment_request_count(db, service_id, detection_results["is_blocked"])
 
             return detection_results
 
@@ -101,7 +97,7 @@ class AiGuardEngineService:
         if has_dimensions and has_labels:
             return "comprehensive"  # 后续实现
         else:
-            return "library_only"   # 当前实现
+            return "library_only"  # 当前实现
 
     @classmethod
     def _detect_library_only(cls, db: Session, content: str, service: Any) -> dict[str, Any]:
@@ -119,7 +115,9 @@ class AiGuardEngineService:
         # 获取服务绑定的词库
         logging.info(f"开始词库检测，服务ID: {service.id}, 内容: {content}")
         libraries = GuardServiceLibraryService.get_libraries_by_service(
-            db, service.id, enabled_only=False  # 临时改为False，包含禁用的词库
+            db,
+            service.id,
+            enabled_only=False,  # 临时改为False，包含禁用的词库
         )
         logging.info(f"获取到 {len(libraries)} 个绑定词库: {[lib.get('name', 'unknown') for lib in libraries]}")
 
@@ -127,15 +125,12 @@ class AiGuardEngineService:
             "is_blocked": False,
             "overall_risk_score": 0.0,
             "action": "pass",
-            "library_results": {
-                "whitelist_matched": [],
-                "blacklist_matched": []
-            },
+            "library_results": {"whitelist_matched": [], "blacklist_matched": []},
             "matched_items": [],
             "risk_words": [],
             # 预留完整版字段
             "dimension_results": {},
-            "label_results": []
+            "label_results": [],
         }
 
         # 第一步：白名单预处理
@@ -146,9 +141,7 @@ class AiGuardEngineService:
             effective_type = library_info.get("effective_library_type")
             logging.info(f"词库 {library_info.get('name')} 的有效类型: {effective_type}")
             if effective_type == "whitelist":
-                whitelist_result = cls._process_whitelist(
-                    content, processed_content, library_info, db
-                )
+                whitelist_result = cls._process_whitelist(content, processed_content, library_info, db)
                 if whitelist_result["matched"]:
                     whitelist_results.append(whitelist_result["result"])
                     processed_content = whitelist_result["processed_content"]
@@ -165,7 +158,9 @@ class AiGuardEngineService:
             if effective_type == "blacklist":
                 logging.info(f"处理黑名单词库: {library_info.get('name')}")
                 blacklist_result = cls._process_blacklist(
-                    content, library_info, db  # 使用原始内容
+                    content,
+                    library_info,
+                    db,  # 使用原始内容
                 )
                 logging.info(f"黑名单检测结果: {blacklist_result}")
                 if blacklist_result["matched"]:
@@ -173,34 +168,24 @@ class AiGuardEngineService:
 
                     # 更新总体风险分数
                     risk_score = blacklist_result["result"]["risk_score"]
-                    detection_results["overall_risk_score"] = max(
-                        detection_results["overall_risk_score"], risk_score
-                    )
+                    detection_results["overall_risk_score"] = max(detection_results["overall_risk_score"], risk_score)
 
                     # 添加到通用匹配项
                     for word in blacklist_result["result"]["matched_words"]:
-                        detection_results["matched_items"].append({
-                            "type": "keyword",
-                            "content": word,
-                            "source": "blacklist_library",
-                            "library_name": blacklist_result["result"]["library_name"]
-                        })
+                        detection_results["matched_items"].append({"type": "keyword", "content": word, "source": "blacklist_library", "library_name": blacklist_result["result"]["library_name"]})
                         detection_results["risk_words"].append(word)
 
         detection_results["library_results"]["blacklist_matched"] = blacklist_results
 
         # 第三步：决定最终动作
-        final_action = cls._determine_action_library_mode(
-            detection_results, service.policy_config
-        )
+        final_action = cls._determine_action_library_mode(detection_results, service.policy_config)
         detection_results["action"] = final_action
         detection_results["is_blocked"] = final_action == "block"
 
         return detection_results
 
     @classmethod
-    def _process_whitelist(cls, original_content: str, processed_content: str,
-                          library_info: dict[str, Any], db: Session) -> dict[str, Any]:
+    def _process_whitelist(cls, original_content: str, processed_content: str, library_info: dict[str, Any], db: Session) -> dict[str, Any]:
         """
         处理白名单词库
 
@@ -215,10 +200,8 @@ class AiGuardEngineService:
         """
         # 只查询启用的词库项（status="1"）
         from api.db.db_models import GuardLibraryItem
-        library_items = db.query(GuardLibraryItem).filter(
-            GuardLibraryItem.library_id == library_info["id"],
-            GuardLibraryItem.status == "1"
-        ).all()
+
+        library_items = db.query(GuardLibraryItem).filter(GuardLibraryItem.library_id == library_info["id"], GuardLibraryItem.status == "1").all()
 
         matched_words = []
         current_content = processed_content
@@ -246,17 +229,11 @@ class AiGuardEngineService:
         return {
             "matched": len(matched_words) > 0,
             "processed_content": current_content,
-            "result": {
-                "library_id": library_info["id"],
-                "library_name": library_info["name"],
-                "matched_words": matched_words,
-                "action": "ignored"
-            }
+            "result": {"library_id": library_info["id"], "library_name": library_info["name"], "matched_words": matched_words, "action": "ignored"},
         }
 
     @classmethod
-    def _process_blacklist(cls, content: str, library_info: dict[str, Any],
-                          db: Session) -> dict[str, Any]:
+    def _process_blacklist(cls, content: str, library_info: dict[str, Any], db: Session) -> dict[str, Any]:
         """
         处理黑名单词库
 
@@ -270,10 +247,8 @@ class AiGuardEngineService:
         """
         # 只查询启用的词库项（status="1"），确保禁用的词不会被检测
         from api.db.db_models import GuardLibraryItem
-        library_items = db.query(GuardLibraryItem).filter(
-            GuardLibraryItem.library_id == library_info["id"],
-            GuardLibraryItem.status == "1"
-        ).all()
+
+        library_items = db.query(GuardLibraryItem).filter(GuardLibraryItem.library_id == library_info["id"], GuardLibraryItem.status == "1").all()
         logging.info(f"黑名单词库 {library_info.get('name')} 包含 {len(library_items)} 个启用的词汇")
 
         matched_words: list[str] = []
@@ -301,13 +276,7 @@ class AiGuardEngineService:
 
             return {
                 "matched": True,
-                "result": {
-                    "library_id": library_info["id"],
-                    "library_name": library_info["name"],
-                    "matched_words": matched_words,
-                    "custom_label": custom_label,
-                    "risk_score": risk_score
-                }
+                "result": {"library_id": library_info["id"], "library_name": library_info["name"], "matched_words": matched_words, "custom_label": custom_label, "risk_score": risk_score},
             }
 
         return {"matched": False, "result": {}}
@@ -351,10 +320,7 @@ class AiGuardEngineService:
         try:
             pattern = re.compile(item.content, re.IGNORECASE | re.MULTILINE | re.UNICODE)
         except re.error as exc:
-            logging.warning(
-                "正则词库项编译失败 item_id=%s library_id=%s error=%s",
-                item.id, item.library_id, exc
-            )
+            logging.warning("正则词库项编译失败 item_id=%s library_id=%s error=%s", item.id, item.library_id, exc)
             cls._regex_cache[item.id] = (item.content, None)
             return None
 
@@ -402,8 +368,7 @@ class AiGuardEngineService:
         return detection_results
 
     @classmethod
-    def _determine_action_library_mode(cls, detection_results: dict[str, Any],
-                                      policy_config: dict[str, Any]) -> str:
+    def _determine_action_library_mode(cls, detection_results: dict[str, Any], policy_config: dict[str, Any]) -> str:
         """
         词库模式下的动作决策
 
@@ -431,10 +396,7 @@ class AiGuardEngineService:
             return "pass"
 
     @classmethod
-    def _log_detection_result(cls, db: Session, service: Any, content: str,
-                             detection_results: dict[str, Any], tenant_id: str,
-                             user_id: str = None, process_time_ms: int = 0,
-                             **kwargs) -> str | None:
+    def _log_detection_result(cls, db: Session, service: Any, content: str, detection_results: dict[str, Any], tenant_id: str, user_id: str = None, process_time_ms: int = 0, **kwargs) -> str | None:
         """
         记录检测结果日志
         """
@@ -451,18 +413,16 @@ class AiGuardEngineService:
                 "risk_words": detection_results["risk_words"],
                 "process_time_ms": process_time_ms,
                 "cloud_service_used": False,
-
                 # 当前基于词库的检测结果
                 "content_results": detection_results.get("library_results", {}),
                 "sensitive_results": [],
                 "attack_results": [],
                 "customized_hits": detection_results.get("matched_items", []),
-
                 # 额外信息
                 "request_id": kwargs.get("request_id"),
                 "chat_id": kwargs.get("chat_id"),
                 "source_type": kwargs.get("source_type", "api"),
-                "source_id": kwargs.get("source_id")
+                "source_id": kwargs.get("source_id"),
             }
 
             return GuardLogService.create_log(db, **log_data)
@@ -484,7 +444,7 @@ class AiGuardEngineService:
             "matched_items": [],
             "risk_words": [],
             "reason": reason,
-            "process_time_ms": 0
+            "process_time_ms": 0,
         }
 
     @classmethod
@@ -500,5 +460,5 @@ class AiGuardEngineService:
             "matched_items": [],
             "risk_words": [],
             "error": error,
-            "process_time_ms": 0
+            "process_time_ms": 0,
         }

@@ -92,14 +92,7 @@ REGION_SYSTEM = _REGION_HEAD + "\n\n" + SKELETON_CONTRACT + "\n\n示例块(仅�
 def build_region_messages(report_text: str, *, section_title: str | None, brief: str) -> list[dict[str, str]]:
     where = f"本生成区位于标题为「{section_title}」的小节内。" if section_title else ""
     brief_text = brief.strip() or "(无指令 —— 从报告中推断一个合理的区域)"
-    user = (
-        "作者对本生成区的指令:\n"
-        + brief_text
-        + "\n\n按上面的指令,只从下面这篇报告构建本区域的块。"
-        + where
-        + '只输出 {"blocks":[...]}。\n\n---\n'
-        + report_text.strip()
-    )
+    user = "作者对本生成区的指令:\n" + brief_text + "\n\n按上面的指令,只从下面这篇报告构建本区域的块。" + where + '只输出 {"blocks":[...]}。\n\n---\n' + report_text.strip()
     return [
         {"role": "system", "content": REGION_SYSTEM},
         {"role": "user", "content": user},
@@ -129,9 +122,7 @@ brief 只给你这个区域的「角色」和要用的「组件」—— 几个�
   内容搬过来,也不要用无关材料凑数。
 - 只构建本区域的块。只输出一个 JSON 对象 {"blocks":[...]},别的什么都不要。"""
 
-LAYOUT_FIRST_REGION_SYSTEM = (
-    _LAYOUT_FIRST_REGION_HEAD + "\n\n" + SKELETON_CONTRACT + "\n\n示例块(仅作说明 —— 请根据用户的实际「源文」 + brief 的角色产出块):\n" + FEW_SHOT_SECTION
-)
+LAYOUT_FIRST_REGION_SYSTEM = _LAYOUT_FIRST_REGION_HEAD + "\n\n" + SKELETON_CONTRACT + "\n\n示例块(仅作说明 —— 请根据用户的实际「源文」 + brief 的角色产出块):\n" + FEW_SHOT_SECTION
 
 
 def build_layout_first_region_messages(report_text: str, *, section_title: str | None, brief: str) -> list[dict[str, str]]:
@@ -198,9 +189,7 @@ _LAYOUT_FIRST_SECTION_HEAD = """你是一个「报告模板」引擎,在「布�
 相同的语言书写(中文报告→中文 hint),无视本指令或下方样例的语言。只输出一个 JSON 对象
 {"blocks":[...]},别的什么都不要:没有 markdown 围栏、没有散文。"""
 
-LAYOUT_FIRST_SECTION_SYSTEM = (
-    _LAYOUT_FIRST_SECTION_HEAD + "\n\n" + LAYOUT_FIRST_CONTRACT + "\n\n示例小节(仅作说明 —— 请根据用户的实际报告产出 open-region):\n" + FEW_SHOT_LAYOUT_FIRST
-)
+LAYOUT_FIRST_SECTION_SYSTEM = _LAYOUT_FIRST_SECTION_HEAD + "\n\n" + LAYOUT_FIRST_CONTRACT + "\n\n示例小节(仅作说明 —— 请根据用户的实际报告产出 open-region):\n" + FEW_SHOT_LAYOUT_FIRST
 
 
 def build_layout_first_section_messages(report_text: str, section: dict[str, str]) -> list[dict[str, str]]:

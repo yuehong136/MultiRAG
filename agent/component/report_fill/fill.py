@@ -358,9 +358,7 @@ async def fill_skeleton(
 
     done = 0
 
-    async def fill_one(
-        section: dict[str, Any], plan: FillPlan
-    ) -> tuple[dict[str, dict[str, Any]], FillError | None]:
+    async def fill_one(section: dict[str, Any], plan: FillPlan) -> tuple[dict[str, dict[str, Any]], FillError | None]:
         nonlocal done
         try:
             messages = build_fill_messages(

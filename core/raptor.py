@@ -74,7 +74,7 @@ class RecursiveAbstractiveProcessing4TreeOrganizedRetrieval:
                 response = re.sub(r"^.*</think>", "", response, flags=re.DOTALL)
                 if response.find("**ERROR**") >= 0:
                     raise Exception(response)
-                await thread_pool_exec(set_llm_cache,self._llm_model.llm_name,system,response,history,gen_conf)
+                await thread_pool_exec(set_llm_cache, self._llm_model.llm_name, system, response, history, gen_conf)
                 return response
             except Exception as exc:
                 last_exc = exc

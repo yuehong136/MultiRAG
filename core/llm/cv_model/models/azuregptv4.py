@@ -10,8 +10,8 @@ class AzureGptV4(GptV4):
     _FACTORY_NAME = "Azure-OpenAI"
 
     def __init__(self, key, model_name, lang="Chinese", **kwargs):
-        api_key = json.loads(key).get('api_key', '')
-        api_version = json.loads(key).get('api_version', '2024-02-01')
+        api_key = json.loads(key).get("api_key", "")
+        api_version = json.loads(key).get("api_version", "2024-02-01")
         self.client = AzureOpenAI(api_key=api_key, azure_endpoint=kwargs["base_url"], api_version=api_version)
         self.model_name = model_name
         self.lang = lang
@@ -25,10 +25,7 @@ class AzureGptV4(GptV4):
                 if "text" in c:
                     c["type"] = "text"
 
-        res = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=prompt
-        )
+        res = self.client.chat.completions.create(model=self.model_name, messages=prompt)
         return res.choices[0].message.content.strip(), res.usage.total_tokens
 
     def describe_with_prompt(self, image, prompt=None):

@@ -49,7 +49,7 @@ class FirecrawlConfig:
             max_retries=int(os.getenv("FIRECRAWL_MAX_RETRIES", "3")),
             timeout=int(os.getenv("FIRECRAWL_TIMEOUT", "30")),
             rate_limit_delay=float(os.getenv("FIRECRAWL_RATE_LIMIT_DELAY", "1.0")),
-            max_concurrent_requests=int(os.getenv("FIRECRAWL_MAX_CONCURRENT", "5"))
+            max_concurrent_requests=int(os.getenv("FIRECRAWL_MAX_CONCURRENT", "5")),
         )
 
     @classmethod
@@ -65,7 +65,7 @@ class FirecrawlConfig:
             "max_retries": self.max_retries,
             "timeout": self.timeout,
             "rate_limit_delay": self.rate_limit_delay,
-            "max_concurrent_requests": self.max_concurrent_requests
+            "max_concurrent_requests": self.max_concurrent_requests,
         }
 
     def to_json(self) -> str:

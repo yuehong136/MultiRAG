@@ -5,6 +5,7 @@
 @date：2024/7/22 9:38
 @desc:
 """
+
 from zhipuai import ZhipuAI
 
 from core.llm.cv_model.base import Base

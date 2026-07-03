@@ -32,7 +32,6 @@ class ServeTTSRequest(BaseModel):
     latency: Literal["normal", "balanced"] = "normal"
 
 
-
 class FishAudioTTS(Base):
     def __init__(self, key, model_name, base_url="https://api.fish.audio/v1/tts"):
         if not base_url:
@@ -56,9 +55,7 @@ class FishAudioTTS(Base):
                 with client.stream(
                     method="POST",
                     url=self.base_url,
-                    content=ormsgpack.packb(
-                        request, option=ormsgpack.OPT_SERIALIZE_PYDANTIC
-                    ),
+                    content=ormsgpack.packb(request, option=ormsgpack.OPT_SERIALIZE_PYDANTIC),
                     headers=self.headers,
                     timeout=None,
                 ) as response:

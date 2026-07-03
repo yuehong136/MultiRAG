@@ -2,6 +2,7 @@ import os
 
 PROJECT_BASE = os.getenv("RAG_PROJECT_BASE") or os.getenv("RAG_DEPLOY_BASE")
 
+
 def get_project_base_directory(*args):
     global PROJECT_BASE
     if PROJECT_BASE is None:

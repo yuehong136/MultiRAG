@@ -20,7 +20,7 @@ class FileReaderComponentOutputDefinition:
     variable_name: str = "OUTPUT"
     variable_type: VariableType = VariableType.OBJECT.value
     description: str | None = None
-    schema: 'FileReaderComponentOutputDefinition' = None
+    schema: "FileReaderComponentOutputDefinition" = None
 
 
 @dataclass
@@ -38,8 +38,7 @@ class FileReaderComponent(Component[FileReaderComponentParam]):
         self.component_parameter: FileReaderComponentParam = component_parameter
         super().__init__(component_parameter, node_id, self.name)
 
-    async def process(self, input_data: dict | None = None, context: WorkflowContext | None = None,
-                      **kwargs) -> dict:
+    async def process(self, input_data: dict | None = None, context: WorkflowContext | None = None, **kwargs) -> dict:
         file_path = ""
         if context is not None:
             if self.component_parameter.is_batch:
@@ -50,8 +49,7 @@ class FileReaderComponent(Component[FileReaderComponentParam]):
                 for file in file_list:
                     file_name, file_content = process_file_object(file)
                     output_list.append({"fileName": file_name, "fileContent": file_content})
-                context.set(str(self.node_id), NodeIOData(
-                    output_data={self.component_parameter.output_definition.variable_name: output_list}))
+                context.set(str(self.node_id), NodeIOData(output_data={self.component_parameter.output_definition.variable_name: output_list}))
             else:
                 if self.component_parameter.input_definition.value_type == ValueTypeOfIODefinition.REF.value:
                     ref_node_id = self.component_parameter.input_definition.content[0]
@@ -63,10 +61,7 @@ class FileReaderComponent(Component[FileReaderComponentParam]):
                         print("file is UploadFile")
                         file_name, file_content = await read_upload_file(file)
 
-                        context.set(str(self.node_id),
-                                    NodeIOData(output_data={self.component_parameter.output_definition.variable_name: {
-                                        "fileName": file_name,
-                                        "fileContent": file_content}}))
+                        context.set(str(self.node_id), NodeIOData(output_data={self.component_parameter.output_definition.variable_name: {"fileName": file_name, "fileContent": file_content}}))
 
     def validate_inputs(self):
         pass
@@ -75,37 +70,39 @@ class FileReaderComponent(Component[FileReaderComponentParam]):
         pass
 
     @staticmethod
-    def decode(json: json) -> 'FileReaderComponent':
-        node_json = json['node']
-        node_id = node_json['id']
-        component_param = node_json['data']['componentParam']
-        is_batch = component_param.get('isBatch', False)
+    def decode(json: json) -> "FileReaderComponent":
+        node_json = json["node"]
+        node_id = node_json["id"]
+        component_param = node_json["data"]["componentParam"]
+        is_batch = component_param.get("isBatch", False)
         # batch = Batch.parse_batch(component_param.get('batch', None))
-        input_definition = component_param['input_definition']
-        parameter_name = input_definition[0]['parameter_name']
-        value_type = input_definition[0]['value_type']
-        content = input_definition[0]['content']
+        input_definition = component_param["input_definition"]
+        parameter_name = input_definition[0]["parameter_name"]
+        value_type = input_definition[0]["value_type"]
+        content = input_definition[0]["content"]
         FileReaderComponentInputDefinition(value_type=value_type, content=content, parameter_name=parameter_name)
 
-        output_definition = component_param['output_definition']
-        variable_name = output_definition['variable_name']
-        variable_type = output_definition['variable_type']
-        description = output_definition['description']
-        schema = output_definition['schema']
+        output_definition = component_param["output_definition"]
+        variable_name = output_definition["variable_name"]
+        variable_type = output_definition["variable_type"]
+        description = output_definition["description"]
+        schema = output_definition["schema"]
 
-        FileReaderComponentOutputDefinition(variable_name=variable_name, variable_type=variable_type,
-                                            description=description, schema=schema)
+        FileReaderComponentOutputDefinition(variable_name=variable_name, variable_type=variable_type, description=description, schema=schema)
 
-        return FileReaderComponent(FileReaderComponentParam(
-            FileReaderComponentOutputDefinition(variable_name=variable_name, variable_type=variable_type,
-                                                description=description, schema=schema),
-            FileReaderComponentInputDefinition(value_type=value_type, content=content, parameter_name=parameter_name),
-            is_batch=is_batch),
-            node_id)
+        return FileReaderComponent(
+            FileReaderComponentParam(
+                FileReaderComponentOutputDefinition(variable_name=variable_name, variable_type=variable_type, description=description, schema=schema),
+                FileReaderComponentInputDefinition(value_type=value_type, content=content, parameter_name=parameter_name),
+                is_batch=is_batch,
+            ),
+            node_id,
+        )
 
 
 class FileReadError(Exception):
     """自定义异常类，用于文件读取错误"""
+
     pass
 
 
@@ -118,17 +115,17 @@ from pypdf import PdfReader
 
 async def read_upload_file(file: UploadFile):
     contents = await file.read()
-    file_extension = file.filename.split('.')[-1].lower()
+    file_extension = file.filename.split(".")[-1].lower()
 
-    if file_extension == 'txt':
+    if file_extension == "txt":
         try:
-            decoded_contents = contents.decode('utf-8')
+            decoded_contents = contents.decode("utf-8")
         except UnicodeDecodeError:
-            decoded_contents = contents.decode('utf-8', errors='ignore')
-    elif file_extension == 'docx':
+            decoded_contents = contents.decode("utf-8", errors="ignore")
+    elif file_extension == "docx":
         doc = docx.Document(io.BytesIO(contents))
-        decoded_contents = '\n'.join([paragraph.text for paragraph in doc.paragraphs])
-    elif file_extension == 'doc':
+        decoded_contents = "\n".join([paragraph.text for paragraph in doc.paragraphs])
+    elif file_extension == "doc":
         try:
             content = contents  # 使用之前读取的内容，而不是再次读取
             print(f"File size: {len(content)} bytes")
@@ -141,15 +138,15 @@ async def read_upload_file(file: UploadFile):
             response = requests.post("http://localhost:8080/api/doc/read", files=files)
 
             if response.status_code == 200:
-                decoded_contents = response.text.replace('\n', '')
+                decoded_contents = response.text.replace("\n", "")
             else:
                 return {"message": f"Error from Spring Boot: {response.status_code}", "details": response.text}
 
         except Exception as e:
             return {"message": f"An error occurred: {e!s}"}
-    elif file_extension == 'pdf':
+    elif file_extension == "pdf":
         pdf = PdfReader(io.BytesIO(contents))
-        decoded_contents = '\n'.join([page.extract_text() for page in pdf.pages])
+        decoded_contents = "\n".join([page.extract_text() for page in pdf.pages])
     else:
         raise ValueError(f"Unsupported file type: {file_extension}")
 
@@ -166,45 +163,45 @@ def process_file_object(file_object):
     返回:
     tuple: 包含文件名和解码后内容的元组
     """
-    file_name = file_object.get('file_name')
-    content = file_object.get('file_content').getvalue()
-    file_extension = file_name.split('.')[-1].lower()
+    file_name = file_object.get("file_name")
+    content = file_object.get("file_content").getvalue()
+    file_extension = file_name.split(".")[-1].lower()
 
     if content is None:
         return file_name, ""
 
-    if file_extension == 'txt':
+    if file_extension == "txt":
         try:
-            decoded_content = content.decode('utf-8')
+            decoded_content = content.decode("utf-8")
         except UnicodeDecodeError:
             try:
-                decoded_content = content.decode('gbk')
+                decoded_content = content.decode("gbk")
             except UnicodeDecodeError:
-                decoded_content = content.decode('utf-8', errors='ignore')
-    elif file_extension == 'docx':
+                decoded_content = content.decode("utf-8", errors="ignore")
+    elif file_extension == "docx":
         doc = docx.Document(io.BytesIO(content))
-        decoded_content = '\n'.join([paragraph.text for paragraph in doc.paragraphs])
-    elif file_extension == 'doc':
+        decoded_content = "\n".join([paragraph.text for paragraph in doc.paragraphs])
+    elif file_extension == "doc":
         try:
             print(f"File size: {len(content)} bytes")
 
             if len(content) == 0:
                 return ""
 
-            files = {"file": (file_name, io.BytesIO(content), 'application/msword')}
+            files = {"file": (file_name, io.BytesIO(content), "application/msword")}
 
             response = requests.post("http://localhost:8080/api/doc/read", files=files)
 
             if response.status_code == 200:
-                decoded_content = response.text.replace('\n', '')
+                decoded_content = response.text.replace("\n", "")
             else:
                 raise Exception(f"Error from Spring Boot: {response.status_code}, Details: {response.text}")
 
         except Exception as e:
             raise Exception(f"An error occurred: {e!s}")
-    elif file_extension == 'pdf':
+    elif file_extension == "pdf":
         pdf = PdfReader(io.BytesIO(content))
-        decoded_content = '\n'.join([page.extract_text() for page in pdf.pages])
+        decoded_content = "\n".join([page.extract_text() for page in pdf.pages])
     else:
         raise Exception(f"Unsupported file type: {file_extension}")
 
@@ -219,8 +216,4 @@ async def read_file_object(file: UploadFile):
 
 
 def get_file_info(file: UploadFile):
-    return {
-        "filename": file.filename,
-        "content_type": file.content_type,
-        "size": file.size
-    }
+    return {"filename": file.filename, "content_type": file.content_type, "size": file.size}

@@ -4,18 +4,17 @@ def map_schema_with_values(input_schema, input_value, batch_value):
     single_inputs = {}
 
     for item in input_schema:
-        name = item['name']
-        value_ref = item['input']['value']['content']
+        name = item["name"]
+        value_ref = item["input"]["value"]["content"]
 
-        if value_ref['name'] in batch_value:
-            array_name = value_ref['name']
+        if value_ref["name"] in batch_value:
+            array_name = value_ref["name"]
             array_inputs[name] = array_name
         else:
-            single_inputs[name] = value_ref['name']
+            single_inputs[name] = value_ref["name"]
 
     # Get array lengths to determine number of combinations
-    array_lengths = {name: len(batch_value[ref_name])
-                     for name, ref_name in array_inputs.items()}
+    array_lengths = {name: len(batch_value[ref_name]) for name, ref_name in array_inputs.items()}
 
     if not array_lengths:
         return []

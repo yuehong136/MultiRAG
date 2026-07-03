@@ -25,7 +25,7 @@ from core.nlp.term_weight import Dealer as TermWeightDealer
 from core.prompts.generator import cluster_keyword_prompt, global_summary_prompt, global_tag_prompt
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
 
-_MAX_CONCURRENT_CHATS = int(os.environ.get('MAX_CONCURRENT_CHATS', 10))
+_MAX_CONCURRENT_CHATS = int(os.environ.get("MAX_CONCURRENT_CHATS", 10))
 _asyncio_chat_limiter = asyncio.Semaphore(_MAX_CONCURRENT_CHATS)
 
 
@@ -117,7 +117,7 @@ class DocumentAnalysisService:
         include_tags: bool = True,
         summary_type: str = "short",
         raptor_config: dict | None = None,
-        use_cache: bool = True
+        use_cache: bool = True,
     ) -> dict:
         """
         文档智能分析 (支持doc_id和file两种模式)
@@ -157,12 +157,7 @@ class DocumentAnalysisService:
 
         # 默认RAPTOR配置
         if raptor_config is None:
-            raptor_config = {
-                "max_cluster": 64,
-                "max_token": 512,
-                "threshold": 0.1,
-                "random_seed": 42
-            }
+            raptor_config = {"max_cluster": 64, "max_token": 512, "threshold": 0.1, "random_seed": 42}
 
         # 1. 获取文档信息
         if doc_id:
@@ -173,17 +168,12 @@ class DocumentAnalysisService:
             doc_kb_id = doc.kb_id or kb_id
         else:
             # file模式
-            doc_name = filename or (file.filename if hasattr(file, 'filename') else "Uploaded File")
+            doc_name = filename or (file.filename if hasattr(file, "filename") else "Uploaded File")
             doc_kb_id = None
             doc_id = None  # 确保后续逻辑知道这是临时文件
 
         # 2. 获取文档chunks (自适应数据源)
-        chunks = await self._get_document_chunks(
-            doc_id=doc_id,
-            kb_id=doc_kb_id,
-            file=file,
-            filename=filename
-        )
+        chunks = await self._get_document_chunks(doc_id=doc_id, kb_id=doc_kb_id, file=file, filename=filename)
 
         if not chunks or len(chunks) == 0:
             raise ValueError(f"No chunks found for document {doc_id}")
@@ -203,17 +193,11 @@ class DocumentAnalysisService:
                 include_tags=include_tags,
                 summary_type=summary_type,
                 raptor_config=raptor_config,
-                use_cache=use_cache
+                use_cache=use_cache,
             )
         else:
             result = await self._analyze_short_document(
-                doc_id=doc_id,
-                doc_name=doc_name,
-                chunks=chunks,
-                include_summary=include_summary,
-                include_tags=include_tags,
-                summary_type=summary_type,
-                use_cache=use_cache
+                doc_id=doc_id, doc_name=doc_name, chunks=chunks, include_summary=include_summary, include_tags=include_tags, summary_type=summary_type, use_cache=use_cache
             )
 
         # 4. 元数据
@@ -221,16 +205,12 @@ class DocumentAnalysisService:
             "chunk_count": len(chunks),
             "use_raptor": use_raptor,
             "raptor_config": raptor_config if use_raptor else None,
-            "processing_time_seconds": round(time.time() - start_time, 2)
+            "processing_time_seconds": round(time.time() - start_time, 2),
         }
 
         return result
 
-    async def _get_chunks_from_milvus(
-        self,
-        doc_id: str,
-        kb_id: str
-    ) -> list[dict]:
+    async def _get_chunks_from_milvus(self, doc_id: str, kb_id: str) -> list[dict]:
         """
         从Milvus向量库获取已入库的chunks (最优性能方案)
 
@@ -251,7 +231,7 @@ class DocumentAnalysisService:
             tenant_id=self.tenant_id,
             kb_ids=[kb_id],
             max_count=10000,  # 足够大以获取所有chunks
-            fields=["content_with_weight", "content_ltks", "important_kwd", "question_kwd"]
+            fields=["content_with_weight", "content_ltks", "important_kwd", "question_kwd"],
         )
 
         if not chunks:
@@ -261,10 +241,7 @@ class DocumentAnalysisService:
         logging.info(f"Retrieved {len(chunks)} chunks from Milvus")
         return chunks
 
-    async def _get_chunks_by_reparse(
-        self,
-        doc_id: str
-    ) -> list[dict]:
+    async def _get_chunks_by_reparse(self, doc_id: str) -> list[dict]:
         """
         从MinIO读取文件并重新解析 (兼容性方案)
 
@@ -282,7 +259,7 @@ class DocumentAnalysisService:
             self.db,
             doc_id,
             None,  # parser_config_override
-            None   # limit
+            None,  # limit
         )
 
         # 统一格式
@@ -293,20 +270,10 @@ class DocumentAnalysisService:
                 result.append(chunk)
             elif isinstance(chunk, str):
                 # 字符串格式,转换为dict
-                result.append({
-                    "content_with_weight": chunk,
-                    "content_ltks": chunk,
-                    "important_kwd": [],
-                    "question_kwd": []
-                })
+                result.append({"content_with_weight": chunk, "content_ltks": chunk, "important_kwd": [], "question_kwd": []})
             else:
                 # 其他格式,转为字符串再转dict
-                result.append({
-                    "content_with_weight": str(chunk),
-                    "content_ltks": str(chunk),
-                    "important_kwd": [],
-                    "question_kwd": []
-                })
+                result.append({"content_with_weight": str(chunk), "content_ltks": str(chunk), "important_kwd": [], "question_kwd": []})
 
         logging.info(f"Reparsed {len(result)} chunks")
         return result
@@ -314,7 +281,7 @@ class DocumentAnalysisService:
     async def _parse_uploaded_file(
         self,
         file,  # UploadFile or file-like object
-        filename: str | None = None
+        filename: str | None = None,
     ) -> list[dict]:
         """
         解析用户直传的文件(临时解析,不入库)
@@ -333,7 +300,7 @@ class DocumentAnalysisService:
         import tempfile
 
         # 获取文件名
-        if hasattr(file, 'filename'):
+        if hasattr(file, "filename"):
             fname = file.filename
         elif filename:
             fname = filename
@@ -343,8 +310,8 @@ class DocumentAnalysisService:
         logging.info(f"Parsing uploaded file: {fname}")
 
         # 读取文件内容
-        if hasattr(file, 'read'):
-            if hasattr(file.read, '__self__'):  # async read
+        if hasattr(file, "read"):
+            if hasattr(file.read, "__self__"):  # async read
                 file_content = await file.read()
             else:  # sync read
                 file_content = await thread_pool_exec(file.read)
@@ -369,17 +336,7 @@ class DocumentAnalysisService:
                 return None
 
             # 执行切片 (使用asyncio.to_thread)
-            result = await thread_pool_exec(
-                module.chunk,
-                fname,
-                binary=file_content,
-                from_page=0,
-                to_page=100000,
-                lang="Chinese",
-                callback=_noop,
-                parser_config={},
-                tenant_id=self.tenant_id
-            )
+            result = await thread_pool_exec(module.chunk, fname, binary=file_content, from_page=0, to_page=100000, lang="Chinese", callback=_noop, parser_config={}, tenant_id=self.tenant_id)
 
             # 统一格式
             chunks = []
@@ -388,19 +345,9 @@ class DocumentAnalysisService:
                     if isinstance(item, dict):
                         chunks.append(item)
                     else:
-                        chunks.append({
-                            "content_with_weight": str(item),
-                            "content_ltks": str(item),
-                            "important_kwd": [],
-                            "question_kwd": []
-                        })
+                        chunks.append({"content_with_weight": str(item), "content_ltks": str(item), "important_kwd": [], "question_kwd": []})
             else:
-                chunks.append({
-                    "content_with_weight": str(result),
-                    "content_ltks": str(result),
-                    "important_kwd": [],
-                    "question_kwd": []
-                })
+                chunks.append({"content_with_weight": str(result), "content_ltks": str(result), "important_kwd": [], "question_kwd": []})
 
             logging.info(f"Parsed {len(chunks)} chunks from uploaded file")
             return chunks
@@ -415,7 +362,7 @@ class DocumentAnalysisService:
         doc_id: str | None = None,
         kb_id: str | None = None,
         file=None,  # UploadFile or file-like object
-        filename: str | None = None
+        filename: str | None = None,
     ) -> list[dict]:
         """
         获取文档chunks (自适应数据源选择)
@@ -463,9 +410,9 @@ class DocumentAnalysisService:
             progress = getattr(doc, "progress", 0.0)
 
             can_use_milvus = (
-                run_status == "3" and  # DONE状态,解析完成
-                chunk_num > 0 and
-                progress >= 0.99
+                run_status == "3"  # DONE状态,解析完成
+                and chunk_num > 0
+                and progress >= 0.99
             )
 
             if can_use_milvus:
@@ -484,22 +431,10 @@ class DocumentAnalysisService:
             return await self._get_chunks_by_reparse(doc_id)
 
     async def _analyze_with_raptor(
-        self,
-        doc_id: str | None,
-        doc_name: str,
-        kb_id: str | None,
-        chunks: list[dict],
-        include_summary: bool,
-        include_tags: bool,
-        summary_type: str,
-        raptor_config: dict,
-        use_cache: bool
+        self, doc_id: str | None, doc_name: str, kb_id: str | None, chunks: list[dict], include_summary: bool, include_tags: bool, summary_type: str, raptor_config: dict, use_cache: bool
     ) -> dict:
         """使用RAPTOR进行分析"""
-        result = {
-            "doc_id": doc_id,
-            "doc_name": doc_name
-        }
+        result = {"doc_id": doc_id, "doc_name": doc_name}
 
         # 1. 准备RAPTOR输入格式 (在asyncio环境中准备embedding)
         embd_model = self._get_embedding_model()
@@ -509,20 +444,14 @@ class DocumentAnalysisService:
             content = chunk.get("content_with_weight", "")
 
             # 检查缓存的embedding
-            cached_embd = await thread_pool_exec(
-                get_embed_cache, embd_model.llm_name, content
-            )
+            cached_embd = await thread_pool_exec(get_embed_cache, embd_model.llm_name, content)
 
             if cached_embd is not None:
                 embd = cached_embd
             else:
-                embd_result, _ = await thread_pool_exec(
-                    embd_model.encode, [content]
-                )
+                embd_result, _ = await thread_pool_exec(embd_model.encode, [content])
                 embd = embd_result[0]
-                await thread_pool_exec(
-                    set_embed_cache, embd_model.llm_name, content, embd
-                )
+                await thread_pool_exec(set_embed_cache, embd_model.llm_name, content, embd)
 
             raptor_chunks.append((content, np.array(embd)))
 
@@ -550,30 +479,23 @@ Focus on the main ideas and key points. Keep the summary coherent and readable."
             embd_model=embd_model_raptor,
             prompt=raptor_config["prompt"],
             max_token=raptor_config.get("max_token", 512),
-            threshold=raptor_config.get("threshold", 0.1)
+            threshold=raptor_config.get("threshold", 0.1),
         )
 
         # 运行 RAPTOR（直接 await，RAPTOR 已改造为 asyncio）
-        raptor_result = await raptor(
-            raptor_chunks,
-            raptor_config.get("random_seed", 42),
-            lambda msg: logging.info(f"RAPTOR: {msg}")
-        )
+        raptor_result = await raptor(raptor_chunks, raptor_config.get("random_seed", 42), lambda msg: logging.info(f"RAPTOR: {msg}"))
 
         # 5. 提取聚类摘要
         logging.info(f"RAPTOR result: original_length={original_length}, result_length={len(raptor_result)}")
         logging.info(f"RAPTOR config: max_cluster={raptor_config.get('max_cluster')}, threshold={raptor_config.get('threshold')}")
 
-        cluster_summaries = [
-            raptor_result[i][0]
-            for i in range(original_length, len(raptor_result))
-        ]
+        cluster_summaries = [raptor_result[i][0] for i in range(original_length, len(raptor_result))]
 
         logging.info(f"RAPTOR generated {len(cluster_summaries)} cluster summaries from {original_length} original chunks")
 
         # 打印每个聚类摘要的前150个字符
         for i, summary in enumerate(cluster_summaries[:3]):  # 只打印前3个
-            logging.info(f"Cluster summary {i+1}: {summary[:150]}...")
+            logging.info(f"Cluster summary {i + 1}: {summary[:150]}...")
 
         # 6. 获取LLM模型用于后续处理 (在asyncio环境中,用于标签和摘要生成)
         llm_model = self._get_llm_model()
@@ -581,17 +503,9 @@ Focus on the main ideas and key points. Keep the summary coherent and readable."
         # 7. 基于RAPTOR结果生成标签和摘要 (FastAPI最佳实践: asyncio.gather)
         tasks = []
         if include_tags:
-            tasks.append(
-                self._generate_tags_from_raptor(
-                    chunks, cluster_summaries, result, llm_model, use_cache
-                )
-            )
+            tasks.append(self._generate_tags_from_raptor(chunks, cluster_summaries, result, llm_model, use_cache))
         if include_summary:
-            tasks.append(
-                self._generate_summary_from_raptor(
-                    cluster_summaries, result, summary_type, llm_model, use_cache
-                )
-            )
+            tasks.append(self._generate_summary_from_raptor(cluster_summaries, result, summary_type, llm_model, use_cache))
 
         if tasks:
             await asyncio.gather(*tasks)
@@ -600,14 +514,7 @@ Focus on the main ideas and key points. Keep the summary coherent and readable."
 
         return result
 
-    async def _generate_tags_from_raptor(
-        self,
-        original_chunks: list[dict],
-        cluster_summaries: list[str],
-        result: dict,
-        llm_model,
-        use_cache: bool
-    ):
+    async def _generate_tags_from_raptor(self, original_chunks: list[dict], cluster_summaries: list[str], result: dict, llm_model, use_cache: bool):
         """基于RAPTOR聚类结果生成标签"""
         # 1. 为每个簇提取关键词（并行）
         cluster_keywords_list = []
@@ -622,34 +529,23 @@ Focus on the main ideas and key points. Keep the summary coherent and readable."
 
             # 检查缓存
             if use_cache:
-                cached = await thread_pool_exec(
-                    get_llm_cache, llm_model.llm_name, prompt, [], {}
-                )
+                cached = await thread_pool_exec(get_llm_cache, llm_model.llm_name, prompt, [], {})
                 if cached:
                     return cached
 
             # LLM调用
             async with _asyncio_chat_limiter:
-                keywords = await thread_pool_exec(
-                    llm_model.chat,
-                    "You're a helpful assistant.",
-                    [{"role": "user", "content": prompt}],
-                    {"temperature": 0.2, "max_tokens": 80}
-                )
+                keywords = await thread_pool_exec(llm_model.chat, "You're a helpful assistant.", [{"role": "user", "content": prompt}], {"temperature": 0.2, "max_tokens": 80})
 
             keywords = re.sub(r"^.*</think>", "", keywords, flags=re.DOTALL).strip()
 
             # 保存缓存
             if use_cache:
-                await thread_pool_exec(
-                    set_llm_cache, llm_model.llm_name, prompt, keywords, [], {}
-                )
+                await thread_pool_exec(set_llm_cache, llm_model.llm_name, prompt, keywords, [], {})
 
             return keywords
 
-        cluster_keywords_list = await asyncio.gather(
-            *[extract_cluster_keyword(summary) for summary in cluster_summaries]
-        )
+        cluster_keywords_list = await asyncio.gather(*[extract_cluster_keyword(summary) for summary in cluster_summaries])
 
         logging.info(f"Extracted {len(cluster_keywords_list)} cluster keywords")
         logging.debug(f"Cluster keywords: {cluster_keywords_list}")
@@ -666,12 +562,7 @@ Focus on the main ideas and key points. Keep the summary coherent and readable."
         logging.info(f"Global tag prompt preview (first 500 chars):\n{global_tag_prompt_text[:500]}...")
 
         async with _asyncio_chat_limiter:
-            semantic_tags_str = await thread_pool_exec(
-                llm_model.chat,
-                "You're a helpful assistant.",
-                [{"role": "user", "content": global_tag_prompt_text}],
-                {"temperature": 0.3, "max_tokens": 100}
-            )
+            semantic_tags_str = await thread_pool_exec(llm_model.chat, "You're a helpful assistant.", [{"role": "user", "content": global_tag_prompt_text}], {"temperature": 0.3, "max_tokens": 100})
 
         semantic_tags_str = re.sub(r"^.*</think>", "", semantic_tags_str, flags=re.DOTALL)
         semantic_tags = [t.strip() for t in semantic_tags_str.split(",")][:3]
@@ -686,14 +577,7 @@ Focus on the main ideas and key points. Keep the summary coherent and readable."
         result["frequency_tags"] = frequency_tags
         result["combined_tags"] = merged
 
-    async def _generate_summary_from_raptor(
-        self,
-        cluster_summaries: list[str],
-        result: dict,
-        summary_type: str,
-        llm_model,
-        use_cache: bool
-    ):
+    async def _generate_summary_from_raptor(self, cluster_summaries: list[str], result: dict, summary_type: str, llm_model, use_cache: bool):
         """基于RAPTOR聚类摘要生成全局摘要"""
         summaries_text = "\n\n---\n\n".join(cluster_summaries)
 
@@ -709,12 +593,7 @@ Focus on the main ideas and key points. Keep the summary coherent and readable."
 
         # LLM调用
         async with _asyncio_chat_limiter:
-            summary = await thread_pool_exec(
-                llm_model.chat,
-                "You're a helpful assistant.",
-                [{"role": "user", "content": prompt}],
-                {"temperature": 0.3, "max_tokens": max_tokens}
-            )
+            summary = await thread_pool_exec(llm_model.chat, "You're a helpful assistant.", [{"role": "user", "content": prompt}], {"temperature": 0.3, "max_tokens": max_tokens})
 
         summary = re.sub(r"^.*</think>", "", summary, flags=re.DOTALL).strip()
 
@@ -723,20 +602,9 @@ Focus on the main ideas and key points. Keep the summary coherent and readable."
         else:
             result["long_summary"] = summary
 
-    async def _analyze_short_document(
-        self,
-        doc_id: str | None,
-        doc_name: str,
-        chunks: list[dict],
-        include_summary: bool,
-        include_tags: bool,
-        summary_type: str,
-        use_cache: bool
-    ) -> dict:
+    async def _analyze_short_document(self, doc_id: str | None, doc_name: str, chunks: list[dict], include_summary: bool, include_tags: bool, summary_type: str, use_cache: bool) -> dict:
         """短文档分析"""
-        full_content = "\n\n".join([
-            chunk.get("content_with_weight", "") for chunk in chunks
-        ])
+        full_content = "\n\n".join([chunk.get("content_with_weight", "") for chunk in chunks])
         full_content = truncate(full_content, 8000)
 
         result = {"doc_id": doc_id, "doc_name": doc_name}
@@ -745,31 +613,16 @@ Focus on the main ideas and key points. Keep the summary coherent and readable."
         # FastAPI最佳实践: asyncio.gather
         tasks = []
         if include_tags:
-            tasks.append(
-                self._generate_tags_for_short_doc(
-                    full_content, chunks, result, llm, use_cache
-                )
-            )
+            tasks.append(self._generate_tags_for_short_doc(full_content, chunks, result, llm, use_cache))
         if include_summary:
-            tasks.append(
-                self._generate_summary_for_short_doc(
-                    full_content, result, summary_type, llm, use_cache
-                )
-            )
+            tasks.append(self._generate_summary_for_short_doc(full_content, result, summary_type, llm, use_cache))
 
         if tasks:
             await asyncio.gather(*tasks)
 
         return result
 
-    async def _generate_tags_for_short_doc(
-        self,
-        full_content: str,
-        chunks: list[dict],
-        result: dict,
-        llm_model,
-        use_cache: bool
-    ):
+    async def _generate_tags_for_short_doc(self, full_content: str, chunks: list[dict], result: dict, llm_model, use_cache: bool):
         """短文档标签生成"""
         tag_prompt = f"""## Task
 Generate 2-3 high-level semantic tags for the following document.
@@ -787,12 +640,7 @@ Generate 2-3 high-level semantic tags for the following document.
 Just output 2-3 tags separated by comma, nothing else."""
 
         async with _asyncio_chat_limiter:
-            semantic_tags_str = await thread_pool_exec(
-                llm_model.chat,
-                "You're a helpful assistant.",
-                [{"role": "user", "content": tag_prompt}],
-                {"temperature": 0.3, "max_tokens": 100}
-            )
+            semantic_tags_str = await thread_pool_exec(llm_model.chat, "You're a helpful assistant.", [{"role": "user", "content": tag_prompt}], {"temperature": 0.3, "max_tokens": 100})
 
         semantic_tags_str = re.sub(r"^.*</think>", "", semantic_tags_str, flags=re.DOTALL)
         semantic_tags = [t.strip() for t in semantic_tags_str.split(",")][:3]
@@ -804,14 +652,7 @@ Just output 2-3 tags separated by comma, nothing else."""
         result["frequency_tags"] = frequency_tags
         result["combined_tags"] = merged
 
-    async def _generate_summary_for_short_doc(
-        self,
-        full_content: str,
-        result: dict,
-        summary_type: str,
-        llm_model,
-        use_cache: bool
-    ):
+    async def _generate_summary_for_short_doc(self, full_content: str, result: dict, summary_type: str, llm_model, use_cache: bool):
         """短文档摘要生成"""
         if summary_type == "short":
             max_tokens = 400
@@ -835,12 +676,7 @@ Write a comprehensive summary (500-800 words) of the following document.
 Just output the summary, nothing else."""
 
         async with _asyncio_chat_limiter:
-            summary = await thread_pool_exec(
-                llm_model.chat,
-                "You're a helpful assistant.",
-                [{"role": "user", "content": summary_prompt}],
-                {"temperature": 0.3, "max_tokens": max_tokens}
-            )
+            summary = await thread_pool_exec(llm_model.chat, "You're a helpful assistant.", [{"role": "user", "content": summary_prompt}], {"temperature": 0.3, "max_tokens": max_tokens})
 
         summary = re.sub(r"^.*</think>", "", summary, flags=re.DOTALL).strip()
 
@@ -857,10 +693,7 @@ Just output the summary, nothing else."""
             tokens = rag_tokenizer.tokenize(content).split()
             all_tokens.extend(tokens)
 
-        filtered_tokens = [
-            t for t in all_tokens
-            if len(t) > 1 and not re.match(r'^[0-9]+$', t)
-        ]
+        filtered_tokens = [t for t in all_tokens if len(t) > 1 and not re.match(r"^[0-9]+$", t)]
 
         counter = Counter(filtered_tokens)
         top_5 = [word for word, count in counter.most_common(5)]

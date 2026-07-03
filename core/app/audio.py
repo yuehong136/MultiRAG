@@ -34,13 +34,10 @@ def chunk(filename, binary, tenant_id, lang, callback=None, **kwargs):
         # 转换音频为 16kHz 单声道格式（通义千问要求）
         try:
             import subprocess
+
             converted_path = tmp_path.replace(ext, "_16k.wav")
             # ffmpeg -i input -ac 1 -ar 16000 -sample_fmt s16 output.wav
-            subprocess.run(
-                ["ffmpeg", "-i", tmp_path, "-ac", "1", "-ar", "16000", "-sample_fmt", "s16", converted_path, "-y"],
-                capture_output=True,
-                check=True
-            )
+            subprocess.run(["ffmpeg", "-i", tmp_path, "-ac", "1", "-ar", "16000", "-sample_fmt", "s16", converted_path, "-y"], capture_output=True, check=True)
             audio_path = converted_path
         except (FileNotFoundError, subprocess.CalledProcessError):
             # FFmpeg 不可用或转换失败，使用原始文件

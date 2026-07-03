@@ -16,17 +16,17 @@ class TableConverter:
         has_header = TableConverter._has_header_row(table)
 
         if has_header:
-            html_builder.append('  <thead>\n')
+            html_builder.append("  <thead>\n")
 
         # 遍历行
         for row_idx, row in enumerate(table.rows):
             # 如果是第二行且第一行是表头，添加tbody标签
             if row_idx == 1 and has_header:
-                html_builder.append('  </thead>\n  <tbody>\n')
+                html_builder.append("  </thead>\n  <tbody>\n")
             elif row_idx == 0 and not has_header:
-                html_builder.append('  <tbody>\n')
+                html_builder.append("  <tbody>\n")
 
-            html_builder.append('    <tr>\n')
+            html_builder.append("    <tr>\n")
 
             # 遍历单元格
             for col_idx, cell in enumerate(row.cells):
@@ -38,27 +38,27 @@ class TableConverter:
                 colspan, rowspan = span_info.get((row_idx, col_idx), (1, 1))
 
                 # 判断是否是表头单元格
-                tag = 'th' if TableConverter._is_header_cell(cell) else 'td'
+                tag = "th" if TableConverter._is_header_cell(cell) else "td"
 
                 # 构建单元格标签
-                html_builder.append(f'      <{tag}')
+                html_builder.append(f"      <{tag}")
                 if colspan > 1:
                     html_builder.append(f' colspan="{colspan}"')
                 if rowspan > 1:
                     html_builder.append(f' rowspan="{rowspan}"')
 
-                html_builder.append('>')
+                html_builder.append(">")
                 html_builder.append(TableConverter._get_cell_content(cell))
-                html_builder.append(f'</{tag}>\n')
+                html_builder.append(f"</{tag}>\n")
 
-            html_builder.append('    </tr>\n')
+            html_builder.append("    </tr>\n")
 
         # 添加闭合标签
         if has_header:
-            html_builder.append('  </tbody>\n')
-        html_builder.append('</table>')
+            html_builder.append("  </tbody>\n")
+        html_builder.append("</table>")
 
-        return ''.join(html_builder)
+        return "".join(html_builder)
 
     @staticmethod
     def _get_span_info(table: Table) -> dict[tuple[int, int], tuple[int, int]]:
@@ -153,6 +153,6 @@ class TableConverter:
         content = []
         for paragraph in cell.paragraphs:
             if content:
-                content.append('<br/>')
+                content.append("<br/>")
             content.append(html.escape(paragraph.text))
-        return ''.join(content)
+        return "".join(content)

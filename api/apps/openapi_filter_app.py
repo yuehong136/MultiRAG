@@ -5,6 +5,7 @@
 @date：2024/12/10 10:00
 @desc: OpenAPI 过滤服务接口
 """
+
 import logging
 from typing import Any
 
@@ -22,15 +23,8 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.post("/openapi-filtered",
-             summary="过滤OpenAPI文档",
-             response_description="返回过滤后的OpenAPI文档",
-             response_model=dict[str, Any])
-async def filter_openapi_post(
-        rule: FilterRule = Body(..., description="过滤规则"),
-        request: Request = None,
-        user=Depends(manager)
-):
+@router.post("/openapi-filtered", summary="过滤OpenAPI文档", response_description="返回过滤后的OpenAPI文档", response_model=dict[str, Any])
+async def filter_openapi_post(rule: FilterRule = Body(..., description="过滤规则"), request: Request = None, user=Depends(manager)):
     """
     根据指定规则过滤 OpenAPI 文档，并仅保留匹配路径及其依赖组件（最小闭包）。
 
@@ -162,59 +156,42 @@ async def filter_openapi_post(
             components=result.filtered_doc.get("components"),
             external_docs=result.filtered_doc.get("externalDocs"),
             x_filter_warnings=result.warnings,
-            x_filter_meta=result.meta
+            x_filter_meta=result.meta,
         )
 
         # 设置响应头
-        headers = {
-            "ETag": result.etag,
-            "Cache-Control": "private, max-age=300",
-            "X-Filter-Cache-Key": result.cache_key,
-            "X-Processing-Time-Ms": str(result.meta.processing_time_ms)
-        }
+        headers = {"ETag": result.etag, "Cache-Control": "private, max-age=300", "X-Filter-Cache-Key": result.cache_key, "X-Processing-Time-Ms": str(result.meta.processing_time_ms)}
 
         if result.meta.source_etag:
             headers["X-Source-ETag"] = result.meta.source_etag
 
-        return JSONResponse(
-            content=response_data.model_dump(by_alias=True, exclude_none=True),
-            headers=headers
-        )
+        return JSONResponse(content=response_data.model_dump(by_alias=True, exclude_none=True), headers=headers)
 
     except ValidationError as e:
         logger.warning(f"过滤规则验证失败: {e}")
-        return get_data_error_result(
-            retcode=422,
-            retmsg="过滤规则验证失败"
-        )
+        return get_data_error_result(retcode=422, retmsg="过滤规则验证失败")
 
     except ValueError as e:
         logger.warning(f"过滤处理失败: {e}")
-        return get_data_error_result(
-            retcode=400,
-            retmsg=str(e)
-        )
+        return get_data_error_result(retcode=400, retmsg=str(e))
 
     except Exception as e:
         logger.error(f"过滤服务异常: {e}", exc_info=True)
         return server_error_response(e)
 
 
-@router.get("/openapi-filtered",
-            summary="过滤OpenAPI文档 (GET)",
-            response_description="返回过滤后的OpenAPI文档",
-            response_model=dict[str, Any])
+@router.get("/openapi-filtered", summary="过滤OpenAPI文档 (GET)", response_description="返回过滤后的OpenAPI文档", response_model=dict[str, Any])
 async def filter_openapi_get(
-        paths: list[str] = Query(..., description="要保留的路径列表"),
-        match: str = Query("exact", description="匹配模式", pattern="^(exact|prefix|glob|regex)$"),
-        source: str | None = Query(None, description="外部OpenAPI文档URL"),
-        include_tags: list[str] = Query(default=[], description="包含标签"),
-        exclude_paths: list[str] = Query(default=[], description="排除路径"),
-        exclude_tags: list[str] = Query(default=[], description="排除标签"),
-        strict: bool = Query(True, description="严格模式"),
-        prune_examples: bool = Query(False, description="删除示例"),
-        request: Request = None,
-        user=Depends(manager)
+    paths: list[str] = Query(..., description="要保留的路径列表"),
+    match: str = Query("exact", description="匹配模式", pattern="^(exact|prefix|glob|regex)$"),
+    source: str | None = Query(None, description="外部OpenAPI文档URL"),
+    include_tags: list[str] = Query(default=[], description="包含标签"),
+    exclude_paths: list[str] = Query(default=[], description="排除路径"),
+    exclude_tags: list[str] = Query(default=[], description="排除标签"),
+    strict: bool = Query(True, description="严格模式"),
+    prune_examples: bool = Query(False, description="删除示例"),
+    request: Request = None,
+    user=Depends(manager),
 ):
     """
     GET方式过滤OpenAPI文档（便于调试）
@@ -240,15 +217,7 @@ async def filter_openapi_get(
     """
     try:
         # 构建过滤规则
-        rule_data = {
-            "paths": paths,
-            "match": match,
-            "include_tags": include_tags,
-            "exclude_paths": exclude_paths,
-            "exclude_tags": exclude_tags,
-            "strict": strict,
-            "prune_examples": prune_examples
-        }
+        rule_data = {"paths": paths, "match": match, "include_tags": include_tags, "exclude_paths": exclude_paths, "exclude_tags": exclude_tags, "strict": strict, "prune_examples": prune_examples}
 
         if source:
             rule_data["source"] = source
@@ -269,24 +238,16 @@ async def filter_openapi_get(
             components=result.filtered_doc.get("components"),
             external_docs=result.filtered_doc.get("externalDocs"),
             x_filter_warnings=result.warnings,
-            x_filter_meta=result.meta
+            x_filter_meta=result.meta,
         )
 
         # 设置响应头
-        headers = {
-            "ETag": result.etag,
-            "Cache-Control": "private, max-age=300",
-            "X-Filter-Cache-Key": result.cache_key,
-            "X-Processing-Time-Ms": str(result.meta.processing_time_ms)
-        }
+        headers = {"ETag": result.etag, "Cache-Control": "private, max-age=300", "X-Filter-Cache-Key": result.cache_key, "X-Processing-Time-Ms": str(result.meta.processing_time_ms)}
 
         if result.meta.source_etag:
             headers["X-Source-ETag"] = result.meta.source_etag
 
-        return JSONResponse(
-            content=response_data.model_dump(by_alias=True, exclude_none=True),
-            headers=headers
-        )
+        return JSONResponse(content=response_data.model_dump(by_alias=True, exclude_none=True), headers=headers)
 
     except ValidationError as e:
         logger.warning(f"过滤规则验证失败: {e}")
@@ -297,19 +258,14 @@ async def filter_openapi_get(
 
     except ValueError as e:
         logger.warning(f"过滤处理失败: {e}")
-        return get_data_error_result(
-            retcode=400,
-            retmsg=str(e)
-        )
+        return get_data_error_result(retcode=400, retmsg=str(e))
 
     except Exception as e:
         logger.error(f"过滤服务异常: {e}", exc_info=True)
         return server_error_response(e)
 
 
-@router.get("/openapi-filter-health",
-            summary="OpenAPI过滤服务健康检查",
-            response_description="返回服务健康状态")
+@router.get("/openapi-filter-health", summary="OpenAPI过滤服务健康检查", response_description="返回服务健康状态")
 def filter_service_health():
     """
     OpenAPI过滤服务健康检查
@@ -324,82 +280,53 @@ def filter_service_health():
     try:
         health_status = {
             "status": "healthy",
-            "timestamp": FilterMeta(
-                rules={},
-                generated_at="",
-                processing_time_ms=0.0,
-                components_before=0,
-                components_after=0,
-                paths_before=0,
-                paths_after=0
-            ).generated_at,
-            "components": {}
+            "timestamp": FilterMeta(rules={}, generated_at="", processing_time_ms=0.0, components_before=0, components_after=0, paths_before=0, paths_after=0).generated_at,
+            "components": {},
         }
 
         # 检查Redis连接
         try:
             from core.utils.redis_conn import REDIS_CONN
+
             if REDIS_CONN.health():  # 使用正确的health方法
                 health_status["components"]["redis"] = {"status": "healthy"}
             else:
-                health_status["components"]["redis"] = {
-                    "status": "unhealthy",
-                    "error": "health check failed"
-                }
+                health_status["components"]["redis"] = {"status": "unhealthy", "error": "health check failed"}
                 health_status["status"] = "unhealthy"
         except Exception as e:
-            health_status["components"]["redis"] = {
-                "status": "unhealthy",
-                "error": str(e)
-            }
+            health_status["components"]["redis"] = {"status": "unhealthy", "error": str(e)}
             health_status["status"] = "unhealthy"
 
         # 检查HTTP客户端
         try:
             client = openapi_filter_service.get_http_client()
-            health_status["components"]["http_client"] = {
-                "status": "healthy",
-                "is_closed": client.is_closed
-            }
+            health_status["components"]["http_client"] = {"status": "healthy", "is_closed": client.is_closed}
         except Exception as e:
-            health_status["components"]["http_client"] = {
-                "status": "unhealthy",
-                "error": str(e)
-            }
+            health_status["components"]["http_client"] = {"status": "unhealthy", "error": str(e)}
             health_status["status"] = "unhealthy"
 
         # 基础功能测试
         try:
             from api.utils.openapi_filter_utils import generate_cache_key
+
             test_key = generate_cache_key({"test": True})
             if len(test_key) == 32:
                 health_status["components"]["utils"] = {"status": "healthy"}
             else:
                 raise ValueError("缓存键生成异常")
         except Exception as e:
-            health_status["components"]["utils"] = {
-                "status": "unhealthy",
-                "error": str(e)
-            }
+            health_status["components"]["utils"] = {"status": "unhealthy", "error": str(e)}
             health_status["status"] = "unhealthy"
 
         return get_json_result(data=health_status)
 
     except Exception as e:
         logger.error(f"健康检查失败: {e}", exc_info=True)
-        return get_data_error_result(
-            retcode=500,
-            retmsg=f"健康检查失败: {e!s}"
-        )
+        return get_data_error_result(retcode=500, retmsg=f"健康检查失败: {e!s}")
 
 
-@router.post("/openapi-filter-validate",
-             summary="验证OpenAPI过滤规则",
-             response_description="返回规则验证结果")
-def validate_filter_rule(
-        rule: FilterRule = Body(..., description="要验证的过滤规则"),
-        user=Depends(manager)
-):
+@router.post("/openapi-filter-validate", summary="验证OpenAPI过滤规则", response_description="返回规则验证结果")
+def validate_filter_rule(rule: FilterRule = Body(..., description="要验证的过滤规则"), user=Depends(manager)):
     """
     验证OpenAPI过滤规则的有效性
 
@@ -412,82 +339,51 @@ def validate_filter_rule(
     返回详细的验证结果和建议
     """
     try:
-        validation_result = {
-            "valid": True,
-            "warnings": [],
-            "suggestions": []
-        }
+        validation_result = {"valid": True, "warnings": [], "suggestions": []}
 
         # 验证路径格式
         for path in rule.paths:
             if not path.startswith("/"):
-                validation_result["warnings"].append({
-                    "type": "path_format",
-                    "message": f"路径建议以'/'开头: {path}",
-                    "path": path
-                })
+                validation_result["warnings"].append({"type": "path_format", "message": f"路径建议以'/'开头: {path}", "path": path})
 
         # 验证正则表达式（如果使用regex模式）
         if rule.match.value == "regex":
             import re
+
             for pattern in rule.paths + rule.exclude_paths:
                 try:
                     re.compile(pattern)
                 except re.error as e:
                     validation_result["valid"] = False
-                    validation_result["warnings"].append({
-                        "type": "invalid_regex",
-                        "message": f"无效的正则表达式 '{pattern}': {e}",
-                        "path": pattern
-                    })
+                    validation_result["warnings"].append({"type": "invalid_regex", "message": f"无效的正则表达式 '{pattern}': {e}", "path": pattern})
 
         # 检查路径重叠
         if rule.exclude_paths:
             overlaps = set(rule.paths) & set(rule.exclude_paths)
             if overlaps:
-                validation_result["warnings"].append({
-                    "type": "path_overlap",
-                    "message": f"包含和排除路径有重叠: {list(overlaps)}",
-                    "paths": list(overlaps)
-                })
+                validation_result["warnings"].append({"type": "path_overlap", "message": f"包含和排除路径有重叠: {list(overlaps)}", "paths": list(overlaps)})
 
         # 检查标签重叠
         if rule.exclude_tags:
             overlaps = set(rule.include_tags) & set(rule.exclude_tags)
             if overlaps:
-                validation_result["warnings"].append({
-                    "type": "tag_overlap",
-                    "message": f"包含和排除标签有重叠: {list(overlaps)}",
-                    "tags": list(overlaps)
-                })
+                validation_result["warnings"].append({"type": "tag_overlap", "message": f"包含和排除标签有重叠: {list(overlaps)}", "tags": list(overlaps)})
 
         # 性能建议
         if len(rule.paths) > 100:
-            validation_result["suggestions"].append({
-                "type": "performance",
-                "message": "路径数量较多，建议考虑使用通配符模式或分批处理"
-            })
+            validation_result["suggestions"].append({"type": "performance", "message": "路径数量较多，建议考虑使用通配符模式或分批处理"})
 
         if rule.max_depth > 20:
-            validation_result["suggestions"].append({
-                "type": "performance",
-                "message": "递归深度设置较高，可能影响性能"
-            })
+            validation_result["suggestions"].append({"type": "performance", "message": "递归深度设置较高，可能影响性能"})
 
         # 安全建议
         if rule.source and not rule.strict:
-            validation_result["suggestions"].append({
-                "type": "security",
-                "message": "使用外部源时建议启用严格模式以确保引用完整性"
-            })
+            validation_result["suggestions"].append({"type": "security", "message": "使用外部源时建议启用严格模式以确保引用完整性"})
 
         return get_json_result(data=validation_result)
 
     except ValidationError:
-        return get_data_error_result(
-            retcode=422,
-            retmsg="规则验证失败"
-        )
+        return get_data_error_result(retcode=422, retmsg="规则验证失败")
 
     except Exception as e:
         logger.error(f"规则验证异常: {e}", exc_info=True)

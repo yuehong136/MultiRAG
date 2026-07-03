@@ -5,6 +5,7 @@
 @date：2024/7/9 9:00
 @desc:
 """
+
 import logging
 from datetime import datetime
 
@@ -36,9 +37,7 @@ class File2DocumentService(CommonService):
     def get_by_document_ids(cls, db: Session, document_ids: list[str]) -> list[dict]:
         """根据文档ID列表批量查询文件-文档关联记录"""
         try:
-            objs = db.query(cls.model).filter(
-                cls.model.document_id.in_(document_ids)
-            ).all()
+            objs = db.query(cls.model).filter(cls.model.document_id.in_(document_ids)).all()
 
             return [
                 {
@@ -48,7 +47,7 @@ class File2DocumentService(CommonService):
                     "create_time": obj.create_time,
                     "create_date": obj.create_date,
                     "update_time": obj.update_time,
-                    "update_date": obj.update_date
+                    "update_date": obj.update_date,
                 }
                 for obj in objs
             ]
@@ -85,22 +84,13 @@ class File2DocumentService(CommonService):
 
             if not document_ids:
                 # 只有 file_ids
-                result = db.query(cls.model).filter(
-                    cls.model.file_id.in_(file_ids)
-                ).delete(synchronize_session=False)
+                result = db.query(cls.model).filter(cls.model.file_id.in_(file_ids)).delete(synchronize_session=False)
             elif not file_ids:
                 # 只有 document_ids
-                result = db.query(cls.model).filter(
-                    cls.model.document_id.in_(document_ids)
-                ).delete(synchronize_session=False)
+                result = db.query(cls.model).filter(cls.model.document_id.in_(document_ids)).delete(synchronize_session=False)
             else:
                 # 两者都有，使用 OR 条件
-                result = db.query(cls.model).filter(
-                    or_(
-                        cls.model.document_id.in_(document_ids),
-                        cls.model.file_id.in_(file_ids)
-                    )
-                ).delete(synchronize_session=False)
+                result = db.query(cls.model).filter(or_(cls.model.document_id.in_(document_ids), cls.model.file_id.in_(file_ids))).delete(synchronize_session=False)
 
             db.commit()
             return result

@@ -39,6 +39,7 @@ class ExcelProcessorParam(ComponentParamBase):
     """
     Define the ExcelProcessor component parameters.
     """
+
     def __init__(self):
         super().__init__()
         # Input configuration
@@ -59,32 +60,11 @@ class ExcelProcessorParam(ComponentParamBase):
         self.output_filename = "output"
 
         # Component outputs
-        self.outputs = {
-            "data": {
-                "type": "object",
-                "value": {}
-            },
-            "summary": {
-                "type": "str",
-                "value": ""
-            },
-            "markdown": {
-                "type": "str",
-                "value": ""
-            }
-        }
+        self.outputs = {"data": {"type": "object", "value": {}}, "summary": {"type": "str", "value": ""}, "markdown": {"type": "str", "value": ""}}
 
     def check(self):
-        self.check_valid_value(
-            self.operation,
-            "[ExcelProcessor] Operation",
-            ["read", "merge", "transform", "output"]
-        )
-        self.check_valid_value(
-            self.output_format,
-            "[ExcelProcessor] Output format",
-            ["xlsx", "csv"]
-        )
+        self.check_valid_value(self.operation, "[ExcelProcessor] Operation", ["read", "merge", "transform", "output"])
+        self.check_valid_value(self.output_format, "[ExcelProcessor] Output format", ["xlsx", "csv"])
         return True
 
 
@@ -98,12 +78,13 @@ class ExcelProcessor(ComponentBase, ABC):
     - transform: Apply data transformations based on instructions
     - output: Generate Excel file output
     """
+
     component_name = "ExcelProcessor"
 
     def get_input_form(self) -> dict[str, dict]:
         """Define input form for the component."""
         res = {}
-        for ref in (self._param.input_files or []):
+        for ref in self._param.input_files or []:
             for k, o in self.get_input_elements_from_text(ref).items():
                 res[k] = {"name": o.get("name", ""), "type": "file"}
         if self._param.transform_data:
@@ -111,7 +92,7 @@ class ExcelProcessor(ComponentBase, ABC):
                 res[k] = {"name": o.get("name", ""), "type": "object"}
         return res
 
-    @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10*60)))
+    @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10 * 60)))
     def _invoke(self, **kwargs):
         if self.check_if_canceled("ExcelProcessor processing"):
             return
@@ -154,6 +135,7 @@ class ExcelProcessor(ComponentBase, ABC):
             # Could be base64 encoded or a path
             if value.startswith("data:"):
                 import base64
+
                 # Extract base64 content
                 _, encoded = value.split(",", 1)
                 return base64.b64decode(encoded), "uploaded.xlsx"
@@ -176,7 +158,7 @@ class ExcelProcessor(ComponentBase, ABC):
                 return {"Sheet1": df}
             else:
                 # Read all sheets
-                xlsx = pd.ExcelFile(excel_file, engine='openpyxl')
+                xlsx = pd.ExcelFile(excel_file, engine="openpyxl")
                 sheet_selection = self._param.sheet_selection
 
                 if sheet_selection == "all":
@@ -203,7 +185,7 @@ class ExcelProcessor(ComponentBase, ABC):
         summaries = []
         markdown_parts = []
 
-        for file_ref in (self._param.input_files or []):
+        for file_ref in self._param.input_files or []:
             if self.check_if_canceled("ExcelProcessor reading"):
                 return
 
@@ -241,7 +223,7 @@ class ExcelProcessor(ComponentBase, ABC):
         """Merge multiple Excel files/sheets into one."""
         all_dfs = []
 
-        for file_ref in (self._param.input_files or []):
+        for file_ref in self._param.input_files or []:
             if self.check_if_canceled("ExcelProcessor merging"):
                 return
 
@@ -358,7 +340,7 @@ class ExcelProcessor(ComponentBase, ABC):
             else:
                 # Excel output
                 excel_io = BytesIO()
-                with pd.ExcelWriter(excel_io, engine='openpyxl') as writer:
+                with pd.ExcelWriter(excel_io, engine="openpyxl") as writer:
                     for sheet_name, df in dfs.items():
                         # Sanitize sheet name (max 31 chars, no special chars)
                         safe_name = sheet_name[:31].replace("/", "_").replace("\\", "_")
@@ -371,11 +353,7 @@ class ExcelProcessor(ComponentBase, ABC):
             settings.STORAGE_IMPL.put(self._canvas._tenant_id, doc_id, binary_content)
 
             # Set attachment output
-            self.set_output("attachment", {
-                "doc_id": doc_id,
-                "format": self._param.output_format,
-                "file_name": filename
-            })
+            self.set_output("attachment", {"doc_id": doc_id, "format": self._param.output_format, "file_name": filename})
 
             total_rows = sum(len(df) for df in dfs.values())
             self.set_output("summary", f"Generated {filename} with {len(dfs)} sheet(s), {total_rows} total rows")

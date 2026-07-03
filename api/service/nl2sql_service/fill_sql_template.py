@@ -1,5 +1,3 @@
-
-
 def fill_sql_template(templated_sql: str, parameter_definitions: list, user_selected_values: dict) -> str:
     """
     根据用户选择的值填充SQL模板。
@@ -44,8 +42,7 @@ def fill_sql_template(templated_sql: str, parameter_definitions: list, user_sele
             str_value = str(new_value)
             escaped_value = str_value.replace("'", "''")  # SQL标准的单引号转义方式
             sql_value = f"'{escaped_value}'"
-        elif data_type in ["integer", "int", "int4", "serial", "bigint", "smallint", "long", "number", "numeric",
-                           "decimal", "float", "double"]:
+        elif data_type in ["integer", "int", "int4", "serial", "bigint", "smallint", "long", "number", "numeric", "decimal", "float", "double"]:
             # 数字类型直接使用
             try:
                 # 验证一下是否真的是数字，避免注入问题
@@ -98,35 +95,32 @@ GROUP BY
 
     parameter_definitions = [
         {
-            'data_type': 'string',
-            'description': '筛选教师所属的部门名称',
-            'name': 'department_name_filter',
-            'original_value': '计算机科学与技术学院',
-            'possible_values': [
-                {'value': '物理学院'},
-                {'synonyms': ['计科院', '计算机学院'], 'value': '计算机科学与技术学院'},
-                {'value': '数学学院'},
-                {'value': '经济管理学院'},
-                {'value': '外国语学院'}
+            "data_type": "string",
+            "description": "筛选教师所属的部门名称",
+            "name": "department_name_filter",
+            "original_value": "计算机科学与技术学院",
+            "possible_values": [
+                {"value": "物理学院"},
+                {"synonyms": ["计科院", "计算机学院"], "value": "计算机科学与技术学院"},
+                {"value": "数学学院"},
+                {"value": "经济管理学院"},
+                {"value": "外国语学院"},
             ],
-            'possible_values_source': 'DIMENSION_ID:36093203355146240',
-            'semantic_info': {
-                'dimension_id': '36093203355146240',
-                'dimension_name': '部门名称'
-            },
-            'type': 'DIMENSION_FILTER',
-            'ui_hint': 'dropdown'
+            "possible_values_source": "DIMENSION_ID:36093203355146240",
+            "semantic_info": {"dimension_id": "36093203355146240", "dimension_name": "部门名称"},
+            "type": "DIMENSION_FILTER",
+            "ui_hint": "dropdown",
         }
     ]
 
-    user_selected_values = {'department_name_filter': '计算机科学与技术学院'}
+    user_selected_values = {"department_name_filter": "计算机科学与技术学院"}
 
     result = fill_sql_template(templated_sql, parameter_definitions, user_selected_values)
     print("填充后的SQL:")
     print(result)
 
     # 测试包含单引号的情况
-    user_selected_values2 = {'department_name_filter': "O'Connor学院"}
+    user_selected_values2 = {"department_name_filter": "O'Connor学院"}
     result2 = fill_sql_template(templated_sql, parameter_definitions, user_selected_values2)
     print("\n测试单引号转义:")
     print(result2)

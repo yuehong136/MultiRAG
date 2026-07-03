@@ -66,9 +66,9 @@ FEISHU_OAUTH = None
 OAUTH_CONFIG = None
 
 # Doc engine settings
-DOC_ENGINE = os.getenv('DOC_ENGINE', 'milvus')
-DOC_ENGINE_INFINITY = (DOC_ENGINE.lower() == "infinity")
-DOC_ENGINE_OCEANBASE = (DOC_ENGINE.lower() == "oceanbase")
+DOC_ENGINE = os.getenv("DOC_ENGINE", "milvus")
+DOC_ENGINE_INFINITY = DOC_ENGINE.lower() == "infinity"
+DOC_ENGINE_OCEANBASE = DOC_ENGINE.lower() == "oceanbase"
 docStoreConn = None
 msgStoreConn = None
 retriever = None
@@ -119,7 +119,7 @@ EMBEDDING_BATCH_SIZE: int = int(os.environ.get("EMBEDDING_BATCH_SIZE", 16))
 PARALLEL_DEVICES: int = 0
 
 # Storage factory settings
-STORAGE_IMPL_TYPE = os.getenv('STORAGE_IMPL', 'MINIO')
+STORAGE_IMPL_TYPE = os.getenv("STORAGE_IMPL", "MINIO")
 STORAGE_IMPL = None
 
 
@@ -276,8 +276,8 @@ def init_settings():
 
     global DOC_ENGINE, DOC_ENGINE_INFINITY, DOC_ENGINE_OCEANBASE, docStoreConn, ES, OB, OS, INFINITY, MILVUS, VASTBASE
     DOC_ENGINE = os.environ.get("DOC_ENGINE", "milvus").strip()
-    DOC_ENGINE_INFINITY = (DOC_ENGINE.lower() == "infinity")
-    DOC_ENGINE_OCEANBASE = (DOC_ENGINE.lower() == "oceanbase")
+    DOC_ENGINE_INFINITY = DOC_ENGINE.lower() == "infinity"
+    DOC_ENGINE_OCEANBASE = DOC_ENGINE.lower() == "oceanbase"
     lower_case_doc_engine = DOC_ENGINE.lower()
 
     if lower_case_doc_engine == "elasticsearch":
@@ -311,11 +311,7 @@ def init_settings():
     elif lower_case_doc_engine == "milvus":
         msgStoreConn = memory_milvus_conn.MilvusConnection()
     elif lower_case_doc_engine == "infinity":
-        INFINITY = get_base_config("infinity", {
-            "uri": "infinity:23817",
-            "postgres_port": 5432,
-            "db_name": "default_db"
-        })
+        INFINITY = get_base_config("infinity", {"uri": "infinity:23817", "postgres_port": 5432, "db_name": "default_db"})
         msgStoreConn = memory_infinity_conn.InfinityConnection()
     elif lower_case_doc_engine in ["oceanbase", "seekdb"]:
         msgStoreConn = memory_ob_conn.OBConnection()
@@ -324,15 +320,15 @@ def init_settings():
     #     docStoreConn = memory_vastbase_conn.VastBaseConnection()
 
     global AZURE, S3, MINIO, OSS, GCS
-    if STORAGE_IMPL_TYPE in ['AZURE_SPN', 'AZURE_SAS']:
+    if STORAGE_IMPL_TYPE in ["AZURE_SPN", "AZURE_SAS"]:
         AZURE = get_base_config("azure", {})
-    elif STORAGE_IMPL_TYPE == 'AWS_S3':
+    elif STORAGE_IMPL_TYPE == "AWS_S3":
         S3 = get_base_config("s3", {})
-    elif STORAGE_IMPL_TYPE == 'MINIO':
+    elif STORAGE_IMPL_TYPE == "MINIO":
         MINIO = decrypt_database_config(name="minio")
-    elif STORAGE_IMPL_TYPE == 'OSS':
+    elif STORAGE_IMPL_TYPE == "OSS":
         OSS = get_base_config("oss", {})
-    elif STORAGE_IMPL_TYPE == 'GCS':
+    elif STORAGE_IMPL_TYPE == "GCS":
         GCS = get_base_config("gcs", {})
 
     global STORAGE_IMPL
@@ -345,6 +341,7 @@ def init_settings():
     if crypto_enabled:
         try:
             from core.utils.encrypted_storage import create_encrypted_storage
+
             algorithm = os.environ.get("MultiRAG_CRYPTO_ALGORITHM", "aes-256-cbc")
             crypto_key = os.environ.get("MultiRAG_CRYPTO_KEY")
 
@@ -393,6 +390,7 @@ def check_and_install_torch():
     try:
         pip_install_torch()
         import torch.cuda
+
         PARALLEL_DEVICES = torch.cuda.device_count()
         logging.info(f"found {PARALLEL_DEVICES} gpus")
     except Exception:

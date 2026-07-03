@@ -37,9 +37,7 @@ class TextEmbeddingService:
 
         # 批量生成嵌入向量
         texts = [item.text for item in semantic_data_list]
-        embedding_model_config = get_model_config_by_type_and_name(
-            self.db, self.user.id, "embedding", embedding_model_name
-        )
+        embedding_model_config = get_model_config_by_type_and_name(self.db, self.user.id, "embedding", embedding_model_name)
         embedding_model = LLMBundle(self.db, self.user.id, embedding_model_config)
 
         # 使用asyncio.to_thread将同步encode方法转为异步
@@ -56,28 +54,24 @@ class TextEmbeddingService:
                 "model_id": item.model_id,
                 "dataset_id": item.dataset_id,
                 "theme_domain_id": item.theme_domain_id,
-                "vector": vectors[i]
+                "vector": vectors[i],
             }
             batch_data.append(insert_data)
 
         # 批量插入到向量数据库
         # 如果vector_database.insert是耗时操作，也可以考虑使用asyncio.to_thread包装
-        await thread_pool_exec(
-            self.vector_database.insert,
-            collection_name=self.COLLECTION_NAME,
-            data=batch_data
-        )
+        await thread_pool_exec(self.vector_database.insert, collection_name=self.COLLECTION_NAME, data=batch_data)
 
     async def search_similar_vectors(
-            self,
-            query_text: str,
-            embedding_model: str,
-            element_types: list[SemanticElementType] | None = None,
-            theme_domain_ids: list[str] | None = None,
-            dataset_ids: list[str] | None = None,
-            model_ids: list[str] | None = None,
-            top_k: int = 10,
-            score_threshold: float = 0.6
+        self,
+        query_text: str,
+        embedding_model: str,
+        element_types: list[SemanticElementType] | None = None,
+        theme_domain_ids: list[str] | None = None,
+        dataset_ids: list[str] | None = None,
+        model_ids: list[str] | None = None,
+        top_k: int = 10,
+        score_threshold: float = 0.6,
     ) -> list[dict[str, Any]]:
         """
         根据文本查询相似的向量数据，支持组合条件过滤
@@ -99,17 +93,12 @@ class TextEmbeddingService:
             RuntimeError: 当集合不存在时
         """
         # 检查集合是否存在
-        has_collection = await thread_pool_exec(
-            self.vector_database.has_collection,
-            collection_name=self.COLLECTION_NAME
-        )
+        has_collection = await thread_pool_exec(self.vector_database.has_collection, collection_name=self.COLLECTION_NAME)
         if not has_collection:
             raise RuntimeError(f"Collection {self.COLLECTION_NAME} does not exist")
 
         # 生成查询向量
-        embedding_model_config = get_model_config_by_type_and_name(
-            self.db, self.user.id, "embedding", embedding_model
-        )
+        embedding_model_config = get_model_config_by_type_and_name(self.db, self.user.id, "embedding", embedding_model)
         embedding_model_instance = LLMBundle(self.db, self.user.id, embedding_model_config)
         # 使用asyncio.to_thread将同步encode方法转为异步
         query_vector, _ = await thread_pool_exec(embedding_model_instance.encode, [query_text])
@@ -147,7 +136,7 @@ class TextEmbeddingService:
         # 执行向量搜索
         search_params = {
             "metric_type": "COSINE",  # 使用余弦相似度
-            "params": {"nprobe": 16}  # 搜索参数，可根据性能需求调整
+            "params": {"nprobe": 16},  # 搜索参数，可根据性能需求调整
         }
 
         # 使用asyncio.to_thread将search_by_milvus方法转为异步
@@ -157,10 +146,9 @@ class TextEmbeddingService:
             data=[query_vector[0]],
             anns_field="vector",
             filter=filter_expr if filter_expr else None,
-            output_fields=["element_type", "original_id", "element_id", "original_text",
-                           "model_id", "dataset_id", "theme_domain_id"],
+            output_fields=["element_type", "original_id", "element_id", "original_text", "model_id", "dataset_id", "theme_domain_id"],
             limit=top_k,
-            search_params=search_params
+            search_params=search_params,
         )
 
         # 处理搜索结果
@@ -177,7 +165,7 @@ class TextEmbeddingService:
                 "element_id": hit.get("entity").get("element_id"),
                 "model_id": hit.get("entity").get("model_id"),
                 "dataset_id": hit.get("entity").get("dataset_id"),
-                "theme_domain_id": hit.get("entity").get("theme_domain_id")
+                "theme_domain_id": hit.get("entity").get("theme_domain_id"),
             }
             processed_results.append(result_item)
 
@@ -195,27 +183,16 @@ class TextEmbeddingService:
             RuntimeError: 当集合不存在时
         """
         # 检查集合是否存在
-        has_collection = await thread_pool_exec(
-            self.vector_database.has_collection,
-            collection_name=self.COLLECTION_NAME
-        )
+        has_collection = await thread_pool_exec(self.vector_database.has_collection, collection_name=self.COLLECTION_NAME)
         if not has_collection:
             raise RuntimeError(f"Collection {self.COLLECTION_NAME} does not exist")
 
         # 映射实体类型到对应的字段名
-        field_mapping = {
-            OwnerType.MODEL: "model_id",
-            OwnerType.DATASET: "dataset_id",
-            OwnerType.THEME_DOMAIN: "theme_domain_id"
-        }
+        field_mapping = {OwnerType.MODEL: "model_id", OwnerType.DATASET: "dataset_id", OwnerType.THEME_DOMAIN: "theme_domain_id"}
 
         field_name = field_mapping[owner_type]
         # 使用asyncio.to_thread将delete方法转为异步
-        result = await thread_pool_exec(
-            self.vector_database.delete,
-            collection_name=self.COLLECTION_NAME,
-            filter=f"{field_name} == '{original_id}'"
-        )
+        result = await thread_pool_exec(self.vector_database.delete, collection_name=self.COLLECTION_NAME, filter=f"{field_name} == '{original_id}'")
 
         return result
 
@@ -233,10 +210,7 @@ class TextEmbeddingService:
             RuntimeError: 当集合不存在时
         """
         # 检查集合是否存在
-        has_collection = await thread_pool_exec(
-            self.vector_database.has_collection,
-            collection_name=self.COLLECTION_NAME
-        )
+        has_collection = await thread_pool_exec(self.vector_database.has_collection, collection_name=self.COLLECTION_NAME)
         if not has_collection:
             raise RuntimeError(f"Collection {self.COLLECTION_NAME} does not exist")
 
@@ -244,19 +218,13 @@ class TextEmbeddingService:
         element_id = f"{element_type.value}_{original_id}"
 
         # 使用asyncio.to_thread将delete方法转为异步
-        result = await thread_pool_exec(
-            self.vector_database.delete,
-            collection_name=self.COLLECTION_NAME,
-            filter=f"element_id == '{element_id}'"
-        )
+        result = await thread_pool_exec(self.vector_database.delete, collection_name=self.COLLECTION_NAME, filter=f"element_id == '{element_id}'")
 
         return result
 
     async def _get_embedding_model_dim(self, embedding_model: str) -> int:
         """获取嵌入模型的向量维度"""
-        embedding_model_config = get_model_config_by_type_and_name(
-            self.db, self.user.id, "embedding", embedding_model
-        )
+        embedding_model_config = get_model_config_by_type_and_name(self.db, self.user.id, "embedding", embedding_model)
         embedding_model_instance = LLMBundle(self.db, self.user.id, embedding_model_config)
         # 使用asyncio.to_thread将encode方法转为异步
         sample_vec, _ = await thread_pool_exec(embedding_model_instance.encode, ["测试"])
@@ -274,13 +242,7 @@ class TextEmbeddingService:
         dimension = await self._get_embedding_model_dim(embedding_model)
 
         # 使用asyncio.to_thread将create_collection方法转为异步
-        await thread_pool_exec(
-            self.vector_database.create_collection,
-            collection_name=self.COLLECTION_NAME,
-            dimension=dimension,
-            schema=schema,
-            index_params=index_params
-        )
+        await thread_pool_exec(self.vector_database.create_collection, collection_name=self.COLLECTION_NAME, dimension=dimension, schema=schema, index_params=index_params)
 
     async def _create_schema(self, embedding_model: str) -> CollectionSchema:
         """创建集合的schema定义"""
@@ -330,51 +292,19 @@ class TextEmbeddingService:
             nullable=True,
             max_length=256,
         )
-        schema.add_field(
-            field_name="vector",
-            datatype=DataType.FLOAT_VECTOR,
-            dim=await self._get_embedding_model_dim(embedding_model)
-        )
+        schema.add_field(field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=await self._get_embedding_model_dim(embedding_model))
         return schema
 
     def _create_index(self):
         """创建集合的索引参数"""
         index_params = self.vector_database.prepare_index_params()
-        index_params.add_index(field_name="vector",
-                               metric_type="COSINE",
-                               index_type="IVF_FLAT",
-                               index_name="vector_index",
-                               param={"nlist": 1024})
-        index_params.add_index(
-            field_name="element_type",
-            index_type="BITMAP",
-            index_name="element_type_index"
-        )
-        index_params.add_index(
-            field_name="original_id",
-            index_type="INVERTED",
-            index_name="original_id_index"
-        )
-        index_params.add_index(
-            field_name="element_id",
-            index_type="INVERTED",
-            index_name="element_id_index"
-        )
-        index_params.add_index(
-            field_name="model_id",
-            index_type="INVERTED",
-            index_name="model_id_index"
-        )
-        index_params.add_index(
-            field_name="dataset_id",
-            index_type="INVERTED",
-            index_name="dataset_id_index"
-        )
-        index_params.add_index(
-            field_name="theme_domain_id",
-            index_type="INVERTED",
-            index_name="theme_domain_id_index"
-        )
+        index_params.add_index(field_name="vector", metric_type="COSINE", index_type="IVF_FLAT", index_name="vector_index", param={"nlist": 1024})
+        index_params.add_index(field_name="element_type", index_type="BITMAP", index_name="element_type_index")
+        index_params.add_index(field_name="original_id", index_type="INVERTED", index_name="original_id_index")
+        index_params.add_index(field_name="element_id", index_type="INVERTED", index_name="element_id_index")
+        index_params.add_index(field_name="model_id", index_type="INVERTED", index_name="model_id_index")
+        index_params.add_index(field_name="dataset_id", index_type="INVERTED", index_name="dataset_id_index")
+        index_params.add_index(field_name="theme_domain_id", index_type="INVERTED", index_name="theme_domain_id_index")
         return index_params
 
 

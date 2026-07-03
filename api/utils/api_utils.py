@@ -71,7 +71,7 @@ async def _coerce_request_data(request: Request) -> dict:
         ValueError: When no JSON body or form data found
         TypeError: When payload type is unsupported
     """
-    if hasattr(request.state, '_cached_payload'):
+    if hasattr(request.state, "_cached_payload"):
         return request.state._cached_payload
     payload: Any = None
 
@@ -121,15 +121,15 @@ def serialize_for_json(obj):
     Recursively serialize objects to make them JSON serializable.
     Handles ModelMetaclass and other non-serializable objects.
     """
-    if hasattr(obj, '__dict__'):
+    if hasattr(obj, "__dict__"):
         # For objects with __dict__, try to serialize their attributes
         try:
-            return {key: serialize_for_json(value) for key, value in obj.__dict__.items() if not key.startswith('_')}
+            return {key: serialize_for_json(value) for key, value in obj.__dict__.items() if not key.startswith("_")}
         except (AttributeError, TypeError):
             return str(obj)
-    elif hasattr(obj, '__name__'):
+    elif hasattr(obj, "__name__"):
         # For classes and metaclasses, return their name
-        return f"<{obj.__module__}.{obj.__name__}>" if hasattr(obj, '__module__') else f"<{obj.__name__}>"
+        return f"<{obj.__module__}.{obj.__name__}>" if hasattr(obj, "__module__") else f"<{obj.__name__}>"
     elif isinstance(obj, (list, tuple)):
         return [serialize_for_json(item) for item in obj]
     elif isinstance(obj, dict):
@@ -141,12 +141,9 @@ def serialize_for_json(obj):
         return str(obj)
 
 
-def get_data_error_result(retcode=RetCode.DATA_ERROR, retmsg='Sorry! Data missing!'):
+def get_data_error_result(retcode=RetCode.DATA_ERROR, retmsg="Sorry! Data missing!"):
     logging.error(retmsg)
-    result_dict = {
-        "retcode": retcode,
-        "retmsg": retmsg
-    }
+    result_dict = {"retcode": retcode, "retmsg": retmsg}
     response = {key: value for key, value in result_dict.items() if value is not None or key == "retcode"}
     return JSONResponse(content=jsonable_encoder(response))
 
@@ -176,6 +173,7 @@ def validate_request(*args, **kwargs):
 
     注意：此装饰器已不再使用，FastAPI 通过 Pydantic 模型自动处理参数验证
     """
+
     def process_args(input_arguments):
         """提取验证逻辑，便于复用"""
         no_arguments = []
@@ -197,8 +195,7 @@ def validate_request(*args, **kwargs):
             if no_arguments:
                 error_string += f"required argument are missing: {', '.join(no_arguments)}; "
             if error_arguments:
-                error_string += "required argument values: " + ", ".join(
-                    [f"{a[0]}={a[1]}" for a in error_arguments])
+                error_string += "required argument values: " + ", ".join([f"{a[0]}={a[1]}" for a in error_arguments])
             return error_string
         return None
 
@@ -226,7 +223,7 @@ def validate_request(*args, **kwargs):
     return wrapper
 
 
-def get_json_result(retcode: RetCode = RetCode.SUCCESS, retmsg='success', data=None):
+def get_json_result(retcode: RetCode = RetCode.SUCCESS, retmsg="success", data=None):
     response = {"retcode": retcode, "retmsg": retmsg, "data": data}
     return JSONResponse(content=jsonable_encoder(response))
 
@@ -238,22 +235,21 @@ def apikey_required(func: Callable) -> Callable:
 
     注意：此装饰器已不再使用，FastAPI 推荐使用依赖注入方式
     """
+
     @wraps(func)
     async def decorated_function(*args, **kwargs):
-        request: Request = kwargs.get('request')  # 从 kwargs 中获取 FastAPI Request 对象
-        db: Session = kwargs.get('db')  # 从 kwargs 中获取数据库会话对象
+        request: Request = kwargs.get("request")  # 从 kwargs 中获取 FastAPI Request 对象
+        db: Session = kwargs.get("db")  # 从 kwargs 中获取数据库会话对象
 
-        authorization_header = request.headers.get('Authorization')
+        authorization_header = request.headers.get("Authorization")
 
         token = authorization_header.split()[1]
         objs = APITokenService.query(db, token=token)
 
         if not objs:
-            return build_error_result(
-                error_msg='API-KEY is invalid!', retcode=RetCode.FORBIDDEN
-            )
+            return build_error_result(error_msg="API-KEY is invalid!", retcode=RetCode.FORBIDDEN)
 
-        kwargs['tenant_id'] = objs[0].tenant_id
+        kwargs["tenant_id"] = objs[0].tenant_id
 
         # 支持同步和异步函数
         if inspect.iscoroutinefunction(func):
@@ -285,39 +281,30 @@ def apikey_dependency(request: Request, db: Session = Depends(get_db)) -> str:
             # 使用 tenant_id
             pass
     """
-    authorization_header = request.headers.get('Authorization')
+    authorization_header = request.headers.get("Authorization")
 
     if not authorization_header:
-        raise build_error_result(
-            error_msg='Authorization header is missing!',
-            retcode=RetCode.FORBIDDEN
-        )
+        raise build_error_result(error_msg="Authorization header is missing!", retcode=RetCode.FORBIDDEN)
 
     authorization_list = authorization_header.split()
     if len(authorization_list) < 2:
-        raise build_error_result(
-            error_msg='Invalid Authorization format!',
-            retcode=RetCode.FORBIDDEN
-        )
+        raise build_error_result(error_msg="Invalid Authorization format!", retcode=RetCode.FORBIDDEN)
 
     token = authorization_list[1]
     objs = APITokenService.query(db, token=token)
 
     if not objs:
-        raise build_error_result(
-            error_msg='API-KEY is invalid!',
-            retcode=RetCode.FORBIDDEN
-        )
+        raise build_error_result(error_msg="API-KEY is invalid!", retcode=RetCode.FORBIDDEN)
 
     return objs[0].tenant_id
 
 
-def build_error_result(retcode=RetCode.FORBIDDEN, error_msg='success'):
+def build_error_result(retcode=RetCode.FORBIDDEN, error_msg="success"):
     response_content = {"error_code": retcode, "error_msg": error_msg}
     return JSONResponse(content=response_content, status_code=retcode)
 
 
-def construct_json_result(code: RetCode = RetCode.SUCCESS, message='success', data=None):
+def construct_json_result(code: RetCode = RetCode.SUCCESS, message="success", data=None):
     if data is None:
         return JSONResponse(content={"code": code, "message": message})
     else:
@@ -334,8 +321,7 @@ def construct_error_response(e):
     if len(e.args) > 1:
         return construct_json_result(code=RetCode.EXCEPTION_ERROR, message=repr(e.args[0]), data=e.args[1])
     if repr(e).find("index_not_found_exception") >= 0:
-        return construct_json_result(code=RetCode.EXCEPTION_ERROR,
-                                     message="No chunk found, please upload file and parse it.")
+        return construct_json_result(code=RetCode.EXCEPTION_ERROR, message="No chunk found, please upload file and parse it.")
     return construct_json_result(code=RetCode.EXCEPTION_ERROR, message=repr(e))
 
 
@@ -345,8 +331,9 @@ def convert_datetime_to_str(data: dict):
     """
     for key, value in data.items():
         if isinstance(value, datetime):
-            data[key] = value.strftime('%Y-%m-%d %H:%M:%S')
+            data[key] = value.strftime("%Y-%m-%d %H:%M:%S")
     return data
+
 
 def token_required(request: Request, db: Session = Depends(get_db)):
     """
@@ -471,7 +458,7 @@ def current_tenant_id(request: Request, db: Session = Depends(get_db)) -> str:
 #     return decorated_function
 
 
-def get_result(retcode=RetCode.SUCCESS, retmsg='error', data=None, total=None):
+def get_result(retcode=RetCode.SUCCESS, retmsg="error", data=None, total=None):
     """
     Standard API response format:
     {
@@ -494,18 +481,10 @@ def get_result(retcode=RetCode.SUCCESS, retmsg='error', data=None, total=None):
     return JSONResponse(content=jsonable_encoder(response))
 
 
-def get_error_data_result(
-        retcode=RetCode.DATA_ERROR,
-        retmsg='Sorry! Data missing!'
-):
+def get_error_data_result(retcode=RetCode.DATA_ERROR, retmsg="Sorry! Data missing!"):
     import re
-    result_dict = {
-        "code": retcode,
-        "message": re.sub(
-            r"rag",
-            "seceum",
-            retmsg,
-            flags=re.IGNORECASE)}
+
+    result_dict = {"code": retcode, "message": re.sub(r"rag", "seceum", retmsg, flags=re.IGNORECASE)}
     response = {}
     for key, value in result_dict.items():
         if value is None and key != "code":
@@ -529,6 +508,7 @@ def get_error_operating_result(message="Operating error"):
 
 def generate_confirmation_token():
     import secrets
+
     return "multirag-" + secrets.token_urlsafe(32)
 
 
@@ -638,18 +618,7 @@ def get_parser_config(chunk_method, parser_config):
     return flatten_parent_child_config(merged_config)
 
 
-def get_data_openai(
-        id=None,
-        created=None,
-        model=None,
-        prompt_tokens=0,
-        completion_tokens=0,
-        content=None,
-        finish_reason=None,
-        object="chat.completion",
-        param=None,
-        stream=False
-):
+def get_data_openai(id=None, created=None, model=None, prompt_tokens=0, completion_tokens=0, content=None, finish_reason=None, object="chat.completion", param=None, stream=False):
     total_tokens = prompt_tokens + completion_tokens
 
     if stream:
@@ -657,11 +626,13 @@ def get_data_openai(
             "id": f"{id}",
             "object": "chat.completion.chunk",
             "model": model,
-            "choices": [{
-                "delta": {"content": content},
-                "finish_reason": finish_reason,
-                "index": 0,
-            }],
+            "choices": [
+                {
+                    "delta": {"content": content},
+                    "finish_reason": finish_reason,
+                    "index": 0,
+                }
+            ],
         }
 
     return {
@@ -680,15 +651,14 @@ def get_data_openai(
                 "rejected_prediction_tokens": 0,
             },
         },
-        "choices": [{
-            "message": {
-                "role": "assistant",
-                "content": content
-            },
-            "logprobs": None,
-            "finish_reason": finish_reason,
-            "index": 0,
-        }],
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": content},
+                "logprobs": None,
+                "finish_reason": finish_reason,
+                "index": 0,
+            }
+        ],
     }
 
 
@@ -757,17 +727,15 @@ def verify_embedding_availability(db: Session, embd_id: str, tenant_id: str) -> 
     """
     from api.db.services.llm_service import LLMService
     from api.db.services.tenant_llm_service import TenantLLMService
+
     try:
         llm_name, llm_factory = TenantLLMService.split_model_name_and_factory(embd_id)
         in_llm_service = bool(LLMService.query(db=db, llm_name=llm_name, fid=llm_factory, model_type="embedding"))
 
         tenant_llms = TenantLLMService.get_my_llms(db=db, tenant_id=tenant_id)
-        is_tenant_model = any(
-            llm.llm_name == llm_name and llm.llm_factory == llm_factory and llm.mdl_type == "embedding"
-            for llm in tenant_llms
-        )
+        is_tenant_model = any(llm.llm_name == llm_name and llm.llm_factory == llm_factory and llm.mdl_type == "embedding" for llm in tenant_llms)
 
-        is_builtin_model = llm_factory=='Builtin'
+        is_builtin_model = llm_factory == "Builtin"
         if not (is_builtin_model or is_tenant_model or in_llm_service):
             return False, f"Unsupported model: <{embd_id}>"
 
@@ -904,8 +872,6 @@ def get_mcp_tools(mcp_servers: list, timeout: float | int = 10) -> tuple[dict, s
         return {}, str(e)
 
 
-
-
 async def is_strong_enough(chat_model, embedding_model):
     count = settings.STRONG_TEST_COUNT
     if not chat_model or not embedding_model:
@@ -917,24 +883,15 @@ async def is_strong_enough(chat_model, embedding_model):
     async def _is_strong_enough():
         nonlocal chat_model, embedding_model
         if embedding_model:
-            await asyncio.wait_for(
-                thread_pool_exec(embedding_model.encode, ["Are you strong enough!?"]),
-                timeout=10
-            )
+            await asyncio.wait_for(thread_pool_exec(embedding_model.encode, ["Are you strong enough!?"]), timeout=10)
 
         if chat_model:
-            res = await asyncio.wait_for(
-                chat_model.async_chat("Nothing special.", [{"role": "user", "content": "Are you strong enough!?"}]),
-                timeout=30
-            )
+            res = await asyncio.wait_for(chat_model.async_chat("Nothing special.", [{"role": "user", "content": "Are you strong enough!?"}]), timeout=30)
             if "**ERROR**" in res:
                 raise Exception(res)
 
     # Pressure test for GraphRAG task
-    tasks = [
-        asyncio.create_task(_is_strong_enough())
-        for _ in range(count)
-    ]
+    tasks = [asyncio.create_task(_is_strong_enough()) for _ in range(count)]
     try:
         await asyncio.gather(*tasks, return_exceptions=False)
     except Exception as e:

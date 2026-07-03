@@ -10,30 +10,30 @@ from core.llm.embedding import DefaultEmbedding
 
 
 class FastEmbed(DefaultEmbedding):
-
     def __init__(
-            self,
-            key: str | None = None,
-            model_name: str = "BAAI/bge-small-en-v1.5",
-            cache_dir: str | None = None,
-            threads: int | None = None,
-            **kwargs,
+        self,
+        key: str | None = None,
+        model_name: str = "BAAI/bge-small-en-v1.5",
+        cache_dir: str | None = None,
+        threads: int | None = None,
+        **kwargs,
     ):
         if not settings.LIGHTEN:
             with FastEmbed._model_lock:
                 from fastembed import TextEmbedding
+
                 if not DefaultEmbedding._model or model_name != DefaultEmbedding._model_name:
                     try:
                         DefaultEmbedding._model = TextEmbedding(model_name, cache_dir, threads, **kwargs)
                         DefaultEmbedding._model_name = model_name
                     except Exception:
-                        cache_dir = snapshot_download(repo_id="BAAI/bge-small-en-v1.5",
-                                                      local_dir=os.path.join(get_home_cache_dir(),
-                                                                             re.sub(r"^[a-zA-Z0-9]+/", "", model_name)),
-                                                      local_dir_use_symlinks=False)
+                        cache_dir = snapshot_download(
+                            repo_id="BAAI/bge-small-en-v1.5", local_dir=os.path.join(get_home_cache_dir(), re.sub(r"^[a-zA-Z0-9]+/", "", model_name)), local_dir_use_symlinks=False
+                        )
                         DefaultEmbedding._model = TextEmbedding(model_name, cache_dir, threads, **kwargs)
         self._model = DefaultEmbedding._model
         self._model_name = model_name
+
     def encode(self, texts: list):
         # Using the internal tokenizer to encode the texts and get the total
         # number of tokens
@@ -50,4 +50,3 @@ class FastEmbed(DefaultEmbedding):
         encoding = self._model.model.tokenizer.encode(text)
         embedding = next(self._model.query_embed(text))
         return np.array(embedding), len(encoding.ids)
-

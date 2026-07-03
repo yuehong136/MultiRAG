@@ -4,6 +4,7 @@ from .base import Component
 
 class RadioComponent(Component):
     """描述文本组件"""
+
     _json_str = """
     {
   "val": "单选组件",

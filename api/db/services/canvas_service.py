@@ -34,6 +34,7 @@ class DataFlowTemplateService(CommonService):
     """
     Alias of CanvasTemplateService
     """
+
     model = CanvasTemplate
 
     def __init__(self):
@@ -47,18 +48,7 @@ class UserCanvasService(CommonService):
         super().__init__(UserCanvas)
 
     @classmethod
-    def get_list(
-        cls,
-        db: Session,
-        tenant_id: str,
-        page_number: int,
-        items_per_page: int,
-        orderby: str,
-        desc: bool,
-        id: str | None,
-        title: str | None,
-        canvas_category=CanvasCategory.Agent
-    ):
+    def get_list(cls, db: Session, tenant_id: str, page_number: int, items_per_page: int, orderby: str, desc: bool, id: str | None, title: str | None, canvas_category=CanvasCategory.Agent):
         columns = list(cls.model.__table__.columns)
 
         base = select(*columns).select_from(cls.model).where(cls.model.user_id == tenant_id)
@@ -80,24 +70,13 @@ class UserCanvasService(CommonService):
     @classmethod
     def get_all_agents_by_tenant_ids(cls, db: Session, tenant_ids: list, user_id: str):
         # will get all permitted agents, be cautious
-        fields = [
-            cls.model.id,
-            cls.model.avatar,
-            cls.model.title,
-            cls.model.permission,
-            cls.model.canvas_type,
-            cls.model.canvas_category
-        ]
+        fields = [cls.model.id, cls.model.avatar, cls.model.title, cls.model.permission, cls.model.canvas_type, cls.model.canvas_category]
         # find team agents and owned agents
-        query = db.query(*fields).filter(
-            or_(
-                and_(
-                    cls.model.user_id.in_(tenant_ids),
-                    cls.model.permission == TenantPermission.TEAM.value
-                ),
-                cls.model.user_id == user_id
-            )
-        ).order_by(cls.model.create_time.asc())
+        query = (
+            db.query(*fields)
+            .filter(or_(and_(cls.model.user_id.in_(tenant_ids), cls.model.permission == TenantPermission.TEAM.value), cls.model.user_id == user_id))
+            .order_by(cls.model.create_time.asc())
+        )
 
         # maybe cause slow query by deep paginate, optimize later
         offset, limit = 0, 50
@@ -108,13 +87,7 @@ class UserCanvasService(CommonService):
                 break
             # 将查询结果转换为字典
             for agent in ag_batch:
-                res.append({
-                    "avatar": agent.avatar,
-                    "title": agent.title,
-                    "permission": agent.permission,
-                    "canvas_type": agent.canvas_type,
-                    "canvas_category": agent.canvas_category
-                })
+                res.append({"avatar": agent.avatar, "title": agent.title, "permission": agent.permission, "canvas_type": agent.canvas_type, "canvas_category": agent.canvas_category})
             offset += limit
         return res
 
@@ -137,12 +110,7 @@ class UserCanvasService(CommonService):
                 User.nickname,
                 User.avatar.label("tenant_avatar"),
             ]
-            stmt = (
-                select(*fields)
-                .select_from(cls.model)
-                .join(User, cls.model.user_id == User.id)
-                .where(cls.model.id == pid)
-            )
+            stmt = select(*fields).select_from(cls.model).join(User, cls.model.user_id == User.id).where(cls.model.id == pid)
             row = db.execute(stmt).mappings().first()
             if not row:
                 return False, None
@@ -163,14 +131,7 @@ class UserCanvasService(CommonService):
         Returns:
             List of canvas info dicts with id, avatar, user_id, title, permission, canvas_category
         """
-        fields = [
-            cls.model.id,
-            cls.model.avatar,
-            cls.model.user_id,
-            cls.model.title,
-            cls.model.permission,
-            cls.model.canvas_category
-        ]
+        fields = [cls.model.id, cls.model.avatar, cls.model.user_id, cls.model.title, cls.model.permission, cls.model.canvas_category]
         stmt = select(*fields).where(cls.model.id.in_(canvas_ids))
         rows = db.execute(stmt).mappings().all()
         return [dict(r) for r in rows]
@@ -241,7 +202,7 @@ class UserCanvasService(CommonService):
 
         # Get latest release time for each canvas
         if agents_list:
-            canvas_ids = [a['id'] for a in agents_list]
+            canvas_ids = [a["id"] for a in agents_list]
             release_stmt = (
                 select(
                     UserCanvasVersion.user_canvas_id,
@@ -257,7 +218,7 @@ class UserCanvasService(CommonService):
             release_time_map = {r.user_canvas_id: r.release_time for r in release_rows}
 
             for agent in agents_list:
-                agent['release_time'] = release_time_map.get(agent['id'])
+                agent["release_time"] = release_time_map.get(agent["id"])
 
         return agents_list, total
 
@@ -472,14 +433,7 @@ async def completion_openai(
 
                 completion_tokens += len(tiktoken_encoder.encode(content_piece))
 
-                openai_data = get_data_openai(
-                        id=session_id or str(uuid4()),
-                        model=agent_id,
-                        content=content_piece,
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
-                        stream=True
-                    )
+                openai_data = get_data_openai(id=session_id or str(uuid4()), model=agent_id, content=content_piece, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, stream=True)
 
                 if ans.get("data", {}).get("reference", None):
                     openai_data["choices"][0]["delta"]["reference"] = ans["data"]["reference"]
@@ -491,18 +445,22 @@ async def completion_openai(
         except Exception as e:
             logging.exception(e)
             err_text = f"**ERROR**: {e!s}"
-            yield "data: " + json.dumps(
-                get_data_openai(
-                    id=session_id or str(uuid4()),
-                    model=agent_id,
-                    content=err_text,
-                    finish_reason="stop",
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=len(tiktoken_encoder.encode(err_text)),
-                    stream=True,
-                ),
-                ensure_ascii=False,
-            ) + "\n\n"
+            yield (
+                "data: "
+                + json.dumps(
+                    get_data_openai(
+                        id=session_id or str(uuid4()),
+                        model=agent_id,
+                        content=err_text,
+                        finish_reason="stop",
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=len(tiktoken_encoder.encode(err_text)),
+                        stream=True,
+                    ),
+                    ensure_ascii=False,
+                )
+                + "\n\n"
+            )
             yield "data: [DONE]\n\n"
 
     else:
@@ -533,13 +491,7 @@ async def completion_openai(
             completion_tokens = len(tiktoken_encoder.encode(all_content))
 
             openai_data = get_data_openai(
-                id=session_id or str(uuid4()),
-                model=agent_id,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                content=all_content,
-                finish_reason="stop",
-                param=None
+                id=session_id or str(uuid4()), model=agent_id, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, content=all_content, finish_reason="stop", param=None
             )
 
             if reference:

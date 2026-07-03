@@ -24,17 +24,12 @@ from core.nlp import find_codec, rag_tokenizer
 
 
 def get_encoding(file):
-    with open(file,'rb') as f:
+    with open(file, "rb") as f:
         tmp = chardet.detect(f.read())
-        return tmp['encoding']
+        return tmp["encoding"]
 
-BLOCK_TAGS = [
-    "h1", "h2", "h3", "h4", "h5", "h6",
-    "p", "div", "article", "section", "aside",
-    "ul", "ol", "li",
-    "table", "pre", "code", "blockquote",
-    "figure", "figcaption"
-]
+
+BLOCK_TAGS = ["h1", "h2", "h3", "h4", "h5", "h6", "p", "div", "article", "section", "aside", "ul", "ol", "li", "table", "pre", "code", "blockquote", "figure", "figcaption"]
 TITLE_TAGS = {"h1": "#", "h2": "##", "h3": "###", "h4": "####", "h5": "#####", "h6": "######"}
 
 
@@ -44,7 +39,7 @@ class RAGFlowHtmlParser:
             encoding = find_codec(binary)
             txt = binary.decode(encoding, errors="ignore")
         else:
-            with open(fnm,encoding=get_encoding(fnm)) as f:
+            with open(fnm, encoding=get_encoding(fnm)) as f:
                 txt = f.read()
         return self.parser_txt(txt, chunk_token_num)
 
@@ -64,8 +59,8 @@ class RAGFlowHtmlParser:
                 script_tag.decompose()
         # delete inline style
         for tag in soup.find_all(True):
-            if 'style' in tag.attrs:
-                del tag.attrs['style']
+            if "style" in tag.attrs:
+                del tag.attrs["style"]
         # delete HTML comment
         for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
             comment.extract()
@@ -130,21 +125,18 @@ class RAGFlowHtmlParser:
                     return_info.append(info)
             return return_info
         elif isinstance(element, Tag):
-
             if str.lower(element.name) == "table":
                 table_info_list = []
                 table_id = str(uuid.uuid1())
                 table_list = [html.unescape(str(element))]
                 for t in table_list:
-                    table_info_list.append({"content": t, "tag_name": "table",
-                                            "metadata": {"table_id": table_id, "index": table_list.index(t)}})
+                    table_info_list.append({"content": t, "tag_name": "table", "metadata": {"table_id": table_id, "index": table_list.index(t)}})
                 return table_info_list
             else:
                 if str.lower(element.name) in BLOCK_TAGS:
                     block_id = str(uuid.uuid1())
                 for child in element.children:
-                    child_info = cls.read_text_recursively(child, parser_result, chunk_token_num, element.name,
-                                                           block_id)
+                    child_info = cls.read_text_recursively(child, parser_result, chunk_token_num, element.name, block_id)
                     parser_result.extend(child_info)
         return []
 

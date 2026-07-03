@@ -24,10 +24,12 @@ def start_tracemalloc_and_snapshot(signum, frame):
     current, peak = tracemalloc.get_traced_memory()
     if sys.platform == "win32":
         import psutil
+
         process = psutil.Process()
         max_rss = process.memory_info().rss / 1024
     else:
         import resource
+
         max_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     logging.info(f"taken snapshot {snapshot_file}. max RSS={max_rss / 1000:.2f} MB, current memory usage: {current / 10**6:.2f} MB, Peak memory usage: {peak / 10**6:.2f} MB")
 
@@ -39,4 +41,3 @@ def stop_tracemalloc(signum, frame):
         tracemalloc.stop()
     else:
         logging.info("tracemalloc not running")
-

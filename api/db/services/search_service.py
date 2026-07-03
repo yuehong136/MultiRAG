@@ -5,6 +5,7 @@
 @date：2024/7/15 16:15
 @desc: 搜索服务
 """
+
 from sqlalchemy import and_, asc, desc, func, or_
 from sqlalchemy.orm import Session
 
@@ -26,40 +27,37 @@ class SearchService(CommonService):
     @classmethod
     def accessible4deletion(cls, db: Session, search_id: str, user_id: str) -> bool:
         """检查用户是否有权限删除搜索配置"""
-        search = db.query(cls.model.id).filter(
-            and_(
-                cls.model.id == search_id,
-                cls.model.created_by == user_id,
-                cls.model.status == StatusEnum.VALID.value,
+        search = (
+            db.query(cls.model.id)
+            .filter(
+                and_(
+                    cls.model.id == search_id,
+                    cls.model.created_by == user_id,
+                    cls.model.status == StatusEnum.VALID.value,
+                )
             )
-        ).first()
+            .first()
+        )
         return search is not None
 
     @classmethod
     def get_detail(cls, db: Session, search_id: str):
         """获取搜索配置详情"""
-        query = db.query(
-            cls.model.id,
-            cls.model.avatar,
-            cls.model.tenant_id,
-            cls.model.name,
-            cls.model.description,
-            cls.model.created_by,
-            cls.model.search_config,
-            cls.model.update_time,
-            User.nickname,
-            User.avatar.label("tenant_avatar"),
-        ).join(
-            User,
-            and_(
-                User.id == cls.model.tenant_id,
-                User.status == StatusEnum.VALID.value
+        query = (
+            db.query(
+                cls.model.id,
+                cls.model.avatar,
+                cls.model.tenant_id,
+                cls.model.name,
+                cls.model.description,
+                cls.model.created_by,
+                cls.model.search_config,
+                cls.model.update_time,
+                User.nickname,
+                User.avatar.label("tenant_avatar"),
             )
-        ).filter(
-            and_(
-                cls.model.id == search_id,
-                cls.model.status == StatusEnum.VALID.value
-            )
+            .join(User, and_(User.id == cls.model.tenant_id, User.status == StatusEnum.VALID.value))
+            .filter(and_(cls.model.id == search_id, cls.model.status == StatusEnum.VALID.value))
         )
 
         result = query.first()
@@ -79,40 +77,31 @@ class SearchService(CommonService):
         return {}
 
     @classmethod
-    def get_by_tenant_ids(cls, db: Session, joined_tenant_ids: list, user_id: str,
-                         page_number: int = None, items_per_page: int = None,
-                         orderby: str = "update_time", desc_order: bool = True,
-                         keywords: str = None):
+    def get_by_tenant_ids(
+        cls, db: Session, joined_tenant_ids: list, user_id: str, page_number: int = None, items_per_page: int = None, orderby: str = "update_time", desc_order: bool = True, keywords: str = None
+    ):
         """根据租户ID获取搜索配置列表"""
-        query = db.query(
-            cls.model.id,
-            cls.model.avatar,
-            cls.model.tenant_id,
-            cls.model.name,
-            cls.model.description,
-            cls.model.created_by,
-            cls.model.status,
-            cls.model.update_time,
-            cls.model.create_time,
-            User.nickname,
-            User.avatar.label("tenant_avatar"),
-        ).join(
-            User, cls.model.tenant_id == User.id
-        ).filter(
-            and_(
-                or_(
-                    cls.model.tenant_id.in_(joined_tenant_ids),
-                    cls.model.tenant_id == user_id
-                ),
-                cls.model.status == StatusEnum.VALID.value
+        query = (
+            db.query(
+                cls.model.id,
+                cls.model.avatar,
+                cls.model.tenant_id,
+                cls.model.name,
+                cls.model.description,
+                cls.model.created_by,
+                cls.model.status,
+                cls.model.update_time,
+                cls.model.create_time,
+                User.nickname,
+                User.avatar.label("tenant_avatar"),
             )
+            .join(User, cls.model.tenant_id == User.id)
+            .filter(and_(or_(cls.model.tenant_id.in_(joined_tenant_ids), cls.model.tenant_id == user_id), cls.model.status == StatusEnum.VALID.value))
         )
 
         # 关键词搜索
         if keywords:
-            query = query.filter(
-                func.lower(cls.model.name).contains(keywords.lower())
-            )
+            query = query.filter(func.lower(cls.model.name).contains(keywords.lower()))
 
         # 排序
         if not hasattr(cls.model, orderby):
@@ -157,9 +146,7 @@ class SearchService(CommonService):
     def delete_by_tenant_id(cls, db: Session, tenant_id: str) -> int:
         """根据tenant_id删除所有相关的搜索配置记录"""
         try:
-            result = db.query(cls.model).filter(
-                cls.model.tenant_id == tenant_id
-            ).delete(synchronize_session=False)
+            result = db.query(cls.model).filter(cls.model.tenant_id == tenant_id).delete(synchronize_session=False)
             db.commit()
             return result
         except Exception as e:
@@ -169,12 +156,7 @@ class SearchService(CommonService):
     @classmethod
     def get_by_user_id(cls, db: Session, user_id: str):
         """根据用户ID获取搜索配置列表"""
-        query = db.query(cls.model).filter(
-            and_(
-                cls.model.created_by == user_id,
-                cls.model.status == StatusEnum.VALID.value
-            )
-        ).order_by(desc(cls.model.update_time))
+        query = db.query(cls.model).filter(and_(cls.model.created_by == user_id, cls.model.status == StatusEnum.VALID.value)).order_by(desc(cls.model.update_time))
 
         return query.all()
 

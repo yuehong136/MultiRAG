@@ -5,6 +5,7 @@ Revises: efce62e1c3ac
 Create Date: 2025-10-29 22:15:27.058927
 
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -12,8 +13,8 @@ from alembic import op
 from sqlalchemy.engine.reflection import Inspector
 
 # revision identifiers, used by Alembic.
-revision: str = '24df210f5ebf'
-down_revision: str | None = 'efce62e1c3ac'
+revision: str = "24df210f5ebf"
+down_revision: str | None = "efce62e1c3ac"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -28,93 +29,32 @@ def upgrade() -> None:
 
     with op.batch_alter_table("t_ai_knowledgebases", schema="usr_ai") as batch_op:
         if "pipeline_id" not in kb_cols:
-            batch_op.add_column(
-                sa.Column(
-                    "pipeline_id",
-                    sa.String(length=32),
-                    nullable=True,
-                    index=True,
-                    doc="Pipeline ID"
-                )
-            )
+            batch_op.add_column(sa.Column("pipeline_id", sa.String(length=32), nullable=True, index=True, doc="Pipeline ID"))
 
         if "graphrag_task_id" not in kb_cols:
-            batch_op.add_column(
-                sa.Column(
-                    "graphrag_task_id",
-                    sa.String(length=32),
-                    nullable=True,
-                    index=True,
-                    doc="Graph RAG task ID"
-                )
-            )
+            batch_op.add_column(sa.Column("graphrag_task_id", sa.String(length=32), nullable=True, index=True, doc="Graph RAG task ID"))
 
         if "graphrag_task_finish_at" not in kb_cols:
-            batch_op.add_column(
-                sa.Column(
-                    "graphrag_task_finish_at",
-                    sa.DateTime(),
-                    nullable=True,
-                    index=True
-                )
-            )
+            batch_op.add_column(sa.Column("graphrag_task_finish_at", sa.DateTime(), nullable=True, index=True))
 
         if "raptor_task_id" not in kb_cols:
-            batch_op.add_column(
-                sa.Column(
-                    "raptor_task_id",
-                    sa.String(length=32),
-                    nullable=True,
-                    index=True,
-                    doc="RAPTOR task ID"
-                )
-            )
+            batch_op.add_column(sa.Column("raptor_task_id", sa.String(length=32), nullable=True, index=True, doc="RAPTOR task ID"))
 
         if "raptor_task_finish_at" not in kb_cols:
-            batch_op.add_column(
-                sa.Column(
-                    "raptor_task_finish_at",
-                    sa.DateTime(),
-                    nullable=True,
-                    index=True
-                )
-            )
+            batch_op.add_column(sa.Column("raptor_task_finish_at", sa.DateTime(), nullable=True, index=True))
 
         if "mindmap_task_id" not in kb_cols:
-            batch_op.add_column(
-                sa.Column(
-                    "mindmap_task_id",
-                    sa.String(length=32),
-                    nullable=True,
-                    index=True,
-                    doc="Mindmap task ID"
-                )
-            )
+            batch_op.add_column(sa.Column("mindmap_task_id", sa.String(length=32), nullable=True, index=True, doc="Mindmap task ID"))
 
         if "mindmap_task_finish_at" not in kb_cols:
-            batch_op.add_column(
-                sa.Column(
-                    "mindmap_task_finish_at",
-                    sa.DateTime(),
-                    nullable=True,
-                    index=True
-                )
-            )
+            batch_op.add_column(sa.Column("mindmap_task_finish_at", sa.DateTime(), nullable=True, index=True))
 
     # ===== 2. Add columns to t_ai_documents =====
     doc_cols = [col["name"] for col in insp.get_columns("t_ai_documents", schema="usr_ai")]
 
     if "pipeline_id" not in doc_cols:
         with op.batch_alter_table("t_ai_documents", schema="usr_ai") as batch_op:
-            batch_op.add_column(
-                sa.Column(
-                    "pipeline_id",
-                    sa.String(length=32),
-                    nullable=True,
-                    index=True,
-                    doc="Pipeline ID"
-                )
-            )
+            batch_op.add_column(sa.Column("pipeline_id", sa.String(length=32), nullable=True, index=True, doc="Pipeline ID"))
 
 
 def downgrade() -> None:

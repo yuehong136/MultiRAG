@@ -38,9 +38,9 @@ def are_expressions_equal_ignore_quotes(expr1, expr2):
 
         # 如果不匹配函数调用格式，则进行基本的引号标准化
         # 将所有的单引号和双引号替换为空（用于比较字段名）
-        expr = re.sub(r'["\']', '', expr)
+        expr = re.sub(r'["\']', "", expr)
         # 移除多余空格
-        expr = re.sub(r'\s+', ' ', expr)
+        expr = re.sub(r"\s+", " ", expr)
 
         return expr.strip()
 

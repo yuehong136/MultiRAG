@@ -24,21 +24,8 @@ import json_repair
 def convert_conditions(metadata_condition):
     if metadata_condition is None:
         metadata_condition = {}
-    op_mapping = {
-        "is": "=",
-        "not is": "≠",
-        ">=": "≥",
-        "<=": "≤",
-        "!=": "≠"
-    }
-    return [
-        {
-            "op": op_mapping.get(cond["comparison_operator"], cond["comparison_operator"]),
-            "key": cond["name"],
-            "value": cond["value"]
-        }
-        for cond in metadata_condition.get("conditions", [])
-    ]
+    op_mapping = {"is": "=", "not is": "≠", ">=": "≥", "<=": "≤", "!=": "≠"}
+    return [{"op": op_mapping.get(cond["comparison_operator"], cond["comparison_operator"]), "key": cond["name"], "value": cond["value"]} for cond in metadata_condition.get("conditions", [])]
 
 
 def meta_filter(metas: dict, filters: list[dict], logic: str = "and"):
@@ -47,30 +34,15 @@ def meta_filter(metas: dict, filters: list[dict], logic: str = "and"):
     def filter_out(v2docs, operator, value):
         ids = []
         for input, docids in v2docs.items():
-
             if operator in ["=", "≠", ">", "<", "≥", "≤"]:
                 # Check if input is in YYYY-MM-DD date format
                 input_str = str(input).strip()
                 value_str = str(value).strip()
 
                 # Strict date format detection: YYYY-MM-DD (must be 10 chars with correct format)
-                is_input_date = (
-                    len(input_str) == 10 and
-                    input_str[4] == '-' and
-                    input_str[7] == '-' and
-                    input_str[:4].isdigit() and
-                    input_str[5:7].isdigit() and
-                    input_str[8:10].isdigit()
-                )
+                is_input_date = len(input_str) == 10 and input_str[4] == "-" and input_str[7] == "-" and input_str[:4].isdigit() and input_str[5:7].isdigit() and input_str[8:10].isdigit()
 
-                is_value_date = (
-                    len(value_str) == 10 and
-                    value_str[4] == '-' and
-                    value_str[7] == '-' and
-                    value_str[:4].isdigit() and
-                    value_str[5:7].isdigit() and
-                    value_str[8:10].isdigit()
-                )
+                is_value_date = len(value_str) == 10 and value_str[4] == "-" and value_str[7] == "-" and value_str[:4].isdigit() and value_str[5:7].isdigit() and value_str[8:10].isdigit()
 
                 if is_value_date:
                     # Query value is in date format
@@ -283,9 +255,7 @@ def metadata_schema(metadata: dict | list | None) -> dict[str, Any]:
         if not key:
             continue
 
-        prop_schema = {
-            "description": item.get("description", "")
-        }
+        prop_schema = {"description": item.get("description", "")}
         if item.get("enum"):
             prop_schema["enum"] = item["enum"]
             prop_schema["type"] = "string"

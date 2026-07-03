@@ -5,6 +5,7 @@
 @date：2025/01/11 16:45
 @desc: AI安全护栏日志管理服务
 """
+
 import hashlib
 import logging
 from datetime import datetime, timedelta
@@ -20,11 +21,11 @@ from common.misc_utils import get_uuid
 
 class GuardLogService(CommonService):
     """AI安全护栏日志管理服务"""
+
     model = GuardLog
 
     @classmethod
-    def create_log(cls, db: Session, service_id: str, service_code: str,
-                  content: str, tenant_id: str, **kwargs) -> str | None:
+    def create_log(cls, db: Session, service_id: str, service_code: str, content: str, tenant_id: str, **kwargs) -> str | None:
         """
         创建护栏日志
 
@@ -40,13 +41,14 @@ class GuardLogService(CommonService):
             创建成功返回日志ID，失败返回None
         """
         try:
+
             def _normalize_field(value: Any, max_len: int) -> str | None:
                 if value is None:
                     return None
                 value_str = str(value)
                 if len(value_str) <= max_len:
                     return value_str
-                digest = hashlib.md5(value_str.encode('utf-8')).hexdigest()
+                digest = hashlib.md5(value_str.encode("utf-8")).hexdigest()
                 suffix_len = min(8, max_len)
                 prefix_len = max_len - suffix_len - 1
                 if prefix_len <= 0:
@@ -54,7 +56,7 @@ class GuardLogService(CommonService):
                 return f"{value_str[:prefix_len]}_{digest[:suffix_len]}"
 
             content = content or ""
-            content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
+            content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
             content_preview = content[:500] if len(content) > 500 else content
             content_preview = _normalize_field(content_preview, 500)
 
@@ -87,7 +89,7 @@ class GuardLogService(CommonService):
                 "client_ip": _normalize_field(kwargs.get("client_ip"), 64),
                 "user_agent": kwargs.get("user_agent"),
                 "process_time_ms": kwargs.get("process_time_ms"),
-                "cloud_service_used": kwargs.get("cloud_service_used", False)
+                "cloud_service_used": kwargs.get("cloud_service_used", False),
             }
 
             log = cls.save(db, **log_data)
@@ -98,10 +100,9 @@ class GuardLogService(CommonService):
             return None
 
     @classmethod
-    def get_logs_by_tenant(cls, db: Session, tenant_id: str,
-                          page: int = 1, page_size: int = 50,
-                          start_date: str = None, end_date: str = None,
-                          service_code: str = None, is_blocked: bool = None) -> dict[str, Any]:
+    def get_logs_by_tenant(
+        cls, db: Session, tenant_id: str, page: int = 1, page_size: int = 50, start_date: str = None, end_date: str = None, service_code: str = None, is_blocked: bool = None
+    ) -> dict[str, Any]:
         """
         获取租户的日志列表（分页）
 
@@ -119,9 +120,7 @@ class GuardLogService(CommonService):
             包含日志列表和分页信息的字典
         """
         try:
-            query = db.query(cls.model).filter(
-                cls.model.tenant_id == tenant_id
-            )
+            query = db.query(cls.model).filter(cls.model.tenant_id == tenant_id)
 
             # 时间范围过滤
             if start_date:
@@ -143,24 +142,15 @@ class GuardLogService(CommonService):
                 query = query.filter(cls.model.is_blocked == is_blocked)
 
             total = query.count()
-            logs = query.order_by(desc(cls.model.create_time))\
-                       .offset((page - 1) * page_size)\
-                       .limit(page_size).all()
+            logs = query.order_by(desc(cls.model.create_time)).offset((page - 1) * page_size).limit(page_size).all()
 
-            return {
-                "logs": logs,
-                "total": total,
-                "page": page,
-                "page_size": page_size,
-                "total_pages": (total + page_size - 1) // page_size
-            }
+            return {"logs": logs, "total": total, "page": page, "page_size": page_size, "total_pages": (total + page_size - 1) // page_size}
         except Exception as e:
             logging.error(f"获取日志列表失败: {e}")
             return {"logs": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 0}
 
     @classmethod
-    def get_log_stats(cls, db: Session, tenant_id: str,
-                     days: int = 30) -> dict[str, Any]:
+    def get_log_stats(cls, db: Session, tenant_id: str, days: int = 30) -> dict[str, Any]:
         """
         获取日志统计信息
 
@@ -176,39 +166,26 @@ class GuardLogService(CommonService):
             start_date = datetime.now() - timedelta(days=days)
             start_timestamp_ms = int(start_date.timestamp() * 1000)
 
-            query = db.query(cls.model).filter(
-                and_(
-                    cls.model.tenant_id == tenant_id,
-                    cls.model.create_time >= start_timestamp_ms
-                )
-            )
+            query = db.query(cls.model).filter(and_(cls.model.tenant_id == tenant_id, cls.model.create_time >= start_timestamp_ms))
 
             total_requests = query.count()
             blocked_requests = query.filter(cls.model.is_blocked == True).count()
 
             # 服务统计
-            service_stats = db.query(
-                cls.model.service_code,
-                func.count(cls.model.id).label('count'),
-                func.sum(func.cast(cls.model.is_blocked, int)).label('blocked_count')
-            ).filter(
-                and_(
-                    cls.model.tenant_id == tenant_id,
-                    cls.model.create_time >= start_timestamp_ms
-                )
-            ).group_by(cls.model.service_code).all()
+            service_stats = (
+                db.query(cls.model.service_code, func.count(cls.model.id).label("count"), func.sum(func.cast(cls.model.is_blocked, int)).label("blocked_count"))
+                .filter(and_(cls.model.tenant_id == tenant_id, cls.model.create_time >= start_timestamp_ms))
+                .group_by(cls.model.service_code)
+                .all()
+            )
 
             # 风险等级统计
-            risk_level_stats = db.query(
-                cls.model.content_risk_level,
-                func.count(cls.model.id).label('count')
-            ).filter(
-                and_(
-                    cls.model.tenant_id == tenant_id,
-                    cls.model.create_time >= start_timestamp_ms,
-                    cls.model.content_risk_level.isnot(None)
-                )
-            ).group_by(cls.model.content_risk_level).all()
+            risk_level_stats = (
+                db.query(cls.model.content_risk_level, func.count(cls.model.id).label("count"))
+                .filter(and_(cls.model.tenant_id == tenant_id, cls.model.create_time >= start_timestamp_ms, cls.model.content_risk_level.isnot(None)))
+                .group_by(cls.model.content_risk_level)
+                .all()
+            )
 
             return {
                 "total_requests": total_requests,
@@ -217,15 +194,14 @@ class GuardLogService(CommonService):
                 "block_rate": (blocked_requests / total_requests * 100) if total_requests > 0 else 0,
                 "service_stats": {stat.service_code: {"total": stat.count, "blocked": stat.blocked_count or 0} for stat in service_stats},
                 "risk_level_stats": {stat.content_risk_level: stat.count for stat in risk_level_stats},
-                "period_days": days
+                "period_days": days,
             }
         except Exception as e:
             logging.error(f"获取日志统计失败: {e}")
             return {}
 
     @classmethod
-    def get_trend_data(cls, db: Session, tenant_id: str,
-                      days: int = 7) -> list[dict[str, Any]]:
+    def get_trend_data(cls, db: Session, tenant_id: str, days: int = 7) -> list[dict[str, Any]]:
         """
         获取趋势数据
 
@@ -242,12 +218,7 @@ class GuardLogService(CommonService):
             start_timestamp_ms = int(start_date.timestamp() * 1000)
 
             # 获取所有符合条件的记录
-            logs = db.query(cls.model).filter(
-                and_(
-                    cls.model.tenant_id == tenant_id,
-                    cls.model.create_time >= start_timestamp_ms
-                )
-            ).all()
+            logs = db.query(cls.model).filter(and_(cls.model.tenant_id == tenant_id, cls.model.create_time >= start_timestamp_ms)).all()
 
             # 在Python中按天分组统计
             daily_stats = {}
@@ -257,10 +228,7 @@ class GuardLogService(CommonService):
                 date_str = log_date.isoformat()
 
                 if date_str not in daily_stats:
-                    daily_stats[date_str] = {
-                        "total": 0,
-                        "blocked": 0
-                    }
+                    daily_stats[date_str] = {"total": 0, "blocked": 0}
 
                 daily_stats[date_str]["total"] += 1
                 if log.is_blocked:
@@ -269,12 +237,7 @@ class GuardLogService(CommonService):
             # 转换为列表格式
             trend_data = []
             for date_str, stats in daily_stats.items():
-                trend_data.append({
-                    "date": date_str,
-                    "total_requests": stats["total"],
-                    "blocked_requests": stats["blocked"],
-                    "pass_requests": stats["total"] - stats["blocked"]
-                })
+                trend_data.append({"date": date_str, "total_requests": stats["total"], "blocked_requests": stats["blocked"], "pass_requests": stats["total"] - stats["blocked"]})
 
             return sorted(trend_data, key=lambda x: x["date"])
         except Exception as e:
@@ -282,8 +245,7 @@ class GuardLogService(CommonService):
             return []
 
     @classmethod
-    def get_top_risk_words(cls, db: Session, tenant_id: str,
-                          days: int = 30, limit: int = 10) -> list[dict[str, Any]]:
+    def get_top_risk_words(cls, db: Session, tenant_id: str, days: int = 30, limit: int = 10) -> list[dict[str, Any]]:
         """
         获取高频风险词
 
@@ -300,21 +262,15 @@ class GuardLogService(CommonService):
             start_date = datetime.now() - timedelta(days=days)
             start_timestamp_ms = int(start_date.timestamp() * 1000)
 
-            logs = db.query(cls.model).filter(
-                and_(
-                    cls.model.tenant_id == tenant_id,
-                    cls.model.create_time >= start_timestamp_ms,
-                    cls.model.risk_words.isnot(None)
-                )
-            ).all()
+            logs = db.query(cls.model).filter(and_(cls.model.tenant_id == tenant_id, cls.model.create_time >= start_timestamp_ms, cls.model.risk_words.isnot(None))).all()
 
             word_counts = {}
             for log in logs:
                 for word in log.risk_words:
                     if isinstance(word, str):
                         word_counts[word] = word_counts.get(word, 0) + 1
-                    elif isinstance(word, dict) and 'word' in word:
-                        w = word['word']
+                    elif isinstance(word, dict) and "word" in word:
+                        w = word["word"]
                         word_counts[w] = word_counts.get(w, 0) + 1
 
             # 排序并返回前N个
@@ -326,8 +282,7 @@ class GuardLogService(CommonService):
             return []
 
     @classmethod
-    def cleanup_old_logs(cls, db: Session, tenant_id: str,
-                        days: int = 90) -> int:
+    def cleanup_old_logs(cls, db: Session, tenant_id: str, days: int = 90) -> int:
         """
         清理旧日志
 
@@ -343,12 +298,7 @@ class GuardLogService(CommonService):
             cutoff_date = datetime.now() - timedelta(days=days)
             cutoff_timestamp_ms = int(cutoff_date.timestamp() * 1000)
 
-            deleted_count = db.query(cls.model).filter(
-                and_(
-                    cls.model.tenant_id == tenant_id,
-                    cls.model.create_time < cutoff_timestamp_ms
-                )
-            ).delete()
+            deleted_count = db.query(cls.model).filter(and_(cls.model.tenant_id == tenant_id, cls.model.create_time < cutoff_timestamp_ms)).delete()
 
             db.commit()
             return deleted_count

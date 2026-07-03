@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # 并发控制
 import os
 
-_MAX_CONCURRENT = int(os.environ.get('MAX_CONCURRENT_CHATS', 10))
+_MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT_CHATS", 10))
 _asyncio_limiter = asyncio.Semaphore(_MAX_CONCURRENT)
 
 
@@ -139,9 +139,7 @@ class SemanticTagDeduplicator:
 
         try:
             # 生成 embeddings
-            embeddings, _ = await thread_pool_exec(
-                lambda: self.embd_model.encode(valid_tags)
-            )
+            embeddings, _ = await thread_pool_exec(lambda: self.embd_model.encode(valid_tags))
 
             # 计算相似度矩阵
             sim_matrix = cosine_similarity(embeddings)
@@ -198,7 +196,7 @@ class PipelineAnalysisService:
         raptor_config: dict | None = None,
         metadata_fields: list[dict] | None = None,
         dedup_strategy: str = "smart",
-        use_cache: bool = True
+        use_cache: bool = True,
     ) -> dict:
         """
         文档分析主入口（使用 core/flow 逻辑）
@@ -223,14 +221,7 @@ class PipelineAnalysisService:
         token_chunker_config = splitter_config
 
         # 1. 获取文档 chunks（使用 core/flow 逻辑）
-        chunks = await self._get_document_chunks(
-            doc_id,
-            file,
-            filename,
-            kb_id,
-            token_chunker_config=token_chunker_config,
-            parse_method=parse_method
-        )
+        chunks = await self._get_document_chunks(doc_id, file, filename, kb_id, token_chunker_config=token_chunker_config, parse_method=parse_method)
 
         if not chunks:
             raise ValueError("No chunks found")
@@ -249,22 +240,13 @@ class PipelineAnalysisService:
 
         # 3. 根据策略处理 chunks
         processed_data = await self._process_with_strategy(
-            chunks=chunks,
-            strategy=strategy,
-            title_chunker_config=title_chunker_config,
-            token_chunker_config=token_chunker_config,
-            raptor_config=raptor_config,
-            components_used=components_used
+            chunks=chunks, strategy=strategy, title_chunker_config=title_chunker_config, token_chunker_config=token_chunker_config, raptor_config=raptor_config, components_used=components_used
         )
 
         # 4. 提取元数据
         metadata_configs = metadata_fields or self._get_default_metadata_fields()
 
-        metadata = await self._extract_metadata(
-            processed_data=processed_data,
-            metadata_configs=metadata_configs,
-            dedup_strategy=dedup_strategy
-        )
+        metadata = await self._extract_metadata(processed_data=processed_data, metadata_configs=metadata_configs, dedup_strategy=dedup_strategy)
 
         # 5. 构建响应
         processing_time = time.time() - start_time
@@ -276,8 +258,8 @@ class PipelineAnalysisService:
                 "chunk_count": len(chunks),
                 "processing_time_seconds": round(processing_time, 2),
                 "components_used": components_used,
-                "dedup_strategy": dedup_strategy
-            }
+                "dedup_strategy": dedup_strategy,
+            },
         }
 
         # 添加结构信息（如果使用了 TitleChunker）
@@ -291,13 +273,7 @@ class PipelineAnalysisService:
         return result
 
     async def _get_document_chunks(
-        self,
-        doc_id: str | None,
-        file=None,
-        filename: str | None = None,
-        kb_id: str | None = None,
-        token_chunker_config: dict | None = None,
-        parse_method: str = "auto"
+        self, doc_id: str | None, file=None, filename: str | None = None, kb_id: str | None = None, token_chunker_config: dict | None = None, parse_method: str = "auto"
     ) -> list[dict]:
         """获取文档 chunks"""
         # 参数验证
@@ -312,13 +288,7 @@ class PipelineAnalysisService:
 
         # 场景1: 直传文件（使用 core/flow 逻辑）
         if file:
-            return await self._parse_uploaded_file(
-                file,
-                filename,
-                parse_method=parse_method,
-                output_format="json",
-                token_chunker_config=token_chunker_config
-            )
+            return await self._parse_uploaded_file(file, filename, parse_method=parse_method, output_format="json", token_chunker_config=token_chunker_config)
 
         # 场景2: 已上传文档
         if doc_id:
@@ -336,24 +306,20 @@ class PipelineAnalysisService:
                     raise ValueError(f"Knowledgebase {kb_id} not found")
 
                 # 从 Milvus 获取
-                query_result = settings.docStoreConn.search(
-                    {"doc_id": doc_id},
-                    search.index_name(self.tenant_id),
-                    kb_id,
-                    page=1,
-                    size=10000
-                )
+                query_result = settings.docStoreConn.search({"doc_id": doc_id}, search.index_name(self.tenant_id), kb_id, page=1, size=10000)
 
                 if query_result.total > 0:
                     chunks = []
                     for chunk_id in query_result.ids:
                         chunk_data = query_result.field[chunk_id]
-                        chunks.append({
-                            "content_with_weight": chunk_data.get("content_with_weight", ""),
-                            "content_ltks": chunk_data.get("content_ltks", ""),
-                            "important_kwd": chunk_data.get("important_kwd", []),
-                            "doc_id": chunk_data.get("doc_id", ""),
-                        })
+                        chunks.append(
+                            {
+                                "content_with_weight": chunk_data.get("content_with_weight", ""),
+                                "content_ltks": chunk_data.get("content_ltks", ""),
+                                "important_kwd": chunk_data.get("important_kwd", []),
+                                "doc_id": chunk_data.get("doc_id", ""),
+                            }
+                        )
 
                     if chunks:
                         logger.info(f"Loaded {len(chunks)} chunks from Milvus")
@@ -367,14 +333,7 @@ class PipelineAnalysisService:
 
         return []
 
-    async def _parse_uploaded_file(
-        self,
-        file,
-        filename: str | None,
-        parse_method: str = "auto",
-        output_format: str = "json",
-        token_chunker_config: dict | None = None
-    ) -> list[dict]:
+    async def _parse_uploaded_file(self, file, filename: str | None, parse_method: str = "auto", output_format: str = "json", token_chunker_config: dict | None = None) -> list[dict]:
         """
         使用 core/flow 逻辑解析上传文件（保留位置信息）
 
@@ -389,7 +348,7 @@ class PipelineAnalysisService:
             chunks with positions and images
         """
         # 获取文件名
-        if hasattr(file, 'filename'):
+        if hasattr(file, "filename"):
             fname = file.filename
         elif filename:
             fname = filename
@@ -397,7 +356,7 @@ class PipelineAnalysisService:
             raise ValueError("filename required")
 
         # 读取文件内容
-        if hasattr(file, 'read'):
+        if hasattr(file, "read"):
             if asyncio.iscoroutinefunction(file.read):
                 file_content = await file.read()
             else:
@@ -412,9 +371,7 @@ class PipelineAnalysisService:
             # 1. 解析文件（保留结构）
             # 构建配置（参考 core/flow/parser 的 setups 结构）
             pdf_config = {
-                "parse_method": parse_method if parse_method in ["deepdoc", "plain_text", "mineru"] else (
-                    parse_method if parse_method not in ["auto", "ocr", "vlm"] else "deepdoc"
-                ),
+                "parse_method": parse_method if parse_method in ["deepdoc", "plain_text", "mineru"] else (parse_method if parse_method not in ["auto", "ocr", "vlm"] else "deepdoc"),
                 "output_format": output_format,
                 "lang": "Chinese",
                 "remove_toc": False,
@@ -462,20 +419,12 @@ class PipelineAnalysisService:
             delimiters = token_chunker_config.get("delimiters")
             overlapped_percent = token_chunker_config.get("overlapped_percent", 0.1)  # 默认 10% 重叠
 
-            chunked_result = await split_chunks(
-                parsed_result=parsed_result,
-                chunk_token_size=chunk_token_size,
-                delimiters=delimiters,
-                overlapped_percent=overlapped_percent
-            )
+            chunked_result = await split_chunks(parsed_result=parsed_result, chunk_token_size=chunk_token_size, delimiters=delimiters, overlapped_percent=overlapped_percent)
 
             # 3. 转换格式
             chunks = []
             for c in chunked_result:
-                chunk_dict = {
-                    "content_with_weight": c.get("text", ""),
-                    "content_ltks": c.get("text", "")
-                }
+                chunk_dict = {"content_with_weight": c.get("text", ""), "content_ltks": c.get("text", "")}
 
                 for field in ("doc_type_kwd", "position_int", "page_num_int", "top_int", "img_id"):
                     if field in c:
@@ -507,7 +456,7 @@ class PipelineAnalysisService:
         import tempfile
 
         # 获取文件名
-        if hasattr(file, 'filename'):
+        if hasattr(file, "filename"):
             fname = file.filename
         elif filename:
             fname = filename
@@ -515,7 +464,7 @@ class PipelineAnalysisService:
             raise ValueError("filename required")
 
         # 读取文件内容
-        if hasattr(file, 'read'):
+        if hasattr(file, "read"):
             if asyncio.iscoroutinefunction(file.read):
                 file_content = await file.read()
             else:
@@ -537,17 +486,7 @@ class PipelineAnalysisService:
                 return None
 
             # 执行切片
-            result = await thread_pool_exec(
-                module.chunk,
-                fname,
-                binary=file_content,
-                from_page=0,
-                to_page=100000,
-                lang="Chinese",
-                callback=_noop,
-                parser_config={},
-                tenant_id=self.tenant_id
-            )
+            result = await thread_pool_exec(module.chunk, fname, binary=file_content, from_page=0, to_page=100000, lang="Chinese", callback=_noop, parser_config={}, tenant_id=self.tenant_id)
 
             # 统一格式
             chunks = []
@@ -556,10 +495,7 @@ class PipelineAnalysisService:
                     if isinstance(item, dict):
                         chunks.append(item)
                     else:
-                        chunks.append({
-                            "content_with_weight": str(item),
-                            "content_ltks": str(item)
-                        })
+                        chunks.append({"content_with_weight": str(item), "content_ltks": str(item)})
 
             return chunks
 
@@ -569,12 +505,7 @@ class PipelineAnalysisService:
 
     async def _parse_document(self, doc_id: str) -> list[dict]:
         """重新解析文档"""
-        chunks = DocumentService.preview_document_chunks(
-            self.db,
-            doc_id=doc_id,
-            parser_config_override=None,
-            limit=None
-        )
+        chunks = DocumentService.preview_document_chunks(self.db, doc_id=doc_id, parser_config_override=None, limit=None)
 
         # 转换为统一格式
         result = []
@@ -582,18 +513,11 @@ class PipelineAnalysisService:
             if isinstance(chunk, dict):
                 result.append(chunk)
             else:
-                result.append({
-                    "content_with_weight": str(chunk),
-                    "content_ltks": str(chunk)
-                })
+                result.append({"content_with_weight": str(chunk), "content_ltks": str(chunk)})
 
         return result
 
-    def _auto_select_strategy(
-        self,
-        chunks: list[dict],
-        title_chunker_config: dict | None
-    ) -> str:
+    def _auto_select_strategy(self, chunks: list[dict], title_chunker_config: dict | None) -> str:
         """
         自动选择处理策略
 
@@ -617,11 +541,7 @@ class PipelineAnalysisService:
         else:
             return "simple"  # 直接处理
 
-    def _detect_hierarchical_structure(
-        self,
-        chunks: list[dict],
-        title_chunker_config: dict | None
-    ) -> bool:
+    def _detect_hierarchical_structure(self, chunks: list[dict], title_chunker_config: dict | None) -> bool:
         """
         检测文档是否有层次结构
 
@@ -670,13 +590,7 @@ class PipelineAnalysisService:
         return has_structure
 
     async def _process_with_strategy(
-        self,
-        chunks: list[dict],
-        strategy: str,
-        title_chunker_config: dict | None,
-        token_chunker_config: dict | None,
-        raptor_config: dict | None,
-        components_used: list[str]
+        self, chunks: list[dict], strategy: str, title_chunker_config: dict | None, token_chunker_config: dict | None, raptor_config: dict | None, components_used: list[str]
     ) -> dict:
         """
         根据策略处理文档
@@ -690,9 +604,7 @@ class PipelineAnalysisService:
         """
         if strategy == "simple":
             # 直接使用原始 chunks
-            return {
-                "summaries": [c.get("content_with_weight", "") for c in chunks]
-            }
+            return {"summaries": [c.get("content_with_weight", "") for c in chunks]}
 
         elif strategy == "hierarchical":
             # 使用 TitleChunker
@@ -724,20 +636,12 @@ class PipelineAnalysisService:
                     # 章节较短，直接使用
                     all_summaries.extend([c.get("content_with_weight", "") for c in chapter_chunks])
 
-            return {
-                "summaries": all_summaries,
-                "structure": hierarchical_result.get("structure"),
-                "chapter_count": len(hierarchical_result.get("chapters", []))
-            }
+            return {"summaries": all_summaries, "structure": hierarchical_result.get("structure"), "chapter_count": len(hierarchical_result.get("chapters", []))}
 
         else:
             raise ValueError(f"Unknown strategy: {strategy}")
 
-    async def _hierarchical_merge(
-        self,
-        chunks: list[dict],
-        config: dict | None
-    ) -> dict:
+    async def _hierarchical_merge(self, chunks: list[dict], config: dict | None) -> dict:
         """
         层次化合并 - 参考 core/flow/chunker/title_chunker/
 
@@ -752,13 +656,7 @@ class PipelineAnalysisService:
 
         # 默认配置
         if not config:
-            config = {
-                "levels": [
-                    ["^#\\s+", "^第[一二三四五六七八九十百]+章"],
-                    ["^##\\s+", "^\\d+\\.\\s+"]
-                ],
-                "hierarchy": 1
-            }
+            config = {"levels": [["^#\\s+", "^第[一二三四五六七八九十百]+章"], ["^##\\s+", "^\\d+\\.\\s+"]], "hierarchy": 1}
 
         levels = config.get("levels")
         hierarchy_level = config.get("hierarchy", 1)
@@ -780,8 +678,7 @@ class PipelineAnalysisService:
                 {
                     "title": ch["title"],
                     "level": 0,  # 简化，都标记为0级
-                    "chunk_range": [ch["chunk_indices"][0], ch["chunk_indices"][-1]]
-                    if ch["chunk_indices"] else [0, 0]
+                    "chunk_range": [ch["chunk_indices"][0], ch["chunk_indices"][-1]] if ch["chunk_indices"] else [0, 0],
                 }
                 for ch in chapters
             ]
@@ -789,17 +686,9 @@ class PipelineAnalysisService:
 
         logger.info(f"TitleChunker: {len(chapters)} chapters identified")
 
-        return {
-            "chapters": chapters,
-            "summaries": [ch["text"] for ch in chapters],
-            "structure": structure
-        }
+        return {"chapters": chapters, "summaries": [ch["text"] for ch in chapters], "structure": structure}
 
-    async def _smart_split(
-        self,
-        chunks: list[dict],
-        config: dict | None
-    ) -> list[dict]:
+    async def _smart_split(self, chunks: list[dict], config: dict | None) -> list[dict]:
         """
         智能切片 - 参考 core/flow/chunker/token_chunker.py
 
@@ -813,11 +702,7 @@ class PipelineAnalysisService:
         """
         # 默认配置
         if not config:
-            config = {
-                "chunk_token_size": 512,
-                "delimiters": ["\n\n", "\n", "。"],
-                "overlapped_percent": 0.1
-            }
+            config = {"chunk_token_size": 512, "delimiters": ["\n\n", "\n", "。"], "overlapped_percent": 0.1}
 
         chunk_token_size = config.get("chunk_token_size", 512)
         delimiters = config.get("delimiters", ["\n\n", "\n", "。"])
@@ -870,15 +755,11 @@ class PipelineAnalysisService:
                 result_chunk["image"] = chunk["image"]
             result_chunks.append(result_chunk)
 
-        logger.info(f"TokenChunker: {len(chunks)} → {len(result_chunks)} chunks (overlap: {overlapped_percent*100}%)")
+        logger.info(f"TokenChunker: {len(chunks)} → {len(result_chunks)} chunks (overlap: {overlapped_percent * 100}%)")
 
         return result_chunks
 
-    async def _raptor_cluster(
-        self,
-        chunks: list[dict],
-        config: dict | None
-    ) -> dict:
+    async def _raptor_cluster(self, chunks: list[dict], config: dict | None) -> dict:
         """
         RAPTOR 聚类和摘要 - 复用 core/raptor.py
 
@@ -893,12 +774,7 @@ class PipelineAnalysisService:
         """
         # 默认配置
         if not config:
-            config = {
-                "max_cluster": 64,
-                "max_token": 512,
-                "threshold": 0.1,
-                "random_seed": 42
-            }
+            config = {"max_cluster": 64, "max_token": 512, "threshold": 0.1, "random_seed": 42}
 
         # 获取 LLM 和 Embedding 模型
         chat_config = get_tenant_default_model_by_type(self.db, self.tenant_id, LLMType.CHAT)
@@ -913,7 +789,7 @@ class PipelineAnalysisService:
             embd_model=embd_model,
             prompt=config.get("prompt") or "Please summarize the following content:\n{cluster_content}",
             max_token=config.get("max_token", 512),
-            threshold=config.get("threshold", 0.1)
+            threshold=config.get("threshold", 0.1),
         )
 
         # 准备数据：需要 (text, embedding) 对
@@ -928,36 +804,23 @@ class PipelineAnalysisService:
                 embd = chunk["embeddings"]
             else:
                 # 生成 embedding
-                embd, _ = await thread_pool_exec(
-                    lambda: embd_model.encode([text])
-                )
+                embd, _ = await thread_pool_exec(lambda: embd_model.encode([text]))
                 embd = embd[0] if embd else []
 
             raptor_inputs.append((text, embd))
 
         logger.info(f"Running RAPTOR on {len(raptor_inputs)} chunks")
 
-        cluster_results = await raptor(
-            raptor_inputs,
-            random_state=config.get("random_seed", 42)
-        )
+        cluster_results = await raptor(raptor_inputs, random_state=config.get("random_seed", 42))
 
         # 提取聚类摘要
         summaries = [text for text, _ in cluster_results]
 
         logger.info(f"RAPTOR generated {len(summaries)} cluster summaries")
 
-        return {
-            "summaries": summaries,
-            "cluster_count": len(summaries)
-        }
+        return {"summaries": summaries, "cluster_count": len(summaries)}
 
-    async def _extract_metadata(
-        self,
-        processed_data: dict,
-        metadata_configs: list[dict],
-        dedup_strategy: str
-    ) -> dict:
+    async def _extract_metadata(self, processed_data: dict, metadata_configs: list[dict], dedup_strategy: str) -> dict:
         """
         提取元数据
 
@@ -974,10 +837,7 @@ class PipelineAnalysisService:
 
         # 使用 BatchMetadataExtractor 并行提取所有字段
         batch_extractor = BatchMetadataExtractor(self.db, self.tenant_id)
-        metadata = await batch_extractor.extract_multiple_fields(
-            summaries,
-            metadata_configs
-        )
+        metadata = await batch_extractor.extract_multiple_fields(summaries, metadata_configs)
 
         # 去重处理（针对列表类型的字段）
         if dedup_strategy != "none":
@@ -985,11 +845,7 @@ class PipelineAnalysisService:
 
         return metadata
 
-    async def _apply_deduplication(
-        self,
-        metadata: dict,
-        strategy: str
-    ) -> dict:
+    async def _apply_deduplication(self, metadata: dict, strategy: str) -> dict:
         """
         应用去重策略
 
@@ -1045,7 +901,7 @@ class PipelineAnalysisService:
 - 只输出关键词，不要输出其他内容。""",
                 "aggregate": "merge",
                 "temperature": 0.2,
-                "max_tokens": 100
+                "max_tokens": 100,
             },
             {
                 "field_name": "short_summary",
@@ -1064,6 +920,6 @@ class PipelineAnalysisService:
 - 只输出摘要文本，不要输出其他内容。""",
                 "aggregate": "concat",
                 "temperature": 0.3,
-                "max_tokens": 400
-            }
+                "max_tokens": 400,
+            },
         ]

@@ -146,15 +146,15 @@ class RedisDB:
     def info(self):
         info = self.REDIS.info()
         return {
-            'redis_version': info.get("redis_version", "Unknown"),  # Redis版本
-            'server_mode': info["server_mode"] if "server_mode" in info else info.get("redis_mode", ""),  # 服务器模式: standalone(单机), sentinel(哨兵), cluster(集群)
-            'used_memory': info.get("used_memory_human", "N/A"),  # 已使用内存(人类可读格式)
-            'total_system_memory': info.get("total_system_memory_human", "N/A"),  # 系统总内存(人类可读格式)
-            'mem_fragmentation_ratio': info.get("mem_fragmentation_ratio", 0.0),  # 内存碎片比率
-            'connected_clients': info.get("connected_clients", 0),  # 已连接客户端数量
-            'blocked_clients': info.get("blocked_clients", 0),  # 被阻塞的客户端数量
-            'instantaneous_ops_per_sec': info.get("instantaneous_ops_per_sec", 0),  # 每秒执行的操作数
-            'total_commands_processed': info.get("total_commands_processed", 0)  # 处理过的命令总数
+            "redis_version": info.get("redis_version", "Unknown"),  # Redis版本
+            "server_mode": info["server_mode"] if "server_mode" in info else info.get("redis_mode", ""),  # 服务器模式: standalone(单机), sentinel(哨兵), cluster(集群)
+            "used_memory": info.get("used_memory_human", "N/A"),  # 已使用内存(人类可读格式)
+            "total_system_memory": info.get("total_system_memory_human", "N/A"),  # 系统总内存(人类可读格式)
+            "mem_fragmentation_ratio": info.get("mem_fragmentation_ratio", 0.0),  # 内存碎片比率
+            "connected_clients": info.get("connected_clients", 0),  # 已连接客户端数量
+            "blocked_clients": info.get("blocked_clients", 0),  # 被阻塞的客户端数量
+            "instantaneous_ops_per_sec": info.get("instantaneous_ops_per_sec", 0),  # 每秒执行的操作数
+            "total_commands_processed": info.get("total_commands_processed", 0),  # 处理过的命令总数
         }
 
     def is_alive(self):
@@ -219,9 +219,7 @@ class RedisDB:
             res = self.REDIS.smembers(key)
             return res
         except Exception as e:
-            logging.warning(
-                "RedisDB.smembers " + str(key) + " got exception: " + str(e)
-            )
+            logging.warning("RedisDB.smembers " + str(key) + " got exception: " + str(e))
             self.__open__()
         return None
 
@@ -257,9 +255,7 @@ class RedisDB:
             res = self.REDIS.zremrangebyscore(key, min, max)
             return res
         except Exception as e:
-            logging.warning(
-                f"RedisDB.zremrangebyscore {key} got exception: {e}"
-            )
+            logging.warning(f"RedisDB.zremrangebyscore {key} got exception: {e}")
             self.__open__()
         return 0
 
@@ -268,9 +264,7 @@ class RedisDB:
             res = self.REDIS.zrangebyscore(key, min, max)
             return res
         except Exception as e:
-            logging.warning(
-                "RedisDB.zrangebyscore " + str(key) + " got exception: " + str(e)
-            )
+            logging.warning("RedisDB.zrangebyscore " + str(key) + " got exception: " + str(e))
             self.__open__()
         return None
 
@@ -366,9 +360,7 @@ class RedisDB:
             pipeline.execute()
             return True
         except Exception as e:
-            logging.warning(
-                "RedisDB.transaction " + str(key) + " got exception: " + str(e)
-            )
+            logging.warning("RedisDB.transaction " + str(key) + " got exception: " + str(e))
             self.__open__()
         return False
 
@@ -379,9 +371,7 @@ class RedisDB:
                 self.REDIS.xadd(queue, payload)
                 return True
             except Exception as e:
-                logging.exception(
-                    "RedisDB.queue_product " + str(queue) + " got exception: " + str(e)
-                )
+                logging.exception("RedisDB.queue_product " + str(queue) + " got exception: " + str(e))
                 self.__open__()
         return False
 
@@ -389,7 +379,6 @@ class RedisDB:
         """https://redis.io/docs/latest/commands/xreadgroup/"""
         for _ in range(3):
             try:
-
                 try:
                     group_info = self.REDIS.xinfo_groups(queue_name)
                     if not any(gi["name"] == group_name for gi in group_info):
@@ -420,15 +409,10 @@ class RedisDB:
                 res = RedisMsg(self.REDIS, queue_name, group_name, msg_id, payload)
                 return res
             except Exception as e:
-                if str(e) == 'no such key':
+                if str(e) == "no such key":
                     pass
                 else:
-                    logging.exception(
-                        "RedisDB.queue_consumer "
-                        + str(queue_name)
-                        + " got exception: "
-                        + str(e)
-                    )
+                    logging.exception("RedisDB.queue_consumer " + str(queue_name) + " got exception: " + str(e))
                     self.__open__()
         return None
 
@@ -438,7 +422,7 @@ class RedisDB:
                 try:
                     group_info = self.REDIS.xinfo_groups(queue_name)
                 except Exception as e:
-                    if str(e) == 'no such key':
+                    if str(e) == "no such key":
                         logging.warning(f"RedisDB.get_unacked_iterator queue {queue_name} doesn't exist")
                         continue
                 if not any(gi["name"] == group_name for gi in group_info):
@@ -453,20 +437,16 @@ class RedisDB:
                     logging.info(f"RedisDB.get_unacked_iterator {queue_name} {consumer_name} {current_min}")
                     yield payload
         except Exception:
-            logging.exception(
-                "RedisDB.get_unacked_iterator got exception: "
-            )
+            logging.exception("RedisDB.get_unacked_iterator got exception: ")
             self.__open__()
 
     def get_pending_msg(self, queue, group_name):
         try:
-            messages = self.REDIS.xpending_range(queue, group_name, '-', '+', 10)
+            messages = self.REDIS.xpending_range(queue, group_name, "-", "+", 10)
             return messages
         except Exception as e:
-            if 'No such key' not in (str(e) or ''):
-                logging.warning(
-                    "RedisDB.get_pending_msg " + str(queue) + " got exception: " + str(e)
-                )
+            if "No such key" not in (str(e) or ""):
+                logging.warning("RedisDB.get_pending_msg " + str(queue) + " got exception: " + str(e))
         return []
 
     def requeue_msg(self, queue: str, group_name: str, msg_id: str):
@@ -477,9 +457,7 @@ class RedisDB:
                     self.REDIS.xadd(queue, messages[0][1])
                     self.REDIS.xack(queue, group_name, msg_id)
             except Exception as e:
-                logging.warning(
-                    "RedisDB.get_pending_msg " + str(queue) + " got exception: " + str(e)
-                )
+                logging.warning("RedisDB.get_pending_msg " + str(queue) + " got exception: " + str(e))
                 self.__open__()
 
     def queue_info(self, queue, group_name) -> dict | None:
@@ -490,9 +468,7 @@ class RedisDB:
                     if group["name"] == group_name:
                         return group
             except Exception as e:
-                logging.warning(
-                    "RedisDB.queue_info " + str(queue) + " got exception: " + str(e)
-                )
+                logging.warning("RedisDB.queue_info " + str(queue) + " got exception: " + str(e))
                 self.__open__()
         return None
 
@@ -549,11 +525,7 @@ class RedisDB:
         try:
             stream_key = f"sse:events:{task_id}"
 
-            payload = {
-                "event_type": event_type,
-                "data": json.dumps(data, ensure_ascii=False),
-                "timestamp": str(datetime.now().timestamp())
-            }
+            payload = {"event_type": event_type, "data": json.dumps(data, ensure_ascii=False), "timestamp": str(datetime.now().timestamp())}
 
             # 添加到 Stream，限制最大长度
             self.REDIS.xadd(stream_key, payload, maxlen=maxlen)
@@ -568,7 +540,7 @@ class RedisDB:
             self.__open__()
             return False
 
-    def xread_sse_events(self, task_id: str, last_id: str = '0-0', count: int = 10, block: int = 1000):
+    def xread_sse_events(self, task_id: str, last_id: str = "0-0", count: int = 10, block: int = 1000):
         """
         读取 SSE 事件 Stream
 
@@ -587,11 +559,7 @@ class RedisDB:
             stream_key = f"sse:events:{task_id}"
 
             # 使用 XREAD 读取（不使用 consumer group，因为每个客户端独立）
-            messages = self.REDIS.xread(
-                {stream_key: last_id},
-                count=count,
-                block=block
-            )
+            messages = self.REDIS.xread({stream_key: last_id}, count=count, block=block)
 
             if not messages:
                 return []
@@ -606,7 +574,7 @@ class RedisDB:
 
         except Exception as e:
             # 如果 key 不存在是正常情况，不记录警告
-            if 'no such key' not in str(e).lower():
+            if "no such key" not in str(e).lower():
                 logging.warning(f"RedisDB.xread_sse_events {task_id} got exception: {e}")
             self.__open__()
             return []

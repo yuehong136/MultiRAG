@@ -22,9 +22,7 @@ class MultiRAGFirecrawlIntegration:
         self.processor = FirecrawlProcessor()
         self.logger = logging.getLogger(__name__)
 
-    async def scrape_and_import(self, urls: list[str],
-                               formats: list[str] = None,
-                               extract_options: dict[str, Any] = None) -> list[MultiRAGDocument]:
+    async def scrape_and_import(self, urls: list[str], formats: list[str] = None, extract_options: dict[str, Any] = None) -> list[MultiRAGDocument]:
         """Scrape URLs and convert to MultiRAG documents."""
         if formats is None:
             formats = ["markdown", "html"]
@@ -38,9 +36,7 @@ class MultiRAGFirecrawlIntegration:
 
             return documents
 
-    async def crawl_and_import(self, start_url: str,
-                              limit: int = 100,
-                              scrape_options: dict[str, Any] = None) -> list[MultiRAGDocument]:
+    async def crawl_and_import(self, start_url: str, limit: int = 100, scrape_options: dict[str, Any] = None) -> list[MultiRAGDocument]:
         """Crawl a website and convert to MultiRAG documents."""
         if scrape_options is None:
             scrape_options = {"formats": ["markdown", "html"]}
@@ -120,25 +116,17 @@ class MultiRAGFirecrawlIntegration:
                 result = await self.connector.scrape_url(test_url, ["markdown"])
 
                 if result.error:
-                    return {
-                        "success": False,
-                        "error": result.error,
-                        "message": "Failed to connect to Firecrawl API"
-                    }
+                    return {"success": False, "error": result.error, "message": "Failed to connect to Firecrawl API"}
 
                 return {
                     "success": True,
                     "message": "Successfully connected to Firecrawl API",
                     "test_url": test_url,
-                    "response_time": "N/A"  # Could be enhanced to measure actual response time
+                    "response_time": "N/A",  # Could be enhanced to measure actual response time
                 }
 
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "message": "Connection test failed"
-            }
+            return {"success": False, "error": str(e), "message": "Connection test failed"}
 
     def get_supported_formats(self) -> list[str]:
         """Get list of supported output formats."""
@@ -165,11 +153,4 @@ def create_firecrawl_integration(config_dict: dict[str, Any]) -> MultiRAGFirecra
 
 
 # Export main classes and functions
-__all__ = [
-    "FirecrawlConfig",
-    "FirecrawlConnector",
-    "FirecrawlProcessor",
-    "MultiRAGDocument",
-    "MultiRAGFirecrawlIntegration",
-    "create_firecrawl_integration"
-]
+__all__ = ["FirecrawlConfig", "FirecrawlConnector", "FirecrawlProcessor", "MultiRAGDocument", "MultiRAGFirecrawlIntegration", "create_firecrawl_integration"]

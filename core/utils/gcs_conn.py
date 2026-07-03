@@ -61,7 +61,7 @@ class MultiRAGGCS:
 
             blob_path = self._get_blob_path(folder, fnm)
             blob = bucket_obj.blob(blob_path)
-            blob.upload_from_file(BytesIO(binary), content_type='application/octet-stream')
+            blob.upload_from_file(BytesIO(binary), content_type="application/octet-stream")
             return True
         except Exception as e:
             logging.exception(f"Health check failed: {e}")
@@ -75,7 +75,7 @@ class MultiRAGGCS:
                 blob_path = self._get_blob_path(bucket, fnm)
                 blob = bucket_obj.blob(blob_path)
 
-                blob.upload_from_file(BytesIO(binary), content_type='application/octet-stream')
+                blob.upload_from_file(BytesIO(binary), content_type="application/octet-stream")
                 return True
             except NotFound:
                 logging.error(f"Fail to put: Main bucket {self.bucket_name} does not exist.")
@@ -147,11 +147,7 @@ class MultiRAGGCS:
                 if isinstance(expires, int):
                     expiration = datetime.timedelta(seconds=expires)
 
-                url = blob.generate_signed_url(
-                    version="v4",
-                    expiration=expiration,
-                    method="GET"
-                )
+                url = blob.generate_signed_url(version="v4", expiration=expiration, method="GET")
                 return url
             except Exception:
                 logging.exception(f"Fail to get_presigned {bucket}/{fnm}:")

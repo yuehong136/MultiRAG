@@ -50,10 +50,7 @@ class QwenTTS(Base):
 
         text = self.normalize_text(text)
         callback = Callback()
-        SpeechSynthesizer.call(model=self.model_name,
-                               text=text,
-                               callback=callback,
-                               format="mp3")
+        SpeechSynthesizer.call(model=self.model_name, text=text, callback=callback, format="mp3")
         try:
             yield from callback._run()
             # yield num_tokens_from_string(text)

@@ -12,15 +12,12 @@ st.set_page_config(
     page_icon="🛠️",
     layout="wide",
     initial_sidebar_state="auto",
-    menu_items={
-        'Get Help': 'https://www.extremelycoolapp.com/help',
-        'Report a bug': "https://www.extremelycoolapp.com/bug",
-        'About': "- 在此随便进行SQL翻译转换!"
-    }
+    menu_items={"Get Help": "https://www.extremelycoolapp.com/help", "Report a bug": "https://www.extremelycoolapp.com/bug", "About": "- 在此随便进行SQL翻译转换!"},
 )
 
 # 自定义CSS样式
-st.markdown("""
+st.markdown(
+    """
     <style>
         .sidebar .sidebar-content {
             padding: 10px;
@@ -33,7 +30,9 @@ st.markdown("""
             border-radius: 8px;
         }
     </style>
-    """, unsafe_allow_html=True)
+    """,
+    unsafe_allow_html=True,
+)
 
 # 页面标题和说明
 # st.title("SQL方言翻译器")
@@ -42,10 +41,7 @@ st.markdown("*" + "使用此工具，您可以将SQL查询从一种方言转换�
 
 # 侧边栏
 with st.sidebar:
-    st.image(
-        r"E:\Project\python\study\RAG\assets\imgs\logo2.png",
-        use_column_width=True
-    )
+    st.image(r"E:\Project\python\study\RAG\assets\imgs\logo2.png", use_column_width=True)
     st.caption(
         f"""<p align="right">当前版本：{VERSION}</p>""",
         unsafe_allow_html=True,
@@ -79,6 +75,7 @@ model = "glm-4-0520"
 temperature = 0.8
 max_tokens = 512
 
+
 # SQL翻译函数
 def translate_sql(input_sql, from_dialect, to_dialect):
     system_prompt = f"""
@@ -88,7 +85,7 @@ def translate_sql(input_sql, from_dialect, to_dialect):
     SQL 查询: {input_sql}
     """
     messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": input_sql}]
-    response = get_ai_response(api_token, model, messages, temperature, max_tokens, system_prompt,tools=[])
+    response = get_ai_response(api_token, model, messages, temperature, max_tokens, system_prompt, tools=[])
 
     # 改进正则表达式提取SQL语句
     sql_match = re.search(r"sql\s*([\s\S]+?)\s*", response, re.IGNORECASE | re.DOTALL)
@@ -96,6 +93,7 @@ def translate_sql(input_sql, from_dialect, to_dialect):
         return sql_match.group(0)
     else:
         return "转换错误：在响应中找不到SQL查询。"
+
 
 # 翻译按钮
 if st.button("翻译"):
@@ -106,4 +104,4 @@ if st.button("翻译"):
         translated_sql_placeholder.text_area("翻译后的 SQL", value=translated_sql_value, height=200, help="转换后的SQL查询将显示在这里", key="translated_sql_output")
 
 # 错误消息
-st.error("不支持的表达式类型SwapTable") if "SwapTable" in sql_input else ''
+st.error("不支持的表达式类型SwapTable") if "SwapTable" in sql_input else ""

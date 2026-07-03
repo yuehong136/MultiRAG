@@ -12,7 +12,7 @@ class FirecrawlUIComponent:
 
     component_type: str
     props: dict[str, Any]
-    children: list['FirecrawlUIComponent'] | None = None
+    children: list["FirecrawlUIComponent"] | None = None
 
 
 class FirecrawlUIBuilder:
@@ -32,47 +32,14 @@ class FirecrawlUIBuilder:
             "config_schema": {
                 "type": "object",
                 "properties": {
-                    "api_key": {
-                        "type": "string",
-                        "title": "Firecrawl API Key",
-                        "description": "Your Firecrawl API key (starts with 'fc-')",
-                        "format": "password",
-                        "required": True
-                    },
-                    "api_url": {
-                        "type": "string",
-                        "title": "API URL",
-                        "description": "Firecrawl API endpoint",
-                        "default": "https://api.firecrawl.dev",
-                        "required": False
-                    },
-                    "max_retries": {
-                        "type": "integer",
-                        "title": "Max Retries",
-                        "description": "Maximum number of retry attempts",
-                        "default": 3,
-                        "minimum": 1,
-                        "maximum": 10
-                    },
-                    "timeout": {
-                        "type": "integer",
-                        "title": "Timeout (seconds)",
-                        "description": "Request timeout in seconds",
-                        "default": 30,
-                        "minimum": 5,
-                        "maximum": 300
-                    },
-                    "rate_limit_delay": {
-                        "type": "number",
-                        "title": "Rate Limit Delay",
-                        "description": "Delay between requests in seconds",
-                        "default": 1.0,
-                        "minimum": 0.1,
-                        "maximum": 10.0
-                    }
+                    "api_key": {"type": "string", "title": "Firecrawl API Key", "description": "Your Firecrawl API key (starts with 'fc-')", "format": "password", "required": True},
+                    "api_url": {"type": "string", "title": "API URL", "description": "Firecrawl API endpoint", "default": "https://api.firecrawl.dev", "required": False},
+                    "max_retries": {"type": "integer", "title": "Max Retries", "description": "Maximum number of retry attempts", "default": 3, "minimum": 1, "maximum": 10},
+                    "timeout": {"type": "integer", "title": "Timeout (seconds)", "description": "Request timeout in seconds", "default": 30, "minimum": 5, "maximum": 300},
+                    "rate_limit_delay": {"type": "number", "title": "Rate Limit Delay", "description": "Delay between requests in seconds", "default": 1.0, "minimum": 0.1, "maximum": 10.0},
                 },
-                "required": ["api_key"]
-            }
+                "required": ["api_key"],
+            },
         }
 
     @staticmethod
@@ -88,12 +55,9 @@ class FirecrawlUIBuilder:
                     "type": "array",
                     "title": "URLs to Scrape",
                     "description": "Enter URLs to scrape (one per line)",
-                    "items": {
-                        "type": "string",
-                        "format": "uri"
-                    },
+                    "items": {"type": "string", "format": "uri"},
                     "required": True,
-                    "minItems": 1
+                    "minItems": 1,
                 },
                 {
                     "name": "scrape_type",
@@ -103,19 +67,16 @@ class FirecrawlUIBuilder:
                     "enum": ["single", "crawl", "batch"],
                     "enumNames": ["Single URL", "Crawl Website", "Batch URLs"],
                     "default": "single",
-                    "required": True
+                    "required": True,
                 },
                 {
                     "name": "formats",
                     "type": "array",
                     "title": "Output Formats",
                     "description": "Select output formats",
-                    "items": {
-                        "type": "string",
-                        "enum": ["markdown", "html", "links", "screenshot"]
-                    },
+                    "items": {"type": "string", "enum": ["markdown", "html", "links", "screenshot"]},
                     "default": ["markdown", "html"],
-                    "required": True
+                    "required": True,
                 },
                 {
                     "name": "crawl_limit",
@@ -125,10 +86,7 @@ class FirecrawlUIBuilder:
                     "default": 100,
                     "minimum": 1,
                     "maximum": 1000,
-                    "condition": {
-                        "field": "scrape_type",
-                        "equals": "crawl"
-                    }
+                    "condition": {"field": "scrape_type", "equals": "crawl"},
                 },
                 {
                     "name": "extract_options",
@@ -136,28 +94,18 @@ class FirecrawlUIBuilder:
                     "title": "Extraction Options",
                     "description": "Advanced extraction settings",
                     "properties": {
-                        "extractMainContent": {
-                            "type": "boolean",
-                            "title": "Extract Main Content Only",
-                            "default": True
-                        },
-                        "excludeTags": {
-                            "type": "array",
-                            "title": "Exclude Tags",
-                            "description": "HTML tags to exclude",
-                            "items": {"type": "string"},
-                            "default": ["nav", "footer", "header", "aside"]
-                        },
+                        "extractMainContent": {"type": "boolean", "title": "Extract Main Content Only", "default": True},
+                        "excludeTags": {"type": "array", "title": "Exclude Tags", "description": "HTML tags to exclude", "items": {"type": "string"}, "default": ["nav", "footer", "header", "aside"]},
                         "includeTags": {
                             "type": "array",
                             "title": "Include Tags",
                             "description": "HTML tags to include",
                             "items": {"type": "string"},
-                            "default": ["main", "article", "section", "div", "p"]
-                        }
-                    }
-                }
-            ]
+                            "default": ["main", "article", "section", "div", "p"],
+                        },
+                    },
+                },
+            ],
         }
 
     @staticmethod
@@ -167,11 +115,7 @@ class FirecrawlUIBuilder:
             "type": "progress",
             "title": "Scraping Progress",
             "description": "Track the progress of your web scraping job",
-            "properties": {
-                "show_percentage": True,
-                "show_eta": True,
-                "show_details": True
-            }
+            "properties": {"show_percentage": True, "show_eta": True, "show_details": True},
         }
 
     @staticmethod
@@ -181,12 +125,7 @@ class FirecrawlUIBuilder:
             "type": "results",
             "title": "Scraping Results",
             "description": "View and manage scraped content",
-            "properties": {
-                "show_preview": True,
-                "show_metadata": True,
-                "allow_editing": True,
-                "show_chunks": True
-            }
+            "properties": {"show_preview": True, "show_metadata": True, "allow_editing": True, "show_chunks": True},
         }
 
     @staticmethod
@@ -196,31 +135,16 @@ class FirecrawlUIBuilder:
             "type": "error_handler",
             "title": "Error Handling",
             "description": "Handle scraping errors and retries",
-            "properties": {
-                "show_retry_button": True,
-                "show_error_details": True,
-                "auto_retry": False,
-                "max_retries": 3
-            }
+            "properties": {"show_retry_button": True, "show_error_details": True, "auto_retry": False, "max_retries": 3},
         }
 
     @staticmethod
     def create_validation_rules() -> dict[str, Any]:
         """Create validation rules for Firecrawl integration."""
         return {
-            "url_validation": {
-                "pattern": r"^https?://.+",
-                "message": "URL must start with http:// or https://"
-            },
-            "api_key_validation": {
-                "pattern": r"^fc-[a-zA-Z0-9]+$",
-                "message": "API key must start with 'fc-' followed by alphanumeric characters"
-            },
-            "rate_limit_validation": {
-                "min": 0.1,
-                "max": 10.0,
-                "message": "Rate limit delay must be between 0.1 and 10.0 seconds"
-            }
+            "url_validation": {"pattern": r"^https?://.+", "message": "URL must start with http:// or https://"},
+            "api_key_validation": {"pattern": r"^fc-[a-zA-Z0-9]+$", "message": "API key must start with 'fc-' followed by alphanumeric characters"},
+            "rate_limit_validation": {"min": 0.1, "max": 10.0, "message": "Rate limit delay must be between 0.1 and 10.0 seconds"},
         }
 
     @staticmethod
@@ -231,7 +155,7 @@ class FirecrawlUIBuilder:
             "url_help": "Enter the URLs you want to scrape. You can add multiple URLs for batch processing.",
             "crawl_help": "Crawling will follow links from the starting URL and scrape all accessible pages within the limit.",
             "formats_help": "Choose the output formats you need. Markdown is recommended for RAG processing.",
-            "extract_help": "Extraction options help filter content to get only the main content without navigation and ads."
+            "extract_help": "Extraction options help filter content to get only the main content without navigation and ads.",
         }
 
     @staticmethod
@@ -244,16 +168,9 @@ class FirecrawlUIBuilder:
                 "scraping_form": FirecrawlUIBuilder.create_scraping_form(),
                 "progress_component": FirecrawlUIBuilder.create_progress_component(),
                 "results_view": FirecrawlUIBuilder.create_results_view(),
-                "error_handler": FirecrawlUIBuilder.create_error_handler()
+                "error_handler": FirecrawlUIBuilder.create_error_handler(),
             },
             "validation_rules": FirecrawlUIBuilder.create_validation_rules(),
             "help_text": FirecrawlUIBuilder.create_help_text(),
-            "workflow": [
-                "configure_data_source",
-                "setup_scraping_parameters",
-                "start_scraping_job",
-                "monitor_progress",
-                "review_results",
-                "import_to_multirag"
-            ]
+            "workflow": ["configure_data_source", "setup_scraping_parameters", "start_scraping_job", "monitor_progress", "review_results", "import_to_multirag"],
         }

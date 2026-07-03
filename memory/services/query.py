@@ -35,23 +35,19 @@ def get_vector(txt, emb_mdl, topk=10, similarity=0.1):
     qv, _ = emb_mdl.encode_queries(txt)
     shape = np.array(qv).shape
     if len(shape) > 1:
-        raise Exception(
-            f"Dealer.get_vector returned array's shape {shape} doesn't match expectation(exact one dimension).")
+        raise Exception(f"Dealer.get_vector returned array's shape {shape} doesn't match expectation(exact one dimension).")
     embedding_data = [get_float(v) for v in qv]
     vector_column_name = f"q_{len(embedding_data)}_vec"
-    return MatchDenseExpr(vector_column_name, embedding_data, 'float', 'cosine', topk, {"similarity": similarity})
+    return MatchDenseExpr(vector_column_name, embedding_data, "float", "cosine", topk, {"similarity": similarity})
 
 
 class MsgTextQuery(QueryBase):
-
     def __init__(self):
         self.tw = term_weight.Dealer()
         self.syn = synonym.Dealer()
-        self.query_fields = [
-            "content"
-        ]
+        self.query_fields = ["content"]
 
-    def question(self, txt, tbl="messages", min_match: float=0.6):
+    def question(self, txt, tbl="messages", min_match: float = 0.6):
         original_query = txt
         txt = MsgTextQuery.add_space_between_eng_zh(txt)
         txt = re.sub(
@@ -76,11 +72,10 @@ class MsgTextQuery(QueryBase):
                 syn = self.syn.lookup(tk)
                 syn = rag_tokenizer.tokenize(" ".join(syn)).split()
                 keywords.extend(syn)
-                syn = [f"\"{s}\"^{w / 4.:.4f}" for s in syn if s.strip()]
+                syn = [f'"{s}"^{w / 4.0:.4f}' for s in syn if s.strip()]
                 syns.append(" ".join(syn))
 
-            q = [f"({tk}^{w:.4f}" + f" {syn})" for (tk, w), syn in zip(tks_w, syns) if
-                 tk and not re.match(r"[.^+\(\)-]", tk)]
+            q = [f"({tk}^{w:.4f}" + f" {syn})" for (tk, w), syn in zip(tks_w, syns) if tk and not re.match(r"[.^+\(\)-]", tk)]
             for i in range(1, len(tks_w)):
                 left, right = tks_w[i - 1][0].strip(), tks_w[i][0].strip()
                 if not left or not right:
@@ -96,9 +91,7 @@ class MsgTextQuery(QueryBase):
             if not q:
                 q.append(txt)
             query = " ".join(q)
-            return MatchTextExpr(
-                self.query_fields, query, 100, {"original_query": original_query}
-            ), keywords
+            return MatchTextExpr(self.query_fields, query, 100, {"original_query": original_query}), keywords
 
         def need_fine_grained_tokenize(tk):
             if len(tk) < 3:
@@ -120,11 +113,7 @@ class MsgTextQuery(QueryBase):
             logging.debug(json.dumps(twts, ensure_ascii=False))
             tms = []
             for tk, w in sorted(twts, key=lambda x: x[1] * -1):
-                sm = (
-                    rag_tokenizer.fine_grained_tokenize(tk).split()
-                    if need_fine_grained_tokenize(tk)
-                    else []
-                )
+                sm = rag_tokenizer.fine_grained_tokenize(tk).split() if need_fine_grained_tokenize(tk) else []
                 sm = [
                     re.sub(
                         r"[ ,\./;'\[\]\\`~!@#$%\^&\*\(\)=\+_<>\?:\"\{\}\|，。；‘’【】、！￥……（）——《》？：“”-]+",
@@ -145,7 +134,7 @@ class MsgTextQuery(QueryBase):
                 if len(keywords) < 32:
                     keywords.extend([s for s in tk_syns if s])
                 tk_syns = [rag_tokenizer.fine_grained_tokenize(s) for s in tk_syns if s]
-                tk_syns = [f"\"{s}\"" if s.find(" ") > 0 else s for s in tk_syns]
+                tk_syns = [f'"{s}"' if s.find(" ") > 0 else s for s in tk_syns]
 
                 if len(keywords) >= 32:
                     break
@@ -165,13 +154,7 @@ class MsgTextQuery(QueryBase):
             if len(twts) > 1:
                 tms += ' ("%s"~2)^1.5' % rag_tokenizer.tokenize(tt)
 
-            syns = " OR ".join(
-                [
-                    '"%s"'
-                    % rag_tokenizer.tokenize(self.sub_special_char(s))
-                    for s in syns
-                ]
-            )
+            syns = " OR ".join(['"%s"' % rag_tokenizer.tokenize(self.sub_special_char(s)) for s in syns])
             if syns and tms:
                 tms = f"({tms})^5 OR ({syns})^0.7"
 
@@ -181,7 +164,5 @@ class MsgTextQuery(QueryBase):
             query = " OR ".join([f"({t})" for t in qs if t])
             if not query:
                 query = otxt
-            return MatchTextExpr(
-                self.query_fields, query, 100, {"minimum_should_match": min_match, "original_query": original_query}
-            ), keywords
+            return MatchTextExpr(self.query_fields, query, 100, {"minimum_should_match": min_match, "original_query": original_query}), keywords
         return None, keywords

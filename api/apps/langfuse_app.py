@@ -18,8 +18,8 @@ class LangfuseKeysRequest(BaseModel):
 router = APIRouter()
 
 
-@router.post('/api_key', summary="设置Langfuse API密钥")
-@router.put('/api_key', summary="更新Langfuse API密钥")
+@router.post("/api_key", summary="设置Langfuse API密钥")
+@router.put("/api_key", summary="更新Langfuse API密钥")
 def set_api_key(request: LangfuseKeysRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     设置或更新Langfuse API密钥
@@ -45,18 +45,14 @@ def set_api_key(request: LangfuseKeysRequest, db: Session = Depends(get_db), use
             return get_error_data_result(retmsg="Missing required fields")
 
         langfuse_keys = {
-            'tenant_id': user.id,
-            'secret_key': secret_key,
-            'public_key': public_key,
-            'host': host,
+            "tenant_id": user.id,
+            "secret_key": secret_key,
+            "public_key": public_key,
+            "host": host,
         }
 
         # 验证API密钥有效性
-        langfuse = Langfuse(
-            public_key=langfuse_keys["public_key"],
-            secret_key=langfuse_keys["secret_key"],
-            host=langfuse_keys["host"]
-        )
+        langfuse = Langfuse(public_key=langfuse_keys["public_key"], secret_key=langfuse_keys["secret_key"], host=langfuse_keys["host"])
 
         if not langfuse.auth_check():
             return get_error_data_result(retmsg="Invalid Langfuse keys")
@@ -74,7 +70,7 @@ def set_api_key(request: LangfuseKeysRequest, db: Session = Depends(get_db), use
         return server_error_response(e)
 
 
-@router.get('/api_key', summary="获取Langfuse API密钥")
+@router.get("/api_key", summary="获取Langfuse API密钥")
 def get_api_key(db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取Langfuse API密钥
@@ -90,8 +86,7 @@ def get_api_key(db: Session = Depends(get_db), user=Depends(manager)):
         if not langfuse_entry:
             return get_error_data_result(retmsg="Have not record any Langfuse keys.")
 
-        langfuse = Langfuse(public_key=langfuse_entry["public_key"], secret_key=langfuse_entry["secret_key"],
-                            host=langfuse_entry["host"])
+        langfuse = Langfuse(public_key=langfuse_entry["public_key"], secret_key=langfuse_entry["secret_key"], host=langfuse_entry["host"])
         try:
             if not langfuse.auth_check():
                 return get_error_data_result(retmsg="Invalid Langfuse keys loaded")
@@ -108,7 +103,7 @@ def get_api_key(db: Session = Depends(get_db), user=Depends(manager)):
         return server_error_response(e)
 
 
-@router.delete('/api_key', summary="删除Langfuse API密钥")
+@router.delete("/api_key", summary="删除Langfuse API密钥")
 def delete_api_key(db: Session = Depends(get_db), user=Depends(manager)):
     """
     删除Langfuse API密钥

@@ -20,7 +20,7 @@ class SemanticFieldExtractor:
     """负责从语义层中提取用户查询所需的维度和指标的服务类"""
 
     # 编译正则表达式以提高性能
-    JSON_PATTERN = re.compile(r'```json\s*([\s\S]*?)```')
+    JSON_PATTERN = re.compile(r"```json\s*([\s\S]*?)```")
 
     def __init__(self, db: Session, user_id: Any, prompt_dir: str = None):
         """
@@ -96,17 +96,11 @@ class SemanticFieldExtractor:
 
             # 检查是否为维度
             if "dimension_id" in field and "dimension_name" in field:
-                cleaned_field = {
-                    "dimension_id": field.get("dimension_id"),
-                    "dimension_name": field.get("dimension_name")
-                }
+                cleaned_field = {"dimension_id": field.get("dimension_id"), "dimension_name": field.get("dimension_name")}
                 cleaned_fields.append(cleaned_field)
             # 检查是否为指标
             elif "metric_id" in field and "metric_name" in field:
-                cleaned_field = {
-                    "metric_id": field.get("metric_id"),
-                    "metric_name": field.get("metric_name")
-                }
+                cleaned_field = {"metric_id": field.get("metric_id"), "metric_name": field.get("metric_name")}
                 cleaned_fields.append(cleaned_field)
             else:
                 pass
@@ -132,17 +126,9 @@ class SemanticFieldExtractor:
             elif "metric_id" in field:
                 metrics.append(field)
 
-        return {
-            "dimensions": dimensions,
-            "metrics": metrics
-        }
+        return {"dimensions": dimensions, "metrics": metrics}
 
-    async def extract_semantic_fields(
-            self,
-            user_query: str,
-            dataset_info: list[dict],
-            llm_name: str
-    ) -> list[dict]:
+    async def extract_semantic_fields(self, user_query: str, dataset_info: list[dict], llm_name: str) -> list[dict]:
         """
         从语义层中提取用户查询所需的维度和指标
 
@@ -160,10 +146,7 @@ class SemanticFieldExtractor:
             prompt_template = PromptTemplateUtil.load_template_from_file(template_path)
 
             # 准备模板参数
-            template_values = {
-                "user_query": user_query,
-                "dataset_info": json.dumps(dataset_info, ensure_ascii=False, indent=2)
-            }
+            template_values = {"user_query": user_query, "dataset_info": json.dumps(dataset_info, ensure_ascii=False, indent=2)}
 
             # 填充模板
             prompt = PromptTemplateUtil.fill_template(prompt_template, template_values)
@@ -171,6 +154,7 @@ class SemanticFieldExtractor:
 
             # 检查性能缓存
             from api.service.askdata_service.cache import perf_cache
+
             cached = perf_cache.get(prompt, namespace="field_extraction")
             if cached is not None:
                 logger.info("PerfCache命中，跳过LLM调用 [field_extraction]")
@@ -183,7 +167,7 @@ class SemanticFieldExtractor:
             gen_conf = {
                 "temperature": 0.0,  # 使用0以获得更确定性的结果
                 "top_p": 0.9,
-                "max_tokens": 4096  # 给予足够的token以处理大量字段
+                "max_tokens": 4096,  # 给予足够的token以处理大量字段
             }
 
             # 定义在独立线程中执行的函数，使用独立的数据库会话
@@ -193,11 +177,7 @@ class SemanticFieldExtractor:
                 with db_connection() as thread_db:
                     model_config = get_model_config_by_type_and_name(thread_db, self.user_id, LLMType.CHAT.value, llm_name)
                     thread_llm_instance = LLMBundle(thread_db, self.user_id, model_config)
-                    return thread_llm_instance.chat(
-                        system="",
-                        history=history,
-                        gen_conf=gen_conf
-                    )
+                    return thread_llm_instance.chat(system="", history=history, gen_conf=gen_conf)
 
             # 调用LLM处理我们的提示词
             response = await thread_pool_exec(_chat_in_thread)
@@ -209,8 +189,7 @@ class SemanticFieldExtractor:
             if success:
                 # 验证和清理字段
                 cleaned_fields = self._validate_and_clean_fields(extracted_fields)
-                logger.debug("[field_extraction] 提取到 %d 个字段: %s",
-                             len(cleaned_fields), json.dumps(cleaned_fields, ensure_ascii=False))
+                logger.debug("[field_extraction] 提取到 %d 个字段: %s", len(cleaned_fields), json.dumps(cleaned_fields, ensure_ascii=False))
                 # 缓存成功的结果
                 perf_cache.set(prompt, cleaned_fields, namespace="field_extraction")
                 return cleaned_fields

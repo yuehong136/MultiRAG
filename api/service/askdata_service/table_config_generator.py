@@ -37,14 +37,18 @@ class TableConfigGenerator:
         if "(" in v or ")" in v or "::" in v:
             return True
         v_upper = v.upper()
-        keywords = ("CURRENT_DATE", "CURRENT_TIMESTAMP", "CURRENT_TIME",
-                    "NOW", "INTERVAL", "CAST", "EXTRACT")
+        keywords = ("CURRENT_DATE", "CURRENT_TIMESTAMP", "CURRENT_TIME", "NOW", "INTERVAL", "CAST", "EXTRACT")
         return any(kw in v_upper for kw in keywords)
 
-    async def generate(self, used_table_detail_dict: dict[str, dict], model_list: list[dict],
-                       sql_components: dict[str, Any], recommended_chart: str,
-                       cached_model_relations: list | None = None,
-                       cached_dimension_values: dict | None = None):
+    async def generate(
+        self,
+        used_table_detail_dict: dict[str, dict],
+        model_list: list[dict],
+        sql_components: dict[str, Any],
+        recommended_chart: str,
+        cached_model_relations: list | None = None,
+        cached_dimension_values: dict | None = None,
+    ):
         """
         生成表配置信息，将SQL解析结果映射到语义层。
 
@@ -76,16 +80,10 @@ class TableConfigGenerator:
             try:
                 if cached_model_relations is not None:
                     # 缓存优先：从 Phase 1 缓存的全量关系中过滤出与主表相关的
-                    related_model_relationships = [
-                        r for r in cached_model_relations
-                        if r.get('sourceModelId') == main_table_model_id
-                        or r.get('targetModelId') == main_table_model_id
-                    ]
+                    related_model_relationships = [r for r in cached_model_relations if r.get("sourceModelId") == main_table_model_id or r.get("targetModelId") == main_table_model_id]
                     logger.info(f"从缓存中过滤到 {len(related_model_relationships)} 条与主表相关的模型关系")
                 else:
-                    related_model_relationships = await self.semantic_api_client.get_model_relationships_async(
-                        model_ids=main_table_model_id
-                    )
+                    related_model_relationships = await self.semantic_api_client.get_model_relationships_async(model_ids=main_table_model_id)
                     logger.info(f"从 API 获取到 {len(related_model_relationships)} 条与主表相关的模型关系")
             except Exception as e:
                 logger.warning(f"获取主表模型关系失败: {e!s}")
@@ -93,15 +91,15 @@ class TableConfigGenerator:
         # 从关系中提取所有涉及的模型ID
         related_model_ids = set()
         for relation in related_model_relationships:
-            source_model_id = relation.get('sourceModelId')
-            target_model_id = relation.get('targetModelId')
+            source_model_id = relation.get("sourceModelId")
+            target_model_id = relation.get("targetModelId")
             if source_model_id:
                 related_model_ids.add(source_model_id)
             if target_model_id:
                 related_model_ids.add(target_model_id)
 
         # 获取model_list中已存在的模型ID
-        existing_model_ids = {model.get('modelId') for model in model_list if model.get('modelId')}
+        existing_model_ids = {model.get("modelId") for model in model_list if model.get("modelId")}
 
         # 找出需要新增的模型ID
         missing_model_ids = related_model_ids - existing_model_ids
@@ -110,31 +108,23 @@ class TableConfigGenerator:
         if missing_model_ids:
             logger.info(f"发现 {len(missing_model_ids)} 个关联模型不在model_list中,准备获取详情")
             try:
-                missing_models_details = await self.semantic_api_client.get_model_detail_async(
-                    model_ids=list(missing_model_ids)
-                )
+                missing_models_details = await self.semantic_api_client.get_model_detail_async(model_ids=list(missing_model_ids))
 
                 # 并行获取缺少 dimsAndMetrics 的模型（gather 替代串行 await）
-                models_needing_dims = [m for m in missing_models_details if 'dimsAndMetrics' not in m]
+                models_needing_dims = [m for m in missing_models_details if "dimsAndMetrics" not in m]
                 if models_needing_dims:
-                    dims_tasks = [
-                        self.semantic_api_client.get_model_inds_and_dims_by_model_id_async(
-                            model_id=m["modelId"]
-                        )
-                        for m in models_needing_dims
-                    ]
+                    dims_tasks = [self.semantic_api_client.get_model_inds_and_dims_by_model_id_async(model_id=m["modelId"]) for m in models_needing_dims]
                     # return_exceptions：一个关联模型的 dims/metrics 超时不再连累整批关联模型
                     # （外层 try/except 是粗粒度兜底，这里做细粒度逐元素降级）。降级值用 dict 不用 None，
                     # 理由见 model_dataset_resolver._ensure_dims_and_metrics。每模型用新字面量防串改。
                     dims_results = await asyncio.gather(*dims_tasks, return_exceptions=True)
                     for model_detail, dims_metrics in zip(models_needing_dims, dims_results):
                         if isinstance(dims_metrics, BaseException):
-                            logger.warning("[dims_metrics] 获取关联模型 %s 的维度/指标失败，降级为空继续: %r",
-                                           model_detail.get("modelId"), dims_metrics)
+                            logger.warning("[dims_metrics] 获取关联模型 %s 的维度/指标失败，降级为空继续: %r", model_detail.get("modelId"), dims_metrics)
                             dims_metrics = {"dimensions": [], "metrics": []}
                         elif not isinstance(dims_metrics, dict):
                             dims_metrics = {"dimensions": [], "metrics": []}
-                        model_detail['dimsAndMetrics'] = dims_metrics
+                        model_detail["dimsAndMetrics"] = dims_metrics
 
                 for model_detail in missing_models_details:
                     model_list.append(model_detail)
@@ -161,12 +151,12 @@ class TableConfigGenerator:
             existing_aliases.add(alias)
 
             # 尝试识别 t1, t2, t3 这类数字规律
-            match = re.match(r'^([a-zA-Z]+)(\d+)$', alias)
+            match = re.match(r"^([a-zA-Z]+)(\d+)$", alias)
             if match:
                 prefix = match.group(1)
                 num = int(match.group(2))
                 # 只记录 t1, t2 这种单字母+数字的模式
-                if prefix == 't':
+                if prefix == "t":
                     has_number_pattern = True
                     max_alias_num = max(max_alias_num, num)
 
@@ -200,9 +190,7 @@ class TableConfigGenerator:
                 existing_aliases.add(alias)
                 logger.info(f"为新增模型 {model['modelName']} (表: {model['tableName']}) 生成别名: {alias}")
 
-            model_table_alias_mapping_list.append(
-                {"modelId": model["modelId"], "table": model["tableName"], "alias": alias,
-                 "modelName": model["modelName"]})
+            model_table_alias_mapping_list.append({"modelId": model["modelId"], "table": model["tableName"], "alias": alias, "modelName": model["modelName"]})
 
         if recommended_chart == "明细表":
             # 4. 一次性构建所有语义字段信息
@@ -221,20 +209,11 @@ class TableConfigGenerator:
 
             return model_table_alias_mapping_list, {
                 "chart_type": "table-row",
-                "columns": {
-                    "selected_columns": selected_columns,
-                    "available_fields": semantic_fields_info["available_fields"]
-                },
-                "filters": {
-                    "filter_conditions": filter_conditions,
-                    "available_fields": semantic_fields_info["filterable_fields"]
-                },
-                "order_by": {
-                    "order_by_fields": order_by_fields,
-                    "available_fields": semantic_fields_info["sortable_fields"]
-                },
+                "columns": {"selected_columns": selected_columns, "available_fields": semantic_fields_info["available_fields"]},
+                "filters": {"filter_conditions": filter_conditions, "available_fields": semantic_fields_info["filterable_fields"]},
+                "order_by": {"order_by_fields": order_by_fields, "available_fields": semantic_fields_info["sortable_fields"]},
                 "limit": limit,
-                "all_semantic_fields": semantic_fields_info["all_fields"]
+                "all_semantic_fields": semantic_fields_info["all_fields"],
             }
         elif recommended_chart == "聚合表":
             # 4. 一次性构建所有语义字段信息
@@ -258,58 +237,58 @@ class TableConfigGenerator:
 
             return model_table_alias_mapping_list, {
                 "chart_type": "table-aggr",
-                "dimensions": {
-                    "selected_dimensions": selected_dimensions,
-                    "available_dimensions": semantic_fields_info["available_dimensions"]
-                },
-                "metrics": {
-                    "selected_metrics": selected_metrics,
-                    "available_metrics": semantic_fields_info["available_metrics"]
-                },
-                "where_conditions": {
-                    "where_conditions": where_conditions,
-                    "available_fields": semantic_fields_info["whereable_fields"]
-                },
-                "having_conditions": {
-                    "having_conditions": having_conditions,
-                    "available_fields": semantic_fields_info["havingable_fields"]
-                },
-                "order_by": {
-                    "order_by_fields": order_by_fields,
-                    "available_fields": semantic_fields_info["sortable_fields"]
-                },
+                "dimensions": {"selected_dimensions": selected_dimensions, "available_dimensions": semantic_fields_info["available_dimensions"]},
+                "metrics": {"selected_metrics": selected_metrics, "available_metrics": semantic_fields_info["available_metrics"]},
+                "where_conditions": {"where_conditions": where_conditions, "available_fields": semantic_fields_info["whereable_fields"]},
+                "having_conditions": {"having_conditions": having_conditions, "available_fields": semantic_fields_info["havingable_fields"]},
+                "order_by": {"order_by_fields": order_by_fields, "available_fields": semantic_fields_info["sortable_fields"]},
                 "limit": limit,
-                "all_semantic_fields": semantic_fields_info["all_fields"]
+                "all_semantic_fields": semantic_fields_info["all_fields"],
             }
 
     def _process_having_conditions(self, parts: dict[str, Any], used_table_detail_dict: dict[str, Any]) -> list[dict]:
         """处理having条件"""
         table_alias_mapping = parts["table_alias_mapping"]
-        having_conditions = parts['having_conditions']
-        if having_conditions.get('has_or'):
-            raw = having_conditions['raw_condition']
-            return [{"is_semantic_field": False, "is_complex_condition": True, "raw_condition": raw, "field": raw,
-                     "operator": "", "value": "", "from_model": None, "id": str(uuid.uuid4()),
-                     "wid": str(uuid.uuid4())}]
+        having_conditions = parts["having_conditions"]
+        if having_conditions.get("has_or"):
+            raw = having_conditions["raw_condition"]
+            return [
+                {
+                    "is_semantic_field": False,
+                    "is_complex_condition": True,
+                    "raw_condition": raw,
+                    "field": raw,
+                    "operator": "",
+                    "value": "",
+                    "from_model": None,
+                    "id": str(uuid.uuid4()),
+                    "wid": str(uuid.uuid4()),
+                }
+            ]
 
         filter_columns = []
-        for cond in having_conditions.get('parsed_conditions', []):
+        for cond in having_conditions.get("parsed_conditions", []):
             is_matched_semantic_field = False
-            table_alias, column_name = self._get_table_alias_and_field_by_split_column(cond['field'])
-            operator = cond['operator']
-            value = cond['value']
+            table_alias, column_name = self._get_table_alias_and_field_by_split_column(cond["field"])
+            operator = cond["operator"]
+            value = cond["value"]
             table_name, table_detail = self._resolve_table(table_alias, column_name, table_alias_mapping, used_table_detail_dict)
             if table_detail is None:
-                filter_columns.append(
-                    {"is_semantic_field": False, "sql_column": cond["field"], "operator": operator, "value": value,
-                     "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())})
+                filter_columns.append({"is_semantic_field": False, "sql_column": cond["field"], "operator": operator, "value": value, "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())})
                 continue
-            for metric in table_detail['dimsAndMetrics']['metrics']:
-                if identifiers_equal(metric['expression'], f"{table_name}.{column_name}"):
+            for metric in table_detail["dimsAndMetrics"]["metrics"]:
+                if identifiers_equal(metric["expression"], f"{table_name}.{column_name}"):
                     filter_columns.append(
-                        {"is_semantic_field": True, "semantic_type": "metric", "id": metric["metricId"],
-                         "metric_name": metric["metricName"], "operator": operator, "value": value,
-                         "wid": str(uuid.uuid4()), "original_sql_component": cond}
+                        {
+                            "is_semantic_field": True,
+                            "semantic_type": "metric",
+                            "id": metric["metricId"],
+                            "metric_name": metric["metricName"],
+                            "operator": operator,
+                            "value": value,
+                            "wid": str(uuid.uuid4()),
+                            "original_sql_component": cond,
+                        }
                     )
                     is_matched_semantic_field = True
                     break
@@ -319,9 +298,8 @@ class TableConfigGenerator:
             # 避免数值列被字符串参数绑定（integer > character varying）。查不到类型则为 None、维持现状。
             data_type = self._lookup_field_data_type(table_detail, column_name)
             filter_columns.append(
-                {"is_semantic_field": False, "sql_column": cond["field"], "operator": operator, "value": value,
-                 "dataType": data_type,
-                 "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())})
+                {"is_semantic_field": False, "sql_column": cond["field"], "operator": operator, "value": value, "dataType": data_type, "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())}
+            )
 
         return filter_columns
 
@@ -337,39 +315,45 @@ class TableConfigGenerator:
                     table_alias, column_name = self._get_table_alias_and_field_by_split_column(group_by)
                     table_name, table_detail = self._resolve_table(table_alias, column_name, table_alias_mapping, used_table_detail_dict)
                     if table_detail is None:
-                        group_by_dimensions.append({
-                            "is_semantic_field": False,
-                            "sql_column": group_by,
-                            "id": str(uuid.uuid4()),
-                            "wid": str(uuid.uuid4()),
-                            "nanoId": str(uuid.uuid4())
-                        })
+                        group_by_dimensions.append({"is_semantic_field": False, "sql_column": group_by, "id": str(uuid.uuid4()), "wid": str(uuid.uuid4()), "nanoId": str(uuid.uuid4())})
                         continue
                     is_timeseries = False
                     time_unit = None
                     time_source = None
                     if column_name.lower().startswith("extract("):
                         parsed_result = parse_sql_extract(column_name)
-                        if parsed_result['unit'] is not None and parsed_result['source'] is not None:
-                            time_unit = parsed_result['unit']
-                            time_source = parsed_result['source']
+                        if parsed_result["unit"] is not None and parsed_result["source"] is not None:
+                            time_unit = parsed_result["unit"]
+                            time_source = parsed_result["source"]
                         if time_unit and time_source:
                             is_timeseries = True
-                    for dim in table_detail['dimsAndMetrics']['dimensions']:
-                        if is_timeseries and dim['dimensionEnName'].lower() == time_source.lower():
+                    for dim in table_detail["dimsAndMetrics"]["dimensions"]:
+                        if is_timeseries and dim["dimensionEnName"].lower() == time_source.lower():
                             group_by_dimensions.append(
-                                {"is_semantic_field": True, "semantic_type": "dimension",
-                                 "id": dim["dimensionId"],
-                                 "dimension_name": dim["dimensionName"], "wid": str(uuid.uuid4()),
-                                 "nanoId": str(uuid.uuid4()), "original_sql_component": group_by, "unit": time_unit}
+                                {
+                                    "is_semantic_field": True,
+                                    "semantic_type": "dimension",
+                                    "id": dim["dimensionId"],
+                                    "dimension_name": dim["dimensionName"],
+                                    "wid": str(uuid.uuid4()),
+                                    "nanoId": str(uuid.uuid4()),
+                                    "original_sql_component": group_by,
+                                    "unit": time_unit,
+                                }
                             )
                             is_matched_semantic_field = True
                             break
-                        if dim['dimensionEnName'].lower() == column_name.lower():
+                        if dim["dimensionEnName"].lower() == column_name.lower():
                             group_by_dimensions.append(
-                                {"is_semantic_field": True, "semantic_type": "dimension", "id": dim["dimensionId"],
-                                 "dimension_name": dim["dimensionName"], "wid": str(uuid.uuid4()),
-                                 "nanoId": str(uuid.uuid4()), "original_sql_component": group_by}
+                                {
+                                    "is_semantic_field": True,
+                                    "semantic_type": "dimension",
+                                    "id": dim["dimensionId"],
+                                    "dimension_name": dim["dimensionName"],
+                                    "wid": str(uuid.uuid4()),
+                                    "nanoId": str(uuid.uuid4()),
+                                    "original_sql_component": group_by,
+                                }
                             )
                             is_matched_semantic_field = True
                             break
@@ -377,13 +361,7 @@ class TableConfigGenerator:
                         continue
 
                 if not is_matched_semantic_field:
-                    group_by_dimensions.append({
-                        "is_semantic_field": False,
-                        "sql_column": group_by,
-                        "id": str(uuid.uuid4()),
-                        "wid": str(uuid.uuid4()),
-                        "nanoId": str(uuid.uuid4())
-                    })
+                    group_by_dimensions.append({"is_semantic_field": False, "sql_column": group_by, "id": str(uuid.uuid4()), "wid": str(uuid.uuid4()), "nanoId": str(uuid.uuid4())})
             return group_by_dimensions
         except Exception:
             logger.exception(f"parts: {parts}")
@@ -402,33 +380,32 @@ class TableConfigGenerator:
             if table_detail is None:
                 # 无法确定来源表（多表+裸列，或模型表详情缺失），按原始列名作为非语义字段处理
                 selected_metrics.append(
-                    {"is_semantic_field": False, "sql_column": metric, "id": str(uuid.uuid4()),
-                     "wid": str(uuid.uuid4()), "nanoId": str(uuid.uuid4()), "original_sql_component": metric})
+                    {"is_semantic_field": False, "sql_column": metric, "id": str(uuid.uuid4()), "wid": str(uuid.uuid4()), "nanoId": str(uuid.uuid4()), "original_sql_component": metric}
+                )
                 continue
             else:
-                for model_metric in table_detail['dimsAndMetrics']['metrics']:
-                    if (model_metric['expression'].lower() == column_name.lower()) or are_expressions_equal_ignore_quotes(model_metric['expression'], column_name):
+                for model_metric in table_detail["dimsAndMetrics"]["metrics"]:
+                    if (model_metric["expression"].lower() == column_name.lower()) or are_expressions_equal_ignore_quotes(model_metric["expression"], column_name):
                         selected_metrics.append(
-                            {"is_semantic_field": True, "semantic_type": "metric", "id": model_metric["metricId"],
-                             "metric_name": model_metric["metricName"], "wid": str(uuid.uuid4()),
-                             "nanoId": str(uuid.uuid4()), "original_sql_component": metric}
+                            {
+                                "is_semantic_field": True,
+                                "semantic_type": "metric",
+                                "id": model_metric["metricId"],
+                                "metric_name": model_metric["metricName"],
+                                "wid": str(uuid.uuid4()),
+                                "nanoId": str(uuid.uuid4()),
+                                "original_sql_component": metric,
+                            }
                         )
                         is_matched_semantic_field = True
                         break
                 if is_matched_semantic_field:
                     continue
             if not is_matched_semantic_field:
-                selected_metrics.append({
-                    "is_semantic_field": False,
-                    "sql_column": metric,
-                    "id": str(uuid.uuid4()),
-                    "wid": str(uuid.uuid4()),
-                    "nanoId": str(uuid.uuid4())
-                })
+                selected_metrics.append({"is_semantic_field": False, "sql_column": metric, "id": str(uuid.uuid4()), "wid": str(uuid.uuid4()), "nanoId": str(uuid.uuid4())})
         return selected_metrics
 
-    async def _build_semantic_fields_info(self, model_list: list[dict],
-                                          cached_dimension_values: dict | None = None) -> dict[str, list]:
+    async def _build_semantic_fields_info(self, model_list: list[dict], cached_dimension_values: dict | None = None) -> dict[str, list]:
         """一次性构建所有语义字段信息，避免重复遍历"""
         available_fields, filterable_fields, sortable_fields, all_fields = [], [], [], []
         all_dimension_ids = []
@@ -438,16 +415,14 @@ class TableConfigGenerator:
                 # 如果是时间字段或者是高基数维度的字段，就不查询他们的维度值。因为时间类型的值是通过前端组件选择得到的，高基数维度的值是前端动态调用接口得到的
                 if dim["dimtype"].lower() == "time" or dim["dimtype"].lower() == "hc":
                     continue
-                all_dimension_ids.append(dim['dimensionId'])
+                all_dimension_ids.append(dim["dimensionId"])
 
         # 缓存优先获取维度值
         if cached_dimension_values is not None:
             dimensions_value_dict = cached_dimension_values
             logger.info(f"使用缓存的维度值 ({len(dimensions_value_dict)} 个)")
         elif all_dimension_ids:
-            dimensions_value_dict = await self.semantic_api_client.get_dimension_values_async(
-                dimension_ids=all_dimension_ids
-            )
+            dimensions_value_dict = await self.semantic_api_client.get_dimension_values_async(dimension_ids=all_dimension_ids)
         else:
             dimensions_value_dict = {}
 
@@ -458,17 +433,12 @@ class TableConfigGenerator:
             for metric in model["dimsAndMetrics"]["metrics"]:
                 # 如果表达式中包含括号，则认为是聚合表达式，由于当前是为明细表服务，不可用于值展示、过滤、排序
                 is_agg = "(" in metric["expression"].lower()
-                available_fields.append(
-                    {"is_allow_use": not is_agg, "semantic_type": "metric", "id": metric["metricId"],
-                     "metric_name": metric["metricName"]})
+                available_fields.append({"is_allow_use": not is_agg, "semantic_type": "metric", "id": metric["metricId"], "metric_name": metric["metricName"]})
                 filterable_fields.append(
-                    {"is_allow_use": not is_agg, "semantic_type": "metric", "id": metric["metricId"],
-                     "from_model": model_name,
-                     "from_model_id": model_id, "metric_name": metric["metricName"]})
-                sortable_fields.append({"is_allow_use": not is_agg, "semantic_type": "metric", "id": metric["metricId"],
-                                        "from_model": model_id, "metric_name": metric["metricName"]})
-                all_fields.append({"semantic_type": "metric", "semantic_field": metric, "id": metric["metricId"],
-                                   "from_model": model_name, "from_model_id": model_id})
+                    {"is_allow_use": not is_agg, "semantic_type": "metric", "id": metric["metricId"], "from_model": model_name, "from_model_id": model_id, "metric_name": metric["metricName"]}
+                )
+                sortable_fields.append({"is_allow_use": not is_agg, "semantic_type": "metric", "id": metric["metricId"], "from_model": model_id, "metric_name": metric["metricName"]})
+                all_fields.append({"semantic_type": "metric", "semantic_field": metric, "id": metric["metricId"], "from_model": model_name, "from_model_id": model_id})
 
             for dim in model["dimsAndMetrics"]["dimensions"]:
                 dim_id = dim["dimensionId"]
@@ -476,27 +446,17 @@ class TableConfigGenerator:
                 if dim["dimtype"].lower() == "time" or dim["dimtype"].lower() == "hc":
                     pass
                 else:
-                    dim['possibleValues'] = dimensions_value_dict.get(dim_id, [])
-                available_fields.append({"is_allow_use": True, "semantic_type": "dimension", "id": dim_id,
-                                         "dimension_name": dim["dimensionName"]})
+                    dim["possibleValues"] = dimensions_value_dict.get(dim_id, [])
+                available_fields.append({"is_allow_use": True, "semantic_type": "dimension", "id": dim_id, "dimension_name": dim["dimensionName"]})
                 filterable_fields.append(
-                    {"is_allow_use": True, "semantic_type": "dimension", "id": dim_id, "from_model": model_name,
-                     "from_model_id": model_id,
-                     "dimension_name": dim["dimensionName"]})
-                sortable_fields.append(
-                    {"is_allow_use": True, "semantic_type": "dimension", "id": dim_id, "from_model": model_id,
-                     "dimension_name": dim["dimensionName"]})
-                all_fields.append(
-                    {"semantic_type": "dimension", "semantic_field": dim, "id": dim_id, "from_model": model_name,
-                     "from_model_id": model_id})
+                    {"is_allow_use": True, "semantic_type": "dimension", "id": dim_id, "from_model": model_name, "from_model_id": model_id, "dimension_name": dim["dimensionName"]}
+                )
+                sortable_fields.append({"is_allow_use": True, "semantic_type": "dimension", "id": dim_id, "from_model": model_id, "dimension_name": dim["dimensionName"]})
+                all_fields.append({"semantic_type": "dimension", "semantic_field": dim, "id": dim_id, "from_model": model_name, "from_model_id": model_id})
 
-        return {
-            "available_fields": available_fields, "filterable_fields": filterable_fields,
-            "sortable_fields": sortable_fields, "all_fields": all_fields
-        }
+        return {"available_fields": available_fields, "filterable_fields": filterable_fields, "sortable_fields": sortable_fields, "all_fields": all_fields}
 
-    async def _build_semantic_fields_info_for_aggr(self, model_list: list[dict],
-                                                    cached_dimension_values: dict | None = None) -> dict[str, list]:
+    async def _build_semantic_fields_info_for_aggr(self, model_list: list[dict], cached_dimension_values: dict | None = None) -> dict[str, list]:
         """一次性构建所有语义字段信息，避免重复遍历"""
         available_dimensions, available_metrics, sortable_fields, whereable_fields, havingable_fields, all_fields = [], [], [], [], [], []
         all_dimension_ids = []
@@ -506,16 +466,14 @@ class TableConfigGenerator:
                 # 如果是时间字段或者是高基数维度的字段，就不查询他们的维度值。因为时间类型的值是通过前端组件选择得到的，高基数维度的值是前端动态调用接口得到的
                 if dim["dimtype"].lower() == "time" or dim["dimtype"].lower() == "hc":
                     continue
-                all_dimension_ids.append(dim['dimensionId'])
+                all_dimension_ids.append(dim["dimensionId"])
 
         # 缓存优先获取维度值
         if cached_dimension_values is not None:
             dimensions_value_dict = cached_dimension_values
             logger.info(f"使用缓存的维度值 ({len(dimensions_value_dict)} 个)")
         elif all_dimension_ids:
-            dimensions_value_dict = await self.semantic_api_client.get_dimension_values_async(
-                dimension_ids=all_dimension_ids
-            )
+            dimensions_value_dict = await self.semantic_api_client.get_dimension_values_async(dimension_ids=all_dimension_ids)
         else:
             dimensions_value_dict = {}
 
@@ -525,49 +483,80 @@ class TableConfigGenerator:
 
             for metric in model["dimsAndMetrics"]["metrics"]:
                 available_metrics.append(
-                    {"is_allow_use": True, "semantic_type": "metric", "id": metric["metricId"],
-                     "from_model": model_name,
-                     "from_model_id": model_id, "metric_name": metric["metricName"], "wid": str(uuid.uuid4())})
+                    {
+                        "is_allow_use": True,
+                        "semantic_type": "metric",
+                        "id": metric["metricId"],
+                        "from_model": model_name,
+                        "from_model_id": model_id,
+                        "metric_name": metric["metricName"],
+                        "wid": str(uuid.uuid4()),
+                    }
+                )
                 whereable_fields.append(
-                    {"is_allow_use": True, "semantic_type": "metric", "id": metric["metricId"], "from_model": model_name,
-                     "from_model_id": model_id,
-                     "metric_name": metric["metricName"], "wid": str(uuid.uuid4())})
+                    {
+                        "is_allow_use": True,
+                        "semantic_type": "metric",
+                        "id": metric["metricId"],
+                        "from_model": model_name,
+                        "from_model_id": model_id,
+                        "metric_name": metric["metricName"],
+                        "wid": str(uuid.uuid4()),
+                    }
+                )
                 havingable_fields.append(
-                    {"is_allow_use": True, "semantic_type": "metric", "id": metric["metricId"],
-                     "from_model": model_name,
-                     "from_model_id": model_id, "metric_name": metric["metricName"], "wid": str(uuid.uuid4())})
-                sortable_fields.append({"is_allow_use": True, "semantic_type": "metric", "id": metric["metricId"],
-                                        "from_model": model_id, "metric_name": metric["metricName"]})
-                all_fields.append({"semantic_type": "metric", "semantic_field": metric, "id": metric["metricId"],
-                                   "from_model": model_name, "from_model_id": model_id})
+                    {
+                        "is_allow_use": True,
+                        "semantic_type": "metric",
+                        "id": metric["metricId"],
+                        "from_model": model_name,
+                        "from_model_id": model_id,
+                        "metric_name": metric["metricName"],
+                        "wid": str(uuid.uuid4()),
+                    }
+                )
+                sortable_fields.append({"is_allow_use": True, "semantic_type": "metric", "id": metric["metricId"], "from_model": model_id, "metric_name": metric["metricName"]})
+                all_fields.append({"semantic_type": "metric", "semantic_field": metric, "id": metric["metricId"], "from_model": model_name, "from_model_id": model_id})
 
             for dim in model["dimsAndMetrics"]["dimensions"]:
                 dim_id = dim["dimensionId"]
                 if dim["dimtype"].lower() == "time" or dim["dimtype"].lower() == "hc":
                     pass
                 else:
-                    dim['possibleValues'] = dimensions_value_dict.get(dim_id, [])
-                available_dimensions.append({"is_allow_use": True, "semantic_type": "dimension", "id": dim_id,
-                                             "dimension_name": dim["dimensionName"]})
+                    dim["possibleValues"] = dimensions_value_dict.get(dim_id, [])
+                available_dimensions.append({"is_allow_use": True, "semantic_type": "dimension", "id": dim_id, "dimension_name": dim["dimensionName"]})
                 available_metrics.append(
-                    {"is_allow_use": True, "semantic_type": "dimension", "id": dim_id, "from_model": model_name,
-                     "from_model_id": model_id,
-                     "dimension_name": dim["dimensionName"], "wid": str(uuid.uuid4())})
+                    {
+                        "is_allow_use": True,
+                        "semantic_type": "dimension",
+                        "id": dim_id,
+                        "from_model": model_name,
+                        "from_model_id": model_id,
+                        "dimension_name": dim["dimensionName"],
+                        "wid": str(uuid.uuid4()),
+                    }
+                )
                 whereable_fields.append(
-                    {"is_allow_use": True, "semantic_type": "dimension", "id": dim_id, "from_model": model_name,
-                     "from_model_id": model_id,
-                     "dimension_name": dim["dimensionName"], "wid": str(uuid.uuid4())})
-                sortable_fields.append(
-                    {"is_allow_use": True, "semantic_type": "dimension", "id": dim_id, "from_model": model_id,
-                     "dimension_name": dim["dimensionName"]})
-                all_fields.append(
-                    {"semantic_type": "dimension", "semantic_field": dim, "id": dim_id, "from_model": model_name,
-                     "from_model_id": model_id})
+                    {
+                        "is_allow_use": True,
+                        "semantic_type": "dimension",
+                        "id": dim_id,
+                        "from_model": model_name,
+                        "from_model_id": model_id,
+                        "dimension_name": dim["dimensionName"],
+                        "wid": str(uuid.uuid4()),
+                    }
+                )
+                sortable_fields.append({"is_allow_use": True, "semantic_type": "dimension", "id": dim_id, "from_model": model_id, "dimension_name": dim["dimensionName"]})
+                all_fields.append({"semantic_type": "dimension", "semantic_field": dim, "id": dim_id, "from_model": model_name, "from_model_id": model_id})
 
         return {
-            "available_dimensions": available_dimensions, "available_metrics": available_metrics,
-            "sortable_fields": sortable_fields, "whereable_fields": whereable_fields,
-            "havingable_fields": havingable_fields, "all_fields": all_fields
+            "available_dimensions": available_dimensions,
+            "available_metrics": available_metrics,
+            "sortable_fields": sortable_fields,
+            "whereable_fields": whereable_fields,
+            "havingable_fields": havingable_fields,
+            "all_fields": all_fields,
         }
 
     def _process_select_columns(self, parts: dict[str, Any], used_table_detail_dict: dict[str, Any]) -> list[dict]:
@@ -581,35 +570,26 @@ class TableConfigGenerator:
                 alias, column_name = split_col
                 table_name, table_detail = self._resolve_table(alias, column_name, table_alias_mapping, used_table_detail_dict)
                 if table_detail is None:
-                    selected_columns.append(
-                        {"is_semantic_field": False, "sql_column": col, "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())})
+                    selected_columns.append({"is_semantic_field": False, "sql_column": col, "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())})
                     continue
-                for dim in table_detail['dimsAndMetrics']['dimensions']:
-                    if dim['dimensionEnName'].lower() == column_name.lower():
-                        selected_columns.append(
-                            {"is_semantic_field": True, "semantic_type": "dimension", "id": dim["dimensionId"],
-                             "dimension_name": dim["dimensionName"], "wid": str(uuid.uuid4())}
-                        )
+                for dim in table_detail["dimsAndMetrics"]["dimensions"]:
+                    if dim["dimensionEnName"].lower() == column_name.lower():
+                        selected_columns.append({"is_semantic_field": True, "semantic_type": "dimension", "id": dim["dimensionId"], "dimension_name": dim["dimensionName"], "wid": str(uuid.uuid4())})
                         is_matched_semantic_field = True
                         break
                 if is_matched_semantic_field:
                     continue
-                for metric in table_detail['dimsAndMetrics']['metrics']:
-                    if identifiers_equal(metric['expression'], f"{table_name}.{column_name}"):
-                        selected_columns.append(
-                            {"is_semantic_field": True, "semantic_type": "metric", "id": metric["metricId"],
-                             "metric_name": metric["metricName"], "wid": str(uuid.uuid4())}
-                        )
+                for metric in table_detail["dimsAndMetrics"]["metrics"]:
+                    if identifiers_equal(metric["expression"], f"{table_name}.{column_name}"):
+                        selected_columns.append({"is_semantic_field": True, "semantic_type": "metric", "id": metric["metricId"], "metric_name": metric["metricName"], "wid": str(uuid.uuid4())})
                         is_matched_semantic_field = True
                         break
                 if is_matched_semantic_field:
                     continue
-                selected_columns.append(
-                    {"is_semantic_field": False, "sql_column": col, "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())})
+                selected_columns.append({"is_semantic_field": False, "sql_column": col, "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())})
         return selected_columns
 
-    def _get_table_detail_with_fallback(self, used_table_detail_dict: dict[str, Any], table_name: str) -> dict[
-        str, Any]:
+    def _get_table_detail_with_fallback(self, used_table_detail_dict: dict[str, Any], table_name: str) -> dict[str, Any]:
         """
         获取表详情，支持带引号/不带引号的表名容错处理
         """
@@ -659,8 +639,7 @@ class TableConfigGenerator:
             if len(candidate_tables) == 1:
                 table_name = next(iter(candidate_tables))
             else:
-                table_name = self._resolve_multi_table_owner(
-                    column_name, candidate_tables, used_table_detail_dict)
+                table_name = self._resolve_multi_table_owner(column_name, candidate_tables, used_table_detail_dict)
         if not table_name:
             return None, None
         try:
@@ -668,9 +647,7 @@ class TableConfigGenerator:
         except KeyError:
             return None, None
         dims_and_metrics = detail.get("dimsAndMetrics") if isinstance(detail, dict) else None
-        if (not isinstance(dims_and_metrics, dict)
-                or "dimensions" not in dims_and_metrics
-                or "metrics" not in dims_and_metrics):
+        if not isinstance(dims_and_metrics, dict) or "dimensions" not in dims_and_metrics or "metrics" not in dims_and_metrics:
             return None, None
         # 返回裸表名：调用方会用 table_name + '.' + column_name 与 metric['expression']（裸名）比较，
         # 若带引号（"t_jzg_jbxx"）会比不上 → 指标被误判为非语义。仅用于比较，不影响输出 SQL。
@@ -704,10 +681,7 @@ class TableConfigGenerator:
         ≥2 张：scope 收窄后仍多拥有者，只能是两表 dimensionEnName 命名巧合（物理上 DB 已
               证明不歧义），没有唯一正解——降级展示表达式永远不会错，强行选一个才会错。
         """
-        owners = [
-            table_name for table_name in candidate_tables
-            if self._table_has_dimension(table_name, column_name, used_table_detail_dict)
-        ]
+        owners = [table_name for table_name in candidate_tables if self._table_has_dimension(table_name, column_name, used_table_detail_dict)]
         return owners[0] if len(owners) == 1 else None
 
     def _table_has_dimension(self, table_name, column_name, used_table_detail_dict):
@@ -722,10 +696,7 @@ class TableConfigGenerator:
         if not isinstance(dims_and_metrics, dict):
             return False
         target = column_name.lower()
-        return any(
-            (dim.get("dimensionEnName") or "").lower() == target
-            for dim in (dims_and_metrics.get("dimensions") or [])
-        )
+        return any((dim.get("dimensionEnName") or "").lower() == target for dim in (dims_and_metrics.get("dimensions") or []))
 
     def _lookup_field_data_type(self, table_detail: Any, column_name: str) -> str | None:
         """从模型物理字段表（table_detail["fields"]，含 fieldName/dataType）按列名查 SQL 数据类型。
@@ -742,23 +713,32 @@ class TableConfigGenerator:
                 return f.get("dataType")
         return None
 
-    def _process_where_conditions(self, parts: dict[str, Any], used_table_detail_dict: dict[str, Any]) -> list[
-        dict[str, Any]]:
+    def _process_where_conditions(self, parts: dict[str, Any], used_table_detail_dict: dict[str, Any]) -> list[dict[str, Any]]:
         """处理WHERE条件"""
         table_alias_mapping = parts["table_alias_mapping"]
-        where_conditions = parts['where_conditions']
-        if where_conditions.get('has_or'):
-            raw = where_conditions['raw_condition']
-            return [{"is_semantic_field": False, "is_complex_condition": True, "raw_condition": raw, "field": raw,
-                     "operator": "", "value": "", "from_model": None, "id": str(uuid.uuid4()),
-                     "wid": str(uuid.uuid4())}]
+        where_conditions = parts["where_conditions"]
+        if where_conditions.get("has_or"):
+            raw = where_conditions["raw_condition"]
+            return [
+                {
+                    "is_semantic_field": False,
+                    "is_complex_condition": True,
+                    "raw_condition": raw,
+                    "field": raw,
+                    "operator": "",
+                    "value": "",
+                    "from_model": None,
+                    "id": str(uuid.uuid4()),
+                    "wid": str(uuid.uuid4()),
+                }
+            ]
 
         filter_columns = []
-        for cond in where_conditions.get('parsed_conditions', []):
+        for cond in where_conditions.get("parsed_conditions", []):
             is_matched_semantic_field = False
-            field = cond['field']
-            operator = cond['operator']
-            value = cond['value']
+            field = cond["field"]
+            operator = cond["operator"]
+            value = cond["value"]
             # 复杂条件：field 含括号（表达式字段）或 value 是 SQL 表达式（函数/类型转换/时间常量）。
             # 原先只判断 field 导致 LLM 生成 `jysj >= (CURRENT_DATE - INTERVAL '7 days')::text`
             # 被当成普通语义字段，value 被作为字面量参数化绑定，re-query 时退化为字符串比较。
@@ -766,36 +746,56 @@ class TableConfigGenerator:
                 val_str = "" if value is None else str(value)
                 raw_condition = (field + " " + operator + (" " + val_str if val_str else "")).strip()
                 filter_columns.append(
-                    {"is_semantic_field": False, "is_complex_condition": True,
-                     "raw_condition": raw_condition, "from_model": None,
-                     "field": field, "operator": operator, "value": val_str,
-                     "id": str(uuid.uuid4()),
-                     "wid": str(uuid.uuid4()), "original_sql_component": cond})
+                    {
+                        "is_semantic_field": False,
+                        "is_complex_condition": True,
+                        "raw_condition": raw_condition,
+                        "from_model": None,
+                        "field": field,
+                        "operator": operator,
+                        "value": val_str,
+                        "id": str(uuid.uuid4()),
+                        "wid": str(uuid.uuid4()),
+                        "original_sql_component": cond,
+                    }
+                )
                 continue
             table_alias, column_name = self._get_table_alias_and_field_by_split_column(field)
             table_name, table_detail = self._resolve_table(table_alias, column_name, table_alias_mapping, used_table_detail_dict)
             if table_detail is None:
-                filter_columns.append(
-                    {"is_semantic_field": False, "sql_column": cond["field"], "operator": operator, "value": value,
-                     "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())})
+                filter_columns.append({"is_semantic_field": False, "sql_column": cond["field"], "operator": operator, "value": value, "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())})
                 continue
-            for dim in table_detail['dimsAndMetrics']['dimensions']:
-                if dim['dimensionEnName'].lower() == column_name.lower():
+            for dim in table_detail["dimsAndMetrics"]["dimensions"]:
+                if dim["dimensionEnName"].lower() == column_name.lower():
                     filter_columns.append(
-                        {"is_semantic_field": True, "semantic_type": "dimension", "id": dim["dimensionId"],
-                         "dimension_name": dim["dimensionName"], "operator": operator, "value": value,
-                         "wid": str(uuid.uuid4()), "original_sql_component": cond}
+                        {
+                            "is_semantic_field": True,
+                            "semantic_type": "dimension",
+                            "id": dim["dimensionId"],
+                            "dimension_name": dim["dimensionName"],
+                            "operator": operator,
+                            "value": value,
+                            "wid": str(uuid.uuid4()),
+                            "original_sql_component": cond,
+                        }
                     )
                     is_matched_semantic_field = True
                     break
             if is_matched_semantic_field:
                 continue
-            for metric in table_detail['dimsAndMetrics']['metrics']:
-                if identifiers_equal(metric['expression'], f"{table_name}.{column_name}"):
+            for metric in table_detail["dimsAndMetrics"]["metrics"]:
+                if identifiers_equal(metric["expression"], f"{table_name}.{column_name}"):
                     filter_columns.append(
-                        {"is_semantic_field": True, "semantic_type": "metric", "id": metric["metricId"],
-                         "metric_name": metric["metricName"], "operator": operator, "value": value,
-                         "wid": str(uuid.uuid4()), "original_sql_component": cond}
+                        {
+                            "is_semantic_field": True,
+                            "semantic_type": "metric",
+                            "id": metric["metricId"],
+                            "metric_name": metric["metricName"],
+                            "operator": operator,
+                            "value": value,
+                            "wid": str(uuid.uuid4()),
+                            "original_sql_component": cond,
+                        }
                     )
                     is_matched_semantic_field = True
                     break
@@ -805,59 +805,65 @@ class TableConfigGenerator:
             # 避免数值列被字符串参数绑定（integer > character varying）。查不到类型则为 None、维持现状。
             data_type = self._lookup_field_data_type(table_detail, column_name)
             filter_columns.append(
-                {"is_semantic_field": False, "sql_column": cond["field"], "operator": operator, "value": value,
-                 "dataType": data_type,
-                 "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())})
+                {"is_semantic_field": False, "sql_column": cond["field"], "operator": operator, "value": value, "dataType": data_type, "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())}
+            )
 
         return filter_columns
 
-    def _process_order_by_fields(self, parts: dict[str, Any], used_table_detail_dict: dict[str, Any]) -> list[
-        dict[str, Any]]:
+    def _process_order_by_fields(self, parts: dict[str, Any], used_table_detail_dict: dict[str, Any]) -> list[dict[str, Any]]:
         """处理ORDER BY字段"""
         order_by_columns = []
         table_alias_mapping = parts["table_alias_mapping"]
-        order_by_fields = parts['order_by']
+        order_by_fields = parts["order_by"]
         for order_info in order_by_fields:
             is_matched_semantic_field = False
-            table_alias, column_name = self._get_table_alias_and_field_by_split_column(order_info['field'])
-            direction = order_info['direction']
+            table_alias, column_name = self._get_table_alias_and_field_by_split_column(order_info["field"])
+            direction = order_info["direction"]
             table_name, table_detail = self._resolve_table(table_alias, column_name, table_alias_mapping, used_table_detail_dict)
             if table_detail is None:
-                order_by_columns.append(
-                    {"is_semantic_field": False, "sql_column": order_info['field'], "id": str(uuid.uuid4()),
-                     "direction": direction, "wid": str(uuid.uuid4())})
+                order_by_columns.append({"is_semantic_field": False, "sql_column": order_info["field"], "id": str(uuid.uuid4()), "direction": direction, "wid": str(uuid.uuid4())})
                 continue
-            for metric in table_detail['dimsAndMetrics']['metrics']:
-                if identifiers_equal(metric['expression'], f"{table_name}.{column_name}"):
+            for metric in table_detail["dimsAndMetrics"]["metrics"]:
+                if identifiers_equal(metric["expression"], f"{table_name}.{column_name}"):
                     order_by_columns.append(
-                        {"is_semantic_field": True, "semantic_type": "metric", "id": metric["metricId"],
-                         "metric_name": metric["metricName"], "direction": direction, "wid": str(uuid.uuid4()),
-                         "original_sql_component": order_info}
+                        {
+                            "is_semantic_field": True,
+                            "semantic_type": "metric",
+                            "id": metric["metricId"],
+                            "metric_name": metric["metricName"],
+                            "direction": direction,
+                            "wid": str(uuid.uuid4()),
+                            "original_sql_component": order_info,
+                        }
                     )
                     is_matched_semantic_field = True
                     break
             if is_matched_semantic_field:
                 continue
-            for dim in table_detail['dimsAndMetrics']['dimensions']:
-                if dim['dimensionEnName'].lower() == column_name.lower():
+            for dim in table_detail["dimsAndMetrics"]["dimensions"]:
+                if dim["dimensionEnName"].lower() == column_name.lower():
                     order_by_columns.append(
-                        {"is_semantic_field": True, "semantic_type": "dimension", "id": dim["dimensionId"],
-                         "dimension_name": dim["dimensionName"], "direction": direction, "wid": str(uuid.uuid4()),
-                         "original_sql_component": order_info}
+                        {
+                            "is_semantic_field": True,
+                            "semantic_type": "dimension",
+                            "id": dim["dimensionId"],
+                            "dimension_name": dim["dimensionName"],
+                            "direction": direction,
+                            "wid": str(uuid.uuid4()),
+                            "original_sql_component": order_info,
+                        }
                     )
                     is_matched_semantic_field = True
                     break
             if is_matched_semantic_field:
                 continue
-            order_by_columns.append(
-                {"is_semantic_field": False, "sql_column": order_info['field'], "id": str(uuid.uuid4()),
-                 "direction": direction, "wid": str(uuid.uuid4())})
+            order_by_columns.append({"is_semantic_field": False, "sql_column": order_info["field"], "id": str(uuid.uuid4()), "direction": direction, "wid": str(uuid.uuid4())})
 
         return order_by_columns
 
     def _process_limit(self, parts: dict[str, Any]) -> int | None:
         """处理LIMIT字段"""
-        limit = parts['limit']
+        limit = parts["limit"]
         if not limit:
             return None
         return int(limit)
@@ -890,15 +896,15 @@ class TableConfigGenerator:
         column = column.strip()
 
         # 处理 AS 别名，取 AS 前面的部分
-        if ' AS ' in column.upper():
-            column = column.split(' AS ')[0].strip()
+        if " AS " in column.upper():
+            column = column.split(" AS ")[0].strip()
 
         # 查找所有表别名引用 (格式: alias.field)
         table_refs = self._find_table_references(column)
 
         if not table_refs:
             # 没有找到表引用，检查是否是简单的聚合函数
-            func_pattern = r'^([A-Z_]+)\((.*)\)$'
+            func_pattern = r"^([A-Z_]+)\((.*)\)$"
             match = re.match(func_pattern, column, re.IGNORECASE)
             if match:
                 func_name = match.group(1)
@@ -906,14 +912,14 @@ class TableConfigGenerator:
 
                 # 处理 DISTINCT 关键字
                 distinct_prefix = ""
-                if func_arg.upper().startswith('DISTINCT '):
+                if func_arg.upper().startswith("DISTINCT "):
                     distinct_prefix = "DISTINCT "
                     func_arg = func_arg[9:].strip()
 
                 # 检查函数参数中是否有表前缀
-                if '.' in func_arg and ' ' not in func_arg:
+                if "." in func_arg and " " not in func_arg:
                     # 简单的 table.field 格式
-                    parts = func_arg.split('.')
+                    parts = func_arg.split(".")
                     table = parts[0].strip()
                     field = parts[1].strip()
                     new_column = f"{func_name}({distinct_prefix}{field})"
@@ -927,7 +933,7 @@ class TableConfigGenerator:
                     return ("", new_column)
             else:
                 # 不是函数，按原逻辑处理
-                parts = column.split('.')
+                parts = column.split(".")
                 return (parts[0], parts[1]) if len(parts) == 2 else ("", column)
 
         # 有表引用，选择主要的表别名（出现次数最多的）
@@ -944,16 +950,49 @@ class TableConfigGenerator:
         返回表别名列表
         """
         # 匹配 alias.field 格式，但排除数字开头的（如 1.5）
-        pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*)\.'
+        pattern = r"\b([a-zA-Z_][a-zA-Z0-9_]*)\."
         matches = re.findall(pattern, expression)
 
         # 过滤掉SQL关键字和数字
         sql_keywords = {
-            'SELECT', 'FROM', 'WHERE', 'JOIN', 'INNER', 'LEFT', 'RIGHT', 'OUTER',
-            'ON', 'AND', 'OR', 'NOT', 'IN', 'EXISTS', 'CASE', 'WHEN', 'THEN',
-            'ELSE', 'END', 'AS', 'DISTINCT', 'GROUP', 'BY', 'ORDER', 'HAVING',
-            'LIMIT', 'OFFSET', 'UNION', 'ALL', 'EXTRACT', 'SUBSTRING', 'CAST',
-            'CONVERT', 'DATEPART', 'DATEDIFF', 'YEAR', 'MONTH', 'DAY'
+            "SELECT",
+            "FROM",
+            "WHERE",
+            "JOIN",
+            "INNER",
+            "LEFT",
+            "RIGHT",
+            "OUTER",
+            "ON",
+            "AND",
+            "OR",
+            "NOT",
+            "IN",
+            "EXISTS",
+            "CASE",
+            "WHEN",
+            "THEN",
+            "ELSE",
+            "END",
+            "AS",
+            "DISTINCT",
+            "GROUP",
+            "BY",
+            "ORDER",
+            "HAVING",
+            "LIMIT",
+            "OFFSET",
+            "UNION",
+            "ALL",
+            "EXTRACT",
+            "SUBSTRING",
+            "CAST",
+            "CONVERT",
+            "DATEPART",
+            "DATEDIFF",
+            "YEAR",
+            "MONTH",
+            "DAY",
         }
 
         table_refs = []
@@ -973,9 +1012,9 @@ class TableConfigGenerator:
 
         # 使用正则表达式匹配 table_alias. 但不匹配在字符串或标识符中间的
         # 确保匹配的是完整的表别名，不是标识符的一部分
-        pattern = r'\b' + re.escape(table_alias) + r'\.'
+        pattern = r"\b" + re.escape(table_alias) + r"\."
 
         # 替换所有匹配的表前缀
-        result = re.sub(pattern, '', expression)
+        result = re.sub(pattern, "", expression)
 
         return result

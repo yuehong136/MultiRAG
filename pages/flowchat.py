@@ -12,17 +12,16 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="auto",
     menu_items={
-        'Get Help': 'https://cake-doom-0c6.notion.site/4b6c4b3a5338497494620b3dd82e4acc?pvs=4',
-        'Report a bug': "https://cake-doom-0c6.notion.site/BUG-cb6ea80282fc4de49d58ff96b4c5431a?pvs=4",
-        'About': "- 快来可视化你的思路、流程!"
-    }
+        "Get Help": "https://cake-doom-0c6.notion.site/4b6c4b3a5338497494620b3dd82e4acc?pvs=4",
+        "Report a bug": "https://cake-doom-0c6.notion.site/BUG-cb6ea80282fc4de49d58ff96b4c5431a?pvs=4",
+        "About": "- 快来可视化你的思路、流程!",
+    },
 )
+
+
 def main():
     with st.sidebar:
-        st.image(
-            r"E:\Project\python\study\RAG\assets\imgs\logo2.png",
-            use_column_width=True
-        )
+        st.image(r"E:\Project\python\study\RAG\assets\imgs\logo2.png", use_column_width=True)
         st.caption(
             f"""<p align="right">当前版本：{VERSION}</p>""",
             unsafe_allow_html=True,
@@ -39,8 +38,7 @@ def main():
     # st.markdown("*" + "可在侧边栏添加编排功能组件构建流程应用，可选择开放API供三方调用。" + "*")
     st.markdown("可在侧边栏添加编排功能组件构建流程应用，可选择开放API供三方调用。")
 
-    user_input = st.text_area("请描述一个工作流程:",
-                              "描述一个计算任务的处理流程，从开始到结束，包括数据读取、处理、存储等步骤。")
+    user_input = st.text_area("请描述一个工作流程:", "描述一个计算任务的处理流程，从开始到结束，包括数据读取、处理、存储等步骤。")
     client = ZhipuAI(api_key="7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv")  # 请填写您自己的APIKey
 
     if st.button("生成流程图"):
@@ -48,13 +46,16 @@ def main():
         response = client.chat.completions.create(
             model="glm-4-0520",  # 填写需要调用的模型编码
             messages=[
-                {"role": "system", "content": '''
+                {
+                    "role": "system",
+                    "content": """
                     请将用户问题描述的工作流程转换为 JSON 格式，其中键表示当前步骤，值表示下一步骤，下一步骤也是可以指向之前步骤的。例如：
                     {{
                         "步骤1": "步骤2",
                         "步骤2": "步骤3"
                     }}
-                '''},
+                """,
+                },
                 {"role": "user", "content": user_input},
             ],
             stream=False,
@@ -67,7 +68,7 @@ def main():
 
         # 提取多个 JSON 部分
         try:
-            json_matches = re.findall(r'\{[\s\S]*?\}', raw_content)
+            json_matches = re.findall(r"\{[\s\S]*?\}", raw_content)
             if json_matches:
                 # 选择最后一个 JSON 块
                 json_content = json_matches[-1]

@@ -5,6 +5,7 @@
 @date：2025/01/11 16:10
 @desc: AI安全护栏标签管理服务
 """
+
 import logging
 from typing import Any
 
@@ -18,12 +19,11 @@ from common.misc_utils import get_uuid
 
 class GuardLabelService(CommonService):
     """AI安全护栏标签管理服务"""
+
     model = GuardLabel
 
     @classmethod
-    def create_label(cls, db: Session, dimension_id: str, code: str, name: str,
-                    description: str = None, tenant_id: str = None,
-                    created_by: str = None, **kwargs) -> str | None:
+    def create_label(cls, db: Session, dimension_id: str, code: str, name: str, description: str = None, tenant_id: str = None, created_by: str = None, **kwargs) -> str | None:
         """
         创建护栏标签
 
@@ -65,7 +65,7 @@ class GuardLabelService(CommonService):
                 "action": kwargs.get("action", "warn"),
                 "action_config": kwargs.get("action_config", {}),
                 "sort_order": kwargs.get("sort_order", 0),
-                "status": kwargs.get("status", "1")
+                "status": kwargs.get("status", "1"),
             }
 
             label = cls.save(db, **label_data)
@@ -76,8 +76,7 @@ class GuardLabelService(CommonService):
             return None
 
     @classmethod
-    def get_label_by_code(cls, db: Session, code: str,
-                         tenant_id: str) -> GuardLabel | None:
+    def get_label_by_code(cls, db: Session, code: str, tenant_id: str) -> GuardLabel | None:
         """
         根据代码获取标签
 
@@ -90,20 +89,13 @@ class GuardLabelService(CommonService):
             标签对象或None
         """
         try:
-            return db.query(cls.model).filter(
-                and_(
-                    cls.model.code == code,
-                    cls.model.tenant_id == tenant_id,
-                    cls.model.status == "1"
-                )
-            ).first()
+            return db.query(cls.model).filter(and_(cls.model.code == code, cls.model.tenant_id == tenant_id, cls.model.status == "1")).first()
         except Exception as e:
             logging.error(f"获取标签失败: {e}")
             return None
 
     @classmethod
-    def get_labels_by_dimension(cls, db: Session, dimension_id: str,
-                               tenant_id: str, enabled_only: bool = False) -> list[GuardLabel]:
+    def get_labels_by_dimension(cls, db: Session, dimension_id: str, tenant_id: str, enabled_only: bool = False) -> list[GuardLabel]:
         """
         获取维度下的标签列表
 
@@ -117,13 +109,7 @@ class GuardLabelService(CommonService):
             标签列表
         """
         try:
-            query = db.query(cls.model).filter(
-                and_(
-                    cls.model.dimension_id == dimension_id,
-                    cls.model.tenant_id == tenant_id,
-                    cls.model.status == "1"
-                )
-            )
+            query = db.query(cls.model).filter(and_(cls.model.dimension_id == dimension_id, cls.model.tenant_id == tenant_id, cls.model.status == "1"))
 
             if enabled_only:
                 query = query.filter(cls.model.enabled == True)
@@ -134,8 +120,7 @@ class GuardLabelService(CommonService):
             return []
 
     @classmethod
-    def get_labels_by_tenant(cls, db: Session, tenant_id: str,
-                            enabled_only: bool = False) -> list[GuardLabel]:
+    def get_labels_by_tenant(cls, db: Session, tenant_id: str, enabled_only: bool = False) -> list[GuardLabel]:
         """
         获取租户的标签列表
 
@@ -148,12 +133,7 @@ class GuardLabelService(CommonService):
             标签列表
         """
         try:
-            query = db.query(cls.model).filter(
-                and_(
-                    cls.model.tenant_id == tenant_id,
-                    cls.model.status == "1"
-                )
-            )
+            query = db.query(cls.model).filter(and_(cls.model.tenant_id == tenant_id, cls.model.status == "1"))
 
             if enabled_only:
                 query = query.filter(cls.model.enabled == True)
@@ -164,8 +144,7 @@ class GuardLabelService(CommonService):
             return []
 
     @classmethod
-    def get_labels_by_codes(cls, db: Session, codes: list[str],
-                           tenant_id: str) -> list[GuardLabel]:
+    def get_labels_by_codes(cls, db: Session, codes: list[str], tenant_id: str) -> list[GuardLabel]:
         """
         根据代码列表获取标签
 
@@ -178,21 +157,13 @@ class GuardLabelService(CommonService):
             标签列表
         """
         try:
-            return db.query(cls.model).filter(
-                and_(
-                    cls.model.code.in_(codes),
-                    cls.model.tenant_id == tenant_id,
-                    cls.model.enabled == True,
-                    cls.model.status == "1"
-                )
-            ).all()
+            return db.query(cls.model).filter(and_(cls.model.code.in_(codes), cls.model.tenant_id == tenant_id, cls.model.enabled == True, cls.model.status == "1")).all()
         except Exception as e:
             logging.error(f"批量获取标签失败: {e}")
             return []
 
     @classmethod
-    def update_label(cls, db: Session, label_id: str,
-                    update_data: dict[str, Any]) -> bool:
+    def update_label(cls, db: Session, label_id: str, update_data: dict[str, Any]) -> bool:
         """
         更新标签信息
 
@@ -283,15 +254,14 @@ class GuardLabelService(CommonService):
                 "enabled_labels": enabled_count,
                 "disabled_labels": len(labels) - enabled_count,
                 "dimension_stats": dimension_stats,
-                "label_codes": [l.code for l in labels if l.enabled]
+                "label_codes": [l.code for l in labels if l.enabled],
             }
         except Exception as e:
             logging.error(f"获取标签统计失败: {e}")
             return {}
 
     @classmethod
-    def init_default_labels(cls, db: Session, dimension_configs: dict[str, str],
-                           tenant_id: str, created_by: str) -> list[str]:
+    def init_default_labels(cls, db: Session, dimension_configs: dict[str, str], tenant_id: str, created_by: str) -> list[str]:
         """
         初始化默认标签
 
@@ -314,7 +284,7 @@ class GuardLabelService(CommonService):
                 "risk_score": 90.0,
                 "risk_level": 5,
                 "action": "block",
-                "sort_order": 1
+                "sort_order": 1,
             },
             {
                 "code": "pornographic_adult",
@@ -324,7 +294,7 @@ class GuardLabelService(CommonService):
                 "risk_score": 95.0,
                 "risk_level": 5,
                 "action": "block",
-                "sort_order": 2
+                "sort_order": 2,
             },
             {
                 "code": "violent_extremists",
@@ -334,8 +304,8 @@ class GuardLabelService(CommonService):
                 "risk_score": 85.0,
                 "risk_level": 4,
                 "action": "block",
-                "sort_order": 3
-            }
+                "sort_order": 3,
+            },
         ]
 
         # 敏感内容标签
@@ -350,7 +320,7 @@ class GuardLabelService(CommonService):
                 "sensitive_level": "S3",
                 "action": "replace",
                 "action_config": {"replacement": "[银行卡号]"},
-                "sort_order": 1
+                "sort_order": 1,
             },
             {
                 "code": "phone_number",
@@ -362,7 +332,7 @@ class GuardLabelService(CommonService):
                 "sensitive_level": "S2",
                 "action": "replace",
                 "action_config": {"replacement": "[手机号]"},
-                "sort_order": 2
+                "sort_order": 2,
             },
             {
                 "code": "id_card_cn",
@@ -374,8 +344,8 @@ class GuardLabelService(CommonService):
                 "sensitive_level": "S3",
                 "action": "replace",
                 "action_config": {"replacement": "[身份证号]"},
-                "sort_order": 3
-            }
+                "sort_order": 3,
+            },
         ]
 
         # 提示词攻击标签
@@ -389,7 +359,7 @@ class GuardLabelService(CommonService):
                 "risk_score": 95.0,
                 "risk_level": 5,
                 "action": "block",
-                "sort_order": 1
+                "sort_order": 1,
             },
             {
                 "code": "jailbreak_attempt",
@@ -400,16 +370,12 @@ class GuardLabelService(CommonService):
                 "risk_score": 90.0,
                 "risk_level": 5,
                 "action": "block",
-                "sort_order": 2
-            }
+                "sort_order": 2,
+            },
         ]
 
         # 组织标签数据
-        label_groups = [
-            ("CONTENT_COMPLIANCE", content_compliance_labels),
-            ("SENSITIVE_CONTENT", sensitive_content_labels),
-            ("PROMPT_ATTACK", prompt_attack_labels)
-        ]
+        label_groups = [("CONTENT_COMPLIANCE", content_compliance_labels), ("SENSITIVE_CONTENT", sensitive_content_labels), ("PROMPT_ATTACK", prompt_attack_labels)]
 
         created_ids = []
         for dimension_code, labels in label_groups:
@@ -418,13 +384,7 @@ class GuardLabelService(CommonService):
                 continue
 
             for label_data in labels:
-                label_id = cls.create_label(
-                    db=db,
-                    dimension_id=dimension_id,
-                    tenant_id=tenant_id,
-                    created_by=created_by,
-                    **label_data
-                )
+                label_id = cls.create_label(db=db, dimension_id=dimension_id, tenant_id=tenant_id, created_by=created_by, **label_data)
                 if label_id:
                     created_ids.append(label_id)
 

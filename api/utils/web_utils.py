@@ -217,10 +217,8 @@ def __send_devtools(driver, cmd, params=None):
         # 使用 Selenium 提供的 execute_cdp_cmd 方法执行命令
         return driver.execute_cdp_cmd(cmd, params)
     except AttributeError:
-        raise RuntimeError(
-            "This Selenium WebDriver does not support execute_cdp_cmd. "
-            "Ensure you are using a compatible driver and browser."
-        )
+        raise RuntimeError("This Selenium WebDriver does not support execute_cdp_cmd. Ensure you are using a compatible driver and browser.")
+
 
 def __get_pdf_from_html(path: str, timeout: int, install_driver: bool, print_options: dict):
     webdriver_options = Options()

@@ -5,6 +5,7 @@
 @date：2024/8/6 17:40
 @desc:
 """
+
 import re
 
 from common.token_utils import num_tokens_from_string
@@ -22,7 +23,7 @@ class RAGFlowTxtParser:
             raise TypeError("txt type should be str!")
         cks = [""]
         tk_nums = [0]
-        delimiter = delimiter.encode('utf-8').decode('unicode_escape').encode('latin1').decode('utf-8')
+        delimiter = delimiter.encode("utf-8").decode("unicode_escape").encode("latin1").decode("utf-8")
 
         def add_chunk(t):
             nonlocal cks, tk_nums, delimiter
@@ -42,7 +43,7 @@ class RAGFlowTxtParser:
         for m in re.finditer(r"`([^`]+)`", delimiter, re.I):
             f, t = m.span()
             dels.append(m.group(1))
-            dels.extend(list(delimiter[s: f]))
+            dels.extend(list(delimiter[s:f]))
             s = t
         if s < len(delimiter):
             dels.extend(list(delimiter[s:]))

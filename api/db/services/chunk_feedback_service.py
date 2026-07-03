@@ -132,11 +132,7 @@ class ChunkFeedbackService:
         budget = UPVOTE_WEIGHT_INCREMENT if is_positive else DOWNVOTE_WEIGHT_DECREMENT
         magnitudes = [_retrieval_signal(chunk) or 1.0 for _chunk_id, _kb_id, chunk in rows]
         parts = _split_integer_budget(magnitudes, budget)
-        return [
-            (chunk_id, kb_id, sign * part)
-            for (chunk_id, kb_id, _chunk), part in zip(rows, parts, strict=True)
-            if part != 0
-        ]
+        return [(chunk_id, kb_id, sign * part) for (chunk_id, kb_id, _chunk), part in zip(rows, parts, strict=True) if part != 0]
 
     @classmethod
     def update_chunk_weight(

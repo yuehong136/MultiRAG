@@ -35,28 +35,17 @@ class DataOperationsParam(ComponentParamBase):
         self.updates = []
         self.remove_keys = []
         self.rename_keys = []
-        self.outputs = {
-            "result": {
-                "value": [],
-                "type": "Array of Object"
-            }
-        }
+        self.outputs = {"result": {"value": [], "type": "Array of Object"}}
 
     def check(self):
-        self.check_valid_value(self.operations, "Support operations",
-                               ["select_keys", "literal_eval", "combine", "filter_values", "append_or_update",
-                                "remove_keys", "rename_keys"])
+        self.check_valid_value(self.operations, "Support operations", ["select_keys", "literal_eval", "combine", "filter_values", "append_or_update", "remove_keys", "rename_keys"])
 
 
 class DataOperations(ComponentBase, ABC):
     component_name = "DataOperations"
 
     def get_input_form(self) -> dict[str, dict]:
-        return {
-            k: {"name": o.get("name", ""), "type": "line"}
-            for input_item in (self._param.query or [])
-            for k, o in self.get_input_elements_from_text(input_item).items()
-        }
+        return {k: {"name": o.get("name", ""), "type": "line"} for input_item in (self._param.query or []) for k, o in self.get_input_elements_from_text(input_item).items()}
 
     @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10 * 60)))
     def _invoke(self, **kwargs):
@@ -92,8 +81,7 @@ class DataOperations(ComponentBase, ABC):
 
     def _select_keys(self):
         filter_criteria: list[str] = self._param.select_keys
-        results = [{key: value for key, value in data_dict.items() if key in filter_criteria} for data_dict in
-                   self.input_objects]
+        results = [{key: value for key, value in data_dict.items() if key in filter_criteria} for data_dict in self.input_objects]
         self.set_output("result", results)
 
     def _recursive_eval(self, data):
@@ -103,11 +91,7 @@ class DataOperations(ComponentBase, ABC):
             return [self._recursive_eval(item) for item in data]
         if isinstance(data, str):
             try:
-                if (
-                        data.strip().startswith(("{", "[", "(", "'", '"'))
-                        or data.strip().lower() in ("true", "false", "none")
-                        or data.strip().replace(".", "").isdigit()
-                ):
+                if data.strip().startswith(("{", "[", "(", "'", '"')) or data.strip().lower() in ("true", "false", "none") or data.strip().replace(".", "").isdigit():
                     return ast.literal_eval(data)
             except (ValueError, SyntaxError, TypeError, MemoryError):
                 return data
@@ -130,9 +114,7 @@ class DataOperations(ComponentBase, ABC):
                     else:
                         result[key].append(value)
                 else:
-                    result[key] = (
-                        [result[key], value] if not isinstance(value, list) else [result[key], *value]
-                    )
+                    result[key] = [result[key], value] if not isinstance(value, list) else [result[key], *value]
         self.set_output("result", result)
 
     def norm(self, v):
@@ -162,7 +144,7 @@ class DataOperations(ComponentBase, ABC):
 
     def _filter_values(self):
         results = []
-        rules = (getattr(self._param, "filter_values", None) or [])
+        rules = getattr(self._param, "filter_values", None) or []
         for obj in self.input_objects:
             if not rules:
                 results.append(obj)
@@ -190,7 +172,7 @@ class DataOperations(ComponentBase, ABC):
         results = []
         remove_keys = getattr(self._param, "remove_keys", []) or []
 
-        for obj in (self.input_objects or []):
+        for obj in self.input_objects or []:
             new_obj = dict(obj)
             for k in remove_keys:
                 if not isinstance(k, str):
@@ -203,7 +185,7 @@ class DataOperations(ComponentBase, ABC):
         results = []
         rename_pairs = getattr(self._param, "rename_keys", []) or []
 
-        for obj in (self.input_objects or []):
+        for obj in self.input_objects or []:
             new_obj = dict(obj)
             for pair in rename_pairs:
                 if not isinstance(pair, dict):

@@ -10,8 +10,8 @@ class ComponentManager:
         self.logger = logger
         self.components: dict[str, BaseComponent] = {}
 
-        self.db = kwargs.get('db', None)
-        self.user = kwargs.get('user', None)
+        self.db = kwargs.get("db", None)
+        self.user = kwargs.get("user", None)
 
     def create_component(self, node_data: dict[str, Any]) -> BaseComponent:
         """创建组件实例，不再处理输入值"""

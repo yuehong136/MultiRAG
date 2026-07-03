@@ -173,7 +173,7 @@ class MinerUParser(RAGFlowPdfParser):
                     self.logger.info("[MinerU] Ignore root folder...")
                     continue
                 if root_dir and name.startswith(root_dir):
-                    name = name[len(root_dir):]
+                    name = name[len(root_dir) :]
                 if not name:
                     continue
                 if name.startswith("/") or name.startswith("//") or re.match(r"^[A-Za-z]:", name):
@@ -244,14 +244,10 @@ class MinerUParser(RAGFlowPdfParser):
 
         return True, reason
 
-    def _run_mineru(
-        self, input_path: Path, output_dir: Path, options: MinerUParseOptions, callback: Callable | None = None
-    ) -> Path:
+    def _run_mineru(self, input_path: Path, output_dir: Path, options: MinerUParseOptions, callback: Callable | None = None) -> Path:
         return self._run_mineru_api(input_path, output_dir, options, callback)
 
-    def _run_mineru_api(
-        self, input_path: Path, output_dir: Path, options: MinerUParseOptions, callback: Callable | None = None
-    ) -> Path:
+    def _run_mineru_api(self, input_path: Path, output_dir: Path, options: MinerUParseOptions, callback: Callable | None = None) -> Path:
         pdf_file_path = str(input_path)
 
         if not os.path.exists(pdf_file_path):
@@ -582,17 +578,17 @@ class MinerUParser(RAGFlowPdfParser):
         return []
 
     def parse_pdf(
-            self,
-            filepath: str | PathLike[str],
-            binary: BytesIO | bytes,
-            callback: Callable | None = None,
-            *,
-            output_dir: str | None = None,
-            backend: str = "pipeline",
-            server_url: str | None = None,
-            delete_output: bool = True,
-            parse_method: str = "raw",
-            **kwargs,
+        self,
+        filepath: str | PathLike[str],
+        binary: BytesIO | bytes,
+        callback: Callable | None = None,
+        *,
+        output_dir: str | None = None,
+        backend: str = "pipeline",
+        server_url: str | None = None,
+        delete_output: bool = True,
+        parse_method: str = "raw",
+        **kwargs,
     ) -> tuple:
         import shutil
 
@@ -600,12 +596,12 @@ class MinerUParser(RAGFlowPdfParser):
         temp_pdf = None
         created_tmp_dir = False
 
-        parser_cfg = kwargs.get('parser_config', {})
-        lang = parser_cfg.get('mineru_lang') or kwargs.get('lang', 'English')
-        mineru_lang_code = LANGUAGE_TO_MINERU_MAP.get(lang, 'ch')  # Defaults to Chinese if not matched
-        mineru_method_raw_str = parser_cfg.get('mineru_parse_method', 'auto')
-        enable_formula = parser_cfg.get('mineru_formula_enable', True)
-        enable_table = parser_cfg.get('mineru_table_enable', True)
+        parser_cfg = kwargs.get("parser_config", {})
+        lang = parser_cfg.get("mineru_lang") or kwargs.get("lang", "English")
+        mineru_lang_code = LANGUAGE_TO_MINERU_MAP.get(lang, "ch")  # Defaults to Chinese if not matched
+        mineru_method_raw_str = parser_cfg.get("mineru_parse_method", "auto")
+        enable_formula = parser_cfg.get("mineru_formula_enable", True)
+        enable_table = parser_cfg.get("mineru_table_enable", True)
 
         # remove spaces, or mineru crash, and _read_output fail too
         file_path = Path(filepath)

@@ -51,14 +51,13 @@ class APITokenService(CommonService):
     def delete_by_tenant_id(cls, db: Session, tenant_id: str) -> int:
         """根据tenant_id删除所有相关的API Token记录"""
         try:
-            result = db.query(cls.model).filter(
-                cls.model.tenant_id == tenant_id
-            ).delete(synchronize_session=False)
+            result = db.query(cls.model).filter(cls.model.tenant_id == tenant_id).delete(synchronize_session=False)
             db.commit()
             return result
         except Exception as e:
             db.rollback()
             raise e
+
 
 class API4ConversationService(CommonService):
     model = API4Conversation
@@ -127,9 +126,7 @@ class API4ConversationService(CommonService):
 
         if keywords:
             # message 若为 JSON/Text，这里统一转 text 处理再 lower
-            base = base.where(
-                func.lower(func.cast(cls.model.message, SAText)).contains(keywords.lower())
-            )
+            base = base.where(func.lower(func.cast(cls.model.message, SAText)).contains(keywords.lower()))
 
         # 处理时间过滤 —— 兼容字符串 / datetime
         def _to_dt(v: str | datetime | None) -> datetime | None:
@@ -245,11 +242,7 @@ class API4ConversationService(CommonService):
 
         # 解析时间
         def _parse_dt(s: str) -> datetime:
-            return (
-                datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
-                if len(s) == 19
-                else datetime.strptime(s, "%Y-%m-%d")
-            )
+            return datetime.strptime(s, "%Y-%m-%d %H:%M:%S") if len(s) == 19 else datetime.strptime(s, "%Y-%m-%d")
 
         dt_from = _parse_dt(from_date)
         dt_to = _parse_dt(to_date)
@@ -302,9 +295,7 @@ class API4ConversationService(CommonService):
     def delete_by_dialog_ids(cls, db: Session, dialog_ids: list[str]) -> int:
         """根据对话ID列表删除所有相关的API会话记录"""
         try:
-            result = db.query(cls.model).filter(
-                cls.model.dialog_id.in_(dialog_ids)
-            ).delete(synchronize_session=False)
+            result = db.query(cls.model).filter(cls.model.dialog_id.in_(dialog_ids)).delete(synchronize_session=False)
             db.commit()
             return result
         except Exception as e:

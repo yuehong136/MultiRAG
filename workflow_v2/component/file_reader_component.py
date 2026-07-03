@@ -16,43 +16,38 @@ from workflow_v2.workflow_logging_config import WorkflowContextLogger
 @dataclass
 class BatchConfig:
     """批处理配置类"""
+
     batch_enable: bool = False
     batch_size: int = 100
     concurrent_size: int = 10
     input_lists: list[dict[str, Any]] = None
 
     @classmethod
-    def from_batch_config(cls, config: dict[str, Any]) -> 'BatchConfig':
+    def from_batch_config(cls, config: dict[str, Any]) -> "BatchConfig":
         """从批处理配置创建实例"""
         if not config:
             return cls()
 
-        input_lists = config.get('inputLists', [])
+        input_lists = config.get("inputLists", [])
         if not isinstance(input_lists, list):
             input_lists = [input_lists]
 
-        return cls(
-            batch_enable=config.get('batchEnable', False),
-            batch_size=config.get('batchSize', 100),
-            concurrent_size=config.get('concurrentSize', 10),
-            input_lists=input_lists
-        )
+        return cls(batch_enable=config.get("batchEnable", False), batch_size=config.get("batchSize", 100), concurrent_size=config.get("concurrentSize", 10), input_lists=input_lists)
 
 
 class FileReaderComponent(BaseComponent):
     """LLM组件"""
 
-    def __init__(self, component_id: str, title: str, node_data: dict[str, Any],
-                 logger: WorkflowContextLogger, **kwargs):
+    def __init__(self, component_id: str, title: str, node_data: dict[str, Any], logger: WorkflowContextLogger, **kwargs):
         super().__init__(component_id, title, logger)
         self.batch_config: BatchConfig = self._extract_batch_config(node_data)
 
-        self.db = kwargs.get('db', None)
-        self.user = kwargs.get('user', None)
+        self.db = kwargs.get("db", None)
+        self.user = kwargs.get("user", None)
 
     def _extract_batch_config(self, node_data: dict[str, Any]) -> BatchConfig:
         """从节点数据中提取批处理配置"""
-        batch_data = node_data['data']['inputs'].get('batch', {})
+        batch_data = node_data["data"]["inputs"].get("batch", {})
         return BatchConfig.from_batch_config(batch_data)
 
     async def execute(self) -> dict[str, Any]:
@@ -68,9 +63,8 @@ class FileReaderComponent(BaseComponent):
             minio_operator = MinioOperator()
             file_list = minio_operator.list_objects(bucket_name=bucket_name, prefix=dir_name, recursive=False)
             for file in file_list:
-                file_name = file['name']
-                file_data = minio_operator.download_to_memory(bucket_name=bucket_name,
-                                                              object_name=file_name)
+                file_name = file["name"]
+                file_data = minio_operator.download_to_memory(bucket_name=bucket_name, object_name=file_name)
                 if file_name.endswith(".docx"):
                     file_content = read_docx_content(file_data)
                 elif file_name.endswith(".txt"):
@@ -83,8 +77,8 @@ class FileReaderComponent(BaseComponent):
         else:
             # 目前单文件只支持普通上传文件
             file_info = await parse_uploaded_file(next(iter(self.inputs.values())))
-            file_name = file_info['file_name']
-            file_content = file_info['file_content']
+            file_name = file_info["file_name"]
+            file_content = file_info["file_content"]
             return {"output": {"fileName": file_name, "fileContent": file_content}}
 
     async def execute_alone(self, input_value: dict, batch_value: dict | None = None) -> dict:
@@ -99,9 +93,8 @@ class FileReaderComponent(BaseComponent):
             minio_operator = MinioOperator()
             file_list = minio_operator.list_objects(bucket_name=bucket_name, prefix=dir_name, recursive=False)
             for file in file_list:
-                file_name = file['name']
-                file_data = minio_operator.download_to_memory(bucket_name=bucket_name,
-                                                              object_name=file_name)
+                file_name = file["name"]
+                file_data = minio_operator.download_to_memory(bucket_name=bucket_name, object_name=file_name)
                 if file_name.endswith(".docx"):
                     file_content = read_docx_content(file_data)
                 elif file_name.endswith(".txt"):
@@ -113,8 +106,8 @@ class FileReaderComponent(BaseComponent):
             return {"outputList": output_list}
         else:
             file_info = await parse_uploaded_file(next(iter(input_value.values())))
-            file_name = file_info['file_name']
-            file_content = file_info['file_content']
+            file_name = file_info["file_name"]
+            file_content = file_info["file_content"]
             return {"output": {"fileName": file_name, "fileContent": file_content}}
 
 
@@ -137,21 +130,18 @@ async def parse_uploaded_file(file: UploadFile) -> dict:
         content = await file.read()
 
         # 根据文件类型进行不同的处理
-        if file_extension == '.docx':
+        if file_extension == ".docx":
             # 直接从内存读取，正文段落 + 表格单元格
             file_content = read_docx_content(io.BytesIO(content))
 
-        elif file_extension == '.txt':
+        elif file_extension == ".txt":
             # 直接解码文本内容
-            file_content = content.decode('utf-8')
+            file_content = content.decode("utf-8")
 
         else:
             raise ValueError(f"Unsupported file type: {file_extension}")
 
-        return {
-            "file_name": file_name,
-            "file_content": file_content
-        }
+        return {"file_name": file_name, "file_content": file_content}
 
     except Exception as e:
         raise Exception(f"Error processing file: {e!s}")
@@ -182,7 +172,7 @@ def read_docx_content(bytes_data) -> str:
     return "\n".join(parts)
 
 
-def read_bytes_content(bytes_data, encoding='utf-8', chunk_size=None):
+def read_bytes_content(bytes_data, encoding="utf-8", chunk_size=None):
     """
     从BytesIO对象中读取内容并转换为字符串
 
@@ -204,7 +194,7 @@ def read_bytes_content(bytes_data, encoding='utf-8', chunk_size=None):
 
         if chunk_size:
             # 分块读取
-            content = ''
+            content = ""
             while True:
                 chunk = bytes_data.read(chunk_size)
                 if not chunk:
@@ -226,6 +216,7 @@ def read_bytes_content(bytes_data, encoding='utf-8', chunk_size=None):
         # 重置指针位置，以便后续可能的读取
         bytes_data.seek(0)
 
+
 def detect_and_read_content(bytes_data, chunk_size=None):
     """
     自动检测编码并读取内容
@@ -237,7 +228,7 @@ def detect_and_read_content(bytes_data, chunk_size=None):
         bytes_data.seek(0)
         raw_data = bytes_data.read()
         detected = chardet.detect(raw_data)
-        encoding = detected['encoding']
+        encoding = detected["encoding"]
 
         # 重新封装成BytesIO
         new_bytes = io.BytesIO(raw_data)

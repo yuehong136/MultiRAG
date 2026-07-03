@@ -14,7 +14,7 @@ from api.service.nl2sql_service.nl2sql_service import NL2SQLService, get_nl2sql_
 
 router = APIRouter()
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -31,6 +31,7 @@ class ResponseSchema(BaseModel):
 
 class QueryRewriteRequest(BaseModel):
     """查询重写请求的基础模型"""
+
     query_text: str = Field(
         ...,
         title="查询文本",
@@ -53,18 +54,12 @@ class QueryRewriteRequest(BaseModel):
     )
 
     class Config:
-        json_schema_extra = {
-            "example": {
-                "query_text": "显示上个季度的销售数据",
-                "llm_name": "gpt-4",
-                "max_variations": 3,
-                "preserve_keywords": True
-            }
-        }
+        json_schema_extra = {"example": {"query_text": "显示上个季度的销售数据", "llm_name": "gpt-4", "max_variations": 3, "preserve_keywords": True}}
 
 
 class QueryRewriteResponse(BaseModel):
     """查询重写响应模型"""
+
     original_query: str = Field(
         ...,
         title="原始查询",
@@ -79,58 +74,35 @@ class QueryRewriteResponse(BaseModel):
 
 @router.post("/rewrite-query", response_model=ResponseSchema, summary="重写自然语言查询为多个变体")
 async def rewrite_natural_language_query(
-        body: QueryRewriteRequest = Body(
-            ...,
-            title="查询重写请求",
-            description="需要重写的自然语言查询信息",
-            examples=[{
-                "query_text": "显示上个季度的销售数据",
-                "llm_name": "gpt-4",
-                "max_variations": 3,
-                "preserve_keywords": True
-            }]
-        ),
-        db: Session = Depends(get_db),
-        user=Depends(manager),
-        service: NL2SQLService = Depends(get_nl2sql_service)
+    body: QueryRewriteRequest = Body(
+        ..., title="查询重写请求", description="需要重写的自然语言查询信息", examples=[{"query_text": "显示上个季度的销售数据", "llm_name": "gpt-4", "max_variations": 3, "preserve_keywords": True}]
+    ),
+    db: Session = Depends(get_db),
+    user=Depends(manager),
+    service: NL2SQLService = Depends(get_nl2sql_service),
 ):
     """将自然语言查询重写为多个语义相同但表达不同的变体"""
     try:
         # 调用服务重写查询
-        rewritten_queries = await service.rewrite_query(
-            query_text=body.query_text,
-            llm_name=body.llm_name
-        )
+        rewritten_queries = await service.rewrite_query(query_text=body.query_text, llm_name=body.llm_name)
 
         # 如果max_variations参数有效，限制返回的变体数量
         if body.max_variations and len(rewritten_queries) > body.max_variations:
-            rewritten_queries = rewritten_queries[:body.max_variations]
+            rewritten_queries = rewritten_queries[: body.max_variations]
 
         # 构建响应数据
-        response_data = QueryRewriteResponse(
-            original_query=body.query_text,
-            rewritten_queries=rewritten_queries
-        )
+        response_data = QueryRewriteResponse(original_query=body.query_text, rewritten_queries=rewritten_queries)
 
-        return ResponseSchema(
-            status=StatusEnum.SUCCESS,
-            message="查询重写成功",
-            data=response_data
-        )
+        return ResponseSchema(status=StatusEnum.SUCCESS, message="查询重写成功", data=response_data)
     except FileNotFoundError as e:
-        return ResponseSchema(
-            status=StatusEnum.ERROR,
-            message=f"查询重写失败：提示词模板文件未找到 - {e!s}"
-        )
+        return ResponseSchema(status=StatusEnum.ERROR, message=f"查询重写失败：提示词模板文件未找到 - {e!s}")
     except Exception as e:
-        return ResponseSchema(
-            status=StatusEnum.ERROR,
-            message=f"查询重写失败：{e!s}"
-        )
+        return ResponseSchema(status=StatusEnum.ERROR, message=f"查询重写失败：{e!s}")
 
 
 class NL2SQLRequest(BaseModel):
     """自然语言转SQL请求的基础模型"""
+
     query_text: str = Field(
         ...,
         title="查询文本",
@@ -147,19 +119,12 @@ class NL2SQLRequest(BaseModel):
         description="用于查询的数据集ID列表",
     )
 
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "query_text": "查询销售额最高的前10个产品",
-                "llm_name": "gpt-4",
-                "dataset_id_list": ["dataset1", "dataset2"]
-            }
-        }
-    )
+    model_config = ConfigDict(json_schema_extra={"example": {"query_text": "查询销售额最高的前10个产品", "llm_name": "gpt-4", "dataset_id_list": ["dataset1", "dataset2"]}})
 
 
 class NL2SQLResponse(BaseModel):
     """自然语言转SQL响应模型"""
+
     original_query: str = Field(
         ...,
         title="原始查询",
@@ -179,58 +144,38 @@ class NL2SQLResponse(BaseModel):
 
 @router.post("/nl-to-sql", response_model=ResponseSchema, summary="将自然语言查询转换为SQL")
 async def convert_nl_to_sql(
-        body: NL2SQLRequest = Body(
-            ...,
-            title="自然语言转SQL请求",
-            description="需要转换为SQL的自然语言查询信息",
-            examples=[{
-                "query_text": "查询销售额最高的前10个产品",
-                "llm_name": "gpt-4",
-                "dataset_id_list": ["dataset1", "dataset2"]
-            }]
-        ),
-        db: Session = Depends(get_db),
-        user=Depends(manager),
-        service: NL2SQLService = Depends(get_nl2sql_service)
+    body: NL2SQLRequest = Body(
+        ...,
+        title="自然语言转SQL请求",
+        description="需要转换为SQL的自然语言查询信息",
+        examples=[{"query_text": "查询销售额最高的前10个产品", "llm_name": "gpt-4", "dataset_id_list": ["dataset1", "dataset2"]}],
+    ),
+    db: Session = Depends(get_db),
+    user=Depends(manager),
+    service: NL2SQLService = Depends(get_nl2sql_service),
 ):
     """将自然语言查询转换为对应的SQL查询语句"""
     try:
         # 调用服务将自然语言转换为SQL
-        sql, semantic_layer_struct = await service.nl2sql(
-            query_text=body.query_text,
-            llm_name=body.llm_name,
-            dataset_id_list=body.dataset_id_list
-        )
+        sql, semantic_layer_struct = await service.nl2sql(query_text=body.query_text, llm_name=body.llm_name, dataset_id_list=body.dataset_id_list)
 
         # 构建响应数据
-        response_data = NL2SQLResponse(
-            original_query=body.query_text,
-            sql=sql,
-            semantic_layer_struct=semantic_layer_struct
-        )
+        response_data = NL2SQLResponse(original_query=body.query_text, sql=sql, semantic_layer_struct=semantic_layer_struct)
 
-        return ResponseSchema(
-            status=StatusEnum.SUCCESS,
-            message="自然语言转SQL成功",
-            data=response_data
-        )
+        return ResponseSchema(status=StatusEnum.SUCCESS, message="自然语言转SQL成功", data=response_data)
     except FileNotFoundError as e:
-        return ResponseSchema(
-            status=StatusEnum.ERROR,
-            message=f"自然语言转SQL失败：提示词模板文件未找到 - {e!s}"
-        )
+        return ResponseSchema(status=StatusEnum.ERROR, message=f"自然语言转SQL失败：提示词模板文件未找到 - {e!s}")
     except Exception as e:
         logger.exception("发生异常")
-        return ResponseSchema(
-            status=StatusEnum.ERROR,
-            message=f"自然语言转SQL失败：{e!s}"
-        )
+        return ResponseSchema(status=StatusEnum.ERROR, message=f"自然语言转SQL失败：{e!s}")
 
 
 # Add this code to nl2sql_app.py after the existing routes
 
+
 class SQLTemplatingRequest(BaseModel):
     """SQL模板化请求的基础模型"""
+
     original_question: str = Field(
         ...,
         title="原始问题",
@@ -255,24 +200,15 @@ class SQLTemplatingRequest(BaseModel):
 
 @router.post("/sql-templating", summary="将SQL查询进行模板化处理")
 async def sql_templating(
-        body: SQLTemplatingRequest = Body(
-            ...,
-            title="SQL模板化请求",
-            description="需要进行模板化的SQL查询信息"
-        ),
-        db: Session = Depends(get_db),
-        user=Depends(manager),
-        service: NL2SQLService = Depends(get_nl2sql_service)
+    body: SQLTemplatingRequest = Body(..., title="SQL模板化请求", description="需要进行模板化的SQL查询信息"),
+    db: Session = Depends(get_db),
+    user=Depends(manager),
+    service: NL2SQLService = Depends(get_nl2sql_service),
 ):
     """将SQL查询进行模板化处理，识别可参数化的内容"""
     try:
         # 调用服务进行SQL模板化
-        sql_template_data = await service.sql_templating(
-            original_question=body.original_question,
-            llm_name=body.llm_name,
-            sql=body.sql,
-            semantic_layer=body.semantic_layer
-        )
+        sql_template_data = await service.sql_templating(original_question=body.original_question, llm_name=body.llm_name, sql=body.sql, semantic_layer=body.semantic_layer)
 
         # 构建响应数据
         response_data = {}
@@ -280,28 +216,20 @@ async def sql_templating(
         response_data["templated_sql"] = sql_template_data["sql_template"]
         response_data["parameters"] = sql_template_data["parameters"]
 
-        return ResponseSchema(
-            status=StatusEnum.SUCCESS,
-            message="SQL模板化处理成功",
-            data=response_data
-        )
+        return ResponseSchema(status=StatusEnum.SUCCESS, message="SQL模板化处理成功", data=response_data)
     except FileNotFoundError as e:
-        return ResponseSchema(
-            status=StatusEnum.ERROR,
-            message=f"SQL模板化处理失败：提示词模板文件未找到 - {e!s}"
-        )
+        return ResponseSchema(status=StatusEnum.ERROR, message=f"SQL模板化处理失败：提示词模板文件未找到 - {e!s}")
     except Exception as e:
         logger.exception("发生异常")
-        return ResponseSchema(
-            status=StatusEnum.ERROR,
-            message=f"SQL模板化处理失败：{e!s}"
-        )
+        return ResponseSchema(status=StatusEnum.ERROR, message=f"SQL模板化处理失败：{e!s}")
 
 
 # Add this code to nl2sql_app.py after the existing routes
 
+
 class FillSQLTemplateRequest(BaseModel):
     """SQL模板填充请求的基础模型"""
+
     templated_sql: str = Field(
         ...,
         title="SQL模板",
@@ -321,6 +249,7 @@ class FillSQLTemplateRequest(BaseModel):
 
 class FillSQLTemplateResponse(BaseModel):
     """SQL模板填充响应模型"""
+
     templated_sql: str = Field(
         ...,
         title="SQL模板",
@@ -335,52 +264,33 @@ class FillSQLTemplateResponse(BaseModel):
 
 @router.post("/fill-sql-template", response_model=ResponseSchema, summary="填充SQL模板参数")
 async def fill_sql_template(
-        body: FillSQLTemplateRequest = Body(
-            ...,
-            title="SQL模板填充请求",
-            description="需要填充参数的SQL模板信息"
-        ),
-        db: Session = Depends(get_db),
-        user=Depends(manager),
-        service: NL2SQLService = Depends(get_nl2sql_service)
+    body: FillSQLTemplateRequest = Body(..., title="SQL模板填充请求", description="需要填充参数的SQL模板信息"),
+    db: Session = Depends(get_db),
+    user=Depends(manager),
+    service: NL2SQLService = Depends(get_nl2sql_service),
 ):
     """根据用户选择的参数值填充SQL模板"""
     try:
         # 调用服务填充SQL模板
-        filled_sql = await service.fill_sql_template(
-            templated_sql=body.templated_sql,
-            parameter_definitions=body.parameter_definitions,
-            user_selected_values=body.user_selected_values
-        )
+        filled_sql = await service.fill_sql_template(templated_sql=body.templated_sql, parameter_definitions=body.parameter_definitions, user_selected_values=body.user_selected_values)
 
         # 构建响应数据
-        response_data = FillSQLTemplateResponse(
-            templated_sql=body.templated_sql,
-            filled_sql=filled_sql
-        )
+        response_data = FillSQLTemplateResponse(templated_sql=body.templated_sql, filled_sql=filled_sql)
 
-        return ResponseSchema(
-            status=StatusEnum.SUCCESS,
-            message="SQL模板填充成功",
-            data=response_data
-        )
+        return ResponseSchema(status=StatusEnum.SUCCESS, message="SQL模板填充成功", data=response_data)
     except KeyError as e:
-        return ResponseSchema(
-            status=StatusEnum.ERROR,
-            message=f"SQL模板填充失败：缺少必要的参数 - {e!s}"
-        )
+        return ResponseSchema(status=StatusEnum.ERROR, message=f"SQL模板填充失败：缺少必要的参数 - {e!s}")
     except Exception as e:
         logger.exception("发生异常")
-        return ResponseSchema(
-            status=StatusEnum.ERROR,
-            message=f"SQL模板填充失败：{e!s}"
-        )
+        return ResponseSchema(status=StatusEnum.ERROR, message=f"SQL模板填充失败：{e!s}")
 
 
 # Add this code to nl2sql_app.py after the existing routes
 
+
 class GenerateEChartsRequest(BaseModel):
     """ECharts生成请求的基础模型"""
+
     user_question: str = Field(
         ...,
         title="用户问题",
@@ -410,6 +320,7 @@ class GenerateEChartsRequest(BaseModel):
 
 class GenerateEChartsResponse(BaseModel):
     """ECharts生成响应模型"""
+
     user_question: str = Field(
         ...,
         title="用户问题",
@@ -424,52 +335,30 @@ class GenerateEChartsResponse(BaseModel):
 
 @router.post("/generate-echarts", response_model=ResponseSchema, summary="生成ECharts配置代码")
 async def generate_echarts(
-        body: GenerateEChartsRequest = Body(
-            ...,
-            title="ECharts生成请求",
-            description="生成ECharts配置的请求信息"
-        ),
-        db: Session = Depends(get_db),
-        user=Depends(manager),
-        service: NL2SQLService = Depends(get_nl2sql_service)
+    body: GenerateEChartsRequest = Body(..., title="ECharts生成请求", description="生成ECharts配置的请求信息"),
+    db: Session = Depends(get_db),
+    user=Depends(manager),
+    service: NL2SQLService = Depends(get_nl2sql_service),
 ):
     """根据用户问题、SQL查询和查询结果生成ECharts配置代码"""
     try:
         # 调用服务生成ECharts配置
-        echarts_code = await service.generate_echarts(
-            user_question=body.user_question,
-            sql=body.sql,
-            column_and_type=body.column_and_type,
-            sample_data=body.sample_data,
-            llm_name=body.llm_name
-        )
+        echarts_code = await service.generate_echarts(user_question=body.user_question, sql=body.sql, column_and_type=body.column_and_type, sample_data=body.sample_data, llm_name=body.llm_name)
 
         # 构建响应数据
-        response_data = GenerateEChartsResponse(
-            user_question=body.user_question,
-            echarts_code=echarts_code
-        )
+        response_data = GenerateEChartsResponse(user_question=body.user_question, echarts_code=echarts_code)
 
-        return ResponseSchema(
-            status=StatusEnum.SUCCESS,
-            message="ECharts配置生成成功",
-            data=response_data
-        )
+        return ResponseSchema(status=StatusEnum.SUCCESS, message="ECharts配置生成成功", data=response_data)
     except FileNotFoundError as e:
-        return ResponseSchema(
-            status=StatusEnum.ERROR,
-            message=f"ECharts配置生成失败：提示词模板文件未找到 - {e!s}"
-        )
+        return ResponseSchema(status=StatusEnum.ERROR, message=f"ECharts配置生成失败：提示词模板文件未找到 - {e!s}")
     except Exception as e:
         logger.exception("发生异常")
-        return ResponseSchema(
-            status=StatusEnum.ERROR,
-            message=f"ECharts配置生成失败：{e!s}"
-        )
+        return ResponseSchema(status=StatusEnum.ERROR, message=f"ECharts配置生成失败：{e!s}")
 
 
 class WholeProcessRequest(BaseModel):
     """全流程处理请求的基础模型"""
+
     user_question: str = Field(
         ...,
         title="用户问题",
@@ -494,44 +383,29 @@ class WholeProcessRequest(BaseModel):
 
 @router.post("/whole-process", response_model=ResponseSchema, summary="执行从自然语言到查询结果的全流程处理")
 async def execute_whole_process(
-        body: WholeProcessRequest = Body(
-            ...,
-            title="全流程处理请求",
-            description="需要执行全流程处理的自然语言问题"
-        ),
-        db: Session = Depends(get_db),
-        user=Depends(manager),
-        service: NL2SQLService = Depends(get_nl2sql_service)
+    body: WholeProcessRequest = Body(..., title="全流程处理请求", description="需要执行全流程处理的自然语言问题"),
+    db: Session = Depends(get_db),
+    user=Depends(manager),
+    service: NL2SQLService = Depends(get_nl2sql_service),
 ):
     """执行从自然语言到查询结果的全流程处理，包括自然语言转SQL、执行查询等步骤"""
     logging.info(f"whole-process请求体：{body}")
 
     try:
-        await service.whole_process(user_question=body.user_question, request_id=body.request_id,
-                                    dataset_id_list=body.dataset_id_list, llm_name=body.llm_name)
+        await service.whole_process(user_question=body.user_question, request_id=body.request_id, dataset_id_list=body.dataset_id_list, llm_name=body.llm_name)
 
         # 构建响应数据
         response_data = {}
 
         await send_event(body.request_id, {"message": "全流程处理完成"}, "completed")
 
-        return ResponseSchema(
-            status=StatusEnum.SUCCESS,
-            message="处理成功",
-            data=response_data
-        )
+        return ResponseSchema(status=StatusEnum.SUCCESS, message="处理成功", data=response_data)
     except FileNotFoundError as e:
-        return ResponseSchema(
-            status=StatusEnum.ERROR,
-            message=f"全流程处理失败：提示词模板文件未找到 - {e!s}"
-        )
+        return ResponseSchema(status=StatusEnum.ERROR, message=f"全流程处理失败：提示词模板文件未找到 - {e!s}")
     except Exception as e:
         logger.exception("发生异常")
         await send_event(body.request_id, {"message": "处理失败"}, "error")
-        return ResponseSchema(
-            status=StatusEnum.ERROR,
-            message=f"全流程处理失败：{e!s}"
-        )
+        return ResponseSchema(status=StatusEnum.ERROR, message=f"全流程处理失败：{e!s}")
 
 
 from fastapi import Depends, Request
@@ -570,6 +444,7 @@ class NumpyEncoder(json.JSONEncoder):
 
 class ReQueryRequest(BaseModel):
     """SQL重新查询请求的基础模型"""
+
     templated_sql: str = Field(
         ...,
         title="SQL模板",
@@ -589,29 +464,21 @@ class ReQueryRequest(BaseModel):
 
 @router.post("/re-query", response_model=ResponseSchema, summary="使用填充后的SQL模板重新查询")
 async def re_query(
-        body: ReQueryRequest = Body(
-            ...,
-            title="SQL重新查询请求",
-            description="使用填充后的SQL模板重新查询的请求信息"
-        ),
-        db: Session = Depends(get_db),
-        user=Depends(manager),
-        service: NL2SQLService = Depends(get_nl2sql_service)
+    body: ReQueryRequest = Body(..., title="SQL重新查询请求", description="使用填充后的SQL模板重新查询的请求信息"),
+    db: Session = Depends(get_db),
+    user=Depends(manager),
+    service: NL2SQLService = Depends(get_nl2sql_service),
 ):
     """根据用户选择的参数值填充SQL模板并执行查询"""
     logger.info(f"收到查询请求：{body}")
     try:
         # 调用服务填充SQL模板并执行查询
-        result = await service.re_query(
-            templated_sql=body.templated_sql,
-            parameter_definitions=body.parameter_definitions,
-            user_selected_values=body.user_selected_values
-        )
+        result = await service.re_query(templated_sql=body.templated_sql, parameter_definitions=body.parameter_definitions, user_selected_values=body.user_selected_values)
 
         # 处理结果中的NumPy类型
-        if 'sql_result' in result and 'data' in result['sql_result']:
+        if "sql_result" in result and "data" in result["sql_result"]:
             # 将NumPy类型转换为Python原生类型
-            for item in result['sql_result']['data']:
+            for item in result["sql_result"]["data"]:
                 for key, value in item.items():
                     if isinstance(value, np.integer):
                         item[key] = int(value)
@@ -620,19 +487,9 @@ async def re_query(
                     elif isinstance(value, np.ndarray):
                         item[key] = value.tolist()
 
-        return ResponseSchema(
-            status=StatusEnum.SUCCESS,
-            message="SQL重新查询成功",
-            data=result
-        )
+        return ResponseSchema(status=StatusEnum.SUCCESS, message="SQL重新查询成功", data=result)
     except KeyError as e:
-        return ResponseSchema(
-            status=StatusEnum.ERROR,
-            message=f"SQL重新查询失败：缺少必要的参数 - {e!s}"
-        )
+        return ResponseSchema(status=StatusEnum.ERROR, message=f"SQL重新查询失败：缺少必要的参数 - {e!s}")
     except Exception as e:
         logger.exception("发生异常")
-        return ResponseSchema(
-            status=StatusEnum.ERROR,
-            message=f"SQL重新查询失败：{e!s}"
-        )
+        return ResponseSchema(status=StatusEnum.ERROR, message=f"SQL重新查询失败：{e!s}")

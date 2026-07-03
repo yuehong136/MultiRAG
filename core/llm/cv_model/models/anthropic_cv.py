@@ -23,14 +23,11 @@ class AnthropicCV(Base):
             return text
         pmpt = [{"type": "text", "text": text}]
         for img in images:
-            pmpt.append({
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/jpeg" if img[:4] != "data" else img.split(":")[1].split(";")[0],
-                            "data": img if img[:4] != "data" else img.split(",")[1]
-                        },
-                    }
+            pmpt.append(
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/jpeg" if img[:4] != "data" else img.split(":")[1].split(";")[0], "data": img if img[:4] != "data" else img.split(",")[1]},
+                }
             )
         return pmpt
 

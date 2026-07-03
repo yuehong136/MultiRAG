@@ -24,7 +24,7 @@ class LLMComponentOutputDefinition:
     variable_name: str
     variable_type: str | None = None
     description: str | None = None
-    schema: 'LLMComponentOutputDefinition' = None
+    schema: "LLMComponentOutputDefinition" = None
 
 
 @dataclass
@@ -44,10 +44,9 @@ class LLMComponent(Component[LLMComponentParam]):
         self.component_parameter = component_parameter
         super().__init__(component_parameter, node_id)
 
-    async def process(self, input_data: dict | None = None, context: WorkflowContext | None = None,
-                      **kwargs) -> dict:
-        user = kwargs.get('user')
-        db = kwargs.get('db')
+    async def process(self, input_data: dict | None = None, context: WorkflowContext | None = None, **kwargs) -> dict:
+        user = kwargs.get("user")
+        db = kwargs.get("db")
         model = self.component_parameter.model
         prompt = self.component_parameter.prompt
 
@@ -55,13 +54,13 @@ class LLMComponent(Component[LLMComponentParam]):
             parameter_dict = {}
             for input_definition in self.node_parameter.input_definition_list:
                 batch_value_list = []
-                parameter_name = input_definition['parameter_name']
-                if input_definition['value_type'] == ValueTypeOfIODefinition.REF.value:
-                    ref_node_id = input_definition['content'][0]
-                    ref_name = input_definition['content'][1]
+                parameter_name = input_definition["parameter_name"]
+                if input_definition["value_type"] == ValueTypeOfIODefinition.REF.value:
+                    ref_node_id = input_definition["content"][0]
+                    ref_name = input_definition["content"][1]
                     ref_node_data = context.get(str(ref_node_id)).output_data
                     for item in ref_node_data[ref_name]:
-                        batch_value_list.append(item[input_definition['content'][2]])
+                        batch_value_list.append(item[input_definition["content"][2]])
                     parameter_dict[parameter_name] = batch_value_list
                 elif input_definition.value_type == ValueTypeOfIODefinition.LITERAL:
                     pass
@@ -74,20 +73,20 @@ class LLMComponent(Component[LLMComponentParam]):
                 history = [{"role": "user", "content": safe_format_double_braces(prompt, **parameter_dict)}]
                 response = chat_mdl.chat(system="", history=history, gen_conf={})
                 output_data_list.append(response)
-            context.set(str(self.node_id),
-                        NodeIOData(output_data={
-                            self.component_parameter.output_definition['variable_name']: {
-                                self.component_parameter.output_definition['schema'][0]["name"]: output_data_list}}))
+            context.set(
+                str(self.node_id),
+                NodeIOData(output_data={self.component_parameter.output_definition["variable_name"]: {self.component_parameter.output_definition["schema"][0]["name"]: output_data_list}}),
+            )
         else:
             parameter_dict = {}
             for input_definition in self.node_parameter.input_definition_list:
-                parameter_name = input_definition['parameter_name']
-                if input_definition['value_type'] == ValueTypeOfIODefinition.REF.value:
-                    ref_node_id = input_definition['content'][0]
-                    ref_name = input_definition['content'][1]
+                parameter_name = input_definition["parameter_name"]
+                if input_definition["value_type"] == ValueTypeOfIODefinition.REF.value:
+                    ref_node_id = input_definition["content"][0]
+                    ref_name = input_definition["content"][1]
                     ref_node_data = context.get(str(ref_node_id)).output_data
                     ref_node_data_json_str = json.dumps(ref_node_data, ensure_ascii=False)
-                    ref_value = parse('$.' + ref_name).find(json.loads(ref_node_data_json_str))
+                    ref_value = parse("$." + ref_name).find(json.loads(ref_node_data_json_str))
                     parameter_dict[parameter_name] = ref_value[0].value
                 elif input_definition.value_type == ValueTypeOfIODefinition.LITERAL:
                     parameter_dict[parameter_name] = input_definition.content
@@ -99,8 +98,7 @@ class LLMComponent(Component[LLMComponentParam]):
             response = chat_mdl.chat(system="", history=history, gen_conf={})
             print(f"LLM 输出：{response}")
 
-            context.set(str(self.node_id),
-                        NodeIOData(output_data={self.component_parameter.output_definition['variable_name']: response}))
+            context.set(str(self.node_id), NodeIOData(output_data={self.component_parameter.output_definition["variable_name"]: response}))
 
     def validate_inputs(self):
         pass
@@ -109,19 +107,18 @@ class LLMComponent(Component[LLMComponentParam]):
         pass
 
     @staticmethod
-    def decode(json: json) -> 'LLMComponent':
-        node_json = json['node']
-        node_id = node_json['id']
-        component_param = node_json['data']['componentParam']
-        is_batch = component_param.get('isBatch', False)
-        batch = Batch.parse_batch(component_param.get('batch', None))
-        input_definition = component_param['input_definition']
-        output_definition = component_param['output_definition']
-        model = component_param['model']
-        prompt = component_param['prompt']
+    def decode(json: json) -> "LLMComponent":
+        node_json = json["node"]
+        node_id = node_json["id"]
+        component_param = node_json["data"]["componentParam"]
+        is_batch = component_param.get("isBatch", False)
+        batch = Batch.parse_batch(component_param.get("batch", None))
+        input_definition = component_param["input_definition"]
+        output_definition = component_param["output_definition"]
+        model = component_param["model"]
+        prompt = component_param["prompt"]
 
-        llm_component_param = LLMComponentParam(model=model, prompt=prompt, output_definition=output_definition,
-                                                input_definition_list=input_definition, is_batch=is_batch, batch=batch)
+        llm_component_param = LLMComponentParam(model=model, prompt=prompt, output_definition=output_definition, input_definition_list=input_definition, is_batch=is_batch, batch=batch)
         return LLMComponent(llm_component_param, node_id)
 
     def combine_dict_arrays(self, input_dict):

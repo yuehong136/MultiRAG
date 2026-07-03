@@ -129,10 +129,7 @@ def _validate_server_commands(commands: list[dict[str, Any]]) -> set[str]:
         if command.get("version") != A2UI_VERSION:
             raise ValueError("A2UI command version must be v0.9")
         if "command" in command:
-            raise ValueError(
-                "A2UI v0.9 does not use a 'command' field. "
-                "Use exactly one top-level command key: createSurface, updateComponents, updateDataModel, or deleteSurface"
-            )
+            raise ValueError("A2UI v0.9 does not use a 'command' field. Use exactly one top-level command key: createSurface, updateComponents, updateDataModel, or deleteSurface")
         command_keys = [key for key in _COMMAND_KEYS if key in command]
         if len(command_keys) != 1 or len(command) != 2:
             raise ValueError("A2UI command must contain version and exactly one command type")
@@ -159,9 +156,7 @@ def _validate_server_commands(commands: list[dict[str, Any]]) -> set[str]:
 
         if command_key != "updateComponents":
             path = payload.get("path", "/")
-            if command_key == "updateDataModel" and (
-                not isinstance(path, str) or not path.startswith("/")
-            ):
+            if command_key == "updateDataModel" and (not isinstance(path, str) or not path.startswith("/")):
                 raise ValueError("A2UI updateDataModel requires a JSON Pointer path")
             continue
 
@@ -210,10 +205,7 @@ def _prevalidate_update_components(payload: dict[str, Any], component_names: set
         if isinstance(component_name, str) and component_name not in component_names:
             hint = _UNSUPPORTED_BASIC_COMPONENT_HINTS.get(component_name)
             suffix = f" {hint}" if hint else ""
-            raise ValueError(
-                f"A2UI component '{component_name}' is not in the official Basic Catalog. "
-                f"Allowed components: {allowed}.{suffix}"
-            )
+            raise ValueError(f"A2UI component '{component_name}' is not in the official Basic Catalog. Allowed components: {allowed}.{suffix}")
 
         if component_name == "CheckBox" and "label" not in component:
             component_id_text = f" '{component_id}'" if isinstance(component_id, str) else ""
@@ -322,10 +314,7 @@ def _client_validator() -> Draft202012Validator:
 @lru_cache(maxsize=1)
 def _component_validator() -> Draft202012Validator:
     catalog = _schema("basic_catalog.json")
-    component_refs = [
-        {"$ref": f"{A2UI_CATALOG_ID}#/components/{component_name}"}
-        for component_name in catalog.get("components", {})
-    ]
+    component_refs = [{"$ref": f"{A2UI_CATALOG_ID}#/components/{component_name}"} for component_name in catalog.get("components", {})]
     return Draft202012Validator(
         {
             "$schema": "https://json-schema.org/draft/2020-12/schema",

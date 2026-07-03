@@ -37,11 +37,9 @@ def include_object(object, name, type_, reflected, compare_to):
     """检查对象是否应该被包含在迁移中"""
     if type_ == "table":
         # 仅包含usr_ai模式中的表
-        return (
-            hasattr(object, "schema") and
-            (object.schema == "usr_ai" or object.schema is None)
-        )
+        return hasattr(object, "schema") and (object.schema == "usr_ai" or object.schema is None)
     return True
+
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
@@ -82,7 +80,8 @@ def run_migrations_online() -> None:
     connection = config.attributes.get("connection", None)
     if connection is not None:
         context.configure(
-            connection=connection, target_metadata=target_metadata,
+            connection=connection,
+            target_metadata=target_metadata,
             include_schemas=True,  # 包含schema
             include_object=include_object,  # 过滤对象
             version_table_schema="usr_ai",  # 将版本表放在usr_ai模式下
@@ -99,7 +98,8 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata,
+            connection=connection,
+            target_metadata=target_metadata,
             include_schemas=True,  # 包含schema
             include_object=include_object,  # 过滤对象
             version_table_schema="usr_ai",  # 将版本表放在usr_ai模式下

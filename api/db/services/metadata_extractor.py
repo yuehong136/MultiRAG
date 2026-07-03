@@ -5,6 +5,7 @@
 @Author: AI Assistant
 @date: 2025-11-05
 """
+
 import asyncio
 import logging
 import re
@@ -30,17 +31,7 @@ class MetadataExtractor:
     - 支持多种聚合策略
     """
 
-    def __init__(
-        self,
-        db: Session,
-        tenant_id: str,
-        field_name: str,
-        prompt: str,
-        aggregate: str = "merge",
-        llm_name: str | None = None,
-        temperature: float = 0.1,
-        max_tokens: int = 512
-    ):
+    def __init__(self, db: Session, tenant_id: str, field_name: str, prompt: str, aggregate: str = "merge", llm_name: str | None = None, temperature: float = 0.1, max_tokens: int = 512):
         """
         初始化元数据提取器
 
@@ -86,20 +77,14 @@ class MetadataExtractor:
         """
         try:
             # 构建消息
-            messages = [
-                {"role": "system", "content": self.prompt},
-                {"role": "user", "content": f"Content:\n\n{content}"}
-            ]
+            messages = [{"role": "system", "content": self.prompt}, {"role": "user", "content": f"Content:\n\n{content}"}]
 
             # 调用 LLM
             result = await thread_pool_exec(
                 self.llm.chat,
                 "",  # system prompt 已在 messages 中
                 messages,
-                {
-                    "temperature": self.temperature,
-                    "max_tokens": self.max_tokens
-                }
+                {"temperature": self.temperature, "max_tokens": self.max_tokens},
             )
 
             # 清理输出
@@ -111,11 +96,7 @@ class MetadataExtractor:
             logger.error(f"Error extracting {self.field_name}: {e}")
             return None
 
-    async def extract_batch(
-        self,
-        contents: list[str],
-        show_progress: bool = False
-    ) -> list[Any]:
+    async def extract_batch(self, contents: list[str], show_progress: bool = False) -> list[Any]:
         """
         批量提取元数据
 
@@ -131,18 +112,14 @@ class MetadataExtractor:
 
         for i, content in enumerate(contents):
             if show_progress and i % max(1, total // 10) == 0:
-                logger.info(f"Extracting {self.field_name}: {i+1}/{total}")
+                logger.info(f"Extracting {self.field_name}: {i + 1}/{total}")
 
             result = await self.extract_single(content)
             results.append(result)
 
         return results
 
-    async def extract_and_aggregate(
-        self,
-        contents: list[str],
-        show_progress: bool = False
-    ) -> Any:
+    async def extract_and_aggregate(self, contents: list[str], show_progress: bool = False) -> Any:
         """
         提取元数据并聚合
 
@@ -240,9 +217,10 @@ class MetadataExtractor:
         result = result.strip()
 
         # 尝试解析 JSON 数组
-        if result.startswith('[') and result.endswith(']'):
+        if result.startswith("[") and result.endswith("]"):
             try:
                 import json
+
                 parsed = json.loads(result)
                 if isinstance(parsed, list):
                     return [str(item).strip() for item in parsed]
@@ -250,17 +228,17 @@ class MetadataExtractor:
                 pass
 
         # 尝试按逗号分隔
-        if ',' in result:
-            items = [item.strip() for item in result.split(',')]
+        if "," in result:
+            items = [item.strip() for item in result.split(",")]
             return [item for item in items if item]
 
         # 尝试按换行分隔（Markdown 列表格式）
-        if '\n' in result:
+        if "\n" in result:
             items = []
-            for line in result.split('\n'):
+            for line in result.split("\n"):
                 line = line.strip()
                 # 移除 Markdown 列表标记
-                line = re.sub(r'^[-*•]\s*', '', line)
+                line = re.sub(r"^[-*•]\s*", "", line)
                 if line:
                     items.append(line)
             return items
@@ -280,11 +258,7 @@ class BatchMetadataExtractor:
         self.db = db
         self.tenant_id = tenant_id
 
-    async def extract_multiple_fields(
-        self,
-        contents: list[str],
-        field_configs: list[dict]
-    ) -> dict[str, Any]:
+    async def extract_multiple_fields(self, contents: list[str], field_configs: list[dict]) -> dict[str, Any]:
         """
         同时提取多个元数据字段
 
@@ -311,7 +285,7 @@ class BatchMetadataExtractor:
                 aggregate=config.get("aggregate", "merge"),
                 llm_name=config.get("llm_name"),
                 temperature=config.get("temperature", 0.1),
-                max_tokens=config.get("max_tokens", 512)
+                max_tokens=config.get("max_tokens", 512),
             )
 
             tasks.append(extractor.extract_and_aggregate(contents))

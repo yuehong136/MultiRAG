@@ -40,6 +40,7 @@ def get_action_handlers():
     # 返回操作处理函数的映射字典
     return handlers
 
+
 if __name__ == "__main__":
     handlers = get_action_handlers()
     print(handlers)  # 输出包含所有自定义操作处理函数的字典

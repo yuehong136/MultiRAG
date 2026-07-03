@@ -11,17 +11,15 @@ st.set_page_config(
     layout="centered",
     initial_sidebar_state="auto",
     menu_items={
-        'Get Help': 'https://cake-doom-0c6.notion.site/4b6c4b3a5338497494620b3dd82e4acc?pvs=4',
-        'Report a bug': "https://cake-doom-0c6.notion.site/BUG-cb6ea80282fc4de49d58ff96b4c5431a?pvs=4",
-        'About': "- 测试ing!"
-    })
+        "Get Help": "https://cake-doom-0c6.notion.site/4b6c4b3a5338497494620b3dd82e4acc?pvs=4",
+        "Report a bug": "https://cake-doom-0c6.notion.site/BUG-cb6ea80282fc4de49d58ff96b4c5431a?pvs=4",
+        "About": "- 测试ing!",
+    },
+)
 
 
 with st.sidebar:
-    st.image(
-        r"E:\Project\python\study\RAG\assets\imgs\logo2.png",
-        use_column_width=True
-    )
+    st.image(r"E:\Project\python\study\RAG\assets\imgs\logo2.png", use_column_width=True)
     st.caption(
         f"""<p align="right">当前版本：{VERSION}</p>""",
         unsafe_allow_html=True,

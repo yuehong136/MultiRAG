@@ -13,14 +13,7 @@ class SQLRetryHandler:
     def __init__(self, max_retries: int = 3):
         self.max_retries = max_retries
 
-    async def execute_with_retry(
-            self,
-            execute_func: Callable,
-            fix_func: Callable,
-            sql: str,
-            dataset_id: int,
-            fix_params: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def execute_with_retry(self, execute_func: Callable, fix_func: Callable, sql: str, dataset_id: int, fix_params: dict[str, Any]) -> dict[str, Any]:
         """
         执行SQL，失败时自动修复并重试
 
@@ -45,12 +38,9 @@ class SQLRetryHandler:
             result = await execute_func(current_sql, dataset_id, [])
 
             # 记录执行历史
-            execution_history.append({
-                "attempt": attempt + 1,
-                "sql": current_sql,
-                "success": result.get("status") != "error",
-                "error": result.get("message") if result.get("status") == "error" else None
-            })
+            execution_history.append(
+                {"attempt": attempt + 1, "sql": current_sql, "success": result.get("status") != "error", "error": result.get("message") if result.get("status") == "error" else None}
+            )
 
             # 执行成功，返回结果
             if result.get("status") != "error":
@@ -62,7 +52,7 @@ class SQLRetryHandler:
                     "used_models": current_used_models,
                     "was_fixed": attempt > 0,
                     "retry_times": attempt,
-                    "execution_history": execution_history
+                    "execution_history": execution_history,
                 }
 
             # 如果是最后一次尝试，不再修复
@@ -75,7 +65,7 @@ class SQLRetryHandler:
                     "used_models": current_used_models,
                     "was_fixed": attempt > 0,
                     "retry_times": attempt,
-                    "execution_history": execution_history
+                    "execution_history": execution_history,
                 }
 
             # 尝试修复SQL
@@ -83,11 +73,7 @@ class SQLRetryHandler:
             logger.info("开始修复SQL...")
 
             fix_result = await fix_func(
-                user_query=fix_params["user_query"],
-                original_sql=current_sql,
-                error_message=result["message"],
-                semantic_layer=fix_params["semantic_layer"],
-                llm_name=fix_params["llm_name"]
+                user_query=fix_params["user_query"], original_sql=current_sql, error_message=result["message"], semantic_layer=fix_params["semantic_layer"], llm_name=fix_params["llm_name"]
             )
 
             if not fix_result or not fix_result.get("sql"):
@@ -99,7 +85,7 @@ class SQLRetryHandler:
                     "used_models": current_used_models,
                     "was_fixed": attempt > 0,
                     "retry_times": attempt,
-                    "execution_history": execution_history
+                    "execution_history": execution_history,
                 }
 
             # 更新SQL和相关组件
@@ -108,9 +94,4 @@ class SQLRetryHandler:
             logger.info(f"修复成功，新SQL: {current_sql}")
 
         # 理论上不会到这里
-        return {
-            "status": "error",
-            "message": "未知错误",
-            "final_sql": current_sql,
-            "retry_times": self.max_retries
-        }
+        return {"status": "error", "message": "未知错误", "final_sql": current_sql, "retry_times": self.max_retries}

@@ -75,7 +75,7 @@ class Tokenizer(ProcessBase):
         for i, c in enumerate(chunks):
             txt = ""
             if isinstance(self._param.fields, str):
-                self._param.fields=[self._param.fields]
+                self._param.fields = [self._param.fields]
             for f in self._param.fields:
                 f = c.get(f)
                 if isinstance(f, str):
@@ -103,7 +103,10 @@ class Tokenizer(ProcessBase):
         cnts_ = np.array([])
         for i in range(0, len(texts), settings.EMBEDDING_BATCH_SIZE):
             async with embed_limiter:
-                vts, c = await thread_pool_exec(batch_encode,texts[i : i + settings.EMBEDDING_BATCH_SIZE],)
+                vts, c = await thread_pool_exec(
+                    batch_encode,
+                    texts[i : i + settings.EMBEDDING_BATCH_SIZE],
+                )
             if len(cnts_) == 0:
                 cnts_ = vts
             else:

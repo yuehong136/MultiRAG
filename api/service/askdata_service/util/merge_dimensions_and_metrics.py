@@ -16,22 +16,22 @@ def merge_dimensions_and_metrics(dimension_values, dimensions, all_metrics):
     for dim in dimensions:
         # 只保留指定的键
         cleaned_dim = {
-            'dimensionId': dim.get('dimensionId'),
-            'dimensionName': dim.get('dimensionName'),
-            'dimname_en': dim.get('dimensionEnName'),
-            'description': dim.get('description'),
-            'modelName': dim.get('modelName'),
-            'modelId': dim.get('modelId'),
-            'dataobject': dim.get('dataobject')
+            "dimensionId": dim.get("dimensionId"),
+            "dimensionName": dim.get("dimensionName"),
+            "dimname_en": dim.get("dimensionEnName"),
+            "description": dim.get("description"),
+            "modelName": dim.get("modelName"),
+            "modelId": dim.get("modelId"),
+            "dataobject": dim.get("dataobject"),
         }
 
         # 合并dimension_values，最多取5个
-        dimension_id = dim.get('dimensionId')
+        dimension_id = dim.get("dimensionId")
         if dimension_id and dimension_id in dimension_values:
             values = dimension_values[dimension_id]
             # 最多取5个值
-            sample_values = [item['value'] for item in values[:5]]
-            cleaned_dim['sampleValues'] = sample_values
+            sample_values = [item["value"] for item in values[:5]]
+            cleaned_dim["sampleValues"] = sample_values
 
         processed_dimensions.append(cleaned_dim)
 
@@ -39,13 +39,13 @@ def merge_dimensions_and_metrics(dimension_values, dimensions, all_metrics):
     processed_metrics = []
     for metric in all_metrics:
         cleaned_metric = {
-            'metricId': metric.get('metricId'),
-            'metricName': metric.get('metricName'),
-            'metricEnName': metric.get('metricEnName'),
-            'description': metric.get('description'),
-            'modelName': metric.get('modelName'),
-            'modelId': metric.get('modelId'),
-            'dataobject': metric.get('dataobject')
+            "metricId": metric.get("metricId"),
+            "metricName": metric.get("metricName"),
+            "metricEnName": metric.get("metricEnName"),
+            "description": metric.get("description"),
+            "modelName": metric.get("modelName"),
+            "modelId": metric.get("modelId"),
+            "dataobject": metric.get("dataobject"),
         }
         processed_metrics.append(cleaned_metric)
 
@@ -69,7 +69,7 @@ if __name__ == "__main__":
             {"value": "00fb6da003cebecba1545420d6d665cb"},
             {"value": "010051305340f12d3d51f7604e6d58b2"},
             {"value": "0109a23a6a0c1e8f8115cf4ea4aed00b"},
-            {"value": "011c28c7d9bd8a4af81d7d5514b2c79f"}
+            {"value": "011c28c7d9bd8a4af81d7d5514b2c79f"},
         ],
         "38608598041722880": [
             {"value": "001a82db1d1f790c6c760ec9d5a42cd0"},
@@ -81,8 +81,8 @@ if __name__ == "__main__":
             {"value": "0061a29fb4ebfc05de82a0aa63ef0c24"},
             {"value": "00911e94e5d4bd13b26284b5973c363e"},
             {"value": "00979866645a769ac636937f78b9e13d"},
-            {"value": "00acf181f5a71f052e848405ebccd657"}
-        ]
+            {"value": "00acf181f5a71f052e848405ebccd657"},
+        ],
     }
 
     dimensions = [
@@ -105,8 +105,8 @@ if __name__ == "__main__":
             "modelId": "38608715617501184",
             "modelName": "教职工政治面貌",
             "requested_dimension_id": "38608716050825216",
-            "semanticsformat": "{\"type\":\"Time\",\"timeFormat\":\"yyyy-MM-dd\",\"timeGranularity\":\"\",\"isTag\":false}",
-            "status": "1"
+            "semanticsformat": '{"type":"Time","timeFormat":"yyyy-MM-dd","timeGranularity":"","isTag":false}',
+            "status": "1",
         },
         {
             "dataType": "varchar",
@@ -127,15 +127,15 @@ if __name__ == "__main__":
             "modelId": "38608715617501184",
             "modelName": "教职工政治面貌",
             "requested_dimension_id": "38608720871391232",
-            "semanticsformat": "{\"type\":\"HC\",\"timeFormat\":\"\",\"timeGranularity\":\"\",\"isTag\":false}",
-            "status": "1"
-        }
+            "semanticsformat": '{"type":"HC","timeFormat":"","timeGranularity":"","isTag":false}',
+            "status": "1",
+        },
     ]
 
     all_metrics = [
         {
             "dataType": "numeric",
-            "dataformat": "{\"dataformat\":\"default\"}",
+            "dataformat": '{"dataformat":"default"}',
             "dataobject": "t_ky_cghj",
             "description": "获奖人数",
             "expression": "t_ky_cghj.hjrs",
@@ -143,7 +143,7 @@ if __name__ == "__main__":
             "metricId": "38695555387054080",
             "metricName": "获奖人数",
             "modelId": "38649313843940352",
-            "modelName": "科研成果获奖信息"
+            "modelName": "科研成果获奖信息",
         }
     ]
 

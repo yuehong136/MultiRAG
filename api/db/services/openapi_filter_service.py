@@ -5,6 +5,7 @@
 @date：2024/12/10 10:00
 @desc: OpenAPI 过滤服务核心实现
 """
+
 import copy
 import json
 import logging
@@ -52,18 +53,7 @@ class OpenApiFilterService:
         """获取HTTP客户端（懒加载）"""
         if self._client is None:
             self._client = httpx.AsyncClient(
-                timeout=httpx.Timeout(
-                    connect=3.0,
-                    read=10.0,
-                    write=5.0,
-                    pool=10.0
-                ),
-                limits=httpx.Limits(
-                    max_keepalive_connections=10,
-                    max_connections=20
-                ),
-                follow_redirects=True,
-                max_redirects=3
+                timeout=httpx.Timeout(connect=3.0, read=10.0, write=5.0, pool=10.0), limits=httpx.Limits(max_keepalive_connections=10, max_connections=20), follow_redirects=True, max_redirects=3
             )
         return self._client
 
@@ -129,7 +119,7 @@ class OpenApiFilterService:
                     "exclude_tags": rule.exclude_tags,
                     "strict": rule.strict,
                     "prune_examples": rule.prune_examples,
-                    "oas_version_target": rule.oas_version_target.value
+                    "oas_version_target": rule.oas_version_target.value,
                 },
                 source_etag=source_etag,
                 generated_at=datetime.now().isoformat(),
@@ -137,26 +127,18 @@ class OpenApiFilterService:
                 components_before=source_stats.total,
                 components_after=filtered_stats.total,
                 paths_before=len(source_doc.get("paths", {})),
-                paths_after=len(filtered_doc.get("paths", {}))
+                paths_after=len(filtered_doc.get("paths", {})),
             )
 
             # 生成结果ETag
             result_etag = generate_etag(filtered_doc)
 
-            result = FilterResult(
-                filtered_doc=filtered_doc,
-                warnings=warnings,
-                meta=meta,
-                cache_key=cache_key,
-                etag=result_etag
-            )
+            result = FilterResult(filtered_doc=filtered_doc, warnings=warnings, meta=meta, cache_key=cache_key, etag=result_etag)
 
             # 缓存结果
             await self._save_to_cache(cache_key, result)
 
-            logger.info(f"完成过滤处理，耗时: {timer.elapsed_ms:.1f}ms，"
-                       f"路径: {meta.paths_before} -> {meta.paths_after}，"
-                       f"组件: {meta.components_before} -> {meta.components_after}")
+            logger.info(f"完成过滤处理，耗时: {timer.elapsed_ms:.1f}ms，路径: {meta.paths_before} -> {meta.paths_after}，组件: {meta.components_before} -> {meta.components_after}")
 
             return result
 
@@ -201,13 +183,7 @@ class OpenApiFilterService:
         client = self.get_http_client()
 
         try:
-            response = await client.get(
-                url,
-                headers={
-                    "Accept": "application/json, application/x-yaml, text/yaml",
-                    "User-Agent": "MultiRAG-OpenAPI-Filter/1.0"
-                }
-            )
+            response = await client.get(url, headers={"Accept": "application/json, application/x-yaml, text/yaml", "User-Agent": "MultiRAG-OpenAPI-Filter/1.0"})
             response.raise_for_status()
 
             # 检查内容类型和大小
@@ -227,6 +203,7 @@ class OpenApiFilterService:
                 # 尝试解析YAML
                 try:
                     import yaml
+
                     doc = yaml.safe_load(response.text)
                 except ImportError:
                     raise ValueError("无法解析YAML格式，请安装PyYAML")
@@ -263,24 +240,19 @@ class OpenApiFilterService:
             # 尝试从全局导入获取应用
             try:
                 from api.apps import app as global_app
+
                 app = global_app
             except ImportError:
                 raise ValueError("无法获取FastAPI应用实例")
 
-        if not hasattr(app, 'openapi_schema'):
+        if not hasattr(app, "openapi_schema"):
             raise ValueError("应用没有openapi_schema属性")
 
         # 获取OpenAPI schema
         if app.openapi_schema:
             doc = app.openapi_schema
         else:
-            doc = get_openapi(
-                title=app.title,
-                version=app.version,
-                description=app.description,
-                routes=app.routes,
-                tags=app.openapi_tags
-            )
+            doc = get_openapi(title=app.title, version=app.version, description=app.description, routes=app.routes, tags=app.openapi_tags)
             app.openapi_schema = doc
 
         if not isinstance(doc, dict):
@@ -313,29 +285,16 @@ class OpenApiFilterService:
         original_paths = filtered_doc.get("paths", {})
 
         # 1. 根据路径模式过滤
-        matched_paths = match_paths(
-            original_paths,
-            rule.paths,
-            rule.exclude_paths,
-            rule.match
-        )
+        matched_paths = match_paths(original_paths, rule.paths, rule.exclude_paths, rule.match)
 
         # 2. 根据标签过滤
         if rule.include_tags or rule.exclude_tags:
-            matched_paths = filter_by_tags(
-                matched_paths,
-                rule.include_tags,
-                rule.exclude_tags
-            )
+            matched_paths = filter_by_tags(matched_paths, rule.include_tags, rule.exclude_tags)
 
         filtered_doc["paths"] = matched_paths
 
         if not matched_paths:
-            warnings.append(FilterWarning(
-                type="no_paths_matched",
-                message="没有路径匹配过滤条件",
-                path="paths"
-            ))
+            warnings.append(FilterWarning(type="no_paths_matched", message="没有路径匹配过滤条件", path="paths"))
 
         # Phase B: 收集初始引用种子
         seed_refs = set()
@@ -357,28 +316,20 @@ class OpenApiFilterService:
         components = source_doc.get("components", {})
         if seed_refs and components:
             try:
-                closure_refs, closure_warnings = build_components_closure(
-                    components, seed_refs, rule.strict, rule.max_depth
-                )
+                closure_refs, closure_warnings = build_components_closure(components, seed_refs, rule.strict, rule.max_depth)
                 warnings.extend(closure_warnings)
 
                 logger.info(f"闭包扩展后共 {len(closure_refs)} 个引用")
 
                 # Phase E: 裁剪components
-                filtered_components = self._build_filtered_components(
-                    components, closure_refs, rule.prune_examples
-                )
+                filtered_components = self._build_filtered_components(components, closure_refs, rule.prune_examples)
                 filtered_doc["components"] = filtered_components
 
             except ValueError as e:
                 if rule.strict:
                     raise
                 else:
-                    warnings.append(FilterWarning(
-                        type="closure_error",
-                        message=str(e),
-                        path="components"
-                    ))
+                    warnings.append(FilterWarning(type="closure_error", message=str(e), path="components"))
                     # 严格模式失败时，保留原始components
                     logger.warning(f"闭包构建失败，保留原始components: {e}")
 
@@ -388,8 +339,7 @@ class OpenApiFilterService:
         logger.info(f"过滤完成，生成 {len(warnings)} 个警告")
         return filtered_doc, warnings
 
-    def _build_filtered_components(self, components: dict[str, Any],
-                                 closure_refs: set[str], should_prune_examples: bool) -> dict[str, Any]:
+    def _build_filtered_components(self, components: dict[str, Any], closure_refs: set[str], should_prune_examples: bool) -> dict[str, Any]:
         """
         构建过滤后的components
 
@@ -449,10 +399,7 @@ class OpenApiFilterService:
             Dict[str, Any]: 规范化后的文档
         """
         # 排序顶级键
-        ordered_keys = [
-            "openapi", "info", "servers", "tags", "security",
-            "paths", "components", "externalDocs"
-        ]
+        ordered_keys = ["openapi", "info", "servers", "tags", "security", "paths", "components", "externalDocs"]
 
         normalized = {}
 
@@ -516,12 +463,8 @@ class OpenApiFilterService:
     async def _save_to_cache(self, cache_key: str, result: FilterResult):
         """保存结果到缓存"""
         try:
-            data = result.model_dump(mode='json')
-            REDIS_CONN.set(
-                f"openapi_filter:{cache_key}",
-                json.dumps(data, ensure_ascii=False),
-                self.cache_ttl
-            )
+            data = result.model_dump(mode="json")
+            REDIS_CONN.set(f"openapi_filter:{cache_key}", json.dumps(data, ensure_ascii=False), self.cache_ttl)
             logger.info(f"结果已缓存: {cache_key}")
         except Exception as e:
             logger.warning(f"缓存保存失败: {e}")

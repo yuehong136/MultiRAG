@@ -125,10 +125,14 @@ class MultiRAGClient:
             if heartbeats and isinstance(heartbeats[0], dict) and "now" in heartbeats[0]:
                 # display latest status
                 heartbeats = sorted(heartbeats, key=lambda x: x["now"], reverse=True)
-            task_executor_list.append({
-                "task_executor_name": k,
-                **heartbeats[0],
-            } if heartbeats else {"task_executor_name": k})
+            task_executor_list.append(
+                {
+                    "task_executor_name": k,
+                    **heartbeats[0],
+                }
+                if heartbeats
+                else {"task_executor_name": k}
+            )
         return task_executor_list
 
     def _print_table_simple(self, data):
@@ -144,12 +148,7 @@ class MultiRAGClient:
         col_widths = {}
 
         def get_string_width(text):
-            half_width_chars = (
-                " !\"#$%&'()*+,-./0123456789:;<=>?@"
-                "ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`"
-                "abcdefghijklmnopqrstuvwxyz{|}~"
-                "\t\n\r"
-            )
+            half_width_chars = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\t\n\r"
             width = 0
             for char in text:
                 if char in half_width_chars:
@@ -181,7 +180,7 @@ class MultiRAGClient:
             for col in columns:
                 value = str(item.get(col, ""))
                 if get_string_width(value) > col_widths[col]:
-                    value = value[:col_widths[col] - 3] + "..."
+                    value = value[: col_widths[col] - 3] + "..."
                 row += f" {value:<{col_widths[col] - (get_string_width(value) - len(value))}} |"
             print(row)
 
@@ -349,11 +348,8 @@ class MultiRAGClient:
         password: str = password_tree.children[0].strip("'\"")
         print(f"Alter user: {user_name}, password: ******")
         from user import encrypt_password as encrypt
-        response = self.http_client.request(
-            "PUT", f"admin/users/{user_name}/password",
-            json_body={"new_password": encrypt(password)},
-            use_api_base=True, auth_kind="admin"
-        )
+
+        response = self.http_client.request("PUT", f"admin/users/{user_name}/password", json_body={"new_password": encrypt(password)}, use_api_base=True, auth_kind="admin")
         res_json = response.json()
         if response.status_code == 200:
             if res_json.get("code") == 0:
@@ -374,11 +370,8 @@ class MultiRAGClient:
         role: str = command["role"]
         print(f"Create user: {user_name}, password: ******, role: {role}")
         from user import encrypt_password as encrypt
-        response = self.http_client.request(
-            "POST", "admin/users",
-            json_body={"user_name": user_name, "password": encrypt(password), "role": role},
-            use_api_base=True, auth_kind="admin"
-        )
+
+        response = self.http_client.request("POST", "admin/users", json_body={"user_name": user_name, "password": encrypt(password), "role": role}, use_api_base=True, auth_kind="admin")
         res_json = response.json()
         if response.status_code == 200:
             if res_json.get("code") == 0:
@@ -402,11 +395,7 @@ class MultiRAGClient:
         activate_status: str = activate_tree.children[0].strip("'\"")
         if activate_status.lower() in ["on", "off"]:
             print(f"Alter user {user_name} activate status, turn {activate_status.lower()}.")
-            response = self.http_client.request(
-                "PUT", f"admin/users/{user_name}/activate",
-                json_body={"activate_status": activate_status},
-                use_api_base=True, auth_kind="admin"
-            )
+            response = self.http_client.request("PUT", f"admin/users/{user_name}/activate", json_body={"activate_status": activate_status}, use_api_base=True, auth_kind="admin")
             res_json = response.json()
             if response.status_code == 200:
                 if res_json.get("code") == 0:
@@ -507,11 +496,7 @@ class MultiRAGClient:
             desc_tree: Tree = command["description"]
             desc_str = desc_tree.children[0].strip("'\"")
         print(f"create role name: {role_name}, description: {desc_str}")
-        response = self.http_client.request(
-            "POST", "admin/roles",
-            json_body={"role_name": role_name, "description": desc_str},
-            use_api_base=True, auth_kind="admin"
-        )
+        response = self.http_client.request("POST", "admin/roles", json_body={"role_name": role_name, "description": desc_str}, use_api_base=True, auth_kind="admin")
         res_json = response.json()
         if response.status_code == 200:
             self._print_table_simple(res_json["data"])
@@ -541,11 +526,7 @@ class MultiRAGClient:
         desc_tree: Tree = command["description"]
         desc_str: str = desc_tree.children[0].strip("'\"")
         print(f"alter role name: {role_name}, description: {desc_str}")
-        response = self.http_client.request(
-            "PUT", f"admin/roles/{role_name}",
-            json_body={"description": desc_str},
-            use_api_base=True, auth_kind="admin"
-        )
+        response = self.http_client.request("PUT", f"admin/roles/{role_name}", json_body={"description": desc_str}, use_api_base=True, auth_kind="admin")
         res_json = response.json()
         if response.status_code == 200:
             self._print_table_simple(res_json["data"])
@@ -592,11 +573,7 @@ class MultiRAGClient:
             action_str: str = action_tree.children[0].strip("'\"")
             actions.append(action_str)
         print(f"grant role_name: {role_name_str}, resource: {resource_str}, actions: {actions}")
-        response = self.http_client.request(
-            "POST", f"admin/roles/{role_name_str}/permission",
-            json_body={"actions": actions, "resource": resource_str},
-            use_api_base=True, auth_kind="admin"
-        )
+        response = self.http_client.request("POST", f"admin/roles/{role_name_str}/permission", json_body={"actions": actions, "resource": resource_str}, use_api_base=True, auth_kind="admin")
         res_json = response.json()
         if response.status_code == 200:
             self._print_table_simple(res_json["data"])
@@ -617,11 +594,7 @@ class MultiRAGClient:
             action_str: str = action_tree.children[0].strip("'\"")
             actions.append(action_str)
         print(f"revoke role_name: {role_name_str}, resource: {resource_str}, actions: {actions}")
-        response = self.http_client.request(
-            "DELETE", f"admin/roles/{role_name_str}/permission",
-            json_body={"actions": actions, "resource": resource_str},
-            use_api_base=True, auth_kind="admin"
-        )
+        response = self.http_client.request("DELETE", f"admin/roles/{role_name_str}/permission", json_body={"actions": actions, "resource": resource_str}, use_api_base=True, auth_kind="admin")
         res_json = response.json()
         if response.status_code == 200:
             self._print_table_simple(res_json["data"])
@@ -637,11 +610,7 @@ class MultiRAGClient:
         user_name_tree: Tree = command["user_name"]
         user_name_str: str = user_name_tree.children[0].strip("'\"")
         print(f"alter_user_role user_name: {user_name_str}, role_name: {role_name_str}")
-        response = self.http_client.request(
-            "PUT", f"admin/users/{user_name_str}/role",
-            json_body={"role_name": role_name_str},
-            use_api_base=True, auth_kind="admin"
-        )
+        response = self.http_client.request("PUT", f"admin/users/{user_name_str}/role", json_body={"role_name": role_name_str}, use_api_base=True, auth_kind="admin")
         res_json = response.json()
         if response.status_code == 200:
             self._print_table_simple(res_json["data"])
@@ -685,11 +654,7 @@ class MultiRAGClient:
         var_name = var_name_tree.children[0].strip("'\"")
         var_value_tree: Tree = command["var_value"]
         var_value = var_value_tree.children[0].strip("'\"")
-        response = self.http_client.request(
-            "PUT", "admin/variables",
-            json_body={"var_name": var_name, "var_value": var_value},
-            use_api_base=True, auth_kind="admin"
-        )
+        response = self.http_client.request("PUT", "admin/variables", json_body={"var_name": var_name, "var_value": var_value}, use_api_base=True, auth_kind="admin")
         res_json = response.json()
         if response.status_code == 200 and res_json.get("code") == 0:
             print(res_json.get("message", "Set variable successfully"))
@@ -702,11 +667,7 @@ class MultiRAGClient:
             return
         var_name_tree: Tree = command["var_name"]
         var_name = var_name_tree.children[0].strip("'\"")
-        response = self.http_client.request(
-            "GET", "admin/variables",
-            params={"var_name": var_name},
-            use_api_base=True, auth_kind="admin"
-        )
+        response = self.http_client.request("GET", "admin/variables", params={"var_name": var_name}, use_api_base=True, auth_kind="admin")
         res_json = response.json()
         if response.status_code == 200 and res_json.get("code") == 0:
             self._print_table_simple(res_json.get("data"))
@@ -775,9 +736,7 @@ class MultiRAGClient:
             return
         value1 = command["value1"]
         value2 = command["value2"]
-        response = self.http_client.request("POST", "admin/license/config",
-                                            json_body={"value1": value1, "value2": value2}, use_api_base=True,
-                                            auth_kind="admin")
+        response = self.http_client.request("POST", "admin/license/config", json_body={"value1": value1, "value2": value2}, use_api_base=True, auth_kind="admin")
         res_json = response.json()
         if response.status_code == 200:
             print("Set license config successfully")
@@ -858,9 +817,7 @@ class MultiRAGClient:
             return
         name_tree: Tree = command["name"]
         name: str = name_tree.children[0].strip("'\"")
-        response = self.http_client.request(
-            "POST", "system/tokens", use_api_base=True, auth_kind="web", json_body={"name": name}
-        )
+        response = self.http_client.request("POST", "system/tokens", use_api_base=True, auth_kind="web", json_body={"name": name})
         res_json = response.json()
         if response.status_code == 200:
             self._print_table_simple(res_json["data"])
@@ -872,9 +829,7 @@ class MultiRAGClient:
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
-        response = self.http_client.request(
-            "GET", "system/tokens", use_api_base=True, auth_kind="web"
-        )
+        response = self.http_client.request("GET", "system/tokens", use_api_base=True, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200:
             self._print_table_simple(res_json["data"])
@@ -889,9 +844,7 @@ class MultiRAGClient:
         token_tree: Tree = command["token"]
         token: str = token_tree.children[0].strip("'\"")
         encoded_token: str = urllib.parse.quote(token, safe="")
-        response = self.http_client.request(
-            "DELETE", f"system/tokens/{encoded_token}", use_api_base=True, auth_kind="web"
-        )
+        response = self.http_client.request("DELETE", f"system/tokens/{encoded_token}", use_api_base=True, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200:
             print("Token dropped successfully")
@@ -913,9 +866,7 @@ class MultiRAGClient:
             return
         chunk_id_tree: Tree = command["chunk_id"]
         chunk_id: str = chunk_id_tree.children[0].strip("'\"")
-        response = self.http_client.request(
-            "GET", f"chunk/get?chunk_id={chunk_id}", use_api_base=False, auth_kind="web"
-        )
+        response = self.http_client.request("GET", f"chunk/get?chunk_id={chunk_id}", use_api_base=False, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200 and res_json.get("code") == 0:
             self._print_key_value(res_json["data"])
@@ -937,9 +888,7 @@ class MultiRAGClient:
             payload["keywords"] = command["keywords"].children[0].strip("'\"")
         if "available_int" in command:
             payload["available_int"] = command["available_int"]
-        response = self.http_client.request(
-            "POST", "chunk/list", use_api_base=False, auth_kind="web", json_body=payload
-        )
+        response = self.http_client.request("POST", "chunk/list", use_api_base=False, auth_kind="web", json_body=payload)
         res_json = response.json()
         if response.status_code == 200 and res_json.get("code") == 0:
             chunks = res_json["data"]["chunks"]
@@ -1044,8 +993,10 @@ class MultiRAGClient:
             return
 
         from user import login_user as do_login
+
         email: str = command["email"]
         import getpass
+
         password = getpass.getpass(f"password for {email}: ").strip()
         try:
             token = do_login(self.http_client, self.server_type, email, password)
@@ -1059,8 +1010,7 @@ class MultiRAGClient:
     def ping_server(self, command: dict):
         iterations = command.get("iterations", 1)
         if iterations > 1:
-            response = self.http_client.request("GET", "system/ping", use_api_base=False, auth_kind=None,
-                                                iterations=iterations)
+            response = self.http_client.request("GET", "system/ping", use_api_base=False, auth_kind=None, iterations=iterations)
             return response
         else:
             response = self.http_client.request("GET", "system/ping", use_api_base=False, auth_kind=None)
@@ -1301,8 +1251,7 @@ class MultiRAGClient:
         if doc_ids:
             payload["doc_ids"] = doc_ids
 
-        response = self.http_client.request("POST", "document/metadata/summary", json_body=payload,
-                                            use_api_base=False, auth_kind="web")
+        response = self.http_client.request("POST", "document/metadata/summary", json_body=payload, use_api_base=False, auth_kind="web")
         res_json = response.json()
         code = res_json.get("code", res_json.get("retcode", -1))
         if response.status_code != 200 or code != 0:
@@ -1350,10 +1299,7 @@ class MultiRAGClient:
                 "quote": True,
                 "keyword": False,
                 "tts": False,
-                "system": (
-                    "You are an intelligent assistant. Please answer questions based on the provided knowledge base.\n"
-                    "{knowledge}"
-                ),
+                "system": ("You are an intelligent assistant. Please answer questions based on the provided knowledge base.\n{knowledge}"),
                 "refine_multiturn": False,
                 "use_kg": False,
                 "reasoning": False,
@@ -1413,8 +1359,7 @@ class MultiRAGClient:
         if dataset_id is None:
             return
         payload = {"kb_id": dataset_id, "vector_size": vector_size}
-        response = self.http_client.request("POST", "kb/index", json_body=payload,
-                                            use_api_base=False, auth_kind="web")
+        response = self.http_client.request("POST", "kb/index", json_body=payload, use_api_base=False, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200 and res_json.get("code") == 0:
             print(f"Success to create index for dataset: {dataset_name}")
@@ -1431,8 +1376,7 @@ class MultiRAGClient:
         if dataset_id is None:
             return
         payload = {"kb_id": dataset_id}
-        response = self.http_client.request("DELETE", "kb/index", json_body=payload,
-                                            use_api_base=False, auth_kind="web")
+        response = self.http_client.request("DELETE", "kb/index", json_body=payload, use_api_base=False, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200 and res_json.get("code") == 0:
             print(f"Success to drop index for dataset: {dataset_name}")
@@ -1443,8 +1387,7 @@ class MultiRAGClient:
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
-        response = self.http_client.request("POST", "tenant/doc_meta_index",
-                                            use_api_base=False, auth_kind="web")
+        response = self.http_client.request("POST", "tenant/doc_meta_index", use_api_base=False, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200 and res_json.get("code") == 0:
             print("Success to create doc meta index")
@@ -1455,8 +1398,7 @@ class MultiRAGClient:
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
-        response = self.http_client.request("DELETE", "tenant/doc_meta_index",
-                                            use_api_base=False, auth_kind="web")
+        response = self.http_client.request("DELETE", "tenant/doc_meta_index", use_api_base=False, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200 and res_json.get("code") == 0:
             print("Success to drop doc meta index")
@@ -1470,8 +1412,7 @@ class MultiRAGClient:
             return
         file_path = command["file_path"]
         payload = {"file_path": file_path}
-        response = self.http_client.request("POST", "kb/insert_from_file", json_body=payload,
-                                            use_api_base=False, auth_kind="web")
+        response = self.http_client.request("POST", "kb/insert_from_file", json_body=payload, use_api_base=False, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200 and res_json.get("code") == 0:
             print(f"Success to insert dataset from file: {file_path}")
@@ -1487,8 +1428,7 @@ class MultiRAGClient:
             return
         file_path = command["file_path"]
         payload = {"file_path": file_path}
-        response = self.http_client.request("POST", "tenant/insert_metadata_from_file", json_body=payload,
-                                            use_api_base=False, auth_kind="web")
+        response = self.http_client.request("POST", "tenant/insert_metadata_from_file", json_body=payload, use_api_base=False, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200 and res_json.get("code") == 0:
             print(f"Success to insert metadata from file: {file_path}")
@@ -1512,8 +1452,7 @@ class MultiRAGClient:
             return
 
         # Get doc_id from chunk_id via GET chunk/get
-        response = self.http_client.request("GET", f"chunk/get?chunk_id={chunk_id}",
-                                            use_api_base=False, auth_kind="web")
+        response = self.http_client.request("GET", f"chunk/get?chunk_id={chunk_id}", use_api_base=False, auth_kind="web")
         res_json = response.json()
         if response.status_code != 200:
             print(f"Fail to get chunk info, code: {res_json.get('code')}, message: {res_json.get('message')}")
@@ -1560,8 +1499,7 @@ class MultiRAGClient:
             "meta": meta_json_str,
         }
 
-        response = self.http_client.request("POST", "document/set_meta", json_body=payload,
-                                            use_api_base=False, auth_kind="web")
+        response = self.http_client.request("POST", "document/set_meta", json_body=payload, use_api_base=False, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200:
             if res_json.get("code") == 0:
@@ -1588,8 +1526,7 @@ class MultiRAGClient:
             "tags": tags,
         }
 
-        response = self.http_client.request("POST", f"kb/{dataset_id}/rm_tags", json_body=payload,
-                                            use_api_base=False, auth_kind="web")
+        response = self.http_client.request("POST", f"kb/{dataset_id}/rm_tags", json_body=payload, use_api_base=False, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200:
             if res_json.get("code") == 0:
@@ -1741,8 +1678,7 @@ class MultiRAGClient:
             fields.append(("kb_id", dataset_id))
             encoder = MultipartEncoder(fields=fields)
             headers = {"Content-Type": encoder.content_type}
-            response = self.http_client.request("POST", "document/upload", headers=headers, data=encoder,
-                                                json_body=None, use_api_base=False, auth_kind="web")
+            response = self.http_client.request("POST", "document/upload", headers=headers, data=encoder, json_body=None, use_api_base=False, auth_kind="web")
             res_json = response.json()
             code = res_json.get("code", res_json.get("retcode", -1))
             if code == 0:
@@ -1869,8 +1805,7 @@ class MultiRAGClient:
         return None
 
     def _list_documents(self, dataset_name: str, dataset_id: str) -> list | None:
-        response = self.http_client.request("POST", f"document/list?id={dataset_id}", json_body={},
-                                            use_api_base=False, auth_kind="web")
+        response = self.http_client.request("POST", f"document/list?id={dataset_id}", json_body={}, use_api_base=False, auth_kind="web")
         res_json = response.json()
         if response.status_code != 200:
             msg = res_json.get("message", res_json.get("retmsg", ""))
@@ -1943,8 +1878,7 @@ class MultiRAGClient:
             "tts_id": current.get("tts_id", ""),
             "rerank_id": current.get("rerank_id", ""),
         }
-        response = self.http_client.request("POST", "user/set_tenant_info", json_body=payload,
-                                            use_api_base=False, auth_kind="web")
+        response = self.http_client.request("POST", "user/set_tenant_info", json_body=payload, use_api_base=False, auth_kind="web")
         res_json = response.json()
         code = res_json.get("code", res_json.get("retcode", -1))
         if response.status_code == 200 and code == 0:
@@ -2156,6 +2090,7 @@ def _handle_meta_command(command: dict):
 def _run_benchmark(client: MultiRAGClient, command_dict: dict):
     import multiprocessing as mp
     from concurrent.futures import ProcessPoolExecutor, as_completed
+
     concurrency = command_dict.get("concurrency", 1)
     iterations = command_dict.get("iterations", 1)
     command = command_dict["command"]

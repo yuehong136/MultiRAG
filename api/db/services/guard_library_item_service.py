@@ -5,6 +5,7 @@
 @date：2025/01/11 16:30
 @desc: AI安全护栏词库项管理服务
 """
+
 import hashlib
 import logging
 from datetime import datetime
@@ -21,12 +22,11 @@ from common.misc_utils import get_uuid
 
 class GuardLibraryItemService(CommonService):
     """AI安全护栏词库项管理服务"""
+
     model = GuardLibraryItem
 
     @classmethod
-    def create_item(cls, db: Session, library_id: str, content: str,
-                   content_type: str = "text", item_metadata: dict[str, Any] = None,
-                   tenant_id: str = None, **kwargs) -> str | None:
+    def create_item(cls, db: Session, library_id: str, content: str, content_type: str = "text", item_metadata: dict[str, Any] = None, tenant_id: str = None, **kwargs) -> str | None:
         """
         创建词库项
 
@@ -44,7 +44,7 @@ class GuardLibraryItemService(CommonService):
         """
         try:
             # 生成内容哈希
-            content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
+            content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
 
             # 检查是否已存在
             existing = cls.get_item_by_hash(db, library_id, content_hash)
@@ -62,7 +62,7 @@ class GuardLibraryItemService(CommonService):
                 "tenant_id": tenant_id,
                 "hit_count": 0,
                 "sort_order": kwargs.get("sort_order", 0),
-                "status": kwargs.get("status", "1")
+                "status": kwargs.get("status", "1"),
             }
 
             item = cls.save(db, **item_data)
@@ -77,8 +77,7 @@ class GuardLibraryItemService(CommonService):
             return None
 
     @classmethod
-    def get_item_by_hash(cls, db: Session, library_id: str,
-                        content_hash: str) -> GuardLibraryItem | None:
+    def get_item_by_hash(cls, db: Session, library_id: str, content_hash: str) -> GuardLibraryItem | None:
         """
         根据内容哈希获取词库项
 
@@ -93,19 +92,13 @@ class GuardLibraryItemService(CommonService):
         try:
             # 移除status过滤，避免重复添加已禁用的词库项
             # 用户应该通过更新status来启用已禁用的词，而不是添加新的
-            return db.query(cls.model).filter(
-                and_(
-                    cls.model.library_id == library_id,
-                    cls.model.content_hash == content_hash
-                )
-            ).first()
+            return db.query(cls.model).filter(and_(cls.model.library_id == library_id, cls.model.content_hash == content_hash)).first()
         except Exception as e:
             logging.error(f"获取词库项失败: {e}")
             return None
 
     @classmethod
-    def get_items_by_library(cls, db: Session, library_id: str,
-                           page: int = 1, page_size: int = 50) -> dict[str, Any]:
+    def get_items_by_library(cls, db: Session, library_id: str, page: int = 1, page_size: int = 50) -> dict[str, Any]:
         """
         获取词库的项列表（分页）
 
@@ -120,20 +113,12 @@ class GuardLibraryItemService(CommonService):
         """
         try:
             # 移除status过滤，让前端能展示所有词库项（包括禁用的）
-            query = db.query(cls.model).filter(
-                cls.model.library_id == library_id
-            ).order_by(cls.model.sort_order.asc(), cls.model.create_time.desc())
+            query = db.query(cls.model).filter(cls.model.library_id == library_id).order_by(cls.model.sort_order.asc(), cls.model.create_time.desc())
 
             total = query.count()
             items = query.offset((page - 1) * page_size).limit(page_size).all()
 
-            return {
-                "items": items,
-                "total": total,
-                "page": page,
-                "page_size": page_size,
-                "total_pages": (total + page_size - 1) // page_size
-            }
+            return {"items": items, "total": total, "page": page, "page_size": page_size, "total_pages": (total + page_size - 1) // page_size}
         except Exception as e:
             logging.error(f"获取词库项列表失败: {e}")
             return {"items": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 0}
@@ -152,16 +137,13 @@ class GuardLibraryItemService(CommonService):
         """
         try:
             # 移除status过滤，让前端能导出所有词库项（包括禁用的）
-            return db.query(cls.model).filter(
-                cls.model.library_id == library_id
-            ).order_by(cls.model.sort_order.asc()).all()
+            return db.query(cls.model).filter(cls.model.library_id == library_id).order_by(cls.model.sort_order.asc()).all()
         except Exception as e:
             logging.error(f"获取词库所有项失败: {e}")
             return []
 
     @classmethod
-    def get_items_by_ids(cls, db: Session, item_ids: list[str],
-                        tenant_id: str = None) -> list[GuardLibraryItem]:
+    def get_items_by_ids(cls, db: Session, item_ids: list[str], tenant_id: str = None) -> list[GuardLibraryItem]:
         """
         根据词库项ID列表批量获取词库项
 
@@ -175,9 +157,7 @@ class GuardLibraryItemService(CommonService):
         """
         try:
             # 移除status过滤，让前端能批量获取所有词库项（包括禁用的）
-            query = db.query(cls.model).filter(
-                cls.model.id.in_(item_ids)
-            )
+            query = db.query(cls.model).filter(cls.model.id.in_(item_ids))
 
             # 如果提供了tenant_id，添加租户过滤
             if tenant_id:
@@ -189,8 +169,7 @@ class GuardLibraryItemService(CommonService):
             return []
 
     @classmethod
-    def search_items(cls, db: Session, library_id: str, keyword: str,
-                    page: int = 1, page_size: int = 50) -> dict[str, Any]:
+    def search_items(cls, db: Session, library_id: str, keyword: str, page: int = 1, page_size: int = 50) -> dict[str, Any]:
         """
         搜索词库项
 
@@ -206,32 +185,18 @@ class GuardLibraryItemService(CommonService):
         """
         try:
             # 移除status过滤，让前端能搜索所有词库项（包括禁用的）
-            query = db.query(cls.model).filter(
-                and_(
-                    cls.model.library_id == library_id,
-                    cls.model.content.contains(keyword)
-                )
-            ).order_by(cls.model.create_time.desc())
+            query = db.query(cls.model).filter(and_(cls.model.library_id == library_id, cls.model.content.contains(keyword))).order_by(cls.model.create_time.desc())
 
             total = query.count()
             items = query.offset((page - 1) * page_size).limit(page_size).all()
 
-            return {
-                "items": items,
-                "total": total,
-                "page": page,
-                "page_size": page_size,
-                "total_pages": (total + page_size - 1) // page_size,
-                "keyword": keyword
-            }
+            return {"items": items, "total": total, "page": page, "page_size": page_size, "total_pages": (total + page_size - 1) // page_size, "keyword": keyword}
         except Exception as e:
             logging.error(f"搜索词库项失败: {e}")
             return {"items": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 0}
 
     @classmethod
-    def batch_create_items(cls, db: Session, library_id: str, contents: list[str],
-                          content_type: str = "text", tenant_id: str = None,
-                          item_metadata: dict[str, Any] = None) -> dict[str, Any]:
+    def batch_create_items(cls, db: Session, library_id: str, contents: list[str], content_type: str = "text", tenant_id: str = None, item_metadata: dict[str, Any] = None) -> dict[str, Any]:
         """
         批量创建词库项
 
@@ -255,14 +220,7 @@ class GuardLibraryItemService(CommonService):
             if not content:
                 continue
 
-            item_id = cls.create_item(
-                db=db,
-                library_id=library_id,
-                content=content,
-                content_type=content_type,
-                item_metadata=item_metadata,
-                tenant_id=tenant_id
-            )
+            item_id = cls.create_item(db=db, library_id=library_id, content=content, content_type=content_type, item_metadata=item_metadata, tenant_id=tenant_id)
 
             if item_id:
                 success_count += 1
@@ -270,13 +228,7 @@ class GuardLibraryItemService(CommonService):
                 failed_count += 1
                 failed_contents.append(content)
 
-        return {
-            "success_count": success_count,
-            "failed_count": failed_count,
-            "failed_contents": failed_contents
-        }
-
-
+        return {"success_count": success_count, "failed_count": failed_count, "failed_contents": failed_contents}
 
     @classmethod
     def delete_items(cls, db: Session, item_ids: list[str], tenant_id: str = None) -> dict[str, Any]:
@@ -323,23 +275,14 @@ class GuardLibraryItemService(CommonService):
             for library_id, count in library_item_counts.items():
                 GuardLibraryService.increment_item_count(db, library_id, -count)
 
-            return {
-                "success_count": success_count,
-                "failed_count": failed_count,
-                "total": len(item_ids)
-            }
+            return {"success_count": success_count, "failed_count": failed_count, "total": len(item_ids)}
         except Exception as e:
             db.rollback()
             logging.error(f"批量删除词库项失败: {e}")
-            return {
-                "success_count": 0,
-                "failed_count": len(item_ids),
-                "total": len(item_ids)
-            }
+            return {"success_count": 0, "failed_count": len(item_ids), "total": len(item_ids)}
 
     @classmethod
-    def update_item_by_hash(cls, db: Session, library_id: str, content_hash: str,
-                           update_data: dict[str, Any]) -> int:
+    def update_item_by_hash(cls, db: Session, library_id: str, content_hash: str, update_data: dict[str, Any]) -> int:
         """
         根据词库ID和内容哈希更新词库项
 
@@ -360,9 +303,9 @@ class GuardLibraryItemService(CommonService):
                 return 0
 
             # 如果更新了内容，需要重新计算哈希
-            if 'content' in update_data:
-                new_content_hash = hashlib.md5(update_data['content'].encode('utf-8')).hexdigest()
-                update_data['content_hash'] = new_content_hash
+            if "content" in update_data:
+                new_content_hash = hashlib.md5(update_data["content"].encode("utf-8")).hexdigest()
+                update_data["content_hash"] = new_content_hash
 
             return cls.update_by_id(db, item.id, update_data)
         except Exception as e:
@@ -403,8 +346,7 @@ class GuardLibraryItemService(CommonService):
             return False
 
     @classmethod
-    def update_items_status(cls, db: Session, item_ids: list[str], status: str,
-                           tenant_id: str = None) -> dict[str, Any]:
+    def update_items_status(cls, db: Session, item_ids: list[str], status: str, tenant_id: str = None) -> dict[str, Any]:
         """
         批量更新词库项状态（启用/禁用）
 
@@ -438,22 +380,13 @@ class GuardLibraryItemService(CommonService):
                 else:
                     failed_count += 1
 
-            return {
-                "success_count": success_count,
-                "failed_count": failed_count,
-                "total": len(item_ids)
-            }
+            return {"success_count": success_count, "failed_count": failed_count, "total": len(item_ids)}
         except Exception as e:
             logging.error(f"批量更新词库项状态失败: {e}")
-            return {
-                "success_count": 0,
-                "failed_count": len(item_ids),
-                "total": len(item_ids)
-            }
+            return {"success_count": 0, "failed_count": len(item_ids), "total": len(item_ids)}
 
     @classmethod
-    def update_item_by_id(cls, db: Session, item_id: str, update_data: dict[str, Any],
-                         tenant_id: str = None) -> int:
+    def update_item_by_id(cls, db: Session, item_id: str, update_data: dict[str, Any], tenant_id: str = None) -> int:
         """
         根据词库项ID更新词库项
 
@@ -479,20 +412,17 @@ class GuardLibraryItemService(CommonService):
                 return 0
 
             # 如果更新了内容，需要重新计算哈希
-            if 'content' in update_data:
-                new_content_hash = hashlib.md5(update_data['content'].encode('utf-8')).hexdigest()
-                update_data['content_hash'] = new_content_hash
+            if "content" in update_data:
+                new_content_hash = hashlib.md5(update_data["content"].encode("utf-8")).hexdigest()
+                update_data["content_hash"] = new_content_hash
 
             return cls.update_by_id(db, item_id, update_data)
         except Exception as e:
             logging.error(f"根据ID更新词库项失败: {e}")
             return 0
 
-
-
     @classmethod
-    def increment_hit_count(cls, db: Session, item_id: str,
-                           count: int = 1) -> int:
+    def increment_hit_count(cls, db: Session, item_id: str, count: int = 1) -> int:
         """
         增加词库项命中次数
 
@@ -517,13 +447,7 @@ class GuardLibraryItemService(CommonService):
                     WHERE id = :item_id
                     RETURNING library_id
                 """),
-                {
-                    "count": count,
-                    "last_hit_time": datetime.utcnow(),
-                    "update_time": now_timestamp,
-                    "update_date": now_datetime,
-                    "item_id": item_id
-                }
+                {"count": count, "last_hit_time": datetime.utcnow(), "update_time": now_timestamp, "update_date": now_datetime, "item_id": item_id},
             )
             row = result.fetchone()
             if row is None:
@@ -566,19 +490,13 @@ class GuardLibraryItemService(CommonService):
                     content_types[content_type] = 0
                 content_types[content_type] += 1
 
-            return {
-                "total_items": len(items),
-                "total_hits": total_hits,
-                "content_types": content_types,
-                "average_hits": total_hits / len(items) if items else 0
-            }
+            return {"total_items": len(items), "total_hits": total_hits, "content_types": content_types, "average_hits": total_hits / len(items) if items else 0}
         except Exception as e:
             logging.error(f"获取项统计失败: {e}")
             return {}
 
     @classmethod
-    def export_items(cls, db: Session, library_id: str,
-                    format_type: str = "text") -> list[str]:
+    def export_items(cls, db: Session, library_id: str, format_type: str = "text") -> list[str]:
         """
         导出词库项
 

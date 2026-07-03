@@ -5,6 +5,7 @@
 @date：2025/01/31
 @desc: 渐进式AI安全护栏检测接口 - 优先词库检测，预留完整流程兼容
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -30,6 +31,7 @@ router = APIRouter()
 
 class ProgressiveDetectionRequest(BaseModel):
     """渐进式检测请求模型"""
+
     service_id: str = Field(..., description="服务ID")
     content: str = Field(..., description="待检测的内容")
     request_id: str | None = Field(None, description="请求ID")
@@ -40,12 +42,14 @@ class ProgressiveDetectionRequest(BaseModel):
 
 class BatchContentItem(BaseModel):
     """批量检测内容项模型"""
+
     content: str = Field(..., description="待检测的内容")
     item_id: str | None = Field(None, description="内容项ID，用于标识和关联结果")
 
 
 class BatchDetectionRequest(BaseModel):
     """批量检测请求模型"""
+
     service_id: str = Field(..., description="服务ID")
     items: list[BatchContentItem] = Field(..., description="待检测的内容列表", min_items=1, max_items=100)
     request_id: str | None = Field(None, description="请求ID")
@@ -55,6 +59,7 @@ class BatchDetectionRequest(BaseModel):
 
 class DocumentItem(BaseModel):
     """批量文档检测文档项模型"""
+
     doc_id: str = Field(..., description="待检测的文档ID")
     max_chunks: int = Field(default=100, description="最大检测切片数量")
     doc_alias: str | None = Field(None, description="文档别名，用于标识和关联结果")
@@ -62,6 +67,7 @@ class DocumentItem(BaseModel):
 
 class BatchDocumentDetectionRequest(BaseModel):
     """批量文档安全检测请求模型"""
+
     service_id: str = Field(..., description="服务ID")
     documents: list[DocumentItem] = Field(..., description="待检测的文档列表", min_items=1, max_items=50)
     request_id: str | None = Field(None, description="请求ID")
@@ -71,6 +77,7 @@ class BatchDocumentDetectionRequest(BaseModel):
 
 class DocumentGuardDetectionRequest(BaseModel):
     """文档安全检测请求模型"""
+
     service_id: str = Field(..., description="服务ID")
     doc_id: str = Field(..., description="待检测的文档ID")
     max_chunks: int = Field(default=100, description="最大检测切片数量")
@@ -81,6 +88,7 @@ class DocumentGuardDetectionRequest(BaseModel):
 
 class BatchDocumentResult(BaseModel):
     """批量文档检测单文档结果"""
+
     doc_id: str = Field(..., description="文档ID")
     doc_alias: str | None = Field(..., description="文档别名")
     doc_index: int = Field(..., description="文档索引")
@@ -98,6 +106,7 @@ class BatchDocumentResult(BaseModel):
 
 class BatchItemResult(BaseModel):
     """批量检测单项结果"""
+
     item_id: str | None = Field(..., description="内容项ID")
     item_index: int = Field(..., description="项目索引")
     content_preview: str = Field(..., description="内容预览（截断显示）")
@@ -112,6 +121,7 @@ class BatchItemResult(BaseModel):
 
 class CreateServiceRequest(BaseModel):
     """创建检测服务请求模型"""
+
     code: str = Field(..., description="服务代码，唯一标识", min_length=1, max_length=100)
     name: str = Field(..., description="服务名称", min_length=1, max_length=200)
     description: str | None = Field(None, description="服务描述")
@@ -125,6 +135,7 @@ class CreateServiceRequest(BaseModel):
 
 class UpdateServiceRequest(BaseModel):
     """更新检测服务请求模型"""
+
     name: str | None = Field(None, description="服务名称", min_length=1, max_length=200)
     description: str | None = Field(None, description="服务描述")
     service_type: str | None = Field(None, description="服务类型")
@@ -137,6 +148,7 @@ class UpdateServiceRequest(BaseModel):
 
 class ChunkDetectionResult(BaseModel):
     """单个切片检测结果"""
+
     chunk_id: str = Field(..., description="切片唯一ID（基于内容哈希）")
     chunk_index: int = Field(..., description="切片索引")
     content: str = Field(..., description="切片内容（截断显示）")
@@ -147,12 +159,8 @@ class ChunkDetectionResult(BaseModel):
     risk_words: list[str] = Field(default_factory=list, description="风险词")
 
 
-@router.post('/detect', summary="内容安全检测（渐进式实现）")
-def detect_content_progressive(
-    request: ProgressiveDetectionRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/detect", summary="内容安全检测（渐进式实现）")
+def detect_content_progressive(request: ProgressiveDetectionRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### POST `/detect` 内容安全检测
 
@@ -271,7 +279,7 @@ def detect_content_progressive(
             request_id=request.request_id,
             chat_id=request.chat_id,
             source_type=request.source_type,
-            source_id=request.source_id
+            source_id=request.source_id,
         )
 
         return get_json_result(data=detection_result)
@@ -280,12 +288,8 @@ def detect_content_progressive(
         return server_error_response(e)
 
 
-@router.post('/batch-detect', summary="批量内容安全检测")
-def detect_batch_content(
-    request: BatchDetectionRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/batch-detect", summary="批量内容安全检测")
+def detect_batch_content(request: BatchDetectionRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### POST `/batch-detect` 批量内容安全检测
 
@@ -396,6 +400,7 @@ def detect_batch_content(
     """
     try:
         import time
+
         start_time = time.time()
 
         # 参数验证
@@ -411,7 +416,7 @@ def detect_batch_content(
         # 验证每个内容项
         for i, item in enumerate(request.items):
             if not item.content or not item.content.strip():
-                return get_data_error_result(retmsg=f"第{i+1}项的检测内容不能为空")
+                return get_data_error_result(retmsg=f"第{i + 1}项的检测内容不能为空")
 
         # 验证服务存在性和权限
         service = GuardServiceService.get_by_id(db, request.service_id)
@@ -433,7 +438,7 @@ def detect_batch_content(
             item_start_time = time.time()
 
             # 生成item_id（如果未提供）
-            item_id = item.item_id or f"item_{i}_{int(time.time()*1000)}"
+            item_id = item.item_id or f"item_{i}_{int(time.time() * 1000)}"
 
             try:
                 # 执行单项检测
@@ -446,7 +451,7 @@ def detect_batch_content(
                     request_id=f"{request.request_id}_item_{item_id}" if request.request_id else f"batch_item_{item_id}",
                     chat_id=None,
                     source_type=request.source_type,
-                    source_id=request.source_id
+                    source_id=request.source_id,
                 )
 
                 item_process_time = int((time.time() - item_start_time) * 1000)
@@ -462,7 +467,7 @@ def detect_batch_content(
                     matched_items=detection_result.get("matched_items", []),
                     risk_words=detection_result.get("risk_words", []),
                     process_time_ms=item_process_time,
-                    detection_result=detection_result
+                    detection_result=detection_result,
                 )
 
                 item_results.append(item_result)
@@ -503,7 +508,7 @@ def detect_batch_content(
                     matched_items=[],
                     risk_words=[],
                     process_time_ms=item_process_time,
-                    detection_result={"error": f"检测失败: {item_error!s}"}
+                    detection_result={"error": f"检测失败: {item_error!s}"},
                 )
 
                 item_results.append(error_result)
@@ -527,15 +532,15 @@ def detect_batch_content(
                 "passed_items": len(request.items) - blocked_count,
                 "overall_risk_score": max_risk_score,
                 "overall_action": overall_action,
-                "total_process_time_ms": total_process_time
+                "total_process_time_ms": total_process_time,
             },
             "item_results": [item.model_dump() for item in item_results],
             "batch_stats": {
                 "risk_distribution": risk_distribution,
                 "action_distribution": action_distribution,
                 "top_risk_words": list(all_risk_words)[:10],  # 只显示前10个风险词
-                "detection_mode": "library_only"
-            }
+                "detection_mode": "library_only",
+            },
         }
 
         return get_json_result(data=response_data)
@@ -544,12 +549,8 @@ def detect_batch_content(
         return server_error_response(e)
 
 
-@router.post('/batch-detect-documents', summary="批量文档安全检测")
-def detect_batch_documents(
-    request: BatchDocumentDetectionRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/batch-detect-documents", summary="批量文档安全检测")
+def detect_batch_documents(request: BatchDocumentDetectionRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### POST `/batch-detect-documents` 批量文档安全检测
 
@@ -673,6 +674,7 @@ def detect_batch_documents(
     """
     try:
         import time
+
         start_time = time.time()
 
         # 参数验证
@@ -688,9 +690,9 @@ def detect_batch_documents(
         # 验证每个文档参数
         for i, doc in enumerate(request.documents):
             if not doc.doc_id or not doc.doc_id.strip():
-                return get_data_error_result(retmsg=f"第{i+1}个文档的doc_id不能为空")
+                return get_data_error_result(retmsg=f"第{i + 1}个文档的doc_id不能为空")
             if doc.max_chunks <= 0:
-                return get_data_error_result(retmsg=f"第{i+1}个文档的max_chunks必须大于0")
+                return get_data_error_result(retmsg=f"第{i + 1}个文档的max_chunks必须大于0")
 
         # 验证服务存在性和权限
         service = GuardServiceService.get_by_id(db, request.service_id)
@@ -732,7 +734,7 @@ def detect_batch_documents(
                         process_time_ms=int((time.time() - doc_start_time) * 1000),
                         chunk_results=[],
                         detection_summary={},
-                        error_message="无权限访问该文档"
+                        error_message="无权限访问该文档",
                     )
                     document_results.append(error_result)
                     failed_count += 1
@@ -753,7 +755,7 @@ def detect_batch_documents(
                         process_time_ms=int((time.time() - doc_start_time) * 1000),
                         chunk_results=[],
                         detection_summary={},
-                        error_message="文档不存在"
+                        error_message="文档不存在",
                     )
                     document_results.append(error_result)
                     failed_count += 1
@@ -778,7 +780,7 @@ def detect_batch_documents(
                         process_time_ms=int((time.time() - doc_start_time) * 1000),
                         chunk_results=[],
                         detection_summary={},
-                        error_message=f"获取文档存储地址失败: {e!s}"
+                        error_message=f"获取文档存储地址失败: {e!s}",
                     )
                     document_results.append(error_result)
                     failed_count += 1
@@ -803,7 +805,7 @@ def detect_batch_documents(
                         process_time_ms=int((time.time() - doc_start_time) * 1000),
                         chunk_results=[],
                         detection_summary={},
-                        error_message=f"获取文档内容失败: {e!s}"
+                        error_message=f"获取文档内容失败: {e!s}",
                     )
                     document_results.append(error_result)
                     failed_count += 1
@@ -811,15 +813,12 @@ def detect_batch_documents(
 
                 # 使用naive解析器进行切片处理
                 try:
-                    parser_config = {
-                        "chunk_token_num": 128,
-                        "delimiter": "\n!?。；！？",
-                        "layout_recognize": "DeepDOC"
-                    }
+                    parser_config = {"chunk_token_num": 128, "delimiter": "\n!?。；！？", "layout_recognize": "DeepDOC"}
 
                     def progress_callback(progress=None, msg=""):
                         if msg:
                             import logging
+
                             logging.info(f"Document parsing progress: {msg}")
 
                     chunks = naive.chunk(
@@ -831,7 +830,7 @@ def detect_batch_documents(
                         callback=progress_callback,
                         parser_config=parser_config,
                         kb_id=doc.kb_id,
-                        tenant_id=service.tenant_id
+                        tenant_id=service.tenant_id,
                     )
 
                     if not chunks:
@@ -852,9 +851,9 @@ def detect_batch_documents(
                                 "risk_distribution": {"high_risk": 0, "medium_risk": 0, "low_risk": 0, "safe": 0},
                                 "action_distribution": {"block": 0, "warn": 0, "pass": 0},
                                 "top_risk_words": [],
-                                "detection_mode": "library_only"
+                                "detection_mode": "library_only",
                             },
-                            error_message=None
+                            error_message=None,
                         )
                         document_results.append(success_result)
                         processed_count += 1
@@ -875,7 +874,7 @@ def detect_batch_documents(
                         process_time_ms=int((time.time() - doc_start_time) * 1000),
                         chunk_results=[],
                         detection_summary={},
-                        error_message=f"文档切片处理失败: {e!s}"
+                        error_message=f"文档切片处理失败: {e!s}",
                     )
                     document_results.append(error_result)
                     failed_count += 1
@@ -883,7 +882,7 @@ def detect_batch_documents(
 
                 # 限制检测的切片数量
                 doc_total_chunks = len(chunks)
-                chunks_to_check = chunks[:doc_item.max_chunks] if doc_item.max_chunks > 0 else chunks
+                chunks_to_check = chunks[: doc_item.max_chunks] if doc_item.max_chunks > 0 else chunks
 
                 # 对每个切片执行安全检测
                 chunk_detection_results = []
@@ -899,9 +898,7 @@ def detect_batch_documents(
                         continue
 
                     # 生成唯一的chunk_id
-                    chunk_id = xxhash.xxh64(
-                        (chunk_content + str(doc_item.doc_id)).encode("utf-8")
-                    ).hexdigest()
+                    chunk_id = xxhash.xxh64((chunk_content + str(doc_item.doc_id)).encode("utf-8")).hexdigest()
 
                     # 执行渐进式检测
                     detection_result = AiGuardEngineService.detect_content(
@@ -914,7 +911,7 @@ def detect_batch_documents(
                         source_type=request.source_type,
                         source_id=request.source_id,
                         chunk_id=chunk_id,
-                        doc_id=doc_item.doc_id
+                        doc_id=doc_item.doc_id,
                     )
 
                     # 构建切片检测结果
@@ -926,7 +923,7 @@ def detect_batch_documents(
                         risk_score=detection_result["overall_risk_score"],
                         action=detection_result["action"],
                         matched_items=detection_result.get("matched_items", []),
-                        risk_words=detection_result.get("risk_words", [])
+                        risk_words=detection_result.get("risk_words", []),
                     )
 
                     chunk_detection_results.append(chunk_result)
@@ -984,9 +981,9 @@ def detect_batch_documents(
                         "risk_distribution": doc_risk_distribution,
                         "action_distribution": doc_action_distribution,
                         "top_risk_words": list(doc_risk_words)[:10],
-                        "detection_mode": "library_only"
+                        "detection_mode": "library_only",
                     },
-                    error_message=None
+                    error_message=None,
                 )
 
                 document_results.append(doc_result)
@@ -1018,7 +1015,7 @@ def detect_batch_documents(
                     process_time_ms=int((time.time() - doc_start_time) * 1000),
                     chunk_results=[],
                     detection_summary={},
-                    error_message=f"文档检测失败: {doc_error!s}"
+                    error_message=f"文档检测失败: {doc_error!s}",
                 )
                 document_results.append(error_result)
                 failed_count += 1
@@ -1043,7 +1040,7 @@ def detect_batch_documents(
                 "blocked_chunks": total_blocked_chunks,
                 "overall_risk_score": max_risk_score,
                 "overall_action": overall_action,
-                "total_process_time_ms": total_process_time
+                "total_process_time_ms": total_process_time,
             },
             "document_results": [doc.model_dump() for doc in document_results],
             "batch_stats": {
@@ -1051,8 +1048,8 @@ def detect_batch_documents(
                 "action_distribution": action_distribution,
                 "top_risk_words": list(all_risk_words)[:10],
                 "detection_mode": "library_only",
-                "document_stats": document_stats
-            }
+                "document_stats": document_stats,
+            },
         }
 
         return get_json_result(data=response_data)
@@ -1061,12 +1058,8 @@ def detect_batch_documents(
         return server_error_response(e)
 
 
-@router.get('/services/{service_id}/detection-config', summary="获取服务检测配置")
-def get_service_detection_config(
-    service_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/services/{service_id}/detection-config", summary="获取服务检测配置")
+def get_service_detection_config(service_id: str, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### GET `/services/{service_id}/detection-config` 获取服务检测配置
 
@@ -1129,9 +1122,8 @@ def get_service_detection_config(
 
         # 获取绑定的词库
         from api.db.services.guard_service_library_service import GuardServiceLibraryService
-        bound_libraries = GuardServiceLibraryService.get_libraries_by_service(
-            db, service_id, enabled_only=False
-        )
+
+        bound_libraries = GuardServiceLibraryService.get_libraries_by_service(db, service_id, enabled_only=False)
 
         # 判断检测模式
         detection_mode = "comprehensive" if (service.enabled_dimensions and service.enabled_labels) else "library_only"
@@ -1144,16 +1136,10 @@ def get_service_detection_config(
             "enabled_dimensions": service.enabled_dimensions or [],
             "enabled_labels": service.enabled_labels or [],
             "bound_libraries": [
-                {
-                    "library_id": lib["id"],
-                    "library_name": lib["name"],
-                    "library_type": lib["library_type"],
-                    "priority": lib["binding"]["priority"],
-                    "enabled": lib["binding"]["enabled"]
-                }
+                {"library_id": lib["id"], "library_name": lib["name"], "library_type": lib["library_type"], "priority": lib["binding"]["priority"], "enabled": lib["binding"]["enabled"]}
                 for lib in bound_libraries
             ],
-            "policy_config": service.policy_config or {}
+            "policy_config": service.policy_config or {},
         }
 
         return get_json_result(data=config_data)
@@ -1162,12 +1148,8 @@ def get_service_detection_config(
         return server_error_response(e)
 
 
-@router.post('/test-libraries', summary="测试词库匹配")
-def test_library_matching(
-    request: dict[str, Any],
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/test-libraries", summary="测试词库匹配")
+def test_library_matching(request: dict[str, Any], db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     测试词库匹配功能（调试用）
 
@@ -1202,9 +1184,7 @@ def test_library_matching(
                 continue
 
             # 获取词库项，只测试启用的项
-            result = GuardLibraryItemService.get_items_by_library(
-                db, library_id, page=1, page_size=10000
-            )
+            result = GuardLibraryItemService.get_items_by_library(db, library_id, page=1, page_size=10000)
             # 过滤出启用的词库项
             library_items = [item for item in result["items"] if item.status == "1"]
 
@@ -1213,29 +1193,16 @@ def test_library_matching(
                 if item.content.lower() in content.lower():
                     matched_words.append(item.content)
 
-            test_results.append({
-                "library_id": library_id,
-                "library_name": library.name,
-                "library_type": library.library_type,
-                "matched_words": matched_words,
-                "match_count": len(matched_words)
-            })
+            test_results.append({"library_id": library_id, "library_name": library.name, "library_type": library.library_type, "matched_words": matched_words, "match_count": len(matched_words)})
 
-        return get_json_result(data={
-            "test_content": content,
-            "library_results": test_results
-        })
+        return get_json_result(data={"test_content": content, "library_results": test_results})
 
     except Exception as e:
         return server_error_response(e)
 
 
-@router.post('/detect-document', summary="文档安全检测")
-def detect_document_chunks(
-    request: DocumentGuardDetectionRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/detect-document", summary="文档安全检测")
+def detect_document_chunks(request: DocumentGuardDetectionRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### POST `/detect-document` 文档安全检测
 
@@ -1331,6 +1298,7 @@ def detect_document_chunks(
     """
     try:
         import time
+
         start_time = time.time()
 
         # 参数验证
@@ -1375,57 +1343,48 @@ def detect_document_chunks(
         # 使用naive解析器进行切片处理
         try:
             # 设置解析器配置
-            parser_config = {
-                "chunk_token_num": 128,
-                "delimiter": "\n!?。；！？",
-                "layout_recognize": "DeepDOC"
-            }
+            parser_config = {"chunk_token_num": 128, "delimiter": "\n!?。；！？", "layout_recognize": "DeepDOC"}
 
             # 定义回调函数用于处理进度报告
             def progress_callback(progress=None, msg=""):
                 """处理naive解析器的进度回调"""
                 if msg:
                     import logging
+
                     logging.info(f"Document parsing progress: {msg}")
 
             # 调用naive解析器进行切片
             chunks = naive.chunk(
-                filename=doc.name,
-                binary=binary,
-                from_page=0,
-                to_page=100000,
-                lang="Chinese",
-                callback=progress_callback,
-                parser_config=parser_config,
-                kb_id=doc.kb_id,
-                tenant_id=service.tenant_id
+                filename=doc.name, binary=binary, from_page=0, to_page=100000, lang="Chinese", callback=progress_callback, parser_config=parser_config, kb_id=doc.kb_id, tenant_id=service.tenant_id
             )
 
             if not chunks:
-                return get_json_result(data={
-                    "doc_id": request.doc_id,
-                    "doc_name": doc.name,
-                    "total_chunks": 0,
-                    "checked_chunks": 0,
-                    "blocked_chunks": 0,
-                    "overall_risk_score": 0.0,
-                    "overall_action": "pass",
-                    "chunk_results": [],
-                    "detection_summary": {
-                        "risk_distribution": {"high_risk": 0, "medium_risk": 0, "low_risk": 0, "safe": 0},
-                        "action_distribution": {"block": 0, "warn": 0, "pass": 0},
-                        "top_risk_words": [],
-                        "detection_mode": "library_only"
-                    },
-                    "process_time_ms": int((time.time() - start_time) * 1000)
-                })
+                return get_json_result(
+                    data={
+                        "doc_id": request.doc_id,
+                        "doc_name": doc.name,
+                        "total_chunks": 0,
+                        "checked_chunks": 0,
+                        "blocked_chunks": 0,
+                        "overall_risk_score": 0.0,
+                        "overall_action": "pass",
+                        "chunk_results": [],
+                        "detection_summary": {
+                            "risk_distribution": {"high_risk": 0, "medium_risk": 0, "low_risk": 0, "safe": 0},
+                            "action_distribution": {"block": 0, "warn": 0, "pass": 0},
+                            "top_risk_words": [],
+                            "detection_mode": "library_only",
+                        },
+                        "process_time_ms": int((time.time() - start_time) * 1000),
+                    }
+                )
 
         except Exception as e:
             return get_data_error_result(retmsg=f"文档切片处理失败: {e!s}")
 
         # 限制检测的切片数量
         total_chunks = len(chunks)
-        chunks_to_check = chunks[:request.max_chunks] if request.max_chunks > 0 else chunks
+        chunks_to_check = chunks[: request.max_chunks] if request.max_chunks > 0 else chunks
 
         # 对每个切片执行安全检测
         chunk_detection_results = []
@@ -1441,9 +1400,7 @@ def detect_document_chunks(
                 continue
 
             # 生成唯一的chunk_id，使用与task_executor.py相同的方案
-            chunk_id = xxhash.xxh64(
-                (chunk_content + str(request.doc_id)).encode("utf-8")
-            ).hexdigest()
+            chunk_id = xxhash.xxh64((chunk_content + str(request.doc_id)).encode("utf-8")).hexdigest()
 
             # 执行渐进式检测
             detection_result = AiGuardEngineService.detect_content(
@@ -1456,7 +1413,7 @@ def detect_document_chunks(
                 source_type=request.source_type,
                 source_id=request.source_id,
                 chunk_id=chunk_id,
-                doc_id=request.doc_id
+                doc_id=request.doc_id,
             )
 
             # 构建切片检测结果
@@ -1468,7 +1425,7 @@ def detect_document_chunks(
                 risk_score=detection_result["overall_risk_score"],
                 action=detection_result["action"],
                 matched_items=detection_result.get("matched_items", []),
-                risk_words=detection_result.get("risk_words", [])
+                risk_words=detection_result.get("risk_words", []),
             )
 
             chunk_detection_results.append(chunk_result)
@@ -1520,9 +1477,9 @@ def detect_document_chunks(
                 "risk_distribution": risk_distribution,
                 "action_distribution": action_distribution,
                 "top_risk_words": list(all_risk_words)[:10],  # 只显示前10个风险词
-                "detection_mode": "library_only"
+                "detection_mode": "library_only",
             },
-            "process_time_ms": int((time.time() - start_time) * 1000)
+            "process_time_ms": int((time.time() - start_time) * 1000),
         }
 
         return get_json_result(data=response_data)
@@ -1531,11 +1488,8 @@ def detect_document_chunks(
         return server_error_response(e)
 
 
-@router.get('/services', summary="获取可用检测服务")
-def get_available_services(
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/services", summary="获取可用检测服务")
+def get_available_services(db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     获取当前租户可用的检测服务列表
 
@@ -1553,19 +1507,20 @@ def get_available_services(
 
         service_list = []
         for service in services:
-            service_list.append({
-                "id": service.id,
-                "code": service.code,
-                "name": service.name,
-                "description": service.description,
-                "service_type": service.service_type,
-                "enabled_dimensions": service.enabled_dimensions,
-                "enabled_labels": service.enabled_labels,
-                "total_requests": service.total_requests,
-                "blocked_requests": service.blocked_requests,
-                "block_rate": (service.blocked_requests / service.total_requests * 100)
-                             if service.total_requests > 0 else 0.0
-            })
+            service_list.append(
+                {
+                    "id": service.id,
+                    "code": service.code,
+                    "name": service.name,
+                    "description": service.description,
+                    "service_type": service.service_type,
+                    "enabled_dimensions": service.enabled_dimensions,
+                    "enabled_labels": service.enabled_labels,
+                    "total_requests": service.total_requests,
+                    "blocked_requests": service.blocked_requests,
+                    "block_rate": (service.blocked_requests / service.total_requests * 100) if service.total_requests > 0 else 0.0,
+                }
+            )
 
         return get_json_result(data=service_list)
 
@@ -1573,12 +1528,8 @@ def get_available_services(
         return server_error_response(e)
 
 
-@router.post('/services', summary="创建检测服务")
-def create_detection_service(
-    request: CreateServiceRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/services", summary="创建检测服务")
+def create_detection_service(request: CreateServiceRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### POST `/services` 创建检测服务
 
@@ -1652,28 +1603,20 @@ def create_detection_service(
             enabled_labels=request.enabled_labels,
             policy_config=request.policy_config,
             cache_enabled=request.cache_enabled,
-            timeout_ms=request.timeout_ms
+            timeout_ms=request.timeout_ms,
         )
 
         if not service_id:
             return get_data_error_result(retmsg=f"服务代码 {request.code} 已存在")
 
-        return get_json_result(data={
-            "service_id": service_id,
-            "message": "服务创建成功"
-        })
+        return get_json_result(data={"service_id": service_id, "message": "服务创建成功"})
 
     except Exception as e:
         return server_error_response(e)
 
 
-@router.put('/services/{service_id}', summary="修改检测服务")
-def update_detection_service(
-    service_id: str,
-    request: UpdateServiceRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.put("/services/{service_id}", summary="修改检测服务")
+def update_detection_service(service_id: str, request: UpdateServiceRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### PUT `/services/{service_id}` 修改检测服务
 
@@ -1787,12 +1730,8 @@ def update_detection_service(
         return server_error_response(e)
 
 
-@router.delete('/services/{service_id}', summary="删除检测服务")
-def delete_detection_service(
-    service_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.delete("/services/{service_id}", summary="删除检测服务")
+def delete_detection_service(service_id: str, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     ### DELETE `/services/{service_id}` 删除检测服务
 
@@ -1854,7 +1793,7 @@ def delete_detection_service(
         return server_error_response(e)
 
 
-@router.get('/logs', summary="获取检测日志")
+@router.get("/logs", summary="获取检测日志")
 def get_detection_logs(
     page: int = 1,
     page_size: int = 50,
@@ -1863,7 +1802,7 @@ def get_detection_logs(
     service_code: str | None = None,
     is_blocked: bool | None = None,
     db: Session = Depends(get_db),
-    user=Depends(manager)
+    user=Depends(manager),
 ) -> dict[str, Any]:
     """
     获取检测日志列表（分页查询）
@@ -1930,14 +1869,7 @@ def get_detection_logs(
     """
     try:
         result = GuardLogService.get_logs_by_tenant(
-            db=db,
-            tenant_id=user.id,
-            page=page,
-            page_size=page_size,
-            start_date=start_date,
-            end_date=end_date,
-            service_code=service_code,
-            is_blocked=is_blocked
+            db=db, tenant_id=user.id, page=page, page_size=page_size, start_date=start_date, end_date=end_date, service_code=service_code, is_blocked=is_blocked
         )
 
         # 转换为字典格式
@@ -1952,12 +1884,8 @@ def get_detection_logs(
         return server_error_response(e)
 
 
-@router.get('/stats', summary="获取检测统计")
-def get_detection_stats(
-    days: int = 30,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/stats", summary="获取检测统计")
+def get_detection_stats(days: int = 30, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     获取指定时间范围内的检测统计信息
 
@@ -2024,12 +1952,8 @@ def get_detection_stats(
         return server_error_response(e)
 
 
-@router.get('/stats/trend', summary="获取检测趋势")
-def get_detection_trend(
-    days: int = 7,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/stats/trend", summary="获取检测趋势")
+def get_detection_trend(days: int = 7, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     获取指定时间范围内的检测趋势数据（按天分组）
 
@@ -2089,13 +2013,8 @@ def get_detection_trend(
         return server_error_response(e)
 
 
-@router.get('/stats/risk-words', summary="获取高频风险词")
-def get_top_risk_words(
-    days: int = 30,
-    limit: int = 10,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/stats/risk-words", summary="获取高频风险词")
+def get_top_risk_words(days: int = 30, limit: int = 10, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     获取指定时间范围内的高频风险词统计（按出现次数降序排列）
 

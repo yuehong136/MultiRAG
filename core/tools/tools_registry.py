@@ -73,7 +73,7 @@ def dispatch_tool(tool_name: str, code: str, session_id: str) -> list[ToolObserv
     if tool_name in ALL_TOOLS:
         return ALL_TOOLS[tool_name](code, session_id)
 
-    code = code.strip().rstrip('<|observation|>').strip()
+    code = code.strip().rstrip("<|observation|>").strip()
 
     # Dispatch custom tools
     try:
@@ -104,8 +104,8 @@ def get_tools() -> list[dict]:
 
 @register_tool
 def random_number_generator(
-        seed: Annotated[int, "The random seed used by the generator", True],
-        range: Annotated[tuple[int, int], "The range of the generated numbers", True],
+    seed: Annotated[int, "The random seed used by the generator", True],
+    range: Annotated[tuple[int, int], "The range of the generated numbers", True],
 ) -> int:
     """
     Generates a random number x, s.t. range[0] <= x < range[1]
@@ -124,7 +124,7 @@ def random_number_generator(
 
 @register_tool
 def get_weather(
-        city_name: Annotated[str, "The name of the city to be queried", True],
+    city_name: Annotated[str, "The name of the city to be queried", True],
 ) -> str:
     """
     Get the current weather for `city_name`
@@ -152,16 +152,14 @@ def get_weather(
     except:
         import traceback
 
-        ret = (
-                "Error encountered while fetching weather data!\n" + traceback.format_exc()
-        )
+        ret = "Error encountered while fetching weather data!\n" + traceback.format_exc()
 
     return str(ret)
 
 
 @register_tool
 def get_shell(
-        query: Annotated[str, "The command should run in Linux shell", True],
+    query: Annotated[str, "The command should run in Linux shell", True],
 ) -> str:
     """
     Use shell to run command

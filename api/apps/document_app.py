@@ -63,200 +63,83 @@ router = APIRouter()
 
 # ==================== Pydantic Schemas ====================
 
+
 class TitleChunkerConfig(BaseModel):
     """TitleChunker 配置"""
 
-    levels: list[list[str]] = Field(
-        default=[
-            ["^#\\s+", "^第[一二三四五六七八九十百]+章"],
-            ["^##\\s+", "^\\d+\\.\\s+"]
-        ],
-        description="标题层级正则表达式列表"
-    )
-    hierarchy: int = Field(
-        default=1,
-        ge=0,
-        le=5,
-        description="合并到第几层（0-5）"
-    )
-    method: Literal["hierarchy", "group"] = Field(
-        default="hierarchy",
-        description="TitleChunker 方法：hierarchy(按标题层级切分) 或 group(按标题分组)"
-    )
-    include_heading_content: bool = Field(
-        default=False,
-        description="hierarchy 方法下是否把标题自身作为独立内容保留"
-    )
+    levels: list[list[str]] = Field(default=[["^#\\s+", "^第[一二三四五六七八九十百]+章"], ["^##\\s+", "^\\d+\\.\\s+"]], description="标题层级正则表达式列表")
+    hierarchy: int = Field(default=1, ge=0, le=5, description="合并到第几层（0-5）")
+    method: Literal["hierarchy", "group"] = Field(default="hierarchy", description="TitleChunker 方法：hierarchy(按标题层级切分) 或 group(按标题分组)")
+    include_heading_content: bool = Field(default=False, description="hierarchy 方法下是否把标题自身作为独立内容保留")
 
 
 class TokenChunkerConfig(BaseModel):
     """TokenChunker 配置"""
 
-    chunk_token_size: int = Field(
-        default=512,
-        ge=100,
-        le=4096,
-        description="切片大小（tokens）"
-    )
-    delimiters: list[str] = Field(
-        default=["\n\n", "\n", "。", "！", "？"],
-        description="分隔符列表"
-    )
-    overlapped_percent: float = Field(
-        default=0.1,
-        ge=0.0,
-        le=0.5,
-        description="重叠比例（0.0-0.5）"
-    )
-    children_delimiters: list[str] | None = Field(
-        default=None,
-        description="子块分隔符列表（用于 child-parent chunking，支持 `pattern` 格式）"
-    )
+    chunk_token_size: int = Field(default=512, ge=100, le=4096, description="切片大小（tokens）")
+    delimiters: list[str] = Field(default=["\n\n", "\n", "。", "！", "？"], description="分隔符列表")
+    overlapped_percent: float = Field(default=0.1, ge=0.0, le=0.5, description="重叠比例（0.0-0.5）")
+    children_delimiters: list[str] | None = Field(default=None, description="子块分隔符列表（用于 child-parent chunking，支持 `pattern` 格式）")
 
 
 class RaptorConfig(BaseModel):
     """RAPTOR 聚类配置"""
 
-    max_cluster: int = Field(
-        default=64,
-        ge=2,
-        le=256,
-        description="最大聚类数量"
-    )
-    max_token: int = Field(
-        default=512,
-        ge=100,
-        le=2048,
-        description="每个摘要的最大 tokens"
-    )
-    threshold: float = Field(
-        default=0.1,
-        ge=0.0,
-        le=1.0,
-        description="聚类相似度阈值"
-    )
-    random_seed: int = Field(
-        default=42,
-        description="随机种子"
-    )
-    prompt: str | None = Field(
-        default=None,
-        description="摘要生成提示词（可选）"
-    )
+    max_cluster: int = Field(default=64, ge=2, le=256, description="最大聚类数量")
+    max_token: int = Field(default=512, ge=100, le=2048, description="每个摘要的最大 tokens")
+    threshold: float = Field(default=0.1, ge=0.0, le=1.0, description="聚类相似度阈值")
+    random_seed: int = Field(default=42, description="随机种子")
+    prompt: str | None = Field(default=None, description="摘要生成提示词（可选）")
 
 
 class MetadataFieldConfig(BaseModel):
     """元数据字段配置"""
 
-    field_name: str = Field(
-        ...,
-        min_length=1,
-        max_length=100,
-        description="字段名称（如 tags, summary, authors）"
-    )
-    prompt: str = Field(
-        ...,
-        description="LLM 提取提示词"
-    )
+    field_name: str = Field(..., min_length=1, max_length=100, description="字段名称（如 tags, summary, authors）")
+    prompt: str = Field(..., description="LLM 提取提示词")
 
     # 数据源选择
     source: Literal["global_summary", "cluster_summaries", "original_chunks"] = Field(
-        default="global_summary",
-        description="数据源：global_summary(RAPTOR全局摘要), cluster_summaries(RAPTOR聚类摘要), original_chunks(原始chunks)"
+        default="global_summary", description="数据源：global_summary(RAPTOR全局摘要), cluster_summaries(RAPTOR聚类摘要), original_chunks(原始chunks)"
     )
 
     # 调用模式
-    call_mode: Literal["single", "batch"] = Field(
-        default="single",
-        description="调用模式：single(合并后一次调用), batch(每个内容调用一次后聚合)"
-    )
+    call_mode: Literal["single", "batch"] = Field(default="single", description="调用模式：single(合并后一次调用), batch(每个内容调用一次后聚合)")
 
     # 后处理策略
     post_process: Literal["none", "split_comma", "counter_top10", "concat"] = Field(
-        default="none",
-        description="后处理：none(原样返回), split_comma(按逗号分割), counter_top10(频次统计top10), concat(拼接)"
+        default="none", description="后处理：none(原样返回), split_comma(按逗号分割), counter_top10(频次统计top10), concat(拼接)"
     )
 
-    llm_name: str | None = Field(
-        default=None,
-        description="LLM 模型名称（可选，默认使用租户配置）"
-    )
-    temperature: float = Field(
-        default=0.1,
-        ge=0.0,
-        le=1.0,
-        description="LLM 温度参数"
-    )
-    max_tokens: int = Field(
-        default=1024,
-        ge=50,
-        le=4096,
-        description="最大生成 tokens"
-    )
+    llm_name: str | None = Field(default=None, description="LLM 模型名称（可选，默认使用租户配置）")
+    temperature: float = Field(default=0.1, ge=0.0, le=1.0, description="LLM 温度参数")
+    max_tokens: int = Field(default=1024, ge=50, le=4096, description="最大生成 tokens")
 
 
 class AnalyzeDocumentRequest(BaseModel):
     """文档分析请求模型"""
 
     # 数据源（二选一）
-    doc_id: str | None = Field(
-        default=None,
-        description="文档ID（与 file 二选一）"
-    )
-    kb_id: str | None = Field(
-        default=None,
-        description="知识库ID（使用 doc_id 时必填）"
-    )
+    doc_id: str | None = Field(default=None, description="文档ID（与 file 二选一）")
+    kb_id: str | None = Field(default=None, description="知识库ID（使用 doc_id 时必填）")
 
     # Parser 配置（简化方式）
     parse_method: str | None = Field(
         default="deepdoc",
-        description="解析方法：deepdoc/plain_text/mineru/paddleocr/tcadp parser/ocr 或 VLM 模型名（如 qwen-vl-plus）。tcadp parser 使用腾讯云 ADP 解析，支持 PDF/Excel/PPT；paddleocr 使用 PaddleOCR API 服务解析"
+        description="解析方法：deepdoc/plain_text/mineru/paddleocr/tcadp parser/ocr 或 VLM 模型名（如 qwen-vl-plus）。tcadp parser 使用腾讯云 ADP 解析，支持 PDF/Excel/PPT；paddleocr 使用 PaddleOCR API 服务解析",
     )
-    output_format: str | None = Field(
-        default="json",
-        description="输出格式：json（保留位置）/text/markdown/html"
-    )
-    lang: str | None = Field(
-        default="Chinese",
-        description="语言（VLM 模式使用）"
-    )
-    image_llm_name: str | None = Field(
-        default=None,
-        description="图片 VLM 模型名称（parse_method=vlm 时使用）"
-    )
-    image_system_prompt: str | None = Field(
-        default=None,
-        description="图片 VLM 提示词（自定义图片理解方式）"
-    )
-    video_llm_name: str | None = Field(
-        default=None,
-        description="视频文件使用的 VLM 模型名称（解析 MP4/AVI/MKV 时生效）"
-    )
-    email_fields: list[str] | None = Field(
-        default=None,
-        description="邮件需要提取的字段（from/to/subject/body等）"
-    )
+    output_format: str | None = Field(default="json", description="输出格式：json（保留位置）/text/markdown/html")
+    lang: str | None = Field(default="Chinese", description="语言（VLM 模式使用）")
+    image_llm_name: str | None = Field(default=None, description="图片 VLM 模型名称（parse_method=vlm 时使用）")
+    image_system_prompt: str | None = Field(default=None, description="图片 VLM 提示词（自定义图片理解方式）")
+    video_llm_name: str | None = Field(default=None, description="视频文件使用的 VLM 模型名称（解析 MP4/AVI/MKV 时生效）")
+    email_fields: list[str] | None = Field(default=None, description="邮件需要提取的字段（from/to/subject/body等）")
     # TCADP parser 特有参数（腾讯云 ADP 解析）
-    table_result_type: str | None = Field(
-        default="1",
-        description="TCADP 表格结果类型（默认 '1'）"
-    )
-    markdown_image_response_type: str | None = Field(
-        default="1",
-        description="TCADP 图片响应类型（默认 '1'）"
-    )
+    table_result_type: str | None = Field(default="1", description="TCADP 表格结果类型（默认 '1'）")
+    markdown_image_response_type: str | None = Field(default="1", description="TCADP 图片响应类型（默认 '1'）")
     # 媒体上下文配置（为表格/图片添加周围文本）
-    table_context_size: int = Field(
-        default=0,
-        ge=0,
-        description="表格上下文 token 数（0 表示不添加周围文本上下文）"
-    )
-    image_context_size: int = Field(
-        default=0,
-        ge=0,
-        description="图片上下文 token 数（0 表示不添加周围文本上下文）"
-    )
+    table_context_size: int = Field(default=0, ge=0, description="表格上下文 token 数（0 表示不添加周围文本上下文）")
+    image_context_size: int = Field(default=0, ge=0, description="图片上下文 token 数（0 表示不添加周围文本上下文）")
 
     # Parser 配置（完整方式）- 参考 core/flow/parser/parser.py 的 setups 结构
     parser_config: dict | None = Field(
@@ -278,40 +161,24 @@ class AnalyzeDocumentRequest(BaseModel):
             "excel": {"parse_method": "tcadp parser", "output_format": "html"},
             "slides": {"parse_method": "tcadp parser", "output_format": "json"}
         }
-        """
+        """,
     )
 
     # 处理策略
     processing_strategy: Literal["auto", "hierarchical", "raptor", "hybrid", "simple"] = Field(
-        default="auto",
-        description="处理策略：auto(自动), hierarchical(层次化), raptor(聚类), hybrid(混合), simple(直接)"
+        default="auto", description="处理策略：auto(自动), hierarchical(层次化), raptor(聚类), hybrid(混合), simple(直接)"
     )
 
     # 组件配置
-    hierarchical_config: TitleChunkerConfig | None = Field(
-        default=None,
-        description="TitleChunker 配置（可选）"
-    )
-    splitter_config: TokenChunkerConfig | None = Field(
-        default=None,
-        description="TokenChunker 配置（请求字段名保留 splitter_config 以兼容既有调用）"
-    )
-    raptor_config: RaptorConfig | None = Field(
-        default=None,
-        description="RAPTOR 配置（可选）"
-    )
+    hierarchical_config: TitleChunkerConfig | None = Field(default=None, description="TitleChunker 配置（可选）")
+    splitter_config: TokenChunkerConfig | None = Field(default=None, description="TokenChunker 配置（请求字段名保留 splitter_config 以兼容既有调用）")
+    raptor_config: RaptorConfig | None = Field(default=None, description="RAPTOR 配置（可选）")
 
     # 元数据提取配置
-    metadata_fields: list[MetadataFieldConfig] | None = Field(
-        default=None,
-        description="元数据字段配置列表（为空时使用默认：document_summary, semantic_tags）"
-    )
+    metadata_fields: list[MetadataFieldConfig] | None = Field(default=None, description="元数据字段配置列表（为空时使用默认：document_summary, semantic_tags）")
 
     # 去重策略
-    dedup_strategy: Literal["smart", "semantic", "none"] = Field(
-        default="smart",
-        description="去重策略：smart(Jaccard+词典), semantic(Embedding), none(不去重)"
-    )
+    dedup_strategy: Literal["smart", "semantic", "none"] = Field(default="smart", description="去重策略：smart(Jaccard+词典), semantic(Embedding), none(不去重)")
 
     @field_validator("kb_id")
     @classmethod
@@ -335,6 +202,7 @@ class CreateDocumentRequest(BaseModel):
 
 class MetadataCondition(BaseModel):
     """元数据过滤条件"""
+
     logic: str = Field(default="and", description="逻辑运算符: and 或 or")
     conditions: list[dict] = Field(default=[], description="条件列表，每个条件包含 name, comparison_operator, value")
 
@@ -408,8 +276,7 @@ class PreviewChunksRequest(BaseModel):
     batch_size: int | None = Field(default=None, description="批次大小（启用批次模式时必填）")
     batch_id: str | None = Field(default=None, description="批次会话ID（续取时携带）")
     parser_id: str | None = Field(default=None, description="手动指定解析器（可选，受文件类型支持列表校验）")
-    batch_index: int | None = Field(default=None,
-                                    description="并发批次号（从0开始）；指定则按批次号取片段，不推进会话offset")
+    batch_index: int | None = Field(default=None, description="并发批次号（从0开始）；指定则按批次号取片段，不推进会话offset")
 
 
 class WebParseOptions(BaseModel):
@@ -425,25 +292,22 @@ class WebParseOptions(BaseModel):
     include_images: bool | None = Field(default=None, description="是否在响应中包含图片URL列表（默认 False）")
     extract_depth: Literal["basic", "advanced"] | None = Field(
         default=None,
-        description=(
-            "提取深度：basic（默认，低延迟，成功率适中，1信用/成功5URL）| advanced（更高成功率与数据量，如表格/嵌入内容，2信用/成功5URL）"
-        ),
+        description=("提取深度：basic（默认，低延迟，成功率适中，1信用/成功5URL）| advanced（更高成功率与数据量，如表格/嵌入内容，2信用/成功5URL）"),
     )
     format: Literal["markdown", "text"] | None = Field(
         default=None,
         description="提取内容格式：markdown（默认）| text（纯文本，可能增加延迟）",
     )
     timeout: int | None = Field(
-        default=None, ge=1, le=60,
+        default=None,
+        ge=1,
+        le=60,
         description="超时时间（秒），1~60。未指定时：basic=10s，advanced=30s",
     )
     include_favicon: bool | None = Field(default=None, description="是否包含 favicon（默认 False）")
 
     # 图片去噪选项
-    clean_images: bool | None = Field(
-        default=True,
-        description="是否启用图片去噪功能，自动过滤 logo、统计像素图、占位图等无用图片（默认 True）"
-    )
+    clean_images: bool | None = Field(default=True, description="是否启用图片去噪功能，自动过滤 logo、统计像素图、占位图等无用图片（默认 True）")
     image_filter_mode: Literal["strict", "balanced", "minimal"] | None = Field(
         default=None,
         description=(
@@ -477,15 +341,14 @@ class WebParseCredentials(BaseModel):
 
 class WebParseRequest(BaseModel):
     url: str = Field(..., description="要解析的网页 URL")
-    provider: Literal["tavily", "jinareader"] = Field(
-        ..., description="解析提供方：tavily | jinareader（后者待集成）"
-    )
+    provider: Literal["tavily", "jinareader"] = Field(..., description="解析提供方：tavily | jinareader（后者待集成）")
     options: WebParseOptions | None = Field(default=None, description="解析选项")
     credentials: WebParseCredentials | None = Field(default=None, description="第三方凭据，如 API Key")
 
 
 class RaptorConfig(BaseModel):
     """RAPTOR配置"""
+
     max_cluster: int = Field(default=64, ge=1, le=128, description="最大聚类数")
     max_token: int = Field(default=512, ge=128, le=2048, description="摘要最大token数")
     threshold: float = Field(default=0.1, ge=0.0, le=1.0, description="聚类阈值")
@@ -495,6 +358,7 @@ class RaptorConfig(BaseModel):
 
 class DocumentAnalysisRequest(BaseModel):
     """文档分析请求"""
+
     doc_id: str = Field(..., description="文档ID")
     include_summary: bool = Field(default=True, description="是否生成摘要")
     include_tags: bool = Field(default=True, description="是否生成标签")
@@ -505,12 +369,14 @@ class DocumentAnalysisRequest(BaseModel):
 
 class MetadataUpdateSelector(BaseModel):
     """元数据批量更新的选择器"""
+
     document_ids: list[str] | None = Field(default=None, description="文档ID列表")
     metadata_condition: MetadataCondition | dict | None = Field(default=None, description="元数据过滤条件")
 
 
 class MetadataUpdateItem(BaseModel):
     """元数据更新项"""
+
     key: str = Field(..., description="元数据键名")
     value: Any = Field(..., description="新值")
     match: Any | None = Field(default=None, description="匹配值（可选）")
@@ -518,12 +384,14 @@ class MetadataUpdateItem(BaseModel):
 
 class MetadataDeleteItem(BaseModel):
     """元数据删除项"""
+
     key: str = Field(..., description="元数据键名")
     value: Any | None = Field(default=None, description="匹配值（可选，不提供则删除整个键）")
 
 
 class MetadataUpdateRequest(BaseModel):
     """元数据批量更新请求"""
+
     kb_id: str | None = Field(default=None, description="知识库ID（ES/Infinity 引擎必填）")
     doc_ids: list[str] = Field(..., description="文档ID列表")
     updates: list[MetadataUpdateItem] | list[dict] = Field(default=[], description="更新操作列表")
@@ -532,17 +400,18 @@ class MetadataUpdateRequest(BaseModel):
 
 class MetadataSummaryRequest(BaseModel):
     """元数据汇总请求"""
+
     kb_id: str = Field(..., description="知识库ID")
     doc_ids: list[str] | None = Field(default=None, description="文档ID列表（可选，不提供则汇总整个知识库）")
 
 
 @router.post("/upload", summary="上传文件", response_description="成功上传文件")
 async def upload(
-        kb_id: str,
-        files: list[UploadFile] = File(...),
-        labels: str | None = Query(None),  # labels 是一个 JSON 格式的字符串
-        db: Session = Depends(get_db),
-        user=Depends(manager)
+    kb_id: str,
+    files: list[UploadFile] = File(...),
+    labels: str | None = Query(None),  # labels 是一个 JSON 格式的字符串
+    db: Session = Depends(get_db),
+    user=Depends(manager),
 ):
     """
     ### POST `/upload` 文件上传接口
@@ -701,7 +570,7 @@ async def upload(
     if not kb_id:
         return construct_json_result(data=False, message='Lack of "KB ID"', code=RetCode.ARGUMENT_ERROR)
     if not files:
-        return construct_json_result(data=False, message='No file part!', code=RetCode.ARGUMENT_ERROR)
+        return construct_json_result(data=False, message="No file part!", code=RetCode.ARGUMENT_ERROR)
 
     # 异步读取所有文件内容
     file_contents = []
@@ -709,8 +578,7 @@ async def upload(
         if file.filename == "":
             return get_json_result(data=False, retmsg="No file selected!", retcode=RetCode.ARGUMENT_ERROR)
         if len(file.filename.encode("utf-8")) > FILE_NAME_LEN_LIMIT:
-            return get_json_result(data=False, retmsg=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.",
-                                   retcode=RetCode.ARGUMENT_ERROR)
+            return get_json_result(data=False, retmsg=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.", retcode=RetCode.ARGUMENT_ERROR)
 
         file_contents.append((await file.read(), file.filename))  # 读取文件内容并存储
 
@@ -720,7 +588,7 @@ async def upload(
         if not kb:
             raise HTTPException(status_code=404, detail="Can't find this dataset!")
         if not check_kb_team_permission(db, kb, user.id):
-            return get_json_result(data=False, retmsg='No authorization.', retcode=RetCode.AUTHENTICATION_ERROR)
+            return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
 
         # 确保 labels 是 list 或 None
         parsed_labels = labels
@@ -728,11 +596,11 @@ async def upload(
             try:
                 parsed_labels = json.loads(parsed_labels)
                 if not isinstance(parsed_labels, list) or not all(isinstance(label, str) for label in parsed_labels):
-                    raise ValueError('Labels must be a list of strings.')
+                    raise ValueError("Labels must be a list of strings.")
             except json.JSONDecodeError:
                 raise ValueError('Invalid JSON format for "labels".')
         elif parsed_labels is not None:
-            raise ValueError('Labels must be a JSON-encoded list of strings or None.')
+            raise ValueError("Labels must be a JSON-encoded list of strings or None.")
 
         err, result_files = FileService.upload_document(db, kb, file_contents, user.id, parsed_labels)  # 传递labels参数
 
@@ -741,9 +609,7 @@ async def upload(
             return construct_json_result(data=docs, message="\n".join(err), code=RetCode.SERVER_ERROR)
 
         if not result_files:
-            return get_json_result(data=result_files,
-                                   retmsg="There seems to be an issue with your file format. Please verify it is correct and not corrupted.",
-                                   retcode=RetCode.DATA_ERROR)
+            return get_json_result(data=result_files, retmsg="There seems to be an issue with your file format. Please verify it is correct and not corrupted.", retcode=RetCode.DATA_ERROR)
 
         # 只返回文档信息，不包含二进制数据
         docs = [doc for doc, _ in result_files]
@@ -753,11 +619,7 @@ async def upload(
 
 
 @router.post("/web_crawl", summary="网页爬取", response_description="成功爬取网页")
-def web_crawl(
-        request_body: WebCrawlRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def web_crawl(request_body: WebCrawlRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/web_crawl` 网页爬取接口
 
@@ -914,13 +776,12 @@ def web_crawl(
     name = request_body.name
     url = request_body.url
     if not is_valid_url(url):
-        return construct_json_result(data=False, message='The URL format is invalid',
-                                     code=RetCode.ARGUMENT_ERROR)
+        return construct_json_result(data=False, message="The URL format is invalid", code=RetCode.ARGUMENT_ERROR)
     kb = KnowledgebaseService.get_by_id(db, kb_id)
     if not kb:
         raise HTTPException(status_code=404, detail="Can't find this dataset!")
     if not check_kb_team_permission(db, kb, user.id):
-        return get_json_result(data=False, retmsg='No authorization.', retcode=RetCode.AUTHENTICATION_ERROR)
+        return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
 
     blob = html2pdf(url)
     if not blob:
@@ -970,33 +831,25 @@ def web_crawl(
 
 
 @router.post("/create", summary="创建文件或文件夹", response_description="成功创建文件或文件夹")
-def create_document(
-        request_body: CreateDocumentRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def create_document(request_body: CreateDocumentRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request_body.model_dump()
     kb_id = req["kb_id"]
     if not kb_id:
         return construct_json_result(data=False, message='Lack of "KB ID"', code=RetCode.ARGUMENT_ERROR)
     if len(req["name"].encode("utf-8")) > FILE_NAME_LEN_LIMIT:
-        return construct_json_result(data=False, message=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.",
-                                     code=RetCode.ARGUMENT_ERROR)
+        return construct_json_result(data=False, message=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.", code=RetCode.ARGUMENT_ERROR)
 
     if req["name"].strip() == "":
-        return construct_json_result(data=False, message="File name can't be empty.",
-                                     code=RetCode.ARGUMENT_ERROR)
+        return construct_json_result(data=False, message="File name can't be empty.", code=RetCode.ARGUMENT_ERROR)
     req["name"] = req["name"].strip()
 
     try:
         kb = KnowledgebaseService.get_by_id(db, kb_id)
         if not kb:
-            return construct_json_result(data=False, message="Can't find this dataset!",
-                                         code=RetCode.ARGUMENT_ERROR)
+            return construct_json_result(data=False, message="Can't find this dataset!", code=RetCode.ARGUMENT_ERROR)
 
         if DocumentService.query(db, name=req["name"], kb_id=kb_id):
-            return construct_json_result(data=False, message="Duplicated document name in the same dataset.",
-                                         code=RetCode.ARGUMENT_ERROR)
+            return construct_json_result(data=False, message="Duplicated document name in the same dataset.", code=RetCode.ARGUMENT_ERROR)
 
         kb_root_folder = FileService.get_kb_folder(db, kb.tenant_id)
         if not kb_root_folder:
@@ -1010,34 +863,28 @@ def create_document(
         if not kb_folder:
             return get_data_error_result(retmsg="Cannot find the kb folder for this file.")
 
-        doc = DocumentService.insert(db, {
-            "id": get_uuid(),
-            "kb_id": kb.id,
-            "parser_id": kb.parser_id,
-            "parser_config": kb.parser_config,
-            "created_by": user.id,
-            "type": FileType.VIRTUAL,
-            "name": req["name"],
-            "suffix": Path(req["name"]).suffix.lstrip("."),
-            "location": "",
-            "size": 0
-        })
+        doc = DocumentService.insert(
+            db,
+            {
+                "id": get_uuid(),
+                "kb_id": kb.id,
+                "parser_id": kb.parser_id,
+                "parser_config": kb.parser_config,
+                "created_by": user.id,
+                "type": FileType.VIRTUAL,
+                "name": req["name"],
+                "suffix": Path(req["name"]).suffix.lstrip("."),
+                "location": "",
+                "size": 0,
+            },
+        )
         return construct_json_result(data=DocumentService.serialize_document(db, doc), code=RetCode.SUCCESS)
     except Exception as e:
         return construct_error_response(e)
 
 
 @router.get("/list", summary="列出文档", response_description="成功列出文档")
-def list_docs_get(
-        kb_id: str,
-        keywords: str = "",
-        page: int = 1,
-        page_size: int = 15,
-        orderby: str = "create_time",
-        desc: bool = True,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def list_docs_get(kb_id: str, keywords: str = "", page: int = 1, page_size: int = 15, orderby: str = "create_time", desc: bool = True, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### GET `/list` 列出文档接口
 
@@ -1198,17 +1045,15 @@ def list_docs_get(
         if KnowledgebaseService.query(db, tenant_id=tenant.tenant_id, id=kb_id):
             break
     else:
-        return get_json_result(
-            data=False, retmsg='Only owner of dataset authorized for this operation.',
-            retcode=RetCode.OPERATING_ERROR)
+        return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
     try:
         docs, tol = DocumentService.get_by_kb_id(db, kb_id, page, page_size, orderby, desc, keywords)
         docs = [convert_datetime_to_str(d) for d in docs]
 
         for doc_item in docs:
-            if doc_item['thumbnail'] and not doc_item['thumbnail'].startswith(IMG_BASE64_PREFIX):
-                doc_item['thumbnail'] = f"/v1/document/image/{kb_id}-{doc_item['thumbnail']}"
+            if doc_item["thumbnail"] and not doc_item["thumbnail"].startswith(IMG_BASE64_PREFIX):
+                doc_item["thumbnail"] = f"/v1/document/image/{kb_id}-{doc_item['thumbnail']}"
             if doc_item.get("source_type"):
                 doc_item["source_type"] = doc_item["source_type"].split("/")[0]
             if doc_item.get("parser_config", {}).get("metadata"):
@@ -1221,18 +1066,18 @@ def list_docs_get(
 
 @router.post("/list", summary="列出文档", response_description="成功列出文档")  # 改为 POST
 def list_docs(
-        filter_params: DocumentFilter,  # JSON body 参数
-        dataset_id: str | None = Query(None, alias="id", description="数据集 ID"),
-        legacy_kb_id: str | None = Query(None, alias="kb_id", include_in_schema=False),
-        keywords: str = Query("", description="关键字"),
-        page: int = Query(0, description="分页页码"),
-        page_size: int = Query(0, description="分页大小"),
-        orderby: str = Query("create_time", description="排序字段"),
-        desc: bool = Query(True, description="是否倒序"),
-        create_time_from: int | None = Query(0, description="创建时间起（时间戳）"),
-        create_time_to: int | None = Query(0, description="创建时间止（时间戳）"),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
+    filter_params: DocumentFilter,  # JSON body 参数
+    dataset_id: str | None = Query(None, alias="id", description="数据集 ID"),
+    legacy_kb_id: str | None = Query(None, alias="kb_id", include_in_schema=False),
+    keywords: str = Query("", description="关键字"),
+    page: int = Query(0, description="分页页码"),
+    page_size: int = Query(0, description="分页大小"),
+    orderby: str = Query("create_time", description="排序字段"),
+    desc: bool = Query(True, description="是否倒序"),
+    create_time_from: int | None = Query(0, description="创建时间起（时间戳）"),
+    create_time_to: int | None = Query(0, description="创建时间止（时间戳）"),
+    db: Session = Depends(get_db),
+    user=Depends(manager),
 ):
     """
     ### POST `/list` 列出文档接口
@@ -1452,31 +1297,21 @@ def list_docs(
         if KnowledgebaseService.query(db, tenant_id=tenant.tenant_id, id=kb_id):
             break
     else:
-        return get_json_result(
-            data=False, retmsg='Only owner of dataset authorized for this operation.',
-            retcode=RetCode.OPERATING_ERROR)
+        return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
     # 验证 run_status 参数
     run_status = filter_params.run_status
     if run_status:
         invalid_status = {s for s in run_status if s not in VALID_TASK_STATUS}
         if invalid_status:
-            return construct_json_result(
-                data=False,
-                message=f"Invalid filter run status conditions: {', '.join(invalid_status)}",
-                code=RetCode.ARGUMENT_ERROR
-            )
+            return construct_json_result(data=False, message=f"Invalid filter run status conditions: {', '.join(invalid_status)}", code=RetCode.ARGUMENT_ERROR)
 
     # 验证 types 参数
     types = filter_params.types
     if types:
         invalid_types = {t for t in types if t not in VALID_FILE_TYPES}
         if invalid_types:
-            return construct_json_result(
-                data=False,
-                message=f"Invalid filter conditions: {', '.join(invalid_types)} type{'s' if len(invalid_types) > 1 else ''}",
-                code=RetCode.ARGUMENT_ERROR
-            )
+            return construct_json_result(data=False, message=f"Invalid filter conditions: {', '.join(invalid_types)} type{'s' if len(invalid_types) > 1 else ''}", code=RetCode.ARGUMENT_ERROR)
 
     suffix = filter_params.suffix
 
@@ -1500,17 +1335,9 @@ def list_docs(
         metadata = {}
     else:
         if metadata_condition and not isinstance(metadata_condition, dict):
-            return construct_json_result(
-                data=False,
-                message="metadata_condition must be an object.",
-                code=RetCode.ARGUMENT_ERROR
-            )
+            return construct_json_result(data=False, message="metadata_condition must be an object.", code=RetCode.ARGUMENT_ERROR)
         if metadata and not isinstance(metadata, dict):
-            return construct_json_result(
-                data=False,
-                message="metadata must be an object.",
-                code=RetCode.ARGUMENT_ERROR
-            )
+            return construct_json_result(data=False, message="metadata must be an object.", code=RetCode.ARGUMENT_ERROR)
 
     doc_ids_filter = None
     metas = None
@@ -1554,23 +1381,16 @@ def list_docs(
         doc_ids_filter = list(doc_ids_filter)
 
     try:
-        docs, tol = DocumentService.get_by_kb_id(
-            db, kb_id, page, page_size, orderby, desc, keywords, run_status, types, suffix, doc_ids_filter,
-            return_empty_metadata=return_empty_metadata
-        )
+        docs, tol = DocumentService.get_by_kb_id(db, kb_id, page, page_size, orderby, desc, keywords, run_status, types, suffix, doc_ids_filter, return_empty_metadata=return_empty_metadata)
         docs = [convert_datetime_to_str(d) for d in docs]
 
         # === 新增的时间范围过滤逻辑 ===
         if create_time_from or create_time_to:
-            docs = [
-                doc for doc in docs
-                if (create_time_from == 0 or doc.get("create_time", 0) >= create_time_from)
-                   and (create_time_to == 0 or doc.get("create_time", 0) <= create_time_to)
-            ]
+            docs = [doc for doc in docs if (create_time_from == 0 or doc.get("create_time", 0) >= create_time_from) and (create_time_to == 0 or doc.get("create_time", 0) <= create_time_to)]
         # 处理缩略图路径
         for doc_item in docs:
-            if doc_item['thumbnail'] and not doc_item['thumbnail'].startswith(IMG_BASE64_PREFIX):
-                doc_item['thumbnail'] = f"/v1/document/image/{kb_id}-{doc_item['thumbnail']}"
+            if doc_item["thumbnail"] and not doc_item["thumbnail"].startswith(IMG_BASE64_PREFIX):
+                doc_item["thumbnail"] = f"/v1/document/image/{kb_id}-{doc_item['thumbnail']}"
             if doc_item.get("source_type"):
                 doc_item["source_type"] = doc_item["source_type"].split("/")[0]
             if doc_item.get("parser_config", {}).get("metadata"):
@@ -1582,11 +1402,7 @@ def list_docs(
 
 
 @router.post("/filter", summary="获取文档过滤器", response_description="成功获取文档过滤器")
-def get_filter(
-        request_body: FilterRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def get_filter(request_body: FilterRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取指定知识库的文档过滤器统计信息。
 
@@ -1614,8 +1430,7 @@ def get_filter(
         if KnowledgebaseService.query(db, tenant_id=tenant.tenant_id, id=kb_id):
             break
     else:
-        return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.",
-                               retcode=RetCode.OPERATING_ERROR)
+        return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
     keywords = req.get("keywords", "")
     suffix = req.get("suffix", [])
@@ -1632,8 +1447,7 @@ def get_filter(
     if types:
         invalid_types = {t for t in types if t not in VALID_FILE_TYPES}
         if invalid_types:
-            return get_data_error_result(
-                retmsg=f"Invalid filter conditions: {', '.join(invalid_types)} type{'s' if len(invalid_types) > 1 else ''}")
+            return get_data_error_result(retmsg=f"Invalid filter conditions: {', '.join(invalid_types)} type{'s' if len(invalid_types) > 1 else ''}")
 
     try:
         filter_data, total = DocumentService.get_filter_by_kb_id(db, kb_id, keywords, run_status, types, suffix)
@@ -1643,11 +1457,7 @@ def get_filter(
 
 
 @router.post("/web_parse", summary="解析网页（按 provider 调用）", response_description="返回网页文本与原始响应")
-def web_parse(
-        request: WebParseRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def web_parse(request: WebParseRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/web_parse` 解析网页（多 Provider）
 
@@ -1874,26 +1684,18 @@ def web_parse(
         return construct_error_response(e)
 
 
-@router.post('/infos', summary="获取文档信息", response_description="成功获取文档信息")
+@router.post("/infos", summary="获取文档信息", response_description="成功获取文档信息")
 def doc_infos(doc_ids: list[str], db: Session = Depends(get_db), user=Depends(manager)):
     for doc_id in doc_ids:
         if not DocumentService.accessible(db, doc_id, user.id):
-            return get_json_result(
-                data=False,
-                retmsg='No authorization.',
-                retcode=RetCode.AUTHENTICATION_ERROR
-            )
+            return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
     docs = DocumentService.get_by_ids(db, doc_ids)
     docs_dicts = DocumentService.serialize_documents(db, docs)
     return get_json_result(data=docs_dicts)
 
 
 @router.get("/thumbnails", summary="获取文档缩略图", response_description="成功获取文档缩略图")
-def thumbnails(
-        doc_ids: list[str] = Query(..., description="文档ID列表，例如 ?doc_ids=1&doc_ids=2"),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def thumbnails(doc_ids: list[str] = Query(..., description="文档ID列表，例如 ?doc_ids=1&doc_ids=2"), db: Session = Depends(get_db), user=Depends(manager)):
     if not doc_ids:
         return construct_json_result(data=False, message='Lack of "Document ID"', code=RetCode.ARGUMENT_ERROR)
 
@@ -1901,8 +1703,8 @@ def thumbnails(
         docs = DocumentService.get_thumbnails(db, doc_ids)
 
         for doc_item in docs:
-            if doc_item['thumbnail'] and not doc_item['thumbnail'].startswith(IMG_BASE64_PREFIX):
-                doc_item['thumbnail'] = f"/v1/document/image/{doc_item['kb_id']}-{doc_item['thumbnail']}"
+            if doc_item["thumbnail"] and not doc_item["thumbnail"].startswith(IMG_BASE64_PREFIX):
+                doc_item["thumbnail"] = f"/v1/document/image/{doc_item['kb_id']}-{doc_item['thumbnail']}"
 
         return get_json_result(data={d["id"]: d["thumbnail"] for d in docs})
     except Exception as e:
@@ -1910,11 +1712,7 @@ def thumbnails(
 
 
 @router.post("/change_status", summary="更改文档状态", response_description="成功更改文档状态")
-def change_status(
-        request_body: ChangeStatusRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def change_status(request_body: ChangeStatusRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/change_status` 更改文档状态接口
 
@@ -2133,8 +1931,7 @@ def change_status(
     """
     req = request_body.model_dump()
     if str(req["status"]) not in ["0", "1"]:
-        return construct_json_result(data=False, message='"Status" must be either 0 or 1!',
-                                     code=RetCode.ARGUMENT_ERROR)
+        return construct_json_result(data=False, message='"Status" must be either 0 or 1!', code=RetCode.ARGUMENT_ERROR)
 
     # 处理兼容性：优先使用 doc_ids，如果不存在则使用 doc_id
     doc_ids = req.get("doc_ids")
@@ -2146,8 +1943,7 @@ def change_status(
         doc_ids = [doc_ids]
 
     if not doc_ids:
-        return construct_json_result(data=False, message="Document ID(s) required!",
-                                     code=RetCode.ARGUMENT_ERROR)
+        return construct_json_result(data=False, message="Document ID(s) required!", code=RetCode.ARGUMENT_ERROR)
 
     result = {}
     has_error = False
@@ -2211,54 +2007,43 @@ def change_status(
 
 @router.post("/change_auth", summary="更改文档授权", response_description="成功更改文档授权")
 def change_auth(
-        request_body: ChangeAuthRequest,
-        auths: str = Query(),  # labels 是一个 JSON 格式的字符串
-        db: Session = Depends(get_db),
-        user=Depends(manager)
+    request_body: ChangeAuthRequest,
+    auths: str = Query(),  # labels 是一个 JSON 格式的字符串
+    db: Session = Depends(get_db),
+    user=Depends(manager),
 ):
     req = request_body.model_dump()
     if not DocumentService.accessible(db, req["doc_id"], user.id):
-        return get_json_result(
-            data=False,
-            retmsg='No authorization.',
-            retcode=RetCode.AUTHENTICATION_ERROR)
+        return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
 
     try:
         doc = DocumentService.get_by_id(db, req["doc_id"])
         if not doc:
-            return construct_json_result(data=False, message="Document not found!",
-                                         code=RetCode.ARGUMENT_ERROR)
+            return construct_json_result(data=False, message="Document not found!", code=RetCode.ARGUMENT_ERROR)
         kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
         if not kb:
-            return construct_json_result(data=False, message="Can't find this dataset!",
-                                         code=RetCode.ARGUMENT_ERROR)
+            return construct_json_result(data=False, message="Can't find this dataset!", code=RetCode.ARGUMENT_ERROR)
         if isinstance(auths, str):
             try:
                 auths = json.loads(auths)
                 if not isinstance(auths, list) or not all(isinstance(auth, str) for auth in auths):
-                    raise ValueError('auths must be a list of strings.')
+                    raise ValueError("auths must be a list of strings.")
             except json.JSONDecodeError:
                 raise ValueError('Invalid JSON format for "auths".')
         elif auths is not None:
-            raise ValueError('Auth must be a JSON-encoded list of strings or None.')
+            raise ValueError("Auth must be a JSON-encoded list of strings or None.")
         if not DocumentService.update_by_id(db, req["doc_id"], {"auth": json.dumps(auths) if auths else None}):
-            return construct_json_result(data=False, message="Database error (Document update)!",
-                                         code=RetCode.ARGUMENT_ERROR)
+            return construct_json_result(data=False, message="Database error (Document update)!", code=RetCode.ARGUMENT_ERROR)
 
         # auth = str(req["auth"])
-        settings.docStoreConn.update({"doc_id": req["doc_id"]}, {"auth": auths},
-                                     search.index_name_one(kb.tenant_id, kb.name), doc.kb_id)
+        settings.docStoreConn.update({"doc_id": req["doc_id"]}, {"auth": auths}, search.index_name_one(kb.tenant_id, kb.name), doc.kb_id)
         return construct_json_result(data=True)
     except Exception as e:
         return construct_json_result(code=RetCode.ARGUMENT_ERROR, message=str(e))
 
 
 @router.post("/rm", summary="删除文档", response_description="成功删除文档")
-def rm(
-        request_body: RemoveRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def rm(request_body: RemoveRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/rm` 删除文档接口
 
@@ -2442,11 +2227,7 @@ def rm(
 
     for doc_id in doc_ids:
         if not DocumentService.accessible4deletion(db, doc_id, user.id):
-            return get_json_result(
-                data=False,
-                retmsg='No authorization.',
-                retcode=RetCode.AUTHENTICATION_ERROR
-            )
+            return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
     errors = FileService.delete_docs(db, doc_ids, user.id)
 
     if errors:
@@ -2456,11 +2237,7 @@ def rm(
 
 
 @router.post("/run", summary="运行任务", response_description="成功运行任务")
-def run(
-        request_body: RunRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def run(request_body: RunRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/run` 运行文档处理任务接口
 
@@ -2657,11 +2434,7 @@ def run(
 
     for doc_id in req["doc_ids"]:
         if not DocumentService.accessible(db, doc_id, user.id):
-            return get_json_result(
-                data=False,
-                retmsg='No authorization.',
-                retcode=RetCode.AUTHENTICATION_ERROR
-            )
+            return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
 
     try:
         kb_table_num_map = {}
@@ -2677,8 +2450,7 @@ def run(
             kb = KnowledgebaseService.get_by_id(db, kb_id)
             tenant_id = kb.tenant_id
             if not tenant_id:
-                return construct_json_result(data=False, message="Tenant not found!",
-                                             code=RetCode.ARGUMENT_ERROR)
+                return construct_json_result(data=False, message="Tenant not found!", code=RetCode.ARGUMENT_ERROR)
 
             if str(req["run"]) == TaskStatus.CANCEL.value:
                 tasks = list(TaskService.query(db, doc_id=id))
@@ -2688,8 +2460,7 @@ def run(
                 else:
                     return get_data_error_result(retmsg="Cannot cancel a task that is not in RUNNING status")
 
-            if all([("delete" not in req or req["delete"]), str(req["run"]) == TaskStatus.RUNNING.value,
-                    str(d["run"]) == TaskStatus.DONE.value]):
+            if all([("delete" not in req or req["delete"]), str(req["run"]) == TaskStatus.RUNNING.value, str(d["run"]) == TaskStatus.DONE.value]):
                 DocumentService.clear_chunk_num_when_rerun(db, d["id"])
 
             DocumentService.update_by_id(db, id, info)
@@ -2703,19 +2474,11 @@ def run(
                     db_type = settings.docStoreConn.db_type()
                     if db_type == "milvus":
                         if settings.docStoreConn.has_collection(collection_name):
-                            delete_result = settings.docStoreConn.delete(
-                                condition={"doc_id": d["id"]},
-                                index_name=collection_name,
-                                dataset_id=kb.id
-                            )
+                            delete_result = settings.docStoreConn.delete(condition={"doc_id": d["id"]}, index_name=collection_name, dataset_id=kb.id)
                     else:
                         if settings.docStoreConn.index_exist(search.index_name(tenant_id, [kb.name]), kb_id):
                             # ES/OpenSearch/Infinity 使用位置参数: condition, index_name, knowledgebase_id
-                            delete_result = settings.docStoreConn.delete(
-                                {"doc_id": d["id"]},
-                                collection_name,
-                                kb.id
-                            )
+                            delete_result = settings.docStoreConn.delete({"doc_id": d["id"]}, collection_name, kb.id)
                     if delete_result is None:
                         return construct_json_result(data=False, message="Doc store delete failed!", code=RetCode.ARGUMENT_ERROR)
                 except Exception as e:
@@ -2735,40 +2498,27 @@ def run(
 
 
 @router.post("/rename", summary="[Deprecated] 重命名文档", response_description="成功重命名文档", deprecated=True)
-def rename(
-        request_body: RenameRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def rename(request_body: RenameRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request_body.model_dump()
 
     if not DocumentService.accessible(db, req["doc_id"], user.id):
-        return get_json_result(
-            data=False,
-            retmsg='No authorization.',
-            retcode=RetCode.AUTHENTICATION_ERROR
-        )
+        return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
 
     try:
         doc = DocumentService.get_by_id(db, req["doc_id"])
         if not doc:
-            return construct_json_result(data=False, message="Document not found!",
-                                         code=RetCode.ARGUMENT_ERROR)
+            return construct_json_result(data=False, message="Document not found!", code=RetCode.ARGUMENT_ERROR)
         if pathlib.Path(req["name"].lower()).suffix != pathlib.Path(doc.name.lower()).suffix:
-            return construct_json_result(data=False, message="The extension of file can't be changed",
-                                         code=RetCode.ARGUMENT_ERROR)
+            return construct_json_result(data=False, message="The extension of file can't be changed", code=RetCode.ARGUMENT_ERROR)
         if len(req["name"].encode("utf-8")) > FILE_NAME_LEN_LIMIT:
-            return construct_json_result(data=False, message=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.",
-                                         code=RetCode.ARGUMENT_ERROR)
+            return construct_json_result(data=False, message=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.", code=RetCode.ARGUMENT_ERROR)
 
         for d in DocumentService.query(db, name=req["name"], kb_id=doc.kb_id):
             if d.name == req["name"]:
-                return construct_json_result(data=False, message="Duplicated document name in the same dataset.",
-                                             code=RetCode.ARGUMENT_ERROR)
+                return construct_json_result(data=False, message="Duplicated document name in the same dataset.", code=RetCode.ARGUMENT_ERROR)
 
         if not DocumentService.update_by_id(db, req["doc_id"], {"name": req["name"]}):
-            return construct_json_result(data=False, message="Database error (Document rename)!",
-                                         code=RetCode.ARGUMENT_ERROR)
+            return construct_json_result(data=False, message="Database error (Document rename)!", code=RetCode.ARGUMENT_ERROR)
 
         informs = File2DocumentService.get_by_document_id(db, req["doc_id"])
         if informs:
@@ -2797,22 +2547,14 @@ def rename(
 
 
 @router.get("/get/{doc_id}", summary="获取文档内容", response_description="成功获取文档内容")
-def get_document(
-        doc_id: str,
-        action: str = Query("preview", description="preview: 仅预览; download: 下载(需 owner/admin 权限)"),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def get_document(doc_id: str, action: str = Query("preview", description="preview: 仅预览; download: 下载(需 owner/admin 权限)"), db: Session = Depends(get_db), user=Depends(manager)):
     try:
         doc = DocumentService.get_by_id(db, doc_id)
         if not doc:
-            return construct_json_result(data=False, message="Document not found!",
-                                         code=RetCode.ARGUMENT_ERROR)
+            return construct_json_result(data=False, message="Document not found!", code=RetCode.ARGUMENT_ERROR)
 
         if not DocumentService.accessible(db, doc_id, user.id):
-            return get_json_result(
-                data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR
-            )
+            return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
 
         if action == "download":
             kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
@@ -2852,11 +2594,7 @@ def get_document(
 
 
 @router.get("/download/{attachment_id}", summary="下载附件", response_description="成功获取附件内容")
-def download_attachment(
-        attachment_id: str,
-        ext: str = "markdown",
-        user=Depends(manager)
-):
+def download_attachment(attachment_id: str, ext: str = "markdown", user=Depends(manager)):
     """
     下载 Message 组件导出的附件文件
 
@@ -2878,11 +2616,7 @@ def download_attachment(
 
 
 @router.post("/change_parser", summary="更改解析器", response_description="成功更改解析器")
-def change_parser(
-        request_body: ChangeParserRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def change_parser(request_body: ChangeParserRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     更改文档的解析器或Pipeline配置
 
@@ -2963,11 +2697,7 @@ def change_parser(
     req = request_body.model_dump()
 
     if not DocumentService.accessible(db, req["doc_id"], user.id):
-        return get_json_result(
-            data=False,
-            retmsg='No authorization.',
-            retcode=RetCode.AUTHENTICATION_ERROR
-        )
+        return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
 
     doc = DocumentService.get_by_id(db, req["doc_id"])
     if not doc:
@@ -2975,12 +2705,7 @@ def change_parser(
 
     def reset_doc():
         """重置文档的处理状态和数据"""
-        update_data = {
-            "parser_id": req.get("parser_id", doc.parser_id),
-            "progress": 0,
-            "progress_msg": "",
-            "run": TaskStatus.UNSTART.value
-        }
+        update_data = {"parser_id": req.get("parser_id", doc.parser_id), "progress": 0, "progress_msg": "", "run": TaskStatus.UNSTART.value}
         if req.get("pipeline_id"):
             update_data["pipeline_id"] = req["pipeline_id"]
 
@@ -2989,12 +2714,7 @@ def change_parser(
             return get_data_error_result(retmsg="Document not found!")
 
         if doc.token_num > 0:
-            e = DocumentService.increment_chunk_num(
-                db, doc.id, doc.kb_id,
-                doc.token_num * -1,
-                doc.chunk_num * -1,
-                doc.process_duration * -1
-            )
+            e = DocumentService.increment_chunk_num(db, doc.id, doc.kb_id, doc.token_num * -1, doc.chunk_num * -1, doc.process_duration * -1)
             if not e:
                 return get_data_error_result(retmsg="Document not found!")
 
@@ -3013,18 +2733,10 @@ def change_parser(
             try:
                 db_type = settings.docStoreConn.db_type()
                 if db_type == "milvus":
-                    delete_result = settings.docStoreConn.delete(
-                        condition={"doc_id": doc.id},
-                        index_name=collection_name,
-                        dataset_id=kb.id
-                    )
+                    delete_result = settings.docStoreConn.delete(condition={"doc_id": doc.id}, index_name=collection_name, dataset_id=kb.id)
                 else:
                     # ES/OpenSearch/Infinity 使用位置参数: condition, index_name, knowledgebase_id
-                    delete_result = settings.docStoreConn.delete(
-                        {"doc_id": doc.id},
-                        collection_name,
-                        kb.id
-                    )
+                    delete_result = settings.docStoreConn.delete({"doc_id": doc.id}, collection_name, kb.id)
                 if delete_result is None:
                     return get_data_error_result(retmsg="Doc store delete failed!")
             except Exception as e:
@@ -3054,8 +2766,7 @@ def change_parser(
                     return get_json_result(data=True)
 
             # 检查文档类型是否支持指定的解析器
-            if (doc.type == FileType.VISUAL and req["parser_id"] != "picture") or (
-                    re.search(r"\.(ppt|pptx|pages)$", doc.name) and req["parser_id"] != "presentation"):
+            if (doc.type == FileType.VISUAL and req["parser_id"] != "picture") or (re.search(r"\.(ppt|pptx|pages)$", doc.name) and req["parser_id"] != "presentation"):
                 return get_data_error_result(retmsg="Not supported yet!")
 
             # 更新parser_config（如果提供）
@@ -3073,8 +2784,8 @@ def change_parser(
 
 @router.get("/image/{image_id}", summary="获取图片", response_description="成功获取图片")
 def get_image(
-        image_id: str,
-        db: Session = Depends(get_db),
+    image_id: str,
+    db: Session = Depends(get_db),
 ):
     try:
         arr = image_id.split("-")
@@ -3101,8 +2812,8 @@ ARTIFACT_CONTENT_TYPES = {
 
 @router.get("/artifact/{filename}", summary="下载沙箱产物", response_description="成功获取沙箱产物文件")
 def get_artifact(
-        filename: str,
-        user=Depends(manager),
+    filename: str,
+    user=Depends(manager),
 ):
     """
     下载代码沙箱（CodeExec）执行产生的产物文件（图表、PDF、CSV 等）。
@@ -3133,11 +2844,7 @@ def get_artifact(
 
 
 @router.post("/parse", summary="解析网页或文件内容", response_description="成功解析内容")
-async def parse(
-        url: str | None = Form(None, description="网页URL（可选）"),
-        files: list[UploadFile] | None = File(None),
-        user=Depends(manager)
-):
+async def parse(url: str | None = Form(None, description="网页URL（可选）"), files: list[UploadFile] | None = File(None), user=Depends(manager)):
     """
     **功能描述**:
     此接口用于解析用户上传的文件或提供的网页URL内容，提取其中的文本信息并返回给用户。支持两种模式：基于URL解析网页内容或上传文件进行解析。
@@ -3189,22 +2896,17 @@ async def parse(
 
     if url:
         if not is_valid_url(url):
-            return get_json_result(
-                data=False, retmsg='The URL format is invalid', retcode=RetCode.ARGUMENT_ERROR)
+            return get_json_result(data=False, retmsg="The URL format is invalid", retcode=RetCode.ARGUMENT_ERROR)
         download_path = os.path.join(get_project_base_directory(), "logs/downloads")
         os.makedirs(download_path, exist_ok=True)
         from seleniumwire.webdriver import Chrome, ChromeOptions
+
         options = ChromeOptions()
-        options.add_argument('--headless')
-        options.add_argument('--disable-gpu')
-        options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
-        options.add_experimental_option('prefs', {
-            'download.default_directory': download_path,
-            'download.prompt_for_download': False,
-            'download.directory_upgrade': True,
-            'safebrowsing.enabled': True
-        })
+        options.add_argument("--headless")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_experimental_option("prefs", {"download.default_directory": download_path, "download.prompt_for_download": False, "download.directory_upgrade": True, "safebrowsing.enabled": True})
         # driver = Chrome(options=options)
         # driver.get(url)
         # res_headers = [r.response.headers for r in driver.requests]
@@ -3224,11 +2926,9 @@ async def parse(
                 return get_json_result(data="\n".join(sections))
 
             # 模拟 File 类逻辑
-            r = re.search(r'filename=\"([^\"]+)\"', str(res_headers))
+            r = re.search(r"filename=\"([^\"]+)\"", str(res_headers))
             if not r or not r.group(1):
-                return get_json_result(
-                    data=False, retmsg="Cannot identify downloaded file", retcode=RetCode.ARGUMENT_ERROR
-                )
+                return get_json_result(data=False, retmsg="Cannot identify downloaded file", retcode=RetCode.ARGUMENT_ERROR)
 
             class File:
                 filename: str
@@ -3244,9 +2944,7 @@ async def parse(
 
             filename = r.group(1).strip()
             if not _is_safe_download_filename(filename):
-                return get_json_result(
-                    data=False, retmsg="Invalid downloaded filename", retcode=RetCode.ARGUMENT_ERROR
-                )
+                return get_json_result(data=False, retmsg="Invalid downloaded filename", retcode=RetCode.ARGUMENT_ERROR)
             filepath = os.path.join(download_path, filename)
             f = File(filename, filepath)
             txt = FileService.parse_docs([f], user.id)
@@ -3254,18 +2952,13 @@ async def parse(
         except Exception as e:
             logging.exception("[ERROR] URL processing failed")
             # traceback.print_exc()
-            return get_json_result(
-                retcode=RetCode.SERVER_ERROR,
-                retmsg=str(e),
-                data=False
-            )
+            return get_json_result(retcode=RetCode.SERVER_ERROR, retmsg=str(e), data=False)
         finally:
             if driver:
                 driver.quit()
 
     if not files:
-        return get_json_result(
-            data=False, retmsg='No file part!', retcode=RetCode.ARGUMENT_ERROR)
+        return get_json_result(data=False, retmsg="No file part!", retcode=RetCode.ARGUMENT_ERROR)
 
     try:
         # 读取每个文件的内容为字节数据，并将文件名与内容作为元组传递给 parse_docs
@@ -3274,25 +2967,15 @@ async def parse(
         # 调用 parse_docs 处理文件内容
         txt = FileService.parse_docs(file_data, user.id)
         # print(f"[DEBUG] parse text from files: {txt}")  # Debug print
-        return get_json_result(
-            data=txt
-        )
+        return get_json_result(data=txt)
     except Exception as e:
         logging.exception("[ERROR] File processing failed")
         # traceback.print_exc()
-        return get_json_result(
-            retcode=RetCode.SERVER_ERROR,
-            retmsg=str(e),
-            data=False
-        )
+        return get_json_result(retcode=RetCode.SERVER_ERROR, retmsg=str(e), data=False)
 
 
 @router.post("/metadata/summary", summary="获取元数据汇总", response_description="成功获取元数据汇总")
-def metadata_summary(
-        request: MetadataSummaryRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def metadata_summary(request: MetadataSummaryRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """获取知识库中文档元数据的汇总统计。
 
     返回每个元数据键下各值的出现次数，按次数降序排列。
@@ -3309,11 +2992,7 @@ def metadata_summary(
         if KnowledgebaseService.query(db, tenant_id=tenant.tenant_id, id=kb_id):
             break
     else:
-        return get_json_result(
-            data=False,
-            retmsg="Only owner of dataset authorized for this operation.",
-            retcode=RetCode.OPERATING_ERROR
-        )
+        return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
     try:
         summary = DocMetadataService.get_metadata_summary(db, kb_id, request.doc_ids)
@@ -3323,11 +3002,7 @@ def metadata_summary(
 
 
 @router.post("/metadata/update", summary="批量更新元数据", response_description="成功批量更新元数据")
-def metadata_update(
-        request: MetadataUpdateRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def metadata_update(request: MetadataUpdateRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """批量更新或删除文档元数据。
 
     - **request.doc_ids**: 文档ID列表
@@ -3346,8 +3021,8 @@ def metadata_update(
     deletes = request.deletes or []
 
     # 转换 Pydantic 模型为字典
-    updates = [u.model_dump() if hasattr(u, 'model_dump') else u for u in updates]
-    deletes = [d.model_dump() if hasattr(d, 'model_dump') else d for d in deletes]
+    updates = [u.model_dump() if hasattr(u, "model_dump") else u for u in updates]
+    deletes = [d.model_dump() if hasattr(d, "model_dump") else d for d in deletes]
 
     if not isinstance(updates, list) or not isinstance(deletes, list):
         return get_json_result(data=False, retmsg="updates and deletes must be lists.", retcode=RetCode.ARGUMENT_ERROR)
@@ -3364,11 +3039,7 @@ def metadata_update(
 
 
 @router.post("/update_metadata_setting", summary="更新文档元数据设置", response_description="成功更新文档元数据设置")
-def update_metadata_setting(
-        request: UpdateMetadataSettingRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def update_metadata_setting(request: UpdateMetadataSettingRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """更新文档的元数据设置（存储在 parser_config 中）。
 
     - **request.doc_id**: 文档ID
@@ -3376,11 +3047,7 @@ def update_metadata_setting(
     - **返回值**: 更新后的文档信息
     """
     if not DocumentService.accessible(db, request.doc_id, user.id):
-        return get_json_result(
-            data=False,
-            retmsg="No authorization.",
-            retcode=RetCode.AUTHENTICATION_ERROR
-        )
+        return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
 
     doc = DocumentService.get_by_id(db, request.doc_id)
     if not doc:
@@ -3395,12 +3062,7 @@ def update_metadata_setting(
 
 
 @router.post("/upload_and_parse", summary="上传文件并解析", response_description="成功上传并解析文件")
-async def upload_and_parse(
-        conversation_id: str = Form(..., description="会话ID"),
-        files: list[UploadFile] = File(..., alias="file"),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+async def upload_and_parse(conversation_id: str = Form(..., description="会话ID"), files: list[UploadFile] = File(..., alias="file"), db: Session = Depends(get_db), user=Depends(manager)):
     """在对话上下文中上传文件并自动解析入库。
 
     - **conversation_id**: 会话ID，用于关联对话所绑定的知识库
@@ -3411,11 +3073,7 @@ async def upload_and_parse(
     file_contents = []
     for file_obj in files:
         if not file_obj.filename:
-            return get_json_result(
-                data=False,
-                retmsg="No file selected!",
-                retcode=RetCode.ARGUMENT_ERROR
-            )
+            return get_json_result(data=False, retmsg="No file selected!", retcode=RetCode.ARGUMENT_ERROR)
         # 读取文件内容并转换为 (bytes, filename) 元组
         file_contents.append((await file_obj.read(), file_obj.filename))
 
@@ -3423,27 +3081,15 @@ async def upload_and_parse(
         doc_ids = doc_upload_and_parse(db, conversation_id, file_contents, user.id)
         return get_json_result(data=doc_ids)
     except AssertionError as e:
-        return get_json_result(
-            data=False,
-            retmsg=str(e),
-            retcode=RetCode.ARGUMENT_ERROR
-        )
+        return get_json_result(data=False, retmsg=str(e), retcode=RetCode.ARGUMENT_ERROR)
     except LookupError as e:
-        return get_json_result(
-            data=False,
-            retmsg=str(e),
-            retcode=RetCode.DATA_ERROR
-        )
+        return get_json_result(data=False, retmsg=str(e), retcode=RetCode.DATA_ERROR)
     except Exception as e:
         return server_error_response(e)
 
 
 @router.post("/set_meta", summary="设置文档元数据", response_description="成功设置文档元数据")
-def set_meta(
-        request: SetMetaRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def set_meta(request: SetMetaRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """为指定文档写入自定义元数据键值对。
 
     - **request.doc_id**: 文档ID。
@@ -3452,16 +3098,10 @@ def set_meta(
     """
     req = request.model_dump()
     if not DocumentService.accessible(db, req["doc_id"], user.id):
-        return get_json_result(
-            data=False,
-            retmsg='No authorization.',
-            retcode=RetCode.AUTHENTICATION_ERROR
-        )
+        return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
 
     if not isinstance(req["meta"], dict):
-        return get_json_result(
-            data=False, retmsg='Meta data should be in Json map format, like {"key": "value"}',
-            retcode=RetCode.ARGUMENT_ERROR)
+        return get_json_result(data=False, retmsg='Meta data should be in Json map format, like {"key": "value"}', retcode=RetCode.ARGUMENT_ERROR)
 
     for key, value in req["meta"].items():
         if isinstance(value, list):
@@ -3485,8 +3125,7 @@ def set_meta(
 
         # meta已经是字典对象，不需要再解析
         if not DocMetadataService.update_document_metadata(db, req["doc_id"], req["meta"]):
-            return get_data_error_result(
-                retmsg="Database error (meta updates)!")
+            return get_data_error_result(retmsg="Database error (meta updates)!")
 
         return get_json_result(data=True)
     except Exception as e:
@@ -3495,12 +3134,12 @@ def set_meta(
 
 @router.post("/preview_chunks", summary="仅切片预览（不向量化/不入库，支持批次与直传文件）")
 async def preview_chunks(
-        request_body: PreviewChunksRequest | None = Body(None),
-        request_form: str | None = Form(None, alias="request", description="请求JSON（multipart时使用）"),
-        file: UploadFile | None = File(None, description="直传单文件（可选）"),
-        raw_req: Request = None,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
+    request_body: PreviewChunksRequest | None = Body(None),
+    request_form: str | None = Form(None, alias="request", description="请求JSON（multipart时使用）"),
+    file: UploadFile | None = File(None, description="直传单文件（可选）"),
+    raw_req: Request = None,
+    db: Session = Depends(get_db),
+    user=Depends(manager),
 ):
     """
     ### POST `/preview_chunks` 仅切片预览接口（支持批次）
@@ -4084,11 +3723,7 @@ async def preview_chunks(
                     return _error_response(RetCode.ARGUMENT_ERROR, str(e), HTTP_400_BAD_REQUEST)
         # 参数校验：支持 doc_id、文件上传或批次续取
         if file is None and not req.doc_id and not req.batch_id:
-            return get_json_result(
-                data=False,
-                retmsg='Either `doc_id` or `file` or `batch_id` is required.',
-                retcode=RetCode.ARGUMENT_ERROR
-            )
+            return get_json_result(data=False, retmsg="Either `doc_id` or `file` or `batch_id` is required.", retcode=RetCode.ARGUMENT_ERROR)
 
         # 分支一：文件预览（直传或批次续取）
         if not req.doc_id:
@@ -4110,11 +3745,7 @@ async def preview_chunks(
                 return get_json_result(data=data)
 
             if file is None:
-                return get_json_result(
-                    data=False,
-                    retmsg='Either supply `file` for preview or provide `batch_id/batch_size` for batch mode.',
-                    retcode=RetCode.ARGUMENT_ERROR
-                )
+                return get_json_result(data=False, retmsg="Either supply `file` for preview or provide `batch_id/batch_size` for batch mode.", retcode=RetCode.ARGUMENT_ERROR)
 
             file_bytes = await file.read()
             filename = file.filename or "uploaded"
@@ -4130,11 +3761,7 @@ async def preview_chunks(
 
         # 分支二：基于 doc_id
         if not DocumentService.accessible(db, req.doc_id, user.id):
-            return get_json_result(
-                data=False,
-                retmsg='No authorization.',
-                retcode=RetCode.AUTHENTICATION_ERROR
-            )
+            return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
         if req.batch_size or req.batch_id:
             data = await DocumentService.preview_document_chunks_batched(
                 db,
@@ -4173,14 +3800,13 @@ async def preview_chunks(
         return _error_response(RetCode.SERVER_ERROR, str(e), HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-@router.post("/run_analyze_v2", summary="启动文档分析任务 V2（异步，数据库持久化，推荐）",
-             response_description="成功创建分析任务")
+@router.post("/run_analyze_v2", summary="启动文档分析任务 V2（异步，数据库持久化，推荐）", response_description="成功创建分析任务")
 async def run_analyze_v2(
-        request_body: str | None = Form(default=None, alias="request"),
-        file: UploadFile | None = File(default=None),
-        enable_sse: bool = Form(default=False),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
+    request_body: str | None = Form(default=None, alias="request"),
+    file: UploadFile | None = File(default=None),
+    enable_sse: bool = Form(default=False),
+    db: Session = Depends(get_db),
+    user=Depends(manager),
 ):
     """
     ### POST `/run_analyze_v2` 启动文档分析任务（异步，数据库持久化）
@@ -4700,10 +4326,7 @@ async def run_analyze_v2(
 
         # 参数验证
         if not request.doc_id and not file:
-            raise HTTPException(
-                status_code=400,
-                detail="Must provide either doc_id or file"
-            )
+            raise HTTPException(status_code=400, detail="Must provide either doc_id or file")
 
         # 构建配置
         config = {
@@ -4731,35 +4354,19 @@ async def run_analyze_v2(
             "raptor_config": request.raptor_config.model_dump() if request.raptor_config else None,
             "metadata_fields": [f.model_dump() for f in request.metadata_fields] if request.metadata_fields else None,
             "dedup_strategy": request.dedup_strategy,
-            "enable_sse": enable_sse
+            "enable_sse": enable_sse,
         }
 
         # 创建任务并加入队列
-        task_id = await queue_analyze_v2_task(
-            db=db,
-            doc_id=request.doc_id,
-            kb_id=request.kb_id,
-            config=config,
-            user_id=user.id,
-            file=file,
-            priority=0
-        )
+        task_id = await queue_analyze_v2_task(db=db, doc_id=request.doc_id, kb_id=request.kb_id, config=config, user_id=user.id, file=file, priority=0)
 
         # 构建响应
-        response_data = {
-            "task_id": task_id,
-            "status": "pending",
-            "trace_url": f"/v1/document/trace_analyze/{task_id}"
-        }
+        response_data = {"task_id": task_id, "status": "pending", "trace_url": f"/v1/document/trace_analyze/{task_id}"}
 
         if enable_sse:
             response_data["sse_url"] = f"/v1/document/analyze_events/{task_id}"
 
-        return construct_json_result(
-            data=response_data,
-            code=RetCode.SUCCESS,
-            message="Task created successfully"
-        )
+        return construct_json_result(data=response_data, code=RetCode.SUCCESS, message="Task created successfully")
 
     except HTTPException:
         raise
@@ -4772,11 +4379,7 @@ async def run_analyze_v2(
 
 
 @router.get("/trace_analyze/{task_id}", summary="查询分析任务进度", response_description="成功获取任务状态")
-async def trace_analyze(
-        task_id: str,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+async def trace_analyze(task_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### GET `/trace_analyze/{task_id}` 查询文档分析任务进度
 
@@ -4908,7 +4511,7 @@ async def trace_analyze(
             "process_duration": task.process_duration,
             "config": task_data.get("config"),
             "result": task_data.get("result") if status == "done" else None,
-            "error_msg": task.progress_msg if status == "failed" else None
+            "error_msg": task.progress_msg if status == "failed" else None,
         }
 
         return construct_json_result(data=result_data, code=RetCode.SUCCESS)
@@ -5004,7 +4607,7 @@ async def subscribe_to_analyze_event(request: Request, task_id: str):
 
         from core.utils.redis_conn import REDIS_CONN
 
-        last_id = '0-0'  # 从头开始读取
+        last_id = "0-0"  # 从头开始读取
         heartbeat_time = time.time()
         start_time = time.time()
 
@@ -5013,7 +4616,7 @@ async def subscribe_to_analyze_event(request: Request, task_id: str):
 
         # 发送连接消息
         yield b"event: connection\n"
-        yield b"data: {\"status\": \"connected\"}\n\n"
+        yield b'data: {"status": "connected"}\n\n'
 
         try:
             while True:
@@ -5027,7 +4630,7 @@ async def subscribe_to_analyze_event(request: Request, task_id: str):
                 if current_time - start_time > TIMEOUT:
                     logging.warning(f"SSE timeout for task {task_id}")
                     yield b"event: timeout\n"
-                    yield b"data: {\"error\": \"Connection timeout\"}\n\n"
+                    yield b'data: {"error": "Connection timeout"}\n\n'
                     break
 
                 # 从 Redis Stream 读取 SSE 事件
@@ -5035,7 +4638,7 @@ async def subscribe_to_analyze_event(request: Request, task_id: str):
                     task_id=task_id,
                     last_id=last_id,
                     count=10,
-                    block=1000  # 阻塞 1 秒
+                    block=1000,  # 阻塞 1 秒
                 )
 
                 if messages:
@@ -5051,7 +4654,7 @@ async def subscribe_to_analyze_event(request: Request, task_id: str):
                         yield f"data: {data}\n\n".encode()
 
                         # 如果是完成或错误，关闭连接
-                        if event_type in ['complete', 'error']:
+                        if event_type in ["complete", "error"]:
                             logging.info(f"Task {task_id} ended with {event_type}")
                             return
 
@@ -5071,24 +4674,11 @@ async def subscribe_to_analyze_event(request: Request, task_id: str):
             yield b"event: error\n"
             yield f"data: {error_data}\n\n".encode()
 
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
-    )
+    return StreamingResponse(event_generator(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})
 
 
 @router.post("/analyze_v2", summary="文档智能分析 V2 (Pipeline - 同步)", response_description="成功分析文档")
-async def analyze_document_v2(
-        request_body: str | None = Form(default=None, alias="request"),
-        file: UploadFile | None = File(default=None),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+async def analyze_document_v2(request_body: str | None = Form(default=None, alias="request"), file: UploadFile | None = File(default=None), db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/analyze_v2` 文档智能分析接口 V2（同步执行）
 
@@ -5376,16 +4966,10 @@ async def analyze_document_v2(
 
         # 参数验证
         if not request.doc_id and not file:
-            raise HTTPException(
-                status_code=400,
-                detail="Must provide either doc_id or file"
-            )
+            raise HTTPException(status_code=400, detail="Must provide either doc_id or file")
 
         if request.doc_id and file:
-            raise HTTPException(
-                status_code=400,
-                detail="Cannot provide both doc_id and file"
-            )
+            raise HTTPException(status_code=400, detail="Cannot provide both doc_id and file")
 
         # 调用服务（使用 core/flow 逻辑）
         service = PipelineAnalysisService(db, user.id)
@@ -5409,7 +4993,7 @@ async def analyze_document_v2(
             splitter_config=request.splitter_config.model_dump() if request.splitter_config else None,
             raptor_config=request.raptor_config.model_dump() if request.raptor_config else None,
             metadata_fields=[f.model_dump() for f in request.metadata_fields] if request.metadata_fields else None,
-            dedup_strategy=request.dedup_strategy
+            dedup_strategy=request.dedup_strategy,
         )
 
         return construct_json_result(data=result, code=RetCode.SUCCESS, message="success")
@@ -5426,16 +5010,16 @@ async def analyze_document_v2(
 
 @router.post("/analyze", summary="文档智能分析", response_description="成功分析文档")
 async def analyze_document(
-        doc_id: str | None = Form(default=None),
-        file: UploadFile | None = File(default=None),
-        kb_id: str | None = Form(default=None),
-        include_summary: bool = Form(default=True),
-        include_tags: bool = Form(default=True),
-        summary_type: str = Form(default="short"),
-        raptor_config: str | None = Form(default=None),  # JSON字符串
-        use_cache: bool = Form(default=True),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
+    doc_id: str | None = Form(default=None),
+    file: UploadFile | None = File(default=None),
+    kb_id: str | None = Form(default=None),
+    include_summary: bool = Form(default=True),
+    include_tags: bool = Form(default=True),
+    summary_type: str = Form(default="short"),
+    raptor_config: str | None = Form(default=None),  # JSON字符串
+    use_cache: bool = Form(default=True),
+    db: Session = Depends(get_db),
+    user=Depends(manager),
 ):
     """
     ### POST `/analyze` 文档智能分析接口
@@ -5681,22 +5265,13 @@ async def analyze_document(
     try:
         # 参数验证
         if not doc_id and not file:
-            raise HTTPException(
-                status_code=400,
-                detail="Must provide either doc_id or file"
-            )
+            raise HTTPException(status_code=400, detail="Must provide either doc_id or file")
 
         if doc_id and file:
-            raise HTTPException(
-                status_code=400,
-                detail="Cannot provide both doc_id and file"
-            )
+            raise HTTPException(status_code=400, detail="Cannot provide both doc_id and file")
 
         if doc_id and not kb_id:
-            raise HTTPException(
-                status_code=400,
-                detail="kb_id is required when using doc_id"
-            )
+            raise HTTPException(status_code=400, detail="kb_id is required when using doc_id")
 
         # doc_id模式: 验证文档状态
         if doc_id:
@@ -5718,14 +5293,7 @@ async def analyze_document(
         # 调用分析服务
         analysis_service = DocumentAnalysisService(db, user.id)
         result = await analysis_service.analyze_document(
-            doc_id=doc_id,
-            file=file,
-            kb_id=kb_id,
-            include_summary=include_summary,
-            include_tags=include_tags,
-            summary_type=summary_type,
-            raptor_config=raptor_config_dict,
-            use_cache=use_cache
+            doc_id=doc_id, file=file, kb_id=kb_id, include_summary=include_summary, include_tags=include_tags, summary_type=summary_type, raptor_config=raptor_config_dict, use_cache=use_cache
         )
 
         return construct_json_result(data=result)
@@ -5738,12 +5306,7 @@ async def analyze_document(
 
 
 @router.get("/{doc_id}/tags", summary="获取文档标签", response_description="成功获取文档标签")
-async def get_document_tags(
-        doc_id: str,
-        kb_id: str = Query(..., description="知识库ID"),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+async def get_document_tags(doc_id: str, kb_id: str = Query(..., description="知识库ID"), db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### GET `/{doc_id}/tags` 快速获取文档标签
 
@@ -5792,20 +5355,10 @@ async def get_document_tags(
     """
     try:
         analysis_service = DocumentAnalysisService(db, user.id)
-        result = await analysis_service.analyze_document(
-            doc_id=doc_id,
-            kb_id=kb_id,
-            include_summary=False,
-            include_tags=True
-        )
+        result = await analysis_service.analyze_document(doc_id=doc_id, kb_id=kb_id, include_summary=False, include_tags=True)
 
         return construct_json_result(
-            data={
-                "doc_id": doc_id,
-                "semantic_tags": result.get("semantic_tags"),
-                "frequency_tags": result.get("frequency_tags"),
-                "combined_tags": result.get("combined_tags")
-            }
+            data={"doc_id": doc_id, "semantic_tags": result.get("semantic_tags"), "frequency_tags": result.get("frequency_tags"), "combined_tags": result.get("combined_tags")}
         )
 
     except Exception as e:
@@ -5815,11 +5368,7 @@ async def get_document_tags(
 
 @router.get("/{doc_id}/summary", summary="获取文档摘要", response_description="成功获取文档摘要")
 async def get_document_summary(
-        doc_id: str,
-        kb_id: str = Query(..., description="知识库ID"),
-        summary_type: str = Query(default="short", pattern="^(short|long)$"),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
+    doc_id: str, kb_id: str = Query(..., description="知识库ID"), summary_type: str = Query(default="short", pattern="^(short|long)$"), db: Session = Depends(get_db), user=Depends(manager)
 ):
     """
     ### GET `/{doc_id}/summary` 快速获取文档摘要
@@ -5875,20 +5424,9 @@ async def get_document_summary(
     """
     try:
         analysis_service = DocumentAnalysisService(db, user.id)
-        result = await analysis_service.analyze_document(
-            doc_id=doc_id,
-            kb_id=kb_id,
-            include_summary=True,
-            include_tags=False,
-            summary_type=summary_type
-        )
+        result = await analysis_service.analyze_document(doc_id=doc_id, kb_id=kb_id, include_summary=True, include_tags=False, summary_type=summary_type)
 
-        return construct_json_result(
-            data={
-                "doc_id": doc_id,
-                "summary": result.get("short_summary") if summary_type == "short" else result.get("long_summary")
-            }
-        )
+        return construct_json_result(data={"doc_id": doc_id, "summary": result.get("short_summary") if summary_type == "short" else result.get("long_summary")})
 
     except Exception as e:
         logging.exception(f"Get document summary failed: {e}")
@@ -5896,12 +5434,7 @@ async def get_document_summary(
 
 
 @router.post("/upload_info", summary="上传文件获取信息", response_description="成功上传文件")
-async def upload_info(
-        url: str | None = Query(None, description="URL地址，用于下载网页内容"),
-        file: list[UploadFile] | None = File(None),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+async def upload_info(url: str | None = Query(None, description="URL地址，用于下载网页内容"), file: list[UploadFile] | None = File(None), db: Session = Depends(get_db), user=Depends(manager)):
     """
     上传文件或从URL下载内容，获取文件信息
 

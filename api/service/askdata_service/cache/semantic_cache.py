@@ -18,6 +18,7 @@ logger = get_askdata_logger()
 @dataclass
 class CacheEntry:
     """缓存条目"""
+
     data: dict[str, Any]
     created_at: float
     ttl: int
@@ -84,7 +85,7 @@ class SemanticLayerCache:
         entry = CacheEntry(
             data=copy.deepcopy(data),  # 深拷贝避免外部修改影响缓存
             created_at=time.time(),
-            ttl=actual_ttl
+            ttl=actual_ttl,
         )
 
         with self._lock:
@@ -163,7 +164,7 @@ class SemanticLayerCache:
                 "valid_entries": len(self._cache) - expired_count,
                 "max_size": self._max_size,
                 "default_ttl": self._default_ttl,
-                "memory_usage_estimate": self._estimate_memory_usage()
+                "memory_usage_estimate": self._estimate_memory_usage(),
             }
 
     def clear_expired(self) -> int:
@@ -177,10 +178,7 @@ class SemanticLayerCache:
         current_time = time.time()
 
         with self._lock:
-            expired_keys = [
-                key for key, entry in self._cache.items()
-                if entry.is_expired
-            ]
+            expired_keys = [key for key, entry in self._cache.items() if entry.is_expired]
 
             for key in expired_keys:
                 del self._cache[key]
@@ -209,10 +207,7 @@ class SemanticLayerCache:
         if not self._cache:
             return
 
-        oldest_key = min(
-            self._cache.keys(),
-            key=lambda k: self._cache[k].created_at
-        )
+        oldest_key = min(self._cache.keys(), key=lambda k: self._cache[k].created_at)
         del self._cache[oldest_key]
         logger.debug(f"移除最旧的缓存条目: {oldest_key}")
 

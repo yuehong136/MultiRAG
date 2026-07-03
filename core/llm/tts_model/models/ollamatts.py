@@ -9,18 +9,12 @@ class OllamaTTS(Base):
             base_url = "https://api.ollama.ai/v1"
         self.model_name = model_name
         self.base_url = base_url
-        self.headers = {
-            "Content-Type": "application/json"
-        }
+        self.headers = {"Content-Type": "application/json"}
         if key and key != "x":
             self.headers["Authorization"] = f"Bearer {key}"
 
     def tts(self, text, voice="standard-voice"):
-        payload = {
-            "model": self.model_name,
-            "voice": voice,
-            "input": text
-        }
+        payload = {"model": self.model_name, "voice": voice, "input": text}
 
         response = requests.post(f"{self.base_url}/audio/tts", headers=self.headers, json=payload, stream=True)
 

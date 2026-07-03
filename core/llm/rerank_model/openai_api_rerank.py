@@ -14,10 +14,7 @@ class OpenAI_APIRerank(Base):
             self.base_url = urljoin(base_url, "/rerank")
         else:
             self.base_url = base_url
-        self.headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {key}"
-        }
+        self.headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
         self.model_name = model_name.split("___")[0]
 
     def similarity(self, query: str, texts: list):

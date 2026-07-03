@@ -22,6 +22,7 @@ DEFAULT_MATCH_VECTOR_TOPN = 10
 DEFAULT_MATCH_SPARSE_TOPN = 10
 VEC = list | np.ndarray
 
+
 @dataclass
 class SparseVector:
     indices: list[int]
@@ -134,12 +135,15 @@ MatchExpr = MatchTextExpr | MatchDenseExpr | MatchSparseExpr | MatchTensorExpr |
 class OrderByExpr:
     def __init__(self):
         self.fields = []
+
     def asc(self, field: str):
         self.fields.append((field, 0))
         return self
+
     def desc(self, field: str):
         self.fields.append((field, 1))
         return self
+
     def fields(self):
         return self.fields
 

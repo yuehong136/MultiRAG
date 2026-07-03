@@ -80,16 +80,14 @@ class SyncBase:
                 return
 
             except Exception as ex:
-                msg = "\n".join([
-                    "".join(traceback.format_exception_only(None, ex)).strip(),
-                    "".join(traceback.format_exception(None, ex, ex.__traceback__)).strip(),
-                ])
+                msg = "\n".join(
+                    [
+                        "".join(traceback.format_exception_only(None, ex)).strip(),
+                        "".join(traceback.format_exception(None, ex, ex.__traceback__)).strip(),
+                    ]
+                )
                 with db_connection() as db:
-                    SyncLogsService.update_by_id(db, task["id"], {
-                        "status": TaskStatus.FAIL,
-                        "full_exception_trace": msg,
-                        "error_msg": str(ex)
-                    })
+                    SyncLogsService.update_by_id(db, task["id"], {"status": TaskStatus.FAIL, "full_exception_trace": msg, "error_msg": str(ex)})
                 return
         with db_connection() as db:
             SyncLogsService.schedule(db, task["connector_id"], task["kb_id"], task["poll_range_start"])
@@ -136,17 +134,8 @@ class SyncBase:
             try:
                 with db_connection() as db:
                     kb = KnowledgebaseService.get_by_id(db, task["kb_id"])
-                    err, dids = SyncLogsService.duplicate_and_parse(
-                        db,
-                        kb, docs, task["tenant_id"],
-                        f"{self.SOURCE_NAME}/{task['connector_id']}",
-                        task["auto_parse"]
-                    )
-                    SyncLogsService.increase_docs(
-                        db,
-                        task["id"], max_update,
-                        len(docs), "\n".join(err), len(err)
-                    )
+                    err, dids = SyncLogsService.duplicate_and_parse(db, kb, docs, task["tenant_id"], f"{self.SOURCE_NAME}/{task['connector_id']}", task["auto_parse"])
+                    SyncLogsService.increase_docs(db, task["id"], max_update, len(docs), "\n".join(err), len(err))
 
                 doc_num += len(docs)
 
@@ -212,11 +201,7 @@ class _BlobLikeBase(SyncBase):
             )
         )
 
-        begin_info = (
-            "totally"
-            if task["reindex"] == "1" or not task["poll_range_start"]
-            else "from {}".format(task["poll_range_start"])
-        )
+        begin_info = "totally" if task["reindex"] == "1" or not task["poll_range_start"] else "from {}".format(task["poll_range_start"])
 
         logging.info(
             "Connect to {}: {}(prefix/{}) {}".format(
@@ -364,6 +349,7 @@ class IMAP(SyncBase):
     async def _generate(self, task):
         from common.data_source.config import DocumentSource
         from common.data_source.interfaces import StaticCredentialsProvider
+
         self.connector = ImapConnector(
             host=self.conf.get("imap_host"),
             port=self.conf.get("imap_port"),
@@ -373,7 +359,7 @@ class IMAP(SyncBase):
         self.connector.set_credentials_provider(credentials_provider)
         end_time = datetime.now(UTC).timestamp()
         if task["reindex"] == "1" or not task["poll_range_start"]:
-            start_time = end_time - self.conf.get("poll_range",30) * 24 * 60 * 60
+            start_time = end_time - self.conf.get("poll_range", 30) * 24 * 60 * 60
             begin_info = "totally"
         else:
             start_time = task["poll_range_start"].timestamp()
@@ -422,14 +408,14 @@ class IMAP(SyncBase):
             self.conf["imap_port"],
             self.conf["credentials"]["imap_username"],
             self.conf["imap_mailbox"],
-            begin_info
+            begin_info,
         )
         return wrapper()
 
 
 class Zendesk(SyncBase):
-
     SOURCE_NAME: str = FileSource.ZENDESK
+
     async def _generate(self, task: dict):
         self.connector = ZendeskConnector(content_type=self.conf.get("zendesk_content_type"))
         self.connector.load_credentials(self.conf["credentials"])
@@ -442,11 +428,7 @@ class Zendesk(SyncBase):
             start_time = task["poll_range_start"].timestamp()
             begin_info = f"from {task['poll_range_start']}"
 
-        raw_batch_size = (
-            self.conf.get("sync_batch_size")
-            or self.conf.get("batch_size")
-            or INDEX_BATCH_SIZE
-        )
+        raw_batch_size = self.conf.get("sync_batch_size") or self.conf.get("batch_size") or INDEX_BATCH_SIZE
         try:
             batch_size = int(raw_batch_size)
         except (TypeError, ValueError):
@@ -463,11 +445,7 @@ class Zendesk(SyncBase):
 
             while checkpoint.has_more:
                 wrapper = CheckpointOutputWrapper()
-                doc_generator = wrapper(
-                    self.connector.load_from_checkpoint(
-                        start_time, end_time, checkpoint
-                    )
-                )
+                doc_generator = wrapper(self.connector.load_from_checkpoint(start_time, end_time, checkpoint))
 
                 for document, failure, next_checkpoint in doc_generator:
                     if failure is not None:
@@ -488,9 +466,7 @@ class Zendesk(SyncBase):
 
                 iterations += 1
                 if iterations > iteration_limit:
-                    raise RuntimeError(
-                        "Too many iterations while loading Zendesk documents."
-                    )
+                    raise RuntimeError("Too many iterations while loading Zendesk documents.")
 
             if pending_docs:
                 yield pending_docs
@@ -500,7 +476,7 @@ class Zendesk(SyncBase):
 
         logging.info(
             "Connect to Zendesk: subdomain(%s) %s",
-            self.conf['credentials'].get("zendesk_subdomain"),
+            self.conf["credentials"].get("zendesk_subdomain"),
             begin_info,
         )
 
@@ -627,9 +603,7 @@ class Dropbox(SyncBase):
             begin_info = "totally"
         else:
             poll_start = task["poll_range_start"]
-            document_generator = self.connector.poll_source(
-                poll_start.timestamp(), datetime.now(UTC).timestamp()
-            )
+            document_generator = self.connector.poll_source(poll_start.timestamp(), datetime.now(UTC).timestamp())
             begin_info = f"from {poll_start}"
 
         logging.info(f"[Dropbox] Connect to Dropbox {begin_info}")
@@ -789,9 +763,7 @@ class Jira(SyncBase):
                 )
                 for document, failure, next_checkpoint in generator:
                     if failure is not None:
-                        logging.warning(
-                            f"[Jira] Jira connector failure: {getattr(failure, 'failure_message', failure)}"
-                        )
+                        logging.warning(f"[Jira] Jira connector failure: {getattr(failure, 'failure_message', failure)}")
                         continue
                     if document is not None:
                         pending_docs.append(document)
@@ -854,10 +826,7 @@ class WebDAV(SyncBase):
     SOURCE_NAME: str = FileSource.WEBDAV
 
     async def _generate(self, task: dict):
-        self.connector = WebDAVConnector(
-            base_url=self.conf["base_url"],
-            remote_path=self.conf.get("remote_path", "/")
-        )
+        self.connector = WebDAVConnector(base_url=self.conf["base_url"], remote_path=self.conf.get("remote_path", "/"))
         self.connector.set_allow_images(self.conf.get("allow_images", False))
         self.connector.load_credentials(self.conf["credentials"])
 
@@ -874,11 +843,7 @@ class WebDAV(SyncBase):
             document_batch_generator = self.connector.poll_source(start_ts, end_ts)
             begin_info = "from {}".format(task["poll_range_start"])
 
-        logging.info("Connect to WebDAV: {}(path: {}) {}".format(
-            self.conf["base_url"],
-            self.conf.get("remote_path", "/"),
-            begin_info
-        ))
+        logging.info("Connect to WebDAV: {}(path: {}) {}".format(self.conf["base_url"], self.conf.get("remote_path", "/"), begin_info))
 
         def wrapper():
             yield from document_batch_generator
@@ -890,10 +855,7 @@ class Moodle(SyncBase):
     SOURCE_NAME: str = FileSource.MOODLE
 
     async def _generate(self, task: dict):
-        self.connector = MoodleConnector(
-            moodle_url=self.conf["moodle_url"],
-            batch_size=self.conf.get("batch_size", INDEX_BATCH_SIZE)
-        )
+        self.connector = MoodleConnector(moodle_url=self.conf["moodle_url"], batch_size=self.conf.get("batch_size", INDEX_BATCH_SIZE))
 
         self.connector.load_credentials(self.conf["credentials"])
 
@@ -922,18 +884,18 @@ class BOX(SyncBase):
             folder_id=self.conf.get("folder_id", "0"),
         )
 
-        credential = json.loads(self.conf['credentials']['box_tokens'])
+        credential = json.loads(self.conf["credentials"]["box_tokens"])
 
         auth = BoxOAuth(
             OAuthConfig(
-                client_id=credential['client_id'],
-                client_secret=credential['client_secret'],
+                client_id=credential["client_id"],
+                client_secret=credential["client_secret"],
             )
         )
 
         token = AccessToken(
-            access_token=credential['access_token'],
-            refresh_token=credential['refresh_token'],
+            access_token=credential["access_token"],
+            refresh_token=credential["refresh_token"],
         )
         auth.token_storage.store(token)
 
@@ -970,9 +932,7 @@ class Airtable(SyncBase):
         if "airtable_access_token" not in credentials:
             raise ValueError("Missing airtable_access_token in credentials")
 
-        self.connector.load_credentials(
-            {"airtable_access_token": credentials["airtable_access_token"]}
-        )
+        self.connector.load_credentials({"airtable_access_token": credentials["airtable_access_token"]})
 
         poll_start = task.get("poll_range_start")
 
@@ -1009,9 +969,7 @@ class Asana(SyncBase):
         if "asana_api_token_secret" not in credentials:
             raise ValueError("Missing asana_api_token_secret in credentials")
 
-        self.connector.load_credentials(
-            {"asana_api_token_secret": credentials["asana_api_token_secret"]}
-        )
+        self.connector.load_credentials({"asana_api_token_secret": credentials["asana_api_token_secret"]})
 
         if task.get("reindex") == "1" or not task.get("poll_range_start"):
             document_generator = self.connector.load_from_state()
@@ -1059,9 +1017,7 @@ class Github(SyncBase):
         if "github_access_token" not in credentials:
             raise ValueError("Missing github_access_token in credentials")
 
-        self.connector.load_credentials(
-            {"github_access_token": credentials["github_access_token"]}
-        )
+        self.connector.load_credentials({"github_access_token": credentials["github_access_token"]})
 
         file_list = None
         if task.get("reindex") == "1" or not task.get("poll_range_start"):
@@ -1077,12 +1033,7 @@ class Github(SyncBase):
 
         end_time = datetime.now(UTC)
 
-        runner = ConnectorRunner(
-            connector=self.connector,
-            batch_size=self.conf.get("batch_size", INDEX_BATCH_SIZE),
-            include_permissions=False,
-            time_range=(start_time, end_time)
-        )
+        runner = ConnectorRunner(connector=self.connector, batch_size=self.conf.get("batch_size", INDEX_BATCH_SIZE), include_permissions=False, time_range=(start_time, end_time))
 
         def document_batches():
             checkpoint = self.connector.build_dummy_checkpoint()
@@ -1124,11 +1075,11 @@ class Gitlab(SyncBase):
         """
 
         self.connector = GitlabConnector(
-            project_owner= self.conf.get("project_owner"),
-            project_name= self.conf.get("project_name"),
-            include_mrs = self.conf.get("include_mrs", False),
-            include_issues = self.conf.get("include_issues", False),
-            include_code_files=  self.conf.get("include_code_files", False),
+            project_owner=self.conf.get("project_owner"),
+            project_name=self.conf.get("project_name"),
+            include_mrs=self.conf.get("include_mrs", False),
+            include_issues=self.conf.get("include_issues", False),
+            include_code_files=self.conf.get("include_code_files", False),
         )
 
         self.connector.load_credentials(
@@ -1147,10 +1098,7 @@ class Gitlab(SyncBase):
                 document_generator = self.connector.load_from_state()
                 begin_info = "totally"
             else:
-                document_generator = self.connector.poll_source(
-                    poll_start.timestamp(),
-                    datetime.now(UTC).timestamp()
-                )
+                document_generator = self.connector.poll_source(poll_start.timestamp(), datetime.now(UTC).timestamp())
                 begin_info = f"from {poll_start}"
         logging.info("Connect to Gitlab: ({}) {}".format(self.conf["project_name"], begin_info))
         return document_generator
@@ -1186,18 +1134,13 @@ class Bitbucket(SyncBase):
             checkpoint = self.connector.build_dummy_checkpoint()
 
             while checkpoint.has_more:
-                gen = self.connector.load_from_checkpoint(
-                    start=start_time.timestamp(),
-                    end=end_time.timestamp(),
-                    checkpoint=checkpoint)
+                gen = self.connector.load_from_checkpoint(start=start_time.timestamp(), end=end_time.timestamp(), checkpoint=checkpoint)
 
                 while True:
                     try:
                         item = next(gen)
                         if isinstance(item, ConnectorFailure):
-                            logging.exception(
-                                "Bitbucket connector failure: %s",
-                                item.failure_message)
+                            logging.exception("Bitbucket connector failure: %s", item.failure_message)
                             break
                         yield [item]
                     except StopIteration as e:
@@ -1214,6 +1157,7 @@ class Bitbucket(SyncBase):
         )
 
         return wrapper()
+
 
 class SeaFile(SyncBase):
     SOURCE_NAME: str = FileSource.SEAFILE
@@ -1250,7 +1194,10 @@ class SeaFile(SyncBase):
 
         logging.info(
             "Connect to SeaFile: %s (scope=%s%s) %s",
-            conf["seafile_url"], scope, extra, begin_info,
+            conf["seafile_url"],
+            scope,
+            extra,
+            begin_info,
         )
         return document_generator
 
@@ -1272,9 +1219,7 @@ class DingTalkAITable(SyncBase):
         if "access_token" not in credentials:
             raise ValueError("Missing access_token in credentials")
 
-        self.connector.load_credentials(
-            {"access_token": credentials["access_token"]}
-        )
+        self.connector.load_credentials({"access_token": credentials["access_token"]})
 
         poll_start = task.get("poll_range_start")
 
@@ -1327,10 +1272,7 @@ class MySQL(SyncBase):
             begin_info = "totally"
         else:
             poll_start = task["poll_range_start"]
-            document_generator = self.connector.poll_source(
-                poll_start.timestamp(),
-                datetime.now(UTC).timestamp()
-            )
+            document_generator = self.connector.poll_source(poll_start.timestamp(), datetime.now(UTC).timestamp())
             begin_info = f"from {poll_start}"
 
         logging.info(f"[MySQL] Connect to {self.conf.get('host')}:{self.conf.get('database')} {begin_info}")
@@ -1366,10 +1308,7 @@ class PostgreSQL(SyncBase):
             begin_info = "totally"
         else:
             poll_start = task["poll_range_start"]
-            document_generator = self.connector.poll_source(
-                poll_start.timestamp(),
-                datetime.now(UTC).timestamp()
-            )
+            document_generator = self.connector.poll_source(poll_start.timestamp(), datetime.now(UTC).timestamp())
             begin_info = f"from {poll_start}"
 
         logging.info(f"[PostgreSQL] Connect to {self.conf.get('host')}:{self.conf.get('database')} {begin_info}")

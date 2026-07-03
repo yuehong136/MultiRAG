@@ -16,9 +16,19 @@ class AskDataHistoryService(CommonService):
         super().__init__(AskDataHistory)
 
     @classmethod
-    def insert_record(cls, db: Session, conversation_id: str, ask_id: str, data: str,
-                      user_id: str = None, status: str = "1", round_id: str = None, user_question: str = "",
-                      processed_semantic_layer: str = None, sql_info: str = None) -> AskDataHistory:
+    def insert_record(
+        cls,
+        db: Session,
+        conversation_id: str,
+        ask_id: str,
+        data: str,
+        user_id: str = None,
+        status: str = "1",
+        round_id: str = None,
+        user_question: str = "",
+        processed_semantic_layer: str = None,
+        sql_info: str = None,
+    ) -> AskDataHistory:
         """
         插入一条新的询问数据历史记录
 
@@ -44,7 +54,7 @@ class AskDataHistoryService(CommonService):
                 "round_id": round_id,
                 "user_question": user_question,
                 "processed_semantic_layer": processed_semantic_layer,
-                "sql_info": sql_info
+                "sql_info": sql_info,
             }
 
             # 使用CommonService的insert方法，它会自动处理时间字段
@@ -55,8 +65,7 @@ class AskDataHistoryService(CommonService):
             raise e
 
     @classmethod
-    def get_by_conversation_id(cls, db: Session, conversation_id: str,
-                               user_id: str = None, status: str = "1") -> list[AskDataHistory]:
+    def get_by_conversation_id(cls, db: Session, conversation_id: str, user_id: str = None, status: str = "1") -> list[AskDataHistory]:
         """
         根据conversation_id和user_id获取记录列表，按插入时间升序排列
 
@@ -70,10 +79,7 @@ class AskDataHistoryService(CommonService):
         - list[AskDataHistory]: 记录列表
         """
         try:
-            query = db.query(cls.model).filter(
-                cls.model.conversation_id == conversation_id,
-                cls.model.status == status
-            )
+            query = db.query(cls.model).filter(cls.model.conversation_id == conversation_id, cls.model.status == status)
 
             # 如果提供了user_id，添加user_id过滤条件
             if user_id is not None:
@@ -88,8 +94,7 @@ class AskDataHistoryService(CommonService):
             raise e
 
     @classmethod
-    def get_by_conversation_id_as_dict(cls, db: Session, conversation_id: str,
-                                       user_id: str = None, status: str = "1") -> list[dict]:
+    def get_by_conversation_id_as_dict(cls, db: Session, conversation_id: str, user_id: str = None, status: str = "1") -> list[dict]:
         """
         根据conversation_id和user_id获取记录列表（字典格式），按插入时间升序排列
 
@@ -112,9 +117,18 @@ class AskDataHistoryService(CommonService):
 
     # 新增的插入方法
     @classmethod
-    def add_history(cls, db: Session, conversation_id: str, ask_id: str, data: str, user_id: str, round_id: str = None,
-                    user_origin_question: str = "", rewritten_question: str | None = "",
-                    processed_semantic_layer: str = "") -> AskDataHistory:
+    def add_history(
+        cls,
+        db: Session,
+        conversation_id: str,
+        ask_id: str,
+        data: str,
+        user_id: str,
+        round_id: str = None,
+        user_origin_question: str = "",
+        rewritten_question: str | None = "",
+        processed_semantic_layer: str = "",
+    ) -> AskDataHistory:
         """
         新增一条历史记录
 
@@ -129,7 +143,9 @@ class AskDataHistoryService(CommonService):
         - AskDataHistory: 创建的记录对象
         """
         logging.info(f"Adding history for conversation_id: {conversation_id}, ask_id: {ask_id}")
-        json_data = json.loads(data, )
+        json_data = json.loads(
+            data,
+        )
         user_question = {
             "user_original_question": user_origin_question,
             "rewritten_question": rewritten_question,
@@ -152,7 +168,7 @@ class AskDataHistoryService(CommonService):
                 round_id=round_id,
                 user_question=json.dumps(user_question, ensure_ascii=False),
                 processed_semantic_layer=processed_semantic_layer,
-                sql_info=json.dumps(sql_info, ensure_ascii=False)
+                sql_info=json.dumps(sql_info, ensure_ascii=False),
             )
             logging.info(f"Successfully added history record with id: {history_record.id}")
             return history_record
@@ -177,8 +193,7 @@ class AskDataHistoryService(CommonService):
         logging.info(f"Fetching history for conversation_id: {conversation_id}, user_id: {user_id}")
         try:
             history_records = cls.get_by_conversation_id_as_dict(db, conversation_id, user_id)
-            logging.info(
-                f"Found {len(history_records)} records for conversation_id: {conversation_id}, user_id: {user_id}")
+            logging.info(f"Found {len(history_records)} records for conversation_id: {conversation_id}, user_id: {user_id}")
             return history_records
         except Exception as e:
             logging.error(f"Failed to fetch history for conversation_id {conversation_id}, user_id {user_id}: {e}")
@@ -200,22 +215,14 @@ class AskDataHistoryService(CommonService):
         logging.info(f"Soft deleting records for conversation_id: {conversation_id}, user_id: {user_id}")
         try:
             updated_count = (
-                db.query(cls.model)
-                .filter(
-                    cls.model.conversation_id == conversation_id,
-                    cls.model.user_id == user_id,
-                    cls.model.status == "1"
-                )
-                .update({"status": "0"}, synchronize_session=False)
+                db.query(cls.model).filter(cls.model.conversation_id == conversation_id, cls.model.user_id == user_id, cls.model.status == "1").update({"status": "0"}, synchronize_session=False)
             )
             db.commit()
-            logging.info(
-                f"Successfully soft deleted {updated_count} records for conversation_id: {conversation_id}, user_id: {user_id}")
+            logging.info(f"Successfully soft deleted {updated_count} records for conversation_id: {conversation_id}, user_id: {user_id}")
             return updated_count
         except Exception as e:
             db.rollback()
-            logging.error(
-                f"Failed to soft delete records for conversation_id {conversation_id}, user_id {user_id}: {e}")
+            logging.error(f"Failed to soft delete records for conversation_id {conversation_id}, user_id {user_id}: {e}")
             raise
 
     @classmethod
@@ -233,15 +240,7 @@ class AskDataHistoryService(CommonService):
         """
         logging.info(f"Soft deleting records for ask_id: {ask_id}, user_id: {user_id}")
         try:
-            updated_count = (
-                db.query(cls.model)
-                .filter(
-                    cls.model.ask_id == ask_id,
-                    cls.model.user_id == user_id,
-                    cls.model.status == "1"
-                )
-                .update({"status": "0"}, synchronize_session=False)
-            )
+            updated_count = db.query(cls.model).filter(cls.model.ask_id == ask_id, cls.model.user_id == user_id, cls.model.status == "1").update({"status": "0"}, synchronize_session=False)
             db.commit()
             logging.info(f"Successfully soft deleted {updated_count} records for ask_id: {ask_id}, user_id: {user_id}")
             return updated_count
@@ -265,15 +264,7 @@ class AskDataHistoryService(CommonService):
         """
         logging.info(f"Fetching history for round_id: {round_id}")
         try:
-            records = (
-                db.query(cls.model)
-                .filter(
-                    cls.model.round_id == round_id,
-                    cls.model.status == status
-                )
-                .order_by(asc(cls.model.create_time))
-                .all()
-            )
+            records = db.query(cls.model).filter(cls.model.round_id == round_id, cls.model.status == status).order_by(asc(cls.model.create_time)).all()
 
             result = []
             for record in records:
@@ -286,19 +277,17 @@ class AskDataHistoryService(CommonService):
                         user_original_question = question_payload.get("user_original_question")
                         rewritten_question = question_payload.get("rewritten_question")
                     except (TypeError, ValueError) as parse_error:
-                        logging.warning(
-                            "Failed to parse user_question JSON for record %s: %s",
-                            record.id,
-                            parse_error
-                        )
+                        logging.warning("Failed to parse user_question JSON for record %s: %s", record.id, parse_error)
 
-                result.append({
-                    "user_original_question": user_original_question,
-                    "rewritten_question": rewritten_question,
-                    "round_id": record.round_id,
-                    "processed_semantic_layer": record.processed_semantic_layer,
-                    "sql_info": record.sql_info
-                })
+                result.append(
+                    {
+                        "user_original_question": user_original_question,
+                        "rewritten_question": rewritten_question,
+                        "round_id": record.round_id,
+                        "processed_semantic_layer": record.processed_semantic_layer,
+                        "sql_info": record.sql_info,
+                    }
+                )
 
             return result
         except Exception as e:

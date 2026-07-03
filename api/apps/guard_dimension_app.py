@@ -5,6 +5,7 @@
 @date：2025/01/11 18:00
 @desc: AI安全护栏维度管理接口
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -23,6 +24,7 @@ router = APIRouter()
 
 class CreateDimensionRequest(BaseModel):
     """创建维度请求模型"""
+
     code: str = Field(..., description="维度代码")
     name: str = Field(..., description="维度名称")
     description: str | None = Field(None, description="维度描述")
@@ -33,6 +35,7 @@ class CreateDimensionRequest(BaseModel):
 
 class UpdateDimensionRequest(BaseModel):
     """更新维度请求模型"""
+
     dimension_id: str = Field(..., description="维度ID")
     name: str | None = Field(None, description="维度名称")
     description: str | None = Field(None, description="维度描述")
@@ -41,12 +44,8 @@ class UpdateDimensionRequest(BaseModel):
     sort_order: int | None = Field(None, description="排序")
 
 
-@router.post('/create', summary="创建检测维度")
-def create_dimension(
-    request: CreateDimensionRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/create", summary="创建检测维度")
+def create_dimension(request: CreateDimensionRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     创建检测维度
 
@@ -68,7 +67,7 @@ def create_dimension(
             created_by=user.id,
             enabled=request.enabled,
             config=request.config,
-            sort_order=request.sort_order
+            sort_order=request.sort_order,
         )
 
         if dimension_id:
@@ -82,12 +81,8 @@ def create_dimension(
         return server_error_response(e)
 
 
-@router.get('/list', summary="获取维度列表")
-def list_dimensions(
-    enabled_only: bool = False,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/list", summary="获取维度列表")
+def list_dimensions(enabled_only: bool = False, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     获取维度列表
 
@@ -100,9 +95,7 @@ def list_dimensions(
         dict[str, Any]: 维度列表
     """
     try:
-        dimensions = GuardDimensionService.get_dimensions_by_tenant(
-            db, user.id, enabled_only
-        )
+        dimensions = GuardDimensionService.get_dimensions_by_tenant(db, user.id, enabled_only)
 
         return get_json_result(data=[dim.to_dict() for dim in dimensions])
 
@@ -110,12 +103,8 @@ def list_dimensions(
         return server_error_response(e)
 
 
-@router.put('/update', summary="更新检测维度")
-def update_dimension(
-    request: UpdateDimensionRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.put("/update", summary="更新检测维度")
+def update_dimension(request: UpdateDimensionRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     更新检测维度
 
@@ -128,12 +117,9 @@ def update_dimension(
         dict[str, Any]: 更新结果
     """
     try:
-        update_data = {k: v for k, v in request.model_dump().items()
-                      if v is not None and k != "dimension_id"}
+        update_data = {k: v for k, v in request.model_dump().items() if v is not None and k != "dimension_id"}
 
-        success = GuardDimensionService.update_dimension(
-            db, request.dimension_id, update_data
-        )
+        success = GuardDimensionService.update_dimension(db, request.dimension_id, update_data)
 
         if success:
             return get_json_result(data=True)
@@ -144,12 +130,8 @@ def update_dimension(
         return server_error_response(e)
 
 
-@router.delete('/{dimension_id}', summary="删除检测维度")
-def delete_dimension(
-    dimension_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.delete("/{dimension_id}", summary="删除检测维度")
+def delete_dimension(dimension_id: str, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     删除检测维度
 
@@ -173,11 +155,8 @@ def delete_dimension(
         return server_error_response(e)
 
 
-@router.get('/stats', summary="获取维度统计")
-def get_dimension_stats(
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/stats", summary="获取维度统计")
+def get_dimension_stats(db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     获取维度统计信息
 
@@ -196,11 +175,8 @@ def get_dimension_stats(
         return server_error_response(e)
 
 
-@router.post('/init', summary="初始化默认维度")
-def init_default_dimensions(
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/init", summary="初始化默认维度")
+def init_default_dimensions(db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     初始化默认维度
 
@@ -212,14 +188,9 @@ def init_default_dimensions(
         dict[str, Any]: 初始化结果
     """
     try:
-        dimension_ids = GuardDimensionService.init_default_dimensions(
-            db, user.id, user.id
-        )
+        dimension_ids = GuardDimensionService.init_default_dimensions(db, user.id, user.id)
 
-        return get_json_result(data={
-            "created_count": len(dimension_ids),
-            "dimension_ids": dimension_ids
-        })
+        return get_json_result(data={"created_count": len(dimension_ids), "dimension_ids": dimension_ids})
 
     except Exception as e:
         return server_error_response(e)

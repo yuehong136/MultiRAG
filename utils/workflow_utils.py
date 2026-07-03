@@ -6,10 +6,12 @@ import streamlit as st
 
 FASTAPI_PROCESS = None
 
+
 def generate_api():
     global FASTAPI_PROCESS
     command = ["uvicorn", "api.work_flow_api:app", "--reload"]
     FASTAPI_PROCESS = subprocess.Popen(command)
+
 
 def stop_fastapi_server():
     global FASTAPI_PROCESS
@@ -26,14 +28,13 @@ def stop_fastapi_server():
 
 
 def save_workflow():
-    if 'steps' in st.session_state:
-        steps = [{"step": step, "action": st.session_state[f"workflow_step_{i}"],
-                  "params": st.session_state.get(f"workflow_params_{i}", {})} for i, step in
-                 enumerate(st.session_state.steps)]
+    if "steps" in st.session_state:
+        steps = [{"step": step, "action": st.session_state[f"workflow_step_{i}"], "params": st.session_state.get(f"workflow_params_{i}", {})} for i, step in enumerate(st.session_state.steps)]
         workflow_json = json.dumps(steps, ensure_ascii=False, indent=4)
         st.download_button("导出当前编排", workflow_json, "workflow.json", "application/json")
     else:
         st.error("没有步骤可以保存！")
+
 
 def import_workflow():
     uploaded_file = st.file_uploader("上传编排的 JSON 文件", type="json")

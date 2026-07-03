@@ -125,11 +125,8 @@ def save_fill_log(request_id: str, stage: str, file_content: bytes, json_data: d
     return request_dir
 
 
-@router.post("/parse", summary="解析 DOCX 文件",
-             response_description="返回解析后的文档结构")
-async def stateless_parse(
-        file: UploadFile = File(...)
-):
+@router.post("/parse", summary="解析 DOCX 文件", response_description="返回解析后的文档结构")
+async def stateless_parse(file: UploadFile = File(...)):
     """
     ### POST `/v1/docx_marker/parse` 无状态解析接口
 
@@ -167,7 +164,7 @@ async def stateless_parse(
 
     外部系统自行管理文档存储，只需要解析能力。
     """
-    if not file.filename.endswith('.docx'):
+    if not file.filename.endswith(".docx"):
         raise HTTPException(status_code=400, detail="只支持 .docx 文件")
 
     ensure_temp_dir()
@@ -182,13 +179,7 @@ async def stateless_parse(
         # 解析文档
         parsed = parse_docx(temp_path, file.filename)
 
-        return get_json_result(
-            retmsg="Document parsed successfully.",
-            data={
-                "document": parsed.model_dump(),
-                "filename": file.filename
-            }
-        )
+        return get_json_result(retmsg="Document parsed successfully.", data={"document": parsed.model_dump(), "filename": file.filename})
     except Exception as e:
         logger.error(f"[parse] 解析失败: {e!s}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"解析失败: {e!s}")
@@ -198,11 +189,8 @@ async def stateless_parse(
             os.remove(temp_path)
 
 
-@router.post("/recognize", summary="自动识别待填项",
-             response_description="返回识别到的待填项列表")
-async def stateless_recognize(
-        file: UploadFile = File(...)
-):
+@router.post("/recognize", summary="自动识别待填项", response_description="返回识别到的待填项列表")
+async def stateless_recognize(file: UploadFile = File(...)):
     """
     ### POST `/v1/docx_marker/recognize` 无状态自动识别接口
 
@@ -255,7 +243,7 @@ async def stateless_recognize(
 
     外部系统自行管理标记数据，只需要识别能力。
     """
-    if not file.filename.endswith('.docx'):
+    if not file.filename.endswith(".docx"):
         raise HTTPException(status_code=400, detail="只支持 .docx 文件")
 
     ensure_temp_dir()
@@ -270,13 +258,7 @@ async def stateless_recognize(
         # 自动识别
         recognized = auto_recognize_placeholders(temp_path)
 
-        return get_json_result(
-            retmsg="Placeholders recognized successfully.",
-            data={
-                "placeholders": [p.model_dump() for p in recognized],
-                "total": len(recognized)
-            }
-        )
+        return get_json_result(retmsg="Placeholders recognized successfully.", data={"placeholders": [p.model_dump() for p in recognized], "total": len(recognized)})
     except Exception as e:
         logger.error(f"[recognize] 自动识别失败: {e!s}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"自动识别失败: {e!s}")
@@ -286,13 +268,8 @@ async def stateless_recognize(
             os.remove(temp_path)
 
 
-@router.post("/fill", summary="填充数据并返回文档",
-             response_description="返回填充后的文档（Base64 编码）")
-async def stateless_fill(
-        file: UploadFile = File(...),
-        placeholders: str = Form(...),
-        fields: str = Form(...)
-):
+@router.post("/fill", summary="填充数据并返回文档", response_description="返回填充后的文档（Base64 编码）")
+async def stateless_fill(file: UploadFile = File(...), placeholders: str = Form(...), fields: str = Form(...)):
     """
     ### POST `/v1/docx_marker/fill` 无状态填充接口
 
@@ -353,7 +330,7 @@ async def stateless_fill(
 
     外部系统自行管理文档和标记数据，只需要填充能力。
     """
-    if not file.filename.endswith('.docx'):
+    if not file.filename.endswith(".docx"):
         raise HTTPException(status_code=400, detail="只支持 .docx 文件")
 
     # 解析 JSON 参数
@@ -385,10 +362,7 @@ async def stateless_fill(
         content = await file.read()
 
         # 保存输入文件和 JSON 数据到日志目录
-        save_fill_log(request_id, "input", content, {
-            "placeholders": placeholders_data,
-            "fields": fields_data
-        }, file.filename)
+        save_fill_log(request_id, "input", content, {"placeholders": placeholders_data, "fields": fields_data}, file.filename)
         logger.info("[fill] 输入文件已保存到日志目录")
 
         with open(source_path, "wb") as f:
@@ -397,20 +371,18 @@ async def stateless_fill(
         # 构建数据字典，支持表格类型
         data_dict = {}
         for field in fields_data:
-            field_id = field.get('id')
+            field_id = field.get("id")
             if not field_id:
                 continue
-            if 'rows' in field and field['rows'] is not None:
+            if "rows" in field and field["rows"] is not None:
                 # 表格类型：包含 rows 数据
-                data_dict[field_id] = {"rows": field['rows'], "value": field.get('value', '')}
+                data_dict[field_id] = {"rows": field["rows"], "value": field.get("value", "")}
             else:
                 # 普通类型：只有 value
-                data_dict[field_id] = field.get('value', '')
+                data_dict[field_id] = field.get("value", "")
 
         # 检查是否有表格类型的 placeholder
-        has_table_placeholder = any(
-            p.get('type') in ('table', 'dynamic_table') for p in placeholders_data
-        )
+        has_table_placeholder = any(p.get("type") in ("table", "dynamic_table") for p in placeholders_data)
 
         # 填充文档
         if has_table_placeholder:
@@ -429,13 +401,7 @@ async def stateless_fill(
 
         base64_encoded_file = base64.b64encode(output_content).decode("utf-8")
 
-        return get_json_result(
-            retmsg="Document filled successfully.",
-            data={
-                "file": base64_encoded_file,
-                "filename": f"filled_{file.filename}"
-            }
-        )
+        return get_json_result(retmsg="Document filled successfully.", data={"file": base64_encoded_file, "filename": f"filled_{file.filename}"})
     except Exception as e:
         logger.error(f"[fill] 填充失败: {e!s}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"填充失败: {e!s}")
@@ -447,13 +413,8 @@ async def stateless_fill(
             os.remove(output_path)
 
 
-@router.post("/fill_download", summary="填充数据并下载文档",
-             response_description="返回填充后的文档文件流")
-async def stateless_fill_download(
-        file: UploadFile = File(...),
-        placeholders: str = Form(...),
-        fields: str = Form(...)
-):
+@router.post("/fill_download", summary="填充数据并下载文档", response_description="返回填充后的文档文件流")
+async def stateless_fill_download(file: UploadFile = File(...), placeholders: str = Form(...), fields: str = Form(...)):
     """
     ### POST `/v1/docx_marker/fill_download` 无状态填充并下载接口
 
@@ -472,7 +433,7 @@ async def stateless_fill_download(
 
     直接返回 `.docx` 文件流，可直接下载保存。
     """
-    if not file.filename.endswith('.docx'):
+    if not file.filename.endswith(".docx"):
         raise HTTPException(status_code=400, detail="只支持 .docx 文件")
 
     # 解析 JSON 参数
@@ -504,20 +465,18 @@ async def stateless_fill_download(
         # 构建数据字典，支持表格类型
         data_dict = {}
         for field in fields_data:
-            field_id = field.get('id')
+            field_id = field.get("id")
             if not field_id:
                 continue
-            if 'rows' in field and field['rows'] is not None:
+            if "rows" in field and field["rows"] is not None:
                 # 表格类型：包含 rows 数据
-                data_dict[field_id] = {"rows": field['rows'], "value": field.get('value', '')}
+                data_dict[field_id] = {"rows": field["rows"], "value": field.get("value", "")}
             else:
                 # 普通类型：只有 value
-                data_dict[field_id] = field.get('value', '')
+                data_dict[field_id] = field.get("value", "")
 
         # 检查是否有表格类型的 placeholder
-        has_table_placeholder = any(
-            p.get('type') in ('table', 'dynamic_table') for p in placeholders_data
-        )
+        has_table_placeholder = any(p.get("type") in ("table", "dynamic_table") for p in placeholders_data)
 
         # 填充文档
         if has_table_placeholder:
@@ -539,9 +498,7 @@ async def stateless_fill_download(
         return StreamingResponse(
             BytesIO(output_content),
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers={
-                "Content-Disposition": f"attachment; filename=filled_{file.filename}"
-            }
+            headers={"Content-Disposition": f"attachment; filename=filled_{file.filename}"},
         )
     except Exception as e:
         logger.error(f"[fill_download] 填充失败: {e!s}", exc_info=True)
@@ -553,11 +510,8 @@ async def stateless_fill_download(
         raise HTTPException(status_code=500, detail=f"填充失败: {e!s}")
 
 
-@router.post("/debug", summary="获取文档调试信息",
-             response_description="返回文档结构和识别结果")
-async def stateless_debug(
-        file: UploadFile = File(...)
-):
+@router.post("/debug", summary="获取文档调试信息", response_description="返回文档结构和识别结果")
+async def stateless_debug(file: UploadFile = File(...)):
     """
     ### POST `/v1/docx_marker/debug` 调试接口
 
@@ -580,7 +534,7 @@ async def stateless_debug(
     }
     ```
     """
-    if not file.filename.endswith('.docx'):
+    if not file.filename.endswith(".docx"):
         raise HTTPException(status_code=400, detail="只支持 .docx 文件")
 
     ensure_temp_dir()
@@ -600,13 +554,7 @@ async def stateless_debug(
         report = generate_debug_report(temp_path, recognized_dicts)
 
         return get_json_result(
-            retmsg="Debug report generated successfully.",
-            data={
-                "filename": file.filename,
-                "recognized_count": len(recognized),
-                "recognized_placeholders": recognized_dicts,
-                "report": report
-            }
+            retmsg="Debug report generated successfully.", data={"filename": file.filename, "recognized_count": len(recognized), "recognized_placeholders": recognized_dicts, "report": report}
         )
     except Exception as e:
         logger.error(f"[debug] 生成调试信息失败: {e!s}", exc_info=True)

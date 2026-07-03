@@ -20,9 +20,9 @@ def extract_js_function(text, function_name=None):
         count = 1
         i = start
         while i < len(text) and count > 0:
-            if text[i] == '{':
+            if text[i] == "{":
                 count += 1
-            elif text[i] == '}':
+            elif text[i] == "}":
                 count -= 1
             i += 1
         return i if count == 0 else -1
@@ -31,7 +31,7 @@ def extract_js_function(text, function_name=None):
         """
         从起始位置提取完整的函数定义
         """
-        body_start = text.find('{', start)
+        body_start = text.find("{", start)
         if body_start == -1:
             return ""
 
@@ -43,9 +43,9 @@ def extract_js_function(text, function_name=None):
         full_function = text[start:body_end].strip()
 
         # 如果提取的内容包含在代码块中，需要去除代码块标记
-        if '```' in full_function:
-            full_function = re.sub(r'```javascript\s*', '', full_function)
-            full_function = re.sub(r'\s*```', '', full_function)
+        if "```" in full_function:
+            full_function = re.sub(r"```javascript\s*", "", full_function)
+            full_function = re.sub(r"\s*```", "", full_function)
 
         return full_function
 
@@ -60,13 +60,13 @@ def extract_js_function(text, function_name=None):
             str: 去除注释后的代码
         """
         # 去除单行注释
-        js_code = re.sub(r'//.*?(?=\n|$)', '', js_code)
+        js_code = re.sub(r"//.*?(?=\n|$)", "", js_code)
 
         # 去除多行注释
-        js_code = re.sub(r'/\*.*?\*/', '', js_code, flags=re.DOTALL)
+        js_code = re.sub(r"/\*.*?\*/", "", js_code, flags=re.DOTALL)
 
         # 清理可能产生的多余空行
-        js_code = re.sub(r'\n\s*\n+', '\n', js_code)
+        js_code = re.sub(r"\n\s*\n+", "\n", js_code)
 
         return js_code.strip()
 
@@ -100,7 +100,7 @@ def test_extractor():
     测试JavaScript函数提取函数
     """
     # 测试用例
-    test_text = '''
+    test_text = """
     function generateChartOption(chartData) {
         // 1. 输入验证
         if (!chartData?.metadata?.columns || !chartData?.data) {
@@ -142,7 +142,7 @@ def test_extractor():
             ]
         };
     }
-    '''
+    """
 
     print("测试提取并去除注释:")
     print(extract_js_function(test_text, "generateChartOption"))

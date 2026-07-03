@@ -123,19 +123,19 @@ def update_cell_text_preserving_format(cell, text: str):
     if text is None:
         text = ""
 
-    lines = text.split('\n')
+    lines = text.split("\n")
     paragraphs = list(cell.paragraphs)
 
     if not paragraphs:
         base_style = None
-        new_paragraph = cell.add_paragraph('')
+        new_paragraph = cell.add_paragraph("")
         paragraphs.append(new_paragraph)
     else:
         base_style = paragraphs[-1].style
 
     # Ensure we have enough paragraphs to accommodate all lines
     while len(paragraphs) < len(lines):
-        new_paragraph = cell.add_paragraph('')
+        new_paragraph = cell.add_paragraph("")
         if base_style:
             new_paragraph.style = base_style
         paragraphs.append(new_paragraph)
@@ -149,10 +149,10 @@ def update_cell_text_preserving_format(cell, text: str):
         _replace_paragraph_text(paragraphs[idx], "")
 
 
-PLACEHOLDER_PATTERN = re.compile(r'\{\{([^{}]+)\}\}')
+PLACEHOLDER_PATTERN = re.compile(r"\{\{([^{}]+)\}\}")
 
 # 冒号模式（中英文冒号）
-COLON_PATTERN = re.compile(r'[：:]')
+COLON_PATTERN = re.compile(r"[：:]")
 
 
 def extract_underline_placeholders_from_paragraph(paragraph):
@@ -182,45 +182,29 @@ def extract_underline_placeholders_from_paragraph(paragraph):
         text = run.text or ""
         # 检查下划线属性
         is_underline = bool(run.font.underline)
-        run_info.append({
-            'index': i,
-            'text': text,
-            'is_underline': is_underline,
-            'char_start': char_offset,
-            'char_end': char_offset + len(text),
-            'run': run
-        })
+        run_info.append({"index": i, "text": text, "is_underline": is_underline, "char_start": char_offset, "char_end": char_offset + len(text), "run": run})
         char_offset += len(text)
 
     # 找到所有下划线区域（连续的下划线run合并为一个区域）
     underline_regions = []
     i = 0
     while i < len(run_info):
-        if run_info[i]['is_underline']:
+        if run_info[i]["is_underline"]:
             region_start = i
             region_end = i
             # 合并连续的下划线run
-            while region_end + 1 < len(run_info) and run_info[region_end + 1]['is_underline']:
+            while region_end + 1 < len(run_info) and run_info[region_end + 1]["is_underline"]:
                 region_end += 1
-            underline_regions.append({
-                'start_index': region_start,
-                'end_index': region_end,
-                'run_indices': list(range(region_start, region_end + 1))
-            })
+            underline_regions.append({"start_index": region_start, "end_index": region_end, "run_indices": list(range(region_start, region_end + 1))})
             i = region_end + 1
         else:
             i += 1
 
     # 对于每个下划线区域，向前查找标签
     for region in underline_regions:
-        label = _find_label_before_underline(run_info, region['start_index'])
+        label = _find_label_before_underline(run_info, region["start_index"])
         if label:
-            placeholders.append({
-                'label': label['text'],
-                'underline_run_indices': region['run_indices'],
-                'colon_run_index': label['colon_run_index'],
-                'colon_position': label['colon_position']
-            })
+            placeholders.append({"label": label["text"], "underline_run_indices": region["run_indices"], "colon_run_index": label["colon_run_index"], "colon_position": label["colon_position"]})
 
     return placeholders
 
@@ -241,7 +225,7 @@ def _find_label_before_underline(run_info, underline_start_index):
     run_text_mapping = []  # [(run_index, text_start_in_combined, text_end_in_combined)]
 
     for i in range(underline_start_index):
-        text = run_info[i]['text']
+        text = run_info[i]["text"]
         start_pos = len(text_before)
         text_before += text
         run_text_mapping.append((i, start_pos, start_pos + len(text)))
@@ -275,9 +259,9 @@ def _find_label_before_underline(run_info, underline_start_index):
     # 标签从上一个下划线区域结束后开始，或从段落开头开始
     label_start = 0
     for i in range(underline_start_index - 1, -1, -1):
-        if run_info[i]['is_underline']:
+        if run_info[i]["is_underline"]:
             # 找到前一个下划线区域，标签从其后开始
-            label_start = run_info[i]['char_end']
+            label_start = run_info[i]["char_end"]
             break
 
     # 提取标签文本（冒号前的文本）
@@ -290,11 +274,7 @@ def _find_label_before_underline(run_info, underline_start_index):
     if not label_text:
         return None
 
-    return {
-        'text': label_text,
-        'colon_run_index': colon_run_index,
-        'colon_position': colon_position_in_run
-    }
+    return {"text": label_text, "colon_run_index": colon_run_index, "colon_position": colon_position_in_run}
 
 
 def process_paragraph_underline_placeholders(paragraph, placeholders_dict):
@@ -317,13 +297,13 @@ def process_paragraph_underline_placeholders(paragraph, placeholders_dict):
     processed = False
 
     for item in underline_items:
-        label = item['label']
-        underline_run_indices = item['underline_run_indices']
+        label = item["label"]
+        underline_run_indices = item["underline_run_indices"]
 
         # 生成标准化的占位符key
         # 移除多余空格，保留中文、数字、字母、下划线和常用符号（括号、顿号等）
-        normalized_label = re.sub(r'\s+', '', label)  # 移除所有空格
-        placeholder_key = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9_（）()、]', '', normalized_label)
+        normalized_label = re.sub(r"\s+", "", label)  # 移除所有空格
+        placeholder_key = re.sub(r"[^\u4e00-\u9fa5a-zA-Z0-9_（）()、]", "", normalized_label)
 
         if not placeholder_key:
             continue
@@ -338,7 +318,7 @@ def process_paragraph_underline_placeholders(paragraph, placeholders_dict):
             total_padding = original_length - len(placeholder_value)
             left_padding = total_padding // 2
             right_padding = total_padding - left_padding
-            placeholder_value = ' ' * left_padding + placeholder_value + ' ' * right_padding
+            placeholder_value = " " * left_padding + placeholder_value + " " * right_padding
 
         # 将占位符文本填入第一个下划线run，清空其余下划线run
         if underline_run_indices:
@@ -393,104 +373,100 @@ def fill_paragraph_underline_placeholders(paragraph, fill_data):
                 total_padding = original_length - len(new_text)
                 left_padding = total_padding // 2
                 right_padding = total_padding - left_padding
-                new_text = ' ' * left_padding + new_text + ' ' * right_padding
+                new_text = " " * left_padding + new_text + " " * right_padding
             run.text = new_text
 
     return filled
 
 
-@router.post("/process_docx", summary="Word 文档占位符处理接口",
-             response_description="返回处理后的文档和占位符 JSON 数据")
-async def process_docx(
-        file: UploadFile = File(...),
-        data: str = Form(default=None)
-):
+@router.post("/process_docx", summary="Word 文档占位符处理接口", response_description="返回处理后的文档和占位符 JSON 数据")
+async def process_docx(file: UploadFile = File(...), data: str = Form(default=None)):
     """
-    ### POST `/v1/document/process_docx` Word 文档占位符处理接口
+        ### POST `/v1/document/process_docx` Word 文档占位符处理接口
 
-**功能描述**:
-该接口接收用户上传的 Word 文件，对文件中的表格占位符进行解析、标准化和填充，最终生成处理后的文档与占位符的 JSON 数据。
+    **功能描述**:
+    该接口接收用户上传的 Word 文件，对文件中的表格占位符进行解析、标准化和填充，最终生成处理后的文档与占位符的 JSON 数据。
 
----
+    ---
 
-### 请求体 (Request Body)
+    ### 请求体 (Request Body)
 
-| 字段        | 类型          | 必填 | 描述                          |
-|-------------|---------------|------|-------------------------------|
-| `file`      | `UploadFile`  | 是   | 用户上传的 Word 文档，格式必须为 `.docx` |
+    | 字段        | 类型          | 必填 | 描述                          |
+    |-------------|---------------|------|-------------------------------|
+    | `file`      | `UploadFile`  | 是   | 用户上传的 Word 文档，格式必须为 `.docx` |
 
----
+    ---
 
-### 响应 (Response)
+    ### 响应 (Response)
 
-#### 成功响应 (200)
+    #### 成功响应 (200)
 
-- **响应格式**:
-    - **`Content-Type: application/json`**
-    - **示例**:
-    ```json
-    {
-        "retcode": 0,
-        "retmsg": "File processed successfully.",
-        "data": {
-            "placeholders": {
-                "key1": "",
-                "key2": ""
-            },
-            "file": "base64-encoded-processed-file-content"
+    - **响应格式**:
+        - **`Content-Type: application/json`**
+        - **示例**:
+        ```json
+        {
+            "retcode": 0,
+            "retmsg": "File processed successfully.",
+            "data": {
+                "placeholders": {
+                    "key1": "",
+                    "key2": ""
+                },
+                "file": "base64-encoded-processed-file-content"
+            }
         }
-    }
-    ```
+        ```
 
-- **字段说明**:
-    | 字段             | 类型        | 描述                               |
-    |------------------|-------------|------------------------------------|
-    | `placeholders`   | `dict`      | 处理后的占位符键值对，键为占位符名称，值为空字符串 |
-    | `file`           | `string`    | 处理后文档的 Base64 编码内容       |
+    - **字段说明**:
+        | 字段             | 类型        | 描述                               |
+        |------------------|-------------|------------------------------------|
+        | `placeholders`   | `dict`      | 处理后的占位符键值对，键为占位符名称，值为空字符串 |
+        | `file`           | `string`    | 处理后文档的 Base64 编码内容       |
 
----
+    ---
 
-#### 错误响应
+    #### 错误响应
 
-| 状态码 | 错误类型              | 描述                                |
-|--------|-----------------------|-------------------------------------|
-| 400    | `Invalid file format` | 当上传的文件格式不是 `.docx` 时，返回此错误 |
+    | 状态码 | 错误类型              | 描述                                |
+    |--------|-----------------------|-------------------------------------|
+    | 400    | `Invalid file format` | 当上传的文件格式不是 `.docx` 时，返回此错误 |
 
-- **示例**:
-    ```json
-    {
-        "detail": "Invalid file format. Only .docx files are supported."
-    }
-    ```
+    - **示例**:
+        ```json
+        {
+            "detail": "Invalid file format. Only .docx files are supported."
+        }
+        ```
 
----
+    ---
 
-### 主要流程
+    ### 主要流程
 
-1. **文件校验**: 验证上传文件的格式是否为 `.docx`，如果不是，返回 400 错误。
-2. **读取文档内容**: 使用 `python-docx` 读取上传文档中的表格内容。
-3. **占位符处理**:
-    - 判断和包装符合 `{{key}}` 格式的占位符。
-    - 标准化占位符键名（仅保留中文字符、数字和下划线）。
-    - 填充表格内容：根据规则右填充和下填充缺失内容。
-    - 为下填充的占位符添加序号后缀。
-4. **文档内容更新**: 将处理后的占位符填充回文档的对应表格。
-5. **返回结果**:
-    - 将处理后的文档内容以 Base64 格式返回。
-    - 返回占位符的 JSON 数据，方便后续填写或二次处理。
+    1. **文件校验**: 验证上传文件的格式是否为 `.docx`，如果不是，返回 400 错误。
+    2. **读取文档内容**: 使用 `python-docx` 读取上传文档中的表格内容。
+    3. **占位符处理**:
+        - 判断和包装符合 `{{key}}` 格式的占位符。
+        - 标准化占位符键名（仅保留中文字符、数字和下划线）。
+        - 填充表格内容：根据规则右填充和下填充缺失内容。
+        - 为下填充的占位符添加序号后缀。
+    4. **文档内容更新**: 将处理后的占位符填充回文档的对应表格。
+    5. **返回结果**:
+        - 将处理后的文档内容以 Base64 格式返回。
+        - 返回占位符的 JSON 数据，方便后续填写或二次处理。
 
----
+    ---
 
-### 注意事项
+    ### 注意事项
 
-- **文件格式**: 仅支持 `.docx` 文件格式。
-- **表格占位符规则**:
-    - 占位符必须以 `{{` 开始，并以 `}}` 结束。
-    - 键名仅支持中文字符和下划线，其他字符会被移除。
-    - 自动为填充生成的占位符添加 `_1`、`_2` 等后缀，以避免重复。
-- **返回文件编码**: 处理后的文档以 Base64 编码返回，需客户端自行解码并保存为 `.docx` 文件。
+    - **文件格式**: 仅支持 `.docx` 文件格式。
+    - **表格占位符规则**:
+        - 占位符必须以 `{{` 开始，并以 `}}` 结束。
+        - 键名仅支持中文字符和下划线，其他字符会被移除。
+        - 自动为填充生成的占位符添加 `_1`、`_2` 等后缀，以避免重复。
+    - **返回文件编码**: 处理后的文档以 Base64 编码返回，需客户端自行解码并保存为 `.docx` 文件。
 
----
+    ---
     """
     # 生成请求唯一标识符
     request_id = f"process_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
@@ -561,8 +537,8 @@ async def process_docx(
         for j in range(pos - 1, -1, -1):
             child = children[j]
             # w:p 段落
-            if child.tag.endswith('}p'):
-                text = para_map.get(id(child), '')
+            if child.tag.endswith("}p"):
+                text = para_map.get(id(child), "")
                 if text:
                     above_paragraphs.append(text)
 
@@ -571,7 +547,7 @@ async def process_docx(
 
     # 工具方法：判断是否是占位符格式
     def is_placeholder_format(value: str) -> bool:
-        return value.strip().startswith('{{') and value.strip().endswith('}}')
+        return value.strip().startswith("{{") and value.strip().endswith("}}")
 
     # 工具方法：包装占位符
     def wrap_placeholder(value: str) -> str:
@@ -581,7 +557,7 @@ async def process_docx(
     # 工具方法：标准化占位符键名
     def normalize_placeholder_key(key: str) -> str:
         # 保留中文字符、数字和下划线
-        return re.sub(r'[^\u4e00-\u9fa5_\d]', '', key)
+        return re.sub(r"[^\u4e00-\u9fa5_\d]", "", key)
 
     # 工具方法：生成JSON合法的完整键名
     def generate_full_placeholder_key(top_content: str) -> str:
@@ -599,14 +575,14 @@ async def process_docx(
         content = content.replace('"', "'")
 
         # 3. 将换行符替换为分隔符，保持可读性
-        content = content.replace('\n', ' | ')
+        content = content.replace("\n", " | ")
 
         # 4. 清理多余的空格
-        content = re.sub(r'\s+', ' ', content).strip()
+        content = re.sub(r"\s+", " ", content).strip()
 
         # 5. 移除其他可能导致JSON问题的字符
         # 保留中文、英文、数字、常用标点符号
-        content = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9\s\'\(\)\[\]\{\}，。！？；、|（）【】《》]', '', content)
+        content = re.sub(r"[^\u4e00-\u9fa5a-zA-Z0-9\s\'\(\)\[\]\{\}，。！？；、|（）【】《》]", "", content)
 
         # 6. 控制长度，避免键名过长（保留前200个字符）
         if len(content) > 200:
@@ -651,7 +627,7 @@ async def process_docx(
             return ""
 
         # 按换行符分割
-        lines = cell_text.split('\n')
+        lines = cell_text.split("\n")
 
         # 找到连续空行的位置，连续空行前的内容作为顶部
         top_content_lines = []
@@ -672,7 +648,7 @@ async def process_docx(
         if not top_content_lines:
             top_content_lines = [line for line in lines if line.strip()]
 
-        return '\n'.join(top_content_lines).strip()
+        return "\n".join(top_content_lines).strip()
 
     # 工具方法：标准化所有占位符
     def normalize_all_placeholders(matrix):
@@ -686,7 +662,7 @@ async def process_docx(
             for c in range(cols):
                 val = matrix[r][c].strip()
                 if is_placeholder_format(val):
-                    raw_key = val.strip('{').strip('}')
+                    raw_key = val.strip("{").strip("}")
                     new_key = normalize_placeholder_key(raw_key)
                     key_map[raw_key] = new_key
                     matrix[r][c] = f"{{{{{new_key}}}}}"
@@ -696,15 +672,13 @@ async def process_docx(
     def is_merged_cell(cell):
         tc = cell._element
         vmerge = tc.xpath(".//w:vMerge")
-        return vmerge and vmerge[0].get(
-            "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val") != "restart"
+        return vmerge and vmerge[0].get("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val") != "restart"
 
     # 工具方法：判断单元格是否为下合并单元格的开始
     def is_start_of_down_merge(cell):
         tc = cell._element
         vmerge = tc.xpath(".//w:vMerge")
-        return vmerge and vmerge[0].get(
-            "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val") == "restart"
+        return vmerge and vmerge[0].get("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val") == "restart"
 
     # 工具方法：判断单元格是否独占整行
     def is_full_row_cell(row, target_cell):
@@ -744,20 +718,20 @@ async def process_docx(
             mapping_data: 解析后的映射配置
             placeholders_dict: 占位符字典，用于收集所有占位符
         """
-        if not mapping_data or 'fillmapping' not in mapping_data:
+        if not mapping_data or "fillmapping" not in mapping_data:
             return
 
-        fillmapping = mapping_data.get('fillmapping', [])
+        fillmapping = mapping_data.get("fillmapping", [])
 
         for mapping in fillmapping:
-            title = mapping.get('title', '').strip()
-            position = mapping.get('position', '').upper()
-            mapfield = mapping.get('mapfield', '').strip()
+            title = mapping.get("title", "").strip()
+            position = mapping.get("position", "").upper()
+            mapfield = mapping.get("mapfield", "").strip()
 
             if not title or not mapfield:
                 continue
 
-            if position not in ('RIGHT', 'SELF'):
+            if position not in ("RIGHT", "SELF"):
                 continue  # 目前只支持 RIGHT 和 SELF
 
             # 在所有表格中查找包含 title 的单元格
@@ -774,9 +748,9 @@ async def process_docx(
                             break
                         if title in cell.text:
                             # 根据 position 类型确定目标单元格
-                            if position == 'RIGHT':
+                            if position == "RIGHT":
                                 target_cell = find_right_cell(cells, cell_idx, cell)
-                            elif position == 'SELF':
+                            elif position == "SELF":
                                 target_cell = cell
                             else:
                                 target_cell = None
@@ -852,7 +826,7 @@ async def process_docx(
                 if (r, c) in filled_cells:
                     val = matrix[r][c].strip()
                     if is_placeholder_format(val):
-                        raw_key = val.strip('{').strip('}')
+                        raw_key = val.strip("{").strip("}")
                         if raw_key not in placeholders_seen:
                             placeholders_seen[raw_key] = 1
                             matrix[r][c] = f"{{{{{raw_key}_1}}}}"
@@ -872,7 +846,7 @@ async def process_docx(
 
         paragraphs = list(cell.paragraphs)
         if not paragraphs:
-            new_para = cell.add_paragraph('')
+            new_para = cell.add_paragraph("")
             _replace_paragraph_text(new_para, placeholder)
             return
 
@@ -884,7 +858,7 @@ async def process_docx(
         top_content = extract_top_content(aggregated_text)
 
         if not top_content:
-            target_paragraph = paragraphs[0].insert_paragraph_before('')
+            target_paragraph = paragraphs[0].insert_paragraph_before("")
             head_style = paragraphs[0].style
             if head_style:
                 target_paragraph.style = head_style
@@ -896,7 +870,7 @@ async def process_docx(
             return
 
         lines = paragraph_texts
-        top_lines = top_content.split('\n')
+        top_lines = top_content.split("\n")
         insert_index = len(top_lines)
 
         if insert_index < len(lines) and lines[insert_index].strip() == "":
@@ -908,9 +882,9 @@ async def process_docx(
         base_alignment = base_paragraph.alignment
 
         if insert_index >= len(paragraphs):
-            target_paragraph = cell.add_paragraph('')
+            target_paragraph = cell.add_paragraph("")
         else:
-            target_paragraph = paragraphs[insert_index].insert_paragraph_before('')
+            target_paragraph = paragraphs[insert_index].insert_paragraph_before("")
 
         if base_style:
             target_paragraph.style = base_style
@@ -1060,116 +1034,110 @@ async def process_docx(
     logger.info(f"[process_docx] 输出 placeholders: {json.dumps(placeholders, ensure_ascii=False)}")
     logger.info(f"[process_docx] 请求ID: {request_id} 处理完成")
 
-    response_data = {
-        "placeholders": placeholders,
-        "file": base64.b64encode(output_file_content).decode("utf-8")
-    }
+    response_data = {"placeholders": placeholders, "file": base64.b64encode(output_file_content).decode("utf-8")}
 
     return get_json_result(retmsg="File processed successfully.", data=response_data)
 
 
 @router.post("/fill_docx", summary="Word 文档填充接口", response_description="返回填充后的文档 Base64 数据")
-async def fill_docx(
-        file: UploadFile = File(...),
-        data: str = Form(...)
-):
+async def fill_docx(file: UploadFile = File(...), data: str = Form(...)):
     """
-    ### POST `/v1/document/fill_docx` Word 文档填充接口
+        ### POST `/v1/document/fill_docx` Word 文档填充接口
 
-**功能描述**:
-该接口接收用户上传的带占位符的 Word 文档（`.docx` 格式）和 JSON 数据，将 JSON 数据填充到文档中的占位符位置，并返回填充后的文档（Base64 编码）。
+    **功能描述**:
+    该接口接收用户上传的带占位符的 Word 文档（`.docx` 格式）和 JSON 数据，将 JSON 数据填充到文档中的占位符位置，并返回填充后的文档（Base64 编码）。
 
----
+    ---
 
-### 请求参数 (Request Parameters)
+    ### 请求参数 (Request Parameters)
 
-| 字段        | 类型          | 必填 | 描述                                    |
-|-------------|---------------|------|-----------------------------------------|
-| `file`      | `UploadFile`  | 是   | 用户上传的 Word 文档，格式必须为 `.docx` |
-| `data`      | `string`      | 是   | JSON 格式的字符串，包含占位符对应的键值对 |
+    | 字段        | 类型          | 必填 | 描述                                    |
+    |-------------|---------------|------|-----------------------------------------|
+    | `file`      | `UploadFile`  | 是   | 用户上传的 Word 文档，格式必须为 `.docx` |
+    | `data`      | `string`      | 是   | JSON 格式的字符串，包含占位符对应的键值对 |
 
-#### 示例请求 (Sample Request)
-**表单数据**:
-- 文件上传: `file` 上传一个包含占位符的 Word 文档。
-- JSON 数据:
-    ```json
-    {
-        "name": "张三",
-        "date": "2024-12-11"
-    }
-    ```
-
----
-
-### 响应 (Response)
-
-#### 成功响应 (200)
-
-- **响应格式**:
-    - **`Content-Type: application/json`**
-    - **示例**:
-    ```json
-    {
-        "retmsg": "File filled successfully.",
-        "data": {
-            "file": "base64-encoded-filled-file-content"
+    #### 示例请求 (Sample Request)
+    **表单数据**:
+    - 文件上传: `file` 上传一个包含占位符的 Word 文档。
+    - JSON 数据:
+        ```json
+        {
+            "name": "张三",
+            "date": "2024-12-11"
         }
-    }
-    ```
+        ```
 
-- **字段说明**:
-    | 字段       | 类型        | 描述                                     |
-    |------------|-------------|------------------------------------------|
-    | `retmsg`   | `string`    | 响应消息，表示处理结果。                 |
-    | `data`     | `object`    | 包含填充后的文档的 Base64 编码数据。      |
-    | `file`     | `string`    | Base64 编码的填充文档数据，需解码后保存为 `.docx` 文件 |
+    ---
 
-#### 错误响应
+    ### 响应 (Response)
 
-| 状态码 | 错误类型                     | 描述                                     |
-|--------|------------------------------|------------------------------------------|
-| 400    | `Invalid file format`        | 上传文件格式不是 `.docx`                 |
-| 400    | `Invalid JSON data provided` | 提供的 `data` 不是有效的 JSON 格式       |
-| 500    | `Internal server error`      | 填充过程中出现意外错误                   |
+    #### 成功响应 (200)
 
-- **示例**:
-    ```json
-    {
-        "detail": "Invalid file format. Only .docx files are supported."
-    }
-    ```
+    - **响应格式**:
+        - **`Content-Type: application/json`**
+        - **示例**:
+        ```json
+        {
+            "retmsg": "File filled successfully.",
+            "data": {
+                "file": "base64-encoded-filled-file-content"
+            }
+        }
+        ```
 
----
+    - **字段说明**:
+        | 字段       | 类型        | 描述                                     |
+        |------------|-------------|------------------------------------------|
+        | `retmsg`   | `string`    | 响应消息，表示处理结果。                 |
+        | `data`     | `object`    | 包含填充后的文档的 Base64 编码数据。      |
+        | `file`     | `string`    | Base64 编码的填充文档数据，需解码后保存为 `.docx` 文件 |
 
-### 主要流程
+    #### 错误响应
 
-1. **文件校验**:
-    - 验证上传文件是否为 `.docx` 格式，如果格式错误，返回 400 错误。
-2. **解析 JSON 数据**:
-    - 使用 Python 内置的 `json.loads` 解析上传的 JSON 数据。
-    - 如果 JSON 数据格式错误，返回 400 错误。
-3. **填充文档**:
-    - 使用 `python-docx-template` 将 JSON 数据渲染到文档中的占位符。
-    - 占位符的格式需为 `{{key}}`。
-4. **生成 Base64 编码**:
-    - 将填充后的文档保存到内存流中，并转换为 Base64 编码字符串。
-5. **返回响应**:
-    - 返回包含 Base64 编码文档的 JSON 数据，客户端可解码后保存为 `.docx` 文件。
+    | 状态码 | 错误类型                     | 描述                                     |
+    |--------|------------------------------|------------------------------------------|
+    | 400    | `Invalid file format`        | 上传文件格式不是 `.docx`                 |
+    | 400    | `Invalid JSON data provided` | 提供的 `data` 不是有效的 JSON 格式       |
+    | 500    | `Internal server error`      | 填充过程中出现意外错误                   |
 
----
+    - **示例**:
+        ```json
+        {
+            "detail": "Invalid file format. Only .docx files are supported."
+        }
+        ```
 
-### 注意事项
+    ---
 
-- **占位符格式**:
-    - 文档中的占位符需遵循 `{{key}}` 格式，`key` 必须与 JSON 数据中的键匹配。
-- **文件格式限制**:
-    - 仅支持 `.docx` 格式的 Word 文件，其他格式会返回错误。
-- **Base64 文档解码**:
-    - 响应返回的文档内容为 Base64 编码，客户端需解码后保存为 `.docx` 文件以查看填充结果。
-- **异常处理**:
-    - 如果填充过程中发生未预料的错误，将返回 500 错误，并包含具体错误描述。
+    ### 主要流程
 
----
+    1. **文件校验**:
+        - 验证上传文件是否为 `.docx` 格式，如果格式错误，返回 400 错误。
+    2. **解析 JSON 数据**:
+        - 使用 Python 内置的 `json.loads` 解析上传的 JSON 数据。
+        - 如果 JSON 数据格式错误，返回 400 错误。
+    3. **填充文档**:
+        - 使用 `python-docx-template` 将 JSON 数据渲染到文档中的占位符。
+        - 占位符的格式需为 `{{key}}`。
+    4. **生成 Base64 编码**:
+        - 将填充后的文档保存到内存流中，并转换为 Base64 编码字符串。
+    5. **返回响应**:
+        - 返回包含 Base64 编码文档的 JSON 数据，客户端可解码后保存为 `.docx` 文件。
+
+    ---
+
+    ### 注意事项
+
+    - **占位符格式**:
+        - 文档中的占位符需遵循 `{{key}}` 格式，`key` 必须与 JSON 数据中的键匹配。
+    - **文件格式限制**:
+        - 仅支持 `.docx` 格式的 Word 文件，其他格式会返回错误。
+    - **Base64 文档解码**:
+        - 响应返回的文档内容为 Base64 编码，客户端需解码后保存为 `.docx` 文件以查看填充结果。
+    - **异常处理**:
+        - 如果填充过程中发生未预料的错误，将返回 500 错误，并包含具体错误描述。
+
+    ---
     """
     # 生成请求唯一标识符
     request_id = f"fill_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
@@ -1230,9 +1198,7 @@ async def fill_docx(
         base64_encoded_file = base64.b64encode(output_file_content).decode("utf-8")
 
         # Step 7: 返回结果
-        response_data = {
-            "file": base64_encoded_file
-        }
+        response_data = {"file": base64_encoded_file}
         return get_json_result(retmsg="File filled successfully.", data=response_data)
 
     except json.JSONDecodeError:

@@ -8,6 +8,7 @@
 关联键是 `ask_id`（各端点入口经 ContextVar 注入，跨「语义层→get-sql→流式分析」三个 HTTP 稳定一致），
 故同一问题的多段请求/重试都会追加进同一个文件。
 """
+
 import logging
 import os
 import re
@@ -23,10 +24,10 @@ from logging.handlers import RotatingFileHandler
 from common.file_utils import get_project_base_directory
 
 # ============ 可调常量（集中一处） ============
-RETENTION_DAYS = 30        # 每问日志按天目录保留天数，过期整目录删除
-OPEN_FILES_LRU = 32        # 路由 handler 同时保持打开的文件句柄上限（防 fd 耗尽）
-REGISTRY_MAX = 4096        # ask_id→路径 注册表上限（防长进程内存无界增长）
-QUESTION_MAXLEN = 40       # 文件名中问题截断长度（字符；UTF-8 下给时间前缀/ask_id 后缀留 255 字节余量）
+RETENTION_DAYS = 30  # 每问日志按天目录保留天数，过期整目录删除
+OPEN_FILES_LRU = 32  # 路由 handler 同时保持打开的文件句柄上限（防 fd 耗尽）
+REGISTRY_MAX = 4096  # ask_id→路径 注册表上限（防长进程内存无界增长）
+QUESTION_MAXLEN = 40  # 文件名中问题截断长度（字符；UTF-8 下给时间前缀/ask_id 后缀留 255 字节余量）
 _SWEEP_INTERVAL_SEC = 24 * 60 * 60
 
 # 请求级上下文：各端点入口 set/reset，日志经 _AskdataContextFilter 自动注入。
@@ -137,13 +138,7 @@ class PerQuestionRoutingHandler(logging.Handler):
         while len(self._registry) > REGISTRY_MAX:
             self._registry.popitem(last=False)
 
-        header = (
-            "=" * 60 + "\n"
-            + f"问题: {question}\n"
-            + f"ask_id: {ask_id}\n"
-            + f"创建时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            + "=" * 60 + "\n"
-        )
+        header = "=" * 60 + "\n" + f"问题: {question}\n" + f"ask_id: {ask_id}\n" + f"创建时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n" + "=" * 60 + "\n"
         return path, header
 
     def emit(self, record: logging.LogRecord) -> None:

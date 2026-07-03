@@ -40,11 +40,7 @@ DEFAULT_SUPERUSER_PASSWORD = os.getenv("DEFAULT_SUPERUSER_PASSWORD", "admin")
 
 
 def init_superuser(
-    db: Session,
-    nickname: str = DEFAULT_SUPERUSER_NICKNAME,
-    email: str = DEFAULT_SUPERUSER_EMAIL,
-    password: str = DEFAULT_SUPERUSER_PASSWORD,
-    role: UserTenantRole = UserTenantRole.OWNER
+    db: Session, nickname: str = DEFAULT_SUPERUSER_NICKNAME, email: str = DEFAULT_SUPERUSER_EMAIL, password: str = DEFAULT_SUPERUSER_PASSWORD, role: UserTenantRole = UserTenantRole.OWNER
 ):
     """
     初始化超级用户
@@ -80,12 +76,7 @@ def init_superuser(
         "img2txt_id": settings.IMAGE2TEXT_MDL,
         "rerank_id": settings.RERANK_MDL,
     }
-    usr_tenant = {
-        "tenant_id": user_info["id"],
-        "user_id": user_info["id"],
-        "invited_by": user_info["id"],
-        "role": role
-    }
+    usr_tenant = {"tenant_id": user_info["id"], "user_id": user_info["id"], "invited_by": user_info["id"], "role": role}
 
     # get_init_tenant_llm 已经包含了所有配置的 LLM factory，无需重复添加
     tenant_llm = get_init_tenant_llm(db, user_info["id"])
@@ -174,7 +165,13 @@ def init_llm_factory(db: Session):
     LLMService.filter_delete(db, [LLM.fid == "QAnything"])
     TenantLLMService.filter_update(db, [TenantLLM.llm_factory == "QAnything"], {"llm_factory": "Youdao"})
     TenantLLMService.filter_update(db, [TenantLLM.llm_factory == "cohere"], {"llm_factory": "Cohere"})
-    TenantService.filter_update(db, [1 == 1], {"parser_ids": "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,email:Email,tag:Tag"})
+    TenantService.filter_update(
+        db,
+        [1 == 1],
+        {
+            "parser_ids": "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,email:Email,tag:Tag"
+        },
+    )
 
     doc_count = DocumentService.get_all_kb_doc_count(db)
     for kb_id in KnowledgebaseService.get_all_ids(db):
@@ -212,30 +209,45 @@ def fix_empty_tenant_model_id(db: Session):
         TenantService.update_by_id(db, row.id, update_dict)
 
     _batch_fill_tenant_model_id(
-        db, KnowledgebaseService.get_null_tenant_embd_id_row(db),
-        model_name_attr="embd_id", target_field="tenant_embd_id",
-        service=KnowledgebaseService, model_class=Knowledgebase,
+        db,
+        KnowledgebaseService.get_null_tenant_embd_id_row(db),
+        model_name_attr="embd_id",
+        target_field="tenant_embd_id",
+        service=KnowledgebaseService,
+        model_class=Knowledgebase,
     )
     _batch_fill_tenant_model_id(
-        db, DialogService.get_null_tenant_llm_id_row(db),
-        model_name_attr="llm_id", target_field="tenant_llm_id",
-        service=DialogService, model_class=Dialog,
+        db,
+        DialogService.get_null_tenant_llm_id_row(db),
+        model_name_attr="llm_id",
+        target_field="tenant_llm_id",
+        service=DialogService,
+        model_class=Dialog,
     )
     if hasattr(DialogService, "get_null_tenant_rerank_id_row"):
         _batch_fill_tenant_model_id(
-            db, DialogService.get_null_tenant_rerank_id_row(db),
-            model_name_attr="rerank_id", target_field="tenant_rerank_id",
-            service=DialogService, model_class=Dialog,
+            db,
+            DialogService.get_null_tenant_rerank_id_row(db),
+            model_name_attr="rerank_id",
+            target_field="tenant_rerank_id",
+            service=DialogService,
+            model_class=Dialog,
         )
     _batch_fill_tenant_model_id(
-        db, MemoryService.get_null_tenant_embd_id_row(db),
-        model_name_attr="embd_id", target_field="tenant_embd_id",
-        service=MemoryService, model_class=Memory,
+        db,
+        MemoryService.get_null_tenant_embd_id_row(db),
+        model_name_attr="embd_id",
+        target_field="tenant_embd_id",
+        service=MemoryService,
+        model_class=Memory,
     )
     _batch_fill_tenant_model_id(
-        db, MemoryService.get_null_tenant_llm_id_row(db),
-        model_name_attr="llm_id", target_field="tenant_llm_id",
-        service=MemoryService, model_class=Memory,
+        db,
+        MemoryService.get_null_tenant_llm_id_row(db),
+        model_name_attr="llm_id",
+        target_field="tenant_llm_id",
+        service=MemoryService,
+        model_class=Memory,
     )
 
 
@@ -413,6 +425,6 @@ def init_web_data(db: Session | None = None):
     return _init_web_data_with_db(db)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     init_web_db()
     init_web_data()

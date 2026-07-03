@@ -12,20 +12,11 @@ class LLM(ABC):
         self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
     def generate(self, prompt, **kwargs):
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            **kwargs
-        )
+        response = self.client.chat.completions.create(model=self.model, messages=[{"role": "user", "content": prompt}], **kwargs)
         return response.choices[0].message.content
 
     def generate_stream(self, prompt, **kwargs):
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            stream=True,
-            **kwargs
-        )
+        response = self.client.chat.completions.create(model=self.model, messages=[{"role": "user", "content": prompt}], stream=True, **kwargs)
         # for chunk in response:
         #     if not chunk.choices:
         #         continue
@@ -42,8 +33,7 @@ if __name__ == "__main__":
     # 使用OpenAI LLM
     api_key = os.getenv("API_KEY")
     # 使用自定义API端点的OpenAI兼容LLM
-    custom_llm = OpenAILLM(api_key, model="ep-20240808173556-h7vxq",
-                           base_url="https://ark.cn-beijing.volces.com/api/v3")
+    custom_llm = OpenAILLM(api_key, model="ep-20240808173556-h7vxq", base_url="https://ark.cn-beijing.volces.com/api/v3")
 
     # 非流式输出
     response = custom_llm.generate("Tell me a joke")

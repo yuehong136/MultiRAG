@@ -2,6 +2,7 @@
 教师科研考核问答系统 - 核心服务实现
 支持QA模板存储和混合检索（密集向量+BM25）
 """
+
 import json
 import logging
 import re
@@ -37,9 +38,11 @@ def _get_chat_bundle(db: Session, tenant_id: str, llm_name: str | None = None) -
         chat_config = get_tenant_default_model_by_type(db, tenant_id, LLMType.CHAT)
     return LLMBundle(db, tenant_id, chat_config)
 
+
 # ================================
 # 1. 模板存储服务
 # ================================
+
 
 class QATemplateStorageService:
     """QA模板存储服务"""
@@ -78,36 +81,19 @@ class QATemplateStorageService:
 
             # 创建BM25函数
             bm25_function_name = f"bm25_function_{str(uuid.uuid4())[:8]}"
-            bm25_function = Function(
-                name=bm25_function_name,
-                function_type=FunctionType.BM25,
-                input_field_names=["question_canonical"],
-                output_field_names="sparse_vector"
-            )
+            bm25_function = Function(name=bm25_function_name, function_type=FunctionType.BM25, input_field_names=["question_canonical"], output_field_names="sparse_vector")
 
             # 创建集合架构
             description = f"QA模板集合（支持混合检索）- 创建于 {datetime.now().isoformat()}"
-            schema = CollectionSchema(
-                fields=fields,
-                description=description,
-                enable_dynamic_field=True
-            )
+            schema = CollectionSchema(fields=fields, description=description, enable_dynamic_field=True)
             schema.add_function(bm25_function)
 
             # 创建集合
             conn = settings.docStoreConn._get_connection()
-            conn.create_collection(
-                self.collection_name,
-                schema,
-                consistency_level=DEFAULT_CONSISTENCY_LEVEL
-            )
+            conn.create_collection(self.collection_name, schema, consistency_level=DEFAULT_CONSISTENCY_LEVEL)
 
             # 为密集向量创建索引
-            dense_index_params = {
-                "metric_type": "COSINE",
-                "index_type": "IVF_FLAT",
-                "params": {"nlist": 128}
-            }
+            dense_index_params = {"metric_type": "COSINE", "index_type": "IVF_FLAT", "params": {"nlist": 128}}
             conn.create_index(self.collection_name, "vector", dense_index_params)
 
             # 为稀疏向量创建索引
@@ -119,8 +105,8 @@ class QATemplateStorageService:
                     # DAAT_MAXSCORE (默认)：适合多、长topk, DAAT_WAND:适合少、短topk, TAAT_NAIVE：不推荐
                     # 配置BM25参数
                     "bm25_k1": 1.5,  # 控制术语频率饱和度，范围[1.2, 2.0]
-                    "bm25_b": 0.75  # 控制文档长度归一化，范围[0, 1]
-                }
+                    "bm25_b": 0.75,  # 控制文档长度归一化，范围[0, 1]
+                },
             }
             conn.create_index(self.collection_name, "sparse_vector", sparse_index_params)
 
@@ -134,12 +120,7 @@ class QATemplateStorageService:
             logger.error(f"创建QA模板集合失败: {e}")
             return False, f"创建集合失败: {e!s}"
 
-    def store_templates(
-            self,
-            db: Session,
-            templates: list[dict[str, Any]],
-            tenant_id: str
-    ) -> dict[str, Any]:
+    def store_templates(self, db: Session, templates: list[dict[str, Any]], tenant_id: str) -> dict[str, Any]:
         """存储QA模板到Milvus"""
         try:
             # 获取嵌入模型
@@ -149,7 +130,7 @@ class QATemplateStorageService:
             texts_to_embed = []
             for template in templates:
                 # 收集标准问法
-                texts_to_embed.append(template['question_canonical'])
+                texts_to_embed.append(template["question_canonical"])
                 # # 收集同义句
                 # for paraphrase in template.get('paraphrases', []):
                 #     texts_to_embed.append(paraphrase)
@@ -174,16 +155,16 @@ class QATemplateStorageService:
 
                 record = {
                     "id": f"{tenant_id}_{template['qa_id']}_canonical",
-                    "qa_id": template['qa_id'],
-                    "question_canonical": template['question_canonical'],
-                    "paraphrases": json.dumps(template.get('paraphrases', []), ensure_ascii=False),
-                    "needed_params": json.dumps(template['needed_params'], ensure_ascii=False),
-                    "sql_template": template['sql_template'],
-                    "rule_id": str(template['rule_id']) if template.get('rule_id') is not None else "",
+                    "qa_id": template["qa_id"],
+                    "question_canonical": template["question_canonical"],
+                    "paraphrases": json.dumps(template.get("paraphrases", []), ensure_ascii=False),
+                    "needed_params": json.dumps(template["needed_params"], ensure_ascii=False),
+                    "sql_template": template["sql_template"],
+                    "rule_id": str(template["rule_id"]) if template.get("rule_id") is not None else "",
                     "tenant_id": tenant_id,
                     "vector": canonical_embedding.tolist(),
                     "create_timestamp": current_timestamp,
-                    "update_timestamp": current_timestamp
+                    "update_timestamp": current_timestamp,
                 }
                 insert_data.append(record)
 
@@ -212,32 +193,16 @@ class QATemplateStorageService:
 
             # 检查 insert_count 是否与本批次长度一致
             if doc_store_result.get("insert_count", 0) != len(insert_data):
-                error_message = (
-                    f"Insert count mismatch: expected {len(insert_data)}, "
-                    f"got {doc_store_result.get('insert_count', 0)}."
-                )
+                error_message = f"Insert count mismatch: expected {len(insert_data)}, got {doc_store_result.get('insert_count', 0)}."
                 raise Exception(error_message)
 
-            return {
-                "success": True,
-                "message": f"成功存储 {len(templates)} 个QA模板",
-                "template_count": len(templates),
-                "record_count": len(insert_data)
-            }
+            return {"success": True, "message": f"成功存储 {len(templates)} 个QA模板", "template_count": len(templates), "record_count": len(insert_data)}
 
         except Exception as e:
             logger.error(f"存储QA模板失败: {e}")
-            return {
-                "success": False,
-                "message": f"存储模板失败: {e!s}"
-            }
+            return {"success": False, "message": f"存储模板失败: {e!s}"}
 
-    def store_templates_v2(
-            self,
-            db: Session,
-            templates: list[dict[str, Any]],
-            tenant_id: str
-    ) -> dict[str, Any]:
+    def store_templates_v2(self, db: Session, templates: list[dict[str, Any]], tenant_id: str) -> dict[str, Any]:
         """存储QA模板V2到Milvus - 支持类型化参数"""
         try:
             # 获取嵌入模型
@@ -247,7 +212,7 @@ class QATemplateStorageService:
             texts_to_embed = []
             for template in templates:
                 # 收集标准问法
-                texts_to_embed.append(template['question_canonical'])
+                texts_to_embed.append(template["question_canonical"])
 
             # 批量向量化
             embeddings, _ = embedding_model.encode(texts_to_embed)
@@ -268,7 +233,7 @@ class QATemplateStorageService:
                 embedding_idx += 1
 
                 # 处理 sql_template：如果是数组则序列化为JSON，如果是字符串则保持兼容性
-                sql_template_value = template['sql_template']
+                sql_template_value = template["sql_template"]
                 if isinstance(sql_template_value, list):
                     sql_template_json = json.dumps(sql_template_value, ensure_ascii=False)
                 else:
@@ -277,18 +242,18 @@ class QATemplateStorageService:
 
                 record = {
                     "id": f"{tenant_id}_{template['qa_id']}_canonical",
-                    "qa_id": template['qa_id'],
-                    "question_canonical": template['question_canonical'],
-                    "paraphrases": json.dumps(template.get('paraphrases', []), ensure_ascii=False),
-                    "needed_params": json.dumps(template['needed_params'], ensure_ascii=False),
-                    "needed_params_typed": template.get('needed_params_typed', '[]'),  # V2新增字段
+                    "qa_id": template["qa_id"],
+                    "question_canonical": template["question_canonical"],
+                    "paraphrases": json.dumps(template.get("paraphrases", []), ensure_ascii=False),
+                    "needed_params": json.dumps(template["needed_params"], ensure_ascii=False),
+                    "needed_params_typed": template.get("needed_params_typed", "[]"),  # V2新增字段
                     "sql_template": sql_template_json,  # 存储为JSON字符串
-                    "rule_id": str(template['rule_id']) if template.get('rule_id') is not None else "",
+                    "rule_id": str(template["rule_id"]) if template.get("rule_id") is not None else "",
                     "tenant_id": tenant_id,
                     "vector": canonical_embedding.tolist(),
                     "create_timestamp": current_timestamp,
                     "update_timestamp": current_timestamp,
-                    "template_version": "v2"  # V2版本标记
+                    "template_version": "v2",  # V2版本标记
                 }
                 insert_data.append(record)
 
@@ -297,26 +262,14 @@ class QATemplateStorageService:
 
             # 检查 insert_count 是否与本批次长度一致
             if doc_store_result.get("insert_count", 0) != len(insert_data):
-                error_message = (
-                    f"Insert count mismatch: expected {len(insert_data)}, "
-                    f"got {doc_store_result.get('insert_count', 0)}."
-                )
+                error_message = f"Insert count mismatch: expected {len(insert_data)}, got {doc_store_result.get('insert_count', 0)}."
                 raise Exception(error_message)
 
-            return {
-                "success": True,
-                "message": f"成功存储 {len(templates)} 个QA模板V2（支持类型化参数）",
-                "template_count": len(templates),
-                "record_count": len(insert_data),
-                "version": "v2"
-            }
+            return {"success": True, "message": f"成功存储 {len(templates)} 个QA模板V2（支持类型化参数）", "template_count": len(templates), "record_count": len(insert_data), "version": "v2"}
 
         except Exception as e:
             logger.error(f"存储QA模板V2失败: {e}")
-            return {
-                "success": False,
-                "message": f"存储模板V2失败: {e!s}"
-            }
+            return {"success": False, "message": f"存储模板V2失败: {e!s}"}
 
     def _ensure_collection_v2_exists(self, dim):
         """创建V2集合"""
@@ -357,48 +310,23 @@ class QATemplateStorageService:
 
             # 创建BM25函数
             bm25_function_name = f"bm25_function_{str(uuid.uuid4())[:8]}"
-            bm25_function = Function(
-                name=bm25_function_name,
-                function_type=FunctionType.BM25,
-                input_field_names=["question_canonical"],
-                output_field_names="sparse_vector"
-            )
+            bm25_function = Function(name=bm25_function_name, function_type=FunctionType.BM25, input_field_names=["question_canonical"], output_field_names="sparse_vector")
 
             # 创建集合架构
             description = f"QA模板V2集合（支持类型化参数和混合检索）- 创建于 {datetime.now().isoformat()}"
-            schema = CollectionSchema(
-                fields=fields,
-                description=description,
-                enable_dynamic_field=True
-            )
+            schema = CollectionSchema(fields=fields, description=description, enable_dynamic_field=True)
             schema.add_function(bm25_function)
 
             # 创建集合
             conn = settings.docStoreConn._get_connection()
-            conn.create_collection(
-                self.collection_name,
-                schema,
-                consistency_level=DEFAULT_CONSISTENCY_LEVEL
-            )
+            conn.create_collection(self.collection_name, schema, consistency_level=DEFAULT_CONSISTENCY_LEVEL)
 
             # 为密集向量创建索引
-            dense_index_params = {
-                "metric_type": "COSINE",
-                "index_type": "IVF_FLAT",
-                "params": {"nlist": 128}
-            }
+            dense_index_params = {"metric_type": "COSINE", "index_type": "IVF_FLAT", "params": {"nlist": 128}}
             conn.create_index(self.collection_name, "vector", dense_index_params)
 
             # 为稀疏向量创建索引
-            sparse_index_params = {
-                "metric_type": "BM25",
-                "index_type": "SPARSE_INVERTED_INDEX",
-                "params": {
-                    "inverted_index_algo": "DAAT_WAND",
-                    "bm25_k1": 1.5,
-                    "bm25_b": 0.75
-                }
-            }
+            sparse_index_params = {"metric_type": "BM25", "index_type": "SPARSE_INVERTED_INDEX", "params": {"inverted_index_algo": "DAAT_WAND", "bm25_k1": 1.5, "bm25_b": 0.75}}
             conn.create_index(self.collection_name, "sparse_vector", sparse_index_params)
 
             # 加载集合
@@ -433,24 +361,13 @@ class QATemplateStorageService:
                 cleared_collections.append(f"{base_collection_name} (V1)")
 
             if cleared_collections:
-                return {
-                    "success": True,
-                    "message": f"成功清空租户 {tenant_id} 的QA模板",
-                    "cleared_collections": cleared_collections
-                }
+                return {"success": True, "message": f"成功清空租户 {tenant_id} 的QA模板", "cleared_collections": cleared_collections}
             else:
-                return {
-                    "success": True,
-                    "message": f"租户 {tenant_id} 没有找到QA模板集合",
-                    "cleared_collections": []
-                }
+                return {"success": True, "message": f"租户 {tenant_id} 没有找到QA模板集合", "cleared_collections": []}
 
         except Exception as e:
             logger.error(f"清空QA模板失败: {e}")
-            return {
-                "success": False,
-                "message": f"清空模板失败: {e!s}"
-            }
+            return {"success": False, "message": f"清空模板失败: {e!s}"}
 
     def delete_template_by_qa_id(self, qa_id: str, tenant_id: str) -> dict[str, Any]:
         """根据qa_id删除指定模板（单个）"""
@@ -464,16 +381,10 @@ class QATemplateStorageService:
             collection_name, collection_version = matcher._get_available_collection()
 
             if not collection_name:
-                return {
-                    "success": False,
-                    "message": "未找到可用的QA模板集合"
-                }
+                return {"success": False, "message": "未找到可用的QA模板集合"}
 
             if not qa_ids:
-                return {
-                    "success": False,
-                    "message": "qa_ids列表不能为空"
-                }
+                return {"success": False, "message": "qa_ids列表不能为空"}
 
             total_deleted = 0
             failed_qa_ids = []
@@ -487,11 +398,7 @@ class QATemplateStorageService:
                         delete_expr = f'tenant_id == "{tenant_id}" && qa_id == "{qa_id}"'
 
                         # 先查询要删除的记录数量
-                        query_results = settings.docStoreConn.query(
-                            collection_name=collection_name,
-                            filter=delete_expr,
-                            output_fields=["id"]
-                        )
+                        query_results = settings.docStoreConn.query(collection_name=collection_name, filter=delete_expr, output_fields=["id"])
 
                         if not query_results:
                             logger.warning(f"未找到租户 {tenant_id} 中 qa_id 为 {qa_id} 的模板")
@@ -503,16 +410,12 @@ class QATemplateStorageService:
                             # condition=delete_expr,
                             condition={"tenant_id": tenant_id, "qa_id": qa_id},
                             index_name=collection_name,
-                            dataset_id= ""
+                            dataset_id="",
                         )
                         total_deleted += len(query_results)
                     else:
                         # ES/OpenSearch/Infinity 使用位置参数: condition, index_name, knowledgebase_id
-                        delete_result = settings.docStoreConn.delete(
-                            {"tenant_id": tenant_id, "qa_id": qa_id},
-                            collection_name,
-                            ""
-                        )
+                        delete_result = settings.docStoreConn.delete({"tenant_id": tenant_id, "qa_id": qa_id}, collection_name, "")
                         # ES delete 返回删除的数量
                         deleted_count = delete_result if isinstance(delete_result, int) else 0
                         if deleted_count == 0:
@@ -543,22 +446,18 @@ class QATemplateStorageService:
                 "deleted_count": total_deleted,
                 "failed_qa_ids": failed_qa_ids if failed_qa_ids else None,
                 "success_qa_ids": success_qa_ids,
-                "collection_used": f"{collection_name} ({collection_version})"
+                "collection_used": f"{collection_name} ({collection_version})",
             }
 
         except Exception as e:
             logger.error(f"批量删除QA模板失败: {e}")
-            return {
-                "success": False,
-                "message": f"批量删除模板失败: {e!s}",
-                "failed_qa_ids": qa_ids
-            }
-
+            return {"success": False, "message": f"批量删除模板失败: {e!s}", "failed_qa_ids": qa_ids}
 
 
 # ================================
 # 2. 模板匹配服务
 # ================================
+
 
 class QATemplateMatchingService:
     """QA模板匹配服务 - 从Milvus中检索匹配的模板"""
@@ -578,13 +477,13 @@ class QATemplateMatchingService:
             return None, None
 
     def find_best_template(
-            self,
-            db: Session,
-            user_query: str,
-            tenant_id: str,
-            top_k: int = 10,
-            threshold: float = 0.3,
-            hybrid_weight: float = 0.7  # 密集向量权重，稀疏向量权重为1-hybrid_weight
+        self,
+        db: Session,
+        user_query: str,
+        tenant_id: str,
+        top_k: int = 10,
+        threshold: float = 0.3,
+        hybrid_weight: float = 0.7,  # 密集向量权重，稀疏向量权重为1-hybrid_weight
     ) -> dict[str, Any] | None:
         """
         从Milvus中检索最匹配的QA模板
@@ -607,15 +506,9 @@ class QATemplateMatchingService:
 
             # 设置输出字段（根据集合版本）
             if collection_version == "v2":
-                output_fields = [
-                    "qa_id", "question_canonical", "paraphrases", "needed_params",
-                    "needed_params_typed", "sql_template", "rule_id", "template_version"
-                ]
+                output_fields = ["qa_id", "question_canonical", "paraphrases", "needed_params", "needed_params_typed", "sql_template", "rule_id", "template_version"]
             else:
-                output_fields = [
-                    "qa_id", "question_canonical", "paraphrases", "needed_params",
-                    "sql_template", "rule_id"
-                ]
+                output_fields = ["qa_id", "question_canonical", "paraphrases", "needed_params", "sql_template", "rule_id"]
 
             filters = f'tenant_id == "{tenant_id}"'  # 添加租户过滤
 
@@ -635,13 +528,7 @@ class QATemplateMatchingService:
             )
             ranker = WeightedRanker(hybrid_weight, 1 - hybrid_weight)
 
-            results = settings.docStoreConn.hybrid_search(
-                collection_name=collection_name,
-                reqs=[dense_req, sparse_req],
-                ranker=ranker,
-                limit=top_k,
-                output_fields=output_fields
-            )
+            results = settings.docStoreConn.hybrid_search(collection_name=collection_name, reqs=[dense_req, sparse_req], ranker=ranker, limit=top_k, output_fields=output_fields)
             logger.info(f"混合检索结果: {results}")
 
             # 处理检索结果
@@ -653,7 +540,7 @@ class QATemplateMatchingService:
             best_result = results[0]
 
             # 计算相似度（distance转换为similarity）
-            similarity = best_result.get('distance', 1.0)
+            similarity = best_result.get("distance", 1.0)
 
             # 检查是否超过阈值
             if similarity < threshold:
@@ -661,21 +548,21 @@ class QATemplateMatchingService:
                 return None
 
             # 提取entity字段
-            entity = best_result.get('entity', {})
+            entity = best_result.get("entity", {})
             if not entity:
                 logger.error("检索结果中缺少entity字段")
                 return None
 
             # 解析JSON字段
             try:
-                paraphrases_str = entity.get('paraphrases', '[]')
+                paraphrases_str = entity.get("paraphrases", "[]")
                 paraphrases = json.loads(paraphrases_str) if paraphrases_str else []
             except json.JSONDecodeError as e:
                 logger.warning(f"解析paraphrases JSON失败: {e}")
                 paraphrases = []
 
             try:
-                needed_params_str = entity.get('needed_params', '[]')
+                needed_params_str = entity.get("needed_params", "[]")
                 needed_params = json.loads(needed_params_str) if needed_params_str else []
             except json.JSONDecodeError as e:
                 logger.warning(f"解析needed_params JSON失败: {e}")
@@ -685,18 +572,18 @@ class QATemplateMatchingService:
             typed_params = None
             if collection_version == "v2":
                 try:
-                    typed_params_str = entity.get('needed_params_typed', '[]')
+                    typed_params_str = entity.get("needed_params_typed", "[]")
                     typed_params = json.loads(typed_params_str) if typed_params_str else []
                 except json.JSONDecodeError as e:
                     logger.warning(f"解析needed_params_typed JSON失败: {e}")
                     typed_params = []
 
             # 解析 sql_template（V2版本存储为JSON数组）
-            sql_template_value = entity.get('sql_template')
+            sql_template_value = entity.get("sql_template")
             if collection_version == "v2":
                 try:
                     # V2版本：尝试解析为JSON数组
-                    if isinstance(sql_template_value, str) and sql_template_value.startswith('['):
+                    if isinstance(sql_template_value, str) and sql_template_value.startswith("["):
                         sql_template = json.loads(sql_template_value)
                     else:
                         # 向后兼容：如果不是JSON数组格式，转换为单元素数组
@@ -711,21 +598,21 @@ class QATemplateMatchingService:
 
             # 构建返回结果
             best_match = {
-                'qa_id': entity.get('qa_id'),
-                'question_canonical': entity.get('question_canonical'),
-                'paraphrases': paraphrases,
-                'needed_params': needed_params,
-                'sql_template': sql_template,
-                'rule_id': entity.get('rule_id') if entity.get('rule_id') else None,
-                'similarity': similarity,
-                'matched_text': entity.get('question_canonical'),
-                'match_score': best_result.get('distance', 1.0),
-                'collection_version': collection_version,  # 标记使用的集合版本
+                "qa_id": entity.get("qa_id"),
+                "question_canonical": entity.get("question_canonical"),
+                "paraphrases": paraphrases,
+                "needed_params": needed_params,
+                "sql_template": sql_template,
+                "rule_id": entity.get("rule_id") if entity.get("rule_id") else None,
+                "similarity": similarity,
+                "matched_text": entity.get("question_canonical"),
+                "match_score": best_result.get("distance", 1.0),
+                "collection_version": collection_version,  # 标记使用的集合版本
             }
 
             # 如果是V2模板，添加类型化参数信息
             if collection_version == "v2" and typed_params:
-                best_match['needed_params_typed'] = typed_params
+                best_match["needed_params_typed"] = typed_params
 
             logger.info(f"找到最佳匹配模板: qa_id={best_match['qa_id']}, similarity={similarity:.4f}, version={collection_version}")
             return best_match
@@ -738,6 +625,7 @@ class QATemplateMatchingService:
 # ================================
 # 3. 重构槽位抽取服务（无状态版本）
 # ================================
+
 
 class StatelessSlotExtractionService:
     """无状态槽位抽取服务"""
@@ -839,14 +727,7 @@ class StatelessSlotExtractionService:
 只返回JSON，不要包含其他文字。"""
 
     def extract_slots(
-        self,
-        db: Session,
-        user_query: str,
-        needed_params: list[str],
-        table_schemas: list[dict[str, Any]],
-        system_date: str,
-        tenant_id: str,
-        llm_name: str | None = None
+        self, db: Session, user_query: str, needed_params: list[str], table_schemas: list[dict[str, Any]], system_date: str, tenant_id: str, llm_name: str | None = None
     ) -> dict[str, Any]:
         """单轮槽位抽取 - 与原有实现保持一致"""
         try:
@@ -854,29 +735,20 @@ class StatelessSlotExtractionService:
             schema_info = ""
             for schema in table_schemas:
                 schema_info += f"表 {schema['table_name']}:\n"
-                for col in schema['columns']:
+                for col in schema["columns"]:
                     schema_info += f"  - {col['name']} ({col['type']}): {col.get('description', '')}\n"
 
             # 构建提示词
-            prompt = self.single_round_prompt.format(
-                needed_params=needed_params,
-                system_date=system_date,
-                table_schemas=schema_info,
-                user_query=user_query
-            )
+            prompt = self.single_round_prompt.format(needed_params=needed_params, system_date=system_date, table_schemas=schema_info, user_query=user_query)
 
             # 调用LLM
             chat_model = _get_chat_bundle(db, tenant_id, llm_name)
 
-            response = chat_model.chat(
-                system=prompt,
-                history=[{"role": "user", "content": "请按照要求输出"}],
-                gen_conf={"temperature": 0.1}
-            )
+            response = chat_model.chat(system=prompt, history=[{"role": "user", "content": "请按照要求输出"}], gen_conf={"temperature": 0.1})
 
             # 解析JSON结果
             try:
-                json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                json_match = re.search(r"\{.*\}", response, re.DOTALL)
                 if json_match:
                     extracted_params = json.loads(json_match.group())
                 else:
@@ -895,30 +767,14 @@ class StatelessSlotExtractionService:
                 else:
                     valid_params[param] = extracted_params[param]
 
-            return {
-                "extracted_params": valid_params,
-                "missing_params": missing_params,
-                "confidence": 0.8 if len(missing_params) == 0 else 0.5,
-                "raw_response": response
-            }
+            return {"extracted_params": valid_params, "missing_params": missing_params, "confidence": 0.8 if len(missing_params) == 0 else 0.5, "raw_response": response}
 
         except Exception as e:
             logger.error(f"Error extracting slots: {e}")
-            return {
-                "extracted_params": {},
-                "missing_params": needed_params,
-                "confidence": 0.0,
-                "raw_response": ""
-            }
+            return {"extracted_params": {}, "missing_params": needed_params, "confidence": 0.0, "raw_response": ""}
 
     def extract_and_merge_slots(
-        self,
-        db: Session,
-        dialog_context: dict[str, Any],
-        table_schemas: list[dict[str, Any]],
-        system_date: str,
-        tenant_id: str,
-        llm_name: str | None = None
+        self, db: Session, dialog_context: dict[str, Any], table_schemas: list[dict[str, Any]], system_date: str, tenant_id: str, llm_name: str | None = None
     ) -> dict[str, Any]:
         """多轮对话槽位抽取和合并 - 新增方法"""
         try:
@@ -941,7 +797,7 @@ class StatelessSlotExtractionService:
             schema_info = ""
             for schema in table_schemas:
                 schema_info += f"表 {schema['table_name']}:\n"
-                for col in schema['columns']:
+                for col in schema["columns"]:
                     schema_info += f"  - {col['name']} ({col['type']}): {col.get('description', '')}\n"
 
             # 构建提示词
@@ -951,21 +807,17 @@ class StatelessSlotExtractionService:
                 table_schemas=schema_info,
                 conversation_history=conversation_history.strip(),
                 existing_params=json.dumps(existing_params, ensure_ascii=False, indent=2),
-                missing_params=missing_params
+                missing_params=missing_params,
             )
 
             # 调用LLM
             chat_model = _get_chat_bundle(db, tenant_id, llm_name)
 
-            response = chat_model.chat(
-                system=prompt,
-                history=[{"role": "user", "content": "请按照要求输出参数"}],
-                gen_conf={"temperature": 0.1}
-            )
+            response = chat_model.chat(system=prompt, history=[{"role": "user", "content": "请按照要求输出参数"}], gen_conf={"temperature": 0.1})
 
             # 解析结果
             try:
-                json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                json_match = re.search(r"\{.*\}", response, re.DOTALL)
                 if json_match:
                     extracted_params = json.loads(json_match.group())
                 else:
@@ -984,21 +836,11 @@ class StatelessSlotExtractionService:
                 else:
                     valid_params[param] = extracted_params[param]
 
-            return {
-                "extracted_params": valid_params,
-                "missing_params": new_missing_params,
-                "confidence": 0.9 if len(new_missing_params) == 0 else 0.6,
-                "raw_response": response
-            }
+            return {"extracted_params": valid_params, "missing_params": new_missing_params, "confidence": 0.9 if len(new_missing_params) == 0 else 0.6, "raw_response": response}
 
         except Exception as e:
             logger.error(f"Error in multiturn slot extraction: {e}")
-            return {
-                "extracted_params": dialog_context.get("accumulated_params", {}),
-                "missing_params": dialog_context.get("missing_params", []),
-                "confidence": 0.0,
-                "raw_response": ""
-            }
+            return {"extracted_params": dialog_context.get("accumulated_params", {}), "missing_params": dialog_context.get("missing_params", []), "confidence": 0.0, "raw_response": ""}
 
     def extract_slots_typed(
         self,
@@ -1008,7 +850,7 @@ class StatelessSlotExtractionService:
         table_schemas: list[dict[str, Any]],
         system_date: str,
         tenant_id: str,
-        llm_name: str | None = None
+        llm_name: str | None = None,
     ) -> dict[str, Any]:
         """类型化单轮槽位抽取 - 支持数据类型"""
         try:
@@ -1016,7 +858,7 @@ class StatelessSlotExtractionService:
             schema_info = ""
             for schema in table_schemas:
                 schema_info += f"表 {schema['table_name']}:\n"
-                for col in schema['columns']:
+                for col in schema["columns"]:
                     schema_info += f"  - {col['name']} ({col['type']}): {col.get('description', '')}\n"
 
             # 准备类型化参数信息
@@ -1035,25 +877,16 @@ class StatelessSlotExtractionService:
                 typed_params_info += "\n"
 
             # 构建提示词
-            prompt = self.typed_single_round_prompt.format(
-                typed_params_info=typed_params_info.strip(),
-                system_date=system_date,
-                table_schemas=schema_info,
-                user_query=user_query
-            )
+            prompt = self.typed_single_round_prompt.format(typed_params_info=typed_params_info.strip(), system_date=system_date, table_schemas=schema_info, user_query=user_query)
 
             # 调用LLM
             chat_model = _get_chat_bundle(db, tenant_id, llm_name)
 
-            response = chat_model.chat(
-                system=prompt,
-                history=[{"role": "user", "content": "请按照要求输出"}],
-                gen_conf={"temperature": 0.1}
-            )
+            response = chat_model.chat(system=prompt, history=[{"role": "user", "content": "请按照要求输出"}], gen_conf={"temperature": 0.1})
 
             # 解析JSON结果
             try:
-                json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                json_match = re.search(r"\{.*\}", response, re.DOTALL)
                 if json_match:
                     extracted_params = json.loads(json_match.group())
                 else:
@@ -1087,21 +920,11 @@ class StatelessSlotExtractionService:
                     if required:
                         missing_params.append(param_name)
 
-            return {
-                "extracted_params": validated_params,
-                "missing_params": missing_params,
-                "confidence": 0.8 if len(missing_params) == 0 else 0.5,
-                "raw_response": response
-            }
+            return {"extracted_params": validated_params, "missing_params": missing_params, "confidence": 0.8 if len(missing_params) == 0 else 0.5, "raw_response": response}
 
         except Exception as e:
             logger.error(f"Error extracting typed slots: {e}")
-            return {
-                "extracted_params": {},
-                "missing_params": param_names,
-                "confidence": 0.0,
-                "raw_response": ""
-            }
+            return {"extracted_params": {}, "missing_params": param_names, "confidence": 0.0, "raw_response": ""}
 
     def _validate_and_convert_type(self, value: Any, data_type: str) -> Any:
         """验证和转换数据类型"""
@@ -1146,7 +969,8 @@ class StatelessSlotExtractionService:
             if isinstance(value, str):
                 # 简单日期格式验证
                 import re
-                if re.match(r'^\d{4}-\d{2}-\d{2}$', value):
+
+                if re.match(r"^\d{4}-\d{2}-\d{2}$", value):
                     return value
                 else:
                     raise ValueError(f"Date format should be YYYY-MM-DD, got {value}")
@@ -1157,13 +981,7 @@ class StatelessSlotExtractionService:
             return str(value)
 
     def extract_and_merge_slots_typed(
-        self,
-        db: Session,
-        dialog_context: dict[str, Any],
-        table_schemas: list[dict[str, Any]],
-        system_date: str,
-        tenant_id: str,
-        llm_name: str | None = None
+        self, db: Session, dialog_context: dict[str, Any], table_schemas: list[dict[str, Any]], system_date: str, tenant_id: str, llm_name: str | None = None
     ) -> dict[str, Any]:
         """V2类型化多轮对话槽位抽取和合并"""
         try:
@@ -1192,7 +1010,7 @@ class StatelessSlotExtractionService:
             schema_info = ""
             for schema in table_schemas:
                 schema_info += f"表 {schema['table_name']}:\n"
-                for col in schema['columns']:
+                for col in schema["columns"]:
                     schema_info += f"  - {col['name']} ({col['type']}): {col.get('description', '')}\n"
 
             # 准备类型化参数信息
@@ -1215,21 +1033,17 @@ class StatelessSlotExtractionService:
                 table_schemas=schema_info,
                 conversation_history=conversation_history.strip(),
                 existing_params=json.dumps(existing_params, ensure_ascii=False, indent=2),
-                missing_params=missing_params
+                missing_params=missing_params,
             )
 
             # 调用LLM
             chat_model = _get_chat_bundle(db, tenant_id, llm_name)
 
-            response = chat_model.chat(
-                system=prompt,
-                history=[{"role": "user", "content": "请按照要求输出参数"}],
-                gen_conf={"temperature": 0.1}
-            )
+            response = chat_model.chat(system=prompt, history=[{"role": "user", "content": "请按照要求输出参数"}], gen_conf={"temperature": 0.1})
 
             # 解析结果
             try:
-                json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                json_match = re.search(r"\{.*\}", response, re.DOTALL)
                 if json_match:
                     extracted_params = json.loads(json_match.group())
                 else:
@@ -1263,25 +1077,17 @@ class StatelessSlotExtractionService:
                     if required:
                         new_missing_params.append(param_name)
 
-            return {
-                "extracted_params": validated_params,
-                "missing_params": new_missing_params,
-                "confidence": 0.9 if len(new_missing_params) == 0 else 0.6,
-                "raw_response": response
-            }
+            return {"extracted_params": validated_params, "missing_params": new_missing_params, "confidence": 0.9 if len(new_missing_params) == 0 else 0.6, "raw_response": response}
 
         except Exception as e:
             logger.error(f"Error in typed multiturn slot extraction: {e}")
-            return {
-                "extracted_params": dialog_context.get("accumulated_params", {}),
-                "missing_params": dialog_context.get("missing_params", []),
-                "confidence": 0.0,
-                "raw_response": ""
-            }
+            return {"extracted_params": dialog_context.get("accumulated_params", {}), "missing_params": dialog_context.get("missing_params", []), "confidence": 0.0, "raw_response": ""}
+
 
 # ================================
 # 4. 追问服务
 # ================================
+
 
 class ClarificationService:
     """追问服务"""
@@ -1301,39 +1107,23 @@ class ClarificationService:
 
 只返回追问文本，不要包含其他内容。"""
 
-    def generate_clarification(
-            self,
-            db: Session,
-            user_query: str,
-            missing_params: list[str],
-            table_schemas: list[dict[str, Any]],
-            tenant_id: str,
-            llm_name: str | None = None
-    ) -> str:
+    def generate_clarification(self, db: Session, user_query: str, missing_params: list[str], table_schemas: list[dict[str, Any]], tenant_id: str, llm_name: str | None = None) -> str:
         """生成追问文案"""
         try:
             # 准备相关表结构信息
             schema_info = ""
             for schema in table_schemas:
-                for col in schema['columns']:
-                    if col['name'] in missing_params:
+                for col in schema["columns"]:
+                    if col["name"] in missing_params:
                         schema_info += f"- {col['name']}: {col.get('description', '')}\n"
 
             # 构建提示词
-            prompt = self.prompt_template.format(
-                missing_params=missing_params,
-                user_query=user_query,
-                table_schemas=schema_info
-            )
+            prompt = self.prompt_template.format(missing_params=missing_params, user_query=user_query, table_schemas=schema_info)
 
             # 调用LLM
             chat_model = _get_chat_bundle(db, tenant_id, llm_name)
 
-            response = chat_model.chat(
-                system=prompt,
-                history=[{"role": "user", "content": "按照要求输出内容"}],
-                gen_conf={"temperature": 0.7}
-            )
+            response = chat_model.chat(system=prompt, history=[{"role": "user", "content": "按照要求输出内容"}], gen_conf={"temperature": 0.7})
 
             return response.strip()
 
@@ -1346,6 +1136,7 @@ class ClarificationService:
 # 5. 核心无状态服务
 # ================================
 
+
 class StatelessQAService:
     """无状态QA服务 - 主要服务类"""
 
@@ -1355,18 +1146,18 @@ class StatelessQAService:
         self.clarification_generator = ClarificationService()
 
     def interpret(
-            self,
-            db: Session,
-            current_input: str,
-            table_schemas: list[dict[str, Any]],
-            tenant_id: str,
-            dialog_context: dict[str, Any] | None = None,
-            system_date: str | None = None,
-            similarity_threshold: float = 0.3,
-            hybrid_weight: float = 0.7,
-            llm_name: str | None = None,
-            force_new_template: bool = False,
-            enable_slot_merge: bool = True
+        self,
+        db: Session,
+        current_input: str,
+        table_schemas: list[dict[str, Any]],
+        tenant_id: str,
+        dialog_context: dict[str, Any] | None = None,
+        system_date: str | None = None,
+        similarity_threshold: float = 0.3,
+        hybrid_weight: float = 0.7,
+        llm_name: str | None = None,
+        force_new_template: bool = False,
+        enable_slot_merge: bool = True,
     ) -> dict[str, Any]:
         """
         无状态查询解释 - 核心方法
@@ -1396,18 +1187,10 @@ class StatelessQAService:
                 # 使用初始查询进行模板匹配
                 query_for_matching = context["initial_query"] if not force_new_template else current_input
 
-                matched_template = self.template_matcher.find_best_template(
-                    db=db,
-                    user_query=query_for_matching,
-                    tenant_id=tenant_id,
-                    threshold=similarity_threshold,
-                    hybrid_weight=hybrid_weight
-                )
+                matched_template = self.template_matcher.find_best_template(db=db, user_query=query_for_matching, tenant_id=tenant_id, threshold=similarity_threshold, hybrid_weight=hybrid_weight)
 
                 if not matched_template:
-                    return self._create_error_response(
-                        context, "未找到匹配的QA模板", 0.0
-                    )
+                    return self._create_error_response(context, "未找到匹配的QA模板", 0.0)
 
                 context["matched_template"] = matched_template
             else:
@@ -1420,23 +1203,13 @@ class StatelessQAService:
                     # 使用V2类型化参数抽取（多轮）
                     logger.info("使用V2类型化多轮参数抽取")
                     slot_result = self.slot_extractor.extract_and_merge_slots_typed(
-                        db=db,
-                        dialog_context=context,
-                        table_schemas=table_schemas,
-                        system_date=system_date or datetime.now().strftime("%Y-%m-%d"),
-                        tenant_id=tenant_id,
-                        llm_name=llm_name
+                        db=db, dialog_context=context, table_schemas=table_schemas, system_date=system_date or datetime.now().strftime("%Y-%m-%d"), tenant_id=tenant_id, llm_name=llm_name
                     )
                 else:
                     # 使用V1参数抽取（多轮）
                     logger.info("使用V1多轮参数抽取")
                     slot_result = self.slot_extractor.extract_and_merge_slots(
-                        db=db,
-                        dialog_context=context,
-                        table_schemas=table_schemas,
-                        system_date=system_date or datetime.now().strftime("%Y-%m-%d"),
-                        tenant_id=tenant_id,
-                        llm_name=llm_name
+                        db=db, dialog_context=context, table_schemas=table_schemas, system_date=system_date or datetime.now().strftime("%Y-%m-%d"), tenant_id=tenant_id, llm_name=llm_name
                     )
             else:
                 # 单轮对话：直接抽取
@@ -1450,7 +1223,7 @@ class StatelessQAService:
                         table_schemas=table_schemas,
                         system_date=system_date or datetime.now().strftime("%Y-%m-%d"),
                         tenant_id=tenant_id,
-                        llm_name=llm_name
+                        llm_name=llm_name,
                     )
                 else:
                     # 使用V1参数抽取（单轮）
@@ -1462,7 +1235,7 @@ class StatelessQAService:
                         table_schemas=table_schemas,
                         system_date=system_date or datetime.now().strftime("%Y-%m-%d"),
                         tenant_id=tenant_id,
-                        llm_name=llm_name
+                        llm_name=llm_name,
                     )
 
             # 4. 更新上下文中的参数
@@ -1473,12 +1246,7 @@ class StatelessQAService:
             if slot_result["missing_params"]:
                 # 需要追问
                 clarify_message = self.clarification_generator.generate_clarification(
-                    db=db,
-                    user_query=current_input,
-                    missing_params=slot_result["missing_params"],
-                    table_schemas=table_schemas,
-                    tenant_id=tenant_id,
-                    llm_name=llm_name
+                    db=db, user_query=current_input, missing_params=slot_result["missing_params"], table_schemas=table_schemas, tenant_id=tenant_id, llm_name=llm_name
                 )
 
                 return {
@@ -1493,9 +1261,9 @@ class StatelessQAService:
                     "processing_info": {
                         "rounds_count": len(context["rounds"]),
                         "template_source": "cached" if not is_first_round else "new_match",
-                        "slot_extraction_mode": "multi_round" if len(context["rounds"]) > 1 else "single_round"
+                        "slot_extraction_mode": "multi_round" if len(context["rounds"]) > 1 else "single_round",
                     },
-                    "updated_context": context
+                    "updated_context": context,
                 }
             else:
                 # 参数完整
@@ -1507,50 +1275,32 @@ class StatelessQAService:
                     "missing_params": [],
                     "rule_id": matched_template.get("rule_id"),
                     "confidence": slot_result["confidence"],
-                    "processing_info": {
-                        "rounds_count": len(context["rounds"]),
-                        "completion_round": len(context["rounds"])
-                    },
-                    "updated_context": context
+                    "processing_info": {"rounds_count": len(context["rounds"]), "completion_round": len(context["rounds"])},
+                    "updated_context": context,
                 }
 
         except Exception as e:
             logger.error(f"Error in stateless interpret: {e}")
-            return self._create_error_response(
-                context if 'context' in locals() else {},
-                f"处理出错: {e!s}",
-                0.0
-            )
+            return self._create_error_response(context if "context" in locals() else {}, f"处理出错: {e!s}", 0.0)
 
     def _create_initial_context(self, initial_query: str) -> dict[str, Any]:
         """创建初始上下文"""
         import time
+
         return {
             "session_id": f"sess_{int(time.time())}_{uuid.uuid4().hex[:8]}",
             "initial_query": initial_query,
-            "rounds": [
-                {
-                    "round_id": 1,
-                    "user_input": initial_query,
-                    "timestamp": datetime.now().isoformat()
-                }
-            ],
+            "rounds": [{"round_id": 1, "user_input": initial_query, "timestamp": datetime.now().isoformat()}],
             "matched_template": None,
             "accumulated_params": {},
             "missing_params": [],
-            "metadata": {
-                "created_at": datetime.now().isoformat()
-            }
+            "metadata": {"created_at": datetime.now().isoformat()},
         }
 
     def _add_round_to_context(self, context: dict[str, Any], user_input: str):
         """向上下文添加新轮次"""
         next_round_id = len(context["rounds"]) + 1
-        context["rounds"].append({
-            "round_id": next_round_id,
-            "user_input": user_input,
-            "timestamp": datetime.now().isoformat()
-        })
+        context["rounds"].append({"round_id": next_round_id, "user_input": user_input, "timestamp": datetime.now().isoformat()})
         context["metadata"]["last_updated"] = datetime.now().isoformat()
 
     def _create_error_response(self, context: dict[str, Any], message: str, confidence: float) -> dict[str, Any]:
@@ -1559,16 +1309,15 @@ class StatelessQAService:
             "status": "ERROR",
             "message": message,
             "confidence": confidence,
-            "processing_info": {
-                "error_occurred": True,
-                "rounds_count": len(context.get("rounds", []))
-            },
-            "updated_context": context
+            "processing_info": {"error_occurred": True, "rounds_count": len(context.get("rounds", []))},
+            "updated_context": context,
         }
+
 
 # ================================
 # 6. 评分和RAG服务
 # ================================
+
 
 class LLMScoringService:
     """LLM驱动的评分服务"""
@@ -1607,44 +1356,24 @@ class LLMScoringService:
 5. 保持客观公正的评价态度"""
 
     def calculate_score(
-            self,
-            db: Session,
-            rule_description: str,
-            data: list[dict[str, Any]],
-            context: dict[str, Any] | None = None,
-            tenant_id: str = "",
-            llm_name: str | None = None
+        self, db: Session, rule_description: str, data: list[dict[str, Any]], context: dict[str, Any] | None = None, tenant_id: str = "", llm_name: str | None = None
     ) -> dict[str, Any]:
         """使用LLM计算评分"""
         try:
             if not data:
-                return {
-                    "score": None,
-                    "score_text": "无数据可供评分",
-                    "analysis": "提供的数据为空，无法进行评分计算",
-                    "suggestions": "请提供有效的数据进行评分",
-                    "data_summary": {"total_records": 0}
-                }
+                return {"score": None, "score_text": "无数据可供评分", "analysis": "提供的数据为空，无法进行评分计算", "suggestions": "请提供有效的数据进行评分", "data_summary": {"total_records": 0}}
 
             # 准备数据
             data_json = json.dumps(data, ensure_ascii=False, indent=2)
             context_info = json.dumps(context or {}, ensure_ascii=False, indent=2)
 
             # 构建提示词
-            prompt = self.prompt_template.format(
-                rule_description=rule_description,
-                data_json=data_json,
-                context_info=context_info
-            )
+            prompt = self.prompt_template.format(rule_description=rule_description, data_json=data_json, context_info=context_info)
 
             # 调用LLM
             chat_model = _get_chat_bundle(db, tenant_id, llm_name)
 
-            response = chat_model.chat(
-                system=prompt,
-                history=[{"role": "user", "content": "请开始评分"}],
-                gen_conf={"temperature": 0.1}
-            )
+            response = chat_model.chat(system=prompt, history=[{"role": "user", "content": "请开始评分"}], gen_conf={"temperature": 0.1})
 
             # 解析LLM响应
             parsed_result = self._parse_score_response(response, data)
@@ -1658,7 +1387,7 @@ class LLMScoringService:
                 "score_text": f"评分计算失败：{e!s}",
                 "analysis": "系统在处理评分请求时发生错误",
                 "suggestions": "请检查输入数据和规则描述，稍后重试",
-                "data_summary": {"total_records": len(data), "error": str(e)}
+                "data_summary": {"total_records": len(data), "error": str(e)},
             }
 
     def _parse_score_response(self, response: str, original_data: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1666,11 +1395,7 @@ class LLMScoringService:
         try:
             # 提取最终得分
             score = None
-            score_patterns = [
-                r'最终得分[：:]\s*([0-9]+\.?[0-9]*)',
-                r'得分[：:]\s*([0-9]+\.?[0-9]*)',
-                r'分数[：:]\s*([0-9]+\.?[0-9]*)'
-            ]
+            score_patterns = [r"最终得分[：:]\s*([0-9]+\.?[0-9]*)", r"得分[：:]\s*([0-9]+\.?[0-9]*)", r"分数[：:]\s*([0-9]+\.?[0-9]*)"]
 
             for pattern in score_patterns:
                 score_match = re.search(pattern, response)
@@ -1690,7 +1415,7 @@ class LLMScoringService:
                 "analysis": sections.get("评分分析", "").strip(),
                 "suggestions": sections.get("改进建议", "").strip() or None,
                 "data_summary": data_summary,
-                "raw_response": response
+                "raw_response": response,
             }
 
         except Exception as e:
@@ -1701,7 +1426,7 @@ class LLMScoringService:
                 "analysis": "响应解析失败，请查看完整文本",
                 "suggestions": None,
                 "data_summary": {"total_records": len(original_data), "parse_error": str(e)},
-                "raw_response": response
+                "raw_response": response,
             }
 
     def _extract_sections(self, response: str) -> dict[str, str]:
@@ -1710,13 +1435,13 @@ class LLMScoringService:
         current_section = None
         current_content = []
 
-        lines = response.split('\n')
+        lines = response.split("\n")
         for line in lines:
             # 检查是否是标题行
-            if line.startswith('## '):
+            if line.startswith("## "):
                 # 保存前一个部分
                 if current_section:
-                    sections[current_section] = '\n'.join(current_content).strip()
+                    sections[current_section] = "\n".join(current_content).strip()
 
                 # 开始新部分
                 current_section = line[3:].strip()
@@ -1726,7 +1451,7 @@ class LLMScoringService:
 
         # 保存最后一个部分
         if current_section:
-            sections[current_section] = '\n'.join(current_content).strip()
+            sections[current_section] = "\n".join(current_content).strip()
 
         return sections
 
@@ -1735,23 +1460,14 @@ class LLMScoringService:
         if not data:
             return {"total_records": 0}
 
-        summary = {
-            "total_records": len(data),
-            "fields": list(data[0].keys()) if data else []
-        }
+        summary = {"total_records": len(data), "fields": list(data[0].keys()) if data else []}
 
         # 统计数值字段
         numeric_fields = []
         for field in summary["fields"]:
             values = [item.get(field) for item in data if isinstance(item.get(field), (int, float))]
             if values:
-                numeric_fields.append({
-                    "field": field,
-                    "total": sum(values),
-                    "average": sum(values) / len(values),
-                    "max": max(values),
-                    "min": min(values)
-                })
+                numeric_fields.append({"field": field, "total": sum(values), "average": sum(values) / len(values), "max": max(values), "min": min(values)})
 
         if numeric_fields:
             summary["numeric_stats"] = numeric_fields
@@ -1773,15 +1489,7 @@ class RAGService:
 请生成清晰、简短的中文回答，并在回答中适当引用资料内容。
 如果资料中没有相关信息，请明确说明。"""
 
-    def generate_answer(
-            self,
-            db: Session,
-            query: str,
-            kb_id: str,
-            tenant_id: str,
-            top_k: int = 5,
-            llm_name: str | None = None
-    ) -> dict[str, Any]:
+    def generate_answer(self, db: Session, query: str, kb_id: str, tenant_id: str, top_k: int = 5, llm_name: str | None = None) -> dict[str, Any]:
         """生成RAG回答"""
         try:
             from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -1803,7 +1511,7 @@ class RAGService:
                 collection_name=collection_name,
                 vector=query_embeddings[0].tolist(),
                 filter={"available_int": 1},  # 只搜索可用文档
-                top_k=top_k
+                top_k=top_k,
             )
 
             # 准备检索到的文档
@@ -1811,58 +1519,37 @@ class RAGService:
             sources = []
 
             for idx, result in enumerate(search_results):
-                chunk_content = result.get('content_with_weight', '')
-                doc_name = result.get('doc_name', f'文档{idx + 1}')
+                chunk_content = result.get("content_with_weight", "")
+                doc_name = result.get("doc_name", f"文档{idx + 1}")
 
                 retrieved_chunks.append(f"[来源{idx + 1}: {doc_name}]\n{chunk_content}")
-                sources.append({
-                    "source": doc_name,
-                    "content": chunk_content[:200] + "..." if len(chunk_content) > 200 else chunk_content,
-                    "score": result.get('score', 0.0)
-                })
+                sources.append({"source": doc_name, "content": chunk_content[:200] + "..." if len(chunk_content) > 200 else chunk_content, "score": result.get("score", 0.0)})
 
             if not retrieved_chunks:
-                return {
-                    "answer": "抱歉，我在知识库中没有找到相关信息来回答您的问题。",
-                    "sources": [],
-                    "confidence": 0.0
-                }
+                return {"answer": "抱歉，我在知识库中没有找到相关信息来回答您的问题。", "sources": [], "confidence": 0.0}
 
             # 构建提示词
             chunks_text = "\n\n".join(retrieved_chunks)
-            prompt = self.prompt_template.format(
-                retrieved_chunks=chunks_text,
-                query=query
-            )
+            prompt = self.prompt_template.format(retrieved_chunks=chunks_text, query=query)
 
             # 调用LLM生成回答
             chat_model = _get_chat_bundle(db, tenant_id, llm_name)
 
-            answer = chat_model.chat(
-                system=prompt,
-                history=[{"role": "user", "content": "请按照要求回答"}],
-                gen_conf={"temperature": 0.3}
-            )
+            answer = chat_model.chat(system=prompt, history=[{"role": "user", "content": "请按照要求回答"}], gen_conf={"temperature": 0.3})
 
             # 计算置信度（基于检索结果的平均分数）
-            avg_score = sum(s['score'] for s in sources) / len(sources) if sources else 0.0
+            avg_score = sum(s["score"] for s in sources) / len(sources) if sources else 0.0
             confidence = min(avg_score * 1.2, 1.0)  # 稍微提升置信度但不超过1.0
 
-            return {
-                "answer": answer.strip(),
-                "sources": sources,
-                "confidence": confidence
-            }
+            return {"answer": answer.strip(), "sources": sources, "confidence": confidence}
 
         except Exception as e:
             logger.error(f"Error generating RAG answer: {e}")
-            return {
-                "answer": f"生成回答时发生错误：{e!s}",
-                "sources": [],
-                "confidence": 0.0
-            }
+            return {"answer": f"生成回答时发生错误：{e!s}", "sources": [], "confidence": 0.0}
+
 
 # 在RAGService类后面添加强化版的评分服务
+
 
 class LLMScoringServiceV2:
     """LLM驱动的评分服务V2 - 强化正则提取能力"""
@@ -1925,18 +1612,18 @@ class LLMScoringServiceV2:
 6. 保持格式严格一致性"""
 
     def calculate_score_v2(
-            self,
-            db: Session,
-            user_input: str,
-            rule_description: str,
-            data: list[dict[str, Any]] | str,
-            context: dict[str, Any] | None = None,
-            tenant_id: str = "",
-            llm_name: str | None = None,
-            enable_multi_extraction: bool = True,
-            score_validation: bool = True,
-            expected_score_range: tuple[float, float] | None = None,
-            extraction_confidence_threshold: float = 0.8
+        self,
+        db: Session,
+        user_input: str,
+        rule_description: str,
+        data: list[dict[str, Any]] | str,
+        context: dict[str, Any] | None = None,
+        tenant_id: str = "",
+        llm_name: str | None = None,
+        enable_multi_extraction: bool = True,
+        score_validation: bool = True,
+        expected_score_range: tuple[float, float] | None = None,
+        extraction_confidence_threshold: float = 0.8,
     ) -> dict[str, Any]:
         """使用LLM计算评分 - V2强化版"""
         try:
@@ -1952,19 +1639,11 @@ class LLMScoringServiceV2:
             context_info = json.dumps(context or {}, ensure_ascii=False, indent=2)
 
             # 构建V2强化版提示词
-            prompt = self.prompt_template_v2.format(
-                rule_description=rule_description,
-                data_json=data_json,
-                context_info=context_info
-            )
+            prompt = self.prompt_template_v2.format(rule_description=rule_description, data_json=data_json, context_info=context_info)
 
             # 调用LLM
             chat_model = _get_chat_bundle(db, tenant_id, llm_name)
-            response = chat_model.chat(
-                system=prompt,
-                history=[{"role": "user", "content": f"{user_input}\n请严格按照格式要求进行评分"}],
-                gen_conf={"temperature": 0.1}
-            )
+            response = chat_model.chat(system=prompt, history=[{"role": "user", "content": f"{user_input}\n请严格按照格式要求进行评分"}], gen_conf={"temperature": 0.1})
 
             # V2强化版响应解析
             parsed_result = self._parse_score_response_v2(
@@ -1973,7 +1652,7 @@ class LLMScoringServiceV2:
                 enable_multi_extraction=enable_multi_extraction,
                 score_validation=score_validation,
                 expected_score_range=expected_score_range,
-                extraction_confidence_threshold=extraction_confidence_threshold
+                extraction_confidence_threshold=extraction_confidence_threshold,
             )
 
             return parsed_result
@@ -1983,13 +1662,13 @@ class LLMScoringServiceV2:
             return self._create_error_response_v2(data, str(e))
 
     def _parse_score_response_v2(
-            self,
-            response: str,
-            original_data: list[dict[str, Any]] | str,
-            enable_multi_extraction: bool = True,
-            score_validation: bool = True,
-            expected_score_range: tuple[float, float] | None = None,
-            extraction_confidence_threshold: float = 0.8
+        self,
+        response: str,
+        original_data: list[dict[str, Any]] | str,
+        enable_multi_extraction: bool = True,
+        score_validation: bool = True,
+        expected_score_range: tuple[float, float] | None = None,
+        extraction_confidence_threshold: float = 0.8,
     ) -> dict[str, Any]:
         """V2强化版响应解析"""
         try:
@@ -2023,20 +1702,10 @@ class LLMScoringServiceV2:
             unique_scores = list(dict.fromkeys(extraction_results))  # 保持顺序去重
 
             # 选择最佳分数
-            best_score, confidence, method = self._select_best_score(
-                unique_scores,
-                extraction_methods,
-                expected_score_range,
-                score_validation
-            )
+            best_score, confidence, method = self._select_best_score(unique_scores, extraction_methods, expected_score_range, score_validation)
 
             # 验证结果
-            validation_results = self._validate_score(
-                best_score,
-                expected_score_range,
-                original_data,
-                response
-            ) if score_validation else {"validated": True, "warnings": []}
+            validation_results = self._validate_score(best_score, expected_score_range, original_data, response) if score_validation else {"validated": True, "warnings": []}
 
             # 分段提取内容
             sections = self._extract_sections_v2(response)
@@ -2053,16 +1722,12 @@ class LLMScoringServiceV2:
                 "analysis": sections.get("详细评分分析", "").strip(),
                 "suggestions": sections.get("改进建议", "").strip() or None,
                 "data_summary": data_summary,
-                "extraction_details": {
-                    "all_extracted_scores": unique_scores,
-                    "extraction_methods_used": list(set(extraction_methods)),
-                    "total_extraction_attempts": len(extraction_results)
-                },
+                "extraction_details": {"all_extracted_scores": unique_scores, "extraction_methods_used": list(set(extraction_methods)), "total_extraction_attempts": len(extraction_results)},
                 "confidence": extraction_confidence,
                 "validation_results": validation_results,
                 "alternative_scores": unique_scores[1:] if len(unique_scores) > 1 else [],
                 "extraction_method": method,
-                "raw_response": response
+                "raw_response": response,
             }
 
         except Exception as e:
@@ -2075,9 +1740,9 @@ class LLMScoringServiceV2:
             # 策略1：最优先 - 提取用双星号包裹的 **总得分**（全局唯一标识符）
             # 这个格式是专门设计用来避免与小项得分混淆的
             double_star_patterns = [
-                r'\*\*总得分\*\*[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # **总得分**：XXX分
-                r'\*\*最终得分\*\*[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # **最终得分**：XXX分
-                r'\*\*总分\*\*[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # **总分**：XXX分
+                r"\*\*总得分\*\*[：:]?\s*([0-9]+\.?[0-9]*)\s*分",  # **总得分**：XXX分
+                r"\*\*最终得分\*\*[：:]?\s*([0-9]+\.?[0-9]*)\s*分",  # **最终得分**：XXX分
+                r"\*\*总分\*\*[：:]?\s*([0-9]+\.?[0-9]*)\s*分",  # **总分**：XXX分
             ]
 
             for pattern in double_star_patterns:
@@ -2088,7 +1753,7 @@ class LLMScoringServiceV2:
                     return score
 
             # 策略2：严格隔离"最终评分结果"章节，在章节内查找
-            final_section_match = re.search(r'=== 最终评分结果 ===(.*?)(?:===|$)', response, re.DOTALL | re.IGNORECASE)
+            final_section_match = re.search(r"=== 最终评分结果 ===(.*?)(?:===|$)", response, re.DOTALL | re.IGNORECASE)
 
             if final_section_match:
                 final_section_content = final_section_match.group(1)
@@ -2104,9 +1769,9 @@ class LLMScoringServiceV2:
 
                 # 在隔离的章节中查找普通格式的分数（降级方案）
                 section_patterns = [
-                    r'总得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
-                    r'最终得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
-                    r'总分[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
+                    r"总得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分",
+                    r"最终得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分",
+                    r"总分[：:]?\s*([0-9]+\.?[0-9]*)\s*分",
                 ]
 
                 for pattern in section_patterns:
@@ -2118,8 +1783,8 @@ class LLMScoringServiceV2:
 
             # 策略3：如果没有找到严格的章节，尝试查找"最终评分结果"的直接模式
             fallback_patterns = [
-                r'=== 最终评分结果 ===.*?\*\*总得分\*\*[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 优先双星号
-                r'=== 最终评分结果 ===.*?总得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
+                r"=== 最终评分结果 ===.*?\*\*总得分\*\*[：:]?\s*([0-9]+\.?[0-9]*)\s*分",  # 优先双星号
+                r"=== 最终评分结果 ===.*?总得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分",
             ]
 
             for pattern in fallback_patterns:
@@ -2139,8 +1804,8 @@ class LLMScoringServiceV2:
         try:
             # 优先：尝试查找引用到 **总得分** 的模式
             reference_patterns = [
-                r'最终结果[：:]?\s*见.*?\*\*总得分\*\*',  # 最终结果：见"最终评分结果"部分的"**总得分**"
-                r'最终[：:]?\s*见.*?总得分',  # 最终：见"最终评分结果"部分的"总得分"
+                r"最终结果[：:]?\s*见.*?\*\*总得分\*\*",  # 最终结果：见"最终评分结果"部分的"**总得分**"
+                r"最终[：:]?\s*见.*?总得分",  # 最终：见"最终评分结果"部分的"总得分"
             ]
 
             for pattern in reference_patterns:
@@ -2150,9 +1815,9 @@ class LLMScoringServiceV2:
 
             # 尝试多种可能的计算章节名称
             calculation_section_patterns = [
-                r'=== 详细评分分析 ===(.*?)(?:===|$)',
-                r'分数计算[：:]?(.*?)(?:===|$|\n\n)',
-                r'计算过程[：:]?(.*?)(?:===|$|\n\n)',
+                r"=== 详细评分分析 ===(.*?)(?:===|$)",
+                r"分数计算[：:]?(.*?)(?:===|$|\n\n)",
+                r"计算过程[：:]?(.*?)(?:===|$|\n\n)",
             ]
 
             calculation_section_content = None
@@ -2167,9 +1832,9 @@ class LLMScoringServiceV2:
             if calculation_section_content:
                 # 在隔离的章节中查找最终得分，排除中间步骤
                 final_patterns = [
-                    r'最终(?:结果|得分)[：:]?\s*(?:见.*?总得分|([0-9]+\.?[0-9]*)\s*分)',  # 最终结果，可能引用到总得分
-                    r'(?<!小项|部分|单项)(?:总计|合计)得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 总计得分，但排除小项等
-                    r'综合计算结果[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
+                    r"最终(?:结果|得分)[：:]?\s*(?:见.*?总得分|([0-9]+\.?[0-9]*)\s*分)",  # 最终结果，可能引用到总得分
+                    r"(?<!小项|部分|单项)(?:总计|合计)得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分",  # 总计得分，但排除小项等
+                    r"综合计算结果[：:]?\s*([0-9]+\.?[0-9]*)\s*分",
                 ]
 
                 for pattern in final_patterns:
@@ -2181,7 +1846,7 @@ class LLMScoringServiceV2:
 
             # 如果没有找到严格的章节隔离，尝试宽松模式但增加限制
             fallback_patterns = [
-                r'(?:分数计算|计算过程).*?最终.*?([0-9]+\.?[0-9]*)\s*分',
+                r"(?:分数计算|计算过程).*?最终.*?([0-9]+\.?[0-9]*)\s*分",
             ]
 
             for pattern in fallback_patterns:
@@ -2203,41 +1868,35 @@ class LLMScoringServiceV2:
         # 改进版正则表达式模式 - 最优先识别双星号包裹的格式
         enhanced_patterns = [
             # 【最高优先级】双星号包裹的格式 - 全局唯一标识符
-            r'\*\*总得分\*\*[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # **总得分**：XXX分
-            r'\*\*最终得分\*\*[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # **最终得分**：XXX分
-            r'\*\*总分\*\*[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # **总分**：XXX分
-
+            r"\*\*总得分\*\*[：:]?\s*([0-9]+\.?[0-9]*)\s*分",  # **总得分**：XXX分
+            r"\*\*最终得分\*\*[：:]?\s*([0-9]+\.?[0-9]*)\s*分",  # **最终得分**：XXX分
+            r"\*\*总分\*\*[：:]?\s*([0-9]+\.?[0-9]*)\s*分",  # **总分**：XXX分
             # 【高优先级】具体考核结果表述（更倾向于个人实际得分）
-            r'(?:考核|考评|评定|评估).*?(?:得分|分数)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 考核得分、考评得分
-            r'(?:论文|项目|工作).*?(?:考核|考评|评分).*?(?:得分|分数)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 具体项目考核得分
-            r'(?:实际|个人|最终)(?:得分|分数|考核结果)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 实际得分、个人得分
-
+            r"(?:考核|考评|评定|评估).*?(?:得分|分数)[：:]?\s*([0-9]+\.?[0-9]*)\s*分",  # 考核得分、考评得分
+            r"(?:论文|项目|工作).*?(?:考核|考评|评分).*?(?:得分|分数)[：:]?\s*([0-9]+\.?[0-9]*)\s*分",  # 具体项目考核得分
+            r"(?:实际|个人|最终)(?:得分|分数|考核结果)[：:]?\s*([0-9]+\.?[0-9]*)\s*分",  # 实际得分、个人得分
             # 【中等优先级】明确的最终结果表述
-            r'最终(?:得分|分数|结果)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 最终得分、最终分数、最终结果
-            r'综合(?:得分|分数|评分)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 综合得分
-            r'总体(?:得分|分数|评分)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 总体得分
-
+            r"最终(?:得分|分数|结果)[：:]?\s*([0-9]+\.?[0-9]*)\s*分",  # 最终得分、最终分数、最终结果
+            r"综合(?:得分|分数|评分)[：:]?\s*([0-9]+\.?[0-9]*)\s*分",  # 综合得分
+            r"总体(?:得分|分数|评分)[：:]?\s*([0-9]+\.?[0-9]*)\s*分",  # 总体得分
             # 【较低优先级】可能是制度标准的表述（谨慎对待）
-            r'(?:评分|考核)结果[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 评分结果、考核结果
-            r'(?:计算)?结果[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 结果XXX分
-
+            r"(?:评分|考核)结果[：:]?\s*([0-9]+\.?[0-9]*)\s*分",  # 评分结果、考核结果
+            r"(?:计算)?结果[：:]?\s*([0-9]+\.?[0-9]*)\s*分",  # 结果XXX分
             # 格式化输出中的分数（通常出现在总结部分）
-            r'^(?:得分|分数)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 行首的得分（避免"总分"）
-            r'\n(?:得分|分数)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 换行后的得分
-
+            r"^(?:得分|分数)[：:]?\s*([0-9]+\.?[0-9]*)\s*分",  # 行首的得分（避免"总分"）
+            r"\n(?:得分|分数)[：:]?\s*([0-9]+\.?[0-9]*)\s*分",  # 换行后的得分
             # 避免中间步骤，只匹配明确的总计表述
-            r'合计[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
-            r'总计[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
-
+            r"合计[：:]?\s*([0-9]+\.?[0-9]*)\s*分",
+            r"总计[：:]?\s*([0-9]+\.?[0-9]*)\s*分",
             # 英文表达 - 更严格
-            r'(?:total\s+|final\s+)score[:\s]*([0-9]+\.?[0-9]*)',
-            r'(?:overall\s+|total\s+)points?[:\s]*([0-9]+\.?[0-9]*)',
+            r"(?:total\s+|final\s+)score[:\s]*([0-9]+\.?[0-9]*)",
+            r"(?:overall\s+|total\s+)points?[:\s]*([0-9]+\.?[0-9]*)",
         ]
 
         # 简化排除模式：只排除最明显的中间步骤关键词
         exclusion_contexts = [
-            r'步骤.*?([0-9]+\.?[0-9]*)\s*分',  # 步骤中的分数
-            r'小项.*?([0-9]+\.?[0-9]*)\s*分',  # 小项分数
+            r"步骤.*?([0-9]+\.?[0-9]*)\s*分",  # 步骤中的分数
+            r"小项.*?([0-9]+\.?[0-9]*)\s*分",  # 小项分数
         ]
 
         # 为不同模式设置权重（用于后续置信度计算）
@@ -2261,11 +1920,11 @@ class LLMScoringServiceV2:
             11: 0.7,  # 行首得分
             12: 0.7,  # 换行后得分
             # 总计表述
-            13: 0.7, # 合计
-            14: 0.7, # 总计
+            13: 0.7,  # 合计
+            14: 0.7,  # 总计
             # 英文表达
-            15: 0.8, # 英文final score
-            16: 0.8, # 英文total points
+            15: 0.8,  # 英文final score
+            16: 0.8,  # 英文total points
         }
 
         scores_with_weights = []  # 存储(score, weight)元组
@@ -2315,7 +1974,7 @@ class LLMScoringServiceV2:
         scores = []
 
         # 查找所有数字
-        number_pattern = r'\b([0-9]+\.?[0-9]*)\b'
+        number_pattern = r"\b([0-9]+\.?[0-9]*)\b"
         numbers = [float(m.group(1)) for m in re.finditer(number_pattern, response)]
 
         # 过滤合理的分数范围 (通常考核分数在0-100000之间)
@@ -2323,6 +1982,7 @@ class LLMScoringServiceV2:
 
         # 查找重复出现的数字（可能是最终答案）
         from collections import Counter
+
         number_counts = Counter(reasonable_scores)
 
         # 优先选择出现频率较高的数字
@@ -2333,24 +1993,13 @@ class LLMScoringServiceV2:
 
         return scores[:3]  # 最多返回3个候选分数
 
-    def _select_best_score(
-            self,
-            scores: list[float],
-            methods: list[str],
-            expected_range: tuple[float, float] | None = None,
-            validation_enabled: bool = True
-    ) -> tuple[float | None, float, str]:
+    def _select_best_score(self, scores: list[float], methods: list[str], expected_range: tuple[float, float] | None = None, validation_enabled: bool = True) -> tuple[float | None, float, str]:
         """选择最佳分数 - 增强版，智能过滤中间步骤分数"""
         if not scores:
             return None, 0.0, "no_extraction"
 
         # 方法优先级（越小优先级越高）
-        method_priority = {
-            "final_section_primary": 1,
-            "calculation_section": 2,
-            "enhanced_regex": 3,
-            "number_sequence": 4
-        }
+        method_priority = {"final_section_primary": 1, "calculation_section": 2, "enhanced_regex": 3, "number_sequence": 4}
 
         # 为每个分数计算置信度和过滤可疑分数
         score_confidences = []
@@ -2358,15 +2007,10 @@ class LLMScoringServiceV2:
             method = methods[i] if i < len(methods) else "unknown"
 
             # 基础置信度（基于提取方法）
-            base_confidence = {
-                "final_section_primary": 0.95,
-                "calculation_section": 0.85,
-                "enhanced_regex": 0.7,
-                "number_sequence": 0.6
-            }.get(method, 0.5)
+            base_confidence = {"final_section_primary": 0.95, "calculation_section": 0.85, "enhanced_regex": 0.7, "number_sequence": 0.6}.get(method, 0.5)
 
             # 如果是enhanced_regex方法，还要考虑模式权重
-            if method == "enhanced_regex" and hasattr(self, '_pattern_weights') and score in self._pattern_weights:
+            if method == "enhanced_regex" and hasattr(self, "_pattern_weights") and score in self._pattern_weights:
                 pattern_weight = self._pattern_weights[score]
                 base_confidence = base_confidence * pattern_weight
                 logger.debug(f"应用模式权重: {score} -> 置信度 {base_confidence:.3f} (权重: {pattern_weight})")
@@ -2392,20 +2036,9 @@ class LLMScoringServiceV2:
         logger.info(f"选择最佳分数: {best_score} (置信度: {confidence:.2f}, 方法: {method})")
         return best_score, confidence, method
 
-
-    def _validate_score(
-            self,
-            score: float | None,
-            expected_range: tuple[float, float] | None,
-            original_data: list[dict[str, Any]] | str,
-            response: str
-    ) -> dict[str, Any]:
+    def _validate_score(self, score: float | None, expected_range: tuple[float, float] | None, original_data: list[dict[str, Any]] | str, response: str) -> dict[str, Any]:
         """验证分数的合理性 - 增强版，检测中间步骤分数"""
-        validation_result = {
-            "validated": True,
-            "warnings": [],
-            "errors": []
-        }
+        validation_result = {"validated": True, "warnings": [], "errors": []}
 
         if score is None:
             validation_result["validated"] = False
@@ -2422,9 +2055,7 @@ class LLMScoringServiceV2:
         if expected_range:
             min_score, max_score = expected_range
             if not (min_score <= score <= max_score):
-                validation_result["warnings"].append(
-                    f"分数 {score} 超出期望范围 [{min_score}, {max_score}]"
-                )
+                validation_result["warnings"].append(f"分数 {score} 超出期望范围 [{min_score}, {max_score}]")
 
         # 数据一致性检查
         data_count = len(original_data)
@@ -2435,28 +2066,27 @@ class LLMScoringServiceV2:
 
         return validation_result
 
-
     def _extract_sections_v2(self, response: str) -> dict[str, str]:
         """V2版本的分段提取，支持新的格式"""
         sections = {}
         current_section = None
         current_content = []
 
-        lines = response.split('\n')
+        lines = response.split("\n")
         for line in lines:
             # 检查是否是V2格式的标题行
-            if line.startswith('=== ') and line.endswith(' ==='):
+            if line.startswith("=== ") and line.endswith(" ==="):
                 # 保存前一个部分
                 if current_section:
-                    sections[current_section] = '\n'.join(current_content).strip()
+                    sections[current_section] = "\n".join(current_content).strip()
 
                 # 开始新部分
                 current_section = line[4:-4].strip()  # 去掉 "=== " 和 " ==="
                 current_content = []
-            elif line.startswith('## '):
+            elif line.startswith("## "):
                 # 兼容V1格式
                 if current_section:
-                    sections[current_section] = '\n'.join(current_content).strip()
+                    sections[current_section] = "\n".join(current_content).strip()
                 current_section = line[3:].strip()
                 current_content = []
             elif current_section:
@@ -2464,7 +2094,7 @@ class LLMScoringServiceV2:
 
         # 保存最后一个部分
         if current_section:
-            sections[current_section] = '\n'.join(current_content).strip()
+            sections[current_section] = "\n".join(current_content).strip()
 
         return sections
 
@@ -2475,23 +2105,12 @@ class LLMScoringServiceV2:
 
         # 如果data是字符串，返回字符串长度汇总
         if isinstance(data, str):
-            return {
-                "total_records": 1,
-                "data_type": "string",
-                "string_length": len(data),
-                "version": "v2"
-            }
+            return {"total_records": 1, "data_type": "string", "string_length": len(data), "version": "v2"}
 
-        summary = {
-            "total_records": len(data),
-            "version": "v2"
-        }
+        summary = {"total_records": len(data), "version": "v2"}
 
         # 检测数据结构类型
-        has_table_structure = any(
-            isinstance(item, dict) and "table" in item and "data_details" in item
-            for item in data
-        )
+        has_table_structure = any(isinstance(item, dict) and "table" in item and "data_details" in item for item in data)
 
         if has_table_structure:
             # 处理表结构数据
@@ -2510,7 +2129,7 @@ class LLMScoringServiceV2:
                         "table_name": table_info.get("table_name", "unknown"),
                         "table_desc": table_info.get("table_desc", ""),
                         "record_count": len(data_details) if isinstance(data_details, list) else 0,
-                        "fields": []
+                        "fields": [],
                     }
 
                     # 处理字段结构信息
@@ -2520,10 +2139,7 @@ class LLMScoringServiceV2:
                                 field_name = field_info.get("column_name", "")
                                 field_desc = field_info.get("column_desc", "")
                                 if field_name:
-                                    table_summary["fields"].append({
-                                        "name": field_name,
-                                        "description": field_desc
-                                    })
+                                    table_summary["fields"].append({"name": field_name, "description": field_desc})
                                     all_fields.add(field_name)
                                     field_descriptions[field_name] = field_desc
 
@@ -2541,20 +2157,13 @@ class LLMScoringServiceV2:
                                         field_types.setdefault(field_name, set()).add(type(value).__name__)
                                         field_non_empty_count[field_name] = field_non_empty_count.get(field_name, 0) + 1
 
-                        table_summary["field_stats"] = {
-                            "field_types": {k: list(v) for k, v in field_types.items()},
-                            "non_empty_counts": field_non_empty_count
-                        }
+                        table_summary["field_stats"] = {"field_types": {k: list(v) for k, v in field_types.items()}, "non_empty_counts": field_non_empty_count}
 
                     tables_info.append(table_summary)
 
-            summary.update({
-                "tables_count": len(tables_info),
-                "total_data_records": total_data_records,
-                "tables_info": tables_info,
-                "all_fields": list(all_fields),
-                "field_descriptions": field_descriptions
-            })
+            summary.update(
+                {"tables_count": len(tables_info), "total_data_records": total_data_records, "tables_info": tables_info, "all_fields": list(all_fields), "field_descriptions": field_descriptions}
+            )
 
             # 统计数值字段（跨所有表）
             numeric_stats = []
@@ -2565,30 +2174,17 @@ class LLMScoringServiceV2:
                             for field_name, value in record.items():
                                 if isinstance(value, (int, float)):
                                     # 查找已存在的字段统计或创建新的
-                                    existing_stat = next(
-                                        (stat for stat in numeric_stats if stat["field"] == field_name),
-                                        None
-                                    )
+                                    existing_stat = next((stat for stat in numeric_stats if stat["field"] == field_name), None)
                                     if existing_stat:
                                         existing_stat["values"].append(value)
                                     else:
-                                        numeric_stats.append({
-                                            "field": field_name,
-                                            "values": [value],
-                                            "description": field_descriptions.get(field_name, "")
-                                        })
+                                        numeric_stats.append({"field": field_name, "values": [value], "description": field_descriptions.get(field_name, "")})
 
             # 计算数值字段统计
             for stat in numeric_stats:
                 values = stat["values"]
                 if values:
-                    stat.update({
-                        "count": len(values),
-                        "total": sum(values),
-                        "average": sum(values) / len(values),
-                        "max": max(values),
-                        "min": min(values)
-                    })
+                    stat.update({"count": len(values), "total": sum(values), "average": sum(values) / len(values), "max": max(values), "min": min(values)})
                     del stat["values"]  # 移除原始值列表以节省空间
 
             if numeric_stats:
@@ -2616,14 +2212,7 @@ class LLMScoringServiceV2:
             for field in summary["fields"]:
                 values = [item.get(field) for item in data if isinstance(item.get(field), (int, float))]
                 if values:
-                    numeric_fields.append({
-                        "field": field,
-                        "count": len(values),
-                        "total": sum(values),
-                        "average": sum(values) / len(values),
-                        "max": max(values),
-                        "min": min(values)
-                    })
+                    numeric_fields.append({"field": field, "count": len(values), "total": sum(values), "average": sum(values) / len(values), "max": max(values), "min": min(values)})
 
             if numeric_fields:
                 summary["numeric_stats"] = numeric_fields
@@ -2646,16 +2235,12 @@ class LLMScoringServiceV2:
             "analysis": "提供的数据为空，无法进行评分计算",
             "suggestions": "请提供有效的数据进行评分",
             "data_summary": {"total_records": 0, "version": "v2"},
-            "extraction_details": {
-                "all_extracted_scores": [],
-                "extraction_methods_used": [],
-                "total_extraction_attempts": 0
-            },
+            "extraction_details": {"all_extracted_scores": [], "extraction_methods_used": [], "total_extraction_attempts": 0},
             "confidence": 0.0,
             "validation_results": {"validated": False, "warnings": [], "errors": ["数据为空"]},
             "alternative_scores": [],
             "extraction_method": "no_data",
-            "raw_response": ""
+            "raw_response": "",
         }
 
     def _create_error_response_v2(self, data: list[dict[str, Any]] | str, error_msg: str) -> dict[str, Any]:
@@ -2668,16 +2253,12 @@ class LLMScoringServiceV2:
             "analysis": "系统在处理评分请求时发生错误",
             "suggestions": "请检查输入数据和规则描述，稍后重试",
             "data_summary": {"total_records": total_records, "error": error_msg, "version": "v2"},
-            "extraction_details": {
-                "all_extracted_scores": [],
-                "extraction_methods_used": [],
-                "total_extraction_attempts": 0
-            },
+            "extraction_details": {"all_extracted_scores": [], "extraction_methods_used": [], "total_extraction_attempts": 0},
             "confidence": 0.0,
             "validation_results": {"validated": False, "warnings": [], "errors": [error_msg]},
             "alternative_scores": [],
             "extraction_method": "error",
-            "raw_response": ""
+            "raw_response": "",
         }
 
     def _create_parse_error_response_v2(self, response: str, data: list[dict[str, Any]] | str, error_msg: str) -> dict[str, Any]:
@@ -2690,14 +2271,10 @@ class LLMScoringServiceV2:
             "analysis": f"响应解析失败：{error_msg}",
             "suggestions": "请查看原始响应内容",
             "data_summary": {"total_records": total_records, "parse_error": error_msg, "version": "v2"},
-            "extraction_details": {
-                "all_extracted_scores": [],
-                "extraction_methods_used": [],
-                "total_extraction_attempts": 0
-            },
+            "extraction_details": {"all_extracted_scores": [], "extraction_methods_used": [], "total_extraction_attempts": 0},
             "confidence": 0.0,
             "validation_results": {"validated": False, "warnings": [], "errors": [f"解析错误: {error_msg}"]},
             "alternative_scores": [],
             "extraction_method": "parse_error",
-            "raw_response": response
+            "raw_response": response,
         }

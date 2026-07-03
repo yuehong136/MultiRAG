@@ -263,61 +263,75 @@ class TestTableDetection:
     #     result = is_single_table(html_content)
     #     assert result == expected
 
-    @pytest.mark.parametrize("html_content,expected", [
-        (INPUTS_TABLE_HTML, False),
-        (SINGLE_NORMAL_TABLE_HTML, False),
-        (MULTIPLE_TABLES_WITH_NAME_HTML, True),
-        (SINGLE_EMPTY_TABLE_WITH_MULTIPLE_BR_HTML, False),
-        (ONE_COLUMN_MULTIPLE_ROWS_TABLE_HTML, False),
-    ])
+    @pytest.mark.parametrize(
+        "html_content,expected",
+        [
+            (INPUTS_TABLE_HTML, False),
+            (SINGLE_NORMAL_TABLE_HTML, False),
+            (MULTIPLE_TABLES_WITH_NAME_HTML, True),
+            (SINGLE_EMPTY_TABLE_WITH_MULTIPLE_BR_HTML, False),
+            (ONE_COLUMN_MULTIPLE_ROWS_TABLE_HTML, False),
+        ],
+    )
     def test_is_multiple_tables_with_name(self, html_content, expected):
         result = is_multiple_tables_with_name(html_content)
         assert result == expected
 
-    @pytest.mark.parametrize("html_content,expected", [
-        (INPUTS_TABLE_HTML, False),
-        (SINGLE_NORMAL_TABLE_HTML, True),
-        (MULTIPLE_TABLES_WITH_NAME_HTML, False),
-        (SINGLE_EMPTY_TABLE_WITH_MULTIPLE_BR_HTML, False),
-        (ONE_COLUMN_MULTIPLE_ROWS_TABLE_HTML, False),
-    ])
+    @pytest.mark.parametrize(
+        "html_content,expected",
+        [
+            (INPUTS_TABLE_HTML, False),
+            (SINGLE_NORMAL_TABLE_HTML, True),
+            (MULTIPLE_TABLES_WITH_NAME_HTML, False),
+            (SINGLE_EMPTY_TABLE_WITH_MULTIPLE_BR_HTML, False),
+            (ONE_COLUMN_MULTIPLE_ROWS_TABLE_HTML, False),
+        ],
+    )
     def test_is_single_normal_table(self, html_content, expected):
         result = is_single_normal_table(html_content)
         assert result == expected
 
-    @pytest.mark.parametrize("html_content,expected", [
-        (INPUTS_TABLE_HTML, True),
-        (SINGLE_NORMAL_TABLE_HTML, False),
-        (MULTIPLE_TABLES_WITH_NAME_HTML, False),
-        (SINGLE_EMPTY_TABLE_WITH_MULTIPLE_BR_HTML, False),
-        (ONE_COLUMN_MULTIPLE_ROWS_TABLE_HTML, False),
-    ])
+    @pytest.mark.parametrize(
+        "html_content,expected",
+        [
+            (INPUTS_TABLE_HTML, True),
+            (SINGLE_NORMAL_TABLE_HTML, False),
+            (MULTIPLE_TABLES_WITH_NAME_HTML, False),
+            (SINGLE_EMPTY_TABLE_WITH_MULTIPLE_BR_HTML, False),
+            (ONE_COLUMN_MULTIPLE_ROWS_TABLE_HTML, False),
+        ],
+    )
     def test_is_inputs_table(self, html_content, expected):
         result = is_inputs_table(html_content)
         assert result == expected
 
-    @pytest.mark.parametrize("html_content,expected", [
-        (INPUTS_TABLE_HTML, False),
-        (SINGLE_NORMAL_TABLE_HTML, False),
-        (MULTIPLE_TABLES_WITH_NAME_HTML, False),
-        (SINGLE_EMPTY_TABLE_WITH_MULTIPLE_BR_HTML, True),
-        (ONE_COLUMN_MULTIPLE_ROWS_TABLE_HTML, False),
-    ])
+    @pytest.mark.parametrize(
+        "html_content,expected",
+        [
+            (INPUTS_TABLE_HTML, False),
+            (SINGLE_NORMAL_TABLE_HTML, False),
+            (MULTIPLE_TABLES_WITH_NAME_HTML, False),
+            (SINGLE_EMPTY_TABLE_WITH_MULTIPLE_BR_HTML, True),
+            (ONE_COLUMN_MULTIPLE_ROWS_TABLE_HTML, False),
+        ],
+    )
     def test_is_single_empty_table_with_multiple_br(self, html_content, expected):
         result = is_single_empty_table_with_multiple_br(html_content)
         assert result == expected
 
-    @pytest.mark.parametrize("html_content,expected", [
-        (INPUTS_TABLE_HTML, False),
-        (SINGLE_NORMAL_TABLE_HTML, False),
-        (MULTIPLE_TABLES_WITH_NAME_HTML, False),
-        (SINGLE_EMPTY_TABLE_WITH_MULTIPLE_BR_HTML, False),
-        (ONE_COLUMN_MULTIPLE_ROWS_TABLE_HTML, True),
-    ])
+    @pytest.mark.parametrize(
+        "html_content,expected",
+        [
+            (INPUTS_TABLE_HTML, False),
+            (SINGLE_NORMAL_TABLE_HTML, False),
+            (MULTIPLE_TABLES_WITH_NAME_HTML, False),
+            (SINGLE_EMPTY_TABLE_WITH_MULTIPLE_BR_HTML, False),
+            (ONE_COLUMN_MULTIPLE_ROWS_TABLE_HTML, True),
+        ],
+    )
     def test_is_one_column_multiple_rows_table(self, html_content, expected):
         result = is_one_column_multiple_rows_table(html_content)
         assert result == expected
-
 
     def test_extract_content_from_one_column_multiple_rows_table(self):
         result = extract_content_from_one_column_multiple_rows_table(ONE_COLUMN_MULTIPLE_ROWS_TABLE_HTML)
@@ -327,5 +341,5 @@ class TestTableDetection:
             print()
 
 
-if __name__ == '__main__':
-    pytest.main(['-v'])
+if __name__ == "__main__":
+    pytest.main(["-v"])

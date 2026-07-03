@@ -6,9 +6,4 @@ class Profile:
         self.constraints = ["只能处理 SQL 相关问题"]
 
     def get_profile(self):
-        return {
-            "name": self.name,
-            "role": self.role,
-            "goal": self.goal,
-            "constraints": self.constraints
-        }
+        return {"name": self.name, "role": self.role, "goal": self.goal, "constraints": self.constraints}

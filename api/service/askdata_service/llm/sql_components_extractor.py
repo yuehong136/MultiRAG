@@ -20,7 +20,7 @@ class SQLComponentsExtractor:
     """负责解析SQL语句并提取各个组件部分的服务类"""
 
     # 编译正则表达式以提高性能
-    JSON_PATTERN = re.compile(r'```json\s*([\s\S]*?)```')
+    JSON_PATTERN = re.compile(r"```json\s*([\s\S]*?)```")
 
     def __init__(self, db: Session, user_id: Any, prompt_dir: str = None):
         """
@@ -109,16 +109,10 @@ class SQLComponentsExtractor:
         # 处理分页信息
         pagination = components.get("pagination", {})
         if isinstance(pagination, dict):
-            validated_pagination = {
-                "limit": str(pagination.get("limit", "")).strip(),
-                "offset": str(pagination.get("offset", "")).strip()
-            }
+            validated_pagination = {"limit": str(pagination.get("limit", "")).strip(), "offset": str(pagination.get("offset", "")).strip()}
         else:
             # 如果没有pagination或格式不对，创建默认的空分页对象
-            validated_pagination = {
-                "limit": "",
-                "offset": ""
-            }
+            validated_pagination = {"limit": "", "offset": ""}
 
         validated_components["pagination"] = validated_pagination
 
@@ -166,11 +160,7 @@ class SQLComponentsExtractor:
 
         return components
 
-    async def extract_sql_components(
-            self,
-            sql_query: str,
-            llm_name: str
-    ) -> dict:
+    async def extract_sql_components(self, sql_query: str, llm_name: str) -> dict:
         """
         解析SQL语句并提取各个组件部分
 
@@ -199,9 +189,7 @@ class SQLComponentsExtractor:
             prompt_template = PromptTemplateUtil.load_template_from_file(template_path)
 
             # 准备模板参数
-            template_values = {
-                "sql": sql_query
-            }
+            template_values = {"sql": sql_query}
 
             # 填充模板
             prompt = PromptTemplateUtil.fill_template(prompt_template, template_values)
@@ -214,7 +202,7 @@ class SQLComponentsExtractor:
             gen_conf = {
                 "temperature": 0.0,  # 使用0以获得更确定性的结果
                 "top_p": 0.9,
-                "max_tokens": 2048  # SQL组件通常不会太长
+                "max_tokens": 2048,  # SQL组件通常不会太长
             }
 
             # 定义在独立线程中执行的函数，使用独立的数据库会话
@@ -224,11 +212,7 @@ class SQLComponentsExtractor:
                 with db_connection() as thread_db:
                     model_config = get_model_config_by_type_and_name(thread_db, self.user_id, LLMType.CHAT.value, llm_name)
                     thread_llm_instance = LLMBundle(thread_db, self.user_id, model_config)
-                    return thread_llm_instance.chat(
-                        system="",
-                        history=history,
-                        gen_conf=gen_conf
-                    )
+                    return thread_llm_instance.chat(system="", history=history, gen_conf=gen_conf)
 
             # 调用LLM处理我们的提示词
             response = await thread_pool_exec(_chat_in_thread)
@@ -242,8 +226,7 @@ class SQLComponentsExtractor:
                 validated_components = self._validate_sql_components(extracted_components)
                 # 后处理组件
                 final_components = self._post_process_components(validated_components)
-                logger.debug("[sql_components] 提取结果: %s",
-                             json.dumps(final_components, ensure_ascii=False))
+                logger.debug("[sql_components] 提取结果: %s", json.dumps(final_components, ensure_ascii=False))
                 return final_components
             else:
                 logger.error("Failed to extract valid JSON from LLM response")
@@ -262,24 +245,9 @@ class SQLComponentsExtractor:
         返回:
             包含所有必需字段的默认空组件字典
         """
-        return {
-            "select": "",
-            "from": "",
-            "where": "",
-            "groupBy": "",
-            "orderBy": "",
-            "having": "",
-            "pagination": {
-                "limit": "",
-                "offset": ""
-            }
-        }
+        return {"select": "", "from": "", "where": "", "groupBy": "", "orderBy": "", "having": "", "pagination": {"limit": "", "offset": ""}}
 
-    async def extract_and_reconstruct(
-            self,
-            sql_query: str,
-            llm_name: str
-    ) -> tuple[dict, str]:
+    async def extract_and_reconstruct(self, sql_query: str, llm_name: str) -> tuple[dict, str]:
         """
         提取SQL组件并重构SQL语句
 
@@ -340,13 +308,9 @@ class SQLComponentsExtractor:
         """
         pagination = components.get("pagination", {})
 
-        return {
-            "limit": pagination.get("limit", ""),
-            "offset": pagination.get("offset", "")
-        }
+        return {"limit": pagination.get("limit", ""), "offset": pagination.get("offset", "")}
 
-    def update_pagination(self, components: dict, limit: str | None = None,
-                          offset: str | None = None) -> dict:
+    def update_pagination(self, components: dict, limit: str | None = None, offset: str | None = None) -> dict:
         """
         更新组件中的分页信息
 

@@ -5,6 +5,7 @@ Revises: 358db7ccaaa9
 Create Date: 2025-06-26 09:46:02.647897
 
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -12,8 +13,8 @@ from alembic import op
 from sqlalchemy.engine.reflection import Inspector
 
 # revision identifiers, used by Alembic.
-revision: str = 'e2694b092c03'
-down_revision: str | None = '358db7ccaaa9'
+revision: str = "e2694b092c03"
+down_revision: str | None = "358db7ccaaa9"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

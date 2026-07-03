@@ -25,8 +25,10 @@ router = APIRouter()
 # 枚举类型定义
 # =============================================================================
 
+
 class SupportedVectorDBType(StrEnum):
     """支持的向量数据库类型"""
+
     MILVUS = "milvus"
     ELASTICSEARCH = "elasticsearch"
     INFINITY = "infinity"
@@ -37,20 +39,23 @@ class SupportedVectorDBType(StrEnum):
 
 class DistanceType(StrEnum):
     """向量距离计算类型 - 统一抽象，内部转换为各数据库语法"""
-    COSINE = "COSINE"       # 余弦相似度 (推荐)
-    L2 = "L2"               # 欧氏距离
-    IP = "IP"               # 内积 (Inner Product)
+
+    COSINE = "COSINE"  # 余弦相似度 (推荐)
+    L2 = "L2"  # 欧氏距离
+    IP = "IP"  # 内积 (Inner Product)
 
 
 class SearchMode(StrEnum):
     """检索模式"""
-    VECTOR = "vector"       # 纯向量检索
-    HYBRID = "hybrid"       # 混合检索 (向量 + 文本)
+
+    VECTOR = "vector"  # 纯向量检索
+    HYBRID = "hybrid"  # 混合检索 (向量 + 文本)
 
 
 # =============================================================================
 # Pydantic 请求/响应模型
 # =============================================================================
+
 
 class EmbeddingConfig(BaseModel):
     """
@@ -67,6 +72,7 @@ class EmbeddingConfig(BaseModel):
         >>> {"model_name": "embedding-3@ZHIPU-AI"}
         >>> {"model_name": "BAAI/bge-large-zh-v1.5@BAAI"}
     """
+
     model_config = ConfigDict(extra="allow")
 
     model_name: str
@@ -88,6 +94,7 @@ class SearchConfig(BaseModel):
         nprobe: IVF 索引的 nprobe 参数
         rerank: 是否启用重排序
     """
+
     model_config = ConfigDict(extra="allow")
 
     # 基础配置 (稳定)
@@ -122,6 +129,7 @@ class FilterCondition(BaseModel):
         not_exists: 字段不存在过滤
         raw_expr: 原生过滤表达式 (高级用户使用，直接透传)
     """
+
     model_config = ConfigDict(extra="allow")
 
     # 结构化过滤 (推荐，跨数据库兼容)
@@ -159,6 +167,7 @@ class VectorSearchRequest(BaseModel):
         extra: 扩展字段，透传给底层
         db_config: 自定义数据库连接配置 (高级)
     """
+
     model_config = ConfigDict(extra="allow")
 
     # ===== 核心参数 (必填，稳定) =====
@@ -169,11 +178,7 @@ class VectorSearchRequest(BaseModel):
     output_fields: list[str]
 
     # ===== 数据库选择 (可选，支持多数据库场景) =====
-    database: str | None = Field(
-        default=None,
-        description="数据库名称，用于 Milvus/Infinity 等支持多数据库的向量数据库。"
-                    "如不指定，则使用系统配置的默认数据库。"
-    )
+    database: str | None = Field(default=None, description="数据库名称，用于 Milvus/Infinity 等支持多数据库的向量数据库。如不指定，则使用系统配置的默认数据库。")
 
     # ===== 配置对象 (可选，可扩展) =====
     embedding: EmbeddingConfig | None = None
@@ -204,6 +209,7 @@ class VectorSearchRequest(BaseModel):
 
 class SearchResultItem(BaseModel):
     """单条检索结果"""
+
     id: str
     score: float
     distance: float | None = None
@@ -213,6 +219,7 @@ class SearchResultItem(BaseModel):
 
 class SearchMetadata(BaseModel):
     """检索元数据"""
+
     db_type: str
     embedding_model: str | None = None
     embedding_tokens: int = 0
@@ -222,6 +229,7 @@ class SearchMetadata(BaseModel):
 
 class VectorSearchResponse(BaseModel):
     """向量检索统一响应"""
+
     total: int
     results: list[SearchResultItem]
     metadata: SearchMetadata
@@ -230,6 +238,7 @@ class VectorSearchResponse(BaseModel):
 # =============================================================================
 # 工具类: 过滤条件转换器
 # =============================================================================
+
 
 class FilterConverter:
     """将统一过滤条件转换为各数据库语法"""
@@ -353,6 +362,7 @@ class FilterConverter:
 # 工具类: 结果归一化器
 # =============================================================================
 
+
 class ResultNormalizer:
     """统一各数据库返回结果格式"""
 
@@ -366,6 +376,7 @@ class ResultNormalizer:
             if value.startswith(("[", "{")):
                 try:
                     import ast
+
                     return ResultNormalizer._to_serializable(ast.literal_eval(value))
                 except Exception:
                     pass
@@ -380,11 +391,7 @@ class ResultNormalizer:
             return str(value)
 
     @staticmethod
-    def normalize_milvus(
-        hits: list,
-        output_fields: list[str],
-        distance_type: DistanceType
-    ) -> list[SearchResultItem]:
+    def normalize_milvus(hits: list, output_fields: list[str], distance_type: DistanceType) -> list[SearchResultItem]:
         """归一化 Milvus 检索结果"""
         results = []
         for hit in hits:
@@ -416,21 +423,12 @@ class ResultNormalizer:
             # 计算分数: L2 越小越好，COSINE/IP 越大越好
             score = 1.0 / (1.0 + distance) if distance_type == DistanceType.L2 else distance
 
-            results.append(SearchResultItem(
-                id=str(doc_id),
-                score=score,
-                distance=distance or None,
-                fields=fields,
-                highlight=None
-            ))
+            results.append(SearchResultItem(id=str(doc_id), score=score, distance=distance or None, fields=fields, highlight=None))
 
         return results
 
     @staticmethod
-    def normalize_elasticsearch(
-        response: dict,
-        output_fields: list[str]
-    ) -> tuple[list[SearchResultItem], int]:
+    def normalize_elasticsearch(response: dict, output_fields: list[str]) -> tuple[list[SearchResultItem], int]:
         """归一化 Elasticsearch 检索结果"""
         results = []
         hits = response.get("hits", {})
@@ -449,23 +447,16 @@ class ResultNormalizer:
             # 处理高亮
             highlight_dict = None
             if highlight:
-                highlight_dict = {k: "".join(v) if isinstance(v, list) else v
-                                 for k, v in highlight.items()}
+                highlight_dict = {k: "".join(v) if isinstance(v, list) else v for k, v in highlight.items()}
 
-            results.append(SearchResultItem(
-                id=str(doc_id),
-                score=float(score),
-                distance=None,
-                fields=fields,
-                highlight=highlight_dict
-            ))
+            results.append(SearchResultItem(id=str(doc_id), score=float(score), distance=None, fields=fields, highlight=highlight_dict))
 
         return results, total_count
 
     @staticmethod
     def normalize_infinity(
         df,  # pandas DataFrame
-        output_fields: list[str]
+        output_fields: list[str],
     ) -> list[SearchResultItem]:
         """归一化 Infinity 检索结果"""
         results = []
@@ -480,13 +471,7 @@ class ResultNormalizer:
 
             fields = {k: row.get(k) for k in output_fields if k in row.index}
 
-            results.append(SearchResultItem(
-                id=str(doc_id),
-                score=float(score),
-                distance=None,
-                fields=fields,
-                highlight=None
-            ))
+            results.append(SearchResultItem(id=str(doc_id), score=float(score), distance=None, fields=fields, highlight=None))
 
         return results
 
@@ -494,6 +479,7 @@ class ResultNormalizer:
 # =============================================================================
 # 工具类: 向量数据库连接工厂
 # =============================================================================
+
 
 class VectorDBFactory:
     """向量数据库连接工厂"""
@@ -536,15 +522,13 @@ class VectorDBFactory:
         else:
             raise ValueError(f"不支持的向量数据库类型: {db_type}")
 
+
 # =============================================================================
 # 核心检索逻辑
 # =============================================================================
 
-def get_embedding_model(
-    db: Session,
-    tenant_id: str,
-    config: EmbeddingConfig | None
-):
+
+def get_embedding_model(db: Session, tenant_id: str, config: EmbeddingConfig | None):
     """
     获取向量模型实例
 
@@ -575,7 +559,7 @@ def get_embedding_model(
         return bundle.mdl
 
     except LookupError as e:
-        model_name = config.model_name if config else '默认模型'
+        model_name = config.model_name if config else "默认模型"
         raise ValueError(f"模型配置未授权: {model_name}. {e!s}")
     except Exception as e:
         logger.exception(f"获取向量模型失败: {e!s}")
@@ -606,10 +590,7 @@ def execute_vector_search(
 
     if db_type == SupportedVectorDBType.MILVUS:
         # Milvus 检索
-        search_params = {
-            "metric_type": distance_type.value,
-            "params": {}
-        }
+        search_params = {"metric_type": distance_type.value, "params": {}}
         if search_config.nprobe:
             search_params["params"]["nprobe"] = search_config.nprobe
         if search_config.ef_search:
@@ -627,9 +608,7 @@ def execute_vector_search(
                 collection_name,
             )
         except Exception as e:
-            raise ValueError(
-                f"Milvus 连接失败，请检查服务状态。数据库: {database or 'default'}。{e!s}"
-            ) from e
+            raise ValueError(f"Milvus 连接失败，请检查服务状态。数据库: {database or 'default'}。{e!s}") from e
 
         results = conn.search_by_milvus(
             collection_name=collection_name,
@@ -654,7 +633,7 @@ def execute_vector_search(
             embedding_data_type="float",
             distance_type=distance_type.value.lower(),
             topn=limit,
-            extra_options={"similarity": search_config.similarity_threshold or 0}
+            extra_options={"similarity": search_config.similarity_threshold or 0},
         )
 
         # 构建条件
@@ -672,7 +651,7 @@ def execute_vector_search(
             offset=offset,
             limit=limit,
             index_names=collection_name,
-            knowledgebase_ids=[]
+            knowledgebase_ids=[],
         )
 
         return results, 0  # ES 结果需要特殊处理
@@ -681,14 +660,7 @@ def execute_vector_search(
         # Infinity 检索
         from common.doc_store.doc_store_base import MatchDenseExpr, OrderByExpr
 
-        dense_expr = MatchDenseExpr(
-            vector_column_name=vector_field,
-            embedding_data=query_vector,
-            embedding_data_type="float",
-            distance_type=distance_type.value.lower(),
-            topn=limit,
-            extra_options={}
-        )
+        dense_expr = MatchDenseExpr(vector_column_name=vector_field, embedding_data=query_vector, embedding_data_type="float", distance_type=distance_type.value.lower(), topn=limit, extra_options={})
 
         results, total = conn.search(
             select_fields=output_fields,
@@ -699,7 +671,7 @@ def execute_vector_search(
             offset=offset,
             limit=limit,
             index_names=collection_name,
-            knowledgebase_ids=[]
+            knowledgebase_ids=[],
         )
 
         return results, total
@@ -708,14 +680,7 @@ def execute_vector_search(
         # 其他数据库使用通用接口
         from common.doc_store.doc_store_base import MatchDenseExpr, OrderByExpr
 
-        dense_expr = MatchDenseExpr(
-            vector_column_name=vector_field,
-            embedding_data=query_vector,
-            embedding_data_type="float",
-            distance_type=distance_type.value,
-            topn=limit,
-            extra_options={}
-        )
+        dense_expr = MatchDenseExpr(vector_column_name=vector_field, embedding_data=query_vector, embedding_data_type="float", distance_type=distance_type.value, topn=limit, extra_options={})
 
         results, total = conn.search(
             select_fields=output_fields,
@@ -726,7 +691,7 @@ def execute_vector_search(
             offset=offset,
             limit=limit,
             index_names=collection_name,
-            knowledgebase_ids=[]
+            knowledgebase_ids=[],
         )
 
         return results, total
@@ -736,12 +701,9 @@ def execute_vector_search(
 # FastAPI 路由
 # =============================================================================
 
+
 @router.post("/search", summary="向量检索", response_description="检索结果")
-def vector_search(
-    request: VectorSearchRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-):
+def vector_search(request: VectorSearchRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/search` 向量数据库统一检索接口
 
@@ -856,11 +818,7 @@ def vector_search(
         search_config = request.search or SearchConfig()
 
         # 2. 获取向量模型并生成查询向量
-        embedding_model = get_embedding_model(
-            db=db,
-            tenant_id=user.id,
-            config=request.embedding
-        )
+        embedding_model = get_embedding_model(db=db, tenant_id=user.id, config=request.embedding)
         query_vector, token_count = embedding_model.encode_queries(request.query_text)
 
         # 转换为列表格式
@@ -891,26 +849,18 @@ def vector_search(
 
         # 6. 归一化结果
         if request.db_type == SupportedVectorDBType.MILVUS:
-            results = ResultNormalizer.normalize_milvus(
-                raw_results, request.output_fields, search_config.distance_type
-            )
+            results = ResultNormalizer.normalize_milvus(raw_results, request.output_fields, search_config.distance_type)
             if total == 0:
                 total = len(results)
         elif request.db_type == SupportedVectorDBType.ELASTICSEARCH:
-            results, total = ResultNormalizer.normalize_elasticsearch(
-                raw_results, request.output_fields
-            )
+            results, total = ResultNormalizer.normalize_elasticsearch(raw_results, request.output_fields)
         elif request.db_type == SupportedVectorDBType.INFINITY:
-            results = ResultNormalizer.normalize_infinity(
-                raw_results, request.output_fields
-            )
+            results = ResultNormalizer.normalize_infinity(raw_results, request.output_fields)
             if total == 0:
                 total = len(results)
         else:
             # 通用处理
-            results = ResultNormalizer.normalize_milvus(
-                raw_results, request.output_fields, search_config.distance_type
-            )
+            results = ResultNormalizer.normalize_milvus(raw_results, request.output_fields, search_config.distance_type)
             if total == 0:
                 total = len(results)
 
@@ -938,12 +888,8 @@ def vector_search(
             total=total,
             results=results,
             metadata=SearchMetadata(
-                db_type=request.db_type.value,
-                embedding_model=embedding_model_name,
-                embedding_tokens=token_count,
-                search_time_ms=round(elapsed_ms, 2),
-                vector_dimension=vector_dimension
-            )
+                db_type=request.db_type.value, embedding_model=embedding_model_name, embedding_tokens=token_count, search_time_ms=round(elapsed_ms, 2), vector_dimension=vector_dimension
+            ),
         )
 
         return get_json_result(data=response.model_dump())
@@ -956,9 +902,7 @@ def vector_search(
         # 处理 Milvus 连接异常，提供更友好的错误信息
         if "MilvusException" in repr(e) or "recvmsg" in error_msg:
             logger.error(f"Milvus 检索失败: database={request.database}. {error_msg}")
-            return get_data_error_result(
-                retmsg=f"Milvus 连接失败，请检查服务状态。数据库: {request.database or 'default'}"
-            )
+            return get_data_error_result(retmsg=f"Milvus 连接失败，请检查服务状态。数据库: {request.database or 'default'}")
         logger.exception(f"向量检索失败: {error_msg}")
         return server_error_response(e)
 
@@ -985,11 +929,7 @@ def health_check():
     ```
     """
     try:
-        data = {
-            "status": "healthy",
-            "supported_db_types": [t.value for t in SupportedVectorDBType],
-            "default_embedding_model": settings.EMBEDDING_MDL or "未配置"
-        }
+        data = {"status": "healthy", "supported_db_types": [t.value for t in SupportedVectorDBType], "default_embedding_model": settings.EMBEDDING_MDL or "未配置"}
         return get_json_result(data=data)
     except Exception as e:
         return server_error_response(e)
@@ -1025,12 +965,7 @@ def get_supported_db_types():
         SupportedVectorDBType.VASTBASE: "VastBase 国产数据库",
     }
 
-    data = {
-        "db_types": [
-            {"value": t.value, "description": descriptions.get(t, t.value)}
-            for t in SupportedVectorDBType
-        ]
-    }
+    data = {"db_types": [{"value": t.value, "description": descriptions.get(t, t.value)} for t in SupportedVectorDBType]}
     return get_json_result(data=data)
 
 
@@ -1081,8 +1016,10 @@ def _get_datav_redis() -> redis.StrictRedis:
 # persondataList 响应模型
 # =============================================================================
 
+
 class PersonDataItem(BaseModel):
     """人员数据项 (datav workflow inputPlugin persondataList 单条记录)"""
+
     model_config = ConfigDict(extra="allow")
 
     checked: bool
@@ -1128,15 +1065,8 @@ def fetch_persondata_list(workflow_id: str) -> list:
     return parsed
 
 
-@router.get(
-    "/persondataList/{workflow_id}",
-    summary="获取 workflow inputPlugin 人员数据列表",
-    response_description="人员数据列表"
-)
-def get_persondata_list(
-    workflow_id: str,
-    user=Depends(manager)
-):
+@router.get("/persondataList/{workflow_id}", summary="获取 workflow inputPlugin 人员数据列表", response_description="人员数据列表")
+def get_persondata_list(workflow_id: str, user=Depends(manager)):
     """
     ### GET `/persondataList/{workflow_id}`
 

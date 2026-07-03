@@ -5,6 +5,7 @@
 @date：2025/01/11 18:20
 @desc: AI安全护栏标签管理接口
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -24,6 +25,7 @@ router = APIRouter()
 
 class CreateLabelRequest(BaseModel):
     """创建标签请求模型"""
+
     dimension_id: str = Field(..., description="维度ID")
     code: str = Field(..., description="标签代码")
     name: str = Field(..., description="标签名称")
@@ -37,6 +39,7 @@ class CreateLabelRequest(BaseModel):
 
 class UpdateLabelRequest(BaseModel):
     """更新标签请求模型"""
+
     label_id: str = Field(..., description="标签ID")
     name: str | None = Field(None, description="标签名称")
     description: str | None = Field(None, description="标签描述")
@@ -47,12 +50,8 @@ class UpdateLabelRequest(BaseModel):
     sort_order: int | None = Field(None, description="排序")
 
 
-@router.post('/create', summary="创建检测标签")
-def create_label(
-    request: CreateLabelRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/create", summary="创建检测标签")
+def create_label(request: CreateLabelRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     创建检测标签
 
@@ -82,7 +81,7 @@ def create_label(
             created_by=user.id,
             config=request.config,
             enabled=request.enabled,
-            sort_order=request.sort_order
+            sort_order=request.sort_order,
         )
 
         if label_id:
@@ -94,13 +93,8 @@ def create_label(
         return server_error_response(e)
 
 
-@router.get('/list', summary="获取标签列表")
-def list_labels(
-    dimension_id: str | None = None,
-    enabled_only: bool = False,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/list", summary="获取标签列表")
+def list_labels(dimension_id: str | None = None, enabled_only: bool = False, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     获取标签列表
 
@@ -115,13 +109,9 @@ def list_labels(
     """
     try:
         if dimension_id:
-            labels = GuardLabelService.get_labels_by_dimension(
-                db, dimension_id, enabled_only
-            )
+            labels = GuardLabelService.get_labels_by_dimension(db, dimension_id, enabled_only)
         else:
-            labels = GuardLabelService.get_labels_by_tenant(
-                db, user.id, enabled_only
-            )
+            labels = GuardLabelService.get_labels_by_tenant(db, user.id, enabled_only)
 
         return get_json_result(data=[label.to_dict() for label in labels])
 
@@ -129,11 +119,8 @@ def list_labels(
         return server_error_response(e)
 
 
-@router.get('/dimensions', summary="获取维度列表")
-def get_dimensions_for_labels(
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/dimensions", summary="获取维度列表")
+def get_dimensions_for_labels(db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     获取可用维度列表（用于标签创建）
 
@@ -145,9 +132,7 @@ def get_dimensions_for_labels(
         dict[str, Any]: 维度列表
     """
     try:
-        dimensions = GuardDimensionService.get_dimensions_by_tenant(
-            db, user.id, enabled_only=True
-        )
+        dimensions = GuardDimensionService.get_dimensions_by_tenant(db, user.id, enabled_only=True)
 
         return get_json_result(data=[dim.to_dict() for dim in dimensions])
 
@@ -155,12 +140,8 @@ def get_dimensions_for_labels(
         return server_error_response(e)
 
 
-@router.put('/update', summary="更新检测标签")
-def update_label(
-    request: UpdateLabelRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.put("/update", summary="更新检测标签")
+def update_label(request: UpdateLabelRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     更新检测标签
 
@@ -173,12 +154,9 @@ def update_label(
         dict[str, Any]: 更新结果
     """
     try:
-        update_data = {k: v for k, v in request.model_dump().items()
-                      if v is not None and k != "label_id"}
+        update_data = {k: v for k, v in request.model_dump().items() if v is not None and k != "label_id"}
 
-        success = GuardLabelService.update_label(
-            db, request.label_id, update_data
-        )
+        success = GuardLabelService.update_label(db, request.label_id, update_data)
 
         if success:
             return get_json_result(data=True)
@@ -189,12 +167,8 @@ def update_label(
         return server_error_response(e)
 
 
-@router.delete('/{label_id}', summary="删除检测标签")
-def delete_label(
-    label_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.delete("/{label_id}", summary="删除检测标签")
+def delete_label(label_id: str, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     删除检测标签
 
@@ -218,12 +192,8 @@ def delete_label(
         return server_error_response(e)
 
 
-@router.get('/stats', summary="获取标签统计")
-def get_label_stats(
-    dimension_id: str | None = None,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/stats", summary="获取标签统计")
+def get_label_stats(dimension_id: str | None = None, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     获取标签统计信息
 
@@ -243,11 +213,8 @@ def get_label_stats(
         return server_error_response(e)
 
 
-@router.post('/init', summary="初始化默认标签")
-def init_default_labels(
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/init", summary="初始化默认标签")
+def init_default_labels(db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     初始化默认标签
 
@@ -266,25 +233,16 @@ def init_default_labels(
         if not dimension_configs:
             return get_data_error_result(retmsg="请先初始化维度")
 
-        label_ids = GuardLabelService.init_default_labels(
-            db, dimension_configs, user.id, user.id
-        )
+        label_ids = GuardLabelService.init_default_labels(db, dimension_configs, user.id, user.id)
 
-        return get_json_result(data={
-            "created_count": len(label_ids),
-            "label_ids": label_ids
-        })
+        return get_json_result(data={"created_count": len(label_ids), "label_ids": label_ids})
 
     except Exception as e:
         return server_error_response(e)
 
 
-@router.get('/{label_id}', summary="获取标签详情")
-def get_label_detail(
-    label_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/{label_id}", summary="获取标签详情")
+def get_label_detail(label_id: str, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     获取标签详情
 
@@ -315,12 +273,8 @@ def get_label_detail(
         return server_error_response(e)
 
 
-@router.post('/batch/enable', summary="批量启用标签")
-def batch_enable_labels(
-    label_ids: list[str],
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/batch/enable", summary="批量启用标签")
+def batch_enable_labels(label_ids: list[str], db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     批量启用标签
 
@@ -342,21 +296,14 @@ def batch_enable_labels(
             else:
                 failed_count += 1
 
-        return get_json_result(data={
-            "success_count": success_count,
-            "failed_count": failed_count
-        })
+        return get_json_result(data={"success_count": success_count, "failed_count": failed_count})
 
     except Exception as e:
         return server_error_response(e)
 
 
-@router.post('/batch/disable', summary="批量禁用标签")
-def batch_disable_labels(
-    label_ids: list[str],
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/batch/disable", summary="批量禁用标签")
+def batch_disable_labels(label_ids: list[str], db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     批量禁用标签
 
@@ -378,10 +325,7 @@ def batch_disable_labels(
             else:
                 failed_count += 1
 
-        return get_json_result(data={
-            "success_count": success_count,
-            "failed_count": failed_count
-        })
+        return get_json_result(data={"success_count": success_count, "failed_count": failed_count})
 
     except Exception as e:
         return server_error_response(e)

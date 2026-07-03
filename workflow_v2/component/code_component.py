@@ -12,9 +12,9 @@ class CodeComponent(BaseComponent):
 
     def __init__(self, component_id: str, title: str, node_data: dict[str, Any], logger: WorkflowContextLogger):
         super().__init__(component_id, title, logger)
-        self.code = node_data['data']['inputs'].get('code', '')
-        self.language = node_data['data']['inputs'].get('language', 3)
-        self.output_definition = node_data['data']['outputs']
+        self.code = node_data["data"]["inputs"].get("code", "")
+        self.language = node_data["data"]["inputs"].get("language", 3)
+        self.output_definition = node_data["data"]["outputs"]
         self.timeout = 30  # 默认超时时间
 
     async def execute(self) -> dict[str, Any]:
@@ -22,7 +22,7 @@ class CodeComponent(BaseComponent):
             if self.language == 3:  # Python
                 # 调用脚本调度服务
                 code_execute_resp = await self.run_temporary_script(self.code, self.inputs)
-                if code_execute_resp.get('status') != 'success':
+                if code_execute_resp.get("status") != "success":
                     self.logger.error(f"Code component execution failed: {code_execute_resp.get('message')}")
                     raise Exception(f"Code component execution failed: {code_execute_resp.get('message')}")
                 original_outputs = code_execute_resp.get("data")
@@ -37,8 +37,7 @@ class CodeComponent(BaseComponent):
         self.inputs = input_value
         return await self.execute()
 
-    async def run_temporary_script(self, script: str, args: dict[str, Any],
-                                   base_url: str = f"http://{SCRIPT_SCHEDULER_HOST}:{SCRIPT_SCHEDULER_PORT}") -> dict:
+    async def run_temporary_script(self, script: str, args: dict[str, Any], base_url: str = f"http://{SCRIPT_SCHEDULER_HOST}:{SCRIPT_SCHEDULER_PORT}") -> dict:
         """
         Send an asynchronous request to run a temporary script with given arguments.
 
@@ -57,15 +56,10 @@ class CodeComponent(BaseComponent):
         endpoint = f"{base_url}/api/v1/script-scheduler/run-temporary-script"
 
         # Prepare the request headers
-        headers = {
-            "Content-Type": "application/json"
-        }
+        headers = {"Content-Type": "application/json"}
 
         # Prepare the request payload
-        payload = {
-            "script": script,
-            "args": args
-        }
+        payload = {"script": script, "args": args}
 
         try:
             # Create a timeout for the request
@@ -73,11 +67,7 @@ class CodeComponent(BaseComponent):
 
             # Send POST request asynchronously
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(
-                        url=endpoint,
-                        headers=headers,
-                        json=payload
-                ) as response:
+                async with session.post(url=endpoint, headers=headers, json=payload) as response:
                     # Raise an exception for bad status codes
                     response.raise_for_status()
 
@@ -114,7 +104,7 @@ class CodeComponent(BaseComponent):
             if value is None:
                 return None
 
-            type_name = type_def.get('type', '').lower()
+            type_name = type_def.get("type", "").lower()
 
             # Handle basic types
             if type_name == "string":
@@ -136,17 +126,16 @@ class CodeComponent(BaseComponent):
                     return None
 
                 # Get schema for list elements
-                element_schema = type_def.get('schema', {})
+                element_schema = type_def.get("schema", {})
 
                 # Convert each element in the list
                 try:
-                    if element_schema.get('type') == 'object':
-                        nested_schema = element_schema.get('schema', [])
+                    if element_schema.get("type") == "object":
+                        nested_schema = element_schema.get("schema", [])
                         # If the schema is empty, preserve the original elements
                         if not nested_schema:
                             return value
-                        return [parse_schema_recursively(nested_schema, item)
-                                for item in value]
+                        return [parse_schema_recursively(nested_schema, item) for item in value]
                     else:
                         return [convert_value(item, element_schema) for item in value]
                 except (ValueError, TypeError):
@@ -155,7 +144,7 @@ class CodeComponent(BaseComponent):
                 if not isinstance(value, dict):
                     return None
 
-                nested_schema = type_def.get('schema', [])
+                nested_schema = type_def.get("schema", [])
                 # If the schema is empty, preserve the original object
                 if not nested_schema:
                     return value
@@ -175,7 +164,7 @@ class CodeComponent(BaseComponent):
                 dict: Parsed data according to schema
             """
             result = {}
-            schema_map = {item['name']: item for item in schema}
+            schema_map = {item["name"]: item for item in schema}
 
             for name, schema_item in schema_map.items():
                 value = data.get(name) if isinstance(data, dict) else None
@@ -186,10 +175,8 @@ class CodeComponent(BaseComponent):
         # Special case for list outputs:
         # When the output definition has a single field of type list
         # and the actual output is already a list
-        if (len(output_structure) == 1 and
-                output_structure[0].get('type') == 'list' and
-                isinstance(actual_output, list)):
-            field_name = output_structure[0].get('name')
+        if len(output_structure) == 1 and output_structure[0].get("type") == "list" and isinstance(actual_output, list):
+            field_name = output_structure[0].get("name")
             return {field_name: convert_value(actual_output, output_structure[0])}
 
         return parse_schema_recursively(output_structure, actual_output)

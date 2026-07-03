@@ -35,13 +35,13 @@ class ResponseSchema(BaseModel):
 
 @router.post("/run")
 async def run(
-        schema_data: str = Form(..., alias="schema"),  # JSON string
-        start_input_values: str = Form(...),  # JSON string
-        workflow_id: str = Form(...),
-        files: list[UploadFile] = File(None),  # Optional files
-        bucket_name: str = Form(None),  # bucket_name在任何情况下都会传入，所以下面处理文件时，先判断files是否为空，如果为空，处理bucket_name
-        db: Session = Depends(get_db),
-        user=Depends(manager)
+    schema_data: str = Form(..., alias="schema"),  # JSON string
+    start_input_values: str = Form(...),  # JSON string
+    workflow_id: str = Form(...),
+    files: list[UploadFile] = File(None),  # Optional files
+    bucket_name: str = Form(None),  # bucket_name在任何情况下都会传入，所以下面处理文件时，先判断files是否为空，如果为空，处理bucket_name
+    db: Session = Depends(get_db),
+    user=Depends(manager),
 ):
     try:
         # Parse JSON strings back to dictionaries
@@ -75,40 +75,28 @@ async def run(
                     continue
 
         # 运行工作流，传递额外的参数
-        result = await run_workflow(
-            workflow_data,
-            start_input_values=input_values,
-            workflow_id=workflow_id,
-            db=db,
-            user=user
-        )
+        result = await run_workflow(workflow_data, start_input_values=input_values, workflow_id=workflow_id, db=db, user=user)
         return result
 
     except json.JSONDecodeError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid JSON format: {e!s}"
-        )
+        raise HTTPException(status_code=400, detail=f"Invalid JSON format: {e!s}")
     except NodeExecutionError as e:
         raise e
     except WorkflowValidationError as e:
         raise e
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error processing request: {e!s}"
-        )
+        raise HTTPException(status_code=500, detail=f"Error processing request: {e!s}")
 
 
 @router.post("/component-run")
 async def component_run(
-        node_data_str: str = Form(...),  # JSON string
-        input_str: str = Form(...),  # JSON string
-        batch_str: str = Form(None),  # JSON string
-        files: list[UploadFile] = File(None),  # Optional files
-        bucket_name: str = Form(None),  # bucket_name在任何情况下都会传入，所以下面处理文件时，先判断files是否为空，如果为空，处理bucket_name
-        db: Session = Depends(get_db),
-        user=Depends(manager)
+    node_data_str: str = Form(...),  # JSON string
+    input_str: str = Form(...),  # JSON string
+    batch_str: str = Form(None),  # JSON string
+    files: list[UploadFile] = File(None),  # Optional files
+    bucket_name: str = Form(None),  # bucket_name在任何情况下都会传入，所以下面处理文件时，先判断files是否为空，如果为空，处理bucket_name
+    db: Session = Depends(get_db),
+    user=Depends(manager),
 ):
     try:
         node_data = json.loads(node_data_str)
@@ -123,17 +111,16 @@ async def component_run(
         if files and len(files) > 0 and files[0].size > 0:
             input_values[next(iter(input_values))] = files[0]
         else:
-            for node_input in node_data['data']['inputs']['inputParameters']:
-                if node_input['input']['type'] == 'minio':
-                    batch_values[node_input['name']] = bucket_name + "+" + batch_values[node_input['name']]
+            for node_input in node_data["data"]["inputs"]["inputParameters"]:
+                if node_input["input"]["type"] == "minio":
+                    batch_values[node_input["name"]] = bucket_name + "+" + batch_values[node_input["name"]]
                     break
 
-        component = (ComponentManager(logger=WorkflowContextLogger("", WorkflowLogger().logger))
-                     .create_component(node_data))
+        component = ComponentManager(logger=WorkflowContextLogger("", WorkflowLogger().logger)).create_component(node_data)
         component.user = user
         component.db = db
 
-        workflow_node = WorkflowNode(node_id=node_data['id'], node_data=node_data)
+        workflow_node = WorkflowNode(node_id=node_data["id"], node_data=node_data)
         component.workflow_node = workflow_node
 
         start_time = datetime.now().timestamp()
@@ -142,34 +129,18 @@ async def component_run(
 
         end_time = datetime.now().timestamp()
 
-        return_obj = {
-            "nodes_io": {
-                node_data['id']: {
-                    "input": component.inputs,
-                    "output": execute_result
-                }
-            },
-            "node_execution_times": {
-                node_data['id']: round(end_time - start_time, 3)
-            }
-        }
+        return_obj = {"nodes_io": {node_data["id"]: {"input": component.inputs, "output": execute_result}}, "node_execution_times": {node_data["id"]: round(end_time - start_time, 3)}}
 
         return return_obj
 
     except json.JSONDecodeError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid JSON format: {e!s}"
-        )
+        raise HTTPException(status_code=400, detail=f"Invalid JSON format: {e!s}")
     except NodeExecutionError as e:
         raise e
     except WorkflowValidationError as e:
         raise e
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error processing request: {e!s}"
-        )
+        raise HTTPException(status_code=500, detail=f"Error processing request: {e!s}")
 
 
 @router.get("/workflow/events/{workflow_id}")
@@ -187,6 +158,7 @@ async def workflow_events(workflow_id: str, request: Request):
     max_duration = 180  # 默认最大连接时间(秒)
     max_idle_time = 120  # 默认最大空闲时间(秒)
     try:
+
         async def event_generator():
             try:
                 # 订阅工作流状态更新
@@ -205,13 +177,7 @@ async def workflow_events(workflow_id: str, request: Request):
                         # 检查是否超过最大连接时间
                         current_time = time.time()
                         if (current_time - start_time) > max_duration:
-                            yield {
-                                "event": "timeout",
-                                "data": json.dumps({
-                                    "workflow_id": workflow_id,
-                                    "message": f"连接超过最大时长 {max_duration} 秒，服务端断开连接"
-                                })
-                            }
+                            yield {"event": "timeout", "data": json.dumps({"workflow_id": workflow_id, "message": f"连接超过最大时长 {max_duration} 秒，服务端断开连接"})}
                             break
 
                         # 等待状态更新，带有超时
@@ -222,41 +188,25 @@ async def workflow_events(workflow_id: str, request: Request):
                             # 如果接收到None，表示工作流结束
                             if state_update is None:
                                 # 发送一个结束事件
-                                yield {
-                                    "event": "workflow_end",
-                                    "data": json.dumps({"workflow_id": workflow_id, "status": "completed"})
-                                }
+                                yield {"event": "workflow_end", "data": json.dumps({"workflow_id": workflow_id, "status": "completed"})}
                                 break
 
                             # 发送普通状态更新
-                            yield {
-                                "event": "workflow_update",
-                                "data": json.dumps(state_update)
-                            }
+                            yield {"event": "workflow_update", "data": json.dumps(state_update)}
 
                         except TimeoutError:
                             # 发送保活消息
-                            yield {
-                                "event": "ping",
-                                "data": json.dumps({"timestamp": workflow_state_manager._current_timestamp()})
-                            }
+                            yield {"event": "ping", "data": json.dumps({"timestamp": workflow_state_manager._current_timestamp()})}
                 finally:
                     # 确保取消订阅
                     await workflow_state_manager.unsubscribe(workflow_id, queue)
             except Exception as e:
                 # 在事件流中发送错误信息
-                yield {
-                    "event": "error",
-                    "data": json.dumps({"error": str(e)})
-                }
+                yield {"event": "error", "data": json.dumps({"error": str(e)})}
 
         return EventSourceResponse(event_generator())
     except Exception as e:
-        return ResponseSchema(
-            status=StatusEnum.ERROR,
-            message=f"获取工作流实时数据异常: {e!s}",
-            data=None
-        )
+        return ResponseSchema(status=StatusEnum.ERROR, message=f"获取工作流实时数据异常: {e!s}", data=None)
 
 
 def extract_literal_parameters(node_data):
@@ -271,16 +221,13 @@ def extract_literal_parameters(node_data):
     """
     literal_params = {}
 
-    if 'data' in node_data and 'inputs' in node_data['data'] and 'inputParameters' in node_data['data']['inputs']:
-        input_parameters = node_data['data']['inputs']['inputParameters']
+    if "data" in node_data and "inputs" in node_data["data"] and "inputParameters" in node_data["data"]["inputs"]:
+        input_parameters = node_data["data"]["inputs"]["inputParameters"]
 
         for param in input_parameters:
-            if (param.get('input') and
-                    param.get('input').get('value') and
-                    param.get('input').get('value').get('type') == 'literal'):
-
-                name = param.get('name')
-                content = param.get('input').get('value').get('content')
+            if param.get("input") and param.get("input").get("value") and param.get("input").get("value").get("type") == "literal":
+                name = param.get("name")
+                content = param.get("input").get("value").get("content")
 
                 if name and content is not None:
                     literal_params[name] = content
@@ -313,18 +260,18 @@ def convert_string_to_typed_value(value_str, type_info):
     将字符串值根据类型信息转换为正确的类型
     """
     # 去除Array<>外的包装
-    base_type = type_info.replace('Array<', '').replace('>', '')
+    base_type = type_info.replace("Array<", "").replace(">", "")
 
     try:
         # 先解析字符串为Python列表
         value_list = json.loads(value_str)
 
         # 根据基本类型进行转换
-        if base_type == 'Number':
+        if base_type == "Number":
             return [float(x) if isinstance(x, str) else x for x in value_list]
-        elif base_type == 'String':
+        elif base_type == "String":
             return [str(x) for x in value_list]
-        elif base_type == 'Boolean':
+        elif base_type == "Boolean":
             return [bool(x) if isinstance(x, str) else x for x in value_list]
         else:
             return value_list  # 对于其他类型（如Object），保持原样
@@ -363,34 +310,29 @@ def convert_input_values(input_str, type_dict):
 
 def extract_batch_input_types(json_data):
     # 用于转换类型的映射字典
-    type_mapping = {
-        'integer': 'Number',
-        'string': 'String',
-        'boolean': 'Boolean',
-        'float': 'Number'
-    }
+    type_mapping = {"integer": "Number", "string": "String", "boolean": "Boolean", "float": "Number"}
 
     def parse_schema_type(schema):
         # 对于对象类型，获取其第一个字段的类型
-        if schema.get('type') == 'object':
-            first_field = schema.get('schema', [])[0]
-            if first_field.get('type') == 'list':
-                return parse_schema_type(first_field.get('schema', {}))
+        if schema.get("type") == "object":
+            first_field = schema.get("schema", [])[0]
+            if first_field.get("type") == "list":
+                return parse_schema_type(first_field.get("schema", {}))
         # 返回基本类型
-        return type_mapping.get(schema.get('type'), schema.get('type').capitalize())
+        return type_mapping.get(schema.get("type"), schema.get("type").capitalize())
 
     result = {}
 
     try:
-        input_lists = json_data['data']['inputs']['batch']['inputLists']
+        input_lists = json_data["data"]["inputs"]["batch"]["inputLists"]
 
         for item in input_lists:
-            variable_name = item['name']
-            input_data = item['input']
+            variable_name = item["name"]
+            input_data = item["input"]
 
             # 直接获取schema中的类型，然后包装成Array
-            schema_type = parse_schema_type(input_data.get('schema', {}))
-            result[variable_name] = f'Array<{schema_type}>'
+            schema_type = parse_schema_type(input_data.get("schema", {}))
+            result[variable_name] = f"Array<{schema_type}>"
 
     except KeyError as e:
         print(f"Error: Could not find key {e} in JSON data")

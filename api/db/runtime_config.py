@@ -5,6 +5,7 @@
 @date：2024/7/9 9:00
 @desc:
 """
+
 from common.versions import get_multirag_version
 
 from .reload_config_base import ReloadConfigBase

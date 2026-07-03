@@ -79,18 +79,10 @@ def delete_chunks_by_doc_id(collection_name: str, doc_id: str, kb_id: str = "") 
     try:
         if db_type == "milvus":
             # Milvus 使用 filter 参数
-            return settings.docStoreConn.delete(
-                condition={"doc_id": doc_id},
-                index_name=collection_name,
-                dataset_id=kb_id
-            )
+            return settings.docStoreConn.delete(condition={"doc_id": doc_id}, index_name=collection_name, dataset_id=kb_id)
         else:
             # ES/OpenSearch/Infinity 使用 condition, index_name, knowledgebase_id 参数
-            return settings.docStoreConn.delete(
-                {"doc_id": doc_id},
-                collection_name,
-                kb_id
-            )
+            return settings.docStoreConn.delete({"doc_id": doc_id}, collection_name, kb_id)
     except Exception as e:
         logging.warning(f"delete_chunks_by_doc_id failed for {db_type}: {e}")
         return 0
@@ -129,6 +121,7 @@ def _normalize_pipeline_output_chunks(output: dict) -> tuple[list[dict], int]:
         return [], embedding_token_consumption
     return copy.deepcopy(chunks), embedding_token_consumption
 
+
 FACTORY = {
     "general": naive,
     ParserType.NAIVE.value: naive,
@@ -145,7 +138,7 @@ FACTORY = {
     ParserType.AUDIO.value: audio,
     ParserType.EMAIL.value: email,
     ParserType.KG.value: naive,
-    ParserType.TAG.value: tag
+    ParserType.TAG.value: tag,
 }
 
 TASK_TYPE_TO_PIPELINE_TASK_TYPE = {
@@ -169,15 +162,15 @@ FAILED_TASKS = 0
 
 CURRENT_TASKS = {}
 
-MAX_CONCURRENT_TASKS = int(os.environ.get('MAX_CONCURRENT_TASKS', "5"))
-MAX_CONCURRENT_CHUNK_BUILDERS = int(os.environ.get('MAX_CONCURRENT_CHUNK_BUILDERS', "3"))
-MAX_CONCURRENT_MINIO = int(os.environ.get('MAX_CONCURRENT_MINIO', '10'))
+MAX_CONCURRENT_TASKS = int(os.environ.get("MAX_CONCURRENT_TASKS", "5"))
+MAX_CONCURRENT_CHUNK_BUILDERS = int(os.environ.get("MAX_CONCURRENT_CHUNK_BUILDERS", "3"))
+MAX_CONCURRENT_MINIO = int(os.environ.get("MAX_CONCURRENT_MINIO", "10"))
 task_limiter = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 chunk_limiter = asyncio.Semaphore(MAX_CONCURRENT_CHUNK_BUILDERS)
 embed_limiter = asyncio.Semaphore(MAX_CONCURRENT_CHUNK_BUILDERS)
 minio_limiter = asyncio.Semaphore(MAX_CONCURRENT_MINIO)
 kg_limiter = asyncio.Semaphore(2)
-WORKER_HEARTBEAT_TIMEOUT = int(os.environ.get('WORKER_HEARTBEAT_TIMEOUT', '120'))
+WORKER_HEARTBEAT_TIMEOUT = int(os.environ.get("WORKER_HEARTBEAT_TIMEOUT", "120"))
 stop_event = threading.Event()
 
 
@@ -239,10 +232,7 @@ def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="
                 clean_msg = msg.split(" ", 1)[1] if " " in msg else msg
 
                 # 构建事件数据
-                event_data = {
-                    "progress": prog,
-                    "message": clean_msg
-                }
+                event_data = {"progress": prog, "message": clean_msg}
 
                 # 如果是完成事件，包含完整结果
                 if event_type == "complete":
@@ -262,7 +252,7 @@ def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="
                 REDIS_CONN.xadd_sse_event(
                     task_id=task_id,
                     event_type=event_type,
-                    data=event_data  # 使用包含 result 的完整数据
+                    data=event_data,  # 使用包含 result 的完整数据
                 )
             except Exception as e:
                 # SSE 发送失败不影响主流程
@@ -339,6 +329,7 @@ async def collect(db: Session):
         # analyze_v2 任务特殊处理：直接从 Task 表获取，不 JOIN Document
         # 因为可能是直传文件，没有对应的 Document 记录
         from api.db.db_models import Task as TaskModel
+
         task_record = db.query(TaskModel).filter(TaskModel.id == msg["id"]).first()
 
         if task_record:
@@ -363,9 +354,8 @@ async def collect(db: Session):
             if kb_id:
                 try:
                     from api.db.db_models import Knowledgebase, Tenant
-                    kb_record = db.query(Knowledgebase, Tenant).join(
-                        Tenant, Knowledgebase.tenant_id == Tenant.id
-                    ).filter(Knowledgebase.id == kb_id).first()
+
+                    kb_record = db.query(Knowledgebase, Tenant).join(Tenant, Knowledgebase.tenant_id == Tenant.id).filter(Knowledgebase.id == kb_id).first()
 
                     if kb_record:
                         kb, tenant = kb_record
@@ -384,13 +374,17 @@ async def collect(db: Session):
             if "tenant_id" not in task and user_id:
                 try:
                     from api.db.db_models import Tenant, UserTenant
+
                     # User 没有 tenant_id，需要通过 UserTenant 关联表查询
-                    user_tenant = db.query(UserTenant, Tenant).join(
-                        Tenant, UserTenant.tenant_id == Tenant.id
-                    ).filter(
-                        UserTenant.user_id == user_id,
-                        UserTenant.status == "1"  # 有效状态
-                    ).first()
+                    user_tenant = (
+                        db.query(UserTenant, Tenant)
+                        .join(Tenant, UserTenant.tenant_id == Tenant.id)
+                        .filter(
+                            UserTenant.user_id == user_id,
+                            UserTenant.status == "1",  # 有效状态
+                        )
+                        .first()
+                    )
 
                     if user_tenant:
                         ut, tenant = user_tenant
@@ -444,8 +438,7 @@ async def get_storage_binary(bucket, name):
 @timeout(60 * 80, 1)
 async def build_chunks(task, progress_callback, db: Session):
     if task["size"] > settings.DOC_MAXIMUM_SIZE:
-        set_progress(db, task["id"], prog=-1, msg="File size exceeds( <= %dMb )" %
-                                                  (int(settings.DOC_MAXIMUM_SIZE / 1024 / 1024)))
+        set_progress(db, task["id"], prog=-1, msg="File size exceeds( <= %dMb )" % (int(settings.DOC_MAXIMUM_SIZE / 1024 / 1024)))
         return []
 
     chunker = FACTORY[task["parser_id"].lower()]
@@ -490,10 +483,7 @@ async def build_chunks(task, progress_callback, db: Session):
         raise
 
     docs = []
-    doc = {
-        "doc_id": task["doc_id"],
-        "kb_id": [str(task["kb_id"])]
-    }
+    doc = {"doc_id": task["doc_id"], "kb_id": [str(task["kb_id"])]}
 
     if task.get("auth"):
         doc["auth"] = task["auth"]
@@ -506,8 +496,7 @@ async def build_chunks(task, progress_callback, db: Session):
         try:
             d = copy.deepcopy(document)
             d.update(chunk)
-            chunk_hash = xxhash.xxh64(
-                (chunk["content_with_weight"] + str(d["doc_id"])).encode("utf-8", "surrogatepass")).hexdigest()
+            chunk_hash = xxhash.xxh64((chunk["content_with_weight"] + str(d["doc_id"])).encode("utf-8", "surrogatepass")).hexdigest()
             d["pk"] = chunk_hash
             d["id"] = chunk_hash  # 同时设置 id 以兼容 ES 和 build_TOC 等函数
             d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
@@ -598,6 +587,7 @@ async def build_chunks(task, progress_callback, db: Session):
             if cached:
                 d["question_kwd"] = cached.split("\n")
                 d["question_tks"] = rag_tokenizer.tokenize("\n".join(d["question_kwd"]))
+
         tasks = []
         for d in docs:
             tasks.append(asyncio.create_task(doc_question_proposal(chat_mdl, d, task["parser_config"]["auto_questions"])))
@@ -610,7 +600,6 @@ async def build_chunks(task, progress_callback, db: Session):
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
         progress_callback(msg=f"Question generation {len(docs)} chunks completed in {timer() - st:.2f}s")
-
 
     if task["parser_config"].get("enable_metadata", False) and task["parser_config"].get("metadata"):
         st = timer()
@@ -689,7 +678,7 @@ async def build_chunks(task, progress_callback, db: Session):
                     return
                 picked_examples = random.choices(examples, k=2) if len(examples) > 2 else examples
                 if not picked_examples:
-                    picked_examples.append({"content": "This is an example", TAG_FLD: {'example': 1}})
+                    picked_examples.append({"content": "This is an example", TAG_FLD: {"example": 1}})
                 async with chat_limiter:
                     cached = await content_tagging(
                         chat_mdl,
@@ -703,6 +692,7 @@ async def build_chunks(task, progress_callback, db: Session):
             if cached:
                 set_llm_cache(chat_mdl.llm_name, d["content_with_weight"], cached, all_tags, {"topn": topn_tags})
                 d[TAG_FLD] = json.loads(cached)
+
         tasks = []
         for d in docs_to_tag:
             tasks.append(asyncio.create_task(doc_content_tagging(chat_mdl, d, topn_tags)))
@@ -724,12 +714,15 @@ def build_TOC(task, docs, progress_callback):
     with db_connection() as db:
         model_config = get_model_config_by_type_and_name(db, task["tenant_id"], LLMType.CHAT.value, task["llm_id"])
         chat_mdl = LLMBundle(db, task["tenant_id"], model_config, lang=task["language"])
-    docs = sorted(docs, key=lambda d: (
-        d.get("page_num_int", 0)[0] if isinstance(d.get("page_num_int", 0), list) else d.get("page_num_int", 0),
-        d.get("top_int", 0)[0] if isinstance(d.get("top_int", 0), list) else d.get("top_int", 0)
-    ))
+    docs = sorted(
+        docs,
+        key=lambda d: (
+            d.get("page_num_int", 0)[0] if isinstance(d.get("page_num_int", 0), list) else d.get("page_num_int", 0),
+            d.get("top_int", 0)[0] if isinstance(d.get("top_int", 0), list) else d.get("top_int", 0),
+        ),
+    )
     toc: list[dict] = asyncio.run(run_toc_from_text([d["content_with_weight"] for d in docs], chat_mdl, progress_callback))
-    logging.info("------------ T O C -------------\n" + json.dumps(toc, ensure_ascii=False, indent='  '))
+    logging.info("------------ T O C -------------\n" + json.dumps(toc, ensure_ascii=False, indent="  "))
 
     def get_chunk_id(doc):
         return doc.get("pk") or doc.get("id")
@@ -846,16 +839,10 @@ async def _create_milvus_collection(collection_name: str, vector_dim: int):
             template["standard_vector_template"]["mapping"]["dims"] = vector_dim
 
     # 构建自动维度字典
-    auto_dimensions = {
-        "vector": vector_dim,
-        f"q_{vector_dim}_vec": vector_dim
-    }
+    auto_dimensions = {"vector": vector_dim, f"q_{vector_dim}_vec": vector_dim}
 
     # 创建集合（内部会检查集合是否已存在）
-    await thread_pool_exec(
-        settings.docStoreConn.create_collection_with_mapping,
-        collection_name, mapping, auto_dimensions
-    )
+    await thread_pool_exec(settings.docStoreConn.create_collection_with_mapping, collection_name, mapping, auto_dimensions)
 
 
 def convert_data_types(data, schema):
@@ -877,18 +864,18 @@ def convert_data_types(data, schema):
 
     # 处理schema中所有定义的字段
     schema_fields = {}
-    for field in schema['fields']:
-        schema_fields[field['name']] = field
+    for field in schema["fields"]:
+        schema_fields[field["name"]] = field
 
     # 确保所有必要字段都有值
     for field_name, field_info in schema_fields.items():
         # 如果字段不在数据中，添加默认值
         if field_name not in result:
-            field_type = field_info['type']
+            field_type = field_info["type"]
 
             # 根据字段类型设置默认值
             if field_type == DataType.FLOAT_VECTOR:
-                result[field_name] = [0.0] * field_info['params']['dim']
+                result[field_name] = [0.0] * field_info["params"]["dim"]
             elif field_type == DataType.VARCHAR:
                 if field_name == "tag_feas":
                     # 特别处理 available_int 字段，设置默认值为 1
@@ -909,16 +896,16 @@ def convert_data_types(data, schema):
                 result[field_name] = []
         else:
             # 转换现有数据的类型
-            field_type = field_info['type']
+            field_type = field_info["type"]
             if field_type == DataType.FLOAT_VECTOR:
                 if not isinstance(result[field_name], list):
                     result[field_name] = list(result[field_name])
             elif field_type == DataType.VARCHAR:
                 if isinstance(result[field_name], list):
                     if field_name in ["question_kwd", "important_kwd", "entities_kwd"]:
-                        result[field_name] = '\n'.join(map(str, result[field_name]))
+                        result[field_name] = "\n".join(map(str, result[field_name]))
                     else:
-                        result[field_name] = ','.join(map(str, result[field_name]))
+                        result[field_name] = ",".join(map(str, result[field_name]))
                 else:
                     result[field_name] = str(result[field_name])
             elif field_type == DataType.FLOAT:
@@ -933,25 +920,21 @@ def convert_data_types(data, schema):
             elif field_type == DataType.ARRAY:
                 if not isinstance(result[field_name], list):
                     if isinstance(result[field_name], str):
-                        result[field_name] = result[field_name].split(',')
+                        result[field_name] = result[field_name].split(",")
                     else:
                         result[field_name] = [result[field_name]]
-                max_length = field_info.get('params', {}).get('max_length')
+                max_length = field_info.get("params", {}).get("max_length")
                 result[field_name] = [str(v) for v in result[field_name]]
                 if isinstance(max_length, int) and max_length > 0:
-                    result[field_name] = [
-                        truncate_utf8_bytes(v, max_length)
-                        for v in result[field_name]
-                        if v is not None
-                    ]
+                    result[field_name] = [truncate_utf8_bytes(v, max_length) for v in result[field_name] if v is not None]
                     result[field_name] = [v for v in result[field_name] if v]
-                max_capacity = field_info.get('params', {}).get('max_capacity', 4096)
+                max_capacity = field_info.get("params", {}).get("max_capacity", 4096)
                 if len(result[field_name]) > max_capacity:
                     logging.warning(f"Array field '{field_name}' has {len(result[field_name])} elements, truncating to {max_capacity}")
                     result[field_name] = result[field_name][:max_capacity]
 
     # 处理动态向量字段 (q_*_vec) - 仅用于 Milvus，ES 使用动态 mapping 自动处理
-    vector_fields = [k for k in result.keys() if re.match(r'q_\d+_vec', k)]
+    vector_fields = [k for k in result.keys() if re.match(r"q_\d+_vec", k)]
     for vector_field in vector_fields:
         if vector_field not in schema_fields:
             # 如果这是一个新的向量字段，记录一下但保留它（使用 debug 级别避免重复日志）
@@ -1014,7 +997,7 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
         callback(prog=0.7 + 0.2 * (i + 1) / len(cnts), msg="")
     cnts = cnts_
 
-    filename_embd_weight = parser_config.get("filename_embd_weight", 0.1) # due to the db support none value
+    filename_embd_weight = parser_config.get("filename_embd_weight", 0.1)  # due to the db support none value
     if not filename_embd_weight:
         filename_embd_weight = 0.1
     title_w = float(filename_embd_weight)
@@ -1113,7 +1096,6 @@ async def run_dataflow(db: Session, task: dict):
             PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
             return
 
-
     metadata = {}
     for ck in chunks:
         ck["doc_id"] = doc_id
@@ -1174,7 +1156,7 @@ async def run_dataflow(db: Session, task: dict):
 
     time_cost = timer() - start_ts
     task_time_cost = timer() - task_start_ts
-    set_progress(db, task_id, prog=1., msg=f"Indexing done ({time_cost:.2f}s). Task done ({task_time_cost:.2f}s)")
+    set_progress(db, task_id, prog=1.0, msg=f"Indexing done ({time_cost:.2f}s). Task done ({task_time_cost:.2f}s)")
     DocumentService.increment_chunk_num(db, doc_id, task_dataset_id, embedding_token_consumption, len(chunks), task_time_cost)
     logging.info(f"[Done], chunks({len(chunks)}), token({embedding_token_consumption}), elapsed:{task_time_cost:.2f}")
     PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
@@ -1216,13 +1198,7 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
         original_length = len(chunks)
         chunks = await raptor(chunks, kb_parser_config["raptor"]["random_seed"], callback, row["id"])
         effective_doc_name = row["name"] if did == fake_doc_id else doc_name_by_id.get(did, row["name"])
-        doc = {
-            "doc_id": did,
-            "kb_id": [str(row["kb_id"])],
-            "docnm_kwd": effective_doc_name,
-            "title_tks": rag_tokenizer.tokenize(effective_doc_name),
-            "raptor_kwd": "raptor"
-        }
+        doc = {"doc_id": did, "kb_id": [str(row["kb_id"])], "docnm_kwd": effective_doc_name, "title_tks": rag_tokenizer.tokenize(effective_doc_name), "raptor_kwd": "raptor"}
         if row["pagerank"]:
             doc[PAGERANK_FLD] = int(row["pagerank"])
 
@@ -1260,7 +1236,7 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
                 continue
 
             await generate(chunks, doc_id)
-            callback(prog=(x + 1.)/len(doc_ids))
+            callback(prog=(x + 1.0) / len(doc_ids))
     else:
         chunks = []
         skipped_chunks = 0
@@ -1310,7 +1286,7 @@ async def _detect_hierarchical_structure(chunks, title_chunker_config):
         hierarchy=title_chunker_config.get("hierarchy", 1) if title_chunker_config else 1,
         callback=None,
         method=title_chunker_config.get("method", "hierarchy") if title_chunker_config else "hierarchy",
-        include_heading_content=title_chunker_config.get("include_heading_content", False) if title_chunker_config else False
+        include_heading_content=title_chunker_config.get("include_heading_content", False) if title_chunker_config else False,
     )
 
     chapters = result.get("chapters", [])
@@ -1352,13 +1328,7 @@ async def _hierarchical_merge(chunks, config, tenant_id=None, db=None):
 
     # 默认配置
     if not config:
-        config = {
-            "levels": [
-                ["^#\\s+", "^第[一二三四五六七八九十百]+章"],
-                ["^##\\s+", "^\\d+\\.\\s+"]
-            ],
-            "hierarchy": 1
-        }
+        config = {"levels": [["^#\\s+", "^第[一二三四五六七八九十百]+章"], ["^##\\s+", "^\\d+\\.\\s+"]], "hierarchy": 1}
 
     levels = config.get("levels")
     hierarchy_level = config.get("hierarchy", 1)
@@ -1366,14 +1336,7 @@ async def _hierarchical_merge(chunks, config, tenant_id=None, db=None):
     include_heading_content = config.get("include_heading_content", False)
 
     # ⭐ 调用 core/flow/utils 的层次化合并
-    result = await hierarchical_merge(
-        chunks=chunks,
-        levels=levels,
-        hierarchy=hierarchy_level,
-        callback=None,
-        method=method,
-        include_heading_content=include_heading_content
-    )
+    result = await hierarchical_merge(chunks=chunks, levels=levels, hierarchy=hierarchy_level, callback=None, method=method, include_heading_content=include_heading_content)
 
     chapters = result.get("chapters", [])
 
@@ -1437,9 +1400,8 @@ async def _hierarchical_merge(chunks, config, tenant_id=None, db=None):
             {
                 "title": ch["title"],
                 "level": 0,
-                "chunk_range": [ch["chunk_indices"][0], ch["chunk_indices"][-1]]
-                if ch.get("chunk_indices") else [0, 0],
-                "page_range": ch.get("page_range")  # ✨ 页码范围
+                "chunk_range": [ch["chunk_indices"][0], ch["chunk_indices"][-1]] if ch.get("chunk_indices") else [0, 0],
+                "page_range": ch.get("page_range"),  # ✨ 页码范围
             }
             for ch in chapters
         ]
@@ -1449,16 +1411,10 @@ async def _hierarchical_merge(chunks, config, tenant_id=None, db=None):
 
     # 调试日志：打印每个章节的信息
     for idx, ch in enumerate(chapters):
-        page_info = f", pages={ch['page_range']}" if ch.get('page_range') else ""
-        logging.info(
-            f"  Chapter {idx + 1}: title='{ch['title'][:30]}', chunks={len(ch.get('chunks', []))}, "
-            f"positions={len(ch.get('positions', []))}{page_info}")
+        page_info = f", pages={ch['page_range']}" if ch.get("page_range") else ""
+        logging.info(f"  Chapter {idx + 1}: title='{ch['title'][:30]}', chunks={len(ch.get('chunks', []))}, positions={len(ch.get('positions', []))}{page_info}")
 
-    return {
-        "chapters": chapters,
-        "summaries": [ch["text"] for ch in chapters],
-        "structure": structure
-    }
+    return {"chapters": chapters, "summaries": [ch["text"] for ch in chapters], "structure": structure}
 
 
 def _get_default_metadata_fields():
@@ -1488,7 +1444,7 @@ def _get_default_metadata_fields():
             "call_mode": "single",
             "post_process": "none",
             "temperature": 0.3,
-            "max_tokens": 400
+            "max_tokens": 400,
         },
         {
             "field_name": "semantic_tags",
@@ -1510,8 +1466,8 @@ def _get_default_metadata_fields():
             "call_mode": "batch",
             "post_process": "counter_top10",
             "temperature": 0.2,
-            "max_tokens": 100
-        }
+            "max_tokens": 100,
+        },
     ]
 
 
@@ -1532,6 +1488,7 @@ def _get_extraction_contents(source, summaries, chunks, cluster_results=None, or
     Returns:
         list[str]: 用于提取的内容列表
     """
+
     # ✨ 辅助函数：提取文本（兼容字符串和字典）
     def extract_text(item):
         if isinstance(item, dict):
@@ -1765,6 +1722,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
             # 读取文件内容
             if has_base64:
                 import base64
+
                 file_content = base64.b64decode(file_content_base64)
                 logging.info(f"Task {task_id}: loaded file from base64 ({len(file_content)} bytes)")
                 # base64 数据已在前面删除
@@ -1838,7 +1796,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                     "parse_method": parse_method,  # ✅ 直接传递，支持任何 VLM 模型名
                     "llm_name": config.get("image_llm_name"),
                     "lang": config.get("lang", "Chinese"),
-                    "system_prompt": config.get("image_system_prompt")
+                    "system_prompt": config.get("image_system_prompt"),
                 }
                 # Excel 支持的 parse_method: deepdoc, tcadp parser
                 excel_parse_method = "deepdoc"
@@ -1923,7 +1881,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 epub_config=epub_config,
                 code_config=code_config,
                 html_config=html_config,
-                callback=_parser_callback
+                callback=_parser_callback,
             )
 
             logging.info(f"Task {task_id}: parsed with flow, format={parsed_result.get('output_format')}")
@@ -1948,16 +1906,13 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 children_delimiters=children_delimiters,
                 table_context_size=table_context_size,
                 image_context_size=image_context_size,
-                callback=_token_chunker_callback
+                callback=_token_chunker_callback,
             )
 
             # 3. 转换为 analyze_v2 格式
             chunks = []
             for c in chunked_result:
-                chunk_dict = {
-                    "content_with_weight": c.get("text", ""),
-                    "embeddings": None
-                }
+                chunk_dict = {"content_with_weight": c.get("text", ""), "embeddings": None}
 
                 for field in ("doc_type_kwd", "position_int", "page_num_int", "top_int", "img_id"):
                     if field in c:
@@ -1989,15 +1944,8 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
             else:
                 vctr_nm = "vector"
 
-            for d in settings.retriever.chunk_list(
-                    doc_id, tenant_id, [kb_id],
-                    fields=["content_with_weight", vctr_nm],
-                    sort_by_position=True
-            ):
-                chunks.append({
-                    "content_with_weight": d["content_with_weight"],
-                    "embeddings": np.array(d[vctr_nm]) if vctr_nm in d else None
-                })
+            for d in settings.retriever.chunk_list(doc_id, tenant_id, [kb_id], fields=["content_with_weight", vctr_nm], sort_by_position=True):
+                chunks.append({"content_with_weight": d["content_with_weight"], "embeddings": np.array(d[vctr_nm]) if vctr_nm in d else None})
 
         if not chunks:
             callback(prog=-1, msg="未找到文档内容")
@@ -2078,20 +2026,19 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
 
             # ⚠️ 保护机制：检查是否真的识别出了结构
             if len(chapters) == 1 and len(chunks) > 10:
-                logging.warning(
-                    f"TitleChunker only identified 1 chapter from {len(chunks)} chunks in hybrid strategy. "
-                    f"Falling back to RAPTOR-only processing to avoid creating a single huge chapter."
-                )
+                logging.warning(f"TitleChunker only identified 1 chapter from {len(chunks)} chunks in hybrid strategy. Falling back to RAPTOR-only processing to avoid creating a single huge chapter.")
                 # 降级为纯 RAPTOR 策略：构造一个完整的 chapter 对象
-                chapters = [{
-                    "chunks": chunks,
-                    "title": "Full Document",
-                    "text": "\n".join([c.get("content_with_weight", "") for c in chunks]),
-                    "chunk_indices": list(range(len(chunks))),
-                    "positions": [],
-                    "image": None,
-                    "page_range": None
-                }]
+                chapters = [
+                    {
+                        "chunks": chunks,
+                        "title": "Full Document",
+                        "text": "\n".join([c.get("content_with_weight", "") for c in chunks]),
+                        "chunk_indices": list(range(len(chunks))),
+                        "positions": [],
+                        "image": None,
+                        "page_range": None,
+                    }
+                ]
 
             # 对每个章节独立运行 RAPTOR
             all_summaries = []
@@ -2099,8 +2046,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 chapter_chunks = chapter["chunks"]
                 chapter_title = chapter.get("title", "")[:30]  # 前30个字符
 
-                logging.info(
-                    f"Hybrid: processing chapter {idx + 1}/{len(chapters)}, title='{chapter_title}', chunks={len(chapter_chunks)}")
+                logging.info(f"Hybrid: processing chapter {idx + 1}/{len(chapters)}, title='{chapter_title}', chunks={len(chapter_chunks)}")
 
                 if len(chapter_chunks) > 10:
                     # 章节较长，使用 RAPTOR
@@ -2116,11 +2062,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                             chapter_raptor_inputs.append((text, embd))
                             # ✨ 保存元数据
                             positions = _get_chunk_positions(chunk)
-                            chunk_metadata.append({
-                                "positions": positions,
-                                "image": chunk.get("image"),
-                                "page_nums": sorted({p[0] for p in positions}) if positions else []
-                            })
+                            chunk_metadata.append({"positions": positions, "image": chunk.get("image"), "page_nums": sorted({p[0] for p in positions}) if positions else []})
 
                     raptor_prompt = raptor_config.get("prompt") or "Please summarize the following content:\n{cluster_content}"
                     raptor = Raptor(
@@ -2133,9 +2075,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                         max_errors=int(os.environ.get("RAPTOR_MAX_ERRORS", 3)),
                     )
                     chapter_results = await raptor(
-                        chapter_raptor_inputs,
-                        random_state=raptor_config.get("random_seed", 42),
-                        callback=lambda msg: callback(prog=0.5, msg=f"RAPTOR ({chapter['title'][:20]}): {msg}")
+                        chapter_raptor_inputs, random_state=raptor_config.get("random_seed", 42), callback=lambda msg: callback(prog=0.5, msg=f"RAPTOR ({chapter['title'][:20]}): {msg}")
                     )
 
                     # ✨ 提取聚类摘要（RAPTOR 生成的新节点）
@@ -2165,21 +2105,19 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                                     if meta["image"]:
                                         merged_image = concat_img(merged_image, meta["image"])
 
-                            all_summaries.append({
-                                "text": summary_text,
-                                "positions": merged_positions,
-                                "image": merged_image,
-                                "is_cluster_summary": True  # 标记为聚类摘要
-                            })
+                            all_summaries.append(
+                                {
+                                    "text": summary_text,
+                                    "positions": merged_positions,
+                                    "image": merged_image,
+                                    "is_cluster_summary": True,  # 标记为聚类摘要
+                                }
+                            )
                 else:
                     # ✨ 章节较短，直接使用（保留位置信息）
                     for c in chapter_chunks:
                         positions = _get_chunk_positions(c)
-                        all_summaries.append({
-                            "text": c.get("content_with_weight", ""),
-                            "positions": positions,
-                            "image": c.get("image")
-                        })
+                        all_summaries.append({"text": c.get("content_with_weight", ""), "positions": positions, "image": c.get("image")})
 
             summaries = all_summaries
             cluster_count = len(summaries)
@@ -2226,11 +2164,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                     max_errors=int(os.environ.get("RAPTOR_MAX_ERRORS", 3)),
                 )
 
-                cluster_results = await raptor(
-                    raptor_inputs,
-                    random_state=raptor_config.get("random_seed", 42),
-                    callback=lambda msg: callback(prog=0.5, msg=f"RAPTOR: {msg}")
-                )
+                cluster_results = await raptor(raptor_inputs, random_state=raptor_config.get("random_seed", 42), callback=lambda msg: callback(prog=0.5, msg=f"RAPTOR: {msg}"))
 
                 original_length = len(raptor_inputs)
                 if len(cluster_results) > original_length:
@@ -2239,8 +2173,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                     cluster_count = len(summaries)
                 else:
                     # 没有聚类摘要（chunk 太少），使用原始 chunks
-                    summaries = [text for text, _ in cluster_results] if cluster_results else [c["content_with_weight"]
-                                                                                               for c in chunks]
+                    summaries = [text for text, _ in cluster_results] if cluster_results else [c["content_with_weight"] for c in chunks]
                     cluster_count = 0
 
                 callback(prog=0.7, msg=f"RAPTOR 生成了 {cluster_count} 个聚类摘要，共 {len(summaries)} 个片段")
@@ -2270,13 +2203,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
 
             try:
                 # 1. 获取数据源
-                contents = _get_extraction_contents(
-                    source,
-                    summaries,
-                    chunks,
-                    cluster_results_for_source,
-                    original_chunk_length
-                )
+                contents = _get_extraction_contents(source, summaries, chunks, cluster_results_for_source, original_chunk_length)
 
                 # 2. 调用 LLM（参考 keyword_extraction 的标准模式）
                 from core.prompts.generator import message_fit_in
@@ -2286,17 +2213,11 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                     combined_content = "\n\n".join(contents) if isinstance(contents, list) else contents[0]
 
                     # 使用 message_fit_in（项目标准）
-                    msg = [
-                        {"role": "system", "content": field_config.get("prompt")},
-                        {"role": "user", "content": combined_content}
-                    ]
+                    msg = [{"role": "system", "content": field_config.get("prompt")}, {"role": "user", "content": combined_content}]
                     _, msg = message_fit_in(msg, chat_mdl.max_length)
 
                     def do_chat_single():
-                        return chat_mdl.chat(msg[0]["content"], msg[1:], {
-                            "temperature": field_config.get("temperature", 0.1),
-                            "max_tokens": field_config.get("max_tokens", 512)
-                        })
+                        return chat_mdl.chat(msg[0]["content"], msg[1:], {"temperature": field_config.get("temperature", 0.1), "max_tokens": field_config.get("max_tokens", 512)})
 
                     raw_output = await thread_pool_exec(do_chat_single)
 
@@ -2309,17 +2230,11 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                     # 每个内容调用一次（需要频次统计的场景）
                     raw_outputs = []
                     for content in contents:
-                        msg = [
-                            {"role": "system", "content": field_config.get("prompt")},
-                            {"role": "user", "content": content}
-                        ]
+                        msg = [{"role": "system", "content": field_config.get("prompt")}, {"role": "user", "content": content}]
                         _, msg = message_fit_in(msg, chat_mdl.max_length)
 
                         def do_chat_batch(m):
-                            return chat_mdl.chat(m[0]["content"], m[1:], {
-                                "temperature": field_config.get("temperature", 0.1),
-                                "max_tokens": field_config.get("max_tokens", 512)
-                            })
+                            return chat_mdl.chat(m[0]["content"], m[1:], {"temperature": field_config.get("temperature", 0.1), "max_tokens": field_config.get("max_tokens", 512)})
 
                         result = await thread_pool_exec(do_chat_batch, msg)
 
@@ -2341,12 +2256,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
         # 4. 构建结果（与 PipelineAnalysisService 保持一致）
         result = {
             "metadata": metadata,
-            "processing_info": {
-                "strategy_used": strategy,
-                "chunk_count": len(chunks),
-                "dedup_strategy": config.get("dedup_strategy", "smart"),
-                "components_used": components_used
-            }
+            "processing_info": {"strategy_used": strategy, "chunk_count": len(chunks), "dedup_strategy": config.get("dedup_strategy", "smart"), "components_used": components_used},
         }
 
         # 添加结构信息（如果使用了 TitleChunker）
@@ -2364,6 +2274,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
 
         from api.db.db_models import Task as TaskModel
         from api.db.db_models import db_connection
+
         with db_connection() as new_db:
             task_record = new_db.query(TaskModel).filter(TaskModel.id == task_id).first()
             if task_record:
@@ -2373,8 +2284,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
 
         callback(prog=1.0, msg="分析完成")
 
-        logging.info(
-            f"analyze_v2 task {task_id} completed: {len(chunks)} chunks, {len(summaries)} summaries, {len(metadata)} metadata fields")
+        logging.info(f"analyze_v2 task {task_id} completed: {len(chunks)} chunks, {len(summaries)} summaries, {len(metadata)} metadata fields")
 
         return result
 
@@ -2394,8 +2304,7 @@ async def delete_image(kb_id, chunk_id):
         raise
 
 
-async def insert_chunks(db, task_id, task_tenant_id, task_dataset_id, chunks, progress_callback, collection_name,
-                        schema):
+async def insert_chunks(db, task_id, task_tenant_id, task_dataset_id, chunks, progress_callback, collection_name, schema):
     """
     将chunks批量插入向量数据库（支持 Milvus/ES/OpenSearch/Infinity），包含类型转换和错误处理
 
@@ -2441,7 +2350,7 @@ async def insert_chunks(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
 
     # 先插入 mother chunks
     for b in range(0, len(mothers), settings.DOC_BULK_SIZE):
-        mother_batch = mothers[b:b + settings.DOC_BULK_SIZE]
+        mother_batch = mothers[b : b + settings.DOC_BULK_SIZE]
         converted_batch = [convert_data_types(m, schema) for m in mother_batch]
         try:
             db_type = settings.docStoreConn.db_type()
@@ -2470,7 +2379,7 @@ async def insert_chunks(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
     # 循环分批插入
     for b in range(0, len(chunks), settings.DOC_BULK_SIZE):
         # 取出本批次要插入的chunks
-        chunk_batch = chunks[b: b + settings.DOC_BULK_SIZE]
+        chunk_batch = chunks[b : b + settings.DOC_BULK_SIZE]
 
         # 将本批次内的数据先做类型转换
         converted_batch = []
@@ -2511,16 +2420,13 @@ async def insert_chunks(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
         except Exception:
             # 如果出现异常，记录失败并进行删除回滚
             failed_inserts.extend(chunk_batch)
-            progress_callback(
-                -1,
-                "Insert chunk error, detail info please check log file. Please check doc store status!"
-            )
+            progress_callback(-1, "Insert chunk error, detail info please check log file. Please check doc store status!")
             try:
                 if await thread_pool_exec(doc_store_exists, collection_name, task_dataset_id):
                     # 删除本批次已经尝试插入的记录
                     for chunk in chunk_batch:
                         if "doc_id" in chunk:
-                            doc_id = chunk['doc_id']
+                            doc_id = chunk["doc_id"]
                             await thread_pool_exec(delete_chunks_by_doc_id, collection_name, doc_id, task_dataset_id)
             except Exception as e:
                 logging.exception(f"Failed to rollback inserted chunks: {e}")
@@ -2551,7 +2457,7 @@ async def insert_chunks(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
                 if await thread_pool_exec(doc_store_exists, collection_name, task_dataset_id):
                     for chunk in chunk_batch:
                         if "doc_id" in chunk:
-                            doc_id = chunk['doc_id']
+                            doc_id = chunk["doc_id"]
                             await thread_pool_exec(delete_chunks_by_doc_id, collection_name, doc_id, task_dataset_id)
             except Exception as e:
                 logging.exception(f"Failed to rollback after task not found: {e}")
@@ -2565,9 +2471,7 @@ async def insert_chunks(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
     if successful_inserts:
         total_insert_count = sum(item.get("insert_count", 0) for item in successful_inserts)
         db_type = settings.docStoreConn.db_type()
-        logging.info(
-            f"Successfully inserted {total_insert_count} chunks into {db_type} index '{collection_name}'"
-        )
+        logging.info(f"Successfully inserted {total_insert_count} chunks into {db_type} index '{collection_name}'")
 
     if failed_inserts:
         logging.warning(f"Failed to insert {len(failed_inserts)} chunks")
@@ -2609,7 +2513,7 @@ async def do_handle_task(db, task):
         task_language = task["language"]
         task_data = json.loads(task.get("chunk_ids", "{}"))
         config = task_data.get("config", {}) or {}
-        task_parser_config = (task.get("parser_config") or config.get("parser_config") or {})
+        task_parser_config = task.get("parser_config") or config.get("parser_config") or {}
         task_llm_id = task_parser_config.get("llm_id") or config.get("llm_id") or task.get("llm_id")
         if not task_llm_id:
             raise ValueError(f"analyze_v2 task {task_id} missing llm_id configuration")
@@ -2617,14 +2521,7 @@ async def do_handle_task(db, task):
         enable_sse = task_data.get("enable_sse", config.get("enable_sse", False))
 
         # 创建进度回调
-        progress_callback_sse = partial(
-            set_progress,
-            db,
-            task_id,
-            task.get("from_page", 0),
-            task.get("to_page", 100000000),
-            enable_sse=enable_sse
-        )
+        progress_callback_sse = partial(set_progress, db, task_id, task.get("from_page", 0), task.get("to_page", 100000000), enable_sse=enable_sse)
 
         try:
             # 绑定 LLM 模型
@@ -2638,14 +2535,7 @@ async def do_handle_task(db, task):
             vector_size = len(vts[0])
 
             # 执行分析任务
-            await run_analyze_v2_task(
-                task,
-                chat_model,
-                embedding_model,
-                vector_size,
-                db,
-                callback=progress_callback_sse
-            )
+            await run_analyze_v2_task(task, chat_model, embedding_model, vector_size, db, callback=progress_callback_sse)
         except Exception as e:
             logging.exception(f"analyze_v2 task {task_id} failed: {e}")
             progress_callback_sse(prog=-1, msg=f"任务失败: {e!s}")
@@ -2653,7 +2543,7 @@ async def do_handle_task(db, task):
         return
 
     # 处理 auth 列
-    task['auth'] = convert_auth(task.get('auth'))
+    task["auth"] = convert_auth(task.get("auth"))
 
     task_id = task["id"]
     task_from_page = task["from_page"]
@@ -2690,7 +2580,7 @@ async def do_handle_task(db, task):
         vts, _ = embedding_model.encode(["ok"])
         vector_size = len(vts[0])
     except Exception as e:
-        error_message = f'Fail to bind embedding model: {e!s}'
+        error_message = f"Fail to bind embedding model: {e!s}"
         progress_callback(-1, msg=error_message)
         logging.exception(error_message)
         raise
@@ -2699,7 +2589,7 @@ async def do_handle_task(db, task):
     kb_name = KnowledgebaseService.get_by_id(db, task_dataset_id).name
     await init_kb(task, kb_name)
 
-    if task_type[:len("dataflow")] == "dataflow":
+    if task_type[: len("dataflow")] == "dataflow":
         await run_dataflow(db, task)
         return
 
@@ -2720,7 +2610,7 @@ async def do_handle_task(db, task):
                         "threshold": 0.1,
                         "max_cluster": 64,
                         "random_seed": 0,
-                        "scope": "file"
+                        "scope": "file",
                     },
                 }
             )
@@ -2759,7 +2649,7 @@ async def do_handle_task(db, task):
                 db=db,
             )
         if fake_doc_ids := task.get("doc_ids", []):
-            task_doc_id = fake_doc_ids[0] # use the first document ID to represent this task for logging purposes
+            task_doc_id = fake_doc_ids[0]  # use the first document ID to represent this task for logging purposes
     # Either using graphrag or Standard chunking methods
     elif task_type == "graphrag":
         kb = KnowledgebaseService.get_by_id(db, task_dataset_id)
@@ -2800,12 +2690,12 @@ async def do_handle_task(db, task):
         return
     else:
         # Standard chunking methods
-        task['llm_id'] = doc_task_llm_id
+        task["llm_id"] = doc_task_llm_id
         start_ts = timer()
         chunks = await build_chunks(task, progress_callback, db)
         logging.info(f"Build document {task_document_name}: {timer() - start_ts:.2f}s")
         if not chunks:
-            progress_callback(1., msg=f"No chunk built from {task_document_name}")
+            progress_callback(1.0, msg=f"No chunk built from {task_document_name}")
             return
         progress_callback(msg=f"Generate {len(chunks)} chunks")
         start_ts = timer()
@@ -2837,17 +2727,14 @@ async def do_handle_task(db, task):
         if has_canceled(task_id):
             progress_callback(-1, msg="Task has been canceled.")
             return False
-        insert_result = await insert_chunks(db, task_id, task_tenant_id, task_dataset_id, _chunks, progress_callback,
-                                collection_name, schema)
+        insert_result = await insert_chunks(db, task_id, task_tenant_id, task_dataset_id, _chunks, progress_callback, collection_name, schema)
         return bool(insert_result)
 
     try:
         if not await _maybe_insert_chunks(chunks):
             return
 
-        logging.info(
-            f"Indexing doc({task_document_name}), page({task_from_page}-{task_to_page}), chunks({len(chunks)}), elapsed: {timer() - start_ts:.2f}"
-        )
+        logging.info(f"Indexing doc({task_document_name}), page({task_from_page}-{task_to_page}), chunks({len(chunks)}), elapsed: {timer() - start_ts:.2f}")
 
         DocumentService.increment_chunk_num(db, task_doc_id, task_dataset_id, token_count, chunk_count, 0)
 
@@ -2866,9 +2753,7 @@ async def do_handle_task(db, task):
 
         task_time_cost = timer() - task_start_ts
         progress_callback(prog=1.0, msg=f"Task done ({task_time_cost:.2f}s)")
-        logging.info(
-            f"Chunk doc({task_document_name}), page({task_from_page}-{task_to_page}), chunks({len(chunks)}), token({token_count}), elapsed:{task_time_cost:.2f}"
-        )
+        logging.info(f"Chunk doc({task_document_name}), page({task_from_page}-{task_to_page}), chunks({len(chunks)}), token({token_count}), elapsed:{task_time_cost:.2f}")
 
     finally:
         if has_canceled(task_id):
@@ -2886,9 +2771,7 @@ async def do_handle_task(db, task):
                         task_dataset_id,
                     )
             except Exception as e:
-                logging.exception(
-                    f"Remove doc({task_doc_id}) from docStore failed when task({task_id}) canceled, exception: {e}"
-                )
+                logging.exception(f"Remove doc({task_doc_id}) from docStore failed when task({task_id}) canceled, exception: {e}")
 
 
 async def handle_task():
@@ -2952,9 +2835,7 @@ async def handle_task():
             except TaskCanceledException as e:
                 DONE_TASKS += 1
                 CURRENT_TASKS.pop(task_id, None)
-                logging.info(
-                    f"handle_task canceled for task {task_id}: {getattr(e, 'msg', str(e))}"
-                )
+                logging.info(f"handle_task canceled for task {task_id}: {getattr(e, 'msg', str(e))}")
             except Exception as e:
                 FAILED_TASKS += 1
                 CURRENT_TASKS.pop(task_id, None)
@@ -2962,14 +2843,14 @@ async def handle_task():
                     err_msg = str(e)
                     while isinstance(e, exceptiongroup.ExceptionGroup):
                         e = e.exceptions[0]
-                        err_msg += ' -- ' + str(e)
+                        err_msg += " -- " + str(e)
                     set_progress(db, task_id, prog=-1, msg=f"[Exception]: {err_msg}")
                 except Exception as e:
                     logging.exception(f"[Exception]: {e!s}")
                     pass
 
                 # 异常日志也清理 base64
-                task_error_dict = copy.deepcopy(task_dict) if 'task_dict' in locals() else {}
+                task_error_dict = copy.deepcopy(task_dict) if "task_dict" in locals() else {}
                 logging.exception(f"handle_task got exception for task {json.dumps(task_error_dict, default=str)}")
 
             finally:
@@ -2979,10 +2860,7 @@ async def handle_task():
                     if task_type in PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES:
                         task_document_ids = task["doc_ids"]
                     if not task.get("dataflow_id", ""):
-                        PipelineOperationLogService.record_pipeline_operation(db, document_id=task["doc_id"],
-                                                                              pipeline_id="",
-                                                                              task_type=pipeline_task_type,
-                                                                              fake_document_ids=task_document_ids)
+                        PipelineOperationLogService.record_pipeline_operation(db, document_id=task["doc_id"], pipeline_id="", task_type=pipeline_task_type, fake_document_ids=task_document_ids)
 
             redis_msg.ack()
         except Exception:
@@ -3001,7 +2879,7 @@ async def get_server_ip() -> str:
             return s.getsockname()[0]
     except Exception as e:
         logging.error(str(e))
-        return 'Unknown'
+        return "Unknown"
 
 
 async def report_status():
@@ -3026,18 +2904,20 @@ async def report_status():
         LAG_TASKS = int(group_info.get("lag", 0))
 
         current = copy.deepcopy(CURRENT_TASKS)
-        heartbeat = json.dumps({
-            "ip_address": ip_address,
-            "pid": pid,
-            "name": CONSUMER_NAME,
-            "now": now.astimezone().isoformat(timespec="milliseconds"),
-            "boot_at": BOOT_AT,
-            "pending": PENDING_TASKS,
-            "lag": LAG_TASKS,
-            "done": DONE_TASKS,
-            "failed": FAILED_TASKS,
-            "current": current,
-        })
+        heartbeat = json.dumps(
+            {
+                "ip_address": ip_address,
+                "pid": pid,
+                "name": CONSUMER_NAME,
+                "now": now.astimezone().isoformat(timespec="milliseconds"),
+                "boot_at": BOOT_AT,
+                "pending": PENDING_TASKS,
+                "lag": LAG_TASKS,
+                "done": DONE_TASKS,
+                "failed": FAILED_TASKS,
+                "current": current,
+            }
+        )
 
         # Report heartbeat to Redis
         try:
@@ -3113,16 +2993,16 @@ async def main():
           /____/
 ======================================================================
     """)
-    logging.info(f'MultiRAG ingestion version: {get_multirag_version()}')
+    logging.info(f"MultiRAG ingestion version: {get_multirag_version()}")
     show_configs()
     settings.init_settings()
     settings.check_and_install_torch()
-    logging.info(f'settings.EMBEDDING_CFG: {settings.EMBEDDING_CFG}')
+    logging.info(f"settings.EMBEDDING_CFG: {settings.EMBEDDING_CFG}")
     settings.print_rag_settings()
     if sys.platform != "win32":
         signal.signal(signal.SIGUSR1, start_tracemalloc_and_snapshot)
         signal.signal(signal.SIGUSR2, stop_tracemalloc)
-    TRACE_MALLOC_ENABLED = int(os.environ.get('TRACE_MALLOC_ENABLED', "0"))
+    TRACE_MALLOC_ENABLED = int(os.environ.get("TRACE_MALLOC_ENABLED", "0"))
     if TRACE_MALLOC_ENABLED:
         start_tracemalloc_and_snapshot(None, None)
 

@@ -5,6 +5,7 @@
 @date：2025/01/11 16:50
 @desc: AI安全护栏规则管理服务
 """
+
 import hashlib
 import logging
 
@@ -18,11 +19,11 @@ from common.misc_utils import get_uuid
 
 class GuardRuleService(CommonService):
     """AI安全护栏规则管理服务"""
+
     model = GuardRule
 
     @classmethod
-    def create_rule(cls, db: Session, label_id: str, rule_type: str, content: str,
-                   tenant_id: str = None, created_by: str = None, **kwargs) -> str | None:
+    def create_rule(cls, db: Session, label_id: str, rule_type: str, content: str, tenant_id: str = None, created_by: str = None, **kwargs) -> str | None:
         """
         创建护栏规则
 
@@ -39,7 +40,7 @@ class GuardRuleService(CommonService):
             创建成功返回规则ID，失败返回None
         """
         try:
-            content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
+            content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
 
             # 检查是否已存在相同规则
             existing = cls.get_rule_by_hash(db, label_id, content_hash)
@@ -62,7 +63,7 @@ class GuardRuleService(CommonService):
                 "priority": kwargs.get("priority", 0),
                 "source": kwargs.get("source"),
                 "description": kwargs.get("description"),
-                "status": kwargs.get("status", "1")
+                "status": kwargs.get("status", "1"),
             }
 
             rule = cls.save(db, **rule_data)
@@ -73,8 +74,7 @@ class GuardRuleService(CommonService):
             return None
 
     @classmethod
-    def get_rule_by_hash(cls, db: Session, label_id: str,
-                        content_hash: str) -> GuardRule | None:
+    def get_rule_by_hash(cls, db: Session, label_id: str, content_hash: str) -> GuardRule | None:
         """
         根据内容哈希获取规则
 
@@ -87,13 +87,7 @@ class GuardRuleService(CommonService):
             规则对象或None
         """
         try:
-            return db.query(cls.model).filter(
-                and_(
-                    cls.model.label_id == label_id,
-                    cls.model.content_hash == content_hash,
-                    cls.model.status == "1"
-                )
-            ).first()
+            return db.query(cls.model).filter(and_(cls.model.label_id == label_id, cls.model.content_hash == content_hash, cls.model.status == "1")).first()
         except Exception as e:
             logging.error(f"获取规则失败: {e}")
             return None
@@ -111,19 +105,13 @@ class GuardRuleService(CommonService):
             规则列表
         """
         try:
-            return db.query(cls.model).filter(
-                and_(
-                    cls.model.label_id == label_id,
-                    cls.model.status == "1"
-                )
-            ).order_by(cls.model.priority.desc()).all()
+            return db.query(cls.model).filter(and_(cls.model.label_id == label_id, cls.model.status == "1")).order_by(cls.model.priority.desc()).all()
         except Exception as e:
             logging.error(f"获取标签规则失败: {e}")
             return []
 
     @classmethod
-    def get_rules_by_type(cls, db: Session, rule_type: str,
-                         tenant_id: str) -> list[GuardRule]:
+    def get_rules_by_type(cls, db: Session, rule_type: str, tenant_id: str) -> list[GuardRule]:
         """
         根据类型获取规则列表
 
@@ -136,20 +124,13 @@ class GuardRuleService(CommonService):
             规则列表
         """
         try:
-            return db.query(cls.model).filter(
-                and_(
-                    cls.model.rule_type == rule_type,
-                    cls.model.tenant_id == tenant_id,
-                    cls.model.status == "1"
-                )
-            ).order_by(cls.model.priority.desc()).all()
+            return db.query(cls.model).filter(and_(cls.model.rule_type == rule_type, cls.model.tenant_id == tenant_id, cls.model.status == "1")).order_by(cls.model.priority.desc()).all()
         except Exception as e:
             logging.error(f"获取类型规则失败: {e}")
             return []
 
     @classmethod
-    def init_default_rules(cls, db: Session, label_configs: dict[str, str],
-                          tenant_id: str, created_by: str) -> list[str]:
+    def init_default_rules(cls, db: Session, label_configs: dict[str, str], tenant_id: str, created_by: str) -> list[str]:
         """
         初始化默认规则
 
@@ -188,12 +169,7 @@ class GuardRuleService(CommonService):
         ]
 
         # 组织规则数据
-        rule_groups = [
-            ("political_entity", political_rules),
-            ("pornographic_adult", pornographic_rules),
-            ("phone_number", pii_rules),
-            ("prompt_injection", injection_rules)
-        ]
+        rule_groups = [("political_entity", political_rules), ("pornographic_adult", pornographic_rules), ("phone_number", pii_rules), ("prompt_injection", injection_rules)]
 
         created_ids = []
         for label_code, rules in rule_groups:
@@ -202,13 +178,7 @@ class GuardRuleService(CommonService):
                 continue
 
             for rule_data in rules:
-                rule_id = cls.create_rule(
-                    db=db,
-                    label_id=label_id,
-                    tenant_id=tenant_id,
-                    created_by=created_by,
-                    **rule_data
-                )
+                rule_id = cls.create_rule(db=db, label_id=label_id, tenant_id=tenant_id, created_by=created_by, **rule_data)
                 if rule_id:
                     created_ids.append(rule_id)
 

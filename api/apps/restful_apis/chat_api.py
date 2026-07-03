@@ -42,8 +42,8 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_PROMPT_CONFIG = {
     "system": (
-        'You are an intelligent assistant. Please summarize the content of the dataset to answer the question. '
-        'Please list the data in the dataset and answer in detail. When all dataset content is irrelevant to the '
+        "You are an intelligent assistant. Please summarize the content of the dataset to answer the question. "
+        "Please list the data in the dataset and answer in detail. When all dataset content is irrelevant to the "
         'question, your answer must include the sentence "The answer you are looking for is not found in the dataset!" '
         "Answers need to consider chat history.\n"
         "      Here is the knowledge base:\n"
@@ -241,10 +241,7 @@ def _reject_legacy_payload(req: dict[str, Any]) -> str | None:
     if not legacy_fields:
         return None
     fields = ", ".join(legacy_fields)
-    return (
-        f"Unsupported legacy chat payload fields: {fields}. "
-        "Use icon, llm_id, llm_setting, prompt_config, and do_refer."
-    )
+    return f"Unsupported legacy chat payload fields: {fields}. Use icon, llm_id, llm_setting, prompt_config, and do_refer."
 
 
 def _normalize_do_refer(req: dict[str, Any]) -> None:
@@ -293,12 +290,9 @@ def _validate_dataset_ids(db: Session, tenant_id: str, dataset_ids: list[str] | 
             return f"The dataset {dataset_id} doesn't own parsed file"
         kbs.append(kb)
 
-    embd_ids = [
-        kb.tenant_embd_id or TenantLLMService.split_model_name_and_factory(kb.embd_id)[0]
-        for kb in kbs
-    ]
+    embd_ids = [kb.tenant_embd_id or TenantLLMService.split_model_name_and_factory(kb.embd_id)[0] for kb in kbs]
     if len(set(embd_ids)) > 1:
-        return f'Datasets use different embedding models: {[kb.embd_id for kb in kbs]}'
+        return f"Datasets use different embedding models: {[kb.embd_id for kb in kbs]}"
     return normalized_ids
 
 
@@ -500,18 +494,14 @@ def list_chats(
         owner_ids = owner_ids or []
         exact_keywords = "" if id or name else (keywords or "")
         if owner_ids:
-            chats, _ = DialogService.get_by_tenant_ids(
-                db, owner_ids, tenant_id, 0, 0, orderby, desc, exact_keywords, id=id, name=name
-            )
+            chats, _ = DialogService.get_by_tenant_ids(db, owner_ids, tenant_id, 0, 0, orderby, desc, exact_keywords, id=id, name=name)
             chats = [chat for chat in chats if chat.get("tenant_id") in owner_ids]
             total = len(chats)
             if page and page_size:
                 start = (page - 1) * page_size
-                chats = chats[start:start + page_size]
+                chats = chats[start : start + page_size]
         else:
-            chats, total = DialogService.get_by_tenant_ids(
-                db, [], tenant_id, page, page_size, orderby, desc, exact_keywords, id=id, name=name
-            )
+            chats, total = DialogService.get_by_tenant_ids(db, [], tenant_id, page, page_size, orderby, desc, exact_keywords, id=id, name=name)
         return get_result(data={"chats": [build_chat_response(db, chat) for chat in chats], "total": total})
     except Exception as e:
         logger.exception(e)
@@ -552,9 +542,7 @@ def update_chat(
     if not _owned_chat_exists(db, tenant_id, chat_id):
         return _error("No authorization.", RetCode.AUTHENTICATION_ERROR)
     try:
-        ok, payload = _prepare_update_payload(
-            db, tenant_id, chat_id, request.model_dump(exclude_unset=True), merge_nested=False
-        )
+        ok, payload = _prepare_update_payload(db, tenant_id, chat_id, request.model_dump(exclude_unset=True), merge_nested=False)
         if not ok:
             return _error(payload)  # type: ignore[arg-type]
         if not DialogService.update_by_id(db, chat_id, payload):  # type: ignore[arg-type]
@@ -578,9 +566,7 @@ def patch_chat(
     if not _owned_chat_exists(db, tenant_id, chat_id):
         return _error("No authorization.", RetCode.AUTHENTICATION_ERROR)
     try:
-        ok, payload = _prepare_update_payload(
-            db, tenant_id, chat_id, request.model_dump(exclude_unset=True), merge_nested=True
-        )
+        ok, payload = _prepare_update_payload(db, tenant_id, chat_id, request.model_dump(exclude_unset=True), merge_nested=True)
         if not ok:
             return _error(payload)  # type: ignore[arg-type]
         if not DialogService.update_by_id(db, chat_id, payload):  # type: ignore[arg-type]
@@ -622,10 +608,7 @@ def bulk_delete_chats(
         ids = req.get("ids")
         if not ids:
             if req.get("delete_all") is True:
-                ids = [
-                    chat.id
-                    for chat in DialogService.query(db, tenant_id=tenant_id, status=StatusEnum.VALID.value)
-                ]
+                ids = [chat.id for chat in DialogService.query(db, tenant_id=tenant_id, status=StatusEnum.VALID.value)]
                 if not ids:
                     return get_result(data={})
             else:
@@ -838,10 +821,14 @@ async def ask(
             async for ans in async_ask(db, req["question"], req["kb_ids"], tenant_id, search_config=search_config):
                 yield "data:" + json.dumps({"code": 0, "message": "", "data": ans}, ensure_ascii=False) + "\n\n"
         except Exception as e:
-            yield "data:" + json.dumps(
-                {"code": 500, "message": str(e), "data": {"answer": "**ERROR**: " + str(e), "reference": []}},
-                ensure_ascii=False,
-            ) + "\n\n"
+            yield (
+                "data:"
+                + json.dumps(
+                    {"code": 500, "message": str(e), "data": {"answer": "**ERROR**: " + str(e), "reference": []}},
+                    ensure_ascii=False,
+                )
+                + "\n\n"
+            )
         yield "data:" + json.dumps({"code": 0, "message": "", "data": True}, ensure_ascii=False) + "\n\n"
 
     resp = StreamingResponse(stream_response(), media_type="text/event-stream")
@@ -1185,14 +1172,18 @@ async def session_completion(
                     ConversationService.update_by_id(db, conv.id, conv.to_dict())
             except Exception as e:
                 logger.exception(e)
-                yield "data:" + json.dumps(
-                    {
-                        "code": 500,
-                        "message": str(e),
-                        "data": {"answer": "**ERROR**: " + str(e), "reference": []},
-                    },
-                    ensure_ascii=False,
-                ) + "\n\n"
+                yield (
+                    "data:"
+                    + json.dumps(
+                        {
+                            "code": 500,
+                            "message": str(e),
+                            "data": {"answer": "**ERROR**: " + str(e), "reference": []},
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n\n"
+                )
             yield "data:" + json.dumps({"code": 0, "message": "", "data": True}, ensure_ascii=False) + "\n\n"
 
         if stream_mode:

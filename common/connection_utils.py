@@ -15,8 +15,7 @@ TimeoutException = type[BaseException] | BaseException
 OnTimeoutCallback = Callable[..., Any] | Coroutine[Any, Any, Any]
 
 
-def timeout(seconds: float | int | str = None, attempts: int = 2, *, exception: TimeoutException | None = None,
-            on_timeout: OnTimeoutCallback | None = None):
+def timeout(seconds: float | int | str = None, attempts: int = 2, *, exception: TimeoutException | None = None, on_timeout: OnTimeoutCallback | None = None):
     if isinstance(seconds, str):
         seconds = float(seconds)
 
@@ -89,7 +88,7 @@ def timeout(seconds: float | int | str = None, attempts: int = 2, *, exception: 
     return decorator
 
 
-def construct_response(retcode=RetCode.SUCCESS, retmsg='success', data=None, auth=None):
+def construct_response(retcode=RetCode.SUCCESS, retmsg="success", data=None, auth=None):
     result_dict = {"retcode": retcode, "retmsg": retmsg, "data": data}
     response_dict = {key: value for key, value in result_dict.items() if value is not None or key == "retcode"}
     response = JSONResponse(content=jsonable_encoder(response_dict))

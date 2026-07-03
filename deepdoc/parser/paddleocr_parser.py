@@ -35,6 +35,7 @@ except Exception:
     class RAGFlowPdfParser:
         pass
 
+
 from deepdoc.parser.utils import extract_pdf_outlines
 
 AlgorithmType = Literal["PaddleOCR-VL"]
@@ -430,8 +431,7 @@ class PaddleOCRParser(RAGFlowPdfParser):
         try:
             with pdfplumber.open(fnm) if isinstance(fnm, (str, PathLike)) else pdfplumber.open(BytesIO(fnm)) as pdf:
                 self.pdf = pdf
-                self.page_images = [p.to_image(resolution=72, antialias=True).original for i, p in
-                                    enumerate(self.pdf.pages[page_from:page_to])]
+                self.page_images = [p.to_image(resolution=72, antialias=True).original for i, p in enumerate(self.pdf.pages[page_from:page_to])]
         except Exception as e:
             self.page_images = None
             self.logger.exception(e)

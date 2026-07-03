@@ -108,7 +108,7 @@ class DefaultRerank(Base):
                     if "CUDA out of memory" in str(e) and current_batch > self._min_batch_size:
                         current_batch = max(current_batch // 2, self._min_batch_size)
                         self.torch_empty_cache()
-                        i = cur_i # reset i to the start of the current batch
+                        i = cur_i  # reset i to the start of the current batch
                         retry_count += 1
                     else:
                         raise
@@ -618,6 +618,7 @@ class RAGconRerank(Base):
     Assumes LiteLLM proxy supports /rerank endpoint.
     Default Base URL: https://connect.ragcon.ai/v1
     """
+
     _FACTORY_NAME = "RAGcon"
 
     def __init__(self, key, model_name, base_url=None, **kwargs):

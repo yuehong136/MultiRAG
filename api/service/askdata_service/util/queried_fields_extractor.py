@@ -2,6 +2,7 @@
 查询字段提取器
 从SQL组件和语义层中提取实际查询的维度和指标信息
 """
+
 import re
 from typing import Any
 
@@ -29,7 +30,7 @@ class QueriedFieldsExtractor:
 
         fields = []
         # 移除SELECT关键字
-        select_clause = re.sub(r'^\s*SELECT\s+', '', select_clause, flags=re.IGNORECASE).strip()
+        select_clause = re.sub(r"^\s*SELECT\s+", "", select_clause, flags=re.IGNORECASE).strip()
 
         # 按逗号分割字段（注意处理函数中的逗号）
         field_parts = []
@@ -37,11 +38,11 @@ class QueriedFieldsExtractor:
         paren_depth = 0
 
         for char in select_clause:
-            if char == '(':
+            if char == "(":
                 paren_depth += 1
-            elif char == ')':
+            elif char == ")":
                 paren_depth -= 1
-            elif char == ',' and paren_depth == 0:
+            elif char == "," and paren_depth == 0:
                 field_parts.append(current_part.strip())
                 current_part = ""
                 continue
@@ -56,7 +57,7 @@ class QueriedFieldsExtractor:
                 continue
 
             # 匹配 "expression AS alias" 或 "expression alias"
-            as_match = re.search(r'^(.+?)\s+AS\s+([^\s]+)$', part, re.IGNORECASE)
+            as_match = re.search(r"^(.+?)\s+AS\s+([^\s]+)$", part, re.IGNORECASE)
             if as_match:
                 field_expr = as_match.group(1).strip()
                 alias = as_match.group(2).strip().strip('"').strip("'")
@@ -64,8 +65,8 @@ class QueriedFieldsExtractor:
                 continue
 
             # 匹配 "expression alias" (无AS关键字)
-            space_match = re.search(r'^(.+?)\s+([^\s\(\)]+)$', part)
-            if space_match and not re.match(r'^\w+\(', space_match.group(2)):
+            space_match = re.search(r"^(.+?)\s+([^\s\(\)]+)$", part)
+            if space_match and not re.match(r"^\w+\(", space_match.group(2)):
                 field_expr = space_match.group(1).strip()
                 alias = space_match.group(2).strip().strip('"').strip("'")
                 fields.append({"field_expr": field_expr, "alias": alias})
@@ -88,7 +89,7 @@ class QueriedFieldsExtractor:
             包含聚合函数和内部字段的字典，如果不是聚合则返回None
         """
         # 匹配聚合函数: COUNT/SUM/AVG/MAX/MIN/COUNT DISTINCT等
-        agg_pattern = r'^(COUNT|SUM|AVG|MAX|MIN)\s*\(\s*(DISTINCT\s+)?(.+?)\s*\)$'
+        agg_pattern = r"^(COUNT|SUM|AVG|MAX|MIN)\s*\(\s*(DISTINCT\s+)?(.+?)\s*\)$"
         match = re.match(agg_pattern, field_expr, re.IGNORECASE)
 
         if match:
@@ -96,11 +97,7 @@ class QueriedFieldsExtractor:
             has_distinct = bool(match.group(2))
             inner_field = match.group(3).strip()
 
-            return {
-                "aggregation": agg_func,
-                "has_distinct": has_distinct,
-                "inner_field": inner_field
-            }
+            return {"aggregation": agg_func, "has_distinct": has_distinct, "inner_field": inner_field}
 
         return None
 
@@ -116,8 +113,8 @@ class QueriedFieldsExtractor:
             标准化后的字段名
         """
         # 移除表别名前缀
-        if '.' in field_name:
-            parts = field_name.split('.')
+        if "." in field_name:
+            parts = field_name.split(".")
             return parts[-1].strip()
         return field_name.strip()
 
@@ -147,10 +144,7 @@ class QueriedFieldsExtractor:
             dim_name = dim.get("dimensionName") or dim.get("dimension_name", "")
 
             # 匹配逻辑：字段表达式或别名与业务名称匹配
-            if (normalized_field == dim_biz_name or
-                alias == dim_biz_name or
-                normalized_field == dim_id):
-
+            if normalized_field == dim_biz_name or alias == dim_biz_name or normalized_field == dim_id:
                 return {
                     "dimension_id": dim_id,
                     "dimension_name": dim_name,
@@ -159,7 +153,7 @@ class QueriedFieldsExtractor:
                     "model_name": dim.get("modelName") or dim.get("model_name", ""),
                     "data_type": dim.get("dataType") or dim.get("data_type", ""),
                     "alias": alias or dim_biz_name,
-                    "field_expr": field_expr
+                    "field_expr": field_expr,
                 }
 
         return None
@@ -198,7 +192,7 @@ class QueriedFieldsExtractor:
                     "model_id": metric.get("modelId") or metric.get("model_id", ""),
                     "model_name": metric.get("modelName") or metric.get("model_name", ""),
                     "alias": alias or metric_biz_name,
-                    "field_expr": field_expr
+                    "field_expr": field_expr,
                 }
 
                 # 如果提取到了聚合信息，添加到结果中
@@ -211,9 +205,7 @@ class QueriedFieldsExtractor:
         return None
 
     # 匹配聚合函数（含嵌套，如 ROUND(AVG(score), 2)）
-    _AGG_PATTERN = re.compile(
-        r'\b(COUNT|SUM|AVG|MAX|MIN)\s*\(', re.IGNORECASE
-    )
+    _AGG_PATTERN = re.compile(r"\b(COUNT|SUM|AVG|MAX|MIN)\s*\(", re.IGNORECASE)
 
     @staticmethod
     def _parse_group_by_fields(group_by_clause: str) -> set[str]:
@@ -229,9 +221,9 @@ class QueriedFieldsExtractor:
         if not group_by_clause or not group_by_clause.strip():
             return set()
 
-        clause = re.sub(r'^\s*GROUP\s+BY\s+', '', group_by_clause, flags=re.IGNORECASE).strip()
+        clause = re.sub(r"^\s*GROUP\s+BY\s+", "", group_by_clause, flags=re.IGNORECASE).strip()
         fields = set()
-        for part in clause.split(','):
+        for part in clause.split(","):
             part = part.strip()
             if part:
                 fields.add(QueriedFieldsExtractor._normalize_field_name(part))
@@ -262,11 +254,7 @@ class QueriedFieldsExtractor:
         return False
 
     @staticmethod
-    def extract_queried_fields(
-        sql_components: dict[str, Any],
-        semantic_layer: dict[str, Any],
-        used_models: list[str]
-    ) -> dict[str, Any]:
+    def extract_queried_fields(sql_components: dict[str, Any], semantic_layer: dict[str, Any], used_models: list[str]) -> dict[str, Any]:
         """
         从SQL组件和语义层中提取查询字段信息
 
@@ -278,12 +266,7 @@ class QueriedFieldsExtractor:
         Returns:
             包含维度和指标信息的字典
         """
-        result = {
-            "dimensions": [],
-            "metrics": [],
-            "unmatched_dimensions": [],
-            "unmatched_metrics": []
-        }
+        result = {"dimensions": [], "metrics": [], "unmatched_dimensions": [], "unmatched_metrics": []}
 
         # 解析SELECT子句
         select_clause = sql_components.get("select", "")
@@ -295,9 +278,7 @@ class QueriedFieldsExtractor:
         logger.info(f"从SELECT子句解析出 {len(parsed_fields)} 个字段")
 
         # 解析GROUP BY子句，用于辅助判断未匹配字段的类型
-        group_by_fields = QueriedFieldsExtractor._parse_group_by_fields(
-            sql_components.get("groupBy", "")
-        )
+        group_by_fields = QueriedFieldsExtractor._parse_group_by_fields(sql_components.get("groupBy", ""))
 
         # 匹配每个字段
         for field_info in parsed_fields:
@@ -314,10 +295,7 @@ class QueriedFieldsExtractor:
                 continue
 
             # 未匹配字段：根据聚合函数和GROUP BY判断是维度还是指标
-            unmatched = {
-                "field_expr": field_info["field_expr"],
-                "alias": field_info["alias"]
-            }
+            unmatched = {"field_expr": field_info["field_expr"], "alias": field_info["alias"]}
 
             if QueriedFieldsExtractor._is_metric_field(field_info, group_by_fields):
                 # 补充聚合信息
@@ -329,9 +307,6 @@ class QueriedFieldsExtractor:
             else:
                 result["unmatched_dimensions"].append(unmatched)
 
-        logger.info(f"字段匹配完成: 维度={len(result['dimensions'])}, "
-                   f"指标={len(result['metrics'])}, "
-                   f"未匹配维度={len(result['unmatched_dimensions'])}, "
-                   f"未匹配指标={len(result['unmatched_metrics'])}")
+        logger.info(f"字段匹配完成: 维度={len(result['dimensions'])}, 指标={len(result['metrics'])}, 未匹配维度={len(result['unmatched_dimensions'])}, 未匹配指标={len(result['unmatched_metrics'])}")
 
         return result

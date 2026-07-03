@@ -18,7 +18,7 @@ class EChartsGenerator:
     """负责生成基于用户查询和SQL数据的ECharts配置的服务类"""
 
     # 编译正则表达式以提高性能
-    JS_PATTERN = re.compile(r'```javascript\s*([\s\S]*?)```')
+    JS_PATTERN = re.compile(r"```javascript\s*([\s\S]*?)```")
 
     def __init__(self, db: Session, user_id: Any, prompt_dir: str = None):
         """
@@ -64,8 +64,7 @@ class EChartsGenerator:
         # 如果提取失败，返回None和False
         return None, False
 
-    async def generate_echarts_config(self, user_query: str, sql_query: str, column_and_type,
-                                      sample_data, llm_name: str) -> str | None:
+    async def generate_echarts_config(self, user_query: str, sql_query: str, column_and_type, sample_data, llm_name: str) -> str | None:
         """
         使用LLM生成ECharts配置代码。
 
@@ -89,15 +88,7 @@ class EChartsGenerator:
             prompt_template = PromptTemplateUtil.load_template_from_file(template_path)
 
             # 用参数填充模板
-            prompt = PromptTemplateUtil.fill_template(
-                prompt_template,
-                {
-                    "user_query": user_query,
-                    "sql_query": sql_query,
-                    "column_and_type": column_and_type,
-                    "sample_data": sample_data
-                }
-            )
+            prompt = PromptTemplateUtil.fill_template(prompt_template, {"user_query": user_query, "sql_query": sql_query, "column_and_type": column_and_type, "sample_data": sample_data})
 
             # 创建包含我们提示词的对话历史
             history = [{"role": "user", "content": prompt}]
@@ -106,16 +97,11 @@ class EChartsGenerator:
             gen_conf = {
                 "temperature": 0.7,  # 稍微降低温度以获得更确定性的结果
                 "top_p": 0.95,
-                "max_tokens": 4096
+                "max_tokens": 4096,
             }
 
             # 调用LLM处理我们的提示词
-            response = await thread_pool_exec(
-                llm_model_instance.chat,
-                system="You are an expert data visualization developer specializing in ECharts.",
-                history=history,
-                gen_conf=gen_conf
-            )
+            response = await thread_pool_exec(llm_model_instance.chat, system="You are an expert data visualization developer specializing in ECharts.", history=history, gen_conf=gen_conf)
 
             # 提取和处理响应
             extracted_js, success = self._extract_js_from_response(response)

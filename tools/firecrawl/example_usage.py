@@ -19,7 +19,7 @@ async def example_single_url_scraping():
         "api_url": "https://api.firecrawl.dev",
         "max_retries": 3,
         "timeout": 30,
-        "rate_limit_delay": 1.0
+        "rate_limit_delay": 1.0,
     }
 
     # Create integration
@@ -56,7 +56,7 @@ async def example_website_crawling():
         "api_url": "https://api.firecrawl.dev",
         "max_retries": 3,
         "timeout": 30,
-        "rate_limit_delay": 1.0
+        "rate_limit_delay": 1.0,
     }
 
     # Create integration
@@ -67,19 +67,13 @@ async def example_website_crawling():
     documents = await integration.crawl_and_import(
         start_url=start_url,
         limit=5,  # Limit to 5 pages for demo
-        scrape_options={
-            "formats": ["markdown", "html"],
-            "extractOptions": {
-                "extractMainContent": True,
-                "excludeTags": ["nav", "footer", "header"]
-            }
-        }
+        scrape_options={"formats": ["markdown", "html"], "extractOptions": {"extractMainContent": True, "excludeTags": ["nav", "footer", "header"]}},
     )
 
     print(f"Crawled {len(documents)} pages from {start_url}")
 
     for i, doc in enumerate(documents):
-        print(f"Page {i+1}: {doc.title}")
+        print(f"Page {i + 1}: {doc.title}")
         print(f"URL: {doc.source_url}")
         print(f"Content length: {len(doc.content)}")
         print("-" * 30)
@@ -95,27 +89,16 @@ async def example_batch_processing():
         "api_url": "https://api.firecrawl.dev",
         "max_retries": 3,
         "timeout": 30,
-        "rate_limit_delay": 1.0
+        "rate_limit_delay": 1.0,
     }
 
     # Create integration
     integration = create_firecrawl_integration(config)
 
     # Batch scrape multiple URLs
-    urls = [
-        "https://httpbin.org/json",
-        "https://httpbin.org/html",
-        "https://httpbin.org/xml"
-    ]
+    urls = ["https://httpbin.org/json", "https://httpbin.org/html", "https://httpbin.org/xml"]
 
-    documents = await integration.scrape_and_import(
-        urls=urls,
-        formats=["markdown", "html"],
-        extract_options={
-            "extractMainContent": True,
-            "excludeTags": ["nav", "footer", "header"]
-        }
-    )
+    documents = await integration.scrape_and_import(urls=urls, formats=["markdown", "html"], extract_options={"extractMainContent": True, "excludeTags": ["nav", "footer", "header"]})
 
     print(f"Processed {len(documents)} URLs")
 
@@ -140,7 +123,7 @@ async def example_content_processing():
         "api_url": "https://api.firecrawl.dev",
         "max_retries": 3,
         "timeout": 30,
-        "rate_limit_delay": 1.0
+        "rate_limit_delay": 1.0,
     }
 
     # Create integration
@@ -155,16 +138,12 @@ async def example_content_processing():
         print(f"Content length: {len(doc.content)}")
 
         # Chunk the content
-        chunks = integration.processor.chunk_content(
-            doc,
-            chunk_size=1000,
-            chunk_overlap=200
-        )
+        chunks = integration.processor.chunk_content(doc, chunk_size=1000, chunk_overlap=200)
 
         print(f"Number of chunks: {len(chunks)}")
 
         for i, chunk in enumerate(chunks):
-            print(f"Chunk {i+1}:")
+            print(f"Chunk {i + 1}:")
             print(f"  ID: {chunk['id']}")
             print(f"  Content length: {len(chunk['content'])}")
             print(f"  Metadata: {chunk['metadata']}")
@@ -176,13 +155,7 @@ async def example_error_handling():
     print("=== Error Handling Example ===")
 
     # Configuration with invalid API key
-    config = {
-        "api_key": "invalid-key",
-        "api_url": "https://api.firecrawl.dev",
-        "max_retries": 3,
-        "timeout": 30,
-        "rate_limit_delay": 1.0
-    }
+    config = {"api_key": "invalid-key", "api_url": "https://api.firecrawl.dev", "max_retries": 3, "timeout": 30, "rate_limit_delay": 1.0}
 
     # Create integration
     integration = create_firecrawl_integration(config)
@@ -206,28 +179,22 @@ async def example_configuration_validation():
 
     # Test various configurations
     test_configs = [
-        {
-            "api_key": "fc-valid-key",
-            "api_url": "https://api.firecrawl.dev",
-            "max_retries": 3,
-            "timeout": 30,
-            "rate_limit_delay": 1.0
-        },
+        {"api_key": "fc-valid-key", "api_url": "https://api.firecrawl.dev", "max_retries": 3, "timeout": 30, "rate_limit_delay": 1.0},
         {
             "api_key": "invalid-key",  # Invalid format
-            "api_url": "https://api.firecrawl.dev"
+            "api_url": "https://api.firecrawl.dev",
         },
         {
             "api_key": "fc-valid-key",
             "api_url": "invalid-url",  # Invalid URL
             "max_retries": 15,  # Too high
             "timeout": 500,  # Too high
-            "rate_limit_delay": 15.0  # Too high
-        }
+            "rate_limit_delay": 15.0,  # Too high
+        },
     ]
 
     for i, config in enumerate(test_configs):
-        print(f"Test configuration {i+1}:")
+        print(f"Test configuration {i + 1}:")
         errors = MultiRAGFirecrawlIntegration(FirecrawlConfig.from_dict(config)).validate_config(config)
 
         if errors:

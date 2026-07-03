@@ -19,6 +19,7 @@ from common.token_utils import num_tokens_from_string
 
 class LLMService(CommonService):
     model = LLM
+
     def __init__(self):
         super().__init__(LLM)
 
@@ -450,12 +451,7 @@ class LLMBundle(LLM4Tenant):
 
         generation = None
         if self.langfuse:
-            generation = self.langfuse.start_generation(
-                trace_context=self.trace_context,
-                name="chat",
-                model=self.llm_name,
-                input={"system": system, "history": history}
-            )
+            generation = self.langfuse.start_generation(trace_context=self.trace_context, name="chat", model=self.llm_name, input={"system": system, "history": history})
 
         chat_partial = partial(base_fn, system, history, gen_conf)
         use_kwargs = self._clean_param(chat_partial, **kwargs)
@@ -499,12 +495,7 @@ class LLMBundle(LLM4Tenant):
 
         generation = None
         if self.langfuse:
-            generation = self.langfuse.start_generation(
-                trace_context=self.trace_context,
-                name="chat_streamly",
-                model=self.llm_name,
-                input={"system": system, "history": history}
-            )
+            generation = self.langfuse.start_generation(trace_context=self.trace_context, name="chat_streamly", model=self.llm_name, input={"system": system, "history": history})
 
         if stream_fn:
             chat_partial = partial(stream_fn, system, history, gen_conf)
@@ -554,12 +545,7 @@ class LLMBundle(LLM4Tenant):
 
         generation = None
         if self.langfuse:
-            generation = self.langfuse.start_generation(
-                trace_context=self.trace_context,
-                name="chat_streamly",
-                model=self.llm_name,
-                input={"system": system, "history": history}
-            )
+            generation = self.langfuse.start_generation(trace_context=self.trace_context, name="chat_streamly", model=self.llm_name, input={"system": system, "history": history})
 
         if stream_fn:
             chat_partial = partial(stream_fn, system, history, gen_conf)

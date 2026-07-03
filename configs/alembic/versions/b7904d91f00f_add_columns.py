@@ -5,6 +5,7 @@ Revises: a08220dd999f
 Create Date: 2025-04-22 09:17:14.501004
 
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -12,8 +13,8 @@ from alembic import op
 from sqlalchemy import Inspector
 
 # revision identifiers, used by Alembic.
-revision: str = 'b7904d91f00f'
-down_revision: str | None = 'a08220dd999f'
+revision: str = "b7904d91f00f"
+down_revision: str | None = "a08220dd999f"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -27,14 +28,7 @@ def upgrade() -> None:
     if "priority" not in cols:
         with op.batch_alter_table("t_ai_tasks", schema="usr_ai") as batch_op:
             # 添加 priority 列，并设置初始默认值 0
-            batch_op.add_column(
-                sa.Column(
-                    "priority",
-                    sa.Integer(),
-                    nullable=False,
-                    server_default="0"
-                )
-            )
+            batch_op.add_column(sa.Column("priority", sa.Integer(), nullable=False, server_default="0"))
             # 可选：移除 server_default，让默认值仅在添加时生效
             batch_op.alter_column("priority", server_default=None)
 

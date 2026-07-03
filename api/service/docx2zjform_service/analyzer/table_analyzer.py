@@ -54,7 +54,7 @@ class TableElementAnalyzer(ElementAnalyzer):
             extractor = MultiTableWithNameExtractor(element.html)
             tables = extractor.extract_tables()
             for table in tables:
-                table_name = table['table_name']
+                table_name = table["table_name"]
                 # 表名作为描述组件
                 component: DescriptionComponent = ComponentFactory.create(ComponentType.DESCRIPTION)
                 component.set_content(table_name)
@@ -62,7 +62,7 @@ class TableElementAnalyzer(ElementAnalyzer):
 
                 # 创建子表单组件
                 subform_component: SubFormComponent = ComponentFactory.create(ComponentType.SUBFORM)
-                fields = table['fields']
+                fields = table["fields"]
                 for field in fields:
                     # 创建输入组件
                     input_component: InputComponent = ComponentFactory.create(ComponentType.INPUT)

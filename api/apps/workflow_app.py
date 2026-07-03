@@ -16,11 +16,11 @@ router = APIRouter()
 
 @router.post("/run")
 async def run(
-        workflow_json_str: str = Form(..., description="工作流请求参数"),
-        input_data_str: str | None = Form(None, description="入参"),
-        file: UploadFile | None = File(None, description="可选的上传文件"),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
+    workflow_json_str: str = Form(..., description="工作流请求参数"),
+    input_data_str: str | None = Form(None, description="入参"),
+    file: UploadFile | None = File(None, description="可选的上传文件"),
+    db: Session = Depends(get_db),
+    user=Depends(manager),
 ):
     """
     运行指定工作流的接口。
@@ -52,8 +52,7 @@ async def run(
     try:
         json.loads(workflow_json_str)
     except json.JSONDecodeError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                            detail="workflow_json_str is not a valid JSON string")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="workflow_json_str is not a valid JSON string")
 
     print(input_data_str)
     # 解析Dict数据
@@ -70,12 +69,12 @@ async def run(
             #                     detail="input_data_str is not a valid JSON string")
 
     if file is not None:
-        input_data['FILE'] = file
+        input_data["FILE"] = file
 
     workflow_engine = WorkflowParser.parse(workflow_json_str=workflow_json_str)
     result = await workflow_engine.execute(input_data=input_data, db=db, user=user)
-    node_list = result['node_list']
-    context = result['context']
+    node_list = result["node_list"]
+    context = result["context"]
     last_node_id = list(node_list)[-1].node_id
     last_node = context.get(str(last_node_id)).output_data
     return last_node
@@ -95,7 +94,7 @@ def run_test(user=Depends(manager)):
     注意：
     - 此接口不涉及复杂操作，仅用于测试用途。
     """
-    print('okk')
+    print("okk")
     return {"result": "success"}
 
 
@@ -124,8 +123,4 @@ def download_file(filename: str):
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
 
-    return FileResponse(
-        path=file_path,
-        filename=filename + ".xlsx",
-        media_type='application/octet-stream'
-    )
+    return FileResponse(path=file_path, filename=filename + ".xlsx", media_type="application/octet-stream")

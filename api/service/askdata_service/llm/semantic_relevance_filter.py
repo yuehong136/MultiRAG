@@ -20,7 +20,7 @@ class SemanticRelevanceFilter:
     """负责从语义层中过滤掉与用户查询明显不相关的维度和指标的服务类"""
 
     # 编译正则表达式以提高性能
-    JSON_PATTERN = re.compile(r'```json\s*([\s\S]*?)```')
+    JSON_PATTERN = re.compile(r"```json\s*([\s\S]*?)```")
 
     def __init__(self, db: Session, user_id: Any, prompt_dir: str = None):
         """
@@ -82,10 +82,7 @@ class SemanticRelevanceFilter:
             验证后的排除列表字典
         """
         # 确保返回正确的格式
-        validated = {
-            "excludeDim": [],
-            "excludeMetric": []
-        }
+        validated = {"excludeDim": [], "excludeMetric": []}
 
         # 验证数据类型
         if not isinstance(exclude_data, dict):
@@ -96,10 +93,7 @@ class SemanticRelevanceFilter:
             dim_list = exclude_data.get("excludeDim", [])
             if isinstance(dim_list, list):
                 # 确保列表中的所有元素都是字符串
-                validated["excludeDim"] = [
-                    str(dim_id) for dim_id in dim_list
-                    if dim_id is not None
-                ]
+                validated["excludeDim"] = [str(dim_id) for dim_id in dim_list if dim_id is not None]
             else:
                 pass
 
@@ -108,25 +102,17 @@ class SemanticRelevanceFilter:
             metric_list = exclude_data.get("excludeMetric", [])
             if isinstance(metric_list, list):
                 # 确保列表中的所有元素都是字符串
-                validated["excludeMetric"] = [
-                    str(metric_id) for metric_id in metric_list
-                    if metric_id is not None
-                ]
+                validated["excludeMetric"] = [str(metric_id) for metric_id in metric_list if metric_id is not None]
             else:
                 pass
 
         # 记录过滤结果
         if validated["excludeDim"] or validated["excludeMetric"]:
-            logger.info(f"Filtering out {len(validated['excludeDim'])} dimensions and "
-                        f"{len(validated['excludeMetric'])} metrics")
+            logger.info(f"Filtering out {len(validated['excludeDim'])} dimensions and {len(validated['excludeMetric'])} metrics")
 
         return validated
 
-    def apply_exclusion_filter(
-            self,
-            dataset_info: list[dict],
-            exclude_data: dict[str, list[str]]
-    ) -> list[dict]:
+    def apply_exclusion_filter(self, dataset_info: list[dict], exclude_data: dict[str, list[str]]) -> list[dict]:
         """
         应用排除列表，从数据集中移除不相关的字段
 
@@ -163,18 +149,11 @@ class SemanticRelevanceFilter:
             if should_include:
                 filtered_data.append(field)
 
-        logger.info(f"Excluded {excluded_count['dimensions']} dimensions and {excluded_count['metrics']} metrics. "
-                    f"Remaining fields: {len(filtered_data)}")
+        logger.info(f"Excluded {excluded_count['dimensions']} dimensions and {excluded_count['metrics']} metrics. Remaining fields: {len(filtered_data)}")
 
         return filtered_data
 
-    async def filter_irrelevant_fields(
-            self,
-            user_query: str,
-            dataset_info: list[dict],
-            model_relations: list[dict],
-            llm_name: str
-    ) -> dict[str, list[str]]:
+    async def filter_irrelevant_fields(self, user_query: str, dataset_info: list[dict], model_relations: list[dict], llm_name: str) -> dict[str, list[str]]:
         """
         从语义层中过滤掉与用户查询明显不相关的维度和指标
 
@@ -202,7 +181,7 @@ class SemanticRelevanceFilter:
             template_values = {
                 "user_query": user_query,
                 "semantic_layer": json.dumps(dataset_info, ensure_ascii=False, indent=2),
-                "model_relations": json.dumps(model_relations, ensure_ascii=False, indent=2)
+                "model_relations": json.dumps(model_relations, ensure_ascii=False, indent=2),
             }
 
             # 填充模板
@@ -211,6 +190,7 @@ class SemanticRelevanceFilter:
 
             # 检查性能缓存
             from api.service.askdata_service.cache import perf_cache
+
             cached = perf_cache.get(prompt, namespace="relevance_filter")
             if cached is not None:
                 logger.info("PerfCache命中，跳过LLM调用 [relevance_filter]")
@@ -223,7 +203,7 @@ class SemanticRelevanceFilter:
             gen_conf = {
                 "temperature": 0.0,  # 确保结果的确定性
                 "top_p": 0.9,
-                "max_tokens": 2048  # 输出较简单，不需要太多token
+                "max_tokens": 2048,  # 输出较简单，不需要太多token
             }
 
             # 定义在独立线程中执行的函数，使用独立的数据库会话
@@ -233,11 +213,7 @@ class SemanticRelevanceFilter:
                 with db_connection() as thread_db:
                     model_config = get_model_config_by_type_and_name(thread_db, self.user_id, LLMType.CHAT.value, llm_name)
                     thread_llm_instance = LLMBundle(thread_db, self.user_id, model_config)
-                    return thread_llm_instance.chat(
-                        system="",
-                        history=history,
-                        gen_conf=gen_conf
-                    )
+                    return thread_llm_instance.chat(system="", history=history, gen_conf=gen_conf)
 
             # 调用LLM处理提示词
             response = await thread_pool_exec(_chat_in_thread)
@@ -248,10 +224,12 @@ class SemanticRelevanceFilter:
 
             # 验证和清理返回的数据
             validated_data = self._validate_exclude_format(exclude_data)
-            logger.debug("[relevance_filter] 排除结果: excludeDim=%d个, excludeMetric=%d个, 详情=%s",
-                         len(validated_data.get('excludeDim', [])),
-                         len(validated_data.get('excludeMetric', [])),
-                         json.dumps(validated_data, ensure_ascii=False))
+            logger.debug(
+                "[relevance_filter] 排除结果: excludeDim=%d个, excludeMetric=%d个, 详情=%s",
+                len(validated_data.get("excludeDim", [])),
+                len(validated_data.get("excludeMetric", [])),
+                json.dumps(validated_data, ensure_ascii=False),
+            )
 
             # 缓存验证后的结果
             perf_cache.set(prompt, validated_data, namespace="relevance_filter")
@@ -263,12 +241,7 @@ class SemanticRelevanceFilter:
             # 出错时返回空的排除列表，保守处理
             return {"excludeDim": [], "excludeMetric": []}
 
-    async def filter_and_apply(
-            self,
-            user_query: str,
-            dataset_info: list[dict],
-            llm_name: str
-    ) -> list[dict]:
+    async def filter_and_apply(self, user_query: str, dataset_info: list[dict], llm_name: str) -> list[dict]:
         """
         一步完成过滤和应用，返回过滤后的语义层信息
 
@@ -288,11 +261,7 @@ class SemanticRelevanceFilter:
 
         return filtered_data
 
-    def get_filter_statistics(
-            self,
-            original_data: list[dict],
-            filtered_data: list[dict]
-    ) -> dict[str, Any]:
+    def get_filter_statistics(self, original_data: list[dict], filtered_data: list[dict]) -> dict[str, Any]:
         """
         获取过滤统计信息
 
@@ -303,35 +272,19 @@ class SemanticRelevanceFilter:
         返回:
             包含统计信息的字典
         """
-        original_dims = sum(1 for field in original_data
-                            if "dimension_id" in field or "dimensionId" in field)
-        original_metrics = sum(1 for field in original_data
-                               if "metric_id" in field or "metricId" in field)
+        original_dims = sum(1 for field in original_data if "dimension_id" in field or "dimensionId" in field)
+        original_metrics = sum(1 for field in original_data if "metric_id" in field or "metricId" in field)
 
-        filtered_dims = sum(1 for field in filtered_data
-                            if "dimension_id" in field or "dimensionId" in field)
-        filtered_metrics = sum(1 for field in filtered_data
-                               if "metric_id" in field or "metricId" in field)
+        filtered_dims = sum(1 for field in filtered_data if "dimension_id" in field or "dimensionId" in field)
+        filtered_metrics = sum(1 for field in filtered_data if "metric_id" in field or "metricId" in field)
 
         return {
-            "original": {
-                "total": len(original_data),
-                "dimensions": original_dims,
-                "metrics": original_metrics
-            },
-            "filtered": {
-                "total": len(filtered_data),
-                "dimensions": filtered_dims,
-                "metrics": filtered_metrics
-            },
-            "excluded": {
-                "total": len(original_data) - len(filtered_data),
-                "dimensions": original_dims - filtered_dims,
-                "metrics": original_metrics - filtered_metrics
-            },
+            "original": {"total": len(original_data), "dimensions": original_dims, "metrics": original_metrics},
+            "filtered": {"total": len(filtered_data), "dimensions": filtered_dims, "metrics": filtered_metrics},
+            "excluded": {"total": len(original_data) - len(filtered_data), "dimensions": original_dims - filtered_dims, "metrics": original_metrics - filtered_metrics},
             "exclusion_rate": {
                 "total": (len(original_data) - len(filtered_data)) / len(original_data) * 100 if original_data else 0,
                 "dimensions": (original_dims - filtered_dims) / original_dims * 100 if original_dims else 0,
-                "metrics": (original_metrics - filtered_metrics) / original_metrics * 100 if original_metrics else 0
-            }
+                "metrics": (original_metrics - filtered_metrics) / original_metrics * 100 if original_metrics else 0,
+            },
         }

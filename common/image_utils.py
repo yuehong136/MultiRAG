@@ -13,53 +13,49 @@ class ImageFilter:
 
     # 强制删除规则（适用所有模式）
     FORCE_DROP_PATTERNS = [
-        r'_visitcount',
-        r'_counter',
-        r'\bstat\?',
-        r'analytics',
-        r'tracking',
-        r'blank\.gif',
-        r'transparent\.gif',
-        r'1x1\.(png|gif)',
-        r'pixel\.(png|gif)',
-        r'lazy\.(png|jpg|jpeg)',
-        r'placeholder\.',
-        r'loading\.gif',
-        r'favicon\.ico',
-        r'apple-touch-icon',
+        r"_visitcount",
+        r"_counter",
+        r"\bstat\?",
+        r"analytics",
+        r"tracking",
+        r"blank\.gif",
+        r"transparent\.gif",
+        r"1x1\.(png|gif)",
+        r"pixel\.(png|gif)",
+        r"lazy\.(png|jpg|jpeg)",
+        r"placeholder\.",
+        r"loading\.gif",
+        r"favicon\.ico",
+        r"apple-touch-icon",
     ]
 
     # 严格模式额外规则
     STRICT_DROP_PATTERNS = [
-        r'/_upload/site/',
-        r'/site/[^/]*/logo',
-        r'/logo/',
-        r'/tpl/',
-        r'/template/',
-        r'/themes/',
-        r'/assets/images/',
-        r'/plugins/',
-        r'/wp-content/themes/',
+        r"/_upload/site/",
+        r"/site/[^/]*/logo",
+        r"/logo/",
+        r"/tpl/",
+        r"/template/",
+        r"/themes/",
+        r"/assets/images/",
+        r"/plugins/",
+        r"/wp-content/themes/",
     ]
 
     # 平衡模式规则（比严格模式少一些）
     BALANCED_DROP_PATTERNS = [
-        r'/tpl/',
-        r'/template/',
-        r'/themes/.*/images/',
-        r'/plugins/',
+        r"/tpl/",
+        r"/template/",
+        r"/themes/.*/images/",
+        r"/plugins/",
     ]
 
     # Markdown 图片正则
-    LINKED_IMAGE_PATTERN = re.compile(r'\[!\[([^\]]*)\]\(([^)]+)\)\]\(([^)]+)\)')
-    SIMPLE_IMAGE_PATTERN = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
+    LINKED_IMAGE_PATTERN = re.compile(r"\[!\[([^\]]*)\]\(([^)]+)\)\]\(([^)]+)\)")
+    SIMPLE_IMAGE_PATTERN = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 
     @staticmethod
-    def clean_markdown_images(
-        markdown_text: str,
-        mode: str = "strict",
-        base_url: str = ""
-    ) -> tuple[str, list[dict], int]:
+    def clean_markdown_images(markdown_text: str, mode: str = "strict", base_url: str = "") -> tuple[str, list[dict], int]:
         """清理 Markdown 文本中的无用图片
 
         边界情况处理：
@@ -94,9 +90,7 @@ class ImageFilter:
                 img_url = match.group(2)
                 link_url = match.group(3)
 
-                should_drop, reason = ImageFilter.should_drop_image(
-                    img_url, link_url, alt_text, mode, base_url
-                )
+                should_drop, reason = ImageFilter.should_drop_image(img_url, link_url, alt_text, mode, base_url)
 
                 if should_drop:
                     dropped_details.append({"url": img_url, "reason": reason})
@@ -112,9 +106,7 @@ class ImageFilter:
                 alt_text = match.group(1)
                 img_url = match.group(2)
 
-                should_drop, reason = ImageFilter.should_drop_image(
-                    img_url, "", alt_text, mode, base_url
-                )
+                should_drop, reason = ImageFilter.should_drop_image(img_url, "", alt_text, mode, base_url)
 
                 if should_drop:
                     dropped_details.append({"url": img_url, "reason": reason})
@@ -124,7 +116,7 @@ class ImageFilter:
             result = ImageFilter.SIMPLE_IMAGE_PATTERN.sub(replace_simple_image, result)
 
             # 清理多余空行
-            result = re.sub(r'\n{3,}', '\n\n', result)
+            result = re.sub(r"\n{3,}", "\n\n", result)
 
             # 始终返回清洗后的文本（即使所有图片都被删除）
             # 用户启用了图片清洗功能，就应该尊重过滤结果
@@ -135,13 +127,7 @@ class ImageFilter:
             return markdown_text, [], 0
 
     @staticmethod
-    def should_drop_image(
-        image_url: str,
-        link_url: str,
-        alt_text: str,
-        mode: str,
-        base_url: str
-    ) -> tuple[bool, str]:
+    def should_drop_image(image_url: str, link_url: str, alt_text: str, mode: str, base_url: str) -> tuple[bool, str]:
         """判断图片是否应该删除
 
         Args:
@@ -157,13 +143,13 @@ class ImageFilter:
             - reason: 删除原因（如 "tracking_visitcount", "site_logo"）
         """
         # 相对路径判断
-        if image_url.startswith('/') and not image_url.startswith('//'):
+        if image_url.startswith("/") and not image_url.startswith("//"):
             return True, "relative_path"
 
         # 强制删除规则（所有模式）
         for pattern in ImageFilter.FORCE_DROP_PATTERNS:
             if re.search(pattern, image_url, re.IGNORECASE):
-                reason_name = pattern.replace(r'\b', '').replace(r'\.', '_').replace('\\', '')
+                reason_name = pattern.replace(r"\b", "").replace(r"\.", "_").replace("\\", "")
                 return True, f"force_drop_{reason_name}"
 
         # 严格模式
@@ -188,11 +174,7 @@ class ImageFilter:
         return False, ""
 
     @staticmethod
-    def filter_image_urls(
-        image_urls: list[str],
-        mode: str = "strict",
-        base_url: str = ""
-    ) -> tuple[list[str], list[dict]]:
+    def filter_image_urls(image_urls: list[str], mode: str = "strict", base_url: str = "") -> tuple[list[str], list[dict]]:
         """过滤图片 URL 列表
 
         Args:
@@ -209,9 +191,7 @@ class ImageFilter:
         dropped_details = []
 
         for img_url in image_urls:
-            should_drop, reason = ImageFilter.should_drop_image(
-                img_url, "", "", mode, base_url
-            )
+            should_drop, reason = ImageFilter.should_drop_image(img_url, "", "", mode, base_url)
 
             if should_drop:
                 dropped_details.append({"url": img_url, "reason": reason})
@@ -240,8 +220,8 @@ class ImageFilter:
 
             # 同域 + 路径为根或主页
             if link_parsed.netloc == base_parsed.netloc:
-                path = link_parsed.path.strip('/')
-                if path in ['', 'index.html', 'index.htm', 'main.htm', 'home', 'index.php']:
+                path = link_parsed.path.strip("/")
+                if path in ["", "index.html", "index.htm", "main.htm", "home", "index.php"]:
                     return True
         except Exception:
             pass

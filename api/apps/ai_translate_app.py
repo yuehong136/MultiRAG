@@ -13,6 +13,7 @@ from api.service.ai_translate_service.ai_translate_service import AITranslateSer
 
 router = APIRouter()
 
+
 class StatusEnum(str, Enum):
     SUCCESS = "success"
     ERROR = "error"
@@ -48,12 +49,8 @@ async def ai_translate(body: AITranslateReqBody = Body(...), db: Session = Depen
       - status: 操作状态（成功/失败）
       - data: 包含原中文文本和翻译后的英文文本
     """
-    translate = await AITranslateService.ai_translate(ai_translate_req_body=body, db=db, user_id=user.id,
-                                                      llm_name=body.llm_name)
-    return ResponseSchema(status="success", data={
-        "zh_text": body.zh_text,
-        "en_text": translate
-    })
+    translate = await AITranslateService.ai_translate(ai_translate_req_body=body, db=db, user_id=user.id, llm_name=body.llm_name)
+    return ResponseSchema(status="success", data={"zh_text": body.zh_text, "en_text": translate})
 
 
 class AIBatchTranslateReqBody(BaseModel):
@@ -80,9 +77,5 @@ async def ai_batch_translate(body: AIBatchTranslateReqBody = Body(...), db: Sess
       - status: 操作状态（成功/失败）
       - data: 包含原中文文本列表和翻译后的英文文本列表
     """
-    translate_list = await AITranslateService.ai_batch_translate(ai_batch_translate_req_body=body, db=db,
-                                                                 user_id=user.id, llm_name=body.llm_name)
-    return ResponseSchema(status="success", data={
-        "zh_text_list": body.zh_text_list,
-        "en_text_list": translate_list
-    })
+    translate_list = await AITranslateService.ai_batch_translate(ai_batch_translate_req_body=body, db=db, user_id=user.id, llm_name=body.llm_name)
+    return ResponseSchema(status="success", data={"zh_text_list": body.zh_text_list, "en_text_list": translate_list})

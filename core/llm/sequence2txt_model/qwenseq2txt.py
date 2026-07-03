@@ -5,6 +5,7 @@
 @date：2024/10/08 11:05
 @desc:
 """
+
 from common.token_utils import num_tokens_from_string
 from core.llm.sequence2txt_model.base import Base
 
@@ -30,12 +31,12 @@ class QWenSeq2txt(Base):
                 "role": "system",
                 "content": [
                     {"text": ""},  # 用于上下文增强
-                ]
+                ],
             },
             {
                 "role": "user",
                 "content": [{"audio": audio_path}],
-            }
+            },
         ]
 
         response = None
@@ -49,7 +50,7 @@ class QWenSeq2txt(Base):
                 asr_options={
                     "enable_lid": True,  # 启用语种识别
                     "enable_itn": False,  # 逆文本规范化
-                }
+                },
             )
             # 流式响应已自动累加，获取最后一个响应即可
             last_response = None
@@ -66,6 +67,8 @@ class QWenSeq2txt(Base):
             return full_content, num_tokens_from_string(full_content)
         except Exception as e:
             return "**ERROR**: " + str(e), 0
+
+
 # class QWenSeq2txt(Base):
 #     def __init__(self, key, model_name="paraformer-realtime-8k-v1", **kwargs):
 #         import dashscope

@@ -5,6 +5,7 @@
 @date：2025/7/15 16:20
 @desc: 搜索应用接口
 """
+
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -49,7 +50,7 @@ class RemoveSearchRequest(BaseModel):
     search_id: str
 
 
-@router.post('/create', summary="创建搜索应用", response_description="成功创建搜索应用", deprecated=True)
+@router.post("/create", summary="创建搜索应用", response_description="成功创建搜索应用", deprecated=True)
 def create(request: CreateSearchRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/create` 创建搜索应用
@@ -176,7 +177,7 @@ def create(request: CreateSearchRequest, db: Session = Depends(get_db), user=Dep
         return server_error_response(e)
 
 
-@router.post('/update', summary="更新搜索应用", response_description="成功更新搜索应用", deprecated=True)
+@router.post("/update", summary="更新搜索应用", response_description="成功更新搜索应用", deprecated=True)
 def update(request: UpdateSearchRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/update` 更新搜索应用
@@ -341,7 +342,7 @@ def update(request: UpdateSearchRequest, db: Session = Depends(get_db), user=Dep
         return server_error_response(e)
 
 
-@router.get('/detail', summary="获取搜索应用详情", response_description="成功获取搜索应用详情", deprecated=True)
+@router.get("/detail", summary="获取搜索应用详情", response_description="成功获取搜索应用详情", deprecated=True)
 def detail(search_id: str = Query(..., description="搜索应用ID"), db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### GET `/detail` 获取搜索应用详情
@@ -442,16 +443,16 @@ def detail(search_id: str = Query(..., description="搜索应用ID"), db: Sessio
         return server_error_response(e)
 
 
-@router.post('/list', summary="获取搜索应用列表", response_description="成功获取搜索应用列表", deprecated=True)
+@router.post("/list", summary="获取搜索应用列表", response_description="成功获取搜索应用列表", deprecated=True)
 def list_search_app(
-        request: ListSearchRequest,
-        keywords: str = Query("", description="关键词搜索"),
-        page: int = Query(1, description="页码"),
-        page_size: int = Query(10, description="每页数量"),
-        orderby: str = Query("create_time", description="排序字段"),
-        desc: bool = Query(True, description="是否降序"),
-        db: Session = Depends(get_db),
-        user=Depends(manager)
+    request: ListSearchRequest,
+    keywords: str = Query("", description="关键词搜索"),
+    page: int = Query(1, description="页码"),
+    page_size: int = Query(10, description="每页数量"),
+    orderby: str = Query("create_time", description="排序字段"),
+    desc: bool = Query(True, description="是否降序"),
+    db: Session = Depends(get_db),
+    user=Depends(manager),
 ):
     """
     ### POST `/list` 获取搜索应用列表
@@ -557,14 +558,10 @@ def list_search_app(
             # tenants = TenantService.get_joined_tenants_by_user_id(db, user.id)
             # tenants = [m["tenant_id"] for m in tenants]
             tenants = []
-            search_apps, total = SearchService.get_by_tenant_ids(
-                db, tenants, user.id, page, page_size, orderby, desc, keywords
-            )
+            search_apps, total = SearchService.get_by_tenant_ids(db, tenants, user.id, page, page_size, orderby, desc, keywords)
         else:
             tenants = owner_ids
-            search_apps, total = SearchService.get_by_tenant_ids(
-                db, tenants, user.id, 0, 0, orderby, desc, keywords
-            )
+            search_apps, total = SearchService.get_by_tenant_ids(db, tenants, user.id, 0, 0, orderby, desc, keywords)
             # 过滤只显示指定租户的搜索应用
             search_apps = [search_app for search_app in search_apps if search_app["tenant_id"] in tenants]
             total = len(search_apps)
@@ -580,7 +577,7 @@ def list_search_app(
         return server_error_response(e)
 
 
-@router.post('/rm', summary="删除搜索应用", response_description="成功删除搜索应用", deprecated=True)
+@router.post("/rm", summary="删除搜索应用", response_description="成功删除搜索应用", deprecated=True)
 def rm(request: RemoveSearchRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/rm` 删除搜索应用

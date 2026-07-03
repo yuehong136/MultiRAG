@@ -26,7 +26,7 @@ class BaseCrypto:
     """Base class for cryptographic algorithms"""
 
     # Magic header to identify encrypted data
-    ENCRYPTED_MAGIC = b'RAGF'
+    ENCRYPTED_MAGIC = b"RAGF"
 
     def __init__(self, key, iv=None, block_size=16, key_length=32, iv_length=16):
         """
@@ -50,7 +50,7 @@ class BaseCrypto:
     def _normalize_key(self, key):
         """Normalize key length"""
         if isinstance(key, str):
-            key = key.encode('utf-8')
+            key = key.encode("utf-8")
 
         # Use PBKDF2 for key derivation to ensure correct key length
         kdf = PBKDF2HMAC(
@@ -58,7 +58,7 @@ class BaseCrypto:
             length=self.key_length,
             salt=b"multirag_crypto_salt",  # Fixed salt to ensure consistent key derivation results
             iterations=100000,
-            backend=default_backend()
+            backend=default_backend(),
         )
 
         return kdf.derive(key)
@@ -102,11 +102,11 @@ class BaseCrypto:
             return encrypted_data
 
         # Remove magic header
-        encrypted_data = encrypted_data[len(self.ENCRYPTED_MAGIC):]
+        encrypted_data = encrypted_data[len(self.ENCRYPTED_MAGIC) :]
 
         # Separate IV and encrypted data
-        iv = encrypted_data[:self.iv_length]
-        ciphertext = encrypted_data[self.iv_length:]
+        iv = encrypted_data[: self.iv_length]
+        ciphertext = encrypted_data[self.iv_length :]
 
         # Delegate to subclass for specific decryption
         padded_data = self._decrypt(ciphertext, iv)
@@ -161,11 +161,7 @@ class AESCrypto(BaseCrypto):
     def _encrypt(self, padded_data, iv):
         """AES encryption implementation"""
         # Create encryptor
-        cipher = Cipher(
-            algorithms.AES(self.key),
-            modes.CBC(iv),
-            backend=default_backend()
-        )
+        cipher = Cipher(algorithms.AES(self.key), modes.CBC(iv), backend=default_backend())
         encryptor = cipher.encryptor()
 
         # Encrypt data
@@ -174,11 +170,7 @@ class AESCrypto(BaseCrypto):
     def _decrypt(self, ciphertext, iv):
         """AES decryption implementation"""
         # Create decryptor
-        cipher = Cipher(
-            algorithms.AES(self.key),
-            modes.CBC(iv),
-            backend=default_backend()
-        )
+        cipher = Cipher(algorithms.AES(self.key), modes.CBC(iv), backend=default_backend())
         decryptor = cipher.decryptor()
 
         # Decrypt data
@@ -229,11 +221,7 @@ class SM4CBC(BaseCrypto):
     def _encrypt(self, padded_data, iv):
         """SM4 encryption implementation using cryptography library"""
         # Create encryptor
-        cipher = Cipher(
-            algorithms.SM4(self.key),
-            modes.CBC(iv),
-            backend=default_backend()
-        )
+        cipher = Cipher(algorithms.SM4(self.key), modes.CBC(iv), backend=default_backend())
         encryptor = cipher.encryptor()
 
         # Encrypt data
@@ -242,11 +230,7 @@ class SM4CBC(BaseCrypto):
     def _decrypt(self, ciphertext, iv):
         """SM4 decryption implementation using cryptography library"""
         # Create decryptor
-        cipher = Cipher(
-            algorithms.SM4(self.key),
-            modes.CBC(iv),
-            backend=default_backend()
-        )
+        cipher = Cipher(algorithms.SM4(self.key), modes.CBC(iv), backend=default_backend())
         decryptor = cipher.decryptor()
 
         # Decrypt data
@@ -257,11 +241,7 @@ class CryptoUtil:
     """Cryptographic utility class, using factory pattern to create cryptographic algorithm instances"""
 
     # Supported cryptographic algorithms mapping
-    SUPPORTED_ALGORITHMS = {
-        "aes-128-cbc": AES128CBC,
-        "aes-256-cbc": AES256CBC,
-        "sm4-cbc": SM4CBC
-    }
+    SUPPORTED_ALGORITHMS = {"aes-128-cbc": AES128CBC, "aes-256-cbc": AES256CBC, "sm4-cbc": SM4CBC}
 
     def __init__(self, algorithm="aes-256-cbc", key=None, iv=None):
         """
@@ -347,6 +327,7 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"SM4 Test Failed: {e}")
         import traceback
+
         traceback.print_exc()
 
     # Test with specific algorithm classes directly

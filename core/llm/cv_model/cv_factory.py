@@ -5,6 +5,7 @@
 @date：2024/7/9 9:00
 @desc:
 """
+
 from core.llm.cv_model.models.zhipu_4v import Zhipu4V
 
 
@@ -30,7 +31,6 @@ class CVModelFactory:
         self.key = key
         self.model_name = model_name
         self.base_url = base_url
-
 
     @staticmethod
     def get_model_instance(key, model_name, lang="Chinese", **kwargs):

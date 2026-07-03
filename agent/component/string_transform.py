@@ -53,18 +53,10 @@ class StringTransform(Message, ABC):
 
     def get_input_form(self) -> dict[str, dict]:
         if self._param.method == "split":
-            return {
-                "line": {
-                    "name": "String",
-                    "type": "line"
-                }
-            }
-        return {k: {
-            "name": o["name"],
-            "type": "line"
-        } for k, o in self.get_input_elements_from_text(self._param.script).items()}
+            return {"line": {"name": "String", "type": "line"}}
+        return {k: {"name": o["name"], "type": "line"} for k, o in self.get_input_elements_from_text(self._param.script).items()}
 
-    @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10*60)))
+    @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10 * 60)))
     def _invoke(self, **kwargs):
         if self.check_if_canceled("StringTransform processing"):
             return
@@ -74,7 +66,7 @@ class StringTransform(Message, ABC):
         else:
             self._merge(kwargs)
 
-    def _split(self, line:str|None = None):
+    def _split(self, line: str | None = None):
         if self.check_if_canceled("StringTransform split processing"):
             return
 
@@ -85,13 +77,13 @@ class StringTransform(Message, ABC):
         self.set_input_value(self._param.split_ref, var)
 
         res = []
-        for i,s in enumerate(re.split(r"(%s)"%("|".join([re.escape(d) for d in self._param.delimiters])), var, flags=re.DOTALL)):
+        for i, s in enumerate(re.split(r"(%s)" % ("|".join([re.escape(d) for d in self._param.delimiters])), var, flags=re.DOTALL)):
             if i % 2 == 1:
                 continue
             res.append(s)
         self.set_output("result", res)
 
-    def _merge(self, kwargs:dict[str, str] = {}):
+    def _merge(self, kwargs: dict[str, str] = {}):
         if self.check_if_canceled("StringTransform merge processing"):
             return
 
@@ -105,7 +97,7 @@ class StringTransform(Message, ABC):
             except Exception:
                 pass
 
-        for k,v in kwargs.items():
+        for k, v in kwargs.items():
             if not v:
                 v = ""
             script = re.sub(k, lambda match: v, script)
@@ -114,5 +106,3 @@ class StringTransform(Message, ABC):
 
     def thoughts(self) -> str:
         return f"It's {self._param.method}ing."
-
-

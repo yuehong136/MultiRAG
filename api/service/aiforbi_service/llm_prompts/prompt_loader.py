@@ -20,7 +20,7 @@ class PromptTemplateLoader:
         :return: 加载的模板字符串
         """
         template_path = os.path.join(self.template_dir, template_name)
-        with open(template_path, encoding='utf-8') as file:
+        with open(template_path, encoding="utf-8") as file:
             return file.read()
 
     def fill_template(self, template_name: str, data: Any | None = None, **kwargs) -> str:
@@ -33,6 +33,7 @@ class PromptTemplateLoader:
         :return: 填充后的字符串
         """
         from string import Template
+
         template_string = self.load_template(template_name)
         template = Template(template_string)
 
@@ -58,19 +59,14 @@ class PromptTemplateLoader:
 if __name__ == "__main__":
     from pydantic import BaseModel
 
-
     class NL2SQLReqBody(BaseModel):
         user_question: str
         table_structure: str
 
-
     loader = PromptTemplateLoader()
 
     # 创建一个NL2SQLReqBody实例
-    req_body = NL2SQLReqBody(
-        user_question="查找所有年龄大于30岁的用户",
-        table_structure="表名：user\n列：id (int), name (varchar), age (int)"
-    )
+    req_body = NL2SQLReqBody(user_question="查找所有年龄大于30岁的用户", table_structure="表名：user\n列：id (int), name (varchar), age (int)")
 
     # 使用Pydantic模型填充模板
     filled_prompt1 = loader.fill_template("nl2sql_temp.txt", req_body)
@@ -78,18 +74,13 @@ if __name__ == "__main__":
     print(filled_prompt1)
 
     # 使用字典填充模板
-    data_dict = {
-        "user_question": "列出所有用户名",
-        "table_structure": "表名：user\n列：id (int), name (varchar), age (int)"
-    }
+    data_dict = {"user_question": "列出所有用户名", "table_structure": "表名：user\n列：id (int), name (varchar), age (int)"}
     filled_prompt2 = loader.fill_template("nl2sql_temp.txt", data_dict)
     print("\n使用字典：")
     print(filled_prompt2)
 
     # 使用关键字参数填充模板
-    filled_prompt3 = loader.fill_template("nl2sql_temp.txt",
-                                          user_question="查找年龄最大的用户",
-                                          table_structure="表名：user\n列：id (int), name (varchar), age (int)")
+    filled_prompt3 = loader.fill_template("nl2sql_temp.txt", user_question="查找年龄最大的用户", table_structure="表名：user\n列：id (int), name (varchar), age (int)")
     print("\n使用关键字参数：")
     print(filled_prompt3)
 

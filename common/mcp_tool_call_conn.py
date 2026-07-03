@@ -15,9 +15,7 @@ MCP_INIT_TIMEOUT = int(os.environ.get("MCP_INIT_TIMEOUT", 15))
 MCP_TOOL_CALL_TIMEOUT = int(os.environ.get("MCP_TOOL_CALL_TIMEOUT", 60))
 # 是否将服务端日志拼接到工具结果字符串末尾。
 # 默认关闭，避免污染 LLM 的 tool observation；保留环境变量开关兼容旧行为。
-MCP_APPEND_SERVER_LOGS_TO_RESULT = os.environ.get(
-    "MCP_APPEND_SERVER_LOGS_TO_RESULT", "false"
-).lower() in {"1", "true", "yes", "on"}
+MCP_APPEND_SERVER_LOGS_TO_RESULT = os.environ.get("MCP_APPEND_SERVER_LOGS_TO_RESULT", "false").lower() in {"1", "true", "yes", "on"}
 
 from typing import override
 
@@ -172,10 +170,7 @@ class MCPToolCallSession(ToolCallSession):
         self._server_instructions = getattr(init_result, "instructions", None)
         self._server_capabilities = getattr(init_result, "capabilities", None)
         if self._server_instructions:
-            logging.info(
-                f"MCP server {self._mcp_server.id} provides instructions "
-                f"({len(self._server_instructions)} chars)"
-            )
+            logging.info(f"MCP server {self._mcp_server.id} provides instructions ({len(self._server_instructions)} chars)")
 
     async def _on_logging(self, params: Any) -> None:
         """Phase 4: MCP logging notification callback.
@@ -245,9 +240,7 @@ class MCPToolCallSession(ToolCallSession):
         except TimeoutError:
             # 用自定义异常包装，避免 Python 3.12+ 中 asyncio.TimeoutError
             # 与 concurrent.futures.TimeoutError 是同一类导致外层 except 分支误捕获
-            raise MCPToolTimeoutError(
-                f"MCP tool call '{task_type}' timed out after {request_timeout}s"
-            ) from None
+            raise MCPToolTimeoutError(f"MCP tool call '{task_type}' timed out after {request_timeout}s") from None
         except Exception:
             raise
 
@@ -420,10 +413,7 @@ class MCPToolCallSession(ToolCallSession):
             return "Error: Session is closed"
 
         # 将 timeout 传递给内层 _call_mcp_tool，确保 MCP 实际调用也使用相同的超时
-        future = asyncio.run_coroutine_threadsafe(
-            self._call_mcp_tool(name, arguments, request_timeout=timeout),
-            self._event_loop
-        )
+        future = asyncio.run_coroutine_threadsafe(self._call_mcp_tool(name, arguments, request_timeout=timeout), self._event_loop)
         try:
             # 外层 future 超时略大于内层，给调度留缓冲
             return future.result(timeout=timeout + 10)
@@ -510,8 +500,7 @@ def close_multiple_mcp_toolcall_sessions(sessions: list[MCPToolCallSession]) -> 
     except Exception:
         logging.exception("Exception during MCP session cleanup thread management")
 
-    logging.info(
-        f"{len(sessions)} MCP sessions has been cleaned up. {len(list(MCPToolCallSession._ALL_INSTANCES))} in global context.")
+    logging.info(f"{len(sessions)} MCP sessions has been cleaned up. {len(list(MCPToolCallSession._ALL_INSTANCES))} in global context.")
 
 
 def shutdown_all_mcp_sessions():
@@ -543,9 +532,7 @@ def _summarize_output_schema(output_schema: dict) -> str:
         if "type" in field_def:
             ftype = field_def["type"]
         elif "anyOf" in field_def:
-            ftype = "|".join(
-                t.get("type", "?") for t in field_def["anyOf"] if isinstance(t, dict) and t.get("type") != "null"
-            )
+            ftype = "|".join(t.get("type", "?") for t in field_def["anyOf"] if isinstance(t, dict) and t.get("type") != "null")
         else:
             ftype = "any"
         fields.append(f"{field_name}({ftype})")

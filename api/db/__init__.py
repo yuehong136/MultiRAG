@@ -4,15 +4,15 @@ from strenum import StrEnum
 
 
 class UserTenantRole(StrEnum):
-    OWNER = 'owner'
-    ADMIN = 'admin'
-    NORMAL = 'normal'
-    INVITE = 'invite'
+    OWNER = "owner"
+    ADMIN = "admin"
+    NORMAL = "normal"
+    INVITE = "invite"
 
 
 class TenantPermission(StrEnum):
-    ME = 'me'
-    TEAM = 'team'
+    ME = "me"
+    TEAM = "team"
 
 
 class SerializedType(IntEnum):
@@ -21,22 +21,23 @@ class SerializedType(IntEnum):
 
 
 class FileType(StrEnum):
-    PDF = 'pdf'
-    DOC = 'doc'
-    VISUAL = 'visual'
-    AURAL = 'aural'
-    VIRTUAL = 'virtual'
-    FOLDER = 'folder'
+    PDF = "pdf"
+    DOC = "doc"
+    VISUAL = "visual"
+    AURAL = "aural"
+    VIRTUAL = "virtual"
+    FOLDER = "folder"
     OTHER = "other"
+
 
 VALID_FILE_TYPES = {FileType.PDF, FileType.DOC, FileType.VISUAL, FileType.AURAL, FileType.VIRTUAL, FileType.FOLDER, FileType.OTHER}
 
 
 class ChatStyle(StrEnum):
-    CREATIVE = 'Creative'
-    PRECISE = 'Precise'
-    EVENLY = 'Evenly'
-    CUSTOM = 'Custom'
+    CREATIVE = "Creative"
+    PRECISE = "Precise"
+    EVENLY = "Evenly"
+    CUSTOM = "Custom"
 
 
 class InputType(StrEnum):
@@ -50,7 +51,8 @@ class CanvasCategory(StrEnum):
     Agent = "agent_canvas"
     DataFlow = "dataflow_canvas"
 
+
 VALID_CANVAS_CATEGORIES = {CanvasCategory.Agent, CanvasCategory.DataFlow}
 
 
-KNOWLEDGEBASE_FOLDER_NAME=".knowledgebase"
+KNOWLEDGEBASE_FOLDER_NAME = ".knowledgebase"

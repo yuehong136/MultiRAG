@@ -89,12 +89,7 @@ def by_deepdoc(filename, binary=None, from_page=0, to_page=100000, lang="Chinese
     callback = callback
     binary = binary
     pdf_parser = pdf_cls() if pdf_cls else Pdf()
-    sections, tables = pdf_parser(
-        filename if not binary else binary,
-        from_page=from_page,
-        to_page=to_page,
-        callback=callback
-    )
+    sections, tables = pdf_parser(filename if not binary else binary, from_page=from_page, to_page=to_page, callback=callback)
 
     tables = vision_figure_parser_pdf_wrapper(
         tbls=tables,
@@ -185,13 +180,7 @@ def by_tcadp(filename, binary=None, from_page=0, to_page=100000, lang="Chinese",
         callback(-1, "TCADP parser not available. Please check Tencent Cloud API configuration.")
         return None, None, tcadp_parser
 
-    sections, tables = tcadp_parser.parse_pdf(
-        filepath=filename,
-        binary=binary,
-        callback=callback,
-        output_dir=os.environ.get("TCADP_OUTPUT_DIR", ""),
-        file_type="PDF"
-    )
+    sections, tables = tcadp_parser.parse_pdf(filepath=filename, binary=binary, callback=callback, output_dir=os.environ.get("TCADP_OUTPUT_DIR", ""), file_type="PDF")
     return sections, tables, tcadp_parser
 
 
@@ -264,12 +253,7 @@ def by_plaintext(filename, binary=None, from_page=0, to_page=100000, callback=No
             )
         pdf_parser = VisionParser(vision_model=vision_model, **kwargs)
 
-    sections, tables = pdf_parser(
-        filename if not binary else binary,
-        from_page=from_page,
-        to_page=to_page,
-        callback=callback
-    )
+    sections, tables = pdf_parser(filename if not binary else binary, from_page=from_page, to_page=to_page, callback=callback)
     return sections, tables, pdf_parser
 
 
@@ -564,13 +548,7 @@ class Pdf(PdfParser):
         start = timer()
         first_start = start
         callback(msg="OCR started")
-        self.__images__(
-            filename if not binary else binary,
-            zoomin,
-            from_page,
-            to_page,
-            callback
-        )
+        self.__images__(filename if not binary else binary, zoomin, from_page, to_page, callback)
         callback(msg=f"OCR finished ({timer() - start:.2f}s)")
         logging.info(f"OCR({from_page}~{to_page}): {timer() - start:.2f}s")
 
@@ -767,9 +745,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
     url_res = []
 
     is_english = lang.lower() == "english"  # is_english(cks)
-    parser_config = kwargs.get(
-        "parser_config", {"chunk_token_num": 512, "delimiter": "\n!?。；！？", "layout_recognize": "DeepDOC", "analyze_hyperlink": True}
-    )
+    parser_config = kwargs.get("parser_config", {"chunk_token_num": 512, "delimiter": "\n!?。；！？", "layout_recognize": "DeepDOC", "analyze_hyperlink": True})
 
     child_deli = (parser_config.get("children_delimiter") or "").encode("utf-8").decode("unicode_escape").encode("latin1").decode("utf-8")
     cust_child_deli = re.findall(r"`([^`]+)`", child_deli)
@@ -783,10 +759,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
     table_context_size = max(0, int(parser_config.get("table_context_size", 0) or 0))
     image_context_size = max(0, int(parser_config.get("image_context_size", 0) or 0))
 
-    doc = {
-        "docnm_kwd": filename,
-        "title_tks": rag_tokenizer.tokenize(re.sub(r"\.[a-zA-Z]+$", "", filename))
-    }
+    doc = {"docnm_kwd": filename, "title_tks": rag_tokenizer.tokenize(re.sub(r"\.[a-zA-Z]+$", "", filename))}
     doc["title_sm_tks"] = rag_tokenizer.fine_grained_tokenize(doc["title_tks"])
     res = []
     pdf_parser = None
@@ -852,9 +825,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
         return res
 
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
-        layout_recognizer, parser_model_name = normalize_layout_recognizer(
-            parser_config.get("layout_recognize", "DeepDOC")
-        )
+        layout_recognizer, parser_model_name = normalize_layout_recognizer(parser_config.get("layout_recognize", "DeepDOC"))
 
         if parser_config.get("analyze_hyperlink", False) and is_root:
             urls = extract_links_from_pdf(binary)
@@ -901,10 +872,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
         if layout_recognizer == "TCADP Parser":
             table_result_type = parser_config.get("table_result_type", "1")
             markdown_image_response_type = parser_config.get("markdown_image_response_type", "1")
-            tcadp_parser = TCADPParser(
-                table_result_type=table_result_type,
-                markdown_image_response_type=markdown_image_response_type
-            )
+            tcadp_parser = TCADPParser(table_result_type=table_result_type, markdown_image_response_type=markdown_image_response_type)
             if not tcadp_parser.check_installation():
                 callback(-1, "TCADP parser not available. Please check Tencent Cloud API configuration.")
                 return res
@@ -912,13 +880,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
             # Determine file type based on extension
             file_type = "XLSX" if re.search(r"\.xlsx?$", filename, re.IGNORECASE) else "CSV"
 
-            sections, tables = tcadp_parser.parse_pdf(
-                filepath=filename,
-                binary=binary,
-                callback=callback,
-                output_dir=os.environ.get("TCADP_OUTPUT_DIR", ""),
-                file_type=file_type
-            )
+            sections, tables = tcadp_parser.parse_pdf(filepath=filename, binary=binary, callback=callback, output_dir=os.environ.get("TCADP_OUTPUT_DIR", ""), file_type=file_type)
             sections = _normalize_section_text_for_rtl_presentation_forms(sections)
             parser_config["chunk_token_num"] = 0
             res = tokenize_table(tables, doc, is_english)
@@ -977,7 +939,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
                     else:
                         section_images = [None] * len(sections)
                         section_images[idx] = combined_image
-                    markdown_vision_parser = VisionFigureParser(vision_model=vision_model, figures_data= [((combined_image, ["markdown image"]), [(0, 0, 0, 0, 0)])], **kwargs)
+                    markdown_vision_parser = VisionFigureParser(vision_model=vision_model, figures_data=[((combined_image, ["markdown image"]), [(0, 0, 0, 0, 0)])], **kwargs)
                     boosted_figures = markdown_vision_parser(callback=callback)
                     sections[idx] = (section_text + "\n\n" + "\n\n".join([fig[0][1] for fig in boosted_figures]), sections[idx][1])
 
@@ -1095,12 +1057,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
                 section_images = None
 
         if section_images:
-            chunks, images = naive_merge_with_images(
-                sections, section_images,
-                int(parser_config.get("chunk_token_num", 128)),
-                parser_config.get("delimiter", "\n!?。；！？"),
-                overlapped_percent
-            )
+            chunks, images = naive_merge_with_images(sections, section_images, int(parser_config.get("chunk_token_num", 128)), parser_config.get("delimiter", "\n!?。；！？"), overlapped_percent)
             res.extend(tokenize_chunks_with_images(chunks, doc, is_english, images, child_delimiters_pattern=child_deli))
         else:
             chunks = naive_merge(sections, int(parser_config.get("chunk_token_num", 128)), parser_config.get("delimiter", "\n!?。；！？"), overlapped_percent)

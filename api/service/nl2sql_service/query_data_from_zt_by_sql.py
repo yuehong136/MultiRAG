@@ -22,7 +22,7 @@ def generate_random_prefix(length: int = 5) -> str:
     """
     # 使用字母和数字组合生成随机字符
     characters = string.ascii_letters + string.digits
-    return ''.join(random.choice(characters) for _ in range(length))
+    return "".join(random.choice(characters) for _ in range(length))
 
 
 async def query_data_from_zt_by_sql(sql: str) -> dict:
@@ -46,9 +46,7 @@ async def query_data_from_zt_by_sql(sql: str) -> dict:
         endpoint = "/api/cmai/appCenter/aiDataInquiry/nl2SqlData"
         url = f"{base_url}{endpoint}"
 
-        payload = {
-            "params": encrypted_params
-        }
+        payload = {"params": encrypted_params}
 
         # 发送异步请求
         async with aiohttp.ClientSession() as session:
@@ -59,17 +57,10 @@ async def query_data_from_zt_by_sql(sql: str) -> dict:
                     return result["data"]
                 else:
                     error_text = await response.text()
-                    return {
-                        "success": False,
-                        "error": f"请求失败，状态码：{response.status}",
-                        "error_details": error_text
-                    }
+                    return {"success": False, "error": f"请求失败，状态码：{response.status}", "error_details": error_text}
 
     except Exception as e:
-        return {
-            "success": False,
-            "error": f"发生异常：{e!s}"
-        }
+        return {"success": False, "error": f"发生异常：{e!s}"}
 
 
 async def query_data_with_params(sql: str, dataset_wid: int, sql_params: list[Any]) -> dict:
@@ -86,11 +77,7 @@ async def query_data_with_params(sql: str, dataset_wid: int, sql_params: list[An
     """
     try:
         # 准备参数对象
-        param_data = {
-            "sql": sql,
-            "dataset_wid": dataset_wid,
-            "sqlParams": sql_params
-        }
+        param_data = {"sql": sql, "dataset_wid": dataset_wid, "sqlParams": sql_params}
 
         # 将参数对象转换为JSON字符串，然后进行base64编码
         json_str = json.dumps(param_data, ensure_ascii=False)
@@ -103,9 +90,7 @@ async def query_data_with_params(sql: str, dataset_wid: int, sql_params: list[An
         endpoint = "/api/cmai/appCenter/aiDataInquiry/nl2SqlDataParam"
         url = f"{base_url}{endpoint}"
 
-        payload = {
-            "params": encrypted_params
-        }
+        payload = {"params": encrypted_params}
 
         # 发送异步请求
         async with aiohttp.ClientSession() as session:
@@ -114,43 +99,30 @@ async def query_data_with_params(sql: str, dataset_wid: int, sql_params: list[An
                 if response.status == 200:
                     result = await response.json()
                     if result["code"] == "-1":
-                        return {
-                            "status": "error",
-                            "message": result["msg"]
-                        }
+                        return {"status": "error", "message": result["msg"]}
                     else:
-                        return {
-                            "status": "success",
-                            "data": result["data"]
-                        }
+                        return {"status": "success", "data": result["data"]}
                 else:
                     error_text = await response.text()
-                    return {
-                        "success": False,
-                        "error": f"请求失败，状态码：{response.status}",
-                        "error_details": error_text
-                    }
+                    return {"success": False, "error": f"请求失败，状态码：{response.status}", "error_details": error_text}
 
     except Exception as e:
-        return {
-            "success": False,
-            "error": f"发生异常：{e!s}"
-        }
+        return {"success": False, "error": f"发生异常：{e!s}"}
 
 
 # 使用示例
 async def main():
     # 示例1：普通查询
-#         print("=== 示例1：普通查询 ===")
-#         query = """
-#         SELECT COUNT(*) AS total_teachers
-# FROM gx_test_teachers t1
-# WHERE "t1"."hire_date" >= CAST('2009-01-01' AS DATE)
-#   AND "t1"."hire_date" <= CAST('2010-12-31' AS DATE)
-#         """
-#
-#         response1 = await query_data_from_zt_by_sql(query)
-#         print(json.dumps(response1, indent=2, ensure_ascii=False))
+    #         print("=== 示例1：普通查询 ===")
+    #         query = """
+    #         SELECT COUNT(*) AS total_teachers
+    # FROM gx_test_teachers t1
+    # WHERE "t1"."hire_date" >= CAST('2009-01-01' AS DATE)
+    #   AND "t1"."hire_date" <= CAST('2010-12-31' AS DATE)
+    #         """
+    #
+    #         response1 = await query_data_from_zt_by_sql(query)
+    #         print(json.dumps(response1, indent=2, ensure_ascii=False))
 
     # 示例2：参数化查询
     print("\n=== 示例2：参数化查询 ===")

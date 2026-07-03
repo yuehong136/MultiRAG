@@ -29,11 +29,7 @@ async def _to_thread(func, *args, **kwargs):
 
 
 def _compile_children_pattern(children_delimiters: list[str] | None) -> str:
-    return "|".join(
-        re.escape(text)
-        for text in sorted(set(children_delimiters or []), key=len, reverse=True)
-        if text
-    )
+    return "|".join(re.escape(text) for text in sorted(set(children_delimiters or []), key=len, reverse=True) if text)
 
 
 class FlowTokenChunker:

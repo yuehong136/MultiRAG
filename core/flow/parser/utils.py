@@ -60,7 +60,7 @@ def remove_toc_pdf(items, outlines):
     for i, (title, level, page_no) in enumerate(outlines):
         if re.match(r"(contents|目录|目次|table of contents|致谢|acknowledge)$", title.split("@@")[0].strip().lower()):
             toc_start_page = page_no
-            for next_title, next_level, next_page_no in outlines[i + 1:]:
+            for next_title, next_level, next_page_no in outlines[i + 1 :]:
                 if next_level != level:
                     continue
                 if re.match(r"(contents|目录|目次|table of contents|致谢|acknowledge)$", next_title.split("@@")[0].strip().lower()):

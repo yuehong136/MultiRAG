@@ -3,6 +3,7 @@
 @file： reference_service.py
 @desc: 参考资料服务类
 """
+
 import logging
 from datetime import UTC, datetime
 
@@ -37,10 +38,7 @@ class ReferenceService(CommonService):
             str: 主章节ID
         """
         # 获取章节信息
-        chapter = db.query(WritingChapter).filter(
-            WritingChapter.id == chapter_id,
-            WritingChapter.status == StatusEnum.VALID.value
-        ).first()
+        chapter = db.query(WritingChapter).filter(WritingChapter.id == chapter_id, WritingChapter.status == StatusEnum.VALID.value).first()
 
         if not chapter:
             raise NoResultFound(f"未找到章节 ID: {chapter_id}")
@@ -48,10 +46,7 @@ class ReferenceService(CommonService):
         # 如果是子章节，返回父章节ID
         if chapter.level == 2 and chapter.parent_id:
             # 验证父章节是否存在
-            parent_chapter = db.query(WritingChapter).filter(
-                WritingChapter.id == chapter.parent_id,
-                WritingChapter.status == StatusEnum.VALID.value
-            ).first()
+            parent_chapter = db.query(WritingChapter).filter(WritingChapter.id == chapter.parent_id, WritingChapter.status == StatusEnum.VALID.value).first()
 
             if parent_chapter:
                 return parent_chapter.id
@@ -81,10 +76,7 @@ class ReferenceService(CommonService):
             main_chapter_id = cls.get_main_chapter_id(db, chapter_id)
 
             # 获取主章节的所有参考资料
-            references = db.query(cls.model).filter(
-                cls.model.chapter_id == main_chapter_id,
-                cls.model.status == StatusEnum.VALID.value
-            ).order_by(cls.model.order_index.asc()).all()
+            references = db.query(cls.model).filter(cls.model.chapter_id == main_chapter_id, cls.model.status == StatusEnum.VALID.value).order_by(cls.model.order_index.asc()).all()
 
             return [ref.to_dict() for ref in references]
         except NoResultFound:
@@ -107,10 +99,7 @@ class ReferenceService(CommonService):
         返回:
             dict: 参考资料详情
         """
-        reference = db.query(cls.model).filter(
-            cls.model.id == reference_id,
-            cls.model.status == StatusEnum.VALID.value
-        ).first()
+        reference = db.query(cls.model).filter(cls.model.id == reference_id, cls.model.status == StatusEnum.VALID.value).first()
 
         if not reference:
             raise NoResultFound(f"未找到参考资料 ID: {reference_id}")
@@ -142,10 +131,7 @@ class ReferenceService(CommonService):
             reference_data["chapter_id"] = main_chapter_id
 
             # 验证章节是否存在
-            chapter = db.query(WritingChapter).filter(
-                WritingChapter.id == main_chapter_id,
-                WritingChapter.status == StatusEnum.VALID.value
-            ).first()
+            chapter = db.query(WritingChapter).filter(WritingChapter.id == main_chapter_id, WritingChapter.status == StatusEnum.VALID.value).first()
 
             if not chapter:
                 raise NoResultFound(f"未找到章节 ID: {main_chapter_id}")
@@ -156,10 +142,7 @@ class ReferenceService(CommonService):
 
             # 如果没有指定order_index，获取当前最大值+1
             if "order_index" not in reference_data:
-                max_order = db.query(func.max(cls.model.order_index)).filter(
-                    cls.model.chapter_id == main_chapter_id,
-                    cls.model.status == StatusEnum.VALID.value
-                ).scalar() or -1
+                max_order = db.query(func.max(cls.model.order_index)).filter(cls.model.chapter_id == main_chapter_id, cls.model.status == StatusEnum.VALID.value).scalar() or -1
 
                 reference_data["order_index"] = max_order + 1
 
@@ -178,18 +161,14 @@ class ReferenceService(CommonService):
     @classmethod
     def update_reference(cls, db: Session, reference_id: str, reference_data: dict) -> WritingReferenceMaterial:
         """更新参考资料"""
-        reference = db.query(cls.model).filter(
-            cls.model.id == reference_id,
-            cls.model.status == StatusEnum.VALID.value
-        ).first()
+        reference = db.query(cls.model).filter(cls.model.id == reference_id, cls.model.status == StatusEnum.VALID.value).first()
 
         if not reference:
             raise NoResultFound(f"未找到参考资料 ID: {reference_id}")
 
         try:
             for key, value in reference_data.items():
-                if hasattr(reference, key) and key not in ['id', 'chapter_id', 'create_time', 'update_time',
-                                                           'create_date', 'update_date', 'status']:
+                if hasattr(reference, key) and key not in ["id", "chapter_id", "create_time", "update_time", "create_date", "update_date", "status"]:
                     setattr(reference, key, value)
 
             # 手动更新时间戳
@@ -219,10 +198,7 @@ class ReferenceService(CommonService):
             bool: 是否删除成功
         """
         # 获取参考资料
-        reference = db.query(cls.model).filter(
-            cls.model.id == reference_id,
-            cls.model.status == StatusEnum.VALID.value
-        ).first()
+        reference = db.query(cls.model).filter(cls.model.id == reference_id, cls.model.status == StatusEnum.VALID.value).first()
 
         if not reference:
             return False
@@ -256,10 +232,7 @@ class ReferenceService(CommonService):
             main_chapter_id = cls.get_main_chapter_id(db, chapter_id)
 
             # 查找主章节的所有参考资料
-            references = db.query(cls.model).filter(
-                cls.model.chapter_id == main_chapter_id,
-                cls.model.status == StatusEnum.VALID.value
-            ).all()
+            references = db.query(cls.model).filter(cls.model.chapter_id == main_chapter_id, cls.model.status == StatusEnum.VALID.value).all()
 
             if not references:
                 return 0
@@ -283,6 +256,7 @@ class ReferenceService(CommonService):
             db.rollback()
             logging.error(f"删除章节参考资料失败: {e!s}")
             raise e
+
     @classmethod
     def reorder_references(cls, db: Session, chapter_id: str, references_order: list[dict]) -> bool:
         """
@@ -307,11 +281,7 @@ class ReferenceService(CommonService):
                 new_order = ref_data.get("order_index")
 
                 # 验证参考资料是否属于指定章节
-                reference = db.query(cls.model).filter(
-                    cls.model.id == ref_id,
-                    cls.model.chapter_id == chapter_id,
-                    cls.model.status == StatusEnum.VALID.value
-                ).first()
+                reference = db.query(cls.model).filter(cls.model.id == ref_id, cls.model.chapter_id == chapter_id, cls.model.status == StatusEnum.VALID.value).first()
 
                 if reference and new_order is not None:
                     reference.order_index = new_order
@@ -366,9 +336,9 @@ class ReferenceService(CommonService):
     def _fallback_file_parsing(cls, file_content: bytes, file_name: str) -> str:
         """当FileService不可用时的备选解析方法"""
         # 根据文件类型进行不同处理
-        if file_name.lower().endswith('.txt'):
-            return file_content.decode('utf-8', errors='ignore')
-        elif file_name.lower().endswith('.pdf'):
+        if file_name.lower().endswith(".txt"):
+            return file_content.decode("utf-8", errors="ignore")
+        elif file_name.lower().endswith(".pdf"):
             try:
                 from io import BytesIO
 
@@ -382,7 +352,7 @@ class ReferenceService(CommonService):
                 return text
             except ImportError:
                 return "解析PDF需要pypdf库，请安装该库。"
-        elif file_name.lower().endswith(('.docx', '.doc')):
+        elif file_name.lower().endswith((".docx", ".doc")):
             try:
                 from io import BytesIO
 
@@ -415,18 +385,18 @@ class ReferenceService(CommonService):
 
             response = requests.get(url, timeout=10)
             if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'html.parser')
+                soup = BeautifulSoup(response.text, "html.parser")
 
                 # 移除脚本和样式元素
                 for script in soup(["script", "style"]):
                     script.extract()
 
                 # 获取文本内容
-                text = soup.get_text(separator='\n', strip=True)
+                text = soup.get_text(separator="\n", strip=True)
 
                 # 清理多余空白行
                 lines = [line.strip() for line in text.splitlines() if line.strip()]
-                return '\n'.join(lines)
+                return "\n".join(lines)
             else:
                 return f"无法获取URL内容，状态码: {response.status_code}"
         except Exception as e:
@@ -454,8 +424,8 @@ class ReferenceService(CommonService):
 
         # 尝试在句子结束处截断
         for i in range(max_length - 1, max_length // 2, -1):
-            if i < len(content) and content[i] in ['.', '!', '?', '。', '！', '？']:
-                return content[:i + 1] + "..."
+            if i < len(content) and content[i] in [".", "!", "?", "。", "！", "？"]:
+                return content[: i + 1] + "..."
 
         # 如果没有找到合适的句子结束点，直接截断
         return content[:max_length] + "..."
@@ -475,43 +445,23 @@ class ReferenceService(CommonService):
         """
         try:
             # 验证两个章节是否存在
-            source_chapter = db.query(WritingChapter).filter(
-                WritingChapter.id == source_chapter_id,
-                WritingChapter.status == StatusEnum.VALID.value
-            ).first()
+            source_chapter = db.query(WritingChapter).filter(WritingChapter.id == source_chapter_id, WritingChapter.status == StatusEnum.VALID.value).first()
 
-            target_chapter = db.query(WritingChapter).filter(
-                WritingChapter.id == target_chapter_id,
-                WritingChapter.status == StatusEnum.VALID.value
-            ).first()
+            target_chapter = db.query(WritingChapter).filter(WritingChapter.id == target_chapter_id, WritingChapter.status == StatusEnum.VALID.value).first()
 
             if not source_chapter or not target_chapter:
                 raise NoResultFound("源章节或目标章节不存在")
 
             # 获取目标章节当前最大order_index
-            max_order = db.query(func.max(cls.model.order_index)).filter(
-                cls.model.chapter_id == target_chapter_id,
-                cls.model.status == StatusEnum.VALID.value
-            ).scalar() or -1
+            max_order = db.query(func.max(cls.model.order_index)).filter(cls.model.chapter_id == target_chapter_id, cls.model.status == StatusEnum.VALID.value).scalar() or -1
 
             # 获取源章节所有参考资料
-            source_refs = db.query(cls.model).filter(
-                cls.model.chapter_id == source_chapter_id,
-                cls.model.status == StatusEnum.VALID.value
-            ).all()
+            source_refs = db.query(cls.model).filter(cls.model.chapter_id == source_chapter_id, cls.model.status == StatusEnum.VALID.value).all()
 
             # 转移参考资料
             for i, ref in enumerate(source_refs):
                 # 创建新的参考资料记录
-                new_ref = WritingReferenceMaterial(
-                    id=get_uuid(),
-                    chapter_id=target_chapter_id,
-                    title=ref.title,
-                    content=ref.content,
-                    source=ref.source,
-                    type=ref.type,
-                    order_index=max_order + i + 1
-                )
+                new_ref = WritingReferenceMaterial(id=get_uuid(), chapter_id=target_chapter_id, title=ref.title, content=ref.content, source=ref.source, type=ref.type, order_index=max_order + i + 1)
                 db.add(new_ref)
 
             db.commit()
@@ -522,8 +472,7 @@ class ReferenceService(CommonService):
             raise e
 
     @classmethod
-    def duplicate_reference(cls, db: Session, reference_id: str,
-                            target_chapter_id: str = None) -> WritingReferenceMaterial:
+    def duplicate_reference(cls, db: Session, reference_id: str, target_chapter_id: str = None) -> WritingReferenceMaterial:
         """
         复制参考资料
 
@@ -537,10 +486,7 @@ class ReferenceService(CommonService):
         """
         try:
             # 获取原参考资料
-            source_ref = db.query(cls.model).filter(
-                cls.model.id == reference_id,
-                cls.model.status == StatusEnum.VALID.value
-            ).first()
+            source_ref = db.query(cls.model).filter(cls.model.id == reference_id, cls.model.status == StatusEnum.VALID.value).first()
 
             if not source_ref:
                 raise NoResultFound(f"未找到参考资料 ID: {reference_id}")
@@ -549,29 +495,17 @@ class ReferenceService(CommonService):
             chapter_id = target_chapter_id or source_ref.chapter_id
 
             # 验证目标章节是否存在
-            chapter = db.query(WritingChapter).filter(
-                WritingChapter.id == chapter_id,
-                WritingChapter.status == StatusEnum.VALID.value
-            ).first()
+            chapter = db.query(WritingChapter).filter(WritingChapter.id == chapter_id, WritingChapter.status == StatusEnum.VALID.value).first()
 
             if not chapter:
                 raise NoResultFound(f"未找到章节 ID: {chapter_id}")
 
             # 获取当前最大order_index
-            max_order = db.query(func.max(cls.model.order_index)).filter(
-                cls.model.chapter_id == chapter_id,
-                cls.model.status == StatusEnum.VALID.value
-            ).scalar() or -1
+            max_order = db.query(func.max(cls.model.order_index)).filter(cls.model.chapter_id == chapter_id, cls.model.status == StatusEnum.VALID.value).scalar() or -1
 
             # 创建新的参考资料
             new_ref = WritingReferenceMaterial(
-                id=get_uuid(),
-                chapter_id=chapter_id,
-                title=f"{source_ref.title} (副本)",
-                content=source_ref.content,
-                source=source_ref.source,
-                type=source_ref.type,
-                order_index=max_order + 1
+                id=get_uuid(), chapter_id=chapter_id, title=f"{source_ref.title} (副本)", content=source_ref.content, source=source_ref.source, type=source_ref.type, order_index=max_order + 1
             )
 
             db.add(new_ref)

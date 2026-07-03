@@ -5,6 +5,7 @@
 @date：2024/7/22 15:22
 @desc:
 """
+
 import logging
 import operator
 from functools import reduce
@@ -35,24 +36,21 @@ def bulk_insert_into_db(db: Session, model, data_source, replace_on_conflict=Fal
     for i, data in enumerate(data_source):
         current_time = current_timestamp() + i
         current_date = timestamp_to_date(current_time)
-        if 'create_time' not in data:
-            data['create_time'] = current_time
-        data['create_date'] = current_date
-        data['update_time'] = current_time
-        data['update_date'] = current_date
+        if "create_time" not in data:
+            data["create_time"] = current_time
+        data["create_date"] = current_date
+        data["update_time"] = current_time
+        data["update_date"] = current_date
 
     batch_size = 1000
     for i in range(0, len(data_source), batch_size):
-        batch = data_source[i:i + batch_size]
+        batch = data_source[i : i + batch_size]
         try:
             # SQLAlchemy 2.0 Core 风格：统一使用 insert().values()
             stmt = insert(model).values(batch)
             if replace_on_conflict:
-                update_cols = {col: getattr(stmt.excluded, col) for col in batch[0].keys() if col not in {'create_time', 'create_date'}}
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=[model.id],
-                    set_=update_cols
-                )
+                update_cols = {col: getattr(stmt.excluded, col) for col in batch[0].keys() if col not in {"create_time", "create_date"}}
+                stmt = stmt.on_conflict_do_update(index_elements=[model.id], set_=update_cols)
             db.execute(stmt)
             db.commit()
         except SQLAlchemyError as e:
@@ -64,6 +62,7 @@ def bulk_insert_into_db(db: Session, model, data_source, replace_on_conflict=Fal
 def get_dynamic_db_model(base, job_id):
     class DynamicModel(base):
         __tablename__ = f"{base.__tablename__}_{get_dynamic_tracking_table_index(job_id)}"
+
     return DynamicModel
 
 
@@ -73,7 +72,7 @@ def get_dynamic_tracking_table_index(job_id):
 
 def fill_db_model_object(model_object, human_model_dict):
     for k, v in human_model_dict.items():
-        attr_name = f'f_{k}'
+        attr_name = f"f_{k}"
         if hasattr(model_object.__class__, attr_name):
             setattr(model_object, attr_name, v)
     return model_object
@@ -81,18 +80,18 @@ def fill_db_model_object(model_object, human_model_dict):
 
 # https://docs.sqlalchemy.org/en/14/core/operators.html
 supported_operators = {
-    '==': operator.eq,
-    '<': operator.lt,
-    '<=': operator.le,
-    '>': operator.gt,
-    '>=': operator.ge,
-    '!=': operator.ne,
-    '<<': operator.lshift,
-    '>>': operator.rshift,
-    '%': operator.mod,
-    '**': operator.pow,
-    '^': operator.xor,
-    '~': operator.inv,
+    "==": operator.eq,
+    "<": operator.lt,
+    "<=": operator.le,
+    ">": operator.gt,
+    ">=": operator.ge,
+    "!=": operator.ne,
+    "<<": operator.lshift,
+    ">>": operator.rshift,
+    "%": operator.mod,
+    "**": operator.pow,
+    "^": operator.xor,
+    "~": operator.inv,
 }
 
 
@@ -100,7 +99,7 @@ def query_dict2expression(model: type[DataBaseModel], query: dict[str, bool | in
     expression = []
     for field, value in query.items():
         if not isinstance(value, (list, tuple)):
-            value = ('==', value)
+            value = ("==", value)
         op, *val = value
         field = getattr(model, field)
         value = supported_operators[op](field, val[0]) if op in supported_operators else getattr(field, op)(*val)
@@ -108,8 +107,7 @@ def query_dict2expression(model: type[DataBaseModel], query: dict[str, bool | in
     return reduce(operator.iand, expression)
 
 
-def query_db(db: Session, model: type[DataBaseModel], limit: int = 0, offset: int = 0,
-             query: dict = None, order_by: str | list | tuple | None = None):
+def query_db(db: Session, model: type[DataBaseModel], limit: int = 0, offset: int = 0, query: dict = None, order_by: str | list | tuple | None = None):
     """
     通用数据库查询函数（SQLAlchemy 2.0 Core 风格）。
 
@@ -137,9 +135,9 @@ def query_db(db: Session, model: type[DataBaseModel], limit: int = 0, offset: in
 
     # 处理排序
     if not order_by:
-        order_by = 'create_time'
+        order_by = "create_time"
     if not isinstance(order_by, (list, tuple)):
-        order_by = (order_by, 'asc')
+        order_by = (order_by, "asc")
     order_field, order_direction = order_by
     order_column = getattr(model, order_field)
     order_column = getattr(order_column, order_direction)()

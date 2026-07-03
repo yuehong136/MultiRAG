@@ -87,7 +87,6 @@ class InfinityConnection(InfinityConnectionBase):
         tokens[0] = field
         return "^".join(tokens)
 
-
     """
     CRUD operations
     """
@@ -306,13 +305,26 @@ class InfinityConnection(InfinityConnectionBase):
             self.connPool.release_conn(inf_conn)
         res = self.concat_dataframes(df_list, ["id"])
         fields = set(res.columns.tolist())
-        for field in ["docnm_kwd", "title_tks", "title_sm_tks", "important_kwd", "important_tks", "question_kwd", "question_tks","content_with_weight", "content_ltks", "content_sm_ltks", "authors_tks", "authors_sm_tks"]:
+        for field in [
+            "docnm_kwd",
+            "title_tks",
+            "title_sm_tks",
+            "important_kwd",
+            "important_tks",
+            "question_kwd",
+            "question_tks",
+            "content_with_weight",
+            "content_ltks",
+            "content_sm_ltks",
+            "authors_tks",
+            "authors_sm_tks",
+        ]:
             fields.add(field)
         res_fields = self.get_fields(res, list(fields))
         return res_fields.get(chunk_id, None)
 
     def insert(self, documents: list[dict], index_name: str, knowledgebase_id: str = None) -> list[str]:
-        '''
+        """
         # Save input to file to test inserting from file in GO
         import datetime
         import os
@@ -324,7 +336,7 @@ class InfinityConnection(InfinityConnectionBase):
                 "chunks": documents
             }, f, indent=2)
         self.logger.debug(f"Saved insert input to {debug_file}")
-        '''
+        """
 
         inf_conn = self.connPool.get_conn()
         try:
@@ -352,6 +364,7 @@ class InfinityConnection(InfinityConnectionBase):
                 parser_id = None
                 if "chunk_data" in documents[0] and isinstance(documents[0].get("chunk_data"), dict):
                     from common.constants import ParserType
+
                     parser_id = ParserType.TABLE.value
                     self.logger.debug("Detected TABLE parser from document structure")
 
@@ -439,7 +452,20 @@ class InfinityConnection(InfinityConnectionBase):
                             d[k] = v if v else "{}"
                     else:
                         d[k] = v
-                for k in ["docnm_kwd", "title_tks", "title_sm_tks", "important_kwd", "important_tks", "content_with_weight", "content_ltks", "content_sm_ltks", "authors_tks", "authors_sm_tks", "question_kwd", "question_tks"]:
+                for k in [
+                    "docnm_kwd",
+                    "title_tks",
+                    "title_sm_tks",
+                    "important_kwd",
+                    "important_tks",
+                    "content_with_weight",
+                    "content_ltks",
+                    "content_sm_ltks",
+                    "authors_tks",
+                    "authors_sm_tks",
+                    "question_kwd",
+                    "question_tks",
+                ]:
                     if k in d:
                         del d[k]
 
@@ -549,7 +575,20 @@ class InfinityConnection(InfinityConnectionBase):
                         del new_value[k]
                 else:
                     new_value[k] = v
-            for k in ["docnm_kwd", "title_tks", "title_sm_tks", "important_kwd", "important_tks", "content_with_weight", "content_ltks", "content_sm_ltks", "authors_tks", "authors_sm_tks", "question_kwd", "question_tks"]:
+            for k in [
+                "docnm_kwd",
+                "title_tks",
+                "title_sm_tks",
+                "important_kwd",
+                "important_tks",
+                "content_with_weight",
+                "content_ltks",
+                "content_sm_ltks",
+                "authors_tks",
+                "authors_sm_tks",
+                "question_kwd",
+                "question_tks",
+            ]:
                 new_value.pop(k, None)
 
             remove_opt = {}  # "[k,new_value]": [id_to_update, ...]
@@ -655,10 +694,7 @@ class InfinityConnection(InfinityConnectionBase):
                 if "important_kwd_empty_count" in res.columns:
                     base = res["important_keywords"].apply(lambda raw: raw.split(",") if raw else [])
                     counts = res["important_kwd_empty_count"].fillna(0).astype(int)
-                    res["important_kwd"] = [
-                        tokens + [""] * empty_count
-                        for tokens, empty_count in zip(base.tolist(), counts.tolist())
-                    ]
+                    res["important_kwd"] = [tokens + [""] * empty_count for tokens, empty_count in zip(base.tolist(), counts.tolist())]
                 else:
                     res["important_kwd"] = res["important_keywords"].apply(lambda v: v.split(",") if v else [])
             if "important_tks" in fields_all:
@@ -697,6 +733,7 @@ class InfinityConnection(InfinityConnectionBase):
             elif k == "chunk_data":
                 res2[column] = res2[column].apply(lambda v: json.loads(v) if v and isinstance(v, str) else v)
             elif k == "position_int":
+
                 def to_position_int(v):
                     if v:
                         arr = [int(hex_val, 16) for hex_val in v.split("_")]

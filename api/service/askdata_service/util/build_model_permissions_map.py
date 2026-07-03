@@ -1,10 +1,7 @@
 from typing import Any
 
 
-def build_model_permissions_map(
-        permissions_response: dict[str, Any],
-        model_table_alias_mapping_list: list[dict[str, Any]]
-) -> dict[str, dict[str, Any]]:
+def build_model_permissions_map(permissions_response: dict[str, Any], model_table_alias_mapping_list: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """
     从权限响应中提取每个模型的行级权限，构建模型ID到权限信息的映射
 
@@ -38,10 +35,7 @@ def build_model_permissions_map(
     models_permissions = data_permissions.get("models", [])
 
     # 创建模型ID到别名和表名的映射
-    model_id_to_info = {
-        m["modelId"]: {"alias": m["alias"], "table": m["table"]}
-        for m in model_table_alias_mapping_list
-    }
+    model_id_to_info = {m["modelId"]: {"alias": m["alias"], "table": m["table"]} for m in model_table_alias_mapping_list}
 
     # 遍历所有有权限信息的模型
     for model_perm in models_permissions:
@@ -53,19 +47,12 @@ def build_model_permissions_map(
             # 获取该模型的表信息
             model_info = model_id_to_info.get(model_id, {})
 
-            model_permissions_map[model_id] = {
-                "alias": model_info.get("alias", ""),
-                "table": model_info.get("table", ""),
-                "rowFilter": row_filter
-            }
+            model_permissions_map[model_id] = {"alias": model_info.get("alias", ""), "table": model_info.get("table", ""), "rowFilter": row_filter}
 
     return model_permissions_map
 
 
-def convert_row_filter_to_sql_conditions(
-        row_filter: dict[str, Any],
-        table_alias: str
-) -> list[str]:
+def convert_row_filter_to_sql_conditions(row_filter: dict[str, Any], table_alias: str) -> list[str]:
     """
     将 rowFilter 转换为 SQL WHERE 条件列表
 
@@ -129,17 +116,14 @@ def add_table_alias_to_expression(expression: str, table_alias: str) -> str:
 
     # 匹配字段名的模式：字母开头，后跟字母、数字或下划线
     # 使用负向前瞻确保前面不是点号
-    pattern = r'(?<![a-zA-Z0-9_.])\b([a-zA-Z_][a-zA-Z0-9_]*)\b'
+    pattern = r"(?<![a-zA-Z0-9_.])\b([a-zA-Z_][a-zA-Z0-9_]*)\b"
 
     def replace_field(match):
         field_name = match.group(1)
         start_pos = match.start()
 
         # 跳过 SQL 关键字和函数名
-        sql_keywords = {
-            'AND', 'OR', 'NOT', 'IN', 'LIKE', 'BETWEEN', 'IS', 'NULL',
-            'TRUE', 'FALSE', 'CAST', 'DATE', 'COUNT', 'SUM', 'AVG', 'MAX', 'MIN'
-        }
+        sql_keywords = {"AND", "OR", "NOT", "IN", "LIKE", "BETWEEN", "IS", "NULL", "TRUE", "FALSE", "CAST", "DATE", "COUNT", "SUM", "AVG", "MAX", "MIN"}
 
         if field_name.upper() in sql_keywords:
             return field_name
@@ -155,8 +139,8 @@ def add_table_alias_to_expression(expression: str, table_alias: str) -> str:
 
         # 检查后面是否跟着点号（说明已经是表别名的一部分）
         # 例如: "t2" 在 "t2.mc" 中
-        after_match = expression[match.end():]
-        if after_match.startswith('.'):
+        after_match = expression[match.end() :]
+        if after_match.startswith("."):
             return field_name
 
         # 添加表别名
@@ -178,13 +162,7 @@ if __name__ == "__main__":
     # 输出: t2.mc = '男' (已有别名，不修改)
 
     # 测试 convert_row_filter_to_sql_conditions
-    row_filter = {
-        "logicalOperator": "OR",
-        "rules": [
-            {"expression": "mc = '男'"},
-            {"expression": "dm = '001'"}
-        ]
-    }
+    row_filter = {"logicalOperator": "OR", "rules": [{"expression": "mc = '男'"}, {"expression": "dm = '001'"}]}
     conditions = convert_row_filter_to_sql_conditions(row_filter, "t1")
     print(conditions)
     # 输出: ["t1.mc = '男'", "t1.dm = '001'"]

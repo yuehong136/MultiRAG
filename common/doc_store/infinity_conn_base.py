@@ -607,50 +607,27 @@ class InfinityConnectionBase(DocStoreConnection):
 
                 # Apply field transformations
                 for alias, actual in field_mapping.items():
-                    select_clause = re.sub(
-                        rf'(^|[, ]){alias}([, ]|$)',
-                        rf'\1{actual}\2',
-                        select_clause
-                    )
+                    select_clause = re.sub(rf"(^|[, ]){alias}([, ]|$)", rf"\1{actual}\2", select_clause)
 
-                sql = select_clause + from_clause + sql[select_match.end():]
+                sql = select_clause + from_clause + sql[select_match.end() :]
 
             # Also replace field names in WHERE, ORDER BY, GROUP BY, and HAVING clauses
             for alias, actual in field_mapping.items():
                 # Transform in WHERE clause
-                sql = re.sub(
-                    rf'(\bwhere\s+[^;]*?)(\b){re.escape(alias)}\b',
-                    rf'\1{actual}',
-                    sql,
-                    flags=re.IGNORECASE
-                )
+                sql = re.sub(rf"(\bwhere\s+[^;]*?)(\b){re.escape(alias)}\b", rf"\1{actual}", sql, flags=re.IGNORECASE)
                 # Transform in ORDER BY clause
-                sql = re.sub(
-                    rf'(\border by\s+[^;]*?)(\b){re.escape(alias)}\b',
-                    rf'\1{actual}',
-                    sql,
-                    flags=re.IGNORECASE
-                )
+                sql = re.sub(rf"(\border by\s+[^;]*?)(\b){re.escape(alias)}\b", rf"\1{actual}", sql, flags=re.IGNORECASE)
                 # Transform in GROUP BY clause
-                sql = re.sub(
-                    rf'(\bgroup by\s+[^;]*?)(\b){re.escape(alias)}\b',
-                    rf'\1{actual}',
-                    sql,
-                    flags=re.IGNORECASE
-                )
+                sql = re.sub(rf"(\bgroup by\s+[^;]*?)(\b){re.escape(alias)}\b", rf"\1{actual}", sql, flags=re.IGNORECASE)
                 # Transform in HAVING clause
-                sql = re.sub(
-                    rf'(\bhaving\s+[^;]*?)(\b){re.escape(alias)}\b',
-                    rf'\1{actual}',
-                    sql,
-                    flags=re.IGNORECASE
-                )
+                sql = re.sub(rf"(\bhaving\s+[^;]*?)(\b){re.escape(alias)}\b", rf"\1{actual}", sql, flags=re.IGNORECASE)
 
             self.logger.debug(f"InfinityConnection.sql to execute: {sql}")
 
             # Get connection parameters from the Infinity connection pool wrapper
             # We need to use INFINITY_CONN singleton, not the raw ConnectionPool
             from common.doc_store.infinity_conn_pool import INFINITY_CONN
+
             conn_info = INFINITY_CONN.get_conn_uri()
 
             # Parse host and port from conn_info
@@ -678,6 +655,7 @@ class InfinityConnectionBase(DocStoreConnection):
             psql_path = "/usr/bin/psql"
             # Check if psql exists at expected location, otherwise try to find it
             import shutil
+
             psql_from_path = shutil.which("psql")
             if psql_from_path:
                 psql_path = psql_from_path
@@ -685,9 +663,12 @@ class InfinityConnectionBase(DocStoreConnection):
             # Execute SQL with psql to get both column names and data in one call
             psql_cmd = [
                 psql_path,
-                "-h", host,
-                "-p", port,
-                "-c", sql,
+                "-h",
+                host,
+                "-p",
+                port,
+                "-c",
+                sql,
             ]
 
             self.logger.debug(f"Executing psql command: {' '.join(psql_cmd)}")
@@ -696,7 +677,7 @@ class InfinityConnectionBase(DocStoreConnection):
                 psql_cmd,
                 capture_output=True,
                 text=True,
-                timeout=10  # 10 second timeout
+                timeout=10,  # 10 second timeout
             )
 
             if result.returncode != 0:
@@ -707,10 +688,7 @@ class InfinityConnectionBase(DocStoreConnection):
             output = result.stdout.strip()
             if not output:
                 # No results
-                return {
-                    "columns": [],
-                    "rows": []
-                } if format == "json" else []
+                return {"columns": [], "rows": []} if format == "json" else []
 
             # Parse psql table output which has format:
             #  col1 | col2 | col3
@@ -743,16 +721,13 @@ class InfinityConnectionBase(DocStoreConnection):
                     rows.append(row)
                 elif len(row) > len(columns):
                     # Row has more cells than columns - truncate
-                    rows.append(row[:len(columns)])
+                    rows.append(row[: len(columns)])
                 elif len(row) < len(columns):
                     # Row has fewer cells - pad with empty strings
                     rows.append(row + [""] * (len(columns) - len(row)))
 
             if format == "json":
-                result = {
-                    "columns": columns,
-                    "rows": rows[:fetch_size] if fetch_size > 0 else rows
-                }
+                result = {"columns": columns, "rows": rows[:fetch_size] if fetch_size > 0 else rows}
             else:
                 result = rows[:fetch_size] if fetch_size > 0 else rows
 

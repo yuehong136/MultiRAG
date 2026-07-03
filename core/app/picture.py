@@ -108,7 +108,7 @@ def vision_llm_chunk(binary, vision_model, prompt=None, callback=None):
     txt = ""
 
     # 检查图像尺寸是否满足视觉模型的最低要求
-    if hasattr(img, 'size'):
+    if hasattr(img, "size"):
         width, height = img.size
         if width < MIN_IMAGE_DIMENSION or height < MIN_IMAGE_DIMENSION:
             # 图像太小，跳过视觉模型处理

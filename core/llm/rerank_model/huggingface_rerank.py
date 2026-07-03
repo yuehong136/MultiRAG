@@ -13,9 +13,9 @@ class HuggingfaceRerank(DefaultRerank):
         batch_size = 8
         for i in range(0, len(texts), batch_size):
             try:
-                res = requests.post(f"http://{url}/rerank", headers={"Content-Type": "application/json"},
-                                    json={"query": query, "texts": texts[i: i + batch_size],
-                                          "raw_scores": False, "truncate": True})
+                res = requests.post(
+                    f"http://{url}/rerank", headers={"Content-Type": "application/json"}, json={"query": query, "texts": texts[i : i + batch_size], "raw_scores": False, "truncate": True}
+                )
 
                 for o in res.json():
                     scores[o["index"] + i] = o["score"]

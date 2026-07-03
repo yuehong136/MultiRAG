@@ -122,15 +122,14 @@ class Excel(ExcelParser):
                 (
                     (
                         img["image"],  # Image.Image or LazyImage
-                        [img["image_description"]]  # description list (must be list)
+                        [img["image_description"]],  # description list (must be list)
                     ),
                     [
                         (0, 0, 0, 0, 0)  # dummy position
-                    ]
+                    ],
                 )
             )
-        callback(0.3, (f"Extract records: {from_page + 1}~{min(to_page, from_page + rn)}" + (
-            f"{len(fails)} failure, line: %s..." % (",".join(fails[:3])) if fails else "")))
+        callback(0.3, (f"Extract records: {from_page + 1}~{min(to_page, from_page + rn)}" + (f"{len(fails)} failure, line: %s..." % (",".join(fails[:3])) if fails else "")))
         return res, tables
 
     def _parse_headers(self, ws, rows):
@@ -332,7 +331,7 @@ def column_data_type(arr):
             continue
         if re.match(r"[+-]?[0-9]+$", str(a).replace("%%", "")) and not str(a).replace("%%", "").startswith("0"):
             counts["int"] += 1
-            if int(str(a)) > 2 ** 63 - 1:
+            if int(str(a)) > 2**63 - 1:
                 float_flag = True
                 break
         elif re.match(r"[+-]?[0-9.]{,19}$", str(a).replace("%%", "")) and not str(a).replace("%%", "").startswith("0"):
@@ -417,17 +416,13 @@ def chunk(filename, binary=None, from_page=0, to_page=10000000000, lang="Chinese
         fails = []
         rows = []
 
-        for i, row in enumerate(all_rows[1 + from_page: 1 + to_page]):
+        for i, row in enumerate(all_rows[1 + from_page : 1 + to_page]):
             if len(row) != len(headers):
                 fails.append(str(i + from_page))
                 continue
             rows.append(row)
 
-        callback(
-            0.3,
-            (f"Extract records: {from_page}~{from_page + len(rows)}" +
-            (f"{len(fails)} failure, line: {','.join(fails[:3])}..." if fails else ""))
-        )
+        callback(0.3, (f"Extract records: {from_page}~{from_page + len(rows)}" + (f"{len(fails)} failure, line: {','.join(fails[:3])}..." if fails else "")))
 
         dfs = [pd.DataFrame(rows, columns=headers)]
     else:
@@ -512,9 +507,7 @@ def chunk(filename, binary=None, from_page=0, to_page=10000000000, lang="Chinese
 if __name__ == "__main__":
     import sys
 
-
     def dummy(prog=None, msg=""):
         pass
-
 
     chunk(sys.argv[1], callback=dummy)

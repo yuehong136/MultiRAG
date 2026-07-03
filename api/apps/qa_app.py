@@ -2,6 +2,7 @@
 教师科研考核问答系统 - API接口
 包含所有Pydantic Schema定义和接口实现
 """
+
 import json
 import logging
 from typing import Any
@@ -52,15 +53,19 @@ def get_user_tenant_id(db: Session, user_id: str) -> str:
 # Pydantic Schema 定义
 # ================================
 
+
 class QAParamDefinition(BaseModel):
     """QA参数定义"""
+
     name: str = Field(..., description="参数名称")
     data_type: str = Field(default="string", description="数据类型：string, integer, float, boolean, date")
     description: str | None = Field(None, description="参数描述")
     required: bool = Field(default=True, description="是否必需")
 
+
 class QATemplate(BaseModel):
     """QA模板数据结构 - 保持不变"""
+
     qa_id: str = Field(..., description="唯一标识符")
     question_canonical: str = Field(..., description="标准问法")
     paraphrases: list[str] = Field(default=[], description="同义句列表")
@@ -68,8 +73,10 @@ class QATemplate(BaseModel):
     sql_template: str = Field(..., description="SQL模板，使用命名参数")
     rule_id: str | None = Field(None, description="评分规则ID，可为空")
 
+
 class QATemplateV2(BaseModel):
     """QA模板数据结构 - 支持带类型的参数定义"""
+
     qa_id: str = Field(..., description="唯一标识符")
     question_canonical: str = Field(..., description="标准问法")
     paraphrases: list[str] = Field(default=[], description="同义句列表")
@@ -83,18 +90,24 @@ class QATemplateV2(BaseModel):
         """向后兼容的参数名列表"""
         return [param.name for param in self.needed_params_v2]
 
+
 class TableSchema(BaseModel):
     """数据库表结构信息 - 保持不变"""
+
     table_name: str = Field(..., description="表名")
     columns: list[dict[str, str]] = Field(..., description="列信息：{name, type, description}")
 
+
 class StoreTemplatesRequest(BaseModel):
     """存储QA模板请求 - 保持不变"""
+
     templates: list[QATemplate] = Field(..., description="QA模板列表")
     clear_existing: bool = Field(default=False, description="是否清空现有模板")
 
+
 class StoreTemplatesResponse(BaseModel):
     """存储QA模板响应 - 保持不变"""
+
     success: bool = Field(..., description="是否成功")
     message: str = Field(..., description="操作结果信息")
     template_count: int | None = Field(None, description="存储的模板数量")
@@ -103,6 +116,7 @@ class StoreTemplatesResponse(BaseModel):
 
 class DialogRound(BaseModel):
     """单轮对话数据"""
+
     round_id: int = Field(..., description="轮次ID")
     user_input: str = Field(..., description="用户输入")
     timestamp: str = Field(..., description="时间戳")
@@ -110,6 +124,7 @@ class DialogRound(BaseModel):
 
 class DialogContext(BaseModel):
     """对话上下文（调用端维护）"""
+
     session_id: str = Field(..., description="会话ID")
     initial_query: str = Field(..., description="初始查询")
     rounds: list[DialogRound] = Field(default_factory=list, description="对话轮次")
@@ -121,6 +136,7 @@ class DialogContext(BaseModel):
 
 class StatelessInterpretRequest(BaseModel):
     """无状态查询解释请求"""
+
     current_input: str = Field(..., description="当前用户输入")
     dialog_context: DialogContext | None = Field(None, description="对话上下文（多轮时提供）")
     table_schemas: list[TableSchema] = Field(..., description="数据库表结构")
@@ -138,6 +154,7 @@ class StatelessInterpretRequest(BaseModel):
 
 class StatelessInterpretResponse(BaseModel):
     """无状态查询解释响应"""
+
     status: str = Field(..., description="处理状态：OK, NEED_CLARIFY, ERROR")
 
     # 核心结果
@@ -160,6 +177,7 @@ class StatelessInterpretResponse(BaseModel):
 
 class QuickInterpretRequest(BaseModel):
     """快速解释请求（单轮）"""
+
     user_query: str = Field(..., description="用户查询")
     table_schemas: list[TableSchema] = Field(..., description="表结构")
     llm_name: str | None = Field(None, description="LLM模型")
@@ -169,6 +187,7 @@ class QuickInterpretRequest(BaseModel):
 
 class QuickInterpretResponse(BaseModel):
     """快速解释响应"""
+
     status: str = Field(..., description="状态：OK, NEED_CLARIFY, ERROR")
     qa_id: str | None = Field(None, description="匹配的QA模板ID")
     sql_template: str | None = Field(None, description="SQL模板")
@@ -181,6 +200,7 @@ class QuickInterpretResponse(BaseModel):
 
 class CalcScoreRequest(BaseModel):
     """评分计算请求"""
+
     rule_description: str = Field(..., description="评分规则描述文本")
     data: list[dict[str, Any]] = Field(..., description="SQL查询结果数据")
     context: dict[str, Any] | None = Field(None, description="评分上下文信息")
@@ -189,6 +209,7 @@ class CalcScoreRequest(BaseModel):
 
 class CalcScoreResponse(BaseModel):
     """评分计算响应"""
+
     score: float | None = Field(None, description="最终得分（如果能提取数值）")
     score_text: str = Field(..., description="LLM生成的完整评分结果文本")
     analysis: str = Field(..., description="评分分析过程")
@@ -198,6 +219,7 @@ class CalcScoreResponse(BaseModel):
 
 class RAGAnswerRequest(BaseModel):
     """RAG回答请求"""
+
     query: str = Field(..., description="用户查询")
     kb_id: str = Field(..., description="知识库ID")
     top_k: int = Field(default=5, description="检索top-k文档")
@@ -206,6 +228,7 @@ class RAGAnswerRequest(BaseModel):
 
 class RAGAnswerResponse(BaseModel):
     """RAG回答响应"""
+
     answer: str = Field(..., description="生成的回答")
     sources: list[dict[str, Any]] = Field(..., description="引用来源")
     confidence: float = Field(..., description="回答置信度")
@@ -213,11 +236,13 @@ class RAGAnswerResponse(BaseModel):
 
 class DeleteTemplateRequest(BaseModel):
     """删除QA模板请求"""
+
     qa_ids: str | list[str] = Field(..., description="要删除的QA模板ID，可以是单个ID或ID列表")
 
 
 class DeleteTemplateResponse(BaseModel):
     """删除QA模板响应"""
+
     success: bool = Field(..., description="是否成功")
     message: str = Field(..., description="操作结果信息")
     deleted_count: int | None = Field(None, description="删除的记录数量")
@@ -226,12 +251,14 @@ class DeleteTemplateResponse(BaseModel):
 
 class StoreTemplatesV2Request(BaseModel):
     """存储QA模板V2请求 - 支持类型化参数"""
+
     templates: list[QATemplateV2] = Field(..., description="QA模板V2列表")
     clear_existing: bool = Field(default=False, description="是否清空现有模板")
 
 
 class CollectionStatusResponse(BaseModel):
     """集合状态响应"""
+
     v1_collection_exists: bool = Field(..., description="V1集合是否存在")
     v2_collection_exists: bool = Field(..., description="V2集合是否存在")
     v1_collection_name: str = Field(..., description="V1集合名称")
@@ -246,8 +273,10 @@ class CollectionStatusResponse(BaseModel):
 
 # 在CalcScoreResponse类后面添加V2版本的Schema
 
+
 class CalcScoreV2Request(BaseModel):
     """评分计算请求V2 - 强化版"""
+
     user_input: str | None = Field(None, description="用户补充要求")
     rule_description: str = Field(..., description="评分规则描述文本")
     data: list[dict[str, Any]] | str = Field(..., description="SQL查询结果数据")
@@ -263,6 +292,7 @@ class CalcScoreV2Request(BaseModel):
 
 class CalcScoreV2Response(BaseModel):
     """评分计算响应V2 - 强化版"""
+
     score: float | None = Field(None, description="提取的数值得分（如果可以提取）")
     score_text: str = Field(..., description="LLM生成的完整评分结果文本")
     analysis: str = Field(..., description="评分分析过程")
@@ -282,12 +312,9 @@ class CalcScoreV2Response(BaseModel):
 # API接口实现
 # ================================
 
+
 @router.post("/store_templates", summary="存储QA模板", response_description="将QA模板存储到Milvus")
-def store_templates(
-        request: StoreTemplatesRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def store_templates(request: StoreTemplatesRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     存储QA模板到Milvus集合
 
@@ -330,11 +357,7 @@ def store_templates(
         templates_dict = [template.model_dump() for template in request.templates]
 
         # 存储模板
-        result = template_storage.store_templates(
-            db=db,
-            templates=templates_dict,
-            tenant_id=tenant_id
-        )
+        result = template_storage.store_templates(db=db, templates=templates_dict, tenant_id=tenant_id)
 
         if result["success"]:
             return get_json_result(data=result)
@@ -347,10 +370,7 @@ def store_templates(
 
 
 @router.post("/clear_templates", summary="清空QA模板", response_description="清空当前租户的所有QA模板")
-def clear_templates(
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def clear_templates(db: Session = Depends(get_db), user=Depends(manager)):
     """
     清空当前租户的所有QA模板
 
@@ -378,11 +398,7 @@ def clear_templates(
 
 
 @router.post("/delete_template", summary="删除QA模板", response_description="根据qa_id删除指定的QA模板（支持单个或批量）")
-def delete_template(
-        request: DeleteTemplateRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def delete_template(request: DeleteTemplateRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     根据qa_id删除指定的QA模板（支持单个或批量删除）
 
@@ -436,10 +452,7 @@ def delete_template(
             return get_data_error_result(retmsg="qa_ids必须是字符串或字符串列表")
 
         # 调用删除服务
-        result = template_storage.delete_templates_by_qa_ids(
-            qa_ids=qa_ids_list,
-            tenant_id=tenant_id
-        )
+        result = template_storage.delete_templates_by_qa_ids(qa_ids=qa_ids_list, tenant_id=tenant_id)
 
         if result["success"]:
             return get_json_result(data=result)
@@ -452,11 +465,7 @@ def delete_template(
 
 
 @router.post("/interpret_stateless", summary="无状态查询解释（智能版）", response_description="解释查询（无状态版本，支持V1/V2模板智能匹配）")
-def interpret_stateless(
-        request: StatelessInterpretRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def interpret_stateless(request: StatelessInterpretRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     无状态查询解释接口 - 智能多轮对话支持
 
@@ -577,7 +586,7 @@ def interpret_stateless(
             hybrid_weight=request.hybrid_weight,
             llm_name=request.llm_name,
             force_new_template=request.force_new_template,
-            enable_slot_merge=request.enable_slot_merge
+            enable_slot_merge=request.enable_slot_merge,
         )
 
         return get_json_result(data=result)
@@ -588,11 +597,7 @@ def interpret_stateless(
 
 
 @router.post("/quick_interpret", summary="快速解释（单轮）", response_description="快速单轮查询解释")
-def quick_interpret(
-        request: QuickInterpretRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def quick_interpret(request: QuickInterpretRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     快速单轮查询解释（完全无状态）
 
@@ -623,7 +628,7 @@ def quick_interpret(
             similarity_threshold=request.similarity_threshold,
             hybrid_weight=request.hybrid_weight,
             llm_name=request.llm_name,
-            enable_slot_merge=False  # 禁用多轮合并
+            enable_slot_merge=False,  # 禁用多轮合并
         )
 
         # 简化返回（不包含上下文）
@@ -635,7 +640,7 @@ def quick_interpret(
             "missing_params": result.get("missing_params", []),
             "clarify_message": result.get("clarify_message"),
             "confidence": result.get("confidence", 0.0),
-            "message": result.get("message")
+            "message": result.get("message"),
         }
 
         return get_json_result(data=simplified_result)
@@ -646,11 +651,7 @@ def quick_interpret(
 
 
 @router.post("/store_templates_v2", summary="存储QA模板V2（强化版）", response_description="存储支持类型化参数和多SQL模板的QA模板到Milvus")
-def store_templates_v2(
-        request: StoreTemplatesV2Request,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def store_templates_v2(request: StoreTemplatesV2Request, db: Session = Depends(get_db), user=Depends(manager)):
     """
     存储QA模板V2到Milvus（支持类型化参数定义和多SQL模板）- V2强化版
 
@@ -811,11 +812,7 @@ def store_templates_v2(
             templates_dict.append(template_dict)
 
         # 存储模板
-        result = template_storage.store_templates_v2(
-            db=db,
-            templates=templates_dict,
-            tenant_id=tenant_id
-        )
+        result = template_storage.store_templates_v2(db=db, templates=templates_dict, tenant_id=tenant_id)
 
         if result["success"]:
             return get_json_result(data=result)
@@ -828,11 +825,7 @@ def store_templates_v2(
 
 
 @router.post("/calc_score", summary="计算评分", response_description="使用LLM根据规则和数据计算评分")
-def calculate_score(
-        request: CalcScoreRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def calculate_score(request: CalcScoreRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     使用LLM根据规则描述和数据计算评分
 
@@ -873,14 +866,7 @@ def calculate_score(
             return get_data_error_result(retmsg="data必须是列表格式")
 
         # 调用LLM评分服务
-        score_result = llm_scorer.calculate_score(
-            db=db,
-            rule_description=request.rule_description,
-            data=request.data,
-            context=request.context,
-            tenant_id=tenant_id,
-            llm_name=request.llm_name
-        )
+        score_result = llm_scorer.calculate_score(db=db, rule_description=request.rule_description, data=request.data, context=request.context, tenant_id=tenant_id, llm_name=request.llm_name)
 
         return get_json_result(data=score_result)
 
@@ -890,11 +876,7 @@ def calculate_score(
 
 
 @router.post("/rag_answer", summary="RAG回答", response_description="基于知识库检索生成回答")
-def rag_answer(
-        request: RAGAnswerRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def rag_answer(request: RAGAnswerRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     基于知识库检索生成回答
 
@@ -925,14 +907,7 @@ def rag_answer(
             return get_data_error_result(retmsg="知识库ID不能为空")
 
         # 调用RAG服务
-        rag_result = rag_service.generate_answer(
-            db=db,
-            query=request.query,
-            kb_id=request.kb_id,
-            tenant_id=tenant_id,
-            top_k=request.top_k,
-            llm_name=request.llm_name
-        )
+        rag_result = rag_service.generate_answer(db=db, query=request.query, kb_id=request.kb_id, tenant_id=tenant_id, top_k=request.top_k, llm_name=request.llm_name)
 
         return get_json_result(data=rag_result)
 
@@ -942,11 +917,7 @@ def rag_answer(
 
 
 @router.post("/calc_score_v2", summary="计算评分V2（强化版）", response_description="使用LLM根据规则和数据计算评分，强化正则提取能力")
-def calculate_score_v2(
-        request: CalcScoreV2Request,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def calculate_score_v2(request: CalcScoreV2Request, db: Session = Depends(get_db), user=Depends(manager)):
     """
     使用LLM根据规则描述和数据计算评分 - V2强化版
 
@@ -1095,7 +1066,7 @@ def calculate_score_v2(
             enable_multi_extraction=request.enable_multi_extraction,
             score_validation=request.score_validation,
             expected_score_range=request.expected_score_range,
-            extraction_confidence_threshold=request.extraction_confidence_threshold
+            extraction_confidence_threshold=request.extraction_confidence_threshold,
         )
 
         return get_json_result(data=score_result)
@@ -1106,10 +1077,7 @@ def calculate_score_v2(
 
 
 @router.get("/system_info", summary="获取系统信息", response_description="获取当前系统的配置信息")
-def get_system_info(
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def get_system_info(db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取系统信息
 
@@ -1131,27 +1099,22 @@ def get_system_info(
                 "llm_scoring": True,
                 "llm_scoring_v2": True,  # 新增V2评分功能
                 "enhanced_score_extraction": True,  # 新增强化提取功能
-                "rag_answer": True
+                "rag_answer": True,
             },
             "supported_operations": {
                 "template_management": [
                     "POST /store_templates - 存储QA模板（V1兼容）",
                     "POST /store_templates_v2 - 存储支持类型化参数的QA模板",
                     "POST /clear_templates - 清空所有模板",
-                    "POST /delete_template - 删除指定模板（支持单个或批量）"
+                    "POST /delete_template - 删除指定模板（支持单个或批量）",
                 ],
-                "query_interpretation": [
-                    "POST /interpret_stateless - 无状态查询解释（支持多轮）",
-                    "POST /quick_interpret - 快速单轮查询"
-                ],
+                "query_interpretation": ["POST /interpret_stateless - 无状态查询解释（支持多轮）", "POST /quick_interpret - 快速单轮查询"],
                 "scoring_and_rag": [
                     "POST /calc_score - LLM评分计算（V1）",
                     "POST /calc_score_v2 - LLM评分计算（V2强化版）",  # 新增
-                    "POST /rag_answer - RAG回答生成"
+                    "POST /rag_answer - RAG回答生成",
                 ],
-                "collection_management": [
-                    "GET /collection_status - 检查集合状态（V1/V2智能管理）和迁移建议"
-                ]
+                "collection_management": ["GET /collection_status - 检查集合状态（V1/V2智能管理）和迁移建议"],
             },
             "scoring_v2_enhancements": {  # 新增V2评分功能说明
                 "description": "V2版本大幅强化了分数提取的准确性和可靠性",
@@ -1161,33 +1124,23 @@ def get_system_info(
                     "增强正则表达式：支持更多种分数表达方式",
                     "数字序列分析：分析重复出现的数字作为候选分数",
                     "置信度评估：为每个提取方法评估置信度",
-                    "分数验证：验证分数的合理性和一致性"
+                    "分数验证：验证分数的合理性和一致性",
                 ],
                 "extraction_strategies": {
                     "final_section_primary": {
                         "priority": 1,
                         "description": "从'=== 最终评分结果 ==='部分的'总得分'提取",
                         "confidence": "0.95",
-                        "patterns": ["总得分：[数字]分", "最终得分：[数字]分", "评分结果：[数字]分"]
+                        "patterns": ["总得分：[数字]分", "最终得分：[数字]分", "评分结果：[数字]分"],
                     },
                     "calculation_section": {
                         "priority": 2,
                         "description": "从'分数计算'部分的'最终得分'提取",
                         "confidence": "0.85",
-                        "patterns": ["最终得分：[数字]分", "总计：[数字]分", "合计得分：[数字]分"]
+                        "patterns": ["最终得分：[数字]分", "总计：[数字]分", "合计得分：[数字]分"],
                     },
-                    "enhanced_regex": {
-                        "priority": 3,
-                        "description": "使用增强版正则表达式全文搜索",
-                        "confidence": "0.7",
-                        "patterns": ["得分为：[数字]分", "[数字]分", "score:[数字]", "=[数字]分"]
-                    },
-                    "number_sequence": {
-                        "priority": 4,
-                        "description": "分析数字出现频率，选择重复出现的数字",
-                        "confidence": "0.6",
-                        "logic": "统计响应中所有数字的出现频率，优选重复出现的合理分数"
-                    }
+                    "enhanced_regex": {"priority": 3, "description": "使用增强版正则表达式全文搜索", "confidence": "0.7", "patterns": ["得分为：[数字]分", "[数字]分", "score:[数字]", "=[数字]分"]},
+                    "number_sequence": {"priority": 4, "description": "分析数字出现频率，选择重复出现的数字", "confidence": "0.6", "logic": "统计响应中所有数字的出现频率，优选重复出现的合理分数"},
                 },
                 "v2_exclusive_features": {
                     "multi_extraction": "同时使用多种策略提取分数，确保提取成功率",
@@ -1195,112 +1148,52 @@ def get_system_info(
                     "validation_system": "验证分数的合理性、范围和一致性",
                     "alternative_scores": "提供备选分数列表，便于人工验证",
                     "extraction_details": "详细记录提取过程，便于调试和优化",
-                    "structured_output": "规范化LLM输出格式，提高解析成功率"
+                    "structured_output": "规范化LLM输出格式，提高解析成功率",
                 },
                 "example_usage": {
                     "basic_request": {
                         "rule_description": "省部级青年人才入选者：1000分/项",
                         "data": [{"sylb": "青年人才入选者", "sydj": "省部级"}],
                         "enable_multi_extraction": True,
-                        "score_validation": True
+                        "score_validation": True,
                     },
-                    "advanced_request": {
-                        "rule_description": "多级评分规则",
-                        "data": "复杂数据结构",
-                        "expected_score_range": [0, 100000],
-                        "extraction_confidence_threshold": 0.8
-                    }
+                    "advanced_request": {"rule_description": "多级评分规则", "data": "复杂数据结构", "expected_score_range": [0, 100000], "extraction_confidence_threshold": 0.8},
                 },
-                "migration_from_v1": [
-                    "V1接口继续可用，无需立即迁移",
-                    "V2接口提供更准确的分数提取",
-                    "建议新项目直接使用V2接口",
-                    "V2返回更详细的诊断信息"
-                ]
+                "migration_from_v1": ["V1接口继续可用，无需立即迁移", "V2接口提供更准确的分数提取", "建议新项目直接使用V2接口", "V2返回更详细的诊断信息"],
             },
             "collection_changes": {
                 "description": "V2版本对Milvus集合结构进行了调整",
-                "changes": [
-                    "V1集合：bl_qa_template - 原有集合结构",
-                    "V2集合：bl_qa_template_v2 - 新增类型化参数支持",
-                    "系统自动检测并优先使用V2集合",
-                    "V1和V2集合可以共存，保证向后兼容"
-                ],
-                "new_fields": [
-                    "needed_params_typed - 类型化参数定义（JSON）",
-                    "template_version - 模板版本标记（v1/v2）"
-                ],
-                "migration_strategy": [
-                    "现有V1集合继续工作，无需立即迁移",
-                    "使用V2接口存储新模板时会自动创建V2集合",
-                    "查询接口自动选择最优集合（优先V2）",
-                    "使用 GET /collection_status 检查当前状态"
-                ]
+                "changes": ["V1集合：bl_qa_template - 原有集合结构", "V2集合：bl_qa_template_v2 - 新增类型化参数支持", "系统自动检测并优先使用V2集合", "V1和V2集合可以共存，保证向后兼容"],
+                "new_fields": ["needed_params_typed - 类型化参数定义（JSON）", "template_version - 模板版本标记（v1/v2）"],
+                "migration_strategy": ["现有V1集合继续工作，无需立即迁移", "使用V2接口存储新模板时会自动创建V2集合", "查询接口自动选择最优集合（优先V2）", "使用 GET /collection_status 检查当前状态"],
             },
             "v2_new_features": {
                 "typed_parameters": {
                     "description": "支持为QA模板参数指定数据类型",
                     "supported_types": ["string", "integer", "float", "boolean", "date"],
-                    "benefits": [
-                        "LLM能更准确地输出正确类型的参数值",
-                        "自动类型验证和转换",
-                        "更好的参数处理精度"
-                    ]
+                    "benefits": ["LLM能更准确地输出正确类型的参数值", "自动类型验证和转换", "更好的参数处理精度"],
                 },
                 "example_v2_template": {
                     "qa_id": "teacher_query_001",
                     "question_canonical": "查询教师考核数据",
                     "paraphrases": ["教师考核情况", "老师绩效数据"],
                     "needed_params_v2": [
-                        {
-                            "name": "teacher_id",
-                            "data_type": "string",
-                            "description": "教师ID",
-                            "required": True
-                        },
-                        {
-                            "name": "year",
-                            "data_type": "integer",
-                            "description": "考核年度",
-                            "required": True
-                        },
-                        {
-                            "name": "score_threshold",
-                            "data_type": "float",
-                            "description": "分数阈值",
-                            "required": False
-                        },
-                        {
-                            "name": "is_active",
-                            "data_type": "boolean",
-                            "description": "是否在职",
-                            "required": False
-                        },
-                        {
-                            "name": "start_date",
-                            "data_type": "date",
-                            "description": "开始日期",
-                            "required": False
-                        }
+                        {"name": "teacher_id", "data_type": "string", "description": "教师ID", "required": True},
+                        {"name": "year", "data_type": "integer", "description": "考核年度", "required": True},
+                        {"name": "score_threshold", "data_type": "float", "description": "分数阈值", "required": False},
+                        {"name": "is_active", "data_type": "boolean", "description": "是否在职", "required": False},
+                        {"name": "start_date", "data_type": "date", "description": "开始日期", "required": False},
                     ],
                     "sql_template": [
                         "SELECT * FROM teacher_performance WHERE teacher_id = {{teacher_id}} AND year = {{year}}",
-                        "SELECT teacher_id, performance_score, evaluation_date FROM teacher_performance WHERE teacher_id = {{teacher_id}} AND year = {{year}} ORDER BY evaluation_date DESC"
+                        "SELECT teacher_id, performance_score, evaluation_date FROM teacher_performance WHERE teacher_id = {{teacher_id}} AND year = {{year}} ORDER BY evaluation_date DESC",
                     ],
-                    "rule_id": "rule_001"
-                }
+                    "rule_id": "rule_001",
+                },
             },
             "configuration": {
-                "similarity_threshold": {
-                    "default": 0.3,
-                    "range": "0.0-1.0",
-                    "description": "模板匹配相似度阈值"
-                },
-                "hybrid_weight": {
-                    "default": 0.7,
-                    "range": "0.0-1.0",
-                    "description": "混合检索中密集向量权重"
-                }
+                "similarity_threshold": {"default": 0.3, "range": "0.0-1.0", "description": "模板匹配相似度阈值"},
+                "hybrid_weight": {"default": 0.7, "range": "0.0-1.0", "description": "混合检索中密集向量权重"},
             },
             "usage_tips": [
                 "使用V2模板获得更精确的参数类型控制",
@@ -1309,16 +1202,16 @@ def get_system_info(
                 "调用端负责保存和管理对话状态",
                 "quick_interpret适用于简单单轮查询",
                 "interpret_stateless支持复杂多轮对话",
-                "V2模板自动向后兼容V1接口"
+                "V2模板自动向后兼容V1接口",
             ],
             "migration_guide": {
                 "from_v1_to_v2": [
                     "1. 将needed_params列表转换为needed_params_v2对象列表",
                     "2. 为每个参数添加data_type字段",
                     "3. 使用/store_templates_v2接口存储模板",
-                    "4. 现有的查询接口无需修改，自动支持类型化参数"
+                    "4. 现有的查询接口无需修改，自动支持类型化参数",
                 ]
-            }
+            },
         }
 
         return get_json_result(data=system_info)
@@ -1329,10 +1222,7 @@ def get_system_info(
 
 
 @router.get("/collection_status", summary="检查集合状态（V1/V2智能管理）", response_description="检查QA模板集合的V1/V2状态并提供迁移建议")
-def check_collection_status(
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+def check_collection_status(db: Session = Depends(get_db), user=Depends(manager)):
     """
     检查QA模板集合状态 - V1/V2版本智能管理
 
@@ -1478,22 +1368,14 @@ def check_collection_status(
 
         if v1_exists:
             try:
-                v1_results = settings.docStoreConn.query(
-                    collection_name=v1_collection,
-                    filter=f'tenant_id == "{tenant_id}"',
-                    output_fields=["id"]
-                )
+                v1_results = settings.docStoreConn.query(collection_name=v1_collection, filter=f'tenant_id == "{tenant_id}"', output_fields=["id"])
                 v1_count = len(v1_results) if v1_results else 0
             except Exception as e:
                 logger.warning(f"无法统计V1集合记录数: {e}")
 
         if v2_exists:
             try:
-                v2_results = settings.docStoreConn.query(
-                    collection_name=v2_collection,
-                    filter=f'tenant_id == "{tenant_id}"',
-                    output_fields=["id"]
-                )
+                v2_results = settings.docStoreConn.query(collection_name=v2_collection, filter=f'tenant_id == "{tenant_id}"', output_fields=["id"])
                 v2_count = len(v2_results) if v2_results else 0
             except Exception as e:
                 logger.warning(f"无法统计V2集合记录数: {e}")
@@ -1535,7 +1417,7 @@ def check_collection_status(
             v1_record_count=v1_count,
             v2_record_count=v2_count,
             needs_migration=needs_migration,
-            migration_suggestions=suggestions
+            migration_suggestions=suggestions,
         )
 
         return get_json_result(data=result.model_dump())

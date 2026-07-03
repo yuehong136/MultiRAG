@@ -25,9 +25,7 @@ def encrypt_password(password_plain: str) -> str:
         from Cryptodome.Cipher import PKCS1_v1_5 as Cipher_pkcs1_v1_5
         from Cryptodome.PublicKey import RSA
     except Exception as exc:
-        raise AuthException(
-            "Password encryption unavailable; install pycryptodomex (uv sync --python 3.12 --group test)."
-        ) from exc
+        raise AuthException("Password encryption unavailable; install pycryptodomex (uv sync --python 3.12 --group test).") from exc
 
     rsa_key = RSA.importKey(PUBLIC_KEY_PEM)
     cipher = Cipher_pkcs1_v1_5.new(rsa_key)

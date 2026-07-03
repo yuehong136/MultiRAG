@@ -16,11 +16,7 @@ class MinioOperator:
     #     )
 
     def __init__(self):
-        self.client = Minio(settings.MINIO["host"],
-                            access_key=settings.MINIO["user"],
-                            secret_key=settings.MINIO["password"],
-                            secure=False
-                            )
+        self.client = Minio(settings.MINIO["host"], access_key=settings.MINIO["user"], secret_key=settings.MINIO["password"], secure=False)
 
     def create_bucket(self, bucket_name):
         try:
@@ -39,8 +35,7 @@ class MinioOperator:
         except S3Error as e:
             print(f"上传文件时发生错误: {e}")
 
-    def upload_file_from_memory(self, bucket_name, object_name, file_data,
-                                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'):
+    def upload_file_from_memory(self, bucket_name, object_name, file_data, content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
         try:
             # 将字节串转换为 BytesIO 对象
             file_stream = io.BytesIO(file_data)
@@ -49,13 +44,7 @@ class MinioOperator:
             file_size = len(file_data)
 
             # 使用 put_object 上传数据
-            self.client.put_object(
-                bucket_name,
-                object_name,
-                file_stream,
-                file_size,
-                content_type=content_type
-            )
+            self.client.put_object(bucket_name, object_name, file_stream, file_size, content_type=content_type)
             print(f"文件成功上传到 '{bucket_name}/{object_name}'")
             return bucket_name, object_name
         except Exception as e:
@@ -97,38 +86,27 @@ class MinioOperator:
             if recursive:
                 # 列出所有对象
                 for obj in objects:
-                    result.append({
-                        "name": obj.object_name,
-                        "size": obj.size,
-                        "type": "file"
-                    })
+                    result.append({"name": obj.object_name, "size": obj.size, "type": "file"})
             else:
                 # 只列出最浅一层的内容
                 seen_prefixes = set()
                 for obj in objects:
                     # 分割对象名，获取最浅层的部分
-                    parts = obj.object_name.split('/')
+                    parts = obj.object_name.split("/")
                     if prefix:
                         # 如果有前缀，去掉前缀部分
-                        prefix_parts = prefix.rstrip('/').split('/')
-                        parts = parts[len(prefix_parts):]
+                        prefix_parts = prefix.rstrip("/").split("/")
+                        parts = parts[len(prefix_parts) :]
 
                     if len(parts) > 1:
                         # 这是一个更深层次的对象，只添加其前缀
-                        top_level = parts[0] + '/'
+                        top_level = parts[0] + "/"
                         if top_level not in seen_prefixes:
-                            result.append({
-                                "name": prefix + top_level if prefix else top_level,
-                                "type": "directory"
-                            })
+                            result.append({"name": prefix + top_level if prefix else top_level, "type": "directory"})
                             seen_prefixes.add(top_level)
                     else:
                         # 这是最浅层的对象
-                        result.append({
-                            "name": obj.object_name,
-                            "size": obj.size,
-                            "type": "file"
-                        })
+                        result.append({"name": obj.object_name, "size": obj.size, "type": "file"})
 
             return result
         except S3Error as e:

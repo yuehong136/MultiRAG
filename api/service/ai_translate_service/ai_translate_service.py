@@ -13,7 +13,6 @@ from errors.exceptions import AITranslateException
 
 
 class AITranslateService:
-
     @staticmethod
     async def ai_translate(ai_translate_req_body, db: Session, user_id, llm_name):
         logging.info(f"ai_translate_req_body: {ai_translate_req_body}")
@@ -30,7 +29,7 @@ class AITranslateService:
         logging.info(f"ai_translate resp: {resp}")
         if contains_chinese_unicode(resp):
             raise AITranslateException(message="翻译内容包含中文字符，请重新翻译")
-        specific_chars = ['/']
+        specific_chars = ["/"]
         if any(char in ai_translate_req_body.zh_text for char in specific_chars):
             return resp
         else:
@@ -64,7 +63,7 @@ class AITranslateService:
         #         将字符串数组转换为列表
         translate_list = json.loads(resp)
         # specific_chars = ['/', '|', '-', ',', '，', '、']
-        specific_chars = ['/']
+        specific_chars = ["/"]
         for i in range(len(translate_list)):
             # 有时候一个中文输入可能会输出多个英文，这种情况下多是使用/分割，比如：Success/Succeed
             # 所以如果翻译中包含多个英文选项，取第一个选项
@@ -76,7 +75,7 @@ class AITranslateService:
         return translate_list
 
 
-def get_first_part_from_translated_text(s, separators=['/']) -> str:
+def get_first_part_from_translated_text(s, separators=["/"]) -> str:
     """
     从给定的字符串中提取第一个部分，使用指定的分隔符列表。
 
@@ -100,7 +99,7 @@ def contains_chinese_unicode(text):
     使用 Unicode 范围检测字符串中是否包含中文字符
     """
     for char in text:
-        if '\u4e00' <= char <= '\u9fff':
+        if "\u4e00" <= char <= "\u9fff":
             return True
     return False
 
@@ -110,7 +109,7 @@ import re
 
 def extract_content_from_markdown(text):
     # 使用正则表达式匹配 ```json 和 ``` 之间的内容
-    match = re.search(r'```json\s*([\s\S]*?)\s*```', text)
+    match = re.search(r"```json\s*([\s\S]*?)\s*```", text)
 
     if match:
         # 如果找到匹配，返回 ``` 之间的内容

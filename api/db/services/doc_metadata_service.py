@@ -49,6 +49,7 @@ def _get_sql_store() -> MetadataStore:
     global _sql_store
     if _sql_store is None:
         from api.db.services.metadata_store_sql import SqlMetadataStore
+
         _sql_store = SqlMetadataStore()
     return _sql_store
 
@@ -57,6 +58,7 @@ def _get_engine_store() -> MetadataStore:
     global _engine_store
     if _engine_store is None:
         from api.db.services.metadata_store_engine import EngineMetadataStore
+
         _engine_store = EngineMetadataStore()
     return _engine_store
 
@@ -82,20 +84,14 @@ class DocMetadataService:
 
     @classmethod
     def _get_tenant_kb_for_doc(cls, db: Session, doc_id: str) -> tuple[str | None, str | None]:
-        row = db.execute(
-            select(Document.kb_id, Knowledgebase.tenant_id)
-            .join(Knowledgebase, Knowledgebase.id == Document.kb_id)
-            .where(Document.id == doc_id)
-        ).first()
+        row = db.execute(select(Document.kb_id, Knowledgebase.tenant_id).join(Knowledgebase, Knowledgebase.id == Document.kb_id).where(Document.id == doc_id)).first()
         if not row:
             return None, None
         return row.tenant_id, row.kb_id
 
     @classmethod
     def _kb_tenant(cls, db: Session, kb_id: str) -> str | None:
-        row = db.execute(
-            select(Knowledgebase.tenant_id).where(Knowledgebase.id == kb_id)
-        ).first()
+        row = db.execute(select(Knowledgebase.tenant_id).where(Knowledgebase.id == kb_id)).first()
         return row.tenant_id if row else None
 
     # ── split combined values ──────────────────────────────────────────────────
@@ -142,8 +138,7 @@ class DocMetadataService:
         return cls._store().upsert(db, doc_id, tenant_id, kb_id, processed)
 
     @classmethod
-    def delete_document_metadata(cls, db: Session, doc_id: str, kb_id: str,
-                                 tenant_id: str | None = None) -> bool:
+    def delete_document_metadata(cls, db: Session, doc_id: str, kb_id: str, tenant_id: str | None = None) -> bool:
         # Get tenant_id from kb_id if not provided
         if tenant_id is None:
             tenant_id = cls._kb_tenant(db, kb_id)
@@ -181,8 +176,7 @@ class DocMetadataService:
         if not doc_ids:
             return {}
         # SqlMetadataStore supports direct doc_ids lookup
-        if hasattr(store, "list_by_doc_ids") and not isinstance(store, type) \
-                and callable(getattr(store, "list_by_doc_ids", None)):
+        if hasattr(store, "list_by_doc_ids") and not isinstance(store, type) and callable(getattr(store, "list_by_doc_ids", None)):
             try:
                 return store.list_by_doc_ids(db, doc_ids)
             except NotImplementedError:
@@ -264,7 +258,7 @@ class DocMetadataService:
                 vt = _type(v)
                 if vt:
                     type_counter.setdefault(k, {})[vt] = type_counter.get(k, {}).get(vt, 0) + 1
-                for vv in (v if isinstance(v, list) else [v]):
+                for vv in v if isinstance(v, list) else [v]:
                     if vv is None:
                         continue
                     summary.setdefault(k, {})[str(vv)] = summary.get(k, {}).get(str(vv), 0) + 1
@@ -278,9 +272,7 @@ class DocMetadataService:
         return result
 
     @classmethod
-    def batch_update_metadata(cls, db: Session, kb_id: str, doc_ids: list[str],
-                              updates: list[dict] | None = None,
-                              deletes: list[dict] | None = None) -> int:
+    def batch_update_metadata(cls, db: Session, kb_id: str, doc_ids: list[str], updates: list[dict] | None = None, deletes: list[dict] | None = None) -> int:
         """Batch update/delete metadata fields across multiple documents."""
         updates = updates or []
         deletes = deletes or []

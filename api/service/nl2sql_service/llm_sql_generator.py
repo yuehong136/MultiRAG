@@ -16,7 +16,7 @@ class LLMSQLGenerator:
     """使用大语言模型(LLM)生成SQL查询的服务类"""
 
     # 编译正则表达式以提高性能
-    SQL_PATTERN = re.compile(r'```sql\s*([\s\S]*?)```')
+    SQL_PATTERN = re.compile(r"```sql\s*([\s\S]*?)```")
 
     def __init__(self, db: Session, user_id: Any):
         """
@@ -40,10 +40,10 @@ class LLMSQLGenerator:
             清理后的SQL查询字符串
         """
         # 查找第一个分号的位置
-        semicolon_pos = sql.find(';')
+        semicolon_pos = sql.find(";")
         if semicolon_pos > -1:
             # 如果分号后有内容，只保留分号前的部分和分号
-            return sql[:semicolon_pos + 1]
+            return sql[: semicolon_pos + 1]
         return sql
 
     def _extract_sql_from_response(self, response: str) -> tuple[str | None, bool]:
@@ -91,16 +91,11 @@ class LLMSQLGenerator:
             gen_conf = {
                 "temperature": 0.3,  # 降低温度以获得更确定的SQL结果
                 "top_p": 0.9,
-                "max_tokens": 8192
+                "max_tokens": 8192,
             }
 
             # 调用LLM处理提示词
-            response = await thread_pool_exec(
-                llm_model_instance.chat,
-                system="You are a SQL expert. Generate concise, correct SQL code based on the requirements.",
-                history=history,
-                gen_conf=gen_conf
-            )
+            response = await thread_pool_exec(llm_model_instance.chat, system="You are a SQL expert. Generate concise, correct SQL code based on the requirements.", history=history, gen_conf=gen_conf)
 
             # 提取SQL
             sql, success = self._extract_sql_from_response(response)

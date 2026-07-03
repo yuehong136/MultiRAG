@@ -73,11 +73,7 @@ class BaseTitleChunker(ABC):
     def extract_line_records(self):
         if self.from_upstream.output_format in {"markdown", "text", "html"}:
             payload = getattr(self.from_upstream, f"{self.from_upstream.output_format}_result") or ""
-            return [
-                {"text": line, "doc_type_kwd": "text", "img_id": None, "layout": "", PDF_POSITIONS_KEY: []}
-                for line in payload.split("\n")
-                if line
-            ]
+            return [{"text": line, "doc_type_kwd": "text", "img_id": None, "layout": "", PDF_POSITIONS_KEY: []} for line in payload.split("\n") if line]
 
         items = self.from_upstream.chunks if self.from_upstream.output_format == "chunks" else self.from_upstream.json_result
         return [
@@ -219,11 +215,7 @@ class BaseTitleChunker(ABC):
 
     def build_chunks_from_record_groups(self, record_groups):
         if self.from_upstream.output_format in ["markdown", "text", "html"]:
-            return [
-                {"text": "".join(record["text"] + "\n" for record in records)}
-                for records in record_groups
-                if records
-            ]
+            return [{"text": "".join(record["text"] + "\n" for record in records)} for records in record_groups if records]
 
         chunks = []
         for records in record_groups:

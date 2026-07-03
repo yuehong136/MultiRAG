@@ -17,8 +17,10 @@ class YoudaoRerank(DefaultRerank):
         self.model_name = model_name  # 修复：显式定义 model_name
         model_path = self.get_model_path(self.model_name.split("/")[-1] if "/" in self.model_name else self.model_name)
         from common import settings
+
         if not settings.LIGHTEN and not YoudaoRerank._model:
             from BCEmbedding import RerankerModel
+
             with YoudaoRerank._model_lock:
                 if not YoudaoRerank._model:
                     try:
@@ -48,7 +50,7 @@ class YoudaoRerank(DefaultRerank):
         :return: 模型的路径。
         """
         project_base = os.path.dirname(os.path.abspath(__file__))
-        models_path = os.path.join(project_base, 'models', model_name)
+        models_path = os.path.join(project_base, "models", model_name)
         if os.path.exists(models_path):
             return models_path
         return os.path.join(get_home_cache_dir(), model_name)
@@ -62,17 +64,14 @@ class YoudaoRerank(DefaultRerank):
         res = res = self._process_batch(pairs, max_batch_size=batch_size)
         return np.array(res), token_count
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     # 初始化 YoudaoRerank 实例
     reranker = YoudaoRerank()
 
     # 定义测试的查询和文本列表
     query = "这是一个查询文本。"
-    texts = [
-        "这是第一个要重排的文本。",
-        "这是第二个要重排的文本。",
-        "这是第三个要重排的文本。"
-    ]
+    texts = ["这是第一个要重排的文本。", "这是第二个要重排的文本。", "这是第三个要重排的文本。"]
 
     # 调用 similarity 方法，获取相似度分数和 token 计数
     scores, token_count = reranker.similarity(query, texts)

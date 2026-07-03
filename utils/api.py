@@ -60,25 +60,18 @@ from core.tools.tools_registry import dispatch_tool
 #     st.success("Fetched data from GLM-4!")
 #     return response_content
 
+
 # @st.cache_data(show_spinner="Fetching data from LLM...", ttl=60)
 def get_ai_recommend(api_token, model, messages, temperature, max_tokens, system_prompt):
-    gen_conf = {
-        "temperature": temperature,
-        "max_tokens": max_tokens
-    }
-    gen_conf_ernie = {
-        "temperature": temperature,
-        "max_output_tokens": max_tokens,
-        "system": system_prompt
-    }
+    gen_conf = {"temperature": temperature, "max_tokens": max_tokens}
+    gen_conf_ernie = {"temperature": temperature, "max_output_tokens": max_tokens, "system": system_prompt}
     if model.startswith("Doubao"):
-        model = 'ep-20240623093120-66vmh'
+        model = "ep-20240623093120-66vmh"
         gen_conf = gen_conf
     elif model.startswith("ERNIE"):
         gen_conf = gen_conf_ernie
     factory = ChatFactory(api_token, model)
     chat_instance = factory.get_chat_instance()
-
 
     response_container = st.empty()
     response_content = ""
@@ -108,6 +101,7 @@ def get_ai_recommend(api_token, model, messages, temperature, max_tokens, system
         return f"**ERROR**: {e}*"
     return response_content
 
+
 @st.cache_data(show_spinner="Fetching data from LLM...", ttl=60)
 def get_ai_response(api_token, model, messages, temperature, max_tokens, system_prompt, tools=None):
 
@@ -115,14 +109,14 @@ def get_ai_response(api_token, model, messages, temperature, max_tokens, system_
     def format_tool_params(params):
         properties = {}
         for param in params:
-            param_type = param['type']
-            if param_type == 'int':
-                param_type = 'integer'
-            elif param_type == 'str':
-                param_type = 'string'
-            elif param_type == 'tuple[int, int]':
-                param_type = {'type': 'array', 'items': {'type': 'integer'}, 'minItems': 2, 'maxItems': 2}
-            properties[param['name']] = {"type": param_type, "description": param['description']}
+            param_type = param["type"]
+            if param_type == "int":
+                param_type = "integer"
+            elif param_type == "str":
+                param_type = "string"
+            elif param_type == "tuple[int, int]":
+                param_type = {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2}
+            properties[param["name"]] = {"type": param_type, "description": param["description"]}
         return properties
 
     tool_definitions = []
@@ -130,14 +124,10 @@ def get_ai_response(api_token, model, messages, temperature, max_tokens, system_
         tool_definition = {
             "type": "function",
             "function": {
-                "name": tool['name'],
-                "description": tool['description'],
-                "parameters": {
-                    "type": "object",
-                    "properties": format_tool_params(tool['params']),
-                    "required": [param['name'] for param in tool['params'] if param['required']]
-                }
-            }
+                "name": tool["name"],
+                "description": tool["description"],
+                "parameters": {"type": "object", "properties": format_tool_params(tool["params"]), "required": [param["name"] for param in tool["params"] if param["required"]]},
+            },
         }
         tool_definitions.append(tool_definition)
 
@@ -145,19 +135,10 @@ def get_ai_response(api_token, model, messages, temperature, max_tokens, system_
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
-    gen_conf_has_tool = {
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-        "tools": tool_definitions,
-        "tool_choice": "auto"
-    }
-    gen_conf_ernie = {
-        "temperature": temperature,
-        "max_output_tokens": max_tokens,
-        "system": system_prompt
-    }
+    gen_conf_has_tool = {"temperature": temperature, "max_tokens": max_tokens, "tools": tool_definitions, "tool_choice": "auto"}
+    gen_conf_ernie = {"temperature": temperature, "max_output_tokens": max_tokens, "system": system_prompt}
     if model.startswith("Doubao"):
-        model = 'ep-20240623093120-66vmh'
+        model = "ep-20240623093120-66vmh"
         gen_conf = gen_conf_default
     elif model.startswith("gpt"):
         gen_conf = gen_conf_default
@@ -165,7 +146,7 @@ def get_ai_response(api_token, model, messages, temperature, max_tokens, system_
         gen_conf = gen_conf_ernie
     else:
         gen_conf = gen_conf_has_tool
-    if model == 'glm-4v':
+    if model == "glm-4v":
         factory = CVModelFactory(api_token, model)
         chat_instance = factory.get_model_instance()
     else:
@@ -195,8 +176,7 @@ def get_ai_response(api_token, model, messages, temperature, max_tokens, system_
         # 增加处理工具调用的逻辑
     for message in messages:
         if message["role"] == "assistant" and "tool_name" in message:
-            tool_response = dispatch_tool(message["tool_name"], message["tool_code"],
-                                          session_id=st.session_state.chat_name)
+            tool_response = dispatch_tool(message["tool_name"], message["tool_code"], session_id=st.session_state.chat_name)
             st.session_state.messages.append({"role": "tool", "content": tool_response})
             st.write(f"tool_response: {tool_response}")
 
@@ -210,9 +190,6 @@ def get_ai_response(api_token, model, messages, temperature, max_tokens, system_
         history_with_system_prompt = safe_messages
     else:
         history_with_system_prompt = [{"role": "system", "content": safe_system_prompt}] + safe_messages
-
-
-
 
     # 直接传递 history_with_system_prompt 给 chat_streamly 方法
     try:
@@ -249,6 +226,8 @@ def get_ai_response(api_token, model, messages, temperature, max_tokens, system_
         st.error(f"Unexpected error: {e},***看看API-KEY是否配置正确了呢？***")
         return f"**ERROR**: {e}*"
     return response_content
+
+
 @st.cache_data
 def process_user_input(input_text):
     return input_text.strip()

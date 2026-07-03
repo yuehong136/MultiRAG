@@ -22,7 +22,7 @@ class PromptTemplateUtil:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"模板文件未找到: {file_path}")
 
-        with open(file_path, encoding='utf-8') as f:
+        with open(file_path, encoding="utf-8") as f:
             return f.read()
 
     @staticmethod

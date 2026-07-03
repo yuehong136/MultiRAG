@@ -13,19 +13,14 @@ class A2UIParam(ComponentParamBase):
     """
     Define the A2UI component parameters.
     """
+
     def __init__(self):
         super().__init__()
         self.commands = []
         self.outputs = {
-            "commands": {
-                "type": "Array<Object>"
-            },
-            "surface_ids": {
-                "type": "Array<String>"
-            },
-            "surface_id": {
-                "type": "str"
-            },
+            "commands": {"type": "Array<Object>"},
+            "surface_ids": {"type": "Array<String>"},
+            "surface_id": {"type": "str"},
         }
 
     def check(self):

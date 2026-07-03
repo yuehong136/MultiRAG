@@ -23,11 +23,9 @@ class UserFileSelectionComponent(Component[UserFileSelectionComponentParam]):
         self.component_parameter: UserFileSelectionComponentParam = component_parameter
         super().__init__(component_parameter, node_id, self.name)
 
-    async def process(self, input_data: dict | None = None, context: WorkflowContext | None = None,
-                      **kwargs) -> dict:
+    async def process(self, input_data: dict | None = None, context: WorkflowContext | None = None, **kwargs) -> dict:
         file = input_data.get(self.component_parameter.input_definition.variable_name)
-        context.set(str(self.node_id),
-                    NodeIOData(output_data={self.component_parameter.input_definition.variable_name: file}))
+        context.set(str(self.node_id), NodeIOData(output_data={self.component_parameter.input_definition.variable_name: file}))
 
     def validate_inputs(self):
         pass
@@ -36,14 +34,13 @@ class UserFileSelectionComponent(Component[UserFileSelectionComponentParam]):
         pass
 
     @staticmethod
-    def decode(json: json) -> 'UserFileSelectionComponent':
-        node_json = json['node']
-        node_id = node_json['id']
-        component_param = node_json['data']['componentParam']
-        variable_name = component_param['input_definition']['variable_name']
-        variable_type = component_param['input_definition']['variable_type']
-        user_file_selection_param = UserFileSelectionComponentParam(
-            UserFileSelectionComponentInputDefinition(variable_name, variable_type))
+    def decode(json: json) -> "UserFileSelectionComponent":
+        node_json = json["node"]
+        node_id = node_json["id"]
+        component_param = node_json["data"]["componentParam"]
+        variable_name = component_param["input_definition"]["variable_name"]
+        variable_type = component_param["input_definition"]["variable_type"]
+        user_file_selection_param = UserFileSelectionComponentParam(UserFileSelectionComponentInputDefinition(variable_name, variable_type))
         return UserFileSelectionComponent(user_file_selection_param, node_id)
 
 

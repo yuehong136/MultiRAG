@@ -72,20 +72,16 @@ class MCPServerService(CommonService):
                 "url": server.url,
                 "description": server.description,
                 "variables": server.variables,
-                "update_date": server.update_date
+                "update_date": server.update_date,
             }
             server_list.append(server_dict)
 
         return server_list
 
-
     @classmethod
     def get_by_name_and_tenant(cls, db: Session, name: str, tenant_id: str):
         try:
-            mcp_server = db.query(cls.model).filter_by(
-                name=name,
-                tenant_id=tenant_id
-            ).first()
+            mcp_server = db.query(cls.model).filter_by(name=name, tenant_id=tenant_id).first()
             return bool(mcp_server), mcp_server
         except SQLAlchemyError:
             return False, None
@@ -94,9 +90,7 @@ class MCPServerService(CommonService):
     def delete_by_tenant_id(cls, db: Session, tenant_id: str) -> int:
         """根据tenant_id删除所有相关的MCP服务器配置记录"""
         try:
-            result = db.query(cls.model).filter(
-                cls.model.tenant_id == tenant_id
-            ).delete(synchronize_session=False)
+            result = db.query(cls.model).filter(cls.model.tenant_id == tenant_id).delete(synchronize_session=False)
             db.commit()
             return result
         except Exception as e:

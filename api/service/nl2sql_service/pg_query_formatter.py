@@ -5,13 +5,7 @@ import pandas as pd
 import psycopg2
 
 
-def connect_to_postgres(
-        host: str,
-        port: int,
-        database: str,
-        user: str,
-        password: str
-) -> psycopg2.extensions.connection | None:
+def connect_to_postgres(host: str, port: int, database: str, user: str, password: str) -> psycopg2.extensions.connection | None:
     """
     连接到PostgreSQL数据库
 
@@ -26,23 +20,14 @@ def connect_to_postgres(
         如果连接成功，返回连接对象；否则返回None
     """
     try:
-        conn = psycopg2.connect(
-            host=host,
-            port=port,
-            database=database,
-            user=user,
-            password=password
-        )
+        conn = psycopg2.connect(host=host, port=port, database=database, user=user, password=password)
         return conn
     except Exception as e:
         print(f"连接数据库时出错: {e}")
         return None
 
 
-def execute_query(
-        conn: psycopg2.extensions.connection,
-        sql: str
-) -> pd.DataFrame | None:
+def execute_query(conn: psycopg2.extensions.connection, sql: str) -> pd.DataFrame | None:
     """
     执行SQL查询并返回结果
 
@@ -116,29 +101,23 @@ def infer_column_types(df: pd.DataFrame) -> list[dict[str, str]]:
         else:
             # 如果列全是空值，则使用pandas dtype
             pandas_type = str(df[column].dtype)
-            if 'int' in pandas_type:
-                type_name = 'integer'
-            elif 'float' in pandas_type:
-                type_name = 'float'
-            elif 'bool' in pandas_type:
-                type_name = 'boolean'
-            elif 'datetime' in pandas_type:
-                type_name = 'date'
+            if "int" in pandas_type:
+                type_name = "integer"
+            elif "float" in pandas_type:
+                type_name = "float"
+            elif "bool" in pandas_type:
+                type_name = "boolean"
+            elif "datetime" in pandas_type:
+                type_name = "date"
             else:
-                type_name = 'string'  # 默认为字符串类型
+                type_name = "string"  # 默认为字符串类型
 
-        column_and_type.append({
-            "column_name": column,
-            "type": type_name
-        })
+        column_and_type.append({"column_name": column, "type": type_name})
 
     return column_and_type
 
 
-def execute_sql_and_format_result(
-        db_config: dict[str, Any] | None,
-        sql: str
-) -> dict[str, Any]:
+def execute_sql_and_format_result(db_config: dict[str, Any] | None, sql: str) -> dict[str, Any]:
     """
     连接PostgreSQL数据库并执行查询，返回完整的查询结果，并格式化为指定格式
 
@@ -150,20 +129,14 @@ def execute_sql_and_format_result(
         包含查询结果的字典，格式为 {"column_and_type": [...], "sql_result": {"columns": [...], "data": [...]}}
     """
     if db_config is None:
-        db_config = {
-            'host': '122.112.237.137',
-            'port': 5432,
-            'database': 'postgres',
-            'user': 'usr_data',
-            'password': 'Dtv123546@dev'
-        }
+        db_config = {"host": "122.112.237.137", "port": 5432, "database": "postgres", "user": "usr_data", "password": "Dtv123546@dev"}
 
     # 从配置中获取连接信息
-    host = db_config.get('host', '122.112.237.137')
-    port = db_config.get('port', 5432)
-    database = db_config.get('database', 'postgres')
-    user = db_config.get('user', 'usr_data')
-    password = db_config.get('password', 'Dtv123546@dev')
+    host = db_config.get("host", "122.112.237.137")
+    port = db_config.get("port", 5432)
+    database = db_config.get("database", "postgres")
+    user = db_config.get("user", "usr_data")
+    password = db_config.get("password", "Dtv123546@dev")
 
     # 连接数据库
     conn = connect_to_postgres(host, port, database, user, password)
@@ -176,14 +149,7 @@ def execute_sql_and_format_result(
         df = execute_query(conn, sql)
 
         if df is None:
-            return {
-                "column_and_type": [],
-                "sql_result": {
-                    "columns": [],
-                    "data": []
-                },
-                "error": "查询执行失败"
-            }
+            return {"column_and_type": [], "sql_result": {"columns": [], "data": []}, "error": "查询执行失败"}
 
         # 从数据中推断列类型
         column_and_type = infer_column_types(df)
@@ -201,19 +167,13 @@ def execute_sql_and_format_result(
                 if pd.isna(value):
                     row_dict[col] = None
                 elif isinstance(value, (datetime.date, datetime.datetime)):
-                    row_dict[col] = value.strftime('%Y-%m-%d')
+                    row_dict[col] = value.strftime("%Y-%m-%d")
                 else:
                     row_dict[col] = value
             data.append(row_dict)
 
         # 构建返回结果
-        result = {
-            "column_and_type": column_and_type,
-            "sql_result": {
-                "columns": columns,
-                "data": data
-            }
-        }
+        result = {"column_and_type": column_and_type, "sql_result": {"columns": columns, "data": data}}
 
         return result
     finally:
@@ -226,11 +186,11 @@ def execute_sql_and_format_result(
 if __name__ == "__main__":
     # 数据库连接配置
     db_config = {
-        'host': '122.112.237.137',  # 数据库主机地址
-        'port': 5432,  # 端口
-        'database': 'postgres',  # 数据库名称
-        'user': 'usr_data',  # 用户名
-        'password': 'Dtv123546@dev'  # 密码
+        "host": "122.112.237.137",  # 数据库主机地址
+        "port": 5432,  # 端口
+        "database": "postgres",  # 数据库名称
+        "user": "usr_data",  # 用户名
+        "password": "Dtv123546@dev",  # 密码
     }
 
     # 示例SQL查询

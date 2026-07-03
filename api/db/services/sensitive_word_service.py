@@ -39,10 +39,7 @@ class ACAutomaton:
 
         if current not in self.output:
             self.output[current] = []
-        self.output[current].append({
-            'word': word,
-            'info': word_info or {}
-        })
+        self.output[current].append({"word": word, "info": word_info or {}})
 
     def build_failure_function(self):
         """构建失败函数"""
@@ -97,14 +94,9 @@ class ACAutomaton:
             # 检查输出
             if current_state in self.output:
                 for match in self.output[current_state]:
-                    word = match['word']
+                    word = match["word"]
                     start_pos = i - len(word) + 1
-                    results.append({
-                        'word': word,
-                        'start': start_pos,
-                        'end': i + 1,
-                        'info': match['info']
-                    })
+                    results.append({"word": word, "start": start_pos, "end": i + 1, "info": match["info"]})
 
         return results
 
@@ -120,7 +112,7 @@ class RegexMatcher:
         try:
             # 编译正则表达式，提高匹配性能
             flags = 0
-            if not word_info.get('case_sensitive', False):
+            if not word_info.get("case_sensitive", False):
                 flags |= re.IGNORECASE
 
             compiled_pattern = re.compile(pattern, flags)
@@ -135,14 +127,7 @@ class RegexMatcher:
         for pattern, word_info in self.patterns:
             try:
                 for match in pattern.finditer(text):
-                    results.append({
-                        'word': match.group(),
-                        'start': match.start(),
-                        'end': match.end(),
-                        'info': word_info,
-                        'match_type': 'regex',
-                        'pattern': pattern.pattern
-                    })
+                    results.append({"word": match.group(), "start": match.start(), "end": match.end(), "info": word_info, "match_type": "regex", "pattern": pattern.pattern})
             except Exception as e:
                 logging.warning(f"正则匹配失败 '{pattern.pattern}': {e}")
 
@@ -161,12 +146,12 @@ class PartialMatcher:
         # * -> .*  (匹配任意字符)
         # ? -> .   (匹配单个字符)
         regex_pattern = re.escape(pattern)
-        regex_pattern = regex_pattern.replace(r'\*', '.*').replace(r'\?', '.')
-        regex_pattern = f'({regex_pattern})'  # 添加捕获组
+        regex_pattern = regex_pattern.replace(r"\*", ".*").replace(r"\?", ".")
+        regex_pattern = f"({regex_pattern})"  # 添加捕获组
 
         try:
             flags = 0
-            if not word_info.get('case_sensitive', False):
+            if not word_info.get("case_sensitive", False):
                 flags |= re.IGNORECASE
 
             compiled_pattern = re.compile(regex_pattern, flags)
@@ -181,14 +166,7 @@ class PartialMatcher:
         for pattern, word_info, original_pattern in self.patterns:
             try:
                 for match in pattern.finditer(text):
-                    results.append({
-                        'word': match.group(),
-                        'start': match.start(),
-                        'end': match.end(),
-                        'info': word_info,
-                        'match_type': 'partial',
-                        'pattern': original_pattern
-                    })
+                    results.append({"word": match.group(), "start": match.start(), "end": match.end(), "info": word_info, "match_type": "partial", "pattern": original_pattern})
             except Exception as e:
                 logging.warning(f"部分匹配失败 '{original_pattern}': {e}")
 
@@ -200,32 +178,28 @@ class PIIDetector:
 
     def __init__(self):
         self.patterns = {
-            'phone': [
-                r'1[3-9]\d{9}',  # 中国手机号
-                r'\+86\s*1[3-9]\d{9}',  # 带国际区号的中国手机号
+            "phone": [
+                r"1[3-9]\d{9}",  # 中国手机号
+                r"\+86\s*1[3-9]\d{9}",  # 带国际区号的中国手机号
             ],
-            'email': [
-                r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+            "email": [r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"],
+            "id_card": [
+                r"\b\d{15}\b",  # 15位身份证号
+                r"\b\d{17}[\dXx]\b",  # 18位身份证号
             ],
-            'id_card': [
-                r'\b\d{15}\b',  # 15位身份证号
-                r'\b\d{17}[\dXx]\b',  # 18位身份证号
+            "bank_card": [
+                r"\b\d{16,19}\b"  # 银行卡号
             ],
-            'bank_card': [
-                r'\b\d{16,19}\b'  # 银行卡号
-            ],
-            'ip_address': [
-                r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b'
-            ]
+            "ip_address": [r"\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b"],
         }
 
         # PII类型的替换文本
         self.pii_types = {
-            'phone': {'name': '手机号', 'replacement': '[手机号]'},
-            'email': {'name': '邮箱', 'replacement': '[邮箱]'},
-            'id_card': {'name': '身份证', 'replacement': '[身份证]'},
-            'bank_card': {'name': '银行卡', 'replacement': '[银行卡]'},
-            'ip_address': {'name': 'IP地址', 'replacement': '[IP地址]'}
+            "phone": {"name": "手机号", "replacement": "[手机号]"},
+            "email": {"name": "邮箱", "replacement": "[邮箱]"},
+            "id_card": {"name": "身份证", "replacement": "[身份证]"},
+            "bank_card": {"name": "银行卡", "replacement": "[银行卡]"},
+            "ip_address": {"name": "IP地址", "replacement": "[IP地址]"},
         }
 
     def detect(self, text: str) -> list[dict]:
@@ -236,14 +210,10 @@ class PIIDetector:
             for pattern in patterns:
                 matches = re.finditer(pattern, text)
                 for match in matches:
-                    results.append({
-                        'type': pii_type,
-                        'value': match.group(),
-                        'start': match.start(),
-                        'end': match.end()
-                    })
+                    results.append({"type": pii_type, "value": match.group(), "start": match.start(), "end": match.end()})
 
         return results
+
 
 #
 # class SensitiveWordCacheManager:

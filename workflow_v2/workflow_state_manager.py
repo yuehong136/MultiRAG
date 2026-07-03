@@ -10,10 +10,12 @@ class WorkflowStateManager:
     负责保存和分发工作流状态信息，并包含自动清理机制
     """
 
-    def __init__(self,
-                 max_inactive_time=180,  # 默认保留180s非活动工作流
-                 max_history_states=50,  # 每个工作流默认最多保留50条历史状态
-                 cleanup_interval=300):  # 默认每5分钟清理一次
+    def __init__(
+        self,
+        max_inactive_time=180,  # 默认保留180s非活动工作流
+        max_history_states=50,  # 每个工作流默认最多保留50条历史状态
+        cleanup_interval=300,
+    ):  # 默认每5分钟清理一次
         # 保存每个工作流的状态订阅者: workflow_id -> list of queues
         self._subscribers: dict[str, list[asyncio.Queue]] = {}
         # 保存每个工作流的最新状态: workflow_id -> state
@@ -75,7 +77,7 @@ class WorkflowStateManager:
             for workflow_id, states in self._history_states.items():
                 if len(states) > self.max_history_states:
                     # 只保留最新的max_history_states条记录
-                    self._history_states[workflow_id] = states[-self.max_history_states:]
+                    self._history_states[workflow_id] = states[-self.max_history_states :]
 
     async def clear_workflow_state(self, workflow_id: str) -> None:
         """
@@ -191,14 +193,9 @@ class WorkflowStateManager:
                 for queue in self._subscribers[workflow_id]:
                     await queue.put(state)
 
-    async def publish_node_state(self,
-                                 workflow_id: str,
-                                 node_id: str,
-                                 node_title: str,
-                                 status: str,
-                                 started_at: float | None = None,
-                                 execution_time: float | None = None,
-                                 error_message: str | None = None) -> None:
+    async def publish_node_state(
+        self, workflow_id: str, node_id: str, node_title: str, status: str, started_at: float | None = None, execution_time: float | None = None, error_message: str | None = None
+    ) -> None:
         """
         发布节点状态更新
 
@@ -217,7 +214,7 @@ class WorkflowStateManager:
                 "id": node_id,
                 "title": node_title,
                 "status": status,
-            }
+            },
         }
 
         if started_at is not None:
@@ -242,11 +239,7 @@ class WorkflowStateManager:
         if not self._started:
             await self.start()
 
-        state = {
-            "workflow_id": workflow_id,
-            "status": "completed",
-            "timestamp": self._current_timestamp()
-        }
+        state = {"workflow_id": workflow_id, "status": "completed", "timestamp": self._current_timestamp()}
 
         async with self._lock:
             # 更新最后活跃时间

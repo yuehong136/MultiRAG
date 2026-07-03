@@ -19,15 +19,15 @@ class Batch:
     ref_name: str
 
     @staticmethod
-    def parse_batch(json_data: str) -> list['Batch']:
+    def parse_batch(json_data: str) -> list["Batch"]:
         if json_data is None:
             return []
 
         batch_list = []
 
         for item in json_data:
-            name = item['name']
-            value = item['value']
+            name = item["name"]
+            value = item["value"]
 
             if len(value) >= 2:
                 ref_node_id = str(value[0])
@@ -76,7 +76,7 @@ class NodeParameter(ABC):
     pass
 
 
-T = TypeVar('T', bound=NodeParameter)
+T = TypeVar("T", bound=NodeParameter)
 
 
 class Node(ABC, Generic[T]):
@@ -85,9 +85,7 @@ class Node(ABC, Generic[T]):
         self.node_parameter: T = node_parameter
 
     @abstractmethod
-    async def process(self, input_data: dict | None = None, context: WorkflowContext | None = None,
-                      db: Session = Depends(get_db),
-                      user=None) -> dict | None:
+    async def process(self, input_data: dict | None = None, context: WorkflowContext | None = None, db: Session = Depends(get_db), user=None) -> dict | None:
         pass
 
     @abstractmethod

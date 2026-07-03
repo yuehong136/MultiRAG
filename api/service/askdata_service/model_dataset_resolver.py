@@ -15,11 +15,11 @@ class ModelDatasetResolver:
         self.semantic_api_client = semantic_api_client
 
     async def get_model_details_and_determine_dataset(
-            self,
-            model_ids: list[str],
-            used_models: list[str],
-            dataset_id_list: list[str],
-            cached_model_details: list | None = None,
+        self,
+        model_ids: list[str],
+        used_models: list[str],
+        dataset_id_list: list[str],
+        cached_model_details: list | None = None,
     ) -> tuple[dict, dict, list, set]:
         """
         构建模型详情字典，并确定使用的数据集
@@ -40,9 +40,7 @@ class ModelDatasetResolver:
         if len(dataset_id_list) == 1:
             logger.info(f"只传入一个数据集ID: {dataset_id_list[0]}，跳过数据集验证")
 
-            used_model_detail_dict, used_table_detail_dict, model_list = await self._build_model_dicts(
-                model_ids, used_models, cached_model_details
-            )
+            used_model_detail_dict, used_table_detail_dict, model_list = await self._build_model_dicts(model_ids, used_models, cached_model_details)
 
             return used_model_detail_dict, used_table_detail_dict, model_list, set(dataset_id_list)
 
@@ -56,7 +54,7 @@ class ModelDatasetResolver:
         model_detail_list = await self._get_model_details(model_ids, cached_model_details)
 
         # 筛选实际使用的模型
-        matched_models = [m for m in model_detail_list if m.get('modelName') in used_models]
+        matched_models = [m for m in model_detail_list if m.get("modelName") in used_models]
 
         # 并行补全缺少 dimsAndMetrics 的模型
         await self._ensure_dims_and_metrics(matched_models)
@@ -68,10 +66,7 @@ class ModelDatasetResolver:
             used_table_detail_dict[model_detail["tableName"]] = model_detail
 
             # 收集该模型所在的数据集
-            used_in_dataset_ids = [
-                dataset["datasetId"]
-                for dataset in model_detail.get("usedInDatasets", [])
-            ]
+            used_in_dataset_ids = [dataset["datasetId"] for dataset in model_detail.get("usedInDatasets", [])]
             model_in_dataset_dict[model_detail["modelId"]] = used_in_dataset_ids
 
         # 3. 确定最终使用的数据集
@@ -80,14 +75,14 @@ class ModelDatasetResolver:
         return used_model_detail_dict, used_table_detail_dict, model_list, final_dataset_ids
 
     async def _get_model_details(
-            self,
-            model_ids: list[str],
-            cached_model_details: list | None,
+        self,
+        model_ids: list[str],
+        cached_model_details: list | None,
     ) -> list:
         """缓存优先获取模型详情，缓存未命中则调用 API"""
         if cached_model_details:
             # 检查缓存是否覆盖了所有需要的 model_ids
-            cached_ids = {m.get('modelId') for m in cached_model_details}
+            cached_ids = {m.get("modelId") for m in cached_model_details}
             missing_ids = [mid for mid in model_ids if mid not in cached_ids]
             if not missing_ids:
                 logger.info(f"模型详情全部命中缓存 ({len(cached_model_details)} 个)")
@@ -102,18 +97,13 @@ class ModelDatasetResolver:
 
     async def _ensure_dims_and_metrics(self, model_details: list) -> None:
         """并行补全缺少 dimsAndMetrics 的模型（gather 替代串行 await）"""
-        models_needing_fetch = [m for m in model_details if 'dimsAndMetrics' not in m]
+        models_needing_fetch = [m for m in model_details if "dimsAndMetrics" not in m]
         if not models_needing_fetch:
             logger.info("所有模型的 dimsAndMetrics 已从缓存获取，跳过 API 调用")
             return
 
         logger.info(f"需要从 API 获取 {len(models_needing_fetch)} 个模型的 dimsAndMetrics")
-        tasks = [
-            self.semantic_api_client.get_model_inds_and_dims_by_model_id_async(
-                model_id=m["modelId"]
-            )
-            for m in models_needing_fetch
-        ]
+        tasks = [self.semantic_api_client.get_model_inds_and_dims_by_model_id_async(model_id=m["modelId"]) for m in models_needing_fetch]
         # dims/metrics 是「非关键、可降级」依赖：中台 getModelIndsAndDimsByModelId 超时/失败时
         # 降级为空维度/指标继续，避免任一模型把整问题拖垮（与 askdata_service 的引擎 B 同源加固；
         # 这里是第二个隐藏的硬依赖——B 当初只覆盖了 model_relations）。
@@ -124,18 +114,17 @@ class ModelDatasetResolver:
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for model_detail, dims_metrics in zip(models_needing_fetch, results):
             if isinstance(dims_metrics, BaseException):
-                logger.warning("[dims_metrics] 获取模型 %s 的维度/指标失败，降级为空继续: %r",
-                               model_detail.get("modelId"), dims_metrics)
+                logger.warning("[dims_metrics] 获取模型 %s 的维度/指标失败，降级为空继续: %r", model_detail.get("modelId"), dims_metrics)
                 dims_metrics = {"dimensions": [], "metrics": []}
             elif not isinstance(dims_metrics, dict):  # 中台空返回时 provider 返回 None，统一成空容器
                 dims_metrics = {"dimensions": [], "metrics": []}
-            model_detail['dimsAndMetrics'] = dims_metrics
+            model_detail["dimsAndMetrics"] = dims_metrics
 
     async def _build_model_dicts(
-            self,
-            model_ids: list[str],
-            used_models: list[str],
-            cached_model_details: list | None = None,
+        self,
+        model_ids: list[str],
+        used_models: list[str],
+        cached_model_details: list | None = None,
     ) -> tuple[dict, dict, list]:
         """
         构建模型相关的字典（仅用于单数据集场景）
@@ -147,7 +136,7 @@ class ModelDatasetResolver:
         model_detail_list = await self._get_model_details(model_ids, cached_model_details)
 
         # 筛选实际使用的模型
-        matched_models = [m for m in model_detail_list if m.get('modelName') in used_models]
+        matched_models = [m for m in model_detail_list if m.get("modelName") in used_models]
 
         # 并行补全缺少 dimsAndMetrics 的模型
         await self._ensure_dims_and_metrics(matched_models)
@@ -159,11 +148,7 @@ class ModelDatasetResolver:
 
         return used_model_detail_dict, used_table_detail_dict, model_list
 
-    def _determine_dataset(
-            self,
-            model_in_dataset_dict: dict[str, list[str]],
-            dataset_id_list: list[str]
-    ) -> set[str]:
+    def _determine_dataset(self, model_in_dataset_dict: dict[str, list[str]], dataset_id_list: list[str]) -> set[str]:
         """
         确定最终使用的数据集ID
         """
@@ -200,10 +185,7 @@ class ModelDatasetResolver:
         logger.info(f"成功确定唯一数据集: {result_dataset_ids}")
         return result_dataset_ids
 
-    def _get_dataset_intersection_or_most_frequent(
-            self,
-            data_dict: dict[str, list[str]]
-    ) -> set[str]:
+    def _get_dataset_intersection_or_most_frequent(self, data_dict: dict[str, list[str]]) -> set[str]:
         """
         获取所有模型数据集的交集，如果没有交集则返回出现次数最多的数据集
 
@@ -247,10 +229,7 @@ class ModelDatasetResolver:
         max_count = counter.most_common(1)[0][1]
 
         # 获取所有出现次数最多的数据集
-        most_frequent_datasets = {
-            dataset for dataset, count in counter.items()
-            if count == max_count
-        }
+        most_frequent_datasets = {dataset for dataset, count in counter.items() if count == max_count}
 
         logger.info(f"出现频率最高的数据集(出现{max_count}次): {most_frequent_datasets}")
 

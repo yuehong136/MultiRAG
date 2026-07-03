@@ -1,4 +1,5 @@
 """Blob storage connector"""
+
 import logging
 import os
 from datetime import UTC, datetime
@@ -45,26 +46,18 @@ class BlobStorageConnector(LoadConnector, PollConnector):
 
     def load_credentials(self, credentials: dict[str, Any]) -> dict[str, Any] | None:
         """Load credentials"""
-        logging.debug(
-            f"Loading credentials for {self.bucket_name} of type {self.bucket_type}"
-        )
+        logging.debug(f"Loading credentials for {self.bucket_name} of type {self.bucket_type}")
 
         # Validate credentials
         if self.bucket_type == BlobType.R2:
-            if not all(
-                credentials.get(key)
-                for key in ["r2_access_key_id", "r2_secret_access_key", "account_id"]
-            ):
+            if not all(credentials.get(key) for key in ["r2_access_key_id", "r2_secret_access_key", "account_id"]):
                 raise ConnectorMissingCredentialError("Cloudflare R2")
 
         elif self.bucket_type == BlobType.S3:
             authentication_method = credentials.get("authentication_method", "access_key")
 
             if authentication_method == "access_key":
-                if not all(
-                    credentials.get(key)
-                    for key in ["aws_access_key_id", "aws_secret_access_key"]
-                ):
+                if not all(credentials.get(key) for key in ["aws_access_key_id", "aws_secret_access_key"]):
                     raise ConnectorMissingCredentialError("Amazon S3")
 
             elif authentication_method == "iam_role":
@@ -78,32 +71,22 @@ class BlobStorageConnector(LoadConnector, PollConnector):
                 raise ConnectorMissingCredentialError("Unsupported S3 authentication method")
 
         elif self.bucket_type == BlobType.GOOGLE_CLOUD_STORAGE:
-            if not all(
-                credentials.get(key) for key in ["access_key_id", "secret_access_key"]
-            ):
+            if not all(credentials.get(key) for key in ["access_key_id", "secret_access_key"]):
                 raise ConnectorMissingCredentialError("Google Cloud Storage")
 
         elif self.bucket_type == BlobType.OCI_STORAGE:
-            if not all(
-                credentials.get(key)
-                for key in ["namespace", "region", "access_key_id", "secret_access_key"]
-            ):
+            if not all(credentials.get(key) for key in ["namespace", "region", "access_key_id", "secret_access_key"]):
                 raise ConnectorMissingCredentialError("Oracle Cloud Infrastructure")
 
         elif self.bucket_type == BlobType.S3_COMPATIBLE:
-            if not all(
-                credentials.get(key)
-                for key in ["endpoint_url", "aws_access_key_id", "aws_secret_access_key", "addressing_style"]
-            ):
+            if not all(credentials.get(key) for key in ["endpoint_url", "aws_access_key_id", "aws_secret_access_key", "addressing_style"]):
                 raise ConnectorMissingCredentialError("S3 Compatible Storage")
 
         else:
             raise ValueError(f"Unsupported bucket type: {self.bucket_type}")
 
         # Create S3 client
-        self.s3_client = create_s3_client(
-            self.bucket_type, credentials, self.european_residency
-        )
+        self.s3_client = create_s3_client(self.bucket_type, credentials, self.european_residency)
 
         # Detect bucket region (only important for S3)
         if self.bucket_type == BlobType.S3:
@@ -148,14 +131,8 @@ class BlobStorageConnector(LoadConnector, PollConnector):
             key = obj["Key"]
 
             size_bytes = extract_size_bytes(obj)
-            if (
-                self.size_threshold is not None
-                and isinstance(size_bytes, int)
-                and size_bytes > self.size_threshold
-            ):
-                logging.warning(
-                    f"{file_name} exceeds size threshold of {self.size_threshold}. Skipping."
-                )
+            if self.size_threshold is not None and isinstance(size_bytes, int) and size_bytes > self.size_threshold:
+                logging.warning(f"{file_name} exceeds size threshold of {self.size_threshold}. Skipping.")
                 continue
 
             try:
@@ -167,8 +144,8 @@ class BlobStorageConnector(LoadConnector, PollConnector):
                 if filename_counts.get(file_name, 0) > 1:
                     relative_path = key
                     if self.prefix and key.startswith(self.prefix):
-                        relative_path = key[len(self.prefix):]
-                    semantic_id = relative_path.replace('/', ' / ') if relative_path else file_name
+                        relative_path = key[len(self.prefix) :]
+                    semantic_id = relative_path.replace("/", " / ") if relative_path else file_name
                 else:
                     semantic_id = file_name
 
@@ -180,7 +157,7 @@ class BlobStorageConnector(LoadConnector, PollConnector):
                         semantic_identifier=semantic_id,
                         extension=get_file_ext(file_name),
                         doc_updated_at=last_modified,
-                        size_bytes=size_bytes if size_bytes else 0
+                        size_bytes=size_bytes if size_bytes else 0,
                     )
                 )
                 if len(batch) == self.batch_size:
@@ -201,9 +178,7 @@ class BlobStorageConnector(LoadConnector, PollConnector):
             end=datetime.now(UTC),
         )
 
-    def poll_source(
-        self, start: SecondsSinceUnixEpoch, end: SecondsSinceUnixEpoch
-    ) -> GenerateDocumentsOutput:
+    def poll_source(self, start: SecondsSinceUnixEpoch, end: SecondsSinceUnixEpoch) -> GenerateDocumentsOutput:
         """Poll source to get documents"""
         if self.s3_client is None:
             raise ConnectorMissingCredentialError("Blob storage")
@@ -216,24 +191,18 @@ class BlobStorageConnector(LoadConnector, PollConnector):
     def validate_connector_settings(self) -> None:
         """Validate connector settings"""
         if self.s3_client is None:
-            raise ConnectorMissingCredentialError(
-                "Blob storage credentials not loaded."
-            )
+            raise ConnectorMissingCredentialError("Blob storage credentials not loaded.")
 
         if not self.bucket_name:
-            raise ConnectorValidationError(
-                "No bucket name was provided in connector settings."
-            )
+            raise ConnectorValidationError("No bucket name was provided in connector settings.")
 
         try:
             # Lightweight validation step
-            self.s3_client.list_objects_v2(
-                Bucket=self.bucket_name, Prefix=self.prefix, MaxKeys=1
-            )
+            self.s3_client.list_objects_v2(Bucket=self.bucket_name, Prefix=self.prefix, MaxKeys=1)
 
         except Exception as e:
-            error_code = getattr(e, 'response', {}).get('Error', {}).get('Code', '')
-            status_code = getattr(e, 'response', {}).get('ResponseMetadata', {}).get('HTTPStatusCode')
+            error_code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
+            status_code = getattr(e, "response", {}).get("ResponseMetadata", {}).get("HTTPStatusCode")
 
             # Common S3 error scenarios
             if error_code in [
@@ -242,27 +211,16 @@ class BlobStorageConnector(LoadConnector, PollConnector):
                 "SignatureDoesNotMatch",
             ]:
                 if status_code == 403 or error_code == "AccessDenied":
-                    raise InsufficientPermissionsError(
-                        f"Insufficient permissions to list objects in bucket '{self.bucket_name}'. "
-                        "Please check your bucket policy and/or IAM policy."
-                    )
+                    raise InsufficientPermissionsError(f"Insufficient permissions to list objects in bucket '{self.bucket_name}'. Please check your bucket policy and/or IAM policy.")
                 if status_code == 401 or error_code == "SignatureDoesNotMatch":
-                    raise CredentialExpiredError(
-                        "Provided blob storage credentials appear invalid or expired."
-                    )
+                    raise CredentialExpiredError("Provided blob storage credentials appear invalid or expired.")
 
-                raise CredentialExpiredError(
-                    f"Credential issue encountered ({error_code})."
-                )
+                raise CredentialExpiredError(f"Credential issue encountered ({error_code}).")
 
             if error_code == "NoSuchBucket" or status_code == 404:
-                raise ConnectorValidationError(
-                    f"Bucket '{self.bucket_name}' does not exist or cannot be found."
-                )
+                raise ConnectorValidationError(f"Bucket '{self.bucket_name}' does not exist or cannot be found.")
 
-            raise ConnectorValidationError(
-                f"Unexpected S3 client error (code={error_code}, status={status_code}): {e}"
-            )
+            raise ConnectorValidationError(f"Unexpected S3 client error (code={error_code}, status={status_code}): {e}")
 
 
 if __name__ == "__main__":

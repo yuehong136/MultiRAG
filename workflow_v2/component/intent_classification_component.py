@@ -19,26 +19,24 @@ class Intent:
 class IntentClassificationComponent(BaseComponent):
     """意图分类组件"""
 
-    def __init__(self, component_id: str, title: str, node_data: dict[str, Any],
-                 logger: WorkflowContextLogger, **kwargs):
+    def __init__(self, component_id: str, title: str, node_data: dict[str, Any], logger: WorkflowContextLogger, **kwargs):
         super().__init__(component_id, title, logger)
         self.llm_params: LLMParams = self._extract_llm_params(node_data)
         self.intents: list[Intent] = self._extract_intents(node_data)
 
-        self.db = kwargs.get('db', None)
-        self.user = kwargs.get('user', None)
+        self.db = kwargs.get("db", None)
+        self.user = kwargs.get("user", None)
         self.prompt: str = self._get_prompt()
 
     def _extract_llm_params(self, node_data: dict[str, Any]) -> LLMParams:
         """从节点数据中提取LLM参数"""
-        params_data = node_data['data']['inputs'].get('llmParam', [])
+        params_data = node_data["data"]["inputs"].get("llmParam", [])
         return LLMParams.from_params_list(params_data)
 
     def _extract_intents(self, node_data: dict[str, Any]) -> list[Intent]:
         """从节点数据中提取intents"""
-        intents_data = node_data['data']['inputs'].get('intents', [])
-        return [Intent(name=intent['name'], description=intent['desc'], example=intent['example']) for intent
-                in intents_data]
+        intents_data = node_data["data"]["inputs"].get("intents", [])
+        return [Intent(name=intent["name"], description=intent["desc"], example=intent["example"]) for intent in intents_data]
 
     def _get_prompt(self) -> str:
         """生成用于意图分类的提示词"""
@@ -54,23 +52,21 @@ class IntentClassificationComponent(BaseComponent):
 
             # 添加描述
             if intent.description.strip():
-                descriptions.append(
-                    f"--------------------\nCategory: {intent.name}\nDescription: {intent.description.strip()}\n"
-                )
+                descriptions.append(f"--------------------\nCategory: {intent.name}\nDescription: {intent.description.strip()}\n")
 
         # 构建提示词
         return f"""
 Role: You're a text classifier.
-Task: You need to categorize the user’s questions into {len(self.intents) + 1} categories, namely: {', '.join(intent.name for intent in self.intents)}, 其他意图.
+Task: You need to categorize the user’s questions into {len(self.intents) + 1} categories, namely: {", ".join(intent.name for intent in self.intents)}, 其他意图.
 
 Here's the description of each category:
-{'\n'.join(descriptions)}
+{"\n".join(descriptions)}
 
 Category: 其他意图
 Description: 用户意图与上述意图都不符合
 
 You could learn from the following examples:
-{'\n\n- '.join(cate_lines)}- Question: 你好，今天星期几  Category: 其他意图
+{"\n\n- ".join(cate_lines)}- Question: 你好，今天星期几  Category: 其他意图
 
 You could learn from the above examples.
 
@@ -90,9 +86,7 @@ Requirements:
             return {"classificationId": 0, "reason": "Empty query"}
 
         input_text = "Question: " + query + "\tCategory: "
-        model_config = get_model_config_by_type_and_name(
-            self.db, self.user.id, LLMType.CHAT.value, self.llm_params.model_name
-        )
+        model_config = get_model_config_by_type_and_name(self.db, self.user.id, LLMType.CHAT.value, self.llm_params.model_name)
         llm = LLMBundle(self.db, self.user.id, model_config)
         result = await llm.async_chat(
             self.prompt,

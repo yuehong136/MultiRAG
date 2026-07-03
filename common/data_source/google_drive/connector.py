@@ -1201,6 +1201,7 @@ if __name__ == "__main__":
     import time
 
     from common.data_source.google_util.util import get_credentials_from_env
+
     logging.basicConfig(level=logging.DEBUG)
 
     try:

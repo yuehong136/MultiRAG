@@ -8,6 +8,7 @@ logger = get_askdata_logger()
 
 class TableType(Enum):
     """表类型枚举"""
+
     FACT = "fact"  # 事实表
     DIMENSION = "dimension"  # 维度表
     MIXED = "mixed"  # 混合表
@@ -16,6 +17,7 @@ class TableType(Enum):
 @dataclass
 class TableScore:
     """表评分结果"""
+
     model_id: str
     model_name: str
     total_score: float
@@ -34,18 +36,13 @@ class MainTableDeterminer:
         self.semantic_keywords = {
             "fact": ["事实", "明细", "记录", "交易", "订单", "销售", "采购"],
             "measure": ["考核", "绩效", "评估", "统计", "汇总", "分析"],
-            "dimension": ["维度", "字典", "基础", "信息", "部门", "产品", "客户"]
+            "dimension": ["维度", "字典", "基础", "信息", "部门", "产品", "客户"],
         }
 
         # 时间维度字段标识
         self.time_dimension_keywords = ["date", "time", "year", "month", "day", "季度", "年份", "日期", "时间"]
 
-    def determine_main_table(
-        self,
-        dataset_detail: dict,
-        model_relationships: list[dict],
-        user_permissions: dict | None = None
-    ) -> tuple[str, TableScore]:
+    def determine_main_table(self, dataset_detail: dict, model_relationships: list[dict], user_permissions: dict | None = None) -> tuple[str, TableScore]:
         """
         确定主表
 
@@ -67,13 +64,7 @@ class MainTableDeterminer:
         # 计算每个模型的得分
         scores = []
         for model in models:
-            score = self._calculate_model_score(
-                model,
-                models,
-                metrics,
-                dimensions,
-                model_relationships
-            )
+            score = self._calculate_model_score(model, models, metrics, dimensions, model_relationships)
             scores.append(score)
 
         # 根据总分排序
@@ -85,14 +76,7 @@ class MainTableDeterminer:
 
         return main_table.model_id, main_table
 
-    def _calculate_model_score(
-        self,
-        model: dict,
-        all_models: list[dict],
-        metrics: list[dict],
-        dimensions: list[dict],
-        relationships: list[dict]
-    ) -> TableScore:
+    def _calculate_model_score(self, model: dict, all_models: list[dict], metrics: list[dict], dimensions: list[dict], relationships: list[dict]) -> TableScore:
         """计算单个模型的得分"""
         model_id = model.get("modelId")
         model_name = model.get("modelName", "")
@@ -108,7 +92,7 @@ class MainTableDeterminer:
         # 2. 指标评分 (权重40%)
         metric_score = self._calculate_metric_score(model_id, metrics)
         if metric_score > 30:
-            reasons.append(f"包含{int(metric_score/10)}个指标")
+            reasons.append(f"包含{int(metric_score / 10)}个指标")
 
         # 3. 维度评分 (权重20%)
         dimension_score = self._calculate_dimension_score(model_id, dimensions)
@@ -130,7 +114,7 @@ class MainTableDeterminer:
             metric_score=metric_score,
             dimension_score=dimension_score,
             semantic_score=semantic_score,
-            reasons=reasons
+            reasons=reasons,
         )
 
     def _calculate_relation_score(self, model_id: str, relationships: list[dict]) -> float:

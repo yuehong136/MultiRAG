@@ -20,34 +20,28 @@ class ComponentFactory:
     @staticmethod
     def create_component(node_data: dict[str, Any], logger: WorkflowContextLogger, **kwargs) -> BaseComponent:
         """从节点数据创建对应的组件实例"""
-        component_id = node_data['id']
-        title = node_data['data']['nodeMeta']['title']
-        node_type = node_data['type']
+        component_id = node_data["id"]
+        title = node_data["data"]["nodeMeta"]["title"]
+        node_type = node_data["type"]
 
         if node_type == "1" or node_type == 1:
             return StartComponent(component_id, title, logger)
         elif node_type == "2" or node_type == 2:
             return EndComponent(component_id, title, node_data, logger)
         elif node_type == "3" or node_type == 3:
-            return LLMComponent(component_id, title, node_data, logger,
-                                db=kwargs.get('db', None),
-                                user=kwargs.get('user', None))
+            return LLMComponent(component_id, title, node_data, logger, db=kwargs.get("db", None), user=kwargs.get("user", None))
         elif node_type == "4" or node_type == 4:
             return PluginComponent(component_id, title, node_data, logger)
         elif node_type == "5" or node_type == 5:
             return CodeComponent(component_id, title, node_data, logger)
         elif node_type == "6" or node_type == 6:
-            return KnowledgeBaseSearchComponent(component_id, title, node_data, logger,
-                                                db=kwargs.get('db', None),
-                                                user=kwargs.get('user', None))
+            return KnowledgeBaseSearchComponent(component_id, title, node_data, logger, db=kwargs.get("db", None), user=kwargs.get("user", None))
         elif node_type == "8" or node_type == 8:
             return SelectorComponent(component_id, title, node_data, logger)
         elif node_type == "9" or node_type == 9:
             return FileReaderComponent(component_id, title, node_data, logger)
         elif node_type == "22" or node_type == 22:
-            return IntentClassificationComponent(component_id, title, node_data, logger,
-                                                 db=kwargs.get('db', None),
-                                                 user=kwargs.get('user', None))
+            return IntentClassificationComponent(component_id, title, node_data, logger, db=kwargs.get("db", None), user=kwargs.get("user", None))
         elif node_type == "32" or node_type == 32:
             return VariableAggregationComponent(component_id, title, node_data, logger)
         else:

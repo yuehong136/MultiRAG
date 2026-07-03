@@ -16,13 +16,7 @@ class WideTableSQLGenerator:
     def __init__(self):
         self.main_table_determiner = MainTableDeterminer()
 
-    def generate_sql(
-            self,
-            dataset_detail: dict,
-            model_relationships: list[dict],
-            user_permissions: dict,
-            user_id: str
-    ) -> str:
+    def generate_sql(self, dataset_detail: dict, model_relationships: list[dict], user_permissions: dict, user_id: str) -> str:
         """
         生成宽表查询SQL
 
@@ -37,34 +31,16 @@ class WideTableSQLGenerator:
         """
         try:
             # 1. 确定主表
-            main_model_id, score_detail = self.main_table_determiner.determine_main_table(
-                dataset_detail,
-                model_relationships,
-                user_permissions
-            )
+            main_model_id, score_detail = self.main_table_determiner.determine_main_table(dataset_detail, model_relationships, user_permissions)
 
             # 2. 构建表关联关系图
-            join_graph = self._build_join_graph(
-                main_model_id,
-                dataset_detail.get("models", []),
-                model_relationships
-            )
+            join_graph = self._build_join_graph(main_model_id, dataset_detail.get("models", []), model_relationships)
 
             # 3. 应用权限过滤
-            filtered_fields = self._apply_permissions(
-                dataset_detail,
-                user_permissions,
-                user_id
-            )
+            filtered_fields = self._apply_permissions(dataset_detail, user_permissions, user_id)
 
             # 4. 生成SQL
-            sql = self._build_sql(
-                main_model_id,
-                dataset_detail.get("models", []),
-                join_graph,
-                filtered_fields,
-                user_permissions
-            )
+            sql = self._build_sql(main_model_id, dataset_detail.get("models", []), join_graph, filtered_fields, user_permissions)
 
             return sql
 
@@ -72,17 +48,9 @@ class WideTableSQLGenerator:
             logger.error(f"生成宽表SQL失败: {e!s}", exc_info=True)
             raise
 
-    def _build_join_graph(
-            self,
-            main_model_id: str,
-            models: list[dict],
-            relationships: list[dict]
-    ) -> dict:
+    def _build_join_graph(self, main_model_id: str, models: list[dict], relationships: list[dict]) -> dict:
         """构建JOIN关系图"""
-        join_graph = {
-            "main_table": main_model_id,
-            "joins": []
-        }
+        join_graph = {"main_table": main_model_id, "joins": []}
 
         # 建立模型ID到模型信息的映射
         model_map = {m["modelId"]: m for m in models}
@@ -109,7 +77,7 @@ class WideTableSQLGenerator:
                             "right_field": rel.get("targetField"),
                             "join_type": rel.get("joinType", "LEFT"),
                             "left_model_id": source_id,
-                            "right_model_id": target_id
+                            "right_model_id": target_id,
                         }
                         join_graph["joins"].append(join_info)
                         visited.add(target_id)
@@ -125,7 +93,7 @@ class WideTableSQLGenerator:
                             "right_field": rel.get("sourceField"),
                             "join_type": rel.get("joinType", "LEFT"),
                             "left_model_id": target_id,
-                            "right_model_id": source_id
+                            "right_model_id": source_id,
                         }
                         join_graph["joins"].append(join_info)
                         visited.add(source_id)
@@ -133,24 +101,13 @@ class WideTableSQLGenerator:
 
         return join_graph
 
-    def _apply_permissions(
-            self,
-            dataset_detail: dict,
-            user_permissions: dict,
-            user_id: str
-    ) -> dict:
+    def _apply_permissions(self, dataset_detail: dict, user_permissions: dict, user_id: str) -> dict:
         """应用权限过滤，返回允许访问的字段"""
-        filtered_fields = {
-            "dimensions": [],
-            "metrics": []
-        }
+        filtered_fields = {"dimensions": [], "metrics": []}
 
         if not user_permissions:
             # 没有权限信息，返回所有字段
-            return {
-                "dimensions": dataset_detail.get("dimensions", []),
-                "metrics": dataset_detail.get("metrics", [])
-            }
+            return {"dimensions": dataset_detail.get("dimensions", []), "metrics": dataset_detail.get("metrics", [])}
 
         # 获取权限配置
         data_permissions = user_permissions.get("dataPermissions", {})
@@ -169,8 +126,7 @@ class WideTableSQLGenerator:
                 dim_name_en = dim.get("dimname_en")
 
                 for allowed in allowed_columns:
-                    if (allowed.get("semanticId") == dim_id or
-                            allowed.get("semantic") == dim_name_en):
+                    if allowed.get("semanticId") == dim_id or allowed.get("semantic") == dim_name_en:
                         filtered_fields["dimensions"].append(dim)
                         break
             else:
@@ -187,8 +143,7 @@ class WideTableSQLGenerator:
                 metric_name_en = metric.get("indname_en")
 
                 for allowed in allowed_columns:
-                    if (allowed.get("semanticId") == metric_id or
-                            allowed.get("semantic") == metric_name_en):
+                    if allowed.get("semanticId") == metric_id or allowed.get("semantic") == metric_name_en:
                         filtered_fields["metrics"].append(metric)
                         break
             else:
@@ -197,14 +152,7 @@ class WideTableSQLGenerator:
 
         return filtered_fields
 
-    def _build_sql(
-            self,
-            main_model_id: str,
-            models: list[dict],
-            join_graph: dict,
-            filtered_fields: dict,
-            user_permissions: dict
-    ) -> str:
+    def _build_sql(self, main_model_id: str, models: list[dict], join_graph: dict, filtered_fields: dict, user_permissions: dict) -> str:
         """构建最终的SQL语句"""
         # 建立模型映射
         model_map = {m["modelId"]: m for m in models}
@@ -232,7 +180,7 @@ class WideTableSQLGenerator:
                 alias = table_aliases[table_name]
                 field_name = dim["dimname_en"]
                 field_label = dim["dimensionname"]
-                select_fields.append(f"{alias}.{field_name} AS \"{field_label}\"")
+                select_fields.append(f'{alias}.{field_name} AS "{field_label}"')
 
         # 添加指标字段（只选择已JOIN表的字段）
         for metric in filtered_fields["metrics"]:
@@ -241,7 +189,7 @@ class WideTableSQLGenerator:
                 alias = table_aliases[table_name]
                 field_name = metric["indname_en"]
                 field_label = metric["metricname"]
-                select_fields.append(f"{alias}.{field_name} AS \"{field_label}\"")
+                select_fields.append(f'{alias}.{field_name} AS "{field_label}"')
 
         # 如果没有字段，至少选择一个
         if not select_fields:
@@ -258,25 +206,18 @@ class WideTableSQLGenerator:
             right_alias = table_aliases[join["right_table"]]
             join_type = join["join_type"]
 
-            join_clause = (
-                f"{join_type} JOIN {join['right_table']} {right_alias} "
-                f"ON {left_alias}.{join['left_field']} = {right_alias}.{join['right_field']}"
-            )
+            join_clause = f"{join_type} JOIN {join['right_table']} {right_alias} ON {left_alias}.{join['left_field']} = {right_alias}.{join['right_field']}"
             join_clauses.append(join_clause)
 
         # 构建WHERE子句（只为已JOIN的表构建）
         where_clauses = self._build_where_clauses(
             joined_models,  # 只传递已JOIN的模型
             table_aliases,
-            user_permissions
+            user_permissions,
         )
 
         # 组装SQL
-        sql_parts = [
-            "SELECT",
-            "    " + ",\n    ".join(select_fields),
-            f"FROM {from_clause}"
-        ]
+        sql_parts = ["SELECT", "    " + ",\n    ".join(select_fields), f"FROM {from_clause}"]
 
         if join_clauses:
             sql_parts.extend(join_clauses)
@@ -320,12 +261,7 @@ class WideTableSQLGenerator:
 
         return aliases
 
-    def _build_where_clauses(
-            self,
-            models: list[dict],
-            table_aliases: dict[str, str],
-            user_permissions: dict
-    ) -> str:
+    def _build_where_clauses(self, models: list[dict], table_aliases: dict[str, str], user_permissions: dict) -> str:
         """构建WHERE子句（行权限）"""
         if not user_permissions:
             return ""

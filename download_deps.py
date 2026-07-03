@@ -53,6 +53,7 @@ repos = [
     "maidalun1020/bce-reranker-base_v1",
 ]
 
+
 def download_model(repository_id):
     local_directory = os.path.abspath(os.path.join("huggingface.co", repository_id))
     os.makedirs(local_directory, exist_ok=True)
@@ -81,4 +82,3 @@ if __name__ == "__main__":
     for repo_id in repos:
         print(f"Downloading huggingface repo {repo_id}...")
         download_model(repo_id)
-

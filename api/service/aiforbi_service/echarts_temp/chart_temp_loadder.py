@@ -5,7 +5,7 @@ chart_type_templates = {
     "仪表盘": "gauge_chart_template.txt",
     "散点图": "scatter_chart_template.txt",
     "词云图": "wordcloud_chart_template.txt",
-    "矩形树图": "treemap_chart_template.txt"
+    "矩形树图": "treemap_chart_template.txt",
 }
 
 import os
@@ -28,7 +28,7 @@ def load_chart_template(chart_type):
 
     # 读取并返回模板内容
     try:
-        with open(template_file, encoding='utf-8') as file:
+        with open(template_file, encoding="utf-8") as file:
             return file.read()
     except OSError as e:
         raise OSError(f"Error reading template file: {e}")

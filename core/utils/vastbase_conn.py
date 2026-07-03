@@ -118,7 +118,7 @@ class VastBaseConnection(DocStoreConnection):
                 database=self.database,
                 user=self.user,
                 password=self.password,
-                options=f'-c search_path={self.schema}'
+                options=f"-c search_path={self.schema}",
             )
             logger.debug(f"VastBase连接池创建成功: 最大连接数 {self.max_connections}")
         except Exception as e:
@@ -187,6 +187,7 @@ class VastBaseConnection(DocStoreConnection):
 
             # 导入并注册VastBase向量扩展
             from vastbase.psycopg2 import register_vector
+
             register_vector(conn)
             logger.debug("VastBase向量扩展注册成功")
         except ImportError as e:
@@ -432,7 +433,7 @@ class VastBaseConnection(DocStoreConnection):
 
         create_sql = f"""
             CREATE TABLE {self.schema}.{table_name} (
-                {',\n                '.join(columns)}
+                {",\n                ".join(columns)}
             )
         """
 
@@ -629,6 +630,7 @@ class VastBaseConnection(DocStoreConnection):
         except Exception as e:
             logger.error(f"VastBase search 失败: {e}")
             import traceback
+
             logger.error(traceback.format_exc())
             return [], 0
 
@@ -638,11 +640,14 @@ class VastBaseConnection(DocStoreConnection):
 
     def _get_table_columns(self, cursor, table_name: str) -> set[str]:
         """获取表的所有列名"""
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT column_name
             FROM information_schema.columns
             WHERE table_schema = %s AND table_name = %s
-        """, (self.schema, table_name))
+        """,
+            (self.schema, table_name),
+        )
         return {row[0] for row in cursor.fetchall()}
 
     def _search_with_filter_only(
@@ -891,7 +896,7 @@ class VastBaseConnection(DocStoreConnection):
         distance_type = dense_expr.distance_type.upper()
 
         # 确保向量数据是列表格式
-        if hasattr(vector_data, 'tolist'):
+        if hasattr(vector_data, "tolist"):
             vector_data = vector_data.tolist()
 
         # 检查向量字段是否存在
@@ -1216,20 +1221,19 @@ class VastBaseConnection(DocStoreConnection):
                 cursor = conn.cursor()
 
             # 获取表结构信息
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT column_name, data_type, udt_name
                 FROM information_schema.columns
                 WHERE table_schema = %s AND table_name = %s
-            """, (self.schema, table_name))
+            """,
+                (self.schema, table_name),
+            )
 
             columns_info = {}
             for row in cursor.fetchall():
                 # 由于没有使用RealDictCursor，需要手动构建字典
-                columns_info[row[0]] = {
-                    'column_name': row[0],
-                    'data_type': row[1],
-                    'udt_name': row[2]
-                }
+                columns_info[row[0]] = {"column_name": row[0], "data_type": row[1], "udt_name": row[2]}
 
             # 预处理数据
             processed_rows = []
@@ -1293,7 +1297,7 @@ class VastBaseConnection(DocStoreConnection):
                         if isinstance(v, list):
                             new_row[k] = v
                         else:
-                            new_row[k] = list(v) if hasattr(v, '__iter__') else v
+                            new_row[k] = list(v) if hasattr(v, "__iter__") else v
 
                     # 其他字段保持原样
                     else:
@@ -1337,6 +1341,7 @@ class VastBaseConnection(DocStoreConnection):
 
                 # 执行批量插入
                 from psycopg2.extras import execute_batch
+
                 execute_batch(cursor, insert_sql, insert_data)
 
                 conn.commit()
@@ -1394,20 +1399,19 @@ class VastBaseConnection(DocStoreConnection):
                 return False
 
             # 获取表结构信息
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT column_name, data_type, column_default
                 FROM information_schema.columns
                 WHERE table_schema = %s AND table_name = %s
-            """, (self.schema, table_name))
+            """,
+                (self.schema, table_name),
+            )
 
             columns_info = {}
             for row in cursor.fetchall():
                 # 由于没有使用RealDictCursor，需要手动构建字典
-                columns_info[row[0]] = {
-                    'column_name': row[0],
-                    'data_type': row[1],
-                    'column_default': row[2]
-                }
+                columns_info[row[0]] = {"column_name": row[0], "data_type": row[1], "column_default": row[2]}
 
             # 深拷贝newValue以避免修改原始数据
             update_values = copy.deepcopy(newValue)
@@ -1428,14 +1432,14 @@ class VastBaseConnection(DocStoreConnection):
                     # 移除整个字段（设置为默认值）
                     if remove_val in columns_info:
                         col_info = columns_info[remove_val]
-                        default_val = col_info.get('column_default')
+                        default_val = col_info.get("column_default")
                         if default_val:
                             update_values[remove_val] = default_val
-                        elif col_info['data_type'] in ['character varying', 'text']:
+                        elif col_info["data_type"] in ["character varying", "text"]:
                             update_values[remove_val] = ""
-                        elif col_info['data_type'] in ['integer', 'bigint']:
+                        elif col_info["data_type"] in ["integer", "bigint"]:
                             update_values[remove_val] = 0
-                        elif col_info['data_type'] in ['double precision', 'real']:
+                        elif col_info["data_type"] in ["double precision", "real"]:
                             update_values[remove_val] = 0.0
                 elif isinstance(remove_val, dict):
                     # 从列表字段中移除特定元素
@@ -1464,7 +1468,7 @@ class VastBaseConnection(DocStoreConnection):
 
                     for row in rows_to_update:
                         row_dict = dict(zip(columns, row))
-                        row_id = row_dict['id']
+                        row_id = row_dict["id"]
 
                         # 处理remove操作
                         for field, value_to_remove in remove_operations.items():
@@ -1541,7 +1545,7 @@ class VastBaseConnection(DocStoreConnection):
                     if isinstance(v, list):
                         processed_values[k] = v
                     else:
-                        processed_values[k] = list(v) if hasattr(v, '__iter__') else v
+                        processed_values[k] = list(v) if hasattr(v, "__iter__") else v
 
                 # 其他字段保持原样
                 else:
@@ -1683,7 +1687,7 @@ class VastBaseConnection(DocStoreConnection):
 
         for k, v in doc.items():
             # 跳过内部字段
-            if k in ['created_at', 'updated_at']:
+            if k in ["created_at", "updated_at"]:
                 continue
 
             # 处理关键词字段
@@ -1705,7 +1709,7 @@ class VastBaseConnection(DocStoreConnection):
                 if v:
                     arr = [int(hex_val, 16) for hex_val in v.split("_")]
                     # 转换回嵌套数组（每5个一组）
-                    result[k] = [arr[i:i + 5] for i in range(0, len(arr), 5)]
+                    result[k] = [arr[i : i + 5] for i in range(0, len(arr), 5)]
                 else:
                     result[k] = []
 
@@ -1907,12 +1911,7 @@ class VastBaseConnection(DocStoreConnection):
 
         return result_dict
 
-    def get_highlight(
-        self,
-        res: tuple[list[dict], int] | list[dict],
-        keywords: list[str],
-        fieldnm: str
-    ) -> dict[str, str]:
+    def get_highlight(self, res: tuple[list[dict], int] | list[dict], keywords: list[str], fieldnm: str) -> dict[str, str]:
         """
         为搜索结果生成高亮文本
 
@@ -1993,11 +1992,7 @@ class VastBaseConnection(DocStoreConnection):
 
         return highlight_dict
 
-    def get_aggregation(
-        self,
-        res: tuple[list[dict], int] | list[dict],
-        fieldnm: str
-    ) -> list[list]:
+    def get_aggregation(self, res: tuple[list[dict], int] | list[dict], fieldnm: str) -> list[list]:
         """
         手动聚合指定字段的值（因为 VastBase 不提供原生聚合）
 

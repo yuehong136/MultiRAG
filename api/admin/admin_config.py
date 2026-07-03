@@ -5,6 +5,7 @@
 @date：2025/10/14
 @desc: SQLAdmin 配置和初始化
 """
+
 import logging
 
 from fastapi import FastAPI

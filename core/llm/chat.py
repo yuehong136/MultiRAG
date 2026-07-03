@@ -328,18 +328,20 @@ class Base(ABC):
         one assistant message containing all tool_calls, followed by one tool message per call.
         results: list of (tool_call, name, args, result, error)
         """
-        hist.append({
-            "role": "assistant",
-            "tool_calls": [
-                {
-                    "index": tc.index,
-                    "id": tc.id,
-                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                    "type": "function",
-                }
-                for tc, _, _, _, _ in results
-            ],
-        })
+        hist.append(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "index": tc.index,
+                        "id": tc.id,
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                        "type": "function",
+                    }
+                    for tc, _, _, _, _ in results
+                ],
+            }
+        )
         for tc, _, _, result, err in results:
             if err:
                 content = str(err)
@@ -1425,18 +1427,20 @@ class LiteLLMBase(ABC):
         one assistant message containing all tool_calls, followed by one tool message per call.
         results: list of (tool_call, name, args, result, error)
         """
-        hist.append({
-            "role": "assistant",
-            "tool_calls": [
-                {
-                    "index": tc.index,
-                    "id": tc.id,
-                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                    "type": "function",
-                }
-                for tc, _, _, _, _ in results
-            ],
-        })
+        hist.append(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "index": tc.index,
+                        "id": tc.id,
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                        "type": "function",
+                    }
+                    for tc, _, _, _, _ in results
+                ],
+            }
+        )
         for tc, _, _, result, err in results:
             if err:
                 content = str(err)
@@ -1766,6 +1770,7 @@ class RAGconChat(Base):
     All model types are handled through a unified LiteLLM endpoint.
     Default Base URL: https://connect.ragcon.com/v1
     """
+
     _FACTORY_NAME = "RAGcon"
 
     def __init__(self, key, model_name, base_url=None, **kwargs):

@@ -42,6 +42,7 @@ DEFAULT_RESOLUTION_RESULT_DELIMITER = "&&"
 @dataclass
 class EntityResolutionResult:
     """Entity resolution result class definition."""
+
     graph: nx.Graph
     change: GraphChange
 
@@ -56,8 +57,8 @@ class EntityResolution(Extractor):
     _resolution_result_delimiter_key: str
 
     def __init__(
-            self,
-            llm_invoker: GraphRAGCompletionLLM,
+        self,
+        llm_invoker: GraphRAGCompletionLLM,
     ):
         super().__init__(llm_invoker)
         """Init method definition."""
@@ -68,11 +69,7 @@ class EntityResolution(Extractor):
         self._resolution_result_delimiter_key = "resolution_result_delimiter"
         self._input_text_key = "input_text"
 
-    async def __call__(self, graph: nx.Graph,
-                       subgraph_nodes: set[str],
-                       prompt_variables: dict[str, Any] | None = None,
-                       callback: Callable | None = None,
-                       task_id: str = "") -> EntityResolutionResult:
+    async def __call__(self, graph: nx.Graph, subgraph_nodes: set[str], prompt_variables: dict[str, Any] | None = None, callback: Callable | None = None, task_id: str = "") -> EntityResolutionResult:
         """Call method definition."""
         if prompt_variables is None:
             prompt_variables = {}
@@ -80,20 +77,17 @@ class EntityResolution(Extractor):
         # Wire defaults into the prompt variables
         self.prompt_variables = {
             **prompt_variables,
-            self._record_delimiter_key: prompt_variables.get(self._record_delimiter_key)
-                                        or DEFAULT_RECORD_DELIMITER,
-            self._entity_index_delimiter_key: prompt_variables.get(self._entity_index_delimiter_key)
-                                              or DEFAULT_ENTITY_INDEX_DELIMITER,
-            self._resolution_result_delimiter_key: prompt_variables.get(self._resolution_result_delimiter_key)
-                                                   or DEFAULT_RESOLUTION_RESULT_DELIMITER,
+            self._record_delimiter_key: prompt_variables.get(self._record_delimiter_key) or DEFAULT_RECORD_DELIMITER,
+            self._entity_index_delimiter_key: prompt_variables.get(self._entity_index_delimiter_key) or DEFAULT_ENTITY_INDEX_DELIMITER,
+            self._resolution_result_delimiter_key: prompt_variables.get(self._resolution_result_delimiter_key) or DEFAULT_RESOLUTION_RESULT_DELIMITER,
         }
 
         nodes = sorted(graph.nodes())
-        entity_types = sorted({graph.nodes[node].get('entity_type', '-') for node in nodes})
+        entity_types = sorted({graph.nodes[node].get("entity_type", "-") for node in nodes})
         node_clusters = {entity_type: [] for entity_type in entity_types}
 
         for node in nodes:
-            node_clusters[graph.nodes[node].get('entity_type', '-')].append(node)
+            node_clusters[graph.nodes[node].get("entity_type", "-")].append(node)
 
         candidate_resolution = {entity_type: [] for entity_type in entity_types}
         for k, v in node_clusters.items():
@@ -116,34 +110,24 @@ class EntityResolution(Extractor):
                     timeout_sec = 280 if enable_timeout_assertion else 1_000_000_000
 
                     try:
-                        await asyncio.wait_for(
-                            self._resolve_candidate(candidate_batch, result_set, result_lock, task_id),
-                            timeout=timeout_sec
-                        )
+                        await asyncio.wait_for(self._resolve_candidate(candidate_batch, result_set, result_lock, task_id), timeout=timeout_sec)
                         remain_candidates_to_resolve -= len(candidate_batch[1])
-                        callback(
-                            msg=f"Resolved {len(candidate_batch[1])} pairs, "
-                                f"{remain_candidates_to_resolve} remain."
-                        )
+                        callback(msg=f"Resolved {len(candidate_batch[1])} pairs, {remain_candidates_to_resolve} remain.")
 
                     except TimeoutError:
                         logging.warning(f"Timeout resolving {candidate_batch}, skipping...")
                         remain_candidates_to_resolve -= len(candidate_batch[1])
-                        callback(
-                            msg=f"Failed to resolve {len(candidate_batch[1])} pairs due to timeout, skipped. "
-                                f"{remain_candidates_to_resolve} remain."
-                        )
+                        callback(msg=f"Failed to resolve {len(candidate_batch[1])} pairs due to timeout, skipped. {remain_candidates_to_resolve} remain.")
 
                 except Exception as exception:
                     logging.error(f"Error resolving candidate batch: {exception}")
-
 
         tasks = []
         for key, lst in candidate_resolution.items():
             if not lst:
                 continue
             for i in range(0, len(lst), resolution_batch_size):
-                batch = (key, lst[i:i + resolution_batch_size])
+                batch = (key, lst[i : i + resolution_batch_size])
                 tasks.append(limited_resolve_candidate(batch, resolution_result, resolution_result_lock))
         try:
             await asyncio.gather(*tasks, return_exceptions=False)
@@ -167,8 +151,7 @@ class EntityResolution(Extractor):
         tasks = []
         for sub_connect_graph in nx.connected_components(connect_graph):
             merging_nodes = list(sub_connect_graph)
-            tasks.append(asyncio.create_task(limited_merge_nodes(graph, merging_nodes, change))
-            )
+            tasks.append(asyncio.create_task(limited_merge_nodes(graph, merging_nodes, change)))
         try:
             await asyncio.gather(*tasks, return_exceptions=False)
         except Exception as e:
@@ -194,32 +177,22 @@ class EntityResolution(Extractor):
                 logging.info(f"Task {task_id} cancelled during entity resolution candidate processing.")
                 raise TaskCanceledException(f"Task {task_id} was cancelled")
 
-        pair_txt = [
-            f'When determining whether two {candidate_resolution_i[0]}s are the same, you should only focus on critical properties and overlook noisy factors.\n']
+        pair_txt = [f"When determining whether two {candidate_resolution_i[0]}s are the same, you should only focus on critical properties and overlook noisy factors.\n"]
         for index, candidate in enumerate(candidate_resolution_i[1]):
-            pair_txt.append(
-                f'Question {index + 1}: name of{candidate_resolution_i[0]} A is {candidate[0]} ,name of{candidate_resolution_i[0]} B is {candidate[1]}')
-        sent = 'question above' if len(pair_txt) == 1 else f'above {len(pair_txt)} questions'
+            pair_txt.append(f"Question {index + 1}: name of{candidate_resolution_i[0]} A is {candidate[0]} ,name of{candidate_resolution_i[0]} B is {candidate[1]}")
+        sent = "question above" if len(pair_txt) == 1 else f"above {len(pair_txt)} questions"
         pair_txt.append(
-            f'\nUse domain knowledge of {candidate_resolution_i[0]}s to help understand the text and answer the {sent} in the format: For Question i, Yes, {candidate_resolution_i[0]} A and {candidate_resolution_i[0]} B are the same {candidate_resolution_i[0]}./No, {candidate_resolution_i[0]} A and {candidate_resolution_i[0]} B are different {candidate_resolution_i[0]}s. For Question i+1, (repeat the above procedures)')
-        pair_prompt = '\n'.join(pair_txt)
-        variables = {
-            **self.prompt_variables,
-            self._input_text_key: pair_prompt
-        }
+            f"\nUse domain knowledge of {candidate_resolution_i[0]}s to help understand the text and answer the {sent} in the format: For Question i, Yes, {candidate_resolution_i[0]} A and {candidate_resolution_i[0]} B are the same {candidate_resolution_i[0]}./No, {candidate_resolution_i[0]} A and {candidate_resolution_i[0]} B are different {candidate_resolution_i[0]}s. For Question i+1, (repeat the above procedures)"
+        )
+        pair_prompt = "\n".join(pair_txt)
+        variables = {**self.prompt_variables, self._input_text_key: pair_prompt}
         text = perform_variable_replacements(self._resolution_prompt, variables=variables)
         logging.info(f"Created resolution prompt {len(text)} bytes for {len(candidate_resolution_i[1])} entity pairs of type {candidate_resolution_i[0]}")
         async with chat_limiter:
             timeout_seconds = 280 if os.environ.get("ENABLE_TIMEOUT_ASSERTION") else 1000000000
             try:
                 response = await asyncio.wait_for(
-                    thread_pool_exec(
-                        self._chat,
-                        text,
-                        [{"role": "user", "content": "Output:"}],
-                        {},
-                        task_id
-                    ),
+                    thread_pool_exec(self._chat, text, [{"role": "user", "content": "Output:"}], {}, task_id),
                     timeout=timeout_seconds,
                 )
 
@@ -231,47 +204,40 @@ class EntityResolution(Extractor):
                 return
 
         logging.debug(f"_resolve_candidate chat prompt: {text}\nchat response: {response}")
-        result = self._process_results(len(candidate_resolution_i[1]), response,
-                                       self.prompt_variables.get(self._record_delimiter_key,
-                                                            DEFAULT_RECORD_DELIMITER),
-                                       self.prompt_variables.get(self._entity_index_delimiter_key,
-                                                            DEFAULT_ENTITY_INDEX_DELIMITER),
-                                       self.prompt_variables.get(self._resolution_result_delimiter_key,
-                                                            DEFAULT_RESOLUTION_RESULT_DELIMITER))
+        result = self._process_results(
+            len(candidate_resolution_i[1]),
+            response,
+            self.prompt_variables.get(self._record_delimiter_key, DEFAULT_RECORD_DELIMITER),
+            self.prompt_variables.get(self._entity_index_delimiter_key, DEFAULT_ENTITY_INDEX_DELIMITER),
+            self.prompt_variables.get(self._resolution_result_delimiter_key, DEFAULT_RESOLUTION_RESULT_DELIMITER),
+        )
         async with resolution_result_lock:
             for result_i in result:
                 resolution_result.add(candidate_resolution_i[1][result_i[0] - 1])
 
-    def _process_results(
-            self,
-            records_length: int,
-            results: str,
-            record_delimiter: str,
-            entity_index_delimiter: str,
-            resolution_result_delimiter: str
-    ) -> list:
+    def _process_results(self, records_length: int, results: str, record_delimiter: str, entity_index_delimiter: str, resolution_result_delimiter: str) -> list:
         ans_list = []
         records = [r.strip() for r in results.split(record_delimiter)]
         for record in records:
-            pattern_int = fr"{re.escape(entity_index_delimiter)}(\d+){re.escape(entity_index_delimiter)}"
+            pattern_int = rf"{re.escape(entity_index_delimiter)}(\d+){re.escape(entity_index_delimiter)}"
             match_int = re.search(pattern_int, record)
-            res_int = int(str(match_int.group(1) if match_int else '0'))
+            res_int = int(str(match_int.group(1) if match_int else "0"))
             if res_int > records_length:
                 continue
 
             pattern_bool = f"{re.escape(resolution_result_delimiter)}([a-zA-Z]+){re.escape(resolution_result_delimiter)}"
             match_bool = re.search(pattern_bool, record)
-            res_bool = str(match_bool.group(1) if match_bool else '')
+            res_bool = str(match_bool.group(1) if match_bool else "")
 
             if res_int and res_bool:
-                if res_bool.lower() == 'yes':
+                if res_bool.lower() == "yes":
                     ans_list.append((res_int, "yes"))
 
         return ans_list
 
     def _has_digit_in_2gram_diff(self, a, b):
         def to_2gram_set(s):
-            return {s[i:i+2] for i in range(len(s) - 1)}
+            return {s[i : i + 2] for i in range(len(s) - 1)}
 
         set_a = to_2gram_set(a)
         set_b = to_2gram_set(b)
@@ -293,4 +259,4 @@ class EntityResolution(Extractor):
         if max_l < 4:
             return len(a & b) > 1
 
-        return len(a & b)*1./max_l >= 0.8
+        return len(a & b) * 1.0 / max_l >= 0.8

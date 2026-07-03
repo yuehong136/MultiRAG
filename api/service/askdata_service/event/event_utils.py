@@ -29,8 +29,7 @@ async def send_event(event_id: str, data: Any, event_type: str = "data") -> bool
         return False
 
 
-async def send_step_event(event_id: str, step: int, total_steps: int, message: str,
-                          details: dict | None = None) -> bool:
+async def send_step_event(event_id: str, step: int, total_steps: int, message: str, details: dict | None = None) -> bool:
     """
     发送步骤进度事件
 
@@ -46,13 +45,7 @@ async def send_step_event(event_id: str, step: int, total_steps: int, message: s
     """
     percentage = int((step / total_steps) * 100) if total_steps > 0 else 0
 
-    step_data = {
-        "status": "processing",
-        "step": step,
-        "total_steps": total_steps,
-        "percentage": percentage,
-        "message": message
-    }
+    step_data = {"status": "processing", "step": step, "total_steps": total_steps, "percentage": percentage, "message": message}
 
     if details:
         step_data["details"] = details
@@ -73,10 +66,7 @@ async def send_status_event(event_id: str, status: str, message: str = "", detai
     Returns:
         bool: 发送是否成功
     """
-    status_data = {
-        "status": status,
-        "message": message
-    }
+    status_data = {"status": status, "message": message}
 
     if details:
         status_data["details"] = details
@@ -95,10 +85,7 @@ async def send_result_event(event_id: str, results: dict[str, Any]) -> bool:
     Returns:
         bool: 发送是否成功
     """
-    result_data = {
-        "status": "success",
-        "results": results
-    }
+    result_data = {"status": "success", "results": results}
 
     return await send_event(event_id, result_data, "result")
 
@@ -115,10 +102,7 @@ async def send_error_event(event_id: str, error_message: str, error_code: str = 
     Returns:
         bool: 发送是否成功
     """
-    error_data = {
-        "status": "error",
-        "error": error_message
-    }
+    error_data = {"status": "error", "error": error_message}
 
     if error_code:
         error_data["error_code"] = error_code
@@ -177,12 +161,7 @@ async def process_tracker(event_id: str, total_steps: int = 100):
 
     # 初始化进度
     tracker = ProcessTracker(event_id, total_steps)
-    await send_status_event(
-        event_id,
-        "started",
-        f"开始处理，共{total_steps}个步骤",
-        {"total_steps": total_steps}
-    )
+    await send_status_event(event_id, "started", f"开始处理，共{total_steps}个步骤", {"total_steps": total_steps})
 
     try:
         # 提供进度追踪器给调用代码
@@ -193,20 +172,13 @@ async def process_tracker(event_id: str, total_steps: int = 100):
             await tracker.update(total_steps, "已完成")
 
         # 发送完成消息
-        await send_status_event(
-            event_id,
-            "completed",
-            "处理已完成"
-        )
+        await send_status_event(event_id, "completed", "处理已完成")
     except Exception as e:
         # 记录错误
         logger.exception(f"处理过程出错: {e!s}")
 
         # 发送错误消息
-        await send_error_event(
-            event_id,
-            str(e)
-        )
+        await send_error_event(event_id, str(e))
 
         # 重新抛出异常，让调用者处理
         raise

@@ -33,13 +33,7 @@ class Pdf(PdfParser):
 
         start = timer()
         callback(msg="OCR started")
-        self.__images__(
-            filename if not binary else binary,
-            zoomin,
-            from_page,
-            to_page,
-            callback
-        )
+        self.__images__(filename if not binary else binary, zoomin, from_page, to_page, callback)
         callback(msg=f"OCR finished ({timer() - start:.2f}s)")
 
         start = timer()
@@ -92,9 +86,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
         callback(0.8, "Finish parsing.")
 
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
-        layout_recognizer, parser_model_name = normalize_layout_recognizer(
-            parser_config.get("layout_recognize", "DeepDOC")
-        )
+        layout_recognizer, parser_model_name = normalize_layout_recognizer(parser_config.get("layout_recognize", "DeepDOC"))
 
         if isinstance(layout_recognizer, bool):
             layout_recognizer = "DeepDOC" if layout_recognizer else "Plain Text"
@@ -168,10 +160,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
     else:
         raise NotImplementedError("file type not supported yet(doc, docx, pdf, txt supported)")
 
-    doc = {
-        "docnm_kwd": filename,
-        "title_tks": rag_tokenizer.tokenize(re.sub(r"\.[a-zA-Z]+$", "", filename))
-    }
+    doc = {"docnm_kwd": filename, "title_tks": rag_tokenizer.tokenize(re.sub(r"\.[a-zA-Z]+$", "", filename))}
     doc["title_sm_tks"] = rag_tokenizer.fine_grained_tokenize(doc["title_tks"])
     tokenize(doc, "\n".join(sections), eng)
     return [doc]

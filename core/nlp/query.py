@@ -10,6 +10,7 @@ from core.nlp import rag_tokenizer, synonym, term_weight
 
 class FulltextQueryer(QueryBase):
     """通用全文查询器，与具体向量数据库无关"""
+
     def __init__(self, dataStore=None):
         self.tw = term_weight.Dealer()
         self.dataStore = dataStore  # 保留接口兼容，但实际未使用
@@ -57,11 +58,10 @@ class FulltextQueryer(QueryBase):
             for tk, w in tks_w[:256]:
                 syn = [rag_tokenizer.tokenize(s) for s in self.syn.lookup(tk)]
                 keywords.extend(syn)
-                syn = [f"\"{s}\"^{w / 4.:.4f}" for s in syn if s.strip()]
+                syn = [f'"{s}"^{w / 4.0:.4f}' for s in syn if s.strip()]
                 syns.append(" ".join(syn))
 
-            q = [f"({tk}^{w:.4f}" + f" {syn})" for (tk, w), syn in zip(tks_w, syns) if
-                 tk and not re.match(r"[.^+\(\)-]", tk)]
+            q = [f"({tk}^{w:.4f}" + f" {syn})" for (tk, w), syn in zip(tks_w, syns) if tk and not re.match(r"[.^+\(\)-]", tk)]
             for i in range(1, len(tks_w)):
                 left, right = tks_w[i - 1][0].strip(), tks_w[i][0].strip()
                 if not left or not right:
@@ -78,9 +78,7 @@ class FulltextQueryer(QueryBase):
                 q.append(txt)
             query = " ".join(q)
             raw_text = " ".join([term.partition("^")[0].strip("()") for term in query.split()])
-            return MatchTextExpr(
-                self.query_fields, query, 100, {"original_query": original_query}, raw_text=raw_text
-            ), keywords
+            return MatchTextExpr(self.query_fields, query, 100, {"original_query": original_query}, raw_text=raw_text), keywords
 
         def need_fine_grained_tokenize(tk):
             if len(tk) < 3:
@@ -105,11 +103,7 @@ class FulltextQueryer(QueryBase):
             logging.debug(json.dumps(twts, ensure_ascii=False))
             tms = []
             for tk, w in sorted(twts, key=lambda x: x[1] * -1):
-                sm = (
-                    rag_tokenizer.fine_grained_tokenize(tk).split()
-                    if need_fine_grained_tokenize(tk)
-                    else []
-                )
+                sm = rag_tokenizer.fine_grained_tokenize(tk).split() if need_fine_grained_tokenize(tk) else []
                 if sm:
                     logging.info(f"[RAG_TOKENIZER] 细粒度分词: '{tk}' -> {sm}")
                 sm = [
@@ -132,7 +126,7 @@ class FulltextQueryer(QueryBase):
                 if len(keywords) < 32:
                     keywords.extend([s for s in tk_syns if s])
                 tk_syns = [rag_tokenizer.fine_grained_tokenize(s) for s in tk_syns if s]
-                tk_syns = [f"\"{s}\"" if s.find(" ") > 0 else s for s in tk_syns]
+                tk_syns = [f'"{s}"' if s.find(" ") > 0 else s for s in tk_syns]
 
                 if len(keywords) >= 32:
                     break
@@ -152,13 +146,7 @@ class FulltextQueryer(QueryBase):
             if len(twts) > 1:
                 tms += ' ("%s"~2)^1.5' % rag_tokenizer.tokenize(tt)
 
-            syns = " OR ".join(
-                [
-                    '"%s"'
-                    % rag_tokenizer.tokenize(self.sub_special_char(s))
-                    for s in syns
-                ]
-            )
+            syns = " OR ".join(['"%s"' % rag_tokenizer.tokenize(self.sub_special_char(s)) for s in syns])
             if syns and tms:
                 tms = f"({tms})^5 OR ({syns})^0.7"
 
@@ -170,9 +158,7 @@ class FulltextQueryer(QueryBase):
                 query = otxt
             raw_text = " ".join(raw_terms) if raw_terms else otxt
             logging.info(f"[RAG_TOKENIZER] 最终关键词: {keywords[:10]}{'...' if len(keywords) > 10 else ''}")
-            return MatchTextExpr(
-                self.query_fields, query, 100, {"minimum_should_match": min_match, "original_query": original_query}, raw_text=raw_text
-            ), keywords
+            return MatchTextExpr(self.query_fields, query, 100, {"minimum_should_match": min_match, "original_query": original_query}, raw_text=raw_text), keywords
         return None, keywords
 
     def hybrid_similarity(self, avec, bvecs, atks, btkss, tkweight=0.3, vtweight=0.7):
@@ -193,9 +179,9 @@ class FulltextQueryer(QueryBase):
             wts = self.tw.weights(tks, preprocess=False)
             for i, (t, c) in enumerate(wts):
                 d[t] += c * 0.4
-                if i+1 < len(wts):
-                    _t, _c = wts[i+1]
-                    d[t+_t] += max(c, _c) * 0.6
+                if i + 1 < len(wts):
+                    _t, _c = wts[i + 1]
+                    d[t + _t] += max(c, _c) * 0.6
             return d
 
         atks = to_dict(atks)
@@ -229,7 +215,7 @@ class FulltextQueryer(QueryBase):
             tk_syns = self.syn.lookup(tk)
             tk_syns = [self.sub_special_char(s) for s in tk_syns]
             tk_syns = [rag_tokenizer.fine_grained_tokenize(s) for s in tk_syns if s]
-            tk_syns = [f"\"{s}\"" if s.find(" ") > 0 else s for s in tk_syns]
+            tk_syns = [f'"{s}"' if s.find(" ") > 0 else s for s in tk_syns]
             tk = self.sub_special_char(tk)
             if tk.find(" ") > 0:
                 tk = '"%s"' % tk
@@ -243,4 +229,3 @@ class FulltextQueryer(QueryBase):
 
 # 别名，保持向后兼容
 MilvusQueryer = FulltextQueryer
-

@@ -19,6 +19,7 @@ STOP_TOKEN = "<|STOP|>"
 COMPLETE_TASK = "complete_task"
 INPUT_UTILIZATION = 0.5
 
+
 def get_value(d, k1, k2):
     return d.get(k1, d.get(k2))
 
@@ -91,7 +92,7 @@ def message_fit_in(msg, max_length=4000):
         return max_length, msg
 
     m = msg_[-1]["content"]
-    m = encoder.decode(encoder.encode(m)[:max_length - ll2])
+    m = encoder.decode(encoder.encode(m)[: max_length - ll2])
     msg[-1]["content"] = m
     return max_length, msg
 
@@ -104,10 +105,7 @@ def kb_prompt(kbinfos, max_tokens, hash_id=False):
         return ck.get("text") or ck.get("content_with_weight") or ""
 
     # knowledges = [get_text(ck) for ck in kbinfos["chunks"]]
-    knowledges = [
-        get_text(ck) or get_value(ck, "content", "content_with_weight")
-        for ck in kbinfos["chunks"]
-    ]
+    knowledges = [get_text(ck) or get_value(ck, "content", "content_with_weight") for ck in kbinfos["chunks"]]
     kwlg_len = len(knowledges)
     used_token_count = 0
     chunks_num = 0
@@ -121,11 +119,7 @@ def kb_prompt(kbinfos, max_tokens, hash_id=False):
             logging.warning(f"Not all the retrieval into prompt: {len(knowledges)}/{kwlg_len}")
             break
     with db_connection() as db:
-        doc_ids = list(dict.fromkeys(
-            get_value(ck, "doc_id", "document_id")
-            for ck in kbinfos["chunks"][:chunks_num]
-            if get_value(ck, "doc_id", "document_id")
-        ))
+        doc_ids = list(dict.fromkeys(get_value(ck, "doc_id", "document_id") for ck in kbinfos["chunks"][:chunks_num] if get_value(ck, "doc_id", "document_id")))
         docs = DocMetadataService.get_metadata_for_documents(
             db,
             doc_ids,
@@ -143,7 +137,7 @@ def kb_prompt(kbinfos, max_tokens, hash_id=False):
     for i, ck in enumerate(kbinfos["chunks"][:chunks_num]):
         cnt = "\nID: {}".format(i if not hash_id else hash_str2int(get_value(ck, "id", "chunk_id"), 500))
         cnt += draw_node("Title", get_value(ck, "docnm_kwd", "document_name"))
-        cnt += draw_node("URL", ck['url']) if "url" in ck else ""
+        cnt += draw_node("URL", ck["url"]) if "url" in ck else ""
         for k, v in docs.get(get_value(ck, "doc_id", "document_id"), {}).items():
             cnt += draw_node(k, v)
         cnt += "\n└── Content:\n"
@@ -407,20 +401,14 @@ def tool_schema(tools_description: list[dict], complete_task=False):
             "function": {
                 "name": COMPLETE_TASK,
                 "description": "When you have the final answer and are ready to complete the task, call this function with your answer",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "answer": {"type": "string", "description": "The final answer to the user's question"}},
-                    "required": ["answer"]
-                }
-            }
+                "parameters": {"type": "object", "properties": {"answer": {"type": "string", "description": "The final answer to the user's question"}}, "required": ["answer"]},
+            },
         }
     for idx, tool in enumerate(tools_description):
         name = tool["function"]["name"]
         desc[name] = tool
 
-    return "\n\n".join([f"## {i + 1}. {fnm}\n{json.dumps(des, ensure_ascii=False, indent=4)}" for i, (fnm, des) in
-                        enumerate(desc.items())])
+    return "\n\n".join([f"## {i + 1}. {fnm}\n{json.dumps(des, ensure_ascii=False, indent=4)}" for i, (fnm, des) in enumerate(desc.items())])
 
 
 def form_history(history, limit=-6):
@@ -476,11 +464,7 @@ async def next_step_async(chat_mdl, history: list, tools_description: list[dict]
         hist[-1]["content"] += user_prompt
     else:
         hist.append({"role": "user", "content": user_prompt})
-    result = await chat_mdl.async_chat(
-        template.render(task_analysis=task_desc, desc=desc, today=datetime.datetime.now().strftime("%Y-%m-%d")),
-        hist[1:],
-        stop=["<|stop|>"]
-    )
+    result = await chat_mdl.async_chat(template.render(task_analysis=task_desc, desc=desc, today=datetime.datetime.now().strftime("%Y-%m-%d")), hist[1:], stop=["<|stop|>"])
 
     if isinstance(result, tuple):
         json_str = result[0]
@@ -492,12 +476,12 @@ async def next_step_async(chat_mdl, history: list, tools_description: list[dict]
     return json_str, tk_cnt
 
 
-def reflect(chat_mdl, history: list[dict], tool_call_res: list[tuple], user_defined_prompts: dict={}):
+def reflect(chat_mdl, history: list[dict], tool_call_res: list[tuple], user_defined_prompts: dict = {}):
     """同步版本 - 内部调用异步版本"""
     return asyncio.run(reflect_async(chat_mdl, history, tool_call_res, user_defined_prompts))
 
 
-async def reflect_async(chat_mdl, history: list[dict], tool_call_res: list[tuple], user_defined_prompts: dict={}):
+async def reflect_async(chat_mdl, history: list[dict], tool_call_res: list[tuple], user_defined_prompts: dict = {}):
     """异步版本 - 主要实现"""
     tool_calls = [{"name": p[0], "result": p[1]} for p in tool_call_res]
     goal = history[1]["content"]
@@ -550,9 +534,9 @@ async def tool_call_summary(chat_mdl, name: str, params: dict, result: str, user
     return re.sub(r"^.*</think>", "", ans, flags=re.DOTALL)
 
 
-async def rank_memories_async(chat_mdl, goal:str, sub_goal:str, tool_call_summaries: list[str], user_defined_prompts: dict = {}):
+async def rank_memories_async(chat_mdl, goal: str, sub_goal: str, tool_call_summaries: list[str], user_defined_prompts: dict = {}):
     template = PROMPT_JINJA_ENV.from_string(RANK_MEMORY)
-    system_prompt = template.render(goal=goal, sub_goal=sub_goal, results=[{"i": i, "content": s} for i,s in enumerate(tool_call_summaries)])
+    system_prompt = template.render(goal=goal, sub_goal=sub_goal, results=[{"i": i, "content": s} for i, s in enumerate(tool_call_summaries)])
     user_prompt = " → rank: "
     _, msg = message_fit_in(form_message(system_prompt, user_prompt), chat_mdl.max_length)
     ans = await chat_mdl.async_chat(msg[0]["content"], msg[1:], stop="<|stop|>")
@@ -570,10 +554,7 @@ async def gen_meta_filter(chat_mdl, meta_data: dict, query: str, constraints: di
         meta_data_structure[key] = list(values.keys()) if isinstance(values, dict) else values
 
     sys_prompt = PROMPT_JINJA_ENV.from_string(META_FILTER).render(
-        current_date=datetime.datetime.today().strftime('%Y-%m-%d'),
-        metadata_keys=json.dumps(meta_data_structure),
-        user_question=query,
-        constraints=json.dumps(constraints) if constraints else None
+        current_date=datetime.datetime.today().strftime("%Y-%m-%d"), metadata_keys=json.dumps(meta_data_structure), user_question=query, constraints=json.dumps(constraints) if constraints else None
     )
     user_prompt = "Generate filters:"
     ans = await chat_mdl.async_chat(sys_prompt, [{"role": "user", "content": user_prompt}])
@@ -591,6 +572,7 @@ async def gen_meta_filter(chat_mdl, meta_data: dict, query: str, constraints: di
 
 async def gen_json(system_prompt: str, user_prompt: str, chat_mdl, gen_conf={}, max_retry=2):
     from core.graphrag.utils import get_llm_cache, set_llm_cache
+
     cached = get_llm_cache(chat_mdl.llm_name, system_prompt, user_prompt, gen_conf)
     if cached:
         return json_repair.loads(cached)
@@ -612,6 +594,8 @@ async def gen_json(system_prompt: str, user_prompt: str, chat_mdl, gen_conf={}, 
 
 
 TOC_DETECTION = load_prompt("toc_detection")
+
+
 async def detect_table_of_contents(page_1024: list[str], chat_mdl):
     toc_secs = []
     for i, sec in enumerate(page_1024[:22]):
@@ -624,6 +608,8 @@ async def detect_table_of_contents(page_1024: list[str], chat_mdl):
 
 TOC_EXTRACTION = load_prompt("toc_extraction")
 TOC_EXTRACTION_CONTINUE = load_prompt("toc_extraction_continue")
+
+
 async def extract_table_of_contents(toc_pages, chat_mdl):
     if not toc_pages:
         return []
@@ -653,11 +639,13 @@ async def toc_index_extractor(toc: list[dict], content: str, chat_mdl):
     If the title of the section are not in the provided pages, do not add the physical_index to it.
     Directly return the final JSON structure. Do not output anything else."""
 
-    prompt = tob_extractor_prompt + '\nTable of contents:\n' + json.dumps(toc, ensure_ascii=False, indent=2) + '\nDocument pages:\n' + content
+    prompt = tob_extractor_prompt + "\nTable of contents:\n" + json.dumps(toc, ensure_ascii=False, indent=2) + "\nDocument pages:\n" + content
     return await gen_json(prompt, "Only JSON please.", chat_mdl)
 
 
 TOC_INDEX = load_prompt("toc_index")
+
+
 async def table_of_contents_index(toc_arr: list[dict], sections: list[str], chat_mdl):
     if not toc_arr or not sections:
         return []
@@ -731,10 +719,7 @@ async def table_of_contents_index(toc_arr: list[dict], sections: list[str], chat
             e = toc_arr[e]["indices"][0]
 
         for j in range(st_i, min(e + 1, len(sections))):
-            ans = await gen_json(PROMPT_JINJA_ENV.from_string(TOC_INDEX).render(
-                structure=it["structure"],
-                title=it["title"],
-                text=sections[j]), "Only JSON please.", chat_mdl)
+            ans = await gen_json(PROMPT_JINJA_ENV.from_string(TOC_INDEX).render(structure=it["structure"], title=it["title"], text=sections[j]), "Only JSON please.", chat_mdl)
             if ans["exist"] == "yes":
                 it["indices"].append(j)
                 break
@@ -756,9 +741,9 @@ async def check_if_toc_transformation_is_complete(content, toc, chat_mdl):
     }}
     Directly return the final JSON structure. Do not output anything else."""
 
-    prompt = prompt + '\n Raw Table of contents:\n' + content + '\n Cleaned Table of contents:\n' + toc
+    prompt = prompt + "\n Raw Table of contents:\n" + content + "\n Cleaned Table of contents:\n" + toc
     response = await gen_json(prompt, "Only JSON please.", chat_mdl)
-    return response['completed']
+    return response["completed"]
 
 
 async def toc_transformer(toc_pages, chat_mdl):
@@ -780,7 +765,7 @@ async def toc_transformer(toc_pages, chat_mdl):
     Directly return the final JSON structure, do not output anything else. """
 
     toc_content = "\n".join(toc_pages)
-    prompt = init_prompt + '\n Given table of contents\n:' + toc_content
+    prompt = init_prompt + "\n Given table of contents\n:" + toc_content
 
     def clean_toc(arr):
         for a in arr:
@@ -815,19 +800,18 @@ async def toc_transformer(toc_pages, chat_mdl):
 
 
 TOC_LEVELS = load_prompt("assign_toc_levels")
-async def assign_toc_levels(toc_secs, chat_mdl, gen_conf = {"temperature": 0.2}):
+
+
+async def assign_toc_levels(toc_secs, chat_mdl, gen_conf={"temperature": 0.2}):
     if not toc_secs:
         return []
-    return await gen_json(
-        PROMPT_JINJA_ENV.from_string(TOC_LEVELS).render(),
-        str(toc_secs),
-        chat_mdl,
-        gen_conf
-    )
+    return await gen_json(PROMPT_JINJA_ENV.from_string(TOC_LEVELS).render(), str(toc_secs), chat_mdl, gen_conf)
 
 
 TOC_FROM_TEXT_SYSTEM = load_prompt("toc_from_text_system")
 TOC_FROM_TEXT_USER = load_prompt("toc_from_text_user")
+
+
 # Generate TOC from text chunks with text llms
 async def gen_toc_from_text(txt_info: dict, chat_mdl, callback=None):
     if callback:
@@ -837,7 +821,7 @@ async def gen_toc_from_text(txt_info: dict, chat_mdl, callback=None):
             PROMPT_JINJA_ENV.from_string(TOC_FROM_TEXT_SYSTEM).render(),
             PROMPT_JINJA_ENV.from_string(TOC_FROM_TEXT_USER).render(text="\n".join([json.dumps(d, ensure_ascii=False) for d in txt_info["chunks"]])),
             chat_mdl,
-            gen_conf={"temperature": 0.0, "top_p": 0.9}
+            gen_conf={"temperature": 0.0, "top_p": 0.9},
         )
         txt_info["toc"] = ans if ans and not isinstance(ans, str) else []
     except Exception as e:
@@ -866,9 +850,7 @@ def split_chunks(chunks, max_length: int):
 
 
 async def run_toc_from_text(chunks, chat_mdl, callback=None):
-    input_budget = int(chat_mdl.max_length * INPUT_UTILIZATION) - num_tokens_from_string(
-        TOC_FROM_TEXT_USER + TOC_FROM_TEXT_SYSTEM
-    )
+    input_budget = int(chat_mdl.max_length * INPUT_UTILIZATION) - num_tokens_from_string(TOC_FROM_TEXT_USER + TOC_FROM_TEXT_SYSTEM)
 
     input_budget = 1024 if input_budget > 1024 else input_budget
     chunk_sections = split_chunks(chunks, input_budget)
@@ -927,28 +909,35 @@ async def run_toc_from_text(chunks, chat_mdl, callback=None):
     if sorted_list:
         max_lvl = sorted_list[-1]
     merged = []
-    for _ , (toc_item, src_item) in enumerate(zip(toc_with_levels, filtered)):
+    for _, (toc_item, src_item) in enumerate(zip(toc_with_levels, filtered)):
         if prune and toc_item.get("level", "0") >= max_lvl:
             continue
-        merged.append({
-            "level": toc_item.get("level", "0"),
-            "title": toc_item.get("title", ""),
-            "chunk_id": src_item.get("chunk_id", ""),
-        })
+        merged.append(
+            {
+                "level": toc_item.get("level", "0"),
+                "title": toc_item.get("title", ""),
+                "chunk_id": src_item.get("chunk_id", ""),
+            }
+        )
 
     return merged
 
 
 TOC_RELEVANCE_SYSTEM = load_prompt("toc_relevance_system")
 TOC_RELEVANCE_USER = load_prompt("toc_relevance_user")
-async def relevant_chunks_with_toc(query: str, toc: list[dict], chat_mdl, topn: int=6):
+
+
+async def relevant_chunks_with_toc(query: str, toc: list[dict], chat_mdl, topn: int = 6):
     import numpy as np
+
     try:
         ans = await gen_json(
             PROMPT_JINJA_ENV.from_string(TOC_RELEVANCE_SYSTEM).render(),
-            PROMPT_JINJA_ENV.from_string(TOC_RELEVANCE_USER).render(query=query, toc_json="[\n%s\n]\n"%"\n".join([json.dumps({"level": d["level"], "title":d["title"]}, ensure_ascii=False) for d in toc])),
+            PROMPT_JINJA_ENV.from_string(TOC_RELEVANCE_USER).render(
+                query=query, toc_json="[\n%s\n]\n" % "\n".join([json.dumps({"level": d["level"], "title": d["title"]}, ensure_ascii=False) for d in toc])
+            ),
             chat_mdl,
-            gen_conf={"temperature": 0.0, "top_p": 0.9}
+            gen_conf={"temperature": 0.0, "top_p": 0.9},
         )
         id2score = {}
         for ti, sc in zip(toc, ans):
@@ -957,16 +946,18 @@ async def relevant_chunks_with_toc(query: str, toc: list[dict], chat_mdl, topn: 
             for id in ti.get("ids", []):
                 if id not in id2score:
                     id2score[id] = []
-                id2score[id].append(sc["score"]/5.)
+                id2score[id].append(sc["score"] / 5.0)
         for id in id2score.keys():
             id2score[id] = np.mean(id2score[id])
-        return [(id, sc) for id, sc in list(id2score.items()) if sc>=0.3][:topn]
+        return [(id, sc) for id, sc in list(id2score.items()) if sc >= 0.3][:topn]
     except Exception as e:
         logging.exception(e)
     return []
 
 
 META_DATA = load_prompt("meta_data")
+
+
 async def gen_metadata(chat_mdl, schema: dict, content: str):
     template = PROMPT_JINJA_ENV.from_string(META_DATA)
     for k, desc in schema["properties"].items():
@@ -982,30 +973,25 @@ async def gen_metadata(chat_mdl, schema: dict, content: str):
 
 
 SUFFICIENCY_CHECK = load_prompt("sufficiency_check")
+
+
 async def sufficiency_check(chat_mdl, question: str, ret_content: str):
     try:
-        return await gen_json(
-            PROMPT_JINJA_ENV.from_string(SUFFICIENCY_CHECK).render(question=question, retrieved_docs=ret_content),
-            "Output:\n",
-            chat_mdl
-        )
+        return await gen_json(PROMPT_JINJA_ENV.from_string(SUFFICIENCY_CHECK).render(question=question, retrieved_docs=ret_content), "Output:\n", chat_mdl)
     except Exception as e:
         logging.exception(e)
     return {}
 
 
 MULTI_QUERIES_GEN = load_prompt("multi_queries_gen")
+
+
 async def multi_queries_gen(chat_mdl, question: str, query: str, missing_infos: list[str], ret_content: str):
     try:
         return await gen_json(
-            PROMPT_JINJA_ENV.from_string(MULTI_QUERIES_GEN).render(
-                original_question=question,
-                original_query=query,
-                missing_info="\n - ".join(missing_infos),
-                retrieved_docs=ret_content
-            ),
+            PROMPT_JINJA_ENV.from_string(MULTI_QUERIES_GEN).render(original_question=question, original_query=query, missing_info="\n - ".join(missing_infos), retrieved_docs=ret_content),
             "Output:\n",
-            chat_mdl
+            chat_mdl,
         )
     except Exception as e:
         logging.exception(e)

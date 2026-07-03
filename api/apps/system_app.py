@@ -5,6 +5,7 @@
 @date：2024/7/9 9:00
 @desc:
 """
+
 import json
 import logging
 from datetime import datetime
@@ -39,16 +40,16 @@ class TokenCreateRequest(BaseModel):
     name: Annotated[str, Field(min_length=1, max_length=20, description="Token名称")]
     description: str | None = Field(None, description="Token描述")
 
-    @field_validator('name')
+    @field_validator("name")
     @classmethod
     def validate_name(cls, v: str) -> str:
         if not v:
-            raise ValueError('Token名称不能为空')
+            raise ValueError("Token名称不能为空")
         if len(v) > 20:
-            raise ValueError('Token名称不能超过20个字符')
+            raise ValueError("Token名称不能超过20个字符")
         return v
 
-    @field_validator('description')
+    @field_validator("description")
     @classmethod
     def validate_description(cls, v: str | None) -> str | None:
         if v is not None and not v.strip():
@@ -68,6 +69,7 @@ class TokenResponse(BaseModel):
     create_time: int
     update_date: str
     update_time: int
+
 
 @router.get("/version", summary="获取版本", response_description="成功获取版本", deprecated=True)
 def version(user=Depends(manager)):
@@ -178,7 +180,7 @@ def status(db: Session = Depends(get_db), user=Depends(manager)):
     st = timer()
     try:
         pool_status = get_pool_status()
-        usage_rate = pool_status.get('usage_rate', 0)
+        usage_rate = pool_status.get("usage_rate", 0)
 
         # 根据使用率判断状态
         if usage_rate > 90:
@@ -191,11 +193,11 @@ def status(db: Session = Depends(get_db), user=Depends(manager)):
         res["database_pool"] = {
             "status": status,
             "elapsed": f"{(timer() - st) * 1000.0:.1f}",
-            "pool_size": pool_status.get('pool_size'),
-            "checked_out": pool_status.get('checked_out'),
-            "checked_in": pool_status.get('checked_in'),
-            "overflow": pool_status.get('overflow'),
-            "total_connections": pool_status.get('total_connections'),
+            "pool_size": pool_status.get("pool_size"),
+            "checked_out": pool_status.get("checked_out"),
+            "checked_in": pool_status.get("checked_in"),
+            "overflow": pool_status.get("overflow"),
+            "total_connections": pool_status.get("total_connections"),
             "usage_rate": f"{usage_rate}%",
         }
     except Exception as e:
@@ -271,9 +273,7 @@ def oceanbase_status(user=Depends(manager)):
         status_info = get_oceanbase_status()
         return get_json_result(data=status_info)
     except Exception as e:
-        return get_json_result(
-            data={"status": "error", "message": f"Failed to get OceanBase status: {e!s}"}
-        )
+        return get_json_result(data={"status": "error", "message": f"Failed to get OceanBase status: {e!s}"})
 
 
 @router.get("/ping", summary="连通测试", deprecated=True)
@@ -281,7 +281,7 @@ async def ping():
     return PlainTextResponse("pong")
 
 
-@router.post('/new_token', summary="创建新访问令牌", response_description="成功创建并返回新令牌", response_model=dict[str, Any], deprecated=True)
+@router.post("/new_token", summary="创建新访问令牌", response_description="成功创建并返回新令牌", response_model=dict[str, Any], deprecated=True)
 def new_token(request: TokenCreateRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     创建新的API访问令牌
@@ -319,7 +319,7 @@ def new_token(request: TokenCreateRequest, db: Session = Depends(get_db), user=D
         return server_error_response(e)
 
 
-@router.get('/token_list', summary="获取API访问令牌列表", response_description="成功获取并返回令牌列表", deprecated=True)
+@router.get("/token_list", summary="获取API访问令牌列表", response_description="成功获取并返回令牌列表", deprecated=True)
 def token_list(db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取API访问令牌列表的接口说明文档。
@@ -365,11 +365,7 @@ def token_list(db: Session = Depends(get_db), user=Depends(manager)):
 
 
 @router.post("/rm", summary="删除API访问令牌", response_description="成功删除指定的令牌", deprecated=True)
-def rm(
-    token: str = Body(..., description="要删除的令牌"),
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-):
+def rm(token: str = Body(..., description="要删除的令牌"), db: Session = Depends(get_db), user=Depends(manager)):
     """
     删除指定的API访问令牌。
 
@@ -394,7 +390,7 @@ def rm(
         return server_error_response(e)
 
 
-@router.get('/config', summary="获取系统配置")
+@router.get("/config", summary="获取系统配置")
 def get_config():
     """
     Get system configuration.
@@ -411,10 +407,12 @@ def get_config():
                         type: integer 0 means disabled, 1 means enabled
                         description: Whether user registration is enabled
     """
-    return get_json_result(data={
-        "registerEnabled": settings.REGISTER_ENABLED,
-        "disablePasswordLogin": settings.DISABLE_PASSWORD_LOGIN,
-    })
+    return get_json_result(
+        data={
+            "registerEnabled": settings.REGISTER_ENABLED,
+            "disablePasswordLogin": settings.DISABLE_PASSWORD_LOGIN,
+        }
+    )
 
 
 class LogLevelRequest(BaseModel):
@@ -424,7 +422,7 @@ class LogLevelRequest(BaseModel):
     level: Annotated[str, Field(min_length=1, description="日志级别 (DEBUG, INFO, WARNING, ERROR)")]
 
 
-@router.get('/log_levels', summary="获取日志级别", deprecated=True)
+@router.get("/log_levels", summary="获取日志级别", deprecated=True)
 def get_logger_levels(user=Depends(manager)):
     """
     Get current log levels for all packages.
@@ -438,7 +436,7 @@ def get_logger_levels(user=Depends(manager)):
     return get_json_result(data=get_log_levels())
 
 
-@router.put('/log_levels', summary="设置日志级别", deprecated=True)
+@router.put("/log_levels", summary="设置日志级别", deprecated=True)
 def set_logger_level(request: LogLevelRequest, user=Depends(manager)):
     """
     Set log level for a package.

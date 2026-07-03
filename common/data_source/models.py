@@ -1,4 +1,5 @@
 """Data model definitions for all connectors"""
+
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -11,7 +12,6 @@ from typing_extensions import TypedDict
 
 @dataclass(frozen=True)
 class ExternalAccess:
-
     # arbitrary limit to prevent excessively large permissions sets
     # not internally enforced ... the caller can check this before using the instance
     MAX_NUM_ENTRIES = 5000
@@ -32,12 +32,7 @@ class ExternalAccess:
                 return f"{s_str[:max_len]}... ({len(s)} items)"
             return s_str
 
-        return (
-            f"ExternalAccess("
-            f"external_user_emails={truncate_set(self.external_user_emails)}, "
-            f"external_user_group_ids={truncate_set(self.external_user_group_ids)}, "
-            f"is_public={self.is_public})"
-        )
+        return f"ExternalAccess(external_user_emails={truncate_set(self.external_user_emails)}, external_user_group_ids={truncate_set(self.external_user_group_ids)}, is_public={self.is_public})"
 
     @property
     def num_entries(self) -> int:
@@ -78,18 +73,21 @@ class ExtractionResult(NamedTuple):
 
 class TextSection(BaseModel):
     """Text section model"""
+
     link: str
     text: str
 
 
 class ImageSection(BaseModel):
     """Image section model"""
+
     link: str
     image_file_id: str
 
 
 class Document(BaseModel):
     """Document model"""
+
     id: str
     source: str
     semantic_identifier: str
@@ -105,6 +103,7 @@ class Document(BaseModel):
 
 class BasicExpertInfo(BaseModel):
     """Expert information model"""
+
     display_name: str | None = None
     first_name: str | None = None
     last_name: str | None = None
@@ -126,29 +125,34 @@ class BasicExpertInfo(BaseModel):
 
 class SlimDocument(BaseModel):
     """Simplified document model (contains only ID and permission info)"""
+
     id: str
     external_access: Any | None = None
 
 
 class ConnectorCheckpoint(BaseModel):
     """Connector checkpoint model"""
+
     has_more: bool = True
 
 
 class DocumentFailure(BaseModel):
     """Document processing failure information"""
+
     document_id: str
     document_link: str
 
 
 class EntityFailure(BaseModel):
     """Entity processing failure information"""
+
     entity_id: str
     missed_time_range: tuple[datetime, datetime]
 
 
 class ConnectorFailure(BaseModel):
     """Connector failure information"""
+
     failed_document: DocumentFailure | None = None
     failed_entity: EntityFailure | None = None
     failure_message: str
@@ -160,18 +164,21 @@ class ConnectorFailure(BaseModel):
 # Gmail Models
 class GmailCredentials(BaseModel):
     """Gmail authentication credentials model"""
+
     primary_admin_email: str
     credentials: dict[str, Any]
 
 
 class GmailThread(BaseModel):
     """Gmail thread data model"""
+
     id: str
     messages: list[dict[str, Any]]
 
 
 class GmailMessage(BaseModel):
     """Gmail message data model"""
+
     id: str
     payload: dict[str, Any]
     label_ids: list[str] | None = None
@@ -180,6 +187,7 @@ class GmailMessage(BaseModel):
 # Notion Models
 class NotionPage(BaseModel):
     """Represents a Notion Page object"""
+
     id: str
     created_time: str
     last_edited_time: str
@@ -192,6 +200,7 @@ class NotionPage(BaseModel):
 
 class NotionBlock(BaseModel):
     """Represents a Notion Block object"""
+
     id: str  # Used for the URL
     text: str
     prefix: str  # How this block should be joined with existing text
@@ -199,6 +208,7 @@ class NotionBlock(BaseModel):
 
 class NotionSearchResponse(BaseModel):
     """Represents the response from the Notion Search API"""
+
     results: list[dict[str, Any]]
     next_cursor: str | None
     has_more: bool = False
@@ -206,12 +216,14 @@ class NotionSearchResponse(BaseModel):
 
 class NotionCredentials(BaseModel):
     """Notion authentication credentials model"""
+
     integration_token: str
 
 
 # Slack Models
 class ChannelTopicPurposeType(TypedDict):
     """Slack channel topic or purpose"""
+
     value: str
     creator: str
     last_set: int
@@ -219,6 +231,7 @@ class ChannelTopicPurposeType(TypedDict):
 
 class ChannelType(TypedDict):
     """Slack channel"""
+
     id: str
     name: str
     is_channel: bool
@@ -247,6 +260,7 @@ class ChannelType(TypedDict):
 
 class AttachmentType(TypedDict):
     """Slack message attachment"""
+
     service_name: NotRequired[str]
     text: NotRequired[str]
     fallback: NotRequired[str]
@@ -258,6 +272,7 @@ class AttachmentType(TypedDict):
 
 class BotProfileType(TypedDict):
     """Slack bot profile"""
+
     id: NotRequired[str]
     deleted: NotRequired[bool]
     name: NotRequired[str]
@@ -268,6 +283,7 @@ class BotProfileType(TypedDict):
 
 class MessageType(TypedDict):
     """Slack message"""
+
     type: str
     user: str
     text: str
@@ -286,6 +302,7 @@ ThreadType = list[MessageType]
 
 class SlackCheckpoint(TypedDict):
     """Slack checkpoint"""
+
     channel_ids: list[str] | None
     channel_completion_map: dict[str, str]
     current_channel: ChannelType | None
@@ -296,12 +313,14 @@ class SlackCheckpoint(TypedDict):
 
 class SlackMessageFilterReason(str):
     """Slack message filter reason"""
+
     BOT = "bot"
     DISALLOWED = "disallowed"
 
 
 class ProcessedSlackMessage:
     """Processed Slack message"""
+
     def __init__(self, doc=None, thread_or_message_ts=None, filter_reason=None, failure=None):
         self.doc = doc
         self.thread_or_message_ts = thread_or_message_ts
@@ -311,8 +330,9 @@ class ProcessedSlackMessage:
 
 class SeafileSyncScope(str, Enum):
     """Defines how much of SeaFile to synchronise."""
-    ACCOUNT = "account"      # All libraries the token can see
-    LIBRARY = "library"      # A single library (repo)
+
+    ACCOUNT = "account"  # All libraries the token can see
+    LIBRARY = "library"  # A single library (repo)
     DIRECTORY = "directory"  # A single directory inside a library
 
 

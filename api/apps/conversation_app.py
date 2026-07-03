@@ -40,11 +40,7 @@ class FullAnswerStreamTransformer:
     full_answer: str = ""
 
     def transform(self, answer: dict[str, Any]) -> dict[str, Any] | None:
-        payload = {
-            key: value
-            for key, value in answer.items()
-            if key not in {"final", "start_to_think", "end_to_think"}
-        }
+        payload = {key: value for key, value in answer.items() if key not in {"final", "start_to_think", "end_to_think"}}
         is_final = answer.get("final", True)
 
         if answer.get("start_to_think"):
@@ -91,15 +87,15 @@ class SetConversationRequest(BaseModel):
     is_new: bool | None = None
     """是否为新建会话，可选参数。如果未提供，将根据conversation_id是否存在来判断。"""
 
-    @field_validator('conversation_id', 'dialog_id', mode='before')
+    @field_validator("conversation_id", "dialog_id", mode="before")
     def blank_str_to_none(cls, v):
         """把 '' 或 '   ' 这种空白字符串统一转成 None"""
-        if isinstance(v, str) and v.strip() == '':
+        if isinstance(v, str) and v.strip() == "":
             return None
         return v
 
-    @model_validator(mode='after')
-    def validate_conversation_logic(self) -> 'SetConversationRequest':
+    @model_validator(mode="after")
+    def validate_conversation_logic(self) -> "SetConversationRequest":
         """验证会话创建/更新逻辑"""
         # 如果没有指定is_new，根据conversation_id来判断
         if self.is_new is None:
@@ -217,6 +213,7 @@ class AskAboutRequest(BaseModel):
     search_id: str | None = ""
     """搜索应用ID，用于读取搜索配置"""
 
+
 class SparseSearchMode(BaseModel):
     type: Literal["sparse"] = "sparse"
 
@@ -230,8 +227,8 @@ class HybridSearchMode(BaseModel):
     weight_dense: float = Field(default=0.7, ge=0.0, le=1.0)
     weight_sparse: float = Field(default=0.3, ge=0.0, le=1.0)
 
-    @model_validator(mode='after')
-    def validate_weights(self) -> 'HybridSearchMode':
+    @model_validator(mode="after")
+    def validate_weights(self) -> "HybridSearchMode":
         """确保权重和为1，如果不是则自动调整"""
         total = self.weight_dense + self.weight_sparse
         if abs(total - 1.0) > 0.001:
@@ -245,11 +242,11 @@ class FusionSearchMode(BaseModel):
     type: Literal["fusion"] = "fusion"
     weights: str = Field(default="0.05,0.95")
 
-    @model_validator(mode='after')
-    def validate_weights_format(self) -> 'FusionSearchMode':
+    @model_validator(mode="after")
+    def validate_weights_format(self) -> "FusionSearchMode":
         """验证weights格式"""
         try:
-            parts = self.weights.split(',')
+            parts = self.weights.split(",")
             if len(parts) != 2:
                 raise ValueError("weights must contain exactly two comma-separated values")
             float(parts[0].strip())
@@ -260,10 +257,8 @@ class FusionSearchMode(BaseModel):
 
 
 # 使用 Discriminator 的高效版本
-SearchModeType = Annotated[
-    SparseSearchMode | DenseSearchMode | HybridSearchMode | FusionSearchMode,
-    Discriminator('type')
-]
+SearchModeType = Annotated[SparseSearchMode | DenseSearchMode | HybridSearchMode | FusionSearchMode, Discriminator("type")]
+
 
 class MindmapRequest(BaseModel):
     question: str
@@ -284,8 +279,9 @@ class MindmapRequest(BaseModel):
             return None
 
         mode_data = self.search_mode.model_dump()
-        mode_type = mode_data.pop('type')
+        mode_type = mode_data.pop("type")
         return {mode_type: mode_data}
+
 
 class RelatedQuestionsRequest(BaseModel):
     question: str
@@ -298,7 +294,7 @@ class RelatedQuestionsRequest(BaseModel):
 router = APIRouter()
 
 
-@router.post('/set', summary="[Deprecated] 设置会话", response_description="成功设置会话", deprecated=True)
+@router.post("/set", summary="[Deprecated] 设置会话", response_description="成功设置会话", deprecated=True)
 def set_conversation(request: SetConversationRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     设置会话
@@ -368,10 +364,9 @@ def set_conversation(request: SetConversationRequest, db: Session = Depends(get_
         return server_error_response(e)
 
 
-@router.get('/get', summary="[Deprecated] 获取会话", response_description="成功获取会话", deprecated=True)
+@router.get("/get", summary="[Deprecated] 获取会话", response_description="成功获取会话", deprecated=True)
 def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     try:
-
         conv = ConversationService.get_by_id(db, conversation_id)
         if not conv:
             return get_data_error_result(retmsg="Conversation not found!")
@@ -382,7 +377,7 @@ def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(manage
                 avatar = dialog[0].icon
                 break
         else:
-            return get_json_result(data=False, retmsg='Only owner of conversation authorized for this operation.', retcode=RetCode.OPERATING_ERROR)
+            return get_json_result(data=False, retmsg="Only owner of conversation authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
         for ref in conv.reference:
             if isinstance(ref, list):
@@ -396,9 +391,9 @@ def get(conversation_id: str, db: Session = Depends(get_db), user=Depends(manage
         return server_error_response(e)
 
 
-@router.get('/getsse/{dialog_id}', summary="[Deprecated] 获取对话信息（支持SSE）", response_description="成功获取对话信息", deprecated=True)
+@router.get("/getsse/{dialog_id}", summary="[Deprecated] 获取对话信息（支持SSE）", response_description="成功获取对话信息", deprecated=True)
 def getsse(dialog_id: str, db: Session = Depends(get_db), request: Request = None):
-    token_header = request.headers.get('Authorization')
+    token_header = request.headers.get("Authorization")
     if not token_header:
         return get_data_error_result(retmsg="Authorization header is missing!")
 
@@ -423,7 +418,8 @@ def getsse(dialog_id: str, db: Session = Depends(get_db), request: Request = Non
     except Exception as e:
         return server_error_response(e)
 
-@router.post('/rm', summary="[Deprecated] 删除会话", response_description="成功删除会话", deprecated=True)
+
+@router.post("/rm", summary="[Deprecated] 删除会话", response_description="成功删除会话", deprecated=True)
 def rm(request: RemoveConversationRequest, db: Session = Depends(get_db), user=Depends(manager)):
     try:
         for cid in request.conversation_ids:
@@ -435,35 +431,27 @@ def rm(request: RemoveConversationRequest, db: Session = Depends(get_db), user=D
                 if DialogService.query(db, tenant_id=tenant.tenant_id, id=conv.dialog_id):
                     break
             else:
-                return get_json_result(
-                    data=False, retmsg='Only owner of conversation authorized for this operation.',
-                    retcode=RetCode.OPERATING_ERROR)
+                return get_json_result(data=False, retmsg="Only owner of conversation authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
             ConversationService.delete_by_id(db, cid)
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)
 
 
-@router.get('/list', summary="[Deprecated] 列出会话", response_description="成功列出会话", deprecated=True)
+@router.get("/list", summary="[Deprecated] 列出会话", response_description="成功列出会话", deprecated=True)
 def list_conversation(dialog_id: str, db: Session = Depends(get_db), user=Depends(manager)):
 
     try:
         if not DialogService.query(db, tenant_id=user.id, id=dialog_id):
-            return get_json_result(
-                data=False, retmsg='Only owner of dialog authorized for this operation.',
-                retcode=RetCode.OPERATING_ERROR)
-        convs = ConversationService.query(
-            db,
-            dialog_id=dialog_id,
-            order_by="create_time",
-            reverse=True)
+            return get_json_result(data=False, retmsg="Only owner of dialog authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
+        convs = ConversationService.query(db, dialog_id=dialog_id, order_by="create_time", reverse=True)
         convs = [d.to_dict() for d in convs]
         return get_json_result(data=convs)
     except Exception as e:
         return server_error_response(e)
 
 
-@router.post('/completion', summary="[Deprecated] 生成对话", response_description="成功生成对话", deprecated=True)
+@router.post("/completion", summary="[Deprecated] 生成对话", response_description="成功生成对话", deprecated=True)
 async def completion(request: CompletionRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request.model_dump()
     if not req.get("conversation_id") or not req.get("messages"):
@@ -562,9 +550,7 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db), 
                 ConversationService.update_by_id(db, conv.id, conv.to_dict())
             except Exception as e:
                 logging.exception(e)
-                yield "data:" + json.dumps({"retcode": 500, "retmsg": str(e),
-                                            "data": {"answer": "**ERROR**: " + str(e), "reference": []}},
-                                           ensure_ascii=False) + "\n\n"
+                yield "data:" + json.dumps({"retcode": 500, "retmsg": str(e), "data": {"answer": "**ERROR**: " + str(e), "reference": []}}, ensure_ascii=False) + "\n\n"
             yield "data:" + json.dumps({"retcode": 0, "retmsg": "", "data": True}, ensure_ascii=False) + "\n\n"
 
         if stream:
@@ -582,7 +568,7 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db), 
         return server_error_response(e)
 
 
-@router.post('/tts', summary="[Deprecated] 文本转语音", response_description="成功文本转语音", deprecated=True)
+@router.post("/tts", summary="[Deprecated] 文本转语音", response_description="成功文本转语音", deprecated=True)
 def tts(request: TTSRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     文本转语音
@@ -629,30 +615,15 @@ def tts(request: TTSRequest, db: Session = Depends(get_db), user=Depends(manager
                 if txt.strip():
                     yield from tts_mdl.tts(txt)
         except Exception as e:
-            error_message = json.dumps({
-                "retcode": 500,
-                "retmsg": str(e),
-                "data": {"answer": "**ERROR**: " + str(e)}
-            }, ensure_ascii=False).encode('utf-8')
+            error_message = json.dumps({"retcode": 500, "retmsg": str(e), "data": {"answer": "**ERROR**: " + str(e)}}, ensure_ascii=False).encode("utf-8")
             yield error_message
 
-    headers = {
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-        "X-Accel-Buffering": "no",
-        "Content-Type": "audio/mpeg",
-        "Content-Disposition": 'attachment; filename="tts_output.mp3"'
-    }
+    headers = {"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no", "Content-Type": "audio/mpeg", "Content-Disposition": 'attachment; filename="tts_output.mp3"'}
     return StreamingResponse(stream_audio(), media_type="audio/mpeg", headers=headers)
 
 
-@router.post('/sequence2txt', summary="[Deprecated] 语音转文字（流式）", response_description="成功识别语音", deprecated=True)
-def sequence2txt(
-    file: UploadFile = File(...),
-    stream: str = "false",
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-):
+@router.post("/sequence2txt", summary="[Deprecated] 语音转文字（流式）", response_description="成功识别语音", deprecated=True)
+def sequence2txt(file: UploadFile = File(...), stream: str = "false", db: Session = Depends(get_db), user=Depends(manager)):
     """
     语音转文字（支持流式）
 
@@ -671,21 +642,16 @@ def sequence2txt(
     """
     stream_mode = stream.lower() == "true"
 
-    ALLOWED_EXTS = {
-        ".wav", ".mp3", ".m4a", ".aac",
-        ".flac", ".ogg", ".webm",
-        ".opus", ".wma"
-    }
+    ALLOWED_EXTS = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".webm", ".opus", ".wma"}
 
     filename = file.filename or ""
     suffix = os.path.splitext(filename)[-1].lower()
     if suffix not in ALLOWED_EXTS:
-        return get_data_error_result(
-            retmsg=f"Unsupported audio format: {suffix}. Allowed: {', '.join(sorted(ALLOWED_EXTS))}"
-        )
+        return get_data_error_result(retmsg=f"Unsupported audio format: {suffix}. Allowed: {', '.join(sorted(ALLOWED_EXTS))}")
 
     # 保存上传的音频文件到临时路径
     import tempfile as tf
+
     fd, temp_audio_path = tf.mkstemp(suffix=suffix)
     os.close(fd)
     with open(temp_audio_path, "wb") as f:
@@ -726,7 +692,7 @@ def sequence2txt(
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-@router.post('/asr', summary="[Deprecated] 语音识别", response_description="成功识别语音", deprecated=True)
+@router.post("/asr", summary="[Deprecated] 语音识别", response_description="成功识别语音", deprecated=True)
 def asr(request: ASRRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request.model_dump()
     audio_file_path = req.get("audio_file_path")
@@ -749,10 +715,11 @@ def asr(request: ASRRequest, db: Session = Depends(get_db), user=Depends(manager
     return get_json_result(data=transcription_result)
 
 
-@router.post('/asr_upload', summary="[Deprecated] 语音识别上传", response_description="成功识别语音", deprecated=True)
+@router.post("/asr_upload", summary="[Deprecated] 语音识别上传", response_description="成功识别语音", deprecated=True)
 def asr_upload(file: UploadFile = File(...), llm_name: str | None = None, db: Session = Depends(get_db), user=Depends(manager)):
 
     import tempfile
+
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_audio_file:
         temp_audio_file.write(file.file.read())
         audio_file_path = temp_audio_file.name
@@ -776,7 +743,7 @@ def asr_upload(file: UploadFile = File(...), llm_name: str | None = None, db: Se
     return get_json_result(data=transcription_result)
 
 
-@router.post('/delete_msg', summary="[Deprecated] 删除信息", response_description="成功删除信息", deprecated=True)
+@router.post("/delete_msg", summary="[Deprecated] 删除信息", response_description="成功删除信息", deprecated=True)
 def delete_msg(request: DeleteMsgRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     删除消息
@@ -822,7 +789,7 @@ def delete_msg(request: DeleteMsgRequest, db: Session = Depends(get_db), user=De
     return get_json_result(data=conv)
 
 
-@router.post('/thumbup', summary="[Deprecated] 点赞", response_description="成功点赞", deprecated=True)
+@router.post("/thumbup", summary="[Deprecated] 点赞", response_description="成功点赞", deprecated=True)
 def thumbup(request: ThumbupRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request.model_dump()
     conv = ConversationService.get_by_id(db, req["conversation_id"])
@@ -839,7 +806,7 @@ def thumbup(request: ThumbupRequest, db: Session = Depends(get_db), user=Depends
     return get_json_result(data=conv)
 
 
-@router.post('/ask', summary="[Deprecated] 问答接口", response_description="返回答案", deprecated=True)
+@router.post("/ask", summary="[Deprecated] 问答接口", response_description="返回答案", deprecated=True)
 def ask_about(request: AskAboutRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request.model_dump()
     uid = user.id
@@ -860,15 +827,11 @@ def ask_about(request: AskAboutRequest, db: Session = Depends(get_db), user=Depe
             yield "data:" + json.dumps({"retcode": 500, "retmsg": str(e), "data": {"answer": "**ERROR**: " + str(e), "reference": []}}, ensure_ascii=False) + "\n\n"
         yield "data:" + json.dumps({"retcode": 0, "retmsg": "", "data": True}, ensure_ascii=False) + "\n\n"
 
-    headers = {
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-        "X-Accel-Buffering": "no"
-    }
+    headers = {"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
     return StreamingResponse(stream(), media_type="text/event-stream", headers=headers)
 
 
-@router.post('/mindmap', summary="[Deprecated] 生成思维导图", response_description="返回思维导图", deprecated=True)
+@router.post("/mindmap", summary="[Deprecated] 生成思维导图", response_description="返回思维导图", deprecated=True)
 async def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request.model_dump()
 
@@ -886,7 +849,7 @@ async def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=D
     return get_json_result(data=mind_map)
 
 
-@router.post('/related_questions', summary="[Deprecated] 生成相关问题", response_description="返回相关问题", deprecated=True)
+@router.post("/related_questions", summary="[Deprecated] 生成相关问题", response_description="返回相关问题", deprecated=True)
 async def related_questions(request: RelatedQuestionsRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request.model_dump()
 

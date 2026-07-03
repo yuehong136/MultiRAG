@@ -16,10 +16,7 @@ class XInferenceRerank(Base):
             base_url = urljoin(base_url, "/v1/rerank")
         self.model_name = model_name
         self.base_url = base_url
-        self.headers = {
-            "Content-Type": "application/json",
-            "accept": "application/json"
-        }
+        self.headers = {"Content-Type": "application/json", "accept": "application/json"}
         if key and key != "x":
             self.headers["Authorization"] = f"Bearer {key}"
 
@@ -30,13 +27,7 @@ class XInferenceRerank(Base):
         token_count = 0
         for _, t in pairs:
             token_count += num_tokens_from_string(t)
-        data = {
-            "model": self.model_name,
-            "query": query,
-            "return_documents": "true",
-            "return_len": "true",
-            "documents": texts
-        }
+        data = {"model": self.model_name, "query": query, "return_documents": "true", "return_len": "true", "documents": texts}
         res = requests.post(self.base_url, headers=self.headers, json=data).json()
         rank = np.zeros(len(texts), dtype=float)
         try:

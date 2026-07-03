@@ -80,9 +80,7 @@ async def expand_open_regions(
     sem = asyncio.Semaphore(max(1, int(concurrency)))
     done = 0
 
-    async def expand_one(
-        section: dict[str, Any], block: dict[str, Any]
-    ) -> tuple[list[dict[str, Any]] | None, ExpandError | None]:
+    async def expand_one(section: dict[str, Any], block: dict[str, Any]) -> tuple[list[dict[str, Any]] | None, ExpandError | None]:
         nonlocal done
         brief = (block.get("annotation") or "").strip()
         builder = build_layout_first_region_messages if layout_first else build_region_messages

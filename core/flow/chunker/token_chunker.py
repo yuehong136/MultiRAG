@@ -303,11 +303,15 @@ class TokenChunker(ProcessBase):
         overlapped_percent = normalize_overlapped_percent(self._param.overlapped_percent)
         if from_upstream.output_format in ["markdown", "text", "html"]:
             payload = getattr(from_upstream, f"{from_upstream.output_format}_result") or ""
-            cks = _split_text_by_pattern(payload, delimiter_pattern) if delimiter_pattern else naive_merge(
-                payload,
-                self._param.chunk_token_size,
-                "",
-                overlapped_percent,
+            cks = (
+                _split_text_by_pattern(payload, delimiter_pattern)
+                if delimiter_pattern
+                else naive_merge(
+                    payload,
+                    self._param.chunk_token_size,
+                    "",
+                    overlapped_percent,
+                )
             )
             if custom_pattern:
                 docs = []

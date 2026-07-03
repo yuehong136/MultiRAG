@@ -20,9 +20,9 @@ class WritingService(CommonService):
     """写作内容生成服务类"""
 
     @classmethod
-    def generate_outline(cls, db: Session, user_input: str, content_type: str, language_style: str,
-                         word_count: int, model: str, user_id: str, reference: str | None = None,
-                         custom_outline_md: str | None = None) -> dict[str, Any]:
+    def generate_outline(
+        cls, db: Session, user_input: str, content_type: str, language_style: str, word_count: int, model: str, user_id: str, reference: str | None = None, custom_outline_md: str | None = None
+    ) -> dict[str, Any]:
         """
         生成文章大纲
 
@@ -58,11 +58,11 @@ class WritingService(CommonService):
 
                 # 从Markdown大纲中提取标题
                 # 尝试从大纲的第一行提取标题（通常是# 开头的一级标题）
-                lines = custom_outline_md.strip().split('\n')
+                lines = custom_outline_md.strip().split("\n")
                 article_title = content_type
 
-                if lines and lines[0].startswith('# '):
-                    article_title = lines[0].replace('# ', '').strip()
+                if lines and lines[0].startswith("# "):
+                    article_title = lines[0].replace("# ", "").strip()
                 else:
                     article_title = f"{content_type}（{language_style}风格）"
 
@@ -76,7 +76,7 @@ class WritingService(CommonService):
                     model=model,
                     user_id=user_id,
                     title=article_title,
-                    reference=reference
+                    reference=reference,
                 )
                 db.add(project)
 
@@ -86,11 +86,7 @@ class WritingService(CommonService):
                 db.commit()
                 db.refresh(project)
 
-                return {
-                    "outline_md": custom_outline_md,
-                    "outline_structure": outline_structure,
-                    "article_id": project_id
-                }
+                return {"outline_md": custom_outline_md, "outline_structure": outline_structure, "article_id": project_id}
             else:
                 # 原有逻辑：使用大模型生成大纲
                 # 创建LLM实例
@@ -163,16 +159,16 @@ class WritingService(CommonService):
                 content = llm_bundle.chat("", [{"role": "user", "content": prompt}], {})
 
                 # 提取JSON部分
-                json_match = re.search(r'```json\s*(\{.*?\})\s*```', content, re.DOTALL)
+                json_match = re.search(r"```json\s*(\{.*?\})\s*```", content, re.DOTALL)
                 if json_match:
                     content = json_match.group(1)
                 else:
                     # 如果没有代码块标记，尝试直接解析整个内容
                     # 寻找第一个{和最后一个}之间的内容
-                    start_idx = content.find('{')
-                    end_idx = content.rfind('}')
+                    start_idx = content.find("{")
+                    end_idx = content.rfind("}")
                     if start_idx != -1 and end_idx != -1:
-                        content = content[start_idx:end_idx + 1]
+                        content = content[start_idx : end_idx + 1]
 
                 # 解析为JSON
                 outline_data = json.loads(content)
@@ -190,7 +186,7 @@ class WritingService(CommonService):
                     model=model,
                     user_id=user_id,
                     title=article_title,
-                    reference=reference  # 存储参考信息
+                    reference=reference,  # 存储参考信息
                 )
                 db.add(project)
 
@@ -198,13 +194,7 @@ class WritingService(CommonService):
                 for main_idx, section in enumerate(outline_data.get("sections", [])):
                     main_chapter_id = get_uuid()
                     main_chapter = WritingChapter(
-                        id=main_chapter_id,
-                        project_id=project_id,
-                        title=section.get("title", "未命名章节"),
-                        summary=section.get("summary", ""),
-                        level=1,
-                        parent_id=None,
-                        order_index=main_idx
+                        id=main_chapter_id, project_id=project_id, title=section.get("title", "未命名章节"), summary=section.get("summary", ""), level=1, parent_id=None, order_index=main_idx
                     )
                     db.add(main_chapter)
 
@@ -217,7 +207,7 @@ class WritingService(CommonService):
                             summary=subsection.get("summary", ""),
                             level=2,
                             parent_id=main_chapter_id,
-                            order_index=sub_idx
+                            order_index=sub_idx,
                         )
                         db.add(sub_chapter)
 
@@ -227,11 +217,7 @@ class WritingService(CommonService):
                 # 返回创建的大纲结构
                 outline_structure = ChapterService.get_project_outline(db, project_id)
 
-                return {
-                    "outline_md": ChapterService.get_markdown_outline(db, project_id),
-                    "outline_structure": outline_structure,
-                    "article_id": project_id
-                }
+                return {"outline_md": ChapterService.get_markdown_outline(db, project_id), "outline_structure": outline_structure, "article_id": project_id}
 
         except Exception as e:
             db.rollback()
@@ -255,22 +241,18 @@ class WritingService(CommonService):
         返回:
             Dict: 上下文信息
         """
-        chapter = db.query(WritingChapter).filter(
-            WritingChapter.id == chapter_id,
-            WritingChapter.status == StatusEnum.VALID.value
-        ).first()
+        chapter = db.query(WritingChapter).filter(WritingChapter.id == chapter_id, WritingChapter.status == StatusEnum.VALID.value).first()
 
         if not chapter:
             raise ValueError(f"未找到章节 ID: {chapter_id}")
 
         # 获取项目中的所有章节，按顺序排列
-        all_chapters = db.query(WritingChapter).filter(
-            WritingChapter.project_id == chapter.project_id,
-            WritingChapter.status == StatusEnum.VALID.value
-        ).order_by(
-            WritingChapter.level.asc(),
-            WritingChapter.order_index.asc()
-        ).all()
+        all_chapters = (
+            db.query(WritingChapter)
+            .filter(WritingChapter.project_id == chapter.project_id, WritingChapter.status == StatusEnum.VALID.value)
+            .order_by(WritingChapter.level.asc(), WritingChapter.order_index.asc())
+            .all()
+        )
 
         # 找到当前章节在列表中的位置
         current_idx = -1
@@ -283,10 +265,7 @@ class WritingService(CommonService):
             raise ValueError("无法确定章节在项目中的位置")
 
         # 获取已完成章节的内容
-        contents = db.query(WritingChapterContent).filter(
-            WritingChapterContent.status == StatusEnum.VALID.value,
-            WritingChapterContent.chapter_id.in_([ch.id for ch in all_chapters])
-        ).all()
+        contents = db.query(WritingChapterContent).filter(WritingChapterContent.status == StatusEnum.VALID.value, WritingChapterContent.chapter_id.in_([ch.id for ch in all_chapters])).all()
 
         # 建立章节ID到内容的映射
         content_map = {content.chapter_id: content.content for content in contents}
@@ -299,7 +278,7 @@ class WritingService(CommonService):
         context = {
             "full_content": [],  # 完整内容的章节
             "summary": [],  # 摘要内容的章节
-            "titles_only": []  # 仅标题的章节
+            "titles_only": [],  # 仅标题的章节
         }
 
         # 处理所有章节
@@ -333,22 +312,11 @@ class WritingService(CommonService):
 
             # 根据关系类型添加到上下文
             if is_adjacent:
-                context["full_content"].append({
-                    "id": ch.id,
-                    "title": ch.title,
-                    "content": content_map[ch.id]
-                })
+                context["full_content"].append({"id": ch.id, "title": ch.title, "content": content_map[ch.id]})
             elif is_related:
-                context["summary"].append({
-                    "id": ch.id,
-                    "title": ch.title,
-                    "summary": content_map[ch.id][:300] + "..." if len(content_map[ch.id]) > 300 else content_map[ch.id]
-                })
+                context["summary"].append({"id": ch.id, "title": ch.title, "summary": content_map[ch.id][:300] + "..." if len(content_map[ch.id]) > 300 else content_map[ch.id]})
             else:
-                context["titles_only"].append({
-                    "id": ch.id,
-                    "title": ch.title
-                })
+                context["titles_only"].append({"id": ch.id, "title": ch.title})
 
         return context
 
@@ -365,7 +333,7 @@ class WritingService(CommonService):
         返回:
             Dict: 创建的大纲结构
         """
-        lines = markdown_outline.strip().split('\n')
+        lines = markdown_outline.strip().split("\n")
 
         # 跟踪当前的主章节ID和索引
         current_main_chapter_id = None
@@ -377,36 +345,27 @@ class WritingService(CommonService):
             line = line.strip()
 
             # 忽略空行和一级标题（通常是文章标题）
-            if not line or line.startswith('# '):
+            if not line or line.startswith("# "):
                 continue
 
             # 解析二级标题（主章节）
-            if line.startswith('## '):
-                title = line.replace('## ', '').strip()
+            if line.startswith("## "):
+                title = line.replace("## ", "").strip()
                 # 提取可能的编号前缀，如 "1. 章节标题"
-                if '.' in title and title.split('.')[0].strip().isdigit():
-                    title = title.split('.', 1)[1].strip()
+                if "." in title and title.split(".")[0].strip().isdigit():
+                    title = title.split(".", 1)[1].strip()
 
                 main_chapter_id = get_uuid()
                 summary = ""
 
                 # 查找下一行是否为摘要
                 next_line_idx = lines.index(line) + 1
-                if next_line_idx < len(lines) and not lines[next_line_idx].startswith('#') and not lines[
-                    next_line_idx].startswith('-'):
+                if next_line_idx < len(lines) and not lines[next_line_idx].startswith("#") and not lines[next_line_idx].startswith("-"):
                     summary = lines[next_line_idx].strip()
-                    if summary.startswith('摘要：'):
+                    if summary.startswith("摘要："):
                         summary = summary[3:].strip()
 
-                main_chapter = WritingChapter(
-                    id=main_chapter_id,
-                    project_id=project_id,
-                    title=title,
-                    summary=summary,
-                    level=1,
-                    parent_id=None,
-                    order_index=main_idx
-                )
+                main_chapter = WritingChapter(id=main_chapter_id, project_id=project_id, title=title, summary=summary, level=1, parent_id=None, order_index=main_idx)
                 db.add(main_chapter)
 
                 current_main_chapter_id = main_chapter_id
@@ -414,37 +373,29 @@ class WritingService(CommonService):
                 sub_idx = 0
 
             # 解析三级标题或列表项（子章节）
-            elif (line.startswith('### ') or line.startswith('- ')) and current_main_chapter_id:
-                if line.startswith('### '):
-                    title = line.replace('### ', '').strip()
+            elif (line.startswith("### ") or line.startswith("- ")) and current_main_chapter_id:
+                if line.startswith("### "):
+                    title = line.replace("### ", "").strip()
                 else:
-                    title = line.replace('- ', '').strip()
+                    title = line.replace("- ", "").strip()
 
                 # 提取可能的编号和摘要
                 summary = ""
 
                 # 处理可能的格式："1.1 子章节标题 (摘要：...)"
-                if ' (摘要：' in title:
-                    title_parts = title.split(' (摘要：', 1)
+                if " (摘要：" in title:
+                    title_parts = title.split(" (摘要：", 1)
                     title = title_parts[0].strip()
-                    summary = title_parts[1].rstrip(')').strip()
+                    summary = title_parts[1].rstrip(")").strip()
 
                 # 处理可能的数字编号
-                if '.' in title and title.split('.')[0].strip().isdigit():
+                if "." in title and title.split(".")[0].strip().isdigit():
                     # 可能是 "1.1 子章节标题" 格式
-                    title = title.split('.', 1)[1].strip()
-                    if '.' in title and title.split('.')[0].strip().isdigit():
-                        title = title.split('.', 1)[1].strip()
+                    title = title.split(".", 1)[1].strip()
+                    if "." in title and title.split(".")[0].strip().isdigit():
+                        title = title.split(".", 1)[1].strip()
 
-                sub_chapter = WritingChapter(
-                    id=get_uuid(),
-                    project_id=project_id,
-                    title=title,
-                    summary=summary,
-                    level=2,
-                    parent_id=current_main_chapter_id,
-                    order_index=sub_idx
-                )
+                sub_chapter = WritingChapter(id=get_uuid(), project_id=project_id, title=title, summary=summary, level=2, parent_id=current_main_chapter_id, order_index=sub_idx)
                 db.add(sub_chapter)
 
                 sub_idx += 1
@@ -469,28 +420,21 @@ class WritingService(CommonService):
             Tuple[str, int]: (完整文章内容, 字数)
         """
         # 获取项目信息
-        project = db.query(WritingProject).filter(
-            WritingProject.id == project_id,
-            WritingProject.status == StatusEnum.VALID.value
-        ).first()
+        project = db.query(WritingProject).filter(WritingProject.id == project_id, WritingProject.status == StatusEnum.VALID.value).first()
 
         if not project:
             raise ValueError(f"未找到项目 ID: {project_id}")
 
         # 获取所有章节
-        chapters = db.query(WritingChapter).filter(
-            WritingChapter.project_id == project_id,
-            WritingChapter.status == StatusEnum.VALID.value
-        ).order_by(
-            WritingChapter.level.asc(),
-            WritingChapter.order_index.asc()
-        ).all()
+        chapters = (
+            db.query(WritingChapter)
+            .filter(WritingChapter.project_id == project_id, WritingChapter.status == StatusEnum.VALID.value)
+            .order_by(WritingChapter.level.asc(), WritingChapter.order_index.asc())
+            .all()
+        )
 
         # 获取所有章节内容
-        contents = db.query(WritingChapterContent).filter(
-            WritingChapterContent.status == StatusEnum.VALID.value,
-            WritingChapterContent.chapter_id.in_([ch.id for ch in chapters])
-        ).all()
+        contents = db.query(WritingChapterContent).filter(WritingChapterContent.status == StatusEnum.VALID.value, WritingChapterContent.chapter_id.in_([ch.id for ch in chapters])).all()
 
         # 建立章节ID到内容的映射
         content_map = {content.chapter_id: content.content for content in contents}
@@ -530,10 +474,7 @@ class WritingService(CommonService):
                 sub_chapters[ch.parent_id].append(ch)
 
         # 按顺序组装文章
-        for main_id, main_ch in sorted(
-                main_chapters.items(),
-                key=lambda x: x[1].order_index
-        ):
+        for main_id, main_ch in sorted(main_chapters.items(), key=lambda x: x[1].order_index):
             article_text += f"## {main_ch.title}\n\n"
 
             if main_id in content_map:
@@ -541,10 +482,7 @@ class WritingService(CommonService):
 
             # 添加子章节
             if main_id in sub_chapters:
-                for sub_ch in sorted(
-                        sub_chapters[main_id],
-                        key=lambda x: x.order_index
-                ):
+                for sub_ch in sorted(sub_chapters[main_id], key=lambda x: x.order_index):
                     article_text += f"### {sub_ch.title}\n\n"
 
                     if sub_ch.id in content_map:
@@ -568,36 +506,21 @@ class WritingService(CommonService):
             dict: 生成的章节内容及相关信息
         """
         # 获取章节信息
-        chapter = db.query(WritingChapter).filter(
-            WritingChapter.id == chapter_id,
-            WritingChapter.status == StatusEnum.VALID.value
-        ).first()
+        chapter = db.query(WritingChapter).filter(WritingChapter.id == chapter_id, WritingChapter.status == StatusEnum.VALID.value).first()
 
         if not chapter:
-            return {
-                "retcode": 404,
-                "retmsg": f"未找到章节 ID: {chapter_id}",
-                "data": None
-            }
+            return {"retcode": 404, "retmsg": f"未找到章节 ID: {chapter_id}", "data": None}
 
         # 获取项目信息
         project = db.query(WritingProject).filter_by(id=chapter.project_id).first()
         if not project:
-            return {
-                "retcode": 404,
-                "retmsg": f"未找到项目 ID: {chapter.project_id}",
-                "data": None
-            }
+            return {"retcode": 404, "retmsg": f"未找到项目 ID: {chapter.project_id}", "data": None}
 
         try:
             # 获取用户所属租户
             tenants = TenantService.get_info_by(db, project.user_id)
             if not tenants:
-                return {
-                    "retcode": 500,
-                    "retmsg": "找不到用户所属租户信息",
-                    "data": None
-                }
+                return {"retcode": 500, "retmsg": "找不到用户所属租户信息", "data": None}
 
             tenant_id = tenants[0]["tenant_id"]
 
@@ -615,10 +538,7 @@ class WritingService(CommonService):
             content = llm_bundle.chat("", [{"role": "user", "content": prompt}], {})
 
             # 保存到数据库
-            content_obj = db.query(WritingChapterContent).filter(
-                WritingChapterContent.chapter_id == chapter_id,
-                WritingChapterContent.status == StatusEnum.VALID.value
-            ).first()
+            content_obj = db.query(WritingChapterContent).filter(WritingChapterContent.chapter_id == chapter_id, WritingChapterContent.status == StatusEnum.VALID.value).first()
 
             if content_obj:
                 # 更新现有内容
@@ -627,13 +547,7 @@ class WritingService(CommonService):
                 content_obj.update_date = cls.current_datetime()
             else:
                 # 创建新内容
-                content_obj = WritingChapterContent(
-                    id=get_uuid(),
-                    chapter_id=chapter_id,
-                    content=content,
-                    update_time=cls.current_timestamp(),
-                    update_date=cls.current_datetime()
-                )
+                content_obj = WritingChapterContent(id=get_uuid(), chapter_id=chapter_id, content=content, update_time=cls.current_timestamp(), update_date=cls.current_datetime())
                 db.add(content_obj)
 
             # 更新章节的更新时间
@@ -643,24 +557,11 @@ class WritingService(CommonService):
             db.commit()
 
             # 返回结果（直接返回字典而不是JSONResponse）
-            return {
-                "retcode": 0,
-                "retmsg": "success",
-                "data": {
-                    "type": "complete",
-                    "section_id": chapter_id,
-                    "section_title": chapter.title,
-                    "content": content
-                }
-            }
+            return {"retcode": 0, "retmsg": "success", "data": {"type": "complete", "section_id": chapter_id, "section_title": chapter.title, "content": content}}
         except Exception as e:
             db.rollback()
             logging.error(f"写作章节内容失败: {e!s}", exc_info=True)
-            return {
-                "retcode": 500,
-                "retmsg": f"章节写作失败: {e!s}",
-                "data": {"type": "error"}
-            }
+            return {"retcode": 500, "retmsg": f"章节写作失败: {e!s}", "data": {"type": "error"}}
 
     @classmethod
     async def write_section_stream_improved(cls, db: Session, chapter_id: str):
@@ -677,10 +578,7 @@ class WritingService(CommonService):
         from api.db.db_models import db_connection
 
         # 获取章节信息
-        chapter = db.query(WritingChapter).filter(
-            WritingChapter.id == chapter_id,
-            WritingChapter.status == StatusEnum.VALID.value
-        ).first()
+        chapter = db.query(WritingChapter).filter(WritingChapter.id == chapter_id, WritingChapter.status == StatusEnum.VALID.value).first()
 
         if not chapter:
             yield f"data: {json.dumps({'retcode': 404, 'retmsg': f'找不到指定的章节: {chapter_id}', 'data': {'type': 'error'}})}\n\n"
@@ -718,15 +616,7 @@ class WritingService(CommonService):
             prompt = cls._build_improved_prompt(db, chapter_id, context)
 
             # 发送初始元数据
-            metadata = {
-                "retcode": 0,
-                "retmsg": "success",
-                "data": {
-                    "type": "metadata",
-                    "section_id": chapter_id,
-                    "section_title": chapter_title
-                }
-            }
+            metadata = {"retcode": 0, "retmsg": "success", "data": {"type": "metadata", "section_id": chapter_id, "section_title": chapter_title}}
             yield f"data: {json.dumps(metadata, ensure_ascii=False)}\n\n"
 
             # 存储最后得到的完整内容
@@ -752,14 +642,7 @@ class WritingService(CommonService):
                 final_content = content
 
                 # 发送内容块到前端
-                data = {
-                    "retcode": 0,
-                    "retmsg": "success",
-                    "data": {
-                        "type": "content",
-                        "content": content
-                    }
-                }
+                data = {"retcode": 0, "retmsg": "success", "data": {"type": "content", "content": content}}
                 yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
                 await asyncio.sleep(0.01)  # 小延迟以保证流畅传输
 
@@ -767,10 +650,7 @@ class WritingService(CommonService):
             if final_content:
                 with db_connection() as new_db:
                     # 保存生成的内容到数据库
-                    content_obj = new_db.query(WritingChapterContent).filter(
-                        WritingChapterContent.chapter_id == chapter_id,
-                        WritingChapterContent.status == StatusEnum.VALID.value
-                    ).first()
+                    content_obj = new_db.query(WritingChapterContent).filter(WritingChapterContent.chapter_id == chapter_id, WritingChapterContent.status == StatusEnum.VALID.value).first()
 
                     if content_obj:
                         # 更新现有内容
@@ -779,19 +659,11 @@ class WritingService(CommonService):
                         content_obj.update_date = cls.current_datetime()
                     else:
                         # 创建新内容
-                        content_obj = WritingChapterContent(
-                            id=get_uuid(),
-                            chapter_id=chapter_id,
-                            content=final_content,
-                            update_time=cls.current_timestamp(),
-                            update_date=cls.current_datetime()
-                        )
+                        content_obj = WritingChapterContent(id=get_uuid(), chapter_id=chapter_id, content=final_content, update_time=cls.current_timestamp(), update_date=cls.current_datetime())
                         new_db.add(content_obj)
 
                     # 更新章节的更新时间
-                    chapter_to_update = new_db.query(WritingChapter).filter(
-                        WritingChapter.id == chapter_id
-                    ).first()
+                    chapter_to_update = new_db.query(WritingChapter).filter(WritingChapter.id == chapter_id).first()
                     if chapter_to_update:
                         chapter_to_update.update_time = cls.current_timestamp()
                         chapter_to_update.update_date = cls.current_datetime()
@@ -799,26 +671,12 @@ class WritingService(CommonService):
                     new_db.commit()
 
             # 发送完成信号
-            complete_data = {
-                "retcode": 0,
-                "retmsg": "success",
-                "data": {
-                    "type": "complete",
-                    "section_id": chapter_id,
-                    "section_title": chapter.title
-                }
-            }
+            complete_data = {"retcode": 0, "retmsg": "success", "data": {"type": "complete", "section_id": chapter_id, "section_title": chapter.title}}
             yield f"data: {json.dumps(complete_data, ensure_ascii=False)}\n\n"
 
         except Exception as e:
             logging.error(f"流式写作章节内容失败: {e!s}", exc_info=True)
-            error_data = {
-                "retcode": 500,
-                "retmsg": f"章节写作失败: {e!s}",
-                "data": {
-                    "type": "error"
-                }
-            }
+            error_data = {"retcode": 500, "retmsg": f"章节写作失败: {e!s}", "data": {"type": "error"}}
             yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
 
     @classmethod
@@ -845,10 +703,12 @@ class WritingService(CommonService):
             raise ValueError(f"未找到项目 ID: {chapter.project_id}")
 
         # 自动获取章节的参考资料
-        db_references = db.query(WritingReferenceMaterial).filter(
-            WritingReferenceMaterial.chapter_id == chapter_id,
-            WritingReferenceMaterial.status == StatusEnum.VALID.value
-        ).order_by(WritingReferenceMaterial.order_index.asc()).all()
+        db_references = (
+            db.query(WritingReferenceMaterial)
+            .filter(WritingReferenceMaterial.chapter_id == chapter_id, WritingReferenceMaterial.status == StatusEnum.VALID.value)
+            .order_by(WritingReferenceMaterial.order_index.asc())
+            .all()
+        )
 
         # 构建参考资料文本
         reference_text = ""
@@ -861,10 +721,7 @@ class WritingService(CommonService):
         # 获取子章节信息（如果是主章节）
         sub_chapters_text = ""
         if chapter.level == 1:
-            sub_chapters = db.query(WritingChapter).filter(
-                WritingChapter.parent_id == chapter_id,
-                WritingChapter.status == StatusEnum.VALID.value
-            ).order_by(WritingChapter.order_index.asc()).all()
+            sub_chapters = db.query(WritingChapter).filter(WritingChapter.parent_id == chapter_id, WritingChapter.status == StatusEnum.VALID.value).order_by(WritingChapter.order_index.asc()).all()
 
             if sub_chapters:
                 sub_chapters_text = "### 子章节结构：\n"
@@ -874,13 +731,12 @@ class WritingService(CommonService):
                         sub_chapters_text += f"   摘要：{sub.summary}\n\n"
 
         # 获取完整大纲
-        all_chapters = db.query(WritingChapter).filter(
-            WritingChapter.project_id == chapter.project_id,
-            WritingChapter.status == StatusEnum.VALID.value
-        ).order_by(
-            WritingChapter.level.asc(),
-            WritingChapter.order_index.asc()
-        ).all()
+        all_chapters = (
+            db.query(WritingChapter)
+            .filter(WritingChapter.project_id == chapter.project_id, WritingChapter.status == StatusEnum.VALID.value)
+            .order_by(WritingChapter.level.asc(), WritingChapter.order_index.asc())
+            .all()
+        )
 
         # 构建完整大纲文本
         outline_text = "# 文章大纲\n\n"
@@ -898,20 +754,14 @@ class WritingService(CommonService):
                 sub_chapters[ch.parent_id].append(ch)
 
         # 按顺序生成大纲
-        for main_id, main_ch in sorted(
-                main_chapters.items(),
-                key=lambda x: x[1].order_index
-        ):
+        for main_id, main_ch in sorted(main_chapters.items(), key=lambda x: x[1].order_index):
             outline_text += f"## {main_ch.order_index + 1}. {main_ch.title}\n"
             if main_ch.summary:
                 outline_text += f"摘要：{main_ch.summary}\n"
 
             # 添加子章节
             if main_id in sub_chapters:
-                for sub_ch in sorted(
-                        sub_chapters[main_id],
-                        key=lambda x: x.order_index
-                ):
+                for sub_ch in sorted(sub_chapters[main_id], key=lambda x: x.order_index):
                     outline_text += f"- {main_ch.order_index + 1}.{sub_ch.order_index + 1} {sub_ch.title}"
                     if sub_ch.summary:
                         outline_text += f" (摘要：{sub_ch.summary})"
@@ -930,10 +780,7 @@ class WritingService(CommonService):
             # 添加子章节
             if chapter.id in sub_chapters:
                 current_section_text += "子章节：\n"
-                for sub_ch in sorted(
-                        sub_chapters[chapter.id],
-                        key=lambda x: x.order_index
-                ):
+                for sub_ch in sorted(sub_chapters[chapter.id], key=lambda x: x.order_index):
                     current_section_text += f"- {sub_ch.title}"
                     if sub_ch.summary:
                         current_section_text += f" (摘要：{sub_ch.summary})"
@@ -994,7 +841,7 @@ class WritingService(CommonService):
     {reference_text}
 
     请注意：
-    1. {'如果这是包含子章节的主章节，请创作一个统一的内容，涵盖所有子章节的要点，并为每个子主题提供适当的过渡。' if chapter.level == 1 and sub_chapters else '请根据章节标题和摘要创作完整内容。'}
+    1. {"如果这是包含子章节的主章节，请创作一个统一的内容，涵盖所有子章节的要点，并为每个子主题提供适当的过渡。" if chapter.level == 1 and sub_chapters else "请根据章节标题和摘要创作完整内容。"}
     2. 保持与已完成章节的连贯性和一致性
     3. 遵循指定的语言风格
     4. 章节长度控制在{chapter_word_count}字左右

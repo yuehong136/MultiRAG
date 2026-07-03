@@ -5,14 +5,15 @@ Revises: b7904d91f00f
 Create Date: 2025-04-29 14:28:18.742679
 
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = '428d4fdf6064'
-down_revision: str | None = 'b7904d91f00f'
+revision: str = "428d4fdf6064"
+down_revision: str | None = "b7904d91f00f"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -28,7 +29,6 @@ def upgrade() -> None:
             type_=sa.String(length=2048),
             existing_nullable=True,
         )
-
 
 
 def downgrade() -> None:

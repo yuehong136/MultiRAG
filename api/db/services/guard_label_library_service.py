@@ -5,6 +5,7 @@
 @date：2025/01/11 18:35
 @desc: AI安全护栏标签词库关系管理服务
 """
+
 import logging
 from typing import Any
 
@@ -18,12 +19,11 @@ from common.misc_utils import get_uuid
 
 class GuardLabelLibraryService(CommonService):
     """AI安全护栏标签词库关系管理服务"""
+
     model = GuardLabelLibrary
 
     @classmethod
-    def bind_library_to_label(cls, db: Session, label_id: str, library_id: str,
-                             priority: int = 0, enabled: bool = True,
-                             tenant_id: str = None, created_by: str = None) -> str | None:
+    def bind_library_to_label(cls, db: Session, label_id: str, library_id: str, priority: int = 0, enabled: bool = True, tenant_id: str = None, created_by: str = None) -> str | None:
         """
         绑定词库到标签
 
@@ -46,16 +46,7 @@ class GuardLabelLibraryService(CommonService):
                 logging.warning(f"标签词库关系已存在: {label_id} -> {library_id}")
                 return None
 
-            binding_data = {
-                "id": get_uuid(),
-                "label_id": label_id,
-                "library_id": library_id,
-                "priority": priority,
-                "enabled": enabled,
-                "tenant_id": tenant_id,
-                "created_by": created_by,
-                "status": "1"
-            }
+            binding_data = {"id": get_uuid(), "label_id": label_id, "library_id": library_id, "priority": priority, "enabled": enabled, "tenant_id": tenant_id, "created_by": created_by, "status": "1"}
 
             binding = cls.save(db, **binding_data)
             return binding.id
@@ -78,20 +69,13 @@ class GuardLabelLibraryService(CommonService):
             绑定关系对象或None
         """
         try:
-            return db.query(cls.model).filter(
-                and_(
-                    cls.model.label_id == label_id,
-                    cls.model.library_id == library_id,
-                    cls.model.status == "1"
-                )
-            ).first()
+            return db.query(cls.model).filter(and_(cls.model.label_id == label_id, cls.model.library_id == library_id, cls.model.status == "1")).first()
         except Exception as e:
             logging.error(f"获取标签词库绑定关系失败: {e}")
             return None
 
     @classmethod
-    def get_libraries_by_label(cls, db: Session, label_id: str,
-                              enabled_only: bool = True) -> list[dict[str, Any]]:
+    def get_libraries_by_label(cls, db: Session, label_id: str, enabled_only: bool = True) -> list[dict[str, Any]]:
         """
         获取标签绑定的词库列表
 
@@ -104,14 +88,10 @@ class GuardLabelLibraryService(CommonService):
             词库列表（包含绑定信息）
         """
         try:
-            query = db.query(cls.model, GuardLibrary).join(
-                GuardLibrary, cls.model.library_id == GuardLibrary.id
-            ).filter(
-                and_(
-                    cls.model.label_id == label_id,
-                    cls.model.status == "1",
-                    GuardLibrary.status == "1"
-                )
+            query = (
+                db.query(cls.model, GuardLibrary)
+                .join(GuardLibrary, cls.model.library_id == GuardLibrary.id)
+                .filter(and_(cls.model.label_id == label_id, cls.model.status == "1", GuardLibrary.status == "1"))
             )
 
             if enabled_only:
@@ -122,12 +102,7 @@ class GuardLabelLibraryService(CommonService):
             libraries = []
             for binding, library in results:
                 library_dict = library.to_dict()
-                library_dict["binding"] = {
-                    "id": binding.id,
-                    "priority": binding.priority,
-                    "enabled": binding.enabled,
-                    "create_time": binding.create_time.isoformat() if binding.create_time else None
-                }
+                library_dict["binding"] = {"id": binding.id, "priority": binding.priority, "enabled": binding.enabled, "create_time": binding.create_time.isoformat() if binding.create_time else None}
                 libraries.append(library_dict)
 
             return libraries
@@ -137,8 +112,7 @@ class GuardLabelLibraryService(CommonService):
             return []
 
     @classmethod
-    def get_labels_by_library(cls, db: Session, library_id: str,
-                             enabled_only: bool = True) -> list[dict[str, Any]]:
+    def get_labels_by_library(cls, db: Session, library_id: str, enabled_only: bool = True) -> list[dict[str, Any]]:
         """
         获取使用此词库的标签列表
 
@@ -151,14 +125,10 @@ class GuardLabelLibraryService(CommonService):
             标签列表（包含绑定信息）
         """
         try:
-            query = db.query(cls.model, GuardLabel).join(
-                GuardLabel, cls.model.label_id == GuardLabel.id
-            ).filter(
-                and_(
-                    cls.model.library_id == library_id,
-                    cls.model.status == "1",
-                    GuardLabel.status == "1"
-                )
+            query = (
+                db.query(cls.model, GuardLabel)
+                .join(GuardLabel, cls.model.label_id == GuardLabel.id)
+                .filter(and_(cls.model.library_id == library_id, cls.model.status == "1", GuardLabel.status == "1"))
             )
 
             if enabled_only:
@@ -169,12 +139,7 @@ class GuardLabelLibraryService(CommonService):
             labels = []
             for binding, label in results:
                 label_dict = label.to_dict()
-                label_dict["binding"] = {
-                    "id": binding.id,
-                    "priority": binding.priority,
-                    "enabled": binding.enabled,
-                    "create_time": binding.create_time.isoformat() if binding.create_time else None
-                }
+                label_dict["binding"] = {"id": binding.id, "priority": binding.priority, "enabled": binding.enabled, "create_time": binding.create_time.isoformat() if binding.create_time else None}
                 labels.append(label_dict)
 
             return labels
@@ -184,8 +149,7 @@ class GuardLabelLibraryService(CommonService):
             return []
 
     @classmethod
-    def update_binding(cls, db: Session, binding_id: str,
-                      update_data: dict[str, Any]) -> bool:
+    def update_binding(cls, db: Session, binding_id: str, update_data: dict[str, Any]) -> bool:
         """
         更新标签词库绑定关系
 
@@ -204,8 +168,7 @@ class GuardLabelLibraryService(CommonService):
             return False
 
     @classmethod
-    def unbind_library_from_label(cls, db: Session, label_id: str,
-                                 library_id: str) -> bool:
+    def unbind_library_from_label(cls, db: Session, label_id: str, library_id: str) -> bool:
         """
         解绑标签词库关系
 
@@ -229,9 +192,7 @@ class GuardLabelLibraryService(CommonService):
             return False
 
     @classmethod
-    def batch_bind_libraries(cls, db: Session, label_id: str,
-                           library_ids: list[str], tenant_id: str = None,
-                           created_by: str = None) -> dict[str, Any]:
+    def batch_bind_libraries(cls, db: Session, label_id: str, library_ids: list[str], tenant_id: str = None, created_by: str = None) -> dict[str, Any]:
         """
         批量绑定词库到标签
 
@@ -250,10 +211,7 @@ class GuardLabelLibraryService(CommonService):
         failed_libraries = []
 
         for library_id in library_ids:
-            binding_id = cls.bind_library_to_label(
-                db, label_id, library_id,
-                tenant_id=tenant_id, created_by=created_by
-            )
+            binding_id = cls.bind_library_to_label(db, label_id, library_id, tenant_id=tenant_id, created_by=created_by)
 
             if binding_id:
                 success_count += 1
@@ -261,15 +219,10 @@ class GuardLabelLibraryService(CommonService):
                 failed_count += 1
                 failed_libraries.append(library_id)
 
-        return {
-            "success_count": success_count,
-            "failed_count": failed_count,
-            "failed_libraries": failed_libraries
-        }
+        return {"success_count": success_count, "failed_count": failed_count, "failed_libraries": failed_libraries}
 
     @classmethod
-    def batch_unbind_libraries(cls, db: Session, label_id: str,
-                             library_ids: list[str]) -> dict[str, Any]:
+    def batch_unbind_libraries(cls, db: Session, label_id: str, library_ids: list[str]) -> dict[str, Any]:
         """
         批量解绑标签词库关系
 
@@ -292,11 +245,7 @@ class GuardLabelLibraryService(CommonService):
                 failed_count += 1
                 failed_libraries.append(library_id)
 
-        return {
-            "success_count": success_count,
-            "failed_count": failed_count,
-            "failed_libraries": failed_libraries
-        }
+        return {"success_count": success_count, "failed_count": failed_count, "failed_libraries": failed_libraries}
 
     @classmethod
     def get_binding_stats(cls, db: Session, tenant_id: str = None) -> dict[str, Any]:
@@ -336,7 +285,7 @@ class GuardLabelLibraryService(CommonService):
                 "enabled_bindings": enabled_bindings,
                 "disabled_bindings": total_bindings - enabled_bindings,
                 "label_count": len(label_stats),
-                "label_stats": label_stats
+                "label_stats": label_stats,
             }
 
         except Exception as e:
@@ -344,8 +293,7 @@ class GuardLabelLibraryService(CommonService):
             return {}
 
     @classmethod
-    def set_binding_priority(cls, db: Session, binding_id: str,
-                           priority: int) -> bool:
+    def set_binding_priority(cls, db: Session, binding_id: str, priority: int) -> bool:
         """
         设置绑定关系优先级
 
@@ -400,8 +348,7 @@ class GuardLabelLibraryService(CommonService):
             return False
 
     @classmethod
-    def get_library_usage_by_dimensions(cls, db: Session, library_id: str,
-                                      tenant_id: str = None) -> dict[str, Any]:
+    def get_library_usage_by_dimensions(cls, db: Session, library_id: str, tenant_id: str = None) -> dict[str, Any]:
         """
         获取词库在各个维度下的使用情况
 
@@ -421,45 +368,29 @@ class GuardLabelLibraryService(CommonService):
             dimension_stats = {}
 
             for label_data in labels:
-                label = db.query(GuardLabel).filter(
-                    GuardLabel.id == label_data["id"]
-                ).first()
+                label = db.query(GuardLabel).filter(GuardLabel.id == label_data["id"]).first()
 
                 if label and label.dimension_id:
                     dimension_id = label.dimension_id
                     if dimension_id not in dimension_stats:
-                        dimension_stats[dimension_id] = {
-                            "total_labels": 0,
-                            "enabled_labels": 0,
-                            "labels": []
-                        }
+                        dimension_stats[dimension_id] = {"total_labels": 0, "enabled_labels": 0, "labels": []}
 
                     dimension_stats[dimension_id]["total_labels"] += 1
                     if label_data["binding"]["enabled"]:
                         dimension_stats[dimension_id]["enabled_labels"] += 1
 
-                    dimension_stats[dimension_id]["labels"].append({
-                        "label_id": label.id,
-                        "label_name": label.name,
-                        "label_code": label.code,
-                        "enabled": label_data["binding"]["enabled"],
-                        "priority": label_data["binding"]["priority"]
-                    })
+                    dimension_stats[dimension_id]["labels"].append(
+                        {"label_id": label.id, "label_name": label.name, "label_code": label.code, "enabled": label_data["binding"]["enabled"], "priority": label_data["binding"]["priority"]}
+                    )
 
-            return {
-                "library_id": library_id,
-                "total_dimensions": len(dimension_stats),
-                "dimension_stats": dimension_stats
-            }
+            return {"library_id": library_id, "total_dimensions": len(dimension_stats), "dimension_stats": dimension_stats}
 
         except Exception as e:
             logging.error(f"获取词库维度使用统计失败: {e}")
             return {}
 
     @classmethod
-    def sync_library_to_all_labels_in_dimension(cls, db: Session, library_id: str,
-                                               dimension_id: str, tenant_id: str = None,
-                                               created_by: str = None) -> dict[str, Any]:
+    def sync_library_to_all_labels_in_dimension(cls, db: Session, library_id: str, dimension_id: str, tenant_id: str = None, created_by: str = None) -> dict[str, Any]:
         """
         将词库同步到指定维度的所有标签
 
@@ -475,12 +406,7 @@ class GuardLabelLibraryService(CommonService):
         """
         try:
             # 获取维度下的所有标签
-            labels = db.query(GuardLabel).filter(
-                and_(
-                    GuardLabel.dimension_id == dimension_id,
-                    GuardLabel.status == "1"
-                )
-            ).all()
+            labels = db.query(GuardLabel).filter(and_(GuardLabel.dimension_id == dimension_id, GuardLabel.status == "1")).all()
 
             success_count = 0
             failed_count = 0
@@ -494,22 +420,14 @@ class GuardLabelLibraryService(CommonService):
                     continue
 
                 # 创建绑定
-                binding_id = cls.bind_library_to_label(
-                    db, label.id, library_id,
-                    tenant_id=tenant_id, created_by=created_by
-                )
+                binding_id = cls.bind_library_to_label(db, label.id, library_id, tenant_id=tenant_id, created_by=created_by)
 
                 if binding_id:
                     success_count += 1
                 else:
                     failed_count += 1
 
-            return {
-                "success_count": success_count,
-                "failed_count": failed_count,
-                "skipped_count": skipped_count,
-                "total_labels": len(labels)
-            }
+            return {"success_count": success_count, "failed_count": failed_count, "skipped_count": skipped_count, "total_labels": len(labels)}
 
         except Exception as e:
             logging.error(f"同步词库到维度标签失败: {e}")

@@ -36,7 +36,8 @@ print("Start MultiRAG server...")
 
 stop_event = threading.Event()
 
-MultiRAG_DEBUGPY_LISTEN = int(os.environ.get('MultiRAG_DEBUGPY_LISTEN', "0"))
+MultiRAG_DEBUGPY_LISTEN = int(os.environ.get("MultiRAG_DEBUGPY_LISTEN", "0"))
+
 
 def update_progress():
     """
@@ -69,6 +70,7 @@ def update_progress():
             # 等待下一次循环（此时连接已归还）
             stop_event.wait(6)
 
+
 def signal_handler(sig, frame):
     logging.info("Received interrupt signal, shutting down...")
     shutdown_all_mcp_sessions()
@@ -76,7 +78,8 @@ def signal_handler(sig, frame):
     stop_event.wait(1)  # 最多等待1秒，stop_event已设置则立即返回
     sys.exit(0)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     faulthandler.enable()
     # ============================================================================
     # 启动脚本 - 负责进程级别的初始化和服务器启动
@@ -86,19 +89,19 @@ if __name__ == '__main__':
     # - api/apps/__init__.py lifespan：应用运行时的初始化和资源管理
     # ============================================================================
 
-#     logging.info(r"""
-# ============================================================================
-#      __  ___            __   __     _             ____     ___       ______
-#     /  |/  /  __  __   / /  / /_   (_)           / __ \   /   |     / ____/
-#    / /|_/ /  / / / /  / /  / __/  / /  ______   / /_/ /  / /| |    / / __
-#   / /  / /  / /_/ /  / /  / /_   / /  /_____/  / _, _/  / ___ |   / /_/ /
-#  /_/  /_/   \__,_/  /_/   \__/  /_/           /_/ |_|  /_/  |_|   \____/
-#
-#                         ╔╦╗ ┬ ┬ ┬  ┌┬┐ ┬ ┬─┐ ┌─┐ ╔═╗
-#                         ║║║ │ │ │   │  │ ├┬┘ ├─┤ ║ ╦    【——v0.9.9——】
-#                         ╩ ╩ └─┘ ┴─┘ ┴  ┴ ┴└─ ┴ ┴ ╚═╝
-# ============================================================================
-#                 """)
+    #     logging.info(r"""
+    # ============================================================================
+    #      __  ___            __   __     _             ____     ___       ______
+    #     /  |/  /  __  __   / /  / /_   (_)           / __ \   /   |     / ____/
+    #    / /|_/ /  / / / /  / /  / __/  / /  ______   / /_/ /  / /| |    / / __
+    #   / /  / /  / /_/ /  / /  / /_   / /  /_____/  / _, _/  / ___ |   / /_/ /
+    #  /_/  /_/   \__,_/  /_/   \__/  /_/           /_/ |_|  /_/  |_|   \____/
+    #
+    #                         ╔╦╗ ┬ ┬ ┬  ┌┬┐ ┬ ┬─┐ ┌─┐ ╔═╗
+    #                         ║║║ │ │ │   │  │ ├┬┘ ├─┤ ║ ╦    【——v0.9.9——】
+    #                         ╩ ╩ └─┘ ┴─┘ ┴  ┴ ┴└─ ┴ ┴ ╚═╝
+    # ============================================================================
+    #                 """)
     logging.info(r"""
 ============================================================================
                 __  ___      ____  _ ____  ___   ______
@@ -110,15 +113,16 @@ if __name__ == '__main__':
                 """)
 
     # ============ 版本和环境信息 ============
-    logging.info(f'MultiRAG version: {get_multirag_version()}')
-    logging.info(f'project base: {get_project_base_directory()}')
+    logging.info(f"MultiRAG version: {get_multirag_version()}")
+    logging.info(f"project base: {get_project_base_directory()}")
 
     # ============ 命令行参数解析 ============
     import argparse
+
     parser = argparse.ArgumentParser()
-    parser.add_argument('--version', default=False, help="MultiRAG version", action='store_true')
-    parser.add_argument('--debug', default=False, help="debug mode", action='store_true')
-    parser.add_argument('--init-superuser', default=False, help="init superuser", action='store_true')
+    parser.add_argument("--version", default=False, help="MultiRAG version", action="store_true")
+    parser.add_argument("--debug", default=False, help="debug mode", action="store_true")
+    parser.add_argument("--init-superuser", default=False, help="init superuser", action="store_true")
     args = parser.parse_args()
 
     if args.version:
@@ -134,6 +138,7 @@ if __name__ == '__main__':
     if MultiRAG_DEBUGPY_LISTEN > 0:
         logging.info(f"Debugpy listening on port {MultiRAG_DEBUGPY_LISTEN}")
         import debugpy
+
         debugpy.listen(("0.0.0.0", MultiRAG_DEBUGPY_LISTEN))
         logging.info("Waiting for debugger to attach...")
 
@@ -142,10 +147,11 @@ if __name__ == '__main__':
     logging.info("Initializing database schema...")
     # 建表前检测是否为全新环境（无任何表），用于后续迁移策略判断
     from sqlalchemy import inspect as sa_inspect
+
     _inspector = sa_inspect(engine)
     _is_fresh_install = len(_inspector.get_table_names(schema="usr_ai")) == 0
-    init_web_db()                              # 创建数据库表结构
-    upgrade_database(_is_fresh_install)        # 执行数据库迁移
+    init_web_db()  # 创建数据库表结构
+    upgrade_database(_is_fresh_install)  # 执行数据库迁移
 
     # 初始化超级用户（如果指定了 --init-superuser 参数）
     # 必须在数据库表创建后、init_web_data 之前执行
@@ -155,7 +161,7 @@ if __name__ == '__main__':
             init_superuser(db)
         logging.info("Superuser initialization completed")
 
-    init_web_data()      # 初始化默认数据
+    init_web_data()  # 初始化默认数据
     logging.info("Database initialization completed")
 
     # ============ 获取启动参数 ============
@@ -169,10 +175,7 @@ if __name__ == '__main__':
 
     # ============ 运行时环境配置 ============
     RuntimeConfig.init_env()
-    RuntimeConfig.init_config(
-        JOB_SERVER_HOST=settings.HOST_IP,
-        HTTP_PORT=settings.HOST_PORT
-    )
+    RuntimeConfig.init_config(JOB_SERVER_HOST=settings.HOST_IP, HTTP_PORT=settings.HOST_PORT)
 
     # ============ 插件系统加载 ============
     logging.info("Loading plugins...")

@@ -20,6 +20,4 @@ beartype_this_package()
 
 from .multirag_chat import MultiRAGChat
 
-__all__ = [
-    "MultiRAGChat"
-]
+__all__ = ["MultiRAGChat"]

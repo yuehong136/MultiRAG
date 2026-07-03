@@ -16,7 +16,7 @@ class WorkflowNode:
         # 基本信息
         self.id = node_id
         self.data = node_data
-        self.title = node_data['data']['nodeMeta']['title']
+        self.title = node_data["data"]["nodeMeta"]["title"]
 
         # 节点关系
         self.next_nodes = []
@@ -38,13 +38,13 @@ class WorkflowNode:
         self.status = "waiting"  # 可能的值: "waiting", "executing", "completed", "failed"
 
         # IO Schema
-        self.input_schema = node_data.get('data', {}).get('inputs', {}).get('inputParameters', [])
-        self.output_schema = node_data.get('data', {}).get('outputs', [])
+        self.input_schema = node_data.get("data", {}).get("inputs", {}).get("inputParameters", [])
+        self.output_schema = node_data.get("data", {}).get("outputs", [])
 
         # 分支相关属性
         self.branches: dict[str, Branch] = {}  # port_id -> Branch
-        self.is_selector = (node_data['type'] == "8" or node_data['type'] == 8)
-        self.is_intent_classification = (node_data['type'] == "22" or node_data['type'] == 22)
+        self.is_selector = node_data["type"] == "8" or node_data["type"] == 8
+        self.is_intent_classification = node_data["type"] == "22" or node_data["type"] == 22
 
         self.in_execution_path = False
 
@@ -55,22 +55,17 @@ class WorkflowNode:
         # 失败原因
         self.failure_reason: str | None = None
 
-    def add_branch_node(self, node: 'WorkflowNode', port_id: str):
+    def add_branch_node(self, node: "WorkflowNode", port_id: str):
         """添加分支节点"""
         if port_id not in self.branches:
-            self.branches[port_id] = Branch(
-                port_id=port_id,
-                nodes=[],
-                conditions=None
-            )
+            self.branches[port_id] = Branch(port_id=port_id, nodes=[], conditions=None)
         self.branches[port_id].nodes.append(node)
         if node not in self.next_nodes:
             self.next_nodes.append(node)
 
 
 class AsyncWorkflowEngine:
-    def __init__(self, workflow_id: str, start_input_values: dict[str, Any] | None = None,
-                 **kwargs):
+    def __init__(self, workflow_id: str, start_input_values: dict[str, Any] | None = None, **kwargs):
         self.workflow_id = workflow_id
         self.nodes = {}
         self.start_nodes = []
@@ -97,32 +92,32 @@ class AsyncWorkflowEngine:
 
         # 创建所有节点
         for node_data in nodes_data:
-            node = WorkflowNode(node_data['id'], node_data)
+            node = WorkflowNode(node_data["id"], node_data)
             self.nodes[node.id] = node
 
         # 建立节点间的连接关系
         for edge in edges_data:
-            source = self.nodes[edge['sourceNodeID']]
-            target = self.nodes[edge['targetNodeID']]
+            source = self.nodes[edge["sourceNodeID"]]
+            target = self.nodes[edge["targetNodeID"]]
 
             if source.is_selector or source.is_intent_classification:
                 if source.is_selector:
-                    port_id = edge.get('sourcePortID', 'true').lower()  # 默认为 true
+                    port_id = edge.get("sourcePortID", "true").lower()  # 默认为 true
                 else:
-                    port_id = edge.get('sourcePortID', 'branch_0')  # 默认为第一个分支
+                    port_id = edge.get("sourcePortID", "branch_0")  # 默认为第一个分支
 
                 source.add_branch_node(target, port_id)
 
                 # 对于选择器节点，设置分支的条件配置
-                if source.is_selector and port_id != 'false':
-                    branch_index = 0 if port_id == 'true' else int(port_id.split('_')[1])
-                    if branch_index < len(source.data['data']['inputs']['branches']):
-                        source.branches[port_id].conditions = source.data['data']['inputs']['branches'][branch_index]
+                if source.is_selector and port_id != "false":
+                    branch_index = 0 if port_id == "true" else int(port_id.split("_")[1])
+                    if branch_index < len(source.data["data"]["inputs"]["branches"]):
+                        source.branches[port_id].conditions = source.data["data"]["inputs"]["branches"][branch_index]
 
                 # 对于意图识别节点，设置分支的意图配置
-                elif source.is_intent_classification and port_id != 'default':
-                    branch_index = int(port_id.split('_')[1])
-                    intents = source.data['data']['inputs'].get('intents', [])
+                elif source.is_intent_classification and port_id != "default":
+                    branch_index = int(port_id.split("_")[1])
+                    intents = source.data["data"]["inputs"].get("intents", [])
                     if branch_index < len(intents):
                         source.branches[port_id].conditions = intents[branch_index]
             else:
@@ -142,12 +137,7 @@ class AsyncWorkflowEngine:
         """发布工作流初始状态"""
         if self.start_nodes:
             start_node = self.start_nodes[0]
-            await workflow_state_manager.publish_node_state(
-                workflow_id=self.workflow_id,
-                node_id=start_node.id,
-                node_title=start_node.title,
-                status="waiting"
-            )
+            await workflow_state_manager.publish_node_state(workflow_id=self.workflow_id, node_id=start_node.id, node_title=start_node.title, status="waiting")
 
     async def execute(self):
         self.logger.info("Starting workflow execution")
@@ -181,12 +171,7 @@ class AsyncWorkflowEngine:
                 node.status = "executing"  # 更新节点状态
 
                 # 发布节点开始执行状态
-                await workflow_state_manager.publish_node_state(
-                    workflow_id=self.workflow_id,
-                    node_id=node.id,
-                    node_title=node.title,
-                    status="executing"
-                )
+                await workflow_state_manager.publish_node_state(workflow_id=self.workflow_id, node_id=node.id, node_title=node.title, status="executing")
 
                 task = asyncio.create_task(self._process_node(node))
                 self.tasks[node.id] = task
@@ -240,7 +225,7 @@ class AsyncWorkflowEngine:
                 status="failed",
                 started_at=node.execution_start_time,
                 execution_time=datetime.now().timestamp() - node.execution_start_time if node.execution_start_time else None,
-                error_message=str(e)
+                error_message=str(e),
             )
 
             if self.first_failed_node is None:
@@ -297,20 +282,12 @@ class AsyncWorkflowEngine:
                 status="failed",
                 started_at=node.execution_start_time,
                 execution_time=node.timeout,
-                error_message=f"节点执行超时，超过{node.timeout}秒"
+                error_message=f"节点执行超时，超过{node.timeout}秒",
             )
 
-            raise NodeTimeoutError(
-                node_id=node.id,
-                node_title=node.title,
-                timeout=node.timeout
-            )
+            raise NodeTimeoutError(node_id=node.id, node_title=node.title, timeout=node.timeout)
         except WorkflowError as e:
-            node.error = {
-                'code': e.error_code.value,
-                'message': str(e),
-                'details': e.details
-            }
+            node.error = {"code": e.error_code.value, "message": str(e), "details": e.details}
             node.status = "failed"
 
             # 发布节点错误状态
@@ -321,7 +298,7 @@ class AsyncWorkflowEngine:
                 status="failed",
                 started_at=node.execution_start_time,
                 execution_time=datetime.now().timestamp() - node.execution_start_time if node.execution_start_time else None,
-                error_message=str(e)
+                error_message=str(e),
             )
 
             node_logger.error(f"Node failed: {e!s}", exc_info=True)
@@ -337,7 +314,7 @@ class AsyncWorkflowEngine:
                 status="failed",
                 started_at=node.execution_start_time,
                 execution_time=datetime.now().timestamp() - node.execution_start_time if node.execution_start_time else None,
-                error_message=str(e)
+                error_message=str(e),
             )
 
             node_logger.error(f"Node processing failed: {e!s}", exc_info=True)
@@ -356,7 +333,7 @@ class AsyncWorkflowEngine:
             return self.start_input_values.copy()
 
         # 处理常规节点的输入
-        input_params = node.data.get('data', {}).get('inputs', {}).get('inputParameters', [])
+        input_params = node.data.get("data", {}).get("inputs", {}).get("inputParameters", [])
         return match_parameters(input_params, self.nodes)
 
     async def cleanup(self):
@@ -394,7 +371,7 @@ async def run_workflow(workflow_data, start_input_values=None, workflow_id: str 
     engine = AsyncWorkflowEngine(workflow_id=workflow_id, start_input_values=start_input_values, **kwargs)
 
     # 先进行验证
-    validation_issues = WorkflowValidator(workflow_data['nodes'], workflow_data['edges']).validate_all()
+    validation_issues = WorkflowValidator(workflow_data["nodes"], workflow_data["edges"]).validate_all()
     if len(validation_issues) > 0:
         issue_str = "\n".join([issue.format_message() for issue in validation_issues])
         for issue in validation_issues:
@@ -404,14 +381,13 @@ async def run_workflow(workflow_data, start_input_values=None, workflow_id: str 
     # 清除该工作流ID的之前状态记录 - 这里也清除一次，确保在构建图之前就已经清除了
     await workflow_state_manager.clear_workflow_state(workflow_id)
 
-    await engine.build_graph(workflow_data['nodes'], workflow_data['edges'])
+    await engine.build_graph(workflow_data["nodes"], workflow_data["edges"])
     try:
         await engine.execute()
-        nodes_io = {k: {'input': v.input, 'output': v.output} for k, v in engine.nodes.items()}
+        nodes_io = {k: {"input": v.input, "output": v.output} for k, v in engine.nodes.items()}
 
         # 获取结果
-        end_node = next(node for node in engine.nodes.values()
-                        if node.data['type'] == '2')
+        end_node = next(node for node in engine.nodes.values() if node.data["type"] == "2")
 
         engine.logger.info("==================================")
 
@@ -420,7 +396,7 @@ async def run_workflow(workflow_data, start_input_values=None, workflow_id: str 
             "workflow_id": workflow_id,  # 添加工作流ID
             "nodes_io": nodes_io,
             "end_node_output": end_node.output,
-            "node_execution_times": engine.node_execution_times
+            "node_execution_times": engine.node_execution_times,
         }
     except NodeExecutionError as e:
         failed_nodes: list[str] = [engine.first_failed_node.id] if engine.first_failed_node else []
@@ -431,9 +407,7 @@ async def run_workflow(workflow_data, start_input_values=None, workflow_id: str 
 
         data = {
             "workflow_id": workflow_id,  # 添加工作流ID
-            "nodes_io": {k: {'input': v.input, 'output': v.output,
-                             'failure_reason': v.failure_reason} for k, v in
-                         engine.nodes.items()},
+            "nodes_io": {k: {"input": v.input, "output": v.output, "failure_reason": v.failure_reason} for k, v in engine.nodes.items()},
             "node_execution_times": engine.node_execution_times,
             "failed_nodes": failed_nodes,
         }
@@ -468,848 +442,205 @@ def get_empty_io_nodes(engine):
 
 # 执行工作流
 if __name__ == "__main__":
+
     async def main():
         workflow_data = {
             "nodes": [
                 {
                     "id": "100001",
                     "type": "1",
-                    "meta": {
-                        "position": {
-                            "x": -98.49195687295378,
-                            "y": 71.10276911084237
-                        },
-                        "testRun": {}
-                    },
+                    "meta": {"position": {"x": -98.49195687295378, "y": 71.10276911084237}, "testRun": {}},
                     "data": {
                         "nodeMeta": {
                             "description": "工作流的起始节点，用于设定启动工作流需要的信息",
                             "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Start.png",
                             "subTitle": "",
-                            "title": "开始"
+                            "title": "开始",
                         },
                         "outputs": [
-                            {
-                                "type": "string",
-                                "name": "BOT_USER_INPUT",
-                                "required": False,
-                                "description": "用户本轮对话输入内容"
-                            },
-                            {
-                                "type": "string",
-                                "name": "test_input",
-                                "required": True,
-                                "description": ""
-                            }
-                        ]
-                    }
+                            {"type": "string", "name": "BOT_USER_INPUT", "required": False, "description": "用户本轮对话输入内容"},
+                            {"type": "string", "name": "test_input", "required": True, "description": ""},
+                        ],
+                    },
                 },
                 {
                     "id": "900001",
                     "type": "2",
-                    "meta": {
-                        "position": {
-                            "x": 1677.645973225257,
-                            "y": 110.66022295359087
-                        },
-                        "testRun": {}
-                    },
+                    "meta": {"position": {"x": 1677.645973225257, "y": 110.66022295359087}, "testRun": {}},
                     "data": {
                         "nodeMeta": {
                             "description": "工作流的最终节点，用于返回工作流运行后的结果信息",
                             "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-End.png",
                             "subTitle": "",
-                            "title": "结束"
+                            "title": "结束",
                         },
                         "inputs": {
                             "terminatePlan": "useAnswerContent",
                             "streamingOutput": False,
                             "inputParameters": [
-                                {
-                                    "name": "BOT_USER_INPUT",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "ref",
-                                            "content": {
-                                                "source": "block-output",
-                                                "blockID": "100001",
-                                                "name": "BOT_USER_INPUT"
-                                            }
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "llm2_1_output",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "ref",
-                                            "content": {
-                                                "source": "block-output",
-                                                "blockID": "158417",
-                                                "name": "output"
-                                            }
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "llm2_2_output",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "ref",
-                                            "content": {
-                                                "source": "block-output",
-                                                "blockID": "102984",
-                                                "name": "output"
-                                            }
-                                        }
-                                    }
-                                }
+                                {"name": "BOT_USER_INPUT", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "BOT_USER_INPUT"}}}},
+                                {"name": "llm2_1_output", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "158417", "name": "output"}}}},
+                                {"name": "llm2_2_output", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "102984", "name": "output"}}}},
                             ],
-                            "content": {
-                                "type": "string",
-                                "value": {
-                                    "type": "literal",
-                                    "content": "bot_user_input:{{BOT_USER_INPUT}}\nllm2_1_output:{{llm2_1_output}}"
-                                }
-                            }
-                        }
-                    }
+                            "content": {"type": "string", "value": {"type": "literal", "content": "bot_user_input:{{BOT_USER_INPUT}}\nllm2_1_output:{{llm2_1_output}}"}},
+                        },
+                    },
                 },
                 {
                     "id": "123228",
                     "type": "3",
-                    "meta": {
-                        "position": {
-                            "x": 495.5229305844795,
-                            "y": 202.10425263285
-                        },
-                        "testRun": {}
-                    },
+                    "meta": {"position": {"x": 495.5229305844795, "y": 202.10425263285}, "testRun": {}},
                     "data": {
                         "nodeMeta": {
                             "description": "调用大语言模型,使用变量和提示词生成回复",
                             "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-LLM.png",
                             "subTitle": "大模型",
-                            "title": "大模型2"
+                            "title": "大模型2",
                         },
                         "inputs": {
                             "settingOnError": {},
                             "inputParameters": [
-                                {
-                                    "name": "BOT_USER_INPUT",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "ref",
-                                            "content": {
-                                                "source": "block-output",
-                                                "blockID": "100001",
-                                                "name": "BOT_USER_INPUT"
-                                            }
-                                        }
-                                    }
-                                }
+                                {"name": "BOT_USER_INPUT", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "BOT_USER_INPUT"}}}}
                             ],
                             "llmParam": [
-                                {
-                                    "name": "temperature",
-                                    "input": {
-                                        "type": "float",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "0.7"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "topP",
-                                    "input": {
-                                        "type": "float",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "0.7"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "maxTokens",
-                                    "input": {
-                                        "type": "integer",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "4096"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "frequencyPenalty",
-                                    "input": {
-                                        "type": "float",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "0"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "responseFormat",
-                                    "input": {
-                                        "type": "integer",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "0"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "modleName",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "Doubao-pro-128k/240628"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "modelType",
-                                    "input": {
-                                        "type": "integer",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "834781236"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "generationDiversity",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "balance"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "prompt",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "请将{{output}}翻译成日文"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "enableChatHistory",
-                                    "input": {
-                                        "type": "boolean",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": False
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "systemPrompt",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": ""
-                                        }
-                                    }
-                                }
-                            ]
+                                {"name": "temperature", "input": {"type": "float", "value": {"type": "literal", "content": "0.7"}}},
+                                {"name": "topP", "input": {"type": "float", "value": {"type": "literal", "content": "0.7"}}},
+                                {"name": "maxTokens", "input": {"type": "integer", "value": {"type": "literal", "content": "4096"}}},
+                                {"name": "frequencyPenalty", "input": {"type": "float", "value": {"type": "literal", "content": "0"}}},
+                                {"name": "responseFormat", "input": {"type": "integer", "value": {"type": "literal", "content": "0"}}},
+                                {"name": "modleName", "input": {"type": "string", "value": {"type": "literal", "content": "Doubao-pro-128k/240628"}}},
+                                {"name": "modelType", "input": {"type": "integer", "value": {"type": "literal", "content": "834781236"}}},
+                                {"name": "generationDiversity", "input": {"type": "string", "value": {"type": "literal", "content": "balance"}}},
+                                {"name": "prompt", "input": {"type": "string", "value": {"type": "literal", "content": "请将{{output}}翻译成日文"}}},
+                                {"name": "enableChatHistory", "input": {"type": "boolean", "value": {"type": "literal", "content": False}}},
+                                {"name": "systemPrompt", "input": {"type": "string", "value": {"type": "literal", "content": ""}}},
+                            ],
                         },
-                        "outputs": [
-                            {
-                                "type": "string",
-                                "name": "output"
-                            }
-                        ],
-                        "version": "3"
-                    }
+                        "outputs": [{"type": "string", "name": "output"}],
+                        "version": "3",
+                    },
                 },
                 {
                     "id": "134633",
                     "type": "3",
-                    "meta": {
-                        "position": {
-                            "x": 496.0522338884329,
-                            "y": -175.42209048057282
-                        },
-                        "testRun": {}
-                    },
+                    "meta": {"position": {"x": 496.0522338884329, "y": -175.42209048057282}, "testRun": {}},
                     "data": {
                         "nodeMeta": {
                             "description": "调用大语言模型,使用变量和提示词生成回复",
                             "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-LLM.png",
                             "subTitle": "大模型",
-                            "title": "大模型1"
+                            "title": "大模型1",
                         },
                         "inputs": {
                             "settingOnError": {},
                             "inputParameters": [
-                                {
-                                    "name": "user_input",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "ref",
-                                            "content": {
-                                                "source": "block-output",
-                                                "blockID": "100001",
-                                                "name": "BOT_USER_INPUT"
-                                            }
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "test_input",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "ref",
-                                            "content": {
-                                                "source": "block-output",
-                                                "blockID": "100001",
-                                                "name": "test_input"
-                                            }
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "llm_input1",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "a"
-                                        }
-                                    }
-                                }
+                                {"name": "user_input", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "BOT_USER_INPUT"}}}},
+                                {"name": "test_input", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "test_input"}}}},
+                                {"name": "llm_input1", "input": {"type": "string", "value": {"type": "literal", "content": "a"}}},
                             ],
                             "llmParam": [
-                                {
-                                    "name": "temperature",
-                                    "input": {
-                                        "type": "float",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "0.7"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "topP",
-                                    "input": {
-                                        "type": "float",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "0.7"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "maxTokens",
-                                    "input": {
-                                        "type": "integer",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "4096"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "frequencyPenalty",
-                                    "input": {
-                                        "type": "float",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "0"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "responseFormat",
-                                    "input": {
-                                        "type": "integer",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "0"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "modleName",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "Doubao-pro-4k/240515"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "modelType",
-                                    "input": {
-                                        "type": "integer",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "834764852"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "generationDiversity",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "balance"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "prompt",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "请将“{{output}}”翻译成中文"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "enableChatHistory",
-                                    "input": {
-                                        "type": "boolean",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": False
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "systemPrompt",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": ""
-                                        }
-                                    }
-                                }
-                            ]
+                                {"name": "temperature", "input": {"type": "float", "value": {"type": "literal", "content": "0.7"}}},
+                                {"name": "topP", "input": {"type": "float", "value": {"type": "literal", "content": "0.7"}}},
+                                {"name": "maxTokens", "input": {"type": "integer", "value": {"type": "literal", "content": "4096"}}},
+                                {"name": "frequencyPenalty", "input": {"type": "float", "value": {"type": "literal", "content": "0"}}},
+                                {"name": "responseFormat", "input": {"type": "integer", "value": {"type": "literal", "content": "0"}}},
+                                {"name": "modleName", "input": {"type": "string", "value": {"type": "literal", "content": "Doubao-pro-4k/240515"}}},
+                                {"name": "modelType", "input": {"type": "integer", "value": {"type": "literal", "content": "834764852"}}},
+                                {"name": "generationDiversity", "input": {"type": "string", "value": {"type": "literal", "content": "balance"}}},
+                                {"name": "prompt", "input": {"type": "string", "value": {"type": "literal", "content": "请将“{{output}}”翻译成中文"}}},
+                                {"name": "enableChatHistory", "input": {"type": "boolean", "value": {"type": "literal", "content": False}}},
+                                {"name": "systemPrompt", "input": {"type": "string", "value": {"type": "literal", "content": ""}}},
+                            ],
                         },
-                        "outputs": [
-                            {
-                                "type": "string",
-                                "name": "output"
-                            }
-                        ],
-                        "version": "3"
-                    }
+                        "outputs": [{"type": "string", "name": "output"}],
+                        "version": "3",
+                    },
                 },
                 {
                     "id": "158417",
                     "type": "3",
-                    "meta": {
-                        "position": {
-                            "x": 1171.2824616402486,
-                            "y": -177.91296045015187
-                        },
-                        "testRun": {}
-                    },
+                    "meta": {"position": {"x": 1171.2824616402486, "y": -177.91296045015187}, "testRun": {}},
                     "data": {
                         "nodeMeta": {
                             "description": "调用大语言模型,使用变量和提示词生成回复",
                             "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-LLM.png",
                             "subTitle": "大模型",
-                            "title": "大模型2_1"
+                            "title": "大模型2_1",
                         },
                         "inputs": {
                             "settingOnError": {},
                             "inputParameters": [
-                                {
-                                    "name": "input",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "ref",
-                                            "content": {
-                                                "source": "block-output",
-                                                "blockID": "100001",
-                                                "name": "BOT_USER_INPUT"
-                                            }
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "llm1_output",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "ref",
-                                            "content": {
-                                                "source": "block-output",
-                                                "blockID": "134633",
-                                                "name": "output"
-                                            }
-                                        }
-                                    }
-                                }
+                                {"name": "input", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "BOT_USER_INPUT"}}}},
+                                {"name": "llm1_output", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "134633", "name": "output"}}}},
                             ],
                             "llmParam": [
-                                {
-                                    "name": "modelType",
-                                    "input": {
-                                        "type": "integer",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "834781236"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "modleName",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "Doubao-pro-128k/240628"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "generationDiversity",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "balance"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "temperature",
-                                    "input": {
-                                        "type": "float",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "0.7"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "topP",
-                                    "input": {
-                                        "type": "float",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "0.7"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "maxTokens",
-                                    "input": {
-                                        "type": "integer",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "4096"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "frequencyPenalty",
-                                    "input": {
-                                        "type": "float",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "0"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "responseFormat",
-                                    "input": {
-                                        "type": "integer",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "0"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "prompt",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "请将{{output}}翻译成韩文"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "enableChatHistory",
-                                    "input": {
-                                        "type": "boolean",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": False
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "systemPrompt",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": ""
-                                        }
-                                    }
-                                }
-                            ]
+                                {"name": "modelType", "input": {"type": "integer", "value": {"type": "literal", "content": "834781236"}}},
+                                {"name": "modleName", "input": {"type": "string", "value": {"type": "literal", "content": "Doubao-pro-128k/240628"}}},
+                                {"name": "generationDiversity", "input": {"type": "string", "value": {"type": "literal", "content": "balance"}}},
+                                {"name": "temperature", "input": {"type": "float", "value": {"type": "literal", "content": "0.7"}}},
+                                {"name": "topP", "input": {"type": "float", "value": {"type": "literal", "content": "0.7"}}},
+                                {"name": "maxTokens", "input": {"type": "integer", "value": {"type": "literal", "content": "4096"}}},
+                                {"name": "frequencyPenalty", "input": {"type": "float", "value": {"type": "literal", "content": "0"}}},
+                                {"name": "responseFormat", "input": {"type": "integer", "value": {"type": "literal", "content": "0"}}},
+                                {"name": "prompt", "input": {"type": "string", "value": {"type": "literal", "content": "请将{{output}}翻译成韩文"}}},
+                                {"name": "enableChatHistory", "input": {"type": "boolean", "value": {"type": "literal", "content": False}}},
+                                {"name": "systemPrompt", "input": {"type": "string", "value": {"type": "literal", "content": ""}}},
+                            ],
                         },
-                        "outputs": [
-                            {
-                                "type": "string",
-                                "name": "output",
-                                "description": ""
-                            }
-                        ],
-                        "version": "3"
-                    }
+                        "outputs": [{"type": "string", "name": "output", "description": ""}],
+                        "version": "3",
+                    },
                 },
                 {
                     "id": "102984",
                     "type": "3",
-                    "meta": {
-                        "position": {
-                            "x": 1172.0872118590732,
-                            "y": 38.127985744663896
-                        },
-                        "testRun": {}
-                    },
+                    "meta": {"position": {"x": 1172.0872118590732, "y": 38.127985744663896}, "testRun": {}},
                     "data": {
                         "nodeMeta": {
                             "description": "调用大语言模型,使用变量和提示词生成回复",
                             "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-LLM.png",
                             "subTitle": "大模型",
-                            "title": "大模型2_2"
+                            "title": "大模型2_2",
                         },
                         "inputs": {
                             "settingOnError": {},
                             "inputParameters": [
-                                {
-                                    "name": "input",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "ref",
-                                            "content": {
-                                                "source": "block-output",
-                                                "blockID": "100001",
-                                                "name": "BOT_USER_INPUT"
-                                            }
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "llm1_output",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "ref",
-                                            "content": {
-                                                "source": "block-output",
-                                                "blockID": "134633",
-                                                "name": "output"
-                                            }
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "llm2_output",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "ref",
-                                            "content": {
-                                                "source": "block-output",
-                                                "blockID": "123228",
-                                                "name": "output"
-                                            }
-                                        }
-                                    }
-                                }
+                                {"name": "input", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "100001", "name": "BOT_USER_INPUT"}}}},
+                                {"name": "llm1_output", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "134633", "name": "output"}}}},
+                                {"name": "llm2_output", "input": {"type": "string", "value": {"type": "ref", "content": {"source": "block-output", "blockID": "123228", "name": "output"}}}},
                             ],
                             "llmParam": [
-                                {
-                                    "name": "modelType",
-                                    "input": {
-                                        "type": "integer",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "834781236"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "modleName",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "Doubao-pro-128k/240628"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "generationDiversity",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "balance"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "temperature",
-                                    "input": {
-                                        "type": "float",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "0.7"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "topP",
-                                    "input": {
-                                        "type": "float",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "0.7"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "maxTokens",
-                                    "input": {
-                                        "type": "integer",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "4096"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "frequencyPenalty",
-                                    "input": {
-                                        "type": "float",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "0"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "responseFormat",
-                                    "input": {
-                                        "type": "integer",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "0"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "prompt",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": "请将{{output}}翻译成韩文"
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "enableChatHistory",
-                                    "input": {
-                                        "type": "boolean",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": False
-                                        }
-                                    }
-                                },
-                                {
-                                    "name": "systemPrompt",
-                                    "input": {
-                                        "type": "string",
-                                        "value": {
-                                            "type": "literal",
-                                            "content": ""
-                                        }
-                                    }
-                                }
-                            ]
+                                {"name": "modelType", "input": {"type": "integer", "value": {"type": "literal", "content": "834781236"}}},
+                                {"name": "modleName", "input": {"type": "string", "value": {"type": "literal", "content": "Doubao-pro-128k/240628"}}},
+                                {"name": "generationDiversity", "input": {"type": "string", "value": {"type": "literal", "content": "balance"}}},
+                                {"name": "temperature", "input": {"type": "float", "value": {"type": "literal", "content": "0.7"}}},
+                                {"name": "topP", "input": {"type": "float", "value": {"type": "literal", "content": "0.7"}}},
+                                {"name": "maxTokens", "input": {"type": "integer", "value": {"type": "literal", "content": "4096"}}},
+                                {"name": "frequencyPenalty", "input": {"type": "float", "value": {"type": "literal", "content": "0"}}},
+                                {"name": "responseFormat", "input": {"type": "integer", "value": {"type": "literal", "content": "0"}}},
+                                {"name": "prompt", "input": {"type": "string", "value": {"type": "literal", "content": "请将{{output}}翻译成韩文"}}},
+                                {"name": "enableChatHistory", "input": {"type": "boolean", "value": {"type": "literal", "content": False}}},
+                                {"name": "systemPrompt", "input": {"type": "string", "value": {"type": "literal", "content": ""}}},
+                            ],
                         },
-                        "outputs": [
-                            {
-                                "type": "string",
-                                "name": "output",
-                                "description": ""
-                            }
-                        ],
-                        "version": "3"
-                    }
-                }
+                        "outputs": [{"type": "string", "name": "output", "description": ""}],
+                        "version": "3",
+                    },
+                },
             ],
             "edges": [
-                {
-                    "sourceNodeID": "158417",
-                    "targetNodeID": "900001"
-                },
-                {
-                    "sourceNodeID": "102984",
-                    "targetNodeID": "900001"
-                },
-                {
-                    "sourceNodeID": "100001",
-                    "targetNodeID": "123228"
-                },
-                {
-                    "sourceNodeID": "100001",
-                    "targetNodeID": "134633"
-                },
-                {
-                    "sourceNodeID": "134633",
-                    "targetNodeID": "158417"
-                },
-                {
-                    "sourceNodeID": "123228",
-                    "targetNodeID": "102984"
-                },
-                {
-                    "sourceNodeID": "134633",
-                    "targetNodeID": "102984"
-                }
-            ]
+                {"sourceNodeID": "158417", "targetNodeID": "900001"},
+                {"sourceNodeID": "102984", "targetNodeID": "900001"},
+                {"sourceNodeID": "100001", "targetNodeID": "123228"},
+                {"sourceNodeID": "100001", "targetNodeID": "134633"},
+                {"sourceNodeID": "134633", "targetNodeID": "158417"},
+                {"sourceNodeID": "123228", "targetNodeID": "102984"},
+                {"sourceNodeID": "134633", "targetNodeID": "102984"},
+            ],
         }
-        start_input_values = {'BOT_USER_INPUT': 'Hello', 'test_input': 'test'}
+        start_input_values = {"BOT_USER_INPUT": "Hello", "test_input": "test"}
 
         result = await run_workflow(workflow_data, start_input_values=start_input_values)
         print(f"Workflow result: {result}")
-
 
     asyncio.run(main())

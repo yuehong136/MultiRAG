@@ -8,6 +8,7 @@ from common.file_utils import get_project_base_directory
 initialized_root_logger = False
 pkg_levels = {}  # 提为模块级，以支持运行时动态修改
 
+
 def init_root_logger(logfile_basename: str, log_format: str = "%(asctime)-15s %(levelname)-8s %(process)d %(message)s"):
     global initialized_root_logger, pkg_levels
     if initialized_root_logger:
@@ -21,7 +22,7 @@ def init_root_logger(logfile_basename: str, log_format: str = "%(asctime)-15s %(
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     formatter = logging.Formatter(log_format)
 
-    handler1 = RotatingFileHandler(log_path, maxBytes=10*1024*1024, backupCount=5)
+    handler1 = RotatingFileHandler(log_path, maxBytes=10 * 1024 * 1024, backupCount=5)
     handler1.setFormatter(formatter)
     logger.addHandler(handler1)
 
@@ -43,11 +44,11 @@ def init_root_logger(logfile_basename: str, log_format: str = "%(asctime)-15s %(
             pkg_level = logging.INFO
         pkg_levels[pkg_name] = logging.getLevelName(pkg_level)
 
-    for pkg_name in ['sqlalchemy', 'pdfminer']:
+    for pkg_name in ["sqlalchemy", "pdfminer"]:
         if pkg_name not in pkg_levels:
             pkg_levels[pkg_name] = logging.getLevelName(logging.WARNING)
-    if 'root' not in pkg_levels:
-        pkg_levels['root'] = logging.getLevelName(logging.INFO)
+    if "root" not in pkg_levels:
+        pkg_levels["root"] = logging.getLevelName(logging.INFO)
 
     for pkg_name, pkg_level in pkg_levels.items():
         pkg_logger = logging.getLogger(pkg_name)

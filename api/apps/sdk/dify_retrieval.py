@@ -3,6 +3,7 @@ Dify 兼容的检索接口模块
 
 使用 Pydantic V2 和 Python 3.12+ 语法
 """
+
 import logging
 from typing import Annotated, Any, Literal, Self
 
@@ -29,8 +30,10 @@ router = APIRouter()
 # 搜索模式模型定义
 # ============================================================================
 
+
 class SparseSearchMode(BaseModel):
     """稀疏检索模式（关键词匹配）"""
+
     model_config = ConfigDict(frozen=True)
 
     type: Literal["sparse"] = "sparse"
@@ -38,6 +41,7 @@ class SparseSearchMode(BaseModel):
 
 class DenseSearchMode(BaseModel):
     """密集检索模式（向量相似度）"""
+
     model_config = ConfigDict(frozen=True)
 
     type: Literal["dense"] = "dense"
@@ -45,6 +49,7 @@ class DenseSearchMode(BaseModel):
 
 class HybridSearchMode(BaseModel):
     """混合检索模式（稀疏+密集加权融合）"""
+
     model_config = ConfigDict(validate_assignment=True)
 
     type: Literal["hybrid"] = "hybrid"
@@ -64,6 +69,7 @@ class HybridSearchMode(BaseModel):
 
 class FusionSearchMode(BaseModel):
     """融合检索模式（RRF 排序融合）"""
+
     model_config = ConfigDict(validate_assignment=True)
 
     type: Literal["fusion"] = "fusion"
@@ -89,18 +95,17 @@ type SearchMode = SparseSearchMode | DenseSearchMode | HybridSearchMode | Fusion
 
 # 使用 Discriminator 实现高效的联合类型解析
 # 注意：Discriminator 必须直接与 Union 类型一起使用，不能使用类型别名
-SearchModeUnion = Annotated[
-    SparseSearchMode | DenseSearchMode | HybridSearchMode | FusionSearchMode,
-    Discriminator("type")
-]
+SearchModeUnion = Annotated[SparseSearchMode | DenseSearchMode | HybridSearchMode | FusionSearchMode, Discriminator("type")]
 
 
 # ============================================================================
 # 请求/响应模型
 # ============================================================================
 
+
 class RetrievalSetting(BaseModel):
     """检索设置"""
+
     model_config = ConfigDict(
         populate_by_name=True,
         str_strip_whitespace=True,
@@ -122,6 +127,7 @@ class RetrievalSetting(BaseModel):
 
 class MetadataCondition(BaseModel):
     """元数据过滤条件"""
+
     model_config = ConfigDict(extra="allow")
 
     logic: Literal["and", "or"] = Field(default="and", description="条件逻辑运算符")
@@ -130,6 +136,7 @@ class MetadataCondition(BaseModel):
 
 class RetrievalRequest(BaseModel):
     """检索请求模型"""
+
     model_config = ConfigDict(
         populate_by_name=True,
         str_strip_whitespace=True,
@@ -180,6 +187,7 @@ class RetrievalRequest(BaseModel):
 
 class RetrievalRecord(BaseModel):
     """单条检索结果"""
+
     content: str = Field(..., description="检索内容")
     score: float = Field(..., description="相似度分数")
     title: str = Field(..., description="文档标题")
@@ -188,12 +196,14 @@ class RetrievalRecord(BaseModel):
 
 class RetrievalResponse(BaseModel):
     """检索响应模型"""
+
     records: list[RetrievalRecord] = Field(default_factory=list, description="检索结果列表")
 
 
 # ============================================================================
 # API 端点
 # ============================================================================
+
 
 @router.post(
     "/retrieval",
@@ -292,9 +302,7 @@ async def retrieval(
 
         # 构建响应
         chunks = ranks.get("chunks", [])
-        chunk_doc_ids = list(dict.fromkeys(
-            chunk["doc_id"] for chunk in chunks if chunk.get("doc_id")
-        ))
+        chunk_doc_ids = list(dict.fromkeys(chunk["doc_id"] for chunk in chunks if chunk.get("doc_id")))
         existing_doc_ids = {doc.id for doc in DocumentService.get_by_ids(db, chunk_doc_ids)}
         metadata_map = DocMetadataService.get_metadata_for_documents(db, chunk_doc_ids, kb_id)
 

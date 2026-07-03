@@ -27,6 +27,7 @@ router = APIRouter()
 # Enums & Schemas
 # ---------------------------------------------------------------------------
 
+
 class InviteResultStatus(StrEnum):
     INVITED = "invited"
     ALREADY_MEMBER = "already_member"
@@ -52,6 +53,7 @@ class UpdateTenantMemberRoleRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Dependencies
 # ---------------------------------------------------------------------------
+
 
 def _get_membership(
     tenant_id: str,
@@ -83,6 +85,7 @@ def require_role_manager(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def object_as_dict(obj):
     return {c.key: getattr(obj, c.key) for c in inspect(obj).mapper.column_attrs}
@@ -206,6 +209,7 @@ def _summarize_invite_results(results: list[dict]) -> dict:
 # Routes
 # ---------------------------------------------------------------------------
 
+
 @router.get("/list", summary="获取租户列表")
 def tenant_list(db: Session = Depends(get_db), user=Depends(manager)):
     try:
@@ -232,7 +236,7 @@ def user_list(
         return server_error_response(e)
 
 
-@router.post('/{tenant_id}/user', summary="新增租户下用户")
+@router.post("/{tenant_id}/user", summary="新增租户下用户")
 def create(
     tenant_id: str,
     request_body: InviteUserRequest = Body(...),
@@ -256,15 +260,17 @@ def create(
     if not invited_user:
         return get_data_error_result(retmsg="User not found.")
 
-    return get_json_result(data={
-        "id": invited_user.id,
-        "avatar": invited_user.avatar,
-        "email": invited_user.email,
-        "nickname": invited_user.nickname,
-    })
+    return get_json_result(
+        data={
+            "id": invited_user.id,
+            "avatar": invited_user.avatar,
+            "email": invited_user.email,
+            "nickname": invited_user.nickname,
+        }
+    )
 
 
-@router.post('/{tenant_id}/user/batch', summary="批量新增租户下用户")
+@router.post("/{tenant_id}/user/batch", summary="批量新增租户下用户")
 def batch_create(
     tenant_id: str,
     request_body: BatchInviteUsersRequest = Body(...),
@@ -286,13 +292,15 @@ def batch_create(
         )
         for email in normalized_emails
     ]
-    return get_json_result(data={
-        "results": results,
-        "summary": _summarize_invite_results(results),
-    })
+    return get_json_result(
+        data={
+            "results": results,
+            "summary": _summarize_invite_results(results),
+        }
+    )
 
 
-@router.delete('/{tenant_id}/user/{user_id}', summary="删除租户下用户")
+@router.delete("/{tenant_id}/user/{user_id}", summary="删除租户下用户")
 def rm(tenant_id: str, user_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     actor_membership = UserTenantService.get_membership(db, tenant_id=tenant_id, user_id=user.id)
     target_membership = UserTenantService.get_membership(db, tenant_id=tenant_id, user_id=user_id)
@@ -300,16 +308,10 @@ def rm(tenant_id: str, user_id: str, db: Session = Depends(get_db), user=Depends
     is_self = user.id == user_id
     is_manager = actor_membership and UserTenantService.can_manage_members(actor_membership.role)
     if not is_self and not is_manager:
-        return get_json_result(
-            data=False,
-            retmsg='No authorization.',
-            retcode=RetCode.AUTHENTICATION_ERROR)
+        return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
     try:
         if target_role == UserTenantRole.OWNER and not is_self:
-            return get_json_result(
-                data=False,
-                retmsg='Owner cannot be removed by others.',
-                retcode=RetCode.AUTHENTICATION_ERROR)
+            return get_json_result(data=False, retmsg="Owner cannot be removed by others.", retcode=RetCode.AUTHENTICATION_ERROR)
         UserTenantService.filter_delete(db, [UserTenant.tenant_id == tenant_id, UserTenant.user_id == user_id])
         if target_role == UserTenantRole.OWNER:
             UserTenantService.filter_delete(db, [UserTenant.tenant_id == tenant_id])
@@ -322,7 +324,7 @@ def rm(tenant_id: str, user_id: str, db: Session = Depends(get_db), user=Depends
         return server_error_response(e)
 
 
-@router.put('/{tenant_id}/user/{user_id}/role', summary="更新租户成员角色")
+@router.put("/{tenant_id}/user/{user_id}/role", summary="更新租户成员角色")
 def update_member_role(
     tenant_id: str,
     user_id: str,

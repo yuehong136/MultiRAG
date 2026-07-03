@@ -13,8 +13,8 @@ from common.decorator import singleton
 class MultiRAGAzureSasBlob:
     def __init__(self):
         self.conn = None
-        self.container_url = os.getenv('CONTAINER_URL', settings.AZURE["container_url"])
-        self.sas_token = os.getenv('SAS_TOKEN', settings.AZURE["sas_token"])
+        self.container_url = os.getenv("CONTAINER_URL", settings.AZURE["container_url"])
+        self.sas_token = os.getenv("SAS_TOKEN", settings.AZURE["sas_token"])
         self.__open__()
 
     def __open__(self):

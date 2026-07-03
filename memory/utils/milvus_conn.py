@@ -261,10 +261,7 @@ class MilvusConnection(MilvusConnectionBase):
                         for m in match_expressions:
                             if isinstance(m, MatchDenseExpr):
                                 vector_field = self.convert_field_name(m.vector_column_name)
-                                search_params = {
-                                    "metric_type": "COSINE",
-                                    "params": {"nprobe": 10}
-                                }
+                                search_params = {"metric_type": "COSINE", "params": {"nprobe": 10}}
                                 search_results = collection.search(
                                     data=[m.embedding_data],
                                     anns_field=vector_field,
@@ -355,13 +352,7 @@ class MilvusConnection(MilvusConnectionBase):
 
         return " and ".join(exprs) if exprs else ""
 
-    def get_forgotten_messages(
-        self,
-        select_fields: list[str],
-        index_name: str,
-        memory_id: str,
-        limit: int = 512
-    ):
+    def get_forgotten_messages(self, select_fields: list[str], index_name: str, memory_id: str, limit: int = 512):
         """
         Get forgotten messages list, sorted by forget_at from old to new.
 
@@ -460,11 +451,7 @@ class MilvusConnection(MilvusConnectionBase):
             collection.load()
 
             try:
-                results = collection.query(
-                    expr=f'id == "{doc_id}"',
-                    output_fields=["*"],
-                    limit=1
-                )
+                results = collection.query(expr=f'id == "{doc_id}"', output_fields=["*"], limit=1)
                 if results:
                     return self.get_message_from_milvus_doc(results[0])
             except Exception as e:
@@ -513,7 +500,7 @@ class MilvusConnection(MilvusConnectionBase):
         try:
             ids = [f'"{d["id"]}"' for d in docs]
             if ids:
-                delete_expr = f'id in [{", ".join(ids)}]'
+                delete_expr = f"id in [{', '.join(ids)}]"
                 collection.delete(delete_expr)
         except Exception as e:
             self.logger.debug(f"Delete before insert failed (may not exist): {e}")
@@ -559,20 +546,12 @@ class MilvusConnection(MilvusConnectionBase):
             FieldSchema(name=f"q_{vector_size}_vec", dtype=DataType.FLOAT_VECTOR, dim=vector_size),
         ]
 
-        schema = CollectionSchema(
-            fields=fields,
-            description="Message collection for memory storage",
-            enable_dynamic_field=True
-        )
+        schema = CollectionSchema(fields=fields, description="Message collection for memory storage", enable_dynamic_field=True)
 
         collection = Collection(name=collection_name, schema=schema, using=self._using)
 
         # Create index on vector field
-        index_params = {
-            "metric_type": "COSINE",
-            "index_type": "HNSW",
-            "params": {"M": 16, "efConstruction": 50}
-        }
+        index_params = {"metric_type": "COSINE", "index_type": "HNSW", "params": {"M": 16, "efConstruction": 50}}
         collection.create_index(field_name=f"q_{vector_size}_vec", index_params=index_params)
 
         # Load collection
@@ -626,7 +605,7 @@ class MilvusConnection(MilvusConnectionBase):
 
             # Delete old records
             ids = [f'"{r["id"]}"' for r in results]
-            delete_expr = f'id in [{", ".join(ids)}]'
+            delete_expr = f"id in [{', '.join(ids)}]"
             collection.delete(delete_expr)
 
             # Insert updated records
@@ -666,7 +645,7 @@ class MilvusConnection(MilvusConnectionBase):
                 message_ids = [message_ids]
             if message_ids:
                 ids = [f'"{mid}"' for mid in message_ids]
-                filter_expr = f'id in [{", ".join(ids)}]'
+                filter_expr = f"id in [{', '.join(ids)}]"
             else:
                 filter_expr = self._build_filter_expr(condition, memory_id, hide_forgotten=False)
         else:

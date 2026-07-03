@@ -19,6 +19,7 @@ from common.data_source.models import Document
 
 class DatabaseType(str, Enum):
     """Supported database types."""
+
     MYSQL = "mysql"
     POSTGRESQL = "postgresql"
 
@@ -33,6 +34,7 @@ class RDBMSConnector(LoadConnector, PollConnector):
     3. Map columns to content (for vectorization) and metadata
     4. Sync data in batch or incremental mode using a timestamp column
     """
+
     def __init__(
         self,
         db_type: str,
@@ -99,9 +101,7 @@ class RDBMSConnector(LoadConnector, PollConnector):
             try:
                 import mysql.connector
             except ImportError:
-                raise ConnectorValidationError(
-                    "MySQL connector not installed. Please install mysql-connector-python."
-                )
+                raise ConnectorValidationError("MySQL connector not installed. Please install mysql-connector-python.")
             try:
                 self._connection = mysql.connector.connect(
                     host=self.host,
@@ -109,7 +109,7 @@ class RDBMSConnector(LoadConnector, PollConnector):
                     database=self.database,
                     user=username,
                     password=password,
-                    charset='utf8mb4',
+                    charset="utf8mb4",
                     use_unicode=True,
                 )
             except Exception as e:
@@ -118,9 +118,7 @@ class RDBMSConnector(LoadConnector, PollConnector):
             try:
                 import psycopg2
             except ImportError:
-                raise ConnectorValidationError(
-                    "PostgreSQL connector not installed. Please install psycopg2-binary."
-                )
+                raise ConnectorValidationError("PostgreSQL connector not installed. Please install psycopg2-binary.")
             try:
                 self._connection = psycopg2.connect(
                     host=self.host,
@@ -152,10 +150,7 @@ class RDBMSConnector(LoadConnector, PollConnector):
             if self.db_type == DatabaseType.MYSQL:
                 cursor.execute("SHOW TABLES")
             else:
-                cursor.execute(
-                    "SELECT table_name FROM information_schema.tables "
-                    "WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"
-                )
+                cursor.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'")
             tables = [row[0] for row in cursor.fetchall()]
             return tables
         finally:
@@ -241,7 +236,6 @@ class RDBMSConnector(LoadConnector, PollConnector):
         first_content_col = self.content_columns[0] if self.content_columns else "record"
         semantic_id = str(row_dict.get(first_content_col, "database_record")).replace("\n", " ").replace("\r", " ").strip()[:100]
 
-
         return Document(
             id=doc_id,
             blob=content.encode("utf-8"),
@@ -313,24 +307,16 @@ class RDBMSConnector(LoadConnector, PollConnector):
         logging.debug(f"Loading all records from {self.db_type} database: {self.database}")
         return self._yield_documents()
 
-    def poll_source(
-        self, start: SecondsSinceUnixEpoch, end: SecondsSinceUnixEpoch
-    ) -> Generator[list[Document], None, None]:
+    def poll_source(self, start: SecondsSinceUnixEpoch, end: SecondsSinceUnixEpoch) -> Generator[list[Document], None, None]:
         """Poll for new/updated documents since the last sync (incremental sync)."""
         if not self.timestamp_column:
-            logging.warning(
-                "No timestamp column configured for incremental sync. "
-                "Falling back to full sync."
-            )
+            logging.warning("No timestamp column configured for incremental sync. Falling back to full sync.")
             return self.load_from_state()
 
         start_datetime = datetime.fromtimestamp(start, tz=UTC)
         end_datetime = datetime.fromtimestamp(end, tz=UTC)
 
-        logging.debug(
-            f"Polling {self.db_type} database {self.database} "
-            f"from {start_datetime} to {end_datetime}"
-        )
+        logging.debug(f"Polling {self.db_type} database {self.database} from {start_datetime} to {end_datetime}")
 
         return self._yield_documents(start_datetime, end_datetime)
 
@@ -346,9 +332,7 @@ class RDBMSConnector(LoadConnector, PollConnector):
             raise ConnectorValidationError("Database name is required.")
 
         if not self.content_columns:
-            raise ConnectorValidationError(
-                "At least one content column must be specified."
-            )
+            raise ConnectorValidationError("At least one content column must be specified.")
 
         try:
             connection = self._get_connection()
@@ -366,9 +350,7 @@ class RDBMSConnector(LoadConnector, PollConnector):
             raise
         except Exception as e:
             self._close_connection()
-            raise ConnectorValidationError(
-                f"Failed to connect to {self.db_type} database: {e!s}"
-            )
+            raise ConnectorValidationError(f"Failed to connect to {self.db_type} database: {e!s}")
         finally:
             self._close_connection()
 

@@ -233,11 +233,7 @@ class AliyunCodeInterpreterProvider(SandboxProvider):
             # Wrap code to call main() function
             # Matches self_managed provider behavior: call main(**arguments)
             args_json = json.dumps(arguments or {})
-            wrapped_code = (
-                self._build_python_wrapper(code, args_json)
-                if normalized_lang == "python"
-                else self._build_javascript_wrapper(code, args_json)
-            )
+            wrapped_code = self._build_python_wrapper(code, args_json) if normalized_lang == "python" else self._build_javascript_wrapper(code, args_json)
             logger.debug(f"Aliyun Code Interpreter: Wrapped code (first 200 chars): {wrapped_code[:200]}")
 
             start_time = time.time()
@@ -381,7 +377,7 @@ if __name__ == "__main__":
     @staticmethod
     def _build_javascript_wrapper(code: str, args_json: str) -> str:
         marker = RESULT_MARKER_PREFIX
-        return f'''{code}
+        return f"""{code}
 
 const __ragflowArgs = {args_json};
 
@@ -400,7 +396,7 @@ const __ragflowArgs = {args_json};
     console.error(err instanceof Error ? err.stack || err.message : String(err));
   }}
 }})();
-'''
+"""
 
     @staticmethod
     def _extract_structured_result(stdout: str) -> tuple[str, dict[str, Any]]:

@@ -8,6 +8,7 @@ from ..utils.generate_code import generate_code
 
 class Component:
     """表单组件基类"""
+
     _original_json: ClassVar[dict[str, Any]] = None
 
     def __init__(self, component_type: ComponentType):
@@ -20,7 +21,7 @@ class Component:
     def __init_subclass__(cls, **kwargs):
         """当子类被定义时自动调用，用于初始化子类的 _original_json"""
         super().__init_subclass__(**kwargs)
-        if hasattr(cls, '_json_str'):
+        if hasattr(cls, "_json_str"):
             cls._original_json = json.loads(cls._json_str)
 
     def _generate_component(self) -> dict[str, Any]:
@@ -37,7 +38,7 @@ class Component:
         return result
 
     @staticmethod
-    def components_to_json_string(components: list['Component']) -> str:
+    def components_to_json_string(components: list["Component"]) -> str:
         """
         将组件列表转换为JSON数组字符串
 

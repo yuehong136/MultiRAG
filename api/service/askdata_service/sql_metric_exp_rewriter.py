@@ -6,25 +6,79 @@ class SQLFieldAliasProcessor:
 
     def __init__(self):
         # 常见的聚合函数
-        self.aggregation_functions = [
-            'SUM', 'AVG', 'COUNT', 'MAX', 'MIN', 'STDDEV', 'VARIANCE', 'VAR',
-            'GROUP_CONCAT', 'STRING_AGG', 'LISTAGG', 'ARRAY_AGG', 'COLLECT'
-        ]
+        self.aggregation_functions = ["SUM", "AVG", "COUNT", "MAX", "MIN", "STDDEV", "VARIANCE", "VAR", "GROUP_CONCAT", "STRING_AGG", "LISTAGG", "ARRAY_AGG", "COLLECT"]
 
         # SQL关键字
         self.sql_keywords = {
-            'AND', 'OR', 'NOT', 'IN', 'LIKE', 'BETWEEN', 'IS', 'NULL', 'TRUE', 'FALSE',
-            'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'IF', 'DISTINCT', 'ALL',
-            'ASC', 'DESC', 'ORDER', 'BY', 'GROUP', 'HAVING', 'WHERE'
+            "AND",
+            "OR",
+            "NOT",
+            "IN",
+            "LIKE",
+            "BETWEEN",
+            "IS",
+            "NULL",
+            "TRUE",
+            "FALSE",
+            "CASE",
+            "WHEN",
+            "THEN",
+            "ELSE",
+            "END",
+            "IF",
+            "DISTINCT",
+            "ALL",
+            "ASC",
+            "DESC",
+            "ORDER",
+            "BY",
+            "GROUP",
+            "HAVING",
+            "WHERE",
         }
 
         # 常见函数名
         self.common_functions = {
-            'SUBSTRING', 'SUBSTR', 'LENGTH', 'UPPER', 'LOWER', 'TRIM', 'LTRIM', 'RTRIM',
-            'CONCAT', 'REPLACE', 'LEFT', 'RIGHT', 'REVERSE', 'REPEAT', 'SPACE',
-            'ABS', 'CEIL', 'FLOOR', 'ROUND', 'SQRT', 'POWER', 'MOD', 'RAND', 'RANDOM',
-            'COALESCE', 'ISNULL', 'NULLIF', 'CAST', 'CONVERT', 'DATE', 'TIME', 'YEAR',
-            'MONTH', 'DAY', 'HOUR', 'MINUTE', 'SECOND', 'NOW', 'GETDATE', 'CURRENT_TIMESTAMP'
+            "SUBSTRING",
+            "SUBSTR",
+            "LENGTH",
+            "UPPER",
+            "LOWER",
+            "TRIM",
+            "LTRIM",
+            "RTRIM",
+            "CONCAT",
+            "REPLACE",
+            "LEFT",
+            "RIGHT",
+            "REVERSE",
+            "REPEAT",
+            "SPACE",
+            "ABS",
+            "CEIL",
+            "FLOOR",
+            "ROUND",
+            "SQRT",
+            "POWER",
+            "MOD",
+            "RAND",
+            "RANDOM",
+            "COALESCE",
+            "ISNULL",
+            "NULLIF",
+            "CAST",
+            "CONVERT",
+            "DATE",
+            "TIME",
+            "YEAR",
+            "MONTH",
+            "DAY",
+            "HOUR",
+            "MINUTE",
+            "SECOND",
+            "NOW",
+            "GETDATE",
+            "CURRENT_TIMESTAMP",
         }
 
     def add_table_alias_to_expression(self, expression: str, table_alias: str) -> str:
@@ -59,7 +113,7 @@ class SQLFieldAliasProcessor:
         temp_expr = self._remove_string_literals(expression)
 
         # 字段模式：字母开头，可包含字母、数字、下划线，但不包含已有别名的字段
-        field_pattern = r'\b[a-zA-Z_][a-zA-Z0-9_]*\b'
+        field_pattern = r"\b[a-zA-Z_][a-zA-Z0-9_]*\b"
         potential_fields = re.findall(field_pattern, temp_expr, re.IGNORECASE)
 
         valid_fields = []
@@ -98,9 +152,8 @@ class SQLFieldAliasProcessor:
             return False
 
         # 排除紧跟在函数名后面的字段（避免误识别函数名）
-        func_pattern = rf'\b(?:{"|".join(self.aggregation_functions + list(self.common_functions))})\s*\(\s*{re.escape(field)}'
-        if re.search(func_pattern, expression, re.IGNORECASE) and field_upper in (
-                self.aggregation_functions + list(self.common_functions)):
+        func_pattern = rf"\b(?:{'|'.join(self.aggregation_functions + list(self.common_functions))})\s*\(\s*{re.escape(field)}"
+        if re.search(func_pattern, expression, re.IGNORECASE) and field_upper in (self.aggregation_functions + list(self.common_functions)):
             return False
 
         return True
@@ -110,7 +163,7 @@ class SQLFieldAliasProcessor:
         # 确保只替换完整的字段名，不替换字段名的一部分
         # 使用负向前瞻和负向后瞻确保字段前后不是字母、数字或下划线
         escaped_field = re.escape(field)
-        return rf'(?<![a-zA-Z0-9_.])\b{escaped_field}\b(?![a-zA-Z0-9_.])'
+        return rf"(?<![a-zA-Z0-9_.])\b{escaped_field}\b(?![a-zA-Z0-9_.])"
 
     def _remove_string_literals(self, expression: str) -> str:
         """移除字符串常量"""
@@ -166,7 +219,7 @@ def test_alias_addition():
         ("GROUP_CONCAT(DISTINCT category SEPARATOR ',')", "p"),
         ("COUNT(*)", "t1"),  # 通配符，不应该被替换
         ("COALESCE(name, 'Unknown')", "u"),
-        ("SUBSTRING(description, 1, 100)", "p")
+        ("SUBSTRING(description, 1, 100)", "p"),
     ]
 
     print("测试结果：")

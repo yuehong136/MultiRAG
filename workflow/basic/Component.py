@@ -4,7 +4,7 @@ from typing import Any, TypeVar
 from workflow.basic.Node import Node, NodeParameter
 from workflow.WorkflowContext import WorkflowContext
 
-C = TypeVar('C', bound='ComponentParameter')
+C = TypeVar("C", bound="ComponentParameter")
 
 
 class ComponentParameter(NodeParameter):

@@ -5,6 +5,7 @@
 @date：2024/10/14
 @desc: SQLAdmin 认证中间件
 """
+
 import logging
 
 from sqladmin.authentication import AuthenticationBackend
@@ -67,12 +68,7 @@ class AdminAuth(AuthenticationBackend):
                 pass
 
             # 登录成功，将用户信息存储到session中
-            request.session.update({
-                "admin_user_id": user.id,
-                "admin_user_email": user.email,
-                "admin_user_name": user.nickname,
-                "admin_is_superuser": user.is_superuser or False
-            })
+            request.session.update({"admin_user_id": user.id, "admin_user_email": user.email, "admin_user_name": user.nickname, "admin_is_superuser": user.is_superuser or False})
 
             logging.info(f"Admin user {user.email} logged in successfully")
             return True
@@ -116,6 +112,7 @@ class AdminAuth(AuthenticationBackend):
         db: Session = SessionLocal()
         try:
             from api.db.db_models import User
+
             user = db.query(User).filter(User.id == admin_user_id).first()
 
             if not user or not user.is_active:

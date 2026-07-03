@@ -30,6 +30,7 @@ class LogicType(Enum):
 @dataclass
 class Branch:
     """分支信息"""
+
     port_id: str  # 'true', 'true_1', 'false' 等
     nodes: list[Any]
     conditions: dict | None  # 分支的条件配置
@@ -45,7 +46,7 @@ class SelectorComponent(BaseComponent):
 
     def _parse_branches(self, node_data: dict[str, Any]) -> list[dict]:
         """解析分支配置"""
-        branches = node_data.get('data', {}).get('inputs', {}).get('branches', [])
+        branches = node_data.get("data", {}).get("inputs", {}).get("branches", [])
         self.logger.debug(f"Parsed {len(branches)} branches for selector {self.id}")
         return branches
 
@@ -67,22 +68,22 @@ class SelectorComponent(BaseComponent):
 
     def _get_value(self, input_def: dict) -> Any:
         """从输入定义中获取实际值"""
-        if not input_def or 'value' not in input_def:
+        if not input_def or "value" not in input_def:
             return None
 
-        value_def = input_def['value']
-        if value_def['type'] == 'literal':
-            return value_def['content']
-        elif value_def['type'] == 'ref':
-            ref = value_def['content']
-            source_node = self.nodes.get(ref['blockID'])
+        value_def = input_def["value"]
+        if value_def["type"] == "literal":
+            return value_def["content"]
+        elif value_def["type"] == "ref":
+            ref = value_def["content"]
+            source_node = self.nodes.get(ref["blockID"])
             if source_node and source_node.is_completed and source_node.output is not None:
-                output_name = ref.get('name')
+                output_name = ref.get("name")
                 if output_name:
                     return self._get_nested_value(source_node.output, output_name)
                 return source_node.output
 
-            output_name = ref.get('name')
+            output_name = ref.get("name")
             if output_name:
                 return self._get_nested_value(self.inputs, output_name)
         return None
@@ -90,10 +91,10 @@ class SelectorComponent(BaseComponent):
     def _evaluate_condition(self, condition: dict) -> bool:
         """评估单个条件"""
         try:
-            operator = OperatorType(int(condition['operator']))
+            operator = OperatorType(int(condition["operator"]))
 
             # 获取左值
-            left_value = self._get_value(condition['left']['input'])
+            left_value = self._get_value(condition["left"]["input"])
             self.logger.debug(f"Left value for condition: {left_value}")
 
             # 对于IS_EMPTY和IS_NOT_EMPTY，不需要右值
@@ -107,8 +108,8 @@ class SelectorComponent(BaseComponent):
 
             # 获取右值（对于某些操作符，可能没有右值）
             right_value = None
-            if 'right' in condition:
-                right_value = self._get_value(condition['right']['input'])
+            if "right" in condition:
+                right_value = self._get_value(condition["right"]["input"])
             self.logger.debug(f"Right value for condition: {right_value}")
 
             # 执行比较
@@ -144,12 +145,12 @@ class SelectorComponent(BaseComponent):
     def _evaluate_branch(self, branch: dict) -> bool:
         """评估分支条件"""
         try:
-            if 'condition' not in branch:
+            if "condition" not in branch:
                 self.logger.warning("Branch has no condition defined")
                 return False
 
-            conditions = branch['condition']['conditions']
-            logic = LogicType(branch['condition']['logic'])
+            conditions = branch["condition"]["conditions"]
+            logic = LogicType(branch["condition"]["logic"])
 
             self.logger.debug(f"Evaluating branch with {len(conditions)} conditions using {logic.name} logic")
 
@@ -185,24 +186,16 @@ class SelectorComponent(BaseComponent):
                     return {
                         "selected_port": port_id,
                         "branch_index": i,
-                        "inputs": self.inputs  # 传递输入到后续节点
+                        "inputs": self.inputs,  # 传递输入到后续节点
                     }
 
             # 没有条件满足，使用else分支
             self.logger.info("No branch conditions met, using else branch")
-            return {
-                "selected_port": "false",
-                "branch_index": -1,
-                "inputs": self.inputs
-            }
+            return {"selected_port": "false", "branch_index": -1, "inputs": self.inputs}
 
         except Exception as e:
             self.logger.error(f"Error executing selector: {e!s}")
-            raise WorkflowError(
-                message=f"Selector execution failed: {e!s}",
-                error_code=ErrorCode.UNKNOWN_ERROR,
-                details={"component_id": self.id, "error": str(e)}
-            )
+            raise WorkflowError(message=f"Selector execution failed: {e!s}", error_code=ErrorCode.UNKNOWN_ERROR, details={"component_id": self.id, "error": str(e)})
 
     async def execute_alone(self, input_value: dict, batch_value: dict | None = None) -> dict[str, Any]:
         self.inputs = input_value

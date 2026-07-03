@@ -21,27 +21,23 @@ class MergeGroup:
 class VariableAggregationComponent(BaseComponent):
     """变量聚合组件"""
 
-    def __init__(self, component_id: str, title: str, node_data: dict[str, Any],
-                 logger: WorkflowContextLogger):
+    def __init__(self, component_id: str, title: str, node_data: dict[str, Any], logger: WorkflowContextLogger):
         super().__init__(component_id, title, logger)
         self.node_data = node_data
         self.mergeGroups: list[MergeGroup] = []
 
     def _extract_merge_groups(self, node_data: dict[str, Any]):
         self.mergeGroups = []
-        merge_groups_params = node_data['data']['inputs'].get('mergeGroups', [])
+        merge_groups_params = node_data["data"]["inputs"].get("mergeGroups", [])
         for merge_group in merge_groups_params:
-            merge_group_name = merge_group['name']
+            merge_group_name = merge_group["name"]
             variables = []
             inputs = []
-            for i in range(len(merge_group['variables'])):
-                variable = merge_group['variables'][i]
-                inputs.append({
-                    "name": merge_group_name + f"_{i}",
-                    "input": variable
-                })
+            for i in range(len(merge_group["variables"])):
+                variable = merge_group["variables"][i]
+                inputs.append({"name": merge_group_name + f"_{i}", "input": variable})
             var_value_dict = match_parameters(inputs, self.nodes)
-            sorted_items = sorted(var_value_dict.items(), key=lambda x: int(x[0].split('_')[-1]))
+            sorted_items = sorted(var_value_dict.items(), key=lambda x: int(x[0].split("_")[-1]))
             for key, value in sorted_items:
                 variables.append(Variable(name=key, value=value))
             self.mergeGroups.append(MergeGroup(name=merge_group_name, variables=variables))
@@ -81,17 +77,17 @@ class VariableAggregationComponent(BaseComponent):
 
     async def execute_alone(self, input_value: dict, batch_value: dict | None = None) -> dict[str, Any]:
         self.mergeGroups = []
-        merge_groups_params = self.node_data['data']['inputs'].get('mergeGroups', [])
+        merge_groups_params = self.node_data["data"]["inputs"].get("mergeGroups", [])
         for merge_group in merge_groups_params:
             variables = []
-            for i, variable in enumerate(merge_group.get('variables', [])):
+            for i, variable in enumerate(merge_group.get("variables", [])):
                 variables.append(
                     Variable(
-                        name=merge_group['name'] + f"_{i}",
+                        name=merge_group["name"] + f"_{i}",
                         value=self._resolve_variable_value(variable, input_value),
                     )
                 )
-            self.mergeGroups.append(MergeGroup(name=merge_group['name'], variables=variables))
+            self.mergeGroups.append(MergeGroup(name=merge_group["name"], variables=variables))
 
         self.workflow_node.input = {"mergeGroups": self.mergeGroups}
         return self.get_first_non_empty_value(self.mergeGroups)

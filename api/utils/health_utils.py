@@ -80,22 +80,19 @@ def check_db_pool() -> tuple[bool, dict]:
         elapsed = f"{(timer() - st) * 1000.0:.1f}"
 
         # 判断连接池健康状态
-        usage_rate = pool_status.get('usage_rate', 0)
+        usage_rate = pool_status.get("usage_rate", 0)
         is_healthy = usage_rate <= 90  # 使用率超过90%认为不健康
 
         return is_healthy, {
             "elapsed": elapsed,
-            "pool_size": pool_status.get('pool_size'),
-            "checked_out": pool_status.get('checked_out'),
-            "checked_in": pool_status.get('checked_in'),
+            "pool_size": pool_status.get("pool_size"),
+            "checked_out": pool_status.get("checked_out"),
+            "checked_in": pool_status.get("checked_in"),
             "usage_rate": f"{usage_rate}%",
-            "status": pool_status.get('status')
+            "status": pool_status.get("status"),
         }
     except Exception as e:
-        return False, {
-            "elapsed": f"{(timer() - st) * 1000.0:.1f}",
-            "error": str(e)
-        }
+        return False, {"elapsed": f"{(timer() - st) * 1000.0:.1f}", "error": str(e)}
 
 
 def check_redis() -> tuple[bool, dict]:
@@ -133,15 +130,13 @@ def check_storage() -> tuple[bool, dict]:
     except Exception as e:
         return False, {"elapsed": f"{(timer() - st) * 1000.0:.1f}", "error": str(e)}
 
+
 def get_es_cluster_stats() -> dict:
-    doc_engine = os.getenv('DOC_ENGINE', 'milvus')
-    if doc_engine != 'elasticsearch':
+    doc_engine = os.getenv("DOC_ENGINE", "milvus")
+    if doc_engine != "elasticsearch":
         raise Exception("Elasticsearch is not in use.")
     try:
-        return {
-            "status": "alive",
-            "message": ESConnection().get_cluster_stats()
-        }
+        return {"status": "alive", "message": ESConnection().get_cluster_stats()}
     except Exception as e:
         return {
             "status": "timeout",
@@ -150,14 +145,11 @@ def get_es_cluster_stats() -> dict:
 
 
 def get_infinity_status():
-    doc_engine = os.getenv('DOC_ENGINE', 'milvus')
-    if doc_engine != 'infinity':
+    doc_engine = os.getenv("DOC_ENGINE", "milvus")
+    if doc_engine != "infinity":
         raise Exception("Infinity is not in use.")
     try:
-        return {
-            "status": "alive",
-            "message": InfinityConnection().health()
-        }
+        return {"status": "alive", "message": InfinityConnection().health()}
     except Exception as e:
         return {
             "status": "timeout",
@@ -166,21 +158,15 @@ def get_infinity_status():
 
 
 def get_oceanbase_status() -> dict:
-    doc_engine = os.getenv('DOC_ENGINE', 'milvus')
-    if doc_engine != 'oceanbase':
+    doc_engine = os.getenv("DOC_ENGINE", "milvus")
+    if doc_engine != "oceanbase":
         raise Exception("OceanBase is not in use.")
     try:
         ob_conn = OBConnection()
         health_info = ob_conn.health()
         performance_metrics = ob_conn.get_performance_metrics()
         status = "alive" if health_info.get("status") == "healthy" else "timeout"
-        return {
-            "status": status,
-            "message": {
-                "health": health_info,
-                "performance": performance_metrics
-            }
-        }
+        return {"status": status, "message": {"health": health_info, "performance": performance_metrics}}
     except Exception as e:
         return {
             "status": "timeout",
@@ -189,15 +175,9 @@ def get_oceanbase_status() -> dict:
 
 
 def check_oceanbase_health() -> dict:
-    doc_engine = os.getenv('DOC_ENGINE', 'milvus')
-    if doc_engine != 'oceanbase':
-        return {
-            "status": "not_configured",
-            "details": {
-                "connection": "not_configured",
-                "message": "OceanBase is not configured as the document engine"
-            }
-        }
+    doc_engine = os.getenv("DOC_ENGINE", "milvus")
+    if doc_engine != "oceanbase":
+        return {"status": "not_configured", "details": {"connection": "not_configured", "message": "OceanBase is not configured as the document engine"}}
     try:
         ob_conn = OBConnection()
         health_info = ob_conn.health()
@@ -218,14 +198,11 @@ def check_oceanbase_health() -> dict:
                     "max_connections": performance_metrics.get("max_connections", 0),
                     "uri": health_info.get("uri", "unknown"),
                     "version": health_info.get("version_comment", "unknown"),
-                    "error": health_info.get("error", performance_metrics.get("error"))
-                }
+                    "error": health_info.get("error", performance_metrics.get("error")),
+                },
             }
 
-        is_healthy = (
-            connection_status == "connected" and
-            performance_metrics.get("latency_ms", float('inf')) < 1000
-        )
+        is_healthy = connection_status == "connected" and performance_metrics.get("latency_ms", float("inf")) < 1000
         return {
             "status": "healthy" if is_healthy else "degraded",
             "details": {
@@ -238,17 +215,11 @@ def check_oceanbase_health() -> dict:
                 "active_connections": performance_metrics.get("active_connections", 0),
                 "max_connections": performance_metrics.get("max_connections", 0),
                 "uri": health_info.get("uri", "unknown"),
-                "version": health_info.get("version_comment", "unknown")
-            }
+                "version": health_info.get("version_comment", "unknown"),
+            },
         }
     except Exception as e:
-        return {
-            "status": "unhealthy",
-            "details": {
-                "connection": "disconnected",
-                "error": str(e)
-            }
-        }
+        return {"status": "unhealthy", "details": {"connection": "disconnected", "error": str(e)}}
 
 
 def get_vastbase_status() -> dict:
@@ -259,20 +230,17 @@ def get_vastbase_status() -> dict:
         dict: 包含 alive 状态和详细统计信息的字典
     """
     from core.utils.vastbase_conn import VastBaseConnection
+
     start_time = timer()
-    doc_engine = os.getenv('DOC_ENGINE', 'milvus')
-    if doc_engine != 'vastbase':
-        return {
-            "status": "timeout",
-            "message": f"VastBase is not in use. Current DOC_ENGINE: {doc_engine}",
-            "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
-        }
+    doc_engine = os.getenv("DOC_ENGINE", "milvus")
+    if doc_engine != "vastbase":
+        return {"status": "timeout", "message": f"VastBase is not in use. Current DOC_ENGINE: {doc_engine}", "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"}
     try:
         conn = VastBaseConnection()
         health = conn.health()
         elapsed = f"{(timer() - start_time) * 1000.0:.1f} ms"
 
-        if health.get('status') == 'green':
+        if health.get("status") == "green":
             return {
                 "status": "alive",
                 "message": {
@@ -281,22 +249,14 @@ def get_vastbase_status() -> dict:
                     "database": conn.database,
                     "schema": conn.schema,
                     "max_connections": conn.max_connections,
-                    "health_status": health.get('status'),
+                    "health_status": health.get("status"),
                 },
-                "elapsed": elapsed
+                "elapsed": elapsed,
             }
         else:
-            return {
-                "status": "timeout",
-                "message": f"VastBase status: {health.get('status')}. Error: {health.get('error')}",
-                "elapsed": elapsed
-            }
+            return {"status": "timeout", "message": f"VastBase status: {health.get('status')}. Error: {health.get('error')}", "elapsed": elapsed}
     except Exception as e:
-        return {
-            "status": "timeout",
-            "message": f"error: {e!s}",
-            "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
-        }
+        return {"status": "timeout", "message": f"error: {e!s}", "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"}
 
 
 def get_milvus_cluster_stats() -> dict:
@@ -307,27 +267,15 @@ def get_milvus_cluster_stats() -> dict:
         dict: 包含 alive 状态和详细统计信息的字典
     """
     start_time = timer()
-    doc_engine = os.getenv('DOC_ENGINE', 'milvus')
-    if doc_engine != 'milvus':
-        return {
-            "status": "timeout",
-            "message": f"Milvus is not in use. Current DOC_ENGINE: {doc_engine}",
-            "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
-        }
+    doc_engine = os.getenv("DOC_ENGINE", "milvus")
+    if doc_engine != "milvus":
+        return {"status": "timeout", "message": f"Milvus is not in use. Current DOC_ENGINE: {doc_engine}", "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"}
     try:
         stats = MilvusConnection().get_cluster_stats()
         elapsed = f"{(timer() - start_time) * 1000.0:.1f} ms"
-        return {
-            "status": "alive",
-            "message": stats,
-            "elapsed": elapsed
-        }
+        return {"status": "alive", "message": stats, "elapsed": elapsed}
     except Exception as e:
-        return {
-            "status": "timeout",
-            "message": f"error: {e!s}",
-            "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
-        }
+        return {"status": "timeout", "message": f"error: {e!s}", "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"}
 
 
 def check_milvus_alive() -> dict:
@@ -343,26 +291,18 @@ def check_milvus_alive() -> dict:
         health = MilvusConnection().health()
         elapsed = f"{(timer() - start_time) * 1000.0:.1f} ms"
 
-        if health.get('status') == 'green':
+        if health.get("status") == "green":
             return {
-                'status': "alive",
-                'message': f"Milvus {health.get('server_version')} is healthy. Elapsed: {elapsed}",
-                'elapsed': elapsed,
-                'version': health.get('server_version'),
-                'server_type': health.get('type')
+                "status": "alive",
+                "message": f"Milvus {health.get('server_version')} is healthy. Elapsed: {elapsed}",
+                "elapsed": elapsed,
+                "version": health.get("server_version"),
+                "server_type": health.get("type"),
             }
         else:
-            return {
-                'status': "timeout",
-                'message': f"Milvus status: {health.get('status')}. Elapsed: {elapsed}",
-                'elapsed': elapsed
-            }
+            return {"status": "timeout", "message": f"Milvus status: {health.get('status')}. Elapsed: {elapsed}", "elapsed": elapsed}
     except Exception as e:
-        return {
-            "status": "timeout",
-            "message": f"error: {e!s}",
-            "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
-        }
+        return {"status": "timeout", "message": f"error: {e!s}", "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"}
 
 
 def get_database_status() -> dict:
@@ -382,7 +322,7 @@ def get_database_status() -> dict:
             # 检测数据库类型
             db_dialect = engine.dialect.name.lower()
 
-            if db_dialect == 'postgresql':
+            if db_dialect == "postgresql":
                 # PostgreSQL: 使用 pg_stat_activity 视图
                 query = text("""
                     SELECT
@@ -410,24 +350,18 @@ def get_database_status() -> dict:
                 for row in rows:
                     process_info = dict(zip(columns, row))
                     # 格式化时间字段
-                    if process_info.get('query_start'):
-                        process_info['query_start'] = str(process_info['query_start'])
-                    if process_info.get('state_change'):
-                        process_info['state_change'] = str(process_info['state_change'])
+                    if process_info.get("query_start"):
+                        process_info["query_start"] = str(process_info["query_start"])
+                    if process_info.get("state_change"):
+                        process_info["state_change"] = str(process_info["state_change"])
                     # 转换 IP 地址
-                    if process_info.get('host'):
-                        process_info['host'] = str(process_info['host'])
+                    if process_info.get("host"):
+                        process_info["host"] = str(process_info["host"])
                     process_list.append(process_info)
 
-                return {
-                    "status": "alive",
-                    "database_type": "postgresql",
-                    "process_count": len(process_list),
-                    "message": process_list,
-                    "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
-                }
+                return {"status": "alive", "database_type": "postgresql", "process_count": len(process_list), "message": process_list, "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"}
 
-            elif db_dialect == 'mysql':
+            elif db_dialect == "mysql":
                 # MySQL: 使用 SHOW PROCESSLIST
                 query = text("SHOW PROCESSLIST")
                 result = connection.execute(query)
@@ -437,28 +371,13 @@ def get_database_status() -> dict:
                 # 转换为字典列表
                 process_list = [dict(zip(columns, row)) for row in rows]
 
-                return {
-                    "status": "alive",
-                    "database_type": "mysql",
-                    "process_count": len(process_list),
-                    "message": process_list,
-                    "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
-                }
+                return {"status": "alive", "database_type": "mysql", "process_count": len(process_list), "message": process_list, "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"}
             else:
                 # 不支持的数据库类型
-                return {
-                    "status": "timeout",
-                    "database_type": db_dialect,
-                    "message": f"Unsupported database type: {db_dialect}",
-                    "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
-                }
+                return {"status": "timeout", "database_type": db_dialect, "message": f"Unsupported database type: {db_dialect}", "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"}
 
     except Exception as e:
-        return {
-            "alive": False,
-            "message": f"error: {e!s}",
-            "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
-        }
+        return {"alive": False, "message": f"error: {e!s}", "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"}
 
 
 def _minio_scheme_and_verify():
@@ -493,8 +412,8 @@ def check_minio_alive():
         url = f"{scheme}://{settings.MINIO['host']}/minio/health/live"
         response = requests.get(url, timeout=10, verify=verify)
         if response.status_code == 200:
-            return {'status': "alive", "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
-        return {'status': "timeout", "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
+            return {"status": "alive", "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
+        return {"status": "timeout", "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
     except Exception as e:
         return {
             "status": "timeout",
@@ -504,10 +423,7 @@ def check_minio_alive():
 
 def get_redis_info():
     try:
-        return {
-            "status": "alive",
-            "message": REDIS_CONN.info()
-        }
+        return {"status": "alive", "message": REDIS_CONN.info()}
     except Exception as e:
         return {
             "status": "timeout",
@@ -518,14 +434,14 @@ def get_redis_info():
 def check_multirag_server_alive():
     start_time = timer()
     try:
-        url = f'http://{settings.HOST_IP}:{settings.HOST_PORT}/api/v1/system/ping'
-        if '0.0.0.0' in url:
-            url = url.replace('0.0.0.0', '127.0.0.1')
+        url = f"http://{settings.HOST_IP}:{settings.HOST_PORT}/api/v1/system/ping"
+        if "0.0.0.0" in url:
+            url = url.replace("0.0.0.0", "127.0.0.1")
         response = requests.get(url)
         if response.status_code == 200:
-            return {'status': "alive", "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
+            return {"status": "alive", "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
         else:
-            return {'status': "timeout", "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
+            return {"status": "timeout", "message": f"Confirm elapsed: {(timer() - start_time) * 1000.0:.1f} ms."}
     except Exception as e:
         return {
             "status": "timeout",
@@ -548,10 +464,7 @@ def check_task_executor_alive():
         else:
             return {"status": "timeout", "message": "Not found any task executor."}
     except Exception as e:
-        return {
-            "status": "timeout",
-            "message": f"error: {e!s}"
-        }
+        return {"status": "timeout", "message": f"error: {e!s}"}
 
 
 def check_chat() -> tuple[bool, dict]:

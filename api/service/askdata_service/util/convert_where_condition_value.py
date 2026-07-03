@@ -50,26 +50,26 @@ def _convert_single_value(value: Any, field_type: str) -> Any:
 
     try:
         # 整数类型
-        if any(int_type in field_type_lower for int_type in ['int', 'integer', 'bigint', 'smallint', 'tinyint']):
+        if any(int_type in field_type_lower for int_type in ["int", "integer", "bigint", "smallint", "tinyint"]):
             return int(value)
 
         # 浮点数类型
-        elif any(float_type in field_type_lower for float_type in ['float', 'double', 'decimal', 'numeric', 'real']):
+        elif any(float_type in field_type_lower for float_type in ["float", "double", "decimal", "numeric", "real"]):
             float_val = float(value)
             # 如果是整数值，保持为 float（因为字段类型是浮点型）
             return float_val
 
         # 布尔类型
-        elif any(bool_type in field_type_lower for bool_type in ['bool', 'boolean']):
-            if value.lower() in ('true', '1', 'yes', 'on'):
+        elif any(bool_type in field_type_lower for bool_type in ["bool", "boolean"]):
+            if value.lower() in ("true", "1", "yes", "on"):
                 return True
-            elif value.lower() in ('false', '0', 'no', 'off'):
+            elif value.lower() in ("false", "0", "no", "off"):
                 return False
             else:
                 return value  # 保持原值，让数据库处理
 
         # 日期时间类型 - 保持字符串，让数据库处理
-        elif any(date_type in field_type_lower for date_type in ['date', 'time', 'timestamp', 'datetime']):
+        elif any(date_type in field_type_lower for date_type in ["date", "time", "timestamp", "datetime"]):
             return value
 
         # 字符串类型 - 保持原值
@@ -93,15 +93,15 @@ def process_where_condition(where_condition: dict, semantic_field: dict, table_a
     Returns:
         tuple: (column_name, operator, converted_value, needs_special_handling, special_sql)
     """
-    field_type = semantic_field['field_detail']['dataType']
+    field_type = semantic_field["field_detail"]["dataType"]
     if semantic_field["semantic_type"] == "metric":
-        column_name = f"{table_alias}.{semantic_field.get('semantic_field_name','').split('.')[1]}"
+        column_name = f"{table_alias}.{semantic_field.get('semantic_field_name', '').split('.')[1]}"
     else:
         column_name = f"{table_alias}.{semantic_field['semantic_field_name']}"
 
     # 如果有原始SQL组件，使用它
     if where_condition.get("original_sql_component", {}).get("field"):
-        column_name = where_condition['original_sql_component']['field']
+        column_name = where_condition["original_sql_component"]["field"]
 
     operator = where_condition["operator"]
     value = where_condition["value"]
@@ -111,7 +111,7 @@ def process_where_condition(where_condition: dict, semantic_field: dict, table_a
 
     # 检查是否需要特殊处理（如日期类型的 CAST）
     field_type_lower = field_type.lower()
-    if any(date_type in field_type_lower for date_type in ['date']) and operator not in ["IN"]:
+    if any(date_type in field_type_lower for date_type in ["date"]) and operator not in ["IN"]:
         # 需要 CAST 处理
         special_sql = f"{column_name} {operator} CAST(%s AS DATE)"
         return column_name, operator, converted_value, True, special_sql
@@ -126,24 +126,19 @@ if __name__ == "__main__":
         # 整数类型
         ("123", "int", "=", 123),
         ("456", "integer", ">", 456),
-
         # 浮点数类型
         ("123.45", "float", "=", 123.45),
         ("100.0", "decimal", "<", 100.0),
-
         # 布尔类型
         ("true", "boolean", "=", True),
         ("false", "bool", "=", False),
         ("1", "boolean", "=", True),
-
         # 日期类型
         ("2023-12-01", "date", "=", "2023-12-01"),
         ("2023-12-01 10:30:00", "datetime", ">", "2023-12-01 10:30:00"),
-
         # 字符串类型
         ("hello", "varchar", "=", "hello"),
         ("world", "text", "LIKE", "world"),
-
         # IN 操作符
         ("('学院A', '学院B')", "varchar", "IN", ["学院A", "学院B"]),
         ("('1', '2', '3')", "int", "IN", [1, 2, 3]),
@@ -164,20 +159,11 @@ if __name__ == "__main__":
     print("完整流程测试:")
 
     # 模拟完整的处理流程
-    mock_where_condition = {
-        "operator": "IN",
-        "value": "('物理学院', '数学学院')",
-        "original_sql_component": {}
-    }
+    mock_where_condition = {"operator": "IN", "value": "('物理学院', '数学学院')", "original_sql_component": {}}
 
-    mock_semantic_field = {
-        'semantic_field_name': 'college_name',
-        'field_detail': {'dataType': 'varchar'}
-    }
+    mock_semantic_field = {"semantic_field_name": "college_name", "field_detail": {"dataType": "varchar"}}
 
-    column_name, operator, converted_value, needs_special, special_sql = process_where_condition(
-        mock_where_condition, mock_semantic_field, "t"
-    )
+    column_name, operator, converted_value, needs_special, special_sql = process_where_condition(mock_where_condition, mock_semantic_field, "t")
 
     print(f"列名: {column_name}")
     print(f"操作符: {operator}")

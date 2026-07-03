@@ -5,6 +5,7 @@ Revises: 24df210f5ebf
 Create Date: 2025-11-03 14:32:41.180953
 
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -12,8 +13,8 @@ from alembic import op
 from sqlalchemy.engine.reflection import Inspector
 
 # revision identifiers, used by Alembic.
-revision: str = '315b233f4811'
-down_revision: str | None = '24df210f5ebf'
+revision: str = "315b233f4811"
+down_revision: str | None = "24df210f5ebf"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -43,14 +44,7 @@ def upgrade() -> None:
                     batch_op.drop_index("ix_usr_ai_t_ai_tenant_llms_api_key")
 
                 # 修改列类型
-                batch_op.alter_column(
-                    "api_key",
-                    existing_type=sa.String(length=2048),
-                    type_=sa.Text(),
-                    existing_nullable=True,
-                    nullable=True,
-                    comment="API KEY"
-                )
+                batch_op.alter_column("api_key", existing_type=sa.String(length=2048), type_=sa.Text(), existing_nullable=True, nullable=True, comment="API KEY")
 
 
 def downgrade() -> None:
@@ -73,17 +67,8 @@ def downgrade() -> None:
 
             with op.batch_alter_table("t_ai_tenant_llms", schema="usr_ai") as batch_op:
                 # 修改列类型回 String(2048)
-                batch_op.alter_column(
-                    "api_key",
-                    existing_type=sa.Text(),
-                    type_=sa.String(length=2048),
-                    existing_nullable=True,
-                    nullable=True
-                )
+                batch_op.alter_column("api_key", existing_type=sa.Text(), type_=sa.String(length=2048), existing_nullable=True, nullable=True)
 
                 # 重新添加索引（如果不存在）
                 if "ix_usr_ai_t_ai_tenant_llms_api_key" not in index_names:
-                    batch_op.create_index(
-                        "ix_usr_ai_t_ai_tenant_llms_api_key",
-                        ["api_key"]
-                    )
+                    batch_op.create_index("ix_usr_ai_t_ai_tenant_llms_api_key", ["api_key"])

@@ -5,6 +5,7 @@
 @date：2025/01/11 16:40
 @desc: AI安全护栏服务配置管理服务
 """
+
 import logging
 from typing import Any
 
@@ -18,12 +19,11 @@ from common.misc_utils import get_uuid
 
 class GuardServiceService(CommonService):
     """AI安全护栏服务配置管理服务"""
+
     model = GuardService
 
     @classmethod
-    def create_service(cls, db: Session, code: str, name: str,
-                      description: str = None, tenant_id: str = None,
-                      created_by: str = None, **kwargs) -> str | None:
+    def create_service(cls, db: Session, code: str, name: str, description: str = None, tenant_id: str = None, created_by: str = None, **kwargs) -> str | None:
         """
         创建AI服务配置
 
@@ -61,7 +61,7 @@ class GuardServiceService(CommonService):
                 "timeout_ms": kwargs.get("timeout_ms", 1000),
                 "total_requests": 0,
                 "blocked_requests": 0,
-                "status": kwargs.get("status", "1")
+                "status": kwargs.get("status", "1"),
             }
 
             service = cls.save(db, **service_data)
@@ -72,8 +72,7 @@ class GuardServiceService(CommonService):
             return None
 
     @classmethod
-    def get_service_by_code(cls, db: Session, code: str,
-                           tenant_id: str) -> GuardService | None:
+    def get_service_by_code(cls, db: Session, code: str, tenant_id: str) -> GuardService | None:
         """
         根据代码获取服务配置
 
@@ -86,13 +85,7 @@ class GuardServiceService(CommonService):
             服务配置对象或None
         """
         try:
-            return db.query(cls.model).filter(
-                and_(
-                    cls.model.code == code,
-                    cls.model.tenant_id == tenant_id,
-                    cls.model.status == "1"
-                )
-            ).first()
+            return db.query(cls.model).filter(and_(cls.model.code == code, cls.model.tenant_id == tenant_id, cls.model.status == "1")).first()
         except Exception as e:
             logging.error(f"获取服务配置失败: {e}")
             return None
@@ -110,19 +103,13 @@ class GuardServiceService(CommonService):
             服务配置列表
         """
         try:
-            return db.query(cls.model).filter(
-                and_(
-                    cls.model.tenant_id == tenant_id,
-                    cls.model.status == "1"
-                )
-            ).order_by(cls.model.create_time.desc()).all()
+            return db.query(cls.model).filter(and_(cls.model.tenant_id == tenant_id, cls.model.status == "1")).order_by(cls.model.create_time.desc()).all()
         except Exception as e:
             logging.error(f"获取租户服务配置失败: {e}")
             return []
 
     @classmethod
-    def update_service(cls, db: Session, service_id: str,
-                      update_data: dict[str, Any]) -> int:
+    def update_service(cls, db: Session, service_id: str, update_data: dict[str, Any]) -> int:
         """
         更新服务配置
 
@@ -141,8 +128,7 @@ class GuardServiceService(CommonService):
             return 0
 
     @classmethod
-    def increment_request_count(cls, db: Session, service_id: str,
-                              blocked: bool = False) -> int:
+    def increment_request_count(cls, db: Session, service_id: str, blocked: bool = False) -> int:
         """
         增加请求统计
 
@@ -159,9 +145,7 @@ class GuardServiceService(CommonService):
             if not service:
                 return 0
 
-            update_data = {
-                "total_requests": service.total_requests + 1
-            }
+            update_data = {"total_requests": service.total_requests + 1}
 
             if blocked:
                 update_data["blocked_requests"] = service.blocked_requests + 1
@@ -172,8 +156,7 @@ class GuardServiceService(CommonService):
             return 0
 
     @classmethod
-    def init_default_services(cls, db: Session, tenant_id: str,
-                             created_by: str) -> list[str]:
+    def init_default_services(cls, db: Session, tenant_id: str, created_by: str) -> list[str]:
         """
         初始化默认服务配置
 
@@ -193,12 +176,8 @@ class GuardServiceService(CommonService):
                 "service_type": "api",
                 "enabled_dimensions": ["CONTENT_COMPLIANCE", "PROMPT_ATTACK"],
                 "enabled_labels": ["political_entity", "prompt_injection"],
-                "policy_config": {
-                    "risk_threshold": 80,
-                    "default_action": "block",
-                    "enable_cache": True
-                },
-                "timeout_ms": 1000
+                "policy_config": {"risk_threshold": 80, "default_action": "block", "enable_cache": True},
+                "timeout_ms": 1000,
             },
             {
                 "code": "response_security_check",
@@ -207,23 +186,14 @@ class GuardServiceService(CommonService):
                 "service_type": "api",
                 "enabled_dimensions": ["CONTENT_COMPLIANCE", "SENSITIVE_CONTENT"],
                 "enabled_labels": ["political_entity", "bank_card_cn", "phone_number"],
-                "policy_config": {
-                    "risk_threshold": 70,
-                    "default_action": "replace",
-                    "enable_cache": True
-                },
-                "timeout_ms": 1500
-            }
+                "policy_config": {"risk_threshold": 70, "default_action": "replace", "enable_cache": True},
+                "timeout_ms": 1500,
+            },
         ]
 
         created_ids = []
         for service_data in default_services:
-            service_id = cls.create_service(
-                db=db,
-                tenant_id=tenant_id,
-                created_by=created_by,
-                **service_data
-            )
+            service_id = cls.create_service(db=db, tenant_id=tenant_id, created_by=created_by, **service_data)
             if service_id:
                 created_ids.append(service_id)
 

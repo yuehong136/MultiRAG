@@ -39,6 +39,7 @@ class CreateCategoryRequest(BaseModel):
             "description": "政治相关敏感词分类"
         }
     """
+
     name: str = Field(..., description="分类名称，不能为空")
     description: str | None = Field(None, description="分类描述，可选")
 
@@ -54,6 +55,7 @@ class UpdateCategoryRequest(BaseModel):
             "status": "1"
         }
     """
+
     category_id: str = Field(..., description="分类ID，必填")
     name: str | None = Field(None, description="分类名称，可选")
     description: str | None = Field(None, description="分类描述，可选")
@@ -72,6 +74,7 @@ class CreateLevelRequest(BaseModel):
             "replacement": "***"
         }
     """
+
     name: str = Field(..., description="等级名称，不能为空")
     level: int = Field(..., ge=1, le=5, description="等级数值，范围1-5，数值越高越严重")
     description: str | None = Field(None, description="等级描述，可选")
@@ -92,6 +95,7 @@ class UpdateLevelRequest(BaseModel):
             "status": "1"
         }
     """
+
     level_id: str = Field(..., description="等级ID，必填")
     name: str | None = Field(None, description="等级名称，可选")
     level: int | None = Field(None, ge=1, le=5, description="等级数值，范围1-5")
@@ -114,6 +118,7 @@ class CreateSensitiveWordRequest(BaseModel):
             "source": "manual"
         }
     """
+
     word: str = Field(..., description="敏感词内容，不能为空")
     category_id: str = Field(..., description="分类ID，必填")
     level_id: str = Field(..., description="等级ID，必填")
@@ -134,6 +139,7 @@ class BatchCreateSensitiveWordRequest(BaseModel):
             "source": "batch_import"
         }
     """
+
     words: list[str] = Field(..., description="敏感词列表，不能为空")
     category_id: str = Field(..., description="分类ID，必填")
     level_id: str = Field(..., description="等级ID，必填")
@@ -154,6 +160,7 @@ class UpdateSensitiveWordRequest(BaseModel):
             "status": "1"
         }
     """
+
     word_id: str = Field(..., description="敏感词ID，必填")
     word: str | None = Field(None, description="敏感词内容，可选")
     category_id: str | None = Field(None, description="分类ID，可选")
@@ -173,6 +180,7 @@ class CreateWhitelistRequest(BaseModel):
             "reason": "误判为敏感词，加入白名单"
         }
     """
+
     word: str = Field(..., description="白名单词汇，不能为空")
     reason: str | None = Field(None, description="加入白名单的原因，可选")
 
@@ -186,6 +194,7 @@ class ContentFilterRequest(BaseModel):
             "strict_mode": false
         }
     """
+
     content: str = Field(..., description="待检测的文本内容，不能为空")
     strict_mode: bool = Field(False, description="是否启用严格模式，默认false")
 
@@ -198,16 +207,13 @@ class BatchDeleteRequest(BaseModel):
             "ids": ["uuid1", "uuid2", "uuid3"]
         }
     """
+
     ids: list[str] = Field(..., description="待删除的ID列表，不能为空")
 
 
 # 分类管理接口
-@router.post('/categories/create', summary="创建敏感词分类")
-def create_category(
-    request: CreateCategoryRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/categories/create", summary="创建敏感词分类")
+def create_category(request: CreateCategoryRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     创建敏感词分类
 
@@ -225,13 +231,7 @@ def create_category(
         Exception: 数据库操作异常或其他系统异常
     """
     try:
-        category_data = {
-            "id": get_uuid(),
-            "name": request.name,
-            "description": request.description,
-            "tenant_id": user.id,
-            "created_by": user.id
-        }
+        category_data = {"id": get_uuid(), "name": request.name, "description": request.description, "tenant_id": user.id, "created_by": user.id}
 
         if not SensitiveWordCategoryService.save(db, **category_data):
             return get_data_error_result(retmsg="创建分类失败")
@@ -241,11 +241,8 @@ def create_category(
         return server_error_response(e)
 
 
-@router.get('/categories/list', summary="获取敏感词分类列表")
-def list_categories(
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/categories/list", summary="获取敏感词分类列表")
+def list_categories(db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     获取当前租户的所有敏感词分类列表
 
@@ -265,12 +262,8 @@ def list_categories(
         return server_error_response(e)
 
 
-@router.post('/categories/update', summary="更新敏感词分类")
-def update_category(
-    request: UpdateCategoryRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/categories/update", summary="更新敏感词分类")
+def update_category(request: UpdateCategoryRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     更新敏感词分类信息
 
@@ -295,12 +288,8 @@ def update_category(
         return server_error_response(e)
 
 
-@router.delete('/categories/{category_id}', summary="删除敏感词分类")
-def delete_category(
-    category_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.delete("/categories/{category_id}", summary="删除敏感词分类")
+def delete_category(category_id: str, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     删除指定的敏感词分类
 
@@ -327,12 +316,8 @@ def delete_category(
 
 
 # 等级管理接口
-@router.post('/levels/create', summary="创建敏感词等级")
-def create_level(
-    request: CreateLevelRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/levels/create", summary="创建敏感词等级")
+def create_level(request: CreateLevelRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     创建敏感词等级
 
@@ -358,7 +343,7 @@ def create_level(
             "description": request.description,
             "action": request.action,
             "replacement": request.replacement,
-            "tenant_id": user.id
+            "tenant_id": user.id,
         }
 
         if not SensitiveWordLevelService.save(db, **level_data):
@@ -369,11 +354,8 @@ def create_level(
         return server_error_response(e)
 
 
-@router.get('/levels/list', summary="获取敏感词等级列表")
-def list_levels(
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/levels/list", summary="获取敏感词等级列表")
+def list_levels(db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     获取当前租户的所有敏感词等级列表
 
@@ -393,12 +375,8 @@ def list_levels(
         return server_error_response(e)
 
 
-@router.post('/levels/update', summary="更新敏感词等级")
-def update_level(
-    request: UpdateLevelRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/levels/update", summary="更新敏感词等级")
+def update_level(request: UpdateLevelRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     更新敏感词等级信息
 
@@ -423,12 +401,8 @@ def update_level(
         return server_error_response(e)
 
 
-@router.delete('/levels/{level_id}', summary="删除敏感词等级")
-def delete_level(
-    level_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.delete("/levels/{level_id}", summary="删除敏感词等级")
+def delete_level(level_id: str, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     删除指定的敏感词等级
 
@@ -455,12 +429,8 @@ def delete_level(
 
 
 # 敏感词管理接口
-@router.post('/words/create', summary="创建敏感词")
-def create_sensitive_word(
-    request: CreateSensitiveWordRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/words/create", summary="创建敏感词")
+def create_sensitive_word(request: CreateSensitiveWordRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     创建单个敏感词
 
@@ -488,7 +458,7 @@ def create_sensitive_word(
             description=request.description,
             source=request.source,
             tenant_id=user.id,
-            created_by=user.id
+            created_by=user.id,
         )
 
         if result:
@@ -499,12 +469,8 @@ def create_sensitive_word(
         return server_error_response(e)
 
 
-@router.post('/words/batch-create', summary="批量创建敏感词")
-def batch_create_sensitive_words(
-    request: BatchCreateSensitiveWordRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/words/batch-create", summary="批量创建敏感词")
+def batch_create_sensitive_words(request: BatchCreateSensitiveWordRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     批量创建敏感词
 
@@ -524,34 +490,17 @@ def batch_create_sensitive_words(
     """
     try:
         results = SensitiveWordService.batch_create_sensitive_words(
-            db=db,
-            words=request.words,
-            category_id=request.category_id,
-            level_id=request.level_id,
-            match_type=request.match_type,
-            source=request.source,
-            tenant_id=user.id,
-            created_by=user.id
+            db=db, words=request.words, category_id=request.category_id, level_id=request.level_id, match_type=request.match_type, source=request.source, tenant_id=user.id, created_by=user.id
         )
 
-        return get_json_result(data={
-            "success_count": results["success_count"],
-            "failed_count": results["failed_count"],
-            "failed_words": results["failed_words"]
-        })
+        return get_json_result(data={"success_count": results["success_count"], "failed_count": results["failed_count"], "failed_words": results["failed_words"]})
     except Exception as e:
         return server_error_response(e)
 
 
-@router.get('/words/list', summary="获取敏感词列表")
+@router.get("/words/list", summary="获取敏感词列表")
 def list_sensitive_words(
-    page: int = 1,
-    page_size: int = 50,
-    category_id: str | None = None,
-    level_id: str | None = None,
-    keyword: str | None = None,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
+    page: int = 1, page_size: int = 50, category_id: str | None = None, level_id: str | None = None, keyword: str | None = None, db: Session = Depends(get_db), user=Depends(manager)
 ) -> dict[str, Any]:
     """
     分页获取敏感词列表，支持多种过滤条件
@@ -574,27 +523,15 @@ def list_sensitive_words(
         GET /words/list?page=1&page_size=20&category_id=uuid&keyword=测试
     """
     try:
-        result = SensitiveWordService.get_paginated_words(
-            db=db,
-            tenant_id=user.id,
-            page=page,
-            page_size=page_size,
-            category_id=category_id,
-            level_id=level_id,
-            keyword=keyword
-        )
+        result = SensitiveWordService.get_paginated_words(db=db, tenant_id=user.id, page=page, page_size=page_size, category_id=category_id, level_id=level_id, keyword=keyword)
 
         return get_json_result(data=result)
     except Exception as e:
         return server_error_response(e)
 
 
-@router.post('/words/update', summary="更新敏感词")
-def update_sensitive_word(
-    request: UpdateSensitiveWordRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/words/update", summary="更新敏感词")
+def update_sensitive_word(request: UpdateSensitiveWordRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     更新敏感词信息
 
@@ -612,11 +549,7 @@ def update_sensitive_word(
         只更新提供的非空字段，其他字段保持不变
     """
     try:
-        result = SensitiveWordService.update_sensitive_word(
-            db=db,
-            word_id=request.word_id,
-            **{k: v for k, v in request.model_dump().items() if v is not None and k != "word_id"}
-        )
+        result = SensitiveWordService.update_sensitive_word(db=db, word_id=request.word_id, **{k: v for k, v in request.model_dump().items() if v is not None and k != "word_id"})
 
         if result:
             return get_json_result(data=True)
@@ -626,12 +559,8 @@ def update_sensitive_word(
         return server_error_response(e)
 
 
-@router.delete('/words/{word_id}', summary="删除敏感词")
-def delete_sensitive_word(
-    word_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.delete("/words/{word_id}", summary="删除敏感词")
+def delete_sensitive_word(word_id: str, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     删除指定的敏感词
 
@@ -654,12 +583,8 @@ def delete_sensitive_word(
         return server_error_response(e)
 
 
-@router.post('/words/batch-delete', summary="批量删除敏感词")
-def batch_delete_sensitive_words(
-    request: BatchDeleteRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/words/batch-delete", summary="批量删除敏感词")
+def batch_delete_sensitive_words(request: BatchDeleteRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     批量删除敏感词
 
@@ -678,21 +603,14 @@ def batch_delete_sensitive_words(
     """
     try:
         result = SensitiveWordService.batch_delete_words(db, request.ids)
-        return get_json_result(data={
-            "success_count": result["success_count"],
-            "failed_count": result["failed_count"]
-        })
+        return get_json_result(data={"success_count": result["success_count"], "failed_count": result["failed_count"]})
     except Exception as e:
         return server_error_response(e)
 
 
 # 白名单管理接口
-@router.post('/whitelist/create', summary="创建白名单")
-def create_whitelist(
-    request: CreateWhitelistRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/whitelist/create", summary="创建白名单")
+def create_whitelist(request: CreateWhitelistRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     创建敏感词白名单
 
@@ -711,13 +629,7 @@ def create_whitelist(
         适用于误判的正常词汇或特殊业务需求的词汇
     """
     try:
-        result = SensitiveWordWhitelistService.create_whitelist_word(
-            db=db,
-            word=request.word,
-            reason=request.reason,
-            tenant_id=user.id,
-            created_by=user.id
-        )
+        result = SensitiveWordWhitelistService.create_whitelist_word(db=db, word=request.word, reason=request.reason, tenant_id=user.id, created_by=user.id)
 
         if result:
             return get_json_result(data={"whitelist_id": result})
@@ -727,11 +639,8 @@ def create_whitelist(
         return server_error_response(e)
 
 
-@router.get('/whitelist/list', summary="获取白名单列表")
-def list_whitelist(
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/whitelist/list", summary="获取白名单列表")
+def list_whitelist(db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     获取当前租户的所有白名单词汇列表
 
@@ -751,12 +660,8 @@ def list_whitelist(
         return server_error_response(e)
 
 
-@router.delete('/whitelist/{whitelist_id}', summary="删除白名单")
-def delete_whitelist(
-    whitelist_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.delete("/whitelist/{whitelist_id}", summary="删除白名单")
+def delete_whitelist(whitelist_id: str, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     删除指定的白名单词汇
 
@@ -783,12 +688,8 @@ def delete_whitelist(
 
 
 # 内容过滤接口
-@router.post('/filter/check', summary="检测内容敏感词")
-def check_content(
-    request: ContentFilterRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/filter/check", summary="检测内容敏感词")
+def check_content(request: ContentFilterRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     检测文本内容中的敏感词
 
@@ -816,13 +717,7 @@ def check_content(
     """
     try:
         result = SensitiveWordService.filter_content(
-            db=db,
-            content=request.content,
-            tenant_id=user.id,
-            strict_mode=request.strict_mode,
-            user_id=user.id,
-            source_type="api_check",
-            source_id="manual_check"
+            db=db, content=request.content, tenant_id=user.id, strict_mode=request.strict_mode, user_id=user.id, source_type="api_check", source_id="manual_check"
         )
 
         return get_json_result(data=result)
@@ -831,11 +726,8 @@ def check_content(
 
 
 # 统计分析接口
-@router.get('/stats/overview', summary="获取敏感词统计概览")
-def get_stats_overview(
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/stats/overview", summary="获取敏感词统计概览")
+def get_stats_overview(db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     获取当前租户的敏感词统计概览信息
 
@@ -866,15 +758,8 @@ def get_stats_overview(
         return server_error_response(e)
 
 
-@router.get('/logs/list', summary="获取过滤日志")
-def list_filter_logs(
-    page: int = 1,
-    page_size: int = 50,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.get("/logs/list", summary="获取过滤日志")
+def list_filter_logs(page: int = 1, page_size: int = 50, start_date: str | None = None, end_date: str | None = None, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     分页获取敏感词过滤日志，支持时间范围过滤
 
@@ -903,14 +788,7 @@ def list_filter_logs(
         GET /logs/list?page=1&page_size=20&start_date=2025-01-01&end_date=2025-01-07
     """
     try:
-        result = SensitiveFilterLogService.get_paginated_logs(
-            db=db,
-            tenant_id=user.id,
-            page=page,
-            page_size=page_size,
-            start_date=start_date,
-            end_date=end_date
-        )
+        result = SensitiveFilterLogService.get_paginated_logs(db=db, tenant_id=user.id, page=page, page_size=page_size, start_date=start_date, end_date=end_date)
 
         return get_json_result(data=result)
     except Exception as e:
@@ -918,11 +796,8 @@ def list_filter_logs(
 
 
 # 缓存管理接口
-@router.post('/cache/refresh', summary="刷新敏感词缓存")
-def refresh_cache(
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-) -> dict[str, Any]:
+@router.post("/cache/refresh", summary="刷新敏感词缓存")
+def refresh_cache(db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
     """
     刷新当前租户的敏感词缓存
 
@@ -949,7 +824,7 @@ def refresh_cache(
         return server_error_response(e)
 
 
-@router.get('/cache/status', summary="获取缓存状态")
+@router.get("/cache/status", summary="获取缓存状态")
 def get_cache_status(user=Depends(manager)) -> dict[str, Any]:
     """
     获取当前租户的敏感词缓存状态信息

@@ -115,7 +115,7 @@ class DialogService(CommonService):
         """
         try:
             for data in data_list:
-                if 'id' not in data:
+                if "id" not in data:
                     raise ValueError("Each data item must include an 'id' field")
 
                 # 自动添加更新时间字段
@@ -125,12 +125,10 @@ class DialogService(CommonService):
                 data["update_date"] = current_date
 
                 # 获取要更新的记录ID
-                record_id = data.pop('id')
+                record_id = data.pop("id")
 
                 # 执行更新
-                db.query(cls.model).filter(
-                    cls.model.id == record_id
-                ).update(data, synchronize_session=False)
+                db.query(cls.model).filter(cls.model.id == record_id).update(data, synchronize_session=False)
 
             # 提交所有更改
             db.commit()
@@ -150,10 +148,7 @@ class DialogService(CommonService):
         if name:
             query = query.filter(cls.model.name == name)
 
-        query = query.filter(
-            (cls.model.tenant_id == tenant_id) &
-            (cls.model.status == StatusEnum.VALID.value)
-        )
+        query = query.filter((cls.model.tenant_id == tenant_id) & (cls.model.status == StatusEnum.VALID.value))
 
         # 根据 desc 参数确定排序方式
         order_col = getattr(cls.model, orderby)
@@ -190,36 +185,37 @@ class DialogService(CommonService):
 
         # 查询字段列表 - 使用 update_date/create_date 而不是 update_time/create_time
         fields = [
-            cls.model.id,               # 0
-            cls.model.tenant_id,        # 1
-            cls.model.name,             # 2
-            cls.model.description,      # 3
-            cls.model.language,         # 4
-            cls.model.llm_id,           # 5
-            cls.model.llm_setting,      # 6
-            cls.model.prompt_type,      # 7
-            cls.model.prompt_config,    # 8
-            cls.model.similarity_threshold,      # 9
+            cls.model.id,  # 0
+            cls.model.tenant_id,  # 1
+            cls.model.name,  # 2
+            cls.model.description,  # 3
+            cls.model.language,  # 4
+            cls.model.llm_id,  # 5
+            cls.model.llm_setting,  # 6
+            cls.model.prompt_type,  # 7
+            cls.model.prompt_config,  # 8
+            cls.model.similarity_threshold,  # 9
             cls.model.vector_similarity_weight,  # 10
-            cls.model.top_n,            # 11
-            cls.model.top_k,            # 12
-            cls.model.do_refer,         # 13
-            cls.model.rerank_id,        # 14
-            cls.model.kb_ids,           # 15
-            cls.model.icon,             # 16
-            cls.model.status,           # 17
-            User.nickname,              # 18
+            cls.model.top_n,  # 11
+            cls.model.top_k,  # 12
+            cls.model.do_refer,  # 13
+            cls.model.rerank_id,  # 14
+            cls.model.kb_ids,  # 15
+            cls.model.icon,  # 16
+            cls.model.status,  # 17
+            User.nickname,  # 18
             User.avatar.label("tenant_avatar"),  # 19
-            cls.model.update_date,      # 20 - DateTime 类型
-            cls.model.create_date,      # 21 - DateTime 类型
-            cls.model.update_time,      # 22 - 毫秒时间戳（可选）
-            cls.model.create_time,      # 23 - 毫秒时间戳（可选）
+            cls.model.update_date,  # 20 - DateTime 类型
+            cls.model.create_date,  # 21 - DateTime 类型
+            cls.model.update_time,  # 22 - 毫秒时间戳（可选）
+            cls.model.create_time,  # 23 - 毫秒时间戳（可选）
         ]
 
         # 构建查询表达式
-        query = db.query(*fields).join(User, cls.model.tenant_id == User.id).filter(
-            ((cls.model.tenant_id.in_(joined_tenant_ids)) | (cls.model.tenant_id == user_id)) &
-            (cls.model.status == StatusEnum.VALID.value)
+        query = (
+            db.query(*fields)
+            .join(User, cls.model.tenant_id == User.id)
+            .filter(((cls.model.tenant_id.in_(joined_tenant_ids)) | (cls.model.tenant_id == user_id)) & (cls.model.status == StatusEnum.VALID.value))
         )
 
         if id:
@@ -250,31 +246,31 @@ class DialogService(CommonService):
         result = []
         for dlg in dialogs:
             dlg_dict = {
-                'id': dlg[0],
-                'tenant_id': dlg[1],
-                'name': dlg[2],
-                'description': dlg[3],
-                'language': dlg[4],
-                'llm_id': dlg[5],
-                'llm_setting': dlg[6],
-                'prompt_type': dlg[7],
-                'prompt_config': dlg[8],
-                'similarity_threshold': dlg[9],
-                'vector_similarity_weight': dlg[10],
-                'top_n': dlg[11],
-                'top_k': dlg[12],
-                'do_refer': dlg[13],
-                'rerank_id': dlg[14],
-                'kb_ids': dlg[15],
-                'icon': dlg[16],
-                'status': dlg[17],
-                'nickname': dlg[18],
-                'tenant_avatar': dlg[19],
+                "id": dlg[0],
+                "tenant_id": dlg[1],
+                "name": dlg[2],
+                "description": dlg[3],
+                "language": dlg[4],
+                "llm_id": dlg[5],
+                "llm_setting": dlg[6],
+                "prompt_type": dlg[7],
+                "prompt_config": dlg[8],
+                "similarity_threshold": dlg[9],
+                "vector_similarity_weight": dlg[10],
+                "top_n": dlg[11],
+                "top_k": dlg[12],
+                "do_refer": dlg[13],
+                "rerank_id": dlg[14],
+                "kb_ids": dlg[15],
+                "icon": dlg[16],
+                "status": dlg[17],
+                "nickname": dlg[18],
+                "tenant_avatar": dlg[19],
                 # DateTime 对象直接转为 ISO 格式字符串（与 ragflow 一致）
-                'update_date': dlg[20].isoformat() if dlg[20] else None,
-                'create_date': dlg[21].isoformat() if dlg[21] else None,
-                'update_time': dlg[22],
-                'create_time': dlg[23],
+                "update_date": dlg[20].isoformat() if dlg[20] else None,
+                "create_date": dlg[21].isoformat() if dlg[21] else None,
+                "update_time": dlg[22],
+                "create_time": dlg[23],
             }
             result.append(dlg_dict)
 
@@ -283,20 +279,14 @@ class DialogService(CommonService):
     @classmethod
     def get_all_dialogs_by_tenant_id(cls, db: Session, tenant_id: str) -> list[dict]:
         """根据tenant_id批量查询所有对话ID，使用分页避免内存溢出"""
-        stmt = (
-            select(cls.model.id)
-            .where(cls.model.tenant_id == tenant_id)
-            .order_by(cls.model.create_time.asc())
-        )
+        stmt = select(cls.model.id).where(cls.model.tenant_id == tenant_id).order_by(cls.model.create_time.asc())
 
         offset, limit = 0, 100
         res = []
 
         while True:
             try:
-                d_batch = db.execute(
-                    stmt.offset(offset).limit(limit)
-                ).scalars().all()
+                d_batch = db.execute(stmt.offset(offset).limit(limit)).scalars().all()
 
                 if not d_batch:
                     break
@@ -312,17 +302,20 @@ class DialogService(CommonService):
     @classmethod
     def get_null_tenant_llm_id_row(cls, db: Session):
         from api.db.db_models import Dialog
+
         stmt = select(Dialog.id, Dialog.tenant_id, Dialog.llm_id).where(Dialog.tenant_llm_id.is_(None))
         return db.execute(stmt).all()
 
     @classmethod
     def get_null_tenant_rerank_id_row(cls, db: Session):
         from api.db.db_models import Dialog
+
         stmt = select(Dialog.id, Dialog.tenant_id, Dialog.rerank_id).where(
             Dialog.rerank_id.is_not(None),
             Dialog.tenant_rerank_id.is_(None),
         )
         return db.execute(stmt).all()
+
 
 def chat_solo(db, dialog, messages, stream=True):
     llm_type = TenantLLMService.llm_id2llm_type(dialog.llm_id)
@@ -356,16 +349,14 @@ def chat_solo(db, dialog, messages, stream=True):
         delta_ans = ""
         for ans in chat_mdl.chat_streamly(prompt_config.get("system", ""), msg, dialog.llm_setting):
             answer = ans
-            delta_ans = ans[len(last_ans):]
+            delta_ans = ans[len(last_ans) :]
             if num_tokens_from_string(delta_ans) < 16:
                 continue
             last_ans = answer
-            yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans), "prompt": "",
-                   "created_at": time.time()}
+            yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans), "prompt": "", "created_at": time.time()}
             delta_ans = ""
         if delta_ans:
-            yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans), "prompt": "",
-                   "created_at": time.time()}
+            yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans), "prompt": "", "created_at": time.time()}
     else:
         answer = chat_mdl.chat(prompt_config.get("system", ""), msg, dialog.llm_setting)
         user_content = msg[-1].get("content", "[content not available]")
@@ -605,11 +596,11 @@ def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
         parts = []
         last_idx = 0
         for match in matches:
-            parts.append(answer[last_idx:match.start()])
+            parts.append(answer[last_idx : match.start()])
             try:
                 i = int(match.group(group_index))
             except Exception:
-                parts.append(answer[match.start():match.end()])
+                parts.append(answer[match.start() : match.end()])
                 last_idx = match.end()
                 continue
 
@@ -618,7 +609,7 @@ def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
                 digits_original = answer[digit_start:digit_end]
                 parts.append(f"[{repl(digits_original)}]")
             else:
-                parts.append(answer[match.start():match.end()])
+                parts.append(answer[match.start() : match.end()])
             last_idx = match.end()
 
         parts.append(answer[last_idx:])
@@ -769,8 +760,8 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                     vector_similarity_weight=0.3,
                     doc_ids=attachments,
                     search_mode=dialog.search_mode,
-                    kb_ids=dialog.kb_ids
-                )
+                    kb_ids=dialog.kb_ids,
+                ),
             )
 
             for think in sync_async_generator(reasoner.thinking(kbinfos, attachments_ + " ".join(questions))):
@@ -781,24 +772,26 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                     yield think
         else:
             if embd_mdl:
-                kbinfos = asyncio.run(retriever.retrieval(
-                    " ".join(questions),
-                    filter_exp,
-                    embd_mdl,
-                    kb_tenant_ids,
-                    kb_names,
-                    1,
-                    dialog.top_n,
-                    dialog.similarity_threshold,
-                    dialog.vector_similarity_weight,
-                    doc_ids=attachments,
-                    top=1024,
-                    aggs=True,
-                    rerank_mdl=rerank_mdl,
-                    rank_feature=label_question(db, " ".join(questions), kbs),
-                    search_mode=dialog.search_mode,
-                    kb_ids = dialog.kb_ids
-                ))
+                kbinfos = asyncio.run(
+                    retriever.retrieval(
+                        " ".join(questions),
+                        filter_exp,
+                        embd_mdl,
+                        kb_tenant_ids,
+                        kb_names,
+                        1,
+                        dialog.top_n,
+                        dialog.similarity_threshold,
+                        dialog.vector_similarity_weight,
+                        doc_ids=attachments,
+                        top=1024,
+                        aggs=True,
+                        rerank_mdl=rerank_mdl,
+                        rank_feature=label_question(db, " ".join(questions), kbs),
+                        search_mode=dialog.search_mode,
+                        kb_ids=dialog.kb_ids,
+                    )
+                )
                 if prompt_config.get("toc_enhance"):
                     cks = asyncio.run(retriever.retrieval_by_toc(" ".join(questions), kbinfos["chunks"], tenant_ids, kb_names, chat_mdl, dialog.top_n))
                     if cks:
@@ -865,7 +858,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                     [ck["vector"] for ck in kbinfos["chunks"]],
                     embd_mdl,
                     tkweight=1 - dialog.vector_similarity_weight,
-                    vtweight=dialog.vector_similarity_weight
+                    vtweight=dialog.vector_similarity_weight,
                 )
             else:
                 for match in CITATION_MARKER_PATTERN.finditer(normalized_answer):
@@ -926,12 +919,10 @@ def chat(dialog, messages, db, stream=True, **kwargs):
 
         return {"answer": think + answer, "reference": refs, "prompt": re.sub(r"\n", "  \n", prompt), "created_at": time.time()}
 
-
     if langfuse_tracer:
         langfuse_generation = langfuse_tracer.start_generation(
             trace_context=trace_context, name="chat", model=llm_model_config["llm_name"], input={"prompt": prompt, "prompt4citation": prompt4citation, "messages": msg}
         )
-
 
     if stream:
         last_ans = ""
@@ -944,12 +935,12 @@ def chat(dialog, messages, db, stream=True, **kwargs):
             if thought:
                 ans = re.sub(r"^.*</think>", "", ans, flags=re.DOTALL)
             answer = ans
-            delta_ans = ans[len(last_ans):]
+            delta_ans = ans[len(last_ans) :]
             if num_tokens_from_string(delta_ans) < 16:
                 continue
             last_ans = answer
             yield {"answer": thought + answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans)}
-        delta_ans = answer[len(last_ans):]
+        delta_ans = answer[len(last_ans) :]
         if delta_ans:
             yield {"answer": thought + answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans)}
         yield decorate_answer(thought + answer)
@@ -1104,11 +1095,12 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
                     vector_similarity_weight=0.3,
                     doc_ids=attachments,
                     search_mode=dialog.search_mode,
-                    kb_ids=dialog.kb_ids
-                )
+                    kb_ids=dialog.kb_ids,
+                ),
             )
 
             queue = asyncio.Queue()
+
             async def callback(msg: str):
                 nonlocal queue
                 await queue.put(msg + "<br/>")
@@ -1145,7 +1137,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
                     rerank_mdl=rerank_mdl,
                     rank_feature=label_question(db, " ".join(questions), kbs),
                     search_mode=dialog.search_mode,
-                    kb_ids=dialog.kb_ids
+                    kb_ids=dialog.kb_ids,
                 )
                 if prompt_config.get("toc_enhance"):
                     cks = await retriever.retrieval_by_toc(" ".join(questions), kbinfos["chunks"], tenant_ids, kb_names, chat_mdl, dialog.top_n)
@@ -1170,8 +1162,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
     retrieval_ts = timer()
     if not knowledges and prompt_config.get("empty_response"):
         empty_res = prompt_config["empty_response"]
-        yield {"answer": empty_res, "reference": kbinfos, "prompt": "\n\n### Query:\n%s" % " ".join(questions),
-               "audio_binary": tts(tts_mdl, empty_res), "final": True}
+        yield {"answer": empty_res, "reference": kbinfos, "prompt": "\n\n### Query:\n%s" % " ".join(questions), "audio_binary": tts(tts_mdl, empty_res), "final": True}
         return
 
     kwargs["knowledge"] = "\n------\n" + "\n\n------\n\n".join(knowledges)
@@ -1340,7 +1331,7 @@ async def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True
         sql = re.sub(r"```(?:sql)?\s*", "", sql, flags=re.IGNORECASE)
         sql = re.sub(r"```\s*$", "", sql, flags=re.IGNORECASE)
         # Remove trailing semicolon that ES SQL parser doesn't like
-        return sql.rstrip().rstrip(';').strip()
+        return sql.rstrip().rstrip(";").strip()
 
     def add_kb_filter(sql):
         # Add kb_id filter for non-Infinity engines (Infinity already has it in table name)
@@ -1398,10 +1389,7 @@ Fields (EXACT case): {}
 {}
 Question: {}
 Write SQL using json_extract_string() with exact field names. Include doc_id, docnm for data queries. Only SQL.""".format(
-            table_name,
-            ", ".join(json_field_names),
-            "\n".join([f"  - {field}" for field in json_field_names]),
-            question
+            table_name, ", ".join(json_field_names), "\n".join([f"  - {field}" for field in json_field_names]), question
         )
     elif doc_engine == "oceanbase":
         row_count_override = f"SELECT COUNT(*) AS rows FROM {table_name}" if is_row_count_question(question) else None
@@ -1428,10 +1416,7 @@ Fields (EXACT case): {}
 {}
 Question: {}
 Write SQL using json_extract_string() with exact field names. Include doc_id, docnm_kwd for data queries. Only SQL.""".format(
-            table_name,
-            ", ".join(json_field_names),
-            "\n".join([f"  - {field}" for field in json_field_names]),
-            question
+            table_name, ", ".join(json_field_names), "\n".join([f"  - {field}" for field in json_field_names]), question
         )
     elif doc_engine == "milvus":
         row_count_override = f"SELECT COUNT(*) AS rows FROM {table_name}" if is_row_count_question(question) else None
@@ -1455,10 +1440,7 @@ Fields (EXACT case): {}
 {}
 Question: {}
 Write SQL using chunk_data["field"] with exact field names. Include doc_id, docnm_kwd for data queries. Only SQL.""".format(
-            table_name,
-            ", ".join(json_field_names),
-            "\n".join([f"  - {field}" for field in json_field_names]),
-            question
+            table_name, ", ".join(json_field_names), "\n".join([f"  - {field}" for field in json_field_names]), question
         )
     else:
         row_count_override = None
@@ -1475,11 +1457,7 @@ RULES:
 Available fields:
 {}
 Question: {}
-Write SQL using exact field names above. Include doc_id, docnm_kwd for data queries. Only SQL.""".format(
-            table_name,
-            "\n".join([f"  - {k} ({v})" for k, v in field_map.items()]),
-            question
-        )
+Write SQL using exact field names above. Include doc_id, docnm_kwd for data queries. Only SQL.""".format(table_name, "\n".join([f"  - {k} ({v})" for k, v in field_map.items()]), question)
 
     tried_times = 0
 
@@ -1517,13 +1495,7 @@ Previous SQL:
 The previous SQL result is missing required source columns for citations.
 Rewrite SQL to keep the same query intent and include doc_id and {} in the SELECT list.
 For extracted JSON fields, use json_extract_string(chunk_data, '$.field_name').
-Return ONLY SQL.""".format(
-                table_name,
-                "\n".join([f"  - {field}" for field in json_field_names]),
-                question,
-                previous_sql,
-                expected_doc_name_column
-            )
+Return ONLY SQL.""".format(table_name, "\n".join([f"  - {field}" for field in json_field_names]), question, previous_sql, expected_doc_name_column)
         elif doc_engine == "milvus":
             json_field_names = list(field_map.keys())
             repair_prompt = """Table name: {};
@@ -1537,12 +1509,7 @@ Previous SQL:
 The previous SQL result is missing required source columns for citations.
 Rewrite SQL to keep the same query intent and include doc_id and docnm_kwd in the SELECT list.
 For extracted JSON fields, use chunk_data["field_name"] syntax.
-Return ONLY SQL.""".format(
-                table_name,
-                "\n".join([f"  - {field}" for field in json_field_names]),
-                question,
-                previous_sql
-            )
+Return ONLY SQL.""".format(table_name, "\n".join([f"  - {field}" for field in json_field_names]), question, previous_sql)
         else:
             repair_prompt = """Table name: {}
 Available fields:
@@ -1554,12 +1521,7 @@ Previous SQL:
 
 The previous SQL result is missing required source columns for citations.
 Rewrite SQL to keep the same query intent and include doc_id and docnm_kwd in the SELECT list.
-Return ONLY SQL.""".format(
-                table_name,
-                "\n".join([f"  - {k} ({v})" for k, v in field_map.items()]),
-                question,
-                previous_sql
-            )
+Return ONLY SQL.""".format(table_name, "\n".join([f"  - {k} ({v})" for k, v in field_map.items()]), question, previous_sql)
         return await get_table(custom_user_prompt=repair_prompt)
 
     try:
@@ -1585,8 +1547,7 @@ The SQL error you provided last time is as follows:
 {}
 
 Please correct the error and write SQL again using {} syntax with the correct field names. Only SQL, no explanations.
-""".format(table_name, syntax_hint, "\n".join([f"  - {field}" for field in json_field_names]),
-           question, syntax_hint, e, syntax_hint)
+""".format(table_name, syntax_hint, "\n".join([f"  - {field}" for field in json_field_names]), question, syntax_hint, e, syntax_hint)
         else:
             user_prompt = """
 Table name: {};
@@ -1617,11 +1578,7 @@ Please correct the error and write SQL again using the exact field names above, 
         logging.warning(f"use_sql: Non-aggregate SQL missing required source columns; retrying once. SQL: {sql}")
         try:
             repaired_tbl, repaired_sql = await repair_table_for_missing_source_columns(sql)
-            if (
-                repaired_tbl
-                and len(repaired_tbl.get("rows", [])) > 0
-                and has_source_columns(repaired_tbl.get("columns", []))
-            ):
+            if repaired_tbl and len(repaired_tbl.get("rows", [])) > 0 and has_source_columns(repaired_tbl.get("columns", [])):
                 tbl, sql = repaired_tbl, repaired_sql
                 logging.info(f"use_sql: Source-column SQL repair succeeded. SQL: {sql}")
             else:
@@ -1644,9 +1601,9 @@ Please correct the error and write SQL again using the exact field names above, 
     def map_column_name(col_name):
         if col_name.lower() == "count(star)":
             return "COUNT(*)"
-        as_match = re.search(r'\s+AS\s+([^\s,)]+)', col_name, re.IGNORECASE)
+        as_match = re.search(r"\s+AS\s+([^\s,)]+)", col_name, re.IGNORECASE)
         if as_match:
-            alias = as_match.group(1).strip('"\'')
+            alias = as_match.group(1).strip("\"'")
             if alias in field_map:
                 return re.sub(r"(/.*|（[^（）]+）)", "", field_map[alias])
             for field_key, display_value in field_map.items():
@@ -1666,10 +1623,7 @@ Please correct the error and write SQL again using the exact field names above, 
         return result
 
     # Compose Markdown table header
-    columns = (
-        "|" + "|".join([map_column_name(tbl["columns"][i]["name"]) for i in column_idx])
-        + ("|Source|" if docid_idx and doc_name_idx else "|")
-    )
+    columns = "|" + "|".join([map_column_name(tbl["columns"][i]["name"]) for i in column_idx]) + ("|Source|" if docid_idx and doc_name_idx else "|")
     line = "|" + "|".join(["------" for _ in range(len(column_idx))]) + ("|------|" if docid_idx and doc_name_idx else "|")
 
     # Build rows using dict-based access (robust against column order)
@@ -1752,15 +1706,7 @@ def clean_tts_text(text: str) -> str:
     text = re.sub(r"[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]", "", text)
 
     emoji_pattern = re.compile(
-        "[\U0001F600-\U0001F64F"
-        "\U0001F300-\U0001F5FF"
-        "\U0001F680-\U0001F6FF"
-        "\U0001F1E0-\U0001F1FF"
-        "\U00002700-\U000027BF"
-        "\U0001F900-\U0001F9FF"
-        "\U0001FA70-\U0001FAFF"
-        "\U0001FAD0-\U0001FAFF]+",
-        flags=re.UNICODE
+        "[\U0001f600-\U0001f64f\U0001f300-\U0001f5ff\U0001f680-\U0001f6ff\U0001f1e0-\U0001f1ff\U00002700-\U000027bf\U0001f900-\U0001f9ff\U0001fa70-\U0001faff\U0001fad0-\U0001faff]+", flags=re.UNICODE
     )
     text = emoji_pattern.sub("", text)
 
@@ -1805,13 +1751,13 @@ def _next_think_delta(state: _ThinkStreamState) -> str:
     if full_text == state.last_full:
         return ""
     state.last_full = full_text
-    delta_ans = full_text[state.last_idx:]
+    delta_ans = full_text[state.last_idx :]
 
     if delta_ans.find("<think>") == 0:
         state.last_idx += len("<think>")
         return "<think>"
     if delta_ans.find("<think>") > 0:
-        delta_text = full_text[state.last_idx:state.last_idx + delta_ans.find("<think>")]
+        delta_text = full_text[state.last_idx : state.last_idx + delta_ans.find("<think>")]
         state.last_idx += delta_ans.find("<think>")
         return delta_text
     if delta_ans.endswith("</think>"):
@@ -1832,7 +1778,7 @@ async def _stream_with_think_delta(stream_iter, min_tokens: int = 16):
         if not chunk:
             continue
         if chunk.startswith(state.last_model_full):
-            new_part = chunk[len(state.last_model_full):]
+            new_part = chunk[len(state.last_model_full) :]
             state.last_model_full = chunk
         else:
             new_part = chunk
@@ -1908,23 +1854,25 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
 
     filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
     kb_names = [kb.name for kb in kbs]
-    kbinfos = asyncio.run(retriever.retrieval(
-        question=question,
-        filter_exp=filter_exp,
-        embd_mdl=embd_mdl,
-        tenant_id=tenant_ids,
-        kb_names=kb_names,
-        page=1,
-        page_size=12,
-        similarity_threshold=search_config.get("similarity_threshold", 0.1),
-        vector_similarity_weight=search_config.get("vector_similarity_weight", 0.3),
-        top=search_config.get("top_k", 1024),
-        doc_ids=doc_ids,
-        aggs=True,
-        rerank_mdl=rerank_mdl,
-        rank_feature=label_question(db, question, kbs),
-        search_mode=None #todo 无法传递应用里的配置，所以只能使用一种默认检索模式
-    ))
+    kbinfos = asyncio.run(
+        retriever.retrieval(
+            question=question,
+            filter_exp=filter_exp,
+            embd_mdl=embd_mdl,
+            tenant_id=tenant_ids,
+            kb_names=kb_names,
+            page=1,
+            page_size=12,
+            similarity_threshold=search_config.get("similarity_threshold", 0.1),
+            vector_similarity_weight=search_config.get("vector_similarity_weight", 0.3),
+            top=search_config.get("top_k", 1024),
+            doc_ids=doc_ids,
+            aggs=True,
+            rerank_mdl=rerank_mdl,
+            rank_feature=label_question(db, question, kbs),
+            search_mode=None,  # todo 无法传递应用里的配置，所以只能使用一种默认检索模式
+        )
+    )
     knowledges = kb_prompt(kbinfos, max_tokens)
     sys_prompt = PROMPT_JINJA_ENV.from_string(ASK_SUMMARY).render(knowledge="\n".join(knowledges))
 
@@ -2012,7 +1960,7 @@ async def async_ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None
         aggs=True,
         rerank_mdl=rerank_mdl,
         rank_feature=label_question(db, question, kbs),
-        search_mode=None
+        search_mode=None,
     )
 
     knowledges = kb_prompt(kbinfos, max_tokens)

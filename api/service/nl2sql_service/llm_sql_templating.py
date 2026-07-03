@@ -20,7 +20,7 @@ class LLMSQLTemplating:
     """负责生成SQL模板的服务类"""
 
     # 编译正则表达式以提高性能
-    JSON_PATTERN = re.compile(r'```json\s*([\s\S]*?)```')
+    JSON_PATTERN = re.compile(r"```json\s*([\s\S]*?)```")
 
     def __init__(self, db: Session, user_id: Any, prompt_dir: str = None):
         """
@@ -64,8 +64,8 @@ class LLMSQLTemplating:
         # 尝试从整个响应中解析JSON
         try:
             # 移除可能的markdown标记
-            cleaned_response = re.sub(r'```(\w*\n|\n)', '', response)
-            cleaned_response = re.sub(r'```$', '', cleaned_response)
+            cleaned_response = re.sub(r"```(\w*\n|\n)", "", response)
+            cleaned_response = re.sub(r"```$", "", cleaned_response)
             parsed_data = json.loads(cleaned_response.strip())
             return parsed_data, True
         except json.JSONDecodeError:
@@ -100,33 +100,16 @@ class LLMSQLTemplating:
             semantic_layer_str = json.dumps(semantic_layer, ensure_ascii=False, indent=2)
 
             # 用参数填充模板
-            prompt = PromptTemplateUtil.fill_template(
-                prompt_template,
-                {
-                    "original_question": original_question,
-                    "sql": sql,
-                    "semantic_layer": semantic_layer_str,
-                    "current_date": date.today()
-                }
-            )
+            prompt = PromptTemplateUtil.fill_template(prompt_template, {"original_question": original_question, "sql": sql, "semantic_layer": semantic_layer_str, "current_date": date.today()})
 
             # 创建包含我们提示词的对话历史
             history = [{"role": "user", "content": prompt}]
 
             # LLM配置
-            gen_conf = {
-                "temperature": 0.3,
-                "top_p": 0.9,
-                "max_tokens": 4096
-            }
+            gen_conf = {"temperature": 0.3, "top_p": 0.9, "max_tokens": 4096}
 
             # 调用LLM处理我们的提示词
-            response = await thread_pool_exec(
-                llm_model_instance.chat,
-                system="",
-                history=history,
-                gen_conf=gen_conf
-            )
+            response = await thread_pool_exec(llm_model_instance.chat, system="", history=history, gen_conf=gen_conf)
 
             # 提取和处理响应
             extracted_data, success = self._extract_json_from_response(response)

@@ -28,7 +28,7 @@ from core.utils.redis_conn import REDIS_CONN
 
 
 class Pipeline(Graph):
-    def __init__(self, dsl: str|dict, tenant_id=None, doc_id=None, task_id=None, flow_id=None):
+    def __init__(self, dsl: str | dict, tenant_id=None, doc_id=None, task_id=None, flow_id=None):
         if isinstance(dsl, dict):
             dsl = json.dumps(dsl, ensure_ascii=False)
         super().__init__(dsl, tenant_id, task_id)
@@ -45,6 +45,7 @@ class Pipeline(Graph):
 
     def callback(self, component_name: str, progress: float | int | None = None, message: str = "") -> None:
         from common.exceptions import TaskCanceledException
+
         log_key = f"{self._flow_id}-{self.task_id}-logs"
         timestamp = timer()
         if has_canceled(self.task_id):
@@ -118,7 +119,6 @@ class Pipeline(Graph):
             logging.exception(e)
         return []
 
-
     async def run(self, **kwargs):
         log_key = f"{self._flow_id}-{self.task_id}-logs"
         try:
@@ -136,10 +136,9 @@ class Pipeline(Graph):
 
         if self._doc_id:
             with db_connection() as db:
-                TaskService.update_progress(db, self.task_id, {
-                    "progress": random.randint(0, 5) / 100.0,
-                    "progress_msg": "Start the pipeline...",
-                    "begin_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+                TaskService.update_progress(
+                    db, self.task_id, {"progress": random.randint(0, 5) / 100.0, "progress_msg": "Start the pipeline...", "begin_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                )
                 db.commit()
 
         idx = len(self.path) - 1
@@ -154,9 +153,9 @@ class Pipeline(Graph):
             async def invoke():
                 nonlocal last_cpn, cpn_obj
                 await cpn_obj.invoke(**last_cpn.output())
-                #if inspect.iscoroutinefunction(cpn_obj.invoke):
+                # if inspect.iscoroutinefunction(cpn_obj.invoke):
                 #    await cpn_obj.invoke(**last_cpn.output())
-                #else:
+                # else:
                 #    cpn_obj.invoke(**last_cpn.output())
 
             tasks = []
@@ -175,9 +174,7 @@ class Pipeline(Graph):
         if not self.error:
             return self.get_component_obj(self.path[-1]).output()
         with db_connection() as db:
-            TaskService.update_progress(db, self.task_id, {
-                "progress": -1,
-                "progress_msg": f"[ERROR]: {self.error}"})
+            TaskService.update_progress(db, self.task_id, {"progress": -1, "progress_msg": f"[ERROR]: {self.error}"})
             db.commit()
 
         return {}

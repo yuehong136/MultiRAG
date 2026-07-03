@@ -21,10 +21,7 @@ from api.service.askdata_service.event.event_utils import send_event
 from common.settings import DCS_SEMANTIC_SERVER_ACCESS_KEY, DCS_SEMANTIC_SERVER_SECRET_KEY, DCS_SERVER_HOST, DCS_SERVER_PORT, DCS_SERVER_PROTOCOL
 
 # 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -66,40 +63,38 @@ def _get_semantic_api_semaphore() -> asyncio.Semaphore:
 # 自定义异常类
 class SemanticApiError(Exception):
     """DRM语义化API请求错误的基类异常"""
+
     pass
 
 
 class ApiRequestError(SemanticApiError):
     """API请求发送错误"""
+
     pass
 
 
 class ApiResponseError(SemanticApiError):
     """API响应错误（业务状态码非0）"""
+
     pass
 
 
 class ApiNetworkError(SemanticApiError):
     """网络连接错误"""
+
     pass
 
 
 class ApiJsonDecodeError(SemanticApiError):
     """响应JSON解析错误"""
+
     pass
 
 
 class SemanticApiClient:
     """DRM API客户端类，用于向DRM服务发送各类API请求"""
 
-    def __init__(
-            self,
-            protocol: str = None,
-            host: str = None,
-            port: str = None,
-            token: str = None,
-            timeout: int = 30
-    ):
+    def __init__(self, protocol: str = None, host: str = None, port: str = None, token: str = None, timeout: int = 30):
         """
         初始化DRM API客户端
 
@@ -136,9 +131,7 @@ class SemanticApiClient:
         }
 
         # 设置请求头
-        self.headers = {
-            "Content-Type": "application/json"
-        }
+        self.headers = {"Content-Type": "application/json"}
         if self.token:
             self.headers["Authorization"] = f"Bearer {self.token}"
 
@@ -153,22 +146,13 @@ class SemanticApiClient:
 
         # Using HMAC-SHA256 for the signature
         message = f"{access_key}{timestamp}".encode()
-        secret = secret_key.encode('utf-8')
+        secret = secret_key.encode("utf-8")
 
         signature = hmac.new(secret, message, digestmod=hashlib.sha256).hexdigest()
 
-        return {
-            "accessKey": access_key,
-            "timestamp": timestamp,
-            "signature": signature
-        }
-    def _make_request(
-            self,
-            method: str,
-            api_path: str,
-            params: dict = None,
-            data: dict = None
-    ) -> dict:
+        return {"accessKey": access_key, "timestamp": timestamp, "signature": signature}
+
+    def _make_request(self, method: str, api_path: str, params: dict = None, data: dict = None) -> dict:
         """
         发送请求并处理响应
 
@@ -198,14 +182,7 @@ class SemanticApiClient:
             if data:
                 logger.debug(f"请求数据: {json.dumps(data, ensure_ascii=False)}")
 
-            response = requests.request(
-                method=method,
-                url=url,
-                params=params,
-                json=data,
-                headers=request_headers,
-                timeout=self.timeout
-            )
+            response = requests.request(method=method, url=url, params=params, json=data, headers=request_headers, timeout=self.timeout)
 
             # 检查HTTP状态码
             response.raise_for_status()
@@ -216,7 +193,7 @@ class SemanticApiClient:
 
             # 检查业务状态码
             if "code" in result and str(result["code"]) != "0":
-                error_msg = result.get('msg', '未知错误')
+                error_msg = result.get("msg", "未知错误")
                 logger.warning(f"业务错误: {error_msg}")
                 raise ApiResponseError(f"业务错误(code={result['code']}): {error_msg}")
 
@@ -237,13 +214,7 @@ class SemanticApiClient:
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e
 
-    async def _make_async_request(
-            self,
-            method: str,
-            api_path: str,
-            params: dict = None,
-            data: dict = None
-    ) -> dict:
+    async def _make_async_request(self, method: str, api_path: str, params: dict = None, data: dict = None) -> dict:
         """
         异步发送请求并处理响应
 
@@ -281,19 +252,9 @@ class SemanticApiClient:
             async with sem:
                 _waited = time.monotonic() - _wait_start
                 if _waited > 0.5:
-                    logger.warning(
-                        f"语义层出站并发已达上限({SEMANTIC_API_MAX_CONCURRENCY})，本次请求排队 "
-                        f"{_waited:.2f}s 后才发出: {method} {api_path}"
-                    )
+                    logger.warning(f"语义层出站并发已达上限({SEMANTIC_API_MAX_CONCURRENCY})，本次请求排队 {_waited:.2f}s 后才发出: {method} {api_path}")
                 async with aiohttp.ClientSession() as session:
-                    async with session.request(
-                            method=method,
-                            url=url,
-                            params=params,
-                            json=data,
-                            headers=request_headers,
-                            timeout=aiohttp.ClientTimeout(total=self.timeout)
-                    ) as response:
+                    async with session.request(method=method, url=url, params=params, json=data, headers=request_headers, timeout=aiohttp.ClientTimeout(total=self.timeout)) as response:
                         # 检查HTTP状态码
                         response.raise_for_status()
 
@@ -303,7 +264,7 @@ class SemanticApiClient:
 
                         # 检查业务状态码
                         if "code" in result and str(result["code"]) != "0":
-                            error_msg = result.get('msg', '未知错误')
+                            error_msg = result.get("msg", "未知错误")
                             logger.warning(f"业务错误: {error_msg}")
                             raise ApiResponseError(f"业务错误(code={result['code']}): {error_msg}")
 
@@ -329,16 +290,16 @@ class SemanticApiClient:
             raise ApiRequestError(error_msg) from e
 
     async def get_dimension_info_by_keyword_async(
-            self,
-            keyword: str | list[str],
-            dataset_ids: list[str],
-            fuzzy_match: bool = True,
-            page_size: int = 100,
-            max_pages: int = 100,
-            extract_rows: bool = True,
-            max_concurrent: int = 5,
-            deduplicate_by_dimension_id: bool = True,
-            event_id: str | None = None
+        self,
+        keyword: str | list[str],
+        dataset_ids: list[str],
+        fuzzy_match: bool = True,
+        page_size: int = 100,
+        max_pages: int = 100,
+        extract_rows: bool = True,
+        max_concurrent: int = 5,
+        deduplicate_by_dimension_id: bool = True,
+        event_id: str | None = None,
     ) -> dict | list[dict]:
         """
         异步获取所有维度信息（支持多关键词，自动分页，并发请求，支持维度ID去重）
@@ -380,10 +341,7 @@ class SemanticApiClient:
                 try:
                     # 第一次请求，获取总数
                     first_result = await self._make_async_request(
-                        "POST",
-                        self.api_paths["get_dimension_info"],
-                        params={"pi": 1, "ps": page_size},
-                        data={"keyword": kw, "datasetIds": dataset_ids, "fuzzyMatch": fuzzy_match}
+                        "POST", self.api_paths["get_dimension_info"], params={"pi": 1, "ps": page_size}, data={"keyword": kw, "datasetIds": dataset_ids, "fuzzyMatch": fuzzy_match}
                     )
 
                     # 计算总页数
@@ -399,7 +357,7 @@ class SemanticApiClient:
 
                         # 处理第一页结果（如果需要去重）
                         for row in first_page_rows:
-                            dimension_id = row.get('dimensionId')
+                            dimension_id = row.get("dimensionId")
                             if deduplicate_by_dimension_id:
                                 if dimension_id and dimension_id in dimension_id_set:
                                     duplicate_count += 1
@@ -409,17 +367,15 @@ class SemanticApiClient:
 
                             keyword_results.append(row)
 
-                        logger.info(
-                            f"关键词'{kw}'的第一页返回了{len(first_page_rows)}条结果，去重后保留{len(first_page_rows) - duplicate_count}条")
+                        logger.info(f"关键词'{kw}'的第一页返回了{len(first_page_rows)}条结果，去重后保留{len(first_page_rows) - duplicate_count}条")
 
                         # 打印第一页结果的维度ID和维度名称
                         if keyword_results:
-                            for idx, row in enumerate(keyword_results[:min(3, len(keyword_results))]):  # 只打印前3条
-                                dimension_id = row.get('dimensionId', 'N/A')
-                                dimension_name = row.get('dimensionName', 'N/A')
-                                dimension_code = row.get('dimensionCode', 'N/A')
-                                logger.info(
-                                    f"  '{kw}'的结果{idx + 1}: 维度ID={dimension_id}, 维度名称={dimension_name}, 维度编码={dimension_code}")
+                            for idx, row in enumerate(keyword_results[: min(3, len(keyword_results))]):  # 只打印前3条
+                                dimension_id = row.get("dimensionId", "N/A")
+                                dimension_name = row.get("dimensionName", "N/A")
+                                dimension_code = row.get("dimensionCode", "N/A")
+                                logger.info(f"  '{kw}'的结果{idx + 1}: 维度ID={dimension_id}, 维度名称={dimension_name}, 维度编码={dimension_code}")
 
                             if len(keyword_results) > 3:
                                 logger.info(f"  ...以及第一页的其他{len(keyword_results) - 3}条结果")
@@ -439,17 +395,14 @@ class SemanticApiClient:
                     page_tasks = []
                     for page in range(2, total_pages + 1):
                         task = self._make_async_request(
-                            "POST",
-                            self.api_paths["get_dimension_info"],
-                            params={"pi": page, "ps": page_size},
-                            data={"keyword": kw, "datasetIds": dataset_ids, "fuzzyMatch": fuzzy_match}
+                            "POST", self.api_paths["get_dimension_info"], params={"pi": page, "ps": page_size}, data={"keyword": kw, "datasetIds": dataset_ids, "fuzzyMatch": fuzzy_match}
                         )
                         page_tasks.append(task)
 
                     # 限制并发请求数
                     page_results = []
                     for i in range(0, len(page_tasks), max_concurrent):
-                        batch = page_tasks[i:i + max_concurrent]
+                        batch = page_tasks[i : i + max_concurrent]
                         batch_results = await asyncio.gather(*batch, return_exceptions=True)
                         page_results.extend(batch_results)
 
@@ -469,7 +422,7 @@ class SemanticApiClient:
 
                             # 处理额外页面结果（如果需要去重）
                             for row in rows:
-                                dimension_id = row.get('dimensionId')
+                                dimension_id = row.get("dimensionId")
                                 if deduplicate_by_dimension_id:
                                     if dimension_id and dimension_id in dimension_id_set:
                                         continue
@@ -484,19 +437,17 @@ class SemanticApiClient:
                             additional_kept_rows += 1
                             additional_total_rows += 1
 
-                    logger.info(
-                        f"关键词'{kw}'的额外页面返回了{additional_total_rows}条结果，去重后保留{additional_kept_rows}条")
+                    logger.info(f"关键词'{kw}'的额外页面返回了{additional_total_rows}条结果，去重后保留{additional_kept_rows}条")
 
                     # 打印额外页面中的一些结果信息
                     if additional_results and extract_rows:
                         sample_size = min(3, len(additional_results))
                         logger.info(f"  关键词'{kw}'的额外页面样本:")
                         for idx, row in enumerate(additional_results[:sample_size]):
-                            dimension_id = row.get('dimensionId', 'N/A')
-                            dimension_name = row.get('dimensionName', 'N/A')
-                            dimension_code = row.get('dimensionCode', 'N/A')
-                            logger.info(
-                                f"  '{kw}'的额外结果{idx + 1}: 维度ID={dimension_id}, 维度名称={dimension_name}, 维度编码={dimension_code}")
+                            dimension_id = row.get("dimensionId", "N/A")
+                            dimension_name = row.get("dimensionName", "N/A")
+                            dimension_code = row.get("dimensionCode", "N/A")
+                            logger.info(f"  '{kw}'的额外结果{idx + 1}: 维度ID={dimension_id}, 维度名称={dimension_name}, 维度编码={dimension_code}")
 
                         if len(additional_results) > 3:
                             logger.info(f"  ...以及额外页面的其他{len(additional_results) - 3}条结果")
@@ -505,12 +456,12 @@ class SemanticApiClient:
                     if extract_rows and keyword_results:
                         dimension_counts = {}
                         for row in keyword_results:
-                            dim_id = row.get('dimensionId')
-                            dim_name = row.get('dimensionName', 'N/A')
+                            dim_id = row.get("dimensionId")
+                            dim_name = row.get("dimensionName", "N/A")
                             if dim_id:
                                 if dim_id not in dimension_counts:
-                                    dimension_counts[dim_id] = {'count': 0, 'name': dim_name}
-                                dimension_counts[dim_id]['count'] += 1
+                                    dimension_counts[dim_id] = {"count": 0, "name": dim_name}
+                                dimension_counts[dim_id]["count"] += 1
 
                         logger.info(f"  关键词'{kw}'的结果分布:")
                         for dim_id, info in dimension_counts.items():
@@ -533,7 +484,7 @@ class SemanticApiClient:
                 final_unique_results = []
                 final_dimension_id_set = set()
                 for result in all_results:
-                    dimension_id = result.get('dimensionId')
+                    dimension_id = result.get("dimensionId")
                     if dimension_id and dimension_id in final_dimension_id_set:
                         continue
                     if dimension_id:
@@ -542,21 +493,22 @@ class SemanticApiClient:
 
                 # 如果有发现额外的重复项（不应该发生，但以防万一）
                 if len(final_unique_results) < len(all_results):
-                    logger.warning(
-                        f"最终检查时发现额外的重复项: 移除了{len(all_results) - len(final_unique_results)}条重复结果")
+                    logger.warning(f"最终检查时发现额外的重复项: 移除了{len(all_results) - len(final_unique_results)}条重复结果")
                     all_results = final_unique_results
 
             if event_id:
-                await send_event(event_id, {"task_name": "分词获取维度信息", "task_data": {
-                    "dimension_info_list": [
-                        {
-                            "dimension_id": item.get("dimensionId"),
-                            "dimension_name": item.get("dimensionName"),
-                            "model_name": item.get("modelName", None)
-                        }
-                        for item in all_results
-                    ]
-                }}, "task_data")
+                await send_event(
+                    event_id,
+                    {
+                        "task_name": "分词获取维度信息",
+                        "task_data": {
+                            "dimension_info_list": [
+                                {"dimension_id": item.get("dimensionId"), "dimension_name": item.get("dimensionName"), "model_name": item.get("modelName", None)} for item in all_results
+                            ]
+                        },
+                    },
+                    "task_data",
+                )
                 await send_event(event_id, {"task_name": "分词获取维度信息", "task_status": "completed"}, "task")
                 await send_event(event_id, {}, "progress_up")
 
@@ -570,16 +522,16 @@ class SemanticApiClient:
             raise  # 重新抛出已经包装的异常
 
     async def get_dimension_by_dimension_value_async(
-            self,
-            keyword: str | list[str],
-            dataset_ids: list[str],
-            fuzzy_match: bool = True,
-            page_size: int = 100,
-            max_pages: int = 100,
-            extract_rows: bool = True,
-            max_concurrent: int = 5,
-            deduplicate_by_dimension_id: bool = True,
-            event_id: str | None = None
+        self,
+        keyword: str | list[str],
+        dataset_ids: list[str],
+        fuzzy_match: bool = True,
+        page_size: int = 100,
+        max_pages: int = 100,
+        extract_rows: bool = True,
+        max_concurrent: int = 5,
+        deduplicate_by_dimension_id: bool = True,
+        event_id: str | None = None,
     ) -> dict | list[dict]:
         """
         异步搜索维度值（支持多关键词，自动分页，并发请求，支持维度ID去重）
@@ -622,10 +574,7 @@ class SemanticApiClient:
                 try:
                     # 第一次请求，获取总数
                     first_result = await self._make_async_request(
-                        "POST",
-                        self.api_paths["get_dimension_by_dimension_value"],
-                        params={"pi": 1, "ps": page_size},
-                        data={"keyword": kw, "datasetIds": dataset_ids, "fuzzyMatch": fuzzy_match}
+                        "POST", self.api_paths["get_dimension_by_dimension_value"], params={"pi": 1, "ps": page_size}, data={"keyword": kw, "datasetIds": dataset_ids, "fuzzyMatch": fuzzy_match}
                     )
 
                     if str(first_result.get("code", "")) != "0":
@@ -646,7 +595,7 @@ class SemanticApiClient:
 
                         # 处理第一页结果（如果需要去重）
                         for row in first_page_rows:
-                            dimension_id = row.get('dimensionId')
+                            dimension_id = row.get("dimensionId")
                             if deduplicate_by_dimension_id:
                                 if dimension_id and dimension_id in dimension_id_set:
                                     duplicate_count += 1
@@ -656,16 +605,14 @@ class SemanticApiClient:
 
                             keyword_results.append(row)
 
-                        logger.info(
-                            f"关键词'{kw}'的第一页返回了{len(first_page_rows)}条结果，去重后保留{len(first_page_rows) - duplicate_count}条")
+                        logger.info(f"关键词'{kw}'的第一页返回了{len(first_page_rows)}条结果，去重后保留{len(first_page_rows) - duplicate_count}条")
 
                         # 打印第一页结果的维度ID和维度名称
                         if keyword_results:
-                            for idx, row in enumerate(keyword_results[:min(3, len(keyword_results))]):  # 只打印前3条
-                                dimension_id = row.get('dimensionId', 'N/A')
-                                dimension_name = row.get('dimensionName', 'N/A')
-                                logger.info(
-                                    f"  '{kw}'的结果{idx + 1}: 维度ID={dimension_id}, 维度名称={dimension_name}")
+                            for idx, row in enumerate(keyword_results[: min(3, len(keyword_results))]):  # 只打印前3条
+                                dimension_id = row.get("dimensionId", "N/A")
+                                dimension_name = row.get("dimensionName", "N/A")
+                                logger.info(f"  '{kw}'的结果{idx + 1}: 维度ID={dimension_id}, 维度名称={dimension_name}")
 
                             if len(keyword_results) > 3:
                                 logger.info(f"  ...以及第一页的其他{len(keyword_results) - 3}条结果")
@@ -685,17 +632,14 @@ class SemanticApiClient:
                     page_tasks = []
                     for page in range(2, total_pages + 1):
                         task = self._make_async_request(
-                            "POST",
-                            self.api_paths["get_dimension_by_dimension_value"],
-                            params={"pi": page, "ps": page_size},
-                            data={"keyword": kw, "datasetIds": dataset_ids, "fuzzyMatch": fuzzy_match}
+                            "POST", self.api_paths["get_dimension_by_dimension_value"], params={"pi": page, "ps": page_size}, data={"keyword": kw, "datasetIds": dataset_ids, "fuzzyMatch": fuzzy_match}
                         )
                         page_tasks.append(task)
 
                     # 限制并发请求数
                     page_results = []
                     for i in range(0, len(page_tasks), max_concurrent):
-                        batch = page_tasks[i:i + max_concurrent]
+                        batch = page_tasks[i : i + max_concurrent]
                         batch_results = await asyncio.gather(*batch, return_exceptions=True)
                         page_results.extend(batch_results)
 
@@ -720,7 +664,7 @@ class SemanticApiClient:
 
                             # 处理额外页面结果（如果需要去重）
                             for row in rows:
-                                dimension_id = row.get('dimensionId')
+                                dimension_id = row.get("dimensionId")
                                 if deduplicate_by_dimension_id:
                                     if dimension_id and dimension_id in dimension_id_set:
                                         continue
@@ -735,18 +679,16 @@ class SemanticApiClient:
                             additional_kept_rows += 1
                             additional_total_rows += 1
 
-                    logger.info(
-                        f"关键词'{kw}'的额外页面返回了{additional_total_rows}条结果，去重后保留{additional_kept_rows}条")
+                    logger.info(f"关键词'{kw}'的额外页面返回了{additional_total_rows}条结果，去重后保留{additional_kept_rows}条")
 
                     # 打印额外页面中的一些结果信息
                     if additional_results and extract_rows:
                         sample_size = min(3, len(additional_results))
                         logger.info(f"  关键词'{kw}'的额外页面样本:")
                         for idx, row in enumerate(additional_results[:sample_size]):
-                            dimension_id = row.get('dimensionId', 'N/A')
-                            dimension_name = row.get('dimensionName', 'N/A')
-                            logger.info(
-                                f"  '{kw}'的额外结果{idx + 1}: 维度ID={dimension_id}, 维度名称={dimension_name}")
+                            dimension_id = row.get("dimensionId", "N/A")
+                            dimension_name = row.get("dimensionName", "N/A")
+                            logger.info(f"  '{kw}'的额外结果{idx + 1}: 维度ID={dimension_id}, 维度名称={dimension_name}")
 
                         if len(additional_results) > 3:
                             logger.info(f"  ...以及额外页面的其他{len(additional_results) - 3}条结果")
@@ -755,12 +697,12 @@ class SemanticApiClient:
                     if extract_rows and keyword_results:
                         dimension_counts = {}
                         for row in keyword_results:
-                            dim_id = row.get('dimensionId')
-                            dim_name = row.get('dimensionName', 'N/A')
+                            dim_id = row.get("dimensionId")
+                            dim_name = row.get("dimensionName", "N/A")
                             if dim_id:
                                 if dim_id not in dimension_counts:
-                                    dimension_counts[dim_id] = {'count': 0, 'name': dim_name}
-                                dimension_counts[dim_id]['count'] += 1
+                                    dimension_counts[dim_id] = {"count": 0, "name": dim_name}
+                                dimension_counts[dim_id]["count"] += 1
 
                         logger.info(f"  关键词'{kw}'的结果分布:")
                         for dim_id, info in dimension_counts.items():
@@ -783,7 +725,7 @@ class SemanticApiClient:
                 final_unique_results = []
                 final_dimension_id_set = set()
                 for result in all_results:
-                    dimension_id = result.get('dimensionId')
+                    dimension_id = result.get("dimensionId")
                     if dimension_id and dimension_id in final_dimension_id_set:
                         continue
                     if dimension_id:
@@ -792,21 +734,22 @@ class SemanticApiClient:
 
                 # 如果有发现额外的重复项（不应该发生，但以防万一）
                 if len(final_unique_results) < len(all_results):
-                    logger.warning(
-                        f"最终检查时发现额外的重复项: 移除了{len(all_results) - len(final_unique_results)}条重复结果")
+                    logger.warning(f"最终检查时发现额外的重复项: 移除了{len(all_results) - len(final_unique_results)}条重复结果")
                     all_results = final_unique_results
 
             if event_id:
-                await send_event(event_id, {"task_name": "维度值匹配维度", "task_data": {
-                    "dimension_info_list": [
-                        {
-                            "dimension_id": item.get("dimensionId"),
-                            "dimension_name": item.get("dimensionName"),
-                            "model_name": item.get("modelName", None)
-                        }
-                        for item in all_results
-                    ]
-                }}, "task_data")
+                await send_event(
+                    event_id,
+                    {
+                        "task_name": "维度值匹配维度",
+                        "task_data": {
+                            "dimension_info_list": [
+                                {"dimension_id": item.get("dimensionId"), "dimension_name": item.get("dimensionName"), "model_name": item.get("modelName", None)} for item in all_results
+                            ]
+                        },
+                    },
+                    "task_data",
+                )
                 await send_event(event_id, {"task_name": "维度值匹配维度", "task_status": "completed"}, "task")
                 await send_event(event_id, {}, "progress_up")
             return all_results
@@ -819,12 +762,7 @@ class SemanticApiClient:
             raise  # 重新抛出已经包装的异常
 
     async def get_hc_dimension_by_dimension_value_async(
-            self,
-            keyword_list: list[str],
-            dataset_ids: list[str],
-            exclude_dim_ids: list[str] = None,
-            fuzzy_match: bool = True,
-            event_id: str | None = None
+        self, keyword_list: list[str], dataset_ids: list[str], exclude_dim_ids: list[str] = None, fuzzy_match: bool = True, event_id: str | None = None
     ) -> list[dict]:
         """
         异步获取HC维度信息（通过维度值搜索）
@@ -853,12 +791,7 @@ class SemanticApiClient:
             result = await self._make_async_request(
                 "POST",
                 self.api_paths["get_hc_dimension_by_dimension_value"],
-                data={
-                    "keywordList": keyword_list,
-                    "datasetIds": dataset_ids,
-                    "excludeDimIds": exclude_dim_ids,
-                    "fuzzyMatch": fuzzy_match
-                }
+                data={"keywordList": keyword_list, "datasetIds": dataset_ids, "excludeDimIds": exclude_dim_ids, "fuzzyMatch": fuzzy_match},
             )
 
             # 获取数据部分
@@ -869,28 +802,29 @@ class SemanticApiClient:
 
                 # 打印结果详情
                 for idx, dimension in enumerate(hc_dimensions):
-                    dimension_id = dimension.get('dimensionId', 'N/A')
-                    dimension_name = dimension.get('dimensionName', 'N/A')
-                    dimension_en_name = dimension.get('dimensionEnName', 'N/A')
-                    dataobject = dimension.get('dataobject', 'N/A')
-                    matched_keywords = dimension.get('matched', [])
+                    dimension_id = dimension.get("dimensionId", "N/A")
+                    dimension_name = dimension.get("dimensionName", "N/A")
+                    dimension_en_name = dimension.get("dimensionEnName", "N/A")
+                    dataobject = dimension.get("dataobject", "N/A")
+                    matched_keywords = dimension.get("matched", [])
 
-                    logger.info(
-                        f"  结果 {idx + 1}: 维度ID={dimension_id}, 中文名={dimension_name}, 英文名={dimension_en_name}")
+                    logger.info(f"  结果 {idx + 1}: 维度ID={dimension_id}, 中文名={dimension_name}, 英文名={dimension_en_name}")
                     logger.info(f"    数据对象={dataobject}, 匹配关键词={matched_keywords}")
             else:
                 logger.info("未获取到任何HC维度信息")
             if event_id:
-                await send_event(event_id, {"task_name": "维度值匹配高基数维度", "task_data": {
-                    "dimension_info_list": [
-                        {
-                            "dimension_id": item.get("dimensionId"),
-                            "dimension_name": item.get("dimensionName"),
-                            "model_name": item.get("modelName", None)
-                        }
-                        for item in hc_dimensions
-                    ]
-                }}, "task_data")
+                await send_event(
+                    event_id,
+                    {
+                        "task_name": "维度值匹配高基数维度",
+                        "task_data": {
+                            "dimension_info_list": [
+                                {"dimension_id": item.get("dimensionId"), "dimension_name": item.get("dimensionName"), "model_name": item.get("modelName", None)} for item in hc_dimensions
+                            ]
+                        },
+                    },
+                    "task_data",
+                )
                 await send_event(event_id, {"task_name": "维度值匹配高基数维度", "task_status": "completed"}, "task")
                 await send_event(event_id, {}, "progress_up")
             return hc_dimensions
@@ -905,16 +839,16 @@ class SemanticApiClient:
             raise ApiRequestError(error_msg) from e
 
     async def get_metric_info_by_keyword_async(
-            self,
-            keyword: str | list[str],
-            dataset_ids: list[str],
-            fuzzy_match: bool = True,
-            page_size: int = 100,
-            max_pages: int = 100,
-            extract_rows: bool = True,
-            max_concurrent: int = 5,
-            deduplicate_by_metric_id: bool = True,
-            event_id: str | None = None
+        self,
+        keyword: str | list[str],
+        dataset_ids: list[str],
+        fuzzy_match: bool = True,
+        page_size: int = 100,
+        max_pages: int = 100,
+        extract_rows: bool = True,
+        max_concurrent: int = 5,
+        deduplicate_by_metric_id: bool = True,
+        event_id: str | None = None,
     ) -> dict | list[dict]:
         """
         异步获取指标信息（支持多关键词，自动分页，并发请求，支持指标ID去重）
@@ -957,10 +891,7 @@ class SemanticApiClient:
                 try:
                     # 第一次请求，获取总数
                     first_result = await self._make_async_request(
-                        "POST",
-                        self.api_paths["get_metric_info"],
-                        params={"pi": 1, "ps": page_size},
-                        data={"keyword": kw, "datasetIds": dataset_ids, "fuzzyMatch": fuzzy_match}
+                        "POST", self.api_paths["get_metric_info"], params={"pi": 1, "ps": page_size}, data={"keyword": kw, "datasetIds": dataset_ids, "fuzzyMatch": fuzzy_match}
                     )
 
                     if str(first_result.get("code", "")) != "0":
@@ -981,7 +912,7 @@ class SemanticApiClient:
 
                         # 处理第一页结果（如果需要去重）
                         for row in first_page_rows:
-                            metric_id = row.get('metricId')
+                            metric_id = row.get("metricId")
                             if deduplicate_by_metric_id:
                                 if metric_id and metric_id in metric_id_set:
                                     duplicate_count += 1
@@ -991,17 +922,15 @@ class SemanticApiClient:
 
                             keyword_results.append(row)
 
-                        logger.info(
-                            f"关键词'{kw}'的第一页返回了{len(first_page_rows)}条结果，去重后保留{len(first_page_rows) - duplicate_count}条")
+                        logger.info(f"关键词'{kw}'的第一页返回了{len(first_page_rows)}条结果，去重后保留{len(first_page_rows) - duplicate_count}条")
 
                         # 打印第一页结果的指标ID和指标名称
                         if keyword_results:
-                            for idx, row in enumerate(keyword_results[:min(3, len(keyword_results))]):  # 只打印前3条
-                                metric_id = row.get('metricId', 'N/A')
-                                metric_name = row.get('metricName', 'N/A')
-                                metric_code = row.get('metricCode', 'N/A')
-                                logger.info(
-                                    f"  '{kw}'的结果{idx + 1}: 指标ID={metric_id}, 指标名称={metric_name}, 指标编码={metric_code}")
+                            for idx, row in enumerate(keyword_results[: min(3, len(keyword_results))]):  # 只打印前3条
+                                metric_id = row.get("metricId", "N/A")
+                                metric_name = row.get("metricName", "N/A")
+                                metric_code = row.get("metricCode", "N/A")
+                                logger.info(f"  '{kw}'的结果{idx + 1}: 指标ID={metric_id}, 指标名称={metric_name}, 指标编码={metric_code}")
 
                             if len(keyword_results) > 3:
                                 logger.info(f"  ...以及第一页的其他{len(keyword_results) - 3}条结果")
@@ -1021,17 +950,14 @@ class SemanticApiClient:
                     page_tasks = []
                     for page in range(2, total_pages + 1):
                         task = self._make_async_request(
-                            "POST",
-                            self.api_paths["get_metric_info"],
-                            params={"pi": page, "ps": page_size},
-                            data={"keyword": kw, "datasetIds": dataset_ids, "fuzzyMatch": fuzzy_match}
+                            "POST", self.api_paths["get_metric_info"], params={"pi": page, "ps": page_size}, data={"keyword": kw, "datasetIds": dataset_ids, "fuzzyMatch": fuzzy_match}
                         )
                         page_tasks.append(task)
 
                     # 限制并发请求数
                     page_results = []
                     for i in range(0, len(page_tasks), max_concurrent):
-                        batch = page_tasks[i:i + max_concurrent]
+                        batch = page_tasks[i : i + max_concurrent]
                         batch_results = await asyncio.gather(*batch, return_exceptions=True)
                         page_results.extend(batch_results)
 
@@ -1056,7 +982,7 @@ class SemanticApiClient:
 
                             # 处理额外页面结果（如果需要去重）
                             for row in rows:
-                                metric_id = row.get('metricId')
+                                metric_id = row.get("metricId")
                                 if deduplicate_by_metric_id:
                                     if metric_id and metric_id in metric_id_set:
                                         continue
@@ -1071,19 +997,17 @@ class SemanticApiClient:
                             additional_kept_rows += 1
                             additional_total_rows += 1
 
-                    logger.info(
-                        f"关键词'{kw}'的额外页面返回了{additional_total_rows}条结果，去重后保留{additional_kept_rows}条")
+                    logger.info(f"关键词'{kw}'的额外页面返回了{additional_total_rows}条结果，去重后保留{additional_kept_rows}条")
 
                     # 打印额外页面中的一些结果信息
                     if additional_results and extract_rows:
                         sample_size = min(3, len(additional_results))
                         logger.info(f"  关键词'{kw}'的额外页面样本:")
                         for idx, row in enumerate(additional_results[:sample_size]):
-                            metric_id = row.get('metricId', 'N/A')
-                            metric_name = row.get('metricName', 'N/A')
-                            metric_code = row.get('metricCode', 'N/A')
-                            logger.info(
-                                f"  '{kw}'的额外结果{idx + 1}: 指标ID={metric_id}, 指标名称={metric_name}, 指标编码={metric_code}")
+                            metric_id = row.get("metricId", "N/A")
+                            metric_name = row.get("metricName", "N/A")
+                            metric_code = row.get("metricCode", "N/A")
+                            logger.info(f"  '{kw}'的额外结果{idx + 1}: 指标ID={metric_id}, 指标名称={metric_name}, 指标编码={metric_code}")
 
                         if len(additional_results) > 3:
                             logger.info(f"  ...以及额外页面的其他{len(additional_results) - 3}条结果")
@@ -1092,12 +1016,12 @@ class SemanticApiClient:
                     if extract_rows and keyword_results:
                         metric_counts = {}
                         for row in keyword_results:
-                            m_id = row.get('metricId')
-                            m_name = row.get('metricName', 'N/A')
+                            m_id = row.get("metricId")
+                            m_name = row.get("metricName", "N/A")
                             if m_id:
                                 if m_id not in metric_counts:
-                                    metric_counts[m_id] = {'count': 0, 'name': m_name}
-                                metric_counts[m_id]['count'] += 1
+                                    metric_counts[m_id] = {"count": 0, "name": m_name}
+                                metric_counts[m_id]["count"] += 1
 
                         logger.info(f"  关键词'{kw}'的结果分布:")
                         for m_id, info in metric_counts.items():
@@ -1120,7 +1044,7 @@ class SemanticApiClient:
                 final_unique_results = []
                 final_metric_id_set = set()
                 for result in all_results:
-                    metric_id = result.get('metricId')
+                    metric_id = result.get("metricId")
                     if metric_id and metric_id in final_metric_id_set:
                         continue
                     if metric_id:
@@ -1129,20 +1053,19 @@ class SemanticApiClient:
 
                 # 如果有发现额外的重复项（不应该发生，但以防万一）
                 if len(final_unique_results) < len(all_results):
-                    logger.warning(
-                        f"最终检查时发现额外的重复项: 移除了{len(all_results) - len(final_unique_results)}条重复结果")
+                    logger.warning(f"最终检查时发现额外的重复项: 移除了{len(all_results) - len(final_unique_results)}条重复结果")
                     all_results = final_unique_results
             if event_id:
-                await send_event(event_id, {"task_name": "按关键字获取指标", "task_data": {
-                    "metric_info_list": [
-                        {
-                            "metric_id": item.get("metricId"),
-                            "metric_name": item.get("metricName"),
-                            "model_name": item.get("modelName", None)
-                        }
-                        for item in all_results
-                    ]
-                }}, "task_data")
+                await send_event(
+                    event_id,
+                    {
+                        "task_name": "按关键字获取指标",
+                        "task_data": {
+                            "metric_info_list": [{"metric_id": item.get("metricId"), "metric_name": item.get("metricName"), "model_name": item.get("modelName", None)} for item in all_results]
+                        },
+                    },
+                    "task_data",
+                )
                 await send_event(event_id, {"task_name": "按关键字获取指标", "task_status": "completed"}, "task")
                 await send_event(event_id, {}, "progress_up")
             return all_results
@@ -1154,12 +1077,7 @@ class SemanticApiClient:
                 raise ApiRequestError(error_msg) from e
             raise  # 重新抛出已经包装的异常
 
-    async def get_dimension_info_by_id_async(
-            self,
-            dimension_ids: str | list[str],
-            max_concurrent: int = 5,
-            event_id: str | None = None
-    ) -> list[dict]:
+    async def get_dimension_info_by_id_async(self, dimension_ids: str | list[str], max_concurrent: int = 5, event_id: str | None = None) -> list[dict]:
         """
         异步获取维度详情信息（支持单个ID或ID列表，并发请求）
 
@@ -1197,22 +1115,17 @@ class SemanticApiClient:
             tasks = []
             for dim_id in dimension_ids:
                 logger.info(f"正在准备获取维度ID: {dim_id} 的详情")
-                task = self._make_async_request(
-                    "POST",
-                    self.api_paths["get_dimension_info_by_id"],
-                    data={"dimensionId": dim_id}
-                )
+                task = self._make_async_request("POST", self.api_paths["get_dimension_info_by_id"], data={"dimensionId": dim_id})
                 tasks.append((dim_id, task))
 
             # 限制并发请求数
             processed_count = 0
             for i in range(0, len(tasks), max_concurrent):
-                batch = tasks[i:i + max_concurrent]
+                batch = tasks[i : i + max_concurrent]
                 batch_ids = [dim_id for dim_id, _ in batch]
                 batch_tasks = [task for _, task in batch]
 
-                logger.info(
-                    f"正在并发获取 {len(batch_ids)} 个维度详情 (ID: {', '.join(batch_ids[:3])}{'...' if len(batch_ids) > 3 else ''})")
+                logger.info(f"正在并发获取 {len(batch_ids)} 个维度详情 (ID: {', '.join(batch_ids[:3])}{'...' if len(batch_ids) > 3 else ''})")
 
                 batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
 
@@ -1246,11 +1159,10 @@ class SemanticApiClient:
                         # 打印第一条详情的关键信息
                         if dimension_info:
                             first_info = dimension_info[0]
-                            dimension_name = first_info.get('dimensionName', 'N/A')
-                            dimension_en_name = first_info.get('dimensionEnName', 'N/A')
-                            model_name = first_info.get('modelName', 'N/A')
-                            logger.info(
-                                f"  维度名称={dimension_name}, 英文名称={dimension_en_name}, 模型名称={model_name}")
+                            dimension_name = first_info.get("dimensionName", "N/A")
+                            dimension_en_name = first_info.get("dimensionEnName", "N/A")
+                            model_name = first_info.get("modelName", "N/A")
+                            logger.info(f"  维度名称={dimension_name}, 英文名称={dimension_en_name}, 模型名称={model_name}")
                     else:
                         error_msg = f"维度ID {dim_id} 未返回任何详情信息"
                         logger.warning(error_msg)
@@ -1285,12 +1197,7 @@ class SemanticApiClient:
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e
 
-    async def get_metric_info_by_id_async(
-            self,
-            metric_ids: str | list[str],
-            max_concurrent: int = 5,
-            event_id: str | None = None
-    ) -> list[dict]:
+    async def get_metric_info_by_id_async(self, metric_ids: str | list[str], max_concurrent: int = 5, event_id: str | None = None) -> list[dict]:
         """
         异步获取指标详情信息（支持单个ID或ID列表，并发请求）
 
@@ -1328,22 +1235,17 @@ class SemanticApiClient:
             tasks = []
             for metric_id in metric_ids:
                 logger.info(f"正在准备获取指标ID: {metric_id} 的详情")
-                task = self._make_async_request(
-                    "POST",
-                    self.api_paths["get_metric_info_by_id"],
-                    data={"metricId": metric_id}
-                )
+                task = self._make_async_request("POST", self.api_paths["get_metric_info_by_id"], data={"metricId": metric_id})
                 tasks.append((metric_id, task))
 
             # 限制并发请求数
             processed_count = 0
             for i in range(0, len(tasks), max_concurrent):
-                batch = tasks[i:i + max_concurrent]
+                batch = tasks[i : i + max_concurrent]
                 batch_ids = [metric_id for metric_id, _ in batch]
                 batch_tasks = [task for _, task in batch]
 
-                logger.info(
-                    f"正在并发获取 {len(batch_ids)} 个指标详情 (ID: {', '.join(batch_ids[:3])}{'...' if len(batch_ids) > 3 else ''})")
+                logger.info(f"正在并发获取 {len(batch_ids)} 个指标详情 (ID: {', '.join(batch_ids[:3])}{'...' if len(batch_ids) > 3 else ''})")
 
                 batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
 
@@ -1377,11 +1279,10 @@ class SemanticApiClient:
                         # 打印第一条详情的关键信息
                         if metric_info:
                             first_info = metric_info[0]
-                            metric_name = first_info.get('metricName', 'N/A')
-                            metric_en_name = first_info.get('metricEnName', 'N/A')
-                            model_name = first_info.get('modelName', 'N/A')
-                            logger.info(
-                                f"  指标名称={metric_name}, 英文名称={metric_en_name}, 模型名称={model_name}")
+                            metric_name = first_info.get("metricName", "N/A")
+                            metric_en_name = first_info.get("metricEnName", "N/A")
+                            model_name = first_info.get("modelName", "N/A")
+                            logger.info(f"  指标名称={metric_name}, 英文名称={metric_en_name}, 模型名称={model_name}")
                     else:
                         error_msg = f"指标ID {metric_id} 未返回任何详情信息"
                         logger.warning(error_msg)
@@ -1402,16 +1303,16 @@ class SemanticApiClient:
             # 返回所有结果
             logger.info(f"总共获取到 {len(all_results)} 条指标详情信息")
             if event_id:
-                await send_event(event_id, {"task_name": "按id获取指标", "task_data": {
-                    "metric_info_list": [
-                        {
-                            "metric_id": item.get("metricId"),
-                            "metric_name": item.get("metricName"),
-                            "model_name": item.get("modelName", None)
-                        }
-                        for item in all_results
-                    ]
-                }}, "task_data")
+                await send_event(
+                    event_id,
+                    {
+                        "task_name": "按id获取指标",
+                        "task_data": {
+                            "metric_info_list": [{"metric_id": item.get("metricId"), "metric_name": item.get("metricName"), "model_name": item.get("modelName", None)} for item in all_results]
+                        },
+                    },
+                    "task_data",
+                )
                 await send_event(event_id, {"task_name": "按id获取指标", "task_status": "completed"}, "task")
                 await send_event(event_id, {}, "progress_up")
             return all_results
@@ -1426,11 +1327,7 @@ class SemanticApiClient:
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e
 
-    async def get_model_detail_async(
-            self,
-            model_ids: str | list[str],
-            max_concurrent: int = 5
-    ) -> list[dict]:
+    async def get_model_detail_async(self, model_ids: str | list[str], max_concurrent: int = 5) -> list[dict]:
         """
         异步获取模型详情信息（支持单个ID或ID列表，并发请求）
 
@@ -1464,22 +1361,17 @@ class SemanticApiClient:
             tasks = []
             for model_id in model_ids:
                 logger.info(f"正在准备获取模型ID: {model_id} 的详情")
-                task = self._make_async_request(
-                    "POST",
-                    self.api_paths["get_model_detail"],
-                    data={"modelId": model_id}
-                )
+                task = self._make_async_request("POST", self.api_paths["get_model_detail"], data={"modelId": model_id})
                 tasks.append((model_id, task))
 
             # 限制并发请求数
             processed_count = 0
             for i in range(0, len(tasks), max_concurrent):
-                batch = tasks[i:i + max_concurrent]
+                batch = tasks[i : i + max_concurrent]
                 batch_ids = [model_id for model_id, _ in batch]
                 batch_tasks = [task for _, task in batch]
 
-                logger.info(
-                    f"正在并发获取 {len(batch_ids)} 个模型详情 (ID: {', '.join(batch_ids[:3])}{'...' if len(batch_ids) > 3 else ''})")
+                logger.info(f"正在并发获取 {len(batch_ids)} 个模型详情 (ID: {', '.join(batch_ids[:3])}{'...' if len(batch_ids) > 3 else ''})")
 
                 batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
 
@@ -1509,17 +1401,15 @@ class SemanticApiClient:
                         all_results.append(model_data)
 
                         # 打印模型的关键信息
-                        model_name = model_data.get('modelName', 'N/A')
-                        table_name = model_data.get('tableName', 'N/A')
-                        description = model_data.get('description', 'N/A')
-                        fields_count = len(model_data.get('fields', []))
-                        datasets = model_data.get('usedInDatasets', [])
-                        datasets_names = [d.get('datasetName', 'N/A') for d in datasets]
+                        model_name = model_data.get("modelName", "N/A")
+                        table_name = model_data.get("tableName", "N/A")
+                        description = model_data.get("description", "N/A")
+                        fields_count = len(model_data.get("fields", []))
+                        datasets = model_data.get("usedInDatasets", [])
+                        datasets_names = [d.get("datasetName", "N/A") for d in datasets]
 
-                        logger.info(
-                            f"  模型ID {model_id} 详情: 模型名称={model_name}, 表名={table_name}, 描述={description}")
-                        logger.info(
-                            f"  字段数量: {fields_count}, 用于数据集: {', '.join(datasets_names[:3])}{'...' if len(datasets_names) > 3 else ''}")
+                        logger.info(f"  模型ID {model_id} 详情: 模型名称={model_name}, 表名={table_name}, 描述={description}")
+                        logger.info(f"  字段数量: {fields_count}, 用于数据集: {', '.join(datasets_names[:3])}{'...' if len(datasets_names) > 3 else ''}")
                     else:
                         error_msg = f"模型ID {model_id} 未返回任何详情信息"
                         logger.warning(error_msg)
@@ -1555,11 +1445,7 @@ class SemanticApiClient:
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e
 
-    async def get_model_relationships_async(
-            self,
-            model_ids: str | list[str],
-            max_concurrent: int = 5
-    ) -> list[dict]:
+    async def get_model_relationships_async(self, model_ids: str | list[str], max_concurrent: int = 5) -> list[dict]:
         """
         异步获取模型关系信息（支持单个ID或ID列表，并发请求，根据模型关系去重）
 
@@ -1598,19 +1484,18 @@ class SemanticApiClient:
                 task = self._make_async_request(
                     "POST",
                     self.api_paths["get_model_relationships"],
-                    data={"modelIds": [model_id]}  # API要求数组，虽然每次只传一个ID
+                    data={"modelIds": [model_id]},  # API要求数组，虽然每次只传一个ID
                 )
                 tasks.append((model_id, task))
 
             # 限制并发请求数
             processed_count = 0
             for i in range(0, len(tasks), max_concurrent):
-                batch = tasks[i:i + max_concurrent]
+                batch = tasks[i : i + max_concurrent]
                 batch_ids = [model_id for model_id, _ in batch]
                 batch_tasks = [task for _, task in batch]
 
-                logger.info(
-                    f"正在并发获取 {len(batch_ids)} 个模型的关系信息 (ID: {', '.join(batch_ids[:3])}{'...' if len(batch_ids) > 3 else ''})")
+                logger.info(f"正在并发获取 {len(batch_ids)} 个模型的关系信息 (ID: {', '.join(batch_ids[:3])}{'...' if len(batch_ids) > 3 else ''})")
 
                 batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
 
@@ -1640,16 +1525,15 @@ class SemanticApiClient:
                                 relation["requested_model_id"] = model_id
 
                             # 根据sourceModelId和targetModelId组合创建唯一键
-                            source_id = relation.get('sourceModelId')
-                            target_id = relation.get('targetModelId')
+                            source_id = relation.get("sourceModelId")
+                            target_id = relation.get("targetModelId")
                             if not source_id or not target_id:
                                 error_msg = f"关系数据缺少source或target模型ID: {relation}"
                                 logger.warning(error_msg)
                                 continue
 
                             # 创建一个排序后的键，确保无论方向如何都能识别相同的关系
-                            relation_key = tuple(sorted([source_id, target_id]) +
-                                                 [relation.get('sourceField', ''), relation.get('targetField', '')])
+                            relation_key = tuple(sorted([source_id, target_id]) + [relation.get("sourceField", ""), relation.get("targetField", "")])
 
                             # 检查是否已经存在相同的关系
                             if relation_key in relationship_keys:
@@ -1662,8 +1546,7 @@ class SemanticApiClient:
 
                         # 打印模型关系信息
                         total_relations = len(relationships)
-                        logger.info(
-                            f"  模型ID {model_id} 返回了 {total_relations} 条关系信息，去重后新增 {added_count} 条")
+                        logger.info(f"  模型ID {model_id} 返回了 {total_relations} 条关系信息，去重后新增 {added_count} 条")
 
                         # 打印部分关系示例
                         if added_count > 0:
@@ -1671,14 +1554,13 @@ class SemanticApiClient:
                             sample_relations = list(all_relationships[-added_count:])[:sample_size]
 
                             for i, relation in enumerate(sample_relations):
-                                source_name = relation.get('sourceModelName', 'N/A')
-                                target_name = relation.get('targetModelName', 'N/A')
-                                source_field = relation.get('sourceField', 'N/A')
-                                target_field = relation.get('targetField', 'N/A')
-                                join_type = relation.get('joinType', 'N/A')
+                                source_name = relation.get("sourceModelName", "N/A")
+                                target_name = relation.get("targetModelName", "N/A")
+                                source_field = relation.get("sourceField", "N/A")
+                                target_field = relation.get("targetField", "N/A")
+                                join_type = relation.get("joinType", "N/A")
 
-                                logger.info(
-                                    f"    关系{i + 1}: {source_name}({source_field}) {join_type} JOIN {target_name}({target_field})")
+                                logger.info(f"    关系{i + 1}: {source_name}({source_field}) {join_type} JOIN {target_name}({target_field})")
                     else:
                         logger.info(f"  模型ID {model_id} 未返回任何关系信息")
                         # 没有关系不算错误，但记录下来
@@ -1722,12 +1604,7 @@ class SemanticApiClient:
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e
 
-    async def get_dataset_detail_async(
-            self,
-            dataset_ids: str | list[str],
-            max_concurrent: int = 5,
-            event_id: str | None = None
-    ) -> list[dict]:
+    async def get_dataset_detail_async(self, dataset_ids: str | list[str], max_concurrent: int = 5, event_id: str | None = None) -> list[dict]:
         """
         异步获取数据集详情信息（支持单个ID或ID列表，并发请求）
 
@@ -1763,22 +1640,17 @@ class SemanticApiClient:
             tasks = []
             for dataset_id in dataset_ids:
                 logger.info(f"正在准备获取数据集ID: {dataset_id} 的详情")
-                task = self._make_async_request(
-                    "POST",
-                    self.api_paths["get_dataset_detail"],
-                    data={"datasetId": dataset_id}
-                )
+                task = self._make_async_request("POST", self.api_paths["get_dataset_detail"], data={"datasetId": dataset_id})
                 tasks.append((dataset_id, task))
 
             # 限制并发请求数
             processed_count = 0
             for i in range(0, len(tasks), max_concurrent):
-                batch = tasks[i:i + max_concurrent]
+                batch = tasks[i : i + max_concurrent]
                 batch_ids = [dataset_id for dataset_id, _ in batch]
                 batch_tasks = [task for _, task in batch]
 
-                logger.info(
-                    f"正在并发获取 {len(batch_ids)} 个数据集详情 (ID: {', '.join(batch_ids[:3])}{'...' if len(batch_ids) > 3 else ''})")
+                logger.info(f"正在并发获取 {len(batch_ids)} 个数据集详情 (ID: {', '.join(batch_ids[:3])}{'...' if len(batch_ids) > 3 else ''})")
 
                 batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
 
@@ -1817,8 +1689,7 @@ class SemanticApiClient:
 
                             # 记录是否有重复模型被移除
                             if len(unique_models) < len(dataset_data["models"]):
-                                logger.info(
-                                    f"数据集ID {dataset_id} 中移除了 {len(dataset_data['models']) - len(unique_models)} 个重复模型")
+                                logger.info(f"数据集ID {dataset_id} 中移除了 {len(dataset_data['models']) - len(unique_models)} 个重复模型")
 
                             dataset_data["models"] = unique_models
 
@@ -1829,12 +1700,11 @@ class SemanticApiClient:
                         all_results.append(dataset_data)
 
                         # 打印数据集的关键信息
-                        dataset_name = dataset_data.get('datasetName', 'N/A')
-                        models_count = len(dataset_data.get('models', []))
-                        domain_name = dataset_data.get('domainName', 'N/A')
+                        dataset_name = dataset_data.get("datasetName", "N/A")
+                        models_count = len(dataset_data.get("models", []))
+                        domain_name = dataset_data.get("domainName", "N/A")
 
-                        logger.info(
-                            f"  已获取数据集: ID={dataset_id}, 名称={dataset_name}, 领域={domain_name}, 关联模型数={models_count}")
+                        logger.info(f"  已获取数据集: ID={dataset_id}, 名称={dataset_name}, 领域={domain_name}, 关联模型数={models_count}")
                     else:
                         error_msg = f"数据集ID {dataset_id} 未返回任何详情信息"
                         logger.warning(error_msg)
@@ -1865,8 +1735,7 @@ class SemanticApiClient:
                     logger.warning(f"数据集 {result.get('requested_dataset_id', '未知ID')} 缺少必要的名称信息")
 
                 if "models" not in result or not isinstance(result["models"], list):
-                    logger.warning(
-                        f"数据集 {result.get('datasetName', result.get('requested_dataset_id', '未知ID'))} 的模型信息格式不正确")
+                    logger.warning(f"数据集 {result.get('datasetName', result.get('requested_dataset_id', '未知ID'))} 的模型信息格式不正确")
 
             if event_id:
                 await send_event(event_id, {"task_name": "获取数据集详情", "task_status": "completed"}, "task")
@@ -1889,15 +1758,15 @@ class SemanticApiClient:
             raise ApiRequestError(error_msg) from e
 
     async def get_business_term_info_async(
-            self,
-            keyword: str | list[str],
-            domain_ids: list[str],
-            fuzzy_match: bool = True,
-            page_size: int = 100,
-            max_pages: int = 10,
-            extract_rows: bool = True,
-            max_concurrent: int = 5,
-            deduplicate_by_term_id: bool = True  # New parameter for deduplication
+        self,
+        keyword: str | list[str],
+        domain_ids: list[str],
+        fuzzy_match: bool = True,
+        page_size: int = 100,
+        max_pages: int = 10,
+        extract_rows: bool = True,
+        max_concurrent: int = 5,
+        deduplicate_by_term_id: bool = True,  # New parameter for deduplication
     ) -> list | list[list]:
         """
         异步获取业务术语信息（支持多关键词，自动分页，并发请求，支持术语ID去重）
@@ -1953,10 +1822,7 @@ class SemanticApiClient:
                 try:
                     # 第一次请求，获取总数
                     first_result = await self._make_async_request(
-                        "POST",
-                        self.api_paths["get_business_term_info"],
-                        params={"pi": 1, "ps": page_size},
-                        data={"keyword": kw, "domainIds": domain_ids, "fuzzyMatch": fuzzy_match}
+                        "POST", self.api_paths["get_business_term_info"], params={"pi": 1, "ps": page_size}, data={"keyword": kw, "domainIds": domain_ids, "fuzzyMatch": fuzzy_match}
                     )
 
                     if str(first_result.get("code", "")) != "0":
@@ -1979,9 +1845,9 @@ class SemanticApiClient:
                             # 处理第一页结果（如果需要去重）
                             for row in first_page_rows:
                                 # 给每行添加原始搜索关键词
-                                row['search_keyword'] = kw
+                                row["search_keyword"] = kw
 
-                                term_id = row.get('termId')
+                                term_id = row.get("termId")
                                 if deduplicate_by_term_id:
                                     if term_id and term_id in term_id_set:
                                         duplicate_count += 1
@@ -1991,15 +1857,14 @@ class SemanticApiClient:
 
                                 keyword_results.append(row)
 
-                            logger.info(
-                                f"关键词'{kw}'的第一页返回了{len(first_page_rows)}条结果，去重后保留{len(first_page_rows) - duplicate_count}条")
+                            logger.info(f"关键词'{kw}'的第一页返回了{len(first_page_rows)}条结果，去重后保留{len(first_page_rows) - duplicate_count}条")
 
                             # 打印样例结果
                             sample_size = min(3, len(keyword_results))
                             for i, row in enumerate(keyword_results[:sample_size]):
-                                term_id = row.get('termId', 'N/A')
-                                term_name = row.get('termName', 'N/A')
-                                term_code = row.get('termCode', 'N/A')
+                                term_id = row.get("termId", "N/A")
+                                term_name = row.get("termName", "N/A")
+                                term_code = row.get("termCode", "N/A")
                                 logger.info(f"  示例 {i + 1}: ID={term_id}, 术语名称={term_name}, 术语编码={term_code}")
 
                             if len(keyword_results) > sample_size:
@@ -2023,10 +1888,7 @@ class SemanticApiClient:
                     page_tasks = []
                     for page in range(2, total_pages + 1):
                         task = self._make_async_request(
-                            "POST",
-                            self.api_paths["get_business_term_info"],
-                            params={"pi": page, "ps": page_size},
-                            data={"keyword": kw, "domainIds": domain_ids, "fuzzyMatch": fuzzy_match}
+                            "POST", self.api_paths["get_business_term_info"], params={"pi": page, "ps": page_size}, data={"keyword": kw, "domainIds": domain_ids, "fuzzyMatch": fuzzy_match}
                         )
                         page_tasks.append(task)
 
@@ -2034,7 +1896,7 @@ class SemanticApiClient:
                     page_results = []
                     page_errors = 0
                     for i in range(0, len(page_tasks), max_concurrent):
-                        batch = page_tasks[i:i + max_concurrent]
+                        batch = page_tasks[i : i + max_concurrent]
                         logger.info(f"并发获取关键词'{kw}'的 {len(batch)} 个额外页面")
                         batch_results = await asyncio.gather(*batch, return_exceptions=True)
 
@@ -2062,9 +1924,9 @@ class SemanticApiClient:
                             # 处理额外页面结果（如果需要去重）
                             for row in rows:
                                 # 给每行添加原始搜索关键词
-                                row['search_keyword'] = kw
+                                row["search_keyword"] = kw
 
-                                term_id = row.get('termId')
+                                term_id = row.get("termId")
                                 if deduplicate_by_term_id:
                                     if term_id and term_id in term_id_set:
                                         continue
@@ -2082,8 +1944,7 @@ class SemanticApiClient:
                     if page_errors > 0:
                         logger.warning(f"关键词'{kw}'的 {page_errors}/{len(page_tasks)} 个页面请求失败")
 
-                    logger.info(
-                        f"关键词'{kw}'的额外页面返回了{additional_total_rows}条结果，去重后保留{additional_kept_rows}条")
+                    logger.info(f"关键词'{kw}'的额外页面返回了{additional_total_rows}条结果，去重后保留{additional_kept_rows}条")
                     logger.info(f"关键词'{kw}'的总结果数: {len(keyword_results)}条")
 
                     # 添加到总结果
@@ -2117,7 +1978,7 @@ class SemanticApiClient:
                 final_unique_results = []
                 final_term_id_set = set()
                 for result in all_results:
-                    term_id = result.get('termId')
+                    term_id = result.get("termId")
                     if term_id and term_id in final_term_id_set:
                         continue
                     if term_id:
@@ -2126,17 +1987,16 @@ class SemanticApiClient:
 
                 # 如果有发现额外的重复项（不应该发生，但以防万一）
                 if len(final_unique_results) < len(all_results):
-                    logger.warning(
-                        f"最终检查时发现额外的重复项: 移除了{len(all_results) - len(final_unique_results)}条重复结果")
+                    logger.warning(f"最终检查时发现额外的重复项: 移除了{len(all_results) - len(final_unique_results)}条重复结果")
                     all_results = final_unique_results
 
             # 数据完整性验证
             if extract_rows and all_results:
                 # 验证结果字段的完整性
                 for idx, result in enumerate(all_results):
-                    if 'termId' not in result or not result['termId']:
+                    if "termId" not in result or not result["termId"]:
                         logger.warning(f"结果中第 {idx + 1} 条数据缺少术语ID")
-                    if 'termName' not in result or not result['termName']:
+                    if "termName" not in result or not result["termName"]:
                         logger.warning(f"术语ID {result.get('termId', '未知')} 缺少术语名称")
 
             return all_results
@@ -2156,12 +2016,7 @@ class SemanticApiClient:
             raise ApiRequestError(error_msg) from e
 
     async def get_dimension_values_async(
-            self,
-            dimension_ids: str | list[str],
-            page_size: int = 100,
-            max_pages: int = 100,
-            max_concurrent: int = 5,
-            event_id: str | None = None
+        self, dimension_ids: str | list[str], page_size: int = 100, max_pages: int = 100, max_concurrent: int = 5, event_id: str | None = None
     ) -> dict[str, list[dict]]:
         """
         异步获取维度值列表（支持单个维度ID或维度ID列表，自动分页，并发请求）
@@ -2207,12 +2062,7 @@ class SemanticApiClient:
 
                 try:
                     # 第一次请求，获取总数和第一页结果
-                    first_result = await self._make_async_request(
-                        "POST",
-                        self.api_paths["get_dimension_values"],
-                        params={"pi": 1, "ps": page_size},
-                        data={"dimensionId": dimension_id}
-                    )
+                    first_result = await self._make_async_request("POST", self.api_paths["get_dimension_values"], params={"pi": 1, "ps": page_size}, data={"dimensionId": dimension_id})
 
                     if str(first_result.get("code", "")) != "0":
                         error_msg = f"获取维度ID '{dimension_id}' 的第一页值失败: {first_result.get('msg', '未知错误')}"
@@ -2234,8 +2084,8 @@ class SemanticApiClient:
                     if first_page_rows:
                         sample_size = min(3, len(first_page_rows))
                         for i, row in enumerate(first_page_rows[:sample_size]):
-                            value = row.get('value', 'N/A')
-                            synonyms = row.get('synonyms', [])
+                            value = row.get("value", "N/A")
+                            synonyms = row.get("synonyms", [])
                             synonyms_str = ", ".join(synonyms) if synonyms else "无"
                             logger.info(f"  示例 {i + 1}: 值={value}, 同义词={synonyms_str}")
 
@@ -2255,12 +2105,7 @@ class SemanticApiClient:
                     # 创建剩余页面的异步任务
                     page_tasks = []
                     for page in range(2, total_pages + 1):
-                        task = self._make_async_request(
-                            "POST",
-                            self.api_paths["get_dimension_values"],
-                            params={"pi": page, "ps": page_size},
-                            data={"dimensionId": dimension_id}
-                        )
+                        task = self._make_async_request("POST", self.api_paths["get_dimension_values"], params={"pi": page, "ps": page_size}, data={"dimensionId": dimension_id})
                         page_tasks.append(task)
 
                     # 限制并发请求数
@@ -2268,7 +2113,7 @@ class SemanticApiClient:
                     page_errors = 0
 
                     for i in range(0, len(page_tasks), max_concurrent):
-                        batch = page_tasks[i:i + max_concurrent]
+                        batch = page_tasks[i : i + max_concurrent]
                         logger.info(f"并发获取维度ID '{dimension_id}' 的 {len(batch)} 个额外页面")
                         batch_results = await asyncio.gather(*batch, return_exceptions=True)
 
@@ -2321,7 +2166,7 @@ class SemanticApiClient:
                 else:
                     # 验证值的完整性
                     for idx, value in enumerate(values):
-                        if 'value' not in value or not value['value']:
+                        if "value" not in value or not value["value"]:
                             logger.warning(f"维度ID '{dim_id}' 的第 {idx + 1} 个维度值缺少value字段")
             if event_id:
                 await send_event(event_id, {"task_name": "获取维度值列表", "task_status": "completed"}, "task")
@@ -2342,10 +2187,7 @@ class SemanticApiClient:
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e
 
-    async def get_model_inds_and_dims_by_model_id_async(
-            self,
-            model_id: str
-    ) -> dict | None:
+    async def get_model_inds_and_dims_by_model_id_async(self, model_id: str) -> dict | None:
         """
         异步获取单个模型的指标和维度信息。
 
@@ -2368,11 +2210,7 @@ class SemanticApiClient:
 
         try:
             # 直接发起对单个模型ID的请求
-            result = await self._make_async_request(
-                "POST",
-                self.api_paths["get_model_inds_and_dims"],
-                data={"modelId": model_id}
-            )
+            result = await self._make_async_request("POST", self.api_paths["get_model_inds_and_dims"], data={"modelId": model_id})
 
             # 获取数据部分
             model_data = result.get("data")
@@ -2381,8 +2219,8 @@ class SemanticApiClient:
                 # 添加原始请求的模型ID，以便跟踪
                 model_data["requested_model_id"] = model_id
 
-                metrics_count = len(model_data.get('metrics', []))
-                dims_count = len(model_data.get('dimensions', []))
+                metrics_count = len(model_data.get("metrics", []))
+                dims_count = len(model_data.get("dimensions", []))
                 logger.info(f"模型ID {model_id} 返回了 {metrics_count} 个指标和 {dims_count} 个维度。")
 
                 return model_data
@@ -2400,15 +2238,7 @@ class SemanticApiClient:
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e
 
-    async def get_hc_dim_values_by_dim_value_async(
-            self,
-            keyword: str,
-            dimension_id: str,
-            user_id: str,
-            page_index: int = 1,
-            page_size: int = 100,
-            fuzzy_match: bool = True
-    ) -> dict:
+    async def get_hc_dim_values_by_dim_value_async(self, keyword: str, dimension_id: str, user_id: str, page_index: int = 1, page_size: int = 100, fuzzy_match: bool = True) -> dict:
         """
         异步获取高基数维度中的维度值（支持模糊匹配和指定页面）
 
@@ -2429,8 +2259,7 @@ class SemanticApiClient:
             ApiNetworkError: 网络连接错误
         """
         logger.info("\n=== 根据关键词在高基数维度中搜索维度值 ===")
-        logger.info(
-            f"维度ID: {dimension_id}, 关键词: {keyword}, 用户ID: {user_id}, 页码: {page_index}, 页面大小: {page_size}, 模糊匹配: {fuzzy_match}")
+        logger.info(f"维度ID: {dimension_id}, 关键词: {keyword}, 用户ID: {user_id}, 页码: {page_index}, 页面大小: {page_size}, 模糊匹配: {fuzzy_match}")
 
         # 参数验证
         if not keyword:
@@ -2465,7 +2294,7 @@ class SemanticApiClient:
                 "POST",
                 self.api_paths["get_hc_dim_values_by_dim_value"],
                 params={"pi": page_index, "ps": page_size},
-                data={"keyword": keyword, "dimensionId": dimension_id, "fuzzyMatch": fuzzy_match, "userId": user_id}
+                data={"keyword": keyword, "dimensionId": dimension_id, "fuzzyMatch": fuzzy_match, "userId": user_id},
             )
 
             if str(result.get("code", "")) != "0":
@@ -2485,7 +2314,7 @@ class SemanticApiClient:
                 sample_size = min(5, len(page_data))
                 logger.info(f"第{page_index}页示例维度值:")
                 for i, item in enumerate(page_data[:sample_size]):
-                    value = item.get('mc', 'N/A')
+                    value = item.get("mc", "N/A")
                     logger.info(f"  示例 {i + 1}: {value}")
 
                 if len(page_data) > sample_size:
@@ -2494,7 +2323,7 @@ class SemanticApiClient:
             # 数据完整性验证
             if page_data:
                 for idx, item in enumerate(page_data):
-                    if 'mc' not in item or not item['mc']:
+                    if "mc" not in item or not item["mc"]:
                         logger.warning(f"结果中第 {idx + 1} 条数据缺少mc字段")
 
             return result
@@ -2513,13 +2342,7 @@ class SemanticApiClient:
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e
 
-    async def get_user_semantic_permissions_async(
-            self,
-            user_id: str,
-            dataset_id_list: list[str] | None = None,
-            model_id_list: list[str] | None = None,
-            event_id: str | None = None
-    ) -> dict | None:
+    async def get_user_semantic_permissions_async(self, user_id: str, dataset_id_list: list[str] | None = None, model_id_list: list[str] | None = None, event_id: str | None = None) -> dict | None:
         logger.info("\n=== 获取用户语义权限信息 ===")
         logger.info(f"用户ID: {user_id}")
         if dataset_id_list:
@@ -2555,20 +2378,16 @@ class SemanticApiClient:
                 request_data["model_id_list"] = model_id_list
 
             # 发起请求
-            result = await self._make_async_request(
-                "POST",
-                self.api_paths["get_user_semantic_permissions"],
-                data=request_data
-            )
+            result = await self._make_async_request("POST", self.api_paths["get_user_semantic_permissions"], data=request_data)
 
             # 获取数据部分
             permission_data = result.get("data")
 
             if permission_data and isinstance(permission_data, dict):
-                returned_user_id = permission_data.get('userId', 'N/A')
-                data_permissions = permission_data.get('dataPermissions', {})
+                returned_user_id = permission_data.get("userId", "N/A")
+                data_permissions = permission_data.get("dataPermissions", {})
                 # 修复：API返回的是 'models' 而不是 'model'
-                models = data_permissions.get('models', [])
+                models = data_permissions.get("models", [])
 
                 logger.info(f"成功获取用户 {returned_user_id} 的语义权限信息")
                 logger.info(f"权限涉及 {len(models)} 个模型")
@@ -2576,23 +2395,23 @@ class SemanticApiClient:
                 # 打印权限详情
                 for idx, model_perm in enumerate(models):
                     # 修复：API返回的是 'modelId' 而不是 'model_id'
-                    model_id = model_perm.get('modelId', 'N/A')
+                    model_id = model_perm.get("modelId", "N/A")
                     # 修复：API返回的是 'allowedColumns' 而不是 'allowedSemanticField'
-                    allowed_fields = model_perm.get('allowedColumns', [])
-                    row_filter = model_perm.get('rowFilter', {})
+                    allowed_fields = model_perm.get("allowedColumns", [])
+                    row_filter = model_perm.get("rowFilter", {})
 
                     logger.info(f"  模型 {idx + 1}: ID={model_id}")
                     logger.info(f"    允许访问的语义字段数量: {len(allowed_fields)}")
 
                     # 统计维度和指标的数量
-                    dim_count = sum(1 for field in allowed_fields if field.get('semanticType') == 'dim')
-                    metric_count = sum(1 for field in allowed_fields if field.get('semanticType') == 'metric')
+                    dim_count = sum(1 for field in allowed_fields if field.get("semanticType") == "dim")
+                    metric_count = sum(1 for field in allowed_fields if field.get("semanticType") == "metric")
                     logger.info(f"    其中维度: {dim_count} 个, 指标: {metric_count} 个")
 
                     # 修复：rowFilter 是一个字典对象，需要检查其内容
                     if row_filter and isinstance(row_filter, dict):
-                        rules = row_filter.get('rules', [])
-                        logical_operator = row_filter.get('logicalOperator', '')
+                        rules = row_filter.get("rules", [])
+                        logical_operator = row_filter.get("logicalOperator", "")
                         if rules:
                             logger.info(f"    行级过滤条件: 逻辑操作符={logical_operator}, 规则数量={len(rules)}")
                         else:
@@ -2605,20 +2424,18 @@ class SemanticApiClient:
                         sample_size = min(3, len(allowed_fields))
                         logger.info("    字段示例:")
                         for i, field in enumerate(allowed_fields[:sample_size]):
-                            semantic_type = field.get('semanticType', 'N/A')
-                            semantic_name = field.get('semanticName', 'N/A')
-                            semantic_id = field.get('semanticId', 'N/A')
+                            semantic_type = field.get("semanticType", "N/A")
+                            semantic_name = field.get("semanticName", "N/A")
+                            semantic_id = field.get("semanticId", "N/A")
                             # 显示更多字段信息
-                            semantic = field.get('semantic', 'N/A')
-                            logger.info(
-                                f"      {i + 1}. {semantic_type}: {semantic_name} (ID: {semantic_id}, semantic: {semantic})")
+                            semantic = field.get("semantic", "N/A")
+                            logger.info(f"      {i + 1}. {semantic_type}: {semantic_name} (ID: {semantic_id}, semantic: {semantic})")
 
                         if len(allowed_fields) > sample_size:
                             logger.info(f"      ...以及其他 {len(allowed_fields) - sample_size} 个字段")
 
                 if event_id:
-                    await send_event(event_id, {"task_name": "获取用户语义权限信息", "task_status": "completed"},
-                                     "task")
+                    await send_event(event_id, {"task_name": "获取用户语义权限信息", "task_status": "completed"}, "task")
                     await send_event(event_id, {}, "progress_up")
 
                 return permission_data

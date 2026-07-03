@@ -5,6 +5,7 @@
 @date：2025/12/19 16:00
 @desc: 数据源连接器管理接口
 """
+
 import json
 import logging
 import time
@@ -102,8 +103,10 @@ def _render_web_oauth_popup(flow_id: str, success: bool, message: str, source: s
 
 # ==================== 请求体模型定义 ====================
 
+
 class SetConnectorRequest(BaseModel):
     """创建或更新连接器请求"""
+
     id: str | None = None
     name: str | None = None
     source: str | None = None
@@ -115,32 +118,38 @@ class SetConnectorRequest(BaseModel):
 
 class ResumeConnectorRequest(BaseModel):
     """恢复/暂停连接器请求"""
+
     resume: bool = True  # True: 恢复调度, False: 取消调度
 
 
 class LinkKbRequest(BaseModel):
     """关联知识库请求"""
+
     kb_ids: list[str]
 
 
 class RebuildRequest(BaseModel):
     """重建连接器请求"""
+
     kb_id: str
 
 
 class GoogleWebOAuthStartRequest(BaseModel):
     """启动 Google Web OAuth 请求"""
+
     credentials: str | dict  # Google OAuth 凭证 JSON
     redirect_uri: str | None = None  # 自定义重定向 URI（可选）
 
 
 class GoogleWebOAuthResultRequest(BaseModel):
     """获取 Google Web OAuth 结果请求"""
+
     flow_id: str
 
 
 class BoxWebOAuthStartRequest(BaseModel):
     """启动 Box Web OAuth 请求"""
+
     client_id: str
     client_secret: str
     redirect_uri: str | None = None
@@ -148,17 +157,15 @@ class BoxWebOAuthStartRequest(BaseModel):
 
 class BoxWebOAuthResultRequest(BaseModel):
     """获取 Box Web OAuth 结果请求"""
+
     flow_id: str
 
 
 # ==================== 接口定义 ====================
 
+
 @router.post("/set", summary="创建或更新连接器", response_description="连接器信息")
-def set_connector(
-    request: SetConnectorRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-):
+def set_connector(request: SetConnectorRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/set` 创建或更新连接器
 
@@ -202,11 +209,7 @@ def set_connector(
 
         if req.get("id"):
             # 更新现有连接器
-            conn = {
-                fld: req[fld]
-                for fld in ["prune_freq", "refresh_freq", "config", "timeout_secs"]
-                if fld in req
-            }
+            conn = {fld: req[fld] for fld in ["prune_freq", "refresh_freq", "config", "timeout_secs"] if fld in req}
             ConnectorService.update_by_id(db, req["id"], conn)
         else:
             # 创建新连接器
@@ -224,7 +227,7 @@ def set_connector(
                 "refresh_freq": int(req.get("refresh_freq", 5)),
                 "prune_freq": int(req.get("prune_freq", 720)),
                 "timeout_secs": int(req.get("timeout_secs", 60 * 29)),
-                "status": TaskStatus.SCHEDULE
+                "status": TaskStatus.SCHEDULE,
             }
             ConnectorService.insert(db, **conn)
 
@@ -239,10 +242,7 @@ def set_connector(
 
 
 @router.get("/list", summary="获取连接器列表", response_description="连接器列表")
-def list_connector(
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-):
+def list_connector(db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### GET `/list` 获取连接器列表
 
@@ -278,11 +278,7 @@ def list_connector(
 
 
 @router.get("/{connector_id}", summary="获取连接器详情", response_description="连接器详情")
-def get_connector(
-    connector_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-):
+def get_connector(connector_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### GET `/{connector_id}` 获取连接器详情
 
@@ -327,11 +323,7 @@ def get_connector(
 
 @router.get("/{connector_id}/logs", summary="获取同步日志", response_description="同步日志列表")
 def list_logs(
-    connector_id: str,
-    page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(15, ge=1, le=100, description="每页数量"),
-    db: Session = Depends(get_db),
-    user=Depends(manager)
+    connector_id: str, page: int = Query(1, ge=1, description="页码"), page_size: int = Query(15, ge=1, le=100, description="每页数量"), db: Session = Depends(get_db), user=Depends(manager)
 ):
     """
     ### GET `/{connector_id}/logs` 获取同步日志
@@ -384,12 +376,7 @@ def list_logs(
 
 
 @router.put("/{connector_id}/resume", summary="恢复或暂停连接器", response_description="操作结果")
-def resume(
-    connector_id: str,
-    request: ResumeConnectorRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-):
+def resume(connector_id: str, request: ResumeConnectorRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### PUT `/{connector_id}/resume` 恢复或暂停连接器
 
@@ -435,12 +422,7 @@ def resume(
 
 
 @router.post("/{connector_id}/link", summary="关联知识库", response_description="操作结果")
-def link_kb(
-    connector_id: str,
-    request: LinkKbRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-):
+def link_kb(connector_id: str, request: LinkKbRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/{connector_id}/link` 关联知识库
 
@@ -494,12 +476,7 @@ def link_kb(
 
 
 @router.put("/{connector_id}/rebuild", summary="重建连接器", response_description="操作结果")
-def rebuild(
-    connector_id: str,
-    request: RebuildRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-):
+def rebuild(connector_id: str, request: RebuildRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### PUT `/{connector_id}/rebuild` 重建连接器
 
@@ -544,11 +521,7 @@ def rebuild(
 
 
 @router.post("/{connector_id}/rm", summary="删除连接器", response_description="操作结果")
-def rm_connector(
-    connector_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-):
+def rm_connector(connector_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/{connector_id}/rm` 删除连接器
 
@@ -595,12 +568,9 @@ def rm_connector(
 
 # ==================== Google OAuth 接口 ====================
 
+
 @router.post("/google/oauth/web/start", summary="启动 Google OAuth（统一接口）", response_description="OAuth 授权 URL")
-def start_google_web_oauth(
-    request: GoogleWebOAuthStartRequest,
-    source: str = Query("google-drive", description="OAuth 类型: google-drive 或 gmail"),
-    user=Depends(manager)
-):
+def start_google_web_oauth(request: GoogleWebOAuthStartRequest, source: str = Query("google-drive", description="OAuth 类型: google-drive 或 gmail"), user=Depends(manager)):
     """
     ### POST `/google/oauth/web/start` 启动 Google OAuth（统一接口）
 
@@ -862,11 +832,7 @@ def gmail_web_oauth_callback(
 
 
 @router.post("/google/oauth/web/result", summary="获取 Google OAuth 结果（统一接口）", response_description="OAuth 凭证")
-def poll_google_web_result(
-    request: GoogleWebOAuthResultRequest,
-    source: str = Query(..., description="OAuth 类型: google-drive 或 gmail"),
-    user=Depends(manager)
-):
+def poll_google_web_result(request: GoogleWebOAuthResultRequest, source: str = Query(..., description="OAuth 类型: google-drive 或 gmail"), user=Depends(manager)):
     """
     ### POST `/google/oauth/web/result` 获取 Google OAuth 结果（统一接口）
 
@@ -936,11 +902,9 @@ def poll_google_web_result(
 
 # ==================== Box OAuth 接口 ====================
 
+
 @router.post("/box/oauth/web/start", summary="启动 Box OAuth", response_description="OAuth 授权 URL")
-def start_box_web_oauth(
-    request: BoxWebOAuthStartRequest,
-    user=Depends(manager)
-):
+def start_box_web_oauth(request: BoxWebOAuthStartRequest, user=Depends(manager)):
     """
     ### POST `/box/oauth/web/start` 启动 Box OAuth
 
@@ -1094,10 +1058,7 @@ def box_web_oauth_callback(
 
 
 @router.post("/box/oauth/web/result", summary="获取 Box OAuth 结果", response_description="OAuth 凭证")
-def poll_box_web_result(
-    request: BoxWebOAuthResultRequest,
-    user=Depends(manager)
-):
+def poll_box_web_result(request: BoxWebOAuthResultRequest, user=Depends(manager)):
     """
     ### POST `/box/oauth/web/result` 获取 Box OAuth 结果
 
