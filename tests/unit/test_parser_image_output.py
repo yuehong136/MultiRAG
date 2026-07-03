@@ -1,7 +1,6 @@
-from io import BytesIO
 import sys
-from types import ModuleType
-from types import SimpleNamespace
+from io import BytesIO
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from PIL import Image
