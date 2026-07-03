@@ -19,6 +19,7 @@
 """
 
 import copy
+import json
 import os
 from functools import lru_cache
 from typing import Any
@@ -28,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, PrivateAttr, ValidationError
 
 from common.config_utils import decrypt_database_password, read_config
 from common.constants import SERVICE_CONF
+from common.file_utils import get_project_base_directory
 
 ENV_PREFIX = "MULTIRAG_"
 
@@ -348,6 +350,18 @@ def get_app_config() -> AppConfig:
     return load_app_config()
 
 
+@lru_cache(maxsize=1)
+def get_factory_llm_infos() -> list[dict[str, Any]]:
+    """configs/llm_factories.json 的 factory_llm_infos 列表（读取失败时为空列表，
+    与旧 init_settings 的 try/except 语义一致）。"""
+    try:
+        with open(os.path.join(get_project_base_directory(), "configs", "llm_factories.json")) as f:
+            return json.load(f)["factory_llm_infos"]
+    except Exception:
+        return []
+
+
 def reset_app_config() -> None:
     """清空配置缓存（仅测试/热重载场景使用）。"""
     get_app_config.cache_clear()
+    get_factory_llm_infos.cache_clear()

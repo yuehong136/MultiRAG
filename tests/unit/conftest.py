@@ -10,6 +10,25 @@ import pytest
 from sqlalchemy.orm import Session
 
 
+@pytest.fixture(autouse=True)
+def _defrost_settings_facade():
+    """清扫 settings 惰性名的"冻结遮蔽"。
+
+    common.settings 是 PEP 562 惰性 facade。测试里 monkeypatch.setattr(settings, "X", ...)
+    在 undo 时会把补丁时刻取到的值写回模块 dict，永久遮蔽同名惰性属性，
+    污染后续测试（尤其 DOC_ENGINE 等随环境变量动态取值的名字）。
+    本 fixture 在每个测试结束后删除所有遮蔽惰性名的模块属性，恢复惰性行为。
+    （autouse 无参 fixture 先于测试请求的 monkeypatch 建立，因此清扫在
+    monkeypatch undo 之后执行。）
+    """
+    yield
+    from common import settings
+
+    for name in list(vars(settings)):
+        if name in settings._LAZY:
+            delattr(settings, name)
+
+
 @pytest.fixture
 def db():
     """未绑定引擎的 SQLAlchemy Session：满足 beartype 的 `db: Session` 校验，不会真正连库。"""
