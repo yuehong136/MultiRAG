@@ -306,9 +306,13 @@ pretty = true
 
 # 配置重构新增模块直接以严格姿态纳管（棘轮只进不退）
 [[tool.mypy.overrides]]
-module = ["common.app_config"]
+module = ["common.app_config", "common.resources", "common.bootstrap"]
 check_untyped_defs = true
 disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["common.settings"]
+check_untyped_defs = true
 
 [tool.pytest.ini_options]
 pythonpath = [

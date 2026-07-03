@@ -175,13 +175,8 @@ if __name__ == "__main__":
     logging.info("Database initialization completed")
 
     # ============ 获取启动参数 ============
-    # 注意：settings.init_settings() 已在 api/apps/__init__.py 模块级别执行
-    # 因此可以直接使用 settings.HOST_IP 和 settings.HOST_PORT
-    #
-    # 热重载说明：
-    # - uvicorn --reload 会在代码变更时重新导入模块
-    # - 模块重新导入 → settings.init_settings() 重新执行
-    # - 因此自动支持配置热重载，无需额外处理
+    # 配置项（HOST_IP/HOST_PORT 等）由 settings 惰性 facade 提供，无需初始化即可用；
+    # 资源已在模块顶部 bootstrap.ensure_initialized() 中显式创建。
 
     # ============ 运行时环境配置 ============
     RuntimeConfig.init_env()
@@ -196,25 +191,12 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, signal_handler)
 
     # ============ 启动 FastAPI 应用服务器 ============
-    # 注意：以下功能在 api/apps/__init__.py 中执行：
-    #
-    # 【模块级别（导入时）】：
-    # • settings.init_settings() - 全局配置初始化（只执行一次）
-    # • LoginManager 初始化 - 需要 SECRET_KEY
-    # • SQLAdmin 初始化 - 需要数据库配置
-    # • 路由注册
-    #
-    # 【lifespan 函数（应用启动时）】：
-    # • settings.print_rag_settings() - 打印 RAG 配置
-    # • show_configs() - 显示配置信息
-    # • update_progress thread - 进度更新后台线程
-    # • SMTP mail server - 邮件服务初始化
-    # • workflow_state_manager - 工作流状态管理
-    #
-    # 【热重载说明】：
-    # • uvicorn --reload 会在代码变更时重新导入模块
-    # • 模块重新导入 → settings.init_settings() 自动重新执行
-    # • 无需在 lifespan 中重复初始化
+    # api/apps/__init__.py 职责：
+    # 【模块级别（导入时）】幂等初始化守卫（SECRET_KEY 为 None 时 bootstrap）、
+    #   LoginManager/SQLAdmin 初始化、路由注册
+    # 【lifespan（应用启动时）】print_rag_settings、update_progress 后台线程、
+    #   SMTP、workflow_state_manager
+    # 热重载：uvicorn --reload 为新进程，bootstrap 重新执行，天然正确
 
     try:
         logging.info(f"MultiRAG server is ready after {time.time() - start_ts}s initialization.")

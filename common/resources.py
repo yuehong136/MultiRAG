@@ -17,9 +17,12 @@ import logging
 import os
 import secrets
 import threading
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from common.constants import Storage
+
+if TYPE_CHECKING:
+    from common.doc_store.doc_store_base import DocStoreConnection
 
 _lock = threading.RLock()
 _state: dict[str, Any] = {}
@@ -51,7 +54,7 @@ class StorageFactory:
     }
 
     @classmethod
-    def create(cls, storage: Storage):
+    def create(cls, storage: Storage) -> Any:
         module_name, _, attr = cls.storage_mapping[storage].partition(":")
         module = importlib.import_module(module_name)
         return getattr(module, attr)()
@@ -184,7 +187,7 @@ def _require(name: str) -> Any:
         raise ResourcesNotInitialized(f"资源 {name!r} 尚未初始化：入口点需先调用 common.bootstrap.ensure_initialized()（等价旧 settings.init_settings()；说明见 AGENTS.md）") from None
 
 
-def doc_store() -> Any:
+def doc_store() -> "DocStoreConnection":
     return _require("doc_store")
 
 
