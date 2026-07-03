@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -6,24 +5,25 @@
 @date：2024/7/9 9:00
 @desc: 数据源连接器相关服务
 """
+
 import logging
 import os
 from datetime import datetime
 
 from pydantic import BaseModel
-
-from sqlalchemy import select, func, text, cast, literal_column
+from sqlalchemy import cast, func, literal_column, select, text
 from sqlalchemy.dialects.postgresql import INTERVAL as Interval
-from sqlalchemy.sql import desc as sa_desc
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import desc as sa_desc
 
 from api.db import InputType
-from common.constants import TaskStatus
-from api.db.db_models import Connector, SyncLogs, Connector2Kb, Knowledgebase
+from api.db.db_models import Connector, Connector2Kb, Knowledgebase, SyncLogs
 from api.db.services.common_service import CommonService
-from api.db.services.document_service import DocumentService
 from api.db.services.doc_metadata_service import DocMetadataService
+from api.db.services.document_service import DocumentService
 from api.db.services.file_service import FileService
+from api.utils.common import hash128
+from common.constants import TaskStatus
 from common.misc_utils import get_uuid
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,7 @@ class ConnectorService(CommonService):
     """
     数据源连接器服务类，提供连接器的CRUD操作。
     """
+
     model = Connector
 
     @classmethod
@@ -57,11 +58,7 @@ class ConnectorService(CommonService):
 
             if task.status == TaskStatus.DONE:
                 if status == TaskStatus.SCHEDULE:
-                    SyncLogsService.schedule(
-                        db, connector_id, c2k.kb_id,
-                        poll_range_start=task.poll_range_end,
-                        total_docs_indexed=task.total_docs_indexed
-                    )
+                    SyncLogsService.schedule(db, connector_id, c2k.kb_id, poll_range_start=task.poll_range_end, total_docs_indexed=task.total_docs_indexed)
                     cls.update_by_id(db, connector_id, {"status": status})
                     return
 
@@ -83,15 +80,7 @@ class ConnectorService(CommonService):
         Returns:
             连接器列表
         """
-        stmt = (
-            select(
-                cls.model.id,
-                cls.model.name,
-                cls.model.source,
-                cls.model.status
-            )
-            .where(cls.model.tenant_id == tenant_id)
-        )
+        stmt = select(cls.model.id, cls.model.name, cls.model.source, cls.model.status).where(cls.model.tenant_id == tenant_id)
         rows = db.execute(stmt).mappings().all()
         return [dict(row) for row in rows]
 
@@ -118,21 +107,78 @@ class ConnectorService(CommonService):
         SyncLogsService.schedule(db, connector_id, kb_id, reindex=True)
         return err
 
+    @classmethod
+    def cleanup_stale_documents_for_task(
+        cls,
+        db: Session,
+        task_id: str,
+        connector_id: str,
+        kb_id: str,
+        tenant_id: str,
+        file_list,
+        delete_batch_size: int = 100,
+    ):
+        """
+        删除源端已不存在、但本地仍保留的连接器文档。
+        """
+        if not Connector2KbService.query(db, connector_id=connector_id, kb_id=kb_id):
+            return 0, []
+
+        conn = cls.get_by_id(db, connector_id)
+        if not conn:
+            return 0, []
+
+        source_type = f"{conn.source}/{conn.id}"
+        retain_doc_ids = {hash128(file.id) for file in file_list}
+        existing_docs = DocumentService.list_doc_headers_by_kb_and_source_type(
+            db,
+            kb_id,
+            source_type,
+        )
+        stale_doc_ids = [doc["id"] for doc in existing_docs if doc["id"] not in retain_doc_ids]
+        if not stale_doc_ids:
+            return 0, []
+
+        stale_doc_id_set = set(stale_doc_ids)
+        errors = []
+        for offset in range(0, len(stale_doc_ids), delete_batch_size):
+            err = FileService.delete_docs(
+                db,
+                stale_doc_ids[offset : offset + delete_batch_size],
+                tenant_id,
+            )
+            if err:
+                errors.append(err)
+
+        remaining_doc_ids = {
+            doc["id"]
+            for doc in DocumentService.list_doc_headers_by_kb_and_source_type(
+                db,
+                kb_id,
+                source_type,
+            )
+            if doc["id"] in stale_doc_id_set
+        }
+        removed_count = len(stale_doc_id_set) - len(remaining_doc_ids)
+        SyncLogsService.increase_removed_docs(
+            db,
+            task_id,
+            removed_count,
+            "\n".join(errors),
+            len(errors),
+        )
+        return removed_count, errors
+
 
 class SyncLogsService(CommonService):
     """
     同步日志服务类，提供同步任务的管理操作。
     """
+
     model = SyncLogs
 
     @classmethod
-    def list_sync_tasks(
-        cls,
-        db: Session,
-        connector_id: str | None = None,
-        page_number: int | None = None,
-        items_per_page: int = 15
-    ) -> tuple[list[dict], int]:
+    def list_sync_tasks(cls, db: Session, connector_id: str | None = None, page_number: int | None = None, items_per_page: int = 15) -> tuple[list[dict], int]:
         """
         获取同步任务列表
 
@@ -167,7 +213,7 @@ class SyncLogsService(CommonService):
             Knowledgebase.avatar.label("kb_avatar"),
             Connector2Kb.auto_parse,
             cls.model.from_beginning.label("reindex"),
-            cls.model.status
+            cls.model.status,
         ]
         if not connector_id:
             columns.append(Connector.config)
@@ -190,21 +236,13 @@ class SyncLogsService(CommonService):
             if "postgres" in database_type.lower():
                 # PostgreSQL 使用 INTERVAL 表达式
                 # 构造: NOW() - (refresh_freq || ' minutes')::INTERVAL
-                interval_expr = func.now() - cast(
-                    Connector.refresh_freq.concat(literal_column("' minutes'")),
-                    Interval
-                )
+                interval_expr = func.now() - cast(Connector.refresh_freq.concat(literal_column("' minutes'")), Interval)
                 time_condition = cls.model.update_date < interval_expr
             else:
                 # MySQL 使用 TIMESTAMPDIFF 函数
                 # TIMESTAMPDIFF(MINUTE, update_date, NOW()) > refresh_freq
                 time_condition = func.timestampdiff(text("MINUTE"), cls.model.update_date, func.now()) > Connector.refresh_freq
-            stmt = stmt.where(
-                Connector.input_type == InputType.POLL,
-                Connector.status == TaskStatus.SCHEDULE,
-                cls.model.status == TaskStatus.SCHEDULE,
-                time_condition
-            )
+            stmt = stmt.where(Connector.input_type == InputType.POLL, Connector.status == TaskStatus.SCHEDULE, cls.model.status == TaskStatus.SCHEDULE, time_condition)
 
         stmt = stmt.distinct().order_by(sa_desc(cls.model.update_time))
         total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar()
@@ -226,10 +264,7 @@ class SyncLogsService(CommonService):
             task_id: 任务ID
             connector_id: 连接器ID
         """
-        cls.update_by_id(db, task_id, {
-            "status": TaskStatus.RUNNING,
-            "time_started": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        })
+        cls.update_by_id(db, task_id, {"status": TaskStatus.RUNNING, "time_started": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
         ConnectorService.update_by_id(db, connector_id, {"status": TaskStatus.RUNNING})
 
     @classmethod
@@ -246,15 +281,7 @@ class SyncLogsService(CommonService):
         ConnectorService.update_by_id(db, connector_id, {"status": TaskStatus.DONE})
 
     @classmethod
-    def schedule(
-        cls,
-        db: Session,
-        connector_id: str,
-        kb_id: str,
-        poll_range_start: str | None = None,
-        reindex: bool = False,
-        total_docs_indexed: int = 0
-    ):
+    def schedule(cls, db: Session, connector_id: str, kb_id: str, poll_range_start: str | None = None, reindex: bool = False, total_docs_indexed: int = 0):
         """
         调度同步任务
 
@@ -284,15 +311,18 @@ class SyncLogsService(CommonService):
 
             reindex_flag = "1" if reindex else "0"
             ConnectorService.update_by_id(db, connector_id, {"status": TaskStatus.SCHEDULE})
-            return cls.insert(db, **{
-                "id": get_uuid(),
-                "kb_id": kb_id,
-                "status": TaskStatus.SCHEDULE,
-                "connector_id": connector_id,
-                "poll_range_start": poll_range_start,
-                "from_beginning": reindex_flag,
-                "total_docs_indexed": total_docs_indexed
-            })
+            return cls.insert(
+                db,
+                **{
+                    "id": get_uuid(),
+                    "kb_id": kb_id,
+                    "status": TaskStatus.SCHEDULE,
+                    "connector_id": connector_id,
+                    "poll_range_start": poll_range_start,
+                    "from_beginning": reindex_flag,
+                    "total_docs_indexed": total_docs_indexed,
+                },
+            )
         except Exception as e:
             logger.exception(f"调度同步任务失败: {e}")
             task = cls.get_latest_task(db, connector_id, kb_id)
@@ -316,15 +346,7 @@ class SyncLogsService(CommonService):
                 ConnectorService.update_by_id(db, connector_id, {"status": TaskStatus.SCHEDULE})
 
     @classmethod
-    def increase_docs(
-        cls,
-        db: Session,
-        task_id: str,
-        max_update: str,
-        doc_num: int,
-        err_msg: str = "",
-        error_count: int = 0
-    ):
+    def increase_docs(cls, db: Session, task_id: str, max_update: str, doc_num: int, err_msg: str = "", error_count: int = 0):
         """
         增加已索引文档数量
 
@@ -368,6 +390,31 @@ class SyncLogsService(CommonService):
         cls.update_by_id(db, task_id, update_data)
 
     @classmethod
+    def increase_removed_docs(
+        cls,
+        db: Session,
+        task_id: str,
+        removed_count: int,
+        err_msg: str = "",
+        error_count: int = 0,
+    ):
+        """
+        增加从索引中移除的文档数量。
+        """
+        task = cls.get_by_id(db, task_id)
+        if not task:
+            return None
+
+        update_data = {
+            "docs_removed_from_index": (task.docs_removed_from_index or 0) + removed_count,
+            "error_count": (task.error_count or 0) + error_count,
+        }
+        if err_msg:
+            update_data["error_msg"] = (task.error_msg or "") + err_msg
+
+        cls.update_by_id(db, task_id, update_data)
+
+    @classmethod
     def duplicate_and_parse(cls, db: Session, kb, docs: list, tenant_id, src: str, auto_parse=True):
         """
         复制并解析文档
@@ -395,20 +442,13 @@ class SyncLogsService(CommonService):
                 return self.blob
 
         # 将文档转换为 FileObj 对象，携带 id 以支持重复检测
-        files = [
-            FileObj(
-                id=d["id"],
-                filename=d["semantic_identifier"] + (f"{d['extension']}" if d["semantic_identifier"][::-1].find(d['extension'][::-1]) < 0 else ""),
-                blob=d["blob"]
-            )
-            for d in docs
-        ]
+        files = [FileObj(id=d["id"], filename=d["semantic_identifier"] + (f"{d['extension']}" if d["semantic_identifier"][::-1].find(d["extension"][::-1]) < 0 else ""), blob=d["blob"]) for d in docs]
 
         # Create a mapping from filename to metadata for later use
         metadata_map = {}
         for d in docs:
             if d.get("metadata"):
-                filename = d["semantic_identifier"] + (f"{d['extension']}" if d["semantic_identifier"][::-1].find(d['extension'][::-1]) < 0 else "")
+                filename = d["semantic_identifier"] + (f"{d['extension']}" if d["semantic_identifier"][::-1].find(d["extension"][::-1]) < 0 else "")
                 metadata_map[filename] = d["metadata"]
 
         doc_ids = []
@@ -440,15 +480,7 @@ class SyncLogsService(CommonService):
         Returns:
             最新的同步任务，如果没有则返回 None
         """
-        stmt = (
-            select(cls.model)
-            .where(
-                cls.model.connector_id == connector_id,
-                cls.model.kb_id == kb_id
-            )
-            .order_by(sa_desc(cls.model.update_time))
-            .limit(1)
-        )
+        stmt = select(cls.model).where(cls.model.connector_id == connector_id, cls.model.kb_id == kb_id).order_by(sa_desc(cls.model.update_time)).limit(1)
         return db.execute(stmt).scalar_one_or_none()
 
 
@@ -456,6 +488,7 @@ class Connector2KbService(CommonService):
     """
     连接器与知识库关联服务类
     """
+
     model = Connector2Kb
 
     @classmethod
@@ -482,14 +515,9 @@ class Connector2KbService(CommonService):
             conn_id = conn["id"]
             connector_ids.append(conn_id)
             if conn_id in old_conn_ids:
-                cls.filter_update(db, [cls.model.connector_id==conn_id, cls.model.kb_id==kb_id], {"auto_parse": conn.get("auto_parse", "1")})
+                cls.filter_update(db, [cls.model.connector_id == conn_id, cls.model.kb_id == kb_id], {"auto_parse": conn.get("auto_parse", "1")})
                 continue
-            cls.insert(db, **{
-                "id": get_uuid(),
-                "connector_id": conn_id,
-                "kb_id": kb_id,
-                "auto_parse": conn.get("auto_parse", "1")
-            })
+            cls.insert(db, **{"id": get_uuid(), "connector_id": conn_id, "kb_id": kb_id, "auto_parse": conn.get("auto_parse", "1")})
             SyncLogsService.schedule(db, conn_id, kb_id, reindex=True)
 
         # 删除不再需要的关联
@@ -508,13 +536,7 @@ class Connector2KbService(CommonService):
 
             # 取消调度中或运行中的同步任务（不删除已同步的文档）
             SyncLogsService.filter_update(
-                db,
-                [
-                    SyncLogs.connector_id == conn_id,
-                    SyncLogs.kb_id == kb_id,
-                    SyncLogs.status.in_([TaskStatus.SCHEDULE, TaskStatus.RUNNING])
-                ],
-                {"status": TaskStatus.CANCEL}
+                db, [SyncLogs.connector_id == conn_id, SyncLogs.kb_id == kb_id, SyncLogs.status.in_([TaskStatus.SCHEDULE, TaskStatus.RUNNING])], {"status": TaskStatus.CANCEL}
             )
 
         return "\n".join(errs)
@@ -523,22 +545,16 @@ class Connector2KbService(CommonService):
     def list_connectors(cls, db: Session, kb_id: str) -> list[dict]:
         """
         列出知识库关联的连接器
-        
+
         Args:
             db: 数据库会话
             kb_id: 知识库ID
-            
+
         Returns:
             连接器列表
         """
         stmt = (
-            select(
-                Connector.id,
-                Connector.source,
-                Connector.name,
-                cls.model.auto_parse,
-                Connector.status
-            )
+            select(Connector.id, Connector.source, Connector.name, cls.model.auto_parse, Connector.status)
             .select_from(cls.model)
             .join(Connector, cls.model.connector_id == Connector.id)
             .where(cls.model.kb_id == kb_id)
@@ -568,11 +584,7 @@ class Connector2KbService(CommonService):
         for kb_id in kb_ids:
             if kb_id in old_kb_ids:
                 continue
-            cls.insert(db, **{
-                "id": get_uuid(),
-                "connector_id": conn_id,
-                "kb_id": kb_id
-            })
+            cls.insert(db, **{"id": get_uuid(), "connector_id": conn_id, "kb_id": kb_id})
             SyncLogsService.schedule(db, conn_id, kb_id, reindex=True)
 
         # 删除不再需要的关联
@@ -589,15 +601,7 @@ class Connector2KbService(CommonService):
             cls.filter_delete(db, [cls.model.kb_id == kb_id, cls.model.connector_id == conn_id])
 
             # 取消调度中的同步任务
-            SyncLogsService.filter_update(
-                db,
-                [
-                    SyncLogs.connector_id == conn_id,
-                    SyncLogs.kb_id == kb_id,
-                    SyncLogs.status == TaskStatus.SCHEDULE
-                ],
-                {"status": TaskStatus.CANCEL}
-            )
+            SyncLogsService.filter_update(db, [SyncLogs.connector_id == conn_id, SyncLogs.kb_id == kb_id, SyncLogs.status == TaskStatus.SCHEDULE], {"status": TaskStatus.CANCEL})
 
             # 删除相关文档
             docs = DocumentService.query(db, source_type=f"{conn.source}/{conn.id}")
