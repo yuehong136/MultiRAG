@@ -158,7 +158,7 @@ class TestMonkeypatchCompatibility:
             if "HOST_IP" in vars(settings):
                 delattr(settings, "HOST_IP")
 
-    def test_uninitialized_core_resource_fails_fast(self):
+    def test_uninitialized_core_resource_fails_fast(self, resources_state_guard):
         from common import resources
 
         resources.reset_resources()
@@ -167,7 +167,7 @@ class TestMonkeypatchCompatibility:
         with pytest.raises(resources.ResourcesNotInitialized, match="ensure_initialized"):
             _ = settings.STORAGE_IMPL
 
-    def test_uninitialized_secret_key_is_none_for_apps_guard(self):
+    def test_uninitialized_secret_key_is_none_for_apps_guard(self, resources_state_guard):
         # api/apps 的模块级守卫依赖"未初始化时 SECRET_KEY 为 None"语义
         from common import resources
 

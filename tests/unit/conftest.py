@@ -30,6 +30,22 @@ def _defrost_settings_facade():
 
 
 @pytest.fixture
+def resources_state_guard():
+    """保存/恢复 common.resources 注册表。
+
+    测试若调用 resources.reset_resources()（或 init），必须用本 fixture——
+    套件中 api.apps 的导入会初始化会话级真实资源，清空后不恢复会饿死
+    后续依赖已初始化资源的测试。
+    """
+    from common import resources
+
+    saved = dict(resources._state)
+    yield
+    resources._state.clear()
+    resources._state.update(saved)
+
+
+@pytest.fixture
 def db():
     """未绑定引擎的 SQLAlchemy Session：满足 beartype 的 `db: Session` 校验，不会真正连库。"""
     return Session()

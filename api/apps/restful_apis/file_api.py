@@ -34,6 +34,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
 
+from api.apps.deps import get_storage
 from api.apps.services import file_api_service
 from api.apps.services.file_convert_service import convert_files_with_new_session
 from api.db import FileType
@@ -43,7 +44,6 @@ from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils.api_utils import current_tenant_id, get_error_argument_result, get_error_data_result, get_json_result, get_result, server_error_response
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers
-from common import settings
 from common.constants import RetCode
 from common.misc_utils import thread_pool_exec
 
@@ -243,6 +243,7 @@ def download(
     file_id: str,
     db: Session = Depends(get_db),
     tenant_id: str = Depends(current_tenant_id),
+    storage: Any = Depends(get_storage),
 ):
     try:
         success, result = file_api_service.get_file_content(db, tenant_id, file_id)
@@ -250,10 +251,10 @@ def download(
             return get_error_data_result(retmsg=result)
 
         file = result
-        blob = settings.STORAGE_IMPL.get(file.parent_id, file.location)
+        blob = storage.get(file.parent_id, file.location)
         if not blob:
             b, n = File2DocumentService.get_storage_address(db, file_id=file_id)
-            blob = settings.STORAGE_IMPL.get(b, n)
+            blob = storage.get(b, n)
         if not blob:
             return get_error_data_result(retmsg="File not found in storage")
 
@@ -349,10 +350,11 @@ async def download_attachment(
     attachment_id: str,
     ext: str = Query("markdown"),
     tenant_id: str = Depends(current_tenant_id),
+    storage: Any = Depends(get_storage),
 ):
     """下载 message 组件输出的 attachment 文件。"""
     try:
-        data = await thread_pool_exec(settings.STORAGE_IMPL.get, tenant_id, attachment_id)
+        data = await thread_pool_exec(storage.get, tenant_id, attachment_id)
         content_type = CONTENT_TYPE_MAP.get(ext, f"application/{ext}")
         response = StreamingResponse(BytesIO(data), media_type=content_type)
         apply_safe_file_response_headers(response, content_type, ext)

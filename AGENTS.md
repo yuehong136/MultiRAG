@@ -57,6 +57,24 @@ MultiRAG：基于深度文档理解的企业级 RAG 后端（Python >=3.12,<3.15
 
 只进不退：不允许把已纳管的包移出范围。
 
+## 配置与资源（重构后的规范）
+
+架构（详见 internal/config_bootstrap_refactor_plan.md）：
+`common/app_config.py`（类型化配置，env `MULTIRAG_<SECTION>__<FIELD>` >
+local.service_conf.yaml > service_conf.yaml）→ `common/resources.py`（有状态资源，
+懒加载选中后端）→ `common/bootstrap.ensure_initialized()`（入口点统一初始化）→
+`common/settings.py`（PEP 562 兼容 facade，上游移植 diff 照抄的官方访问面）。
+
+**新代码规则**：
+1. 读配置用 `get_app_config()` 的类型化字段，不要新增 `settings.大写名`；
+2. 路由层资源用 `api/apps/deps.py` 的 `Depends(get_storage)` 等注入
+   （测试用 `app.dependency_overrides` 替换，见 tests/unit/test_api_deps.py 示范），
+   不要直接引用 `settings.docStoreConn`/`settings.STORAGE_IMPL`；
+3. **例外：紧跟 ragflow 上游的文件保持 `settings.X` 风格**，保证上游 diff
+   可照抄（映射表：internal/ragflow_settings_porting_map.md）；
+4. 新入口点（脚本/服务）先调 `common.bootstrap.ensure_initialized()`；
+   核心资源未初始化即访问会 fail-fast 抛 `ResourcesNotInitialized`。
+
 ## 服务与运行
 
 ```bash
