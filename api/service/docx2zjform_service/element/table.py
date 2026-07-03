@@ -1,4 +1,5 @@
-from typing import List, Optional, Dict, Any
+from typing import Any
+
 from .base import Element, ElementType
 
 
@@ -7,11 +8,11 @@ class TableElement(Element):
 
     def __init__(
             self,
-            content: List[List[str]],
+            content: list[list[str]],
             style: str = 'TableNormal',
             row_count: int = 0,
             column_count: int = 0,
-            html: Optional[str] = None
+            html: str | None = None
     ):
         super().__init__(ElementType.TABLE)
         self.content = content
@@ -20,7 +21,7 @@ class TableElement(Element):
         self.column_count = column_count or len(content[0]) if content else 0
         self.html = html
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             'type': self.type.value,
             'content': self.content,
@@ -31,7 +32,7 @@ class TableElement(Element):
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'TableElement':
+    def from_dict(cls, data: dict[str, Any]) -> 'TableElement':
         return cls(
             content=data['content'],
             style=data.get('style', 'TableNormal'),

@@ -23,8 +23,8 @@ from abc import abstractmethod
 from typing import Any
 
 from pymysql.converters import escape_string
-from pyobvector import ObVecClient, FtsIndexParam, FtsParser, VECTOR
-from sqlalchemy import Column, JSON, Table
+from pyobvector import VECTOR, FtsIndexParam, FtsParser, ObVecClient
+from sqlalchemy import JSON, Column, Table
 from sqlalchemy.dialects.mysql import VARCHAR
 
 from common.doc_store.doc_store_base import DocStoreConnection, MatchExpr, OrderByExpr
@@ -215,7 +215,7 @@ class OBConnectionBase(DocStoreConnection):
                     return False
 
         except Exception as e:
-            raise Exception(f"OBConnection._check_table_exists_cached error: {str(e)}")
+            raise Exception(f"OBConnection._check_table_exists_cached error: {e!s}")
 
         with self._table_exists_cache_lock:
             if table_name not in self._table_exists_cache:
@@ -265,7 +265,7 @@ class OBConnectionBase(DocStoreConnection):
                 )
 
         except Exception as e:
-            raise Exception(f"OBConnection.create_idx error: {str(e)}")
+            raise Exception(f"OBConnection.create_idx error: {e!s}")
         finally:
             self.client.refresh_metadata([table_name])
 
@@ -298,7 +298,7 @@ class OBConnectionBase(DocStoreConnection):
             return True
 
         except Exception as e:
-            self.logger.error(f"OBConnection.create_doc_meta_idx error: {str(e)}")
+            self.logger.error(f"OBConnection.create_doc_meta_idx error: {e!s}")
             return False
         finally:
             self.client.refresh_metadata([table_name])
@@ -315,7 +315,7 @@ class OBConnectionBase(DocStoreConnection):
                 self.client.drop_table_if_exist(table_name)
                 self.logger.info(f"Dropped table '{table_name}'.")
         except Exception as e:
-            raise Exception(f"OBConnection.delete_idx error: {str(e)}")
+            raise Exception(f"OBConnection.delete_idx error: {e!s}")
 
     def index_exist(self, index_name: str, dataset_id: str = None) -> bool:
         """Check if index/table exists."""
@@ -430,7 +430,7 @@ class OBConnectionBase(DocStoreConnection):
             )
             self.logger.info(f"Added column '{column.name}' to table '{table_name}'.")
         except Exception as e:
-            self.logger.warning(f"Failed to add column '{column.name}' to table '{table_name}': {str(e)}")
+            self.logger.warning(f"Failed to add column '{column.name}' to table '{table_name}': {e!s}")
 
     def _ensure_vector_column_exists(self, table_name: str, vector_size: int, refresh_metadata: bool = True):
         """
@@ -679,7 +679,7 @@ class OBConnectionBase(DocStoreConnection):
             )
             return len(ids)
         except Exception as e:
-            self.logger.error(f"OBConnection.delete error: {str(e)}")
+            self.logger.error(f"OBConnection.delete error: {e!s}")
         return 0
 
     """

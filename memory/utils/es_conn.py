@@ -18,20 +18,21 @@ ES connection for message storage.
 This module provides a specialized ES connection for storing and retrieving messages.
 """
 
-import re
+import copy
 import json
+import re
 import time
 
-import copy
-from elasticsearch import NotFoundError
-from elasticsearch_dsl import UpdateByQuery, Q, Search
 from elastic_transport import ConnectionTimeout
+from elasticsearch import NotFoundError
+from elasticsearch_dsl import Q, Search, UpdateByQuery
+
+from common.constants import PAGERANK_FLD, TAG_FLD
 from common.decorator import singleton
-from common.doc_store.doc_store_base import MatchExpr, OrderByExpr, MatchTextExpr, MatchDenseExpr, FusionExpr
+from common.doc_store.doc_store_base import FusionExpr, MatchDenseExpr, MatchExpr, MatchTextExpr, OrderByExpr
 from common.doc_store.es_conn_base import ESConnectionBase
 from common.float_utils import get_float
-from common.constants import PAGERANK_FLD, TAG_FLD
-from core.nlp.rag_tokenizer import tokenize, fine_grained_tokenize
+from core.nlp.rag_tokenizer import fine_grained_tokenize, tokenize
 
 ATTEMPT_TIME = 2
 
@@ -159,7 +160,7 @@ class ESConnection(ESConnectionBase):
                 bool_query.filter.append(Q("term", **{field_name: v}))
             else:
                 raise Exception(
-                    f"Condition `{str(k)}={str(v)}` value type is {str(type(v))}, expected to be int, str or list.")
+                    f"Condition `{k!s}={v!s}` value type is {type(v)!s}, expected to be int, str or list.")
         s = Search()
         vector_similarity_weight = 0.5
         for m in match_expressions:
@@ -205,7 +206,7 @@ class ESConnection(ESConnectionBase):
             s = s.highlight(field)
 
         if order_by:
-            orders = list()
+            orders = []
             for field, order in order_by.fields:
                 order = "asc" if order == 0 else "desc"
                 if field.endswith("_int") or field.endswith("_flt"):
@@ -222,7 +223,7 @@ class ESConnection(ESConnectionBase):
         if limit > 0:
             s = s[offset:offset + limit]
         q = s.to_dict()
-        self.logger.debug(f"ESConnection.search {str(index_names)} query: " + json.dumps(q))
+        self.logger.debug(f"ESConnection.search {index_names!s} query: " + json.dumps(q))
 
         for i in range(ATTEMPT_TIME):
             try:
@@ -235,17 +236,17 @@ class ESConnection(ESConnectionBase):
                                      _source=True)
                 if str(res.get("timed_out", "")).lower() == "true":
                     raise Exception("Es Timeout.")
-                self.logger.debug(f"ESConnection.search {str(index_names)} res: " + str(res))
+                self.logger.debug(f"ESConnection.search {index_names!s} res: " + str(res))
                 return res, self.get_total(res)
             except ConnectionTimeout:
                 self.logger.exception("ES request timeout")
                 self._connect()
                 continue
             except NotFoundError as e:
-                self.logger.debug(f"ESConnection.search {str(index_names)} query: " + str(q) + str(e))
+                self.logger.debug(f"ESConnection.search {index_names!s} query: " + str(q) + str(e))
                 return None, 0
             except Exception as e:
-                self.logger.exception(f"ESConnection.search {str(index_names)} query: " + str(q) + str(e))
+                self.logger.exception(f"ESConnection.search {index_names!s} query: " + str(q) + str(e))
                 raise e
 
         self.logger.error(f"ESConnection.search timeout for {ATTEMPT_TIME} times!")
@@ -261,7 +262,7 @@ class ESConnection(ESConnectionBase):
         # build search
         s = Search()
         s = s.query(bool_query)
-        orders = list()
+        orders = []
         for field, order in order_by.fields:
             order = "asc" if order == 0 else "desc"
             if field.endswith("_int") or field.endswith("_flt"):
@@ -278,17 +279,17 @@ class ESConnection(ESConnectionBase):
                 res = self.es.search(index=index_name, body=q, timeout="600s", track_total_hits=True, _source=True)
                 if str(res.get("timed_out", "")).lower() == "true":
                     raise Exception("Es Timeout.")
-                self.logger.debug(f"ESConnection.search {str(index_name)} res: " + str(res))
+                self.logger.debug(f"ESConnection.search {index_name!s} res: " + str(res))
                 return res
             except ConnectionTimeout:
                 self.logger.exception("ES request timeout")
                 self._connect()
                 continue
             except NotFoundError as e:
-                self.logger.debug(f"ESConnection.search {str(index_name)} query: " + str(q) + str(e))
+                self.logger.debug(f"ESConnection.search {index_name!s} query: " + str(q) + str(e))
                 return None
             except Exception as e:
-                self.logger.exception(f"ESConnection.search {str(index_name)} query: " + str(q) + str(e))
+                self.logger.exception(f"ESConnection.search {index_name!s} query: " + str(q) + str(e))
                 raise e
 
         self.logger.error(f"ESConnection.search timeout for {ATTEMPT_TIME} times!")
@@ -306,7 +307,7 @@ class ESConnection(ESConnectionBase):
         # build search
         s = Search()
         s = s.query(bool_query)
-        orders = list()
+        orders = []
         for field, order in order_by.fields:
             order = "asc" if order == 0 else "desc"
             if field.endswith("_int") or field.endswith("_flt"):
@@ -323,17 +324,17 @@ class ESConnection(ESConnectionBase):
                 res = self.es.search(index=index_name, body=q, timeout="600s", track_total_hits=True, _source=True)
                 if str(res.get("timed_out", "")).lower() == "true":
                     raise Exception("Es Timeout.")
-                self.logger.debug(f"ESConnection.search {str(index_name)} res: " + str(res))
+                self.logger.debug(f"ESConnection.search {index_name!s} res: " + str(res))
                 return res
             except ConnectionTimeout:
                 self.logger.exception("ES request timeout")
                 self._connect()
                 continue
             except NotFoundError as e:
-                self.logger.debug(f"ESConnection.search {str(index_name)} query: " + str(q) + str(e))
+                self.logger.debug(f"ESConnection.search {index_name!s} query: " + str(q) + str(e))
                 return None
             except Exception as e:
-                self.logger.exception(f"ESConnection.search {str(index_name)} query: " + str(q) + str(e))
+                self.logger.exception(f"ESConnection.search {index_name!s} query: " + str(q) + str(e))
                 raise e
 
         self.logger.error(f"ESConnection.search timeout for {ATTEMPT_TIME} times!")
@@ -437,7 +438,7 @@ class ESConnection(ESConnectionBase):
                 bool_query.filter.append(Q("term", **{k: v}))
             else:
                 raise Exception(
-                    f"Condition `{str(k)}={str(v)}` value type is {str(type(v))}, expected to be int, str or list.")
+                    f"Condition `{k!s}={v!s}` value type is {type(v)!s}, expected to be int, str or list.")
         scripts = []
         params = {}
         for k, v in update_dict.items():
@@ -468,7 +469,7 @@ class ESConnection(ESConnectionBase):
                 params[f"pp_{k}"] = json.dumps(v, ensure_ascii=False)
             else:
                 raise Exception(
-                    f"newValue `{str(k)}={str(v)}` value type is {str(type(v))}, expected to be int, str.")
+                    f"newValue `{k!s}={v!s}` value type is {type(v)!s}, expected to be int, str.")
         ubq = UpdateByQuery(
             index=index_name).using(
             self.es).query(bool_query)

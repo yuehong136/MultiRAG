@@ -1,12 +1,13 @@
-import io
 import hashlib
+import io
 import zipfile
-import requests
-from requests.exceptions import Timeout, RequestException
 from io import BytesIO
-import pypdf as PyPDF2
-from docx import Document
+
 import olefile
+import pypdf as PyPDF2
+import requests
+from docx import Document
+from requests.exceptions import RequestException, Timeout
 
 
 def _is_zip(h: bytes) -> bool:

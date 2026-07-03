@@ -1,9 +1,7 @@
-import re
-from typing import List
 
 # 常见的SQL聚合函数列表 (可以根据你使用的数据库方言进行增删)
 # 列表已转为大写，以匹配后续处理逻辑
-AGGREGATE_FUNCTIONS: List[str] = [
+AGGREGATE_FUNCTIONS: list[str] = [
     'COUNT', 'SUM', 'AVG', 'MIN', 'MAX',
     'ARRAY_AGG', 'STRING_AGG', 'GROUP_CONCAT',
     'BIT_AND', 'BIT_OR', 'BIT_XOR',
@@ -12,7 +10,7 @@ AGGREGATE_FUNCTIONS: List[str] = [
 ]
 
 
-def find_aggregate_columns(selected_columns: List[str]) -> List[str]:
+def find_aggregate_columns(selected_columns: list[str]) -> list[str]:
     """
     从给定的select列名列表中，识别并返回所有聚合列。
 

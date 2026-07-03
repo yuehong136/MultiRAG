@@ -9,15 +9,15 @@ import os
 import re
 import threading
 import time
-from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, as_completed, wait
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache, wraps
 from io import BytesIO
 from itertools import islice
 from numbers import Integral
 from pathlib import Path
-from typing import IO, Any, Generic, Iterable, Optional, Protocol, TypeVar, cast
+from typing import IO, Any, Generic, Protocol, TypeVar, cast
 from urllib.parse import parse_qs, quote, urljoin, urlparse
 
 import boto3
@@ -82,10 +82,10 @@ def datetime_from_string(datetime_string: str) -> datetime:
 
     if datetime_object.tzinfo is None:
         # If no timezone info, assume it is UTC
-        datetime_object = datetime_object.replace(tzinfo=timezone.utc)
+        datetime_object = datetime_object.replace(tzinfo=UTC)
     else:
         # If not in UTC, translate it
-        datetime_object = datetime_object.astimezone(timezone.utc)
+        datetime_object = datetime_object.astimezone(UTC)
 
     return datetime_object
 
@@ -552,7 +552,7 @@ def to_bytesio(stream: IO[bytes]) -> BytesIO:
 # Slack Utilities
 
 
-@lru_cache()
+@lru_cache
 def get_base_url(token: str) -> str:
     """Get and cache Slack workspace base URL"""
     client = WebClient(token=token)
@@ -783,10 +783,9 @@ def time_str_to_utc(time_str: str):
 def gmail_time_str_to_utc(time_str: str):
     """Convert Gmail RFC 2822 time string to UTC."""
     from email.utils import parsedate_to_datetime
-    from datetime import timezone
 
     dt = parsedate_to_datetime(time_str)
-    return dt.astimezone(timezone.utc)
+    return dt.astimezone(UTC)
 
 
 # Notion Utilities
@@ -810,7 +809,7 @@ def batch_generator(
 
 
 @retry(tries=3, delay=1, backoff=2)
-def fetch_notion_data(url: str, headers: dict[str, str], method: str = "GET", json_data: Optional[dict] = None) -> dict[str, Any]:
+def fetch_notion_data(url: str, headers: dict[str, str], method: str = "GET", json_data: dict | None = None) -> dict[str, Any]:
     """Fetch data from Notion API with retry logic."""
     try:
         if method == "GET":
@@ -1005,7 +1004,7 @@ def confluence_refresh_tokens(client_id: str, client_secret: str, cloud_id: str,
     except Exception:
         raise RuntimeError("Confluence Cloud token refresh failed.")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     expires_at = now + timedelta(seconds=token_response.expires_in)
 
     new_credentials: dict[str, Any] = {}

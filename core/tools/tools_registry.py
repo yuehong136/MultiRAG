@@ -4,15 +4,14 @@ This code provides extended functionality to the model, enabling it to call and 
 through defined interfaces.
 """
 
-from collections.abc import Callable
 import copy
 import inspect
 import json
-from pprint import pformat
-import traceback
-from types import GenericAlias
-from typing import get_origin, Annotated
 import subprocess
+import traceback
+from collections.abc import Callable
+from types import GenericAlias
+from typing import Annotated, get_origin
 
 from .interface import ToolObservation
 
@@ -174,8 +173,7 @@ def get_shell(
             query,
             shell=True,
             check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
         )
         return result.stdout

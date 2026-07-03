@@ -2,7 +2,6 @@ import json
 from datetime import datetime
 
 import streamlit as st
-from typing import List
 
 
 def export2md(
@@ -16,7 +15,7 @@ def export2md(
     sys_bg_color: str = "#0EF8FC",
     tool_bg_color: str = "#0AC1AB",
     callback: callable = None,
-) -> List[str]:
+) -> list[str]:
     '''
     默认导出消息为文本表格。
     使用 callback(msg) 自定义导出的内容。

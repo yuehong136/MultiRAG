@@ -23,7 +23,7 @@ class CoHereEmbed(Base):
                 embedding_types=["float"],
             )
             try:
-                ress.extend([d for d in res.embeddings.float])
+                ress.extend(list(res.embeddings.float))
                 token_count += res.meta.billed_units.input_tokens
             except Exception as _e:
                 log_exception(_e, res)

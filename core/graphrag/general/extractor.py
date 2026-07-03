@@ -18,19 +18,18 @@ import logging
 import os
 import re
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from copy import deepcopy
-from typing import Callable
 
 import networkx as nx
 
 from api.db.services.task_service import has_canceled
-from common.exceptions import TaskCanceledException
 from common.connection_utils import timeout
-from common.token_utils import truncate
+from common.exceptions import TaskCanceledException
 from common.misc_utils import thread_pool_exec
-from core.graphrag.llm_protocol import GraphRAGCompletionLLM, unwrap_graphrag_chat_response
-from core.prompts.generator import message_fit_in
+from common.token_utils import truncate
 from core.graphrag.general.graph_prompt import SUMMARIZE_DESCRIPTIONS_PROMPT
+from core.graphrag.llm_protocol import GraphRAGCompletionLLM, unwrap_graphrag_chat_response
 from core.graphrag.utils import (
     GraphChange,
     chat_limiter,
@@ -42,6 +41,7 @@ from core.graphrag.utils import (
     set_llm_cache,
     split_string_by_multi_markers,
 )
+from core.prompts.generator import message_fit_in
 
 GRAPH_FIELD_SEP = "<SEP>"
 DEFAULT_ENTITY_TYPES = ["organization", "person", "geo", "event", "category"]
@@ -137,13 +137,13 @@ class Extractor:
                         await self._process_single_content(chunk_key_dp, idx, total, out_results, task_id)
                     except Exception as e:
                         error_count += 1
-                        error_msg = f"Error processing chunk {idx + 1}/{total}: {str(e)}"
+                        error_msg = f"Error processing chunk {idx + 1}/{total}: {e!s}"
                         logging.warning(error_msg)
                         if self.callback:
                             self.callback(msg=error_msg)
 
                         if error_count > max_errors:
-                            raise Exception(f"Maximum error count ({max_errors}) reached. Last errors: {str(e)}")
+                            raise Exception(f"Maximum error count ({max_errors}) reached. Last errors: {e!s}")
 
             tasks = [
                 asyncio.create_task(worker((doc_id, ck), i, len(chunks), task_id))
@@ -153,7 +153,7 @@ class Extractor:
             try:
                 await asyncio.gather(*tasks, return_exceptions=False)
             except Exception as e:
-                logging.error(f"Error in worker: {str(e)}")
+                logging.error(f"Error in worker: {e!s}")
                 for t in tasks:
                     t.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
@@ -264,14 +264,14 @@ class Extractor:
             key=lambda x: x[1],
             reverse=True,
         )[0][0]
-        description = GRAPH_FIELD_SEP.join(sorted(set([dp["description"] for dp in entities])))
+        description = GRAPH_FIELD_SEP.join(sorted({dp["description"] for dp in entities}))
         already_source_ids = flat_uniq_list(entities, "source_id")
         description = await self._handle_entity_relation_summary(entity_name, description, task_id=task_id)
-        node_data = dict(
-            entity_type=entity_type,
-            description=description,
-            source_id=already_source_ids,
-        )
+        node_data = {
+            "entity_type": entity_type,
+            "description": description,
+            "source_id": already_source_ids,
+        }
         node_data["entity_name"] = entity_name
         all_relationships_data.append(node_data)
 
@@ -279,11 +279,11 @@ class Extractor:
         if not edges_data:
             return
         weight = sum([edge["weight"] for edge in edges_data])
-        description = GRAPH_FIELD_SEP.join(sorted(set([edge["description"] for edge in edges_data])))
+        description = GRAPH_FIELD_SEP.join(sorted({edge["description"] for edge in edges_data}))
         description = await self._handle_entity_relation_summary(f"{src_id} -> {tgt_id}", description, task_id=task_id)
         keywords = flat_uniq_list(edges_data, "keywords")
         source_id = flat_uniq_list(edges_data, "source_id")
-        edge_data = dict(src_id=src_id, tgt_id=tgt_id, description=description, keywords=keywords, weight=weight, source_id=source_id)
+        edge_data = {"src_id": src_id, "tgt_id": tgt_id, "description": description, "keywords": keywords, "weight": weight, "source_id": source_id}
         all_relationships_data.append(edge_data)
 
     async def _merge_graph_nodes(self, graph: nx.Graph, nodes: list[str], change: GraphChange, task_id=""):
@@ -335,11 +335,11 @@ class Extractor:
         if len(description_list) <= 12:
             return use_description
         prompt_template = SUMMARIZE_DESCRIPTIONS_PROMPT
-        context_base = dict(
-            entity_name=entity_or_relation_name,
-            description_list=description_list,
-            language=self._language,
-        )
+        context_base = {
+            "entity_name": entity_or_relation_name,
+            "description_list": description_list,
+            "language": self._language,
+        }
         use_prompt = prompt_template.format(**context_base)
         logging.info(f"Trigger summary: {entity_or_relation_name}")
 

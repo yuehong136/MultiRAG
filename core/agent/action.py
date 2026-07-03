@@ -1,5 +1,8 @@
 import openai
+
 from core.components.llm import zhipuai
+
+
 class Action:
     def __init__(self, api_key):
         openai.api_key = api_key

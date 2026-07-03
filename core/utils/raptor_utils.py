@@ -20,7 +20,6 @@ Utility functions for Raptor processing decisions.
 
 import logging
 
-
 # File extensions for structured data types
 EXCEL_EXTENSIONS = {".xls", ".xlsx", ".xlsm", ".xlsb"}
 CSV_EXTENSIONS = {".csv", ".tsv"}

@@ -18,15 +18,16 @@ Infinity connection for message storage.
 This module provides a specialized Infinity connection for storing and retrieving messages.
 """
 
-import re
-import json
 import copy
+import json
+import re
+
+import pandas as pd
 from infinity.common import InfinityException, SortType
 from infinity.errors import ErrorCode
 
 from common.decorator import singleton
-import pandas as pd
-from common.doc_store.doc_store_base import MatchExpr, MatchTextExpr, MatchDenseExpr, FusionExpr, OrderByExpr
+from common.doc_store.doc_store_base import FusionExpr, MatchDenseExpr, MatchExpr, MatchTextExpr, OrderByExpr
 from common.doc_store.infinity_conn_base import InfinityConnectionBase
 from common.time_utils import date_string_to_timestamp
 
@@ -128,8 +129,8 @@ class InfinityConnection(InfinityConnectionBase):
         inf_conn = self.connPool.get_conn()
         try:
             db_instance = inf_conn.get_database(self.dbName)
-            df_list = list()
-            table_list = list()
+            df_list = []
+            table_list = []
             if hide_forgotten:
                 condition.update({"must_not": {"exists": "forget_at_flt"}})
             output = select_fields.copy()
@@ -215,7 +216,7 @@ class InfinityConnection(InfinityConnectionBase):
                         matchExpr.fusion_params["normalize"] = "atan"
                     self.logger.debug(f"INFINITY search FusionExpr: {json.dumps(matchExpr.__dict__)}")
 
-            order_by_expr_list = list()
+            order_by_expr_list = []
             if order_by.fields:
                 for order_field in order_by.fields:
                     order_field_name = self.convert_condition_and_order_field(order_field[0])
@@ -269,7 +270,7 @@ class InfinityConnection(InfinityConnectionBase):
                     mem_res, extra_result = builder.option({"total_hits_count": True}).to_df()
                     if extra_result:
                         total_hits_count += int(extra_result["total_hits_count"])
-                    self.logger.debug(f"INFINITY search table: {str(table_name)}, result: {str(mem_res)}")
+                    self.logger.debug(f"INFINITY search table: {table_name!s}, result: {mem_res!s}")
                     df_list.append(mem_res)
         finally:
             self.connPool.release_conn(inf_conn)
@@ -278,7 +279,7 @@ class InfinityConnection(InfinityConnectionBase):
             res["_score"] = res[score_column]
             res = res.sort_values(by="_score", ascending=False).reset_index(drop=True)
             res = res.head(limit)
-        self.logger.debug(f"INFINITY search final result: {str(res)}")
+        self.logger.debug(f"INFINITY search final result: {res!s}")
         return res, total_hits_count
 
     def get_forgotten_messages(self, select_fields: list[str], index_name: str, memory_id: str, limit: int=512):
@@ -296,7 +297,7 @@ class InfinityConnection(InfinityConnectionBase):
             builder = table_instance.output(output_fields)
             filter_cond = self.equivalent_condition_to_str(condition, db_instance.get_table(table_name))
             builder.filter(filter_cond)
-            order_by_expr_list = list()
+            order_by_expr_list = []
             if order_by.fields:
                 for order_field in order_by.fields:
                     order_field_name = self.convert_condition_and_order_field(order_field[0])
@@ -328,7 +329,7 @@ class InfinityConnection(InfinityConnectionBase):
             builder = table_instance.output(output_fields)
             filter_cond = self.equivalent_condition_to_str(condition, db_instance.get_table(table_name))
             builder.filter(filter_cond)
-            order_by_expr_list = list()
+            order_by_expr_list = []
             if order_by.fields:
                 for order_field in order_by.fields:
                     order_field_name = self.convert_condition_and_order_field(order_field[0])
@@ -349,9 +350,9 @@ class InfinityConnection(InfinityConnectionBase):
         inf_conn = self.connPool.get_conn()
         try:
             db_instance = inf_conn.get_database(self.dbName)
-            df_list = list()
+            df_list = []
             assert isinstance(memory_ids, list)
-            table_list = list()
+            table_list = []
             for memoryId in memory_ids:
                 table_name = f"{index_name}_{memoryId}"
                 table_list.append(table_name)
@@ -361,7 +362,7 @@ class InfinityConnection(InfinityConnectionBase):
                     self.logger.warning(f"Table not found: {table_name}, this memory isn't created in Infinity. Maybe it is created in other document engine.")
                     continue
                 mem_res, _ = table_instance.output(["*"]).filter(f"id = '{message_id}'").to_df()
-                self.logger.debug(f"INFINITY get table: {str(table_list)}, result: {str(mem_res)}")
+                self.logger.debug(f"INFINITY get table: {table_list!s}, result: {mem_res!s}")
                 df_list.append(mem_res)
         finally:
             self.connPool.release_conn(inf_conn)
@@ -377,7 +378,7 @@ class InfinityConnection(InfinityConnectionBase):
         try:
             db_instance = inf_conn.get_database(self.dbName)
             table_name = f"{index_name}_{memory_id}"
-            vector_size = int(len(documents[0]["content_embed"]))
+            vector_size = len(documents[0]["content_embed"])
             try:
                 table_instance = db_instance.get_table(table_name)
             except InfinityException as e:

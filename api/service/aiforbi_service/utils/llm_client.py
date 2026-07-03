@@ -1,9 +1,10 @@
-from openai import OpenAI, AsyncOpenAI
-from typing import Generator, Any
-
 from abc import ABC, abstractmethod
+from collections.abc import Generator
+from typing import Any
 
-from common.settings import AIFORBI_BASE_URL, AIFORBI_API_KEY, AIFORBI_MODEL_ID
+from openai import AsyncOpenAI, OpenAI
+
+from common.settings import AIFORBI_API_KEY, AIFORBI_BASE_URL, AIFORBI_MODEL_ID
 
 
 class BaseLLMClient(ABC):

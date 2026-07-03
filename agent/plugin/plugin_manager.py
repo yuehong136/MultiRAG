@@ -1,10 +1,10 @@
 import logging
 import os
 from pathlib import Path
+
 import pluginlib
 
 from .common import PLUGIN_TYPE_LLM_TOOLS
-
 from .llm_tool_plugin import LLMToolPlugin
 
 
@@ -18,7 +18,7 @@ class PluginManager:
         loader = pluginlib.PluginLoader(
             paths=[str(Path(os.path.dirname(__file__), "embedded_plugins"))]
         )
-        
+
         for type, plugins in loader.plugins.items():
             for name, plugin in plugins.items():
                 logging.info(f"Loaded {type} plugin {name} version {plugin.version}")

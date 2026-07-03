@@ -1,38 +1,37 @@
+import base64
 import datetime
 import json
-from typing import Literal, Annotated, Any
-import xxhash
 import re
-import base64
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends
 import numpy as np
-from pydantic import BaseModel, Field, Discriminator, model_validator
+import xxhash
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Discriminator, Field, model_validator
 from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.db.db_models import get_db
-from api.db.services.search_service import SearchService
+from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
+from api.db.services.doc_metadata_service import DocMetadataService
+from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
+from api.db.services.search_service import SearchService
 from api.db.services.user_service import UserTenantService
-from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
-from api.db.services.document_service import DocumentService
-from api.db.services.doc_metadata_service import DocMetadataService
-from api.utils.api_utils import server_error_response, get_data_error_result
-from api.utils.api_utils import get_json_result
+from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
 from api.utils.image_utils import store_chunk_image
-from core.app.qa import rmPrefix, beAdoc
-from core.app.tag import label_question
-from core.nlp import search, rag_tokenizer
 from common import settings
-from core.prompts.generator import keyword_extraction, cross_languages
+from common.constants import PAGERANK_FLD, LLMType, ParserType, RetCode
 from common.doc_store.doc_store_base import OrderByExpr
 from common.metadata_utils import apply_meta_data_filter
-from common.constants import RetCode, LLMType, ParserType, PAGERANK_FLD
 from common.misc_utils import thread_pool_exec
 from common.string_utils import remove_redundant_spaces
 from common.tag_feature_utils import validate_tag_features
+from core.app.qa import beAdoc, rmPrefix
+from core.app.tag import label_question
+from core.nlp import rag_tokenizer, search
+from core.prompts.generator import cross_languages, keyword_extraction
 
 router = APIRouter()
 
@@ -820,7 +819,7 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
                     request.content_with_weight) if len(t) > 1]
             q, a = rmPrefix(arr[0]), rmPrefix("\n".join(arr[1:]))
             d = beAdoc(d, q, a, not any(
-                [rag_tokenizer.is_chinese(t) for t in q + a]))
+                rag_tokenizer.is_chinese(t) for t in q + a))
 
         # 计算向量
         v, c = embd_mdl.encode(
@@ -1866,7 +1865,7 @@ async def knowledge_graph(doc_id: str, db: Session = Depends(get_db), user=Depen
                             node_dict[node_name] += 1
                         else:
                             node_dict[content_json['id']] = 1
-                    if 'children' in content_json and content_json['children']:
+                    if content_json.get('children'):
                         for item in content_json['children']:
                             repeat_deal(item, node_dict)
 

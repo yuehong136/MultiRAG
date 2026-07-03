@@ -18,18 +18,28 @@ import logging
 import re
 from io import BytesIO
 
-from deepdoc.parser.utils import get_text
-from core.app import naive
-from core.app.naive import by_plaintext, PARSERS
-from core.nlp import bullets_category, is_english, remove_contents_table, \
-    hierarchical_merge, make_colon_as_title, naive_merge, random_choices, tokenize_table, \
-    tokenize_chunks, attach_media_context
-from core.nlp import rag_tokenizer
-from common.parser_config_utils import normalize_layout_recognizer
-from deepdoc.parser import PdfParser, HtmlParser
-from deepdoc.parser.figure_parser import vision_figure_parser_docx_wrapper
 from PIL import Image
+
+from common.parser_config_utils import normalize_layout_recognizer
+from core.app import naive
+from core.app.naive import PARSERS, by_plaintext
+from core.nlp import (
+    attach_media_context,
+    bullets_category,
+    hierarchical_merge,
+    is_english,
+    make_colon_as_title,
+    naive_merge,
+    rag_tokenizer,
+    random_choices,
+    remove_contents_table,
+    tokenize_chunks,
+    tokenize_table,
+)
 from core.utils.lazy_image import LazyImage
+from deepdoc.parser import HtmlParser, PdfParser
+from deepdoc.parser.figure_parser import vision_figure_parser_docx_wrapper
+from deepdoc.parser.utils import get_text
 
 
 class Pdf(PdfParser):
@@ -39,16 +49,16 @@ class Pdf(PdfParser):
         start = timer()
         callback(msg="OCR started")
         self.__images__(filename if not binary else binary, zoomin, from_page, to_page, callback)
-        callback(msg="OCR finished ({:.2f}s)".format(timer() - start))
+        callback(msg=f"OCR finished ({timer() - start:.2f}s)")
 
         start = timer()
         self._layouts_rec(zoomin)
-        callback(0.67, "Layout analysis ({:.2f}s)".format(timer() - start))
-        logging.debug("layouts: {}".format(timer() - start))
+        callback(0.67, f"Layout analysis ({timer() - start:.2f}s)")
+        logging.debug(f"layouts: {timer() - start}")
 
         start = timer()
         self._table_transformer_job(zoomin)
-        callback(0.68, "Table analysis ({:.2f}s)".format(timer() - start))
+        callback(0.68, f"Table analysis ({timer() - start:.2f}s)")
 
         start = timer()
         self._text_merge()
@@ -56,7 +66,7 @@ class Pdf(PdfParser):
         self._naive_vertical_merge()
         self._filter_forpages()
         self._merge_with_same_bullet()
-        callback(0.8, "Text extraction ({:.2f}s)".format(timer() - start))
+        callback(0.8, f"Text extraction ({timer() - start:.2f}s)")
 
         return [(b["text"] + self._line_tag(b, zoomin), b.get("layoutno", "")) for b in self.boxes], tbls
 
@@ -170,7 +180,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
         raise NotImplementedError("file type not supported yet(doc, docx, pdf, txt supported)")
 
     make_colon_as_title(sections)
-    bull = bullets_category([t for t in random_choices([t for t, _ in sections], k=100)])
+    bull = bullets_category(list(random_choices([t for t, _ in sections], k=100)))
     if bull >= 0:
         chunks = ["\n".join(ck) for ck in hierarchical_merge(bull, sections, 5)]
     else:

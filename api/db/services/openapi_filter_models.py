@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -6,10 +5,11 @@
 @date：2025/9/04 10:00
 @desc: OpenAPI 过滤服务相关模型定义
 """
-from enum import Enum
-from typing import Any, Set
-from pydantic import BaseModel, Field, HttpUrl, field_validator, ConfigDict
 import re
+from enum import Enum
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
 
 class MatchMode(str, Enum):
@@ -76,11 +76,11 @@ class FilterRule(BaseModel):
                 for pattern in internal_patterns:
                     if re.match(pattern, host):
                         raise ValueError(f'不允许访问内网地址: {host}')
-            
+
             # 只允许 http/https 协议
             if v.scheme not in ['http', 'https']:
                 raise ValueError(f'不支持的协议: {v.scheme}，仅支持 http/https')
-        
+
         return v
 
 
@@ -119,7 +119,7 @@ class FilterResponse(BaseModel):
     paths: dict[str, Any] = Field(..., description="过滤后的路径")
     components: dict[str, Any] | None = Field(None, description="过滤后的组件")
     external_docs: dict[str, Any] | None = Field(None, alias="externalDocs", description="外部文档")
-    
+
     # 扩展字段
     x_filter_warnings: list[FilterWarning] = Field(default_factory=list, alias="x-filter-warnings", description="过滤警告")
     x_filter_meta: FilterMeta = Field(..., alias="x-filter-meta", description="过滤元信息")
@@ -146,7 +146,7 @@ class ComponentStats(BaseModel):
     links: int = 0
     callbacks: int = 0
     path_items: int = 0
-    
+
     @property
     def total(self) -> int:
         return sum([

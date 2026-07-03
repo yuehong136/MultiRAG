@@ -1,11 +1,11 @@
-import re
 import logging
+import re
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from api.db.services.llm_service import LLMBundle
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+from api.db.services.llm_service import LLMBundle
 from common.constants import LLMType
 from common.misc_utils import thread_pool_exec
 
@@ -112,4 +112,4 @@ class LLMSQLGenerator:
 
         except Exception as e:
             logger.error(f"Error in LLM SQL generation: {e}", exc_info=True)
-            return f"Error generating SQL with LLM: {str(e)}"  # 发生错误时，返回错误信息
+            return f"Error generating SQL with LLM: {e!s}"  # 发生错误时，返回错误信息

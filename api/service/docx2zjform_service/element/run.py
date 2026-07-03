@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
@@ -7,11 +6,11 @@ class Run:
     """段落中的文本运行"""
     text: str
     # 使用 Optional[bool] 并提供默认值
-    bold: Optional[bool] = False
-    italic: Optional[bool] = False
-    underline: Optional[bool] = False
-    font_name: Optional[str] = None
-    font_size: Optional[float] = None
+    bold: bool | None = False
+    italic: bool | None = False
+    underline: bool | None = False
+    font_name: str | None = None
+    font_size: float | None = None
 
     def __post_init__(self):
         # 确保布尔值属性不为 None

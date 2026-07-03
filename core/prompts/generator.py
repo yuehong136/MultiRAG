@@ -4,15 +4,16 @@ import json
 import logging
 import re
 from copy import deepcopy
+
 import jinja2
 import json_repair
 
 from api.db.db_models import db_connection
+from common.constants import TAG_FLD
 from common.misc_utils import hash_str2int
+from common.token_utils import encoder, num_tokens_from_string
 from core.nlp import rag_tokenizer
 from core.prompts.template import load_prompt
-from common.constants import TAG_FLD
-from common.token_utils import encoder, num_tokens_from_string
 
 STOP_TOKEN = "<|STOP|>"
 COMPLETE_TASK = "complete_task"
@@ -274,10 +275,10 @@ async def question_proposal(chat_mdl, content, topn=3):
 async def full_question(tenant_id=None, llm_id=None, messages=None, language=None, chat_mdl=None):
     if messages is None:
         messages = []
-    from common.constants import LLMType
+    from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
     from api.db.services.llm_service import LLMBundle
     from api.db.services.tenant_llm_service import TenantLLMService
-    from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+    from common.constants import LLMType
 
     if not chat_mdl:
         with db_connection() as db:
@@ -311,10 +312,10 @@ async def full_question(tenant_id=None, llm_id=None, messages=None, language=Non
 
 
 async def cross_languages(tenant_id, llm_id, query, languages=None):
-    from common.constants import LLMType
+    from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
     from api.db.services.llm_service import LLMBundle
     from api.db.services.tenant_llm_service import TenantLLMService
-    from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
+    from common.constants import LLMType
 
     if languages is None:
         languages = []
@@ -517,13 +518,13 @@ async def reflect_async(chat_mdl, history: list[dict], tool_call_res: list[tuple
         ans = result
 
     ans = re.sub(r"^.*</think>", "", ans, flags=re.DOTALL)
-    return """
+    return f"""
 **Observation**
-{}
+{json.dumps(tool_calls, ensure_ascii=False, indent=2)}
 
 **Reflection**
-{}
-    """.format(json.dumps(tool_calls, ensure_ascii=False, indent=2), ans)
+{ans}
+    """
 
 
 def form_message(system_prompt, user_prompt):

@@ -90,7 +90,7 @@ class MilvusConnectionBase(DocStoreConnection):
         try:
             connections.connect(using, user, password, db_name, token, uri=uri, **kwargs)
         except Exception as ex:
-            self.logger.error(f"Failed to create connection {using}: {str(ex)}")
+            self.logger.error(f"Failed to create connection {using}: {ex!s}")
             raise ex from ex
         else:
             self.logger.debug(f"Created connection: {using}")
@@ -138,7 +138,7 @@ class MilvusConnectionBase(DocStoreConnection):
                 self.logger.warning(f"Milvus mapping file not found, using default fields: {mapping_path}")
                 return self._create_default_collection(index_name, dataset_id, vector_size)
 
-            with open(mapping_path, 'r', encoding='utf-8') as f:
+            with open(mapping_path, encoding='utf-8') as f:
                 mapping = json.load(f)
 
             fields = []
@@ -233,7 +233,7 @@ class MilvusConnectionBase(DocStoreConnection):
             return True
 
         except Exception as e:
-            self.logger.error(f"Failed to create collection {collection_name}: {str(e)}")
+            self.logger.error(f"Failed to create collection {collection_name}: {e!s}")
             raise e
 
     def _create_default_collection(self, index_name: str | list[str], dataset_id: str, vector_size: int):
@@ -304,7 +304,7 @@ class MilvusConnectionBase(DocStoreConnection):
                 self.logger.info(f"Successfully deleted collection {collection_name}")
             return True
         except Exception as e:
-            self.logger.error(f"Failed to delete collection {collection_name}: {str(e)}")
+            self.logger.error(f"Failed to delete collection {collection_name}: {e!s}")
             raise e
 
     def index_exist(self, index_name: str | list[str], dataset_id: str = None) -> bool:
@@ -324,7 +324,7 @@ class MilvusConnectionBase(DocStoreConnection):
             conn = self._get_connection()
             return conn.has_collection(collection_name)
         except Exception as e:
-            self.logger.warning(f"Failed to check if collection {collection_name} exists: {str(e)}")
+            self.logger.warning(f"Failed to check if collection {collection_name} exists: {e!s}")
             return False
 
     """
@@ -507,7 +507,7 @@ class MilvusConnectionBase(DocStoreConnection):
 
             return [(str(value), count) for value, count in value_counts.items()]
         except Exception as e:
-            self.logger.warning(f"Aggregation calculation failed: {str(e)}")
+            self.logger.warning(f"Aggregation calculation failed: {e!s}")
             return []
 
     """
@@ -644,8 +644,8 @@ class MilvusConnectionBase(DocStoreConnection):
             return results
 
         except Exception as e:
-            self.logger.error(f"Milvus SQL parsing or execution failed: {str(e)}")
-            return {"error": f"SQL query failed: {str(e)}"}
+            self.logger.error(f"Milvus SQL parsing or execution failed: {e!s}")
+            return {"error": f"SQL query failed: {e!s}"}
 
     def _split_select_fields(self, fields_str: str) -> list[str]:
         """Split SELECT field list respecting parentheses and quotes."""
@@ -814,7 +814,7 @@ class MilvusConnectionBase(DocStoreConnection):
             return cfg
 
         try:
-            with open(mapping_path, "r", encoding="utf-8") as f:
+            with open(mapping_path, encoding="utf-8") as f:
                 mapping = json.load(f)
         except Exception as e:
             self.logger.error(f"Failed to read mapping file: {e}")
@@ -864,7 +864,7 @@ class MilvusConnectionBase(DocStoreConnection):
         max_v = np.max(values)
 
         if max_v - min_v < 1e-6:
-            return {k: 1.0 for k in keys}
+            return dict.fromkeys(keys, 1.0)
 
         if reverse:
             normalized = (max_v - values) / (max_v - min_v)

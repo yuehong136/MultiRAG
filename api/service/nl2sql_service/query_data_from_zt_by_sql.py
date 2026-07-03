@@ -1,11 +1,13 @@
-import base64
-import aiohttp
 import asyncio
+import base64
 import json
 import random
 import string
 from typing import Any
-from common.settings import DCS_SERVER_PROTOCOL, DCS_SERVER_HOST, DCS_SERVER_PORT
+
+import aiohttp
+
+from common.settings import DCS_SERVER_HOST, DCS_SERVER_PORT, DCS_SERVER_PROTOCOL
 
 
 def generate_random_prefix(length: int = 5) -> str:
@@ -66,7 +68,7 @@ async def query_data_from_zt_by_sql(sql: str) -> dict:
     except Exception as e:
         return {
             "success": False,
-            "error": f"发生异常：{str(e)}"
+            "error": f"发生异常：{e!s}"
         }
 
 
@@ -132,7 +134,7 @@ async def query_data_with_params(sql: str, dataset_wid: int, sql_params: list[An
     except Exception as e:
         return {
             "success": False,
-            "error": f"发生异常：{str(e)}"
+            "error": f"发生异常：{e!s}"
         }
 
 

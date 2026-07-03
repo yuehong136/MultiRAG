@@ -15,8 +15,9 @@ import os
 import re
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from hashlib import md5
-from typing import Any, Callable
+from typing import Any
 
 import networkx as nx
 import numpy as np
@@ -25,10 +26,10 @@ from networkx.readwrite import json_graph
 
 from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
+from common import settings
 from common.connection_utils import timeout
 from common.doc_store.doc_store_base import OrderByExpr
 from common.misc_utils import get_uuid, thread_pool_exec
-from common import settings
 from core.nlp import rag_tokenizer, search
 from core.utils.redis_conn import REDIS_CONN
 
@@ -244,12 +245,12 @@ def handle_single_entity_extraction(
     entity_type = clean_str(record_attributes[2].upper())
     entity_description = clean_str(record_attributes[3])
     entity_source_id = chunk_key
-    return dict(
-        entity_name=entity_name.upper(),
-        entity_type=entity_type.upper(),
-        description=entity_description,
-        source_id=entity_source_id,
-    )
+    return {
+        "entity_name": entity_name.upper(),
+        "entity_type": entity_type.upper(),
+        "description": entity_description,
+        "source_id": entity_source_id,
+    }
 
 
 def handle_single_relationship_extraction(record_attributes: list[str], chunk_key: str):
@@ -264,15 +265,15 @@ def handle_single_relationship_extraction(record_attributes: list[str], chunk_ke
     edge_source_id = chunk_key
     weight = float(record_attributes[-1]) if is_float_regex(record_attributes[-1]) else 1.0
     pair = sorted([source.upper(), target.upper()])
-    return dict(
-        src_id=pair[0],
-        tgt_id=pair[1],
-        weight=weight,
-        description=edge_description,
-        keywords=edge_keywords,
-        source_id=edge_source_id,
-        metadata={"created_at": time.time()},
-    )
+    return {
+        "src_id": pair[0],
+        "tgt_id": pair[1],
+        "weight": weight,
+        "description": edge_description,
+        "keywords": edge_keywords,
+        "source_id": edge_source_id,
+        "metadata": {"created_at": time.time()},
+    }
 
 
 def pack_user_ass_to_openai_messages(*args: str):

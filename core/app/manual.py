@@ -14,21 +14,21 @@
 #  limitations under the License.
 #
 
-import logging
 import copy
+import logging
 import re
 from io import BytesIO
 
 from docx import Document
 
-from core.nlp import rag_tokenizer, tokenize, tokenize_table, bullets_category, title_frequency, tokenize_chunks, docx_question_level, attach_media_context, concat_img
-from core.app.naive import by_plaintext, PARSERS
-from common.token_utils import num_tokens_from_string
 from common.constants import ParserType
 from common.parser_config_utils import normalize_layout_recognizer
-from deepdoc.parser import PdfParser, DocxParser
+from common.token_utils import num_tokens_from_string
+from core.app.naive import PARSERS, by_plaintext
+from core.nlp import attach_media_context, bullets_category, concat_img, docx_question_level, rag_tokenizer, title_frequency, tokenize, tokenize_chunks, tokenize_table
+from deepdoc.parser import DocxParser, PdfParser
+from deepdoc.parser.figure_parser import vision_figure_parser_docx_wrapper, vision_figure_parser_pdf_wrapper
 from deepdoc.parser.utils import extract_pdf_outlines
-from deepdoc.parser.figure_parser import vision_figure_parser_pdf_wrapper, vision_figure_parser_docx_wrapper
 
 
 class Pdf(PdfParser):
@@ -48,24 +48,24 @@ class Pdf(PdfParser):
             to_page,
             callback
         )
-        callback(msg="OCR finished ({:.2f}s)".format(timer() - start))
-        logging.debug("OCR: {}".format(timer() - start))
+        callback(msg=f"OCR finished ({timer() - start:.2f}s)")
+        logging.debug(f"OCR: {timer() - start}")
 
         start = timer()
         self._layouts_rec(zoomin)
-        callback(0.65, "Layout analysis ({:.2f}s)".format(timer() - start))
-        logging.debug("layouts: {}".format(timer() - start))
+        callback(0.65, f"Layout analysis ({timer() - start:.2f}s)")
+        logging.debug(f"layouts: {timer() - start}")
 
         start = timer()
         self._table_transformer_job(zoomin)
-        callback(0.67, "Table analysis ({:.2f}s)".format(timer() - start))
+        callback(0.67, f"Table analysis ({timer() - start:.2f}s)")
 
         start = timer()
         self._text_merge()
         tbls = self._extract_table_figure(True, zoomin, True, True)
         self._concat_downward()
         self._filter_forpages()
-        callback(0.68, "Text merged ({:.2f}s)".format(timer() - start))
+        callback(0.68, f"Text merged ({timer() - start:.2f}s)")
 
         # clean mess
         for b in self.boxes:
@@ -220,8 +220,8 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
             levels = []
             for txt, _, _ in sections:
                 for t, lvl, _ in outlines:
-                    tks = set([t[i] + t[i + 1] for i in range(len(t) - 1)])
-                    tks_ = set([txt[i] + txt[i + 1] for i in range(min(len(t), len(txt) - 1))])
+                    tks = {t[i] + t[i + 1] for i in range(len(t) - 1)}
+                    tks_ = {txt[i] + txt[i + 1] for i in range(min(len(t), len(txt) - 1))}
                     if len(set(tks & tks_)) / max([len(tks), len(tks_), 1]) > 0.8:
                         levels.append(lvl)
                         break
@@ -249,7 +249,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
         def tag(pn, left, right, top, bottom):
             if pn + left + right + top + bottom == 0:
                 return ""
-            return "@@{}\t{:.1f}\t{:.1f}\t{:.1f}\t{:.1f}##".format(pn, left, right, top, bottom)
+            return f"@@{pn}\t{left:.1f}\t{right:.1f}\t{top:.1f}\t{bottom:.1f}##"
 
         chunks = []
         last_sid = -2

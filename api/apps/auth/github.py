@@ -15,6 +15,7 @@
 #
 
 from common.http_client import async_request, sync_request
+
 from .oauth import OAuthClient, UserInfo
 
 

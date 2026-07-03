@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -8,8 +7,8 @@
 """
 import requests
 
-from core.llm.sequence2txt_model.base import Base
 from common.token_utils import num_tokens_from_string
+from core.llm.sequence2txt_model.base import Base
 
 
 class XinferenceSeq2txt(Base):
@@ -55,5 +54,5 @@ class XinferenceSeq2txt(Base):
                 return "**ERROR**: Failed to retrieve transcription.", 0
 
         except requests.exceptions.RequestException as e:
-            return f"**ERROR**: {str(e)}", 0
+            return f"**ERROR**: {e!s}", 0
 

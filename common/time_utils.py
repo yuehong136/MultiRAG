@@ -2,6 +2,7 @@ import datetime
 import logging
 import time
 
+
 def current_timestamp():
     """
     Get the current timestamp in milliseconds.

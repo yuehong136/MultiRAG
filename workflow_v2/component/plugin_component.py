@@ -1,15 +1,15 @@
 import copy
+from dataclasses import dataclass
 from typing import Any
 
 # 替换 requests 为 aiohttp
 import aiohttp
 from aiohttp import ClientTimeout
 
-from common.settings import SCRIPT_SCHEDULER_PORT, SCRIPT_SCHEDULER_HOST
+from common.settings import SCRIPT_SCHEDULER_HOST, SCRIPT_SCHEDULER_PORT
 from workflow_v2.component.base_component import BaseComponent
-from workflow_v2.utils import dict_arrays_to_array_dicts, match_parameters, map_schema_with_values
+from workflow_v2.utils import dict_arrays_to_array_dicts, map_schema_with_values, match_parameters
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
-from dataclasses import dataclass
 
 
 @dataclass
@@ -240,7 +240,7 @@ class PluginComponent(BaseComponent):
                 return await response.json()
 
         except aiohttp.ClientError as e:
-            self.logger.error(f"Error making request: {str(e)}")
+            self.logger.error(f"Error making request: {e!s}")
             raise
 
     def parse_output(self, output_structure: list[dict], actual_output: Any) -> dict:

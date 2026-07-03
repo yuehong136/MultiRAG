@@ -1,5 +1,5 @@
 import json
-from workflow.WorkflowEngine import WorkflowEngine
+
 from workflow.basic.Edge import Edge
 from workflow.basic.EndNode import EndNode
 from workflow.basic.Node import Node
@@ -7,7 +7,8 @@ from workflow.components.ExcelGeneratorComponent import ExcelGeneratorComponent
 from workflow.components.FileReaderComponent import FileReaderComponent
 from workflow.components.LLMComponent import LLMComponent
 from workflow.components.MinIOSelectionComponent import MinIOSelectionComponent
-from workflow.components.UserFileSelectionComponent import UserFileSelectionComponent, UserFileSelectionComponentParam
+from workflow.components.UserFileSelectionComponent import UserFileSelectionComponent
+from workflow.WorkflowEngine import WorkflowEngine
 
 class_map = {
     "UserFileSelectionComponent": UserFileSelectionComponent,
@@ -69,8 +70,8 @@ class WorkflowParser:
         for edge in edges:
             graph[edge.source] = edge.target
 
-        start_node = next(node for node in set(edge.source for edge in edges)
-                          if node not in set(edge.target for edge in edges))
+        start_node = next(node for node in {edge.source for edge in edges}
+                          if node not in {edge.target for edge in edges})
 
         ordered_nodes = [start_node]
         current_node = start_node
@@ -207,6 +208,6 @@ if __name__ == "__main__":
 
     # 读取文件
     workflow_json_str = ""
-    with open('/Users/naimehao/Desktop/workflowSampleData.json', 'r') as f:
+    with open('/Users/naimehao/Desktop/workflowSampleData.json') as f:
         workflow_json_str = f.read()
     workflowEngine = WorkflowParser.parse(workflow_json_str=workflow_json_str)

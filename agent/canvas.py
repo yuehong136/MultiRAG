@@ -15,9 +15,9 @@
 #
 import asyncio
 import base64
+import binascii
 import datetime
 import inspect
-import binascii
 import json
 import logging
 import re
@@ -27,21 +27,22 @@ from copy import deepcopy
 from functools import partial
 from typing import Any
 
-from agent.component import component_class
 from agent.a2ui import A2UI_EVENT
+from agent.component import component_class
 from agent.component.base import ComponentBase
 from agent.dsl_migration import normalize_chunker_dsl
 from agent.persondata_input import redact_persondata_payload
 from api.db.db_models import db_connection
+from api.db.joint_services.tenant_model_service import get_tenant_default_model_by_type
 from api.db.services.file_service import FileService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.task_service import has_canceled
-from api.db.joint_services.tenant_model_service import get_tenant_default_model_by_type
 from common.constants import LLMType
-from common.misc_utils import get_uuid, hash_str2int
 from common.exceptions import TaskCanceledException
+from common.misc_utils import get_uuid, hash_str2int
 from core.prompts.generator import chunks_format
 from core.utils.redis_conn import REDIS_CONN
+
 
 class Graph:
     """
@@ -98,7 +99,7 @@ class Graph:
 
     def load(self):
         self.components = self.dsl["components"]
-        cpn_nms = set([])
+        cpn_nms = set()
         for k, cpn in self.components.items():
             cpn_nms.add(cpn["obj"]["component_name"])
             param = component_class(cpn["obj"]["component_name"] + "Param")()
@@ -302,7 +303,7 @@ class Canvas(Graph):
             "sys.conversation_turns": 0,
             "sys.files": [],
             "sys.history": [],
-            "sys.date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            "sys.date": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
         }
         self.variables = {}
         super().__init__(dsl, tenant_id, task_id, custom_header=custom_header)
@@ -316,7 +317,7 @@ class Canvas(Graph):
             if "sys.history" not in self.globals:
                 self.globals["sys.history"] = []
             if "sys.date" not in self.globals:
-                self.globals["sys.date"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                self.globals["sys.date"] = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
         else:
             self.globals = {
                 "sys.query": "",
@@ -324,7 +325,7 @@ class Canvas(Graph):
                 "sys.conversation_turns": 0,
                 "sys.files": [],
                 "sys.history": [],
-                "sys.date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                "sys.date": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
             }
         if "variables" in self.dsl:
             self.variables = self.dsl["variables"]
@@ -386,7 +387,7 @@ class Canvas(Graph):
                     self.globals[k] = ""
 
     async def run(self, **kwargs):
-        self.globals["sys.date"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        self.globals["sys.date"] = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
         st = time.perf_counter()
         self._loop = asyncio.get_running_loop()
         self.message_id = get_uuid()
@@ -652,7 +653,7 @@ class Canvas(Graph):
                 break
             idx = to
 
-            if any([self.get_component_obj(c).component_name.lower() == "userfillup" for c in self.path[idx:]]):
+            if any(self.get_component_obj(c).component_name.lower() == "userfillup" for c in self.path[idx:]):
                 path = [c for c in self.path[idx:] if self.get_component(c)["obj"].component_name.lower() == "userfillup"]
                 path.extend([c for c in self.path[idx:] if self.get_component(c)["obj"].component_name.lower() != "userfillup"])
                 another_inputs = {}

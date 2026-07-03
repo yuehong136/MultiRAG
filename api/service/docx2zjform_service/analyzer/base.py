@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List
+
 from ..component.base import Component
 from ..element import Element
 from .analysis_context import AnalysisContext
@@ -14,6 +14,6 @@ class ElementAnalyzer(ABC):
         pass
 
     @abstractmethod
-    def analyze(self, element: Element, context: AnalysisContext) -> List[Component]:
+    def analyze(self, element: Element, context: AnalysisContext) -> list[Component]:
         """分析元素并返回对应的组件列表"""
         pass

@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @file: evaluation_app.py
@@ -12,7 +11,6 @@ Provides REST API for RAG evaluation functionality including:
 - Configuration recommendations
 """
 
-import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session

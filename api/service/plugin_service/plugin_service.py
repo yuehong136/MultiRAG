@@ -1,6 +1,6 @@
 import aiohttp
 
-from common.settings import SCRIPT_SCHEDULER_PORT, SCRIPT_SCHEDULER_HOST
+from common.settings import SCRIPT_SCHEDULER_HOST, SCRIPT_SCHEDULER_PORT
 
 
 class PluginService:

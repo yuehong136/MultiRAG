@@ -19,22 +19,23 @@ import csv
 import io
 import logging
 import re
+from collections import Counter
 from io import BytesIO
-from xpinyin import Pinyin
+
 import numpy as np
 import pandas as pd
-from collections import Counter
 
 # from openpyxl import load_workbook, Workbook
 from dateutil.parser import parse as datetime_parse
+from xpinyin import Pinyin
 
 from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from deepdoc.parser.figure_parser import vision_figure_parser_figure_xlsx_wrapper
-from deepdoc.parser.utils import get_text
+from common import settings
 from core.nlp import rag_tokenizer, tokenize, tokenize_table
 from deepdoc.parser import ExcelParser
-from common import settings
+from deepdoc.parser.figure_parser import vision_figure_parser_figure_xlsx_wrapper
+from deepdoc.parser.utils import get_text
 
 
 class Excel(ExcelParser):
@@ -128,7 +129,7 @@ class Excel(ExcelParser):
                     ]
                 )
             )
-        callback(0.3, ("Extract records: {}~{}".format(from_page + 1, min(to_page, from_page + rn)) + (
+        callback(0.3, (f"Extract records: {from_page + 1}~{min(to_page, from_page + rn)}" + (
             f"{len(fails)} failure, line: %s..." % (",".join(fails[:3])) if fails else "")))
         return res, tables
 
@@ -393,13 +394,13 @@ def chunk(filename, binary=None, from_page=0, to_page=10000000000, lang="Chinese
                 continue
             if i >= to_page:
                 break
-            row = [field for field in line.split(kwargs.get("delimiter", "\t"))]
+            row = list(line.split(kwargs.get("delimiter", "\t")))
             if len(row) != len(headers):
                 fails.append(str(i))
                 continue
             rows.append(row)
 
-        callback(0.3, ("Extract records: {}~{}".format(from_page, min(len(lines), to_page)) + (f"{len(fails)} failure, line: %s..." % (",".join(fails[:3])) if fails else "")))
+        callback(0.3, (f"Extract records: {from_page}~{min(len(lines), to_page)}" + (f"{len(fails)} failure, line: %s..." % (",".join(fails[:3])) if fails else "")))
 
         dfs = [pd.DataFrame(np.array(rows), columns=headers)]
     elif re.search(r"\.csv$", filename, re.IGNORECASE):
@@ -465,7 +466,7 @@ def chunk(filename, binary=None, from_page=0, to_page=10000000000, lang="Chinese
         if use_chunk_data:
             field_map = {py_clmns[i].lower(): str(clmns[i]).replace("_", " ") for i in range(len(clmns))}
         else:
-            field_map = {k: v for k, v in clmns_map}
+            field_map = dict(clmns_map)
         logging.debug(f"Field map: {field_map}")
 
         eng = lang.lower() == "english"  # is_english(txts)

@@ -1,6 +1,6 @@
-from .base import ElementAnalyzer
-from .table_analyzer import TableElementAnalyzer
-from .paragraph_analyzer import ParagraphElementAnalyzer
 from .analysis_context import AnalysisContext
+from .base import ElementAnalyzer
+from .paragraph_analyzer import ParagraphElementAnalyzer
+from .table_analyzer import TableElementAnalyzer
 
-__all__ = ['ElementAnalyzer', 'TableElementAnalyzer', 'ParagraphElementAnalyzer', 'AnalysisContext']
+__all__ = ['AnalysisContext', 'ElementAnalyzer', 'ParagraphElementAnalyzer', 'TableElementAnalyzer']

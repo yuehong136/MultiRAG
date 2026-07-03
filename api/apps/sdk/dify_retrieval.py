@@ -7,19 +7,19 @@ import logging
 from typing import Annotated, Any, Literal, Self
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict, Field, Discriminator, model_validator
+from pydantic import BaseModel, ConfigDict, Discriminator, Field, model_validator
 from sqlalchemy.orm import Session
 
 from api.db.db_models import get_db
-from api.db.services.document_service import DocumentService
+from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.doc_metadata_service import DocMetadataService
+from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
-from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.utils.api_utils import apikey_dependency, build_error_result
 from common import settings
-from common.metadata_utils import convert_conditions, meta_filter
 from common.constants import LLMType, RetCode
+from common.metadata_utils import convert_conditions, meta_filter
 from core.app.tag import label_question
 
 router = APIRouter()

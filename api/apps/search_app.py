@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -10,16 +9,15 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from api.apps import manager
 from api.constants import DATASET_NAME_LIMIT
-from common.constants import StatusEnum
 from api.db.db_models import get_db
 from api.db.services import duplicate_name
 from api.db.services.search_service import SearchService
 from api.db.services.user_service import TenantService, UserTenantService
-from common.misc_utils import get_uuid
-from common.constants import RetCode
 from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
-from api.apps import manager
+from common.constants import RetCode, StatusEnum
+from common.misc_utils import get_uuid
 
 router = APIRouter()
 

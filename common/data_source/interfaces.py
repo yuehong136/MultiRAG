@@ -2,19 +2,14 @@
 import abc
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Generator, Iterator
 from enum import IntFlag, auto
 from types import TracebackType
-from typing import Any, Dict, Generator, TypeVar, Generic, Callable, TypeAlias
-from collections.abc import Iterator
+from typing import Any, Generic, TypeAlias, TypeVar
+
 from anthropic import BaseModel
 
-from common.data_source.models import (
-    Document,
-    SlimDocument,
-    ConnectorCheckpoint,
-    ConnectorFailure,
-    SecondsSinceUnixEpoch, GenerateSlimDocumentOutput
-)
+from common.data_source.models import ConnectorCheckpoint, ConnectorFailure, Document, GenerateSlimDocumentOutput, SecondsSinceUnixEpoch, SlimDocument
 
 GenerateDocumentsOutput = Iterator[list[Document]]
 
@@ -22,7 +17,7 @@ class LoadConnector(ABC):
     """Load connector interface"""
 
     @abstractmethod
-    def load_credentials(self, credentials: Dict[str, Any]) -> Dict[str, Any] | None:
+    def load_credentials(self, credentials: dict[str, Any]) -> dict[str, Any] | None:
         """Load credentials"""
         pass
 
@@ -49,7 +44,7 @@ class CredentialsConnector(ABC):
     """Credentials connector interface"""
 
     @abstractmethod
-    def load_credentials(self, credentials: Dict[str, Any]) -> Dict[str, Any] | None:
+    def load_credentials(self, credentials: dict[str, Any]) -> dict[str, Any] | None:
         """Load credentials"""
         pass
 
@@ -220,7 +215,7 @@ class BaseConnector(abc.ABC, Generic[CT]):
             if isinstance(metadata_value, str):
                 metadata_lines.append(f"{metadata_key}: {metadata_value}")
             elif isinstance(metadata_value, list):
-                if not all([isinstance(val, str) for val in metadata_value]):
+                if not all(isinstance(val, str) for val in metadata_value):
                     raise RuntimeError(custom_parser_req_msg)
                 metadata_lines.append(f'{metadata_key}: {", ".join(metadata_value)}')
             else:

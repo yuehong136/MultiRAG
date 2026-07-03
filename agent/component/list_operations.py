@@ -1,7 +1,9 @@
-from abc import ABC
 import os
+from abc import ABC
+
 from agent.component.base import ComponentBase, ComponentParamBase
 from api.utils.api_utils import timeout
+
 
 class ListOperationsParam(ComponentParamBase):
     """
@@ -31,14 +33,14 @@ class ListOperationsParam(ComponentParamBase):
                 "type": "?"
             }
         }
-    
+
     def check(self):
         self.check_empty(self.query, "query")
         self.check_valid_value(self.operations, "Support operations", ["topN","head","tail","filter","sort","drop_duplicates"])
 
     def get_input_form(self) -> dict[str, dict]:
         return {}
-    
+
 
 class ListOperations(ComponentBase,ABC):
     component_name = "ListOperations"
@@ -72,12 +74,12 @@ class ListOperations(ComponentBase,ABC):
             return int(getattr(self._param, "n", 0))
         except Exception:
             return 0
-        
+
     def _set_outputs(self, outputs):
         self._param.outputs["result"]["value"] = outputs
         self._param.outputs["first"]["value"] = outputs[0] if outputs else None
         self._param.outputs["last"]["value"]  = outputs[-1] if outputs else None
-        
+
     def _topN(self):
         n = self._coerce_n()
         if n < 1:
@@ -109,7 +111,7 @@ class ListOperations(ComponentBase,ABC):
     def _norm(self,v):
         s = "" if v is None else str(v)
         return s
-    
+
     def _eval(self, v, operator, value):
         if operator == "=":
             return v == value
@@ -165,6 +167,6 @@ class ListOperations(ComponentBase,ABC):
         if isinstance(x, set):
             return tuple(sorted(self._hashable(v) for v in x))
         return x
-    
+
     def thoughts(self) -> str:
         return "ListOperation in progress"

@@ -1,5 +1,5 @@
-from typing import Set, Any
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -49,7 +49,7 @@ class WorkflowValidator:
         """判断一条边是否是选择器节点的边"""
         return 'sourcePortID' in edge
 
-    def _get_selector_nodes(self) -> Set[str]:
+    def _get_selector_nodes(self) -> set[str]:
         """获取所有选择器节点的ID"""
         return {edge['sourceNodeID'] for edge in self.edges if self._is_selector_edge(edge)}
 
@@ -132,7 +132,7 @@ class WorkflowValidator:
     def detect_cycles(self) -> list[list[dict]]:
         """使用DFS检测图中的环，返回完整的节点对象列表"""
 
-        def dfs(node_id: str, visited: Set[str], path: Set[str], current_path: list[dict]) -> list[dict] | None:
+        def dfs(node_id: str, visited: set[str], path: set[str], current_path: list[dict]) -> list[dict] | None:
             visited.add(node_id)
             path.add(node_id)
             current_path.append(self.node_map[node_id])

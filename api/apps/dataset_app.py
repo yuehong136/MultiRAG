@@ -7,30 +7,30 @@ from functools import partial
 from io import BytesIO
 from urllib.parse import quote
 
-from PIL import Image
-from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File as Fe
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
+from fastapi import File as Fe
 from fastapi.responses import StreamingResponse
+from PIL import Image
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from api.apps import manager
 from api.constants import NAME_LENGTH_LIMIT
 from api.db import FileType
-from common.constants import ParserType, TaskStatus, StatusEnum
-from api.db.db_models import get_db, db_connection
+from api.db.db_models import db_connection, get_db
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import TenantService
-from common import settings
-from common.misc_utils import get_uuid
-from common.constants import RetCode
-from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str
-from api.utils.tenant_utils import ensure_tenant_model_id_for_params
+from api.utils.api_utils import construct_error_response, construct_json_result, convert_datetime_to_str
 from api.utils.file_utils import filename_type, thumbnail
-from core.app import book, laws, manual, naive, one, paper, presentation, qa, resume, table, picture
-from api.apps import manager
-from pydantic import BaseModel, Field
+from api.utils.tenant_utils import ensure_tenant_model_id_for_params
+from common import settings
+from common.constants import ParserType, RetCode, StatusEnum, TaskStatus
+from common.misc_utils import get_uuid
+from core.app import book, laws, manual, naive, one, paper, picture, presentation, qa, resume, table
 
 MAXIMUM_OF_UPLOADING_FILES = 256
 
@@ -394,7 +394,7 @@ async def upload_documents(
             blob = await file.read()
 
             if blob == b'':
-                warnings.warn(f"[WARNING]: The content of the file {filename} is empty.")
+                warnings.warn(f"[WARNING]: The content of the file {filename} is empty.", stacklevel=2)
 
             settings.STORAGE_IMPL.put(dataset_id, location, blob)
 

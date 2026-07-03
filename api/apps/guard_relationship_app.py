@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -7,16 +6,18 @@
 @desc: AI安全护栏关系管理接口
 """
 from __future__ import annotations
+
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.db.db_models import get_db
-from api.db.services.guard_service_library_service import GuardServiceLibraryService
 from api.db.services.guard_label_library_service import GuardLabelLibraryService
-from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
+from api.db.services.guard_service_library_service import GuardServiceLibraryService
+from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
 
 router = APIRouter()
 
@@ -61,12 +62,12 @@ def bind_service_library(
 ) -> dict[str, Any]:
     """
     绑定词库到服务
-    
+
     Args:
         request: 绑定请求参数
         db: 数据库会话
         user: 当前用户信息
-        
+
     Returns:
         dict[str, Any]: 绑定结果
     """
@@ -81,12 +82,12 @@ def bind_service_library(
             tenant_id=user.id,
             created_by=user.id
         )
-        
+
         if binding_id:
             return get_json_result(data={"binding_id": binding_id})
         else:
             return get_data_error_result(retmsg="绑定失败，可能已存在相同绑定")
-            
+
     except Exception as e:
         return server_error_response(e)
 
@@ -100,13 +101,13 @@ def get_service_libraries(
 ) -> dict[str, Any]:
     """
     获取服务绑定的词库列表
-    
+
     Args:
         service_id: 服务ID
         enabled_only: 是否只返回启用的
         db: 数据库会话
         user: 当前用户信息
-        
+
     Returns:
         dict[str, Any]: 词库列表
     """
@@ -114,9 +115,9 @@ def get_service_libraries(
         libraries = GuardServiceLibraryService.get_libraries_by_service(
             db, service_id, enabled_only
         )
-        
+
         return get_json_result(data=libraries)
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -130,13 +131,13 @@ def get_library_services(
 ) -> dict[str, Any]:
     """
     获取使用词库的服务列表
-    
+
     Args:
         library_id: 词库ID
         enabled_only: 是否只返回启用的
         db: 数据库会话
         user: 当前用户信息
-        
+
     Returns:
         dict[str, Any]: 服务列表
     """
@@ -144,9 +145,9 @@ def get_library_services(
         services = GuardServiceLibraryService.get_services_by_library(
             db, library_id, enabled_only
         )
-        
+
         return get_json_result(data=services)
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -159,12 +160,12 @@ def batch_bind_service_libraries(
 ) -> dict[str, Any]:
     """
     ### POST `/service-library/batch-bind` 批量绑定词库到服务
-    
+
     **功能描述**:
     此接口用于批量绑定多个词库到指定服务。
     支持为每个绑定关系指定词库类型，同一个词库在不同服务中可以有不同的类型。
     library_type字段存储在服务-词库关系表中，而不是词库表中，实现更灵活的配置。
-    
+
     ---
     ### 请求体 (Request Body)
     | 字段           | 类型         | 必填 | 描述                                                    |
@@ -172,7 +173,7 @@ def batch_bind_service_libraries(
     | `target_id`    | `string`    | 是   | 服务ID                                                  |
     | `library_ids`  | `list[string]` | 是   | 词库ID列表                                           |
     | `library_type` | `string`    | 否   | 词库类型: blacklist/whitelist/reply/pattern/custom      |
-    
+
     **请求示例**:
     ```json
     {
@@ -184,7 +185,7 @@ def batch_bind_service_libraries(
         "library_type": "blacklist"
     }
     ```
-    
+
     **不更新类型示例**:
     ```json
     {
@@ -195,7 +196,7 @@ def batch_bind_service_libraries(
         ]
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应（有library_type）(200)
@@ -215,7 +216,7 @@ def batch_bind_service_libraries(
         }
     }
     ```
-    
+
     #### 成功响应（无library_type）(200)
     ```json
     {
@@ -234,9 +235,9 @@ def batch_bind_service_libraries(
             db, request.target_id, request.library_ids,
             tenant_id=user.id, created_by=user.id, library_type=request.library_type
         )
-        
+
         return get_json_result(data=result)
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -250,13 +251,13 @@ def unbind_service_library(
 ) -> dict[str, Any]:
     """
     解绑服务词库关系
-    
+
     Args:
         service_id: 服务ID
         library_id: 词库ID
         db: 数据库会话
         user: 当前用户信息
-        
+
     Returns:
         dict[str, Any]: 解绑结果
     """
@@ -264,12 +265,12 @@ def unbind_service_library(
         success = GuardServiceLibraryService.unbind_library_from_service(
             db, service_id, library_id
         )
-        
+
         if success:
             return get_json_result(data=True)
         else:
             return get_data_error_result(retmsg="解绑失败")
-            
+
     except Exception as e:
         return server_error_response(e)
 
@@ -283,12 +284,12 @@ def bind_label_library(
 ) -> dict[str, Any]:
     """
     绑定词库到标签
-    
+
     Args:
         request: 绑定请求参数
         db: 数据库会话
         user: 当前用户信息
-        
+
     Returns:
         dict[str, Any]: 绑定结果
     """
@@ -302,12 +303,12 @@ def bind_label_library(
             tenant_id=user.id,
             created_by=user.id
         )
-        
+
         if binding_id:
             return get_json_result(data={"binding_id": binding_id})
         else:
             return get_data_error_result(retmsg="绑定失败，可能已存在相同绑定")
-            
+
     except Exception as e:
         return server_error_response(e)
 
@@ -321,13 +322,13 @@ def get_label_libraries(
 ) -> dict[str, Any]:
     """
     获取标签绑定的词库列表
-    
+
     Args:
         label_id: 标签ID
         enabled_only: 是否只返回启用的
         db: 数据库会话
         user: 当前用户信息
-        
+
     Returns:
         dict[str, Any]: 词库列表
     """
@@ -335,9 +336,9 @@ def get_label_libraries(
         libraries = GuardLabelLibraryService.get_libraries_by_label(
             db, label_id, enabled_only
         )
-        
+
         return get_json_result(data=libraries)
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -351,13 +352,13 @@ def get_library_labels(
 ) -> dict[str, Any]:
     """
     获取使用词库的标签列表
-    
+
     Args:
         library_id: 词库ID
         enabled_only: 是否只返回启用的
         db: 数据库会话
         user: 当前用户信息
-        
+
     Returns:
         dict[str, Any]: 标签列表
     """
@@ -365,9 +366,9 @@ def get_library_labels(
         labels = GuardLabelLibraryService.get_labels_by_library(
             db, library_id, enabled_only
         )
-        
+
         return get_json_result(data=labels)
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -380,12 +381,12 @@ def batch_bind_label_libraries(
 ) -> dict[str, Any]:
     """
     批量绑定词库到标签
-    
+
     Args:
         request: 批量绑定请求参数
         db: 数据库会话
         user: 当前用户信息
-        
+
     Returns:
         dict[str, Any]: 绑定结果
     """
@@ -394,9 +395,9 @@ def batch_bind_label_libraries(
             db, request.target_id, request.library_ids,
             tenant_id=user.id, created_by=user.id
         )
-        
+
         return get_json_result(data=result)
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -410,13 +411,13 @@ def unbind_label_library(
 ) -> dict[str, Any]:
     """
     解绑标签词库关系
-    
+
     Args:
         label_id: 标签ID
         library_id: 词库ID
         db: 数据库会话
         user: 当前用户信息
-        
+
     Returns:
         dict[str, Any]: 解绑结果
     """
@@ -424,12 +425,12 @@ def unbind_label_library(
         success = GuardLabelLibraryService.unbind_library_from_label(
             db, label_id, library_id
         )
-        
+
         if success:
             return get_json_result(data=True)
         else:
             return get_data_error_result(retmsg="解绑失败")
-            
+
     except Exception as e:
         return server_error_response(e)
 
@@ -444,20 +445,20 @@ def update_binding(
 ) -> dict[str, Any]:
     """
     更新绑定关系
-    
+
     Args:
         request: 更新请求参数
         binding_type: 绑定类型
         db: 数据库会话
         user: 当前用户信息
-        
+
     Returns:
         dict[str, Any]: 更新结果
     """
     try:
-        update_data = {k: v for k, v in request.model_dump().items() 
+        update_data = {k: v for k, v in request.model_dump().items()
                       if v is not None and k != "binding_id"}
-        
+
         if binding_type == "service-library":
             success = GuardServiceLibraryService.update_binding(
                 db, request.binding_id, update_data
@@ -468,12 +469,12 @@ def update_binding(
             )
         else:
             return get_data_error_result(retmsg="无效的绑定类型")
-        
+
         if success:
             return get_json_result(data=True)
         else:
             return get_data_error_result(retmsg="更新失败")
-            
+
     except Exception as e:
         return server_error_response(e)
 
@@ -485,23 +486,23 @@ def get_relationship_stats(
 ) -> dict[str, Any]:
     """
     获取关系统计信息
-    
+
     Args:
         db: 数据库会话
         user: 当前用户信息
-        
+
     Returns:
         dict[str, Any]: 统计信息
     """
     try:
         service_stats = GuardServiceLibraryService.get_binding_stats(db, user.id)
         label_stats = GuardLabelLibraryService.get_binding_stats(db, user.id)
-        
+
         return get_json_result(data={
             "service_library_stats": service_stats,
             "label_library_stats": label_stats
         })
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -514,12 +515,12 @@ def get_library_usage(
 ) -> dict[str, Any]:
     """
     获取词库使用情况
-    
+
     Args:
         library_id: 词库ID
         db: 数据库会话
         user: 当前用户信息
-        
+
     Returns:
         dict[str, Any]: 使用情况
     """
@@ -528,17 +529,17 @@ def get_library_usage(
         services = GuardServiceLibraryService.get_services_by_library(
             db, library_id, enabled_only=False
         )
-        
+
         # 获取使用此词库的标签
         labels = GuardLabelLibraryService.get_labels_by_library(
             db, library_id, enabled_only=False
         )
-        
+
         # 获取词库在各维度的使用统计
         dimension_usage = GuardLabelLibraryService.get_library_usage_by_dimensions(
             db, library_id, user.id
         )
-        
+
         return get_json_result(data={
             "library_id": library_id,
             "services": services,
@@ -551,7 +552,7 @@ def get_library_usage(
                 "enabled_labels": len([l for l in labels if l.get("binding", {}).get("enabled", False)])
             }
         })
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -565,13 +566,13 @@ def sync_library_to_dimension(
 ) -> dict[str, Any]:
     """
     将词库同步到指定维度的所有标签
-    
+
     Args:
         library_id: 词库ID
         dimension_id: 维度ID
         db: 数据库会话
         user: 当前用户信息
-        
+
     Returns:
         dict[str, Any]: 同步结果
     """
@@ -579,8 +580,8 @@ def sync_library_to_dimension(
         result = GuardLabelLibraryService.sync_library_to_all_labels_in_dimension(
             db, library_id, dimension_id, user.id, user.id
         )
-        
+
         return get_json_result(data=result)
-        
+
     except Exception as e:
         return server_error_response(e)

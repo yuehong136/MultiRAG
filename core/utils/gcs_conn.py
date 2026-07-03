@@ -13,14 +13,16 @@
 #  limitations under the License.
 #
 
+import datetime
 import logging
 import time
-import datetime
 from io import BytesIO
-from google.cloud import storage
+
 from google.api_core.exceptions import NotFound
-from common.decorator import singleton
+from google.cloud import storage
+
 from common import settings
+from common.decorator import singleton
 
 
 @singleton

@@ -1,16 +1,15 @@
 import logging
-from typing import List
 
-from .analysis_context import AnalysisContext
-from .base import ElementAnalyzer
-from .paragraph_analyzer_util import identify_input, split_lines
-from ..component import InputComponent, DescriptionComponent
+from ..component import DescriptionComponent, InputComponent
+from ..component.base import Component
 from ..component.factory import ComponentFactory
 from ..component.radio import RadioComponent
 from ..component.sign import SignComponent
 from ..constants import ComponentType
-from ..component.base import Component
 from ..element import Element, ElementType, ParagraphElement
+from .analysis_context import AnalysisContext
+from .base import ElementAnalyzer
+from .paragraph_analyzer_util import identify_input, split_lines
 
 
 class ParagraphElementAnalyzer(ElementAnalyzer):
@@ -19,7 +18,7 @@ class ParagraphElementAnalyzer(ElementAnalyzer):
     def can_handle(self, element: Element) -> bool:
         return element.type == ElementType.PARAGRAPH
 
-    def analyze(self, element: ParagraphElement, context: AnalysisContext) -> List[Component]:
+    def analyze(self, element: ParagraphElement, context: AnalysisContext) -> list[Component]:
         logging.info(f"处理段落元素：{element.content}")
         components = []
 
@@ -34,7 +33,7 @@ class ParagraphElementAnalyzer(ElementAnalyzer):
 
         return components
 
-    def _analyze_content(self, content: str) -> List[Component]:
+    def _analyze_content(self, content: str) -> list[Component]:
         """分析内容并创建对应的组件
 
         Args:

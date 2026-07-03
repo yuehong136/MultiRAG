@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @file: evaluation_service.py
@@ -22,7 +21,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from api.db.db_models import EvaluationDataset, EvaluationCase, EvaluationRun, EvaluationResult
+from api.db.db_models import EvaluationCase, EvaluationDataset, EvaluationResult, EvaluationRun
 from api.db.services.common_service import CommonService
 from api.db.services.dialog_service import DialogService
 from common.constants import StatusEnum
@@ -268,7 +267,7 @@ class EvaluationService:
             failure_count = 0
 
         except Exception as e:
-            logging.error(f"Error bulk importing test cases: {str(e)}")
+            logging.error(f"Error bulk importing test cases: {e!s}")
             failure_count = len(cases)
             success_count = 0
 

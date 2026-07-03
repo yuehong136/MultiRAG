@@ -1,15 +1,15 @@
-import json
-import uuid
-import os
-import shutil
-import logging
-import re
-from datetime import datetime
-
-from fastapi import APIRouter, UploadFile, File, HTTPException, Form
-from io import BytesIO
-from docx import Document
 import base64
+import json
+import logging
+import os
+import re
+import shutil
+import uuid
+from datetime import datetime
+from io import BytesIO
+
+from docx import Document
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from api.utils.api_utils import get_json_result
 
@@ -261,7 +261,7 @@ def save_document_structure(request_id: str, structure: dict):
 
     # 输出汇总日志
     summary = structure["summary"]
-    logger.info(f"[document_structure] ===== 文档结构分析 =====")
+    logger.info("[document_structure] ===== 文档结构分析 =====")
     logger.info(f"[document_structure] 正文段落数: {summary['total_body_paragraphs']}")
     logger.info(f"[document_structure] 表格数: {summary['total_tables']}")
     logger.info(f"[document_structure] 表格单元格数: {summary['total_table_cells']}")
@@ -269,11 +269,11 @@ def save_document_structure(request_id: str, structure: dict):
     logger.info(f"[document_structure] 疑似被拆分的占位符数: {summary['split_placeholder_count']}")
 
     if summary["potentially_split_placeholders"]:
-        logger.warning(f"[document_structure] ⚠️ 发现可能被拆分的占位符:")
+        logger.warning("[document_structure] ⚠️ 发现可能被拆分的占位符:")
         for item in summary["potentially_split_placeholders"]:
             logger.warning(f"[document_structure]   位置: {item['location']}")
             logger.warning(f"[document_structure]   完整文本: {item['full_text']}")
-            logger.warning(f"[document_structure]   Run 拆分情况:")
+            logger.warning("[document_structure]   Run 拆分情况:")
             for run in item["runs_detail"]:
                 logger.warning(f"[document_structure]     Run[{run['run_index']}]: '{run['text']}'")
 
@@ -293,7 +293,7 @@ def extract_placeholders_from_text(text: str) -> set:
         占位符编号集合（例如：{1, 2, 3}）
     """
     matches = PLACEHOLDER_PATTERN.findall(text)
-    return set(int(num) for num in matches)
+    return {int(num) for num in matches}
 
 
 def extract_placeholders_from_document(doc: Document) -> list:
@@ -563,7 +563,7 @@ async def extract_placeholders(
 
     # 保存输入文件
     save_docx_log(request_id, "input", input_file_content, filename=file.filename)
-    logger.info(f"[extract_placeholders] 输入文件已保存")
+    logger.info("[extract_placeholders] 输入文件已保存")
 
     # 读取文档
     doc = Document(BytesIO(input_file_content))
@@ -681,7 +681,7 @@ async def fill_placeholders(
 
         # 保存输入文件和 JSON 数据
         save_docx_log(request_id, "input", input_file_content, fill_data, file.filename)
-        logger.info(f"[fill_placeholders] 输入文件已保存")
+        logger.info("[fill_placeholders] 输入文件已保存")
 
         # Step 3: 读取文档
         doc = Document(BytesIO(input_file_content))
@@ -716,5 +716,5 @@ async def fill_placeholders(
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON data provided.")
     except Exception as e:
-        logger.error(f"[fill_placeholders] 处理失败: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+        logger.error(f"[fill_placeholders] 处理失败: {e!s}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"An error occurred: {e!s}")

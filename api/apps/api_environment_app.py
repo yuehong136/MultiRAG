@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -7,20 +6,28 @@
 @desc: 环境管理API接口
 """
 import logging
-from typing import Any
-from fastapi import APIRouter, HTTPException, Depends, Query, Body
-from fastapi.responses import JSONResponse
 
+from fastapi import APIRouter, Body, Depends, Query
+
+from api.apps import manager
+from api.db.db_models import UserTenant, get_db
 from api.db.services.api_environment_models import (
-    EnvironmentCreate, EnvironmentUpdate, EnvironmentListResponse, EnvironmentDetailResponse,
-    EnvironmentVariableCreate, EnvironmentVariableUpdate, EnvironmentVariableResponse,
-    EnvironmentDuplicateRequest, BatchVariablesRequest, VariableResolveRequest, VariableResolveResponse,
-    GlobalEnvironmentResponse, EnvironmentQueryParams, PaginatedEnvironmentResponse
+    BatchVariablesRequest,
+    EnvironmentCreate,
+    EnvironmentDetailResponse,
+    EnvironmentDuplicateRequest,
+    EnvironmentQueryParams,
+    EnvironmentUpdate,
+    EnvironmentVariableCreate,
+    EnvironmentVariableResponse,
+    EnvironmentVariableUpdate,
+    GlobalEnvironmentResponse,
+    PaginatedEnvironmentResponse,
+    VariableResolveRequest,
+    VariableResolveResponse,
 )
 from api.db.services.api_environment_service import environment_service
-from api.utils.api_utils import get_json_result, get_data_error_result, server_error_response
-from api.apps import manager, app as global_app
-from api.db.db_models import get_db, UserTenant
+from api.utils.api_utils import get_data_error_result, get_json_result
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -39,8 +46,8 @@ def get_user_tenant_id(db, user_id: str) -> str:
         return user_id
 
 
-@router.get("/environments", 
-            summary="获取环境列表", 
+@router.get("/environments",
+            summary="获取环境列表",
             response_description="返回用户的环境列表",
             response_model=PaginatedEnvironmentResponse)
 def get_environments(
@@ -53,7 +60,7 @@ def get_environments(
 ):
     """
     获取当前用户的所有环境列表
-    
+
     支持分页、搜索和筛选功能：
     - 支持按环境名称和描述搜索
     - 支持筛选默认环境
@@ -66,18 +73,18 @@ def get_environments(
             search=search,
             is_default=is_default
         )
-        
+
         tenant_id = get_user_tenant_id(db, user.id)
         result = environment_service.get_environments(db, tenant_id, params)
         return get_json_result(data=result, retmsg="获取环境列表成功")
-        
+
     except Exception as e:
-        logger.error(f"获取环境列表失败: {str(e)}")
+        logger.error(f"获取环境列表失败: {e!s}")
         return get_data_error_result(retmsg=str(e))
 
 
-@router.get("/environments/{environment_id}", 
-            summary="获取环境详情", 
+@router.get("/environments/{environment_id}",
+            summary="获取环境详情",
             response_description="返回环境的详细信息",
             response_model=EnvironmentDetailResponse)
 def get_environment_detail(
@@ -87,21 +94,21 @@ def get_environment_detail(
 ):
     """
     获取指定环境的详细信息，包括所有环境变量
-    
+
     返回环境的基本信息和所有关联的变量列表
     """
     try:
         tenant_id = get_user_tenant_id(db, user.id)
         result = environment_service.get_environment_detail(db, tenant_id, environment_id)
         return get_json_result(data=result, retmsg="获取环境详情成功")
-        
+
     except Exception as e:
-        logger.error(f"获取环境详情失败: {str(e)}")
+        logger.error(f"获取环境详情失败: {e!s}")
         return get_data_error_result(retmsg=str(e))
 
 
-@router.post("/environments", 
-             summary="创建环境", 
+@router.post("/environments",
+             summary="创建环境",
              response_description="返回创建的环境详情",
              response_model=EnvironmentDetailResponse)
 def create_environment(
@@ -111,7 +118,7 @@ def create_environment(
 ):
     """
     创建新的环境
-    
+
     可以同时创建环境和关联的变量：
     - 环境名称在同一用户下必须唯一
     - base_url: 可选的前置URL，如 https://api.example.com
@@ -122,14 +129,14 @@ def create_environment(
         tenant_id = get_user_tenant_id(db, user.id)
         result = environment_service.create_environment(db, tenant_id, env_data)
         return get_json_result(data=result, retmsg="创建环境成功")
-        
+
     except Exception as e:
-        logger.error(f"创建环境失败: {str(e)}")
+        logger.error(f"创建环境失败: {e!s}")
         return get_data_error_result(retmsg=str(e))
 
 
-@router.put("/environments/{environment_id}", 
-            summary="更新环境", 
+@router.put("/environments/{environment_id}",
+            summary="更新环境",
             response_description="返回更新后的环境详情",
             response_model=EnvironmentDetailResponse)
 def update_environment(
@@ -140,7 +147,7 @@ def update_environment(
 ):
     """
     更新环境基本信息
-    
+
     支持更新环境名称、描述和默认状态：
     - 环境名称在同一用户下必须唯一
     - 如果设为默认环境，会自动取消其他环境的默认状态
@@ -148,14 +155,14 @@ def update_environment(
     try:
         result = environment_service.update_environment(db, user.id, environment_id, env_data)
         return get_json_result(data=result, retmsg="更新环境成功")
-        
+
     except Exception as e:
-        logger.error(f"更新环境失败: {str(e)}")
+        logger.error(f"更新环境失败: {e!s}")
         return get_data_error_result(retmsg=str(e))
 
 
-@router.delete("/environments/{environment_id}", 
-               summary="删除环境", 
+@router.delete("/environments/{environment_id}",
+               summary="删除环境",
                response_description="返回删除结果")
 def delete_environment(
     environment_id: str,
@@ -164,20 +171,20 @@ def delete_environment(
 ):
     """
     删除指定环境
-    
+
     会同时删除环境下的所有变量
     """
     try:
         environment_service.delete_environment(db, user.id, environment_id)
         return get_json_result(data=True, retmsg="删除环境成功")
-        
+
     except Exception as e:
-        logger.error(f"删除环境失败: {str(e)}")
+        logger.error(f"删除环境失败: {e!s}")
         return get_data_error_result(retmsg=str(e))
 
 
-@router.post("/environments/{environment_id}/duplicate", 
-             summary="复制环境", 
+@router.post("/environments/{environment_id}/duplicate",
+             summary="复制环境",
              response_description="返回复制的环境详情",
              response_model=EnvironmentDetailResponse)
 def duplicate_environment(
@@ -188,7 +195,7 @@ def duplicate_environment(
 ):
     """
     复制现有环境
-    
+
     会复制环境的所有信息和变量：
     - 新环境名称必须唯一
     - 复制的环境不会设为默认环境
@@ -196,14 +203,14 @@ def duplicate_environment(
     try:
         result = environment_service.duplicate_environment(db, user.id, environment_id, duplicate_data)
         return get_json_result(data=result, retmsg="复制环境成功")
-        
+
     except Exception as e:
-        logger.error(f"复制环境失败: {str(e)}")
+        logger.error(f"复制环境失败: {e!s}")
         return get_data_error_result(retmsg=str(e))
 
 
-@router.post("/environments/{environment_id}/set-default", 
-             summary="设置默认环境", 
+@router.post("/environments/{environment_id}/set-default",
+             summary="设置默认环境",
              response_description="返回设置后的环境详情",
              response_model=EnvironmentDetailResponse)
 def set_default_environment(
@@ -213,20 +220,20 @@ def set_default_environment(
 ):
     """
     将指定环境设为默认环境
-    
+
     会自动取消其他环境的默认状态
     """
     try:
         result = environment_service.set_default_environment(db, user.id, environment_id)
         return get_json_result(data=result, retmsg="设置默认环境成功")
-        
+
     except Exception as e:
-        logger.error(f"设置默认环境失败: {str(e)}")
+        logger.error(f"设置默认环境失败: {e!s}")
         return get_data_error_result(retmsg=str(e))
 
 
-@router.post("/environments/{environment_id}/variables", 
-             summary="创建环境变量", 
+@router.post("/environments/{environment_id}/variables",
+             summary="创建环境变量",
              response_description="返回创建的变量",
              response_model=EnvironmentVariableResponse)
 def create_variable(
@@ -237,20 +244,20 @@ def create_variable(
 ):
     """
     在指定环境中添加变量
-    
+
     变量名在同一环境下必须唯一
     """
     try:
         result = environment_service.create_variable(db, user.id, environment_id, var_data)
         return get_json_result(data=result, retmsg="创建变量成功")
-        
+
     except Exception as e:
-        logger.error(f"创建变量失败: {str(e)}")
+        logger.error(f"创建变量失败: {e!s}")
         return get_data_error_result(retmsg=str(e))
 
 
-@router.put("/environments/{environment_id}/variables/{variable_id}", 
-            summary="更新环境变量", 
+@router.put("/environments/{environment_id}/variables/{variable_id}",
+            summary="更新环境变量",
             response_description="返回更新后的变量",
             response_model=EnvironmentVariableResponse)
 def update_variable(
@@ -262,20 +269,20 @@ def update_variable(
 ):
     """
     更新指定变量
-    
+
     变量名在同一环境下必须唯一
     """
     try:
         result = environment_service.update_variable(db, user.id, environment_id, variable_id, var_data)
         return get_json_result(data=result, retmsg="更新变量成功")
-        
+
     except Exception as e:
-        logger.error(f"更新变量失败: {str(e)}")
+        logger.error(f"更新变量失败: {e!s}")
         return get_data_error_result(retmsg=str(e))
 
 
-@router.delete("/environments/{environment_id}/variables/{variable_id}", 
-               summary="删除环境变量", 
+@router.delete("/environments/{environment_id}/variables/{variable_id}",
+               summary="删除环境变量",
                response_description="返回删除结果")
 def delete_variable(
     environment_id: str,
@@ -289,14 +296,14 @@ def delete_variable(
     try:
         environment_service.delete_variable(db, user.id, environment_id, variable_id)
         return get_json_result(data=True, retmsg="删除变量成功")
-        
+
     except Exception as e:
-        logger.error(f"删除变量失败: {str(e)}")
+        logger.error(f"删除变量失败: {e!s}")
         return get_data_error_result(retmsg=str(e))
 
 
-@router.put("/environments/{environment_id}/variables/batch", 
-            summary="批量更新变量", 
+@router.put("/environments/{environment_id}/variables/batch",
+            summary="批量更新变量",
             response_description="返回更新后的变量列表",
             response_model=list[EnvironmentVariableResponse])
 def batch_update_variables(
@@ -307,20 +314,20 @@ def batch_update_variables(
 ):
     """
     批量更新环境的所有变量
-    
+
     会删除现有的所有变量，然后创建新的变量列表
     """
     try:
         result = environment_service.batch_update_variables(db, user.id, environment_id, batch_data)
         return get_json_result(data=result, retmsg="批量更新变量成功")
-        
+
     except Exception as e:
-        logger.error(f"批量更新变量失败: {str(e)}")
+        logger.error(f"批量更新变量失败: {e!s}")
         return get_data_error_result(retmsg=str(e))
 
 
-@router.post("/environments/{environment_id}/resolve", 
-             summary="变量解析预览", 
+@router.post("/environments/{environment_id}/resolve",
+             summary="变量解析预览",
              response_description="返回变量解析结果",
              response_model=VariableResolveResponse)
 def resolve_variables(
@@ -331,7 +338,7 @@ def resolve_variables(
 ):
     """
     预览变量解析结果
-    
+
     将文本中的 {{variableName}} 格式的变量替换为实际值：
     - 返回解析后的文本
     - 列出使用的变量
@@ -341,14 +348,14 @@ def resolve_variables(
         tenant_id = get_user_tenant_id(db, user.id)
         result = environment_service.resolve_variables(db, tenant_id, environment_id, resolve_data.text)
         return get_json_result(data=result, retmsg="变量解析成功")
-        
+
     except Exception as e:
-        logger.error(f"变量解析失败: {str(e)}")
+        logger.error(f"变量解析失败: {e!s}")
         return get_data_error_result(retmsg=str(e))
 
 
-@router.get("/environments/global", 
-            summary="获取全局预设环境", 
+@router.get("/environments/global",
+            summary="获取全局预设环境",
             response_description="返回系统预设的环境模板",
             response_model=list[GlobalEnvironmentResponse])
 def get_global_environments(
@@ -357,13 +364,13 @@ def get_global_environments(
 ):
     """
     获取系统预设的环境模板
-    
+
     用于环境创建时的快速选择
     """
     try:
         result = environment_service.get_global_environments(db)
         return get_json_result(data=result, retmsg="获取全局环境成功")
-        
+
     except Exception as e:
-        logger.error(f"获取全局环境失败: {str(e)}")
+        logger.error(f"获取全局环境失败: {e!s}")
         return get_data_error_result(retmsg=str(e))

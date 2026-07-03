@@ -1,18 +1,19 @@
-import logging
-import json
-import re
 import asyncio
+import json
+import logging
+import re
 from typing import Any
+
 from sqlalchemy.orm import Session
 
-from api.db.db_models import WritingChapter, WritingProject, WritingChapterContent, WritingReferenceMaterial
+from api.db.db_models import WritingChapter, WritingChapterContent, WritingProject, WritingReferenceMaterial
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from api.db.services.chapter_service import ChapterService
 from api.db.services.common_service import CommonService
-from api.db.services.user_service import TenantService
 from api.db.services.llm_service import LLMBundle
-from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+from api.db.services.user_service import TenantService
+from common.constants import LLMType, StatusEnum
 from common.misc_utils import get_uuid
-from common.constants import StatusEnum, LLMType
 
 
 class WritingService(CommonService):
@@ -53,7 +54,7 @@ class WritingService(CommonService):
             # 如果用户提供了自定义大纲，则使用它，否则调用大模型生成大纲
             if custom_outline_md:
                 # 使用用户提供的自定义大纲
-                logging.info(f"使用用户提供的自定义大纲模板")
+                logging.info("使用用户提供的自定义大纲模板")
 
                 # 从Markdown大纲中提取标题
                 # 尝试从大纲的第一行提取标题（通常是# 开头的一级标题）
@@ -234,7 +235,7 @@ class WritingService(CommonService):
 
         except Exception as e:
             db.rollback()
-            logging.error(f"生成大纲出错: {str(e)}", exc_info=True)
+            logging.error(f"生成大纲出错: {e!s}", exc_info=True)
             raise e
 
     @classmethod
@@ -279,7 +280,7 @@ class WritingService(CommonService):
                 break
 
         if current_idx == -1:
-            raise ValueError(f"无法确定章节在项目中的位置")
+            raise ValueError("无法确定章节在项目中的位置")
 
         # 获取已完成章节的内容
         contents = db.query(WritingChapterContent).filter(
@@ -654,10 +655,10 @@ class WritingService(CommonService):
             }
         except Exception as e:
             db.rollback()
-            logging.error(f"写作章节内容失败: {str(e)}", exc_info=True)
+            logging.error(f"写作章节内容失败: {e!s}", exc_info=True)
             return {
                 "retcode": 500,
-                "retmsg": f"章节写作失败: {str(e)}",
+                "retmsg": f"章节写作失败: {e!s}",
                 "data": {"type": "error"}
             }
 
@@ -674,7 +675,7 @@ class WritingService(CommonService):
             AsyncGenerator: 生成内容的流
         """
         from api.db.db_models import db_connection
-        
+
         # 获取章节信息
         chapter = db.query(WritingChapter).filter(
             WritingChapter.id == chapter_id,
@@ -810,10 +811,10 @@ class WritingService(CommonService):
             yield f"data: {json.dumps(complete_data, ensure_ascii=False)}\n\n"
 
         except Exception as e:
-            logging.error(f"流式写作章节内容失败: {str(e)}", exc_info=True)
+            logging.error(f"流式写作章节内容失败: {e!s}", exc_info=True)
             error_data = {
                 "retcode": 500,
-                "retmsg": f"章节写作失败: {str(e)}",
+                "retmsg": f"章节写作失败: {e!s}",
                 "data": {
                     "type": "error"
                 }
@@ -882,7 +883,7 @@ class WritingService(CommonService):
         ).all()
 
         # 构建完整大纲文本
-        outline_text = f"# 文章大纲\n\n"
+        outline_text = "# 文章大纲\n\n"
 
         # 处理主章节和子章节
         main_chapters = {}

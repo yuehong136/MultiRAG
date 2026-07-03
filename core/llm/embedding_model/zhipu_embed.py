@@ -2,8 +2,8 @@ import numpy as np
 from zhipuai import ZhipuAI
 
 from common.log_utils import log_exception
-from core.llm.embedding_model.base import Base
 from common.token_utils import truncate
+from core.llm.embedding_model.base import Base
 
 
 class ZhipuEmbed(Base):

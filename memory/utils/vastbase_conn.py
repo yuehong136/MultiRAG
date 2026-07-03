@@ -18,9 +18,8 @@ VastBase connection for message storage.
 This module provides a specialized VastBase connection for storing and retrieving messages.
 """
 
-import json
 import copy
-from typing import Any
+import json
 
 from common.decorator import singleton
 from common.doc_store.doc_store_base import MatchExpr, OrderByExpr
@@ -169,7 +168,7 @@ class VastBaseConnection(VastBaseConnectionBase):
                 cursor.close()
                 self._release_connection(conn)
             except Exception as e:
-                errors.append(f"{doc.get('id')}: {str(e)}")
+                errors.append(f"{doc.get('id')}: {e!s}")
                 self.logger.warning(f"VastBase insert error: {e}")
 
         return errors

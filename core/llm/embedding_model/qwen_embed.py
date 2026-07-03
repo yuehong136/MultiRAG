@@ -2,8 +2,8 @@ import dashscope
 import numpy as np
 
 from common.log_utils import log_exception
-from core.llm.embedding_model.base import Base
 from common.token_utils import truncate
+from core.llm.embedding_model.base import Base
 
 
 class QWenEmbed(Base):
@@ -12,8 +12,9 @@ class QWenEmbed(Base):
         self.model_name = model_name
 
     def encode(self, texts: list):
-        import dashscope
         import time
+
+        import dashscope
 
         batch_size = 4
         res = []

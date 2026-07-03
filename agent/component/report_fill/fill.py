@@ -248,7 +248,7 @@ async def _fill_title(
         return static_title, None
     except FillError as err:
         return static_title, err
-    except Exception as err:  # noqa: BLE001 - 任何调用失败都回落静态 title,保其余
+    except Exception as err:
         return static_title, FillError(str(err))
 
 
@@ -278,7 +278,7 @@ async def _fill_subtitle(
         return static_subtitle, None
     except FillError as err:
         return static_subtitle, err
-    except Exception as err:  # noqa: BLE001 - 任何调用失败都回落静态 subtitle,保其余
+    except Exception as err:
         return static_subtitle, FillError(str(err))
 
 
@@ -309,7 +309,7 @@ async def _fill_section_titles(
         return out, None
     except FillError as err:
         return {}, err
-    except Exception as err:  # noqa: BLE001 - 任何调用失败都回落静态标题,保其余
+    except Exception as err:
         return {}, FillError(str(err))
 
 
@@ -379,7 +379,7 @@ async def fill_skeleton(
             )
         except FillError as err:
             result = ({}, err)
-        except Exception as err:  # noqa: BLE001 - 任何调用失败都降级为本节失败,保其余
+        except Exception as err:
             result = ({}, FillError(str(err)))
         if on_progress:
             # 单线程事件循环:此处读写 done 之间无 await,不会竞态。

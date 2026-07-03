@@ -1,16 +1,15 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from enum import Enum
-from typing import Generic, TypeVar, Optional
+from typing import Generic, TypeVar
 
 from fastapi import Depends
 from requests import Session
 
-from api.apps import manager
 from api.db.db_models import get_db
+
 # from api.db.database import get_db
 from workflow.WorkflowContext import WorkflowContext
-
-from dataclasses import dataclass
 
 
 @dataclass
@@ -86,10 +85,9 @@ class Node(ABC, Generic[T]):
         self.node_parameter: T = node_parameter
 
     @abstractmethod
-    async def process(self, input_data: Optional[dict] = None, context: Optional[WorkflowContext] = None,
+    async def process(self, input_data: dict | None = None, context: WorkflowContext | None = None,
                       db: Session = Depends(get_db),
-                      user=Optional[Depends(manager)]) -> Optional[
-        dict]:
+                      user=None) -> dict | None:
         pass
 
     @abstractmethod

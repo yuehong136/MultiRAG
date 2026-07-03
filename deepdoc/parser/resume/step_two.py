@@ -10,19 +10,21 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import copy
+import datetime
 import logging
 import re
-import copy
-import time
-import datetime
-import demjson3
-import traceback
 import signal
-import numpy as np
-from deepdoc.parser.resume.entities import degrees, schools, corporations
-from core.nlp import rag_tokenizer, surname
-from xpinyin import Pinyin
+import time
+import traceback
 from contextlib import contextmanager
+
+import demjson3
+import numpy as np
+from xpinyin import Pinyin
+
+from core.nlp import rag_tokenizer, surname
+from deepdoc.parser.resume.entities import corporations, degrees, schools
 
 
 class TimeoutException(Exception):
@@ -147,7 +149,7 @@ def forEdu(cv):
         cv["sch_rank_kwd"].append("顶尖学校")
     elif 50 >= cv["school_rank_int"] > 20 or ("海外名校" in fea and 500 >= cv["school_rank_int"] > 200):
         cv["sch_rank_kwd"].append("精英学校")
-    elif cv["school_rank_int"] > 50 and ("985" in fea or "211" in fea) or ("海外名校" in fea and cv["school_rank_int"] > 500):
+    elif (cv["school_rank_int"] > 50 and ("985" in fea or "211" in fea)) or ("海外名校" in fea and cv["school_rank_int"] > 500):
         cv["sch_rank_kwd"].append("优质学校")
     else:
         cv["sch_rank_kwd"].append("一般学校")
@@ -191,7 +193,7 @@ def forEdu(cv):
     if sch:
         cv["school_name_kwd"] = sch
         if (len(cv.get("degree_kwd", [])) >= 1 and "本科" in cv["degree_kwd"]) \
-                or all([c.lower() in ["硕士", "博士", "mba", "博士后"] for c in cv.get("degree_kwd", [])]) \
+                or all(c.lower() in ["硕士", "博士", "mba", "博士后"] for c in cv.get("degree_kwd", [])) \
                 or not cv.get("degree_kwd"):
             for c in sch:
                 if schools.is_good(c):
@@ -201,9 +203,9 @@ def forEdu(cv):
                     cv["tag_kwd"].append("好学历")
                     break
         if (len(cv.get("degree_kwd", [])) >= 1 and "本科" in cv["degree_kwd"] and
-            any([d.lower() in ["硕士", "博士", "mba", "博士"] for d in cv.get("degree_kwd", [])])) \
-                or all([d.lower() in ["硕士", "博士", "mba", "博士后"] for d in cv.get("degree_kwd", [])]) \
-                or any([d in ["mba", "emba", "博士后"] for d in cv.get("degree_kwd", [])]):
+            any(d.lower() in ["硕士", "博士", "mba", "博士"] for d in cv.get("degree_kwd", []))) \
+                or all(d.lower() in ["硕士", "博士", "mba", "博士后"] for d in cv.get("degree_kwd", [])) \
+                or any(d in ["mba", "emba", "博士后"] for d in cv.get("degree_kwd", [])):
             if "tag_kwd" not in cv:
                 cv["tag_kwd"] = []
             if "好学历" not in cv["tag_kwd"]:
@@ -534,7 +536,7 @@ def parse(cv):
                     cv[f"{t}_kwd"] = nms
                     cv[f"{t}_tks"] = rag_tokenizer.tokenize(" ".join(nms))
             except Exception:
-                logging.exception("parse {} {}".format(str(traceback.format_exc()), cv[k]))
+                logging.exception(f"parse {traceback.format_exc()!s} {cv[k]}")
                 cv[k] = []
 
         # tokenize fields
@@ -632,7 +634,7 @@ def parse(cv):
     cv = forWork(cv)
     cv = birth(cv)
 
-    cv["corp_proj_sch_deg_kwd"] = [c for c in cv.get("corp_tag_kwd", [])]
+    cv["corp_proj_sch_deg_kwd"] = list(cv.get("corp_tag_kwd", []))
     for i in range(len(cv["corp_proj_sch_deg_kwd"])):
         for j in cv.get("sch_rank_kwd", []):
             cv["corp_proj_sch_deg_kwd"][i] += "+" + j
@@ -661,7 +663,7 @@ def parse(cv):
     for k in cv.keys():
         if not re.search("_(kwd|id)$", k) or not isinstance(cv[k], list):
             continue
-        cv[k] = list(set([re.sub("(市)$", "", str(n)) for n in cv[k] if n not in ['中国', '0']]))
+        cv[k] = list({re.sub("(市)$", "", str(n)) for n in cv[k] if n not in ['中国', '0']})
     keys = [k for k in cv.keys() if re.search(r"_feas*$", k)]
     for k in keys:
         if cv[k] <= 0:

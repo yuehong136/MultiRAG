@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -7,13 +6,15 @@
 @desc: 敏感词管理接口
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field
 from typing import Any
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.db.db_models import get_db
+
 # from api.db.services.sensitive_word_service import (
 #     SensitiveWordService,
 #     SensitiveWordCategoryService,
@@ -22,9 +23,8 @@ from api.db.db_models import get_db
 #     SensitiveFilterLogService,
 #     SensitiveFilterStatsService
 # )
-from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
+from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
 from common.misc_utils import get_uuid
-from common import settings
 
 router = APIRouter()
 

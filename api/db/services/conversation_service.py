@@ -1,19 +1,18 @@
+import json
 import logging
 import time
-import json
-from uuid import uuid4
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from common.constants import StatusEnum
 from api.db.db_models import Conversation
 from api.db.services.api_service import API4ConversationService
 from api.db.services.common_service import CommonService
-from api.db.services.dialog_service import DialogService, chat, async_chat
+from api.db.services.dialog_service import DialogService, async_chat, chat
+from common.constants import StatusEnum
 from common.misc_utils import get_uuid
-
 from core.prompts.generator import chunks_format
 
 

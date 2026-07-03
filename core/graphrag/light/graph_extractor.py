@@ -12,11 +12,11 @@ from typing import Any
 
 import networkx as nx
 
-from common.token_utils import num_tokens_from_string
 from common.misc_utils import thread_pool_exec
-from core.graphrag.llm_protocol import GraphRAGCompletionLLM
+from common.token_utils import num_tokens_from_string
 from core.graphrag.general.extractor import ENTITY_EXTRACTION_MAX_GLEANINGS, Extractor
 from core.graphrag.light.graph_prompt import PROMPTS
+from core.graphrag.llm_protocol import GraphRAGCompletionLLM
 from core.graphrag.utils import chat_limiter, pack_user_ass_to_openai_messages, split_string_by_multi_markers
 
 
@@ -45,25 +45,25 @@ class GraphExtractor(Extractor):
         self._example_number = example_number
         examples = "\n".join(PROMPTS["entity_extraction_examples"][: int(self._example_number)])
 
-        example_context_base = dict(
-            tuple_delimiter=PROMPTS["DEFAULT_TUPLE_DELIMITER"],
-            record_delimiter=PROMPTS["DEFAULT_RECORD_DELIMITER"],
-            completion_delimiter=PROMPTS["DEFAULT_COMPLETION_DELIMITER"],
-            entity_types=",".join(self._entity_types),
-            language=self._language,
-        )
+        example_context_base = {
+            "tuple_delimiter": PROMPTS["DEFAULT_TUPLE_DELIMITER"],
+            "record_delimiter": PROMPTS["DEFAULT_RECORD_DELIMITER"],
+            "completion_delimiter": PROMPTS["DEFAULT_COMPLETION_DELIMITER"],
+            "entity_types": ",".join(self._entity_types),
+            "language": self._language,
+        }
         # add example's format
         examples = examples.format(**example_context_base)
 
         self._entity_extract_prompt = PROMPTS["entity_extraction"]
-        self._context_base = dict(
-            tuple_delimiter=PROMPTS["DEFAULT_TUPLE_DELIMITER"],
-            record_delimiter=PROMPTS["DEFAULT_RECORD_DELIMITER"],
-            completion_delimiter=PROMPTS["DEFAULT_COMPLETION_DELIMITER"],
-            entity_types=",".join(self._entity_types),
-            examples=examples,
-            language=self._language,
-        )
+        self._context_base = {
+            "tuple_delimiter": PROMPTS["DEFAULT_TUPLE_DELIMITER"],
+            "record_delimiter": PROMPTS["DEFAULT_RECORD_DELIMITER"],
+            "completion_delimiter": PROMPTS["DEFAULT_COMPLETION_DELIMITER"],
+            "entity_types": ",".join(self._entity_types),
+            "examples": examples,
+            "language": self._language,
+        }
 
         self._continue_prompt = PROMPTS["entity_continue_extraction"].format(**self._context_base)
         self._if_loop_prompt = PROMPTS["entity_if_loop_extraction"]

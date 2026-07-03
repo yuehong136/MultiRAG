@@ -19,12 +19,13 @@ import base64
 import logging
 import os
 import re
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import Enum
 from io import BytesIO
 from os import PathLike
 from pathlib import Path
-from typing import Any, Callable, Iterable, Optional
+from typing import Any
 
 import pdfplumber
 import requests
@@ -60,7 +61,7 @@ class _BBox:
     y1: float
 
 
-def _extract_bbox_from_prov(item, prov_attr: str = "prov") -> Optional[_BBox]:
+def _extract_bbox_from_prov(item, prov_attr: str = "prov") -> _BBox | None:
     prov = getattr(item, prov_attr, None)
     if not prov:
         return None
@@ -150,9 +151,7 @@ class DoclingParser(RAGFlowPdfParser):
         if hasattr(self, "page_images") and self.page_images and len(self.page_images) >= bbox.page_no:
             _, page_height = self.page_images[bbox.page_no - 1].size
             top, bott = page_height - top, page_height - bott
-        return "@@{}\t{:.1f}\t{:.1f}\t{:.1f}\t{:.1f}##".format(
-            bbox.page_no, x0, x1, top, bott
-        )
+        return f"@@{bbox.page_no}\t{x0:.1f}\t{x1:.1f}\t{top:.1f}\t{bott:.1f}##"
 
     @staticmethod
     def extract_positions(txt: str) -> list[tuple[list[int], float, float, float, float]]:
@@ -216,7 +215,7 @@ class DoclingParser(RAGFlowPdfParser):
 
         return (pic, positions) if need_position else pic
 
-    def _iter_doc_items(self, doc) -> Iterable[tuple[str, Any, Optional[_BBox]]]:
+    def _iter_doc_items(self, doc) -> Iterable[tuple[str, Any, _BBox | None]]:
         for t in getattr(doc, "texts", []):
             parent = getattr(t, "parent", "")
             ref = getattr(parent, "cref", "")

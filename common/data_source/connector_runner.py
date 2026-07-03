@@ -1,10 +1,10 @@
+import logging
 import sys
 import time
-import logging
 from collections.abc import Generator
 from datetime import datetime
-from typing import Generic
-from typing import TypeVar
+from typing import Generic, TypeVar
+
 from common.data_source.interfaces import (
     BaseConnector,
     CheckpointedConnector,
@@ -14,7 +14,6 @@ from common.data_source.interfaces import (
     PollConnector,
 )
 from common.data_source.models import ConnectorCheckpoint, ConnectorFailure, Document
-
 
 TimeRange = tuple[datetime, datetime]
 

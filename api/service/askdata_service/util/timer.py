@@ -1,7 +1,9 @@
 import time
-from typing import TypeVar, Coroutine, Any
+from collections.abc import Coroutine
+from typing import Any, TypeVar
 
 from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+
 logger = get_askdata_logger()
 
 T = TypeVar('T')
@@ -40,5 +42,5 @@ async def time_task(coro: Coroutine[Any, Any, T], name: str, log_level: str = "I
     except Exception as e:
         end_time = time.perf_counter()
         elapsed_time = end_time - start_time
-        logger.error(f"任务 '{name}' 执行失败，耗时: {elapsed_time:.4f} 秒，错误: {str(e)}")
+        logger.error(f"任务 '{name}' 执行失败，耗时: {elapsed_time:.4f} 秒，错误: {e!s}")
         raise

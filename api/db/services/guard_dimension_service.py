@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -7,9 +6,10 @@
 @desc: AI安全护栏维度管理服务
 """
 import logging
-from typing import List, Optional, Dict, Any
-from sqlalchemy.orm import Session
+from typing import Any
+
 from sqlalchemy import and_
+from sqlalchemy.orm import Session
 
 from api.db.db_models import GuardDimension
 from api.db.services.common_service import CommonService
@@ -22,11 +22,11 @@ class GuardDimensionService(CommonService):
 
     @classmethod
     def create_dimension(cls, db: Session, code: str, name: str,
-                        description: Optional[str] = None, tenant_id: Optional[str] = None,
-                        created_by: Optional[str] = None, **kwargs) -> Optional[str]:
+                        description: str | None = None, tenant_id: str | None = None,
+                        created_by: str | None = None, **kwargs) -> str | None:
         """
         创建护栏维度
-        
+
         Args:
             db: 数据库会话
             code: 维度代码
@@ -35,7 +35,7 @@ class GuardDimensionService(CommonService):
             tenant_id: 租户ID
             created_by: 创建者ID
             **kwargs: 其他参数
-            
+
         Returns:
             创建成功返回维度ID，失败返回None
         """
@@ -45,7 +45,7 @@ class GuardDimensionService(CommonService):
             if existing:
                 logging.warning(f"维度代码 {code} 已存在，租户: {tenant_id}")
                 raise ValueError(f"维度代码 {code} 已存在")
-                
+
             dimension_data = {
                 "id": get_uuid(),
                 "code": code,
@@ -58,25 +58,25 @@ class GuardDimensionService(CommonService):
                 "sort_order": kwargs.get("sort_order", 0),
                 "status": kwargs.get("status", "1")
             }
-            
+
             dimension = cls.save(db, **dimension_data)
             return dimension.id
-            
+
         except Exception as e:
             logging.error(f"创建维度失败: {e}")
             return None
 
     @classmethod
     def get_dimension_by_code(cls, db: Session, code: str,
-                             tenant_id: str) -> Optional[GuardDimension]:
+                             tenant_id: str) -> GuardDimension | None:
         """
         根据代码获取维度
-        
+
         Args:
             db: 数据库会话
             code: 维度代码
             tenant_id: 租户ID
-            
+
         Returns:
             维度对象或None
         """
@@ -93,14 +93,14 @@ class GuardDimensionService(CommonService):
             return None
 
     @classmethod
-    def get_enabled_dimensions(cls, db: Session, tenant_id: str) -> List[GuardDimension]:
+    def get_enabled_dimensions(cls, db: Session, tenant_id: str) -> list[GuardDimension]:
         """
         获取启用的维度列表
-        
+
         Args:
             db: 数据库会话
             tenant_id: 租户ID
-            
+
         Returns:
             启用的维度列表
         """
@@ -118,15 +118,15 @@ class GuardDimensionService(CommonService):
 
     @classmethod
     def get_dimensions_by_tenant(cls, db: Session, tenant_id: str,
-                                enabled_only: bool = False) -> List[GuardDimension]:
+                                enabled_only: bool = False) -> list[GuardDimension]:
         """
         获取租户的维度列表
-        
+
         Args:
             db: 数据库会话
             tenant_id: 租户ID
             enabled_only: 是否只返回启用的维度
-            
+
         Returns:
             维度列表
         """
@@ -137,10 +137,10 @@ class GuardDimensionService(CommonService):
                     cls.model.status == "1"
                 )
             )
-            
+
             if enabled_only:
                 query = query.filter(cls.model.enabled == True)
-                
+
             return query.order_by(cls.model.sort_order.asc()).all()
         except Exception as e:
             logging.error(f"获取租户维度失败: {e}")
@@ -148,15 +148,15 @@ class GuardDimensionService(CommonService):
 
     @classmethod
     def update_dimension(cls, db: Session, dimension_id: str,
-                        update_data: Dict[str, Any]) -> int:
+                        update_data: dict[str, Any]) -> int:
         """
         更新维度信息
-        
+
         Args:
             db: 数据库会话
             dimension_id: 维度ID
             update_data: 更新数据
-            
+
         Returns:
             更新成功返回True，失败返回False
         """
@@ -170,11 +170,11 @@ class GuardDimensionService(CommonService):
     def delete_dimension(cls, db: Session, dimension_id: str) -> int:
         """
         删除维度（物理删除）
-        
+
         Args:
             db: 数据库会话
             dimension_id: 维度ID
-            
+
         Returns:
             删除成功返回True，失败返回False
         """
@@ -188,11 +188,11 @@ class GuardDimensionService(CommonService):
     def toggle_dimension_status(cls, db: Session, dimension_id: str) -> int:
         """
         切换维度启用状态
-        
+
         Args:
             db: 数据库会话
             dimension_id: 维度ID
-            
+
         Returns:
             切换成功返回True，失败返回False
         """
@@ -200,30 +200,30 @@ class GuardDimensionService(CommonService):
             dimension = cls.get_by_id(db, dimension_id)
             if not dimension:
                 return False
-                
+
             new_enabled = not dimension.enabled
             return cls.update_by_id(db, dimension_id, {"enabled": new_enabled})
-            
+
         except Exception as e:
             logging.error(f"切换维度状态失败: {e}")
             return False
 
     @classmethod
-    def get_dimension_stats(cls, db: Session, tenant_id: str) -> Dict[str, Any]:
+    def get_dimension_stats(cls, db: Session, tenant_id: str) -> dict[str, Any]:
         """
         获取维度统计信息
-        
+
         Args:
             db: 数据库会话
             tenant_id: 租户ID
-            
+
         Returns:
             统计信息字典
         """
         try:
             dimensions = cls.get_dimensions_by_tenant(db, tenant_id)
             enabled_count = len([d for d in dimensions if d.enabled])
-            
+
             return {
                 "total_dimensions": len(dimensions),
                 "enabled_dimensions": enabled_count,
@@ -236,15 +236,15 @@ class GuardDimensionService(CommonService):
 
     @classmethod
     def init_default_dimensions(cls, db: Session, tenant_id: str,
-                               created_by: str) -> List[str]:
+                               created_by: str) -> list[str]:
         """
         初始化默认维度
-        
+
         Args:
             db: 数据库会话
             tenant_id: 租户ID
             created_by: 创建者ID
-            
+
         Returns:
             创建的维度ID列表
         """
@@ -283,7 +283,7 @@ class GuardDimensionService(CommonService):
                 }
             }
         ]
-        
+
         created_ids = []
         for dimension_data in default_dimensions:
             dimension_id = cls.create_dimension(
@@ -294,5 +294,5 @@ class GuardDimensionService(CommonService):
             )
             if dimension_id:
                 created_ids.append(dimension_id)
-                
+
         return created_ids

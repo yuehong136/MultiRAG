@@ -1,21 +1,15 @@
-from logging.config import fileConfig
-
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool
 import os
 import sys
+from logging.config import fileConfig
+
+from sqlalchemy import engine_from_config, pool
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 # 导入所有模型以便自动检测变化
-from api.db.db_models import (
-    Base, BaseModel, User, Tenant, UserTenant, LLMFactories, LLM, TenantLLM,
-    Knowledgebase, Document, File, File2Document, Task, Dialog, Conversation,
-    APIToken, API4Conversation, UserCanvas, CanvasTemplate,
-    WritingProject, WritingChapter, WritingReferenceMaterial, WritingChapterContent,
-    ApiEnvironment, ApiEnvironmentVariable, GlobalApiEnvironment
-)
-
 from alembic import context
+
+from api.db.db_models import Base
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

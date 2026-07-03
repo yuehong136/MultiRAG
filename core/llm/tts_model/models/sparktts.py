@@ -1,3 +1,4 @@
+import _thread as thread
 import base64
 import hashlib
 import hmac
@@ -8,7 +9,6 @@ from datetime import datetime
 from time import mktime
 from urllib.parse import urlencode
 from wsgiref.handlers import format_date_time
-import _thread as thread
 
 import websocket
 

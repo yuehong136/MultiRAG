@@ -14,6 +14,7 @@
 #  limitations under the License.
 #
 from abc import ABC
+
 from agent.component.base import ComponentBase, ComponentParamBase
 
 """
@@ -65,7 +66,7 @@ class Iteration(ComponentBase, ABC):
             self.set_output("_ERROR", self._param.items_ref + " must be an array, but its type is "+str(type(arr)))
 
     def thoughts(self) -> str:
-        return "Need to process {} items.".format(len(self._canvas.get_variable_value(self._param.items_ref)))
+        return f"Need to process {len(self._canvas.get_variable_value(self._param.items_ref))} items."
 
 
 

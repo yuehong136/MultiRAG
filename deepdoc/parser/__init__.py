@@ -27,15 +27,15 @@ from .ppt_parser import RAGFlowPptParser as PptParser
 from .txt_parser import RAGFlowTxtParser as TxtParser
 
 __all__ = [
-    "PdfParser",
-    "PlainParser",
     "DocxParser",
     "EpubParser",
     "ExcelParser",
-    "PptParser",
     "HtmlParser",
     "JsonParser",
-    "MarkdownParser",
-    "TxtParser",
     "MarkdownElementExtractor",
+    "MarkdownParser",
+    "PdfParser",
+    "PlainParser",
+    "PptParser",
+    "TxtParser",
 ]

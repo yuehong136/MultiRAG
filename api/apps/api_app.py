@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -7,18 +6,17 @@
 @desc: API 管理接口
 """
 from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from api.db.db_models import APIToken, get_db
-from api.db.services.api_service import APITokenService, API4ConversationService
-from api.db.services.user_service import UserTenantService
-from api.utils.api_utils import server_error_response, get_data_error_result, get_json_result, \
-    generate_confirmation_token
-from common.time_utils import current_timestamp, datetime_format
-
 from api.apps import manager
+from api.db.db_models import APIToken, get_db
+from api.db.services.api_service import API4ConversationService, APITokenService
+from api.db.services.user_service import UserTenantService
+from api.utils.api_utils import generate_confirmation_token, get_data_error_result, get_json_result, server_error_response
+from common.time_utils import current_timestamp, datetime_format
 
 
 class NewTokenRequest(BaseModel):

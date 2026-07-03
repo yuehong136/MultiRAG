@@ -1,4 +1,5 @@
 import time
+
 start_ts = time.time()
 
 import asyncio
@@ -11,48 +12,48 @@ import signal
 import sys
 import threading
 import traceback
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
-from api.utils.common import hash128
+from box_sdk_gen import AccessToken, BoxOAuth, OAuthConfig
+
+from api.db.db_models import db_connection
 from api.db.services.connector_service import ConnectorService, SyncLogsService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.db_models import db_connection
-from box_sdk_gen import BoxOAuth, OAuthConfig, AccessToken
+from api.utils.common import hash128
 from common import settings
-from common.versions import get_multirag_version
+from common.config_utils import show_configs
+from common.constants import FileSource, TaskStatus
 from common.data_source import (
-    BlobStorageConnector,
-    RSSConnector,
-    NotionConnector,
-    DiscordConnector,
-    GoogleDriveConnector,
-    MoodleConnector,
-    JiraConnector,
-    DropboxConnector,
     AirtableConnector,
     AsanaConnector,
-    ImapConnector,
-    ZendeskConnector,
-    SeaFileConnector,
-    RDBMSConnector,
+    BlobStorageConnector,
     DingTalkAITableConnector,
+    DiscordConnector,
+    DropboxConnector,
+    GoogleDriveConnector,
+    ImapConnector,
+    JiraConnector,
+    MoodleConnector,
+    NotionConnector,
+    RDBMSConnector,
+    RSSConnector,
+    SeaFileConnector,
+    ZendeskConnector,
 )
-from common.constants import FileSource, TaskStatus
-from common.data_source.confluence_connector import ConfluenceConnector
-from common.data_source.gmail_connector import GmailConnector
+from common.data_source.bitbucket.connector import BitbucketConnector
 from common.data_source.box_connector import BoxConnector
+from common.data_source.config import INDEX_BATCH_SIZE
+from common.data_source.confluence_connector import ConfluenceConnector
 from common.data_source.github.connector import GithubConnector
 from common.data_source.gitlab_connector import GitlabConnector
-from common.data_source.bitbucket.connector import BitbucketConnector
+from common.data_source.gmail_connector import GmailConnector
 from common.data_source.interfaces import CheckpointOutputWrapper
-from common.data_source.config import INDEX_BATCH_SIZE
 from common.data_source.models import ConnectorFailure, SeafileSyncScope
 from common.data_source.webdav_connector import WebDAVConnector
-from common.signal_utils import start_tracemalloc_and_snapshot, stop_tracemalloc
-from common.config_utils import show_configs
 from common.log_utils import init_root_logger
-
+from common.signal_utils import start_tracemalloc_and_snapshot, stop_tracemalloc
+from common.versions import get_multirag_version
 
 MAX_CONCURRENT_TASKS = int(os.environ.get("MAX_CONCURRENT_TASKS", "5"))
 task_limiter = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
@@ -72,7 +73,7 @@ class SyncBase:
             try:
                 await asyncio.wait_for(self._run_task_logic(task), timeout=task["timeout_secs"])
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 msg = f"Task timeout after {task['timeout_secs']} seconds"
                 with db_connection() as db:
                     SyncLogsService.update_by_id(db, task["id"], {"status": TaskStatus.FAIL, "error_msg": msg})
@@ -104,7 +105,7 @@ class SyncBase:
         doc_num = 0
         failed_docs = 0
         removed_docs = 0
-        next_update = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        next_update = datetime(1970, 1, 1, tzinfo=UTC)
 
         if task["poll_range_start"]:
             next_update = task["poll_range_start"]
@@ -207,7 +208,7 @@ class _BlobLikeBase(SyncBase):
             if task["reindex"] == "1" or not task["poll_range_start"]
             else self.connector.poll_source(
                 task["poll_range_start"].timestamp(),
-                datetime.now(timezone.utc).timestamp(),
+                datetime.now(UTC).timestamp(),
             )
         )
 
@@ -264,7 +265,7 @@ class RSS(SyncBase):
 
         return self.connector.poll_source(
             task["poll_range_start"].timestamp(),
-            datetime.now(timezone.utc).timestamp(),
+            datetime.now(UTC).timestamp(),
         )
 
 
@@ -312,7 +313,7 @@ class Confluence(SyncBase):
             start_time = task["poll_range_start"].timestamp()
             begin_info = f"from {task['poll_range_start']}"
 
-        end_time = datetime.now(timezone.utc).timestamp()
+        end_time = datetime.now(UTC).timestamp()
 
         raw_batch_size = self.conf.get("sync_batch_size") or self.conf.get("batch_size") or INDEX_BATCH_SIZE
         try:
@@ -351,8 +352,7 @@ class Confluence(SyncBase):
                 yield pending_docs
 
         def wrapper():
-            for batch in document_batches():
-                yield batch
+            yield from document_batches()
 
         logging.info("Connect to Confluence: {} {}".format(self.conf["wiki_base"], begin_info))
         return wrapper()
@@ -371,7 +371,7 @@ class IMAP(SyncBase):
         )
         credentials_provider = StaticCredentialsProvider(tenant_id=task["tenant_id"], connector_name=DocumentSource.IMAP, credential_json=self.conf["credentials"])
         self.connector.set_credentials_provider(credentials_provider)
-        end_time = datetime.now(timezone.utc).timestamp()
+        end_time = datetime.now(UTC).timestamp()
         if task["reindex"] == "1" or not task["poll_range_start"]:
             start_time = end_time - self.conf.get("poll_range",30) * 24 * 60 * 60
             begin_info = "totally"
@@ -414,8 +414,7 @@ class IMAP(SyncBase):
                 yield pending_docs
 
         def wrapper():
-            for batch in document_batches():
-                yield batch
+            yield from document_batches()
 
         logging.info(
             "Connect to IMAP: host(%s) port(%s) user(%s) folder(%s) %s",
@@ -435,7 +434,7 @@ class Zendesk(SyncBase):
         self.connector = ZendeskConnector(content_type=self.conf.get("zendesk_content_type"))
         self.connector.load_credentials(self.conf["credentials"])
 
-        end_time = datetime.now(timezone.utc).timestamp()
+        end_time = datetime.now(UTC).timestamp()
         if task["reindex"] == "1" or not task.get("poll_range_start"):
             start_time = 0
             begin_info = "totally"
@@ -497,8 +496,7 @@ class Zendesk(SyncBase):
                 yield pending_docs
 
         def wrapper():
-            for batch in document_batches():
-                yield batch
+            yield from document_batches()
 
         logging.info(
             "Connect to Zendesk: subdomain(%s) %s",
@@ -518,7 +516,7 @@ class Notion(SyncBase):
         document_generator = (
             self.connector.load_from_state()
             if task["reindex"] == "1" or not task["poll_range_start"]
-            else self.connector.poll_source(task["poll_range_start"].timestamp(), datetime.now(timezone.utc).timestamp())
+            else self.connector.poll_source(task["poll_range_start"].timestamp(), datetime.now(UTC).timestamp())
         )
 
         begin_info = "totally" if task["reindex"] == "1" or not task["poll_range_start"] else "from {}".format(task["poll_range_start"])
@@ -537,18 +535,18 @@ class Discord(SyncBase):
         self.connector = DiscordConnector(
             server_ids=server_ids.split(",") if server_ids else [],
             channel_names=channel_names.split(",") if channel_names else [],
-            start_date=datetime(1970, 1, 1, tzinfo=timezone.utc).strftime("%Y-%m-%d"),
+            start_date=datetime(1970, 1, 1, tzinfo=UTC).strftime("%Y-%m-%d"),
             batch_size=self.conf.get("batch_size", 1024),
         )
         self.connector.load_credentials(self.conf["credentials"])
         document_generator = (
             self.connector.load_from_state()
             if task["reindex"] == "1" or not task["poll_range_start"]
-            else self.connector.poll_source(task["poll_range_start"].timestamp(), datetime.now(timezone.utc).timestamp())
+            else self.connector.poll_source(task["poll_range_start"].timestamp(), datetime.now(UTC).timestamp())
         )
 
         begin_info = "totally" if task["reindex"] == "1" or not task["poll_range_start"] else "from {}".format(task["poll_range_start"])
-        logging.info("Connect to Discord: servers({}),  channel({}) {}".format(server_ids, channel_names, begin_info))
+        logging.info(f"Connect to Discord: servers({server_ids}),  channel({channel_names}) {begin_info}")
         return document_generator
 
 
@@ -605,7 +603,7 @@ class Gmail(SyncBase):
                 document_generator = self.connector.load_from_state()
             else:
                 start_time = poll_start.timestamp()
-                end_time = datetime.now(timezone.utc).timestamp()
+                end_time = datetime.now(UTC).timestamp()
                 begin_info = f"from {poll_start}"
                 document_generator = self.connector.poll_source(start_time, end_time)
 
@@ -630,7 +628,7 @@ class Dropbox(SyncBase):
         else:
             poll_start = task["poll_range_start"]
             document_generator = self.connector.poll_source(
-                poll_start.timestamp(), datetime.now(timezone.utc).timestamp()
+                poll_start.timestamp(), datetime.now(UTC).timestamp()
             )
             begin_info = f"from {poll_start}"
 
@@ -670,7 +668,7 @@ class GoogleDrive(SyncBase):
             start_time = task["poll_range_start"].timestamp()
             begin_info = f"from {task['poll_range_start']}"
 
-        end_time = datetime.now(timezone.utc).timestamp()
+        end_time = datetime.now(UTC).timestamp()
         raw_batch_size = self.conf.get("sync_batch_size") or self.conf.get("batch_size") or INDEX_BATCH_SIZE
         try:
             batch_size = int(raw_batch_size)
@@ -764,7 +762,7 @@ class Jira(SyncBase):
             start_time = task["poll_range_start"].timestamp()
             begin_info = f"from {task['poll_range_start']}"
 
-        end_time = datetime.now(timezone.utc).timestamp()
+        end_time = datetime.now(UTC).timestamp()
 
         raw_batch_size = self.conf.get("sync_batch_size") or self.conf.get("batch_size") or INDEX_BATCH_SIZE
         try:
@@ -871,7 +869,7 @@ class WebDAV(SyncBase):
             begin_info = "totally"
         else:
             start_ts = task["poll_range_start"].timestamp()
-            end_ts = datetime.now(timezone.utc).timestamp()
+            end_ts = datetime.now(UTC).timestamp()
             logging.info(f"Polling WebDAV from {task['poll_range_start']} (ts: {start_ts}) to now (ts: {end_ts})")
             document_batch_generator = self.connector.poll_source(start_ts, end_ts)
             begin_info = "from {}".format(task["poll_range_start"])
@@ -883,8 +881,7 @@ class WebDAV(SyncBase):
         ))
 
         def wrapper():
-            for document_batch in document_batch_generator:
-                yield document_batch
+            yield from document_batch_generator
 
         return wrapper()
 
@@ -909,7 +906,7 @@ class Moodle(SyncBase):
         else:
             document_generator = self.connector.poll_source(
                 poll_start.timestamp(),
-                datetime.now(timezone.utc).timestamp(),
+                datetime.now(UTC).timestamp(),
             )
             begin_info = f"from {poll_start}"
 
@@ -949,7 +946,7 @@ class BOX(SyncBase):
         else:
             document_generator = self.connector.poll_source(
                 poll_start.timestamp(),
-                datetime.now(timezone.utc).timestamp(),
+                datetime.now(UTC).timestamp(),
             )
             begin_info = f"from {poll_start}"
         logging.info("Connect to Box: folder_id({}) {}".format(self.conf["folder_id"], begin_info))
@@ -985,7 +982,7 @@ class Airtable(SyncBase):
         else:
             document_generator = self.connector.poll_source(
                 poll_start.timestamp(),
-                datetime.now(timezone.utc).timestamp(),
+                datetime.now(UTC).timestamp(),
             )
             begin_info = f"from {poll_start}"
 
@@ -1027,7 +1024,7 @@ class Asana(SyncBase):
             else:
                 document_generator = self.connector.poll_source(
                     poll_start.timestamp(),
-                    datetime.now(timezone.utc).timestamp(),
+                    datetime.now(UTC).timestamp(),
                 )
                 begin_info = f"from {poll_start}"
 
@@ -1068,7 +1065,7 @@ class Github(SyncBase):
 
         file_list = None
         if task.get("reindex") == "1" or not task.get("poll_range_start"):
-            start_time = datetime.fromtimestamp(0, tz=timezone.utc)
+            start_time = datetime.fromtimestamp(0, tz=UTC)
             begin_info = "totally"
         else:
             start_time = task.get("poll_range_start")
@@ -1078,7 +1075,7 @@ class Github(SyncBase):
                 for slim_batch in self.connector.retrieve_all_slim_docs_perm_sync():
                     file_list.extend(slim_batch)
 
-        end_time = datetime.now(timezone.utc)
+        end_time = datetime.now(UTC)
 
         runner = ConnectorRunner(
             connector=self.connector,
@@ -1104,8 +1101,7 @@ class Github(SyncBase):
                         checkpoint = next_checkpoint
 
         def wrapper():
-            for batch in document_batches():
-                yield batch
+            yield from document_batches()
 
         logging.info(
             "Connect to Github: org_name(%s), repo_names(%s) for %s",
@@ -1153,9 +1149,9 @@ class Gitlab(SyncBase):
             else:
                 document_generator = self.connector.poll_source(
                     poll_start.timestamp(),
-                    datetime.now(timezone.utc).timestamp()
+                    datetime.now(UTC).timestamp()
                 )
-                begin_info = "from {}".format(poll_start)
+                begin_info = f"from {poll_start}"
         logging.info("Connect to Gitlab: ({}) {}".format(self.conf["project_name"], begin_info))
         return document_generator
 
@@ -1178,13 +1174,13 @@ class Bitbucket(SyncBase):
         )
 
         if task["reindex"] == "1" or not task["poll_range_start"]:
-            start_time = datetime.fromtimestamp(0, tz=timezone.utc)
+            start_time = datetime.fromtimestamp(0, tz=UTC)
             begin_info = "totally"
         else:
             start_time = task.get("poll_range_start")
             begin_info = f"from {start_time}"
 
-        end_time = datetime.now(timezone.utc)
+        end_time = datetime.now(UTC)
 
         def document_batches():
             checkpoint = self.connector.build_dummy_checkpoint()
@@ -1209,8 +1205,7 @@ class Bitbucket(SyncBase):
                         break
 
         def wrapper():
-            for batch in document_batches():
-                yield batch
+            yield from document_batches()
 
         logging.info(
             "Connect to Bitbucket: workspace(%s), %s",
@@ -1242,7 +1237,7 @@ class SeaFile(SyncBase):
         else:
             document_generator = self.connector.poll_source(
                 poll_start.timestamp(),
-                datetime.now(timezone.utc).timestamp(),
+                datetime.now(UTC).timestamp(),
             )
             begin_info = f"from {poll_start}"
 
@@ -1289,7 +1284,7 @@ class DingTalkAITable(SyncBase):
         else:
             document_generator = self.connector.poll_source(
                 poll_start.timestamp(),
-                datetime.now(timezone.utc).timestamp(),
+                datetime.now(UTC).timestamp(),
             )
             begin_info = f"from {poll_start}"
 
@@ -1334,7 +1329,7 @@ class MySQL(SyncBase):
             poll_start = task["poll_range_start"]
             document_generator = self.connector.poll_source(
                 poll_start.timestamp(),
-                datetime.now(timezone.utc).timestamp()
+                datetime.now(UTC).timestamp()
             )
             begin_info = f"from {poll_start}"
 
@@ -1373,7 +1368,7 @@ class PostgreSQL(SyncBase):
             poll_start = task["poll_range_start"]
             document_generator = self.connector.poll_source(
                 poll_start.timestamp(),
-                datetime.now(timezone.utc).timestamp()
+                datetime.now(UTC).timestamp()
             )
             begin_info = f"from {poll_start}"
 
@@ -1428,9 +1423,9 @@ async def dispatch_tasks():
     with db_connection() as db:
         for task in SyncLogsService.list_sync_tasks(db)[0]:
             if task["poll_range_start"]:
-                task["poll_range_start"] = task["poll_range_start"].astimezone(timezone.utc)
+                task["poll_range_start"] = task["poll_range_start"].astimezone(UTC)
             if task["poll_range_end"]:
-                task["poll_range_end"] = task["poll_range_end"].astimezone(timezone.utc)
+                task["poll_range_end"] = task["poll_range_end"].astimezone(UTC)
 
             func = func_factory[task["source"]](task["config"])
             tasks.append(asyncio.create_task(func(task)))

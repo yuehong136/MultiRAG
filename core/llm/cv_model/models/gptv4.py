@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -7,6 +6,7 @@
 @desc:
 """
 from openai import OpenAI
+
 from core.llm.cv_model.base import Base
 
 

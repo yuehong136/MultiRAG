@@ -1,8 +1,8 @@
 import numpy as np
 import requests
 
-from core.llm.embedding_model.base import Base
 from common.token_utils import num_tokens_from_string
+from core.llm.embedding_model.base import Base
 
 
 class HuggingFaceEmbed(Base):

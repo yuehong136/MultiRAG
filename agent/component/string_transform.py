@@ -23,6 +23,7 @@ from jinja2.sandbox import SandboxedEnvironment
 _jinja2_sandbox = SandboxedEnvironment()
 from agent.component.base import ComponentParamBase
 from common.connection_utils import timeout
+
 from .message import Message
 
 
@@ -80,7 +81,7 @@ class StringTransform(Message, ABC):
         var = self._canvas.get_variable_value(self._param.split_ref) if not line else line
         if not var:
             var = ""
-        assert isinstance(var, str), "The input variable is not a string: {}".format(type(var))
+        assert isinstance(var, str), f"The input variable is not a string: {type(var)}"
         self.set_input_value(self._param.split_ref, var)
 
         res = []
@@ -98,7 +99,7 @@ class StringTransform(Message, ABC):
         script, kwargs = self.get_kwargs(script, kwargs, self._param.delimiters[0])
 
         if self._is_jinjia2(script):
-            template = Jinja2Template(script)
+            template = _jinja2_sandbox.from_string(script)
             try:
                 script = template.render(kwargs)
             except Exception:

@@ -13,7 +13,6 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
-import json
 import os
 import re
 import threading
@@ -27,10 +26,11 @@ import requests
 from huggingface_hub import snapshot_download
 from yarl import URL
 
-from common import settings
 from api.utils.file_utils import get_home_cache_dir
+from common import settings
 from common.log_utils import log_exception
-from common.token_utils import num_tokens_from_string, truncate, total_token_count_from_response
+from common.token_utils import num_tokens_from_string, total_token_count_from_response, truncate
+
 
 class Base(ABC):
     def __init__(self, key, model_name, **kwargs):
@@ -114,7 +114,7 @@ class DefaultRerank(Base):
                         raise
             if retry_count >= max_retries:
                 raise RuntimeError("max retry times, still cannot process batch, please check your GPU memory")
-            
+
         self.torch_empty_cache()
         self._dynamic_batch_size = old_dynamic_batch_size
         return np.array(res)

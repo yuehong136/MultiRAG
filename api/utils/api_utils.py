@@ -3,14 +3,15 @@ import inspect
 import logging
 import os
 import time
+from collections.abc import Callable
 from copy import deepcopy
 from datetime import datetime
 from functools import wraps
-from typing import Any, Callable
+from typing import Any
 
-from fastapi import Request, Depends
-from fastapi.responses import JSONResponse
+from fastapi import Depends, Request
 from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -18,10 +19,10 @@ from api.db.db_models import APIToken, get_db
 from api.db.services.api_service import APITokenService
 from api.db.services.tenant_llm_service import LLMFactoriesService
 from common import settings
-from common.mcp_tool_call_conn import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
-from common.misc_utils import thread_pool_exec
 from common.connection_utils import timeout
 from common.constants import RetCode
+from common.mcp_tool_call_conn import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
+from common.misc_utils import thread_pool_exec
 
 
 class SDKAuthError(Exception):
@@ -102,13 +103,13 @@ async def _coerce_request_data(request: Request) -> dict:
 async def get_request_json(request: Request) -> dict:
     """
     Get request JSON data with fallback to form data.
-    
+
     This is a convenience wrapper around _coerce_request_data().
     For most FastAPI endpoints, prefer using Pydantic models instead.
-    
+
     Args:
         request: FastAPI Request object
-        
+
     Returns:
         dict: Parsed request data
     """
@@ -172,7 +173,7 @@ def validate_request(*args, **kwargs):
     """
     参数验证装饰器（已废弃，FastAPI 推荐使用 Pydantic 模型验证）
     保留此函数是为了向后兼容和代码完整性
-    
+
     注意：此装饰器已不再使用，FastAPI 通过 Pydantic 模型自动处理参数验证
     """
     def process_args(input_arguments):
@@ -200,7 +201,7 @@ def validate_request(*args, **kwargs):
                     [f"{a[0]}={a[1]}" for a in error_arguments])
             return error_string
         return None
-    
+
     def wrapper(func):
         @wraps(func)
         async def decorated_function(request: Request, *_args, **_kwargs):
@@ -234,7 +235,7 @@ def apikey_required(func: Callable) -> Callable:
     """
     装饰器形式的 API Key 验证（已废弃，建议使用 apikey_dependency）
     保留此函数是为了向后兼容和代码完整性
-    
+
     注意：此装饰器已不再使用，FastAPI 推荐使用依赖注入方式
     """
     @wraps(func)
@@ -253,7 +254,7 @@ def apikey_required(func: Callable) -> Callable:
             )
 
         kwargs['tenant_id'] = objs[0].tenant_id
-        
+
         # 支持同步和异步函数
         if inspect.iscoroutinefunction(func):
             return await func(*args, **kwargs)
@@ -265,19 +266,19 @@ def apikey_required(func: Callable) -> Callable:
 def apikey_dependency(request: Request, db: Session = Depends(get_db)) -> str:
     """
     FastAPI 依赖注入形式的 API Key 验证
-    
+
     从请求头中提取并验证 API Key，返回 tenant_id
-    
+
     Args:
         request: FastAPI Request 对象
         db: 数据库会话
-    
+
     Returns:
         str: 租户ID
-        
+
     Raises:
         HTTPException: 当 API Key 无效或缺失时
-        
+
     Example:
         @router.post("/endpoint")
         def endpoint(tenant_id: str = Depends(apikey_dependency)):
@@ -285,29 +286,29 @@ def apikey_dependency(request: Request, db: Session = Depends(get_db)) -> str:
             pass
     """
     authorization_header = request.headers.get('Authorization')
-    
+
     if not authorization_header:
         raise build_error_result(
-            error_msg='Authorization header is missing!', 
+            error_msg='Authorization header is missing!',
             retcode=RetCode.FORBIDDEN
         )
-    
+
     authorization_list = authorization_header.split()
     if len(authorization_list) < 2:
         raise build_error_result(
-            error_msg='Invalid Authorization format!', 
+            error_msg='Invalid Authorization format!',
             retcode=RetCode.FORBIDDEN
         )
-    
+
     token = authorization_list[1]
     objs = APITokenService.query(db, token=token)
-    
+
     if not objs:
         raise build_error_result(
-            error_msg='API-KEY is invalid!', 
+            error_msg='API-KEY is invalid!',
             retcode=RetCode.FORBIDDEN
         )
-    
+
     return objs[0].tenant_id
 
 
@@ -350,16 +351,16 @@ def convert_datetime_to_str(data: dict):
 def token_required(request: Request, db: Session = Depends(get_db)):
     """
     FastAPI 依赖注入形式的 Token 验证
-    
+
     从请求头中提取并验证 API Token，返回 tenant_id
-    
+
     Args:
         request: FastAPI Request 对象
         db: 数据库会话
-    
+
     Returns:
         str: 租户ID
-        
+
     Example:
         @router.post("/endpoint")
         def endpoint(tenant_id: str = Depends(token_required)):
@@ -427,7 +428,7 @@ def current_tenant_id(request: Request, db: Session = Depends(get_db)) -> str:
 
     # 1) web 会话 JWT：复用 LoginManager 的解码逻辑与 user_loader
     #    （延迟导入避免与 api.apps 的循环依赖）
-    from api.apps import manager, load_user
+    from api.apps import load_user, manager
 
     try:
         payload = manager._get_payload(token)
@@ -947,18 +948,18 @@ async def is_strong_enough(chat_model, embedding_model):
 def get_allowed_llm_factories(db) -> list:
     """
     获取允许的LLM工厂列表
-    
+
     如果在配置中设置了 ALLOWED_LLM_FACTORIES，则只返回配置中指定的工厂；
     否则返回所有工厂。
-    
+
     Args:
         db: 数据库会话
-        
+
     Returns:
         list: 允许的LLM工厂对象列表
     """
     factories = list(LLMFactoriesService.get_all(db, reverse=True, order_by="rank"))
     if settings.ALLOWED_LLM_FACTORIES is None:
         return factories
-    
+
     return [factory for factory in factories if factory.name in settings.ALLOWED_LLM_FACTORIES]

@@ -15,6 +15,7 @@
 #
 
 import urllib.parse
+
 from common.http_client import async_request, sync_request
 
 
@@ -26,7 +27,7 @@ class UserInfo:
         self.avatar_url = avatar_url
 
     def to_dict(self):
-        return {key: value for key, value in self.__dict__.items()}
+        return dict(self.__dict__.items())
 
 
 class OAuthClient:

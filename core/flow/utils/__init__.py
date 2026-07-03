@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 core/flow 组件的纯函数提取工具集
 
@@ -8,25 +7,22 @@ core/flow 组件的纯函数提取工具集
 @date: 2025-11-10
 """
 
-from .parser_utils import FlowParser, parse_file
-from .token_chunker_utils import FlowTokenChunker, split_chunks
-from .title_chunker_utils import FlowTitleChunker, hierarchical_merge
 from .extractor_utils import FlowExtractor, extract_metadata
+from .parser_utils import FlowParser, parse_file
+from .title_chunker_utils import FlowTitleChunker, hierarchical_merge
+from .token_chunker_utils import FlowTokenChunker, split_chunks
 
 __all__ = [
-    # Parser
-    "FlowParser",
-    "parse_file",
-    
-    # TokenChunker
-    "FlowTokenChunker",
-    "split_chunks",
-    
-    # TitleChunker
-    "FlowTitleChunker",
-    "hierarchical_merge",
-    
     # Extractor
     "FlowExtractor",
+    # Parser
+    "FlowParser",
+    # TitleChunker
+    "FlowTitleChunker",
+    # TokenChunker
+    "FlowTokenChunker",
     "extract_metadata",
+    "hierarchical_merge",
+    "parse_file",
+    "split_chunks",
 ]

@@ -9,8 +9,8 @@ import time
 from typing import Any
 
 import jwt
-from fastapi import APIRouter, Depends, Query, Request, UploadFile, File, Form
-from fastapi.responses import StreamingResponse, Response, JSONResponse
+from fastapi import APIRouter, Depends, Query, Request, UploadFile
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -20,8 +20,8 @@ from api.db import CanvasCategory
 from api.db.db_models import get_db
 from api.db.services.canvas_service import UserCanvasService
 from api.db.services.file_service import FileService
-from api.db.services.user_service import UserService
 from api.db.services.user_canvas_version import UserCanvasVersionService
+from api.db.services.user_service import UserService
 from api.utils.api_utils import get_error_data_result, get_result, token_required
 from common.constants import RetCode
 from common.misc_utils import get_uuid, thread_pool_exec
@@ -64,7 +64,7 @@ def list_agents(
 ):
     """
     获取代理列表
-    
+
     Args:
         id: 代理ID过滤
         title: 代理标题过滤
@@ -74,7 +74,7 @@ def list_agents(
         desc: 是否降序
         db: 数据库会话
         tenant_id: 租户ID
-    
+
     Returns:
         代理列表
     """
@@ -82,7 +82,7 @@ def list_agents(
         canvas = UserCanvasService.query(db, id=id, title=title, user_id=tenant_id)
         if not canvas:
             return get_error_data_result(retmsg="The agent doesn't exist.")
-    
+
     canvas = UserCanvasService.get_list(db, tenant_id, page, page_size, order_by, desc, id, title)
     return get_result(data=canvas)
 
@@ -95,12 +95,12 @@ def create_agent(
 ):
     """
     创建新的代理
-    
+
     Args:
         request: 代理创建参数
         db: 数据库会话
         tenant_id: 租户ID
-    
+
     Returns:
         创建结果
     """
@@ -149,13 +149,13 @@ def update_agent(
 ):
     """
     更新代理
-    
+
     Args:
         agent_id: 代理ID
         request: 更新请求参数
         db: 数据库会话
         tenant_id: 租户ID
-    
+
     Returns:
         更新结果
     """
@@ -199,12 +199,12 @@ def delete_agent(
 ):
     """
     删除代理
-    
+
     Args:
         agent_id: 代理ID
         db: 数据库会话
         tenant_id: 租户ID
-    
+
     Returns:
         删除结果
     """
@@ -468,7 +468,7 @@ async def webhook(
                 **decode_kwargs,
             )
         except Exception as e:
-            raise Exception(f"Invalid JWT: {str(e)}")
+            raise Exception(f"Invalid JWT: {e!s}")
 
         raw_required_claims = jwt_cfg.get("required_claims", [])
         if isinstance(raw_required_claims, str):
@@ -614,7 +614,7 @@ async def webhook(
             try:
                 value = auto_cast_value(raw_value, field_type)
             except Exception as e:
-                raise Exception(f"{name}.{field} auto-cast failed: {str(e)}")
+                raise Exception(f"{name}.{field} auto-cast failed: {e!s}")
 
             # 4. Type validation
             if not validate_type(value, field_type):

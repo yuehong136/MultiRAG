@@ -1,16 +1,16 @@
 from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy.orm import Session
 
-from api.db.db_models import get_db
-from api.db.services.file_service import FileService
-from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.utils.api_utils import server_error_response, get_data_error_result, get_json_result
-from api.db import FileType
+from api.apps import manager
 from api.apps.services.file_convert_service import convert_files_with_new_session
+from api.db import FileType
+from api.db.db_models import get_db
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
+from api.db.services.file_service import FileService
+from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
 from common.constants import RetCode
-from api.apps import manager
 
 router = APIRouter()
 

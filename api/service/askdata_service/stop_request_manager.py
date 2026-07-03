@@ -1,9 +1,8 @@
-import asyncio
 import time
-from typing import Dict, Set
 from threading import Lock
 
 from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+
 logger = get_askdata_logger()
 
 
@@ -20,7 +19,7 @@ class StopRequestManager:
         Args:
             expire_seconds: 停止记录过期时间（秒），默认300秒（5分钟）
         """
-        self._stopped_requests: Dict[str, float] = {}  # ask_id -> timestamp
+        self._stopped_requests: dict[str, float] = {}  # ask_id -> timestamp
         self._lock = Lock()  # 使用线程锁而不是asyncio.Lock，因为可能在同步和异步环境中使用
         self._expire_seconds = expire_seconds
         self._last_cleanup = time.time()
@@ -54,7 +53,7 @@ class StopRequestManager:
                 return True
 
         except Exception as e:
-            logger.error(f"停止请求 {ask_id} 时发生错误: {str(e)}")
+            logger.error(f"停止请求 {ask_id} 时发生错误: {e!s}")
             return False
 
     def is_stopped(self, ask_id: str) -> bool:
@@ -90,7 +89,7 @@ class StopRequestManager:
                 return True
 
         except Exception as e:
-            logger.error(f"检查请求 {ask_id} 停止状态时发生错误: {str(e)}")
+            logger.error(f"检查请求 {ask_id} 停止状态时发生错误: {e!s}")
             return False
 
     def remove_stop_request(self, ask_id: str) -> bool:
@@ -115,7 +114,7 @@ class StopRequestManager:
                 return False
 
         except Exception as e:
-            logger.error(f"移除停止记录 {ask_id} 时发生错误: {str(e)}")
+            logger.error(f"移除停止记录 {ask_id} 时发生错误: {e!s}")
             return False
 
     def cleanup_expired(self) -> int:
@@ -130,7 +129,7 @@ class StopRequestManager:
                 return self._cleanup_expired_unsafe()
 
         except Exception as e:
-            logger.error(f"清理过期停止记录时发生错误: {str(e)}")
+            logger.error(f"清理过期停止记录时发生错误: {e!s}")
             return 0
 
     def _cleanup_expired_unsafe(self) -> int:
@@ -155,7 +154,7 @@ class StopRequestManager:
 
         return len(expired_keys)
 
-    def get_active_stop_requests(self) -> Set[str]:
+    def get_active_stop_requests(self) -> set[str]:
         """
         获取当前所有活跃的停止请求ID
 
@@ -174,10 +173,10 @@ class StopRequestManager:
                 return active_requests
 
         except Exception as e:
-            logger.error(f"获取活跃停止请求时发生错误: {str(e)}")
+            logger.error(f"获取活跃停止请求时发生错误: {e!s}")
             return set()
 
-    def get_stats(self) -> Dict[str, int]:
+    def get_stats(self) -> dict[str, int]:
         """
         获取管理器统计信息
 
@@ -202,7 +201,7 @@ class StopRequestManager:
                 }
 
         except Exception as e:
-            logger.error(f"获取统计信息时发生错误: {str(e)}")
+            logger.error(f"获取统计信息时发生错误: {e!s}")
             return {
                 "total_records": 0,
                 "active_records": 0,

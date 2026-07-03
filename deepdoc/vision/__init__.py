@@ -19,10 +19,10 @@ import threading
 
 import pdfplumber
 
-from .ocr import OCR
-from .recognizer import Recognizer
 from .layout_recognizer import AscendLayoutRecognizer
 from .layout_recognizer import LayoutRecognizer4YOLOv10 as LayoutRecognizer
+from .ocr import OCR
+from .recognizer import Recognizer
 from .table_structure_recognizer import TableStructureRecognizer
 
 LOCK_KEY_pdfplumber = "global_shared_lock_pdfplumber"
@@ -81,9 +81,9 @@ def init_in_out(args):
 
 __all__ = [
     "OCR",
-    "Recognizer",
-    "LayoutRecognizer",
     "AscendLayoutRecognizer",
+    "LayoutRecognizer",
+    "Recognizer",
     "TableStructureRecognizer",
     "init_in_out",
 ]

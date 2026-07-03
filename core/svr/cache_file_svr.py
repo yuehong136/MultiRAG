@@ -6,9 +6,8 @@ from sqlalchemy.orm import Session
 
 from api.db.db_models import SessionLocal
 from api.db.services.task_service import TaskService
-from core.utils.redis_conn import REDIS_CONN
 from common import settings
-
+from core.utils.redis_conn import REDIS_CONN
 
 
 def collect(db: Session):
@@ -28,12 +27,12 @@ def main(db: Session):
         try:
             if REDIS_CONN.is_alive():
                 try:
-                    key = "{}/{}".format(kb_id, loc)
+                    key = f"{kb_id}/{loc}"
                     if REDIS_CONN.exist(key):
                         continue
                     file_bin = settings.STORAGE_IMPL.get(kb_id, loc)
                     REDIS_CONN.transaction(key, file_bin, 12 * 60)
-                    logging.info("CACHE: {}".format(loc))
+                    logging.info(f"CACHE: {loc}")
                 except Exception as e:
                     logging.error(f"Error to get data from REDIS: {e}")
                     traceback.print_stack()

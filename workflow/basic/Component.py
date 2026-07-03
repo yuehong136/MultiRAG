@@ -1,9 +1,8 @@
 from abc import abstractmethod
+from typing import Any, TypeVar
 
-from typing import TypeVar, Any
-
+from workflow.basic.Node import Node, NodeParameter
 from workflow.WorkflowContext import WorkflowContext
-from workflow.basic.Node import NodeParameter, Node
 
 C = TypeVar('C', bound='ComponentParameter')
 

@@ -19,7 +19,7 @@ from copy import deepcopy
 
 import xxhash
 
-from agent.component.llm import LLMParam, LLM
+from agent.component.llm import LLM, LLMParam
 from core.flow.base import ProcessBase, ProcessParamBase
 from core.prompts.generator import run_toc_from_text
 

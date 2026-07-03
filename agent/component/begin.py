@@ -13,7 +13,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
-from agent.component.fillup import UserFillUpParam, UserFillUp
+from agent.component.fillup import UserFillUp, UserFillUpParam
 from agent.persondata_input import decrypt_persondata_input_value, is_persondata_input
 from api.db.services.file_service import FileService
 
@@ -32,7 +32,7 @@ class BeginParam(UserFillUpParam):
         self.check_valid_value(self.mode, "The 'mode' should be either `conversational` or `task`", ["conversational", "task", "Webhook"])
 
     def get_input_form(self) -> dict[str, dict]:
-        return getattr(self, "inputs")
+        return self.inputs
 
 
 class Begin(UserFillUp):

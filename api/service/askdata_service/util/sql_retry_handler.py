@@ -1,7 +1,9 @@
 # sql_retry_handler.py
-from typing import Callable, Dict, Any
+from collections.abc import Callable
+from typing import Any
 
 from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+
 logger = get_askdata_logger()
 
 
@@ -17,8 +19,8 @@ class SQLRetryHandler:
             fix_func: Callable,
             sql: str,
             dataset_id: int,
-            fix_params: Dict[str, Any]
-    ) -> Dict[str, Any]:
+            fix_params: dict[str, Any]
+    ) -> dict[str, Any]:
         """
         执行SQL，失败时自动修复并重试
 
@@ -78,7 +80,7 @@ class SQLRetryHandler:
 
             # 尝试修复SQL
             logger.info(f"第 {attempt + 1} 次执行失败，错误: {result['message']}")
-            logger.info(f"开始修复SQL...")
+            logger.info("开始修复SQL...")
 
             fix_result = await fix_func(
                 user_query=fix_params["user_query"],

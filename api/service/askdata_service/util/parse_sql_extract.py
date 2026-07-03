@@ -1,5 +1,6 @@
 import re
 
+
 def parse_sql_extract(extract_string: str) -> dict:
     """
     解析 SQL EXTRACT 函数字符串，提取时间粒度 (unit) 和涉及到的字段 (source)。

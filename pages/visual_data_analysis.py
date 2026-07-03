@@ -1,7 +1,6 @@
-from idlelib.iomenu import encoding
 
-import streamlit as st
 import pandas as pd
+import streamlit as st
 from pygwalker.api.streamlit import StreamlitRenderer
 
 from configs import VERSION

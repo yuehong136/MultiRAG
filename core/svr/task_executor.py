@@ -1,64 +1,64 @@
 import time
+
 start_ts = time.time()
 
 import asyncio
+import concurrent.futures
+import copy
+import faulthandler
+import json
+import logging
+import os
 import random
+import re
+import signal
 import socket
 import sys
 import threading
-import concurrent.futures
-import logging
 from datetime import datetime
-import json
-import os
-import xxhash
-import copy
-import re
 from functools import partial
 from multiprocessing.context import TimeoutError
 from timeit import default_timer as timer
-import signal
+
 import exceptiongroup
-import faulthandler
-
-from pymilvus import DataType
 import numpy as np
-from sqlalchemy.orm.exc import NoResultFound
+import xxhash
+from pymilvus import DataType
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import NoResultFound
 
-from api.db.services.document_service import DocumentService
-from api.db.services.doc_metadata_service import DocMetadataService
-from api.db.services.llm_service import LLMBundle
-from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
-from api.db.services.task_service import TaskService, has_canceled, CANVAS_DEBUG_DOC_ID, GRAPH_RAPTOR_FAKE_DOC_ID
-from api.db.services.file2document_service import File2DocumentService
 from api.db.db_models import db_connection
-from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
 from api.db.joint_services.memory_message_service import handle_save_to_memory_task
-from core.app import laws, paper, presentation, manual, qa, table, book, resume, picture, naive, one, audio, \
-    email, tag
-from core.utils.base64_image import image2id
-from core.utils.raptor_utils import should_skip_raptor, get_skip_reason
-from core.utils.redis_conn import REDIS_CONN, RedisDistributedLock
-from core.nlp import search, rag_tokenizer, add_positions, concat_img
-from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
-from core.prompts.generator import keyword_extraction, question_proposal, content_tagging, run_toc_from_text, gen_metadata
-from core.graphrag.general.index import run_graphrag_for_kb
-from core.graphrag.utils import get_llm_cache, set_llm_cache, get_tags_from_cache, set_tags_to_cache, chat_limiter
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
+from api.db.services.doc_metadata_service import DocMetadataService
+from api.db.services.document_service import DocumentService
+from api.db.services.file2document_service import File2DocumentService
+from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.llm_service import LLMBundle
+from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
+from api.db.services.task_service import CANVAS_DEBUG_DOC_ID, GRAPH_RAPTOR_FAKE_DOC_ID, TaskService, has_canceled
 from common import settings
-from common.constants import LLMType, ParserType, PipelineTaskType, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES, PAGERANK_FLD, TAG_FLD, SVR_CONSUMER_GROUP_NAME
-from common.token_utils import num_tokens_from_string, truncate
-from common.string_utils import split_and_sanitize_terms, truncate_utf8_bytes
-from common.exceptions import TaskCanceledException
-from common.log_utils import init_root_logger
 from common.config_utils import show_configs
-from common.metadata_utils import update_metadata_to, turn2jsonschema
+from common.connection_utils import timeout
+from common.constants import PAGERANK_FLD, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES, SVR_CONSUMER_GROUP_NAME, TAG_FLD, LLMType, ParserType, PipelineTaskType
+from common.exceptions import TaskCanceledException
+from common.file_utils import get_project_base_directory
+from common.log_utils import init_root_logger
+from common.metadata_utils import turn2jsonschema, update_metadata_to
 from common.misc_utils import thread_pool_exec
 from common.signal_utils import start_tracemalloc_and_snapshot, stop_tracemalloc
-from common.connection_utils import timeout
-from common.file_utils import get_project_base_directory
+from common.string_utils import split_and_sanitize_terms, truncate_utf8_bytes
+from common.token_utils import num_tokens_from_string, truncate
 from common.versions import get_multirag_version
+from core.app import audio, book, email, laws, manual, naive, one, paper, picture, presentation, qa, resume, table, tag
+from core.graphrag.general.index import run_graphrag_for_kb
+from core.graphrag.utils import chat_limiter, get_llm_cache, get_tags_from_cache, set_llm_cache, set_tags_to_cache
+from core.nlp import add_positions, concat_img, rag_tokenizer, search
+from core.prompts.generator import content_tagging, gen_metadata, keyword_extraction, question_proposal, run_toc_from_text
+from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
+from core.utils.base64_image import image2id
+from core.utils.raptor_utils import get_skip_reason, should_skip_raptor
+from core.utils.redis_conn import REDIS_CONN, RedisDistributedLock
 
 BATCH_SIZE = 64
 
@@ -383,7 +383,7 @@ async def collect(db: Session):
             # 如果没有 kb_id 或获取失败，使用用户的默认配置
             if "tenant_id" not in task and user_id:
                 try:
-                    from api.db.db_models import UserTenant, Tenant
+                    from api.db.db_models import Tenant, UserTenant
                     # User 没有 tenant_id，需要通过 UserTenant 关联表查询
                     user_tenant = db.query(UserTenant, Tenant).join(
                         Tenant, UserTenant.tenant_id == Tenant.id
@@ -495,7 +495,7 @@ async def build_chunks(task, progress_callback, db: Session):
         "kb_id": [str(task["kb_id"])]
     }
 
-    if "auth" in task and task["auth"]:
+    if task.get("auth"):
         doc["auth"] = task["auth"]
     if task.get("pagerank"):
         doc[PAGERANK_FLD] = int(task["pagerank"])
@@ -573,12 +573,12 @@ async def build_chunks(task, progress_callback, db: Session):
         try:
             await asyncio.gather(*tasks, return_exceptions=False)
         except Exception as e:
-            logging.error("Error in doc_keyword_extraction: {}".format(e))
+            logging.error(f"Error in doc_keyword_extraction: {e}")
             for t in tasks:
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
-        progress_callback(msg="Keywords generation {} chunks completed in {:.2f}s".format(len(docs), timer() - st))
+        progress_callback(msg=f"Keywords generation {len(docs)} chunks completed in {timer() - st:.2f}s")
 
     if task["parser_config"].get("auto_questions", 0):
         st = timer()
@@ -609,7 +609,7 @@ async def build_chunks(task, progress_callback, db: Session):
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
-        progress_callback(msg="Question generation {} chunks completed in {:.2f}s".format(len(docs), timer() - st))
+        progress_callback(msg=f"Question generation {len(docs)} chunks completed in {timer() - st:.2f}s")
 
 
     if task["parser_config"].get("enable_metadata", False) and task["parser_config"].get("metadata"):
@@ -650,7 +650,7 @@ async def build_chunks(task, progress_callback, db: Session):
             existing_meta = existing_meta if isinstance(existing_meta, dict) else {}
             metadata = update_metadata_to(metadata, existing_meta)
             DocMetadataService.update_document_metadata(db, task["doc_id"], metadata)
-        progress_callback(msg="Question generation {} chunks completed in {:.2f}s".format(len(docs), timer() - st))
+        progress_callback(msg=f"Question generation {len(docs)} chunks completed in {timer() - st:.2f}s")
 
     if task["kb_parser_config"].get("tag_kb_ids", []):
         progress_callback(msg="Start to tag for every chunk ...")
@@ -709,12 +709,12 @@ async def build_chunks(task, progress_callback, db: Session):
         try:
             await asyncio.gather(*tasks, return_exceptions=False)
         except Exception as e:
-            logging.error("Error tagging docs: {}".format(e))
+            logging.error(f"Error tagging docs: {e}")
             for t in tasks:
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
-        progress_callback(msg="Tagging {} chunks completed in {:.2f}s".format(len(docs), timer() - st))
+        progress_callback(msg=f"Tagging {len(docs)} chunks completed in {timer() - st:.2f}s")
 
     return docs
 
@@ -835,7 +835,7 @@ async def _create_milvus_collection(collection_name: str, vector_dim: int):
     mapping_path = os.path.join(get_project_base_directory(), "configs", "mapping.json")
 
     def load_mapping():
-        with open(mapping_path, 'r') as f:
+        with open(mapping_path) as f:
             return json.load(f)
 
     mapping = await thread_pool_exec(load_mapping)
@@ -861,7 +861,7 @@ async def _create_milvus_collection(collection_name: str, vector_dim: int):
 def convert_data_types(data, schema):
     """
     转换数据类型以匹配向量数据库模式，确保所有必要字段都有值
-    
+
     对于 Milvus: 根据 schema 进行严格的类型转换
     对于 ES/OpenSearch: schema 为空，直接返回原数据
 
@@ -1073,7 +1073,7 @@ async def run_dataflow(db: Session, task: dict):
         return
 
     keys = [k for o in chunks for k in list(o.keys())]
-    if not any([re.match(r"q_[0-9]+_vec", k) for k in keys]):
+    if not any(re.match(r"q_[0-9]+_vec", k) for k in keys):
         try:
             set_progress(db, task_id, prog=0.82, msg="\n-------------------------------------\nStart to embedding...")
             kb = KnowledgebaseService.get_by_id(db, task["kb_id"])
@@ -1166,7 +1166,7 @@ async def run_dataflow(db: Session, task: dict):
     kb_name = kb.name if kb else "default"
     collection_name = search.index_name_one(task["tenant_id"], kb_name)
     schema = await get_schema(collection_name)
-    
+
     e = await insert_chunks(db, task_id, task["tenant_id"], task["kb_id"], chunks, partial(set_progress, db, task_id, 0, 100000000), collection_name, schema)
     if not e:
         PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
@@ -1174,9 +1174,9 @@ async def run_dataflow(db: Session, task: dict):
 
     time_cost = timer() - start_ts
     task_time_cost = timer() - task_start_ts
-    set_progress(db, task_id, prog=1., msg="Indexing done ({:.2f}s). Task done ({:.2f}s)".format(time_cost, task_time_cost))
+    set_progress(db, task_id, prog=1., msg=f"Indexing done ({time_cost:.2f}s). Task done ({task_time_cost:.2f}s)")
     DocumentService.increment_chunk_num(db, doc_id, task_dataset_id, embedding_token_consumption, len(chunks), task_time_cost)
-    logging.info("[Done], chunks({}), token({}), elapsed:{:.2f}".format(len(chunks),  embedding_token_consumption, task_time_cost))
+    logging.info(f"[Done], chunks({len(chunks)}), token({embedding_token_consumption}), elapsed:{task_time_cost:.2f}")
     PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
 
 
@@ -1289,20 +1289,20 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
 async def _detect_hierarchical_structure(chunks, title_chunker_config):
     """
     检测文档是否有层次结构
-    
+
     参考 core/flow 的设计理念：
     - 不单独实现检测逻辑，而是直接调用 TitleChunker facade
     - 通过返回的 chapters 数量判断是否有结构
-    
+
     Args:
         chunks: chunk 列表
         title_chunker_config: TitleChunker 配置
-    
+
     Returns:
         bool: 是否有层次结构（chapters > 1 表示有结构）
     """
     from core.flow.utils import hierarchical_merge
-    
+
     # 调用 hierarchical_merge 尝试识别结构
     result = await hierarchical_merge(
         chunks=chunks,
@@ -1312,14 +1312,14 @@ async def _detect_hierarchical_structure(chunks, title_chunker_config):
         method=title_chunker_config.get("method", "hierarchy") if title_chunker_config else "hierarchy",
         include_heading_content=title_chunker_config.get("include_heading_content", False) if title_chunker_config else False
     )
-    
+
     chapters = result.get("chapters", [])
-    
+
     # 如果识别出多个章节，说明有层次结构
     has_structure = len(chapters) > 1
-    
+
     logging.info(f"Structure detection: {len(chapters)} chapters identified, has_structure={has_structure}")
-    
+
     return has_structure
 
 
@@ -1343,7 +1343,7 @@ async def _hierarchical_merge(chunks, config, tenant_id=None, db=None):
             - hierarchy: 合并到第几层
         tenant_id: 租户ID（保留参数，未使用）
         db: 数据库session（保留参数，未使用）
-    
+
     注意：
         图片处理应该在 Parser 阶段配置（parse_method），而不是在这里。
         章节级的图片是合并后的巨图，不适合进行 OCR/VLM 处理。
@@ -1374,32 +1374,32 @@ async def _hierarchical_merge(chunks, config, tenant_id=None, db=None):
         method=method,
         include_heading_content=include_heading_content
     )
-    
+
     chapters = result.get("chapters", [])
-    
+
     # ✨ 增强：为每个章节添加位置信息、图片合并
     for chapter in chapters:
         chapter_chunks = chapter.get("chunks", [])
-        
+
         # 合并位置信息
         chapter_positions = _get_chunk_positions(chapter)
         for chunk in chapter_chunks:
             chapter_positions.extend(_get_chunk_positions(chunk))
-        
+
         # 合并图片（内存中处理，不上传 MinIO）
         chapter_image = None
         for chunk in chapter_chunks:
-            if "image" in chunk and chunk["image"]:
+            if chunk.get("image"):
                 chapter_image = concat_img(chapter_image, chunk["image"])
         if chapter_image is None and chapter.get("image"):
             chapter_image = chapter.get("image")
-        
+
         # 计算页码范围
         page_range = None
         if chapter_positions:
             pages = [p[0] for p in chapter_positions]
             page_range = [min(pages), max(pages)]
-        
+
         # 添加到章节信息
         chapter["positions"] = chapter_positions
         chapter["position_int"] = [tuple(pos[:5]) for pos in chapter_positions]
@@ -1409,7 +1409,7 @@ async def _hierarchical_merge(chunks, config, tenant_id=None, db=None):
         chapter["page_range"] = page_range
 
     # ⚠️ 注意：不在章节级别处理合并后的图片
-    # 
+    #
     # 原因分析：
     # 1. Parser 阶段已经对每张原始图片进行了 OCR/VLM 处理
     # 2. 图片内容已经转化为文本，存储在 chunk 的 content_with_weight 中
@@ -1423,7 +1423,7 @@ async def _hierarchical_merge(chunks, config, tenant_id=None, db=None):
     # - 合并后的图片仅用于展示，不再进行 OCR/VLM 处理
     #
     # 参考：core/flow/parser/parser.py 第 346-375 行 - 只处理单张原始图片
-    
+
     if config.get("image_model"):
         logging.info(
             f"Note: image_model ('{config.get('image_model')}') should be configured in parse_method, "
@@ -1786,17 +1786,17 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
 
             # 1. 解析文件（保留结构）
             # 支持两种配置方式（参考 core/flow/parser/parser.py 的 setups 结构）
-            
+
             parser_config_dict = config.get("parser_config")  # 完整方式（优先）
-            
+
             # TCADP parser 特有参数（腾讯云 ADP 解析）
             tcadp_table_result_type = config.get("table_result_type", "1")
             tcadp_markdown_image_response_type = config.get("markdown_image_response_type", "1")
-            
+
             # 媒体上下文配置（为表格/图片添加周围文本）
             table_context_size = config.get("table_context_size", 0) or 0
             image_context_size = config.get("image_context_size", 0) or 0
-            
+
             if parser_config_dict:
                 # 方式 1：使用 parser_config 字典（用户一次性配置所有文件类型）
                 pdf_config = parser_config_dict.get("pdf", {"parse_method": "deepdoc", "output_format": "json"})
@@ -1811,7 +1811,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 slides_config = parser_config_dict.get("slides", {"parse_method": "deepdoc", "output_format": "json"})
                 markdown_config = parser_config_dict.get("markdown", {"output_format": "json"})
                 epub_config = parser_config_dict.get("epub", {"output_format": "json"})
-                logging.info(f"Using parser_config dictionary mode")
+                logging.info("Using parser_config dictionary mode")
             else:
                 # 方式 2：使用简化参数（自动应用到所有文件类型）
                 parse_method = config.get("parse_method", "deepdoc")
@@ -1821,7 +1821,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 pdf_parse_method = parse_method
                 if parse_method in ["auto", "ocr", "vlm"]:
                     pdf_parse_method = "deepdoc"
-                
+
                 pdf_config = {
                     "parse_method": pdf_parse_method,
                     "output_format": output_format,
@@ -1970,11 +1970,11 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                     chunk_dict["positions"] = c["position_int"]
 
                 # 保留图片（如果有）
-                if "image" in c and c["image"]:
+                if c.get("image"):
                     chunk_dict["image"] = c["image"]
 
                 # 保留 mother chunk（child-parent chunking）
-                if "mom" in c and c["mom"]:
+                if c.get("mom"):
                     chunk_dict["mom"] = c["mom"]
 
                 chunks.append(chunk_dict)
@@ -2119,7 +2119,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                             chunk_metadata.append({
                                 "positions": positions,
                                 "image": chunk.get("image"),
-                                "page_nums": sorted(set(p[0] for p in positions)) if positions else []
+                                "page_nums": sorted({p[0] for p in positions}) if positions else []
                             })
 
                     raptor_prompt = raptor_config.get("prompt") or "Please summarize the following content:\n{cluster_content}"
@@ -2362,7 +2362,8 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
 
         task_data["result"] = result
 
-        from api.db.db_models import db_connection, Task as TaskModel
+        from api.db.db_models import Task as TaskModel
+        from api.db.db_models import db_connection
         with db_connection() as new_db:
             task_record = new_db.query(TaskModel).filter(TaskModel.id == task_id).first()
             if task_record:
@@ -2380,7 +2381,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
     except Exception as e:
         logging.exception(f"analyze_v2 task {task_id} failed: {e}")
         if callback:
-            callback(prog=-1, msg=f"任务失败: {str(e)}")
+            callback(prog=-1, msg=f"任务失败: {e!s}")
         raise
 
 
@@ -2507,7 +2508,7 @@ async def insert_chunks(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
                 # 记录成功插入
                 successful_inserts.append({"insert_count": len(converted_batch)})
 
-        except Exception as e:
+        except Exception:
             # 如果出现异常，记录失败并进行删除回滚
             failed_inserts.extend(chunk_batch)
             progress_callback(
@@ -2647,7 +2648,7 @@ async def do_handle_task(db, task):
             )
         except Exception as e:
             logging.exception(f"analyze_v2 task {task_id} failed: {e}")
-            progress_callback_sse(prog=-1, msg=f"任务失败: {str(e)}")
+            progress_callback_sse(prog=-1, msg=f"任务失败: {e!s}")
 
         return
 
@@ -2689,7 +2690,7 @@ async def do_handle_task(db, task):
         vts, _ = embedding_model.encode(["ok"])
         vector_size = len(vts[0])
     except Exception as e:
-        error_message = f'Fail to bind embedding model: {str(e)}'
+        error_message = f'Fail to bind embedding model: {e!s}'
         progress_callback(-1, msg=error_message)
         logging.exception(error_message)
         raise
@@ -2791,7 +2792,7 @@ async def do_handle_task(db, task):
                 with_community=with_community,
             )
             logging.info(f"GraphRAG task result for task {task}:\n{result}")
-        progress_callback(prog=1.0, msg="Knowledge Graph done ({:.2f}s)".format(timer() - start_ts))
+        progress_callback(prog=1.0, msg=f"Knowledge Graph done ({timer() - start_ts:.2f}s)")
         return
     elif task_type == "mindmap":
         progress_callback(1, "place holder")
@@ -2802,29 +2803,29 @@ async def do_handle_task(db, task):
         task['llm_id'] = doc_task_llm_id
         start_ts = timer()
         chunks = await build_chunks(task, progress_callback, db)
-        logging.info("Build document {}: {:.2f}s".format(task_document_name, timer() - start_ts))
+        logging.info(f"Build document {task_document_name}: {timer() - start_ts:.2f}s")
         if not chunks:
             progress_callback(1., msg=f"No chunk built from {task_document_name}")
             return
-        progress_callback(msg="Generate {} chunks".format(len(chunks)))
+        progress_callback(msg=f"Generate {len(chunks)} chunks")
         start_ts = timer()
         try:
             token_count = await embedding(chunks, embedding_model, task_parser_config, progress_callback)
         except TaskCanceledException:
             raise
         except Exception as e:
-            error_message = "Generate embedding error:{}".format(str(e))
+            error_message = f"Generate embedding error:{e!s}"
             progress_callback(-1, error_message)
             logging.exception(error_message)
             token_count = 0
             raise
-        progress_message = "Embedding chunks ({:.2f}s)".format(timer() - start_ts)
+        progress_message = f"Embedding chunks ({timer() - start_ts:.2f}s)"
         logging.info(progress_message)
         progress_callback(msg=progress_message)
         if task["parser_id"].lower() == "naive" and task["parser_config"].get("toc_extraction", False):
             toc_thread = executor.submit(build_TOC, task, chunks, progress_callback)
 
-    chunk_count = len(set([chunk["pk"] for chunk in chunks]))
+    chunk_count = len({chunk["pk"] for chunk in chunks})
     # 记录开始时间
     start_ts = timer()
 
@@ -2845,14 +2846,12 @@ async def do_handle_task(db, task):
             return
 
         logging.info(
-            "Indexing doc({}), page({}-{}), chunks({}), elapsed: {:.2f}".format(
-                task_document_name, task_from_page, task_to_page, len(chunks), timer() - start_ts
-            )
+            f"Indexing doc({task_document_name}), page({task_from_page}-{task_to_page}), chunks({len(chunks)}), elapsed: {timer() - start_ts:.2f}"
         )
 
         DocumentService.increment_chunk_num(db, task_doc_id, task_dataset_id, token_count, chunk_count, 0)
 
-        progress_callback(msg="Indexing done ({:.2f}s).".format(timer() - start_ts))
+        progress_callback(msg=f"Indexing done ({timer() - start_ts:.2f}s).")
 
         if toc_thread:
             d = toc_thread.result()
@@ -2866,11 +2865,9 @@ async def do_handle_task(db, task):
             return
 
         task_time_cost = timer() - task_start_ts
-        progress_callback(prog=1.0, msg="Task done ({:.2f}s)".format(task_time_cost))
+        progress_callback(prog=1.0, msg=f"Task done ({task_time_cost:.2f}s)")
         logging.info(
-            "Chunk doc({}), page({}-{}), chunks({}), token({}), elapsed:{:.2f}".format(
-                task_document_name, task_from_page, task_to_page, len(chunks), token_count, task_time_cost
-            )
+            f"Chunk doc({task_document_name}), page({task_from_page}-{task_to_page}), chunks({len(chunks)}), token({token_count}), elapsed:{task_time_cost:.2f}"
         )
 
     finally:
@@ -2922,7 +2919,7 @@ async def handle_task():
                 if "chunk_ids" in task_dict:
                     try:
                         chunk_ids_data = json.loads(task_dict["chunk_ids"])
-                        if "file_content_base64" in chunk_ids_data and chunk_ids_data["file_content_base64"]:
+                        if chunk_ids_data.get("file_content_base64"):
                             if not chunk_ids_data["file_content_base64"].startswith("<removed"):
                                 file_size = chunk_ids_data.get("file_size", len(chunk_ids_data["file_content_base64"]))
                                 chunk_ids_data["file_content_base64"] = f"<removed, {file_size} bytes>"
@@ -2968,7 +2965,7 @@ async def handle_task():
                         err_msg += ' -- ' + str(e)
                     set_progress(db, task_id, prog=-1, msg=f"[Exception]: {err_msg}")
                 except Exception as e:
-                    logging.exception(f"[Exception]: {str(e)}")
+                    logging.exception(f"[Exception]: {e!s}")
                     pass
 
                 # 异常日志也清理 base64
@@ -2989,7 +2986,7 @@ async def handle_task():
 
             redis_msg.ack()
         except Exception:
-            logging.exception(f"Error in main loop")
+            logging.exception("Error in main loop")
             db.rollback()  # 回滚事务
             raise
         else:

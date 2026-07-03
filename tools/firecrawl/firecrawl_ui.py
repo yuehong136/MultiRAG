@@ -2,24 +2,24 @@
 UI components for Firecrawl integration in MultiRAG.
 """
 
-from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
 class FirecrawlUIComponent:
     """Represents a UI component for Firecrawl integration."""
-    
+
     component_type: str
-    props: Dict[str, Any]
-    children: Optional[List['FirecrawlUIComponent']] = None
+    props: dict[str, Any]
+    children: list['FirecrawlUIComponent'] | None = None
 
 
 class FirecrawlUIBuilder:
     """Builder for Firecrawl UI components in MultiRAG."""
-    
+
     @staticmethod
-    def create_data_source_config() -> Dict[str, Any]:
+    def create_data_source_config() -> dict[str, Any]:
         """Create configuration for Firecrawl data source."""
         return {
             "name": "firecrawl",
@@ -74,9 +74,9 @@ class FirecrawlUIBuilder:
                 "required": ["api_key"]
             }
         }
-    
+
     @staticmethod
-    def create_scraping_form() -> Dict[str, Any]:
+    def create_scraping_form() -> dict[str, Any]:
         """Create form for scraping configuration."""
         return {
             "type": "form",
@@ -159,9 +159,9 @@ class FirecrawlUIBuilder:
                 }
             ]
         }
-    
+
     @staticmethod
-    def create_progress_component() -> Dict[str, Any]:
+    def create_progress_component() -> dict[str, Any]:
         """Create progress tracking component."""
         return {
             "type": "progress",
@@ -173,9 +173,9 @@ class FirecrawlUIBuilder:
                 "show_details": True
             }
         }
-    
+
     @staticmethod
-    def create_results_view() -> Dict[str, Any]:
+    def create_results_view() -> dict[str, Any]:
         """Create results display component."""
         return {
             "type": "results",
@@ -188,9 +188,9 @@ class FirecrawlUIBuilder:
                 "show_chunks": True
             }
         }
-    
+
     @staticmethod
-    def create_error_handler() -> Dict[str, Any]:
+    def create_error_handler() -> dict[str, Any]:
         """Create error handling component."""
         return {
             "type": "error_handler",
@@ -203,9 +203,9 @@ class FirecrawlUIBuilder:
                 "max_retries": 3
             }
         }
-    
+
     @staticmethod
-    def create_validation_rules() -> Dict[str, Any]:
+    def create_validation_rules() -> dict[str, Any]:
         """Create validation rules for Firecrawl integration."""
         return {
             "url_validation": {
@@ -222,9 +222,9 @@ class FirecrawlUIBuilder:
                 "message": "Rate limit delay must be between 0.1 and 10.0 seconds"
             }
         }
-    
+
     @staticmethod
-    def create_help_text() -> Dict[str, str]:
+    def create_help_text() -> dict[str, str]:
         """Create help text for users."""
         return {
             "api_key_help": "Get your API key from https://firecrawl.dev. Sign up for a free account to get started.",
@@ -233,9 +233,9 @@ class FirecrawlUIBuilder:
             "formats_help": "Choose the output formats you need. Markdown is recommended for RAG processing.",
             "extract_help": "Extraction options help filter content to get only the main content without navigation and ads."
         }
-    
+
     @staticmethod
-    def create_ui_schema() -> Dict[str, Any]:
+    def create_ui_schema() -> dict[str, Any]:
         """Create complete UI schema for Firecrawl integration."""
         return {
             "version": "1.0.0",

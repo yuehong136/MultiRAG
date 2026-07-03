@@ -15,12 +15,14 @@
 #
 import logging
 import os
-import time
-from abc import ABC
-from Bio import Entrez
 import re
+import time
 import xml.etree.ElementTree as ET
-from agent.tools.base import ToolParamBase, ToolMeta, ToolBase
+from abc import ABC
+
+from Bio import Entrez
+
+from agent.tools.base import ToolBase, ToolMeta, ToolParamBase
 from common.connection_utils import timeout
 
 
@@ -113,7 +115,7 @@ class PubMed(ToolBase, ABC):
             self.set_output("_ERROR", str(last_e))
             return f"PubMed error: {last_e}"
 
-        assert False, self.output()
+        raise AssertionError(self.output())
 
     def _format_pubmed_content(self, child):
         """Extract structured reference info from PubMed XML"""

@@ -1,9 +1,8 @@
 import re
-from typing import List, Union
 
 
-def add_table_alias_to_fields(expressions: Union[str, List[str]],
-                              table_alias: str) -> Union[str, List[str]]:
+def add_table_alias_to_fields(expressions: str | list[str],
+                              table_alias: str) -> str | list[str]:
     """
     为SQL表达式中的字段添加表别名前缀
 

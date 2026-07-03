@@ -1,14 +1,14 @@
 import os
 from datetime import date
+from typing import Any
 
 from api.utils.prompt_template_util import PromptTemplateUtil
-from typing import Dict, Any, List
 
 
 def generate_nl2sql_prompt(
         user_question: str,
-        query_intents: List[Dict[str, str]],
-        semantic_layer: Dict[str, Any]
+        query_intents: list[dict[str, str]],
+        semantic_layer: dict[str, Any]
 ):
     # 确定模板完整路径
     prompt_dir = os.path.join(os.path.dirname(__file__), "prompt")
@@ -39,7 +39,7 @@ def generate_nl2sql_prompt(
     return prompt, template_data["semantic_layer"]
 
 
-def process_data_models(models: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def process_data_models(models: list[dict[str, Any]]) -> list[dict[str, Any]]:
     data_models_output = []
     if not models:
         return data_models_output
@@ -83,7 +83,7 @@ def process_business_datasets(
         dimensions,
         metrics,
         dimension_values
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     business_datasets_output = []
     for dataset_detail in dataset_details:
         business_dataset = {}
@@ -127,7 +127,7 @@ def process_business_datasets(
     return business_datasets_output
 
 
-def process_relationships(model_relations) -> List[Dict[str, Any]]:
+def process_relationships(model_relations) -> list[dict[str, Any]]:
     relationships = []
     for relation in model_relations:
         relationship = {}
@@ -142,7 +142,7 @@ def process_relationships(model_relations) -> List[Dict[str, Any]]:
     return relationships
 
 
-def process_business_terms(business_term_rows) -> List[Dict[str, Any]]:
+def process_business_terms(business_term_rows) -> list[dict[str, Any]]:
     business_terms = []
     for term in business_term_rows:
         business_term = {}
@@ -153,7 +153,7 @@ def process_business_terms(business_term_rows) -> List[Dict[str, Any]]:
     return business_terms
 
 
-def process_semantic_layer(semantic_layer: Dict[str, Any]) -> Dict[str, Any]:
+def process_semantic_layer(semantic_layer: dict[str, Any]) -> dict[str, Any]:
     dataset_details = semantic_layer.get("dataset_details")
     dimensions = semantic_layer.get("dimensions")
     dimension_values = semantic_layer.get("dimension_values")

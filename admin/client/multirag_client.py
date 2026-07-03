@@ -113,7 +113,7 @@ class MultiRAGClient:
             return data
 
         # Check if all values are lists (task_executor heartbeats format)
-        if not all([isinstance(v, list) for v in data.values()]):
+        if not all(isinstance(v, list) for v in data.values()):
             # Not heartbeats format, return original data
             return data
 

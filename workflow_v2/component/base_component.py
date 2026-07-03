@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
-from workflow_v2.workflow_logging_config import WorkflowContextLogger, ComponentLogger
+from workflow_v2.workflow_logging_config import ComponentLogger, WorkflowContextLogger
 
 
 class BaseComponent(ABC):

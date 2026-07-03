@@ -18,37 +18,36 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from api.utils.api_utils import group_by
-from api.db import FileType, UserTenantRole#, ActiveEnum
-from api.db.services.api_service import APITokenService, API4ConversationService
+from api.db import FileType, UserTenantRole  #, ActiveEnum
+from api.db.services.api_service import API4ConversationService, APITokenService
 from api.db.services.canvas_service import UserCanvasService
 from api.db.services.conversation_service import ConversationService
 from api.db.services.dialog_service import DialogService
-from api.db.services.document_service import DocumentService
 from api.db.services.doc_metadata_service import DocMetadataService
+from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
+from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.llm_service import get_init_tenant_llm
-from api.db.services.file_service import FileService
 from api.db.services.mcp_server_service import MCPServerService
+from api.db.services.memory_service import MemoryService
 from api.db.services.search_service import SearchService
 from api.db.services.task_service import TaskService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.db.services.user_service import TenantService, UserService, UserTenantService
-from api.db.services.memory_service import MemoryService
+from api.utils.api_utils import group_by
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
-from memory.services.messages import MessageService
 from common import settings
 from core.nlp import search
-
+from memory.services.messages import MessageService
 
 
 def create_new_user(db: Session, user_info: dict) -> dict:
     """
     Add a new user, and create tenant, tenant llm, file folder for new user.
-    
+
     Args:
         db: 数据库会话
         user_info: {
@@ -58,7 +57,7 @@ def create_new_user(db: Session, user_info: dict) -> dict:
             "login_channel": <enum, "password">,
             "is_superuser": <bool, role == "admin">,
         }
-        
+
     Returns:
         {
             "success": <bool>,
@@ -69,7 +68,7 @@ def create_new_user(db: Session, user_info: dict) -> dict:
     user_id = uuid.uuid1().hex
     user_info['id'] = user_id
     user_info['access_token'] = uuid.uuid1().hex
-    
+
     # construct tenant info
     tenant = {
         "id": user_id,
@@ -81,14 +80,14 @@ def create_new_user(db: Session, user_info: dict) -> dict:
         "img2txt_id": settings.IMAGE2TEXT_MDL,
         "rerank_id": settings.RERANK_MDL,
     }
-    
+
     usr_tenant = {
         "tenant_id": user_id,
         "user_id": user_id,
         "invited_by": user_id,
         "role": UserTenantRole.OWNER,
     }
-    
+
     # construct file folder info（根目录：parent_id 等于自己的 id）
     file_id = uuid.uuid1().hex
     file = {
@@ -101,7 +100,7 @@ def create_new_user(db: Session, user_info: dict) -> dict:
         "size": 0,
         "location": "",
     }
-    
+
     try:
         # 获取初始租户 LLM 配置
         logging.info(f"Getting initial tenant LLM config for user_id: {user_id}")
@@ -117,11 +116,11 @@ def create_new_user(db: Session, user_info: dict) -> dict:
         # 创建租户
         logging.info(f"Creating tenant for user_id: {user_id}")
         TenantService.insert(db, **tenant)
-        
+
         # 创建用户-租户关系
         logging.info("Creating user-tenant relationship")
         UserTenantService.insert(db, **usr_tenant)
-        
+
         # 批量插入租户 LLM 配置
         logging.info(f"Inserting tenant LLM configs, count: {len(tenant_llm)}")
         TenantLLMService.insert_many(db, tenant_llm)
@@ -142,7 +141,7 @@ def create_new_user(db: Session, user_info: dict) -> dict:
         logging.exception(f"Exception occurred while creating user: {create_error}")
         # 发生异常时回滚数据库
         db.rollback()
-        
+
         # 清理已创建的数据
         try:
             DocMetadataService.delete_tenant_metadata_container(user_id)
@@ -152,14 +151,14 @@ def create_new_user(db: Session, user_info: dict) -> dict:
             TenantService.delete_by_id(db, user_id)
         except Exception as e:
             logging.exception(e)
-            
+
         try:
             u = UserTenantService.query(db, tenant_id=user_id)
             if u:
                 UserTenantService.delete_by_id(db, u[0].id)
         except Exception as e:
             logging.exception(e)
-            
+
         try:
             TenantLLMService.delete_by_tenant_id(db, user_id)
         except Exception as e:
@@ -173,7 +172,7 @@ def create_new_user(db: Session, user_info: dict) -> dict:
             UserService.delete_by_id(db, user_id)
         except Exception as e:
             logging.exception(e)
-            
+
         # reraise
         raise create_error
 

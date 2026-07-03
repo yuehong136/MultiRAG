@@ -16,11 +16,12 @@ import base64
 import logging
 import os
 import re
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, fields
 from io import BytesIO
 from os import PathLike
 from pathlib import Path
-from typing import Any, Callable, ClassVar, Literal
+from typing import Any, ClassVar, Literal
 
 import numpy as np
 import pdfplumber
@@ -35,7 +36,6 @@ except Exception:
         pass
 
 from deepdoc.parser.utils import extract_pdf_outlines
-
 
 AlgorithmType = Literal["PaddleOCR-VL"]
 SectionTuple = tuple[str, ...]

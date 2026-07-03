@@ -1,8 +1,8 @@
-from typing import Any
 from dataclasses import dataclass
+from typing import Any
 
-from api.db.services.llm_service import LLMBundle
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+from api.db.services.llm_service import LLMBundle
 from common.constants import LLMType
 from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.component.llm_component import LLMParams
@@ -60,7 +60,7 @@ class IntentClassificationComponent(BaseComponent):
 
         # 构建提示词
         return f"""
-Role: You're a text classifier.  
+Role: You're a text classifier.
 Task: You need to categorize the user’s questions into {len(self.intents) + 1} categories, namely: {', '.join(intent.name for intent in self.intents)}, 其他意图.
 
 Here's the description of each category:

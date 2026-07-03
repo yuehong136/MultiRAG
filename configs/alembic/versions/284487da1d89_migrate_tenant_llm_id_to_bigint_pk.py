@@ -5,18 +5,17 @@ Revises: aae5b5f0d916
 Create Date: 2026-03-23 16:03:55.917868
 
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.engine.reflection import Inspector
-
 
 # revision identifiers, used by Alembic.
 revision: str = '284487da1d89'
-down_revision: Union[str, None] = 'aae5b5f0d916'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = 'aae5b5f0d916'
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 SCHEMA = "usr_ai"
 TABLE = "t_ai_tenant_llms"

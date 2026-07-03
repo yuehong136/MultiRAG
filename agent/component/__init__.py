@@ -13,14 +13,13 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
-import os
 import importlib
 import inspect
+import os
 from types import ModuleType
-from typing import Dict, Type
 
 _package_path = os.path.dirname(__file__)
-__all_classes: Dict[str, Type] = {}
+__all_classes: dict[str, type] = {}
 
 def _import_submodules() -> None:
     for filename in os.listdir(_package_path): # noqa: F821
@@ -32,7 +31,7 @@ def _import_submodules() -> None:
             module = importlib.import_module(f".{module_name}", package=__name__)
             _extract_classes_from_module(module)  # noqa: F821
         except ImportError as e:
-            print(f"Warning: Failed to import module {module_name}: {str(e)}")
+            print(f"Warning: Failed to import module {module_name}: {e!s}")
 
 def _extract_classes_from_module(module: ModuleType) -> None:
     for name, obj in inspect.getmembers(module):
@@ -55,4 +54,4 @@ def component_class(class_name):
         except Exception:
             # logging.warning(f"Can't import module: {module_name}, error: {e}")
             pass
-    assert False, f"Can't import {class_name}"
+    raise AssertionError(f"Can't import {class_name}")

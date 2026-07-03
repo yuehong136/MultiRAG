@@ -1,7 +1,7 @@
-from core.llm.chat_model.models.qwen_chat import QWenChat
-from core.llm.chat_model.models.zhipu_chat import ZhipuChat
 from core.llm.chat_model.models.gptturbo import GptTurbo
 from core.llm.chat_model.models.ollama_chat import OllamaChat
+from core.llm.chat_model.models.qwen_chat import QWenChat
+from core.llm.chat_model.models.zhipu_chat import ZhipuChat
 
 
 class ChatFactory:

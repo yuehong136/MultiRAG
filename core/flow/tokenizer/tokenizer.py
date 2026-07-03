@@ -19,20 +19,21 @@ import re
 import numpy as np
 
 from api.db.db_models import db_connection
+from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
-from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
+from common import settings
+from common.connection_utils import timeout
+from common.constants import LLMType
+from common.misc_utils import thread_pool_exec
+from common.string_utils import split_and_sanitize_terms
+from common.token_utils import truncate
 from core.flow.base import ProcessBase, ProcessParamBase
 from core.flow.parser.pdf_chunk_metadata import finalize_pdf_chunk
 from core.flow.tokenizer.schema import TokenizerFromUpstream
 from core.nlp import rag_tokenizer
 from core.svr.task_executor import embed_limiter
-from common import settings
-from common.misc_utils import thread_pool_exec
-from common.token_utils import truncate
-from common.string_utils import split_and_sanitize_terms
-from common.connection_utils import timeout
-from common.constants import LLMType
+
 
 class TokenizerParam(ProcessParamBase):
     def __init__(self):
@@ -129,7 +130,7 @@ class Tokenizer(ProcessBase):
 
             from_upstream = TokenizerFromUpstream.model_validate(kwargs)
         except Exception as e:
-            self.set_output("_ERROR", f"Input error: {str(e)}")
+            self.set_output("_ERROR", f"Input error: {e!s}")
             return
 
         self.set_output("output_format", "chunks")

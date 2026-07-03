@@ -8,7 +8,7 @@ from api.apps import manager
 from api.db.db_models import get_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from api.db.services.llm_service import LLMBundle
-from api.service.semantic_layer_service.models import SemanticTextData, OwnerType, SemanticElementType
+from api.service.semantic_layer_service.models import OwnerType, SemanticElementType, SemanticTextData
 from common import settings
 from common.misc_utils import thread_pool_exec
 

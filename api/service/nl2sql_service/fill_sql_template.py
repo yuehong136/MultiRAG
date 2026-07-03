@@ -1,4 +1,3 @@
-import json
 
 
 def fill_sql_template(templated_sql: str, parameter_definitions: list, user_selected_values: dict) -> str:

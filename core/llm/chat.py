@@ -275,7 +275,7 @@ class Base(ABC):
             time.sleep(delay)
             return None
 
-        msg = f"{ERROR_PREFIX}: {error_code} - {str(e)}"
+        msg = f"{ERROR_PREFIX}: {error_code} - {e!s}"
         logging.error(f"sync base giving up: {msg}")
         return msg
 
@@ -291,7 +291,7 @@ class Base(ABC):
             await asyncio.sleep(delay)
             return None
 
-        msg = f"{ERROR_PREFIX}: {error_code} - {str(e)}"
+        msg = f"{ERROR_PREFIX}: {error_code} - {e!s}"
         logging.error(f"async base giving up: {msg}")
         return msg
 
@@ -416,7 +416,7 @@ class Base(ABC):
                 if e:
                     return e, tk_count
 
-        assert False, "Shouldn't be here."
+        raise AssertionError("Shouldn't be here.")
 
     async def async_chat_streamly_with_tools(self, system: str, history: list, gen_conf: dict = {}):
         gen_conf = self._clean_conf(gen_conf)
@@ -543,7 +543,7 @@ class Base(ABC):
                     yield total_tokens
                     return
 
-        assert False, "Shouldn't be here."
+        raise AssertionError("Shouldn't be here.")
 
     async def _async_chat(self, history, gen_conf, **kwargs):
         logging.info("[HISTORY]" + json.dumps(history, ensure_ascii=False, indent=2))
@@ -590,7 +590,7 @@ class Base(ABC):
                 e = await self._exceptions_async(e, attempt)
                 if e:
                     return e, 0
-        assert False, "Shouldn't be here."
+        raise AssertionError("Shouldn't be here.")
 
 
 class XinferenceChat(Base):
@@ -1298,7 +1298,7 @@ class LiteLLMBase(ABC):
                 if e:
                     return e, 0
 
-        assert False, "Shouldn't be here."
+        raise AssertionError("Shouldn't be here.")
 
     async def async_chat_streamly(self, system, history, gen_conf, **kwargs):
         if system and history and history[0].get("role") != "system":
@@ -1388,7 +1388,7 @@ class LiteLLMBase(ABC):
             logging.warning(f"Error: {error_code}. Retrying in {delay:.2f} seconds... (Attempt {attempt + 1}/{self.max_retries})")
             await asyncio.sleep(delay)
             return None
-        msg = f"{ERROR_PREFIX}: {error_code} - {str(e)}"
+        msg = f"{ERROR_PREFIX}: {error_code} - {e!s}"
         logging.error(f"async_chat_streamly giving up: {msg}")
         return msg
 
@@ -1523,7 +1523,7 @@ class LiteLLMBase(ABC):
                 if e:
                     return e, tk_count
 
-        assert False, "Shouldn't be here."
+        raise AssertionError("Shouldn't be here.")
 
     async def async_chat_streamly_with_tools(self, system: str, history: list, gen_conf: dict = {}):
         gen_conf = self._clean_conf(gen_conf)
@@ -1657,7 +1657,7 @@ class LiteLLMBase(ABC):
                     yield total_tokens
                     return
 
-        assert False, "Shouldn't be here."
+        raise AssertionError("Shouldn't be here.")
 
     def _construct_completion_args(self, history, stream: bool, tools: bool, **kwargs):
         completion_args = {

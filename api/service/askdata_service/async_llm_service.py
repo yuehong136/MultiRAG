@@ -1,20 +1,18 @@
 # services/async_llm_service.py - 最终完整版
 import asyncio
-import logging
-import threading
 import queue
+import threading
 import time
-from typing import Any
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-from api.db.services.llm_service import LLMBundle
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+from api.db.services.llm_service import LLMBundle
 from api.service.askdata_service.event.event_manager import event_manager
-from api.service.askdata_service.util.askdata_logger import get_askdata_logger, askdata_ask_id, askdata_query
+from api.service.askdata_service.util.askdata_logger import askdata_ask_id, askdata_query, get_askdata_logger
 from common.constants import LLMType
-
 
 logger = get_askdata_logger()
 
@@ -89,7 +87,7 @@ class AsyncLLMService:
             await self.send_event(
                 event_id,
                 {
-                    "message": f"聊天失败: {str(e)}",
+                    "message": f"聊天失败: {e!s}",
                     "error": str(e),
                     "status": "error"
                 },
@@ -252,7 +250,7 @@ class AsyncLLMService:
             error_occurred.set()
             await self.send_event(
                 event_id,
-                {"message": f"流式处理错误: {str(e)}", "status": "error"},
+                {"message": f"流式处理错误: {e!s}", "status": "error"},
                 "chat_error"
             )
             await self.send_event(

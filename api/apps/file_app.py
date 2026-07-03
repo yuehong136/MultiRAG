@@ -5,25 +5,25 @@ import re
 from io import BytesIO
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
 
 from api.apps import manager
-from api.db import FileType
-from api.utils.file_utils import filename_type
-from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers
 from api.common.check_team_permission import check_file_team_permission
+from api.db import FileType
 from api.db.db_models import get_db
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
-from api.utils.api_utils import get_json_result, construct_error_response, get_data_error_result
+from api.utils.api_utils import construct_error_response, get_data_error_result, get_json_result
+from api.utils.file_utils import filename_type
+from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers
 from common import settings
+from common.constants import FileSource, RetCode
 from common.misc_utils import get_uuid, thread_pool_exec
-from common.constants import RetCode, FileSource
 
 router = APIRouter()
 
@@ -175,7 +175,7 @@ async def upload(
         pf_folder = FileService.get_by_id(db, pf_id)
         if not pf_folder:
             return get_data_error_result(retmsg="Can't find this folder!")
-        
+
         file_dict = None
         for blob, filename in file_contents:
             MAX_FILE_NUM_PER_USER: int = int(os.environ.get('MAX_FILE_NUM_PER_USER', 0))
@@ -209,7 +209,7 @@ async def upload(
             location = file_obj_names[file_len - 1]
             while settings.STORAGE_IMPL.obj_exist(last_folder.id, location):
                 location += "_"
-            
+
             final_filename = duplicate_name(FileService.query, db=db, name=file_obj_names[file_len - 1],
                                       parent_id=last_folder.id)
             settings.STORAGE_IMPL.put(last_folder.id, location, blob)
@@ -670,7 +670,7 @@ def move(
                 # 移动存储层的文件
                 settings.STORAGE_IMPL.move(old_parent_id, old_location, dest_folder.id, new_location)
             except Exception as storage_err:
-                raise RuntimeError(f"Move file failed at storage layer: {str(storage_err)}")
+                raise RuntimeError(f"Move file failed at storage layer: {storage_err!s}")
 
             # 更新数据库记录
             FileService.update_by_id(db, source_file_entry.id, {

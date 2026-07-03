@@ -1,14 +1,16 @@
-import io
 import atexit
-import streamlit as st
+import io
+
 import pandas as pd
+import streamlit as st
+
+from configs import VERSION
 from core.components import get_action_handlers
 from core.components.data_processing import process_data
 from core.components.llm import zhipuai
-from core.components.nl2sql import input_nl_query, semantic_parsing, db_schema_understanding, generate_sql
+from core.components.nl2sql import db_schema_understanding, generate_sql, input_nl_query, semantic_parsing
 from core.components.sql_operations import execute_sql
-from utils.workflow_utils import save_workflow, import_workflow, stop_fastapi_server, generate_api
-from configs import VERSION
+from utils.workflow_utils import generate_api, import_workflow, save_workflow, stop_fastapi_server
 
 st.set_page_config(
     page_title="工作流管理",
@@ -141,7 +143,7 @@ def main():
 
         if selected_step == "上传文件":
             st.header(f"{step}：上传文件")
-            uploaded_file = st.file_uploader(f"选择一个CSV文件", type="csv", key=f"file_uploader_{i}")
+            uploaded_file = st.file_uploader("选择一个CSV文件", type="csv", key=f"file_uploader_{i}")
             if uploaded_file is not None:
                 file_content = uploaded_file.getvalue()
                 st.session_state[f"file_content_{i}"] = file_content

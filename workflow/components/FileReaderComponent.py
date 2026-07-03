@@ -1,10 +1,11 @@
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 
 import requests
-from workflow.WorkflowContext import WorkflowContext, NodeIOData
+
 from workflow.basic.Component import Component, ComponentParameter
-from workflow.basic.Node import ValueTypeOfIODefinition, VariableType, Batch
+from workflow.basic.Node import Batch, ValueTypeOfIODefinition, VariableType
+from workflow.WorkflowContext import NodeIOData, WorkflowContext
 
 
 @dataclass
@@ -109,9 +110,10 @@ class FileReadError(Exception):
 
 
 import io
+
 import docx
-from pypdf import PdfReader
 from fastapi import UploadFile
+from pypdf import PdfReader
 
 
 async def read_upload_file(file: UploadFile):
@@ -144,7 +146,7 @@ async def read_upload_file(file: UploadFile):
                 return {"message": f"Error from Spring Boot: {response.status_code}", "details": response.text}
 
         except Exception as e:
-            return {"message": f"An error occurred: {str(e)}"}
+            return {"message": f"An error occurred: {e!s}"}
     elif file_extension == 'pdf':
         pdf = PdfReader(io.BytesIO(contents))
         decoded_contents = '\n'.join([page.extract_text() for page in pdf.pages])
@@ -199,7 +201,7 @@ def process_file_object(file_object):
                 raise Exception(f"Error from Spring Boot: {response.status_code}, Details: {response.text}")
 
         except Exception as e:
-            raise Exception(f"An error occurred: {str(e)}")
+            raise Exception(f"An error occurred: {e!s}")
     elif file_extension == 'pdf':
         pdf = PdfReader(io.BytesIO(content))
         decoded_content = '\n'.join([page.extract_text() for page in pdf.pages])

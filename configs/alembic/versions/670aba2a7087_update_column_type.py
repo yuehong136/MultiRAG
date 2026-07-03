@@ -5,18 +5,17 @@ Revises: ed48e0b671e8
 Create Date: 2025-10-20 11:06:41.926684
 
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy import Inspector, String, Text
-
 
 # revision identifiers, used by Alembic.
 revision: str = '670aba2a7087'
-down_revision: Union[str, None] = 'ed48e0b671e8'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = 'ed48e0b671e8'
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 # ===== 按需修改：表名与 schema =====

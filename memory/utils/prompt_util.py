@@ -16,6 +16,7 @@
 from common.constants import MemoryType
 from common.time_utils import current_timestamp
 
+
 class PromptAssembler:
 
     SYSTEM_BASE_TEMPLATE = """**Memory Extraction Specialist**
@@ -109,7 +110,7 @@ You are an expert at analyzing conversations to extract structured memory.
 {conversation}
 
 **CONVERSATION TIME:** {conversation_time}
-**CURRENT TIME:** {current_time}    
+**CURRENT TIME:** {current_time}
 """
 
     @classmethod

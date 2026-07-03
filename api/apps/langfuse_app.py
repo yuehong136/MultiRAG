@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends
 from langfuse import Langfuse
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.db.db_models import get_db
@@ -44,12 +44,12 @@ def set_api_key(request: LangfuseKeysRequest, db: Session = Depends(get_db), use
         if not all([secret_key, public_key, host]):
             return get_error_data_result(retmsg="Missing required fields")
 
-        langfuse_keys = dict(
-            tenant_id=user.id,
-            secret_key=secret_key,
-            public_key=public_key,
-            host=host,
-        )
+        langfuse_keys = {
+            'tenant_id': user.id,
+            'secret_key': secret_key,
+            'public_key': public_key,
+            'host': host,
+        }
 
         # 验证API密钥有效性
         langfuse = Langfuse(

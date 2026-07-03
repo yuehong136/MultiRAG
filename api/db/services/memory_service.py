@@ -1,12 +1,13 @@
 import logging
-from sqlalchemy import select, desc, update, delete
+
+from sqlalchemy import desc, select, update
 from sqlalchemy.orm import Session
 
+from api.constants import MEMORY_NAME_LIMIT
 from api.db.db_models import Memory, User
 from api.db.services import duplicate_name
 from api.db.services.common_service import CommonService
 from api.utils.memory_utils import calculate_memory_type
-from api.constants import MEMORY_NAME_LIMIT
 from common.misc_utils import get_uuid
 from memory.utils.prompt_util import PromptAssembler
 

@@ -1,5 +1,6 @@
 import base64
 
+
 def encrypt(text, key):
     text_bytes = text.encode('utf-8')
     key_bytes = key.encode('utf-8')

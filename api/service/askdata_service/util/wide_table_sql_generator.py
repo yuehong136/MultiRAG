@@ -2,10 +2,11 @@
 宽表SQL生成器
 根据数据集信息、关联关系和权限配置，自动生成宽表查询SQL
 """
-from typing import List, Dict
-from .main_table_determiner import MainTableDeterminer
 
 from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+
+from .main_table_determiner import MainTableDeterminer
+
 logger = get_askdata_logger()
 
 
@@ -17,9 +18,9 @@ class WideTableSQLGenerator:
 
     def generate_sql(
             self,
-            dataset_detail: Dict,
-            model_relationships: List[Dict],
-            user_permissions: Dict,
+            dataset_detail: dict,
+            model_relationships: list[dict],
+            user_permissions: dict,
             user_id: str
     ) -> str:
         """
@@ -68,15 +69,15 @@ class WideTableSQLGenerator:
             return sql
 
         except Exception as e:
-            logger.error(f"生成宽表SQL失败: {str(e)}", exc_info=True)
+            logger.error(f"生成宽表SQL失败: {e!s}", exc_info=True)
             raise
 
     def _build_join_graph(
             self,
             main_model_id: str,
-            models: List[Dict],
-            relationships: List[Dict]
-    ) -> Dict:
+            models: list[dict],
+            relationships: list[dict]
+    ) -> dict:
         """构建JOIN关系图"""
         join_graph = {
             "main_table": main_model_id,
@@ -134,10 +135,10 @@ class WideTableSQLGenerator:
 
     def _apply_permissions(
             self,
-            dataset_detail: Dict,
-            user_permissions: Dict,
+            dataset_detail: dict,
+            user_permissions: dict,
             user_id: str
-    ) -> Dict:
+    ) -> dict:
         """应用权限过滤，返回允许访问的字段"""
         filtered_fields = {
             "dimensions": [],
@@ -199,10 +200,10 @@ class WideTableSQLGenerator:
     def _build_sql(
             self,
             main_model_id: str,
-            models: List[Dict],
-            join_graph: Dict,
-            filtered_fields: Dict,
-            user_permissions: Dict
+            models: list[dict],
+            join_graph: dict,
+            filtered_fields: dict,
+            user_permissions: dict
     ) -> str:
         """构建最终的SQL语句"""
         # 建立模型映射
@@ -289,14 +290,14 @@ class WideTableSQLGenerator:
         logger.info(f"生成的宽表SQL:\n{sql}")
 
         # 记录未能JOIN的表（可选）
-        unjoined_model_ids = set(m["modelId"] for m in models) - joined_model_ids
+        unjoined_model_ids = {m["modelId"] for m in models} - joined_model_ids
         if unjoined_model_ids:
             unjoined_tables = [model_map[mid]["modelName"] for mid in unjoined_model_ids if mid in model_map]
             logger.warning(f"以下表由于缺少关联关系未被包含在查询中: {', '.join(unjoined_tables)}")
 
         return sql
 
-    def _generate_table_aliases(self, models: List[Dict]) -> Dict[str, str]:
+    def _generate_table_aliases(self, models: list[dict]) -> dict[str, str]:
         """生成表别名"""
         aliases = {}
         used_aliases = set()
@@ -321,9 +322,9 @@ class WideTableSQLGenerator:
 
     def _build_where_clauses(
             self,
-            models: List[Dict],
-            table_aliases: Dict[str, str],
-            user_permissions: Dict
+            models: list[dict],
+            table_aliases: dict[str, str],
+            user_permissions: dict
     ) -> str:
         """构建WHERE子句（行权限）"""
         if not user_permissions:

@@ -9,15 +9,15 @@ from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.db import UserTenantRole
-from api.db.db_models import UserTenant, TenantLLM, Tenant, File, User, get_db
+from api.db.db_models import File, Tenant, TenantLLM, User, UserTenant, get_db
 from api.db.services.file_service import FileService
 from api.db.services.tenant_llm_service import TenantLLMService
-from api.db.services.user_service import UserTenantService, UserService, TenantService
-from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result, BusinessError
+from api.db.services.user_service import TenantService, UserService, UserTenantService
+from api.utils.api_utils import BusinessError, get_data_error_result, get_json_result, server_error_response
 from api.utils.web_utils import send_invite_email
 from common import settings
-from common.misc_utils import get_uuid
 from common.constants import RetCode, StatusEnum
+from common.misc_utils import get_uuid
 from common.time_utils import delta_seconds
 
 router = APIRouter()

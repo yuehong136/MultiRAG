@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -6,8 +5,8 @@
 @date：2024/10/08 11:05
 @desc:
 """
-from core.llm.sequence2txt_model.base import Base
 from common.token_utils import num_tokens_from_string
+from core.llm.sequence2txt_model.base import Base
 
 
 class QWenSeq2txt(Base):

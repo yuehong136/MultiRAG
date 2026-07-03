@@ -1,8 +1,10 @@
 # sql_trans.py
 import re
+
 import streamlit as st
-from utils.api import get_ai_response
+
 from configs import VERSION
+from utils.api import get_ai_response
 
 # 设置页面配置
 st.set_page_config(

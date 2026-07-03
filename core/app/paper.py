@@ -14,18 +14,18 @@
 #  limitations under the License.
 #
 
-import logging
 import copy
+import logging
 import re
 
 import numpy as np
 
-from core.nlp import rag_tokenizer, tokenize, tokenize_table, add_positions, bullets_category, title_frequency, tokenize_chunks, attach_media_context
-from core.app.naive import by_plaintext, PARSERS
-from common.parser_config_utils import normalize_layout_recognizer
 from common.constants import ParserType
-from deepdoc.parser.figure_parser import vision_figure_parser_pdf_wrapper
+from common.parser_config_utils import normalize_layout_recognizer
+from core.app.naive import PARSERS, by_plaintext
+from core.nlp import add_positions, attach_media_context, bullets_category, rag_tokenizer, title_frequency, tokenize, tokenize_chunks, tokenize_table
 from deepdoc.parser import PdfParser
+from deepdoc.parser.figure_parser import vision_figure_parser_pdf_wrapper
 
 
 class Pdf(PdfParser):
@@ -45,16 +45,16 @@ class Pdf(PdfParser):
             to_page,
             callback
         )
-        callback(msg="OCR finished ({:.2f}s)".format(timer() - start))
+        callback(msg=f"OCR finished ({timer() - start:.2f}s)")
 
         start = timer()
         self._layouts_rec(zoomin)
-        callback(0.63, "Layout analysis ({:.2f}s)".format(timer() - start))
+        callback(0.63, f"Layout analysis ({timer() - start:.2f}s)")
         logging.debug(f"layouts cost: {timer() - start}s")
 
         start = timer()
         self._table_transformer_job(zoomin)
-        callback(0.68, "Table analysis ({:.2f}s)".format(timer() - start))
+        callback(0.68, f"Table analysis ({timer() - start:.2f}s)")
 
         start = timer()
         self._text_merge()
@@ -62,12 +62,11 @@ class Pdf(PdfParser):
         column_width = np.median([b["x1"] - b["x0"] for b in self.boxes])
         self._concat_downward()
         self._filter_forpages()
-        callback(0.75, "Text merged ({:.2f}s)".format(timer() - start))
+        callback(0.75, f"Text merged ({timer() - start:.2f}s)")
 
         # clean mess
         if column_width < self.page_images[0].size[0] / zoomin / 2:
-            logging.debug("two_column................... {} {}".format(column_width,
-                  self.page_images[0].size[0] / zoomin / 2))
+            logging.debug(f"two_column................... {column_width} {self.page_images[0].size[0] / zoomin / 2}")
             self.boxes = self.sort_X_by_page(self.boxes, column_width / 2)
         for b in self.boxes:
             b["text"] = re.sub(r"([\t 　]|\u3000){2,}", " ", b["text"].strip())
@@ -134,7 +133,7 @@ class Pdf(PdfParser):
                     to_page, self.total_page)))
         for b in self.boxes:
             logging.debug("{} {}".format(b["text"], b.get("layoutno")))
-        logging.debug("{}".format(tbls))
+        logging.debug(f"{tbls}")
 
         return {
             "title": title,
@@ -216,7 +215,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
     doc["authors_sm_tks"] = rag_tokenizer.fine_grained_tokenize(doc["authors_tks"])
     # is it English
     eng = lang.lower() == "english"  # pdf_parser.is_english
-    logging.debug("It's English.....{}".format(eng))
+    logging.debug(f"It's English.....{eng}")
 
     res = tokenize_table(paper["tables"], doc, eng)
 
@@ -243,7 +242,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         if lvl <= most_level and i > 0 and lvl != levels[i - 1]:
             sid += 1
         sec_ids.append(sid)
-        logging.debug("{} {} {} {}".format(lvl, sorted_sections[i][0], most_level, sid))
+        logging.debug(f"{lvl} {sorted_sections[i][0]} {most_level} {sid}")
 
     chunks = []
     last_sid = -2

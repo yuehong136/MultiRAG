@@ -1,17 +1,17 @@
 from datetime import datetime
 
-from sqlalchemy import func, update, or_, and_, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from api.constants import DATASET_NAME_LIMIT
 from api.db import TenantPermission
-from api.db.db_models import Knowledgebase, User, UserTenant, Document, UserCanvas
-from api.db.services.user_service import TenantService, UserTenantService
+from api.db.db_models import Document, Knowledgebase, User, UserCanvas, UserTenant
 from api.db.services.common_service import CommonService
+from api.db.services.user_service import TenantService, UserTenantService
 from api.utils.api_utils import get_data_error_result
-from common.time_utils import current_timestamp, datetime_format
 from common.constants import StatusEnum
 from common.misc_utils import get_uuid
+from common.time_utils import current_timestamp, datetime_format
 
 
 class KnowledgebaseService(CommonService):
@@ -29,8 +29,8 @@ class KnowledgebaseService(CommonService):
             If all documents are parsed successfully, returns (True, None)
             If any document is not fully parsed, returns (False, error_message)
         """
-        from common.constants import TaskStatus
         from api.db.services.document_service import DocumentService
+        from common.constants import TaskStatus
 
         # Get dataset information
         kbs = cls.query(db, id=kb_id)
@@ -180,12 +180,12 @@ class KnowledgebaseService(CommonService):
     def get_all_kb_by_tenant_ids(cls, db: Session, tenant_ids: list, user_id: str):
         """
         根据租户ID列表获取所有有权限的知识库
-        
+
         Args:
             db: 数据库会话
             tenant_ids: 租户ID列表
             user_id: 用户ID
-            
+
         Returns:
             list: 知识库字典列表
         """

@@ -85,7 +85,7 @@ class OceanBaseConnectionPool:
                 )
                 break
             except Exception as e:
-                logger.warning(f"{str(e)}. Waiting OceanBase {self.uri} to be healthy.")
+                logger.warning(f"{e!s}. Waiting OceanBase {self.uri} to be healthy.")
                 time.sleep(5)
 
         if self.client is None:
@@ -105,7 +105,7 @@ class OceanBaseConnectionPool:
             version_str = res[0] if res else None
             logger.info(f"OceanBase {self.uri} version is {version_str}")
         except Exception as e:
-            raise Exception(f"Failed to get OceanBase version from {self.uri}, error: {str(e)}")
+            raise Exception(f"Failed to get OceanBase version from {self.uri}, error: {e!s}")
 
         if not version_str:
             raise Exception(f"Failed to get OceanBase version from {self.uri}.")
@@ -132,7 +132,7 @@ class OceanBaseConnectionPool:
             self.client.engine.dispose()
             logger.info("Disposed all connections in engine pool to refresh connection pool")
         except Exception as e:
-            logger.warning(f"Failed to set 'ob_query_timeout' variable: {str(e)}")
+            logger.warning(f"Failed to set 'ob_query_timeout' variable: {e!s}")
 
     def _init_hybrid_search(self, max_connections, max_overflow, pool_timeout):
         enable_hybrid_search = os.getenv('ENABLE_HYBRID_SEARCH', 'false').lower() in ['true', '1', 'yes', 'y']
@@ -171,7 +171,7 @@ class OceanBaseConnectionPool:
             self.client.perform_raw_text_sql("SELECT 1 FROM DUAL")
             return self.client
         except Exception as e:
-            logger.warning(f"OceanBase connection unhealthy: {str(e)}, refreshing...")
+            logger.warning(f"OceanBase connection unhealthy: {e!s}, refreshing...")
             self.client.engine.dispose()
             return self.client
 

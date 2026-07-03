@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 DOCX 模板标记与填充接口
 
@@ -11,26 +10,26 @@ DOCX 模板标记与填充接口
 - POST /fill - 填充数据并返回文档
 """
 
+import base64
 import json
-import uuid
+import logging
 import os
 import shutil
-import logging
-from io import BytesIO
+import uuid
 from datetime import datetime
+from io import BytesIO
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Form
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
-import base64
 
-from api.utils.api_utils import get_json_result
 from api.service.docx_marker_service import (
-    parse_docx,
     auto_recognize_placeholders,
     fill_document,
     fill_document_with_tables,
     generate_debug_report,
+    parse_docx,
 )
+from api.utils.api_utils import get_json_result
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -191,8 +190,8 @@ async def stateless_parse(
             }
         )
     except Exception as e:
-        logger.error(f"[parse] 解析失败: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"解析失败: {str(e)}")
+        logger.error(f"[parse] 解析失败: {e!s}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"解析失败: {e!s}")
     finally:
         # 清理临时文件
         if os.path.exists(temp_path):
@@ -279,8 +278,8 @@ async def stateless_recognize(
             }
         )
     except Exception as e:
-        logger.error(f"[recognize] 自动识别失败: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"自动识别失败: {str(e)}")
+        logger.error(f"[recognize] 自动识别失败: {e!s}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"自动识别失败: {e!s}")
     finally:
         # 清理临时文件
         if os.path.exists(temp_path):
@@ -362,7 +361,7 @@ async def stateless_fill(
         placeholders_data = json.loads(placeholders)
         fields_data = json.loads(fields)
     except json.JSONDecodeError as e:
-        raise HTTPException(status_code=400, detail=f"JSON 解析失败: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"JSON 解析失败: {e!s}")
 
     # 验证数据格式
     if not isinstance(placeholders_data, list):
@@ -390,7 +389,7 @@ async def stateless_fill(
             "placeholders": placeholders_data,
             "fields": fields_data
         }, file.filename)
-        logger.info(f"[fill] 输入文件已保存到日志目录")
+        logger.info("[fill] 输入文件已保存到日志目录")
 
         with open(source_path, "wb") as f:
             f.write(content)
@@ -425,7 +424,7 @@ async def stateless_fill(
 
         # 保存输出文件到日志目录
         save_fill_log(request_id, "output", output_content, filename=f"filled_{file.filename}")
-        logger.info(f"[fill] 输出文件已保存到日志目录")
+        logger.info("[fill] 输出文件已保存到日志目录")
         logger.info(f"[fill] 请求ID: {request_id} 处理完成")
 
         base64_encoded_file = base64.b64encode(output_content).decode("utf-8")
@@ -438,8 +437,8 @@ async def stateless_fill(
             }
         )
     except Exception as e:
-        logger.error(f"[fill] 填充失败: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"填充失败: {str(e)}")
+        logger.error(f"[fill] 填充失败: {e!s}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"填充失败: {e!s}")
     finally:
         # 清理临时文件
         if os.path.exists(source_path):
@@ -481,7 +480,7 @@ async def stateless_fill_download(
         placeholders_data = json.loads(placeholders)
         fields_data = json.loads(fields)
     except json.JSONDecodeError as e:
-        raise HTTPException(status_code=400, detail=f"JSON 解析失败: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"JSON 解析失败: {e!s}")
 
     # 验证数据格式
     if not isinstance(placeholders_data, list):
@@ -545,13 +544,13 @@ async def stateless_fill_download(
             }
         )
     except Exception as e:
-        logger.error(f"[fill_download] 填充失败: {str(e)}", exc_info=True)
+        logger.error(f"[fill_download] 填充失败: {e!s}", exc_info=True)
         # 清理临时文件
         if os.path.exists(source_path):
             os.remove(source_path)
         if os.path.exists(output_path):
             os.remove(output_path)
-        raise HTTPException(status_code=500, detail=f"填充失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"填充失败: {e!s}")
 
 
 @router.post("/debug", summary="获取文档调试信息",
@@ -610,8 +609,8 @@ async def stateless_debug(
             }
         )
     except Exception as e:
-        logger.error(f"[debug] 生成调试信息失败: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"生成调试信息失败: {str(e)}")
+        logger.error(f"[debug] 生成调试信息失败: {e!s}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"生成调试信息失败: {e!s}")
     finally:
         # 清理临时文件
         if os.path.exists(temp_path):

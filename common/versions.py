@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -21,7 +20,7 @@ def get_multirag_version() -> str:
         )
     )
     if os.path.exists(version_path):
-        with open(version_path, "r") as f:
+        with open(version_path) as f:
             MULITIRAG_VERSION_INFO = f.read().strip()
     else:
         MULITIRAG_VERSION_INFO = get_closest_tag_and_count()

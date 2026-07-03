@@ -1,25 +1,24 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 
 """
 Enhanced API Client for DRM Semantic OpenAPI
 用于向DRM语义化API服务发送请求的客户端（带自动分页和异步功能）
 """
 
-import requests
+import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import os
-import asyncio
-import aiohttp
 import time
-import hashlib
-import hmac
 from urllib.parse import urljoin
 
+import aiohttp
+import requests
+
 from api.service.askdata_service.event.event_utils import send_event
-from common.settings import DCS_SERVER_PROTOCOL, DCS_SERVER_HOST, DCS_SERVER_PORT, DCS_SEMANTIC_SERVER_ACCESS_KEY, \
-    DCS_SEMANTIC_SERVER_SECRET_KEY
+from common.settings import DCS_SEMANTIC_SERVER_ACCESS_KEY, DCS_SEMANTIC_SERVER_SECRET_KEY, DCS_SERVER_HOST, DCS_SERVER_PORT, DCS_SERVER_PROTOCOL
 
 # 配置日志
 logging.basicConfig(
@@ -153,7 +152,7 @@ class SemanticApiClient:
             return {}
 
         # Using HMAC-SHA256 for the signature
-        message = f"{access_key}{timestamp}".encode('utf-8')
+        message = f"{access_key}{timestamp}".encode()
         secret = secret_key.encode('utf-8')
 
         signature = hmac.new(secret, message, digestmod=hashlib.sha256).hexdigest()
@@ -224,17 +223,17 @@ class SemanticApiClient:
             return result
 
         except requests.exceptions.RequestException as e:
-            error_msg = f"请求错误: {str(e)}"
+            error_msg = f"请求错误: {e!s}"
             logger.error(error_msg)
             raise ApiNetworkError(error_msg) from e
         except json.JSONDecodeError as e:
-            error_msg = f"JSON解析错误: {str(e)}"
+            error_msg = f"JSON解析错误: {e!s}"
             logger.error(error_msg)
             raise ApiJsonDecodeError(error_msg) from e
         except Exception as e:
             if isinstance(e, SemanticApiError):
                 raise  # 如果是已经包装过的异常就直接抛出
-            error_msg = f"意外错误: {str(e)}"
+            error_msg = f"意外错误: {e!s}"
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e
 
@@ -310,7 +309,7 @@ class SemanticApiClient:
 
                         return result
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             error_msg = f"异步请求超时({self.timeout}s): {method} {url}"
             logger.error(error_msg)
             raise ApiNetworkError(error_msg)
@@ -319,7 +318,7 @@ class SemanticApiClient:
             logger.error(error_msg)
             raise ApiNetworkError(error_msg) from e
         except json.JSONDecodeError as e:
-            error_msg = f"异步JSON解析错误: {str(e)}"
+            error_msg = f"异步JSON解析错误: {e!s}"
             logger.error(error_msg)
             raise ApiJsonDecodeError(error_msg) from e
         except Exception as e:
@@ -360,7 +359,7 @@ class SemanticApiClient:
         Raises:
             SemanticApiError: 请求或处理过程中的任何错误
         """
-        logger.info(f"\n=== 根据维度名称搜索维度信息 ===")
+        logger.info("\n=== 根据维度名称搜索维度信息 ===")
         logger.info(f"dataset_ids: {dataset_ids}")
         if event_id:
             await send_event(event_id, {"task_name": "分词获取维度信息", "task_status": "working"}, "task")
@@ -460,7 +459,7 @@ class SemanticApiClient:
                     additional_results = []
                     for result in page_results:
                         if isinstance(result, Exception):
-                            error_msg = f"关键词'{kw}'的异步请求出错: {str(result)}"
+                            error_msg = f"关键词'{kw}'的异步请求出错: {result!s}"
                             logger.error(error_msg)
                             raise ApiRequestError(error_msg) from result
 
@@ -524,7 +523,7 @@ class SemanticApiClient:
 
                 except SemanticApiError as e:
                     # 某个关键词处理失败，但允许继续处理其他关键词
-                    logger.error(f"处理关键词 '{kw}' 时出错: {str(e)}")
+                    logger.error(f"处理关键词 '{kw}' 时出错: {e!s}")
                     raise
 
             logger.info(f"所有维度信息关键词合并后的总唯一结果数: {len(all_results)}条")
@@ -565,7 +564,7 @@ class SemanticApiClient:
 
         except Exception as e:
             if not isinstance(e, SemanticApiError):
-                error_msg = f"多关键词维度信息搜索过程中出错: {str(e)}"
+                error_msg = f"多关键词维度信息搜索过程中出错: {e!s}"
                 logger.error(error_msg)
                 raise ApiRequestError(error_msg) from e
             raise  # 重新抛出已经包装的异常
@@ -602,7 +601,7 @@ class SemanticApiClient:
             ApiResponseError: API响应业务状态码不为0
             ApiRequestError: 请求过程中的其他错误
         """
-        logger.info(f"\n=== 根据维度值名称搜索维度信息 ===")
+        logger.info("\n=== 根据维度值名称搜索维度信息 ===")
         logger.info(f"dataset_ids: {dataset_ids}")
         if event_id:
             await send_event(event_id, {"task_name": "维度值匹配维度", "task_status": "working"}, "task")
@@ -706,7 +705,7 @@ class SemanticApiClient:
                     additional_results = []
                     for result in page_results:
                         if isinstance(result, Exception):
-                            error_msg = f"关键词'{kw}'的异步请求出错: {str(result)}"
+                            error_msg = f"关键词'{kw}'的异步请求出错: {result!s}"
                             logger.error(error_msg)
                             raise ApiRequestError(error_msg) from result
 
@@ -774,7 +773,7 @@ class SemanticApiClient:
 
                 except SemanticApiError as e:
                     # 记录错误但继续处理其他关键词
-                    logger.error(f"处理关键词 '{kw}' 时出错: {str(e)}")
+                    logger.error(f"处理关键词 '{kw}' 时出错: {e!s}")
                     raise  # 重新抛出异常
 
             logger.info(f"所有维度值关键词合并后的总唯一结果数: {len(all_results)}条")
@@ -814,7 +813,7 @@ class SemanticApiClient:
 
         except Exception as e:
             if not isinstance(e, SemanticApiError):
-                error_msg = f"多关键词维度值搜索过程中出错: {str(e)}"
+                error_msg = f"多关键词维度值搜索过程中出错: {e!s}"
                 logger.error(error_msg)
                 raise ApiRequestError(error_msg) from e
             raise  # 重新抛出已经包装的异常
@@ -830,7 +829,7 @@ class SemanticApiClient:
         """
         异步获取HC维度信息（通过维度值搜索）
         """
-        logger.info(f"\n=== 通过维度值搜索HC维度信息 ===")
+        logger.info("\n=== 通过维度值搜索HC维度信息 ===")
         logger.info(f"关键词列表: {keyword_list}")
         logger.info(f"数据集ID: {dataset_ids}")
         logger.info(f"排除维度ID: {exclude_dim_ids}")
@@ -901,7 +900,7 @@ class SemanticApiClient:
             raise e
         except Exception as e:
             # 其他异常封装为ApiRequestError后抛出
-            error_msg = f"获取HC维度信息过程中出错: {str(e)}"
+            error_msg = f"获取HC维度信息过程中出错: {e!s}"
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e
 
@@ -937,7 +936,7 @@ class SemanticApiClient:
             ApiResponseError: API响应业务状态码不为0
             ApiRequestError: 请求过程中的其他错误
         """
-        logger.info(f"\n=== 根据指标名称搜索指标信息 ===")
+        logger.info("\n=== 根据指标名称搜索指标信息 ===")
         logger.info(f"dataset_ids: {dataset_ids}")
         if event_id:
             await send_event(event_id, {"task_name": "按关键字获取指标", "task_status": "working"}, "task")
@@ -1042,7 +1041,7 @@ class SemanticApiClient:
                     additional_results = []
                     for result in page_results:
                         if isinstance(result, Exception):
-                            error_msg = f"关键词'{kw}'的异步请求出错: {str(result)}"
+                            error_msg = f"关键词'{kw}'的异步请求出错: {result!s}"
                             logger.error(error_msg)
                             raise ApiRequestError(error_msg) from result
 
@@ -1111,7 +1110,7 @@ class SemanticApiClient:
 
                 except SemanticApiError as e:
                     # 记录错误但继续处理其他关键词
-                    logger.error(f"处理关键词 '{kw}' 时出错: {str(e)}")
+                    logger.error(f"处理关键词 '{kw}' 时出错: {e!s}")
                     raise  # 重新抛出异常
 
             logger.info(f"所有指标信息关键词合并后的总唯一结果数: {len(all_results)}条")
@@ -1150,7 +1149,7 @@ class SemanticApiClient:
 
         except Exception as e:
             if not isinstance(e, SemanticApiError):
-                error_msg = f"多关键词指标信息搜索过程中出错: {str(e)}"
+                error_msg = f"多关键词指标信息搜索过程中出错: {e!s}"
                 logger.error(error_msg)
                 raise ApiRequestError(error_msg) from e
             raise  # 重新抛出已经包装的异常
@@ -1175,7 +1174,7 @@ class SemanticApiClient:
             ApiRequestError: 请求过程中的错误
             ApiResponseError: API响应错误（业务状态码非0）
         """
-        logger.info(f"\n=== 根据维度ID获取维度详情 ===")
+        logger.info("\n=== 根据维度ID获取维度详情 ===")
         if event_id:
             await send_event(event_id, {"task_name": "按id获取维度信息", "task_status": "working"}, "task")
 
@@ -1220,7 +1219,7 @@ class SemanticApiClient:
                 # 处理结果
                 for idx, (dim_id, result) in enumerate(zip(batch_ids, batch_results)):
                     if isinstance(result, Exception):
-                        error_msg = f"维度ID {dim_id} 的请求出错: {str(result)}"
+                        error_msg = f"维度ID {dim_id} 的请求出错: {result!s}"
                         logger.error(error_msg)
                         error_count += 1
                         # 不立即抛出异常，继续处理其他ID，但记录错误
@@ -1282,7 +1281,7 @@ class SemanticApiClient:
                 raise
 
             # 其他异常封装为ApiRequestError后抛出
-            error_msg = f"获取维度详情过程中出错: {str(e)}"
+            error_msg = f"获取维度详情过程中出错: {e!s}"
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e
 
@@ -1306,7 +1305,7 @@ class SemanticApiClient:
             ApiRequestError: 请求过程中的错误
             ApiResponseError: API响应错误（业务状态码非0）
         """
-        logger.info(f"\n=== 根据指标ID获取指标详情 ===")
+        logger.info("\n=== 根据指标ID获取指标详情 ===")
         if event_id:
             await send_event(event_id, {"task_name": "按id获取指标", "task_status": "working"}, "task")
 
@@ -1351,7 +1350,7 @@ class SemanticApiClient:
                 # 处理结果
                 for idx, (metric_id, result) in enumerate(zip(batch_ids, batch_results)):
                     if isinstance(result, Exception):
-                        error_msg = f"指标ID {metric_id} 的请求出错: {str(result)}"
+                        error_msg = f"指标ID {metric_id} 的请求出错: {result!s}"
                         logger.error(error_msg)
                         error_count += 1
                         # 不立即抛出异常，继续处理其他ID，但记录错误
@@ -1423,7 +1422,7 @@ class SemanticApiClient:
                 raise
 
             # 其他异常封装为ApiRequestError后抛出
-            error_msg = f"获取指标详情过程中出错: {str(e)}"
+            error_msg = f"获取指标详情过程中出错: {e!s}"
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e
 
@@ -1447,7 +1446,7 @@ class SemanticApiClient:
             ApiResponseError: API响应错误（业务状态码非0）
             ApiNetworkError: 网络连接错误
         """
-        logger.info(f"\n=== 根据模型ID获取模型详情 ===")
+        logger.info("\n=== 根据模型ID获取模型详情 ===")
 
         # 确保API路径已添加
         if "get_model_detail" not in self.api_paths:
@@ -1487,7 +1486,7 @@ class SemanticApiClient:
                 # 处理结果
                 for idx, (model_id, result) in enumerate(zip(batch_ids, batch_results)):
                     if isinstance(result, Exception):
-                        error_msg = f"模型ID {model_id} 的请求出错: {str(result)}"
+                        error_msg = f"模型ID {model_id} 的请求出错: {result!s}"
                         logger.error(error_msg)
                         error_count += 1
                         # 不立即抛出异常，继续处理其他ID，但记录错误
@@ -1542,17 +1541,17 @@ class SemanticApiClient:
             logger.info(f"总共获取到 {len(all_results)} 条模型详情信息")
             return all_results
 
-        except SemanticApiError as e:
+        except SemanticApiError:
             # 如果是已经封装好的API异常则直接抛出
             raise
         except aiohttp.ClientError as e:
             # 网络连接错误单独处理
-            error_msg = f"获取模型详情时发生网络错误: {str(e)}"
+            error_msg = f"获取模型详情时发生网络错误: {e!s}"
             logger.error(error_msg)
             raise ApiNetworkError(error_msg) from e
         except Exception as e:
             # 其他异常封装为ApiRequestError后抛出
-            error_msg = f"获取模型详情过程中出错: {str(e)}"
+            error_msg = f"获取模型详情过程中出错: {e!s}"
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e
 
@@ -1576,7 +1575,7 @@ class SemanticApiClient:
             ApiResponseError: API响应错误（业务状态码非0）
             ApiNetworkError: 网络连接错误
         """
-        logger.info(f"\n=== 根据模型ID获取模型关系 ===")
+        logger.info("\n=== 根据模型ID获取模型关系 ===")
 
         # 确保API路径已添加
         if "get_model_relationships" not in self.api_paths:
@@ -1618,7 +1617,7 @@ class SemanticApiClient:
                 # 处理结果
                 for idx, (model_id, result) in enumerate(zip(batch_ids, batch_results)):
                     if isinstance(result, Exception):
-                        error_msg = f"模型ID {model_id} 的关系请求出错: {str(result)}"
+                        error_msg = f"模型ID {model_id} 的关系请求出错: {result!s}"
                         logger.error(error_msg)
                         error_count += 1
                         # 不立即抛出异常，继续处理其他ID，后续根据错误比例决定
@@ -1669,7 +1668,7 @@ class SemanticApiClient:
                         # 打印部分关系示例
                         if added_count > 0:
                             sample_size = min(3, added_count)
-                            sample_relations = [r for r in all_relationships[-added_count:]][:sample_size]
+                            sample_relations = list(all_relationships[-added_count:])[:sample_size]
 
                             for i, relation in enumerate(sample_relations):
                                 source_name = relation.get('sourceModelName', 'N/A')
@@ -1709,17 +1708,17 @@ class SemanticApiClient:
             logger.info(f"总共获取到 {len(all_relationships)} 条唯一的模型关系信息")
             return all_relationships
 
-        except SemanticApiError as e:
+        except SemanticApiError:
             # 如果是已经封装好的API异常则直接抛出
             raise
         except aiohttp.ClientError as e:
             # 网络连接错误单独处理
-            error_msg = f"获取模型关系时发生网络错误: {str(e)}"
+            error_msg = f"获取模型关系时发生网络错误: {e!s}"
             logger.error(error_msg)
             raise ApiNetworkError(error_msg) from e
         except Exception as e:
             # 其他异常封装为ApiRequestError后抛出
-            error_msg = f"获取模型关系过程中出错: {str(e)}"
+            error_msg = f"获取模型关系过程中出错: {e!s}"
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e
 
@@ -1744,7 +1743,7 @@ class SemanticApiClient:
             ApiResponseError: API响应业务状态码不为0
             ApiNetworkError: 网络连接错误
         """
-        logger.info(f"\n=== 根据数据集ID获取数据集详情 ===")
+        logger.info("\n=== 根据数据集ID获取数据集详情 ===")
         if event_id:
             await send_event(event_id, {"task_name": "获取数据集详情", "task_status": "working"}, "task")
 
@@ -1786,7 +1785,7 @@ class SemanticApiClient:
                 # 处理结果
                 for idx, (dataset_id, result) in enumerate(zip(batch_ids, batch_results)):
                     if isinstance(result, Exception):
-                        error_msg = f"数据集ID {dataset_id} 的请求出错: {str(result)}"
+                        error_msg = f"数据集ID {dataset_id} 的请求出错: {result!s}"
                         logger.error(error_msg)
                         error_count += 1
                         # 记录错误但继续处理其他ID
@@ -1807,7 +1806,7 @@ class SemanticApiClient:
                             dataset_data["requested_dataset_id"] = dataset_id
 
                         # 去除重复的模型（如示例中显示的可能有重复）
-                        if "models" in dataset_data and dataset_data["models"]:
+                        if dataset_data.get("models"):
                             unique_models = []
                             model_ids_seen = set()
                             for model in dataset_data["models"]:
@@ -1875,17 +1874,17 @@ class SemanticApiClient:
 
             return all_results
 
-        except SemanticApiError as e:
+        except SemanticApiError:
             # 如果是已经封装好的API异常则直接抛出
             raise
         except aiohttp.ClientError as e:
             # 网络连接错误单独处理
-            error_msg = f"获取数据集详情时发生网络错误: {str(e)}"
+            error_msg = f"获取数据集详情时发生网络错误: {e!s}"
             logger.error(error_msg)
             raise ApiNetworkError(error_msg) from e
         except Exception as e:
             # 其他异常封装为ApiRequestError后抛出
-            error_msg = f"获取数据集详情过程中出错: {str(e)}"
+            error_msg = f"获取数据集详情过程中出错: {e!s}"
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e
 
@@ -1921,7 +1920,7 @@ class SemanticApiClient:
             ApiResponseError: API响应业务状态码不为0
             ApiNetworkError: 网络连接错误
         """
-        logger.info(f"\n=== 根据关键词搜索业务术语 ===")
+        logger.info("\n=== 根据关键词搜索业务术语 ===")
         logger.info(f"domain_ids: {domain_ids}")
 
         # 参数验证
@@ -2041,7 +2040,7 @@ class SemanticApiClient:
 
                         for result in batch_results:
                             if isinstance(result, Exception):
-                                logger.error(f"获取关键词'{kw}'的页面时发生错误: {str(result)}")
+                                logger.error(f"获取关键词'{kw}'的页面时发生错误: {result!s}")
                                 page_errors += 1
                                 continue
                             page_results.append(result)
@@ -2093,7 +2092,7 @@ class SemanticApiClient:
 
                 except SemanticApiError as e:
                     # 记录错误但继续处理其他关键词
-                    logger.error(f"处理关键词 '{kw}' 时出错: {str(e)}")
+                    logger.error(f"处理关键词 '{kw}' 时出错: {e!s}")
                     error_count += 1
                     # 不抛出异常，继续处理其他关键词
 
@@ -2142,17 +2141,17 @@ class SemanticApiClient:
 
             return all_results
 
-        except SemanticApiError as e:
+        except SemanticApiError:
             # 如果是已经封装好的API异常则直接抛出
             raise
         except aiohttp.ClientError as e:
             # 网络连接错误单独处理
-            error_msg = f"业务术语搜索过程中发生网络错误: {str(e)}"
+            error_msg = f"业务术语搜索过程中发生网络错误: {e!s}"
             logger.error(error_msg)
             raise ApiNetworkError(error_msg) from e
         except Exception as e:
             # 其他异常封装为ApiRequestError后抛出
-            error_msg = f"业务术语搜索过程中出错: {str(e)}"
+            error_msg = f"业务术语搜索过程中出错: {e!s}"
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e
 
@@ -2181,7 +2180,7 @@ class SemanticApiClient:
             ApiResponseError: API响应业务状态码不为0
             ApiNetworkError: 网络连接错误
         """
-        logger.info(f"\n=== 获取维度值列表 ===")
+        logger.info("\n=== 获取维度值列表 ===")
         if event_id:
             await send_event(event_id, {"task_name": "获取维度值列表", "task_status": "working"}, "task")
 
@@ -2276,7 +2275,7 @@ class SemanticApiClient:
                         # 处理每个页面的结果
                         for result in batch_results:
                             if isinstance(result, Exception):
-                                logger.error(f"获取维度ID '{dimension_id}' 的页面时发生错误: {str(result)}")
+                                logger.error(f"获取维度ID '{dimension_id}' 的页面时发生错误: {result!s}")
                                 page_errors += 1
                                 continue
 
@@ -2303,7 +2302,7 @@ class SemanticApiClient:
 
                 except SemanticApiError as e:
                     # 记录错误但继续处理其他维度ID
-                    logger.error(f"处理维度ID '{dimension_id}' 时出错: {str(e)}")
+                    logger.error(f"处理维度ID '{dimension_id}' 时出错: {e!s}")
                     error_count += 1
                     # 不抛出异常，继续处理其他维度ID
 
@@ -2329,17 +2328,17 @@ class SemanticApiClient:
                 await send_event(event_id, {}, "progress_up")
             return dimension_values_dict
 
-        except SemanticApiError as e:
+        except SemanticApiError:
             # 如果是已经封装好的API异常则直接抛出
             raise
         except aiohttp.ClientError as e:
             # 网络连接错误单独处理
-            error_msg = f"获取维度值过程中发生网络错误: {str(e)}"
+            error_msg = f"获取维度值过程中发生网络错误: {e!s}"
             logger.error(error_msg)
             raise ApiNetworkError(error_msg) from e
         except Exception as e:
             # 其他异常封装为ApiRequestError后抛出
-            error_msg = f"获取维度值过程中出错: {str(e)}"
+            error_msg = f"获取维度值过程中出错: {e!s}"
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e
 
@@ -2397,7 +2396,7 @@ class SemanticApiClient:
             raise  # 重新抛出，让调用者处理
         except Exception as e:
             # 捕获其他所有异常
-            error_msg = f"获取模型 {model_id} 的指标和维度时发生意外错误: {str(e)}"
+            error_msg = f"获取模型 {model_id} 的指标和维度时发生意外错误: {e!s}"
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e
 
@@ -2429,7 +2428,7 @@ class SemanticApiClient:
             ApiResponseError: API响应业务状态码不为0
             ApiNetworkError: 网络连接错误
         """
-        logger.info(f"\n=== 根据关键词在高基数维度中搜索维度值 ===")
+        logger.info("\n=== 根据关键词在高基数维度中搜索维度值 ===")
         logger.info(
             f"维度ID: {dimension_id}, 关键词: {keyword}, 用户ID: {user_id}, 页码: {page_index}, 页面大小: {page_size}, 模糊匹配: {fuzzy_match}")
 
@@ -2500,17 +2499,17 @@ class SemanticApiClient:
 
             return result
 
-        except SemanticApiError as e:
+        except SemanticApiError:
             # 如果是已经封装好的API异常则直接抛出
             raise
         except aiohttp.ClientError as e:
             # 网络连接错误单独处理
-            error_msg = f"获取高基数维度值过程中发生网络错误: {str(e)}"
+            error_msg = f"获取高基数维度值过程中发生网络错误: {e!s}"
             logger.error(error_msg)
             raise ApiNetworkError(error_msg) from e
         except Exception as e:
             # 其他异常封装为ApiRequestError后抛出
-            error_msg = f"获取高基数维度值过程中出错: {str(e)}"
+            error_msg = f"获取高基数维度值过程中出错: {e!s}"
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e
 
@@ -2521,7 +2520,7 @@ class SemanticApiClient:
             model_id_list: list[str] | None = None,
             event_id: str | None = None
     ) -> dict | None:
-        logger.info(f"\n=== 获取用户语义权限信息 ===")
+        logger.info("\n=== 获取用户语义权限信息 ===")
         logger.info(f"用户ID: {user_id}")
         if dataset_id_list:
             logger.info(f"数据集ID列表: {dataset_id_list}")
@@ -2541,7 +2540,7 @@ class SemanticApiClient:
             error_msg = "必须提供 dataset_id_list 或 model_id_list 中的一个"
             logger.error(error_msg)
             raise ApiRequestError(error_msg)
-        
+
         if dataset_id_list and model_id_list:
             error_msg = "dataset_id_list 和 model_id_list 不能同时提供，只能选择其一"
             logger.error(error_msg)
@@ -2554,7 +2553,7 @@ class SemanticApiClient:
                 request_data["dataset_id_list"] = dataset_id_list
             else:  # model_id_list
                 request_data["model_id_list"] = model_id_list
-            
+
             # 发起请求
             result = await self._make_async_request(
                 "POST",
@@ -2597,14 +2596,14 @@ class SemanticApiClient:
                         if rules:
                             logger.info(f"    行级过滤条件: 逻辑操作符={logical_operator}, 规则数量={len(rules)}")
                         else:
-                            logger.info(f"    行级过滤条件: 已配置但无具体规则")
+                            logger.info("    行级过滤条件: 已配置但无具体规则")
                     else:
-                        logger.info(f"    无行级过滤条件")
+                        logger.info("    无行级过滤条件")
 
                     # 打印部分字段示例
                     if allowed_fields:
                         sample_size = min(3, len(allowed_fields))
-                        logger.info(f"    字段示例:")
+                        logger.info("    字段示例:")
                         for i, field in enumerate(allowed_fields[:sample_size]):
                             semantic_type = field.get('semanticType', 'N/A')
                             semantic_name = field.get('semanticName', 'N/A')
@@ -2629,10 +2628,10 @@ class SemanticApiClient:
 
         except SemanticApiError as e:
             # 如果是已经封装好的API异常则直接抛出
-            logger.error(f"获取用户 {user_id} 的语义权限时出错: {str(e)}")
+            logger.error(f"获取用户 {user_id} 的语义权限时出错: {e!s}")
             raise
         except Exception as e:
             # 其他异常封装为ApiRequestError后抛出
-            error_msg = f"获取用户语义权限过程中出错: {str(e)}"
+            error_msg = f"获取用户语义权限过程中出错: {e!s}"
             logger.error(error_msg)
             raise ApiRequestError(error_msg) from e

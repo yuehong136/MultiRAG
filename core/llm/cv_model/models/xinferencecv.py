@@ -2,8 +2,8 @@ from urllib.parse import urljoin
 
 from openai import OpenAI
 
-from core.llm.cv_model.models.gptv4 import GptV4
 from core.llm.cv_model.base import Base
+from core.llm.cv_model.models.gptv4 import GptV4
 
 
 class XinferenceCV(GptV4):

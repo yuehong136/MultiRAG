@@ -15,6 +15,7 @@
 #
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+
 import numpy as np
 
 DEFAULT_MATCH_VECTOR_TOPN = 10
@@ -132,7 +133,7 @@ MatchExpr = MatchTextExpr | MatchDenseExpr | MatchSparseExpr | MatchTensorExpr |
 
 class OrderByExpr:
     def __init__(self):
-        self.fields = list()
+        self.fields = []
     def asc(self, field: str):
         self.fields.append((field, 0))
         return self

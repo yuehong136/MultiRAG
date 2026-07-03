@@ -1,32 +1,28 @@
-# coding=utf-8
 """
 调试辅助工具：输出文档结构和识别结果
 """
 
+from typing import Any
+
 from docx import Document
 from docx.oxml.ns import qn
-from typing import List, Dict, Any
-import json
 
 
-def extract_document_structure(doc_path: str) -> Dict[str, Any]:
+def extract_document_structure(doc_path: str) -> dict[str, Any]:
     """
     提取文档的完整结构，以可读的方式展示
     """
     doc = Document(doc_path)
-    structure = {
-        "paragraphs": [],
-        "tables": []
-    }
+    structure = {"paragraphs": [], "tables": []}
 
     # 遍历所有块级元素
     body = doc.element.body
     element_index = 0
 
     def process_element(child, index):
-        tag = child.tag.split('}')[-1]
+        tag = child.tag.split("}")[-1]
 
-        if tag == 'p':  # 段落
+        if tag == "p":  # 段落
             para = None
             for p in doc.paragraphs:
                 if p._element == child:
@@ -34,13 +30,7 @@ def extract_document_structure(doc_path: str) -> Dict[str, Any]:
                     break
 
             if para:
-                para_info = {
-                    "index": index,
-                    "path": f"body[{index}]",
-                    "type": "paragraph",
-                    "text": para.text,
-                    "runs": []
-                }
+                para_info = {"index": index, "path": f"body[{index}]", "type": "paragraph", "text": para.text, "runs": []}
 
                 for run_idx, run in enumerate(para.runs):
                     run_info = {
@@ -56,7 +46,7 @@ def extract_document_structure(doc_path: str) -> Dict[str, Any]:
                 structure["paragraphs"].append(para_info)
                 return True
 
-        elif tag == 'tbl':  # 表格
+        elif tag == "tbl":  # 表格
             table = None
             for tbl in doc.tables:
                 if tbl._element == child:
@@ -64,19 +54,10 @@ def extract_document_structure(doc_path: str) -> Dict[str, Any]:
                     break
 
             if table:
-                table_info = {
-                    "index": index,
-                    "path": f"body[{index}]",
-                    "type": "table",
-                    "rows": []
-                }
+                table_info = {"index": index, "path": f"body[{index}]", "type": "table", "rows": []}
 
                 for row_idx, row in enumerate(table.rows):
-                    row_info = {
-                        "index": row_idx,
-                        "path": f"body[{index}]/row[{row_idx}]",
-                        "cells": []
-                    }
+                    row_info = {"index": row_idx, "path": f"body[{index}]/row[{row_idx}]", "cells": []}
 
                     for cell_idx, cell in enumerate(row.cells):
                         cell_text = cell.text.strip()
@@ -85,16 +66,11 @@ def extract_document_structure(doc_path: str) -> Dict[str, Any]:
                             "path": f"body[{index}]/row[{row_idx}]/cell[{cell_idx}]",
                             "text": cell_text,
                             "text_preview": cell_text[:50] + "..." if len(cell_text) > 50 else cell_text,
-                            "paragraphs": []
+                            "paragraphs": [],
                         }
 
                         for para_idx, para in enumerate(cell.paragraphs):
-                            para_info = {
-                                "index": para_idx,
-                                "path": f"body[{index}]/row[{row_idx}]/cell[{cell_idx}]/p[{para_idx}]",
-                                "text": para.text,
-                                "runs": []
-                            }
+                            para_info = {"index": para_idx, "path": f"body[{index}]/row[{row_idx}]/cell[{cell_idx}]/p[{para_idx}]", "text": para.text, "runs": []}
 
                             for run_idx, run in enumerate(para.runs):
                                 run_info = {
@@ -113,16 +89,16 @@ def extract_document_structure(doc_path: str) -> Dict[str, Any]:
 
                 structure["tables"].append(table_info)
                 return True
-        
-        elif tag == 'sdt':
-            sdt_content = child.find(qn('w:sdtContent'))
+
+        elif tag == "sdt":
+            sdt_content = child.find(qn("w:sdtContent"))
             if sdt_content is not None:
                 nonlocal element_index
                 for sdt_child in sdt_content:
                     if process_element(sdt_child, element_index):
                         element_index += 1
                 return False
-        
+
         return False
 
     for child in body:
@@ -132,7 +108,7 @@ def extract_document_structure(doc_path: str) -> Dict[str, Any]:
     return structure
 
 
-def format_structure_for_display(structure: Dict[str, Any]) -> str:
+def format_structure_for_display(structure: dict[str, Any]) -> str:
     """
     将文档结构格式化为易读的文本
     """
@@ -154,11 +130,14 @@ def format_structure_for_display(structure: Dict[str, Any]) -> str:
                 lines.append(f"  Runs ({len(para['runs'])}个):")
                 for run in para["runs"]:
                     attrs = []
-                    if run["bold"]: attrs.append("粗体")
-                    if run["italic"]: attrs.append("斜体")
-                    if run["underline"]: attrs.append("下划线")
+                    if run["bold"]:
+                        attrs.append("粗体")
+                    if run["italic"]:
+                        attrs.append("斜体")
+                    if run["underline"]:
+                        attrs.append("下划线")
                     attr_str = f" [{', '.join(attrs)}]" if attrs else ""
-                    lines.append(f"    - {run['path']}: \"{run['text']}\"{attr_str}")
+                    lines.append(f'    - {run["path"]}: "{run["text"]}"{attr_str}')
         lines.append("")
 
     # 表格
@@ -177,17 +156,17 @@ def format_structure_for_display(structure: Dict[str, Any]) -> str:
                         lines.append(f"      段落数: {len(cell['paragraphs'])}")
                         for para in cell["paragraphs"]:
                             if para["runs"]:
-                                lines.append(f"        {para['path']}: \"{para['text']}\"")
+                                lines.append(f'        {para["path"]}: "{para["text"]}"')
                                 for run in para["runs"]:
                                     if run["underline"]:
-                                        lines.append(f"          - {run['path']}: \"{run['text']}\" [下划线]")
+                                        lines.append(f'          - {run["path"]}: "{run["text"]}" [下划线]')
         lines.append("")
 
     lines.append("=" * 80)
     return "\n".join(lines)
 
 
-def format_placeholders_for_display(placeholders: List[Dict[str, Any]]) -> str:
+def format_placeholders_for_display(placeholders: list[dict[str, Any]]) -> str:
     lines = []
     lines.append("=" * 80)
     lines.append(f"自动识别结果 (共 {len(placeholders)} 个)")
@@ -207,7 +186,7 @@ def format_placeholders_for_display(placeholders: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def generate_debug_report(doc_path: str, placeholders: List[Dict[str, Any]]) -> str:
+def generate_debug_report(doc_path: str, placeholders: list[dict[str, Any]]) -> str:
     structure = extract_document_structure(doc_path)
     report = []
     report.append(format_structure_for_display(structure))

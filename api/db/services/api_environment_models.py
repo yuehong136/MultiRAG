@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -6,16 +5,17 @@
 @date：2025/1/15 10:00
 @desc: 环境管理相关模型定义
 """
+from datetime import datetime
 from enum import Enum
 from typing import Any
-from pydantic import BaseModel, Field, field_validator, ConfigDict
-from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class VariableType(str, Enum):
     """变量类型"""
     STRING = "string"
-    NUMBER = "number" 
+    NUMBER = "number"
     BOOLEAN = "boolean"
 
 

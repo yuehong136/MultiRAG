@@ -24,17 +24,18 @@ import time
 import traceback
 import types
 import zipfile
+from collections.abc import Callable
 from datetime import datetime
 from io import BytesIO
 from os import PathLike
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 import requests
 from tencentcloud.common import credential
+from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentCloudSDKException
 from tencentcloud.common.profile.client_profile import ClientProfile
 from tencentcloud.common.profile.http_profile import HttpProfile
-from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentCloudSDKException
 from tencentcloud.lkeap.v20240522 import lkeap_client, models
 
 from common.config_utils import get_base_config
@@ -385,14 +386,14 @@ class TCADPParser(RAGFlowPdfParser):
             self,
             filepath: str | PathLike[str],
             binary: BytesIO | bytes,
-            callback: Optional[Callable] = None,
+            callback: Callable | None = None,
             *,
-            output_dir: Optional[str] = None,
+            output_dir: str | None = None,
             file_type: str = "PDF",
-            file_start_page: Optional[int] = 1,
-            file_end_page: Optional[int] = 1000,
-            delete_output: Optional[bool] = True,
-            max_retries: Optional[int] = 1,
+            file_start_page: int | None = 1,
+            file_end_page: int | None = 1000,
+            delete_output: bool | None = True,
+            max_retries: int | None = 1,
     ) -> tuple:
         """Parse PDF document"""
 

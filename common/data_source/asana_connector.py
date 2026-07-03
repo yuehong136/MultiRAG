@@ -1,10 +1,12 @@
-from collections.abc import Iterator
-import time
-from datetime import datetime
 import logging
+import time
+from collections.abc import Iterator
+from datetime import datetime
 from typing import Any
+
 import asana
 import requests
+
 from common.data_source.config import CONTINUE_ON_CONNECTOR_FAILURE, INDEX_BATCH_SIZE, DocumentSource
 from common.data_source.interfaces import LoadConnector, PollConnector
 from common.data_source.models import Document, GenerateDocumentsOutput, SecondsSinceUnixEpoch
@@ -85,10 +87,9 @@ class AsanaAPI:
                 logging.info(f"Processed {project_count} projects")
         logging.info(f"Found {len(projects_list)} projects to process")
         for project_gid in projects_list:
-            for task in self._get_tasks_for_project(
+            yield from self._get_tasks_for_project(
                 project_gid, start_date, start_seconds
-            ):
-                yield task
+            )
         logging.info(f"Completed fetching {self.task_count} tasks from Asana")
         if self.api_error_count > 0:
             logging.warning(
@@ -432,8 +433,8 @@ class AsanaConnector(LoadConnector, PollConnector):
 
 
 if __name__ == "__main__":
-    import time
     import os
+    import time
 
     logging.info("Starting Asana connector test")
     connector = AsanaConnector(

@@ -113,7 +113,7 @@ class TableStructureRecognizer(Recognizer):
     @staticmethod
     def is_caption(bx):
         patt = [r"[图表]+[ 0-9:：]{2,}"]
-        if any([re.match(p, bx["text"].strip()) for p in patt]) or bx.get("layout_type", "").find("caption") >= 0:
+        if any(re.match(p, bx["text"].strip()) for p in patt) or bx.get("layout_type", "").find("caption") >= 0:
             return True
         return False
 
@@ -189,7 +189,7 @@ class TableStructureRecognizer(Recognizer):
 
         colwm = [b["C_right"] - b["C_left"] for b in boxes if "C" in b]
         colwm = np.min(colwm) if colwm else 0
-        crosspage = len(set([b["page_number"] for b in boxes])) > 1
+        crosspage = len({b["page_number"] for b in boxes}) > 1
         if crosspage:
             boxes = Recognizer.sort_X_firstly(boxes, colwm / 2)
         else:
@@ -329,7 +329,7 @@ class TableStructureRecognizer(Recognizer):
                 rows.pop(i)
 
         # which rows are headers
-        hdset = set([])
+        hdset = set()
         for i in range(len(tbl)):
             cnt, h = 0, 0
             for j, arr in enumerate(tbl[i]):
@@ -338,7 +338,7 @@ class TableStructureRecognizer(Recognizer):
                 cnt += 1
                 if max_type == "Nu" and arr[0]["btype"] == "Nu":
                     continue
-                if any([a.get("H") for a in arr]) or (max_type == "Nu" and arr[0]["btype"] != "Nu"):
+                if any(a.get("H") for a in arr) or (max_type == "Nu" and arr[0]["btype"] != "Nu"):
                     h += 1
             if h / cnt > 0.5:
                 hdset.add(i)
@@ -379,7 +379,7 @@ class TableStructureRecognizer(Recognizer):
                     row += f"<td {sp} >" + txt + "</td>"
 
             if i in hdset:
-                if all([t in hdset for t in txts]):
+                if all(t in hdset for t in txts):
                     continue
                 for t in txts:
                     hdset.add(t)
@@ -401,7 +401,7 @@ class TableStructureRecognizer(Recognizer):
         hdrset = set()
         lst_hdr = []
         de = "的" if not is_english else " for "
-        for r in sorted(list(hdr_rowno)):
+        for r in sorted(hdr_rowno):
             headers[r] = ["" for _ in range(clmno)]
             for i in range(clmno):
                 if not tbl[r][i]:
@@ -409,7 +409,7 @@ class TableStructureRecognizer(Recognizer):
                 txt = " ".join([a["text"].strip() for a in tbl[r][i]])
                 headers[r][i] = txt
                 hdrset.add(txt)
-            if all([not t for t in headers[r]]):
+            if all(not t for t in headers[r]):
                 del headers[r]
                 hdr_rowno.remove(r)
                 continue
@@ -533,7 +533,7 @@ class TableStructureRecognizer(Recognizer):
             for j, arr in enumerate(tbl[i]):
                 if not arr:
                     continue
-                if all(["rowspan" not in a and "colspan" not in a for a in arr]):
+                if all("rowspan" not in a and "colspan" not in a for a in arr):
                     continue
                 rowspan, colspan = [], []
                 for a in arr:

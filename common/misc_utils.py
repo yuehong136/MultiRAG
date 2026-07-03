@@ -9,7 +9,6 @@ import sys
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 
 def get_uuid():

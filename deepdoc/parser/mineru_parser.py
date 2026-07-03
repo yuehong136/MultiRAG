@@ -22,11 +22,12 @@ import sys
 import tempfile
 import threading
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from io import BytesIO
 from os import PathLike
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import pdfplumber
@@ -539,12 +540,12 @@ class MinerUParser(RAGFlowPdfParser):
         if not json_file:
             raise FileNotFoundError(f"[MinerU] Missing output file, tried: {', '.join(str(p) for p in attempted)}")
 
-        with open(json_file, "r", encoding="utf-8") as f:
+        with open(json_file, encoding="utf-8") as f:
             data = json.load(f)
 
         for item in data:
             for key in ("img_path", "table_img_path", "equation_img_path"):
-                if key in item and item[key]:
+                if item.get(key):
                     item[key] = str((subdir / item[key]).resolve())
         return data
 

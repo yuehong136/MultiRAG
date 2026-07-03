@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -7,16 +6,18 @@
 @desc: AI安全护栏词库管理接口
 """
 from __future__ import annotations
+
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-from sqlalchemy.orm import Session
+
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.db.db_models import get_db
-from api.db.services.guard_library_service import GuardLibraryService
 from api.db.services.guard_library_item_service import GuardLibraryItemService
-from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
+from api.db.services.guard_library_service import GuardLibraryService
+from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
 
 router = APIRouter()
 
@@ -99,11 +100,11 @@ def create_library(
 ) -> dict[str, Any]:
     """
     ### POST `/create` 创建词库
-    
+
     **功能描述**:
     此接口用于创建新的AI安全护栏词库，支持创建黑名单、白名单、代答库、模式库等不同类型的词库。
     用户可以指定词库的基本信息、分类、标签和配置参数。
-    
+
     ---
     ### 请求体 (Request Body)
     | 字段           | 类型         | 必填 | 描述                                                    |
@@ -114,7 +115,7 @@ def create_library(
     | `category`     | `string`    | 否   | 词库分类                                                |
     | `tags`         | `list[string]` | 否   | 标签列表                                             |
     | `config`       | `object`    | 否   | 词库配置参数                                            |
-    
+
     **请求示例**:
     ```json
     {
@@ -129,7 +130,7 @@ def create_library(
         }
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -142,7 +143,7 @@ def create_library(
         }
     }
     ```
-    
+
     #### 失败响应 (400)
     ```json
     {
@@ -164,12 +165,12 @@ def create_library(
             tags=request.tags,
             config=request.config
         )
-        
+
         if library_id:
             return get_json_result(data={"library_id": library_id})
         else:
             return get_data_error_result(retmsg="创建词库失败")
-            
+
     except Exception as e:
         return server_error_response(e)
 
@@ -183,23 +184,23 @@ def list_libraries(
 ) -> dict[str, Any]:
     """
     ### GET `/list` 获取词库列表
-    
+
     **功能描述**:
     此接口用于获取用户有权限访问的AI安全护栏词库列表。
     支持按词库类型和分类进行过滤，返回词库的完整信息包括配置、统计数据等。
-    
+
     ---
     ### 查询参数 (Query Parameters)
     | 参数           | 类型     | 必填 | 默认值 | 描述                                      |
     |----------------|----------|------|--------|-------------------------------------------|
     | `library_type` | `string` | 否   | null   | 词库类型过滤: blacklist/whitelist/reply/pattern/custom |
     | `category`     | `string` | 否   | null   | 词库分类过滤                              |
-    
+
     **请求示例**:
     ```bash
     GET /list?library_type=blacklist&category=内容合规
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -233,9 +234,9 @@ def list_libraries(
         libraries = GuardLibraryService.get_libraries_by_tenant(
             db, user.id, library_type, category
         )
-        
+
         return get_json_result(data=[lib.to_dict() for lib in libraries])
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -248,11 +249,11 @@ def update_library(
 ) -> dict[str, Any]:
     """
     ### PUT `/update` 更新词库
-    
+
     **功能描述**:
     此接口用于更新已存在的AI安全护栏词库信息。
     支持部分更新，只更新传入的字段，未传入的字段保持不变。
-    
+
     ---
     ### 请求体 (Request Body)
     | 字段           | 类型         | 必填 | 描述                                                |
@@ -263,7 +264,7 @@ def update_library(
     | `category`     | `string`    | 否   | 词库分类                                            |
     | `tags`         | `list[string]` | 否   | 标签列表                                         |
     | `config`       | `object`    | 否   | 词库配置参数                                        |
-    
+
     **请求示例**:
     ```json
     {
@@ -273,7 +274,7 @@ def update_library(
         "tags": ["更新", "标签"]
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -284,7 +285,7 @@ def update_library(
         "data": true
     }
     ```
-    
+
     #### 失败响应 (400)
     ```json
     {
@@ -295,18 +296,18 @@ def update_library(
     ```
     """
     try:
-        update_data = {k: v for k, v in request.model_dump().items() 
+        update_data = {k: v for k, v in request.model_dump().items()
                       if v is not None and k != "library_id"}
-        
+
         success = GuardLibraryService.update_library(
             db, request.library_id, update_data
         )
-        
+
         if success:
             return get_json_result(data=True)
         else:
             return get_data_error_result(retmsg="更新词库失败")
-            
+
     except Exception as e:
         return server_error_response(e)
 
@@ -319,23 +320,23 @@ def delete_library(
 ) -> dict[str, Any]:
     """
     ### DELETE `/{library_id}` 删除词库
-    
+
     **功能描述**:
     此接口用于删除指定的AI安全护栏词库（软删除）。
     删除词库不会物理删除数据，而是将状态标记为删除，保留历史记录。
     删除词库时会同时删除该词库下的所有词库项。
-    
+
     ---
     ### 路径参数 (Path Parameters)
     | 参数         | 类型     | 必填 | 描述       |
     |--------------|----------|------|------------|
     | `library_id` | `string` | 是   | 词库ID     |
-    
+
     **请求示例**:
     ```bash
     DELETE /uuid-library-id-here
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -346,7 +347,7 @@ def delete_library(
         "data": true
     }
     ```
-    
+
     #### 失败响应 (400)
     ```json
     {
@@ -358,12 +359,12 @@ def delete_library(
     """
     try:
         success = GuardLibraryService.delete_library(db, library_id)
-        
+
         if success:
             return get_json_result(data=True)
         else:
             return get_data_error_result(retmsg="删除词库失败")
-            
+
     except Exception as e:
         return server_error_response(e)
 
@@ -378,18 +379,18 @@ def create_library_item(
 ) -> dict[str, Any]:
     """
     ### POST `/{library_id}/items/create` 创建词库项
-    
+
     **功能描述**:
     此接口用于在指定词库中创建新的词库项。
     支持创建文本、正则表达式、模板等不同类型的内容，适用于黑名单、白名单、代答库等场景。
     创建时会自动计算内容哈希值，防止重复添加相同内容。
-    
+
     ---
     ### 路径参数 (Path Parameters)
     | 参数         | 类型     | 必填 | 描述       |
     |--------------|----------|------|------------|
     | `library_id` | `string` | 是   | 词库ID     |
-    
+
     ### 请求体 (Request Body)
     | 字段            | 类型     | 必填 | 默认值 | 描述                                    |
     |-----------------|----------|------|--------|-----------------------------------------|
@@ -398,7 +399,7 @@ def create_library_item(
     | `content_type`  | `string` | 否   | "text" | 内容类型: text/regex/template           |
     | `item_metadata` | `object` | 否   | {}     | 元数据信息                              |
     | `sort_order`    | `integer`| 否   | 0      | 排序权重                                |
-    
+
     **请求示例**:
     ```json
     {
@@ -412,7 +413,7 @@ def create_library_item(
         "sort_order": 10
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -425,7 +426,7 @@ def create_library_item(
         }
     }
     ```
-    
+
     #### 失败响应 (400)
     ```json
     {
@@ -440,10 +441,10 @@ def create_library_item(
         library = GuardLibraryService.get_by_id(db, library_id)
         if not library:
             return get_data_error_result(retmsg="词库不存在")
-        
+
         if library.tenant_id != user.id:
             return get_data_error_result(retmsg="无权访问此词库")
-        
+
         item_id = GuardLibraryItemService.create_item(
             db=db,
             library_id=library_id,
@@ -453,12 +454,12 @@ def create_library_item(
             tenant_id=user.id,
             sort_order=request.sort_order
         )
-        
+
         if item_id:
             return get_json_result(data={"item_id": item_id})
         else:
             return get_data_error_result(retmsg="创建词库项失败")
-            
+
     except Exception as e:
         return server_error_response(e)
 
@@ -474,30 +475,30 @@ def get_library_items(
 ) -> dict[str, Any]:
     """
     ### GET `/{library_id}/items` 获取词库项列表
-    
+
     **功能描述**:
     此接口用于获取指定词库下的词库项列表，支持分页查询和关键词搜索。
     返回词库项的完整信息包括内容、类型、元数据、命中统计等。
     支持按内容关键词进行模糊搜索。
-    
+
     ---
     ### 路径参数 (Path Parameters)
     | 参数         | 类型     | 必填 | 描述       |
     |--------------|----------|------|------------|
     | `library_id` | `string` | 是   | 词库ID     |
-    
+
     ### 查询参数 (Query Parameters)
     | 参数        | 类型      | 必填 | 默认值 | 描述                         |
     |-------------|-----------|------|--------|------------------------------|
     | `page`      | `integer` | 否   | 1      | 页码，从1开始                |
     | `page_size` | `integer` | 否   | 50     | 每页显示的记录数             |
     | `keyword`   | `string`  | 否   | null   | 搜索关键词，用于模糊匹配内容 |
-    
+
     **请求示例**:
     ```bash
     GET /uuid-library-id-here/items?page=1&page_size=20&keyword=敏感
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -536,10 +537,10 @@ def get_library_items(
         library = GuardLibraryService.get_by_id(db, library_id)
         if not library:
             return get_data_error_result(retmsg="词库不存在")
-        
+
         if library.tenant_id != user.id:
             return get_data_error_result(retmsg="无权访问此词库")
-        
+
         if keyword:
             result = GuardLibraryItemService.search_items(
                 db, library_id, keyword, page, page_size
@@ -548,15 +549,15 @@ def get_library_items(
             result = GuardLibraryItemService.get_items_by_library(
                 db, library_id, page, page_size
             )
-        
+
         # 转换为字典格式
         items_data = []
         for item in result["items"]:
             items_data.append(item.to_dict())
-        
+
         result["items"] = items_data
         return get_json_result(data=result)
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -570,18 +571,18 @@ def batch_create_items(
 ) -> dict[str, Any]:
     """
     ### POST `/{library_id}/items/batch` 批量创建词库项
-    
+
     **功能描述**:
     此接口用于在指定词库中批量创建多个词库项。
     适用于导入大量敏感词、白名单词汇等批量操作场景。
     会自动去重，避免添加重复内容，并返回详细的创建统计结果。
-    
+
     ---
     ### 路径参数 (Path Parameters)
     | 参数         | 类型     | 必填 | 描述       |
     |--------------|----------|------|------------|
     | `library_id` | `string` | 是   | 词库ID     |
-    
+
     ### 请求体 (Request Body)
     | 字段            | 类型         | 必填 | 默认值 | 描述                                    |
     |-----------------|-------------|------|--------|-----------------------------------------|
@@ -589,7 +590,7 @@ def batch_create_items(
     | `contents`      | `list[string]` | 是 | -      | 内容列表                                |
     | `content_type`  | `string`    | 否   | "text" | 内容类型: text/regex/template           |
     | `item_metadata` | `object`    | 否   | {}     | 统一的元数据信息                        |
-    
+
     **请求示例**:
     ```json
     {
@@ -606,7 +607,7 @@ def batch_create_items(
         }
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -627,10 +628,10 @@ def batch_create_items(
         library = GuardLibraryService.get_by_id(db, library_id)
         if not library:
             return get_data_error_result(retmsg="词库不存在")
-        
+
         if library.tenant_id != user.id:
             return get_data_error_result(retmsg="无权访问此词库")
-        
+
         result = GuardLibraryItemService.batch_create_items(
             db=db,
             library_id=library_id,
@@ -639,9 +640,9 @@ def batch_create_items(
             tenant_id=user.id,
             item_metadata=request.item_metadata
         )
-        
+
         return get_json_result(data=result)
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -654,18 +655,18 @@ def delete_library_items(
 ) -> dict[str, Any]:
     """
     ### POST `/items/delete` 批量删除词库项
-    
+
     **功能描述**:
     此接口用于批量删除词库项（硬删除，物理删除）。
     支持单个或多个词库项删除，使用数组形式传入ID列表。
     删除后会自动更新相关词库的项目计数。
-    
+
     ---
     ### 请求体 (Request Body)
     | 字段       | 类型         | 必填 | 描述           |
     |------------|-------------|------|----------------|
     | `item_ids` | `list[string]` | 是   | 词库项ID列表   |
-    
+
     **请求示例**:
     ```json
     {
@@ -675,14 +676,14 @@ def delete_library_items(
         ]
     }
     ```
-    
+
     **单个删除示例**:
     ```json
     {
         "item_ids": ["uuid-item-id-1"]
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -697,7 +698,7 @@ def delete_library_items(
         }
     }
     ```
-    
+
     #### 部分失败响应 (200)
     ```json
     {
@@ -714,13 +715,13 @@ def delete_library_items(
     try:
         if not request.item_ids:
             return get_data_error_result(retmsg="词库项ID列表不能为空")
-        
+
         result = GuardLibraryItemService.delete_items(
             db, request.item_ids, user.id
         )
-        
+
         return get_json_result(data=result)
-            
+
     except Exception as e:
         return server_error_response(e)
 
@@ -733,19 +734,19 @@ def update_items_status(
 ) -> dict[str, Any]:
     """
     ### PUT `/items/status` 批量更新词库项状态
-    
+
     **功能描述**:
     此接口用于批量更新词库项的启用/禁用状态。
     支持单个或多个词库项状态更新，使用数组形式传入ID列表。
     状态值："1"表示启用，"0"表示禁用。
-    
+
     ---
     ### 请求体 (Request Body)
     | 字段       | 类型         | 必填 | 描述                          |
     |------------|-------------|------|-------------------------------|
     | `item_ids` | `list[string]` | 是   | 词库项ID列表                  |
     | `status`   | `string`    | 是   | 状态值: "1"-启用, "0"-禁用     |
-    
+
     **启用示例**:
     ```json
     {
@@ -756,7 +757,7 @@ def update_items_status(
         "status": "1"
     }
     ```
-    
+
     **禁用示例**:
     ```json
     {
@@ -764,7 +765,7 @@ def update_items_status(
         "status": "0"
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -779,7 +780,7 @@ def update_items_status(
         }
     }
     ```
-    
+
     #### 部分失败响应 (200)
     ```json
     {
@@ -796,16 +797,16 @@ def update_items_status(
     try:
         if not request.item_ids:
             return get_data_error_result(retmsg="词库项ID列表不能为空")
-        
+
         if request.status not in ["0", "1"]:
             return get_data_error_result(retmsg="状态值必须是 '0' 或 '1'")
-        
+
         result = GuardLibraryItemService.update_items_status(
             db, request.item_ids, request.status, user.id
         )
-        
+
         return get_json_result(data=result)
-            
+
     except Exception as e:
         return server_error_response(e)
 
@@ -819,18 +820,18 @@ def update_library_item_by_id(
 ) -> dict[str, Any]:
     """
     ### PUT `/items/{item_id}` 根据ID更新词库项
-    
+
     **功能描述**:
     此接口用于根据词库项ID更新指定的词库项。
     支持部分更新，只更新传入的字段。
     如果更新内容字段，会重新计算哈希值。
-    
+
     ---
     ### 路径参数 (Path Parameters)
     | 参数      | 类型     | 必填 | 描述       |
     |-----------|----------|------|------------|
     | `item_id` | `string` | 是   | 词库项ID   |
-    
+
     ### 请求体 (Request Body)
     | 字段            | 类型     | 必填 | 描述                                    |
     |-----------------|----------|------|-----------------------------------------|
@@ -838,7 +839,7 @@ def update_library_item_by_id(
     | `content_type`  | `string` | 否   | 更新后的内容类型                        |
     | `item_metadata` | `object` | 否   | 更新后的元数据                          |
     | `sort_order`    | `integer`| 否   | 更新后的排序权重                        |
-    
+
     **请求示例**:
     ```json
     {
@@ -850,7 +851,7 @@ def update_library_item_by_id(
         "sort_order": 20
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -861,7 +862,7 @@ def update_library_item_by_id(
         "data": true
     }
     ```
-    
+
     #### 失败响应 (400)
     ```json
     {
@@ -882,19 +883,19 @@ def update_library_item_by_id(
             update_data["item_metadata"] = request.item_metadata
         if request.sort_order is not None:
             update_data["sort_order"] = request.sort_order
-            
+
         if not update_data:
             return get_data_error_result(retmsg="没有提供更新数据")
-        
+
         success = GuardLibraryItemService.update_item_by_id(
             db, item_id, update_data, user.id
         )
-        
+
         if success:
             return get_json_result(data=True)
         else:
             return get_data_error_result(retmsg="更新词库项失败")
-            
+
     except Exception as e:
         return server_error_response(e)
 
@@ -909,19 +910,19 @@ def update_library_item_by_hash(
 ) -> dict[str, Any]:
     """
     ### PUT `/{library_id}/items/hash/{content_hash}` 根据哈希更新词库项
-    
+
     **功能描述**:
     此接口用于根据词库ID和内容哈希精确更新指定的词库项。
     支持部分更新，只更新传入的字段。适用于已知内容哈希时的精确修改操作。
     如果更新内容字段，会重新计算哈希值。
-    
+
     ---
     ### 路径参数 (Path Parameters)
     | 参数           | 类型     | 必填 | 描述       |
     |----------------|----------|------|------------|
     | `library_id`   | `string` | 是   | 词库ID     |
     | `content_hash` | `string` | 是   | 内容哈希值 |
-    
+
     ### 请求体 (Request Body)
     | 字段            | 类型     | 必填 | 描述                                    |
     |-----------------|----------|------|-----------------------------------------|
@@ -929,7 +930,7 @@ def update_library_item_by_hash(
     | `content_type`  | `string` | 否   | 更新后的内容类型                        |
     | `item_metadata` | `object` | 否   | 更新后的元数据                          |
     | `sort_order`    | `integer`| 否   | 更新后的排序权重                        |
-    
+
     **请求示例**:
     ```json
     {
@@ -941,7 +942,7 @@ def update_library_item_by_hash(
         "sort_order": 20
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -952,7 +953,7 @@ def update_library_item_by_hash(
         "data": true
     }
     ```
-    
+
     #### 失败响应 (400)
     ```json
     {
@@ -973,19 +974,19 @@ def update_library_item_by_hash(
             update_data["item_metadata"] = request.item_metadata
         if request.sort_order is not None:
             update_data["sort_order"] = request.sort_order
-            
+
         if not update_data:
             return get_data_error_result(retmsg="没有提供更新数据")
-        
+
         success = GuardLibraryItemService.update_item_by_hash(
             db, library_id, content_hash, update_data
         )
-        
+
         if success:
             return get_json_result(data=True)
         else:
             return get_data_error_result(retmsg="更新词库项失败")
-            
+
     except Exception as e:
         return server_error_response(e)
 
@@ -999,24 +1000,24 @@ def delete_library_item_by_hash(
 ) -> dict[str, Any]:
     """
     ### DELETE `/{library_id}/items/hash/{content_hash}` 根据哈希删除词库项
-    
+
     **功能描述**:
     此接口用于根据词库ID和内容哈希精确删除指定的词库项（硬删除，物理删除）。
     适用于已知内容哈希时的精确删除操作，常用于去重或批量清理场景。
     删除后会自动更新词库的项目计数。
-    
+
     ---
     ### 路径参数 (Path Parameters)
     | 参数           | 类型     | 必填 | 描述       |
     |----------------|----------|------|------------|
     | `library_id`   | `string` | 是   | 词库ID     |
     | `content_hash` | `string` | 是   | 内容哈希值 |
-    
+
     **请求示例**:
     ```bash
     DELETE /uuid-library-id-here/items/hash/5d41402abc4b2a76b9719d911017c592
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -1027,7 +1028,7 @@ def delete_library_item_by_hash(
         "data": true
     }
     ```
-    
+
     #### 失败响应 (400)
     ```json
     {
@@ -1041,12 +1042,12 @@ def delete_library_item_by_hash(
         success = GuardLibraryItemService.delete_item_by_hash(
             db, library_id, content_hash
         )
-        
+
         if success:
             return get_json_result(data=True)
         else:
             return get_data_error_result(retmsg="删除词库项失败")
-            
+
     except Exception as e:
         return server_error_response(e)
 
@@ -1059,23 +1060,23 @@ def export_library_items(
 ) -> dict[str, Any]:
     """
     ### GET `/{library_id}/items/export` 导出词库所有项
-    
+
     **功能描述**:
     此接口用于导出指定词库下的所有词库项，不分页返回全部数据。
     适用于词库数据的完整导出、备份等场景。
     返回的数据格式与分页接口相同，但包含所有词库项。
-    
+
     ---
     ### 路径参数 (Path Parameters)
     | 参数         | 类型     | 必填 | 描述       |
     |--------------|----------|------|------------|
     | `library_id` | `string` | 是   | 词库ID     |
-    
+
     **请求示例**:
     ```bash
     GET /uuid-library-id-here/items/export
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -1111,22 +1112,22 @@ def export_library_items(
         library = GuardLibraryService.get_by_id(db, library_id)
         if not library:
             return get_data_error_result(retmsg="词库不存在")
-        
+
         if library.tenant_id != user.id:
             return get_data_error_result(retmsg="无权访问此词库")
-        
+
         items = GuardLibraryItemService.get_all_items_by_library(db, library_id)
-        
+
         # 转换为字典格式
         items_data = []
         for item in items:
             items_data.append(item.to_dict())
-        
+
         return get_json_result(data={
             "items": items_data,
             "total": len(items_data)
         })
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -1139,18 +1140,18 @@ def batch_get_items(
 ) -> dict[str, Any]:
     """
     ### POST `/items/batch-get` 批量获取词库项
-    
+
     **功能描述**:
     此接口用于根据词库项ID数组批量获取指定的词库项。
     适用于选择性导出、批量操作前的数据确认等场景。
     会自动过滤掉不存在或无权限访问的词库项。
-    
+
     ---
     ### 请求体 (Request Body)
     | 字段       | 类型         | 必填 | 描述           |
     |------------|-------------|------|----------------|
     | `item_ids` | `list[string]` | 是   | 词库项ID列表   |
-    
+
     **请求示例**:
     ```json
     {
@@ -1161,7 +1162,7 @@ def batch_get_items(
         ]
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -1197,27 +1198,27 @@ def batch_get_items(
     try:
         if not request.item_ids:
             return get_data_error_result(retmsg="词库项ID列表不能为空")
-        
+
         items = GuardLibraryItemService.get_items_by_ids(
             db, request.item_ids, user.id
         )
-        
+
         # 转换为字典格式
         items_data = []
         for item in items:
             items_data.append(item.to_dict())
-        
+
         # 统计信息
         found_count = len(items_data)
         not_found_count = len(request.item_ids) - found_count
-        
+
         return get_json_result(data={
             "items": items_data,
             "total": len(request.item_ids),
             "found_count": found_count,
             "not_found_count": not_found_count
         })
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -1229,18 +1230,18 @@ def get_library_stats(
 ) -> dict[str, Any]:
     """
     ### GET `/stats` 获取词库统计信息
-    
+
     **功能描述**:
     此接口用于获取用户租户下所有词库的统计信息。
     包括词库总数、词库项总数、总命中次数，以及按类型的详细统计。
     用于监控和分析词库使用情况。
-    
+
     ---
     **请求示例**:
     ```bash
     GET /stats
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -1277,7 +1278,7 @@ def get_library_stats(
     try:
         stats = GuardLibraryService.get_library_stats(db, user.id)
         return get_json_result(data=stats)
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -1289,18 +1290,18 @@ def init_default_libraries(
 ) -> dict[str, Any]:
     """
     ### POST `/init` 初始化默认词库
-    
+
     **功能描述**:
     此接口用于为新用户或租户初始化默认的AI安全护栏词库。
     会自动创建包括政治敏感词库、色情内容词库、暴力词库、通用白名单、代答库等基础词库。
     适用于首次使用时的快速设置。
-    
+
     ---
     **请求示例**:
     ```bash
     POST /init
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -1321,7 +1322,7 @@ def init_default_libraries(
         }
     }
     ```
-    
+
     #### 失败响应 (500)
     ```json
     {
@@ -1335,11 +1336,11 @@ def init_default_libraries(
         library_ids = GuardLibraryService.init_default_libraries(
             db, user.id, user.id
         )
-        
+
         return get_json_result(data={
             "created_count": len(library_ids),
             "library_ids": library_ids
         })
-        
+
     except Exception as e:
         return server_error_response(e)

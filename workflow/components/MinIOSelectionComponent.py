@@ -3,10 +3,10 @@ from dataclasses import dataclass
 from urllib.parse import unquote
 
 from core.utils.minio_conn import MultiRAGMinio
-from workflow.WorkflowContext import WorkflowContext, NodeIOData
 from workflow.basic.Component import Component, ComponentParameter
 from workflow.basic.Node import VariableType
 from workflow.utils.MinioOperator import MinioOperator
+from workflow.WorkflowContext import NodeIOData, WorkflowContext
 
 
 @dataclass
@@ -141,7 +141,7 @@ def get_files_from_folder(folder_path):
                 file = open(file_path, 'rb')
                 file_list.append(file)
             except Exception as e:
-                print(f"打开文件 {filename} 时发生错误: {str(e)}")
+                print(f"打开文件 {filename} 时发生错误: {e!s}")
 
     return file_list
 

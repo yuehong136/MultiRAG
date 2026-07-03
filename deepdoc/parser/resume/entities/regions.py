@@ -754,7 +754,7 @@ TBL = {
     "7084": {"name": "天门市", "parent": "18"},
 }
 
-NM_SET = set([v["name"] for _, v in TBL.items()])
+NM_SET = {v["name"] for _, v in TBL.items()}
 
 
 def get_names(id):

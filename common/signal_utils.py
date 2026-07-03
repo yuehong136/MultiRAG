@@ -1,8 +1,9 @@
+import logging
 import os
 import sys
-from datetime import datetime
-import logging
 import tracemalloc
+from datetime import datetime
+
 from common.file_utils import get_project_base_directory
 
 

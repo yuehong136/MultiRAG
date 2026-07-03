@@ -1,7 +1,9 @@
 import json
+import logging
 import os
 import random
 import re
+import time
 from abc import ABC
 from copy import deepcopy
 from typing import Any, Protocol
@@ -10,10 +12,9 @@ import json_repair
 import openai
 from openai import OpenAI
 from strenum import StrEnum
-from core.nlp import is_chinese, is_english
+
 from common.token_utils import num_tokens_from_string, total_token_count_from_response
-import logging
-import time
+from core.nlp import is_chinese
 
 
 # Error message constants
@@ -191,7 +192,7 @@ class Base(ABC):
             time.sleep(delay)
             return None
 
-        return f"{ERROR_PREFIX}: {error_code} - {str(e)}"
+        return f"{ERROR_PREFIX}: {error_code} - {e!s}"
 
     def _verbose_tool_use(self, name, args, res):
         return "<tool_call>" + json.dumps({
@@ -285,7 +286,7 @@ class Base(ABC):
                 if e:
                     return e, tk_count
 
-        assert False, "Shouldn't be here."
+        raise AssertionError("Shouldn't be here.")
 
     def chat(self, system, history, gen_conf=None, **kwargs):
         if gen_conf is None:
@@ -302,7 +303,7 @@ class Base(ABC):
                 e = self._exceptions(e, attempt)
                 if e:
                     return e, 0
-        assert False, "Shouldn't be here."
+        raise AssertionError("Shouldn't be here.")
 
     def _wrap_toolcall_message(self, stream):
         final_tool_calls = {}
@@ -428,7 +429,7 @@ class Base(ABC):
                     yield total_tokens
                     return
 
-        assert False, "Shouldn't be here."
+        raise AssertionError("Shouldn't be here.")
 
     def chat_streamly(self, system, history, gen_conf: dict={}, **kwargs):
         if system:

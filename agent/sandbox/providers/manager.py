@@ -22,7 +22,6 @@ active provider at a time. This manager is a thin wrapper that holds a reference
 to the currently active provider.
 """
 
-from typing import Optional
 from .base import SandboxProvider
 
 
@@ -36,8 +35,8 @@ class ProviderManager:
 
     def __init__(self):
         """Initialize an empty provider manager."""
-        self.current_provider: Optional[SandboxProvider] = None
-        self.current_provider_name: Optional[str] = None
+        self.current_provider: SandboxProvider | None = None
+        self.current_provider_name: str | None = None
 
     def set_provider(self, name: str, provider: SandboxProvider):
         """
@@ -50,7 +49,7 @@ class ProviderManager:
         self.current_provider = provider
         self.current_provider_name = name
 
-    def get_provider(self) -> Optional[SandboxProvider]:
+    def get_provider(self) -> SandboxProvider | None:
         """
         Get the active provider.
 
@@ -59,7 +58,7 @@ class ProviderManager:
         """
         return self.current_provider
 
-    def get_provider_name(self) -> Optional[str]:
+    def get_provider_name(self) -> str | None:
         """
         Get the active provider name.
 

@@ -13,24 +13,24 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import copy
 import gc
 import logging
-import copy
-import time
+import math
 import os
+import time
 
+import cv2
+import numpy as np
+import onnxruntime as ort
 from huggingface_hub import snapshot_download
 
+from common import settings
 from common.file_utils import get_project_base_directory
 from common.misc_utils import pip_install_torch
-from common import settings
-from .operators import *
-from . import operators
-import math
-import numpy as np
-import cv2
-import onnxruntime as ort
 
+from . import operators
+from .operators import *
 from .postprocess import build_post_process
 
 loaded_models = {}
@@ -60,7 +60,7 @@ def create_operators(op_param_list, global_config=None):
     for operator in op_param_list:
         assert isinstance(operator,
                           dict) and len(operator) == 1, "yaml format error"
-        op_name = list(operator)[0]
+        op_name = next(iter(operator))
         param = {} if operator[op_name] is None else operator[op_name]
         if global_config is not None:
             param.update(global_config)
@@ -80,8 +80,7 @@ def load_model(model_dir, nm, device_id: int | None = None):
         return loaded_model
 
     if not os.path.exists(model_file_path):
-        raise ValueError("not find model file path {}".format(
-            model_file_path))
+        raise ValueError(f"not find model file path {model_file_path}")
 
     def cuda_is_available():
         try:
@@ -154,7 +153,7 @@ class TextRecognizer:
         imgC, imgH, imgW = self.rec_image_shape
 
         assert imgC == img.shape[2]
-        imgW = int((imgH * max_wh_ratio))
+        imgW = int(imgH * max_wh_ratio)
         w = self.input_tensor.shape[3:][0]
         if isinstance(w, str):
             pass
@@ -165,7 +164,7 @@ class TextRecognizer:
         if math.ceil(imgH * ratio) > imgW:
             resized_w = imgW
         else:
-            resized_w = int(math.ceil(imgH * ratio))
+            resized_w = math.ceil(imgH * ratio)
 
         resized_image = cv2.resize(img, (resized_w, imgH))
         resized_image = resized_image.astype('float32')
@@ -296,7 +295,7 @@ class TextRecognizer:
     def resize_norm_img_spin(self, img):
         img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         # return padding_im
-        img = cv2.resize(img, tuple([100, 32]), cv2.INTER_CUBIC)
+        img = cv2.resize(img, (100, 32), cv2.INTER_CUBIC)
         img = np.array(img, np.float32)
         img = np.expand_dims(img, -1)
         img = img.transpose((2, 0, 1))

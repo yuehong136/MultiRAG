@@ -1,14 +1,17 @@
+import asyncio
 import os
 import queue
 import threading
-from typing import Any, Callable, Coroutine, Type
-import asyncio
+from collections.abc import Callable, Coroutine
 from functools import wraps
-from fastapi.responses import JSONResponse
+from typing import Any
+
 from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
+
 from common.constants import RetCode
 
-TimeoutException = Type[BaseException] | BaseException
+TimeoutException = type[BaseException] | BaseException
 OnTimeoutCallback = Callable[..., Any] | Coroutine[Any, Any, Any]
 
 
@@ -57,7 +60,7 @@ def timeout(seconds: float | int | str = None, attempts: int = 2, *, exception: 
                         return await asyncio.wait_for(func(*args, **kwargs), timeout=seconds)
                     else:
                         return await func(*args, **kwargs)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     if a < attempts - 1:
                         continue
                     if on_timeout is not None:

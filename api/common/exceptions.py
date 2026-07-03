@@ -1,8 +1,9 @@
-from fastapi import FastAPI, Request, status
-from fastapi.responses import JSONResponse
-from fastapi.exceptions import RequestValidationError
-from starlette.exceptions import HTTPException as StarletteHTTPException
 import logging
+
+from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
 class AdminException(Exception):
@@ -46,7 +47,7 @@ class AuthenticationError(AdminException):
 
 def setup_exception_handlers(app: FastAPI):
     """设置全局异常处理器"""
-    
+
     @app.exception_handler(AdminException)
     async def admin_exception_handler(request: Request, exc: AdminException):
         """处理 AdminException 异常"""
@@ -59,7 +60,7 @@ def setup_exception_handlers(app: FastAPI):
                 "data": None
             }
         )
-    
+
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
         """处理请求验证异常"""
@@ -72,7 +73,7 @@ def setup_exception_handlers(app: FastAPI):
                 "data": None
             }
         )
-    
+
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: StarletteHTTPException):
         """处理 HTTP 异常"""
@@ -85,16 +86,16 @@ def setup_exception_handlers(app: FastAPI):
                 "data": None
             }
         )
-    
+
     @app.exception_handler(Exception)
     async def general_exception_handler(request: Request, exc: Exception):
         """处理通用异常"""
-        logging.error(f"Unexpected error: {str(exc)}", exc_info=True)
+        logging.error(f"Unexpected error: {exc!s}", exc_info=True)
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content={
                 "code": 500,
-                "message": f"Internal server error: {str(exc)}",
+                "message": f"Internal server error: {exc!s}",
                 "data": None
             }
         )

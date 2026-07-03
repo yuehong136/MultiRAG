@@ -1,9 +1,10 @@
-from langchain_community.document_loaders import PyMuPDFLoader
 import docx
+from langchain_community.document_loaders import PyMuPDFLoader
 from pptx import Presentation
 
+
 def extract_text(path):
-    return open(path, 'r', encoding='utf-8').read()
+    return open(path, encoding='utf-8').read()
 
 def extract_pdf(path):
     loader = PyMuPDFLoader(path)

@@ -3,8 +3,9 @@
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
-from typing import Any, AsyncIterable, Iterable
+from collections.abc import AsyncIterable, Iterable
+from datetime import UTC, datetime
+from typing import Any
 
 from discord import Client, MessageType
 from discord.channel import TextChannel, Thread
@@ -53,9 +54,9 @@ def _convert_message_to_document(
     # fallback to created_at
     doc_updated_at = message.edited_at if message.edited_at else message.created_at
     if doc_updated_at and doc_updated_at.tzinfo is None:
-        doc_updated_at = doc_updated_at.replace(tzinfo=timezone.utc)
+        doc_updated_at = doc_updated_at.replace(tzinfo=UTC)
     elif doc_updated_at:
-        doc_updated_at = doc_updated_at.astimezone(timezone.utc)
+        doc_updated_at = doc_updated_at.astimezone(UTC)
 
     return Document(
         id=f"{_DISCORD_DOC_ID_PREFIX}{message.id}",
@@ -97,7 +98,7 @@ async def _fetch_documents_from_channel(
     end_time: datetime | None,
 ) -> AsyncIterable[Document]:
     # Discord's epoch starts at 2015-01-01
-    discord_epoch = datetime(2015, 1, 1, tzinfo=timezone.utc)
+    discord_epoch = datetime(2015, 1, 1, tzinfo=UTC)
     if start_time and start_time < discord_epoch:
         start_time = discord_epoch
 
@@ -174,7 +175,7 @@ def _manage_async_retrieval(
     end: datetime | None = None,
 ) -> Iterable[Document]:
     # parse requested_start_date_string to datetime
-    pull_date: datetime | None = datetime.strptime(requested_start_date_string, "%Y-%m-%d").replace(tzinfo=timezone.utc) if requested_start_date_string else None
+    pull_date: datetime | None = datetime.strptime(requested_start_date_string, "%Y-%m-%d").replace(tzinfo=UTC) if requested_start_date_string else None
 
     # Set start_time to the most recent of start and pull_date, or whichever is provided
     start_time = max(filter(None, [start, pull_date])) if start or pull_date else None
@@ -307,8 +308,8 @@ class DiscordConnector(LoadConnector, PollConnector):
     def poll_source(self, start: SecondsSinceUnixEpoch, end: SecondsSinceUnixEpoch) -> Any:
         """Poll Discord for recent messages"""
         return self._manage_doc_batching(
-            datetime.fromtimestamp(start, tz=timezone.utc),
-            datetime.fromtimestamp(end, tz=timezone.utc),
+            datetime.fromtimestamp(start, tz=UTC),
+            datetime.fromtimestamp(end, tz=UTC),
         )
 
     def load_from_state(self) -> Any:

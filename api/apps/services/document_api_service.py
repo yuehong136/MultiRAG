@@ -1,4 +1,3 @@
-# coding=utf-8
 """Document API business logic for RESTful document update endpoints."""
 
 from __future__ import annotations

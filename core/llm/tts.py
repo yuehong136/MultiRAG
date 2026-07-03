@@ -171,8 +171,7 @@ class FishAudioTTS(Base):
                     timeout=None,
                 ) as response:
                     if response.status_code == HTTPStatus.OK:
-                        for chunk in response.iter_bytes():
-                            yield chunk
+                        yield from response.iter_bytes()
                     else:
                         response.raise_for_status()
 
@@ -232,8 +231,7 @@ class QwenTTS(Base):
         callback = Callback()
         SpeechSynthesizer.call(model=self.model_name, text=text, callback=callback, format="mp3")
         try:
-            for data in callback._run():
-                yield data
+            yield from callback._run()
             yield num_tokens_from_string(text)
 
         except Exception as e:

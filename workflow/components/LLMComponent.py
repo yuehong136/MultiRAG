@@ -1,14 +1,15 @@
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 
-from api.db.services.llm_service import LLMBundle
-from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
-from common.constants import LLMType
-from workflow.WorkflowContext import WorkflowContext, NodeIOData
-from workflow.basic.Component import Component, ComponentParameter
-from workflow.basic.Node import ValueTypeOfIODefinition, Batch
-from workflow.utils.utils import safe_format_double_braces
 from jsonpath_ng import parse
+
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+from api.db.services.llm_service import LLMBundle
+from common.constants import LLMType
+from workflow.basic.Component import Component, ComponentParameter
+from workflow.basic.Node import Batch, ValueTypeOfIODefinition
+from workflow.utils.utils import safe_format_double_braces
+from workflow.WorkflowContext import NodeIOData, WorkflowContext
 
 
 @dataclass

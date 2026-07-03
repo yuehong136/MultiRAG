@@ -575,14 +575,14 @@ def test_build_fill_messages_layout_first_drops_sample_context():
         "blocks": [_llm_para("p")],
     }
     plan = collect_fill_plan(section)
-    common = dict(
-        report_title="北辰大学发展报告",
-        section=section,
-        source_text="文旅源文正文",
-        toc_titles=["学校概况", "办学规模"],
-        plan=plan,
-        schema=build_fill_schema(plan),
-    )
+    common = {
+        "report_title": "北辰大学发展报告",
+        "section": section,
+        "source_text": "文旅源文正文",
+        "toc_titles": ["学校概况", "办学规模"],
+        "plan": plan,
+        "schema": build_fill_schema(plan),
+    }
     lf = build_fill_messages(**common, layout_first=True)[1]["content"]
     assert "只填充本节。" in lf
     assert "文旅源文正文" in lf  # 源文仍在

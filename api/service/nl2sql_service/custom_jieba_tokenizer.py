@@ -1,14 +1,14 @@
-import jieba
-import aiohttp
-import os
-import logging
-import time
 import hashlib
 import hmac
+import logging
+import os
+import time
 from pathlib import Path
 
-from common.settings import DCS_SERVER_HOST, DCS_SERVER_PORT, DCS_SERVER_PROTOCOL, DCS_SEMANTIC_SERVER_ACCESS_KEY, \
-    DCS_SEMANTIC_SERVER_SECRET_KEY
+import aiohttp
+import jieba
+
+from common.settings import DCS_SEMANTIC_SERVER_ACCESS_KEY, DCS_SEMANTIC_SERVER_SECRET_KEY, DCS_SERVER_HOST, DCS_SERVER_PORT, DCS_SERVER_PROTOCOL
 
 # 配置日志
 logging.basicConfig(
@@ -30,7 +30,7 @@ def _generate_signature() -> dict[str, str]:
         return {}
 
     # Using HMAC-SHA256 for the signature
-    message = f"{access_key}{timestamp}".encode('utf-8')
+    message = f"{access_key}{timestamp}".encode()
     secret = secret_key.encode('utf-8')
 
     signature = hmac.new(secret, message, digestmod=hashlib.sha256).hexdigest()
@@ -60,7 +60,7 @@ def load_stopwords(file_path: str | None = None) -> set[str]:
 
     try:
         logger.info(f"尝试从 {file_path} 加载停用词")
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, encoding='utf-8') as f:
             for line in f:
                 word = line.strip()
                 if word:

@@ -5,12 +5,13 @@ Reference:
  - [graphrag](https://github.com/microsoft/graphrag)
 """
 
-import logging
 import html
+import logging
 from typing import Any, cast
+
+import networkx as nx
 from graspologic.partition import hierarchical_leiden
 from graspologic.utils import largest_connected_component
-import networkx as nx
 from networkx import is_empty
 
 

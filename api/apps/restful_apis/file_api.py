@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @file: file_api.py
@@ -34,13 +33,13 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
 
+from api.apps.services import file_api_service
+from api.apps.services.file_convert_service import convert_files_with_new_session
 from api.db import FileType
 from api.db.db_models import get_db
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.apps.services import file_api_service
-from api.apps.services.file_convert_service import convert_files_with_new_session
 from api.utils.api_utils import current_tenant_id, get_error_argument_result, get_error_data_result, get_json_result, get_result, server_error_response
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers
 from common import settings

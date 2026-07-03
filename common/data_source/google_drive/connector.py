@@ -8,14 +8,13 @@ import threading
 from collections.abc import Callable, Generator, Iterator
 from enum import Enum
 from functools import partial
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, cast, override
 from urllib.parse import urlparse
 
 from google.auth.exceptions import RefreshError  # type: ignore  # type: ignore
 from google.oauth2.credentials import Credentials as OAuthCredentials  # type: ignore  # type: ignore  # type: ignore
 from google.oauth2.service_account import Credentials as ServiceAccountCredentials  # type: ignore  # type: ignore
 from googleapiclient.errors import HttpError  # type: ignore  # type: ignore
-from typing_extensions import override
 
 from common.data_source.config import GOOGLE_DRIVE_CONNECTOR_SIZE_THRESHOLD, INDEX_BATCH_SIZE, SLIM_BATCH_SIZE, DocumentSource
 from common.data_source.exceptions import ConnectorMissingCredentialError, ConnectorValidationError, CredentialExpiredError, InsufficientPermissionsError
@@ -457,7 +456,7 @@ class GoogleDriveConnector(SlimConnectorWithPermSync, CheckpointedConnectorWithP
         if curr_stage.stage == DriveRetrievalStage.FOLDER_FILES:
 
             def _yield_from_folder_crawl(folder_id: str, folder_start: SecondsSinceUnixEpoch | None) -> Iterator[RetrievedDriveFile]:
-                for retrieved_file in crawl_folders_for_files(
+                yield from crawl_folders_for_files(
                     service=drive_service,
                     parent_id=folder_id,
                     field_type=field_type,
@@ -466,8 +465,7 @@ class GoogleDriveConnector(SlimConnectorWithPermSync, CheckpointedConnectorWithP
                     update_traversed_ids_func=self._update_traversed_parent_ids,
                     start=folder_start,
                     end=end,
-                ):
-                    yield retrieved_file
+                )
 
             # resume from a checkpoint
             last_processed_folder = None
@@ -1201,6 +1199,7 @@ def yield_all_docs_from_checkpoint_connector(
 
 if __name__ == "__main__":
     import time
+
     from common.data_source.google_util.util import get_credentials_from_env
     logging.basicConfig(level=logging.DEBUG)
 

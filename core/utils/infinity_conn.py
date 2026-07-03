@@ -14,17 +14,17 @@
 #  limitations under the License.
 #
 
-import re
-import json
 import copy
+import json
+import re
 
 import pandas as pd
 from infinity.common import InfinityException, SortType
 from infinity.errors import ErrorCode
 
-from common.decorator import singleton
 from common.constants import PAGERANK_FLD, TAG_FLD
-from common.doc_store.doc_store_base import MatchExpr, MatchTextExpr, MatchDenseExpr, FusionExpr, OrderByExpr
+from common.decorator import singleton
+from common.doc_store.doc_store_base import FusionExpr, MatchDenseExpr, MatchExpr, MatchTextExpr, OrderByExpr
 from common.doc_store.infinity_conn_base import InfinityConnectionBase
 
 
@@ -115,8 +115,8 @@ class InfinityConnection(InfinityConnectionBase):
         inf_conn = self.connPool.get_conn()
         try:
             db_instance = inf_conn.get_database(self.dbName)
-            df_list = list()
-            table_list = list()
+            df_list = []
+            table_list = []
             output = select_fields.copy()
             output = self.convert_select_fields(output)
             if agg_fields is None:
@@ -220,7 +220,7 @@ class InfinityConnection(InfinityConnectionBase):
                         matchExpr.fusion_params["normalize"] = "atan"
                     self.logger.debug(f"INFINITY search FusionExpr: {json.dumps(matchExpr.__dict__)}")
 
-            order_by_expr_list = list()
+            order_by_expr_list = []
             if order_by.fields:
                 for order_field in order_by.fields:
                     if order_field[1] == 0:
@@ -271,7 +271,7 @@ class InfinityConnection(InfinityConnectionBase):
                     kb_res, extra_result = builder.option({"total_hits_count": True}).to_df()
                     if extra_result:
                         total_hits_count += int(extra_result["total_hits_count"])
-                    self.logger.debug(f"INFINITY search table: {str(table_name)}, result: {str(kb_res)}")
+                    self.logger.debug(f"INFINITY search table: {table_name!s}, result: {kb_res!s}")
                     df_list.append(kb_res)
         finally:
             self.connPool.release_conn(inf_conn)
@@ -280,16 +280,16 @@ class InfinityConnection(InfinityConnectionBase):
             res["_score"] = res[score_column] + res[PAGERANK_FLD]
             res = res.sort_values(by="_score", ascending=False).reset_index(drop=True)
             res = res.head(limit)
-        self.logger.debug(f"INFINITY search final result: {str(res)}")
+        self.logger.debug(f"INFINITY search final result: {res!s}")
         return res, total_hits_count
 
     def get(self, chunk_id: str, index_name: str, knowledgebase_ids: list[str]) -> dict | None:
         inf_conn = self.connPool.get_conn()
         try:
             db_instance = inf_conn.get_database(self.dbName)
-            df_list = list()
+            df_list = []
             assert isinstance(knowledgebase_ids, list)
-            table_list = list()
+            table_list = []
             for knowledgebaseId in knowledgebase_ids:
                 # Empty knowledgebaseId means use the index_name directly (metadata tables)
                 table_name = index_name if not knowledgebaseId else f"{index_name}_{knowledgebaseId}"
@@ -300,7 +300,7 @@ class InfinityConnection(InfinityConnectionBase):
                     self.logger.warning(f"Table not found: {table_name}, this dataset isn't created in Infinity. Maybe it is created in other document engine.")
                     continue
                 kb_res, _ = table_instance.output(["*"]).filter(f"id = '{chunk_id}'").to_df()
-                self.logger.debug(f"INFINITY get table: {str(table_list)}, result: {str(kb_res)}")
+                self.logger.debug(f"INFINITY get table: {table_list!s}, result: {kb_res!s}")
                 df_list.append(kb_res)
         finally:
             self.connPool.release_conn(inf_conn)
@@ -550,14 +550,13 @@ class InfinityConnection(InfinityConnectionBase):
                 else:
                     new_value[k] = v
             for k in ["docnm_kwd", "title_tks", "title_sm_tks", "important_kwd", "important_tks", "content_with_weight", "content_ltks", "content_sm_ltks", "authors_tks", "authors_sm_tks", "question_kwd", "question_tks"]:
-                if k in new_value:
-                    del new_value[k]
+                new_value.pop(k, None)
 
             remove_opt = {}  # "[k,new_value]": [id_to_update, ...]
             if removeValue:
                 col_to_remove = list(removeValue.keys())
                 row_to_opt = table_instance.output(col_to_remove + ["id"]).filter(filter).to_df()
-                self.logger.debug(f"INFINITY search table {str(table_name)}, filter {filter}, result: {str(row_to_opt[0])}")
+                self.logger.debug(f"INFINITY search table {table_name!s}, filter {filter}, result: {row_to_opt[0]!s}")
                 row_to_opt = self.get_fields(row_to_opt, col_to_remove)
                 for id, old_v in row_to_opt.items():
                     for k, remove_v in removeValue.items():
@@ -573,7 +572,7 @@ class InfinityConnection(InfinityConnectionBase):
             self.logger.debug(f"INFINITY update table {table_name}, filter {filter}, newValue {new_value}.")
             for update_kv, ids in remove_opt.items():
                 k, v = json.loads(update_kv)
-                table_instance.update(filter + " AND id in ({0})".format(",".join([f"'{id}'" for id in ids])), {k: "###".join(v)})
+                table_instance.update(filter + " AND id in ({})".format(",".join([f"'{id}'" for id in ids])), {k: "###".join(v)})
 
             table_instance.update(filter, new_value)
             return True

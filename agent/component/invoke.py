@@ -180,7 +180,7 @@ class Invoke(ComponentBase, ABC):
             self.set_output("_ERROR", str(last_e))
             return f"Http request error: {last_e}"
 
-        assert False, self.output()
+        raise AssertionError(self.output())
 
     def thoughts(self) -> str:
         return "Waiting for the server respond..."

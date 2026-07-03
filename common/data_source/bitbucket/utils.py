@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
-from collections.abc import Iterator
-from datetime import datetime
-from datetime import timezone
+from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -13,9 +11,9 @@ from common.data_source.config import REQUEST_TIMEOUT_SECONDS, DocumentSource
 from common.data_source.cross_connector_utils.rate_limit_wrapper import (
     rate_limit_builder,
 )
-from common.data_source.utils import sanitize_filename
-from common.data_source.models import BasicExpertInfo, Document
 from common.data_source.cross_connector_utils.retry_wrapper import retry_builder
+from common.data_source.models import BasicExpertInfo, Document
+from common.data_source.utils import sanitize_filename
 
 # Fields requested from Bitbucket PR list endpoint to ensure rich PR data
 PR_LIST_RESPONSE_FIELDS: str = ",".join(
@@ -153,8 +151,7 @@ def paginate(
         resp = bitbucket_get(client, next_url, params=query)
         data = resp.json()
         values = data.get("values", [])
-        for item in values:
-            yield item
+        yield from values
         next_url = data.get("next")
         if on_page is not None:
             on_page(next_url)
@@ -197,7 +194,7 @@ def map_pr_to_document(pr: dict[str, Any], workspace: str, repo_slug: str) -> Do
     updated_on = pr.get("updated_on")
     updated_dt = (
         datetime.fromisoformat(updated_on.replace("Z", "+00:00")).astimezone(
-            timezone.utc
+            UTC
         )
         if isinstance(updated_on, str)
         else None
@@ -216,9 +213,9 @@ def map_pr_to_document(pr: dict[str, Any], workspace: str, repo_slug: str) -> Do
             display_name=_get_user_name(author),
         )
 
-    # secondary_owners = [ 
+    # secondary_owners = [
     #     BasicExpertInfo(display_name=_get_user_name(r)) for r in reviewers
-    # ] or None 
+    # ] or None
 
     reviewer_names = [_get_user_name(r) for r in reviewers]
 

@@ -4,36 +4,36 @@ import json
 import logging
 import re
 from io import BytesIO
-from typing import Any, Literal, Annotated
+from typing import Annotated, Any, Literal
+from urllib.parse import quote
 
 import xxhash
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, field_validator, Discriminator, model_validator
+from pydantic import BaseModel, Discriminator, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
-from urllib.parse import quote
 
 from api.constants import FILE_NAME_LEN_LIMIT
 from api.db.db_models import APIToken, Document, Task, get_db
-from api.db.services.document_service import DocumentService
+from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.doc_metadata_service import DocMetadataService
+from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
+from api.db.services.task_service import TaskService, cancel_all_task_of, queue_tasks
 from api.db.services.tenant_llm_service import TenantLLMService
-from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
-from api.db.services.task_service import TaskService, queue_tasks, cancel_all_task_of
 from api.utils.api_utils import check_duplicate_ids, construct_json_result, get_error_data_result, get_result, server_error_response, token_required
 from api.utils.image_utils import store_chunk_image
+from common import settings
+from common.constants import LLMType, RetCode, TaskStatus
+from common.metadata_utils import convert_conditions, meta_filter
+from common.string_utils import remove_redundant_spaces
+from common.tag_feature_utils import validate_tag_features
 from core.app.tag import label_question
 from core.nlp import rag_tokenizer, search
 from core.prompts.generator import cross_languages, keyword_extraction
-from common import settings
-from common.metadata_utils import meta_filter, convert_conditions
-from common.constants import LLMType, TaskStatus, RetCode
-from common.string_utils import remove_redundant_spaces
-from common.tag_feature_utils import validate_tag_features
 
 MAXIMUM_OF_UPLOADING_FILES = 256
 
@@ -280,8 +280,7 @@ def download_document(dataset_id: str, document_id: str, db: Session = Depends(g
 
         def file_generator():
             try:
-                for chunk in settings.STORAGE_IMPL.get(file.location):
-                    yield chunk
+                yield from settings.STORAGE_IMPL.get(file.location)
             except Exception:
                 yield b""
 
@@ -584,7 +583,7 @@ def delete_documents(dataset_id: str, request: DeleteDocumentsRequest, db: Sessi
                 continue
             success_count += 1
         except Exception as e:
-            errors.append(f"Error deleting document {doc_id}: {str(e)}")
+            errors.append(f"Error deleting document {doc_id}: {e!s}")
 
     if errors:
         if success_count > 0:
@@ -671,7 +670,7 @@ def parse_documents(dataset_id: str, request: ParseDocumentRequest, db: Session 
         return get_result(retmsg=message)
     except Exception as e:
         logging.exception(e)
-        return get_error_data_result(retmsg=f"Failed to queue parsing: {str(e)}")
+        return get_error_data_result(retmsg=f"Failed to queue parsing: {e!s}")
 
 
 DOC_STOP_PARSING_INVALID_STATE_MESSAGE = "Can't stop parsing document that has not started or already completed"
@@ -732,7 +731,7 @@ def stop_parsing_documents(dataset_id: str, request: StopParsingRequest, db: Ses
         return get_result(retmsg=message)
     except Exception as e:
         logging.exception(e)
-        return get_error_data_result(retmsg=f"Failed to stop parsing: {str(e)}")
+        return get_error_data_result(retmsg=f"Failed to stop parsing: {e!s}")
 
 
 @router.get("/datasets/{dataset_id}/documents/{document_id}/chunks", summary="获取文档分块列表")
@@ -972,7 +971,7 @@ def add_chunk(dataset_id: str, document_id: str, request: AddChunkRequest, db: S
         return get_result(data={"chunk": renamed_chunk})
     except Exception as e:
         logging.exception(e)
-        return get_error_data_result(retmsg=f"Failed to add chunk: {str(e)}")
+        return get_error_data_result(retmsg=f"Failed to add chunk: {e!s}")
 
 
 @router.delete("/datasets/{dataset_id}/documents/{document_id}/chunks", summary="批量删除文档分块")
@@ -1152,10 +1151,10 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
 
     # 获取所有知识库
     kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
-    kb_names = list([kb.name for kb in kbs])
+    kb_names = [kb.name for kb in kbs]
 
     # 验证所有数据集使用相同的embedding模型
-    embd_keys = list(set([kb.tenant_embd_id or TenantLLMService.split_model_name_and_factory(kb.embd_id)[0] for kb in kbs]))
+    embd_keys = list({kb.tenant_embd_id or TenantLLMService.split_model_name_and_factory(kb.embd_id)[0] for kb in kbs})
     if len(embd_keys) != 1:
         return get_result(
             retmsg="Datasets use different embedding models.",
@@ -1223,7 +1222,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
         return get_error_data_result(retmsg="`highlight` should be a boolean")
 
     try:
-        tenant_ids = list(set([kb.tenant_id for kb in kbs]))
+        tenant_ids = list({kb.tenant_id for kb in kbs})
         kb = KnowledgebaseService.get_by_id(db, kb_ids[0])
         if not kb:
             return get_error_data_result(retmsg="Dataset not found!")

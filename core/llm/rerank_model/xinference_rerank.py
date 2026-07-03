@@ -1,11 +1,11 @@
-import os
 from urllib.parse import urljoin
+
 import numpy as np
 import requests
 
 from common.log_utils import log_exception
+from common.token_utils import num_tokens_from_string, truncate
 from core.llm.rerank_model.base import Base
-from common.token_utils import truncate, num_tokens_from_string
 
 
 class XInferenceRerank(Base):

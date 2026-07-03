@@ -1,14 +1,13 @@
 import logging
 from enum import Enum
-from typing import List, Any, Dict
+from typing import Any
 
-from fastapi import APIRouter, Depends, Body
-from pydantic import BaseModel, Field, ConfigDict
+from fastapi import APIRouter, Body, Depends
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from api.db.db_models import get_db
 from api.apps import manager
-
+from api.db.db_models import get_db
 from api.service.nl2sql_service.event.event_handlers import create_sse_response
 from api.service.nl2sql_service.event.event_utils import send_event
 from api.service.nl2sql_service.nl2sql_service import NL2SQLService, get_nl2sql_service
@@ -71,7 +70,7 @@ class QueryRewriteResponse(BaseModel):
         title="原始查询",
         description="提交进行重写的原始查询文本",
     )
-    rewritten_queries: List[str] = Field(
+    rewritten_queries: list[str] = Field(
         ...,
         title="重写后的查询列表",
         description="LLM生成的重写查询变体列表",
@@ -121,12 +120,12 @@ async def rewrite_natural_language_query(
     except FileNotFoundError as e:
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"查询重写失败：提示词模板文件未找到 - {str(e)}"
+            message=f"查询重写失败：提示词模板文件未找到 - {e!s}"
         )
     except Exception as e:
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"查询重写失败：{str(e)}"
+            message=f"查询重写失败：{e!s}"
         )
 
 
@@ -142,7 +141,7 @@ class NL2SQLRequest(BaseModel):
         title="LLM模型名称",
         description="用于将自然语言转换为SQL的LLM模型名称",
     )
-    dataset_id_list: List[str] = Field(
+    dataset_id_list: list[str] = Field(
         ...,
         title="数据集ID列表",
         description="用于查询的数据集ID列表",
@@ -171,7 +170,7 @@ class NL2SQLResponse(BaseModel):
         title="生成的SQL查询",
         description="从自然语言转换生成的SQL查询语句",
     )
-    semantic_layer_struct: Dict = Field(
+    semantic_layer_struct: dict = Field(
         ...,
         title="语义层结构",
         description="自然语言转SQL生成的语义层结构信息",
@@ -218,13 +217,13 @@ async def convert_nl_to_sql(
     except FileNotFoundError as e:
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"自然语言转SQL失败：提示词模板文件未找到 - {str(e)}"
+            message=f"自然语言转SQL失败：提示词模板文件未找到 - {e!s}"
         )
     except Exception as e:
         logger.exception("发生异常")
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"自然语言转SQL失败：{str(e)}"
+            message=f"自然语言转SQL失败：{e!s}"
         )
 
 
@@ -247,7 +246,7 @@ class SQLTemplatingRequest(BaseModel):
         title="SQL查询",
         description="需要进行模板化的SQL查询语句",
     )
-    semantic_layer: Dict[str, Any] = Field(
+    semantic_layer: dict[str, Any] = Field(
         ...,
         title="语义层结构",
         description="包含数据集、维度、指标等语义层信息的结构",
@@ -289,13 +288,13 @@ async def sql_templating(
     except FileNotFoundError as e:
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"SQL模板化处理失败：提示词模板文件未找到 - {str(e)}"
+            message=f"SQL模板化处理失败：提示词模板文件未找到 - {e!s}"
         )
     except Exception as e:
         logger.exception("发生异常")
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"SQL模板化处理失败：{str(e)}"
+            message=f"SQL模板化处理失败：{e!s}"
         )
 
 
@@ -308,12 +307,12 @@ class FillSQLTemplateRequest(BaseModel):
         title="SQL模板",
         description="需要填充的SQL模板字符串",
     )
-    parameter_definitions: List[Dict[str, Any]] = Field(
+    parameter_definitions: list[dict[str, Any]] = Field(
         ...,
         title="参数定义列表",
         description="SQL模板中参数的定义列表",
     )
-    user_selected_values: Dict[str, Any] = Field(
+    user_selected_values: dict[str, Any] = Field(
         ...,
         title="用户选择的值",
         description="用户为SQL模板参数选择的值映射",
@@ -368,13 +367,13 @@ async def fill_sql_template(
     except KeyError as e:
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"SQL模板填充失败：缺少必要的参数 - {str(e)}"
+            message=f"SQL模板填充失败：缺少必要的参数 - {e!s}"
         )
     except Exception as e:
         logger.exception("发生异常")
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"SQL模板填充失败：{str(e)}"
+            message=f"SQL模板填充失败：{e!s}"
         )
 
 
@@ -392,12 +391,12 @@ class GenerateEChartsRequest(BaseModel):
         title="SQL查询",
         description="执行的SQL查询语句，图表将基于该查询的结果生成",
     )
-    column_and_type: List = Field(
+    column_and_type: list = Field(
         ...,
         title="列名与类型",
         description="SQL查询结果的列名及其数据类型描述",
     )
-    sample_data: List = Field(
+    sample_data: list = Field(
         ...,
         title="样本数据",
         description="SQL查询结果的样本数据，用于生成图表",
@@ -459,13 +458,13 @@ async def generate_echarts(
     except FileNotFoundError as e:
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"ECharts配置生成失败：提示词模板文件未找到 - {str(e)}"
+            message=f"ECharts配置生成失败：提示词模板文件未找到 - {e!s}"
         )
     except Exception as e:
         logger.exception("发生异常")
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"ECharts配置生成失败：{str(e)}"
+            message=f"ECharts配置生成失败：{e!s}"
         )
 
 
@@ -481,7 +480,7 @@ class WholeProcessRequest(BaseModel):
         title="请求ID",
         description="请求ID",
     )
-    dataset_id_list: List[str] = Field(
+    dataset_id_list: list[str] = Field(
         [],
         title="数据集ID列表",
         description="数据集ID列表",
@@ -524,19 +523,18 @@ async def execute_whole_process(
     except FileNotFoundError as e:
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"全流程处理失败：提示词模板文件未找到 - {str(e)}"
+            message=f"全流程处理失败：提示词模板文件未找到 - {e!s}"
         )
     except Exception as e:
         logger.exception("发生异常")
         await send_event(body.request_id, {"message": "处理失败"}, "error")
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"全流程处理失败：{str(e)}"
+            message=f"全流程处理失败：{e!s}"
         )
 
 
-from fastapi import Request, Depends
-from fastapi.responses import StreamingResponse
+from fastapi import Depends, Request
 
 
 @router.get("/events/{event_id}")
@@ -554,8 +552,9 @@ def subscribe_to_event(request: Request, event_id: str):
     return create_sse_response(request, event_id)
 
 
-import numpy as np
 import json
+
+import numpy as np
 
 
 class NumpyEncoder(json.JSONEncoder):
@@ -566,7 +565,7 @@ class NumpyEncoder(json.JSONEncoder):
             return float(obj)
         elif isinstance(obj, np.ndarray):
             return obj.tolist()
-        return super(NumpyEncoder, self).default(obj)
+        return super().default(obj)
 
 
 class ReQueryRequest(BaseModel):
@@ -576,12 +575,12 @@ class ReQueryRequest(BaseModel):
         title="SQL模板",
         description="需要填充的SQL模板字符串",
     )
-    parameter_definitions: List[Dict[str, Any]] = Field(
+    parameter_definitions: list[dict[str, Any]] = Field(
         ...,
         title="参数定义列表",
         description="SQL模板中参数的定义列表",
     )
-    user_selected_values: Dict[str, Any] = Field(
+    user_selected_values: dict[str, Any] = Field(
         ...,
         title="用户选择的值",
         description="用户为SQL模板参数选择的值映射",
@@ -629,11 +628,11 @@ async def re_query(
     except KeyError as e:
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"SQL重新查询失败：缺少必要的参数 - {str(e)}"
+            message=f"SQL重新查询失败：缺少必要的参数 - {e!s}"
         )
     except Exception as e:
         logger.exception("发生异常")
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"SQL重新查询失败：{str(e)}"
+            message=f"SQL重新查询失败：{e!s}"
         )

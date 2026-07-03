@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 DOCX 模板标记与填充服务
 
@@ -8,44 +7,43 @@ DOCX 模板标记与填充服务
 - 数据填充：根据标记位置自动填充数据，生成新文档
 """
 
+from .auto_recognizer import auto_recognize_placeholders
+from .debug_helper import generate_debug_report
+from .filler import fill_document, fill_document_with_tables
 from .models import (
-    Placeholder,
-    PlaceholderRequest,
+    Cell,
+    DocumentElement,
     FieldValue,
     FillRequest,
-    ParsedDocument,
-    DocumentElement,
     Paragraph,
+    ParsedDocument,
+    Placeholder,
+    PlaceholderRequest,
+    Row,
     Run,
     RunStyle,
     Table,
-    Row,
-    Cell,
 )
-
 from .parser import parse_docx
-from .auto_recognizer import auto_recognize_placeholders
-from .filler import fill_document, fill_document_with_tables
-from .debug_helper import generate_debug_report
 
 __all__ = [
+    'Cell',
+    'DocumentElement',
+    'FieldValue',
+    'FillRequest',
+    'Paragraph',
+    'ParsedDocument',
     # Models
     'Placeholder',
     'PlaceholderRequest',
-    'FieldValue',
-    'FillRequest',
-    'ParsedDocument',
-    'DocumentElement',
-    'Paragraph',
+    'Row',
     'Run',
     'RunStyle',
     'Table',
-    'Row',
-    'Cell',
-    # Functions
-    'parse_docx',
     'auto_recognize_placeholders',
     'fill_document',
     'fill_document_with_tables',
     'generate_debug_report',
+    # Functions
+    'parse_docx',
 ]

@@ -1,10 +1,14 @@
 import pytest
-from bs4 import BeautifulSoup
 
 from api.service.docx2zjform_service.analyzer.paragraph_analyzer_util import split_lines
-from api.service.docx2zjform_service.analyzer.table_analyzer_util import is_multiple_tables_with_name, \
-    is_single_normal_table, is_single_empty_table_with_multiple_br, is_one_column_multiple_rows_table, is_inputs_table, \
-    extract_content_from_one_column_multiple_rows_table
+from api.service.docx2zjform_service.analyzer.table_analyzer_util import (
+    extract_content_from_one_column_multiple_rows_table,
+    is_inputs_table,
+    is_multiple_tables_with_name,
+    is_one_column_multiple_rows_table,
+    is_single_empty_table_with_multiple_br,
+    is_single_normal_table,
+)
 
 # 测试数据
 INPUTS_TABLE_HTML = """<table border="1">

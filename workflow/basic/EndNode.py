@@ -1,9 +1,9 @@
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 
-from workflow.WorkflowEngine import WorkflowContext
 from workflow.basic.Node import Node, NodeParameter, ValueTypeOfIODefinition
 from workflow.utils.utils import safe_format_double_braces
+from workflow.WorkflowEngine import WorkflowContext
 
 
 @dataclass
@@ -33,7 +33,7 @@ class EndNode(Node[EndNodeParam]):
                 ref_node_id = output_definition['content'][0]
                 ref_name = output_definition['content'][1]
                 ref_node_data = context.get(str(ref_node_id)).output_data[ref_name]
-                if type(ref_node_data) == str:
+                if type(ref_node_data) is str:
                     parameter_dict[parameter_name] = ref_node_data
                 else:
                     parameter_dict[parameter_name] = ref_node_data[output_definition['content'][2]]

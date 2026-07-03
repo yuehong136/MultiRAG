@@ -1,13 +1,15 @@
+from enum import Enum
+from typing import Any
+
 from fastapi import APIRouter, Body, Depends
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.db.db_models import get_db
+
 # from api.db.database import get_db
 from api.service.ai_translate_service.ai_translate_service import AITranslateService
-from sqlalchemy.orm import Session
-from enum import Enum
-from pydantic import BaseModel
-from typing import Any
 
 router = APIRouter()
 
@@ -60,7 +62,7 @@ class AIBatchTranslateReqBody(BaseModel):
 
 
 @router.post("/ai-batch-translate", summary="批量翻译中文文本", response_description="成功返回英文翻译结果列表")
-async def ai_translate(body: AIBatchTranslateReqBody = Body(...), db: Session = Depends(get_db), user=Depends(manager)):
+async def ai_batch_translate(body: AIBatchTranslateReqBody = Body(...), db: Session = Depends(get_db), user=Depends(manager)):
     """
     AI批量翻译接口
 

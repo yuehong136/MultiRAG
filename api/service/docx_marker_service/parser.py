@@ -1,18 +1,13 @@
-# coding=utf-8
 """
 DOCX 文档解析器，将文档转换为带路径的结构化数据
 """
 
 from docx import Document
-from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.table import Table as DocxTable
 
-from .models import (
-    ParsedDocument, DocumentElement, Paragraph, Run, RunStyle,
-    Table, Row, Cell
-)
+from .models import Cell, DocumentElement, Paragraph, ParsedDocument, Row, Run, RunStyle, Table
 
 
 def get_run_color(run) -> str | None:
@@ -208,7 +203,7 @@ def parse_docx(file_path: str, filename: str) -> ParsedDocument:
 
     def process_element(child, index):
         tag = child.tag.split('}')[-1]
-        
+
         if tag == 'p':  # 段落
             path = f"body[{index}]"
             para = None
@@ -216,7 +211,7 @@ def parse_docx(file_path: str, filename: str) -> ParsedDocument:
                 if p._element == child:
                     para = p
                     break
-            
+
             if para:
                 elements.append(DocumentElement(
                     type="paragraph",
@@ -224,7 +219,7 @@ def parse_docx(file_path: str, filename: str) -> ParsedDocument:
                     paragraph=parse_paragraph(para, path),
                 ))
                 return True
-        
+
         elif tag == 'tbl':  # 表格
             path = f"body[{index}]"
             for tbl in doc.tables:
@@ -235,7 +230,7 @@ def parse_docx(file_path: str, filename: str) -> ParsedDocument:
                         table=parse_table(tbl, path),
                     ))
                     return True
-        
+
         elif tag == 'sdt':  # 内容控制
             # 递归处理 sdtContent
             sdt_content = child.find(qn('w:sdtContent'))
@@ -245,7 +240,7 @@ def parse_docx(file_path: str, filename: str) -> ParsedDocument:
                     if process_element(sdt_child, element_index):
                         element_index += 1
                 return False
-        
+
         return False
 
     for child in body:

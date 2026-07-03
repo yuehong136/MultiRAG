@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -7,10 +6,11 @@
 @desc: AI安全护栏词库管理服务
 """
 import logging
-from typing import List, Optional, Dict, Any
-from sqlalchemy.orm import Session
+from datetime import UTC, datetime
+from typing import Any
+
 from sqlalchemy import and_, func
-from datetime import datetime, UTC
+from sqlalchemy.orm import Session
 
 from api.db.db_models import GuardLibrary
 from api.db.services.common_service import CommonService
@@ -24,10 +24,10 @@ class GuardLibraryService(CommonService):
     @classmethod
     def create_library(cls, db: Session, library_type: str, name: str,
                       description: str = None, tenant_id: str = None,
-                      created_by: str = None, **kwargs) -> Optional[str]:
+                      created_by: str = None, **kwargs) -> str | None:
         """
         创建护栏词库
-        
+
         Args:
             db: 数据库会话
             library_type: 词库类型
@@ -36,7 +36,7 @@ class GuardLibraryService(CommonService):
             tenant_id: 租户ID
             created_by: 创建者ID
             **kwargs: 其他参数
-            
+
         Returns:
             创建成功返回词库ID，失败返回None
         """
@@ -56,26 +56,26 @@ class GuardLibraryService(CommonService):
                 "version": 1,
                 "status": kwargs.get("status", "1")
             }
-            
+
             library = cls.save(db, **library_data)
             return library.id
-            
+
         except Exception as e:
             logging.error(f"创建词库失败: {e}")
             return None
 
     @classmethod
     def get_library_by_name(cls, db: Session, name: str, library_type: str,
-                           tenant_id: str) -> Optional[GuardLibrary]:
+                           tenant_id: str) -> GuardLibrary | None:
         """
         根据名称和类型获取词库
-        
+
         Args:
             db: 数据库会话
             name: 词库名称
             library_type: 词库类型
             tenant_id: 租户ID
-            
+
         Returns:
             词库对象或None
         """
@@ -94,15 +94,15 @@ class GuardLibraryService(CommonService):
 
     @classmethod
     def get_libraries_by_type(cls, db: Session, library_type: str,
-                             tenant_id: str) -> List[GuardLibrary]:
+                             tenant_id: str) -> list[GuardLibrary]:
         """
         根据类型获取词库列表
-        
+
         Args:
             db: 数据库会话
             library_type: 词库类型
             tenant_id: 租户ID
-            
+
         Returns:
             词库列表
         """
@@ -121,16 +121,16 @@ class GuardLibraryService(CommonService):
     @classmethod
     def get_libraries_by_tenant(cls, db: Session, tenant_id: str,
                                library_type: str = None,
-                               category: str = None) -> List[GuardLibrary]:
+                               category: str = None) -> list[GuardLibrary]:
         """
         获取租户的词库列表
-        
+
         Args:
             db: 数据库会话
             tenant_id: 租户ID
             library_type: 词库类型（可选）
             category: 词库分类（可选）
-            
+
         Returns:
             词库列表
         """
@@ -140,29 +140,29 @@ class GuardLibraryService(CommonService):
                     cls.model.tenant_id == tenant_id
                 )
             )
-            
+
             if library_type:
                 query = query.filter(cls.model.library_type == library_type)
-            
+
             if category:
                 query = query.filter(cls.model.category == category)
-                
+
             return query.order_by(cls.model.create_time.desc()).all()
         except Exception as e:
             logging.error(f"获取租户词库失败: {e}")
             return []
 
     @classmethod
-    def get_libraries_by_ids(cls, db: Session, library_ids: List[str],
-                            tenant_id: str) -> List[GuardLibrary]:
+    def get_libraries_by_ids(cls, db: Session, library_ids: list[str],
+                            tenant_id: str) -> list[GuardLibrary]:
         """
         根据ID列表获取词库
-        
+
         Args:
             db: 数据库会话
             library_ids: 词库ID列表
             tenant_id: 租户ID
-            
+
         Returns:
             词库列表
         """
@@ -179,16 +179,16 @@ class GuardLibraryService(CommonService):
             return []
 
     @classmethod
-    def update_library(cls, db: Session, library_id: str, 
-                      update_data: Dict[str, Any]) -> int:
+    def update_library(cls, db: Session, library_id: str,
+                      update_data: dict[str, Any]) -> int:
         """
         更新词库信息
-        
+
         Args:
             db: 数据库会话
             library_id: 词库ID
             update_data: 更新数据
-            
+
         Returns:
             更新成功返回True，失败返回False
         """
@@ -202,11 +202,11 @@ class GuardLibraryService(CommonService):
     def delete_library(cls, db: Session, library_id: str) -> int:
         """
         删除词库（物理删除）
-        
+
         Args:
             db: 数据库会话
             library_id: 词库ID
-            
+
         Returns:
             删除成功返回True，失败返回False
         """
@@ -217,16 +217,16 @@ class GuardLibraryService(CommonService):
             return False
 
     @classmethod
-    def increment_item_count(cls, db: Session, library_id: str, 
+    def increment_item_count(cls, db: Session, library_id: str,
                            count: int = 1) -> int:
         """
         增加词库项数量
-        
+
         Args:
             db: 数据库会话
             library_id: 词库ID
             count: 增加数量
-            
+
         Returns:
             更新成功返回True，失败返回False
         """
@@ -234,7 +234,7 @@ class GuardLibraryService(CommonService):
             library = cls.get_by_id(db, library_id)
             if not library:
                 return False
-                
+
             new_count = library.item_count + count
             return cls.update_by_id(db, library_id, {"item_count": new_count})
         except Exception as e:
@@ -242,16 +242,16 @@ class GuardLibraryService(CommonService):
             return False
 
     @classmethod
-    def increment_hit_count(cls, db: Session, library_id: str, 
+    def increment_hit_count(cls, db: Session, library_id: str,
                            count: int = 1) -> int:
         """
         增加词库命中次数
-        
+
         Args:
             db: 数据库会话
             library_id: 词库ID
             count: 增加数量
-            
+
         Returns:
             更新成功返回True，失败返回False
         """
@@ -259,7 +259,7 @@ class GuardLibraryService(CommonService):
             library = cls.get_by_id(db, library_id)
             if not library:
                 return False
-                
+
             new_count = library.hit_count + count
             update_data = {
                 "hit_count": new_count,
@@ -271,25 +271,25 @@ class GuardLibraryService(CommonService):
             return False
 
     @classmethod
-    def get_library_stats(cls, db: Session, tenant_id: str) -> Dict[str, Any]:
+    def get_library_stats(cls, db: Session, tenant_id: str) -> dict[str, Any]:
         """
         获取词库统计信息
-        
+
         Args:
             db: 数据库会话
             tenant_id: 租户ID
-            
+
         Returns:
             统计信息字典
         """
         try:
             libraries = cls.get_libraries_by_tenant(db, tenant_id)
-            
+
             # 按类型统计
             type_stats = {}
             total_items = 0
             total_hits = 0
-            
+
             for library in libraries:
                 lib_type = library.library_type
                 if lib_type not in type_stats:
@@ -298,14 +298,14 @@ class GuardLibraryService(CommonService):
                         "total_items": 0,
                         "total_hits": 0
                     }
-                
+
                 type_stats[lib_type]["count"] += 1
                 type_stats[lib_type]["total_items"] += library.item_count
                 type_stats[lib_type]["total_hits"] += library.hit_count
-                
+
                 total_items += library.item_count
                 total_hits += library.hit_count
-            
+
             return {
                 "total_libraries": len(libraries),
                 "total_items": total_items,
@@ -320,10 +320,10 @@ class GuardLibraryService(CommonService):
     @classmethod
     def search_libraries(cls, db: Session, tenant_id: str,
                         keyword: str = None, library_type: str = None,
-                        category: str = None, tags: List[str] = None) -> List[GuardLibrary]:
+                        category: str = None, tags: list[str] = None) -> list[GuardLibrary]:
         """
         搜索词库
-        
+
         Args:
             db: 数据库会话
             tenant_id: 租户ID
@@ -331,7 +331,7 @@ class GuardLibraryService(CommonService):
             library_type: 词库类型
             category: 词库分类
             tags: 标签列表
-            
+
         Returns:
             匹配的词库列表
         """
@@ -342,42 +342,42 @@ class GuardLibraryService(CommonService):
                     cls.model.status == "1"
                 )
             )
-            
+
             if keyword:
                 query = query.filter(
-                    cls.model.name.contains(keyword) | 
+                    cls.model.name.contains(keyword) |
                     cls.model.description.contains(keyword)
                 )
-            
+
             if library_type:
                 query = query.filter(cls.model.library_type == library_type)
-            
+
             if category:
                 query = query.filter(cls.model.category == category)
-            
+
             if tags:
                 # 搜索包含指定标签的词库
                 for tag in tags:
                     query = query.filter(
                         func.jsonb_exists(cls.model.tags, tag)
                     )
-                    
+
             return query.order_by(cls.model.create_time.desc()).all()
         except Exception as e:
             logging.error(f"搜索词库失败: {e}")
             return []
 
     @classmethod
-    def init_default_libraries(cls, db: Session, tenant_id: str, 
-                              created_by: str) -> List[str]:
+    def init_default_libraries(cls, db: Session, tenant_id: str,
+                              created_by: str) -> list[str]:
         """
         初始化默认词库
-        
+
         Args:
             db: 数据库会话
             tenant_id: 租户ID
             created_by: 创建者ID
-            
+
         Returns:
             创建的词库ID列表
         """
@@ -449,7 +449,7 @@ class GuardLibraryService(CommonService):
                 }
             }
         ]
-        
+
         created_ids = []
         for library_data in default_libraries:
             library_id = cls.create_library(
@@ -460,5 +460,5 @@ class GuardLibraryService(CommonService):
             )
             if library_id:
                 created_ids.append(library_id)
-                
+
         return created_ids

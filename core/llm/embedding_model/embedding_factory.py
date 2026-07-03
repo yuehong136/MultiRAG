@@ -1,5 +1,6 @@
 # embedding_model/embedding_factory.py
 from core.llm.embedding_model.default_embedding import DefaultEmbedding
+
 # from llm.embedding_model.openai_embedding import OpenAIEmbed
 # from llm.embedding_model.baichuan_embedding import BaiChuanEmbed
 # from llm.embedding_model.qwen_embedding import QWenEmbed
@@ -8,6 +9,7 @@ from core.llm.embedding_model.default_embedding import DefaultEmbedding
 # from llm.embedding_model.fast_embedding import FastEmbed
 # from llm.embedding_model.xinference_embedding import XinferenceEmbed
 from core.llm.embedding_model.youdao_embedding import YoudaoEmbed
+
 # from llm.embedding_model.jina_embedding import JinaEmbed
 
 class EmbeddingFactory:

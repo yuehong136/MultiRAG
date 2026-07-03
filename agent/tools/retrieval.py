@@ -14,24 +14,24 @@
 #  limitations under the License.
 #
 import asyncio
-from functools import partial
 import json
 import os
 import re
 from abc import ABC
-from agent.tools.base import ToolParamBase, ToolBase, ToolMeta
-from common.constants import LLMType
-from api.db.services.document_service import DocumentService
-from api.db.services.doc_metadata_service import DocMetadataService
-from common.metadata_utils import apply_meta_data_filter
+from functools import partial
+
+from agent.tools.base import ToolBase, ToolMeta, ToolParamBase
 from api.db.db_models import db_connection
+from api.db.joint_services import memory_message_service
+from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
+from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
-from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.memory_service import MemoryService
-from api.db.joint_services import memory_message_service
 from common import settings
 from common.connection_utils import timeout
+from common.constants import LLMType
+from common.metadata_utils import apply_meta_data_filter
 from core.app.tag import label_question
 from core.prompts.generator import cross_languages, kb_prompt, memory_prompt
 
@@ -96,7 +96,7 @@ class Retrieval(ToolBase, ABC):
     async def _retrieve_memory(self, query_text: str):
         """Retrieve from memory storage."""
         with db_connection() as db:
-            memory_ids: list[str] = [memory_id for memory_id in self._param.memory_ids]
+            memory_ids: list[str] = list(self._param.memory_ids)
             user_id = getattr(self._param, "user_id", None)
             if user_id and isinstance(user_id, str) and re.match(r"^{.*}$", user_id):
                 user_id = self._canvas.get_variable_value(user_id)
@@ -173,14 +173,14 @@ class Retrieval(ToolBase, ABC):
                         raise Exception(f"Dataset({nm_or_id}) does not exist.")
                 kb_ids.append(kb.id)
 
-            filtered_kb_ids: list[str] = list(set([kb_id for kb_id in kb_ids if kb_id]))
+            filtered_kb_ids: list[str] = list({kb_id for kb_id in kb_ids if kb_id})
             kbs = KnowledgebaseService.get_by_ids(db, filtered_kb_ids)
             if not kbs:
                 raise Exception("No dataset is selected.")
 
             # Keep the embedding-equivalence check aligned with RAGFlow: tenant_embd_id
             # selects the concrete tenant model row, while embd_id defines model equivalence.
-            embd_keys = list(set([kb.embd_id for kb in kbs]))
+            embd_keys = list({kb.embd_id for kb in kbs})
             assert len(embd_keys) == 1, "Knowledge bases use different embedding models."
 
             embd_mdl = None
@@ -254,9 +254,9 @@ class Retrieval(ToolBase, ABC):
             if self._param.cross_languages:
                 query = await cross_languages(kbs[0].tenant_id, None, query, self._param.cross_languages)
 
-            tenant_ids = list(set([kb.tenant_id for kb in kbs]))
+            tenant_ids = list({kb.tenant_id for kb in kbs})
             if kbs:
-                kb_names = list([kb.name for kb in kbs])
+                kb_names = [kb.name for kb in kbs]
                 query = re.sub(r"^user[:：\s]*", "", query, flags=re.IGNORECASE)
                 kbinfos = await settings.retriever.retrieval(
                     query,

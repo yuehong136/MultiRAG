@@ -1,18 +1,19 @@
-import time
-import logging
 import functools
-from datetime import datetime, timezone
-from typing import Any, Type, Generic, TypeVar
+import logging
+import time
+from datetime import UTC, datetime
+from typing import Any, Generic, TypeVar
 
-from sqlalchemy import Row, desc, asc, exc, update, select, delete, insert
-from sqlalchemy.orm import Session
 from fastapi import HTTPException
-from sqlalchemy.exc import NoResultFound, IntegrityError
+from sqlalchemy import Row, asc, delete, desc, exc, insert, select, update
+from sqlalchemy.exc import IntegrityError, NoResultFound
+from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import InstrumentedAttribute
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from api.db import db_models
 from common.misc_utils import get_uuid
+
 # from common.time_utils import current_timestamp, datetime_format
 
 # 配置日志
@@ -176,18 +177,18 @@ def retry_transient_tx_conflict(max_attempts: int = 3, base_delay: float = 0.1, 
 ModelType = TypeVar("ModelType", bound=db_models.BaseModel)
 
 class CommonService(Generic[ModelType]):
-    model: Type[ModelType]
+    model: type[ModelType]
 
-    def __init__(self, model: Type[ModelType]):
+    def __init__(self, model: type[ModelType]):
         self.model = model
 
     @staticmethod
     def current_timestamp():
-        return int(datetime.now(timezone.utc).timestamp() * 1000)
+        return int(datetime.now(UTC).timestamp() * 1000)
 
     @staticmethod
     def current_datetime():
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
     @classmethod
     def query(cls, db: Session, cols: list[str] | None = None, reverse: bool | None = None,

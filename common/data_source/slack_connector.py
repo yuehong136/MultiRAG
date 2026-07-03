@@ -4,7 +4,7 @@ import itertools
 import logging
 import re
 from collections.abc import Callable, Generator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from http.client import IncompleteRead, RemoteDisconnected
 from typing import Any, cast
 from urllib.error import URLError
@@ -14,43 +14,34 @@ from slack_sdk.errors import SlackApiError
 from slack_sdk.http_retry import ConnectionErrorRetryHandler
 from slack_sdk.http_retry.builtin_interval_calculators import FixedValueRetryIntervalCalculator
 
-from common.data_source.config import (
-    INDEX_BATCH_SIZE, SLACK_NUM_THREADS, ENABLE_EXPENSIVE_EXPERT_CALLS,
-    _SLACK_LIMIT, FAST_TIMEOUT, MAX_RETRIES, MAX_CHANNELS_TO_LOG
-)
-from common.data_source.exceptions import (
-    ConnectorMissingCredentialError,
-    ConnectorValidationError,
-    CredentialExpiredError,
-    InsufficientPermissionsError,
-    UnexpectedValidationError
-)
-from common.data_source.interfaces import (
-    CheckpointedConnectorWithPermSync,
-    CredentialsConnector,
-    SlimConnectorWithPermSync
-)
+from common.data_source.config import _SLACK_LIMIT, ENABLE_EXPENSIVE_EXPERT_CALLS, FAST_TIMEOUT, INDEX_BATCH_SIZE, MAX_CHANNELS_TO_LOG, MAX_RETRIES, SLACK_NUM_THREADS
+from common.data_source.exceptions import ConnectorMissingCredentialError, ConnectorValidationError, CredentialExpiredError, InsufficientPermissionsError, UnexpectedValidationError
+from common.data_source.interfaces import CheckpointedConnectorWithPermSync, CredentialsConnector, SlimConnectorWithPermSync
 from common.data_source.models import (
     BasicExpertInfo,
+    ChannelType,
+    CheckpointOutput,
     ConnectorCheckpoint,
     ConnectorFailure,
     Document,
     DocumentFailure,
+    GenerateSlimDocumentOutput,
+    MessageType,
+    ProcessedSlackMessage,
+    SecondsSinceUnixEpoch,
+    SlackMessageFilterReason,
     SlimDocument,
     TextSection,
-    SecondsSinceUnixEpoch,
-    GenerateSlimDocumentOutput, MessageType, SlackMessageFilterReason, ChannelType, ThreadType, ProcessedSlackMessage,
-    CheckpointOutput
+    ThreadType,
 )
-from common.data_source.utils import make_paginated_slack_api_call, SlackTextCleaner, expert_info_from_slack_id, \
-    get_message_link
+from common.data_source.utils import SlackTextCleaner, expert_info_from_slack_id, get_message_link, make_paginated_slack_api_call
 
 # Disallowed message subtypes list
 _DISALLOWED_MSG_SUBTYPES = {
     "channel_join", "channel_leave", "channel_archive", "channel_unarchive",
     "pinned_item", "unpinned_item", "ekm_access_denied", "channel_posting_permissions",
     "group_join", "group_leave", "group_archive", "group_unarchive",
-    "channel_leave", "channel_name", "channel_join",
+    "channel_name",
 }
 
 
@@ -98,7 +89,7 @@ def get_channels(
         channel_types.append("public_channel")
     if get_private:
         channel_types.append("private_channel")
-    
+
     # First try to get public and private channels
     try:
         channels = _collect_paginated_channels(
@@ -163,7 +154,7 @@ def get_thread(client: WebClient, channel_id: str, thread_id: str) -> ThreadType
 
 def get_latest_message_time(thread: ThreadType) -> datetime:
     max_ts = max([float(msg.get("ts", 0)) for msg in thread])
-    return datetime.fromtimestamp(max_ts, tz=timezone.utc)
+    return datetime.fromtimestamp(max_ts, tz=UTC)
 
 
 def _build_doc_id(channel_id: str, thread_ts: str) -> str:

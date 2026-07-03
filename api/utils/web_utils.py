@@ -1,15 +1,16 @@
-import base64
 import asyncio
+import base64
 import ipaddress
 import json
+import logging
+import re
+import smtplib
+import socket
 from email.message import EmailMessage
 from email.utils import formataddr
-import re
-import socket
 from urllib.parse import urlparse
-import logging
-import smtplib
 
+from jinja2 import Template
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.chrome.options import Options
@@ -18,7 +19,6 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.expected_conditions import staleness_of
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
-from jinja2 import Template
 
 from api.utils.email_templates import EMAIL_TEMPLATES
 from common import settings
@@ -335,7 +335,7 @@ async def send_invite_email(to_email: str, invite_url: str, tenant_id: str, invi
     """
     Send invitation email to a user.
     Reuses the generic HTML sender with 'invite' template.
-    
+
     Args:
         to_email: Recipient email address
         invite_url: URL for accepting the invitation
@@ -356,10 +356,10 @@ async def send_invite_email(to_email: str, invite_url: str, tenant_id: str, invi
 def otp_keys(email: str) -> tuple[str, str, str, str]:
     """
     Generate Redis keys for OTP management.
-    
+
     Args:
         email: User email address
-        
+
     Returns:
         Tuple of (otp_key, attempts_key, last_sent_key, lock_key)
     """
@@ -375,17 +375,17 @@ def otp_keys(email: str) -> tuple[str, str, str, str]:
 def hash_code(code: str, salt: bytes) -> str:
     """
     Generate a secure hash of a code using HMAC-SHA256.
-    
+
     Args:
         code: The code to hash
         salt: Salt bytes for hashing
-        
+
     Returns:
         Hexadecimal hash string
     """
     import hashlib
     import hmac
-    
+
     return hmac.new(salt, (code or "").encode("utf-8"), hashlib.sha256).hexdigest()
 
 

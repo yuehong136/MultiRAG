@@ -1,16 +1,16 @@
 import json
 import re
 
-from core.llm.sequence2txt_model.base import Base
 from common.token_utils import num_tokens_from_string
+from core.llm.sequence2txt_model.base import Base
 
 
 class TencentCloudSeq2txt(Base):
     def __init__(
             self, key, model_name="16k_zh", base_url="https://asr.tencentcloudapi.com"
     ):
-        from tencentcloud.common import credential
         from tencentcloud.asr.v20190614 import asr_client
+        from tencentcloud.common import credential
 
         key = json.loads(key)
         sid = key.get("tencent_cloud_sid", "")
@@ -20,11 +20,12 @@ class TencentCloudSeq2txt(Base):
         self.model_name = model_name
 
     def transcription(self, audio, max_retries=60, retry_interval=5):
+        import time
+
+        from tencentcloud.asr.v20190614 import models
         from tencentcloud.common.exception.tencent_cloud_sdk_exception import (
             TencentCloudSDKException,
         )
-        from tencentcloud.asr.v20190614 import models
-        import time
 
         b64 = self.audio2base64(audio)
         try:

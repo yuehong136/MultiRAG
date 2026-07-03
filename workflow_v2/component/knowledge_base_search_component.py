@@ -1,11 +1,11 @@
 from typing import Any
 
+from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
-from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name
-from core.app.tag import label_question
 from common import settings
 from common.constants import LLMType
+from core.app.tag import label_question
 from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
 
@@ -31,7 +31,7 @@ class KnowledgeBaseSearchComponent(BaseComponent):
         self.user = kwargs.get('user', None)
 
     def _build_embedding_model(self, kbs: list[Any]) -> LLMBundle:
-        embd_keys = list(set([kb.tenant_embd_id or kb.embd_id for kb in kbs]))
+        embd_keys = list({kb.tenant_embd_id or kb.embd_id for kb in kbs})
         assert len(embd_keys) == 1, "Knowledge bases use different embedding models."
 
         if kbs[0].tenant_embd_id:
@@ -54,7 +54,7 @@ class KnowledgeBaseSearchComponent(BaseComponent):
     async def _retrieve(self, query: str, kbs: list[Any]) -> dict[str, Any]:
         embd_mdl = self._build_embedding_model(kbs)
         rerank_mdl = self._build_rerank_model(kbs)
-        tenant_ids = list(set([kb.tenant_id for kb in kbs]))
+        tenant_ids = list({kb.tenant_id for kb in kbs})
         kb_names = [kb.name for kb in kbs]
 
         kbinfos = await settings.retriever.retrieval(

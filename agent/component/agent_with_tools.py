@@ -20,21 +20,21 @@ import os
 import re
 from copy import deepcopy
 from functools import partial
+from timeit import default_timer as timer
 from typing import Any
 
 import json_repair
-from timeit import default_timer as timer
 
-from agent.component.llm import LLMParam, LLM
-from agent.tools.base import LLMToolPluginCallSession, ToolParamBase, ToolBase, ToolMeta
+from agent.component.llm import LLM, LLMParam
+from agent.tools.base import LLMToolPluginCallSession, ToolBase, ToolMeta, ToolParamBase
 from api.db.db_models import db_connection
-from api.db.services.llm_service import LLMBundle
-from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+from api.db.services.llm_service import LLMBundle
 from api.db.services.mcp_server_service import MCPServerService
+from api.db.services.tenant_llm_service import TenantLLMService
 from common.connection_utils import timeout
-from core.prompts.generator import citation_prompt, kb_prompt, citation_plus, full_question, message_fit_in, structured_output_prompt
 from common.mcp_tool_call_conn import MCPToolCallSession, mcp_tool_metadata_to_openai_tool
+from core.prompts.generator import citation_plus, citation_prompt, full_question, kb_prompt, message_fit_in, structured_output_prompt
 
 
 class AgentParam(LLMParam, ToolParamBase):
@@ -118,12 +118,12 @@ class Agent(LLM, ToolBase):
             for tnm, meta in mcp["tools"].items():
                 self.tool_meta.append(mcp_tool_metadata_to_openai_tool(meta))
                 self.tools[tnm] = tool_call_session
-        
+
         # 预热 MCP 会话：等待所有会话初始化完成
         for session in self._mcp_sessions:
             if not session.wait_ready(timeout=20):
-                logging.warning(f"MCP session failed to initialize, some tools may not work properly")
-        
+                logging.warning("MCP session failed to initialize, some tools may not work properly")
+
         self.callback = partial(self._canvas.tool_use_callback, id)
         self.toolcall_session = LLMToolPluginCallSession(self.tools, self.callback)
         if self.tool_meta and self.chat_mdl is not None:

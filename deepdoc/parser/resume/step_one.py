@@ -12,7 +12,8 @@
 #
 
 import json
-from deepdoc.parser.resume.entities import degrees, regions, industries
+
+from deepdoc.parser.resume.entities import degrees, industries, regions
 
 FIELDS = [
 "address STRING",
@@ -80,7 +81,7 @@ def refactor(df):
     def loadjson(line):
         try:
             return json.loads(line)
-        except Exception as e:
+        except Exception:
             pass
         return {}
 

@@ -1,15 +1,15 @@
 import asyncio
 import json
 import time
+from collections.abc import AsyncGenerator
 from datetime import datetime
 
-from fastapi import Request, HTTPException
+from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
-from typing import AsyncGenerator
 
 from api.service.askdata_service.event.event_manager import event_manager
-
 from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+
 logger = get_askdata_logger()
 
 
@@ -34,10 +34,10 @@ async def event_generator(request: Request, event_id: str) -> AsyncGenerator[byt
     # 可以通过环境变量配置，默认 30 分钟
     import os
     INACTIVITY_TIMEOUT = float(os.environ.get('SSE_INACTIVITY_TIMEOUT', 1800.0))
-    
+
     # 心跳间隔（秒），定期发送以保持连接活跃
     HEARTBEAT_INTERVAL = float(os.environ.get('SSE_HEARTBEAT_INTERVAL', 15.0))
-    
+
     # 初始化最后活动时间和最后心跳时间
     last_activity_time = time.time()
     last_heartbeat_time = time.time()
@@ -79,13 +79,13 @@ async def event_generator(request: Request, event_id: str) -> AsyncGenerator[byt
                     # 如果数据不是有效的JSON或没有event_type，忽略即可
                     pass
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # 检查是否长时间无活动
                 current_time = time.time()
                 if current_time - last_activity_time > INACTIVITY_TIMEOUT:
                     logger.warning(f"Inactivity timeout ({INACTIVITY_TIMEOUT}s) for event_id {event_id}. Closing server-side connection.")
                     break  # 超时，退出循环
-                
+
                 # 定期发送心跳包以保持连接活跃
                 if current_time - last_heartbeat_time >= HEARTBEAT_INTERVAL:
                     yield b": heartbeat\n\n"

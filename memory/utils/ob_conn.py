@@ -19,15 +19,15 @@ import re
 import numpy as np
 from pydantic import BaseModel
 from pymysql.converters import escape_string
-from sqlalchemy import Column, String, Integer
+from sqlalchemy import Column, Integer, String
 from sqlalchemy.dialects.mysql import LONGTEXT
 
 from common.decorator import singleton
-from common.doc_store.doc_store_base import MatchExpr, OrderByExpr, FusionExpr, MatchTextExpr, MatchDenseExpr
+from common.doc_store.doc_store_base import FusionExpr, MatchDenseExpr, MatchExpr, MatchTextExpr, OrderByExpr
 from common.doc_store.ob_conn_base import OBConnectionBase, get_value_str, vector_search_template
 from common.float_utils import get_float
 from core.nlp import is_english
-from core.nlp.rag_tokenizer import tokenize, fine_grained_tokenize
+from core.nlp.rag_tokenizer import fine_grained_tokenize, tokenize
 from memory.utils.aggregation_utils import aggregate_by_field
 from memory.utils.highlight_utils import get_highlight_from_messages
 
@@ -100,10 +100,10 @@ class OBConnection(OBConnectionBase):
     def _get_vector_column_name_from_table(self, table_name: str) -> str | None:
         """Get the vector column name from the table (q_{size}_vec pattern)."""
         sql = f"""
-            SELECT COLUMN_NAME 
-            FROM INFORMATION_SCHEMA.COLUMNS 
-            WHERE TABLE_SCHEMA = '{self.db_name}' 
-              AND TABLE_NAME = '{table_name}' 
+            SELECT COLUMN_NAME
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = '{self.db_name}'
+              AND TABLE_NAME = '{table_name}'
               AND COLUMN_NAME REGEXP '^q_[0-9]+_vec$'
             LIMIT 1
         """
@@ -285,7 +285,7 @@ class OBConnection(OBConnectionBase):
                 vector_similarity_weight = get_float(weights.split(",")[1])
 
         if fulltext_query:
-            fulltext_search_filter = f"({' OR '.join([expr for expr in fulltext_search_expr.values()])})"
+            fulltext_search_filter = f"({' OR '.join(list(fulltext_search_expr.values()))})"
             fulltext_search_score_expr = f"({' + '.join(f'{expr} * {fulltext_search_weight.get(col, 0)}' for col, expr in fulltext_search_expr.items())})"
 
         if vector_data:
@@ -499,7 +499,7 @@ class OBConnection(OBConnectionBase):
         try:
             self.client.upsert(index_name, docs)
         except Exception as e:
-            self.logger.error(f"OBConnection.insert error: {str(e)}")
+            self.logger.error(f"OBConnection.insert error: {e!s}")
             res.append(str(e))
         return res
 
@@ -541,7 +541,7 @@ class OBConnection(OBConnectionBase):
             self.client.perform_raw_text_sql(update_sql)
             return True
         except Exception as e:
-            self.logger.error(f"OBConnection.update error: {str(e)}")
+            self.logger.error(f"OBConnection.update error: {e!s}")
         return False
 
     def delete(self, condition: dict, index_name: str, memory_id: str) -> int:

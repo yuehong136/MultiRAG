@@ -1,20 +1,21 @@
-from fastapi import APIRouter, Depends, Body
-from api.apps import manager
+from fastapi import APIRouter, Body, Depends
+
 # from api.db.database import get_db
 from sqlalchemy.orm import Session
 
+from agent.plugin import GlobalPluginManager
+from api.apps import manager
 from api.db.db_models import get_db
 from api.service.plugin_service.plugin_service import PluginService
 from api.service.script_scheduler_service.script_scheduler_service import ScriptSchedulerService
 from api.utils.api_utils import get_json_result
-from agent.plugin import GlobalPluginManager
 
 router = APIRouter()
 
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel
-from typing import Any, Optional, Dict
 
 
 class StatusEnum(str, Enum):
@@ -24,25 +25,25 @@ class StatusEnum(str, Enum):
 
 class ResponseSchema(BaseModel):
     status: StatusEnum = StatusEnum.SUCCESS
-    message: Optional[str] = None
-    data: Optional[Any] = None
+    message: str | None = None
+    data: Any | None = None
 
 
 class RunTemporaryScriptRequest(BaseModel):
     script: str
-    args: Dict[str, Any]
+    args: dict[str, Any]
 
 
 class RunPluginScriptRequest(BaseModel):
     plugin_id: str
     script: str
-    args: Dict[str, Any]
+    args: dict[str, Any]
 
 
 class InstallDepRequest(BaseModel):
     plugin_id: str
     package_name: str
-    package_version: Optional[str] = None
+    package_version: str | None = None
 
 
 class UninstallDepRequest(BaseModel):

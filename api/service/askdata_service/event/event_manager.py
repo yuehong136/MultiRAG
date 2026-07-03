@@ -1,7 +1,9 @@
-from typing import Dict, List, Callable, Any
 import asyncio
-from datetime import datetime
 import json
+from collections.abc import Callable
+from datetime import datetime
+from typing import Any
+
 import numpy as np
 
 
@@ -27,7 +29,7 @@ class EventManager:
 
     def __init__(self):
         # 存储事件ID和对应的订阅者列表
-        self._subscribers: Dict[str, List[Callable]] = {}
+        self._subscribers: dict[str, list[Callable]] = {}
         # 队列锁，防止并发问题
         self._lock = asyncio.Lock()
 
@@ -96,7 +98,7 @@ class EventManager:
                     return_exceptions=True
                 )
 
-    def get_active_events(self) -> List[str]:
+    def get_active_events(self) -> list[str]:
         """
         获取当前所有活跃的事件ID
 

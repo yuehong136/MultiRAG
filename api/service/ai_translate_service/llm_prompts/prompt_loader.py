@@ -18,7 +18,7 @@ class PromptTemplateLoader:
         :return: 加载的模板字符串
         """
         template_path = os.path.join(self.template_dir, template_name)
-        with open(template_path, 'r', encoding='utf-8') as file:
+        with open(template_path, encoding='utf-8') as file:
             return file.read()
 
     def fill_template(self, template_name: str, data: Any | None = None, **kwargs) -> str:

@@ -14,10 +14,9 @@
 #  limitations under the License.
 #
 
+from .github import GithubOAuthClient
 from .oauth import OAuthClient
 from .oidc import OIDCClient
-from .github import GithubOAuthClient
-
 
 CLIENT_TYPES = {
     "oauth2": OAuthClient,

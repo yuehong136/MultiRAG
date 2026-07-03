@@ -1,9 +1,9 @@
 import json
-from typing import List, Dict, Any
+from typing import Any
 
 
-def filter_dimension_values_by_segmented_words(dimension_values: List[Dict[str, Any]], segmented_words: List[str]) -> \
-List[Dict[str, Any]]:
+def filter_dimension_values_by_segmented_words(dimension_values: list[dict[str, Any]], segmented_words: list[str]) -> \
+list[dict[str, Any]]:
     """
     根据分词列表对维度值进行模糊匹配、评分和排序
 
@@ -89,12 +89,12 @@ List[Dict[str, Any]]:
 
 
 def process_data_models(
-        models: List[Dict[str, Any]],
-        user_semantic_permissions: Dict[str, Any],
-        dimensions: List[Dict[str, Any]],
-        metrics: List[Dict[str, Any]],
-        model_relations: List[Dict[str, Any]]
-) -> List[Dict[str, Any]]:
+        models: list[dict[str, Any]],
+        user_semantic_permissions: dict[str, Any],
+        dimensions: list[dict[str, Any]],
+        metrics: list[dict[str, Any]],
+        model_relations: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     """
     处理数据模型，只保留被维度、指标、关联关系和行级权限引用的字段
     """
@@ -271,7 +271,7 @@ def process_business_datasets(
         metrics,
         dimension_values,
         segmented_words
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     business_datasets_output = []
     for dataset_detail in dataset_details:
         business_dataset = {}
@@ -347,7 +347,7 @@ def process_business_datasets(
     return business_datasets_output
 
 
-def process_relationships(model_relations) -> List[Dict[str, Any]]:
+def process_relationships(model_relations) -> list[dict[str, Any]]:
     relationships = []
     for relation in model_relations:
         relationship = {}
@@ -362,7 +362,7 @@ def process_relationships(model_relations) -> List[Dict[str, Any]]:
     return relationships
 
 
-def process_business_terms(business_term_rows) -> List[Dict[str, Any]]:
+def process_business_terms(business_term_rows) -> list[dict[str, Any]]:
     business_terms = []
     for term in business_term_rows:
         business_term = {}
@@ -373,8 +373,8 @@ def process_business_terms(business_term_rows) -> List[Dict[str, Any]]:
     return business_terms
 
 
-def process_semantic_layer(semantic_layer: Dict[str, Any], user_semantic_permissions: Dict[str, Any],
-                           segmented_words: List[str]) -> Dict[str, Any]:
+def process_semantic_layer(semantic_layer: dict[str, Any], user_semantic_permissions: dict[str, Any],
+                           segmented_words: list[str]) -> dict[str, Any]:
     dataset_details = semantic_layer.get("dataset_details")
     dimensions = semantic_layer.get("dimensions")
     dimension_values = semantic_layer.get("dimension_values")

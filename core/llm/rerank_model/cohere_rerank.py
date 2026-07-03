@@ -1,8 +1,8 @@
 import numpy as np
 
 from common.log_utils import log_exception
-from core.llm.rerank_model.base import Base
 from common.token_utils import num_tokens_from_string
+from core.llm.rerank_model.base import Base
 
 
 class CoHereRerank(Base):

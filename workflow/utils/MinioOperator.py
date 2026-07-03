@@ -1,7 +1,9 @@
+import io
+
 from minio import Minio
 from minio.error import S3Error
+
 from common import settings
-import io
 
 
 class MinioOperator:
@@ -58,7 +60,7 @@ class MinioOperator:
             return bucket_name, object_name
         except Exception as e:
             print(f"上传文件时发生错误: {e}")
-            raise type(e)(f"上传文件到MinIO时发生错误") from e
+            raise type(e)("上传文件到MinIO时发生错误") from e
 
     def download_file(self, bucket_name, object_name, file_path):
         try:

@@ -1,6 +1,7 @@
 import streamlit as st
-from core.agent.agent import Agent
+
 from configs import VERSION
+from core.agent.agent import Agent
 
 # from my_agent import MyAgent  # 假设已经实现了一个简单的 Agent 类
 # 定义 Agent 类（示例）

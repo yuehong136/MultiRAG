@@ -8,19 +8,19 @@ import time
 from uuid import uuid4
 
 import tiktoken
-from sqlalchemy import select, func, asc, or_, and_
+from sqlalchemy import and_, asc, func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import desc as sa_desc
 
-from agent.canvas import Canvas
 from agent.a2ui import validate_client_a2ui_messages
-from api.db import TenantPermission, CanvasCategory
+from agent.canvas import Canvas
+from api.db import CanvasCategory, TenantPermission
 from api.db.db_models import CanvasTemplate, User, UserCanvas, UserCanvasVersion
-from api.db.services.common_service import CommonService
 from api.db.services.api_service import API4ConversationService
+from api.db.services.common_service import CommonService
 from api.db.services.user_canvas_version import UserCanvasVersionService
-from common.misc_utils import get_uuid
 from api.utils.api_utils import get_data_openai
+from common.misc_utils import get_uuid
 
 
 class CanvasTemplateService(CommonService):
@@ -98,7 +98,7 @@ class UserCanvasService(CommonService):
                 cls.model.user_id == user_id
             )
         ).order_by(cls.model.create_time.asc())
-        
+
         # maybe cause slow query by deep paginate, optimize later
         offset, limit = 0, 50
         res = []
@@ -155,11 +155,11 @@ class UserCanvasService(CommonService):
     def get_basic_info_by_canvas_ids(cls, db: Session, canvas_ids: list[str]):
         """
         Get basic info for multiple canvases by their IDs.
-        
+
         Args:
             db: Database session
             canvas_ids: List of canvas IDs
-            
+
         Returns:
             List of canvas info dicts with id, avatar, user_id, title, permission, canvas_category
         """
@@ -249,7 +249,7 @@ class UserCanvasService(CommonService):
                 )
                 .where(
                     UserCanvasVersion.user_canvas_id.in_(canvas_ids),
-                    UserCanvasVersion.release == True,  # noqa: E712
+                    UserCanvasVersion.release == True,
                 )
                 .group_by(UserCanvasVersion.user_canvas_id)
             )
@@ -490,7 +490,7 @@ async def completion_openai(
 
         except Exception as e:
             logging.exception(e)
-            err_text = f"**ERROR**: {str(e)}"
+            err_text = f"**ERROR**: {e!s}"
             yield "data: " + json.dumps(
                 get_data_openai(
                     id=session_id or str(uuid4()),
@@ -548,7 +548,7 @@ async def completion_openai(
             yield openai_data
         except Exception as e:
             logging.exception(e)
-            err_text = f"**ERROR**: {str(e)}"
+            err_text = f"**ERROR**: {e!s}"
             yield get_data_openai(
                 id=session_id or str(uuid4()),
                 model=agent_id,

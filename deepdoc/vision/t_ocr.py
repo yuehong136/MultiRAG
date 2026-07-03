@@ -18,6 +18,7 @@ import asyncio
 import logging
 import os
 import sys
+
 sys.path.insert(
     0,
     os.path.abspath(
@@ -27,11 +28,12 @@ sys.path.insert(
             '../../')))
 
 import argparse
+
 import numpy as np
 
 from common.misc_utils import thread_pool_exec
-from deepdoc.vision.seeit import draw_box
 from deepdoc.vision import OCR, init_in_out
+from deepdoc.vision.seeit import draw_box
 
 # os.environ['CUDA_VISIBLE_DEVICES'] = '0,2' #2 gpus, uncontinuous
 os.environ['CUDA_VISIBLE_DEVICES'] = '0' #1 gpu
@@ -47,7 +49,7 @@ def main(args):
     images, outputs = init_in_out(args)
 
     def __ocr(i, id, img):
-        print("Task {} start".format(i))
+        print(f"Task {i} start")
         bxs = ocr(np.array(img), id)
         bxs = [(line[0], line[1][0]) for line in bxs]
         bxs = [{
@@ -60,7 +62,7 @@ def main(args):
         with open(outputs[i] + ".txt", "w+", encoding='utf-8') as f:
             f.write("\n".join([o["text"] for o in bxs]))
 
-        print("Task {} done".format(i))
+        print(f"Task {i} done")
 
     async def __ocr_thread(i, id, img, limiter = None):
         if limiter:
@@ -81,7 +83,7 @@ def main(args):
         try:
             await asyncio.gather(*tasks, return_exceptions=False)
         except Exception as e:
-            logging.error("OCR tasks failed: {}".format(e))
+            logging.error(f"OCR tasks failed: {e}")
             for t in tasks:
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)

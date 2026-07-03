@@ -19,7 +19,6 @@ import textwrap
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import Enum
-from typing import Dict, Optional
 
 import requests
 from pydantic import BaseModel
@@ -60,10 +59,10 @@ class ExecutionResult(BaseModel):
     stdout: str
     stderr: str
     exit_code: int
-    detail: Optional[str] = None
-    resource_limit_type: Optional[ResourceLimitType] = None
-    unauthorized_access_type: Optional[UnauthorizedAccessType] = None
-    runtime_error_type: Optional[RuntimeErrorType] = None
+    detail: str | None = None
+    resource_limit_type: ResourceLimitType | None = None
+    unauthorized_access_type: UnauthorizedAccessType | None = None
+    runtime_error_type: RuntimeErrorType | None = None
 
 
 class TestResult(BaseModel):
@@ -71,9 +70,9 @@ class TestResult(BaseModel):
     passed: bool
     duration: float
     expected_failure: bool = False
-    result: Optional[ExecutionResult] = None
-    error: Optional[str] = None
-    validation_error: Optional[str] = None
+    result: ExecutionResult | None = None
+    error: str | None = None
+    validation_error: str | None = None
 
 
 def encode_code(code: str) -> str:
@@ -147,7 +146,7 @@ def validate_test_result(name: str, expect_fail: bool, test_result: TestResult):
             test_result.validation_error = f"Unexpected failure (status={test_result.result.status})"
 
 
-def get_test_cases() -> Dict[str, dict]:
+def get_test_cases() -> dict[str, dict]:
     """Return test cases (code, whether expected to fail)"""
     return {
         "1 Infinite loop: Should be forcibly terminated": {
@@ -367,7 +366,7 @@ def main():
     }
 
 
-def print_test_report(results: Dict[str, TestResult]):
+def print_test_report(results: dict[str, TestResult]):
     print("\n=== 🔍 Test Report ===")
 
     max_name_len = max(len(name) for name in results)

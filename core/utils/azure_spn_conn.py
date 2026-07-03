@@ -1,10 +1,12 @@
 import logging
 import os
 import time
-from common.decorator import singleton
-from common import settings
-from azure.identity import ClientSecretCredential, AzureAuthorityHosts
+
+from azure.identity import AzureAuthorityHosts, ClientSecretCredential
 from azure.storage.filedatalake import FileSystemClient
+
+from common import settings
+from common.decorator import singleton
 
 _CLOUD_AUTHORITY_MAP = {
     "public": AzureAuthorityHosts.AZURE_PUBLIC_CLOUD,

@@ -1,7 +1,7 @@
-from typing import Dict, Any, List
+from typing import Any
 
 
-def extract_manually_adjusted_field_ids(table_config: Dict[str, Any]) -> List[str]:
+def extract_manually_adjusted_field_ids(table_config: dict[str, Any]) -> list[str]:
     """
     从 table_config 中提取用户手动调整的语义字段 ID
 

@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -13,6 +12,7 @@ import uuid
 from html import escape
 from typing import Any
 
+from box_sdk_gen import BoxOAuth, GetAuthorizeUrlOptions, OAuthConfig
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import HTMLResponse
 from google_auth_oauthlib.flow import Flow
@@ -21,16 +21,14 @@ from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.db import InputType
-from common.constants import TaskStatus
 from api.db.db_models import get_db
-from api.db.services.connector_service import ConnectorService, Connector2KbService, SyncLogsService
-from api.utils.api_utils import get_json_result, get_data_error_result, server_error_response
+from api.db.services.connector_service import Connector2KbService, ConnectorService, SyncLogsService
+from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
+from common.constants import RetCode, TaskStatus
+from common.data_source.config import BOX_WEB_OAUTH_REDIRECT_URI, GMAIL_WEB_OAUTH_REDIRECT_URI, GOOGLE_DRIVE_WEB_OAUTH_REDIRECT_URI, DocumentSource
+from common.data_source.google_util.constant import GOOGLE_SCOPES, WEB_OAUTH_POPUP_TEMPLATE
 from common.misc_utils import get_uuid
-from common.constants import RetCode
-from common.data_source.config import GOOGLE_DRIVE_WEB_OAUTH_REDIRECT_URI, GMAIL_WEB_OAUTH_REDIRECT_URI, BOX_WEB_OAUTH_REDIRECT_URI, DocumentSource
-from common.data_source.google_util.constant import WEB_OAUTH_POPUP_TEMPLATE, GOOGLE_SCOPES
 from core.utils.redis_conn import REDIS_CONN
-from box_sdk_gen import BoxOAuth, OAuthConfig, GetAuthorizeUrlOptions
 
 router = APIRouter()
 

@@ -16,9 +16,10 @@
 
 import logging
 import re
+from collections import Counter
+from io import BytesIO
 
 import pandas as pd
-from io import BytesIO
 from docx import Document
 from docx.image.exceptions import (
     InvalidImageStreamError,
@@ -26,9 +27,8 @@ from docx.image.exceptions import (
     UnrecognizedImageError,
 )
 
-from core.utils.lazy_image import LazyImage
-from collections import Counter
 from core.nlp import rag_tokenizer
+from core.utils.lazy_image import LazyImage
 
 
 class RAGFlowDocxParser:

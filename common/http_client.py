@@ -230,13 +230,13 @@ def sync_request(
 
 
 __all__ = [
-    "async_request",
-    "sync_request",
-    "DEFAULT_TIMEOUT",
+    "DEFAULT_BACKOFF_FACTOR",
     "DEFAULT_FOLLOW_REDIRECTS",
     "DEFAULT_MAX_REDIRECTS",
     "DEFAULT_MAX_RETRIES",
-    "DEFAULT_BACKOFF_FACTOR",
     "DEFAULT_PROXY",
+    "DEFAULT_TIMEOUT",
     "DEFAULT_USER_AGENT",
+    "async_request",
+    "sync_request",
 ]

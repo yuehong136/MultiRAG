@@ -1,12 +1,12 @@
-import opendal
 import logging
-import pymysql
 import re
 from urllib.parse import quote_plus
 
+import opendal
+import pymysql
+
 from common.config_utils import get_base_config
 from common.decorator import singleton
-
 
 CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS `{}` (
@@ -112,7 +112,7 @@ class OpenDALStorage:
             conn.close()
             logging.info(f"Database configuration initialized with max_allowed_packet={max_packet}")
         except Exception as e:
-            logging.error(f"Failed to initialize database configuration: {str(e)}")
+            logging.error(f"Failed to initialize database configuration: {e!s}")
             raise
 
     def init_opendal_mysql_table(self):

@@ -1,11 +1,11 @@
-from typing import List, Dict, Any
+from typing import Any
 
 
 def append_join_clauses(
         from_sentence: str,
-        relationships: List[Dict[str, Any]],
-        model_table_alias_mapping_list: List[Dict[str, Any]],
-        existing_tables: List[str]
+        relationships: list[dict[str, Any]],
+        model_table_alias_mapping_list: list[dict[str, Any]],
+        existing_tables: list[str]
 ) -> str:
     """
     根据关系信息追加 JOIN 子句到 FROM 语句

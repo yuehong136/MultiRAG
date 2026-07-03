@@ -1,27 +1,17 @@
 import fnmatch
 import itertools
 from collections import deque
-from collections.abc import Iterable
-from collections.abc import Iterator
-from datetime import datetime
-from datetime import timezone
-from typing import Any
-from typing import TypeVar
+from collections.abc import Iterable, Iterator
+from datetime import UTC, datetime
+from typing import Any, TypeVar
+
 import gitlab
 from gitlab.v4.objects import Project
 
-from common.data_source.config import DocumentSource, INDEX_BATCH_SIZE
-from common.data_source.exceptions import ConnectorMissingCredentialError
-from common.data_source.exceptions import ConnectorValidationError
-from common.data_source.exceptions import CredentialExpiredError
-from common.data_source.exceptions import InsufficientPermissionsError
-from common.data_source.exceptions import UnexpectedValidationError
-from common.data_source.interfaces import GenerateDocumentsOutput
-from common.data_source.interfaces import LoadConnector
-from common.data_source.interfaces import PollConnector
-from common.data_source.interfaces import SecondsSinceUnixEpoch
-from common.data_source.models import BasicExpertInfo
-from common.data_source.models import Document
+from common.data_source.config import INDEX_BATCH_SIZE, DocumentSource
+from common.data_source.exceptions import ConnectorMissingCredentialError, ConnectorValidationError, CredentialExpiredError, InsufficientPermissionsError, UnexpectedValidationError
+from common.data_source.interfaces import GenerateDocumentsOutput, LoadConnector, PollConnector, SecondsSinceUnixEpoch
+from common.data_source.models import BasicExpertInfo, Document
 from common.data_source.utils import get_file_ext
 
 T = TypeVar("T")
@@ -63,7 +53,7 @@ def _convert_merge_request_to_document(mr: Any) -> Document:
         # updated_at is UTC time but is timezone unaware, explicitly add UTC
         # as there is logic in indexing to prevent wrong timestamped docs
         # due to local time discrepancies with UTC
-        doc_updated_at=mr.updated_at.replace(tzinfo=timezone.utc),
+        doc_updated_at=mr.updated_at.replace(tzinfo=UTC),
         size_bytes=len(mr_text.encode("utf-8")),
         primary_owners=[get_author(mr.author)],
         metadata={"state": mr.state, "type": "MergeRequest", "web_url": mr.web_url},
@@ -82,7 +72,7 @@ def _convert_issue_to_document(issue: Any) -> Document:
         # updated_at is UTC time but is timezone unaware, explicitly add UTC
         # as there is logic in indexing to prevent wrong timestamped docs
         # due to local time discrepancies with UTC
-        doc_updated_at=issue.updated_at.replace(tzinfo=timezone.utc),
+        doc_updated_at=issue.updated_at.replace(tzinfo=UTC),
         size_bytes=len(issue_text.encode("utf-8")),
         primary_owners=[get_author(issue.author)],
         metadata={
@@ -97,7 +87,7 @@ def _convert_issue_to_document(issue: Any) -> Document:
 def _convert_code_to_document(
     project: Project, file: Any, url: str, projectName: str, projectOwner: str
 ) -> Document:
-    
+
     # Dynamically get the default branch from the project object
     default_branch = project.default_branch
 
@@ -125,9 +115,9 @@ def _convert_code_to_document(
             if isinstance(committed_date, str):
                 last_commit_at = datetime.strptime(
                     committed_date, "%Y-%m-%dT%H:%M:%S.%f%z"
-                ).astimezone(timezone.utc)
+                ).astimezone(UTC)
             elif isinstance(committed_date, datetime):
-                last_commit_at = committed_date.astimezone(timezone.utc)
+                last_commit_at = committed_date.astimezone(UTC)
     except Exception:
         last_commit_at = None
 
@@ -139,7 +129,7 @@ def _convert_code_to_document(
         source=DocumentSource.GITLAB,
         semantic_identifier=file.get("name"),
         extension=get_file_ext(file.get("name")),
-        doc_updated_at=last_commit_at or datetime.now(tz=timezone.utc),
+        doc_updated_at=last_commit_at or datetime.now(tz=UTC),
         size_bytes=len(file_content_bytes) if file_content_bytes is not None else 0,
         primary_owners=[],  # Add owners if needed
         metadata={
@@ -224,8 +214,8 @@ class GitlabConnector(LoadConnector, PollConnector):
             f"{self.project_owner}/{self.project_name}"
         )
 
-        start_utc = start.astimezone(timezone.utc) if start else None
-        end_utc = end.astimezone(timezone.utc) if end else None
+        start_utc = start.astimezone(UTC) if start else None
+        end_utc = end.astimezone(UTC) if end else None
 
         # Fetch code files
         if self.include_code_files:
@@ -309,8 +299,8 @@ class GitlabConnector(LoadConnector, PollConnector):
     def poll_source(
         self, start: SecondsSinceUnixEpoch, end: SecondsSinceUnixEpoch
     ) -> GenerateDocumentsOutput:
-        start_datetime = datetime.fromtimestamp(start, tz=timezone.utc)
-        end_datetime = datetime.fromtimestamp(end, tz=timezone.utc)
+        start_datetime = datetime.fromtimestamp(start, tz=UTC)
+        end_datetime = datetime.fromtimestamp(end, tz=UTC)
         return self._fetch_from_gitlab(start_datetime, end_datetime)
 
 

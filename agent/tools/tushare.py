@@ -14,10 +14,12 @@
 #  limitations under the License.
 #
 import json
-from abc import ABC
-import pandas as pd
 import time
+from abc import ABC
+
+import pandas as pd
 import requests
+
 from agent.component.base import ComponentBase, ComponentParamBase
 
 

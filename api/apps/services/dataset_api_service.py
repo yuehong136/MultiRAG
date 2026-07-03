@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -21,17 +20,17 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from common import settings
-from common.constants import FileSource, StatusEnum, PAGERANK_FLD
 from api.db.db_models import File
+from api.db.services.connector_service import Connector2KbService
 from api.db.services.document_service import DocumentService, queue_raptor_o_graphrag_tasks
-from api.db.services.task_service import GRAPH_RAPTOR_FAKE_DOC_ID, TaskService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.connector_service import Connector2KbService
+from api.db.services.task_service import GRAPH_RAPTOR_FAKE_DOC_ID, TaskService
 from api.db.services.user_service import TenantService, UserService
 from api.utils.api_utils import deep_merge, flatten_parent_child_config, get_parser_config, remap_dictionary_keys, verify_embedding_availability
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
+from common import settings
+from common.constants import PAGERANK_FLD, FileSource, StatusEnum
 from core.nlp import search
 
 logger = logging.getLogger(__name__)
@@ -290,7 +289,7 @@ def update_dataset(db: Session, tenant_id: str, dataset_id: str, req: dict) -> t
 
     # 绑定 connectors（不写入 KB 表；仅在显式传入时操作）
     if connectors_provided:
-        errors = Connector2KbService.link_connectors(db, kb.id, [c for c in connectors], tenant_id)
+        errors = Connector2KbService.link_connectors(db, kb.id, list(connectors), tenant_id)
         if errors:
             logger.error("Link KB connectors errors: %s", errors)
 

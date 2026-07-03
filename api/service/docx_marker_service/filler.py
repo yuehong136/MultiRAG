@@ -1,23 +1,22 @@
-# coding=utf-8
 """
 根据 path 定位 docx 元素并填充数据
 """
 
-import re
 import copy
-from pathlib import Path
+import re
+
 from docx import Document
 from docx.document import Document as DocumentType
-from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 
 def parse_insert_path(path: str) -> tuple[str, str | None]:
     """
     解析插入路径，分离基础路径和插入位置
     """
-    if '::' in path:
-        base_path, position = path.rsplit('::', 1)
+    if "::" in path:
+        base_path, position = path.rsplit("::", 1)
         return base_path, position
     return path, None
 
@@ -26,7 +25,7 @@ def parse_path(path: str) -> list[tuple[str, int]]:
     """
     解析 path 字符串为 (类型, 索引) 列表
     """
-    pattern = r'(\w+)\[(\d+)\]'
+    pattern = r"(\w+)\[(\d+)\]"
     matches = re.findall(pattern, path)
     return [(name, int(idx)) for name, idx in matches]
 
@@ -41,45 +40,45 @@ def get_element_by_path(doc: "DocumentType", path: str):
 
     # 获取 body 中的元素（段落或表格）
     body = doc.element.body
-    
+
     # 递归查找逻辑，与 parser.py 保持一致
     def find_in_body(target_idx):
         current_idx = 0
-        
+
         def search(container):
             nonlocal current_idx
             for child in container:
-                tag = child.tag.split('}')[-1]
-                if tag in ('p', 'tbl'):
+                tag = child.tag.split("}")[-1]
+                if tag in ("p", "tbl"):
                     if current_idx == target_idx:
                         return child
                     current_idx += 1
-                elif tag == 'sdt':
-                    sdt_content = child.find(qn('w:sdtContent'))
+                elif tag == "sdt":
+                    sdt_content = child.find(qn("w:sdtContent"))
                     if sdt_content is not None:
                         res = search(sdt_content)
                         if res is not None:
                             return res
             return None
-        
+
         return search(body)
 
     # body[n] - 找到第 n 个块级元素
     body_idx = parts[0][1]
     child_element = find_in_body(body_idx)
-    
+
     if child_element is None:
         return None
 
     # 转换 XML 元素为 python-docx 对象
     current_element = None
-    tag = child_element.tag.split('}')[-1]
-    if tag == 'p':
+    tag = child_element.tag.split("}")[-1]
+    if tag == "p":
         for p in doc.paragraphs:
             if p._element == child_element:
                 current_element = p
                 break
-    elif tag == 'tbl':
+    elif tag == "tbl":
         for t in doc.tables:
             if t._element == child_element:
                 current_element = t
@@ -94,8 +93,8 @@ def get_element_by_path(doc: "DocumentType", path: str):
 
     # 处理后续路径
     for i, (part_type, part_idx) in enumerate(parts[1:], 1):
-        if part_type == 'run':
-            if hasattr(current_element, 'runs'):
+        if part_type == "run":
+            if hasattr(current_element, "runs"):
                 if part_idx < len(current_element.runs):
                     current_element = current_element.runs[part_idx]
                 else:
@@ -103,8 +102,8 @@ def get_element_by_path(doc: "DocumentType", path: str):
             else:
                 return None
 
-        elif part_type == 'row':
-            if hasattr(current_element, 'rows'):
+        elif part_type == "row":
+            if hasattr(current_element, "rows"):
                 rows = list(current_element.rows)
                 if part_idx < len(rows):
                     current_element = rows[part_idx]
@@ -113,8 +112,8 @@ def get_element_by_path(doc: "DocumentType", path: str):
             else:
                 return None
 
-        elif part_type == 'cell':
-            if hasattr(current_element, 'cells'):
+        elif part_type == "cell":
+            if hasattr(current_element, "cells"):
                 cells = list(current_element.cells)
                 if part_idx < len(cells):
                     current_element = cells[part_idx]
@@ -123,8 +122,8 @@ def get_element_by_path(doc: "DocumentType", path: str):
             else:
                 return None
 
-        elif part_type == 'p':
-            if hasattr(current_element, 'paragraphs'):
+        elif part_type == "p":
+            if hasattr(current_element, "paragraphs"):
                 if part_idx < len(current_element.paragraphs):
                     current_element = current_element.paragraphs[part_idx]
                 else:
@@ -167,11 +166,11 @@ def insert_run_at(paragraph, ref_run_index: int, position: str, text: str):
     new_run = paragraph.add_run(text)
     run_element = new_run._element
     runs = paragraph.runs
-    if position == 'before':
+    if position == "before":
         if ref_run_index < len(runs) - 1:
             ref_element = runs[ref_run_index]._element
             ref_element.addprevious(run_element)
-    elif position == 'after':
+    elif position == "after":
         if ref_run_index < len(runs) - 1:
             ref_element = runs[ref_run_index]._element
             ref_element.addnext(run_element)
@@ -182,15 +181,15 @@ def insert_paragraph_at(cell, ref_para_index: int, position: str, text: str):
     para_element = new_para._element
     paragraphs = cell.paragraphs
     num_paras = len(paragraphs)
-    if position == 'prepend':
+    if position == "prepend":
         if num_paras > 1:
             first_element = paragraphs[0]._element
             first_element.addprevious(para_element)
-    elif position == 'before':
+    elif position == "before":
         if ref_para_index < num_paras - 1:
             ref_element = paragraphs[ref_para_index]._element
             ref_element.addprevious(para_element)
-    elif position == 'after':
+    elif position == "after":
         if ref_para_index < num_paras - 1:
             ref_element = paragraphs[ref_para_index]._element
             ref_element.addnext(para_element)
@@ -201,7 +200,7 @@ def get_parent_element_by_path(doc: "DocumentType", path: str):
     if len(parts) < 2:
         return None, None, None
     last_part = parts[-1]
-    parent_path = '/'.join(f"{name}[{idx}]" for name, idx in parts[:-1])
+    parent_path = "/".join(f"{name}[{idx}]" for name, idx in parts[:-1])
     parent_element = get_element_by_path(doc, parent_path)
     if parent_element is None:
         return None, None, None
@@ -211,15 +210,16 @@ def get_parent_element_by_path(doc: "DocumentType", path: str):
 def fill_document(doc_path: str, placeholders: list[dict], data: dict, output_path: str) -> str:
     from docx.table import _Cell
     from docx.text.paragraph import Paragraph
+
     doc = Document(doc_path)
-    sorted_placeholders = sorted(placeholders, key=lambda p: p['path'], reverse=True)
+    sorted_placeholders = sorted(placeholders, key=lambda p: p["path"], reverse=True)
 
     for placeholder in sorted_placeholders:
-        placeholder_id = placeholder.get('field_key') or placeholder.get('id')
+        placeholder_id = placeholder.get("field_key") or placeholder.get("id")
         if not placeholder_id or placeholder_id not in data:
             continue
         value = data[placeholder_id]
-        full_path = placeholder['path']
+        full_path = placeholder["path"]
         base_path, insert_position = parse_insert_path(full_path)
 
         if insert_position is None:
@@ -227,16 +227,17 @@ def fill_document(doc_path: str, placeholders: list[dict], data: dict, output_pa
             if element:
                 fill_element(element, str(value))
         else:
-            if insert_position in ('prepend', 'append'):
+            if insert_position in ("prepend", "append"):
                 container = get_element_by_path(doc, base_path)
                 if container and isinstance(container, _Cell):
                     insert_paragraph_at(container, 0, insert_position, str(value))
             else:
                 parent, elem_type, elem_index = get_parent_element_by_path(doc, base_path)
-                if parent is None: continue
-                if elem_type == 'run' and isinstance(parent, Paragraph):
+                if parent is None:
+                    continue
+                if elem_type == "run" and isinstance(parent, Paragraph):
                     insert_run_at(parent, elem_index, insert_position, str(value))
-                elif elem_type == 'p' and isinstance(parent, _Cell):
+                elif elem_type == "p" and isinstance(parent, _Cell):
                     insert_paragraph_at(parent, elem_index, insert_position, str(value))
 
     doc.save(output_path)
@@ -265,13 +266,13 @@ def get_table_by_path(doc: "DocumentType", path: str):
         def search(container):
             nonlocal current_idx
             for child in container:
-                tag = child.tag.split('}')[-1]
-                if tag in ('p', 'tbl'):
+                tag = child.tag.split("}")[-1]
+                if tag in ("p", "tbl"):
                     if current_idx == target_idx:
                         return child
                     current_idx += 1
-                elif tag == 'sdt':
-                    sdt_content = child.find(qn('w:sdtContent'))
+                elif tag == "sdt":
+                    sdt_content = child.find(qn("w:sdtContent"))
                     if sdt_content is not None:
                         res = search(sdt_content)
                         if res is not None:
@@ -284,8 +285,8 @@ def get_table_by_path(doc: "DocumentType", path: str):
     if child_element is None:
         return None, None
 
-    tag = child_element.tag.split('}')[-1]
-    if tag != 'tbl':
+    tag = child_element.tag.split("}")[-1]
+    if tag != "tbl":
         return None, None
 
     # 找到对应的 python-docx Table 对象
@@ -306,7 +307,7 @@ def copy_row(table, source_row_idx: int, category_columns: list[int] | None = No
     - category_columns: 分类列索引列表，这些列在新行中需要设置为纵向合并的延续
     """
     # 获取所有 tr 元素（直接操作 XML，避免 python-docx 的合并单元格解析问题）
-    tr_elements = table._tbl.findall(qn('w:tr'))
+    tr_elements = table._tbl.findall(qn("w:tr"))
     if source_row_idx >= len(tr_elements):
         return
 
@@ -319,8 +320,8 @@ def copy_row(table, source_row_idx: int, category_columns: list[int] | None = No
     # 如果有分类列，需要处理纵向合并
     if category_columns:
         # 获取源行和新行中的所有单元格
-        source_tc_elements = source_tr.findall(qn('w:tc'))
-        new_tc_elements = new_tr.findall(qn('w:tc'))
+        source_tc_elements = source_tr.findall(qn("w:tc"))
+        new_tc_elements = new_tr.findall(qn("w:tc"))
 
         for col_idx in category_columns:
             if col_idx < len(source_tc_elements) and col_idx < len(new_tc_elements):
@@ -328,10 +329,10 @@ def copy_row(table, source_row_idx: int, category_columns: list[int] | None = No
                 new_tc = new_tc_elements[col_idx]
 
                 # 检查源单元格是否已经有 vMerge 属性
-                source_tcPr = source_tc.find(qn('w:tcPr'))
+                source_tcPr = source_tc.find(qn("w:tcPr"))
                 has_vmerge = False
                 if source_tcPr is not None:
-                    vMerge = source_tcPr.find(qn('w:vMerge'))
+                    vMerge = source_tcPr.find(qn("w:vMerge"))
                     if vMerge is not None:
                         has_vmerge = True
 
@@ -350,21 +351,21 @@ def set_cell_vmerge_continue(tc) -> None:
     - 合并区域的后续单元格: <w:vMerge/> (没有 val 属性，表示继续合并)
     """
     # 获取或创建 tcPr (table cell properties)
-    tcPr = tc.find(qn('w:tcPr'))
+    tcPr = tc.find(qn("w:tcPr"))
     if tcPr is None:
-        tcPr = OxmlElement('w:tcPr')
+        tcPr = OxmlElement("w:tcPr")
         # tcPr 应该是第一个子元素
         tc.insert(0, tcPr)
 
     # 查找现有的 vMerge 元素
-    vMerge = tcPr.find(qn('w:vMerge'))
+    vMerge = tcPr.find(qn("w:vMerge"))
     if vMerge is not None:
         # 如果已存在，移除 val 属性使其成为合并延续
-        if vMerge.get(qn('w:val')):
-            del vMerge.attrib[qn('w:val')]
+        if vMerge.get(qn("w:val")):
+            del vMerge.attrib[qn("w:val")]
     else:
         # 创建新的 vMerge 元素（不带 val 属性，表示合并延续）
-        vMerge = OxmlElement('w:vMerge')
+        vMerge = OxmlElement("w:vMerge")
         tcPr.append(vMerge)
 
 
@@ -372,17 +373,17 @@ def set_cell_vmerge_restart(tc) -> None:
     """
     设置单元格为纵向合并的起始（vMerge with val="restart"）
     """
-    tcPr = tc.find(qn('w:tcPr'))
+    tcPr = tc.find(qn("w:tcPr"))
     if tcPr is None:
-        tcPr = OxmlElement('w:tcPr')
+        tcPr = OxmlElement("w:tcPr")
         tc.insert(0, tcPr)
 
-    vMerge = tcPr.find(qn('w:vMerge'))
+    vMerge = tcPr.find(qn("w:vMerge"))
     if vMerge is not None:
-        vMerge.set(qn('w:val'), 'restart')
+        vMerge.set(qn("w:val"), "restart")
     else:
-        vMerge = OxmlElement('w:vMerge')
-        vMerge.set(qn('w:val'), 'restart')
+        vMerge = OxmlElement("w:vMerge")
+        vMerge.set(qn("w:val"), "restart")
         tcPr.append(vMerge)
 
 
@@ -391,11 +392,11 @@ def clear_cell_content(tc) -> None:
     清空单元格内容，但保留一个空段落
     """
     # 移除所有段落
-    for p in tc.findall(qn('w:p')):
+    for p in tc.findall(qn("w:p")):
         tc.remove(p)
 
     # 添加一个空段落（Word 要求单元格至少有一个段落）
-    empty_p = OxmlElement('w:p')
+    empty_p = OxmlElement("w:p")
     tc.append(empty_p)
 
 
@@ -411,20 +412,20 @@ def extend_vmerge_region(table, start_row: int, end_row: int, category_columns: 
     因为在修改 vMerge 属性后，python-docx 的单元格遍历可能会出错。
     """
     # 获取表格中的所有 tr 元素
-    tr_elements = table._tbl.findall(qn('w:tr'))
+    tr_elements = table._tbl.findall(qn("w:tr"))
 
     for col_idx in category_columns:
         # 处理起始行 - 设置为合并区域的开始
         if start_row < len(tr_elements):
             start_tr = tr_elements[start_row]
-            tc_elements = start_tr.findall(qn('w:tc'))
+            tc_elements = start_tr.findall(qn("w:tc"))
             if col_idx < len(tc_elements):
                 set_cell_vmerge_restart(tc_elements[col_idx])
 
         # 后续行设置为合并延续
         for row_idx in range(start_row + 1, min(end_row + 1, len(tr_elements))):
             tr = tr_elements[row_idx]
-            tc_elements = tr.findall(qn('w:tc'))
+            tc_elements = tr.findall(qn("w:tc"))
             if col_idx < len(tc_elements):
                 set_cell_vmerge_continue(tc_elements[col_idx])
                 # 清空内容
@@ -473,28 +474,28 @@ def fill_table_placeholder(doc: "DocumentType", placeholder: dict, rows_data: li
     返回:
     - 新增的行数（用于计算后续 placeholder 的偏移量）
     """
-    table_config = placeholder.get('table_config')
+    table_config = placeholder.get("table_config")
     if not table_config:
         return 0
 
     # 获取表格
-    table, _ = get_table_by_path(doc, placeholder['path'])
+    table, _ = get_table_by_path(doc, placeholder["path"])
     if table is None:
         return 0
 
-    columns = table_config.get('columns', [])
+    columns = table_config.get("columns", [])
     # 注意：所有行索引都需要加上偏移量
-    header_row = table_config.get('header_row', 0) + row_offset
-    data_start_row = table_config.get('data_start_row', 0) + row_offset
-    data_end_row = table_config.get('data_end_row', data_start_row) + row_offset
-    is_dynamic = table_config.get('dynamic', False)
-    category_columns = table_config.get('category_columns', [])
+    header_row = table_config.get("header_row", 0) + row_offset
+    data_start_row = table_config.get("data_start_row", 0) + row_offset
+    data_end_row = table_config.get("data_end_row", data_start_row) + row_offset
+    is_dynamic = table_config.get("dynamic", False)
+    category_columns = table_config.get("category_columns", [])
 
     if not columns or not rows_data:
         return 0
 
     # 构建列名到 cell_index 的映射
-    column_map = {col['name']: col['cell_index'] for col in columns}
+    column_map = {col["name"]: col["cell_index"] for col in columns}
 
     # 计算现有数据行数
     existing_data_rows = data_end_row - data_start_row + 1
@@ -541,7 +542,7 @@ def get_row_index_from_path(path: str) -> int | None:
     """
     parts = parse_path(path)
     for name, idx in parts:
-        if name == 'row':
+        if name == "row":
             return idx
     return None
 
@@ -552,7 +553,7 @@ def get_body_index_from_path(path: str) -> int | None:
     例如: body[10]/row[4]/cell[0] -> 10
     """
     parts = parse_path(path)
-    if parts and parts[0][0] == 'body':
+    if parts and parts[0][0] == "body":
         return parts[0][1]
     return None
 
@@ -568,11 +569,11 @@ def apply_row_offset_to_path(path: str, offset: int) -> str:
     parts = parse_path(path)
     new_parts = []
     for name, idx in parts:
-        if name == 'row':
+        if name == "row":
             new_parts.append(f"{name}[{idx + offset}]")
         else:
             new_parts.append(f"{name}[{idx}]")
-    return '/'.join(new_parts)
+    return "/".join(new_parts)
 
 
 def fill_document_with_tables(doc_path: str, placeholders: list[dict], data: dict, output_path: str) -> str:
@@ -601,8 +602,8 @@ def fill_document_with_tables(doc_path: str, placeholders: list[dict], data: dic
     non_table_placeholders = []  # 不在表格中的 placeholder（没有 row）
 
     for placeholder in placeholders:
-        body_idx = get_body_index_from_path(placeholder['path'])
-        row_idx = get_row_index_from_path(placeholder['path'])
+        body_idx = get_body_index_from_path(placeholder["path"])
+        row_idx = get_row_index_from_path(placeholder["path"])
 
         if body_idx is not None and row_idx is not None:
             if body_idx not in body_groups:
@@ -619,17 +620,17 @@ def fill_document_with_tables(doc_path: str, placeholders: list[dict], data: dic
         table_phs = []
         normal_phs = []
         for ph in group:
-            ph_type = ph.get('type', 'cell')
-            if ph_type in ('table', 'dynamic_table'):
+            ph_type = ph.get("type", "cell")
+            if ph_type in ("table", "dynamic_table"):
                 table_phs.append(ph)
             else:
                 normal_phs.append(ph)
 
         # 按 data_start_row 排序表格类型（从小到大）
-        table_phs.sort(key=lambda p: p.get('table_config', {}).get('data_start_row', 0))
+        table_phs.sort(key=lambda p: p.get("table_config", {}).get("data_start_row", 0))
 
         # 按 row 索引排序普通类型（从小到大，用于后续应用偏移量）
-        normal_phs.sort(key=lambda p: get_row_index_from_path(p['path']) or 0)
+        normal_phs.sort(key=lambda p: get_row_index_from_path(p["path"]) or 0)
 
         # 记录每个位置的累计偏移量
         # key: 原始 row 索引, value: 在该位置之前累计新增的行数
@@ -638,20 +639,20 @@ def fill_document_with_tables(doc_path: str, placeholders: list[dict], data: dic
         # 先处理表格类型，记录偏移量
         cumulative_offset = 0
         for placeholder in table_phs:
-            placeholder_id = placeholder.get('field_key') or placeholder.get('id')
+            placeholder_id = placeholder.get("field_key") or placeholder.get("id")
             if not placeholder_id or placeholder_id not in data:
                 continue
 
             field_data = data[placeholder_id]
-            if isinstance(field_data, dict) and 'rows' in field_data:
-                rows_data = field_data['rows']
+            if isinstance(field_data, dict) and "rows" in field_data:
+                rows_data = field_data["rows"]
             elif isinstance(field_data, list):
                 rows_data = field_data
             else:
                 continue
 
-            table_config = placeholder.get('table_config', {})
-            original_data_end_row = table_config.get('data_end_row', 0)
+            table_config = placeholder.get("table_config", {})
+            original_data_end_row = table_config.get("data_end_row", 0)
 
             # 填充表格，传入当前累计偏移量
             rows_added = fill_table_placeholder(doc, placeholder, rows_data, cumulative_offset)
@@ -663,18 +664,18 @@ def fill_document_with_tables(doc_path: str, placeholders: list[dict], data: dic
 
         # 处理普通类型，应用偏移量
         for placeholder in normal_phs:
-            placeholder_id = placeholder.get('field_key') or placeholder.get('id')
+            placeholder_id = placeholder.get("field_key") or placeholder.get("id")
             if not placeholder_id or placeholder_id not in data:
                 continue
 
             field_data = data[placeholder_id]
             if isinstance(field_data, dict):
-                value = field_data.get('value', '')
+                value = field_data.get("value", "")
             else:
                 value = str(field_data)
 
             # 计算该 placeholder 应该应用的偏移量
-            original_row_idx = get_row_index_from_path(placeholder['path'])
+            original_row_idx = get_row_index_from_path(placeholder["path"])
             offset_to_apply = 0
             if original_row_idx is not None:
                 for data_end_row, offset in row_offsets:
@@ -682,7 +683,7 @@ def fill_document_with_tables(doc_path: str, placeholders: list[dict], data: dic
                         offset_to_apply = offset
 
             # 应用偏移量到 path
-            full_path = placeholder['path']
+            full_path = placeholder["path"]
             adjusted_path = apply_row_offset_to_path(full_path, offset_to_apply)
             base_path, insert_position = parse_insert_path(adjusted_path)
 
@@ -691,7 +692,7 @@ def fill_document_with_tables(doc_path: str, placeholders: list[dict], data: dic
                 if element:
                     fill_element(element, str(value))
             else:
-                if insert_position in ('prepend', 'append'):
+                if insert_position in ("prepend", "append"):
                     container = get_element_by_path(doc, base_path)
                     if container and isinstance(container, _Cell):
                         insert_paragraph_at(container, 0, insert_position, str(value))
@@ -699,24 +700,24 @@ def fill_document_with_tables(doc_path: str, placeholders: list[dict], data: dic
                     parent, elem_type, elem_index = get_parent_element_by_path(doc, base_path)
                     if parent is None:
                         continue
-                    if elem_type == 'run' and isinstance(parent, Paragraph):
+                    if elem_type == "run" and isinstance(parent, Paragraph):
                         insert_run_at(parent, elem_index, insert_position, str(value))
-                    elif elem_type == 'p' and isinstance(parent, _Cell):
+                    elif elem_type == "p" and isinstance(parent, _Cell):
                         insert_paragraph_at(parent, elem_index, insert_position, str(value))
 
     # 处理不在表格中的 placeholder（没有 row 的）
     for placeholder in non_table_placeholders:
-        placeholder_id = placeholder.get('field_key') or placeholder.get('id')
+        placeholder_id = placeholder.get("field_key") or placeholder.get("id")
         if not placeholder_id or placeholder_id not in data:
             continue
 
         field_data = data[placeholder_id]
         if isinstance(field_data, dict):
-            value = field_data.get('value', '')
+            value = field_data.get("value", "")
         else:
             value = str(field_data)
 
-        full_path = placeholder['path']
+        full_path = placeholder["path"]
         base_path, insert_position = parse_insert_path(full_path)
 
         if insert_position is None:
@@ -724,7 +725,7 @@ def fill_document_with_tables(doc_path: str, placeholders: list[dict], data: dic
             if element:
                 fill_element(element, str(value))
         else:
-            if insert_position in ('prepend', 'append'):
+            if insert_position in ("prepend", "append"):
                 container = get_element_by_path(doc, base_path)
                 if container and isinstance(container, _Cell):
                     insert_paragraph_at(container, 0, insert_position, str(value))
@@ -732,9 +733,9 @@ def fill_document_with_tables(doc_path: str, placeholders: list[dict], data: dic
                 parent, elem_type, elem_index = get_parent_element_by_path(doc, base_path)
                 if parent is None:
                     continue
-                if elem_type == 'run' and isinstance(parent, Paragraph):
+                if elem_type == "run" and isinstance(parent, Paragraph):
                     insert_run_at(parent, elem_index, insert_position, str(value))
-                elif elem_type == 'p' and isinstance(parent, _Cell):
+                elif elem_type == "p" and isinstance(parent, _Cell):
                     insert_paragraph_at(parent, elem_index, insert_position, str(value))
 
     doc.save(output_path)

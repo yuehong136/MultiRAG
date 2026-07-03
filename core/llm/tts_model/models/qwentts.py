@@ -1,7 +1,7 @@
 import time
 
-from core.llm.tts_model.base import Base
 from common.token_utils import num_tokens_from_string
+from core.llm.tts_model.base import Base
 
 
 class QwenTTS(Base):
@@ -12,9 +12,10 @@ class QwenTTS(Base):
         dashscope.api_key = key
 
     def tts(self, text):
-        from dashscope.api_entities.dashscope_response import SpeechSynthesisResponse
-        from dashscope.audio.tts import ResultCallback, SpeechSynthesizer, SpeechSynthesisResult
         from collections import deque
+
+        from dashscope.api_entities.dashscope_response import SpeechSynthesisResponse
+        from dashscope.audio.tts import ResultCallback, SpeechSynthesisResult, SpeechSynthesizer
 
         class Callback(ResultCallback):
             def __init__(self) -> None:
@@ -54,8 +55,7 @@ class QwenTTS(Base):
                                callback=callback,
                                format="mp3")
         try:
-            for data in callback._run():
-                yield data
+            yield from callback._run()
             # yield num_tokens_from_string(text)
             self.token_count = num_tokens_from_string(text)
 

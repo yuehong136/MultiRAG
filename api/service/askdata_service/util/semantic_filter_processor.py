@@ -2,9 +2,9 @@
 语义过滤处理器模块
 用于处理语义相关性过滤后的维度和指标
 """
-from typing import List, Dict, Tuple, Set, Optional
 
 from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+
 logger = get_askdata_logger()
 
 
@@ -13,11 +13,11 @@ class SemanticFilterProcessor:
 
     @staticmethod
     def process_excluded_fields(
-            dimensions: List[Dict],
-            all_metrics: List[Dict],
-            exclude_dim_and_metric: Dict[str, List[str]],
+            dimensions: list[dict],
+            all_metrics: list[dict],
+            exclude_dim_and_metric: dict[str, list[str]],
             log_details: bool = True
-    ) -> Tuple[List[Dict], List[Dict], Dict[str, List[Dict]]]:
+    ) -> tuple[list[dict], list[dict], dict[str, list[dict]]]:
         """
         处理被排除的字段，打印信息并更新列表
 
@@ -114,7 +114,7 @@ class SemanticFilterProcessor:
 
         # 打印统计信息
         if log_details:
-            logger.info(f"语义相关性过滤结果统计:")
+            logger.info("语义相关性过滤结果统计:")
             logger.info(f"  - 原始维度数量: {original_dim_count}, 排除: {excluded_dim_count}, "
                         f"保留: {len(dimensions)} (排除率: {excluded_fields_detail['statistics']['exclusion_rate']['dimensions']:.1f}%)")
             logger.info(f"  - 原始指标数量: {original_metric_count}, 排除: {excluded_metric_count}, "
@@ -127,7 +127,7 @@ class SemanticFilterProcessor:
         return dimensions, all_metrics, excluded_fields_detail
 
     @staticmethod
-    def get_excluded_field_names(excluded_fields_detail: Dict[str, List[Dict]]) -> Dict[str, List[str]]:
+    def get_excluded_field_names(excluded_fields_detail: dict[str, list[dict]]) -> dict[str, list[str]]:
         """
         从详细信息中提取被排除字段的名称列表
 
@@ -143,7 +143,7 @@ class SemanticFilterProcessor:
         }
 
     @staticmethod
-    def get_excluded_field_ids(excluded_fields_detail: Dict[str, List[Dict]]) -> Dict[str, List[str]]:
+    def get_excluded_field_ids(excluded_fields_detail: dict[str, list[dict]]) -> dict[str, list[str]]:
         """
         从详细信息中提取被排除字段的ID列表
 
@@ -159,7 +159,7 @@ class SemanticFilterProcessor:
         }
 
     @staticmethod
-    def format_exclusion_summary(excluded_fields_detail: Dict[str, List[Dict]]) -> str:
+    def format_exclusion_summary(excluded_fields_detail: dict[str, list[dict]]) -> str:
         """
         格式化排除字段的摘要信息
 
@@ -203,11 +203,11 @@ class SemanticFilterProcessor:
 
 # 便捷函数，供快速调用
 def apply_semantic_filter(
-        dimensions: List[Dict],
-        all_metrics: List[Dict],
-        exclude_dim_and_metric: Dict[str, List[str]],
+        dimensions: list[dict],
+        all_metrics: list[dict],
+        exclude_dim_and_metric: dict[str, list[str]],
         log_details: bool = True
-) -> Tuple[List[Dict], List[Dict], Dict[str, List[Dict]]]:
+) -> tuple[list[dict], list[dict], dict[str, list[dict]]]:
     """
     应用语义过滤的便捷函数
 

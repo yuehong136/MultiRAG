@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 Canvas-free Parser facade.
 
@@ -8,8 +7,8 @@ module therefore only normalizes caller configs, creates a lightweight Parser
 process, and dispatches to the Parser runtime methods.
 """
 
-from copy import deepcopy
 import logging
+from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
 

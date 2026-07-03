@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -7,6 +6,7 @@
 @desc:
 """
 from common.versions import get_multirag_version
+
 from .reload_config_base import ReloadConfigBase
 
 
@@ -16,7 +16,7 @@ class RuntimeConfig(ReloadConfigBase):
     HTTP_PORT = None
     JOB_SERVER_HOST = None
     JOB_SERVER_VIP = None
-    ENV = dict()
+    ENV = {}
     SERVICE_DB = None
     LOAD_CONFIG_MANAGER = False
 

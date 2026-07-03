@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -10,17 +9,14 @@ import logging
 import operator
 from functools import reduce
 
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
-
-from common.time_utils import current_timestamp, timestamp_to_date
+from sqlalchemy.orm import Session
 
 # from api.db.database import BaseModel as DataBaseModel
 from api.db.db_models import BaseModel as DataBaseModel
-
-
+from common.time_utils import current_timestamp, timestamp_to_date
 
 
 def bulk_insert_into_db(db: Session, model, data_source, replace_on_conflict=False):

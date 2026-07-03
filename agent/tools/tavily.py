@@ -17,8 +17,10 @@ import logging
 import os
 import time
 from abc import ABC
+
 from tavily import TavilyClient
-from agent.tools.base import ToolParamBase, ToolBase, ToolMeta
+
+from agent.tools.base import ToolBase, ToolMeta, ToolParamBase
 from common.connection_utils import timeout
 
 
@@ -144,7 +146,7 @@ class TavilySearch(ToolBase, ABC):
             self.set_output("_ERROR", str(last_e))
             return f"Tavily error: {last_e}"
 
-        assert False, self.output()
+        raise AssertionError(self.output())
 
     def thoughts(self) -> str:
         return """
@@ -245,7 +247,7 @@ class TavilyExtract(ToolBase, ABC):
             self.set_output("_ERROR", str(last_e))
             return f"Tavily error: {last_e}"
 
-        assert False, self.output()
+        raise AssertionError(self.output())
 
     def thoughts(self) -> str:
         return "Opened {}—pulling out the main text…".format(self.get_input().get("urls", "-_-!"))

@@ -1,11 +1,14 @@
 import logging
-import boto3
-from botocore.exceptions import ClientError
-from botocore.config import Config
 import time
 from io import BytesIO
-from common.decorator import singleton
+
+import boto3
+from botocore.config import Config
+from botocore.exceptions import ClientError
+
 from common import settings
+from common.decorator import singleton
+
 
 @singleton
 class MultiRAGS3:

@@ -18,11 +18,13 @@ import json
 import os
 import re
 from abc import ABC
+
 import pandas as pd
-import pymysql
 import psycopg2
+import pymysql
 import pyodbc
-from agent.tools.base import ToolParamBase, ToolBase, ToolMeta
+
+from agent.tools.base import ToolBase, ToolMeta, ToolParamBase
 from common.connection_utils import timeout
 
 
@@ -86,8 +88,8 @@ class ExeSQL(ToolBase, ABC):
             return
 
         def convert_decimals(obj):
-            from decimal import Decimal
             import math
+            from decimal import Decimal
             if isinstance(obj, float):
                 # Handle NaN and Infinity which are not valid JSON values
                 if math.isnan(obj) or math.isinf(obj):
@@ -263,7 +265,7 @@ class ExeSQL(ToolBase, ABC):
                     single_res = pd.DataFrame.from_records(cursor.fetchmany(self._param.max_records),
                                                            columns=[desc[0] for desc in cursor.description])
                 else:
-                    single_res = pd.DataFrame([i for i in cursor.fetchmany(self._param.max_records)])
+                    single_res = pd.DataFrame(list(cursor.fetchmany(self._param.max_records)))
                     single_res.columns = [i[0] for i in cursor.description]
 
                 for col in single_res.columns:

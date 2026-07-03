@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -8,8 +7,8 @@
 """
 from zhipuai import ZhipuAI
 
-from core.llm.cv_model.models.gptv4 import GptV4
 from core.llm.cv_model.base import Base
+from core.llm.cv_model.models.gptv4 import GptV4
 
 
 class Zhipu4V(GptV4):

@@ -1,25 +1,23 @@
+import argparse
 import asyncio
 import json
 import os
 import sys
 import time
-import argparse
 from collections import defaultdict
 
-from ranx import evaluate
-from ranx import Qrels, Run
 import pandas as pd
+from ranx import Qrels, Run, evaluate
 from tqdm import tqdm
 
-from api.db.services.llm_service import LLMBundle
 from api.db.db_models import db_connection
-from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name
-from core.nlp import tokenize, search
+from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.llm_service import LLMBundle
 from common import settings
 from common.constants import LLMType
 from common.misc_utils import get_uuid
-
+from core.nlp import search, tokenize
 
 global max_docs
 max_docs = sys.maxsize

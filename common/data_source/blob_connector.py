@@ -1,9 +1,13 @@
 """Blob storage connector"""
 import logging
 import os
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
+from common.data_source.config import BLOB_STORAGE_SIZE_THRESHOLD, INDEX_BATCH_SIZE, BlobType, DocumentSource
+from common.data_source.exceptions import ConnectorMissingCredentialError, ConnectorValidationError, CredentialExpiredError, InsufficientPermissionsError
+from common.data_source.interfaces import LoadConnector, PollConnector
+from common.data_source.models import Document, GenerateDocumentsOutput, SecondsSinceUnixEpoch
 from common.data_source.utils import (
     create_s3_client,
     detect_bucket_region,
@@ -11,15 +15,6 @@ from common.data_source.utils import (
     extract_size_bytes,
     get_file_ext,
 )
-from common.data_source.config import BlobType, DocumentSource, BLOB_STORAGE_SIZE_THRESHOLD, INDEX_BATCH_SIZE
-from common.data_source.exceptions import (
-    ConnectorMissingCredentialError,
-    ConnectorValidationError,
-    CredentialExpiredError,
-    InsufficientPermissionsError
-)
-from common.data_source.interfaces import LoadConnector, PollConnector
-from common.data_source.models import Document, SecondsSinceUnixEpoch, GenerateDocumentsOutput
 
 
 class BlobStorageConnector(LoadConnector, PollConnector):
@@ -37,10 +32,10 @@ class BlobStorageConnector(LoadConnector, PollConnector):
         self.bucket_name = bucket_name.strip()
         self.prefix = prefix if not prefix or prefix.endswith("/") else prefix + "/"
         self.batch_size = batch_size
-        self.s3_client: Optional[Any] = None
+        self.s3_client: Any | None = None
         self._allow_images: bool | None = None
         self.size_threshold: int | None = BLOB_STORAGE_SIZE_THRESHOLD
-        self.bucket_region: Optional[str] = None
+        self.bucket_region: str | None = None
         self.european_residency: bool = european_residency
 
     def set_allow_images(self, allow_images: bool) -> None:
@@ -136,7 +131,7 @@ class BlobStorageConnector(LoadConnector, PollConnector):
             for obj in page["Contents"]:
                 if obj["Key"].endswith("/"):
                     continue
-                last_modified = obj["LastModified"].replace(tzinfo=timezone.utc)
+                last_modified = obj["LastModified"].replace(tzinfo=UTC)
                 if start < last_modified <= end:
                     all_objects.append(obj)
 
@@ -148,7 +143,7 @@ class BlobStorageConnector(LoadConnector, PollConnector):
 
         batch: list[Document] = []
         for obj in all_objects:
-            last_modified = obj["LastModified"].replace(tzinfo=timezone.utc)
+            last_modified = obj["LastModified"].replace(tzinfo=UTC)
             file_name = os.path.basename(obj["Key"])
             key = obj["Key"]
 
@@ -202,8 +197,8 @@ class BlobStorageConnector(LoadConnector, PollConnector):
         """Load documents from state"""
         logging.debug("Loading blob objects")
         return self._yield_blob_objects(
-            start=datetime(1970, 1, 1, tzinfo=timezone.utc),
-            end=datetime.now(timezone.utc),
+            start=datetime(1970, 1, 1, tzinfo=UTC),
+            end=datetime.now(UTC),
         )
 
     def poll_source(
@@ -213,11 +208,10 @@ class BlobStorageConnector(LoadConnector, PollConnector):
         if self.s3_client is None:
             raise ConnectorMissingCredentialError("Blob storage")
 
-        start_datetime = datetime.fromtimestamp(start, tz=timezone.utc)
-        end_datetime = datetime.fromtimestamp(end, tz=timezone.utc)
+        start_datetime = datetime.fromtimestamp(start, tz=UTC)
+        end_datetime = datetime.fromtimestamp(end, tz=UTC)
 
-        for batch in self._yield_blob_objects(start_datetime, end_datetime):
-            yield batch
+        yield from self._yield_blob_objects(start_datetime, end_datetime)
 
     def validate_connector_settings(self) -> None:
         """Validate connector settings"""

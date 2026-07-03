@@ -17,8 +17,10 @@ import logging
 import os
 import time
 from abc import ABC
+
 import requests
-from agent.tools.base import ToolParamBase, ToolMeta, ToolBase
+
+from agent.tools.base import ToolBase, ToolMeta, ToolParamBase
 from common.connection_utils import timeout
 
 
@@ -98,7 +100,7 @@ class GitHub(ToolBase, ABC):
             self.set_output("_ERROR", str(last_e))
             return f"GitHub error: {last_e}"
 
-        assert False, self.output()
+        raise AssertionError(self.output())
 
     def thoughts(self) -> str:
         return "Scanning GitHub repos related to `{}`.".format(self.get_input().get("query", "-_-!"))

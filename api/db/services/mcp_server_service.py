@@ -62,7 +62,7 @@ class MCPServerService(CommonService):
         servers = query.all()
         if not servers:
             return None
-        
+
         server_list = []
         for server in servers:
             server_dict = {
@@ -75,7 +75,7 @@ class MCPServerService(CommonService):
                 "update_date": server.update_date
             }
             server_list.append(server_dict)
-        
+
         return server_list
 
 

@@ -12,6 +12,7 @@
 #
 import logging
 from io import BytesIO
+
 from pptx import Presentation
 
 
@@ -77,7 +78,7 @@ class RAGFlowPptParser:
             return ""
 
         except Exception as e:
-            logging.error(f"Error processing shape: {str(e)}")
+            logging.error(f"Error processing shape: {e!s}")
             return ""
 
     def __call__(self, fnm, from_page, to_page, callback=None):

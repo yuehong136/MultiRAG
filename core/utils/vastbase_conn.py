@@ -1,23 +1,23 @@
+import copy
+import json
 import logging
 import os
 import re
-import json
 import time
-import copy
+
 import psycopg2
-from psycopg2 import pool
-from common.constants import PAGERANK_FLD, TAG_FLD
+
 from common import settings
+from common.constants import PAGERANK_FLD
 from common.decorator import singleton
 from common.file_utils import get_project_base_directory
 from core.nlp import is_english
-
 from core.utils.doc_store_conn import (
     DocStoreConnection,
+    FusionExpr,
+    MatchDenseExpr,
     MatchExpr,
     MatchTextExpr,
-    MatchDenseExpr,
-    FusionExpr,
     OrderByExpr,
 )
 
@@ -77,7 +77,7 @@ class VastBaseConnection(DocStoreConnection):
                 break
 
             except Exception as e:
-                logger.warning(f"{str(e)}. 等待VastBase {self.host}:{self.port} 恢复健康状态... (尝试 {attempt + 1}/24)")
+                logger.warning(f"{e!s}. 等待VastBase {self.host}:{self.port} 恢复健康状态... (尝试 {attempt + 1}/24)")
                 time.sleep(5)
         else:
             # 所有尝试都失败了
@@ -94,7 +94,7 @@ class VastBaseConnection(DocStoreConnection):
                 raise Exception(msg)
             logger.info(f"VastBase {self.host}:{self.port} 健康状态良好")
         except Exception as e:
-            msg = f"VastBase {self.host}:{self.port} 最终健康检查失败: {str(e)}"
+            msg = f"VastBase {self.host}:{self.port} 最终健康检查失败: {e!s}"
             logger.error(msg)
             raise Exception(msg)
 
@@ -204,7 +204,7 @@ class VastBaseConnection(DocStoreConnection):
             return {}
 
         try:
-            with open(mapping_path, "r", encoding="utf-8") as f:
+            with open(mapping_path, encoding="utf-8") as f:
                 schema = json.load(f)
             logger.debug(f"成功加载VastBase表结构配置: {mapping_path}")
             return schema
@@ -638,7 +638,7 @@ class VastBaseConnection(DocStoreConnection):
 
     def _get_table_columns(self, cursor, table_name: str) -> set[str]:
         """获取表的所有列名"""
-        cursor.execute(f"""
+        cursor.execute("""
             SELECT column_name
             FROM information_schema.columns
             WHERE table_schema = %s AND table_name = %s
@@ -1058,7 +1058,7 @@ class VastBaseConnection(DocStoreConnection):
 
         # 如果分值差异过小，返回 1.0
         if max_v - min_v < 1e-9:
-            return {k: 1.0 for k in keys}
+            return dict.fromkeys(keys, 1.0)
 
         if reverse:
             # 距离越小分数越高
@@ -1216,7 +1216,7 @@ class VastBaseConnection(DocStoreConnection):
                 cursor = conn.cursor()
 
             # 获取表结构信息
-            cursor.execute(f"""
+            cursor.execute("""
                 SELECT column_name, data_type, udt_name
                 FROM information_schema.columns
                 WHERE table_schema = %s AND table_name = %s
@@ -1348,7 +1348,7 @@ class VastBaseConnection(DocStoreConnection):
         except Exception as e:
             if conn:
                 conn.rollback()
-            error_msg = f"插入到 {table_name} 失败: {str(e)}"
+            error_msg = f"插入到 {table_name} 失败: {e!s}"
             logger.error(error_msg)
             return [error_msg]  # 返回错误信息
 
@@ -1394,7 +1394,7 @@ class VastBaseConnection(DocStoreConnection):
                 return False
 
             # 获取表结构信息
-            cursor.execute(f"""
+            cursor.execute("""
                 SELECT column_name, data_type, column_default
                 FROM information_schema.columns
                 WHERE table_schema = %s AND table_name = %s
@@ -1468,7 +1468,7 @@ class VastBaseConnection(DocStoreConnection):
 
                         # 处理remove操作
                         for field, value_to_remove in remove_operations.items():
-                            if field in row_dict and row_dict[field]:
+                            if row_dict.get(field):
                                 # 反序列化字段值
                                 if field_keyword(field):
                                     current_values = row_dict[field].split("###") if row_dict[field] else []

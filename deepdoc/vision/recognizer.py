@@ -12,18 +12,20 @@
 #
 import gc
 import logging
-import os
 import math
-import numpy as np
-import cv2
+import os
 from functools import cmp_to_key
 
+import cv2
+import numpy as np
 
 from common.file_utils import get_project_base_directory
-from .operators import *
-from .operators import preprocess
+
 from . import operators
 from .ocr import load_model
+from .operators import *
+from .operators import preprocess
+
 
 class Recognizer:
     def __init__(self, label_list, task_name, model_dir=None):
@@ -116,12 +118,10 @@ class Recognizer:
             return 0
         x0_ = max(b["x0"], x0)
         x1_ = min(b["x1"], x1)
-        assert x0_ <= x1_, "Bbox mismatch! T:{},B:{},X0:{},X1:{} ==> {}".format(
-            tp, btm, x0, x1, b)
+        assert x0_ <= x1_, f"Bbox mismatch! T:{tp},B:{btm},X0:{x0},X1:{x1} ==> {b}"
         tp_ = max(b["top"], tp)
         btm_ = min(b["bottom"], btm)
-        assert tp_ <= btm_, "Bbox mismatch! T:{},B:{},X0:{},X1:{} => {}".format(
-            tp, btm, x0, x1, b)
+        assert tp_ <= btm_, f"Bbox mismatch! T:{tp},B:{btm},X0:{x0},X1:{x1} => {b}"
         ov = (btm_ - tp_) * (x1_ - x0_) if x1 - \
                                            x0 != 0 and btm - tp != 0 else 0
         if ov > 0 and ratio:

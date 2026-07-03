@@ -50,14 +50,14 @@ def test_extractor():
     根据用户查询"查询教职工男女比例"，我们可以直接从表t_jzg_basic中统计性别为男和女的数量。以下是相应的SQL查询语句：
     ```sql
     -- 查询教职工男女比例
-    SELECT 
+    SELECT
         xb, -- 性别
         COUNT(*) AS number -- 统计每个性别的教职工数量
-    FROM 
+    FROM
         t_jzg_basic
-    WHERE 
+    WHERE
         xb IN ('男', '女') -- 只统计性别为男和女的记录
-    GROUP BY 
+    GROUP BY
         xb; -- 按性别分组
     ```
     '''

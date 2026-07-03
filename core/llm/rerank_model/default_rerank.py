@@ -3,13 +3,14 @@ import os
 import re
 import threading
 from collections.abc import Iterable
+
 import numpy as np
 from huggingface_hub import snapshot_download
 
-from common.log_utils import log_exception
-from core.llm.rerank_model.base import Base
 from api.utils.file_utils import get_home_cache_dir
+from common.log_utils import log_exception
 from common.token_utils import num_tokens_from_string, truncate
+from core.llm.rerank_model.base import Base
 
 
 class DefaultRerank(Base):
@@ -38,7 +39,7 @@ class DefaultRerank(Base):
                         DefaultRerank._model = FlagReranker(
                             os.path.join(get_home_cache_dir(), re.sub(r"^[a-zA-Z0-9]+/", "", model_name)),
                             use_fp16=torch.cuda.is_available())
-                    except Exception as e:
+                    except Exception:
                         model_dir = snapshot_download(repo_id=model_name,
                                                       local_dir=os.path.join(get_home_cache_dir(),
                                                                              re.sub(r"^[a-zA-Z0-9]+/", "", model_name)),

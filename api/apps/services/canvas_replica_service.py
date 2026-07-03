@@ -3,8 +3,8 @@ import logging
 import random
 import time
 
-from api.db import CanvasCategory
 from agent.dsl_migration import normalize_chunker_dsl
+from api.db import CanvasCategory
 from core.utils.redis_conn import REDIS_CONN, RedisDistributedLock
 
 

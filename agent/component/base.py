@@ -14,13 +14,13 @@
 #  limitations under the License.
 #
 import asyncio
+import builtins
+import json
+import logging
+import os
 import re
 import time
 from abc import ABC
-import builtins
-import json
-import os
-import logging
 from typing import Any
 
 import pandas as pd
@@ -28,7 +28,6 @@ import pandas as pd
 from agent import settings
 from common.connection_utils import timeout
 from common.misc_utils import thread_pool_exec
-
 
 _FEEDED_DEPRECATED_PARAMS = "_feeded_deprecated_params"
 _DEPRECATED_PARAMS = "_deprecated_params"
@@ -90,7 +89,7 @@ class ComponentParamBase(ABC):
 
     @property
     def _deprecated_params_set(self):
-        return {name: True for name in self.get_feeded_deprecated_params()}
+        return dict.fromkeys(self.get_feeded_deprecated_params(), True)
 
     def __str__(self):
         return json.dumps(self.as_dict(), ensure_ascii=False)
@@ -217,7 +216,7 @@ class ComponentParamBase(ABC):
         validation_json = None
 
         try:
-            with open(param_validation_path, "r") as fin:
+            with open(param_validation_path) as fin:
                 validation_json = json.loads(fin.read())
         except BaseException:
             return
@@ -245,7 +244,7 @@ class ComponentParamBase(ABC):
                         break
 
                 if not value_legal:
-                    raise ValueError("Please check runtime conf, {} = {} does not match user-parameter restriction".format(variable, value))
+                    raise ValueError(f"Please check runtime conf, {variable} = {value} does not match user-parameter restriction")
 
             elif variable in validation_json:
                 self._validate_param(attr, validation_json)
@@ -253,7 +252,7 @@ class ComponentParamBase(ABC):
     @staticmethod
     def check_string(param, description):
         if type(param).__name__ not in ["str"]:
-            raise ValueError(description + " {} not supported, should be string type".format(param))
+            raise ValueError(description + f" {param} not supported, should be string type")
 
     @staticmethod
     def check_empty(param, description):
@@ -263,27 +262,27 @@ class ComponentParamBase(ABC):
     @staticmethod
     def check_positive_integer(param, description):
         if type(param).__name__ not in ["int", "long"] or param <= 0:
-            raise ValueError(description + " {} not supported, should be positive integer".format(param))
+            raise ValueError(description + f" {param} not supported, should be positive integer")
 
     @staticmethod
     def check_positive_number(param, description):
         if type(param).__name__ not in ["float", "int", "long"] or param <= 0:
-            raise ValueError(description + " {} not supported, should be positive numeric".format(param))
+            raise ValueError(description + f" {param} not supported, should be positive numeric")
 
     @staticmethod
     def check_nonnegative_number(param, description):
         if type(param).__name__ not in ["float", "int", "long"] or param < 0:
-            raise ValueError(description + " {} not supported, should be non-negative numeric".format(param))
+            raise ValueError(description + f" {param} not supported, should be non-negative numeric")
 
     @staticmethod
     def check_decimal_float(param, description):
         if type(param).__name__ not in ["float", "int"] or param < 0 or param > 1:
-            raise ValueError(description + " {} not supported, should be a float number in range [0, 1]".format(param))
+            raise ValueError(description + f" {param} not supported, should be a float number in range [0, 1]")
 
     @staticmethod
     def check_boolean(param, descr):
         if type(param).__name__ != "bool":
-            raise ValueError(descr + " {} not supported, should be bool type".format(param))
+            raise ValueError(descr + f" {param} not supported, should be bool type")
 
     @staticmethod
     def check_open_unit_interval(param, description):
@@ -293,23 +292,23 @@ class ComponentParamBase(ABC):
     @staticmethod
     def check_valid_value(param, description, valid_values):
         if param not in valid_values:
-            raise ValueError(description+ " {} is not supported, it should be in {}".format(param, valid_values))
+            raise ValueError(description+ f" {param} is not supported, it should be in {valid_values}")
 
     @staticmethod
     def check_defined_type(param, description, types):
         if type(param).__name__ not in types:
-            raise ValueError(description + " {} not supported, should be one of {}".format(param, types))
+            raise ValueError(description + f" {param} not supported, should be one of {types}")
 
     @staticmethod
     def check_and_change_lower(param, valid_list, description=""):
         if type(param).__name__ != "str":
-            raise ValueError(description + " {} not supported, should be one of {}".format(param, valid_list))
+            raise ValueError(description + f" {param} not supported, should be one of {valid_list}")
 
         lower_param = param.lower()
         if lower_param in valid_list:
             return lower_param
         else:
-            raise ValueError(description + " {} not supported, should be one of {}".format(param, valid_list))
+            raise ValueError(description + f" {param} not supported, should be one of {valid_list}")
 
     @staticmethod
     def _greater_equal_than(value, limit):
@@ -367,10 +366,10 @@ class ComponentBase(ABC):
             "params": {}
         }
         """
-        return """{{
-            "component_name": "{}",
-            "params": {}
-        }}""".format(self.component_name, self._param)
+        return f"""{{
+            "component_name": "{self.component_name}",
+            "params": {self._param}
+        }}"""
 
     def __init__(self, canvas, id, param: ComponentParamBase):
         from agent.canvas import Graph  # Local import to avoid cyclic dependency

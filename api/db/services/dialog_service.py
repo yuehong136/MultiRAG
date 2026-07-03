@@ -1,18 +1,19 @@
 import asyncio
-import logging
 import binascii
-import time
-from functools import partial
-
+import logging
 import re
+import time
 from copy import deepcopy
-from timeit import default_timer as timer
-from langfuse import Langfuse
 from datetime import datetime
-from sqlalchemy import select, func
+from functools import partial
+from timeit import default_timer as timer
+
+from langfuse import Langfuse
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from api.db.db_models import Dialog
+from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.common_service import CommonService
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.file_service import FileService
@@ -20,21 +21,19 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
-from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
-from core.graphrag.general.mind_map_extractor import MindMapExtractor
-from core.app.tag import label_question
-from core.advanced_rag import DeepResearcher
-from core.nlp.search import index_name
-from core.prompts.generator import kb_prompt, message_fit_in, keyword_extraction, full_question, chunks_format, \
-    citation_prompt, cross_languages, PROMPT_JINJA_ENV, ASK_SUMMARY
-from common.metadata_utils import apply_meta_data_filter
-from common.token_utils import num_tokens_from_string
-from core.utils.tavily_conn import Tavily
-from common.constants import LLMType, StatusEnum, ParserType
-from common.string_utils import remove_redundant_spaces
 from common import settings
-from common.time_utils import current_timestamp, datetime_format
+from common.constants import LLMType, ParserType, StatusEnum
+from common.metadata_utils import apply_meta_data_filter
+from common.string_utils import remove_redundant_spaces
 from common.text_utils import normalize_arabic_digits
+from common.time_utils import current_timestamp, datetime_format
+from common.token_utils import num_tokens_from_string
+from core.advanced_rag import DeepResearcher
+from core.app.tag import label_question
+from core.graphrag.general.mind_map_extractor import MindMapExtractor
+from core.nlp.search import index_name
+from core.prompts.generator import ASK_SUMMARY, PROMPT_JINJA_ENV, chunks_format, citation_prompt, cross_languages, full_question, kb_prompt, keyword_extraction, message_fit_in
+from core.utils.tavily_conn import Tavily
 
 
 def _resolve_model_config(
@@ -183,12 +182,12 @@ class DialogService(CommonService):
     ):
         """
         获取对话列表（支持分页、搜索、排序）
-        
+
         直接查询 update_date/create_date（DateTime 类型），与 ragflow 保持一致。
         SQLAlchemy 会自动将 DateTime 对象序列化为 ISO 格式字符串。
         """
         from api.db.db_models import User
-        
+
         # 查询字段列表 - 使用 update_date/create_date 而不是 update_time/create_time
         fields = [
             cls.model.id,               # 0
@@ -370,7 +369,7 @@ def chat_solo(db, dialog, messages, stream=True):
     else:
         answer = chat_mdl.chat(prompt_config.get("system", ""), msg, dialog.llm_setting)
         user_content = msg[-1].get("content", "[content not available]")
-        logging.debug("User: {}|Assistant: {}".format(user_content, answer))
+        logging.debug(f"User: {user_content}|Assistant: {answer}")
         yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, answer), "prompt": "", "created_at": time.time()}
 
 
@@ -419,14 +418,14 @@ async def async_chat_solo(db, dialog, messages, stream=True):
         else:
             answer = await chat_mdl.async_chat(prompt_config.get("system", ""), msg, dialog.llm_setting, images=image_files)
         user_content = msg[-1].get("content", "[content not available]")
-        logging.debug("User: {}|Assistant: {}".format(user_content, answer))
+        logging.debug(f"User: {user_content}|Assistant: {answer}")
         yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, answer), "prompt": "", "created_at": time.time()}
 
 
 def get_models(db, dialog):
     embd_mdl, chat_mdl, rerank_mdl, tts_mdl = None, None, None, None
     kbs = KnowledgebaseService.get_by_ids(db, dialog.kb_ids)
-    embedding_keys = list(set([kb.tenant_embd_id or kb.embd_id for kb in kbs]))
+    embedding_keys = list({kb.tenant_embd_id or kb.embd_id for kb in kbs})
     if len(embedding_keys) > 1:
         raise Exception("**ERROR**: Knowledge bases use different embedding models.")
 
@@ -671,7 +670,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
         chat_mdl.bind_tools(toolcall_session, tools)
     bind_models_ts = timer()
 
-    kb_names = list([kb.name for kb in kbs])
+    kb_names = [kb.name for kb in kbs]
     kb_tenant_ids = [kb.tenant_id for kb in kbs]  # 1:1 with kb_names, for correct collection lookup
     print("正在检索的知识库 --> ", kb_names)
 
@@ -698,7 +697,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     field_map = KnowledgebaseService.get_field_map(db, dialog.kb_ids)
     # 如果字段映射存在，尝试使用SQL检索答案
     if field_map:
-        logging.debug("Use SQL to retrieval:{}".format(questions[-1]))
+        logging.debug(f"Use SQL to retrieval:{questions[-1]}")
         ans = use_sql(questions[-1], field_map, kb_tenant_ids, kb_names, chat_mdl, prompt_config.get("quote", True), dialog.kb_ids)
         if ans:
             yield ans
@@ -748,7 +747,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
 
     # 检查prompt_config中是否包含"knowledge"参数，以决定是否进行知识检索
     if "knowledge" in param_keys:
-        tenant_ids = list(set([kb.tenant_id for kb in kbs]))
+        tenant_ids = list({kb.tenant_id for kb in kbs})
         knowledges = []
         prompt_config_for_reasoning = prompt_config
         if not internet_enabled:
@@ -857,7 +856,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
             answer = ans[1]
 
         if knowledges and (prompt_config.get("quote", True) and kwargs.get("quote", True)):
-            idx = set([])
+            idx = set()
             normalized_answer = normalize_arabic_digits(answer) or ""
             if embd_mdl and not CITATION_MARKER_PATTERN.search(normalized_answer):
                 answer, idx = retriever.insert_citations(
@@ -876,7 +875,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
 
             answer, idx = repair_bad_citation_formats(answer, kbinfos, idx)
 
-            idx = set([kbinfos["chunks"][int(i)]["doc_id"] for i in idx])
+            idx = {kbinfos["chunks"][int(i)]["doc_id"] for i in idx}
             recall_docs = [d for d in kbinfos["doc_aggs"] if d["doc_id"] in idx]
             if not recall_docs:
                 recall_docs = kbinfos["doc_aggs"]
@@ -960,7 +959,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
         else:
             answer = chat_mdl.chat(prompt + prompt4citation, msg[1:], gen_conf, images=image_files)
         user_content = msg[-1].get("content", "[content not available]")
-        logging.debug("User: {}|Assistant: {}".format(user_content, answer))
+        logging.debug(f"User: {user_content}|Assistant: {answer}")
         res = decorate_answer(answer)
         res["audio_binary"] = tts(tts_mdl, answer)
         yield res
@@ -1004,7 +1003,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
         chat_mdl.bind_tools(toolcall_session, tools)
     bind_models_ts = timer()
 
-    kb_names = list([kb.name for kb in kbs])
+    kb_names = [kb.name for kb in kbs]
     kb_tenant_ids = [kb.tenant_id for kb in kbs]  # 1:1 with kb_names, for correct collection lookup
     print("正在检索的知识库 --> ", kb_names)
 
@@ -1032,7 +1031,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
     logging.debug(f"field_map retrieved: {field_map}")
     # 如果字段映射存在，尝试使用SQL检索答案
     if field_map:
-        logging.debug("Use SQL to retrieval:{}".format(questions[-1]))
+        logging.debug(f"Use SQL to retrieval:{questions[-1]}")
         ans = await use_sql(questions[-1], field_map, kb_tenant_ids, kb_names, chat_mdl, prompt_config.get("quote", True), dialog.kb_ids)
         # For aggregate queries (COUNT, SUM, etc.), chunks may be empty but answer is still valid
         if ans and (ans.get("reference", {}).get("chunks") or ans.get("answer")):
@@ -1083,7 +1082,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
     # 检查prompt_config中是否包含"knowledge"参数，以决定是否进行知识检索
     if "knowledge" in param_keys:
         logging.debug("Proceeding with retrieval")
-        tenant_ids = list(set([kb.tenant_id for kb in kbs]))
+        tenant_ids = list({kb.tenant_id for kb in kbs})
         knowledges = []
         prompt_config_for_reasoning = prompt_config
         if not internet_enabled:
@@ -1204,7 +1203,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
             answer = ans[1]
 
         if knowledges and (prompt_config.get("quote", True) and kwargs.get("quote", True)):
-            idx = set([])
+            idx = set()
             if embd_mdl and not re.search(r"\[ID:([0-9]+)\]", answer):
                 answer, idx = retriever.insert_citations(
                     answer,
@@ -1222,7 +1221,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
 
             answer, idx = repair_bad_citation_formats(answer, kbinfos, idx)
 
-            idx = set([kbinfos["chunks"][int(i)]["doc_id"] for i in idx])
+            idx = {kbinfos["chunks"][int(i)]["doc_id"] for i in idx}
             recall_docs = [d for d in kbinfos["doc_aggs"] if d["doc_id"] in idx]
             if not recall_docs:
                 recall_docs = kbinfos["doc_aggs"]
@@ -1301,7 +1300,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
         else:
             answer = await chat_mdl.async_chat(prompt + prompt4citation, msg[1:], gen_conf, images=image_files)
         user_content = msg[-1].get("content", "[content not available]")
-        logging.debug("User: {}|Assistant: {}".format(user_content, answer))
+        logging.debug(f"User: {user_content}|Assistant: {answer}")
         res = decorate_answer(answer)
         res["audio_binary"] = tts(tts_mdl, answer)
         yield res
@@ -1333,7 +1332,7 @@ async def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True
         return bool(re.search(r"(count|sum|avg|max|min|distinct)\s*\(", (sql_text or "").lower()))
 
     def normalize_sql(sql):
-        logging.debug(f"use_sql: Raw SQL from LLM: {repr(sql[:500])}")
+        logging.debug(f"use_sql: Raw SQL from LLM: {sql[:500]!r}")
         # Remove think blocks if present (format: </think>...)
         sql = re.sub(r"</think>\n.*?\n\s*", "", sql, flags=re.DOTALL)
         sql = re.sub(r"思考\n.*?\n", "", sql, flags=re.DOTALL)
@@ -1633,8 +1632,8 @@ Please correct the error and write SQL again using the exact field names above, 
     logging.debug(f"use_sql: Proceeding with {len(tbl['rows'])} rows to build answer")
 
     # Case-insensitive column index matching (aligned with ragflow)
-    docid_idx = set([ii for ii, c in enumerate(tbl["columns"]) if c["name"].lower() == "doc_id"])
-    doc_name_idx = set([ii for ii, c in enumerate(tbl["columns"]) if c["name"].lower() in ["docnm_kwd", "docnm"]])
+    docid_idx = {ii for ii, c in enumerate(tbl["columns"]) if c["name"].lower() == "doc_id"}
+    doc_name_idx = {ii for ii, c in enumerate(tbl["columns"]) if c["name"].lower() in ["docnm_kwd", "docnm"]}
 
     logging.debug(f"use_sql: All columns: {[(i, c['name']) for i, c in enumerate(tbl['columns'])]}")
     logging.debug(f"use_sql: docid_idx={docid_idx}, doc_name_idx={doc_name_idx}")
@@ -1724,8 +1723,8 @@ Please correct the error and write SQL again using the exact field names above, 
             return {"answer": answer, "reference": {"chunks": [], "doc_aggs": []}, "prompt": sys_prompt}
         return {"answer": "\n".join([columns, line, rows]), "reference": {"chunks": [], "doc_aggs": []}, "prompt": sys_prompt}
 
-    docid_idx = list(docid_idx)[0]
-    doc_name_idx = list(doc_name_idx)[0]
+    docid_idx = next(iter(docid_idx))
+    doc_name_idx = next(iter(doc_name_idx))
     doc_aggs = {}
     for r in tbl["rows"]:
         if r[docid_idx] not in doc_aggs:
@@ -1879,9 +1878,9 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
     meta_data_filter = search_config.get("meta_data_filter")
 
     kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
-    embedding_keys = list(set([kb.tenant_embd_id or kb.embd_id for kb in kbs]))
+    embedding_keys = list({kb.tenant_embd_id or kb.embd_id for kb in kbs})
 
-    is_knowledge_graph = all([kb.parser_id == ParserType.KG for kb in kbs])
+    is_knowledge_graph = all(kb.parser_id == ParserType.KG for kb in kbs)
     retriever = settings.retriever if not is_knowledge_graph else settings.kg_retriever
 
     if len(embedding_keys) > 1:
@@ -1901,14 +1900,14 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
         rerank_model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.RERANK.value, rerank_id)
         rerank_mdl = LLMBundle(db, tenant_id, rerank_model_config)
     max_tokens = chat_mdl.max_length
-    tenant_ids = list([kb.tenant_id for kb in kbs])
+    tenant_ids = [kb.tenant_id for kb in kbs]
 
     if meta_data_filter:
         metas = DocMetadataService.get_flatted_meta_by_kbs(db, kb_ids)
         doc_ids = asyncio.run(apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids))
 
     filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
-    kb_names = list([kb.name for kb in kbs])
+    kb_names = [kb.name for kb in kbs]
     kbinfos = asyncio.run(retriever.retrieval(
         question=question,
         filter_exp=filter_exp,
@@ -1934,7 +1933,7 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
     def decorate_answer(answer):
         nonlocal knowledges, kbinfos, sys_prompt
         answer, idx = retriever.insert_citations(answer, [ck["content_ltks"] for ck in kbinfos["chunks"]], [ck["vector"] for ck in kbinfos["chunks"]], embd_mdl, tkweight=0.7, vtweight=0.3)
-        idx = set([kbinfos["chunks"][int(i)]["doc_id"] for i in idx])
+        idx = {kbinfos["chunks"][int(i)]["doc_id"] for i in idx}
         recall_docs = [d for d in kbinfos["doc_aggs"] if d["doc_id"] in idx]
         if not recall_docs:
             recall_docs = kbinfos["doc_aggs"]
@@ -1968,9 +1967,9 @@ async def async_ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None
     meta_data_filter = search_config.get("meta_data_filter")
 
     kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
-    embedding_keys = list(set([kb.tenant_embd_id or kb.embd_id for kb in kbs]))
+    embedding_keys = list({kb.tenant_embd_id or kb.embd_id for kb in kbs})
 
-    is_knowledge_graph = all([kb.parser_id == ParserType.KG for kb in kbs])
+    is_knowledge_graph = all(kb.parser_id == ParserType.KG for kb in kbs)
     retriever = settings.retriever if not is_knowledge_graph else settings.kg_retriever
 
     if len(embedding_keys) > 1:
@@ -1990,14 +1989,14 @@ async def async_ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None
         rerank_model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.RERANK.value, rerank_id)
         rerank_mdl = LLMBundle(db, tenant_id, rerank_model_config)
     max_tokens = chat_mdl.max_length
-    tenant_ids = list([kb.tenant_id for kb in kbs])
+    tenant_ids = [kb.tenant_id for kb in kbs]
 
     if meta_data_filter:
         metas = DocMetadataService.get_flatted_meta_by_kbs(db, kb_ids)
         doc_ids = await apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids)
 
     filter_exp = ""
-    kb_names = list([kb.name for kb in kbs])
+    kb_names = [kb.name for kb in kbs]
     kbinfos = await retriever.retrieval(
         question=question,
         filter_exp=filter_exp,
@@ -2024,7 +2023,7 @@ async def async_ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None
     def decorate_answer(answer):
         nonlocal knowledges, kbinfos, sys_prompt
         answer, idx = retriever.insert_citations(answer, [ck["content_ltks"] for ck in kbinfos["chunks"]], [ck["vector"] for ck in kbinfos["chunks"]], embd_mdl, tkweight=0.7, vtweight=0.3)
-        idx = set([kbinfos["chunks"][int(i)]["doc_id"] for i in idx])
+        idx = {kbinfos["chunks"][int(i)]["doc_id"] for i in idx}
         recall_docs = [d for d in kbinfos["doc_aggs"] if d["doc_id"] in idx]
         if not recall_docs:
             recall_docs = kbinfos["doc_aggs"]
@@ -2065,9 +2064,9 @@ async def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=No
     kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
     if not kbs:
         return {"error": "No KB selected"}
-    embedding_keys = list(set([kb.tenant_embd_id or kb.embd_id for kb in kbs]))
-    tenant_ids = list(set([kb.tenant_id for kb in kbs]))
-    kb_names = list(set([kb.name for kb in kbs]))
+    embedding_keys = list({kb.tenant_embd_id or kb.embd_id for kb in kbs})
+    tenant_ids = list({kb.tenant_id for kb in kbs})
+    kb_names = list({kb.name for kb in kbs})
 
     if len(embedding_keys) > 1:
         raise ValueError("Knowledge bases use different embedding models.")

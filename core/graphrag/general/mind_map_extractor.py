@@ -15,22 +15,22 @@
 #
 
 import asyncio
-import logging
 import collections
+import logging
 import re
 from collections.abc import Mapping
-from typing import Any
 from dataclasses import dataclass
 from functools import reduce
+from typing import Any
 
 import markdown_to_json
 
 from common.misc_utils import thread_pool_exec
 from common.token_utils import num_tokens_from_string
-from core.graphrag.llm_protocol import GraphRAGCompletionLLM
 from core.graphrag.general.extractor import Extractor
 from core.graphrag.general.mind_map_prompt import MIND_MAP_EXTRACTION_PROMPT
-from core.graphrag.utils import ErrorHandlerFn, perform_variable_replacements, chat_limiter
+from core.graphrag.llm_protocol import GraphRAGCompletionLLM
+from core.graphrag.utils import ErrorHandlerFn, chat_limiter, perform_variable_replacements
 
 
 @dataclass
@@ -123,7 +123,7 @@ class MindMapExtractor(Extractor):
         merge_json = reduce(self._merge, res)
         if len(merge_json) > 1:
             keys = [re.sub(r"\*+", "", k) for k, v in merge_json.items() if isinstance(v, dict)]
-            keyset = set(i for i in keys if i)
+            keyset = {i for i in keys if i}
             merge_json = {
                 "id": "root",
                 "children": [
@@ -135,8 +135,8 @@ class MindMapExtractor(Extractor):
                 ]
             }
         else:
-            k = self._key(list(merge_json.keys())[0])
-            merge_json = {"id": k, "children": self._be_children(list(merge_json.items())[0][1], {k})}
+            k = self._key(next(iter(merge_json.keys())))
+            merge_json = {"id": k, "children": self._be_children(next(iter(merge_json.items()))[1], {k})}
 
         return MindMapResult(output=merge_json)
 

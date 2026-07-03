@@ -14,24 +14,23 @@
 #  limitations under the License.
 #
 
-import logging
-import re
 import json
-import time
+import logging
 import os
+import re
+import time
 from abc import abstractmethod
 
-from elasticsearch import NotFoundError
-from elasticsearch_dsl import Index
 from elastic_transport import ConnectionTimeout
+from elasticsearch import NotFoundError
 from elasticsearch.client import IndicesClient
+from elasticsearch_dsl import Index
 
+from common import settings
+from common.doc_store.doc_store_base import DocStoreConnection, MatchExpr, OrderByExpr
 from common.file_utils import get_project_base_directory
 from common.misc_utils import convert_bytes
-from common.doc_store.doc_store_base import DocStoreConnection, OrderByExpr, MatchExpr
-from common import settings
 from core.nlp import is_english, rag_tokenizer
-
 
 ATTEMPT_TIME = 2
 
@@ -50,7 +49,7 @@ class ESConnectionBase(DocStoreConnection):
             msg = f"Elasticsearch mapping file not found at {fp_mapping}"
             self.logger.error(msg)
             raise Exception(msg)
-        with open(fp_mapping, "r") as f:
+        with open(fp_mapping) as f:
             self.mapping = json.load(f)
         self.logger.info(f"Elasticsearch {settings.ES['hosts']} is healthy.")
 
@@ -148,7 +147,7 @@ class ESConnectionBase(DocStoreConnection):
             if not os.path.exists(fp_mapping):
                 self.logger.error(f"Document metadata mapping file not found at {fp_mapping}")
                 return False
-            with open(fp_mapping, "r") as f:
+            with open(fp_mapping) as f:
                 doc_meta_mapping = json.load(f)
             return IndicesClient(self.es).create(index=index_name,
                                                  settings=doc_meta_mapping["settings"],
@@ -262,7 +261,7 @@ class ESConnectionBase(DocStoreConnection):
             highlights = d.get("highlight")
             if not highlights:
                 continue
-            txt = "...".join([a for a in list(highlights.items())[0][1]])
+            txt = "...".join(list(next(iter(highlights.items()))[1]))
             if not is_english(txt.split()):
                 ans[d["_id"]] = txt
                 continue
@@ -277,14 +276,14 @@ class ESConnectionBase(DocStoreConnection):
                 if not re.search(r"<em>[^<>]+</em>", t, flags=re.IGNORECASE | re.MULTILINE):
                     continue
                 txt_list.append(t)
-            ans[d["_id"]] = "...".join(txt_list) if txt_list else "...".join([a for a in list(highlights.items())[0][1]])
+            ans[d["_id"]] = "...".join(txt_list) if txt_list else "...".join(list(next(iter(highlights.items()))[1]))
 
         return ans
 
     def get_aggregation(self, res, field_name: str):
         agg_field = "aggs_" + field_name
         if "aggregations" not in res or agg_field not in res["aggregations"]:
-            return list()
+            return []
         buckets = res["aggregations"][agg_field]["buckets"]
         return [(b["key"], b["doc_count"]) for b in buckets]
 
@@ -299,13 +298,9 @@ class ESConnectionBase(DocStoreConnection):
         replaces = []
         for r in re.finditer(r" ([a-z_]+_l?tks)( like | ?= ?)'([^']+)'", sql):
             fld, v = r.group(1), r.group(3)
-            match = " MATCH({}, '{}', 'operator=OR;minimum_should_match=30%') ".format(
-                fld, rag_tokenizer.fine_grained_tokenize(rag_tokenizer.tokenize(v)))
+            match = f" MATCH({fld}, '{rag_tokenizer.fine_grained_tokenize(rag_tokenizer.tokenize(v))}', 'operator=OR;minimum_should_match=30%') "
             replaces.append(
-                ("{}{}'{}'".format(
-                    r.group(1),
-                    r.group(2),
-                    r.group(3)),
+                (f"{r.group(1)}{r.group(2)}'{r.group(3)}'",
                  match))
 
         for p, r in replaces:

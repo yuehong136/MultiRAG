@@ -23,7 +23,7 @@ to provide code execution capabilities.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Dict, Any, Optional, List
+from typing import Any
 
 
 @dataclass
@@ -32,7 +32,7 @@ class SandboxInstance:
     instance_id: str
     provider: str
     status: str  # running, stopped, error
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
 
     def __post_init__(self):
         if self.metadata is None:
@@ -46,7 +46,7 @@ class ExecutionResult:
     stderr: str
     exit_code: int
     execution_time: float  # in seconds
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
 
     def __post_init__(self):
         if self.metadata is None:
@@ -62,7 +62,7 @@ class SandboxProvider(ABC):
     """
 
     @abstractmethod
-    def initialize(self, config: Dict[str, Any]) -> bool:
+    def initialize(self, config: dict[str, Any]) -> bool:
         """
         Initialize the provider with configuration.
 
@@ -98,7 +98,7 @@ class SandboxProvider(ABC):
         code: str,
         language: str,
         timeout: int = 10,
-        arguments: Optional[Dict[str, Any]] = None
+        arguments: dict[str, Any] | None = None
     ) -> ExecutionResult:
         """
         Execute code in a sandbox instance.
@@ -146,7 +146,7 @@ class SandboxProvider(ABC):
         pass
 
     @abstractmethod
-    def get_supported_languages(self) -> List[str]:
+    def get_supported_languages(self) -> list[str]:
         """
         Get list of supported programming languages.
 
@@ -156,7 +156,7 @@ class SandboxProvider(ABC):
         pass
 
     @staticmethod
-    def get_config_schema() -> Dict[str, Dict]:
+    def get_config_schema() -> dict[str, dict]:
         """
         Return configuration schema for this provider.
 
@@ -185,7 +185,7 @@ class SandboxProvider(ABC):
         """
         return {}
 
-    def validate_config(self, config: Dict[str, Any]) -> tuple[bool, Optional[str]]:
+    def validate_config(self, config: dict[str, Any]) -> tuple[bool, str | None]:
         """
         Validate provider-specific configuration.
 

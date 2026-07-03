@@ -1,17 +1,17 @@
-from fastapi import APIRouter, Depends, UploadFile, File
-from pydantic import BaseModel
-from typing import Any
-from enum import Enum
-from sqlalchemy.orm import Session
-from docx import Document
 import io
 import logging
 import traceback
+from enum import Enum
+from typing import Any
+
+from docx import Document
+from fastapi import APIRouter, Depends, File, UploadFile
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 # from api.db.database import get_db
 from api.apps import manager
 from api.db.db_models import get_db
-
 from api.service.docx2zjform_service.docx2zjform_service import Docx2ZJFormService
 
 router = APIRouter()
@@ -78,10 +78,10 @@ async def convert(
 
     except Exception as e:
         # 使用logger.error记录完整的异常信息和堆栈跟踪
-        logging.error(f"文档处理失败: {str(e)}")
+        logging.error(f"文档处理失败: {e!s}")
         logging.error(traceback.format_exc())
 
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"文档处理失败: {str(e)}"
+            message=f"文档处理失败: {e!s}"
         )

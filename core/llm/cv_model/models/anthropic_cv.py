@@ -1,7 +1,7 @@
+from common.token_utils import num_tokens_from_string
 from core.llm.cv_model.base import Base
 from core.nlp import is_english
 from core.prompts.generator import vision_llm_describe_prompt
-from common.token_utils import num_tokens_from_string
 
 
 class AnthropicCV(Base):

@@ -6,17 +6,17 @@ import json
 import logging
 import re
 import uuid
-from typing import Any
 from datetime import datetime
+from typing import Any
 
-from pymilvus import FieldSchema, DataType, CollectionSchema, Function, FunctionType, AnnSearchRequest, WeightedRanker
+from pymilvus import AnnSearchRequest, CollectionSchema, DataType, FieldSchema, Function, FunctionType, WeightedRanker
 from pymilvus.client.constants import DEFAULT_CONSISTENCY_LEVEL
 from sqlalchemy.orm import Session
 
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.llm_service import LLMBundle
-from common.constants import LLMType
 from common import settings
+from common.constants import LLMType
 from common.float_utils import get_float
 
 logger = logging.getLogger(__name__)
@@ -132,7 +132,7 @@ class QATemplateStorageService:
 
         except Exception as e:
             logger.error(f"创建QA模板集合失败: {e}")
-            return False, f"创建集合失败: {str(e)}"
+            return False, f"创建集合失败: {e!s}"
 
     def store_templates(
             self,
@@ -229,7 +229,7 @@ class QATemplateStorageService:
             logger.error(f"存储QA模板失败: {e}")
             return {
                 "success": False,
-                "message": f"存储模板失败: {str(e)}"
+                "message": f"存储模板失败: {e!s}"
             }
 
     def store_templates_v2(
@@ -315,7 +315,7 @@ class QATemplateStorageService:
             logger.error(f"存储QA模板V2失败: {e}")
             return {
                 "success": False,
-                "message": f"存储模板V2失败: {str(e)}"
+                "message": f"存储模板V2失败: {e!s}"
             }
 
     def _ensure_collection_v2_exists(self, dim):
@@ -409,24 +409,24 @@ class QATemplateStorageService:
 
         except Exception as e:
             logger.error(f"创建QA模板V2集合失败: {e}")
-            return False, f"创建V2集合失败: {str(e)}"
+            return False, f"创建V2集合失败: {e!s}"
 
     def clear_tenant_templates(self, tenant_id: str) -> dict[str, Any]:
         """清空指定租户的所有QA模板"""
         try:
             conn = settings.docStoreConn._get_connection()
-            
+
             # 检查并清空V1和V2集合
             base_collection_name = QA_TEMPLATE_COLLECTION
             v2_collection_name = f"{base_collection_name}_v2"
-            
+
             cleared_collections = []
-            
+
             # 清空V2集合
             if conn.has_collection(v2_collection_name):
                 conn.drop_collection(v2_collection_name)
                 cleared_collections.append(f"{v2_collection_name} (V2)")
-                
+
             # 清空V1集合
             if conn.has_collection(base_collection_name):
                 conn.drop_collection(base_collection_name)
@@ -449,7 +449,7 @@ class QATemplateStorageService:
             logger.error(f"清空QA模板失败: {e}")
             return {
                 "success": False,
-                "message": f"清空模板失败: {str(e)}"
+                "message": f"清空模板失败: {e!s}"
             }
 
     def delete_template_by_qa_id(self, qa_id: str, tenant_id: str) -> dict[str, Any]:
@@ -462,7 +462,7 @@ class QATemplateStorageService:
             # 获取可用的集合名称
             matcher = QATemplateMatchingService()
             collection_name, collection_version = matcher._get_available_collection()
-            
+
             if not collection_name:
                 return {
                     "success": False,
@@ -485,14 +485,14 @@ class QATemplateStorageService:
                     if db_type == "milvus":
                         # Milvus 使用 filter 表达式
                         delete_expr = f'tenant_id == "{tenant_id}" && qa_id == "{qa_id}"'
-                        
+
                         # 先查询要删除的记录数量
                         query_results = settings.docStoreConn.query(
                             collection_name=collection_name,
                             filter=delete_expr,
                             output_fields=["id"]
                         )
-                        
+
                         if not query_results:
                             logger.warning(f"未找到租户 {tenant_id} 中 qa_id 为 {qa_id} 的模板")
                             failed_qa_ids.append(qa_id)
@@ -550,7 +550,7 @@ class QATemplateStorageService:
             logger.error(f"批量删除QA模板失败: {e}")
             return {
                 "success": False,
-                "message": f"批量删除模板失败: {str(e)}",
+                "message": f"批量删除模板失败: {e!s}",
                 "failed_qa_ids": qa_ids
             }
 
@@ -608,12 +608,12 @@ class QATemplateMatchingService:
             # 设置输出字段（根据集合版本）
             if collection_version == "v2":
                 output_fields = [
-                    "qa_id", "question_canonical", "paraphrases", "needed_params", 
+                    "qa_id", "question_canonical", "paraphrases", "needed_params",
                     "needed_params_typed", "sql_template", "rule_id", "template_version"
                 ]
             else:
                 output_fields = [
-                    "qa_id", "question_canonical", "paraphrases", "needed_params", 
+                    "qa_id", "question_canonical", "paraphrases", "needed_params",
                     "sql_template", "rule_id"
                 ]
 
@@ -1027,7 +1027,7 @@ class StatelessSlotExtractionService:
                 param_type = param.get("data_type", "string")
                 param_desc = param.get("description", "")
                 required = param.get("required", True)
-                
+
                 param_names.append(param_name)
                 typed_params_info += f"- {param_name} ({param_type}): {param_desc}"
                 if not required:
@@ -1070,14 +1070,14 @@ class StatelessSlotExtractionService:
                 param_name = param.get("name")
                 param_type = param.get("data_type", "string")
                 required = param.get("required", True)
-                
+
                 if param_name not in extracted_params or extracted_params[param_name] is None:
                     if required:
                         missing_params.append(param_name)
                     continue
-                
+
                 raw_value = extracted_params[param_name]
-                
+
                 # 类型验证和转换
                 try:
                     validated_value = self._validate_and_convert_type(raw_value, param_type)
@@ -1107,9 +1107,9 @@ class StatelessSlotExtractionService:
         """验证和转换数据类型"""
         if value is None:
             return None
-            
+
         data_type = data_type.lower()
-        
+
         if data_type == "string":
             return str(value)
         elif data_type == "integer":
@@ -1202,7 +1202,7 @@ class StatelessSlotExtractionService:
                 param_type = param.get("data_type", "string")
                 param_desc = param.get("description", "")
                 required = param.get("required", True)
-                
+
                 typed_params_info += f"- {param_name} ({param_type}): {param_desc}"
                 if not required:
                     typed_params_info += " [可选]"
@@ -1246,14 +1246,14 @@ class StatelessSlotExtractionService:
                 param_name = param.get("name")
                 param_type = param.get("data_type", "string")
                 required = param.get("required", True)
-                
+
                 if param_name not in extracted_params or extracted_params[param_name] is None:
                     if required:
                         new_missing_params.append(param_name)
                     continue
-                
+
                 raw_value = extracted_params[param_name]
-                
+
                 # 类型验证和转换
                 try:
                     validated_value = self._validate_and_convert_type(raw_value, param_type)
@@ -1518,7 +1518,7 @@ class StatelessQAService:
             logger.error(f"Error in stateless interpret: {e}")
             return self._create_error_response(
                 context if 'context' in locals() else {},
-                f"处理出错: {str(e)}",
+                f"处理出错: {e!s}",
                 0.0
             )
 
@@ -1655,7 +1655,7 @@ class LLMScoringService:
             logger.error(f"Error calculating score with LLM: {e}")
             return {
                 "score": None,
-                "score_text": f"评分计算失败：{str(e)}",
+                "score_text": f"评分计算失败：{e!s}",
                 "analysis": "系统在处理评分请求时发生错误",
                 "suggestions": "请检查输入数据和规则描述，稍后重试",
                 "data_summary": {"total_records": len(data), "error": str(e)}
@@ -1857,7 +1857,7 @@ class RAGService:
         except Exception as e:
             logger.error(f"Error generating RAG answer: {e}")
             return {
-                "answer": f"生成回答时发生错误：{str(e)}",
+                "answer": f"生成回答时发生错误：{e!s}",
                 "sources": [],
                 "confidence": 0.0
             }
@@ -1983,8 +1983,8 @@ class LLMScoringServiceV2:
             return self._create_error_response_v2(data, str(e))
 
     def _parse_score_response_v2(
-            self, 
-            response: str, 
+            self,
+            response: str,
             original_data: list[dict[str, Any]] | str,
             enable_multi_extraction: bool = True,
             score_validation: bool = True,
@@ -1995,25 +1995,25 @@ class LLMScoringServiceV2:
         try:
             extraction_results = []
             extraction_methods = []
-            
+
             # 策略1：优先从"总得分"部分提取 - 最高优先级
             score_from_final = self._extract_score_from_final_section(response)
             if score_from_final is not None:
                 extraction_results.append(score_from_final)
                 extraction_methods.append("final_section_primary")
-            
+
             # 策略2：从分数计算部分提取"最终得分"
             score_from_calculation = self._extract_score_from_calculation_section(response)
             if score_from_calculation is not None:
                 extraction_results.append(score_from_calculation)
                 extraction_methods.append("calculation_section")
-            
+
             if enable_multi_extraction:
                 # 策略3：增强版正则表达式提取
                 scores_from_regex = self._extract_scores_with_enhanced_regex(response)
                 extraction_results.extend(scores_from_regex)
                 extraction_methods.extend(["enhanced_regex"] * len(scores_from_regex))
-                
+
                 # 策略4：数字序列分析
                 scores_from_sequence = self._extract_scores_from_number_sequence(response)
                 extraction_results.extend(scores_from_sequence)
@@ -2021,19 +2021,19 @@ class LLMScoringServiceV2:
 
             # 去重并排序
             unique_scores = list(dict.fromkeys(extraction_results))  # 保持顺序去重
-            
+
             # 选择最佳分数
             best_score, confidence, method = self._select_best_score(
-                unique_scores, 
+                unique_scores,
                 extraction_methods,
                 expected_score_range,
                 score_validation
             )
-            
+
             # 验证结果
             validation_results = self._validate_score(
-                best_score, 
-                expected_score_range, 
+                best_score,
+                expected_score_range,
                 original_data,
                 response
             ) if score_validation else {"validated": True, "warnings": []}
@@ -2079,21 +2079,21 @@ class LLMScoringServiceV2:
                 r'\*\*最终得分\*\*[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # **最终得分**：XXX分
                 r'\*\*总分\*\*[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # **总分**：XXX分
             ]
-            
+
             for pattern in double_star_patterns:
                 match = re.search(pattern, response, re.IGNORECASE)
                 if match:
                     score = float(match.group(1))
                     logger.info(f"✓ 从双星号格式提取到分数: {score} (模式: **总得分**)")
                     return score
-            
+
             # 策略2：严格隔离"最终评分结果"章节，在章节内查找
             final_section_match = re.search(r'=== 最终评分结果 ===(.*?)(?:===|$)', response, re.DOTALL | re.IGNORECASE)
-            
+
             if final_section_match:
                 final_section_content = final_section_match.group(1)
                 logger.debug(f"找到最终评分结果章节，内容长度: {len(final_section_content)}")
-                
+
                 # 在章节内再次查找双星号格式（优先级最高）
                 for pattern in double_star_patterns:
                     match = re.search(pattern, final_section_content, re.IGNORECASE)
@@ -2101,34 +2101,34 @@ class LLMScoringServiceV2:
                         score = float(match.group(1))
                         logger.info(f"✓ 从章节内双星号格式提取到分数: {score}")
                         return score
-                
+
                 # 在隔离的章节中查找普通格式的分数（降级方案）
                 section_patterns = [
                     r'总得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
                     r'最终得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
                     r'总分[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
                 ]
-                
+
                 for pattern in section_patterns:
                     match = re.search(pattern, final_section_content, re.IGNORECASE)
                     if match:
                         score = float(match.group(1))
                         logger.info(f"从最终评分结果章节提取到分数: {score}")
                         return score
-            
+
             # 策略3：如果没有找到严格的章节，尝试查找"最终评分结果"的直接模式
             fallback_patterns = [
                 r'=== 最终评分结果 ===.*?\*\*总得分\*\*[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 优先双星号
                 r'=== 最终评分结果 ===.*?总得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
             ]
-            
+
             for pattern in fallback_patterns:
                 match = re.search(pattern, response, re.DOTALL | re.IGNORECASE)
                 if match:
                     score = float(match.group(1))
                     logger.info(f"从最终评分结果模式提取到分数: {score}")
                     return score
-            
+
             return None
         except (ValueError, AttributeError) as e:
             logger.warning(f"从最终评分结果部分提取分数失败: {e}")
@@ -2142,28 +2142,28 @@ class LLMScoringServiceV2:
                 r'最终结果[：:]?\s*见.*?\*\*总得分\*\*',  # 最终结果：见"最终评分结果"部分的"**总得分**"
                 r'最终[：:]?\s*见.*?总得分',  # 最终：见"最终评分结果"部分的"总得分"
             ]
-            
+
             for pattern in reference_patterns:
                 if re.search(pattern, response, re.IGNORECASE):
                     logger.info("检测到引用**总得分**的模式，跳过计算章节提取")
                     return None  # 返回None，让主提取逻辑去提取 **总得分**
-            
+
             # 尝试多种可能的计算章节名称
             calculation_section_patterns = [
                 r'=== 详细评分分析 ===(.*?)(?:===|$)',
                 r'分数计算[：:]?(.*?)(?:===|$|\n\n)',
                 r'计算过程[：:]?(.*?)(?:===|$|\n\n)',
             ]
-            
+
             calculation_section_content = None
-            
+
             for section_pattern in calculation_section_patterns:
                 section_match = re.search(section_pattern, response, re.DOTALL | re.IGNORECASE)
                 if section_match:
                     calculation_section_content = section_match.group(1)
                     logger.debug(f"找到计算章节，内容长度: {len(calculation_section_content)}")
                     break
-            
+
             if calculation_section_content:
                 # 在隔离的章节中查找最终得分，排除中间步骤
                 final_patterns = [
@@ -2171,26 +2171,26 @@ class LLMScoringServiceV2:
                     r'(?<!小项|部分|单项)(?:总计|合计)得分[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 总计得分，但排除小项等
                     r'综合计算结果[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
                 ]
-                
+
                 for pattern in final_patterns:
                     match = re.search(pattern, calculation_section_content, re.IGNORECASE)
                     if match and match.group(1):  # 确保捕获组1存在
                         score = float(match.group(1))
                         logger.info(f"从分数计算章节提取到分数: {score}")
                         return score
-            
+
             # 如果没有找到严格的章节隔离，尝试宽松模式但增加限制
             fallback_patterns = [
                 r'(?:分数计算|计算过程).*?最终.*?([0-9]+\.?[0-9]*)\s*分',
             ]
-            
+
             for pattern in fallback_patterns:
                 match = re.search(pattern, response, re.DOTALL | re.IGNORECASE)
                 if match:
                     score = float(match.group(1))
                     logger.info(f"从计算部分fallback模式提取到分数: {score}")
                     return score
-            
+
             return None
         except (ValueError, AttributeError) as e:
             logger.warning(f"从分数计算部分提取分数失败: {e}")
@@ -2199,47 +2199,47 @@ class LLMScoringServiceV2:
     def _extract_scores_with_enhanced_regex(self, response: str) -> list[float]:
         """使用增强版正则表达式提取分数 - 更精准，减少误匹配，优先识别**总得分**格式"""
         scores = []
-        
+
         # 改进版正则表达式模式 - 最优先识别双星号包裹的格式
         enhanced_patterns = [
             # 【最高优先级】双星号包裹的格式 - 全局唯一标识符
             r'\*\*总得分\*\*[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # **总得分**：XXX分
             r'\*\*最终得分\*\*[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # **最终得分**：XXX分
             r'\*\*总分\*\*[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # **总分**：XXX分
-            
+
             # 【高优先级】具体考核结果表述（更倾向于个人实际得分）
             r'(?:考核|考评|评定|评估).*?(?:得分|分数)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 考核得分、考评得分
             r'(?:论文|项目|工作).*?(?:考核|考评|评分).*?(?:得分|分数)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 具体项目考核得分
             r'(?:实际|个人|最终)(?:得分|分数|考核结果)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 实际得分、个人得分
-            
+
             # 【中等优先级】明确的最终结果表述
             r'最终(?:得分|分数|结果)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 最终得分、最终分数、最终结果
             r'综合(?:得分|分数|评分)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 综合得分
             r'总体(?:得分|分数|评分)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 总体得分
-            
+
             # 【较低优先级】可能是制度标准的表述（谨慎对待）
             r'(?:评分|考核)结果[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 评分结果、考核结果
             r'(?:计算)?结果[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 结果XXX分
-            
+
             # 格式化输出中的分数（通常出现在总结部分）
             r'^(?:得分|分数)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 行首的得分（避免"总分"）
             r'\n(?:得分|分数)[：:]?\s*([0-9]+\.?[0-9]*)\s*分',  # 换行后的得分
-            
+
             # 避免中间步骤，只匹配明确的总计表述
             r'合计[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
             r'总计[：:]?\s*([0-9]+\.?[0-9]*)\s*分',
-            
+
             # 英文表达 - 更严格
             r'(?:total\s+|final\s+)score[:\s]*([0-9]+\.?[0-9]*)',
             r'(?:overall\s+|total\s+)points?[:\s]*([0-9]+\.?[0-9]*)',
         ]
-        
+
         # 简化排除模式：只排除最明显的中间步骤关键词
         exclusion_contexts = [
             r'步骤.*?([0-9]+\.?[0-9]*)\s*分',  # 步骤中的分数
             r'小项.*?([0-9]+\.?[0-9]*)\s*分',  # 小项分数
         ]
-        
+
         # 为不同模式设置权重（用于后续置信度计算）
         pattern_weights = {
             # 双星号格式 - 最高权重
@@ -2248,7 +2248,7 @@ class LLMScoringServiceV2:
             2: 1.0,  # **总分**
             # 具体考核结果表述
             3: 0.95,  # 考核得分
-            4: 0.95,  # 具体项目考核得分  
+            4: 0.95,  # 具体项目考核得分
             5: 0.95,  # 实际得分、个人得分
             # 最终结果表述
             6: 0.8,  # 最终得分
@@ -2267,9 +2267,9 @@ class LLMScoringServiceV2:
             15: 0.8, # 英文final score
             16: 0.8, # 英文total points
         }
-        
+
         scores_with_weights = []  # 存储(score, weight)元组
-        
+
         for pattern_idx, pattern in enumerate(enhanced_patterns):
             matches = re.finditer(pattern, response, re.IGNORECASE | re.MULTILINE)
             for match in matches:
@@ -2279,10 +2279,10 @@ class LLMScoringServiceV2:
                     context_start = max(0, match.start() - 50)
                     context_end = min(len(response), match.end() + 50)
                     context = response[context_start:context_end]
-                    
+
                     # 如果不在排除上下文中，则添加分数
                     is_excluded = any(re.search(exc_pattern, context, re.IGNORECASE) for exc_pattern in exclusion_contexts)
-                    
+
                     if not is_excluded:
                         weight = pattern_weights.get(pattern_idx, 0.5)
                         # 检查是否已有相同分数，如果有则选择更高权重
@@ -2297,45 +2297,45 @@ class LLMScoringServiceV2:
                             logger.debug(f"增强正则提取到分数: {score} (权重: {weight}, 模式: {pattern})")
                     elif is_excluded:
                         logger.debug(f"排除中间过程分数: {score} (上下文: {context[:30]}...)")
-                        
+
                 except ValueError:
                     continue
-        
+
         # 按权重排序，返回分数列表
         scores_with_weights.sort(key=lambda x: x[1], reverse=True)
         scores = [entry[0] for entry in scores_with_weights]
-        
+
         # 将权重信息存储起来供后续使用
-        self._pattern_weights = {score: weight for score, weight in scores_with_weights}
-        
+        self._pattern_weights = dict(scores_with_weights)
+
         return scores
 
     def _extract_scores_from_number_sequence(self, response: str) -> list[float]:
         """从数字序列中分析提取分数"""
         scores = []
-        
+
         # 查找所有数字
         number_pattern = r'\b([0-9]+\.?[0-9]*)\b'
         numbers = [float(m.group(1)) for m in re.finditer(number_pattern, response)]
-        
+
         # 过滤合理的分数范围 (通常考核分数在0-100000之间)
         reasonable_scores = [n for n in numbers if 0 <= n <= 100000]
-        
+
         # 查找重复出现的数字（可能是最终答案）
         from collections import Counter
         number_counts = Counter(reasonable_scores)
-        
+
         # 优先选择出现频率较高的数字
         for number, count in number_counts.most_common():
             if count >= 2 and number not in scores:  # 至少出现2次
                 scores.append(number)
                 logger.debug(f"数字序列分析提取到分数: {number} (出现{count}次)")
-        
+
         return scores[:3]  # 最多返回3个候选分数
 
     def _select_best_score(
-            self, 
-            scores: list[float], 
+            self,
+            scores: list[float],
             methods: list[str],
             expected_range: tuple[float, float] | None = None,
             validation_enabled: bool = True
@@ -2343,7 +2343,7 @@ class LLMScoringServiceV2:
         """选择最佳分数 - 增强版，智能过滤中间步骤分数"""
         if not scores:
             return None, 0.0, "no_extraction"
-        
+
         # 方法优先级（越小优先级越高）
         method_priority = {
             "final_section_primary": 1,
@@ -2351,12 +2351,12 @@ class LLMScoringServiceV2:
             "enhanced_regex": 3,
             "number_sequence": 4
         }
-        
+
         # 为每个分数计算置信度和过滤可疑分数
         score_confidences = []
         for i, score in enumerate(scores):
             method = methods[i] if i < len(methods) else "unknown"
-            
+
             # 基础置信度（基于提取方法）
             base_confidence = {
                 "final_section_primary": 0.95,
@@ -2364,38 +2364,38 @@ class LLMScoringServiceV2:
                 "enhanced_regex": 0.7,
                 "number_sequence": 0.6
             }.get(method, 0.5)
-            
+
             # 如果是enhanced_regex方法，还要考虑模式权重
             if method == "enhanced_regex" and hasattr(self, '_pattern_weights') and score in self._pattern_weights:
                 pattern_weight = self._pattern_weights[score]
                 base_confidence = base_confidence * pattern_weight
                 logger.debug(f"应用模式权重: {score} -> 置信度 {base_confidence:.3f} (权重: {pattern_weight})")
-            
+
             # 简化验证：只做基本合理性检查
             if expected_range and expected_range[0] <= score <= expected_range[1]:
                 base_confidence += 0.1
-            
+
             if 0 <= score <= 100000:  # 合理的分数范围
                 base_confidence += 0.05
-            
+
             score_confidences.append((score, base_confidence, method))
-        
+
         # 按置信度排序，置信度相同时按方法优先级排序
         score_confidences.sort(key=lambda x: (-x[1], method_priority.get(x[2], 99)))
-        
+
         # 如果最高置信度太低，可能都是中间步骤分数
         best_score, confidence, method = score_confidences[0]
-        
+
         if confidence < 0.3:
             logger.warning(f"所有分数的置信度都很低，最佳分数 {best_score} 置信度仅为 {confidence:.2f}")
-        
+
         logger.info(f"选择最佳分数: {best_score} (置信度: {confidence:.2f}, 方法: {method})")
         return best_score, confidence, method
-    
+
 
     def _validate_score(
-            self, 
-            score: float | None, 
+            self,
+            score: float | None,
             expected_range: tuple[float, float] | None,
             original_data: list[dict[str, Any]] | str,
             response: str
@@ -2406,18 +2406,18 @@ class LLMScoringServiceV2:
             "warnings": [],
             "errors": []
         }
-        
+
         if score is None:
             validation_result["validated"] = False
             validation_result["errors"].append("未能提取到有效分数")
             return validation_result
-        
+
         # 基本范围检查
         if score < 0:
             validation_result["warnings"].append(f"分数为负数: {score}")
         elif score > 100000:
             validation_result["warnings"].append(f"分数异常偏高: {score}")
-        
+
         # 期望范围检查
         if expected_range:
             min_score, max_score = expected_range
@@ -2425,16 +2425,16 @@ class LLMScoringServiceV2:
                 validation_result["warnings"].append(
                     f"分数 {score} 超出期望范围 [{min_score}, {max_score}]"
                 )
-        
+
         # 数据一致性检查
         data_count = len(original_data)
         if data_count == 0 and score > 0:
             validation_result["warnings"].append("数据为空但得分大于0")
-        
+
         # 简化验证：只保留基本检查
-        
+
         return validation_result
-    
+
 
     def _extract_sections_v2(self, response: str) -> dict[str, str]:
         """V2版本的分段提取，支持新的格式"""
@@ -2489,10 +2489,10 @@ class LLMScoringServiceV2:
 
         # 检测数据结构类型
         has_table_structure = any(
-            isinstance(item, dict) and "table" in item and "data_details" in item 
+            isinstance(item, dict) and "table" in item and "data_details" in item
             for item in data
         )
-        
+
         if has_table_structure:
             # 处理表结构数据
             summary["data_type"] = "structured_tables"
@@ -2500,19 +2500,19 @@ class LLMScoringServiceV2:
             total_data_records = 0
             all_fields = set()
             field_descriptions = {}
-            
+
             for item in data:
                 if "table" in item and "data_details" in item:
                     table_info = item["table"]
                     data_details = item["data_details"]
-                    
+
                     table_summary = {
                         "table_name": table_info.get("table_name", "unknown"),
                         "table_desc": table_info.get("table_desc", ""),
                         "record_count": len(data_details) if isinstance(data_details, list) else 0,
                         "fields": []
                     }
-                    
+
                     # 处理字段结构信息
                     if "structure" in table_info and isinstance(table_info["structure"], list):
                         for field_info in table_info["structure"]:
@@ -2526,28 +2526,28 @@ class LLMScoringServiceV2:
                                     })
                                     all_fields.add(field_name)
                                     field_descriptions[field_name] = field_desc
-                    
+
                     # 统计实际数据
                     if isinstance(data_details, list):
                         total_data_records += len(data_details)
                         # 统计每个字段的数据类型和非空情况
                         field_types = {}
                         field_non_empty_count = {}
-                        
+
                         for record in data_details:
                             if isinstance(record, dict):
                                 for field_name, value in record.items():
                                     if value is not None:
                                         field_types.setdefault(field_name, set()).add(type(value).__name__)
                                         field_non_empty_count[field_name] = field_non_empty_count.get(field_name, 0) + 1
-                        
+
                         table_summary["field_stats"] = {
                             "field_types": {k: list(v) for k, v in field_types.items()},
                             "non_empty_counts": field_non_empty_count
                         }
-                    
+
                     tables_info.append(table_summary)
-            
+
             summary.update({
                 "tables_count": len(tables_info),
                 "total_data_records": total_data_records,
@@ -2555,7 +2555,7 @@ class LLMScoringServiceV2:
                 "all_fields": list(all_fields),
                 "field_descriptions": field_descriptions
             })
-            
+
             # 统计数值字段（跨所有表）
             numeric_stats = []
             for item in data:
@@ -2566,7 +2566,7 @@ class LLMScoringServiceV2:
                                 if isinstance(value, (int, float)):
                                     # 查找已存在的字段统计或创建新的
                                     existing_stat = next(
-                                        (stat for stat in numeric_stats if stat["field"] == field_name), 
+                                        (stat for stat in numeric_stats if stat["field"] == field_name),
                                         None
                                     )
                                     if existing_stat:
@@ -2577,7 +2577,7 @@ class LLMScoringServiceV2:
                                             "values": [value],
                                             "description": field_descriptions.get(field_name, "")
                                         })
-            
+
             # 计算数值字段统计
             for stat in numeric_stats:
                 values = stat["values"]
@@ -2590,10 +2590,10 @@ class LLMScoringServiceV2:
                         "min": min(values)
                     })
                     del stat["values"]  # 移除原始值列表以节省空间
-            
+
             if numeric_stats:
                 summary["numeric_stats"] = numeric_stats
-                
+
         else:
             # 处理普通数据结构（保持原有逻辑）
             summary["data_type"] = "simple_records"
@@ -2608,7 +2608,7 @@ class LLMScoringServiceV2:
                     if value is not None:
                         types.add(type(value).__name__)
                 field_types[field] = list(types)
-            
+
             summary["field_types"] = field_types
 
             # 统计数值字段
@@ -2633,7 +2633,7 @@ class LLMScoringServiceV2:
             for field in summary["fields"]:
                 non_empty_count = sum(1 for item in data if item.get(field) is not None and item.get(field) != "")
                 non_empty_counts[field] = non_empty_count
-            
+
             summary["non_empty_counts"] = non_empty_counts
 
         return summary

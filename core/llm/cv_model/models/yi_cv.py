@@ -1,5 +1,6 @@
 from core.llm.cv_model.models.gptv4 import GptV4
 
+
 class YiCV(GptV4):
     _FACTORY_NAME = "01.AI"
 

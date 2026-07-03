@@ -4,15 +4,17 @@ import logging
 import queue
 import re
 import threading
+from collections.abc import Generator
 from functools import partial
-from typing import Generator, Any
+from typing import Any
+
 from sqlalchemy.orm import Session
 
 from api.db.db_models import LLM
 from api.db.services.common_service import CommonService
 from api.db.services.tenant_llm_service import LLM4Tenant, TenantLLMService
-from common.token_utils import num_tokens_from_string
 from common.constants import LLMType
+from common.token_utils import num_tokens_from_string
 
 
 class LLMService(CommonService):
@@ -120,9 +122,9 @@ class LLMBundle(LLM4Tenant):
         # 避免在外部模型调用期间持有 idle-in-transaction
         self._release_db_before_long_io()
         embeddings, used_tokens = self.mdl.encode(safe_texts)
-        
+
         if not self._record_usage(used_tokens):
-            logging.error("LLMBundle.encode can't update token usage for <tenant redacted>/EMBEDDING used_tokens: {}".format(used_tokens))
+            logging.error(f"LLMBundle.encode can't update token usage for <tenant redacted>/EMBEDDING used_tokens: {used_tokens}")
 
         if self.langfuse:
             generation.update(usage_details={"total_tokens": used_tokens})
@@ -138,7 +140,7 @@ class LLMBundle(LLM4Tenant):
         self._release_db_before_long_io()
         emd, used_tokens = self.mdl.encode_queries(query)
         if not self._record_usage(used_tokens):
-            logging.error("LLMBundle.encode_queries can't update token usage for <tenant redacted>/EMBEDDING used_tokens: {}".format(used_tokens))
+            logging.error(f"LLMBundle.encode_queries can't update token usage for <tenant redacted>/EMBEDDING used_tokens: {used_tokens}")
 
         if self.langfuse:
             generation.update(usage_details={"total_tokens": used_tokens})
@@ -186,7 +188,7 @@ class LLMBundle(LLM4Tenant):
         self._release_db_before_long_io()
         txt, used_tokens = self.mdl.describe_with_prompt(image, prompt)
         if not self._record_usage(used_tokens):
-            logging.error("LLMBundle.describe can't update token usage for {}/IMAGE2TEXT used_tokens: {}".format(self.tenant_id, used_tokens))
+            logging.error(f"LLMBundle.describe can't update token usage for {self.tenant_id}/IMAGE2TEXT used_tokens: {used_tokens}")
 
         if self.langfuse:
             generation.update(output={"output": txt}, usage_details={"total_tokens": used_tokens})
@@ -202,7 +204,7 @@ class LLMBundle(LLM4Tenant):
         self._release_db_before_long_io()
         txt, used_tokens = self.mdl.transcription(audio)
         if not self._record_usage(used_tokens):
-            logging.error("Can't update token usage for {}/SEQUENCE2TXT used_tokens: {}".format(self.tenant_id, used_tokens))
+            logging.error(f"Can't update token usage for {self.tenant_id}/SEQUENCE2TXT used_tokens: {used_tokens}")
 
         if self.langfuse:
             generation.update(output={"output": txt}, usage_details={"total_tokens": used_tokens})
@@ -216,7 +218,7 @@ class LLMBundle(LLM4Tenant):
         如果底层模型支持 stream_transcription，则使用流式模式；否则回退到非流式模式。
         """
         mdl = self.mdl
-        supports_stream = hasattr(mdl, "stream_transcription") and callable(getattr(mdl, "stream_transcription"))
+        supports_stream = hasattr(mdl, "stream_transcription") and callable(mdl.stream_transcription)
 
         if supports_stream:
             if self.langfuse:
@@ -290,7 +292,7 @@ class LLMBundle(LLM4Tenant):
         for chunk in self.mdl.tts(text):
             if isinstance(chunk, int):
                 if not self._record_usage(chunk):
-                    logging.error("LLMBundle.tts can't update token usage for {}/TTS".format(self.tenant_id))
+                    logging.error(f"LLMBundle.tts can't update token usage for {self.tenant_id}/TTS")
                 return
             yield chunk
 
@@ -471,7 +473,7 @@ class LLMBundle(LLM4Tenant):
             txt = re.sub(r"<tool_call>.*?</tool_call>", "", txt, flags=re.DOTALL)
 
         if used_tokens and not self._record_usage(used_tokens):
-            logging.error("LLMBundle.async_chat can't update token usage for {}/CHAT llm_name: {}, used_tokens: {}".format(self.tenant_id, self.llm_name, used_tokens))
+            logging.error(f"LLMBundle.async_chat can't update token usage for {self.tenant_id}/CHAT llm_name: {self.llm_name}, used_tokens: {used_tokens}")
 
         if generation:
             generation.update(output={"output": txt}, usage_details={"total_tokens": used_tokens})
@@ -528,7 +530,7 @@ class LLMBundle(LLM4Tenant):
                 raise
 
             if total_tokens and not self._record_usage(total_tokens):
-                logging.error("LLMBundle.async_chat_streamly can't update token usage for {}/CHAT llm_name: {}, used_tokens: {}".format(self.tenant_id, self.llm_name, total_tokens))
+                logging.error(f"LLMBundle.async_chat_streamly can't update token usage for {self.tenant_id}/CHAT llm_name: {self.llm_name}, used_tokens: {total_tokens}")
 
             if generation:
                 generation.update(output={"output": ans}, usage_details={"total_tokens": total_tokens})
@@ -583,7 +585,7 @@ class LLMBundle(LLM4Tenant):
                 raise
 
             if total_tokens and not self._record_usage(total_tokens):
-                logging.error("LLMBundle.async_chat_streamly_delta can't update token usage for {}/CHAT llm_name: {}, used_tokens: {}".format(self.tenant_id, self.llm_name, total_tokens))
+                logging.error(f"LLMBundle.async_chat_streamly_delta can't update token usage for {self.tenant_id}/CHAT llm_name: {self.llm_name}, used_tokens: {total_tokens}")
 
             if generation:
                 generation.update(output={"output": ans}, usage_details={"total_tokens": total_tokens})

@@ -1,16 +1,18 @@
 import asyncio
 import json
+import logging
 import uuid
 from datetime import datetime
 
 # todo 后续将redis替换成valkey，docker里也要换
 # import valkey as redis
 import redis
-import logging
-from common.decorator import singleton
-from common import settings
+
 # from valkey.lock import Lock
 from redis.lock import Lock
+
+from common import settings
+from common.decorator import singleton
 
 REDIS = {}
 try:
@@ -129,7 +131,7 @@ class RedisDB:
 
             self.register_scripts()
         except Exception as e:
-            logging.warning(f"Redis can't be connected. Error: {str(e)}")
+            logging.warning(f"Redis can't be connected. Error: {e!s}")
         return self.REDIS
 
     def health(self):
@@ -509,15 +511,15 @@ class RedisDB:
             logging.warning("RedisDB.delete " + str(key) + " got exception: " + str(e))
             self.__open__()
         return False
-    
+
     def expire(self, key: str, seconds: int) -> bool:
         """
         设置 key 的过期时间
-        
+
         Args:
             key: Redis key
             seconds: 过期时间（秒）
-            
+
         Returns:
             bool: 是否成功
         """
@@ -528,80 +530,80 @@ class RedisDB:
             logging.warning(f"RedisDB.expire {key} got exception: {e}")
             self.__open__()
         return False
-    
+
     def xadd_sse_event(self, task_id: str, event_type: str, data: dict, maxlen: int = 1000) -> bool:
         """
         发送 SSE 事件到 Redis Stream
-        
+
         用途：TaskExecutor 执行任务时发送进度事件，供 FastAPI SSE 接口读取
-        
+
         Args:
             task_id: 任务ID
             event_type: 事件类型（progress/complete/error/message）
             data: 事件数据字典
             maxlen: Stream 最大长度（自动清理旧消息）
-            
+
         Returns:
             bool: 是否成功
         """
         try:
             stream_key = f"sse:events:{task_id}"
-            
+
             payload = {
                 "event_type": event_type,
                 "data": json.dumps(data, ensure_ascii=False),
                 "timestamp": str(datetime.now().timestamp())
             }
-            
+
             # 添加到 Stream，限制最大长度
             self.REDIS.xadd(stream_key, payload, maxlen=maxlen)
-            
+
             # 设置过期时间（1小时）
             self.REDIS.expire(stream_key, 3600)
-            
+
             return True
-            
+
         except Exception as e:
             logging.warning(f"RedisDB.xadd_sse_event {task_id} got exception: {e}")
             self.__open__()
             return False
-    
+
     def xread_sse_events(self, task_id: str, last_id: str = '0-0', count: int = 10, block: int = 1000):
         """
         读取 SSE 事件 Stream
-        
+
         用途：FastAPI SSE 接口读取 TaskExecutor 发送的进度事件
-        
+
         Args:
             task_id: 任务ID
             last_id: 上次读取的消息ID（'0-0' 表示从头开始）
             count: 一次最多读取的消息数
             block: 阻塞等待时间（毫秒），0 表示不阻塞
-            
+
         Returns:
             list: 消息列表 [(msg_id, {event_type, data, timestamp}), ...]
         """
         try:
             stream_key = f"sse:events:{task_id}"
-            
+
             # 使用 XREAD 读取（不使用 consumer group，因为每个客户端独立）
             messages = self.REDIS.xread(
                 {stream_key: last_id},
                 count=count,
                 block=block
             )
-            
+
             if not messages:
                 return []
-            
+
             # 解析返回的消息
             result = []
             for stream, msg_list in messages:
                 for msg_id, payload in msg_list:
                     result.append((msg_id, payload))
-            
+
             return result
-            
+
         except Exception as e:
             # 如果 key 不存在是正常情况，不记录警告
             if 'no such key' not in str(e).lower():

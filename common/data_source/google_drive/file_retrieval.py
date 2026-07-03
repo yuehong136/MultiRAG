@@ -1,6 +1,6 @@
 import logging
 from collections.abc import Callable, Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 
 from googleapiclient.discovery import Resource  # type: ignore
@@ -35,10 +35,10 @@ def generate_time_range_filter(
 ) -> str:
     time_range_filter = ""
     if start is not None:
-        time_start = datetime.fromtimestamp(start, tz=timezone.utc).isoformat()
+        time_start = datetime.fromtimestamp(start, tz=UTC).isoformat()
         time_range_filter += f" and {GoogleFields.MODIFIED_TIME.value} > '{time_start}'"
     if end is not None:
-        time_stop = datetime.fromtimestamp(end, tz=timezone.utc).isoformat()
+        time_stop = datetime.fromtimestamp(end, tz=UTC).isoformat()
         time_range_filter += f" and {GoogleFields.MODIFIED_TIME.value} <= '{time_stop}'"
     return time_range_filter
 
@@ -54,7 +54,7 @@ def _get_folders_in_parent(
     if parent_id:
         query += f" and '{parent_id}' in parents"
 
-    for file in execute_paginated_retrieval(
+    yield from execute_paginated_retrieval(
         retrieval_function=service.files().list,
         list_key="files",
         continue_on_404_or_403=True,
@@ -63,8 +63,7 @@ def _get_folders_in_parent(
         includeItemsFromAllDrives=True,
         fields=FOLDER_FIELDS,
         q=query,
-    ):
-        yield file
+    )
 
 
 def _get_fields_for_file_type(field_type: DriveFileFieldType) -> str:
@@ -90,7 +89,7 @@ def _get_files_in_parent(
 
     kwargs = {ORDER_BY_KEY: GoogleFields.MODIFIED_TIME.value}
 
-    for file in execute_paginated_retrieval(
+    yield from execute_paginated_retrieval(
         retrieval_function=service.files().list,
         list_key="files",
         continue_on_404_or_403=True,
@@ -100,8 +99,7 @@ def _get_files_in_parent(
         fields=_get_fields_for_file_type(field_type),
         q=query,
         **kwargs,
-    ):
-        yield file
+    )
 
 
 def crawl_folders_for_files(

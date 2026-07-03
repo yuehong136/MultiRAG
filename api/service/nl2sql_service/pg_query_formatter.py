@@ -1,7 +1,8 @@
-import psycopg2
-import pandas as pd
-from typing import Dict, Any, Optional, Union, List, Tuple
 import datetime
+from typing import Any
+
+import pandas as pd
+import psycopg2
 
 
 def connect_to_postgres(
@@ -10,7 +11,7 @@ def connect_to_postgres(
         database: str,
         user: str,
         password: str
-) -> Optional[psycopg2.extensions.connection]:
+) -> psycopg2.extensions.connection | None:
     """
     连接到PostgreSQL数据库
 
@@ -41,7 +42,7 @@ def connect_to_postgres(
 def execute_query(
         conn: psycopg2.extensions.connection,
         sql: str
-) -> Union[pd.DataFrame, None]:
+) -> pd.DataFrame | None:
     """
     执行SQL查询并返回结果
 
@@ -92,7 +93,7 @@ def get_python_type_name(value):
         return type(value).__name__
 
 
-def infer_column_types(df: pd.DataFrame) -> List[Dict[str, str]]:
+def infer_column_types(df: pd.DataFrame) -> list[dict[str, str]]:
     """
     从DataFrame推断列类型
 
@@ -135,9 +136,9 @@ def infer_column_types(df: pd.DataFrame) -> List[Dict[str, str]]:
 
 
 def execute_sql_and_format_result(
-        db_config: Dict[str, Any] | None,
+        db_config: dict[str, Any] | None,
         sql: str
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     连接PostgreSQL数据库并执行查询，返回完整的查询结果，并格式化为指定格式
 

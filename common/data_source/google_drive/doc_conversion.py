@@ -1,7 +1,7 @@
 import io
 import logging
 import mimetypes
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse, urlunparse
@@ -277,12 +277,12 @@ def _download_request(request: Any, file_id: str, size_threshold: int) -> bytes:
         download_progress, done = downloader.next_chunk()
         if download_progress.resumable_progress > size_threshold:
             logging.warning(f"File {file_id} exceeds size threshold of {size_threshold}. Skipping2.")
-            return bytes()
+            return b""
 
     response = response_bytes.getvalue()
     if not response:
         logging.warning(f"Failed to download {file_id}")
-        return bytes()
+        return b""
     return response
 
 
@@ -470,10 +470,10 @@ def _convert_drive_item_to_document(
         doc_id = onyx_document_id_from_drive_file(file)
         modified_time = file.get("modifiedTime")
         try:
-            doc_updated_at = datetime.fromisoformat(modified_time.replace("Z", "+00:00")) if modified_time else datetime.now(timezone.utc)
+            doc_updated_at = datetime.fromisoformat(modified_time.replace("Z", "+00:00")) if modified_time else datetime.now(UTC)
         except ValueError:
             logging.warning(f"Failed to parse modifiedTime for {file.get('name')}, defaulting to current time.")
-            doc_updated_at = datetime.now(timezone.utc)
+            doc_updated_at = datetime.now(UTC)
 
         return Document(
             id=doc_id,

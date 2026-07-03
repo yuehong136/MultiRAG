@@ -5,7 +5,7 @@
 #
 import json
 from datetime import datetime
-from functools import lru_cache
+from functools import cache, lru_cache
 from json import JSONDecodeError
 from pathlib import Path
 from typing import Any
@@ -276,7 +276,7 @@ def _validate_with_schema(
         raise ValueError(f"{label} schema validation failed at {path}: {message}") from exc
 
 
-@lru_cache(maxsize=None)
+@cache
 def _schema(filename: str) -> dict[str, Any]:
     path = _SCHEMA_DIR / filename
     with path.open("r", encoding="utf-8") as fp:

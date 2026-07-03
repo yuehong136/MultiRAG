@@ -3,9 +3,11 @@ import json
 import os
 from datetime import date
 from enum import Enum
-from typing import Any, List, Dict, Optional, Tuple, Set
+from typing import Any
+
 from fastapi.params import Depends
 from sqlalchemy.orm import Session
+
 from api.apps import manager
 from api.db.db_models import get_db
 from api.db.services.ask_data_history_service import AskDataHistoryService
@@ -17,35 +19,33 @@ from api.service.askdata_service.llm.semantic_relevance_filter import SemanticRe
 from api.service.askdata_service.llm.sql_components_extractor import SQLComponentsExtractor
 from api.service.askdata_service.llm.sql_pagination_converter import SQLPaginationConverter
 from api.service.askdata_service.llm_sql_query_generator import NLQToInitialSQLGenerator
+from api.service.askdata_service.model_dataset_resolver import ModelDatasetResolver
 from api.service.askdata_service.process_semantic_layer import process_semantic_layer
 from api.service.askdata_service.query_intent import QueryIntentAnalyzer
-from api.service.askdata_service.sql_assembler import FlexibleSQLAssembler, FilterOperator, OrderDirection
-
+from api.service.askdata_service.sql_assembler import FilterOperator, FlexibleSQLAssembler, OrderDirection
 from api.service.askdata_service.sql_metric_exp_rewriter import SQLFieldAliasProcessor
+from api.service.askdata_service.stop_request_manager import stop_request_manager
 from api.service.askdata_service.table_config_generator import TableConfigGenerator
 from api.service.askdata_service.util.add_table_alias_to_fields import add_table_alias_to_fields
 from api.service.askdata_service.util.append_join_clauses import append_join_clauses
 from api.service.askdata_service.util.apply_permissions import apply_permissions_to_assembler
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
 from api.service.askdata_service.util.build_model_permissions_map import build_model_permissions_map
 from api.service.askdata_service.util.convert_aggregation_value import convert_aggregation_value
-from api.service.askdata_service.util.convert_where_condition_value import process_where_condition, convert_where_condition_value
+from api.service.askdata_service.util.convert_where_condition_value import convert_where_condition_value, process_where_condition
 from api.service.askdata_service.util.extract_manually_adjusted_field_ids import extract_manually_adjusted_field_ids
 from api.service.askdata_service.util.filter_model_relations_by_ids import filter_model_relations_by_ids
 from api.service.askdata_service.util.merge_dimensions_and_metrics import merge_dimensions_and_metrics
 from api.service.askdata_service.util.parse_from_clause import parse_from_clause
 from api.service.askdata_service.util.parse_sql_in_values import parse_sql_in_values
+from api.service.askdata_service.util.queried_fields_extractor import QueriedFieldsExtractor
 from api.service.askdata_service.util.semantic_filter_processor import apply_semantic_filter
-from api.service.askdata_service.util.semantic_permissions_filter import filter_dimensions_by_permissions, \
-    filter_metrics_by_permissions
+from api.service.askdata_service.util.semantic_permissions_filter import filter_dimensions_by_permissions, filter_metrics_by_permissions
 from api.service.askdata_service.util.timer import time_task
 from api.service.askdata_service.util.wide_table_sql_generator import WideTableSQLGenerator
-from api.service.askdata_service.stop_request_manager import stop_request_manager
 from api.service.nl2sql_service.custom_jieba_tokenizer import custom_tokenize_with_semantic_words
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
 from api.utils.prompt_template_util import PromptTemplateUtil
-from api.service.askdata_service.model_dataset_resolver import ModelDatasetResolver
-from api.service.askdata_service.util.askdata_logger import get_askdata_logger
-from api.service.askdata_service.util.queried_fields_extractor import QueriedFieldsExtractor
 
 logger = get_askdata_logger()
 
@@ -87,13 +87,13 @@ class AskdataService:
             is_stopped = stop_request_manager.is_stopped(ask_id)
             if is_stopped:
                 logger.info(f"检测到请求 {ask_id} 已被停止")
-                raise Exception(f"请求已被用户停止")
+                raise Exception("请求已被用户停止")
             return False
         except Exception as e:
             if "已被用户停止" in str(e):
                 raise e
             else:
-                logger.warning(f"检查停止状态时发生错误: {str(e)}")
+                logger.warning(f"检查停止状态时发生错误: {e!s}")
                 return False
 
     async def _async_check_if_stopped(self, ask_id: str) -> bool:
@@ -113,10 +113,10 @@ class AskdataService:
 
     async def rewrite_conversation_question(
             self,
-            conversation_history: Optional[List[Dict[str, Any]]],
+            conversation_history: list[dict[str, Any]] | None,
             new_user_question: str,
             llm_name: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """调用会话查询改写器，对用户追问进行改写。"""
         history_payload = conversation_history or []
         return await self.conversation_query_rewriter.rewrite_question(
@@ -127,10 +127,10 @@ class AskdataService:
 
     async def prepare_user_query_for_semantic_layer(
             self,
-            round_id: Optional[str],
+            round_id: str | None,
             original_user_query: str,
-            llm_name: Optional[str]
-    ) -> Tuple[str, Optional[str]]:
+            llm_name: str | None
+    ) -> tuple[str, str | None]:
         """根据历史对话改写用户提问，返回用于语义层生成的最终问题和改写后的问题。"""
         # 未配置多轮参数或缺少模型名称时，直接返回原始问题
         if not round_id or not llm_name:
@@ -142,7 +142,7 @@ class AskdataService:
             logger.warning("获取历史对话失败，使用原始问题: %s", history_error)
             return original_user_query, None
 
-        round_chat_list: List[Dict[str, Any]] = []
+        round_chat_list: list[dict[str, Any]] = []
         for chat in chat_history:
             user_original_question = chat.get("user_original_question")
             rewritten_question = chat.get("rewritten_question") or ""
@@ -183,9 +183,9 @@ class AskdataService:
         logger.info("多轮问题改写失败或判定不相关，继续使用原始查询")
         return original_user_query, None
 
-    async def generate_semantic_layer(self, user_query: str, dataset_id_list: List[str],
+    async def generate_semantic_layer(self, user_query: str, dataset_id_list: list[str],
                                       userid: str, llm_name: str = None,
-                                      event_id: Optional[str] = None, enable_deep_search: bool = False, ask_id: str = None):
+                                      event_id: str | None = None, enable_deep_search: bool = False, ask_id: str = None):
         """
         生成语义层信息
 
@@ -554,15 +554,15 @@ class AskdataService:
                             + (f"（其中 {_degraded} 个降级为空）" if _degraded else ""))
 
             # 9. 构建最终的语义层
-            semantic_layer_original = dict(
-                dataset_details=dataset_details,
-                dimensions=dimensions,
-                dimension_values=dimension_values,
-                metrics=all_metrics,
-                model_details=model_details,
-                model_relations=model_relations,
-                business_term_rows=business_term_rows
-            )
+            semantic_layer_original = {
+                "dataset_details": dataset_details,
+                "dimensions": dimensions,
+                "dimension_values": dimension_values,
+                "metrics": all_metrics,
+                "model_details": model_details,
+                "model_relations": model_relations,
+                "business_term_rows": business_term_rows
+            }
 
             processed_semantic_layer = process_semantic_layer(
                 semantic_layer_original,
@@ -584,21 +584,21 @@ class AskdataService:
             }
 
             return processed_semantic_layer, [model_detail["modelId"] for model_detail in model_details], recommended_chart, recommendation_reason, phase2_prefetch_data
-        except Exception as e:
+        except Exception:
             raise
 
     async def analyze_user_query_stream(
-            self, event_id: str, user_query: str, rewritten_question: Optional[str], round_id: Optional[str],
-            semantic_layer: Dict[str, Any],
-            llm_name: Optional[str], tenant_id: str, recommended_chart: str, recommendation_reason: str,
-            ask_id: Optional[str] = None
+            self, event_id: str, user_query: str, rewritten_question: str | None, round_id: str | None,
+            semantic_layer: dict[str, Any],
+            llm_name: str | None, tenant_id: str, recommended_chart: str, recommendation_reason: str,
+            ask_id: str | None = None
     ):
         """分析用户问题并流式返回结果。"""
         # 在开始流式分析前检查是否被停止
         if ask_id:
             await self._async_check_if_stopped(ask_id)
 
-        round_chat_list: List[Dict[str, Any]] = []
+        round_chat_list: list[dict[str, Any]] = []
         if round_id:
             chat_history = await self.get_ask_data_history_by_round(round_id)
             for round_chat in chat_history:
@@ -634,9 +634,8 @@ class AskdataService:
         await llm_service.chat_stream_async(event_id=event_id, tenant_id=tenant_id, history=history, gen_conf=gen_conf,
                                             llm_name=llm_name)
 
-    async def nlq_to_initial_sql(self, user_query: str, llm_name: str, semantic_layer: Dict[str, Any],
-                                 recommended_chart: str, ask_id: str = None) -> Optional[
-        Dict[str, Any]]:
+    async def nlq_to_initial_sql(self, user_query: str, llm_name: str, semantic_layer: dict[str, Any],
+                                 recommended_chart: str, ask_id: str = None) -> dict[str, Any] | None:
         """
         从自然语言生成初始SQL，返回包含组件的完整字典。
 
@@ -665,7 +664,7 @@ class AskdataService:
         return result
 
     async def fix_sql_query_with_components(self, user_query: str, original_sql: str, error_message: str,
-                                            semantic_layer: Dict[str, Any], llm_name: str, ask_id: str = None) -> Optional[Dict[str, Any]]:
+                                            semantic_layer: dict[str, Any], llm_name: str, ask_id: str = None) -> dict[str, Any] | None:
         """
         修复执行失败的SQL查询
 
@@ -686,8 +685,8 @@ class AskdataService:
         return result
 
     async def generate_table_config(self,
-                                    used_table_detail_dict: Dict[str, Dict], model_list: List[Dict],
-                                    sql_components: Dict[str, Any], recommended_chart: str,
+                                    used_table_detail_dict: dict[str, dict], model_list: list[dict],
+                                    sql_components: dict[str, Any], recommended_chart: str,
                                     cached_model_relations: list | None = None,
                                     cached_dimension_values: dict | None = None):
         """
@@ -705,11 +704,11 @@ class AskdataService:
 
     async def get_model_details_and_determine_dataset(
             self,
-            model_ids: List[str],
-            used_models: List[str],
-            dataset_id_list: List[str],
+            model_ids: list[str],
+            used_models: list[str],
+            dataset_id_list: list[str],
             cached_model_details: list | None = None,
-    ) -> Tuple[Dict, Dict, List, Set]:
+    ) -> tuple[dict, dict, list, set]:
         """
         构建模型详情字典，并确定使用的数据集
         委托给专门的解析器处理
@@ -721,8 +720,8 @@ class AskdataService:
 
     async def add_ask_data_history(self, conversation_id: str, ask_id: str, user_id: str, data: str,
                                    round_id: str = None,
-                                   user_origin_question: str = None, rewritten_question: Optional[str] = None,
-                                   processed_semantic_layer: str = None, request_ask_id: Optional[str] = None):
+                                   user_origin_question: str = None, rewritten_question: str | None = None,
+                                   processed_semantic_layer: str = None, request_ask_id: str | None = None):
         """添加一条问数历史记录。"""
         # 在保存历史记录前检查是否被停止
         if request_ask_id:
@@ -737,10 +736,10 @@ class AskdataService:
 
     def extract_queried_fields(
         self,
-        sql_components: Dict[str, Any],
-        semantic_layer: Dict[str, Any],
-        used_models: List[str]
-    ) -> Dict[str, Any]:
+        sql_components: dict[str, Any],
+        semantic_layer: dict[str, Any],
+        used_models: list[str]
+    ) -> dict[str, Any]:
         """
         从SQL组件和语义层中提取查询字段信息
 
@@ -770,8 +769,8 @@ class AskdataService:
         """根据轮次ID获取问数历史记录，按时间从早到晚排列。"""
         return self.history_service.get_by_round_id(self.db, round_id)
 
-    def _extract_unique_model_ids(self, dimensions: List[Any], metrics: List[Any]) -> Tuple[
-        List[str], List[Dict[str, str]]]:
+    def _extract_unique_model_ids(self, dimensions: list[Any], metrics: list[Any]) -> tuple[
+        list[str], list[dict[str, str]]]:
         """从维度和指标数据中提取所有modelId并去重，同时返回模型详细信息。
 
         Returns:
@@ -795,18 +794,18 @@ class AskdataService:
 
         return model_ids, model_details
 
-    def _deduplicate_dimensions(self, dims_by_keyword: List[Any], dims_by_value: List[Any]) -> List[str]:
+    def _deduplicate_dimensions(self, dims_by_keyword: list[Any], dims_by_value: list[Any]) -> list[str]:
         """根据dimensionId对两个维度列表进行去重合并。"""
         return list(set(
             [d.get('dimensionId') for d in dims_by_keyword if d.get('dimensionId')] +
             [d.get('dimensionId') for d in dims_by_value if d.get('dimensionId')]
         ))
 
-    def _extract_unique_domain_ids(self, dataset_details: List[Any]) -> List[str]:
+    def _extract_unique_domain_ids(self, dataset_details: list[Any]) -> list[str]:
         """从数据集详情列表中提取所有domainId并去重。"""
-        return list(set(d.get('domainId') for d in dataset_details if d.get('domainId')))
+        return list({d.get('domainId') for d in dataset_details if d.get('domainId')})
 
-    def _apply_nonsemantic_where(self, assembler, cond: Dict[str, Any]) -> None:
+    def _apply_nonsemantic_where(self, assembler, cond: dict[str, Any]) -> None:
         """把一条「非语义」WHERE 条件应用到 assembler —— table-row 与聚合分支共用，杜绝两套漂移。
 
         优先级：raw_condition(has_or/复杂表达式) > 结构化(operator+value 分开)重组 > 整条 sql_column 正则兜底 > 裸列兜底。
@@ -898,7 +897,7 @@ class AskdataService:
         logger.warning(f"[re-query] 无法解析非语义 where 条件，按原始 SQL 添加(可能非法): {sql_column}")
         assembler.add_raw_where(sql_column)
 
-    def _apply_nonsemantic_having(self, assembler, cond: Dict[str, Any]) -> None:
+    def _apply_nonsemantic_having(self, assembler, cond: dict[str, Any]) -> None:
         """把一条「非语义」HAVING 条件应用到 assembler，与非语义 where 同源对齐。
 
         构建器非语义 having 同样只存「字段名 + 独立 operator/value」，原先 add_raw_having(sql_column) 把裸字段名
@@ -928,7 +927,7 @@ class AskdataService:
             value = convert_where_condition_value(value, data_type, operator)
         assembler.add_having(sql_column, FilterOperator.from_value(operator), value)
 
-    def _normalize_cap(self, cap) -> Optional[int]:
+    def _normalize_cap(self, cap) -> int | None:
         """把可能来自前端回传的行数上限归一成「正整数或 None」。
 
         cap 类型不固定：int 30 / 数字字符串 "30" / None / 空串 / bool。
@@ -940,7 +939,7 @@ class AskdataService:
             cap = int(cap.strip()) if cap.strip().isdigit() else None
         return cap if isinstance(cap, int) and cap > 0 else None
 
-    def _effective_limit(self, cap: Optional[int], ceiling: Optional[int]) -> Optional[int]:
+    def _effective_limit(self, cap: int | None, ceiling: int | None) -> int | None:
         """导出行数上限 = min(用户 N 上限, ceiling 安全阈值)。
 
         只有 cap → cap；只有 ceiling → ceiling；两者都有 → min；两者都无 → None
@@ -1019,10 +1018,10 @@ class AskdataService:
             "count_sql_params": count_sql_params,
         }
 
-    async def generate_requery_sql(self, chart_type: str, table_config: Dict[str, Any], sql_components: Dict[str, Any],
-                                   model_table_alias_mapping_list: List[Dict[str, Any]],
-                                   pagination_info: Optional[Dict[str, Any]], user_id: str,
-                                   export_mode: bool = False, export_ceiling: Optional[int] = None):
+    async def generate_requery_sql(self, chart_type: str, table_config: dict[str, Any], sql_components: dict[str, Any],
+                                   model_table_alias_mapping_list: list[dict[str, Any]],
+                                   pagination_info: dict[str, Any] | None, user_id: str,
+                                   export_mode: bool = False, export_ceiling: int | None = None):
         """生成重新查询的SQL语句。
 
         export_mode=True（导出全部数据）时：不分页，按 effective_limit=min(用户N上限, ceiling)
@@ -1130,7 +1129,7 @@ class AskdataService:
                     logger.warning(f"未找到以下表与主表的关系信息: {[t['table'] for t in tables_to_add]}")
 
             except Exception as e:
-                logger.error(f"获取模型关系失败: {str(e)}", exc_info=True)
+                logger.error(f"获取模型关系失败: {e!s}", exc_info=True)
                 raise e
         elif tables_to_add and not main_table_model_id:
             logger.error(f"无法找到主表 {main_table} 的模型ID，无法添加新的 JOIN")
@@ -1349,7 +1348,7 @@ class AskdataService:
             page_size: int = 20,
             fuzzy_match: bool = True,
             user_id: str = None
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         根据关键词在高基数维度中搜索维度值
 
@@ -1386,11 +1385,10 @@ class AskdataService:
             return result
 
         except Exception as e:
-            logger.exception(f"获取高基数维度值失败: {str(e)}")
+            logger.exception(f"获取高基数维度值失败: {e!s}")
             raise
 
-    def _find_semantic_field(self, semantic_id: str, all_semantic_fields: List[Dict[str, Any]]) -> Optional[
-        Dict[str, Any]]:
+    def _find_semantic_field(self, semantic_id: str, all_semantic_fields: list[dict[str, Any]]) -> dict[str, Any] | None:
         """根据语义字段ID查找语义字段信息"""
         for field in all_semantic_fields:
             if field["id"] == semantic_id:
@@ -1402,7 +1400,7 @@ class AskdataService:
 
         return None
 
-    def _find_table_alias(self, model_id: str, table_alias_mapping_list: List[Dict[str, Any]]) -> Optional[str]:
+    def _find_table_alias(self, model_id: str, table_alias_mapping_list: list[dict[str, Any]]) -> str | None:
         """根据模型ID查找表别名"""
         for mapping in table_alias_mapping_list:
             if mapping["modelId"] == model_id:
@@ -1410,7 +1408,7 @@ class AskdataService:
 
         return None
 
-    def _find_model_name(self, model_id: str, table_alias_mapping_list: List[Dict[str, Any]]) -> Optional[str]:
+    def _find_model_name(self, model_id: str, table_alias_mapping_list: list[dict[str, Any]]) -> str | None:
         """根据模型ID查找模型名称"""
         for mapping in table_alias_mapping_list:
             if mapping["modelId"] == model_id:
@@ -1460,7 +1458,7 @@ class AskdataService:
                         [dataset_id]
                     )
                 except Exception as e:
-                    logger.warning(f"获取用户权限失败，将使用默认权限: {str(e)}")
+                    logger.warning(f"获取用户权限失败，将使用默认权限: {e!s}")
                     user_permissions = None
 
             # 4. 生成SQL
@@ -1476,7 +1474,7 @@ class AskdataService:
             return sql
 
         except Exception as e:
-            logger.error(f"生成宽表SQL时发生错误: {str(e)}", exc_info=True)
+            logger.error(f"生成宽表SQL时发生错误: {e!s}", exc_info=True)
             raise
 
 

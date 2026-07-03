@@ -195,7 +195,7 @@ class XinferenceSeq2txt(Base):
                 return "**ERROR**: Failed to retrieve transcription.", 0
 
         except requests.exceptions.RequestException as e:
-            return f"**ERROR**: {str(e)}", 0
+            return f"**ERROR**: {e!s}", 0
 
 
 class TencentCloudSeq2txt(Base):

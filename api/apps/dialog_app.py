@@ -1,16 +1,15 @@
-from typing import Annotated, Literal, Any
-
 import io
 import json
 import logging
 import zipfile
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Query, HTTPException, Body, File, UploadFile
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel, ConfigDict, Discriminator, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field, Discriminator, model_validator, field_validator, ConfigDict
 
 from api.apps import manager
 from api.db.db_models import get_db
@@ -18,12 +17,10 @@ from api.db.services.dialog_service import DialogService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService, UserTenantService
+from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
-from api.utils.api_utils import server_error_response, get_data_error_result, get_json_result
-from common.constants import StatusEnum
+from common.constants import RetCode, StatusEnum
 from common.misc_utils import get_uuid
-from common.constants import RetCode
-
 
 router = APIRouter()
 
@@ -568,7 +565,7 @@ def rm(request: RemoveDialogRequest, db: Session = Depends(get_db), user=Depends
                     break
             else:
                 return get_json_result(
-                    data=False, retmsg=f'Only owner of dialog authorized for this operation.',
+                    data=False, retmsg='Only owner of dialog authorized for this operation.',
                     retcode=RetCode.OPERATING_ERROR)
             dialog_list.append({"id": id, "status": StatusEnum.INVALID.value})
         DialogService.update_many_by_id(db, dialog_list)
@@ -606,7 +603,7 @@ def _build_template_json(dialog_dict: dict) -> dict:
     return {
         "format": TEMPLATE_FORMAT,
         "version": TEMPLATE_VERSION,
-        "export_time": datetime.now(timezone.utc).isoformat(),
+        "export_time": datetime.now(UTC).isoformat(),
         "app": sanitize_dialog_for_export(dialog_dict),
     }
 
@@ -679,7 +676,7 @@ def export_templates(
             manifest = {
                 "format": TEMPLATE_BUNDLE_FORMAT,
                 "version": TEMPLATE_VERSION,
-                "export_time": datetime.now(timezone.utc).isoformat(),
+                "export_time": datetime.now(UTC).isoformat(),
                 "count": len(manifest_files),
                 "files": manifest_files,
             }

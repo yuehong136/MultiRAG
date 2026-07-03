@@ -1,14 +1,14 @@
 import argparse
+import getpass
 import sys
+import warnings
 from cmd import Cmd
 from typing import Any
 
-import getpass
-import warnings
-from lark import Lark, Tree
-from parser import GRAMMAR, MultiRAGCLITransformer
 from http_client import HttpClient
-from multirag_client import MultiRAGClient, run_command, show_help
+from lark import Lark, Tree
+from multirag_client import MultiRAGClient, run_command
+from parser import GRAMMAR, MultiRAGCLITransformer
 from user import login_user
 
 warnings.filterwarnings("ignore", category=getpass.GetPassWarning)
@@ -66,7 +66,7 @@ class MultiRAGCLI(Cmd):
             result = self.parser.parse(command_str)
             return result
         except Exception as e:
-            return {'type': 'error', 'message': f'Parse error: {str(e)}'}
+            return {'type': 'error', 'message': f'Parse error: {e!s}'}
 
     def verify_auth(self, arguments: dict[str, str | int], single_command: bool, auth: bool = True) -> bool:
         host = str(arguments["host"])

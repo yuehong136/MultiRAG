@@ -15,6 +15,7 @@
 #
 import logging
 import time
+
 from elasticsearch import Elasticsearch
 
 from common import settings
@@ -37,7 +38,7 @@ class ElasticSearchConnectionPool:
                 if self._connect():
                     break
             except Exception as e:
-                logging.warning(f"{str(e)}. Waiting Elasticsearch {self.ES_CONFIG['hosts']} to be healthy.")
+                logging.warning(f"{e!s}. Waiting Elasticsearch {self.ES_CONFIG['hosts']} to be healthy.")
                 time.sleep(5)
 
         if not hasattr(self, "es_conn") or not self.es_conn or not self.es_conn.ping():

@@ -1,10 +1,10 @@
-from typing import Dict, Any, List
+from typing import Any
 
 
 def build_model_permissions_map(
-        permissions_response: Dict[str, Any],
-        model_table_alias_mapping_list: List[Dict[str, Any]]
-) -> Dict[str, Dict[str, Any]]:
+        permissions_response: dict[str, Any],
+        model_table_alias_mapping_list: list[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
     """
     从权限响应中提取每个模型的行级权限，构建模型ID到权限信息的映射
 
@@ -63,9 +63,9 @@ def build_model_permissions_map(
 
 
 def convert_row_filter_to_sql_conditions(
-        row_filter: Dict[str, Any],
+        row_filter: dict[str, Any],
         table_alias: str
-) -> List[str]:
+) -> list[str]:
     """
     将 rowFilter 转换为 SQL WHERE 条件列表
 

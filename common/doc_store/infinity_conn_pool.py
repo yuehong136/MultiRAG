@@ -48,7 +48,7 @@ class InfinityConnectionPool:
                     conn_pool.release_conn(inf_conn)
                     break
             except Exception as e:
-                logging.warning(f"{str(e)}. Waiting Infinity {infinity_uri} to be healthy.")
+                logging.warning(f"{e!s}. Waiting Infinity {infinity_uri} to be healthy.")
                 time.sleep(5)
 
         if self.conn_pool is None:

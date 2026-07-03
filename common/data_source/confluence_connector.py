@@ -3,48 +3,73 @@ import copy
 import json
 import logging
 import time
-from datetime import datetime, timezone, timedelta
+from collections.abc import Callable, Generator, Iterator
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, cast, Iterator, Callable, Generator
-
-import requests
-from typing_extensions import override
+from typing import Any, cast, override
 from urllib.parse import quote
 
 import bs4
-from atlassian.errors import ApiError
+import requests
 from atlassian import Confluence
+from atlassian.errors import ApiError
 from requests.exceptions import HTTPError
 
-from common.data_source.config import INDEX_BATCH_SIZE, DocumentSource, CONTINUE_ON_CONNECTOR_FAILURE, \
-    CONFLUENCE_CONNECTOR_LABELS_TO_SKIP, CONFLUENCE_TIMEZONE_OFFSET, CONFLUENCE_CONNECTOR_USER_PROFILES_OVERRIDE, \
-    CONFLUENCE_SYNC_TIME_BUFFER_SECONDS, \
-    OAUTH_CONFLUENCE_CLOUD_CLIENT_ID, OAUTH_CONFLUENCE_CLOUD_CLIENT_SECRET, _DEFAULT_PAGINATION_LIMIT, \
-    _PROBLEMATIC_EXPANSIONS, _REPLACEMENT_EXPANSIONS, _USER_NOT_FOUND, _COMMENT_EXPANSION_FIELDS, \
-    _ATTACHMENT_EXPANSION_FIELDS, _PAGE_EXPANSION_FIELDS, ONE_DAY, ONE_HOUR, _RESTRICTIONS_EXPANSION_FIELDS, \
-    _SLIM_DOC_BATCH_SIZE, CONFLUENCE_CONNECTOR_ATTACHMENT_SIZE_THRESHOLD
-from common.data_source.exceptions import (
-    ConnectorMissingCredentialError,
-    ConnectorValidationError,
-    InsufficientPermissionsError,
-    UnexpectedValidationError, CredentialExpiredError
+from common.data_source.config import (
+    _ATTACHMENT_EXPANSION_FIELDS,
+    _COMMENT_EXPANSION_FIELDS,
+    _DEFAULT_PAGINATION_LIMIT,
+    _PAGE_EXPANSION_FIELDS,
+    _PROBLEMATIC_EXPANSIONS,
+    _REPLACEMENT_EXPANSIONS,
+    _RESTRICTIONS_EXPANSION_FIELDS,
+    _SLIM_DOC_BATCH_SIZE,
+    _USER_NOT_FOUND,
+    CONFLUENCE_CONNECTOR_ATTACHMENT_SIZE_THRESHOLD,
+    CONFLUENCE_CONNECTOR_LABELS_TO_SKIP,
+    CONFLUENCE_CONNECTOR_USER_PROFILES_OVERRIDE,
+    CONFLUENCE_SYNC_TIME_BUFFER_SECONDS,
+    CONFLUENCE_TIMEZONE_OFFSET,
+    CONTINUE_ON_CONNECTOR_FAILURE,
+    INDEX_BATCH_SIZE,
+    OAUTH_CONFLUENCE_CLOUD_CLIENT_ID,
+    OAUTH_CONFLUENCE_CLOUD_CLIENT_SECRET,
+    ONE_DAY,
+    ONE_HOUR,
+    DocumentSource,
 )
+from common.data_source.exceptions import ConnectorMissingCredentialError, ConnectorValidationError, CredentialExpiredError, InsufficientPermissionsError, UnexpectedValidationError
 from common.data_source.html_utils import format_document_soup
 from common.data_source.interfaces import (
+    AttachmentProcessingResult,
+    CheckpointedConnector,
+    CheckpointOutput,
+    ConfluenceUser,
     ConnectorCheckpoint,
     CredentialsConnector,
+    CredentialsProviderInterface,
+    IndexingHeartbeatInterface,
     SecondsSinceUnixEpoch,
-    SlimConnectorWithPermSync, StaticCredentialsProvider, CheckpointedConnector, SlimConnector,
-    CredentialsProviderInterface, ConfluenceUser, IndexingHeartbeatInterface, AttachmentProcessingResult,
-    CheckpointOutput
+    SlimConnector,
+    SlimConnectorWithPermSync,
+    StaticCredentialsProvider,
 )
-from common.data_source.models import ConnectorFailure, Document, TextSection, ImageSection, BasicExpertInfo, \
-    DocumentFailure, GenerateSlimDocumentOutput, SlimDocument, ExternalAccess
-from common.data_source.utils import load_all_docs_from_checkpoint_connector, scoped_url, \
-    process_confluence_user_profiles_override, confluence_refresh_tokens, run_with_timeout, _handle_http_error, \
-    update_param_in_path, get_start_param_from_url, build_confluence_document_id, datetime_from_string, \
-    is_atlassian_date_error, validate_attachment_filetype
-from core.utils.redis_conn import RedisDB, REDIS_CONN
+from common.data_source.models import BasicExpertInfo, ConnectorFailure, Document, DocumentFailure, ExternalAccess, GenerateSlimDocumentOutput, ImageSection, SlimDocument, TextSection
+from common.data_source.utils import (
+    _handle_http_error,
+    build_confluence_document_id,
+    confluence_refresh_tokens,
+    datetime_from_string,
+    get_start_param_from_url,
+    is_atlassian_date_error,
+    load_all_docs_from_checkpoint_connector,
+    process_confluence_user_profiles_override,
+    run_with_timeout,
+    scoped_url,
+    update_param_in_path,
+    validate_attachment_filetype,
+)
+from core.utils.redis_conn import REDIS_CONN, RedisDB
 
 _USER_ID_TO_DISPLAY_NAME_CACHE: dict[str, str | None] = {}
 _USER_EMAIL_CACHE: dict[str, str | None] = {}
@@ -160,7 +185,7 @@ class OnyxConfluence:
 
         # check if we should refresh tokens. we're deciding to refresh halfway
         # to expiration
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         created_at = datetime.fromisoformat(credential_json["created_at"])
         expires_in: int = credential_json["expires_in"]
         renew_at = created_at + timedelta(seconds=expires_in // 2)
@@ -1523,7 +1548,7 @@ class ConfluenceConnector(
                 path_parts.append(space_name)
 
             # Add ancestor pages to path if available
-            if "ancestors" in page and page["ancestors"]:
+            if page.get("ancestors"):
                 for ancestor in page["ancestors"]:
                     ancestor_title = ancestor.get("title", "")
                     if ancestor_title:

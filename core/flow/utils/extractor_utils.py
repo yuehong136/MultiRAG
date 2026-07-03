@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 Canvas-free Extractor facade.
 
@@ -6,8 +5,8 @@ This helper keeps the direct-call metadata extraction interface while delegating
 prompt rendering and chunk iteration to ``core.flow.extractor.Extractor``.
 """
 
-from copy import deepcopy
 import logging
+from copy import deepcopy
 
 from core.flow.extractor.extractor import Extractor, ExtractorParam
 

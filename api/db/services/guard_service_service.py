@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -7,9 +6,10 @@
 @desc: AI安全护栏服务配置管理服务
 """
 import logging
-from typing import List, Optional, Dict, Any
-from sqlalchemy.orm import Session
+from typing import Any
+
 from sqlalchemy import and_
+from sqlalchemy.orm import Session
 
 from api.db.db_models import GuardService
 from api.db.services.common_service import CommonService
@@ -23,10 +23,10 @@ class GuardServiceService(CommonService):
     @classmethod
     def create_service(cls, db: Session, code: str, name: str,
                       description: str = None, tenant_id: str = None,
-                      created_by: str = None, **kwargs) -> Optional[str]:
+                      created_by: str = None, **kwargs) -> str | None:
         """
         创建AI服务配置
-        
+
         Args:
             db: 数据库会话
             code: 服务代码
@@ -35,7 +35,7 @@ class GuardServiceService(CommonService):
             tenant_id: 租户ID
             created_by: 创建者ID
             **kwargs: 其他参数
-            
+
         Returns:
             创建成功返回服务ID，失败返回None
         """
@@ -45,7 +45,7 @@ class GuardServiceService(CommonService):
             if existing:
                 logging.warning(f"服务代码 {code} 已存在，租户: {tenant_id}")
                 return None
-                
+
             service_data = {
                 "id": get_uuid(),
                 "code": code,
@@ -63,25 +63,25 @@ class GuardServiceService(CommonService):
                 "blocked_requests": 0,
                 "status": kwargs.get("status", "1")
             }
-            
+
             service = cls.save(db, **service_data)
             return service.id
-            
+
         except Exception as e:
             logging.error(f"创建服务配置失败: {e}")
             return None
 
     @classmethod
-    def get_service_by_code(cls, db: Session, code: str, 
-                           tenant_id: str) -> Optional[GuardService]:
+    def get_service_by_code(cls, db: Session, code: str,
+                           tenant_id: str) -> GuardService | None:
         """
         根据代码获取服务配置
-        
+
         Args:
             db: 数据库会话
             code: 服务代码
             tenant_id: 租户ID
-            
+
         Returns:
             服务配置对象或None
         """
@@ -98,14 +98,14 @@ class GuardServiceService(CommonService):
             return None
 
     @classmethod
-    def get_services_by_tenant(cls, db: Session, tenant_id: str) -> List[GuardService]:
+    def get_services_by_tenant(cls, db: Session, tenant_id: str) -> list[GuardService]:
         """
         获取租户的服务配置列表
-        
+
         Args:
             db: 数据库会话
             tenant_id: 租户ID
-            
+
         Returns:
             服务配置列表
         """
@@ -121,16 +121,16 @@ class GuardServiceService(CommonService):
             return []
 
     @classmethod
-    def update_service(cls, db: Session, service_id: str, 
-                      update_data: Dict[str, Any]) -> int:
+    def update_service(cls, db: Session, service_id: str,
+                      update_data: dict[str, Any]) -> int:
         """
         更新服务配置
-        
+
         Args:
             db: 数据库会话
             service_id: 服务ID
             update_data: 更新数据
-            
+
         Returns:
             返回受影响的行数，失败返回0
         """
@@ -141,16 +141,16 @@ class GuardServiceService(CommonService):
             return 0
 
     @classmethod
-    def increment_request_count(cls, db: Session, service_id: str, 
+    def increment_request_count(cls, db: Session, service_id: str,
                               blocked: bool = False) -> int:
         """
         增加请求统计
-        
+
         Args:
             db: 数据库会话
             service_id: 服务ID
             blocked: 是否被拦截
-            
+
         Returns:
             返回受影响的行数，服务不存在或失败返回0
         """
@@ -158,11 +158,11 @@ class GuardServiceService(CommonService):
             service = cls.get_by_id(db, service_id)
             if not service:
                 return 0
-                
+
             update_data = {
                 "total_requests": service.total_requests + 1
             }
-            
+
             if blocked:
                 update_data["blocked_requests"] = service.blocked_requests + 1
 
@@ -172,16 +172,16 @@ class GuardServiceService(CommonService):
             return 0
 
     @classmethod
-    def init_default_services(cls, db: Session, tenant_id: str, 
-                             created_by: str) -> List[str]:
+    def init_default_services(cls, db: Session, tenant_id: str,
+                             created_by: str) -> list[str]:
         """
         初始化默认服务配置
-        
+
         Args:
             db: 数据库会话
             tenant_id: 租户ID
             created_by: 创建者ID
-            
+
         Returns:
             创建的服务ID列表
         """
@@ -215,7 +215,7 @@ class GuardServiceService(CommonService):
                 "timeout_ms": 1500
             }
         ]
-        
+
         created_ids = []
         for service_data in default_services:
             service_id = cls.create_service(
@@ -226,5 +226,5 @@ class GuardServiceService(CommonService):
             )
             if service_id:
                 created_ids.append(service_id)
-                
+
         return created_ids

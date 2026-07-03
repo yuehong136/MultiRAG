@@ -23,7 +23,7 @@ with the configured sandbox provider.
 
 import json
 import logging
-from typing import Dict, Any, Optional
+from typing import Any
 
 from api.db.db_models import SessionLocal
 from api.db.services.system_settings_service import SystemSettingsService
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 # Global provider manager instance
-_provider_manager: Optional[ProviderManager] = None
+_provider_manager: ProviderManager | None = None
 
 
 def get_provider_manager() -> ProviderManager:
@@ -144,7 +144,7 @@ def execute_code(
     code: str,
     language: str = "python",
     timeout: int = 30,
-    arguments: Optional[Dict[str, Any]] = None
+    arguments: dict[str, Any] | None = None
 ) -> ExecutionResult:
     """
     Execute code in the configured sandbox.
@@ -216,7 +216,7 @@ def health_check() -> bool:
         return False
 
 
-def get_provider_info() -> Dict[str, Any]:
+def get_provider_info() -> dict[str, Any]:
     """
     Get information about the current sandbox provider.
 

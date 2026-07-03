@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Dict, List
+from typing import Any
 
 from api.service.docx2zjform_service.component import Component
 
@@ -23,15 +23,15 @@ class Element(ABC):
 
     def __init__(self, element_type: ElementType):
         self.type = element_type
-        self.form_components: List[Component] = []
+        self.form_components: list[Component] = []
 
     @abstractmethod
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式"""
         pass
 
     @classmethod
     @abstractmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Element':
+    def from_dict(cls, data: dict[str, Any]) -> 'Element':
         """从字典创建元素"""
         pass

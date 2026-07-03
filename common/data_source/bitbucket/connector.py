@@ -1,41 +1,27 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Callable
-from collections.abc import Iterator
-from datetime import datetime
-from datetime import timezone
-from typing import Any
-from typing import TYPE_CHECKING
+from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, override
 
-from typing_extensions import override
-
-from common.data_source.config import INDEX_BATCH_SIZE
-from common.data_source.config import DocumentSource
-from common.data_source.config import REQUEST_TIMEOUT_SECONDS
-from common.data_source.exceptions import ( 
+from common.data_source.bitbucket.utils import (
+    PR_LIST_RESPONSE_FIELDS,
+    SLIM_PR_LIST_RESPONSE_FIELDS,
+    build_auth_client,
+    list_repositories,
+    map_pr_to_document,
+    paginate,
+)
+from common.data_source.config import INDEX_BATCH_SIZE, REQUEST_TIMEOUT_SECONDS, DocumentSource
+from common.data_source.exceptions import (
     ConnectorMissingCredentialError,
     CredentialExpiredError,
     InsufficientPermissionsError,
     UnexpectedValidationError,
 )
-from common.data_source.interfaces import CheckpointedConnector
-from common.data_source.interfaces import CheckpointOutput
-from common.data_source.interfaces import IndexingHeartbeatInterface
-from common.data_source.interfaces import SecondsSinceUnixEpoch
-from common.data_source.interfaces import SlimConnectorWithPermSync
-from common.data_source.models import ConnectorCheckpoint
-from common.data_source.models import ConnectorFailure
-from common.data_source.models import DocumentFailure
-from common.data_source.models import SlimDocument
-from common.data_source.bitbucket.utils import (
-    build_auth_client,
-    list_repositories,
-    map_pr_to_document,
-    paginate,
-    PR_LIST_RESPONSE_FIELDS,
-    SLIM_PR_LIST_RESPONSE_FIELDS,
-)
+from common.data_source.interfaces import CheckpointedConnector, CheckpointOutput, IndexingHeartbeatInterface, SecondsSinceUnixEpoch, SlimConnectorWithPermSync
+from common.data_source.models import ConnectorCheckpoint, ConnectorFailure, DocumentFailure, SlimDocument
 
 if TYPE_CHECKING:
     import httpx
@@ -135,7 +121,7 @@ class BitbucketConnector(
         """
 
         def _iso(ts: SecondsSinceUnixEpoch) -> str:
-            return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+            return datetime.fromtimestamp(ts, tz=UTC).isoformat()
 
         def _tc_epoch(
             lower_epoch: SecondsSinceUnixEpoch | None,
@@ -164,8 +150,7 @@ class BitbucketConnector(
         - workspace (all repos)
         """
         if self._repositories:
-            for slug in self._repositories:
-                yield slug
+            yield from self._repositories
             return
         if self._projects:
             for project_key in self._projects:
@@ -358,8 +343,8 @@ if __name__ == "__main__":
     bitbucket.validate_connector_settings()
     print("Credentials validated successfully.")
 
-    start_time = datetime.fromtimestamp(0, tz=timezone.utc)
-    end_time = datetime.now(timezone.utc)
+    start_time = datetime.fromtimestamp(0, tz=UTC)
+    end_time = datetime.now(UTC)
 
     for doc_batch in bitbucket.retrieve_all_slim_docs_perm_sync(
         start=start_time.timestamp(),
@@ -370,7 +355,7 @@ if __name__ == "__main__":
 
 
     bitbucket_checkpoint = bitbucket.build_dummy_checkpoint()
-    
+
     while bitbucket_checkpoint.has_more:
         gen = bitbucket.load_from_checkpoint(
             start=start_time.timestamp(),
@@ -380,9 +365,8 @@ if __name__ == "__main__":
 
         while True:
             try:
-                doc = next(gen)  
+                doc = next(gen)
                 print(doc)
             except StopIteration as e:
-                bitbucket_checkpoint = e.value  
+                bitbucket_checkpoint = e.value
                 break
-        

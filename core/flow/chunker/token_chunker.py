@@ -292,7 +292,7 @@ class TokenChunker(ProcessBase):
         try:
             from_upstream = TokenChunkerFromUpstream.model_validate(kwargs)
         except Exception as e:
-            self.set_output("_ERROR", f"Input error: {str(e)}")
+            self.set_output("_ERROR", f"Input error: {e!s}")
             return
 
         delimiter_pattern = _compile_delimiter_pattern(self._param.delimiters)

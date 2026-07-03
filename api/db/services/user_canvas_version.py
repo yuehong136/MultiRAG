@@ -18,7 +18,7 @@ class UserCanvasVersionService(CommonService):
         tenant = str(user_nickname or "").strip() or "tenant"
         title = str(agent_title or "").strip() or "agent"
         stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)) if ts is not None else time.strftime("%Y-%m-%d %H:%M:%S")
-        return "{0}_{1}_{2}".format(tenant, title, stamp)
+        return f"{tenant}_{title}_{stamp}"
 
     @staticmethod
     def _normalize_dsl(dsl):
@@ -87,7 +87,7 @@ class UserCanvasVersionService(CommonService):
             select(cls.model.id)
             .where(
                 cls.model.user_canvas_id == user_canvas_id,
-                or_(cls.model.release == False, cls.model.release.is_(None)),  # noqa: E712
+                or_(cls.model.release == False, cls.model.release.is_(None)),
             )
             .order_by(cls.model.create_time.desc())
         )

@@ -1,9 +1,9 @@
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
-from dataclasses import dataclass
 
 from workflow_v2.component.base_component import BaseComponent
-from workflow_v2.workflow_exceptions import WorkflowError, ErrorCode
+from workflow_v2.workflow_exceptions import ErrorCode, WorkflowError
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
 
 
@@ -138,7 +138,7 @@ class SelectorComponent(BaseComponent):
             return result
 
         except Exception as e:
-            self.logger.error(f"Error evaluating condition: {str(e)}")
+            self.logger.error(f"Error evaluating condition: {e!s}")
             return False
 
     def _evaluate_branch(self, branch: dict) -> bool:
@@ -167,7 +167,7 @@ class SelectorComponent(BaseComponent):
             return final_result
 
         except Exception as e:
-            self.logger.error(f"Error evaluating branch: {str(e)}")
+            self.logger.error(f"Error evaluating branch: {e!s}")
             return False
 
     async def execute(self) -> dict[str, Any]:
@@ -197,9 +197,9 @@ class SelectorComponent(BaseComponent):
             }
 
         except Exception as e:
-            self.logger.error(f"Error executing selector: {str(e)}")
+            self.logger.error(f"Error executing selector: {e!s}")
             raise WorkflowError(
-                message=f"Selector execution failed: {str(e)}",
+                message=f"Selector execution failed: {e!s}",
                 error_code=ErrorCode.UNKNOWN_ERROR,
                 details={"component_id": self.id, "error": str(e)}
             )

@@ -1,5 +1,5 @@
-from .base import Component
 from ..constants import ComponentType
+from .base import Component
 
 
 class RadioComponent(Component):

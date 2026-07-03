@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 TitleChunker utility wrapper.
 

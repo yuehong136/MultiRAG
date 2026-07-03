@@ -1,10 +1,10 @@
 import json
 import logging
-from typing import Any
-from core.llm.chat_model.base import Base, LENGTH_NOTIFICATION_CN, LENGTH_NOTIFICATION_EN
+
 from zhipuai import ZhipuAI
 
-from core.nlp import is_chinese, is_english
+from core.llm.chat_model.base import LENGTH_NOTIFICATION_CN, LENGTH_NOTIFICATION_EN, Base
+from core.nlp import is_chinese
 
 
 class ZhipuChat(Base):

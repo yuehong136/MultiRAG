@@ -169,8 +169,8 @@ __all__ = [
     "ChatModel",
     "CvModel",
     "EmbeddingModel",
+    "OcrModel",
     "RerankModel",
     "Seq2txtModel",
     "TTSModel",
-    "OcrModel",
 ]

@@ -17,25 +17,28 @@ import json
 import logging
 import re
 import time
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 from elasticsearch_dsl import Q, Search
 from pydantic import BaseModel
 from pymysql.converters import escape_string
 from pyobvector import ARRAY
-from sqlalchemy import Column, String, Integer, JSON, Double, Row
+from sqlalchemy import JSON, Column, Double, Integer, Row, String
 from sqlalchemy.dialects.mysql import LONGTEXT, TEXT
 from sqlalchemy.sql.type_api import TypeEngine
 
 from common.constants import PAGERANK_FLD, TAG_FLD
 from common.decorator import singleton
-from common.doc_store.doc_store_base import MatchExpr, OrderByExpr, FusionExpr, MatchTextExpr, MatchDenseExpr
+from common.doc_store.doc_store_base import FusionExpr, MatchDenseExpr, MatchExpr, MatchTextExpr, OrderByExpr
 from common.doc_store.ob_conn_base import (
-    OBConnectionBase, get_value_str,
-    vector_search_template, vector_column_pattern,
-    fulltext_index_name_template, doc_meta_column_names,
+    OBConnectionBase,
+    doc_meta_column_names,
     doc_meta_column_types,
+    fulltext_index_name_template,
+    get_value_str,
+    vector_column_pattern,
+    vector_search_template,
 )
 from common.float_utils import get_float
 from core.nlp import rag_tokenizer
@@ -364,33 +367,33 @@ class OBConnection(OBConnectionBase):
                 storage_info = self._get_storage_info()
                 metrics.update(storage_info)
             except Exception as e:
-                logger.warning(f"Failed to get storage info: {str(e)}")
+                logger.warning(f"Failed to get storage info: {e!s}")
 
             # Get connection pool statistics
             try:
                 pool_stats = self._get_connection_pool_stats()
                 metrics.update(pool_stats)
             except Exception as e:
-                logger.warning(f"Failed to get connection pool stats: {str(e)}")
+                logger.warning(f"Failed to get connection pool stats: {e!s}")
 
             # Get slow query statistics
             try:
                 slow_queries = self._get_slow_query_count()
                 metrics["slow_queries"] = slow_queries
             except Exception as e:
-                logger.warning(f"Failed to get slow query count: {str(e)}")
+                logger.warning(f"Failed to get slow query count: {e!s}")
 
             # Get QPS (Queries Per Second) - approximate from processlist
             try:
                 qps = self._estimate_qps()
                 metrics["query_per_second"] = qps
             except Exception as e:
-                logger.warning(f"Failed to estimate QPS: {str(e)}")
+                logger.warning(f"Failed to estimate QPS: {e!s}")
 
         except Exception as e:
             metrics["connection"] = "disconnected"
             metrics["error"] = str(e)
-            logger.error(f"Failed to get OceanBase performance metrics: {str(e)}")
+            logger.error(f"Failed to get OceanBase performance metrics: {e!s}")
 
         return metrics
 
@@ -426,7 +429,7 @@ class OBConnection(OBConnectionBase):
                 "storage_total": f"{total_gb:.2f}GB" if total_gb else "N/A"
             }
         except Exception as e:
-            logger.warning(f"Failed to get storage info: {str(e)}")
+            logger.warning(f"Failed to get storage info: {e!s}")
             return {
                 "storage_used": "N/A",
                 "storage_total": "N/A"
@@ -459,7 +462,7 @@ class OBConnection(OBConnectionBase):
                 "pool_size": pool_size
             }
         except Exception as e:
-            logger.warning(f"Failed to get connection pool stats: {str(e)}")
+            logger.warning(f"Failed to get connection pool stats: {e!s}")
             return {
                 "active_connections": 0,
                 "max_connections": 0,
@@ -483,7 +486,7 @@ class OBConnection(OBConnectionBase):
             ).fetchone()
             return int(result[0]) if result and result[0] else 0
         except Exception as e:
-            logger.warning(f"Failed to get slow query count: {str(e)}")
+            logger.warning(f"Failed to get slow query count: {e!s}")
             return 0
 
     def _estimate_qps(self) -> int:
@@ -506,7 +509,7 @@ class OBConnection(OBConnectionBase):
 
             return estimated_qps
         except Exception as e:
-            logger.warning(f"Failed to estimate QPS: {str(e)}")
+            logger.warning(f"Failed to estimate QPS: {e!s}")
             return 0
 
     """
@@ -573,7 +576,7 @@ class OBConnection(OBConnectionBase):
                     bqry.filter.append(Q("term", **{k: v}))
                 else:
                     raise Exception(
-                        f"Condition `{str(k)}={str(v)}` value type is {str(type(v))}, expected to be int, str or list.")
+                        f"Condition `{k!s}={v!s}` value type is {type(v)!s}, expected to be int, str or list.")
 
             s = Search()
             vector_similarity_weight = 0.5
@@ -621,7 +624,7 @@ class OBConnection(OBConnectionBase):
             #     s = s.highlight(field)
 
             if order_by:
-                orders = list()
+                orders = []
                 for field, order in order_by.fields:
                     order = "asc" if order == 0 else "desc"
                     if field in ["page_num_int", "top_int"]:
@@ -640,7 +643,7 @@ class OBConnection(OBConnectionBase):
             if limit > 0:
                 s = s[offset:offset + limit]
             q = s.to_dict()
-            logger.debug(f"OBConnection.hybrid_search {str(index_names)} query: " + json.dumps(q))
+            logger.debug(f"OBConnection.hybrid_search {index_names!s} query: " + json.dumps(q))
 
             for index_name in index_names:
                 start_time = time.time()
@@ -682,22 +685,22 @@ class OBConnection(OBConnectionBase):
         filters: list[str] = get_filters(condition)
         filters_expr = " AND ".join(filters)
 
-        fulltext_query: Optional[str] = None
-        fulltext_topn: Optional[int] = None
+        fulltext_query: str | None = None
+        fulltext_topn: int | None = None
         fulltext_search_weight: dict[str, float] = {}
         fulltext_search_expr: dict[str, str] = {}
         fulltext_search_idx_list: list[str] = []
-        fulltext_search_score_expr: Optional[str] = None
-        fulltext_search_filter: Optional[str] = None
+        fulltext_search_score_expr: str | None = None
+        fulltext_search_filter: str | None = None
 
-        vector_column_name: Optional[str] = None
-        vector_data: Optional[list[float]] = None
-        vector_topn: Optional[int] = None
-        vector_similarity_threshold: Optional[float] = None
-        vector_similarity_weight: Optional[float] = None
-        vector_search_expr: Optional[str] = None
-        vector_search_score_expr: Optional[str] = None
-        vector_search_filter: Optional[str] = None
+        vector_column_name: str | None = None
+        vector_data: list[float] | None = None
+        vector_topn: int | None = None
+        vector_similarity_threshold: float | None = None
+        vector_similarity_weight: float | None = None
+        vector_search_expr: str | None = None
+        vector_search_score_expr: str | None = None
+        vector_search_filter: str | None = None
 
         for m in match_expressions:
             if isinstance(m, MatchTextExpr):
@@ -723,7 +726,7 @@ class OBConnection(OBConnectionBase):
                 vector_similarity_weight = get_float(weights.split(",")[1])
 
         if fulltext_query:
-            fulltext_search_filter = f"({' OR '.join([expr for expr in fulltext_search_expr.values()])})"
+            fulltext_search_filter = f"({' OR '.join(list(fulltext_search_expr.values()))})"
             fulltext_search_score_expr = f"({' + '.join(f'{expr} * {fulltext_search_weight.get(col, 0)}' for col, expr in fulltext_search_expr.items())})"
 
         if vector_data:
@@ -1041,10 +1044,10 @@ class OBConnection(OBConnectionBase):
                 return None
             return doc
         except json.JSONDecodeError as e:
-            logger.error(f"JSON decode error when getting chunk {chunk_id}: {str(e)}")
+            logger.error(f"JSON decode error when getting chunk {chunk_id}: {e!s}")
             return {
                 "id": chunk_id,
-                "error": f"Failed to parse chunk data due to invalid JSON: {str(e)}"
+                "error": f"Failed to parse chunk data due to invalid JSON: {e!s}"
             }
         except Exception as e:
             logger.exception(f"OBConnection.get({chunk_id}) got exception")
@@ -1125,7 +1128,7 @@ class OBConnection(OBConnectionBase):
         try:
             self.client.upsert(index_name, docs)
         except Exception as e:
-            logger.error(f"OBConnection.insert error: {str(e)}")
+            logger.error(f"OBConnection.insert error: {e!s}")
             res.append(str(e))
         return res
 
@@ -1156,7 +1159,7 @@ class OBConnection(OBConnectionBase):
         try:
             self.client.upsert(index_name, docs)
         except Exception as e:
-            logger.error(f"OBConnection._insert_doc_meta error: {str(e)}")
+            logger.error(f"OBConnection._insert_doc_meta error: {e!s}")
             res.append(str(e))
         return res
 
@@ -1210,7 +1213,7 @@ class OBConnection(OBConnectionBase):
             self.client.perform_raw_text_sql(update_sql)
             return True
         except Exception as e:
-            logger.error(f"OBConnection.update error: {str(e)}")
+            logger.error(f"OBConnection.update error: {e!s}")
         return False
 
     def adjust_chunk_pagerank_fea(
@@ -1289,7 +1292,7 @@ class OBConnection(OBConnectionBase):
                 e += 1
         return e * 1.0 / len(arr) >= 0.7
 
-    def highlight(self, txt: str, tks: str, question: str, keywords: list[str]) -> Optional[str]:
+    def highlight(self, txt: str, tks: str, question: str, keywords: list[str]) -> str | None:
         if not txt or not keywords:
             return None
 

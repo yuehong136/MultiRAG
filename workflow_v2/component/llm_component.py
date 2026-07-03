@@ -3,11 +3,11 @@ import copy
 from dataclasses import dataclass
 from typing import Any
 
-from api.db.services.llm_service import LLMBundle
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+from api.db.services.llm_service import LLMBundle
 from common.constants import LLMType
 from workflow_v2.component.base_component import BaseComponent
-from workflow_v2.utils import parse_template, match_parameters, dict_arrays_to_array_dicts, map_schema_with_values
+from workflow_v2.utils import dict_arrays_to_array_dicts, map_schema_with_values, match_parameters, parse_template
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
 
 

@@ -1,7 +1,7 @@
 import asyncio
 import base64
-import logging
 import json
+import logging
 import re
 import sys
 import time
@@ -9,21 +9,21 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import xxhash
-from sqlalchemy.orm import Session
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from api.db import KNOWLEDGEBASE_FOLDER_NAME, FileType
-from common.constants import FileSource, ParserType, TaskStatus
 from api.db.db_models import Document, File, File2Document, Knowledgebase
 from api.db.services import duplicate_name
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
-from common.misc_utils import get_uuid
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.utils.file_utils import filename_type, read_potential_broken_pdf, thumbnail_img, sanitize_path
-from core.llm.cv_model.models.gptv4 import GptV4
+from api.utils.file_utils import filename_type, read_potential_broken_pdf, sanitize_path, thumbnail_img
 from common import settings
+from common.constants import FileSource, ParserType, TaskStatus
+from common.misc_utils import get_uuid
+from core.llm.cv_model.models.gptv4 import GptV4
 
 
 class FileService(CommonService):
@@ -459,7 +459,7 @@ class FileService(CommonService):
                 cls.add_file_from_kb(db, doc, kb_folder["id"], kb.tenant_id)
                 files_info.append((doc, file_blob))  # 返回文档信息和二进制数据
             except Exception as e:
-                err.append(f"{filename}: {str(e)}")
+                err.append(f"{filename}: {e!s}")
 
         return err, files_info
 
@@ -467,11 +467,11 @@ class FileService(CommonService):
     def list_all_files_by_parent_id(cls, db: Session, parent_id: str) -> list[File]:
         """
         根据父文件夹ID查询所有子文件和子文件夹
-        
+
         Args:
             db: 数据库会话
             parent_id: 父文件夹ID
-            
+
         Returns:
             文件列表
         """
@@ -580,7 +580,7 @@ class FileService(CommonService):
     async def upload_info(db: Session, user_id, file, url: str | None = None):
         """
         上传文件或从URL下载内容
-        
+
         Args:
             db: 数据库会话（用于健康检查）
             user_id: 用户ID
@@ -607,14 +607,7 @@ class FileService(CommonService):
             }
 
         if url:
-            from crawl4ai import (
-                AsyncWebCrawler,
-                BrowserConfig,
-                CrawlerRunConfig,
-                DefaultMarkdownGenerator,
-                PruningContentFilter,
-                CrawlResult
-            )
+            from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CrawlResult, DefaultMarkdownGenerator, PruningContentFilter
             filename = re.sub(r"\?.*", "", url.split("/")[-1])
 
             browser_config = BrowserConfig(
@@ -633,7 +626,7 @@ class FileService(CommonService):
                     url=url,
                     config=crawler_config
                 )
-            
+
             if page.pdf:
                 if filename.split(".")[-1].lower() != "pdf":
                     filename += ".pdf"
@@ -650,7 +643,7 @@ class FileService(CommonService):
                 file_content = file.read()
         else:
             raise ValueError("Invalid file object")
-            
+
         DocumentService.check_doc_health(db, user_id, file.filename)
         return structured(file.filename, filename_type(file.filename), file_content, file.content_type)
 

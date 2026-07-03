@@ -19,16 +19,13 @@ This module provides a specialized Milvus connection for storing and retrieving 
 """
 
 import re
-import copy
 
-from pymilvus import Collection, FieldSchema, CollectionSchema, DataType
+from pymilvus import Collection, CollectionSchema, DataType, FieldSchema
 from pymilvus.orm import utility
 
 from common.decorator import singleton
-from common.doc_store.doc_store_base import MatchExpr, MatchTextExpr, MatchDenseExpr, FusionExpr, OrderByExpr
+from common.doc_store.doc_store_base import MatchDenseExpr, MatchExpr, OrderByExpr
 from common.doc_store.milvus_conn_base import MilvusConnectionBase
-from common.float_utils import get_float
-from common.constants import PAGERANK_FLD, TAG_FLD
 
 
 def _message_collection_name(index_name: str | list[str], memory_id: str) -> str:

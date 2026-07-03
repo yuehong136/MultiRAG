@@ -5,17 +5,16 @@ Revises: c3b7a58f9b2e
 Create Date: 2026-03-24 22:00:00.000000
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.engine.reflection import Inspector
 
-
 revision: str = "f4a1b2c3d5e6"
-down_revision: Union[str, None] = "c3b7a58f9b2e"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "c3b7a58f9b2e"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 SCHEMA = "usr_ai"
 

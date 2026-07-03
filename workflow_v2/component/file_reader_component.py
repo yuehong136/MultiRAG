@@ -1,6 +1,6 @@
 import io
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
 from typing import Any
 
 import chardet
@@ -62,7 +62,7 @@ class FileReaderComponent(BaseComponent):
         if self.batch_config.batch_enable:
             # 目前批量只支持minio文件
             output_list = []
-            minio_file_info = list(match_parameters(self.batch_config.input_lists, self.nodes).values())[0]
+            minio_file_info = next(iter(match_parameters(self.batch_config.input_lists, self.nodes).values()))
             bucket_name = minio_file_info.split("+")[0]
             dir_name = minio_file_info.split("+")[1]
             minio_operator = MinioOperator()
@@ -82,7 +82,7 @@ class FileReaderComponent(BaseComponent):
             return {"outputList": output_list}
         else:
             # 目前单文件只支持普通上传文件
-            file_info = await parse_uploaded_file(list(self.inputs.values())[0])
+            file_info = await parse_uploaded_file(next(iter(self.inputs.values())))
             file_name = file_info['file_name']
             file_content = file_info['file_content']
             return {"output": {"fileName": file_name, "fileContent": file_content}}
@@ -93,7 +93,7 @@ class FileReaderComponent(BaseComponent):
 
         if self.batch_config.batch_enable:
             output_list = []
-            minio_file_info = list(batch_value.values())[0]
+            minio_file_info = next(iter(batch_value.values()))
             bucket_name = minio_file_info.split("+")[0]
             dir_name = minio_file_info.split("+")[1]
             minio_operator = MinioOperator()
@@ -112,7 +112,7 @@ class FileReaderComponent(BaseComponent):
 
             return {"outputList": output_list}
         else:
-            file_info = await parse_uploaded_file(list(input_value.values())[0])
+            file_info = await parse_uploaded_file(next(iter(input_value.values())))
             file_name = file_info['file_name']
             file_content = file_info['file_content']
             return {"output": {"fileName": file_name, "fileContent": file_content}}
@@ -154,7 +154,7 @@ async def parse_uploaded_file(file: UploadFile) -> dict:
         }
 
     except Exception as e:
-        raise Exception(f"Error processing file: {str(e)}")
+        raise Exception(f"Error processing file: {e!s}")
 
     finally:
         # 关闭文件

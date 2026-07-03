@@ -5,16 +5,16 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime
 
+from sqlalchemy import Text as SAText
 from sqlalchemy import (
+    asc,
+    func,
     select,
     update,
-    func,
-    asc,
 )
-from sqlalchemy.sql import desc as sa_desc
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import desc as sa_desc
 from sqlalchemy.sql.elements import ColumnElement
-from sqlalchemy import Text as SAText
 
 from api.db.db_models import API4Conversation, APIToken, Dialog
 from api.db.services.common_service import CommonService
@@ -83,7 +83,7 @@ class API4ConversationService(CommonService):
     # ---------- 辅助：字段选择 ----------
     @classmethod
     def _all_columns(cls) -> list[ColumnElement]:
-        return [c for c in cls.model.__table__.columns]
+        return list(cls.model.__table__.columns)
 
     @classmethod
     def _columns_excluding(cls, *names: str) -> list[ColumnElement]:

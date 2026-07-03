@@ -17,7 +17,6 @@
 import copy
 import re
 
-
 COMPONENT_RENAMES = {
     "Splitter": "TokenChunker",
     "HierarchicalMerger": "TitleChunker",

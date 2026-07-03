@@ -1,23 +1,23 @@
 import asyncio
+import json
 import time
 from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Request
-from sse_starlette.sse import EventSourceResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
-import json
-
-from api.db.db_models import get_db
-from workflow_v2.workflow_state_manager import workflow_state_manager
-from workflow_v2.component.component_manager import ComponentManager
-from workflow_v2.workflow import run_workflow, WorkflowNode
 from sqlalchemy.orm import Session
+from sse_starlette.sse import EventSourceResponse
+
 # from api.db.database import get_db
 from api.apps import manager
+from api.db.db_models import get_db
+from workflow_v2.component.component_manager import ComponentManager
+from workflow_v2.workflow import WorkflowNode, run_workflow
 from workflow_v2.workflow_exceptions import NodeExecutionError, WorkflowValidationError
 from workflow_v2.workflow_logging_config import WorkflowContextLogger, WorkflowLogger
+from workflow_v2.workflow_state_manager import workflow_state_manager
 
 router = APIRouter()
 
@@ -87,7 +87,7 @@ async def run(
     except json.JSONDecodeError as e:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid JSON format: {str(e)}"
+            detail=f"Invalid JSON format: {e!s}"
         )
     except NodeExecutionError as e:
         raise e
@@ -96,7 +96,7 @@ async def run(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Error processing request: {str(e)}"
+            detail=f"Error processing request: {e!s}"
         )
 
 
@@ -121,7 +121,7 @@ async def component_run(
 
         # 将文件与输入值关联
         if files and len(files) > 0 and files[0].size > 0:
-            input_values[list(input_values)[0]] = files[0]
+            input_values[next(iter(input_values))] = files[0]
         else:
             for node_input in node_data['data']['inputs']['inputParameters']:
                 if node_input['input']['type'] == 'minio':
@@ -159,7 +159,7 @@ async def component_run(
     except json.JSONDecodeError as e:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid JSON format: {str(e)}"
+            detail=f"Invalid JSON format: {e!s}"
         )
     except NodeExecutionError as e:
         raise e
@@ -168,7 +168,7 @@ async def component_run(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Error processing request: {str(e)}"
+            detail=f"Error processing request: {e!s}"
         )
 
 
@@ -234,7 +234,7 @@ async def workflow_events(workflow_id: str, request: Request):
                                 "data": json.dumps(state_update)
                             }
 
-                        except asyncio.TimeoutError:
+                        except TimeoutError:
                             # 发送保活消息
                             yield {
                                 "event": "ping",
@@ -254,7 +254,7 @@ async def workflow_events(workflow_id: str, request: Request):
     except Exception as e:
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"获取工作流实时数据异常: {str(e)}",
+            message=f"获取工作流实时数据异常: {e!s}",
             data=None
         )
 
@@ -395,6 +395,6 @@ def extract_batch_input_types(json_data):
     except KeyError as e:
         print(f"Error: Could not find key {e} in JSON data")
     except Exception as e:
-        print(f"Error: {str(e)}")
+        print(f"Error: {e!s}")
 
     return result

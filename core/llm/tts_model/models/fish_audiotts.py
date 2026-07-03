@@ -1,11 +1,12 @@
+import json
 from typing import Annotated, Literal
+
 import httpx
 import ormsgpack
-from pydantic import BaseModel, conint, Field
+from pydantic import BaseModel, Field, conint
 
-from core.llm.tts_model.base import Base
 from common.token_utils import num_tokens_from_string
-import json
+from core.llm.tts_model.base import Base
 
 
 class ServeReferenceAudio(BaseModel):
@@ -62,8 +63,7 @@ class FishAudioTTS(Base):
                     timeout=None,
                 ) as response:
                     if response.status_code == HTTPStatus.OK:
-                        for chunk in response.iter_bytes():
-                            yield chunk
+                        yield from response.iter_bytes()
                     else:
                         response.raise_for_status()
 

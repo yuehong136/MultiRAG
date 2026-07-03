@@ -1,7 +1,7 @@
-from typing import List, Dict, Any, Optional, Union, Tuple
 import re
-from enum import Enum
 from abc import ABC, abstractmethod
+from enum import Enum
+from typing import Any
 
 
 class DatabaseType(Enum):
@@ -54,7 +54,7 @@ class DatabaseDialect:
     """数据库方言类 - 处理不同数据库的语法差异"""
 
     @staticmethod
-    def get_identifier_quote(db_type: DatabaseType) -> Tuple[str, str]:
+    def get_identifier_quote(db_type: DatabaseType) -> tuple[str, str]:
         """获取标识符引用符号"""
         quote_map = {
             DatabaseType.MYSQL: ('`', '`'),
@@ -147,7 +147,7 @@ class SQLFragment(ABC):
     """SQL片段抽象基类"""
 
     @abstractmethod
-    def to_sql(self, db_type: DatabaseType = DatabaseType.POSTGRESQL) -> Tuple[str, List[Any]]:
+    def to_sql(self, db_type: DatabaseType = DatabaseType.POSTGRESQL) -> tuple[str, list[Any]]:
         """转换为SQL字符串和参数列表"""
         pass
 
@@ -161,7 +161,7 @@ class FilterCondition(SQLFragment):
         self.value = value
         self.value2 = value2
 
-    def to_sql(self, db_type: DatabaseType = DatabaseType.POSTGRESQL) -> Tuple[str, List[Any]]:
+    def to_sql(self, db_type: DatabaseType = DatabaseType.POSTGRESQL) -> tuple[str, list[Any]]:
         """转换为SQL条件和参数"""
         escaped_field = DatabaseDialect.escape_identifier(self.field, db_type)
 
@@ -186,7 +186,7 @@ class FilterCondition(SQLFragment):
 class RawSQLFragment(SQLFragment):
     """原始SQL片段类 - 支持纯自定义SQL"""
 
-    def __init__(self, sql_content: str, parameters: List[Any] = None):
+    def __init__(self, sql_content: str, parameters: list[Any] = None):
         """
         初始化原始SQL片段
 
@@ -229,7 +229,7 @@ class RawSQLFragment(SQLFragment):
             if re.search(pattern, sql_upper):
                 raise ValueError(f"检测到潜在危险的SQL操作: {pattern}")
 
-    def to_sql(self, db_type: DatabaseType = DatabaseType.POSTGRESQL) -> Tuple[str, List[Any]]:
+    def to_sql(self, db_type: DatabaseType = DatabaseType.POSTGRESQL) -> tuple[str, list[Any]]:
         """转换为SQL字符串和参数列表"""
         return self.sql_content, self.parameters
 
@@ -237,7 +237,7 @@ class RawSQLFragment(SQLFragment):
 class DynamicSQLFragment(SQLFragment):
     """动态SQL片段类 - 支持运行时替换变量"""
 
-    def __init__(self, sql_template: str, dynamic_values: Dict[str, Any] = None):
+    def __init__(self, sql_template: str, dynamic_values: dict[str, Any] = None):
         """
         初始化动态SQL片段
 
@@ -248,7 +248,7 @@ class DynamicSQLFragment(SQLFragment):
         self.sql_template = sql_template
         self.dynamic_values = dynamic_values or {}
 
-    def to_sql(self, db_type: DatabaseType = DatabaseType.POSTGRESQL) -> Tuple[str, List[Any]]:
+    def to_sql(self, db_type: DatabaseType = DatabaseType.POSTGRESQL) -> tuple[str, list[Any]]:
         """转换为SQL字符串和参数列表"""
         try:
             # 使用format进行变量替换
@@ -265,7 +265,7 @@ class OrderByClause(SQLFragment):
         self.field = field
         self.direction = direction
 
-    def to_sql(self, db_type: DatabaseType = DatabaseType.POSTGRESQL) -> Tuple[str, List[Any]]:
+    def to_sql(self, db_type: DatabaseType = DatabaseType.POSTGRESQL) -> tuple[str, list[Any]]:
         escaped_field = DatabaseDialect.escape_identifier(self.field, db_type)
         return f"{escaped_field} {self.direction.value}", []
 
@@ -276,7 +276,7 @@ class GroupByClause(SQLFragment):
     def __init__(self, field: str):
         self.field = field
 
-    def to_sql(self, db_type: DatabaseType = DatabaseType.POSTGRESQL) -> Tuple[str, List[Any]]:
+    def to_sql(self, db_type: DatabaseType = DatabaseType.POSTGRESQL) -> tuple[str, list[Any]]:
         escaped_field = DatabaseDialect.escape_identifier(self.field, db_type)
         return escaped_field, []
 
@@ -299,7 +299,7 @@ class HavingCondition(SQLFragment):
         self.value = value
         self.value2 = value2
 
-    def to_sql(self, db_type: DatabaseType = DatabaseType.POSTGRESQL) -> Tuple[str, List[Any]]:
+    def to_sql(self, db_type: DatabaseType = DatabaseType.POSTGRESQL) -> tuple[str, list[Any]]:
         """转换为SQL条件和参数"""
         if self.operator in [FilterOperator.IS_NULL, FilterOperator.IS_NOT_NULL]:
             return f"{self.aggregate_expression} {self.operator.value}", []
@@ -332,18 +332,18 @@ class FlexibleSQLAssembler:
         """
         self.base_from_clause = base_from_clause.strip()
         self.db_type = db_type
-        self.select_parts: List[SQLFragment] = []
-        self.where_conditions: List[SQLFragment] = []
-        self.group_by_parts: List[SQLFragment] = []
-        self.having_conditions: List[SQLFragment] = []
-        self.order_by_parts: List[SQLFragment] = []
-        self.limit_count: Optional[int] = None
-        self.offset_count: Optional[int] = None
-        self.additional_clauses: Dict[str, str] = {}
+        self.select_parts: list[SQLFragment] = []
+        self.where_conditions: list[SQLFragment] = []
+        self.group_by_parts: list[SQLFragment] = []
+        self.having_conditions: list[SQLFragment] = []
+        self.order_by_parts: list[SQLFragment] = []
+        self.limit_count: int | None = None
+        self.offset_count: int | None = None
+        self.additional_clauses: dict[str, str] = {}
 
     @staticmethod
-    def _clean_sql_clause(sql_input: str, clause_keywords: List[str],
-                          clause_name: str = "条件") -> Tuple[str, bool]:
+    def _clean_sql_clause(sql_input: str, clause_keywords: list[str],
+                          clause_name: str = "条件") -> tuple[str, bool]:
         """
         清理SQL子句，移除不必要的关键字
 
@@ -433,7 +433,7 @@ class FlexibleSQLAssembler:
         self.select_parts.append(raw_fragment)
         return self
 
-    def add_parameterized_column(self, sql_template: str, parameters: List[Any],
+    def add_parameterized_column(self, sql_template: str, parameters: list[Any],
                                  alias: str = None) -> 'FlexibleSQLAssembler':
         """
         添加带参数的列表达式（用于动态值）
@@ -451,7 +451,7 @@ class FlexibleSQLAssembler:
         self.select_parts.append(raw_fragment)
         return self
 
-    def add_dynamic_column(self, sql_template: str, dynamic_values: Dict[str, Any],
+    def add_dynamic_column(self, sql_template: str, dynamic_values: dict[str, Any],
                            alias: str = None) -> 'FlexibleSQLAssembler':
         """
         添加动态列表达式（用于配置驱动的场景）
@@ -513,7 +513,7 @@ class FlexibleSQLAssembler:
 
         return self
 
-    def add_parameterized_where(self, sql_template: str, parameters: List[Any]) -> 'FlexibleSQLAssembler':
+    def add_parameterized_where(self, sql_template: str, parameters: list[Any]) -> 'FlexibleSQLAssembler':
         """
         添加带参数的WHERE条件
 
@@ -569,7 +569,7 @@ class FlexibleSQLAssembler:
         return self
 
     # 添加便捷方法，支持多种输入方式
-    def add_where_condition(self, condition: Union[str, FilterCondition]) -> 'FlexibleSQLAssembler':
+    def add_where_condition(self, condition: str | FilterCondition) -> 'FlexibleSQLAssembler':
         """
         智能添加WHERE条件，支持字符串和FilterCondition对象
 
@@ -584,7 +584,7 @@ class FlexibleSQLAssembler:
         else:
             raise ValueError("条件必须是字符串或FilterCondition对象")
 
-    def add_having_condition(self, condition: Union[str, HavingCondition]) -> 'FlexibleSQLAssembler':
+    def add_having_condition(self, condition: str | HavingCondition) -> 'FlexibleSQLAssembler':
         """
         智能添加HAVING条件，支持字符串和HavingCondition对象
 
@@ -599,7 +599,7 @@ class FlexibleSQLAssembler:
         else:
             raise ValueError("条件必须是字符串或HavingCondition对象")
 
-    def add_multiple_group_by(self, fields: List[str]) -> 'FlexibleSQLAssembler':
+    def add_multiple_group_by(self, fields: list[str]) -> 'FlexibleSQLAssembler':
         """批量添加分组字段"""
         for field in fields:
             self.add_group_by(field)
@@ -657,7 +657,7 @@ class FlexibleSQLAssembler:
 
         return self
 
-    def add_parameterized_having(self, sql_template: str, parameters: List[Any]) -> 'FlexibleSQLAssembler':
+    def add_parameterized_having(self, sql_template: str, parameters: list[Any]) -> 'FlexibleSQLAssembler':
         """
         添加带参数的HAVING条件
 
@@ -671,7 +671,7 @@ class FlexibleSQLAssembler:
 
     # ============ ORDER BY相关方法 ============
     def add_order_by(self, field: str,
-                     direction: Union[OrderDirection, str] = OrderDirection.ASC) -> 'FlexibleSQLAssembler':
+                     direction: OrderDirection | str = OrderDirection.ASC) -> 'FlexibleSQLAssembler':
         """
         添加标准排序
 
@@ -810,7 +810,7 @@ class FlexibleSQLAssembler:
         self.additional_clauses[clause_name] = sql_content
         return self
 
-    def build_sql(self) -> Tuple[str, List[Any]]:
+    def build_sql(self) -> tuple[str, list[Any]]:
         """构建最终的SQL语句"""
         all_params = []
 
@@ -939,13 +939,13 @@ class FlexibleSQLAssembler:
         final_sql = " ".join(sql_parts)
         return final_sql, all_params
 
-    def build_sql_for_jdbc(self) -> Tuple[str, List[Any]]:
+    def build_sql_for_jdbc(self) -> tuple[str, list[Any]]:
         """构建JDBC格式的SQL语句（使用?作为占位符）"""
         sql, params = self.build_sql()
         jdbc_sql = sql.replace('%s', '?')
         return jdbc_sql, params
 
-    def build_count_sql_for_jdbc(self, cap: Optional[int] = None) -> Tuple[str, List[Any]]:
+    def build_count_sql_for_jdbc(self, cap: int | None = None) -> tuple[str, list[Any]]:
         """
         构建用于获取总数的JDBC格式SQL语句
         将当前SQL作为子查询，外层包装COUNT(*)

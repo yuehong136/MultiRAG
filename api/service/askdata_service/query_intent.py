@@ -5,14 +5,14 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from api.db.services.llm_service import LLMBundle
 from api.db.db_models import db_connection
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+from api.db.services.llm_service import LLMBundle
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
 from api.utils.prompt_template_util import PromptTemplateUtil
 from common.constants import LLMType
 from common.misc_utils import thread_pool_exec
 
-from api.service.askdata_service.util.askdata_logger import get_askdata_logger
 logger = get_askdata_logger()
 
 
@@ -182,7 +182,7 @@ class QueryIntentAnalyzer:
             logger.error(f"Error in recommend_chart_with_reason: {e}", exc_info=True)
             # 发生错误时，返回默认图表类型和错误信息
             default_chart = supported_charts_list[0] if supported_charts_list else "指标卡"
-            return default_chart, f"分析过程中发生错误: {str(e)}"
+            return default_chart, f"分析过程中发生错误: {e!s}"
 
     async def recommend_chart_without_semantic(
             self,
@@ -261,7 +261,7 @@ class QueryIntentAnalyzer:
             logger.error(f"Error in recommend_chart_without_semantic: {e}", exc_info=True)
             # 发生错误时，返回默认图表类型和错误信息
             default_chart = supported_charts_list[0] if supported_charts_list else "指标卡"
-            return default_chart, f"分析过程中发生错误: {str(e)}"
+            return default_chart, f"分析过程中发生错误: {e!s}"
 
     async def analyze_query_intent_with_details(
             self,
@@ -344,7 +344,7 @@ class QueryIntentAnalyzer:
             default_chart = supported_charts_list[0] if supported_charts_list else "指标卡"
             return {
                 "recommended_chart": default_chart,
-                "recommendation_reason": f"分析过程中发生错误: {str(e)}",
+                "recommendation_reason": f"分析过程中发生错误: {e!s}",
                 "raw_response": "",
                 "parsed_data": None,
                 "parse_success": False,

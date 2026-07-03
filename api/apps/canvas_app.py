@@ -7,46 +7,37 @@ import logging
 from functools import partial
 from urllib.parse import quote_plus
 
-from fastapi import (
-    APIRouter,
-    Depends,
-    File,
-    Header,
-    Query,
-    UploadFile
-)
-from fastapi.responses import StreamingResponse, Response
+from fastapi import APIRouter, Depends, File, Header, Query, UploadFile
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
+from agent.canvas import Canvas
 from agent.component.llm import LLM
+from agent.dsl_migration import normalize_chunker_dsl
 from api.apps import manager
 from api.apps.services.canvas_replica_service import CanvasReplicaService
 from api.db import CanvasCategory
-from api.db.db_models import get_db, APIToken, Task
+from api.db.db_models import APIToken, Task, get_db
 from api.db.services.canvas_service import (
+    API4ConversationService,
     CanvasTemplateService,
     UserCanvasService,
-    API4ConversationService,
+)
+from api.db.services.canvas_service import (
     completion as agent_completion,
 )
 from api.db.services.document_service import DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
-from api.db.services.task_service import queue_dataflow, CANVAS_DEBUG_DOC_ID, TaskService
-from api.db.services.user_service import TenantService
+from api.db.services.task_service import CANVAS_DEBUG_DOC_ID, TaskService, queue_dataflow
 from api.db.services.user_canvas_version import UserCanvasVersionService
-from api.utils.api_utils import (
-    get_json_result,
-    server_error_response,
-    get_data_error_result
-)
-from agent.canvas import Canvas
-from agent.dsl_migration import normalize_chunker_dsl
-from common.constants import RetCode
+from api.db.services.user_service import TenantService
+from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
 from common import settings
+from common.constants import RetCode
 from common.misc_utils import get_uuid, thread_pool_exec
 from core.flow.pipeline import Pipeline
 from core.nlp import search
@@ -122,9 +113,9 @@ def templates(
 ):
     """
     获取所有Agent类型的Canvas模板
-    
+
     概要：返回系统预定义的Canvas模板列表，用户可以基于这些模板快速创建新的Canvas。
-    
+
     返回：
     - list: Canvas模板列表，每个模板包含：
         - id: 模板ID
@@ -133,11 +124,11 @@ def templates(
         - dsl: 模板DSL配置
         - avatar: 模板图标
         - canvas_category: 模板类别
-    
+
     功能：
     1. 查询所有Agent类别的模板
     2. 返回模板详细信息
-    
+
     业务场景：
     - 用户创建新Canvas时选择模板
     - 快速复制常用配置
@@ -155,28 +146,28 @@ def rm(
 ):
     """
     批量删除Canvas
-    
+
     概要：删除指定的一个或多个Canvas，只有Canvas所有者有权限执行此操作。
-    
+
     参数：
     - **request_body**: 请求体
         - canvas_ids: Canvas ID列表，支持批量删除
-    
+
     返回：
     - dict: 操作结果
         - data: True 表示删除成功
-    
+
     功能：
     1. 遍历Canvas ID列表
     2. 验证用户对每个Canvas的权限
     3. 执行删除操作
-    
+
     权限要求：
     - 用户必须是Canvas的所有者
-    
+
     异常处理：
     - 如果用户无权限，返回 OPERATING_ERROR
-    
+
     注意：
     - 删除操作不可逆
     - 删除Canvas不会删除关联的会话记录
@@ -201,9 +192,9 @@ def save(
 ):
     """
     创建或更新Canvas配置
-    
+
     概要：保存Canvas的DSL配置、标题等信息，支持创建新Canvas或更新现有Canvas。
-    
+
     参数：
     - **request_body**: 请求体
         - id: Canvas ID（更新时必填，创建时可选）
@@ -213,10 +204,10 @@ def save(
         - avatar: 头像URL（可选）
         - permission: 权限设置（可选）
         - canvas_category: Canvas类别（可选，默认为Agent）
-    
+
     返回：
     - dict: 保存后的Canvas信息
-    
+
     功能：
     1. **创建模式**（无id）：
        - 检查标题是否重复
@@ -228,25 +219,25 @@ def save(
        - 更新Canvas配置
        - 创建版本历史记录
        - 清理旧版本（保留有限数量）
-    
+
     DSL处理：
     - 如果DSL是字典，会自动转换为JSON字符串
     - 保存前会确保DSL格式正确
-    
+
     版本管理：
     - 每次保存都会创建版本快照
     - 版本命名格式：{title}_{timestamp}
     - 自动清理过期版本
-    
+
     权限要求：
     - 创建：任何登录用户都可创建
     - 更新：只有所有者可更新
-    
+
     异常处理：
     - 如果标题重复，返回 "{title} already exists"
     - 如果保存失败，返回 "Fail to save canvas"
     - 如果无权限更新，返回 OPERATING_ERROR
-    
+
     注意：
     - 标题会自动去除首尾空格
     - DSL配置会被序列化存储
@@ -260,9 +251,9 @@ def save(
         req["dsl"] = CanvasReplicaService.normalize_dsl(req["dsl"])
     except ValueError as e:
         return get_data_error_result(retmsg=str(e))
-    
+
     cate = req.get("canvas_category", CanvasCategory.Agent)
-    
+
     if "id" not in req or req["id"] is None:
         # 创建新Canvas
         req["user_id"] = user.id
@@ -284,24 +275,24 @@ def save(
         canvas = UserCanvasService.get_by_id(db, req["id"])
         if not canvas:
             return get_data_error_result(retmsg="canvas not found.")
-        
+
         # 转换为字典
         flow = canvas.to_dict()
-        
+
         # 更新标题（必须字段）
         flow["title"] = req["title"]
-        
+
         # 更新可选字段（只在值存在且非空时更新）
         for key in ["description", "permission", "avatar", "canvas_type", "canvas_category"]:
             if value := req.get(key):
                 flow[key] = value
-        
+
         # 更新DSL（必须字段）
         flow["dsl"] = req["dsl"]
-        
+
         # 执行更新
         UserCanvasService.update_by_id(db, req["id"], flow)
-    
+
     # 保存版本
     UserCanvasVersionService.save_or_replace_latest(
         db,
@@ -331,18 +322,18 @@ def get(
 ):
     """
     获取指定Canvas的详细信息
-    
+
     概要：根据Canvas ID查询并返回Canvas的完整配置信息。
-    
+
     参数：
     - **canvas_id**: Canvas ID
-    
+
     返回：
     - dict: Canvas详细信息
-    
+
     权限要求：
     - 用户必须有权限访问该Canvas
-    
+
     异常处理：
     - 如果Canvas不存在或无权限，返回 "canvas not found"
     """
@@ -394,28 +385,28 @@ def getsse(
 ):
     """
     使用API Token获取Canvas信息（用于SSE连接）
-    
+
     概要：通过API Token认证获取Canvas详情，主要用于SSE（Server-Sent Events）连接场景。
-    
+
     参数：
     - **canvas_id**: Canvas ID
     - **Authorization**: 请求头中的授权token，格式：Bearer {token}
-    
+
     返回：
     - dict: Canvas详细信息
-    
+
     认证流程：
     1. 解析Authorization头获取token
     2. 验证token有效性
     3. 检查用户对Canvas的权限
     4. 返回Canvas信息
-    
+
     异常处理：
     - 如果Authorization格式无效，返回 "Authorization is not valid"
     - 如果token无效，返回 "Authentication error: API key is invalid"
     - 如果无权限，返回 OPERATING_ERROR
     - 如果Canvas不存在，返回 "canvas not found"
-    
+
     注意：
     - 这个接口主要用于外部API调用
     - 不需要cookie认证，使用API Token
@@ -423,12 +414,12 @@ def getsse(
     token_parts = authorization.split()
     if len(token_parts) != 2:
         return get_data_error_result(retmsg='Authorization is not valid!')
-    
+
     token = token_parts[1]
     objs = db.query(APIToken).filter_by(token=token).all()
     if not objs:
         return get_data_error_result(retmsg='Authentication error: API key is invalid!')
-    
+
     tenant_id = objs[0].tenant_id
     if not UserCanvasService.query(db, user_id=tenant_id, id=canvas_id):
         return get_json_result(
@@ -436,11 +427,11 @@ def getsse(
             retmsg='Only owner of canvas authorized for this operation.',
             retcode=RetCode.OPERATING_ERROR
         )
-    
+
     canvas = UserCanvasService.get_by_id(db, canvas_id)
     if not canvas or canvas.user_id != tenant_id:
         return get_data_error_result(retmsg="canvas not found.")
-    
+
     return get_json_result(data=canvas.to_dict())
 
 
@@ -452,9 +443,9 @@ async def run(
 ):
     """
     执行Canvas推理任务
-    
+
     概要：运行指定的Canvas，支持Agent和DataFlow两种类型，使用SSE流式返回结果。
-    
+
     参数：
     - **request_body**: 请求体
         - id: Canvas ID
@@ -462,37 +453,37 @@ async def run(
         - files: 文件列表（DataFlow模式使用）
         - inputs: 输入参数
         - user_id: 用户ID（可选）
-    
+
     返回：
     - **Agent模式**: SSE流，实时返回推理过程
     - **DataFlow模式**: JSON，包含任务ID
-    
+
     功能：
     1. **Agent模式**（canvas_category == Agent）：
        - 初始化Canvas
        - 流式执行推理
        - 实时返回结果（SSE格式）
        - 更新Canvas状态
-    
+
     2. **DataFlow模式**（canvas_category == DataFlow）：
        - 创建Pipeline
        - 提交异步任务到队列
        - 返回任务ID用于追踪
-    
+
     SSE事件格式：
     - data: {JSON对象}
     - event类型：message, message_end, error等
     - 包含session_id、content等字段
-    
+
     权限要求：
     - 用户必须有权限访问该Canvas
-    
+
     异常处理：
     - 如果无权限，返回 OPERATING_ERROR
     - 如果Canvas不存在，返回 "canvas not found"
     - Agent执行错误通过SSE返回错误事件
     - DataFlow错误直接返回错误信息
-    
+
     注意：
     - Agent模式使用SSE流式响应，连接保持打开
     - DataFlow模式异步执行，不阻塞请求
@@ -580,7 +571,7 @@ async def run(
             yield "data:" + json.dumps({"code": 500, "message": str(e), "data": False}, ensure_ascii=False) + "\n\n"
         finally:
             canvas.cancel_task()
-    
+
     return StreamingResponse(
         sse(),
         media_type="text/event-stream",
@@ -657,19 +648,19 @@ def rerun(
 ):
     """
     重新运行Pipeline处理任务
-    
+
     概要：清除文档的处理结果并重新执行Pipeline流程，从指定的组件开始运行。
-    
+
     参数：
     - **request_body**: 请求体
         - id: Pipeline操作日志ID
         - dsl: DSL配置
         - component_id: 要运行的组件ID
-    
+
     返回：
     - dict: 操作结果
         - data: True 表示成功提交重新运行任务
-    
+
     功能：
     1. 获取文档信息
     2. 检查文档处理状态（不能重复运行）
@@ -678,17 +669,17 @@ def rerun(
     5. 删除旧的任务记录
     6. 更新DSL配置
     7. 提交新的处理任务到队列
-    
+
     清理内容：
     - 向量数据库中的所有chunks
     - chunk_num、token_num统计
     - 进度和错误信息
     - 旧的任务记录
-    
+
     异常处理：
     - 如果文档不存在，返回 "Document not found"
     - 如果文档正在处理，返回 "is processing..."
-    
+
     注意：
     - 只能重新运行已完成或失败的文档
     - 重新运行会清除所有处理结果
@@ -698,11 +689,11 @@ def rerun(
     doc = PipelineOperationLogService.get_documents_info(db, req["id"])
     if not doc:
         return get_data_error_result(retmsg="Document not found.")
-    
+
     doc = doc[0]
     if 0 < doc["progress"] < 1:
         return get_data_error_result(retmsg=f"`{doc['name']}` is processing...")
-    
+
     # 删除向量数据库中的数据
     if settings.docStoreConn.index_exist(search.index_name(user.id, [doc["kb_name"]]), doc["kb_id"]):
         settings.docStoreConn.delete(
@@ -710,22 +701,22 @@ def rerun(
             search.index_name(user.id, [doc["kb_name"]]),
             doc["kb_id"]
         )
-    
+
     # 清空统计数据
     doc["progress_msg"] = ""
     doc["chunk_num"] = 0
     doc["token_num"] = 0
     DocumentService.clear_chunk_num_when_rerun(db, doc["id"])
     DocumentService.update_by_id(db, doc["id"], doc)
-    
+
     # 删除旧任务
     TaskService.filter_delete(db, [Task.doc_id == doc["id"]])
-    
+
     # 更新DSL配置
     dsl = req["dsl"]
     dsl["path"] = [req["component_id"]]
     PipelineOperationLogService.update_by_id(db, req["id"], {"dsl": dsl})
-    
+
     # 提交新任务
     queue_dataflow(
         db,
@@ -736,7 +727,7 @@ def rerun(
         priority=0,
         rerun=True
     )
-    
+
     return get_json_result(data=True)
 
 
@@ -748,20 +739,20 @@ def cancel(
 ):
     """
     取消正在运行的任务
-    
+
     概要：设置任务的取消标记，通知任务执行器停止处理。
-    
+
     参数：
     - **task_id**: 任务ID
-    
+
     返回：
     - dict: 操作结果
         - data: True 表示取消标记已设置
-    
+
     功能：
     1. 在Redis中设置取消标记
     2. 任务执行器检测到标记后会停止执行
-    
+
     注意：
     - 取消操作是异步的，不会立即停止任务
     - 任务可能需要几秒钟才能完全停止
@@ -782,59 +773,59 @@ def reset(
 ):
     """
     重置Canvas状态
-    
+
     概要：清除Canvas的运行时状态，恢复到初始配置。
-    
+
     参数：
     - **request_body**: 请求体
         - id: Canvas ID
-    
+
     返回：
     - dict: 重置后的DSL配置
-    
+
     功能：
     1. 验证用户权限
     2. 加载Canvas配置
     3. 调用Canvas.reset()清除状态
     4. 保存重置后的配置
     5. 返回新的DSL
-    
+
     重置内容：
     - 清除对话历史
     - 重置组件状态
     - 清除临时变量
     - 保留DSL结构
-    
+
     权限要求：
     - 用户必须是Canvas的所有者
-    
+
     异常处理：
     - 如果无权限，返回 OPERATING_ERROR
     - 如果Canvas不存在，返回 "canvas not found"
-    
+
     注意：
     - 重置不会删除历史会话记录
     - 只影响当前Canvas的运行时状态
     """
     req = request_body.model_dump()
-    
+
     if not UserCanvasService.accessible(db, req["id"], user.id):
         return get_json_result(
             data=False,
             retmsg='Only owner of canvas authorized for this operation.',
             retcode=RetCode.OPERATING_ERROR
         )
-    
+
     try:
         user_canvas = UserCanvasService.get_by_id(db, req["id"])
         if not user_canvas:
             return get_data_error_result(retmsg="canvas not found.")
-        
+
         canvas = Canvas(json.dumps(user_canvas.dsl), user.id, canvas_id=user_canvas.id)
         canvas.reset()
         req["dsl"] = json.loads(str(canvas))
         UserCanvasService.update_by_id(db, req["id"], {"dsl": req["dsl"]})
-        
+
         return get_json_result(data=req["dsl"])
     except Exception as e:
         return server_error_response(e)
@@ -849,14 +840,14 @@ async def upload(
 ):
     """
     上传文件到Canvas或从URL下载内容
-    
+
     概要：支持两种方式：1) 直接上传文件，2) 通过URL抓取网页内容。
-    
+
     参数：
     - **canvas_id**: Canvas ID
     - **url**: URL地址（可选），用于爬取网页内容
     - **file**: 上传的文件（可选）
-    
+
     返回：
     - dict: 文件信息
         - id: 文件唯一标识
@@ -867,38 +858,38 @@ async def upload(
         - created_by: 创建者ID
         - created_at: 创建时间
         - preview_url: 预览URL
-    
+
     功能：
     1. **URL模式**（提供url参数）：
        - 使用crawl4ai爬取网页
        - 支持生成PDF和Markdown
        - 自动识别内容类型
        - 存储到文件系统
-    
+
     2. **文件上传模式**（提供file参数）：
        - 接收上传的文件
        - 检查文件健康状态
        - 存储到文件系统
        - 返回文件元信息
-    
+
     支持的文件类型：
     - PDF文档
     - HTML文件
     - Office文档
     - 图片文件
     - 文本文件
-    
+
     URL爬取特性：
     - 自动生成PDF
     - 提取Markdown格式内容
     - 内容剪枝优化
     - 支持动态页面
-    
+
     异常处理：
     - 如果Canvas不存在，返回 "canvas not found"
     - 如果URL爬取失败，返回错误信息
     - 如果文件健康检查失败，返回错误信息
-    
+
     注意：
     - URL爬取可能需要较长时间
     - 文件会存储在用户的存储空间中
@@ -928,34 +919,34 @@ def input_form(
 ):
     """
     获取Canvas组件的输入表单配置
-    
+
     概要：返回指定组件的输入参数定义，用于动态生成表单界面。
-    
+
     参数：
     - **id**: Canvas ID
     - **component_id**: 组件ID
-    
+
     返回：
     - dict: 输入表单配置
         - 参数名称和类型
         - 默认值
         - 验证规则
         - 描述信息
-    
+
     功能：
     1. 验证Canvas访问权限
     2. 加载Canvas配置
     3. 获取指定组件
     4. 返回组件的输入表单定义
-    
+
     业务场景：
     - 动态生成参数配置界面
     - 验证用户输入
     - 提供参数说明
-    
+
     权限要求：
     - 用户必须是Canvas的所有者
-    
+
     异常处理：
     - 如果Canvas不存在，返回 "canvas not found"
     - 如果无权限，返回 OPERATING_ERROR
@@ -964,14 +955,14 @@ def input_form(
         user_canvas = UserCanvasService.get_by_id(db, id)
         if not user_canvas:
             return get_data_error_result(retmsg="canvas not found.")
-        
+
         if not UserCanvasService.query(db, user_id=user.id, id=id):
             return get_json_result(
                 data=False,
                 retmsg='Only owner of canvas authorized for this operation.',
                 retcode=RetCode.OPERATING_ERROR
             )
-        
+
         canvas = Canvas(json.dumps(user_canvas.dsl), user.id, canvas_id=user_canvas.id)
         return get_json_result(data=canvas.get_component_input_form(component_id))
     except Exception as e:
@@ -986,18 +977,18 @@ async def debug(
 ):
     """
     调试单个Canvas组件
-    
+
     概要：独立运行指定组件，用于测试组件配置和参数。
-    
+
     参数：
     - **request_body**: 请求体
         - id: Canvas ID
         - component_id: 要调试的组件ID
         - params: 调试参数
-    
+
     返回：
     - dict: 组件的输出结果
-    
+
     功能：
     1. 验证Canvas访问权限
     2. 重置Canvas状态
@@ -1005,48 +996,48 @@ async def debug(
     4. 设置调试输入
     5. 执行组件
     6. 返回输出结果
-    
+
     调试特性：
     - 不影响Canvas的实际状态
     - 支持LLM组件的流式输出聚合
     - 可以多次调试不同参数
-    
+
     权限要求：
     - 用户必须是Canvas的所有者
-    
+
     异常处理：
     - 如果无权限，返回 OPERATING_ERROR
     - 执行错误返回详细错误信息
-    
+
     注意：
     - 调试模式下输出会完整返回，不是流式
     - LLM组件的流式输出会被聚合
     - 不会保存到Canvas状态中
     """
     req = request_body.model_dump()
-    
+
     if not UserCanvasService.accessible(db, req["id"], user.id):
         return get_json_result(
             data=False,
             retmsg='Only owner of canvas authorized for this operation.',
             retcode=RetCode.OPERATING_ERROR
         )
-    
+
     try:
         user_canvas = UserCanvasService.get_by_id(db, req["id"])
         canvas = Canvas(json.dumps(user_canvas.dsl), user.id, canvas_id=user_canvas.id)
         canvas.reset()
         canvas.message_id = get_uuid()
-        
+
         component = canvas.get_component(req["component_id"])["obj"]
         component.reset()
-        
+
         if isinstance(component, LLM):
             component.set_debug_inputs(req["params"])
-        
+
         component.invoke(**{k: o["value"] for k, o in req["params"].items()})
         outputs = component.output()
-        
+
         # 处理流式输出
         for k in outputs.keys():
             if isinstance(outputs[k], partial):
@@ -1059,7 +1050,7 @@ async def debug(
                     for c in iter_obj:
                         txt += c
                 outputs[k] = txt
-        
+
         return get_json_result(data=outputs)
     except Exception as e:
         return server_error_response(e)
@@ -1073,9 +1064,9 @@ def test_db_connect(
 ):
     """
     测试数据库连接配置是否正确
-    
+
     概要：验证数据库连接参数，确保可以成功连接到目标数据库。
-    
+
     参数：
     - **request_body**: 请求体
         - db_type: 数据库类型（mysql, mariadb, postgres, mssql, IBM DB2）
@@ -1084,39 +1075,39 @@ def test_db_connect(
         - host: 主机地址
         - port: 端口号
         - password: 密码
-    
+
     返回：
     - dict: 测试结果
         - data: "Database Connection Successful!" 表示连接成功
-    
+
     支持的数据库：
     1. **MySQL/MariaDB**: 使用SQLAlchemy + pymysql
     2. **PostgreSQL**: 使用SQLAlchemy + psycopg2
     3. **MS SQL Server**: 使用pyodbc，需要ODBC Driver 17
     4. **IBM DB2**: 使用ibm_db
-    
+
     功能：
     1. 根据数据库类型创建连接
     2. 执行简单查询验证连接
     3. 关闭连接
     4. 返回测试结果
-    
+
     测试查询：
     - MySQL/PostgreSQL: SELECT 1
     - MS SQL Server: SELECT 1
     - IBM DB2: SELECT 1 FROM sysibm.sysdummy1
-    
+
     异常处理：
     - 如果数据库类型不支持，返回 "Unsupported database type"
     - 如果连接失败，返回详细错误信息
-    
+
     注意：
     - 连接测试后立即关闭
     - 不会执行任何数据修改操作
     - 需要安装对应数据库的驱动
     """
     req = request_body.model_dump()
-    
+
     try:
         if req["db_type"] in ["mysql", "mariadb"]:
             url = f"mysql+pymysql://{quote_plus(req['username'])}:{quote_plus(req['password'])}@{req['host']}:{req['port']}/{req['database']}"
@@ -1177,8 +1168,9 @@ def test_db_connect(
                 return catalog_name, schema_name
 
             try:
-                import trino
                 import os
+
+                import trino
             except Exception as e:
                 return server_error_response(
                     f"Missing dependency 'trino'. Please install: pip install trino, detail: {e}")
@@ -1210,12 +1202,12 @@ def test_db_connect(
             return get_json_result(data="Database Connection Successful!")
         else:
             return server_error_response("Unsupported database type.")
-        
+
         if req["db_type"] != 'mssql':
             with engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
             engine.dispose()
-        
+
         return get_json_result(data="Database Connection Successful!")
     except Exception as e:
         return server_error_response(e)
@@ -1229,12 +1221,12 @@ def getlistversion(
 ):
     """
     获取Canvas的所有历史版本
-    
+
     概要：返回指定Canvas的版本历史列表，按时间倒序排列。
-    
+
     参数：
     - **canvas_id**: Canvas ID
-    
+
     返回：
     - list: 版本列表，每个版本包含：
         - id: 版本ID
@@ -1243,24 +1235,24 @@ def getlistversion(
         - title: 版本标题（包含时间戳）
         - create_time: 创建时间
         - update_time: 更新时间
-    
+
     功能：
     1. 查询Canvas的所有版本记录
     2. 按更新时间倒序排序
     3. 返回版本列表
-    
+
     版本命名：
     - 格式：{Canvas标题}_{时间戳}
     - 例如：MyAgent_2024_01_15_10_30_45
-    
+
     业务场景：
     - 查看Canvas的修改历史
     - 恢复到之前的版本
     - 比较不同版本的配置
-    
+
     异常处理：
     - 如果查询失败，返回错误信息
-    
+
     注意：
     - 版本按时间倒序排列，最新的在前
     - 系统会自动清理过期版本
@@ -1284,20 +1276,20 @@ def getversion(
 ):
     """
     获取Canvas特定版本的详细配置
-    
+
     概要：根据版本ID查询并返回该版本的完整DSL配置。
-    
+
     参数：
     - **version_id**: 版本ID
-    
+
     返回：
     - dict: 版本详细信息
-    
+
     业务场景：
     - 查看历史版本的具体配置
     - 恢复到指定版本
     - 比较版本差异
-    
+
     异常处理：
     - 如果版本不存在，返回 None
     - 查询错误返回错误信息
@@ -1325,9 +1317,9 @@ def list_canvas(
 ):
     """
     获取Canvas列表
-    
+
     概要：查询用户可访问的Canvas列表，支持搜索、筛选、排序和分页。
-    
+
     参数：
     - **keywords**: 搜索关键词，匹配Canvas标题
     - **page**: 页码，0表示不分页
@@ -1336,37 +1328,37 @@ def list_canvas(
     - **desc**: 是否降序排列
     - **canvas_category**: Canvas类别筛选
     - **owner_ids**: 所有者ID列表，逗号分隔
-    
+
     返回：
     - dict: 包含以下字段
         - canvas: Canvas列表
         - total: 总数量
-    
+
     功能：
     1. **默认模式**（无owner_ids）：
        - 获取用户加入的所有租户
        - 查询这些租户下的Canvas
        - 包括用户自己创建的Canvas
-    
+
     2. **指定所有者模式**（有owner_ids）：
        - 只查询指定所有者的Canvas
        - 不分页，返回所有结果
-    
+
     权限逻辑：
     - 可以看到同租户下其他人的Canvas（如果设置为TEAM权限）
     - 可以看到自己创建的所有Canvas
-    
+
     业务场景：
     - Canvas管理界面
     - 团队Canvas浏览
     - 搜索特定Canvas
-    
+
     注意：
     - owner_ids为空时使用默认权限逻辑
     - 支持跨租户查询（如果在多个租户中）
     """
     owner_id_list = [id for id in owner_ids.strip().split(",") if id]
-    
+
     if not owner_id_list:
         # 默认模式：获取用户有权限的所有Canvas
         tenants = TenantService.get_joined_tenants_by_user_id(db, user.id)
@@ -1386,7 +1378,7 @@ def list_canvas(
             orderby, desc, keywords,
             canvas_category
         )
-    
+
     return get_json_result(data={"canvas": canvas, "total": total})
 
 
@@ -1398,9 +1390,9 @@ def setting(
 ):
     """
     更新Canvas的基本设置
-    
+
     概要：修改Canvas的标题、描述、权限和头像等基本信息。
-    
+
     参数：
     - **request_body**: 请求体
         - id: Canvas ID
@@ -1408,54 +1400,54 @@ def setting(
         - permission: 权限设置
         - description: 描述（可选）
         - avatar: 头像URL（可选）
-    
+
     返回：
     - dict: 更新的记录数
-    
+
     功能：
     1. 验证用户权限
     2. 获取当前Canvas信息
     3. 更新指定字段
     4. 保存到数据库
-    
+
     可更新字段：
     - title: Canvas标题
     - description: 详细描述
     - permission: 权限（PRIVATE/TEAM）
     - avatar: 头像图片URL
-    
+
     权限要求：
     - 用户必须是Canvas的所有者
-    
+
     异常处理：
     - 如果无权限，返回 OPERATING_ERROR
     - 如果Canvas不存在，返回 "canvas not found"
-    
+
     注意：
     - 只更新提供的字段
     - 不会影响DSL配置
     """
     req = request_body.model_dump()
     req["user_id"] = user.id
-    
+
     if not UserCanvasService.accessible(db, req["id"], user.id):
         return get_json_result(
             data=False,
             retmsg='Only owner of canvas authorized for this operation.',
             retcode=RetCode.OPERATING_ERROR
         )
-    
+
     flow = UserCanvasService.get_by_id(db, req["id"])
     if not flow:
         return get_data_error_result(retmsg="canvas not found.")
-    
+
     flow_dict = flow.to_dict()
     flow_dict["title"] = req["title"]
-    
+
     for key in ["description", "permission", "avatar"]:
         if value := req.get(key):
             flow_dict[key] = value
-    
+
     num = UserCanvasService.update_by_id(db, req["id"], flow_dict)
     return get_json_result(data=num)
 
@@ -1468,36 +1460,36 @@ def trace(
 ):
     """
     获取Canvas执行过程的详细日志
-    
+
     概要：查询指定消息的执行日志，用于调试和追踪Canvas的运行过程。
-    
+
     参数：
     - **canvas_id**: Canvas ID
     - **message_id**: 消息ID（任务ID）
-    
+
     返回：
     - dict: 执行日志，包含：
         - 组件执行顺序
         - 每个组件的输入输出
         - 执行时间
         - 错误信息
-    
+
     功能：
     1. 从Redis获取日志数据
     2. 解析JSON格式的日志
     3. 返回结构化日志
-    
+
     日志内容：
     - 执行路径
     - 组件状态
     - 中间结果
     - 性能指标
-    
+
     业务场景：
     - 调试Canvas执行问题
     - 分析性能瓶颈
     - 追踪数据流
-    
+
     注意：
     - 日志有过期时间
     - 如果日志不存在返回空对象
@@ -1531,9 +1523,9 @@ def sessions(
 ):
     """
     获取Canvas的会话历史
-    
+
     概要：查询指定Canvas的所有对话会话，支持多维度筛选和分页。
-    
+
     参数：
     - **canvas_id**: Canvas ID
     - **user_id**: 用户ID，筛选特定用户的会话
@@ -1545,12 +1537,12 @@ def sessions(
     - **from_date**: 开始日期
     - **to_date**: 结束日期
     - **dsl**: 是否包含DSL配置
-    
+
     返回：
     - dict: 包含以下字段
         - total: 总会话数
         - sessions: 会话列表
-    
+
     会话信息包含：
     - session_id: 会话ID
     - user_id: 用户ID
@@ -1558,23 +1550,23 @@ def sessions(
     - dsl: Canvas配置（可选）
     - create_time: 创建时间
     - update_time: 更新时间
-    
+
     功能：
     1. 验证Canvas访问权限
     2. 根据条件筛选会话
     3. 分页返回结果
-    
+
     权限要求：
     - 用户必须是Canvas的所有者
-    
+
     筛选条件：
     - 按用户筛选
     - 按时间范围筛选
     - 关键词搜索
-    
+
     异常处理：
     - 如果无权限，返回 OPERATING_ERROR
-    
+
     注意：
     - dsl字段可能较大，按需获取
     - 支持日期范围查询
@@ -1704,43 +1696,37 @@ def prompts(
 ):
     """
     获取系统预定义的提示词模板
-    
+
     概要：返回Agent推理过程中使用的各种提示词模板。
-    
+
     返回：
     - dict: 提示词集合，包含：
         - task_analysis: 任务分析提示词
         - plan_generation: 计划生成提示词
         - reflection: 反思提示词
         - citation_guidelines: 引用指南
-    
+
     功能：
     1. 从prompts模块导入提示词
     2. 组合成字典返回
-    
+
     提示词类型：
     - **task_analysis**: 分析用户任务的系统提示词
     - **plan_generation**: 生成执行计划的提示词
     - **reflection**: 反思执行结果的提示词
     - **citation_guidelines**: 引用来源的格式指南
-    
+
     业务场景：
     - Agent配置界面
     - 自定义提示词参考
     - 理解Agent推理流程
-    
+
     注意：
     - 这些是默认提示词，可以被覆盖
     - 提示词包含占位符，使用时需要替换
     """
-    from core.prompts.generator import (
-        ANALYZE_TASK_SYSTEM,
-        ANALYZE_TASK_USER,
-        NEXT_STEP,
-        REFLECT,
-        CITATION_PROMPT_TEMPLATE
-    )
-    
+    from core.prompts.generator import ANALYZE_TASK_SYSTEM, ANALYZE_TASK_USER, CITATION_PROMPT_TEMPLATE, NEXT_STEP, REFLECT
+
     return get_json_result(data={
         "task_analysis": ANALYZE_TASK_SYSTEM + "\n\n" + ANALYZE_TASK_USER,
         "plan_generation": NEXT_STEP,
@@ -1757,32 +1743,32 @@ def download(
 ):
     """
     下载Canvas中上传的文件
-    
+
     概要：根据文件ID和创建者ID下载文件内容。
-    
+
     参数：
     - **id**: 文件ID（存储位置）
     - **created_by**: 创建者ID（用户ID）
-    
+
     返回：
     - 文件二进制内容
-    
+
     功能：
     1. 从存储系统获取文件内容
     2. 返回二进制数据
-    
+
     业务场景：
     - 下载Canvas中使用的文件
     - 预览文档内容
     - 导出处理结果
-    
+
     注意：
     - 需要提供正确的创建者ID
     - 返回原始二进制内容
     - 不包含文件名等元信息
     """
     blob = FileService.get_blob(created_by, id)
-    
+
     response = Response(content=blob)
     response.headers["Content-Type"] = "application/octet-stream"
     return response

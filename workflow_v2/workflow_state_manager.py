@@ -1,7 +1,7 @@
-from datetime import datetime
 import asyncio
-from typing import Dict, Any, List, Optional
 import time
+from datetime import datetime
+from typing import Any
 
 
 class WorkflowStateManager:
@@ -15,13 +15,13 @@ class WorkflowStateManager:
                  max_history_states=50,  # 每个工作流默认最多保留50条历史状态
                  cleanup_interval=300):  # 默认每5分钟清理一次
         # 保存每个工作流的状态订阅者: workflow_id -> list of queues
-        self._subscribers: Dict[str, List[asyncio.Queue]] = {}
+        self._subscribers: dict[str, list[asyncio.Queue]] = {}
         # 保存每个工作流的最新状态: workflow_id -> state
-        self._latest_states: Dict[str, Dict[str, Any]] = {}
+        self._latest_states: dict[str, dict[str, Any]] = {}
         # 保存每个工作流的所有历史状态: workflow_id -> list of states
-        self._history_states: Dict[str, List[Dict[str, Any]]] = {}
+        self._history_states: dict[str, list[dict[str, Any]]] = {}
         # 工作流最后活跃时间: workflow_id -> timestamp
-        self._last_active: Dict[str, float] = {}
+        self._last_active: dict[str, float] = {}
         # 锁，防止并发问题
         self._lock = asyncio.Lock()
 
@@ -123,7 +123,7 @@ class WorkflowStateManager:
             self._subscribers[workflow_id].append(queue)
 
             # 如果已有该工作流的历史状态，按顺序发送所有历史状态
-            if workflow_id in self._history_states and self._history_states[workflow_id]:
+            if self._history_states.get(workflow_id):
                 for state in self._history_states[workflow_id]:
                     await queue.put(state)
             # 如果没有历史状态但有最新状态，发送最新状态
@@ -155,7 +155,7 @@ class WorkflowStateManager:
         """获取当前时间戳"""
         return datetime.now().isoformat()
 
-    async def publish_state(self, workflow_id: str, state: Dict[str, Any]) -> None:
+    async def publish_state(self, workflow_id: str, state: dict[str, Any]) -> None:
         """
         发布工作流状态更新
 
@@ -196,9 +196,9 @@ class WorkflowStateManager:
                                  node_id: str,
                                  node_title: str,
                                  status: str,
-                                 started_at: Optional[float] = None,
-                                 execution_time: Optional[float] = None,
-                                 error_message: Optional[str] = None) -> None:
+                                 started_at: float | None = None,
+                                 execution_time: float | None = None,
+                                 error_message: str | None = None) -> None:
         """
         发布节点状态更新
 

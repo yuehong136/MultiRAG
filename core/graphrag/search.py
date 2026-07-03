@@ -18,20 +18,20 @@ import json
 import logging
 from collections import defaultdict
 from copy import deepcopy
-import json_repair
 
+import json_repair
 import pandas as pd
 
 from api.db.db_models import db_connection
-from common.token_utils import num_tokens_from_string
+from common import settings
 from common.doc_store.doc_store_base import OrderByExpr
 from common.float_utils import get_float
-from common import settings
 from common.misc_utils import get_uuid, thread_pool_exec
-from core.nlp.search import Dealer, index_name
+from common.token_utils import num_tokens_from_string
 from core.graphrag.llm_protocol import GraphRAGCompletionLLM, unwrap_graphrag_chat_response
 from core.graphrag.query_analyze_prompt import PROMPTS
-from core.graphrag.utils import get_entity_type2samples, get_llm_cache, set_llm_cache, get_relation
+from core.graphrag.utils import get_entity_type2samples, get_llm_cache, get_relation, set_llm_cache
+from core.nlp.search import Dealer, index_name
 
 
 class KGSearch(Dealer):
@@ -253,10 +253,10 @@ class KGSearch(Dealer):
                         nhop_pathes[(f, t)]["sim"] = ent["sim"] / (2 + i)
                     nhop_pathes[(f, t)]["pagerank"] = wts[i]
 
-        logging.info("Retrieved entities: {}".format(list(ents_from_query.keys())))
-        logging.info("Retrieved relations: {}".format(list(rels_from_txt.keys())))
-        logging.info("Retrieved entities from types({}): {}".format(ty_kwds, list(ents_from_types.keys())))
-        logging.info("Retrieved N-hops: {}".format(list(nhop_pathes.keys())))
+        logging.info(f"Retrieved entities: {list(ents_from_query.keys())}")
+        logging.info(f"Retrieved relations: {list(rels_from_txt.keys())}")
+        logging.info(f"Retrieved entities from types({ty_kwds}): {list(ents_from_types.keys())}")
+        logging.info(f"Retrieved N-hops: {list(nhop_pathes.keys())}")
 
         # P(E|Q) => P(E) * P(Q|E) => pagerank * sim
         for ent in ents_from_types.keys():
@@ -332,11 +332,11 @@ class KGSearch(Dealer):
                 break
 
         if ents:
-            ents = "\n---- Entities ----\n{}".format(pd.DataFrame(ents).to_csv())
+            ents = f"\n---- Entities ----\n{pd.DataFrame(ents).to_csv()}"
         else:
             ents = ""
         if relas:
-            relas = "\n---- Relations ----\n{}".format(pd.DataFrame(relas).to_csv())
+            relas = f"\n---- Relations ----\n{pd.DataFrame(relas).to_csv()}"
         else:
             relas = ""
 
@@ -395,10 +395,11 @@ class KGSearch(Dealer):
 
 if __name__ == "__main__":
     import argparse
-    from common.constants import LLMType
+
+    from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
     from api.db.services.knowledgebase_service import KnowledgebaseService
     from api.db.services.llm_service import LLMBundle
-    from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
+    from common.constants import LLMType
     from core.nlp import search
 
     settings.init_settings()

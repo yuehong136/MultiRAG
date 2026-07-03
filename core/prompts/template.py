@@ -13,7 +13,7 @@ def load_prompt(name: str) -> str:
     if not os.path.isfile(path):
         raise FileNotFoundError(f"Prompt file '{name}.md' not found in prompts/ directory.")
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         content = f.read().strip()
         _loaded_prompts[name] = content
         return content

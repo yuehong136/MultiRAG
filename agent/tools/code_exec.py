@@ -25,12 +25,11 @@ from collections.abc import Mapping
 from pydantic import BaseModel, Field, field_validator
 from strenum import StrEnum
 
-from api.db.services.file_service import FileService
 from agent.tools.base import ToolBase, ToolMeta, ToolParamBase
+from api.db.services.file_service import FileService
 from common import settings
 from common.connection_utils import timeout
 from common.constants import SANDBOX_ARTIFACT_BUCKET, SANDBOX_ARTIFACT_EXPIRE_DAYS
-
 
 SYSTEM_OUTPUT_KEYS = frozenset(
     {
@@ -226,7 +225,7 @@ class CodeExecutionRequest(BaseModel):
             base64.b64decode(v, validate=True)
             return v
         except Exception as e:
-            raise ValueError(f"Invalid base64 encoding: {str(e)}")
+            raise ValueError(f"Invalid base64 encoding: {e!s}")
 
     @field_validator("language", mode="before")
     @classmethod

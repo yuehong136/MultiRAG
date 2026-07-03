@@ -20,7 +20,8 @@ import os
 import re
 import threading
 from abc import ABC
-from typing import Annotated, Any, Iterable, Mapping, Sequence, Literal
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Annotated, Any, Literal
 from urllib.parse import urljoin
 
 import dashscope
@@ -31,10 +32,10 @@ from ollama import Client
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
 
-from common import settings
 from api.utils.file_utils import get_home_cache_dir
+from common import settings
 from common.log_utils import log_exception
-from common.token_utils import num_tokens_from_string, truncate, total_token_count_from_response
+from common.token_utils import num_tokens_from_string, total_token_count_from_response, truncate
 
 
 class Base(ABC):
@@ -573,8 +574,8 @@ class MistralEmbed(Base):
         self.model_name = model_name
 
     def encode(self, texts: list):
-        import time
         import random
+        import time
 
         texts = [truncate(t, 8196) for t in texts]
         batch_size = 16
@@ -597,8 +598,8 @@ class MistralEmbed(Base):
         return np.array(ress), token_count
 
     def encode_queries(self, text):
-        import time
         import random
+        import time
 
         retry_max = 5
         while retry_max > 0:
@@ -874,7 +875,7 @@ class CoHereEmbed(Base):
                 embedding_types=["float"],
             )
             try:
-                ress.extend([d for d in res.embeddings.float])
+                ress.extend(list(res.embeddings.float))
                 token_count += total_token_count_from_response(res)
             except Exception as _e:
                 log_exception(_e, res)
@@ -1279,7 +1280,7 @@ class VolcEngineEmbed(Base):
         try:
             response.raise_for_status()
             return response.json()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log_exception(exc, response.text if hasattr(response, "text") else response)
             raise
 
@@ -1302,7 +1303,7 @@ class VolcEngineEmbed(Base):
         if isinstance(raw_embedding, str):
             try:
                 decoded = base64.b64decode(raw_embedding)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 log_exception(exc, {"raw": raw_embedding, "context": context})
                 raise ValueError("Base64 解码失败") from exc
             return np.frombuffer(decoded, dtype="float32").tolist()

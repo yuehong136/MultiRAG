@@ -1,9 +1,10 @@
 import logging
-import string
 import os
 import re
 import secrets
+import string
 import time
+from base64 import b64decode
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -12,37 +13,35 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from api.apps import manager
+from api.apps.auth import get_auth_client
+from api.db import FileType, UserTenantRole
 from api.db.db_models import TenantLLM, get_db
+from api.db.services.file_service import FileService
 from api.db.services.llm_service import get_init_tenant_llm
 from api.db.services.tenant_llm_service import TenantLLMService
+from api.db.services.user_service import TenantService, UserService, UserTenantService
+from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
+from api.utils.crypt import decrypt
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
-from api.db.services.user_service import UserService, TenantService, UserTenantService
-from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
-from api.db.services.file_service import FileService
-from api.db import UserTenantRole, FileType
-from api.apps.auth import get_auth_client
 from api.utils.web_utils import (
-    send_email_html,
-    OTP_LENGTH,
-    OTP_TTL_SECONDS,
     ATTEMPT_LIMIT,
     ATTEMPT_LOCK_SECONDS,
+    OTP_LENGTH,
+    OTP_TTL_SECONDS,
     RESEND_COOLDOWN_SECONDS,
-    otp_keys,
-    hash_code,
     captcha_key,
+    hash_code,
+    otp_keys,
+    send_email_html,
     verified_key,
 )
-from base64 import b64decode
-from api.utils.crypt import decrypt
-from common.misc_utils import download_img, get_uuid
-from common.http_client import async_request
 from common import settings
 from common.connection_utils import construct_response
 from common.constants import RetCode
+from common.http_client import async_request
+from common.misc_utils import download_img, get_uuid
 from common.time_utils import current_timestamp, datetime_format, get_format_time
 from core.utils.redis_conn import REDIS_CONN
-
 
 router = APIRouter()
 
@@ -147,7 +146,7 @@ def get_login_channels():
         logging.exception(e)
         return get_json_result(
             data=[],
-            retmsg=f"Load channels failure, error: {str(e)}",
+            retmsg=f"Load channels failure, error: {e!s}",
             retcode=RetCode.EXCEPTION_ERROR
         )
 
@@ -204,7 +203,7 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
             return construct_response(data=response_data, auth=jwt_token, retmsg=msg)
         except Exception as e:
             db.rollback()
-            raise HTTPException(status_code=500, detail=f"Login error: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Login error: {e!s}")
     else:
         return get_json_result(data=False,
                                retcode=RetCode.AUTHENTICATION_ERROR,
@@ -272,7 +271,7 @@ async def github_callback(code: str, db: Session = Depends(get_db)):
         except Exception as e:
             rollback_user_registration(db, user_id)
             logging.exception(e)
-            return RedirectResponse(url=f"/?error={str(e)}")
+            return RedirectResponse(url=f"/?error={e!s}")
 
     # User exists, try to log in
     user = users[0]
@@ -360,7 +359,7 @@ async def feishu_callback(code: str, db: Session = Depends(get_db)):
         except Exception as e:
             rollback_user_registration(db, user_id)
             logging.exception(e)
-            return RedirectResponse(url=f"/?error={str(e)}")
+            return RedirectResponse(url=f"/?error={e!s}")
 
     # User exists, try to log in
     user = users[0]
@@ -390,7 +389,7 @@ def log_out(db: Session = Depends(get_db), user=Depends(manager)):
         return get_json_result(data=True)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An error occurred: {e!s}")
 
 
 @router.get("/login/{channel}", summary="OAuth登录入口")
@@ -422,7 +421,7 @@ def oauth_login(channel: str, request: Request):
         return RedirectResponse(url=auth_url)
     except Exception as e:
         logging.exception(e)
-        raise HTTPException(status_code=500, detail=f"OAuth login error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"OAuth login error: {e!s}")
 
 
 @router.get("/oauth/callback/{channel}", summary="OAuth回调处理")
@@ -520,7 +519,7 @@ async def oauth_callback(channel: str, code: str, state: str = None, request: Re
             except Exception as e:
                 rollback_user_registration(db, user_id)
                 logging.exception(e)
-                return RedirectResponse(url=f"/?error={str(e)}")
+                return RedirectResponse(url=f"/?error={e!s}")
 
         # 用户已存在，尝试登录
         user = users[0]
@@ -535,7 +534,7 @@ async def oauth_callback(channel: str, code: str, state: str = None, request: Re
 
     except Exception as e:
         logging.exception(e)
-        return RedirectResponse(url=f"/?error={str(e)}")
+        return RedirectResponse(url=f"/?error={e!s}")
 
 
 @router.post("/setting", summary="设置用户信息")
@@ -623,21 +622,21 @@ def login_user(user):
 def rollback_user_registration(db: Session, user_id: str):
     try:
         UserService.delete_by_id(db, user_id)
-    except Exception as e:
+    except Exception:
         pass
     try:
         TenantService.delete_by_id(db, user_id)
-    except Exception as e:
+    except Exception:
         pass
     try:
         u = UserTenantService.query(db, tenant_id=user_id)
         if u:
             UserTenantService.delete_by_id(db, u[0].id)
-    except Exception as e:
+    except Exception:
         pass
     try:
         db.query(TenantLLM).filter(TenantLLM.tenant_id == user_id).delete()
-    except Exception as e:
+    except Exception:
         pass
 
 
@@ -685,7 +684,7 @@ def user_register(db: Session, user_id: str, user: dict):
         return UserService.query(db, email=user["email"])
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error during user registration: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error during user registration: {e!s}")
 
 
 @router.post("/register", summary="注册用户")
@@ -743,7 +742,7 @@ def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
         rollback_user_registration(db, user_id)
         logging.exception(e)
         return get_json_result(data=False,
-                               retmsg=f'User registration failure, error: {str(e)}',
+                               retmsg=f'User registration failure, error: {e!s}',
                                retcode=RetCode.EXCEPTION_ERROR)
 
 
@@ -844,77 +843,77 @@ def forget_get_captcha(email: str, db: Session = Depends(get_db)):
 async def forget_send_otp(request: SendOtpRequest, db: Session = Depends(get_db)):
     """
     发送邮箱OTP验证码
-    
+
     该接口用于验证图片验证码，并生成邮箱OTP验证码发送到用户邮箱。
-    
+
     参数:
     - request: SendOtpRequest对象，包含邮箱和图片验证码
         - email: str 用户的邮箱地址
         - captcha: str 图片验证码
-    
+
     返回:
     - 成功时返回成功消息
     - 失败时返回错误信息
     """
     email = request.email.strip() if request.email else ""
     captcha = request.captcha.strip() if request.captcha else ""
-    
+
     if not email or not captcha:
         return get_json_result(
-            data=False, 
-            retcode=RetCode.ARGUMENT_ERROR, 
+            data=False,
+            retcode=RetCode.ARGUMENT_ERROR,
             retmsg="email and captcha required"
         )
-    
+
     users = UserService.query(db, email=email)
     if not users:
         return get_json_result(
-            data=False, 
-            retcode=RetCode.DATA_ERROR, 
+            data=False,
+            retcode=RetCode.DATA_ERROR,
             retmsg="invalid email"
         )
-    
+
     stored_captcha = REDIS_CONN.get(captcha_key(email))
     if not stored_captcha:
         return get_json_result(
-            data=False, 
-            retcode=RetCode.NOT_EFFECTIVE, 
+            data=False,
+            retcode=RetCode.NOT_EFFECTIVE,
             retmsg="invalid or expired captcha"
         )
-    
+
     if (stored_captcha or "").strip().lower() != captcha.lower():
         return get_json_result(
-            data=False, 
+            data=False,
             retcode=RetCode.AUTHENTICATION_ERROR,
             retmsg="invalid or expired captcha"
         )
-    
+
     # Delete captcha to prevent reuse
     REDIS_CONN.delete(captcha_key(email))
-    
+
     k_code, k_attempts, k_last, k_lock = otp_keys(email)
     now = int(time.time())
     last_ts = REDIS_CONN.get(k_last)
-    
+
     if last_ts:
         try:
             elapsed = now - int(last_ts)
         except Exception:
             elapsed = RESEND_COOLDOWN_SECONDS
-        
+
         remaining = RESEND_COOLDOWN_SECONDS - elapsed
         if remaining > 0:
             return get_json_result(
-                data=False, 
+                data=False,
                 retcode=RetCode.NOT_EFFECTIVE,
                 retmsg=f"you still have to wait {remaining} seconds"
             )
-    
+
     # Generate OTP (uppercase letters only) and store hashed
     otp = "".join(secrets.choice(string.ascii_uppercase) for _ in range(OTP_LENGTH))
     salt = os.urandom(16)
     code_hash = hash_code(otp, salt)
-    
+
     REDIS_CONN.set(k_code, f"{code_hash}:{salt.hex()}", OTP_TTL_SECONDS)
     REDIS_CONN.set(k_attempts, 0, OTP_TTL_SECONDS)
     REDIS_CONN.set(k_last, now, OTP_TTL_SECONDS)

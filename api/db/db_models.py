@@ -1,25 +1,26 @@
+import functools
+import hashlib
+import inspect
 import logging
 import os
 import sys
-import inspect
-import sqlalchemy as sa
-from sqlalchemy import create_engine, String, DateTime, BigInteger, event, Integer, Float, Boolean, Text, text, JSON, select
-from sqlalchemy.engine import URL
-from sqlalchemy.orm import sessionmaker, Session, object_session, DeclarativeBase, Mapped, mapped_column
-from sqlalchemy.exc import OperationalError, DisconnectionError, SQLAlchemyError
-from sqlalchemy.inspection import inspect as sa_inspect
-from sqlalchemy.orm.attributes import get_history
-from sqlalchemy.dialects.postgresql import JSONB
-from typing import Any
-import uuid
-from datetime import datetime, timezone
 import time
-import functools
-import hashlib
-from alembic.config import Config
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+import sqlalchemy as sa
 from alembic import command
-from alembic.script import ScriptDirectory
+from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, Integer, String, Text, create_engine, event, select, text
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.engine import URL
+from sqlalchemy.exc import DisconnectionError, OperationalError, SQLAlchemyError
+from sqlalchemy.inspection import inspect as sa_inspect
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, object_session, sessionmaker
+from sqlalchemy.orm.attributes import get_history
 
 # from common.time_utils import current_timestamp, timestamp_to_date, date_string_to_timestamp
 from common.config_utils import decrypt_database_config
@@ -400,12 +401,12 @@ def auto_date_timestamp_date_field():
 
 def timestamp_to_datetime(ts: int) -> datetime:
     """将毫秒时间戳转换为 UTC datetime 对象"""
-    return datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
+    return datetime.fromtimestamp(ts / 1000, tz=UTC)
 
 
 def get_utc_now():
     """获取当前UTC时间"""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def get_timestamp_ms():
@@ -1967,7 +1968,7 @@ def init_database_tables():
 
     except OperationalError as e:
         logging.exception(f"OperationalError while checking schema existence: {e}")
-        return f"OperationalError: {str(e)}"
+        return f"OperationalError: {e!s}"
 
     # 获取现有表列表
     inspector = sa_inspect(engine)
@@ -2074,7 +2075,7 @@ def upgrade_database_tables(is_fresh_install: bool = False):
             return "数据库迁移成功完成"
 
     except Exception as e:
-        error_msg = f"数据库迁移过程中发生错误: {str(e)}"
+        error_msg = f"数据库迁移过程中发生错误: {e!s}"
         logging.error(error_msg)
         import traceback
         logging.error(traceback.format_exc())
@@ -2108,10 +2109,10 @@ def with_retry(max_retries=3, retry_delay=1.0):
 
                     if retry < max_retries - 1:
                         current_delay = retry_delay * (2 ** retry)
-                        logging.warning(f"{func_name} {lock_name} 失败: {str(e)}, 重试中 ({retry + 1}/{max_retries})")
+                        logging.warning(f"{func_name} {lock_name} 失败: {e!s}, 重试中 ({retry + 1}/{max_retries})")
                         time.sleep(current_delay)
                     else:
-                        logging.error(f"{func_name} {lock_name} 在所有尝试后失败: {str(e)}")
+                        logging.error(f"{func_name} {lock_name} 在所有尝试后失败: {e!s}")
 
             if last_exception:
                 raise last_exception
@@ -2367,7 +2368,7 @@ class SQLiteDatabaseLock:
             return True
         except SQLAlchemyError as e:
             self.session.rollback()
-            raise Exception(f"释放 SQLite 锁失败: {str(e)}")
+            raise Exception(f"释放 SQLite 锁失败: {e!s}")
 
     def __enter__(self):
         """上下文管理器入口"""

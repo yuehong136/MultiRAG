@@ -1,4 +1,5 @@
 import json
+
 from openai.lib.azure import AzureOpenAI
 
 from core.llm.chat_model.base import Base, LLMErrorCode

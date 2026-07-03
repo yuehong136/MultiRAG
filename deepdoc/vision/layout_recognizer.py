@@ -23,7 +23,7 @@ import numpy as np
 from huggingface_hub import snapshot_download
 
 from common.file_utils import get_project_base_directory
-from deepdoc.vision import Recognizer
+from deepdoc.vision.recognizer import Recognizer
 from deepdoc.vision.operators import nms
 
 
@@ -60,7 +60,7 @@ class LayoutRecognizer(Recognizer):
     def __call__(self, image_list, ocr_res, scale_factor=3, thr=0.2, batch_size=16, drop=True):
         def __is_garbage(b):
             patt = [r"\(cid\s*:\s*\d+\s*\)"]
-            return any([re.search(p, b.get("text", "")) for p in patt])
+            return any(re.search(p, b.get("text", "")) for p in patt)
 
         if self.client:
             layouts = self.client.predict(image_list)
@@ -187,15 +187,15 @@ class LayoutRecognizer4YOLOv10(LayoutRecognizer):
             # Scale ratio (new / old)
             r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
             # Compute padding
-            new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))
+            new_unpad = round(shape[1] * r), round(shape[0] * r)
             dw, dh = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]  # wh padding
             dw /= 2  # divide padding into 2 sides
             dh /= 2
             ww, hh = new_unpad
             img = np.array(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)).astype(np.float32)
             img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)
-            top, bottom = int(round(dh - 0.1)) if self.center else 0, int(round(dh + 0.1))
-            left, right = int(round(dw - 0.1)) if self.center else 0, int(round(dw + 0.1))
+            top, bottom = round(dh - 0.1) if self.center else 0, round(dh + 0.1)
+            left, right = round(dw - 0.1) if self.center else 0, round(dw + 0.1)
             img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114))  # add border
             img /= 255.0
             img = img.transpose(2, 0, 1)
@@ -269,12 +269,12 @@ class AscendLayoutRecognizer(Recognizer):
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32)
 
             r = min(H / h, W / w)
-            new_unpad = (int(round(w * r)), int(round(h * r)))
+            new_unpad = (round(w * r), round(h * r))
             dw, dh = (W - new_unpad[0]) / 2.0, (H - new_unpad[1]) / 2.0
 
             img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)
-            top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
-            left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
+            top, bottom = round(dh - 0.1), round(dh + 0.1)
+            left, right = round(dw - 0.1), round(dw + 0.1)
             img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114))
 
             img /= 255.0

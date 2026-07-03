@@ -1,11 +1,12 @@
-import logging
 import json
+import logging
 import os
-import time
 import re
-from nltk.corpus import wordnet
-from common.file_utils import get_project_base_directory
+import time
 
+from nltk.corpus import wordnet
+
+from common.file_utils import get_project_base_directory
 
 # Forces NLTK to load the corpus synchronously once, preventing concurrent tasks
 # from triggering the lazy-loading race condition.
@@ -23,7 +24,7 @@ class Dealer:
         self.dictionary = None
         path = os.path.join(get_project_base_directory(), "core/res", "synonym.json")
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 self.dictionary = json.load(f)
 
             self.dictionary = {(k.lower() if isinstance(k, str) else k): v for k, v in self.dictionary.items()}

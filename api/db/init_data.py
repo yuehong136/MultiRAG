@@ -1,6 +1,6 @@
 import asyncio
-import logging
 import json
+import logging
 import os
 import time
 import uuid
@@ -11,27 +11,27 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from api.db import UserTenantRole
-from api.db.db_models import init_database_tables as init_web_db, LLM, LLMFactories, TenantLLM, Knowledgebase, Dialog, Memory, db_connection
+from api.db.db_models import LLM, Dialog, GuardDimension, Knowledgebase, LLMFactories, Memory, TenantLLM, db_connection
+from api.db.db_models import init_database_tables as init_web_db
+from api.db.joint_services.memory_message_service import fix_missing_tokenized_memory, init_memory_size_cache, init_message_id_sequence
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from api.db.services import UserService
 from api.db.services.canvas_service import CanvasTemplateService
 from api.db.services.dialog_service import DialogService
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.llm_service import LLMBundle, LLMService, get_init_tenant_llm
 from api.db.services.memory_service import MemoryService
-from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMService
-from api.db.services.llm_service import LLMService, LLMBundle, get_init_tenant_llm
-from api.db.services.user_service import TenantService, UserTenantService
-from api.db.db_models import GuardDimension
-from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
-from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from api.db.services.system_settings_service import SystemSettingsService
-from api.db.joint_services.memory_message_service import init_message_id_sequence, init_memory_size_cache, fix_missing_tokenized_memory
+from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMService
+from api.db.services.user_service import TenantService, UserTenantService
+from api.utils.tenant_utils import ensure_tenant_model_id_for_params
+
 # from api.common.base64 import encode_to_base64
 from common import settings
-from common.file_utils import get_project_base_directory
 from common.constants import LLMType
+from common.file_utils import get_project_base_directory
 from scripts.init_ai_guard_system import init_ai_guard_system
-
 
 # 超级用户默认配置（支持环境变量覆盖）
 DEFAULT_SUPERUSER_NICKNAME = os.getenv("DEFAULT_SUPERUSER_NICKNAME", "admin")
@@ -48,7 +48,7 @@ def init_superuser(
 ):
     """
     初始化超级用户
-    
+
     Args:
         db: 数据库会话
         nickname: 用户昵称，默认从环境变量 DEFAULT_SUPERUSER_NICKNAME 读取
@@ -61,7 +61,7 @@ def init_superuser(
     if existing_admin:
         logging.info(f"超级用户已存在（邮箱：{email}），跳过初始化")
         return
-    
+
     user_info = {
         "id": uuid.uuid1().hex,
         "password": password,
@@ -97,28 +97,28 @@ def init_superuser(
     except IntegrityError:
         logging.info("User with email %s already exists, skipping.", email)
         return
-    
+
     # 检查 Tenant 是否已存在，避免重复插入
     existing_tenant = TenantService.get_or_none(db, id=tenant["id"])
     if not existing_tenant:
         TenantService.insert(db, **tenant)
     else:
         logging.info(f"Tenant {tenant['id']} already exists, skipping creation.")
-    
+
     # 检查 UserTenant 是否已存在
     existing_user_tenant = UserTenantService.get_or_none(db, tenant_id=usr_tenant["tenant_id"], user_id=usr_tenant["user_id"])
     if not existing_user_tenant:
         UserTenantService.insert(db, **usr_tenant)
     else:
         logging.info(f"UserTenant for user {usr_tenant['user_id']} already exists, skipping creation.")
-    
+
     # 清理该 tenant 已有的 TenantLLM 记录，然后重新插入（避免唯一约束冲突）
     try:
         TenantLLMService.filter_delete(db, [TenantLLM.tenant_id == user_info["id"]])
         logging.info(f"Cleaned existing TenantLLM records for tenant {user_info['id']}")
     except Exception as e:
         logging.warning(f"Failed to clean TenantLLM records: {e}")
-    
+
     TenantLLMService.insert_many(db, tenant_llm)
     TenantService.update_by_id(db, user_info["id"], ensure_tenant_model_id_for_params(db, user_info["id"], tenant))
 
@@ -248,7 +248,7 @@ def add_graph_templates(db: Session):
 
     for fnm in os.listdir(dir):
         try:
-            with open(os.path.join(dir, fnm), "r", encoding="utf-8") as f:
+            with open(os.path.join(dir, fnm), encoding="utf-8") as f:
                 cnvs = json.load(f)
 
             # 将 ID 转换为字符串以确保一致性
@@ -309,7 +309,7 @@ def init_guard_system_wrapper(db: Session, tenant_id: str, user_id: str):
         # 使用 init_ai_guard_system 进行初始化
         init_ai_guard_system(tenant_id=tenant_id, created_by=user_id)
 
-        logging.info(f"✅ AI安全护栏系统初始化完成")
+        logging.info("✅ AI安全护栏系统初始化完成")
 
     except Exception as e:
         logging.error(f"初始化AI安全护栏系统失败: {e}")
@@ -323,7 +323,7 @@ def init_table(db: Session):
         logging.warning("Missing system_settings.json, skipping system settings initialization")
         return
 
-    with open(settings_file, "r", encoding="utf-8") as f:
+    with open(settings_file, encoding="utf-8") as f:
         records_from_file = json.load(f)["system_settings"]
 
     # 获取已有记录，构建索引
@@ -387,7 +387,7 @@ def _init_web_data_with_db(db: Session) -> None:
         fix_empty_tenant_model_id(db)
         fix_missing_tokenized_memory(db)
 
-        logging.info("init web data success:{}".format(time.time() - start_time))
+        logging.info(f"init web data success:{time.time() - start_time}")
     except Exception:
         # 对外部传入的 db：这里 rollback 只负责清理当前函数内造成的脏事务状态
         # （具体 commit 发生在各 Service 内部）

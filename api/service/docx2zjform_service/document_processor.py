@@ -1,9 +1,8 @@
-from typing import List
+import logging
 
-from .analyzer import ElementAnalyzer, TableElementAnalyzer, ParagraphElementAnalyzer, AnalysisContext
+from .analyzer import AnalysisContext, ElementAnalyzer, ParagraphElementAnalyzer, TableElementAnalyzer
 from .component.base import Component
 from .element import Element
-import logging
 
 
 class DocumentProcessor:
@@ -15,9 +14,9 @@ class DocumentProcessor:
             ParagraphElementAnalyzer()
         ]
 
-    def process(self, elements: List[Element]) -> List[Component]:
+    def process(self, elements: list[Element]) -> list[Component]:
         """处理文档元素并返回表单组件"""
-        logging.info(f"处理文档元素并返回表单组件")
+        logging.info("处理文档元素并返回表单组件")
 
         # 创建分析上下文
         context = AnalysisContext(elements)
@@ -43,6 +42,6 @@ class DocumentProcessor:
                 return analyzer
         return None
 
-    def _post_process_components(self, components: List[Component]) -> List[Component]:
+    def _post_process_components(self, components: list[Component]) -> list[Component]:
         """对组件进行后处理"""
         return components

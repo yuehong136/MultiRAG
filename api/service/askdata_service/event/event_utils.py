@@ -1,10 +1,11 @@
-from typing import Any, Dict, Optional
 from contextlib import asynccontextmanager
+from typing import Any
 
 from api.service.askdata_service.event.event_manager import event_manager
 
 # 配置日志
 from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+
 logger = get_askdata_logger()
 
 
@@ -24,12 +25,12 @@ async def send_event(event_id: str, data: Any, event_type: str = "data") -> bool
         await event_manager.publish(event_id, data, event_type)
         return True
     except Exception as e:
-        logger.error(f"发送事件失败: {str(e)}")
+        logger.error(f"发送事件失败: {e!s}")
         return False
 
 
 async def send_step_event(event_id: str, step: int, total_steps: int, message: str,
-                          details: Optional[Dict] = None) -> bool:
+                          details: dict | None = None) -> bool:
     """
     发送步骤进度事件
 
@@ -59,7 +60,7 @@ async def send_step_event(event_id: str, step: int, total_steps: int, message: s
     return await send_event(event_id, step_data, "progress")
 
 
-async def send_status_event(event_id: str, status: str, message: str = "", details: Optional[Dict] = None) -> bool:
+async def send_status_event(event_id: str, status: str, message: str = "", details: dict | None = None) -> bool:
     """
     发送状态事件
 
@@ -83,7 +84,7 @@ async def send_status_event(event_id: str, status: str, message: str = "", detai
     return await send_event(event_id, status_data, "status")
 
 
-async def send_result_event(event_id: str, results: Dict[str, Any]) -> bool:
+async def send_result_event(event_id: str, results: dict[str, Any]) -> bool:
     """
     发送结果事件
 
@@ -157,7 +158,7 @@ async def process_tracker(event_id: str, total_steps: int = 100):
             self.total_steps = total_steps
             self.current_step = 0
 
-        async def update(self, step: int, message: str = "", details: Optional[Dict] = None):
+        async def update(self, step: int, message: str = "", details: dict | None = None):
             """
             更新进度
 
@@ -199,7 +200,7 @@ async def process_tracker(event_id: str, total_steps: int = 100):
         )
     except Exception as e:
         # 记录错误
-        logger.exception(f"处理过程出错: {str(e)}")
+        logger.exception(f"处理过程出错: {e!s}")
 
         # 发送错误消息
         await send_error_event(

@@ -11,8 +11,9 @@ class QWenRerank(Base):
         self.model_name = dashscope.TextReRank.Models.gte_rerank if model_name is None else model_name
 
     def similarity(self, query: str, texts: list):
-        import dashscope
         from http import HTTPStatus
+
+        import dashscope
         resp = dashscope.TextReRank.call(
             api_key=self.api_key,
             model=self.model_name,

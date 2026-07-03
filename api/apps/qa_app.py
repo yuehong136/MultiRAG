@@ -2,31 +2,29 @@
 教师科研考核问答系统 - API接口
 包含所有Pydantic Schema定义和接口实现
 """
-import logging
-from datetime import datetime
-from typing import Any
 import json
+import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
+from api.apps import manager
 from api.db.db_models import get_db
-from api.db.services.user_service import UserTenantService
 from api.db.services.qa_service import (
-    QATemplateStorageService,
-    QATemplateMatchingService,
-    StatelessSlotExtractionService,
     ClarificationService,
-    StatelessQAService,
     LLMScoringService,
     LLMScoringServiceV2,  # 新增V2服务
-    RAGService
+    QATemplateMatchingService,
+    QATemplateStorageService,
+    RAGService,
+    StatelessQAService,
+    StatelessSlotExtractionService,
 )
-from api.apps import manager
-from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
+from api.db.services.user_service import UserTenantService
+from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
 from common import settings
-
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -78,7 +76,7 @@ class QATemplateV2(BaseModel):
     needed_params_v2: list[QAParamDefinition] = Field(..., description="带类型的参数定义列表")
     sql_template: list[str] = Field(..., description="SQL模板列表，支持多个SQL模板，使用命名参数")
     rule_id: str | None = Field(None, description="评分规则ID，可为空")
-    
+
     # 向后兼容
     @property
     def needed_params(self) -> list[str]:
@@ -255,10 +253,10 @@ class CalcScoreV2Request(BaseModel):
     data: list[dict[str, Any]] | str = Field(..., description="SQL查询结果数据")
     context: dict[str, Any] | None = Field(None, description="评分上下文信息")
     llm_name: str | None = Field(None, description="指定用于评分的LLM模型")
-    
+
     # V2新增配置
     enable_multi_extraction: bool = Field(default=True, description="启用多重提取策略")
-    score_validation: bool = Field(default=True, description="启用分数合理性验证") 
+    score_validation: bool = Field(default=True, description="启用分数合理性验证")
     expected_score_range: tuple[float, float] | None = Field(None, description="期望分数范围 (min, max)")
     extraction_confidence_threshold: float = Field(default=0.8, description="提取置信度阈值")
 
@@ -270,7 +268,7 @@ class CalcScoreV2Response(BaseModel):
     analysis: str = Field(..., description="评分分析过程")
     suggestions: str | None = Field(None, description="改进建议")
     data_summary: dict[str, Any] = Field(..., description="数据汇总信息")
-    
+
     # V2新增字段
     extraction_details: dict[str, Any] = Field(..., description="提取过程详细信息")
     confidence: float = Field(..., description="提取置信度")
@@ -409,7 +407,7 @@ def delete_template(
     ```json
     // 删除单个模板
     {"qa_ids": "template_001"}
-    
+
     // 批量删除多个模板
     {"qa_ids": ["template_001", "template_002", "template_003"]}
     ```
@@ -487,7 +485,7 @@ def interpret_stateless(
         "current_input": "查询张三老师2023年考核数据",     // 当前用户输入
         "dialog_context": {                               // 对话上下文（可选）
             "session_id": "sess_12345",
-            "initial_query": "教师考核查询", 
+            "initial_query": "教师考核查询",
             "rounds": [...],                              // 历史对话轮次
             "matched_template": {...},                    // 已匹配模板（缓存）
             "accumulated_params": {...},                  // 累积参数
@@ -503,7 +501,7 @@ def interpret_stateless(
     ```
 
     **返回格式说明:**
-    - **sql_template**: 
+    - **sql_template**:
       - V2模板: 返回数组格式 `["SQL1", "SQL2"]`，支持多场景查询
       - V1模板: 返回字符串格式 `"SQL"`，保持向后兼容
     - **updated_context**: 更新后的完整上下文，供下次调用使用
@@ -520,11 +518,11 @@ def interpret_stateless(
     轮次1:
     Input: "查询教师考核数据"
     Output: status="NEED_CLARIFY", clarify_message="请提供教师姓名和考核年度"
-    
-    轮次2:  
+
+    轮次2:
     Input: "张三老师"
     Output: status="NEED_CLARIFY", clarify_message="请提供考核年度"
-    
+
     轮次3:
     Input: "2023年"
     Output: status="OK", sql_template=["SELECT * FROM..."], complete_params={"teacher_name":"张三", "year":2023}
@@ -658,7 +656,7 @@ def store_templates_v2(
 
     **V2核心新功能:**
     - 🆕 **类型化参数定义**: 支持为每个参数指定数据类型(string/integer/float/boolean/date)
-    - 🆕 **多SQL模板支持**: 一个QA模板可包含多个SQL查询，适应不同场景需求  
+    - 🆕 **多SQL模板支持**: 一个QA模板可包含多个SQL查询，适应不同场景需求
     - 🆕 **自动类型验证**: LLM输出参数时会自动验证和转换数据类型
     - 🆕 **V2集合存储**: 使用独立的bl_qa_template_v2集合，与V1兼容共存
     - ✅ **向后兼容**: V1接口仍可查询V2模板，无需修改现有代码
@@ -668,7 +666,7 @@ def store_templates_v2(
     V1版本:
     - needed_params: ["teacher_id", "year"]           # 简单字符串列表
     - sql_template: "SELECT * FROM table"             # 单个SQL字符串
-    
+
     V2版本:
     - needed_params_v2: [                             # 类型化参数对象
         {"name": "teacher_id", "data_type": "string", "description": "教师ID", "required": true},
@@ -682,7 +680,7 @@ def store_templates_v2(
 
     **支持的数据类型详细说明:**
     - **string**: 字符串类型，如教师姓名、部门等文本信息
-    - **integer**: 整数类型，如年份、数量等整数值  
+    - **integer**: 整数类型，如年份、数量等整数值
     - **float**: 浮点数类型，如分数、比例等小数值
     - **boolean**: 布尔类型，如是否在职、是否有效等true/false值
     - **date**: 日期类型，格式为YYYY-MM-DD，如"2024-01-15"
@@ -713,14 +711,14 @@ def store_templates_v2(
                         "required": true
                     },
                     {
-                        "name": "year", 
+                        "name": "year",
                         "data_type": "integer",
                         "description": "考核年度",
                         "required": true
                     },
                     {
                         "name": "score_threshold",
-                        "data_type": "float", 
+                        "data_type": "float",
                         "description": "分数筛选阈值",
                         "required": false
                     },
@@ -733,7 +731,7 @@ def store_templates_v2(
                     {
                         "name": "query_date",
                         "data_type": "date",
-                        "description": "查询截止日期", 
+                        "description": "查询截止日期",
                         "required": false
                     }
                 ],
@@ -763,7 +761,7 @@ def store_templates_v2(
     ```json
     {
         "success": true,
-        "message": "成功存储N个QA模板V2（支持类型化参数）", 
+        "message": "成功存储N个QA模板V2（支持类型化参数）",
         "template_count": 1,
         "record_count": 1,
         "version": "v2"
@@ -1009,7 +1007,7 @@ def calculate_score_v2(
                 "data_details": [
                     {
                         "cyxm": "李方正",
-                        "cysf": "教职工", 
+                        "cysf": "教职工",
                         "cybm": "园林学院"
                     }
                 ]
@@ -1029,7 +1027,7 @@ def calculate_score_v2(
                     {
                         "xmch": "林草科技创新人才青年拔尖人才",
                         "brjs": "获得者",
-                        "sylb": "青年人才入选者", 
+                        "sylb": "青年人才入选者",
                         "sydj": "省部级"
                     }
                 ]
@@ -1262,7 +1260,7 @@ def get_system_info(
                         },
                         {
                             "name": "year",
-                            "data_type": "integer", 
+                            "data_type": "integer",
                             "description": "考核年度",
                             "required": True
                         },
@@ -1350,8 +1348,8 @@ def check_collection_status(
     - 简单参数: needed_params: ["param1", "param2"]
     - 单SQL模板: sql_template: "SELECT * FROM table"
     - 基础功能: 支持混合检索，满足基本需求
-    
-    V2集合 (bl_qa_template_v2):  
+
+    V2集合 (bl_qa_template_v2):
     - 类型化参数: needed_params_typed: [{"name":"param1","data_type":"string",...}]
     - 多SQL模板: sql_template: ["SQL1", "SQL2", "SQL3"]
     - 增强功能: 类型验证、智能提示、多场景查询
@@ -1361,7 +1359,7 @@ def check_collection_status(
     ```json
     {
         "v1_collection_exists": true,              // V1集合是否存在
-        "v2_collection_exists": true,              // V2集合是否存在  
+        "v2_collection_exists": true,              // V2集合是否存在
         "v1_collection_name": "bl_qa_template",   // V1集合名称
         "v2_collection_name": "bl_qa_template_v2", // V2集合名称
         "current_active_collection": "bl_qa_template_v2", // 当前优先使用的集合
@@ -1392,7 +1390,7 @@ def check_collection_status(
     }
     ```
 
-    **场景2: V1存量系统**  
+    **场景2: V1存量系统**
     ```json
     {
         "v1_collection_exists": true, "v1_record_count": 20,
@@ -1406,7 +1404,7 @@ def check_collection_status(
     ```json
     {
         "v1_collection_exists": true, "v1_record_count": 15,
-        "v2_collection_exists": true, "v2_record_count": 8, 
+        "v2_collection_exists": true, "v2_record_count": 8,
         "current_active_collection": "bl_qa_template_v2",
         "migration_suggestions": ["系统优先使用V2，V1数据作为兜底"]
     }
@@ -1438,7 +1436,7 @@ def check_collection_status(
     {
         "monitoring_metrics": [
             "collection_query_latency",     // 集合查询延迟
-            "template_match_accuracy",      // 模板匹配准确率  
+            "template_match_accuracy",      // 模板匹配准确率
             "parameter_extraction_success", // 参数提取成功率
             "v1_v2_usage_ratio"            // V1/V2使用比例
         ],
@@ -1464,20 +1462,20 @@ def check_collection_status(
     """
     try:
         tenant_id = get_user_tenant_id(db, user.id)
-        
+
         from api.db.services.qa_service import QA_TEMPLATE_COLLECTION
-        
+
         v1_collection = QA_TEMPLATE_COLLECTION
         v2_collection = f"{QA_TEMPLATE_COLLECTION}_v2"
-        
+
         # 检查集合存在性
         v1_exists = settings.docStoreConn.has_collection(v1_collection)
         v2_exists = settings.docStoreConn.has_collection(v2_collection)
-        
+
         # 统计记录数量
         v1_count = 0
         v2_count = 0
-        
+
         if v1_exists:
             try:
                 v1_results = settings.docStoreConn.query(
@@ -1488,7 +1486,7 @@ def check_collection_status(
                 v1_count = len(v1_results) if v1_results else 0
             except Exception as e:
                 logger.warning(f"无法统计V1集合记录数: {e}")
-        
+
         if v2_exists:
             try:
                 v2_results = settings.docStoreConn.query(
@@ -1499,7 +1497,7 @@ def check_collection_status(
                 v2_count = len(v2_results) if v2_results else 0
             except Exception as e:
                 logger.warning(f"无法统计V2集合记录数: {e}")
-        
+
         # 确定当前活跃的集合
         current_active = None
         collection_version = None
@@ -1509,10 +1507,10 @@ def check_collection_status(
         elif v1_exists and v1_count > 0:
             current_active = v1_collection
             collection_version = "v1"
-        
+
         # 判断是否需要迁移
         needs_migration = v1_exists and v1_count > 0 and (not v2_exists or v2_count == 0)
-        
+
         # 生成迁移建议
         suggestions = []
         if not v1_exists and not v2_exists:
@@ -1523,10 +1521,10 @@ def check_collection_status(
             suggestions.append("V1和V2集合都存在，但V2集合为空，建议使用V2接口存储新模板")
         elif v2_exists and v2_count > 0:
             suggestions.append("V2集合已有数据，系统将优先使用V2集合，享受类型化参数功能")
-        
+
         if v1_exists and v1_count > 0:
             suggestions.append("V1集合数据仍然兼容，查询接口可以正常使用")
-        
+
         result = CollectionStatusResponse(
             v1_collection_exists=v1_exists,
             v2_collection_exists=v2_exists,
@@ -1539,9 +1537,9 @@ def check_collection_status(
             needs_migration=needs_migration,
             migration_suggestions=suggestions
         )
-        
+
         return get_json_result(data=result.model_dump())
-        
+
     except Exception as e:
         logger.error(f"Error checking collection status: {e}")
         return server_error_response(e)

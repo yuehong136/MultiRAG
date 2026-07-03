@@ -24,8 +24,8 @@ from sklearn.mixture import GaussianMixture
 from api.db.services.task_service import has_canceled
 from common.connection_utils import timeout
 from common.exceptions import TaskCanceledException
-from common.token_utils import truncate
 from common.misc_utils import thread_pool_exec
+from common.token_utils import truncate
 from core.graphrag.utils import (
     chat_limiter,
     get_embed_cache,
@@ -168,7 +168,7 @@ class RecursiveAbstractiveProcessing4TreeOrganizedRetrieval:
             if len(embeddings) == 2:
                 await summarize([start, start + 1])
                 if callback:
-                    callback(msg="Cluster one layer: {} -> {}".format(end - start, len(chunks) - end))
+                    callback(msg=f"Cluster one layer: {end - start} -> {len(chunks) - end}")
                 layers.append((end, len(chunks)))
                 start = end
                 end = len(chunks)
@@ -205,10 +205,10 @@ class RecursiveAbstractiveProcessing4TreeOrganizedRetrieval:
                 await asyncio.gather(*tasks, return_exceptions=True)
                 raise
 
-            assert len(chunks) - end == n_clusters, "{} vs. {}".format(len(chunks) - end, n_clusters)
+            assert len(chunks) - end == n_clusters, f"{len(chunks) - end} vs. {n_clusters}"
             layers.append((end, len(chunks)))
             if callback:
-                callback(msg="Cluster one layer: {} -> {}".format(end - start, len(chunks) - end))
+                callback(msg=f"Cluster one layer: {end - start} -> {len(chunks) - end}")
             start = end
             end = len(chunks)
 

@@ -1,15 +1,15 @@
-import json
-import uuid
-import os
-import shutil
-import logging
-from datetime import datetime
-
-from fastapi import APIRouter, UploadFile, File, HTTPException, Form
-from io import BytesIO
-from docx import Document
-import re
 import base64
+import json
+import logging
+import os
+import re
+import shutil
+import uuid
+from datetime import datetime
+from io import BytesIO
+
+from docx import Document
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from api.utils.api_utils import get_json_result
 
@@ -514,7 +514,7 @@ async def process_docx(
 
     # 保存输入文件和 JSON 数据
     save_docx_log(request_id, "input", input_file_content, mapping_data, file.filename)
-    logger.info(f"[process_docx] 输入文件已保存")
+    logger.info("[process_docx] 输入文件已保存")
 
     # 工具方法：判断是否为独立单元格
     def is_isolated_cell(matrix, row_idx, col_idx):
@@ -1189,7 +1189,7 @@ async def fill_docx(
 
         # 保存输入文件和 JSON 数据
         save_docx_log(request_id, "input", input_file_content, fill_data, file.filename)
-        logger.info(f"[fill_docx] 输入文件已保存")
+        logger.info("[fill_docx] 输入文件已保存")
 
         doc = Document(BytesIO(input_file_content))
 
@@ -1238,4 +1238,4 @@ async def fill_docx(
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON data provided.")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An error occurred: {e!s}")

@@ -1,6 +1,7 @@
 from urllib.parse import urljoin
 
 from openai import OpenAI
+
 from core.llm.chat_model.base import Base
 
 

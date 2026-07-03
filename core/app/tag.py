@@ -13,15 +13,15 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import csv
 import json
 import re
-import csv
 from copy import deepcopy
 
-from deepdoc.parser.utils import get_text
+from common import settings
 from core.app.qa import Excel
 from core.nlp import rag_tokenizer
-from common import settings
+from deepdoc.parser.utils import get_text
 
 
 def beAdoc(d, q, a, eng, row_num=-1):
@@ -84,10 +84,10 @@ def chunk(filename, binary=None, lang="Chinese", callback=None, **kwargs):
                 content = ""
             i += 1
             if len(res) % 999 == 0:
-                callback(len(res) * 0.6 / len(lines), ("Extract TAG: {}".format(len(res)) + (
+                callback(len(res) * 0.6 / len(lines), (f"Extract TAG: {len(res)}" + (
                     f"{len(fails)} failure, line: %s..." % (",".join(fails[:3])) if fails else "")))
 
-        callback(0.6, ("Extract TAG: {}".format(len(res)) + (
+        callback(0.6, (f"Extract TAG: {len(res)}" + (
             f"{len(fails)} failure, line: %s..." % (",".join(fails[:3])) if fails else "")))
 
         return res
@@ -111,10 +111,10 @@ def chunk(filename, binary=None, lang="Chinese", callback=None, **kwargs):
                 res.append(beAdoc(deepcopy(doc), content, row[1], eng, i))
                 content = ""
             if len(res) % 999 == 0:
-                callback(len(res) * 0.6 / len(lines), ("Extract Tags: {}".format(len(res)) + (
+                callback(len(res) * 0.6 / len(lines), (f"Extract Tags: {len(res)}" + (
                     f"{len(fails)} failure, line: %s..." % (",".join(fails[:3])) if fails else "")))
 
-        callback(0.6, ("Extract TAG : {}".format(len(res)) + (
+        callback(0.6, (f"Extract TAG : {len(res)}" + (
             f"{len(fails)} failure, line: %s..." % (",".join(fails[:3])) if fails else "")))
         return res
 
@@ -141,7 +141,7 @@ def label_question(db, question, kbs):
         if not tag_kbs:
             return tags
         tags = settings.retriever.tag_query(question,
-                                            list(set([kb.tenant_id for kb in tag_kbs])),
+                                            list({kb.tenant_id for kb in tag_kbs}),
                                             tag_kb_ids,
                                             all_tags,
                                             kb.parser_config.get("topn_tags", 3)

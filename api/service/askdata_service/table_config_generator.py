@@ -1,15 +1,15 @@
 import asyncio
 import re
 import uuid
-from typing import Any, List, Dict, Tuple, Optional
+from typing import Any
 
 from api.service.askdata_service.sql_components_parser import SQLComponentsParser
 from api.service.askdata_service.util.are_expressions_equal_ignore_quotes import are_expressions_equal_ignore_quotes
-from api.service.askdata_service.util.identifier_utils import strip_identifier_quotes, identifiers_equal
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
 from api.service.askdata_service.util.find_aggregate_columns import find_aggregate_columns
+from api.service.askdata_service.util.identifier_utils import identifiers_equal, strip_identifier_quotes
 from api.service.askdata_service.util.parse_sql_extract import parse_sql_extract
 from api.service.nl2sql_service.semantic_api_client import SemanticApiClient
-from api.service.askdata_service.util.askdata_logger import get_askdata_logger
 
 logger = get_askdata_logger()
 
@@ -41,8 +41,8 @@ class TableConfigGenerator:
                     "NOW", "INTERVAL", "CAST", "EXTRACT")
         return any(kw in v_upper for kw in keywords)
 
-    async def generate(self, used_table_detail_dict: Dict[str, Dict], model_list: List[Dict],
-                       sql_components: Dict[str, Any], recommended_chart: str,
+    async def generate(self, used_table_detail_dict: dict[str, dict], model_list: list[dict],
+                       sql_components: dict[str, Any], recommended_chart: str,
                        cached_model_relations: list | None = None,
                        cached_dimension_values: dict | None = None):
         """
@@ -69,7 +69,7 @@ class TableConfigGenerator:
         main_table_model_id = None
         if main_table and main_table in used_table_detail_dict:
             main_table_model_id = used_table_detail_dict[main_table].get("modelId")
-        
+
         # 如果找到了主表的模型ID,则查询相关的模型关系
         related_model_relationships = []
         if main_table_model_id:
@@ -88,8 +88,8 @@ class TableConfigGenerator:
                     )
                     logger.info(f"从 API 获取到 {len(related_model_relationships)} 条与主表相关的模型关系")
             except Exception as e:
-                logger.warning(f"获取主表模型关系失败: {str(e)}")
-        
+                logger.warning(f"获取主表模型关系失败: {e!s}")
+
         # 从关系中提取所有涉及的模型ID
         related_model_ids = set()
         for relation in related_model_relationships:
@@ -99,13 +99,13 @@ class TableConfigGenerator:
                 related_model_ids.add(source_model_id)
             if target_model_id:
                 related_model_ids.add(target_model_id)
-        
+
         # 获取model_list中已存在的模型ID
-        existing_model_ids = set(model.get('modelId') for model in model_list if model.get('modelId'))
-        
+        existing_model_ids = {model.get('modelId') for model in model_list if model.get('modelId')}
+
         # 找出需要新增的模型ID
         missing_model_ids = related_model_ids - existing_model_ids
-        
+
         # 如果有缺失的模型,则获取它们的详情并添加到model_list
         if missing_model_ids:
             logger.info(f"发现 {len(missing_model_ids)} 个关联模型不在model_list中,准备获取详情")
@@ -142,7 +142,7 @@ class TableConfigGenerator:
 
                 logger.info(f"成功获取并添加 {len(missing_models_details)} 个关联模型的完整详情到model_list")
             except Exception as e:
-                logger.warning(f"获取关联模型详情失败: {str(e)}")
+                logger.warning(f"获取关联模型详情失败: {e!s}")
 
         # 重新构建 used_table_detail_dict，确保包含所有模型（包括新增的关联模型）
         for model in model_list:
@@ -282,7 +282,7 @@ class TableConfigGenerator:
                 "all_semantic_fields": semantic_fields_info["all_fields"]
             }
 
-    def _process_having_conditions(self, parts: Dict[str, Any], used_table_detail_dict: Dict[str, Any]) -> List[Dict]:
+    def _process_having_conditions(self, parts: dict[str, Any], used_table_detail_dict: dict[str, Any]) -> list[dict]:
         """处理having条件"""
         table_alias_mapping = parts["table_alias_mapping"]
         having_conditions = parts['having_conditions']
@@ -325,7 +325,7 @@ class TableConfigGenerator:
 
         return filter_columns
 
-    def _build_selected_dimensions(self, parts: Dict[str, Any], used_table_detail_dict: Dict[str, Any]) -> List[Dict]:
+    def _build_selected_dimensions(self, parts: dict[str, Any], used_table_detail_dict: dict[str, Any]) -> list[dict]:
         """构建group by维度字典"""
         try:
             group_by_dimensions = []
@@ -385,12 +385,12 @@ class TableConfigGenerator:
                         "nanoId": str(uuid.uuid4())
                     })
             return group_by_dimensions
-        except Exception as e:
+        except Exception:
             logger.exception(f"parts: {parts}")
             logger.exception(f"used_table_detail_dict: {used_table_detail_dict}")
             return []
 
-    def _build_selected_metrics(self, parts: Dict[str, Any], used_table_detail_dict: Dict[str, Any]) -> List[Dict]:
+    def _build_selected_metrics(self, parts: dict[str, Any], used_table_detail_dict: dict[str, Any]) -> list[dict]:
         selected_metrics = []
         selected_columns = parts["select_columns"]
         table_alias_mapping = parts["table_alias_mapping"]
@@ -427,8 +427,8 @@ class TableConfigGenerator:
                 })
         return selected_metrics
 
-    async def _build_semantic_fields_info(self, model_list: List[Dict],
-                                          cached_dimension_values: dict | None = None) -> Dict[str, List]:
+    async def _build_semantic_fields_info(self, model_list: list[dict],
+                                          cached_dimension_values: dict | None = None) -> dict[str, list]:
         """一次性构建所有语义字段信息，避免重复遍历"""
         available_fields, filterable_fields, sortable_fields, all_fields = [], [], [], []
         all_dimension_ids = []
@@ -495,8 +495,8 @@ class TableConfigGenerator:
             "sortable_fields": sortable_fields, "all_fields": all_fields
         }
 
-    async def _build_semantic_fields_info_for_aggr(self, model_list: List[Dict],
-                                                    cached_dimension_values: dict | None = None) -> Dict[str, List]:
+    async def _build_semantic_fields_info_for_aggr(self, model_list: list[dict],
+                                                    cached_dimension_values: dict | None = None) -> dict[str, list]:
         """一次性构建所有语义字段信息，避免重复遍历"""
         available_dimensions, available_metrics, sortable_fields, whereable_fields, havingable_fields, all_fields = [], [], [], [], [], []
         all_dimension_ids = []
@@ -570,7 +570,7 @@ class TableConfigGenerator:
             "havingable_fields": havingable_fields, "all_fields": all_fields
         }
 
-    def _process_select_columns(self, parts: Dict[str, Any], used_table_detail_dict: Dict[str, Any]) -> List[Dict]:
+    def _process_select_columns(self, parts: dict[str, Any], used_table_detail_dict: dict[str, Any]) -> list[dict]:
         """处理SELECT列"""
         selected_columns = []
         table_alias_mapping = parts["table_alias_mapping"]
@@ -608,7 +608,7 @@ class TableConfigGenerator:
                     {"is_semantic_field": False, "sql_column": col, "id": str(uuid.uuid4()), "wid": str(uuid.uuid4())})
         return selected_columns
 
-    def _get_table_detail_with_fallback(self, used_table_detail_dict: Dict[str, Any], table_name: str) -> Dict[
+    def _get_table_detail_with_fallback(self, used_table_detail_dict: dict[str, Any], table_name: str) -> dict[
         str, Any]:
         """
         获取表详情，支持带引号/不带引号的表名容错处理
@@ -727,7 +727,7 @@ class TableConfigGenerator:
             for dim in (dims_and_metrics.get("dimensions") or [])
         )
 
-    def _lookup_field_data_type(self, table_detail: Any, column_name: str) -> Optional[str]:
+    def _lookup_field_data_type(self, table_detail: Any, column_name: str) -> str | None:
         """从模型物理字段表（table_detail["fields"]，含 fieldName/dataType）按列名查 SQL 数据类型。
         去引号/大小写无关；查不到返回 None。仅用于给「非语义但能定位到真实表的列」补类型，
         让 re-query 非语义分支能按真实类型转换（避免数值列被绑成字符串参数 → integer > varchar）。
@@ -742,8 +742,8 @@ class TableConfigGenerator:
                 return f.get("dataType")
         return None
 
-    def _process_where_conditions(self, parts: Dict[str, Any], used_table_detail_dict: Dict[str, Any]) -> List[
-        Dict[str, Any]]:
+    def _process_where_conditions(self, parts: dict[str, Any], used_table_detail_dict: dict[str, Any]) -> list[
+        dict[str, Any]]:
         """处理WHERE条件"""
         table_alias_mapping = parts["table_alias_mapping"]
         where_conditions = parts['where_conditions']
@@ -811,8 +811,8 @@ class TableConfigGenerator:
 
         return filter_columns
 
-    def _process_order_by_fields(self, parts: Dict[str, Any], used_table_detail_dict: Dict[str, Any]) -> List[
-        Dict[str, Any]]:
+    def _process_order_by_fields(self, parts: dict[str, Any], used_table_detail_dict: dict[str, Any]) -> list[
+        dict[str, Any]]:
         """处理ORDER BY字段"""
         order_by_columns = []
         table_alias_mapping = parts["table_alias_mapping"]
@@ -855,14 +855,14 @@ class TableConfigGenerator:
 
         return order_by_columns
 
-    def _process_limit(self, parts: Dict[str, Any]) -> Optional[int]:
+    def _process_limit(self, parts: dict[str, Any]) -> int | None:
         """处理LIMIT字段"""
         limit = parts['limit']
         if not limit:
             return None
         return int(limit)
 
-    def _get_table_alias_and_field_by_split_column(self, column: str) -> Tuple[str, str]:
+    def _get_table_alias_and_field_by_split_column(self, column: str) -> tuple[str, str]:
         """拆出 (table_alias, column_name) 并对二者做引号归一化。
 
         column_name/table_alias 仅用于「语义匹配」（与 dim['dimensionEnName']、metric['expression']、
@@ -873,7 +873,7 @@ class TableConfigGenerator:
         table_alias, column_name = self._split_column_raw(column)
         return strip_identifier_quotes(table_alias), strip_identifier_quotes(column_name)
 
-    def _split_column_raw(self, column: str) -> Tuple[str, str]:
+    def _split_column_raw(self, column: str) -> tuple[str, str]:
         """
         将列名分割为 (table, field)
         支持以下格式：
@@ -911,7 +911,7 @@ class TableConfigGenerator:
                     func_arg = func_arg[9:].strip()
 
                 # 检查函数参数中是否有表前缀
-                if '.' in func_arg and not ' ' in func_arg:
+                if '.' in func_arg and ' ' not in func_arg:
                     # 简单的 table.field 格式
                     parts = func_arg.split('.')
                     table = parts[0].strip()
@@ -938,7 +938,7 @@ class TableConfigGenerator:
 
         return (main_table, new_column)
 
-    def _find_table_references(self, expression: str) -> List[str]:
+    def _find_table_references(self, expression: str) -> list[str]:
         """
         查找表达式中的所有表别名引用
         返回表别名列表

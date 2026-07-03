@@ -6,27 +6,27 @@ Reference:
 """
 
 import asyncio
-import logging
 import json
+import logging
 import os
 import re
-from typing import Callable
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import networkx as nx
 import pandas as pd
 
 from api.db.services.task_service import has_canceled
-from common.token_utils import num_tokens_from_string
-from common.exceptions import TaskCanceledException
 from common.connection_utils import timeout
+from common.exceptions import TaskCanceledException
 from common.misc_utils import thread_pool_exec
-from core.graphrag.llm_protocol import GraphRAGCompletionLLM
+from common.token_utils import num_tokens_from_string
 from core.graphrag.general import leiden
 from core.graphrag.general.community_report_prompt import COMMUNITY_REPORT_PROMPT
 from core.graphrag.general.extractor import Extractor
 from core.graphrag.general.leiden import add_community_info2graph
-from core.graphrag.utils import perform_variable_replacements, dict_has_keys_with_types, chat_limiter
+from core.graphrag.llm_protocol import GraphRAGCompletionLLM
+from core.graphrag.utils import chat_limiter, dict_has_keys_with_types, perform_variable_replacements
 
 
 @dataclass
@@ -108,7 +108,7 @@ class CommunityReportsExtractor(Extractor):
                         timeout = 180 if enable_timeout_assertion else 1000000000
                         response = await asyncio.wait_for(
                             thread_pool_exec(self._chat, text, [{"role": "user", "content": "Output:"}], {}, task_id), timeout=timeout)
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         logging.warning("extract_community_report._chat timeout, skipping...")
                         return
                 except Exception as e:

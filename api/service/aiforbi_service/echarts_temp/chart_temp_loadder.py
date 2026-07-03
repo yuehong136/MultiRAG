@@ -28,10 +28,10 @@ def load_chart_template(chart_type):
 
     # 读取并返回模板内容
     try:
-        with open(template_file, 'r', encoding='utf-8') as file:
+        with open(template_file, encoding='utf-8') as file:
             return file.read()
-    except IOError as e:
-        raise IOError(f"Error reading template file: {e}")
+    except OSError as e:
+        raise OSError(f"Error reading template file: {e}")
 
 
 if __name__ == "__main__":

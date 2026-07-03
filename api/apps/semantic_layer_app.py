@@ -1,14 +1,14 @@
 from enum import Enum
-from typing import List, Optional, Any, Dict
+from typing import Any
 
-from fastapi import APIRouter, Depends, Body, HTTPException
+from fastapi import APIRouter, Body, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from api.db.db_models import get_db
-from api.apps import manager
 
+from api.apps import manager
+from api.db.db_models import get_db
+from api.service.semantic_layer_service.models import OwnerType, SemanticElementType, SemanticTextData
 from api.service.semantic_layer_service.text_embedding_service import TextEmbeddingService, get_text_embedding_service
-from api.service.semantic_layer_service.models import SemanticTextData, SemanticElementType, OwnerType
 
 router = APIRouter()
 
@@ -85,17 +85,17 @@ class TextItemBase(BaseModel):
         title="original_id",
         description="在中台表中的ID",
     )
-    model_id: Optional[str] = Field(
+    model_id: str | None = Field(
         None,
         title="模型id",
         description="所属模型id（当为指标、维度相关信息保存向量时需要填写）",
     )
-    dataset_id: Optional[str] = Field(
+    dataset_id: str | None = Field(
         None,
         title="数据集id",
         description="所属数据集id（当为指标、维度相关信息保存向量时需要填写）",
     )
-    theme_domain_id: Optional[str] = Field(
+    theme_domain_id: str | None = Field(
         None,
         title="主题域id",
         description="所属主题域id（当为指标、维度相关信息保存向量时需要填写）",
@@ -120,7 +120,7 @@ class TextItemBase(BaseModel):
 
 class BatchTextItem(BaseModel):
     """批量处理的请求模型"""
-    items: List[TextItemBase] = Field(
+    items: list[TextItemBase] = Field(
         ...,
         title="批量文本信息",
         description="需要批量转换为向量的多条文本信息",
@@ -160,22 +160,22 @@ class SearchVectorsRequest(BaseModel):
         title="嵌入模型",
         description="用于生成查询向量的嵌入模型名称"
     )
-    element_types: Optional[List[SemanticElementType]] = Field(
+    element_types: list[SemanticElementType] | None = Field(
         None,
         title="元素类型列表",
         description="用于过滤的元素类型列表，可选"
     )
-    theme_domain_ids: Optional[List[str]] = Field(
+    theme_domain_ids: list[str] | None = Field(
         None,
         title="主题域ID列表",
         description="用于过滤的主题域ID列表，可选"
     )
-    dataset_ids: Optional[List[str]] = Field(
+    dataset_ids: list[str] | None = Field(
         None,
         title="数据集ID列表",
         description="用于过滤的数据集ID列表，可选"
     )
-    model_ids: Optional[List[str]] = Field(
+    model_ids: list[str] | None = Field(
         None,
         title="模型ID列表",
         description="用于过滤的模型ID列表，可选"
@@ -248,7 +248,7 @@ async def save_text_to_embedding(
     except Exception as e:
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"文本转向量保存失败: {str(e)}"
+            message=f"文本转向量保存失败: {e!s}"
         )
 
 
@@ -295,7 +295,7 @@ async def delete_embeddings_by_owner_type_and_id(
     except Exception as e:
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"删除向量数据时发生未知错误: {str(e)}"
+            message=f"删除向量数据时发生未知错误: {e!s}"
         )
 
 
@@ -343,13 +343,13 @@ async def delete_embeddings_by_element_type_and_id(
     except Exception as e:
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"删除向量数据时发生未知错误: {str(e)}"
+            message=f"删除向量数据时发生未知错误: {e!s}"
         )
 
 
 @router.post("/save-texts-to-embedding-batch", summary="批量将多个文本转为向量并保存")
 async def save_texts_to_embedding_batch(
-        body: List[TextItemBase] = Body(
+        body: list[TextItemBase] = Body(
             ...,
             title="批量文本信息",
             description="需要批量转换为向量的多条文本信息",
@@ -394,7 +394,7 @@ async def save_texts_to_embedding_batch(
     except Exception as e:
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"批量文本转向量处理失败: {str(e)}"
+            message=f"批量文本转向量处理失败: {e!s}"
         )
 
 
@@ -449,5 +449,5 @@ async def search_similar_vectors(
     except Exception as e:
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"查询相似向量时发生未知错误: {str(e)}"
+            message=f"查询相似向量时发生未知错误: {e!s}"
         )

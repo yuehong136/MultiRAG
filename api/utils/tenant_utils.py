@@ -3,7 +3,6 @@ from sqlalchemy.orm import Session
 from api.db.services.tenant_llm_service import TenantLLMService
 from common.constants import LLMType
 
-
 _KEY_TO_MODEL_TYPE = {
     "llm_id": LLMType.CHAT,
     "embd_id": LLMType.EMBEDDING,

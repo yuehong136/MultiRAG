@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @file: file_api_service.py
@@ -318,7 +317,7 @@ def move_files(db: Session, uid: str, src_file_ids: list[str], dest_file_id: str
                     dest_folder_entry.id, new_location,
                 )
             except Exception as storage_err:
-                raise RuntimeError(f"Move file failed at storage layer: {str(storage_err)}")
+                raise RuntimeError(f"Move file failed at storage layer: {storage_err!s}")
             updates["parent_id"] = dest_folder_entry.id
             updates["location"] = new_location
 

@@ -22,7 +22,7 @@ using Firecracker microVMs.
 """
 
 import uuid
-from typing import Dict, Any, List
+from typing import Any
 
 from .base import SandboxProvider, SandboxInstance, ExecutionResult
 
@@ -41,7 +41,7 @@ class E2BProvider(SandboxProvider):
         self.timeout: int = 30
         self._initialized: bool = False
 
-    def initialize(self, config: Dict[str, Any]) -> bool:
+    def initialize(self, config: dict[str, Any]) -> bool:
         """
         Initialize the provider with E2B credentials.
 
@@ -167,7 +167,7 @@ class E2BProvider(SandboxProvider):
         # For now, return True if initialized with API key
         return bool(self.api_key)
 
-    def get_supported_languages(self) -> List[str]:
+    def get_supported_languages(self) -> list[str]:
         """
         Get list of supported programming languages.
 
@@ -177,7 +177,7 @@ class E2BProvider(SandboxProvider):
         return ["python", "nodejs", "javascript", "go", "bash"]
 
     @staticmethod
-    def get_config_schema() -> Dict[str, Dict]:
+    def get_config_schema() -> dict[str, dict]:
         """
         Return configuration schema for E2B provider.
 

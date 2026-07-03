@@ -29,14 +29,14 @@ Compatibility:
     - Compatible with FACTORY[ParserType.RESUME.value] in task_executor.py
 """
 
-import json
-import re
-import random
-import datetime
-import unicodedata
 import concurrent.futures
+import datetime
+import json
+import random
+import re
+import unicodedata
 from io import BytesIO
-from typing import Optional
+
 import numpy as np
 
 # tiktoken for long random string filtering (ref: SmartResume should_remove strategy)
@@ -50,6 +50,7 @@ except ImportError:
 _LONG_RANDOM_PATTERN = re.compile(r'[a-zA-Z0-9\-~_]{40,}')
 
 import logging as logger
+
 from core.nlp import rag_tokenizer
 from deepdoc.parser.utils import get_text
 
@@ -527,9 +528,10 @@ def _extract_ocr_text(binary: bytes, meta_blocks: list[dict] | None = None) -> l
     if meta_blocks is None:
         meta_blocks = []
     try:
-        import pdfplumber
-        from deepdoc.vision.ocr import OCR
         import numpy as np
+        import pdfplumber
+
+        from deepdoc.vision.ocr import OCR
 
         ocr = OCR()
         blocks = []
@@ -1048,7 +1050,7 @@ def _parse_json_with_repair(text: str) -> dict:
     raise json.JSONDecodeError("All JSON repair strategies failed", text, 0)
 
 
-def _call_llm(prompt: str, tenant_id , lang: str) -> Optional[dict]:
+def _call_llm(prompt: str, tenant_id , lang: str) -> dict | None:
     """
     Call LLM and parse JSON response (ref SmartResume's retry + fault-tolerance strategy).
 
@@ -1065,9 +1067,9 @@ def _call_llm(prompt: str, tenant_id , lang: str) -> Optional[dict]:
 
     """
     try:
-        from api.db.services.llm_service import LLMBundle
         from api.db.db_models import db_connection
         from api.db.joint_services.tenant_model_service import get_tenant_default_model_by_type
+        from api.db.services.llm_service import LLMBundle
         from common.constants import LLMType
 
         with db_connection() as db:
@@ -1176,7 +1178,7 @@ def _calculate_work_years(experiences: list[dict]) -> float:
     return round(total, 1)
 
 
-def _parse_date_str(date_str: str) -> Optional[datetime.datetime]:
+def _parse_date_str(date_str: str) -> datetime.datetime | None:
     """
     Parse date string, supporting multiple common formats.
 
@@ -1269,7 +1271,7 @@ def _extract_description_from_range(
     return "\n".join(line.strip() for line in extracted_lines if line.strip())
 
 
-def _extract_basic_info(indexed_text: str, tenant_id , lang: str) -> Optional[dict]:
+def _extract_basic_info(indexed_text: str, tenant_id , lang: str) -> dict | None:
     """Extract basic info (subtask 1).
 
     Basic info is usually at the beginning of the resume, first 8000 chars suffice.
@@ -1278,7 +1280,7 @@ def _extract_basic_info(indexed_text: str, tenant_id , lang: str) -> Optional[di
     return _call_llm(prompt,tenant_id, lang)
 
 
-def _extract_work_experience(indexed_text: str, tenant_id , lang: str) -> Optional[dict]:
+def _extract_work_experience(indexed_text: str, tenant_id , lang: str) -> dict | None:
     """Extract work experience (subtask 2, using index pointers).
 
     Work experience may span the middle-to-end of the resume, use full text to avoid truncation.
@@ -1287,7 +1289,7 @@ def _extract_work_experience(indexed_text: str, tenant_id , lang: str) -> Option
     return _call_llm(prompt, tenant_id , lang)
 
 
-def _extract_education(indexed_text: str, tenant_id , lang: str) -> Optional[dict]:
+def _extract_education(indexed_text: str, tenant_id , lang: str) -> dict | None:
     """Extract education background (subtask 3).
 
     Education is usually at the end of the resume, must use full text to avoid truncation.
@@ -1297,7 +1299,7 @@ def _extract_education(indexed_text: str, tenant_id , lang: str) -> Optional[dic
     return _call_llm(prompt,tenant_id, lang)
 
 
-def _extract_project_experience(indexed_text: str, tenant_id , lang: str) -> Optional[dict]:
+def _extract_project_experience(indexed_text: str, tenant_id , lang: str) -> dict | None:
     """Extract project experience (subtask 4, using index pointers).
 
     Project experience may span the middle-to-end of the resume, use full text to avoid truncation.
@@ -1306,7 +1308,7 @@ def _extract_project_experience(indexed_text: str, tenant_id , lang: str) -> Opt
     return _call_llm(prompt, tenant_id , lang)
 
 
-def parse_with_llm(indexed_text: str, lines: list[str], tenant_id , lang: str) -> Optional[dict]:
+def parse_with_llm(indexed_text: str, lines: list[str], tenant_id , lang: str) -> dict | None:
     """
     Extract resume info using parallel task decomposition strategy (ref SmartResume Section 3.2).
 
@@ -2506,7 +2508,7 @@ def chunk(filename, binary, tenant_id, from_page=0, to_page=100000,
 
     except Exception as e:
         logger.exception(f"Resume parsing exception: {filename}")
-        callback(-1, f"Resume parsing failed: {str(e)}")
+        callback(-1, f"Resume parsing failed: {e!s}")
         return []
 
 

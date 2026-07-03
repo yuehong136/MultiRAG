@@ -1,5 +1,6 @@
-from typing import Any
 from dataclasses import dataclass
+from typing import Any
+
 from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.utils import match_parameters
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
@@ -102,7 +103,7 @@ class VariableAggregationComponent(BaseComponent):
             # 遍历每个Variable，找到第一个非空的值
             for var in group.variables:
                 # 检查值是否为非空（非空字典或非空字符串）
-                if var.value and (isinstance(var.value, dict) and var.value or isinstance(var.value, str)):
+                if var.value and ((isinstance(var.value, dict) and var.value) or isinstance(var.value, str)):
                     result[group.name] = var.value
                     break  # 找到第一个非空值后就跳出内层循环
 

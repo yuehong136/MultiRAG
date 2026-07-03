@@ -1,9 +1,11 @@
+import asyncio
 import logging
+
+# asyncio版本的并发限制器 (代替trio.CapacityLimiter)
+import os
 import re
 import time
-import asyncio
-from common.misc_utils import thread_pool_exec
-from collections import Counter, defaultdict
+from collections import Counter
 
 import numpy as np
 from sqlalchemy.orm import Session
@@ -13,26 +15,16 @@ from api.db.joint_services.tenant_model_service import get_tenant_default_model_
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
+from common import settings
+from common.constants import LLMType
+from common.misc_utils import thread_pool_exec
+from common.token_utils import truncate
+from core.graphrag.utils import get_embed_cache, get_llm_cache, set_embed_cache, set_llm_cache
 from core.nlp import rag_tokenizer
 from core.nlp.term_weight import Dealer as TermWeightDealer
-from common.token_utils import truncate
-from common.constants import LLMType
-from core.prompts.generator import (
-    cluster_keyword_prompt,
-    global_tag_prompt,
-    global_summary_prompt
-)
+from core.prompts.generator import cluster_keyword_prompt, global_summary_prompt, global_tag_prompt
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
-from core.graphrag.utils import (
-    get_llm_cache,
-    set_llm_cache,
-    get_embed_cache,
-    set_embed_cache
-)
-from common import settings
 
-# asyncio版本的并发限制器 (代替trio.CapacityLimiter)
-import os
 _MAX_CONCURRENT_CHATS = int(os.environ.get('MAX_CONCURRENT_CHATS', 10))
 _asyncio_chat_limiter = asyncio.Semaphore(_MAX_CONCURRENT_CHATS)
 
@@ -337,8 +329,8 @@ class DocumentAnalysisService:
         Returns:
             list[dict]: chunks列表
         """
-        import tempfile
         import os
+        import tempfile
 
         # 获取文件名
         if hasattr(file, 'filename'):
@@ -375,7 +367,7 @@ class DocumentAnalysisService:
             # 空回调函数
             def _noop(prog=None, msg=""):
                 return None
-            
+
             # 执行切片 (使用asyncio.to_thread)
             result = await thread_pool_exec(
                 module.chunk,
@@ -571,14 +563,14 @@ Focus on the main ideas and key points. Keep the summary coherent and readable."
         # 5. 提取聚类摘要
         logging.info(f"RAPTOR result: original_length={original_length}, result_length={len(raptor_result)}")
         logging.info(f"RAPTOR config: max_cluster={raptor_config.get('max_cluster')}, threshold={raptor_config.get('threshold')}")
-        
+
         cluster_summaries = [
             raptor_result[i][0]
             for i in range(original_length, len(raptor_result))
         ]
 
         logging.info(f"RAPTOR generated {len(cluster_summaries)} cluster summaries from {original_length} original chunks")
-        
+
         # 打印每个聚类摘要的前150个字符
         for i, summary in enumerate(cluster_summaries[:3]):  # 只打印前3个
             logging.info(f"Cluster summary {i+1}: {summary[:150]}...")
@@ -622,10 +614,10 @@ Focus on the main ideas and key points. Keep the summary coherent and readable."
 
         async def extract_cluster_keyword(cluster_summary: str):
             logging.debug(f"Extracting keywords from summary: {cluster_summary[:100]}...")
-            
+
             # ⭐ 使用项目规范的渲染函数
             prompt = cluster_keyword_prompt(cluster_content=cluster_summary)
-            
+
             logging.debug(f"Prompt length: {len(prompt)} chars")
 
             # 检查缓存
@@ -664,13 +656,13 @@ Focus on the main ideas and key points. Keep the summary coherent and readable."
 
         # 2. 聚合为全局语义标签
         cluster_keywords_text = "\n".join([f"- {kw}" for kw in cluster_keywords_list])
-        
+
         logging.info(f"Cluster keywords text length: {len(cluster_keywords_text)} chars")
         logging.info(f"Cluster keywords text preview:\n{cluster_keywords_text[:500]}...")
 
         # ⭐ 使用项目规范的渲染函数
         global_tag_prompt_text = global_tag_prompt(cluster_keywords=cluster_keywords_text)
-        
+
         logging.info(f"Global tag prompt preview (first 500 chars):\n{global_tag_prompt_text[:500]}...")
 
         async with _asyncio_chat_limiter:
@@ -704,13 +696,13 @@ Focus on the main ideas and key points. Keep the summary coherent and readable."
     ):
         """基于RAPTOR聚类摘要生成全局摘要"""
         summaries_text = "\n\n---\n\n".join(cluster_summaries)
-        
+
         logging.info(f"Generating {summary_type} summary from {len(cluster_summaries)} cluster summaries")
         logging.info(f"Summaries text length: {len(summaries_text)} chars")
 
         # ⭐ 使用项目规范的渲染函数
         prompt = global_summary_prompt(section_summaries=summaries_text)
-        
+
         logging.info(f"Summary prompt preview (first 800 chars):\n{prompt[:800]}...")
 
         max_tokens = 400 if summary_type == "short" else 1000

@@ -19,7 +19,7 @@ MCP_APPEND_SERVER_LOGS_TO_RESULT = os.environ.get(
     "MCP_APPEND_SERVER_LOGS_TO_RESULT", "false"
 ).lower() in {"1", "true", "yes", "on"}
 
-from typing_extensions import override
+from typing import override
 
 from common.constants import MCPServerType
 from mcp.client.session import ClientSession
@@ -113,7 +113,7 @@ class MCPToolCallSession(ToolCallSession):
                             logging.info(f"client_session initialized successfully for server {self._mcp_server.id}")
                             self._initialized.set()
                             await self._process_mcp_tasks(client_session)
-                        except asyncio.TimeoutError:
+                        except TimeoutError:
                             msg = f"Timeout initializing client_session for server {self._mcp_server.id} (timeout={MCP_INIT_TIMEOUT}s)"
                             logging.error(msg)
                             self._init_error = msg
@@ -141,7 +141,7 @@ class MCPToolCallSession(ToolCallSession):
                             logging.info(f"client_session initialized successfully for server {self._mcp_server.id}")
                             self._initialized.set()
                             await self._process_mcp_tasks(client_session)
-                        except asyncio.TimeoutError:
+                        except TimeoutError:
                             msg = f"Timeout initializing client_session for server {self._mcp_server.id} (timeout={MCP_INIT_TIMEOUT}s)"
                             logging.error(msg)
                             self._init_error = msg
@@ -196,7 +196,7 @@ class MCPToolCallSession(ToolCallSession):
         while not self._close:
             try:
                 mcp_task, arguments, result_queue = await asyncio.wait_for(self._queue.get(), timeout=1)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             except asyncio.CancelledError:
                 break
@@ -242,7 +242,7 @@ class MCPToolCallSession(ToolCallSession):
             if isinstance(result, Exception):
                 raise result
             return result
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # 用自定义异常包装，避免 Python 3.12+ 中 asyncio.TimeoutError
             # 与 concurrent.futures.TimeoutError 是同一类导致外层 except 分支误捕获
             raise MCPToolTimeoutError(
@@ -338,13 +338,13 @@ class MCPToolCallSession(ToolCallSession):
         try:
             await asyncio.wait_for(self._initialized.wait(), timeout=timeout)
             return self._init_error is None
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return False
 
     def wait_ready(self, timeout: float | int = MCP_INIT_TIMEOUT + 5) -> bool:
         """
         同步等待 MCP 会话初始化完成。
-        
+
         Returns:
             True 如果初始化成功，False 如果失败或超时
         """

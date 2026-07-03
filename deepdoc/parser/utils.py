@@ -11,7 +11,7 @@ def get_text(fnm: str, binary=None) -> str:
         encoding = find_codec(binary)
         txt = binary.decode(encoding, errors="ignore")
     else:
-        with open(fnm, "r", encoding="utf-8") as f:
+        with open(fnm, encoding="utf-8") as f:
             while True:
                 line = f.readline()
                 if not line:

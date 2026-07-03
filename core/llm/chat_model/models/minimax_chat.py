@@ -1,8 +1,10 @@
 import json
+
 import requests
-from core.llm.chat_model.base import Base, LENGTH_NOTIFICATION_CN, LENGTH_NOTIFICATION_EN
-from core.nlp import is_chinese
+
 from common.token_utils import num_tokens_from_string
+from core.llm.chat_model.base import LENGTH_NOTIFICATION_CN, LENGTH_NOTIFICATION_EN, Base
+from core.nlp import is_chinese
 
 
 class MiniMaxChat(Base):

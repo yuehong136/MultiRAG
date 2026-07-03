@@ -1,17 +1,17 @@
+import json
 import logging
 import os.path
-import json
 import pathlib
 import re
-from pathlib import Path, PurePosixPath, PureWindowsPath
 from io import BytesIO
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Literal
-
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Form, Body, Request
-from fastapi.responses import StreamingResponse, Response
-from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field, ValidationError, field_validator
 from urllib.parse import quote
+
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel, Field, ValidationError, field_validator
+from sqlalchemy.orm import Session
 from starlette.status import (
     HTTP_400_BAD_REQUEST,
     HTTP_404_NOT_FOUND,
@@ -19,32 +19,30 @@ from starlette.status import (
     HTTP_500_INTERNAL_SERVER_ERROR,
 )
 
+from api.apps import manager
+from api.common.check_team_permission import check_kb_team_permission
 from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
 from api.db import VALID_FILE_TYPES, FileType
-from api.apps import manager
-from common.constants import VALID_TASK_STATUS, TaskStatus, ParserType
 from api.db.db_models import Task, get_db
 from api.db.services import duplicate_name
-from api.db.services.document_service import DocumentService, queue_analyze_v2_task, doc_upload_and_parse
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_analysis_service import DocumentAnalysisService
-from api.db.services.pipeline_analysis_service import PipelineAnalysisService
+from api.db.services.document_service import DocumentService, doc_upload_and_parse, queue_analyze_v2_task
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.pipeline_analysis_service import PipelineAnalysisService
 from api.db.services.task_service import TaskService, cancel_all_task_of
 from api.db.services.user_service import UserTenantService
-from api.common.check_team_permission import check_kb_team_permission
-from api.utils.api_utils import construct_json_result, construct_error_response, convert_datetime_to_str, \
-    get_json_result, get_data_error_result, server_error_response
+from api.utils.api_utils import construct_error_response, construct_json_result, convert_datetime_to_str, get_data_error_result, get_json_result, server_error_response
 from api.utils.file_utils import filename_type, thumbnail
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers, html2pdf, is_valid_url
-from common.misc_utils import get_uuid, thread_pool_exec
-from common.metadata_utils import meta_filter, convert_conditions, turn2jsonschema
-from common.constants import RetCode, SANDBOX_ARTIFACT_BUCKET
-from common.file_utils import get_project_base_directory
 from common import settings
-from core.nlp import search, rag_tokenizer
+from common.constants import SANDBOX_ARTIFACT_BUCKET, VALID_TASK_STATUS, ParserType, RetCode, TaskStatus
+from common.file_utils import get_project_base_directory
+from common.metadata_utils import convert_conditions, meta_filter, turn2jsonschema
+from common.misc_utils import get_uuid, thread_pool_exec
+from core.nlp import rag_tokenizer, search
 from deepdoc.parser.html_parser import RAGFlowHtmlParser
 
 
@@ -735,7 +733,7 @@ async def upload(
                 raise ValueError('Invalid JSON format for "labels".')
         elif parsed_labels is not None:
             raise ValueError('Labels must be a JSON-encoded list of strings or None.')
-        
+
         err, result_files = FileService.upload_document(db, kb, file_contents, user.id, parsed_labels)  # 传递labels参数
 
         if err:
@@ -1030,7 +1028,7 @@ def create_document(
 
 
 @router.get("/list", summary="列出文档", response_description="成功列出文档")
-def list_docs(
+def list_docs_get(
         kb_id: str,
         keywords: str = "",
         page: int = 1,
@@ -1201,7 +1199,7 @@ def list_docs(
             break
     else:
         return get_json_result(
-            data=False, retmsg=f'Only owner of dataset authorized for this operation.',
+            data=False, retmsg='Only owner of dataset authorized for this operation.',
             retcode=RetCode.OPERATING_ERROR)
 
     try:
@@ -1455,7 +1453,7 @@ def list_docs(
             break
     else:
         return get_json_result(
-            data=False, retmsg=f'Only owner of dataset authorized for this operation.',
+            data=False, retmsg='Only owner of dataset authorized for this operation.',
             retcode=RetCode.OPERATING_ERROR)
 
     # 验证 run_status 参数
@@ -2203,7 +2201,7 @@ def change_status(
                     continue
             result[doc_id] = {"status": status}
         except Exception as e:
-            result[doc_id] = {"error": f"Internal server error: {str(e)}"}
+            result[doc_id] = {"error": f"Internal server error: {e!s}"}
             has_error = True
 
     if has_error:
@@ -5002,8 +5000,9 @@ async def subscribe_to_analyze_event(request: Request, task_id: str):
     """
 
     async def event_generator():
-        from core.utils.redis_conn import REDIS_CONN
         import time
+
+        from core.utils.redis_conn import REDIS_CONN
 
         last_id = '0-0'  # 从头开始读取
         heartbeat_time = time.time()
@@ -5048,8 +5047,8 @@ async def subscribe_to_analyze_event(request: Request, task_id: str):
                         data = payload.get("data", "{}")
 
                         # 推送给客户端
-                        yield f"event: {event_type}\n".encode('utf-8')
-                        yield f"data: {data}\n\n".encode('utf-8')
+                        yield f"event: {event_type}\n".encode()
+                        yield f"data: {data}\n\n".encode()
 
                         # 如果是完成或错误，关闭连接
                         if event_type in ['complete', 'error']:
@@ -5070,7 +5069,7 @@ async def subscribe_to_analyze_event(request: Request, task_id: str):
             logging.error(f"SSE error for task {task_id}: {e}")
             error_data = json.dumps({"error": str(e)})
             yield b"event: error\n"
-            yield f"data: {error_data}\n\n".encode('utf-8')
+            yield f"data: {error_data}\n\n".encode()
 
     return StreamingResponse(
         event_generator(),

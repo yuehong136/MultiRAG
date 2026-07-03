@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Collection
-from datetime import datetime, timezone
-from typing import Any, Iterable
+from collections.abc import Collection, Iterable
+from datetime import UTC, datetime
+from typing import Any
 
 from jira.resources import Issue
 
@@ -25,7 +25,7 @@ def parse_jira_datetime(value: Any) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, datetime):
-        return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
     if isinstance(value, str):
         return datetime_from_string(value)
     return None

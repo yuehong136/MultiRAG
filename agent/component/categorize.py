@@ -19,12 +19,12 @@ import os
 import re
 from abc import ABC
 
-from common.constants import LLMType
+from agent.component.llm import LLM, LLMParam
 from api.db.db_models import db_connection
-from api.db.services.llm_service import LLMBundle
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
-from agent.component.llm import LLMParam, LLM
+from api.db.services.llm_service import LLMBundle
 from common.connection_utils import timeout
+from common.constants import LLMType
 from core.llm.chat import ERROR_PREFIX
 
 
@@ -139,7 +139,7 @@ class Categorize(LLM, ABC):
             return
 
         ans = await chat_mdl.async_chat(self._param.sys_prompt, [{"role": "user", "content": user_prompt}], self._param.gen_conf())
-        logging.info(f"input: {user_prompt}, answer: {str(ans)}")
+        logging.info(f"input: {user_prompt}, answer: {ans!s}")
         if ERROR_PREFIX in ans:
             raise Exception(ans)
 

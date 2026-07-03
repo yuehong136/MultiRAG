@@ -1,9 +1,9 @@
 import html
 import logging
 from collections.abc import Generator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 from retry import retry
@@ -56,7 +56,7 @@ class NotionConnector(LoadConnector, PollConnector):
         self,
         batch_size: int = INDEX_BATCH_SIZE,
         recursive_index_enabled: bool = not NOTION_CONNECTOR_DISABLE_RECURSIVE_PAGE_LOOKUP,
-        root_page_id: Optional[str] = None,
+        root_page_id: str | None = None,
     ) -> None:
         self.batch_size = batch_size
         self.headers = {
@@ -69,7 +69,7 @@ class NotionConnector(LoadConnector, PollConnector):
         self.page_path_cache: dict[str, str] = {}
 
     @retry(tries=3, delay=1, backoff=2)
-    def _fetch_child_blocks(self, block_id: str, cursor: Optional[str] = None) -> dict[str, Any] | None:
+    def _fetch_child_blocks(self, block_id: str, cursor: str | None = None) -> dict[str, Any] | None:
         """Fetch all child blocks via the Notion API."""
         logging.debug(f"[Notion]: Fetching children of block with ID {block_id}")
         block_url = f"https://api.notion.com/v1/blocks/{block_id}/children"
@@ -118,7 +118,7 @@ class NotionConnector(LoadConnector, PollConnector):
         return NotionPage(**data, database_name=database_name)
 
     @retry(tries=3, delay=1, backoff=2)
-    def _fetch_database(self, database_id: str, cursor: Optional[str] = None) -> dict[str, Any]:
+    def _fetch_database(self, database_id: str, cursor: str | None = None) -> dict[str, Any]:
         """Fetch a database from its ID via the Notion API."""
         logging.debug(f"[Notion]: Fetching database for ID {database_id}")
         block_url = f"https://api.notion.com/v1/databases/{database_id}/query"
@@ -243,7 +243,7 @@ class NotionConnector(LoadConnector, PollConnector):
             logging.warning(f"[Notion]: Failed to download Notion file from {url}: {exc}")
             return None
 
-    def _append_block_id_to_name(self, name: str, block_id: Optional[str]) -> str:
+    def _append_block_id_to_name(self, name: str, block_id: str | None) -> str:
         """Append the Notion block ID to the filename while keeping the extension."""
         if not block_id:
             return name
@@ -280,9 +280,9 @@ class NotionConnector(LoadConnector, PollConnector):
         block_id: str,
         url: str,
         name: str,
-        caption: Optional[str],
-        page_last_edited_time: Optional[str],
-        page_path: Optional[str],
+        caption: str | None,
+        page_last_edited_time: str | None,
+        page_path: str | None,
     ) -> Document | None:
         file_bytes = self._download_file(url)
         if file_bytes is None:
@@ -294,7 +294,7 @@ class NotionConnector(LoadConnector, PollConnector):
         if not extension:
             extension = ".bin"
 
-        updated_at = datetime_from_string(page_last_edited_time) if page_last_edited_time else datetime.now(timezone.utc)
+        updated_at = datetime_from_string(page_last_edited_time) if page_last_edited_time else datetime.now(UTC)
         base_identifier = name or caption or (f"Notion file {block_id}" if block_id else "Notion file")
         semantic_identifier = f"{page_path} / {base_identifier}" if page_path else base_identifier
 
@@ -308,7 +308,7 @@ class NotionConnector(LoadConnector, PollConnector):
             doc_updated_at=updated_at,
         )
 
-    def _read_blocks(self, base_block_id: str, page_last_edited_time: Optional[str] = None, page_path: Optional[str] = None) -> tuple[list[NotionBlock], list[str], list[Document]]:
+    def _read_blocks(self, base_block_id: str, page_last_edited_time: str | None = None, page_path: str | None = None) -> tuple[list[NotionBlock], list[str], list[Document]]:
         result_blocks: list[NotionBlock] = []
         child_pages: list[str] = []
         attachments: list[Document] = []
@@ -433,7 +433,7 @@ class NotionConnector(LoadConnector, PollConnector):
 
         return result_blocks, child_pages, attachments
 
-    def _read_page_title(self, page: NotionPage) -> Optional[str]:
+    def _read_page_title(self, page: NotionPage) -> str | None:
         """Extracts the title from a Notion page."""
         if hasattr(page, "database_name") and page.database_name:
             return page.database_name
@@ -445,7 +445,7 @@ class NotionConnector(LoadConnector, PollConnector):
 
         return None
 
-    def _build_page_path(self, page: NotionPage, visited: Optional[set[str]] = None) -> Optional[str]:
+    def _build_page_path(self, page: NotionPage, visited: set[str] | None = None) -> str | None:
         """Construct a hierarchical path for a page based on its parent chain."""
         if page.id in self.page_path_cache:
             return self.page_path_cache[page.id]
@@ -528,8 +528,7 @@ class NotionConnector(LoadConnector, PollConnector):
                 id=page.id, blob=blob, source=DocumentSource.NOTION, semantic_identifier=semantic_identifier, extension=".txt", size_bytes=len(blob), doc_updated_at=datetime_from_string(page.last_edited_time)
             )
 
-            for attachment_doc in attachment_docs:
-                yield attachment_doc
+            yield from attachment_docs
 
         if self.recursive_index_enabled and all_child_page_ids:
             for child_page_batch_ids in batch_generator(all_child_page_ids, INDEX_BATCH_SIZE):

@@ -14,22 +14,22 @@
 #  limitations under the License.
 #
 
+import json
 import logging
 import os
 import re
-import json
 import time
 from abc import abstractmethod
 
 import infinity
-from infinity.common import ConflictType
-from infinity.index import IndexInfo, IndexType
-from infinity.errors import ErrorCode
 import pandas as pd
+from infinity.common import ConflictType
+from infinity.errors import ErrorCode
+from infinity.index import IndexInfo, IndexType
 
-from common.file_utils import get_project_base_directory
 from common import settings
 from common.doc_store.doc_store_base import DocStoreConnection, MatchExpr, OrderByExpr
+from common.file_utils import get_project_base_directory
 from core.nlp import is_english
 
 
@@ -62,7 +62,7 @@ class InfinityConnectionBase(DocStoreConnection):
                 time.sleep(5)
             except Exception as e:
                 conn_pool = INFINITY_CONN.refresh_conn_pool()
-                self.logger.warning(f"{str(e)}. Waiting Infinity {infinity_uri} to be healthy.")
+                self.logger.warning(f"{e!s}. Waiting Infinity {infinity_uri} to be healthy.")
                 time.sleep(5)
         if self.connPool is None:
             msg = f"Infinity {infinity_uri} is unhealthy in 120s."
@@ -172,13 +172,13 @@ class InfinityConnectionBase(DocStoreConnection):
                 return f" {cln}!='{de}' "
             return f"{cln}!={de}"
 
-        cond = list()
+        cond = []
         for k, v in condition.items():
             if not isinstance(k, str) or not v:
                 continue
             if self.field_keyword(k):
                 if isinstance(v, list):
-                    inCond = list()
+                    inCond = []
                     for item in v:
                         if isinstance(item, str):
                             item = item.replace("'", "''")
@@ -190,7 +190,7 @@ class InfinityConnectionBase(DocStoreConnection):
                 else:
                     cond.append(f"filter_fulltext('{self.convert_matching_field(k)}', '{v}')")
             elif isinstance(v, list):
-                inCond = list()
+                inCond = []
                 for item in v:
                     if isinstance(item, str):
                         item = item.replace("'", "''")
@@ -211,7 +211,7 @@ class InfinityConnectionBase(DocStoreConnection):
             elif k == "exists":
                 cond.append(exists(v))
             else:
-                cond.append(f"{k}={str(v)}")
+                cond.append(f"{k}={v!s}")
         return " AND ".join(cond) if cond else "1=1"
 
     @staticmethod
@@ -401,7 +401,7 @@ class InfinityConnectionBase(DocStoreConnection):
             _ = db_instance.get_table(table_name)
             return True
         except Exception as e:
-            self.logger.warning(f"INFINITY indexExist {str(e)}")
+            self.logger.warning(f"INFINITY indexExist {e!s}")
             return False
         finally:
             self.connPool.release_conn(inf_conn)

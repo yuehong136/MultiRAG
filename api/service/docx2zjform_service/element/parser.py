@@ -1,22 +1,22 @@
-from typing import List
-from docx.document import Document
-from docx.text.paragraph import Paragraph
-from docx.table import Table
-from docx.oxml.text.paragraph import CT_P
-from docx.oxml.table import CT_Tbl
 
+from docx.document import Document
+from docx.oxml.table import CT_Tbl
+from docx.oxml.text.paragraph import CT_P
+from docx.table import Table
+from docx.text.paragraph import Paragraph
+
+from ..utils.table_converter import TableConverter
 from . import Element
 from .paragraph import ParagraphElement
-from .table import TableElement
 from .run import Run
-from ..utils.table_converter import TableConverter
+from .table import TableElement
 
 
 class DocumentParser:
     """文档解析器"""
 
     @staticmethod
-    async def parse(doc: Document) -> List[Element]:
+    async def parse(doc: Document) -> list[Element]:
         elements = []
 
         for element in doc.element.body:

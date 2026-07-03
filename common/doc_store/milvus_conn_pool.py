@@ -13,8 +13,8 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
-import logging
 import hashlib
+import logging
 import re
 import threading
 import time
@@ -64,7 +64,7 @@ class MilvusConnectionPool:
                 logging.info(f"Milvus {uri} connected, server version: {version}")
                 break
             except Exception as e:
-                logging.warning(f"{str(e)}. Waiting Milvus {uri} to be healthy.")
+                logging.warning(f"{e!s}. Waiting Milvus {uri} to be healthy.")
                 time.sleep(5)
 
         if self._using is None:
@@ -79,7 +79,7 @@ class MilvusConnectionPool:
                 raise Exception("Failed to get server version")
             logging.info(f"Milvus {uri} is healthy.")
         except Exception as e:
-            msg = f"Milvus {uri} health check failed: {str(e)}"
+            msg = f"Milvus {uri} health check failed: {e!s}"
             logging.error(msg)
             raise Exception(msg)
 
@@ -178,7 +178,7 @@ class MilvusConnectionPool:
                 self._db_aliases[normalized_db_name] = alias
                 return alias
             except Exception as e:
-                raise Exception(f"Failed to connect Milvus database '{normalized_db_name}': {str(e)}") from e
+                raise Exception(f"Failed to connect Milvus database '{normalized_db_name}': {e!s}") from e
 
     def refresh_conn(self) -> str:
         """Check health and reconnect if needed."""

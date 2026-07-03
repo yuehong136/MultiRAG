@@ -4,8 +4,8 @@ import re
 import numpy as np
 from huggingface_hub import snapshot_download
 
-from common import settings
 from api.utils.file_utils import get_home_cache_dir
+from common import settings
 from core.llm.embedding import DefaultEmbedding
 
 

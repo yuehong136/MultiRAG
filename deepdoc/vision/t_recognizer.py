@@ -11,7 +11,8 @@
 #  limitations under the License.
 #
 import logging
-import os, sys
+import os
+import sys
 
 sys.path.insert(
     0,
@@ -21,11 +22,13 @@ sys.path.insert(
                 os.path.abspath(__file__)),
             '../../')))
 
-from deepdoc.vision.seeit import draw_box
-from deepdoc.vision import LayoutRecognizer, TableStructureRecognizer, OCR, init_in_out
 import argparse
 import re
+
 import numpy as np
+
+from deepdoc.vision import OCR, LayoutRecognizer, TableStructureRecognizer, init_in_out
+from deepdoc.vision.seeit import draw_box
 
 
 def main(args):

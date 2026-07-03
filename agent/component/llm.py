@@ -18,18 +18,21 @@ import json
 import logging
 import os
 import re
+from collections.abc import AsyncGenerator
 from copy import deepcopy
-from typing import Any, AsyncGenerator
-import json_repair
 from functools import partial
+from typing import Any
+
+import json_repair
+
+from agent.component.base import ComponentBase, ComponentParamBase
 from api.db.db_models import db_connection
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
-from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
-from agent.component.base import ComponentBase, ComponentParamBase
 from common.connection_utils import timeout
 from common.constants import LLMType
-from core.prompts.generator import tool_call_summary, message_fit_in, citation_prompt, structured_output_prompt
+from core.prompts.generator import citation_prompt, message_fit_in, structured_output_prompt, tool_call_summary
 
 
 class LLMParam(ComponentParamBase):

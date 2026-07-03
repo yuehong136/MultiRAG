@@ -15,11 +15,14 @@
 #
 
 import logging
+
 import requests
 from bridge.context import ContextType  # Import Context, ContextType
 from bridge.reply import Reply, ReplyType  # Import Reply, ReplyType
+
 from plugins import Plugin, register  # Import Plugin and register
-from plugins.event import Event, EventContext, EventAction  # Import event-related classes
+from plugins.event import Event, EventAction, EventContext  # Import event-related classes
+
 
 @register(name="MultiRAGChat", desc="Use RAGFlow API to chat", version="1.0", author="Your Name")
 class MultiRAGChat(Plugin):
@@ -92,7 +95,7 @@ class MultiRAGChat(Plugin):
                     return f"Sorry, unable to connect to RAGFlow API (create conversation). HTTP status code: {response.status_code}"
             except Exception as e:
                 logging.exception("[MultiRAGChat] Exception when creating conversation")
-                return f"Sorry, an internal error occurred: {str(e)}"
+                return f"Sorry, an internal error occurred: {e!s}"
 
         # Step 2: Send the message and get a reply
         url_completion = f"http://{host_address}/v1/api/completion"
@@ -124,4 +127,4 @@ class MultiRAGChat(Plugin):
                 return f"Sorry, unable to connect to RAGFlow API (get reply). HTTP status code: {response.status_code}"
         except Exception as e:
             logging.exception("[MultiRAGChat] Exception when getting answer")
-            return f"Sorry, an internal error occurred: {str(e)}"
+            return f"Sorry, an internal error occurred: {e!s}"

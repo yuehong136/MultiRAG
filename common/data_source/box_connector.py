@@ -1,10 +1,11 @@
 """Box connector"""
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from box_sdk_gen import BoxClient
-from common.data_source.config import DocumentSource, INDEX_BATCH_SIZE
+
+from common.data_source.config import INDEX_BATCH_SIZE, DocumentSource
 from common.data_source.exceptions import (
     ConnectorMissingCredentialError,
     ConnectorValidationError,
@@ -125,9 +126,9 @@ class BoxConnector(LoadConnector, PollConnector):
             raise TypeError(f"box_datetime_to_epoch_seconds expects datetime, got {type(dt)}")
 
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
         else:
-            dt = dt.astimezone(timezone.utc)
+            dt = dt.astimezone(UTC)
 
         return SecondsSinceUnixEpoch(int(dt.timestamp()))
 

@@ -11,11 +11,11 @@ API Documentation:
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
-from alibabacloud_dingtalk.notable_1_0.client import Client as NotableClient
 from alibabacloud_dingtalk.notable_1_0 import models as notable_models
+from alibabacloud_dingtalk.notable_1_0.client import Client as NotableClient
 from alibabacloud_tea_openapi import models as open_api_models
 from alibabacloud_tea_util import models as util_models
 from alibabacloud_tea_util.client import Client as UtilClient
@@ -310,7 +310,7 @@ class DingTalkAITableConnector(LoadConnector, PollConnector):
             extension=".json",
             blob=blob,
             size_bytes=len(blob),
-            doc_updated_at=datetime.now(timezone.utc),
+            doc_updated_at=datetime.now(UTC),
             metadata=metadata,
         )
 

@@ -1,33 +1,32 @@
 import json
+import logging
 import os
 import re
-import logging
-from dataclasses import dataclass
+from collections.abc import Generator
 from copy import deepcopy
+from dataclasses import dataclass
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Discriminator, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field, model_validator, Discriminator, field_validator
-from typing import Generator, Literal, Annotated, Any
 
 from api.apps import manager
 from api.apps.restful_apis.chat_api import apply_feedback_to_session_payload
 from api.db.db_models import APIToken, get_db
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.conversation_service import ConversationService, structure_answer
-from api.db.services.dialog_service import DialogService, async_chat, async_ask, gen_mindmap
+from api.db.services.dialog_service import DialogService, async_ask, async_chat, gen_mindmap
 from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import UserTenantService
-from api.utils.api_utils import server_error_response, get_data_error_result, get_json_result
-from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
-from common.constants import LLMType
+from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
+from common.constants import LLMType, RetCode
 from common.misc_utils import get_uuid
-from common.constants import RetCode
-from core.prompts.template import load_prompt
 from core.prompts.generator import chunks_format
-
+from core.prompts.template import load_prompt
 
 # Deprecated compatibility routes for production clients that still call
 # /v1/conversation/*. New integrations should use /api/v1/chats/*.
@@ -348,7 +347,7 @@ def set_conversation(request: SetConversationRequest, db: Session = Depends(get_
         dia = DialogService.get_by_id(db, req["dialog_id"])
         if not dia:
             return get_data_error_result(retmsg="Dialog not found")
-        
+
         conv = {
             "id": conv_id or get_uuid(),
             "dialog_id": req["dialog_id"],
@@ -358,12 +357,12 @@ def set_conversation(request: SetConversationRequest, db: Session = Depends(get_
             "reference": [],
         }
         ConversationService.save(db, **conv)
-        
+
         # 重新获取保存后的完整数据，确保向后兼容
         saved_conv = ConversationService.get_by_id(db, conv["id"])
         if not saved_conv:
             return get_data_error_result(retmsg="Fail to create a conversation!")
-        
+
         return get_json_result(data=saved_conv.to_dict())
     except Exception as e:
         return server_error_response(e)
@@ -628,8 +627,7 @@ def tts(request: TTSRequest, db: Session = Depends(get_db), user=Depends(manager
         try:
             for txt in filter(None, re.split(r"[，。/《》？；：！\n\r:;]+", text)):
                 if txt.strip():
-                    for chunk in tts_mdl.tts(txt):
-                        yield chunk
+                    yield from tts_mdl.tts(txt)
         except Exception as e:
             error_message = json.dumps({
                 "retcode": 500,
@@ -709,7 +707,7 @@ def sequence2txt(
         try:
             os.remove(temp_audio_path)
         except Exception as e:
-            logging.error(f"Failed to remove temp audio file: {str(e)}")
+            logging.error(f"Failed to remove temp audio file: {e!s}")
         return get_json_result(data={"text": text})
 
     def event_stream():
@@ -723,7 +721,7 @@ def sequence2txt(
             try:
                 os.remove(temp_audio_path)
             except Exception as e:
-                logging.error(f"Failed to remove temp audio file: {str(e)}")
+                logging.error(f"Failed to remove temp audio file: {e!s}")
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 

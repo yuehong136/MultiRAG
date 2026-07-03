@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Any
 
 from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.component.code_component import CodeComponent
@@ -18,7 +18,7 @@ class ComponentFactory:
     """组件工厂类"""
 
     @staticmethod
-    def create_component(node_data: Dict[str, Any], logger: WorkflowContextLogger, **kwargs) -> BaseComponent:
+    def create_component(node_data: dict[str, Any], logger: WorkflowContextLogger, **kwargs) -> BaseComponent:
         """从节点数据创建对应的组件实例"""
         component_id = node_data['id']
         title = node_data['data']['nodeMeta']['title']

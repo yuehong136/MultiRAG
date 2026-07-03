@@ -1,7 +1,7 @@
 """Dropbox connector"""
 
 import logging
-from datetime import timezone
+from datetime import UTC
 from typing import Any
 
 from dropbox import Dropbox
@@ -90,21 +90,21 @@ class DropboxConnector(LoadConnector, PollConnector):
         # Collect all files first to count filename occurrences
         all_files = []
         self._collect_files_recursive(path, start, end, all_files)
-        
+
         # Count filename occurrences
         filename_counts: dict[str, int] = {}
         for entry, _ in all_files:
             filename_counts[entry.name] = filename_counts.get(entry.name, 0) + 1
-        
+
         # Process files in batches
         batch: list[Document] = []
         for entry, downloaded_file in all_files:
             modified_time = entry.client_modified
             if modified_time.tzinfo is None:
-                modified_time = modified_time.replace(tzinfo=timezone.utc)
+                modified_time = modified_time.replace(tzinfo=UTC)
             else:
-                modified_time = modified_time.astimezone(timezone.utc)
-            
+                modified_time = modified_time.astimezone(UTC)
+
             # Use full path only if filename appears multiple times
             if filename_counts.get(entry.name, 0) > 1:
                 # Remove leading slash and replace slashes with ' / '
@@ -112,7 +112,7 @@ class DropboxConnector(LoadConnector, PollConnector):
                 semantic_id = relative_path.replace('/', ' / ') if relative_path else entry.name
             else:
                 semantic_id = entry.name
-            
+
             batch.append(
                 Document(
                     id=f"dropbox:{entry.id}",
@@ -124,11 +124,11 @@ class DropboxConnector(LoadConnector, PollConnector):
                     size_bytes=entry.size if getattr(entry, "size", None) is not None else len(downloaded_file),
                 )
             )
-            
+
             if len(batch) == self.batch_size:
                 yield batch
                 batch = []
-        
+
         if batch:
             yield batch
 
@@ -154,9 +154,9 @@ class DropboxConnector(LoadConnector, PollConnector):
                 if isinstance(entry, FileMetadata):
                     modified_time = entry.client_modified
                     if modified_time.tzinfo is None:
-                        modified_time = modified_time.replace(tzinfo=timezone.utc)
+                        modified_time = modified_time.replace(tzinfo=UTC)
                     else:
-                        modified_time = modified_time.astimezone(timezone.utc)
+                        modified_time = modified_time.astimezone(UTC)
 
                     time_as_seconds = modified_time.timestamp()
                     if start is not None and time_as_seconds <= start:
@@ -184,8 +184,7 @@ class DropboxConnector(LoadConnector, PollConnector):
         if self.dropbox_client is None:
             raise ConnectorMissingCredentialError("Dropbox")
 
-        for batch in self._yield_files_recursive("", start, end):
-            yield batch
+        yield from self._yield_files_recursive("", start, end)
 
     def load_from_state(self) -> GenerateDocumentsOutput:
         """Load files from Dropbox state"""

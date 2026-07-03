@@ -18,33 +18,33 @@ Milvus connection for knowledge base operations.
 This module provides a specialized Milvus connection for storing and retrieving knowledge base chunks.
 """
 
+import ast
 import copy
 import re
 import time
-import ast
-from functools import cmp_to_key
 from datetime import datetime
+from functools import cmp_to_key
 
 from pymilvus import Collection, Function
-from pymilvus.client.constants import DEFAULT_CONSISTENCY_LEVEL
-from pymilvus.client.types import OmitZeroDict, FunctionType
 from pymilvus.client.abstract import AnnSearchRequest, BaseRanker
-from pymilvus.milvus_client.index import IndexParams, IndexParam
+from pymilvus.client.constants import DEFAULT_CONSISTENCY_LEVEL
+from pymilvus.client.types import FunctionType, OmitZeroDict
+from pymilvus.milvus_client.index import IndexParam, IndexParams
 from pymilvus.orm import utility
 from pymilvus.orm.collection import CollectionSchema, FieldSchema
 from pymilvus.orm.types import DataType
 
 from common import settings
-from common.constants import TAG_FLD, PAGERANK_FLD
+from common.constants import PAGERANK_FLD, TAG_FLD
 from common.decorator import singleton
-from common.doc_store.milvus_conn_base import MilvusConnectionBase
 from common.doc_store.doc_store_base import (
+    FusionExpr,
+    MatchDenseExpr,
     MatchExpr,
     MatchTextExpr,
-    MatchDenseExpr,
-    FusionExpr,
     OrderByExpr,
 )
+from common.doc_store.milvus_conn_base import MilvusConnectionBase
 from common.float_utils import get_float
 from common.string_utils import truncate_utf8_bytes
 
@@ -328,7 +328,7 @@ class MilvusConnection(MilvusConnectionBase):
                         all_results.extend(results)
                         total_hits_count += len(results)
                 except Exception as e:
-                    self.logger.warning(f"Query collection {collection_name} failed: {str(e)}")
+                    self.logger.warning(f"Query collection {collection_name} failed: {e!s}")
 
             if all_results:
                 if order_by and order_by.fields and not native_order_complete:
@@ -405,7 +405,7 @@ class MilvusConnection(MilvusConnectionBase):
             if results and len(results) > 0:
                 return results[0]
         except Exception as e:
-            self.logger.warning(f"Get document {doc_id} from {collection_name} failed: {str(e)}")
+            self.logger.warning(f"Get document {doc_id} from {collection_name} failed: {e!s}")
 
         return None
 
@@ -569,7 +569,7 @@ class MilvusConnection(MilvusConnectionBase):
                 try:
                     conn.delete(collection_name, expression=id_filter)
                 except Exception as e:
-                    self.logger.debug(f"Delete existing records failed for {collection_name}: {str(e)}")
+                    self.logger.debug(f"Delete existing records failed for {collection_name}: {e!s}")
 
             res = conn.insert_rows(collection_name, processed_rows)
             self.logger.debug(f"Successfully inserted {res.insert_count} records into {collection_name}")
@@ -694,7 +694,7 @@ class MilvusConnection(MilvusConnectionBase):
                     delete_res = conn.delete(collection_name, expression=filter_expr)
                     self.logger.debug(f"Deleted {getattr(delete_res, 'delete_count', 0)} records")
                 except Exception as e:
-                    self.logger.error(f"Delete records failed: {str(e)}")
+                    self.logger.error(f"Delete records failed: {e!s}")
                     return False
 
                 if updated_records:
@@ -703,13 +703,13 @@ class MilvusConnection(MilvusConnectionBase):
                         self.logger.debug(f"Inserted {getattr(insert_res, 'insert_count', len(updated_records))} updated records")
                         return True
                     except Exception as e:
-                        self.logger.error(f"Insert updated records failed: {str(e)}")
+                        self.logger.error(f"Insert updated records failed: {e!s}")
                         return False
 
                 return True
 
             except Exception as e:
-                self.logger.error(f"Update operation failed (attempt {attempt + 1}/{ATTEMPT_TIME}): {str(e)}")
+                self.logger.error(f"Update operation failed (attempt {attempt + 1}/{ATTEMPT_TIME}): {e!s}")
                 if re.search(r"(timeout|connection|conflict)", str(e).lower()):
                     time.sleep(1)
                     continue
@@ -847,7 +847,7 @@ class MilvusConnection(MilvusConnectionBase):
             res = conn.delete(collection_name, expression=filter_expr)
             return res.delete_count
         except Exception as e:
-            self.logger.error(f"Delete from {collection_name} failed: {str(e)}")
+            self.logger.error(f"Delete from {collection_name} failed: {e!s}")
             return 0
 
     """
@@ -997,8 +997,8 @@ class MilvusConnection(MilvusConnectionBase):
         **kwargs,
     ):
         """Fast create collection with minimal configuration."""
-        from pymilvus.exceptions import PrimaryKeyException
         from pymilvus.client.types import ExceptionsMessage
+        from pymilvus.exceptions import PrimaryKeyException
 
         if dimension is None:
             msg = "Missing required argument: 'dimension'"
@@ -1382,7 +1382,7 @@ class MilvusConnection(MilvusConnectionBase):
             self.load_collection(collection_name)
             self.logger.info(f"Collection {collection_name} loaded")
         except Exception as e:
-            self.logger.warning(f"Collection {collection_name} load failed: {str(e)}")
+            self.logger.warning(f"Collection {collection_name} load failed: {e!s}")
 
     def get_cluster_stats(self):
         """Get Milvus cluster statistics."""
@@ -1425,7 +1425,7 @@ class MilvusConnection(MilvusConnectionBase):
             for collection_name in collections:
                 try:
                     coll = Collection(name=collection_name, using=self._using)
-                    
+
                     # Get stats
                     conn = self._get_connection()
                     stats = conn.get_collection_stats(collection_name)

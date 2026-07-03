@@ -2,8 +2,10 @@ import base64
 import os
 import sys
 from pathlib import Path
-from Cryptodome.PublicKey import RSA
+
 from Cryptodome.Cipher import PKCS1_v1_5 as Cipher_pkcs1_v1_5
+from Cryptodome.PublicKey import RSA
+
 from common.file_utils import get_project_base_directory
 
 
@@ -34,7 +36,8 @@ def decrypt(line):
 
 
 def decrypt2(crypt_text):
-    from base64 import b64decode, b16decode
+    from base64 import b16decode, b64decode
+
     from Crypto.Cipher import PKCS1_v1_5 as Cipher_PKCS1_v1_5
     from Crypto.PublicKey import RSA
     decode_data = b64decode(crypt_text)

@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -7,107 +6,94 @@
 @desc: 敏感词管理服务
 """
 
-import hashlib
-import json
 import logging
 import re
-from datetime import datetime, timedelta
-from typing import Any, Optional
-import pickle
-import base64
-
-from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, desc, func
-from sqlalchemy.exc import IntegrityError
 
 # from api.db.db_models import (
 #     SensitiveWordCategory, SensitiveWordLevel, SensitiveWord,
 #     SensitiveWordWhitelist, SensitiveFilterLog, SensitiveFilterStats
 # )
-from api.db.services.common_service import CommonService
-from common.misc_utils import get_uuid
-from core.utils.redis_conn import RedisDB
 
 
 class ACAutomaton:
     """AC自动机算法实现"""
-    
+
     def __init__(self):
         self.goto = {}
         self.fail = {}
         self.output = {}
         self.words = set()
-    
+
     def add_word(self, word: str, word_info: dict = None):
         """添加敏感词"""
         if not word or word in self.words:
             return
-            
+
         self.words.add(word)
         current = 0
-        
+
         for char in word:
             if (current, char) not in self.goto:
                 self.goto[(current, char)] = len(self.goto) + 1
             current = self.goto[(current, char)]
-        
+
         if current not in self.output:
             self.output[current] = []
         self.output[current].append({
             'word': word,
             'info': word_info or {}
         })
-    
+
     def build_failure_function(self):
         """构建失败函数"""
         queue = []
-        
+
         # 初始化第一层的失败函数
         for key, state in self.goto.items():
             if key[0] == 0:
                 self.fail[state] = 0
                 queue.append(state)
-        
+
         # BFS构建失败函数
         while queue:
             current_state = queue.pop(0)
-            
+
             for key, next_state in self.goto.items():
                 if key[0] == current_state:
                     char = key[1]
                     queue.append(next_state)
-                    
+
                     temp_state = self.fail[current_state]
                     while temp_state != 0 and (temp_state, char) not in self.goto:
                         temp_state = self.fail[temp_state]
-                    
+
                     if (temp_state, char) in self.goto:
                         self.fail[next_state] = self.goto[(temp_state, char)]
                     else:
                         self.fail[next_state] = 0
-                    
+
                     # 继承失败状态的输出
                     if self.fail[next_state] in self.output:
                         if next_state not in self.output:
                             self.output[next_state] = []
                         self.output[next_state].extend(self.output[self.fail[next_state]])
-    
+
     def search(self, text: str) -> list[dict]:
         """搜索敏感词"""
         if not self.goto:
             return []
-        
+
         results = []
         current_state = 0
-        
+
         for i, char in enumerate(text):
             # 状态转移
             while current_state != 0 and (current_state, char) not in self.goto:
                 current_state = self.fail[current_state]
-            
+
             if (current_state, char) in self.goto:
                 current_state = self.goto[(current_state, char)]
-            
+
             # 检查输出
             if current_state in self.output:
                 for match in self.output[current_state]:
@@ -119,16 +105,16 @@ class ACAutomaton:
                         'end': i + 1,
                         'info': match['info']
                     })
-        
+
         return results
 
 
 class RegexMatcher:
     """正则表达式匹配器"""
-    
+
     def __init__(self):
         self.patterns = []  # [(compiled_regex, word_info), ...]
-        
+
     def add_pattern(self, pattern: str, word_info: dict):
         """添加正则表达式模式"""
         try:
@@ -136,16 +122,16 @@ class RegexMatcher:
             flags = 0
             if not word_info.get('case_sensitive', False):
                 flags |= re.IGNORECASE
-                
+
             compiled_pattern = re.compile(pattern, flags)
             self.patterns.append((compiled_pattern, word_info))
         except re.error as e:
             logging.warning(f"无效的正则表达式 '{pattern}': {e}")
-    
+
     def search(self, text: str) -> list[dict]:
         """在文本中搜索所有匹配的正则表达式"""
         results = []
-        
+
         for pattern, word_info in self.patterns:
             try:
                 for match in pattern.finditer(text):
@@ -159,16 +145,16 @@ class RegexMatcher:
                     })
             except Exception as e:
                 logging.warning(f"正则匹配失败 '{pattern.pattern}': {e}")
-                
+
         return results
 
 
 class PartialMatcher:
     """部分匹配器（支持通配符）"""
-    
+
     def __init__(self):
         self.patterns = []  # [(pattern, word_info), ...]
-        
+
     def add_pattern(self, pattern: str, word_info: dict):
         """添加部分匹配模式（支持*和?通配符）"""
         # 将通配符转换为正则表达式
@@ -177,21 +163,21 @@ class PartialMatcher:
         regex_pattern = re.escape(pattern)
         regex_pattern = regex_pattern.replace(r'\*', '.*').replace(r'\?', '.')
         regex_pattern = f'({regex_pattern})'  # 添加捕获组
-        
+
         try:
             flags = 0
             if not word_info.get('case_sensitive', False):
                 flags |= re.IGNORECASE
-                
+
             compiled_pattern = re.compile(regex_pattern, flags)
             self.patterns.append((compiled_pattern, word_info, pattern))
         except re.error as e:
             logging.warning(f"无效的部分匹配模式 '{pattern}': {e}")
-    
+
     def search(self, text: str) -> list[dict]:
         """搜索部分匹配"""
         results = []
-        
+
         for pattern, word_info, original_pattern in self.patterns:
             try:
                 for match in pattern.finditer(text):
@@ -205,13 +191,13 @@ class PartialMatcher:
                     })
             except Exception as e:
                 logging.warning(f"部分匹配失败 '{original_pattern}': {e}")
-                
+
         return results
 
 
 class PIIDetector:
     """个人敏感信息检测器"""
-    
+
     def __init__(self):
         self.patterns = {
             'phone': [
@@ -232,7 +218,7 @@ class PIIDetector:
                 r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b'
             ]
         }
-        
+
         # PII类型的替换文本
         self.pii_types = {
             'phone': {'name': '手机号', 'replacement': '[手机号]'},
@@ -241,11 +227,11 @@ class PIIDetector:
             'bank_card': {'name': '银行卡', 'replacement': '[银行卡]'},
             'ip_address': {'name': 'IP地址', 'replacement': '[IP地址]'}
         }
-    
+
     def detect(self, text: str) -> list[dict]:
         """检测PII信息"""
         results = []
-        
+
         for pii_type, patterns in self.patterns.items():
             for pattern in patterns:
                 matches = re.finditer(pattern, text)
@@ -256,7 +242,7 @@ class PIIDetector:
                         'start': match.start(),
                         'end': match.end()
                     })
-        
+
         return results
 
 #

@@ -1,9 +1,11 @@
 import logging
 import os
+
 import numpy as np
-from core.llm.embedding_model.base import Base
+
 from api.utils.file_utils import get_home_cache_dir
 from common.token_utils import num_tokens_from_string
+from core.llm.embedding_model.base import Base
 
 
 class YoudaoEmbed(Base):

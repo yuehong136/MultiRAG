@@ -15,7 +15,6 @@ from api.db.db_models import get_db
 from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
 from common import settings
 from common.config_utils import get_base_config
-from core.llm import EmbeddingModel
 
 logger = logging.getLogger("multirag.datav_app")
 
@@ -56,27 +55,27 @@ class SearchMode(StrEnum):
 class EmbeddingConfig(BaseModel):
     """
     向量模型配置
-    
+
     调用者只需提供 model_name，系统根据当前用户的 tenant_id 从数据库查询完整配置。
-    
+
     Attributes:
         model_name: 模型名称，格式为 "模型名@厂商" 或 "模型名"
                    例如: "embedding-3@ZHIPU-AI", "text-embedding-ada-002@OpenAI"
                    如果不包含 @，则使用系统默认厂商
-    
+
     Examples:
         >>> {"model_name": "embedding-3@ZHIPU-AI"}
         >>> {"model_name": "BAAI/bge-large-zh-v1.5@BAAI"}
     """
     model_config = ConfigDict(extra="allow")
-    
+
     model_name: str
 
 
 class SearchConfig(BaseModel):
     """
     搜索配置 - 可扩展参数组
-    
+
     Attributes:
         distance_type: 距离计算类型，默认 COSINE
         limit: 返回结果数量限制，默认 10
@@ -90,17 +89,17 @@ class SearchConfig(BaseModel):
         rerank: 是否启用重排序
     """
     model_config = ConfigDict(extra="allow")
-    
+
     # 基础配置 (稳定)
     distance_type: DistanceType = DistanceType.COSINE
     limit: int = Field(default=10, ge=1, le=10000)
     offset: int = Field(default=0, ge=0)
-    
+
     # 混合搜索配置 (可选)
     text_fields: list[str] | None = None
     text_weight: float = Field(default=0.5, ge=0, le=1)
     vector_weight: float = Field(default=0.5, ge=0, le=1)
-    
+
     # 高级配置 (可选)
     similarity_threshold: float | None = None
     ef_search: int | None = None
@@ -111,9 +110,9 @@ class SearchConfig(BaseModel):
 class FilterCondition(BaseModel):
     """
     统一过滤条件 - 内部转换为各数据库语法
-    
+
     设计目标: 调用方无需关心底层数据库语法差异
-    
+
     Attributes:
         equals: 等值过滤，如 {"kb_id": "xxx"}
         in_list: 列表过滤，如 {"doc_type_kwd": ["pdf", "docx"]}
@@ -124,7 +123,7 @@ class FilterCondition(BaseModel):
         raw_expr: 原生过滤表达式 (高级用户使用，直接透传)
     """
     model_config = ConfigDict(extra="allow")
-    
+
     # 结构化过滤 (推荐，跨数据库兼容)
     equals: dict[str, str | int | float] | None = None
     in_list: dict[str, list] | None = None
@@ -132,7 +131,7 @@ class FilterCondition(BaseModel):
     range_filter: dict[str, dict] | None = None
     exists: list[str] | None = None
     not_exists: list[str] | None = None
-    
+
     # 原生表达式 (高级用户，数据库特定)
     raw_expr: str | None = None
 
@@ -140,12 +139,12 @@ class FilterCondition(BaseModel):
 class VectorSearchRequest(BaseModel):
     """
     向量检索统一请求模型
-    
+
     设计原则:
     1. 核心参数稳定，不轻易变动
     2. 配置对象可扩展，新增不影响现有调用
     3. extra 字段预留未来扩展
-    
+
     Attributes:
         db_type: 向量数据库类型
         collection_name: 集合/索引名称
@@ -161,40 +160,40 @@ class VectorSearchRequest(BaseModel):
         db_config: 自定义数据库连接配置 (高级)
     """
     model_config = ConfigDict(extra="allow")
-    
+
     # ===== 核心参数 (必填，稳定) =====
     db_type: SupportedVectorDBType
     collection_name: str
     query_text: str
     vector_field: str
     output_fields: list[str]
-    
+
     # ===== 数据库选择 (可选，支持多数据库场景) =====
     database: str | None = Field(
         default=None,
         description="数据库名称，用于 Milvus/Infinity 等支持多数据库的向量数据库。"
                     "如不指定，则使用系统配置的默认数据库。"
     )
-    
+
     # ===== 配置对象 (可选，可扩展) =====
     embedding: EmbeddingConfig | None = None
     search: SearchConfig | None = None
     filter: FilterCondition | None = None
-    
+
     # ===== 检索模式 =====
     mode: SearchMode = SearchMode.VECTOR
-    
+
     # ===== 扩展预留 =====
     extra: dict | None = None
     db_config: dict | None = None
-    
+
     @field_validator("collection_name", "query_text", "vector_field")
     @classmethod
     def validate_not_empty(cls, v: str) -> str:
         if not v or not v.strip():
             raise ValueError("字段不能为空")
         return v.strip()
-    
+
     @field_validator("output_fields")
     @classmethod
     def validate_output_fields(cls, v: list[str]) -> list[str]:
@@ -234,19 +233,19 @@ class VectorSearchResponse(BaseModel):
 
 class FilterConverter:
     """将统一过滤条件转换为各数据库语法"""
-    
+
     @staticmethod
     def to_milvus(filter_cond: FilterCondition | None) -> str:
         """转换为 Milvus 过滤表达式"""
         if filter_cond is None:
             return ""
-        
+
         # 如果有原生表达式，直接返回
         if filter_cond.raw_expr:
             return filter_cond.raw_expr
-        
+
         parts = []
-        
+
         # 等值过滤
         if filter_cond.equals:
             for field, value in filter_cond.equals.items():
@@ -254,13 +253,13 @@ class FilterConverter:
                     parts.append(f"{field} == '{value}'")
                 else:
                     parts.append(f"{field} == {value}")
-        
+
         # 列表过滤
         if filter_cond.in_list:
             for field, values in filter_cond.in_list.items():
                 formatted_values = [f"'{v}'" if isinstance(v, str) else str(v) for v in values]
                 parts.append(f"{field} in [{','.join(formatted_values)}]")
-        
+
         # 不等值过滤
         if filter_cond.not_equals:
             for field, value in filter_cond.not_equals.items():
@@ -268,7 +267,7 @@ class FilterConverter:
                     parts.append(f"{field} != '{value}'")
                 else:
                     parts.append(f"{field} != {value}")
-        
+
         # 范围过滤
         if filter_cond.range_filter:
             for field, conditions in filter_cond.range_filter.items():
@@ -276,73 +275,73 @@ class FilterConverter:
                     op_map = {"gte": ">=", "gt": ">", "lte": "<=", "lt": "<"}
                     if op in op_map:
                         parts.append(f"{field} {op_map[op]} {value}")
-        
+
         # 字段存在
         if filter_cond.exists:
             for field in filter_cond.exists:
                 parts.append(f'{field} != ""')
-        
+
         # 字段不存在
         if filter_cond.not_exists:
             for field in filter_cond.not_exists:
                 parts.append(f'{field} == ""')
-        
+
         return " && ".join(parts) if parts else ""
-    
+
     @staticmethod
     def to_elasticsearch(filter_cond: FilterCondition | None) -> dict | None:
         """转换为 Elasticsearch DSL 格式"""
         if filter_cond is None:
             return None
-        
+
         # 如果有原生表达式，返回 query_string
         if filter_cond.raw_expr:
             return {"query_string": {"query": filter_cond.raw_expr}}
-        
+
         must = []
         must_not = []
-        
+
         # 等值过滤
         if filter_cond.equals:
             for field, value in filter_cond.equals.items():
                 must.append({"term": {field: value}})
-        
+
         # 列表过滤
         if filter_cond.in_list:
             for field, values in filter_cond.in_list.items():
                 must.append({"terms": {field: values}})
-        
+
         # 不等值过滤
         if filter_cond.not_equals:
             for field, value in filter_cond.not_equals.items():
                 must_not.append({"term": {field: value}})
-        
+
         # 范围过滤
         if filter_cond.range_filter:
             for field, conditions in filter_cond.range_filter.items():
                 must.append({"range": {field: conditions}})
-        
+
         # 字段存在
         if filter_cond.exists:
             for field in filter_cond.exists:
                 must.append({"exists": {"field": field}})
-        
+
         # 字段不存在
         if filter_cond.not_exists:
             for field in filter_cond.not_exists:
                 must_not.append({"exists": {"field": field}})
-        
+
         if not must and not must_not:
             return None
-        
+
         bool_query = {}
         if must:
             bool_query["must"] = must
         if must_not:
             bool_query["must_not"] = must_not
-        
+
         return {"bool": bool_query}
-    
+
     @staticmethod
     def to_infinity(filter_cond: FilterCondition | None) -> str:
         """转换为 Infinity 过滤表达式"""
@@ -356,7 +355,7 @@ class FilterConverter:
 
 class ResultNormalizer:
     """统一各数据库返回结果格式"""
-    
+
     @staticmethod
     def _to_serializable(value: Any) -> Any:
         """递归转换为 JSON 可序列化类型，自动解析字符串形式的数组/字典"""
@@ -379,7 +378,7 @@ class ResultNormalizer:
             return [ResultNormalizer._to_serializable(item) for item in value]
         except Exception:
             return str(value)
-    
+
     @staticmethod
     def normalize_milvus(
         hits: list,
@@ -394,15 +393,15 @@ class ResultNormalizer:
                 hit = hit.to_dict()
             elif not isinstance(hit, dict):
                 hit = {"id": str(hit), "distance": 0, "entity": {}}
-            
+
             doc_id = hit.get("id") or hit.get("pk", "")
             distance = float(hit.get("distance", 0) or 0)
-            
+
             # entity 可能在子对象中，也可能直接在 hit 中
             entity = hit.get("entity", {})
             if not isinstance(entity, dict):
                 entity = dict(entity) if hasattr(entity, "items") else {}
-            
+
             # 提取字段：优先从 entity，其次从 hit 顶层
             raw_fields = {}
             for k in output_fields:
@@ -410,13 +409,13 @@ class ResultNormalizer:
                     raw_fields[k] = entity[k]
                 elif k in hit and k not in ("id", "pk", "distance", "entity"):
                     raw_fields[k] = hit[k]
-            
+
             # 转换为可序列化类型
             fields = {k: ResultNormalizer._to_serializable(v) for k, v in raw_fields.items()}
-            
+
             # 计算分数: L2 越小越好，COSINE/IP 越大越好
             score = 1.0 / (1.0 + distance) if distance_type == DistanceType.L2 else distance
-            
+
             results.append(SearchResultItem(
                 id=str(doc_id),
                 score=score,
@@ -424,9 +423,9 @@ class ResultNormalizer:
                 fields=fields,
                 highlight=None
             ))
-        
+
         return results
-    
+
     @staticmethod
     def normalize_elasticsearch(
         response: dict,
@@ -437,22 +436,22 @@ class ResultNormalizer:
         hits = response.get("hits", {})
         total = hits.get("total", {})
         total_count = total.get("value", 0) if isinstance(total, dict) else total
-        
+
         for hit in hits.get("hits", []):
             doc_id = hit.get("_id", "")
             score = hit.get("_score", 0) or 0
             source = hit.get("_source", {})
             highlight = hit.get("highlight", {})
-            
+
             # 提取指定字段
             fields = {k: source.get(k) for k in output_fields if k in source}
-            
+
             # 处理高亮
             highlight_dict = None
             if highlight:
-                highlight_dict = {k: "".join(v) if isinstance(v, list) else v 
+                highlight_dict = {k: "".join(v) if isinstance(v, list) else v
                                  for k, v in highlight.items()}
-            
+
             results.append(SearchResultItem(
                 id=str(doc_id),
                 score=float(score),
@@ -460,9 +459,9 @@ class ResultNormalizer:
                 fields=fields,
                 highlight=highlight_dict
             ))
-        
+
         return results, total_count
-    
+
     @staticmethod
     def normalize_infinity(
         df,  # pandas DataFrame
@@ -470,17 +469,17 @@ class ResultNormalizer:
     ) -> list[SearchResultItem]:
         """归一化 Infinity 检索结果"""
         results = []
-        
+
         if df is None or len(df) == 0:
             return results
-        
+
         for _, row in df.iterrows():
             doc_id = row.get("id", "")
             # Infinity 可能返回 SCORE 或 SIMILARITY
             score = row.get("SCORE", 0) or row.get("SIMILARITY", 0) or 0
-            
+
             fields = {k: row.get(k) for k in output_fields if k in row.index}
-            
+
             results.append(SearchResultItem(
                 id=str(doc_id),
                 score=float(score),
@@ -488,7 +487,7 @@ class ResultNormalizer:
                 fields=fields,
                 highlight=None
             ))
-        
+
         return results
 
 
@@ -498,25 +497,25 @@ class ResultNormalizer:
 
 class VectorDBFactory:
     """向量数据库连接工厂"""
-    
+
     @staticmethod
     def get_connection(db_type: SupportedVectorDBType, database: str | None = None):
         """
         获取向量数据库连接
-        
+
         Args:
             db_type: 向量数据库类型
             database: 数据库名称 (可选，用于 Milvus/Infinity 等支持多数据库的场景)
-        
+
         注意: 使用项目现有的单例连接，避免重复创建
         """
-        import core.utils.milvus_conn
         import core.utils.es_conn
         import core.utils.infinity_conn
-        import core.utils.opensearch_conn
+        import core.utils.milvus_conn
         import core.utils.ob_conn
+        import core.utils.opensearch_conn
         import core.utils.vastbase_conn
-        
+
         if db_type == SupportedVectorDBType.MILVUS:
             return core.utils.milvus_conn.MilvusConnection()
         elif db_type == SupportedVectorDBType.ELASTICSEARCH:
@@ -536,7 +535,7 @@ class VectorDBFactory:
             return core.utils.vastbase_conn.VastBaseConnection()
         else:
             raise ValueError(f"不支持的向量数据库类型: {db_type}")
-    
+
 # =============================================================================
 # 核心检索逻辑
 # =============================================================================
@@ -557,8 +556,8 @@ def get_embedding_model(
     Returns:
         向量模型实例
     """
-    from api.db.services.llm_service import LLMBundle
     from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
+    from api.db.services.llm_service import LLMBundle
     from common.constants import LLMType
 
     try:
@@ -577,10 +576,10 @@ def get_embedding_model(
 
     except LookupError as e:
         model_name = config.model_name if config else '默认模型'
-        raise ValueError(f"模型配置未授权: {model_name}. {str(e)}")
+        raise ValueError(f"模型配置未授权: {model_name}. {e!s}")
     except Exception as e:
-        logger.exception(f"获取向量模型失败: {str(e)}")
-        raise ValueError(f"获取向量模型失败: {str(e)}")
+        logger.exception(f"获取向量模型失败: {e!s}")
+        raise ValueError(f"获取向量模型失败: {e!s}")
 
 
 def execute_vector_search(
@@ -597,14 +596,14 @@ def execute_vector_search(
 ) -> tuple[list, int]:
     """
     执行向量检索
-    
+
     Returns:
         (检索结果列表, 总数)
     """
     limit = search_config.limit
     offset = search_config.offset
     distance_type = search_config.distance_type
-    
+
     if db_type == SupportedVectorDBType.MILVUS:
         # Milvus 检索
         search_params = {
@@ -629,7 +628,7 @@ def execute_vector_search(
             )
         except Exception as e:
             raise ValueError(
-                f"Milvus 连接失败，请检查服务状态。数据库: {database or 'default'}。{str(e)}"
+                f"Milvus 连接失败，请检查服务状态。数据库: {database or 'default'}。{e!s}"
             ) from e
 
         results = conn.search_by_milvus(
@@ -642,13 +641,13 @@ def execute_vector_search(
             anns_field=vector_field,
             using=using_alias,
         )
-        
+
         return results, len(results)
-    
+
     elif db_type == SupportedVectorDBType.ELASTICSEARCH:
         # ES 检索 - 使用 KNN
         from common.doc_store.doc_store_base import MatchDenseExpr, OrderByExpr
-        
+
         dense_expr = MatchDenseExpr(
             vector_column_name=vector_field,
             embedding_data=query_vector,
@@ -657,13 +656,13 @@ def execute_vector_search(
             topn=limit,
             extra_options={"similarity": search_config.similarity_threshold or 0}
         )
-        
+
         # 构建条件
         condition = {}
         if filter_expr:
             # ES 需要解析过滤条件，这里简化处理
             condition["raw_filter"] = filter_expr
-        
+
         results = conn.search(
             select_fields=output_fields,
             highlight_fields=[],
@@ -675,13 +674,13 @@ def execute_vector_search(
             index_names=collection_name,
             knowledgebase_ids=[]
         )
-        
+
         return results, 0  # ES 结果需要特殊处理
-    
+
     elif db_type == SupportedVectorDBType.INFINITY:
         # Infinity 检索
         from common.doc_store.doc_store_base import MatchDenseExpr, OrderByExpr
-        
+
         dense_expr = MatchDenseExpr(
             vector_column_name=vector_field,
             embedding_data=query_vector,
@@ -690,7 +689,7 @@ def execute_vector_search(
             topn=limit,
             extra_options={}
         )
-        
+
         results, total = conn.search(
             select_fields=output_fields,
             highlight_fields=[],
@@ -702,13 +701,13 @@ def execute_vector_search(
             index_names=collection_name,
             knowledgebase_ids=[]
         )
-        
+
         return results, total
-    
+
     else:
         # 其他数据库使用通用接口
         from common.doc_store.doc_store_base import MatchDenseExpr, OrderByExpr
-        
+
         dense_expr = MatchDenseExpr(
             vector_column_name=vector_field,
             embedding_data=query_vector,
@@ -717,7 +716,7 @@ def execute_vector_search(
             topn=limit,
             extra_options={}
         )
-        
+
         results, total = conn.search(
             select_fields=output_fields,
             highlight_fields=[],
@@ -729,7 +728,7 @@ def execute_vector_search(
             index_names=collection_name,
             knowledgebase_ids=[]
         )
-        
+
         return results, total
 
 
@@ -745,14 +744,14 @@ def vector_search(
 ):
     """
     ### POST `/search` 向量数据库统一检索接口
-    
+
     **功能描述**:
     提供跨向量数据库的统一检索能力，支持 Milvus、Elasticsearch、Infinity 等多种向量数据库。
     调用方可指定向量模型、过滤条件、返回字段等参数进行灵活检索。
-    
+
     ---
     ### 请求体 (Request Body)
-    
+
     #### 核心参数 (必填)
     | 字段 | 类型 | 描述 |
     |------|------|------|
@@ -761,7 +760,7 @@ def vector_search(
     | `query_text` | `string` | 查询文本 |
     | `vector_field` | `string` | 向量字段名，如 q_768_vec |
     | `output_fields` | `list[string]` | 要返回的字段列表 |
-    
+
     #### 配置参数 (可选)
     | 字段 | 类型 | 描述 |
     |------|------|------|
@@ -771,10 +770,10 @@ def vector_search(
     | `filter` | `object` | 过滤条件 |
     | `mode` | `string` | 检索模式: vector (默认), hybrid |
     | `extra` | `object` | 扩展字段，透传给底层 |
-    
+
     ---
     ### 请求示例
-    
+
     #### 最简调用
     ```json
     {
@@ -785,7 +784,7 @@ def vector_search(
         "output_fields": ["content", "title", "kb_id"]
     }
     ```
-    
+
     #### 指定数据库
     ```json
     {
@@ -797,7 +796,7 @@ def vector_search(
         "output_fields": ["content", "title", "kb_id"]
     }
     ```
-    
+
     #### 完整调用
     ```json
     {
@@ -821,7 +820,7 @@ def vector_search(
         }
     }
     ```
-    
+
     ---
     ### 响应
     ```json
@@ -851,11 +850,11 @@ def vector_search(
     ```
     """
     start_time = time.time()
-    
+
     try:
         # 1. 获取搜索配置
         search_config = request.search or SearchConfig()
-        
+
         # 2. 获取向量模型并生成查询向量
         embedding_model = get_embedding_model(
             db=db,
@@ -863,19 +862,19 @@ def vector_search(
             config=request.embedding
         )
         query_vector, token_count = embedding_model.encode_queries(request.query_text)
-        
+
         # 转换为列表格式
         if hasattr(query_vector, "tolist"):
             query_vector = query_vector.tolist()
-        
+
         vector_dimension = len(query_vector) if query_vector else None
-        
+
         # 3. 获取数据库连接 (支持指定数据库名称)
         conn = VectorDBFactory.get_connection(request.db_type, database=request.database)
-        
+
         # 4. 转换过滤条件
         filter_expr = FilterConverter.to_milvus(request.filter)
-        
+
         # 5. 执行检索
         raw_results, total = execute_vector_search(
             conn=conn,
@@ -889,7 +888,7 @@ def vector_search(
             database=request.database,
             trace_id=(request.extra or {}).get("trace_id") if isinstance(request.extra, dict) else None,
         )
-        
+
         # 6. 归一化结果
         if request.db_type == SupportedVectorDBType.MILVUS:
             results = ResultNormalizer.normalize_milvus(
@@ -914,7 +913,7 @@ def vector_search(
             )
             if total == 0:
                 total = len(results)
-        
+
         # 7. 根据相似度阈值过滤结果
         if search_config.similarity_threshold is not None and search_config.similarity_threshold > 0:
             threshold = search_config.similarity_threshold
@@ -925,16 +924,16 @@ def vector_search(
                 logger.debug(f"相似度阈值过滤: 阈值={threshold}, 原始数量={original_count}, 过滤掉={filtered_count}")
             # 更新总数
             total = len(results)
-        
+
         # 8. 构建响应
         elapsed_ms = (time.time() - start_time) * 1000
-        
+
         # 构建模型名称
         if request.embedding:
             embedding_model_name = request.embedding.model_name
         else:
             embedding_model_name = settings.EMBEDDING_MDL
-        
+
         response = VectorSearchResponse(
             total=total,
             results=results,
@@ -946,11 +945,11 @@ def vector_search(
                 vector_dimension=vector_dimension
             )
         )
-        
+
         return get_json_result(data=response.model_dump())
-    
+
     except ValueError as e:
-        logger.warning(f"向量检索参数错误: {str(e)}")
+        logger.warning(f"向量检索参数错误: {e!s}")
         return get_data_error_result(retmsg=str(e))
     except Exception as e:
         error_msg = str(e)
@@ -968,9 +967,9 @@ def vector_search(
 def health_check():
     """
     ### GET `/health` 健康检查接口
-    
+
     检查向量检索服务的健康状态。
-    
+
     ---
     ### 响应
     ```json
@@ -1000,7 +999,7 @@ def health_check():
 def get_supported_db_types():
     """
     ### GET `/db_types` 获取支持的向量数据库类型
-    
+
     ---
     ### 响应
     ```json
@@ -1025,7 +1024,7 @@ def get_supported_db_types():
         SupportedVectorDBType.OCEANBASE: "OceanBase 分布式数据库",
         SupportedVectorDBType.VASTBASE: "VastBase 国产数据库",
     }
-    
+
     data = {
         "db_types": [
             {"value": t.value, "description": descriptions.get(t, t.value)}

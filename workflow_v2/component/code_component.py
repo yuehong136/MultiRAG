@@ -1,7 +1,8 @@
 from typing import Any
 
 import aiohttp
-from common.settings import SCRIPT_SCHEDULER_PORT, SCRIPT_SCHEDULER_HOST
+
+from common.settings import SCRIPT_SCHEDULER_HOST, SCRIPT_SCHEDULER_PORT
 from workflow_v2.component.base_component import BaseComponent
 from workflow_v2.workflow_logging_config import WorkflowContextLogger
 
@@ -84,7 +85,7 @@ class CodeComponent(BaseComponent):
                     return await response.json()
 
         except aiohttp.ClientError as e:
-            self.logger.error(f"Error making request: {str(e)}")
+            self.logger.error(f"Error making request: {e!s}")
             raise
 
     def parse_output(self, output_structure: list[dict], actual_output: Any) -> dict:

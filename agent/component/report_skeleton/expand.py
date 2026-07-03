@@ -99,7 +99,7 @@ async def expand_open_regions(
             result: tuple[list[dict[str, Any]] | None, ExpandError | None] = (blocks, None)
         except SkeletonParseError as err:
             result = (None, ExpandError(str(err)))
-        except Exception as err:  # noqa: BLE001 - 任何失败都降级为本区失败,保其余
+        except Exception as err:
             result = (None, ExpandError(str(err)))
         if on_progress:
             # 单线程事件循环:此处读写 done 之间无 await,不会竞态。

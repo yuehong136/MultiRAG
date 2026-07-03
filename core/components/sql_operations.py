@@ -1,5 +1,7 @@
 import sqlite3
+
 import pandas as pd
+
 
 def execute_sql(sql_query):
     """

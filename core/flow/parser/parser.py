@@ -20,20 +20,18 @@ import random
 import re
 from functools import partial
 
-from litellm import logging
 import numpy as np
+from litellm import logging
 from PIL import Image
 
 from api.db.db_models import db_connection
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.llm_service import LLMBundle
-from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, \
-    get_tenant_default_model_by_type
-from deepdoc.parser import ExcelParser, HtmlParser, TxtParser
-from deepdoc.parser.docling_parser import DoclingParser
-from deepdoc.parser.pdf_parser import PlainParser, RAGFlowPdfParser, VisionParser
-from deepdoc.parser.tcadp_parser import TCADPParser
+from common import settings
+from common.constants import LLMType
+from common.misc_utils import get_uuid, thread_pool_exec
 from core.app.naive import Docx
 from core.flow.base import ProcessBase, ProcessParamBase
 from core.flow.parser.pdf_chunk_metadata import (
@@ -52,9 +50,10 @@ from core.flow.parser.utils import (
 from core.llm.cv import Base as VLM
 from core.nlp import BULLET_PATTERN, bullets_category, docx_question_level, not_bullet
 from core.utils.base64_image import image2id
-from common import settings
-from common.constants import LLMType
-from common.misc_utils import get_uuid, thread_pool_exec
+from deepdoc.parser import ExcelParser, HtmlParser, TxtParser
+from deepdoc.parser.docling_parser import DoclingParser
+from deepdoc.parser.pdf_parser import PlainParser, RAGFlowPdfParser, VisionParser
+from deepdoc.parser.tcadp_parser import TCADPParser
 
 
 class ParserParam(ProcessParamBase):
@@ -1230,7 +1229,7 @@ class Parser(ProcessBase):
         try:
             from_upstream = ParserFromUpstream.model_validate(kwargs)
         except Exception as e:
-            self.set_output("_ERROR", f"Input error: {str(e)}")
+            self.set_output("_ERROR", f"Input error: {e!s}")
             return
 
         name = from_upstream.name

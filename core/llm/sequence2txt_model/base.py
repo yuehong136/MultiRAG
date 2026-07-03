@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -9,6 +8,7 @@
 import base64
 import io
 from abc import ABC
+
 from common.token_utils import num_tokens_from_string
 
 

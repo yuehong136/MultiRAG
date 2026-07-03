@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 #
 #  Copyright 2025 The InfiniFlow Authors. All Rights Reserved.
 #
@@ -76,7 +75,7 @@ class RAGFlowMarkdownParser:
 
         def replace_tag(m):
             tag_name = re.match(r"<(\w+)", m.group()).group(1)
-            return "<{}>".format(tag_name)
+            return f"<{tag_name}>"
 
         working_text = re.sub(table_with_attributes_pattern, replace_tag, working_text)
 

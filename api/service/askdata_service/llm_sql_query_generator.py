@@ -6,11 +6,11 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from api.db.services.llm_service import LLMBundle
 from api.db.db_models import db_connection
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
-from api.utils.prompt_template_util import PromptTemplateUtil
+from api.db.services.llm_service import LLMBundle
 from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+from api.utils.prompt_template_util import PromptTemplateUtil
 from common.constants import LLMType
 from common.misc_utils import thread_pool_exec
 
@@ -91,7 +91,7 @@ class NLQToInitialSQLGenerator:
 
         sql = json_data.get('sql')
         if not sql or not isinstance(sql, str):
-            logger.warning(f"JSON中缺少必须的'sql'字段或其类型不是字符串。")
+            logger.warning("JSON中缺少必须的'sql'字段或其类型不是字符串。")
             return None
 
         # 定义期望的组件键 - 添加了 having 键
@@ -100,7 +100,7 @@ class NLQToInitialSQLGenerator:
         # 获取sqlComponents，如果不存在则为空字典
         sql_components = json_data.get('sqlComponents', {})
         if not isinstance(sql_components, dict):
-            logger.warning(f"sqlComponents不是一个字典，将视为空处理。")
+            logger.warning("sqlComponents不是一个字典，将视为空处理。")
             sql_components = {}
 
         # 确保所有期望的组件都存在，不存在则设置为空字符串
@@ -259,7 +259,7 @@ class NLQToInitialSQLGenerator:
 
             json_response = self._extract_llm_response_json(response)
             if not json_response:
-                logger.error(f"无法从LLM的响应中提取JSON")
+                logger.error("无法从LLM的响应中提取JSON")
                 return None
             if json_response.get("status") == "failed":
                 if not self._is_permission_denial_grounded(json_response, semantic_layer):
@@ -317,7 +317,7 @@ class NLQToInitialSQLGenerator:
             return False, "SQL查询必须以SELECT开头"
 
         if 'FROM' not in sql_upper:
-            return False, f"SQL查询缺少必需的关键字: FROM"
+            return False, "SQL查询缺少必需的关键字: FROM"
 
         if sql.count('(') != sql.count(')'):
             return False, "SQL查询中括号不匹配"
@@ -402,7 +402,7 @@ class NLQToInitialSQLGenerator:
 
             json_response = self._extract_llm_response_json(response)
             if not json_response:
-                logger.error(f"SQL修复: 无法从LLM的响应中提取JSON")
+                logger.error("SQL修复: 无法从LLM的响应中提取JSON")
                 return None
 
             validated_data = self._parse_and_validate_llm_json(json_response)

@@ -10,11 +10,11 @@ $ git ls-files -z -- '*.py' | xargs -0 python3 check_comment_ascii.py
 ```
 """
 
-import sys
-import tokenize
 import ast
 import pathlib
 import re
+import sys
+import tokenize
 
 ASCII = re.compile(r"^[\n -~]*\Z")  # Printable ASCII + newline
 

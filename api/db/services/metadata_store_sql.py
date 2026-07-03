@@ -21,9 +21,10 @@ Used when the doc engine is Milvus.
 
 import logging
 
-from sqlalchemy import select, delete as sa_delete
-from sqlalchemy.orm import Session
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.orm import Session
 
 from api.db.db_models import DocumentMetadata
 from api.db.services.metadata_store import MetadataStore

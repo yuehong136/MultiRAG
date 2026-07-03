@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -6,13 +5,13 @@
 @date：2024/7/15 16:15
 @desc: 搜索服务
 """
-from datetime import datetime
-from sqlalchemy import and_, or_, func, desc, asc
+from sqlalchemy import and_, asc, desc, func, or_
 from sqlalchemy.orm import Session
 
-from common.constants import StatusEnum
 from api.db.db_models import Search, User
 from api.db.services.common_service import CommonService
+from common.constants import StatusEnum
+
 # from common.time_utils import current_timestamp, datetime_format
 
 
@@ -51,7 +50,7 @@ class SearchService(CommonService):
             User.nickname,
             User.avatar.label("tenant_avatar"),
         ).join(
-            User, 
+            User,
             and_(
                 User.id == cls.model.tenant_id,
                 User.status == StatusEnum.VALID.value
@@ -62,7 +61,7 @@ class SearchService(CommonService):
                 cls.model.status == StatusEnum.VALID.value
             )
         )
-        
+
         result = query.first()
         if result:
             return {
@@ -80,9 +79,9 @@ class SearchService(CommonService):
         return {}
 
     @classmethod
-    def get_by_tenant_ids(cls, db: Session, joined_tenant_ids: list, user_id: str, 
-                         page_number: int = None, items_per_page: int = None, 
-                         orderby: str = "update_time", desc_order: bool = True, 
+    def get_by_tenant_ids(cls, db: Session, joined_tenant_ids: list, user_id: str,
+                         page_number: int = None, items_per_page: int = None,
+                         orderby: str = "update_time", desc_order: bool = True,
                          keywords: str = None):
         """根据租户ID获取搜索配置列表"""
         query = db.query(
@@ -118,7 +117,7 @@ class SearchService(CommonService):
         # 排序
         if not hasattr(cls.model, orderby):
             orderby = "update_time"
-        
+
         order_column = getattr(cls.model, orderby)
         if desc_order:
             query = query.order_by(desc(order_column))
@@ -176,7 +175,7 @@ class SearchService(CommonService):
                 cls.model.status == StatusEnum.VALID.value
             )
         ).order_by(desc(cls.model.update_time))
-        
+
         return query.all()
 
     @classmethod

@@ -14,29 +14,31 @@
 #  limitations under the License.
 #
 import asyncio
+
 import nest_asyncio
+
 nest_asyncio.apply()
 import inspect
 import json
+import logging
 import os
 import random
 import re
-import logging
 import tempfile
 from functools import partial
 from typing import Any
 
-from agent.component.base import ComponentBase, ComponentParamBase
 from jinja2.sandbox import SandboxedEnvironment
+
+from agent.component.base import ComponentBase, ComponentParamBase
 
 _jinja2_sandbox = SandboxedEnvironment()
 
-from common.connection_utils import timeout
-from common.misc_utils import get_uuid
-from common import settings
-
 from api.db.db_models import db_connection
 from api.db.joint_services.memory_message_service import queue_save_to_memory_task
+from common import settings
+from common.connection_utils import timeout
+from common.misc_utils import get_uuid
 
 
 class MessageParam(ComponentParamBase):
@@ -179,7 +181,7 @@ class Message(ComponentBase):
         patt = [
             r"\{%.*%\}", "{{", "}}"
         ]
-        return any([re.search(p, content) for p in patt])
+        return any(re.search(p, content) for p in patt)
 
     @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10*60)))
     def _invoke(self, **kwargs):
@@ -192,7 +194,7 @@ class Message(ComponentBase):
             return
 
         rand_cnt, kwargs = self.get_kwargs(rand_cnt, kwargs)
-        template = Jinja2Template(rand_cnt)
+        template = _jinja2_sandbox.from_string(rand_cnt)
         try:
             content = template.render(kwargs)
         except Exception:
@@ -281,8 +283,9 @@ class Message(ComponentBase):
                 binary_content = converted.encode("utf-8")
 
             elif self._param.output_format == "xlsx":
-                import pandas as pd
                 from io import BytesIO
+
+                import pandas as pd
 
                 # Debug: log the content being parsed
                 logging.info(

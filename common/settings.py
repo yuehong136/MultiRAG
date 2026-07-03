@@ -1,32 +1,33 @@
-import os
 import json
-import secrets
 import logging
+import os
+import secrets
 
-from common.constants import MULTI_RAG_SERVICE_NAME, SVR_QUEUE_NAME, Storage
-from common.file_utils import get_project_base_directory
-from common.config_utils import get_base_config, decrypt_database_config
-from common.misc_utils import pip_install_torch
 import core.utils
-import core.utils.milvus_conn
 import core.utils.es_conn
 import core.utils.infinity_conn
+import core.utils.milvus_conn
 import core.utils.ob_conn
 import core.utils.opensearch_conn
 import core.utils.vastbase_conn
+import memory.utils.es_conn as memory_es_conn
+import memory.utils.infinity_conn as memory_infinity_conn
+import memory.utils.milvus_conn as memory_milvus_conn
+import memory.utils.ob_conn as memory_ob_conn
+from common.config_utils import decrypt_database_config, get_base_config
+from common.constants import MULTI_RAG_SERVICE_NAME, SVR_QUEUE_NAME, Storage
+from common.file_utils import get_project_base_directory
+from common.misc_utils import pip_install_torch
+from core.nlp import search
 from core.utils.azure_sas_conn import MultiRAGAzureSasBlob
 from core.utils.azure_spn_conn import MultiRAGAzureSpnBlob
 from core.utils.gcs_conn import MultiRAGGCS
 from core.utils.minio_conn import MultiRAGMinio
 from core.utils.opendal_conn import OpenDALStorage
+from core.utils.oss_conn import MultiRAGOSS
 from core.utils.redis_conn import REDIS_CONN
 from core.utils.s3_conn import MultiRAGS3
-from core.utils.oss_conn import MultiRAGOSS
-from core.nlp import search
-import memory.utils.es_conn as memory_es_conn
-import memory.utils.infinity_conn as memory_infinity_conn
-import memory.utils.milvus_conn as memory_milvus_conn
-import memory.utils.ob_conn as memory_ob_conn
+
 # import memory.utils.vastbase_conn as memory_vastbase_conn
 
 # Lighten mode
@@ -214,7 +215,7 @@ def init_settings():
 
     global FACTORY_LLM_INFOS
     try:
-        with open(os.path.join(get_project_base_directory(), "configs", "llm_factories.json"), "r") as f:
+        with open(os.path.join(get_project_base_directory(), "configs", "llm_factories.json")) as f:
             FACTORY_LLM_INFOS = json.load(f)["factory_llm_infos"]
     except Exception:
         FACTORY_LLM_INFOS = []

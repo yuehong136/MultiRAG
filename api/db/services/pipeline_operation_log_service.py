@@ -18,16 +18,17 @@ import logging
 import os
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, asc, desc as sa_desc, select
+from sqlalchemy import asc, func
+from sqlalchemy import desc as sa_desc
 from sqlalchemy.orm import Session
 
-from common.constants import VALID_PIPELINE_TASK_TYPES, PipelineTaskType
 from api.db.db_models import Document, PipelineOperationLog
 from api.db.services.canvas_service import UserCanvasService
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.task_service import GRAPH_RAPTOR_FAKE_DOC_ID
+from common.constants import VALID_PIPELINE_TASK_TYPES, PipelineTaskType
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, datetime_format
 
@@ -154,27 +155,27 @@ class PipelineOperationLogService(CommonService):
                     {"mindmap_task_finish_at": finish_at},
                 )
 
-        log = dict(
-            id=get_uuid(),
-            document_id=document_id,  # GRAPH_RAPTOR_FAKE_DOC_ID or real document_id
-            tenant_id=tenant_id,
-            kb_id=document.kb_id,
-            pipeline_id=pipeline_id,
-            pipeline_title=title,
-            parser_id=document.parser_id,
-            document_name=document.name,
-            document_suffix=document.suffix,
-            document_type=document.type,
-            source_from=document.source_type.split("/")[0] if document.source_type else "",
-            progress=document.progress,
-            progress_msg=document.progress_msg,
-            process_begin_at=document.process_begin_at,
-            process_duration=document.process_duration,
-            dsl=json.loads(dsl),
-            task_type=task_type,
-            operation_status=operation_status,
-            avatar=avatar,
-        )
+        log = {
+            "id": get_uuid(),
+            "document_id": document_id,  # GRAPH_RAPTOR_FAKE_DOC_ID or real document_id
+            "tenant_id": tenant_id,
+            "kb_id": document.kb_id,
+            "pipeline_id": pipeline_id,
+            "pipeline_title": title,
+            "parser_id": document.parser_id,
+            "document_name": document.name,
+            "document_suffix": document.suffix,
+            "document_type": document.type,
+            "source_from": document.source_type.split("/")[0] if document.source_type else "",
+            "progress": document.progress,
+            "progress_msg": document.progress_msg,
+            "process_begin_at": document.process_begin_at,
+            "process_duration": document.process_duration,
+            "dsl": json.loads(dsl),
+            "task_type": task_type,
+            "operation_status": operation_status,
+            "avatar": avatar,
+        }
         timestamp = current_timestamp()
         datetime_now = datetime_format(datetime.now())
         log["create_time"] = timestamp

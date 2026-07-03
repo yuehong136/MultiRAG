@@ -1,16 +1,17 @@
-# coding=utf-8
 """
 @project: writing_system
 @file： reference_service.py
 @desc: 参考资料服务类
 """
 import logging
-from datetime import datetime, timezone
-from sqlalchemy.orm import Session
+from datetime import UTC, datetime
+
 from sqlalchemy import func
 from sqlalchemy.exc import NoResultFound
+from sqlalchemy.orm import Session
+
+from api.db.db_models import WritingChapter, WritingReferenceMaterial
 from api.db.services.common_service import CommonService
-from api.db.db_models import WritingReferenceMaterial, WritingChapter
 from common.constants import StatusEnum
 from common.misc_utils import get_uuid
 
@@ -91,7 +92,7 @@ class ReferenceService(CommonService):
             logging.warning(f"获取参考资料时找不到章节: {chapter_id}")
             return []
         except Exception as e:
-            logging.error(f"获取章节参考资料失败: {str(e)}")
+            logging.error(f"获取章节参考资料失败: {e!s}")
             return []
 
     @classmethod
@@ -171,7 +172,7 @@ class ReferenceService(CommonService):
             return reference
         except Exception as e:
             db.rollback()
-            logging.error(f"添加参考资料失败: {str(e)}")
+            logging.error(f"添加参考资料失败: {e!s}")
             raise e
 
     @classmethod
@@ -194,7 +195,7 @@ class ReferenceService(CommonService):
             # 手动更新时间戳
             now = datetime.now()
             reference.update_time = int(now.timestamp())
-            reference.update_date = datetime.now(timezone.utc)
+            reference.update_date = datetime.now(UTC)
 
             db.commit()
             db.refresh(reference)
@@ -202,7 +203,7 @@ class ReferenceService(CommonService):
             return reference
         except Exception as e:
             db.rollback()
-            logging.error(f"更新参考资料失败: {str(e)}")
+            logging.error(f"更新参考资料失败: {e!s}")
             raise e
 
     @classmethod
@@ -234,7 +235,7 @@ class ReferenceService(CommonService):
             return True
         except Exception as e:
             db.rollback()
-            logging.error(f"删除参考资料失败: {str(e)}")
+            logging.error(f"删除参考资料失败: {e!s}")
             return False
 
     @classmethod
@@ -266,7 +267,7 @@ class ReferenceService(CommonService):
             # 获取当前时间戳
             now = datetime.now()
             now_ts = int(now.timestamp())
-            now_utc = datetime.now(timezone.utc)
+            now_utc = datetime.now(UTC)
 
             # 逻辑删除所有参考资料
             count = 0
@@ -280,7 +281,7 @@ class ReferenceService(CommonService):
             return count
         except Exception as e:
             db.rollback()
-            logging.error(f"删除章节参考资料失败: {str(e)}")
+            logging.error(f"删除章节参考资料失败: {e!s}")
             raise e
     @classmethod
     def reorder_references(cls, db: Session, chapter_id: str, references_order: list[dict]) -> bool:
@@ -299,7 +300,7 @@ class ReferenceService(CommonService):
             # 获取当前时间戳
             now = datetime.now()
             now_ts = int(now.timestamp())
-            now_utc = datetime.now(timezone.utc)
+            now_utc = datetime.now(UTC)
 
             for ref_data in references_order:
                 ref_id = ref_data.get("id")
@@ -322,7 +323,7 @@ class ReferenceService(CommonService):
             return True
         except Exception as e:
             db.rollback()
-            logging.error(f"重新排序参考资料失败: {str(e)}")
+            logging.error(f"重新排序参考资料失败: {e!s}")
             return False
 
     @classmethod
@@ -354,12 +355,12 @@ class ReferenceService(CommonService):
                 return f"无法解析文件内容: {file_name}"
 
         except ImportError as e:
-            logging.error(f"FileService导入失败: {str(e)}")
+            logging.error(f"FileService导入失败: {e!s}")
             # 如果没有FileService，返回简单处理
             return cls._fallback_file_parsing(file_content, file_name)
         except Exception as e:
-            logging.error(f"解析文件内容失败: {str(e)}", exc_info=True)
-            return f"解析文件失败: {str(e)}"
+            logging.error(f"解析文件内容失败: {e!s}", exc_info=True)
+            return f"解析文件失败: {e!s}"
 
     @classmethod
     def _fallback_file_parsing(cls, file_content: bytes, file_name: str) -> str:
@@ -369,8 +370,9 @@ class ReferenceService(CommonService):
             return file_content.decode('utf-8', errors='ignore')
         elif file_name.lower().endswith('.pdf'):
             try:
-                import pypdf
                 from io import BytesIO
+
+                import pypdf
 
                 pdf_file = BytesIO(file_content)
                 pdf_reader = pypdf.PdfReader(pdf_file)
@@ -382,8 +384,9 @@ class ReferenceService(CommonService):
                 return "解析PDF需要pypdf库，请安装该库。"
         elif file_name.lower().endswith(('.docx', '.doc')):
             try:
-                import docx
                 from io import BytesIO
+
+                import docx
 
                 doc = docx.Document(BytesIO(file_content))
                 text = "\n".join([para.text for para in doc.paragraphs if para.text.strip()])
@@ -427,8 +430,8 @@ class ReferenceService(CommonService):
             else:
                 return f"无法获取URL内容，状态码: {response.status_code}"
         except Exception as e:
-            logging.error(f"解析URL内容失败: {str(e)}")
-            return f"解析URL内容失败: {str(e)}"
+            logging.error(f"解析URL内容失败: {e!s}")
+            return f"解析URL内容失败: {e!s}"
 
     @classmethod
     def get_summary(cls, content: str, max_length: int = 200) -> str:
@@ -515,7 +518,7 @@ class ReferenceService(CommonService):
             return len(source_refs)
         except Exception as e:
             db.rollback()
-            logging.error(f"转移参考资料失败: {str(e)}")
+            logging.error(f"转移参考资料失败: {e!s}")
             raise e
 
     @classmethod
@@ -578,5 +581,5 @@ class ReferenceService(CommonService):
             return new_ref
         except Exception as e:
             db.rollback()
-            logging.error(f"复制参考资料失败: {str(e)}")
+            logging.error(f"复制参考资料失败: {e!s}")
             raise e

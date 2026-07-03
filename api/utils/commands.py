@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -6,12 +5,9 @@
 @date：2024/7/26 13:55
 @desc:
 """
-import base64
-import click
 import re
 
-from flask import Flask
-from werkzeug.security import generate_password_hash
+import click
 
 from api.db.services import UserService
 
@@ -29,14 +25,14 @@ def reset_email(email, new_email, email_confirm):
         return
     user = UserService.query(email=email)
     if not user:
-        click.echo(click.style('sorry. the account: [{}] not exist .'.format(email), fg='red'))
+        click.echo(click.style(f'sorry. the account: [{email}] not exist .', fg='red'))
         return
     if not re.match(r"^[\w\._-]+@([\w_-]+\.)+[\w-]{2,4}$", new_email):
-        click.echo(click.style('sorry. {} is not a valid email. '.format(new_email), fg='red'))
+        click.echo(click.style(f'sorry. {new_email} is not a valid email. ', fg='red'))
         return
     new_user = UserService.query(email=new_email)
     if new_user:
-        click.echo(click.style('sorry. the account: [{}] is exist .'.format(new_email), fg='red'))
+        click.echo(click.style(f'sorry. the account: [{new_email}] is exist .', fg='red'))
         return
     user_dict = {
         'email': new_email
@@ -44,6 +40,4 @@ def reset_email(email, new_email, email_confirm):
     UserService.update_user(user[0].id,user_dict)
     click.echo(click.style('Congratulations!, email has been reset.', fg='green'))
 
-def register_commands(app: Flask):
-    app.cli.add_command(reset_password)
-    app.cli.add_command(reset_email)
+

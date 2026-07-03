@@ -19,9 +19,8 @@ import inspect
 import pkgutil
 from pathlib import Path
 from types import ModuleType
-from typing import Dict, Type
 
-__all_classes: Dict[str, Type] = {}
+__all_classes: dict[str, type] = {}
 
 _pkg_dir = Path(__file__).resolve().parent
 _pkg_name = __name__
@@ -35,7 +34,7 @@ def _should_skip_module(mod_name: str) -> bool:
 def _import_submodules() -> None:
     for modinfo in pkgutil.walk_packages([str(_pkg_dir)], prefix=_pkg_name + "."):  # noqa: F821
         mod_name = modinfo.name
-        if _should_skip_module(mod_name):  # noqa: F821
+        if _should_skip_module(mod_name):
             continue
         try:
             module = importlib.import_module(mod_name)

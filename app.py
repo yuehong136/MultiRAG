@@ -4,7 +4,7 @@ import os
 import re
 import time
 from enum import Enum
-from typing import Literal, Dict
+from typing import Literal
 from uuid import uuid4
 
 import pandas as pd
@@ -12,13 +12,14 @@ import requests
 import streamlit as st
 from PIL import Image
 
-from core.file.utils import extract_pdf, extract_docx, extract_pptx, extract_text
+from configs import MODEL_PLATFORMS, VERSION
+from core.file.utils import extract_docx, extract_pdf, extract_pptx, extract_text
 from core.llm.cv_model.cv_factory import CVModelFactory
-from core.tools.tools_registry import get_tools, ALL_TOOLS
+from core.tools.tools_registry import ALL_TOOLS, get_tools
+
 # from server.kb import kb_list, process_schema_response, request_milvus
-from utils.api import get_ai_response, get_ai_recommend, process_user_input
-from configs import VERSION, MODEL_PLATFORMS
-from web_ui.dialogue.dialogue import export2md, build_system_prompt
+from utils.api import get_ai_recommend, get_ai_response, process_user_input
+from web_ui.dialogue.dialogue import build_system_prompt, export2md
 
 # Set Streamlit page configuration
 st.set_page_config(
@@ -95,7 +96,7 @@ def load_chat_history(user_id='admin'):
 
 # Function to display chat history
 def display_chat_history(file_name):
-    with open(file_name, 'r', encoding='utf-8') as f:
+    with open(file_name, encoding='utf-8') as f:
         history = json.load(f)
     for message in history:
         with st.chat_message(message["role"]):
@@ -532,7 +533,7 @@ with st.sidebar:
                     "llm", "embed", "image", "reranking", "speech2text", "tts"
                 ] = None,
                 platform_name: str = None,
-        ) -> Dict[str, Dict]:
+        ) -> dict[str, dict]:
             """
             获取配置的模型列表，返回值为:
             {model_name: {

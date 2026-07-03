@@ -15,7 +15,9 @@
 #
 
 import jwt
+
 from common.http_client import sync_request
+
 from .oauth import OAuthClient, UserInfo
 
 
@@ -32,7 +34,7 @@ class OIDCClient(OAuthClient):
         oidc_metadata = self._load_oidc_metadata(self.issuer)
         config.update({
             'issuer': oidc_metadata['issuer'],
-            'jwks_uri': oidc_metadata['jwks_uri'], 
+            'jwks_uri': oidc_metadata['jwks_uri'],
             'authorization_url': oidc_metadata['authorization_endpoint'],
             'token_url': oidc_metadata['token_endpoint'],
             'userinfo_url': oidc_metadata['userinfo_endpoint']
@@ -64,7 +66,7 @@ class OIDCClient(OAuthClient):
         try:
             # Decode JWT header without verifying signature
             headers = jwt.get_unverified_header(id_token)
-            
+
             # OIDC usually uses `RS256` for signing
             alg = headers.get("alg", "RS256")
 
@@ -76,7 +78,7 @@ class OIDCClient(OAuthClient):
             decoded_token = jwt.decode(
                 id_token,
                 key=signing_key,
-                algorithms=[alg],  
+                algorithms=[alg],
                 audience=str(self.client_id),
                 issuer=self.issuer,
             )

@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -6,15 +5,16 @@
 @date：2024/8/6 17:40
 @desc:
 """
+import io
 import logging
+import re
 from email import policy
 from email.parser import BytesParser
-from core.app.naive import chunk as naive_chunk
-import re
-from core.nlp import rag_tokenizer, naive_merge, tokenize_chunks
-from deepdoc.parser import HtmlParser, TxtParser
 from timeit import default_timer as timer
-import io
+
+from core.app.naive import chunk as naive_chunk
+from core.nlp import naive_merge, rag_tokenizer, tokenize_chunks
+from deepdoc.parser import HtmlParser, TxtParser
 
 
 def chunk(
@@ -96,7 +96,7 @@ def chunk(
     )
 
     main_res.extend(tokenize_chunks(chunks, doc, eng, None))
-    logging.debug("naive_merge({}): {}".format(filename, timer() - st))
+    logging.debug(f"naive_merge({filename}): {timer() - st}")
     # get the attachment info
     for part in msg.iter_attachments():
         content_disposition = part.get("Content-Disposition")

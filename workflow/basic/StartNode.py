@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
-from workflow.WorkflowContext import WorkflowContext
 from workflow.basic.Node import Node, NodeParameter
+from workflow.WorkflowContext import WorkflowContext
 
 
 @dataclass

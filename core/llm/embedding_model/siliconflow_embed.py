@@ -1,10 +1,11 @@
-import numpy as np
-import requests
 from urllib.parse import urljoin
 
+import numpy as np
+import requests
+
 from common.log_utils import log_exception
-from core.llm.embedding_model.base import Base
 from common.token_utils import truncate
+from core.llm.embedding_model.base import Base
 
 
 class SILICONFLOWEmbed(Base):

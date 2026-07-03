@@ -1,12 +1,13 @@
-import os
 import copy
-import logging
 import importlib
-from filelock import FileLock
+import logging
+import os
 
-from common.file_utils import get_project_base_directory
-from common.constants import SERVICE_CONF
+from filelock import FileLock
 from ruamel.yaml import YAML
+
+from common.constants import SERVICE_CONF
+from common.file_utils import get_project_base_directory
 
 
 def load_yaml_conf(conf_path):
@@ -17,7 +18,7 @@ def load_yaml_conf(conf_path):
             yaml = YAML(typ="safe", pure=True)
             return yaml.load(f)
     except Exception as e:
-        raise EnvironmentError("loading yaml file config from {} failed:".format(conf_path), e)
+        raise OSError(f"loading yaml file config from {conf_path} failed:", e)
 
 
 def rewrite_yaml_conf(conf_path, config):
@@ -28,7 +29,7 @@ def rewrite_yaml_conf(conf_path, config):
             yaml = YAML(typ="safe")
             yaml.dump(config, f)
     except Exception as e:
-        raise EnvironmentError("rewrite yaml file config {} failed:".format(conf_path), e)
+        raise OSError(f"rewrite yaml file config {conf_path} failed:", e)
 
 
 def conf_realpath(conf_name):

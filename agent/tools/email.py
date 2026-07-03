@@ -13,18 +13,18 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import json
+import logging
 import os
+import smtplib
 import time
 from abc import ABC
-import json
-import smtplib
-import logging
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from email.header import Header
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from email.utils import formataddr
 
-from agent.tools.base import ToolParamBase, ToolBase, ToolMeta
+from agent.tools.base import ToolBase, ToolMeta, ToolParamBase
 from common.connection_utils import timeout
 
 
@@ -172,7 +172,7 @@ class Email(ToolBase, ABC):
                         server.send_message(msg, self._param.email, recipients)
                         success = True
                     except Exception as e:
-                        logging.error(f"Error during send_message: {str(e)}")
+                        logging.error(f"Error during send_message: {e!s}")
                         # Try alternative method
                         server.sendmail(self._param.email, recipients, msg.as_string())
                         success = True
@@ -181,7 +181,7 @@ class Email(ToolBase, ABC):
                         server.quit()
                     except Exception as e:
                         # Ignore errors when closing connection
-                        logging.warning(f"Non-fatal error during connection close: {str(e)}")
+                        logging.warning(f"Non-fatal error during connection close: {e!s}")
 
                 self.set_output("success", success)
                 return success
@@ -207,13 +207,13 @@ class Email(ToolBase, ABC):
                 time.sleep(self._param.delay_after_error)
 
             except smtplib.SMTPException as e:
-                error_msg = f"SMTP error occurred: {str(e)}"
+                error_msg = f"SMTP error occurred: {e!s}"
                 logging.error(error_msg)
                 last_e = error_msg
                 time.sleep(self._param.delay_after_error)
 
             except Exception as e:
-                error_msg = f"Unexpected error: {str(e)}"
+                error_msg = f"Unexpected error: {e!s}"
                 logging.error(error_msg)
                 self.set_output("_ERROR", error_msg)
                 self.set_output("success", False)
@@ -223,7 +223,7 @@ class Email(ToolBase, ABC):
             self.set_output("_ERROR", str(last_e))
             return False
 
-        assert False, self.output()
+        raise AssertionError(self.output())
 
     def thoughts(self) -> str:
         inputs = self.get_input()

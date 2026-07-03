@@ -1,12 +1,13 @@
 import datetime
 import json
 from enum import Enum, IntEnum
-from api.utils.common import string_to_bytes, bytes_to_string
+
+from api.utils.common import bytes_to_string, string_to_bytes
 
 
 class BaseType:
     def to_dict(self):
-        return dict([(k.lstrip("_"), v) for k, v in self.__dict__.items()])
+        return {k.lstrip("_"): v for k, v in self.__dict__.items()}
 
     def to_dict_with_type(self):
         def _dict(obj):

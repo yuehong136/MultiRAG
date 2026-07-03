@@ -13,10 +13,12 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
-from abc import ABC
 import asyncio
+from abc import ABC
+
 from crawl4ai import AsyncWebCrawler
-from agent.tools.base import ToolParamBase, ToolBase
+
+from agent.tools.base import ToolBase, ToolParamBase
 
 
 class CrawlerParam(ToolParamBase):
@@ -48,7 +50,7 @@ class Crawler(ToolBase, ABC):
             return Crawler.be_output(result)
 
         except Exception as e:
-            return Crawler.be_output(f"An unexpected error occurred: {str(e)}")
+            return Crawler.be_output(f"An unexpected error occurred: {e!s}")
 
     async def get_web(self, url):
         if self.check_if_canceled("Crawler async operation"):

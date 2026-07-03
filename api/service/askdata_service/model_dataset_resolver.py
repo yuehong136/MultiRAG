@@ -1,8 +1,8 @@
 import asyncio
-from typing import Dict, List, Set, Tuple
 from collections import Counter
 
 from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+
 logger = get_askdata_logger()
 
 
@@ -16,11 +16,11 @@ class ModelDatasetResolver:
 
     async def get_model_details_and_determine_dataset(
             self,
-            model_ids: List[str],
-            used_models: List[str],
-            dataset_id_list: List[str],
+            model_ids: list[str],
+            used_models: list[str],
+            dataset_id_list: list[str],
             cached_model_details: list | None = None,
-    ) -> Tuple[Dict, Dict, List, Set]:
+    ) -> tuple[dict, dict, list, set]:
         """
         构建模型详情字典，并确定使用的数据集
 
@@ -50,7 +50,7 @@ class ModelDatasetResolver:
         used_model_detail_dict = {}
         used_table_detail_dict = {}
         model_list = []
-        model_in_dataset_dict: Dict[str, List[str]] = {}
+        model_in_dataset_dict: dict[str, list[str]] = {}
 
         # 获取模型详情：缓存优先，API 兜底
         model_detail_list = await self._get_model_details(model_ids, cached_model_details)
@@ -81,7 +81,7 @@ class ModelDatasetResolver:
 
     async def _get_model_details(
             self,
-            model_ids: List[str],
+            model_ids: list[str],
             cached_model_details: list | None,
     ) -> list:
         """缓存优先获取模型详情，缓存未命中则调用 API"""
@@ -133,10 +133,10 @@ class ModelDatasetResolver:
 
     async def _build_model_dicts(
             self,
-            model_ids: List[str],
-            used_models: List[str],
+            model_ids: list[str],
+            used_models: list[str],
             cached_model_details: list | None = None,
-    ) -> Tuple[Dict, Dict, List]:
+    ) -> tuple[dict, dict, list]:
         """
         构建模型相关的字典（仅用于单数据集场景）
         """
@@ -161,9 +161,9 @@ class ModelDatasetResolver:
 
     def _determine_dataset(
             self,
-            model_in_dataset_dict: Dict[str, List[str]],
-            dataset_id_list: List[str]
-    ) -> Set[str]:
+            model_in_dataset_dict: dict[str, list[str]],
+            dataset_id_list: list[str]
+    ) -> set[str]:
         """
         确定最终使用的数据集ID
         """
@@ -187,12 +187,12 @@ class ModelDatasetResolver:
             if dataset_id_list:
                 common_datasets = result_dataset_ids.intersection(set(dataset_id_list))
                 if common_datasets:
-                    selected = list(common_datasets)[0]
+                    selected = next(iter(common_datasets))
                     logger.warning(f"从 {len(common_datasets)} 个匹配的数据集中选择: {selected}")
                     return {selected}
 
             # 使用第一个
-            selected = list(result_dataset_ids)[0]
+            selected = next(iter(result_dataset_ids))
             logger.warning(f"从 {len(result_dataset_ids)} 个数据集中选择第一个: {selected}")
             return {selected}
 
@@ -202,8 +202,8 @@ class ModelDatasetResolver:
 
     def _get_dataset_intersection_or_most_frequent(
             self,
-            data_dict: Dict[str, List[str]]
-    ) -> Set[str]:
+            data_dict: dict[str, list[str]]
+    ) -> set[str]:
         """
         获取所有模型数据集的交集，如果没有交集则返回出现次数最多的数据集
 

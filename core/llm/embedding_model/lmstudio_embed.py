@@ -1,5 +1,7 @@
 from urllib.parse import urljoin
+
 from openai import OpenAI
+
 from core.llm.embedding_model.localai_embed import LocalAIEmbed
 
 

@@ -1,12 +1,12 @@
-from typing import List, Dict, Any, Set
-import json
+from typing import Any
 
 from api.service.askdata_service.util.askdata_logger import get_askdata_logger
+
 logger = get_askdata_logger()
 def filter_model_relations_by_ids(
-        model_ids: List[str],
-        model_relations: List[Dict[str, Any]]
-) -> List[Dict[str, Any]]:
+        model_ids: list[str],
+        model_relations: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     """
     根据给定的model_ids列表，过滤模型关系列表。
 
@@ -26,7 +26,7 @@ def filter_model_relations_by_ids(
 
     # 1. 为了提高查找效率 (O(1) 平均时间复杂度)，将列表转换为集合。
     #    这对于大量的 model_ids 尤为重要。
-    valid_model_ids_set: Set[str] = set(model_ids)
+    valid_model_ids_set: set[str] = set(model_ids)
 
     # 2. 使用列表推导式进行过滤，代码更简洁、高效。
     #    .get() 方法可以安全地处理字典中可能不存在键的情况。

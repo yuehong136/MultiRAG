@@ -1,13 +1,16 @@
 # embedding_model/default_embedding.py
-import re
 import os
+import re
+import threading
+
 import numpy as np
 from huggingface_hub import snapshot_download
-import threading
-from common import settings
+
 from api.utils.file_utils import get_home_cache_dir
+from common import settings
 from common.token_utils import num_tokens_from_string, truncate
 from core.llm.embedding_model.base import Base
+
 
 class DefaultEmbedding(Base):
     _model = None

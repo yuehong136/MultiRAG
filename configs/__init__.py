@@ -1,7 +1,8 @@
-from .kb_config import *
 from .basic_config import *
+from .kb_config import *
 from .model_config import *
 from .server_config import *
+
 OPEN_CROSS_DOMAIN = True
 
 VERSION = "v0.0.1"

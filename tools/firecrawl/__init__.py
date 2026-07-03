@@ -9,7 +9,7 @@ __version__ = "1.0.0"
 __author__ = "Firecrawl Team"
 __description__ = "Firecrawl integration for MultiRAG - Web content scraping and import"
 
-from firecrawl_connector import FirecrawlConnector
 from firecrawl_config import FirecrawlConfig
+from firecrawl_connector import FirecrawlConnector
 
-__all__ = ["FirecrawlConnector", "FirecrawlConfig"]
+__all__ = ["FirecrawlConfig", "FirecrawlConnector"]

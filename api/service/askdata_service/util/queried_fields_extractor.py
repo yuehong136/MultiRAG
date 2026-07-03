@@ -3,7 +3,7 @@
 从SQL组件和语义层中提取实际查询的维度和指标信息
 """
 import re
-from typing import Dict, List, Any, Optional
+from typing import Any
 
 from api.service.askdata_service.util.askdata_logger import get_askdata_logger
 
@@ -14,7 +14,7 @@ class QueriedFieldsExtractor:
     """从SQL组件中提取查询字段并匹配语义信息"""
 
     @staticmethod
-    def _parse_select_fields(select_clause: str) -> List[Dict[str, str]]:
+    def _parse_select_fields(select_clause: str) -> list[dict[str, str]]:
         """
         解析SELECT子句，提取字段和别名
 
@@ -77,7 +77,7 @@ class QueriedFieldsExtractor:
         return fields
 
     @staticmethod
-    def _extract_aggregation_info(field_expr: str) -> Optional[Dict[str, str]]:
+    def _extract_aggregation_info(field_expr: str) -> dict[str, str] | None:
         """
         从字段表达式中提取聚合函数信息
 
@@ -122,7 +122,7 @@ class QueriedFieldsExtractor:
         return field_name.strip()
 
     @staticmethod
-    def _match_dimension(field_info: Dict[str, str], semantic_layer: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _match_dimension(field_info: dict[str, str], semantic_layer: dict[str, Any]) -> dict[str, Any] | None:
         """
         在语义层中匹配维度信息
 
@@ -165,7 +165,7 @@ class QueriedFieldsExtractor:
         return None
 
     @staticmethod
-    def _match_metric(field_info: Dict[str, str], semantic_layer: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _match_metric(field_info: dict[str, str], semantic_layer: dict[str, Any]) -> dict[str, Any] | None:
         """
         在语义层中匹配指标信息
 
@@ -263,10 +263,10 @@ class QueriedFieldsExtractor:
 
     @staticmethod
     def extract_queried_fields(
-        sql_components: Dict[str, Any],
-        semantic_layer: Dict[str, Any],
-        used_models: List[str]
-    ) -> Dict[str, Any]:
+        sql_components: dict[str, Any],
+        semantic_layer: dict[str, Any],
+        used_models: list[str]
+    ) -> dict[str, Any]:
         """
         从SQL组件和语义层中提取查询字段信息
 

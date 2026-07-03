@@ -2,8 +2,8 @@ import json
 
 from openai.lib.azure import AzureOpenAI
 
-from core.llm.cv_model.models.gptv4 import GptV4
 from core.llm.cv_model.base import Base
+from core.llm.cv_model.models.gptv4 import GptV4
 
 
 class AzureGptV4(GptV4):

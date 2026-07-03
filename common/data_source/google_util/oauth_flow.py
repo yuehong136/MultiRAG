@@ -1,7 +1,8 @@
 import json
 import os
 import threading
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from common.data_source.config import DocumentSource
 from common.data_source.google_util.constant import GOOGLE_SCOPES

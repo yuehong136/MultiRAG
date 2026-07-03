@@ -1,17 +1,16 @@
+import json
 import uuid
 from dataclasses import dataclass
-import json
 
 import pyexcel
-
-from common import settings
-from workflow.WorkflowContext import WorkflowContext, NodeIOData
-from workflow.basic.Component import Component, ComponentParameter
-from workflow.basic.Node import ValueTypeOfIODefinition, Batch
 from jsonpath_ng import parse
 
+from common import settings
+from workflow.basic.Component import Component, ComponentParameter
+from workflow.basic.Node import Batch, ValueTypeOfIODefinition
 from workflow.utils import string_cipher
 from workflow.utils.MinioOperator import MinioOperator
+from workflow.WorkflowContext import NodeIOData, WorkflowContext
 
 
 @dataclass
@@ -57,7 +56,7 @@ class ExcelGeneratorComponent(Component[ExcelGeneratorComponentParam]):
                 parsed = parse('$.' + ref_name)
                 actual_ref_value = parsed.find(ref_node_data)[0].value
                 input_value: list[str] = []
-                if type(actual_ref_value) == list:
+                if type(actual_ref_value) is list:
                     for ref_value in actual_ref_value:
                         input_value.append(ref_value[input_definition['content'][2]])
                     parameter_dict[parameter_name] = input_value
@@ -136,7 +135,7 @@ class ExcelGeneratorComponent(Component[ExcelGeneratorComponentParam]):
             pyexcel.save_as(array=all_data, dest_file_name=output_path)
             print(f"Excel文件已成功创建: {output_path}")
         except Exception as e:
-            print(f"创建Excel文件时发生错误: {str(e)}")
+            print(f"创建Excel文件时发生错误: {e!s}")
 
     def transform_dict_to_list(self, parameter_dict, headers):
         """
@@ -164,11 +163,9 @@ class ExcelGeneratorComponent(Component[ExcelGeneratorComponentParam]):
 
 
 import io
-from openpyxl import Workbook
-
-import io
-from openpyxl import Workbook
 from datetime import datetime
+
+from openpyxl import Workbook
 
 
 def create_excel_in_memory(headers, data, filename=None):
@@ -215,7 +212,7 @@ def create_excel_in_memory(headers, data, filename=None):
         print(f"Excel文件 '{filename}' 已成功创建在内存中")
         return filename, excel_bytes
     except Exception as e:
-        print(f"创建Excel文件时发生错误: {str(e)}")
+        print(f"创建Excel文件时发生错误: {e!s}")
         return None, None
     finally:
         excel_buffer.close()

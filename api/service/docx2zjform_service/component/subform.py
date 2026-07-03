@@ -1,6 +1,6 @@
-from .base import Component
 from ..constants import ComponentType
 from ..utils.generate_code import generate_code
+from .base import Component
 from .input import InputComponent
 
 

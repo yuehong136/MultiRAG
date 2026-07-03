@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -11,14 +10,14 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from api.apps import manager
-from api.db.db_models import get_db, MCPServer
+from api.db.db_models import MCPServer, get_db
 from api.db.services.mcp_server_service import MCPServerService
 from api.db.services.user_service import TenantService
-from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response, get_mcp_tools
+from api.utils.api_utils import get_data_error_result, get_json_result, get_mcp_tools, server_error_response
 from api.utils.web_utils import get_float, safe_json_parse
+from common.constants import VALID_MCP_SERVER_TYPES, RetCode
 from common.mcp_tool_call_conn import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
 from common.misc_utils import get_uuid
-from common.constants import RetCode, VALID_MCP_SERVER_TYPES
 
 router = APIRouter()
 
@@ -100,18 +99,18 @@ def list_mcp(
 ):
     """
     ### POST `/list` 获取MCP服务器列表
-    
+
     **功能描述**:
     此接口用于获取MCP服务器列表，支持分页查询、关键词搜索和排序功能。
     用户可以查看自己有权限访问的所有MCP服务器，或指定特定的MCP服务器。
     支持按名称关键词过滤，并提供灵活的排序和分页选项。
-    
+
     ---
     ### 请求体 (Request Body)
     | 字段      | 类型          | 必填 | 描述                         |
     |-----------|---------------|------|------------------------------|
     | `mcp_ids` | `list[string]` | 否   | 指定MCP服务器ID列表，为空时查询所有可访问的服务器 |
-    
+
     ### 查询参数 (Query Parameters)
     | 参数        | 类型      | 必填 | 默认值      | 描述                         |
     |-------------|-----------|------|-------------|------------------------------|
@@ -120,14 +119,14 @@ def list_mcp(
     | `page_size` | `integer` | 否   | 0           | 每页显示的记录数，0表示不分页 |
     | `orderby`   | `string`  | 否   | "create_time" | 排序字段               |
     | `desc`      | `boolean` | 否   | true        | 是否降序排列             |
-    
+
     **请求示例**:
     ```json
     {
         "mcp_ids": ["uuid-server-id-1", "uuid-server-id-2"]
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -156,7 +155,7 @@ def list_mcp(
     """
     req_data = request.model_dump()
     mcp_ids = req_data.get("mcp_ids", [])
-    
+
     try:
         servers = MCPServerService.get_servers(
             db, user.id, mcp_ids, 0, 0, orderby, desc, keywords
@@ -179,22 +178,22 @@ def detail(
 ):
     """
     ### GET `/detail` 获取MCP服务器详情
-    
+
     **功能描述**:
     此接口用于获取指定MCP服务器的详细信息。系统会验证用户对该MCP服务器的访问权限，
     确保用户只能查看有权限的MCP服务器详情，包括服务器的基本信息、配置参数和元数据。
-    
+
     ---
     ### 请求参数 (Query Parameters)
     | 参数      | 类型     | 必填 | 描述               |
     |-----------|----------|------|--------------------|
     | `mcp_id`  | `string` | 是   | MCP服务器的唯一标识符 |
-    
+
     **请求示例**:
     ```
     GET /detail?mcp_id=uuid-server-id
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -221,7 +220,7 @@ def detail(
         }
     }
     ```
-    
+
     #### 错误响应
     - **MCP服务器不存在**:
     ```json
@@ -247,11 +246,11 @@ def detail(
 def create(request: CreateMCPServerRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/create` 创建MCP服务器
-    
+
     **功能描述**:
     此接口用于创建新的MCP服务器配置。用户可以通过提供服务器名称、类型、URL和其他配置信息来创建MCP服务器。
     系统会自动检查名称重复性、验证用户权限，并为MCP服务器分配唯一标识符。
-    
+
     ---
     ### 请求体 (Request Body)
     | 字段          | 类型     | 必填 | 描述                                               |
@@ -262,7 +261,7 @@ def create(request: CreateMCPServerRequest, db: Session = Depends(get_db), user=
     | `description` | `string` | 否   | MCP服务器描述信息，用于说明服务器的用途和功能        |
     | `variables`   | `object` | 否   | MCP服务器变量配置，JSON格式                        |
     | `headers`     | `object` | 否   | 额外的HTTP请求头配置，JSON格式                      |
-    
+
     **请求示例**:
     ```json
     {
@@ -280,7 +279,7 @@ def create(request: CreateMCPServerRequest, db: Session = Depends(get_db), user=
         }
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -293,7 +292,7 @@ def create(request: CreateMCPServerRequest, db: Session = Depends(get_db), user=
         }
     }
     ```
-    
+
     #### 错误响应
     - **不支持的服务器类型**:
     ```json
@@ -375,11 +374,11 @@ def create(request: CreateMCPServerRequest, db: Session = Depends(get_db), user=
 def update(request: UpdateMCPServerRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/update` 更新MCP服务器
-    
+
     **功能描述**:
     此接口用于更新现有的MCP服务器配置信息。支持更新服务器名称、类型、URL、描述和配置参数。
     系统会验证用户权限、检查服务器类型有效性，并合并配置参数，保留现有配置的同时应用新的设置。
-    
+
     ---
     ### 请求体 (Request Body)
     | 字段          | 类型     | 必填 | 描述                                               |
@@ -391,7 +390,7 @@ def update(request: UpdateMCPServerRequest, db: Session = Depends(get_db), user=
     | `description` | `string` | 否   | 新的MCP服务器描述                                  |
     | `variables`   | `object` | 否   | 新的变量配置，会与现有配置合并                      |
     | `headers`     | `object` | 否   | 新的请求头配置，会与现有配置合并                    |
-    
+
     **请求示例**:
     ```json
     {
@@ -409,7 +408,7 @@ def update(request: UpdateMCPServerRequest, db: Session = Depends(get_db), user=
         }
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -437,7 +436,7 @@ def update(request: UpdateMCPServerRequest, db: Session = Depends(get_db), user=
         }
     }
     ```
-    
+
     #### 错误响应
     - **更新失败**:
     ```json
@@ -520,24 +519,24 @@ def update(request: UpdateMCPServerRequest, db: Session = Depends(get_db), user=
 def get_multiple(request: GetMultipleMCPServerRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/get_multiple` 批量获取MCP服务器
-    
+
     **功能描述**:
     此接口用于根据ID列表批量获取MCP服务器详情。用户可以通过提供MCP服务器ID列表，
     一次性获取多个MCP服务器的详细信息。系统会验证用户对每个MCP服务器的访问权限。
-    
+
     ---
     ### 请求体 (Request Body)
     | 字段      | 类型          | 必填 | 描述                     |
     |-----------|---------------|------|--------------------------|
     | `id_list` | `list[string]` | 是   | MCP服务器ID列表           |
-    
+
     **请求示例**:
     ```json
     {
         "id_list": ["uuid-server-id-1", "uuid-server-id-2", "uuid-server-id-3"]
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -563,16 +562,16 @@ def get_multiple(request: GetMultipleMCPServerRequest, db: Session = Depends(get
     """
     req_data = request.model_dump()
     id_list = req_data.get("id_list", [])
-    
+
     if not id_list:
         return get_json_result(data=[])
-    
+
     try:
         # 使用get_servers方法，传入id_list
         servers = MCPServerService.get_servers(
             db, user.id, id_list, 0, 0, "create_time", True, ""
         ) or []
-        
+
         return get_json_result(data=servers)
     except Exception as e:
         return server_error_response(e)
@@ -582,24 +581,24 @@ def get_multiple(request: GetMultipleMCPServerRequest, db: Session = Depends(get
 def rm(request: RemoveMCPServerRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/rm` 删除MCP服务器
-    
+
     **功能描述**:
     此接口用于删除指定的MCP服务器。执行的是软删除操作，即将MCP服务器状态标记为已删除，
     而不是物理删除数据。系统会验证用户对该MCP服务器的删除权限，确保只有授权用户才能执行删除操作。
-    
+
     ---
     ### 请求体 (Request Body)
     | 字段      | 类型          | 必填 | 描述                     |
     |-----------|---------------|------|--------------------------|
     | `mcp_ids` | `list[string]` | 是   | 要删除的MCP服务器ID列表   |
-    
+
     **请求示例**:
     ```json
     {
         "mcp_ids": ["uuid-server-id-1", "uuid-server-id-2"]
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -610,7 +609,7 @@ def rm(request: RemoveMCPServerRequest, db: Session = Depends(get_db), user=Depe
         "data": true
     }
     ```
-    
+
     #### 错误响应
     - **删除失败**:
     ```json
@@ -638,17 +637,17 @@ def rm(request: RemoveMCPServerRequest, db: Session = Depends(get_db), user=Depe
 def import_multiple(request: ImportMCPServerRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/import` 批量导入MCP服务器
-    
+
     **功能描述**:
     此接口用于批量导入多个MCP服务器配置。支持从外部配置文件或其他系统导入MCP服务器设置。
     系统会自动处理重名冲突，确保每个导入的服务器都有唯一的名称。
-    
+
     ---
     ### 请求体 (Request Body)
     | 字段         | 类型     | 必填 | 描述                             |
     |--------------|----------|------|----------------------------------|
     | `mcpServers` | `object` | 是   | MCP服务器配置对象，键为服务器名称 |
-    
+
     **请求示例**:
     ```json
     {
@@ -672,7 +671,7 @@ def import_multiple(request: ImportMCPServerRequest, db: Session = Depends(get_d
         }
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -771,24 +770,24 @@ def import_multiple(request: ImportMCPServerRequest, db: Session = Depends(get_d
 def export_multiple(request: ExportMCPServerRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/export` 批量导出MCP服务器
-    
+
     **功能描述**:
     此接口用于批量导出指定的MCP服务器配置。用户可以将MCP服务器配置导出为标准格式，
     便于备份、迁移或与其他系统集成。导出的配置包含服务器的所有关键信息。
-    
+
     ---
     ### 请求体 (Request Body)
     | 字段      | 类型          | 必填 | 描述                     |
     |-----------|---------------|------|--------------------------|
     | `mcp_ids` | `list[string]` | 是   | 要导出的MCP服务器ID列表   |
-    
+
     **请求示例**:
     ```json
     {
         "mcp_ids": ["uuid-server-id-1", "uuid-server-id-2"]
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -820,7 +819,7 @@ def export_multiple(request: ExportMCPServerRequest, db: Session = Depends(get_d
         }
     }
     ```
-    
+
     #### 错误响应
     - **无MCP服务器ID**:
     ```json
@@ -863,18 +862,18 @@ def export_multiple(request: ExportMCPServerRequest, db: Session = Depends(get_d
 def list_tools(request: ListToolsRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/list_tools` 获取MCP服务器工具列表
-    
+
     **功能描述**:
     此接口用于获取指定MCP服务器的工具列表。通过连接到MCP服务器并查询其可用工具，
     返回每个工具的详细信息，包括工具名称、描述、参数等。支持批量查询多个MCP服务器的工具。
-    
+
     ---
     ### 请求体 (Request Body)
     | 字段      | 类型          | 必填 | 描述                         |
     |-----------|---------------|------|------------------------------|
     | `mcp_ids` | `list[string]` | 是   | MCP服务器ID列表               |
     | `timeout` | `float`       | 否   | 连接超时时间（秒），默认10.0   |
-    
+
     **请求示例**:
     ```json
     {
@@ -882,7 +881,7 @@ def list_tools(request: ListToolsRequest, db: Session = Depends(get_db), user=De
         "timeout": 15.0
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -944,7 +943,7 @@ def list_tools(request: ListToolsRequest, db: Session = Depends(get_db), user=De
         }
     }
     ```
-    
+
     #### 错误响应
     - **无MCP服务器ID**:
     ```json
@@ -962,7 +961,7 @@ def list_tools(request: ListToolsRequest, db: Session = Depends(get_db), user=De
         "data": null
     }
     ```
-    
+
     ---
     ### 主要流程
     1. 验证请求参数，确保提供了MCP服务器ID列表
@@ -970,7 +969,7 @@ def list_tools(request: ListToolsRequest, db: Session = Depends(get_db), user=De
     3. 为每个有效的MCP服务器创建工具调用会话
     4. 并行查询所有MCP服务器的工具列表
     5. 关闭所有会话连接并返回结果
-    
+
     ---
     ### 注意事项
     - **权限验证**: 只能查询用户有权限的MCP服务器工具
@@ -981,7 +980,7 @@ def list_tools(request: ListToolsRequest, db: Session = Depends(get_db), user=De
     """
     req_data = request.model_dump()
     mcp_ids = req_data.get("mcp_ids", [])
-    
+
     if not mcp_ids:
         return get_data_error_result(retmsg="No MCP server IDs provided.")
 
@@ -1026,11 +1025,11 @@ def list_tools(request: ListToolsRequest, db: Session = Depends(get_db), user=De
 def test_tool(request: TestToolRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/test_tool` 测试MCP工具
-    
+
     **功能描述**:
     此接口用于测试指定MCP服务器的特定工具。通过连接到MCP服务器并调用指定工具，
     返回工具执行结果。主要用于验证工具功能、调试工具参数或演示工具能力。
-    
+
     ---
     ### 请求体 (Request Body)
     | 字段        | 类型     | 必填 | 描述                         |
@@ -1039,7 +1038,7 @@ def test_tool(request: TestToolRequest, db: Session = Depends(get_db), user=Depe
     | `tool_name` | `string` | 是   | 要测试的工具名称               |
     | `arguments` | `object` | 是   | 工具参数，JSON对象格式         |
     | `timeout`   | `float`  | 否   | 执行超时时间（秒），默认10.0   |
-    
+
     **请求示例**:
     ```json
     {
@@ -1052,7 +1051,7 @@ def test_tool(request: TestToolRequest, db: Session = Depends(get_db), user=Depe
         "timeout": 30.0
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -1071,7 +1070,7 @@ def test_tool(request: TestToolRequest, db: Session = Depends(get_db), user=Depe
         }
     }
     ```
-    
+
     #### 错误响应
     - **无MCP服务器ID**:
     ```json
@@ -1113,7 +1112,7 @@ def test_tool(request: TestToolRequest, db: Session = Depends(get_db), user=Depe
         }
     }
     ```
-    
+
     ---
     ### 主要流程
     1. 验证请求参数，确保提供了必要的工具信息
@@ -1121,7 +1120,7 @@ def test_tool(request: TestToolRequest, db: Session = Depends(get_db), user=Depe
     3. 创建MCP工具调用会话
     4. 执行指定工具并传入参数
     5. 关闭会话连接并返回执行结果
-    
+
     ---
     ### 注意事项
     - **权限验证**: 只能测试用户有权限的MCP服务器工具
@@ -1133,7 +1132,7 @@ def test_tool(request: TestToolRequest, db: Session = Depends(get_db), user=Depe
     """
     req_data = request.model_dump()
     mcp_id = req_data.get("mcp_id", "")
-    
+
     if not mcp_id:
         return get_data_error_result(retmsg="No MCP server ID provided.")
 
@@ -1141,7 +1140,7 @@ def test_tool(request: TestToolRequest, db: Session = Depends(get_db), user=Depe
 
     tool_name = req_data.get("tool_name", "")
     arguments = req_data.get("arguments", {})
-    
+
     if not all([tool_name, arguments]):
         return get_data_error_result(retmsg="Require provide tool name and arguments.")
 
@@ -1166,18 +1165,18 @@ def test_tool(request: TestToolRequest, db: Session = Depends(get_db), user=Depe
 def cache_tools(request: CacheToolsRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/cache_tools` 缓存MCP工具配置
-    
+
     **功能描述**:
     此接口用于缓存MCP服务器的工具配置信息。将工具列表保存到MCP服务器的variables中，
     用于后续快速访问工具信息，避免重复查询MCP服务器。支持工具的启用/禁用状态管理。
-    
+
     ---
     ### 请求体 (Request Body)
     | 字段      | 类型          | 必填 | 描述                           |
     |-----------|---------------|------|--------------------------------|
     | `mcp_id`  | `string`      | 是   | MCP服务器ID                     |
     | `tools`   | `list[object]` | 是   | 工具列表，每个工具包含name字段   |
-    
+
     **请求示例**:
     ```json
     {
@@ -1216,7 +1215,7 @@ def cache_tools(request: CacheToolsRequest, db: Session = Depends(get_db), user=
         ]
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -1258,7 +1257,7 @@ def cache_tools(request: CacheToolsRequest, db: Session = Depends(get_db), user=
         }
     }
     ```
-    
+
     #### 错误响应
     - **无MCP服务器ID**:
     ```json
@@ -1284,7 +1283,7 @@ def cache_tools(request: CacheToolsRequest, db: Session = Depends(get_db), user=
         "data": null
     }
     ```
-    
+
     ---
     ### 主要流程
     1. 验证请求参数，确保提供了MCP服务器ID和工具列表
@@ -1292,7 +1291,7 @@ def cache_tools(request: CacheToolsRequest, db: Session = Depends(get_db), user=
     3. 将工具列表转换为以工具名称为键的字典格式
     4. 更新MCP服务器的variables字段，保存工具缓存
     5. 返回缓存的工具配置信息
-    
+
     ---
     ### 注意事项
     - **权限验证**: 只能缓存用户有权限的MCP服务器工具
@@ -1304,10 +1303,10 @@ def cache_tools(request: CacheToolsRequest, db: Session = Depends(get_db), user=
     """
     req_data = request.model_dump()
     mcp_id = req_data.get("mcp_id", "")
-    
+
     if not mcp_id:
         return get_data_error_result(retmsg="No MCP server ID provided.")
-    
+
     tools = req_data.get("tools", [])
 
     try:
@@ -1317,7 +1316,7 @@ def cache_tools(request: CacheToolsRequest, db: Session = Depends(get_db), user=
 
         # 获取现有的variables
         variables = mcp_server.variables or {}
-        
+
         # 将工具列表转换为字典格式，以工具名称为键
         tools_dict = {tool["name"]: tool for tool in tools if isinstance(tool, dict) and "name" in tool}
         variables["tools"] = tools_dict

@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 import unicodedata
 
-
 ARABIC_PRESENTATION_FORMS_RE = re.compile(r"[\uFB50-\uFDFF\uFE70-\uFEFF]")
 
 

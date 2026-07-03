@@ -1,30 +1,29 @@
 import json
 from enum import Enum
-from typing import List, Any, Dict, Optional
+from typing import Any
 
-from fastapi import APIRouter, Depends, Body, BackgroundTasks, Request
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from fastapi.responses import StreamingResponse
 
-from api.db.db_models import get_db
 from api.apps import manager
+from api.db.db_models import get_db
 from api.service.askdata_service.askdata_service import AskdataService, get_askdata_service
+from api.service.askdata_service.cache import perf_cache, semantic_layer_cache
 from api.service.askdata_service.event.event_handlers import create_sse_response
+from api.service.askdata_service.stop_request_manager import stop_request_manager
 from api.service.askdata_service.util.askdata_logger import (
-    get_askdata_logger,
     askdata_ask_id,
     askdata_query,
+    get_askdata_logger,
     log_incident,
 )
 from api.service.askdata_service.util.sql_retry_handler import SQLRetryHandler
 from api.service.askdata_service.util.sqlglot_utils import (
-    try_extract_components,
-    try_apply_pagination,
     normalize_sql_components,
+    try_apply_pagination,
+    try_extract_components,
 )
-from api.service.askdata_service.stop_request_manager import stop_request_manager
-from api.service.askdata_service.cache import semantic_layer_cache, perf_cache
 from api.service.nl2sql_service.query_data_from_zt_by_sql import query_data_with_params
 
 router = APIRouter()
@@ -45,11 +44,11 @@ class ResponseSchema(BaseModel):
 class GetSqlAndTableConfigReq(BaseModel):
     """自然语言转初始SQL请求的基础模型"""
     user_query: str = Field(..., title="查询文本", description="用户提出的自然语言查询文本")
-    dataset_id_list: List[str] = Field([], title="数据集ID列表", description="数据集ID列表")
+    dataset_id_list: list[str] = Field([], title="数据集ID列表", description="数据集ID列表")
     llm_name: str = Field("gpt-4", title="LLM模型名称", description="用于将自然语言转换为SQL的LLM模型名称")
     conversation_id: str = Field(None, title="conversation_id", description="conversation_id")
     ask_id: str = Field(None, title="ask_id", description="用户的提问ID")
-    semantic_layer: Dict[str, Any] = Field({}, title="语义层", description="语义层")
+    semantic_layer: dict[str, Any] = Field({}, title="语义层", description="语义层")
     clear_cache: bool = Field(False, title="清除缓存", description="是否清除LLM响应缓存")
 
 
@@ -108,7 +107,7 @@ async def get_sql_and_table_config(
                 }
             )
 
-        cached_semantic_data = semantic_layer_cache.get(body.ask_id) 
+        cached_semantic_data = semantic_layer_cache.get(body.ask_id)
         if not cached_semantic_data:
             logger.error(f"缓存中未找到语义层数据: ask_id={body.ask_id}")
             return ResponseSchema(
@@ -189,7 +188,7 @@ async def get_sql_and_table_config(
                     return ResponseSchema(
                         # 虽然无法生成SQL，但这里要返回成功的状态，因为中台接口只有在收到成功的状态才能将data返回给前端。
                         status=StatusEnum.SUCCESS,
-                        message=f"SQL生成失败: {str(e)}",
+                        message=f"SQL生成失败: {e!s}",
                         data={
                             "status": StatusEnum.ERROR,
                             "message": str(e),
@@ -203,7 +202,7 @@ async def get_sql_and_table_config(
                 status=StatusEnum.ERROR,
                 message="无法确定查询的数据集"
             )
-        dataset_id = list(intersection_dataset_ids)[0]
+        dataset_id = next(iter(intersection_dataset_ids))
 
         # ========== 使用 SQLRetryHandler 执行和修复 ==========
 
@@ -267,7 +266,7 @@ async def get_sql_and_table_config(
                         status=StatusEnum.ERROR,
                         message="修复后无法确定查询的数据集"
                     )
-                dataset_id = list(new_intersection_dataset_ids)[0]
+                dataset_id = next(iter(new_intersection_dataset_ids))
                 used_models = final_used_models
 
         # 复杂查询，直接返回结果
@@ -367,7 +366,7 @@ async def get_sql_and_table_config(
                     return ResponseSchema(
                         # 虽然无法生成SQL，但这里要返回成功的状态，因为中台接口只有在收到成功的状态才能将data返回给前端。
                         status=StatusEnum.SUCCESS,
-                        message=f"SQL生成失败: {str(e)}",
+                        message=f"SQL生成失败: {e!s}",
                         data={
                             "status": StatusEnum.ERROR,
                             "message": str(e),
@@ -484,12 +483,12 @@ class AnalyzeUserQueryRequest(BaseModel):
     conversation_id: str = Field(..., description="会话ID")
     ask_id: str = Field(..., description="用户的提问ID")
     user_query: str = Field(..., description="用户查询")
-    llm_name: Optional[str] = Field(default=None, description="指定使用的模型名称")
-    dataset_id_list: List[str] = Field([], title="数据集ID列表", description="数据集ID列表")
-    semantic_layer: Dict[str, Any] = Field(..., title="语义层", description="语义层")
-    round_id: Optional[str] = Field(None, title="多轮对话的分组ID",
+    llm_name: str | None = Field(default=None, description="指定使用的模型名称")
+    dataset_id_list: list[str] = Field([], title="数据集ID列表", description="数据集ID列表")
+    semantic_layer: dict[str, Any] = Field(..., title="语义层", description="语义层")
+    round_id: str | None = Field(None, title="多轮对话的分组ID",
                                     description="如果是多轮对话，那么同一组对话所享有的ID")
-    rewritten_question: Optional[str] = Field(None, title="重写的问题", description="重写的问题")
+    rewritten_question: str | None = Field(None, title="重写的问题", description="重写的问题")
 
 
 class AnalyzeUserQueryResponse(BaseModel):
@@ -573,7 +572,7 @@ async def analyze_user_query_background_task(
             await event_manager.publish(
                 event_id=event_id,
                 data={
-                    "message": f"后台任务失败: {str(e)}",
+                    "message": f"后台任务失败: {e!s}",
                     "error": str(e),
                     "status": "task_error"
                 },
@@ -629,7 +628,7 @@ def analyze_user_query_streaming(
         logger.exception("使用自定义事件ID启动流式聊天失败")
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"启动聊天失败：{str(e)}"
+            message=f"启动聊天失败：{e!s}"
         )
 
 
@@ -638,7 +637,7 @@ class SemanticLayerRequest(BaseModel):
     ask_id: str = Field(..., description="用户的提问ID")
     user_query: str = Field(..., description="用户查询")
     llm_name: str = Field("", title="LLM模型名称", description="")
-    dataset_id_list: List[str] = Field(
+    dataset_id_list: list[str] = Field(
         [],
         title="数据集ID列表",
         description="数据集ID列表",
@@ -660,7 +659,7 @@ class SemanticLayerRequest(BaseModel):
         title="启用多轮问答",
         description="是否启用多轮问答功能"
     )
-    round_id: Optional[str] = Field(
+    round_id: str | None = Field(
         "",
         title="多轮对话的分组ID",
         description="如果是多轮对话，那么同一组对话所享有的ID"
@@ -729,7 +728,7 @@ async def get_semantic_layer_streaming(
                 data=cache_data
             )
             if not cache_success:
-                logger.error(f"存储语义层数据到缓存失败")
+                logger.error("存储语义层数据到缓存失败")
         else:
             logger.warning("ask_id为空，无法缓存语义层数据")
 
@@ -755,7 +754,7 @@ async def get_semantic_layer_streaming(
         return ResponseSchema(
             # 虽然无法生成SQL，但这里要返回成功的状态，因为中台接口只有在收到成功的状态才能将data返回给前端。
             status=StatusEnum.SUCCESS,
-            message=f"获得语义层信息失败：{str(e)}",
+            message=f"获得语义层信息失败：{e!s}",
             data={
                 "status": StatusEnum.ERROR,
                 "message": str(e),
@@ -773,7 +772,7 @@ class AddHistoryRequest(BaseModel):
     data: str = Field(..., description="历史记录内容, 可以是JSON字符串")
     round_id: str = Field("", description="对话轮次ID")
     user_origin_question: str = Field("", description="用户原始问题")
-    rewritten_question: Optional[str] = Field("", description="重写后的问题")
+    rewritten_question: str | None = Field("", description="重写后的问题")
     processed_semantic_layer: str = Field("", description="处理后的语义层")
 
 
@@ -906,12 +905,12 @@ class ReQueryRequest(BaseModel):
     conversation_id: str = Field(..., description="会话ID")
     ask_id: str = Field(..., description="用户的提问ID")
     chart_type: str = Field(..., description="图表类型")
-    table_config: Dict[str, Any] = Field(..., description="表配置")
-    sql_components: Dict[str, Any] = Field(..., description="SQL组件")
-    model_table_alias_mapping_list: List[Dict[str, Any]] = Field(..., description="模型表别名映射列表")
+    table_config: dict[str, Any] = Field(..., description="表配置")
+    sql_components: dict[str, Any] = Field(..., description="SQL组件")
+    model_table_alias_mapping_list: list[dict[str, Any]] = Field(..., description="模型表别名映射列表")
     dataset_id: str = Field(..., description="数据集ID")
     userid: str = Field(..., description="用户ID")
-    pagination_info: Optional[Dict[str, Any]] = Field(None, description="分页信息")
+    pagination_info: dict[str, Any] | None = Field(None, description="分页信息")
 
     class Config:
         protected_namespaces = ()
@@ -1018,7 +1017,7 @@ async def re_query(
         log_incident("re-query", e, chart_type=body.chart_type)
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"生成re-query SQL失败：{str(e)}"
+            message=f"生成re-query SQL失败：{e!s}"
         )
     finally:
         askdata_query.reset(q_token)
@@ -1027,7 +1026,7 @@ async def re_query(
 class ExportSqlRequest(ReQueryRequest):
     # 与 re-query 同一份入参（chart_type/table_config/sql_components/.../dataset_id/userid），
     # 仅多一个由中台透传的导出行数安全上限。pagination_info 字段在导出场景被忽略（恒为不分页）。
-    export_ceiling: Optional[int] = Field(None, description="导出行数安全上限（中台透传系统参数，缺省时引擎不额外封顶，依赖用户N上限）")
+    export_ceiling: int | None = Field(None, description="导出行数安全上限（中台透传系统参数，缺省时引擎不额外封顶，依赖用户N上限）")
 
 
 @router.post("/export-sql", response_model=ResponseSchema,
@@ -1086,7 +1085,7 @@ async def export_sql(
         log_incident("export-sql", e, chart_type=body.chart_type)
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"生成导出SQL失败：{str(e)}"
+            message=f"生成导出SQL失败：{e!s}"
         )
     finally:
         askdata_query.reset(q_token)
@@ -1099,7 +1098,7 @@ class GetHCDimValuesByDimValueRequest(BaseModel):
     dimension_id: str = Field(..., title="维度ID", description="高基数维度的ID")
     page_index: int = Field(1, title="页码", description="页码，从1开始", ge=1)
     page_size: int = Field(20, title="页面大小", description="每页返回的记录数", ge=1, le=1000)
-    fuzzy_match: Optional[bool] = Field(True, title="模糊匹配", description="是否启用模糊匹配")
+    fuzzy_match: bool | None = Field(True, title="模糊匹配", description="是否启用模糊匹配")
     userid: str = Field(
         "",
         title="用户ID",
@@ -1188,7 +1187,7 @@ async def get_hc_dim_values_by_dim_value(
         logger.exception("获取高基数维度值失败")
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"获取高基数维度值失败: {str(e)}"
+            message=f"获取高基数维度值失败: {e!s}"
         )
 
 
@@ -1230,7 +1229,7 @@ async def generate_wide_table_sql(
         logger.exception("generate-wide-table-sql 发生异常")
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"处理请求失败：{str(e)}"
+            message=f"处理请求失败：{e!s}"
         )
 
 
@@ -1278,5 +1277,5 @@ def stop_request(ask_id: str) -> ResponseSchema:
         logger.exception(f"停止请求 {ask_id} 时发生异常")
         return ResponseSchema(
             status=StatusEnum.ERROR,
-            message=f"停止请求失败：{str(e)}"
+            message=f"停止请求失败：{e!s}"
         )

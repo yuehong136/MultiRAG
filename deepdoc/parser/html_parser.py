@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 #
 #  Copyright 2025 The InfiniFlow Authors. All Rights Reserved.
 #
@@ -15,11 +14,14 @@
 #  limitations under the License.
 #
 
-from core.nlp import find_codec, rag_tokenizer
-import uuid
-import chardet
-from bs4 import BeautifulSoup, NavigableString, Tag, Comment
 import html
+import uuid
+
+import chardet
+from bs4 import BeautifulSoup, Comment, NavigableString, Tag
+
+from core.nlp import find_codec, rag_tokenizer
+
 
 def get_encoding(file):
     with open(file,'rb') as f:
@@ -42,7 +44,7 @@ class RAGFlowHtmlParser:
             encoding = find_codec(binary)
             txt = binary.decode(encoding, errors="ignore")
         else:
-            with open(fnm, "r",encoding=get_encoding(fnm)) as f:
+            with open(fnm,encoding=get_encoding(fnm)) as f:
                 txt = f.read()
         return self.parser_txt(txt, chunk_token_num)
 

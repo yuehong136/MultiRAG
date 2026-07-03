@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -11,18 +10,17 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from api.apps import manager
-from api.db.db_models import get_db
-from api.utils.api_utils import get_json_result, get_error_argument_result
-from api.utils.tenant_utils import ensure_tenant_model_id_for_params
-from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
 from api.apps.services import memory_api_service
+from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
+from api.db.db_models import get_db
+from api.utils.api_utils import get_error_argument_result, get_json_result
+from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from common.constants import RetCode
 from common.exceptions import ArgumentException, NotFoundException
-
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -97,7 +95,7 @@ def update_memory(
     db: Session = Depends(get_db),
     user=Depends(manager)
 ):
-    new_settings = {k: v for k, v in request_body.model_dump(exclude_unset=True).items()}
+    new_settings = dict(request_body.model_dump(exclude_unset=True).items())
     try:
         success, result = memory_api_service.update_memory(db, memory_id, new_settings)
         if success:

@@ -1,7 +1,8 @@
 import json
 from dataclasses import dataclass
-from workflow.WorkflowContext import WorkflowContext, NodeIOData
+
 from workflow.basic.Component import Component, ComponentParameter
+from workflow.WorkflowContext import NodeIOData, WorkflowContext
 
 
 @dataclass

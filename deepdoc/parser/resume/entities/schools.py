@@ -11,10 +11,11 @@
 #  limitations under the License.
 #
 
-import os
-import json
-import re
 import copy
+import json
+import os
+import re
+
 import pandas as pd
 
 current_file_path = os.path.dirname(os.path.abspath(__file__))
@@ -22,14 +23,14 @@ TBL = pd.read_csv(
     os.path.join(current_file_path, "res/schools.csv"), sep="\t", header=0
 ).fillna("")
 TBL["name_en"] = TBL["name_en"].map(lambda x: x.lower().strip())
-GOOD_SCH = json.load(open(os.path.join(current_file_path, "res/good_sch.json"), "r", encoding="utf-8"))
-GOOD_SCH = set([re.sub(r"[,. &（）()]+", "", c) for c in GOOD_SCH])
+GOOD_SCH = json.load(open(os.path.join(current_file_path, "res/good_sch.json"), encoding="utf-8"))
+GOOD_SCH = {re.sub(r"[,. &（）()]+", "", c) for c in GOOD_SCH}
 
 
 def loadRank(fnm):
     global TBL
     TBL["rank"] = 1000000
-    with open(fnm, "r", encoding="utf-8") as f:
+    with open(fnm, encoding="utf-8") as f:
         while True:
             line = f.readline()
             if not line:

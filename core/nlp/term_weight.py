@@ -1,16 +1,18 @@
+import json
 import logging
 import math
-import json
-import re
 import os
+import re
+
 import numpy as np
-from core.nlp import rag_tokenizer
+
 from common.file_utils import get_project_base_directory
+from core.nlp import rag_tokenizer
 
 
 class Dealer:
     def __init__(self):
-        self.stop_words = set(["请问",
+        self.stop_words = {"请问",
                                "您",
                                "你",
                                "我",
@@ -25,7 +27,6 @@ class Dealer:
                                "在",
                                "为",
                                "最",
-                               "有",
                                "从",
                                "以",
                                "了",
@@ -40,11 +41,11 @@ class Dealer:
                                "哪个",
                                "哪些",
                                "啥",
-                               "相关"])
+                               "相关"}
 
         def load_dict(fnm):
             res = {}
-            with open(fnm, "r", encoding="utf-8") as f:
+            with open(fnm, encoding="utf-8") as f:
                 while True:
                     line = f.readline()
                     if not line:
@@ -65,7 +66,7 @@ class Dealer:
         fnm = os.path.join(get_project_base_directory(), "core/res")
         self.ne, self.df = {}, {}
         try:
-            with open(os.path.join(fnm, "ner.json"), "r", encoding="utf-8") as f:
+            with open(os.path.join(fnm, "ner.json"), encoding="utf-8") as f:
                 self.ne = json.load(f)
         except Exception:
             logging.warning("Load ner.json FAIL!")
@@ -162,11 +163,11 @@ class Dealer:
 
         def postag(t):
             t = rag_tokenizer.tag(t)
-            if t in set(["r", "c", "d"]):
+            if t in {"r", "c", "d"}:
                 return 0.3
-            if t in set(["ns", "nt"]):
+            if t in {"ns", "nt"}:
                 return 3
-            if t in set(["n"]):
+            if t in {"n"}:
                 return 2
             if re.match(r"[0-9-]+", t):
                 return 2
@@ -212,7 +213,7 @@ class Dealer:
             idf1 = np.array([idf(freq(t), 10000000) for t in tks])
             idf2 = np.array([idf(df(t), 1000000000) for t in tks])
             wts = (0.3 * idf1 + 0.7 * idf2) * np.array([ner(t) * postag(t) for t in tks])
-            wts = [s for s in wts]
+            wts = list(wts)
             tw = list(zip(tks, wts))
         else:
             for tk in tks:
@@ -220,7 +221,7 @@ class Dealer:
                 idf1 = np.array([idf(freq(t), 10000000) for t in tt])
                 idf2 = np.array([idf(df(t), 1000000000) for t in tt])
                 wts = (0.3 * idf1 + 0.7 * idf2) * np.array([ner(t) * postag(t) for t in tt])
-                wts = [s for s in wts]
+                wts = list(wts)
                 tw.extend(zip(tt, wts))
 
         S = np.sum([s for _, s in tw])

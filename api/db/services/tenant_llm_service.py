@@ -1,7 +1,8 @@
 import json
-import os
 import logging
+import os
 from dataclasses import dataclass
+
 from langfuse import Langfuse
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -12,8 +13,8 @@ from api.db.services.common_service import CommonService
 from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.user_service import TenantService
 from common import settings
-from common.constants import LLMType, MINERU_DEFAULT_CONFIG, MINERU_ENV_KEYS, PADDLEOCR_DEFAULT_CONFIG, PADDLEOCR_ENV_KEYS
-from core.llm import ChatModel, CvModel, EmbeddingModel, RerankModel, Seq2txtModel, TTSModel, OcrModel
+from common.constants import MINERU_DEFAULT_CONFIG, MINERU_ENV_KEYS, PADDLEOCR_DEFAULT_CONFIG, PADDLEOCR_ENV_KEYS, LLMType
+from core.llm import ChatModel, CvModel, EmbeddingModel, OcrModel, RerankModel, Seq2txtModel, TTSModel
 
 
 class LLMFactoriesService(CommonService):
@@ -109,7 +110,7 @@ class TenantLLMService(CommonService):
         # model name must be xxx@yyy
         try:
             model_factories = settings.FACTORY_LLM_INFOS
-            model_providers = set([f["name"] for f in model_factories])
+            model_providers = {f["name"] for f in model_factories}
             if arr[-1] not in model_providers:
                 return model_name, None
             return arr[0], arr[-1]

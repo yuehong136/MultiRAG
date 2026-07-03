@@ -1,4 +1,3 @@
-# coding=utf-8
 """RESTful document API endpoints mounted under /api/v1."""
 
 from __future__ import annotations

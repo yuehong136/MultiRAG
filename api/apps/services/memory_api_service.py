@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -8,20 +7,20 @@
 """
 from sqlalchemy.orm import Session
 
-from api.db.services.memory_service import MemoryService
-from api.db.services.user_service import UserTenantService
-from api.db.services.canvas_service import UserCanvasService
-from api.db.services.task_service import TaskService
+from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
 from api.db.joint_services.memory_message_service import (
     get_memory_size_cache,
     judge_system_prompt_is_default,
-    queue_save_to_memory_task,
     query_message,
+    queue_save_to_memory_task,
 )
-from api.utils.tenant_utils import ensure_tenant_model_id_for_params
+from api.db.services.canvas_service import UserCanvasService
+from api.db.services.memory_service import MemoryService
+from api.db.services.task_service import TaskService
+from api.db.services.user_service import UserTenantService
 from api.utils.memory_utils import format_ret_data_from_memory, get_memory_type_human
-from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
-from common.constants import MemoryType, TenantPermission, ForgettingPolicy
+from api.utils.tenant_utils import ensure_tenant_model_id_for_params
+from common.constants import ForgettingPolicy, MemoryType, TenantPermission
 from common.exceptions import ArgumentException, NotFoundException
 from common.time_utils import current_timestamp, timestamp_to_date
 from memory.services.messages import MessageService

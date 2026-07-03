@@ -5,10 +5,10 @@
 
 import copy
 import json
-import time
 import threading
-from typing import Dict, Any, Optional
+import time
 from dataclasses import dataclass
+from typing import Any
 
 from api.service.askdata_service.util.askdata_logger import get_askdata_logger
 
@@ -18,7 +18,7 @@ logger = get_askdata_logger()
 @dataclass
 class CacheEntry:
     """缓存条目"""
-    data: Dict[str, Any]
+    data: dict[str, Any]
     created_at: float
     ttl: int
 
@@ -48,7 +48,7 @@ class SemanticLayerCache:
             max_size: 最大缓存条目数
             cleanup_interval: 清理过期数据的间隔（秒），默认5分钟
         """
-        self._cache: Dict[str, CacheEntry] = {}
+        self._cache: dict[str, CacheEntry] = {}
         self._lock = threading.RLock()
         self._default_ttl = default_ttl
         self._max_size = max_size
@@ -60,7 +60,7 @@ class SemanticLayerCache:
 
         logger.info(f"SemanticLayerCache initialized: ttl={default_ttl}s, max_size={max_size}")
 
-    def store(self, ask_id: str, data: Dict[str, Any], ttl: Optional[int] = None) -> bool:
+    def store(self, ask_id: str, data: dict[str, Any], ttl: int | None = None) -> bool:
         """
         存储语义层数据
 
@@ -97,7 +97,7 @@ class SemanticLayerCache:
 
         return True
 
-    def get(self, ask_id: str) -> Optional[Dict[str, Any]]:
+    def get(self, ask_id: str) -> dict[str, Any] | None:
         """
         获取语义层数据
 
@@ -146,7 +146,7 @@ class SemanticLayerCache:
                 return True
             return False
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         获取缓存统计信息
 

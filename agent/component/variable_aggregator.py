@@ -13,11 +13,11 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-from typing import Any
 import os
+from typing import Any
 
-from common.connection_utils import timeout
 from agent.component.base import ComponentBase, ComponentParamBase
+from common.connection_utils import timeout
 
 
 class VariableAggregatorParam(ComponentParamBase):

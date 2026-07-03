@@ -8,7 +8,7 @@ import logging
 import os
 import re
 from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -379,14 +379,14 @@ class JiraConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPermSync
         self,
         start: SecondsSinceUnixEpoch | None = None,
         end: SecondsSinceUnixEpoch | None = None,
-        callback: Any = None,  # noqa: ARG002 - maintained for interface compatibility
+        callback: Any = None,
     ) -> Generator[list[SlimDocument], None, None]:
         """Return lightweight references to Jira issues (used for permission syncing)."""
         if not self.jira_client:
             raise ConnectorMissingCredentialError("Jira")
 
         start_ts = start if start is not None else 0
-        end_ts = end if end is not None else datetime.now(timezone.utc).timestamp()
+        end_ts = end if end is not None else datetime.now(UTC).timestamp()
         jql = self._build_jql(start_ts, end_ts)
 
         checkpoint = self.build_dummy_checkpoint()
@@ -471,7 +471,7 @@ class JiraConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPermSync
         return max(0.0, start_value - float(self.time_buffer_seconds))
 
     def _format_jql_time(self, timestamp: SecondsSinceUnixEpoch) -> str:
-        dt_utc = datetime.fromtimestamp(float(timestamp), tz=timezone.utc)
+        dt_utc = datetime.fromtimestamp(float(timestamp), tz=UTC)
         dt_local = dt_utc.astimezone(self.timezone)
         # Jira only accepts minute-precision timestamps in JQL, so we format accordingly
         # and rely on a post-query second-level filter to avoid duplicates.
@@ -523,7 +523,7 @@ class JiraConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPermSync
             metadata_lines.append(f"labels: {', '.join(fields.get('labels'))}")
 
         created_dt = parse_jira_datetime(fields.get("created"))
-        updated_dt = parse_jira_datetime(fields.get("updated")) or created_dt or datetime.now(timezone.utc)
+        updated_dt = parse_jira_datetime(fields.get("updated")) or created_dt or datetime.now(UTC)
         metadata_lines.append(f"created: {created_dt.isoformat() if created_dt else ''}")
         metadata_lines.append(f"updated: {updated_dt.isoformat() if updated_dt else ''}")
 
@@ -598,7 +598,7 @@ class JiraConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPermSync
             return None
 
         attachment_time = parse_jira_datetime(attachment.get("created")) or parse_jira_datetime(attachment.get("updated"))
-        updated_dt = attachment_time or parse_jira_datetime(issue.raw.get("fields", {}).get("updated")) or datetime.now(timezone.utc)
+        updated_dt = attachment_time or parse_jira_datetime(issue.raw.get("fields", {}).get("updated")) or datetime.now(UTC)
 
         extension = os.path.splitext(filename)[1] or ""
         document_id = f"{issue.key}::attachment::{attachment.get('id') or filename}"
@@ -780,8 +780,7 @@ class JiraConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPermSync
             fields=fields or self._fields_param,
             expand="renderedFields",
         )
-        for issue in issues:
-            yield issue
+        yield from issues
 
     def _enhanced_search_ids(
         self,
@@ -857,7 +856,7 @@ class JiraConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPermSync
 
 
 def iterate_jira_documents(
-    connector: "JiraConnector",
+    connector: JiraConnector,
     start: SecondsSinceUnixEpoch,
     end: SecondsSinceUnixEpoch,
     iteration_limit: int = 100_000,
@@ -909,7 +908,7 @@ def test_jira(
     connector.load_credentials(credentials)
     connector.validate_connector_settings()
 
-    now_ts = datetime.now(timezone.utc).timestamp()
+    now_ts = datetime.now(UTC).timestamp()
     start = start_ts if start_ts is not None else 0.0
     end = end_ts if end_ts is not None else now_ts
 

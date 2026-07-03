@@ -41,7 +41,7 @@ def get_home_cache_dir():
     try:
         # 尝试创建用户缓存目录
         os.mkdir(dir)
-    except OSError as error:
+    except OSError:
         # 如果目录已存在，忽略错误
         pass
     return dir

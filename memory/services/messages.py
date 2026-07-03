@@ -17,7 +17,7 @@ import sys
 
 from common import settings
 from common.constants import MemoryType
-from common.doc_store.doc_store_base import OrderByExpr, MatchExpr
+from common.doc_store.doc_store_base import MatchExpr, OrderByExpr
 
 
 def index_name(uid: str):
@@ -403,5 +403,5 @@ class MessageService:
         if not docs:
             return 1
         else:
-            latest_msg = list(docs.values())[0]
+            latest_msg = next(iter(docs.values()))
             return int(latest_msg["message_id"])

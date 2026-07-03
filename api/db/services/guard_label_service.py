@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -7,9 +6,10 @@
 @desc: AI安全护栏标签管理服务
 """
 import logging
-from typing import List, Optional, Dict, Any
-from sqlalchemy.orm import Session
+from typing import Any
+
 from sqlalchemy import and_
+from sqlalchemy.orm import Session
 
 from api.db.db_models import GuardLabel
 from api.db.services.common_service import CommonService
@@ -23,10 +23,10 @@ class GuardLabelService(CommonService):
     @classmethod
     def create_label(cls, db: Session, dimension_id: str, code: str, name: str,
                     description: str = None, tenant_id: str = None,
-                    created_by: str = None, **kwargs) -> Optional[str]:
+                    created_by: str = None, **kwargs) -> str | None:
         """
         创建护栏标签
-        
+
         Args:
             db: 数据库会话
             dimension_id: 维度ID
@@ -36,7 +36,7 @@ class GuardLabelService(CommonService):
             tenant_id: 租户ID
             created_by: 创建者ID
             **kwargs: 其他参数
-            
+
         Returns:
             创建成功返回标签ID，失败返回None
         """
@@ -46,7 +46,7 @@ class GuardLabelService(CommonService):
             if existing:
                 logging.warning(f"标签代码 {code} 已存在，租户: {tenant_id}")
                 return None
-                
+
             label_data = {
                 "id": get_uuid(),
                 "dimension_id": dimension_id,
@@ -67,25 +67,25 @@ class GuardLabelService(CommonService):
                 "sort_order": kwargs.get("sort_order", 0),
                 "status": kwargs.get("status", "1")
             }
-            
+
             label = cls.save(db, **label_data)
             return label.id
-            
+
         except Exception as e:
             logging.error(f"创建标签失败: {e}")
             return None
 
     @classmethod
-    def get_label_by_code(cls, db: Session, code: str, 
-                         tenant_id: str) -> Optional[GuardLabel]:
+    def get_label_by_code(cls, db: Session, code: str,
+                         tenant_id: str) -> GuardLabel | None:
         """
         根据代码获取标签
-        
+
         Args:
             db: 数据库会话
             code: 标签代码
             tenant_id: 租户ID
-            
+
         Returns:
             标签对象或None
         """
@@ -103,16 +103,16 @@ class GuardLabelService(CommonService):
 
     @classmethod
     def get_labels_by_dimension(cls, db: Session, dimension_id: str,
-                               tenant_id: str, enabled_only: bool = False) -> List[GuardLabel]:
+                               tenant_id: str, enabled_only: bool = False) -> list[GuardLabel]:
         """
         获取维度下的标签列表
-        
+
         Args:
             db: 数据库会话
             dimension_id: 维度ID
             tenant_id: 租户ID
             enabled_only: 是否只返回启用的标签
-            
+
         Returns:
             标签列表
         """
@@ -124,10 +124,10 @@ class GuardLabelService(CommonService):
                     cls.model.status == "1"
                 )
             )
-            
+
             if enabled_only:
                 query = query.filter(cls.model.enabled == True)
-                
+
             return query.order_by(cls.model.sort_order.asc()).all()
         except Exception as e:
             logging.error(f"获取维度标签失败: {e}")
@@ -135,15 +135,15 @@ class GuardLabelService(CommonService):
 
     @classmethod
     def get_labels_by_tenant(cls, db: Session, tenant_id: str,
-                            enabled_only: bool = False) -> List[GuardLabel]:
+                            enabled_only: bool = False) -> list[GuardLabel]:
         """
         获取租户的标签列表
-        
+
         Args:
             db: 数据库会话
             tenant_id: 租户ID
             enabled_only: 是否只返回启用的标签
-            
+
         Returns:
             标签列表
         """
@@ -154,26 +154,26 @@ class GuardLabelService(CommonService):
                     cls.model.status == "1"
                 )
             )
-            
+
             if enabled_only:
                 query = query.filter(cls.model.enabled == True)
-                
+
             return query.order_by(cls.model.sort_order.asc()).all()
         except Exception as e:
             logging.error(f"获取租户标签失败: {e}")
             return []
 
     @classmethod
-    def get_labels_by_codes(cls, db: Session, codes: List[str],
-                           tenant_id: str) -> List[GuardLabel]:
+    def get_labels_by_codes(cls, db: Session, codes: list[str],
+                           tenant_id: str) -> list[GuardLabel]:
         """
         根据代码列表获取标签
-        
+
         Args:
             db: 数据库会话
             codes: 标签代码列表
             tenant_id: 租户ID
-            
+
         Returns:
             标签列表
         """
@@ -191,16 +191,16 @@ class GuardLabelService(CommonService):
             return []
 
     @classmethod
-    def update_label(cls, db: Session, label_id: str, 
-                    update_data: Dict[str, Any]) -> bool:
+    def update_label(cls, db: Session, label_id: str,
+                    update_data: dict[str, Any]) -> bool:
         """
         更新标签信息
-        
+
         Args:
             db: 数据库会话
             label_id: 标签ID
             update_data: 更新数据
-            
+
         Returns:
             更新成功返回True，失败返回False
         """
@@ -214,11 +214,11 @@ class GuardLabelService(CommonService):
     def delete_label(cls, db: Session, label_id: str) -> bool:
         """
         删除标签（物理删除）
-        
+
         Args:
             db: 数据库会话
             label_id: 标签ID
-            
+
         Returns:
             删除成功返回True，失败返回False
         """
@@ -232,11 +232,11 @@ class GuardLabelService(CommonService):
     def toggle_label_status(cls, db: Session, label_id: str) -> bool:
         """
         切换标签启用状态
-        
+
         Args:
             db: 数据库会话
             label_id: 标签ID
-            
+
         Returns:
             切换成功返回True，失败返回False
         """
@@ -244,30 +244,30 @@ class GuardLabelService(CommonService):
             label = cls.get_by_id(db, label_id)
             if not label:
                 return False
-                
+
             new_enabled = not label.enabled
             return cls.update_by_id(db, label_id, {"enabled": new_enabled})
-            
+
         except Exception as e:
             logging.error(f"切换标签状态失败: {e}")
             return False
 
     @classmethod
-    def get_label_stats(cls, db: Session, tenant_id: str) -> Dict[str, Any]:
+    def get_label_stats(cls, db: Session, tenant_id: str) -> dict[str, Any]:
         """
         获取标签统计信息
-        
+
         Args:
             db: 数据库会话
             tenant_id: 租户ID
-            
+
         Returns:
             统计信息字典
         """
         try:
             labels = cls.get_labels_by_tenant(db, tenant_id)
             enabled_count = len([l for l in labels if l.enabled])
-            
+
             # 按维度统计
             dimension_stats = {}
             for label in labels:
@@ -277,7 +277,7 @@ class GuardLabelService(CommonService):
                 dimension_stats[dim_id]["total"] += 1
                 if label.enabled:
                     dimension_stats[dim_id]["enabled"] += 1
-            
+
             return {
                 "total_labels": len(labels),
                 "enabled_labels": enabled_count,
@@ -290,17 +290,17 @@ class GuardLabelService(CommonService):
             return {}
 
     @classmethod
-    def init_default_labels(cls, db: Session, dimension_configs: Dict[str, str],
-                           tenant_id: str, created_by: str) -> List[str]:
+    def init_default_labels(cls, db: Session, dimension_configs: dict[str, str],
+                           tenant_id: str, created_by: str) -> list[str]:
         """
         初始化默认标签
-        
+
         Args:
             db: 数据库会话
             dimension_configs: 维度配置 {dimension_code: dimension_id}
             tenant_id: 租户ID
             created_by: 创建者ID
-            
+
         Returns:
             创建的标签ID列表
         """
@@ -337,7 +337,7 @@ class GuardLabelService(CommonService):
                 "sort_order": 3
             }
         ]
-        
+
         # 敏感内容标签
         sensitive_content_labels = [
             {
@@ -377,7 +377,7 @@ class GuardLabelService(CommonService):
                 "sort_order": 3
             }
         ]
-        
+
         # 提示词攻击标签
         prompt_attack_labels = [
             {
@@ -403,20 +403,20 @@ class GuardLabelService(CommonService):
                 "sort_order": 2
             }
         ]
-        
+
         # 组织标签数据
         label_groups = [
             ("CONTENT_COMPLIANCE", content_compliance_labels),
             ("SENSITIVE_CONTENT", sensitive_content_labels),
             ("PROMPT_ATTACK", prompt_attack_labels)
         ]
-        
+
         created_ids = []
         for dimension_code, labels in label_groups:
             dimension_id = dimension_configs.get(dimension_code)
             if not dimension_id:
                 continue
-                
+
             for label_data in labels:
                 label_id = cls.create_label(
                     db=db,
@@ -427,5 +427,5 @@ class GuardLabelService(CommonService):
                 )
                 if label_id:
                     created_ids.append(label_id)
-                    
+
         return created_ids

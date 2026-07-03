@@ -19,31 +19,31 @@ All types are re-exported from common.doc_store.doc_store_base.
 """
 
 from common.doc_store.doc_store_base import (
+    DEFAULT_MATCH_SPARSE_TOPN,
+    DEFAULT_MATCH_VECTOR_TOPN,
+    VEC,
     DocStoreConnection,
-    MatchExpr,
-    MatchTextExpr,
+    FusionExpr,
     MatchDenseExpr,
+    MatchExpr,
     MatchSparseExpr,
     MatchTensorExpr,
-    FusionExpr,
+    MatchTextExpr,
     OrderByExpr,
     SparseVector,
-    VEC,
-    DEFAULT_MATCH_VECTOR_TOPN,
-    DEFAULT_MATCH_SPARSE_TOPN,
 )
 
 __all__ = [
+    "DEFAULT_MATCH_SPARSE_TOPN",
+    "DEFAULT_MATCH_VECTOR_TOPN",
+    "VEC",
     "DocStoreConnection",
-    "MatchExpr",
-    "MatchTextExpr",
+    "FusionExpr",
     "MatchDenseExpr",
+    "MatchExpr",
     "MatchSparseExpr",
     "MatchTensorExpr",
-    "FusionExpr",
+    "MatchTextExpr",
     "OrderByExpr",
     "SparseVector",
-    "VEC",
-    "DEFAULT_MATCH_VECTOR_TOPN",
-    "DEFAULT_MATCH_SPARSE_TOPN",
 ]

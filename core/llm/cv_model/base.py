@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -13,9 +12,7 @@ from abc import ABC
 from io import BytesIO
 from typing import Any
 
-from openai import OpenAI
 from core.nlp import is_english
-
 from core.prompts.generator import vision_llm_describe_prompt
 
 

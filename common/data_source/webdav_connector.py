@@ -1,24 +1,19 @@
 """WebDAV connector"""
 import logging
 import os
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from webdav4.client import Client as WebDAVClient
 
+from common.data_source.config import BLOB_STORAGE_SIZE_THRESHOLD, INDEX_BATCH_SIZE, DocumentSource
+from common.data_source.exceptions import ConnectorMissingCredentialError, ConnectorValidationError, CredentialExpiredError, InsufficientPermissionsError
+from common.data_source.interfaces import LoadConnector, OnyxExtensionType, PollConnector
+from common.data_source.models import Document, GenerateDocumentsOutput, SecondsSinceUnixEpoch
 from common.data_source.utils import (
     get_file_ext,
     is_accepted_file_ext,
 )
-from common.data_source.config import DocumentSource, INDEX_BATCH_SIZE, BLOB_STORAGE_SIZE_THRESHOLD
-from common.data_source.exceptions import (
-    ConnectorMissingCredentialError,
-    ConnectorValidationError,
-    CredentialExpiredError,
-    InsufficientPermissionsError
-)
-from common.data_source.interfaces import LoadConnector, OnyxExtensionType, PollConnector
-from common.data_source.models import Document, SecondsSinceUnixEpoch, GenerateDocumentsOutput
 
 
 class WebDAVConnector(LoadConnector, PollConnector):
@@ -31,7 +26,7 @@ class WebDAVConnector(LoadConnector, PollConnector):
         batch_size: int = INDEX_BATCH_SIZE,
     ) -> None:
         """Initialize WebDAV connector
-        
+
         Args:
             base_url: Base URL of the WebDAV server (e.g., "https://webdav.example.com")
             remote_path: Remote path to sync from (default: "/")
@@ -46,7 +41,7 @@ class WebDAVConnector(LoadConnector, PollConnector):
             remote_path = remote_path.rstrip("/")
         self.remote_path = remote_path
         self.batch_size = batch_size
-        self.client: Optional[WebDAVClient] = None
+        self.client: WebDAVClient | None = None
         self._allow_images: bool | None = None
         self.size_threshold: int | None = BLOB_STORAGE_SIZE_THRESHOLD
 
@@ -67,13 +62,13 @@ class WebDAVConnector(LoadConnector, PollConnector):
 
     def load_credentials(self, credentials: dict[str, Any]) -> dict[str, Any] | None:
         """Load credentials and initialize WebDAV client
-        
+
         Args:
             credentials: Dictionary containing 'username' and 'password'
-        
+
         Returns:
             None
-        
+
         Raises:
             ConnectorMissingCredentialError: If required credentials are missing
         """
@@ -81,7 +76,7 @@ class WebDAVConnector(LoadConnector, PollConnector):
 
         username = credentials.get("username")
         password = credentials.get("password")
-        
+
         if not username or not password:
             raise ConnectorMissingCredentialError(
                 "WebDAV requires 'username' and 'password' credentials"
@@ -102,18 +97,18 @@ class WebDAVConnector(LoadConnector, PollConnector):
         return None
 
     def _list_files_recursive(
-        self, 
+        self,
         path: str,
         start: datetime,
         end: datetime,
     ) -> list[tuple[str, dict]]:
         """Recursively list all files in the given path
-        
+
         Args:
             path: Path to list files from
             start: Start datetime for filtering
             end: End datetime for filtering
-            
+
         Returns:
             List of tuples containing (file_path, file_info)
         """
@@ -121,15 +116,15 @@ class WebDAVConnector(LoadConnector, PollConnector):
             raise ConnectorMissingCredentialError("WebDAV client not initialized")
 
         files = []
-        
+
         try:
             logging.debug(f"Listing directory: {path}")
             for item in self.client.ls(path, detail=True):
                 item_path = item['name']
-            
+
                 if item_path == path or item_path == path + '/':
                     continue
-                
+
                 logging.debug(f"Found item: {item_path}, type: {item.get('type')}")
 
                 if item.get('type') == 'directory':
@@ -150,22 +145,22 @@ class WebDAVConnector(LoadConnector, PollConnector):
                             if isinstance(modified_time, datetime):
                                 modified = modified_time
                                 if modified.tzinfo is None:
-                                    modified = modified.replace(tzinfo=timezone.utc)
+                                    modified = modified.replace(tzinfo=UTC)
                             elif isinstance(modified_time, str):
                                 try:
                                     modified = datetime.strptime(modified_time, '%a, %d %b %Y %H:%M:%S %Z')
-                                    modified = modified.replace(tzinfo=timezone.utc)
+                                    modified = modified.replace(tzinfo=UTC)
                                 except (ValueError, TypeError):
                                     try:
                                         modified = datetime.fromisoformat(modified_time.replace('Z', '+00:00'))
                                     except (ValueError, TypeError):
                                         logging.warning(f"Could not parse modified time for {item_path}: {modified_time}")
-                                        modified = datetime.now(timezone.utc)
+                                        modified = datetime.now(UTC)
                             else:
-                                modified = datetime.now(timezone.utc)
+                                modified = datetime.now(UTC)
                         else:
-                            modified = datetime.now(timezone.utc)
-                        
+                            modified = datetime.now(UTC)
+
 
                         logging.debug(f"File {item_path}: modified={modified}, start={start}, end={end}, include={start < modified <= end}")
                         if start < modified <= end:
@@ -175,10 +170,10 @@ class WebDAVConnector(LoadConnector, PollConnector):
                     except Exception as e:
                         logging.error(f"Error processing file {item_path}: {e}")
                         continue
-                        
+
         except Exception as e:
             logging.error(f"Error listing directory {path}: {e}")
-            
+
         return files
 
     def _yield_webdav_documents(
@@ -187,11 +182,11 @@ class WebDAVConnector(LoadConnector, PollConnector):
         end: datetime,
     ) -> GenerateDocumentsOutput:
         """Generate documents from WebDAV server
-        
+
         Args:
             start: Start datetime for filtering
             end: End datetime for filtering
-            
+
         Yields:
             Batches of documents
         """
@@ -201,12 +196,12 @@ class WebDAVConnector(LoadConnector, PollConnector):
         logging.info(f"Searching for files in {self.remote_path} between {start} and {end}")
         files = self._list_files_recursive(self.remote_path, start, end)
         logging.info(f"Found {len(files)} files matching time criteria")
-        
+
         filename_counts: dict[str, int] = {}
         for file_path, _ in files:
             file_name = os.path.basename(file_path)
             filename_counts[file_name] = filename_counts.get(file_name, 0) + 1
-        
+
         batch: list[Document] = []
         for file_path, file_info in files:
             file_name = os.path.basename(file_path)
@@ -214,7 +209,7 @@ class WebDAVConnector(LoadConnector, PollConnector):
             if not self._is_supported_file(file_name):
                 logging.debug(f"Skipping file {file_path} due to unsupported extension.")
                 continue
-            
+
             size_bytes = file_info.get('size', 0)
             if (
                 self.size_threshold is not None
@@ -225,14 +220,14 @@ class WebDAVConnector(LoadConnector, PollConnector):
                     f"{file_name} exceeds size threshold of {self.size_threshold}. Skipping."
                 )
                 continue
-            
+
             try:
                 logging.debug(f"Downloading file: {file_path}")
                 from io import BytesIO
                 buffer = BytesIO()
                 self.client.download_fileobj(file_path, buffer)
                 blob = buffer.getvalue()
-                
+
                 if blob is None or len(blob) == 0:
                     logging.warning(f"Downloaded content is empty for {file_path}")
                     continue
@@ -242,21 +237,21 @@ class WebDAVConnector(LoadConnector, PollConnector):
                     if isinstance(modified_time, datetime):
                         modified = modified_time
                         if modified.tzinfo is None:
-                            modified = modified.replace(tzinfo=timezone.utc)
+                            modified = modified.replace(tzinfo=UTC)
                     elif isinstance(modified_time, str):
                         try:
                             modified = datetime.strptime(modified_time, '%a, %d %b %Y %H:%M:%S %Z')
-                            modified = modified.replace(tzinfo=timezone.utc)
+                            modified = modified.replace(tzinfo=UTC)
                         except (ValueError, TypeError):
                             try:
                                 modified = datetime.fromisoformat(modified_time.replace('Z', '+00:00'))
                             except (ValueError, TypeError):
                                 logging.warning(f"Could not parse modified time for {file_path}: {modified_time}")
-                                modified = datetime.now(timezone.utc)
+                                modified = datetime.now(UTC)
                     else:
-                        modified = datetime.now(timezone.utc)
+                        modified = datetime.now(UTC)
                 else:
-                    modified = datetime.now(timezone.utc)
+                    modified = datetime.now(UTC)
 
                 if filename_counts.get(file_name, 0) > 1:
                     relative_path = file_path
@@ -279,49 +274,48 @@ class WebDAVConnector(LoadConnector, PollConnector):
                         size_bytes=size_bytes if size_bytes else 0
                     )
                 )
-                
+
                 if len(batch) == self.batch_size:
                     yield batch
                     batch = []
 
             except Exception as e:
                 logging.exception(f"Error downloading file {file_path}: {e}")
-        
+
         if batch:
             yield batch
 
     def load_from_state(self) -> GenerateDocumentsOutput:
         """Load all documents from WebDAV server
-        
+
         Yields:
             Batches of documents
         """
         logging.debug(f"Loading documents from WebDAV server {self.base_url}")
         return self._yield_webdav_documents(
-            start=datetime(1970, 1, 1, tzinfo=timezone.utc),
-            end=datetime.now(timezone.utc),
+            start=datetime(1970, 1, 1, tzinfo=UTC),
+            end=datetime.now(UTC),
         )
 
     def poll_source(
         self, start: SecondsSinceUnixEpoch, end: SecondsSinceUnixEpoch
     ) -> GenerateDocumentsOutput:
         """Poll WebDAV server for updated documents
-        
+
         Args:
             start: Start timestamp (seconds since Unix epoch)
             end: End timestamp (seconds since Unix epoch)
-            
+
         Yields:
             Batches of documents
         """
         if self.client is None:
             raise ConnectorMissingCredentialError("WebDAV client not initialized")
 
-        start_datetime = datetime.fromtimestamp(start, tz=timezone.utc)
-        end_datetime = datetime.fromtimestamp(end, tz=timezone.utc)
+        start_datetime = datetime.fromtimestamp(start, tz=UTC)
+        end_datetime = datetime.fromtimestamp(end, tz=UTC)
 
-        for batch in self._yield_webdav_documents(start_datetime, end_datetime):
-            yield batch
+        yield from self._yield_webdav_documents(start_datetime, end_datetime)
 
     def validate_connector_settings(self) -> None:
         """Validate WebDAV connector settings.
@@ -376,7 +370,7 @@ class WebDAVConnector(LoadConnector, PollConnector):
             # Fallback: avoid brittle substring matching that caused false positives.
             # Provide the original exception for diagnosis.
             raise ConnectorValidationError(
-                f"WebDAV validation failed for path '{test_path}': {repr(e)}"
+                f"WebDAV validation failed for path '{test_path}': {e!r}"
             )
 
 
@@ -401,7 +395,7 @@ if __name__ == "__main__":
     try:
         connector.load_credentials(credentials_dict)
         connector.validate_connector_settings()
-        
+
         document_batch_generator = connector.load_from_state()
         for document_batch in document_batch_generator:
             print("First batch of documents:")

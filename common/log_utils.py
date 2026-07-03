@@ -1,7 +1,8 @@
+import logging
 import os
 import os.path
-import logging
 from logging.handlers import RotatingFileHandler
+
 from common.file_utils import get_project_base_directory
 
 initialized_root_logger = False
@@ -78,7 +79,7 @@ def log_exception(e, *args):
     logging.exception(e)
     for a in args:
         try:
-            text = getattr(a, "text")
+            text = a.text
         except Exception:
             text = None
         if text is not None:

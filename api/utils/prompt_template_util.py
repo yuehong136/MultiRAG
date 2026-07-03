@@ -1,6 +1,6 @@
 import os
 from string import Template
-from typing import Dict, Any, Optional
+from typing import Any
 
 
 class PromptTemplateUtil:
@@ -22,11 +22,11 @@ class PromptTemplateUtil:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"模板文件未找到: {file_path}")
 
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, encoding='utf-8') as f:
             return f.read()
 
     @staticmethod
-    def fill_template(template: str, values: Dict[str, Any]) -> str:
+    def fill_template(template: str, values: dict[str, Any]) -> str:
         """
         使用Python的string.Template填充模板中的占位符。
 
@@ -47,7 +47,7 @@ class PromptTemplateUtil:
         return template_obj.safe_substitute(str_values)
 
     @staticmethod
-    def fill_template_with_format(template: str, values: Dict[str, Any]) -> str:
+    def fill_template_with_format(template: str, values: dict[str, Any]) -> str:
         """
         使用str.format()和命名占位符的替代方法。
 
@@ -62,6 +62,6 @@ class PromptTemplateUtil:
         """
         try:
             return template.format(**values)
-        except KeyError as e:
+        except KeyError:
             # 优雅地处理缺失的键，保留原始占位符不变
             return template

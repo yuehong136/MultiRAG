@@ -1,7 +1,7 @@
-from typing import Dict, Any
+from typing import Any
 
 
-def parse_from_clause(from_sentence: str) -> Dict[str, Any]:
+def parse_from_clause(from_sentence: str) -> dict[str, Any]:
     """
     解析 FROM 子句，提取主表和所有已存在的表
 

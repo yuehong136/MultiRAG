@@ -1,5 +1,6 @@
 import os
 
+
 def singleton(cls, *args, **kw):
     instances = {}
 

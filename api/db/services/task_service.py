@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -15,19 +14,19 @@ import xxhash
 from sqlalchemy import asc, delete, desc, select, update
 from sqlalchemy.orm import Session
 
-from api.utils.db_utils import bulk_insert_into_db
-from deepdoc.parser import PdfParser
-from api.db.db_models import Task, Document, Knowledgebase, Tenant, File2Document, File, DatabaseLock
 from api.db import FileType
-from common.constants import StatusEnum, TaskStatus
+from api.db.db_models import DatabaseLock, Document, File, File2Document, Knowledgebase, Task, Tenant
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
+from api.utils.db_utils import bulk_insert_into_db
+from common import settings
+from common.constants import StatusEnum, TaskStatus
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp
-from deepdoc.parser.excel_parser import RAGFlowExcelParser
-from core.utils.redis_conn import REDIS_CONN
-from common import settings
 from core.nlp import search
+from core.utils.redis_conn import REDIS_CONN
+from deepdoc.parser import PdfParser
+from deepdoc.parser.excel_parser import RAGFlowExcelParser
 
 CANVAS_DEBUG_DOC_ID = "dataflow_x"
 GRAPH_RAPTOR_FAKE_DOC_ID = "graph_raptor_x"
@@ -583,15 +582,15 @@ def queue_dataflow(db: Session, tenant_id: str, flow_id: str, task_id: str, doc_
     Returns a tuple (success: bool, error_message: str).
     """
 
-    task = dict(
-        id=task_id,
-        doc_id=doc_id,
-        from_page=0,
-        to_page=100000000,
-        task_type="dataflow" if not rerun else "dataflow_rerun",
-        priority=priority,
-        begin_at=datetime.now(),
-    )
+    task = {
+        "id": task_id,
+        "doc_id": doc_id,
+        "from_page": 0,
+        "to_page": 100000000,
+        "task_type": "dataflow" if not rerun else "dataflow_rerun",
+        "priority": priority,
+        "begin_at": datetime.now(),
+    }
 
     if doc_id not in [CANVAS_DEBUG_DOC_ID, GRAPH_RAPTOR_FAKE_DOC_ID]:
         TaskService.filter_delete(db, [Task.doc_id == doc_id])

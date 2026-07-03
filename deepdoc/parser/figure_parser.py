@@ -13,20 +13,21 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from PIL import Image
 
-from api.db.services.llm_service import LLMBundle
 from api.db.db_models import db_connection
 from api.db.joint_services.tenant_model_service import get_tenant_default_model_by_type
+from api.db.services.llm_service import LLMBundle
 from common.connection_utils import timeout
 from common.constants import LLMType
-from core.app.picture import vision_llm_chunk as picture_vision_llm_chunk, MIN_IMAGE_DIMENSION
-from core.prompts.generator import vision_llm_figure_describe_prompt, vision_llm_figure_describe_prompt_with_context
+from core.app.picture import MIN_IMAGE_DIMENSION
+from core.app.picture import vision_llm_chunk as picture_vision_llm_chunk
 from core.nlp import append_context2table_image4pdf
-from core.utils.lazy_image import ensure_pil_image, open_image_for_processing, is_image_like
+from core.prompts.generator import vision_llm_figure_describe_prompt, vision_llm_figure_describe_prompt_with_context
+from core.utils.lazy_image import ensure_pil_image, is_image_like, open_image_for_processing
 
 
 def _is_valid_image_size(img: Image.Image) -> bool:

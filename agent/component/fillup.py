@@ -17,7 +17,7 @@ import json
 import re
 from functools import partial
 
-from agent.component.base import ComponentParamBase, ComponentBase
+from agent.component.base import ComponentBase, ComponentParamBase
 from agent.persondata_input import decrypt_persondata_input_value, is_persondata_input
 from api.db.services.file_service import FileService
 

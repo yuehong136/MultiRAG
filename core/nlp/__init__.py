@@ -1,17 +1,18 @@
+import copy
 import logging
 import random
+import re
 from collections import Counter, defaultdict
 
-from common.token_utils import num_tokens_from_string
-from . import rag_tokenizer
-import re
-import copy
+import chardet
 import roman_numbers as r
-from word2number import w2n
 from cn2an import cn2an
 from PIL import Image
+from word2number import w2n
 
-import chardet
+from common.token_utils import num_tokens_from_string
+
+from . import rag_tokenizer
 
 all_codecs = [
     'utf-8', 'gb2312', 'gbk', 'utf_16', 'ascii', 'big5', 'big5hkscs',
@@ -193,7 +194,7 @@ def not_bullet(line):
     patt = [
         r"0", r"[0-9]+ +[0-9~个只-]", r"[0-9]+\.{2,}"
     ]
-    return any([re.match(r, line) for r in patt])
+    return any(re.match(r, line) for r in patt)
 
 
 def bullets_category(sections):
@@ -268,7 +269,7 @@ def split_with_pattern(d, pattern: str, content: str, eng) -> list:
         tokenize(dd, content, eng)
         return [dd]
 
-    txts = [txt for txt in compiled_pattern.split(content)]
+    txts = list(compiled_pattern.split(content))
     for j in range(0, len(txts), 2):
         txt = txts[j]
         if not txt:
@@ -287,7 +288,7 @@ def tokenize_chunks(chunks, doc, eng, pdf_parser=None, child_delimiters_pattern=
     for ii, ck in enumerate(chunks):
         if len(ck.strip()) == 0:
             continue
-        logging.debug("-- {}".format(ck))
+        logging.debug(f"-- {ck}")
         d = copy.deepcopy(doc)
         if pdf_parser:
             try:
@@ -315,7 +316,7 @@ def doc_tokenize_chunks_with_images(chunks, doc, eng, child_delimiters_pattern=N
         text = ck.get("context_above", "") + ck.get("text") + ck.get("context_below", "")
         if len(text.strip()) == 0:
             continue
-        logging.debug("-- {}".format(ck))
+        logging.debug(f"-- {ck}")
         d = copy.deepcopy(doc)
         if ck.get("image"):
             d["image"] = ck.get("image")
@@ -341,7 +342,7 @@ def tokenize_chunks_with_images(chunks, doc, eng, images, child_delimiters_patte
     for ii, (ck, image) in enumerate(zip(chunks, images)):
         if len(ck.strip()) == 0:
             continue
-        logging.debug("-- {}".format(ck))
+        logging.debug(f"-- {ck}")
         d = copy.deepcopy(doc)
         d["image"] = image
         add_positions(d, [[ii] * 5])
@@ -829,7 +830,7 @@ def remove_contents_table(sections, eng=False):
         def get(i):
             nonlocal sections
             return (sections[i] if isinstance(sections[i],
-                                              type("")) else sections[i][0]).strip()
+                                              str) else sections[i][0]).strip()
 
         if not re.match(r"(contents|目录|目次|table of contents|致谢|acknowledge)$",
                         re.sub(r"( | |\u3000)+", "", get(i).split("@@")[0], flags=re.IGNORECASE)):
@@ -858,7 +859,7 @@ def remove_contents_table(sections, eng=False):
 def make_colon_as_title(sections):
     if not sections:
         return []
-    if isinstance(sections[0], type("")):
+    if isinstance(sections[0], str):
         return sections
     i = 0
     while i < len(sections):
@@ -910,7 +911,7 @@ def not_title(txt):
 def tree_merge(bull, sections, depth):
     if not sections or bull < 0:
         return sections
-    if isinstance(sections[0], type("")):
+    if isinstance(sections[0], str):
         sections = [(s, "") for s in sections]
 
     # filter out position information in pdf sections
@@ -939,7 +940,7 @@ def tree_merge(bull, sections, depth):
         lines.append((level, text))
         level_set.add(level)
 
-    sorted_levels = sorted(list(level_set))
+    sorted_levels = sorted(level_set)
 
     if depth <= len(sorted_levels):
         target_level = sorted_levels[depth - 1]
@@ -958,7 +959,7 @@ def tree_merge(bull, sections, depth):
 def hierarchical_merge(bull, sections, depth):
     if not sections or bull < 0:
         return []
-    if isinstance(sections[0], type("")):
+    if isinstance(sections[0], str):
         sections = [(s, "") for s in sections]
     sections = [(t, o) for t, o in sections if
                 t and len(t.split("@")[0].strip()) > 1 and not re.match(r"[0-9]+$", t.split("@")[0].strip())]
@@ -996,7 +997,7 @@ def hierarchical_merge(bull, sections, depth):
                 e = i
                 continue
             else:
-                assert False
+                raise AssertionError()
         return s
 
     cks = []
@@ -1190,7 +1191,7 @@ def docx_question_level(p, bull=-1):
 
 
 def concat_img(img1, img2):
-    from core.utils.lazy_image import ensure_pil_image, LazyImage
+    from core.utils.lazy_image import LazyImage, ensure_pil_image
 
     if (img1 is None or isinstance(img1, LazyImage)) and \
        (img2 is None or isinstance(img2, LazyImage)):

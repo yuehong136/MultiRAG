@@ -1,7 +1,7 @@
 import hashlib
 import ipaddress
 import socket
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from time import struct_time
 from typing import Any
@@ -191,10 +191,10 @@ class RSSConnector(LoadConnector, PollConnector):
                 except (TypeError, ValueError, IndexError):
                     continue
                 if parsed.tzinfo is None:
-                    parsed = parsed.replace(tzinfo=timezone.utc)
-                return parsed.astimezone(timezone.utc)
+                    parsed = parsed.replace(tzinfo=UTC)
+                return parsed.astimezone(UTC)
 
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
     @staticmethod
     def _normalize_text(value: Any) -> str:
@@ -204,5 +204,5 @@ class RSSConnector(LoadConnector, PollConnector):
 
     @staticmethod
     def _struct_time_to_utc(value: struct_time | tuple[Any, ...]) -> datetime:
-        dt = datetime(*value[:6], tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
+        dt = datetime(*value[:6], tzinfo=UTC)
+        return dt.astimezone(UTC)

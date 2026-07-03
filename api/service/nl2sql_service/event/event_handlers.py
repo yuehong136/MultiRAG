@@ -1,10 +1,10 @@
 import asyncio
 import json
+from collections.abc import AsyncGenerator
 from datetime import datetime
 
-from fastapi import Request, Response, HTTPException
+from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
-from typing import AsyncGenerator
 
 from api.service.nl2sql_service.event.event_manager import event_manager
 
@@ -46,7 +46,7 @@ async def event_generator(request: Request, event_id: str) -> AsyncGenerator[byt
                 # 直接将数据作为SSE消息发送
                 message = f"data: {data}\n\n"
                 yield message.encode('utf-8')
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # 超时后发送心跳包，保持连接活跃
                 yield b": heartbeat\n\n"
             except Exception as e:

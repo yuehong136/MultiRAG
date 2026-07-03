@@ -1,5 +1,5 @@
-import json
 import copy
+import json
 import logging
 import os
 import re
@@ -8,38 +8,36 @@ import time
 from io import BytesIO
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, UploadFile, File
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from agent.canvas import Canvas
 from api.db.db_models import get_db
+from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.api_service import API4ConversationService
 from api.db.services.canvas_service import UserCanvasService, completion_openai
 from api.db.services.canvas_service import completion as agent_completion
 from api.db.services.conversation_service import ConversationService, iframe_completion
 from api.db.services.conversation_service import completion as rag_completion
-from api.db.services.dialog_service import DialogService, async_chat, async_ask, gen_mindmap
+from api.db.services.dialog_service import DialogService, async_ask, async_chat, gen_mindmap
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
 from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.db.services.user_service import UserTenantService
-from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.utils.api_utils import beta_token_required, check_duplicate_ids, get_data_openai, get_error_data_result, get_json_result, get_result, server_error_response, token_required
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers
-from core.app.tag import label_question
-from core.prompts.template import load_prompt
-from core.prompts.generator import cross_languages, keyword_extraction, chunks_format
-from common.misc_utils import get_uuid, thread_pool_exec
-from common.constants import RetCode
 from common import settings
-from common.constants import LLMType, StatusEnum
+from common.constants import LLMType, RetCode, StatusEnum
 from common.metadata_utils import apply_meta_data_filter, convert_conditions, meta_filter
+from common.misc_utils import get_uuid, thread_pool_exec
 from common.token_utils import num_tokens_from_string
-
+from core.app.tag import label_question
+from core.prompts.generator import chunks_format, cross_languages, keyword_extraction
+from core.prompts.template import load_prompt
 
 router = APIRouter()
 
@@ -203,9 +201,9 @@ def create_agent_session(
 
 @router.post("/chats/{chat_id}/completions", summary="聊天补全")
 async def chat_completion(
-    chat_id: str, 
-    request: ChatCompletionRequest, 
-    db: Session = Depends(get_db), 
+    chat_id: str,
+    request: ChatCompletionRequest,
+    db: Session = Depends(get_db),
     tenant_id: str = Depends(token_required)
 ):
     req = request.model_dump()
@@ -240,7 +238,7 @@ async def chat_completion(
             req["doc_ids"] = ",".join(filtered_doc_ids)
         else:
             req.pop("doc_ids", None)
-    
+
     if req.get("stream", True):
         resp = StreamingResponse(rag_completion(db, tenant_id, chat_id, **req), media_type="text/event-stream")
         resp.headers["Cache-control"] = "no-cache"
@@ -258,9 +256,9 @@ async def chat_completion(
 
 @router.post("/chats_openai/{chat_id}/chat/completions", summary="OpenAI兼容的聊天补全")
 async def chat_completion_openai_like(
-    chat_id: str, 
-    request: ChatCompletionOpenAIRequest, 
-    db: Session = Depends(get_db), 
+    chat_id: str,
+    request: ChatCompletionOpenAIRequest,
+    db: Session = Depends(get_db),
     tenant_id: str = Depends(token_required)
 ):
     """
@@ -680,7 +678,7 @@ async def agent_completions(
 
             final_ans = ans
         except Exception as e:
-            return get_result(data=f"**ERROR**: {str(e)}")
+            return get_result(data=f"**ERROR**: {e!s}")
     final_ans["data"]["content"] = full_content
     final_ans["data"]["reference"] = reference
     if structured_output:
@@ -705,15 +703,15 @@ def list_agent_sessions(
 ):
     if not UserCanvasService.query(db, user_id=tenant_id, id=agent_id):
         return get_error_data_result(retmsg=f"You don't own the agent {agent_id}.")
-    
+
     page_number = int(page)
     items_per_page = int(page_size)
     include_dsl = dsl
-    
+
     total, convs = API4ConversationService.get_list(db, agent_id, tenant_id, page_number, items_per_page, orderby, desc, id, user_id, include_dsl)
     if not convs:
         return get_result(data=[])
-    
+
     for conv in convs:
         conv["messages"] = conv.pop("message")
         infos = conv["messages"]
@@ -758,9 +756,9 @@ def list_agent_sessions(
 
 @router.delete("/agents/{agent_id}/sessions", summary="批量删除代理会话")
 def delete_agent_sessions(
-    agent_id: str, 
-    request: DeleteSessionsRequest, 
-    db: Session = Depends(get_db), 
+    agent_id: str,
+    request: DeleteSessionsRequest,
+    db: Session = Depends(get_db),
     tenant_id: str = Depends(token_required)
 ):
     errors = []
@@ -809,8 +807,8 @@ def delete_agent_sessions(
 
 @router.post("/sessions/ask", summary="询问知识库")
 async def ask_about(
-    request: AskRequest, 
-    db: Session = Depends(get_db), 
+    request: AskRequest,
+    db: Session = Depends(get_db),
     tenant_id: str = Depends(token_required)
 ):
     req = request.model_dump()
@@ -820,7 +818,7 @@ async def ask_about(
         return get_error_data_result(retmsg="`dataset_ids` is required.")
     if not isinstance(req.get("dataset_ids"), list):
         return get_error_data_result(retmsg="`dataset_ids` should be a list.")
-    
+
     req["kb_ids"] = req.pop("dataset_ids")
     for kb_id in req["kb_ids"]:
         if not KnowledgebaseService.accessible(db, kb_id, tenant_id):
@@ -829,7 +827,7 @@ async def ask_about(
         kb = kbs[0]
         if kb.chunk_num == 0:
             return get_error_data_result(retmsg=f"The dataset {kb_id} doesn't own parsed file")
-    
+
     uid = tenant_id
 
     async def stream():
@@ -851,14 +849,14 @@ async def ask_about(
 
 @router.post("/sessions/related_questions", summary="获取相关问题")
 async def related_questions(
-    request: RelatedQuestionsRequest, 
-    db: Session = Depends(get_db), 
+    request: RelatedQuestionsRequest,
+    db: Session = Depends(get_db),
     tenant_id: str = Depends(token_required)
 ):
     req = request.model_dump()
     if not req.get("question"):
         return get_error_data_result(retmsg="`question` is required.")
-    
+
     question = req["question"]
     industry = req.get("industry", "")
     chat_config = get_tenant_default_model_by_type(db, tenant_id, LLMType.CHAT)
@@ -1324,7 +1322,7 @@ async def sequence2txt(
         try:
             os.remove(temp_audio_path)
         except Exception as e:
-            logging.error(f"Failed to remove temp audio file: {str(e)}")
+            logging.error(f"Failed to remove temp audio file: {e!s}")
         return get_json_result(data={"text": text})
 
     async def event_stream():
@@ -1338,7 +1336,7 @@ async def sequence2txt(
             try:
                 os.remove(temp_audio_path)
             except Exception as e:
-                logging.error(f"Failed to remove temp audio file: {str(e)}")
+                logging.error(f"Failed to remove temp audio file: {e!s}")
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -1360,8 +1358,7 @@ async def tts(
     def stream_audio():
         try:
             for txt in re.split(r"[，。/《》？；：！\n\r:;]+", text):
-                for chunk in tts_mdl.tts(txt):
-                    yield chunk
+                yield from tts_mdl.tts(txt)
         except Exception as e:
             yield ("data:" + json.dumps({"code": 500, "message": str(e), "data": {"answer": "**ERROR**: " + str(e)}}, ensure_ascii=False)).encode("utf-8")
 

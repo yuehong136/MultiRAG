@@ -17,9 +17,11 @@ import logging
 import os
 import time
 from abc import ABC
+
 import pandas as pd
 import yfinance as yf
-from agent.tools.base import ToolMeta, ToolParamBase, ToolBase
+
+from agent.tools.base import ToolBase, ToolMeta, ToolParamBase
 from common.connection_utils import timeout
 
 
@@ -120,7 +122,7 @@ class YahooFinance(ToolBase, ABC):
             self.set_output("_ERROR", str(last_e))
             return f"YahooFinance error: {last_e}"
 
-        assert False, self.output()
+        raise AssertionError(self.output())
 
     def thoughts(self) -> str:
         return "Pulling live financial data for `{}`.".format(self.get_input().get("stock_code", "-_-!"))

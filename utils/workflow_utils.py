@@ -1,7 +1,8 @@
 import json
-import streamlit as st
 import subprocess
+
 import psutil
+import streamlit as st
 
 FASTAPI_PROCESS = None
 

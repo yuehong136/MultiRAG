@@ -5,13 +5,13 @@
 """
 
 import re
-from typing import Dict, Any, List
+from typing import Any
 
+from api.service.askdata_service.sql_components_parser import SQLComponentsParser
+from api.service.askdata_service.util.askdata_logger import get_askdata_logger
 from api.service.askdata_service.util.build_model_permissions_map import convert_row_filter_to_sql_conditions
 from api.service.askdata_service.util.identifier_utils import strip_identifier_quotes
-from api.service.askdata_service.sql_components_parser import SQLComponentsParser
 
-from api.service.askdata_service.util.askdata_logger import get_askdata_logger
 logger = get_askdata_logger()
 
 
@@ -51,8 +51,8 @@ def _normalize_condition(s: str) -> str:
 
 def apply_permissions_to_assembler(
         assembler,
-        model_permissions_map: Dict[str, Dict[str, Any]],
-        model_table_alias_mapping_list: List[Dict[str, Any]]
+        model_permissions_map: dict[str, dict[str, Any]],
+        model_table_alias_mapping_list: list[dict[str, Any]]
 ):
     """
     将所有模型的权限条件应用到 SQL 组装器
@@ -119,7 +119,7 @@ def apply_permissions_to_assembler(
         existing_where += _normalize_condition(permission_condition)
 
 
-def build_permission_condition(row_filter: Dict[str, Any], table_alias: str) -> str:
+def build_permission_condition(row_filter: dict[str, Any], table_alias: str) -> str:
     """
     构建单个模型的权限条件
 
@@ -172,10 +172,10 @@ def build_permission_condition(row_filter: Dict[str, Any], table_alias: str) -> 
 
 
 def get_involved_model_ids_from_query(
-        table_config: Dict[str, Any],
-        all_semantic_fields: List[Dict[str, Any]],
+        table_config: dict[str, Any],
+        all_semantic_fields: list[dict[str, Any]],
         chart_type: str
-) -> List[str]:
+) -> list[str]:
     """
     从查询配置中提取所有涉及的模型ID
 
@@ -230,10 +230,10 @@ if __name__ == "__main__":
         ]
     }
     result1 = build_permission_condition(row_filter1, "t1")
-    print(f"\n✓ 单个规则:")
+    print("\n✓ 单个规则:")
     print(f"  输入: {row_filter1}")
     print(f"  结果: {result1}")
-    print(f"  期望: (t1.mc = '男')")
+    print("  期望: (t1.mc = '男')")
 
     # 测试用例2：多个规则 - OR
     row_filter2 = {
@@ -244,10 +244,10 @@ if __name__ == "__main__":
         ]
     }
     result2 = build_permission_condition(row_filter2, "t4")
-    print(f"\n✓ 多个规则 (OR):")
+    print("\n✓ 多个规则 (OR):")
     print(f"  输入: {row_filter2}")
     print(f"  结果: {result2}")
-    print(f"  期望: ((t4.byxx = '南京大学') OR (t4.age > 25))")
+    print("  期望: ((t4.byxx = '南京大学') OR (t4.age > 25))")
 
     # 测试用例3：多个规则 - AND
     row_filter3 = {
@@ -259,10 +259,10 @@ if __name__ == "__main__":
         ]
     }
     result3 = build_permission_condition(row_filter3, "t4")
-    print(f"\n✓ 多个规则 (AND):")
+    print("\n✓ 多个规则 (AND):")
     print(f"  输入: {row_filter3}")
     print(f"  结果: {result3}")
-    print(f"  期望: ((t4.byxx = '南京大学') AND (t4.age > 25) AND (t4.status = 'active'))")
+    print("  期望: ((t4.byxx = '南京大学') AND (t4.age > 25) AND (t4.status = 'active'))")
 
     print("\n" + "=" * 60)
     print("✅ 测试完成!")

@@ -1,6 +1,6 @@
 # exceptions.py
 from enum import Enum
-from typing import Optional, Dict, Any
+from typing import Any
 
 
 class ErrorCode(Enum):
@@ -21,9 +21,9 @@ class WorkflowError(Exception):
     def __init__(self,
                  message: str,
                  error_code: ErrorCode = ErrorCode.UNKNOWN_ERROR,
-                 node_id: Optional[str] = None,
-                 node_title: Optional[str] = None,
-                 details: Optional[Dict[str, Any]] = None):
+                 node_id: str | None = None,
+                 node_title: str | None = None,
+                 details: dict[str, Any] | None = None):
         self.message = message
         self.error_code = error_code
         self.node_id = node_id
@@ -40,7 +40,7 @@ class NodeError(WorkflowError):
                  node_title: str,
                  message: str,
                  error_code: ErrorCode = ErrorCode.UNKNOWN_ERROR,
-                 details: Optional[Dict[str, Any]] = None):
+                 details: dict[str, Any] | None = None):
         super().__init__(
             message=message,
             error_code=error_code,
@@ -53,8 +53,8 @@ class NodeError(WorkflowError):
 class NodeExecutionError(NodeError):
     """节点执行异常"""
 
-    def __init__(self, node_id: str, node_title: str, message: str, details: Optional[Dict[str, Any]] = None,
-                 workflow_exe_data: Optional[Dict[str, Any]] = None):
+    def __init__(self, node_id: str, node_title: str, message: str, details: dict[str, Any] | None = None,
+                 workflow_exe_data: dict[str, Any] | None = None):
         super().__init__(
             node_id=node_id,
             node_title=node_title,
@@ -68,7 +68,7 @@ class NodeExecutionError(NodeError):
 class NodeTimeoutError(NodeError):
     """节点执行超时异常"""
 
-    def __init__(self, node_id: str, node_title: str, timeout: int, details: Optional[Dict[str, Any]] = None):
+    def __init__(self, node_id: str, node_title: str, timeout: int, details: dict[str, Any] | None = None):
         super().__init__(
             node_id=node_id,
             node_title=node_title,

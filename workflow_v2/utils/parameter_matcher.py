@@ -1,5 +1,5 @@
-from typing import Any
 import json
+from typing import Any
 
 
 class ParameterMatcher:
@@ -62,7 +62,7 @@ class ParameterMatcher:
             try:
                 value = self._resolve_value(input_def["value"])
             except (KeyError, ValueError) as e:
-                raise ValueError(f"Error resolving value for parameter {name}: {str(e)}")
+                raise ValueError(f"Error resolving value for parameter {name}: {e!s}")
 
             if value is None:
                 continue
@@ -542,4 +542,4 @@ if __name__ == "__main__":
         result = match_parameters(input_parameters, nodes)
         print("Matched parameters:", json.dumps(result, indent=2))
     except Exception as e:
-        print(f"Error: {str(e)}")
+        print(f"Error: {e!s}")

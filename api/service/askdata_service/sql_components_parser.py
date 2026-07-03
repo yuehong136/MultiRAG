@@ -1,11 +1,11 @@
 import re
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Any
 
 
 class SQLComponentsParser:
     """SQL组件解析器，用于解析已经分离的SQL各部分"""
 
-    def __init__(self, sql_components: Dict[str, Any]):
+    def __init__(self, sql_components: dict[str, Any]):
         """
         初始化解析器
 
@@ -27,7 +27,7 @@ class SQLComponentsParser:
         self.components = sql_components
         self._table_alias_map = {}
 
-    def parse_select_columns(self) -> List[str]:
+    def parse_select_columns(self) -> list[str]:
         """解析SELECT列"""
         select_clause = self.components.get('select', '')
         if not select_clause:
@@ -48,7 +48,7 @@ class SQLComponentsParser:
 
         return columns
 
-    def parse_from_tables(self) -> List[Dict[str, str]]:
+    def parse_from_tables(self) -> list[dict[str, str]]:
         """
         解析FROM子句中的所有表
 
@@ -90,7 +90,7 @@ class SQLComponentsParser:
 
         return tables
 
-    def get_table_alias_mapping(self) -> Dict[str, str]:
+    def get_table_alias_mapping(self) -> dict[str, str]:
         """
         获取表别名到真实表名的映射
 
@@ -106,7 +106,7 @@ class SQLComponentsParser:
 
         return self._table_alias_map.copy()
 
-    def parse_where_conditions(self) -> Dict:
+    def parse_where_conditions(self) -> dict:
         """
         解析WHERE条件
 
@@ -150,7 +150,7 @@ class SQLComponentsParser:
 
         return result
 
-    def parse_having_conditions(self) -> Dict:
+    def parse_having_conditions(self) -> dict:
         """
         解析HAVING条件
 
@@ -194,7 +194,7 @@ class SQLComponentsParser:
 
         return result
 
-    def parse_order_by(self) -> List[Dict[str, str]]:
+    def parse_order_by(self) -> list[dict[str, str]]:
         """
         解析ORDER BY字段
 
@@ -237,7 +237,7 @@ class SQLComponentsParser:
 
         return order_fields
 
-    def parse_group_by(self) -> List[str]:
+    def parse_group_by(self) -> list[str]:
         """解析GROUP BY字段"""
         group_clause = self.components.get('groupBy', '')
         if not group_clause:
@@ -254,7 +254,7 @@ class SQLComponentsParser:
 
         return fields
 
-    def parse_pagination(self) -> Tuple[Optional[int], Optional[int]]:
+    def parse_pagination(self) -> tuple[int | None, int | None]:
         """
         解析分页信息
 
@@ -279,7 +279,7 @@ class SQLComponentsParser:
 
         return limit, offset
 
-    def parse_limit(self) -> Optional[int]:
+    def parse_limit(self) -> int | None:
         """
         解析LIMIT值（保持向后兼容）
 
@@ -289,7 +289,7 @@ class SQLComponentsParser:
         limit, _ = self.parse_pagination()
         return limit
 
-    def parse_offset(self) -> Optional[int]:
+    def parse_offset(self) -> int | None:
         """
         解析OFFSET值
 
@@ -299,7 +299,7 @@ class SQLComponentsParser:
         _, offset = self.parse_pagination()
         return offset
 
-    def parse_all(self) -> Dict:
+    def parse_all(self) -> dict:
         """解析所有组件"""
         limit, offset = self.parse_pagination()
         from_tables = self.parse_from_tables()
@@ -325,7 +325,7 @@ class SQLComponentsParser:
         }
 
     # 辅助方法
-    def _split_by_comma(self, text: str) -> List[str]:
+    def _split_by_comma(self, text: str) -> list[str]:
         """智能分割逗号分隔的内容（考虑括号内的逗号）"""
         parts = []
         current = []
@@ -348,7 +348,7 @@ class SQLComponentsParser:
 
         return parts
 
-    def _extract_table_info(self, table_expr: str) -> Optional[Dict[str, str]]:
+    def _extract_table_info(self, table_expr: str) -> dict[str, str] | None:
         """从表表达式中提取表名和别名"""
         table_expr = table_expr.strip()
         if not table_expr:
@@ -379,7 +379,7 @@ class SQLComponentsParser:
             'alias': table_expr  # 别名与表名相同
         }
 
-    def _parse_single_condition(self, condition: str) -> Optional[Dict[str, str]]:
+    def _parse_single_condition(self, condition: str) -> dict[str, str] | None:
         """解析单个WHERE或HAVING条件"""
         condition = condition.strip()
         if not condition:
@@ -433,7 +433,7 @@ class SQLComponentsParser:
         return None
 
 
-def format_parsed_components(parsed: Dict) -> None:
+def format_parsed_components(parsed: dict) -> None:
     """格式化输出解析结果"""
     print("SQL组件解析结果：")
     print("=" * 60)
@@ -474,10 +474,10 @@ def format_parsed_components(parsed: Dict) -> None:
     if where['raw_condition']:
         print("\n4. WHERE条件：")
         if where['has_or']:
-            print(f"   包含OR操作符，原始条件：")
+            print("   包含OR操作符，原始条件：")
             print(f"   {where['raw_condition']}")
         else:
-            print(f"   解析后的条件（AND连接）：")
+            print("   解析后的条件（AND连接）：")
             for i, cond in enumerate(where['parsed_conditions'], 1):
                 if cond['value'] is None:  # NULL操作符没有值
                     print(f"   {i}. {cond['field']} {cond['operator']}")
@@ -496,10 +496,10 @@ def format_parsed_components(parsed: Dict) -> None:
     if having['raw_condition']:
         print("\n6. HAVING条件：")
         if having['has_or']:
-            print(f"   包含OR操作符，原始条件：")
+            print("   包含OR操作符，原始条件：")
             print(f"   {having['raw_condition']}")
         else:
-            print(f"   解析后的条件（AND连接）：")
+            print("   解析后的条件（AND连接）：")
             for i, cond in enumerate(having['parsed_conditions'], 1):
                 if cond['value'] is None:  # NULL操作符没有值
                     print(f"   {i}. {cond['field']} {cond['operator']}")

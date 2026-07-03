@@ -4,8 +4,8 @@ import re
 import tempfile
 
 from api.db.db_models import db_connection
-from api.db.services.llm_service import LLMBundle
 from api.db.joint_services.tenant_model_service import get_tenant_default_model_by_type
+from api.db.services.llm_service import LLMBundle
 from common.constants import LLMType
 from core.nlp import rag_tokenizer, tokenize
 

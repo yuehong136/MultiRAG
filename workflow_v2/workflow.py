@@ -1,18 +1,18 @@
-from datetime import datetime
 import asyncio
-from typing import Dict, Any, Optional, List
+from datetime import datetime
+from typing import Any
 
-from workflow_v2.workflow_state_manager import workflow_state_manager
 from workflow_v2.component.component_manager import ComponentManager
 from workflow_v2.component.selector_component import Branch
 from workflow_v2.utils import match_parameters
-from workflow_v2.workflow_exceptions import WorkflowError, NodeTimeoutError, WorkflowValidationError, NodeExecutionError
-from workflow_v2.workflow_logging_config import WorkflowLogger, WorkflowContextLogger, NodeLogger
+from workflow_v2.workflow_exceptions import NodeExecutionError, NodeTimeoutError, WorkflowError, WorkflowValidationError
+from workflow_v2.workflow_logging_config import NodeLogger, WorkflowContextLogger, WorkflowLogger
+from workflow_v2.workflow_state_manager import workflow_state_manager
 from workflow_v2.workflow_validator import WorkflowValidator
 
 
 class WorkflowNode:
-    def __init__(self, node_id: str, node_data: Dict[str, Any]):
+    def __init__(self, node_id: str, node_data: dict[str, Any]):
         # 基本信息
         self.id = node_id
         self.data = node_data
@@ -26,8 +26,8 @@ class WorkflowNode:
         self.timeout = 60  # 超时时间(秒)
 
         # 实际输入输出
-        self.input: Optional[Dict[str, Any]] = None
-        self.output: Optional[Dict[str, Any]] = None
+        self.input: dict[str, Any] | None = None
+        self.output: dict[str, Any] | None = None
 
         # 状态管理
         self.is_completed = False
@@ -42,18 +42,18 @@ class WorkflowNode:
         self.output_schema = node_data.get('data', {}).get('outputs', [])
 
         # 分支相关属性
-        self.branches: Dict[str, Branch] = {}  # port_id -> Branch
+        self.branches: dict[str, Branch] = {}  # port_id -> Branch
         self.is_selector = (node_data['type'] == "8" or node_data['type'] == 8)
         self.is_intent_classification = (node_data['type'] == "22" or node_data['type'] == 22)
 
         self.in_execution_path = False
 
         # 添加执行时间属性
-        self.execution_start_time: Optional[float] = None
-        self.execution_end_time: Optional[float] = None
+        self.execution_start_time: float | None = None
+        self.execution_end_time: float | None = None
 
         # 失败原因
-        self.failure_reason: Optional[str] = None
+        self.failure_reason: str | None = None
 
     def add_branch_node(self, node: 'WorkflowNode', port_id: str):
         """添加分支节点"""
@@ -69,7 +69,7 @@ class WorkflowNode:
 
 
 class AsyncWorkflowEngine:
-    def __init__(self, workflow_id: str, start_input_values: Optional[Dict[str, Any]] = None,
+    def __init__(self, workflow_id: str, start_input_values: dict[str, Any] | None = None,
                  **kwargs):
         self.workflow_id = workflow_id
         self.nodes = {}
@@ -85,12 +85,12 @@ class AsyncWorkflowEngine:
         self.node_execution_times = {}
 
         # 添加第一个失败的节点
-        self.first_failed_node: Optional[WorkflowNode] = None
+        self.first_failed_node: WorkflowNode | None = None
 
     async def build_graph(self, nodes_data, edges_data):
-        self.logger.info(f"==================================")
+        self.logger.info("==================================")
         self.logger.info(f"Workflow ID: {self.workflow_id}")
-        self.logger.info(f"Building workflow graph")
+        self.logger.info("Building workflow graph")
 
         # 首先清除该工作流ID的之前状态记录
         await workflow_state_manager.clear_workflow_state(self.workflow_id)
@@ -150,7 +150,7 @@ class AsyncWorkflowEngine:
             )
 
     async def execute(self):
-        self.logger.info(f"Starting workflow execution")
+        self.logger.info("Starting workflow execution")
         try:
             # 重置所有节点的执行路径状态
             for node in self.nodes.values():
@@ -165,7 +165,7 @@ class AsyncWorkflowEngine:
             await workflow_state_manager.publish_workflow_completed(self.workflow_id)
 
         except Exception as e:
-            self.logger.error(f"Workflow execution failed: {str(e)}", exc_info=True)
+            self.logger.error(f"Workflow execution failed: {e!s}", exc_info=True)
             raise
 
     async def execute_node(self, node: WorkflowNode) -> None:
@@ -228,7 +228,7 @@ class AsyncWorkflowEngine:
                         await asyncio.gather(*next_tasks)
 
         except Exception as e:
-            node_logger.error(f"Node execution failed: {str(e)}", exc_info=True)
+            node_logger.error(f"Node execution failed: {e!s}", exc_info=True)
             node.status = "failed"
             node.failure_reason = str(e)
 
@@ -285,8 +285,8 @@ class AsyncWorkflowEngine:
                     execution_time=datetime.now().timestamp() - node.execution_start_time,
                 )
 
-        except asyncio.TimeoutError:
-            node_logger.error(f"Node execution timed out")
+        except TimeoutError:
+            node_logger.error("Node execution timed out")
             node.status = "failed"
 
             # 发布节点超时状态
@@ -324,7 +324,7 @@ class AsyncWorkflowEngine:
                 error_message=str(e)
             )
 
-            node_logger.error(f"Node failed: {str(e)}", exc_info=True)
+            node_logger.error(f"Node failed: {e!s}", exc_info=True)
             raise
         except Exception as e:
             node.status = "failed"
@@ -340,7 +340,7 @@ class AsyncWorkflowEngine:
                 error_message=str(e)
             )
 
-            node_logger.error(f"Node processing failed: {str(e)}", exc_info=True)
+            node_logger.error(f"Node processing failed: {e!s}", exc_info=True)
             raise
         finally:
             # 记录结束时间并计算执行时长
@@ -349,7 +349,7 @@ class AsyncWorkflowEngine:
             self.node_execution_times[node.id] = round(execution_time, 3)
             node.is_executing = False
 
-    async def _resolve_node_inputs(self, node: WorkflowNode) -> Dict[str, Any]:
+    async def _resolve_node_inputs(self, node: WorkflowNode) -> dict[str, Any]:
         """解析节点的输入值"""
         # 如果是开始节点，使用start_input_values
         if not node.previous_nodes:
@@ -370,7 +370,7 @@ class AsyncWorkflowEngine:
             # 等待任务取消完成
             await asyncio.gather(*self.tasks.values(), return_exceptions=True)
         except Exception as e:
-            self.logger.error(f"Cleanup failed: {str(e)}", exc_info=True)
+            self.logger.error(f"Cleanup failed: {e!s}", exc_info=True)
         finally:
             # 重置工作流状态
             self.tasks.clear()
@@ -407,13 +407,13 @@ async def run_workflow(workflow_data, start_input_values=None, workflow_id: str 
     await engine.build_graph(workflow_data['nodes'], workflow_data['edges'])
     try:
         await engine.execute()
-        nodes_io = {k: {'input': getattr(v, 'input'), 'output': getattr(v, 'output')} for k, v in engine.nodes.items()}
+        nodes_io = {k: {'input': v.input, 'output': v.output} for k, v in engine.nodes.items()}
 
         # 获取结果
         end_node = next(node for node in engine.nodes.values()
                         if node.data['type'] == '2')
 
-        engine.logger.info(f"==================================")
+        engine.logger.info("==================================")
 
         # 返回结果时包含节点执行时间和工作流ID
         return {
@@ -423,7 +423,7 @@ async def run_workflow(workflow_data, start_input_values=None, workflow_id: str 
             "node_execution_times": engine.node_execution_times
         }
     except NodeExecutionError as e:
-        failed_nodes: List[str] = [engine.first_failed_node.id] if engine.first_failed_node else []
+        failed_nodes: list[str] = [engine.first_failed_node.id] if engine.first_failed_node else []
         # 如果节点IO均为空，则认为是失败节点
         empty_io_nodes = get_empty_io_nodes(engine)
         if empty_io_nodes:
@@ -431,8 +431,8 @@ async def run_workflow(workflow_data, start_input_values=None, workflow_id: str 
 
         data = {
             "workflow_id": workflow_id,  # 添加工作流ID
-            "nodes_io": {k: {'input': getattr(v, 'input'), 'output': getattr(v, 'output'),
-                             'failure_reason': getattr(v, 'failure_reason')} for k, v in
+            "nodes_io": {k: {'input': v.input, 'output': v.output,
+                             'failure_reason': v.failure_reason} for k, v in
                          engine.nodes.items()},
             "node_execution_times": engine.node_execution_times,
             "failed_nodes": failed_nodes,

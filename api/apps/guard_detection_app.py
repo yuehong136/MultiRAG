@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -7,22 +6,24 @@
 @desc: 渐进式AI安全护栏检测接口 - 优先词库检测，预留完整流程兼容
 """
 from __future__ import annotations
-from typing import Any, List, Dict
+
+from typing import Any
+
+import xxhash
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.db.db_models import get_db
 from api.db.services.ai_guard_engine_service import AiGuardEngineService
-from api.db.services.guard_log_service import GuardLogService
-from api.db.services.guard_service_service import GuardServiceService
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
-from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result
+from api.db.services.guard_log_service import GuardLogService
+from api.db.services.guard_service_service import GuardServiceService
+from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
 from common import settings
 from core.app import naive
-import xxhash
 
 router = APIRouter()
 
@@ -46,7 +47,7 @@ class BatchContentItem(BaseModel):
 class BatchDetectionRequest(BaseModel):
     """批量检测请求模型"""
     service_id: str = Field(..., description="服务ID")
-    items: List[BatchContentItem] = Field(..., description="待检测的内容列表", min_items=1, max_items=100)
+    items: list[BatchContentItem] = Field(..., description="待检测的内容列表", min_items=1, max_items=100)
     request_id: str | None = Field(None, description="请求ID")
     source_type: str | None = Field("batch_api", description="来源类型")
     source_id: str | None = Field(None, description="来源ID")
@@ -62,7 +63,7 @@ class DocumentItem(BaseModel):
 class BatchDocumentDetectionRequest(BaseModel):
     """批量文档安全检测请求模型"""
     service_id: str = Field(..., description="服务ID")
-    documents: List[DocumentItem] = Field(..., description="待检测的文档列表", min_items=1, max_items=50)
+    documents: list[DocumentItem] = Field(..., description="待检测的文档列表", min_items=1, max_items=50)
     request_id: str | None = Field(None, description="请求ID")
     source_type: str | None = Field("batch_document_api", description="来源类型")
     source_id: str | None = Field(None, description="来源ID")
@@ -90,8 +91,8 @@ class BatchDocumentResult(BaseModel):
     overall_risk_score: float = Field(..., description="文档整体风险分数")
     overall_action: str = Field(..., description="文档整体处理动作")
     process_time_ms: int = Field(..., description="文档处理耗时(毫秒)")
-    chunk_results: List[Dict[str, Any]] = Field(default_factory=list, description="切片检测结果")
-    detection_summary: Dict[str, Any] = Field(default_factory=dict, description="检测汇总信息")
+    chunk_results: list[dict[str, Any]] = Field(default_factory=list, description="切片检测结果")
+    detection_summary: dict[str, Any] = Field(default_factory=dict, description="检测汇总信息")
     error_message: str | None = Field(None, description="错误信息（如果检测失败）")
 
 
@@ -103,10 +104,10 @@ class BatchItemResult(BaseModel):
     is_blocked: bool = Field(..., description="是否被拦截")
     risk_score: float = Field(..., description="风险分数")
     action: str = Field(..., description="处理动作")
-    matched_items: List[Dict[str, Any]] = Field(default_factory=list, description="匹配项")
-    risk_words: List[str] = Field(default_factory=list, description="风险词")
+    matched_items: list[dict[str, Any]] = Field(default_factory=list, description="匹配项")
+    risk_words: list[str] = Field(default_factory=list, description="风险词")
     process_time_ms: int = Field(..., description="单项处理耗时(毫秒)")
-    detection_result: Dict[str, Any] = Field(default_factory=dict, description="完整检测结果")
+    detection_result: dict[str, Any] = Field(default_factory=dict, description="完整检测结果")
 
 
 class CreateServiceRequest(BaseModel):
@@ -142,8 +143,8 @@ class ChunkDetectionResult(BaseModel):
     is_blocked: bool = Field(..., description="是否被拦截")
     risk_score: float = Field(..., description="风险分数")
     action: str = Field(..., description="处理动作")
-    matched_items: List[Dict[str, Any]] = Field(default_factory=list, description="匹配项")
-    risk_words: List[str] = Field(default_factory=list, description="风险词")
+    matched_items: list[dict[str, Any]] = Field(default_factory=list, description="匹配项")
+    risk_words: list[str] = Field(default_factory=list, description="风险词")
 
 
 @router.post('/detect', summary="内容安全检测（渐进式实现）")
@@ -154,12 +155,12 @@ def detect_content_progressive(
 ) -> dict[str, Any]:
     """
     ### POST `/detect` 内容安全检测
-    
+
     **功能描述**:
     此接口基于服务ID对文本内容进行安全检测，采用渐进式实现策略。
     当前版本优先使用服务绑定的黑白名单词库进行检测，后续版本将无缝升级到完整的维度-标签-规则检测流程。
     支持链路追踪、会话关联等高级特性，检测结果自动记录日志。
-    
+
     ---
     ### 请求体 (Request Body)
     | 字段          | 类型     | 必填 | 默认值 | 描述                           |
@@ -170,7 +171,7 @@ def detect_content_progressive(
     | `chat_id`     | `string` | 否   | null   | 会话ID，用于关联对话           |
     | `source_type` | `string` | 否   | "api"  | 来源类型                       |
     | `source_id`   | `string` | 否   | null   | 来源标识                       |
-    
+
     **请求示例**:
     ```json
     {
@@ -182,7 +183,7 @@ def detect_content_progressive(
         "source_id": "frontend_v1"
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -227,7 +228,7 @@ def detect_content_progressive(
         }
     }
     ```
-    
+
     #### 失败响应 (400)
     ```json
     {
@@ -235,7 +236,7 @@ def detect_content_progressive(
         "retmsg": "服务ID不能为空"
     }
     ```
-    
+
     #### 失败响应 (500)
     ```json
     {
@@ -248,18 +249,18 @@ def detect_content_progressive(
         # 参数验证
         if not request.service_id or not request.service_id.strip():
             return get_data_error_result(retmsg="服务ID不能为空")
-        
+
         if not request.content or not request.content.strip():
             return get_data_error_result(retmsg="检测内容不能为空")
-        
+
         # 验证服务存在性和权限
         service = GuardServiceService.get_by_id(db, request.service_id)
         if not service:
             return get_data_error_result(retmsg="服务不存在", retcode=404)
-        
+
         if service.tenant_id != user.id:
             return get_data_error_result(retmsg="无权限访问该服务", retcode=403)
-        
+
         # 执行渐进式检测
         detection_result = AiGuardEngineService.detect_content(
             db=db,
@@ -272,9 +273,9 @@ def detect_content_progressive(
             source_type=request.source_type,
             source_id=request.source_id
         )
-        
+
         return get_json_result(data=detection_result)
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -287,12 +288,12 @@ def detect_batch_content(
 ) -> dict[str, Any]:
     """
     ### POST `/batch-detect` 批量内容安全检测
-    
+
     **功能描述**:
     此接口基于现有的单文件检测功能，支持批量处理多个内容项（1-100项）。
     每个内容项独立检测，使用相同的服务配置，返回统一格式的批量检测结果。
     支持错误容错机制，单项检测失败不影响其他项目，适用于大量文本内容的批量安全审核场景。
-    
+
     ---
     ### 请求体 (Request Body)
     | 字段          | 类型     | 必填 | 默认值      | 描述                               |
@@ -302,13 +303,13 @@ def detect_batch_content(
     | `request_id`  | `string` | 否   | null        | 请求ID，用于链路追踪               |
     | `source_type` | `string` | 否   | "batch_api" | 来源类型                           |
     | `source_id`   | `string` | 否   | null        | 来源标识                           |
-    
+
     **items 数组元素结构**:
     | 字段      | 类型     | 必填 | 默认值 | 描述                             |
     |-----------|----------|------|--------|----------------------------------|
     | `content` | `string` | 是   | -      | 待检测的文本内容                 |
     | `item_id` | `string` | 否   | null   | 内容项ID，用于标识和关联结果     |
-    
+
     **请求示例**:
     ```json
     {
@@ -328,7 +329,7 @@ def detect_batch_content(
         "source_id": "frontend_batch_v1"
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -376,7 +377,7 @@ def detect_batch_content(
         }
     }
     ```
-    
+
     #### 失败响应 (400)
     ```json
     {
@@ -384,7 +385,7 @@ def detect_batch_content(
         "retmsg": "检测内容列表不能为空"
     }
     ```
-    
+
     #### 失败响应 (500)
     ```json
     {
@@ -396,30 +397,30 @@ def detect_batch_content(
     try:
         import time
         start_time = time.time()
-        
+
         # 参数验证
         if not request.service_id or not request.service_id.strip():
             return get_data_error_result(retmsg="服务ID不能为空")
-        
+
         if not request.items or len(request.items) == 0:
             return get_data_error_result(retmsg="检测内容列表不能为空")
-        
+
         if len(request.items) > 100:
             return get_data_error_result(retmsg="批量检测项数量不能超过100个")
-        
+
         # 验证每个内容项
         for i, item in enumerate(request.items):
             if not item.content or not item.content.strip():
                 return get_data_error_result(retmsg=f"第{i+1}项的检测内容不能为空")
-        
+
         # 验证服务存在性和权限
         service = GuardServiceService.get_by_id(db, request.service_id)
         if not service:
             return get_data_error_result(retmsg="服务不存在", retcode=404)
-        
+
         if service.tenant_id != user.id:
             return get_data_error_result(retmsg="无权限访问该服务", retcode=403)
-        
+
         # 执行批量检测
         item_results = []
         blocked_count = 0
@@ -427,13 +428,13 @@ def detect_batch_content(
         all_risk_words = set()
         risk_distribution = {"high_risk": 0, "medium_risk": 0, "low_risk": 0, "safe": 0}
         action_distribution = {"block": 0, "warn": 0, "pass": 0}
-        
+
         for i, item in enumerate(request.items):
             item_start_time = time.time()
-            
+
             # 生成item_id（如果未提供）
             item_id = item.item_id or f"item_{i}_{int(time.time()*1000)}"
-            
+
             try:
                 # 执行单项检测
                 detection_result = AiGuardEngineService.detect_content(
@@ -447,9 +448,9 @@ def detect_batch_content(
                     source_type=request.source_type,
                     source_id=request.source_id
                 )
-                
+
                 item_process_time = int((time.time() - item_start_time) * 1000)
-                
+
                 # 构建单项结果
                 item_result = BatchItemResult(
                     item_id=item_id,
@@ -463,16 +464,16 @@ def detect_batch_content(
                     process_time_ms=item_process_time,
                     detection_result=detection_result
                 )
-                
+
                 item_results.append(item_result)
-                
+
                 # 统计汇总信息
                 if detection_result["is_blocked"]:
                     blocked_count += 1
-                
+
                 max_risk_score = max(max_risk_score, detection_result["overall_risk_score"])
                 all_risk_words.update(detection_result.get("risk_words", []))
-                
+
                 # 风险分数分布统计
                 risk_score = detection_result["overall_risk_score"]
                 if risk_score >= 80:
@@ -483,15 +484,15 @@ def detect_batch_content(
                     risk_distribution["low_risk"] += 1
                 else:
                     risk_distribution["safe"] += 1
-                
+
                 # 动作分布统计
                 action = detection_result["action"]
                 action_distribution[action] = action_distribution.get(action, 0) + 1
-                
+
             except Exception as item_error:
                 # 单项检测失败，记录错误但不影响整体处理
                 item_process_time = int((time.time() - item_start_time) * 1000)
-                
+
                 error_result = BatchItemResult(
                     item_id=item_id,
                     item_index=i,
@@ -502,12 +503,12 @@ def detect_batch_content(
                     matched_items=[],
                     risk_words=[],
                     process_time_ms=item_process_time,
-                    detection_result={"error": f"检测失败: {str(item_error)}"}
+                    detection_result={"error": f"检测失败: {item_error!s}"}
                 )
-                
+
                 item_results.append(error_result)
                 action_distribution["error"] = action_distribution.get("error", 0) + 1
-        
+
         # 确定整体动作
         if blocked_count > 0:
             overall_action = "block"
@@ -515,9 +516,9 @@ def detect_batch_content(
             overall_action = "warn"
         else:
             overall_action = "pass"
-        
+
         total_process_time = int((time.time() - start_time) * 1000)
-        
+
         # 构建响应数据
         response_data = {
             "batch_summary": {
@@ -536,9 +537,9 @@ def detect_batch_content(
                 "detection_mode": "library_only"
             }
         }
-        
+
         return get_json_result(data=response_data)
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -551,12 +552,12 @@ def detect_batch_documents(
 ) -> dict[str, Any]:
     """
     ### POST `/batch-detect-documents` 批量文档安全检测
-    
+
     **功能描述**:
     此接口基于现有的单文档检测功能，支持批量处理多个文档（1-50个）。
     每个文档独立进行切片解析和安全检测，返回详细的批量文档检测结果。
     支持多种文档格式（PDF、Word、PPT、Excel等），提供完整的错误容错机制。
-    
+
     ---
     ### 请求体 (Request Body)
     | 字段          | 类型     | 必填 | 默认值               | 描述                           |
@@ -566,14 +567,14 @@ def detect_batch_documents(
     | `request_id`  | `string` | 否   | null                 | 请求ID，用于链路追踪           |
     | `source_type` | `string` | 否   | "batch_document_api" | 来源类型                       |
     | `source_id`   | `string` | 否   | null                 | 来源标识                       |
-    
+
     **documents 数组元素结构**:
     | 字段         | 类型      | 必填 | 默认值 | 描述                           |
     |--------------|----------|------|--------|--------------------------------|
     | `doc_id`     | `string` | 是   | -      | 文档ID                         |
     | `max_chunks` | `integer`| 否   | 100    | 最大检测切片数量               |
     | `doc_alias`  | `string` | 否   | null   | 文档别名，用于标识和关联结果   |
-    
+
     **请求示例**:
     ```json
     {
@@ -595,7 +596,7 @@ def detect_batch_documents(
         "source_id": "frontend_batch_doc_v1"
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -653,7 +654,7 @@ def detect_batch_documents(
         }
     }
     ```
-    
+
     #### 失败响应 (400)
     ```json
     {
@@ -661,7 +662,7 @@ def detect_batch_documents(
         "retmsg": "文档列表不能为空"
     }
     ```
-    
+
     #### 失败响应 (500)
     ```json
     {
@@ -673,32 +674,32 @@ def detect_batch_documents(
     try:
         import time
         start_time = time.time()
-        
+
         # 参数验证
         if not request.service_id or not request.service_id.strip():
             return get_data_error_result(retmsg="服务ID不能为空")
-        
+
         if not request.documents or len(request.documents) == 0:
             return get_data_error_result(retmsg="文档列表不能为空")
-        
+
         if len(request.documents) > 50:
             return get_data_error_result(retmsg="批量文档检测数量不能超过50个")
-        
+
         # 验证每个文档参数
         for i, doc in enumerate(request.documents):
             if not doc.doc_id or not doc.doc_id.strip():
                 return get_data_error_result(retmsg=f"第{i+1}个文档的doc_id不能为空")
             if doc.max_chunks <= 0:
                 return get_data_error_result(retmsg=f"第{i+1}个文档的max_chunks必须大于0")
-        
+
         # 验证服务存在性和权限
         service = GuardServiceService.get_by_id(db, request.service_id)
         if not service:
             return get_data_error_result(retmsg="服务不存在", retcode=404)
-        
+
         if service.tenant_id != user.id:
             return get_data_error_result(retmsg="无权限访问该服务", retcode=403)
-        
+
         # 执行批量文档检测
         document_results = []
         processed_count = 0
@@ -710,11 +711,11 @@ def detect_batch_documents(
         risk_distribution = {"high_risk": 0, "medium_risk": 0, "low_risk": 0, "safe": 0}
         action_distribution = {"block": 0, "warn": 0, "pass": 0}
         document_stats = {"blocked_documents": 0, "warned_documents": 0, "passed_documents": 0}
-        
+
         for i, doc_item in enumerate(request.documents):
             doc_start_time = time.time()
             doc_alias = doc_item.doc_alias or doc_item.doc_id
-            
+
             try:
                 # 验证文档存在性和权限
                 if not DocumentService.accessible(db, doc_item.doc_id, user.id):
@@ -736,7 +737,7 @@ def detect_batch_documents(
                     document_results.append(error_result)
                     failed_count += 1
                     continue
-                
+
                 doc = DocumentService.get_by_id(db, doc_item.doc_id)
                 if not doc:
                     error_result = BatchDocumentResult(
@@ -757,7 +758,7 @@ def detect_batch_documents(
                     document_results.append(error_result)
                     failed_count += 1
                     continue
-                
+
                 # 获取文件存储地址
                 try:
                     bucket, name = File2DocumentService.get_storage_address(db, doc_id=doc_item.doc_id)
@@ -777,12 +778,12 @@ def detect_batch_documents(
                         process_time_ms=int((time.time() - doc_start_time) * 1000),
                         chunk_results=[],
                         detection_summary={},
-                        error_message=f"获取文档存储地址失败: {str(e)}"
+                        error_message=f"获取文档存储地址失败: {e!s}"
                     )
                     document_results.append(error_result)
                     failed_count += 1
                     continue
-                
+
                 # 从MinIO获取文件内容
                 try:
                     binary = settings.STORAGE_IMPL.get(bucket, name)
@@ -802,25 +803,25 @@ def detect_batch_documents(
                         process_time_ms=int((time.time() - doc_start_time) * 1000),
                         chunk_results=[],
                         detection_summary={},
-                        error_message=f"获取文档内容失败: {str(e)}"
+                        error_message=f"获取文档内容失败: {e!s}"
                     )
                     document_results.append(error_result)
                     failed_count += 1
                     continue
-                
+
                 # 使用naive解析器进行切片处理
                 try:
                     parser_config = {
-                        "chunk_token_num": 128, 
-                        "delimiter": "\n!?。；！？", 
+                        "chunk_token_num": 128,
+                        "delimiter": "\n!?。；！？",
                         "layout_recognize": "DeepDOC"
                     }
-                    
+
                     def progress_callback(progress=None, msg=""):
                         if msg:
                             import logging
                             logging.info(f"Document parsing progress: {msg}")
-                    
+
                     chunks = naive.chunk(
                         filename=doc.name,
                         binary=binary,
@@ -832,7 +833,7 @@ def detect_batch_documents(
                         kb_id=doc.kb_id,
                         tenant_id=service.tenant_id
                     )
-                    
+
                     if not chunks:
                         # 文档无内容但处理成功
                         success_result = BatchDocumentResult(
@@ -859,7 +860,7 @@ def detect_batch_documents(
                         processed_count += 1
                         document_stats["passed_documents"] += 1
                         continue
-                        
+
                 except Exception as e:
                     error_result = BatchDocumentResult(
                         doc_id=doc_item.doc_id,
@@ -874,16 +875,16 @@ def detect_batch_documents(
                         process_time_ms=int((time.time() - doc_start_time) * 1000),
                         chunk_results=[],
                         detection_summary={},
-                        error_message=f"文档切片处理失败: {str(e)}"
+                        error_message=f"文档切片处理失败: {e!s}"
                     )
                     document_results.append(error_result)
                     failed_count += 1
                     continue
-                
+
                 # 限制检测的切片数量
                 doc_total_chunks = len(chunks)
                 chunks_to_check = chunks[:doc_item.max_chunks] if doc_item.max_chunks > 0 else chunks
-                
+
                 # 对每个切片执行安全检测
                 chunk_detection_results = []
                 doc_blocked_count = 0
@@ -891,17 +892,17 @@ def detect_batch_documents(
                 doc_risk_words = set()
                 doc_risk_distribution = {"high_risk": 0, "medium_risk": 0, "low_risk": 0, "safe": 0}
                 doc_action_distribution = {"block": 0, "warn": 0, "pass": 0}
-                
+
                 for j, chunk in enumerate(chunks_to_check):
                     chunk_content = chunk.get("content_with_weight", "")
                     if not chunk_content:
                         continue
-                    
+
                     # 生成唯一的chunk_id
                     chunk_id = xxhash.xxh64(
                         (chunk_content + str(doc_item.doc_id)).encode("utf-8")
                     ).hexdigest()
-                    
+
                     # 执行渐进式检测
                     detection_result = AiGuardEngineService.detect_content(
                         db=db,
@@ -915,7 +916,7 @@ def detect_batch_documents(
                         chunk_id=chunk_id,
                         doc_id=doc_item.doc_id
                     )
-                    
+
                     # 构建切片检测结果
                     chunk_result = ChunkDetectionResult(
                         chunk_id=chunk_id,
@@ -927,16 +928,16 @@ def detect_batch_documents(
                         matched_items=detection_result.get("matched_items", []),
                         risk_words=detection_result.get("risk_words", [])
                     )
-                    
+
                     chunk_detection_results.append(chunk_result)
-                    
+
                     # 统计信息
                     if detection_result["is_blocked"]:
                         doc_blocked_count += 1
-                    
+
                     doc_max_risk_score = max(doc_max_risk_score, detection_result["overall_risk_score"])
                     doc_risk_words.update(detection_result.get("risk_words", []))
-                    
+
                     # 风险分数分布统计
                     risk_score = detection_result["overall_risk_score"]
                     if risk_score >= 80:
@@ -947,14 +948,14 @@ def detect_batch_documents(
                         doc_risk_distribution["low_risk"] += 1
                     else:
                         doc_risk_distribution["safe"] += 1
-                    
+
                     # 动作分布统计
                     action = detection_result["action"]
                     doc_action_distribution[action] = doc_action_distribution.get(action, 0) + 1
-                
+
                 # 按风险分数降序排列
                 chunk_detection_results.sort(key=lambda x: x.risk_score, reverse=True)
-                
+
                 # 确定文档整体动作
                 if doc_blocked_count > 0:
                     doc_overall_action = "block"
@@ -965,7 +966,7 @@ def detect_batch_documents(
                 else:
                     doc_overall_action = "pass"
                     document_stats["passed_documents"] += 1
-                
+
                 # 构建文档检测结果
                 doc_result = BatchDocumentResult(
                     doc_id=doc_item.doc_id,
@@ -987,21 +988,21 @@ def detect_batch_documents(
                     },
                     error_message=None
                 )
-                
+
                 document_results.append(doc_result)
                 processed_count += 1
-                
+
                 # 累加到批量统计
                 total_chunks += doc_total_chunks
                 total_blocked_chunks += doc_blocked_count
                 max_risk_score = max(max_risk_score, doc_max_risk_score)
                 all_risk_words.update(doc_risk_words)
-                
+
                 for key in risk_distribution:
                     risk_distribution[key] += doc_risk_distribution[key]
                 for key in action_distribution:
                     action_distribution[key] += doc_action_distribution.get(key, 0)
-                
+
             except Exception as doc_error:
                 # 单个文档检测失败
                 error_result = BatchDocumentResult(
@@ -1017,11 +1018,11 @@ def detect_batch_documents(
                     process_time_ms=int((time.time() - doc_start_time) * 1000),
                     chunk_results=[],
                     detection_summary={},
-                    error_message=f"文档检测失败: {str(doc_error)}"
+                    error_message=f"文档检测失败: {doc_error!s}"
                 )
                 document_results.append(error_result)
                 failed_count += 1
-        
+
         # 确定整体动作
         if total_blocked_chunks > 0:
             overall_action = "block"
@@ -1029,9 +1030,9 @@ def detect_batch_documents(
             overall_action = "warn"
         else:
             overall_action = "pass"
-        
+
         total_process_time = int((time.time() - start_time) * 1000)
-        
+
         # 构建响应数据
         response_data = {
             "batch_summary": {
@@ -1053,9 +1054,9 @@ def detect_batch_documents(
                 "document_stats": document_stats
             }
         }
-        
+
         return get_json_result(data=response_data)
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -1068,17 +1069,17 @@ def get_service_detection_config(
 ) -> dict[str, Any]:
     """
     ### GET `/services/{service_id}/detection-config` 获取服务检测配置
-    
+
     **功能描述**:
     此接口用于获取指定服务的检测配置信息，包括检测模式、绑定的词库、
     启用的维度和标签等详细配置。适用于前端显示服务配置详情和调试检测规则。
-    
+
     ---
     ### 路径参数 (Path Parameters)
     | 参数         | 类型     | 必填 | 描述       |
     |--------------|----------|------|------------|
     | `service_id` | `string` | 是   | 服务ID     |
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -1108,7 +1109,7 @@ def get_service_detection_config(
         }
     }
     ```
-    
+
     #### 失败响应 (404)
     ```json
     {
@@ -1122,19 +1123,19 @@ def get_service_detection_config(
         service = GuardServiceService.get_by_id(db, service_id)
         if not service:
             return get_data_error_result(retmsg="服务不存在", retcode=404)
-        
+
         if service.tenant_id != user.id:
             return get_data_error_result(retmsg="无权限访问该服务", retcode=403)
-        
+
         # 获取绑定的词库
         from api.db.services.guard_service_library_service import GuardServiceLibraryService
         bound_libraries = GuardServiceLibraryService.get_libraries_by_service(
             db, service_id, enabled_only=False
         )
-        
+
         # 判断检测模式
         detection_mode = "comprehensive" if (service.enabled_dimensions and service.enabled_labels) else "library_only"
-        
+
         config_data = {
             "service_id": service.id,
             "service_name": service.name,
@@ -1154,9 +1155,9 @@ def get_service_detection_config(
             ],
             "policy_config": service.policy_config or {}
         }
-        
+
         return get_json_result(data=config_data)
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -1169,49 +1170,49 @@ def test_library_matching(
 ) -> dict[str, Any]:
     """
     测试词库匹配功能（调试用）
-    
+
     Args:
         request: {
             "content": "测试内容",
             "library_ids": ["lib_001", "lib_002"]
         }
-        
+
     Returns:
         词库匹配测试结果
     """
     try:
         content = request.get("content", "")
         library_ids = request.get("library_ids", [])
-        
+
         if not content:
             return get_data_error_result(retmsg="测试内容不能为空")
-        
+
         if not library_ids:
             return get_data_error_result(retmsg="词库ID列表不能为空")
-        
+
         # 获取词库并测试匹配
-        from api.db.services.guard_library_service import GuardLibraryService
         from api.db.services.guard_library_item_service import GuardLibraryItemService
-        
+        from api.db.services.guard_library_service import GuardLibraryService
+
         test_results = []
-        
+
         for library_id in library_ids:
             library = GuardLibraryService.get_by_id(db, library_id)
             if not library or library.tenant_id != user.id:
                 continue
-            
+
             # 获取词库项，只测试启用的项
             result = GuardLibraryItemService.get_items_by_library(
                 db, library_id, page=1, page_size=10000
             )
             # 过滤出启用的词库项
             library_items = [item for item in result["items"] if item.status == "1"]
-            
+
             matched_words = []
             for item in library_items:
                 if item.content.lower() in content.lower():
                     matched_words.append(item.content)
-            
+
             test_results.append({
                 "library_id": library_id,
                 "library_name": library.name,
@@ -1219,12 +1220,12 @@ def test_library_matching(
                 "matched_words": matched_words,
                 "match_count": len(matched_words)
             })
-        
+
         return get_json_result(data={
             "test_content": content,
             "library_results": test_results
         })
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -1237,14 +1238,14 @@ def detect_document_chunks(
 ) -> dict[str, Any]:
     """
     ### POST `/detect-document` 文档安全检测
-    
+
     **功能描述**:
     此接口根据文档ID进行文档安全检测，会自动获取文档内容，使用智能解析器进行切片处理，
     然后对每个切片执行安全检测。支持多种文档格式（PDF、Word、PPT、Excel等），
     提供详细的切片级检测结果和统计信息。
-    
+
     ---
-    ### 请求体 (Request Body)                  
+    ### 请求体 (Request Body)
     | 字段          | 类型      | 必填 | 默认值        | 描述                             |
     |---------------|----------|------|---------------|----------------------------------|
     | `service_id`  | `string` | 是   | -             | 服务ID，用于获取检测配置         |
@@ -1253,7 +1254,7 @@ def detect_document_chunks(
     | `request_id`  | `string` | 否   | null          | 请求ID，用于链路追踪             |
     | `source_type` | `string` | 否   | "document_api"| 来源类型                         |
     | `source_id`   | `string` | 否   | null          | 来源标识                         |
-    
+
     **请求示例**:
     ```json
     {
@@ -1265,7 +1266,7 @@ def detect_document_chunks(
         "source_id": "frontend_v1"
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -1311,7 +1312,7 @@ def detect_document_chunks(
         }
     }
     ```
-    
+
     #### 失败响应 (400)
     ```json
     {
@@ -1319,7 +1320,7 @@ def detect_document_chunks(
         "retmsg": "文档ID不能为空"
     }
     ```
-    
+
     #### 失败响应 (500)
     ```json
     {
@@ -1331,62 +1332,62 @@ def detect_document_chunks(
     try:
         import time
         start_time = time.time()
-        
+
         # 参数验证
         if not request.service_id or not request.service_id.strip():
             return get_data_error_result(retmsg="服务ID不能为空")
-        
+
         if not request.doc_id or not request.doc_id.strip():
             return get_data_error_result(retmsg="文档ID不能为空")
-        
+
         # 验证服务存在性和权限
         service = GuardServiceService.get_by_id(db, request.service_id)
         if not service:
             return get_data_error_result(retmsg="服务不存在", retcode=404)
-        
+
         if service.tenant_id != user.id:
             return get_data_error_result(retmsg="无权限访问该服务", retcode=403)
-        
+
         # 验证文档存在性和权限
         if not DocumentService.accessible(db, request.doc_id, user.id):
             return get_data_error_result(retmsg="无权限访问该文档", retcode=403)
-        
+
         doc = DocumentService.get_by_id(db, request.doc_id)
         if not doc:
             return get_data_error_result(retmsg="文档不存在", retcode=404)
-        
+
         # 获取文件存储地址
         try:
             bucket, name = File2DocumentService.get_storage_address(db, doc_id=request.doc_id)
             if not bucket or not name:
                 return get_data_error_result(retmsg="无法获取文档存储地址")
         except Exception as e:
-            return get_data_error_result(retmsg=f"获取文档存储地址失败: {str(e)}")
-        
+            return get_data_error_result(retmsg=f"获取文档存储地址失败: {e!s}")
+
         # 从MinIO获取文件内容
         try:
             binary = settings.STORAGE_IMPL.get(bucket, name)
             if not binary:
                 return get_data_error_result(retmsg="无法从存储获取文档内容")
         except Exception as e:
-            return get_data_error_result(retmsg=f"获取文档内容失败: {str(e)}")
-        
+            return get_data_error_result(retmsg=f"获取文档内容失败: {e!s}")
+
         # 使用naive解析器进行切片处理
         try:
             # 设置解析器配置
             parser_config = {
-                "chunk_token_num": 128, 
-                "delimiter": "\n!?。；！？", 
+                "chunk_token_num": 128,
+                "delimiter": "\n!?。；！？",
                 "layout_recognize": "DeepDOC"
             }
-            
+
             # 定义回调函数用于处理进度报告
             def progress_callback(progress=None, msg=""):
                 """处理naive解析器的进度回调"""
                 if msg:
                     import logging
                     logging.info(f"Document parsing progress: {msg}")
-            
+
             # 调用naive解析器进行切片
             chunks = naive.chunk(
                 filename=doc.name,
@@ -1399,7 +1400,7 @@ def detect_document_chunks(
                 kb_id=doc.kb_id,
                 tenant_id=service.tenant_id
             )
-            
+
             if not chunks:
                 return get_json_result(data={
                     "doc_id": request.doc_id,
@@ -1418,14 +1419,14 @@ def detect_document_chunks(
                     },
                     "process_time_ms": int((time.time() - start_time) * 1000)
                 })
-                
+
         except Exception as e:
-            return get_data_error_result(retmsg=f"文档切片处理失败: {str(e)}")
-        
+            return get_data_error_result(retmsg=f"文档切片处理失败: {e!s}")
+
         # 限制检测的切片数量
         total_chunks = len(chunks)
         chunks_to_check = chunks[:request.max_chunks] if request.max_chunks > 0 else chunks
-        
+
         # 对每个切片执行安全检测
         chunk_detection_results = []
         blocked_count = 0
@@ -1433,17 +1434,17 @@ def detect_document_chunks(
         all_risk_words = set()
         risk_distribution = {"high_risk": 0, "medium_risk": 0, "low_risk": 0, "safe": 0}
         action_distribution = {"block": 0, "warn": 0, "pass": 0}
-        
+
         for i, chunk in enumerate(chunks_to_check):
             chunk_content = chunk.get("content_with_weight", "")
             if not chunk_content:
                 continue
-            
+
             # 生成唯一的chunk_id，使用与task_executor.py相同的方案
             chunk_id = xxhash.xxh64(
                 (chunk_content + str(request.doc_id)).encode("utf-8")
             ).hexdigest()
-            
+
             # 执行渐进式检测
             detection_result = AiGuardEngineService.detect_content(
                 db=db,
@@ -1457,7 +1458,7 @@ def detect_document_chunks(
                 chunk_id=chunk_id,
                 doc_id=request.doc_id
             )
-            
+
             # 构建切片检测结果
             chunk_result = ChunkDetectionResult(
                 chunk_id=chunk_id,
@@ -1469,16 +1470,16 @@ def detect_document_chunks(
                 matched_items=detection_result.get("matched_items", []),
                 risk_words=detection_result.get("risk_words", [])
             )
-            
+
             chunk_detection_results.append(chunk_result)
-            
+
             # 统计信息
             if detection_result["is_blocked"]:
                 blocked_count += 1
-            
+
             max_risk_score = max(max_risk_score, detection_result["overall_risk_score"])
             all_risk_words.update(detection_result.get("risk_words", []))
-            
+
             # 风险分数分布统计
             risk_score = detection_result["overall_risk_score"]
             if risk_score >= 80:
@@ -1489,14 +1490,14 @@ def detect_document_chunks(
                 risk_distribution["low_risk"] += 1
             else:
                 risk_distribution["safe"] += 1
-            
+
             # 动作分布统计
             action = detection_result["action"]
             action_distribution[action] = action_distribution.get(action, 0) + 1
-        
+
         # 按风险分数降序排列
         chunk_detection_results.sort(key=lambda x: x.risk_score, reverse=True)
-        
+
         # 确定整体动作
         if blocked_count > 0:
             overall_action = "block"
@@ -1504,7 +1505,7 @@ def detect_document_chunks(
             overall_action = "warn"
         else:
             overall_action = "pass"
-        
+
         # 构建响应数据
         response_data = {
             "doc_id": request.doc_id,
@@ -1523,9 +1524,9 @@ def detect_document_chunks(
             },
             "process_time_ms": int((time.time() - start_time) * 1000)
         }
-        
+
         return get_json_result(data=response_data)
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -1537,11 +1538,11 @@ def get_available_services(
 ) -> dict[str, Any]:
     """
     获取当前租户可用的检测服务列表
-    
+
     Args:
         db: 数据库会话
         user: 当前用户信息
-        
+
     Returns:
         dict[str, Any]: 服务列表
         - 成功: {"code": 200, "data": [{"code": "xxx", "name": "xxx", ...}]}
@@ -1549,7 +1550,7 @@ def get_available_services(
     """
     try:
         services = GuardServiceService.get_services_by_tenant(db, user.id)
-        
+
         service_list = []
         for service in services:
             service_list.append({
@@ -1562,12 +1563,12 @@ def get_available_services(
                 "enabled_labels": service.enabled_labels,
                 "total_requests": service.total_requests,
                 "blocked_requests": service.blocked_requests,
-                "block_rate": (service.blocked_requests / service.total_requests * 100) 
+                "block_rate": (service.blocked_requests / service.total_requests * 100)
                              if service.total_requests > 0 else 0.0
             })
-        
+
         return get_json_result(data=service_list)
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -1580,10 +1581,10 @@ def create_detection_service(
 ) -> dict[str, Any]:
     """
     ### POST `/services` 创建检测服务
-    
+
     **功能描述**:
     创建一个新的检测服务配置，用于后续的内容安全检测。
-    
+
     ---
     ### 请求体 (Request Body)
     | 字段                  | 类型        | 必填 | 默认值 | 描述                           |
@@ -1597,7 +1598,7 @@ def create_detection_service(
     | `policy_config`      | `dict`      | 否   | {}     | 策略配置                       |
     | `cache_enabled`      | `bool`      | 否   | true   | 是否启用缓存                   |
     | `timeout_ms`         | `int`       | 否   | 1000   | 超时时间（毫秒），范围100-30000|
-    
+
     **请求示例**:
     ```json
     {
@@ -1615,7 +1616,7 @@ def create_detection_service(
         "timeout_ms": 1500
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -1628,7 +1629,7 @@ def create_detection_service(
         }
     }
     ```
-    
+
     #### 失败响应 (400)
     ```json
     {
@@ -1653,15 +1654,15 @@ def create_detection_service(
             cache_enabled=request.cache_enabled,
             timeout_ms=request.timeout_ms
         )
-        
+
         if not service_id:
             return get_data_error_result(retmsg=f"服务代码 {request.code} 已存在")
-        
+
         return get_json_result(data={
             "service_id": service_id,
             "message": "服务创建成功"
         })
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -1675,20 +1676,20 @@ def update_detection_service(
 ) -> dict[str, Any]:
     """
     ### PUT `/services/{service_id}` 修改检测服务
-    
+
     **功能描述**:
     修改指定检测服务的配置信息。只需要提供需要修改的字段，未提供的字段保持不变。
-    
-    **注意**: 
+
+    **注意**:
     - `code` 字段不可修改（业务主键，与历史日志关联）
     - 如需修改 code，建议删除后重建服务
-    
+
     ---
     ### 路径参数 (Path Parameters)
     | 参数         | 类型     | 必填 | 描述       |
     |--------------|----------|------|------------|
     | `service_id` | `string` | 是   | 服务ID     |
-    
+
     ---
     ### 请求体 (Request Body)
     | 字段                  | 类型        | 必填 | 描述                           |
@@ -1701,7 +1702,7 @@ def update_detection_service(
     | `policy_config`      | `dict`      | 否   | 策略配置                       |
     | `cache_enabled`      | `bool`      | 否   | 是否启用缓存                   |
     | `timeout_ms`         | `int`       | 否   | 超时时间（毫秒），范围100-30000|
-    
+
     **请求示例**:
     ```json
     {
@@ -1713,7 +1714,7 @@ def update_detection_service(
         }
     }
     ```
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -1725,7 +1726,7 @@ def update_detection_service(
         }
     }
     ```
-    
+
     #### 失败响应 (404)
     ```json
     {
@@ -1733,7 +1734,7 @@ def update_detection_service(
         "retmsg": "服务不存在"
     }
     ```
-    
+
     #### 失败响应 (403)
     ```json
     {
@@ -1747,10 +1748,10 @@ def update_detection_service(
         service = GuardServiceService.get_by_id(db, service_id)
         if not service:
             return get_data_error_result(retmsg="服务不存在", retcode=404)
-        
+
         if service.tenant_id != user.id:
             return get_data_error_result(retmsg="无权限访问该服务", retcode=403)
-        
+
         # 构建更新数据（只包含提供的字段）
         update_data = {}
         if request.name is not None:
@@ -1769,19 +1770,19 @@ def update_detection_service(
             update_data["cache_enabled"] = request.cache_enabled
         if request.timeout_ms is not None:
             update_data["timeout_ms"] = request.timeout_ms
-        
+
         # 检查是否有数据需要更新
         if not update_data:
             return get_data_error_result(retmsg="没有提供需要更新的数据")
-        
+
         # 执行更新
         success = GuardServiceService.update_service(db, service_id, update_data)
-        
+
         if not success:
             return get_data_error_result(retmsg="服务更新失败")
-        
+
         return get_json_result(data={"message": "服务更新成功"})
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -1794,16 +1795,16 @@ def delete_detection_service(
 ) -> dict[str, Any]:
     """
     ### DELETE `/services/{service_id}` 删除检测服务
-    
+
     **功能描述**:
     删除指定的检测服务。这是逻辑删除，实际上是将服务状态标记为已删除。
-    
+
     ---
     ### 路径参数 (Path Parameters)
     | 参数         | 类型     | 必填 | 描述       |
     |--------------|----------|------|------------|
     | `service_id` | `string` | 是   | 服务ID     |
-    
+
     ---
     ### 响应 (Response)
     #### 成功响应 (200)
@@ -1815,7 +1816,7 @@ def delete_detection_service(
         }
     }
     ```
-    
+
     #### 失败响应 (404)
     ```json
     {
@@ -1823,7 +1824,7 @@ def delete_detection_service(
         "retmsg": "服务不存在"
     }
     ```
-    
+
     #### 失败响应 (403)
     ```json
     {
@@ -1837,18 +1838,18 @@ def delete_detection_service(
         service = GuardServiceService.get_by_id(db, service_id)
         if not service:
             return get_data_error_result(retmsg="服务不存在", retcode=404)
-        
+
         if service.tenant_id != user.id:
             return get_data_error_result(retmsg="无权限访问该服务", retcode=403)
-        
+
         # 逻辑删除（将状态设置为 "0"）
         success = GuardServiceService.update_service(db, service_id, {"status": "0"})
-        
+
         if not success:
             return get_data_error_result(retmsg="服务删除失败")
-        
+
         return get_json_result(data={"message": "服务删除成功"})
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -1866,7 +1867,7 @@ def get_detection_logs(
 ) -> dict[str, Any]:
     """
     获取检测日志列表（分页查询）
-    
+
     Args:
         page (int): 页码，从1开始，默认为1
         page_size (int): 每页记录数量，默认50，最大100
@@ -1875,7 +1876,7 @@ def get_detection_logs(
             - 示例: "2025-07-01" 或 "2025-07-01T00:00:00"
             - 如果不提供，则不限制开始时间
         end_date (str, optional): 结束日期，ISO格式字符串
-            - 格式: "YYYY-MM-DD" 或 "YYYY-MM-DDTHH:MM:SS"  
+            - 格式: "YYYY-MM-DD" 或 "YYYY-MM-DDTHH:MM:SS"
             - 示例: "2025-07-14" 或 "2025-07-14T23:59:59"
             - 如果不提供，则不限制结束时间
         service_code (str, optional): 服务代码过滤（如 "query_security_check"）
@@ -1888,7 +1889,7 @@ def get_detection_logs(
             - None: 返回所有记录（默认）
         db (Session): 数据库会话（自动注入）
         user: 当前用户信息（自动注入）
-        
+
     Returns:
         dict[str, Any]: 检测日志列表和分页信息
         成功响应 (200):
@@ -1920,7 +1921,7 @@ def get_detection_logs(
             "code": 500,
             "retmsg": "获取日志列表失败: 具体错误信息"
         }
-        
+
     HTTP Status Codes:
         200: 请求成功
         400: 参数错误
@@ -1938,15 +1939,15 @@ def get_detection_logs(
             service_code=service_code,
             is_blocked=is_blocked
         )
-        
+
         # 转换为字典格式
         logs_data = []
         for log in result["logs"]:
             logs_data.append(log.to_dict())
-        
+
         result["logs"] = logs_data
         return get_json_result(data=result)
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -1959,7 +1960,7 @@ def get_detection_stats(
 ) -> dict[str, Any]:
     """
     获取指定时间范围内的检测统计信息
-    
+
     Args:
         days (int): 统计天数，从今天开始向前计算
             - 默认: 30天
@@ -1968,7 +1969,7 @@ def get_detection_stats(
             - 示例: days=1 表示今天的统计
         db (Session): 数据库会话（自动注入）
         user: 当前用户信息（自动注入）
-        
+
     Returns:
         dict[str, Any]: 检测统计信息
         成功响应 (200):
@@ -2003,13 +2004,13 @@ def get_detection_stats(
             "code": 500,
             "retmsg": "获取检测统计失败: 具体错误信息"
         }
-        
+
     HTTP Status Codes:
         200: 请求成功
         400: 参数错误（如days超出范围）
         401: 未授权
         500: 服务器内部错误
-        
+
     注意事项:
         - 统计时间基于记录的create_time字段（毫秒时间戳）
         - 统计数据实时计算，可能有轻微延迟
@@ -2018,7 +2019,7 @@ def get_detection_stats(
     try:
         stats = GuardLogService.get_log_stats(db, user.id, days)
         return get_json_result(data=stats)
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -2031,7 +2032,7 @@ def get_detection_trend(
 ) -> dict[str, Any]:
     """
     获取指定时间范围内的检测趋势数据（按天分组）
-    
+
     Args:
         days (int): 统计天数，从今天开始向前计算
             - 默认: 7天
@@ -2040,7 +2041,7 @@ def get_detection_trend(
             - 示例: days=30 表示最近30天的每日趋势
         db (Session): 数据库会话（自动注入）
         user: 当前用户信息（自动注入）
-        
+
     Returns:
         dict[str, Any]: 按日期分组的趋势数据
         成功响应 (200):
@@ -2067,13 +2068,13 @@ def get_detection_trend(
             "code": 500,
             "retmsg": "获取趋势数据失败: 具体错误信息"
         }
-        
+
     HTTP Status Codes:
         200: 请求成功
         400: 参数错误（如days超出范围）
         401: 未授权
         500: 服务器内部错误
-        
+
     注意事项:
         - 返回数据按日期正序排列（最早日期在前）
         - 如果某天没有数据，该日期不会出现在结果中
@@ -2083,7 +2084,7 @@ def get_detection_trend(
     try:
         trend_data = GuardLogService.get_trend_data(db, user.id, days)
         return get_json_result(data=trend_data)
-        
+
     except Exception as e:
         return server_error_response(e)
 
@@ -2097,7 +2098,7 @@ def get_top_risk_words(
 ) -> dict[str, Any]:
     """
     获取指定时间范围内的高频风险词统计（按出现次数降序排列）
-    
+
     Args:
         days (int): 统计天数，从今天开始向前计算
             - 默认: 30天
@@ -2110,7 +2111,7 @@ def get_top_risk_words(
             - 按出现频次从高到低排序
         db (Session): 数据库会话（自动注入）
         user: 当前用户信息（自动注入）
-        
+
     Returns:
         dict[str, Any]: 高频风险词统计列表
         成功响应 (200):
@@ -2126,7 +2127,7 @@ def get_top_risk_words(
                     "count": 18
                 },
                 {
-                    "word": "敏感词3", 
+                    "word": "敏感词3",
                     "count": 12
                 },
                 // ... 按count降序排列，最多limit个
@@ -2137,13 +2138,13 @@ def get_top_risk_words(
             "code": 500,
             "retmsg": "获取高频风险词失败: 具体错误信息"
         }
-        
+
     HTTP Status Codes:
         200: 请求成功
         400: 参数错误（如days或limit超出范围）
         401: 未授权
         500: 服务器内部错误
-        
+
     注意事项:
         - 只统计包含risk_words字段的检测记录
         - 风险词来源于各类检测结果（敏感词、违禁词等）
@@ -2155,6 +2156,6 @@ def get_top_risk_words(
     try:
         risk_words = GuardLogService.get_top_risk_words(db, user.id, days, limit)
         return get_json_result(data=risk_words)
-        
+
     except Exception as e:
         return server_error_response(e)

@@ -1,7 +1,8 @@
-from .profile import Profile
+from .action import Action
 from .memory import Memory
 from .planning import Planner
-from .action import Action
+from .profile import Profile
+
 
 class Agent:
     def __init__(self, api_key):

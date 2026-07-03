@@ -1,5 +1,5 @@
 import re
-from typing import Union, Any
+from typing import Any
 
 
 def convert_aggregation_value(column_name: str, value: Any) -> Any:
@@ -133,7 +133,7 @@ if __name__ == "__main__":
     for column_name, input_value, expected in test_cases:
         result = convert_aggregation_value(column_name, input_value)
         status = "✓" if result == expected else "✗"
-        print(f"{status} {column_name:<20} {str(input_value):<15} -> {result} ({type(result).__name__})")
+        print(f"{status} {column_name:<20} {input_value!s:<15} -> {result} ({type(result).__name__})")
         if result != expected:
             print(f"   期望: {expected} ({type(expected).__name__})")
 

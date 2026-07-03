@@ -15,9 +15,11 @@
 #
 import ast
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import json_repair
+
 
 def convert_conditions(metadata_condition):
     if metadata_condition is None:
@@ -40,7 +42,7 @@ def convert_conditions(metadata_condition):
 
 
 def meta_filter(metas: dict, filters: list[dict], logic: str = "and"):
-    doc_ids = set([])
+    doc_ids = set()
 
     def filter_out(v2docs, operator, value):
         ids = []
@@ -179,7 +181,7 @@ async def apply_meta_data_filter(
         list of doc_ids, ["-999"] when manual filters yield no result, or None
         when auto/semi_auto filters return empty.
     """
-    from core.prompts.generator import gen_meta_filter # move from the top of the file to avoid circular import
+    from core.prompts.generator import gen_meta_filter  # move from the top of the file to avoid circular import
 
     doc_ids = list(base_doc_ids) if base_doc_ids else []
 
@@ -284,7 +286,7 @@ def metadata_schema(metadata: dict | list | None) -> dict[str, Any]:
         prop_schema = {
             "description": item.get("description", "")
         }
-        if "enum" in item and item["enum"]:
+        if item.get("enum"):
             prop_schema["enum"] = item["enum"]
             prop_schema["type"] = "string"
 

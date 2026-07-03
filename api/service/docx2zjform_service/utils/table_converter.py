@@ -1,6 +1,6 @@
-from docx.table import Table, _Cell
-from typing import Dict, List, Tuple
 import html
+
+from docx.table import Table, _Cell
 
 
 class TableConverter:
@@ -61,7 +61,7 @@ class TableConverter:
         return ''.join(html_builder)
 
     @staticmethod
-    def _get_span_info(table: Table) -> Dict[Tuple[int, int], Tuple[int, int]]:
+    def _get_span_info(table: Table) -> dict[tuple[int, int], tuple[int, int]]:
         """获取所有单元格的合并信息"""
         span_info = {}
 

@@ -58,7 +58,7 @@ class GeminiCV(Base):
             return res.text, res.usage_metadata.total_token_count
 
     def chat(self, system, history, gen_conf, images=[]):
-        generation_config = dict(temperature=gen_conf.get("temperature", 0.3), top_p=gen_conf.get("top_p", 0.7))
+        generation_config = {"temperature": gen_conf.get("temperature", 0.3), "top_p": gen_conf.get("top_p", 0.7)}
         try:
             response = self.model.generate_content(
                 self._form_history(system, history, images),
@@ -72,7 +72,7 @@ class GeminiCV(Base):
         ans = ""
         response = None
         try:
-            generation_config = dict(temperature=gen_conf.get("temperature", 0.3), top_p=gen_conf.get("top_p", 0.7))
+            generation_config = {"temperature": gen_conf.get("temperature", 0.3), "top_p": gen_conf.get("top_p", 0.7)}
             response = self.model.generate_content(
                 self._form_history(system, history, images),
                 generation_config=generation_config,

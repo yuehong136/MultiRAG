@@ -1,4 +1,3 @@
-# coding=utf-8
 """RESTful chat management API.
 
 Routes are mounted under ``/api/v1`` by ``api.apps.register_page``.
@@ -20,8 +19,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.db_models import get_db
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.chunk_feedback_service import ChunkFeedbackService
 from api.db.services.conversation_service import ConversationService, structure_answer
 from api.db.services.dialog_service import DialogService, async_ask, async_chat, gen_mindmap
@@ -673,8 +672,7 @@ async def tts(
             for txt in re.split(r"[，。/《》？；：！\n\r:;]+", request.text):
                 if not txt.strip():
                     continue
-                for chunk in tts_mdl.tts(txt):
-                    yield chunk
+                yield from tts_mdl.tts(txt)
         except Exception as e:
             yield (
                 "data:"

@@ -3,19 +3,20 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Generator
-from datetime import datetime, timezone
-from retry import retry
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from markdownify import markdownify as md
-from moodle import Moodle as MoodleClient, MoodleException
+from moodle import Moodle as MoodleClient
+from moodle import MoodleException
+from retry import retry
 
 from common.data_source.config import INDEX_BATCH_SIZE
 from common.data_source.exceptions import (
     ConnectorMissingCredentialError,
+    ConnectorValidationError,
     CredentialExpiredError,
     InsufficientPermissionsError,
-    ConnectorValidationError,
 )
 from common.data_source.interfaces import (
     LoadConnector,
@@ -34,7 +35,7 @@ class MoodleConnector(LoadConnector, PollConnector):
     def __init__(self, moodle_url: str, batch_size: int = INDEX_BATCH_SIZE) -> None:
         self.moodle_url = moodle_url.rstrip("/")
         self.batch_size = batch_size
-        self.moodle_client: Optional[MoodleClient] = None
+        self.moodle_client: MoodleClient | None = None
 
     def _add_token_to_url(self, file_url: str) -> str:
         """Append Moodle token to URL if missing"""
@@ -63,8 +64,7 @@ class MoodleConnector(LoadConnector, PollConnector):
     def _yield_in_batches(
         self, generator: Generator[Document, None, None]
     ) -> Generator[list[Document], None, None]:
-        for batch in batch_generator(generator, self.batch_size):
-            yield batch
+        yield from batch_generator(generator, self.batch_size)
 
     def load_credentials(self, credentials: dict[str, Any]) -> None:
         token = credentials.get("moodle_token")
@@ -197,7 +197,7 @@ class MoodleConnector(LoadConnector, PollConnector):
             except Exception as e:
                 self._log_error(f"polling course {course.fullname}", e)
 
-    def _process_module(self, course, section, module) -> Optional[Document]:
+    def _process_module(self, course, section, module) -> Document | None:
         try:
             mtype = module.modname
             if mtype in ["label", "url"]:
@@ -216,7 +216,7 @@ class MoodleConnector(LoadConnector, PollConnector):
             self._log_error(f"processing module {getattr(module, 'name', '?')}", e)
         return None
 
-    def _process_resource(self, course, section, module) -> Optional[Document]:
+    def _process_resource(self, course, section, module) -> Document | None:
         if not getattr(module, "contents", None):
             return None
 
@@ -269,7 +269,7 @@ class MoodleConnector(LoadConnector, PollConnector):
                 semantic_identifier=semantic_id,
                 extension=ext,
                 blob=blob,
-                doc_updated_at=datetime.fromtimestamp(ts or 0, tz=timezone.utc),
+                doc_updated_at=datetime.fromtimestamp(ts or 0, tz=UTC),
                 size_bytes=len(blob),
                 metadata=metadata,
             )
@@ -277,7 +277,7 @@ class MoodleConnector(LoadConnector, PollConnector):
             self._log_error(f"downloading resource {file_name}", e, "error")
             return None
 
-    def _process_forum(self, course, section, module) -> Optional[Document]:
+    def _process_forum(self, course, section, module) -> Document | None:
         if not self.moodle_client or not getattr(module, "instance", None):
             return None
 
@@ -339,7 +339,7 @@ class MoodleConnector(LoadConnector, PollConnector):
                 semantic_identifier=semantic_id,
                 extension=".md",
                 blob=blob,
-                doc_updated_at=datetime.fromtimestamp(latest_ts or 0, tz=timezone.utc),
+                doc_updated_at=datetime.fromtimestamp(latest_ts or 0, tz=UTC),
                 size_bytes=len(blob),
                 metadata=metadata,
             )
@@ -347,7 +347,7 @@ class MoodleConnector(LoadConnector, PollConnector):
             self._log_error(f"processing forum {module.name}", e)
             return None
 
-    def _process_page(self, course, section, module) -> Optional[Document]:
+    def _process_page(self, course, section, module) -> Document | None:
         if not getattr(module, "contents", None):
             return None
 
@@ -400,7 +400,7 @@ class MoodleConnector(LoadConnector, PollConnector):
                 semantic_identifier=semantic_id,
                 extension=ext,
                 blob=blob,
-                doc_updated_at=datetime.fromtimestamp(ts or 0, tz=timezone.utc),
+                doc_updated_at=datetime.fromtimestamp(ts or 0, tz=UTC),
                 size_bytes=len(blob),
                 metadata=metadata,
             )
@@ -408,7 +408,7 @@ class MoodleConnector(LoadConnector, PollConnector):
             self._log_error(f"processing page {file_name}", e, "error")
             return None
 
-    def _process_activity(self, course, section, module) -> Optional[Document]:
+    def _process_activity(self, course, section, module) -> Document | None:
         desc = getattr(module, "description", "")
         if not desc:
             return None
@@ -452,12 +452,12 @@ class MoodleConnector(LoadConnector, PollConnector):
             semantic_identifier=semantic_id,
             extension=".md",
             blob=blob,
-            doc_updated_at=datetime.fromtimestamp(ts or 0, tz=timezone.utc),
+            doc_updated_at=datetime.fromtimestamp(ts or 0, tz=UTC),
             size_bytes=len(blob),
             metadata=metadata,
         )
 
-    def _process_book(self, course, section, module) -> Optional[Document]:
+    def _process_book(self, course, section, module) -> Document | None:
         if not getattr(module, "contents", None):
             return None
 
@@ -533,7 +533,7 @@ class MoodleConnector(LoadConnector, PollConnector):
             semantic_identifier=semantic_id,
             extension=".md",
             blob=blob,
-            doc_updated_at=datetime.fromtimestamp(latest_ts or 0, tz=timezone.utc),
+            doc_updated_at=datetime.fromtimestamp(latest_ts or 0, tz=UTC),
             size_bytes=len(blob),
             metadata=metadata,
         )

@@ -1,12 +1,12 @@
 # project_service.py 最终优化版本
 
 import logging
-from datetime import datetime, timezone
-from sqlalchemy.orm import Session
-from sqlalchemy.exc import NoResultFound, OperationalError
 
+from sqlalchemy.exc import NoResultFound
+from sqlalchemy.orm import Session
+
+from api.db.db_models import WritingChapter, WritingChapterContent, WritingProject
 from api.db.services.common_service import CommonService
-from api.db.db_models import WritingProject, WritingChapter, WritingChapterContent
 from common.constants import StatusEnum
 from common.misc_utils import get_uuid
 
@@ -145,7 +145,7 @@ class ProjectService(CommonService):
             return updated_project
         except Exception as e:
             db.rollback()
-            logging.error(f"更新项目失败: {str(e)}")
+            logging.error(f"更新项目失败: {e!s}")
             raise e
 
     @classmethod
@@ -177,7 +177,7 @@ class ProjectService(CommonService):
                 logging.error(f"项目状态更新失败: {project_id}")
                 return False
 
-            logging.info(f"项目状态已更新，现在更新相关章节")
+            logging.info("项目状态已更新，现在更新相关章节")
 
             # 使用filter_update批量更新章节状态
             from api.db.services.chapter_service import ChapterService
@@ -216,7 +216,7 @@ class ProjectService(CommonService):
 
         except Exception as e:
             db.rollback()
-            logging.error(f"删除项目失败: {str(e)}", exc_info=True)
+            logging.error(f"删除项目失败: {e!s}", exc_info=True)
             return False
 
     @classmethod
@@ -288,5 +288,5 @@ class ProjectService(CommonService):
             return new_project
         except Exception as e:
             db.rollback()
-            logging.error(f"复制项目失败: {str(e)}")
+            logging.error(f"复制项目失败: {e!s}")
             raise e

@@ -15,16 +15,17 @@
 #
 
 import logging
-from io import BytesIO
 import re
+from io import BytesIO
 
-from core.app import naive
-from core.nlp import rag_tokenizer, tokenize
-from core.app.naive import by_plaintext, PARSERS
 from common.parser_config_utils import normalize_layout_recognizer
-from deepdoc.parser import PdfParser, ExcelParser, HtmlParser
-from deepdoc.parser.utils import get_text
+from core.app import naive
+from core.app.naive import PARSERS, by_plaintext
+from core.nlp import rag_tokenizer, tokenize
+from deepdoc.parser import ExcelParser, HtmlParser, PdfParser
 from deepdoc.parser.figure_parser import vision_figure_parser_docx_wrapper_naive
+from deepdoc.parser.utils import get_text
+
 
 class Pdf(PdfParser):
     def __call__(self, filename, binary=None, from_page=0, to_page=100000, zoomin=3, callback=None):
@@ -39,20 +40,20 @@ class Pdf(PdfParser):
             to_page,
             callback
         )
-        callback(msg="OCR finished ({:.2f}s)".format(timer() - start))
+        callback(msg=f"OCR finished ({timer() - start:.2f}s)")
 
         start = timer()
         self._layouts_rec(zoomin, drop=False)
-        callback(0.63, "Layout analysis ({:.2f}s)".format(timer() - start))
-        logging.debug("layouts cost: {}s".format(timer() - start))
+        callback(0.63, f"Layout analysis ({timer() - start:.2f}s)")
+        logging.debug(f"layouts cost: {timer() - start}s")
 
         start = timer()
         self._table_transformer_job(zoomin)
-        callback(0.65, "Table analysis ({:.2f}s)".format(timer() - start))
+        callback(0.65, f"Table analysis ({timer() - start:.2f}s)")
 
         start = timer()
         self._text_merge()
-        callback(0.67, "Text merged ({:.2f}s)".format(timer() - start))
+        callback(0.67, f"Text merged ({timer() - start:.2f}s)")
         tbls = self._extract_table_figure(True, zoomin, True, True)
         self._concat_downward()
 

@@ -13,14 +13,16 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
-import re
-import logging
 import json
+import logging
+import re
+
 import numpy as np
-from common.query_base import QueryBase
+
 from common.doc_store.doc_store_base import MatchDenseExpr, MatchTextExpr
 from common.float_utils import get_float
-from core.nlp import rag_tokenizer, term_weight, synonym
+from common.query_base import QueryBase
+from core.nlp import rag_tokenizer, synonym, term_weight
 
 
 def get_vector(txt, emb_mdl, topk=10, similarity=0.1):
@@ -74,10 +76,10 @@ class MsgTextQuery(QueryBase):
                 syn = self.syn.lookup(tk)
                 syn = rag_tokenizer.tokenize(" ".join(syn)).split()
                 keywords.extend(syn)
-                syn = ["\"{}\"^{:.4f}".format(s, w / 4.) for s in syn if s.strip()]
+                syn = [f"\"{s}\"^{w / 4.:.4f}" for s in syn if s.strip()]
                 syns.append(" ".join(syn))
 
-            q = ["({}^{:.4f}".format(tk, w) + " {})".format(syn) for (tk, w), syn in zip(tks_w, syns) if
+            q = [f"({tk}^{w:.4f}" + f" {syn})" for (tk, w), syn in zip(tks_w, syns) if
                  tk and not re.match(r"[.^+\(\)-]", tk)]
             for i in range(1, len(tks_w)):
                 left, right = tks_w[i - 1][0].strip(), tks_w[i][0].strip()

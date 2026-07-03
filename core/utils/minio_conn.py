@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -9,12 +8,14 @@
 import logging
 import ssl
 import time
-from minio import Minio, S3Error, ServerError, InvalidResponseError
-from minio.commonconfig import CopySource
 from io import BytesIO
+
 import urllib3
-from common.decorator import singleton
+from minio import InvalidResponseError, Minio, S3Error, ServerError
+from minio.commonconfig import CopySource
+
 from common import settings
+from common.decorator import singleton
 
 
 def _build_minio_http_client():

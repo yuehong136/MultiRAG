@@ -1,8 +1,8 @@
-import os
 
 import openai
-from core.llm.chat_model.chat_factory import ChatFactory
 import streamlit as st
+
+from core.llm.chat_model.chat_factory import ChatFactory
 
 # os.environ["OPENAI_API_KEY"] = '7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv'
 # os.environ["OPENAI_BASE_URL"] = "https://open.bigmodel.cn/api/paas/v4"

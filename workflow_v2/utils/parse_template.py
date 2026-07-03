@@ -1,8 +1,8 @@
-from typing import Dict, Any, Union
 import re
+from typing import Any
 
 
-def parse_template(template: str, values: Dict[str, Any]) -> str:
+def parse_template(template: str, values: dict[str, Any]) -> str:
     """
     Parse a template string and replace placeholders with actual values.
 
@@ -22,7 +22,7 @@ def parse_template(template: str, values: Dict[str, Any]) -> str:
     if len(template) == 0:
         return ""
 
-    def get_nested_value(key_path: str, data: Dict[str, Any]) -> Union[str, Any]:
+    def get_nested_value(key_path: str, data: dict[str, Any]) -> str | Any:
         """Helper function to get nested dictionary values."""
         # Handle array index access (e.g., key[0])
         array_index_match = re.match(r'(.+)\[(\d+)\]$', key_path)

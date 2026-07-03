@@ -1,9 +1,8 @@
 import json
 import logging
-from typing import Optional
 
-from sqlalchemy.orm import Session
 from sqlalchemy import asc
+from sqlalchemy.orm import Session
 
 from api.db.db_models import AskDataHistory
 from api.db.services.common_service import CommonService
@@ -114,7 +113,7 @@ class AskDataHistoryService(CommonService):
     # 新增的插入方法
     @classmethod
     def add_history(cls, db: Session, conversation_id: str, ask_id: str, data: str, user_id: str, round_id: str = None,
-                    user_origin_question: str = "", rewritten_question: Optional[str] = "",
+                    user_origin_question: str = "", rewritten_question: str | None = "",
                     processed_semantic_layer: str = "") -> AskDataHistory:
         """
         新增一条历史记录

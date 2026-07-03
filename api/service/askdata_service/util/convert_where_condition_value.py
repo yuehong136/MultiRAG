@@ -156,7 +156,7 @@ if __name__ == "__main__":
     for value, field_type, operator, expected in test_cases:
         result = convert_where_condition_value(value, field_type, operator)
         status = "✓" if result == expected else "✗"
-        print(f"{status} {field_type:<10} {operator:<5} {str(value):<25} -> {result}")
+        print(f"{status} {field_type:<10} {operator:<5} {value!s:<25} -> {result}")
         if result != expected:
             print(f"   期望: {expected}")
 

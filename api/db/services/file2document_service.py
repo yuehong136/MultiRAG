@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -8,13 +7,14 @@
 """
 import logging
 from datetime import datetime
-from sqlalchemy.orm import Session
-from fastapi import HTTPException
 
-from common.constants import FileSource
-from api.db.db_models import File2Document, File
+from fastapi import HTTPException
+from sqlalchemy.orm import Session
+
+from api.db.db_models import File, File2Document
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
+from common.constants import FileSource
 from common.time_utils import current_timestamp, datetime_format
 
 
@@ -70,7 +70,7 @@ class File2DocumentService(CommonService):
             return deleted_count
         except Exception:
             db.rollback()  # 回滚事务
-            logging.exception(f"[delete_by_file_id] Error occurred")
+            logging.exception("[delete_by_file_id] Error occurred")
             return 0
 
     @classmethod
@@ -117,7 +117,7 @@ class File2DocumentService(CommonService):
             return deleted_count
         except Exception:
             db.rollback()  # 回滚事务
-            logging.exception(f"[delete_by_file_id] Error occurred")
+            logging.exception("[delete_by_file_id] Error occurred")
             return 0
 
     @classmethod

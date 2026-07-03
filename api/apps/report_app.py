@@ -107,7 +107,7 @@ async def _stream_orchestration(produce: Callable[[Callable[[dict[str, Any]], No
         try:
             result = await produce(emit_progress)
             await queue.put(("result", result))
-        except Exception as exc:  # noqa: BLE001 - 任何编排失败都降级为 SSE error 帧
+        except Exception as exc:
             logging.exception("report SSE orchestration failed")
             await queue.put(("error", str(exc)))
         finally:

@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -16,7 +15,6 @@ from sqlalchemy.orm import Session
 from api.db.db_models import get_db
 from api.db.services.tools_data_service import ToolsDataService
 from api.utils.api_utils import get_error_data_result, get_json_result, server_error_response
-
 
 router = APIRouter()
 

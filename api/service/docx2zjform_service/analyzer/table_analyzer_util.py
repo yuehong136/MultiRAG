@@ -1,7 +1,6 @@
 import re
 
 from bs4 import BeautifulSoup
-from typing import List, Dict, Optional
 
 
 def is_multiple_tables_with_name(html_content: str) -> bool:
@@ -116,7 +115,7 @@ def is_single_normal_table(html_content):
         return True
 
     except Exception as e:
-        print(f"解析出错: {str(e)}")
+        print(f"解析出错: {e!s}")
         return False
 
 
@@ -225,13 +224,13 @@ def is_one_column_multiple_rows_table(html_content: str) -> bool:
                 return False
 
     except Exception as e:
-        print(f"处理HTML时发生错误：{str(e)}")
+        print(f"处理HTML时发生错误：{e!s}")
         return False
 
     return True
 
 
-def extract_content_from_one_column_multiple_rows_table(html_content: str) -> Optional[List[str]]:
+def extract_content_from_one_column_multiple_rows_table(html_content: str) -> list[str] | None:
     """
     从HTML表格中提取每行的内容，保留<br/>标签的换行效果
 
@@ -291,11 +290,11 @@ def extract_content_from_one_column_multiple_rows_table(html_content: str) -> Op
         return contents if contents else None
 
     except Exception as e:
-        print(f"提取内容时发生错误：{str(e)}")
+        print(f"提取内容时发生错误：{e!s}")
         return None
 
 
-def extract_inputs_from_inputs_table(html_content: str) -> List[str]:
+def extract_inputs_from_inputs_table(html_content: str) -> list[str]:
     """
     提取表格中的所有待填项标签名称
 
@@ -334,11 +333,11 @@ def extract_inputs_from_inputs_table(html_content: str) -> List[str]:
         return form_fields
 
     except Exception as e:
-        print(f"解析出错: {str(e)}")
+        print(f"解析出错: {e!s}")
         return []
 
 
-def extract_headers_from_single_normal_table(html_content: str) -> Optional[List[str]]:
+def extract_headers_from_single_normal_table(html_content: str) -> list[str] | None:
     """
     从HTML表格中提取第一行的字段值
 
@@ -371,7 +370,7 @@ def extract_headers_from_single_normal_table(html_content: str) -> Optional[List
         return None
 
     except Exception as e:
-        print(f"解析出错: {str(e)}")
+        print(f"解析出错: {e!s}")
         return None
 
 
@@ -383,7 +382,7 @@ class MultiTableWithNameExtractor:
     def __init__(self, html_content: str):
         self.soup = BeautifulSoup(html_content, 'html.parser')
 
-    def _get_consecutive_rows(self, start_row) -> List[Dict]:
+    def _get_consecutive_rows(self, start_row) -> list[dict]:
         """获取连续的相同类型的行"""
         rows = []
         current_row = start_row
@@ -422,16 +421,16 @@ class MultiTableWithNameExtractor:
 
         return rows
 
-    def _is_header_row(self, row: Dict) -> bool:
+    def _is_header_row(self, row: dict) -> bool:
         """检查是否是表头行（所有单元格内容相同）"""
         cells = [cell for cell in row['data'] if cell]  # 过滤空单元格
         return len(cells) > 1 and all(cell == cells[0] for cell in cells)
 
-    def _is_merged_header_pattern(self, rows: List[Dict]) -> bool:
+    def _is_merged_header_pattern(self, rows: list[dict]) -> bool:
         """检查是否是合并表头模式（如科研获奖成果表）"""
         return len(rows) >= 2 and self._is_header_row(rows[0])
 
-    def _is_repeated_first_column_pattern(self, rows: List[Dict]) -> bool:
+    def _is_repeated_first_column_pattern(self, rows: list[dict]) -> bool:
         """检查是否是重复第一列模式（如科研论文表）"""
         if len(rows) < 2:
             return False
@@ -439,7 +438,7 @@ class MultiTableWithNameExtractor:
         first_cell = rows[0]['data'][0]
         return first_cell and all(row['data'][0] == first_cell for row in rows if any(row['data']))
 
-    def extract_tables(self) -> List[Dict]:
+    def extract_tables(self) -> list[dict]:
         """提取所有表格结构"""
         tables = []
         current_row = self.soup.find('tr')

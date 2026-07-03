@@ -1,21 +1,16 @@
 """SharePoint connector"""
 
 from typing import Any
+
 import msal
 from office365.graph_client import GraphClient
 from office365.runtime.client_request import ClientRequestException
 from office365.sharepoint.client_context import ClientContext
 
 from common.data_source.config import INDEX_BATCH_SIZE
-from common.data_source.exceptions import ConnectorValidationError, ConnectorMissingCredentialError
-from common.data_source.interfaces import (
-    CheckpointedConnectorWithPermSync,
-    SecondsSinceUnixEpoch,
-    SlimConnectorWithPermSync
-)
-from common.data_source.models import (
-    ConnectorCheckpoint
-)
+from common.data_source.exceptions import ConnectorMissingCredentialError, ConnectorValidationError
+from common.data_source.interfaces import CheckpointedConnectorWithPermSync, SecondsSinceUnixEpoch, SlimConnectorWithPermSync
+from common.data_source.models import ConnectorCheckpoint
 
 
 class SharePointConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPermSync):
@@ -33,29 +28,29 @@ class SharePointConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPe
             client_id = credentials.get("client_id")
             client_secret = credentials.get("client_secret")
             site_url = credentials.get("site_url")
-            
+
             if not all([tenant_id, client_id, client_secret, site_url]):
                 raise ConnectorMissingCredentialError("SharePoint credentials are incomplete")
-            
+
             # Create MSAL confidential client
             app = msal.ConfidentialClientApplication(
                 client_id=client_id,
                 client_credential=client_secret,
                 authority=f"https://login.microsoftonline.com/{tenant_id}"
             )
-            
+
             # Get access token
             result = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
-            
+
             if "access_token" not in result:
                 raise ConnectorMissingCredentialError("Failed to acquire SharePoint access token")
-            
+
             # Create Graph client
             self.graph_client = GraphClient(result["access_token"])
-            
+
             # Create SharePoint client context
             self.sharepoint_client = ClientContext(site_url).with_access_token(result["access_token"])
-            
+
             return None
         except Exception as e:
             raise ConnectorMissingCredentialError(f"SharePoint: {e}")
@@ -64,7 +59,7 @@ class SharePointConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPe
         """Validate SharePoint connector settings"""
         if not self.sharepoint_client or not self.graph_client:
             raise ConnectorMissingCredentialError("SharePoint")
-        
+
         try:
             # Test connection by getting site info
             site = self.sharepoint_client.site.get().execute_query()

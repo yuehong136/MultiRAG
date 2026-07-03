@@ -6,18 +6,9 @@ import msal
 from office365.graph_client import GraphClient
 from office365.runtime.client_request_exception import ClientRequestException
 
-from common.data_source.exceptions import (
-    ConnectorValidationError,
-    InsufficientPermissionsError,
-    UnexpectedValidationError, ConnectorMissingCredentialError
-)
-from common.data_source.interfaces import (
-    SecondsSinceUnixEpoch,
-    SlimConnectorWithPermSync, CheckpointedConnectorWithPermSync
-)
-from common.data_source.models import (
-    ConnectorCheckpoint
-)
+from common.data_source.exceptions import ConnectorMissingCredentialError, ConnectorValidationError, InsufficientPermissionsError, UnexpectedValidationError
+from common.data_source.interfaces import CheckpointedConnectorWithPermSync, SecondsSinceUnixEpoch, SlimConnectorWithPermSync
+from common.data_source.models import ConnectorCheckpoint
 
 _SLIM_DOC_BATCH_SIZE = 5000
 
@@ -40,26 +31,26 @@ class TeamsConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPermSyn
             tenant_id = credentials.get("tenant_id")
             client_id = credentials.get("client_id")
             client_secret = credentials.get("client_secret")
-            
+
             if not all([tenant_id, client_id, client_secret]):
                 raise ConnectorMissingCredentialError("Microsoft Teams credentials are incomplete")
-            
+
             # Create MSAL confidential client
             app = msal.ConfidentialClientApplication(
                 client_id=client_id,
                 client_credential=client_secret,
                 authority=f"https://login.microsoftonline.com/{tenant_id}"
             )
-            
+
             # Get access token
             result = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
-            
+
             if "access_token" not in result:
                 raise ConnectorMissingCredentialError("Failed to acquire Microsoft Teams access token")
-            
+
             # Create Graph client for Teams
             self.teams_client = GraphClient(result["access_token"])
-            
+
             return None
         except Exception as e:
             raise ConnectorMissingCredentialError(f"Microsoft Teams: {e}")
@@ -68,7 +59,7 @@ class TeamsConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPermSyn
         """Validate Microsoft Teams connector settings"""
         if not self.teams_client:
             raise ConnectorMissingCredentialError("Microsoft Teams")
-        
+
         try:
             # Test connection by getting teams
             teams = self.teams_client.teams.get().execute_query()

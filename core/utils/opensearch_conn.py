@@ -14,23 +14,21 @@
 #  limitations under the License.
 #
 
-import logging
-import re
-import json
-import time
-import os
-
 import copy
-from opensearchpy import OpenSearch, NotFoundError
-from opensearchpy import UpdateByQuery, Q, Search, Index
-from opensearchpy import ConnectionTimeout
-from common.decorator import singleton
-from common.file_utils import get_project_base_directory
-from common.doc_store.doc_store_base import DocStoreConnection, MatchExpr, OrderByExpr, MatchTextExpr, MatchDenseExpr, \
-    FusionExpr
-from core.nlp import is_english, rag_tokenizer
-from common.constants import PAGERANK_FLD, TAG_FLD
+import json
+import logging
+import os
+import re
+import time
+
+from opensearchpy import ConnectionTimeout, Index, NotFoundError, OpenSearch, Q, Search, UpdateByQuery
+
 from common import settings
+from common.constants import PAGERANK_FLD, TAG_FLD
+from common.decorator import singleton
+from common.doc_store.doc_store_base import DocStoreConnection, FusionExpr, MatchDenseExpr, MatchExpr, MatchTextExpr, OrderByExpr
+from common.file_utils import get_project_base_directory
+from core.nlp import is_english, rag_tokenizer
 
 ATTEMPT_TIME = 2
 
@@ -79,7 +77,7 @@ class OSConnection(DocStoreConnection):
                     self.info = self.os.info()
                     break
             except Exception as e:
-                logger.warning(f"{str(e)}. Waiting OpenSearch {settings.OS['hosts']} to be healthy.")
+                logger.warning(f"{e!s}. Waiting OpenSearch {settings.OS['hosts']} to be healthy.")
                 time.sleep(5)
         if not self.os.ping():
             msg = f"OpenSearch {settings.OS['hosts']} is unhealthy in 120s."
@@ -96,7 +94,7 @@ class OSConnection(DocStoreConnection):
             msg = f"OpenSearch mapping file not found at {fp_mapping}"
             logger.error(msg)
             raise Exception(msg)
-        with open(fp_mapping, "r") as f:
+        with open(fp_mapping) as f:
             self.mapping = json.load(f)
         logger.info(f"OpenSearch {settings.OS['hosts']} is healthy.")
 
@@ -192,7 +190,7 @@ class OSConnection(DocStoreConnection):
                 bqry.filter.append(Q("term", **{k: v}))
             else:
                 raise Exception(
-                    f"Condition `{str(k)}={str(v)}` value type is {str(type(v))}, expected to be int, str or list.")
+                    f"Condition `{k!s}={v!s}` value type is {type(v)!s}, expected to be int, str or list.")
 
         s = Search()
         vector_similarity_weight = 0.5
@@ -242,7 +240,7 @@ class OSConnection(DocStoreConnection):
             s = s.highlight(field, force_source=True, no_match_size=30, require_field_match=False)
 
         if orderBy:
-            orders = list()
+            orders = []
             for field, order in orderBy.fields:
                 order = "asc" if order == 0 else "desc"
                 if field in ["page_num_int", "top_int"]:
@@ -260,7 +258,7 @@ class OSConnection(DocStoreConnection):
         if limit > 0:
             s = s[offset:offset + limit]
         q = s.to_dict()
-        logger.debug(f"OSConnection.search {str(indexNames)} query: " + json.dumps(q))
+        logger.debug(f"OSConnection.search {indexNames!s} query: " + json.dumps(q))
 
         if use_knn:
             del q["query"]
@@ -276,10 +274,10 @@ class OSConnection(DocStoreConnection):
                                      _source=True)
                 if str(res.get("timed_out", "")).lower() == "true":
                     raise Exception("OpenSearch Timeout.")
-                logger.debug(f"OSConnection.search {str(indexNames)} res: " + str(res))
+                logger.debug(f"OSConnection.search {indexNames!s} res: " + str(res))
                 return res
             except Exception as e:
-                logger.exception(f"OSConnection.search {str(indexNames)} query: " + str(q))
+                logger.exception(f"OSConnection.search {indexNames!s} query: " + str(q))
                 if str(e).find("Timeout") > 0:
                     continue
                 raise e
@@ -373,7 +371,7 @@ class OSConnection(DocStoreConnection):
                 bqry.filter.append(Q("term", **{k: v}))
             else:
                 raise Exception(
-                    f"Condition `{str(k)}={str(v)}` value type is {str(type(v))}, expected to be int, str or list.")
+                    f"Condition `{k!s}={v!s}` value type is {type(v)!s}, expected to be int, str or list.")
         scripts = []
         params = {}
         for k, v in newValue.items():
@@ -404,7 +402,7 @@ class OSConnection(DocStoreConnection):
                 params[f"pp_{k}"] = json.dumps(v, ensure_ascii=False)
             else:
                 raise Exception(
-                    f"newValue `{str(k)}={str(v)}` value type is {str(type(v))}, expected to be int, str.")
+                    f"newValue `{k!s}={v!s}` value type is {type(v)!s}, expected to be int, str.")
         ubq = UpdateByQuery(
             index=indexName).using(
             self.os).query(bqry)
@@ -570,7 +568,7 @@ class OSConnection(DocStoreConnection):
             hlts = d.get("highlight")
             if not hlts:
                 continue
-            txt = "...".join([a for a in list(hlts.items())[0][1]])
+            txt = "...".join(list(next(iter(hlts.items()))[1]))
             if not is_english(txt.split()):
                 ans[d["_id"]] = txt
                 continue
@@ -584,14 +582,14 @@ class OSConnection(DocStoreConnection):
                 if not re.search(r"<em>[^<>]+</em>", t, flags=re.IGNORECASE | re.MULTILINE):
                     continue
                 txts.append(t)
-            ans[d["_id"]] = "...".join(txts) if txts else "...".join([a for a in list(hlts.items())[0][1]])
+            ans[d["_id"]] = "...".join(txts) if txts else "...".join(list(next(iter(hlts.items()))[1]))
 
         return ans
 
     def get_aggregation(self, res, fieldnm: str):
         agg_field = "aggs_" + fieldnm
         if "aggregations" not in res or agg_field not in res["aggregations"]:
-            return list()
+            return []
         bkts = res["aggregations"][agg_field]["buckets"]
         return [(b["key"], b["doc_count"]) for b in bkts]
 
@@ -606,13 +604,9 @@ class OSConnection(DocStoreConnection):
         replaces = []
         for r in re.finditer(r" ([a-z_]+_l?tks)( like | ?= ?)'([^']+)'", sql):
             fld, v = r.group(1), r.group(3)
-            match = " MATCH({}, '{}', 'operator=OR;minimum_should_match=30%') ".format(
-                fld, rag_tokenizer.fine_grained_tokenize(rag_tokenizer.tokenize(v)))
+            match = f" MATCH({fld}, '{rag_tokenizer.fine_grained_tokenize(rag_tokenizer.tokenize(v))}', 'operator=OR;minimum_should_match=30%') "
             replaces.append(
-                ("{}{}'{}'".format(
-                    r.group(1),
-                    r.group(2),
-                    r.group(3)),
+                (f"{r.group(1)}{r.group(2)}'{r.group(3)}'",
                  match))
 
         for p, r in replaces:

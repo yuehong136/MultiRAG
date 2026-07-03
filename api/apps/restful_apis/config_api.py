@@ -1,4 +1,3 @@
-# coding=utf-8
 """Configuration RESTful API.
 
 Routes are mounted under ``/api/v1`` by ``api.apps.register_page``.

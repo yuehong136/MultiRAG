@@ -1,24 +1,22 @@
 import copy
 import email
-from email.header import decode_header
 import imaplib
 import logging
 import os
 import re
-from datetime import datetime, timedelta
-from datetime import timezone
+import uuid
+from datetime import UTC, datetime, timedelta
+from email.header import decode_header
 from email.message import Message
 from email.utils import collapse_rfc2231_value, getaddresses
 from enum import Enum
-from typing import Any
-from typing import cast
-import uuid
+from typing import Any, cast
 
 import bs4
 from pydantic import BaseModel
 
 from common.data_source.config import IMAP_CONNECTOR_SIZE_THRESHOLD, DocumentSource
-from common.data_source.interfaces import CheckpointOutput, CheckpointedConnectorWithPermSync, CredentialsConnector, CredentialsProviderInterface
+from common.data_source.interfaces import CheckpointedConnectorWithPermSync, CheckpointOutput, CredentialsConnector, CredentialsProviderInterface
 from common.data_source.models import BasicExpertInfo, ConnectorCheckpoint, Document, ExternalAccess, SecondsSinceUnixEpoch
 
 _DEFAULT_IMAP_PORT_NUMBER = int(os.environ.get("IMAP_PORT", 993))
@@ -100,7 +98,7 @@ class EmailHeaders(BaseModel):
         date = _parse_date(date_str=date_str)
 
         if not date:
-            date = datetime.now(tz=timezone.utc)
+            date = datetime.now(tz=UTC)
 
         # If any of the above are `None`, model validation will fail.
         # Therefore, no guards (i.e.: `if <header> is None: raise RuntimeError(..)`) were written.
@@ -271,12 +269,12 @@ class ImapConnector(
             email_headers = EmailHeaders.from_email_msg(email_msg=email_msg)
             msg_dt = email_headers.date
             if msg_dt.tzinfo is None:
-                msg_dt = msg_dt.replace(tzinfo=timezone.utc)
+                msg_dt = msg_dt.replace(tzinfo=UTC)
             else:
-                msg_dt = msg_dt.astimezone(timezone.utc)
+                msg_dt = msg_dt.astimezone(UTC)
 
-            start_dt = datetime.fromtimestamp(start, tz=timezone.utc)
-            end_dt = datetime.fromtimestamp(end, tz=timezone.utc)
+            start_dt = datetime.fromtimestamp(start, tz=UTC)
+            end_dt = datetime.fromtimestamp(end, tz=UTC)
 
             if not (start_dt < msg_dt <= end_dt):
                 continue
@@ -403,8 +401,8 @@ def _fetch_email_ids_in_mailbox(
         logging.warning(f"Skip mailbox: {mailbox}")
         return []
 
-    start_dt = datetime.fromtimestamp(start, tz=timezone.utc)
-    end_dt = datetime.fromtimestamp(end, tz=timezone.utc) + timedelta(days=1)
+    start_dt = datetime.fromtimestamp(start, tz=UTC)
+    end_dt = datetime.fromtimestamp(end, tz=UTC) + timedelta(days=1)
 
     start_str = start_dt.strftime("%d-%b-%Y")
     end_str = end_dt.strftime("%d-%b-%Y")
@@ -637,6 +635,7 @@ def _parse_singular_addr(raw_header: str) -> tuple[str, str]:
 if __name__ == "__main__":
     import time
     from types import TracebackType
+
     from common.data_source.utils import load_all_docs_from_checkpoint_connector
 
 

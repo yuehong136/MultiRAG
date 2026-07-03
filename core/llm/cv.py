@@ -26,11 +26,11 @@ from pathlib import Path
 from urllib.parse import urljoin
 
 import requests
-from openai import OpenAI, AsyncOpenAI
-from openai.lib.azure import AzureOpenAI, AsyncAzureOpenAI
+from openai import AsyncOpenAI, OpenAI
+from openai.lib.azure import AsyncAzureOpenAI, AzureOpenAI
 
-from common.token_utils import num_tokens_from_string, total_token_count_from_response
 from common.misc_utils import thread_pool_exec
+from common.token_utils import num_tokens_from_string, total_token_count_from_response
 from core.nlp import is_english
 from core.prompts.generator import vision_llm_describe_prompt
 

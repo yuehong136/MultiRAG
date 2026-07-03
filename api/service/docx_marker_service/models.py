@@ -1,9 +1,9 @@
-# coding=utf-8
 """
 DOCX 模板标记数据模型
 """
 
 from typing import Literal
+
 from pydantic import BaseModel
 
 

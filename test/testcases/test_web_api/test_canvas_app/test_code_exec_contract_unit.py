@@ -22,7 +22,6 @@ from unittest.mock import patch
 
 import pytest
 
-
 CODE_EXEC_MODULE_PATH = next(
     parent / "agent" / "tools" / "code_exec.py"
     for parent in Path(__file__).resolve().parents

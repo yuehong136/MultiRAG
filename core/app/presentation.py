@@ -22,12 +22,11 @@ from io import BytesIO
 
 from pypdf import PdfReader as pdf2_read
 
-from core.app.naive import by_plaintext, PARSERS
-from core.nlp import rag_tokenizer
-from core.nlp import tokenize
 from common.parser_config_utils import normalize_layout_recognizer
+from core.app.naive import PARSERS, by_plaintext
+from core.nlp import rag_tokenizer, tokenize
 from core.utils.lazy_image import ensure_pil_image, is_image_like
-from deepdoc.parser import PdfParser, PptParser, PlainParser
+from deepdoc.parser import PdfParser, PlainParser, PptParser
 
 
 class Pdf(PdfParser):

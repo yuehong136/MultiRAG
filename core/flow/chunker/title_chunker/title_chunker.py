@@ -26,7 +26,7 @@ class TitleChunker(ProcessBase):
         try:
             from_upstream = TitleChunkerFromUpstream.model_validate(kwargs)
         except Exception as e:
-            self.set_output("_ERROR", f"Input error: {str(e)}")
+            self.set_output("_ERROR", f"Input error: {e!s}")
             return
 
         if self._param.method == "hierarchy":

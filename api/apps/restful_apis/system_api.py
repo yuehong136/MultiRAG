@@ -1,4 +1,3 @@
-# coding=utf-8
 """System RESTful API.
 
 Routes are mounted under ``/api/v1`` by ``api.apps.register_page``.
@@ -20,7 +19,7 @@ from api.apps import manager
 from api.db.db_models import APIToken, get_db
 from api.db.services.api_service import APITokenService
 from api.db.services.user_service import UserTenantService
-from api.utils.api_utils import get_data_error_result, get_json_result, generate_confirmation_token, server_error_response
+from api.utils.api_utils import generate_confirmation_token, get_data_error_result, get_json_result, server_error_response
 from api.utils.health_utils import run_health_checks
 from common.time_utils import current_timestamp, datetime_format
 from common.versions import get_multirag_version

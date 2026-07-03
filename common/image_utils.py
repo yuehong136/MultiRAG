@@ -5,7 +5,6 @@
 """
 
 import re
-from typing import Literal
 from urllib.parse import urlparse
 
 

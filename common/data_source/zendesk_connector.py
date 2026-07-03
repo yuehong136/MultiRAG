@@ -1,21 +1,19 @@
 import copy
 import logging
 import time
-from collections.abc import Callable
-from collections.abc import Iterator
-from typing import Any
+from collections.abc import Callable, Iterator
+from typing import Any, override
 
 import requests
 from pydantic import BaseModel
 from requests.exceptions import HTTPError
-from typing_extensions import override
 
 from common.data_source.config import ZENDESK_CONNECTOR_SKIP_ARTICLE_LABELS, DocumentSource
 from common.data_source.exceptions import ConnectorValidationError, CredentialExpiredError, InsufficientPermissionsError
 from common.data_source.html_utils import parse_html_page_basic
-from common.data_source.interfaces import CheckpointOutput, CheckpointOutputWrapper, CheckpointedConnector, IndexingHeartbeatInterface, SlimConnectorWithPermSync
+from common.data_source.interfaces import CheckpointedConnector, CheckpointOutput, CheckpointOutputWrapper, IndexingHeartbeatInterface, SlimConnectorWithPermSync
 from common.data_source.models import BasicExpertInfo, ConnectorCheckpoint, ConnectorFailure, Document, DocumentFailure, GenerateSlimDocumentOutput, SecondsSinceUnixEpoch, SlimDocument
-from common.data_source.utils import retry_builder, time_str_to_utc,rate_limit_builder
+from common.data_source.utils import rate_limit_builder, retry_builder, time_str_to_utc
 
 MAX_PAGE_SIZE = 30  # Zendesk API maximum
 MAX_AUTHOR_MAP_SIZE = 50_000  # Reset author map cache if it gets too large
@@ -99,7 +97,7 @@ def _get_content_tag_mapping(client: ZendeskClient) -> dict[str, str]:
 
         return content_tags
     except Exception as e:
-        raise Exception(f"Error fetching content tags: {str(e)}")
+        raise Exception(f"Error fetching content tags: {e!s}")
 
 
 def _get_articles(
@@ -111,8 +109,7 @@ def _get_articles(
 
     while True:
         data = client.make_request("help_center/articles", params)
-        for article in data["articles"]:
-            yield article
+        yield from data["articles"]
 
         if not data.get("meta", {}).get("has_more"):
             break
@@ -146,8 +143,7 @@ def _get_tickets(
 
     while True:
         data = client.make_request("incremental/tickets.json", params)
-        for ticket in data["tickets"]:
-            yield ticket
+        yield from data["tickets"]
 
         if not data.get("end_of_stream", False):
             params["start_time"] = data["end_time"]

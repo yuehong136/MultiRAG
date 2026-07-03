@@ -5,7 +5,6 @@ from typing import Any
 from common.config_utils import get_base_config
 from common.datav_persondata_crypto import PersonDataCryptoError, decrypt_persondata_prompt
 
-
 PERSONDATA_REDACTED_VALUE = "[PERSON_DATA_DECRYPTED]"
 _PERSONDATA_TYPE_RE = re.compile(r"[\s_-]+")
 

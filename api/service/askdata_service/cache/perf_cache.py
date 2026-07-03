@@ -5,10 +5,10 @@ LLM 响应性能缓存
 """
 
 import hashlib
-import time
 import threading
-from typing import Any, Optional
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass
+from typing import Any
 
 from api.service.askdata_service.util.askdata_logger import get_askdata_logger
 
@@ -72,7 +72,7 @@ class PerfCache:
             self._ns_stats[namespace] = NamespaceStats()
         return self._ns_stats[namespace]
 
-    def get(self, prompt: str, namespace: str = "default") -> Optional[Any]:
+    def get(self, prompt: str, namespace: str = "default") -> Any | None:
         key = self._make_key(prompt, namespace)
         with self._lock:
             entry = self._cache.get(key)

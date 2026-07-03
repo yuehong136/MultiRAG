@@ -6,18 +6,18 @@ Reference:
 """
 
 import re
-from typing import Any
 from dataclasses import dataclass
+from typing import Any
 
-import tiktoken
 import networkx as nx
+import tiktoken
 
-from common.token_utils import num_tokens_from_string
 from common.misc_utils import thread_pool_exec
+from common.token_utils import num_tokens_from_string
+from core.graphrag.general.extractor import ENTITY_EXTRACTION_MAX_GLEANINGS, Extractor
+from core.graphrag.general.graph_prompt import CONTINUE_PROMPT, GRAPH_EXTRACTION_PROMPT, LOOP_PROMPT
 from core.graphrag.llm_protocol import GraphRAGCompletionLLM
-from core.graphrag.general.extractor import Extractor, ENTITY_EXTRACTION_MAX_GLEANINGS
-from core.graphrag.general.graph_prompt import GRAPH_EXTRACTION_PROMPT, CONTINUE_PROMPT, LOOP_PROMPT
-from core.graphrag.utils import ErrorHandlerFn, perform_variable_replacements, chat_limiter, split_string_by_multi_markers
+from core.graphrag.utils import ErrorHandlerFn, chat_limiter, perform_variable_replacements, split_string_by_multi_markers
 
 DEFAULT_TUPLE_DELIMITER = "<|>"
 DEFAULT_RECORD_DELIMITER = "##"

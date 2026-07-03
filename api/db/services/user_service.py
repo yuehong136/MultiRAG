@@ -2,14 +2,14 @@ import hashlib
 import logging
 from datetime import datetime
 
-from fastapi import HTTPException
-from sqlalchemy.exc import NoResultFound, IntegrityError
-from sqlalchemy.orm import Session
-from sqlalchemy import func, select, update
 import bcrypt
+from fastapi import HTTPException
+from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError, NoResultFound
+from sqlalchemy.orm import Session
 
 from api.db import UserTenantRole
-from api.db.db_models import User, Tenant, UserTenant
+from api.db.db_models import Tenant, User, UserTenant
 from api.db.services.common_service import CommonService
 from common import settings
 from common.constants import StatusEnum
@@ -109,10 +109,10 @@ class UserService(CommonService):
             db.refresh(user)
         except IntegrityError as e:
             db.rollback()
-            raise HTTPException(status_code=500, detail=f"Integrity error: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Integrity error: {e!s}")
         except Exception as e:
             db.rollback()
-            raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"An error occurred: {e!s}")
         return user
 
     @classmethod

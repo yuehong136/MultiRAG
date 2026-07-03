@@ -1,7 +1,7 @@
 from abc import ABC
 from typing import TypeVar
 
-from workflow.basic.Node import NodeParameter, Node
+from workflow.basic.Node import Node, NodeParameter
 
 
 class PluginParameter(NodeParameter):

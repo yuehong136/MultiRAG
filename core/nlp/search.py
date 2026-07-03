@@ -1,7 +1,7 @@
 import json
 import logging
-import re
 import math
+import re
 from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
 
@@ -9,19 +9,19 @@ import numpy as np
 from pymilvus import AnnSearchRequest, WeightedRanker
 
 from api.db.db_models import db_connection
-from core.nlp import rag_tokenizer, query, is_english
 from common import settings
+from common.constants import PAGERANK_FLD, TAG_FLD
 from common.doc_store.doc_store_base import (
     DocStoreConnection,
-    MatchDenseExpr,
     FusionExpr,
+    MatchDenseExpr,
     OrderByExpr,
 )
-from common.string_utils import remove_redundant_spaces
 from common.float_utils import get_float
 from common.misc_utils import thread_pool_exec
-from common.constants import TAG_FLD, PAGERANK_FLD
+from common.string_utils import remove_redundant_spaces
 from common.tag_feature_utils import parse_tag_features
+from core.nlp import is_english, query, rag_tokenizer
 
 
 def index_name(uid, kb_names=None):
@@ -78,7 +78,7 @@ class Dealer:
     def __init__(self, dataStore: DocStoreConnection):
         self.qryr = query.FulltextQueryer()
         self.dataStore = dataStore
-        
+
         # 基础搜索字段（ES/OpenSearch/Infinity 兼容）
         base_fields = [
             "title_tks^10",
@@ -88,11 +88,11 @@ class Dealer:
             "question_tks^20",
             "content_ltks^2",
             "content_sm_ltks"]
-        
+
         # Milvus 额外支持 content_with_weight 搜索（ES 中该字段不可索引）
         if dataStore.db_type() == "milvus":
             base_fields.append("content_with_weight")
-        
+
         self.qryr.flds = base_fields
 
     @dataclass
@@ -144,7 +144,7 @@ class Dealer:
         return MatchDenseExpr(vector_column_name, embedding_data, 'float', 'cosine', topk, {"similarity": similarity})
 
     def get_filters(self, req):
-        condition = dict()
+        condition = {}
         for key, field in {"kb_ids": "kb_id", "doc_ids": "doc_id"}.items():
             if key in req and req[key] is not None:
                 condition[field] = req[key]
@@ -416,7 +416,7 @@ class Dealer:
                 )
             return _build_result(res, keywords_raw)
 
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logging.error("Search failed: %s", exc, exc_info=True)
             # 极端情况 fallback 为空结果，保持返回格式
             return self.SearchResult(
@@ -444,7 +444,7 @@ class Dealer:
             hlts = entity.get("highlight")
             if not hlts:
                 continue
-            txt = "...".join([a for a in list(hlts.items())[0][1]])
+            txt = "...".join(list(next(iter(hlts.items()))[1]))
 
             # 判断文本是否为英文
             if not is_english(txt.split()):
@@ -478,7 +478,7 @@ class Dealer:
                          embd_mdl, tkweight=0.1, vtweight=0.9):
         assert len(chunks) == len(chunk_v)
         if not chunks:
-            return answer, set([])
+            return answer, set()
         pieces = re.split(r"(```)", answer)
         if len(pieces) >= 3:
             i = 0
@@ -514,17 +514,17 @@ class Dealer:
                 continue
             idx.append(i)
             pieces_.append(t)
-        logging.info("{} => {}".format(answer, pieces_))
+        logging.info(f"{answer} => {pieces_}")
         if not pieces_:
-            return answer, set([])
+            return answer, set()
 
         ans_v, _ = embd_mdl.encode(pieces_)
         for i in range(len(chunk_v)):
             if len(ans_v[0]) != len(chunk_v[i]):
                 chunk_v[i] = [0.0] * len(ans_v[0])
-                logging.warning("The dimension of query and chunk do not match: {} vs. {}".format(len(ans_v[0]), len(chunk_v[i])))
+                logging.warning(f"The dimension of query and chunk do not match: {len(ans_v[0])} vs. {len(chunk_v[i])}")
 
-        assert len(ans_v[0]) == len(chunk_v[0]), "The dimension of query and chunk do not match: {} vs. {}".format(len(ans_v[0]), len(chunk_v[0]))
+        assert len(ans_v[0]) == len(chunk_v[0]), f"The dimension of query and chunk do not match: {len(ans_v[0])} vs. {len(chunk_v[0])}"
 
         chunks_tks = [rag_tokenizer.tokenize(self.qryr.rmWWW(ck)).split()
                       for ck in chunks]
@@ -539,15 +539,15 @@ class Dealer:
                                                                 chunks_tks,
                                                                 tkweight, vtweight)
                 mx = np.max(sim) * 0.99
-                logging.info("{} SIM: {}".format(pieces_[i], mx))
+                logging.info(f"{pieces_[i]} SIM: {mx}")
                 if mx < thr:
                     continue
                 cites[idx[i]] = list(
-                    set([str(ii) for ii in range(len(chunk_v)) if sim[ii] > mx]))[:4]
+                    {str(ii) for ii in range(len(chunk_v)) if sim[ii] > mx})[:4]
             thr *= 0.8
 
         res = ""
-        seted = set([])
+        seted = set()
         for i, p in enumerate(pieces):
             res += p
             if i not in idx:
@@ -624,18 +624,18 @@ class Dealer:
         # 获取结果中的嵌入向量
         vector_dim = len(sres.query_vector) if sres.query_vector else 0
         logging.info(f"rerank: vector_dim={vector_dim}, sres.ids count={len(sres.ids)}")
-        
+
         if vector_dim == 0:
             logging.warning("rerank: query_vector 为空，无法计算向量相似度")
             # 返回基于文本的相似度
             sim = np.array([sres.field[id].get("_score", 0.0) for id in sres.ids], dtype=np.float64)
             return sim, sim, np.zeros(len(sim), dtype=np.float64)
-            
+
         if vector_dim != 768:
             dim_field = f"q_{vector_dim}_vec"
         else:
             dim_field = "vector"
-        
+
         ins_embd = []
         zero_count = 0
         for i in sres.ids:
@@ -658,7 +658,7 @@ class Dealer:
                     zero_count += 1
 
             ins_embd.append(vector)
-        
+
         logging.info(f"rerank: 获取到 {len(ins_embd)} 个向量，其中 {zero_count} 个为零向量，dim_field={dim_field}")
 
         # 处理文本相似度比较所需的token列表
@@ -811,7 +811,7 @@ class Dealer:
         if not idxnms:
             logging.warning("No valid index names built: tenant_id=%s, kb_names=%s", tenant_id, kb_names)
             return ranks
-        
+
         # 优先使用 kb_ids（知识库ID），如果没有则使用 kb_names（仅适用于Milvus场景）
         search_kb_ids = kb_ids if kb_ids else kb_names
 
@@ -976,13 +976,9 @@ class Dealer:
         replaces = []
         for r in re.finditer(r" ([a-z_]+_l?tks)( like | ?= ?)'([^']+)'", sql):
             fld, v = r.group(1), r.group(3)
-            match = " MATCH({}, '{}', 'operator=OR;minimum_should_match=30%') ".format(
-                fld, rag_tokenizer.fine_grained_tokenize(rag_tokenizer.tokenize(v)))
+            match = f" MATCH({fld}, '{rag_tokenizer.fine_grained_tokenize(rag_tokenizer.tokenize(v))}', 'operator=OR;minimum_should_match=30%') "
             replaces.append(
-                ("{}{}'{}'".format(
-                    r.group(1),
-                    r.group(2),
-                    r.group(3)),
+                (f"{r.group(1)}{r.group(2)}'{r.group(3)}'",
                  match))
 
         for p, r in replaces:
@@ -1100,7 +1096,7 @@ class Dealer:
     async def retrieval_by_toc(self, query: str, chunks: list[dict], tenant_ids: list[str], kb_names: list[str], chat_mdl, topn: int = 6):
         """
         基于 TOC (Table of Contents) 的检索增强方法
-        
+
         Args:
             query: 查询文本
             chunks: 初始检索到的 chunk 列表
@@ -1108,7 +1104,7 @@ class Dealer:
             kb_names: 知识库名称列表（与 tenant_ids 对应）
             chat_mdl: LLM 模型用于 TOC 相关性评分
             topn: 返回的 top N 结果
-            
+
         Returns:
             重新排序和补充后的 chunks 列表
         """
@@ -1119,7 +1115,7 @@ class Dealer:
 
         # 从 chunks 中提取实际的 kb_id，查询对应的知识库名称
         from api.db.services.knowledgebase_service import KnowledgebaseService
-        kb_id_set = set(ck.get("kb_id") for ck in chunks if ck.get("kb_id"))
+        kb_id_set = {ck.get("kb_id") for ck in chunks if ck.get("kb_id")}
         with db_connection() as db:
             kbs = KnowledgebaseService.get_by_ids(db, list(kb_id_set))
 
@@ -1136,7 +1132,7 @@ class Dealer:
         for tid in tenant_ids:
             if tid in tenant_kb_dict:
                 idx_nms.extend(index_name(tid, tenant_kb_dict[tid]))
-        
+
         ranks, doc_id2kb_id = {}, {}
         for ck in chunks:
             if ck["doc_id"] not in ranks:
@@ -1213,7 +1209,7 @@ class Dealer:
 
         # 从chunks中提取kb_id，构建索引名称
         from api.db.services.knowledgebase_service import KnowledgebaseService
-        kb_id_set = set(ck.get("kb_id") for ck in chunks if ck.get("kb_id"))
+        kb_id_set = {ck.get("kb_id") for ck in chunks if ck.get("kb_id")}
         with db_connection() as db:
             kbs = KnowledgebaseService.get_by_ids(db, list(kb_id_set))
 

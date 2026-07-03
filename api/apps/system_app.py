@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -6,29 +5,29 @@
 @date：2024/7/9 9:00
 @desc:
 """
-import logging
 import json
+import logging
 from datetime import datetime
 from timeit import default_timer as timer
-
-from fastapi import APIRouter, Depends, Body, Response
-from fastapi.responses import PlainTextResponse
-from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Annotated, Any
+
+from fastapi import APIRouter, Body, Depends, Response
+from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.apps.api_app import generate_confirmation_token
-from api.db.db_models import APIToken, get_db, DATABASE_TYPE, get_pool_status
+from api.db.db_models import DATABASE_TYPE, APIToken, get_db, get_pool_status
 from api.db.services.api_service import APITokenService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import UserTenantService
-from api.utils.api_utils import get_json_result, get_data_error_result, server_error_response
-from api.utils.health_utils import run_health_checks, is_health_result_ok, get_oceanbase_status
-from common.versions import get_multirag_version
-from common.time_utils import current_timestamp, datetime_format
-from common.log_utils import get_log_levels, set_log_level
+from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
+from api.utils.health_utils import get_oceanbase_status, is_health_result_ok, run_health_checks
 from common import settings
+from common.log_utils import get_log_levels, set_log_level
+from common.time_utils import current_timestamp, datetime_format
+from common.versions import get_multirag_version
 from core.utils.redis_conn import REDIS_CONN
 
 router = APIRouter()
@@ -129,12 +128,12 @@ def status(db: Session = Depends(get_db), user=Depends(manager)):
     st = timer()
     try:
         res["doc_engine"] = settings.docStoreConn.health()
-        res["doc_engine"]["elapsed"] = "{:.1f}".format((timer() - st) * 1000.0)
+        res["doc_engine"]["elapsed"] = f"{(timer() - st) * 1000.0:.1f}"
     except Exception as e:
         res["doc_engine"] = {
             "type": "unknown",
             "status": "red",
-            "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
+            "elapsed": f"{(timer() - st) * 1000.0:.1f}",
             "error": str(e),
         }
 
@@ -145,7 +144,7 @@ def status(db: Session = Depends(get_db), user=Depends(manager)):
         res["storage"] = {
             "storage": settings.STORAGE_IMPL_TYPE.lower(),
             "status": "green" if storage_ok else "red",
-            "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
+            "elapsed": f"{(timer() - st) * 1000.0:.1f}",
         }
         if not storage_ok:
             res["storage"]["error"] = f"storage health returned unhealthy result: {health_result!r}"
@@ -155,7 +154,7 @@ def status(db: Session = Depends(get_db), user=Depends(manager)):
         res["storage"] = {
             "storage": settings.STORAGE_IMPL_TYPE.lower(),
             "status": "red",
-            "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
+            "elapsed": f"{(timer() - st) * 1000.0:.1f}",
             "error": str(e),
         }
 
@@ -165,13 +164,13 @@ def status(db: Session = Depends(get_db), user=Depends(manager)):
         res["database"] = {
             "database": DATABASE_TYPE.lower(),
             "status": "green",
-            "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
+            "elapsed": f"{(timer() - st) * 1000.0:.1f}",
         }
     except Exception as e:
         res["database"] = {
             "database": DATABASE_TYPE.lower(),
             "status": "red",
-            "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
+            "elapsed": f"{(timer() - st) * 1000.0:.1f}",
             "error": str(e),
         }
 
@@ -191,7 +190,7 @@ def status(db: Session = Depends(get_db), user=Depends(manager)):
 
         res["database_pool"] = {
             "status": status,
-            "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
+            "elapsed": f"{(timer() - st) * 1000.0:.1f}",
             "pool_size": pool_status.get('pool_size'),
             "checked_out": pool_status.get('checked_out'),
             "checked_in": pool_status.get('checked_in'),
@@ -202,7 +201,7 @@ def status(db: Session = Depends(get_db), user=Depends(manager)):
     except Exception as e:
         res["database_pool"] = {
             "status": "red",
-            "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
+            "elapsed": f"{(timer() - st) * 1000.0:.1f}",
             "error": str(e),
         }
 
@@ -212,12 +211,12 @@ def status(db: Session = Depends(get_db), user=Depends(manager)):
             raise Exception("Lost connection!")
         res["redis"] = {
             "status": "green",
-            "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
+            "elapsed": f"{(timer() - st) * 1000.0:.1f}",
         }
     except Exception as e:
         res["redis"] = {
             "status": "red",
-            "elapsed": "{:.1f}".format((timer() - st) * 1000.0),
+            "elapsed": f"{(timer() - st) * 1000.0:.1f}",
             "error": str(e),
         }
 
@@ -240,24 +239,24 @@ def status(db: Session = Depends(get_db), user=Depends(manager)):
 def healthz(response: Response):
     """
     健康检查接口
-    
+
     概要：检查系统关键组件的健康状态。
     响应描述：返回各组件的健康状态，如果所有关键组件正常则返回200状态码，否则返回500。
-    
+
     返回：
     - dict: 包含各组件健康状态的详细信息
-    
+
     功能：
     1. 检查数据库连接状态
     2. 检查 Redis 连接状态
     3. 检查文档引擎状态
     4. 检查存储服务状态
     5. 检查聊天服务配置
-    
+
     状态码：
     - 200: 所有关键组件正常
     - 500: 至少一个关键组件异常
-    
+
     注意：
     - 此接口通常用于 Kubernetes 或其他容器编排系统的健康探测
     """
@@ -273,11 +272,11 @@ def oceanbase_status(user=Depends(manager)):
         return get_json_result(data=status_info)
     except Exception as e:
         return get_json_result(
-            data={"status": "error", "message": f"Failed to get OceanBase status: {str(e)}"}
+            data={"status": "error", "message": f"Failed to get OceanBase status: {e!s}"}
         )
 
 
-@router.get("/ping", summary="连通测试", deprecated=True) # noqa: F821
+@router.get("/ping", summary="连通测试", deprecated=True)
 async def ping():
     return PlainTextResponse("pong")
 
@@ -297,7 +296,7 @@ def new_token(request: TokenCreateRequest, db: Session = Depends(get_db), user=D
         if not tenants:
             return get_data_error_result(retmsg="Tenant not found!")
 
-        tenant_id = [tenant for tenant in tenants if tenant.role == "owner"][0].tenant_id
+        tenant_id = next(tenant for tenant in tenants if tenant.role == "owner").tenant_id
         current_ts = current_timestamp()
         current_date = datetime_format(datetime.now())
         obj = {
@@ -353,7 +352,7 @@ def token_list(db: Session = Depends(get_db), user=Depends(manager)):
         if not tenants:
             return get_data_error_result(retmsg="Tenant not found!")
 
-        tenant_id = [tenant for tenant in tenants if tenant.role == "owner"][0].tenant_id
+        tenant_id = next(tenant for tenant in tenants if tenant.role == "owner").tenant_id
         objs = APITokenService.query(db, tenant_id=tenant_id)
         objs = [o.to_dict() for o in objs]
         for o in objs:
@@ -395,7 +394,7 @@ def rm(
         return server_error_response(e)
 
 
-@router.get('/config', summary="获取系统配置")  # noqa: F821
+@router.get('/config', summary="获取系统配置")
 def get_config():
     """
     Get system configuration.
@@ -425,7 +424,7 @@ class LogLevelRequest(BaseModel):
     level: Annotated[str, Field(min_length=1, description="日志级别 (DEBUG, INFO, WARNING, ERROR)")]
 
 
-@router.get('/log_levels', summary="获取日志级别", deprecated=True)  # noqa: F821
+@router.get('/log_levels', summary="获取日志级别", deprecated=True)
 def get_logger_levels(user=Depends(manager)):
     """
     Get current log levels for all packages.
@@ -439,7 +438,7 @@ def get_logger_levels(user=Depends(manager)):
     return get_json_result(data=get_log_levels())
 
 
-@router.put('/log_levels', summary="设置日志级别", deprecated=True)  # noqa: F821
+@router.put('/log_levels', summary="设置日志级别", deprecated=True)
 def set_logger_level(request: LogLevelRequest, user=Depends(manager)):
     """
     Set log level for a package.

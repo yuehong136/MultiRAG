@@ -15,18 +15,18 @@
 #
 
 from common.doc_store.doc_store_base import (
+    DEFAULT_MATCH_SPARSE_TOPN,
+    DEFAULT_MATCH_VECTOR_TOPN,
+    VEC,
     DocStoreConnection,
-    MatchExpr,
-    MatchTextExpr,
+    FusionExpr,
     MatchDenseExpr,
+    MatchExpr,
     MatchSparseExpr,
     MatchTensorExpr,
-    FusionExpr,
+    MatchTextExpr,
     OrderByExpr,
     SparseVector,
-    VEC,
-    DEFAULT_MATCH_VECTOR_TOPN,
-    DEFAULT_MATCH_SPARSE_TOPN,
 )
 
 # Base classes are imported lazily to avoid import errors when dependencies are not installed
@@ -35,16 +35,16 @@ from common.doc_store.doc_store_base import (
 # Use: from common.doc_store.infinity_conn_base import InfinityConnectionBase
 
 __all__ = [
+    "DEFAULT_MATCH_SPARSE_TOPN",
+    "DEFAULT_MATCH_VECTOR_TOPN",
+    "VEC",
     "DocStoreConnection",
-    "MatchExpr",
-    "MatchTextExpr",
+    "FusionExpr",
     "MatchDenseExpr",
+    "MatchExpr",
     "MatchSparseExpr",
     "MatchTensorExpr",
-    "FusionExpr",
+    "MatchTextExpr",
     "OrderByExpr",
     "SparseVector",
-    "VEC",
-    "DEFAULT_MATCH_VECTOR_TOPN",
-    "DEFAULT_MATCH_SPARSE_TOPN",
 ]

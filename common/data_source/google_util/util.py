@@ -2,11 +2,11 @@ import json
 import logging
 import os
 import re
-import socket
+import unicodedata
 from collections.abc import Callable, Iterator
 from enum import Enum
 from typing import Any
-import unicodedata
+
 from googleapiclient.errors import HttpError  # type: ignore  # type: ignore
 
 from common.data_source.config import DocumentSource
@@ -108,8 +108,7 @@ def _execute_paginated_retrieval(
 
         next_page_token = results.get(NEXT_PAGE_TOKEN_KEY)
         if list_key:
-            for item in results.get(list_key, []):
-                yield item
+            yield from results.get(list_key, [])
         else:
             yield results
 
@@ -148,7 +147,7 @@ def _execute_single_retrieval(
         else:
             logging.exception("Error executing request:")
             raise e
-    except (TimeoutError, socket.timeout) as error:
+    except TimeoutError as error:
         logging.warning(
             "Timed out executing Google API request; retrying with backoff. Details: %s",
             error,

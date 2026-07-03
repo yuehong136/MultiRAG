@@ -13,6 +13,7 @@
 
 import logging
 import os
+
 import PIL
 from PIL import ImageDraw
 

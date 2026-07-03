@@ -1,12 +1,12 @@
-from typing import List, Tuple, Dict, Any
+from typing import Any
 
 from api.service.askdata_service.util.askdata_logger import get_askdata_logger
 
 logger = get_askdata_logger()
 
 
-def _extract_allowed_semantic_fields(user_semantic_permissions: Dict[str, Any], semantic_type: str) -> Tuple[
-    List[str], List[Dict[str, str]]]:
+def _extract_allowed_semantic_fields(user_semantic_permissions: dict[str, Any], semantic_type: str) -> tuple[
+    list[str], list[dict[str, str]]]:
     """
     提取用户权限中允许的语义字段ID
 
@@ -46,8 +46,8 @@ def _extract_allowed_semantic_fields(user_semantic_permissions: Dict[str, Any], 
     return allowed_ids, allowed_info
 
 
-def filter_dimensions_by_permissions(involved_dimension_id_list: List[str],
-                                     user_semantic_permissions: Dict[str, Any]) -> Tuple[List[str], List[str]]:
+def filter_dimensions_by_permissions(involved_dimension_id_list: list[str],
+                                     user_semantic_permissions: dict[str, Any]) -> tuple[list[str], list[str]]:
     """
     根据用户权限过滤维度，返回允许和禁止的维度ID列表
 
@@ -88,8 +88,8 @@ def filter_dimensions_by_permissions(involved_dimension_id_list: List[str],
     return allowed_dimensions, prohibited_dimensions
 
 
-def filter_metrics_by_permissions(involved_metric_id_list: List[str], user_semantic_permissions: Dict[str, Any]) -> \
-Tuple[List[str], List[str]]:
+def filter_metrics_by_permissions(involved_metric_id_list: list[str], user_semantic_permissions: dict[str, Any]) -> \
+tuple[list[str], list[str]]:
     """
     根据用户权限过滤度量，返回允许和禁止的度量ID列表
 
@@ -130,10 +130,10 @@ Tuple[List[str], List[str]]:
     return allowed_metrics, prohibited_metrics
 
 
-def filter_semantic_fields_by_permissions(involved_dimension_id_list: List[str],
-                                          involved_metric_id_list: List[str],
-                                          user_semantic_permissions: Dict[str, Any]) -> Dict[
-    str, Tuple[List[str], List[str]]]:
+def filter_semantic_fields_by_permissions(involved_dimension_id_list: list[str],
+                                          involved_metric_id_list: list[str],
+                                          user_semantic_permissions: dict[str, Any]) -> dict[
+    str, tuple[list[str], list[str]]]:
     """
     同时过滤维度和度量，返回完整的权限过滤结果
 

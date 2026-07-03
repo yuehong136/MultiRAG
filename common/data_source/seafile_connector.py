@@ -1,18 +1,14 @@
 """SeaFile connector with granular sync support"""
 import logging
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from retry import retry
 
-from common.data_source.utils import (
-    get_file_ext,
-    rl_requests,
-)
 from common.data_source.config import (
-    DocumentSource,
-    INDEX_BATCH_SIZE,
     BLOB_STORAGE_SIZE_THRESHOLD,
+    INDEX_BATCH_SIZE,
+    DocumentSource,
 )
 from common.data_source.exceptions import (
     ConnectorMissingCredentialError,
@@ -23,9 +19,13 @@ from common.data_source.exceptions import (
 from common.data_source.interfaces import LoadConnector, PollConnector
 from common.data_source.models import (
     Document,
-    SecondsSinceUnixEpoch,
     GenerateDocumentsOutput,
     SeafileSyncScope,
+    SecondsSinceUnixEpoch,
+)
+from common.data_source.utils import (
+    get_file_ext,
+    rl_requests,
 )
 
 logger = logging.getLogger(__name__)
@@ -90,16 +90,16 @@ class SeaFileConnector(LoadConnector, PollConnector):
             - None / missing
         """
         if not raw_mtime:
-            return datetime.now(timezone.utc)
+            return datetime.now(UTC)
 
         # Try as unix timestamp (int or numeric string)
         if isinstance(raw_mtime, (int, float)):
-            return datetime.fromtimestamp(raw_mtime, tz=timezone.utc)
+            return datetime.fromtimestamp(raw_mtime, tz=UTC)
 
         if isinstance(raw_mtime, str):
             # Try numeric string first
             try:
-                return datetime.fromtimestamp(int(raw_mtime), tz=timezone.utc)
+                return datetime.fromtimestamp(int(raw_mtime), tz=UTC)
             except ValueError:
                 pass
 
@@ -110,7 +110,7 @@ class SeaFileConnector(LoadConnector, PollConnector):
                 pass
 
         logger.warning("Unparseable mtime %r, using current time", raw_mtime)
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
     def _validate_scope_params(self) -> None:
         if self.sync_scope in (SeafileSyncScope.LIBRARY, SeafileSyncScope.DIRECTORY):
@@ -298,7 +298,7 @@ class SeaFileConnector(LoadConnector, PollConnector):
                 raise CredentialExpiredError("Token invalid or expired.")
             if status == 403:
                 raise InsufficientPermissionsError("Insufficient permissions.")
-            raise ConnectorValidationError(f"Validation failed: {repr(e)}")
+            raise ConnectorValidationError(f"Validation failed: {e!r}")
 
     @retry(tries=3, delay=1, backoff=2)
     def _get_libraries(self) -> list[dict]:
@@ -520,14 +520,13 @@ class SeaFileConnector(LoadConnector, PollConnector):
 
     def load_from_state(self) -> GenerateDocumentsOutput:
         return self._yield_seafile_documents(
-            start=datetime(1970, 1, 1, tzinfo=timezone.utc),
-            end=datetime.now(timezone.utc),
+            start=datetime(1970, 1, 1, tzinfo=UTC),
+            end=datetime.now(UTC),
         )
 
     def poll_source(
         self, start: SecondsSinceUnixEpoch, end: SecondsSinceUnixEpoch,
     ) -> GenerateDocumentsOutput:
-        start_dt = datetime.fromtimestamp(start, tz=timezone.utc)
-        end_dt = datetime.fromtimestamp(end, tz=timezone.utc)
-        for batch in self._yield_seafile_documents(start_dt, end_dt):
-            yield batch
+        start_dt = datetime.fromtimestamp(start, tz=UTC)
+        end_dt = datetime.fromtimestamp(end, tz=UTC)
+        yield from self._yield_seafile_documents(start_dt, end_dt)

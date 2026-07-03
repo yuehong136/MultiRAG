@@ -25,11 +25,9 @@ from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.task_service import has_canceled
 from common import settings
+from common.connection_utils import timeout
 from common.exceptions import TaskCanceledException
 from common.misc_utils import get_uuid, thread_pool_exec
-from common.connection_utils import timeout
-from core.nlp import rag_tokenizer, search
-from core.utils.redis_conn import RedisDistributedLock
 from core.graphrag.entity_resolution import EntityResolution
 from core.graphrag.general.community_reports_extractor import CommunityReportsExtractor
 from core.graphrag.general.extractor import Extractor
@@ -44,6 +42,8 @@ from core.graphrag.utils import (
     set_graph,
     tidy_graph,
 )
+from core.nlp import rag_tokenizer, search
+from core.utils.redis_conn import RedisDistributedLock
 
 
 async def run_graphrag(
@@ -82,7 +82,7 @@ async def run_graphrag(
             ),
             timeout=timeout_sec,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logging.error("generate_subgraph timeout")
         raise
 
@@ -268,7 +268,7 @@ async def run_graphrag_for_kb(
                         ),
                         timeout=deadline,
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     failed_docs.append((doc_id, "timeout"))
                     callback(msg=f"{msg} FAILED: timeout")
                     return

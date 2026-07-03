@@ -1,11 +1,11 @@
-import logging
 import json
+import logging
 import re
 from collections import defaultdict
 
-from core.nlp import rag_tokenizer, term_weight, synonym
-from common.query_base import QueryBase
 from common.doc_store.doc_store_base import MatchTextExpr
+from common.query_base import QueryBase
+from core.nlp import rag_tokenizer, synonym, term_weight
 
 
 class FulltextQueryer(QueryBase):
@@ -57,10 +57,10 @@ class FulltextQueryer(QueryBase):
             for tk, w in tks_w[:256]:
                 syn = [rag_tokenizer.tokenize(s) for s in self.syn.lookup(tk)]
                 keywords.extend(syn)
-                syn = ["\"{}\"^{:.4f}".format(s, w / 4.) for s in syn if s.strip()]
+                syn = [f"\"{s}\"^{w / 4.:.4f}" for s in syn if s.strip()]
                 syns.append(" ".join(syn))
 
-            q = ["({}^{:.4f}".format(tk, w) + " {})".format(syn) for (tk, w), syn in zip(tks_w, syns) if
+            q = [f"({tk}^{w:.4f}" + f" {syn})" for (tk, w), syn in zip(tks_w, syns) if
                  tk and not re.match(r"[.^+\(\)-]", tk)]
             for i in range(1, len(tks_w)):
                 left, right = tks_w[i - 1][0].strip(), tks_w[i][0].strip()
@@ -176,8 +176,8 @@ class FulltextQueryer(QueryBase):
         return None, keywords
 
     def hybrid_similarity(self, avec, bvecs, atks, btkss, tkweight=0.3, vtweight=0.7):
-        from sklearn.metrics.pairwise import cosine_similarity
         import numpy as np
+        from sklearn.metrics.pairwise import cosine_similarity
 
         sims = cosine_similarity([avec], bvecs)
         tksim = self.token_similarity(atks, btkss)
@@ -203,10 +203,10 @@ class FulltextQueryer(QueryBase):
         return [self.similarity(atks, btks) for btks in btkss]
 
     def similarity(self, qtwt, dtwt):
-        if isinstance(dtwt, type("")):
-            dtwt = {t: w for t, w in self.tw.weights(self.tw.split(dtwt), preprocess=False)}
-        if isinstance(qtwt, type("")):
-            qtwt = {t: w for t, w in self.tw.weights(self.tw.split(qtwt), preprocess=False)}
+        if isinstance(dtwt, str):
+            dtwt = dict(self.tw.weights(self.tw.split(dtwt), preprocess=False))
+        if isinstance(qtwt, str):
+            qtwt = dict(self.tw.weights(self.tw.split(qtwt), preprocess=False))
         s = 1e-9
         for k, v in qtwt.items():
             if k in dtwt:

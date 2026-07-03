@@ -1,5 +1,4 @@
 import re
-from typing import List, Dict, Set, Tuple
 
 
 class SQLFieldAliasProcessor:
@@ -54,7 +53,7 @@ class SQLFieldAliasProcessor:
 
         return result
 
-    def _extract_fields_for_alias(self, expression: str) -> List[str]:
+    def _extract_fields_for_alias(self, expression: str) -> list[str]:
         """提取需要添加别名的字段"""
         # 临时移除字符串常量
         temp_expr = self._remove_string_literals(expression)
@@ -121,7 +120,7 @@ class SQLFieldAliasProcessor:
         expr = re.sub(r'"[^"]*"', '""', expr)
         return expr
 
-    def extract_fields_from_expression(self, expression: str) -> List[str]:
+    def extract_fields_from_expression(self, expression: str) -> list[str]:
         """
         从表达式中提取字段名（用于调试和验证）
 

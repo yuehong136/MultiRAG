@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 @project: multirag
 @Author：龙
@@ -7,18 +6,17 @@
 @desc: OpenAPI 过滤服务接口
 """
 import logging
-from typing import Any, Dict
-from fastapi import APIRouter, HTTPException, Depends, Request, Query, Body
+from typing import Any
+
+from fastapi import APIRouter, Body, Depends, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
-import json
 
-from api.db.services.openapi_filter_models import (
-    FilterRule, FilterResponse, FilterWarning, FilterMeta
-)
+from api.apps import app as global_app
+from api.apps import manager
+from api.db.services.openapi_filter_models import FilterMeta, FilterResponse, FilterRule
 from api.db.services.openapi_filter_service import openapi_filter_service
-from api.utils.api_utils import get_json_result, get_data_error_result, server_error_response
-from api.apps import manager, app as global_app
+from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -27,7 +25,7 @@ logger = logging.getLogger(__name__)
 @router.post("/openapi-filtered",
              summary="过滤OpenAPI文档",
              response_description="返回过滤后的OpenAPI文档",
-             response_model=Dict[str, Any])
+             response_model=dict[str, Any])
 async def filter_openapi_post(
         rule: FilterRule = Body(..., description="过滤规则"),
         request: Request = None,
@@ -205,7 +203,7 @@ async def filter_openapi_post(
 @router.get("/openapi-filtered",
             summary="过滤OpenAPI文档 (GET)",
             response_description="返回过滤后的OpenAPI文档",
-            response_model=Dict[str, Any])
+            response_model=dict[str, Any])
 async def filter_openapi_get(
         paths: list[str] = Query(..., description="要保留的路径列表"),
         match: str = Query("exact", description="匹配模式", pattern="^(exact|prefix|glob|regex)$"),
@@ -391,7 +389,7 @@ def filter_service_health():
         logger.error(f"健康检查失败: {e}", exc_info=True)
         return get_data_error_result(
             retcode=500,
-            retmsg=f"健康检查失败: {str(e)}"
+            retmsg=f"健康检查失败: {e!s}"
         )
 
 
@@ -485,7 +483,7 @@ def validate_filter_rule(
 
         return get_json_result(data=validation_result)
 
-    except ValidationError as e:
+    except ValidationError:
         return get_data_error_result(
             retcode=422,
             retmsg="规则验证失败"

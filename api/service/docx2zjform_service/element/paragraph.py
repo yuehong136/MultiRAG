@@ -1,4 +1,5 @@
-from typing import List, Optional, Dict, Any
+from typing import Any
+
 from .base import Element, ElementType
 from .run import Run
 
@@ -10,8 +11,8 @@ class ParagraphElement(Element):
             self,
             content: str,
             style: str = 'Normal',
-            alignment: Optional[int] = None,
-            runs: Optional[List[Run]] = None
+            alignment: int | None = None,
+            runs: list[Run] | None = None
     ):
         super().__init__(ElementType.PARAGRAPH)
         self.content = content
@@ -19,7 +20,7 @@ class ParagraphElement(Element):
         self.alignment = alignment
         self.runs = runs or []
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             'type': self.type.value,
             'content': self.content,
@@ -29,7 +30,7 @@ class ParagraphElement(Element):
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'ParagraphElement':
+    def from_dict(cls, data: dict[str, Any]) -> 'ParagraphElement':
         runs = [Run.from_dict(run_data) for run_data in data.get('runs', [])]
         return cls(
             content=data['content'],

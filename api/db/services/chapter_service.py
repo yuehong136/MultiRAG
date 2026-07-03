@@ -1,16 +1,17 @@
-# coding=utf-8
 """
 @project: writing_system
 @file： chapter_service.py
 @desc: 写作章节服务类
 """
 import logging
-from datetime import datetime, timezone
-from sqlalchemy.orm import Session
+from datetime import UTC, datetime
+
 from sqlalchemy import func
 from sqlalchemy.exc import NoResultFound
+from sqlalchemy.orm import Session
+
+from api.db.db_models import WritingChapter, WritingChapterContent, WritingProject
 from api.db.services.common_service import CommonService
-from api.db.db_models import WritingChapter, WritingProject, WritingChapterContent
 from common.constants import StatusEnum
 from common.misc_utils import get_uuid
 
@@ -129,7 +130,7 @@ class ChapterService(CommonService):
             return chapter
         except Exception as e:
             db.rollback()
-            logging.error(f"创建章节失败: {str(e)}")
+            logging.error(f"创建章节失败: {e!s}")
             raise e
 
     @classmethod
@@ -155,7 +156,7 @@ class ChapterService(CommonService):
             # 手动更新时间戳
             now = datetime.now()
             now_ts = int(now.timestamp())
-            now_utc = datetime.now(timezone.utc)
+            now_utc = datetime.now(UTC)
 
             chapter.update_time = now_ts
             chapter.update_date = now_utc
@@ -166,7 +167,7 @@ class ChapterService(CommonService):
             return chapter
         except Exception as e:
             db.rollback()
-            logging.error(f"更新章节失败: {str(e)}")
+            logging.error(f"更新章节失败: {e!s}")
             raise e
 
     @classmethod
@@ -186,7 +187,7 @@ class ChapterService(CommonService):
                 # 获取当前时间戳
                 now = datetime.now()
                 now_ts = int(now.timestamp())
-                now_utc = datetime.now(timezone.utc)
+                now_utc = datetime.now(UTC)
 
                 # 更新子章节
                 sub_chapters = db.query(cls.model).filter(
@@ -202,7 +203,7 @@ class ChapterService(CommonService):
             # 标记章节为已删除
             chapter.status = StatusEnum.INVALID.value
             chapter.update_time = int(datetime.now().timestamp())
-            chapter.update_date = datetime.now(timezone.utc)
+            chapter.update_date = datetime.now(UTC)
 
             # 删除章节内容
             content = db.query(WritingChapterContent).filter(
@@ -213,13 +214,13 @@ class ChapterService(CommonService):
             if content:
                 content.status = StatusEnum.INVALID.value
                 content.update_time = int(datetime.now().timestamp())
-                content.update_date = datetime.now(timezone.utc)
+                content.update_date = datetime.now(UTC)
 
             db.commit()
             return True
         except Exception as e:
             db.rollback()
-            logging.error(f"删除章节失败: {str(e)}")
+            logging.error(f"删除章节失败: {e!s}")
             return False
 
     @classmethod
@@ -238,7 +239,7 @@ class ChapterService(CommonService):
             # 获取当前时间戳
             now = datetime.now()
             now_ts = int(now.timestamp())
-            now_utc = datetime.now(timezone.utc)
+            now_utc = datetime.now(UTC)
 
             for chapter_data in chapters_order:
                 chapter_id = chapter_data.get("id")
@@ -274,7 +275,7 @@ class ChapterService(CommonService):
             return True
         except Exception as e:
             db.rollback()
-            logging.error(f"重新排序章节失败: {str(e)}")
+            logging.error(f"重新排序章节失败: {e!s}")
             return False
 
     @classmethod
@@ -321,7 +322,7 @@ class ChapterService(CommonService):
             return content_obj
         except Exception as e:
             db.rollback()
-            logging.error(f"保存章节内容失败: {str(e)}")
+            logging.error(f"保存章节内容失败: {e!s}")
             raise e
 
     @classmethod
@@ -454,7 +455,7 @@ class ChapterService(CommonService):
                     main_chapter.summary = section_data.get("summary", main_chapter.summary)
                     main_chapter.order_index = index
                     main_chapter.update_time = int(datetime.now().timestamp())
-                    main_chapter.update_date = datetime.now(timezone.utc)
+                    main_chapter.update_date = datetime.now(UTC)
                     processed_ids.add(section_id)
                 else:
                     # 创建新主章节
@@ -487,7 +488,7 @@ class ChapterService(CommonService):
                         sub_chapter.order_index = child_index
                         sub_chapter.parent_id = main_chapter_id  # 确保父章节关系正确
                         sub_chapter.update_time = int(datetime.now().timestamp())
-                        sub_chapter.update_date = datetime.now(timezone.utc)
+                        sub_chapter.update_date = datetime.now(UTC)
                         processed_ids.add(child_id)
                     else:
                         # 创建新子章节
@@ -509,7 +510,7 @@ class ChapterService(CommonService):
                 if chapter_id not in processed_ids:
                     chapter.status = StatusEnum.INVALID.value
                     chapter.update_time = int(datetime.now().timestamp())
-                    chapter.update_date = datetime.now(timezone.utc)
+                    chapter.update_date = datetime.now(UTC)
 
             db.commit()
 
@@ -517,7 +518,7 @@ class ChapterService(CommonService):
             return cls.get_project_outline(db, project_id)
         except Exception as e:
             db.rollback()
-            logging.error(f"更新项目大纲失败: {str(e)}", exc_info=True)
+            logging.error(f"更新项目大纲失败: {e!s}", exc_info=True)
             raise e
 
     @classmethod

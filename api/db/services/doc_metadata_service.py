@@ -177,10 +177,7 @@ class DocMetadataService:
             tenant_id = cls._kb_tenant(db, kb_id)
             if not tenant_id:
                 return {}
-            return {
-                did: meta
-                for did, meta in store.list_by_kb_ids(db, tenant_id, [kb_id])
-            }
+            return dict(store.list_by_kb_ids(db, tenant_id, [kb_id]))
         if not doc_ids:
             return {}
         # SqlMetadataStore supports direct doc_ids lookup

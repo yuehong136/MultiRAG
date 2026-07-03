@@ -1,18 +1,18 @@
-from datetime import datetime
 import json
 import os
-import requests
+from datetime import datetime
 from timeit import default_timer as timer
 
+import requests
 from sqlalchemy import text
 
 from api.db.db_models import engine, get_pool_status
-from core.utils.redis_conn import REDIS_CONN
 from common import settings
 from core.utils.es_conn import ESConnection
-from core.utils.milvus_conn import MilvusConnection
 from core.utils.infinity_conn import InfinityConnection
+from core.utils.milvus_conn import MilvusConnection
 from core.utils.ob_conn import OBConnection
+from core.utils.redis_conn import REDIS_CONN
 
 
 def _ok_nok(ok: bool) -> str:
@@ -145,7 +145,7 @@ def get_es_cluster_stats() -> dict:
     except Exception as e:
         return {
             "status": "timeout",
-            "message": f"error: {str(e)}",
+            "message": f"error: {e!s}",
         }
 
 
@@ -161,7 +161,7 @@ def get_infinity_status():
     except Exception as e:
         return {
             "status": "timeout",
-            "message": f"error: {str(e)}",
+            "message": f"error: {e!s}",
         }
 
 
@@ -184,7 +184,7 @@ def get_oceanbase_status() -> dict:
     except Exception as e:
         return {
             "status": "timeout",
-            "message": f"error: {str(e)}",
+            "message": f"error: {e!s}",
         }
 
 
@@ -294,7 +294,7 @@ def get_vastbase_status() -> dict:
     except Exception as e:
         return {
             "status": "timeout",
-            "message": f"error: {str(e)}",
+            "message": f"error: {e!s}",
             "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
         }
 
@@ -325,7 +325,7 @@ def get_milvus_cluster_stats() -> dict:
     except Exception as e:
         return {
             "status": "timeout",
-            "message": f"error: {str(e)}",
+            "message": f"error: {e!s}",
             "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
         }
 
@@ -360,7 +360,7 @@ def check_milvus_alive() -> dict:
     except Exception as e:
         return {
             "status": "timeout",
-            "message": f"error: {str(e)}",
+            "message": f"error: {e!s}",
             "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
         }
 
@@ -456,7 +456,7 @@ def get_database_status() -> dict:
     except Exception as e:
         return {
             "alive": False,
-            "message": f"error: {str(e)}",
+            "message": f"error: {e!s}",
             "elapsed": f"{(timer() - start_time) * 1000.0:.1f} ms"
         }
 
@@ -498,7 +498,7 @@ def check_minio_alive():
     except Exception as e:
         return {
             "status": "timeout",
-            "message": f"error: {str(e)}",
+            "message": f"error: {e!s}",
         }
 
 
@@ -511,7 +511,7 @@ def get_redis_info():
     except Exception as e:
         return {
             "status": "timeout",
-            "message": f"error: {str(e)}",
+            "message": f"error: {e!s}",
         }
 
 
@@ -529,7 +529,7 @@ def check_multirag_server_alive():
     except Exception as e:
         return {
             "status": "timeout",
-            "message": f"error: {str(e)}",
+            "message": f"error: {e!s}",
         }
 
 
@@ -550,7 +550,7 @@ def check_task_executor_alive():
     except Exception as e:
         return {
             "status": "timeout",
-            "message": f"error: {str(e)}"
+            "message": f"error: {e!s}"
         }
 
 

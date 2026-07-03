@@ -1,9 +1,9 @@
-from datetime import datetime, timezone
 import logging
-from typing import Any, Generator
+from collections.abc import Generator
+from datetime import UTC, datetime
+from typing import Any
 
 import requests
-
 from pyairtable import Api as AirtableApi
 
 from common.data_source.config import AIRTABLE_CONNECTOR_SIZE_THRESHOLD, INDEX_BATCH_SIZE, DocumentSource
@@ -11,6 +11,7 @@ from common.data_source.exceptions import ConnectorMissingCredentialError
 from common.data_source.interfaces import LoadConnector, PollConnector
 from common.data_source.models import Document, GenerateDocumentsOutput, SecondsSinceUnixEpoch
 from common.data_source.utils import extract_size_bytes, get_file_ext
+
 
 class AirtableClientNotSetUpError(PermissionError):
     def __init__(self) -> None:
@@ -120,7 +121,7 @@ class AirtableConnector(LoadConnector, PollConnector):
                             semantic_identifier=filename,
                             extension=get_file_ext(filename),
                             size_bytes=size_bytes if size_bytes else 0,
-                            doc_updated_at=datetime.strptime(created_time, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+                            doc_updated_at=datetime.strptime(created_time, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
                         )
                     )
 
@@ -133,8 +134,8 @@ class AirtableConnector(LoadConnector, PollConnector):
 
     def poll_source(self, start: SecondsSinceUnixEpoch, end: SecondsSinceUnixEpoch) -> Generator[list[Document], None, None]:
         """Poll source to get documents"""
-        start_dt = datetime.fromtimestamp(start, tz=timezone.utc)
-        end_dt = datetime.fromtimestamp(end, tz=timezone.utc)
+        start_dt = datetime.fromtimestamp(start, tz=UTC)
+        end_dt = datetime.fromtimestamp(end, tz=UTC)
 
         for batch in self.load_from_state():
             filtered: list[Document] = []
@@ -143,7 +144,7 @@ class AirtableConnector(LoadConnector, PollConnector):
                 if not doc.doc_updated_at:
                     continue
 
-                doc_dt = doc.doc_updated_at.astimezone(timezone.utc)
+                doc_dt = doc.doc_updated_at.astimezone(UTC)
 
                 if start_dt <= doc_dt < end_dt:
                     filtered.append(doc)

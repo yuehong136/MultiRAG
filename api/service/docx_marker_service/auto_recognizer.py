@@ -1,26 +1,25 @@
-# coding=utf-8
 """自动识别文档中的待填充位置"""
 
 import re
+
 from docx import Document
 from docx.oxml.ns import qn
 
 from .models import Placeholder, TableColumn, TableConfig
 from .parser import parse_table
 
-
 # 冒号模式（中英文冒号）
-COLON_PATTERN = re.compile(r'[：:]')
-HEADING_PATTERN = re.compile(r'^\s*\d+[\.、．]')
-ROW_INDEX_PATTERN = re.compile(r'/row\[(\d+)]')
+COLON_PATTERN = re.compile(r"[：:]")
+HEADING_PATTERN = re.compile(r"^\s*\d+[\.、．]")
+ROW_INDEX_PATTERN = re.compile(r"/row\[(\d+)]")
 
 
 def normalize_placeholder_key(key: str) -> str:
     """标准化占位符键名，保留中文字符、数字、字母、下划线和常用符号"""
     # 移除多余空格
-    normalized = re.sub(r'\s+', '', key)
+    normalized = re.sub(r"\s+", "", key)
     # 保留中文、数字、字母、下划线和常用符号（括号、顿号等）
-    normalized = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9_（）()、]', '', normalized)
+    normalized = re.sub(r"[^\u4e00-\u9fa5a-zA-Z0-9_（）()、]", "", normalized)
     return normalized
 
 
@@ -40,43 +39,27 @@ def extract_underline_placeholders_from_paragraph(paragraph):
     for i, run in enumerate(runs):
         text = run.text or ""
         is_underline = bool(run.font.underline)
-        run_info.append({
-            'index': i,
-            'text': text,
-            'is_underline': is_underline,
-            'char_start': char_offset,
-            'char_end': char_offset + len(text),
-            'run': run
-        })
+        run_info.append({"index": i, "text": text, "is_underline": is_underline, "char_start": char_offset, "char_end": char_offset + len(text), "run": run})
         char_offset += len(text)
 
     # 找到所有下划线区域
     underline_regions = []
     i = 0
     while i < len(run_info):
-        if run_info[i]['is_underline']:
+        if run_info[i]["is_underline"]:
             region_start = i
             region_end = i
-            while region_end + 1 < len(run_info) and run_info[region_end + 1]['is_underline']:
+            while region_end + 1 < len(run_info) and run_info[region_end + 1]["is_underline"]:
                 region_end += 1
-            underline_regions.append({
-                'start_index': region_start,
-                'end_index': region_end,
-                'run_indices': list(range(region_start, region_end + 1))
-            })
+            underline_regions.append({"start_index": region_start, "end_index": region_end, "run_indices": list(range(region_start, region_end + 1))})
             i = region_end + 1
         else:
             i += 1
 
     for region in underline_regions:
-        label = _find_label_before_underline(run_info, region['start_index'])
+        label = _find_label_before_underline(run_info, region["start_index"])
         if label:
-            placeholders.append({
-                'label': label['text'],
-                'underline_run_indices': region['run_indices'],
-                'colon_run_index': label['colon_run_index'],
-                'colon_position': label['colon_position']
-            })
+            placeholders.append({"label": label["text"], "underline_run_indices": region["run_indices"], "colon_run_index": label["colon_run_index"], "colon_position": label["colon_position"]})
 
     return placeholders
 
@@ -86,7 +69,7 @@ def _find_label_before_underline(run_info, underline_start_index):
     run_text_mapping = []
 
     for i in range(underline_start_index):
-        text = run_info[i]['text']
+        text = run_info[i]["text"]
         start_pos = len(text_before)
         text_before += text
         run_text_mapping.append((i, start_pos, start_pos + len(text)))
@@ -113,19 +96,15 @@ def _find_label_before_underline(run_info, underline_start_index):
 
     label_start = 0
     for i in range(underline_start_index - 1, -1, -1):
-        if run_info[i]['is_underline']:
-            label_start = run_info[i]['char_end']
+        if run_info[i]["is_underline"]:
+            label_start = run_info[i]["char_end"]
             break
 
     label_text = text_before[label_start:colon_pos].strip()
     if not label_text:
         return None
 
-    return {
-        'text': label_text,
-        'colon_run_index': colon_run_index,
-        'colon_position': colon_pos - run_text_mapping[colon_run_index][1]
-    }
+    return {"text": label_text, "colon_run_index": colon_run_index, "colon_position": colon_pos - run_text_mapping[colon_run_index][1]}
 
 
 def get_cell_text(cell) -> str:
@@ -134,7 +113,7 @@ def get_cell_text(cell) -> str:
         for run in para.runs:
             if run.text:
                 parts.append(run.text)
-    return ''.join(parts).strip()
+    return "".join(parts).strip()
 
 
 def is_cell_empty(cell) -> bool:
@@ -360,12 +339,14 @@ def build_summary_placeholders(table, skip_rows: set[int]) -> tuple[list[Placeho
         if get_cell_text(target_cell):
             continue
 
-        placeholders.append(Placeholder(
-            path=target_cell.path,
-            label=label_text,
-            field_key="",
-            type="summary",
-        ))
+        placeholders.append(
+            Placeholder(
+                path=target_cell.path,
+                label=label_text,
+                field_key="",
+                type="summary",
+            )
+        )
 
         skip_rows.add(row_idx)
         row_span = target_cell.row_span if target_cell.is_merged_origin else 1
@@ -404,10 +385,7 @@ def detect_table_region(table, clicked_row_index: int) -> dict | None:
     data_end_row = data_start_row
     for i in range(data_start_row, region_end + 1):
         row = rows[i]
-        is_empty_data_row = all(
-            (idx in category_columns) or is_cell_empty(cell)
-            for idx, cell in enumerate(row.cells)
-        )
+        is_empty_data_row = all((idx in category_columns) or is_cell_empty(cell) for idx, cell in enumerate(row.cells))
         if is_empty_data_row:
             data_end_row = i
         elif i > data_start_row:
@@ -494,9 +472,7 @@ def build_table_placeholders(table, last_heading: str, last_paragraph: str) -> t
         if not label:
             label = last_paragraph or "表格"
 
-        anchor_col = region["columns"][0].cell_index if region["columns"] else (
-            region["category_columns"][0] if region["category_columns"] else 0
-        )
+        anchor_col = region["columns"][0].cell_index if region["columns"] else (region["category_columns"][0] if region["category_columns"] else 0)
         anchor_path = rows[region["header_row"]].cells[anchor_col].path
 
         table_config = TableConfig(
@@ -507,13 +483,15 @@ def build_table_placeholders(table, last_heading: str, last_paragraph: str) -> t
             columns=region["columns"],
             category_columns=region["category_columns"],
         )
-        placeholders.append(Placeholder(
-            path=anchor_path,
-            label=label,
-            field_key="",
-            type="dynamic_table",
-            table_config=table_config,
-        ))
+        placeholders.append(
+            Placeholder(
+                path=anchor_path,
+                label=label,
+                field_key="",
+                type="dynamic_table",
+                table_config=table_config,
+            )
+        )
         for row_idx in range(region["region_start"], region["region_end"] + 1):
             skip_rows.add(row_idx)
 
@@ -529,6 +507,7 @@ def is_independent_cell(row, cell_idx, cell) -> bool:
             return False
     return True
 
+
 def is_merged_cell(cell) -> bool:
     tc = cell._element
     vmerge = tc.xpath(".//w:vMerge")
@@ -536,12 +515,14 @@ def is_merged_cell(cell) -> bool:
         return False
     return vmerge[0].get(qn("w:val")) != "restart"
 
+
 def is_start_of_down_merge(cell) -> bool:
     tc = cell._element
     vmerge = tc.xpath(".//w:vMerge")
     if not vmerge:
         return False
     return vmerge[0].get(qn("w:val")) == "restart"
+
 
 def auto_recognize_placeholders(doc_path: str) -> list[Placeholder]:
     doc = Document(doc_path)
@@ -554,9 +535,9 @@ def auto_recognize_placeholders(doc_path: str) -> list[Placeholder]:
 
     def process_element(child, index):
         nonlocal last_heading_text, last_paragraph_text
-        tag = child.tag.split('}')[-1]
+        tag = child.tag.split("}")[-1]
 
-        if tag == 'p':
+        if tag == "p":
             para = None
             for p in doc.paragraphs:
                 if p._element == child:
@@ -566,16 +547,12 @@ def auto_recognize_placeholders(doc_path: str) -> list[Placeholder]:
             if para:
                 underline_items = extract_underline_placeholders_from_paragraph(para)
                 for item in underline_items:
-                    label = item['label']
-                    underline_run_indices = item['underline_run_indices']
+                    label = item["label"]
+                    underline_run_indices = item["underline_run_indices"]
                     if underline_run_indices:
                         first_run_idx = underline_run_indices[0]
                         path = f"body[{index}]/run[{first_run_idx}]"
-                        placeholders.append(Placeholder(
-                            path=path,
-                            label=label,
-                            field_key=""
-                        ))
+                        placeholders.append(Placeholder(path=path, label=label, field_key=""))
                 para_text = para.text.strip()
                 if para_text:
                     last_paragraph_text = para_text
@@ -583,7 +560,7 @@ def auto_recognize_placeholders(doc_path: str) -> list[Placeholder]:
                         last_heading_text = para_text
             return True
 
-        elif tag == 'tbl':
+        elif tag == "tbl":
             table = None
             for tbl in doc.tables:
                 if tbl._element == child:
@@ -593,11 +570,7 @@ def auto_recognize_placeholders(doc_path: str) -> list[Placeholder]:
             if table:
                 table_path = f"body[{index}]"
                 parsed_table = parse_table(table, table_path)
-                table_placeholders, skip_rows = build_table_placeholders(
-                    parsed_table,
-                    last_heading_text,
-                    last_paragraph_text
-                )
+                table_placeholders, skip_rows = build_table_placeholders(parsed_table, last_heading_text, last_paragraph_text)
                 if table_placeholders:
                     placeholders.extend(table_placeholders)
 
@@ -617,13 +590,16 @@ def auto_recognize_placeholders(doc_path: str) -> list[Placeholder]:
                     for c in range(1, num_cols):
                         if not matrix[r][c].strip():
                             current_cell = rows[r].cells[c]
-                            if is_merged_cell(current_cell): continue
-                            if not is_independent_cell(rows[r], c, current_cell): continue
+                            if is_merged_cell(current_cell):
+                                continue
+                            if not is_independent_cell(rows[r], c, current_cell):
+                                continue
 
                             source_value = None
                             for left_c in range(c - 1, -1, -1):
                                 left_cell = rows[r].cells[left_c]
-                                if is_start_of_down_merge(left_cell): break
+                                if is_start_of_down_merge(left_cell):
+                                    break
                                 if is_independent_cell(rows[r], left_c, left_cell) and matrix[r][left_c].strip():
                                     source_value = matrix[r][left_c]
                                     break
@@ -636,7 +612,7 @@ def auto_recognize_placeholders(doc_path: str) -> list[Placeholder]:
                 right_filled_cells = set()
                 for ph in placeholders:
                     if ph.path.startswith(table_path):
-                        match = re.search(r'/row[[](\d+)]/cell[[](\d+)]$', ph.path)
+                        match = re.search(r"/row[[](\d+)]/cell[[](\d+)]$", ph.path)
                         if match:
                             right_filled_cells.add((int(match.group(1)), int(match.group(2))))
 
@@ -645,14 +621,18 @@ def auto_recognize_placeholders(doc_path: str) -> list[Placeholder]:
                     for r in range(1, num_rows):
                         if r in skip_rows or (r - 1) in skip_rows:
                             continue
-                        if (r, c) in right_filled_cells: continue
+                        if (r, c) in right_filled_cells:
+                            continue
                         current_cell = rows[r].cells[c]
                         top_cell = rows[r - 1].cells[c]
 
                         if not matrix[r][c].strip() and not is_merged_cell(current_cell) and matrix[r - 1][c].strip():
-                            if not is_independent_cell(rows[r], c, current_cell): continue
-                            if not is_independent_cell(rows[r - 1], c, top_cell): continue
-                            if (r - 1, c) in right_filled_cells: continue
+                            if not is_independent_cell(rows[r], c, current_cell):
+                                continue
+                            if not is_independent_cell(rows[r - 1], c, top_cell):
+                                continue
+                            if (r - 1, c) in right_filled_cells:
+                                continue
 
                             is_label_cell = True
                             if c > 0:
@@ -668,8 +648,8 @@ def auto_recognize_placeholders(doc_path: str) -> list[Placeholder]:
 
             return True
 
-        elif tag == 'sdt':
-            sdt_content = child.find(qn('w:sdtContent'))
+        elif tag == "sdt":
+            sdt_content = child.find(qn("w:sdtContent"))
             if sdt_content is not None:
                 nonlocal element_index
                 for sdt_child in sdt_content:

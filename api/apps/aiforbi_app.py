@@ -1,18 +1,19 @@
-from fastapi import APIRouter, Depends, Body
+from fastapi import APIRouter, Body, Depends
+from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.db.db_models import get_db
+
 # from api.db.database import get_db
 from api.service.aiforbi_service.aiforbi_service import AIForBIService
-from sqlalchemy.orm import Session
 
 # AI生成图表
 router = APIRouter()
 
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel
-from typing import Any
 
 
 class StatusEnum(str, Enum):

@@ -1,24 +1,24 @@
-# coding=utf-8
 """
 @project: writing_system
 @file： routes.py
 @desc: API路由定义
 """
 import logging
-from fastapi import APIRouter, Depends, HTTPException, File, Form, UploadFile
+from typing import Any
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from api.apps import manager
-from common.constants import StatusEnum
 from api.db.db_models import WritingChapter, WritingProject, WritingReferenceMaterial, get_db
-from api.db.services.project_service import ProjectService
 from api.db.services.chapter_service import ChapterService
+from api.db.services.project_service import ProjectService
 from api.db.services.reference_service import ReferenceService
 from api.db.services.writing_service import WritingService
 from api.utils.api_utils import get_json_result
-from pydantic import BaseModel, Field
-from typing import Any
+from common.constants import StatusEnum
 
 router = APIRouter()
 
@@ -99,8 +99,8 @@ def generate_outline(
         }
 
     except Exception as e:
-        logging.error(f"生成大纲出错: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"生成大纲失败: {str(e)}")
+        logging.error(f"生成大纲出错: {e!s}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"生成大纲失败: {e!s}")
 
 
 @router.get("/api/projects")
@@ -132,8 +132,8 @@ def get_projects(
             "limit": limit
         })
     except Exception as e:
-        logging.error(f"获取项目列表出错: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"获取项目列表失败: {str(e)}")
+        logging.error(f"获取项目列表出错: {e!s}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取项目列表失败: {e!s}")
 
 
 @router.get("/api/projects/{project_id}")
@@ -152,8 +152,8 @@ def get_project_detail(
 
         return get_json_result(data=project_detail)
     except Exception as e:
-        logging.error(f"获取项目详情出错: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"获取项目详情失败: {str(e)}")
+        logging.error(f"获取项目详情出错: {e!s}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取项目详情失败: {e!s}")
 
 
 @router.put("/api/projects/{project_id}")
@@ -174,8 +174,8 @@ def update_project(
 
         return get_json_result(data=updated_project.to_dict())
     except Exception as e:
-        logging.error(f"更新项目出错: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"更新项目失败: {str(e)}")
+        logging.error(f"更新项目出错: {e!s}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"更新项目失败: {e!s}")
 
 
 @router.api_route("/api/projects/{project_id}/outline", methods=["PUT", "POST"])
@@ -232,8 +232,8 @@ def update_project_outline(
             "outline": updated_outline
         })
     except Exception as e:
-        logging.error(f"更新项目大纲失败: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"更新项目大纲失败: {str(e)}")
+        logging.error(f"更新项目大纲失败: {e!s}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"更新项目大纲失败: {e!s}")
 
 
 @router.delete("/api/projects/{project_id}")
@@ -251,12 +251,12 @@ def delete_project(
         )
 
         if not success:
-            raise HTTPException(status_code=404, detail=f"项目不存在或已删除")
+            raise HTTPException(status_code=404, detail="项目不存在或已删除")
 
         return get_json_result(data={"message": "项目已成功删除"})
     except Exception as e:
-        logging.error(f"删除项目出错: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"删除项目失败: {str(e)}")
+        logging.error(f"删除项目出错: {e!s}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"删除项目失败: {e!s}")
 
 
 # ========== 章节相关路由 ==========#
@@ -284,8 +284,8 @@ def add_chapter(
 
         return get_json_result(data=new_chapter.to_dict())
     except Exception as e:
-        logging.error(f"添加章节出错: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"添加章节失败: {str(e)}")
+        logging.error(f"添加章节出错: {e!s}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"添加章节失败: {e!s}")
 
 
 @router.get("/api/projects/{project_id}/sections")
@@ -304,8 +304,8 @@ def get_project_chapters(
 
         return get_json_result(data=outline)
     except Exception as e:
-        logging.error(f"获取章节列表出错: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"获取章节列表失败: {str(e)}")
+        logging.error(f"获取章节列表出错: {e!s}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取章节列表失败: {e!s}")
 
 
 @router.delete("/api/chapters/{chapter_id}/references")
@@ -350,10 +350,10 @@ def delete_chapter_references(
             "deleted_count": count
         })
     except Exception as e:
-        logging.error(f"删除章节参考资料失败: {str(e)}", exc_info=True)
+        logging.error(f"删除章节参考资料失败: {e!s}", exc_info=True)
         return get_json_result(
             data=False,
-            retmsg=f"删除章节参考资料失败: {str(e)}",
+            retmsg=f"删除章节参考资料失败: {e!s}",
             retcode=500
         )
 
@@ -384,8 +384,8 @@ def reorder_outline_sections(
             "outline": updated_outline
         })
     except Exception as e:
-        logging.error(f"重新排序章节出错: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"重新排序章节失败: {str(e)}")
+        logging.error(f"重新排序章节出错: {e!s}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"重新排序章节失败: {e!s}")
 
 
 # ========== 参考资料相关路由 ==========#
@@ -508,10 +508,10 @@ async def parse_reference_material(
             "type": new_reference.type
         })
     except Exception as e:
-        logging.error(f"解析参考资料失败: {str(e)}", exc_info=True)
+        logging.error(f"解析参考资料失败: {e!s}", exc_info=True)
         return get_json_result(
             data=False,
-            retmsg=f"解析参考资料失败: {str(e)}",
+            retmsg=f"解析参考资料失败: {e!s}",
             retcode=500
         )
 
@@ -533,8 +533,8 @@ def get_chapter_references(
 
         return get_json_result(data=references)
     except Exception as e:
-        logging.error(f"获取参考资料失败: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"获取参考资料失败: {str(e)}")
+        logging.error(f"获取参考资料失败: {e!s}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取参考资料失败: {e!s}")
 
 
 @router.delete("/api/references/{reference_id}")
@@ -598,10 +598,10 @@ def delete_reference(
             "message": "参考资料已成功删除"
         })
     except Exception as e:
-        logging.error(f"删除参考资料失败: {str(e)}", exc_info=True)
+        logging.error(f"删除参考资料失败: {e!s}", exc_info=True)
         return get_json_result(
             data=False,
-            retmsg=f"删除参考资料失败: {str(e)}",
+            retmsg=f"删除参考资料失败: {e!s}",
             retcode=500
         )
 
@@ -661,10 +661,10 @@ def write_section(
             data=result["data"]
         )
     except Exception as e:
-        logging.error(f"章节写作出错: {str(e)}", exc_info=True)
+        logging.error(f"章节写作出错: {e!s}", exc_info=True)
         return get_json_result(
             retcode=500,
-            retmsg=f"章节写作失败: {str(e)}",
+            retmsg=f"章节写作失败: {e!s}",
             data={"type": "error"}
         )
 
@@ -733,8 +733,8 @@ def get_complete_article(
             "word_count": word_count
         })
     except Exception as e:
-        logging.error(f"获取完整文章出错: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"获取完整文章失败: {str(e)}")
+        logging.error(f"获取完整文章出错: {e!s}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取完整文章失败: {e!s}")
 
 
 @router.get("/article-status/{article_id}")
@@ -750,5 +750,5 @@ def get_article_status(
 
         return get_json_result(data=outline)
     except Exception as e:
-        logging.error(f"获取文章状态出错: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"获取文章状态失败: {str(e)}")
+        logging.error(f"获取文章状态出错: {e!s}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取文章状态失败: {e!s}")

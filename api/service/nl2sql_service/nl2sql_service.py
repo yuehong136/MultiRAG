@@ -1,15 +1,15 @@
 import asyncio
-import os
 import logging
-from typing import Any, List, Dict
+import os
+from typing import Any
 
 from fastapi.params import Depends
 from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.db.db_models import get_db
-from api.service.nl2sql_service.EChartsGenerator import EChartsGenerator
 from api.service.nl2sql_service.custom_jieba_tokenizer import custom_tokenize_with_semantic_words
+from api.service.nl2sql_service.EChartsGenerator import EChartsGenerator
 from api.service.nl2sql_service.event.event_utils import send_event
 from api.service.nl2sql_service.fill_sql_template import fill_sql_template
 from api.service.nl2sql_service.generate_nl2sql_prompt import generate_nl2sql_prompt
@@ -39,7 +39,7 @@ class NL2SQLService:
         self.echarts_generator = EChartsGenerator(db, user.id)
         self.semantic_api_client = SemanticApiClient()
 
-    async def rewrite_query(self, query_text: str, llm_name: str) -> List[str]:
+    async def rewrite_query(self, query_text: str, llm_name: str) -> list[str]:
         """
         使用LLM重写自然语言查询，生成多个变体。
 
@@ -52,16 +52,16 @@ class NL2SQLService:
         """
         return await self.query_rewriter.rewrite_query(query_text, llm_name)
 
-    async def analyze_query_intent(self, query_text: str, llm_name: str) -> List[Dict[str, str]]:
+    async def analyze_query_intent(self, query_text: str, llm_name: str) -> list[dict[str, str]]:
         """
         使用LLM分析自然语言查询意图
         """
         return await self.query_intent_analyzer.get_query_intents_with_descriptions(query_text, llm_name)
 
-    async def _semantic_mapping(self, query_text: str, llm_name: str) -> List[str]:
+    async def _semantic_mapping(self, query_text: str, llm_name: str) -> list[str]:
         pass
 
-    async def nl2sql(self, query_text: str, llm_name: str, dataset_id_list: List[str]):
+    async def nl2sql(self, query_text: str, llm_name: str, dataset_id_list: list[str]):
         """
         使用LLM转换自然语言查询为SQL
         """
@@ -101,16 +101,16 @@ class NL2SQLService:
         domain_ids = self._extract_unique_domain_ids(dataset_details)
         business_term_rows = await self.semantic_api_client.get_business_term_info_async(keyword=segmented_words,
                                                                                          domain_ids=domain_ids)
-        semantic_layer = dict(dataset_details=dataset_details, dimensions=dimensions, dimension_values=dimension_values,
-                              metrics=metrics, model_details=model_details,
-                              model_relations=model_relations, business_term_rows=business_term_rows)
+        semantic_layer = {"dataset_details": dataset_details, "dimensions": dimensions, "dimension_values": dimension_values,
+                              "metrics": metrics, "model_details": model_details,
+                              "model_relations": model_relations, "business_term_rows": business_term_rows}
         prompt, semantic_layer_struct = generate_nl2sql_prompt(user_question=query_text, query_intents=intents,
                                                                semantic_layer=semantic_layer)
         sql = await self.llm_sql_generator.generate_sql(prompt=prompt, llm_name=llm_name)
 
         return sql, semantic_layer_struct
 
-    def _extract_unique_model_ids(self, dimensions: List[Any], metrics: List[Any]) -> List[str]:
+    def _extract_unique_model_ids(self, dimensions: list[Any], metrics: list[Any]) -> list[str]:
         """
         从维度和指标数据中提取所有modelId并去重
 
@@ -139,7 +139,7 @@ class NL2SQLService:
         # 将集合转换为列表并返回
         return list(unique_model_ids)
 
-    def _deduplicate_dimensions(self, dimensions_by_keyword: List[Any], dimensions_by_value: List[Any]) -> List[str]:
+    def _deduplicate_dimensions(self, dimensions_by_keyword: list[Any], dimensions_by_value: list[Any]) -> list[str]:
         """
         根据dimensionId对两个维度列表进行去重合并，只返回去重后的维度ID列表
 
@@ -168,7 +168,7 @@ class NL2SQLService:
         # 将集合转换为列表并返回
         return list(unique_dimension_ids)
 
-    def _extract_unique_domain_ids(self, dataset_details: List[Any]) -> List[str]:
+    def _extract_unique_domain_ids(self, dataset_details: list[Any]) -> list[str]:
         """
         从数据集详情列表中提取所有domainId并去重
 
@@ -191,7 +191,7 @@ class NL2SQLService:
         return list(unique_domain_ids)
 
     async def sql_templating(self, original_question: str, llm_name: str, sql: str,
-                             semantic_layer: Dict[str, Any]):
+                             semantic_layer: dict[str, Any]):
         """
         SQL模板化
         """
@@ -228,7 +228,7 @@ class NL2SQLService:
                                                                        llm_name=llm_name)
         return js_code
 
-    async def nl2sql_for_whole_process(self, query_text: str, llm_name: str, dataset_id_list: List[str],
+    async def nl2sql_for_whole_process(self, query_text: str, llm_name: str, dataset_id_list: list[str],
                                        request_id: str):
         """
         使用LLM转换自然语言查询为SQL
@@ -284,9 +284,9 @@ class NL2SQLService:
         domain_ids = self._extract_unique_domain_ids(dataset_details)
         business_term_rows = await self.semantic_api_client.get_business_term_info_async(keyword=segmented_words,
                                                                                          domain_ids=domain_ids)
-        semantic_layer = dict(dataset_details=dataset_details, dimensions=dimensions, dimension_values=dimension_values,
-                              metrics=metrics, model_details=model_details,
-                              model_relations=model_relations, business_term_rows=business_term_rows)
+        semantic_layer = {"dataset_details": dataset_details, "dimensions": dimensions, "dimension_values": dimension_values,
+                              "metrics": metrics, "model_details": model_details,
+                              "model_relations": model_relations, "business_term_rows": business_term_rows}
         prompt, semantic_layer_struct = generate_nl2sql_prompt(user_question=query_text, query_intents=intents,
                                                                semantic_layer=semantic_layer)
         await send_event(request_id, {"message": "生成SQL", "action": "start"}, "message")
@@ -296,7 +296,7 @@ class NL2SQLService:
 
         return sql, semantic_layer_struct
 
-    async def whole_process(self, user_question: str, request_id: str, dataset_id_list: List[str], llm_name: str):
+    async def whole_process(self, user_question: str, request_id: str, dataset_id_list: list[str], llm_name: str):
         """
         全流程都在AI平台上完成
         """
@@ -342,7 +342,7 @@ class NL2SQLService:
             await send_event(request_id, {"message": f"处理过程中发生错误: {e}"}, "error")
 
     async def _handle_sql_templating_flow(self, user_question: str, sql: str,
-                                          semantic_layer_struct: Dict[str, Any],
+                                          semantic_layer_struct: dict[str, Any],
                                           request_id: str, llm_name: str):
         """处理SQL模板化并发送相关事件"""
         await send_event(request_id, {"message": "生成SQL模板", "action": "start"}, "message")
