@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-_CHAT_API_PATH = Path(__file__).resolve().parents[1] / "api/apps/restful_apis/chat_api.py"
+_CHAT_API_PATH = Path(__file__).resolve().parents[2] / "api/apps/restful_apis/chat_api.py"
 _SPEC = importlib.util.spec_from_file_location("chat_feedback_api_under_test", _CHAT_API_PATH)
 chat_api = importlib.util.module_from_spec(_SPEC)
 assert _SPEC and _SPEC.loader

@@ -305,6 +305,7 @@ pretty = true
 pythonpath = [
     "."
 ]
+testpaths = ["tests"]
 
 # 测试用例收集规则（与 pytest 默认一致，显式声明）
 python_files = ["test_*.py"]
@@ -312,21 +313,21 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 
 markers = [
-    "p0: critical priority test cases",
-    "p1: high priority test cases",
-    "p2: medium priority test cases",
-    "p3: low priority test cases",
-    "smoke: smoke test cases",
-    "auth: authentication UI tests",
-    "asyncio: mark test as async",
-    "integration: integration tests requiring external services (DB/Redis/vector store)",
+    "integration: 需要外部服务（DB/Redis/MinIO/向量库），服务缺失时自动跳过",
+    "slow: 长耗时测试，默认快速门禁不跑",
+    "smoke: 端到端存活检查",
 ]
 
-# 运行参数（强制 marker 注册、精简 traceback、彩色输出）
+# async def test_* 无需显式 marker（pytest-asyncio 自动接管）
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+# 运行参数（强制 marker 注册、精简 traceback、彩色输出；tests/manual 不收集）
 addopts = [
     "--strict-markers",
     "--tb=short",
     "--color=yes",
+    "--ignore=tests/manual",
 ]
 
 # 屏蔽第三方库的弃用/用户告警噪音（beartype / pydantic / pkg_resources 等），
@@ -337,3 +338,13 @@ filterwarnings = [
     "ignore::SyntaxWarning",
     "ignore::UserWarning",
 ]
+
+[tool.coverage.run]
+source = ["api", "common", "core", "agent", "deepdoc", "workflow", "workflow_v2", "memory"]
+branch = true
+omit = ["tests/*", "server/*", "internal/*", "docker/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+precision = 1
+skip_empty = true
+# 暂不设 fail_under —— 先积累基线数据，稳定后按基线设阈值棘轮

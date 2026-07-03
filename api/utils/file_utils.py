@@ -241,7 +241,7 @@ def read_potential_broken_pdf(blob):
     return blob
 
 
-def sanitize_path(raw_path: str | None) -> str:
+def sanitize_path(raw_path: object) -> str:
     """Normalize and sanitize a user-provided path segment.
 
     - Converts backslashes to forward slashes

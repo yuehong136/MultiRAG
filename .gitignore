@@ -214,14 +214,12 @@ WARP.md
 
 admin/release
 
-tests
-!tests/
-tests/*
-!tests/unit/
-tests/unit/*
-!tests/unit/test_tenant_member_management.py
+# Claude Code：共享配置入库，本地/用户态忽略
+.claude/*
+!.claude/settings.json
 
-.claude
+# 本地服务配置覆盖（按顶层 section 整体覆盖 configs/service_conf.yaml）
+configs/local.service_conf.yaml
 
 docs
 temp/
