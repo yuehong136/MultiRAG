@@ -1,9 +1,13 @@
 from io import BytesIO
+import sys
+from types import ModuleType
 from types import SimpleNamespace
 
+import pytest
 from PIL import Image
 
 from core.flow.parser.parser import Parser, ParserParam
+from core.flow.utils.parser_utils import parse_file
 
 
 class _FakeOCR:
@@ -39,3 +43,42 @@ def test_parser_image_outputs_json_image_chunk(monkeypatch):
             "doc_type_kwd": "image",
         }
     ]
+
+
+def test_parser_word_supports_doc_with_tika(monkeypatch):
+    tika_module = ModuleType("tika")
+    tika_parser = SimpleNamespace(from_buffer=lambda _buffer: {"content": "Title\n\nBody"})
+    tika_module.parser = tika_parser
+    monkeypatch.setitem(sys.modules, "tika", tika_module)
+
+    param = ParserParam()
+    param.setups["word"]["output_format"] = "markdown"
+    param.setups["word"]["remove_toc"] = True
+    parser = Parser.__new__(Parser)
+    parser._param = param
+    parser._canvas = SimpleNamespace(get_tenant_id=lambda: "tenant-1")
+    parser.callback = lambda *args, **kwargs: None
+    parser._id = "parser-1"
+
+    parser._word("legacy.doc", b"fake-doc")
+
+    assert parser.output("file")["outlines"] == []
+    assert parser.output("markdown") == "Title\n\nBody"
+
+
+@pytest.mark.asyncio
+async def test_parse_file_routes_doc_to_word_parser(monkeypatch):
+    tika_module = ModuleType("tika")
+    tika_parser = SimpleNamespace(from_buffer=lambda _buffer: {"content": "Legacy\nDoc"})
+    tika_module.parser = tika_parser
+    monkeypatch.setitem(sys.modules, "tika", tika_module)
+
+    parsed = await parse_file(
+        "legacy.doc",
+        b"fake-doc",
+        tenant_id="tenant-1",
+        word_config={"output_format": "markdown", "remove_toc": True},
+    )
+
+    assert parsed["file"]["outlines"] == []
+    assert parsed["markdown"] == "Legacy\n\nDoc"
