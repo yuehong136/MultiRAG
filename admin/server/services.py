@@ -4,21 +4,20 @@ import os
 import re
 from typing import Any
 
+from config import SERVICE_CONFIGS
 from sqlalchemy.orm import Session
 
-from common.constants import ActiveEnum
+from api.common.exceptions import AdminException, UserAlreadyExistsError, UserNotFoundError
+from api.db.db_models import APIToken
 from api.db.joint_services.user_account_service import create_new_user, delete_user_data
 from api.db.services import UserService
 from api.db.services.api_service import APITokenService
 from api.db.services.canvas_service import UserCanvasService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.user_service import TenantService, UserTenantService
 from api.db.services.system_settings_service import SystemSettingsService
-from api.db.db_models import APIToken
+from api.db.services.user_service import TenantService, UserTenantService
 from api.utils import health_utils
-
-from api.common.exceptions import AdminException, UserAlreadyExistsError, UserNotFoundError
-from config import SERVICE_CONFIGS
+from common.constants import ActiveEnum
 
 
 class UserMgr:
@@ -29,28 +28,30 @@ class UserMgr:
         users = UserService.get_all_users(db)
         result = []
         for user in users:
-            result.append({
-                'avatar': user.avatar,
-                'email': user.email,
-                'nickname': user.nickname,
-                'create_date': user.create_date,
-                'is_active': user.is_active,
-                'is_superuser': user.is_superuser,
-            })
+            result.append(
+                {
+                    "avatar": user.avatar,
+                    "email": user.email,
+                    "nickname": user.nickname,
+                    "create_date": user.create_date,
+                    "is_active": user.is_active,
+                    "is_superuser": user.is_superuser,
+                }
+            )
         return result
 
     @staticmethod
     def get_user_details(db: Session, username: str):
         """
         获取用户详细信息
-        
+
         Args:
             db: 数据库会话
             username: 用户邮箱
-            
+
         Returns:
             dict: 用户详细信息
-            
+
         Raises:
             UserNotFoundError: 用户不存在
             AdminException: 存在多个同名用户
@@ -61,34 +62,34 @@ class UserMgr:
             raise UserNotFoundError(username)
         elif len(users) > 1:
             raise AdminException(f"Exist more than 1 user: {username}!")
-        
+
         user = users[0]
         return {
-            'avatar': user.avatar,
-            'email': user.email,
-            'nickname': user.nickname,
-            'language': user.language,
-            'last_login_time': user.last_login_time,
-            'is_active': user.is_active,
-            'is_anonymous': user.is_anonymous,
-            'login_channel': user.login_channel,
-            'status': user.status,
-            'is_superuser': user.is_superuser,
-            'create_date': user.create_date,
-            'update_date': user.update_date
+            "avatar": user.avatar,
+            "email": user.email,
+            "nickname": user.nickname,
+            "language": user.language,
+            "last_login_time": user.last_login_time,
+            "is_active": user.is_active,
+            "is_anonymous": user.is_anonymous,
+            "login_channel": user.login_channel,
+            "status": user.status,
+            "is_superuser": user.is_superuser,
+            "create_date": user.create_date,
+            "update_date": user.update_date,
         }
 
     @staticmethod
     def create_user(db: Session, username: str, password: str, role: str = "user") -> dict:
         """
         创建新用户
-        
+
         Args:
             db: 数据库会话
             username: 用户邮箱
             password: 原始密码（未加密）
             role: 用户角色 ('admin' 或 'user')
-            
+
         Returns:
             dict: {"success": bool, "user_info": dict}
         """
@@ -101,7 +102,7 @@ class UserMgr:
         # Construct user info data
         user_info_dict = {
             "email": username,
-            "nickname": username.split('@')[0],  # 使用邮箱前缀作为昵称
+            "nickname": username.split("@")[0],  # 使用邮箱前缀作为昵称
             "password": password,  # 传入原始密码，UserService.save 会自动哈希
             "login_channel": "password",
             "is_superuser": role == "admin",
@@ -123,12 +124,12 @@ class UserMgr:
     def update_user_password(db: Session, username: str, new_password: str) -> str:
         """
         更新用户密码
-        
+
         Args:
             db: 数据库会话
             username: 用户邮箱
             new_password: 新密码（原始密码，未加密）
-            
+
         Returns:
             str: 操作结果消息
         """
@@ -138,14 +139,14 @@ class UserMgr:
             raise UserNotFoundError(username)
         elif len(user_list) > 1:
             raise AdminException(f"Exist more than 1 user: {username}!")
-        
+
         # check new_password different from old.
         usr = user_list[0]
-        
+
         # 使用 bcrypt 验证新密码是否与旧密码相同
         if UserService.verify_password(new_password, usr.password):
             return "Same password, no need to update!"
-        
+
         # update password (传入原始密码，update_user_password 内部会自动哈希)
         UserService.update_user_password(db, usr.id, new_password)
         return "Password updated successfully!"
@@ -154,12 +155,12 @@ class UserMgr:
     def update_user_activate_status(db: Session, username: str, activate_status: str) -> str:
         """
         更新用户激活状态
-        
+
         Args:
             db: 数据库会话
             username: 用户邮箱
             activate_status: 激活状态 ('on' 或 'off')
-            
+
         Returns:
             str: 操作结果消息
         """
@@ -169,29 +170,29 @@ class UserMgr:
             raise UserNotFoundError(username)
         elif len(user_list) > 1:
             raise AdminException(f"Exist more than 1 user: {username}!")
-        
+
         # check activate status different from new
         usr = user_list[0]
-        
+
         # format activate_status before handle
         _activate_status = activate_status.lower()
-        
+
         # 映射到 bool 类型 (ActiveEnum.ACTIVE.value = True, ActiveEnum.INACTIVE.value = False)
         status_map = {
-            'on': ActiveEnum.ACTIVE.value,    # True
-            'off': ActiveEnum.INACTIVE.value,  # False
+            "on": ActiveEnum.ACTIVE.value,  # True
+            "off": ActiveEnum.INACTIVE.value,  # False
         }
-        
+
         # 检查是否是有效的状态值
         if _activate_status not in status_map:
             raise AdminException(f"Invalid activate_status: {activate_status}. Must be 'on' or 'off'.")
-        
+
         target_status = status_map[_activate_status]
-        
+
         # 检查是否与当前状态相同
         if target_status == usr.is_active:
             return f"User activate status is already {_activate_status}!"
-        
+
         # update is_active
         UserService.update_user(db, usr.id, {"is_active": target_status})
         return f"Turn {_activate_status} user activate status successfully!"
@@ -260,7 +261,6 @@ class UserMgr:
 
 
 class UserServiceMgr:
-
     @staticmethod
     def get_user_datasets(db: Session, username):
         # use email to find user.
@@ -290,12 +290,7 @@ class UserServiceMgr:
         tenant_ids = [m.tenant_id for m in tenants]
         # filter permitted agents and owned agents
         res = UserCanvasService.get_all_agents_by_tenant_ids(db, tenant_ids, usr.id)
-        return [{
-            'title': r['title'],
-            'permission': r['permission'],
-            'canvas_category': r['canvas_category'].split('_')[0],
-            'avatar': r['avatar']
-        } for r in res]
+        return [{"title": r["title"], "permission": r["permission"], "canvas_category": r["canvas_category"].split("_")[0], "avatar": r["avatar"]} for r in res]
 
     @staticmethod
     def get_user_tenants(db: Session, username: str) -> list[dict[str, Any]]:
@@ -305,33 +300,33 @@ class UserServiceMgr:
         user = users[0]
         return UserTenantService.get_tenants_by_user_id(db, user.id)
 
-class ServiceMgr:
 
+class ServiceMgr:
     @staticmethod
     def get_all_services():
         """获取所有服务配置"""
-        doc_engine = os.getenv('DOC_ENGINE', 'milvus')
+        doc_engine = os.getenv("DOC_ENGINE", "milvus")
 
         result = []
         configs = SERVICE_CONFIGS.configs
         for service_id, config in enumerate(configs):
             config_dict = config.to_dict()
-            if config_dict['service_type'] == 'retrieval':
-                if config_dict['extra']['retrieval_type'] != doc_engine:
+            if config_dict["service_type"] == "retrieval":
+                if config_dict["extra"]["retrieval_type"] != doc_engine:
                     continue
             try:
                 service_detail = ServiceMgr.get_service_details(service_id)
                 if "status" in service_detail:
-                    config_dict['status'] = service_detail['status']
+                    config_dict["status"] = service_detail["status"]
                 else:
-                    config_dict['status'] = 'timeout'
+                    config_dict["status"] = "timeout"
             except Exception as e:
                 logging.warning(f"Can't get service details, error: {e}")
-                config_dict['status'] = 'timeout'
-            if not config_dict['host']:
-                config_dict['host'] = '-'
-            if not config_dict['port']:
-                config_dict['port'] = '-'
+                config_dict["status"] = "timeout"
+            if not config_dict["host"]:
+                config_dict["host"] = "-"
+            if not config_dict["port"]:
+                config_dict["port"] = "-"
             result.append(config_dict)
         return result
 
@@ -366,34 +361,34 @@ class ServiceMgr:
 
         # 获取基本配置信息
         result = service_config.to_dict()
-        
+
         # 添加 service_name 字段以兼容客户端
-        result['service_name'] = service_config.name
+        result["service_name"] = service_config.name
 
         # 调用健康检查函数获取状态和详细信息
         try:
             detail_func = getattr(health_utils, service_config.detail_func_name)
             health_info = detail_func()
-            
+
             # 设置状态
-            if 'status' in health_info:
-                result['status'] = health_info['status']
+            if "status" in health_info:
+                result["status"] = health_info["status"]
             else:
-                result['status'] = 'alive'
-            
+                result["status"] = "alive"
+
             # 将健康检查的其他信息合并到 extra 字段
-            if 'extra' not in result:
-                result['extra'] = {}
-            
+            if "extra" not in result:
+                result["extra"] = {}
+
             # 将健康检查信息（除了 status）放入 extra
             for key, value in health_info.items():
-                if key != 'status':
-                    result['extra'][key] = value
-                    
+                if key != "status":
+                    result["extra"][key] = value
+
         except Exception:
-            result['status'] = 'timeout'
-            if 'extra' not in result:
-                result['extra'] = {}
+            result["status"] = "timeout"
+            if "extra" not in result:
+                result["extra"] = {}
 
         return result
 
@@ -414,10 +409,10 @@ class SettingsMgr:
         settings = SystemSettingsService.get_all(db)
         return [
             {
-                'name': setting.name,
-                'source': setting.source,
-                'data_type': setting.data_type,
-                'value': setting.value,
+                "name": setting.name,
+                "source": setting.source,
+                "data_type": setting.data_type,
+                "value": setting.value,
             }
             for setting in settings
         ]
@@ -429,10 +424,10 @@ class SettingsMgr:
             raise AdminException(f"Can't get setting: {name}")
         return [
             {
-                'name': setting.name,
-                'source': setting.source,
-                'data_type': setting.data_type,
-                'value': setting.value,
+                "name": setting.name,
+                "source": setting.source,
+                "data_type": setting.data_type,
+                "value": setting.value,
             }
             for setting in settings
         ]
@@ -465,7 +460,6 @@ class SettingsMgr:
 
 
 class ConfigMgr:
-
     @staticmethod
     def get_all():
         result = []
@@ -477,7 +471,6 @@ class ConfigMgr:
 
 
 class EnvironmentsMgr:
-
     @staticmethod
     def get_all():
         result = []
@@ -516,18 +509,15 @@ class SandboxMgr:
     @staticmethod
     def list_providers():
         """列出所有可用的沙箱 provider。"""
-        return [
-            {"id": provider_id, **metadata}
-            for provider_id, metadata in SandboxMgr.PROVIDER_REGISTRY.items()
-        ]
+        return [{"id": provider_id, **metadata} for provider_id, metadata in SandboxMgr.PROVIDER_REGISTRY.items()]
 
     @staticmethod
     def get_provider_config_schema(provider_id: str):
         """获取指定 provider 的配置 schema。"""
         from agent.sandbox.providers import (
-            SelfManagedProvider,
             AliyunCodeInterpreterProvider,
             E2BProvider,
+            SelfManagedProvider,
         )
 
         schemas = {
@@ -568,7 +558,7 @@ class SandboxMgr:
                 "config": provider_config,
             }
         except Exception as e:
-            raise AdminException(f"Failed to get sandbox config: {str(e)}")
+            raise AdminException(f"Failed to get sandbox config: {e!s}")
 
     @staticmethod
     def set_config(db: Session, provider_type: str, config: dict, set_active: bool = True):
@@ -585,9 +575,9 @@ class SandboxMgr:
             含更新后 provider_type 与 config 的字典
         """
         from agent.sandbox.providers import (
-            SelfManagedProvider,
             AliyunCodeInterpreterProvider,
             E2BProvider,
+            SelfManagedProvider,
         )
 
         try:
@@ -648,7 +638,7 @@ class SandboxMgr:
         except AdminException:
             raise
         except Exception as e:
-            raise AdminException(f"Failed to set sandbox config: {str(e)}")
+            raise AdminException(f"Failed to set sandbox config: {e!s}")
 
     @staticmethod
     def test_connection(provider_type: str, config: dict):
@@ -669,9 +659,9 @@ class SandboxMgr:
         """
         try:
             from agent.sandbox.providers import (
-                SelfManagedProvider,
                 AliyunCodeInterpreterProvider,
                 E2BProvider,
+                SelfManagedProvider,
             )
 
             # 按类型实例化 provider
@@ -734,7 +724,7 @@ print("TEST_PASSED")
                 instance_id=instance.instance_id,
                 code=test_code,
                 language="python",
-                timeout=10  # 10 秒超时
+                timeout=10,  # 10 秒超时
             )
 
             # 清理测试实例（multirag/ragflow base 均为 destroy_instance）
@@ -747,11 +737,7 @@ print("TEST_PASSED")
             # 组装结果信息
             success = execution_result.exit_code == 0 and "TEST_PASSED" in execution_result.stdout
 
-            message_parts = [
-                f"Test {success and 'PASSED' or 'FAILED'}",
-                f"Exit code: {execution_result.exit_code}",
-                f"Execution time: {execution_result.execution_time:.2f}s"
-            ]
+            message_parts = [f"Test {(success and 'PASSED') or 'FAILED'}", f"Exit code: {execution_result.exit_code}", f"Execution time: {execution_result.execution_time:.2f}s"]
 
             if execution_result.stdout.strip():
                 stdout_preview = execution_result.stdout.strip()[:200]
@@ -771,12 +757,13 @@ print("TEST_PASSED")
                     "execution_time": execution_result.execution_time,
                     "stdout": execution_result.stdout,
                     "stderr": execution_result.stderr,
-                }
+                },
             }
 
         except AdminException:
             raise
         except Exception as e:
             import traceback
+
             error_details = traceback.format_exc()
-            raise AdminException(f"Connection test failed: {str(e)}\n\nStack trace:\n{error_details}")
+            raise AdminException(f"Connection test failed: {e!s}\n\nStack trace:\n{error_details}")

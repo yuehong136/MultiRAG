@@ -213,8 +213,11 @@ default = true
 [tool.ruff]
 line-length = 200
 target-version = "py312"
-# server/、internal/ 为停滞的并行实现，不纳入质量门禁
-extend-exclude = ["server", "internal", "core/svr/discord_svr.py", "temp", "tmp"]
+# 仅排除根目录的 server/、internal/（停滞的并行实现）；
+# 用 dir/** 形式锚定仓库根，避免误伤 admin/server、mcp/server 等活代码
+extend-exclude = ["server/**", "internal/**", "core/svr/discord_svr.py", "temp/**", "tmp/**"]
+# pre-commit / 钩子显式传文件路径时也强制应用排除规则
+force-exclude = true
 
 [tool.ruff.lint]
 select = [

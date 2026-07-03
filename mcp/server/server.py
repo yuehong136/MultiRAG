@@ -7,16 +7,15 @@ from typing import Annotated
 
 import click
 import httpx
+from fastmcp import Context, FastMCP
+from fastmcp.server.dependencies import get_http_headers
+from fastmcp.server.http import RequestContextMiddleware, create_sse_app, create_streamable_http_app
 from pydantic import Field
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 from strenum import StrEnum
-
-from fastmcp import Context, FastMCP
-from fastmcp.server.dependencies import get_http_headers
-from fastmcp.server.http import RequestContextMiddleware, create_sse_app, create_streamable_http_app
 
 
 class LaunchMode(StrEnum):
@@ -35,6 +34,7 @@ MODE = ""
 TRANSPORT_SSE_ENABLED = True
 TRANSPORT_STREAMABLE_HTTP_ENABLED = True
 JSON_RESPONSE = True
+
 
 def _extract_token_from_headers(headers: dict[str, str]) -> str | None:
     """Extract bearer token or API key from HTTP headers (string keys, lowercase)."""
@@ -160,7 +160,7 @@ class MultiRAGConnector:
             data_list, ts = entry
             if self._is_cache_valid(ts):
                 self._document_metadata_cache.move_to_end(dataset_id)
-                return {doc_id: doc_meta for doc_id, doc_meta in data_list}
+                return dict(data_list)
         return None
 
     def _set_cached_document_metadata_by_dataset(self, dataset_id: str, doc_id_meta_list: list):
@@ -215,16 +215,8 @@ class MultiRAGConnector:
             grouped.setdefault(self._embedding_model_from_dataset(dataset), []).append(dataset)
 
         if len(grouped) > 1:
-            group_desc = "; ".join(
-                f"{embedding_model or '<unknown>'}: "
-                + ", ".join(dataset.get("name") or dataset["id"] for dataset in group)
-                for embedding_model, group in grouped.items()
-            )
-            raise ValueError(
-                "Selected datasets use different embedding_model values. "
-                "Choose dataset_ids from a single embedding_model group. "
-                f"Available groups: {group_desc}"
-            )
+            group_desc = "; ".join(f"{embedding_model or '<unknown>'}: " + ", ".join(dataset.get("name") or dataset["id"] for dataset in group) for embedding_model, group in grouped.items())
+            raise ValueError(f"Selected datasets use different embedding_model values. Choose dataset_ids from a single embedding_model group. Available groups: {group_desc}")
 
         return [dataset["id"] for dataset in selected]
 
@@ -271,16 +263,11 @@ class MultiRAGConnector:
             raise ValueError(f"Retrieval API error: {msg}")
         data = res_data.get("data")
         if not isinstance(data, dict):
-            raise ValueError(
-                "Retrieval API returned success without a valid data payload: "
-                + json.dumps(res_data, ensure_ascii=False)
-            )
+            raise ValueError("Retrieval API returned success without a valid data payload: " + json.dumps(res_data, ensure_ascii=False))
 
         chunks = []
 
-        document_cache, dataset_cache = await self._get_document_metadata_cache(
-            dataset_ids, api_key=api_key, force_refresh=force_refresh
-        )
+        document_cache, dataset_cache = await self._get_document_metadata_cache(dataset_ids, api_key=api_key, force_refresh=force_refresh)
 
         for chunk_data in data.get("chunks", []):
             enhanced_chunk = self._map_chunk_fields(chunk_data, dataset_cache, document_cache)
@@ -303,9 +290,7 @@ class MultiRAGConnector:
             },
         }
 
-    async def _get_document_metadata_cache(
-        self, dataset_ids: list[str], *, api_key: str, force_refresh: bool = False
-    ) -> tuple[dict, dict]:
+    async def _get_document_metadata_cache(self, dataset_ids: list[str], *, api_key: str, force_refresh: bool = False) -> tuple[dict, dict]:
         """Cache document metadata for all documents in the specified datasets."""
         document_cache: dict = {}
         dataset_cache: dict = {}
@@ -461,10 +446,7 @@ def _register_tools(server: FastMCP):
 
     @server.tool(
         name="list_datasets",
-        description=(
-            "List all available datasets with their IDs, names, descriptions, and embedding_model values. "
-            "Use this to discover dataset IDs for the multirag_retrieval tool."
-        ),
+        description=("List all available datasets with their IDs, names, descriptions, and embedding_model values. Use this to discover dataset IDs for the multirag_retrieval tool."),
     )
     async def tool_list_datasets(ctx: Context) -> list[dict]:
         api_key = _resolve_api_key()
@@ -586,6 +568,7 @@ def create_starlette_app() -> Starlette:
 
     if lifespans:
         from fastmcp.utilities.lifespan import combine_lifespans
+
         combined_lifespan = combine_lifespans(*lifespans)
     else:
         combined_lifespan = None

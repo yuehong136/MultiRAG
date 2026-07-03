@@ -1,30 +1,30 @@
 import logging
-import uuid
 import secrets
+import uuid
 from datetime import datetime, timedelta
 from typing import Annotated
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi_login import LoginManager
 from sqlalchemy.orm import Session
 
-from common import settings
 from api.common.exceptions import AdminException, UserNotFoundError
 from api.db import UserTenantRole
+from api.db.db_models import SessionLocal, get_db
 from api.db.services import UserService
 from api.db.services.user_service import TenantService, UserTenantService
-from api.db.db_models import get_db, SessionLocal
-from common.constants import ActiveEnum, StatusEnum
 from api.utils.crypt import decrypt
+from common import settings
+from common.constants import ActiveEnum, StatusEnum
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, datetime_format, get_format_time
-
 
 security = HTTPBasic()
 
 # ============================================================================
 # 关键：在模块级别初始化 settings
-# 
+#
 # 原因：
 # 1. LoginManager 需要 SECRET_KEY 才能创建
 # 2. 模块导入时就会执行这些代码
@@ -35,7 +35,7 @@ if settings.SECRET_KEY is None:
     settings.init_settings()
 
 # 创建 admin 专用的 LoginManager
-admin_manager = LoginManager(settings.SECRET_KEY, token_url='/api/v1/admin/login', default_expiry=timedelta(days=1))
+admin_manager = LoginManager(settings.SECRET_KEY, token_url="/api/v1/admin/login", default_expiry=timedelta(days=1))
 
 
 @admin_manager.user_loader()
@@ -53,19 +53,19 @@ def load_admin_user(email: str, db: Session = None):
         users = UserService.query(db, email=email, status=StatusEnum.VALID.value)
         if not users:
             return None
-        
+
         user = users[0]
-        
+
         # 检查是否是管理员
         if not user.is_superuser:
             logging.warning(f"User {email} is not admin")
             return None
-        
+
         # 检查是否被登出
         if user.access_token and user.access_token.startswith("INVALID_"):
             logging.warning(f"Admin {email} has been logged out")
             return None
-        
+
         # 检查是否被禁用
         if user.is_active == ActiveEnum.INACTIVE.value:
             logging.warning(f"Admin {email} is inactive")
@@ -84,7 +84,7 @@ def init_default_admin(db: Session):
     """初始化默认管理员账号"""
     DEFAULT_ADMIN_EMAIL = "admin@datav.com"
     DEFAULT_ADMIN_PASSWORD = "admin"
-    
+
     users = UserService.query(db, is_superuser=True)
     if not users:
         logging.info(f"Creating default admin account: {DEFAULT_ADMIN_EMAIL}")
@@ -101,7 +101,7 @@ def init_default_admin(db: Session):
             raise AdminException("Can't init admin.", 500)
         add_tenant_for_admin(db, user_info, UserTenantRole.OWNER)
         logging.info("Default admin account created successfully")
-    elif not any([u.is_active == ActiveEnum.ACTIVE.value for u in users]):
+    elif not any(u.is_active == ActiveEnum.ACTIVE.value for u in users):
         raise AdminException("No active admin. Please update 'is_active' in db manually.", 500)
     else:
         default_admin_rows = [u for u in users if u.email == DEFAULT_ADMIN_EMAIL]
@@ -112,8 +112,8 @@ def init_default_admin(db: Session):
 
 
 def add_tenant_for_admin(db: Session, user_info: dict, role: str):
-    from api.db.services.tenant_llm_service import TenantLLMService
     from api.db.services.llm_service import get_init_tenant_llm
+    from api.db.services.tenant_llm_service import TenantLLMService
 
     tenant = {
         "id": user_info["id"],
@@ -125,25 +125,19 @@ def add_tenant_for_admin(db: Session, user_info: dict, role: str):
         "img2txt_id": settings.IMAGE2TEXT_MDL,
         "rerank_id": settings.RERANK_MDL,
     }
-    usr_tenant = {
-        "tenant_id": user_info["id"],
-        "user_id": user_info["id"],
-        "invited_by": user_info["id"],
-        "role": role
-    }
+    usr_tenant = {"tenant_id": user_info["id"], "user_id": user_info["id"], "invited_by": user_info["id"], "role": role}
 
     tenant_llm = get_init_tenant_llm(db, user_info["id"])
     TenantService.insert(db, **tenant)
     UserTenantService.insert(db, **usr_tenant)
     TenantLLMService.insert_many(db, tenant_llm)
-    logging.info(
-        f"Added tenant for email: {user_info['email']}, A default tenant has been set; changing the default models after login is strongly recommended.")
+    logging.info(f"Added tenant for email: {user_info['email']}, A default tenant has been set; changing the default models after login is strongly recommended.")
 
 
 def login_admin(db: Session, email: str, password: str):
     """
     管理员登录
-    
+
     :param db: 数据库会话
     :param email: 管理员邮箱
     :param password: 加密后的密码（客户端已加密）
@@ -153,19 +147,19 @@ def login_admin(db: Session, email: str, password: str):
     users = UserService.query(db, email=email)
     if not users:
         raise UserNotFoundError(email)
-    
+
     # 解密客户端发送的密码
     # 优先尝试 RSA 解密（兼容加密客户端），失败则视为明文（HTTPS 场景下足够安全）
     try:
         # Step 1: RSA 解密
         decrypted_base64 = decrypt(password)
         # Step 2: Base64 解码（客户端加密前做了 base64 编码）
-        plain_password = base64.b64decode(decrypted_base64).decode('utf-8')
+        plain_password = base64.b64decode(decrypted_base64).decode("utf-8")
     except Exception as e:
         # plain_password = password
         logging.error(f"Failed to decrypt password: {e}", exc_info=True)
         raise AdminException("Password decryption failed!")
-    
+
     # 验证密码
     logging.info(f"Verifying password for {email}")
     user = UserService.query_user(db, email, plain_password)
@@ -175,15 +169,15 @@ def login_admin(db: Session, email: str, password: str):
         test_user = users[0]
         logging.debug(f"User exists: {test_user.email}, checking password hash...")
         raise AdminException("Email and password do not match!")
-    
+
     # 检查是否是管理员
     if not user.is_superuser:
         raise AdminException("Not admin", 403)
-    
+
     # 检查是否被禁用
     if user.is_active == ActiveEnum.INACTIVE.value:
         raise AdminException(f"Admin {email} is inactive", 403)
-    
+
     # 更新 access_token
     user.access_token = get_uuid()
     user.update_time = current_timestamp()
@@ -191,24 +185,28 @@ def login_admin(db: Session, email: str, password: str):
     user.last_login_time = get_format_time()
     db.add(user)
     db.commit()
-    
+
     # 生成 JWT token
     jwt_token = admin_manager.create_access_token(data={"sub": email})
-    
+
     resp_data = user.to_dict()
     msg = "Welcome back!"
-    
+
     # 返回标准格式（code/message）并设置 Authorization header
-    from fastapi.responses import JSONResponse
     from fastapi.encoders import jsonable_encoder
-    
-    response = JSONResponse(content=jsonable_encoder({
-        "code": 0,
-        "message": msg,
-        "data": resp_data,
-        # 兼容前端在跨域场景无法读取响应头时，从响应体读取 JWT
-        "auth": jwt_token,
-    }))
+    from fastapi.responses import JSONResponse
+
+    response = JSONResponse(
+        content=jsonable_encoder(
+            {
+                "code": 0,
+                "message": msg,
+                "data": resp_data,
+                # 兼容前端在跨域场景无法读取响应头时，从响应体读取 JWT
+                "auth": jwt_token,
+            }
+        )
+    )
     # 使用标准 Bearer 格式，便于前端透传到后续请求
     response.headers["Authorization"] = f"Bearer {jwt_token}"
     return response
@@ -217,7 +215,7 @@ def login_admin(db: Session, email: str, password: str):
 def logout_admin(db: Session, user):
     """
     管理员登出
-    
+
     :param db: 数据库会话
     :param user: 当前用户对象
     """
@@ -237,33 +235,30 @@ def check_admin(db: Session, username: str, password: str) -> bool:
     return False
 
 
-async def verify_admin(
-    credentials: Annotated[HTTPBasicCredentials, Depends(security)],
-    db: Annotated[Session, Depends(get_db)]
-) -> tuple[str, Session]:
+async def verify_admin(credentials: Annotated[HTTPBasicCredentials, Depends(security)], db: Annotated[Session, Depends(get_db)]) -> tuple[str, Session]:
     """
     验证管理员身份的依赖函数（兼容旧版 HTTP Basic Auth）
-    
+
     Args:
         credentials: HTTP Basic 认证凭据
         db: 数据库会话
-        
+
     Returns:
         tuple[str, Session]: 用户名和数据库会话
-        
+
     Raises:
         HTTPException: 认证失败时抛出
     """
     username = credentials.username
     password = credentials.password
-    
+
     if not username or not password:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required",
             headers={"WWW-Authenticate": "Basic"},
         )
-    
+
     # 添加异常处理，捕获验证过程中的错误
     try:
         if not check_admin(db, username, password):
@@ -280,7 +275,7 @@ async def verify_admin(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An internal server error occurred.",
         )
-    
+
     return username, db
 
 
