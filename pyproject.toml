@@ -304,6 +304,12 @@ warn_unused_ignores = false       # 检查范围稳定后翻转
 show_error_codes = true
 pretty = true
 
+# 配置重构新增模块直接以严格姿态纳管（棘轮只进不退）
+[[tool.mypy.overrides]]
+module = ["common.app_config"]
+check_untyped_defs = true
+disallow_untyped_defs = true
+
 [tool.pytest.ini_options]
 pythonpath = [
     "."
