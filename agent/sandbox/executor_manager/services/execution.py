@@ -19,6 +19,8 @@ import json
 import os
 import time
 import uuid
+from dataclasses import dataclass
+
 from core.config import TIMEOUT
 from core.container import allocate_container_blocking, release_container
 from core.logger import logger
@@ -27,6 +29,14 @@ from models.schemas import ArtifactItem, CodeExecutionRequest, CodeExecutionResu
 from utils.common import async_run_command
 
 RESULT_MARKER_PREFIX = "__RAGFLOW_RESULT__:"
+
+
+@dataclass(frozen=True)
+class ExecutionBundle:
+    code_name: str
+    runner_name: str
+    args_name: str
+    args_size_bytes: int
 
 
 def _extract_result_envelope(stdout: str) -> tuple[str, ExecutionStructuredResult | None]:
@@ -56,33 +66,16 @@ def _extract_result_envelope(stdout: str) -> tuple[str, ExecutionStructuredResul
     return cleaned_stdout, envelope
 
 
-async def execute_code(req: CodeExecutionRequest):
-    """Fully asynchronous execution logic"""
-    language = req.language
-    container = await allocate_container_blocking(language)
-    if not container:
-        return CodeExecutionResult(
-            status=ResultStatus.PROGRAM_RUNNER_ERROR,
-            stdout="",
-            stderr="Container pool is busy",
-            exit_code=-10,
-            detail="no_available_container",
-        )
+def _build_execution_bundle(req: CodeExecutionRequest, workdir: str) -> ExecutionBundle:
+    arguments = req.arguments or {}
+    args_source = json.dumps(arguments, ensure_ascii=False)
+    args_name = "args.json"
+    code_bytes = base64.b64decode(req.code_b64)
 
-    task_id = str(uuid.uuid4())
-    workdir = f"/tmp/sandbox_{task_id}"
-    os.makedirs(workdir, mode=0o700, exist_ok=True)
-
-    try:
-        if language == SupportLanguage.PYTHON:
-            code_name = "main.py"
-            code_path = os.path.join(workdir, code_name)
-            with open(code_path, "wb") as f:
-                f.write(base64.b64decode(req.code_b64))
-            runner_name = "runner.py"
-            runner_path = os.path.join(workdir, runner_name)
-            with open(runner_path, "w") as f:
-                f.write(f"""import base64
+    if req.language == SupportLanguage.PYTHON:
+        code_name = "main.py"
+        runner_name = "runner.py"
+        runner_source = f"""import base64
 import json
 import os
 import sys
@@ -109,25 +102,19 @@ def emit_result(value):
 
 
 if __name__ == "__main__":
-    args = json.loads(sys.argv[1])
+    with open(os.path.join(os.path.dirname(__file__), "args.json"), encoding="utf-8") as f:
+        args = json.load(f)
     result = main(**args)
     emit_result(result)
-""")
-
-        elif language == SupportLanguage.NODEJS:
-            code_name = "main.js"
-            code_path = os.path.join(workdir, code_name)
-            with open(code_path, "wb") as f:
-                f.write(base64.b64decode(req.code_b64))
-
-            runner_name = "runner.js"
-            runner_path = os.path.join(workdir, "runner.js")
-            with open(runner_path, "w") as f:
-                runner_code = """
+"""
+    elif req.language == SupportLanguage.NODEJS:
+        code_name = "main.js"
+        runner_name = "runner.js"
+        runner_source = """
 const fs = require('fs');
 const path = require('path');
 
-const args = JSON.parse(process.argv[2]);
+const args = JSON.parse(fs.readFileSync(path.join(__dirname, 'args.json'), 'utf8'));
 const mainPath = path.join(__dirname, 'main.js');
 const RESULT_MARKER_PREFIX = '__RESULT_MARKER_PREFIX__';
 
@@ -185,12 +172,83 @@ if (fs.existsSync(mainPath)) {
     process.exit(1);
 }
 """
-                f.write(runner_code.replace("__RESULT_MARKER_PREFIX__", RESULT_MARKER_PREFIX))
+        runner_source = runner_source.replace("__RESULT_MARKER_PREFIX__", RESULT_MARKER_PREFIX)
+    else:
+        raise AssertionError("Will never reach here")
+
+    with open(os.path.join(workdir, code_name), "wb") as f:
+        f.write(code_bytes)
+
+    with open(os.path.join(workdir, runner_name), "w", encoding="utf-8") as f:
+        f.write(runner_source)
+
+    with open(os.path.join(workdir, args_name), "w", encoding="utf-8") as f:
+        f.write(args_source)
+
+    return ExecutionBundle(
+        code_name=code_name,
+        runner_name=runner_name,
+        args_name=args_name,
+        args_size_bytes=len(args_source.encode("utf-8")),
+    )
+
+
+def _build_container_run_args(language: SupportLanguage, task_id: str, container: str, runner_name: str) -> list[str]:
+    run_args = [
+        "docker",
+        "exec",
+        "--workdir",
+        f"/workspace/{task_id}",
+        container,
+        "timeout",
+        str(TIMEOUT),
+        language,
+    ]
+    if language == SupportLanguage.PYTHON:
+        run_args.extend(["-I", "-B"])
+    elif language == SupportLanguage.NODEJS:
+        pass  # no additional flags
+    else:
+        raise AssertionError("Will never reach here")
+    run_args.append(runner_name)
+    return run_args
+
+
+async def execute_code(req: CodeExecutionRequest) -> CodeExecutionResult:
+    """Fully asynchronous execution logic"""
+    language = req.language
+    container = await allocate_container_blocking(language)
+    if not container:
+        return CodeExecutionResult(
+            status=ResultStatus.PROGRAM_RUNNER_ERROR,
+            stdout="",
+            stderr="Container pool is busy",
+            exit_code=-10,
+            detail="no_available_container",
+        )
+
+    task_id = str(uuid.uuid4())
+    workdir = f"/tmp/sandbox_{task_id}"
+    os.makedirs(workdir, mode=0o700, exist_ok=True)
+
+    try:
+        bundle = _build_execution_bundle(req, workdir)
+
         returncode, _, stderr = await async_run_command("docker", "exec", container, "mkdir", "-p", f"/workspace/{task_id}", timeout=5)
         if returncode != 0:
             raise RuntimeError(f"Directory creation failed: {stderr}")
 
-        tar_proc = await asyncio.create_subprocess_exec("tar", "czf", "-", "-C", workdir, code_name, runner_name, stdout=asyncio.subprocess.PIPE)
+        tar_proc = await asyncio.create_subprocess_exec(
+            "tar",
+            "czf",
+            "-",
+            "-C",
+            workdir,
+            bundle.code_name,
+            bundle.runner_name,
+            bundle.args_name,
+            stdout=asyncio.subprocess.PIPE,
+        )
         tar_stdout, _ = await tar_proc.communicate()
 
         docker_proc = await asyncio.create_subprocess_exec(
@@ -203,25 +261,9 @@ if (fs.existsSync(mainPath)) {
 
         start_time = time.time()
         try:
-            logger.info(f"Passed in args: {req.arguments}")
-            args_json = json.dumps(req.arguments or {})
-            run_args = [
-                "docker",
-                "exec",
-                "--workdir",
-                f"/workspace/{task_id}",
-                container,
-                "timeout",
-                str(TIMEOUT),
-                language,
-            ]
-            if language == SupportLanguage.PYTHON:
-                run_args.extend(["-I", "-B"])
-            elif language == SupportLanguage.NODEJS:
-                pass  # no additional flags
-            else:
-                raise AssertionError("Will never reach here")
-            run_args.extend([runner_name, args_json])
+            arguments = req.arguments or {}
+            logger.info("Passed in args keys=%s size_bytes=%s", list(arguments.keys()), bundle.args_size_bytes)
+            run_args = _build_container_run_args(language=language, task_id=task_id, container=container, runner_name=bundle.runner_name)
 
             returncode, stdout, stderr = await async_run_command(
                 *run_args,
@@ -235,7 +277,6 @@ if (fs.existsSync(mainPath)) {
             logger.info(f"{returncode=}")
             logger.info(f"{stdout=}")
             logger.info(f"{stderr=}")
-            logger.info(f"{args_json=}")
 
             if returncode == 0:
                 clean_stdout, structured_result = _extract_result_envelope(stdout)
