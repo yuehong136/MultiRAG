@@ -50,15 +50,27 @@ MultiRAG is an enterprise-grade RAG (Retrieval-Augmented Generation) backend eng
 ### Data Connectors (`/common/data_source/`)
 - Connectors for SharePoint, Dropbox, Jira, Notion, Slack, Gmail, Teams, Discord, Google Drive, Azure Blob
 
+## 验证体系（权威文档：AGENTS.md）
+
+**任何编码任务完成前必须 `make verify` 全绿**（= ruff format/check + mypy + 单元测试）。
+完整的验证金字塔、写测试规范、mypy 棘轮策略见 **AGENTS.md**——它是验证流程的唯一权威来源。
+
+```bash
+make help          # 列出全部验证目标
+make verify        # Tier 0+1+2：编码后标准门禁（必跑）
+make fix           # 自动修复 lint/格式（不要手工排版）
+make integration   # Tier 3：需要 docker compose base 服务
+make smoke         # Tier 4：对运行中的服务器打健康端点
+```
+
+修根因，不改门禁：禁止删/跳测试、扩 ruff ignore、扩 mypy exclude 来换绿。
+
 ## Common Development Commands
 
 ### Package Management
 ```bash
-# Install dependencies
-uv sync --python 3.12 --all-extras
-
-# Add development dependencies
-uv add --dev pytest black flake8 mypy
+# Install dependencies (dev group, locked)
+make install    # = uv sync --group dev --frozen
 
 # Download model dependencies
 uv run python download_deps.py
@@ -84,17 +96,17 @@ uv run python mcp/server/server.py --host=127.0.0.1 --port=9382 --mode=self-host
 
 ### Testing
 ```bash
-# Run all tests
-pytest
+# 单元测试（无需外部服务；tests/unit 平铺，纯 monkeypatch 风格）
+make test
 
-# Run tests with verbose output
-pytest -v
+# 单元 + 集成（集成测试在服务缺失时自动跳过）
+make test-all
 
-# Run specific test file
-pytest tests/unit/test_image_filter.py
+# 覆盖率报告
+make coverage
 
-# Run specific test directory
-pytest api/service/docx2zjform_service/analyzer/
+# 跑单个测试文件
+uv run pytest tests/unit/test_image_filter.py -q
 ```
 
 ### Development Environment Setup
@@ -163,7 +175,7 @@ MultiRAG supports multiple vector database backends:
 
 ## Development Environment Requirements
 
-- Python 3.12 (strict version bound: >=3.12,<3.13)
+- Python 3.12+ (version bound: >=3.12,<3.15)
 - uv package manager
 - Docker & Docker Compose
 - 16GB+ RAM, 50GB+ disk space
