@@ -158,10 +158,22 @@ class TestMonkeypatchCompatibility:
             if "HOST_IP" in vars(settings):
                 delattr(settings, "HOST_IP")
 
-    def test_resource_globals_still_plain_attributes(self):
-        # 资源句柄仍是普通模块全局（Phase 3 前），monkeypatch 逻辑不变
-        assert hasattr(settings, "docStoreConn")
-        assert hasattr(settings, "STORAGE_IMPL")
+    def test_uninitialized_core_resource_fails_fast(self):
+        from common import resources
+
+        resources.reset_resources()
+        with pytest.raises(resources.ResourcesNotInitialized, match="ensure_initialized"):
+            _ = settings.docStoreConn
+        with pytest.raises(resources.ResourcesNotInitialized, match="ensure_initialized"):
+            _ = settings.STORAGE_IMPL
+
+    def test_uninitialized_secret_key_is_none_for_apps_guard(self):
+        # api/apps 的模块级守卫依赖"未初始化时 SECRET_KEY 为 None"语义
+        from common import resources
+
+        resources.reset_resources()
+        assert settings.SECRET_KEY is None
+        assert settings.msgStoreConn is None
 
 
 def test_unknown_attribute_raises():

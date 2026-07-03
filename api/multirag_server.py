@@ -7,6 +7,12 @@ from common.log_utils import init_root_logger
 
 init_root_logger("multirag_server")
 
+# 显式初始化：加载类型化配置（fail-fast）并创建资源（doc store/存储/检索器/SECRET_KEY）。
+# 不再依赖"导入 api.apps 的副作用"这一隐式顺序（曾因 F401 清理导致启动崩溃）。
+from common import bootstrap
+
+bootstrap.ensure_initialized()
+
 import faulthandler
 import logging
 import os
@@ -18,10 +24,9 @@ import uuid
 
 import uvicorn
 
-# 承重的副作用导入，不可删除（F401 误报）：
-# 1. 导入 api.apps 时在模块级执行 settings.init_settings()，
-#    init_web_data() 等后续启动步骤依赖其加载的全局配置；
-# 2. uvicorn.run("api.multirag_server:app", ...) 按字符串引用本模块的 app 属性。
+# 承重导入，不可删除（F401 误报）：
+# uvicorn.run("api.multirag_server:app", ...) 按字符串引用本模块的 app 属性。
+# （api.apps 自身带幂等初始化守卫，与上方显式 bootstrap 双保险。）
 from api.apps import app  # noqa: F401
 from api.db.db_models import SessionLocal, db_connection, engine
 from api.db.db_models import init_database_tables as init_web_db

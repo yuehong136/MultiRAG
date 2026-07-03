@@ -56,7 +56,10 @@ SETTINGS_PUBLIC_NAMES = [
 
 
 def test_all_public_names_accessible():
-    missing = [name for name in SETTINGS_PUBLIC_NAMES if not hasattr(settings, name)]
+    # 资源句柄未初始化时访问会 fail-fast（by design），因此契约检查用
+    # dir()（涵盖模块 dict + _LAZY），而非 hasattr（会真的取值）
+    available = set(dir(settings))
+    missing = [name for name in SETTINGS_PUBLIC_NAMES if name not in available]
     assert not missing, f"settings facade 缺失名字（会破坏存量调用点/上游移植）: {missing}"
 
 

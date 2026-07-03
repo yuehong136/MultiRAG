@@ -15,6 +15,7 @@
 import pytest
 
 import core.graphrag.search
+import core.nlp.search
 import core.utils.es_conn
 import core.utils.infinity_conn
 import core.utils.milvus_conn
@@ -40,9 +41,12 @@ class _Fake:
 
 @pytest.fixture
 def settings_state_guard():
-    """init_settings 会改写大量模块全局，测试后完整还原。"""
+    """init_settings 经 bootstrap 写入 resources 注册表，测试后清空还原。"""
+    from common import resources
+
     before = dict(vars(settings))
     yield
+    resources.reset_resources()
     current = vars(settings)
     for key in set(current) - set(before):
         delattr(settings, key)
@@ -73,7 +77,7 @@ def mocked_backends(monkeypatch, settings_state_guard):
 
     # 资源侧其余构造点
     monkeypatch.setattr(settings.StorageFactory, "create", classmethod(lambda cls, storage: _Fake(f"storage:{storage}")))
-    monkeypatch.setattr(settings.search, "Dealer", lambda conn: _Fake("retriever"))
+    monkeypatch.setattr(core.nlp.search, "Dealer", lambda conn: _Fake("retriever"))
     monkeypatch.setattr(core.graphrag.search, "KGSearch", lambda conn: _Fake("kg_retriever"))
     monkeypatch.setattr(settings.REDIS_CONN, "get_or_create_secret_key", lambda key, generated: "pinned-secret", raising=False)
 
@@ -84,24 +88,22 @@ DOC_ENGINE_EXPECTATIONS = [
     ("elasticsearch", "doc:es", "msg:es"),
     ("milvus", "doc:milvus", "msg:milvus"),
     ("infinity", "doc:infinity", "msg:infinity"),
-    ("opensearch", "doc:opensearch", None),  # msgStore 无 opensearch 分支：保持原值
+    ("opensearch", "doc:opensearch", None),  # msgStore 无 opensearch 分支：None（历史行为）
     ("oceanbase", "doc:ob", "msg:ob"),
     ("seekdb", "doc:ob", "msg:ob"),
-    ("vastbase", "doc:vastbase", None),  # msgStore 无 vastbase 分支：保持原值
+    ("vastbase", "doc:vastbase", None),  # msgStore 无 vastbase 分支：None（历史行为）
 ]
 
 
 @pytest.mark.parametrize("engine,doc_role,msg_role", DOC_ENGINE_EXPECTATIONS)
 def test_doc_engine_backend_mapping(engine, doc_role, msg_role, mocked_backends, monkeypatch):
     monkeypatch.setenv("DOC_ENGINE", engine)
-    sentinel = object()
-    settings.msgStoreConn = sentinel  # 用哨兵验证"无分支则不改写"
 
     settings.init_settings()
 
     assert settings.docStoreConn.role == doc_role
     if msg_role is None:
-        assert settings.msgStoreConn is sentinel
+        assert settings.msgStoreConn is None
     else:
         assert settings.msgStoreConn.role == msg_role
     # retriever/kg_retriever 基于选中的 doc store 构建
