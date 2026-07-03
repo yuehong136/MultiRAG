@@ -1,0 +1,154 @@
+# MultiRAG CI —— 与本地 Makefile 对应的分层验证
+#   lint      = make lint      (Tier 0)
+#   typecheck = make typecheck (Tier 1)
+#   unit      = make coverage  (Tier 2)
+#   integration + smoke        (Tier 3+4，服务容器)
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --only-group dev --frozen
+      - run: uv run --no-sync ruff format --check .
+      - run: uv run --no-sync ruff check --output-format=github .
+
+  typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      # 全量同步：mypy 需要真实三方包的内联类型
+      - run: uv sync --python 3.12 --group dev --frozen
+      - run: uv run --no-sync mypy
+
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --python 3.12 --group dev --frozen
+      - run: uv run --no-sync pytest tests/unit -q --cov --cov-branch --cov-report=xml:coverage-unit.xml
+      - uses: codecov/codecov-action@v5
+        if: ${{ !cancelled() }}
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+  # Tier 3+4：真实服务容器上的集成 + 冒烟。
+  # 初期 continue-on-error，稳定跑通若干 PR 后移除该行转为必过门禁。
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    continue-on-error: true
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: usr_ai
+          POSTGRES_PASSWORD: "123456"
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U usr_ai"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: valkey/valkey:8
+        ports: ["6379:6379"]
+    steps:
+      - uses: actions/checkout@v4
+      # GH services 无法覆盖容器 CMD，MinIO 需要 `server /data`，用 docker run
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=12345678 \
+            minio/minio:latest server /data
+      - name: Init postgres schema (mirror docker/postgres/init.sql)
+        run: |
+          PGPASSWORD=123456 psql -h 127.0.0.1 -U usr_ai -d postgres \
+            -c 'CREATE SCHEMA IF NOT EXISTS usr_ai; GRANT ALL ON SCHEMA usr_ai TO usr_ai;'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --python 3.12 --group dev --frozen
+      - name: Write CI service config override
+        # 浅合并按顶层 section 整体替换，因此每个 section 必须写全
+        run: |
+          cat > configs/local.service_conf.yaml <<'EOF'
+          multirag:
+            host: 127.0.0.1
+            http_port: 8123
+            secret_key: 'ci-smoke-secret'
+            admin_require_superuser: false
+          postgresql:
+            name: postgresql
+            dbname: postgres
+            user: usr_ai
+            password: '123456'
+            host: 127.0.0.1
+            port: 5432
+            max_connections: 50
+            stale_timeout: 30
+          redis:
+            db: 1
+            username: ''
+            password: ''
+            host: '127.0.0.1:6379'
+          minio:
+            user: minioadmin
+            password: '12345678'
+            host: '127.0.0.1:9000'
+            region: ''
+            bucket: 'multirag'
+            prefix_path: ''
+            workflow_bucket: 'multirag-workflow'
+          EOF
+      - name: Integration tests
+        run: REQUIRE_SERVICES=1 uv run --no-sync pytest tests/integration -q
+      - name: Smoke (boot server, hit health endpoints)
+        run: |
+          uv run --no-sync python -m api.multirag_server > server.log 2>&1 &
+          echo $! > server.pid
+          uv run --no-sync python scripts/smoke.py --wait 180
+          kill "$(cat server.pid)" || true
+      - name: Server log on failure
+        if: failure()
+        run: tail -200 server.log || true
