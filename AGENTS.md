@@ -37,11 +37,29 @@ MultiRAG：基于深度文档理解的企业级 RAG 后端（Python >=3.12,<3.15
 
 ## 写测试
 
-- **单元测试 → `tests/unit/`**（平铺）：纯净、无网络、不连真实服务。外部依赖一律
-  monkeypatch；DB 参数用未绑定 `Session()` 过 beartype（见 `tests/unit/conftest.py`
-  的 `db`/`fake_kb` fixtures）；需要绕过会查库的 `__init__` 时用 `object.__new__(Cls)`。
-- **集成测试 → `tests/integration/`**：需要真实 PostgreSQL/Redis/MinIO。conftest 会自动探测：
-  服务缺失时整体 skip，`REQUIRE_SERVICES=1` 时硬失败（CI 用）。marker 自动附加。
+按被测对象选形态（三形态选型表）：
+
+| 测什么 | 形态 | 位置 |
+|---|---|---|
+| 路由/HTTP 行为（状态码、retcode、载荷契约） | TestClient 契约式：conftest 的 session 级 `client` fixture + `dependency_overrides`，service 层 monkeypatch 真实类 | `tests/unit/` |
+| 纯编排/算法逻辑 | 纯函数式 + 显式 monkeypatch 打桩（经典形态，仍合法） | `tests/unit/` |
+| SQL/事务/迁移语义 | 真库行为测试：`bootstrapped_engine`（一次性 scratch 库，绝不触碰配置的真实 dbname） | `tests/integration/` |
+
+- **单元测试 → `tests/unit/`**（平铺）：**套件已封闭**——conftest 的 `pytest_configure`
+  向 `common.resources` 注册表预置假件，任何测试不得依赖真实服务（CI unit job 无服务，
+  永久守护封闭性）。外部依赖一律 monkeypatch；DB 参数用未绑定 `Session()` 过 beartype
+  （见 `tests/unit/conftest.py` 的 `db`/`fake_kb` fixtures）；需要绕过会查库的
+  `__init__` 时用 `object.__new__(Cls)`。
+  - 路由测试用 `client` fixture（真实 `api.apps.app`，已带 get_db/登录/租户基线
+    覆盖；per-test 追加的 `dependency_overrides` 自动回滚），断言只锁 HTTP 契约——
+    对内部重构免疫。**禁止新增 sys.modules 整包伪造**（桩会与生产漂移，历史上曾把
+    RetCode 桩错）。存量 monkeypatch 路由测试不强迁，坏了才按契约式重写。
+  - 迁移示范：`tests/unit/test_tenant_member_management.py`。
+- **集成测试 → `tests/integration/`**：需要真实 PostgreSQL/Redis/MinIO。conftest 三级探测：
+  ① 运行中的服务直接用 → ② docker 可用时 testcontainers 自动拉起缺失服务
+  （`INTEGRATION_NO_TESTCONTAINERS=1` 可禁用）→ ③ 整体 skip，`REQUIRE_SERVICES=1`
+  时硬失败（CI 用）。marker 自动附加。真库行为测试用 `pg_scratch_engine` /
+  `bootstrapped_engine` fixtures（示范：`test_db_bootstrap.py`、`test_common_service_crud.py`）。
 - **`tests/manual/`**：性能/压测脚本，不被收集，手动运行（见其 README）。
 - marker 只有三个：`integration`、`slow`、`smoke`（`--strict-markers` 强制）。
 - `async def test_*` 直接写即可（pytest-asyncio `asyncio_mode=auto`）。
