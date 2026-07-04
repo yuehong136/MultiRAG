@@ -181,6 +181,7 @@ dependencies = [
 dev = [
     "codecov>=2.1.13",
     "debugpy>=1.8.13",
+    "import-linter>=2.13",
     "mypy>=1.14",
     "pre-commit>=4.0",
     "pytest>=8.3.4",
@@ -209,6 +210,74 @@ python-install-mirror = "http://maven.datav.com/repository/static/indygreg/pytho
 url = "https://mirrors.aliyun.com/pypi/simple"
 trusted-host = "mirrors.aliyun.com"
 default = true
+
+# ============================================================
+# import-linter —— 分层依赖契约（make lint 强制执行）
+#
+# 规则：ignore_imports 是燃尽豁免清单，**只减不增**；
+# 新代码触发违规时修依赖方向，禁止往豁免清单里加条目换绿
+# （组合点 common.resources/settings 的豁免除外，那是有意设计）。
+# ============================================================
+[tool.importlinter]
+root_packages = ["api", "common", "core", "agent", "deepdoc", "workflow", "workflow_v2", "memory", "server"]
+
+[[tool.importlinter.contracts]]
+name = "停滞的并行实现 server/ 不得被活代码依赖"
+type = "forbidden"
+source_modules = ["api", "common", "core", "agent", "deepdoc", "workflow", "workflow_v2", "memory"]
+forbidden_modules = ["server"]
+
+[[tool.importlinter.contracts]]
+name = "common 是底层：不依赖 api/agent/deepdoc/workflow*"
+type = "forbidden"
+source_modules = ["common"]
+forbidden_modules = ["api", "agent", "deepdoc", "workflow", "workflow_v2"]
+# 只约束直接导入：core↔api 的传递纠缠属后续分层项目，解开后收紧为传递级
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "common → core/memory 仅限组合点（resources/settings）与燃尽名单"
+type = "forbidden"
+source_modules = ["common"]
+forbidden_modules = ["core", "memory"]
+allow_indirect_imports = true
+ignore_imports = [
+    # ---- 组合点（有意设计：资源层按选中后端懒加载）----
+    "common.resources -> core.**",
+    "common.resources -> memory.**",
+    "common.settings -> core.utils.redis_conn",
+    # ---- 燃尽名单（清理后逐条移出）----
+    "common.metadata_utils -> core.prompts.generator",
+    "common.data_source.confluence_connector -> core.utils.redis_conn",
+    "common.doc_store.es_conn_base -> core.nlp",
+    "common.doc_store.es_conn_base -> core.nlp.rag_tokenizer",
+    "common.doc_store.infinity_conn_base -> core.nlp",
+    "common.doc_store.milvus_conn_base -> core.nlp",
+]
+
+[[tool.importlinter.contracts]]
+name = "api 服务层（db/utils）不依赖路由层（apps）"
+type = "forbidden"
+source_modules = ["api.db", "api.utils"]
+forbidden_modules = ["api.apps"]
+ignore_imports = [
+    # 燃尽名单：函数级延迟导入的既有循环依赖，分层项目中解开
+    "api.db.services.openapi_filter_service -> api.apps",
+    "api.utils.api_utils -> api.apps",
+]
+
+[[tool.importlinter.contracts]]
+name = "deepdoc（文档解析）不依赖 api/agent/workflow*"
+type = "forbidden"
+source_modules = ["deepdoc"]
+forbidden_modules = ["api", "agent", "workflow", "workflow_v2"]
+allow_indirect_imports = true
+ignore_imports = [
+    # 燃尽名单：figure_parser 直连 api 服务层（应下沉为注入），分层项目中解开
+    "deepdoc.parser.figure_parser -> api.db.db_models",
+    "deepdoc.parser.figure_parser -> api.db.joint_services.tenant_model_service",
+    "deepdoc.parser.figure_parser -> api.db.services.llm_service",
+]
 
 [tool.ruff]
 line-length = 200

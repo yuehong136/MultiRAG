@@ -30,6 +30,8 @@ jobs:
       - run: uv sync --only-group dev --frozen
       - run: uv run --no-sync ruff format --check .
       - run: uv run --no-sync ruff check --output-format=github .
+      # 分层依赖契约（grimp 静态解析，无需项目运行时依赖）
+      - run: uv run --no-sync lint-imports
 
   typecheck:
     runs-on: ubuntu-latest

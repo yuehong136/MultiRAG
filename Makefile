@@ -15,9 +15,10 @@ fix: ## 自动修复 lint 违规并格式化（提交前先跑这个）
 	$(UV) ruff check --fix .
 	$(UV) ruff format .
 
-lint: ## Tier 0：格式检查 + lint（秒级）
+lint: ## Tier 0：格式检查 + lint + 分层依赖契约（秒级）
 	$(UV) ruff format --check .
 	$(UV) ruff check .
+	$(UV) lint-imports
 
 typecheck: ## Tier 1：mypy 渐进式类型检查（范围见 pyproject [tool.mypy]）
 	$(UV) mypy

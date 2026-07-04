@@ -26,8 +26,9 @@ MultiRAG：基于深度文档理解的企业级 RAG 后端（Python >=3.12,<3.15
 
 1. **编码后必跑 `make verify`**，全绿才算完成。改动涉及 DB/存储/检索时加跑 `make integration`。
 2. **修根因，不改门禁**。禁止用以下手段换绿：删除/跳过测试、往 ruff `ignore` 加规则、
-   扩大 mypy `exclude`、放宽 marker。pyproject 中的门禁配置视为变更受控——确需调整时
-   单独说明理由。（燃尽清单里的规则是遗留债，只出不进。）
+   扩大 mypy `exclude`、往 import-linter `ignore_imports` 加豁免、放宽 marker。
+   pyproject 中的门禁配置视为变更受控——确需调整时单独说明理由。
+   （各燃尽清单是遗留债，只出不进。）
 3. **新代码从严**：新增/修改的函数必须写完整类型注解（py3.12 风格：`list[str]`、`str | None`）。
    运行时另有 beartype 校验，注解错误会直接在测试中暴露。
 4. **格式交给工具**：提交前 `make fix`。全库曾做过一次性 `ruff format`
@@ -74,6 +75,10 @@ local.service_conf.yaml > service_conf.yaml）→ `common/resources.py`（有状
    可照抄（映射表：internal/ragflow_settings_porting_map.md）；
 4. 新入口点（脚本/服务）先调 `common.bootstrap.ensure_initialized()`；
    核心资源未初始化即访问会 fail-fast 抛 `ResourcesNotInitialized`。
+5. **依赖方向受 import-linter 契约约束**（`make lint` 内含，配置见 pyproject
+   `[tool.importlinter]`）：common 是底层不依赖上层；deepdoc 不依赖 api/agent；
+   api 服务层（db/utils）不依赖路由层（apps）；任何代码不依赖停滞的 server/。
+   违规时调整依赖方向（下沉共享逻辑 / 注入依赖），禁止往豁免清单加条目。
 
 ## 服务与运行
 
