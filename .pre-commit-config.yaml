@@ -22,3 +22,8 @@ repos:
         args: [--maxkb=2048]
       - id: check-yaml
         exclude: ^docker/
+  # 泄密扫描（staged 内容；规则与豁免见 .gitleaks.toml）
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks

@@ -14,9 +14,7 @@ class Action:
             #     prompt="根据用户输入生成 SQL 语句",
             #     max_tokens=150
             # )
-            response = zhipuai(
-                messages=[{"role": "user", "content": plan}], temperature=0.7, max_tokens=150, sys_prompt="根据用户输入生成 SQL 语句", api_token="7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv"
-            )
+            response = zhipuai(messages=[{"role": "user", "content": plan}], temperature=0.7, max_tokens=150, sys_prompt="根据用户输入生成 SQL 语句")
             return response
         else:
             return "无法执行非 SQL 相关任务"

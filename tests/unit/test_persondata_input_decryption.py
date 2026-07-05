@@ -5,10 +5,11 @@ from agent.canvas import Canvas
 from agent.persondata_input import PERSONDATA_REDACTED_VALUE
 from common.datav_persondata_crypto import decrypt_persondata_prompt
 
-AES_KEY_HEX = "9962707aa9bfa32590233bca0443dfa9173b47ab8e366caabdb27c39c99ceff7"
-AES_IV_HEX = "0f4abefe47a7a4953d7f93063ff8e514"
+# 测试专用假密钥（顺序字节模式，显然非生产值）；向量由 common.datav_persondata_crypto 同算法生成
+AES_KEY_HEX = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"  # gitleaks:allow
+AES_IV_HEX = "000102030405060708090a0b0c0d0e0f"  # gitleaks:allow
 PLAINTEXT = "这是一段person_data prompt内容"
-ENCRYPTED = "7sWZbML1Rg8FRDJoPJZdDun7nf7AXWRwYbTWWdJjxEG5tQuqEY5GHjac7qmczYFw"
+ENCRYPTED = "ZR1lF653jI/tbVaTMqvD3WQ+WKpuQ1S+z6aKuOXGBABkCDLYpHxnfbxCQPFzS4jS"
 
 
 def _make_begin_only_dsl() -> str:

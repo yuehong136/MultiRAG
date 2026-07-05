@@ -1,13 +1,25 @@
 # 配置文件用于定义各种服务的连接和认证信息，以确保应用程序能正确地与这些服务通信。
+#
+# ⚠ 凭据规范（2026-07 起强制）：
+#   本文件已入 git，只允许出现【占位符】和【docker-compose-base 的本地开发默认值】。
+#   真实凭据一律放以下两处（优先级：环境变量 > local > 本文件）：
+#     1. configs/local.service_conf.yaml（gitignored，按顶层 section 整体替换——覆盖必须写全该 section 字段）
+#     2. 环境变量 MULTIRAG_<SECTION>__<FIELD>（如 MULTIRAG_POSTGRESQL__PASSWORD）
 multirag:
-  # multirag服务的监听地址
+  # multirag服务的监听地址（0.0.0.0 供 docker 端口映射；本机开发可在 local 覆盖）
   host: 0.0.0.0
   # multirag服务的HTTP端口
   http_port: 8123
-  # multirag服务的SECRET_KEY
-  secret_key: 'multirag'
+  # multirag服务的SECRET_KEY（会话签名密钥；生产部署必须在 local/env 覆盖为强随机值）
+  secret_key: 'changeme-in-production'
   # 管理后台是否需要超级管理员权限 (true: 仅超级管理员, false: 所有激活用户)
   admin_require_superuser: false
+
+multimodal_upload_storage:
+  # 指定用于多模态文件上传的存储类型: minio, oss, s3, azure_spn, azure_sas
+  type: "minio"
+  # 指定存储桶名称，如果不填则使用对应存储类型的默认桶
+  bucket: "multimodal-temp"
 
 admin:
   host: 0.0.0.0
@@ -17,13 +29,13 @@ postgresql:
   # 数据库的类型
   name: 'postgresql'
   # 数据库的名称
-  dbname: ''
-  # postgresql数据库的用户名
-  user: ''
+  dbname: 'postgres'
+  # postgresql数据库的用户名（默认值与 docker/docker-compose-base.yml 配套，仅限本地开发）
+  user: 'usr_ai'
   # postgresql数据库的密码
-  password: ''
+  password: '123456'
   # postgresql数据库的主机名
-  host: ''
+  host: '127.0.0.1'
   # postgresql数据库的端口
   port: 5432
   # postgresql的最大连接数
@@ -32,9 +44,10 @@ postgresql:
   stale_timeout: 30
 
 minio:
-  user: ''
-  password:
-  host: ''
+  # 默认值与 docker/docker-compose-base.yml 配套，仅限本地开发
+  user: 'minioadmin'
+  password: '12345678'
+  host: '127.0.0.1:9000'
   region: ''
   bucket: ''
   prefix_path: ''
@@ -70,12 +83,12 @@ s3:
   addressing_style: 'path'
 
 gcs:
-  bucket: '${GCS_BUCKET:bridgtl-edm-d-bucket-multirag'
+  bucket: 'bridgtl-edm-d-bucket-multirag'
 
 oss:
   access_key: 'access_key'
   secret_key: 'secret_key'
-  endpoint_url: 'http://oss-cn-hangzhou.aliyuncs.com'
+  endpoint_url: 'https://s3.oss-cn-hangzhou.aliyuncs.com'
   region: 'cn-hangzhou'
   bucket: 'bucket_name'
   prefix_path: 'prefix_path'
@@ -84,10 +97,10 @@ oss:
 
 milvus:
   # Milvus服务的主机地址
-  hosts: 'http://localhost:19530'
+  hosts: 'http://127.0.0.1:19530'
   # Milvus服务的用户名
   username: 'root'
-  # Milvus服务的密码
+  # Milvus服务的密码（Milvus 出厂默认值，仅限本地开发）
   password: 'Milvus'
   db_name: ''
   token: ''
@@ -95,20 +108,20 @@ milvus:
   kwargs: {}
 
 vastbase:
-  host: 192.168.188.220
-  port: 5433
-  database: datav
-  user: datav
-  password:
+  host: '127.0.0.1'
+  port: 5434
+  database: 'your_database'
+  user: 'your_user'
+  password: 'changeme'
   max_connections: 20
   schema: public
 
 es:
   # Elasticsearch服务的主机地址
-  hosts: 'http://es01:9200'
+  hosts: 'http://localhost:1200'
   # Elasticsearch服务的用户名
   username: 'elastic'
-  # Elasticsearch服务的密码
+  # Elasticsearch服务的密码（与 docker compose 模板配套，仅限本地开发）
   password: 'infini_rag_flow'
 
 os:
@@ -126,7 +139,7 @@ oceanbase:
   config:
     db_name: 'test'
     user: 'root@multirag'
-    password: 'dxl_multi_rag'
+    password: 'changeme'
     host: 'localhost'
     port: 2881
 
@@ -146,8 +159,9 @@ redis:
   host: '127.0.0.1:6379'
 
 # datav 项目方提供的独立 Redis（用于读取 workflow inputPlugin persondataList 等数据）
+# 真实地址与密码放 local.service_conf.yaml
 datav_redis:
-  host: ''
+  host: '127.0.0.1:6379'
   db: 0
   username: ''
   password: ''
@@ -161,17 +175,17 @@ task_executor:
 
 user_default_llm:
   factory: 'ZHIPU-AI'
-  api_key: '622531847aa342ad9da7e62b83930d56.mV8uJ8BoWMa8lfra'
+  api_key: 'changeme'
   base_url: ''
   default_models:
     chat_model:
       name: 'glm-4.5-airx'
       factory: 'ZHIPU-AI'
-      api_key: '622531847aa342ad9da7e62b83930d56.mV8uJ8BoWMa8lfra'
+      api_key: 'changeme'
       base_url: ''
     embedding_model:
-      api_key: 'xxx'
-      base_url: 'http://192.168.139.127:6380'
+      api_key: 'changeme'
+      base_url: 'http://127.0.0.1:6380'
     asr_model:
       model: 'whisper-large-v3' # alias of name
     rerank_model:
@@ -226,16 +240,16 @@ permission:
   dataset: false
 
 smtp:
-  mail_server: ""
+  mail_server: "smtp.example.com"
   mail_port: 465
   mail_use_ssl: true
   mail_use_tls: false
-  mail_username: ""
-  mail_password: ""
+  mail_username: "your_email@example.com"
+  mail_password: "your_smtp_auth_code"  # SMTP 授权码（不是登录密码），真实值放 local.service_conf.yaml
   mail_default_sender:
     - "MultiRAG" # display name
-    - "xxx@163.com" # sender email address
-  mail_frontend_url: "https://your-frontend.example.com"
+    - "your_email@example.com"
+  mail_frontend_url: "http://127.0.0.1:5173"
 
 tcadp_config:
   secret_id: 'tencent_secret_id'
@@ -245,15 +259,14 @@ tcadp_config:
 script_scheduler:
   # 如果源码部署，则使用localhost，如果docker部署，则使用宿主机的ip
   host: localhost
-#  host: xxx.xxx.xxx.xxx
   port: 8124
 
 dcs_server:
   # 有些功能需要与中台服务通信
   protocol: http
-  host: localhost
+  host: 127.0.0.1
   port: 8080
-  # 调用语义层接口时，需要使用的认证信息
+  # 调用语义层接口时，需要使用的认证信息（真实值放 local.service_conf.yaml）
   semantic_server:
-    access_key: multirag
-    secret_key: g-Wv5@F]jeBGi^7Q~UWYKnUo)Ki.Q8th
+    access_key: 'your_access_key'
+    secret_key: 'changeme'

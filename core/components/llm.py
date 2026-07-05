@@ -1,19 +1,12 @@
+import os
+
 import openai
 import streamlit as st
 
 from core.llm.chat_model.chat_factory import ChatFactory
 
-# os.environ["OPENAI_API_KEY"] = '7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv'
-# os.environ["OPENAI_BASE_URL"] = "https://open.bigmodel.cn/api/paas/v4"
-# llm = ChatOpenAI(model="glm-4-0520")
-# # llm = ChatOpenAI(model="gpt-3.5-turbo-0125")
-# from langchain_core.messages import HumanMessage
-#
-# print(llm.invoke([HumanMessage(content="Hi! I'm Bob")]))
-#
 
-
-def zhipuai(messages, temperature, max_tokens, sys_prompt, api_token="7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv", model="glm-4-0520"):
+def zhipuai(messages, temperature, max_tokens, sys_prompt, api_token=os.environ.get("ZHIPUAI_API_KEY", ""), model="glm-4-0520"):
     """
     智谱GLM4对话
     """

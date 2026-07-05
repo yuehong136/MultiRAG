@@ -139,8 +139,7 @@ def delete_chat_history(custom_name=None, user_id="admin", file_path=None):
     return False
 
 
-api_key = "7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv"  # 7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv
-# api_key = "" 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
+api_key = os.environ.get("ZHIPUAI_API_KEY", "")  # 密钥不入库：环境变量注入
 fastapi_url = "http://127.0.0.1:8000"  # FastAPI 服务的URL
 
 if "api_token" not in st.session_state:
@@ -689,13 +688,13 @@ uploaded_texts = st.session_state.get("uploaded_texts", "")
 # 用户输入框
 if prompt := st.chat_input("请输入您的问题："):
     if st.session_state.model.startswith("Doubao"):
-        st.session_state.api_token = "02ca5035-c85d-47c6-b7d6-52e565a29919"
+        st.session_state.api_token = os.environ.get("ARK_API_KEY", "")
     elif st.session_state.model.startswith("glm"):
-        st.session_state.api_token = "7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv"
+        st.session_state.api_token = os.environ.get("ZHIPUAI_API_KEY", "")
     elif st.session_state.model.startswith("ERNIE"):
-        st.session_state.api_token = "DEDtZBJENAe1FocADSw0Nk41"
+        st.session_state.api_token = os.environ.get("QIANFAN_API_KEY", "")
     elif st.session_state.model.startswith("qwen"):
-        st.session_state.api_token = "sk-855ec5ff02584d059b833a95eae1b64e"
+        st.session_state.api_token = os.environ.get("DASHSCOPE_API_KEY", "")
     processed_prompt = None
     if prompt:
         processed_prompt = process_user_input(prompt)

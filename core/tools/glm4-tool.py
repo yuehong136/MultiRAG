@@ -1,6 +1,8 @@
+import os
+
 from zhipuai import ZhipuAI
 
-client = ZhipuAI(api_key="7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv")  # 请填写您自己的APIKey
+client = ZhipuAI(api_key=os.environ.get("ZHIPUAI_API_KEY", ""))  # 密钥不入库：环境变量注入
 
 tools = [
     {

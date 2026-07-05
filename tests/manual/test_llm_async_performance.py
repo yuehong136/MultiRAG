@@ -14,6 +14,7 @@ LLM 接口异步性能测试脚本
 
 import asyncio
 import json
+import os
 import statistics
 import time
 from dataclasses import dataclass
@@ -21,8 +22,9 @@ from dataclasses import dataclass
 import aiohttp
 
 # ============ 配置区域 ============
-BASE_URL = "http://192.168.188.195:8123"
-TOKEN = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbkBkYXRhdi5jb20iLCJleHAiOjE3NjgyMTUzNTF9.XLQ26l2fEFcg0vVSmVCU2djx525DdKTRK5stgAPkpro"
+BASE_URL = os.environ.get("MULTIRAG_PERF_BASE_URL", "http://127.0.0.1:8123")
+# 会话 JWT 不入库：运行前 export MULTIRAG_PERF_TOKEN="Bearer eyJ..."
+TOKEN = os.environ.get("MULTIRAG_PERF_TOKEN", "")
 LLM_NAME = "glm-4-airx"
 
 # 使用复杂的问题确保 LLM 需要真正思考并生成较长回答

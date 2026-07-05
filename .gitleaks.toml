@@ -1,0 +1,37 @@
+title = "MultiRAG gitleaks 配置"
+
+# 继承 gitleaks 默认规则集
+[extend]
+useDefault = true
+
+# ---- 路径豁免 ----
+
+[[allowlists]]
+description = "gitignored 本地凭据覆盖文件（真实凭据的合法存放处；CI integration job 会动态生成同名文件）"
+paths = ['''configs/local\.service_conf\.yaml''']
+
+[[allowlists]]
+description = "gitignored 本地产物：运行日志、字节码缓存、IDE 状态（dir 扫描时跳过；均不入库）"
+paths = [
+    '''^logs/''',
+    '''__pycache__/''',
+    '''^\.idea/''',
+    '''^fastmcp\.txt$''',
+]
+
+[[allowlists]]
+description = "上游 ragflow 出厂 RSA 密钥对（与上游 conf/ 逐字节一致、全球公开）。仅限本地开发；生产部署必须更换自有密钥对"
+paths = [
+    '''configs/private\.pem''',
+    '''configs/public\.pem''',
+]
+
+# ---- 内容豁免（占位符/测试假值） ----
+
+[[allowlists]]
+description = "文档示例与测试假值：curl 示例的 YOUR_TOKEN 占位符、crypto_utils 文档示例的 test_key"
+regexes = [
+    '''YOUR_TOKEN''',
+    '''YOUR_API_KEY''',
+    '''test_key_123456''',
+]

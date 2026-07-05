@@ -1,3 +1,5 @@
+import os
+
 import streamlit as st
 
 from configs import VERSION
@@ -35,8 +37,8 @@ with st.sidebar:
 st.title("智能助手")
 
 
-# 初始化 Agent
-API_KEY = "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"
+# 初始化 Agent（密钥不入库：环境变量注入）
+API_KEY = os.environ.get("OPENAI_API_KEY", "")
 agent = Agent(API_KEY)
 
 # 展示 Agent 的 Profile 信息

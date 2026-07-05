@@ -1,4 +1,5 @@
 import json
+import os
 import re
 
 import streamlit as st
@@ -39,7 +40,7 @@ def main():
     st.markdown("可在侧边栏添加编排功能组件构建流程应用，可选择开放API供三方调用。")
 
     user_input = st.text_area("请描述一个工作流程:", "描述一个计算任务的处理流程，从开始到结束，包括数据读取、处理、存储等步骤。")
-    client = ZhipuAI(api_key="7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv")  # 请填写您自己的APIKey
+    client = ZhipuAI(api_key=os.environ.get("ZHIPUAI_API_KEY", ""))  # 密钥不入库：环境变量注入
 
     if st.button("生成流程图"):
         # 调用大模型生成 JSON 数据

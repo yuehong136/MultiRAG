@@ -1,4 +1,5 @@
 # sql_trans.py
+import os
 import re
 
 import streamlit as st
@@ -69,8 +70,8 @@ with col2:
     to_dialect = st.selectbox("到:", ["Snowflake", "MySQL", "PostgreSQL", "SQLite", "Oracle"], index=1, help="选择目标SQL方言")
     translated_sql_placeholder = st.empty()
 
-# 定义API参数
-api_token = "7ae32940233e38153d5ebaf94844f3e2.gwrz4P0tH9IDijUv"
+# 定义API参数（密钥不入库：环境变量注入）
+api_token = os.environ.get("ZHIPUAI_API_KEY", "")
 model = "glm-4-0520"
 temperature = 0.8
 max_tokens = 512
