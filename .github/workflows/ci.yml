@@ -51,7 +51,15 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
       # 全量同步：mypy 需要真实三方包的内联类型
-      - run: uv sync --python 3.12 --group dev --frozen
+      # git 依赖源（gitee）偶发超时，重试兜底；命中 uv 缓存后不再走网络
+      - name: uv sync (retry)
+        run: |
+          for i in 1 2 3; do
+            uv sync --python 3.12 --group dev --frozen && exit 0
+            echo "uv sync failed (attempt $i), retrying..." >&2
+            sleep 15
+          done
+          exit 1
       - run: uv run --no-sync mypy
 
   unit:
@@ -66,7 +74,17 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --python 3.12 --group dev --frozen
+      - name: uv sync (retry)
+        run: |
+          for i in 1 2 3; do
+            uv sync --python 3.12 --group dev --frozen && exit 0
+            echo "uv sync failed (attempt $i), retrying..." >&2
+            sleep 15
+          done
+          exit 1
+      # rag_tokenizer/synonym 运行时需要 NLTK 语料（与 download_deps.py 清单一致）
+      - name: Provision NLTK corpora
+        run: uv run --no-sync python -m nltk.downloader punkt punkt_tab wordnet
       - run: uv run --no-sync pytest tests/unit -q --cov --cov-branch --cov-report=xml:coverage-unit.xml
       - uses: codecov/codecov-action@v5
         if: ${{ !cancelled() }}
@@ -115,7 +133,14 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --python 3.12 --group dev --frozen
+      - name: uv sync (retry)
+        run: |
+          for i in 1 2 3; do
+            uv sync --python 3.12 --group dev --frozen && exit 0
+            echo "uv sync failed (attempt $i), retrying..." >&2
+            sleep 15
+          done
+          exit 1
       - name: Write CI service config override
         # 浅合并按顶层 section 整体替换，因此每个 section 必须写全
         run: |
