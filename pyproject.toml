@@ -299,6 +299,7 @@ select = [
     "B",               # flake8-bugbear
     "C4",              # flake8-comprehensions
     "RUF",             # ruff 专有规则
+    "ASYNC",           # flake8-async：async 函数内的阻塞调用（事件循环保护，与上游一致）
 ]
 ignore = [
     # ---- 永久忽略（代码库惯用法）----
@@ -308,6 +309,10 @@ ignore = [
     "E731",    # lambda 赋值
     "E741",    # 单字符变量名 l/O/I
     # ---- 燃尽清单（按包清理后逐条移出，禁止新增违规）----
+    "ASYNC109",  # async 函数带 timeout 参数（3 处：sandbox executor/mcp conn，改造为 asyncio.timeout 时清理）
+    "ASYNC210",  # async 函数内阻塞 HTTP 调用（1 处：workflow FileReaderComponent）
+    "ASYNC230",  # async 函数内阻塞 open()（10 处：docx_marker_app 为主，随 §2 B 类深修处理）
+    "ASYNC240",  # async 函数内阻塞 os.path 调用（12 处：同上）
     "E402",    # 模块级 import 不在顶部（init_root_logger 先行模式）
     "E722",    # bare except
     "B005",    # 多字符 strip（个别应改 removesuffix/removeprefix，清理时处理）
