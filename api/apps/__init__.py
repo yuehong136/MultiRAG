@@ -2,28 +2,27 @@ import logging
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.security import OAuth2PasswordRequestForm
 from fastapi_login import LoginManager
 from fastapi_login.exceptions import InvalidCredentialsException
-from fastapi.security import OAuth2PasswordRequestForm
-from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy.orm import Session
+from starlette.middleware.sessions import SessionMiddleware
 
 from api.constants import API_VERSION
-from api.db.db_models import get_db, SessionLocal, APIToken
+from api.db.db_models import APIToken, SessionLocal, get_db
 from api.db.services import UserService
-from api.utils.api_utils import SDKAuthError, BusinessError
+from api.utils.api_utils import BusinessError, SDKAuthError
 from common import settings
 from common.constants import RetCode
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, datetime_format
-from datetime import datetime
 from errors.exceptions import AITranslateException
 from workflow_v2.workflow_exceptions import NodeExecutionError, WorkflowValidationError
 from workflow_v2.workflow_state_manager import workflow_state_manager
@@ -77,7 +76,7 @@ async def lifespan(app: FastAPI):
     """
     FastAPI 应用生命周期管理
     在应用启动时执行初始化，在关闭时执行清理
-    
+
     注意：此函数在以下场景会被调用：
     - 正常启动：python api/multirag_server.py
     - 热重载：uvicorn --reload 时每次代码变更
@@ -87,21 +86,24 @@ async def lifespan(app: FastAPI):
     # ============ 启动时执行的代码 ============
     logging.info("=" * 80)
     logging.info("FastAPI application lifecycle starting...")
-    
+
     # 1. 显示配置信息
     # 注意：settings.init_settings() 已在模块级别执行（见上方）
     # 无需重复初始化，避免资源浪费
     from common.config_utils import show_configs
+
     show_configs()
     settings.print_rag_settings()
-    
+
     # 2. 启动工作流状态管理器
     logging.info("Starting workflow state manager...")
     await workflow_state_manager.start()
 
     # 3. 启动进度更新线程
-    from api.multirag_server import update_progress, stop_event
     import threading
+
+    from api.multirag_server import stop_event, update_progress
+
     logging.info("Starting background progress update thread...")
     update_progress_thread = threading.Thread(target=update_progress, daemon=True)
     update_progress_thread.start()
@@ -120,11 +122,12 @@ async def lifespan(app: FastAPI):
 
     logging.info("Shutting down MCP sessions...")
     from common.mcp_tool_call_conn import shutdown_all_mcp_sessions
+
     shutdown_all_mcp_sessions()
 
     logging.info("Shutting down workflow state manager...")
     await workflow_state_manager.shutdown()
-    
+
     logging.info("FastAPI application lifecycle shutdown completed")
     logging.info("=" * 80)
 
@@ -148,7 +151,7 @@ app = FastAPI(
     openapi_tags=tags_metadata,
     docs_url=None,
     redoc_url=None,
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # 注意：settings.init_settings() 已移到 lifespan 函数中
@@ -158,6 +161,7 @@ app = FastAPI(
 # 这样 SQLAdmin 才能正确注册其路由和内部中间件
 try:
     from api.admin.admin_config import setup_admin
+
     admin = setup_admin(app)
     logging.info("SQLAdmin管理后台已初始化")
 except Exception as e:
@@ -202,12 +206,12 @@ app.add_middleware(
 
 # ============================================================================
 # 模块级别初始化 settings（一次性完成）
-# 
+#
 # 为什么在这里初始化而不是在 lifespan？
 # 1. LoginManager、SQLAdmin 等对象必须在模块级别创建（用于装饰器）
 # 2. 这些对象需要 settings 中的配置（如 SECRET_KEY）
 # 3. 只初始化一次，避免资源浪费
-# 
+#
 # 关于热重载：
 # - 开发模式下使用 uvicorn --reload 时，代码变更会重新导入模块
 # - 模块重新导入 = settings.init_settings() 重新执行
@@ -216,6 +220,7 @@ app.add_middleware(
 if settings.SECRET_KEY is None:
     logging.info("Initializing settings at module level...")
     settings.init_settings()
+
 
 # 初始化登录管理器，设置密钥和令牌URL
 def _load_user_by_api_token(token: str):
@@ -268,7 +273,7 @@ class _TokenFallbackLoginManager(LoginManager):
             raise
 
 
-manager = _TokenFallbackLoginManager(settings.SECRET_KEY, token_url='/auth/token', default_expiry=timedelta(days=1))
+manager = _TokenFallbackLoginManager(settings.SECRET_KEY, token_url="/auth/token", default_expiry=timedelta(days=1))
 
 
 # 定义一个函数，根据电子邮件加载用户
@@ -307,18 +312,18 @@ def load_user(email: str, db: Session = None):
 async def active_required(user=Depends(manager)):
     """
     验证用户是否已激活的依赖函数
-    
+
     该函数先通过 manager 验证用户登录状态，然后检查用户是否已激活账号
-    
+
     Args:
         user: 从 manager 获取的已登录用户对象
-    
+
     Returns:
         User: 已激活的用户对象
-        
+
     Raises:
         HTTPException: 当用户未激活时
-        
+
     Example:
         @router.post("/create")
         def create(
@@ -330,14 +335,11 @@ async def active_required(user=Depends(manager)):
             pass
     """
     from fastapi import HTTPException
-    
+
     # 检查用户是否激活（is_active 是 Boolean 类型）
-    if not hasattr(user, 'is_active') or not user.is_active:
-        raise HTTPException(
-            status_code=403,
-            detail="User isn't active, please activate first."
-        )
-    
+    if not hasattr(user, "is_active") or not user.is_active:
+        raise HTTPException(status_code=403, detail="User isn't active, please activate first.")
+
     return user
 
 
@@ -346,18 +348,16 @@ def search_pages_path(page_path):
     app_path_list = [path for path in page_path.glob("*_app.py") if not path.name.startswith(".")]
     api_path_list = [path for path in page_path.glob("*sdk/*.py") if not path.name.startswith(".")]
     app_path_list.extend(api_path_list)
-    restful_api_path_list = [
-        path for path in page_path.glob("*restful_apis/*.py") if not path.name.startswith(".")
-    ]
+    restful_api_path_list = [path for path in page_path.glob("*restful_apis/*.py") if not path.name.startswith(".")]
     app_path_list.extend(restful_api_path_list)
     return app_path_list
 
 
 # 定义一个函数，用于注册页面模块到FastAPI应用中
 def register_page(page_path):
-    path = f'{page_path}'
-    page_name = page_path.stem.removesuffix('_api') if "_api" in path else page_path.stem.removesuffix('_app')
-    module_name = '.'.join(page_path.parts[page_path.parts.index('api'):-1] + (page_name,))
+    path = f"{page_path}"
+    page_name = page_path.stem.removesuffix("_api") if "_api" in path else page_path.stem.removesuffix("_app")
+    module_name = ".".join(page_path.parts[page_path.parts.index("api") : -1] + (page_name,))
 
     spec = spec_from_file_location(module_name, page_path)
     page = module_from_spec(spec)
@@ -365,11 +365,9 @@ def register_page(page_path):
     spec.loader.exec_module(page)
     sdk_path = "\\sdk\\" if sys.platform.startswith("win") else "/sdk/"
     restful_api_path = "\\restful_apis\\" if sys.platform.startswith("win") else "/restful_apis/"
-    url_prefix = (
-        f"/api/{API_VERSION}" if sdk_path in path or restful_api_path in path else f"/{API_VERSION}/{page_name}"
-    )
+    url_prefix = f"/api/{API_VERSION}" if sdk_path in path or restful_api_path in path else f"/{API_VERSION}/{page_name}"
     # 确保模块有 router 属性
-    if hasattr(page, 'router'):
+    if hasattr(page, "router"):
         app.include_router(page.router, prefix=url_prefix, tags=[page_name])
     else:
         logging.warning(f"Module {module_name} does not have 'router' attribute.")
@@ -378,9 +376,9 @@ def register_page(page_path):
 # 定义要搜索页面的目录
 pages_dir = [
     Path(__file__).parent,
-    Path(__file__).parent.parent / 'api' / 'apps',
-    Path(__file__).parent.parent / 'api' / 'apps' / 'restful_apis',
-    Path(__file__).parent.parent / 'api' / 'apps' / 'sdk',
+    Path(__file__).parent.parent / "api" / "apps",
+    Path(__file__).parent.parent / "api" / "apps" / "restful_apis",
+    Path(__file__).parent.parent / "api" / "apps" / "sdk",
 ]
 
 # 遍历页面目录，注册每个找到的页面
@@ -399,12 +397,7 @@ def ai_translate_exception_handler(request: Request, exc: AITranslateException):
 
 @app.exception_handler(NodeExecutionError)
 def node_execution_error_handler(request: Request, exc: NodeExecutionError):
-    return JSONResponse(
-        status_code=200,
-        content={"status": "error",
-                 "message": exc.message,
-                 "workflow_exe_data": exc.workflow_exe_data}
-    )
+    return JSONResponse(status_code=200, content={"status": "error", "message": exc.message, "workflow_exe_data": exc.workflow_exe_data})
 
 
 @app.exception_handler(WorkflowValidationError)
@@ -414,7 +407,7 @@ def workflow_validation_error_handler(request: Request, exc: WorkflowValidationE
         content={
             "status": "error",
             "message": exc.message,
-        }
+        },
     )
 
 
@@ -432,7 +425,7 @@ async def not_found_handler(request: Request, exc):
             "message": message,
             "data": None,
             "error": "Not Found",
-        }
+        },
     )
 
 
@@ -449,7 +442,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
                 "code": RetCode.UNAUTHORIZED,
                 "message": exc.detail or "Unauthorized",
                 "data": None,
-            }
+            },
         )
     # 其他 HTTPException 保持默认行为
     return JSONResponse(
@@ -492,7 +485,7 @@ def custom_exception_handler(request: Request, exc: Exception):
 
 
 # 定义一个用于用户登录的路由，生成和返回访问令牌
-@app.post('/auth/token', summary="获取Access_token")
+@app.post("/auth/token", summary="获取Access_token")
 def login(data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     """
     此函数用于处理用户身份验证并生成访问令牌。[目前有效期：1天]
