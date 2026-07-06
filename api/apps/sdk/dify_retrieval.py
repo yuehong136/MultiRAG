@@ -7,7 +7,7 @@ Dify 兼容的检索接口模块
 import logging
 from typing import Annotated, Any, Literal, Self
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Discriminator, Field, model_validator
 from sqlalchemy.orm import Session
 
@@ -205,30 +205,12 @@ class RetrievalResponse(BaseModel):
 # ============================================================================
 
 
-@router.post(
-    "/retrieval",
-    summary="Dify 检索接口",
-    response_model=RetrievalResponse,
-    responses={
-        200: {"description": "检索成功"},
-        404: {"description": "知识库或文档块未找到"},
-        500: {"description": "服务器内部错误"},
-    },
-)
-async def retrieval(
+async def _run_retrieval(
     request_data: RetrievalRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(apikey_dependency),
+    db: Session,
+    tenant_id: str,
 ) -> RetrievalResponse | dict[str, Any]:
-    """
-    Dify 兼容的检索接口
-
-    支持多种检索模式：
-    - sparse: 稀疏检索（关键词匹配）
-    - dense: 密集检索（向量相似度）
-    - hybrid: 混合检索（加权融合）
-    - fusion: 融合检索（RRF 排序）
-    """
+    """Execute the Dify-compatible retrieval contract."""
     # 提取请求参数
     question = request_data.query
     kb_id = request_data.knowledge_id
@@ -337,3 +319,62 @@ async def retrieval(
             error_msg=error_msg,
             retcode=RetCode.SERVER_ERROR,
         )
+
+
+@router.post(
+    "/dify/retrieval",
+    summary="Dify 检索接口",
+    response_model=RetrievalResponse,
+    responses={
+        200: {"description": "检索成功"},
+        404: {"description": "知识库或文档块未找到"},
+        500: {"description": "服务器内部错误"},
+    },
+)
+async def retrieval(
+    request_data: RetrievalRequest,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(apikey_dependency),
+) -> RetrievalResponse | dict[str, Any]:
+    """
+    Dify 兼容的检索接口
+
+    支持多种检索模式：
+    - sparse: 稀疏检索（关键词匹配）
+    - dense: 密集检索（向量相似度）
+    - hybrid: 混合检索（加权融合）
+    - fusion: 融合检索（RRF 排序）
+    """
+    return await _run_retrieval(request_data, db, tenant_id)
+
+
+@router.get(
+    "/dify/retrieval",
+    summary="Dify 检索接口",
+    response_model=RetrievalResponse,
+    responses={
+        200: {"description": "检索成功"},
+        404: {"description": "知识库或文档块未找到"},
+        500: {"description": "服务器内部错误"},
+    },
+)
+async def retrieval_get(
+    knowledge_id: Annotated[str, Query(min_length=1, description="知识库ID")],
+    query: Annotated[str, Query(min_length=1, description="查询问题")],
+    use_kg: Annotated[bool, Query(description="是否使用知识图谱增强检索")] = False,
+    top_k: Annotated[int, Query(ge=1, le=10000, description="返回结果的最大数量")] = 1024,
+    score_threshold: Annotated[float, Query(ge=0.0, le=1.0, description="相似度阈值")] = 0.0,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(apikey_dependency),
+) -> RetrievalResponse | dict[str, Any]:
+    """Dify-compatible retrieval API for GET connectivity checks."""
+    request_data = RetrievalRequest(
+        knowledge_id=knowledge_id,
+        query=query,
+        use_kg=use_kg,
+        retrieval_setting=RetrievalSetting(
+            score_threshold=score_threshold,
+            top_k=top_k,
+        ),
+    )
+    return await _run_retrieval(request_data, db, tenant_id)
