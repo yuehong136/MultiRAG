@@ -435,4 +435,6 @@ omit = ["tests/*", "server/*", "internal/*", "docker/*", "*/__pycache__/*"]
 [tool.coverage.report]
 precision = 1
 skip_empty = true
-# 暂不设 fail_under —— 先积累基线数据，稳定后按基线设阈值棘轮
+# 覆盖率棘轮（只升不降）：基线 19.0%（2026-07-07 实测），阈值留 1 个百分点防抖。
+# 覆盖率显著提升后手动上调本值；禁止下调换绿。
+fail_under = 18
