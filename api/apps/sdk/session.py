@@ -1311,7 +1311,7 @@ async def sequence2txt(
 
 
 @router.post("/tts", summary="文字转语音")
-async def tts(
+def tts(
     body: TTSRequest,
     db: Session = Depends(get_db),
     tenant_id: str = Depends(token_required),

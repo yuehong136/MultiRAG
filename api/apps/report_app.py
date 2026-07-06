@@ -134,7 +134,7 @@ async def _stream_orchestration(produce: Callable[[Callable[[dict[str, Any]], No
 
 
 @router.post("/skeleton", summary="AI 生成报告骨架(SSE)", response_description="流式进度 + 最终 SkeletonSchema")
-async def report_skeleton_sse(request: SkeletonGenRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def report_skeleton_sse(request: SkeletonGenRequest, db: Session = Depends(get_db), user=Depends(manager)):
     chat_mdl = _resolve_chat_mdl(db, user, request.llm_name)
     call_llm = _make_call_llm(chat_mdl, dict(request.gen_conf or {}))
 
@@ -149,7 +149,7 @@ async def report_skeleton_sse(request: SkeletonGenRequest, db: Session = Depends
 
 
 @router.post("/fill", summary="试运行填值:展开生成区 + 逐节填值(SSE)", response_description="流式进度 + 最终 ReportSchema")
-async def report_fill_sse(request: ReportFillRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def report_fill_sse(request: ReportFillRequest, db: Session = Depends(get_db), user=Depends(manager)):
     chat_mdl = _resolve_chat_mdl(db, user, request.llm_name)
     call_llm = _make_call_llm(chat_mdl, {"temperature": float(request.temperature)})
     variables = request.variables or {}

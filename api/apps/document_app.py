@@ -4379,7 +4379,7 @@ async def run_analyze_v2(
 
 
 @router.get("/trace_analyze/{task_id}", summary="查询分析任务进度", response_description="成功获取任务状态")
-async def trace_analyze(task_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+def trace_analyze(task_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### GET `/trace_analyze/{task_id}` 查询文档分析任务进度
 

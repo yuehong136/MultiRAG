@@ -468,7 +468,7 @@ class MetadataUpdateRequestSDK(BaseModel):
 
 
 @router.post("/datasets/{dataset_id}/metadata/update", summary="批量更新元数据")
-async def metadata_batch_update(dataset_id: str, request: MetadataUpdateRequestSDK, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
+def metadata_batch_update(dataset_id: str, request: MetadataUpdateRequestSDK, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     """
     批量更新或删除文档元数据。
 

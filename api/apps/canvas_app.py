@@ -1437,7 +1437,7 @@ def sessions(
 
 
 @router.put("/{canvas_id}/sessions", summary="创建Canvas会话", response_description="成功创建会话")
-async def set_session(
+def set_session(
     canvas_id: str,
     request_body: dict,
     db: Session = Depends(get_db),

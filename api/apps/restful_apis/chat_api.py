@@ -638,7 +638,7 @@ def bulk_delete_chats(
 
 
 @router.post("/chats/tts", summary="Text to speech")
-async def tts(
+def tts(
     request: TTSRequest,
     db: Session = Depends(get_db),
     tenant_id: str = Depends(current_tenant_id),
