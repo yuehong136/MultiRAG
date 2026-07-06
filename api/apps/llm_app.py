@@ -1,48 +1,53 @@
 import asyncio
-import threading
-import logging
+import base64
 import json
+import logging
 import os
 import re
+from array import array
 from datetime import datetime
 from typing import Any, Literal
-import base64
-from array import array
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Body, Form, File, UploadFile
-from pydantic import ValidationError
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
-from pydantic import BaseModel, Field, field_validator
 
-from api.apps import manager, executor
 from agent.component.agent_with_tools import Agent, AgentParam
-from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMService
-from api.db.services.llm_service import LLMService, LLMBundle
-from api.db.services.user_service import TenantService
-from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
-from api.utils.api_utils import get_json_result, server_error_response, get_data_error_result, get_allowed_llm_factories
-from common.constants import StatusEnum, LLMType
-from api.db.db_models import TenantLLM, get_db, db_connection
-from core.utils.base64_image import test_image
-from core.llm import EmbeddingModel, ChatModel, CvModel, RerankModel, TTSModel, OcrModel, Seq2txtModel
-
-from core.prompts.generator import kb_prompt
-from core.utils.tavily_conn import Tavily
+from api.apps import manager
+from api.db.db_models import TenantLLM, db_connection, get_db
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from api.db.services.dialog_service import _stream_with_think_delta
+from api.db.services.llm_service import LLMBundle, LLMService
 from api.db.services.mcp_server_service import MCPServerService
+from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMService
+from api.db.services.user_service import TenantService
+from api.utils.api_utils import get_allowed_llm_factories, get_data_error_result, get_json_result, server_error_response
+from api.utils.chat_request_validation import validate_chat_messages
 from api.utils.web_utils import CONTENT_TYPE_MAP
 from common import settings
-from common.misc_utils import get_uuid, thread_pool_exec
+from common.constants import LLMType, StatusEnum
 from common.mcp_tool_call_conn import close_multiple_mcp_toolcall_sessions
+from common.misc_utils import get_uuid, thread_pool_exec
+from core.llm import ChatModel, CvModel, EmbeddingModel, OcrModel, RerankModel, Seq2txtModel, TTSModel
+from core.prompts.generator import kb_prompt
+from core.utils.base64_image import test_image
+from core.utils.tavily_conn import Tavily
+
+
+def _preview_stream_text(value: Any, limit: int = 120) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    text = text.replace("\n", "\\n")
+    if len(text) > limit:
+        return f"{text[:limit]}..."
+    return text
 
 
 class ChatAgentAdapter:
     """对话Agent适配器，直接复用Agent类但适配对话场景"""
 
-    def __init__(self, tenant_id: str, llm_name: str, system_prompt: str = "", 
-                 mcp_ids: list[str] = None, output_schema: dict = None):
+    def __init__(self, tenant_id: str, llm_name: str, system_prompt: str = "", mcp_ids: list[str] = None, output_schema: dict = None):
         self.tenant_id = tenant_id
         self.llm_name = llm_name
         self.system_prompt = system_prompt
@@ -63,13 +68,15 @@ class ChatAgentAdapter:
         agent_param.cite = True
         agent_param.temperature = 0.1
         agent_param.max_tokens = 0
-        
+
         # 设置结构化输出 schema
         if output_schema:
             agent_param.outputs = {"structured": output_schema}
 
         # 创建Agent实例，直接复用完整的Agent功能
         self.agent = Agent(self.canvas_mock, "chat_agent", agent_param)
+        # 让 canvas_mock 知道有哪些真实工具名，以便 tool_use_callback 过滤伪事件
+        self.canvas_mock.tool_names = set(self.agent.tools.keys())
 
     def _create_canvas_mock(self):
         """创建最小化的Canvas mock，满足Agent的依赖"""
@@ -78,42 +85,26 @@ class ChatAgentAdapter:
         class CanvasMock(Canvas):
             def __init__(self, tenant_id):
                 # 使用最小化的DSL初始化Canvas
-                minimal_dsl = json.dumps({
-                    "components": {
-                        "begin": {
-                            "obj": {
-                                "component_name": "Begin",
-                                "params": {
-                                    "prologue": "Hi there!"
-                                }
-                            },
-                            "downstream": [],
-                            "upstream": [],
-                            "parent_id": ""
-                        }
-                    },
-                    "history": [],
-                    "path": [],
-                    "retrieval": {"chunks": [], "doc_aggs": []},
-                    "memory": [],
-                    "globals": {
-                        "sys.query": "",
-                        "sys.user_id": tenant_id,
-                        "sys.conversation_turns": 0,
-                        "sys.files": []
+                minimal_dsl = json.dumps(
+                    {
+                        "components": {"begin": {"obj": {"component_name": "Begin", "params": {"prologue": "Hi there!"}}, "downstream": [], "upstream": [], "parent_id": ""}},
+                        "history": [],
+                        "path": [],
+                        "retrieval": {"chunks": [], "doc_aggs": []},
+                        "memory": [],
+                        "globals": {"sys.query": "", "sys.user_id": tenant_id, "sys.conversation_turns": 0, "sys.files": []},
                     }
-                })
+                )
                 super().__init__(minimal_dsl, tenant_id=tenant_id)
                 self._tenant_id = tenant_id
                 self.history = []
                 self.retrieval = {"chunks": [], "doc_aggs": []}
                 self.memory = []
-                self.globals = {
-                    "sys.query": "",
-                    "sys.user_id": tenant_id,
-                    "sys.conversation_turns": 0,
-                    "sys.files": []
-                }
+                self.globals = {"sys.query": "", "sys.user_id": tenant_id, "sys.conversation_turns": 0, "sys.files": []}
+                # 原生 function-calling 下，工具调用经 tool_use_callback 上报，
+                # 这里缓冲真实工具调用记录供 SSE 层 drain 出 tool_call/tool_result 事件。
+                self.tool_events = []
+                self.tool_names = set()
 
             def get_tenant_id(self):
                 return self._tenant_id
@@ -132,6 +123,19 @@ class ChatAgentAdapter:
 
             def tool_use_callback(self, component_id, *args, **kwargs):
                 logging.debug(f"Tool callback: component_id={component_id}, args={args}")
+                # 仅捕获真正的工具调用（name 在已注册工具名集合中），
+                # 过滤掉 "Multi-turn conversation optimization"/"gen_citations" 等伪事件。
+                name = args[0] if args else None
+                if name and name in self.tool_names:
+                    arguments = args[1] if len(args) > 1 else {}
+                    results = args[2] if len(args) > 2 else ""
+                    self.tool_events.append(
+                        {
+                            "name": name,
+                            "arguments": arguments if isinstance(arguments, dict) else {},
+                            "results": results,
+                        }
+                    )
 
             def get_variable_value(self, var_name):
                 return self.globals.get(var_name, "")
@@ -150,29 +154,27 @@ class ChatAgentAdapter:
                         comp["downstream"] = []
                     return comp
                 # 返回一个默认的组件结构，downstream 为空数组
-                return {
-                    "obj": None,
-                    "downstream": [],
-                    "upstream": [],
-                    "parent_id": ""
-                }
+                return {"obj": None, "downstream": [], "upstream": [], "parent_id": ""}
 
             def get_component_obj(self, cpn_id):
                 """重写 get_component_obj，安全获取组件对象"""
                 cpn = self.get_component(cpn_id)
                 if cpn and "obj" in cpn and cpn["obj"] is not None:
                     return cpn["obj"]
-                
+
                 # 返回一个安全的 Mock 对象，避免 None 引用错误
                 class SafeComponentMock:
                     component_name = "Mock"
+
                     def output(self, key=None):
                         return ""
+
                     def error(self):
                         return None
+
                     def set_output(self, key, value):
                         pass
-                
+
                 return SafeComponentMock()
 
             def get_component_name(self, cpn_id):
@@ -187,14 +189,14 @@ class ChatAgentAdapter:
                 """添加检索参考信息"""
                 if not self.retrieval:
                     self.retrieval = {"chunks": [], "doc_aggs": []}
-                
+
                 # 简化版本，直接添加
                 if isinstance(self.retrieval, dict):
                     if "chunks" not in self.retrieval:
                         self.retrieval["chunks"] = []
                     if "doc_aggs" not in self.retrieval:
                         self.retrieval["doc_aggs"] = []
-                    
+
                     if chunks:
                         self.retrieval["chunks"].extend(chunks)
                     if doc_infos:
@@ -203,7 +205,7 @@ class ChatAgentAdapter:
             def get_component_type(self, cpn_id):
                 """获取组件类型"""
                 cpn_obj = self.get_component_obj(cpn_id)
-                if cpn_obj and hasattr(cpn_obj, 'component_name'):
+                if cpn_obj and hasattr(cpn_obj, "component_name"):
                     return cpn_obj.component_name
                 return "Unknown"
 
@@ -238,10 +240,7 @@ class ChatAgentAdapter:
                     if mcp_server and mcp_server.tenant_id == self.tenant_id:
                         cached_tools = (mcp_server.variables or {}).get("tools", {})
                         if cached_tools:
-                            mcp_config.append({
-                                "mcp_id": mcp_id,
-                                "tools": cached_tools
-                            })
+                            mcp_config.append({"mcp_id": mcp_id, "tools": cached_tools})
                 except Exception as e:
                     logging.warning(f"Failed to load MCP server {mcp_id}: {e}")
 
@@ -251,8 +250,9 @@ class ChatAgentAdapter:
         """获取结构化输出的 prompt"""
         if not self.output_schema:
             return ""
-        
+
         from core.prompts.generator import structured_output_prompt
+
         schema = json.dumps(self.output_schema, ensure_ascii=False, indent=2)
         return structured_output_prompt(schema)
 
@@ -283,50 +283,54 @@ class ChatAgentAdapter:
             self.agent._param.sys_prompt = "You are a helpful AI assistant."
 
         try:
-            kwargs = {
-                "user_prompt": query,
-                "reasoning": "Direct chat request",
-                "context": "Chat conversation context"
-            }
+            kwargs = {"user_prompt": query, "reasoning": "Direct chat request", "context": "Chat conversation context"}
 
             if self.agent.tools:
                 prompt, msg, _ = self.agent._prepare_prompt_variables()
 
                 from core.prompts.generator import message_fit_in
+
                 _, msg = message_fit_in([{"role": "system", "content": prompt}, *msg], int(self.agent.chat_mdl.max_length * 0.97))
 
-                use_tools = []
                 schema_prompt = self._get_schema_prompt()
+                if schema_prompt:
+                    self.agent._append_system_prompt(msg, schema_prompt)
 
                 yield "🔧 Starting tool analysis...\n"
 
+                # 原生 function-calling：工具在 chat_mdl 内执行，经 tool_use_callback 上报到缓冲
+                self.canvas_mock.tool_events = []
                 previous_tool_count = 0
-                # 使用异步版本的 _react_with_tools_streamly_async_simple
-                async for delta_ans, _ in self.agent._react_with_tools_streamly_async_simple(prompt, msg, use_tools, schema_prompt=schema_prompt):
-                    if len(use_tools) > previous_tool_count:
-                        new_tools = use_tools[previous_tool_count:]
-                        for tool_call in new_tools:
-                            tool_name = tool_call.get('name', 'Unknown')
-                            tool_args = tool_call.get('arguments', {})
 
-                            args_preview = ""
-                            if isinstance(tool_args, dict) and tool_args:
-                                key_args = []
-                                for k, v in list(tool_args.items()):
-                                    key_args.append(f"{k}={v}")
-                                args_preview = f"({', '.join(key_args)})"
+                def _drain_tool_events():
+                    nonlocal previous_tool_count
+                    out = []
+                    while len(self.canvas_mock.tool_events) > previous_tool_count:
+                        tool_call = self.canvas_mock.tool_events[previous_tool_count]
+                        previous_tool_count += 1
+                        tool_name = tool_call.get("name", "Unknown")
+                        tool_args = tool_call.get("arguments", {})
+                        args_preview = ""
+                        if isinstance(tool_args, dict) and tool_args:
+                            key_args = [f"{k}={v}" for k, v in list(tool_args.items())]
+                            args_preview = f"({', '.join(key_args)})"
+                        out.append(f"\n🔧 **工具调用**: {tool_name}{args_preview}\n")
+                        tool_results = tool_call.get("results", "")
+                        if tool_results:
+                            out.append(f"📋 **结果**: {tool_results!s}\n\n")
+                    return out
 
-                            yield f"\n🔧 **工具调用**: {tool_name}{args_preview}\n"
-
-                            tool_results = tool_call.get('results', '')
-                            if tool_results:
-                                results_preview = str(tool_results)
-                                yield f"📋 **结果**: {results_preview}\n\n"
-
-                        previous_tool_count = len(use_tools)
+                async for delta_ans in self.agent._generate_streamly(msg):
+                    for ev in _drain_tool_events():
+                        yield ev
                     if delta_ans:
                         yield delta_ans
 
+                # 流结束后再 drain 一次，捕获最后一轮工具事件
+                for ev in _drain_tool_events():
+                    yield ev
+
+                use_tools = self.canvas_mock.tool_events
                 self.agent._last_use_tools = use_tools
                 if use_tools:
                     self.agent.set_output("use_tools", use_tools)
@@ -343,8 +347,7 @@ class ChatAgentAdapter:
             if knowledge_context:
                 self.agent._param.sys_prompt = original_prompt or "You are a helpful AI assistant."
 
-    async def chat_with_tools_stream_structured_async(self, query: str, messages: list[dict] = None,
-                                                      knowledge_context: str = "", files: list[str] = None):
+    async def chat_with_tools_stream_structured_async(self, query: str, messages: list[dict] = None, knowledge_context: str = "", files: list[str] = None):
         """
         异步版本的结构化工具流式对话
         返回结构化的SSE消息，每个文本消息都包含累积内容
@@ -353,10 +356,7 @@ class ChatAgentAdapter:
         history = []
 
         for msg in messages:
-            history.append({
-                "role": msg.get("role", "user"),
-                "content": msg.get("content", "")
-            })
+            history.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
 
         if query:
             history.append({"role": "user", "content": query})
@@ -385,18 +385,29 @@ class ChatAgentAdapter:
                             events.append({"type": "text", "content": text[:pos]})
                         in_think = True
                         events.append({"start_to_think": True})
-                        text = text[pos + len("<think>"):]
+                        text = text[pos + len("<think>") :]
                 else:
-                    pos = text.find("</think>")
-                    if pos == -1:
+                    close_pos = text.find("</think>")
+                    open_pos = text.find("<think>")
+                    if close_pos == -1 and open_pos == -1:
                         events.append({"type": "text", "content": text})
                         text = ""
-                    else:
-                        if pos > 0:
-                            events.append({"type": "text", "content": text[:pos]})
+                    elif close_pos != -1 and (open_pos == -1 or close_pos <= open_pos):
+                        # 正常闭合 think 块
+                        if close_pos > 0:
+                            events.append({"type": "text", "content": text[:close_pos]})
                         in_think = False
                         events.append({"end_to_think": True})
-                        text = text[pos + len("</think>"):]
+                        text = text[close_pos + len("</think>") :]
+                    else:
+                        # in_think 时遇到 stray <think>（上一轮 </think> 在上游 delta_wrapper 被丢弃）：
+                        # 先闭合当前块再重开新块，保持 think 标记平衡，避免 <think> 泄漏成文本。
+                        if open_pos > 0:
+                            events.append({"type": "text", "content": text[:open_pos]})
+                        events.append({"end_to_think": True})
+                        events.append({"start_to_think": True})
+                        # 仍处于 in_think 状态
+                        text = text[open_pos + len("<think>") :]
             return events, in_think
 
         try:
@@ -408,74 +419,56 @@ class ChatAgentAdapter:
 
             if self.agent.tools:
                 from core.prompts.generator import message_fit_in
+
                 _, msg = message_fit_in([{"role": "system", "content": prompt}, *msg], int(self.agent.chat_mdl.max_length * 0.97))
 
-                use_tools = []
                 schema_prompt = self._get_schema_prompt()
+                if schema_prompt:
+                    self.agent._append_system_prompt(msg, schema_prompt)
 
                 yield {"type": "tool_start", "content": "Starting tool analysis..."}
 
+                # 原生 function-calling：工具在 chat_mdl 内执行，经 tool_use_callback 上报到缓冲
+                self.canvas_mock.tool_events = []
                 previous_tool_count = 0
                 call_id_counter = 0
 
-                # 使用异步版本
-                async for delta_ans, _ in self.agent._react_with_tools_streamly_async_simple(prompt, msg, use_tools, schema_prompt=schema_prompt):
-                    if len(use_tools) > previous_tool_count:
-                        new_tools = use_tools[previous_tool_count:]
-                        for tool_call in new_tools:
-                            call_id_counter += 1
-                            call_id = f"call_{call_id_counter}"
+                def _drain_tool_events():
+                    nonlocal previous_tool_count, call_id_counter
+                    out = []
+                    while len(self.canvas_mock.tool_events) > previous_tool_count:
+                        tool_call = self.canvas_mock.tool_events[previous_tool_count]
+                        previous_tool_count += 1
+                        call_id_counter += 1
+                        call_id = f"call_{call_id_counter}"
+                        tool_name = tool_call.get("name", "Unknown")
+                        tool_args = tool_call.get("arguments", {})
+                        out.append({"type": "tool_call", "content": {"tool_name": tool_name, "arguments": tool_args, "call_id": call_id}})
+                        tool_results = tool_call.get("results", "")
+                        if tool_results:
+                            out.append({"type": "tool_result", "content": {"tool_name": tool_name, "result": tool_results, "call_id": call_id, "success": True}})
+                    return out
 
-                            tool_name = tool_call.get('name', 'Unknown')
-                            tool_args = tool_call.get('arguments', {})
-
-                            yield {
-                                "type": "tool_call",
-                                "content": {
-                                    "tool_name": tool_name,
-                                    "arguments": tool_args,
-                                    "call_id": call_id
-                                }
-                            }
-
-                            tool_results = tool_call.get('results', '')
-                            if tool_results:
-                                yield {
-                                    "type": "tool_result",
-                                    "content": {
-                                        "tool_name": tool_name,
-                                        "result": tool_results,
-                                        "call_id": call_id,
-                                        "success": True
-                                    }
-                                }
-
-                            tool_logs = tool_call.get("server_logs", [])
-                            if tool_logs:
-                                yield {
-                                    "type": "tool_logs",
-                                    "content": {
-                                        "tool_name": tool_name,
-                                        "logs": tool_logs,
-                                        "call_id": call_id,
-                                    }
-                                }
-
-                        previous_tool_count = len(use_tools)
-
+                async for delta_ans in self.agent._generate_streamly(msg):
+                    for ev in _drain_tool_events():
+                        yield ev
                     if delta_ans:
                         events, in_think = _emit_text_delta(delta_ans, in_think)
                         for event in events:
                             yield event
 
+                # 流结束后再 drain 一次，捕获最后一轮工具事件
+                for ev in _drain_tool_events():
+                    yield ev
+
+                # 兜底：流结束时若仍处于未闭合的 think 块，补发 end_to_think
+                if in_think:
+                    in_think = False
+                    yield {"end_to_think": True}
+
+                use_tools = self.canvas_mock.tool_events
                 if use_tools:
-                    yield {
-                        "type": "tool_end",
-                        "content": {
-                            "total_calls": len(use_tools),
-                            "summary": f"Used {len(use_tools)} tool(s)"
-                        }
-                    }
+                    yield {"type": "tool_end", "content": {"total_calls": len(use_tools), "summary": f"Used {len(use_tools)} tool(s)"}}
 
                 self.agent._last_use_tools = use_tools
                 if use_tools:
@@ -492,72 +485,55 @@ class ChatAgentAdapter:
                         for event in events:
                             yield event
 
+                # 兜底：流结束时若仍处于未闭合的 think 块，补发 end_to_think
+                if in_think:
+                    in_think = False
+                    yield {"end_to_think": True}
+
         except Exception as e:
-            yield {
-                "type": "error",
-                "content": {
-                    "error": str(e),
-                    "code": 500
-                }
-            }
+            yield {"type": "error", "content": {"error": str(e), "code": 500}}
 
         finally:
             if knowledge_context:
                 self.agent._param.sys_prompt = original_prompt or "You are a helpful AI assistant."
 
-    async def chat_async(self, query: str, messages: list[dict] = None,
-                         knowledge_context: str = "", files: list[str] = None) -> str:
+    async def chat_async(self, query: str, messages: list[dict] = None, knowledge_context: str = "", files: list[str] = None) -> str:
         """
         非流式异步对话方法 - 用于不需要流式输出的场景
-        
+
         Args:
             query: 用户查询
             messages: 历史消息列表
             knowledge_context: 知识上下文
             files: 文件列表
-            
+
         Returns:
             str: 完整的回复内容
         """
         result_content = ""
-        async for delta in self.chat_with_tools_stream_async(
-            query=query,
-            messages=messages,
-            knowledge_context=knowledge_context,
-            files=files
-        ):
+        async for delta in self.chat_with_tools_stream_async(query=query, messages=messages, knowledge_context=knowledge_context, files=files):
             if delta:
                 result_content += delta
         return result_content
 
-    async def chat_structured_async(self, query: str, messages: list[dict] = None,
-                                    knowledge_context: str = "", files: list[str] = None) -> dict:
+    async def chat_structured_async(self, query: str, messages: list[dict] = None, knowledge_context: str = "", files: list[str] = None) -> dict:
         """
         非流式结构化异步对话方法 - 返回最终的结构化结果
-        
+
         Args:
             query: 用户查询
             messages: 历史消息列表
             knowledge_context: 知识上下文
             files: 文件列表
-            
+
         Returns:
             dict: 包含最终文本和工具使用信息的字典
         """
-        result = {
-            "text": "",
-            "tool_calls": [],
-            "tool_results": []
-        }
-        async for message in self.chat_with_tools_stream_structured_async(
-            query=query,
-            messages=messages,
-            knowledge_context=knowledge_context,
-            files=files
-        ):
+        result = {"text": "", "tool_calls": [], "tool_results": []}
+        async for message in self.chat_with_tools_stream_structured_async(query=query, messages=messages, knowledge_context=knowledge_context, files=files):
             msg_type = message.get("type")
             content = message.get("content")
-            
+
             if msg_type == "text":
                 result["text"] = content  # 累积内容，最后一个是完整的
             elif msg_type == "tool_call":
@@ -566,7 +542,7 @@ class ChatAgentAdapter:
                 result["tool_results"].append(content)
             elif msg_type == "error":
                 raise Exception(content.get("error", "Unknown error"))
-        
+
         return result
 
 
@@ -656,36 +632,48 @@ class DeleteFactoryRequest(BaseModel):
 
 class LLMServiceRequest(BaseModel):
     prompt: str = ""
-    messages: list[dict]
+    messages: list[dict[str, Any]]
     llm_name: str
     stream: bool = False
-    gen_conf: dict[str, Any]
+    gen_conf: dict[str, Any] = Field(default_factory=dict)
     image: str = ""
     tavily_api_key: str = ""
     delta_stream: bool = False
+
+    @field_validator("messages")
+    @classmethod
+    def _validate_messages(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return validate_chat_messages(value)
 
 
 class ChatRequest(BaseModel):
     """聊天请求模型"""
+
     prompt: str = ""
     messages: list[dict[str, Any]]
     llm_name: str
     stream: bool = True
-    gen_conf: dict[str, Any] = {}
+    gen_conf: dict[str, Any] = Field(default_factory=dict)
     image: str = ""
     tavily_api_key: str = ""
     # MCP 集成相关
-    mcp_ids: list[str] = []
+    mcp_ids: list[str] = Field(default_factory=list)
     mcp_timeout: float = 10.0
     verbose_tool_use: bool = False
-    files: list[str] = []
+    files: list[str] = Field(default_factory=list)
     # 结构化输出控制
     structured_output: bool = False  # 是否使用结构化的SSE消息格式
     delta_stream: bool = False
 
+    @field_validator("messages")
+    @classmethod
+    def _validate_messages(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return validate_chat_messages(value)
+
 
 class EmbeddingsRequest(BaseModel):
     """2025标准向量化接口请求体（对齐OpenAI v1/embeddings风格）"""
+
     model: str | None = Field(default=None, description="嵌入模型名称，不填则使用租户默认")
     input: list[str] | str | None = Field(default=None, description="要向量化的文本或文本数组；多模态场景可为空")
     input_type: str = Field(default="document", description="document|query（部分模型对查询向量有专项优化）")
@@ -738,7 +726,7 @@ class SuggestionRequest(BaseModel):
     llm_name: str  # 模型名称
     last_response: str  # 模型的最后一轮回复
     messages: list[dict]  # 当前对话上下文
-    gen_conf: dict[str, Any] = None # 大模型的配置信息
+    gen_conf: dict[str, Any] = None  # 大模型的配置信息
     num: int = Field(3)  # 返回建议的条数
 
 
@@ -750,14 +738,9 @@ class CandidateForm(BaseModel):
 
 class RecognizeIntentRequest(BaseModel):
     user_text: str = Field(..., description="用户的自然语言输入")
-    candidate_forms: list[CandidateForm] = Field(
-        ..., description="候选表单列表，建议 ≤ 10 个"
-    )
+    candidate_forms: list[CandidateForm] = Field(..., description="候选表单列表，建议 ≤ 10 个")
     llm_name: str = Field(..., description="用于意图识别的对话模型名称")
-    gen_conf: dict[str, Any] = Field(
-        default_factory=lambda: {"temperature": 0.0},
-        description="可选的大模型生成参数"
-    )
+    gen_conf: dict[str, Any] = Field(default_factory=lambda: {"temperature": 0.0}, description="可选的大模型生成参数")
 
 
 class RecognizeIntentResponse(BaseModel):
@@ -791,7 +774,7 @@ class FillFieldsResponse(BaseModel):
 router = APIRouter()
 
 
-@router.get('/factories', summary="获取模型供应商信息", response_description="成功获取到所有模型供应商信息")
+@router.get("/factories", summary="获取模型供应商信息", response_description="成功获取到所有模型供应商信息")
 def factories(db: Session = Depends(get_db), user=Depends(manager)):
     try:
         fac = get_allowed_llm_factories(db)
@@ -803,7 +786,7 @@ def factories(db: Session = Depends(get_db), user=Depends(manager)):
             if m.status != StatusEnum.VALID.value:
                 continue
             if m.fid not in mdl_types:
-                mdl_types[m.fid] = set([])
+                mdl_types[m.fid] = set()
             mdl_types[m.fid].add(m.mdl_type)
         for f in fac:
             f["model_types"] = list(
@@ -818,7 +801,7 @@ def factories(db: Session = Depends(get_db), user=Depends(manager)):
         return server_error_response(e)
 
 
-@router.post('/set_api_key', summary="新增模型厂商api key", response_description="成功保存该模型服务厂商的api key")
+@router.post("/set_api_key", summary="新增模型厂商api key", response_description="成功保存该模型服务厂商的api key")
 async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request.model_dump()
     chat_passed, embd_passed, rerank_passed = False, False, False
@@ -877,7 +860,7 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
                 if len(arr) == 0 or tc == 0:
                     raise Exception("Fail")
                 rerank_passed = True
-                logging.debug(f'passed model rerank {llm.llm_name}')
+                logging.debug(f"passed model rerank {llm.llm_name}")
             except Exception as e:
                 msg += f"\nFail to access model({llm.fid}/{llm.llm_name}) using this api key." + str(e)
 
@@ -887,23 +870,14 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
     if msg:
         return get_data_error_result(retmsg=msg)
 
-    llm_config = {
-        "api_key": req["api_key"],
-        "api_base": base_url
-    }
+    llm_config = {"api_key": req["api_key"], "api_base": base_url}
     for n in ["mdl_type", "llm_name"]:
         if n in req:
             llm_config[n] = req[n]
 
     for llm in source_llms:
         llm_config["max_tokens"] = llm.max_tokens
-        if not TenantLLMService.filter_update(
-                db,
-                [TenantLLM.tenant_id == user.id,
-                 TenantLLM.llm_factory == factory,
-                 TenantLLM.llm_name == llm.llm_name],
-                llm_config
-        ):
+        if not TenantLLMService.filter_update(db, [TenantLLM.tenant_id == user.id, TenantLLM.llm_factory == factory, TenantLLM.llm_name == llm.llm_name], llm_config):
             TenantLLMService.save(
                 db,
                 tenant_id=user.id,
@@ -912,112 +886,112 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
                 mdl_type=llm.mdl_type,
                 api_key=llm_config["api_key"],
                 api_base=llm_config["api_base"],
-                max_tokens=llm_config["max_tokens"]
+                max_tokens=llm_config["max_tokens"],
             )
 
     return get_json_result(data=True)
 
 
-@router.post('/add_llm', summary="新增模型", response_description="成功新增该模型")
+@router.post("/add_llm", summary="新增模型", response_description="成功新增该模型")
 async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
-# POST /add_llm
+    # POST /add_llm
 
-## 接口描述
-用于向系统中添加一个新的大语言模型(LLM)，并验证相关连接是否有效。
+    ## 接口描述
+    用于向系统中添加一个新的大语言模型(LLM)，并验证相关连接是否有效。
 
-## 请求方式
-POST
+    ## 请求方式
+    POST
 
-## 接口权限
-需要用户认证
+    ## 接口权限
+    需要用户认证
 
-## 请求参数
-| 参数名称 | 类型 | 必填 | 描述 |
-|----------|------|------|------|
-| llm_factory | string | 是 | 模型提供商/工厂，例如: "OpenAI", "Azure-OpenAI", "Bedrock", "VolcEngine", "Tencent Hunyuan", "Tencent Cloud", "LocalAI", "HuggingFace", "OpenAI-API-Compatible", "XunFei Spark", "Fish Audio", "Google Cloud" 等 |
-| llm_name | string | 是 | 模型名称 |
-| mdl_type | string | 是 | 模型类型，可以是 "chat" (聊天), "embedding" (嵌入), "rerank" (重排序), "image2text" (图像转文本), "tts" (文本转语音) |
-| api_key | string | 否 | API密钥，根据不同的工厂可能需要或者不需要 |
-| api_base | string | 否 | API基础URL地址 |
-| ark_api_key | string | 否 | VolcEngine专用: ARK API密钥 |
-| endpoint_id | string | 否 | VolcEngine专用: 终端节点ID |
-| bedrock_ak | string | 否 | AWS Bedrock专用: Access Key |
-| bedrock_sk | string | 否 | AWS Bedrock专用: Secret Key |
-| bedrock_region | string | 否 | AWS Bedrock专用: 区域名称 |
-| fish_audio_ak | string | 否 | Fish Audio专用: Access Key |
-| fish_audio_refid | string | 否 | Fish Audio专用: 参考ID |
-| hunyuan_sid | string | 否 | 腾讯混元专用: SID |
-| hunyuan_sk | string | 否 | 腾讯混元专用: Secret Key |
-| tencent_cloud_sid | string | 否 | 腾讯云专用: SID |
-| tencent_cloud_sk | string | 否 | 腾讯云专用: Secret Key |
-| spark_api_password | string | 否 | 讯飞星火专用: API密码 (用于chat模型) |
-| spark_app_id | string | 否 | 讯飞星火专用: 应用ID (用于tts模型) |
-| spark_api_secret | string | 否 | 讯飞星火专用: API Secret (用于tts模型) |
-| spark_api_key | string | 否 | 讯飞星火专用: API Key (用于tts模型) |
-| google_project_id | string | 否 | Google Cloud专用: 项目ID |
-| google_region | string | 否 | Google Cloud专用: 区域 |
-| google_service_account_key | string | 否 | Google Cloud专用: 服务账号密钥 |
+    ## 请求参数
+    | 参数名称 | 类型 | 必填 | 描述 |
+    |----------|------|------|------|
+    | llm_factory | string | 是 | 模型提供商/工厂，例如: "OpenAI", "Azure-OpenAI", "Bedrock", "VolcEngine", "Tencent Hunyuan", "Tencent Cloud", "LocalAI", "HuggingFace", "OpenAI-API-Compatible", "XunFei Spark", "Fish Audio", "Google Cloud" 等 |
+    | llm_name | string | 是 | 模型名称 |
+    | mdl_type | string | 是 | 模型类型，可以是 "chat" (聊天), "embedding" (嵌入), "rerank" (重排序), "image2text" (图像转文本), "tts" (文本转语音) |
+    | api_key | string | 否 | API密钥，根据不同的工厂可能需要或者不需要 |
+    | api_base | string | 否 | API基础URL地址 |
+    | ark_api_key | string | 否 | VolcEngine专用: ARK API密钥 |
+    | endpoint_id | string | 否 | VolcEngine专用: 终端节点ID |
+    | bedrock_ak | string | 否 | AWS Bedrock专用: Access Key |
+    | bedrock_sk | string | 否 | AWS Bedrock专用: Secret Key |
+    | bedrock_region | string | 否 | AWS Bedrock专用: 区域名称 |
+    | fish_audio_ak | string | 否 | Fish Audio专用: Access Key |
+    | fish_audio_refid | string | 否 | Fish Audio专用: 参考ID |
+    | hunyuan_sid | string | 否 | 腾讯混元专用: SID |
+    | hunyuan_sk | string | 否 | 腾讯混元专用: Secret Key |
+    | tencent_cloud_sid | string | 否 | 腾讯云专用: SID |
+    | tencent_cloud_sk | string | 否 | 腾讯云专用: Secret Key |
+    | spark_api_password | string | 否 | 讯飞星火专用: API密码 (用于chat模型) |
+    | spark_app_id | string | 否 | 讯飞星火专用: 应用ID (用于tts模型) |
+    | spark_api_secret | string | 否 | 讯飞星火专用: API Secret (用于tts模型) |
+    | spark_api_key | string | 否 | 讯飞星火专用: API Key (用于tts模型) |
+    | google_project_id | string | 否 | Google Cloud专用: 项目ID |
+    | google_region | string | 否 | Google Cloud专用: 区域 |
+    | google_service_account_key | string | 否 | Google Cloud专用: 服务账号密钥 |
 
-## 响应参数
-| 参数名称 | 类型 | 描述 |
-|----------|------|------|
-| success | boolean | 操作是否成功 |
-| data | boolean | 返回true表示添加成功 |
-| message | string | 当操作失败时，返回错误信息 |
+    ## 响应参数
+    | 参数名称 | 类型 | 描述 |
+    |----------|------|------|
+    | success | boolean | 操作是否成功 |
+    | data | boolean | 返回true表示添加成功 |
+    | message | string | 当操作失败时，返回错误信息 |
 
-## 特性
-1. 根据不同的模型提供商，自动组装API密钥格式
-2. 添加模型前，会进行连接测试，确保API密钥和URL有效
-3. 对于不同类型的模型，执行不同的有效性验证:
-   - 对于embedding模型: 验证能否成功编码测试文本
-   - 对于chat模型: 验证能否成功生成回复
-   - 对于rerank模型: 验证能否成功计算相似度
-   - 对于image2text模型: 验证能否成功描述图像
-   - 对于tts模型: 验证能否成功生成语音
+    ## 特性
+    1. 根据不同的模型提供商，自动组装API密钥格式
+    2. 添加模型前，会进行连接测试，确保API密钥和URL有效
+    3. 对于不同类型的模型，执行不同的有效性验证:
+       - 对于embedding模型: 验证能否成功编码测试文本
+       - 对于chat模型: 验证能否成功生成回复
+       - 对于rerank模型: 验证能否成功计算相似度
+       - 对于image2text模型: 验证能否成功描述图像
+       - 对于tts模型: 验证能否成功生成语音
 
-## 错误码
-| 错误码 | 描述 |
-|--------|------|
-| 400 | 请求参数错误或模型已存在或模型验证失败 |
-| 401 | 用户未认证 |
+    ## 错误码
+    | 错误码 | 描述 |
+    |--------|------|
+    | 400 | 请求参数错误或模型已存在或模型验证失败 |
+    | 401 | 用户未认证 |
 
-## 示例
+    ## 示例
 
-### 请求示例 (添加OpenAI模型)
-```json
-{
-  "llm_factory": "OpenAI",
-  "llm_name": "gpt-4",
-  "mdl_type": "chat",
-  "api_key": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-  "api_base": "https://api.openai.com/v1"
-}
-```
+    ### 请求示例 (添加OpenAI模型)
+    ```json
+    {
+      "llm_factory": "OpenAI",
+      "llm_name": "gpt-4",
+      "mdl_type": "chat",
+      "api_key": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "api_base": "https://api.openai.com/v1"
+    }
+    ```
 
-### 响应示例 (成功)
-```json
-{
-  "success": true,
-  "data": true,
-  "message": ""
-}
-```
+    ### 响应示例 (成功)
+    ```json
+    {
+      "success": true,
+      "data": true,
+      "message": ""
+    }
+    ```
 
-### 响应示例 (失败)
-```json
-{
-  "success": false,
-  "data": null,
-  "message": "Fail to access model(gpt-4). Invalid API key."
-}
-```
+    ### 响应示例 (失败)
+    ```json
+    {
+      "success": false,
+      "data": null,
+      "message": "Fail to access model(gpt-4). Invalid API key."
+    }
+    ```
 
-## 注意事项
-1. 不同的模型提供商需要不同的API密钥格式，请确保提供正确的参数组合
-2. 添加前，系统会验证模型连接，如果验证失败将返回400错误
-3. 对于同一个租户，相同工厂和名称的模型不能重复添加
-4. 对于某些特殊的模型工厂，系统会自动在模型名称后添加后缀，例如LocalAI会添加"___LocalAI"
+    ## 注意事项
+    1. 不同的模型提供商需要不同的API密钥格式，请确保提供正确的参数组合
+    2. 添加前，系统会验证模型连接，如果验证失败将返回400错误
+    3. 对于同一个租户，相同工厂和名称的模型不能重复添加
+    4. 对于某些特殊的模型工厂，系统会自动在模型名称后添加后缀，例如LocalAI会添加"___LocalAI"
     """
     req = request.model_dump()
     factory = req["llm_factory"]
@@ -1090,7 +1064,7 @@ POST
         "llm_name": llm_name,
         "api_base": req.get("api_base", ""),
         "api_key": api_key,
-        "max_tokens": req.get("max_tokens")
+        "max_tokens": req.get("max_tokens"),
     }
 
     msg = ""
@@ -1168,6 +1142,7 @@ POST
             assert factory in TTSModel, f"TTS model from {factory} is not supported yet."
             mdl = TTSModel[factory](key=model_api_key, model_name=mdl_nm, base_url=model_base_url)
             try:
+
                 def drain_tts():
                     for _ in mdl.tts("Hello~ MultiRAGer!"):
                         pass
@@ -1207,16 +1182,15 @@ POST
         raise HTTPException(status_code=400, detail=msg)
 
     try:
-        if not TenantLLMService.filter_update(db, [TenantLLM.tenant_id == user.id, TenantLLM.llm_factory == factory,
-                                                   TenantLLM.llm_name == llm["llm_name"]], llm):
+        if not TenantLLMService.filter_update(db, [TenantLLM.tenant_id == user.id, TenantLLM.llm_factory == factory, TenantLLM.llm_name == llm["llm_name"]], llm):
             TenantLLMService.save(db, **llm)
-    except IntegrityError as e:
+    except IntegrityError:
         raise HTTPException(status_code=400, detail="LLM already exists for this tenant, factory, and name.")
 
     return get_json_result(data=True)
 
 
-@router.post('/delete_llm', summary="删除模型", response_description="成功删除该模型")
+@router.post("/delete_llm", summary="删除模型", response_description="成功删除该模型")
 def delete_llm(request: DeleteLLMRequest, db: Session = Depends(get_db), user=Depends(manager)):
     try:
         req = request.model_dump()
@@ -1230,7 +1204,7 @@ def delete_llm(request: DeleteLLMRequest, db: Session = Depends(get_db), user=De
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post('/enable_llm', summary="启用/禁用模型", response_description="成功更新模型状态")
+@router.post("/enable_llm", summary="启用/禁用模型", response_description="成功更新模型状态")
 def enable_llm(request: EnableLLMRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request.model_dump()
     TenantLLMService.filter_update(
@@ -1241,21 +1215,20 @@ def enable_llm(request: EnableLLMRequest, db: Session = Depends(get_db), user=De
     return get_json_result(data=True)
 
 
-@router.post('/delete_factory', summary="删除模型厂商", response_description="成功删除模型厂商")
+@router.post("/delete_factory", summary="删除模型厂商", response_description="成功删除模型厂商")
 def delete_factory(request: DeleteFactoryRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request.model_dump()
-    TenantLLMService.filter_delete(
-        db, [TenantLLM.tenant_id == user.id, TenantLLM.llm_factory == req["llm_factory"]])
+    TenantLLMService.filter_delete(db, [TenantLLM.tenant_id == user.id, TenantLLM.llm_factory == req["llm_factory"]])
     return get_json_result(data=True)
 
 
-@router.delete('/factory', summary="删除模型厂商", response_description="成功删除模型厂商")
+@router.delete("/factory", summary="删除模型厂商", response_description="成功删除模型厂商")
 def delete_factory_restful(request: DeleteFactoryRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """RESTful 别名：等价于 POST /delete_factory，供 CLI 的 DROP PROVIDER（DELETE /llm/factory）调用。"""
     return delete_factory(request, db, user)
 
 
-@router.get('/my_llms', summary="获取用户的所有模型", response_description="成功获取到用户的所有模型")
+@router.get("/my_llms", summary="获取用户的所有模型", response_description="成功获取到用户的所有模型")
 def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=Depends(manager), request: Request = None):
     try:
         TenantLLMService.ensure_mineru_from_env(db, user.id)
@@ -1274,35 +1247,25 @@ def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=D
                         break
 
                 if o_dict["llm_factory"] not in res:
-                    res[o_dict["llm_factory"]] = {
-                        "tags": factory_tags,
-                        "llm": []
-                    }
+                    res[o_dict["llm_factory"]] = {"tags": factory_tags, "llm": []}
 
-                res[o_dict["llm_factory"]]["llm"].append({
-                    "id": o_dict["id"],
-                    "type": o_dict["mdl_type"],
-                    "name": o_dict["llm_name"],
-                    "used_token": o_dict["used_tokens"],
-                    "api_base": o_dict["api_base"] or "",
-                    "max_tokens": o_dict["max_tokens"] or 8192,
-                    "status": o_dict["status"] or "1"
-                })
+                res[o_dict["llm_factory"]]["llm"].append(
+                    {
+                        "id": o_dict["id"],
+                        "type": o_dict["mdl_type"],
+                        "name": o_dict["llm_name"],
+                        "used_token": o_dict["used_tokens"],
+                        "api_base": o_dict["api_base"] or "",
+                        "max_tokens": o_dict["max_tokens"] or 8192,
+                        "status": o_dict["status"] or "1",
+                    }
+                )
         else:
             res = {}
             for o in TenantLLMService.get_my_llms(db, user.id):
                 if o.llm_factory not in res:
-                    res[o.llm_factory] = {
-                        "tags": o.tags,
-                        "llm": []
-                    }
-                res[o.llm_factory]["llm"].append({
-                    "id": o.id,
-                    "type": o.mdl_type,
-                    "name": o.llm_name,
-                    "used_token": o.used_tokens,
-                    "status": o.status
-                })
+                    res[o.llm_factory] = {"tags": o.tags, "llm": []}
+                res[o.llm_factory]["llm"].append({"id": o.id, "type": o.mdl_type, "name": o.llm_name, "used_token": o.used_tokens, "status": o.status})
         return get_json_result(data=res)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1339,9 +1302,7 @@ async def upload_file_to_presigned_url(file: UploadFile) -> tuple[str, str | Non
     if not content:
         raise ValueError("Empty file content")
 
-    bucket = (settings.OSS.get("bucket") or
-              settings.MINIO.get("bucket") or
-              "multimodal-temp")
+    bucket = settings.OSS.get("bucket") or settings.MINIO.get("bucket") or "multimodal-temp"
 
     ext = file.filename.rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else "bin"
     unique_filename = f"embeddings_upload/{get_uuid()}.{ext}"
@@ -1363,7 +1324,8 @@ async def upload_file_to_presigned_url(file: UploadFile) -> tuple[str, str | Non
 
 # ==================== Embeddings 接口 ====================
 
-@router.post('/embeddings', summary="文本/多模态向量化（2025标准）", response_description="返回OpenAI风格的embedding结果")
+
+@router.post("/embeddings", summary="文本/多模态向量化（2025标准）", response_description="返回OpenAI风格的embedding结果")
 async def embeddings_api(
     request_body: EmbeddingsMultiModalRequest | None = Body(None),
     request_form: str | None = Form(None, alias="request", description="请求JSON（multipart时使用）"),
@@ -1371,7 +1333,7 @@ async def embeddings_api(
     merge_mode_form: str | None = Form(None, alias="merge_mode", description="多文件处理模式: independent|merged"),
     raw_req: Request = None,
     db: Session = Depends(get_db),
-    user=Depends(manager)
+    user=Depends(manager),
 ):
     """
     ### POST `/v1/llm/embeddings` 文本向量化服务（2025标准）
@@ -1483,9 +1445,9 @@ curl -X POST "/v1/llm/embeddings" \\
         try:
             request = EmbeddingsMultiModalRequest.model_validate_json(request_form)
         except ValidationError as e:
-            raise HTTPException(status_code=400, detail=f"Invalid request JSON: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"Invalid request JSON: {e!s}")
         except json.JSONDecodeError as e:
-            raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"Invalid JSON: {e!s}")
     elif request_body is not None:
         # JSON Body 模式
         request = request_body
@@ -1495,9 +1457,9 @@ curl -X POST "/v1/llm/embeddings" \\
             data = await raw_req.json()
             request = EmbeddingsMultiModalRequest.model_validate(data)
         except json.JSONDecodeError as e:
-            raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"Invalid JSON: {e!s}")
         except ValidationError as e:
-            raise HTTPException(status_code=400, detail=f"Invalid request: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"Invalid request: {e!s}")
         except Exception:
             request = EmbeddingsMultiModalRequest()
 
@@ -1513,20 +1475,14 @@ curl -X POST "/v1/llm/embeddings" \\
                 try:
                     url, media_type = await upload_file_to_presigned_url(file)
                     if media_type == "image_url":
-                        uploaded_media.append(VolcEmbeddingMedia(
-                            type="image_url",
-                            image_url={"url": url}
-                        ))
+                        uploaded_media.append(VolcEmbeddingMedia(type="image_url", image_url={"url": url}))
                     elif media_type == "video_url":
-                        uploaded_media.append(VolcEmbeddingMedia(
-                            type="video_url",
-                            video_url={"url": url}
-                        ))
+                        uploaded_media.append(VolcEmbeddingMedia(type="video_url", video_url={"url": url}))
                     else:
                         logging.warning(f"Unsupported media type for file: {file.filename}, skipping")
                 except Exception as e:
                     logging.exception(f"Failed to upload file: {file.filename}")
-                    raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
+                    raise HTTPException(status_code=500, detail=f"File upload failed: {e!s}")
 
     req = request.model_dump()
 
@@ -1551,7 +1507,7 @@ curl -X POST "/v1/llm/embeddings" \\
         embd_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.EMBEDDING.value, model_name)
         emb_bundle = LLMBundle(db, tenant_id, embd_config)
     except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Embedding model not available: {str(e)}")
+        raise HTTPException(status_code=404, detail=f"Embedding model not available: {e!s}")
 
     try:
         vectors: list[Any]
@@ -1568,7 +1524,7 @@ curl -X POST "/v1/llm/embeddings" \\
             raise HTTPException(
                 status_code=400,
                 detail=f"The embedding model '{model_display_name}' does not support multimodal inputs (images, videos). "
-                       "Please use a multimodal embedding model (e.g., VolcEngine) for media content, or remove media items from the request."
+                "Please use a multimodal embedding model (e.g., VolcEngine) for media content, or remove media items from the request.",
             )
 
         if media_items or is_vision_model:
@@ -1590,10 +1546,7 @@ curl -X POST "/v1/llm/embeddings" \\
 
                 # 处理媒体输入（每个独立调用）
                 for media in media_items:
-                    media_payload = {
-                        "model": req.get("model") or emb_bundle.llm_name or getattr(emb_bundle.mdl, "model_name", None),
-                        "input": [media.model_dump(by_alias=True)]
-                    }
+                    media_payload = {"model": req.get("model") or emb_bundle.llm_name or getattr(emb_bundle.mdl, "model_name", None), "input": [media.model_dump(by_alias=True)]}
                     embedding, tk = emb_bundle.encode([media_payload])
                     if isinstance(embedding, (list, tuple, np.ndarray)) and len(embedding) > 0:
                         vectors.append(embedding[0])
@@ -1634,15 +1587,15 @@ curl -X POST "/v1/llm/embeddings" \\
             vectors, used_tokens = emb_bundle.encode(inputs)
     except Exception as e:
         logging.exception("Embedding generation failed")
-        raise HTTPException(status_code=500, detail=f"Embedding generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Embedding generation failed: {e!s}")
 
     def to_base64(v) -> str:
         try:
             seq = v.tolist()
         except AttributeError:
             seq = list(v)
-        arr = array('f', [float(x) for x in seq])
-        return base64.b64encode(arr.tobytes()).decode('ascii')
+        arr = array("f", [float(x) for x in seq])
+        return base64.b64encode(arr.tobytes()).decode("ascii")
 
     data_items = []
     for idx, v in enumerate(vectors):
@@ -1653,28 +1606,19 @@ curl -X POST "/v1/llm/embeddings" \\
                 embedding_value = v.tolist()
             except AttributeError:
                 embedding_value = [float(x) for x in v]
-        data_items.append({
-            "object": "embedding",
-            "index": idx,
-            "embedding": embedding_value
-        })
+        data_items.append({"object": "embedding", "index": idx, "embedding": embedding_value})
 
     try:
         used = int(used_tokens)
     except Exception:
         used = used_tokens
 
-    result = {
-        "object": "list",
-        "data": data_items,
-        "model": getattr(emb_bundle, "llm_name", model_name) or "",
-        "usage": {"prompt_tokens": used, "total_tokens": used}
-    }
+    result = {"object": "list", "data": data_items, "model": getattr(emb_bundle, "llm_name", model_name) or "", "usage": {"prompt_tokens": used, "total_tokens": used}}
 
     return get_json_result(data=result)
 
 
-@router.get('/list', summary="列出所有模型", response_description="成功列出所有模型")
+@router.get("/list", summary="列出所有模型", response_description="成功列出所有模型")
 def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=Depends(manager)):
     self_deployed = ["Youdao", "FastEmbed", "BAAI", "Ollama", "Xinference", "LocalAI", "LM-Studio", "GPUStack"]
     weighted = ["Youdao", "FastEmbed", "BAAI"] if settings.LIGHTEN != 0 else []
@@ -1682,20 +1626,20 @@ def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=De
     try:
         TenantLLMService.ensure_mineru_from_env(db, tenant_id)
         objs = TenantLLMService.query(db, tenant_id=tenant_id)
-        facts = set(o.llm_factory for o in objs if o.api_key and o.status==StatusEnum.VALID.value)
+        facts = {o.llm_factory for o in objs if o.api_key and o.status == StatusEnum.VALID.value}
         tenant_llm_mapping = {f"{o.llm_name}@{o.llm_factory}": o for o in objs}
         status = {(o.llm_name + "@" + o.llm_factory) for o in objs if o.status == StatusEnum.VALID.value}
         llms = LLMService.get_all(db)
-        llms = [m.to_dict() for m in llms if m.status == StatusEnum.VALID.value and m.fid not in weighted and (m.fid == 'Builtin' or (m.llm_name + "@" + m.fid) in status)]
+        llms = [m.to_dict() for m in llms if m.status == StatusEnum.VALID.value and m.fid not in weighted and (m.fid == "Builtin" or (m.llm_name + "@" + m.fid) in status)]
 
         for m in llms:
             tenant_llm = tenant_llm_mapping.get(m["llm_name"] + "@" + m["fid"])
             m["id"] = tenant_llm.id if tenant_llm else None
             m["available"] = m["fid"] in facts or m["llm_name"].lower() == "flag-embedding" or m["fid"] in self_deployed
-            if "tei-" in os.getenv("COMPOSE_PROFILES", "") and m["model_type"]==LLMType.EMBEDDING and m["fid"]=="Builtin" and m["llm_name"]==os.getenv('TEI_MODEL', ''):
+            if "tei-" in os.getenv("COMPOSE_PROFILES", "") and m["model_type"] == LLMType.EMBEDDING and m["fid"] == "Builtin" and m["llm_name"] == os.getenv("TEI_MODEL", ""):
                 m["available"] = True
 
-        llm_set = set([m["llm_name"] + "@" + m["fid"] for m in llms])
+        llm_set = {m["llm_name"] + "@" + m["fid"] for m in llms}
         for o in objs:
             if o.llm_name + "@" + o.llm_factory in llm_set:
                 continue
@@ -1714,7 +1658,7 @@ def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=De
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post('/chat_service', summary="模型对话服务", response_description="成功调用对话模型")
+@router.post("/chat_service", summary="模型对话服务", response_description="成功调用对话模型")
 async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request.model_dump()
     tenants = TenantService.get_info_by(db, user.id)
@@ -1738,14 +1682,10 @@ async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db)
     mdl_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], llm_type, req["llm_name"])
     chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], mdl_config)
     # 构建调用参数
-    call_params = {
-        "system": req["prompt"],
-        "history": req["messages"],
-        "gen_conf": req["gen_conf"]
-    }
+    call_params = {"system": req["prompt"], "history": req["messages"], "gen_conf": req["gen_conf"]}
 
     # 如果llm_type为image2text，添加image参数
-    if llm_type == 'image2text':
+    if llm_type == "image2text":
         call_params["image"] = req["image"]
 
     # 根据是否流式调用选择合适的方法
@@ -1765,161 +1705,161 @@ async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db)
     return get_json_result(data=data)
 
 
-@router.post('/chat_service_sse', summary="模型对话服务", response_description="成功调用对话模型")
+@router.post("/chat_service_sse", summary="模型对话服务", response_description="成功调用对话模型")
 async def chat_service_sse(request: LLMServiceRequest, http_request: Request, db: Session = Depends(get_db), user=Depends(manager)):
     """
-    ### POST `/v1/llm/chat_service` 模型对话服务
+        ### POST `/v1/llm/chat_service` 模型对话服务
 
-**功能描述**:
-此接口用于调用对话模型，基于用户提供的输入生成对应的响应内容。支持文本生成、图像到文本转换、消息处理等多种模型类型，接口根据请求体中的配置，选择适当的模型及生成方式，提供流式和非流式响应模式。
+    **功能描述**:
+    此接口用于调用对话模型，基于用户提供的输入生成对应的响应内容。支持文本生成、图像到文本转换、消息处理等多种模型类型，接口根据请求体中的配置，选择适当的模型及生成方式，提供流式和非流式响应模式。
 
----
+    ---
 
-### 请求体 (Request Body)
+    ### 请求体 (Request Body)
 
-| 字段         | 类型                | 必填 | 描述                                                                                  |
-|--------------|---------------------|------|---------------------------------------------------------------------------------------|
-| `prompt`     | `string`           | 否   | 用户提供的提示内容，用于引导对话模型生成响应。                                        |
-| `messages`   | `list[dict]`       | 是   | 对话消息列表，包含用户与模型之间的对话历史，格式为 `{ "role": "user/assistant", "content": "..." }`。|
-| `llm_name`   | `string`           | 是   | 模型名称，用于指定所调用的语言模型。                                                 |
-| `stream`     | `boolean`          | 是   | 指定是否使用流式响应，`true` 表示流式响应，`false` 表示非流式响应。                   |
-| `gen_conf`   | `object`           | 否   | 生成配置，控制对话生成行为，例如温度值、生成长度等（具体配置视模型能力而定）。         |
-| `image`      | `string (Base64)`  | 否   | Base64 编码的图像数据，适用于图像到文本的转换模型。                                   |
+    | 字段         | 类型                | 必填 | 描述                                                                                  |
+    |--------------|---------------------|------|---------------------------------------------------------------------------------------|
+    | `prompt`     | `string`           | 否   | 用户提供的提示内容，用于引导对话模型生成响应。                                        |
+    | `messages`   | `list[dict]`       | 是   | 对话消息列表，包含用户与模型之间的对话历史，格式为 `{ "role": "user/assistant", "content": "..." }`。|
+    | `llm_name`   | `string`           | 是   | 模型名称，用于指定所调用的语言模型。                                                 |
+    | `stream`     | `boolean`          | 是   | 指定是否使用流式响应，`true` 表示流式响应，`false` 表示非流式响应。                   |
+    | `gen_conf`   | `object`           | 否   | 生成配置，控制对话生成行为，例如温度值、生成长度等（具体配置视模型能力而定）。         |
+    | `image`      | `string (Base64)`  | 否   | Base64 编码的图像数据，适用于图像到文本的转换模型。                                   |
 
----
+    ---
 
-### 响应 (Response)
+    ### 响应 (Response)
 
-#### 成功响应 (200)
+    #### 成功响应 (200)
 
-- **流式响应**:
-    - **`Content-Type: text/event-stream`**
-    - 数据按块流式返回，每条消息以 `data:` 开头，并以两个换行符 `\\n\\n` 结束。
+    - **流式响应**:
+        - **`Content-Type: text/event-stream`**
+        - 数据按块流式返回，每条消息以 `data:` 开头，并以两个换行符 `\\n\\n` 结束。
 
-    **示例**:
+        **示例**:
 
-    ```plaintext
-    data: {"retcode": 0, "retmsg": "", "data": "你好"}
-
-    data: {"retcode": 0, "retmsg": "", "data": "你好👋！"}
-
-    data: {"retcode": 0, "retmsg": "", "data": "你好👋！我是人工智能助手"}
-
-    data: {"retcode": 0, "retmsg": "", "data": true}
-    ```
-
-- **非流式响应**:
-    - **`Content-Type: application/json`**
-    - **示例**:
-    ```json
-    {
-        "retcode": 0,
-        "retmsg": "success",
-        "data": "你好👋！我是人工智能助手，很高兴见到你！欢迎问我任何问题。"
-    }
-    ```
-
----
-
-### 错误响应
-
-#### **404: Tenant not found**
-- **描述**: 当根据用户ID查找租户信息失败时，返回此错误。
-- **示例**:
-    ```json
-    {
-        "detail": "Tenant not found!"
-    }
-    ```
-
-#### **404: Model not found**
-- **描述**: 当指定的模型名称在用户租户可用模型列表中未找到时，返回此错误。
-- **示例**:
-    ```json
-    {
-        "detail": "Model glm-4-airx not found in the list."
-    }
-    ```
-
-#### **500: 内部错误**
-- **描述**: 当发生意外错误时，返回此错误。
-- **示例**:
-    - **流式响应错误**:
         ```plaintext
-        data: {"retcode": 500, "retmsg": "Internal server error", "data": {"answer": "**ERROR**: Internal error"}}
+        data: {"retcode": 0, "retmsg": "", "data": "你好"}
+
+        data: {"retcode": 0, "retmsg": "", "data": "你好👋！"}
+
+        data: {"retcode": 0, "retmsg": "", "data": "你好👋！我是人工智能助手"}
+
+        data: {"retcode": 0, "retmsg": "", "data": true}
         ```
-    - **非流式响应错误**:
+
+    - **非流式响应**:
+        - **`Content-Type: application/json`**
+        - **示例**:
         ```json
         {
-            "retcode": 500,
-            "retmsg": "Internal server error",
-            "data": {"answer": "**ERROR**: Internal error"}
+            "retcode": 0,
+            "retmsg": "success",
+            "data": "你好👋！我是人工智能助手，很高兴见到你！欢迎问我任何问题。"
         }
         ```
 
----
+    ---
 
-### 主要流程
+    ### 错误响应
 
-1. 从请求中提取用户输入的内容、模型名称和配置信息。
-2. 通过用户信息获取租户信息，确保用户的租户身份；如果未找到租户信息，返回404错误。
-3. 获取用户租户关联的模型列表，确定模型类型 (`llm_type`)。
-4. 根据 `llm_type` 判断是否需要传入 `image` 参数，构建生成请求。
-5. 根据 `stream` 参数选择流式或非流式的生成方法，调用模型获取对话响应内容。
-6. 返回生成的对话结果。
+    #### **404: Tenant not found**
+    - **描述**: 当根据用户ID查找租户信息失败时，返回此错误。
+    - **示例**:
+        ```json
+        {
+            "detail": "Tenant not found!"
+        }
+        ```
 
----
+    #### **404: Model not found**
+    - **描述**: 当指定的模型名称在用户租户可用模型列表中未找到时，返回此错误。
+    - **示例**:
+        ```json
+        {
+            "detail": "Model glm-4-airx not found in the list."
+        }
+        ```
 
-### 注意事项
+    #### **500: 内部错误**
+    - **描述**: 当发生意外错误时，返回此错误。
+    - **示例**:
+        - **流式响应错误**:
+            ```plaintext
+            data: {"retcode": 500, "retmsg": "Internal server error", "data": {"answer": "**ERROR**: Internal error"}}
+            ```
+        - **非流式响应错误**:
+            ```json
+            {
+                "retcode": 500,
+                "retmsg": "Internal server error",
+                "data": {"answer": "**ERROR**: Internal error"}
+            }
+            ```
 
-- **模型选择**:
-    - 仅当 `llm_type` 为 `image2text` 时传递 `image` 参数，以确保在需要图像到文本转换时能处理Base64编码的图像数据。
-    - 支持多种模型类型 (如文本生成、图像到文本、消息对话)，请根据需求选择适当的 `llm_name` 和 `llm_type`。
-- **流式调用**:
-    - 若 `stream` 参数为 `True`，将返回流式响应，用于实时数据生成；若为 `False`，返回完整的响应数据。
-- **数据格式**:
-    - 返回数据格式可能因模型及请求内容不同而有所变化；默认返回JSON格式的结构化数据或文本响应。
-- **流式响应结束标记**:
-    - 流式响应的最后一条消息为:
-      ```plaintext
-      data: {"retcode": 0, "retmsg": "", "data": true}
-      ```
+    ---
+
+    ### 主要流程
+
+    1. 从请求中提取用户输入的内容、模型名称和配置信息。
+    2. 通过用户信息获取租户信息，确保用户的租户身份；如果未找到租户信息，返回404错误。
+    3. 获取用户租户关联的模型列表，确定模型类型 (`llm_type`)。
+    4. 根据 `llm_type` 判断是否需要传入 `image` 参数，构建生成请求。
+    5. 根据 `stream` 参数选择流式或非流式的生成方法，调用模型获取对话响应内容。
+    6. 返回生成的对话结果。
+
+    ---
+
+    ### 注意事项
+
+    - **模型选择**:
+        - 仅当 `llm_type` 为 `image2text` 时传递 `image` 参数，以确保在需要图像到文本转换时能处理Base64编码的图像数据。
+        - 支持多种模型类型 (如文本生成、图像到文本、消息对话)，请根据需求选择适当的 `llm_name` 和 `llm_type`。
+    - **流式调用**:
+        - 若 `stream` 参数为 `True`，将返回流式响应，用于实时数据生成；若为 `False`，返回完整的响应数据。
+    - **数据格式**:
+        - 返回数据格式可能因模型及请求内容不同而有所变化；默认返回JSON格式的结构化数据或文本响应。
+    - **流式响应结束标记**:
+        - 流式响应的最后一条消息为:
+          ```plaintext
+          data: {"retcode": 0, "retmsg": "", "data": true}
+          ```
 
     """
     req_dict = request.model_dump()
 
     # 检查是否有敏感词过滤结果
-    if hasattr(http_request, 'state') and hasattr(http_request.state, 'sensitive_filter_result'):
+    if hasattr(http_request, "state") and hasattr(http_request.state, "sensitive_filter_result"):
         filter_result = http_request.state.sensitive_filter_result
         logging.info(f"[SSE接口] 检测到敏感词过滤结果: {filter_result.get('is_sensitive')}")
 
-        if filter_result.get('is_sensitive') and filter_result.get('action') == 'filter':
+        if filter_result.get("is_sensitive") and filter_result.get("action") == "filter":
             # 使用过滤后的内容替换原始内容
-            filtered_content = filter_result.get('filtered_content', '')
-            matched_words = filter_result.get('matched_words', [])
+            filtered_content = filter_result.get("filtered_content", "")
+            matched_words = filter_result.get("matched_words", [])
 
             # 处理messages中的敏感词
-            if 'messages' in req_dict and isinstance(req_dict['messages'], list):
-                for msg in req_dict['messages']:
-                    if isinstance(msg, dict) and 'content' in msg:
+            if "messages" in req_dict and isinstance(req_dict["messages"], list):
+                for msg in req_dict["messages"]:
+                    if isinstance(msg, dict) and "content" in msg:
                         # 查找并替换匹配的敏感词
-                        content = msg['content']
+                        content = msg["content"]
                         for word_info in matched_words:
-                            word = word_info.get('word', '')
-                            replacement = word_info.get('replacement', '***')
+                            word = word_info.get("word", "")
+                            replacement = word_info.get("replacement", "***")
                             if word in content:
                                 content = content.replace(word, replacement)
-                        msg['content'] = content
+                        msg["content"] = content
 
             # 处理prompt中的敏感词
-            if 'prompt' in req_dict and req_dict['prompt']:
-                prompt = req_dict['prompt']
+            if req_dict.get("prompt"):
+                prompt = req_dict["prompt"]
                 for word_info in matched_words:
-                    word = word_info.get('word', '')
-                    replacement = word_info.get('replacement', '***')
+                    word = word_info.get("word", "")
+                    replacement = word_info.get("replacement", "***")
                     if word in prompt:
                         prompt = prompt.replace(word, replacement)
-                req_dict['prompt'] = prompt
+                req_dict["prompt"] = prompt
 
             logging.info(f"[SSE接口] 已应用敏感词过滤，替换了 {len(matched_words)} 个敏感词")
 
@@ -1950,14 +1890,10 @@ async def chat_service_sse(request: LLMServiceRequest, http_request: Request, db
         mdl_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], llm_type, req_data["llm_name"])
         chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], mdl_config)
         # 构建调用参数
-        call_params = {
-            "system": req_data["prompt"],
-            "history": req_data["messages"],
-            "gen_conf": req_data["gen_conf"]
-        }
+        call_params = {"system": req_data["prompt"], "history": req_data["messages"], "gen_conf": req_data["gen_conf"]}
 
         # 如果llm_type为image2text，添加image参数
-        if llm_type == 'image2text':
+        if llm_type == "image2text":
             call_params["images"] = req_data["image"]
 
         # 非流式调用，直接返回完整响应
@@ -1986,25 +1922,17 @@ async def chat_service_sse(request: LLMServiceRequest, http_request: Request, db
         chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], mdl_config)
 
         # 构建调用参数
-        call_params = {
-            "system": req_data["prompt"],
-            "history": req_data["messages"],
-            "gen_conf": req_data["gen_conf"]
-        }
+        call_params = {"system": req_data["prompt"], "history": req_data["messages"], "gen_conf": req_data["gen_conf"]}
 
         # # 如果llm_type为image2text，添加image参数
         # if llm_type == 'image2text':
         #     call_params["image"] = req["image"]
 
         if llm_type == "image2text":
-            llm_model_config = get_model_config_by_type_and_name(
-                db, tenants[0]["tenant_id"], LLMType.IMAGE2TEXT.value, req_data["llm_name"]
-            )
+            llm_model_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], LLMType.IMAGE2TEXT.value, req_data["llm_name"])
             call_params["images"] = req_data["image"]
         else:
-            llm_model_config = get_model_config_by_type_and_name(
-                db, tenants[0]["tenant_id"], LLMType.CHAT.value, req_data["llm_name"]
-            )
+            llm_model_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], LLMType.CHAT.value, req_data["llm_name"])
 
         max_tokens = llm_model_config.get("max_tokens", 8192)
         kbinfos = {"total": 0, "chunks": [], "doc_aggs": []}
@@ -2054,10 +1982,7 @@ async def chat_service_sse(request: LLMServiceRequest, http_request: Request, db
 
         except Exception as e:
             if not await http_request.is_disconnected():
-                error_message = json.dumps(
-                    {"retcode": 500, "retmsg": str(e), "data": {"answer": f"**ERROR**: {str(e)}"}},
-                    ensure_ascii=False
-                )
+                error_message = json.dumps({"retcode": 500, "retmsg": str(e), "data": {"answer": f"**ERROR**: {e!s}"}}, ensure_ascii=False)
                 yield f"data: {error_message}\n\n"
                 # 流结束标记
                 end_message = json.dumps({"retcode": 0, "retmsg": "", "data": True}, ensure_ascii=False)
@@ -2077,7 +2002,7 @@ async def chat_service_sse(request: LLMServiceRequest, http_request: Request, db
         return get_json_result(data=data)
 
 
-@router.post('/fine_prompt', summary="优化提示词", response_description="返回优化后的提示词")
+@router.post("/fine_prompt", summary="优化提示词", response_description="返回优化后的提示词")
 async def fine_prompt(request: FinePromptRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     **功能描述**:
@@ -2163,125 +2088,124 @@ async def fine_prompt(request: FinePromptRequest, db: Session = Depends(get_db),
     chat_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], LLMType.CHAT.value, req["llm_name"])
     chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], chat_config)
 
-    data = await chat_mdl.async_chat(META_PROMPT, [{"role": "user", "content": "Task, Goal, or Current Prompt:\n" + req["prompt"]}],
-                         req["gen_conf"])
+    data = await chat_mdl.async_chat(META_PROMPT, [{"role": "user", "content": "Task, Goal, or Current Prompt:\n" + req["prompt"]}], req["gen_conf"])
 
     return get_json_result(data=data)
 
 
-@router.post('/generate_suggestions', summary="生成用户输入建议", response_description="成功调用大模型生成建议")
+@router.post("/generate_suggestions", summary="生成用户输入建议", response_description="成功调用大模型生成建议")
 async def generate_suggestions(request: SuggestionRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
-    ### POST `/v1/suggestions/generate_suggestions` 生成用户输入建议
+        ### POST `/v1/suggestions/generate_suggestions` 生成用户输入建议
 
-**功能描述**
-此接口用于调用大模型根据当前对话上下文及智能体的配置信息，生成用户下一轮输入建议。生成的建议应紧密相关、多样性高、避免重复，并与用户的角色匹配。
+    **功能描述**
+    此接口用于调用大模型根据当前对话上下文及智能体的配置信息，生成用户下一轮输入建议。生成的建议应紧密相关、多样性高、避免重复，并与用户的角色匹配。
 
----
+    ---
 
-## 请求体 (Request Body)
+    ## 请求体 (Request Body)
 
-| 字段            | 类型            | 必填 | 描述                                                                                     |
-|-----------------|-----------------|------|------------------------------------------------------------------------------------------|
-| `llm_name`      | `string`       | 是   | 模型名称，指定用于生成建议的大模型。                                                    |
-| `last_response` | `string`       | 是   | 模型在对话中的最后一轮回复内容。                                                        |
-| `messages`      | `list[dict]`   | 是   | 对话消息列表，包括用户与模型之间的上下文历史，格式为 `{ "role": "user/assistant", "content": "..." }`。 |
-| `gen_conf`      | `object`       | 否   | 大模型的生成配置，用于控制生成行为，例如温度值、生成长度等。                              |
-| `num`           | `integer`      | 否   | 返回的建议条数，默认为3。                                                               |
+    | 字段            | 类型            | 必填 | 描述                                                                                     |
+    |-----------------|-----------------|------|------------------------------------------------------------------------------------------|
+    | `llm_name`      | `string`       | 是   | 模型名称，指定用于生成建议的大模型。                                                    |
+    | `last_response` | `string`       | 是   | 模型在对话中的最后一轮回复内容。                                                        |
+    | `messages`      | `list[dict]`   | 是   | 对话消息列表，包括用户与模型之间的上下文历史，格式为 `{ "role": "user/assistant", "content": "..." }`。 |
+    | `gen_conf`      | `object`       | 否   | 大模型的生成配置，用于控制生成行为，例如温度值、生成长度等。                              |
+    | `num`           | `integer`      | 否   | 返回的建议条数，默认为3。                                                               |
 
----
+    ---
 
-## 响应 (Response)
+    ## 响应 (Response)
 
-### 成功响应 (200)
+    ### 成功响应 (200)
 
-- **`Content-Type: application/json`**
-- **示例**:
-    ```json
-    {
-        "retcode": 0,
-        "retmsg": "success",
-        "data": [
-            "建议 1",
-            "建议 2",
-            "建议 3"
-        ]
-    }
-    ```
+    - **`Content-Type: application/json`**
+    - **示例**:
+        ```json
+        {
+            "retcode": 0,
+            "retmsg": "success",
+            "data": [
+                "建议 1",
+                "建议 2",
+                "建议 3"
+            ]
+        }
+        ```
 
----
+    ---
 
-## 错误响应
+    ## 错误响应
 
-### 404: Tenant not found
-- **描述**
-  当根据用户ID查找租户信息失败时，返回此错误。
-- **示例**
-    ```json
-    {
-        "detail": "Tenant not found!"
-    }
-    ```
+    ### 404: Tenant not found
+    - **描述**
+      当根据用户ID查找租户信息失败时，返回此错误。
+    - **示例**
+        ```json
+        {
+            "detail": "Tenant not found!"
+        }
+        ```
 
-### 500: JSON 解析错误
-- **描述**
-  模型返回数据无法解析为有效的JSON格式。
-- **示例**
-    ```json
-    {
-        "detail": "模型返回数据无法解析为 JSON: Expecting value: line 1 column 1 (char 0)"
-    }
-    ```
+    ### 500: JSON 解析错误
+    - **描述**
+      模型返回数据无法解析为有效的JSON格式。
+    - **示例**
+        ```json
+        {
+            "detail": "模型返回数据无法解析为 JSON: Expecting value: line 1 column 1 (char 0)"
+        }
+        ```
 
-### 500: 无效的建议列表
-- **描述**
-  模型返回的建议列表为空或格式不正确。
-- **示例**
-    ```json
-    {
-        "detail": "模型未返回有效的建议列表"
-    }
-    ```
+    ### 500: 无效的建议列表
+    - **描述**
+      模型返回的建议列表为空或格式不正确。
+    - **示例**
+        ```json
+        {
+            "detail": "模型未返回有效的建议列表"
+        }
+        ```
 
-### 500: 解析模型返回数据时发生未知错误
-- **描述**
-  发生未知错误导致无法解析模型返回的数据。
-- **示例**
-    ```json
-    {
-        "detail": "解析模型返回数据时发生未知错误: list index out of range"
-    }
-    ```
+    ### 500: 解析模型返回数据时发生未知错误
+    - **描述**
+      发生未知错误导致无法解析模型返回的数据。
+    - **示例**
+        ```json
+        {
+            "detail": "解析模型返回数据时发生未知错误: list index out of range"
+        }
+        ```
 
----
+    ---
 
-## 主要流程
+    ## 主要流程
 
-1. 从请求中提取 `llm_name`、`last_response`、`messages`、`gen_conf` 和 `num` 等字段。
-2. 获取用户对应的租户信息；如果未找到，返回404错误。
-3. 构造 `system_prompt`，用于明确生成建议的任务及格式。
-4. 调用大模型生成建议，并解析模型返回的 JSON 数据。
-5. 校验建议列表的有效性，确保返回符合要求的结果。
-6. 返回生成的建议列表。
+    1. 从请求中提取 `llm_name`、`last_response`、`messages`、`gen_conf` 和 `num` 等字段。
+    2. 获取用户对应的租户信息；如果未找到，返回404错误。
+    3. 构造 `system_prompt`，用于明确生成建议的任务及格式。
+    4. 调用大模型生成建议，并解析模型返回的 JSON 数据。
+    5. 校验建议列表的有效性，确保返回符合要求的结果。
+    6. 返回生成的建议列表。
 
----
+    ---
 
-## 注意事项
+    ## 注意事项
 
-- **紧密相关性**
-  建议内容必须与最后一轮模型回复和对话上下文相关，避免偏离主题。
+    - **紧密相关性**
+      建议内容必须与最后一轮模型回复和对话上下文相关，避免偏离主题。
 
-- **多样性**
-  确保生成的建议从不同方向或角度切入，不重复也不雷同。
+    - **多样性**
+      确保生成的建议从不同方向或角度切入，不重复也不雷同。
 
-- **角色适配性**
-  根据用户的身份和对话场景定制建议内容，确保更具针对性。
+    - **角色适配性**
+      根据用户的身份和对话场景定制建议内容，确保更具针对性。
 
-- **JSON 格式输出**
-  大模型返回数据必须是纯 JSON 格式，不应包含多余标记或格式化代码块。
+    - **JSON 格式输出**
+      大模型返回数据必须是纯 JSON 格式，不应包含多余标记或格式化代码块。
 
-- **异常处理**
-  当模型返回数据无法解析或格式不符合预期时，记录日志并返回错误响应。
+    - **异常处理**
+      当模型返回数据无法解析或格式不符合预期时，记录日志并返回错误响应。
 
     """
     req = request.model_dump()
@@ -2320,11 +2244,7 @@ async def generate_suggestions(request: SuggestionRequest, db: Session = Depends
     chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], chat_config)
 
     # 调用大模型
-    response = await chat_mdl.async_chat(
-        system=system_prompt,
-        history=[{"role": "user", "content": "请按照要求输出"}],
-        gen_conf=req["gen_conf"].get("gen_conf", {})
-    )
+    response = await chat_mdl.async_chat(system=system_prompt, history=[{"role": "user", "content": "请按照要求输出"}], gen_conf=req["gen_conf"].get("gen_conf", {}))
 
     try:
         # 检查模型返回数据
@@ -2343,16 +2263,10 @@ async def generate_suggestions(request: SuggestionRequest, db: Session = Depends
     except json.JSONDecodeError as e:
         logging.error("JSON 解析错误: %s", str(e))
         logging.debug("模型返回数据: %s", response)
-        raise HTTPException(
-            status_code=500,
-            detail=f"模型返回数据无法解析为 JSON: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"模型返回数据无法解析为 JSON: {e!s}")
     except Exception as e:
         logging.error("解析模型返回数据时发生未知错误: %s", str(e))
-        raise HTTPException(
-            status_code=500,
-            detail=f"解析模型返回数据时发生未知错误: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"解析模型返回数据时发生未知错误: {e!s}")
 
     # 确保 suggestions 是一个非空列表
     if not suggestions or not isinstance(suggestions, list):
@@ -2364,17 +2278,8 @@ async def generate_suggestions(request: SuggestionRequest, db: Session = Depends
     return get_json_result(data=suggestions)
 
 
-@router.post(
-    "/recognize_intent",
-    summary="表单意图识别",
-    response_description="返回匹配到的表单 ID 及置信度",
-    response_model=RecognizeIntentResponse
-)
-async def recognize_intent(
-    request: RecognizeIntentRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-):
+@router.post("/recognize_intent", summary="表单意图识别", response_description="返回匹配到的表单 ID 及置信度", response_model=RecognizeIntentResponse)
+async def recognize_intent(request: RecognizeIntentRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### 功能
     - 根据 `user_text` 在 `candidate_forms` 中找到**最合适**的表单。
@@ -2417,24 +2322,18 @@ async def recognize_intent(
 
     # 2) 组 Prompt（few-shot + 指令，完全内存化）
     forms: list[dict] = req["candidate_forms"]
-    form_lines = [
-        f"{f['form_id']} | {f['name']} — {f.get('description', '')}" for f in forms
-    ]
+    form_lines = [f"{f['form_id']} | {f['name']} — {f.get('description', '')}" for f in forms]
     prompt = (
         "Role: 你是企业工作流中的 **表单意图识别助手**。\n"
         "Task: 从候选表单中挑选最符合用户需求的一张，**只输出对应的 form_id 数字**，不要包含多余文字。\n"
-        "Candidates:\n"
-        + "\n".join(form_lines)
-        + "\nUSER: "
-        + req["user_text"]
-        + "\nAnswer:"
+        "Candidates:\n" + "\n".join(form_lines) + "\nUSER: " + req["user_text"] + "\nAnswer:"
     )
 
     # 3) 调 LLM
     answer = await chat_mdl.async_chat(
         system=prompt,
         history=[{"role": "user", "content": "请根据要求返回规定的格式"}],  # 空 user 消息 → 模型直接输出结果
-        gen_conf=req["gen_conf"]
+        gen_conf=req["gen_conf"],
     )
 
     # 4) 解析结果（取首个数字；无则兜底为候选列表第 0 个）
@@ -2446,21 +2345,11 @@ async def recognize_intent(
         intent_id = forms[0]["form_id"]
         confidence = 0.5
 
-    return get_json_result(
-        data={"intent_id": intent_id, "confidence": confidence}
-    )
+    return get_json_result(data={"intent_id": intent_id, "confidence": confidence})
 
 
-@router.post(
-    "/fill_fields",
-    summary="表单字段填充",
-    response_model=FillFieldsResponse
-)
-async def fill_fields(
-    req: FillFieldsRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager)
-):
+@router.post("/fill_fields", summary="表单字段填充", response_model=FillFieldsResponse)
+async def fill_fields(req: FillFieldsRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     1) 用 LLM 粗填 JSON
     2) 后端解析 & 校验
@@ -2479,11 +2368,7 @@ async def fill_fields(
     chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], mdl_config)
 
     async def call_llm(prompt: str) -> str:
-        return await chat_mdl.async_chat(
-            system=prompt,
-            history=[{"role": "user", "content": "请按照要求输出"}],
-            gen_conf=req.gen_conf
-        )
+        return await chat_mdl.async_chat(system=prompt, history=[{"role": "user", "content": "请按照要求输出"}], gen_conf=req.gen_conf)
 
     def build_prompt(user_text: str, fields: list[FieldMeta]) -> str:
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -2496,10 +2381,7 @@ async def fill_fields(
                 desc = desc.replace("默认填当前时间", f"默认填当前时间（即 {now_str}）")
             lines.append(f"{f.name} ({f.type})：{desc}")
         prompt = (
-                "请根据下列字段含义，从用户输入中抽取对应的值，未提及的必填字段请按提示填充。\n\n"
-                + "\n".join(lines)
-                + f"\n\n用户输入：{user_text}\n"
-                  '请只输出 JSON，例如 {"字段1":"值1","字段2":"值2",…}'
+            "请根据下列字段含义，从用户输入中抽取对应的值，未提及的必填字段请按提示填充。\n\n" + "\n".join(lines) + f'\n\n用户输入：{user_text}\n请只输出 JSON，例如 {{"字段1":"值1","字段2":"值2",…}}'
         )
         return prompt
 
@@ -2553,28 +2435,18 @@ async def fill_fields(
     if res1["missing"] and req.retry:
         # 构造追问 Prompt
         missed = ",".join(res1["missing"])
-        prompt2 = (
-            f"请补全字段：{missed}，按之前格式再输出完整 JSON，不要多余文字。"
-        )
+        prompt2 = f"请补全字段：{missed}，按之前格式再输出完整 JSON，不要多余文字。"
         raw2 = await call_llm(prompt2)
         res2 = parse_and_validate(raw2, req.fields)
         final = res2
     else:
         final = res1
 
-    return get_json_result(data={
-        "field_values": final["values"],
-        "missing": final["missing"],
-        "invalid": final["invalid"]
-    })
+    return get_json_result(data={"field_values": final["values"], "missing": final["missing"], "invalid": final["invalid"]})
 
 
-@router.post('/enhanced_chat_sse')
-async def enhanced_chat_service_sse(
-        request: ChatRequest,
-        db: Session = Depends(get_db),
-        user=Depends(manager)
-):
+@router.post("/enhanced_chat_sse")
+async def enhanced_chat_service_sse(request: ChatRequest, db: Session = Depends(get_db), user=Depends(manager)):
 
     mcp_sessions = []
 
@@ -2610,12 +2482,7 @@ async def enhanced_chat_service_sse(
         knowledge_context = prepare_knowledge_context(db, request.messages, request.tavily_api_key, tenant_id, request.llm_name)
 
         # 创建对话Agent适配器，直接复用Agent类
-        chat_agent = ChatAgentAdapter(
-            tenant_id=tenant_id,
-            llm_name=request.llm_name,
-            system_prompt=request.prompt,
-            mcp_ids=request.mcp_ids
-        )
+        chat_agent = ChatAgentAdapter(tenant_id=tenant_id, llm_name=request.llm_name, system_prompt=request.prompt, mcp_ids=request.mcp_ids)
 
         if not request.stream:
             # 非流式响应 - 使用纯异步方法，避免阻塞事件循环
@@ -2624,11 +2491,11 @@ async def enhanced_chat_service_sse(
                     query=request.messages[-1]["content"] if request.messages else "",
                     messages=request.messages[:-1] if request.messages else [],
                     knowledge_context=knowledge_context,
-                    files=request.files
+                    files=request.files,
                 )
                 return {"retcode": 0, "retmsg": "success", "data": {"answer": result_content}}
             except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Chat error: {e!s}")
 
         # 流式响应 - 使用原生异步方法，减少线程开销
         async def sse_stream():
@@ -2640,7 +2507,7 @@ async def enhanced_chat_service_sse(
                         query=request.messages[-1]["content"] if request.messages else "",
                         messages=request.messages[:-1] if request.messages else [],
                         knowledge_context=knowledge_context,
-                        files=request.files
+                        files=request.files,
                     ):
                         if "start_to_think" in message or "end_to_think" in message:
                             # think 标记提升到 SSE 顶层，与其他端点格式一致
@@ -2657,11 +2524,7 @@ async def enhanced_chat_service_sse(
                             yield f"data: {json.dumps({'retcode': 0, 'retmsg': '', 'data': message}, ensure_ascii=False)}\n\n"
 
                     # 发送完成消息
-                    end_data = {
-                        "retcode": 0,
-                        "retmsg": "Stream completed",
-                        "data": True
-                    }
+                    end_data = {"retcode": 0, "retmsg": "Stream completed", "data": True}
                     yield f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n"
 
                 else:
@@ -2670,7 +2533,7 @@ async def enhanced_chat_service_sse(
                         query=request.messages[-1]["content"] if request.messages else "",
                         messages=request.messages[:-1] if request.messages else [],
                         knowledge_context=knowledge_context,
-                        files=request.files
+                        files=request.files,
                     )
                     accumulated_content = ""
                     async for kind, value, state in _stream_with_think_delta(stream_iter):
@@ -2687,17 +2550,13 @@ async def enhanced_chat_service_sse(
 
                     # 添加工具使用摘要（如果启用）
                     if request.verbose_tool_use and chat_agent.agent.tools:
-                        use_tools = getattr(chat_agent.agent, '_last_use_tools', [])
+                        use_tools = getattr(chat_agent.agent, "_last_use_tools", [])
                         if use_tools:
                             tools_summary = f"\n\n📊 **本次对话使用了 {len(use_tools)} 个工具调用**"
                             yield f"data: {json.dumps({'retcode': 0, 'retmsg': '', 'data': tools_summary}, ensure_ascii=False)}\n\n"
 
                     # 发送完成消息
-                    end_data = {
-                        "retcode": 0,
-                        "retmsg": "Stream completed",
-                        "data": True
-                    }
+                    end_data = {"retcode": 0, "retmsg": "Stream completed", "data": True}
                     yield f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n"
 
             except asyncio.CancelledError:
@@ -2705,17 +2564,9 @@ async def enhanced_chat_service_sse(
                 raise
             except Exception as e:
                 logging.exception(f"Stream error: {e}")
-                error_data = {
-                    "retcode": 500,
-                    "retmsg": str(e),
-                    "data": {"answer": f"**ERROR**: {str(e)}"}
-                }
+                error_data = {"retcode": 500, "retmsg": str(e), "data": {"answer": f"**ERROR**: {e!s}"}}
                 yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
-                end_data = {
-                    "retcode": 0,
-                    "retmsg": "",
-                    "data": True
-                }
+                end_data = {"retcode": 0, "retmsg": "", "data": True}
                 yield f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n"
 
         return StreamingResponse(
@@ -2730,8 +2581,8 @@ async def enhanced_chat_service_sse(
                 "Content-Type": "text/event-stream; charset=utf-8",
                 "Access-Control-Allow-Origin": "*",
                 "Access-Control-Allow-Headers": "Cache-Control",
-                "Access-Control-Expose-Headers": "X-Accel-Buffering"
-            }
+                "Access-Control-Expose-Headers": "X-Accel-Buffering",
+            },
         )
 
     except Exception as e:
