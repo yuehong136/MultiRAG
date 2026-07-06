@@ -24,7 +24,7 @@ from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import UserTenantService
 from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
 from common.constants import LLMType, RetCode
-from common.misc_utils import get_uuid
+from common.misc_utils import get_uuid, thread_pool_exec
 from core.prompts.generator import chunks_format
 from core.prompts.template import load_prompt
 
@@ -452,7 +452,9 @@ def list_conversation(dialog_id: str, db: Session = Depends(get_db), user=Depend
 
 
 @router.post("/completion", summary="[Deprecated] 生成对话", response_description="成功生成对话", deprecated=True)
-async def completion(request: CompletionRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def completion(
+    request: CompletionRequest, db: Session = Depends(get_db), user=Depends(manager)
+):  # async-db-ok: 路由层 DB 已 thread_pool_exec 外移；async_chat 内部同步 DB 待 §11 Phase 1 迁 AsyncSession
     req = request.model_dump()
     if not req.get("conversation_id") or not req.get("messages"):
         return get_data_error_result(retmsg="Missing conversation_id or messages!")
@@ -491,14 +493,14 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db), 
             chat_model_config[model_config] = config
 
     try:
-        conv = ConversationService.get_by_id(db, req["conversation_id"])
+        conv = await thread_pool_exec(ConversationService.get_by_id, db, req["conversation_id"])
         if not conv:
             return get_data_error_result(retmsg="Conversation not found!")
         if len(req["messages"]) != 1:
             conv.message = deepcopy(req["messages"])  # re-generate for conversation
         else:
             conv.message.append(msg[0])
-        dia = DialogService.get_by_id(db, conv.dialog_id)
+        dia = await thread_pool_exec(DialogService.get_by_id, db, conv.dialog_id)
         if not dia:
             return get_data_error_result(retmsg="Dialog not found!")
         del req["conversation_id"]
@@ -511,12 +513,13 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db), 
 
         if chat_model_id:
             try:
-                override_model_type = TenantLLMService.llm_id2llm_type(chat_model_id)
+                override_model_type = await thread_pool_exec(TenantLLMService.llm_id2llm_type, chat_model_id)
                 if override_model_type == "image2text":
                     model_type_value = LLMType.IMAGE2TEXT.value
                 else:
                     model_type_value = LLMType.CHAT.value
-                override_model_config = get_model_config_by_type_and_name(
+                override_model_config = await thread_pool_exec(
+                    get_model_config_by_type_and_name,
                     db,
                     dia.tenant_id,
                     model_type_value,
@@ -547,7 +550,7 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db), 
                         if ans is None:
                             continue
                     yield "data:" + json.dumps({"retcode": 0, "retmsg": "", "data": ans}, ensure_ascii=False) + "\n\n"
-                ConversationService.update_by_id(db, conv.id, conv.to_dict())
+                await thread_pool_exec(ConversationService.update_by_id, db, conv.id, conv.to_dict())
             except Exception as e:
                 logging.exception(e)
                 yield "data:" + json.dumps({"retcode": 500, "retmsg": str(e), "data": {"answer": "**ERROR**: " + str(e), "reference": []}}, ensure_ascii=False) + "\n\n"
@@ -561,7 +564,7 @@ async def completion(request: CompletionRequest, db: Session = Depends(get_db), 
             async for ans in async_chat(dia, msg, db, **req):
                 answer = structure_answer(conv, ans, message_id, conv.id)
                 if not is_embedded:
-                    ConversationService.update_by_id(db, conv.id, conv.to_dict())
+                    await thread_pool_exec(ConversationService.update_by_id, db, conv.id, conv.to_dict())
                 break
             return get_json_result(data=answer)
     except Exception as e:

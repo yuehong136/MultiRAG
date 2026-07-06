@@ -94,6 +94,7 @@ def _respond(success: bool, result: Any):
 
 
 @router.post("/files", summary="上传文件或创建文件夹")
+# async-db-ok: async 仅用于 multipart 读取；DB/存储工作全部经 thread_pool_exec 外移
 async def create_or_upload(
     request: Request,
     db: Session = Depends(get_db),

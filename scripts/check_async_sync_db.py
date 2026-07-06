@@ -134,9 +134,14 @@ def _nested_async_uses_session(fn: ast.AsyncFunctionDef, session_names: list[str
 
 
 def _is_exempt(fn: ast.AsyncFunctionDef, source_lines: list[str]) -> bool:
-    def_line_idx = fn.lineno - 1  # `async def` 所在行（不含装饰器）
-    candidates = source_lines[max(0, def_line_idx - 1) : def_line_idx + 1]
-    return any(EXEMPT_MARK in line for line in candidates)
+    """豁免标记可出现在 `async def` 的上一行，或签名区间内任意一行。
+
+    签名区间 = def 行到函数体首语句前——ruff format 折行长签名时会把
+    行尾注释挪到 `):` 收尾行，因此不能只看 def 行本身。
+    """
+    start_idx = max(0, fn.lineno - 2)  # def 行的上一行（0 起）
+    end_idx = (fn.body[0].lineno - 1) if fn.body else fn.lineno
+    return any(EXEMPT_MARK in line for line in source_lines[start_idx:end_idx])
 
 
 def scan_file(path: Path) -> list[Violation]:

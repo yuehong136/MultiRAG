@@ -1706,7 +1706,9 @@ async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db)
 
 
 @router.post("/chat_service_sse", summary="模型对话服务", response_description="成功调用对话模型")
-async def chat_service_sse(request: LLMServiceRequest, http_request: Request, db: Session = Depends(get_db), user=Depends(manager)):
+async def chat_service_sse(
+    request: LLMServiceRequest, http_request: Request, db: Session = Depends(get_db), user=Depends(manager)
+):  # async-db-ok: 路由层 DB 已 thread_pool_exec 外移；LLMBundle 内部同步 DB 待 §11 Phase 1
     """
         ### POST `/v1/llm/chat_service` 模型对话服务
 
@@ -1868,12 +1870,12 @@ async def chat_service_sse(request: LLMServiceRequest, http_request: Request, db
 
     # 将操作封装在异步函数中
     async def process_non_streaming_request():
-        # 获取租户信息
-        tenants = TenantService.get_info_by(db, user.id)
+        # 获取租户信息（同步 DB 一律走线程池，避免阻塞事件循环）
+        tenants = await thread_pool_exec(TenantService.get_info_by, db, user.id)
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
 
-        my_llms = TenantLLMService.get_my_llms(db, tenants[0]["tenant_id"])
+        my_llms = await thread_pool_exec(TenantLLMService.get_my_llms, db, tenants[0]["tenant_id"])
 
         def get_llm_type(model_name, my_llms):
             for row in my_llms:
@@ -1887,8 +1889,8 @@ async def chat_service_sse(request: LLMServiceRequest, http_request: Request, db
         else:
             raise HTTPException(status_code=404, detail=f"Model {req_data['llm_name']} not found in the list.")
 
-        mdl_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], llm_type, req_data["llm_name"])
-        chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], mdl_config)
+        mdl_config = await thread_pool_exec(get_model_config_by_type_and_name, db, tenants[0]["tenant_id"], llm_type, req_data["llm_name"])
+        chat_mdl = await thread_pool_exec(LLMBundle, db, tenants[0]["tenant_id"], mdl_config)
         # 构建调用参数
         call_params = {"system": req_data["prompt"], "history": req_data["messages"], "gen_conf": req_data["gen_conf"]}
 
@@ -1953,8 +1955,8 @@ async def chat_service_sse(request: LLMServiceRequest, http_request: Request, db
         stream_iter = None
         think_iter = None
         try:
-            # 获取初始设置
-            chat_mdl, call_params = get_initial_setup()
+            # 获取初始设置（同步 DB + Tavily HTTP，走线程池避免阻塞事件循环）
+            chat_mdl, call_params = await thread_pool_exec(get_initial_setup)
 
             stream_iter = chat_mdl.async_chat_streamly_delta(**call_params)
             accumulated = ""
@@ -2446,14 +2448,14 @@ async def fill_fields(req: FillFieldsRequest, db: Session = Depends(get_db), use
 
 
 @router.post("/enhanced_chat_sse")
-async def enhanced_chat_service_sse(request: ChatRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def enhanced_chat_service_sse(request: ChatRequest, db: Session = Depends(get_db), user=Depends(manager)):  # async-db-ok: 路由层 DB 已 thread_pool_exec 外移；Agent 内部同步 DB 待 §11 Phase 1
 
     mcp_sessions = []
 
     try:
-        # 获取租户信息
+        # 获取租户信息（同步 DB 一律走线程池，避免阻塞事件循环）
         try:
-            tenants = TenantService.get_info_by(db, user.id)
+            tenants = await thread_pool_exec(TenantService.get_info_by, db, user.id)
             if not tenants:
                 raise HTTPException(status_code=404, detail="Tenant not found!")
 
@@ -2464,7 +2466,7 @@ async def enhanced_chat_service_sse(request: ChatRequest, db: Session = Depends(
 
         # 验证模型
         try:
-            my_llms = TenantLLMService.get_my_llms(db, tenant_id)
+            my_llms = await thread_pool_exec(TenantLLMService.get_my_llms, db, tenant_id)
         except Exception as e:
             logging.error(f"Failed to get LLMs: {e}")
             raise HTTPException(status_code=500, detail="Failed to get available models")
@@ -2478,11 +2480,11 @@ async def enhanced_chat_service_sse(request: ChatRequest, db: Session = Depends(
         if not llm_type:
             raise HTTPException(status_code=404, detail=f"Model {request.llm_name} not found")
 
-        # 准备知识上下文（复用现有的Tavily集成）
-        knowledge_context = prepare_knowledge_context(db, request.messages, request.tavily_api_key, tenant_id, request.llm_name)
+        # 准备知识上下文（复用现有的Tavily集成；同步 DB + HTTP，走线程池）
+        knowledge_context = await thread_pool_exec(prepare_knowledge_context, db, request.messages, request.tavily_api_key, tenant_id, request.llm_name)
 
-        # 创建对话Agent适配器，直接复用Agent类
-        chat_agent = ChatAgentAdapter(tenant_id=tenant_id, llm_name=request.llm_name, system_prompt=request.prompt, mcp_ids=request.mcp_ids)
+        # 创建对话Agent适配器，直接复用Agent类（构造期查 DB/MCP 配置，走线程池）
+        chat_agent = await thread_pool_exec(ChatAgentAdapter, tenant_id=tenant_id, llm_name=request.llm_name, system_prompt=request.prompt, mcp_ids=request.mcp_ids)
 
         if not request.stream:
             # 非流式响应 - 使用纯异步方法，避免阻塞事件循环
