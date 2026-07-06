@@ -146,6 +146,23 @@ jobs:
         run: |
           PGPASSWORD=123456 psql -h 127.0.0.1 -U usr_ai -d postgres \
             -c 'CREATE SCHEMA IF NOT EXISTS usr_ai; GRANT ALL ON SCHEMA usr_ai TO usr_ai;'
+      # 服务器 import 链在 core/app/picture.py 顶层实例化 OCR()，缺模型直接崩。
+      # runner 裸 IP 跑 snapshot_download 会被 HF 429，这里 curl 定点拉 3 个小文件（~16MB）
+      - name: Provision deepdoc OCR models (det/rec/ocr.res)
+        run: |
+          mkdir -p core/res/deepdoc
+          for f in det.onnx rec.onnx ocr.res; do
+            [ -f "core/res/deepdoc/$f" ] && continue
+            for base in https://huggingface.co https://hf-mirror.com; do
+              if curl -sSfL --retry 3 --retry-delay 5 -o "core/res/deepdoc/$f" \
+                  "$base/InfiniFlow/deepdoc/resolve/main/$f"; then
+                break
+              fi
+              echo "download $f from $base failed" >&2
+            done
+            [ -f "core/res/deepdoc/$f" ] || { echo "cannot fetch $f" >&2; exit 1; }
+          done
+          ls -la core/res/deepdoc
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
