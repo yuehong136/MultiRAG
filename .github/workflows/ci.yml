@@ -134,6 +134,7 @@ jobs:
           auto-compaction-retention: '1000'
           EOF
           docker run -d --name milvus --security-opt seccomp:unconfined \
+            -e DEPLOY_MODE=STANDALONE \
             -e ETCD_USE_EMBED=true \
             -e ETCD_DATA_DIR=/var/lib/milvus/etcd \
             -e ETCD_CONFIG_PATH=/milvus/configs/embedEtcd.yaml \
