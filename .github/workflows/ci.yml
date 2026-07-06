@@ -32,6 +32,8 @@ jobs:
       - run: uv run --no-sync ruff check --output-format=github .
       # 分层依赖契约（grimp 静态解析，无需项目运行时依赖）
       - run: uv run --no-sync lint-imports
+      # async 路由 × 同步 Session 门禁（基线燃尽：新增即红，见 scripts/async_sync_db_baseline.txt）
+      - run: uv run --no-sync python scripts/check_async_sync_db.py
       # 泄密扫描（当前工作树；规则与豁免见 .gitleaks.toml，历史泄露靠轮换处理）
       - name: gitleaks secret scan
         run: |
