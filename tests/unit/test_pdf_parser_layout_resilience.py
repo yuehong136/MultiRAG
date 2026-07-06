@@ -38,6 +38,7 @@ _MOCK_MODULES = [
     "deepdoc",
     "deepdoc.vision",
     "deepdoc.parser",
+    "deepdoc.parser.utils",
     "core",
     "core.nlp",
     "core.nlp.rag_tokenizer",

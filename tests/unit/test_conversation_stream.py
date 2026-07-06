@@ -7,7 +7,7 @@ from typing import Any
 # TODO(multirag): Transitional compatibility coverage. Remove these tests when
 # the legacy cumulative SSE adapter is deleted.
 def _load_transformer_class() -> type:
-    source = Path("/Users/dxl/project/python/multirag/api/apps/conversation_app.py").read_text(encoding="utf-8")
+    source = (Path(__file__).resolve().parents[2] / "api" / "apps" / "conversation_app.py").read_text(encoding="utf-8")
     module = ast.parse(source)
     class_node = next(node for node in module.body if isinstance(node, ast.ClassDef) and node.name == "FullAnswerStreamTransformer")
     isolated_module = ast.Module(body=[class_node], type_ignores=[])
