@@ -128,7 +128,7 @@ class RAGFlowPdfParser:
             r"[0-9]+\.[0-9.]+(、|\.[ 　])",
             r"[⚫•➢①② ]",
         ]
-        return any([re.match(p, b["text"]) for p in proj_patt])
+        return any(re.match(p, b["text"]) for p in proj_patt)
 
     def _updown_concat_features(self, up, down):
         w = max(self.__char_width(up), self.__char_width(down))
@@ -212,7 +212,7 @@ class RAGFlowPdfParser:
             return True
         if cp == 0xFFFD:
             return True
-        if cp < 0x20 and ch not in ('\t', '\n', '\r'):
+        if cp < 0x20 and ch not in ("\t", "\n", "\r"):
             return True
         if 0x80 <= cp <= 0x9F:
             return True
@@ -269,13 +269,9 @@ class RAGFlowPdfParser:
                 subset_font_count += 1
 
             cp = ord(text[0])
-            if (0x2E80 <= cp <= 0x9FFF or 0xF900 <= cp <= 0xFAFF
-                    or 0x20000 <= cp <= 0x2FA1F
-                    or 0xAC00 <= cp <= 0xD7AF
-                    or 0x3040 <= cp <= 0x30FF):
+            if 0x2E80 <= cp <= 0x9FFF or 0xF900 <= cp <= 0xFAFF or 0x20000 <= cp <= 0x2FA1F or 0xAC00 <= cp <= 0xD7AF or 0x3040 <= cp <= 0x30FF:
                 cjk_like += 1
-            elif (0x21 <= cp <= 0x2F or 0x3A <= cp <= 0x40
-                    or 0x5B <= cp <= 0x60 or 0x7B <= cp <= 0x7E):
+            elif 0x21 <= cp <= 0x2F or 0x3A <= cp <= 0x40 or 0x5B <= cp <= 0x60 or 0x7B <= cp <= 0x7E:
                 ascii_punct_sym += 1
 
         if total_non_space < min_chars:
@@ -291,6 +287,67 @@ class RAGFlowPdfParser:
             return True
 
         return False
+
+    @staticmethod
+    def _normalize_ocr_quad(box, zoomin):
+        """Convert an OCR quadrilateral into a stable axis-aligned box."""
+        points = np.asarray(box, dtype=np.float32)
+        if points.shape != (4, 2):
+            return None
+
+        x0 = float(np.min(points[:, 0])) / zoomin
+        x1 = float(np.max(points[:, 0])) / zoomin
+        top = float(np.min(points[:, 1])) / zoomin
+        bottom = float(np.max(points[:, 1])) / zoomin
+        if x1 <= x0 or bottom <= top:
+            return None
+
+        return {
+            "x0": x0,
+            "x1": x1,
+            "top": top,
+            "bottom": bottom,
+            "quad": points,
+        }
+
+    @staticmethod
+    def _valid_page_metric(value):
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return False
+        return math.isfinite(value) and value > 0
+
+    def _fallback_page_metric(self, metrics, page_index, default):
+        if 0 <= page_index < len(metrics) and self._valid_page_metric(metrics[page_index]):
+            return float(metrics[page_index])
+
+        for offset in range(1, len(metrics) + 1):
+            left = page_index - offset
+            if left >= 0 and self._valid_page_metric(metrics[left]):
+                return float(metrics[left])
+
+            right = page_index + offset
+            if right < len(metrics) and self._valid_page_metric(metrics[right]):
+                return float(metrics[right])
+
+        return float(default)
+
+    def _refresh_page_metrics(self, page_index, boxes):
+        heights = [b["bottom"] - b["top"] for b in boxes if b["bottom"] > b["top"]]
+        widths = [b["x1"] - b["x0"] for b in boxes if b["x1"] > b["x0"]]
+
+        if not self._valid_page_metric(self.mean_height[page_index]):
+            if heights:
+                self.mean_height[page_index] = float(np.median(heights))
+            else:
+                self.mean_height[page_index] = self._fallback_page_metric(self.mean_height, page_index, 10.0)
+
+        if not self._valid_page_metric(self.mean_width[page_index]):
+            if widths:
+                self.mean_width[page_index] = float(np.median(widths))
+            else:
+                self.mean_width[page_index] = self._fallback_page_metric(self.mean_width, page_index, 8.0)
 
     def _evaluate_table_orientation(self, table_img, sample_ratio=0.3):
         """
@@ -684,15 +741,30 @@ class RAGFlowPdfParser:
 
         start = timer()
         if not bxs:
+            self._refresh_page_metrics(pagenum - 1, [])
             self.boxes.append([])
             return
         bxs = [(line[0], line[1][0]) for line in bxs]
+        normalized_boxes = []
+        for b, t in bxs:
+            norm = self._normalize_ocr_quad(b, ZM)
+            if not norm:
+                continue
+            normalized_boxes.append(
+                {
+                    "x0": norm["x0"],
+                    "x1": norm["x1"],
+                    "top": norm["top"],
+                    "text": "",
+                    "txt": t,
+                    "bottom": norm["bottom"],
+                    "chars": [],
+                    "page_number": pagenum,
+                    "quad": norm["quad"],
+                }
+            )
         bxs = Recognizer.sort_Y_firstly(
-            [
-                {"x0": b[0][0] / ZM, "x1": b[1][0] / ZM, "top": b[0][1] / ZM, "text": "", "txt": t, "bottom": b[-1][1] / ZM, "chars": [], "page_number": pagenum}
-                for b, t in bxs
-                if b[0][0] <= b[1][0] and b[0][1] <= b[-1][1]
-            ],
+            normalized_boxes,
             self.mean_height[pagenum - 1] / 3,
         )
 
@@ -735,7 +807,11 @@ class RAGFlowPdfParser:
             if total_count > 0 and garbled_count / total_count >= 0.5:
                 logging.info(
                     "Page %d: detected garbled pdfplumber text (garbled=%d/%d), falling back to OCR for box at (%.1f, %.1f)",
-                    pagenum, garbled_count, total_count, b["x0"], b["top"],
+                    pagenum,
+                    garbled_count,
+                    total_count,
+                    b["x0"],
+                    b["top"],
                 )
                 b["text"] = ""
                 continue
@@ -744,7 +820,10 @@ class RAGFlowPdfParser:
             if total_count > 0 and self._is_garbled_by_font_encoding(box_chars, min_chars=5):
                 logging.info(
                     "Page %d: detected font-encoding garbled text (%d chars), falling back to OCR for box at (%.1f, %.1f)",
-                    pagenum, total_count, b["x0"], b["top"],
+                    pagenum,
+                    total_count,
+                    b["x0"],
+                    b["top"],
                 )
                 b["text"] = ""
 
@@ -754,8 +833,15 @@ class RAGFlowPdfParser:
         img_np = np.array(img)
         for b in bxs:
             if not b["text"]:
-                left, right, top, bott = b["x0"] * ZM, b["x1"] * ZM, b["top"] * ZM, b["bottom"] * ZM
-                b["box_image"] = self.ocr.get_rotate_crop_image(img_np, np.array([[left, top], [right, top], [right, bott], [left, bott]], dtype=np.float32))
+                quad = b.get("quad")
+                if quad is not None:
+                    b["box_image"] = self.ocr.get_rotate_crop_image(img_np, quad)
+                else:
+                    left, right, top, bott = b["x0"] * ZM, b["x1"] * ZM, b["top"] * ZM, b["bottom"] * ZM
+                    b["box_image"] = self.ocr.get_rotate_crop_image(
+                        img_np,
+                        np.array([[left, top], [right, top], [right, bott], [left, bott]], dtype=np.float32),
+                    )
                 boxes_to_reg.append(b)
             del b["txt"]
         texts = self.ocr.recognize_batch([b["box_image"] for b in boxes_to_reg], device_id)
@@ -763,9 +849,10 @@ class RAGFlowPdfParser:
             boxes_to_reg[i]["text"] = texts[i]
             del boxes_to_reg[i]["box_image"]
         logging.info(f"__ocr recognize {len(bxs)} boxes cost {timer() - start}s")
+        for b in bxs:
+            b.pop("quad", None)
         bxs = [b for b in bxs if b["text"]]
-        if self.mean_height[pagenum - 1] == 0:
-            self.mean_height[pagenum - 1] = np.median([b["bottom"] - b["top"] for b in bxs])
+        self._refresh_page_metrics(pagenum - 1, bxs)
         self.boxes.append(bxs)
 
     def _layouts_rec(self, ZM, drop=True):
@@ -871,7 +958,7 @@ class RAGFlowPdfParser:
 
         def start_with(b, txts):
             tt = b.get("text", "").strip()
-            return tt and any([tt.find(t.strip()) == 0 for t in txts])
+            return tt and any(tt.find(t.strip()) == 0 for t in txts)
 
         # horizontally merge adjacent box with the same layout
         i = 0
@@ -1142,7 +1229,7 @@ class RAGFlowPdfParser:
         for b in self.boxes:
             if re.search(r"(··|··|··)", b["text"]):
                 page_dirty[b["page_number"] - 1] += 1
-        page_dirty = set([i + 1 for i, t in enumerate(page_dirty) if t > 3])
+        page_dirty = {i + 1 for i, t in enumerate(page_dirty) if t > 3}
         if not page_dirty:
             return
         i = 0
@@ -1216,7 +1303,7 @@ class RAGFlowPdfParser:
 
         # merge table on different pages
         nomerge_lout_no = set(nomerge_lout_no)
-        tbls = sorted([(k, bxs) for k, bxs in tables.items()], key=lambda x: (x[1][0]["top"], x[1][0]["x0"]))
+        tbls = sorted(tables.items(), key=lambda x: (x[1][0]["top"], x[1][0]["x0"]))
 
         i = len(tbls) - 1
         while i - 1 >= 0:
@@ -1304,7 +1391,7 @@ class RAGFlowPdfParser:
                 return None
 
             if len(pn) < 2:
-                pn = list(pn)[0]
+                pn = next(iter(pn))
                 ht = self.page_cum_height[pn]
                 b = {"x0": np.min([b["x0"] for b in bxs]), "top": np.min([b["top"] for b in bxs]) - ht, "x1": np.max([b["x1"] for b in bxs]), "bottom": np.max([b["bottom"] for b in bxs]) - ht}
                 louts = [layout for layout in self.page_layout[pn] if layout["type"] == ltype]
@@ -1518,7 +1605,7 @@ class RAGFlowPdfParser:
                     try:
                         self.page_chars = [[c for c in page.dedupe_chars().chars if self._has_color(c)] for page in self.pdf.pages[page_from:page_to]]
                     except Exception as e:
-                        logging.warning(f"Failed to extract characters for pages {page_from}-{page_to}: {str(e)}")
+                        logging.warning(f"Failed to extract characters for pages {page_from}-{page_to}: {e!s}")
                         self.page_chars = [[] for _ in range(page_to - page_from)]  # If failed to extract, using empty list instead.
 
                     # Detect garbled pages and clear their chars so the OCR
@@ -1531,19 +1618,18 @@ class RAGFlowPdfParser:
                         sample_text = "".join(c.get("text", "") for c in sample)
                         if self._is_garbled_text(sample_text, threshold=0.3):
                             logging.warning(
-                                "Page %d: pdfplumber extracted mostly garbled characters (%d chars), "
-                                "clearing to use OCR fallback.",
-                                page_from + pi + 1, len(page_ch),
+                                "Page %d: pdfplumber extracted mostly garbled characters (%d chars), clearing to use OCR fallback.",
+                                page_from + pi + 1,
+                                len(page_ch),
                             )
                             self.page_chars[pi] = []
                             continue
                         # Strategy 2: font-encoding garbling (CJK mapped to ASCII)
                         if self._is_garbled_by_font_encoding(page_ch):
                             logging.warning(
-                                "Page %d: detected font-encoding garbled text "
-                                "(subset fonts with no CJK output, %d chars), "
-                                "clearing to use OCR fallback.",
-                                page_from + pi + 1, len(page_ch),
+                                "Page %d: detected font-encoding garbled text (subset fonts with no CJK output, %d chars), clearing to use OCR fallback.",
+                                page_from + pi + 1,
+                                len(page_ch),
                             )
                             self.page_chars[pi] = []
 
@@ -1632,7 +1718,7 @@ class RAGFlowPdfParser:
 
         logging.info(f"__images__ {len(self.page_images)} pages cost {timer() - start}s")
 
-        if not self.is_english and not any([c for c in self.page_chars]) and self.boxes:
+        if not self.is_english and not any(c for c in self.page_chars) and self.boxes:
             bxes = [b for bxs in self.boxes for b in bxs]
             self.is_english = re.search(r"[ \na-zA-Z0-9,/¸;:'\[\]\(\)!@#$%^&*\"?<>._-]{30,}", "".join([b["text"] for b in random.choices(bxes, k=min(30, len(bxes)))]))
 
@@ -1675,12 +1761,12 @@ class RAGFlowPdfParser:
         self.outlines = extract_pdf_outlines(fnm)
         self.__images__(fnm, zoomin, callback=callback)
         if callback:
-            callback(0.40, "OCR finished ({:.2f}s)".format(timer() - start))
+            callback(0.40, f"OCR finished ({timer() - start:.2f}s)")
 
         start = timer()
         self._layouts_rec(zoomin)
         if callback:
-            callback(0.63, "Layout analysis ({:.2f}s)".format(timer() - start))
+            callback(0.63, f"Layout analysis ({timer() - start:.2f}s)")
 
         # Read table auto-rotation setting from environment variable
         auto_rotate_tables = os.getenv("TABLE_AUTO_ROTATE", "true").lower() in ("true", "1", "yes")
@@ -1688,14 +1774,14 @@ class RAGFlowPdfParser:
         start = timer()
         self._table_transformer_job(zoomin, auto_rotate=auto_rotate_tables)
         if callback:
-            callback(0.83, "Table analysis ({:.2f}s)".format(timer() - start))
+            callback(0.83, f"Table analysis ({timer() - start:.2f}s)")
 
         start = timer()
         self._text_merge()
         self._concat_downward()
         self._naive_vertical_merge(zoomin)
         if callback:
-            callback(0.92, "Text merged ({:.2f}s)".format(timer() - start))
+            callback(0.92, f"Text merged ({timer() - start:.2f}s)")
 
         start = timer()
         tbls, figs = self._extract_table_figure(True, zoomin, True, True, True)
@@ -1777,7 +1863,7 @@ class RAGFlowPdfParser:
         insert_table_figures(tbls, "table")
         insert_table_figures(figs, "figure")
         if callback:
-            callback(1, "Structured ({:.2f}s)".format(timer() - start))
+            callback(1, f"Structured ({timer() - start:.2f}s)")
         return deepcopy(self.boxes)
 
     @staticmethod
@@ -1924,7 +2010,7 @@ class PlainParser:
         try:
             self.pdf = pdf2_read(filename if isinstance(filename, str) else BytesIO(filename))
             for page in self.pdf.pages[from_page:to_page]:
-                lines.extend([t for t in page.extract_text().split("\n")])
+                lines.extend(list(page.extract_text().split("\n")))
         except Exception:
             logging.exception("Outlines exception")
         self.outlines = extract_pdf_outlines(filename)
