@@ -122,6 +122,25 @@ jobs:
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=12345678 \
             minio/minio:latest server /data
+      # 与 docker-compose-base.yml 同版本；CI 采用官方 embedded-etcd 单容器形态，
+      # 省去独立 etcd/minio 依赖。尽早启动，让它在 uv sync 期间完成冷启动。
+      - name: Start Milvus (standalone, embedded etcd)
+        run: |
+          cat > embedEtcd.yaml <<'EOF'
+          listen-client-urls: http://0.0.0.0:2379
+          advertise-client-urls: http://0.0.0.0:2379
+          quota-backend-bytes: 4294967296
+          auto-compaction-mode: revision
+          auto-compaction-retention: '1000'
+          EOF
+          docker run -d --name milvus --security-opt seccomp:unconfined \
+            -e ETCD_USE_EMBED=true \
+            -e ETCD_DATA_DIR=/var/lib/milvus/etcd \
+            -e ETCD_CONFIG_PATH=/milvus/configs/embedEtcd.yaml \
+            -e COMMON_STORAGETYPE=local \
+            -v "$PWD/embedEtcd.yaml":/milvus/configs/embedEtcd.yaml \
+            -p 19530:19530 -p 9091:9091 \
+            milvusdb/milvus:v2.6.7 milvus run standalone
       - name: Init postgres schema (mirror docker/postgres/init.sql)
         run: |
           PGPASSWORD=123456 psql -h 127.0.0.1 -U usr_ai -d postgres \
@@ -175,6 +194,19 @@ jobs:
           EOF
       - name: Integration tests
         run: REQUIRE_SERVICES=1 uv run --no-sync pytest tests/integration -q
+      # 服务器 bootstrap 对 Milvus 只等 10s，必须先确认健康再起服务器
+      - name: Wait for Milvus healthy
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:9091/healthz >/dev/null; then
+              echo "Milvus healthy after ~$((i * 3))s"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Milvus not healthy in time"
+          docker logs milvus 2>&1 | tail -50
+          exit 1
       - name: Smoke (boot server, hit health endpoints)
         run: |
           uv run --no-sync python -m api.multirag_server > server.log 2>&1 &
