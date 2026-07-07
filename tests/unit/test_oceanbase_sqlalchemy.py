@@ -53,7 +53,7 @@ class TestOceanBaseBuildDatabaseUrl:
         url = build_database_url(db_config)
         assert url.startswith("mysql+pymysql://")
 
-    def test_postgresql_url_unchanged(self):
+    def test_postgresql_maps_to_psycopg3_driver(self):
         from api.db.db_models import build_database_url
 
         db_config = {
@@ -65,7 +65,7 @@ class TestOceanBaseBuildDatabaseUrl:
             "port": 5432,
         }
         url = build_database_url(db_config)
-        assert url.startswith("postgresql://")
+        assert url.startswith("postgresql+psycopg://")
 
 
 class TestOceanBaseEngineConfig:

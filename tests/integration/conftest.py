@@ -89,7 +89,7 @@ def _start_container_for(service: str) -> Any:
             username=pg_conf.get("user", "usr_ai"),
             password=str(pg_conf.get("password", "123456")),
             dbname=pg_conf.get("dbname", "postgres"),
-            driver="psycopg2",
+            driver="psycopg",
         )
         container.start()
         engine = sa.create_engine(container.get_connection_url())
@@ -196,7 +196,7 @@ def alembic_cfg() -> Any:
 def _pg_url(dbname: str) -> sa.engine.URL:
     pg = CONFIGS["postgresql"]
     return sa.engine.URL.create(
-        "postgresql+psycopg2",
+        "postgresql+psycopg",
         username=pg["user"],
         password=str(pg["password"]),
         host=pg["host"],
@@ -254,7 +254,7 @@ def pg_scratch_engine(_require_services):
 
     from testcontainers.postgres import PostgresContainer
 
-    container = PostgresContainer(_POSTGRES_IMAGE, driver="psycopg2")
+    container = PostgresContainer(_POSTGRES_IMAGE, driver="psycopg")
     container.start()
     engine = sa.create_engine(container.get_connection_url())
     try:

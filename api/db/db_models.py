@@ -47,6 +47,12 @@ def build_database_url(db_config: dict[str, Any]) -> str:
         drivername = "mysql+pymysql"
         drivername_lower = "mysql+pymysql"
 
+    # PostgreSQL 统一走 psycopg3 驱动：同一驱动同时服务 create_engine 与
+    # create_async_engine，共存迁移期只维护一套驱动行为差异
+    if drivername_lower == "postgresql":
+        drivername = "postgresql+psycopg"
+        drivername_lower = "postgresql+psycopg"
+
     database = db_config.get("dbname") or db_config.get("database")
     if not database and drivername_lower.startswith("postgresql"):
         database = "postgres"
@@ -124,7 +130,9 @@ def get_engine_config(db_config: dict) -> dict:
 engine_config = get_engine_config(database_config)
 engine_kwargs = dict(engine_config)
 if str(database_config.get("name", "")).lower().startswith("postgresql"):
-    engine_kwargs["client_encoding"] = "utf8"
+    # client_encoding 是 libpq 连接参数，经 connect_args 传递（psycopg3 方言
+    # 不再接受 create_engine 级别的同名 kwarg）
+    engine_kwargs.setdefault("connect_args", {})["client_encoding"] = "utf8"
 
 engine = create_engine(DATABASE_URL, **engine_kwargs)
 

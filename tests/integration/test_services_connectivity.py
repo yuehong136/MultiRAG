@@ -12,7 +12,7 @@ from common.config_utils import CONFIGS
 
 def test_postgres_select_one():
     pg = CONFIGS["postgresql"]
-    url = f"postgresql+psycopg2://{pg['user']}:{pg['password']}@{pg['host']}:{pg['port']}/{pg['dbname']}"
+    url = f"postgresql+psycopg://{pg['user']}:{pg['password']}@{pg['host']}:{pg['port']}/{pg['dbname']}"
     engine = sa.create_engine(url, connect_args={"connect_timeout": 5})
     try:
         with engine.connect() as conn:
