@@ -90,11 +90,25 @@ def run_migrations_online() -> None:
             context.run_migrations()
         return
 
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    env_url = os.environ.get("ALEMBIC_DATABASE_URL", "")
+    ini_url = config.get_main_option("sqlalchemy.url", "")
+    if env_url:
+        # 显式 URL 覆盖：scratch 库上验证「从零 upgrade head + check」时使用，
+        # 不触碰 service_conf 指向的真实库。
+        from sqlalchemy import create_engine
+
+        connectable = create_engine(env_url, poolclass=pool.NullPool)
+    elif not ini_url or ini_url.startswith("driver://"):
+        # CLI 直跑（alembic upgrade/check，本地与 CI 门禁）：ini 里只有占位 URL，
+        # 复用应用引擎——连接串仍单源于 service_conf（凭据含 % 时也不经过
+        # ConfigParser 插值）。
+        from api.db.db_models import engine as connectable
+    else:
+        connectable = engine_from_config(
+            config.get_section(config.config_ini_section, {}),
+            prefix="sqlalchemy.",
+            poolclass=pool.NullPool,
+        )
 
     with connectable.connect() as connection:
         context.configure(
