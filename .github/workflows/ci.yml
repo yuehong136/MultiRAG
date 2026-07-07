@@ -18,11 +18,17 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # dev 工具组（ruff/import-linter/门禁脚本）已验证 3.13 可跑，两版本均必过；
+    # 版本无关的安全扫描（uv lock --check/gitleaks/osv）只在 3.12 跑一次省时避噪
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
       - uses: astral-sh/setup-uv@v7
         with:
           # 与本地工具链、uv.lock 产出版本对齐（pyproject [tool.uv] required-version
@@ -31,9 +37,10 @@ jobs:
           version: "0.11.27"
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --only-group dev --frozen
+      - run: uv sync --python ${{ matrix.python-version }} --only-group dev --frozen
       # 锁文件一致性：pyproject 改了但 uv.lock 未更新即失败
       - run: uv lock --check
+        if: matrix.python-version == '3.12'
       - run: uv run --no-sync ruff format --check .
       - run: uv run --no-sync ruff check --output-format=github .
       # 分层依赖契约（grimp 静态解析，无需项目运行时依赖）
@@ -42,12 +49,14 @@ jobs:
       - run: uv run --no-sync python scripts/check_async_sync_db.py
       # 泄密扫描（当前工作树；规则与豁免见 .gitleaks.toml，历史泄露靠轮换处理）
       - name: gitleaks secret scan
+        if: matrix.python-version == '3.12'
         run: |
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz | tar -xz gitleaks
           ./gitleaks dir . --no-banner --redact
       # 依赖漏洞扫描（OSV 数据库 × uv.lock 全依赖树）。
       # 存量告警分诊完成前 allow-fail 观察；转必过后改为硬门禁（方案 §3）
       - name: osv-scanner dependency audit (allow-fail during triage)
+        if: matrix.python-version == '3.12'
         continue-on-error: true
         run: |
           curl -sSfL -o osv-scanner https://github.com/google/osv-scanner/releases/download/v2.4.0/osv-scanner_linux_amd64
@@ -82,11 +91,23 @@ jobs:
   unit:
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    # 3.13 为 experimental 观察位：当前被 numpy 1.26 时代栈阻塞（numpy/scipy/
+    # scikit-learn/gensim/tensorflow-cpu 等 12 个包无 cp313 轮子，uv sync 必败），
+    # 待 §6 批次 3 依赖现代化（对齐上游 numpy≥2 解析）后转必过；3.14 等 3.13 绿后再加。
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+        experimental: [false]
+        include:
+          - python-version: "3.13"
+            experimental: true
+    continue-on-error: ${{ matrix.experimental }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
       - uses: astral-sh/setup-uv@v7
         with:
           version: "0.11.27"  # 与 uv.lock 同源，见 lint job 注释
@@ -95,7 +116,7 @@ jobs:
       - name: uv sync (retry)
         run: |
           for i in 1 2 3; do
-            uv sync --python 3.12 --group dev --frozen && exit 0
+            uv sync --python ${{ matrix.python-version }} --group dev --frozen && exit 0
             echo "uv sync failed (attempt $i), retrying..." >&2
             sleep 15
           done
@@ -105,7 +126,7 @@ jobs:
         run: uv run --no-sync python -m nltk.downloader punkt punkt_tab wordnet
       - run: uv run --no-sync pytest tests/unit -q --cov --cov-branch --cov-report=xml:coverage-unit.xml
       - uses: codecov/codecov-action@v5
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.python-version == '3.12' }}
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
