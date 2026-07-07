@@ -259,3 +259,4 @@ internal/cpp/cmake-build-debug/
 !configs/alembic/versions/*.py
 internal/cpp/cmake-build-release/
 internal/cpp/cmake-build-debug/
+.dmypy.json  # mypy daemon 状态文件（PostToolUse 钩子）

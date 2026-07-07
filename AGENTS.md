@@ -122,7 +122,8 @@ uv run python -m core.svr.task_executor
 - **pre-commit**（可选，人各一次）：`uv run pre-commit install`——commit 时自动跑
   ruff check/format 与基础卫生检查。
 - **Claude Code**：`.claude/settings.json` 的 PostToolUse 钩子对每次编辑的 .py 单文件
-  即时 ruff（自动修复 + 残留问题回灌）。其他 AI 工具没有钩子，务必遵守规则 1。
+  即时 ruff（自动修复 + 残留问题回灌）；mypy 纳管范围内的文件追加 dmypy 增量类型检查
+  （类型错误同样即时回灌）。其他 AI 工具没有钩子，务必遵守规则 1。
 
 ## 编码规范（速查）
 

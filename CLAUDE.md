@@ -106,7 +106,7 @@ MCP server（self-host）：`uv run python mcp/server/server.py --host=127.0.0.1
 ## Claude Code 特有事项
 
 - **PostToolUse 钩子**（`.claude/settings.json` → `scripts/hooks/post_edit_ruff.py`）：每次编辑 .py
-  单文件即时 ruff 自动修复，残留问题通过 exit 2 回灌给 Claude 当场修复；
-  `server/`、`internal/` 等停滞/笔记目录自动跳过。
+  单文件即时 ruff 自动修复 + mypy 纳管范围内 dmypy 增量类型检查，残留问题通过 exit 2
+  回灌给 Claude 当场修复；`server/`、`internal/` 等停滞/笔记目录自动跳过。
 - **项目 skill**：`port-ragflow-commit`——跟进 ragflow 上游提交时必用。
 - `internal/*.md` 是用户本地笔记：可读可编辑，**绝不 git add**。
