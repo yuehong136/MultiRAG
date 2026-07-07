@@ -5,6 +5,7 @@ description = "基于RAG、Agent、Workflow体系赋能LLM应用"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
 dependencies = [
+    "aiohttp>=3.14.1",  # 显式下限：3.11.14 被 yank（aio-libs/aiohttp#10617 回归）；本为传递依赖
     "akshare>=1.15.78,<2.0.0",
     "alembic>=1.13.2",
     "anthropic==0.34.1",
@@ -199,6 +200,9 @@ test = [
 ]
 
 [tool.uv]
+# 工具链防漂：本地与 CI 必须同一 minor 的 uv（锁文件由 0.11.x 产出；
+# 升级 uv 时本地、CI 四处 pin、重锁三者同一提交完成）
+required-version = ">=0.11,<0.12"
 override-dependencies = [
     # CVE-2026-30922: Denial of Service via unbounded recursion in ASN.1 decoding (CVSS 7.5 HIGH)
     # pyasn1 < 0.6.3 is vulnerable; pulled in transitively via google-auth / rsa / pyasn1-modules

@@ -38,7 +38,7 @@ RUN apt update && apt -y install ca-certificates && \
     # 安装uv
     pip3 config set global.index-url https://mirrors.aliyun.com/pypi/simple && \
     pip3 config set global.trusted-host mirrors.aliyun.com; \
-    pipx install uv -i https://mirrors.aliyun.com/pypi/simple && \
+    pipx install "uv>=0.11,<0.12" -i https://mirrors.aliyun.com/pypi/simple && \
     # 添加Redis的GPG密钥和源
     curl -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg && \
     chmod 644 /usr/share/keyrings/redis-archive-keyring.gpg && \

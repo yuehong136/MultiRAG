@@ -25,10 +25,10 @@ jobs:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@v7
         with:
-          # 与 uv.lock（v1 schema）的产出版本对齐：CI 浮动装新版 uv 会让
-          # `uv lock --check` 因 schema 重写而误报漂移。升级 uv 时本地、
-          # 此处四个 pin、重锁 uv.lock 三者必须同一提交内完成。
-          version: "0.5.18"
+          # 与本地工具链、uv.lock 产出版本对齐（pyproject [tool.uv] required-version
+          # 同区间）。CI 浮动装新版 uv 会让 `uv lock --check` 因锁格式重写而误报漂移。
+          # 升级 uv 时本地、此处四个 pin、重锁 uv.lock 三者必须同一提交内完成。
+          version: "0.11.27"
           enable-cache: true
           cache-dependency-glob: uv.lock
       - run: uv sync --only-group dev --frozen
@@ -64,7 +64,7 @@ jobs:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@v7
         with:
-          version: "0.5.18"  # 与 uv.lock 同源，见 lint job 注释
+          version: "0.11.27"  # 与 uv.lock 同源，见 lint job 注释
           enable-cache: true
           cache-dependency-glob: uv.lock
       # 全量同步：mypy 需要真实三方包的内联类型
@@ -89,7 +89,7 @@ jobs:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@v7
         with:
-          version: "0.5.18"  # 与 uv.lock 同源，见 lint job 注释
+          version: "0.11.27"  # 与 uv.lock 同源，见 lint job 注释
           enable-cache: true
           cache-dependency-glob: uv.lock
       - name: uv sync (retry)
@@ -187,7 +187,7 @@ jobs:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@v7
         with:
-          version: "0.5.18"  # 与 uv.lock 同源，见 lint job 注释
+          version: "0.11.27"  # 与 uv.lock 同源，见 lint job 注释
           enable-cache: true
           cache-dependency-glob: uv.lock
       - name: uv sync (retry)
