@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## ⚠ 权威指针（最重要的一条）
+
+**验证流程、写测试规范、mypy 棘轮、配置与资源访问规范、编码规范速查——一切以根目录
+[AGENTS.md](AGENTS.md) 为准**，它是唯一权威来源，本文件不再重复其内容。
+最低要求：任何编码任务完成前 `make verify` 必须全绿（`make help` 列出全部验证目标）；
+修根因，不改门禁。
+
 ## Project Overview
 
 MultiRAG is an enterprise-grade RAG (Retrieval-Augmented Generation) backend engine based on deep document understanding. It provides:
@@ -23,6 +30,7 @@ MultiRAG is an enterprise-grade RAG (Retrieval-Augmented Generation) backend eng
   - `llm_app.py` - LLM model management
   - `workflow_app.py` - Workflow execution
   - `guard_*.py` - Security guard and content filtering
+  - `restful_apis/` - RESTful `/api/v1` 端点（新代码优先落这里）
 - **Services**: Business logic in `api/db/services/`
 - **Models**: Database models in `api/db/db_models.py`
 
@@ -50,80 +58,30 @@ MultiRAG is an enterprise-grade RAG (Retrieval-Augmented Generation) backend eng
 ### Data Connectors (`/common/data_source/`)
 - Connectors for SharePoint, Dropbox, Jira, Notion, Slack, Gmail, Teams, Discord, Google Drive, Azure Blob
 
-## 验证体系（权威文档：AGENTS.md）
+### 停滞的并行实现（不在门禁范围，活代码禁止依赖）
+- `server/`（旧 Python 实现）与 Go 移植（`cmd/` + Go 侧 `internal/`）
 
-**任何编码任务完成前必须 `make verify` 全绿**（= ruff format/check + mypy + 单元测试）。
-完整的验证金字塔、写测试规范、mypy 棘轮策略见 **AGENTS.md**——它是验证流程的唯一权威来源。
+## Key Configuration Files
+
+- `configs/service_conf.yaml` - Main service configuration (databases, LLM, storage, authentication)
+- `configs/local.service_conf.yaml` - 本地覆盖（gitignored，按顶层 section 整体替换）
+- `configs/llm_factories.json` - LLM provider factory configurations
+- `configs/es_mapping.json` / `configs/infinity_mapping.json` - Vector DB index mappings
+- `pyproject.toml` - Python dependencies and project metadata（含 ruff/mypy/coverage/import-linter 门禁配置）
+- `docker/.env` - Docker environment variables
+- `alembic.ini` + `configs/alembic/` - Database migration configuration
+
+## Database Engines
+
+MultiRAG supports multiple vector database backends:
+
+- **Vector**: Milvus（默认）/ Elasticsearch / Infinity / OpenSearch——`configs/service_conf.yaml` 对应 section
+- **Relational**: PostgreSQL（默认）/ MySQL / VastBase
+- **Storage**: MinIO（默认）/ AWS S3 / Azure Blob / Aliyun OSS
+
+## Docker Operations（AGENTS.md 未覆盖的部分）
 
 ```bash
-make help          # 列出全部验证目标
-make verify        # Tier 0+1+2：编码后标准门禁（必跑）
-make fix           # 自动修复 lint/格式（不要手工排版）
-make integration   # Tier 3：需要 docker compose base 服务
-make smoke         # Tier 4：对运行中的服务器打健康端点
-```
-
-修根因，不改门禁：禁止删/跳测试、扩 ruff ignore、扩 mypy exclude 来换绿。
-
-## Common Development Commands
-
-### Package Management
-```bash
-# Install dependencies (dev group, locked)
-make install    # = uv sync --group dev --frozen
-
-# Download model dependencies
-uv run python download_deps.py
-```
-
-### Running the Application
-```bash
-# Start API server
-uv run python -m api.multirag_server
-
-# Start API server in debug mode
-uv run python -m api.multirag_server --debug
-
-# Start task executor
-uv run python -m core.svr.task_executor
-
-# Start task executor with worker ID
-uv run python -m core.svr.task_executor worker_001
-
-# Start MCP server (self-host mode)
-uv run python mcp/server/server.py --host=127.0.0.1 --port=9382 --mode=self-host --api-key=<your-key>
-```
-
-### Testing
-```bash
-# 单元测试（无需外部服务；tests/unit 平铺，纯 monkeypatch 风格）
-make test
-
-# 单元 + 集成（集成测试在服务缺失时自动跳过）
-make test-all
-
-# 覆盖率报告
-make coverage
-
-# 跑单个测试文件
-uv run pytest tests/unit/test_image_filter.py -q
-```
-
-### Development Environment Setup
-```bash
-# Set environment variables for development
-export HF_ENDPOINT=https://hf-mirror.com
-export PYTHONPATH=$(pwd)
-
-# Configure hosts for local development (add to /etc/hosts)
-# 127.0.0.1 es01 infinity mysql minio redis
-```
-
-### Docker Operations
-```bash
-# Start base services only (databases, Redis, MinIO)
-docker compose -f docker/docker-compose-base.yml up -d
-
 # Full Docker deployment
 cd docker && docker compose up -d
 
@@ -141,75 +99,14 @@ docker build --build-arg LIGHTEN=1 -t multirag:slim .
 docker logs -f multirag-server
 ```
 
-## Key Configuration Files
+其他入口（基础服务、API server、task executor 的启动命令）见 AGENTS.md「服务与运行」。
+MCP server（self-host）：`uv run python mcp/server/server.py --host=127.0.0.1 --port=9382 --mode=self-host --api-key=<your-key>`；
+模型依赖下载：`uv run python download_deps.py`。
 
-- `configs/service_conf.yaml` - Main service configuration (databases, LLM, storage, authentication)
-- `configs/llm_factories.json` - LLM provider factory configurations
-- `configs/mapping.json` - General mapping configurations
-- `configs/es_mapping.json` - Elasticsearch index mapping
-- `configs/infinity_mapping.json` - Infinity vector DB mapping
-- `pyproject.toml` - Python dependencies and project metadata
-- `docker/.env` - Docker environment variables
-- `alembic.ini` - Database migration configuration
+## Claude Code 特有事项
 
-## Database Engines
-
-MultiRAG supports multiple vector database backends:
-
-### Vector Databases
-- **Milvus** (default): Set in `configs/service_conf.yaml` under `milvus` section
-- **Elasticsearch**: Configure under `elasticsearch` section
-- **Infinity**: Lightweight option, configure under `infinity` section
-- **OpenSearch**: Enterprise option, configure under `opensearch` section
-
-### Relational Databases
-- **PostgreSQL** (default): Configure under `postgresql` section
-- **MySQL**: Alternative relational backend
-- **VastBase**: Vector-enhanced database option
-
-### Storage
-- **MinIO** (default): S3-compatible object storage
-- **AWS S3**: Cloud storage option
-- **Azure Blob**: Azure storage integration
-- **Alibaba OSS**: Aliyun storage option
-
-## Development Environment Requirements
-
-- Python 3.12+ (version bound: >=3.12,<3.15)
-- uv package manager
-- Docker & Docker Compose
-- 16GB+ RAM, 50GB+ disk space
-
-## Code Style Guidelines
-
-### Python 3.12+
-
-| ❌ 避免 | ✅ 推荐 |
-|--------|--------|
-| `List[str]`, `Dict[str, Any]` | `list[str]`, `dict[str, Any]` |
-| `Optional[str]`, `Union[str, int]` | `str \| None`, `str \| int` |
-
-### FastAPI 0.128+
-
-| ❌ 弃用 | ✅ 推荐 |
-|--------|--------|
-| `Query(..., regex="pattern")` | `Query(..., pattern="pattern")` |
-| `Body(..., example={...})` | `Body(..., examples=[{...}])` |
-| `@app.on_event("startup")` | `FastAPI(lifespan=lifespan)` |
-
-### Pydantic V2
-
-| ❌ 弃用 | ✅ 推荐 |
-|--------|--------|
-| `class Config:` 内部类 | `model_config = ConfigDict(...)` |
-| `.dict()` | `.model_dump()` |
-| `.parse_obj()` | `.model_validate()` |
-| `@validator` | `@field_validator` |
-
-### SQLAlchemy 2.0
-
-| ❌ 弃用 | ✅ 推荐 |
-|--------|--------|
-| `Column(String)` | `name: Mapped[str] = mapped_column(String)` |
-| `session.query(M).filter(...)` | `select(M).where(...)` |
-| `select(M).where(M.id == pk)` | `session.get(Model, pk)` — 主键查询，利用identity map |
+- **PostToolUse 钩子**（`.claude/settings.json` → `scripts/hooks/post_edit_ruff.py`）：每次编辑 .py
+  单文件即时 ruff 自动修复，残留问题通过 exit 2 回灌给 Claude 当场修复；
+  `server/`、`internal/` 等停滞/笔记目录自动跳过。
+- **项目 skill**：`port-ragflow-commit`——跟进 ragflow 上游提交时必用。
+- `internal/*.md` 是用户本地笔记：可读可编辑，**绝不 git add**。
