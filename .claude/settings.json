@@ -11,5 +11,29 @@
         ]
       }
     ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(make verify)",
+      "Bash(make lint)",
+      "Bash(make typecheck)",
+      "Bash(make test)",
+      "Bash(make test-all)",
+      "Bash(make coverage)",
+      "Bash(make fix)",
+      "Bash(make integration)",
+      "Bash(make smoke)",
+      "Bash(make help)",
+      "Bash(uv run ruff *)",
+      "Bash(uv run --no-sync ruff *)",
+      "Bash(uv run pytest *)",
+      "Bash(uv run --no-sync pytest *)",
+      "Bash(uv run mypy *)",
+      "Bash(uv run --no-sync mypy *)",
+      "Bash(uv lock --check)",
+      "Bash(go build *)",
+      "Bash(go vet *)",
+      "Bash(git fetch *)"
+    ]
   }
 }
