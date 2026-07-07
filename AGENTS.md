@@ -98,6 +98,32 @@ local.service_conf.yaml > service_conf.yaml）→ `common/resources.py`（有状
    api 服务层（db/utils）不依赖路由层（apps）；任何代码不依赖停滞的 server/。
    违规时调整依赖方向（下沉共享逻辑 / 注入依赖），禁止往豁免清单加条目。
 
+## 异步 SQLAlchemy 编码规范（新代码从严）
+
+API 进程的终态是纯异步（AsyncSession）。基建已就位：`api/db/db_models.py` 的
+`async_engine` / `async_session_factory`（`expire_on_commit=False` 工厂级强制）/
+`get_async_db`，`Base` 带 `AsyncAttrs`；示范端点 `GET /api/v1/system/healthz`。
+
+**共存期规则**：新写的 service 一律 async-first（签名 `db: AsyncSession`，handler
+`async def` + `Depends(get_async_db)`）；同一请求内**禁止混用**同步/异步两种 session
+（两个连接、两个事务，一致性破坏）——路由要么整体走 `get_db`，要么整体走 `get_async_db`。
+
+| ❌ 禁止 | ✅ 规范 | 原因 |
+|---|---|---|
+| 隐式 lazy load（`obj.children` 直接触发 SQL） | 查询时 `selectinload()`/`joinedload()` 显式预载；新模型 relationship 默认 `lazy="raise_on_sql"` | 异步下隐式 IO 直接抛 `MissingGreenlet`；显式预载也消灭 N+1 |
+| commit 后访问过期属性 | `expire_on_commit=False`（工厂级强制）+ 确需新值时 `await session.refresh(obj)` | 同上 |
+| 迁移期确需延迟加载 | `await obj.awaitable_attrs.children`（AsyncAttrs） | 显式可 await 的逃生门 |
+| 跨 asyncio task 共享同一 `AsyncSession`；`gather()` 里多协程共用一个 session | 一个请求/一个 task 一个 session；并发查询各开 session 或改串行 | AsyncSession **非 task-safe**，共享会损坏事务状态 |
+| `session.query(...)`（1.x 风格） | `select(M).where(...)` + `await session.execute()` / `await session.scalars()` | 既有约定延续 |
+| 主键查询写 select | `await session.get(Model, pk)` | 利用 identity map（既有约定的 async 版） |
+| 大结果集 `(await session.scalars(...)).all()` | `async for row in await session.stream_scalars(stmt)` | 流式，控内存 |
+| async 函数里 `time.sleep` / `requests` / 同步 redis | `asyncio.sleep` / `httpx.AsyncClient` / `redis.asyncio` | ruff `ASYNC` 规则强制 |
+| 新代码调 `session.run_sync(...)` | 仅迁移期桥接遗留同步逻辑允许，带 `# TODO(async-phase4)` 标记 | 收口阶段验收要求清零 |
+
+测试基建：unit 层 `async_db` fixture（未绑定 `AsyncSession`，对齐 `db` fixture 模式）、
+`client` 基线已覆盖 `get_async_db`；integration 层 `bootstrapped_async_engine`
+（示范：`tests/integration/test_async_engine.py`）。
+
 ## 服务与运行
 
 ```bash

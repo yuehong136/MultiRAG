@@ -13,14 +13,15 @@ from typing import Annotated
 from fastapi import APIRouter, Body, Depends, Query, Response
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.apps import manager
-from api.db.db_models import APIToken, get_db
+from api.db.db_models import APIToken, get_async_db, get_db
 from api.db.services.api_service import APITokenService
 from api.db.services.user_service import UserTenantService
 from api.utils.api_utils import generate_confirmation_token, get_data_error_result, get_json_result, server_error_response
-from api.utils.health_utils import run_health_checks
+from api.utils.health_utils import run_health_checks_async
 from common.time_utils import current_timestamp, datetime_format
 from common.versions import get_multirag_version
 
@@ -69,8 +70,9 @@ def version(user=Depends(manager)):
 
 
 @router.get("/system/healthz", summary="健康检查", response_description="返回系统健康状态")
-def healthz(response: Response):
-    result, all_ok = run_health_checks()
+async def healthz(response: Response, db: AsyncSession = Depends(get_async_db)):
+    """纯异步示范端点：DB 探针走 AsyncSession 全链路，其余组件检查经线程池执行。"""
+    result, all_ok = await run_health_checks_async(db)
     response.status_code = 200 if all_ok else 500
     return result
 

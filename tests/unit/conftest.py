@@ -126,8 +126,9 @@ def client(client_user):
 
     - session 级缓存：api.apps 冷导入约 46s/559 路由，整个会话只付一次；
       导入惰性化在 fixture 体内，只跑纯逻辑测试文件时零成本；
-    - 基线 dependency_overrides：``get_db`` → 未绑定 Session（不连库）、
-      登录 ``manager`` → ``client_user``、``current_tenant_id`` → "tenant-unit"；
+    - 基线 dependency_overrides：``get_db``/``get_async_db`` → 未绑定
+      Session/AsyncSession（不连库）、登录 ``manager`` → ``client_user``、
+      ``current_tenant_id`` → "tenant-unit"；
       api/apps/deps.py 的资源依赖无需覆盖——注册表里已是预置 stub，
       未显式打桩就使用会以 NotImplementedError 现形（个别测试按需
       ``client.app.dependency_overrides[deps.get_storage] = ...`` 覆盖）；
@@ -136,14 +137,16 @@ def client(client_user):
     - per-test 追加覆盖由 ``_restore_dependency_overrides`` 自动回滚。
     """
     from fastapi.testclient import TestClient
+    from sqlalchemy.ext.asyncio import AsyncSession
 
     import api.apps as api_apps
-    from api.db.db_models import get_db
+    from api.db.db_models import get_async_db, get_db
     from api.utils import api_utils
 
     app = api_apps.app
     baseline = {
         get_db: lambda: Session(),
+        get_async_db: lambda: AsyncSession(),
         api_apps.manager: lambda: client_user,
         api_utils.current_tenant_id: lambda: "tenant-unit",
     }
@@ -157,6 +160,14 @@ def client(client_user):
 def db():
     """未绑定引擎的 SQLAlchemy Session：满足 beartype 的 `db: Session` 校验，不会真正连库。"""
     return Session()
+
+
+@pytest.fixture
+def async_db():
+    """未绑定引擎的 AsyncSession：满足 beartype 的 `db: AsyncSession` 校验，不会真正连库。"""
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    return AsyncSession()
 
 
 @pytest.fixture

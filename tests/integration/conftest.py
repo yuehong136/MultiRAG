@@ -285,3 +285,17 @@ def bootstrapped_engine(pg_scratch_engine, alembic_cfg):
         cfg.attributes["connection"] = conn
         command.stamp(cfg, "head")
     return pg_scratch_engine
+
+
+@pytest.fixture
+async def bootstrapped_async_engine(bootstrapped_engine):
+    """bootstrapped_engine 的异步变体：同一 scratch 库、同一 psycopg3 驱动的 AsyncEngine。
+
+    function 级（与 asyncio_default_fixture_loop_scope 匹配）：AsyncEngine 创建
+    本身不建连接，按测试创建/释放零成本。
+    """
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    engine = create_async_engine(bootstrapped_engine.url)
+    yield engine
+    await engine.dispose()

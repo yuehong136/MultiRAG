@@ -3,6 +3,7 @@ import json
 from types import SimpleNamespace
 
 from fastapi import Response
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.apps.restful_apis import config_api, system_api
@@ -38,16 +39,22 @@ def test_system_restful_ping_returns_pong():
 
 
 def test_system_restful_healthz_sets_status(monkeypatch):
-    monkeypatch.setattr(system_api, "run_health_checks", lambda: ({"status": "ok"}, True))
+    async def _ok(_db):
+        return {"status": "ok"}, True
+
+    async def _degraded(_db):
+        return {"status": "degraded"}, False
+
+    monkeypatch.setattr(system_api, "run_health_checks_async", _ok)
     response = Response()
 
-    assert system_api.healthz(response) == {"status": "ok"}
+    assert asyncio.run(system_api.healthz(response, db=AsyncSession())) == {"status": "ok"}
     assert response.status_code == 200
 
-    monkeypatch.setattr(system_api, "run_health_checks", lambda: ({"status": "degraded"}, False))
+    monkeypatch.setattr(system_api, "run_health_checks_async", _degraded)
     response = Response()
 
-    assert system_api.healthz(response) == {"status": "degraded"}
+    assert asyncio.run(system_api.healthz(response, db=AsyncSession())) == {"status": "degraded"}
     assert response.status_code == 500
 
 

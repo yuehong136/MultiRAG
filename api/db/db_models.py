@@ -6,6 +6,7 @@ import os
 import sys
 import time
 import uuid
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -18,6 +19,7 @@ from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, Integer, Stri
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import DisconnectionError, OperationalError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncAttrs, AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.inspection import inspect as sa_inspect
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, object_session, sessionmaker
 from sqlalchemy.orm.attributes import get_history
@@ -207,8 +209,25 @@ def receive_close(dbapi_conn, connection_record):
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, expire_on_commit=False, bind=engine)
 
 
-class Base(DeclarativeBase):
-    """SQLAlchemy 2.0 风格的声明式基类"""
+# ==================== 异步引擎（纯异步改造 Phase 0 基建） ====================
+# 同一 URL、同一 psycopg3 驱动同时服务同步与异步引擎；池参数与 libpq 连接参数
+# 复用同步侧配置。仅 PostgreSQL 后端构建（pymysql/pysqlite 无异步支持，
+# asyncmy/aiosqlite 属后续 Phase 决策）。
+
+
+def _build_async_engine() -> AsyncEngine | None:
+    if not DATABASE_URL.startswith("postgresql+psycopg://"):
+        return None
+    return create_async_engine(DATABASE_URL, **engine_kwargs)
+
+
+async_engine = _build_async_engine()
+# expire_on_commit=False 是异步下的强制项：避免 commit 后属性访问触发隐式 IO
+async_session_factory = async_sessionmaker(async_engine, expire_on_commit=False) if async_engine is not None else None
+
+
+class Base(AsyncAttrs, DeclarativeBase):
+    """SQLAlchemy 2.0 风格的声明式基类（AsyncAttrs 提供 awaitable_attrs 显式延迟加载逃生门）"""
 
     pass
 
@@ -272,6 +291,24 @@ def get_db():
         raise
     finally:
         db.close()
+
+
+async def get_async_db() -> AsyncIterator[AsyncSession]:
+    """
+    FastAPI 依赖注入：提供异步数据库会话（与 get_db 并存至纯异步改造收口）
+
+    - 事务边界由路由/service 显式控制（session.begin() 或显式 commit）
+    - 异常时自动回滚；async with 保证会话关闭
+    """
+    if async_session_factory is None:
+        raise RuntimeError(f"异步引擎仅支持 PostgreSQL 后端，当前 DB_TYPE={DATABASE_TYPE} 无异步驱动（asyncmy/aiosqlite 接入见纯异步改造规范）")
+    async with async_session_factory() as session:
+        try:
+            yield session
+        except Exception as e:
+            await session.rollback()
+            logging.debug(f"[数据库] 异步请求异常，事务已回滚: {type(e).__name__}")
+            raise
 
 
 # ==================== 连接池状态监控工具 ====================

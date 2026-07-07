@@ -6,9 +6,11 @@ from typing import Any
 
 import requests
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.db_models import engine, get_pool_status
 from common import settings
+from common.misc_utils import thread_pool_exec
 from core.utils.es_conn import ESConnection
 from core.utils.infinity_conn import InfinityConnection
 from core.utils.milvus_conn import MilvusConnection
@@ -478,30 +480,14 @@ def check_chat() -> tuple[bool, dict]:
         return False, {"elapsed": f"{(timer() - st) * 1000.0:.1f}", "error": str(e)}
 
 
-def run_health_checks() -> tuple[dict, bool]:
-    """
-    运行所有健康检查
-
-    Returns:
-        tuple[dict, bool]: (健康检查结果, 是否全部正常)
-            - 结果包含各个组件的状态 (ok/nok)
-            - 如果关键组件（db, chat）都正常，则返回 True
-    """
-    result: dict[str, Any] = {}
-
-    # 关键组件检查
-    db_ok, db_meta = check_db()
+def _run_non_db_checks(result: dict[str, Any]) -> None:
+    """除 DB 探针外的组件检查，结果写入传入的 result（同步实现，异步链路经线程池调用）。"""
     chat_ok, chat_meta = check_chat()
-
-    result["db"] = _ok_nok(db_ok)
-    if not db_ok:
-        result.setdefault("_meta", {})["db"] = db_meta
-
     result["chat"] = _ok_nok(chat_ok)
     if not chat_ok:
         result.setdefault("_meta", {})["chat"] = chat_meta
 
-    # 数据库连接池检查（新增）
+    # 数据库连接池检查
     try:
         pool_ok, pool_meta = check_db_pool()
         result["db_pool"] = _ok_nok(pool_ok)
@@ -535,7 +521,55 @@ def run_health_checks() -> tuple[dict, bool]:
     except Exception:
         result["storage"] = "nok"
 
+
+def _finalize_health_result(result: dict[str, Any]) -> tuple[dict, bool]:
     # 整体健康状态：只要关键组件（db, chat）正常即可
     all_ok = (result.get("db") == "ok") and (result.get("chat") == "ok")
     result["status"] = "ok" if all_ok else "nok"
     return result, all_ok
+
+
+def run_health_checks() -> tuple[dict, bool]:
+    """
+    运行所有健康检查
+
+    Returns:
+        tuple[dict, bool]: (健康检查结果, 是否全部正常)
+            - 结果包含各个组件的状态 (ok/nok)
+            - 如果关键组件（db, chat）都正常，则返回 True
+    """
+    result: dict[str, Any] = {}
+
+    db_ok, db_meta = check_db()
+    result["db"] = _ok_nok(db_ok)
+    if not db_ok:
+        result.setdefault("_meta", {})["db"] = db_meta
+
+    _run_non_db_checks(result)
+    return _finalize_health_result(result)
+
+
+async def check_db_async(session: AsyncSession) -> tuple[bool, dict]:
+    """check_db 的异步变体：经注入的 AsyncSession 探活（healthz 异步链路）。"""
+    st = timer()
+    try:
+        await session.execute(text("SELECT 1"))
+        return True, {"elapsed": f"{(timer() - st) * 1000.0:.1f}"}
+    except Exception as e:
+        return False, {"elapsed": f"{(timer() - st) * 1000.0:.1f}", "error": str(e)}
+
+
+async def run_health_checks_async(db: AsyncSession) -> tuple[dict, bool]:
+    """
+    run_health_checks 的异步变体：DB 探针走 AsyncSession（事件循环原生），
+    其余同步组件检查经线程池执行，不阻塞事件循环。结果契约与同步版一致。
+    """
+    result: dict[str, Any] = {}
+
+    db_ok, db_meta = await check_db_async(db)
+    result["db"] = _ok_nok(db_ok)
+    if not db_ok:
+        result.setdefault("_meta", {})["db"] = db_meta
+
+    await thread_pool_exec(_run_non_db_checks, result)
+    return _finalize_health_result(result)
