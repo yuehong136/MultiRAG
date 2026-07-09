@@ -107,6 +107,17 @@ class LLMBundle(LLM4Tenant):
             raise ValueError(f"Model config for {self.model_config.get('llm_name')} is missing tenant model id")
         return bool(TenantLLMService.increase_usage_by_id(model_id, used_tokens))
 
+    async def _record_usage_async(self, used_tokens: int) -> bool:
+        """_record_usage 的异步版:async 调用链(SSE 流式等)内记账不阻塞事件循环。"""
+        if not isinstance(used_tokens, int) or used_tokens <= 0:
+            return True
+        if self.model_config.get("llm_factory") == "Builtin":
+            return True
+        model_id = self.model_config.get("id")
+        if model_id is None:
+            raise ValueError(f"Model config for {self.model_config.get('llm_name')} is missing tenant model id")
+        return bool(await TenantLLMService.increase_usage_by_id_async(model_id, used_tokens))
+
     def encode(self, texts: list):
         if self.langfuse:
             generation = self.langfuse.start_generation(trace_context=self.trace_context, name="encode", model=self.llm_name, input={"texts": texts})
@@ -468,7 +479,7 @@ class LLMBundle(LLM4Tenant):
         if not self.verbose_tool_use:
             txt = re.sub(r"<tool_call>.*?</tool_call>", "", txt, flags=re.DOTALL)
 
-        if used_tokens and not self._record_usage(used_tokens):
+        if used_tokens and not await self._record_usage_async(used_tokens):
             logging.error(f"LLMBundle.async_chat can't update token usage for {self.tenant_id}/CHAT llm_name: {self.llm_name}, used_tokens: {used_tokens}")
 
         if generation:
@@ -520,7 +531,7 @@ class LLMBundle(LLM4Tenant):
                     generation.end()
                 raise
 
-            if total_tokens and not self._record_usage(total_tokens):
+            if total_tokens and not await self._record_usage_async(total_tokens):
                 logging.error(f"LLMBundle.async_chat_streamly can't update token usage for {self.tenant_id}/CHAT llm_name: {self.llm_name}, used_tokens: {total_tokens}")
 
             if generation:
@@ -570,7 +581,7 @@ class LLMBundle(LLM4Tenant):
                     generation.end()
                 raise
 
-            if total_tokens and not self._record_usage(total_tokens):
+            if total_tokens and not await self._record_usage_async(total_tokens):
                 logging.error(f"LLMBundle.async_chat_streamly_delta can't update token usage for {self.tenant_id}/CHAT llm_name: {self.llm_name}, used_tokens: {total_tokens}")
 
             if generation:

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -8,7 +9,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from api.db.db_models import LLMFactories, TenantLLM, db_connection
+from api.db.db_models import LLMFactories, TenantLLM, async_session_factory, db_connection
 from api.db.services.common_service import CommonService
 from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.user_service import TenantService
@@ -324,6 +325,29 @@ class TenantLLMService(CommonService):
                 return result.rowcount
         except Exception as e:
             logging.error(f"TenantLLMService.increase_usage_by_id unexpected error (ignored), id={tenant_model_id}, used_tokens={used_tokens}: {e}")
+            return 0
+
+    @classmethod
+    async def increase_usage_by_id_async(cls, tenant_model_id: int | None, used_tokens: int) -> int:
+        """increase_usage_by_id 的异步版:async 调用链(SSE 流式等)内记账不阻塞事件循环。
+
+        与同步版同语义:独立短会话、best-effort 吞异常;非 PG 后端无异步引擎时
+        退回线程池跑同步版。
+        """
+        try:
+            if tenant_model_id is None or not isinstance(used_tokens, int) or used_tokens <= 0:
+                return 0
+
+            if async_session_factory is None:
+                return await asyncio.to_thread(cls.increase_usage_by_id, tenant_model_id, used_tokens)
+
+            async with async_session_factory() as usage_db:
+                stmt = update(cls.model).where(cls.model.id == tenant_model_id).values(used_tokens=cls.model.used_tokens + used_tokens)
+                result = await usage_db.execute(stmt)
+                await usage_db.commit()
+                return result.rowcount
+        except Exception as e:
+            logging.error(f"TenantLLMService.increase_usage_by_id_async unexpected error (ignored), id={tenant_model_id}, used_tokens={used_tokens}: {e}")
             return 0
 
     @classmethod
