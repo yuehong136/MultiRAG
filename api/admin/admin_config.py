@@ -6,7 +6,9 @@
 @desc: SQLAdmin 配置和初始化
 """
 
+import inspect
 import logging
+from collections.abc import Callable
 
 from fastapi import FastAPI
 from sqladmin import Admin
@@ -70,6 +72,35 @@ from api.db.db_models import engine
 from common import settings
 
 
+class _BeartypeTolerantAdmin(Admin):
+    """sqladmin 0.28 × beartype 0.22 的兼容垫片。
+
+    beartype 会（有意地，见其 utilcacheobjattr.py 注释）把每个被装饰类的
+    ``__sizeof__`` 换成纯 Python 包装函数当作属性藏身处；sqladmin 0.28 的
+    ``_find_decorated_funcs`` 对实例全部方法按 ``inspect.getsourcelines``
+    排序，unwrap 该包装后落到 C 层 method_descriptor 直接 TypeError。
+    这里复刻上游实现、仅把排序键换成可容错版本（拿不到源码行的成员按 -1
+    参排——它们本就不是被 @expose/@action 装饰的目标，顺序无影响）。
+    sqladmin 后续版本若自带容错可删除本垫片。
+    """
+
+    @staticmethod
+    def _find_decorated_funcs(
+        view: type,
+        view_instance: object,
+        handle_fn: Callable,
+    ) -> None:
+        def _source_line_or_default(item: tuple[str, object]) -> int:
+            try:
+                return inspect.getsourcelines(item[1])[1]  # type: ignore[arg-type]
+            except (TypeError, OSError):
+                return -1
+
+        funcs = inspect.getmembers(view_instance, predicate=inspect.ismethod)
+        for _, func in sorted(funcs, key=_source_line_or_default, reverse=True):
+            handle_fn(func, view, view_instance)
+
+
 def setup_admin(app: FastAPI) -> Admin:
     """
     配置并初始化SQLAdmin管理后台
@@ -84,7 +115,7 @@ def setup_admin(app: FastAPI) -> Admin:
     authentication_backend = AdminAuth(secret_key=settings.SECRET_KEY)
 
     # 创建Admin实例
-    admin = Admin(
+    admin = _BeartypeTolerantAdmin(
         app=app,
         engine=engine,
         authentication_backend=authentication_backend,
