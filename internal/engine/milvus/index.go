@@ -23,14 +23,14 @@ import (
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 )
 
-// CreateIndex creates a collection in Milvus
-func (e *milvusEngine) CreateIndex(ctx context.Context, indexName, datasetID string, vectorSize int, parserID string) error {
+// CreateDataset creates a collection in Milvus
+func (e *milvusEngine) CreateDataset(ctx context.Context, indexName, datasetID string, vectorSize int, parserID string) error {
 	// TODO: Implement collection creation with schema (vectorSize/parserID aware)
-	return fmt.Errorf("milvus CreateIndex not yet implemented")
+	return fmt.Errorf("milvus CreateDataset not yet implemented")
 }
 
-// CreateDocMetaIndex creates the document metadata collection in Milvus
-func (e *milvusEngine) CreateDocMetaIndex(ctx context.Context, indexName string) error {
+// CreateMetadata creates the document metadata collection in Milvus
+func (e *milvusEngine) CreateMetadata(ctx context.Context, indexName string) error {
 	// TODO: implement doc meta index for Milvus
 	return nil
 }
@@ -59,16 +59,22 @@ func (e *milvusEngine) UpdateMetadata(ctx context.Context, docID string, kbID st
 	return nil
 }
 
-// DeleteIndex drops a collection in Milvus
-func (e *milvusEngine) DeleteIndex(ctx context.Context, indexName string) error {
+// DropTable drops a collection in Milvus
+func (e *milvusEngine) DropTable(ctx context.Context, indexName string) error {
 	return e.client.DropCollection(ctx, milvusclient.NewDropCollectionOption(indexName))
 }
 
-// IndexExists checks if a collection exists in Milvus
-func (e *milvusEngine) IndexExists(ctx context.Context, indexName string) (bool, error) {
+// TableExists checks if a collection exists in Milvus
+func (e *milvusEngine) TableExists(ctx context.Context, indexName string) (bool, error) {
 	has, err := e.client.HasCollection(ctx, milvusclient.NewHasCollectionOption(indexName))
 	if err != nil {
 		return false, err
 	}
 	return has, nil
+}
+
+// Delete deletes rows from either a dataset collection or metadata collection in Milvus
+func (e *milvusEngine) Delete(ctx context.Context, condition map[string]interface{}, indexName string, datasetID string) (int64, error) {
+	// TODO: implement delete for Milvus
+	return 0, nil
 }

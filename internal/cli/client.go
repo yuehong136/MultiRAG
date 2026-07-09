@@ -193,14 +193,6 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 		return c.ListTokens(cmd)
 	case "drop_token":
 		return c.DropToken(cmd)
-	case "create_index":
-		return c.CreateIndex(cmd)
-	case "drop_index":
-		return c.DropIndex(cmd)
-	case "create_doc_meta_index":
-		return c.CreateDocMetaIndex(cmd)
-	case "drop_doc_meta_index":
-		return c.DropDocMetaIndex(cmd)
 	case "list_available_providers":
 		return c.ListAvailableProviders(cmd)
 	case "show_provider":
@@ -241,22 +233,32 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 		return c.UseModel(cmd)
 	case "show_current_model":
 		return c.ShowCurrentModel(cmd)
-	// Context Engine commands (SQL-parser path)
-	case "ce_ls":
-		return c.CEList(cmd)
-	case "ce_search":
-		return c.CESearch(cmd)
-	// Internal CLI for GO
+	// Dataset, metadata commands
+	case "create_dataset_table":
+		return c.CreateDatasetInDocEngine(cmd)
+	case "drop_dataset_table":
+		return c.DropDatasetInDocEngine(cmd)
+	case "create_metadata_table":
+		return c.CreateMetadataInDocEngine(cmd)
+	case "drop_metadata_table":
+		return c.DropMetadataInDocEngine(cmd)
 	case "insert_dataset_from_file":
 		return c.InsertDatasetFromFile(cmd)
 	case "insert_metadata_from_file":
 		return c.InsertMetadataFromFile(cmd)
 	case "update_chunk":
 		return c.UpdateChunk(cmd)
-	case "rm_tags":
-		return c.RmTags(cmd)
 	case "set_meta":
 		return c.SetMeta(cmd)
+	case "rm_tags":
+		return c.RmTags(cmd)
+	case "remove_chunks":
+		return c.RemoveChunks(cmd)
+	// Context Engine commands (SQL-parser path)
+	case "ce_ls":
+		return c.CEList(cmd)
+	case "ce_search":
+		return c.CESearch(cmd)
 	// TODO: Implement other user commands
 	default:
 		return nil, fmt.Errorf("command '%s' would be executed with API", cmd.Type)

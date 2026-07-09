@@ -1179,12 +1179,14 @@ SQL Commands (User Mode):
   USE MODEL 'provider/instance/model';                   - Set current model for chat
   CHAT 'message';                                        - Chat using current model
   CHAT 'provider/instance/model' 'message';              - Chat with specified model
-  CREATE INDEX FOR DATASET 'name' VECTOR_SIZE N;         - Create index for dataset
-  DROP INDEX FOR DATASET 'name';                         - Drop index for dataset
-  CREATE INDEX DOC_META;                                 - Create doc meta index
-  DROP INDEX DOC_META;                                   - Drop doc meta index
+  CREATE DATASET TABLE 'name' VECTOR SIZE N;             - Create dataset table in doc engine
+  DROP DATASET TABLE 'name';                             - Drop dataset table in doc engine
+  CREATE METADATA TABLE;                                 - Create doc metadata table
+  DROP METADATA TABLE;                                   - Drop doc metadata table
   UPDATE CHUNK 'id' OF DATASET 'name' SET '{...}';       - Update chunk fields (JSON)
   REMOVE TAGS 'tag1','tag2' FROM DATASET 'name';         - Remove tags from a dataset
+  REMOVE CHUNKS 'id1','id2' FROM DOCUMENT 'doc_id';      - Remove chunks from a document
+  REMOVE ALL CHUNKS FROM DOCUMENT 'doc_id';              - Remove all chunks of a document
   SET METADATA OF DOCUMENT 'doc_id' TO '{...}';          - Set/merge document metadata (JSON)
 
 SQL Commands (Admin Mode):

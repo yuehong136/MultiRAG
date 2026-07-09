@@ -216,8 +216,10 @@ func (p *Parser) parseCreateCommand() (*Command, error) {
 		return p.parseCreateChat()
 	case TokenToken:
 		return p.parseCreateToken()
-	case TokenIndex:
-		return p.parseCreateIndex()
+	case TokenDatasetTable:
+		return p.parseCreateDatasetTable()
+	case TokenMetadata:
+		return p.parseCreateMetadataTable()
 	case TokenProvider:
 		return p.parseCreateProviderInstance()
 	default:
@@ -315,32 +317,10 @@ func (p *Parser) parseCreateToken() (*Command, error) {
 	return cmd, nil
 }
 
-// parseCreateIndex parses:
-//
-//	CREATE INDEX FOR DATASET 'name' VECTOR_SIZE N;
-//	CREATE INDEX DOC_META;
-func (p *Parser) parseCreateIndex() (*Command, error) {
-	p.nextToken() // consume INDEX
-
-	// Check if creating doc meta index
-	if p.curToken.Type == TokenDocMeta {
-		p.nextToken()
-		if err := p.expectSemicolon(); err != nil {
-			return nil, err
-		}
-		return NewCommand("create_doc_meta_index"), nil
-	}
-
-	// Otherwise, must be CREATE INDEX FOR DATASET 'name' VECTOR_SIZE N
-	if p.curToken.Type != TokenFor {
-		return nil, fmt.Errorf("expected FOR or DOC_META after INDEX, got %s", p.curToken.Value)
-	}
-	p.nextToken()
-
-	if p.curToken.Type != TokenDataset {
-		return nil, fmt.Errorf("expected DATASET after FOR, got %s", p.curToken.Value)
-	}
-	p.nextToken()
+// Internal CLI for GO
+// parseCreateDatasetTable parses: CREATE DATASET TABLE 'name' VECTOR SIZE N;
+func (p *Parser) parseCreateDatasetTable() (*Command, error) {
+	p.nextToken() // consume DATASET TABLE compound token
 
 	datasetName, err := p.parseQuotedString()
 	if err != nil {
@@ -348,8 +328,12 @@ func (p *Parser) parseCreateIndex() (*Command, error) {
 	}
 
 	p.nextToken()
-	if p.curToken.Type != TokenVectorSize {
-		return nil, fmt.Errorf("expected VECTOR_SIZE after dataset name, got %s", p.curToken.Value)
+	if p.curToken.Type != TokenVector {
+		return nil, fmt.Errorf("expected VECTOR after dataset name, got %s", p.curToken.Value)
+	}
+	p.nextToken()
+	if p.curToken.Type != TokenSize {
+		return nil, fmt.Errorf("expected SIZE after VECTOR, got %s", p.curToken.Value)
 	}
 	p.nextToken()
 
@@ -366,10 +350,27 @@ func (p *Parser) parseCreateIndex() (*Command, error) {
 		return nil, err
 	}
 
-	cmd := NewCommand("create_index")
+	cmd := NewCommand("create_dataset_table")
 	cmd.Params["dataset_name"] = datasetName
 	cmd.Params["vector_size"] = vectorSize
 	return cmd, nil
+}
+
+// Internal CLI for GO
+// parseCreateMetadataTable parses: CREATE METADATA TABLE;
+func (p *Parser) parseCreateMetadataTable() (*Command, error) {
+	p.nextToken() // consume METADATA
+
+	if p.curToken.Type != TokenTable {
+		return nil, fmt.Errorf("expected TABLE after METADATA, got %s", p.curToken.Value)
+	}
+	p.nextToken()
+
+	if err := p.expectSemicolon(); err != nil {
+		return nil, err
+	}
+
+	return NewCommand("create_metadata_table"), nil
 }
 
 // ==================== User DROP ====================
@@ -384,8 +385,10 @@ func (p *Parser) parseDropCommand() (*Command, error) {
 		return p.parseDropChat()
 	case TokenToken:
 		return p.parseDropToken()
-	case TokenIndex:
-		return p.parseDropIndex()
+	case TokenDatasetTable:
+		return p.parseDropDatasetTable()
+	case TokenMetadata:
+		return p.parseDropMetadataTable()
 	case TokenInstance:
 		return p.parseDropInstance()
 	default:
@@ -404,32 +407,10 @@ func (p *Parser) parseDeleteCommand() (*Command, error) {
 	}
 }
 
-// parseDropIndex parses:
-//
-//	DROP INDEX FOR DATASET 'name';
-//	DROP INDEX DOC_META;
-func (p *Parser) parseDropIndex() (*Command, error) {
-	p.nextToken() // consume INDEX
-
-	// Check if dropping doc meta index
-	if p.curToken.Type == TokenDocMeta {
-		p.nextToken()
-		if err := p.expectSemicolon(); err != nil {
-			return nil, err
-		}
-		return NewCommand("drop_doc_meta_index"), nil
-	}
-
-	// Otherwise, must be DROP INDEX FOR DATASET 'name'
-	if p.curToken.Type != TokenFor {
-		return nil, fmt.Errorf("expected FOR or DOC_META after INDEX, got %s", p.curToken.Value)
-	}
-	p.nextToken()
-
-	if p.curToken.Type != TokenDataset {
-		return nil, fmt.Errorf("expected DATASET after FOR, got %s", p.curToken.Value)
-	}
-	p.nextToken()
+// Internal CLI for GO
+// parseDropDatasetTable parses: DROP DATASET TABLE 'name';
+func (p *Parser) parseDropDatasetTable() (*Command, error) {
+	p.nextToken() // consume DATASET TABLE
 
 	datasetName, err := p.parseQuotedString()
 	if err != nil {
@@ -441,9 +422,26 @@ func (p *Parser) parseDropIndex() (*Command, error) {
 		return nil, err
 	}
 
-	cmd := NewCommand("drop_index")
+	cmd := NewCommand("drop_dataset_table")
 	cmd.Params["dataset_name"] = datasetName
 	return cmd, nil
+}
+
+// Internal CLI for GO
+// parseDropMetadataTable parses: DROP METADATA TABLE;
+func (p *Parser) parseDropMetadataTable() (*Command, error) {
+	p.nextToken() // consume METADATA
+
+	if p.curToken.Type != TokenTable {
+		return nil, fmt.Errorf("expected TABLE after METADATA, got %s", p.curToken.Value)
+	}
+	p.nextToken()
+
+	if err := p.expectSemicolon(); err != nil {
+		return nil, err
+	}
+
+	return NewCommand("drop_metadata_table"), nil
 }
 
 func (p *Parser) parseDropDataset() (*Command, error) {
@@ -1348,15 +1346,21 @@ func (p *Parser) parseUseCommand() (*Command, error) {
 	return cmd, nil
 }
 
-// parseUpdateCommand parses UPDATE CHUNK command
-// UPDATE CHUNK 'chunk_id' OF DATASET 'dataset_name' SET '{"content": "..."}'
+// Internal
+// parseUpdateCommand parses: UPDATE CHUNK 'chunk_id' OF DATASET 'dataset_name' SET '{"content": "..."}'
 func (p *Parser) parseUpdateCommand() (*Command, error) {
 	p.nextToken() // consume UPDATE
 
-	if p.curToken.Type != TokenChunk {
-		return nil, fmt.Errorf("expected CHUNK after UPDATE")
+	if p.curToken.Type == TokenChunk {
+		return p.parseUpdateChunk()
 	}
-	p.nextToken()
+
+	return nil, fmt.Errorf("unknown UPDATE target: %s", p.curToken.Value)
+}
+
+// parseUpdateChunk parses: UPDATE CHUNK 'chunk_id' OF DATASET 'dataset_name' SET '{"content": "..."}'
+func (p *Parser) parseUpdateChunk() (*Command, error) {
+	p.nextToken() // consume CHUNK
 
 	// Parse chunk_id
 	chunkID, err := p.parseQuotedString()
@@ -1414,6 +1418,8 @@ func (p *Parser) parseRemoveCommand() (*Command, error) {
 	switch p.curToken.Type {
 	case TokenTag:
 		return p.parseRemoveTags()
+	case TokenChunks, TokenAll:
+		return p.parseRemoveChunk()
 	default:
 		return nil, fmt.Errorf("unknown REMOVE target: %s", p.curToken.Value)
 	}
@@ -1469,6 +1475,75 @@ func (p *Parser) parseRemoveTags() (*Command, error) {
 	// Semicolon is optional
 	if p.curToken.Type == TokenSemicolon {
 		p.nextToken()
+	}
+
+	return cmd, nil
+}
+
+// parseRemoveChunk parses:
+//   - REMOVE CHUNKS 'chunk_id1', 'chunk_id2' FROM DOCUMENT 'doc_id';
+//   - REMOVE ALL CHUNKS FROM DOCUMENT 'doc_id';
+func (p *Parser) parseRemoveChunk() (*Command, error) {
+	cmd := NewCommand("remove_chunks")
+
+	// Check if ALL CHUNKS - if we came here from TokenAll case, curToken is already ALL
+	if p.curToken.Type == TokenAll {
+		p.nextToken() // consume ALL
+		if p.curToken.Type != TokenChunks {
+			return nil, fmt.Errorf("expected CHUNKS after ALL")
+		}
+		p.nextToken() // consume CHUNKS
+		cmd.Params["delete_all"] = true
+	} else {
+		// curToken is TokenChunks, consume it first
+		p.nextToken()
+		// Multiple chunks: REMOVE CHUNKS 'id1', 'id2' FROM DOCUMENT 'doc_id'
+		// Parse first chunk ID
+		chunkID, err := p.parseQuotedString()
+		if err != nil {
+			return nil, fmt.Errorf("expected chunk_id: %w", err)
+		}
+		chunkIDs := []string{chunkID}
+
+		// Parse additional chunk IDs separated by commas
+		for {
+			p.nextToken()
+			if p.curToken.Type == TokenComma {
+				p.nextToken()
+				chunkID, err := p.parseQuotedString()
+				if err != nil {
+					return nil, fmt.Errorf("expected chunk_id after comma: %w", err)
+				}
+				chunkIDs = append(chunkIDs, chunkID)
+			} else {
+				break
+			}
+		}
+		cmd.Params["chunk_ids"] = chunkIDs
+	}
+
+	// Expect FROM
+	if p.curToken.Type != TokenFrom {
+		return nil, fmt.Errorf("expected FROM after chunk(s)")
+	}
+	p.nextToken()
+
+	// Expect DOCUMENT
+	if p.curToken.Type != TokenDocument {
+		return nil, fmt.Errorf("expected DOCUMENT after FROM")
+	}
+	p.nextToken()
+
+	// Parse doc_id
+	docID, err := p.parseQuotedString()
+	if err != nil {
+		return nil, fmt.Errorf("expected doc_id: %w", err)
+	}
+	cmd.Params["doc_id"] = docID
+	p.nextToken()
+
+	if err := p.expectSemicolon(); err != nil {
+		return nil, err
 	}
 
 	return cmd, nil

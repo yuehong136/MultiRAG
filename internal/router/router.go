@@ -112,11 +112,11 @@ func (r *Router) Setup(engine *gin.Engine) {
 		authorized.GET("/v1/user/tenant_info", r.tenantHandler.TenantInfo)
 		// Tenant list endpoint
 		authorized.GET("/v1/tenant/list", r.tenantHandler.TenantList)
-		// Tenant doc meta index endpoints (per-tenant resources)
-		authorized.POST("/v1/tenant/doc_meta_index", r.tenantHandler.CreateDocMetaIndex)
-		authorized.DELETE("/v1/tenant/doc_meta_index", r.tenantHandler.DeleteDocMetaIndex)
+		// Tenant doc engine metadata table endpoints (per-tenant resources)
+		authorized.POST("/v1/tenant/doc_engine_metadata_table", r.tenantHandler.CreateMetadataInDocEngine)   // Internal API only for GO
+		authorized.DELETE("/v1/tenant/doc_engine_metadata_table", r.tenantHandler.DeleteMetadataInDocEngine) // Internal API only for GO
 		// Tenant metadata insert from file (internal)
-		authorized.POST("/v1/tenant/insert_metadata_from_file", r.tenantHandler.InsertMetadataFromFile)
+		authorized.POST("/v1/tenant/insert_metadata_from_file", r.tenantHandler.InsertMetadataFromFile) // Internal API only for GO
 		// User settings endpoint
 		authorized.POST("/v1/user/setting", r.userHandler.Setting)
 		// User change password endpoint
@@ -158,12 +158,6 @@ func (r *Router) Setup(engine *gin.Engine) {
 				datasets.GET("", r.datasetsHandler.ListDatasets)
 				datasets.POST("", r.datasetsHandler.CreateDataset)
 				datasets.DELETE("", r.datasetsHandler.DeleteDatasets)
-			}
-
-			// RESTful dataset chunk routes
-			datasetChunks := v1.Group("/datasets/:dataset_id/documents/:document_id/chunks")
-			{
-				datasetChunks.PUT("/:chunk_id", r.chunkHandler.UpdateChunk)
 			}
 
 			// Author routes
@@ -262,9 +256,9 @@ func (r *Router) Setup(engine *gin.Engine) {
 			kb.GET("/tags", r.knowledgebaseHandler.ListTagsFromKbs)
 			kb.GET("/get_meta", r.knowledgebaseHandler.GetMeta)
 			kb.GET("/basic_info", r.knowledgebaseHandler.GetBasicInfo)
-			kb.POST("/index", r.knowledgebaseHandler.CreateIndex)
-			kb.DELETE("/index", r.knowledgebaseHandler.DeleteIndex)
-			kb.POST("/insert_from_file", r.knowledgebaseHandler.InsertDatasetFromFile)
+			kb.POST("/doc_engine_table", r.knowledgebaseHandler.CreateDatasetInDocEngine)   // Internal API only for GO
+			kb.DELETE("/doc_engine_table", r.knowledgebaseHandler.DeleteDatasetInDocEngine) // Internal API only for GO
+			kb.POST("/insert_from_file", r.knowledgebaseHandler.InsertDatasetFromFile)      // Internal API only for GO
 
 			// KB ID specific routes
 			kbByID := kb.Group("/:kb_id")
@@ -291,6 +285,8 @@ func (r *Router) Setup(engine *gin.Engine) {
 			chunk.POST("/retrieval_test", r.chunkHandler.RetrievalTest)
 			chunk.GET("/get", r.chunkHandler.Get)
 			chunk.POST("/list", r.chunkHandler.List)
+			chunk.POST("/update", r.chunkHandler.UpdateChunk) // Internal API only for GO
+			chunk.POST("/rm", r.chunkHandler.Remove)
 		}
 
 		// LLM routes

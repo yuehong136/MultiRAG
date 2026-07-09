@@ -47,6 +47,7 @@ const (
 	TokenPassword
 	TokenDataset
 	TokenDatasets
+	TokenDatasetTable
 	TokenOf
 	TokenAgents
 	TokenRole
@@ -102,7 +103,8 @@ const (
 	TokenBenchmark
 	TokenPing
 	TokenIndex
-	TokenVectorSize
+	TokenVector
+	TokenSize
 	TokenDocMeta
 	TokenName // For ALTER PROVIDER <name> NAME <new_name>
 	TokenInstance
@@ -114,9 +116,11 @@ const (
 	TokenInsert
 	TokenFile
 	TokenMetadata
+	TokenTable
 	TokenUpdate
 	TokenRemove
 	TokenChunk
+	TokenChunks
 	TokenDocument
 	TokenTag
 	TokenLog
