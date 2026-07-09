@@ -91,19 +91,12 @@ jobs:
   unit:
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    # 3.13 为 experimental 观察位：依赖侧阻塞已清（2026-07-08：scipy/sklearn/gensim/
-    # tiktoken 等升至带 cp313 轮子的版本，trio/audioop 兼容修复，numpy 1.26.4 从
-    # sdist 构建；本地 3.13 单测 569 全绿）。本 job 在 CI 首次全绿后删除
-    # experimental/continue-on-error 转必过；3.14 等 3.13 转必过后再加。
+    # 3.12/3.13 双版本均必过（3.13 已于 2026-07-09 首次 CI 全绿后转正）；
+    # 3.14 待评估主开发版本切换时一并考虑。
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12"]
-        experimental: [false]
-        include:
-          - python-version: "3.13"
-            experimental: true
-    continue-on-error: ${{ matrix.experimental }}
+        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
