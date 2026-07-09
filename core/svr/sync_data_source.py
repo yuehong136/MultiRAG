@@ -1395,7 +1395,8 @@ CONSUMER_NAME = "data_sync_" + CONSUMER_NO
 
 
 async def main():
-    logging.info(r"""
+    # 装饰性 banner 走 stdout（多行 ASCII art 进 JSON 日志不可读）
+    print(r"""
   _____        _           _____
  |  __ \      | |         / ____|
  | |  | | __ _| |_ __ _  | (___  _   _ _ __   ___

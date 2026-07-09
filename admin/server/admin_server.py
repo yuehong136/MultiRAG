@@ -44,7 +44,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """应用生命周期管理"""
     # 启动时执行
     init_root_logger("admin_service")
-    logging.info(r"""
+    # 装饰性 banner 走 stdout（多行 ASCII art 进 JSON 日志不可读）
+    print(r"""
 ============================================================================
         __  ___      __  _ ____  ___   ______   ___       __          _
        /  |/  /_  __/ /_(_) __ \/   | / ____/  /   | ____/ /___ ___  (_)___

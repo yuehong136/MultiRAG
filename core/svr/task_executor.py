@@ -2991,7 +2991,8 @@ async def main():
     except (ValueError, IndexError):
         pass  # Non-standard consumer name, skip delay
 
-    logging.info(r"""
+    # 装饰性 banner 走 stdout（多行 ASCII art 进 JSON 日志不可读）
+    print(r"""
 ======================================================================
     ____                      __  _
    /  _/___  ____ ____  _____/ /_(_)___  ____     ________  ______   _____  _____
