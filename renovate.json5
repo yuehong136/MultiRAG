@@ -1,0 +1,60 @@
+{
+  // Renovate 配置（方案 §6.2 长效机制）。
+  // 生效前提：仓库安装 Renovate GitHub App（手动动作）。
+  // 原则：每周节流小步走；越线项显式禁用（理由随条目注释，与 §6.1b/§6.4 对齐）。
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["config:recommended"],
+  timezone: "Asia/Shanghai",
+  // 每周一早晨集中出 PR，避免日常噪音
+  schedule: ["before 6am on monday"],
+  prConcurrentLimit: 5,
+  labels: ["dependencies"],
+  // pep621 manager 原生支持 uv.lock；改 pyproject 的 PR 会同步重锁
+  lockFileMaintenance: {
+    enabled: true,
+    schedule: ["before 6am on monday"],
+  },
+  packageRules: [
+    {
+      description: "google 系 SDK 合并为一个 PR",
+      matchPackageNames: ["google-*"],
+      groupName: "google sdks",
+    },
+    {
+      description: "azure 系 SDK 合并为一个 PR",
+      matchPackageNames: ["azure-*"],
+      groupName: "azure sdks",
+    },
+    {
+      description: "dev 依赖组的 patch 级更新自动合并（CI 全绿为前提）",
+      matchDepTypes: ["dependency-groups"],
+      matchUpdateTypes: ["patch"],
+      automerge: true,
+    },
+    {
+      description: "numpy 生态红线：numpy 停 1.26.4，fastembed>=0.5/pillow>=11 需 numpy>=2.1（被 graspologic fork pin<2 挡死，§6.4 勿再试清单）——升级只随 numpy>=2 专项批次人工做",
+      matchPackageNames: ["numpy", "fastembed", "fastembed-gpu", "pillow", "onnx"],
+      enabled: false,
+    },
+    {
+      description: "上游协同档（§6.1b）：调用点在上游跟踪文件内。『跟随上游节奏』项抢跑会让未来上游 diff 打不上；『对齐上游版本』项（anthropic/groq/boto3）目标是上游 pin 的版本而非 latest——两类都只人工按上游对照升级，不接受 Renovate 的 latest 提案",
+      matchPackageNames: [
+        "mistralai",
+        "cohere",
+        "replicate",
+        "voyageai",
+        "xgboost",
+        "elasticsearch-dsl",
+        "selenium-wire",
+        "pdfplumber",
+        "litellm",
+        "torch",
+        "transformers",
+        "anthropic",
+        "groq",
+        "boto3",
+      ],
+      enabled: false,
+    },
+  ],
+}
