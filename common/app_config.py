@@ -242,6 +242,16 @@ class UserDefaultLLMConfig(_Section):
         return ResolvedModelConfig(model=name, factory=m_factory, api_key=m_api_key, base_url=m_base_url)
 
 
+class TaskExecutorConfig(_Section):
+    """task_executor section。"""
+
+    message_queue_type: str = "redis"
+    # Prometheus /metrics（core/svr/executor_metrics.py）；实际监听口 =
+    # metrics_port + worker 序号（多 worker 同机不撞口）。9091 被 milvus 占用，勿用
+    metrics_enabled: bool = True
+    metrics_port: int = 9464
+
+
 class ObservabilityConfig(_Section):
     """observability section：OTel 追踪开关与导出目标（初始化单点见 common/observability.py）。"""
 
@@ -284,6 +294,7 @@ class AppConfig(BaseModel):
     oauth: dict[str, Any] = {}
     authentication: AuthenticationConfig = AuthenticationConfig()
     smtp: SmtpConfig = SmtpConfig()
+    task_executor: TaskExecutorConfig = TaskExecutorConfig()
     observability: ObservabilityConfig = ObservabilityConfig()
 
     _raw: dict[str, Any] = PrivateAttr(default_factory=dict)

@@ -105,6 +105,8 @@ dependencies = [
     "pdfplumber==0.10.4",
     "pillow>=10.4.0,<13.0.0",
     "pluginlib==0.10.0",
+    # task_executor /metrics 端点（指标定义与启动见 core/svr/executor_metrics.py）
+    "prometheus-client>=0.21.0",
     "psutil>=5.9.8",
     # 应用主引擎驱动（同步+异步同一驱动，纯异步改造 Phase 0 选型）
     "psycopg[binary]>=3.3,<4",

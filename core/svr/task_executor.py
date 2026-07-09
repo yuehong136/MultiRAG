@@ -56,6 +56,7 @@ from core.graphrag.utils import chat_limiter, get_llm_cache, get_tags_from_cache
 from core.nlp import add_positions, concat_img, rag_tokenizer, search
 from core.prompts.generator import content_tagging, gen_metadata, keyword_extraction, question_proposal, run_toc_from_text
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
+from core.svr import executor_metrics
 from core.utils.base64_image import image2id
 from core.utils.raptor_utils import get_skip_reason, should_skip_raptor
 from core.utils.redis_conn import REDIS_CONN, RedisDistributedLock
@@ -2825,7 +2826,8 @@ async def handle_task():
                         pass
 
                 CURRENT_TASKS[task["id"]] = task_for_tracking
-                await do_handle_task(db, task)
+                with executor_metrics.TaskTimer(task_type, task.get("parser_id")):
+                    await do_handle_task(db, task)
                 DONE_TASKS += 1
                 CURRENT_TASKS.pop(task_id, None)
 
@@ -2902,6 +2904,7 @@ async def report_status():
         group_info = REDIS_CONN.queue_info(settings.get_svr_queue_name(0), SVR_CONSUMER_GROUP_NAME) or {}
         PENDING_TASKS = int(group_info.get("pending", 0))
         LAG_TASKS = int(group_info.get("lag", 0))
+        executor_metrics.set_queue_stats(PENDING_TASKS, LAG_TASKS)
 
         current = copy.deepcopy(CURRENT_TASKS)
         heartbeat = json.dumps(
@@ -2996,6 +2999,7 @@ async def main():
     logging.info(f"MultiRAG ingestion version: {get_multirag_version()}")
     show_configs()
     settings.init_settings()
+    executor_metrics.start_metrics_server(CONSUMER_NO)
     settings.check_and_install_torch()
     logging.info(f"settings.EMBEDDING_CFG: {settings.EMBEDDING_CFG}")
     settings.print_rag_settings()

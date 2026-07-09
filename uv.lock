@@ -4813,6 +4813,7 @@ dependencies = [
     { name = "pdfplumber" },
     { name = "pillow" },
     { name = "pluginlib" },
+    { name = "prometheus-client" },
     { name = "psutil" },
     { name = "psycopg", extra = ["binary"] },
     { name = "psycopg2-binary" },
@@ -4986,6 +4987,7 @@ requires-dist = [
     { name = "pdfplumber", specifier = "==0.10.4" },
     { name = "pillow", specifier = ">=10.4.0,<13.0.0" },
     { name = "pluginlib", specifier = "==0.10.0" },
+    { name = "prometheus-client", specifier = ">=0.21.0" },
     { name = "psutil", specifier = ">=5.9.8" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3,<4" },
     { name = "psycopg2-binary", specifier = ">=2.9.11,<3.0.0" },
@@ -6378,6 +6380,15 @@ source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/2c/3d/4159b57736ced0fd22553226df20a985ef7655519c80ffcb8a9fb49ebeee/proces-0.1.7.tar.gz", hash = "sha256:70a05d9e973dd685f7a9092c58be695a8181a411d63796c213232fd3fdc43775" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/6f/88/06cc0c7d890ed8d7e16ef0e56880dea516a21643fb1f3a69a50f4cc6f716/proces-0.1.7-py3-none-any.whl", hash = "sha256:308325bbc96877263f06e57e5e9c760c4b42cc722887ad60be6b18fc37d68762" },
+]
+
+[[package]]
+name = "prometheus-client"
+version = "0.25.0"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/1b/fb/d9aa83ffe43ce1f19e557c0971d04b90561b0cfd50762aafb01968285553/prometheus_client-0.25.0.tar.gz", hash = "sha256:5e373b75c31afb3c86f1a52fa1ad470c9aace18082d39ec0d2f918d11cc9ba28" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/8d/9b/d4b1e644385499c8346fa9b622a3f030dce14cd6ef8a1871c221a17a67e7/prometheus_client-0.25.0-py3-none-any.whl", hash = "sha256:d5aec89e349a6ec230805d0df882f3807f74fd6c1a2fa86864e3c2279059fed1" },
 ]
 
 [[package]]

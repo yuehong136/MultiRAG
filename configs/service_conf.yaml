@@ -172,6 +172,11 @@ datav_persondata_crypto:
 
 task_executor:
   message_queue_type: 'redis'
+  # Prometheus /metrics 端点（core/svr/executor_metrics.py）：
+  # 实际监听口 = metrics_port + worker 序号（多 worker 同机不撞口）。
+  # ⚠ 9091 被 milvus healthz 占用，勿配到该口
+  metrics_enabled: true
+  metrics_port: 9464
 
 observability:
   # OTel 自动埋点开关（FastAPI/SQLAlchemy/Redis/httpx 四件套，初始化单点在
