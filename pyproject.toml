@@ -40,7 +40,6 @@ dependencies = [
     "editdistance==0.8.1",
     "elasticsearch-dsl==8.12.0",
     "email-validator>=2.2.0",
-    "exceptiongroup>=1.3.0,<2.0.0",
     "extract-msg>=0.55.0",
     "fastapi>=0.128.0",
     "fastapi-login>=1.10.1",

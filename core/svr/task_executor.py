@@ -20,7 +20,6 @@ from functools import partial
 from multiprocessing.context import TimeoutError
 from timeit import default_timer as timer
 
-import exceptiongroup
 import numpy as np
 import xxhash
 from pymilvus import DataType
@@ -2846,7 +2845,9 @@ async def handle_task():
                 CURRENT_TASKS.pop(task_id, None)
                 try:
                     err_msg = str(e)
-                    while isinstance(e, exceptiongroup.ExceptionGroup):
+                    # py3.11+ 内置 ExceptionGroup（exceptiongroup 回填包已随
+                    # requires-python>=3.12 移除；回填包的同名类即内置别名，行为等价）
+                    while isinstance(e, ExceptionGroup):
                         e = e.exceptions[0]
                         err_msg += " -- " + str(e)
                     set_progress(db, task_id, prog=-1, msg=f"[Exception]: {err_msg}")
