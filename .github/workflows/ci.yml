@@ -125,13 +125,11 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
-  # Tier 3+4：真实服务容器上的集成 + 冒烟。
-  # 转必过条件：main 上连续 ≥5 次 integration job 全绿后删除 continue-on-error。
-  # （截至 2026-07-07：smoke 环境问题修复后仅最新 1 次绿，继续观察。）
+  # Tier 3+4：真实服务容器上的集成 + 冒烟（必过门禁，2026-07-09 转正：
+  # main 上连续 ≥5 次全绿达标——52b98e04 起至 c28605b3 无一失败）。
   integration:
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    continue-on-error: true
     services:
       postgres:
         image: postgres:16-alpine
