@@ -75,10 +75,10 @@ sql_command: login_user
            | list_user_documents_metadata_summary
            | create_user_chat
            | drop_user_chat
-           | create_index
-           | drop_index
-           | create_doc_meta_index
-           | drop_doc_meta_index
+           | create_dataset_table
+           | drop_dataset_table
+           | create_metadata_table
+           | drop_metadata_table
            | create_chat_session
            | drop_chat_session
            | list_chat_sessions
@@ -89,6 +89,7 @@ sql_command: login_user
            | update_chunk
            | set_metadata
            | remove_tags
+           | remove_chunks
            | search_on_datasets
            | parse_dataset_docs
            | parse_dataset_sync
@@ -187,7 +188,7 @@ REMOVE: "REMOVE"i
 TAGS: "TAGS"i
 INTO: "INTO"i
 WITH: "WITH"i
-VECTOR_SIZE: "VECTOR_SIZE"i
+VECTOR: "VECTOR"i
 PARSER: "PARSER"i
 PIPELINE: "PIPELINE"i
 PARSE: "PARSE"i
@@ -201,7 +202,7 @@ LICENSE: "LICENSE"i
 CHECK: "CHECK"i
 CONFIG: "CONFIG"i
 INDEX: "INDEX"i
-DOC_META: "DOC_META"i
+TABLE: "TABLE"i
 BENCHMARK: "BENCHMARK"i
 AS: "AS"i
 RESET: "RESET"i
@@ -297,10 +298,10 @@ list_user_datasets_metadata: LIST METADATA OF DATASETS quoted_string (COMMA quot
 list_user_documents_metadata_summary: LIST METADATA SUMMARY OF DATASET quoted_string (DOCUMENTS quoted_string (COMMA quoted_string)*)? ";"
 create_user_chat: CREATE CHAT quoted_string ";"
 drop_user_chat: DROP CHAT quoted_string ";"
-create_index: CREATE INDEX FOR DATASET quoted_string VECTOR_SIZE NUMBER ";"
-drop_index: DROP INDEX FOR DATASET quoted_string ";"
-create_doc_meta_index: CREATE INDEX DOC_META ";"
-drop_doc_meta_index: DROP INDEX DOC_META ";"
+create_dataset_table: CREATE DATASET TABLE quoted_string VECTOR SIZE NUMBER ";"
+drop_dataset_table: DROP DATASET TABLE quoted_string ";"
+create_metadata_table: CREATE METADATA TABLE ";"
+drop_metadata_table: DROP METADATA TABLE ";"
 create_chat_session: CREATE CHAT quoted_string SESSION ";"
 drop_chat_session: DROP CHAT quoted_string SESSION quoted_string ";"
 list_chat_sessions: LIST CHAT quoted_string SESSIONS ";"
@@ -312,6 +313,8 @@ insert_metadata_from_file: INSERT METADATA FROM FILE quoted_string ";"
 update_chunk: UPDATE CHUNK quoted_string OF DATASET quoted_string SET quoted_string ";"
 set_metadata: SET METADATA OF DOCUMENT quoted_string TO quoted_string ";"
 remove_tags: REMOVE TAGS quoted_string (COMMA quoted_string)* FROM DATASET quoted_string ";"
+remove_chunks: REMOVE CHUNKS quoted_string (COMMA quoted_string)* FROM DOCUMENT quoted_string ";"
+           | REMOVE ALL CHUNKS FROM DOCUMENT quoted_string ";"
 search_on_datasets: SEARCH quoted_string ON DATASETS quoted_string ";"
 parse_dataset_docs: PARSE quoted_string OF DATASET quoted_string ";"
 parse_dataset_sync: PARSE DATASET quoted_string SYNC ";"
@@ -663,30 +666,29 @@ class MultiRAGCLITransformer(Transformer):
         chat_name = items[2].children[0].strip("'\"")
         return {"type": "drop_user_chat", "chat_name": chat_name}
 
-    def create_index(self, items):
-        # items: CREATE, INDEX, FOR, DATASET, quoted_string, VECTOR_SIZE, NUMBER, ";"
+    def create_dataset_table(self, items):
         dataset_name = None
         vector_size = None
         for i, item in enumerate(items):
             if hasattr(item, "data") and item.data == "quoted_string":
                 dataset_name = item.children[0].strip("'\"")
             if hasattr(item, "type") and item.type == "NUMBER":
-                if i > 0 and items[i - 1].type == "VECTOR_SIZE":
+                if i > 0 and items[i - 1].type == "SIZE" and items[i - 2].type == "VECTOR":
                     vector_size = int(item)
-        return {"type": "create_index", "dataset_name": dataset_name, "vector_size": vector_size}
+        return {"type": "create_dataset_table", "dataset_name": dataset_name, "vector_size": vector_size}
 
-    def drop_index(self, items):
+    def drop_dataset_table(self, items):
         dataset_name = None
         for item in items:
             if hasattr(item, "data") and item.data == "quoted_string":
                 dataset_name = item.children[0].strip("'\"")
-        return {"type": "drop_index", "dataset_name": dataset_name}
+        return {"type": "drop_dataset_table", "dataset_name": dataset_name}
 
-    def create_doc_meta_index(self, items):
-        return {"type": "create_doc_meta_index"}
+    def create_metadata_table(self, items):
+        return {"type": "create_metadata_table"}
 
-    def drop_doc_meta_index(self, items):
-        return {"type": "drop_doc_meta_index"}
+    def drop_metadata_table(self, items):
+        return {"type": "drop_metadata_table"}
 
     def create_chat_session(self, items):
         chat_name = items[2].children[0].strip("'\"")
@@ -758,6 +760,36 @@ class MultiRAGCLITransformer(Transformer):
                 dataset_name = items[i + 1].children[0].strip("'\"")
                 break
         return {"type": "remove_tags", "dataset_name": dataset_name, "tags": tags}
+
+    def remove_chunks(self, items):
+        # Handle two cases:
+        # 1. REMOVE CHUNKS quoted_string (COMMA quoted_string)* FROM DOCUMENT quoted_string ";"
+        # 2. REMOVE ALL CHUNKS FROM DOCUMENT quoted_string ";"
+
+        # Check if it's "REMOVE ALL CHUNKS"
+        for item in items:
+            if hasattr(item, "type") and item.type == "ALL":
+                # Find doc_id
+                for j, inner_item in enumerate(items):
+                    if hasattr(inner_item, "type") and inner_item.type == "DOCUMENT":
+                        doc_id = items[j + 1].children[0].strip("'\"")
+                        return {"type": "remove_chunks", "doc_id": doc_id, "delete_all": True}
+
+        # Otherwise, we have chunk_ids: collect quoted strings until FROM
+        # (与 remove_tags 同一截断惯用法，避免 doc_id 被误收进 chunk_ids)
+        chunk_ids = []
+        doc_id = None
+        for item in items:
+            if hasattr(item, "type") and item.type == "FROM":
+                break
+            if hasattr(item, "children") and item.children:
+                chunk_ids.append(item.children[0].strip("'\""))
+        for i, item in enumerate(items):
+            if hasattr(item, "type") and item.type == "DOCUMENT":
+                doc_id = items[i + 1].children[0].strip("'\"")
+                break
+
+        return {"type": "remove_chunks", "doc_id": doc_id, "chunk_ids": chunk_ids}
 
     def search_on_datasets(self, items):
         question = items[1].children[0].strip("'\"")

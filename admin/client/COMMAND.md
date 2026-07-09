@@ -654,14 +654,14 @@ multirag> DROP CHAT 'my_chat';
 
 ---
 
-### create_index
+### create_dataset_table
 
 **Description**  
-Creates the document engine index/table for a dataset (knowledge base).
+Creates the document engine table for a dataset (knowledge base).
 
 **Usage**  
 ```
-CREATE INDEX FOR DATASET <dataset_name> VECTOR_SIZE <vector_size>;
+CREATE DATASET TABLE <dataset_name> VECTOR SIZE <vector_size>;
 ```
 
 **Parameters**  
@@ -670,7 +670,7 @@ CREATE INDEX FOR DATASET <dataset_name> VECTOR_SIZE <vector_size>;
 
 **Example**  
 ```
-multirag> CREATE INDEX FOR DATASET 'my_dataset' VECTOR_SIZE 1024;
+multirag> CREATE DATASET TABLE 'my_dataset' VECTOR SIZE 1024;
 ```
 
 **Display Effect**  
@@ -678,14 +678,14 @@ multirag> CREATE INDEX FOR DATASET 'my_dataset' VECTOR_SIZE 1024;
 
 ---
 
-### drop_index
+### drop_dataset_table
 
 **Description**  
-Drops the document engine index/table for a dataset (knowledge base).
+Drops the document engine table for a dataset (knowledge base).
 
 **Usage**  
 ```
-DROP INDEX FOR DATASET <dataset_name>;
+DROP DATASET TABLE <dataset_name>;
 ```
 
 **Parameters**  
@@ -693,7 +693,7 @@ DROP INDEX FOR DATASET <dataset_name>;
 
 **Example**  
 ```
-multirag> DROP INDEX FOR DATASET 'my_dataset';
+multirag> DROP DATASET TABLE 'my_dataset';
 ```
 
 **Display Effect**  
@@ -701,14 +701,14 @@ multirag> DROP INDEX FOR DATASET 'my_dataset';
 
 ---
 
-### create_doc_meta_index
+### create_metadata_table
 
 **Description**  
-Creates the per-tenant document metadata index.
+Creates the per-tenant document metadata table.
 
 **Usage**  
 ```
-CREATE INDEX DOC_META;
+CREATE METADATA TABLE;
 ```
 
 **Parameters**  
@@ -716,7 +716,7 @@ CREATE INDEX DOC_META;
 
 **Example**  
 ```
-multirag> CREATE INDEX DOC_META;
+multirag> CREATE METADATA TABLE;
 ```
 
 **Display Effect**  
@@ -724,14 +724,14 @@ multirag> CREATE INDEX DOC_META;
 
 ---
 
-### drop_doc_meta_index
+### drop_metadata_table
 
 **Description**  
-Drops the per-tenant document metadata index.
+Drops the per-tenant document metadata table.
 
 **Usage**  
 ```
-DROP INDEX DOC_META;
+DROP METADATA TABLE;
 ```
 
 **Parameters**  
@@ -739,7 +739,7 @@ DROP INDEX DOC_META;
 
 **Example**  
 ```
-multirag> DROP INDEX DOC_META;
+multirag> DROP METADATA TABLE;
 ```
 
 **Display Effect**  

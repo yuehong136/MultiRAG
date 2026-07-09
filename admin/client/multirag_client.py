@@ -1345,7 +1345,7 @@ class MultiRAGClient:
             msg = res_json.get("message", res_json.get("retmsg", ""))
             print(f"Fail to drop chat {chat_name}: {msg}")
 
-    def create_index(self, command: dict):
+    def create_dataset_table(self, command: dict):
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
@@ -1359,14 +1359,14 @@ class MultiRAGClient:
         if dataset_id is None:
             return
         payload = {"kb_id": dataset_id, "vector_size": vector_size}
-        response = self.http_client.request("POST", "kb/index", json_body=payload, use_api_base=False, auth_kind="web")
+        response = self.http_client.request("POST", "kb/doc_engine_table", json_body=payload, use_api_base=False, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200 and res_json.get("code") == 0:
-            print(f"Success to create index for dataset: {dataset_name}")
+            print(f"Success to create table for dataset: {dataset_name}")
         else:
-            print(f"Fail to create index for dataset {dataset_name}, code: {res_json.get('code')}, message: {res_json.get('message')}")
+            print(f"Fail to create table for dataset {dataset_name}, code: {res_json.get('code')}, message: {res_json.get('message')}")
 
-    def drop_index(self, command: dict):
+    def drop_dataset_table(self, command: dict):
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
@@ -1376,34 +1376,34 @@ class MultiRAGClient:
         if dataset_id is None:
             return
         payload = {"kb_id": dataset_id}
-        response = self.http_client.request("DELETE", "kb/index", json_body=payload, use_api_base=False, auth_kind="web")
+        response = self.http_client.request("DELETE", "kb/doc_engine_table", json_body=payload, use_api_base=False, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200 and res_json.get("code") == 0:
-            print(f"Success to drop index for dataset: {dataset_name}")
+            print(f"Success to drop table for dataset: {dataset_name}")
         else:
-            print(f"Fail to drop index for dataset {dataset_name}, code: {res_json.get('code')}, message: {res_json.get('message')}")
+            print(f"Fail to drop table for dataset {dataset_name}, code: {res_json.get('code')}, message: {res_json.get('message')}")
 
-    def create_doc_meta_index(self, command: dict):
+    def create_metadata_table(self, command: dict):
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
-        response = self.http_client.request("POST", "tenant/doc_meta_index", use_api_base=False, auth_kind="web")
+        response = self.http_client.request("POST", "tenant/doc_engine_metadata_table", use_api_base=False, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200 and res_json.get("code") == 0:
-            print("Success to create doc meta index")
+            print("Success to create metadata table")
         else:
-            print(f"Fail to create doc meta index, code: {res_json.get('code')}, message: {res_json.get('message')}")
+            print(f"Fail to create metadata table, code: {res_json.get('code')}, message: {res_json.get('message')}")
 
-    def drop_doc_meta_index(self, command: dict):
+    def drop_metadata_table(self, command: dict):
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
-        response = self.http_client.request("DELETE", "tenant/doc_meta_index", use_api_base=False, auth_kind="web")
+        response = self.http_client.request("DELETE", "tenant/doc_engine_metadata_table", use_api_base=False, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200 and res_json.get("code") == 0:
-            print("Success to drop doc meta index")
+            print("Success to drop metadata table")
         else:
-            print(f"Fail to drop doc meta index, code: {res_json.get('code')}, message: {res_json.get('message')}")
+            print(f"Fail to drop metadata table, code: {res_json.get('code')}, message: {res_json.get('message')}")
 
     # Internal CLI for GO
     def insert_dataset_from_file(self, command: dict):
@@ -1473,9 +1473,13 @@ class MultiRAGClient:
             print(f"Invalid JSON body: {e}")
             return
 
-        # Call PUT datasets/{dataset_id}/documents/{doc_id}/chunks/{chunk_id}
-        path = f"datasets/{dataset_id}/documents/{doc_id}/chunks/{chunk_id}"
-        response = self.http_client.request("PUT", path, json_body=payload, use_api_base=True, auth_kind="api")
+        # Add IDs to payload
+        payload["dataset_id"] = dataset_id
+        payload["document_id"] = doc_id
+        payload["chunk_id"] = chunk_id
+
+        # Call POST /v1/chunk/update
+        response = self.http_client.request("POST", "chunk/update", json_body=payload, use_api_base=False, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200:
             if res_json.get("code") == 0:
@@ -1507,7 +1511,7 @@ class MultiRAGClient:
             else:
                 print(f"Fail to set metadata, code: {res_json.get('code')}, message: {res_json.get('message')}")
         else:
-            print(f"Fail to set metadata, HTTP {response.status_code}")
+            print(f"Fail to set metadata, HTTP {response.status_code}: {res_json.get('message', 'no message')}")
 
     def remove_tags(self, command_dict):
         if self.server_type != "user":
@@ -1535,6 +1539,30 @@ class MultiRAGClient:
                 print(f"Fail to remove tags, code: {res_json.get('code')}, message: {res_json.get('message')}")
         else:
             print(f"Fail to remove tags, HTTP {response.status_code}")
+
+    def remove_chunks(self, command_dict):
+        if self.server_type != "user":
+            print("This command is only allowed in USER mode")
+            return
+
+        doc_id = command_dict["doc_id"]
+        payload = {"doc_id": doc_id}
+
+        if command_dict.get("delete_all"):
+            payload["delete_all"] = True
+        elif command_dict.get("chunk_ids"):
+            payload["chunk_ids"] = command_dict["chunk_ids"]
+
+        response = self.http_client.request("POST", "chunk/rm", json_body=payload, use_api_base=False, auth_kind="web")
+        res_json = response.json()
+        if response.status_code == 200:
+            if res_json.get("code") == 0:
+                deleted_count = res_json.get("data", 0)
+                print(f"Success to remove chunks from document {doc_id}: {deleted_count} chunks deleted")
+            else:
+                print(f"Fail to remove chunks, code: {res_json.get('code')}, message: {res_json.get('message')}")
+        else:
+            print(f"Fail to remove chunks, HTTP {response.status_code}")
 
     def create_chat_session(self, command: dict):
         if self.server_type != "user":
@@ -2033,14 +2061,14 @@ def run_command(client: MultiRAGClient, command_dict: dict):
             client.create_user_chat(command_dict)
         case "drop_user_chat":
             client.drop_user_chat(command_dict)
-        case "create_index":
-            client.create_index(command_dict)
-        case "drop_index":
-            client.drop_index(command_dict)
-        case "create_doc_meta_index":
-            client.create_doc_meta_index(command_dict)
-        case "drop_doc_meta_index":
-            client.drop_doc_meta_index(command_dict)
+        case "create_dataset_table":
+            client.create_dataset_table(command_dict)
+        case "drop_dataset_table":
+            client.drop_dataset_table(command_dict)
+        case "create_metadata_table":
+            client.create_metadata_table(command_dict)
+        case "drop_metadata_table":
+            client.drop_metadata_table(command_dict)
         case "insert_dataset_from_file":
             client.insert_dataset_from_file(command_dict)
         case "insert_metadata_from_file":
@@ -2051,6 +2079,8 @@ def run_command(client: MultiRAGClient, command_dict: dict):
             client.set_metadata(command_dict)
         case "remove_tags":
             client.remove_tags(command_dict)
+        case "remove_chunks":
+            client.remove_chunks(command_dict)
         case "create_chat_session":
             client.create_chat_session(command_dict)
         case "drop_chat_session":
