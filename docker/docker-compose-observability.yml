@@ -1,0 +1,18 @@
+# 本地可观测性栈（独立于 base 服务，可单独启停）：
+#   docker compose -f docker/docker-compose-observability.yml up -d
+#
+# Jaeger all-in-one：接收 OTLP（gRPC 4317 / HTTP 4318），UI http://localhost:16686。
+# 应用侧开关：service_conf 的 observability.enabled=true（默认端点即指向这里）。
+# 存储为内存态，重启即清——只用于本地开发排查，不是生产部署形态。
+
+services:
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    container_name: multirag-jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "${JAEGER_OTLP_GRPC_PORT:-4317}:4317"
+      - "${JAEGER_OTLP_HTTP_PORT:-4318}:4318"
+      - "${JAEGER_UI_PORT:-16686}:16686"
+    restart: on-failure

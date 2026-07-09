@@ -242,6 +242,16 @@ class UserDefaultLLMConfig(_Section):
         return ResolvedModelConfig(model=name, factory=m_factory, api_key=m_api_key, base_url=m_base_url)
 
 
+class ObservabilityConfig(_Section):
+    """observability section：OTel 追踪开关与导出目标（初始化单点见 common/observability.py）。"""
+
+    enabled: bool = False
+    # OTLP gRPC 端点；本地 Jaeger 见 docker/docker-compose-observability.yml
+    otlp_endpoint: str = "http://localhost:4317"
+    # 空值时取 OTEL_SERVICE_NAME 环境变量，再退回按入口进程推导
+    service_name: str = ""
+
+
 # ---------------------------------------------------------------------------
 # 根模型
 # ---------------------------------------------------------------------------
@@ -274,6 +284,7 @@ class AppConfig(BaseModel):
     oauth: dict[str, Any] = {}
     authentication: AuthenticationConfig = AuthenticationConfig()
     smtp: SmtpConfig = SmtpConfig()
+    observability: ObservabilityConfig = ObservabilityConfig()
 
     _raw: dict[str, Any] = PrivateAttr(default_factory=dict)
 

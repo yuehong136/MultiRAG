@@ -88,6 +88,14 @@ dependencies = [
     "onnxruntime==1.23.2; sys_platform == 'darwin' or platform_machine != 'x86_64'",
     "onnxruntime-gpu==1.23.2; sys_platform != 'darwin' and platform_machine == 'x86_64'",
     "opendal>=0.45.0,<0.46.0",
+    # OTel 自动埋点（初始化单点：common/observability.py，经 bootstrap 启用）；
+    # api/sdk/exporter 本为 langfuse 传递依赖，这里显式声明直接消费面
+    "opentelemetry-sdk>=1.36.0",
+    "opentelemetry-exporter-otlp>=1.36.0",
+    "opentelemetry-instrumentation-fastapi>=0.57b0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.57b0",
+    "opentelemetry-instrumentation-redis>=0.57b0",
+    "opentelemetry-instrumentation-httpx>=0.57b0",
     "opencv-python==4.10.0.84",
     "opencv-python-headless==4.10.0.84",
     "openpyxl>=3.1.0,<4.0.0",

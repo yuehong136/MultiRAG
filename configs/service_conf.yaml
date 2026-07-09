@@ -173,6 +173,17 @@ datav_persondata_crypto:
 task_executor:
   message_queue_type: 'redis'
 
+observability:
+  # OTel 自动埋点开关（FastAPI/SQLAlchemy/Redis/httpx 四件套，初始化单点在
+  # common/observability.py，经 bootstrap 启用）。默认关闭零开销；
+  # 本地排查时起 docker/docker-compose-observability.yml 的 Jaeger 后打开
+  enabled: false
+  # OTLP gRPC 导出端点（本地 Jaeger 默认口；有平台端点时在 local/env 覆盖）
+  otlp_endpoint: 'http://localhost:4317'
+  # 服务名；留空时取 OTEL_SERVICE_NAME 环境变量，再退回按入口进程推导
+  # （multirag-server / multirag-task-executor）
+  service_name: ''
+
 user_default_llm:
   factory: 'ZHIPU-AI'
   api_key: 'changeme'
