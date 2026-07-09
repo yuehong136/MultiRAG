@@ -547,13 +547,13 @@ class ChatAgentAdapter:
         return result
 
 
-def prepare_knowledge_context(db: Session, messages: list[dict], tavily_api_key: str, tenant_id: str, llm_name: str) -> str:
+async def prepare_knowledge_context(db: AsyncSession, messages: list[dict], tavily_api_key: str, tenant_id: str, llm_name: str) -> str:
     """准备知识上下文，复用现有的Tavily集成"""
     knowledge_context = ""
 
     if tavily_api_key and messages:
         try:
-            llm_model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, llm_name)
+            llm_model_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, tenant_id, LLMType.CHAT.value, llm_name))  # TODO(async-phase4)
             max_tokens = llm_model_config.get("max_tokens", 8192)
 
             kbinfos = {"total": 0, "chunks": [], "doc_aggs": []}
@@ -561,7 +561,7 @@ def prepare_knowledge_context(db: Session, messages: list[dict], tavily_api_key:
 
             if questions:
                 tav = Tavily(tavily_api_key)
-                tav_res = tav.retrieve_chunks(" ".join(questions))
+                tav_res = await thread_pool_exec(tav.retrieve_chunks, " ".join(questions))  # 外部 HTTP,非 DB
                 kbinfos["chunks"].extend(tav_res["chunks"])
                 kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
                 kbinfos["total"] = len(kbinfos["chunks"])
@@ -2455,14 +2455,14 @@ async def fill_fields(req: FillFieldsRequest, db: Session = Depends(get_db), use
 
 
 @router.post("/enhanced_chat_sse")
-async def enhanced_chat_service_sse(request: ChatRequest, db: Session = Depends(get_db), user=Depends(manager)):  # async-db-ok: 路由层 DB 已 thread_pool_exec 外移；Agent 内部同步 DB 待 §11 Phase 1
+async def enhanced_chat_service_sse(request: ChatRequest, db: AsyncSession = Depends(get_async_db), user=Depends(manager)):
 
     mcp_sessions = []
 
     try:
-        # 获取租户信息（同步 DB 一律走线程池，避免阻塞事件循环）
+        # 获取租户信息(遗留同步 service 经 run_sync 桥接)
         try:
-            tenants = await thread_pool_exec(TenantService.get_info_by, db, user.id)
+            tenants = await db.run_sync(lambda s: TenantService.get_info_by(s, user.id))  # TODO(async-phase4)
             if not tenants:
                 raise HTTPException(status_code=404, detail="Tenant not found!")
 
@@ -2473,7 +2473,7 @@ async def enhanced_chat_service_sse(request: ChatRequest, db: Session = Depends(
 
         # 验证模型
         try:
-            my_llms = await thread_pool_exec(TenantLLMService.get_my_llms, db, tenant_id)
+            my_llms = await db.run_sync(lambda s: TenantLLMService.get_my_llms(s, tenant_id))  # TODO(async-phase4)
         except Exception as e:
             logging.error(f"Failed to get LLMs: {e}")
             raise HTTPException(status_code=500, detail="Failed to get available models")
@@ -2487,10 +2487,11 @@ async def enhanced_chat_service_sse(request: ChatRequest, db: Session = Depends(
         if not llm_type:
             raise HTTPException(status_code=404, detail=f"Model {request.llm_name} not found")
 
-        # 准备知识上下文（复用现有的Tavily集成；同步 DB + HTTP，走线程池）
-        knowledge_context = await thread_pool_exec(prepare_knowledge_context, db, request.messages, request.tavily_api_key, tenant_id, request.llm_name)
+        # 准备知识上下文(DB 经 run_sync 桥接,Tavily HTTP 走线程池)
+        knowledge_context = await prepare_knowledge_context(db, request.messages, request.tavily_api_key, tenant_id, request.llm_name)
 
-        # 创建对话Agent适配器，直接复用Agent类（构造期查 DB/MCP 配置，走线程池）
+        # 创建对话Agent适配器，直接复用Agent类
+        # TODO(async-phase4): 构造期经自有连接查 DB/MCP 配置(不收 session 参数),暂留线程池外移
         chat_agent = await thread_pool_exec(ChatAgentAdapter, tenant_id=tenant_id, llm_name=request.llm_name, system_prompt=request.prompt, mcp_ids=request.mcp_ids)
 
         if not request.stream:

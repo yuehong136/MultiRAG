@@ -69,6 +69,48 @@ def test_chat_service_non_stream_returns_json(client, llm_stubs):
     assert body["data"] == "非流式回答"
 
 
+class _FakeChatAgent:
+    def __init__(self, *args, **kwargs):
+        self.agent = types.SimpleNamespace(tools={})
+
+    async def chat_async(self, **kwargs):
+        return "agent 非流式回答"
+
+    async def chat_with_tools_stream_async(self, **kwargs):
+        yield "agent"
+        yield "agent 流式回答"
+
+
+def test_enhanced_chat_sse_streams(client, monkeypatch, llm_stubs):
+    monkeypatch.setattr(_llm_module(), "ChatAgentAdapter", _FakeChatAgent)
+
+    resp = client.post(
+        "/v1/llm/enhanced_chat_sse",
+        json={"prompt": "p", "messages": [{"role": "user", "content": "hi"}], "llm_name": "m1", "stream": True},
+    )
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    frames = _sse_frames(resp.text)
+    assert frames[-1]["data"] is True
+    text_frames = [f for f in frames if isinstance(f.get("data"), str) and f["data"]]
+    assert text_frames and "agent 流式回答" in text_frames[-1]["data"]
+
+
+def test_enhanced_chat_non_stream_returns_json(client, monkeypatch, llm_stubs):
+    monkeypatch.setattr(_llm_module(), "ChatAgentAdapter", _FakeChatAgent)
+
+    resp = client.post(
+        "/v1/llm/enhanced_chat_sse",
+        json={"prompt": "p", "messages": [{"role": "user", "content": "hi"}], "llm_name": "m1", "stream": False},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["retcode"] == 0
+    assert body["data"]["answer"] == "agent 非流式回答"
+
+
 def test_chat_service_sse_setup_failure_keeps_sse_error_contract(client, llm_stubs):
     """未知模型的 setup 失败必须仍以 SSE 错误帧 + 结束帧返回(旧实现行为)。"""
     resp = client.post(
