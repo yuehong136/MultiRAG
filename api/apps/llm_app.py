@@ -11,12 +11,13 @@ from typing import Any, Literal
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
 
 from agent.component.agent_with_tools import Agent, AgentParam
 from api.apps import manager
-from api.db.db_models import TenantLLM, db_connection, get_db
+from api.db.db_models import TenantLLM, db_connection, get_async_db, get_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from api.db.services.dialog_service import _stream_with_think_delta
 from api.db.services.llm_service import LLMBundle, LLMService
@@ -1706,9 +1707,7 @@ async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db)
 
 
 @router.post("/chat_service_sse", summary="模型对话服务", response_description="成功调用对话模型")
-async def chat_service_sse(
-    request: LLMServiceRequest, http_request: Request, db: Session = Depends(get_db), user=Depends(manager)
-):  # async-db-ok: 路由层 DB 已 thread_pool_exec 外移；LLMBundle 内部同步 DB 待 §11 Phase 1
+async def chat_service_sse(request: LLMServiceRequest, http_request: Request, db: AsyncSession = Depends(get_async_db), user=Depends(manager)):
     """
         ### POST `/v1/llm/chat_service` 模型对话服务
 
@@ -1870,12 +1869,12 @@ async def chat_service_sse(
 
     # 将操作封装在异步函数中
     async def process_non_streaming_request():
-        # 获取租户信息（同步 DB 一律走线程池，避免阻塞事件循环）
-        tenants = await thread_pool_exec(TenantService.get_info_by, db, user.id)
+        # TODO(async-phase4): 遗留同步 service 经 run_sync 桥接
+        tenants = await db.run_sync(lambda s: TenantService.get_info_by(s, user.id))
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
 
-        my_llms = await thread_pool_exec(TenantLLMService.get_my_llms, db, tenants[0]["tenant_id"])
+        my_llms = await db.run_sync(lambda s: TenantLLMService.get_my_llms(s, tenants[0]["tenant_id"]))  # TODO(async-phase4)
 
         def get_llm_type(model_name, my_llms):
             for row in my_llms:
@@ -1889,8 +1888,9 @@ async def chat_service_sse(
         else:
             raise HTTPException(status_code=404, detail=f"Model {req_data['llm_name']} not found in the list.")
 
-        mdl_config = await thread_pool_exec(get_model_config_by_type_and_name, db, tenants[0]["tenant_id"], llm_type, req_data["llm_name"])
-        chat_mdl = await thread_pool_exec(LLMBundle, db, tenants[0]["tenant_id"], mdl_config)
+        mdl_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, tenants[0]["tenant_id"], llm_type, req_data["llm_name"]))  # TODO(async-phase4)
+        chat_mdl = await db.run_sync(lambda s: LLMBundle(s, tenants[0]["tenant_id"], mdl_config))  # TODO(async-phase4)
+        chat_mdl.db = None  # facade 不得逸出 run_sync:防同步方法内 rollback 在事件循环上过期 ORM 状态
         # 构建调用参数
         call_params = {"system": req_data["prompt"], "history": req_data["messages"], "gen_conf": req_data["gen_conf"]}
 
@@ -1902,13 +1902,13 @@ async def chat_service_sse(
         data = await chat_mdl.async_chat(**call_params)
         return data
 
-    # 获取初始设置的同步函数
-    def get_initial_setup():
-        tenants = TenantService.get_info_by(db, user.id)
+    # 获取初始设置(DB 经 run_sync 桥接;Tavily 外部 HTTP 走线程池)
+    async def get_initial_setup():
+        tenants = await db.run_sync(lambda s: TenantService.get_info_by(s, user.id))  # TODO(async-phase4)
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
 
-        my_llms = TenantLLMService.get_my_llms(db, tenants[0]["tenant_id"])
+        my_llms = await db.run_sync(lambda s: TenantLLMService.get_my_llms(s, tenants[0]["tenant_id"]))  # TODO(async-phase4)
 
         def get_llm_type(model_name, my_llms):
             for row in my_llms:
@@ -1920,8 +1920,9 @@ async def chat_service_sse(
         if not llm_type:
             raise HTTPException(status_code=404, detail=f"Model {req_data['llm_name']} not found in the list.")
 
-        mdl_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], llm_type, req_data["llm_name"])
-        chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], mdl_config)
+        mdl_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, tenants[0]["tenant_id"], llm_type, req_data["llm_name"]))  # TODO(async-phase4)
+        chat_mdl = await db.run_sync(lambda s: LLMBundle(s, tenants[0]["tenant_id"], mdl_config))  # TODO(async-phase4)
+        chat_mdl.db = None  # facade 不得逸出 run_sync:防同步方法内 rollback 在事件循环上过期 ORM 状态
 
         # 构建调用参数
         call_params = {"system": req_data["prompt"], "history": req_data["messages"], "gen_conf": req_data["gen_conf"]}
@@ -1931,17 +1932,17 @@ async def chat_service_sse(
         #     call_params["image"] = req["image"]
 
         if llm_type == "image2text":
-            llm_model_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], LLMType.IMAGE2TEXT.value, req_data["llm_name"])
+            llm_model_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, tenants[0]["tenant_id"], LLMType.IMAGE2TEXT.value, req_data["llm_name"]))  # TODO(async-phase4)
             call_params["images"] = req_data["image"]
         else:
-            llm_model_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], LLMType.CHAT.value, req_data["llm_name"])
+            llm_model_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, tenants[0]["tenant_id"], LLMType.CHAT.value, req_data["llm_name"]))  # TODO(async-phase4)
 
         max_tokens = llm_model_config.get("max_tokens", 8192)
         kbinfos = {"total": 0, "chunks": [], "doc_aggs": []}
         questions = [m["content"] for m in req_data["messages"] if m["role"] == "user"]
         if req_data["tavily_api_key"]:
             tav = Tavily(req_data["tavily_api_key"])
-            tav_res = tav.retrieve_chunks(" ".join(questions))
+            tav_res = await thread_pool_exec(tav.retrieve_chunks, " ".join(questions))  # 外部 HTTP,非 DB
             kbinfos["chunks"].extend(tav_res["chunks"])
             kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
             kbinfos["total"] = len(kbinfos["chunks"])
@@ -1950,14 +1951,11 @@ async def chat_service_sse(
         call_params["system"] = "\n------\n" + call_params["system"] + knowledges
         return chat_mdl, call_params
 
-    # 处理流式响应
-    async def stream_response():
+    # 处理流式响应(setup 已在 handler 体完成,生成器内零桥接)
+    async def stream_response(chat_mdl, call_params):
         stream_iter = None
         think_iter = None
         try:
-            # 获取初始设置（同步 DB + Tavily HTTP，走线程池避免阻塞事件循环）
-            chat_mdl, call_params = await thread_pool_exec(get_initial_setup)
-
             stream_iter = chat_mdl.async_chat_streamly_delta(**call_params)
             accumulated = ""
             think_iter = _stream_with_think_delta(stream_iter)
@@ -1997,7 +1995,16 @@ async def chat_service_sse(
 
     # 根据是否流式调用选择合适的方法
     if req_data["stream"]:
-        return StreamingResponse(stream_response(), media_type="text/event-stream")
+        try:
+            chat_mdl, call_params = await get_initial_setup()
+        except Exception as e:
+            # 保持既有 SSE 契约:setup 失败也以流式错误帧返回(原实现 setup 在生成器内)
+            async def _setup_error_stream(err: Exception = e):
+                yield f"data: {json.dumps({'retcode': 500, 'retmsg': str(err), 'data': {'answer': f'**ERROR**: {err!s}'}}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'retcode': 0, 'retmsg': '', 'data': True}, ensure_ascii=False)}\n\n"
+
+            return StreamingResponse(_setup_error_stream(), media_type="text/event-stream")
+        return StreamingResponse(stream_response(chat_mdl, call_params), media_type="text/event-stream")
     else:
         # 直接调用异步函数
         data = await process_non_streaming_request()
