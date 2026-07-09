@@ -7,13 +7,14 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
 
 from api.apps import manager
 from api.common.check_team_permission import check_file_team_permission
 from api.db import FileType
-from api.db.db_models import get_db
+from api.db.db_models import get_async_db, get_db
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
@@ -127,7 +128,7 @@ async def upload_media_redirect(file: UploadFile = File(...), db: Session = Depe
 
 
 @router.post("/upload", summary="上传文件", response_description="成功上传文件", deprecated=True)
-async def upload(parent_id: str, files: list[UploadFile] = File(...), db: Session = Depends(get_db), user=Depends(manager)):
+async def upload(parent_id: str, files: list[UploadFile] = File(...), db: AsyncSession = Depends(get_async_db), user=Depends(manager)):
     """
     上传文件。
 
@@ -151,22 +152,27 @@ async def upload(parent_id: str, files: list[UploadFile] = File(...), db: Sessio
         blob = await file_obj.read()
         file_contents.append((blob, file_obj.filename))
 
-    # 将同步的数据库和存储操作放到线程池中执行
-    def _upload_sync():
+    def _dedup_location(folder_id: str, location: str) -> str:
+        """存储侧重名去重(对象存储 IO,非 DB)。"""
+        while settings.STORAGE_IMPL.obj_exist(folder_id, location):
+            location += "_"
+        return location
+
+    try:
         pf_id = parent_id
 
         if not pf_id:
-            root_folder = FileService.get_root_folder(db, user.id)
+            root_folder = await db.run_sync(lambda s: FileService.get_root_folder(s, user.id))  # TODO(async-phase4)
             pf_id = root_folder["id"]
 
-        pf_folder = FileService.get_by_id(db, pf_id)
+        pf_folder = await db.run_sync(lambda s: FileService.get_by_id(s, pf_id))  # TODO(async-phase4)
         if not pf_folder:
             return get_data_error_result(retmsg="Can't find this folder!")
 
         file_dict = None
         for blob, filename in file_contents:
             MAX_FILE_NUM_PER_USER: int = int(os.environ.get("MAX_FILE_NUM_PER_USER", 0))
-            if 0 < MAX_FILE_NUM_PER_USER <= DocumentService.get_doc_count(db, user.id):
+            if 0 < MAX_FILE_NUM_PER_USER <= await db.run_sync(lambda s: DocumentService.get_doc_count(s, user.id)):  # TODO(async-phase4)
                 return get_data_error_result(retmsg="Exceed the maximum file number of a free user!")
 
             if not filename:
@@ -176,27 +182,22 @@ async def upload(parent_id: str, files: list[UploadFile] = File(...), db: Sessio
                 file_obj_names = full_path.split("/")
             file_len = len(file_obj_names)
 
-            file_id_list = FileService.get_id_list_by_id(db, pf_id, file_obj_names, 1, [pf_id])
+            file_id_list = await db.run_sync(lambda s, names=file_obj_names: FileService.get_id_list_by_id(s, pf_id, names, 1, [pf_id]))  # TODO(async-phase4)
             len_id_list = len(file_id_list)
 
-            if file_len != len_id_list:
-                file = FileService.get_by_id(db, file_id_list[len_id_list - 1])
-                if not file:
-                    return get_data_error_result(retmsg="Folder not found!")
-                last_folder = FileService.create_folder(db, file, file_id_list[len_id_list - 1], file_obj_names, len_id_list)
-            else:
-                file = FileService.get_by_id(db, file_id_list[len_id_list - 2])
-                if not file:
-                    return get_data_error_result(retmsg="Folder not found!")
-                last_folder = FileService.create_folder(db, file, file_id_list[len_id_list - 2], file_obj_names, len_id_list)
+            folder_idx = len_id_list - 1 if file_len != len_id_list else len_id_list - 2
+            file = await db.run_sync(lambda s, ids=file_id_list, i=folder_idx: FileService.get_by_id(s, ids[i]))  # TODO(async-phase4)
+            if not file:
+                return get_data_error_result(retmsg="Folder not found!")
+            last_folder = await db.run_sync(lambda s, f=file, ids=file_id_list, i=folder_idx, names=file_obj_names: FileService.create_folder(s, f, ids[i], names, len_id_list))  # TODO(async-phase4)
 
             filetype = filename_type(file_obj_names[file_len - 1])
-            location = file_obj_names[file_len - 1]
-            while settings.STORAGE_IMPL.obj_exist(last_folder.id, location):
-                location += "_"
+            location = await thread_pool_exec(_dedup_location, last_folder.id, file_obj_names[file_len - 1])
 
-            final_filename = duplicate_name(FileService.query, db=db, name=file_obj_names[file_len - 1], parent_id=last_folder.id)
-            settings.STORAGE_IMPL.put(last_folder.id, location, blob)
+            final_filename = await db.run_sync(
+                lambda s, names=file_obj_names, folder=last_folder: duplicate_name(FileService.query, db=s, name=names[file_len - 1], parent_id=folder.id)
+            )  # TODO(async-phase4)
+            await thread_pool_exec(settings.STORAGE_IMPL.put, last_folder.id, location, blob)
             file_data = {
                 "id": get_uuid(),
                 "parent_id": last_folder.id,
@@ -207,7 +208,7 @@ async def upload(parent_id: str, files: list[UploadFile] = File(...), db: Sessio
                 "location": location,
                 "size": len(blob),
             }
-            file = FileService.insert(db, file_data)
+            file = await db.run_sync(lambda s, data=file_data: FileService.insert(s, data))  # TODO(async-phase4)
             file_dict = {
                 "id": file.id,
                 "parent_id": file.parent_id,
@@ -219,9 +220,6 @@ async def upload(parent_id: str, files: list[UploadFile] = File(...), db: Sessio
                 "type": file.type,
             }
         return get_json_result(data=file_dict)
-
-    try:
-        return await thread_pool_exec(_upload_sync)
     except Exception as e:
         return construct_error_response(e)
 
