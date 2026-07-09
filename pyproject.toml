@@ -143,7 +143,6 @@ dependencies = [
     "sqladmin>=0.21.0",
     "sqlalchemy>=2.0.40",
     "sse-starlette>=2.2.1",
-    "strenum==0.4.15",
     "tavily-python==0.5.4",
     "tencentcloud-sdk-python==3.0.1478",
     "tika==2.6.0",

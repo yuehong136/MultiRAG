@@ -1,7 +1,5 @@
 import os
-from enum import Enum, IntEnum
-
-from strenum import StrEnum
+from enum import Enum, IntEnum, StrEnum
 
 SERVICE_CONF = "service_conf.yaml"
 MULTI_RAG_SERVICE_NAME = "multirag"

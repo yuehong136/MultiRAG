@@ -21,9 +21,9 @@ import os
 import uuid
 from abc import ABC
 from collections.abc import Mapping
+from enum import StrEnum
 
 from pydantic import BaseModel, Field, field_validator
-from strenum import StrEnum
 
 from agent.tools.base import ToolBase, ToolMeta, ToolParamBase
 from api.db.services.file_service import FileService

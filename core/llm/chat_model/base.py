@@ -6,12 +6,12 @@ import re
 import time
 from abc import ABC
 from copy import deepcopy
+from enum import StrEnum
 from typing import Any, Protocol
 
 import json_repair
 import openai
 from openai import OpenAI
-from strenum import StrEnum
 
 from common.token_utils import num_tokens_from_string, total_token_count_from_response
 from core.nlp import is_chinese

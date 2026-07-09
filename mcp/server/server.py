@@ -3,6 +3,7 @@ import logging
 import random
 import time
 from collections import OrderedDict
+from enum import StrEnum
 from typing import Annotated
 
 import click
@@ -15,7 +16,6 @@ from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
-from strenum import StrEnum
 
 
 class LaunchMode(StrEnum):
