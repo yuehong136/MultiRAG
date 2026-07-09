@@ -64,7 +64,6 @@ api/apps/plugin_app.py::uninstall_dep
 api/apps/restful_apis/chat_api.py::ask
 api/apps/restful_apis/chat_api.py::mindmap
 api/apps/restful_apis/chat_api.py::related_questions
-api/apps/restful_apis/chat_api.py::session_completion
 api/apps/restful_apis/chat_api.py::transcriptions
 api/apps/restful_apis/dataset_api.py::get_knowledge_graph
 api/apps/restful_apis/file_api.py::upload_info
@@ -80,7 +79,6 @@ api/apps/sdk/session.py::agents_completion_openai_compatibility
 api/apps/sdk/session.py::ask_about
 api/apps/sdk/session.py::ask_about_embedded
 api/apps/sdk/session.py::chat_completion
-api/apps/sdk/session.py::chat_completion_openai_like
 api/apps/sdk/session.py::chatbot_completions
 api/apps/sdk/session.py::download_agentbot_attachment
 api/apps/sdk/session.py::mindmap

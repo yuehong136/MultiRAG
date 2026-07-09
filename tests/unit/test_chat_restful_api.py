@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from common.constants import StatusEnum
 
 _CHAT_API_PATH = Path(__file__).resolve().parents[2] / "api/apps/restful_apis/chat_api.py"
@@ -366,9 +368,11 @@ def test_session_completion_non_stream_uses_session_rest_path(monkeypatch):
         lambda _db, _session_id, payload: updates.append(payload) or 1,
     )
 
+    db_stub = AsyncSession()
+
     async def fake_async_chat(dialog_arg, messages_arg, db_arg, stream=True, **kwargs):
         assert dialog_arg is dialog
-        assert db_arg == "db"
+        assert db_arg is db_stub
         assert stream is False
         assert messages_arg == [{"role": "user", "content": "hi", "id": "msg-1"}]
         assert kwargs == {}
@@ -386,7 +390,7 @@ def test_session_completion_non_stream_uses_session_rest_path(monkeypatch):
             "chat-1",
             "session-1",
             RequestStub(),
-            db="db",
+            db=db_stub,
             tenant_id="tenant-1",
         )
     )

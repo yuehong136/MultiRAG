@@ -6,6 +6,7 @@ The legacy ``/v1/dialog/*`` endpoints stay in ``api/apps/dialog_app.py``.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -17,9 +18,10 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from api.db.db_models import get_db
+from api.db.db_models import get_async_db, get_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.chunk_feedback_service import ChunkFeedbackService
 from api.db.services.conversation_service import ConversationService, structure_answer
@@ -1101,10 +1103,10 @@ async def session_completion(
     chat_id: str,
     session_id: str,
     request: SessionCompletionRequest,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(current_tenant_id),
 ):
-    if not _owned_chat_exists(db, tenant_id, chat_id):
+    if not await db.run_sync(lambda s: _owned_chat_exists(s, tenant_id, chat_id)):  # TODO(async-phase4)
         return _error("No authorization.", RetCode.AUTHENTICATION_ERROR)
 
     req = request.model_dump(exclude_unset=True)
@@ -1134,13 +1136,13 @@ async def session_completion(
             chat_model_config[model_config] = config
 
     try:
-        conv = ConversationService.get_by_id(db, session_id)
+        conv = await db.run_sync(lambda s: ConversationService.get_by_id(s, session_id))  # TODO(async-phase4)
         if not conv:
             return _error("Session not found!")
         if conv.dialog_id != chat_id:
             return _error("Session does not belong to this chat!")
 
-        dialog = DialogService.get_by_id(db, chat_id)
+        dialog = await db.run_sync(lambda s: DialogService.get_by_id(s, chat_id))  # TODO(async-phase4)
         if not dialog:
             return _error("Chat not found!")
 
@@ -1152,9 +1154,9 @@ async def session_completion(
 
         if chat_model_id:
             try:
-                override_model_type = TenantLLMService.llm_id2llm_type(chat_model_id)
+                override_model_type = await asyncio.to_thread(TenantLLMService.llm_id2llm_type, chat_model_id)  # TODO(async-phase4): DB 兜底自开同步连接
                 model_type = LLMType.IMAGE2TEXT.value if override_model_type == "image2text" else LLMType.CHAT.value
-                override_model_config = get_model_config_by_type_and_name(db, dialog.tenant_id, model_type, chat_model_id)
+                override_model_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, dialog.tenant_id, model_type, chat_model_id))  # TODO(async-phase4)
             except Exception:
                 return _error(f"Cannot use specified model {chat_model_id}.")
             dialog.llm_id = chat_model_id
@@ -1169,7 +1171,7 @@ async def session_completion(
                     ans = structure_answer(conv, ans, message_id, conv.id)
                     yield "data:" + json.dumps({"code": 0, "message": "", "data": ans}, ensure_ascii=False) + "\n\n"
                 if not is_embedded:
-                    ConversationService.update_by_id(db, conv.id, conv.to_dict())
+                    await db.run_sync(lambda s: ConversationService.update_by_id(s, conv.id, conv.to_dict()))  # TODO(async-phase4)
             except Exception as e:
                 logger.exception(e)
                 yield (
@@ -1198,7 +1200,7 @@ async def session_completion(
         async for ans in async_chat(dialog, messages, db, False, **req):
             answer = structure_answer(conv, ans, message_id, conv.id)
             if not is_embedded:
-                ConversationService.update_by_id(db, conv.id, conv.to_dict())
+                await db.run_sync(lambda s: ConversationService.update_by_id(s, conv.id, conv.to_dict()))  # TODO(async-phase4)
             break
         return get_result(data=answer)
     except Exception as e:

@@ -11,10 +11,7 @@ Provides functionality for evaluating RAG system performance including:
 - Configuration recommendations
 """
 
-import asyncio
 import logging
-import queue
-import threading
 from datetime import datetime
 from timeit import default_timer as timer
 from typing import Any
@@ -355,40 +352,12 @@ class EvaluationService:
             answer = ""
             retrieved_chunks = []
 
-            # 使用局部桥接函数调用异步 chat
-            def _sync_from_async_gen(async_gen):
-                result_queue: queue.Queue = queue.Queue()
-
-                def runner():
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-
-                    async def consume():
-                        try:
-                            async for item in async_gen:
-                                result_queue.put(item)
-                        except Exception as e:
-                            result_queue.put(e)
-                        finally:
-                            result_queue.put(StopIteration)
-
-                    loop.run_until_complete(consume())
-                    loop.close()
-
-                threading.Thread(target=runner, daemon=True).start()
-
-                while True:
-                    item = result_queue.get()
-                    if item is StopIteration:
-                        break
-                    if isinstance(item, Exception):
-                        raise item
-                    yield item
-
+            # 评测跑在同步线程上,直接用 dialog_service 的同步 chat
+            # (async_chat 已迁 AsyncSession,不再接受本上下文的同步 Session)
             def chat(dialog, messages, stream=True, **kwargs):
-                from api.db.services.dialog_service import async_chat
+                from api.db.services.dialog_service import chat as dialog_chat
 
-                return _sync_from_async_gen(async_chat(dialog, messages, db, stream=stream, **kwargs))
+                return dialog_chat(dialog, messages, db, stream=stream, **kwargs)
 
             for ans in chat(dialog, messages, stream=False):
                 if isinstance(ans, dict):

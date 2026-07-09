@@ -11,10 +11,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from agent.canvas import Canvas
-from api.db.db_models import get_db
+from api.db.db_models import get_async_db, get_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.api_service import API4ConversationService
 from api.db.services.canvas_service import UserCanvasService, completion_openai
@@ -249,7 +250,7 @@ async def chat_completion(chat_id: str, request: ChatCompletionRequest, db: Sess
 
 
 @router.post("/chats_openai/{chat_id}/chat/completions", summary="OpenAI兼容的聊天补全")
-async def chat_completion_openai_like(chat_id: str, request: ChatCompletionOpenAIRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
+async def chat_completion_openai_like(chat_id: str, request: ChatCompletionOpenAIRequest, db: AsyncSession = Depends(get_async_db), tenant_id: str = Depends(token_required)):
     """
     OpenAI-like chat completion API that simulates the behavior of OpenAI's completions endpoint.
 
@@ -348,7 +349,7 @@ async def chat_completion_openai_like(chat_id: str, request: ChatCompletionOpenA
     # Treat context tokens as reasoning tokens
     context_token_used = sum(num_tokens_from_string(message["content"]) for message in messages)
 
-    dia = DialogService.query(db, tenant_id=tenant_id, id=chat_id, status=StatusEnum.VALID.value)
+    dia = await db.run_sync(lambda s: DialogService.query(s, tenant_id=tenant_id, id=chat_id, status=StatusEnum.VALID.value))  # TODO(async-phase4)
     if not dia:
         return get_error_data_result(retmsg=f"You don't own the chat {chat_id}")
     dia = dia[0]
@@ -359,7 +360,7 @@ async def chat_completion_openai_like(chat_id: str, request: ChatCompletionOpenA
 
     doc_ids_str = None
     if metadata_condition:
-        metas = DocMetadataService.get_flatted_meta_by_kbs(db, dia.kb_ids or [])
+        metas = await db.run_sync(lambda s: DocMetadataService.get_flatted_meta_by_kbs(s, dia.kb_ids or []))  # TODO(async-phase4)
         filtered_doc_ids = meta_filter(
             metas,
             convert_conditions(metadata_condition),

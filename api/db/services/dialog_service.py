@@ -10,6 +10,7 @@ from timeit import default_timer as timer
 
 from langfuse import Langfuse
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.db.db_models import Dialog
@@ -958,15 +959,17 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     return None
 
 
-async def async_chat(dialog, messages, db, stream=True, **kwargs):
-    """异步版本的 chat"""
+async def async_chat(dialog, messages, db: AsyncSession, stream: bool = True, **kwargs):
+    """异步版本的 chat(AsyncSession 全链路;遗留同步 service 经 run_sync 桥接)"""
     logging.debug("Begin async_chat")
     # 确保最后一条消息是用户的消息
     assert messages[-1]["role"] == "user", "The last content of this conversation is not from user."
     chat_start_ts = timer()
 
-    llm_type = TenantLLMService.llm_id2llm_type(dialog.llm_id)
-    llm_model_config = _resolve_dialog_primary_model_config(db, dialog)
+    # TODO(async-phase4): llm_id2llm_type 的 DB 兜底自开同步连接,先线程池外移防阻塞事件循环
+    llm_type = await asyncio.to_thread(TenantLLMService.llm_id2llm_type, dialog.llm_id)
+    # TODO(async-phase4): 遗留同步 service 经 run_sync 桥接
+    llm_model_config = await db.run_sync(lambda s: _resolve_dialog_primary_model_config(s, dialog))
 
     factory = llm_model_config.get("llm_factory", "") if llm_model_config else ""
     max_tokens = llm_model_config.get("max_tokens", 8192)
@@ -975,7 +978,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
 
     langfuse_tracer = None
     trace_context = {}
-    langfuse_keys = TenantLangfuseService.filter_by_tenant(db, tenant_id=dialog.tenant_id)
+    langfuse_keys = await db.run_sync(lambda s: TenantLangfuseService.filter_by_tenant(s, tenant_id=dialog.tenant_id))  # TODO(async-phase4)
     if langfuse_keys:
         langfuse = Langfuse(public_key=langfuse_keys.public_key, secret_key=langfuse_keys.secret_key, host=langfuse_keys.host)
         try:
@@ -988,7 +991,13 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
             pass
 
     check_langfuse_tracer_ts = timer()
-    kbs, embd_mdl, rerank_mdl, chat_mdl, tts_mdl = get_models(db, dialog)
+    kbs, embd_mdl, rerank_mdl, chat_mdl, tts_mdl = await db.run_sync(lambda s: get_models(s, dialog))  # TODO(async-phase4)
+    # run_sync 的 facade session 不得逸出 greenlet:LLMBundle 同步方法里的
+    # _release_db_before_long_io 会 rollback,在事件循环上先把 ORM 对象整体过期
+    # 再抛 MissingGreenlet(conv/dialog 的后续属性访问全部炸)。构造完即剥离。
+    for _mdl in (embd_mdl, rerank_mdl, chat_mdl, tts_mdl):
+        if _mdl is not None:
+            _mdl.db = None
     toolcall_session, tools = kwargs.get("toolcall_session"), kwargs.get("tools")
     if toolcall_session and tools:
         chat_mdl.bind_tools(toolcall_session, tools)
@@ -1018,7 +1027,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
 
     prompt_config = dialog.prompt_config
     internet_enabled = kwargs.get("internet") is not False
-    field_map = KnowledgebaseService.get_field_map(db, dialog.kb_ids)
+    field_map = await db.run_sync(lambda s: KnowledgebaseService.get_field_map(s, dialog.kb_ids))  # TODO(async-phase4)
     logging.debug(f"field_map retrieved: {field_map}")
     # 如果字段映射存在，尝试使用SQL检索答案
     if field_map:
@@ -1058,7 +1067,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
         questions = [await cross_languages(dialog.tenant_id, dialog.llm_id, questions[0], prompt_config["cross_languages"])]
 
     if dialog.meta_data_filter:
-        metas = DocMetadataService.get_flatted_meta_by_kbs(db, dialog.kb_ids)
+        metas = await db.run_sync(lambda s: DocMetadataService.get_flatted_meta_by_kbs(s, dialog.kb_ids))  # TODO(async-phase4)
         attachments = await apply_meta_data_filter(dialog.meta_data_filter, metas, questions[-1], chat_mdl, attachments)
 
     if prompt_config.get("keyword", False):
@@ -1121,6 +1130,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
 
         else:
             if embd_mdl:
+                rank_feature = await db.run_sync(lambda s: label_question(s, " ".join(questions), kbs))  # TODO(async-phase4)
                 kbinfos = await retriever.retrieval(
                     " ".join(questions),
                     filter_exp,
@@ -1135,7 +1145,7 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
                     top=1024,
                     aggs=True,
                     rerank_mdl=rerank_mdl,
-                    rank_feature=label_question(db, " ".join(questions), kbs),
+                    rank_feature=rank_feature,
                     search_mode=dialog.search_mode,
                     kb_ids=dialog.kb_ids,
                 )
@@ -1150,8 +1160,10 @@ async def async_chat(dialog, messages, db, stream=True, **kwargs):
                 kbinfos["chunks"].extend(tav_res["chunks"])
                 kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
             if prompt_config.get("use_kg"):
-                kg_chat_model_config = get_tenant_default_model_by_type(db, dialog.tenant_id, LLMType.CHAT)
-                ck = await settings.kg_retriever.retrieval(" ".join(questions), tenant_ids, dialog.kb_ids, embd_mdl, LLMBundle(db, dialog.tenant_id, kg_chat_model_config))
+                # TODO(async-phase4): 遗留同步 service 经 run_sync 桥接
+                kg_chat_mdl = await db.run_sync(lambda s: LLMBundle(s, dialog.tenant_id, get_tenant_default_model_by_type(s, dialog.tenant_id, LLMType.CHAT)))
+                kg_chat_mdl.db = None  # facade 不得逸出 run_sync(同上)
+                ck = await settings.kg_retriever.retrieval(" ".join(questions), tenant_ids, dialog.kb_ids, embd_mdl, kg_chat_mdl)
                 if ck["content_with_weight"]:
                     kbinfos["chunks"].insert(0, ck)
 
