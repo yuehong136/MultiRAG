@@ -188,6 +188,9 @@ observability:
   # 服务名；留空时取 OTEL_SERVICE_NAME 环境变量，再退回按入口进程推导
   # （multirag-server / multirag-task-executor）
   service_name: ''
+  # 日志格式：json（结构化单行，含 request_id/tenant_id/doc_id）| plain（旧文本格式）。
+  # 脱敏 filter 与格式无关，永远启用
+  log_format: 'json'
 
 user_default_llm:
   factory: 'ZHIPU-AI'

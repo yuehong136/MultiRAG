@@ -43,6 +43,7 @@ from common.connection_utils import timeout
 from common.constants import PAGERANK_FLD, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES, SVR_CONSUMER_GROUP_NAME, TAG_FLD, LLMType, ParserType, PipelineTaskType
 from common.exceptions import TaskCanceledException
 from common.file_utils import get_project_base_directory
+from common.log_ctx import bind_log_context, clear_log_context
 from common.log_utils import init_root_logger
 from common.metadata_utils import turn2jsonschema, update_metadata_to
 from common.misc_utils import thread_pool_exec
@@ -2790,6 +2791,8 @@ async def handle_task():
             pipeline_task_type = TASK_TYPE_TO_PIPELINE_TASK_TYPE.get(task_type, PipelineTaskType.PARSE) or PipelineTaskType.PARSE
 
             task_id = task["id"]
+            # 日志上下文（§8-3）：task_id 充当 request_id，本任务全部日志可按其聚合
+            bind_log_context(request_id=str(task_id), tenant_id=str(task.get("tenant_id") or ""), doc_id=str(task.get("doc_id") or ""))
             try:
                 # 转换为可序列化的字典
                 if hasattr(task, "_asdict"):  # 检查是否为 RowProxy
@@ -2863,6 +2866,7 @@ async def handle_task():
                         task_document_ids = task["doc_ids"]
                     if not task.get("dataflow_id", ""):
                         PipelineOperationLogService.record_pipeline_operation(db, document_id=task["doc_id"], pipeline_id="", task_type=pipeline_task_type, fake_document_ids=task_document_ids)
+                clear_log_context()
 
             redis_msg.ack()
         except Exception:

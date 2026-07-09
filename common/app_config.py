@@ -260,6 +260,8 @@ class ObservabilityConfig(_Section):
     otlp_endpoint: str = "http://localhost:4317"
     # 空值时取 OTEL_SERVICE_NAME 环境变量，再退回按入口进程推导
     service_name: str = ""
+    # 根 logger 输出格式：json（结构化，默认）| plain（旧文本格式，本地调试可读）
+    log_format: str = "json"
 
 
 # ---------------------------------------------------------------------------

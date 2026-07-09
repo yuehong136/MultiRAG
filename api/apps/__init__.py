@@ -21,6 +21,7 @@ from api.db.services import UserService
 from api.utils.api_utils import BusinessError, SDKAuthError
 from common import settings
 from common.constants import RetCode
+from common.log_ctx import bind_log_context
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, datetime_format
 from errors.exceptions import AITranslateException
@@ -193,6 +194,13 @@ app.add_middleware(
     expose_headers=["Content-Disposition", "Authorization"],
 )
 
+# request_id 中间件（add_middleware 后添加者在最外层）：置于最外层，
+# Session/CORS 及路由的日志全部携带 request_id；生成/透传 X-Request-ID
+# 并绑定日志上下文（common/log_ctx），响应头回写
+from api.middleware.request_context import RequestContextMiddleware
+
+app.add_middleware(RequestContextMiddleware)
+
 # # 添加敏感词过滤中间件
 # try:
 #     from api.middleware.sensitive_word_middleware import SensitiveWordMiddlewareConfig
@@ -298,6 +306,9 @@ def load_user(email: str, db: Session = None):
             if user.access_token and user.access_token.startswith("INVALID_"):
                 logging.warning(f"User {user.email} has been logged out")
                 return None
+            # 日志上下文：本代码库约定 tenant_id 即用户 id（JWT 与 token 两条
+            # 鉴权路径都汇于此，绑定一次全请求日志生效）
+            bind_log_context(tenant_id=str(user.id))
 
         return user
     except Exception as e:
