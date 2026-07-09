@@ -95,7 +95,8 @@ dependencies = [
     "opentelemetry-instrumentation-sqlalchemy>=0.57b0",
     "opentelemetry-instrumentation-redis>=0.57b0",
     "opentelemetry-instrumentation-httpx>=0.57b0",
-    "opencv-python==4.10.0.84",
+    # 服务端只装 headless（双装时 cv2 归属取决于安装顺序，曾是隐患）；
+    # deepdoc/vision 已核实无任何 GUI 调用（imshow/waitKey/VideoCapture 零命中）
     "opencv-python-headless==4.10.0.84",
     "openpyxl>=3.1.0,<4.0.0",
     "opensearch-py==2.7.1",
