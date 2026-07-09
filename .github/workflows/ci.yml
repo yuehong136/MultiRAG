@@ -53,15 +53,15 @@ jobs:
         run: |
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz | tar -xz gitleaks
           ./gitleaks dir . --no-banner --redact
-      # 依赖漏洞扫描（OSV 数据库 × uv.lock 全依赖树）。
-      # 存量告警分诊完成前 allow-fail 观察；转必过后改为硬门禁（方案 §3）
-      - name: osv-scanner dependency audit (allow-fail during triage)
+      # 依赖漏洞扫描（OSV 数据库 × uv.lock 全依赖树，必过门禁）。
+      # 豁免清单及理由见 osv-scanner.toml（只出不进）；新告警 = 红，
+      # 处置顺序：先试 lock-only 小步升，确认被约束锁死才进豁免。
+      - name: osv-scanner dependency audit
         if: matrix.python-version == '3.12'
-        continue-on-error: true
         run: |
           curl -sSfL -o osv-scanner https://github.com/google/osv-scanner/releases/download/v2.4.0/osv-scanner_linux_amd64
           chmod +x osv-scanner
-          ./osv-scanner scan source -L uv.lock
+          ./osv-scanner scan source -L uv.lock --config=osv-scanner.toml
 
   typecheck:
     runs-on: ubuntu-latest

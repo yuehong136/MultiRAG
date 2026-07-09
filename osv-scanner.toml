@@ -1,0 +1,99 @@
+# osv-scanner 豁免清单（CI lint job 使用，见 .github/workflows/ci.yml）
+#
+# 规则（与其他燃尽清单同文化，只出不进）：
+# - 每条必须带 reason（约束方 + 复查条件）；解除约束后立即删除对应条目；
+# - 新增豁免视为门禁变更受控，须单独说明理由；
+# - 整包豁免（PackageOverrides）只用于"版本被结构性约束锁死、逐 ID 维护无信息量"的包，
+#   其余一律按漏洞 ID 豁免（IgnoredVulns），保证同包新出现的可修告警仍然爆红。
+#
+# 快照：2026-07-09 分诊（osv-scanner v2.4.0 × uv.lock）。
+
+# ============================================================
+# 整包豁免：版本被依赖栈结构性锁死（复查条件 = 约束解除）
+# ============================================================
+
+[[PackageOverrides]]
+name = "torch"
+ecosystem = "PyPI"
+ignore = true
+reason = "2.6.0 锁定：升级归依赖现代化批次 3（transformers/torch 同批），多数告警为 torch.load 反序列化面且无统一修复版本；模型文件为自管资源非用户可控输入。复查：批次 3 启动时。"
+
+[[PackageOverrides]]
+name = "transformers"
+ecosystem = "PyPI"
+ignore = true
+reason = "4.36.2 锁定：升级需 4.48+，模型加载行为面大需专项验证，归批次 3。复查：批次 3 启动时。"
+
+[[PackageOverrides]]
+name = "litellm"
+ecosystem = "PyPI"
+ignore = true
+reason = "1.82.x 锁定（pyproject ~=1.82.0）：CVE 集中在 litellm proxy server 组件，我方仅用 SDK 路由不部署 proxy；升级与 provider 收编评估（批次 4）同期决策。复查：批次 4。"
+
+[[PackageOverrides]]
+name = "onnx"
+ecosystem = "PyPI"
+ignore = true
+reason = "1.19.0 锁定：1.21 修复线被 fastembed<0.5 约束挡死，fastembed≥0.5 需 numpy≥2.1（graspologic pin <2）。复查：numpy≥2 迁移批次（批次 3 主轴）。"
+
+[[PackageOverrides]]
+name = "pillow"
+ecosystem = "PyPI"
+ignore = true
+reason = "10.4.0 锁定：修复线在 12.x，被 fastembed<11 pin 挡死，与 onnx 同属 numpy≥2 解锁链。复查：numpy≥2 迁移批次。"
+
+[[PackageOverrides]]
+name = "pdfminer-six"
+ecosystem = "PyPI"
+ignore = true
+reason = "20221105 锁定：pdfplumber==0.10.4 精确 pin（谨慎抢跑档，调用点在跟踪文件内）。复查：pdfplumber 升级时。"
+
+# ============================================================
+# 按 ID 豁免：单点约束（同包新告警仍会爆红）
+# ============================================================
+
+[[IgnoredVulns]]
+id = "GHSA-537c-gmf6-5ccf"
+reason = "cryptography 修复线 48.0.1 被 alibabacloud-tea-openapi 全版本 pin 死（agentrun-sdk 传递）；CVSS 7.5 DoS 面。复查：阿里云 SDK 放开 pin。"
+
+[[IgnoredVulns]]
+id = "GHSA-5wmx-573v-2qwq"
+reason = "markdown 3.6 无修复版本发布（别名 PYSEC-2026-89）。复查：上游发布含 fix 的 release。"
+
+[[IgnoredVulns]]
+id = "GHSA-hx9q-6w63-j58v"
+reason = "orjson 修复线 3.11.5 被 mistralai==0.4.2 pin <3.11 挡死（别名 PYSEC-2026-107）；mistralai 属批次 3（随上游节奏）。复查：mistralai 升级时。"
+
+[[IgnoredVulns]]
+id = "GHSA-rgxp-2hwp-jwgg"
+reason = "pyarrow 修复线 23.0.1 被 infinity-sdk pin <23 挡死（别名 PYSEC-2026-113）；CVSS 7.0。复查：infinity-sdk 放开 pin。"
+
+[[IgnoredVulns]]
+id = "GHSA-6w46-j5rx-g56g"
+reason = "pytest 修复线 9.0.3 为大版本升级（别名 PYSEC-2026-1845；dev 依赖组，不进生产镜像）。复查：pytest 9 迁移时。"
+
+[[IgnoredVulns]]
+id = "GHSA-gc5v-m9x4-r6x2"
+reason = "requests 修复线 2.33.0 被 arxiv==2.1.3 pin <2.33 挡死；CVSS 4.4 低危。复查：arxiv 升级时。"
+
+# starlette：0.50.0 已是 FastAPI 约束区间内可达的最新，以下修复线全部在 1.x，
+# 随 FastAPI 升级 starlette 1.x 支持时统一解决。复查：FastAPI 放开 starlette 1.x。
+[[IgnoredVulns]]
+id = "GHSA-82w8-qh3p-5jfq"
+reason = "starlette 修复线 1.3.1（别名 PYSEC-2026-249），FastAPI 锁区间。"
+
+[[IgnoredVulns]]
+id = "GHSA-86qp-5c8j-p5mr"
+reason = "starlette 1.x 修复线，FastAPI 锁区间。"
+
+[[IgnoredVulns]]
+id = "GHSA-jp82-jpqv-5vv3"
+reason = "starlette 1.x 修复线，FastAPI 锁区间。"
+
+[[IgnoredVulns]]
+id = "GHSA-wqp7-x3pw-xc5r"
+reason = "starlette 修复线 1.1.0，FastAPI 锁区间。"
+
+[[IgnoredVulns]]
+id = "GHSA-x746-7m8f-x49c"
+reason = "starlette 修复线 1.1.0，FastAPI 锁区间。"
