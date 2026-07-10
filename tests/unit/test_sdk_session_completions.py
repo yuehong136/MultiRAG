@@ -13,6 +13,7 @@ import types
 import pytest
 
 from api.db.services import conversation_service
+from api.db.services.api_service import API4ConversationService
 from api.db.services.conversation_service import ConversationService
 from api.db.services.dialog_service import DialogService
 
@@ -75,6 +76,7 @@ def completion_stubs(monkeypatch):
     monkeypatch.setattr(ConversationService, "query", classmethod(lambda cls, s, **kw: [conv]))
     monkeypatch.setattr(ConversationService, "save", classmethod(lambda cls, s, **kw: True))
     monkeypatch.setattr(ConversationService, "update_by_id", classmethod(lambda cls, s, cid, data: updates.append(cid) or True))
+    monkeypatch.setattr(API4ConversationService, "save", classmethod(lambda cls, s, **kw: True))
     monkeypatch.setattr(conversation_service, "chat", _fake_sync_chat(answers))
     monkeypatch.setattr(conversation_service, "async_chat", _fake_async_chat(answers))
     return types.SimpleNamespace(dialog=dia, conv=conv, updates=updates)
@@ -82,10 +84,12 @@ def completion_stubs(monkeypatch):
 
 @pytest.fixture
 def sdk_auth(client):
-    from api.utils.api_utils import async_token_required, token_required
+    from api.utils.api_utils import async_beta_token_required, async_token_required, beta_token_required, token_required
 
     client.app.dependency_overrides[token_required] = lambda: "tenant-unit"
     client.app.dependency_overrides[async_token_required] = lambda: "tenant-unit"
+    client.app.dependency_overrides[beta_token_required] = lambda: "tenant-unit"
+    client.app.dependency_overrides[async_beta_token_required] = lambda: "tenant-unit"
     return client
 
 
@@ -139,3 +143,38 @@ def test_chat_completion_non_stream_returns_first_answer(sdk_auth, completion_st
     assert body["code"] == 0
     assert body["data"]["answer"] == "你好"
     assert body["data"]["session_id"] == "conv-1"
+
+
+# ---------------------------------------------------------------------------
+# chatbot_completions（任务 3）
+# ---------------------------------------------------------------------------
+
+
+def test_chatbot_completions_stream_prologue_frames(sdk_auth, completion_stubs):
+    """请求模型无 session_id 字段→路由恒走新会话路径（存量契约，钉住）。"""
+    resp = sdk_auth.post("/api/v1/chatbots/dlg-1/completions", json={"question": "hi", "stream": True})
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    frames = _sse_frames(resp.text)
+    assert frames[-1] == {"code": 0, "message": "", "data": True}
+    prologue = frames[0]
+    assert prologue["code"] == 0
+    assert prologue["message"] == ""
+    assert set(prologue["data"].keys()) == {"answer", "reference", "audio_binary", "id", "session_id"}
+    assert prologue["data"]["answer"] == "您好！"
+
+
+def test_chatbot_completions_non_stream_returns_prologue_frame_string(sdk_auth, completion_stubs):
+    """新会话路径不分流式恒 yield SSE 字符串→非流式 data 是字符串（存量契约，钉住）。
+
+    换轨前 async for 同步生成器 TypeError（预存在 bug），换轨后修复。
+    """
+    resp = sdk_auth.post("/api/v1/chatbots/dlg-1/completions", json={"question": "hi", "stream": False})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["code"] == 0
+    assert isinstance(body["data"], str) and body["data"].startswith("data:")
+    frame = json.loads(body["data"][len("data:") :])
+    assert frame["data"]["answer"] == "您好！"

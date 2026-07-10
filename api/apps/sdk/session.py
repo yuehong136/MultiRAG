@@ -20,7 +20,7 @@ from api.db.joint_services.tenant_model_service import get_model_config_by_id, g
 from api.db.services.api_service import API4ConversationService
 from api.db.services.canvas_service import UserCanvasService, completion_openai
 from api.db.services.canvas_service import completion as agent_completion
-from api.db.services.conversation_service import ConversationService, async_completion, iframe_completion
+from api.db.services.conversation_service import ConversationService, async_completion, async_iframe_completion
 from api.db.services.dialog_service import DialogService, async_ask, async_chat, gen_mindmap
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -29,6 +29,7 @@ from api.db.services.search_service import SearchService
 from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.db.services.user_service import UserTenantService
 from api.utils.api_utils import (
+    async_beta_token_required,
     async_token_required,
     beta_token_required,
     check_duplicate_ids,
@@ -885,8 +886,8 @@ Related search terms:
 async def chatbot_completions(
     dialog_id: str,
     body: ChatbotCompletionRequest,
-    db: Session = Depends(get_db),
-    _: str = Depends(beta_token_required),
+    db: AsyncSession = Depends(get_async_db),
+    _: str = Depends(async_beta_token_required),
 ):
     req = body.model_dump()
 
@@ -894,14 +895,14 @@ async def chatbot_completions(
         req["quote"] = False
 
     if req.get("stream", True):
-        resp = StreamingResponse(iframe_completion(db, dialog_id, **req), media_type="text/event-stream")
+        resp = StreamingResponse(async_iframe_completion(db, dialog_id, **req), media_type="text/event-stream")
         resp.headers["Cache-control"] = "no-cache"
         resp.headers["Connection"] = "keep-alive"
         resp.headers["X-Accel-Buffering"] = "no"
         resp.headers["Content-Type"] = "text/event-stream; charset=utf-8"
         return resp
 
-    async for answer in iframe_completion(db, dialog_id, **req):
+    async for answer in async_iframe_completion(db, dialog_id, **req):
         return get_result(data=answer)
 
 

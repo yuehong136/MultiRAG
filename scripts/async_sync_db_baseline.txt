@@ -76,7 +76,6 @@ api/apps/sdk/session.py::agent_completions
 api/apps/sdk/session.py::agents_completion_openai_compatibility
 api/apps/sdk/session.py::ask_about
 api/apps/sdk/session.py::ask_about_embedded
-api/apps/sdk/session.py::chatbot_completions
 api/apps/sdk/session.py::download_agentbot_attachment
 api/apps/sdk/session.py::mindmap
 api/apps/sdk/session.py::related_questions
