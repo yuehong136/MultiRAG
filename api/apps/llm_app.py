@@ -1660,13 +1660,13 @@ def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=De
 
 
 @router.post("/chat_service", summary="模型对话服务", response_description="成功调用对话模型")
-async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def chat_service(request: LLMServiceRequest, db: AsyncSession = Depends(get_async_db), user=Depends(manager)):
     req = request.model_dump()
-    tenants = TenantService.get_info_by(db, user.id)
+    tenants = await db.run_sync(lambda s: TenantService.get_info_by(s, user.id))  # TODO(async-phase4)
     if not tenants:
         raise HTTPException(status_code=404, detail="Tenant not found!")
 
-    my_llms = TenantLLMService.get_my_llms(db, tenants[0]["tenant_id"])
+    my_llms = await db.run_sync(lambda s: TenantLLMService.get_my_llms(s, tenants[0]["tenant_id"]))  # TODO(async-phase4)
 
     def get_llm_type(model_name, my_llms):
         for row in my_llms:
@@ -1680,8 +1680,9 @@ async def chat_service(request: LLMServiceRequest, db: Session = Depends(get_db)
     else:
         raise HTTPException(status_code=404, detail=f"Model {req['llm_name']} not found in the list.")
 
-    mdl_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], llm_type, req["llm_name"])
-    chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], mdl_config)
+    mdl_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, tenants[0]["tenant_id"], llm_type, req["llm_name"]))  # TODO(async-phase4)
+    chat_mdl = await db.run_sync(lambda s: LLMBundle(s, tenants[0]["tenant_id"], mdl_config))  # TODO(async-phase4)
+    chat_mdl.db = None  # facade 不得逸出 run_sync:防同步方法内 rollback 在事件循环上过期 ORM 状态
     # 构建调用参数
     call_params = {"system": req["prompt"], "history": req["messages"], "gen_conf": req["gen_conf"]}
 

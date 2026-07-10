@@ -19,10 +19,18 @@ def _llm_module():
 
 
 class _FakeBundle:
+    instances: list["_FakeBundle"] = []
+
     def __init__(self, *args, **kwargs):
+        # 哨兵值:路由必须在构造后剥离 facade(db=None),否则 MissingGreenlet 判例复发
         self.db = "sentinel"
+        _FakeBundle.instances.append(self)
 
     async def async_chat_streamly_delta(self, system, history, gen_conf, **kwargs):
+        yield "你好"
+        yield "你好,世界"
+
+    async def async_chat_streamly(self, system, history, gen_conf, **kwargs):
         yield "你好"
         yield "你好,世界"
 
@@ -32,6 +40,7 @@ class _FakeBundle:
 
 @pytest.fixture
 def llm_stubs(monkeypatch):
+    _FakeBundle.instances.clear()
     monkeypatch.setattr(TenantService, "get_info_by", classmethod(lambda cls, s, uid: [{"tenant_id": "tenant-unit"}]))
     monkeypatch.setattr(TenantLLMService, "get_my_llms", classmethod(lambda cls, s, tid: [types.SimpleNamespace(llm_name="m1", mdl_type="chat")]))
     monkeypatch.setattr(_llm_module(), "get_model_config_by_type_and_name", lambda s, tid, t, n: {"llm_name": "m1", "max_tokens": 1024})
@@ -55,6 +64,7 @@ def test_chat_service_sse_streams(client, llm_stubs):
     text_frames = [f for f in frames if isinstance(f.get("data"), str) and f["data"]]
     assert text_frames and all(f["retcode"] == 0 for f in text_frames)
     assert "你好,世界" in text_frames[-1]["data"]
+    assert _FakeBundle.instances and _FakeBundle.instances[-1].db is None  # facade 已剥离
 
 
 def test_chat_service_non_stream_returns_json(client, llm_stubs):
@@ -67,6 +77,43 @@ def test_chat_service_non_stream_returns_json(client, llm_stubs):
     body = resp.json()
     assert body["retcode"] == 0
     assert body["data"] == "非流式回答"
+    assert _FakeBundle.instances and _FakeBundle.instances[-1].db is None  # facade 已剥离
+
+
+def test_chat_service_buffered_json_stream_and_detached_bundle(client, llm_stubs):
+    """/chat_service(非 SSE 版):stream=true 时缓冲整流回 JSON 数组。"""
+    resp = client.post(
+        "/v1/llm/chat_service",
+        json={"prompt": "p", "messages": [{"role": "user", "content": "hi"}], "llm_name": "m1", "stream": True, "gen_conf": {}},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["retcode"] == 0
+    assert isinstance(body["data"], list)
+    assert body["data"][-1] == "你好,世界"
+    assert _FakeBundle.instances and _FakeBundle.instances[-1].db is None  # facade 已剥离
+
+
+def test_chat_service_non_stream_returns_answer(client, llm_stubs):
+    resp = client.post(
+        "/v1/llm/chat_service",
+        json={"prompt": "p", "messages": [{"role": "user", "content": "hi"}], "llm_name": "m1", "stream": False, "gen_conf": {}},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["retcode"] == 0
+    assert body["data"] == "非流式回答"
+
+
+def test_chat_service_unknown_model_returns_404(client, llm_stubs):
+    resp = client.post(
+        "/v1/llm/chat_service",
+        json={"prompt": "p", "messages": [{"role": "user", "content": "hi"}], "llm_name": "no-such-model", "stream": True, "gen_conf": {}},
+    )
+
+    assert resp.status_code == 404
 
 
 class _FakeChatAgent:

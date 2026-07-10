@@ -43,7 +43,6 @@ api/apps/docx2zjform_app.py::convert
 api/apps/file_app.py::upload_media_redirect
 api/apps/kb_app.py::knowledge_graph
 api/apps/llm_app.py::add_llm
-api/apps/llm_app.py::chat_service
 api/apps/llm_app.py::embeddings_api
 api/apps/llm_app.py::fill_fields
 api/apps/llm_app.py::fine_prompt
