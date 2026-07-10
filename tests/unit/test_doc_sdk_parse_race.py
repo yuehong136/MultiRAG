@@ -2,12 +2,55 @@ import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
+from fastapi.responses import StreamingResponse
+
 from api.apps.sdk import doc as doc_routes
 from common.constants import RetCode, TaskStatus
 
 
 def _response_json(response):
     return json.loads(response.body)
+
+
+async def _streaming_response_body(response: StreamingResponse) -> bytes:
+    chunks: list[bytes] = []
+    async for chunk in response.body_iterator:
+        chunks.append(bytes(chunk))
+    return b"".join(chunks)
+
+
+class _StrictBinaryStorage:
+    def __init__(self, content: bytes) -> None:
+        self.content = content
+        self.get_calls: list[tuple[str, str, str | None]] = []
+
+    def get(self, bucket: str, filename: str, tenant_id: str | None = None) -> bytes:
+        self.get_calls.append((bucket, filename, tenant_id))
+        return self.content
+
+    def obj_exist(self, *_args: object, **_kwargs: object) -> bool:
+        raise AssertionError("download_document should not preflight storage with obj_exist")
+
+
+async def test_download_document_uses_storage_address_and_preserves_binary(monkeypatch: pytest.MonkeyPatch) -> None:
+    db = object()
+    binary_content = b"\x00multi\nrag\xff\xfe"
+    storage = _StrictBinaryStorage(binary_content)
+    doc = SimpleNamespace(id="doc-1", name="resume.bin")
+
+    monkeypatch.setattr(doc_routes.KnowledgebaseService, "query", lambda *_args, **_kwargs: [object()])
+    monkeypatch.setattr(doc_routes.DocumentService, "query", lambda *_args, **_kwargs: [doc])
+    monkeypatch.setattr(doc_routes.File2DocumentService, "get_storage_address", lambda *_args, **_kwargs: ("bucket-1", "path/doc.bin"))
+    monkeypatch.setattr(doc_routes.File2DocumentService, "get_by_document_id", Mock(side_effect=AssertionError("legacy file lookup should not be used")))
+    monkeypatch.setattr(doc_routes.settings, "STORAGE_IMPL", storage)
+
+    response = doc_routes.download_document("kb-1", "doc-1", db=db, tenant_id="tenant-1")
+
+    assert isinstance(response, StreamingResponse)
+    assert await _streaming_response_body(response) == binary_content
+    assert storage.get_calls == [("bucket-1", "path/doc.bin", None)]
+    assert response.headers["content-disposition"] == "attachment; filename*=UTF-8''resume.bin"
 
 
 def test_parse_documents_stops_when_atomic_running_update_loses(monkeypatch):

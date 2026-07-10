@@ -266,27 +266,14 @@ def download_document(dataset_id: str, document_id: str, db: Session = Depends(g
         return get_error_data_result(retmsg=f"The dataset not own the document {document_id}.")
 
     doc = doc[0]
-    informs = File2DocumentService.get_by_document_id(db, document_id)
-    if not informs:
-        return get_error_data_result(retmsg="This document has been deleted")
+    bucket, name = File2DocumentService.get_storage_address(db, doc_id=document_id)
+    file_stream = settings.STORAGE_IMPL.get(bucket, name)
+    if not file_stream:
+        return construct_json_result(message="This file is empty.", code=RetCode.DATA_ERROR)
 
-    file = FileService.get_by_id(db, informs[0].file_id)
-    if not file:
-        return get_error_data_result(retmsg="This document has been deleted")
-
-    try:
-        settings.STORAGE_IMPL.obj_exist(file.location)
-
-        def file_generator():
-            try:
-                yield from settings.STORAGE_IMPL.get(file.location)
-            except Exception:
-                yield b""
-
-        encoded_filename = quote(doc.name)
-        return StreamingResponse(file_generator(), media_type="application/octet-stream", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"})
-    except Exception:
-        return get_error_data_result(retmsg="This document has been deleted")
+    file = BytesIO(file_stream)
+    encoded_filename = quote(doc.name)
+    return StreamingResponse(file, media_type="application/octet-stream", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"})
 
 
 @router.get("/documents/{document_id}", summary="按文档ID下载文档")
