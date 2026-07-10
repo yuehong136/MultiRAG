@@ -406,7 +406,8 @@ def test_session_completion_non_stream_uses_session_rest_path(monkeypatch):
     assert updates[0]["message"][-1]["content"] == "ok"
 
 
-def test_related_questions_uses_search_chat_config(monkeypatch):
+def test_related_questions_uses_search_chat_config(monkeypatch, async_db):
+    """直调式：AsyncSession 化后 db 走 run_sync facade，桩收到的是 facade 同步 session。"""
     captured = {}
     monkeypatch.setattr(
         chat_api.SearchService,
@@ -429,6 +430,7 @@ def test_related_questions_uses_search_chat_config(monkeypatch):
 
     class FakeLLMBundle:
         def __init__(self, db, tenant_id, config):
+            self.db = db
             captured["bundle"] = (db, tenant_id, config)
 
         async def async_chat(self, prompt, messages, gen_conf):
@@ -440,14 +442,14 @@ def test_related_questions_uses_search_chat_config(monkeypatch):
     response = asyncio.run(
         chat_api.related_questions(
             chat_api.RelatedQuestionsRequest(question="hybrid search", search_id="search-1"),
-            db="db",
+            db=async_db,
             tenant_id="tenant-1",
         )
     )
     body = json.loads(response.body)
 
-    assert captured["model_lookup"] == ("db", "tenant-1", "chat", "search-1-model")
-    assert captured["bundle"] == ("db", "tenant-1", {"id": 7})
+    assert captured["model_lookup"][1:] == ("tenant-1", "chat", "search-1-model")
+    assert captured["bundle"][1:] == ("tenant-1", {"id": 7})
     assert captured["chat"][0] == "prompt:related_question"
     assert captured["chat"][1][0]["content"] == "\nKeywords: hybrid search\nRelated search terms:\n    "
     assert captured["chat"][2] == {"temperature": 0.4}

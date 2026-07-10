@@ -847,23 +847,24 @@ async def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=D
 
 
 @router.post("/related_questions", summary="[Deprecated] 生成相关问题", response_description="返回相关问题", deprecated=True)
-async def related_questions(request: RelatedQuestionsRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def related_questions(request: RelatedQuestionsRequest, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)):
     req = request.model_dump()
 
     search_id = req.get("search_id", "")
     search_config = {}
     if search_id:
-        if search_app := SearchService.get_detail(db, search_id):
+        if search_app := await db.run_sync(lambda s: SearchService.get_detail(s, search_id)):  # TODO(async-phase4)
             search_config = search_app.get("search_config", {})
 
     question = req["question"]
 
     chat_id = search_config.get("chat_id", "")
     if chat_id:
-        chat_config = get_model_config_by_type_and_name(db, user.id, LLMType.CHAT.value, chat_id)
+        chat_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, user.id, LLMType.CHAT.value, chat_id))  # TODO(async-phase4)
     else:
-        chat_config = get_tenant_default_model_by_type(db, user.id, LLMType.CHAT)
-    chat_mdl = LLMBundle(db, user.id, chat_config)
+        chat_config = await db.run_sync(lambda s: get_tenant_default_model_by_type(s, user.id, LLMType.CHAT))  # TODO(async-phase4)
+    chat_mdl = await db.run_sync(lambda s: LLMBundle(s, user.id, chat_config))  # TODO(async-phase4)
+    chat_mdl.db = None  # run_sync 的 facade 不得逸出 greenlet（AGENTS.md 规约）
 
     gen_conf = search_config.get("llm_setting", {"temperature": 0.9})
     if "parameter" in gen_conf:

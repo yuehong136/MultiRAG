@@ -763,8 +763,8 @@ async def mindmap(
 @router.post("/chats/related_questions", summary="Generate related questions")
 async def related_questions(
     request: RelatedQuestionsRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(current_tenant_id),
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_current_tenant_id),
 ):
     try:
         req = request.model_dump()
@@ -775,15 +775,16 @@ async def related_questions(
         search_id = req.get("search_id", "")
         search_config = {}
         if search_id:
-            if search_app := SearchService.get_detail(db, search_id):
+            if search_app := await db.run_sync(lambda s: SearchService.get_detail(s, search_id)):  # TODO(async-phase4)
                 search_config = search_app.get("search_config", {})
 
         chat_id = search_config.get("chat_id", "")
         if chat_id:
-            chat_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, chat_id)
+            chat_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, tenant_id, LLMType.CHAT.value, chat_id))  # TODO(async-phase4)
         else:
-            chat_config = get_tenant_default_model_by_type(db, tenant_id, LLMType.CHAT)
-        chat_mdl = LLMBundle(db, tenant_id, chat_config)
+            chat_config = await db.run_sync(lambda s: get_tenant_default_model_by_type(s, tenant_id, LLMType.CHAT))  # TODO(async-phase4)
+        chat_mdl = await db.run_sync(lambda s: LLMBundle(s, tenant_id, chat_config))  # TODO(async-phase4)
+        chat_mdl.db = None  # run_sync 的 facade 不得逸出 greenlet（AGENTS.md 规约）
 
         gen_conf = search_config.get("llm_setting", {"temperature": 0.9})
         if "parameter" in gen_conf:
