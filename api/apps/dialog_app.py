@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from api.apps import manager
 from api.db.db_models import get_db
 from api.db.services.dialog_service import DialogService
-from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.knowledgebase_service import EmbeddingModelMismatchError, KnowledgebaseService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService, UserTenantService
 from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
@@ -344,10 +344,10 @@ def set_dialog(request: DialogRequest, db: Session = Depends(get_db), user=Depen
             return get_data_error_result(retmsg="Tenant not found!")
 
         kbs = KnowledgebaseService.get_by_ids(db, request.kb_ids or [])
-        embd_keys = [kb.tenant_embd_id or TenantLLMService.split_model_name_and_factory(kb.embd_id)[0] for kb in kbs]
-        embd_count = len(set(embd_keys))
-        if embd_count > 1:
-            return get_data_error_result(retmsg=f'Datasets use different embedding models: {[kb.embd_id for kb in kbs]}"')
+        try:
+            KnowledgebaseService.ensure_same_embedding_model(kbs)
+        except EmbeddingModelMismatchError as e:
+            return get_data_error_result(retmsg=str(e))
 
         llm_id = request.llm_id or tenant.llm_id
 

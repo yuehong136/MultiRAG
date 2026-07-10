@@ -15,7 +15,7 @@ from api.db.db_models import get_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService
-from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.knowledgebase_service import EmbeddingModelMismatchError, KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
 from api.db.services.user_service import UserTenantService
@@ -1536,6 +1536,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
 
     - **权限错误**: 只有知识库的所有者才能进行检索测试
     - **知识库不存在**: 指定的知识库ID无效
+    - **embedding 模型不一致**: 多个知识库使用了不同的 embedding 模型（向量空间不兼容，无法联合检索）
     - **无结果**: 未找到匹配的内容块
     - **参数错误**: 搜索模式参数格式错误
 
@@ -1583,9 +1584,15 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
             else:
                 return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
-        kb = KnowledgebaseService.get_by_id(db, request.kb_ids[0])
-        if not kb:
+        kbs = KnowledgebaseService.get_by_ids(db, request.kb_ids)
+        if not kbs:
             return get_data_error_result(retmsg="Knowledgebase not found!")
+        try:
+            KnowledgebaseService.ensure_same_embedding_model(kbs)
+        except EmbeddingModelMismatchError as e:
+            return get_json_result(data=False, retmsg=str(e), retcode=RetCode.DATA_ERROR)
+        kb = kbs[0]
+        tenant_ids = list({kb.tenant_id for kb in kbs})
 
         if request.cross_languages:
             question = await cross_languages(kb.tenant_id, None, question, request.cross_languages)
@@ -1610,7 +1617,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
             chat_mdl = LLMBundle(db, kb.tenant_id, chat_config)
             question += await keyword_extraction(chat_mdl, question)
         filter_exp = ""
-        labels = label_question(db, question, [kb])
+        labels = label_question(db, question, kbs)
 
         # 使用实例方法获取搜索模式
         search_mode_dict = request.get_search_mode_dict()
@@ -1621,8 +1628,8 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
             question,
             filter_exp,
             embd_mdl,
-            kb.tenant_id,
-            [kb.name],
+            tenant_ids,
+            [kb.name for kb in kbs],
             request.page,
             request.size,
             request.similarity_threshold,
@@ -1636,10 +1643,10 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
             kb_ids=request.kb_ids,
         )
         if request.use_kg:
-            ck = await settings.kg_retriever.retrieval(question, kb.tenant_id, request.kb_ids, embd_mdl, LLMBundle(db, kb.tenant_id, get_tenant_default_model_by_type(db, kb.tenant_id, LLMType.CHAT)))
+            ck = await settings.kg_retriever.retrieval(question, tenant_ids, request.kb_ids, embd_mdl, LLMBundle(db, kb.tenant_id, get_tenant_default_model_by_type(db, kb.tenant_id, LLMType.CHAT)))
             if ck["content_with_weight"]:
                 ranks["chunks"].insert(0, ck)
-        ranks["chunks"] = settings.retriever.retrieval_by_children(ranks["chunks"], [kb.tenant_id])
+        ranks["chunks"] = settings.retriever.retrieval_by_children(ranks["chunks"], tenant_ids)
 
         for c in ranks["chunks"]:
             c.pop("vector", None)

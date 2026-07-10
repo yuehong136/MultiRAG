@@ -417,11 +417,9 @@ async def async_chat_solo(db, dialog, messages, stream=True):
 def get_models(db, dialog):
     embd_mdl, chat_mdl, rerank_mdl, tts_mdl = None, None, None, None
     kbs = KnowledgebaseService.get_by_ids(db, dialog.kb_ids)
-    embedding_keys = list({kb.tenant_embd_id or kb.embd_id for kb in kbs})
-    if len(embedding_keys) > 1:
-        raise Exception("**ERROR**: Knowledge bases use different embedding models.")
+    KnowledgebaseService.ensure_same_embedding_model(kbs)
 
-    if embedding_keys:
+    if kbs:
         embd_owner_tenant_id = kbs[0].tenant_id
         embd_model_config = _resolve_model_config(
             db,
@@ -1836,13 +1834,11 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
     meta_data_filter = search_config.get("meta_data_filter")
 
     kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
-    embedding_keys = list({kb.tenant_embd_id or kb.embd_id for kb in kbs})
+    KnowledgebaseService.ensure_same_embedding_model(kbs)
 
     is_knowledge_graph = all(kb.parser_id == ParserType.KG for kb in kbs)
     retriever = settings.retriever if not is_knowledge_graph else settings.kg_retriever
 
-    if len(embedding_keys) > 1:
-        raise ValueError("Knowledge bases use different embedding models.")
     embd_owner_tenant_id = kbs[0].tenant_id if kbs else tenant_id
     embd_model_config = _resolve_model_config(
         db,
@@ -1927,13 +1923,11 @@ async def async_ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None
     meta_data_filter = search_config.get("meta_data_filter")
 
     kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
-    embedding_keys = list({kb.tenant_embd_id or kb.embd_id for kb in kbs})
+    KnowledgebaseService.ensure_same_embedding_model(kbs)
 
     is_knowledge_graph = all(kb.parser_id == ParserType.KG for kb in kbs)
     retriever = settings.retriever if not is_knowledge_graph else settings.kg_retriever
 
-    if len(embedding_keys) > 1:
-        raise ValueError("Knowledge bases use different embedding models.")
     embd_owner_tenant_id = kbs[0].tenant_id if kbs else tenant_id
     embd_model_config = _resolve_model_config(
         db,
@@ -2024,12 +2018,10 @@ async def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=No
     kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
     if not kbs:
         return {"error": "No KB selected"}
-    embedding_keys = list({kb.tenant_embd_id or kb.embd_id for kb in kbs})
+    KnowledgebaseService.ensure_same_embedding_model(kbs)
     tenant_ids = list({kb.tenant_id for kb in kbs})
     kb_names = list({kb.name for kb in kbs})
 
-    if len(embedding_keys) > 1:
-        raise ValueError("Knowledge bases use different embedding models.")
     embd_owner_tenant_id = kbs[0].tenant_id
     embd_model_config = _resolve_model_config(
         db,

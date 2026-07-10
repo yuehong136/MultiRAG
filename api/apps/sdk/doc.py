@@ -20,10 +20,9 @@ from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
-from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.knowledgebase_service import EmbeddingModelMismatchError, KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.task_service import TaskService, cancel_all_task_of, queue_tasks
-from api.db.services.tenant_llm_service import TenantLLMService
 from api.utils.api_utils import check_duplicate_ids, construct_json_result, get_error_data_result, get_result, server_error_response, token_required
 from api.utils.image_utils import store_chunk_image
 from common import settings
@@ -1153,11 +1152,11 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
     kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
     kb_names = [kb.name for kb in kbs]
 
-    # 验证所有数据集使用相同的embedding模型
-    embd_keys = list({kb.tenant_embd_id or TenantLLMService.split_model_name_and_factory(kb.embd_id)[0] for kb in kbs})
-    if len(embd_keys) != 1:
+    try:
+        KnowledgebaseService.ensure_same_embedding_model(kbs)
+    except EmbeddingModelMismatchError as e:
         return get_result(
-            retmsg="Datasets use different embedding models.",
+            retmsg=str(e),
             retcode=RetCode.DATA_ERROR,
         )
 

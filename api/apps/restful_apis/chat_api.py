@@ -26,7 +26,7 @@ from api.db.joint_services.tenant_model_service import get_model_config_by_type_
 from api.db.services.chunk_feedback_service import ChunkFeedbackService
 from api.db.services.conversation_service import ConversationService, structure_answer
 from api.db.services.dialog_service import DialogService, async_ask, async_chat, gen_mindmap
-from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.knowledgebase_service import EmbeddingModelMismatchError, KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
 from api.db.services.tenant_llm_service import TenantLLMService
@@ -292,9 +292,10 @@ def _validate_dataset_ids(db: Session, tenant_id: str, dataset_ids: list[str] | 
             return f"The dataset {dataset_id} doesn't own parsed file"
         kbs.append(kb)
 
-    embd_ids = [kb.tenant_embd_id or TenantLLMService.split_model_name_and_factory(kb.embd_id)[0] for kb in kbs]
-    if len(set(embd_ids)) > 1:
-        return f"Datasets use different embedding models: {[kb.embd_id for kb in kbs]}"
+    try:
+        KnowledgebaseService.ensure_same_embedding_model(kbs)
+    except EmbeddingModelMismatchError as e:
+        return str(e)
     return normalized_ids
 
 

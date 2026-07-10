@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from datetime import datetime
 
 from sqlalchemy import and_, func, or_, select, update
@@ -7,6 +8,7 @@ from api.constants import DATASET_NAME_LIMIT
 from api.db import TenantPermission
 from api.db.db_models import Document, Knowledgebase, User, UserCanvas, UserTenant
 from api.db.services.common_service import CommonService
+from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService, UserTenantService
 from api.utils.api_utils import get_data_error_result
 from common.constants import StatusEnum
@@ -14,8 +16,25 @@ from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, datetime_format
 
 
+class EmbeddingModelMismatchError(ValueError):
+    """同一批知识库引用了不止一种 embedding 模型（向量空间不兼容，无法联合检索）。"""
+
+
 class KnowledgebaseService(CommonService):
     model = Knowledgebase
+
+    @classmethod
+    def ensure_same_embedding_model(cls, kbs: Sequence[Knowledgebase]) -> None:
+        """校验一批知识库使用同一 embedding 模型，否则抛 EmbeddingModelMismatchError。
+
+        判定键：tenant_embd_id（provider 实例级）；缺失时回退到 embd_id 并剥掉
+        @factory 后缀——同名模型挂不同 factory 视为同一向量空间（与上游语义一致）。
+        所有多知识库联合检索/对话入口都必须走这里，不要在调用点内联复制此校验。
+        """
+        keys = {kb.tenant_embd_id or TenantLLMService.split_model_name_and_factory(kb.embd_id)[0] for kb in kbs}
+        if len(keys) > 1:
+            detail = sorted(str(kb.tenant_embd_id or kb.embd_id) for kb in kbs)
+            raise EmbeddingModelMismatchError(f"Datasets use different embedding models: {detail}")
 
     @classmethod
     def is_parsed_done(cls, db, kb_id):

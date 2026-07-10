@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.db_models import Knowledgebase
 from common.constants import StatusEnum
 
 _CHAT_API_PATH = Path(__file__).resolve().parents[2] / "api/apps/restful_apis/chat_api.py"
@@ -29,7 +30,9 @@ def _install_common_fakes(monkeypatch):
     monkeypatch.setattr(
         chat_api.KnowledgebaseService,
         "query",
-        lambda *_args, **_kwargs: [Obj(id="kb-1", chunk_num=1, embd_id="embed-model", tenant_embd_id=None)],
+        # 真实模型实例（不落库）：ensure_same_embedding_model 的 Sequence[Knowledgebase]
+        # 注解受 beartype 运行时校验，SimpleNamespace 过不了。
+        lambda *_args, **_kwargs: [Knowledgebase(id="kb-1", chunk_num=1, embd_id="embed-model", tenant_embd_id=None)],
     )
     monkeypatch.setattr(
         chat_api.KnowledgebaseService,
