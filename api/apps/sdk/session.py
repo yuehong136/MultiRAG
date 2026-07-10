@@ -20,8 +20,7 @@ from api.db.joint_services.tenant_model_service import get_model_config_by_id, g
 from api.db.services.api_service import API4ConversationService
 from api.db.services.canvas_service import UserCanvasService, completion_openai
 from api.db.services.canvas_service import completion as agent_completion
-from api.db.services.conversation_service import ConversationService, iframe_completion
-from api.db.services.conversation_service import completion as rag_completion
+from api.db.services.conversation_service import ConversationService, async_completion, iframe_completion
 from api.db.services.dialog_service import DialogService, async_ask, async_chat, gen_mindmap
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -210,19 +209,19 @@ def create_agent_session(agent_id: str, request_body: CreateAgentSessionRequest 
 
 
 @router.post("/chats/{chat_id}/completions", summary="聊天补全")
-async def chat_completion(chat_id: str, request: ChatCompletionRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
+async def chat_completion(chat_id: str, request: ChatCompletionRequest, db: AsyncSession = Depends(get_async_db), tenant_id: str = Depends(async_token_required)):
     req = request.model_dump()
     if not req:
         req = {"question": ""}
     if not req.get("session_id"):
         req["question"] = ""
 
-    dia = DialogService.query(db, tenant_id=tenant_id, id=chat_id, status=StatusEnum.VALID.value)
+    dia = await db.run_sync(lambda s: DialogService.query(s, tenant_id=tenant_id, id=chat_id, status=StatusEnum.VALID.value))  # TODO(async-phase4)
     if not dia:
         return get_error_data_result(retmsg=f"You don't own the chat {chat_id}")
     dia = dia[0]
     if req.get("session_id"):
-        if not ConversationService.query(db, id=req["session_id"], dialog_id=chat_id):
+        if not await db.run_sync(lambda s: ConversationService.query(s, id=req["session_id"], dialog_id=chat_id)):  # TODO(async-phase4)
             return get_error_data_result(retmsg=f"You don't own the session {req['session_id']}")
 
     metadata_condition = req.get("metadata_condition") or {}
@@ -230,7 +229,7 @@ async def chat_completion(chat_id: str, request: ChatCompletionRequest, db: Sess
         return get_error_data_result(retmsg="metadata_condition must be an object.")
 
     if metadata_condition and req.get("question"):
-        metas = DocMetadataService.get_flatted_meta_by_kbs(db, dia.kb_ids or [])
+        metas = await db.run_sync(lambda s: DocMetadataService.get_flatted_meta_by_kbs(s, dia.kb_ids or []))  # TODO(async-phase4)
         filtered_doc_ids = meta_filter(
             metas,
             convert_conditions(metadata_condition),
@@ -245,7 +244,7 @@ async def chat_completion(chat_id: str, request: ChatCompletionRequest, db: Sess
             req.pop("doc_ids", None)
 
     if req.get("stream", True):
-        resp = StreamingResponse(rag_completion(db, tenant_id, chat_id, **req), media_type="text/event-stream")
+        resp = StreamingResponse(async_completion(db, tenant_id, chat_id, **req), media_type="text/event-stream")
         resp.headers["Cache-control"] = "no-cache"
         resp.headers["Connection"] = "keep-alive"
         resp.headers["X-Accel-Buffering"] = "no"
@@ -253,7 +252,7 @@ async def chat_completion(chat_id: str, request: ChatCompletionRequest, db: Sess
         return resp
     else:
         answer = None
-        async for ans in rag_completion(db, tenant_id, chat_id, **req):
+        async for ans in async_completion(db, tenant_id, chat_id, **req):
             answer = ans
             break
         return get_result(data=answer)
