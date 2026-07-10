@@ -5,17 +5,18 @@ import pathlib
 import re
 from io import BytesIO
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, Json, ValidationError, field_validator
 from sqlalchemy.orm import Session
 from starlette.status import (
     HTTP_400_BAD_REQUEST,
     HTTP_404_NOT_FOUND,
     HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+    HTTP_422_UNPROCESSABLE_CONTENT,
     HTTP_500_INTERNAL_SERVER_ERROR,
 )
 
@@ -35,6 +36,7 @@ from api.db.services.pipeline_analysis_service import PipelineAnalysisService
 from api.db.services.task_service import TaskService, cancel_all_task_of
 from api.db.services.user_service import UserTenantService
 from api.utils.api_utils import construct_error_response, construct_json_result, convert_datetime_to_str, get_data_error_result, get_json_result, server_error_response
+from api.utils.document_upload import UploadDocumentsManifest, UploadManifestValidationError, resolve_document_upload_names
 from api.utils.file_utils import filename_type, thumbnail
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers, html2pdf, is_valid_url
 from common import settings
@@ -410,177 +412,130 @@ async def upload(
     kb_id: str,
     files: list[UploadFile] = File(...),
     labels: str | None = Query(None),  # labels 是一个 JSON 格式的字符串
+    manifest: Annotated[
+        Json[UploadDocumentsManifest] | None,
+        Form(description="Optional JSON manifest mapping each zero-based files index to its canonical document name."),
+    ] = None,
     db: Session = Depends(get_db),
     user=Depends(manager),
 ):
     """
-    ### POST `/upload` 文件上传接口
+    ### POST `/v1/document/upload`
 
-    **功能描述**:
-    此接口用于上传单个或多个文件到指定的知识库，支持文件标签标注和自动文件类型识别。上传的文件会被存储并创建对应的文档记录。
+    上传一个或多个文件到指定知识库，并创建对应文档记录。调用方可通过可选
+    `manifest` 为每个上传文件指定进入解析、文件名 embedding、检索引用和下载响应的
+    真实文档名；未传 `manifest` 时继续使用 multipart part 的 `filename`。
 
-    ---
+    ### Query 参数
 
-    ### 请求参数
+    | 参数 | 类型 | 必填 | 说明 |
+    |------|------|------|------|
+    | `kb_id` | `string` | 是 | 目标知识库 ID |
+    | `labels` | `string` | 否 | JSON 字符串数组，如 `["财务", "2025"]` |
 
-    #### Form Data 参数
-    | 参数名    | 类型                | 必填 | 描述                                                                |
-    |-----------|---------------------|------|---------------------------------------------------------------------|
-    | `kb_id`   | `string`           | 是   | 知识库的唯一标识符                                                  |
-    | `files`   | `list[UploadFile]` | 是   | 要上传的文件列表，支持多文件同时上传                                |
-    | `labels`  | `string`           | 否   | JSON格式的标签字符串，用于标注文件属性，如 `["标签1", "标签2"]`     |
+    ### multipart/form-data 参数
 
-    ---
+    | 参数 | 类型 | 必填 | 说明 |
+    |------|------|------|------|
+    | `files` | `file[]` | 是 | 重复使用同名字段上传单个或多个文件 |
+    | `manifest` | `JSON string` | 否 | 按 `file_index` 为每个文件指定真实文档名 |
 
-    ### 响应 (Response)
+    `manifest` 结构：
 
-    #### 成功响应 (200)
     ```json
     {
-        "retcode": 0,
-        "retmsg": "success",
-        "data": [
-            {
-                "id": "doc_123456",
-                "name": "示例文档.pdf",
-                "size": 1024000,
-                "type": "pdf",
-                "thumbnail": "/v1/document/image/kb_id-thumbnail_id",
-                "created_time": "2024-01-01 12:00:00",
-                "status": "uploaded"
-            }
-        ]
+      "documents": [
+        {"file_index": 0, "name": "2025年度财务报告.pdf"},
+        {"file_index": 1, "name": "董事会决议.docx"}
+      ]
     }
     ```
 
-    #### 错误响应
+    manifest 规则：
 
-    - **400: 参数错误**
-        ```json
-        {
-            "retcode": 400,
-            "retmsg": "Lack of \"KB ID\"",
-            "data": false
-        }
-        ```
+    - `file_index` 从 0 开始，对应 `files` 在 multipart 请求中的顺序。
+    - 传入 manifest 时必须完整覆盖所有文件；索引不得缺失、重复或越界。
+    - `name` 会执行 Unicode NFC 规范化并去除首尾空白。
+    - `name` 不能为空，不得包含控制字符、NUL、`/` 或 `\\`，UTF-8 编码后不得超过 255 字节。
+    - `name` 必须保留对应 multipart filename 的扩展名，扩展名比较不区分大小写。
+    - manifest 无效时返回 HTTP 422，且不会调用上传服务或写入文档。
+    - 同库重名继续沿用自动编号规则，响应中的 `name` 是最终实际名称。
 
-    - **400: 文件问题**
-        ```json
-        {
-            "retcode": 400,
-            "retmsg": "No file selected!",
-            "data": false
-        }
-        ```
+    ### 请求示例
 
-    - **400: 文件名过长**
-        ```json
-        {
-            "retcode": 400,
-            "retmsg": "File name must be 255 bytes or less.",
-            "data": false
-        }
-        ```
+    不指定真实名称，保持原行为：
 
-    - **404: 知识库不存在**
-        ```json
-        {
-            "status_code": 404,
-            "detail": "Can't find this dataset!"
-        }
-        ```
-
-    - **500: 服务器错误**
-        ```json
-        {
-            "retcode": 500,
-            "retmsg": "Upload processing failed",
-            "data": false
-        }
-        ```
-
-    ---
-
-    ### 主要流程
-
-    1. **参数验证**:
-        - 验证知识库ID是否存在
-        - 验证文件列表是否为空
-        - 检查文件名长度限制
-
-    2. **知识库验证**:
-        - 根据kb_id查找知识库
-        - 验证用户是否有权限访问该知识库
-
-    3. **文件处理**:
-        - 读取所有上传文件的内容
-        - 验证文件格式和大小
-        - 生成文件缩略图（如果适用）
-
-    4. **标签处理**:
-        - 解析JSON格式的labels参数
-        - 验证标签格式的正确性
-
-    5. **存储操作**:
-        - 将文件存储到对象存储系统
-        - 在数据库中创建文档记录
-        - 关联文件与知识库的关系
-
-    ---
-
-    ### 支持的文件类型
-
-    - **文档类型**: PDF, DOC, DOCX, TXT, MD
-    - **表格类型**: XLS, XLSX, CSV
-    - **演示文稿**: PPT, PPTX
-    - **图片类型**: JPG, JPEG, PNG, GIF, BMP
-    - **其他格式**: HTML, XML, JSON
-
-    ---
-
-    ### 使用示例
-
-    #### 单文件上传
     ```bash
-    curl -X POST "http://api.example.com/v1/document/upload" \
-        -F "kb_id=kb_123456" \
-        -F "files=@document.pdf"
+    curl -X POST "http://api.example.com/v1/document/upload?kb_id=kb_123456" \
+      -F "files=@document.pdf"
     ```
 
-    #### 多文件上传带标签
+    数字源文件名映射为真实名称：
+
     ```bash
-    curl -X POST "http://api.example.com/v1/document/upload" \
-        -F "kb_id=kb_123456" \
-        -F "files=@doc1.pdf" \
-        -F "files=@doc2.docx" \
-        -F 'labels=["重要文档", "技术资料"]'
+    curl -X POST "http://api.example.com/v1/document/upload?kb_id=kb_123456" \
+      -F "files=@938472938472.pdf" \
+      -F 'manifest={"documents":[{"file_index":0,"name":"2025年度财务报告.pdf"}]}'
     ```
 
-    ---
+    批量上传：
 
-    ### 注意事项
+    ```bash
+    curl -X POST "http://api.example.com/v1/document/upload?kb_id=kb_123456" \
+      -F "files=@10001.pdf" \
+      -F "files=@10002.docx" \
+      -F 'manifest={"documents":[{"file_index":0,"name":"年度财务报告.pdf"},{"file_index":1,"name":"董事会决议.docx"}]}'
+    ```
 
-    - **文件大小限制**: 单个文件建议不超过100MB
-    - **文件名限制**: 文件名不能超过255字节
-    - **并发上传**: 支持同时上传多个文件，但建议单次不超过10个
-    - **标签格式**: labels必须是有效的JSON数组格式
-    - **权限控制**: 只有知识库的所有者才能上传文件
-    - **自动解析**: 上传后文件会自动进入解析队列等待处理
+    ### 成功响应
+
+    ```json
+    {
+      "code": 0,
+      "message": "success",
+      "data": [
+        {
+          "id": "doc_123456",
+          "kb_id": "kb_123456",
+          "name": "2025年度财务报告.pdf",
+          "size": 1024000,
+          "type": "pdf",
+          "suffix": "pdf"
+        }
+      ]
+    }
+    ```
+
+    ### 错误语义
+
+    - `422`：manifest JSON、索引映射或真实名称不合法；不进入上传服务。
+    - `404`：知识库不存在。
+    - 业务鉴权失败：沿用现有 `RetCode.AUTHENTICATION_ERROR` 响应。
+    - 部分文件上传失败：沿用现有响应，`data` 包含已成功创建的文档，错误信息放在 `message`。
+
+    接口只负责上传和创建文档，不自动启动文档解析任务。
     """
     if not kb_id:
         return construct_json_result(data=False, message='Lack of "KB ID"', code=RetCode.ARGUMENT_ERROR)
     if not files:
         return construct_json_result(data=False, message="No file part!", code=RetCode.ARGUMENT_ERROR)
 
-    # 异步读取所有文件内容
-    file_contents = []
+    # 先校验全部源文件名与 manifest，避免无效映射进入上传服务。
+    source_filenames: list[str] = []
     for file in files:
         if file.filename == "":
             return get_json_result(data=False, retmsg="No file selected!", retcode=RetCode.ARGUMENT_ERROR)
         if len(file.filename.encode("utf-8")) > FILE_NAME_LEN_LIMIT:
             return get_json_result(data=False, retmsg=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.", retcode=RetCode.ARGUMENT_ERROR)
+        source_filenames.append(file.filename)
 
-        file_contents.append((await file.read(), file.filename))  # 读取文件内容并存储
+    try:
+        document_names = resolve_document_upload_names(source_filenames, manifest)
+    except UploadManifestValidationError as error:
+        raise HTTPException(status_code=HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
+
+    # manifest 缺失时 document_names 与原 filename 完全相同。
+    file_contents = [(await file.read(), document_names[index]) for index, file in enumerate(files)]
 
     # 将同步的数据库和存储操作放到线程池中执行
     def _upload_sync():
