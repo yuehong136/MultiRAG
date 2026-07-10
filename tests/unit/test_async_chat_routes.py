@@ -124,11 +124,11 @@ def test_session_completion_streams(client, monkeypatch, chat_route_stubs):
 
 
 def test_chat_completion_openai_like_streams(client, monkeypatch, chat_route_stubs):
-    from api.utils.api_utils import token_required
+    from api.utils.api_utils import async_token_required
 
     sdk_session = _route_module("api.apps.sdk.session")
 
-    client.app.dependency_overrides[token_required] = lambda: "tenant-unit"
+    client.app.dependency_overrides[async_token_required] = lambda: "tenant-unit"
     monkeypatch.setattr(
         sdk_session,
         "async_chat",

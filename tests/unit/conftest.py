@@ -128,7 +128,8 @@ def client(client_user):
       导入惰性化在 fixture 体内，只跑纯逻辑测试文件时零成本；
     - 基线 dependency_overrides：``get_db``/``get_async_db`` → 未绑定
       Session/AsyncSession（不连库）、登录 ``manager`` → ``client_user``、
-      ``current_tenant_id`` → "tenant-unit"；
+      ``async_current_user`` → 同字段 Principal、
+      ``current_tenant_id``/``async_current_tenant_id`` → "tenant-unit"；
       api/apps/deps.py 的资源依赖无需覆盖——注册表里已是预置 stub，
       未显式打桩就使用会以 NotImplementedError 现形（个别测试按需
       ``client.app.dependency_overrides[deps.get_storage] = ...`` 覆盖）；
@@ -149,6 +150,8 @@ def client(client_user):
         get_async_db: lambda: AsyncSession(),
         api_apps.manager: lambda: client_user,
         api_utils.current_tenant_id: lambda: "tenant-unit",
+        api_utils.async_current_user: lambda: api_utils.Principal(id=client_user.id, email=client_user.email, nickname=client_user.nickname),
+        api_utils.async_current_tenant_id: lambda: "tenant-unit",
     }
     app.dependency_overrides.update(baseline)
     yield TestClient(app)

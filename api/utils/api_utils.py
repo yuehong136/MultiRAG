@@ -5,6 +5,7 @@ import os
 import time
 from collections.abc import Callable
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
 from typing import Any
@@ -13,9 +14,10 @@ from fastapi import Depends, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from api.db.db_models import APIToken, get_db
+from api.db.db_models import APIToken, get_async_db, get_db
 from api.db.services.api_service import APITokenService
 from api.db.services.tenant_llm_service import LLMFactoriesService
 from common import settings
@@ -435,6 +437,149 @@ def current_tenant_id(request: Request, db: Session = Depends(get_db)) -> str:
     if not objs:
         raise SDKAuthError("Authentication error: invalid credentials!")
     return objs[0].tenant_id
+
+
+# ---------------------------------------------------------------------------
+# 异步鉴权依赖(AsyncSession 版;§11 Phase 2 双轨收口)
+#
+# 与同步版逐一对应:async_token_required ↔ token_required、
+# async_beta_token_required ↔ beta_token_required、
+# async_current_tenant_id ↔ current_tenant_id、async_current_user ↔ Depends(manager)。
+# 依赖自身声明 Depends(get_async_db),借 FastAPI 依赖缓存与 handler 共享同一
+# 请求级 AsyncSession;AsyncSession 路由禁止再挂同步鉴权依赖(双轨请求),
+# 由 scripts/check_async_sync_db.py 的依赖树检查强制。
+# 查询走 service 层(真收 session)而非模型层 BaseModel.query——后者自开
+# SessionLocal,经 run_sync 桥接会把同步连接 IO 留在事件循环上。
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Principal:
+    """鉴权产物:不可变身份 DTO,ORM User 对象不逸出鉴权依赖。"""
+
+    id: str
+    email: str = ""
+    nickname: str = ""
+
+
+async def async_token_required(request: Request, db: AsyncSession = Depends(get_async_db)) -> str:
+    """token_required 的 AsyncSession 版:校验 SDK API token,返回 tenant_id。"""
+    if os.environ.get("DISABLE_SDK"):
+        raise SDKAuthError("SDK API is disabled.")
+    authorization_str = request.headers.get("Authorization")
+    if not authorization_str:
+        raise SDKAuthError("`Authorization` can't be empty")
+    authorization_list = authorization_str.split()
+    if len(authorization_list) < 2:
+        raise SDKAuthError("Please check your authorization format.")
+    token = authorization_list[1]
+
+    def _tenant_of_token(s: Session) -> str | None:
+        objs = APITokenService.query(s, token=token)
+        return objs[0].tenant_id if objs else None
+
+    tenant_id = await db.run_sync(_tenant_of_token)  # TODO(async-phase4)
+    if not tenant_id:
+        raise SDKAuthError("Authentication error: API key is invalid!")
+    return tenant_id
+
+
+async def async_beta_token_required(request: Request, db: AsyncSession = Depends(get_async_db)) -> str:
+    """beta_token_required 的 AsyncSession 版(embedded 端点),返回 tenant_id。"""
+    authorization_str = request.headers.get("Authorization", "")
+    parts = authorization_str.split()
+    if len(parts) != 2:
+        raise SDKAuthError("Authorization is not valid!")
+    token = parts[1]
+
+    def _tenant_of_beta(s: Session) -> str | None:
+        objs = APITokenService.query(s, beta=token)
+        return objs[0].tenant_id if objs else None
+
+    tenant_id = await db.run_sync(_tenant_of_beta)  # TODO(async-phase4)
+    if not tenant_id:
+        raise SDKAuthError("Authentication error: API key is invalid!")
+    return tenant_id
+
+
+async def async_current_tenant_id(request: Request, db: AsyncSession = Depends(get_async_db)) -> str:
+    """current_tenant_id 的 AsyncSession 版:web JWT 优先,SDK API-key 兜底,返回 tenant_id。"""
+    authorization_str = request.headers.get("Authorization")
+    if not authorization_str:
+        raise SDKAuthError("`Authorization` can't be empty")
+    parts = authorization_str.split()
+    token = parts[1] if len(parts) >= 2 else parts[0]
+
+    # 1) web 会话 JWT:复用 LoginManager 的解码与 user_loader(延迟导入避免循环依赖)
+    from api.apps import load_user, manager
+
+    email: str | None = None
+    try:
+        payload = manager._get_payload(token)
+        email = payload.get("sub")
+    except Exception:
+        email = None  # 非 web JWT(如 SDK API-key),转入 fallback
+    if email:
+        user_id = await db.run_sync(lambda s: getattr(load_user(email, s), "id", None))  # type: ignore[operator]  # TODO(async-phase4)；fastapi-login user_loader 标注 artifact，运行时为同步函数
+        if user_id:
+            return str(user_id)
+
+    # 2) fallback:SDK API-key
+    if os.environ.get("DISABLE_SDK"):
+        raise SDKAuthError("SDK API is disabled.")
+
+    def _tenant_of_token(s: Session) -> str | None:
+        objs = APITokenService.query(s, token=token)
+        return objs[0].tenant_id if objs else None
+
+    tenant_id = await db.run_sync(_tenant_of_token)  # TODO(async-phase4)
+    if not tenant_id:
+        raise SDKAuthError("Authentication error: invalid credentials!")
+    return tenant_id
+
+
+async def async_current_user(request: Request, db: AsyncSession = Depends(get_async_db)) -> Principal:
+    """``Depends(manager)`` 的 AsyncSession 版:返回不可变 Principal。
+
+    对齐 _TokenFallbackLoginManager 的双认语义:web JWT 优先,解码/加载失败时把
+    Authorization 值当 SDK API token 反查 owner 用户;用户与 Token 查询全部走
+    注入的 AsyncSession(run_sync),不再自开 SessionLocal。
+    """
+    from api.apps import load_user, manager  # 延迟导入避免循环依赖
+    from api.db.services.user_service import UserService
+
+    def _principal_of(user: Any) -> Principal | None:
+        if user is None or not getattr(user, "id", None):
+            return None
+        return Principal(id=str(user.id), email=str(user.email or ""), nickname=str(user.nickname or ""))
+
+    try:
+        token = await manager._get_token(request)
+        payload = manager._get_payload(token)
+        email = payload.get("sub")
+        principal = None
+        if email:
+            principal = await db.run_sync(lambda s: _principal_of(load_user(email, s)))  # type: ignore[operator]  # TODO(async-phase4)；fastapi-login user_loader 标注 artifact，运行时为同步函数
+        if principal is None:
+            raise manager.not_authenticated_exception
+        return principal
+    except Exception:
+        authorization = request.headers.get("Authorization")
+        if authorization:
+            parts = authorization.split()
+            token = parts[1] if len(parts) >= 2 else parts[0]
+
+            def _by_api_token(s: Session) -> Principal | None:
+                objs = APITokenService.query(s, token=token)
+                if not objs:
+                    return None
+                users = UserService.query(s, id=objs[0].tenant_id)
+                return _principal_of(users[0] if users else None)
+
+            principal = await db.run_sync(_by_api_token)  # TODO(async-phase4)
+            if principal is not None:
+                return principal
+        raise
 
 
 # def token_required(func):

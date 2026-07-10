@@ -24,7 +24,7 @@ from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import UserTenantService
-from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
+from api.utils.api_utils import Principal, async_current_user, get_data_error_result, get_json_result, server_error_response
 from common.constants import LLMType, RetCode
 from common.misc_utils import get_uuid
 from core.prompts.generator import chunks_format
@@ -454,7 +454,7 @@ def list_conversation(dialog_id: str, db: Session = Depends(get_db), user=Depend
 
 
 @router.post("/completion", summary="[Deprecated] 生成对话", response_description="成功生成对话", deprecated=True)
-async def completion(request: CompletionRequest, db: AsyncSession = Depends(get_async_db), user=Depends(manager)):
+async def completion(request: CompletionRequest, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)):
     req = request.model_dump()
     if not req.get("conversation_id") or not req.get("messages"):
         return get_data_error_result(retmsg="Missing conversation_id or messages!")

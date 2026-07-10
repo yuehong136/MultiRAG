@@ -24,7 +24,7 @@ from api.db.services.llm_service import LLMBundle, LLMService
 from api.db.services.mcp_server_service import MCPServerService
 from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMService
 from api.db.services.user_service import TenantService
-from api.utils.api_utils import get_allowed_llm_factories, get_data_error_result, get_json_result, server_error_response
+from api.utils.api_utils import Principal, async_current_user, get_allowed_llm_factories, get_data_error_result, get_json_result, server_error_response
 from api.utils.chat_request_validation import validate_chat_messages
 from api.utils.web_utils import CONTENT_TYPE_MAP
 from common import settings
@@ -1660,7 +1660,7 @@ def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=De
 
 
 @router.post("/chat_service", summary="模型对话服务", response_description="成功调用对话模型")
-async def chat_service(request: LLMServiceRequest, db: AsyncSession = Depends(get_async_db), user=Depends(manager)):
+async def chat_service(request: LLMServiceRequest, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)):
     req = request.model_dump()
     tenants = await db.run_sync(lambda s: TenantService.get_info_by(s, user.id))  # TODO(async-phase4)
     if not tenants:
@@ -1708,7 +1708,7 @@ async def chat_service(request: LLMServiceRequest, db: AsyncSession = Depends(ge
 
 
 @router.post("/chat_service_sse", summary="模型对话服务", response_description="成功调用对话模型")
-async def chat_service_sse(request: LLMServiceRequest, http_request: Request, db: AsyncSession = Depends(get_async_db), user=Depends(manager)):
+async def chat_service_sse(request: LLMServiceRequest, http_request: Request, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)):
     """
         ### POST `/v1/llm/chat_service` 模型对话服务
 
@@ -2456,7 +2456,7 @@ async def fill_fields(req: FillFieldsRequest, db: Session = Depends(get_db), use
 
 
 @router.post("/enhanced_chat_sse")
-async def enhanced_chat_service_sse(request: ChatRequest, db: AsyncSession = Depends(get_async_db), user=Depends(manager)):
+async def enhanced_chat_service_sse(request: ChatRequest, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)):
 
     mcp_sessions = []
 

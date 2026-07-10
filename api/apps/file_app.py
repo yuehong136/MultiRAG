@@ -19,7 +19,7 @@ from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
-from api.utils.api_utils import construct_error_response, get_data_error_result, get_json_result
+from api.utils.api_utils import Principal, async_current_user, construct_error_response, get_data_error_result, get_json_result
 from api.utils.file_utils import filename_type
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers
 from common import settings
@@ -128,7 +128,7 @@ async def upload_media_redirect(file: UploadFile = File(...), db: Session = Depe
 
 
 @router.post("/upload", summary="上传文件", response_description="成功上传文件", deprecated=True)
-async def upload(parent_id: str, files: list[UploadFile] = File(...), db: AsyncSession = Depends(get_async_db), user=Depends(manager)):
+async def upload(parent_id: str, files: list[UploadFile] = File(...), db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)):
     """
     上传文件。
 

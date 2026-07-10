@@ -29,7 +29,17 @@ from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
 from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.db.services.user_service import UserTenantService
-from api.utils.api_utils import beta_token_required, check_duplicate_ids, get_data_openai, get_error_data_result, get_json_result, get_result, server_error_response, token_required
+from api.utils.api_utils import (
+    async_token_required,
+    beta_token_required,
+    check_duplicate_ids,
+    get_data_openai,
+    get_error_data_result,
+    get_json_result,
+    get_result,
+    server_error_response,
+    token_required,
+)
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers
 from common import settings
 from common.constants import LLMType, RetCode, StatusEnum
@@ -250,7 +260,7 @@ async def chat_completion(chat_id: str, request: ChatCompletionRequest, db: Sess
 
 
 @router.post("/chats_openai/{chat_id}/chat/completions", summary="OpenAI兼容的聊天补全")
-async def chat_completion_openai_like(chat_id: str, request: ChatCompletionOpenAIRequest, db: AsyncSession = Depends(get_async_db), tenant_id: str = Depends(token_required)):
+async def chat_completion_openai_like(chat_id: str, request: ChatCompletionOpenAIRequest, db: AsyncSession = Depends(get_async_db), tenant_id: str = Depends(async_token_required)):
     """
     OpenAI-like chat completion API that simulates the behavior of OpenAI's completions endpoint.
 

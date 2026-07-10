@@ -31,7 +31,7 @@ from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService, UserTenantService
-from api.utils.api_utils import check_duplicate_ids, current_tenant_id, get_error_data_result, get_result
+from api.utils.api_utils import async_current_tenant_id, check_duplicate_ids, current_tenant_id, get_error_data_result, get_result
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from common.constants import LLMType, RetCode, StatusEnum
 from common.misc_utils import get_uuid
@@ -1105,7 +1105,7 @@ async def session_completion(
     session_id: str,
     request: SessionCompletionRequest,
     db: AsyncSession = Depends(get_async_db),
-    tenant_id: str = Depends(current_tenant_id),
+    tenant_id: str = Depends(async_current_tenant_id),
 ):
     if not await db.run_sync(lambda s: _owned_chat_exists(s, tenant_id, chat_id)):  # TODO(async-phase4)
         return _error("No authorization.", RetCode.AUTHENTICATION_ERROR)

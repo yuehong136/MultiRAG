@@ -22,6 +22,14 @@
 
 豁免：在 `async def` 行或其紧邻上一行加注释 `# async-db-ok: <原因>`
 （仅限已按 §2 分类 B 处理完 DB 阻塞的 handler）。
+
+依赖树检查（§11 Phase 2 起，硬失败、无基线）：
+    handler 挂 `Depends(get_async_db)` 时，其 Depends 链上不得出现同步 Session 依赖
+    ——包括直接 `Depends(get_db)`、签名里（直接或传递）带 Depends(get_db) 的依赖函数
+    （token_required / current_tenant_id 等，从 api/utils/api_utils.py 自动推导），
+    以及 `Depends(manager)`（LoginManager 实例，user_loader/兜底内部自开 SessionLocal）。
+    同一请求业务走 AsyncSession、鉴权走同步 Session 即"双轨请求"，违反 AGENTS.md
+    「同一请求禁混两种 session」；异步变体见 api_utils 的 async_token_required 等。
 """
 
 from __future__ import annotations
@@ -36,6 +44,21 @@ from pathlib import Path
 SCAN_ROOT = Path("api/apps")
 BASELINE_PATH = Path("scripts/async_sync_db_baseline.txt")
 EXEMPT_MARK = "async-db-ok:"
+
+# 依赖树污点源：同步鉴权依赖所在文件（签名含 Depends(get_db) 的函数自动入污点集）
+DEP_SCAN_FILES = (Path("api/utils/api_utils.py"),)
+# 非函数形态的同步依赖：LoginManager 实例，user_loader/兜底内部自开 SessionLocal
+SYNC_DEP_EXTRA = frozenset({"manager"})
+
+
+@dataclass(frozen=True)
+class DualTrackViolation:
+    """AsyncSession 路由的依赖树中出现同步 Session 依赖（双轨请求）。"""
+
+    file: Path
+    line: int
+    func: str
+    dep: str
 
 
 @dataclass(frozen=True)
@@ -70,6 +93,63 @@ def _is_get_db_depends(default: ast.expr | None) -> bool:
     if _call_target_name(default.func) != "Depends":
         return False
     return any(_call_target_name(arg) == "get_db" for arg in default.args)
+
+
+def _param_depends_targets(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
+    """签名默认值里全部 `Depends(X)` 的 X 名字（含位置参数与 kw-only 参数）。"""
+    targets: list[str] = []
+    kw_defaults = [d for d in fn.args.kw_defaults if d is not None]
+    for default in [*fn.args.defaults, *kw_defaults]:
+        if not isinstance(default, ast.Call) or _call_target_name(default.func) != "Depends":
+            continue
+        for arg in default.args:
+            name = _call_target_name(arg)
+            if name:
+                targets.append(name)
+    return targets
+
+
+def collect_sync_dep_names() -> frozenset[str]:
+    """依赖树污点集：签名里（直接或传递）带 Depends(get_db) 的依赖函数名 + manager。"""
+    dep_targets: dict[str, set[str]] = {}
+    for path in DEP_SCAN_FILES:
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, SyntaxError) as exc:
+            print(f"[warn] 依赖树污点源不可解析 {path}: {exc}", file=sys.stderr)
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                dep_targets[node.name] = set(_param_depends_targets(node))
+    tainted = {"get_db", *SYNC_DEP_EXTRA}
+    changed = True
+    while changed:
+        changed = False
+        for name, targets in dep_targets.items():
+            if name not in tainted and targets & tainted:
+                tainted.add(name)
+                changed = True
+    return frozenset(tainted)
+
+
+def collect_dual_track(tainted: frozenset[str]) -> list[DualTrackViolation]:
+    """扫 SCAN_ROOT：挂 Depends(get_async_db) 的函数，其 Depends 链上出现污点依赖即违规。"""
+    violations: list[DualTrackViolation] = []
+    for path in sorted(SCAN_ROOT.rglob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except SyntaxError:
+            continue  # 语法错误由主扫描报 warn，这里静默跳过
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            targets = _param_depends_targets(node)
+            if "get_async_db" not in targets:
+                continue
+            for dep in targets:
+                if dep in tainted:
+                    violations.append(DualTrackViolation(file=path, line=node.lineno, func=node.name, dep=dep))
+    return violations
 
 
 def _sync_session_arg_names(fn: ast.AsyncFunctionDef) -> list[str]:
@@ -197,7 +277,7 @@ def write_baseline(violations: list[Violation]) -> None:
     BASELINE_PATH.write_text(f"{header}{body}\n", encoding="utf-8")
 
 
-def print_report(violations: list[Violation]) -> None:
+def print_report(violations: list[Violation], dual_track: list[DualTrackViolation]) -> None:
     class_a = [v for v in violations if v.is_class_a]
     class_b = [v for v in violations if not v.is_class_a]
     print(f"async def + Depends(get_db) 共 {len(violations)} 处（A 类 {len(class_a)} / B 类 {len(class_b)}）\n")
@@ -207,9 +287,12 @@ def print_report(violations: list[Violation]) -> None:
     print(f"\n== B 类（DB 需外移/threadpool/AsyncSession）: {len(class_b)} 处 ==")
     for v in class_b:
         print(f"  {v.file}:{v.line}  {v.func}  [{v.reason}]")
+    print(f"\n== 双轨（get_async_db 路由依赖树含同步 Session 依赖，硬失败无基线）: {len(dual_track)} 处 ==")
+    for d in dual_track:
+        print(f"  {d.file}:{d.line}  {d.func}  [Depends({d.dep})]")
 
 
-def run_gate(violations: list[Violation]) -> int:
+def run_gate(violations: list[Violation], dual_track: list[DualTrackViolation]) -> int:
     baseline = load_baseline()
     current = Counter(v.key for v in violations)
     new_keys = current - baseline
@@ -230,8 +313,15 @@ def run_gate(violations: list[Violation]) -> int:
         for key in sorted(fixed_keys):
             print(f"  {key}", file=sys.stderr)
 
+    if dual_track:
+        ok = False
+        print(f"双轨违规 {len(dual_track)} 处：get_async_db 路由的依赖树中出现同步 Session 依赖（无基线，必须当场修）：", file=sys.stderr)
+        for d in dual_track:
+            print(f"  {d.file}:{d.line}  {d.func}  [Depends({d.dep})]", file=sys.stderr)
+        print("改用 api/utils/api_utils.py 的 async_token_required / async_beta_token_required / async_current_tenant_id / async_current_user。", file=sys.stderr)
+
     if ok:
-        print(f"check_async_sync_db: OK（新增 0；基线存量 {sum(current.values())} 处待燃尽）")
+        print(f"check_async_sync_db: OK（新增 0；双轨 0；基线存量 {sum(current.values())} 处待燃尽）")
         return 0
     return 1
 
@@ -243,14 +333,15 @@ def main() -> int:
     args = parser.parse_args()
 
     violations = collect()
+    dual_track = collect_dual_track(collect_sync_dep_names())
     if args.report:
-        print_report(violations)
+        print_report(violations, dual_track)
         return 0
     if args.write_baseline:
         write_baseline(violations)
         print(f"基线已写入 {BASELINE_PATH}（{len(violations)} 条）")
         return 0
-    return run_gate(violations)
+    return run_gate(violations, dual_track)
 
 
 if __name__ == "__main__":
