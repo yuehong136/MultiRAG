@@ -1254,13 +1254,13 @@ def detail_share_embedded(
 @router.post("/searchbots/mindmap", summary="生成搜索机器人思维导图")
 async def mindmap(
     body: SearchBotMindmapRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(beta_token_required),
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_beta_token_required),
 ):
     req = body.model_dump()
 
     search_id = req.get("search_id", "")
-    search_app = SearchService.get_detail(db, search_id) if search_id else {}
+    search_app = await db.run_sync(lambda s: SearchService.get_detail(s, search_id)) if search_id else {}  # TODO(async-phase4)
 
     mind_map = await gen_mindmap(db, req["question"], req["kb_ids"], tenant_id, search_app.get("search_config", {}))
     if "error" in mind_map:

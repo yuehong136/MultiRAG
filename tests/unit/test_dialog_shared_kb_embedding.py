@@ -63,5 +63,5 @@ def test_gen_mindmap_uses_kb_owner_for_embedding_bundle():
     source = inspect.getsource(dialog_service.gen_mindmap)
 
     assert "embd_owner_tenant_id = kbs[0].tenant_id" in source
-    assert "embd_owner_tenant_id,\n        kbs[0].tenant_embd_id" in source
-    assert "LLMBundle(db, embd_owner_tenant_id, embd_model_config)" in source
+    assert "embd_owner_tenant_id,\n            kbs[0].tenant_embd_id" in source
+    assert "LLMBundle(s, embd_owner_tenant_id, embd_model_config)" in source

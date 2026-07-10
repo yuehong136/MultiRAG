@@ -2008,14 +2008,14 @@ async def async_ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None
     yield final
 
 
-async def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=None):
+async def gen_mindmap(db: AsyncSession, question, kb_ids, tenant_id, search_config=None):
     if search_config is None:
         search_config = {}
     meta_data_filter = search_config.get("meta_data_filter", {})
     doc_ids = search_config.get("doc_ids", [])
     rerank_id = search_config.get("rerank_id", "")
     rerank_mdl = None
-    kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
+    kbs = await db.run_sync(lambda s: KnowledgebaseService.get_by_ids(s, kb_ids))  # TODO(async-phase4)
     if not kbs:
         return {"error": "No KB selected"}
     KnowledgebaseService.ensure_same_embedding_model(kbs)
@@ -2023,28 +2023,35 @@ async def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=No
     kb_names = list({kb.name for kb in kbs})
 
     embd_owner_tenant_id = kbs[0].tenant_id
-    embd_model_config = _resolve_model_config(
-        db,
-        embd_owner_tenant_id,
-        kbs[0].tenant_embd_id if kbs else None,
-        LLMType.EMBEDDING.value,
-        kbs[0].embd_id if kbs else "",
+    embd_model_config = await db.run_sync(  # TODO(async-phase4)
+        lambda s: _resolve_model_config(
+            s,
+            embd_owner_tenant_id,
+            kbs[0].tenant_embd_id if kbs else None,
+            LLMType.EMBEDDING.value,
+            kbs[0].embd_id if kbs else "",
+        )
     )
-    embd_mdl = LLMBundle(db, embd_owner_tenant_id, embd_model_config)
+    embd_mdl = await db.run_sync(lambda s: LLMBundle(s, embd_owner_tenant_id, embd_model_config))  # TODO(async-phase4)
     chat_id = search_config.get("chat_id", "")
     if chat_id:
-        chat_model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, chat_id)
+        chat_model_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, tenant_id, LLMType.CHAT.value, chat_id))  # TODO(async-phase4)
     else:
-        chat_model_config = get_tenant_default_model_by_type(db, tenant_id, LLMType.CHAT)
-    chat_mdl = LLMBundle(db, tenant_id, chat_model_config)
+        chat_model_config = await db.run_sync(lambda s: get_tenant_default_model_by_type(s, tenant_id, LLMType.CHAT))  # TODO(async-phase4)
+    chat_mdl = await db.run_sync(lambda s: LLMBundle(s, tenant_id, chat_model_config))  # TODO(async-phase4)
     if rerank_id:
-        rerank_model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.RERANK.value, rerank_id)
-        rerank_mdl = LLMBundle(db, tenant_id, rerank_model_config)
+        rerank_model_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, tenant_id, LLMType.RERANK.value, rerank_id))  # TODO(async-phase4)
+        rerank_mdl = await db.run_sync(lambda s: LLMBundle(s, tenant_id, rerank_model_config))  # TODO(async-phase4)
+    # run_sync 的 facade 不得逸出 greenlet（AGENTS.md 规约）：构造完即剥离
+    for _mdl in (embd_mdl, chat_mdl, rerank_mdl):
+        if _mdl is not None:
+            _mdl.db = None
 
     if meta_data_filter:
-        metas = DocMetadataService.get_flatted_meta_by_kbs(db, kb_ids)
+        metas = await db.run_sync(lambda s: DocMetadataService.get_flatted_meta_by_kbs(s, kb_ids))  # TODO(async-phase4)
         doc_ids = await apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids)
 
+    rank_feature = await db.run_sync(lambda s: label_question(s, question, kbs))  # TODO(async-phase4)
     ranks = await settings.retriever.retrieval(
         question=question,
         filter_exp="",
@@ -2059,7 +2066,7 @@ async def gen_mindmap(db: Session, question, kb_ids, tenant_id, search_config=No
         doc_ids=doc_ids,
         aggs=False,
         rerank_mdl=rerank_mdl,
-        rank_feature=label_question(db, question, kbs),
+        rank_feature=rank_feature,
         kb_ids=kb_ids,
     )
     mindmap = MindMapExtractor(chat_mdl)

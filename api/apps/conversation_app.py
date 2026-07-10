@@ -829,12 +829,12 @@ def ask_about(request: AskAboutRequest, db: Session = Depends(get_db), user=Depe
 
 
 @router.post("/mindmap", summary="[Deprecated] 生成思维导图", response_description="返回思维导图", deprecated=True)
-async def mindmap(request: MindmapRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def mindmap(request: MindmapRequest, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)):
     req = request.model_dump()
 
     search_id = req.get("search_id", "")
 
-    search_app = SearchService.get_detail(db, search_id) if search_id else {}
+    search_app = await db.run_sync(lambda s: SearchService.get_detail(s, search_id)) if search_id else {}  # TODO(async-phase4)
     search_config = search_app.get("search_config", {}) if search_app else {}
     kb_ids = search_config.get("kb_ids", [])
     kb_ids.extend(req["kb_ids"])

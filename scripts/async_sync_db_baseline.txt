@@ -22,7 +22,6 @@ api/apps/chunk_app.py::knowledge_graph
 api/apps/chunk_app.py::list_chunk
 api/apps/chunk_app.py::query_vector_store
 api/apps/chunk_app.py::retrieval_test
-api/apps/conversation_app.py::mindmap
 api/apps/dataset_app.py::parse_document
 api/apps/dataset_app.py::parse_documents
 api/apps/dataset_app.py::stop_parsing_document
@@ -59,7 +58,6 @@ api/apps/plugin_app.py::install_dep
 api/apps/plugin_app.py::run_plugin_script
 api/apps/plugin_app.py::uninstall_dep
 api/apps/restful_apis/chat_api.py::ask
-api/apps/restful_apis/chat_api.py::mindmap
 api/apps/restful_apis/chat_api.py::transcriptions
 api/apps/restful_apis/dataset_api.py::get_knowledge_graph
 api/apps/restful_apis/file_api.py::upload_info
@@ -75,7 +73,6 @@ api/apps/sdk/session.py::agents_completion_openai_compatibility
 api/apps/sdk/session.py::ask_about
 api/apps/sdk/session.py::ask_about_embedded
 api/apps/sdk/session.py::download_agentbot_attachment
-api/apps/sdk/session.py::mindmap
 api/apps/sdk/session.py::retrieval_test_embedded
 api/apps/sdk/session.py::sequence2txt
 api/apps/semantic_layer_app.py::delete_embeddings_by_element_type_and_id

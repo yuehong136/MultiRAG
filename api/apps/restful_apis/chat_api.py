@@ -733,13 +733,13 @@ async def transcriptions(
 @router.post("/chats/mindmap", summary="Generate mindmap")
 async def mindmap(
     request: MindmapRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(current_tenant_id),
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_current_tenant_id),
 ):
     try:
         req = request.model_dump()
         search_id = req.get("search_id", "")
-        search_app = SearchService.get_detail(db, search_id) if search_id else {}
+        search_app = await db.run_sync(lambda s: SearchService.get_detail(s, search_id)) if search_id else {}  # TODO(async-phase4)
         search_config = search_app.get("search_config", {}) if search_app else {}
         kb_ids = list(search_config.get("kb_ids", []))
         kb_ids.extend(req["kb_ids"])
