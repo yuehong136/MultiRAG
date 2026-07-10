@@ -1836,7 +1836,8 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
     kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
     KnowledgebaseService.ensure_same_embedding_model(kbs)
 
-    is_knowledge_graph = all(kb.parser_id == ParserType.KG for kb in kbs)
+    # all(空)=True 会把空 KB 误判成 KG，必须先确认非空
+    is_knowledge_graph = bool(kbs) and all(kb.parser_id == ParserType.KG for kb in kbs)
     retriever = settings.retriever if not is_knowledge_graph else settings.kg_retriever
 
     embd_owner_tenant_id = kbs[0].tenant_id if kbs else tenant_id
@@ -1862,25 +1863,30 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
 
     filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
     kb_names = [kb.name for kb in kbs]
-    kbinfos = asyncio.run(
-        retriever.retrieval(
-            question=question,
-            filter_exp=filter_exp,
-            embd_mdl=embd_mdl,
-            tenant_id=tenant_ids,
-            kb_names=kb_names,
-            page=1,
-            page_size=12,
-            similarity_threshold=search_config.get("similarity_threshold", 0.1),
-            vector_similarity_weight=search_config.get("vector_similarity_weight", 0.3),
-            top=search_config.get("top_k", 1024),
-            doc_ids=doc_ids,
-            aggs=True,
-            rerank_mdl=rerank_mdl,
-            rank_feature=label_question(db, question, kbs),
-            search_mode=None,  # todo 无法传递应用里的配置，所以只能使用一种默认检索模式
+    if is_knowledge_graph:
+        # KGSearch.retrieval 与 Dealer.retrieval 签名不同，按全库统一约定位置传参
+        ck = asyncio.run(settings.kg_retriever.retrieval(question, tenant_ids, kb_ids, embd_mdl, chat_mdl))
+        kbinfos = {"chunks": [ck] if ck.get("content_with_weight") else [], "doc_aggs": []}
+    else:
+        kbinfos = asyncio.run(
+            retriever.retrieval(
+                question=question,
+                filter_exp=filter_exp,
+                embd_mdl=embd_mdl,
+                tenant_id=tenant_ids,
+                kb_names=kb_names,
+                page=1,
+                page_size=12,
+                similarity_threshold=search_config.get("similarity_threshold", 0.1),
+                vector_similarity_weight=search_config.get("vector_similarity_weight", 0.3),
+                top=search_config.get("top_k", 1024),
+                doc_ids=doc_ids,
+                aggs=True,
+                rerank_mdl=rerank_mdl,
+                rank_feature=label_question(db, question, kbs),
+                search_mode=None,  # todo 无法传递应用里的配置，所以只能使用一种默认检索模式
+            )
         )
-    )
     knowledges = kb_prompt(kbinfos, max_tokens)
     sys_prompt = PROMPT_JINJA_ENV.from_string(ASK_SUMMARY).render(knowledge="\n".join(knowledges))
 
@@ -1925,7 +1931,8 @@ async def async_ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None
     kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
     KnowledgebaseService.ensure_same_embedding_model(kbs)
 
-    is_knowledge_graph = all(kb.parser_id == ParserType.KG for kb in kbs)
+    # all(空)=True 会把空 KB 误判成 KG，必须先确认非空
+    is_knowledge_graph = bool(kbs) and all(kb.parser_id == ParserType.KG for kb in kbs)
     retriever = settings.retriever if not is_knowledge_graph else settings.kg_retriever
 
     embd_owner_tenant_id = kbs[0].tenant_id if kbs else tenant_id
@@ -1951,23 +1958,28 @@ async def async_ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None
 
     filter_exp = ""
     kb_names = [kb.name for kb in kbs]
-    kbinfos = await retriever.retrieval(
-        question=question,
-        filter_exp=filter_exp,
-        embd_mdl=embd_mdl,
-        tenant_id=tenant_ids,
-        kb_names=kb_names,
-        page=1,
-        page_size=12,
-        similarity_threshold=search_config.get("similarity_threshold", 0.1),
-        vector_similarity_weight=search_config.get("vector_similarity_weight", 0.3),
-        top=search_config.get("top_k", 1024),
-        doc_ids=doc_ids,
-        aggs=True,
-        rerank_mdl=rerank_mdl,
-        rank_feature=label_question(db, question, kbs),
-        search_mode=None,
-    )
+    if is_knowledge_graph:
+        # KGSearch.retrieval 与 Dealer.retrieval 签名不同，按全库统一约定位置传参
+        ck = await settings.kg_retriever.retrieval(question, tenant_ids, kb_ids, embd_mdl, chat_mdl)
+        kbinfos = {"chunks": [ck] if ck.get("content_with_weight") else [], "doc_aggs": []}
+    else:
+        kbinfos = await retriever.retrieval(
+            question=question,
+            filter_exp=filter_exp,
+            embd_mdl=embd_mdl,
+            tenant_id=tenant_ids,
+            kb_names=kb_names,
+            page=1,
+            page_size=12,
+            similarity_threshold=search_config.get("similarity_threshold", 0.1),
+            vector_similarity_weight=search_config.get("vector_similarity_weight", 0.3),
+            top=search_config.get("top_k", 1024),
+            doc_ids=doc_ids,
+            aggs=True,
+            rerank_mdl=rerank_mdl,
+            rank_feature=label_question(db, question, kbs),
+            search_mode=None,
+        )
 
     knowledges = kb_prompt(kbinfos, max_tokens)
     sys_prompt = PROMPT_JINJA_ENV.from_string(ASK_SUMMARY).render(knowledge="\n".join(knowledges))
