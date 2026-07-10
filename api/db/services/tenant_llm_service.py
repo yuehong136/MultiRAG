@@ -600,15 +600,15 @@ class LLM4Tenant:
 
         langfuse_keys = TenantLangfuseService.filter_by_tenant(db, tenant_id=tenant_id)
         if langfuse_keys:
-            langfuse = Langfuse(public_key=langfuse_keys.public_key, secret_key=langfuse_keys.secret_key, host=langfuse_keys.host)
+            # 零 preflight：auth_check 是阻塞 HTTP（默认 5s 超时；经 run_sync 构造 LLMBundle 时
+            # 会冻结整个事件循环）。凭据有效性在配置写入期校验（langfuse_app）；此处 fail-open。
             try:
-                if langfuse.auth_check():
-                    self.langfuse = langfuse
-                    trace_id = self.langfuse.create_trace_id()
-                    self.trace_context = {"trace_id": trace_id}
+                self.langfuse = Langfuse(public_key=langfuse_keys.public_key, secret_key=langfuse_keys.secret_key, host=langfuse_keys.host)
+                self.trace_context = {"trace_id": self.langfuse.create_trace_id()}
             except Exception:
-                # Skip langfuse tracing if connection fails
-                pass
+                logging.warning("Langfuse tracer init failed; tracing disabled for this bundle", exc_info=True)
+                self.langfuse = None
+                self.trace_context = {}
 
     def _release_db_before_long_io(self) -> None:
         """

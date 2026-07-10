@@ -643,15 +643,15 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     trace_context = {}
     langfuse_keys = TenantLangfuseService.filter_by_tenant(db, tenant_id=dialog.tenant_id)
     if langfuse_keys:
-        langfuse = Langfuse(public_key=langfuse_keys.public_key, secret_key=langfuse_keys.secret_key, host=langfuse_keys.host)
+        # 零 preflight：auth_check 是阻塞 HTTP（默认 5s 超时），凭据有效性在配置写入期
+        # 校验（langfuse_app）；此处 fail-open，构造失败不阻塞聊天，导出错误由 SDK 后台记录。
         try:
-            if langfuse.auth_check():
-                langfuse_tracer = langfuse
-                trace_id = langfuse_tracer.create_trace_id()
-                trace_context = {"trace_id": trace_id}
+            langfuse_tracer = Langfuse(public_key=langfuse_keys.public_key, secret_key=langfuse_keys.secret_key, host=langfuse_keys.host)
+            trace_context = {"trace_id": langfuse_tracer.create_trace_id()}
         except Exception:
-            # Skip langfuse tracing if connection fails
-            pass
+            logging.warning("Langfuse tracer init failed; tracing disabled for this request", exc_info=True)
+            langfuse_tracer = None
+            trace_context = {}
 
     check_langfuse_tracer_ts = timer()
     kbs, embd_mdl, rerank_mdl, chat_mdl, tts_mdl = get_models(db, dialog)
@@ -978,15 +978,15 @@ async def async_chat(dialog, messages, db: AsyncSession, stream: bool = True, **
     trace_context = {}
     langfuse_keys = await db.run_sync(lambda s: TenantLangfuseService.filter_by_tenant(s, tenant_id=dialog.tenant_id))  # TODO(async-phase4)
     if langfuse_keys:
-        langfuse = Langfuse(public_key=langfuse_keys.public_key, secret_key=langfuse_keys.secret_key, host=langfuse_keys.host)
+        # 零 preflight：auth_check 是阻塞 HTTP（默认 5s 超时，会冻结事件循环），凭据有效性
+        # 在配置写入期校验（langfuse_app）；此处 fail-open，构造失败不阻塞聊天，导出错误由 SDK 后台记录。
         try:
-            if langfuse.auth_check():
-                langfuse_tracer = langfuse
-                trace_id = langfuse_tracer.create_trace_id()
-                trace_context = {"trace_id": trace_id}
+            langfuse_tracer = Langfuse(public_key=langfuse_keys.public_key, secret_key=langfuse_keys.secret_key, host=langfuse_keys.host)
+            trace_context = {"trace_id": langfuse_tracer.create_trace_id()}
         except Exception:
-            # Skip langfuse tracing if connection fails
-            pass
+            logging.warning("Langfuse tracer init failed; tracing disabled for this request", exc_info=True)
+            langfuse_tracer = None
+            trace_context = {}
 
     check_langfuse_tracer_ts = timer()
     kbs, embd_mdl, rerank_mdl, chat_mdl, tts_mdl = await db.run_sync(lambda s: get_models(s, dialog))  # TODO(async-phase4)
