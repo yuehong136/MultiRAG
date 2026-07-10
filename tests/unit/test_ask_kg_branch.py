@@ -58,22 +58,22 @@ def ask_stubs(monkeypatch):
     monkeypatch.setattr(settings, "kg_retriever", types.SimpleNamespace(retrieval=_kg_retrieval))
 
 
-async def test_async_ask_empty_kbs_use_dealer_not_kg(monkeypatch, db, ask_stubs):
+async def test_async_ask_empty_kbs_use_dealer_not_kg(monkeypatch, async_db, ask_stubs):
     monkeypatch.setattr(KnowledgebaseService, "get_by_ids", classmethod(lambda cls, s, ids, cols=None: []))
 
     with pytest.raises(_Sentinel) as exc:
-        async for _ in async_ask(db, "q", [], "t1"):
+        async for _ in async_ask(async_db, "q", [], "t1"):
             pass
 
     assert exc.value.which == "dealer"
 
 
-async def test_async_ask_kg_branch_uses_positional_convention(monkeypatch, db, ask_stubs):
+async def test_async_ask_kg_branch_uses_positional_convention(monkeypatch, async_db, ask_stubs):
     kb = _fake_kb(parser_id=dialog_service.ParserType.KG)
     monkeypatch.setattr(KnowledgebaseService, "get_by_ids", classmethod(lambda cls, s, ids, cols=None: [kb]))
 
     with pytest.raises(_Sentinel) as exc:
-        async for _ in async_ask(db, "q", ["kb1"], "t1"):
+        async for _ in async_ask(async_db, "q", ["kb1"], "t1"):
             pass
 
     assert exc.value.which == "kg"

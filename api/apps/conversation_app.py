@@ -804,7 +804,7 @@ def thumbup(request: ThumbupRequest, db: Session = Depends(get_db), user=Depends
 
 
 @router.post("/ask", summary="[Deprecated] 问答接口", response_description="返回答案", deprecated=True)
-def ask_about(request: AskAboutRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def ask_about(request: AskAboutRequest, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)):
     req = request.model_dump()
     uid = user.id
 
@@ -812,7 +812,7 @@ def ask_about(request: AskAboutRequest, db: Session = Depends(get_db), user=Depe
     search_app = None
     search_config = {}
     if search_id:
-        search_app = SearchService.get_detail(db, search_id)
+        search_app = await db.run_sync(lambda s: SearchService.get_detail(s, search_id))  # TODO(async-phase4)
     if search_app:
         search_config = search_app.get("search_config", {})
 

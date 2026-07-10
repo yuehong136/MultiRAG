@@ -792,7 +792,7 @@ def delete_agent_sessions(agent_id: str, request: DeleteSessionsRequest, db: Ses
 
 
 @router.post("/sessions/ask", summary="询问知识库")
-async def ask_about(request: AskRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
+async def ask_about(request: AskRequest, db: AsyncSession = Depends(get_async_db), tenant_id: str = Depends(async_token_required)):
     req = request.model_dump()
     if not req.get("question"):
         return get_error_data_result(retmsg="`question` is required.")
@@ -803,9 +803,9 @@ async def ask_about(request: AskRequest, db: Session = Depends(get_db), tenant_i
 
     req["kb_ids"] = req.pop("dataset_ids")
     for kb_id in req["kb_ids"]:
-        if not KnowledgebaseService.accessible(db, kb_id, tenant_id):
+        if not await db.run_sync(lambda s: KnowledgebaseService.accessible(s, kb_id, tenant_id)):  # TODO(async-phase4)
             return get_error_data_result(retmsg=f"You don't own the dataset {kb_id}.")
-        kbs = KnowledgebaseService.query(db, id=kb_id)
+        kbs = await db.run_sync(lambda s: KnowledgebaseService.query(s, id=kb_id))  # TODO(async-phase4)
         kb = kbs[0]
         if kb.chunk_num == 0:
             return get_error_data_result(retmsg=f"The dataset {kb_id} doesn't own parsed file")
@@ -1056,8 +1056,8 @@ async def download_agentbot_attachment(
 @router.post("/searchbots/ask", summary="搜索机器人询问")
 async def ask_about_embedded(
     body: SearchBotAskRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(beta_token_required),
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_beta_token_required),
 ):
     req = body.model_dump()
     uid = tenant_id
@@ -1065,7 +1065,7 @@ async def ask_about_embedded(
     search_id = req.get("search_id", "")
     search_config = {}
     if search_id:
-        if search_app := SearchService.get_detail(db, search_id):
+        if search_app := await db.run_sync(lambda s: SearchService.get_detail(s, search_id)):  # TODO(async-phase4)
             search_config = search_app.get("search_config", {})
 
     async def stream():

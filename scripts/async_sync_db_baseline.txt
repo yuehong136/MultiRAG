@@ -57,7 +57,6 @@ api/apps/nl2sql_app.py::sql_templating
 api/apps/plugin_app.py::install_dep
 api/apps/plugin_app.py::run_plugin_script
 api/apps/plugin_app.py::uninstall_dep
-api/apps/restful_apis/chat_api.py::ask
 api/apps/restful_apis/chat_api.py::transcriptions
 api/apps/restful_apis/dataset_api.py::get_knowledge_graph
 api/apps/restful_apis/file_api.py::upload_info
@@ -70,8 +69,6 @@ api/apps/sdk/doc.py::retrieval_test
 api/apps/sdk/session.py::agent_bot_completions
 api/apps/sdk/session.py::agent_completions
 api/apps/sdk/session.py::agents_completion_openai_compatibility
-api/apps/sdk/session.py::ask_about
-api/apps/sdk/session.py::ask_about_embedded
 api/apps/sdk/session.py::download_agentbot_attachment
 api/apps/sdk/session.py::retrieval_test_embedded
 api/apps/sdk/session.py::sequence2txt

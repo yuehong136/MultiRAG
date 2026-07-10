@@ -810,14 +810,14 @@ async def related_questions(
 @router.post("/chats/ask", summary="Ask over datasets")
 async def ask(
     request: AskRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(current_tenant_id),
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_current_tenant_id),
 ):
     req = request.model_dump()
     search_id = req.get("search_id", "")
     search_config = {}
     if search_id:
-        if search_app := SearchService.get_detail(db, search_id):
+        if search_app := await db.run_sync(lambda s: SearchService.get_detail(s, search_id)):  # TODO(async-phase4)
             search_config = search_app.get("search_config", {})
 
     async def stream_response():

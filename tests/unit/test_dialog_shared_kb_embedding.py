@@ -52,11 +52,17 @@ def test_get_models_uses_kb_owner_for_shared_embedding(monkeypatch):
 
 
 def test_ask_paths_use_kb_owner_for_embedding_bundle():
-    for fn in (dialog_service.ask, dialog_service.async_ask):
-        source = inspect.getsource(fn)
-        assert "embd_owner_tenant_id = kbs[0].tenant_id if kbs else tenant_id" in source
-        assert "embd_owner_tenant_id,\n        kbs[0].tenant_embd_id" in source
-        assert "LLMBundle(db, embd_owner_tenant_id, embd_model_config)" in source
+    # sync ask：直连 Session 形态
+    source = inspect.getsource(dialog_service.ask)
+    assert "embd_owner_tenant_id = kbs[0].tenant_id if kbs else tenant_id" in source
+    assert "embd_owner_tenant_id,\n        kbs[0].tenant_embd_id" in source
+    assert "LLMBundle(db, embd_owner_tenant_id, embd_model_config)" in source
+
+    # async_ask：AsyncSession + run_sync facade 形态
+    source = inspect.getsource(dialog_service.async_ask)
+    assert "embd_owner_tenant_id = kbs[0].tenant_id if kbs else tenant_id" in source
+    assert "embd_owner_tenant_id,\n            kbs[0].tenant_embd_id" in source
+    assert "LLMBundle(s, embd_owner_tenant_id, embd_model_config)" in source
 
 
 def test_gen_mindmap_uses_kb_owner_for_embedding_bundle():

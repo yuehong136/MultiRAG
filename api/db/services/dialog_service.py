@@ -1917,8 +1917,8 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
     yield decorate_answer(answer)
 
 
-async def async_ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_config=None):
-    """异步版本的 ask"""
+async def async_ask(db: AsyncSession, question, kb_ids, tenant_id, chat_llm_name=None, search_config=None):
+    """异步版本的 ask（AsyncSession；遗留同步 service 经 run_sync 桥接）"""
     if search_config is None:
         search_config = {}
     doc_ids = search_config.get("doc_ids", [])
@@ -1928,7 +1928,7 @@ async def async_ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None
     rerank_id = search_config.get("rerank_id", "")
     meta_data_filter = search_config.get("meta_data_filter")
 
-    kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
+    kbs = await db.run_sync(lambda s: KnowledgebaseService.get_by_ids(s, kb_ids))  # TODO(async-phase4)
     KnowledgebaseService.ensure_same_embedding_model(kbs)
 
     # all(空)=True 会把空 KB 误判成 KG，必须先确认非空
@@ -1936,24 +1936,30 @@ async def async_ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None
     retriever = settings.retriever if not is_knowledge_graph else settings.kg_retriever
 
     embd_owner_tenant_id = kbs[0].tenant_id if kbs else tenant_id
-    embd_model_config = _resolve_model_config(
-        db,
-        embd_owner_tenant_id,
-        kbs[0].tenant_embd_id if kbs else None,
-        LLMType.EMBEDDING.value,
-        kbs[0].embd_id if kbs else "",
+    embd_model_config = await db.run_sync(  # TODO(async-phase4)
+        lambda s: _resolve_model_config(
+            s,
+            embd_owner_tenant_id,
+            kbs[0].tenant_embd_id if kbs else None,
+            LLMType.EMBEDDING.value,
+            kbs[0].embd_id if kbs else "",
+        )
     )
-    embd_mdl = LLMBundle(db, embd_owner_tenant_id, embd_model_config)
-    chat_model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, chat_llm_name)
-    chat_mdl = LLMBundle(db, tenant_id, chat_model_config)
+    embd_mdl = await db.run_sync(lambda s: LLMBundle(s, embd_owner_tenant_id, embd_model_config))  # TODO(async-phase4)
+    chat_model_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, tenant_id, LLMType.CHAT.value, chat_llm_name))  # TODO(async-phase4)
+    chat_mdl = await db.run_sync(lambda s: LLMBundle(s, tenant_id, chat_model_config))  # TODO(async-phase4)
     if rerank_id:
-        rerank_model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.RERANK.value, rerank_id)
-        rerank_mdl = LLMBundle(db, tenant_id, rerank_model_config)
+        rerank_model_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, tenant_id, LLMType.RERANK.value, rerank_id))  # TODO(async-phase4)
+        rerank_mdl = await db.run_sync(lambda s: LLMBundle(s, tenant_id, rerank_model_config))  # TODO(async-phase4)
+    # run_sync 的 facade 不得逸出 greenlet（AGENTS.md 规约）：构造完即剥离
+    for _mdl in (embd_mdl, chat_mdl, rerank_mdl):
+        if _mdl is not None:
+            _mdl.db = None
     max_tokens = chat_mdl.max_length
     tenant_ids = [kb.tenant_id for kb in kbs]
 
     if meta_data_filter:
-        metas = DocMetadataService.get_flatted_meta_by_kbs(db, kb_ids)
+        metas = await db.run_sync(lambda s: DocMetadataService.get_flatted_meta_by_kbs(s, kb_ids))  # TODO(async-phase4)
         doc_ids = await apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids)
 
     filter_exp = ""
@@ -1963,6 +1969,7 @@ async def async_ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None
         ck = await settings.kg_retriever.retrieval(question, tenant_ids, kb_ids, embd_mdl, chat_mdl)
         kbinfos = {"chunks": [ck] if ck.get("content_with_weight") else [], "doc_aggs": []}
     else:
+        rank_feature = await db.run_sync(lambda s: label_question(s, question, kbs))  # TODO(async-phase4)
         kbinfos = await retriever.retrieval(
             question=question,
             filter_exp=filter_exp,
@@ -1977,7 +1984,7 @@ async def async_ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None
             doc_ids=doc_ids,
             aggs=True,
             rerank_mdl=rerank_mdl,
-            rank_feature=label_question(db, question, kbs),
+            rank_feature=rank_feature,
             search_mode=None,
         )
 
@@ -2014,7 +2021,9 @@ async def async_ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None
             continue
         yield {"answer": value, "reference": {}, "final": False}
     full_answer = last_state.full_text if last_state else ""
-    final = decorate_answer(full_answer)
+    # citation finalize：同步 embedding HTTP + 自开连接记账，不持有请求 Session
+    # （bundles 已剥离 facade），整段外移工作线程，避免阻塞事件循环
+    final = await asyncio.to_thread(decorate_answer, full_answer)
     final["final"] = True
     final["answer"] = ""
     yield final

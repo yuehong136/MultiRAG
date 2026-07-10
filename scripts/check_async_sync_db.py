@@ -23,6 +23,11 @@
 豁免：在 `async def` 行或其紧邻上一行加注释 `# async-db-ok: <原因>`
 （仅限已按 §2 分类 B 处理完 DB 阻塞的 handler）。
 
+def-handler 盲区检查（§11 Phase 2 起）：普通 `def` handler + `Depends(get_db)` 本身合法
+（跑线程池），但其**嵌套 async 生成器**（典型：StreamingResponse 的流式体）引用同步
+Session 时，流式阶段仍跑在事件循环上——同样计入违规（reason=B(def嵌套async用db)），
+走同一基线燃尽机制。
+
 依赖树检查（§11 Phase 2 起，硬失败、无基线）：
     handler 挂 `Depends(get_async_db)` 时，其 Depends 链上不得出现同步 Session 依赖
     ——包括直接 `Depends(get_db)`、签名里（直接或传递）带 Depends(get_db) 的依赖函数
@@ -152,7 +157,7 @@ def collect_dual_track(tainted: frozenset[str]) -> list[DualTrackViolation]:
     return violations
 
 
-def _sync_session_arg_names(fn: ast.AsyncFunctionDef) -> list[str]:
+def _sync_session_arg_names(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
     """返回默认值为 Depends(get_db) 的参数名（通常是 'db'）。"""
     names: list[str] = []
     positional = [*fn.args.posonlyargs, *fn.args.args]
@@ -199,7 +204,7 @@ def _has_async_usage(fn: ast.AsyncFunctionDef) -> bool:
     return False
 
 
-def _nested_async_uses_session(fn: ast.AsyncFunctionDef, session_names: list[str]) -> bool:
+def _nested_async_uses_session(fn: ast.FunctionDef | ast.AsyncFunctionDef, session_names: list[str]) -> bool:
     """嵌套 async 函数（典型：SSE 流式生成器）是否引用了同步 Session 参数。
 
     这类 handler 即使外层无 await，改 def 也只是把预处理挪出事件循环，
@@ -213,7 +218,7 @@ def _nested_async_uses_session(fn: ast.AsyncFunctionDef, session_names: list[str
     return False
 
 
-def _is_exempt(fn: ast.AsyncFunctionDef, source_lines: list[str]) -> bool:
+def _is_exempt(fn: ast.FunctionDef | ast.AsyncFunctionDef, source_lines: list[str]) -> bool:
     """豁免标记可出现在 `async def` 的上一行，或签名区间内任意一行。
 
     签名区间 = def 行到函数体首语句前——ruff format 折行长签名时会把
@@ -235,20 +240,29 @@ def scan_file(path: Path) -> list[Violation]:
     source_lines = source.splitlines()
     violations: list[Violation] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.AsyncFunctionDef):
-            continue
-        session_names = _sync_session_arg_names(node)
-        if not session_names:
-            continue
-        if _is_exempt(node, source_lines):
-            continue
-        if _has_async_usage(node):
-            reason = "B(有await)"
-        elif _nested_async_uses_session(node, session_names):
-            reason = "B(嵌套async用db)"
-        else:
-            reason = "A(无await→改def)"
-        violations.append(Violation(file=path, line=node.lineno, func=node.name, reason=reason))
+        if isinstance(node, ast.AsyncFunctionDef):
+            session_names = _sync_session_arg_names(node)
+            if not session_names:
+                continue
+            if _is_exempt(node, source_lines):
+                continue
+            if _has_async_usage(node):
+                reason = "B(有await)"
+            elif _nested_async_uses_session(node, session_names):
+                reason = "B(嵌套async用db)"
+            else:
+                reason = "A(无await→改def)"
+            violations.append(Violation(file=path, line=node.lineno, func=node.name, reason=reason))
+        elif isinstance(node, ast.FunctionDef):
+            # def handler 本身进线程池没问题；但嵌套 async 生成器引用同步 Session 时，
+            # 流式阶段仍在事件循环上（Phase 2 实例：conversation_app.ask_about 旧形态）
+            session_names = _sync_session_arg_names(node)
+            if not session_names:
+                continue
+            if _is_exempt(node, source_lines):
+                continue
+            if _nested_async_uses_session(node, session_names):
+                violations.append(Violation(file=path, line=node.lineno, func=node.name, reason="B(def嵌套async用db)"))
     return violations
 
 
