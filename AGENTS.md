@@ -119,6 +119,8 @@ API 进程的终态是纯异步（AsyncSession）。基建已就位：`api/db/db
 | 大结果集 `(await session.scalars(...)).all()` | `async for row in await session.stream_scalars(stmt)` | 流式，控内存 |
 | async 函数里 `time.sleep` / `requests` / 同步 redis | `asyncio.sleep` / `httpx.AsyncClient` / `redis.asyncio` | ruff `ASYNC` 规则强制 |
 | 新代码调 `session.run_sync(...)` | 仅迁移期桥接遗留同步逻辑允许，带 `# TODO(async-phase4)` 标记 | 收口阶段验收要求清零 |
+| run_sync 的 facade session 被构造物持有并逸出 greenlet（如 `run_sync(lambda s: LLMBundle(s, ...))` 后 bundle 带着 s 存活） | 构造后立即剥离（`bundle.db = None`）；facade 只在 run_sync 回调内使用 | 同步方法内 rollback 会**先过期全部 ORM 状态、后抛 MissingGreenlet 且可能被吞**——炸点漂移到后续任意属性访问，单测打桩抓不到（Phase 1 活体实锤） |
+| 自开连接的同步 helper 经 run_sync 桥接（`llm_id2llm_type`、`LLMBundle(None, ...)` 等内部 `db_connection()` 的函数） | `asyncio.to_thread` 外移，或改造为接收 session 参数 | run_sync 只把该 session 自身的 IO 变非阻塞，回调内其他同步连接仍阻塞事件循环 |
 
 测试基建：unit 层 `async_db` fixture（未绑定 `AsyncSession`，对齐 `db` fixture 模式）、
 `client` 基线已覆盖 `get_async_db`；integration 层 `bootstrapped_async_engine`
