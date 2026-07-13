@@ -6,6 +6,7 @@
 @desc: Memory API 业务逻辑层 - 从gateway层解耦的业务处理
 """
 
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
@@ -243,7 +244,7 @@ def get_memory_messages(db: Session, memory_id: str, agent_ids: list[str], keywo
     return {"messages": messages, "storage_type": memory.storage_type}
 
 
-async def add_message(db: Session, memory_ids: list[str], message_dict: dict):
+async def add_message(db: AsyncSession, memory_ids: list[str], message_dict: dict) -> tuple[bool, str]:
     """
     添加消息到Memory，并投递后台任务提取结构化记忆。
 

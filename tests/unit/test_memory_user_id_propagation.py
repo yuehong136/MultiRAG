@@ -137,7 +137,9 @@ def test_save_to_memory_persists_user_id_for_raw_and_extracted_messages(monkeypa
 
 
 def test_queue_save_to_memory_task_persists_user_id_on_raw_message(monkeypatch) -> None:
-    fake_db = Session()
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    fake_db = AsyncSession()
     fake_memory = SimpleNamespace(id="mem-1", tenant_id="tenant-1")
     captured: dict[str, object] = {}
 
@@ -157,13 +159,13 @@ def test_queue_save_to_memory_task_persists_user_id_on_raw_message(monkeypatch) 
         lambda *_args, **_kwargs: True,
     )
     monkeypatch.setattr(memory_message_service_module, "bulk_insert_into_db", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(memory_message_service_module, "_embedding_bundle_for", lambda _s, _m: SimpleNamespace(db="facade"))
 
-    async def fake_embed_and_save(_db, _memory, message_list, task_id=None):
+    def fake_embed_and_save_messages(_embedding_model, _memory, message_list, _report):
         captured["message_list"] = message_list
-        captured["task_id"] = task_id
         return True, "ok"
 
-    monkeypatch.setattr(memory_message_service_module, "embed_and_save", fake_embed_and_save)
+    monkeypatch.setattr(memory_message_service_module, "_embed_and_save_messages", fake_embed_and_save_messages)
 
     ok, msg = asyncio.run(
         memory_message_service_module.queue_save_to_memory_task(

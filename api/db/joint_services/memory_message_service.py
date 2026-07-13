@@ -17,11 +17,14 @@
 Joint service for memory and message operations.
 """
 
+import asyncio
 import logging
+from collections.abc import Callable
 
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from api.db.db_models import Task
+from api.db.db_models import Memory, Task
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name
 from api.db.services.llm_service import LLMBundle
 from api.db.services.memory_service import MemoryService
@@ -233,26 +236,32 @@ async def extract_by_llm(
     ]
 
 
-async def embed_and_save(db: Session, memory, message_list: list[dict], task_id: str | None = None):
+def _embedding_bundle_for(db: Session, memory: Memory) -> LLMBundle:
+    """构造 memory 的 embedding LLMBundle（纯同步 DB 面，供同步轨直调 / 异步轨 run_sync 复用）。"""
     if getattr(memory, "tenant_embd_id", None):
         embd_config = get_model_config_by_id(db, memory.tenant_embd_id)
     else:
         embd_config = get_model_config_by_type_and_name(db, memory.tenant_id, LLMType.EMBEDDING.value, memory.embd_id)
-    embedding_model = LLMBundle(db, memory.tenant_id, embd_config)
-    if task_id:
-        TaskService.update_progress(db, task_id, {"progress": 0.65, "progress_msg": timestamp_to_date(current_timestamp()) + " " + "Prepared embedding model."})
+    return LLMBundle(db, memory.tenant_id, embd_config)
+
+
+def _embed_and_save_messages(embedding_model: LLMBundle, memory: Memory, message_list: list[dict], report: Callable[[float, str], None]) -> tuple[bool, str]:
+    """embed_and_save 的非 DB 同步面：embedding HTTP + doc-store 写入 + Redis 容量缓存。
+
+    不触碰关系型 DB（用量记账自开短连接）；进度上报经 report 回调注入——任务轨携带
+    db+task_id，请求轨为 no-op。因而异步轨可将其整体放进工作线程执行。
+    """
+    report(0.65, "Prepared embedding model.")
     vector_list, _ = embedding_model.encode([msg["content"] for msg in message_list])
     for idx, msg in enumerate(message_list):
         msg["content_embed"] = vector_list[idx]
-    if task_id:
-        TaskService.update_progress(db, task_id, {"progress": 0.85, "progress_msg": timestamp_to_date(current_timestamp()) + " " + "Embedded extracted content."})
+    report(0.85, "Embedded extracted content.")
     vector_dimension = len(vector_list[0])
     if not MessageService.has_index(memory.tenant_id, memory.id):
         created = MessageService.create_index(memory.tenant_id, memory.id, vector_size=vector_dimension)
         if not created:
             error_msg = "Failed to create message index."
-            if task_id:
-                TaskService.update_progress(db, task_id, {"progress": -1, "progress_msg": timestamp_to_date(current_timestamp()) + " " + error_msg})
+            report(-1, error_msg)
             return False, error_msg
 
     new_msg_size = sum([MessageService.calculate_message_size(m) for m in message_list])
@@ -265,20 +274,27 @@ async def embed_and_save(db: Session, memory, message_list: list[dict], task_id:
             decrease_memory_size_cache(memory.id, delete_size)
         else:
             error_msg = "Failed to insert message into memory. Memory size reached limit and cannot decide which to delete."
-            if task_id:
-                TaskService.update_progress(db, task_id, {"progress": -1, "progress_msg": timestamp_to_date(current_timestamp()) + " " + error_msg})
+            report(-1, error_msg)
             return False, error_msg
     fail_cases = MessageService.insert_message(message_list, memory.tenant_id, memory.id)
     if fail_cases:
         error_msg = "Failed to insert message into memory. Details: " + "; ".join(fail_cases)
-        if task_id:
-            TaskService.update_progress(db, task_id, {"progress": -1, "progress_msg": timestamp_to_date(current_timestamp()) + " " + error_msg})
+        report(-1, error_msg)
         return False, error_msg
 
-    if task_id:
-        TaskService.update_progress(db, task_id, {"progress": 0.95, "progress_msg": timestamp_to_date(current_timestamp()) + " " + "Saved messages to storage."})
+    report(0.95, "Saved messages to storage.")
     increase_memory_size_cache(memory.id, new_msg_size)
     return True, "Message saved successfully."
+
+
+async def embed_and_save(db: Session, memory: Memory, message_list: list[dict], task_id: str | None = None) -> tuple[bool, str]:
+    embedding_model = _embedding_bundle_for(db, memory)
+
+    def _report(progress: float, msg: str) -> None:
+        if task_id:
+            TaskService.update_progress(db, task_id, {"progress": progress, "progress_msg": timestamp_to_date(current_timestamp()) + " " + msg})
+
+    return _embed_and_save_messages(embedding_model, memory, message_list, _report)
 
 
 def query_message(db: Session, filter_dict: dict, params: dict):
@@ -408,7 +424,7 @@ def judge_system_prompt_is_default(system_prompt: str, memory_type: int | list[s
     return system_prompt == PromptAssembler.assemble_system_prompt({"memory_type": memory_type_list})
 
 
-async def queue_save_to_memory_task(db: Session, memory_ids: list[str], message_dict: dict):
+async def queue_save_to_memory_task(db: AsyncSession, memory_ids: list[str], message_dict: dict) -> tuple[bool, str]:
     """
     Queue save to memory tasks.
 
@@ -429,15 +445,18 @@ async def queue_save_to_memory_task(db: Session, memory_ids: list[str], message_
     def new_task(_memory_id: str, _source_id: int):
         return {"id": get_uuid(), "doc_id": _memory_id, "task_type": "memory", "progress": 0.0, "digest": str(_source_id)}
 
+    def _no_report(progress: float, msg: str) -> None:
+        return None
+
     not_found_memory = []
     failed_memory = []
     for memory_id in memory_ids:
-        memory = MemoryService.get_by_memory_id(db, memory_id)
+        memory = await db.run_sync(lambda s, mid=memory_id: MemoryService.get_by_memory_id(s, mid))  # TODO(async-phase4)
         if not memory:
             not_found_memory.append(memory_id)
             continue
 
-        raw_message_id = REDIS_CONN.generate_auto_increment_id(namespace="memory")
+        raw_message_id = await asyncio.to_thread(REDIS_CONN.generate_auto_increment_id, namespace="memory")
         raw_message = {
             "message_id": raw_message_id,
             "message_type": MemoryType.RAW.name.lower(),
@@ -452,15 +471,18 @@ async def queue_save_to_memory_task(db: Session, memory_ids: list[str], message_
             "forget_at": None,
             "status": True,
         }
-        res, msg = await embed_and_save(db, memory, [raw_message])
+        embedding_model = await db.run_sync(lambda s, m=memory: _embedding_bundle_for(s, m))  # TODO(async-phase4)
+        embedding_model.db = None  # run_sync 的 facade 不得逸出 greenlet（AGENTS.md 规约）
+        # 非 DB 同步面（embedding HTTP + doc-store + Redis 缓存）整体在工作线程执行
+        res, msg = await asyncio.to_thread(_embed_and_save_messages, embedding_model, memory, [raw_message], _no_report)
         if not res:
             failed_memory.append({"memory_id": memory_id, "fail_msg": msg})
             continue
 
         task = new_task(memory_id, raw_message_id)
-        bulk_insert_into_db(db, Task, [task], replace_on_conflict=True)
+        await db.run_sync(lambda s, t=task: bulk_insert_into_db(s, Task, [t], replace_on_conflict=True))  # TODO(async-phase4)
         task_message = {"id": task["id"], "task_id": task["id"], "task_type": task["task_type"], "memory_id": memory_id, "source_id": raw_message_id, "message_dict": message_dict}
-        if not REDIS_CONN.queue_product(settings.get_svr_queue_name(priority=0), message=task_message):
+        if not await asyncio.to_thread(REDIS_CONN.queue_product, settings.get_svr_queue_name(priority=0), message=task_message):
             failed_memory.append({"memory_id": memory_id, "fail_msg": "Can't access Redis."})
 
     error_msg = ""

@@ -12,13 +12,14 @@ import logging
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.apps.services import memory_api_service
 from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
-from api.db.db_models import get_db
-from api.utils.api_utils import get_error_argument_result, get_json_result
+from api.db.db_models import get_async_db, get_db
+from api.utils.api_utils import Principal, async_current_user, get_error_argument_result, get_json_result
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from common.constants import RetCode
 from common.exceptions import ArgumentException, NotFoundException
@@ -209,8 +210,8 @@ class UpdateMessageRequest(BaseModel):
 @router.post("/messages", summary="添加消息到记忆")
 async def add_message(
     request_body: AddMessageRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager),
+    db: AsyncSession = Depends(get_async_db),
+    user: Principal = Depends(async_current_user),
 ):
     memory_ids = request_body.memory_id
     if isinstance(memory_ids, str):
