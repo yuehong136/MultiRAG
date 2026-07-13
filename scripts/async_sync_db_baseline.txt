@@ -57,9 +57,6 @@ api/apps/sdk/dify_retrieval.py::retrieval
 api/apps/sdk/dify_retrieval.py::retrieval_get
 api/apps/sdk/doc.py::list_chunks
 api/apps/sdk/doc.py::retrieval_test
-api/apps/sdk/session.py::download_agentbot_attachment
-api/apps/sdk/session.py::retrieval_test_embedded
-api/apps/sdk/session.py::sequence2txt
 api/apps/semantic_layer_app.py::delete_embeddings_by_element_type_and_id
 api/apps/semantic_layer_app.py::delete_embeddings_by_owner_type_and_id
 api/apps/semantic_layer_app.py::save_text_to_embedding

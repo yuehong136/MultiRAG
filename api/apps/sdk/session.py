@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import json
 import logging
@@ -13,10 +14,17 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
+from starlette.concurrency import iterate_in_threadpool
 
 from agent.canvas import Canvas
-from api.db.db_models import get_async_db, get_db
-from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
+from api.db.db_models import db_connection, get_async_db, get_db
+from api.db.joint_services.tenant_model_service import (
+    build_bundle_by_id_async,
+    build_default_bundle_async,
+    build_named_bundle_async,
+    get_model_config_by_type_and_name,
+    get_tenant_default_model_by_type,
+)
 from api.db.services.api_service import API4ConversationService
 from api.db.services.canvas_service import UserCanvasService, completion_openai
 from api.db.services.canvas_service import completion as agent_completion
@@ -51,6 +59,13 @@ from core.prompts.generator import chunks_format, cross_languages, keyword_extra
 from core.prompts.template import load_prompt
 
 router = APIRouter()
+
+
+def _label_question_with_conn(question: str, kbs: list) -> Any:
+    """label_question 的自开连接包装：内部还有 tag 缓存与 doc-store 查询等同步 IO，
+    只桥 DB 会把它们留在事件循环上——整体交给线程池调用（AGENTS.md 规约）。"""
+    with db_connection() as s:
+        return label_question(s, question, kbs)
 
 
 class DeleteSessionsRequest(BaseModel):
@@ -1026,8 +1041,8 @@ async def download_agentbot_attachment(
     agent_id: str,
     attachment_id: str,
     ext: str = Query("markdown"),
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(beta_token_required),
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_beta_token_required),
 ):
     """
     Public agentbot artifact download for share/widget beta-token flows.
@@ -1036,10 +1051,10 @@ async def download_agentbot_attachment(
     so embedded agents do not expand the internal document or SDK file auth
     boundary.
     """
-    cvs = UserCanvasService.get_by_id(db, agent_id)
-    if not cvs:
+    owner_id = await db.run_sync(lambda s: getattr(UserCanvasService.get_by_id(s, agent_id), "user_id", None))  # TODO(async-phase4)
+    if owner_id is None:
         return get_error_data_result(retmsg=f"Can't find agent by ID: {agent_id}")
-    if cvs.user_id != tenant_id:
+    if owner_id != tenant_id:
         return get_error_data_result(retmsg="You cannot access the agent.")
 
     try:
@@ -1088,8 +1103,8 @@ async def ask_about_embedded(
 @router.post("/searchbots/retrieval_test", summary="搜索机器人检索测试")
 async def retrieval_test_embedded(
     body: SearchBotRetrievalTestRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(beta_token_required),
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_beta_token_required),
 ):
     req = body.model_dump()
 
@@ -1111,14 +1126,13 @@ async def retrieval_test_embedded(
     tenant_ids = []
 
     if req.get("search_id", ""):
-        search_config = SearchService.get_detail(db, req.get("search_id", "")).get("search_config", {})
+        search_config = (await db.run_sync(lambda s: SearchService.get_detail(s, req.get("search_id", "")))).get("search_config", {})  # TODO(async-phase4)
         meta_data_filter = search_config.get("meta_data_filter", {})
         if meta_data_filter:
-            metas = DocMetadataService.get_flatted_meta_by_kbs(db, kb_ids)
+            metas = await db.run_sync(lambda s: DocMetadataService.get_flatted_meta_by_kbs(s, kb_ids))  # TODO(async-phase4)
             chat_mdl = None
             if meta_data_filter.get("method") in ["auto", "semi_auto"]:
-                chat_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, search_config.get("chat_id", ""))
-                chat_mdl = LLMBundle(db, tenant_id, chat_config)
+                chat_mdl = await build_named_bundle_async(tenant_id, LLMType.CHAT.value, search_config.get("chat_id", ""))
             doc_ids = await apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids)
         # Apply search_config settings if not explicitly provided in request
         if not req.get("similarity_threshold"):
@@ -1131,48 +1145,71 @@ async def retrieval_test_embedded(
             rerank_id = search_config.get("rerank_id", "")
 
     try:
-        tenants = UserTenantService.query(db, user_id=tenant_id)
-        for kb_id in kb_ids:
-            for tenant in tenants:
-                if KnowledgebaseService.query(db, tenant_id=tenant.tenant_id, id=kb_id):
-                    tenant_ids.append(tenant.tenant_id)
-                    break
-            else:
-                return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
-        kb = KnowledgebaseService.get_by_id(db, kb_ids[0])
-        if not kb:
+        def _authorized_tenants(s: Session) -> list[str] | None:
+            owned: list[str] = []
+            tenants = UserTenantService.query(s, user_id=tenant_id)
+            for kb_id in kb_ids:
+                for tenant in tenants:
+                    if KnowledgebaseService.query(s, tenant_id=tenant.tenant_id, id=kb_id):
+                        owned.append(tenant.tenant_id)
+                        break
+                else:
+                    return None
+            return owned
+
+        owned_tenants = await db.run_sync(_authorized_tenants)  # TODO(async-phase4)
+        if owned_tenants is None:
+            return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
+        tenant_ids = owned_tenants
+
+        kbs = await db.run_sync(lambda s: KnowledgebaseService.get_by_ids(s, kb_ids))  # TODO(async-phase4)
+        if not kbs:
             return get_error_data_result(retmsg="Knowledgebase not found!")
+        kb = kbs[0]
 
         if langs:
             question = await cross_languages(kb.tenant_id, None, question, langs)
 
         if kb.tenant_embd_id:
-            embd_config = get_model_config_by_id(db, kb.tenant_embd_id)
+            embd_mdl = await build_bundle_by_id_async(kb.tenant_id, kb.tenant_embd_id)
         else:
-            embd_config = get_model_config_by_type_and_name(db, kb.tenant_id, LLMType.EMBEDDING.value, kb.embd_id)
-        embd_mdl = LLMBundle(db, kb.tenant_id, embd_config)
+            embd_mdl = await build_named_bundle_async(kb.tenant_id, LLMType.EMBEDDING.value, kb.embd_id)
 
         rerank_mdl = None
         if req.get("tenant_rerank_id"):
-            rerank_config = get_model_config_by_id(db, req["tenant_rerank_id"])
-            rerank_mdl = LLMBundle(db, kb.tenant_id, rerank_config)
+            rerank_mdl = await build_bundle_by_id_async(kb.tenant_id, req["tenant_rerank_id"])
         elif rerank_id:
-            rerank_config = get_model_config_by_type_and_name(db, kb.tenant_id, LLMType.RERANK.value, rerank_id)
-            rerank_mdl = LLMBundle(db, kb.tenant_id, rerank_config)
+            rerank_mdl = await build_named_bundle_async(kb.tenant_id, LLMType.RERANK.value, rerank_id)
 
         if req.get("keyword", False):
-            chat_config = get_tenant_default_model_by_type(db, kb.tenant_id, LLMType.CHAT)
-            chat_mdl = LLMBundle(db, kb.tenant_id, chat_config)
+            chat_mdl = await build_default_bundle_async(kb.tenant_id, LLMType.CHAT)
             question += await keyword_extraction(chat_mdl, question)
 
-        labels = label_question(db, question, [kb])
+        # tag 特征：同步（tag 缓存 + doc-store 查询）且自开连接——入线程池
+        labels = await asyncio.to_thread(_label_question_with_conn, question, kbs)
+        # 位置参数必须对齐 Dealer.retrieval(question, filter_exp, embd_mdl, tenant_id, kb_names, page, page_size, ...)：
+        # kb_names 构建索引名，kb_ids 走 kwarg 做过滤（对齐非 embedded 孪生 chunk_app.retrieval_test）
         ranks = await settings.retriever.retrieval(
-            question, embd_mdl, tenant_ids, kb_ids, page, size, similarity_threshold, vector_similarity_weight, top, doc_ids, rerank_mdl=rerank_mdl, highlight=req.get("highlight"), rank_feature=labels
+            question,
+            "",
+            embd_mdl,
+            tenant_ids,
+            [k.name for k in kbs],
+            page,
+            size,
+            similarity_threshold,
+            vector_similarity_weight,
+            top,
+            doc_ids,
+            rerank_mdl=rerank_mdl,
+            highlight=req.get("highlight"),
+            rank_feature=labels,
+            kb_ids=kb_ids,
         )
         if use_kg:
-            kg_chat_config = get_tenant_default_model_by_type(db, kb.tenant_id, LLMType.CHAT)
-            ck = await settings.kg_retriever.retrieval(question, tenant_ids, kb_ids, embd_mdl, LLMBundle(db, kb.tenant_id, kg_chat_config))
+            kg_chat_mdl = await build_default_bundle_async(kb.tenant_id, LLMType.CHAT)
+            ck = await settings.kg_retriever.retrieval(question, tenant_ids, kb_ids, embd_mdl, kg_chat_mdl)
             if ck["content_with_weight"]:
                 ranks["chunks"].insert(0, ck)
 
@@ -1276,8 +1313,8 @@ class TTSRequest(BaseModel):
 async def sequence2txt(
     file: UploadFile = File(...),
     stream: str = "false",
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required),
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_token_required),
 ):
     stream_mode = stream.lower() == "true"
 
@@ -1294,13 +1331,13 @@ async def sequence2txt(
         f.write(content)
 
     try:
-        default_asr_model_config = get_tenant_default_model_by_type(db, tenant_id, LLMType.SPEECH2TEXT)
+        asr_mdl = await build_default_bundle_async(tenant_id, LLMType.SPEECH2TEXT)
     except Exception as e:
         return get_error_data_result(retmsg=str(e))
-    asr_mdl = LLMBundle(db, tenant_id, default_asr_model_config)
 
     if not stream_mode:
-        text = asr_mdl.transcription(temp_audio_path)
+        # ASR 同步 HTTP 不持有 Session，工作线程执行
+        text = await asyncio.to_thread(asr_mdl.transcription, temp_audio_path)
         try:
             os.remove(temp_audio_path)
         except Exception as e:
@@ -1309,7 +1346,8 @@ async def sequence2txt(
 
     async def event_stream():
         try:
-            for evt in asr_mdl.stream_transcription(temp_audio_path):
+            # 同步 ASR 流逐项经线程池拉取
+            async for evt in iterate_in_threadpool(asr_mdl.stream_transcription(temp_audio_path)):
                 yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
         except Exception as e:
             err = {"event": "error", "text": str(e)}
