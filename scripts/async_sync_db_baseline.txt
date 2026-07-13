@@ -55,7 +55,6 @@ api/apps/nl2sql_app.py::sql_templating
 api/apps/plugin_app.py::install_dep
 api/apps/plugin_app.py::run_plugin_script
 api/apps/plugin_app.py::uninstall_dep
-api/apps/restful_apis/chat_api.py::transcriptions
 api/apps/sdk/agents.py::webhook
 api/apps/sdk/dify_retrieval.py::retrieval
 api/apps/sdk/dify_retrieval.py::retrieval_get

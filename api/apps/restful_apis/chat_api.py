@@ -20,6 +20,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
+from starlette.concurrency import iterate_in_threadpool
 
 from api.db.db_models import get_async_db, get_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
@@ -679,8 +680,8 @@ def tts(
 async def transcriptions(
     file: UploadFile = File(...),
     stream: str = "false",
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(current_tenant_id),
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_current_tenant_id),
 ):
     stream_mode = stream.lower() == "true"
     allowed_exts = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".webm", ".opus", ".wma"}
@@ -698,18 +699,21 @@ async def transcriptions(
             temp_file.write(content)
 
         try:
-            asr_config = get_tenant_default_model_by_type(db, tenant_id, LLMType.SPEECH2TEXT)
+            asr_config = await db.run_sync(lambda s: get_tenant_default_model_by_type(s, tenant_id, LLMType.SPEECH2TEXT))  # TODO(async-phase4)
         except Exception as e:
             return _error(str(e))
 
-        asr_mdl = LLMBundle(db, tenant_id, asr_config)
+        asr_mdl = await db.run_sync(lambda s: LLMBundle(s, tenant_id, asr_config))  # TODO(async-phase4)
+        asr_mdl.db = None  # run_sync 的 facade 不得逸出 greenlet（AGENTS.md 规约）
         if not stream_mode:
-            text = asr_mdl.transcription(temp_audio_path)
+            # ASR 同步 HTTP 不持有 Session，工作线程执行
+            text = await asyncio.to_thread(asr_mdl.transcription, temp_audio_path)
             return get_result(data={"text": text})
 
         async def event_stream():
             try:
-                for evt in asr_mdl.stream_transcription(temp_audio_path):
+                # 同步 ASR 流逐项经线程池拉取（局部、不持有 Session 的第三方 IO 桥接）
+                async for evt in iterate_in_threadpool(asr_mdl.stream_transcription(temp_audio_path)):
                     yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
             except Exception as e:
                 yield f"data: {json.dumps({'event': 'error', 'text': str(e)}, ensure_ascii=False)}\n\n"
