@@ -9,6 +9,7 @@
 import json
 import sys
 import threading
+import types
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -162,3 +163,38 @@ def test_canvas_run_rejects_non_owner(client, monkeypatch):
     body = resp.json()
     assert body["retcode"] != 0
     assert "authorized" in body["retmsg"]
+
+
+def test_sdk_agents_openai_ownership_check_runs_on_sync_facade(agent_route_stubs, monkeypatch):
+    """所有权校验必须经 run_sync 拿同步 facade——直接把 AsyncSession 递给同步 service 是
+    f0bd9154 判例的同型回归（假件保留真实类型契约，直递必红）。"""
+    seen: dict[str, object] = {}
+
+    def _fake_query(cls, s, **kw):
+        seen["session_type_ok"] = isinstance(s, Session)
+        return [types.SimpleNamespace(id=kw.get("id"))]
+
+    monkeypatch.setattr(UserCanvasService, "query", classmethod(_fake_query))
+
+    async def _fake_completion_openai(db, tenant_id, agent_id, question, session_id=None, stream=True, **kw):
+        yield 'data: {"choices": []}\n\n'
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(_route_module("api.apps.sdk.session"), "completion_openai", _fake_completion_openai)
+
+    resp = agent_route_stubs.post(
+        "/api/v1/agents_openai/agent-1/chat/completions",
+        json={"model": "m", "stream": True, "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    assert resp.status_code == 200
+    assert "[DONE]" in resp.text
+    assert seen["session_type_ok"] is True
+
+
+def test_sdk_agent_bot_completions_stream_frames(agent_route_stubs):
+    resp = agent_route_stubs.post("/api/v1/agentbots/agent-1/completions", json={"question": "hi", "stream": True})
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    assert '"content": "hi"' in resp.text

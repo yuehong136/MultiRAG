@@ -559,7 +559,7 @@ async def agents_completion_openai_compatibility(agent_id: str, request: ChatCom
     messages = req.get("messages", [])
     if not messages:
         return get_error_data_result(retmsg="You must provide at least one message.")
-    if not UserCanvasService.query(db, user_id=tenant_id, id=agent_id):
+    if not await db.run_sync(lambda s: UserCanvasService.query(s, user_id=tenant_id, id=agent_id)):  # TODO(async-phase4)
         return get_error_data_result(retmsg=f"You don't own the agent {agent_id}")
 
     filtered_messages = [m for m in messages if m["role"] in ["user", "assistant"]]
