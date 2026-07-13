@@ -539,7 +539,7 @@ async def chat_completion_openai_like(chat_id: str, request: ChatCompletionOpenA
 
 
 @router.post("/agents_openai/{agent_id}/chat/completions", summary="代理OpenAI兼容补全")
-async def agents_completion_openai_compatibility(agent_id: str, request: ChatCompletionOpenAIRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
+async def agents_completion_openai_compatibility(agent_id: str, request: ChatCompletionOpenAIRequest, db: AsyncSession = Depends(get_async_db), tenant_id: str = Depends(async_token_required)):
     req = request.model_dump()
     messages = req.get("messages", [])
     if not messages:
@@ -595,7 +595,7 @@ async def agents_completion_openai_compatibility(agent_id: str, request: ChatCom
 
 
 @router.post("/agents/{agent_id}/completions", summary="代理补全")
-async def agent_completions(agent_id: str, request: AgentCompletionRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
+async def agent_completions(agent_id: str, request: AgentCompletionRequest, db: AsyncSession = Depends(get_async_db), tenant_id: str = Depends(async_token_required)):
     req = request.model_dump()
     return_trace = bool(req.get("return_trace", False))
 
@@ -932,8 +932,8 @@ async def agent_bot_completions(
     agent_id: str,
     body: AgentCompletionRequest,
     release: str | None = Query(None),
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(beta_token_required),
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_beta_token_required),
 ):
     req = body.model_dump()
     if release is not None and req.get("release") is None:

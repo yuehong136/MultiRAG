@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -9,6 +10,7 @@ from uuid import uuid4
 
 import tiktoken
 from sqlalchemy import and_, asc, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import desc as sa_desc
 
@@ -268,7 +270,7 @@ class UserCanvasService(CommonService):
 # 推理流程（SSE / OpenAI 兼容）
 # ---------------------------
 async def completion(
-    db: Session,
+    db: AsyncSession,
     tenant_id: str,
     agent_id: str,
     session_id: str | None = None,
@@ -290,43 +292,60 @@ async def completion(
     user_id = kwargs.get("user_id", "") or ""
     custom_header = kwargs.get("custom_header", "")
     release_mode = str(kwargs.get("release", "")).strip().lower()
+    is_new_session = not session_id
 
-    # 组装 canvas & conversation
-    if session_id:
-        conv = API4ConversationService.get_by_id(db, session_id)
-        if not conv:
-            raise LookupError("Session not found!")
-        if not conv.message:
-            conv.message = []
-        if not isinstance(conv.dsl, str):
-            conv.dsl = json.dumps(conv.dsl, ensure_ascii=False)
-        canvas = Canvas(conv.dsl, tenant_id, agent_id, canvas_id=agent_id, custom_header=custom_header)
-    else:
+    def _setup(s: Session) -> tuple[dict, str, str]:
+        """会话与 DSL 装配。产物**只有纯 dict/str**——ORM 对象不得跨下方的流式期存活。"""
+        if session_id:
+            conv = API4ConversationService.get_by_id(s, session_id)
+            if not conv:
+                raise LookupError("Session not found!")
+            if not conv.message:
+                conv.message = []
+            if not isinstance(conv.dsl, str):
+                conv.dsl = json.dumps(conv.dsl, ensure_ascii=False)
+            return conv.to_dict(), conv.dsl, agent_id
+
         cvs, dsl = UserCanvasService.get_agent_dsl_with_release(
-            db,
+            s,
             agent_id,
             release_mode=release_mode == "true",
             tenant_id=tenant_id,
         )
-        session_id = get_uuid()
-        canvas = Canvas(dsl, tenant_id, agent_id, canvas_id=cvs.id, custom_header=custom_header)
-        canvas.reset()
         # 记录建会话时 canvas 的版本标题（按 release_mode 取已发布/最新版本）
-        version_title = UserCanvasVersionService.get_latest_version_title(db, cvs.id, release_mode=release_mode == "true")
-        conv_dict = {
-            "id": session_id,
-            "dialog_id": cvs.id,
-            "user_id": user_id,
-            "message": [],
-            "source": "agent",
-            "dsl": dsl,
-            "reference": [],
-            "version_title": version_title,
-        }
+        version_title = UserCanvasVersionService.get_latest_version_title(s, cvs.id, release_mode=release_mode == "true")
         # Use the persisted instance so SQLAlchemy-side defaults are populated.
-        conv = API4ConversationService.save(db, **conv_dict)
+        conv = API4ConversationService.save(
+            s,
+            id=get_uuid(),
+            dialog_id=cvs.id,
+            user_id=user_id,
+            message=[],
+            source="agent",
+            dsl=dsl,
+            reference=[],
+            version_title=version_title,
+        )
         if not conv.message:
             conv.message = []
+        return conv.to_dict(), dsl, cvs.id
+
+    conv, dsl, canvas_id = await db.run_sync(_setup)  # TODO(async-phase4)
+    session_id = conv["id"]
+
+    def _build_canvas() -> Canvas:
+        canvas = Canvas(dsl, tenant_id, agent_id, canvas_id=canvas_id, custom_header=custom_header)
+        if is_new_session:
+            canvas.reset()
+        return canvas
+
+    # 组件 __init__ 各自开连接查模型配置（reset 还打 Redis）——整体入线程池
+    canvas = await asyncio.to_thread(_build_canvas)
+
+    # setup 产物已全是纯 dict/str（无 ORM 对象存活、save 自带 commit）——此处安全结束
+    # autobegin 的读事务，把连接还回池：canvas.run 是分钟级流式，不能让连接全程以
+    # idle-in-transaction 钉死（AGENTS.md 判例：有 ORM 对象存活时 rollback 会过期状态）
+    await db.rollback()
 
     # 记录用户消息
     message_id = str(uuid4())
@@ -335,7 +354,7 @@ async def completion(
         user_message["a2ui"] = a2ui_messages
     if metadata:
         user_message["metadata"] = metadata
-    conv.message.append(user_message)
+    conv["message"].append(user_message)
 
     # 流式运行
     txt = ""
@@ -375,16 +394,16 @@ async def completion(
             "commands": a2ui_commands,
             "surface_ids": sorted(a2ui_surface_ids),
         }
-    conv.message.append(assistant_message)
-    conv.reference = canvas.get_reference()
-    conv.errors = canvas.error
-    conv.dsl = str(canvas)
+    conv["message"].append(assistant_message)
+    conv["reference"] = canvas.get_reference()
+    conv["errors"] = canvas.error
+    conv["dsl"] = str(canvas)
 
-    API4ConversationService.append_message(db, conv.id, conv.to_dict())
+    await db.run_sync(lambda s: API4ConversationService.append_message(s, conv["id"], conv))  # TODO(async-phase4)
 
 
 async def completion_openai(
-    db: Session,
+    db: AsyncSession,
     tenant_id: str,
     agent_id: str,
     question: str,

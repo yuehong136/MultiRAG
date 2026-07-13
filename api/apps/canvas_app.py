@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import copy
 import inspect
 import json
@@ -36,10 +37,10 @@ from api.db.services.pipeline_operation_log_service import PipelineOperationLogS
 from api.db.services.task_service import CANVAS_DEBUG_DOC_ID, TaskService, queue_dataflow
 from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.db.services.user_service import TenantService
-from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
+from api.utils.api_utils import Principal, async_current_user, get_data_error_result, get_json_result, server_error_response
 from common import settings
 from common.constants import RetCode
-from common.misc_utils import get_uuid, thread_pool_exec
+from common.misc_utils import get_uuid
 from core.flow.pipeline import Pipeline
 from core.nlp import search
 from core.utils.redis_conn import REDIS_CONN
@@ -405,7 +406,7 @@ def getsse(canvas_id: str, authorization: str = Header(...), db: Session = Depen
 
 
 @router.post("/completion", summary="运行Canvas", response_description="成功执行Canvas")
-async def run(request_body: CompletionRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def run(request_body: CompletionRequest, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)):
     """
     执行Canvas推理任务
 
@@ -463,7 +464,7 @@ async def run(request_body: CompletionRequest, db: Session = Depends(get_db), us
     runtime_user_id = req.get("user_id") or tenant_id
     user_id = str(runtime_user_id)
 
-    if not await thread_pool_exec(UserCanvasService.accessible, db, req["id"], tenant_id):
+    if not await db.run_sync(lambda s: UserCanvasService.accessible(s, req["id"], tenant_id)):  # TODO(async-phase4)
         return get_json_result(data=False, retmsg="Only owner of canvas authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
     replica_payload = CanvasReplicaService.load_for_run(
@@ -480,21 +481,26 @@ async def run(request_body: CompletionRequest, db: Session = Depends(get_db), us
     canvas_category = replica_payload.get("canvas_category", CanvasCategory.Agent)
     dsl_str = json.dumps(replica_dsl, ensure_ascii=False)
 
-    # DataFlow模式
-    cvs = await thread_pool_exec(UserCanvasService.get_by_id, db, req["id"])
-    if cvs.canvas_category == CanvasCategory.DataFlow:
+    # DataFlow模式（只取所需字段，不让 ORM 对象活到流式期）
+    stored_category = await db.run_sync(lambda s: UserCanvasService.get_by_id(s, req["id"]).canvas_category)  # TODO(async-phase4)
+    if stored_category == CanvasCategory.DataFlow:
         task_id = get_uuid()
         Pipeline(dsl_str, tenant_id=tenant_id, doc_id=CANVAS_DEBUG_DOC_ID, task_id=task_id, flow_id=req["id"])
-        ok, error_message = await thread_pool_exec(queue_dataflow, db, user_id, req["id"], task_id, CANVAS_DEBUG_DOC_ID, files if files else None, 0)
+        ok, error_message = await db.run_sync(lambda s: queue_dataflow(s, user_id, req["id"], task_id, CANVAS_DEBUG_DOC_ID, files if files else None, 0))  # TODO(async-phase4)
         if not ok:
             return get_data_error_result(retmsg=error_message)
         return get_json_result(data={"message_id": task_id})
 
     # Agent模式 - SSE流式响应
     try:
-        canvas = Canvas(dsl_str, tenant_id, canvas_id=req["id"])
+        # 组件 __init__ 各自开连接查模型配置——整体入线程池
+        canvas = await asyncio.to_thread(Canvas, dsl_str, tenant_id, canvas_id=req["id"])
     except Exception as e:
         return server_error_response(e)
+
+    # setup 产物已全是纯值（无 ORM 对象存活）——结束 autobegin 的读事务，避免连接在
+    # 下方分钟级的 SSE 流式期间以 idle-in-transaction 状态钉死
+    await db.rollback()
 
     async def sse():
         nonlocal canvas, user_id
@@ -531,8 +537,8 @@ async def run(request_body: CompletionRequest, db: Session = Depends(get_db), us
 async def exp_agent_completion(
     canvas_id: str,
     request_body: dict,
-    db: Session = Depends(get_db),
-    user=Depends(manager),
+    db: AsyncSession = Depends(get_async_db),
+    user: Principal = Depends(async_current_user),
 ):
     """
     实验性Agent Completion端点，支持trace返回。
@@ -872,7 +878,7 @@ def input_form(id: str = Query(..., description="Canvas ID"), component_id: str 
 
 
 @router.post("/debug", summary="调试组件", response_description="成功执行组件调试")
-async def debug(request_body: DebugRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def debug(request_body: DebugRequest, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)):
     """
     调试单个Canvas组件
 
@@ -914,14 +920,25 @@ async def debug(request_body: DebugRequest, db: Session = Depends(get_db), user=
     """
     req = request_body.model_dump()
 
-    if not UserCanvasService.accessible(db, req["id"], user.id):
+    if not await db.run_sync(lambda s: UserCanvasService.accessible(s, req["id"], user.id)):  # TODO(async-phase4)
         return get_json_result(data=False, retmsg="Only owner of canvas authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
     try:
-        user_canvas = UserCanvasService.get_by_id(db, req["id"])
-        canvas = Canvas(json.dumps(user_canvas.dsl), user.id, canvas_id=user_canvas.id)
-        canvas.reset()
+        dsl_str, stored_canvas_id = await db.run_sync(  # TODO(async-phase4)
+            lambda s: (lambda cvs: (json.dumps(cvs.dsl), cvs.id))(UserCanvasService.get_by_id(s, req["id"]))
+        )
+
+        def _build_canvas() -> Canvas:
+            canvas = Canvas(dsl_str, user.id, canvas_id=stored_canvas_id)
+            canvas.reset()
+            return canvas
+
+        # 组件 __init__ 各自开连接查模型配置（reset 还打 Redis）——整体入线程池
+        canvas = await asyncio.to_thread(_build_canvas)
         canvas.message_id = get_uuid()
+
+        # setup 产物已全是纯值——结束读事务，避免连接在下方组件执行（可能分钟级 LLM）期间钉死
+        await db.rollback()
 
         component = canvas.get_component(req["component_id"])["obj"]
         component.reset()
@@ -929,7 +946,9 @@ async def debug(request_body: DebugRequest, db: Session = Depends(get_db), user=
         if isinstance(component, LLM):
             component.set_debug_inputs(req["params"])
 
-        component.invoke(**{k: o["value"] for k, o in req["params"].items()})
+        # 同步 invoke 会在事件循环上 asyncio.run 组件的 async 实现（靠 nest_asyncio 补丁），
+        # 直接走组件自己的 async 入口
+        await component.invoke_async(**{k: o["value"] for k, o in req["params"].items()})
         outputs = component.output()
 
         # 处理流式输出

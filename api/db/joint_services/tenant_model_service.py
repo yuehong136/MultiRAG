@@ -1,9 +1,11 @@
+import asyncio
 import enum
 import os
 
 from sqlalchemy.orm import Session
 
-from api.db.services.llm_service import LLMService
+from api.db.db_models import db_connection
+from api.db.services.llm_service import LLMBundle, LLMService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService
 from common import settings
@@ -112,3 +114,51 @@ def get_tenant_default_model_by_type(
     if not model_name:
         raise ValueError(f"No default {model_type_val} model is set.")
     return get_model_config_by_type_and_name(db, tenant_id, model_type_val, model_name)
+
+
+# ---------------------------------------------------------------------------
+# 事件循环上的 LLMBundle 构造（Canvas/Agent 组件等自开连接的调用方）
+#
+# 构造是纯同步 DB（模型配置查询 + LLMBundle 内部的租户模型/Langfuse 查询），不持有
+# 调用方的 Session——整体入线程池即可解除事件循环阻塞，无需沿调用链传 session。
+# 构造用的短会话在返回前关闭，故一律剥离 `bundle.db`（不得随 bundle 逸出，AGENTS.md 规约）。
+# ---------------------------------------------------------------------------
+
+
+async def build_default_bundle_async(tenant_id: str, model_type: str | enum.Enum, **kwargs) -> LLMBundle:
+    """按租户默认模型构造 LLMBundle（事件循环安全）。"""
+
+    def _build() -> LLMBundle:
+        with db_connection() as db:
+            model_config = get_tenant_default_model_by_type(db, tenant_id, model_type)
+            bundle = LLMBundle(db, tenant_id, model_config, **kwargs)
+        bundle.db = None
+        return bundle
+
+    return await asyncio.to_thread(_build)
+
+
+async def build_named_bundle_async(tenant_id: str, model_type: str, llm_id: str, **kwargs) -> LLMBundle:
+    """按模型名构造 LLMBundle（事件循环安全）。"""
+
+    def _build() -> LLMBundle:
+        with db_connection() as db:
+            model_config = get_model_config_by_type_and_name(db, tenant_id, model_type, llm_id)
+            bundle = LLMBundle(db, tenant_id, model_config, **kwargs)
+        bundle.db = None
+        return bundle
+
+    return await asyncio.to_thread(_build)
+
+
+async def build_bundle_by_id_async(tenant_id: str, tenant_model_id: int, **kwargs) -> LLMBundle:
+    """按租户模型行 id 构造 LLMBundle（事件循环安全）。"""
+
+    def _build() -> LLMBundle:
+        with db_connection() as db:
+            model_config = get_model_config_by_id(db, tenant_model_id)
+            bundle = LLMBundle(db, tenant_id, model_config, **kwargs)
+        bundle.db = None
+        return bundle
+
+    return await asyncio.to_thread(_build)

@@ -391,7 +391,8 @@ class LLM(ComponentBase):
             ans = re.sub(r"^.*```json", "", ans, flags=re.DOTALL)
             return re.sub(r"```\n*$", "", ans, flags=re.DOTALL)
 
-        prompt, msg, _ = self._prepare_prompt_variables()
+        # 同步 prompt 组装：内含自开连接的模型查询与（有图片时）视觉模型构造——入线程池
+        prompt, msg, _ = await asyncio.to_thread(self._prepare_prompt_variables)
         error: str = ""
         output_structure = None
         try:

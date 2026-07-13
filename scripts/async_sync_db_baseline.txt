@@ -14,9 +14,6 @@ api/apps/askdata_app.py::get_hc_dim_values_by_dim_value
 api/apps/askdata_app.py::get_semantic_layer_streaming
 api/apps/askdata_app.py::get_sql_and_table_config
 api/apps/askdata_app.py::re_query
-api/apps/canvas_app.py::debug
-api/apps/canvas_app.py::exp_agent_completion
-api/apps/canvas_app.py::run
 api/apps/chunk_app.py::knowledge_graph
 api/apps/chunk_app.py::list_chunk
 api/apps/chunk_app.py::query_vector_store
@@ -60,9 +57,6 @@ api/apps/sdk/dify_retrieval.py::retrieval
 api/apps/sdk/dify_retrieval.py::retrieval_get
 api/apps/sdk/doc.py::list_chunks
 api/apps/sdk/doc.py::retrieval_test
-api/apps/sdk/session.py::agent_bot_completions
-api/apps/sdk/session.py::agent_completions
-api/apps/sdk/session.py::agents_completion_openai_compatibility
 api/apps/sdk/session.py::download_agentbot_attachment
 api/apps/sdk/session.py::retrieval_test_embedded
 api/apps/sdk/session.py::sequence2txt

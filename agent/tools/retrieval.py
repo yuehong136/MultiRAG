@@ -19,14 +19,14 @@ import os
 import re
 from abc import ABC
 from functools import partial
+from typing import Any
 
 from agent.tools.base import ToolBase, ToolMeta, ToolParamBase
 from api.db.db_models import db_connection
 from api.db.joint_services import memory_message_service
-from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
+from api.db.joint_services.tenant_model_service import build_bundle_by_id_async, build_default_bundle_async, build_named_bundle_async
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.llm_service import LLMBundle
 from api.db.services.memory_service import MemoryService
 from common import settings
 from common.connection_utils import timeout
@@ -89,7 +89,14 @@ class Retrieval(ToolBase, ABC):
         return getattr(self._param, "dataset_ids", None) or getattr(self._param, "kb_ids", None) or []
 
     async def _retrieve_memory(self, query_text: str):
-        """Retrieve from memory storage."""
+        """Retrieve from memory storage.
+
+        整体入线程池：块内是纯同步链（DB + query_message 内的 embedding HTTP 与消息库检索），
+        不持有调用方 Session——线程池一次解除全部阻塞面（只桥 DB 会漏掉 embedding HTTP）。
+        """
+        return await asyncio.to_thread(self._retrieve_memory_sync, query_text)
+
+    def _retrieve_memory_sync(self, query_text: str):
         with db_connection() as db:
             memory_ids: list[str] = list(self._param.memory_ids)
             user_id = getattr(self._param, "user_id", None)
@@ -151,8 +158,8 @@ class Retrieval(ToolBase, ABC):
             self.set_output("formalized_content", self._param.empty_response)
             return
 
-    async def _retrieve_kb(self, query_text: str):
-        """Retrieve from knowledge base."""
+    def _resolve_kbs(self) -> tuple[list[str], list[str], list]:
+        """解析 dataset_ids（含 @变量 引用）→ (kb_ids, filtered_kb_ids, kbs)。纯同步 DB。"""
         with db_connection() as db:
             kb_ids: list[str] = []
             for id in self._dataset_ids:
@@ -172,142 +179,151 @@ class Retrieval(ToolBase, ABC):
             kbs = KnowledgebaseService.get_by_ids(db, filtered_kb_ids)
             if not kbs:
                 raise Exception("No dataset is selected.")
+            return kb_ids, filtered_kb_ids, kbs
 
-            # Keep the embedding-equivalence check aligned with RAGFlow: tenant_embd_id
-            # selects the concrete tenant model row, while embd_id defines model equivalence.
-            embd_keys = list({kb.embd_id for kb in kbs})
-            assert len(embd_keys) == 1, "Knowledge bases use different embedding models."
+    @staticmethod
+    def _flatted_metas(kb_ids: list[str]) -> Any:
+        """元数据读取（纯同步 DB，自开短连接）。"""
+        with db_connection() as db:
+            return DocMetadataService.get_flatted_meta_by_kbs(db, kb_ids)
 
-            embd_mdl = None
-            if embd_keys:
-                if kbs[0].tenant_embd_id:
-                    embd_model_config = get_model_config_by_id(db, kbs[0].tenant_embd_id)
-                else:
-                    embd_model_config = get_model_config_by_type_and_name(
-                        db,
-                        self._canvas.get_tenant_id(),
-                        LLMType.EMBEDDING.value,
-                        kbs[0].embd_id,
-                    )
-                embd_mdl = LLMBundle(db, self._canvas.get_tenant_id(), embd_model_config)
+    @staticmethod
+    def _rank_feature(query: str, kbs: list) -> Any:
+        """tag 特征（同步：tag 缓存 + doc-store 查询；自开短连接）。"""
+        with db_connection() as db:
+            return label_question(db, query, kbs)
 
-            rerank_mdl = None
-            if self._param.rerank_id:
-                rerank_model_config = get_model_config_by_type_and_name(
-                    db,
-                    kbs[0].tenant_id,
-                    LLMType.RERANK.value,
-                    self._param.rerank_id,
-                )
-                rerank_mdl = LLMBundle(db, kbs[0].tenant_id, rerank_model_config)
+    async def _retrieve_kb(self, query_text: str):
+        """Retrieve from knowledge base.
 
-            vars = self.get_input_elements_from_text(query_text)
-            vars = {k: o["value"] for k, o in vars.items()}
-            query = self.string_format(query_text, vars)
+        DB 面一律按需自开短连接、用完即释放（helper 内部 to_thread + 剥离会话）：
+        **不**用一个会话包住整个函数——下方的检索/LLM await 是分钟级的，会把连接以
+        idle-in-transaction 状态钉死整个检索期。
+        """
+        kb_ids, filtered_kb_ids, kbs = await asyncio.to_thread(self._resolve_kbs)
 
-            doc_ids = []
-            if self._param.meta_data_filter != {}:
-                metas = DocMetadataService.get_flatted_meta_by_kbs(db, kb_ids)
+        # Keep the embedding-equivalence check aligned with RAGFlow: tenant_embd_id
+        # selects the concrete tenant model row, while embd_id defines model equivalence.
+        embd_keys = list({kb.embd_id for kb in kbs})
+        assert len(embd_keys) == 1, "Knowledge bases use different embedding models."
 
-                def _resolve_manual_filter(flt: dict) -> dict:
-                    pat = re.compile(self.variable_ref_patt)
-                    s = flt.get("value", "")
-                    out_parts = []
-                    last = 0
+        embd_mdl = None
+        if embd_keys:
+            if kbs[0].tenant_embd_id:
+                embd_mdl = await build_bundle_by_id_async(self._canvas.get_tenant_id(), kbs[0].tenant_embd_id)
+            else:
+                embd_mdl = await build_named_bundle_async(self._canvas.get_tenant_id(), LLMType.EMBEDDING.value, kbs[0].embd_id)
 
-                    for m in pat.finditer(s):
-                        out_parts.append(s[last : m.start()])
-                        key = m.group(1)
-                        v = self._canvas.get_variable_value(key)
-                        if v is None:
-                            rep = ""
-                        elif isinstance(v, partial):
-                            buf = []
-                            for chunk in v():
-                                buf.append(chunk)
-                            rep = "".join(buf)
-                        elif isinstance(v, str):
-                            rep = v
-                        else:
-                            rep = json.dumps(v, ensure_ascii=False)
+        rerank_mdl = None
+        if self._param.rerank_id:
+            rerank_mdl = await build_named_bundle_async(kbs[0].tenant_id, LLMType.RERANK.value, self._param.rerank_id)
 
-                        out_parts.append(rep)
-                        last = m.end()
+        vars = self.get_input_elements_from_text(query_text)
+        vars = {k: o["value"] for k, o in vars.items()}
+        query = self.string_format(query_text, vars)
 
-                    out_parts.append(s[last:])
-                    flt["value"] = "".join(out_parts)
-                    return flt
+        doc_ids = []
+        if self._param.meta_data_filter != {}:
+            metas = await asyncio.to_thread(self._flatted_metas, kb_ids)
 
-                chat_mdl = None
-                if self._param.meta_data_filter.get("method") in ["auto", "semi_auto"]:
-                    chat_model_config = get_tenant_default_model_by_type(db, self._canvas.get_tenant_id(), LLMType.CHAT)
-                    chat_mdl = LLMBundle(db, self._canvas.get_tenant_id(), chat_model_config)
+            def _resolve_manual_filter(flt: dict) -> dict:
+                pat = re.compile(self.variable_ref_patt)
+                s = flt.get("value", "")
+                out_parts = []
+                last = 0
 
-                doc_ids = await apply_meta_data_filter(
-                    self._param.meta_data_filter,
-                    metas,
-                    query,
-                    chat_mdl,
-                    doc_ids,
-                    _resolve_manual_filter if self._param.meta_data_filter.get("method") == "manual" else None,
-                )
+                for m in pat.finditer(s):
+                    out_parts.append(s[last : m.start()])
+                    key = m.group(1)
+                    v = self._canvas.get_variable_value(key)
+                    if v is None:
+                        rep = ""
+                    elif isinstance(v, partial):
+                        buf = []
+                        for chunk in v():
+                            buf.append(chunk)
+                        rep = "".join(buf)
+                    elif isinstance(v, str):
+                        rep = v
+                    else:
+                        rep = json.dumps(v, ensure_ascii=False)
 
-            if self._param.cross_languages:
-                query = await cross_languages(kbs[0].tenant_id, None, query, self._param.cross_languages)
+                    out_parts.append(rep)
+                    last = m.end()
 
-            tenant_ids = list({kb.tenant_id for kb in kbs})
-            if kbs:
-                kb_names = [kb.name for kb in kbs]
-                query = re.sub(r"^user[:：\s]*", "", query, flags=re.IGNORECASE)
-                kbinfos = await settings.retriever.retrieval(
-                    query,
-                    "",
-                    embd_mdl,
-                    tenant_ids,
-                    kb_names,
-                    1,
-                    self._param.top_n,
-                    self._param.similarity_threshold,
-                    1 - self._param.keywords_similarity_weight,
-                    doc_ids=doc_ids,
-                    aggs=False,
-                    rerank_mdl=rerank_mdl,
-                    rank_feature=label_question(db, query, kbs),
-                    kb_ids=filtered_kb_ids,
-                )
+                out_parts.append(s[last:])
+                flt["value"] = "".join(out_parts)
+                return flt
 
+            chat_mdl = None
+            if self._param.meta_data_filter.get("method") in ["auto", "semi_auto"]:
+                chat_mdl = await build_default_bundle_async(self._canvas.get_tenant_id(), LLMType.CHAT)
+
+            doc_ids = await apply_meta_data_filter(
+                self._param.meta_data_filter,
+                metas,
+                query,
+                chat_mdl,
+                doc_ids,
+                _resolve_manual_filter if self._param.meta_data_filter.get("method") == "manual" else None,
+            )
+
+        if self._param.cross_languages:
+            query = await cross_languages(kbs[0].tenant_id, None, query, self._param.cross_languages)
+
+        tenant_ids = list({kb.tenant_id for kb in kbs})
+        if kbs:
+            kb_names = [kb.name for kb in kbs]
+            query = re.sub(r"^user[:：\s]*", "", query, flags=re.IGNORECASE)
+            rank_feature = await asyncio.to_thread(self._rank_feature, query, kbs)
+            kbinfos = await settings.retriever.retrieval(
+                query,
+                "",
+                embd_mdl,
+                tenant_ids,
+                kb_names,
+                1,
+                self._param.top_n,
+                self._param.similarity_threshold,
+                1 - self._param.keywords_similarity_weight,
+                doc_ids=doc_ids,
+                aggs=False,
+                rerank_mdl=rerank_mdl,
+                rank_feature=rank_feature,
+                kb_ids=filtered_kb_ids,
+            )
+
+            if self.check_if_canceled("Retrieval processing"):
+                return
+
+            # TOC增强和知识图谱检索
+            if self._param.toc_enhance:
+                chat_mdl = await build_default_bundle_async(self._canvas._tenant_id, LLMType.CHAT)
+                cks = await settings.retriever.retrieval_by_toc(query, kbinfos["chunks"], tenant_ids, kb_names, chat_mdl, self._param.top_n)
                 if self.check_if_canceled("Retrieval processing"):
                     return
-
-                # TOC增强和知识图谱检索
-                if self._param.toc_enhance:
-                    toc_chat_config = get_tenant_default_model_by_type(db, self._canvas._tenant_id, LLMType.CHAT)
-                    chat_mdl = LLMBundle(db, self._canvas._tenant_id, toc_chat_config)
-                    cks = await settings.retriever.retrieval_by_toc(query, kbinfos["chunks"], tenant_ids, kb_names, chat_mdl, self._param.top_n)
-                    if self.check_if_canceled("Retrieval processing"):
-                        return
-                    if cks:
-                        kbinfos["chunks"] = cks
-                kbinfos["chunks"] = settings.retriever.retrieval_by_children(kbinfos["chunks"], [kb.tenant_id for kb in kbs])
-                if self._param.use_kg:
-                    kg_chat_config = get_tenant_default_model_by_type(db, self._canvas.get_tenant_id(), LLMType.CHAT)
-                    ck = await settings.kg_retriever.retrieval(query, tenant_ids, kb_ids, embd_mdl, LLMBundle(db, self._canvas.get_tenant_id(), kg_chat_config))
-                    if self.check_if_canceled("Retrieval processing"):
-                        return
-                    if ck["content_with_weight"]:
-                        kbinfos["chunks"].insert(0, ck)
-            else:
-                kbinfos = {"chunks": [], "doc_aggs": []}
-
-            if self._param.use_kg and kbs:
-                kg2_chat_config = get_tenant_default_model_by_type(db, kbs[0].tenant_id, LLMType.CHAT)
-                ck = await settings.kg_retriever.retrieval(query, tenant_ids, filtered_kb_ids, embd_mdl, LLMBundle(db, kbs[0].tenant_id, kg2_chat_config))
+                if cks:
+                    kbinfos["chunks"] = cks
+            kbinfos["chunks"] = settings.retriever.retrieval_by_children(kbinfos["chunks"], [kb.tenant_id for kb in kbs])
+            if self._param.use_kg:
+                kg_chat_mdl = await build_default_bundle_async(self._canvas.get_tenant_id(), LLMType.CHAT)
+                ck = await settings.kg_retriever.retrieval(query, tenant_ids, kb_ids, embd_mdl, kg_chat_mdl)
                 if self.check_if_canceled("Retrieval processing"):
                     return
                 if ck["content_with_weight"]:
-                    ck["content"] = ck["content_with_weight"]
-                    del ck["content_with_weight"]
                     kbinfos["chunks"].insert(0, ck)
+        else:
+            kbinfos = {"chunks": [], "doc_aggs": []}
+
+        if self._param.use_kg and kbs:
+            kg2_chat_mdl = await build_default_bundle_async(kbs[0].tenant_id, LLMType.CHAT)
+            ck = await settings.kg_retriever.retrieval(query, tenant_ids, filtered_kb_ids, embd_mdl, kg2_chat_mdl)
+            if self.check_if_canceled("Retrieval processing"):
+                return
+            if ck["content_with_weight"]:
+                ck["content"] = ck["content_with_weight"]
+                del ck["content_with_weight"]
+                kbinfos["chunks"].insert(0, ck)
 
         for ck in kbinfos["chunks"]:
             if "vector" in ck:

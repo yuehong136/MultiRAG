@@ -32,10 +32,8 @@ from agent.component import component_class
 from agent.component.base import ComponentBase
 from agent.dsl_migration import normalize_chunker_dsl
 from agent.persondata_input import redact_persondata_payload
-from api.db.db_models import db_connection
-from api.db.joint_services.tenant_model_service import get_tenant_default_model_by_type
+from api.db.joint_services.tenant_model_service import build_default_bundle_async
 from api.db.services.file_service import FileService
-from api.db.services.llm_service import LLMBundle
 from api.db.services.task_service import has_canceled
 from common.constants import LLMType
 from common.exceptions import TaskCanceledException
@@ -515,6 +513,8 @@ class Canvas(Graph):
         while idx < len(self.path):
             to = len(self.path)
             for i in range(idx, to):
+                # thoughts 会走组件的同步 prompt 组装（内含自开连接的模型查询）——入线程池
+                thoughts = await asyncio.to_thread(self.get_component_thoughts, self.path[i])
                 yield decorate(
                     "node_started",
                     {
@@ -523,7 +523,7 @@ class Canvas(Graph):
                         "component_id": self.path[i],
                         "component_name": self.get_component_name(self.path[i]),
                         "component_type": self.get_component_type(self.path[i]),
-                        "thoughts": self.get_component_thoughts(self.path[i]),
+                        "thoughts": thoughts,
                     },
                 )
             await _run_batch(idx, to)
@@ -534,9 +534,7 @@ class Canvas(Graph):
                 cpn_obj = self.get_component_obj(self.path[i])
                 if cpn_obj.component_name.lower() == "message":
                     if cpn_obj.get_param("auto_play"):
-                        with db_connection() as db:
-                            model_config = get_tenant_default_model_by_type(db, self._tenant_id, LLMType.TTS)
-                            tts_mdl = LLMBundle(db, self._tenant_id, model_config)
+                        tts_mdl = await build_default_bundle_async(self._tenant_id, LLMType.TTS)
                     if isinstance(cpn_obj.output("content"), partial):
                         _m = ""
                         buff_m = ""
