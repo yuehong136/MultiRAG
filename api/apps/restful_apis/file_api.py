@@ -31,6 +31,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError, model_validator
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
 
@@ -38,11 +39,11 @@ from api.apps.deps import get_storage
 from api.apps.services import file_api_service
 from api.apps.services.file_convert_service import convert_files_with_new_session
 from api.db import FileType
-from api.db.db_models import get_db
+from api.db.db_models import get_async_db, get_db
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.utils.api_utils import current_tenant_id, get_error_argument_result, get_error_data_result, get_json_result, get_result, server_error_response
+from api.utils.api_utils import async_current_tenant_id, current_tenant_id, get_error_argument_result, get_error_data_result, get_json_result, get_result, server_error_response
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers
 from common.constants import RetCode
 from common.misc_utils import thread_pool_exec
@@ -171,8 +172,8 @@ def list_files(
 async def upload_info(
     files: list[UploadFile] | None = File(None),
     url: str | None = Query(None),
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(current_tenant_id),
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_current_tenant_id),
 ):
     """为 SDK chat completions 上传运行时文件元数据；multipart 文件与 URL 互斥、须其一。"""
     file_objs = [f for f in files if getattr(f, "filename", "")] if files else []

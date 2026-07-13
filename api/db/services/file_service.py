@@ -10,6 +10,7 @@ from pathlib import Path
 
 import xxhash
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.db import KNOWLEDGEBASE_FOLDER_NAME, FileType
@@ -543,7 +544,7 @@ class FileService(CommonService):
         return errors
 
     @staticmethod
-    async def upload_info(db: Session, user_id, file, url: str | None = None):
+    async def upload_info(db: AsyncSession, user_id, file, url: str | None = None):
         """
         上传文件或从URL下载内容
 
@@ -554,6 +555,7 @@ class FileService(CommonService):
             url: URL地址（可选），用于爬取网页内容
         """
 
+        # PDF 修复（CPU）+ 存储写入（同步 HTTP）都不持有 Session，整体在工作线程执行
         def structured(filename, filetype, blob, content_type):
             nonlocal user_id
             if filetype == FileType.PDF.value:
@@ -589,9 +591,9 @@ class FileService(CommonService):
             if page.pdf:
                 if filename.split(".")[-1].lower() != "pdf":
                     filename += ".pdf"
-                return structured(filename, "pdf", page.pdf, page.response_headers.get("content-type", "application/pdf"))
+                return await asyncio.to_thread(structured, filename, "pdf", page.pdf, page.response_headers.get("content-type", "application/pdf"))
 
-            return structured(filename, "html", str(page.markdown).encode("utf-8"), page.response_headers.get("content-type", "text/html"))
+            return await asyncio.to_thread(structured, filename, "html", str(page.markdown).encode("utf-8"), page.response_headers.get("content-type", "text/html"))
 
         # 处理文件上传
         if hasattr(file, "read"):
@@ -603,8 +605,8 @@ class FileService(CommonService):
         else:
             raise ValueError("Invalid file object")
 
-        DocumentService.check_doc_health(db, user_id, file.filename)
-        return structured(file.filename, filename_type(file.filename), file_content, file.content_type)
+        await db.run_sync(lambda s: DocumentService.check_doc_health(s, user_id, file.filename))  # TODO(async-phase4)
+        return await asyncio.to_thread(structured, file.filename, filename_type(file.filename), file_content, file.content_type)
 
     @staticmethod
     def get_files(files: list[dict] | None, raw: bool = False, layout_recognize: str = None) -> list[str] | tuple[list[str], list[bytes]]:

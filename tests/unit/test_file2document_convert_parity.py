@@ -137,6 +137,7 @@ def _load_restful_file_api_module(monkeypatch):
 
     fake_db_models = types.ModuleType("api.db.db_models")
     fake_db_models.get_db = lambda: None
+    fake_db_models.get_async_db = lambda: None
 
     fake_file2document_service = types.ModuleType("api.db.services.file2document_service")
     fake_file2document_service.File2DocumentService = type("File2DocumentService", (), {})
@@ -154,6 +155,7 @@ def _load_restful_file_api_module(monkeypatch):
 
     fake_api_utils = types.ModuleType("api.utils.api_utils")
     fake_api_utils.current_tenant_id = lambda: "tenant-1"
+    fake_api_utils.async_current_tenant_id = lambda: "tenant-1"
     fake_api_utils.get_error_argument_result = lambda **kwargs: {"retcode": 400, **kwargs}
     fake_api_utils.get_error_data_result = lambda **kwargs: {"retcode": 100, **kwargs}
     fake_api_utils.get_json_result = lambda data=None, retmsg="success", retcode=0, **_: {

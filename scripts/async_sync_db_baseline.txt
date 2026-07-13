@@ -17,7 +17,6 @@ api/apps/askdata_app.py::re_query
 api/apps/canvas_app.py::debug
 api/apps/canvas_app.py::exp_agent_completion
 api/apps/canvas_app.py::run
-api/apps/canvas_app.py::upload
 api/apps/chunk_app.py::knowledge_graph
 api/apps/chunk_app.py::list_chunk
 api/apps/chunk_app.py::query_vector_store
@@ -36,7 +35,6 @@ api/apps/document_app.py::preview_chunks
 api/apps/document_app.py::run_analyze_v2
 api/apps/document_app.py::upload
 api/apps/document_app.py::upload_and_parse
-api/apps/document_app.py::upload_info
 api/apps/docx2zjform_app.py::convert
 api/apps/file_app.py::upload_media_redirect
 api/apps/kb_app.py::knowledge_graph
@@ -58,7 +56,6 @@ api/apps/plugin_app.py::install_dep
 api/apps/plugin_app.py::run_plugin_script
 api/apps/plugin_app.py::uninstall_dep
 api/apps/restful_apis/chat_api.py::transcriptions
-api/apps/restful_apis/file_api.py::upload_info
 api/apps/restful_apis/memory_api.py::add_message
 api/apps/sdk/agents.py::webhook
 api/apps/sdk/dify_retrieval.py::retrieval

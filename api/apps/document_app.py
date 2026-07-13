@@ -11,6 +11,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field, Json, ValidationError, field_validator
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from starlette.status import (
     HTTP_400_BAD_REQUEST,
@@ -24,7 +25,7 @@ from api.apps import manager
 from api.common.check_team_permission import check_kb_team_permission
 from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
 from api.db import VALID_FILE_TYPES, FileType
-from api.db.db_models import Task, get_db
+from api.db.db_models import Task, get_async_db, get_db
 from api.db.services import duplicate_name
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_analysis_service import DocumentAnalysisService
@@ -35,7 +36,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.pipeline_analysis_service import PipelineAnalysisService
 from api.db.services.task_service import TaskService, cancel_all_task_of
 from api.db.services.user_service import UserTenantService
-from api.utils.api_utils import construct_error_response, construct_json_result, convert_datetime_to_str, get_data_error_result, get_json_result, server_error_response
+from api.utils.api_utils import Principal, async_current_user, construct_error_response, construct_json_result, convert_datetime_to_str, get_data_error_result, get_json_result, server_error_response
 from api.utils.document_upload import UploadDocumentsManifest, UploadManifestValidationError, resolve_document_upload_names
 from api.utils.file_utils import filename_type, thumbnail
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers, html2pdf, is_valid_url
@@ -5389,7 +5390,12 @@ async def get_document_summary(
 
 
 @router.post("/upload_info", summary="上传文件获取信息", response_description="成功上传文件")
-async def upload_info(url: str | None = Query(None, description="URL地址，用于下载网页内容"), file: list[UploadFile] | None = File(None), db: Session = Depends(get_db), user=Depends(manager)):
+async def upload_info(
+    url: str | None = Query(None, description="URL地址，用于下载网页内容"),
+    file: list[UploadFile] | None = File(None),
+    db: AsyncSession = Depends(get_async_db),
+    user: Principal = Depends(async_current_user),
+):
     """
     上传文件或从URL下载内容，获取文件信息
 

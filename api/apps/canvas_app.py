@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, File, Header, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, text
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from agent.canvas import Canvas
@@ -19,7 +20,7 @@ from agent.dsl_migration import normalize_chunker_dsl
 from api.apps import manager
 from api.apps.services.canvas_replica_service import CanvasReplicaService
 from api.db import CanvasCategory
-from api.db.db_models import APIToken, Task, get_db
+from api.db.db_models import APIToken, Task, get_async_db, get_db
 from api.db.services.canvas_service import (
     API4ConversationService,
     CanvasTemplateService,
@@ -747,7 +748,7 @@ def reset(request_body: ResetRequest, db: Session = Depends(get_db), user=Depend
 
 
 @router.post("/upload/{canvas_id}", summary="上传文件到Canvas", response_description="成功上传文件")
-async def upload(canvas_id: str, url: str | None = Query(None, description="URL地址，用于下载网页内容"), file: list[UploadFile] | None = File(None), db: Session = Depends(get_db)):
+async def upload(canvas_id: str, url: str | None = Query(None, description="URL地址，用于下载网页内容"), file: list[UploadFile] | None = File(None), db: AsyncSession = Depends(get_async_db)):
     """
     上传文件到Canvas或从URL下载内容
 
@@ -805,7 +806,7 @@ async def upload(canvas_id: str, url: str | None = Query(None, description="URL�
     - 文件会存储在用户的存储空间中
     - 自动检测PDF文件的完整性
     """
-    exists, canvas = UserCanvasService.get_by_canvas_id(db, canvas_id)
+    exists, canvas = await db.run_sync(lambda s: UserCanvasService.get_by_canvas_id(s, canvas_id))  # TODO(async-phase4)
     if not exists or not canvas:
         return get_data_error_result(retmsg="canvas not found.")
 
