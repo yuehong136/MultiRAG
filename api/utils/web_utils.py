@@ -6,6 +6,7 @@ import logging
 import re
 import smtplib
 import socket
+from collections.abc import Sequence
 from email.message import EmailMessage
 from email.utils import formataddr
 from urllib.parse import urlparse
@@ -277,6 +278,56 @@ def is_valid_url(url: str) -> bool:
     except socket.gaierror:
         return False
     return True
+
+
+def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """SSRF 视角的不可出网地址：私网、环回、link-local（含云 metadata 169.254.169.254）、保留段。"""
+    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+
+
+def validate_outbound_url(url: str, allowed_hosts: Sequence[str] | None = None) -> None:
+    """校验用户提供的出网地址，不通过即抛 ``ValueError``（消息可直接回给调用方）。
+
+    规则：
+    - scheme 必须是 http/https，且必须有 hostname；
+    - ``allowed_hosts`` 非空时按白名单裁决（大小写不敏感的 hostname 精确匹配）——
+      命中即放行（自部署内网 Langfuse 等场景的显式逃生口），未命中直接拒绝；
+    - 白名单为空（默认）时解析 hostname 的**全部**地址（getaddrinfo 覆盖多 A 记录与
+      IPv6），任一落在私网/环回/link-local/保留段即拒绝。
+
+    注意：DNS 解析是阻塞 IO——只用于配置写入/读取这类冷路径，禁止进聊天热路径。
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"URL scheme must be http or https, got: {parsed.scheme or '(none)'}")
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("URL must have a valid hostname")
+
+    if allowed_hosts:
+        if hostname.lower() in {h.strip().lower() for h in allowed_hosts if h.strip()}:
+            return
+        raise ValueError(f"Host is not in the configured allowlist: {hostname}")
+
+    try:
+        literal = ipaddress.ip_address(hostname)
+    except ValueError:
+        literal = None
+    if literal is not None:
+        if _is_blocked_ip(literal):
+            raise ValueError(f"URL points at a private or reserved address: {hostname}")
+        return
+
+    try:
+        infos = socket.getaddrinfo(hostname, parsed.port, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as e:
+        raise ValueError(f"Failed to resolve hostname: {hostname}") from e
+
+    for info in infos:
+        resolved = ipaddress.ip_address(info[4][0])
+        if _is_blocked_ip(resolved):
+            raise ValueError(f"URL resolves to a private or reserved address: {resolved}")
 
 
 def safe_json_parse(data: str | dict) -> dict:

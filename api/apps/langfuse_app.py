@@ -7,6 +7,8 @@ from api.apps import manager
 from api.db.db_models import get_db
 from api.db.services.langfuse_service import TenantLangfuseService
 from api.utils.api_utils import get_error_data_result, get_json_result, server_error_response
+from api.utils.web_utils import validate_outbound_url
+from common.app_config import get_app_config
 
 
 class LangfuseKeysRequest(BaseModel):
@@ -43,6 +45,11 @@ def set_api_key(request: LangfuseKeysRequest, db: Session = Depends(get_db), use
 
         if not all([secret_key, public_key, host]):
             return get_error_data_result(retmsg="Missing required fields")
+
+        try:
+            validate_outbound_url(host, get_app_config().observability.langfuse_allowed_hosts)
+        except ValueError as e:
+            return get_error_data_result(retmsg=f"Invalid Langfuse host: {e}")
 
         langfuse_keys = {
             "tenant_id": user.id,
@@ -85,6 +92,12 @@ def get_api_key(db: Session = Depends(get_db), user=Depends(manager)):
         langfuse_entry = TenantLangfuseService.filter_by_tenant_with_info(db, tenant_id=user.id)
         if not langfuse_entry:
             return get_error_data_result(retmsg="Have not record any Langfuse keys.")
+
+        # 纵深防御：存量行（本校验上线前写入）在探测前同样过出网边界
+        try:
+            validate_outbound_url(langfuse_entry["host"], get_app_config().observability.langfuse_allowed_hosts)
+        except ValueError as e:
+            return get_error_data_result(retmsg=f"Invalid Langfuse host: {e}")
 
         langfuse = Langfuse(public_key=langfuse_entry["public_key"], secret_key=langfuse_entry["secret_key"], host=langfuse_entry["host"])
         try:

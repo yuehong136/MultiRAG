@@ -262,6 +262,10 @@ class ObservabilityConfig(_Section):
     service_name: str = ""
     # 根 logger 输出格式：json（结构化，默认）| plain（旧文本格式，本地调试可读）
     log_format: str = "json"
+    # 租户可配的 Langfuse host 白名单（SSRF 出网边界，api/apps/langfuse_app.py 消费）：
+    # 空=拒绝解析到私网/环回/link-local/保留段的 host；非空=只接受清单内的 hostname
+    # （内网自部署 Langfuse 在此显式放行）
+    langfuse_allowed_hosts: list[str] = []
 
 
 # ---------------------------------------------------------------------------
