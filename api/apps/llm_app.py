@@ -2492,7 +2492,8 @@ async def enhanced_chat_service_sse(request: ChatRequest, db: AsyncSession = Dep
         knowledge_context = await prepare_knowledge_context(db, request.messages, request.tavily_api_key, tenant_id, request.llm_name)
 
         # 创建对话Agent适配器，直接复用Agent类
-        # TODO(async-phase4): 构造期经自有连接查 DB/MCP 配置(不收 session 参数),暂留线程池外移
+        # 构造期自开连接查 DB/MCP 配置(不收 session 参数)——与 Canvas 构造同构：局部、明确、
+        # 不持有请求 Session 的同步 IO，线程池外移即为终态形态(AGENTS.md 规约)，非待还的桥接债
         chat_agent = await thread_pool_exec(ChatAgentAdapter, tenant_id=tenant_id, llm_name=request.llm_name, system_prompt=request.prompt, mcp_ids=request.mcp_ids)
 
         if not request.stream:
