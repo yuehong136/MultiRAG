@@ -232,7 +232,7 @@ class Base(AsyncAttrs, DeclarativeBase):
     pass
 
 
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 
 
 @contextmanager
@@ -260,6 +260,31 @@ def db_connection():
         raise
     finally:
         db.close()
+
+
+@asynccontextmanager
+async def async_db_connection() -> AsyncIterator[AsyncSession]:
+    """``db_connection()`` 的异步孪生：自开短异步会话（不参与请求依赖注入）。
+
+    用途：事件循环上的代码需要自开连接（不复用请求 Session）时——典型是 Canvas/Agent
+    组件内部。同步版在 async 上下文里会阻塞事件循环；本函数是它的原位替换：
+
+        async with async_db_connection() as db:
+            await db.run_sync(lambda s: SomeService.get_by_id(s, pk))
+
+    语义与同步版一致：不自动提交、异常回滚、退出关闭。
+    """
+    if async_session_factory is None:
+        raise RuntimeError(f"异步引擎仅支持 PostgreSQL 后端，当前 DB_TYPE={DATABASE_TYPE} 无异步驱动（asyncmy/aiosqlite 接入见纯异步改造规范）")
+    db = async_session_factory()
+    try:
+        yield db
+    except Exception as e:
+        await db.rollback()
+        logging.error(f"[数据库] 异步事务执行失败，已回滚: {e}")
+        raise
+    finally:
+        await db.close()
 
 
 def get_db():

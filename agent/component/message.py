@@ -34,7 +34,7 @@ from agent.component.base import ComponentBase, ComponentParamBase
 
 _jinja2_sandbox = SandboxedEnvironment()
 
-from api.db.db_models import db_connection
+from api.db.db_models import async_db_connection
 from api.db.joint_services.memory_message_service import queue_save_to_memory_task
 from common import settings
 from common.connection_utils import timeout
@@ -433,5 +433,5 @@ class Message(ComponentBase):
             user_id = self._canvas.get_variable_value(user_id)
 
         message_dict = {"user_id": user_id or "", "agent_id": self._canvas._id, "session_id": self._canvas.task_id, "user_input": self._canvas.get_sys_query(), "agent_response": content}
-        with db_connection() as db:
+        async with async_db_connection() as db:
             return await queue_save_to_memory_task(db, self._param.memory_ids, message_dict)

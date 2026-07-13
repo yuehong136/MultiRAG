@@ -1,6 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from agent.component import message as message_module
@@ -16,6 +17,16 @@ class _DummyDBContext:
         return "db"
 
     def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class _DummyAsyncDBContext:
+    """async_db_connection() 的替身：给出未绑定 AsyncSession（过 beartype，不连库）。"""
+
+    async def __aenter__(self):
+        return AsyncSession()
+
+    async def __aexit__(self, exc_type, exc, tb):
         return False
 
 
@@ -205,14 +216,16 @@ def test_message_resolves_variable_user_id_before_saving_to_memory(monkeypatch) 
         captured["message_dict"] = message_dict
         return True, "ok"
 
-    monkeypatch.setattr(message_module, "db_connection", lambda: _DummyDBContext())
+    monkeypatch.setattr(message_module, "async_db_connection", lambda: _DummyAsyncDBContext())
     monkeypatch.setattr(message_module, "queue_save_to_memory_task", fake_queue_save_to_memory_task)
 
     ok, msg = asyncio.run(component._save_to_memory("hello"))
 
     assert ok is True
     assert msg == "ok"
-    assert captured["db"] == "db"
+    # 契约守门：queue_save_to_memory_task 收 AsyncSession——传同步 Session 会被 beartype 拒，
+    # 且 Agent 的 Message 组件是它除 memory_api 外的唯一调用方（回归实锤，勿弱化此断言）
+    assert isinstance(captured["db"], AsyncSession)
     assert captured["memory_ids"] == ["mem-1"]
     assert captured["message_dict"]["user_id"] == "user-1"
 
