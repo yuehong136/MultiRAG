@@ -58,7 +58,6 @@ api/apps/plugin_app.py::install_dep
 api/apps/plugin_app.py::run_plugin_script
 api/apps/plugin_app.py::uninstall_dep
 api/apps/restful_apis/chat_api.py::transcriptions
-api/apps/restful_apis/dataset_api.py::get_knowledge_graph
 api/apps/restful_apis/file_api.py::upload_info
 api/apps/restful_apis/memory_api.py::add_message
 api/apps/sdk/agents.py::webhook

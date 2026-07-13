@@ -13,11 +13,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.db.db_models import File
@@ -395,16 +397,17 @@ def update_auto_metadata(db: Session, tenant_id: str, dataset_id: str, cfg: dict
     return True, {"enabled": parser_cfg["enable_metadata"], "fields": fields}
 
 
-async def get_knowledge_graph(db: Session, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
+async def get_knowledge_graph(db: AsyncSession, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
     """获取数据集的知识图谱。失败时返回 (False, "No authorization.")。"""
-    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+    if not await db.run_sync(lambda s: KnowledgebaseService.accessible(s, dataset_id, tenant_id)):  # TODO(async-phase4)
         return False, "No authorization."
 
-    kb = KnowledgebaseService.get_by_id(db, dataset_id)
+    kb = await db.run_sync(lambda s: KnowledgebaseService.get_by_id(s, dataset_id))  # TODO(async-phase4)
     req = {"kb_id": [dataset_id], "knowledge_graph_kwd": ["graph"]}
 
     obj = {"graph": {}, "mind_map": {}}
-    if not settings.docStoreConn.index_exist(search.index_name_one(kb.tenant_id, kb.name), dataset_id):
+    # doc-store 探测是同步 HTTP：不持有 Session，to_thread 外移避免阻塞事件循环
+    if not await asyncio.to_thread(settings.docStoreConn.index_exist, search.index_name_one(kb.tenant_id, kb.name), dataset_id):
         return True, obj
 
     sres = await settings.retriever.search(req, search.index_name_one(kb.tenant_id, kb.name), [dataset_id])

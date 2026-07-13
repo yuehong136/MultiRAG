@@ -18,11 +18,12 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.apps.services import dataset_api_service
-from api.db.db_models import get_db
-from api.utils.api_utils import current_tenant_id, get_error_data_result, get_result
+from api.db.db_models import get_async_db, get_db
+from api.utils.api_utils import async_current_tenant_id, current_tenant_id, get_error_data_result, get_result
 from api.utils.validation_utils import CreateDatasetReq
 from common.constants import RetCode
 
@@ -212,8 +213,8 @@ def update_auto_metadata(
 @router.get("/datasets/{dataset_id}/knowledge_graph", summary="获取数据集知识图谱")
 async def get_knowledge_graph(
     dataset_id: str,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(current_tenant_id),
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_current_tenant_id),
 ):
     try:
         success, result = await dataset_api_service.get_knowledge_graph(db, tenant_id, dataset_id)
