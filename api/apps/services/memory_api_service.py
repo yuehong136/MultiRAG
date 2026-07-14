@@ -6,10 +6,15 @@
 @desc: Memory API 业务逻辑层 - 从gateway层解耦的业务处理
 """
 
+import asyncio
+from collections.abc import Callable
+from typing import Any
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
+from api.db.db_models import db_connection
 from api.db.joint_services.memory_message_service import (
     get_memory_size_cache,
     judge_system_prompt_is_default,
@@ -324,3 +329,58 @@ def get_message_content(db: Session, memory_id: str, message_id: int):
     if res:
         return res
     raise NotFoundException(f"Message '{message_id}' in memory '{memory_id}' not found.")
+
+
+# ---------------------------------------------------------------------------
+# 混轨函数的异步入口（§11.12 混轨块判例形态）：MessageService(msg_store)/Redis size
+# cache/query_message(embedding) 与 DB 读在函数内交错，run_sync 只桥 session 自身的
+# IO——整块进工作线程 + 自开短会话。终态（Phase 3/4 拆面）前的过渡形态。
+# ---------------------------------------------------------------------------
+
+
+async def _run_with_own_session(fn: Callable[..., Any], /, *args: Any) -> Any:
+    def _run() -> Any:
+        with db_connection() as s:
+            return fn(s, *args)
+
+    return await asyncio.to_thread(_run)
+
+
+async def update_memory_async(memory_id: str, new_settings: dict) -> tuple[bool, Any]:
+    """update_memory 的异步入口（Redis size cache + msg_store 空判混轨）。"""
+    return await _run_with_own_session(update_memory, memory_id, new_settings)
+
+
+async def delete_memory_async(memory_id: str) -> bool:
+    """delete_memory 的异步入口（msg_store 索引删除混轨）。"""
+    return await _run_with_own_session(delete_memory, memory_id)
+
+
+async def get_memory_messages_async(memory_id: str, agent_ids: list[str], keywords: str, page: int = 1, page_size: int = 50) -> dict:
+    """get_memory_messages 的异步入口（msg_store 列表与 DB 富化交错）。"""
+    return await _run_with_own_session(get_memory_messages, memory_id, agent_ids, keywords, page, page_size)
+
+
+async def forget_message_async(memory_id: str, message_id: int) -> bool:
+    """forget_message 的异步入口（DB 读 + msg_store 更新混轨）。"""
+    return await _run_with_own_session(forget_message, memory_id, message_id)
+
+
+async def update_message_status_async(memory_id: str, message_id: int, status: bool) -> bool:
+    """update_message_status 的异步入口（DB 读 + msg_store 更新混轨）。"""
+    return await _run_with_own_session(update_message_status, memory_id, message_id, status)
+
+
+async def search_message_async(filter_dict: dict, params: dict) -> Any:
+    """search_message 的异步入口（query_message：DB + embedding HTTP + msg_store 检索混轨）。"""
+    return await _run_with_own_session(search_message, filter_dict, params)
+
+
+async def get_messages_async(memory_ids: list[str], agent_id: str = "", session_id: str = "", limit: int = 10) -> Any:
+    """get_messages 的异步入口（DB 读 + msg_store 最近消息混轨）。"""
+    return await _run_with_own_session(get_messages, memory_ids, agent_id, session_id, limit)
+
+
+async def get_message_content_async(memory_id: str, message_id: int) -> Any:
+    """get_message_content 的异步入口（DB 读 + msg_store 取内容混轨）。"""
+    return await _run_with_own_session(get_message_content, memory_id, message_id)

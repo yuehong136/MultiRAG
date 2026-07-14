@@ -13,12 +13,10 @@ import logging
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
 
-from api.apps import manager
 from api.apps.services import memory_api_service
 from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
-from api.db.db_models import get_async_db, get_db
+from api.db.db_models import get_async_db
 from api.utils.api_utils import Principal, async_current_user, get_error_argument_result, get_json_result
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from common.constants import RetCode
@@ -68,16 +66,16 @@ class UpdateMemoryRequest(BaseModel):
 
 
 @router.post("/memories", summary="创建Memory", response_description="成功创建Memory")
-def create_memory(request_body: CreateMemoryRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def create_memory(request_body: CreateMemoryRequest, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)):
     memory_info = {
         "name": request_body.name,
         "memory_type": request_body.memory_type,
         "embd_id": request_body.embd_id,
         "llm_id": request_body.llm_id,
     }
-    memory_info = ensure_tenant_model_id_for_params(db, user.id, memory_info)
+    memory_info = await db.run_sync(lambda s: ensure_tenant_model_id_for_params(s, user.id, memory_info))  # TODO(async-phase4)
     try:
-        success, result = memory_api_service.create_memory(db, user.id, memory_info)
+        success, result = await db.run_sync(lambda s: memory_api_service.create_memory(s, user.id, memory_info))  # TODO(async-phase4)
         if success:
             return get_json_result(data=result)
         else:
@@ -91,10 +89,11 @@ def create_memory(request_body: CreateMemoryRequest, db: Session = Depends(get_d
 
 
 @router.put("/memories/{memory_id}", summary="更新Memory", response_description="成功更新Memory")
-def update_memory(memory_id: str, request_body: UpdateMemoryRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def update_memory(memory_id: str, request_body: UpdateMemoryRequest, user: Principal = Depends(async_current_user)):
     new_settings = dict(request_body.model_dump(exclude_unset=True).items())
     try:
-        success, result = memory_api_service.update_memory(db, memory_id, new_settings)
+        # Redis size cache + msg_store 空判与 DB 交错：整块在工作线程 + 自开短会话执行
+        success, result = await memory_api_service.update_memory_async(memory_id, new_settings)
         if success:
             return get_json_result(data=result)
         else:
@@ -111,9 +110,10 @@ def update_memory(memory_id: str, request_body: UpdateMemoryRequest, db: Session
 
 
 @router.delete("/memories/{memory_id}", summary="删除Memory", response_description="成功删除Memory")
-def delete_memory(memory_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+async def delete_memory(memory_id: str, user: Principal = Depends(async_current_user)):
     try:
-        memory_api_service.delete_memory(db, memory_id)
+        # msg_store 索引删除与 DB 交错：整块在工作线程 + 自开短会话执行
+        await memory_api_service.delete_memory_async(memory_id)
         return get_json_result(data=True)
     except NotFoundException as e:
         logger.error(e)
@@ -124,15 +124,15 @@ def delete_memory(memory_id: str, db: Session = Depends(get_db), user=Depends(ma
 
 
 @router.get("/memories", summary="获取Memory列表", response_description="成功获取Memory列表")
-def list_memory(
+async def list_memory(
     tenant_id: list[str] | None = Query(None, description="租户ID列表"),
     memory_type: list[str] | None = Query(None, description="Memory类型列表"),
     storage_type: str | None = Query(None, description="存储类型"),
     keywords: str | None = Query(None, description="搜索关键词"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(50, ge=1, description="每页数量"),
-    db: Session = Depends(get_db),
-    user=Depends(manager),
+    db: AsyncSession = Depends(get_async_db),
+    user: Principal = Depends(async_current_user),
 ):
     effective_page_size = min(page_size, MEMORY_LIST_MAX_PAGE_SIZE)
     filter_params = {}
@@ -143,7 +143,7 @@ def list_memory(
     if storage_type is not None:
         filter_params["storage_type"] = storage_type
     try:
-        result = memory_api_service.list_memory(db, user.id, filter_params, keywords or "", page, effective_page_size)
+        result = await db.run_sync(lambda s: memory_api_service.list_memory(s, user.id, filter_params, keywords or "", page, effective_page_size))  # TODO(async-phase4)
         return get_json_result(data=result)
     except Exception as e:
         logger.error(e)
@@ -151,9 +151,9 @@ def list_memory(
 
 
 @router.get("/memories/{memory_id}/config", summary="获取Memory配置", response_description="成功获取Memory配置")
-def get_memory_config(memory_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+async def get_memory_config(memory_id: str, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)):
     try:
-        result = memory_api_service.get_memory_config(db, memory_id)
+        result = await db.run_sync(lambda s: memory_api_service.get_memory_config(s, memory_id))  # TODO(async-phase4)
         return get_json_result(data=result)
     except NotFoundException as e:
         logger.error(e)
@@ -164,20 +164,20 @@ def get_memory_config(memory_id: str, db: Session = Depends(get_db), user=Depend
 
 
 @router.get("/memories/{memory_id}", summary="获取Memory详情", response_description="成功获取Memory详情及消息列表")
-def get_memory_messages(
+async def get_memory_messages(
     memory_id: str,
     agent_id: list[str] | None = Query(None, description="Agent ID列表"),
     keywords: str | None = Query(None, description="搜索关键词"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(50, ge=1, description="每页数量"),
-    db: Session = Depends(get_db),
-    user=Depends(manager),
+    user: Principal = Depends(async_current_user),
 ):
     effective_page_size = min(page_size, MEMORY_LIST_MAX_PAGE_SIZE)
     if agent_id and len(agent_id) == 1 and "," in agent_id[0]:
         agent_id = agent_id[0].split(",")
     try:
-        result = memory_api_service.get_memory_messages(db, memory_id, agent_id or [], keywords.strip() if keywords else "", page, effective_page_size)
+        # msg_store 列表与 DB 富化交错：整块在工作线程 + 自开短会话执行
+        result = await memory_api_service.get_memory_messages_async(memory_id, agent_id or [], keywords.strip() if keywords else "", page, effective_page_size)
         return get_json_result(data=result)
     except NotFoundException as e:
         logger.error(e)
@@ -232,14 +232,14 @@ async def add_message(
 
 
 @router.delete("/messages/{memory_id}:{message_id}", summary="忘记（软删除）消息")
-def forget_message(
+async def forget_message(
     memory_id: str,
     message_id: int,
-    db: Session = Depends(get_db),
-    user=Depends(manager),
+    user: Principal = Depends(async_current_user),
 ):
     try:
-        memory_api_service.forget_message(db, memory_id, message_id)
+        # DB 读 + msg_store 更新交错：整块在工作线程 + 自开短会话执行
+        await memory_api_service.forget_message_async(memory_id, message_id)
         return get_json_result(data=True)
     except NotFoundException as e:
         logger.error(e)
@@ -250,17 +250,17 @@ def forget_message(
 
 
 @router.put("/messages/{memory_id}:{message_id}", summary="更新消息状态")
-def update_message(
+async def update_message(
     memory_id: str,
     message_id: int,
     request_body: UpdateMessageRequest,
-    db: Session = Depends(get_db),
-    user=Depends(manager),
+    user: Principal = Depends(async_current_user),
 ):
     if not isinstance(request_body.status, bool):
         return get_error_argument_result("Status must be a boolean.")
     try:
-        update_succeed = memory_api_service.update_message_status(db, memory_id, message_id, request_body.status)
+        # DB 读 + msg_store 更新交错：整块在工作线程 + 自开短会话执行
+        update_succeed = await memory_api_service.update_message_status_async(memory_id, message_id, request_body.status)
         if update_succeed:
             return get_json_result(data=update_succeed)
         else:
@@ -274,7 +274,7 @@ def update_message(
 
 
 @router.get("/messages/search", summary="搜索记忆中的消息")
-def search_message(
+async def search_message(
     memory_id: list[str] = Query(..., description="List of Memory IDs"),
     query: str = Query(..., description="Search query"),
     similarity_threshold: float = Query(default=0.2, description="Minimum similarity threshold"),
@@ -283,8 +283,7 @@ def search_message(
     agent_id: str = Query(default="", description="Optional Agent ID filter"),
     session_id: str = Query(default="", description="Optional Session ID filter"),
     user_id: str = Query(default="", description="Optional User ID filter"),
-    db: Session = Depends(get_db),
-    user=Depends(manager),
+    user: Principal = Depends(async_current_user),
 ):
     if len(memory_id) == 1 and "," in memory_id[0]:
         memory_id = memory_id[0].split(",")
@@ -295,25 +294,26 @@ def search_message(
         "keywords_similarity_weight": keywords_similarity_weight,
         "top_n": top_n,
     }
-    res = memory_api_service.search_message(db, filter_dict, params)
+    # query_message：DB + embedding HTTP + msg_store 检索交错：整块在工作线程 + 自开短会话执行
+    res = await memory_api_service.search_message_async(filter_dict, params)
     return get_json_result(data=res)
 
 
 @router.get("/messages", summary="获取最近的消息")
-def get_messages(
+async def get_messages(
     memory_id: list[str] = Query(..., description="List of Memory IDs"),
     agent_id: str = Query(default="", description="Agent ID"),
     session_id: str = Query(default="", description="Session ID"),
     limit: int = Query(default=10, description="Maximum number of messages"),
-    db: Session = Depends(get_db),
-    user=Depends(manager),
+    user: Principal = Depends(async_current_user),
 ):
     if len(memory_id) == 1 and "," in memory_id[0]:
         memory_id = memory_id[0].split(",")
     if not memory_id:
         return get_error_argument_result("memory_ids is required.")
     try:
-        res = memory_api_service.get_messages(db, memory_id, agent_id, session_id, limit)
+        # DB 读 + msg_store 最近消息交错：整块在工作线程 + 自开短会话执行
+        res = await memory_api_service.get_messages_async(memory_id, agent_id, session_id, limit)
         return get_json_result(data=res)
     except Exception as e:
         logger.error(e)
@@ -321,14 +321,14 @@ def get_messages(
 
 
 @router.get("/messages/{memory_id}:{message_id}/content", summary="获取消息内容")
-def get_message_content(
+async def get_message_content(
     memory_id: str,
     message_id: int,
-    db: Session = Depends(get_db),
-    user=Depends(manager),
+    user: Principal = Depends(async_current_user),
 ):
     try:
-        res = memory_api_service.get_message_content(db, memory_id, message_id)
+        # DB 读 + msg_store 取内容交错：整块在工作线程 + 自开短会话执行
+        res = await memory_api_service.get_message_content_async(memory_id, message_id)
         return get_json_result(data=res)
     except NotFoundException as e:
         logger.error(e)
