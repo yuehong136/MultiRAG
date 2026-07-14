@@ -35,6 +35,14 @@ Session 时，流式阶段仍跑在事件循环上——同样计入违规（rea
     以及 `Depends(manager)`（LoginManager 实例，user_loader/兜底内部自开 SessionLocal）。
     同一请求业务走 AsyncSession、鉴权走同步 Session 即"双轨请求"，违反 AGENTS.md
     「同一请求禁混两种 session」；异步变体见 api_utils 的 async_token_required 等。
+
+纳管反转检查（§11 Phase 2.5/3 棘轮，硬失败、无基线）：
+    `MANAGED_PURE_ASYNC` 清单中的文件已完成纯异步收口，检查逻辑对其反转——从
+    「禁止 async def + 同步 Session」变为「禁止任何同步 Session 形态」：任何函数
+    （含普通 def）挂同步 Session 依赖（get_db / manager / 同步鉴权污点集），或
+    引用自开同步会话（SessionLocal / db_connection），一律违规。每收口一个文件，
+    在同一提交把它加进清单，只增不减；run_sync 回调收到的同步 facade 以参数形式
+    出现、不引用上述名字，天然不受影响。
 """
 
 from __future__ import annotations
@@ -43,6 +51,7 @@ import argparse
 import ast
 import sys
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -55,6 +64,12 @@ DEP_SCAN_FILES = (Path("api/utils/api_utils.py"),)
 # 非函数形态的同步依赖：LoginManager 实例，user_loader/兜底内部自开 SessionLocal
 SYNC_DEP_EXTRA = frozenset({"manager"})
 
+# 纳管清单（棘轮反转，只增不减）：已完成纯异步收口的文件，禁止任何同步 Session 形态。
+# 每收口一个文件，在同一提交把它加进来。
+MANAGED_PURE_ASYNC: tuple[Path, ...] = (Path("api/apps/restful_apis/system_api.py"),)
+# 纳管文件内出现即违规的自开同步会话名（Name 或 Attribute 末端名）
+SYNC_SESSION_OPEN_NAMES = frozenset({"SessionLocal", "db_connection"})
+
 
 @dataclass(frozen=True)
 class DualTrackViolation:
@@ -64,6 +79,15 @@ class DualTrackViolation:
     line: int
     func: str
     dep: str
+
+
+@dataclass(frozen=True)
+class ManagedSyncViolation:
+    """纳管（纯异步）文件中出现同步 Session 形态（棘轮反转）。"""
+
+    file: Path
+    line: int
+    detail: str
 
 
 @dataclass(frozen=True)
@@ -154,6 +178,31 @@ def collect_dual_track(tainted: frozenset[str]) -> list[DualTrackViolation]:
             for dep in targets:
                 if dep in tainted:
                     violations.append(DualTrackViolation(file=path, line=node.lineno, func=node.name, dep=dep))
+    return violations
+
+
+def collect_managed_sync(files: Iterable[Path], tainted: frozenset[str]) -> list[ManagedSyncViolation]:
+    """纳管文件反转检查：任何函数挂同步 Session 依赖、或引用自开同步会话名即违规。
+
+    run_sync 回调收到的同步 facade 以参数形式出现（`s: Session`），不引用
+    SessionLocal/db_connection，也不挂 Depends——天然不受本检查影响。
+    """
+    violations: list[ManagedSyncViolation] = []
+    for path in files:
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, SyntaxError) as exc:
+            violations.append(ManagedSyncViolation(file=path, line=0, detail=f"纳管文件不可解析: {exc}"))
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                for dep in _param_depends_targets(node):
+                    if dep in tainted:
+                        violations.append(ManagedSyncViolation(file=path, line=node.lineno, detail=f"{node.name} 挂 Depends({dep})"))
+            elif isinstance(node, ast.Name | ast.Attribute):
+                name = _call_target_name(node)
+                if name in SYNC_SESSION_OPEN_NAMES:
+                    violations.append(ManagedSyncViolation(file=path, line=node.lineno, detail=f"引用自开同步会话 {name}"))
     return violations
 
 
@@ -291,7 +340,7 @@ def write_baseline(violations: list[Violation]) -> None:
     BASELINE_PATH.write_text(f"{header}{body}\n", encoding="utf-8")
 
 
-def print_report(violations: list[Violation], dual_track: list[DualTrackViolation]) -> None:
+def print_report(violations: list[Violation], dual_track: list[DualTrackViolation], managed: list[ManagedSyncViolation]) -> None:
     class_a = [v for v in violations if v.is_class_a]
     class_b = [v for v in violations if not v.is_class_a]
     print(f"async def + Depends(get_db) 共 {len(violations)} 处（A 类 {len(class_a)} / B 类 {len(class_b)}）\n")
@@ -304,9 +353,12 @@ def print_report(violations: list[Violation], dual_track: list[DualTrackViolatio
     print(f"\n== 双轨（get_async_db 路由依赖树含同步 Session 依赖，硬失败无基线）: {len(dual_track)} 处 ==")
     for d in dual_track:
         print(f"  {d.file}:{d.line}  {d.func}  [Depends({d.dep})]")
+    print(f"\n== 纳管反转（纯异步文件出现同步 Session，硬失败无基线；纳管 {len(MANAGED_PURE_ASYNC)} 文件）: {len(managed)} 处 ==")
+    for m in managed:
+        print(f"  {m.file}:{m.line}  {m.detail}")
 
 
-def run_gate(violations: list[Violation], dual_track: list[DualTrackViolation]) -> int:
+def run_gate(violations: list[Violation], dual_track: list[DualTrackViolation], managed: list[ManagedSyncViolation]) -> int:
     baseline = load_baseline()
     current = Counter(v.key for v in violations)
     new_keys = current - baseline
@@ -334,8 +386,15 @@ def run_gate(violations: list[Violation], dual_track: list[DualTrackViolation]) 
             print(f"  {d.file}:{d.line}  {d.func}  [Depends({d.dep})]", file=sys.stderr)
         print("改用 api/utils/api_utils.py 的 async_token_required / async_beta_token_required / async_current_tenant_id / async_current_user。", file=sys.stderr)
 
+    if managed:
+        ok = False
+        print(f"纳管违规 {len(managed)} 处：纯异步文件出现同步 Session 形态（棘轮反转，无基线，必须当场修）：", file=sys.stderr)
+        for m in managed:
+            print(f"  {m.file}:{m.line}  {m.detail}", file=sys.stderr)
+        print("纳管清单见 MANAGED_PURE_ASYNC；这些文件的 DB 一律走 AsyncSession（迁移期 run_sync 桥接规范见 AGENTS.md）。", file=sys.stderr)
+
     if ok:
-        print(f"check_async_sync_db: OK（新增 0；双轨 0；基线存量 {sum(current.values())} 处待燃尽）")
+        print(f"check_async_sync_db: OK（新增 0；双轨 0；纳管 {len(MANAGED_PURE_ASYNC)} 文件净；基线存量 {sum(current.values())} 处待燃尽）")
         return 0
     return 1
 
@@ -347,15 +406,17 @@ def main() -> int:
     args = parser.parse_args()
 
     violations = collect()
-    dual_track = collect_dual_track(collect_sync_dep_names())
+    tainted = collect_sync_dep_names()
+    dual_track = collect_dual_track(tainted)
+    managed = collect_managed_sync(MANAGED_PURE_ASYNC, tainted)
     if args.report:
-        print_report(violations, dual_track)
+        print_report(violations, dual_track, managed)
         return 0
     if args.write_baseline:
         write_baseline(violations)
         print(f"基线已写入 {BASELINE_PATH}（{len(violations)} 条）")
         return 0
-    return run_gate(violations, dual_track)
+    return run_gate(violations, dual_track, managed)
 
 
 if __name__ == "__main__":
