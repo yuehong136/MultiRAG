@@ -68,6 +68,7 @@ SYNC_DEP_EXTRA = frozenset({"manager"})
 # 每收口一个文件，在同一提交把它加进来。
 MANAGED_PURE_ASYNC: tuple[Path, ...] = (
     Path("api/apps/restful_apis/config_api.py"),
+    Path("api/apps/restful_apis/dataset_api.py"),
     Path("api/apps/restful_apis/document_api.py"),
     Path("api/apps/restful_apis/search_api.py"),
     Path("api/apps/restful_apis/system_api.py"),

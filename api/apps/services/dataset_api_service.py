@@ -22,7 +22,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from api.db.db_models import File
+from api.db.db_models import File, db_connection
 from api.db.services.connector_service import Connector2KbService
 from api.db.services.document_service import DocumentService, queue_raptor_o_graphrag_tasks
 from api.db.services.file_service import FileService
@@ -199,6 +199,18 @@ def delete_datasets(db: Session, tenant_id: str, ids: list | None = None, delete
     return True, {"success_count": success_count, "errors": errors[:5]}
 
 
+async def delete_datasets_async(tenant_id: str, ids: list | None = None, delete_all: bool = False) -> tuple[bool, Any]:
+    """delete_datasets 的异步入口：DB 与 doc-store/存储/Redis 深度交错（remove_document、
+    remove_bucket、delete_idx），且交错点在共享 service 内部无法拆面——run_sync 只桥
+    session 自身的 IO，故整块进工作线程 + 自开短会话（§11.12 混轨块判例的合法形态）。"""
+
+    def _run() -> tuple[bool, Any]:
+        with db_connection() as s:
+            return delete_datasets(s, tenant_id, ids, delete_all)
+
+    return await asyncio.to_thread(_run)
+
+
 def update_dataset(db: Session, tenant_id: str, dataset_id: str, req: dict) -> tuple[bool, Any]:
     """更新数据集。"""
     # 字段名转换
@@ -302,6 +314,17 @@ def update_dataset(db: Session, tenant_id: str, dataset_id: str, req: dict) -> t
     response_data = remap_dictionary_keys(k.to_dict())
     response_data["connectors"] = connectors
     return True, response_data
+
+
+async def update_dataset_async(tenant_id: str, dataset_id: str, req: dict) -> tuple[bool, Any]:
+    """update_dataset 的异步入口：pagerank 分支内联 doc-store 同步 HTTP，混轨块整体
+    进工作线程 + 自开短会话（同 delete_datasets_async 口径）。"""
+
+    def _run() -> tuple[bool, Any]:
+        with db_connection() as s:
+            return update_dataset(s, tenant_id, dataset_id, req)
+
+    return await asyncio.to_thread(_run)
 
 
 def list_datasets(db: Session, tenant_id: str, args: dict) -> tuple[bool, Any]:
@@ -432,15 +455,21 @@ async def get_knowledge_graph(db: AsyncSession, tenant_id: str, dataset_id: str)
     return True, obj
 
 
-def delete_knowledge_graph(db: Session, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
+async def delete_knowledge_graph(db: AsyncSession, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
     """删除数据集的知识图谱。失败时返回 (False, "No authorization.")。"""
-    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+    if not await db.run_sync(lambda s: KnowledgebaseService.accessible(s, dataset_id, tenant_id)):  # TODO(async-phase4)
         return False, "No authorization."
 
-    kb = KnowledgebaseService.get_by_id(db, dataset_id)
-    settings.docStoreConn.delete(
+    def _kb_index(s: Session) -> str:
+        kb = KnowledgebaseService.get_by_id(s, dataset_id)
+        return search.index_name_one(kb.tenant_id, kb.name)
+
+    index_name = await db.run_sync(_kb_index)  # TODO(async-phase4)
+    # doc-store 删除是同步 HTTP：不持有 Session，to_thread 外移避免阻塞事件循环
+    await asyncio.to_thread(
+        settings.docStoreConn.delete,
         {"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation"]},
-        search.index_name_one(kb.tenant_id, kb.name),
+        index_name,
         dataset_id,
     )
     return True, True
@@ -496,6 +525,17 @@ def run_graphrag(db: Session, tenant_id: str, dataset_id: str) -> tuple[bool, An
         logger.warning(f"Cannot save graphrag_task_id for Dataset {dataset_id}")
 
     return True, {"graphrag_task_id": task_id}
+
+
+async def run_graphrag_async(tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
+    """run_graphrag 的异步入口：queue_raptor_o_graphrag_tasks（共享 helper）内部
+    DB 写 + Redis 入队交错，混轨块整体进工作线程 + 自开短会话。"""
+
+    def _run() -> tuple[bool, Any]:
+        with db_connection() as s:
+            return run_graphrag(s, tenant_id, dataset_id)
+
+    return await asyncio.to_thread(_run)
 
 
 def trace_graphrag(db: Session, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
@@ -570,6 +610,16 @@ def run_raptor(db: Session, tenant_id: str, dataset_id: str) -> tuple[bool, Any]
         logger.warning(f"Cannot save raptor_task_id for Dataset {dataset_id}")
 
     return True, {"raptor_task_id": task_id}
+
+
+async def run_raptor_async(tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
+    """run_raptor 的异步入口：同 run_graphrag_async 口径（共享 helper 内 DB+Redis 交错）。"""
+
+    def _run() -> tuple[bool, Any]:
+        with db_connection() as s:
+            return run_raptor(s, tenant_id, dataset_id)
+
+    return await asyncio.to_thread(_run)
 
 
 def trace_raptor(db: Session, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
