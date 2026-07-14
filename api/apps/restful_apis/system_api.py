@@ -16,11 +16,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from api.apps import manager
-from api.db.db_models import APIToken, get_async_db, get_db
+from api.db.db_models import APIToken, get_async_db
 from api.db.services.api_service import APITokenService
 from api.db.services.user_service import UserTenantService
-from api.utils.api_utils import generate_confirmation_token, get_data_error_result, get_json_result, server_error_response
+from api.utils.api_utils import Principal, async_current_user, generate_confirmation_token, get_data_error_result, get_json_result, server_error_response
 from api.utils.health_utils import run_health_checks_async
 from common.time_utils import current_timestamp, datetime_format
 from common.versions import get_multirag_version
@@ -42,7 +41,7 @@ class TokenCreateRequest(BaseModel):
         return value
 
 
-def _owner_tenant_id(db: Session, user) -> str | None:
+def _owner_tenant_id(db: Session, user: Principal) -> str | None:
     tenants = UserTenantService.query(db, user_id=user.id)
     owner = next((tenant for tenant in tenants if tenant.role == "owner"), None)
     return owner.tenant_id if owner else None
@@ -58,7 +57,7 @@ async def ping():
 
 
 @router.get("/system/version", summary="获取版本", response_description="成功获取版本")
-def version(user=Depends(manager)):
+async def version(user: Principal = Depends(async_current_user)):
     """
     获取系统当前版本信息。
 
@@ -78,69 +77,87 @@ async def healthz(response: Response, db: AsyncSession = Depends(get_async_db)):
 
 
 @router.get("/system/tokens", summary="获取API访问令牌列表", response_description="成功获取并返回令牌列表")
-def token_list(db: Session = Depends(get_db), user=Depends(manager)):
+async def token_list(db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)):
     try:
-        tenant_id = _owner_tenant_id(db, user)
-        if not tenant_id:
-            return get_data_error_result(retmsg="Tenant not found!")
 
-        objs = APITokenService.query(db, tenant_id=tenant_id)
-        tokens = [o.to_dict() for o in objs]
-        for token_payload in tokens:
-            if not token_payload.get("beta"):
-                token_payload["beta"] = _new_beta_token()
-                APITokenService.filter_update(
-                    db,
-                    [APIToken.tenant_id == tenant_id, APIToken.token == token_payload["token"]],
-                    dict(token_payload),
-                )
+        def _list_tokens(s: Session) -> list[dict] | None:
+            tenant_id = _owner_tenant_id(s, user)
+            if not tenant_id:
+                return None
+            objs = APITokenService.query(s, tenant_id=tenant_id)
+            tokens = [o.to_dict() for o in objs]
+            for token_payload in tokens:
+                if not token_payload.get("beta"):
+                    token_payload["beta"] = _new_beta_token()
+                    APITokenService.filter_update(
+                        s,
+                        [APIToken.tenant_id == tenant_id, APIToken.token == token_payload["token"]],
+                        dict(token_payload),
+                    )
+            return tokens
+
+        tokens = await db.run_sync(_list_tokens)  # TODO(async-phase4)
+        if tokens is None:
+            return get_data_error_result(retmsg="Tenant not found!")
         return get_json_result(data=tokens)
     except Exception as e:
         return server_error_response(e)
 
 
 @router.post("/system/tokens", summary="创建新访问令牌", response_description="成功创建并返回新令牌")
-def new_token(
+async def new_token(
     request: Annotated[TokenCreateRequest | None, Body()] = None,
     name: Annotated[str | None, Query(min_length=1, max_length=20)] = None,
-    db: Session = Depends(get_db),
-    user=Depends(manager),
+    db: AsyncSession = Depends(get_async_db),
+    user: Principal = Depends(async_current_user),
 ):
     try:
-        tenant_id = _owner_tenant_id(db, user)
-        if not tenant_id:
-            return get_data_error_result(retmsg="Tenant not found!")
 
-        current_ts = current_timestamp()
-        current_date = datetime_format(datetime.now())
-        obj = {
-            "tenant_id": tenant_id,
-            "token": generate_confirmation_token(),
-            "beta": _new_beta_token(),
-            "name": (request.name if request and request.name else name) or "API Token",
-            "description": request.description if request else None,
-            "create_time": current_ts,
-            "create_date": current_date,
-            "update_time": None,
-            "update_date": None,
-        }
+        def _create_token(s: Session) -> tuple[dict | None, str]:
+            tenant_id = _owner_tenant_id(s, user)
+            if not tenant_id:
+                return None, "Tenant not found!"
 
-        if not APITokenService.save(db, **obj):
-            return get_data_error_result(retmsg="Fail to new a dialog!")
+            current_ts = current_timestamp()
+            current_date = datetime_format(datetime.now())
+            obj = {
+                "tenant_id": tenant_id,
+                "token": generate_confirmation_token(),
+                "beta": _new_beta_token(),
+                "name": (request.name if request and request.name else name) or "API Token",
+                "description": request.description if request else None,
+                "create_time": current_ts,
+                "create_date": current_date,
+                "update_time": None,
+                "update_date": None,
+            }
 
+            if not APITokenService.save(s, **obj):
+                return None, "Fail to new a dialog!"
+            return obj, ""
+
+        obj, err = await db.run_sync(_create_token)  # TODO(async-phase4)
+        if obj is None:
+            return get_data_error_result(retmsg=err)
         return get_json_result(data=obj)
     except Exception as e:
         return server_error_response(e)
 
 
 @router.delete("/system/tokens/{token}", summary="删除API访问令牌", response_description="成功删除指定的令牌")
-def rm(token: str, db: Session = Depends(get_db), user=Depends(manager)):
+async def rm(token: str, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)):
     try:
-        tenant_id = _owner_tenant_id(db, user)
-        if not tenant_id:
-            return get_data_error_result(retmsg="Tenant not found!")
 
-        APITokenService.filter_delete(db, [APIToken.tenant_id == tenant_id, APIToken.token == token])
+        def _delete_token(s: Session) -> bool:
+            tenant_id = _owner_tenant_id(s, user)
+            if not tenant_id:
+                return False
+            APITokenService.filter_delete(s, [APIToken.tenant_id == tenant_id, APIToken.token == token])
+            return True
+
+        deleted = await db.run_sync(_delete_token)  # TODO(async-phase4)
+        if not deleted:
+            return get_data_error_result(retmsg="Tenant not found!")
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)

@@ -1,13 +1,29 @@
+"""system RESTful API 契约测试。
+
+version/token 四条 authenticated 路由已切纯异步轨（AsyncSession + async_current_user）：
+走真实 ``api.apps.app`` 的 HTTP 契约式测试。service 桩保留真实类型契约——记录并断言
+同步 service 收到的是 run_sync 的同步 facade（``sqlalchemy.orm.Session``），
+"AsyncSession 直递同步 service" 的变异必红（79b6007d 判例同型防线）。
+ping / healthz 不在本批转换范围，保持原有直调形态。
+"""
+
 import asyncio
 import json
 from types import SimpleNamespace
 
 from fastapi import Response
+from fastapi.routing import APIRoute
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.apps.restful_apis import config_api, system_api
+from api.db.db_models import get_async_db, get_db
+from api.db.services.api_service import APITokenService
+from api.db.services.user_service import UserTenantService
 from api.utils import health_utils
+from api.utils.api_utils import async_current_user
+from common.constants import RetCode
+from common.versions import get_multirag_version
 
 
 class Obj(SimpleNamespace):
@@ -19,16 +35,24 @@ def _body(response):
     return json.loads(response.body)
 
 
-def _db():
-    return Session()
+def _stub_owner(monkeypatch, sessions, rows=None):
+    """UserTenantService.query 桩：记录收到的 session（类型契约锚点）。"""
+    if rows is None:
+        rows = [SimpleNamespace(role="owner", tenant_id="tenant-1")]
+
+    def _query(cls, s, **kwargs):
+        sessions.append(s)
+        assert kwargs == {"user_id": "user-unit"}  # 鉴权产物 Principal 的 id 必须传进查询
+        return rows
+
+    monkeypatch.setattr(UserTenantService, "query", classmethod(_query))
 
 
-def _stub_owner(monkeypatch):
-    monkeypatch.setattr(
-        system_api.UserTenantService,
-        "query",
-        lambda *_args, **_kwargs: [SimpleNamespace(role="owner", tenant_id="tenant-1")],
-    )
+def _assert_sync_facade(sessions):
+    """同步 service 必须运行在 run_sync 的同步 facade 上（AsyncSession 直递必红）。"""
+    assert sessions
+    for s in sessions:
+        assert isinstance(s, Session), f"同步 service 收到 {type(s).__name__}，应为 sqlalchemy.orm.Session"
 
 
 def test_system_restful_ping_returns_pong():
@@ -58,53 +82,172 @@ def test_system_restful_healthz_sets_status(monkeypatch):
     assert response.status_code == 500
 
 
-def test_system_restful_token_list_backfills_missing_beta(monkeypatch):
-    _stub_owner(monkeypatch)
-    monkeypatch.setattr(
-        system_api.APITokenService,
-        "query",
-        lambda *_args, **_kwargs: [Obj(token="tok-1", beta="", name="old", description=None)],
-    )
-    monkeypatch.setattr(system_api, "generate_confirmation_token", lambda: "multirag-abcdefghijklmnopqrstuvwxyz0123456789")
-    updates = []
-    monkeypatch.setattr(
-        system_api.APITokenService,
-        "filter_update",
-        lambda db, filters, payload: updates.append((db, filters, payload)) or True,
-    )
+def test_system_restful_version_returns_version_envelope(client):
+    resp = client.get("/api/v1/system/version")
 
-    body = _body(system_api.token_list(db=_db(), user=SimpleNamespace(id="user-1")))
-
+    assert resp.status_code == 200
+    body = resp.json()
     assert body["retcode"] == 0
-    assert body["data"][0]["beta"] == "abcdefghijklmnopqrstuvwxyz012345"
-    assert updates[0][2]["token"] == "tok-1"
+    assert body["data"] == get_multirag_version()
 
 
-def test_system_restful_token_create_allows_upstream_empty_payload(monkeypatch):
-    _stub_owner(monkeypatch)
-    generated = iter(["multirag-token-value", "multirag-beta-value-abcdefghijklmnopqrstuvwxyz"])
-    monkeypatch.setattr(system_api, "generate_confirmation_token", lambda: next(generated))
-    saved = []
-    monkeypatch.setattr(system_api.APITokenService, "save", lambda db, **kwargs: saved.append(kwargs) or Obj(**kwargs))
+def test_system_restful_token_list_backfills_missing_beta(client, monkeypatch):
+    sessions: list[object] = []
+    _stub_owner(monkeypatch, sessions)
 
-    body = _body(system_api.new_token(request=None, name=None, db=_db(), user=SimpleNamespace(id="user-1")))
+    def _query_tokens(cls, s, **kwargs):
+        sessions.append(s)
+        assert kwargs == {"tenant_id": "tenant-1"}
+        return [Obj(token="tok-1", beta="", name="old", description=None)]
 
+    updates: list[dict] = []
+
+    def _filter_update(cls, s, filters, payload):
+        sessions.append(s)
+        updates.append(dict(payload))
+        return 1
+
+    monkeypatch.setattr(APITokenService, "query", classmethod(_query_tokens))
+    monkeypatch.setattr(APITokenService, "filter_update", classmethod(_filter_update))
+
+    resp = client.get("/api/v1/system/tokens")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["retcode"] == 0
+    assert len(body["data"]) == 1
+    assert len(body["data"][0]["beta"]) == 32  # 缺失 beta 的旧记录回填
+    assert updates[0]["token"] == "tok-1"
+    assert updates[0]["beta"] == body["data"][0]["beta"]
+    _assert_sync_facade(sessions)
+
+
+def test_system_restful_token_create_allows_empty_body_default_name(client, monkeypatch):
+    sessions: list[object] = []
+    _stub_owner(monkeypatch, sessions)
+    saved: list[dict] = []
+
+    def _save(cls, s, **kwargs):
+        sessions.append(s)
+        saved.append(kwargs)
+        return Obj(**kwargs)
+
+    monkeypatch.setattr(APITokenService, "save", classmethod(_save))
+
+    resp = client.post("/api/v1/system/tokens")
+
+    assert resp.status_code == 200
+    body = resp.json()
     assert body["retcode"] == 0
     assert body["data"]["name"] == "API Token"
+    assert body["data"]["tenant_id"] == "tenant-1"
+    assert body["data"]["token"].startswith("multirag-")
+    assert len(body["data"]["beta"]) == 32
     assert saved[0]["name"] == "API Token"
     assert saved[0]["description"] is None
+    _assert_sync_facade(sessions)
 
 
-def test_system_restful_token_delete_uses_path_token(monkeypatch):
-    _stub_owner(monkeypatch)
-    deleted = []
-    monkeypatch.setattr(system_api.APITokenService, "filter_delete", lambda db, filters: deleted.append((db, filters)) or 1)
+def test_system_restful_token_create_body_contract(client, monkeypatch):
+    sessions: list[object] = []
+    _stub_owner(monkeypatch, sessions)
+    saved: list[dict] = []
 
-    body = _body(system_api.rm("tok-1", db=_db(), user=SimpleNamespace(id="user-1")))
+    def _save(cls, s, **kwargs):
+        sessions.append(s)
+        saved.append(kwargs)
+        return Obj(**kwargs)
 
+    monkeypatch.setattr(APITokenService, "save", classmethod(_save))
+
+    body_wins = client.post("/api/v1/system/tokens?name=query-name", json={"name": "body-name", "description": "   "})
+    query_fallback = client.post("/api/v1/system/tokens?name=query-name", json={"description": " desc "})
+
+    assert body_wins.json()["retcode"] == 0
+    assert saved[0]["name"] == "body-name"  # body name 优先于 query name
+    assert saved[0]["description"] is None  # 空白 description 归一为 None
+    assert query_fallback.json()["retcode"] == 0
+    assert saved[1]["name"] == "query-name"  # body 无 name 时回退 query name
+    assert saved[1]["description"] == "desc"  # str_strip_whitespace 修剪
+    _assert_sync_facade(sessions)
+
+
+def test_system_restful_token_delete_uses_path_token(client, monkeypatch):
+    sessions: list[object] = []
+    _stub_owner(monkeypatch, sessions)
+    deleted: list[list] = []
+
+    def _filter_delete(cls, s, filters):
+        sessions.append(s)
+        deleted.append(filters)
+        return 1
+
+    monkeypatch.setattr(APITokenService, "filter_delete", classmethod(_filter_delete))
+
+    resp = client.delete("/api/v1/system/tokens/tok-9")
+
+    assert resp.status_code == 200
+    body = resp.json()
     assert body["retcode"] == 0
     assert body["data"] is True
-    assert deleted
+    tenant_clause, token_clause = deleted[0]
+    assert tenant_clause.right.value == "tenant-1"
+    assert token_clause.right.value == "tok-9"  # 删除条件取自 path 中的 token
+    _assert_sync_facade(sessions)
+
+
+def test_system_restful_token_routes_report_missing_owner_tenant(client, monkeypatch):
+    sessions: list[object] = []
+    _stub_owner(monkeypatch, sessions, rows=[SimpleNamespace(role="normal", tenant_id="tenant-1")])
+
+    responses = [
+        client.get("/api/v1/system/tokens"),
+        client.post("/api/v1/system/tokens"),
+        client.delete("/api/v1/system/tokens/tok-1"),
+    ]
+
+    for resp in responses:
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["retcode"] == int(RetCode.DATA_ERROR)
+        assert body["retmsg"] == "Tenant not found!"
+    _assert_sync_facade(sessions)
+
+
+def _dependency_calls(app, method: str, path: str) -> set:
+    """展开路由的完整 Depends 树，返回全部依赖 callable。
+
+    ``Depends(manager)`` 的 LoginManager 实例同样以 ``dep.call`` 形态出现在树里
+    （legacy ``/v1/system/version`` 阳性对照验证过），无需另走安全依赖结构。
+    """
+    for route in app.routes:
+        if isinstance(route, APIRoute) and route.path == path and method in route.methods:
+            calls = set()
+            stack = [route.dependant]
+            while stack:
+                dep = stack.pop()
+                if dep.call is not None:
+                    calls.add(dep.call)
+                stack.extend(dep.dependencies)
+            return calls
+    raise AssertionError(f"route not found: {method} {path}")
+
+
+def test_system_authenticated_routes_have_pure_async_dependency_tree(client):
+    """四条已换轨路由的依赖树不得再出现 get_db / manager 同步轨。"""
+    import api.apps as api_apps
+
+    for method, path in (
+        ("GET", "/api/v1/system/version"),
+        ("GET", "/api/v1/system/tokens"),
+        ("POST", "/api/v1/system/tokens"),
+        ("DELETE", "/api/v1/system/tokens/{token}"),
+    ):
+        calls = _dependency_calls(client.app, method, path)
+        assert get_db not in calls, f"{method} {path} 依赖树含同步 get_db"
+        assert api_apps.manager not in calls, f"{method} {path} 依赖树含同步 manager"
+        assert async_current_user in calls, f"{method} {path} 缺异步鉴权依赖"
+        assert get_async_db in calls, f"{method} {path} 缺 AsyncSession 依赖"
 
 
 def test_config_restful_log_level_validation(monkeypatch):
