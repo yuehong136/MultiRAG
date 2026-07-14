@@ -4,6 +4,7 @@ import json
 import logging
 import re
 from copy import deepcopy
+from typing import Any
 
 import jinja2
 import json_repair
@@ -333,7 +334,13 @@ async def cross_languages(tenant_id, llm_id, query, languages=None):
     return "\n".join([a for a in re.sub(r"(^Output:|\n+)", "", ans, flags=re.DOTALL).split("===") if a.strip()])
 
 
-async def content_tagging(chat_mdl, content, all_tags, examples, topn=3):
+async def content_tagging(
+    chat_mdl: Any,
+    content: str,
+    all_tags: Any,
+    examples: list[dict[str, Any]],
+    topn: int = 3,
+) -> dict[str, int]:
     template = PROMPT_JINJA_ENV.from_string(CONTENT_TAGGING_PROMPT_TEMPLATE)
 
     for ex in examples:
@@ -357,7 +364,7 @@ async def content_tagging(chat_mdl, content, all_tags, examples, topn=3):
 
     try:
         obj = json_repair.loads(kwd)
-    except json_repair.JSONDecodeError:
+    except json.JSONDecodeError:
         try:
             result = kwd.replace(rendered_prompt[:-1], "").replace("user", "").replace("model", "").strip()
             result = "{" + result.split("{")[1].split("}")[0] + "}"

@@ -66,7 +66,13 @@ class KGSearch(Dealer):
                 normalized.extend([name for name in idx if isinstance(name, str) and name])
         return normalized
 
-    async def query_rewrite(self, llm: GraphRAGCompletionLLM, question, idxnms, kb_ids):
+    async def query_rewrite(
+        self,
+        llm: GraphRAGCompletionLLM,
+        question: str,
+        idxnms: str | list[str] | list[list[str]],
+        kb_ids: list[str],
+    ) -> tuple[list[str], list[str]]:
         idxnms = self._normalize_idx_names(idxnms)
         ty2ents = await get_entity_type2samples(idxnms, kb_ids)
         hint_prompt = PROMPTS["minirag_query2kwd"].format(query=question, TYPE_POOL=json.dumps(ty2ents, ensure_ascii=False, indent=2))
@@ -76,7 +82,7 @@ class KGSearch(Dealer):
             type_keywords = keywords_data.get("answer_type_keywords", [])
             entities_from_query = keywords_data.get("entities_from_query", [])[:5]
             return type_keywords, entities_from_query
-        except json_repair.JSONDecodeError:
+        except json.JSONDecodeError:
             try:
                 result = result.replace(hint_prompt[:-1], "").replace("user", "").replace("model", "").strip()
                 result = "{" + result.split("{")[1].split("}")[0] + "}"
