@@ -17,14 +17,15 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.constants import DATASET_NAME_LIMIT
-from api.db.db_models import get_db
+from api.db.db_models import get_async_db
 from api.db.services import duplicate_name
 from api.db.services.search_service import SearchService
 from api.db.services.user_service import TenantService, UserTenantService
-from api.utils.api_utils import current_tenant_id, get_error_data_result, get_result
+from api.utils.api_utils import async_current_tenant_id, get_error_data_result, get_result
 from common.constants import RetCode, StatusEnum
 from common.misc_utils import get_uuid
 
@@ -189,13 +190,13 @@ def _delete_search(db: Session, tenant_id: str, search_id: str) -> tuple[bool, A
 
 
 @router.post("/searches", summary="Create search app")
-def create_search(
+async def create_search(
     request: CreateSearchRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(current_tenant_id),
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_current_tenant_id),
 ):
     try:
-        success, result, retcode = _create_search(db, tenant_id, request.model_dump())
+        success, result, retcode = await db.run_sync(lambda s: _create_search(s, tenant_id, request.model_dump()))  # TODO(async-phase4)
         return _respond(success, result, retcode)
     except Exception as e:
         logger.exception(e)
@@ -203,26 +204,28 @@ def create_search(
 
 
 @router.get("/searches", summary="List search apps")
-def list_searches(
+async def list_searches(
     keywords: str = Query("", description="Keyword filter"),
     page: int = Query(0, description="Page number; 0 disables pagination"),
     page_size: int = Query(0, description="Items per page; 0 disables pagination"),
     orderby: str = Query("create_time", description="Sort field"),
     desc: bool = Query(True, description="Sort descending"),
     owner_ids: list[str] | None = Query(None, description="Owner tenant IDs"),
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(current_tenant_id),
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_current_tenant_id),
 ):
     try:
-        success, result, retcode = _list_searches(
-            db,
-            tenant_id,
-            keywords=keywords,
-            page=page,
-            page_size=page_size,
-            orderby=orderby,
-            desc=desc,
-            owner_ids=owner_ids,
+        success, result, retcode = await db.run_sync(  # TODO(async-phase4)
+            lambda s: _list_searches(
+                s,
+                tenant_id,
+                keywords=keywords,
+                page=page,
+                page_size=page_size,
+                orderby=orderby,
+                desc=desc,
+                owner_ids=owner_ids,
+            )
         )
         return _respond(success, result, retcode)
     except Exception as e:
@@ -231,13 +234,13 @@ def list_searches(
 
 
 @router.get("/searches/{search_id}", summary="Get search app")
-def get_search(
+async def get_search(
     search_id: str,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(current_tenant_id),
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_current_tenant_id),
 ):
     try:
-        success, result, retcode = _get_search_detail(db, tenant_id, search_id)
+        success, result, retcode = await db.run_sync(lambda s: _get_search_detail(s, tenant_id, search_id))  # TODO(async-phase4)
         return _respond(success, result, retcode)
     except Exception as e:
         logger.exception(e)
@@ -245,14 +248,14 @@ def get_search(
 
 
 @router.put("/searches/{search_id}", summary="Update search app")
-def update_search(
+async def update_search(
     search_id: str,
     request: UpdateSearchRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(current_tenant_id),
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_current_tenant_id),
 ):
     try:
-        success, result, retcode = _update_search(db, tenant_id, search_id, request.model_dump(exclude_unset=True))
+        success, result, retcode = await db.run_sync(lambda s: _update_search(s, tenant_id, search_id, request.model_dump(exclude_unset=True)))  # TODO(async-phase4)
         return _respond(success, result, retcode)
     except Exception as e:
         logger.exception(e)
@@ -260,13 +263,13 @@ def update_search(
 
 
 @router.delete("/searches/{search_id}", summary="Delete search app")
-def delete_search(
+async def delete_search(
     search_id: str,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(current_tenant_id),
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_current_tenant_id),
 ):
     try:
-        success, result, retcode = _delete_search(db, tenant_id, search_id)
+        success, result, retcode = await db.run_sync(lambda s: _delete_search(s, tenant_id, search_id))  # TODO(async-phase4)
         return _respond(success, result, retcode)
     except Exception as e:
         logger.exception(e)

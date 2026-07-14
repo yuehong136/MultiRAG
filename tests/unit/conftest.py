@@ -160,6 +160,31 @@ def client(client_user):
 
 
 @pytest.fixture
+def route_dependency_calls():
+    """展开真实 app 某路由的完整 Depends 树，返回全部依赖 callable（纯异步换轨测试用）。
+
+    ``Depends(manager)`` 的 LoginManager 实例同样以 ``dep.call`` 形态出现在树里，
+    可直接用 ``manager not in calls`` 断言同步鉴权轨已清除。
+    """
+    from fastapi.routing import APIRoute
+
+    def _calls(app, method: str, path: str) -> set:
+        for route in app.routes:
+            if isinstance(route, APIRoute) and route.path == path and method in route.methods:
+                calls = set()
+                stack = [route.dependant]
+                while stack:
+                    dep = stack.pop()
+                    if dep.call is not None:
+                        calls.add(dep.call)
+                    stack.extend(dep.dependencies)
+                return calls
+        raise AssertionError(f"route not found: {method} {path}")
+
+    return _calls
+
+
+@pytest.fixture
 def db():
     """未绑定引擎的 SQLAlchemy Session：满足 beartype 的 `db: Session` 校验，不会真正连库。"""
     return Session()

@@ -66,7 +66,10 @@ SYNC_DEP_EXTRA = frozenset({"manager"})
 
 # 纳管清单（棘轮反转，只增不减）：已完成纯异步收口的文件，禁止任何同步 Session 形态。
 # 每收口一个文件，在同一提交把它加进来。
-MANAGED_PURE_ASYNC: tuple[Path, ...] = (Path("api/apps/restful_apis/system_api.py"),)
+MANAGED_PURE_ASYNC: tuple[Path, ...] = (
+    Path("api/apps/restful_apis/search_api.py"),
+    Path("api/apps/restful_apis/system_api.py"),
+)
 # 纳管文件内出现即违规的自开同步会话名（Name 或 Attribute 末端名）
 SYNC_SESSION_OPEN_NAMES = frozenset({"SessionLocal", "db_connection"})
 
