@@ -11,8 +11,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
 
-from api.apps import manager
-from api.utils.api_utils import get_data_error_result, get_json_result
+from api.utils.api_utils import Principal, async_current_user, get_data_error_result, get_json_result
 from common.log_utils import get_log_levels, set_log_level
 
 router = APIRouter()
@@ -26,12 +25,12 @@ class LogLevelRequest(BaseModel):
 
 
 @router.get("/config/log", summary="获取日志级别")
-def get_logger_levels(user=Depends(manager)):
+async def get_logger_levels(user: Principal = Depends(async_current_user)):
     return get_json_result(data=get_log_levels())
 
 
 @router.put("/config/log", summary="设置日志级别")
-def set_logger_level(request: LogLevelRequest, user=Depends(manager)):
+async def set_logger_level(request: LogLevelRequest, user: Principal = Depends(async_current_user)):
     success = set_log_level(request.pkg_name, request.level)
     if success:
         return get_json_result(data={"pkg_name": request.pkg_name, "level": request.level})

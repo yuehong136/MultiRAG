@@ -1,14 +1,13 @@
-"""system RESTful API 契约测试。
+"""system / config RESTful API 契约测试。
 
-version/token 四条 authenticated 路由已切纯异步轨（AsyncSession + async_current_user）：
-走真实 ``api.apps.app`` 的 HTTP 契约式测试。service 桩保留真实类型契约——记录并断言
-同步 service 收到的是 run_sync 的同步 facade（``sqlalchemy.orm.Session``），
-"AsyncSession 直递同步 service" 的变异必红（79b6007d 判例同型防线）。
-ping / healthz 不在本批转换范围，保持原有直调形态。
+system 的 version/token 四条与 config 的两条 authenticated 路由已切纯异步轨
+（AsyncSession + async_current_user）：走真实 ``api.apps.app`` 的 HTTP 契约式测试。
+service 桩保留真实类型契约——记录并断言同步 service 收到的是 run_sync 的同步
+facade（``sqlalchemy.orm.Session``），"AsyncSession 直递同步 service" 的变异必红
+（79b6007d 判例同型防线）。ping / healthz 不在转换范围，保持原有直调形态。
 """
 
 import asyncio
-import json
 from types import SimpleNamespace
 
 from fastapi import Response
@@ -16,7 +15,7 @@ from fastapi.routing import APIRoute
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from api.apps.restful_apis import config_api, system_api
+from api.apps.restful_apis import system_api
 from api.db.db_models import get_async_db, get_db
 from api.db.services.api_service import APITokenService
 from api.db.services.user_service import UserTenantService
@@ -29,10 +28,6 @@ from common.versions import get_multirag_version
 class Obj(SimpleNamespace):
     def to_dict(self):
         return dict(self.__dict__)
-
-
-def _body(response):
-    return json.loads(response.body)
 
 
 def _stub_owner(monkeypatch, sessions, rows=None):
@@ -250,14 +245,46 @@ def test_system_authenticated_routes_have_pure_async_dependency_tree(client):
         assert get_async_db in calls, f"{method} {path} 缺 AsyncSession 依赖"
 
 
-def test_config_restful_log_level_validation(monkeypatch):
-    monkeypatch.setattr(config_api, "set_log_level", lambda pkg_name, level: level == "INFO")
+def _config_route_module():
+    """app 路由绑定的是 register_page 经 spec loader 加载的模块实例，
+    与常规导入的 ``api.apps.restful_apis.config_api`` 不是同一对象——
+    打桩模块级名字必须打在前者上（monkeypatch 真实 service 类则两边通用）。"""
+    import sys
 
-    ok = _body(config_api.set_logger_level(config_api.LogLevelRequest(pkg_name="core", level="INFO"), user=object()))
-    bad = _body(config_api.set_logger_level(config_api.LogLevelRequest(pkg_name="core", level="NOPE"), user=object()))
+    return sys.modules["api.apps.restful_apis.config"]
 
+
+def test_config_restful_log_level_validation(client, monkeypatch):
+    monkeypatch.setattr(_config_route_module(), "set_log_level", lambda pkg_name, level: level == "INFO")
+
+    ok = client.put("/api/v1/config/log", json={"pkg_name": "core", "level": "INFO"}).json()
+    bad = client.put("/api/v1/config/log", json={"pkg_name": "core", "level": "NOPE"}).json()
+
+    assert ok["retcode"] == 0
     assert ok["data"] == {"pkg_name": "core", "level": "INFO"}
     assert bad["retmsg"] == "Invalid log level: NOPE"
+
+
+def test_config_restful_log_level_listing(client, monkeypatch):
+    monkeypatch.setattr(_config_route_module(), "get_log_levels", lambda: {"core": "INFO"})
+
+    resp = client.get("/api/v1/config/log")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["retcode"] == 0
+    assert body["data"] == {"core": "INFO"}
+
+
+def test_config_routes_have_pure_async_dependency_tree(client):
+    import api.apps as api_apps
+
+    for method, path in (("GET", "/api/v1/config/log"), ("PUT", "/api/v1/config/log")):
+        calls = _dependency_calls(client.app, method, path)
+        assert get_db not in calls, f"{method} {path} 依赖树含同步 get_db"
+        assert api_apps.manager not in calls, f"{method} {path} 依赖树含同步 manager"
+        assert async_current_user in calls, f"{method} {path} 缺异步鉴权依赖"
+        assert get_async_db in calls, f"{method} {path} 缺 AsyncSession 依赖"
 
 
 def test_multirag_server_alive_uses_restful_ping(monkeypatch):
