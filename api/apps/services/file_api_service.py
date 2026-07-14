@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import pathlib
@@ -24,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from api.common.check_team_permission import check_file_team_permission
 from api.db import FileType
+from api.db.db_models import db_connection
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
@@ -100,6 +102,17 @@ def upload_file(db: Session, tenant_id: str, pf_id: str | None, file_contents: l
         file_res.append(inserted.to_dict())
 
     return True, file_res
+
+
+async def upload_file_async(tenant_id: str, pf_id: str | None, file_contents: list[tuple[bytes, str]]) -> tuple[bool, Any]:
+    """upload_file 的异步入口：DB 与存储写逐文件交错（obj_exist/put），run_sync 只桥
+    session 自身的 IO，故整块进工作线程 + 自开短会话（§11.12 混轨块判例的合法形态）。"""
+
+    def _run() -> tuple[bool, Any]:
+        with db_connection() as s:
+            return upload_file(s, tenant_id, pf_id, file_contents)
+
+    return await asyncio.to_thread(_run)
 
 
 def create_folder(db: Session, tenant_id: str, name: str, pf_id: str | None = None, file_type: str | None = None) -> tuple[bool, Any]:
@@ -243,6 +256,17 @@ def delete_files(db: Session, uid: str, file_ids: list[str]) -> tuple[bool, Any]
     return True, True
 
 
+async def delete_files_async(uid: str, file_ids: list[str]) -> tuple[bool, Any]:
+    """delete_files 的异步入口：存储 rm 与 remove_document（内混 Redis 取消/存储/doc-store）
+    逐文件交错在共享 helper 内，整块进工作线程 + 自开短会话。"""
+
+    def _run() -> tuple[bool, Any]:
+        with db_connection() as s:
+            return delete_files(s, uid, file_ids)
+
+    return await asyncio.to_thread(_run)
+
+
 def move_files(db: Session, uid: str, src_file_ids: list[str], dest_file_id: str | None = None, new_name: str | None = None) -> tuple[bool, Any]:
     """移动并/或重命名文件，遵循 Linux mv 语义：
     - 仅 new_name：原地重命名（不动存储）
@@ -356,6 +380,17 @@ def move_files(db: Session, uid: str, src_file_ids: list[str], dest_file_id: str
                 return False, "Database error (Document rename)!"
 
     return True, True
+
+
+async def move_files_async(uid: str, src_file_ids: list[str], dest_file_id: str | None = None, new_name: str | None = None) -> tuple[bool, Any]:
+    """move_files 的异步入口：跨文件夹移动时存储 obj_exist/move 与 DB 更新在递归内交错，
+    整块进工作线程 + 自开短会话。"""
+
+    def _run() -> tuple[bool, Any]:
+        with db_connection() as s:
+            return move_files(s, uid, src_file_ids, dest_file_id, new_name)
+
+    return await asyncio.to_thread(_run)
 
 
 def get_file_content(db: Session, uid: str, file_id: str) -> tuple[bool, Any]:

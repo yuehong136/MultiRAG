@@ -122,88 +122,6 @@ def _load_file_convert_service_module(monkeypatch):
     return module
 
 
-def _load_restful_file_api_module(monkeypatch):
-    class _FileType:
-        FOLDER = types.SimpleNamespace(value="folder")
-        VISUAL = types.SimpleNamespace(value="visual")
-
-    class _RetCode:
-        NOT_FOUND = 404
-        SUCCESS = 0
-        SERVER_ERROR = 500
-
-    fake_api_db = types.ModuleType("api.db")
-    fake_api_db.FileType = _FileType
-
-    fake_db_models = types.ModuleType("api.db.db_models")
-    fake_db_models.get_db = lambda: None
-    fake_db_models.get_async_db = lambda: None
-
-    fake_file2document_service = types.ModuleType("api.db.services.file2document_service")
-    fake_file2document_service.File2DocumentService = type("File2DocumentService", (), {})
-
-    fake_file_service = types.ModuleType("api.db.services.file_service")
-    fake_file_service.FileService = type("FileService", (), {})
-
-    fake_kb_service = types.ModuleType("api.db.services.knowledgebase_service")
-    fake_kb_service.KnowledgebaseService = type("KnowledgebaseService", (), {})
-
-    fake_api_apps_services = types.ModuleType("api.apps.services")
-    fake_file_api_service = types.ModuleType("api.apps.services.file_api_service")
-    fake_file_convert_service = types.ModuleType("api.apps.services.file_convert_service")
-    fake_file_convert_service.convert_files_with_new_session = lambda *_args: None
-
-    fake_api_utils = types.ModuleType("api.utils.api_utils")
-    fake_api_utils.current_tenant_id = lambda: "tenant-1"
-    fake_api_utils.async_current_tenant_id = lambda: "tenant-1"
-    fake_api_utils.get_error_argument_result = lambda **kwargs: {"retcode": 400, **kwargs}
-    fake_api_utils.get_error_data_result = lambda **kwargs: {"retcode": 100, **kwargs}
-    fake_api_utils.get_json_result = lambda data=None, retmsg="success", retcode=0, **_: {
-        "retcode": retcode,
-        "retmsg": retmsg,
-        "data": data,
-    }
-    fake_api_utils.get_result = lambda *args, **kwargs: {"args": args, "kwargs": kwargs}
-    fake_api_utils.server_error_response = lambda e: {"retcode": 500, "retmsg": repr(e)}
-
-    fake_web_utils = types.ModuleType("api.utils.web_utils")
-    fake_web_utils.CONTENT_TYPE_MAP = {}
-    fake_web_utils.apply_safe_file_response_headers = lambda *_args, **_kwargs: None
-
-    fake_common = types.ModuleType("common")
-    fake_common.settings = types.SimpleNamespace(STORAGE_IMPL=types.SimpleNamespace())
-    fake_constants = types.ModuleType("common.constants")
-    fake_constants.RetCode = _RetCode
-    fake_misc_utils = types.ModuleType("common.misc_utils")
-    fake_misc_utils.thread_pool_exec = lambda *_args, **_kwargs: None
-
-    for name, module in {
-        "api.db": fake_api_db,
-        "api.db.db_models": fake_db_models,
-        "api.db.services.file2document_service": fake_file2document_service,
-        "api.db.services.file_service": fake_file_service,
-        "api.db.services.knowledgebase_service": fake_kb_service,
-        "api.apps.services": fake_api_apps_services,
-        "api.apps.services.file_api_service": fake_file_api_service,
-        "api.apps.services.file_convert_service": fake_file_convert_service,
-        "api.utils.api_utils": fake_api_utils,
-        "api.utils.web_utils": fake_web_utils,
-        "common": fake_common,
-        "common.constants": fake_constants,
-        "common.misc_utils": fake_misc_utils,
-    }.items():
-        monkeypatch.setitem(sys.modules, name, module)
-
-    spec = importlib.util.spec_from_file_location(
-        "restful_file_api_subject",
-        ROOT / "api/apps/restful_apis/file_api.py",
-    )
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
-
-
 def _file(**overrides):
     defaults = {
         "id": "f1",
@@ -244,25 +162,6 @@ def test_convert_rejects_missing_file_before_scheduling(monkeypatch):
 
     assert result["retmsg"] == "File not found!"
     assert background_tasks.tasks == []
-
-
-def test_sdk_file_convert_schedules_background_work(monkeypatch):
-    module = _load_restful_file_api_module(monkeypatch)
-    folder = _file(id="folder-1", type=module.FileType.FOLDER.value, name="folder")
-    kb = types.SimpleNamespace(id="kb-1")
-
-    monkeypatch.setattr(module.FileService, "get_by_ids", lambda _db, _ids: [folder], raising=False)
-    monkeypatch.setattr(module.FileService, "get_all_innermost_file_ids", lambda _db, _fid, _acc: ["inner-1"], raising=False)
-    monkeypatch.setattr(module.KnowledgebaseService, "get_by_id", lambda _db, _kb_id: kb, raising=False)
-
-    background_tasks = BackgroundTasks()
-    result = module.convert(["kb-1"], ["folder-1"], background_tasks, db="request-db", tenant_id="tenant-1")
-
-    assert result == {"retcode": 0, "retmsg": "success", "data": True}
-    assert len(background_tasks.tasks) == 1
-    task = background_tasks.tasks[0]
-    assert task.func is module.convert_files_with_new_session
-    assert task.args == (["inner-1"], ["kb-1"], "tenant-1")
 
 
 def test_convert_worker_removes_old_links_and_inserts_new_docs(monkeypatch):

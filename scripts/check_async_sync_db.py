@@ -70,6 +70,7 @@ MANAGED_PURE_ASYNC: tuple[Path, ...] = (
     Path("api/apps/restful_apis/config_api.py"),
     Path("api/apps/restful_apis/dataset_api.py"),
     Path("api/apps/restful_apis/document_api.py"),
+    Path("api/apps/restful_apis/file_api.py"),
     Path("api/apps/restful_apis/search_api.py"),
     Path("api/apps/restful_apis/system_api.py"),
 )
