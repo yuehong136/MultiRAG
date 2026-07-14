@@ -15,8 +15,9 @@ class Obj(SimpleNamespace):
         return dict(self.__dict__)
 
 
-def test_feedback_endpoint_rejects_non_boolean_thumbup(monkeypatch):
-    monkeypatch.setattr(chat_api, "_owned_chat_exists", lambda *_args: True)
+def test_feedback_endpoint_rejects_non_boolean_thumbup(client, monkeypatch):
+    """HTTP 契约式（路由切 AsyncSession 后直调形态失效）。"""
+    monkeypatch.setattr(chat_api.DialogService, "query", lambda *_args, **_kw: [Obj(id="chat-1")])
     monkeypatch.setattr(
         chat_api.ConversationService,
         "get_by_id",
@@ -25,22 +26,14 @@ def test_feedback_endpoint_rejects_non_boolean_thumbup(monkeypatch):
     update = []
     monkeypatch.setattr(chat_api.ConversationService, "update_by_id", lambda *_args: update.append(_args))
 
-    response = chat_api.update_message_feedback(
-        "chat-1",
-        "session-1",
-        "msg-1",
-        Obj(model_dump=lambda **_kwargs: {"thumbup": "yes"}),
-        db="db",
-        tenant_id="tenant-1",
-    )
+    body = client.put("/api/v1/chats/chat-1/sessions/session-1/messages/msg-1/feedback", json={"thumbup": "yes"}).json()
 
-    body = json.loads(response.body)
     assert "thumbup must be a boolean" in json.dumps(body)
     assert update == []
 
 
-def test_feedback_endpoint_applies_first_feedback_and_updates_session(monkeypatch):
-    monkeypatch.setattr(chat_api, "_owned_chat_exists", lambda *_args: True)
+def test_feedback_endpoint_applies_first_feedback_and_updates_session(client, monkeypatch):
+    monkeypatch.setattr(chat_api.DialogService, "query", lambda *_args, **_kw: [Obj(id="chat-1")])
     session = Obj(
         id="session-1",
         dialog_id="chat-1",
@@ -61,18 +54,10 @@ def test_feedback_endpoint_applies_first_feedback_and_updates_session(monkeypatc
         lambda **kwargs: calls.append(kwargs) or {"success_count": 1, "fail_count": 0},
     )
 
-    response = chat_api.update_message_feedback(
-        "chat-1",
-        "session-1",
-        "msg-1",
-        Obj(model_dump=lambda **_kwargs: {"thumbup": True}),
-        db="db",
-        tenant_id="tenant-1",
-    )
+    body = client.put("/api/v1/chats/chat-1/sessions/session-1/messages/msg-1/feedback", json={"thumbup": True}).json()
 
-    body = json.loads(response.body)
     assert body["data"]["messages"][2]["thumbup"] is True
-    assert calls[0]["tenant_id"] == "tenant-1"
+    assert calls[0]["tenant_id"] == "tenant-unit"  # client 基线鉴权产物
     assert calls[0]["is_positive"] is True
     assert updates[0][2]["message"][2]["thumbup"] is True
 

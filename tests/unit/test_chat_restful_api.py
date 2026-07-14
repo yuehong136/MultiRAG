@@ -209,12 +209,17 @@ def test_update_payload_allows_knowledge_placeholder_without_sources(monkeypatch
     assert payload["prompt_config"]["system"] == "Answer with {knowledge}"
 
 
-def test_list_chats_returns_restful_shape(monkeypatch):
+def test_list_chats_returns_restful_shape(client, monkeypatch):
+    """HTTP 契约式（路由切 AsyncSession 后直调形态失效）：桩保留类型契约。"""
+    from sqlalchemy.orm import Session as _SyncSession
+
     _install_common_fakes(monkeypatch)
+    sessions: list[object] = []
 
     def fake_get_by_tenant_ids(_db, joined, user_id, page, page_size, orderby, desc, keywords, *, id=None, name=None):
+        sessions.append(_db)
         assert joined == []
-        assert user_id == "tenant-1"
+        assert user_id == "tenant-unit"
         assert page == 0
         assert page_size == 0
         assert orderby == "create_time"
@@ -225,7 +230,7 @@ def test_list_chats_returns_restful_shape(monkeypatch):
         return [
             {
                 "id": "chat-1",
-                "tenant_id": "tenant-1",
+                "tenant_id": "tenant-unit",
                 "name": "Support Bot",
                 "kb_ids": ["kb-1"],
             }
@@ -233,24 +238,16 @@ def test_list_chats_returns_restful_shape(monkeypatch):
 
     monkeypatch.setattr(chat_api.DialogService, "get_by_tenant_ids", fake_get_by_tenant_ids)
 
-    response = chat_api.list_chats(
-        id="chat-1",
-        name=None,
-        keywords="",
-        page=0,
-        page_size=0,
-        orderby="create_time",
-        desc=True,
-        owner_ids=None,
-        db=object(),
-        tenant_id="tenant-1",
-    )
-    body = response.body.decode()
+    resp = client.get("/api/v1/chats?id=chat-1&page=0&page_size=0")
 
-    assert '"chats"' in body
-    assert '"total":1' in body
-    assert '"dataset_ids":["kb-1"]' in body
-    assert '"kb_names":["Dataset One"]' in body
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["total"] == 1
+    chat = body["data"]["chats"][0]
+    assert chat["dataset_ids"] == ["kb-1"]
+    assert chat["kb_names"] == ["Dataset One"]
+    assert sessions and all(isinstance(s, _SyncSession) for s in sessions)  # run_sync 同步 facade
 
 
 def test_build_session_response_renames_chat_fields():
@@ -270,9 +267,10 @@ def test_build_session_response_renames_chat_fields():
     assert "_sa_instance_state" not in result
 
 
-def test_list_sessions_uses_restful_shape_and_all_rows(monkeypatch):
+def test_list_sessions_uses_restful_shape_and_all_rows(client, monkeypatch):
+    """HTTP 契约式：所有权校验经真实 _owned_chat_exists 走 DialogService 桩。"""
     captured = {}
-    monkeypatch.setattr(chat_api, "_owned_chat_exists", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(chat_api.DialogService, "query", lambda _db, **_kw: [Obj(id="chat-1")])
 
     def fake_get_list(_db, chat_id, page, page_size, orderby, desc, session_id, name, user_id):
         captured.update(
@@ -298,20 +296,9 @@ def test_list_sessions_uses_restful_shape_and_all_rows(monkeypatch):
 
     monkeypatch.setattr(chat_api.ConversationService, "get_list", fake_get_list)
 
-    response = chat_api.list_sessions(
-        "chat-1",
-        id="session-1",
-        name="Demo",
-        page=1,
-        page_size=0,
-        orderby="create_time",
-        desc=True,
-        user_id="user-1",
-        db=object(),
-        tenant_id="tenant-1",
-    )
-    body = json.loads(response.body)
+    resp = client.get("/api/v1/chats/chat-1/sessions?id=session-1&name=Demo&page=1&page_size=0&user_id=user-1")
 
+    body = resp.json()
     assert captured == {
         "chat_id": "chat-1",
         "page": 1,
@@ -326,27 +313,16 @@ def test_list_sessions_uses_restful_shape_and_all_rows(monkeypatch):
     assert body["data"][0]["messages"][0]["content"] == "hello"
 
 
-def test_update_session_rejects_message_and_reference_changes(monkeypatch):
-    monkeypatch.setattr(chat_api, "_owned_chat_exists", lambda *_args, **_kwargs: True)
+def test_update_session_rejects_message_and_reference_changes(client, monkeypatch):
+    """HTTP 契约式：所有权校验经真实 _owned_chat_exists 走 DialogService 桩。"""
+    monkeypatch.setattr(chat_api.DialogService, "query", lambda _db, **_kw: [Obj(id="chat-1")])
     monkeypatch.setattr(chat_api.ConversationService, "query", lambda *_args, **_kwargs: [Obj(id="session-1")])
 
-    response = chat_api.update_session(
-        "chat-1",
-        "session-1",
-        chat_api.UpdateSessionRequest.model_validate({"messages": []}),
-        db=object(),
-        tenant_id="tenant-1",
-    )
-    assert json.loads(response.body)["message"] == "`messages` cannot be changed."
+    messages = client.put("/api/v1/chats/chat-1/sessions/session-1", json={"messages": []}).json()
+    assert messages["message"] == "`messages` cannot be changed."
 
-    response = chat_api.update_session(
-        "chat-1",
-        "session-1",
-        chat_api.UpdateSessionRequest.model_validate({"reference": []}),
-        db=object(),
-        tenant_id="tenant-1",
-    )
-    assert json.loads(response.body)["message"] == "`reference` cannot be changed."
+    reference = client.put("/api/v1/chats/chat-1/sessions/session-1", json={"reference": []}).json()
+    assert reference["message"] == "`reference` cannot be changed."
 
 
 def test_session_completion_non_stream_uses_session_rest_path(monkeypatch):
