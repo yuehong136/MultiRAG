@@ -201,14 +201,14 @@ class _BlobLikeBase(SyncBase):
             )
         )
 
-        begin_info = "totally" if task["reindex"] == "1" or not task["poll_range_start"] else "from {}".format(task["poll_range_start"])
+        _begin_info = "totally" if task["reindex"] == "1" or not task["poll_range_start"] else "from {}".format(task["poll_range_start"])
 
         logging.info(
             "Connect to {}: {}(prefix/{}) {}".format(
                 bucket_type,
                 self.conf["bucket_name"],
                 self.conf.get("prefix", ""),
-                begin_info,
+                _begin_info,
             )
         )
         return document_batch_generator
@@ -293,10 +293,10 @@ class Confluence(SyncBase):
         # Determine the time range for synchronization based on reindex or poll_range_start
         if task["reindex"] == "1" or not task["poll_range_start"]:
             start_time = 0.0
-            begin_info = "totally"
+            _begin_info = "totally"
         else:
             start_time = task["poll_range_start"].timestamp()
-            begin_info = f"from {task['poll_range_start']}"
+            _begin_info = f"from {task['poll_range_start']}"
 
         end_time = datetime.now(UTC).timestamp()
 
@@ -339,7 +339,7 @@ class Confluence(SyncBase):
         def wrapper():
             yield from document_batches()
 
-        logging.info("Connect to Confluence: {} {}".format(self.conf["wiki_base"], begin_info))
+        logging.info("Connect to Confluence: {} {}".format(self.conf["wiki_base"], _begin_info))
         return wrapper()
 
 
@@ -360,10 +360,10 @@ class IMAP(SyncBase):
         end_time = datetime.now(UTC).timestamp()
         if task["reindex"] == "1" or not task["poll_range_start"]:
             start_time = end_time - self.conf.get("poll_range", 30) * 24 * 60 * 60
-            begin_info = "totally"
+            _begin_info = "totally"
         else:
             start_time = task["poll_range_start"].timestamp()
-            begin_info = f"from {task['poll_range_start']}"
+            _begin_info = f"from {task['poll_range_start']}"
         raw_batch_size = self.conf.get("sync_batch_size") or self.conf.get("batch_size") or INDEX_BATCH_SIZE
         try:
             batch_size = int(raw_batch_size)
@@ -408,7 +408,7 @@ class IMAP(SyncBase):
             self.conf["imap_port"],
             self.conf["credentials"]["imap_username"],
             self.conf["imap_mailbox"],
-            begin_info,
+            _begin_info,
         )
         return wrapper()
 
@@ -423,10 +423,10 @@ class Zendesk(SyncBase):
         end_time = datetime.now(UTC).timestamp()
         if task["reindex"] == "1" or not task.get("poll_range_start"):
             start_time = 0
-            begin_info = "totally"
+            _begin_info = "totally"
         else:
             start_time = task["poll_range_start"].timestamp()
-            begin_info = f"from {task['poll_range_start']}"
+            _begin_info = f"from {task['poll_range_start']}"
 
         raw_batch_size = self.conf.get("sync_batch_size") or self.conf.get("batch_size") or INDEX_BATCH_SIZE
         try:
@@ -477,7 +477,7 @@ class Zendesk(SyncBase):
         logging.info(
             "Connect to Zendesk: subdomain(%s) %s",
             self.conf["credentials"].get("zendesk_subdomain"),
-            begin_info,
+            _begin_info,
         )
 
         return wrapper()
@@ -495,8 +495,8 @@ class Notion(SyncBase):
             else self.connector.poll_source(task["poll_range_start"].timestamp(), datetime.now(UTC).timestamp())
         )
 
-        begin_info = "totally" if task["reindex"] == "1" or not task["poll_range_start"] else "from {}".format(task["poll_range_start"])
-        logging.info("Connect to Notion: root({}) {}".format(self.conf["root_page_id"], begin_info))
+        _begin_info = "totally" if task["reindex"] == "1" or not task["poll_range_start"] else "from {}".format(task["poll_range_start"])
+        logging.info("Connect to Notion: root({}) {}".format(self.conf["root_page_id"], _begin_info))
         return document_generator
 
 
@@ -521,8 +521,8 @@ class Discord(SyncBase):
             else self.connector.poll_source(task["poll_range_start"].timestamp(), datetime.now(UTC).timestamp())
         )
 
-        begin_info = "totally" if task["reindex"] == "1" or not task["poll_range_start"] else "from {}".format(task["poll_range_start"])
-        logging.info(f"Connect to Discord: servers({server_ids}),  channel({channel_names}) {begin_info}")
+        _begin_info = "totally" if task["reindex"] == "1" or not task["poll_range_start"] else "from {}".format(task["poll_range_start"])
+        logging.info(f"Connect to Discord: servers({server_ids}),  channel({channel_names}) {_begin_info}")
         return document_generator
 
 
@@ -567,7 +567,7 @@ class Gmail(SyncBase):
         if task["reindex"] == "1" or not task.get("poll_range_start"):
             start_time = None
             end_time = None
-            begin_info = "totally"
+            _begin_info = "totally"
             document_generator = self.connector.load_from_state()
         else:
             poll_start = task["poll_range_start"]
@@ -575,19 +575,19 @@ class Gmail(SyncBase):
             if poll_start is None:
                 start_time = None
                 end_time = None
-                begin_info = "totally"
+                _begin_info = "totally"
                 document_generator = self.connector.load_from_state()
             else:
                 start_time = poll_start.timestamp()
                 end_time = datetime.now(UTC).timestamp()
-                begin_info = f"from {poll_start}"
+                _begin_info = f"from {poll_start}"
                 document_generator = self.connector.poll_source(start_time, end_time)
 
         try:
             admin_email = self.connector.primary_admin_email
         except RuntimeError:
             admin_email = "unknown"
-        logging.info(f"Connect to Gmail as {admin_email} {begin_info}")
+        logging.info(f"Connect to Gmail as {admin_email} {_begin_info}")
         return document_generator
 
 
@@ -600,13 +600,13 @@ class Dropbox(SyncBase):
 
         if task["reindex"] == "1" or not task["poll_range_start"]:
             document_generator = self.connector.load_from_state()
-            begin_info = "totally"
+            _begin_info = "totally"
         else:
             poll_start = task["poll_range_start"]
             document_generator = self.connector.poll_source(poll_start.timestamp(), datetime.now(UTC).timestamp())
-            begin_info = f"from {poll_start}"
+            _begin_info = f"from {poll_start}"
 
-        logging.info(f"[Dropbox] Connect to Dropbox {begin_info}")
+        logging.info(f"[Dropbox] Connect to Dropbox {_begin_info}")
         return document_generator
 
 
@@ -637,10 +637,10 @@ class GoogleDrive(SyncBase):
 
         if task["reindex"] == "1" or not task["poll_range_start"]:
             start_time = 0.0
-            begin_info = "totally"
+            _begin_info = "totally"
         else:
             start_time = task["poll_range_start"].timestamp()
-            begin_info = f"from {task['poll_range_start']}"
+            _begin_info = f"from {task['poll_range_start']}"
 
         end_time = datetime.now(UTC).timestamp()
         raw_batch_size = self.conf.get("sync_batch_size") or self.conf.get("batch_size") or INDEX_BATCH_SIZE
@@ -683,7 +683,7 @@ class GoogleDrive(SyncBase):
             admin_email = self.connector.primary_admin_email
         except RuntimeError:
             admin_email = "unknown"
-        logging.info(f"Connect to Google Drive as {admin_email} {begin_info}")
+        logging.info(f"Connect to Google Drive as {admin_email} {_begin_info}")
         return document_batches()
 
     def _persist_rotated_credentials(self, connector_id: str, credentials: dict[str, Any]) -> None:
@@ -731,10 +731,10 @@ class Jira(SyncBase):
 
         if task["reindex"] == "1" or not task["poll_range_start"]:
             start_time = 0.0
-            begin_info = "totally"
+            _begin_info = "totally"
         else:
             start_time = task["poll_range_start"].timestamp()
-            begin_info = f"from {task['poll_range_start']}"
+            _begin_info = f"from {task['poll_range_start']}"
 
         end_time = datetime.now(UTC).timestamp()
 
@@ -784,7 +784,7 @@ class Jira(SyncBase):
         logging.info(
             "[Jira] Connect to Jira %s %s (start=%s, end=%s, sync_batch_size=%s, overlap_buffer_s=%s)",
             connector_kwargs["jira_base_url"],
-            begin_info,
+            _begin_info,
             start_time,
             end_time,
             batch_size,
@@ -835,15 +835,15 @@ class WebDAV(SyncBase):
         if task["reindex"] == "1" or not task["poll_range_start"]:
             logging.info("Using load_from_state (full sync)")
             document_batch_generator = self.connector.load_from_state()
-            begin_info = "totally"
+            _begin_info = "totally"
         else:
             start_ts = task["poll_range_start"].timestamp()
             end_ts = datetime.now(UTC).timestamp()
             logging.info(f"Polling WebDAV from {task['poll_range_start']} (ts: {start_ts}) to now (ts: {end_ts})")
             document_batch_generator = self.connector.poll_source(start_ts, end_ts)
-            begin_info = "from {}".format(task["poll_range_start"])
+            _begin_info = "from {}".format(task["poll_range_start"])
 
-        logging.info("Connect to WebDAV: {}(path: {}) {}".format(self.conf["base_url"], self.conf.get("remote_path", "/"), begin_info))
+        logging.info("Connect to WebDAV: {}(path: {}) {}".format(self.conf["base_url"], self.conf.get("remote_path", "/"), _begin_info))
 
         def wrapper():
             yield from document_batch_generator
@@ -864,15 +864,15 @@ class Moodle(SyncBase):
 
         if task["reindex"] == "1" or poll_start is None:
             document_generator = self.connector.load_from_state()
-            begin_info = "totally"
+            _begin_info = "totally"
         else:
             document_generator = self.connector.poll_source(
                 poll_start.timestamp(),
                 datetime.now(UTC).timestamp(),
             )
-            begin_info = f"from {poll_start}"
+            _begin_info = f"from {poll_start}"
 
-        logging.info("Connect to Moodle: {} {}".format(self.conf["moodle_url"], begin_info))
+        logging.info("Connect to Moodle: {} {}".format(self.conf["moodle_url"], _begin_info))
         return document_generator
 
 
@@ -904,14 +904,14 @@ class BOX(SyncBase):
 
         if task["reindex"] == "1" or poll_start is None:
             document_generator = self.connector.load_from_state()
-            begin_info = "totally"
+            _begin_info = "totally"
         else:
             document_generator = self.connector.poll_source(
                 poll_start.timestamp(),
                 datetime.now(UTC).timestamp(),
             )
-            begin_info = f"from {poll_start}"
-        logging.info("Connect to Box: folder_id({}) {}".format(self.conf["folder_id"], begin_info))
+            _begin_info = f"from {poll_start}"
+        logging.info("Connect to Box: folder_id({}) {}".format(self.conf["folder_id"], _begin_info))
         return document_generator
 
 
@@ -938,19 +938,19 @@ class Airtable(SyncBase):
 
         if task.get("reindex") == "1" or poll_start is None:
             document_generator = self.connector.load_from_state()
-            begin_info = "totally"
+            _begin_info = "totally"
         else:
             document_generator = self.connector.poll_source(
                 poll_start.timestamp(),
                 datetime.now(UTC).timestamp(),
             )
-            begin_info = f"from {poll_start}"
+            _begin_info = f"from {poll_start}"
 
         logging.info(
             "Connect to Airtable: base_id(%s), table(%s) %s",
             self.conf.get("base_id"),
             self.conf.get("table_name_or_id"),
-            begin_info,
+            _begin_info,
         )
 
         return document_generator
@@ -973,25 +973,25 @@ class Asana(SyncBase):
 
         if task.get("reindex") == "1" or not task.get("poll_range_start"):
             document_generator = self.connector.load_from_state()
-            begin_info = "totally"
+            _begin_info = "totally"
         else:
             poll_start = task.get("poll_range_start")
             if poll_start is None:
                 document_generator = self.connector.load_from_state()
-                begin_info = "totally"
+                _begin_info = "totally"
             else:
                 document_generator = self.connector.poll_source(
                     poll_start.timestamp(),
                     datetime.now(UTC).timestamp(),
                 )
-                begin_info = f"from {poll_start}"
+                _begin_info = f"from {poll_start}"
 
         logging.info(
             "Connect to Asana: workspace_id(%s), project_ids(%s), team_id(%s) %s",
             self.conf.get("asana_workspace_id"),
             self.conf.get("asana_project_ids"),
             self.conf.get("asana_team_id"),
-            begin_info,
+            _begin_info,
         )
 
         return document_generator
@@ -1022,10 +1022,10 @@ class Github(SyncBase):
         file_list = None
         if task.get("reindex") == "1" or not task.get("poll_range_start"):
             start_time = datetime.fromtimestamp(0, tz=UTC)
-            begin_info = "totally"
+            _begin_info = "totally"
         else:
             start_time = task.get("poll_range_start")
-            begin_info = f"from {start_time}"
+            _begin_info = f"from {start_time}"
             if self.conf.get("sync_deleted_files"):
                 file_list = []
                 for slim_batch in self.connector.retrieve_all_slim_docs_perm_sync():
@@ -1058,7 +1058,7 @@ class Github(SyncBase):
             "Connect to Github: org_name(%s), repo_names(%s) for %s",
             self.conf.get("repository_owner"),
             self.conf.get("repository_name"),
-            begin_info,
+            _begin_info,
         )
 
         if file_list is not None:
@@ -1091,16 +1091,16 @@ class Gitlab(SyncBase):
 
         if task["reindex"] == "1" or not task["poll_range_start"]:
             document_generator = self.connector.load_from_state()
-            begin_info = "totally"
+            _begin_info = "totally"
         else:
             poll_start = task["poll_range_start"]
             if poll_start is None:
                 document_generator = self.connector.load_from_state()
-                begin_info = "totally"
+                _begin_info = "totally"
             else:
                 document_generator = self.connector.poll_source(poll_start.timestamp(), datetime.now(UTC).timestamp())
-                begin_info = f"from {poll_start}"
-        logging.info("Connect to Gitlab: ({}) {}".format(self.conf["project_name"], begin_info))
+                _begin_info = f"from {poll_start}"
+        logging.info("Connect to Gitlab: ({}) {}".format(self.conf["project_name"], _begin_info))
         return document_generator
 
 
@@ -1123,10 +1123,10 @@ class Bitbucket(SyncBase):
 
         if task["reindex"] == "1" or not task["poll_range_start"]:
             start_time = datetime.fromtimestamp(0, tz=UTC)
-            begin_info = "totally"
+            _begin_info = "totally"
         else:
             start_time = task.get("poll_range_start")
-            begin_info = f"from {start_time}"
+            _begin_info = f"from {start_time}"
 
         end_time = datetime.now(UTC)
 
@@ -1153,7 +1153,7 @@ class Bitbucket(SyncBase):
         logging.info(
             "Connect to Bitbucket: workspace(%s), %s",
             self.conf.get("workspace"),
-            begin_info,
+            _begin_info,
         )
 
         return wrapper()
@@ -1177,13 +1177,13 @@ class SeaFile(SyncBase):
         poll_start = task.get("poll_range_start")
         if task["reindex"] == "1" or poll_start is None:
             document_generator = self.connector.load_from_state()
-            begin_info = "totally"
+            _begin_info = "totally"
         else:
             document_generator = self.connector.poll_source(
                 poll_start.timestamp(),
                 datetime.now(UTC).timestamp(),
             )
-            begin_info = f"from {poll_start}"
+            _begin_info = f"from {poll_start}"
 
         scope = conf.get("sync_scope", "account")
         extra = ""
@@ -1197,7 +1197,7 @@ class SeaFile(SyncBase):
             conf["seafile_url"],
             scope,
             extra,
-            begin_info,
+            _begin_info,
         )
         return document_generator
 
@@ -1225,19 +1225,19 @@ class DingTalkAITable(SyncBase):
 
         if task.get("reindex") == "1" or poll_start is None:
             document_generator = self.connector.load_from_state()
-            begin_info = "totally"
+            _begin_info = "totally"
         else:
             document_generator = self.connector.poll_source(
                 poll_start.timestamp(),
                 datetime.now(UTC).timestamp(),
             )
-            begin_info = f"from {poll_start}"
+            _begin_info = f"from {poll_start}"
 
         logging.info(
             "Connect to DingTalk AI Table: table_id(%s), operator_id(%s) %s",
             self.conf.get("table_id"),
             self.conf.get("operator_id"),
-            begin_info,
+            _begin_info,
         )
 
         return document_generator
@@ -1269,13 +1269,13 @@ class MySQL(SyncBase):
 
         if task["reindex"] == "1" or not task["poll_range_start"]:
             document_generator = self.connector.load_from_state()
-            begin_info = "totally"
+            _begin_info = "totally"
         else:
             poll_start = task["poll_range_start"]
             document_generator = self.connector.poll_source(poll_start.timestamp(), datetime.now(UTC).timestamp())
-            begin_info = f"from {poll_start}"
+            _begin_info = f"from {poll_start}"
 
-        logging.info(f"[MySQL] Connect to {self.conf.get('host')}:{self.conf.get('database')} {begin_info}")
+        logging.info(f"[MySQL] Connect to {self.conf.get('host')}:{self.conf.get('database')} {_begin_info}")
         return document_generator
 
 
@@ -1305,13 +1305,13 @@ class PostgreSQL(SyncBase):
 
         if task["reindex"] == "1" or not task["poll_range_start"]:
             document_generator = self.connector.load_from_state()
-            begin_info = "totally"
+            _begin_info = "totally"
         else:
             poll_start = task["poll_range_start"]
             document_generator = self.connector.poll_source(poll_start.timestamp(), datetime.now(UTC).timestamp())
-            begin_info = f"from {poll_start}"
+            _begin_info = f"from {poll_start}"
 
-        logging.info(f"[PostgreSQL] Connect to {self.conf.get('host')}:{self.conf.get('database')} {begin_info}")
+        logging.info(f"[PostgreSQL] Connect to {self.conf.get('host')}:{self.conf.get('database')} {_begin_info}")
         return document_generator
 
 

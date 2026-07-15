@@ -39,7 +39,7 @@ from sklearn.metrics import silhouette_score
 
 from common import settings
 from common.file_utils import get_project_base_directory
-from common.misc_utils import pip_install_torch, thread_pool_exec
+from common.misc_utils import thread_pool_exec
 from core.nlp import rag_tokenizer
 from core.prompts.generator import vision_llm_describe_prompt
 from deepdoc.parser.utils import extract_pdf_outlines
@@ -87,14 +87,9 @@ class RAGFlowPdfParser:
         self.tbl_det = TableStructureRecognizer()
 
         self.updown_cnt_mdl = xgb.Booster()
-        try:
-            pip_install_torch()
-            import torch.cuda
-
-            if torch.cuda.is_available():
-                self.updown_cnt_mdl.set_param({"device": "cuda"})
-        except Exception:
-            logging.info("No torch found.")
+        # xgboost model is very small; using CPU explicitly
+        self.updown_cnt_mdl.set_param({"device": "cpu"})
+        logging.info("updown_cnt_mdl initialized on CPU")
         try:
             model_dir = os.path.join(get_project_base_directory(), "core/res/deepdoc")
             self.updown_cnt_mdl.load_model(os.path.join(model_dir, "updown_concat_xgb.model"))
