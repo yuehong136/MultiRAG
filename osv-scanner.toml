@@ -76,6 +76,10 @@ reason = "pytest 修复线 9.0.3 为大版本升级（别名 PYSEC-2026-1845；d
 id = "GHSA-gc5v-m9x4-r6x2"
 reason = "requests 修复线 2.33.0 被 arxiv==2.1.3 pin <2.33 挡死；CVSS 4.4 低危。复查：arxiv 升级时。"
 
+[[IgnoredVulns]]
+id = "GHSA-h35f-9h28-mq5c"
+reason = "setuptools 修复线 83.0.0 被 infinity-sdk pin <81 挡死（别名 PYSEC-2026-3447/CVE-2026-59890，0.7.0 正式版仍未放开）；CVSS 6.1。复查：infinity-sdk 放开 pin。"
+
 # starlette：0.50.0 已是 FastAPI 约束区间内可达的最新，以下修复线全部在 1.x，
 # 随 FastAPI 升级 starlette 1.x 支持时统一解决。复查：FastAPI 放开 starlette 1.x。
 [[IgnoredVulns]]
