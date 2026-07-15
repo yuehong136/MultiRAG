@@ -382,11 +382,11 @@ hierarchy = await hierarchical_merge(chunks, ...)
 
 ```bash
 # 测试所有 utils
-python -m pytest tests/test_flow_utils.py
+python -m pytest tests/unit/test_flow_utils_parser.py tests/unit/test_flow_utils_chunker.py
 
 # 测试特定组件
-python -m pytest tests/test_flow_utils.py -k "parser"
-python -m pytest tests/test_flow_utils.py -k "splitter"
+python -m pytest tests/unit/test_flow_utils_parser.py
+python -m pytest tests/unit/test_flow_utils_chunker.py
 ```
 
 ## 🎯 设计原则
