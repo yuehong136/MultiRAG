@@ -9,6 +9,7 @@ from typing import Annotated
 import click
 import httpx
 from fastmcp import Context, FastMCP
+from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_headers
 from fastmcp.server.http import RequestContextMiddleware, create_sse_app, create_streamable_http_app
 from pydantic import Field
@@ -81,7 +82,7 @@ def _resolve_api_key() -> str:
     headers = get_http_headers()
     token = _extract_token_from_headers(headers)
     if not token:
-        raise ValueError("MultiRAG API key or Bearer token is required.")
+        raise ToolError("MultiRAG API key or Bearer token is required.")
     return token
 
 
@@ -91,6 +92,9 @@ def _resolve_api_key() -> str:
 class MultiRAGConnector:
     _MAX_DATASET_CACHE = 32
     _CACHE_TTL = 300
+    # 后端 /api/v1/datasets 目前未对 page_size 设上限；若 RESTful 层将来引入
+    # max page size，此值必须同步下调，否则超限请求会被静默截断。
+    _DATASET_PAGE_SIZE = 1000
 
     def __init__(self, base_url: str, version: str = "v1"):
         self.base_url = base_url
@@ -169,15 +173,54 @@ class MultiRAGConnector:
 
     # -- Public API ---------------------------------------------------------
 
+    async def _fetch_datasets_page(
+        self,
+        *,
+        api_key: str,
+        page: int,
+        page_size: int,
+        orderby: str = "create_time",
+        desc: bool = True,
+        id: str | None = None,
+        name: str | None = None,
+    ) -> dict:
+        """Fetch one structured page of accessible datasets from the backend API."""
+        params: dict = {"page": page, "page_size": page_size, "orderby": orderby, "desc": desc}
+        if id:
+            params["id"] = id
+        if name:
+            params["name"] = name
+
+        res = await self._get("/datasets", api_key, params)
+        if res is None or res.status_code != 200:
+            error_message = None
+            if res is not None:
+                try:
+                    error_message = res.json().get("message")
+                except Exception:
+                    error_message = None
+            raise ToolError(error_message or "Cannot process this operation.")
+
+        res_json = res.json()
+        if res_json.get("code") != 0:
+            raise ToolError(res_json.get("message") or "Cannot process this operation.")
+
+        return res_json
+
     async def list_datasets_structured(self, api_key: str) -> list[dict]:
-        """Return all datasets with normalized SDK-facing metadata fields."""
-        res = await self._get("/datasets", api_key, {"page": 1, "page_size": 1000, "orderby": "create_time", "desc": True})
-        if not res:
-            raise ValueError("Cannot process this operation.")
-        data = res.json()
-        if data.get("code") == 0:
-            datasets: list[dict] = []
-            for d in data.get("data", []):
+        """Return all accessible datasets with normalized SDK-facing metadata fields."""
+        datasets: list[dict] = []
+        seen_ids: set[str] = set()
+        page = 1
+
+        while True:
+            logging.debug("list_datasets_structured fetching /datasets page=%s page_size=%s", page, self._DATASET_PAGE_SIZE)
+            res_json = await self._fetch_datasets_page(api_key=api_key, page=page, page_size=self._DATASET_PAGE_SIZE)
+            page_datasets = res_json.get("data", [])
+            for d in page_datasets:
+                if not d.get("id") or d["id"] in seen_ids:
+                    continue
+                seen_ids.add(d["id"])
                 embedding_model = d.get("embedding_model") or d.get("embd_id", "")
                 datasets.append(
                     {
@@ -189,17 +232,25 @@ class MultiRAGConnector:
                         "embd_id": embedding_model,
                     }
                 )
-            return datasets
-        return []
+            total = res_json.get("total")
+            # total 缺失时保守收敛到单页，避免异常响应导致死循环。
+            if not page_datasets or total is None or len(seen_ids) >= total:
+                break
+            page += 1
+
+        logging.info("list_datasets_structured resolved %s accessible datasets", len(datasets))
+        return datasets
 
     @staticmethod
     def _embedding_model_from_dataset(dataset: dict) -> str:
         return dataset.get("embedding_model") or dataset.get("embd_id") or ""
 
     async def _resolve_retrieval_dataset_ids(self, api_key: str, dataset_ids: list[str]) -> list[str]:
+        if not dataset_ids:
+            logging.info("MCP retrieval omitted dataset_ids; resolving accessible datasets")
         datasets = await self.list_datasets_structured(api_key)
         if not datasets:
-            raise ValueError("No accessible datasets available for retrieval.")
+            raise ToolError("No accessible datasets available for retrieval.")
 
         selected = datasets
         if dataset_ids:
@@ -208,7 +259,7 @@ class MultiRAGConnector:
             found_ids = {d["id"] for d in selected}
             missing_ids = [dataset_id for dataset_id in dataset_ids if dataset_id not in found_ids]
             if missing_ids:
-                raise ValueError("Unknown or inaccessible dataset_ids: " + ", ".join(missing_ids))
+                raise ToolError("Unknown or inaccessible dataset_ids: " + ", ".join(missing_ids))
 
         grouped: dict[str, list[dict]] = {}
         for dataset in selected:
@@ -216,7 +267,7 @@ class MultiRAGConnector:
 
         if len(grouped) > 1:
             group_desc = "; ".join(f"{embedding_model or '<unknown>'}: " + ", ".join(dataset.get("name") or dataset["id"] for dataset in group) for embedding_model, group in grouped.items())
-            raise ValueError(f"Selected datasets use different embedding_model values. Choose dataset_ids from a single embedding_model group. Available groups: {group_desc}")
+            raise ToolError(f"Selected datasets use different embedding_model values. Choose dataset_ids from a single embedding_model group. Available groups: {group_desc}")
 
         return [dataset["id"] for dataset in selected]
 
@@ -255,15 +306,15 @@ class MultiRAGConnector:
 
         res = await self._post("/retrieval", api_key, json=data_json)
         if not res:
-            raise ValueError("Cannot process this operation.")
+            raise ToolError("Cannot process this operation.")
 
         res_data = res.json()
         if res_data.get("code") != 0:
             msg = res_data.get("message") or res_data.get("retmsg") or json.dumps(res_data, ensure_ascii=False)
-            raise ValueError(f"Retrieval API error: {msg}")
+            raise ToolError(f"Retrieval API error: {msg}")
         data = res_data.get("data")
         if not isinstance(data, dict):
-            raise ValueError("Retrieval API returned success without a valid data payload: " + json.dumps(res_data, ensure_ascii=False))
+            raise ToolError("Retrieval API returned success without a valid data payload: " + json.dumps(res_data, ensure_ascii=False))
 
         chunks = []
 
