@@ -89,26 +89,49 @@
                                     "attachments"
                                 ]
                             },
-                            "text&markdown": {
-                                "output_format": "text",
-                                "suffix": [
-                                    "md",
-                                    "markdown",
-                                    "mdx",
-                                    "txt"
-                                ]
-                            },
-                            "word": {
-                                "output_format": "json",
-                                "suffix": [
-                                    "doc",
-                                    "docx"
-                                ]
-                            },
                             "slides": {
                                 "output_format": "json",
                                 "suffix": [
                                     "pptx"
+                                ]
+                            },
+                            "markdown": {
+                                "output_format": "text",
+                                "suffix": [
+                                    "md",
+                                    "markdown",
+                                    "mdx"
+                                ]
+                            },
+                            "text&code": {
+                                "output_format": "text",
+                                "suffix": [
+                                    "txt",
+                                    "py",
+                                    "js",
+                                    "java",
+                                    "c",
+                                    "cpp",
+                                    "h",
+                                    "php",
+                                    "go",
+                                    "ts",
+                                    "sh",
+                                    "cs",
+                                    "kt",
+                                    "sql"
+                                ]
+                            },
+                            "doc": {
+                                "output_format": "json",
+                                "suffix": [
+                                    "doc"
+                                ]
+                            },
+                            "docx": {
+                                "output_format": "json",
+                                "suffix": [
+                                    "docx"
                                 ]
                             }
                         }
@@ -274,11 +297,19 @@
                                     "output_format": "text"
                                 },
                                 {
-                                    "fileFormat": "text&markdown",
+                                    "fileFormat": "markdown",
                                     "output_format": "text"
                                 },
                                 {
-                                    "fileFormat": "word",
+                                    "fileFormat": "text&code",
+                                    "output_format": "text"
+                                },
+                                {
+                                    "fileFormat": "doc",
+                                    "output_format": "json"
+                                },
+                                {
+                                    "fileFormat": "docx",
                                     "output_format": "json"
                                 },
                                 {

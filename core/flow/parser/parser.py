@@ -69,7 +69,11 @@ class ParserParam(ProcessParamBase):
                 "markdown",
                 "html",
             ],
-            "word": [
+            "doc": [
+                "json",
+                "markdown",
+            ],
+            "docx": [
                 "json",
                 "markdown",
             ],
@@ -80,8 +84,8 @@ class ParserParam(ProcessParamBase):
                 "json",
             ],
             "email": ["text", "json"],
-            "text&markdown": ["text", "json"],
-            "code": [
+            "markdown": ["text", "json"],
+            "text&code": [
                 "text",
                 "json",
             ],
@@ -116,21 +120,28 @@ class ParserParam(ProcessParamBase):
                     "csv",
                 ],
             },
-            "word": {
+            "doc": {
                 "remove_toc": False,
                 "suffix": [
                     "doc",
+                ],
+                "output_format": "json",
+            },
+            "docx": {
+                "remove_toc": False,
+                "suffix": [
                     "docx",
                 ],
                 "output_format": "json",
             },
-            "text&markdown": {
-                "suffix": ["md", "markdown", "mdx", "txt"],
+            "markdown": {
+                "suffix": ["md", "markdown", "mdx"],
                 "remove_toc": False,
                 "output_format": "json",
             },
-            "code": {
+            "text&code": {
                 "suffix": [
+                    "txt",
                     "py",
                     "js",
                     "java",
@@ -145,12 +156,12 @@ class ParserParam(ProcessParamBase):
                     "kt",
                     "sql",
                 ],
-                "output_format": "text",
+                "output_format": "json",
             },
             "html": {
                 "suffix": ["htm", "html"],
                 "remove_toc": "false",
-                "output_format": "text",
+                "output_format": "json",
             },
             "slides": {
                 "parse_method": "deepdoc",  # deepdoc/tcadp_parser
@@ -207,10 +218,15 @@ class ParserParam(ProcessParamBase):
             spreadsheet_output_format = spreadsheet_config.get("output_format", "")
             self.check_valid_value(spreadsheet_output_format, "Spreadsheet output format abnormal.", self.allowed_output_format["spreadsheet"])
 
-        doc_config = self.setups.get("word", "")
+        doc_config = self.setups.get("doc", "")
         if doc_config:
             doc_output_format = doc_config.get("output_format", "")
-            self.check_valid_value(doc_output_format, "Word processer document output format abnormal.", self.allowed_output_format["word"])
+            self.check_valid_value(doc_output_format, "DOC output format abnormal.", self.allowed_output_format["doc"])
+
+        docx_config = self.setups.get("docx", "")
+        if docx_config:
+            docx_output_format = docx_config.get("output_format", "")
+            self.check_valid_value(docx_output_format, "DOCX output format abnormal.", self.allowed_output_format["docx"])
 
         slides_config = self.setups.get("slides", "")
         if slides_config:
@@ -223,15 +239,15 @@ class ParserParam(ProcessParamBase):
             if image_parse_method not in ["ocr"]:
                 self.check_empty(image_config.get("lang", ""), "Image VLM language")
 
-        text_config = self.setups.get("text&markdown", "")
+        text_config = self.setups.get("markdown", "")
         if text_config:
             text_output_format = text_config.get("output_format", "")
-            self.check_valid_value(text_output_format, "Text output format abnormal.", self.allowed_output_format["text&markdown"])
+            self.check_valid_value(text_output_format, "Markdown output format abnormal.", self.allowed_output_format["markdown"])
 
-        code_config = self.setups.get("code", "")
+        code_config = self.setups.get("text&code", "")
         if code_config:
             code_output_format = code_config.get("output_format", "")
-            self.check_valid_value(code_output_format, "Code output format abnormal.", self.allowed_output_format["code"])
+            self.check_valid_value(code_output_format, "Text&Code output format abnormal.", self.allowed_output_format["text&code"])
 
         html_config = self.setups.get("html", "")
         if html_config:
@@ -765,9 +781,46 @@ class Parser(ProcessBase):
             elif conf.get("output_format") == "markdown":
                 self.set_output("markdown", spreadsheet_parser.markdown(blob))
 
-    def _word(self, name, blob, **kwargs):
-        self.callback(random.randint(1, 5) / 100.0, "Start to work on a Word Processor Document")
-        conf = self._param.setups["word"]
+    def _doc(self, name, blob, **kwargs):
+        self.callback(random.randint(1, 5) / 100.0, "Start to work on a DOC document")
+        conf = self._param.setups["doc"]
+        self.set_output("output_format", conf["output_format"])
+
+        self.set_output("file", {**kwargs.get("file", {}), "outlines": []})
+        try:
+            from tika import parser as tika_parser
+        except Exception as e:
+            msg = f"tika not available: {e}. Unsupported .doc parsing."
+            self.callback(0.8, msg)
+            logging.warning(f"{msg} for {name}.")
+            return
+
+        doc_parsed = tika_parser.from_buffer(io.BytesIO(blob))
+        content = doc_parsed.get("content")
+        if content is None:
+            msg = f"tika.parser got empty content from {name}."
+            self.callback(0.8, msg)
+            logging.warning(msg)
+            return
+
+        sections = [line.strip() for line in content.splitlines() if line and line.strip()]
+        if conf.get("remove_toc"):
+            sections = remove_toc_word(sections, [])
+
+        if conf.get("output_format") == "json":
+            self.set_output(
+                "json",
+                [{"text": line, "image": None, "doc_type_kwd": "text"} for line in sections],
+            )
+        elif conf.get("output_format") == "markdown":
+            # Tika gives us plain text lines, so join with blank lines to preserve paragraph boundaries in markdown.
+            self.set_output("markdown", "\n\n".join(sections))
+
+        self.callback(0.8, "Finish parsing.")
+
+    def _docx(self, name, blob, **kwargs):
+        self.callback(random.randint(1, 5) / 100.0, "Start to work on a DOCX document")
+        conf = self._param.setups["docx"]
         self.set_output("output_format", conf["output_format"])
 
         if re.search(r"\.doc$", name, re.IGNORECASE):
@@ -900,7 +953,7 @@ class Parser(ProcessBase):
         from core.nlp import concat_img
 
         self.callback(random.randint(1, 5) / 100.0, "Start to work on a markdown.")
-        conf = self._param.setups["text&markdown"]
+        conf = self._param.setups["markdown"]
         self.set_output("output_format", conf["output_format"])
 
         markdown_parser = naive_markdown_parser()
@@ -911,11 +964,6 @@ class Parser(ProcessBase):
             delimiter=conf.get("delimiter"),
             return_section_images=True,
         )
-        if name.lower().endswith(".txt") and conf.get("remove_toc") == "true":
-            sections, kept_indices = remove_toc(sections)
-            if section_images:
-                section_images = [section_images[i] for i in kept_indices if i < len(section_images)]
-
         if conf.get("output_format") == "json":
             json_results = []
 
@@ -946,8 +994,8 @@ class Parser(ProcessBase):
             self.set_output("text", "\n".join([section_text for section_text, _ in sections]))
 
     def _code(self, name, blob, **kwargs):
-        self.callback(random.randint(1, 5) / 100.0, "Start to work on a code or plain text file.")
-        conf = self._param.setups["code"]
+        self.callback(random.randint(1, 5) / 100.0, "Start to work on a text or code file.")
+        conf = self._param.setups["text&code"]
         self.set_output("output_format", conf["output_format"])
 
         sections = TxtParser()(
@@ -1200,12 +1248,13 @@ class Parser(ProcessBase):
     async def _invoke(self, **kwargs):
         function_map = {
             "pdf": self._pdf,
-            "text&markdown": self._markdown,
-            "code": self._code,
+            "markdown": self._markdown,
+            "text&code": self._code,
             "html": self._html,
             "spreadsheet": self._spreadsheet,
             "slides": self._slides,
-            "word": self._word,
+            "doc": self._doc,
+            "docx": self._docx,
             "image": self._image,
             "audio": self._audio,
             "video": self._video,

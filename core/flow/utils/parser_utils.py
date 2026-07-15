@@ -21,9 +21,10 @@ logger = logging.getLogger(__name__)
 _SETUP_CONFIG_KEYS = {
     "pdf": ("pdf", "pdf_config"),
     "spreadsheet": ("spreadsheet", "excel", "spreadsheet_config", "excel_config"),
-    "word": ("word", "word_config"),
-    "text&markdown": ("text&markdown", "markdown", "text", "markdown_config"),
-    "code": ("code", "code_config"),
+    "doc": ("doc", "doc_config", "word", "word_config"),
+    "docx": ("docx", "docx_config", "word", "word_config"),
+    "markdown": ("markdown", "text&markdown", "text", "markdown_config"),
+    "text&code": ("text&code", "code", "code_config"),
     "html": ("html", "html_config"),
     "slides": ("slides", "ppt", "ppt_config", "slides_config"),
     "image": ("image", "image_config"),
@@ -36,9 +37,10 @@ _SETUP_CONFIG_KEYS = {
 _METHOD_BY_SETUP = {
     "pdf": "_pdf",
     "spreadsheet": "_spreadsheet",
-    "word": "_word",
-    "text&markdown": "_markdown",
-    "code": "_code",
+    "doc": "_doc",
+    "docx": "_docx",
+    "markdown": "_markdown",
+    "text&code": "_code",
     "html": "_html",
     "slides": "_slides",
     "image": "_image",
@@ -84,7 +86,7 @@ def _normalize_image_config(config: dict | None) -> dict:
 
 def _normalize_setup_config(setup_key: str, config: dict | None) -> dict:
     normalized = dict(config or {})
-    if setup_key in {"text&markdown", "html"} and "remove_toc" in normalized:
+    if setup_key in {"markdown", "html"} and "remove_toc" in normalized:
         normalized["remove_toc"] = _normalize_bool_string(normalized["remove_toc"])
     if setup_key == "image":
         normalized = _normalize_image_config(normalized)
@@ -121,9 +123,10 @@ def _build_parser_param(
     direct_configs = {
         "pdf": pdf_config,
         "spreadsheet": excel_config,
-        "word": word_config,
-        "text&markdown": markdown_config,
-        "code": code_config,
+        "doc": word_config,
+        "docx": word_config,
+        "markdown": markdown_config,
+        "text&code": code_config,
         "html": html_config,
         "slides": slides_config,
         "image": image_config,

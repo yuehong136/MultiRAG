@@ -54,19 +54,42 @@
                                 ],
                                 "parse_method": "DeepDOC"
                             },
-                            "text&markdown": {
+                            "markdown": {
                                 "output_format": "text",
                                 "suffix": [
                                     "md",
                                     "markdown",
-                                    "mdx",
-                                    "txt"
+                                    "mdx"
                                 ]
                             },
-                            "word": {
+                            "text&code": {
+                                "output_format": "text",
+                                "suffix": [
+                                    "txt",
+                                    "py",
+                                    "js",
+                                    "java",
+                                    "c",
+                                    "cpp",
+                                    "h",
+                                    "php",
+                                    "go",
+                                    "ts",
+                                    "sh",
+                                    "cs",
+                                    "kt",
+                                    "sql"
+                                ]
+                            },
+                            "doc": {
                                 "output_format": "json",
                                 "suffix": [
-                                    "doc",
+                                    "doc"
+                                ]
+                            },
+                            "docx": {
+                                "output_format": "json",
+                                "suffix": [
                                     "docx"
                                 ]
                             }
@@ -182,11 +205,19 @@
                                     "parse_method": "DeepDOC"
                                 },
                                 {
-                                    "fileFormat": "text&markdown",
+                                    "fileFormat": "markdown",
                                     "output_format": "text"
                                 },
                                 {
-                                    "fileFormat": "word",
+                                    "fileFormat": "text&code",
+                                    "output_format": "text"
+                                },
+                                {
+                                    "fileFormat": "doc",
+                                    "output_format": "json"
+                                },
+                                {
+                                    "fileFormat": "docx",
                                     "output_format": "json"
                                 }
                             ]

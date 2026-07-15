@@ -44,29 +44,29 @@ def test_parser_image_outputs_json_image_chunk(monkeypatch):
     ]
 
 
-def test_parser_word_supports_doc_with_tika(monkeypatch):
+def test_parser_doc_parses_with_tika(monkeypatch):
     tika_module = ModuleType("tika")
     tika_parser = SimpleNamespace(from_buffer=lambda _buffer: {"content": "Title\n\nBody"})
     tika_module.parser = tika_parser
     monkeypatch.setitem(sys.modules, "tika", tika_module)
 
     param = ParserParam()
-    param.setups["word"]["output_format"] = "markdown"
-    param.setups["word"]["remove_toc"] = True
+    param.setups["doc"]["output_format"] = "markdown"
+    param.setups["doc"]["remove_toc"] = True
     parser = Parser.__new__(Parser)
     parser._param = param
     parser._canvas = SimpleNamespace(get_tenant_id=lambda: "tenant-1")
     parser.callback = lambda *args, **kwargs: None
     parser._id = "parser-1"
 
-    parser._word("legacy.doc", b"fake-doc")
+    parser._doc("legacy.doc", b"fake-doc")
 
     assert parser.output("file")["outlines"] == []
     assert parser.output("markdown") == "Title\n\nBody"
 
 
 @pytest.mark.asyncio
-async def test_parse_file_routes_doc_to_word_parser(monkeypatch):
+async def test_parse_file_routes_doc_to_doc_parser(monkeypatch):
     tika_module = ModuleType("tika")
     tika_parser = SimpleNamespace(from_buffer=lambda _buffer: {"content": "Legacy\nDoc"})
     tika_module.parser = tika_parser

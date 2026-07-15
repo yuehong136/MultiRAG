@@ -37,6 +37,21 @@ def test_parser_utils_routes_code_to_runtime_parser_json():
     assert result["json"] == [{"text": "print('hello')\n", "doc_type_kwd": "text"}]
 
 
+def test_parser_utils_routes_txt_to_text_code_runtime_parser():
+    result = asyncio.run(
+        parse_file(
+            "notes.txt",
+            b"line one\nline two\n",
+            tenant_id="tenant-1",
+        )
+    )
+
+    assert result["output_format"] == "json"
+    assert result["json"]
+    assert all(item["doc_type_kwd"] == "text" for item in result["json"])
+    assert "line one" in result["json"][0]["text"]
+
+
 def test_parser_utils_routes_html_to_runtime_parser_json():
     result = asyncio.run(
         parse_file(
@@ -78,12 +93,17 @@ def test_parser_utils_normalizes_direct_configs():
             "image": {"parse_method": "deepdoc"},
             "html": {"remove_toc": True},
             "code": {"output_format": "json"},
+            "word": {"output_format": "markdown"},
         }
     )
 
     assert setups["image"]["parse_method"] == "ocr"
     assert setups["html"]["remove_toc"] == "true"
-    assert setups["code"]["output_format"] == "json"
+    assert setups["text&code"]["output_format"] == "json"
+    assert setups["doc"]["output_format"] == "markdown"
+    assert setups["docx"]["output_format"] == "markdown"
+    assert "txt" in setups["text&code"]["suffix"]
+    assert "txt" not in setups["markdown"]["suffix"]
 
 
 def test_extractor_utils_reuses_runtime_extractor_async_flow():
