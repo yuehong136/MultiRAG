@@ -215,6 +215,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 				searches.GET("", r.searchHandler.ListSearches)
 				searches.POST("", r.searchHandler.CreateSearch)
 				searches.GET("/:search_id", r.searchHandler.GetSearch)
+				searches.DELETE("/:search_id", r.searchHandler.DeleteSearch)
 			}
 
 			// System routes (RESTful, aligned with Python /api/v1/system)
