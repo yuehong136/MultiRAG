@@ -213,6 +213,8 @@ func (r *Router) Setup(engine *gin.Engine) {
 			searches := v1.Group("/searches")
 			{
 				searches.GET("", r.searchHandler.ListSearches)
+				searches.POST("", r.searchHandler.CreateSearch)
+				searches.GET("/:search_id", r.searchHandler.GetSearch)
 			}
 
 			// System routes (RESTful, aligned with Python /api/v1/system)

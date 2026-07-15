@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"multirag/internal/common"
 	"multirag/internal/dao"
@@ -203,14 +202,14 @@ func (s *TenantService) GetTenantList(userID string) ([]*TenantListItem, error) 
 	}
 
 	result := make([]*TenantListItem, len(tenants))
-	now := time.Now()
 
 	for i, t := range tenants {
 		// Parse update_date and calculate delta_seconds
 		var deltaSeconds float64
 		if t.UpdateDate != "" {
-			if updateTime, err := time.Parse("2006-01-02 15:04:05", t.UpdateDate); err == nil {
-				deltaSeconds = now.Sub(updateTime).Seconds()
+			deltaSeconds, err = common.DeltaSeconds(t.UpdateDate)
+			if err != nil {
+				return nil, err
 			}
 		}
 
