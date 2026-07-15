@@ -13,6 +13,7 @@ from api.db.services.common_service import CommonService
 class UserCanvasVersionService(CommonService):
     model = UserCanvasVersion
 
+    # Build a stable display name for saved snapshots.
     @staticmethod
     def build_version_title(user_nickname, agent_title, ts=None):
         tenant = str(user_nickname or "").strip() or "tenant"
@@ -20,6 +21,7 @@ class UserCanvasVersionService(CommonService):
         stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)) if ts is not None else time.strftime("%Y-%m-%d %H:%M:%S")
         return f"{tenant}_{title}_{stamp}"
 
+    # Normalize DSL before comparing or writing version content.
     @staticmethod
     def _normalize_dsl(dsl):
         normalized = dsl
@@ -137,6 +139,7 @@ class UserCanvasVersionService(CommonService):
             stmt = select(cls.model).where(cls.model.user_canvas_id == user_canvas_id).order_by(cls.model.create_time.desc())
             latest = db.execute(stmt).scalars().first()
 
+            # Repeated saves with the same DSL only refresh the latest snapshot.
             if latest and cls._normalize_dsl(latest.dsl) == normalized_dsl:
                 # Protect released version: if latest is released and current is not,
                 # create a new version instead of updating
@@ -164,6 +167,7 @@ class UserCanvasVersionService(CommonService):
                 cls.delete_all_versions(db, user_canvas_id)
                 return latest.id, False
 
+            # Real content changes create a new snapshot.
             insert_data = {"user_canvas_id": user_canvas_id, "dsl": normalized_dsl}
             if title is not None:
                 insert_data["title"] = title

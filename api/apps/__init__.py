@@ -242,11 +242,15 @@ def _load_user_by_api_token(token: str):
     try:
         objs = APIToken.query(token=token)
         if not objs:
+            logging.warning(f"_load_user_by_api_token: No APIToken found for token={token[:10]}...")
             return None
         db = SessionLocal()
         try:
             users = UserService.query(db, id=objs[0].tenant_id)
-            return users[0] if users else None
+            if not users:
+                logging.warning(f"_load_user_by_api_token: No user found for tenant_id={objs[0].tenant_id} from APIToken")
+                return None
+            return users[0]
         finally:
             db.close()
     except Exception as e:
