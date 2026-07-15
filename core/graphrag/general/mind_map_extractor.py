@@ -25,7 +25,6 @@ from typing import Any
 
 import markdown_to_json
 
-from common.misc_utils import thread_pool_exec
 from common.token_utils import num_tokens_from_string
 from core.graphrag.general.extractor import Extractor
 from core.graphrag.general.mind_map_prompt import MIND_MAP_EXTRACTION_PROMPT
@@ -178,7 +177,7 @@ class MindMapExtractor(Extractor):
         }
         text = perform_variable_replacements(self._mind_map_prompt, variables=variables)
         async with chat_limiter:
-            response = await thread_pool_exec(self._chat, text, [{"role": "user", "content": "Output:"}], {})
+            response = await self._async_chat(text, [{"role": "user", "content": "Output:"}], {})
         response = re.sub(r"```[^\n]*", "", response)
         logging.debug(response)
         logging.debug(self._todict(markdown_to_json.dictify(response)))

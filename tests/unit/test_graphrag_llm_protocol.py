@@ -2,7 +2,6 @@ import asyncio
 import collections
 
 import core.graphrag.general.extractor as extractor_module
-import core.graphrag.general.mind_map_extractor as mind_map_extractor_module
 from core.graphrag.general.mind_map_extractor import MindMapExtractor
 
 
@@ -29,12 +28,12 @@ def test_mind_map_extractor_accepts_protocol_based_llm():
     assert extractor._llm.max_length == 4096
 
 
-def test_mind_map_extractor_accepts_tuple_chat_response(monkeypatch):
+async def test_mind_map_extractor_accepts_tuple_chat_response(monkeypatch):
     extractor = MindMapExtractor(TupleLLM())
     monkeypatch.setattr(extractor_module, "get_llm_cache", lambda *args, **kwargs: None)
     monkeypatch.setattr(extractor_module, "set_llm_cache", lambda *args, **kwargs: None)
 
-    assert extractor._chat("system", [{"role": "user", "content": "Output:"}], {}) == "{}"
+    assert await extractor._async_chat("system", [{"role": "user", "content": "Output:"}], {}) == "{}"
 
 
 def test_mind_map_extractor_todict_supports_list_leaves():
@@ -68,10 +67,10 @@ def test_mind_map_extractor_process_document_returns_none(monkeypatch):
     extractor = MindMapExtractor(FakeLLM())
     out_res = []
 
-    async def fake_thread_pool_exec(*args, **kwargs):
+    async def fake_async_chat(*args, **kwargs):
         return "# 顶层\n## 部分A\n- 点1\n- 点2"
 
-    monkeypatch.setattr(mind_map_extractor_module, "thread_pool_exec", fake_thread_pool_exec)
+    monkeypatch.setattr(extractor, "_async_chat", fake_async_chat)
 
     result = asyncio.run(extractor._process_document("课堂纪要", {}, out_res))
 
