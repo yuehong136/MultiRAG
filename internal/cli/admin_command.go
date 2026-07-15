@@ -17,6 +17,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 )
@@ -499,4 +500,43 @@ func (c *MultiRAGClient) DropAdminToken(cmd *Command) (ResponseIf, error) {
 	}
 
 	return &SimpleResponse{Code: 0, Message: "Token dropped successfully"}, nil
+}
+
+// ShowAdminVersion shows the admin server version (admin mode only).
+// Aligned with the admin server /api/v1/admin/version endpoint.
+func (c *MultiRAGClient) ShowAdminVersion(cmd *Command) (ResponseIf, error) {
+	if c.ServerType != "admin" {
+		return nil, fmt.Errorf("this command is only allowed in ADMIN mode")
+	}
+
+	// Check for benchmark iterations
+	iterations := 1
+	if val, ok := cmd.Params["iterations"].(int); ok && val > 1 {
+		iterations = val
+	}
+
+	if iterations > 1 {
+		// Benchmark mode - return raw result for benchmark stats
+		return c.HTTPClient.RequestWithIterations("GET", "/admin/version", true, "admin", nil, nil, iterations)
+	}
+
+	resp, err := c.HTTPClient.Request("GET", "/admin/version", true, "admin", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to show admin version: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to show admin version: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	var result CommonDataResponse
+	if err = json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("show admin version failed: invalid JSON (%w)", err)
+	}
+
+	if result.Code != 0 {
+		return nil, fmt.Errorf("%s", result.Message)
+	}
+	result.Duration = 0
+	return &result, nil
 }
