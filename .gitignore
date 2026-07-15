@@ -43,7 +43,8 @@ cl100k_base.tiktoken
 chrome*
 huggingface.co/
 nltk_data/
-uv-x86_64*.tar.gz
+/models/
+uv-*-unknown-linux-gnu.tar.gz
 
 core/llm/embedding_model/models
 *.jar

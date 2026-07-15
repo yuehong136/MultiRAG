@@ -1,16 +1,21 @@
+ARG MULTIRAG_DEPS_IMAGE=multirag_deps:uv0.11.27-tika3.2.3-build-only
+FROM ${MULTIRAG_DEPS_IMAGE} AS multirag_deps
+
 # base stage
 FROM ubuntu:24.04 AS base
 USER root
 SHELL ["/bin/bash", "-c"]
 
 ARG NEED_MIRROR=0
+ARG MULTIRAG_DEPS_IMAGE
+ARG UV_VERSION=0.11.27
 
 # 创建必要的目录
 RUN mkdir -p /root/.ragdatav /root/nltk_data && \
     mkdir -p /multirag/core/res /multirag/core/res/deepdoc
 
 # 安装libssl
-RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/,target=/root \
+RUN --mount=type=bind,from=multirag_deps,source=/,target=/root \
     if [ "$(uname -m)" = "x86_64" ]; then \
         dpkg -i /root/libssl1.1_1.1.1f-1ubuntu2_amd64.deb; \
     elif [ "$(uname -m)" = "aarch64" ]; then \
@@ -21,7 +26,12 @@ RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/,target=/root 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # 配置 Locale 支持中文 (必须在安装其他软件包之前)
-RUN apt update && apt -y install locales && \
+RUN if [ "$NEED_MIRROR" == "1" ]; then \
+        # ca-certificates 尚未安装，先使用 HTTP 镜像，下一步安装 CA 后再切换 HTTPS。
+        sed -i 's|http://archive.ubuntu.com/ubuntu|http://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources; \
+        sed -i 's|http://security.ubuntu.com/ubuntu|http://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources; \
+    fi && \
+    apt update && apt -y install locales && \
     locale-gen zh_CN.UTF-8 && \
     locale-gen en_US.UTF-8 && \
     update-locale LANG=zh_CN.UTF-8 LC_ALL=zh_CN.UTF-8
@@ -42,6 +52,7 @@ RUN --mount=type=cache,id=multirag_apt,target=/var/cache/apt,sharing=locked \
     if [ "$NEED_MIRROR" == "1" ]; then \
         sed -i 's|http://archive.ubuntu.com/ubuntu|https://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources; \
         sed -i 's|http://security.ubuntu.com/ubuntu|https://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources; \
+        sed -i 's|http://mirrors.aliyun.com/ubuntu|https://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources; \
     fi; \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
     echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
@@ -97,10 +108,11 @@ RUN --mount=type=cache,id=multirag_apt,target=/var/cache/apt,sharing=locked \
     { echo "Failed to install ODBC driver"; exit 1; }
 
 # 安装Redis (从源码编译)
+ARG REDIS_BUILD_JOBS=2
 RUN wget https://download.redis.io/releases/redis-7.4.3.tar.gz && \
     tar -zxvf redis-7.4.3.tar.gz && \
     cd redis-7.4.3 && \
-    make && \
+    make -j"${REDIS_BUILD_JOBS}" OPT="-O2" && \
     make install PREFIX=/usr/local/redis && \
     mkdir -p /etc/redis /mirror && \
     cp redis.conf /etc/redis/redis.conf && \
@@ -122,7 +134,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
 ENV PATH=/root/.local/bin:$PATH
 
 # 安装uv并配置镜像源
-RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/,target=/deps \
+RUN --mount=type=bind,from=multirag_deps,source=/,target=/deps \
     mkdir -p /etc/uv && \
     echo 'python-install-mirror = "file:///mirror"' > /etc/uv/uv.toml && \
     if [ "$NEED_MIRROR" == "1" ]; then \
@@ -139,26 +151,29 @@ RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/,target=/deps 
         tar xzf /deps/uv-aarch64-unknown-linux-gnu.tar.gz && \
         cp uv-aarch64-unknown-linux-gnu/* /usr/local/bin/ && \
         rm -rf uv-aarch64-unknown-linux-gnu; \
-    fi && \
+    else \
+        echo "Unsupported architecture for uv: $arch" >&2; \
+        exit 1; \
+    fi; \
+    actual_uv_version="$(uv --version | awk '{print $2}')"; \
+    if [ "$actual_uv_version" != "$UV_VERSION" ]; then \
+        echo "Expected uv $UV_VERSION from $MULTIRAG_DEPS_IMAGE, got $actual_uv_version" >&2; \
+        exit 1; \
+    fi; \
     uv python install 3.12.10 && \
     rm -rf /mirror
 
-# 使用mount绑定挂载模型文件并根据条件复制到目标位置
-RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/huggingface.co,target=/huggingface.co \
+# 只复制镜像构建期必需的 DeepDoc 资源。运行时 embedding/rerank
+# 模型不再进入镜像，由宿主机目录挂载到固定路径 /root/.ragdatav。
+RUN --mount=type=bind,from=multirag_deps,source=/huggingface.co,target=/huggingface.co \
     tar --exclude='.*' -cf - \
         /huggingface.co/InfiniFlow/text_concat_xgb_v1.0 \
         /huggingface.co/InfiniFlow/deepdoc \
         | tar -xf - --strip-components=3 -C /multirag/core/res/deepdoc
-RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/huggingface.co,target=/huggingface.co \
-    tar -cf - \
-        /huggingface.co/BAAI/bge-large-zh-v1.5 \
-        /huggingface.co/BAAI/bge-reranker-v2-m3 \
-        /huggingface.co/maidalun1020/bce-embedding-base_v1 \
-        | tar -xf - --strip-components=2 -C /root/.ragdatav
 
 # 创建并添加NLTK数据
 # 设置Tika服务器
-RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/,target=/deps \
+RUN --mount=type=bind,from=multirag_deps,source=/,target=/deps \
     cp -r /deps/nltk_data /root/ && \
     cp /deps/tika-server-standard-3.2.3.jar /deps/tika-server-standard-3.2.3.jar.md5 /multirag/ && \
     cp /deps/cl100k_base.tiktoken /multirag/9b5ad71b2ce5302211f9c61530b329a4922fc6a4
@@ -167,11 +182,11 @@ ENV TIKA_SERVER_JAR="file:///multirag/tika-server-standard-3.2.3.jar"
 ENV DEBIAN_FRONTEND=noninteractive
 
 # 添加Chrome和ChromeDriver依赖
-RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/chrome-linux64-121-0-6167-85,target=/chrome-linux64.zip \
+RUN --mount=type=bind,from=multirag_deps,source=/chrome-linux64-121-0-6167-85,target=/chrome-linux64.zip \
     unzip /chrome-linux64.zip && \
     mv chrome-linux64 /opt/chrome && \
     ln -s /opt/chrome/chrome /usr/local/bin/
-RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/chromedriver-linux64-121-0-6167-85,target=/chromedriver-linux64.zip \
+RUN --mount=type=bind,from=multirag_deps,source=/chromedriver-linux64-121-0-6167-85,target=/chromedriver-linux64.zip \
     unzip -j /chromedriver-linux64.zip chromedriver-linux64/chromedriver && \
     mv chromedriver /usr/local/bin/ && \
     rm -f /usr/bin/google-chrome
@@ -207,6 +222,9 @@ FROM base AS production
 USER root
 
 WORKDIR /multirag
+
+LABEL io.multirag.runtime-models="external" \
+      io.multirag.runtime-model-path="/root/.ragdatav"
 
 # 设置环境变量
 ENV HF_ENDPOINT=https://hf-mirror.com \

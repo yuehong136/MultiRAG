@@ -280,6 +280,53 @@ docker compose -f docker-compose-macos.yml --profile cpu up -d
 
 更多组合见 [`docker/README.md`](./docker/README.md)。
 
+### 外部模型目录与仅镜像部署
+
+MultiRAG 镜像默认不再包含 embedding/rerank 运行时模型。宿主机目录可通过
+`MULTIRAG_MODEL_DIR` 任意调整，容器内目标始终是 `/root/.ragdatav`：
+
+```bash
+mkdir -p /data/multirag/models
+MULTIRAG_MODEL_DIR=/data/multirag/models \
+  docker compose -f docker/docker-compose.yml --profile cpu --profile milvus up -d
+```
+
+挂载目录按模型 basename 平铺，只需放置实际使用的本地模型：
+
+```text
+/data/multirag/models/
+├── bge-large-zh-v1.5/
+├── bge-reranker-v2-m3/
+├── bce-embedding-base_v1/
+└── bce-reranker-base_v1/
+```
+
+需要准备一份可直接挂载的模型目录时，可单独运行：
+
+```bash
+HF_ENDPOINT=https://hf-mirror.com uv run --script download_deps.py \
+  --runtime-models-only --runtime-model-dir /data/multirag/models
+```
+
+如果服务器上只有 `datav/multirag:latest` 镜像，没有源码仓库，可单独复制
+[`docker-compose-standalone.yml`](./docker/docker-compose-standalone.yml) 后启动。该文件不挂载
+仓库中的 `configs/`、`entrypoint.sh` 或源码：
+
+```bash
+mkdir -p /opt/multirag && cd /opt/multirag
+# 将 docker-compose-standalone.yml 放到当前目录
+MULTIRAG_IMAGE=datav/multirag:latest \
+MULTIRAG_CONFIG_FILE=/data/multirag/service_conf.yaml \
+MULTIRAG_MODEL_DIR=/data/multirag/models \
+docker compose -f docker-compose-standalone.yml up -d
+```
+
+Standalone Compose 默认以只读方式挂载模型。请在启动前上传完整模型；否则代码的
+Hugging Face 回退下载也无法写入该目录。`MULTIRAG_CONFIG_FILE` 可以指向任意宿主机
+文件名（包括你现有的 `service_config.yaml`），Compose 会将它只读挂载到应用固定读取的
+`/multirag/configs/service_conf.yaml`，并设置 `SKIP_CONFIG_GENERATE=1` 防止入口脚本覆盖。可选的
+[`docker/.env.standalone.example`](./docker/.env.standalone.example) 可作为启动参数模板。
+
 ## 📦 Docker Profiles
 
 ### 默认基础服务
@@ -316,16 +363,42 @@ docker compose -f docker-compose-macos.yml --profile cpu up -d
 
 ## 🔧 Docker 镜像构建
 
-### 构建轻量镜像
+### 构建依赖资源镜像
+
+主镜像不再依赖浮动的 `infiniflow/ragflow_deps:latest`。先下载 Tika、NLTK、Chrome、
+DeepDoc 和 uv 0.11.27 等构建资源（不包含运行时 embedding/rerank 模型），再构建
+本地依赖镜像：
 
 ```bash
-docker build --platform linux/amd64 --build-arg LIGHTEN=1 -f Dockerfile -t multirag:slim .
+HF_ENDPOINT=https://hf-mirror.com uv run --script download_deps.py --china-mirrors
+docker build --platform linux/amd64 -f Dockerfile.deps \
+  -t multirag_deps:uv0.11.27-tika3.2.3-build-only .
 ```
 
-### 构建完整镜像
+团队或 CI 可将该镜像推送到内部仓库，并在构建主镜像时通过
+`MULTIRAG_DEPS_IMAGE` 指定完整镜像引用。
+
+### 一键构建主镜像
 
 ```bash
-docker build --platform linux/amd64 -f Dockerfile -t multirag:latest .
+NEED_MIRROR=1 ./scripts/build_docker_image.sh datav/multirag:latest
+```
+
+该脚本会按顺序下载构建资源、构建 build-only 依赖镜像、构建主镜像，并验证
+uv 版本与主镜像中的 `/root/.ragdatav` 为空。手工构建主镜像的等价命令为：
+
+```bash
+docker build --platform linux/amd64 --build-arg NEED_MIRROR=1 \
+  --build-arg MULTIRAG_DEPS_IMAGE=multirag_deps:uv0.11.27-tika3.2.3-build-only \
+  -f Dockerfile -t datav/multirag:latest .
+```
+
+使用内部依赖镜像：
+
+```bash
+docker build --platform linux/amd64 \
+  --build-arg MULTIRAG_DEPS_IMAGE=registry.example.com/multirag_deps:uv0.11.27-tika3.2.3-build-only \
+  -f Dockerfile -t multirag:latest .
 ```
 
 ### 重建并重启
@@ -403,7 +476,7 @@ retrieval:
 
 ```bash
 uv sync --python 3.12 --all-extras
-uv run python download_deps.py
+uv run --script download_deps.py
 ```
 
 ### 2. 启动依赖服务

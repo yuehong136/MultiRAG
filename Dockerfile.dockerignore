@@ -1,0 +1,34 @@
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.dmypy.json
+.coverage
+coverage.xml
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+.DS_Store
+
+# Local configuration can contain credentials and must never override the
+# externally mounted standalone configuration.
+configs/local.service_conf.yaml
+
+# Generated resources are supplied by the build-only dependency image. Ignore
+# local copies so COPY core core cannot duplicate them in a later layer.
+core/res/deepdoc/
+core/llm/embedding_model/models/
+
+# Inputs for Dockerfile.deps are mounted from the prebuilt dependency image;
+# do not resend or accidentally retain them in the application build context.
+huggingface.co/
+models/
+runtime_models/
+nltk_data/
+chrome-linux64-121-0-6167-85
+chromedriver-linux64-121-0-6167-85
+cl100k_base.tiktoken
+libssl*.deb
+tika-server*.jar
+tika-server*.jar.md5
+uv-*-unknown-linux-gnu.tar.gz

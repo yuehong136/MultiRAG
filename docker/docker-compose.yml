@@ -100,6 +100,8 @@ services:
       - ./entrypoint.sh:/multirag/entrypoint.sh
       # 日志目录
       - ../logs:/multirag/logs
+      # 宿主机路径可通过 MULTIRAG_MODEL_DIR 调整；容器内路径固定。
+      - ${MULTIRAG_MODEL_DIR:-../models}:/root/.ragdatav:ro
       # 前端静态文件（预留，等前端开发后启用）
       # - ../web/dist:/multirag/web/dist
       # 源代码挂载（开发模式）
@@ -117,7 +119,7 @@ services:
 
     # 健康检查
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8123/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8123/api/v1/system/ping"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -168,6 +170,8 @@ services:
       - ./service_conf.yaml.template:/multirag/docker/service_conf.yaml.template
       - ./entrypoint.sh:/multirag/entrypoint.sh
       - ../logs:/multirag/logs
+      # 宿主机路径可通过 MULTIRAG_MODEL_DIR 调整；容器内路径固定。
+      - ${MULTIRAG_MODEL_DIR:-../models}:/root/.ragdatav:ro
       # 源代码挂载（开发模式）
       - ../api:/multirag/api
       - ../core:/multirag/core
@@ -181,7 +185,7 @@ services:
       - multirag
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8123/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8123/api/v1/system/ping"]
       interval: 30s
       timeout: 10s
       retries: 3

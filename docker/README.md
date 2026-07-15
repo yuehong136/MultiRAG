@@ -6,6 +6,8 @@
 - 🐳 [Docker Compose](#-docker-compose)
 - 🏗️ [架构设计](#-架构设计)
 - 🐬 [Docker 环境变量](#-docker-环境变量)
+- 📦 [独立镜像部署](#-独立镜像部署)
+- 🧠 [外部模型目录](#-外部模型目录)
 - 🌐 [Nginx 配置](#-nginx-配置)
 - 🧠 [TEI 服务配置](#-tei-服务配置)
 - 🐋 [启动选项](#-启动选项)
@@ -21,6 +23,8 @@
   基础设施服务配置（PostgreSQL、Redis、MinIO、Elasticsearch、Milvus 等），供 `docker-compose.yml` 引用。
 - **docker-compose-macos.yml**  
   macOS (Apple Silicon) 专用配置，通过 Rosetta 2 模拟 x86_64 架构。
+- **docker-compose-standalone.yml**
+  可脱离源码仓库分发的单镜像配置，只依赖外部 `service_conf.yaml` 和模型目录。
 - **docker-compose-tei.yml**  
   TEI 服务独立部署配置（已整合到 base 文件中，此文件保留用于向后兼容）。
 - **.env**  
@@ -140,6 +144,67 @@ docker compose --profile gpu --profile milvus --profile tei-gpu up -d
 | `--profile cpu --profile milvus` | 上述 + milvus-etcd, milvus-minio, milvus-standalone (7个) |
 | `--profile cpu --profile milvus --profile tei-cpu` | 上述 + tei-cpu (8个) |
 | `--profile cpu --profile elasticsearch` | postgres, redis, minio, multirag-cpu, es01 (5个) |
+
+## 📦 独立镜像部署
+
+`docker-compose-standalone.yml` 用于服务器上只保留 MultiRAG 镜像、一份配置文件和
+外部模型的场景。它不依赖仓库的 `configs/`、`entrypoint.sh` 或源码目录。
+
+宿主机与容器的映射契约为：
+
+| 宿主机参数 | 容器内固定路径 | 说明 |
+|---|---|---|
+| `MULTIRAG_CONFIG_FILE` | `/multirag/configs/service_conf.yaml` | 可指向现有 `service_config.yaml` 或任意文件名 |
+| `MULTIRAG_MODEL_DIR` | `/root/.ragdatav` | embedding/rerank 运行时模型根目录 |
+
+示例：
+
+```bash
+mkdir -p /opt/multirag /data/multirag/models
+cd /opt/multirag
+
+# 放入 docker-compose-standalone.yml 和你现有的 service_config.yaml
+MULTIRAG_IMAGE=datav/multirag:latest \
+MULTIRAG_CONFIG_FILE=/opt/multirag/service_config.yaml \
+MULTIRAG_MODEL_DIR=/data/multirag/models \
+DOC_ENGINE=milvus \
+STORAGE_IMPL=MINIO \
+docker compose -f docker-compose-standalone.yml up -d
+```
+
+Compose 通过 `configs` 将配置文件只读挂载，并为容器设置
+`SKIP_CONFIG_GENERATE=1`，因此入口脚本不会重新生成或覆盖该文件。容器默认会启动自带
+Redis；如果 `service_conf.yaml` 使用外部 Redis，设置 `ENABLE_REDIS=0` 即可关闭容器内 Redis。
+
+> [!IMPORTANT]
+> 镜像、`service_conf.yaml` 与数据库迁移必须保持版本兼容。更新镜像时建议同时保存一份对应的
+> 配置文件，并先运行 `docker compose config` 检查最终编排。
+
+## 🧠 外部模型目录
+
+主镜像和 build-only 依赖镜像都不再包含 embedding/rerank 模型。宿主机可以使用任意
+磁盘路径，但容器内根目录始终是 `/root/.ragdatav`。目录必须按模型 basename 平铺：
+
+```text
+${MULTIRAG_MODEL_DIR}/
+├── bge-large-zh-v1.5/
+├── bge-reranker-v2-m3/
+├── bce-embedding-base_v1/
+└── bce-reranker-base_v1/
+```
+
+只需上传部署实际使用的模型。不要直接把带有 `BAAI/` 和 `maidalun1020/` 中间层的
+`huggingface.co/` 根目录挂载进去，因为加载器会直接查找
+`/root/.ragdatav/<model-basename>`。
+
+仓库 Compose 和 standalone Compose 都默认使用只读挂载。这可避免 API 和 TaskExecutor
+并发下载模型、模型目录无限增长；代价是启动前必须上传完整文件。需要自动下载时，
+建议在独立准备机器上运行：
+
+```bash
+HF_ENDPOINT=https://hf-mirror.com uv run --script download_deps.py \
+  --runtime-models-only --runtime-model-dir /data/multirag/models
+```
 
 ## 🐬 Docker 环境变量
 
@@ -787,4 +852,3 @@ command:
 > - 确保不同实例的消费者 ID 区间不重叠
 > - 只需要一个实例启动 API Server
 > - 所有实例应连接到同一个 Redis 和数据库
-

@@ -22,7 +22,7 @@ fi
 
 # --------------------------- 默认参数 ---------------------------------------
 PY=${PYTHON_BIN:-python3}       # Python 可执行文件，可通过环境变量 PYTHON_BIN 覆盖
-ENABLE_REDIS=1                 # 是否启动 Redis
+ENABLE_REDIS="${ENABLE_REDIS:-1}"  # 是否启动 Redis（外部 Redis 可设为 0）
 ENABLE_SERVER=1                # 是否启动 api.multirag_server
 ENABLE_TASKEXECUTOR=1          # 是否启动 TaskExecutor
 ENABLE_DATASYNC=1              # 是否启动数据源同步服务

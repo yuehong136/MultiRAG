@@ -280,6 +280,59 @@ Recommendations:
 
 For more combinations, see [`docker/README.md`](./docker/README.md).
 
+### External model directory and image-only deployment
+
+The MultiRAG image no longer bundles runtime embedding or rerank models. Set
+`MULTIRAG_MODEL_DIR` to any host directory; its in-container target always
+remains `/root/.ragdatav`:
+
+```bash
+mkdir -p /data/multirag/models
+MULTIRAG_MODEL_DIR=/data/multirag/models \
+  docker compose -f docker/docker-compose.yml --profile cpu --profile milvus up -d
+```
+
+Keep the model basenames flat under the mounted directory, and only provide the
+local models your deployment uses:
+
+```text
+/data/multirag/models/
+├── bge-large-zh-v1.5/
+├── bge-reranker-v2-m3/
+├── bce-embedding-base_v1/
+└── bce-reranker-base_v1/
+```
+
+To prepare a mount-ready model directory separately:
+
+```bash
+HF_ENDPOINT=https://hf-mirror.com uv run --script download_deps.py \
+  --runtime-models-only --runtime-model-dir /data/multirag/models
+```
+
+If a server has only the `datav/multirag:latest` image and no source checkout,
+copy [`docker-compose-standalone.yml`](./docker/docker-compose-standalone.yml)
+to it. This Compose file does not mount repository `configs/`, `entrypoint.sh`,
+or source files:
+
+```bash
+mkdir -p /opt/multirag && cd /opt/multirag
+# Place docker-compose-standalone.yml in the current directory.
+MULTIRAG_IMAGE=datav/multirag:latest \
+MULTIRAG_CONFIG_FILE=/data/multirag/service_conf.yaml \
+MULTIRAG_MODEL_DIR=/data/multirag/models \
+docker compose -f docker-compose-standalone.yml up -d
+```
+
+The standalone Compose file mounts models read-only. Upload complete model
+directories before startup; otherwise Hugging Face fallback downloads cannot
+write to the mount. `MULTIRAG_CONFIG_FILE` may point to any host filename,
+including an existing `service_config.yaml`; Compose mounts it read-only at the
+application's fixed `/multirag/configs/service_conf.yaml` path and sets
+`SKIP_CONFIG_GENERATE=1` so the entrypoint cannot overwrite it. The optional
+[`docker/.env.standalone.example`](./docker/.env.standalone.example) is a
+starting template for launch parameters.
+
 ## 📦 Docker Profiles
 
 ### Default baseline services
@@ -316,16 +369,44 @@ For more combinations, see [`docker/README.md`](./docker/README.md).
 
 ## 🔧 Docker Image Build
 
-### Build lightweight image
+### Build the dependency resource image
+
+The application image no longer relies on the floating
+`infiniflow/ragflow_deps:latest` image. Download build resources such as Tika,
+NLTK, Chrome, DeepDoc, and uv 0.11.27 (excluding runtime embedding/rerank
+models), then build the local dependency resource image:
 
 ```bash
-docker build --platform linux/amd64 --build-arg LIGHTEN=1 -f Dockerfile -t multirag:slim .
+HF_ENDPOINT=https://hf-mirror.com uv run --script download_deps.py --china-mirrors
+docker build --platform linux/amd64 -f Dockerfile.deps \
+  -t multirag_deps:uv0.11.27-tika3.2.3-build-only .
 ```
 
-### Build full image
+Teams and CI can push this image to an internal registry and select it with
+`MULTIRAG_DEPS_IMAGE` when building the application image.
+
+### Build the application image
 
 ```bash
-docker build --platform linux/amd64 -f Dockerfile -t multirag:latest .
+NEED_MIRROR=1 ./scripts/build_docker_image.sh datav/multirag:latest
+```
+
+The script downloads build resources, builds the build-only dependency image,
+builds the application image, and verifies both uv and an empty
+`/root/.ragdatav`. The equivalent manual application build is:
+
+```bash
+docker build --platform linux/amd64 --build-arg NEED_MIRROR=1 \
+  --build-arg MULTIRAG_DEPS_IMAGE=multirag_deps:uv0.11.27-tika3.2.3-build-only \
+  -f Dockerfile -t datav/multirag:latest .
+```
+
+To use a dependency image from an internal registry:
+
+```bash
+docker build --platform linux/amd64 \
+  --build-arg MULTIRAG_DEPS_IMAGE=registry.example.com/multirag_deps:uv0.11.27-tika3.2.3-build-only \
+  -f Dockerfile -t multirag:latest .
 ```
 
 ### Rebuild and restart
@@ -403,7 +484,7 @@ retrieval:
 
 ```bash
 uv sync --python 3.12 --all-extras
-uv run python download_deps.py
+uv run --script download_deps.py
 ```
 
 ### 2. Start infrastructure services

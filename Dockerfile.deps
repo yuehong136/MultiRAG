@@ -2,9 +2,19 @@
 #
 FROM scratch
 
-# Copy resources downloaded via download_deps.py
-COPY chromedriver-linux64-121-0-6167-85 chrome-linux64-121-0-6167-85 cl100k_base.tiktoken libssl1.1_1.1.1f-1ubuntu2_amd64.deb libssl1.1_1.1.1f-1ubuntu2_arm64.deb tika-server-standard-3.2.3.jar tika-server-standard-3.2.3.jar.md5 libssl*.deb uv-x86_64-unknown-linux-gnu.tar.gz uv-aarch64-unknown-linux-gnu.tar.gz /
+ARG UV_VERSION=0.11.27
+LABEL org.opencontainers.image.title="MultiRAG build dependencies" \
+      io.multirag.uv.version="${UV_VERSION}" \
+      io.multirag.runtime-models="excluded"
+
+# Copy resources downloaded via download_deps.py. Keep the pinned uv archives
+# in a distinct layer so toolchain changes remain explicit and auditable.
+COPY chromedriver-linux64-121-0-6167-85 chrome-linux64-121-0-6167-85 cl100k_base.tiktoken libssl1.1_1.1.1f-1ubuntu2_amd64.deb libssl1.1_1.1.1f-1ubuntu2_arm64.deb tika-server-standard-3.2.3.jar tika-server-standard-3.2.3.jar.md5 /
+COPY uv-x86_64-unknown-linux-gnu.tar.gz uv-aarch64-unknown-linux-gnu.tar.gz /
 
 COPY nltk_data /nltk_data
 
-COPY huggingface.co /huggingface.co
+# Runtime embedding/rerank models deliberately stay outside this image. Copy
+# only the resources consumed while building the MultiRAG application image.
+COPY huggingface.co/InfiniFlow/text_concat_xgb_v1.0 /huggingface.co/InfiniFlow/text_concat_xgb_v1.0
+COPY huggingface.co/InfiniFlow/deepdoc /huggingface.co/InfiniFlow/deepdoc

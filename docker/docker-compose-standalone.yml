@@ -1,0 +1,71 @@
+# Image-only MultiRAG deployment.
+#
+# This file can be copied to a server without the source repository. Runtime
+# models come from a configurable host directory, while the in-container path
+# remains /root/.ragdatav. A host service_conf.yaml is mounted through Compose
+# configs, so the image never depends on a source checkout.
+
+name: multirag-standalone
+
+services:
+  multirag:
+    image: ${MULTIRAG_IMAGE:-datav/multirag:latest}
+    container_name: multirag
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+    ports:
+      - "${MULTIRAG_HTTP_PORT:-80}:80"
+      - "${MULTIRAG_API_PORT:-8123}:8123"
+      - "${MULTIRAG_ADMIN_PORT:-8130}:8130"
+
+    environment:
+      PYTHONIOENCODING: utf-8
+      LANG: zh_CN.UTF-8
+      LC_ALL: zh_CN.UTF-8
+      TZ: ${TZ:-Asia/Shanghai}
+      SKIP_CONFIG_GENERATE: "1"
+      ENABLE_REDIS: ${ENABLE_REDIS:-1}
+      ENABLE_WEBSERVER: ${ENABLE_WEBSERVER:-1}
+      API_PROXY_SCHEME: ${API_PROXY_SCHEME:-python}
+      WS: ${WS:-1}
+      STORAGE_IMPL: ${STORAGE_IMPL:-MINIO}
+      DOC_ENGINE: ${DOC_ENGINE:-milvus}
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+      DEVICE: ${DEVICE:-cpu}
+      USE_DOCLING: ${USE_DOCLING:-false}
+
+    volumes:
+      - type: bind
+        source: ${MULTIRAG_MODEL_DIR:-./models}
+        target: /root/.ragdatav
+        read_only: true
+      - type: volume
+        source: multirag_logs
+        target: /multirag/logs
+
+    configs:
+      - source: multirag_service_conf
+        target: /multirag/configs/service_conf.yaml
+        mode: 0444
+
+    command:
+      - --enable-adminserver
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8123/api/v1/system/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  multirag_logs:
+
+configs:
+  multirag_service_conf:
+    file: ${MULTIRAG_CONFIG_FILE:-./service_conf.yaml}
