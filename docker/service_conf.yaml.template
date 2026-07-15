@@ -72,7 +72,7 @@ s3:
   addressing_style: 'path'
 
 gcs:
-  bucket: '${GCS_BUCKET:bridgtl-edm-d-bucket-multirag'
+  bucket: '${GCS_BUCKET:-bridgtl-edm-d-bucket-multirag}'
 
 oss:
   access_key: '${OSS_ACCESS_KEY:-access_key}'

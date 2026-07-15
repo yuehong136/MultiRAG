@@ -240,6 +240,7 @@ trap _term SIGTERM SIGINT
 #
 # 环境变量控制：
 #   SKIP_CONFIG_GENERATE=1  跳过配置生成（运维直接挂载配置文件时使用）
+#   MULTIRAG_RENDER_CONFIG_ONLY=1  仅生成配置后退出（验证/排障使用）
 #
 generate_config() {
   local CONF_DIR="${MULTIRAG_CONF_DIR:-/multirag/configs}"
@@ -259,28 +260,107 @@ generate_config() {
     return 0
   fi
 
-  # 从模板生成配置文件
+  # 从模板生成配置文件。使用 Python 做受控的 ${VAR:-default} 替换，既支持
+  # 空默认值，也保留 YAML 中原有的引号；禁止使用 eval，避免值被再次解释。
   echo "[entrypoint] 从模板生成配置文件: ${TEMPLATE_FILE} -> ${CONF_FILE}"
-  rm -f "${CONF_FILE}"
-  DEF_ENV_VALUE_PATTERN="\$\{([^:]+):-([^}]+)\}"
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    if [[ "$line" =~ DEF_ENV_VALUE_PATTERN ]]; then
-      varname="${BASH_REMATCH[1]}"
-      if [ -n "${!varname}" ]; then
-        eval "echo \"$line\"" >> "${CONF_FILE}"
-      else
-        echo "$line" | sed -E "s/\\\$\{[^:]+:-([^}]+)\}/\1/g" >> "${CONF_FILE}"
-      fi
-    else
-      eval "echo \"$line\"" >> "${CONF_FILE}"
-    fi
-  done < "${TEMPLATE_FILE}"
+  if ! "${PY}" - "${TEMPLATE_FILE}" "${CONF_FILE}" <<'PY'
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+pattern = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*):-([^}]*)\}")
+template_path = Path(sys.argv[1])
+output_path = Path(sys.argv[2])
+template = template_path.read_text(encoding="utf-8")
+
+
+def yaml_context(source: str, position: int) -> str:
+    """Return the YAML quoting context at a placeholder position."""
+    state = "plain"
+    index = source.rfind("\n", 0, position) + 1
+
+    while index < position:
+        char = source[index]
+        if state == "plain":
+            if char == "#":
+                return "comment"
+            if char == "'":
+                state = "single"
+            elif char == '"':
+                state = "double"
+        elif state == "single" and char == "'":
+            if index + 1 < position and source[index + 1] == "'":
+                index += 1
+            else:
+                state = "plain"
+        elif state == "double":
+            if char == "\\":
+                index += 1
+            elif char == '"':
+                state = "plain"
+        index += 1
+
+    return state
+
+
+def render_environment_value(variable_name: str, value: str, default: str, context: str) -> str:
+    if any(ord(char) < 32 for char in value):
+        raise ValueError(f"{variable_name} contains unsupported control characters")
+
+    if context == "single":
+        return value.replace("'", "''")
+    if context == "double":
+        return json.dumps(value, ensure_ascii=False)[1:-1]
+
+    stripped_default = default.strip()
+    if re.fullmatch(r"[+-]?\d+", stripped_default):
+        if not re.fullmatch(r"[+-]?\d+", value.strip()):
+            raise ValueError(f"{variable_name} must be an integer")
+        return str(int(value, 10))
+
+    if stripped_default.lower() in {"true", "false"}:
+        if value.strip().lower() not in {"true", "false"}:
+            raise ValueError(f"{variable_name} must be true or false")
+        return value.strip().lower()
+
+    # JSON strings are valid YAML scalars and safely preserve punctuation.
+    return json.dumps(value, ensure_ascii=False)
+
+
+def replace_default(match: re.Match[str]) -> str:
+    variable_name = match.group(1)
+    value = os.environ.get(variable_name)
+    if not value:
+        return match.group(2)
+
+    context = yaml_context(template, match.start())
+    if context == "comment":
+        return match.group(0)
+    return render_environment_value(variable_name, value, match.group(2), context)
+
+
+rendered = pattern.sub(replace_default, template)
+output_path.parent.mkdir(parents=True, exist_ok=True)
+output_path.write_text(rendered, encoding="utf-8")
+PY
+  then
+    echo "[entrypoint] 配置文件生成失败" >&2
+    return 1
+  fi
   echo "[entrypoint] 配置文件生成完成"
 }
 
 # --------------------------- 启动流程 ---------------------------------------
 # 生成配置文件（从模板）
-generate_config
+if ! generate_config; then
+  exit 1
+fi
+
+if [[ "${MULTIRAG_RENDER_CONFIG_ONLY:-0}" == "1" ]]; then
+  exit 0
+fi
 
 ensure_docling
 
