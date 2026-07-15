@@ -1,4 +1,5 @@
 **
+# Keep this file on LF line endings for Docker and WSL build validation.
 !Dockerfile.deps
 !chrome-linux64-121-0-6167-85
 !chromedriver-linux64-121-0-6167-85

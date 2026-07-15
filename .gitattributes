@@ -1,0 +1,6 @@
+# Shell scripts execute directly in Linux containers and WSL.
+*.sh text eol=lf
+
+# Docker control files are parsed and compared line-by-line during builds.
+Dockerfile* text eol=lf
+*.dockerignore text eol=lf

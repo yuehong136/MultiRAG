@@ -1,4 +1,5 @@
 .venv/
+# Keep this file on LF line endings for Docker and WSL build validation.
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+# Keep this script on LF line endings because it executes directly in Linux/WSL.
+
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -12,7 +14,9 @@ NEED_MIRROR="${NEED_MIRROR:-1}"
 REDIS_BUILD_JOBS="${REDIS_BUILD_JOBS:-2}"
 
 if ! command -v uv >/dev/null 2>&1; then
-  echo "uv is required to run download_deps.py" >&2
+  echo "uv is required to run download_deps.py." >&2
+  echo "Install the pinned WSL/Linux version with:" >&2
+  echo "  python -m pip install -U 'uv==0.11.27' -i https://pypi.tuna.tsinghua.edu.cn/simple" >&2
   exit 1
 fi
 if ! command -v docker >/dev/null 2>&1; then
@@ -25,7 +29,9 @@ for excluded_path in \
   "core/res/deepdoc/" \
   "core/llm/embedding_model/models/" \
   "models/"; do
-  if ! grep -Fxq "${excluded_path}" Dockerfile.dockerignore; then
+  if ! awk -v expected="${excluded_path}" \
+    '{ sub(/\r$/, ""); if ($0 == expected) found = 1 } END { exit found ? 0 : 1 }' \
+    Dockerfile.dockerignore; then
     echo "Dockerfile.dockerignore must exclude ${excluded_path}" >&2
     exit 1
   fi
