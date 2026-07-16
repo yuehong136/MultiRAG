@@ -245,20 +245,20 @@ def test_system_authenticated_routes_have_pure_async_dependency_tree(client):
         assert get_async_db in calls, f"{method} {path} 缺 AsyncSession 依赖"
 
 
-def _config_route_module():
+def _system_route_module():
     """app 路由绑定的是 register_page 经 spec loader 加载的模块实例，
-    与常规导入的 ``api.apps.restful_apis.config_api`` 不是同一对象——
+    与常规导入的 ``api.apps.restful_apis.system_api`` 不是同一对象——
     打桩模块级名字必须打在前者上（monkeypatch 真实 service 类则两边通用）。"""
     import sys
 
-    return sys.modules["api.apps.restful_apis.config"]
+    return sys.modules["api.apps.restful_apis.system"]
 
 
 def test_config_restful_log_level_validation(client, monkeypatch):
-    monkeypatch.setattr(_config_route_module(), "set_log_level", lambda pkg_name, level: level == "INFO")
+    monkeypatch.setattr(_system_route_module(), "set_log_level", lambda pkg_name, level: level == "INFO")
 
-    ok = client.put("/api/v1/config/log", json={"pkg_name": "core", "level": "INFO"}).json()
-    bad = client.put("/api/v1/config/log", json={"pkg_name": "core", "level": "NOPE"}).json()
+    ok = client.put("/api/v1/system/config/log", json={"pkg_name": "core", "level": "INFO"}).json()
+    bad = client.put("/api/v1/system/config/log", json={"pkg_name": "core", "level": "NOPE"}).json()
 
     assert ok["retcode"] == 0
     assert ok["data"] == {"pkg_name": "core", "level": "INFO"}
@@ -266,9 +266,9 @@ def test_config_restful_log_level_validation(client, monkeypatch):
 
 
 def test_config_restful_log_level_listing(client, monkeypatch):
-    monkeypatch.setattr(_config_route_module(), "get_log_levels", lambda: {"core": "INFO"})
+    monkeypatch.setattr(_system_route_module(), "get_log_levels", lambda: {"core": "INFO"})
 
-    resp = client.get("/api/v1/config/log")
+    resp = client.get("/api/v1/system/config/log")
 
     assert resp.status_code == 200
     body = resp.json()
@@ -279,7 +279,7 @@ def test_config_restful_log_level_listing(client, monkeypatch):
 def test_config_routes_have_pure_async_dependency_tree(client):
     import api.apps as api_apps
 
-    for method, path in (("GET", "/api/v1/config/log"), ("PUT", "/api/v1/config/log")):
+    for method, path in (("GET", "/api/v1/system/config/log"), ("PUT", "/api/v1/system/config/log")):
         calls = _dependency_calls(client.app, method, path)
         assert get_db not in calls, f"{method} {path} 依赖树含同步 get_db"
         assert api_apps.manager not in calls, f"{method} {path} 依赖树含同步 manager"

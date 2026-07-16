@@ -21,6 +21,7 @@ from api.db.services.api_service import APITokenService
 from api.db.services.user_service import UserTenantService
 from api.utils.api_utils import Principal, async_current_user, generate_confirmation_token, get_data_error_result, get_json_result, server_error_response
 from api.utils.health_utils import run_health_checks_async
+from common.log_utils import get_log_levels, set_log_level
 from common.time_utils import current_timestamp, datetime_format
 from common.versions import get_multirag_version
 
@@ -161,3 +162,23 @@ async def rm(token: str, db: AsyncSession = Depends(get_async_db), user: Princip
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)
+
+
+class LogLevelRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    pkg_name: Annotated[str, Field(min_length=1, description='包名 (如 "core.utils.es_conn")')]
+    level: Annotated[str, Field(min_length=1, description="日志级别 (DEBUG, INFO, WARNING, ERROR)")]
+
+
+@router.get("/system/config/log", summary="获取日志级别")
+async def get_logger_levels(user: Principal = Depends(async_current_user)):
+    return get_json_result(data=get_log_levels())
+
+
+@router.put("/system/config/log", summary="设置日志级别")
+async def set_logger_level(request: LogLevelRequest, user: Principal = Depends(async_current_user)):
+    success = set_log_level(request.pkg_name, request.level)
+    if success:
+        return get_json_result(data={"pkg_name": request.pkg_name, "level": request.level})
+    return get_data_error_result(retmsg=f"Invalid log level: {request.level}")

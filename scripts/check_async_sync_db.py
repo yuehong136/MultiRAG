@@ -65,10 +65,10 @@ DEP_SCAN_FILES = (Path("api/utils/api_utils.py"),)
 SYNC_DEP_EXTRA = frozenset({"manager"})
 
 # 纳管清单（棘轮反转，只增不减）：已完成纯异步收口的文件，禁止任何同步 Session 形态。
-# 每收口一个文件，在同一提交把它加进来。
+# 每收口一个文件，在同一提交把它加进来。文件被合并/删除时条目随之迁移
+# （config_api.py 的端点已并入 system_api.py，后者在管）。
 MANAGED_PURE_ASYNC: tuple[Path, ...] = (
     Path("api/apps/restful_apis/chat_api.py"),
-    Path("api/apps/restful_apis/config_api.py"),
     Path("api/apps/restful_apis/dataset_api.py"),
     Path("api/apps/restful_apis/document_api.py"),
     Path("api/apps/restful_apis/file_api.py"),
