@@ -716,6 +716,31 @@ class Dealer:
     def hybrid_similarity(self, ans_embd, ins_embd, ans, inst):
         return self.qryr.hybrid_similarity(ans_embd, ins_embd, rag_tokenizer.tokenize(ans).split(), rag_tokenizer.tokenize(inst).split())
 
+    @staticmethod
+    def _rerank_window(page_size: int, top: int = 0) -> int:
+        """Candidate-window size shared by retrieval's block fetch and slice.
+
+        ``retrieval`` reuses this value BOTH as the backend block size and as
+        the modulus for extracting a single page from a (re)ranked block::
+
+            req["page"] = global_offset // window   # which block to fetch
+            begin       = global_offset %  window   # where the page starts
+
+        For those two to agree the window MUST be an exact multiple of
+        ``page_size``; otherwise blocks and pages drift apart and deep
+        pagination silently drops results and returns short pages.
+
+        The window targets a provider-friendly pool of ~64 candidates, bounded
+        by ``top`` when given (i.e. when an external reranker is active), and is
+        always rounded UP to a whole number of pages to preserve the invariant.
+        """
+        if page_size <= 1:
+            return min(30, top) if top > 0 else 30
+        window = math.ceil(64 / page_size) * page_size
+        if top > 0:
+            window = min(window, math.ceil(top / page_size) * page_size)
+        return window
+
     async def retrieval(
         self,
         question,
@@ -763,13 +788,18 @@ class Dealer:
         if not question:
             return ranks
 
-        # Ensure RERANK_LIMIT is multiple of page_size
-        RERANK_LIMIT = math.ceil(64 / page_size) * page_size if page_size > 1 else 1
-        RERANK_LIMIT = max(30, RERANK_LIMIT)
+        # Candidate window for block-based pagination. It MUST stay a multiple
+        # of page_size so the block fetched (global_offset // RERANK_LIMIT) and
+        # the in-block page slice (global_offset % RERANK_LIMIT) stay aligned;
+        # see _rerank_window. When an external reranker is active the pool is
+        # also bounded by top.
+        RERANK_LIMIT = self._rerank_window(page_size, top if rerank_mdl else 0)
+        page = max(page, 1)
+        global_offset = (page - 1) * page_size
         req = {
             "kb_names": kb_names,
             "doc_ids": doc_ids,
-            "page": math.ceil(page_size * page / RERANK_LIMIT),
+            "page": global_offset // RERANK_LIMIT + 1,
             "size": RERANK_LIMIT,
             "question": question,
             "vector": True,
@@ -856,9 +886,7 @@ class Dealer:
             ranks["doc_aggs"] = []
             return ranks
 
-        max_pages = max(RERANK_LIMIT // max(page_size, 1), 1)
-        page_index = (page - 1) % max_pages
-        begin = page_index * page_size
+        begin = global_offset % RERANK_LIMIT
         end = begin + page_size
         page_idx = valid_idx[begin:end]
 
