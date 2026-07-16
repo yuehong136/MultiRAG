@@ -8,7 +8,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
 MULTIRAG_IMAGE="${1:-${MULTIRAG_IMAGE:-datav/multirag:latest}}"
-MULTIRAG_DEPS_IMAGE="${MULTIRAG_DEPS_IMAGE:-multirag_deps:uv0.11.27-tika3.2.3-build-only}"
+MULTIRAG_DEPS_IMAGE="${MULTIRAG_DEPS_IMAGE:-multirag_deps:uv0.11.27-tika3.3.0-build-only}"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
 NEED_MIRROR="${NEED_MIRROR:-1}"
 REDIS_BUILD_JOBS="${REDIS_BUILD_JOBS:-2}"

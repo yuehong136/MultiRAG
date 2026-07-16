@@ -6,8 +6,8 @@
 !cl100k_base.tiktoken
 !libssl1.1_1.1.1f-1ubuntu2_amd64.deb
 !libssl1.1_1.1.1f-1ubuntu2_arm64.deb
-!tika-server-standard-3.2.3.jar
-!tika-server-standard-3.2.3.jar.md5
+!tika-server-standard-3.3.0.jar
+!tika-server-standard-3.3.0.jar.md5
 !uv-x86_64-unknown-linux-gnu.tar.gz
 !uv-aarch64-unknown-linux-gnu.tar.gz
 !nltk_data/

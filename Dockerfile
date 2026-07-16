@@ -1,4 +1,4 @@
-ARG MULTIRAG_DEPS_IMAGE=multirag_deps:uv0.11.27-tika3.2.3-build-only
+ARG MULTIRAG_DEPS_IMAGE=multirag_deps:uv0.11.27-tika3.3.0-build-only
 FROM ${MULTIRAG_DEPS_IMAGE} AS multirag_deps
 
 # base stage
@@ -175,10 +175,10 @@ RUN --mount=type=bind,from=multirag_deps,source=/huggingface.co,target=/huggingf
 # 设置Tika服务器
 RUN --mount=type=bind,from=multirag_deps,source=/,target=/deps \
     cp -r /deps/nltk_data /root/ && \
-    cp /deps/tika-server-standard-3.2.3.jar /deps/tika-server-standard-3.2.3.jar.md5 /multirag/ && \
+    cp /deps/tika-server-standard-3.3.0.jar /deps/tika-server-standard-3.3.0.jar.md5 /multirag/ && \
     cp /deps/cl100k_base.tiktoken /multirag/9b5ad71b2ce5302211f9c61530b329a4922fc6a4
 
-ENV TIKA_SERVER_JAR="file:///multirag/tika-server-standard-3.2.3.jar"
+ENV TIKA_SERVER_JAR="file:///multirag/tika-server-standard-3.3.0.jar"
 ENV DEBIAN_FRONTEND=noninteractive
 
 # 添加Chrome和ChromeDriver依赖

@@ -379,7 +379,7 @@ models), then build the local dependency resource image:
 ```bash
 HF_ENDPOINT=https://hf-mirror.com uv run --script download_deps.py --china-mirrors
 docker build --platform linux/amd64 -f Dockerfile.deps \
-  -t multirag_deps:uv0.11.27-tika3.2.3-build-only .
+  -t multirag_deps:uv0.11.27-tika3.3.0-build-only .
 ```
 
 Teams and CI can push this image to an internal registry and select it with
@@ -397,7 +397,7 @@ builds the application image, and verifies both uv and an empty
 
 ```bash
 docker build --platform linux/amd64 --build-arg NEED_MIRROR=1 \
-  --build-arg MULTIRAG_DEPS_IMAGE=multirag_deps:uv0.11.27-tika3.2.3-build-only \
+  --build-arg MULTIRAG_DEPS_IMAGE=multirag_deps:uv0.11.27-tika3.3.0-build-only \
   -f Dockerfile -t datav/multirag:latest .
 ```
 
@@ -405,7 +405,7 @@ To use a dependency image from an internal registry:
 
 ```bash
 docker build --platform linux/amd64 \
-  --build-arg MULTIRAG_DEPS_IMAGE=registry.example.com/multirag_deps:uv0.11.27-tika3.2.3-build-only \
+  --build-arg MULTIRAG_DEPS_IMAGE=registry.example.com/multirag_deps:uv0.11.27-tika3.3.0-build-only \
   -f Dockerfile -t multirag:latest .
 ```
 

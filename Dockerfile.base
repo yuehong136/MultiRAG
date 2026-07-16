@@ -79,8 +79,8 @@ RUN --mount=type=bind,source=./huggingface.co,target=/mnt/models \
 COPY ./nltk_data /root/nltk_data
 
 # 设置Tika服务器
-COPY tika-server-standard-3.0.0.jar /multirag/tika-server-standard.jar
-COPY tika-server-standard-3.0.0.jar.md5 /multirag/tika-server-standard.jar.md5
+COPY tika-server-standard-3.3.0.jar /multirag/tika-server-standard.jar
+COPY tika-server-standard-3.3.0.jar.md5 /multirag/tika-server-standard.jar.md5
 ENV TIKA_SERVER_JAR="file:///multirag/tika-server-standard.jar"
 ENV DEBIAN_FRONTEND=noninteractive
 

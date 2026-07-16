@@ -372,7 +372,7 @@ DeepDoc 和 uv 0.11.27 等构建资源（不包含运行时 embedding/rerank 模
 ```bash
 HF_ENDPOINT=https://hf-mirror.com uv run --script download_deps.py --china-mirrors
 docker build --platform linux/amd64 -f Dockerfile.deps \
-  -t multirag_deps:uv0.11.27-tika3.2.3-build-only .
+  -t multirag_deps:uv0.11.27-tika3.3.0-build-only .
 ```
 
 团队或 CI 可将该镜像推送到内部仓库，并在构建主镜像时通过
@@ -389,7 +389,7 @@ uv 版本与主镜像中的 `/root/.ragdatav` 为空。手工构建主镜像的�
 
 ```bash
 docker build --platform linux/amd64 --build-arg NEED_MIRROR=1 \
-  --build-arg MULTIRAG_DEPS_IMAGE=multirag_deps:uv0.11.27-tika3.2.3-build-only \
+  --build-arg MULTIRAG_DEPS_IMAGE=multirag_deps:uv0.11.27-tika3.3.0-build-only \
   -f Dockerfile -t datav/multirag:latest .
 ```
 
@@ -397,7 +397,7 @@ docker build --platform linux/amd64 --build-arg NEED_MIRROR=1 \
 
 ```bash
 docker build --platform linux/amd64 \
-  --build-arg MULTIRAG_DEPS_IMAGE=registry.example.com/multirag_deps:uv0.11.27-tika3.2.3-build-only \
+  --build-arg MULTIRAG_DEPS_IMAGE=registry.example.com/multirag_deps:uv0.11.27-tika3.3.0-build-only \
   -f Dockerfile -t multirag:latest .
 ```
 
