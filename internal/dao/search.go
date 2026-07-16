@@ -17,7 +17,10 @@
 package dao
 
 import (
+	"errors"
 	"strings"
+
+	"gorm.io/gorm"
 
 	"multirag/internal/entity"
 )
@@ -155,9 +158,33 @@ func (dao *SearchDAO) DeleteByID(id string) error {
 
 // Accessible4Deletion checks if a search can be deleted by a specific user
 // Reference: Python search_service.py::accessible4deletion
-// Returns true if the search exists, is valid, and was created by the user
-func (dao *SearchDAO) Accessible4Deletion(searchID string, userID string) bool {
+// Returns true if the search exists, is valid, and was created by the user;
+// a missing row means "not authorized" (false, nil), only real DB failures return an error
+func (dao *SearchDAO) Accessible4Deletion(searchID string, userID string) (bool, error) {
 	var search entity.Search
 	err := DB.Where("id = ? AND created_by = ? AND status = ?", searchID, userID, "1").First(&search).Error
-	return err == nil
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// GetByTenantIDAndID gets search by tenant ID and search ID
+// Reference: Python SearchService.query(tenant_id=tenant_id, id=search_id)
+func (dao *SearchDAO) GetByTenantIDAndID(tenantID string, searchID string) (*entity.Search, error) {
+	var search entity.Search
+	err := DB.Where("tenant_id = ? AND id = ? AND status = ?", tenantID, searchID, "1").First(&search).Error
+	if err != nil {
+		return nil, err
+	}
+	return &search, nil
+}
+
+// UpdateByID updates search by ID
+// Reference: Python common_service.py::update_by_id
+func (dao *SearchDAO) UpdateByID(id string, updates map[string]interface{}) error {
+	return DB.Model(&entity.Search{}).Where("id = ?", id).Updates(updates).Error
 }
