@@ -960,10 +960,11 @@ class Parser(ProcessBase):
         sections, tables, section_images = markdown_parser(
             name,
             blob,
-            separate_tables=False,
+            separate_tables=True,
             delimiter=conf.get("delimiter"),
             return_section_images=True,
         )
+
         if conf.get("output_format") == "json":
             json_results = []
 
@@ -983,6 +984,16 @@ class Parser(ProcessBase):
                 json_result["doc_type_kwd"] = "image" if json_result.get("image") is not None else "text"
                 json_results.append(json_result)
 
+            for table in tables:
+                table_text = table[0][1] if table and table[0] else ""
+                if table_text:
+                    json_results.append(
+                        {
+                            "text": table_text,
+                            "doc_type_kwd": "table",
+                        }
+                    )
+
             enhance_media_sections_with_vision(
                 json_results,
                 self._canvas._tenant_id,
@@ -991,7 +1002,9 @@ class Parser(ProcessBase):
             )
             self.set_output("json", json_results)
         else:
-            self.set_output("text", "\n".join([section_text for section_text, _ in sections]))
+            texts = [section_text for section_text, _ in sections if section_text]
+            texts.extend(table[0][1] for table in tables if table and table[0] and table[0][1])
+            self.set_output("text", "\n".join(texts))
 
     def _code(self, name, blob, **kwargs):
         self.callback(random.randint(1, 5) / 100.0, "Start to work on a text or code file.")

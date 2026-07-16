@@ -687,10 +687,9 @@ class Markdown(MarkdownParser):
                 txt = f.read()
 
         remainder, tables = self.extract_tables_and_remainder(f"{txt}\n", separate_tables=separate_tables)
-        # To eliminate duplicate tables in chunking result, uncomment code below and set separate_tables to True in line 410.
-        # extractor = MarkdownElementExtractor(remainder)
-        extractor = MarkdownElementExtractor(txt)
-        image_refs = self.extract_image_urls_with_lines(txt)
+        parsing_text = remainder if separate_tables else txt
+        extractor = MarkdownElementExtractor(parsing_text)
+        image_refs = self.extract_image_urls_with_lines(parsing_text)
         element_sections = extractor.extract_elements(delimiter, include_meta=True)
 
         sections = []
