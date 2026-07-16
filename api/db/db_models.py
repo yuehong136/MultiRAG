@@ -1265,6 +1265,7 @@ class CanvasTemplate(BaseModel):
     title: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True, default=dict, doc="Canvas title")
     description: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True, default=dict, doc="Canvas description")
     canvas_type: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="Canvas type")
+    canvas_types: Mapped[list | None] = mapped_column(JSONB, index=False, nullable=True, default=list, doc="Canvas types")
     canvas_category: Mapped[str] = mapped_column(String(32), index=True, nullable=False, default="agent_canvas", doc="Canvas category: agent_canvas|dataflow_canvas")
     dsl: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True, default={})
 

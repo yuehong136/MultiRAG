@@ -25,6 +25,7 @@ from api.db.services.memory_service import MemoryService
 from api.db.services.system_settings_service import SystemSettingsService
 from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMService
 from api.db.services.user_service import TenantService, UserTenantService
+from api.db.template_utils import normalize_canvas_template_categories
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 
 # from api.common.base64 import encode_to_base64
@@ -258,10 +259,15 @@ def add_graph_templates(db: Session):
         logging.warning("Missing agent templates!")
         return
 
-    for fnm in os.listdir(dir):
+    for fnm in sorted(os.listdir(dir)):
+        if not fnm.endswith(".json"):
+            logging.debug("Skipping non-json template file in %s: %s", dir, fnm)
+            continue
+        template_path = os.path.join(dir, fnm)
         try:
-            with open(os.path.join(dir, fnm), encoding="utf-8") as f:
-                cnvs = json.load(f)
+            with open(template_path, encoding="utf-8") as f:
+                cnvs = normalize_canvas_template_categories(json.load(f))
+            logging.info("Loaded and normalized template file: %s", template_path)
 
             # 将 ID 转换为字符串以确保一致性
             cnvs["id"] = str(cnvs["id"])
@@ -273,7 +279,7 @@ def add_graph_templates(db: Session):
             except HTTPException as e:
                 if e.status_code == 404:
                     # 记录不存在，继续执行插入逻辑
-                    print(f"Template {cnvs['id']} not found, will insert.")
+                    logging.debug("Template %s not found, will insert.", cnvs["id"])
                 else:
                     raise  # 其他异常重新抛出
             if existing_template:
@@ -294,7 +300,7 @@ def add_graph_templates(db: Session):
                     db.rollback()  # 回滚事务
 
         except Exception as e:
-            logging.exception(f"Add agent templates error: {e}")
+            logging.exception(f"Add agent templates error for {template_path}: {e}")
 
             db.rollback()  # 回滚事务
 
