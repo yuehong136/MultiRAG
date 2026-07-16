@@ -3037,7 +3037,15 @@ async def main():
     logging.error("BUG!!! You should not reach here!!!")
 
 
-if __name__ == "__main__":
+def run_task_executor() -> None:
     faulthandler.enable()
     init_root_logger(CONSUMER_NAME)
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except Exception:
+        logging.exception("Task executor terminated unexpectedly")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    run_task_executor()

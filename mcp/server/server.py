@@ -632,7 +632,7 @@ def create_starlette_app() -> Starlette:
     ]
 
     return Starlette(
-        debug=True,
+        debug=False,
         routes=routes,
         middleware=parent_middleware,
         lifespan=combined_lifespan,

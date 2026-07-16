@@ -19,7 +19,6 @@ import os
 import signal
 import sys
 import threading
-import traceback
 import uuid
 
 import uvicorn
@@ -210,7 +209,6 @@ if __name__ == "__main__":
         )
     except Exception:
         logging.exception("Failed to start MultiRAG server")
-        traceback.print_exc()
         stop_event.set()
         stop_event.wait(1)  # 最多等待1秒，stop_event已设置则立即返回
         os.kill(os.getpid(), signal.SIGKILL)
