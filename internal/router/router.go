@@ -197,6 +197,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 				files.GET("", r.fileHandler.ListFiles)
 				files.DELETE("", r.fileHandler.DeleteFiles)
 				files.POST("/move", r.fileHandler.MoveFiles)
+				files.GET("/:id/ancestors", r.fileHandler.GetFileAncestors)
 				files.GET("/:id", r.fileHandler.Download)
 			}
 
