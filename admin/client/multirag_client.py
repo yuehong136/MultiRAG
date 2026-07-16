@@ -1536,7 +1536,7 @@ class MultiRAGClient:
             "meta_fields": meta_fields,
         }
 
-        response = self.http_client.request("PUT", f"datasets/{dataset_id}/documents/{doc_id}", json_body=payload, use_api_base=True, auth_kind="web")
+        response = self.http_client.request("PATCH", f"datasets/{dataset_id}/documents/{doc_id}", json_body=payload, use_api_base=True, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200:
             if res_json.get("code") == 0:

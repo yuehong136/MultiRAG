@@ -3053,10 +3053,11 @@ async def upload_and_parse(conversation_id: str = Form(..., description="会话I
 
 # ============================================================================
 # 【废弃通告】设置文档元数据已收编进 RESTful 更新端点：
-#   api/apps/restful_apis/document_api.py（PUT /api/v1/datasets/{dataset_id}/documents/{document_id}，
-#   body 传 meta_fields，类型校验见 validation_utils.UpdateDocumentReq.validate_document_meta_fields）。
+#   api/apps/restful_apis/document_api.py（PATCH /api/v1/datasets/{dataset_id}/documents/{document_id}，
+#   body 传 meta_fields，类型校验见 validation_utils.UpdateDocumentReq.validate_document_meta_fields；
+#   PUT 为 deprecated 别名，前端当前仍在发 PUT）。
 # 下列旧路由（POST /v1/document/set_meta）已标注 deprecated=True：
-# 前端 knowledge.ts 已迁移到 PUT 端点，待前端部署后再于后续版本移除。
+# 前端 knowledge.ts 已迁移到 RESTful 端点，待前端部署后再于后续版本移除。
 # ============================================================================
 @router.post("/set_meta", summary="设置文档元数据", response_description="成功设置文档元数据", deprecated=True)
 def set_meta(request: SetMetaRequest, db: Session = Depends(get_db), user=Depends(manager)):
