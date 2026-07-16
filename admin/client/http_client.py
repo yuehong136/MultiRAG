@@ -100,13 +100,13 @@ class HttpClient:
             total_duration = 0.0
             for _ in range(iterations):
                 start_time = time.perf_counter()
-                response = http_function(url, headers=merged_headers, json=json_body, data=data, stream=stream)
+                response = http_function(url, headers=merged_headers, json=json_body, data=data, params=params, stream=stream)
                 end_time = time.perf_counter()
                 total_duration += end_time - start_time
                 response_list.append(response)
             return {"duration": total_duration, "response_list": response_list}
         else:
-            return http_function(url, headers=merged_headers, json=json_body, data=data, stream=stream)
+            return http_function(url, headers=merged_headers, json=json_body, data=data, params=params, stream=stream)
 
     def request_json(
         self,

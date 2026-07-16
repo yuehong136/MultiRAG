@@ -2930,7 +2930,14 @@ async def parse(url: str | None = Form(None, description="网页URL（可选）"
         return get_json_result(retcode=RetCode.SERVER_ERROR, retmsg=str(e), data=False)
 
 
-@router.post("/metadata/summary", summary="获取元数据汇总", response_description="成功获取元数据汇总")
+# ============================================================================
+# 【废弃通告】元数据汇总已 RESTful 化，迁移至
+#   api/apps/restful_apis/document_api.py（GET /api/v1/datasets/{dataset_id}/metadata/summary，
+#   doc_ids 为逗号分隔 query 参数）。
+# 下列旧路由（POST /v1/document/metadata/summary）已标注 deprecated=True：
+# 前端 knowledge.ts 仍在调用，暂不删除，待前端迁移后再于后续版本移除。
+# ============================================================================
+@router.post("/metadata/summary", summary="获取元数据汇总", response_description="成功获取元数据汇总", deprecated=True)
 def metadata_summary(request: MetadataSummaryRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """获取知识库中文档元数据的汇总统计。
 

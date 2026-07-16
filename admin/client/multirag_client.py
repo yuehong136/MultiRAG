@@ -1246,12 +1246,12 @@ class MultiRAGClient:
         if dataset_id is None:
             return
 
-        payload = {"kb_id": dataset_id}
+        params = {}
         doc_ids = command.get("document_ids") or []
         if doc_ids:
-            payload["doc_ids"] = doc_ids
+            params["doc_ids"] = ",".join(doc_ids)
 
-        response = self.http_client.request("POST", "document/metadata/summary", json_body=payload, use_api_base=False, auth_kind="web")
+        response = self.http_client.request("GET", f"datasets/{dataset_id}/metadata/summary", params=params or None, use_api_base=True, auth_kind="web")
         res_json = response.json()
         code = res_json.get("code", res_json.get("retcode", -1))
         if response.status_code != 200 or code != 0:

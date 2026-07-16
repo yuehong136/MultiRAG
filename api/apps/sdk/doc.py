@@ -415,29 +415,6 @@ def list_documents(
         return get_error_data_result(retmsg="Failed to retrieve documents")
 
 
-@router.get("/datasets/{dataset_id}/metadata/summary", summary="获取元数据汇总")
-def metadata_summary(dataset_id: str, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
-    """
-    获取数据集中文档元数据的汇总统计。
-
-    Args:
-        dataset_id: 数据集ID
-        db: 数据库会话
-        tenant_id: 租户ID
-
-    Returns:
-        元数据汇总，格式: {"summary": {key: [[value, count], ...], ...}}
-    """
-    if not KnowledgebaseService.accessible(db, kb_id=dataset_id, user_id=tenant_id):
-        return get_error_data_result(retmsg=f"You don't own the dataset {dataset_id}.")
-
-    try:
-        summary = DocMetadataService.get_metadata_summary(db, dataset_id)
-        return get_result(data={"summary": summary})
-    except Exception as e:
-        return server_error_response(e)
-
-
 class MetadataUpdateSelectorSDK(BaseModel):
     """元数据批量更新的选择器"""
 
