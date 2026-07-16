@@ -181,21 +181,27 @@ def list_files(db: Session, tenant_id: str, args: dict) -> tuple[bool, Any]:
     return True, {"total": total, "files": files, "parent_folder": parent_folder.to_dict()}
 
 
-def get_parent_folder(db: Session, file_id: str) -> tuple[bool, Any]:
-    """获取某个文件的父文件夹。"""
+def get_parent_folder(db: Session, file_id: str, user_id: str | None = None) -> tuple[bool, Any]:
+    """获取某个文件的父文件夹（带团队权限校验）。"""
     file = FileService.get_by_id(db, file_id)
     if not file:
         return False, "Folder not found!"
+
+    if user_id and not check_file_team_permission(db, file, user_id):
+        return False, "No authorization."
 
     parent_folder = FileService.get_parent_folder(db, file_id)
     return True, {"parent_folder": parent_folder.to_dict()}
 
 
-def get_all_parent_folders(db: Session, file_id: str) -> tuple[bool, Any]:
-    """获取某个文件的全部祖先文件夹。"""
+def get_all_parent_folders(db: Session, file_id: str, user_id: str | None = None) -> tuple[bool, Any]:
+    """获取某个文件的全部祖先文件夹（带团队权限校验）。"""
     file = FileService.get_by_id(db, file_id)
     if not file:
         return False, "Folder not found!"
+
+    if user_id and not check_file_team_permission(db, file, user_id):
+        return False, "No authorization."
 
     parent_folders = FileService.get_all_parent_folders(db, file_id)
     return True, {"parent_folders": [pf.to_dict() for pf in parent_folders]}

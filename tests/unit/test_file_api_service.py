@@ -99,6 +99,43 @@ def test_list_files_success(monkeypatch, db):
     assert data["parent_folder"]["id"] == "parent"
 
 
+# ============ get_parent_folder / get_all_parent_folders（IDOR 钉板） ============
+
+
+def test_get_parent_folder_no_permission(monkeypatch, db):
+    monkeypatch.setattr(svc.FileService, "get_by_id", lambda d, fid: _file())
+    monkeypatch.setattr(svc, "check_file_team_permission", lambda d, f, uid: False)
+    ok, msg = svc.get_parent_folder(db, "f1", user_id="intruder")
+    assert ok is False
+    assert msg == "No authorization."
+
+
+def test_get_parent_folder_success_with_permission(monkeypatch, db):
+    monkeypatch.setattr(svc.FileService, "get_by_id", lambda d, fid: _file())
+    monkeypatch.setattr(svc, "check_file_team_permission", lambda d, f, uid: True)
+    monkeypatch.setattr(svc.FileService, "get_parent_folder", lambda d, fid: _file(id="pf1", name="parent"))
+    ok, result = svc.get_parent_folder(db, "f1", user_id="u1")
+    assert ok is True
+    assert result["parent_folder"]["id"] == "pf1"
+
+
+def test_get_all_parent_folders_no_permission(monkeypatch, db):
+    monkeypatch.setattr(svc.FileService, "get_by_id", lambda d, fid: _file())
+    monkeypatch.setattr(svc, "check_file_team_permission", lambda d, f, uid: False)
+    ok, msg = svc.get_all_parent_folders(db, "f1", user_id="intruder")
+    assert ok is False
+    assert msg == "No authorization."
+
+
+def test_get_all_parent_folders_success_with_permission(monkeypatch, db):
+    monkeypatch.setattr(svc.FileService, "get_by_id", lambda d, fid: _file())
+    monkeypatch.setattr(svc, "check_file_team_permission", lambda d, f, uid: True)
+    monkeypatch.setattr(svc.FileService, "get_all_parent_folders", lambda d, fid: [_file(id="pf1"), _file(id="root")])
+    ok, result = svc.get_all_parent_folders(db, "f1", user_id="u1")
+    assert ok is True
+    assert [f["id"] for f in result["parent_folders"]] == ["pf1", "root"]
+
+
 # ============================ delete_files ============================
 
 

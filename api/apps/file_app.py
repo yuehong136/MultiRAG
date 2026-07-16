@@ -340,6 +340,9 @@ def get_parent_folder(file_id: str, db: Session = Depends(get_db), user=Depends(
         if not file:
             return get_data_error_result(retmsg="Folder not found!")
 
+        if not check_file_team_permission(db, file, user.id):
+            return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
+
         parent_folder = FileService.get_parent_folder(db, file_id)
         return get_json_result(data={"parent_folder": parent_folder.to_dict()})
     except Exception as e:
@@ -361,6 +364,9 @@ def get_all_parent_folders(file_id: str, db: Session = Depends(get_db), user=Dep
         file = FileService.get_by_id(db, file_id)
         if not file:
             return get_data_error_result(retmsg="Folder not found!")
+
+        if not check_file_team_permission(db, file, user.id):
+            return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
 
         parent_folders = FileService.get_all_parent_folders(db, file_id)
         parent_folders_res = [parent_folder.to_dict() for parent_folder in parent_folders]

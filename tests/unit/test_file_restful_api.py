@@ -98,8 +98,8 @@ def test_file_root_folder(client, monkeypatch):
 
 def test_file_parent_and_ancestors(client, monkeypatch):
     records: list[dict] = []
-    monkeypatch.setattr(file_api_service, "get_parent_folder", lambda s, fid: _record(records, s) or (True, {"parent_folder": {"id": "p-1"}}))
-    monkeypatch.setattr(file_api_service, "get_all_parent_folders", lambda s, fid: _record(records, s) or (True, {"parent_folders": [{"id": "p-1"}]}))
+    monkeypatch.setattr(file_api_service, "get_parent_folder", lambda s, fid, user_id=None: _record(records, s) or (True, {"parent_folder": {"id": "p-1"}}))
+    monkeypatch.setattr(file_api_service, "get_all_parent_folders", lambda s, fid, user_id=None: _record(records, s) or (True, {"parent_folders": [{"id": "p-1"}]}))
 
     parent = client.get("/api/v1/files/f-1/parent").json()
     ancestors = client.get("/api/v1/files/f-1/ancestors").json()

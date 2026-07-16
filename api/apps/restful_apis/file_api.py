@@ -292,7 +292,7 @@ async def parent_folder(
     tenant_id: str = Depends(async_current_tenant_id),
 ):
     try:
-        success, result = await db.run_sync(lambda s: file_api_service.get_parent_folder(s, file_id))  # TODO(async-phase4)
+        success, result = await db.run_sync(lambda s: file_api_service.get_parent_folder(s, file_id, user_id=tenant_id))  # TODO(async-phase4)
         return _respond(success, result)
     except Exception as e:
         logger.exception(e)
@@ -306,7 +306,7 @@ async def ancestors(
     tenant_id: str = Depends(async_current_tenant_id),
 ):
     try:
-        success, result = await db.run_sync(lambda s: file_api_service.get_all_parent_folders(s, file_id))  # TODO(async-phase4)
+        success, result = await db.run_sync(lambda s: file_api_service.get_all_parent_folders(s, file_id, user_id=tenant_id))  # TODO(async-phase4)
         return _respond(success, result)
     except Exception as e:
         logger.exception(e)
