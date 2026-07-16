@@ -210,6 +210,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 			chats := v1.Group("/chats")
 			{
 				chats.GET("", r.chatHandler.ListChats)
+				chats.GET("/:chat_id", r.chatHandler.GetChat)
 			}
 
 			// Search routes (RESTful, aligned with Python /api/v1/searches)
