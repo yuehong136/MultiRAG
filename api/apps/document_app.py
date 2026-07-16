@@ -2935,7 +2935,7 @@ async def parse(url: str | None = Form(None, description="网页URL（可选）"
 #   api/apps/restful_apis/document_api.py（GET /api/v1/datasets/{dataset_id}/metadata/summary，
 #   doc_ids 为逗号分隔 query 参数）。
 # 下列旧路由（POST /v1/document/metadata/summary）已标注 deprecated=True：
-# 前端 knowledge.ts 仍在调用，暂不删除，待前端迁移后再于后续版本移除。
+# 前端 knowledge.ts 已迁移到新端点（web 仓 d6b442d），待前端部署后再于后续版本移除。
 # ============================================================================
 @router.post("/metadata/summary", summary="获取元数据汇总", response_description="成功获取元数据汇总", deprecated=True)
 def metadata_summary(request: MetadataSummaryRequest, db: Session = Depends(get_db), user=Depends(manager)):
