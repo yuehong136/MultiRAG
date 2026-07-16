@@ -33,6 +33,7 @@ from core.nlp import naive_merge
 class TokenChunkerParam(ProcessParamBase):
     def __init__(self):
         super().__init__()
+        self.delimiter_mode = "token_size"
         self.chunk_token_size = 512
         self.delimiters = ["\n"]
         self.overlapped_percent = 0
@@ -41,6 +42,7 @@ class TokenChunkerParam(ProcessParamBase):
         self.image_context_size = 0
 
     def check(self):
+        self.check_valid_value(self.delimiter_mode, "Delimiter mode abnormal.", ["token_size", "delimiter", "one"])
         if self.delimiters is None:
             self.delimiters = []
         elif isinstance(self.delimiters, str):
@@ -303,6 +305,10 @@ class TokenChunker(ProcessBase):
         overlapped_percent = normalize_overlapped_percent(self._param.overlapped_percent)
         if from_upstream.output_format in ["markdown", "text", "html"]:
             payload = getattr(from_upstream, f"{from_upstream.output_format}_result") or ""
+            if self._param.delimiter_mode == "one":
+                self.set_output("chunks", [{"text": payload}] if payload.strip() else [])
+                self.callback(1, "Done.")
+                return
             cks = (
                 _split_text_by_pattern(payload, delimiter_pattern)
                 if delimiter_pattern
@@ -330,6 +336,18 @@ class TokenChunker(ProcessBase):
             return
 
         json_result = from_upstream.json_result or []
+        if self._param.delimiter_mode == "one":
+            sections = []
+            for item in json_result:
+                text = item.get("text")
+                if not isinstance(text, str):
+                    text = item.get("content_with_weight")
+                if isinstance(text, str) and text.strip():
+                    sections.append(text)
+            merged_text = "\n".join(sections)
+            self.set_output("chunks", [{"text": merged_text}] if merged_text.strip() else [])
+            self.callback(1, "Done.")
+            return
         chunks = _build_json_chunks(json_result, delimiter_pattern)
         _attach_context_to_media_chunks(chunks, self._param.table_context_size, self._param.image_context_size)
         if not delimiter_pattern:

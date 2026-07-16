@@ -1,6 +1,8 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from core.flow.chunker.title_chunker import TitleChunker, TitleChunkerParam
 from core.flow.chunker.token_chunker import TokenChunker, TokenChunkerParam
 from core.flow.parser.pdf_chunk_metadata import PDF_POSITIONS_KEY
@@ -41,6 +43,53 @@ def test_token_chunker_splits_text_with_delimiters_and_children():
         {"text": "Body@@", "mom": "Body@@Child"},
         {"text": "Child", "mom": "Body@@Child"},
     ]
+
+
+def test_token_chunker_one_mode_keeps_text_as_single_chunk():
+    param = TokenChunkerParam()
+    param.delimiter_mode = "one"
+    param.check()
+    chunker = _make_process(TokenChunker, param)
+
+    asyncio.run(
+        chunker._invoke(
+            name="sample.txt",
+            output_format="text",
+            text="Intro##Body@@Child",
+        )
+    )
+
+    assert _outputs(chunker)["chunks"] == [{"text": "Intro##Body@@Child"}]
+
+
+def test_token_chunker_one_mode_merges_json_sections_into_single_chunk():
+    param = TokenChunkerParam()
+    param.delimiter_mode = "one"
+    param.check()
+    chunker = _make_process(TokenChunker, param)
+
+    asyncio.run(
+        chunker._invoke(
+            name="sample.pdf",
+            output_format="json",
+            json=[
+                {"text": "First section.", "doc_type_kwd": "text"},
+                {"doc_type_kwd": "text", "content_with_weight": "Legacy section."},
+                {"text": "   ", "doc_type_kwd": "text"},
+                {"text": "Last section.", "doc_type_kwd": "table"},
+            ],
+        )
+    )
+
+    assert _outputs(chunker)["chunks"] == [{"text": "First section.\nLegacy section.\nLast section."}]
+
+
+def test_token_chunker_param_rejects_unknown_delimiter_mode():
+    param = TokenChunkerParam()
+    param.delimiter_mode = "sentence"
+
+    with pytest.raises(ValueError, match=r"Delimiter mode abnormal\."):
+        param.check()
 
 
 def test_token_chunker_preserves_media_types_context_and_pdf_fields():
