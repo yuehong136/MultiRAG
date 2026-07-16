@@ -514,7 +514,7 @@ def run_graphrag(db: Session, tenant_id: str, dataset_id: str) -> tuple[bool, An
 
     task_id = queue_raptor_o_graphrag_tasks(
         db,
-        sample_doc_id=sample_document,
+        sample_doc=sample_document,
         ty="graphrag",
         priority=0,
         fake_doc_id=GRAPH_RAPTOR_FAKE_DOC_ID,
@@ -599,7 +599,7 @@ def run_raptor(db: Session, tenant_id: str, dataset_id: str) -> tuple[bool, Any]
 
     task_id = queue_raptor_o_graphrag_tasks(
         db,
-        sample_doc_id=sample_document,
+        sample_doc=sample_document,
         ty="raptor",
         priority=0,
         fake_doc_id=GRAPH_RAPTOR_FAKE_DOC_ID,
