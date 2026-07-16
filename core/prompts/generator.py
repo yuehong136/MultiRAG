@@ -6,8 +6,8 @@ import re
 from copy import deepcopy
 from typing import Any
 
-import jinja2
 import json_repair
+from jinja2.sandbox import SandboxedEnvironment
 
 from api.db.db_models import db_connection
 from common.constants import TAG_FLD
@@ -199,7 +199,7 @@ CLUSTER_KEYWORD_PROMPT_TEMPLATE = load_prompt("cluster_keyword_prompt")
 GLOBAL_TAG_PROMPT_TEMPLATE = load_prompt("global_tag_prompt")
 GLOBAL_SUMMARY_PROMPT_TEMPLATE = load_prompt("global_summary_prompt")
 
-PROMPT_JINJA_ENV = jinja2.Environment(autoescape=False, trim_blocks=True, lstrip_blocks=True)
+PROMPT_JINJA_ENV = SandboxedEnvironment(autoescape=False, trim_blocks=True, lstrip_blocks=True)
 
 
 # Document Analysis Prompt Rendering Functions
