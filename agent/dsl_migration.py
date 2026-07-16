@@ -20,6 +20,7 @@ import re
 COMPONENT_RENAMES = {
     "Splitter": "TokenChunker",
     "HierarchicalMerger": "TitleChunker",
+    "PDFGenerator": "DocGenerator",
 }
 
 NODE_TYPE_RENAMES = {

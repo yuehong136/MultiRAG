@@ -66,7 +66,7 @@ RUN --mount=type=cache,id=multirag_apt,target=/var/cache/apt,sharing=locked \
     apt install -y gnupg unzip curl wget git vim less && \
     apt install -y ghostscript && \
     apt install -y pandoc && \
-    apt install -y texlive && \
+    apt install -y texlive texlive-latex-extra texlive-xetex texlive-lang-chinese && \
     apt install -y fonts-freefont-ttf fonts-noto-cjk && \
     apt install -y postgresql-client && \
     apt install -y fonts-wqy-zenhei fonts-wqy-microhei && \

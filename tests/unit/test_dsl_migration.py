@@ -95,3 +95,46 @@ def test_normalize_chunker_dsl_rewrites_legacy_components_and_refs():
 def test_normalize_chunker_dsl_ignores_non_pipeline_payloads():
     assert normalize_chunker_dsl(None) is None
     assert normalize_chunker_dsl({"not_components": []}) == {"not_components": []}
+
+
+def test_normalize_chunker_dsl_rewrites_pdf_generator_to_doc_generator():
+    legacy = {
+        "path": ["PDFGenerator:Report", "Message:Answer"],
+        "components": {
+            "PDFGenerator:Report": {
+                "downstream": ["Message:Answer"],
+                "obj": {"component_name": "PDFGenerator", "params": {}},
+            },
+            "Message:Answer": {
+                "upstream": ["PDFGenerator:Report"],
+                "obj": {
+                    "component_name": "Message",
+                    "params": {"content": ["{PDFGenerator:Report@download}"]},
+                },
+            },
+        },
+        "graph": {
+            "nodes": [
+                {
+                    "id": "PDFGenerator:Report",
+                    "type": "ragNode",
+                    "data": {"label": "PDFGenerator", "name": "PDFGenerator"},
+                }
+            ],
+            "edges": [
+                {
+                    "id": "xy-edge__PDFGenerator:Reportstart-Message:Answerend",
+                    "source": "PDFGenerator:Report",
+                    "target": "Message:Answer",
+                }
+            ],
+        },
+    }
+
+    migrated = normalize_chunker_dsl(legacy)
+
+    serialized = json.dumps(migrated, ensure_ascii=False)
+    assert "PDFGenerator" not in serialized
+    assert "DocGenerator:Report" in migrated["components"]
+    assert migrated["components"]["DocGenerator:Report"]["obj"]["component_name"] == "DocGenerator"
+    assert migrated["components"]["Message:Answer"]["obj"]["params"]["content"] == ["{DocGenerator:Report@download}"]
