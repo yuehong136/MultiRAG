@@ -124,12 +124,6 @@ func (r *Router) Setup(engine *gin.Engine) {
 		// User set tenant info endpoint
 		authorized.POST("/v1/user/set_tenant_info", r.userHandler.SetTenantInfo)
 
-		// Legacy system token aliases kept for /v1 clients. New clients should use
-		// /api/v1/system/tokens; Swagger annotations live on the RESTful path.
-		authorized.GET("/v1/system/token_list", r.systemHandler.ListTokens)
-		authorized.POST("/v1/system/new_token", r.systemHandler.CreateToken)
-		authorized.DELETE("/v1/system/token/:token", r.systemHandler.DeleteToken)
-
 		// API v1 route group
 		v1 := authorized.Group("/api/v1")
 		{
