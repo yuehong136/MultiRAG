@@ -244,7 +244,7 @@ func (c *MultiRAGClient) executeBenchmarkSilent(cmd *Command, iterations int) []
 		case "ping_server":
 			resp, err = c.HTTPClient.Request("GET", "/system/ping", false, "web", nil, nil)
 		case "list_user_datasets":
-			resp, err = c.HTTPClient.Request("POST", "/kb/list", false, "web", nil, nil)
+			resp, err = c.HTTPClient.Request("GET", "/datasets", true, "web", nil, nil)
 		case "list_datasets":
 			userName, _ := cmd.Params["user_name"].(string)
 			resp, err = c.HTTPClient.Request("GET", fmt.Sprintf("/admin/users/%s/datasets", userName), true, "admin", nil, nil)

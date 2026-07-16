@@ -312,11 +312,11 @@ func (c *MultiRAGClient) ListUserDatasets(cmd *Command) (ResponseIf, error) {
 
 	if iterations > 1 {
 		// Benchmark mode - return raw result for benchmark stats
-		return c.HTTPClient.RequestWithIterations("POST", "/kb/list", false, authKind, nil, nil, iterations)
+		return c.HTTPClient.RequestWithIterations("GET", "/datasets", true, authKind, nil, nil, iterations)
 	}
 
 	// Normal mode
-	resp, err := c.HTTPClient.Request("POST", "/kb/list", false, authKind, nil, nil)
+	resp, err := c.HTTPClient.Request("GET", "/datasets", true, authKind, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list datasets: %w", err)
 	}
@@ -336,19 +336,14 @@ func (c *MultiRAGClient) ListUserDatasets(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("failed to list datasets: %s", msg)
 	}
 
-	data, ok := resJSON["data"].(map[string]interface{})
+	data, ok := resJSON["data"].([]interface{})
 	if !ok {
 		return nil, fmt.Errorf("invalid response format")
 	}
 
-	kbs, ok := data["kbs"].([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid response format: kbs not found")
-	}
-
 	// Convert to slice of maps
-	tableData := make([]map[string]interface{}, 0, len(kbs))
-	for _, kb := range kbs {
+	tableData := make([]map[string]interface{}, 0, len(data))
+	for _, kb := range data {
 		if kbMap, ok := kb.(map[string]interface{}); ok {
 			// Remove avatar field
 			delete(kbMap, "avatar")
@@ -361,13 +356,13 @@ func (c *MultiRAGClient) ListUserDatasets(cmd *Command) (ResponseIf, error) {
 
 // getDatasetID gets dataset ID by name
 func (c *MultiRAGClient) getDatasetID(datasetName string) (string, error) {
-	resp, err := c.HTTPClient.Request("POST", "/kb/list", false, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", "/datasets", true, "web", nil, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to list datasets: %w", err)
 	}
 
 	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("failed to list datasets: HTTP %d", resp.StatusCode)
+		return "", fmt.Errorf("failed to list datasets: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
 	}
 
 	resJSON, err := resp.JSON()
@@ -381,17 +376,12 @@ func (c *MultiRAGClient) getDatasetID(datasetName string) (string, error) {
 		return "", fmt.Errorf("failed to list datasets: %s", msg)
 	}
 
-	data, ok := resJSON["data"].(map[string]interface{})
+	data, ok := resJSON["data"].([]interface{})
 	if !ok {
 		return "", fmt.Errorf("invalid response format")
 	}
 
-	kbs, ok := data["kbs"].([]interface{})
-	if !ok {
-		return "", fmt.Errorf("invalid response format: kbs not found")
-	}
-
-	for _, kb := range kbs {
+	for _, kb := range data {
 		if kbMap, ok := kb.(map[string]interface{}); ok {
 			if name, _ := kbMap["name"].(string); name == datasetName {
 				if id, _ := kbMap["id"].(string); id != "" {
