@@ -15,9 +15,12 @@
 #
 import asyncio
 
-import nest_asyncio
+try:
+    import nest_asyncio
 
-nest_asyncio.apply()
+    nest_asyncio.apply()
+except Exception:
+    pass
 import inspect
 import json
 import logging
