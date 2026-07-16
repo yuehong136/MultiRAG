@@ -46,48 +46,14 @@ func NewChatHandler(chatService *service.ChatService, userService *service.UserS
 // @Tags chat
 // @Accept json
 // @Produce json
-// @Success 200 {object} service.ListChatsResponse
-// @Router /api/v1/chats [get]
-func (h *ChatHandler) ListChats(c *gin.Context) {
-	user, errorCode, errorMessage := GetUser(c)
-	if errorCode != common.CodeSuccess {
-		jsonError(c, errorCode, errorMessage)
-		return
-	}
-	userID := user.ID
-
-	// List chats - default to valid status "1" (same as Python StatusEnum.VALID.value)
-	result, err := h.chatService.ListChats(userID, "1")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": err.Error(),
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"data":    result,
-		"message": "success",
-	})
-}
-
-// ListChatsNext list chats with advanced filtering and pagination
-// @Summary List Chats Next
-// @Description Get list of chats with filtering, pagination and sorting (equivalent to list_dialogs_next)
-// @Tags chat
-// @Accept json
-// @Produce json
 // @Param keywords query string false "search keywords"
 // @Param page query int false "page number"
 // @Param page_size query int false "items per page"
 // @Param orderby query string false "order by field (default: create_time)"
 // @Param desc query bool false "descending order (default: true)"
-// @Param request body service.ListChatsNextRequest true "filter options including owner_ids"
-// @Success 200 {object} service.ListChatsNextResponse
-// @Router /v1/dialog/next [post]
-func (h *ChatHandler) ListChatsNext(c *gin.Context) {
+// @Success 200 {object} service.ListChatsResponse
+// @Router /api/v1/chats [get]
+func (h *ChatHandler) ListChats(c *gin.Context) {
 	user, errorCode, errorMessage := GetUser(c)
 	if errorCode != common.CodeSuccess {
 		jsonError(c, errorCode, errorMessage)
@@ -119,20 +85,8 @@ func (h *ChatHandler) ListChatsNext(c *gin.Context) {
 		desc = descStr != "false"
 	}
 
-	// Parse request body for owner_ids
-	var req service.ListChatsNextRequest
-	if c.Request.ContentLength > 0 {
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"code":    400,
-				"message": err.Error(),
-			})
-			return
-		}
-	}
-
-	// List chats with advanced filtering
-	result, err := h.chatService.ListChatsNext(userID, keywords, page, pageSize, orderby, desc, req.OwnerIDs)
+	// List chats - default to valid status "1" (same as Python StatusEnum.VALID.value)
+	result, err := h.chatService.ListChats(userID, "1", keywords, page, pageSize, orderby, desc)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,

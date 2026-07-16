@@ -59,7 +59,7 @@ type ListChatsResponse struct {
 }
 
 // ListChats list chats for a user
-func (s *ChatService) ListChats(userID string, status string) (*ListChatsResponse, error) {
+func (s *ChatService) ListChats(userID, status, keywords string, page, pageSize int, orderby string, desc bool) (*ListChatsResponse, error) {
 	// Get tenant IDs by user ID
 	tenantIDs, err := s.userTenantDAO.GetTenantIDsByUserID(userID)
 	if err != nil {
@@ -81,6 +81,21 @@ func (s *ChatService) ListChats(userID string, status string) (*ListChatsRespons
 		return nil, err
 	}
 
+	total := int64(len(chats))
+
+	if page > 0 && pageSize > 0 {
+		start := (page - 1) * pageSize
+		end := start + pageSize
+		if start < int(total) {
+			if end > int(total) {
+				end = int(total)
+			}
+			chats = chats[start:end]
+		} else {
+			chats = []*entity.Chat{}
+		}
+	}
+
 	// Enrich with knowledge base names
 	chatsWithKBNames := make([]*ChatWithKBNames, 0, len(chats))
 	for _, chat := range chats {
@@ -93,73 +108,6 @@ func (s *ChatService) ListChats(userID string, status string) (*ListChatsRespons
 
 	return &ListChatsResponse{
 		Chats: chatsWithKBNames,
-	}, nil
-}
-
-// ListChatsNextRequest list chats next request
-type ListChatsNextRequest struct {
-	OwnerIDs []string `json:"owner_ids,omitempty"`
-}
-
-// ListChatsNextResponse list chats next response
-type ListChatsNextResponse struct {
-	Chats []*ChatWithKBNames `json:"dialogs"`
-	Total int64              `json:"total"`
-}
-
-// ListChatsNext list chats with advanced filtering (equivalent to list_dialogs_next)
-func (s *ChatService) ListChatsNext(userID string, keywords string, page, pageSize int, orderby string, desc bool, ownerIDs []string) (*ListChatsNextResponse, error) {
-	var chats []*entity.Chat
-	var total int64
-	var err error
-
-	if len(ownerIDs) == 0 {
-		// Get tenant IDs by user ID (joined tenants)
-		tenantIDs, err := s.userTenantDAO.GetTenantIDsByUserID(userID)
-		if err != nil {
-			return nil, err
-		}
-
-		// Use database pagination
-		chats, total, err = s.chatDAO.ListByTenantIDs(tenantIDs, userID, page, pageSize, orderby, desc, keywords)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		// Filter by owner IDs, manual pagination
-		chats, total, err = s.chatDAO.ListByOwnerIDs(ownerIDs, userID, orderby, desc, keywords)
-		if err != nil {
-			return nil, err
-		}
-
-		// Manual pagination
-		if page > 0 && pageSize > 0 {
-			start := (page - 1) * pageSize
-			end := start + pageSize
-			if start < int(total) {
-				if end > int(total) {
-					end = int(total)
-				}
-				chats = chats[start:end]
-			} else {
-				chats = []*entity.Chat{}
-			}
-		}
-	}
-
-	// Enrich with knowledge base names
-	chatsWithKBNames := make([]*ChatWithKBNames, 0, len(chats))
-	for _, chat := range chats {
-		kbNames := s.getKBNames(chat.KBIDs)
-		chatsWithKBNames = append(chatsWithKBNames, &ChatWithKBNames{
-			Chat:    chat,
-			KBNames: kbNames,
-		})
-	}
-
-	return &ListChatsNextResponse{
-		Chats: chatsWithKBNames,
-		Total: total,
 	}, nil
 }
 
