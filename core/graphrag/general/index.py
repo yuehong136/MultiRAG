@@ -201,7 +201,7 @@ async def run_graphrag_for_kb(
 
     if not doc_ids:
         logging.info(f"Fetching all docs for {kb_id}")
-        with db_connection as db:
+        with db_connection() as db:
             docs, _ = DocumentService.get_by_kb_id(
                 db,
                 kb_id=kb_id,
