@@ -3,6 +3,7 @@ import logging
 import random
 import time
 from collections import OrderedDict
+from contextlib import asynccontextmanager
 from enum import StrEnum
 from typing import Annotated
 
@@ -10,13 +11,17 @@ import click
 import httpx
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
+from fastmcp.server.auth import StaticTokenVerifier
 from fastmcp.server.dependencies import get_http_headers
-from fastmcp.server.http import RequestContextMiddleware, create_sse_app, create_streamable_http_app
+from fastmcp.utilities.lifespan import combine_lifespans
 from pydantic import Field
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.responses import JSONResponse
+from starlette.routing import Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+from mcp.types import ToolAnnotations
 
 
 class LaunchMode(StrEnum):
@@ -35,6 +40,10 @@ MODE = ""
 TRANSPORT_SSE_ENABLED = True
 TRANSPORT_STREAMABLE_HTTP_ENABLED = True
 JSON_RESPONSE = True
+# Host/Origin 防护（DNS rebinding）额外信任名单；空列表 = fastmcp "auto" 默认
+# （仅保护 localhost 绑定）。经公网域名部署时必须把该域名加进来。
+ALLOWED_HOSTS: list[str] = []
+ALLOWED_ORIGINS: list[str] = []
 
 
 def _extract_token_from_headers(headers: dict[str, str]) -> str | None:
@@ -429,40 +438,41 @@ class MultiRAGConnector:
 
 
 # ---------------------------------------------------------------------------
-# Auth middleware — handles token extraction for both modes
+# Token-compat middleware — normalizes legacy auth headers for both modes
 # ---------------------------------------------------------------------------
-class AuthMiddleware:
-    """
-    ASGI-level gate that runs before FastMCP's ``RequestContextMiddleware``.
+_PROTECTED_PREFIXES = ("/messages/", "/sse", "/mcp")
 
-    self-host mode: validates that the Bearer token matches HOST_API_KEY.
-    host mode: ensures a valid Bearer token or API key header is present.
-               The actual token is later read inside tool handlers via
-               ``get_http_headers()`` (fastmcp dependency injection).
+
+class TokenCompatMiddleware:
+    """
+    ASGI shim in front of the transport apps.
+
+    Rewrites legacy ``api_key`` / ``x-api-key`` headers into a standard
+    ``Authorization: Bearer`` header so the single downstream validation path
+    (fastmcp ``StaticTokenVerifier`` in self-host mode; the backend API per
+    request in host mode) sees every credential form we historically accept.
+    Requests without any credential are rejected early in both modes; token
+    VALUE validation lives downstream, not here.
     """
 
     def __init__(self, app: ASGIApp):
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send):
-        if scope["type"] != "http":
+        if scope["type"] != "http" or not scope["path"].startswith(_PROTECTED_PREFIXES):
             await self.app(scope, receive, send)
             return
 
-        path = scope["path"]
-        if path.startswith("/messages/") or path.startswith("/sse") or path.startswith("/mcp"):
-            token = _extract_token_from_scope(scope)
+        token = _extract_token_from_scope(scope)
+        if not token:
+            response = JSONResponse({"error": "Missing or invalid authorization header"}, status_code=401)
+            await response(scope, receive, send)
+            return
 
-            if not token:
-                response = JSONResponse({"error": "Missing or invalid authorization header"}, status_code=401)
-                await response(scope, receive, send)
-                return
-
-            if MODE == LaunchMode.SELF_HOST and token != HOST_API_KEY:
-                response = JSONResponse({"error": "Invalid API key"}, status_code=401)
-                await response(scope, receive, send)
-                return
-
+        headers = [(k, v) for k, v in scope["headers"] if k.lower() != b"authorization"]
+        headers.append((b"authorization", f"Bearer {token}".encode()))
+        scope = dict(scope)
+        scope["headers"] = headers
         await self.app(scope, receive, send)
 
 
@@ -487,7 +497,21 @@ mcp: FastMCP | None = None
 
 def create_mcp_server() -> FastMCP:
     global mcp
-    mcp = FastMCP("multirag-mcp-server")
+    auth = None
+    if MODE == LaunchMode.SELF_HOST and HOST_API_KEY:
+        # self-host：静态密钥交给 fastmcp 官方验证器（标准 401 + WWW-Authenticate）；
+        # host 模式不挂验证器，token 逐请求透传给后端 API 校验。
+        auth = StaticTokenVerifier(tokens={HOST_API_KEY: {"client_id": "self-host", "sub": "self-host"}})
+    mcp = FastMCP(
+        "multirag-mcp-server",
+        instructions=(
+            "MultiRAG retrieval server. Call list_datasets first to discover dataset IDs "
+            "and their embedding_model values, then call multirag_retrieval with a question "
+            "and dataset_ids from a single embedding_model group."
+        ),
+        auth=auth,
+        mask_error_details=True,
+    )
     _register_tools(mcp)
     return mcp
 
@@ -498,6 +522,7 @@ def _register_tools(server: FastMCP):
     @server.tool(
         name="list_datasets",
         description=("List all available datasets with their IDs, names, descriptions, and embedding_model values. Use this to discover dataset IDs for the multirag_retrieval tool."),
+        annotations=ToolAnnotations(readOnlyHint=True),
     )
     async def tool_list_datasets(ctx: Context) -> list[dict]:
         api_key = _resolve_api_key()
@@ -515,6 +540,7 @@ def _register_tools(server: FastMCP):
             "dataset_ids from a single embedding_model group. You can also optionally specify "
             "document_ids to search within specific documents."
         ),
+        annotations=ToolAnnotations(readOnlyHint=True),
     )
     async def tool_multirag_retrieval(
         question: Annotated[str, Field(description="The question or query to search for.")],
@@ -565,7 +591,7 @@ def _register_tools(server: FastMCP):
             Field(description="Set to true only if fresh dataset and document metadata is explicitly required. Otherwise, cached metadata is used (default: false)."),
         ] = False,
         ctx: Context | None = None,
-    ) -> str:
+    ) -> dict:
         api_key = _resolve_api_key()
         connector = _get_connector()
 
@@ -587,55 +613,84 @@ def _register_tools(server: FastMCP):
             force_refresh=force_refresh,
         )
 
-        return json.dumps(result, ensure_ascii=False)
+        # dict 直接返回：fastmcp 自动生成 structured content + output schema，
+        # 传统 TextContent 仍是 JSON 文本，旧消费者不受影响。
+        return result
 
 
 # ---------------------------------------------------------------------------
 # ASGI application factory — combines SSE and Streamable HTTP transports
 # ---------------------------------------------------------------------------
+@asynccontextmanager
+async def _connector_lifespan(app):
+    try:
+        yield
+    finally:
+        if _connector is not None:
+            await _connector.close()
+
+
+async def _health(_request) -> JSONResponse:
+    return JSONResponse({"status": "ok", "mode": str(MODE)})
+
+
+class _TransportDispatchApp:
+    """按路径把请求原样分发到对应传输子 app。
+
+    子 app 用完整内部路径构建（/mcp、/sse），分发不剥前缀——既保住
+    既有消费者的 /mcp 端点形态，又让每个子 app 自带的中间件栈
+    （RequestContext、鉴权、streamable HTTP 的 Host/Origin DNS-rebinding
+    防护）原样生效。绝不抽子 app 的 routes 平铺：平铺会剥掉这些
+    app 级中间件（旧实现的教训）。
+    """
+
+    def __init__(self, streamable_app: ASGIApp | None, sse_app: ASGIApp | None):
+        self.streamable_app = streamable_app
+        self.sse_app = sse_app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        path = scope.get("path", "")
+        if self.streamable_app is not None and (path == "/mcp" or path.startswith("/mcp/")):
+            await self.streamable_app(scope, receive, send)
+            return
+        if self.sse_app is not None:
+            await self.sse_app(scope, receive, send)
+            return
+        assert self.streamable_app is not None, "at least one transport must be enabled"
+        await self.streamable_app(scope, receive, send)
+
+
 def create_starlette_app() -> Starlette:
     assert mcp is not None, "MCP server must be created before building the ASGI app"
 
-    routes: list = []
-    lifespans: list = []
-
-    if TRANSPORT_SSE_ENABLED:
-        sse_app = create_sse_app(
-            server=mcp,
-            message_path="/messages/",
-            sse_path="/sse",
-        )
-        routes.extend(sse_app.routes)
+    streamable_app = None
+    sse_app = None
+    lifespans: list = [_connector_lifespan]
 
     if TRANSPORT_STREAMABLE_HTTP_ENABLED:
-        http_app = create_streamable_http_app(
-            server=mcp,
-            streamable_http_path="/mcp",
+        streamable_app = mcp.http_app(
+            path="/mcp",
             json_response=JSON_RESPONSE,
             stateless_http=True,
+            allowed_hosts=ALLOWED_HOSTS or None,
+            allowed_origins=ALLOWED_ORIGINS or None,
         )
-        routes.extend(http_app.routes)
-        lifespans.append(http_app.lifespan)
+        lifespans.append(streamable_app.lifespan)
 
-    if lifespans:
-        from fastmcp.utilities.lifespan import combine_lifespans
+    if TRANSPORT_SSE_ENABLED:
+        sse_app = mcp.http_app(path="/sse", transport="sse")
+        lifespans.append(sse_app.lifespan)
 
-        combined_lifespan = combine_lifespans(*lifespans)
-    else:
-        combined_lifespan = None
-
-    # AuthMiddleware handles token validation/extraction for both modes.
-    # RequestContextMiddleware is required by FastMCP for per-request context.
-    parent_middleware = [
-        Middleware(AuthMiddleware),
-        Middleware(RequestContextMiddleware),
+    routes: list = [
+        Route("/health", _health, methods=["GET"]),
+        Mount("/", app=_TransportDispatchApp(streamable_app, sse_app)),
     ]
 
     return Starlette(
         debug=False,
         routes=routes,
-        middleware=parent_middleware,
-        lifespan=combined_lifespan,
+        middleware=[Middleware(TokenCompatMiddleware)],
+        lifespan=combine_lifespans(*lifespans),
     )
 
 
@@ -668,7 +723,19 @@ def create_starlette_app() -> Starlette:
     default=True,
     help="Enable or disable JSON response mode for streamable-http (default: enabled)",
 )
-def main(base_url, host, port, mode, api_key, transport_sse_enabled, transport_streamable_http_enabled, json_response):
+@click.option(
+    "--allowed-hosts",
+    type=str,
+    default="",
+    help="Comma-separated extra hostnames trusted by streamable-http Host/Origin protection (needed when serving behind a public hostname)",
+)
+@click.option(
+    "--allowed-origins",
+    type=str,
+    default="",
+    help="Comma-separated browser origins trusted by streamable-http Host/Origin protection",
+)
+def main(base_url, host, port, mode, api_key, transport_sse_enabled, transport_streamable_http_enabled, json_response, allowed_hosts, allowed_origins):
     import os
 
     import uvicorn
@@ -680,7 +747,11 @@ def main(base_url, host, port, mode, api_key, transport_sse_enabled, transport_s
         val = os.environ.get(key, str(default))
         return str(val).strip().lower() in ("1", "true", "yes", "on")
 
-    global BASE_URL, HOST, PORT, MODE, HOST_API_KEY, TRANSPORT_SSE_ENABLED, TRANSPORT_STREAMABLE_HTTP_ENABLED, JSON_RESPONSE
+    def parse_csv(key: str, default: str) -> list[str]:
+        val = os.environ.get(key, default)
+        return [item.strip() for item in val.split(",") if item.strip()]
+
+    global BASE_URL, HOST, PORT, MODE, HOST_API_KEY, TRANSPORT_SSE_ENABLED, TRANSPORT_STREAMABLE_HTTP_ENABLED, JSON_RESPONSE, ALLOWED_HOSTS, ALLOWED_ORIGINS
     BASE_URL = os.environ.get("MULTIRAG_MCP_BASE_URL", base_url)
     HOST = os.environ.get("MULTIRAG_MCP_HOST", host)
     PORT = os.environ.get("MULTIRAG_MCP_PORT", str(port))
@@ -689,6 +760,8 @@ def main(base_url, host, port, mode, api_key, transport_sse_enabled, transport_s
     TRANSPORT_SSE_ENABLED = parse_bool_flag("MULTIRAG_MCP_TRANSPORT_SSE_ENABLED", transport_sse_enabled)
     TRANSPORT_STREAMABLE_HTTP_ENABLED = parse_bool_flag("MULTIRAG_MCP_TRANSPORT_STREAMABLE_ENABLED", transport_streamable_http_enabled)
     JSON_RESPONSE = parse_bool_flag("MULTIRAG_MCP_JSON_RESPONSE", json_response)
+    ALLOWED_HOSTS = parse_csv("MULTIRAG_MCP_ALLOWED_HOSTS", allowed_hosts)
+    ALLOWED_ORIGINS = parse_csv("MULTIRAG_MCP_ALLOWED_ORIGINS", allowed_origins)
 
     if MODE == LaunchMode.SELF_HOST and not HOST_API_KEY:
         raise click.UsageError("--api-key is required when --mode is 'self-host'")

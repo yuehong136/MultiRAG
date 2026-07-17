@@ -21,7 +21,10 @@ def test_unhandled_mcp_exception_does_not_expose_debug_traceback() -> None:
     async def debug_probe(_request: Request) -> NoReturn:
         raise RuntimeError("synthetic-sensitive-debug-detail")
 
-    app.add_route("/__debug_probe__", debug_probe)
+    # SSE 子 app 挂在根路径兜底，探针必须插到路由表最前才可达
+    from starlette.routing import Route
+
+    app.router.routes.insert(0, Route("/__debug_probe__", debug_probe))
 
     response = TestClient(app, raise_server_exceptions=False).get(
         "/__debug_probe__",
