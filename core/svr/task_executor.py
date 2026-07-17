@@ -2896,11 +2896,18 @@ async def handle_task():
             finally:
                 # analyze_v2 任务不记录 pipeline 操作日志（临时 doc_id，无对应 Document 记录）
                 if task_type != "analyze_v2":
-                    task_document_ids = []
+                    referred_document_id = None
                     if task_type in PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES:
-                        task_document_ids = task["doc_ids"]
+                        referred_document_id = task["doc_ids"][0]
                     if not task.get("dataflow_id", ""):
-                        PipelineOperationLogService.record_pipeline_operation(db, document_id=task["doc_id"], pipeline_id="", task_type=pipeline_task_type, fake_document_ids=task_document_ids)
+                        PipelineOperationLogService.record_pipeline_operation(
+                            db,
+                            document_id=task["doc_id"],
+                            pipeline_id="",
+                            task_type=pipeline_task_type,
+                            task_id=task_id,
+                            referred_document_id=referred_document_id,
+                        )
                 clear_log_context()
 
             redis_msg.ack()
