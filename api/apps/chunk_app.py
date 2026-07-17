@@ -26,7 +26,7 @@ from common.constants import PAGERANK_FLD, LLMType, ParserType, RetCode
 from common.doc_store.doc_store_base import OrderByExpr
 from common.metadata_utils import apply_meta_data_filter
 from common.misc_utils import thread_pool_exec
-from common.string_utils import remove_redundant_spaces
+from common.string_utils import is_content_empty, remove_redundant_spaces
 from common.tag_feature_utils import validate_tag_features
 from core.app.qa import beAdoc, rmPrefix
 from core.app.tag import label_question
@@ -712,6 +712,7 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
 
     | 场景                        | retcode | retmsg                                      |
     |-----------------------------|---------|---------------------------------------------|
+    | `content_with_weight` 为空/纯空白 | 400 | `` `content_with_weight` is required ``     |
     | 租户不存在                  | 400     | `Tenant not found!`                         |
     | 文档不存在                  | 400     | `Document not found!`                       |
     | `important_kwd` 非列表      | 400     | `` `important_kwd` should be a list ``      |
@@ -741,6 +742,8 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
     {"retcode": 0, "retmsg": "success", "data": true}
     ```
     """
+    if is_content_empty(request.content_with_weight):
+        return get_data_error_result(retmsg="`content_with_weight` is required")
     d = {
         "id": request.chunk_id,
         "content_with_weight": request.content_with_weight,

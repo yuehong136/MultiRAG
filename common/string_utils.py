@@ -78,6 +78,10 @@ def truncate_utf8_bytes(text: str, max_bytes: int) -> str:
     return ""
 
 
+def is_content_empty(content: str | None) -> bool:
+    return content is None or not str(content).strip()
+
+
 def split_and_sanitize_terms(
     raw: str | list[str] | tuple[str, ...] | None,
     split_pattern: str = r"[,，;；、\n\r|]+",

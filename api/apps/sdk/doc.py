@@ -26,7 +26,7 @@ from api.utils.image_utils import store_chunk_image
 from common import settings
 from common.constants import LLMType, RetCode, TaskStatus
 from common.metadata_utils import convert_conditions, meta_filter
-from common.string_utils import remove_redundant_spaces
+from common.string_utils import is_content_empty, remove_redundant_spaces
 from common.tag_feature_utils import validate_tag_features
 from core.app.tag import label_question
 from core.nlp import rag_tokenizer, search
@@ -785,6 +785,9 @@ def add_chunk(dataset_id: str, document_id: str, request: AddChunkRequest, db: S
     if not doc:
         return get_error_data_result(retmsg="Document not found.")
 
+    if is_content_empty(req["content"]):
+        return get_error_data_result(retmsg="`content` is required")
+
     try:
         doc = doc[0]
         kb = KnowledgebaseService.get_by_id(db, dataset_id)
@@ -929,6 +932,8 @@ def update_chunk(dataset_id: str, document_id: str, chunk_id: str, request: Upda
 
     # 更新内容
     if "content" in req and req["content"] is not None:
+        if is_content_empty(req["content"]):
+            return get_error_data_result(retmsg="`content` is required")
         chunk_data["content_with_weight"] = req["content"]
         tks = rag_tokenizer.tokenize(req["content"])
         chunk_data["content_ltks"] = tks
