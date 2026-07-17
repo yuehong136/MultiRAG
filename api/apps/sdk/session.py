@@ -77,6 +77,7 @@ class ChatCompletionRequest(BaseModel):
     question: str | None = ""
     session_id: str | None = None
     stream: bool | None = True
+    internet: bool | None = None
     metadata_condition: dict[str, Any] | None = None
 
 
@@ -84,6 +85,7 @@ class ChatCompletionOpenAIRequest(BaseModel):
     model: str
     messages: list[dict[str, Any]]
     stream: bool | None = True
+    internet: bool | None = None
     reference: bool | None = False
     extra_body: dict[str, Any] | None = None
 
@@ -118,6 +120,7 @@ class RelatedQuestionsRequest(BaseModel):
 class ChatbotCompletionRequest(BaseModel):
     question: str | None = ""
     stream: bool | None = True
+    internet: bool | None = None
     quote: bool | None = False
 
 
@@ -275,7 +278,12 @@ async def chat_completion(chat_id: str, request: ChatCompletionRequest, db: Asyn
 
 
 @router.post("/chats_openai/{chat_id}/chat/completions", summary="OpenAI兼容的聊天补全")
-async def chat_completion_openai_like(chat_id: str, request: ChatCompletionOpenAIRequest, db: AsyncSession = Depends(get_async_db), tenant_id: str = Depends(async_token_required)):
+async def chat_completion_openai_like(
+    chat_id: str,
+    request: ChatCompletionOpenAIRequest,
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_token_required),
+) -> Any:
     """
     OpenAI-like chat completion API that simulates the behavior of OpenAI's completions endpoint.
 
@@ -288,6 +296,7 @@ async def chat_completion_openai_like(chat_id: str, request: ChatCompletionOpenA
     - If `stream` is True, the final answer and reference information will appear in the **last chunk** of the stream.
     - If `stream` is False, the reference will be included in `choices[0].message.reference`.
     - If `extra_body.reference_metadata.include` is True, each reference chunk may include `document_metadata` in both streaming and non-streaming responses.
+    - Web search is disabled by default and requires `internet: true` in the request.
 
     Example usage:
 
@@ -408,6 +417,15 @@ async def chat_completion_openai_like(chat_id: str, request: ChatCompletionOpenA
     # toolcall_session = SimpleFunctionCallServer()
     tools = None
     toolcall_session = None
+    chat_kwargs = {
+        "toolcall_session": toolcall_session,
+        "tools": tools,
+        "quote": need_reference,
+    }
+    if req.get("internet") is not None:
+        chat_kwargs["internet"] = req["internet"]
+    if doc_ids_str:
+        chat_kwargs["doc_ids"] = doc_ids_str
 
     if req.get("stream", True):
         # The value for the usage field on all chunks except for the last one will be null.
@@ -445,9 +463,6 @@ async def chat_completion_openai_like(chat_id: str, request: ChatCompletionOpenA
             }
 
             try:
-                chat_kwargs = {"toolcall_session": toolcall_session, "tools": tools, "quote": need_reference}
-                if doc_ids_str:
-                    chat_kwargs["doc_ids"] = doc_ids_str
                 async for ans in async_chat(dia, msg, db, True, **chat_kwargs):
                     last_ans = ans
                     if ans.get("final"):
@@ -507,9 +522,6 @@ async def chat_completion_openai_like(chat_id: str, request: ChatCompletionOpenA
         return resp
     else:
         answer = None
-        chat_kwargs = {"toolcall_session": toolcall_session, "tools": tools, "quote": need_reference}
-        if doc_ids_str:
-            chat_kwargs["doc_ids"] = doc_ids_str
         async for ans in async_chat(dia, msg, db, False, **chat_kwargs):
             # focus answer content only
             answer = ans

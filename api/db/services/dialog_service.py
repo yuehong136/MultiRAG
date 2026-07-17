@@ -3,10 +3,13 @@ import binascii
 import logging
 import re
 import time
+from collections.abc import AsyncGenerator, Generator, Mapping
+from contextlib import aclosing, suppress
 from copy import deepcopy
 from datetime import datetime
 from functools import partial
 from timeit import default_timer as timer
+from typing import Any
 
 from langfuse import Langfuse
 from sqlalchemy import func, select
@@ -37,6 +40,28 @@ from core.prompts.generator import ASK_SUMMARY, PROMPT_JINJA_ENV, chunks_format,
 from core.utils.tavily_conn import Tavily
 
 
+def _normalize_internet_flag(value: object) -> bool | None:
+    """Normalize supported request values without treating unknown input as enabled."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off", ""}:
+            return False
+    return None
+
+
+def _should_use_web_search(prompt_config: Mapping[str, object], internet: object = None) -> bool:
+    """Require both configured Tavily access and an explicit request opt-in."""
+    if not prompt_config.get("tavily_api_key"):
+        return False
+    return _normalize_internet_flag(internet) is True
+
+
 def _resolve_model_config(
     db: Session,
     tenant_id: str,
@@ -56,7 +81,7 @@ def _resolve_dialog_primary_model_config(db: Session, dialog) -> dict:
     return _resolve_model_config(db, dialog.tenant_id, dialog.tenant_llm_id, model_type, dialog.llm_id)
 
 
-def sync_async_generator(async_gen):
+def sync_async_generator(async_gen: AsyncGenerator[Any, None]) -> Generator[Any, None, None]:
     """将异步生成器转换为同步生成器"""
     loop = asyncio.new_event_loop()
     try:
@@ -66,7 +91,46 @@ def sync_async_generator(async_gen):
             except StopAsyncIteration:
                 break
     finally:
+        loop.run_until_complete(async_gen.aclose())
         loop.close()
+
+
+async def _deep_research_events(
+    reasoner: DeepResearcher,
+    kbinfos: dict[str, Any],
+    question: str,
+) -> AsyncGenerator[str, None]:
+    """Bridge DeepResearcher callbacks into one ordered async event stream."""
+    queue: asyncio.Queue[str] = asyncio.Queue()
+
+    async def callback(message: str) -> None:
+        await queue.put(message + "<br/>")
+
+    task = asyncio.create_task(reasoner.research(kbinfos, question, question, callback=callback))
+    reached_end = False
+    try:
+        while True:
+            message = await queue.get()
+            is_end = message.startswith("<END_DEEP_RESEARCH>")
+            reached_end = reached_end or is_end
+            yield message
+            if is_end:
+                break
+    finally:
+        if not reached_end and task.cancel():
+            with suppress(asyncio.CancelledError):
+                await task
+        else:
+            await task
+
+
+def _deep_research_event_payload(message: str) -> dict[str, Any]:
+    """Convert a DeepResearcher callback message to the chat stream contract."""
+    if message.startswith("<START_DEEP_RESEARCH>"):
+        return {"answer": "", "reference": {}, "audio_binary": None, "final": False, "start_to_think": True}
+    if message.startswith("<END_DEEP_RESEARCH>"):
+        return {"answer": "", "reference": {}, "audio_binary": None, "final": False, "end_to_think": True}
+    return {"answer": message, "reference": {}, "audio_binary": None, "final": False}
 
 
 class DialogService(CommonService):
@@ -621,14 +685,26 @@ def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
     return answer, idx
 
 
-def chat(dialog, messages, db, stream=True, **kwargs):
+def chat(
+    dialog: Any,
+    messages: list[dict[str, Any]],
+    db: Session,
+    stream: bool = True,
+    **kwargs: Any,
+) -> Generator[dict[str, Any], None, dict[str, Any] | None]:
     # 确保最后一条消息是用户的消息
     assert messages[-1]["role"] == "user", "The last content of this conversation is not from user."
-    # todo ragflow用这个方法实现了无kb时应用对话。但我们通过前后端交互对接实现了，所以注释掉这部分
-    # if not dialog.kb_ids and not dialog.prompt_config.get("tavily_api_key"):
-    #     for ans in chat_solo(db, dialog, messages, stream):
-    #         yield ans
-    #     return
+    use_web_search = _should_use_web_search(dialog.prompt_config, kwargs.get("internet"))
+    has_retrieval_source = bool(dialog.kb_ids) or use_web_search
+    logging.debug(
+        "web_search kb=%s tavily=%s internet=%r enabled=%s",
+        bool(dialog.kb_ids),
+        bool(dialog.prompt_config.get("tavily_api_key")),
+        kwargs.get("internet"),
+        use_web_search,
+    )
+    # Keep no-KB chats in the local main pipeline so prompt parameters and bound tools
+    # are preserved; the upstream solo fallback does not apply to this architecture.
     chat_start_ts = timer()
 
     llm_type = TenantLLMService.llm_id2llm_type(dialog.llm_id)
@@ -683,7 +759,6 @@ def chat(dialog, messages, db, stream=True, **kwargs):
         attachments_ = "\n\n".join(text_attachments)
 
     prompt_config = dialog.prompt_config
-    internet_enabled = kwargs.get("internet") is not False
     field_map = KnowledgebaseService.get_field_map(db, dialog.kb_ids)
     # 如果字段映射存在，尝试使用SQL检索答案
     if field_map:
@@ -736,17 +811,13 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     knowledges = []
 
     # 检查prompt_config中是否包含"knowledge"参数，以决定是否进行知识检索
-    if "knowledge" in param_keys:
+    if "knowledge" in param_keys and has_retrieval_source:
         tenant_ids = list({kb.tenant_id for kb in kbs})
         knowledges = []
-        prompt_config_for_reasoning = prompt_config
-        if not internet_enabled:
-            prompt_config_for_reasoning = dict(prompt_config)
-            prompt_config_for_reasoning.pop("tavily_api_key", None)
         if prompt_config.get("reasoning", False) or kwargs.get("reasoning"):
             reasoner = DeepResearcher(
                 chat_mdl,
-                prompt_config_for_reasoning,
+                prompt_config,
                 partial(
                     retriever.retrieval,
                     filter_exp="",
@@ -761,14 +832,17 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                     search_mode=dialog.search_mode,
                     kb_ids=dialog.kb_ids,
                 ),
+                internet_enabled=use_web_search,
             )
 
-            for think in sync_async_generator(reasoner.thinking(kbinfos, attachments_ + " ".join(questions))):
-                if isinstance(think, str):
-                    thought = think
-                    knowledges = [t for t in think.split("\n") if t]
-                elif stream:
-                    yield think
+            research_events = sync_async_generator(_deep_research_events(reasoner, kbinfos, questions[-1]))
+            try:
+                for message in research_events:
+                    if stream:
+                        yield _deep_research_event_payload(message)
+            finally:
+                research_events.close()
+            knowledges = kb_prompt(kbinfos, max_tokens)
         else:
             if embd_mdl:
                 kbinfos = asyncio.run(
@@ -796,7 +870,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
                     if cks:
                         kbinfos["chunks"] = cks
                 kbinfos["chunks"] = retriever.retrieval_by_children(kbinfos["chunks"], tenant_ids)
-            if internet_enabled and prompt_config.get("tavily_api_key"):
+            if use_web_search:
                 tav = Tavily(prompt_config["tavily_api_key"])
                 tav_res = tav.retrieve_chunks(" ".join(questions))
                 kbinfos["chunks"].extend(tav_res["chunks"])
@@ -812,7 +886,7 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     logging.debug("{}->{}".format(" ".join(questions), "\n->".join(knowledges)))
 
     retrieval_ts = timer()
-    if not knowledges and prompt_config.get("empty_response"):
+    if has_retrieval_source and not knowledges and prompt_config.get("empty_response"):
         empty_res = prompt_config["empty_response"]
         yield {"answer": empty_res, "reference": kbinfos, "prompt": "\n\n### Query:\n%s" % " ".join(questions), "audio_binary": tts(tts_mdl, empty_res)}
         return {"answer": prompt_config["empty_response"], "reference": kbinfos}
@@ -957,11 +1031,28 @@ def chat(dialog, messages, db, stream=True, **kwargs):
     return None
 
 
-async def async_chat(dialog, messages, db: AsyncSession, stream: bool = True, **kwargs):
+async def async_chat(
+    dialog: Any,
+    messages: list[dict[str, Any]],
+    db: AsyncSession,
+    stream: bool = True,
+    **kwargs: Any,
+) -> AsyncGenerator[dict[str, Any], None]:
     """异步版本的 chat(AsyncSession 全链路;遗留同步 service 经 run_sync 桥接)"""
     logging.debug("Begin async_chat")
     # 确保最后一条消息是用户的消息
     assert messages[-1]["role"] == "user", "The last content of this conversation is not from user."
+    use_web_search = _should_use_web_search(dialog.prompt_config, kwargs.get("internet"))
+    has_retrieval_source = bool(dialog.kb_ids) or use_web_search
+    logging.debug(
+        "web_search kb=%s tavily=%s internet=%r enabled=%s",
+        bool(dialog.kb_ids),
+        bool(dialog.prompt_config.get("tavily_api_key")),
+        kwargs.get("internet"),
+        use_web_search,
+    )
+    # Keep no-KB chats in the local main pipeline so prompt parameters and bound tools
+    # are preserved; the upstream solo fallback does not apply to this architecture.
     chat_start_ts = timer()
 
     # TODO(async-phase4): llm_id2llm_type 的 DB 兜底自开同步连接,先线程池外移防阻塞事件循环
@@ -1024,7 +1115,6 @@ async def async_chat(dialog, messages, db: AsyncSession, stream: bool = True, **
         attachments_ = "\n\n".join(text_attachments)
 
     prompt_config = dialog.prompt_config
-    internet_enabled = kwargs.get("internet") is not False
     field_map = await db.run_sync(lambda s: KnowledgebaseService.get_field_map(s, dialog.kb_ids))  # TODO(async-phase4)
     logging.debug(f"field_map retrieved: {field_map}")
     # 如果字段映射存在，尝试使用SQL检索答案
@@ -1078,18 +1168,14 @@ async def async_chat(dialog, messages, db: AsyncSession, stream: bool = True, **
     knowledges = []
 
     # 检查prompt_config中是否包含"knowledge"参数，以决定是否进行知识检索
-    if "knowledge" in param_keys:
+    if "knowledge" in param_keys and has_retrieval_source:
         logging.debug("Proceeding with retrieval")
         tenant_ids = list({kb.tenant_id for kb in kbs})
         knowledges = []
-        prompt_config_for_reasoning = prompt_config
-        if not internet_enabled:
-            prompt_config_for_reasoning = dict(prompt_config)
-            prompt_config_for_reasoning.pop("tavily_api_key", None)
         if prompt_config.get("reasoning", False) or kwargs.get("reasoning"):
             reasoner = DeepResearcher(
                 chat_mdl,
-                prompt_config_for_reasoning,
+                prompt_config,
                 partial(
                     retriever.retrieval,
                     filter_exp="",
@@ -1104,27 +1190,12 @@ async def async_chat(dialog, messages, db: AsyncSession, stream: bool = True, **
                     search_mode=dialog.search_mode,
                     kb_ids=dialog.kb_ids,
                 ),
+                internet_enabled=use_web_search,
             )
 
-            queue = asyncio.Queue()
-
-            async def callback(msg: str):
-                nonlocal queue
-                await queue.put(msg + "<br/>")
-
-            await callback("<START_DEEP_RESEARCH>")
-            task = asyncio.create_task(reasoner.research(kbinfos, questions[-1], questions[-1], callback=callback))
-            while True:
-                msg = await queue.get()
-                if msg.find("<START_DEEP_RESEARCH>") == 0:
-                    yield {"answer": "", "reference": {}, "audio_binary": None, "final": False, "start_to_think": True}
-                elif msg.find("<END_DEEP_RESEARCH>") == 0:
-                    yield {"answer": "", "reference": {}, "audio_binary": None, "final": False, "end_to_think": True}
-                    break
-                else:
-                    yield {"answer": msg, "reference": {}, "audio_binary": None, "final": False}
-
-            await task
+            async with aclosing(_deep_research_events(reasoner, kbinfos, questions[-1])) as research_events:
+                async for message in research_events:
+                    yield _deep_research_event_payload(message)
 
         else:
             if embd_mdl:
@@ -1152,7 +1223,7 @@ async def async_chat(dialog, messages, db: AsyncSession, stream: bool = True, **
                     if cks:
                         kbinfos["chunks"] = cks
                 kbinfos["chunks"] = retriever.retrieval_by_children(kbinfos["chunks"], tenant_ids)
-            if internet_enabled and prompt_config.get("tavily_api_key"):
+            if use_web_search:
                 tav = Tavily(prompt_config["tavily_api_key"])
                 tav_res = tav.retrieve_chunks(" ".join(questions))
                 kbinfos["chunks"].extend(tav_res["chunks"])
@@ -1170,7 +1241,7 @@ async def async_chat(dialog, messages, db: AsyncSession, stream: bool = True, **
     logging.debug("{}->{}".format(" ".join(questions), "\n->".join(knowledges)))
 
     retrieval_ts = timer()
-    if not knowledges and prompt_config.get("empty_response"):
+    if has_retrieval_source and not knowledges and prompt_config.get("empty_response"):
         empty_res = prompt_config["empty_response"]
         yield {"answer": empty_res, "reference": kbinfos, "prompt": "\n\n### Query:\n%s" % " ".join(questions), "audio_binary": tts(tts_mdl, empty_res), "final": True}
         return

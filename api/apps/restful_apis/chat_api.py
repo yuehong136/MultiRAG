@@ -114,6 +114,7 @@ class SessionCompletionRequest(BaseModel):
 
     messages: list[dict[str, Any]]
     stream: bool | None = True
+    internet: bool | None = None
 
 
 class RelatedQuestionsRequest(BaseModel):

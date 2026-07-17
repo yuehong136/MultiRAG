@@ -137,7 +137,7 @@ class CompletionRequest(BaseModel):
     """是否启用推理模式。"""
 
     internet: bool | None = None
-    """是否启用联网检索。"""
+    """是否启用联网检索；只有显式设为 True 才会调用外部搜索。"""
 
     filter_condition: str | None = ""
     """过滤条件，可以根据实际需求自定义结构。"""
