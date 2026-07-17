@@ -60,3 +60,17 @@ def test_full_answer_stream_transformer_keeps_single_final_answer_reference() ->
         "id": "m1",
         "session_id": "c1",
     }
+
+
+def test_full_answer_stream_transformer_replaces_with_decorated_final_answer() -> None:
+    # final 事件携带 decorate_answer 后的全文（引用标记插在正文中间，
+    # 相对累积增量既非前缀也非纯追加），必须整体替换而不是拼接
+    FullAnswerStreamTransformer = _load_transformer_class()
+    transformer = FullAnswerStreamTransformer()
+
+    transformer.transform({"answer": "foo ", "reference": {}, "id": "m1", "session_id": "c1", "final": False})
+    transformer.transform({"answer": "bar baz", "reference": {}, "id": "m1", "session_id": "c1", "final": False})
+    final = transformer.transform({"answer": "foo bar ##0$$ baz", "reference": {"chunks": [{"document_name": "doc"}]}, "id": "m1", "session_id": "c1", "final": True})
+
+    assert final["answer"] == "foo bar ##0$$ baz"
+    assert final["reference"] == {"chunks": [{"document_name": "doc"}]}

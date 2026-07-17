@@ -59,11 +59,10 @@ class FullAnswerStreamTransformer:
 
         answer_text = answer.get("answer") or ""
         if is_final:
+            # final 事件携带 decorate_answer 后的权威全文（引用标记插在正文中间，
+            # 与累积的裸增量既非前缀也非纯追加），整体替换而非拼接
             if answer_text:
-                if answer_text.startswith(self.full_answer):
-                    self.full_answer = answer_text
-                else:
-                    self.full_answer += answer_text
+                self.full_answer = answer_text
             payload["answer"] = self.full_answer
             return payload
 

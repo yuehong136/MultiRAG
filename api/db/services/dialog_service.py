@@ -1293,7 +1293,6 @@ async def async_chat(dialog, messages, db: AsyncSession, stream: bool = True, **
             final = decorate_answer(thought + full_answer)
             final["final"] = True
             final["audio_binary"] = None
-            final["answer"] = ""
             yield final
     else:
         if llm_type == "chat":
@@ -2025,7 +2024,6 @@ async def async_ask(db: AsyncSession, question, kb_ids, tenant_id, chat_llm_name
     # （bundles 已剥离 facade），整段外移工作线程，避免阻塞事件循环
     final = await asyncio.to_thread(decorate_answer, full_answer)
     final["final"] = True
-    final["answer"] = ""
     yield final
 
 
