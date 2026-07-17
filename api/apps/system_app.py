@@ -18,12 +18,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
 
 from api.apps import manager
-from api.apps.api_app import generate_confirmation_token
 from api.db.db_models import DATABASE_TYPE, APIToken, get_db, get_pool_status
 from api.db.services.api_service import APITokenService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import UserTenantService
-from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
+from api.utils.api_utils import generate_confirmation_token, get_data_error_result, get_json_result, server_error_response
 from api.utils.health_utils import get_oceanbase_status, is_health_result_ok, run_health_checks
 from common import settings
 from common.log_utils import get_log_levels, set_log_level

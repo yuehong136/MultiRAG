@@ -8,136 +8,16 @@
 
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from api.apps import manager
-from api.db.db_models import APIToken, get_db
-from api.db.services.api_service import API4ConversationService, APITokenService
+from api.db.db_models import get_db
+from api.db.services.api_service import API4ConversationService
 from api.db.services.user_service import UserTenantService
-from api.utils.api_utils import generate_confirmation_token, get_data_error_result, get_json_result, server_error_response
-from common.time_utils import current_timestamp, datetime_format
-
-
-class NewTokenRequest(BaseModel):
-    dialog_id: str | None = None
-    """对话的唯一标识符。"""
-    canvas_id: str | None = None
-    """画布的唯一标识符。"""
-    tenant_id: str
-    """租户的唯一标识符。"""
-
-
-class RemoveTokenRequest(BaseModel):
-    tokens: list[str]
-    """要删除的API令牌列表。"""
-
-    tenant_id: str
-    """租户的唯一标识符。"""
-
+from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
 
 router = APIRouter()
-
-
-@router.post("/new_token", summary="生成新的API令牌", response_description="成功生成新的API令牌")
-def new_token(request: NewTokenRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    生成新的API令牌
-
-    该接口用于为指定租户生成新的API令牌。
-
-    参数:
-    - request: NewTokenRequest对象，包含租户的唯一标识符
-        - tenant_id: str 租户的唯一标识符
-
-    返回:
-    - 成功时返回包含新API令牌的JSON结果
-    - 失败时返回错误信息
-    """
-    try:
-        tenants = UserTenantService.query(db, user_id=user.id)
-        if not tenants:
-            return get_data_error_result(retmsg="Tenant not found!")
-
-        tenant_id = tenants[0].tenant_id
-        current_ts = current_timestamp()
-        current_date = datetime_format(datetime.now())
-        obj = {
-            "tenant_id": tenant_id,
-            "token": generate_confirmation_token(),
-            "dialog_id": request.tenant_id,
-            "create_time": current_ts,
-            "create_date": current_date,
-            "update_time": None,
-            "update_date": None,
-        }
-        if request.canvas_id:
-            obj["dialog_id"] = request.canvas_id
-            obj["source"] = "agent"
-        else:
-            obj["dialog_id"] = request.dialog_id
-        if not APITokenService.save(db, **obj):
-            return get_data_error_result(retmsg="Fail to new a dialog!")
-
-        return get_json_result(data=obj)
-    except Exception as e:
-        return server_error_response(e)
-
-
-@router.get("/token_list", summary="获取API令牌列表", response_description="成功获取API令牌列表")
-def token_list(dialog_id: str | None = Query(None, alias="dialog_id"), canvas_id: str | None = Query(None, alias="canvas_id"), db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    获取API令牌列表
-
-    该接口用于获取指定对话的API令牌列表。
-
-    参数:
-    - dialog_id: str 对话的唯一标识符
-    - canvas_id: str 画布的唯一标识符
-
-    返回:
-    - 成功时返回包含API令牌列表的JSON结果
-    - 失败时返回错误信息
-    """
-    try:
-        # 优先使用 dialog_id，如果 dialog_id 不存在，则使用 canvas_id
-        id = dialog_id if dialog_id is not None else canvas_id
-        if not id:
-            raise HTTPException(status_code=400, detail="Either dialog_id or canvas_id must be provided")
-
-        tenants = UserTenantService.query(db, user_id=user.id)
-        if not tenants:
-            return get_data_error_result(retmsg="Tenant not found!")
-
-        objs = APITokenService.query(db, tenant_id=tenants[0].tenant_id, dialog_id=id)
-        return get_json_result(data=[o.to_dict() for o in objs])
-    except Exception as e:
-        return server_error_response(e)
-
-
-@router.post("/rm", summary="删除API令牌", response_description="成功删除API令牌")
-def rm(request: RemoveTokenRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    删除API令牌
-
-    该接口用于删除指定租户的API令牌。
-
-    参数:
-    - request: RemoveTokenRequest对象，包含要删除的API令牌和租户的唯一标识符
-        - tokens: List[str] 要删除的API令牌列表
-        - tenant_id: str 租户的唯一标识符
-
-    返回:
-    - 成功时返回成功删除的JSON结果
-    - 失败时返回错误信息
-    """
-    try:
-        for token in request.tokens:
-            APITokenService.filter_delete(db, [APIToken.tenant_id == request.tenant_id, APIToken.token == token])
-        return get_json_result(data=True)
-    except Exception as e:
-        return server_error_response(e)
 
 
 @router.get("/stats", summary="获取API使用统计", response_description="成功获取API使用统计")
