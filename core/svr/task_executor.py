@@ -1163,6 +1163,34 @@ async def run_dataflow(db: Session, task: dict):
     PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
 
 
+async def has_raptor_chunks(doc_id: str, tenant_id: str, kb_id: str) -> bool:
+    """Return True if RAPTOR chunks already exist for doc_id in the doc store.
+
+    Queries directly for raptor_kwd="raptor" rows so a non-RAPTOR leading
+    chunk cannot produce a false-negative result.  Uses thread_pool_exec so
+    the blocking doc-store call does not stall the event loop.
+    """
+    from common.doc_store.doc_store_base import OrderByExpr
+
+    try:
+        with db_connection() as db:
+            kb = KnowledgebaseService.get_by_id(db, kb_id)
+            kb_name = kb.name if kb else "default"
+        collection_name = search.index_name_one(tenant_id, kb_name)
+        condition = {"doc_id": doc_id, "raptor_kwd": ["raptor"]}
+        res = await thread_pool_exec(settings.docStoreConn.search, ["raptor_kwd"], [], condition, [], OrderByExpr(), 0, 1, collection_name, [kb_id])
+        field_map = settings.docStoreConn.get_fields(res, ["raptor_kwd"])
+        found = bool(field_map)
+        if found:
+            logging.info("Checkpoint hit: RAPTOR chunks for doc %s (tenant=%s kb=%s) already exist", doc_id, tenant_id, kb_id)
+        else:
+            logging.info("Checkpoint miss: no RAPTOR chunks for doc %s (tenant=%s kb=%s)", doc_id, tenant_id, kb_id)
+        return found
+    except Exception:
+        logging.exception("Failed to check RAPTOR chunks for doc %s", doc_id)
+        return False
+
+
 @timeout(3600)
 async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_size, callback=None, doc_ids=[], db=None):
     fake_doc_id = GRAPH_RAPTOR_FAKE_DOC_ID
@@ -1218,6 +1246,12 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
 
     if raptor_config.get("scope", "file") == "file":
         for x, doc_id in enumerate(doc_ids):
+            # CHECKPOINT: skip docs that already have RAPTOR chunks in the doc store
+            if await has_raptor_chunks(doc_id, row["tenant_id"], row["kb_id"]):
+                callback(msg=f"[RAPTOR] doc:{doc_id} already has RAPTOR chunks, skipping.")
+                callback(prog=(x + 1.0) / len(doc_ids))
+                continue
+
             chunks = []
             skipped_chunks = 0
             for d in settings.retriever.chunk_list(doc_id, row["tenant_id"], [str(row["kb_id"])], fields=["content_with_weight", vctr_nm], sort_by_position=True):
