@@ -321,8 +321,9 @@ def test_openapi_describes_manifest_as_json_form_field(client):
     files_schema = multipart_schema["properties"]["files"]
     manifest_schema = multipart_schema["properties"]["manifest"]
 
+    # fastapi 0.139 起按 OpenAPI 3.1 描述二进制文件：contentMediaType 取代 format: binary
     assert files_schema["type"] == "array"
-    assert files_schema["items"] == {"type": "string", "format": "binary"}
+    assert files_schema["items"] == {"type": "string", "contentMediaType": "application/octet-stream"}
     assert "contentSchema" in json.dumps(manifest_schema)
     assert "UploadDocumentsManifest" in json.dumps(manifest_schema)
     query_parameters = {parameter["name"]: parameter for parameter in operation["parameters"] if parameter["in"] == "query"}

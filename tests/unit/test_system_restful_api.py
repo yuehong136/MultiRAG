@@ -11,7 +11,6 @@ import asyncio
 from types import SimpleNamespace
 
 from fastapi import Response
-from fastapi.routing import APIRoute
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -23,6 +22,7 @@ from api.utils import health_utils
 from api.utils.api_utils import async_current_user
 from common.constants import RetCode
 from common.versions import get_multirag_version
+from tests.unit.conftest import iter_api_routes
 
 
 class Obj(SimpleNamespace):
@@ -215,8 +215,8 @@ def _dependency_calls(app, method: str, path: str) -> set:
     ``Depends(manager)`` 的 LoginManager 实例同样以 ``dep.call`` 形态出现在树里
     （legacy ``/v1/system/version`` 阳性对照验证过），无需另走安全依赖结构。
     """
-    for route in app.routes:
-        if isinstance(route, APIRoute) and route.path == path and method in route.methods:
+    for route in iter_api_routes(app):
+        if route.path == path and method in route.methods:
             calls = set()
             stack = [route.dependant]
             while stack:

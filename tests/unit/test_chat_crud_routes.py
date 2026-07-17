@@ -11,7 +11,6 @@ import sys
 import threading
 from types import SimpleNamespace
 
-from fastapi.routing import APIRoute
 from sqlalchemy.orm import Session
 
 from api.db.db_models import get_db
@@ -19,6 +18,7 @@ from api.db.services.dialog_service import DialogService
 from api.db.services.user_service import UserTenantService
 from api.utils.api_utils import current_tenant_id
 from common.constants import RetCode
+from tests.unit.conftest import iter_api_routes
 
 
 class Obj(SimpleNamespace):
@@ -147,7 +147,7 @@ def test_all_chat_routes_have_pure_async_dependency_tree(client, route_dependenc
     """全量扫 /api/v1/chats* 前缀：现在与未来的路由都不得回到同步轨。"""
     import api.apps as api_apps
 
-    chat_routes = [(sorted(r.methods)[0], r.path) for r in client.app.routes if isinstance(r, APIRoute) and r.path.startswith("/api/v1/chats")]
+    chat_routes = [(sorted(r.methods)[0], r.path) for r in iter_api_routes(client.app) if r.path.startswith("/api/v1/chats")]
     assert len(chat_routes) >= 20  # 文件当前 20 条路由全部在册
 
     for method, path in chat_routes:

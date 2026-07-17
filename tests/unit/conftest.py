@@ -159,6 +159,24 @@ def client(client_user):
         app.dependency_overrides.pop(dep, None)
 
 
+def iter_api_routes(app):
+    """展平 app 的全部 APIRoute，产出带完整路径的轻量视图。
+
+    fastapi 0.139 起 include_router 不再把子路由平铺进 app.routes（挂成
+    _IncludedRouter 容器，内部路由只存本地路径）；官方展平入口是
+    fastapi.routing.iter_route_contexts——get_openapi 亦经由它遍历。
+    RouteContext.path 是拼好前缀的完整路径，dependant 需回到 original_route 取。
+    """
+    from types import SimpleNamespace
+
+    from fastapi.routing import APIRoute, iter_route_contexts
+
+    for ctx in iter_route_contexts(app.routes):
+        route = ctx.original_route
+        if isinstance(route, APIRoute):
+            yield SimpleNamespace(path=ctx.path, methods=ctx.methods, dependant=route.dependant)
+
+
 @pytest.fixture
 def route_dependency_calls():
     """展开真实 app 某路由的完整 Depends 树，返回全部依赖 callable（纯异步换轨测试用）。
@@ -166,11 +184,10 @@ def route_dependency_calls():
     ``Depends(manager)`` 的 LoginManager 实例同样以 ``dep.call`` 形态出现在树里，
     可直接用 ``manager not in calls`` 断言同步鉴权轨已清除。
     """
-    from fastapi.routing import APIRoute
 
     def _calls(app, method: str, path: str) -> set:
-        for route in app.routes:
-            if isinstance(route, APIRoute) and route.path == path and method in route.methods:
+        for route in iter_api_routes(app):
+            if route.path == path and method in route.methods:
                 calls = set()
                 stack = [route.dependant]
                 while stack:
