@@ -8,18 +8,16 @@ from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
 import xxhash
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Discriminator, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 
-from api.constants import FILE_NAME_LEN_LIMIT
 from api.db.db_models import APIToken, Document, Task, get_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
-from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import EmbeddingModelMismatchError, KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.task_service import TaskService, cancel_all_task_of, queue_tasks
@@ -33,8 +31,6 @@ from common.tag_feature_utils import validate_tag_features
 from core.app.tag import label_question
 from core.nlp import rag_tokenizer, search
 from core.prompts.generator import cross_languages, keyword_extraction
-
-MAXIMUM_OF_UPLOADING_FILES = 256
 
 router = APIRouter()
 
@@ -174,71 +170,6 @@ class RetrievalTestRequest(BaseModel):
         mode_data = self.search_mode.model_dump()
         mode_type = mode_data.pop("type")
         return {mode_type: mode_data}
-
-
-@router.post("/datasets/{dataset_id}/documents", summary="上传文档")
-def upload_documents(
-    dataset_id: str,
-    files: list[UploadFile] = File(...),
-    parent_path: str | None = Form(None, description="Optional nested path under the parent folder. Uses '/' separators."),
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required),
-):
-    """
-    上传文档到数据集
-
-    Args:
-        dataset_id: 数据集ID
-        files: 上传的文件列表
-        parent_path: 可选的父文件夹路径，使用 '/' 分隔
-        db: 数据库会话
-        tenant_id: 租户ID
-
-    Returns:
-        上传的文档信息列表
-    """
-    if not files:
-        return get_error_data_result(retmsg="No file part!", retcode=RetCode.ARGUMENT_ERROR)
-
-    if len(files) > MAXIMUM_OF_UPLOADING_FILES:
-        return get_error_data_result(retmsg=f"You try to upload {len(files)} files, which exceeds the maximum number: {MAXIMUM_OF_UPLOADING_FILES}")
-
-    # 验证文件并读取内容
-    file_contents = []
-    for file_obj in files:
-        if file_obj.filename == "":
-            return get_result(retmsg="No file selected!", retcode=RetCode.ARGUMENT_ERROR)
-        if len(file_obj.filename.encode("utf-8")) > FILE_NAME_LEN_LIMIT:
-            return get_result(retmsg=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.", retcode=RetCode.ARGUMENT_ERROR)
-        # 读取文件内容并转换为 (bytes, filename) 元组
-        file_contents.append((file_obj.file.read(), file_obj.filename))
-
-    kb = KnowledgebaseService.get_by_id(db, dataset_id)
-    if not kb:
-        raise HTTPException(status_code=RetCode.NOT_FOUND, detail=f"Can't find the dataset with ID {dataset_id}!")
-
-    err, uploaded_files = FileService.upload_document(db, kb, file_contents, tenant_id, parent_path=parent_path)
-    if err:
-        return get_result(retmsg="\n".join(err), retcode=RetCode.SERVER_ERROR)
-
-    # 重命名键名
-    renamed_doc_list = []
-    for file in uploaded_files:
-        doc = file[0]
-        key_mapping = {
-            "chunk_num": "chunk_count",
-            "kb_id": "dataset_id",
-            "token_num": "token_count",
-            "parser_id": "chunk_method",
-        }
-        renamed_doc = {}
-        for key, value in doc.items():
-            new_key = key_mapping.get(key, key)
-            renamed_doc[new_key] = value
-        renamed_doc["run"] = "UNSTART"
-        renamed_doc_list.append(renamed_doc)
-
-    return get_result(data=renamed_doc_list)
 
 
 @router.get("/datasets/{dataset_id}/documents/{document_id}", summary="下载文档")

@@ -30,7 +30,7 @@ def _stub_happy_chain(monkeypatch, sessions):
     monkeypatch.setattr(DocumentService, "query", classmethod(lambda cls, s, **kw: sessions.append(s) or [doc]))
     monkeypatch.setattr(document_api_service, "validate_document_update_fields", lambda s, r, d, rq: sessions.append(s) or (None, None))
     monkeypatch.setattr(DocumentService, "get_by_id", classmethod(lambda cls, s, did: sessions.append(s) or doc))
-    monkeypatch.setattr(document_api_service, "rename_doc_key", lambda s, d: {"id": d.id, "chunk_method": "naive"})
+    monkeypatch.setattr(document_api_service, "map_doc_keys", lambda s, d: {"id": d.id, "chunk_method": "naive"})
     return doc
 
 

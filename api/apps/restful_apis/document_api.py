@@ -4,19 +4,24 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.apps.services import document_api_service
+from api.common.check_team_permission import check_kb_team_permission
+from api.constants import FILE_NAME_LEN_LIMIT
 from api.db.db_models import get_async_db
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService
+from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils.api_utils import async_current_tenant_id, get_error_data_result, get_result, server_error_response
 from api.utils.validation_utils import UpdateDocumentReq
 from common.constants import RetCode
+
+MAXIMUM_OF_UPLOADING_FILES = 256
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -83,7 +88,7 @@ async def update_document(
             logger.exception(e)
             return get_error_data_result(retmsg="Database operation failed")
 
-        return get_result(data=document_api_service.rename_doc_key(s, doc))
+        return get_result(data=document_api_service.map_doc_keys(s, doc))
 
     return await db.run_sync(_update)  # TODO(async-phase4)
 
@@ -112,3 +117,56 @@ async def metadata_summary(
             return server_error_response(e)
 
     return await db.run_sync(_summary)  # TODO(async-phase4)
+
+
+@router.post("/datasets/{dataset_id}/documents", summary="上传文档")
+async def upload_documents(
+    dataset_id: str,
+    file: list[UploadFile] | None = File(None, description="上传的文件（与 files 等价，至少提供其一）"),
+    files: list[UploadFile] | None = File(None, description="上传的文件"),
+    parent_path: str | None = Form(None, description="父文件夹下的可选嵌套路径，使用 '/' 分隔"),
+    return_raw_files: bool = Query(False, description="跳过文档键名映射，返回原始文档数据"),
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_current_tenant_id),
+):
+    """上传文档到数据集（web 会话与 API token 统一入口）。
+
+    - multipart 字段 ``file`` 与 ``files`` 等价：``file`` 为正典字段名，
+      ``files`` 兼容既有 SDK 消费方，二者可混用、按序合并。
+    - ``return_raw_files=true`` 返回原始文档字段（web/admin 消费格式）；
+      默认返回映射后的键名（chunk_count/dataset_id/... + run=UNSTART）。
+    - 只负责上传和创建文档，不自动启动解析任务。
+    """
+    file_objs = (file or []) + (files or [])
+    if not file_objs:
+        return get_error_data_result(retmsg="No file part!", retcode=RetCode.ARGUMENT_ERROR)
+    if len(file_objs) > MAXIMUM_OF_UPLOADING_FILES:
+        return get_error_data_result(retmsg=f"You try to upload {len(file_objs)} files, which exceeds the maximum number: {MAXIMUM_OF_UPLOADING_FILES}", retcode=RetCode.ARGUMENT_ERROR)
+
+    file_contents: list[tuple[bytes, str]] = []
+    for file_obj in file_objs:
+        if not file_obj.filename:
+            return get_error_data_result(retmsg="No file selected!", retcode=RetCode.ARGUMENT_ERROR)
+        if len(file_obj.filename.encode("utf-8")) > FILE_NAME_LEN_LIMIT:
+            return get_error_data_result(retmsg=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.", retcode=RetCode.ARGUMENT_ERROR)
+        file_contents.append((await file_obj.read(), file_obj.filename))
+
+    def _upload(s: Session) -> Response:
+        kb = KnowledgebaseService.get_by_id(s, dataset_id)
+        if not kb:
+            return get_error_data_result(retmsg=f"Can't find the dataset with ID {dataset_id}!", retcode=RetCode.DATA_ERROR)
+        if not check_kb_team_permission(s, kb, tenant_id):
+            return get_error_data_result(retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
+
+        err, uploaded = FileService.upload_document(s, kb, file_contents, tenant_id, parent_path=parent_path)
+        if err:
+            return get_error_data_result(retmsg="\n".join(err), retcode=RetCode.SERVER_ERROR)
+        if not uploaded:
+            return get_error_data_result(retmsg="There seems to be an issue with your file format. Please verify it is correct and not corrupted.", retcode=RetCode.DATA_ERROR)
+
+        docs = [f[0] for f in uploaded]  # 去掉 blob
+        if return_raw_files:
+            return get_result(data=docs)
+        return get_result(data=[document_api_service.map_doc_keys_with_run_status(doc, "0") for doc in docs])
+
+    return await db.run_sync(_upload)  # TODO(async-phase4)

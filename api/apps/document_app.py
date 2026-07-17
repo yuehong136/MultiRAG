@@ -408,7 +408,15 @@ class MetadataSummaryRequest(BaseModel):
     doc_ids: list[str] | None = Field(default=None, description="文档ID列表（可选，不提供则汇总整个知识库）")
 
 
-@router.post("/upload", summary="上传文件", response_description="成功上传文件")
+# ============================================================================
+# 文档上传的统一入口已收编至 RESTful：
+#   api/apps/restful_apis/document_api.py（POST /api/v1/datasets/{dataset_id}/documents，
+#   web 会话与 API token 统一鉴权，?return_raw_files=true 返回本端点的原始文档格式）。
+# 下列旧路由（POST /v1/document/upload）已标注 deprecated=True：
+# 前端 knowledge.ts 已迁移到新端点，manifest/labels 增强目前仅本端点支持，
+# 待消费方全部迁移后再于后续版本移除。
+# ============================================================================
+@router.post("/upload", summary="[Deprecated] 上传文件（请改用 POST /api/v1/datasets/{dataset_id}/documents）", response_description="成功上传文件", deprecated=True)
 async def upload(
     kb_id: str,
     files: list[UploadFile] = File(...),

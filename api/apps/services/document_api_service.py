@@ -121,13 +121,31 @@ def validate_document_update_fields(db: Session, update_doc_req: UpdateDocumentR
     return None, None
 
 
-def rename_doc_key(db: Session, doc: Document) -> dict[str, Any]:
+def map_doc_keys(db: Session, doc: Document) -> dict[str, Any]:
+    """将文档 model 的内部字段名映射为 API 响应字段名（如 chunk_num -> chunk_count）。"""
+    renamed_doc = _process_key_mappings(DocumentService.serialize_document(db, doc))
+    if "run" in renamed_doc:
+        renamed_doc = _process_run_mapping(renamed_doc, renamed_doc["run"])
+    return renamed_doc
+
+
+def map_doc_keys_with_run_status(doc: dict[str, Any], run_status: str) -> dict[str, Any]:
+    """dict 输入版本：上传路径的文档来自 FileService（dict 而非 model），run 状态由调用方显式给定。"""
+    renamed_doc = _process_key_mappings(doc)
+    return _process_run_mapping(renamed_doc, run_status)
+
+
+def _process_key_mappings(doc: dict[str, Any]) -> dict[str, Any]:
     key_mapping = {
         "chunk_num": "chunk_count",
         "kb_id": "dataset_id",
         "token_num": "token_count",
         "parser_id": "chunk_method",
     }
+    return {key_mapping.get(key, key): value for key, value in doc.items()}
+
+
+def _process_run_mapping(doc: dict[str, Any], run_status: Any) -> dict[str, Any]:
     run_mapping = {
         "0": "UNSTART",
         "1": "RUNNING",
@@ -135,11 +153,6 @@ def rename_doc_key(db: Session, doc: Document) -> dict[str, Any]:
         "3": "DONE",
         "4": "FAIL",
     }
-    renamed_doc = {}
-    for key, value in DocumentService.serialize_document(db, doc).items():
-        new_key = key_mapping.get(key, key)
-        if key == "run":
-            renamed_doc[new_key] = run_mapping.get(str(value), str(value))
-        else:
-            renamed_doc[new_key] = value
-    return renamed_doc
+    # 未知 run 值原样透出（不强制归 UNSTART），避免丢失状态信息。
+    doc["run"] = run_mapping.get(str(run_status), str(run_status))
+    return doc

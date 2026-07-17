@@ -1736,10 +1736,11 @@ class MultiRAGClient:
                 fh = path.open("rb")
                 fields.append(("file", (path.name, fh)))
                 file_handles.append(fh)
-            fields.append(("kb_id", dataset_id))
             encoder = MultipartEncoder(fields=fields)
             headers = {"Content-Type": encoder.content_type}
-            response = self.http_client.request("POST", "document/upload", headers=headers, data=encoder, json_body=None, use_api_base=False, auth_kind="web")
+            response = self.http_client.request(
+                "POST", f"datasets/{dataset_id}/documents", headers=headers, data=encoder, json_body=None, params={"return_raw_files": "true"}, use_api_base=True, auth_kind="web"
+            )
             res_json = response.json()
             code = res_json.get("code", res_json.get("retcode", -1))
             if code == 0:
