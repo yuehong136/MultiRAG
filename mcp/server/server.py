@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import random
@@ -5,6 +6,7 @@ import time
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from enum import StrEnum
+from importlib import metadata as importlib_metadata
 from typing import Annotated
 
 import click
@@ -13,8 +15,12 @@ from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import StaticTokenVerifier
 from fastmcp.server.dependencies import get_http_headers
+from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
+from fastmcp.server.middleware.logging import StructuredLoggingMiddleware
+from fastmcp.server.middleware.rate_limiting import RateLimitingMiddleware
+from fastmcp.server.middleware.timing import TimingMiddleware
 from fastmcp.utilities.lifespan import combine_lifespans
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.responses import JSONResponse
@@ -44,6 +50,53 @@ JSON_RESPONSE = True
 # （仅保护 localhost 绑定）。经公网域名部署时必须把该域名加进来。
 ALLOWED_HOSTS: list[str] = []
 ALLOWED_ORIGINS: list[str] = []
+# 每客户端每秒请求上限（host 模式按 token 哈希区分租户；进程内计数，
+# 多 worker 部署时各 worker 独立）
+RATE_LIMIT_RPS = 10.0
+
+
+# ---------------------------------------------------------------------------
+# Tool output models — 字段级 output_schema，客户端可直接反序列化 result.data
+# ---------------------------------------------------------------------------
+class DatasetInfo(BaseModel):
+    """list_datasets 单条数据集条目。"""
+
+    id: str
+    name: str = ""
+    description: str = ""
+    embedding_model: str = ""
+    embd_id: str = Field("", description="Legacy alias of embedding_model for older MCP consumers.")
+
+
+class ChunkInfo(BaseModel):
+    """检索命中 chunk。extra=allow：后端原始字段（content_with_weight、
+    similarity、document_metadata 等开放字段集）全部透传，钉板测试锁此契约。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    dataset_name: str = "Unknown"
+    document_name: str = ""
+
+
+class RetrievalPagination(BaseModel):
+    page: int
+    page_size: int
+    total_chunks: int
+    total_pages: int
+
+
+class RetrievalQueryInfo(BaseModel):
+    question: str
+    similarity_threshold: float
+    vector_weight: float
+    keyword_search: bool
+    dataset_count: int
+
+
+class RetrievalResult(BaseModel):
+    chunks: list[ChunkInfo]
+    pagination: RetrievalPagination
+    query_info: RetrievalQueryInfo
 
 
 def _extract_token_from_headers(headers: dict[str, str]) -> str | None:
@@ -495,6 +548,35 @@ def _get_connector() -> MultiRAGConnector:
 mcp: FastMCP | None = None
 
 
+def _server_version() -> str:
+    """serverInfo.version 用我方项目版本；缺省会误报为 fastmcp 库版本。
+
+    项目不以包形式安装（uv 非 package 布局），主路径是读仓库 pyproject.toml；
+    importlib.metadata 留作未来打包安装形态的快路径。
+    """
+    try:
+        return importlib_metadata.version("multirag")
+    except importlib_metadata.PackageNotFoundError:
+        pass
+    try:
+        import tomllib
+        from pathlib import Path
+
+        pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+        with open(pyproject, "rb") as f:
+            return tomllib.load(f)["project"]["version"]
+    except Exception:
+        return "0.0.0-dev"
+
+
+def _rate_limit_client_id(_context) -> str:
+    """host 模式按 token 哈希区分租户限流；self-host 单租户共用一个桶。"""
+    if MODE == LaunchMode.SELF_HOST:
+        return "self-host"
+    token = _extract_token_from_headers(get_http_headers())
+    return hashlib.sha256(token.encode()).hexdigest()[:16] if token else "anonymous"
+
+
 def create_mcp_server() -> FastMCP:
     global mcp
     auth = None
@@ -507,11 +589,19 @@ def create_mcp_server() -> FastMCP:
         instructions=(
             "MultiRAG retrieval server. Call list_datasets first to discover dataset IDs "
             "and their embedding_model values, then call multirag_retrieval with a question "
-            "and dataset_ids from a single embedding_model group."
+            "and dataset_ids from a single embedding_model group. The dataset catalog is "
+            "also readable as the datasets://list resource."
         ),
+        version=_server_version(),
         auth=auth,
         mask_error_details=True,
     )
+    # MCP 级中间件（先加=最外层）。刻意不加 ResponseCachingMiddleware：其 cache key
+    # 只含操作名+参数、不含用户身份，host 多租户下会跨租户泄漏检索结果。
+    mcp.add_middleware(ErrorHandlingMiddleware())
+    mcp.add_middleware(RateLimitingMiddleware(max_requests_per_second=RATE_LIMIT_RPS, get_client_id=_rate_limit_client_id))
+    mcp.add_middleware(TimingMiddleware())
+    mcp.add_middleware(StructuredLoggingMiddleware(include_payloads=False))
     _register_tools(mcp)
     return mcp
 
@@ -522,13 +612,25 @@ def _register_tools(server: FastMCP):
     @server.tool(
         name="list_datasets",
         description=("List all available datasets with their IDs, names, descriptions, and embedding_model values. Use this to discover dataset IDs for the multirag_retrieval tool."),
-        annotations=ToolAnnotations(readOnlyHint=True),
+        annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True),
     )
-    async def tool_list_datasets(ctx: Context) -> list[dict]:
+    async def tool_list_datasets(ctx: Context) -> list[DatasetInfo]:
         api_key = _resolve_api_key()
         connector = _get_connector()
         await ctx.info("Listing available datasets")
-        return await connector.list_datasets_structured(api_key=api_key)
+        datasets = await connector.list_datasets_structured(api_key=api_key)
+        return [DatasetInfo(**d) for d in datasets]
+
+    @server.resource(
+        "datasets://list",
+        mime_type="application/json",
+        description="Dataset catalog (same payload as the list_datasets tool), readable as context without spending a tool call.",
+        annotations={"readOnlyHint": True, "idempotentHint": True},
+    )
+    async def resource_list_datasets() -> str:
+        api_key = _resolve_api_key()
+        datasets = await _get_connector().list_datasets_structured(api_key=api_key)
+        return json.dumps(datasets, ensure_ascii=False)
 
     @server.tool(
         name="multirag_retrieval",
@@ -540,7 +642,10 @@ def _register_tools(server: FastMCP):
             "dataset_ids from a single embedding_model group. You can also optionally specify "
             "document_ids to search within specific documents."
         ),
-        annotations=ToolAnnotations(readOnlyHint=True),
+        annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True),
+        # 元数据缓存冷启动时会对多数据集全量分页拉取（多次 30s 下游调用累加），
+        # MCP 层兜底超时防止单次调用无界拖长
+        timeout=120.0,
     )
     async def tool_multirag_retrieval(
         question: Annotated[str, Field(description="The question or query to search for.")],
@@ -591,7 +696,7 @@ def _register_tools(server: FastMCP):
             Field(description="Set to true only if fresh dataset and document metadata is explicitly required. Otherwise, cached metadata is used (default: false)."),
         ] = False,
         ctx: Context | None = None,
-    ) -> dict:
+    ) -> RetrievalResult:
         api_key = _resolve_api_key()
         connector = _get_connector()
 
@@ -613,9 +718,10 @@ def _register_tools(server: FastMCP):
             force_refresh=force_refresh,
         )
 
-        # dict 直接返回：fastmcp 自动生成 structured content + output schema，
-        # 传统 TextContent 仍是 JSON 文本，旧消费者不受影响。
-        return result
+        # 类型化返回：fastmcp 生成字段级 output schema + structured content，
+        # 传统 TextContent 仍是 JSON 文本，旧消费者不受影响；
+        # ChunkInfo extra=allow 保证后端原始字段全部透传。
+        return RetrievalResult.model_validate(result)
 
 
 # ---------------------------------------------------------------------------
@@ -735,7 +841,13 @@ def create_starlette_app() -> Starlette:
     default="",
     help="Comma-separated browser origins trusted by streamable-http Host/Origin protection",
 )
-def main(base_url, host, port, mode, api_key, transport_sse_enabled, transport_streamable_http_enabled, json_response, allowed_hosts, allowed_origins):
+@click.option(
+    "--rate-limit-rps",
+    type=float,
+    default=10.0,
+    help="Per-client requests-per-second cap (host mode buckets by token hash; in-process counter)",
+)
+def main(base_url, host, port, mode, api_key, transport_sse_enabled, transport_streamable_http_enabled, json_response, allowed_hosts, allowed_origins, rate_limit_rps):
     import os
 
     import uvicorn
@@ -751,7 +863,7 @@ def main(base_url, host, port, mode, api_key, transport_sse_enabled, transport_s
         val = os.environ.get(key, default)
         return [item.strip() for item in val.split(",") if item.strip()]
 
-    global BASE_URL, HOST, PORT, MODE, HOST_API_KEY, TRANSPORT_SSE_ENABLED, TRANSPORT_STREAMABLE_HTTP_ENABLED, JSON_RESPONSE, ALLOWED_HOSTS, ALLOWED_ORIGINS
+    global BASE_URL, HOST, PORT, MODE, HOST_API_KEY, TRANSPORT_SSE_ENABLED, TRANSPORT_STREAMABLE_HTTP_ENABLED, JSON_RESPONSE, ALLOWED_HOSTS, ALLOWED_ORIGINS, RATE_LIMIT_RPS
     BASE_URL = os.environ.get("MULTIRAG_MCP_BASE_URL", base_url)
     HOST = os.environ.get("MULTIRAG_MCP_HOST", host)
     PORT = os.environ.get("MULTIRAG_MCP_PORT", str(port))
@@ -762,6 +874,7 @@ def main(base_url, host, port, mode, api_key, transport_sse_enabled, transport_s
     JSON_RESPONSE = parse_bool_flag("MULTIRAG_MCP_JSON_RESPONSE", json_response)
     ALLOWED_HOSTS = parse_csv("MULTIRAG_MCP_ALLOWED_HOSTS", allowed_hosts)
     ALLOWED_ORIGINS = parse_csv("MULTIRAG_MCP_ALLOWED_ORIGINS", allowed_origins)
+    RATE_LIMIT_RPS = float(os.environ.get("MULTIRAG_MCP_RATE_LIMIT_RPS", rate_limit_rps))
 
     if MODE == LaunchMode.SELF_HOST and not HOST_API_KEY:
         raise click.UsageError("--api-key is required when --mode is 'self-host'")
@@ -828,6 +941,12 @@ if __name__ == "__main__":
         uv run mcp/server/server.py --host=127.0.0.1 --port=9382 \
             --base-url=http://127.0.0.1:8123 \
             --mode=host
+
+    2b. Public-hostname deployment (feed the DNS-rebinding guard) + OpenTelemetry
+        (zero-code: SDK must exist before fastmcp import, so use the wrapper):
+        OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318 \
+        uv run opentelemetry-instrument python mcp/server/server.py \
+            --mode=host --allowed-hosts=mcp.example.com
 
     3. Disable legacy SSE (only streamable HTTP will be active):
         uv run mcp/server/server.py --no-transport-sse-enabled \
