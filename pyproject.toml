@@ -3,13 +3,15 @@ name = "multirag"
 version = "0.9.9"
 description = "基于RAG、Agent、Workflow体系赋能LLM应用"
 readme = "README.md"
-requires-python = ">=3.12,<3.15"
+# 上界 <3.14：CI 矩阵 3.12/3.13、Docker 3.12.10，3.14 无真实消费者；
+# 且 3.14 解析分支会迫使 pymilvus 静默换 3.0.0（grpcio 钉子冲突）——收紧上界
+# 让锁文件不再产生任何多版本分叉（uv 0.11.x 写入器对分叉引用有自毁 bug）
+requires-python = ">=3.12,<3.14"
 dependencies = [
-    "aiohttp>=3.14.1",  # 显式下限：3.11.14 被 yank（aio-libs/aiohttp#10617 回归）；本为传递依赖
     "akshare>=1.15.78,<2.0.0",
     "alembic>=1.13.2",
-    "anthropic==0.34.1",
-    "arxiv==2.1.3",
+    "anthropic==0.76.0",
+    "arxiv==4.0.0",
     "asana>=5.2.2",
     "atlassian-python-api==4.0.7",
     # discord-py 在 discord/player.py 模块加载期无条件 import audioop；audioop 已被
@@ -22,7 +24,7 @@ dependencies = [
     "bcembedding==0.1.5",
     "beartype>=0.20.0,<1.0.0",
     "bio==1.7.1",
-    "boto3==1.34.140",
+    "boto3>=1.28.0",
     "boxsdk>=10.1.0",
     "bs4>=0.0.2",
     "captcha>=0.7.1",
@@ -41,7 +43,7 @@ dependencies = [
     "elasticsearch-dsl==8.12.0",
     "email-validator>=2.2.0",
     "extract-msg>=0.55.0",
-    "fastapi>=0.128.0",
+    "fastapi>=0.139.0",
     "fastapi-login>=1.10.1",
     "feedparser>=6.0.11,<7.0.0",
     "fastembed>=0.3.6; sys_platform == 'darwin' or platform_machine != 'x86_64'",
@@ -54,7 +56,7 @@ dependencies = [
     "google-genai>=1.41.0,<2.0.0",
     "google-search-results==2.4.2",
     "graspologic @ git+https://gitee.com/infiniflow/graspologic.git@38e680cab72bc9fb68a7992c3bcc2d53b24e42fd",
-    "groq==0.9.0",
+    "groq>=0.30.0,<1.0.0",
     "html-text==0.6.2",
     "httpx[socks]>=0.28.1,<0.29.0",
     "huggingface-hub>=0.25.0",
@@ -70,7 +72,7 @@ dependencies = [
     "langfuse>=3.2.4",
     "litellm~=1.82.0,!=1.82.7,!=1.82.8",
     "mammoth>=1.11.0",
-    "markdown==3.6",
+    "markdown==3.8.2",
     "markdown-to-json==2.1.1",
     "markdownify>=1.2.0",
     "fastmcp>=3.4.4",
@@ -80,7 +82,7 @@ dependencies = [
     "mistune>=3.0.0,<4.0.0",
     "mysql-connector-python>=9.0.0,<10.0.0",
     "moodlepy>=0.23.0",
-    "mypy-boto3-s3==1.40.26",
+    "mypy-boto3-s3==1.43.50",
     "nest-asyncio>=1.6.0,<2.0.0",  # Needed for agent/component/message.py
     "Office365-REST-Python-Client==2.6.2",
     "ollama>=0.5.0",
@@ -89,12 +91,15 @@ dependencies = [
     "opendal>=0.45.0,<0.46.0",
     # OTel 自动埋点（初始化单点：common/observability.py，经 bootstrap 启用）；
     # api/sdk/exporter 本为 langfuse 传递依赖，这里显式声明直接消费面
-    "opentelemetry-sdk>=1.36.0",
-    "opentelemetry-exporter-otlp>=1.36.0",
-    "opentelemetry-instrumentation-fastapi>=0.57b0",
-    "opentelemetry-instrumentation-sqlalchemy>=0.57b0",
-    "opentelemetry-instrumentation-redis>=0.57b0",
-    "opentelemetry-instrumentation-httpx>=0.57b0",
+    # 0.57b0 的 instrumentation-fastapi 与 fastapi≥0.137 路由树不兼容（_IncludedRouter
+    # 无 path 属性→开埋点后全路由 500），0.64b0 起上游已修（_flatten_routes +
+    # iter_route_contexts）；instrumentation 族有互相 == pin，六件必须 lockstep 同升
+    "opentelemetry-sdk>=1.44.0",
+    "opentelemetry-exporter-otlp>=1.44.0",
+    "opentelemetry-instrumentation-fastapi>=0.64b0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.64b0",
+    "opentelemetry-instrumentation-redis>=0.64b0",
+    "opentelemetry-instrumentation-httpx>=0.64b0",
     # 服务端只装 headless（双装时 cv2 归属取决于安装顺序，曾是隐患）；
     # deepdoc/vision 已核实无任何 GUI 调用（imshow/waitKey/VideoCapture 零命中）
     "opencv-python-headless==4.10.0.84",
@@ -115,7 +120,8 @@ dependencies = [
     "psycopg2-binary>=2.9.11,<3.0.0",
     "pyclipper>=1.4.0,<2.0.0",
     "pycryptodomex==3.20.0",
-    "pymilvus>=2.5.11",
+    # <3：生产主向量库客户端不敞口大版本；敞口时解析器曾在部分分支静默换 3.0.0
+    "pymilvus>=2.5.11,<3.0.0",
     "pyobvector==0.2.22",
     "pyodbc>=5.2.0,<6.0.0",
     "pypandoc>=1.16",
@@ -219,17 +225,16 @@ test = [
 # 升级 uv 时本地、CI 四处 pin、重锁三者同一提交完成）
 required-version = ">=0.11,<0.12"
 override-dependencies = [
-    # CVE-2026-30922: Denial of Service via unbounded recursion in ASN.1 decoding (CVSS 7.5 HIGH)
-    # pyasn1 < 0.6.3 is vulnerable; pulled in transitively via google-auth / rsa / pyasn1-modules
-    "pyasn1>=0.6.3",
+    # moodlepy 0.24.1（最新版、上游停更）pin attrs/cattrs <23.0，与现代栈硬冲突，
+    # override 是唯一出路；日落点 = 弃用或内联 moodlepy 连接器
     "attrs>=23.1.0",
     "cattrs>=23.1.0",
 ]
 constraint-dependencies = [
-    # pywin32 若在 py<3.14/≥3.14 分叉出双版本，uv 0.11.x 写入器会给部分依赖方
-    # 输出无版本消歧的引用，产出自身无法再解析的 lock；312 起 wheel 全覆盖
-    # cp312–cp315，钉住下界让所有分支收敛到单版本，绕开该写入器 bug。
-    "pywin32>=312",
+    # CVE-2026-30922: pyasn1 < 0.6.3 ASN.1 解码无界递归 DoS（CVSS 7.5）；
+    # 依赖图内无任何 <0.6.3 上界的冲突方，constraint 即可钳住（曾误放 override，
+    # 那会抹掉 pyasn1-modules 的 <0.7.0 上界，未来 0.7 破坏版会静默越界）
+    "pyasn1>=0.6.3",
 ]
 python-install-mirror = "http://maven.datav.com/repository/static/indygreg/python-build-standalone/"
 [[tool.uv.index]]
@@ -450,6 +455,9 @@ filterwarnings = [
     "ignore::PendingDeprecationWarning",
     "ignore::SyntaxWarning",
     "ignore::UserWarning",
+    # StarletteDeprecationWarning 是 UserWarning 子类，会被上面整类吞掉；
+    # 恢复可见（后列优先），否则 TestClient httpx1 后端下线等弃用信号零预警
+    "default::starlette.exceptions.StarletteDeprecationWarning",
 ]
 
 [tool.coverage.run]
