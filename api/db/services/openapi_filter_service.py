@@ -13,7 +13,6 @@ from datetime import datetime
 from typing import Any
 
 import httpx
-from fastapi.openapi.utils import get_openapi
 
 from api.utils.openapi_filter_utils import (
     PerformanceTimer,
@@ -245,15 +244,13 @@ class OpenApiFilterService:
             except ImportError:
                 raise ValueError("无法获取FastAPI应用实例")
 
-        if not hasattr(app, "openapi_schema"):
-            raise ValueError("应用没有openapi_schema属性")
+        if not callable(getattr(app, "openapi", None)):
+            raise ValueError("应用没有openapi()方法")
 
-        # 获取OpenAPI schema
-        if app.openapi_schema:
-            doc = app.openapi_schema
-        else:
-            doc = get_openapi(title=app.title, version=app.version, description=app.description, routes=app.routes, tags=app.openapi_tags)
-            app.openapi_schema = doc
+        # 走 FastAPI 公开入口：自带缓存与全部 OpenAPI 参数（servers/webhooks/
+        # separate_input_output_schemas 等）——手工 get_openapi 只传五个参数，
+        # 过滤源文档会与 /openapi.json 实际输出漂移
+        doc = app.openapi()
 
         if not isinstance(doc, dict):
             raise ValueError("本地OpenAPI文档格式无效")

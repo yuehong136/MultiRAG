@@ -4,7 +4,7 @@ import sys
 
 def python_version_validation():
     # Check python version
-    required_python_version = (3, 10)
+    required_python_version = (3, 12)
     if sys.version_info < required_python_version:
         logging.info(f"Required Python: >= {required_python_version[0]}.{required_python_version[1]}. Current Python version: {sys.version_info[0]}.{sys.version_info[1]}.")
         sys.exit(1)

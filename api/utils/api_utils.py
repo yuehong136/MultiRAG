@@ -1,13 +1,10 @@
 import asyncio
-import inspect
 import logging
 import os
 import time
-from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
-from functools import wraps
 from typing import Any
 
 from fastapi import Depends, Request
@@ -168,97 +165,9 @@ def server_error_response(e):
     return get_json_result(retcode=RetCode.EXCEPTION_ERROR, retmsg=repr(e))
 
 
-def validate_request(*args, **kwargs):
-    """
-    参数验证装饰器（已废弃，FastAPI 推荐使用 Pydantic 模型验证）
-    保留此函数是为了向后兼容和代码完整性
-
-    注意：此装饰器已不再使用，FastAPI 通过 Pydantic 模型自动处理参数验证
-    """
-
-    def process_args(input_arguments):
-        """提取验证逻辑，便于复用"""
-        no_arguments = []
-        error_arguments = []
-        for arg in args:
-            if arg not in input_arguments:
-                no_arguments.append(arg)
-        for k, v in kwargs.items():
-            config_value = input_arguments.get(k, None)
-            if config_value is None:
-                no_arguments.append(k)
-            elif isinstance(v, (tuple, list)):
-                if config_value not in v:
-                    error_arguments.append((k, set(v)))
-            elif config_value != v:
-                error_arguments.append((k, v))
-        if no_arguments or error_arguments:
-            error_string = ""
-            if no_arguments:
-                error_string += f"required argument are missing: {', '.join(no_arguments)}; "
-            if error_arguments:
-                error_string += "required argument values: " + ", ".join([f"{a[0]}={a[1]}" for a in error_arguments])
-            return error_string
-        return None
-
-    def wrapper(func):
-        @wraps(func)
-        async def decorated_function(request: Request, *_args, **_kwargs):
-            if args or kwargs:
-                try:
-                    input_arguments = await _coerce_request_data(request)
-                except (AttributeError, TypeError):
-                    input_arguments = {}
-            else:
-                input_arguments = await _coerce_request_data(request)
-            errs = process_args(input_arguments)
-            if errs:
-                return get_json_result(retcode=RetCode.ARGUMENT_ERROR, retmsg=errs)
-
-            # 支持同步和异步函数
-            if inspect.iscoroutinefunction(func):
-                return await func(request, *_args, **_kwargs)
-            return func(request, *_args, **_kwargs)
-
-        return decorated_function
-
-    return wrapper
-
-
 def get_json_result(retcode: RetCode = RetCode.SUCCESS, retmsg="success", data=None):
     response = {"retcode": retcode, "retmsg": retmsg, "data": data}
     return JSONResponse(content=jsonable_encoder(response))
-
-
-def apikey_required(func: Callable) -> Callable:
-    """
-    装饰器形式的 API Key 验证（已废弃，建议使用 apikey_dependency）
-    保留此函数是为了向后兼容和代码完整性
-
-    注意：此装饰器已不再使用，FastAPI 推荐使用依赖注入方式
-    """
-
-    @wraps(func)
-    async def decorated_function(*args, **kwargs):
-        request: Request = kwargs.get("request")  # 从 kwargs 中获取 FastAPI Request 对象
-        db: Session = kwargs.get("db")  # 从 kwargs 中获取数据库会话对象
-
-        authorization_header = request.headers.get("Authorization")
-
-        token = authorization_header.split()[1]
-        objs = APITokenService.query(db, token=token)
-
-        if not objs:
-            return build_error_result(error_msg="API-KEY is invalid!", retcode=RetCode.FORBIDDEN)
-
-        kwargs["tenant_id"] = objs[0].tenant_id
-
-        # 支持同步和异步函数
-        if inspect.iscoroutinefunction(func):
-            return await func(*args, **kwargs)
-        return func(*args, **kwargs)
-
-    return decorated_function
 
 
 def apikey_dependency(request: Request, db: Session = Depends(get_db)) -> str:
