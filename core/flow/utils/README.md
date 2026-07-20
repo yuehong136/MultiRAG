@@ -119,6 +119,35 @@ parsed = await parse_file(filename, binary, tenant_id)
 chunks = await split_chunks(parsed, overlapped_percent=0.1)
 ```
 
+### 音视频 VLM 配置
+
+Pipeline Parser 的标准音视频模型配置位于 `vlm.llm_id`：
+
+```python
+from core.flow.utils import parse_file
+
+audio = await parse_file(
+    filename="meeting.wav",
+    binary=audio_content,
+    tenant_id=tenant_id,
+    audio_config={"vlm": {"llm_id": "qwen-audio-asr"}},
+)
+
+video = await parse_file(
+    filename="demo.mp4",
+    binary=video_content,
+    tenant_id=tenant_id,
+    video_config={
+        "vlm": {"llm_id": "qwen-vl-plus"},
+        "prompt": "概括视频内容",
+    },
+)
+```
+
+`FlowParser.parse_audio(llm_id=...)`、`FlowParser.parse_video(llm_name=...)` 会生成相同的标准结构。
+为兼容已有 analyze_v2 调用，facade 仍接受 `{"llm_id": "..."}`，并在进入正式 Parser 前归一化为
+`{"vlm": {"llm_id": "..."}}`；新调用方应使用标准嵌套结构。
+
 ### 使用 MinerU 解析（OCR 模型）
 
 ```python

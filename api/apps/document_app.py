@@ -157,7 +157,8 @@ class AnalyzeDocumentRequest(BaseModel):
             "word": {"output_format": "json"},
             "markdown": {"output_format": "json"},
             "email": {"output_format": "json", "fields": ["from", "to", "subject", "body"]},
-            "video": {"llm_id": "qwen-vl-plus"}
+            "video": {"vlm": {"llm_id": "qwen-vl-plus"}},
+            "audio": {"vlm": {"llm_id": "qwen-audio-asr"}}
         }
         TCADP parser 配置示例（支持 PDF/Excel/PPT）：{
             "pdf": {"parse_method": "tcadp parser", "table_result_type": "1", "markdown_image_response_type": "1"},
@@ -3888,7 +3889,10 @@ async def run_analyze_v2(
           "fields": ["from", "to", "subject", "body"]
         },
         "video": {
-          "llm_id": "qwen-vl-plus"      // VLM 模型名
+          "vlm": {"llm_id": "qwen-vl-plus"}  // VLM 模型名
+        },
+        "audio": {
+          "vlm": {"llm_id": "qwen-audio-asr"} // 语音识别模型名
         }
       },
 

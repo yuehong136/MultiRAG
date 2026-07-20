@@ -1669,7 +1669,8 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 - word: {"output_format": "json"}
                 - markdown: {"output_format": "json"}
                 - email: {"output_format": "json", "fields": [...]}
-                - video: {"llm_id": "..."}
+                - video: {"vlm": {"llm_id": "..."}}
+                - audio: {"vlm": {"llm_id": "..."}}
             config.hierarchical_config: 层次化配置
                 - levels: 标题正则表达式列表
                 - hierarchy: 层级（0=章节，1=章+节）
@@ -1799,8 +1800,8 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                 code_config = parser_config_dict.get("code", {"output_format": "text"})
                 html_config = parser_config_dict.get("html", {"output_format": "text"})
                 email_config = parser_config_dict.get("email", {"output_format": "json", "fields": None})
-                video_config = parser_config_dict.get("video", {"llm_id": config.get("video_llm_name")})
-                audio_config = parser_config_dict.get("audio", {"llm_id": config.get("audio_llm_name")})
+                video_config = parser_config_dict.get("video", {"vlm": {"llm_id": config.get("video_llm_name")}})
+                audio_config = parser_config_dict.get("audio", {"vlm": {"llm_id": config.get("audio_llm_name")}})
                 slides_config = parser_config_dict.get("slides", {"parse_method": "deepdoc", "output_format": "json"})
                 markdown_config = parser_config_dict.get("markdown", {"output_format": "json"})
                 epub_config = parser_config_dict.get("epub", {"output_format": "json"})
@@ -1865,14 +1866,14 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                     candidate = config.get("parse_method")
                     if candidate and candidate not in ["deepdoc", "plain_text", "mineru", "paddleocr", "auto", "ocr", "vlm", "tcadp parser"]:
                         video_llm_name = candidate
-                video_config = {"llm_id": video_llm_name}
+                video_config = {"vlm": {"llm_id": video_llm_name}}
                 # Audio 配置
                 audio_llm_name = config.get("audio_llm_name")
                 if not audio_llm_name:
                     candidate = config.get("parse_method")
                     if candidate and candidate not in ["deepdoc", "plain_text", "mineru", "paddleocr", "auto", "ocr", "vlm", "tcadp parser"]:
                         audio_llm_name = candidate
-                audio_config = {"llm_id": audio_llm_name}
+                audio_config = {"vlm": {"llm_id": audio_llm_name}}
                 # PPT/Slides 支持的 parse_method: deepdoc, tcadp parser
                 slides_parse_method = "deepdoc"
                 if parse_method.lower() == "tcadp parser":

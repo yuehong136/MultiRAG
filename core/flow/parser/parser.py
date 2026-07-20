@@ -260,11 +260,13 @@ class ParserParam(ProcessParamBase):
 
         audio_config = self.setups.get("audio", "")
         if audio_config:
-            self.check_empty(audio_config.get("llm_id"), "Audio VLM")
+            audio_vlm = audio_config.get("vlm") or {}
+            self.check_empty(audio_vlm.get("llm_id"), "Audio VLM")
 
         video_config = self.setups.get("video", "")
         if video_config:
-            self.check_empty(video_config.get("llm_id"), "Video VLM")
+            video_vlm = video_config.get("vlm") or {}
+            self.check_empty(video_vlm.get("llm_id"), "Video VLM")
 
         email_config = self.setups.get("email", "")
         if email_config:
@@ -1106,6 +1108,7 @@ class Parser(ProcessBase):
         self.callback(random.randint(1, 5) / 100.0, "Start to work on an audio.")
 
         conf = self._param.setups["audio"]
+        vlm = conf.get("vlm")
         self.set_output("output_format", conf["output_format"])
         _, ext = os.path.splitext(name)
         with tempfile.NamedTemporaryFile(suffix=ext) as tmpf:
@@ -1113,7 +1116,7 @@ class Parser(ProcessBase):
             tmpf.flush()
             tmp_path = os.path.abspath(tmpf.name)
             with db_connection() as db:
-                seq2txt_config = get_model_config_by_type_and_name(db, self._canvas.get_tenant_id(), LLMType.SPEECH2TEXT.value, conf["llm_id"])
+                seq2txt_config = get_model_config_by_type_and_name(db, self._canvas.get_tenant_id(), LLMType.SPEECH2TEXT.value, vlm["llm_id"])
                 seq2txt_mdl = LLMBundle(db, self._canvas.get_tenant_id(), seq2txt_config)
             txt = seq2txt_mdl.transcription(tmp_path)
 
@@ -1123,9 +1126,10 @@ class Parser(ProcessBase):
         self.callback(random.randint(1, 5) / 100.0, "Start to work on an video.")
 
         conf = self._param.setups["video"]
+        vlm = conf.get("vlm")
         self.set_output("output_format", conf["output_format"])
         with db_connection() as db:
-            cv_config = get_model_config_by_type_and_name(db, self._canvas.get_tenant_id(), LLMType.IMAGE2TEXT.value, conf["llm_id"])
+            cv_config = get_model_config_by_type_and_name(db, self._canvas.get_tenant_id(), LLMType.IMAGE2TEXT.value, vlm["llm_id"])
             cv_mdl = LLMBundle(db, self._canvas.get_tenant_id(), cv_config)
         video_prompt = str(conf.get("prompt", "") or "")
         txt = asyncio.run(cv_mdl.async_chat(system="", history=[], gen_conf={}, video_bytes=blob, filename=name, video_prompt=video_prompt))

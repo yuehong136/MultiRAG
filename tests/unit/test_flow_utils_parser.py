@@ -94,6 +94,8 @@ def test_parser_utils_normalizes_direct_configs():
             "html": {"remove_toc": True},
             "code": {"output_format": "json"},
             "word": {"output_format": "markdown"},
+            "audio": {"llm_id": "audio-model"},
+            "video": {"llm_id": "video-model", "prompt": "describe"},
         }
     )
 
@@ -102,8 +104,24 @@ def test_parser_utils_normalizes_direct_configs():
     assert setups["text&code"]["output_format"] == "json"
     assert setups["doc"]["output_format"] == "markdown"
     assert setups["docx"]["output_format"] == "markdown"
+    assert setups["audio"]["vlm"] == {"llm_id": "audio-model"}
+    assert setups["video"]["vlm"] == {"llm_id": "video-model"}
+    assert setups["video"]["prompt"] == "describe"
     assert "txt" in setups["text&code"]["suffix"]
     assert "txt" not in setups["markdown"]["suffix"]
+
+
+def test_parser_utils_preserves_canonical_media_vlm_configs() -> None:
+    setups = clone_parser_setups(
+        parser_config={
+            "audio": {"vlm": {"llm_id": "audio-model"}},
+            "video": {"vlm": {"llm_id": "video-model"}, "prompt": "describe"},
+        }
+    )
+
+    assert setups["audio"]["vlm"] == {"llm_id": "audio-model"}
+    assert setups["video"]["vlm"] == {"llm_id": "video-model"}
+    assert setups["video"]["prompt"] == "describe"
 
 
 def test_extractor_utils_reuses_runtime_extractor_async_flow():

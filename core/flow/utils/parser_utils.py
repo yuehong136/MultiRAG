@@ -90,6 +90,8 @@ def _normalize_setup_config(setup_key: str, config: dict | None) -> dict:
         normalized["remove_toc"] = _normalize_bool_string(normalized["remove_toc"])
     if setup_key == "image":
         normalized = _normalize_image_config(normalized)
+    if setup_key in {"audio", "video"} and "vlm" not in normalized and "llm_id" in normalized:
+        normalized["vlm"] = {"llm_id": normalized.pop("llm_id")}
     return normalized
 
 
@@ -416,7 +418,7 @@ class FlowParser:
         callback=None,
         llm_id: str = "",
     ) -> dict:
-        return await parse_file(filename, binary, tenant_id, audio_config={"llm_id": llm_id}, callback=callback)
+        return await parse_file(filename, binary, tenant_id, audio_config={"vlm": {"llm_id": llm_id}}, callback=callback)
 
     @staticmethod
     async def parse_video(
@@ -431,7 +433,7 @@ class FlowParser:
             filename,
             binary,
             tenant_id,
-            video_config={"llm_id": llm_name, "prompt": prompt},
+            video_config={"vlm": {"llm_id": llm_name}, "prompt": prompt},
             callback=callback,
         )
 
