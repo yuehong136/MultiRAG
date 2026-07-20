@@ -18,4 +18,12 @@ func TestProviderModelsKeepInitializedTypeMaps(t *testing.T) {
 	if !model.ModelTypeMap["chat"] || !model.ModelTypeMap["image2text"] {
 		t.Fatalf("ModelTypeMap = %#v, want chat and image2text", model.ModelTypeMap)
 	}
+
+	provider := manager.FindProvider("zhipu-ai")
+	if provider == nil {
+		t.Fatal("FindProvider() returned nil")
+	}
+	if got := provider.URL["default"]; got != "https://open.bigmodel.cn/api/paas/v4" {
+		t.Fatalf("default provider URL = %q", got)
+	}
 }

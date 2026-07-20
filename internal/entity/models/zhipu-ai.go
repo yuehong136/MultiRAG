@@ -29,13 +29,13 @@ import (
 
 // ZhipuAIModel implements ModelDriver for Zhipu AI
 type ZhipuAIModel struct {
-	BaseURL    string
+	BaseURL    map[string]string
 	URLSuffix  URLSuffix
 	httpClient *http.Client // Reusable HTTP client with connection pool
 }
 
 // NewZhipuAIModel creates a new Zhipu AI model instance
-func NewZhipuAIModel(baseURL string, urlSuffix URLSuffix) *ZhipuAIModel {
+func NewZhipuAIModel(baseURL map[string]string, urlSuffix URLSuffix) *ZhipuAIModel {
 	return &ZhipuAIModel{
 		BaseURL:   baseURL,
 		URLSuffix: urlSuffix,
@@ -51,13 +51,37 @@ func NewZhipuAIModel(baseURL string, urlSuffix URLSuffix) *ZhipuAIModel {
 	}
 }
 
+func (z *ZhipuAIModel) resolveBaseURL(region *string) (string, error) {
+	regionName := "default"
+	if region != nil && *region != "" {
+		regionName = *region
+	}
+
+	baseURL := z.BaseURL[regionName]
+	if baseURL == "" {
+		return "", fmt.Errorf("no base URL configured for region %q", regionName)
+	}
+	return strings.TrimRight(baseURL, "/"), nil
+}
+
+func joinModelURL(baseURL, suffix string) string {
+	return baseURL + "/" + strings.TrimLeft(suffix, "/")
+}
+
 // Chat sends a message and returns response
-func (z *ZhipuAIModel) Chat(modelName, apiKey, message *string, genConf map[string]interface{}) (string, error) {
+func (z *ZhipuAIModel) Chat(modelName, apiKey, message *string, modelConfig *ChatConfig) (string, error) {
 	if message == nil {
 		return "", fmt.Errorf("message is nil")
 	}
 
-	url := fmt.Sprintf("%s/%s", z.BaseURL, z.URLSuffix.Chat)
+	baseURL, err := z.resolveBaseURL(nil)
+	if modelConfig != nil {
+		baseURL, err = z.resolveBaseURL(modelConfig.Region)
+	}
+	if err != nil {
+		return "", err
+	}
+	url := joinModelURL(baseURL, z.URLSuffix.Chat)
 
 	// Build request body
 	reqBody := map[string]interface{}{
@@ -69,16 +93,15 @@ func (z *ZhipuAIModel) Chat(modelName, apiKey, message *string, genConf map[stri
 		"temperature": 1,
 	}
 
-	// Add generation config if provided
-	if genConf != nil {
-		if maxTokens, ok := genConf["max_tokens"]; ok {
-			reqBody["max_tokens"] = maxTokens
+	if modelConfig != nil {
+		if modelConfig.MaxTokens != nil {
+			reqBody["max_tokens"] = *modelConfig.MaxTokens
 		}
-		if temperature, ok := genConf["temperature"]; ok {
-			reqBody["temperature"] = temperature
+		if modelConfig.Temperature != nil {
+			reqBody["temperature"] = *modelConfig.Temperature
 		}
-		if topP, ok := genConf["top_p"]; ok {
-			reqBody["top_p"] = topP
+		if modelConfig.TopP != nil {
+			reqBody["top_p"] = *modelConfig.TopP
 		}
 	}
 
@@ -141,7 +164,11 @@ func (z *ZhipuAIModel) Chat(modelName, apiKey, message *string, genConf map[stri
 
 // ChatStreamly sends a message and streams response
 func (z *ZhipuAIModel) ChatStreamly(modelName, apiKey, message *string, genConf map[string]interface{}) (<-chan string, error) {
-	url := fmt.Sprintf("%s/chat/completions", z.BaseURL)
+	baseURL, err := z.resolveBaseURL(nil)
+	if err != nil {
+		return nil, err
+	}
+	url := joinModelURL(baseURL, z.URLSuffix.Chat)
 
 	// Build request body with streaming enabled
 	reqBody := map[string]interface{}{
@@ -253,7 +280,11 @@ func (z *ZhipuAIModel) ChatStreamly(modelName, apiKey, message *string, genConf 
 
 // ChatStreamlyWithChannel sends a message and streams response to channel (better performance)
 func (z *ZhipuAIModel) ChatStreamlyWithChannel(modelName, apiKey, message *string, genConf map[string]interface{}, resultChan chan<- string) error {
-	url := fmt.Sprintf("%s/chat/completions", z.BaseURL)
+	baseURL, err := z.resolveBaseURL(nil)
+	if err != nil {
+		return err
+	}
+	url := joinModelURL(baseURL, z.URLSuffix.Chat)
 
 	// Build request body with streaming enabled
 	reqBody := map[string]interface{}{
@@ -360,7 +391,15 @@ func (z *ZhipuAIModel) ChatStreamlyWithChannel(modelName, apiKey, message *strin
 
 // ChatStreamlyWithSender sends a message and streams response via sender function (best performance, no channel)
 func (z *ZhipuAIModel) ChatStreamlyWithSender(modelName, apiKey, message *string, modelConfig *ChatConfig, sender func(*string, *string) error) error {
-	url := fmt.Sprintf("%s/chat/completions", z.BaseURL)
+	var region *string
+	if modelConfig != nil {
+		region = modelConfig.Region
+	}
+	baseURL, err := z.resolveBaseURL(region)
+	if err != nil {
+		return err
+	}
+	url := joinModelURL(baseURL, z.URLSuffix.Chat)
 
 	// Build request body with streaming enabled
 	reqBody := map[string]interface{}{
@@ -503,8 +542,16 @@ func (z *ZhipuAIModel) ChatStreamlyWithSender(modelName, apiKey, message *string
 }
 
 // EncodeToEmbedding encodes a list of texts into embeddings
-func (z *ZhipuAIModel) EncodeToEmbedding(modelName, apiKey *string, texts []string) ([][]float64, error) {
-	url := fmt.Sprintf("%s/embedding", z.BaseURL)
+func (z *ZhipuAIModel) EncodeToEmbedding(modelName, apiKey *string, texts []string, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
+	var region *string
+	if embeddingConfig != nil {
+		region = embeddingConfig.Region
+	}
+	baseURL, err := z.resolveBaseURL(region)
+	if err != nil {
+		return nil, err
+	}
+	url := joinModelURL(baseURL, z.URLSuffix.Embedding)
 
 	embeddings := make([][]float64, len(texts))
 

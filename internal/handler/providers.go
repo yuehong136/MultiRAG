@@ -242,6 +242,7 @@ func (h *ProviderHandler) ShowModel(c *gin.Context) {
 type CreateProviderInstanceRequest struct {
 	InstanceName string `json:"instance_name" binding:"required"`
 	APIKey       string `json:"api_key" binding:"required"`
+	Region       string `json:"region"`
 }
 
 func (h *ProviderHandler) CreateProviderInstance(c *gin.Context) {
@@ -274,7 +275,7 @@ func (h *ProviderHandler) CreateProviderInstance(c *gin.Context) {
 
 	userID := c.GetString("user_id")
 
-	_, err := h.modelProviderService.CreateProviderInstance(providerName, req.InstanceName, req.APIKey, userID)
+	_, err := h.modelProviderService.CreateProviderInstance(providerName, req.InstanceName, req.APIKey, userID, req.Region)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    common.CodeServerError,
@@ -618,6 +619,7 @@ func (h *ProviderHandler) ChatToModel(c *gin.Context) {
 			MaxTokens:   nil,
 			Temperature: nil,
 			TopP:        nil,
+			Region:      nil,
 		}
 
 		// Stream response using sender function (best performance, no channel)
@@ -629,8 +631,19 @@ func (h *ProviderHandler) ChatToModel(c *gin.Context) {
 		return
 	}
 
+	chatConfig := models.ChatConfig{
+		Reasoning:   &req.Reasoning,
+		Stream:      &req.Stream,
+		Stop:        &[]string{},
+		DoSample:    nil,
+		MaxTokens:   nil,
+		Temperature: nil,
+		TopP:        nil,
+		Region:      nil,
+	}
+
 	// Non-stream response
-	response, errorCode, err := h.modelProviderService.ChatToModel(providerName, instanceName, modelName, userID, req.Message)
+	response, errorCode, err := h.modelProviderService.ChatToModel(providerName, instanceName, modelName, userID, req.Message, &chatConfig)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    errorCode,

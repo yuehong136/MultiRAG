@@ -145,11 +145,11 @@ type Model struct {
 
 // Provider represents an LLM provider
 type Provider struct {
-	Name        string           `json:"name"`
-	Tags        string           `json:"tags"`
-	URL         string           `json:"url"`
-	URLSuffix   models.URLSuffix `json:"url_suffix"`
-	Models      []*Model         `json:"models"`
+	Name        string            `json:"name"`
+	Tags        string            `json:"tags"`
+	URL         map[string]string `json:"url"`
+	URLSuffix   models.URLSuffix  `json:"url_suffix"`
+	Models      []*Model          `json:"models"`
 	ModelDriver models.ModelDriver
 }
 
@@ -203,6 +203,9 @@ func NewProviderManager(dirPath string) (*ProviderManager, error) {
 		var provider Provider
 		if err = json.Unmarshal(data, &provider); err != nil {
 			return nil, fmt.Errorf("error parsing JSON from file %s: %w", filePath, err)
+		}
+		if provider.URL["default"] == "" {
+			return nil, fmt.Errorf("provider %s has no default URL", provider.Name)
 		}
 
 		for _, model := range provider.Models {
@@ -320,20 +323,21 @@ func (pm *ProviderManager) GetModelUrl(providerName, modelName, modelType string
 	if !model.ModelTypeMap[modelType] {
 		return nil, nil, fmt.Errorf("model '%s' does not support model type '%s'", modelName, modelType)
 	}
+	defaultURL := provider.URL["default"]
 
 	switch modelType {
 	case "chat":
-		url := fmt.Sprintf("%s%s", provider.URL, provider.URLSuffix.Chat)
+		url := fmt.Sprintf("%s%s", defaultURL, provider.URLSuffix.Chat)
 		return &url, nil, nil
 	case "async_chat":
-		chatUrl := fmt.Sprintf("%s%s", provider.URL, provider.URLSuffix.AsyncChat)
-		resultUrl := fmt.Sprintf("%s%s", provider.URL, provider.URLSuffix.AsyncResult)
+		chatUrl := fmt.Sprintf("%s%s", defaultURL, provider.URLSuffix.AsyncChat)
+		resultUrl := fmt.Sprintf("%s%s", defaultURL, provider.URLSuffix.AsyncResult)
 		return &chatUrl, &resultUrl, nil
 	case "embedding":
-		url := fmt.Sprintf("%s%s", provider.URL, provider.URLSuffix.Embedding)
+		url := fmt.Sprintf("%s%s", defaultURL, provider.URLSuffix.Embedding)
 		return &url, nil, nil
 	case "rerank":
-		url := fmt.Sprintf("%s%s", provider.URL, provider.URLSuffix.Rerank)
+		url := fmt.Sprintf("%s%s", defaultURL, provider.URLSuffix.Rerank)
 		return &url, nil, nil
 	default:
 		return nil, nil, fmt.Errorf("model '%s' does not support model type '%s'", modelName, modelType)

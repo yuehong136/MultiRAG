@@ -22,12 +22,12 @@ import (
 
 // DummyModel implements ModelDriver for Zhipu AI (智谱 AI)
 type DummyModel struct {
-	BaseURL   string
+	BaseURL   map[string]string
 	URLSuffix URLSuffix
 }
 
 // NewDummyModel creates a new Zhipu AI model instance
-func NewDummyModel(baseURL string, urlSuffix URLSuffix) *DummyModel {
+func NewDummyModel(baseURL map[string]string, urlSuffix URLSuffix) *DummyModel {
 	return &DummyModel{
 		BaseURL:   baseURL,
 		URLSuffix: urlSuffix,
@@ -35,7 +35,7 @@ func NewDummyModel(baseURL string, urlSuffix URLSuffix) *DummyModel {
 }
 
 // Chat sends a message and returns response
-func (z *DummyModel) Chat(modelName, apiKey, message *string, genConf map[string]interface{}) (string, error) {
+func (z *DummyModel) Chat(modelName, apiKey, message *string, modelConfig *ChatConfig) (string, error) {
 	return "", fmt.Errorf("not implemented")
 }
 
@@ -55,6 +55,6 @@ func (z *DummyModel) ChatStreamlyWithSender(modelName, apiKey, message *string, 
 }
 
 // EncodeToEmbedding encodes a list of texts into embeddings
-func (z *DummyModel) EncodeToEmbedding(modelName, apiKey *string, texts []string) ([][]float64, error) {
+func (z *DummyModel) EncodeToEmbedding(modelName, apiKey *string, texts []string, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
 	return nil, fmt.Errorf("not implemented")
 }

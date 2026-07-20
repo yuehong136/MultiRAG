@@ -18,6 +18,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -138,6 +139,34 @@ type ModelProviderService struct {
 	userTenantDAO        *dao.UserTenantDAO
 }
 
+func normalizeModelRegion(region string) string {
+	region = strings.TrimSpace(region)
+	if region == "" {
+		return "default"
+	}
+	return region
+}
+
+func encodeModelInstanceExtra(region string) (string, error) {
+	extra, err := json.Marshal(map[string]string{"region": normalizeModelRegion(region)})
+	if err != nil {
+		return "", fmt.Errorf("marshal model instance extra: %w", err)
+	}
+	return string(extra), nil
+}
+
+func decodeModelInstanceRegion(extra string) (string, error) {
+	if strings.TrimSpace(extra) == "" {
+		return "default", nil
+	}
+
+	var fields map[string]string
+	if err := json.Unmarshal([]byte(extra), &fields); err != nil {
+		return "", fmt.Errorf("unmarshal model instance extra: %w", err)
+	}
+	return normalizeModelRegion(fields["region"]), nil
+}
+
 func (m *ModelProviderService) AddModelProvider(providerName, userID string) (common.ErrorCode, error) {
 
 	_, err := dao.GetModelProviderManager().GetProviderByName(providerName)
@@ -227,7 +256,7 @@ func (m *ModelProviderService) DeleteModelProvider(providerName, userID string) 
 	return common.CodeSuccess, nil
 }
 
-func (m *ModelProviderService) CreateProviderInstance(providerName, instanceName, apiKey, userID string) (common.ErrorCode, error) {
+func (m *ModelProviderService) CreateProviderInstance(providerName, instanceName, apiKey, userID, region string) (common.ErrorCode, error) {
 	// Get tenant ID from user
 	tenants, err := m.userTenantDAO.GetByUserIDAndRole(userID, "owner")
 	if err != nil {
@@ -250,6 +279,10 @@ func (m *ModelProviderService) CreateProviderInstance(providerName, instanceName
 	if err != nil {
 		return common.CodeServerError, errors.New("fail to get UUID")
 	}
+	extra, err := encodeModelInstanceExtra(region)
+	if err != nil {
+		return common.CodeServerError, err
+	}
 
 	now := time.Now().Unix()
 	nowDate := time.Now().Truncate(time.Second)
@@ -259,6 +292,7 @@ func (m *ModelProviderService) CreateProviderInstance(providerName, instanceName
 		ProviderID:   provider.ID,
 		APIKey:       apiKey,
 		Status:       "active",
+		Extra:        extra,
 	}
 	tenantModelProvider.CreateTime = &now
 	tenantModelProvider.UpdateTime = &now
@@ -300,12 +334,17 @@ func (m *ModelProviderService) ListProviderInstances(providerName, userID string
 
 	var result []map[string]interface{}
 	for _, instance := range instances {
+		region, err := decodeModelInstanceRegion(instance.Extra)
+		if err != nil {
+			return nil, common.CodeServerError, err
+		}
 		result = append(result, map[string]interface{}{
 			"id":           instance.ID,
 			"instanceName": instance.InstanceName,
 			"providerID":   instance.ProviderID,
 			"apiKey":       instance.APIKey,
 			"status":       instance.Status,
+			"region":       region,
 		})
 	}
 
@@ -336,12 +375,17 @@ func (m *ModelProviderService) ShowProviderInstance(providerName, instanceName, 
 	if err != nil {
 		return nil, common.CodeServerError, err
 	}
+	region, err := decodeModelInstanceRegion(instance.Extra)
+	if err != nil {
+		return nil, common.CodeServerError, err
+	}
 
 	result := map[string]interface{}{
 		"id":           instance.ID,
 		"instanceName": instance.InstanceName,
 		"providerID":   instance.ProviderID,
 		"status":       instance.Status,
+		"region":       region,
 	}
 
 	return result, common.CodeSuccess, nil
@@ -503,7 +547,7 @@ func (m *ModelProviderService) UpdateModelStatus(providerName, instanceName, mod
 	return common.CodeSuccess, nil
 }
 
-func (m *ModelProviderService) ChatToModel(providerName, instanceName, modelName, userID, message string) (*string, common.ErrorCode, error) {
+func (m *ModelProviderService) ChatToModel(providerName, instanceName, modelName, userID, message string, modelConfig *modelModule.ChatConfig) (*string, common.ErrorCode, error) {
 
 	// Get tenant ID from user
 	tenants, err := m.userTenantDAO.GetByUserIDAndRole(userID, "owner")
@@ -539,9 +583,17 @@ func (m *ModelProviderService) ChatToModel(providerName, instanceName, modelName
 		if err != nil {
 			return nil, common.CodeNotFound, errors.New(fmt.Sprintf("provider %s model %s not found", providerName, modelName))
 		}
+		region, err := decodeModelInstanceRegion(instance.Extra)
+		if err != nil {
+			return nil, common.CodeServerError, err
+		}
+		if modelConfig == nil {
+			modelConfig = &modelModule.ChatConfig{}
+		}
+		modelConfig.Region = &region
 
 		var response string
-		response, err = providerInfo.ModelDriver.Chat(&modelName, &instance.APIKey, &message, nil)
+		response, err = providerInfo.ModelDriver.Chat(&modelName, &instance.APIKey, &message, modelConfig)
 		if err != nil {
 			return nil, common.CodeServerError, err
 		}
@@ -659,9 +711,17 @@ func (m *ModelProviderService) ChatToModelStreamWithSender(providerName, instanc
 		if err != nil {
 			return common.CodeNotFound
 		}
+		region, err := decodeModelInstanceRegion(instance.Extra)
+		if err != nil {
+			return common.CodeServerError
+		}
+		if modelConfig == nil {
+			modelConfig = &modelModule.ChatConfig{}
+		}
+		modelConfig.Region = &region
 
 		// Direct call with sender function
-		err := providerInfo.ModelDriver.ChatStreamlyWithSender(&modelName, &instance.APIKey, &message, modelConfig, sender)
+		err = providerInfo.ModelDriver.ChatStreamlyWithSender(&modelName, &instance.APIKey, &message, modelConfig, sender)
 		if err != nil {
 			return common.CodeServerError
 		}
