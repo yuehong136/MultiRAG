@@ -393,9 +393,6 @@ def _prepare_update_payload(
     if err := _reject_legacy_payload(req):
         return False, err
 
-    if req.get("tenant_id"):
-        return False, "`tenant_id` must not be provided."
-
     current_chat = DialogService.get_by_id(db, chat_id)
     if not current_chat:
         return False, "Chat not found!"

@@ -581,11 +581,21 @@ def valid_parameter(parameter, valid_values):
 
 
 def flatten_parent_child_config(parser_config: dict[str, Any]) -> dict[str, Any]:
-    pc = parser_config.get("parent_child", {})
-    if pc.get("use_parent_child"):
-        parser_config["children_delimiter"] = pc.get("children_delimiter", "\n")
-    elif pc:
-        parser_config["children_delimiter"] = ""
+    has_parent_child = "parent_child" in parser_config
+    if has_parent_child:
+        pc = parser_config.get("parent_child") or {}
+        enabled = bool(pc.get("use_parent_child"))
+        delimiter = pc.get("children_delimiter", "\n")
+    elif "enable_children" in parser_config:
+        enabled = bool(parser_config.get("enable_children"))
+        delimiter = parser_config.get("children_delimiter", "\n")
+    else:
+        return parser_config
+
+    parser_config["enable_children"] = enabled
+    parser_config["children_delimiter"] = delimiter if enabled else ""
+    if has_parent_child and not enabled:
+        parser_config["parent_child"] = {}
     return parser_config
 
 
