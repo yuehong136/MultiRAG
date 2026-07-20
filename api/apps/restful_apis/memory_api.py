@@ -73,8 +73,8 @@ async def create_memory(request_body: CreateMemoryRequest, db: AsyncSession = De
         "embd_id": request_body.embd_id,
         "llm_id": request_body.llm_id,
     }
-    memory_info = await db.run_sync(lambda s: ensure_tenant_model_id_for_params(s, user.id, memory_info))  # TODO(async-phase4)
     try:
+        memory_info = await db.run_sync(lambda s: ensure_tenant_model_id_for_params(s, user.id, memory_info, strict=True))  # TODO(async-phase4)
         success, result = await db.run_sync(lambda s: memory_api_service.create_memory(s, user.id, memory_info))  # TODO(async-phase4)
         if success:
             return get_json_result(data=result)

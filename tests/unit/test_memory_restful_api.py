@@ -48,9 +48,10 @@ _CREATE_BODY = {"name": "mem-1", "memory_type": ["raw"], "embd_id": "e@f", "llm_
 def test_memory_create_uses_sync_facade(client, monkeypatch):
     records: list[dict] = []
 
-    def _ensure(s, tenant_id, params):
+    def _ensure(s, tenant_id, params, *, strict=False):
         _record(records, s)
         assert tenant_id == "user-unit"
+        assert strict is True
         return dict(params, tenant_llm_id=7)
 
     monkeypatch.setattr(_route_module(), "ensure_tenant_model_id_for_params", _ensure)
@@ -71,7 +72,7 @@ def test_memory_create_uses_sync_facade(client, monkeypatch):
 
 
 def test_memory_create_argument_error_envelope(client, monkeypatch):
-    monkeypatch.setattr(_route_module(), "ensure_tenant_model_id_for_params", lambda s, t, p: p)
+    monkeypatch.setattr(_route_module(), "ensure_tenant_model_id_for_params", lambda s, t, p, **kwargs: p)
 
     def _create(s, tenant_id, memory_info):
         raise ArgumentException("Memory name cannot be empty or whitespace.")
@@ -82,6 +83,24 @@ def test_memory_create_argument_error_envelope(client, monkeypatch):
 
     assert body["retcode"] == int(RetCode.ARGUMENT_ERROR)
     assert body["retmsg"] == "Memory name cannot be empty or whitespace."
+    assert body["data"] is False
+
+
+def test_memory_create_rejects_unresolved_chat_model(client, monkeypatch):
+    def _ensure(_session, _tenant_id, _params, *, strict=False):
+        assert strict is True
+        raise ArgumentException("Tenant Model with name gemini and type chat not found")
+
+    def _create(*_args):
+        raise AssertionError("create_memory must not run")
+
+    monkeypatch.setattr(_route_module(), "ensure_tenant_model_id_for_params", _ensure)
+    monkeypatch.setattr(memory_api_service, "create_memory", _create)
+
+    body = client.post("/api/v1/memories", json=_CREATE_BODY).json()
+
+    assert body["retcode"] == int(RetCode.ARGUMENT_ERROR)
+    assert body["retmsg"] == "Tenant Model with name gemini and type chat not found"
     assert body["data"] is False
 
 
