@@ -21,46 +21,57 @@ from infinity.connection_pool import ConnectionPool
 from infinity.errors import ErrorCode
 
 from common import settings
+from common.app_config import get_app_config
 from common.decorator import singleton
 
 
 @singleton
 class InfinityConnectionPool:
-    def __init__(self):
+    def __init__(self) -> None:
         if hasattr(settings, "INFINITY"):
             self.INFINITY_CONFIG = settings.INFINITY
         else:
             self.INFINITY_CONFIG = settings.get_base_config("infinity", {"uri": "infinity:23817", "postgres_port": 5432, "db_name": "default_db"})
 
+        self.pool_max_size = get_app_config().infinity.pool_max_size
         infinity_uri = self.INFINITY_CONFIG["uri"]
         if ":" in infinity_uri:
             host, port = infinity_uri.split(":")
             self.infinity_uri = infinity.common.NetworkAddress(host, int(port))
 
+        self.conn_pool: ConnectionPool | None = None
         for _ in range(24):
+            conn_pool = None
+            inf_conn = None
             try:
-                conn_pool = ConnectionPool(self.infinity_uri, max_size=4)
+                conn_pool = ConnectionPool(self.infinity_uri, max_size=self.pool_max_size)
                 inf_conn = conn_pool.get_conn()
                 res = inf_conn.show_current_node()
                 if res.error_code == ErrorCode.OK and res.server_status in ["started", "alive"]:
                     self.conn_pool = conn_pool
-                    conn_pool.release_conn(inf_conn)
                     break
+                logging.warning(f"Infinity status: {res.server_status}. Waiting Infinity {infinity_uri} to be healthy.")
+                time.sleep(5)
             except Exception as e:
                 logging.warning(f"{e!s}. Waiting Infinity {infinity_uri} to be healthy.")
                 time.sleep(5)
+            finally:
+                if inf_conn is not None and conn_pool is not None:
+                    conn_pool.release_conn(inf_conn)
+                if conn_pool is not None and conn_pool is not self.conn_pool:
+                    conn_pool.destroy()
 
         if self.conn_pool is None:
             msg = f"Infinity {infinity_uri} is unhealthy in 120s."
             logging.error(msg)
             raise Exception(msg)
 
-        logging.info(f"Infinity {infinity_uri} is healthy.")
+        logging.info(f"Infinity {infinity_uri} is healthy. Connection pool max_size={self.pool_max_size}")
 
     def get_conn_pool(self):
         return self.conn_pool
 
-    def refresh_conn_pool(self):
+    def refresh_conn_pool(self) -> ConnectionPool | None:
         try:
             inf_conn = self.conn_pool.get_conn()
             res = inf_conn.show_current_node()
@@ -73,7 +84,7 @@ class InfinityConnectionPool:
             logging.error(str(e))
             if hasattr(self, "conn_pool") and self.conn_pool:
                 self.conn_pool.destroy()
-                self.conn_pool = ConnectionPool(self.infinity_uri, max_size=32)
+                self.conn_pool = ConnectionPool(self.infinity_uri, max_size=self.pool_max_size)
                 return self.conn_pool
 
     def get_conn_uri(self):
