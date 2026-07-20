@@ -188,7 +188,8 @@ class InfinityConnectionBase(DocStoreConnection):
                         strInCond = f"({strInCond})"
                         cond.append(strInCond)
                 else:
-                    cond.append(f"filter_fulltext('{self.convert_matching_field(k)}', '{v}')")
+                    escaped_v = str(v).replace("'", "''")
+                    cond.append(f"filter_fulltext('{self.convert_matching_field(k)}', '{escaped_v}')")
             elif isinstance(v, list):
                 inCond = []
                 for item in v:
@@ -207,7 +208,8 @@ class InfinityConnectionBase(DocStoreConnection):
                         if kk == "exists":
                             cond.append("NOT (%s)" % exists(vv))
             elif isinstance(v, str):
-                cond.append(f"{k}='{v}'")
+                escaped_v = v.replace("'", "''")
+                cond.append(f"{k}='{escaped_v}'")
             elif k == "exists":
                 cond.append(exists(v))
             else:
