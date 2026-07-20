@@ -141,9 +141,7 @@ def parse_xlsx(file_path: str, filename: str) -> ParsedWorkbook:
             for c in range(max_col):
                 cell = ws.cell(row=r + 1, column=c + 1)
                 formula_cell = ws_formula.cell(row=r + 1, column=c + 1)
-                has_formula = formula_cell.data_type == "f" or (
-                    isinstance(formula_cell.value, str) and formula_cell.value.startswith("=")
-                )
+                has_formula = formula_cell.data_type == "f" or (isinstance(formula_cell.value, str) and formula_cell.value.startswith("="))
 
                 merge_info = merges.get((r, c))
                 row_span, col_span, is_origin, origin_path = 1, 1, True, None

@@ -164,9 +164,7 @@ def _detect_tables_for_sheet(sheet: Sheet) -> list[dict]:
 
 
 def _in_table_region(tables: list[dict], row: int, col: int) -> bool:
-    return any(
-        t["header_row"] <= row <= t["data_end"] and t["col_start"] <= col <= t["col_end"] for t in tables
-    )
+    return any(t["header_row"] <= row <= t["data_end"] and t["col_start"] <= col <= t["col_end"] for t in tables)
 
 
 def auto_recognize_placeholders(workbook: ParsedWorkbook) -> list[Placeholder]:
@@ -182,10 +180,7 @@ def auto_recognize_placeholders(workbook: ParsedWorkbook) -> list[Placeholder]:
         if tables:
             before = len(candidates)
             candidates = [c for c in candidates if not _in_table_region(tables, c["row"], c["col"])]
-            logger.info(
-                f"[recognize] sheet[{sheet.index}] 探测到 {len(tables)} 个表格区域，"
-                f"剔除区域内 cell 候选: {before} -> {len(candidates)}"
-            )
+            logger.info(f"[recognize] sheet[{sheet.index}] 探测到 {len(tables)} 个表格区域，剔除区域内 cell 候选: {before} -> {len(candidates)}")
 
         # 填充色收敛：候选里存在明显占多数的统一填充色时，只保留该颜色的候选
         colors = Counter(c["cell"].style.fill_color for c in candidates if c["cell"].style.fill_color)
@@ -197,9 +192,7 @@ def auto_recognize_placeholders(workbook: ParsedWorkbook) -> list[Placeholder]:
                 candidates = filtered
 
         # 表格与单元格候选按版面位置（行、列）统一排序后编号
-        items: list[tuple[int, int, str, dict]] = [
-            (t["header_row"], t["col_start"], "table", t) for t in tables
-        ] + [(c["row"], c["col"], "cell", c) for c in candidates]
+        items: list[tuple[int, int, str, dict]] = [(t["header_row"], t["col_start"], "table", t) for t in tables] + [(c["row"], c["col"], "cell", c) for c in candidates]
         items.sort(key=lambda x: (x[0], x[1]))
 
         for _row, _col, kind, payload in items:

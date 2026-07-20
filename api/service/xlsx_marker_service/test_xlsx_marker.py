@@ -198,10 +198,13 @@ def test_fill_fixed(template, tmp_path):
         {"id": "$2", "value": "男"},
         {"id": "$3", "value": "上海市延安西路1882号"},
         {"id": "$4", "value": "第一行\n第二行"},
-        {"id": "$5", "rows": [
-            {"称谓": "父亲", "姓名": "张大山", "电话": "13800000000"},
-            {"称谓": "母亲", "姓名": "李小花", "电话": "13900000000"},
-        ]},
+        {
+            "id": "$5",
+            "rows": [
+                {"称谓": "父亲", "姓名": "张大山", "电话": "13800000000"},
+                {"称谓": "母亲", "姓名": "李小花", "电话": "13900000000"},
+            ],
+        },
     ]
     fill_workbook(template, PLACEHOLDERS, fields, out)
 
@@ -223,11 +226,16 @@ def test_fill_fixed(template, tmp_path):
 
 def test_fill_fixed_truncates_overflow(template, tmp_path):
     out = str(tmp_path / "filled.xlsx")
-    fields = [{"id": "$5", "rows": [
-        {"称谓": "父亲", "姓名": "A", "电话": "1"},
-        {"称谓": "母亲", "姓名": "B", "电话": "2"},
-        {"称谓": "配偶", "姓名": "C", "电话": "3"},  # 超出预留2行，应截断
-    ]}]
+    fields = [
+        {
+            "id": "$5",
+            "rows": [
+                {"称谓": "父亲", "姓名": "A", "电话": "1"},
+                {"称谓": "母亲", "姓名": "B", "电话": "2"},
+                {"称谓": "配偶", "姓名": "C", "电话": "3"},  # 超出预留2行，应截断
+            ],
+        }
+    ]
     fill_workbook(template, PLACEHOLDERS, fields, out)
     ws = openpyxl.load_workbook(out)["登记表"]
     assert ws["B7"].value == "母亲"
@@ -247,12 +255,15 @@ def test_fill_dynamic_insert(template, tmp_path):
     }
     fields = [
         {"id": "$4", "value": "备注内容"},
-        {"id": "$5", "rows": [
-            {"称谓": "父亲", "姓名": "A", "电话": "1"},
-            {"称谓": "母亲", "姓名": "B", "电话": "2"},
-            {"称谓": "配偶", "姓名": "C", "电话": "3"},
-            {"称谓": "长子", "姓名": "D", "电话": "4"},
-        ]},
+        {
+            "id": "$5",
+            "rows": [
+                {"称谓": "父亲", "姓名": "A", "电话": "1"},
+                {"称谓": "母亲", "姓名": "B", "电话": "2"},
+                {"称谓": "配偶", "姓名": "C", "电话": "3"},
+                {"称谓": "长子", "姓名": "D", "电话": "4"},
+            ],
+        },
     ]
     fill_workbook(template, dynamic_placeholders, fields, out)
 
@@ -282,16 +293,21 @@ def test_fill_dynamic_clones_row_merges(tmp_path):
     wb.save(path)
 
     out = str(tmp_path / "filled.xlsx")
-    placeholders = [{
-        "path": "sheet[0]/row[4]/cell[1]",
-        "label": "清单",
-        "field_key": "$1",
-        "type": "dynamic_table",
-        "table_config": {
-            "dynamic": True, "header_row": 4, "data_start_row": 5, "data_end_row": 5,
-            "columns": [{"cell_index": 1, "name": "项目"}, {"cell_index": 2, "name": "说明"}],
-        },
-    }]
+    placeholders = [
+        {
+            "path": "sheet[0]/row[4]/cell[1]",
+            "label": "清单",
+            "field_key": "$1",
+            "type": "dynamic_table",
+            "table_config": {
+                "dynamic": True,
+                "header_row": 4,
+                "data_start_row": 5,
+                "data_end_row": 5,
+                "columns": [{"cell_index": 1, "name": "项目"}, {"cell_index": 2, "name": "说明"}],
+            },
+        }
+    ]
     fields = [{"id": "$1", "rows": [{"项目": "甲", "说明": "x"}, {"项目": "乙", "说明": "y"}]}]
     fill_workbook(path, placeholders, fields, out)
 
@@ -311,16 +327,21 @@ def test_fill_rejects_formula_below_insert(tmp_path):
     wb.save(path)
 
     out = str(tmp_path / "filled.xlsx")
-    placeholders = [{
-        "path": "sheet[0]/row[4]/cell[1]",
-        "label": "清单",
-        "field_key": "$1",
-        "type": "dynamic_table",
-        "table_config": {
-            "dynamic": True, "header_row": 4, "data_start_row": 5, "data_end_row": 5,
-            "columns": [{"cell_index": 1, "name": "项目"}],
-        },
-    }]
+    placeholders = [
+        {
+            "path": "sheet[0]/row[4]/cell[1]",
+            "label": "清单",
+            "field_key": "$1",
+            "type": "dynamic_table",
+            "table_config": {
+                "dynamic": True,
+                "header_row": 4,
+                "data_start_row": 5,
+                "data_end_row": 5,
+                "columns": [{"cell_index": 1, "name": "项目"}],
+            },
+        }
+    ]
     fields = [{"id": "$1", "rows": [{"项目": "甲"}, {"项目": "乙"}]}]
     with pytest.raises(ValueError, match="公式"):
         fill_workbook(path, placeholders, fields, out)
@@ -366,11 +387,7 @@ def test_real_sample_parse_and_fill(tmp_path):
     exp_cfg = rec_tables["学习与工作经历"].table_config
     assert (exp_cfg.header_row, exp_cfg.data_start_row, exp_cfg.data_end_row) == (33, 34, 38)
     # 表格区域内不再有 cell 候选（此前每列首行会被"下填充"命中）
-    cell_rows = {
-        int(re.search(r"row\[(\d+)\]", p.path).group(1))
-        for p in recognized
-        if p.type == "cell" and p.path.startswith("sheet[0]")
-    }
+    cell_rows = {int(re.search(r"row\[(\d+)\]", p.path).group(1)) for p in recognized if p.type == "cell" and p.path.startswith("sheet[0]")}
     assert not cell_rows & set(range(27, 39))
 
     # 动态填充: 家庭成员表(表头27, 数据28-31, 0-based)扩到6行, 同时填基本字段
@@ -384,11 +401,17 @@ def test_real_sample_parse_and_fill(tmp_path):
             "field_key": "$3",
             "type": "dynamic_table",
             "table_config": {
-                "dynamic": True, "header_row": 27, "data_start_row": 28, "data_end_row": 31,
+                "dynamic": True,
+                "header_row": 27,
+                "data_start_row": 28,
+                "data_end_row": 31,
                 "columns": [
-                    {"cell_index": 1, "name": "称谓"}, {"cell_index": 2, "name": "姓名"},
-                    {"cell_index": 3, "name": "年龄"}, {"cell_index": 4, "name": "工作单位"},
-                    {"cell_index": 5, "name": "职务"}, {"cell_index": 6, "name": "联系电话"},
+                    {"cell_index": 1, "name": "称谓"},
+                    {"cell_index": 2, "name": "姓名"},
+                    {"cell_index": 3, "name": "年龄"},
+                    {"cell_index": 4, "name": "工作单位"},
+                    {"cell_index": 5, "name": "职务"},
+                    {"cell_index": 6, "name": "联系电话"},
                 ],
             },
         },
@@ -396,10 +419,7 @@ def test_real_sample_parse_and_fill(tmp_path):
     fields = [
         {"id": "$1", "value": "张明华"},
         {"id": "$2", "value": "男"},
-        {"id": "$3", "rows": [
-            {"称谓": f"成员{i}", "姓名": f"名{i}", "年龄": str(30 + i), "工作单位": f"单位{i}", "职务": "-", "联系电话": f"1380000000{i}"}
-            for i in range(6)
-        ]},
+        {"id": "$3", "rows": [{"称谓": f"成员{i}", "姓名": f"名{i}", "年龄": str(30 + i), "工作单位": f"单位{i}", "职务": "-", "联系电话": f"1380000000{i}"} for i in range(6)]},
     ]
     fill_workbook(REAL_SAMPLE, placeholders, fields, out)
 
@@ -436,7 +456,10 @@ def test_wps_sample_full_flow(tmp_path):
             "field_key": "$2",
             "type": "dynamic_table",
             "table_config": {
-                "dynamic": True, "header_row": 27, "data_start_row": 28, "data_end_row": 31,
+                "dynamic": True,
+                "header_row": 27,
+                "data_start_row": 28,
+                "data_end_row": 31,
                 "columns": [{"cell_index": 1, "name": "称谓"}, {"cell_index": 2, "name": "姓名"}],
             },
         },
