@@ -584,6 +584,32 @@ def test_sync_chat_reasoning_uses_shared_event_bridge(
     assert gate_calls == [(dialog_pipeline_stubs.dialog.prompt_config, None)]
 
 
+def test_chat_separates_extracted_keywords_from_question(
+    monkeypatch: pytest.MonkeyPatch,
+    db: Session,
+    dialog_pipeline_stubs: _PipelineProbe,
+) -> None:
+    dialog_pipeline_stubs.dialog.prompt_config["keyword"] = True
+    _patch_web_search_decision(monkeypatch, True)
+
+    async def fake_keyword_extraction(*_args: Any, **_kwargs: Any) -> str:
+        return "alpha,beta"
+
+    monkeypatch.setattr(dialog_service, "keyword_extraction", fake_keyword_extraction)
+
+    with pytest.raises(_GenerationReached):
+        list(
+            dialog_service.chat(
+                dialog_pipeline_stubs.dialog,
+                dialog_pipeline_stubs.messages,
+                db,
+                stream=False,
+            )
+        )
+
+    assert dialog_pipeline_stubs.tavily_calls == [("tavily-key", "question,alpha,beta")]
+
+
 async def test_async_chat_without_retrieval_source_continues_to_generation(
     monkeypatch: pytest.MonkeyPatch,
     async_db: AsyncSession,
@@ -610,6 +636,31 @@ async def test_async_chat_without_retrieval_source_continues_to_generation(
 
     assert gate_calls == [(dialog_pipeline_stubs.dialog.prompt_config, None)]
     assert dialog_pipeline_stubs.tavily_calls == []
+
+
+async def test_async_chat_separates_extracted_keywords_from_question(
+    monkeypatch: pytest.MonkeyPatch,
+    async_db: AsyncSession,
+    dialog_pipeline_stubs: _PipelineProbe,
+) -> None:
+    dialog_pipeline_stubs.dialog.prompt_config["keyword"] = True
+    _patch_web_search_decision(monkeypatch, True)
+
+    async def fake_keyword_extraction(*_args: Any, **_kwargs: Any) -> str:
+        return "alpha,beta"
+
+    monkeypatch.setattr(dialog_service, "keyword_extraction", fake_keyword_extraction)
+
+    with pytest.raises(_GenerationReached):
+        async for _answer in dialog_service.async_chat(
+            dialog_pipeline_stubs.dialog,
+            dialog_pipeline_stubs.messages,
+            async_db,
+            stream=False,
+        ):
+            pass
+
+    assert dialog_pipeline_stubs.tavily_calls == [("tavily-key", "question,alpha,beta")]
 
 
 @pytest.mark.parametrize("enabled", [False, True])

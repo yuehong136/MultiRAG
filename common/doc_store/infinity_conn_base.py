@@ -188,7 +188,8 @@ class InfinityConnectionBase(DocStoreConnection):
                         strInCond = f"({strInCond})"
                         cond.append(strInCond)
                 else:
-                    cond.append(f"filter_fulltext('{self.convert_matching_field(k)}', '{v}')")
+                    escaped_v = str(v).replace("'", "''")
+                    cond.append(f"filter_fulltext('{self.convert_matching_field(k)}', '{escaped_v}')")
             elif isinstance(v, list):
                 inCond = []
                 for item in v:
@@ -207,7 +208,8 @@ class InfinityConnectionBase(DocStoreConnection):
                         if kk == "exists":
                             cond.append("NOT (%s)" % exists(vv))
             elif isinstance(v, str):
-                cond.append(f"{k}='{v}'")
+                escaped_v = v.replace("'", "''")
+                cond.append(f"{k}='{escaped_v}'")
             elif k == "exists":
                 cond.append(exists(v))
             else:
@@ -468,29 +470,45 @@ class InfinityConnectionBase(DocStoreConnection):
 
     def get_doc_ids(self, res: tuple[pd.DataFrame, int] | pd.DataFrame) -> list[str]:
         if isinstance(res, tuple):
-            res = res[0]
-        return list(res["id"])
+            df, count = res
+            if count == 0:
+                return []
+        else:
+            df = res
+        if df.empty or "id" not in df.columns:
+            return []
+        return list(df["id"])
 
     @abstractmethod
     def get_fields(self, res: tuple[pd.DataFrame, int] | pd.DataFrame, fields: list[str]) -> dict[str, dict]:
         raise NotImplementedError("Not implemented")
 
-    def get_highlight(self, res: tuple[pd.DataFrame, int] | pd.DataFrame, keywords: list[str], field_name: str):
+    def get_highlight(
+        self,
+        res: tuple[pd.DataFrame, int] | pd.DataFrame,
+        keywords: list[str],
+        field_name: str,
+    ) -> dict[str, str]:
         if isinstance(res, tuple):
-            res = res[0]
-        ans = {}
-        num_rows = len(res)
-        column_id = res["id"]
-        if field_name not in res:
-            if field_name == "content_with_weight" and "content" in res:
+            df, _ = res
+        else:
+            df = res
+        if df.empty or "id" not in df.columns:
+            return {}
+        if field_name not in df.columns:
+            if field_name == "content_with_weight" and "content" in df.columns:
                 field_name = "content"
             else:
                 return {}
+
+        ans = {}
+        num_rows = len(df)
+        column_id = df["id"]
         for i in range(num_rows):
-            id = column_id[i]
-            txt = res[field_name][i]
+            doc_id = column_id[i]
+            txt = df[field_name][i]
             if re.search(r"<em>[^<>]+</em>", txt, flags=re.IGNORECASE | re.MULTILINE):
-                ans[id] = txt
+                ans[doc_id] = txt
                 continue
             txt = re.sub(r"[\r\n]", " ", txt, flags=re.IGNORECASE | re.MULTILINE)
             txt_list = []
@@ -515,9 +533,9 @@ class InfinityConnectionBase(DocStoreConnection):
                     continue
                 txt_list.append(t)
             if txt_list:
-                ans[id] = "...".join(txt_list)
+                ans[doc_id] = "...".join(txt_list)
             else:
-                ans[id] = txt
+                ans[doc_id] = txt
         return ans
 
     def get_aggregation(self, res: tuple[pd.DataFrame, int] | pd.DataFrame, field_name: str):

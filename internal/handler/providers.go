@@ -18,11 +18,11 @@ package handler
 
 import (
 	"fmt"
-	"net/http"
 	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/entity/models"
 	"multirag/internal/service"
+	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -402,6 +402,10 @@ func (h *ProviderHandler) AlterProviderInstance(c *gin.Context) {
 	})
 }
 
+type DropProviderInstanceRequest struct {
+	Instances []string `json:"instances" binding:"required"`
+}
+
 func (h *ProviderHandler) DropProviderInstance(c *gin.Context) {
 	providerName := c.Param("provider_name")
 	if providerName == "" {
@@ -412,18 +416,18 @@ func (h *ProviderHandler) DropProviderInstance(c *gin.Context) {
 		return
 	}
 
-	instanceName := c.Param("instance_name")
-	if instanceName == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "Instance name is required",
+	var req DropProviderInstanceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    common.CodeBadRequest,
+			"message": err.Error(),
 		})
 		return
 	}
 
 	userID := c.GetString("user_id")
 
-	_, err := h.modelProviderService.DropProviderInstance(providerName, instanceName, userID)
+	_, err := h.modelProviderService.DropProviderInstances(providerName, userID, req.Instances)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    common.CodeServerError,

@@ -25,7 +25,7 @@ from functools import lru_cache
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, PrivateAttr, ValidationError
+from pydantic import BaseModel, ConfigDict, PositiveInt, PrivateAttr, ValidationError
 
 from common.config_utils import decrypt_database_password, read_config
 from common.constants import SERVICE_CONF
@@ -137,6 +137,7 @@ class InfinityConfig(_Section):
     uri: str = "infinity:23817"
     postgres_port: int = 5432
     db_name: str = "default_db"
+    pool_max_size: PositiveInt = 4
 
 
 class SchemeConfig(_Section):
@@ -331,9 +332,19 @@ def _coerce_env_value(value: str) -> Any:
 def _apply_env_overlay(merged: dict[str, Any]) -> None:
     """把 MULTIRAG_<SECTION>__<FIELD>[__<SUBFIELD>...] 环境变量写入合并配置。
 
+    - ``INFINITY_POOL_MAX_SIZE`` 作为上游兼容别名，映射到
+      ``infinity.pool_max_size``；标准 MULTIRAG 变量优先级更高；
     - 至少要有一层 '__'（裸 MULTIRAG_X 不视为配置覆盖，避免误伤无关变量）；
     - 中间路径不存在时自动建 dict；中间路径撞上非 dict 值则覆盖为 dict。
     """
+    legacy_pool_max_size = os.environ.get("INFINITY_POOL_MAX_SIZE")
+    if legacy_pool_max_size is not None:
+        infinity_config = merged.get("infinity")
+        if not isinstance(infinity_config, dict):
+            infinity_config = {}
+            merged["infinity"] = infinity_config
+        infinity_config["pool_max_size"] = _coerce_env_value(legacy_pool_max_size)
+
     for env_key, env_value in os.environ.items():
         if not env_key.startswith(ENV_PREFIX):
             continue

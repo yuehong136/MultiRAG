@@ -180,6 +180,65 @@ def test_patch_payload_merges_nested_settings(monkeypatch):
     assert payload["llm_setting"] == {"temperature": 0.6, "top_p": 0.3}
 
 
+def test_patch_payload_accepts_but_does_not_persist_tenant_id(monkeypatch):
+    _install_common_fakes(monkeypatch)
+    current = Obj(
+        id="chat-1",
+        name="Old Bot",
+        kb_ids=[],
+        prompt_config={"system": "Old system", "parameters": []},
+        llm_setting={},
+    )
+    monkeypatch.setattr(chat_api.DialogService, "get_by_id", lambda _db, _chat_id: current)
+    monkeypatch.setattr(chat_api.DialogService, "query", lambda *_args, **_kwargs: [])
+
+    ok, payload = chat_api._prepare_update_payload(
+        object(),
+        "tenant-1",
+        "chat-1",
+        {"name": "New Bot", "tenant_id": "tenant-2"},
+        merge_nested=True,
+    )
+
+    assert ok is True
+    assert payload["name"] == "New Bot"
+    assert "tenant_id" not in payload
+
+
+def test_patch_chat_accepts_but_does_not_persist_tenant_id(client, monkeypatch):
+    _install_common_fakes(monkeypatch)
+    current = Obj(
+        id="chat-1",
+        tenant_id="tenant-unit",
+        name="Old Bot",
+        kb_ids=[],
+        prompt_config={"system": "Old system", "parameters": []},
+        llm_setting={},
+    )
+    captured = {}
+
+    def fake_query(_db, **kwargs):
+        return [current] if kwargs.get("id") == "chat-1" else []
+
+    def fake_update_by_id(_db, _chat_id, payload):
+        captured.update(payload)
+        return True
+
+    monkeypatch.setattr(chat_api.DialogService, "query", fake_query)
+    monkeypatch.setattr(chat_api.DialogService, "get_by_id", lambda _db, _chat_id: current)
+    monkeypatch.setattr(chat_api.DialogService, "update_by_id", fake_update_by_id)
+
+    response = client.patch(
+        "/api/v1/chats/chat-1",
+        json={"name": "New Bot", "tenant_id": "tenant-2"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 0
+    assert captured["name"] == "New Bot"
+    assert "tenant_id" not in captured
+
+
 def test_update_payload_allows_knowledge_placeholder_without_sources(monkeypatch):
     _install_common_fakes(monkeypatch)
     current = Obj(

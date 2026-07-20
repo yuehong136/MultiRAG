@@ -250,7 +250,10 @@ def update_dataset(db: Session, tenant_id: str, dataset_id: str, req: dict) -> t
     if req.get("parser_config"):
         parser_config = req["parser_config"]
         parser_config.update(parser_config.pop("ext", {}) or {})
-        req["parser_config"] = flatten_parent_child_config(deep_merge(kb.parser_config, parser_config))
+        parser_config = flatten_parent_child_config(parser_config)
+        req["parser_config"] = deep_merge(kb.parser_config, parser_config)
+        if parser_config.get("parent_child") == {}:
+            req["parser_config"]["parent_child"] = {}
 
     if (chunk_method := req.get("parser_id")) and chunk_method != kb.parser_id:
         if not req.get("parser_config"):

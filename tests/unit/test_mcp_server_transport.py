@@ -10,6 +10,7 @@ streamable HTTP 的 Host/Origin DNS-rebinding 防护）得以保留。本文件�
 """
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -85,25 +86,50 @@ def test_health_route_is_public(self_host_app):
 
 
 async def test_tools_are_read_only_annotated_and_retrieval_is_structured(monkeypatch):
+    import fastmcp
     from fastmcp import Client
 
     monkeypatch.setattr(server, "MODE", server.LaunchMode.SELF_HOST)
     monkeypatch.setattr(server, "HOST_API_KEY", _KEY)
     mcp = server.create_mcp_server()
 
-    fake_result = {"chunks": [], "pagination": {"page": 1}, "query_info": {"question": "q"}}
+    # 含后端开放字段集的真实形态 chunk：额外字段必须原样透传（ChunkInfo extra=allow）
+    fake_result = {
+        "chunks": [{"dataset_name": "kb-1", "document_name": "doc.pdf", "content_with_weight": "raw text", "similarity": 0.87}],
+        "pagination": {"page": 1, "page_size": 10, "total_chunks": 1, "total_pages": 1},
+        "query_info": {"question": "q", "similarity_threshold": 0.2, "vector_weight": 0.3, "keyword_search": False, "dataset_count": 1},
+    }
 
     async def fake_retrieval(self, api_key, dataset_ids, **kwargs):
         return fake_result
 
+    async def fake_list_datasets(self, api_key):
+        return [{"id": "ds-1", "name": "kb-1", "description": "", "embedding_model": "bge", "embd_id": "bge"}]
+
     monkeypatch.setattr(server.MultiRAGConnector, "retrieval", fake_retrieval)
+    monkeypatch.setattr(server.MultiRAGConnector, "list_datasets_structured", fake_list_datasets)
 
     async with Client(mcp) as client:
+        # 回归点：缺省会误报 fastmcp 库版本
+        assert client.initialize_result.serverInfo.version == server._server_version()
+        assert client.initialize_result.serverInfo.version != fastmcp.__version__
+
         tools = {t.name: t for t in await client.list_tools()}
         assert set(tools) == {"list_datasets", "multirag_retrieval"}
         for tool in tools.values():
             assert tool.annotations is not None and tool.annotations.readOnlyHint is True
-        assert tools["multirag_retrieval"].outputSchema is not None
+            assert tool.annotations.idempotentHint is True
+
+        # 字段级 output schema（非裸 object）
+        retrieval_schema = tools["multirag_retrieval"].outputSchema
+        assert {"chunks", "pagination", "query_info"} <= set(retrieval_schema.get("properties", {}) or retrieval_schema.get("$defs", {}).get("RetrievalResult", {}).get("properties", {}))
 
         result = await client.call_tool("multirag_retrieval", {"question": "q"})
-        assert result.structured_content == fake_result
+        assert result.structured_content == fake_result  # 额外字段透传契约
+
+        listed = await client.call_tool("list_datasets", {})
+        assert listed.structured_content["result"][0]["id"] == "ds-1"
+
+        # resource 双轨：datasets://list 与工具同源
+        catalog = await client.read_resource("datasets://list")
+        assert json.loads(catalog[0].text)[0]["id"] == "ds-1"

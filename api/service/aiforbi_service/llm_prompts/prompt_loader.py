@@ -43,7 +43,7 @@ class PromptTemplateLoader:
         # 处理data参数
         if data is not None:
             if isinstance(data, BaseModel):
-                fill_data.update(data.dict())
+                fill_data.update(data.model_dump())
             elif isinstance(data, dict):
                 fill_data.update(data)
             else:

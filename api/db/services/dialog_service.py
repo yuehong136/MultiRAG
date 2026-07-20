@@ -802,7 +802,7 @@ def chat(
         attachments = asyncio.run(apply_meta_data_filter(dialog.meta_data_filter, metas, questions[-1], chat_mdl, attachments))
 
     if prompt_config.get("keyword", False):
-        questions[-1] += asyncio.run(keyword_extraction(chat_mdl, questions[-1]))
+        questions[-1] = questions[-1] + "," + asyncio.run(keyword_extraction(chat_mdl, questions[-1]))
 
     refine_question_ts = timer()
 
@@ -1159,7 +1159,7 @@ async def async_chat(
         attachments = await apply_meta_data_filter(dialog.meta_data_filter, metas, questions[-1], chat_mdl, attachments)
 
     if prompt_config.get("keyword", False):
-        questions[-1] += await keyword_extraction(chat_mdl, questions[-1])
+        questions[-1] = questions[-1] + "," + await keyword_extraction(chat_mdl, questions[-1])
 
     refine_question_ts = timer()
 

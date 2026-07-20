@@ -113,12 +113,32 @@ class TestEnvOverlay:
 
         assert cfg.get_section("debugpy") is None
 
+    def test_infinity_pool_size_supports_upstream_env_and_typed_override(self, conf_dir, monkeypatch):
+        conf_dir(SERVICE_CONF, BASE_YAML)
+        monkeypatch.setenv("INFINITY_POOL_MAX_SIZE", "12")
+
+        cfg = load_app_config()
+
+        assert cfg.infinity.pool_max_size == 12
+
+        monkeypatch.setenv("MULTIRAG_INFINITY__POOL_MAX_SIZE", "20")
+        cfg = load_app_config()
+
+        assert cfg.infinity.pool_max_size == 20
+
 
 class TestValidation:
     def test_type_error_fails_fast_with_field_path(self, conf_dir):
         conf_dir(SERVICE_CONF, "multirag: {http_port: not-a-port}\n")
 
         with pytest.raises(AppConfigError, match=r"multirag\.http_port"):
+            load_app_config()
+
+    def test_infinity_pool_size_must_be_positive(self, conf_dir, monkeypatch):
+        conf_dir(SERVICE_CONF, BASE_YAML)
+        monkeypatch.setenv("INFINITY_POOL_MAX_SIZE", "0")
+
+        with pytest.raises(AppConfigError, match=r"infinity\.pool_max_size"):
             load_app_config()
 
     def test_unmodeled_section_preserved(self, conf_dir):

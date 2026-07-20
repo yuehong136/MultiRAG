@@ -210,9 +210,6 @@ class BaseTitleChunker(ABC):
     def resolve_title_levels(self, line_records):
         return self.resolve_outline_levels(line_records) or self.resolve_frequency_levels(line_records)
 
-    def resolve_manual_levels(self, line_records):
-        return self.resolve_title_levels(line_records)["levels"]
-
     def build_chunks_from_record_groups(self, record_groups):
         if self.from_upstream.output_format in ["markdown", "text", "html"]:
             return [{"text": "".join(record["text"] + "\n" for record in records)} for records in record_groups if records]

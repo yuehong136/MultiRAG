@@ -304,7 +304,7 @@ def get_db():
             db: Session = Depends(get_db)
         ):
             # Service 层方法内部会调用 db.commit()
-            user = UserService.save(db, **request.dict())
+            user = UserService.save(db, **request.model_dump())
             return {"code": 0, "data": user}
     """
     db = SessionLocal()
