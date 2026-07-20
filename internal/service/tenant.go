@@ -19,6 +19,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -27,21 +28,29 @@ import (
 	"multirag/internal/dao"
 	"multirag/internal/engine"
 	"multirag/internal/entity"
+
+	"gorm.io/gorm"
 )
 
 // TenantService tenant service
 type TenantService struct {
-	tenantDAO     *dao.TenantDAO
-	userTenantDAO *dao.UserTenantDAO
-	docEngine     engine.DocEngine
+	tenantDAO        *dao.TenantDAO
+	userTenantDAO    *dao.UserTenantDAO
+	modelProviderDAO *dao.TenantModelProviderDAO
+	modelInstanceDAO *dao.TenantModelInstanceDAO
+	modelDAO         *dao.TenantModelDAO
+	docEngine        engine.DocEngine
 }
 
 // NewTenantService create tenant service
 func NewTenantService() *TenantService {
 	return &TenantService{
-		tenantDAO:     dao.NewTenantDAO(),
-		userTenantDAO: dao.NewUserTenantDAO(),
-		docEngine:     engine.Get(),
+		tenantDAO:        dao.NewTenantDAO(),
+		userTenantDAO:    dao.NewUserTenantDAO(),
+		modelProviderDAO: dao.NewTenantModelProviderDAO(),
+		modelInstanceDAO: dao.NewTenantModelInstanceDAO(),
+		modelDAO:         dao.NewTenantModelDAO(),
+		docEngine:        engine.Get(),
 	}
 }
 
@@ -279,4 +288,146 @@ func (s *TenantService) InsertMetadataFromFile(tenantID, filePath string) (inter
 	}
 
 	return result, common.CodeSuccess, nil
+}
+
+// ModelItem describes one tenant default-model selection.
+type ModelItem struct {
+	ModelProvider *string `json:"model_provider"`
+	ModelInstance *string `json:"model_instance"`
+	ModelName     *string `json:"model_name"`
+	ModelType     string  `json:"model_type"`
+	Enable        bool    `json:"enable"`
+}
+
+// GetModelInfo parses and validates a stored tenant default-model identifier.
+func (s *TenantService) GetModelInfo(tenantID, defaultModel, modelType string) (*string, *string, *string, bool, error) {
+	parts := strings.Split(defaultModel, "@")
+	var providerName, instanceName, modelName string
+	switch len(parts) {
+	case 3:
+		modelName, instanceName, providerName = parts[0], parts[1], parts[2]
+	case 2:
+		modelName, instanceName, providerName = parts[0], "default", parts[1]
+	default:
+		return nil, nil, nil, false, fmt.Errorf("invalid model string: %s", defaultModel)
+	}
+
+	modelProvider, err := s.modelProviderDAO.GetByTenantIDAndProviderName(tenantID, providerName)
+	if err != nil {
+		return nil, nil, nil, false, err
+	}
+	modelInstance, err := s.modelInstanceDAO.GetByProviderIDAndInstanceName(modelProvider.ID, instanceName)
+	if err != nil {
+		return nil, nil, nil, false, err
+	}
+	modelSchema, err := dao.GetModelProviderManager().GetModelByName(providerName, modelName)
+	if err != nil {
+		return nil, nil, nil, false, err
+	}
+	if !modelSchema.ModelTypeMap[modelType] {
+		return nil, nil, nil, false, fmt.Errorf("model %s does not support model type %s", modelName, modelType)
+	}
+
+	_, err = s.modelDAO.GetModelByProviderIDAndInstanceIDAndModelName(modelProvider.ID, modelInstance.ID, modelName)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil, nil, false, err
+	}
+	enabled := errors.Is(err, gorm.ErrRecordNotFound)
+	return &providerName, &instanceName, &modelName, enabled, nil
+}
+
+// ListTenantDefaultModels lists the valid default models of the user's owned tenant.
+func (s *TenantService) ListTenantDefaultModels(userID string) ([]ModelItem, error) {
+	tenantInfos, err := s.tenantDAO.GetInfoByUserID(userID)
+	if err != nil {
+		return nil, err
+	}
+	if len(tenantInfos) == 0 {
+		return nil, nil
+	}
+
+	ownedTenant := tenantInfos[0]
+	var result []ModelItem
+	appendModel := func(defaultModel, lookupType, responseType string) {
+		provider, instance, name, enabled, modelErr := s.GetModelInfo(ownedTenant.TenantID, defaultModel, lookupType)
+		if modelErr == nil {
+			result = append(result, ModelItem{
+				ModelProvider: provider,
+				ModelInstance: instance,
+				ModelName:     name,
+				ModelType:     responseType,
+				Enable:        enabled,
+			})
+		}
+	}
+
+	appendModel(ownedTenant.LLMID, "chat", "llm")
+	appendModel(ownedTenant.EmbDID, "embedding", "embedding")
+	appendModel(ownedTenant.RerankID, "rerank", "rerank")
+	appendModel(ownedTenant.ASRID, "asr", "asr")
+	appendModel(ownedTenant.Img2TxtID, "image2text", "image2text")
+	if ownedTenant.TTSID != nil {
+		appendModel(*ownedTenant.TTSID, "tts", "tts")
+	}
+
+	return result, nil
+}
+
+func (s *TenantService) checkModelAvailable(tenantID, providerName, instanceName, modelName, modelType string) error {
+	modelProvider, err := s.modelProviderDAO.GetByTenantIDAndProviderName(tenantID, providerName)
+	if err != nil {
+		return err
+	}
+	modelInstance, err := s.modelInstanceDAO.GetByProviderIDAndInstanceName(modelProvider.ID, instanceName)
+	if err != nil {
+		return err
+	}
+	modelSchema, err := dao.GetModelProviderManager().GetModelByName(providerName, modelName)
+	if err != nil {
+		return err
+	}
+	if !modelSchema.ModelTypeMap[modelType] {
+		return fmt.Errorf("model %s does not support model type %s", modelName, modelType)
+	}
+
+	_, err = s.modelDAO.GetModelByProviderIDAndInstanceIDAndModelName(modelProvider.ID, modelInstance.ID, modelName)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("model %s is disabled", modelName)
+}
+
+// SetTenantDefaultModels validates and stores one default model selection.
+func (s *TenantService) SetTenantDefaultModels(userID, modelProvider, modelInstance, modelName, modelType string) error {
+	tenantInfos, err := s.tenantDAO.GetInfoByUserID(userID)
+	if err != nil {
+		return err
+	}
+	if len(tenantInfos) == 0 {
+		return fmt.Errorf("tenant not found")
+	}
+
+	ownedTenant := tenantInfos[0]
+	if err = s.checkModelAvailable(ownedTenant.TenantID, modelProvider, modelInstance, modelName, modelType); err != nil {
+		return err
+	}
+
+	modelColumns := map[string]string{
+		"chat":       "llm_id",
+		"embedding":  "embd_id",
+		"rerank":     "rerank_id",
+		"asr":        "asr_id",
+		"image2text": "img2txt_id",
+		"tts":        "tts_id",
+	}
+	modelColumn, ok := modelColumns[modelType]
+	if !ok {
+		return fmt.Errorf("model type %s is invalid", modelType)
+	}
+
+	defaultModel := fmt.Sprintf("%s@%s@%s", modelName, modelInstance, modelProvider)
+	return s.tenantDAO.Update(ownedTenant.TenantID, map[string]interface{}{modelColumn: defaultModel})
 }

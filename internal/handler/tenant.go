@@ -39,6 +39,81 @@ func NewTenantHandler(tenantService *service.TenantService, userService *service
 	}
 }
 
+// GetModels lists the current tenant's default models.
+func (h *TenantHandler) GetModels(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	defaultModels, err := h.tenantService.ListTenantDefaultModels(user.ID)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    common.CodeExceptionError,
+			"message": err.Error(),
+			"data":    false,
+		})
+		return
+	}
+	if defaultModels == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    common.CodeDataError,
+			"message": "No default models",
+			"data":    nil,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    common.CodeSuccess,
+		"message": "success",
+		"data":    defaultModels,
+	})
+}
+
+// SetModelRequest is the payload used to select a tenant default model.
+type SetModelRequest struct {
+	ModelProvider string `json:"model_provider" binding:"required"`
+	ModelInstance string `json:"model_instance" binding:"required"`
+	ModelName     string `json:"model_name" binding:"required"`
+	ModelType     string `json:"model_type" binding:"required"`
+}
+
+// SetModels updates one of the current tenant's default models.
+func (h *TenantHandler) SetModels(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
+	if errorCode != common.CodeSuccess {
+		jsonError(c, errorCode, errorMessage)
+		return
+	}
+
+	var req SetModelRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    common.CodeBadRequest,
+			"data":    nil,
+			"message": "Invalid request body: " + err.Error(),
+		})
+		return
+	}
+
+	if err := h.tenantService.SetTenantDefaultModels(user.ID, req.ModelProvider, req.ModelInstance, req.ModelName, req.ModelType); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    common.CodeExceptionError,
+			"message": err.Error(),
+			"data":    false,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    common.CodeSuccess,
+		"message": "success",
+		"data":    nil,
+	})
+}
+
 // TenantInfo get tenant information
 // @Summary Get Tenant Information
 // @Description Get current user's tenant information (owner tenant)

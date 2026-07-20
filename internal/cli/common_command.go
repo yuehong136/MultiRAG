@@ -415,3 +415,66 @@ func (c *MultiRAGClient) ShowModel(cmd *Command) (ResponseIf, error) {
 	result.Duration = 0
 	return &result, nil
 }
+
+func (c *MultiRAGClient) SetDefaultModel(cmd *Command) (ResponseIf, error) {
+	modelType, ok := cmd.Params["model_type"].(string)
+	if !ok {
+		return nil, fmt.Errorf("model_type not provided")
+	}
+	modelProvider, ok := cmd.Params["model_provider"].(string)
+	if !ok {
+		return nil, fmt.Errorf("model_provider not provided")
+	}
+	modelInstance, ok := cmd.Params["model_instance"].(string)
+	if !ok {
+		return nil, fmt.Errorf("model_instance not provided")
+	}
+	modelName, ok := cmd.Params["model_name"].(string)
+	if !ok {
+		return nil, fmt.Errorf("model_name not provided")
+	}
+
+	payload := map[string]interface{}{
+		"model_type":     modelType,
+		"model_provider": modelProvider,
+		"model_instance": modelInstance,
+		"model_name":     modelName,
+	}
+	resp, err := c.HTTPClient.Request("PATCH", "/models", true, "web", nil, payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to set default model: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to set default model: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	var result SimpleResponse
+	if err = json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("failed to set default model: invalid JSON (%w)", err)
+	}
+	if result.Code != 0 {
+		return nil, fmt.Errorf("%s", result.Message)
+	}
+	result.Duration = 0
+	return &result, nil
+}
+
+func (c *MultiRAGClient) ListDefaultModels(cmd *Command) (ResponseIf, error) {
+	resp, err := c.HTTPClient.Request("GET", "/models", true, "web", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list default models: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to list default models: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	var result CommonResponse
+	if err = json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("failed to list default models: invalid JSON (%w)", err)
+	}
+	if result.Code != 0 {
+		return nil, fmt.Errorf("%s", result.Message)
+	}
+	result.Duration = 0
+	return &result, nil
+}

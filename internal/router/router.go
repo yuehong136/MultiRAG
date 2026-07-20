@@ -190,6 +190,12 @@ func (r *Router) Setup(engine *gin.Engine) {
 				provider.POST("/:provider_name/instances/:instance_name/models/:model_name", r.providerHandler.ChatToModel)
 			}
 
+			models := v1.Group("/models")
+			{
+				models.GET("", r.tenantHandler.GetModels)
+				models.PATCH("", r.tenantHandler.SetModels)
+			}
+
 			// File routes (RESTful, aligned with Python /api/v1/files)
 			files := v1.Group("/files")
 			{
