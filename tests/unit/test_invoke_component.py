@@ -69,7 +69,7 @@ def _make_invoke(module, *, variables=None, variable_values=None, datatype="form
     variable_values = variable_values or {}
 
     canvas = MagicMock()
-    canvas.get_variable_value = MagicMock(side_effect=lambda key: variable_values.get(key, ""))
+    canvas.get_variable_value = MagicMock(side_effect=lambda key: variable_values.get(key))
     canvas.is_canceled = MagicMock(return_value=False)
 
     param = module.InvokeParam.__new__(module.InvokeParam)
@@ -148,6 +148,20 @@ def test_invoke_falls_back_to_canvas_for_ref_variables(monkeypatch):
 
     assert mock_post.call_args[1]["data"] == {"username": "from-canvas"}
     assert invoke._param.inputs["begin@username"]["value"] == "from-canvas"
+
+
+def test_invoke_falls_back_to_literal_value_for_missing_ref(monkeypatch):
+    module = _load_invoke_module(monkeypatch)
+    invoke = _make_invoke(
+        module,
+        variables=[{"key": "content", "ref": "begin@content", "value": "fallback document"}],
+    )
+    mock_post = MagicMock(return_value=SimpleNamespace(text="ok"))
+    monkeypatch.setattr(module.requests, "post", mock_post)
+
+    invoke._invoke()
+
+    assert mock_post.call_args[1]["data"] == {"content": "fallback document"}
 
 
 def test_invoke_coerces_stringified_json_arguments(monkeypatch):
