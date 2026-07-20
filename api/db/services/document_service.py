@@ -291,6 +291,7 @@ class DocumentService(CommonService):
         run_status: list | None = None,
         types: list | None = None,
         suffix: list = None,
+        name: str | None = None,
         doc_ids: list | None = None,
         return_empty_metadata: bool = False,
     ) -> tuple[list[dict], int]:
@@ -321,7 +322,10 @@ class DocumentService(CommonService):
         if suffix:
             base = base.where(cls.model.suffix.in_(suffix))
 
-        if doc_ids:
+        if name:
+            base = base.where(cls.model.name == name)
+
+        if doc_ids is not None:
             base = base.where(cls.model.id.in_(doc_ids))
 
         if return_empty_metadata:

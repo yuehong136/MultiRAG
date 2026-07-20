@@ -1,6 +1,5 @@
 import base64
 import datetime
-import json
 import logging
 import re
 from io import BytesIO
@@ -237,113 +236,6 @@ def download_doc(
     file = BytesIO(file_stream)
     encoded_filename = quote(doc[0].name)
     return StreamingResponse(file, media_type="application/octet-stream", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"})
-
-
-@router.get("/datasets/{dataset_id}/documents", summary="获取文档列表")
-def list_documents(
-    dataset_id: str,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(30, ge=1, le=100),
-    orderby: str = Query("create_time"),
-    desc: bool = Query(True),
-    keywords: str | None = Query(None),
-    id: str | None = Query(None),
-    name: str | None = Query(None),
-    suffix: list[str] = Query(None),
-    run: list[str] = Query(None),
-    create_time_from: int = Query(0),
-    create_time_to: int = Query(0),
-    metadata_condition: str | None = Query(None, description="元数据过滤条件（JSON格式）"),
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required),
-):
-    """
-    获取数据集中的文档列表
-
-    Args:
-        dataset_id: 数据集ID
-        page: 页码
-        page_size: 每页数量
-        orderby: 排序字段
-        desc: 是否降序
-        keywords: 关键词搜索
-        id: 文档ID过滤
-        name: 文档名称过滤
-        suffix: 文件后缀过滤 (e.g., ["pdf", "txt", "docx"])
-        run: 文档运行状态过滤 (支持数字和文本格式: "0"/"UNSTART", "1"/"RUNNING", "2"/"CANCEL", "3"/"DONE", "4"/"FAIL")
-        create_time_from: Unix时间戳，过滤此时间之后创建的文档（0表示无过滤）
-        create_time_to: Unix时间戳，过滤此时间之前创建的文档（0表示无过滤）
-        db: 数据库会话
-        tenant_id: 租户ID
-
-    Returns:
-        文档列表
-    """
-    if not KnowledgebaseService.query(db, id=dataset_id, tenant_id=tenant_id):
-        return get_error_data_result(retmsg="You don't own the dataset.")
-
-    # 检查文档ID
-    if id and not DocumentService.query(db, id=id, kb_id=dataset_id):
-        return get_error_data_result(retmsg=f"You don't own the document {id}.")
-    if name and not DocumentService.query(db, name=name, kb_id=dataset_id):
-        return get_error_data_result(retmsg=f"You don't own the document {name}.")
-
-    # 映射 run 状态（接受文本或数字格式）
-    run_status_text_to_numeric = {"UNSTART": "0", "RUNNING": "1", "CANCEL": "2", "DONE": "3", "FAIL": "4"}
-    run_status_converted = None
-    if run:
-        run_status_converted = [run_status_text_to_numeric.get(v, v) for v in run]
-
-    # 处理 metadata_condition
-    metadata_cond = {}
-    if metadata_condition:
-        try:
-            metadata_cond = json.loads(metadata_condition)
-        except Exception:
-            return get_error_data_result(retmsg="metadata_condition must be valid JSON.")
-    if metadata_cond and not isinstance(metadata_cond, dict):
-        return get_error_data_result(retmsg="metadata_condition must be an object.")
-
-    doc_ids_filter = None
-    if metadata_cond:
-        metas = DocMetadataService.get_flatted_meta_by_kbs(db, [dataset_id])
-        doc_ids_filter = meta_filter(metas, convert_conditions(metadata_cond), metadata_cond.get("logic", "and"))
-        if metadata_cond.get("conditions") and not doc_ids_filter:
-            return get_result(data={"total": 0, "docs": []})
-
-    try:
-        docs, total = DocumentService.get_list(db, dataset_id, page, page_size, orderby, desc, keywords=keywords, id=id, name=name, suffix=suffix, run=run_status_converted, doc_ids=doc_ids_filter)
-
-        # 时间范围过滤（0表示无限制）
-        if create_time_from or create_time_to:
-            docs = [d for d in docs if (create_time_from == 0 or d.get("create_time", 0) >= create_time_from) and (create_time_to == 0 or d.get("create_time", 0) <= create_time_to)]
-
-        # 重命名键名 + 映射 run 状态回文本格式输出
-        key_mapping = {
-            "chunk_num": "chunk_count",
-            "kb_id": "dataset_id",
-            "token_num": "token_count",
-            "parser_id": "chunk_method",
-        }
-        run_status_numeric_to_text = {
-            "0": "UNSTART",
-            "1": "RUNNING",
-            "2": "CANCEL",
-            "3": "DONE",
-            "4": "FAIL",
-        }
-
-        output_docs = []
-        for d in docs:
-            renamed_doc = {key_mapping.get(k, k): v for k, v in d.items()}
-            if "run" in d:
-                renamed_doc["run"] = run_status_numeric_to_text.get(str(d["run"]), d["run"])
-            output_docs.append(renamed_doc)
-
-        return get_result(data={"total": total, "docs": output_docs})
-    except Exception as e:
-        logging.exception(e)
-        return get_error_data_result(retmsg="Failed to retrieve documents")
 
 
 class MetadataUpdateSelectorSDK(BaseModel):

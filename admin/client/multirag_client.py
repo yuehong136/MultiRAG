@@ -1867,7 +1867,12 @@ class MultiRAGClient:
         return None
 
     def _list_documents(self, dataset_name: str, dataset_id: str) -> list | None:
-        response = self.http_client.request("POST", f"document/list?id={dataset_id}", json_body={}, use_api_base=False, auth_kind="web")
+        response = self.http_client.request(
+            "GET",
+            f"datasets/{dataset_id}/documents",
+            use_api_base=True,
+            auth_kind="web",
+        )
         res_json = response.json()
         if response.status_code != 200:
             msg = res_json.get("message", res_json.get("retmsg", ""))
@@ -1955,7 +1960,7 @@ class MultiRAGClient:
             docs = self._list_documents(dataset_name, dataset_id)
             if docs is None:
                 return False
-            all_done = all(doc.get("run") == "3" for doc in docs)
+            all_done = all(doc.get("run") == "DONE" for doc in docs)
             if all_done:
                 return True
             if time.monotonic() - start > 60:

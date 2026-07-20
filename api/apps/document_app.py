@@ -1028,7 +1028,12 @@ def list_docs_get(kb_id: str, keywords: str = "", page: int = 1, page_size: int 
         return construct_error_response(e)
 
 
-@router.post("/list", summary="列出文档", response_description="成功列出文档")  # 改为 POST
+@router.post(
+    "/list",
+    summary="列出文档（已弃用）",
+    response_description="成功列出文档",
+    deprecated=True,
+)
 def list_docs(
     filter_params: DocumentFilter,  # JSON body 参数
     dataset_id: str | None = Query(None, alias="id", description="数据集 ID"),
@@ -1045,6 +1050,9 @@ def list_docs(
 ):
     """
     ### POST `/list` 列出文档接口
+
+    > **已弃用**：仅为兼容存量调用保留。新调用方请使用
+    > `GET /api/v1/datasets/{dataset_id}/documents`。
 
     **功能描述**:
     此接口用于获取指定知识库中的文档列表，支持关键词搜索、分页查询、排序及多条件过滤（运行状态、文件类型、文件后缀、创建时间范围）。返回文档的基本信息和缩略图。

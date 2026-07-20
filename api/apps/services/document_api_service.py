@@ -121,9 +121,12 @@ def validate_document_update_fields(db: Session, update_doc_req: UpdateDocumentR
     return None, None
 
 
-def map_doc_keys(db: Session, doc: Document) -> dict[str, Any]:
-    """将文档 model 的内部字段名映射为 API 响应字段名（如 chunk_num -> chunk_count）。"""
-    renamed_doc = _process_key_mappings(DocumentService.serialize_document(db, doc))
+def map_doc_keys(db: Session, doc: Document | dict[str, Any]) -> dict[str, Any]:
+    """将文档 model/dict 的内部字段名映射为 RESTful API 响应字段名。"""
+    serialized_doc = dict(doc) if isinstance(doc, dict) else DocumentService.serialize_document(db, doc)
+    if serialized_doc is None:
+        return {}
+    renamed_doc = _process_key_mappings(serialized_doc)
     if "run" in renamed_doc:
         renamed_doc = _process_run_mapping(renamed_doc, renamed_doc["run"])
     return renamed_doc
