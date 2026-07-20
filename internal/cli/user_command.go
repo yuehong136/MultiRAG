@@ -825,7 +825,7 @@ func (c *MultiRAGClient) AddProvider(cmd *Command) (ResponseIf, error) {
 		"provider_name": providerName,
 	}
 
-	resp, err := c.HTTPClient.Request("POST", "/providers", true, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("PUT", "/providers", true, "web", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add provider: %w", err)
 	}
@@ -1133,9 +1133,13 @@ func (c *MultiRAGClient) DropProviderInstance(cmd *Command) (ResponseIf, error) 
 		return nil, fmt.Errorf("provider name not provided")
 	}
 
-	url := fmt.Sprintf("/providers/%s/instances/%s", providerName, instanceName)
+	payload := map[string]interface{}{
+		"instances": []string{instanceName},
+	}
 
-	resp, err := c.HTTPClient.Request("DELETE", url, true, "web", nil, nil)
+	url := fmt.Sprintf("/providers/%s/instances", providerName)
+
+	resp, err := c.HTTPClient.Request("DELETE", url, true, "web", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to drop instance: %w", err)
 	}
@@ -1220,7 +1224,7 @@ func (c *MultiRAGClient) EnableOrDisableModel(cmd *Command, status string) (Resp
 		"status": status,
 	}
 
-	resp, err := c.HTTPClient.Request("PUT", url, true, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("PATCH", url, true, "web", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to enable/disable model: %w", err)
 	}
