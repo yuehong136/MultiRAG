@@ -134,12 +134,36 @@ type Features struct {
 	Reasoning  *Reasoning  `json:"reasoning,omitempty"`
 }
 
+// ThinkingClearConfig describes whether reasoning content is cleared by default.
+type ThinkingClearConfig struct {
+	DefaultValue bool `json:"default_value"`
+}
+
+// ThinkingConfig describes provider-level thinking support.
+type ThinkingConfig struct {
+	DefaultValue    bool                `json:"default_value"`
+	SupportedModels []string            `json:"supported_models"`
+	Clear           ThinkingClearConfig `json:"clear"`
+}
+
+// ProviderFeatures describes capabilities shared by selected provider models.
+type ProviderFeatures struct {
+	Thinking *ThinkingConfig `json:"thinking,omitempty"`
+}
+
+// ModelThinking contains the resolved thinking defaults for one model.
+type ModelThinking struct {
+	DefaultValue bool `json:"default_value"`
+	ClearContent bool `json:"clear_content"`
+}
+
 // Model represents a single LLM model
 type Model struct {
-	Name         string   `json:"name"`
-	MaxTokens    int      `json:"max_tokens"`
-	ModelTypes   []string `json:"model_types"`
-	Features     Features `json:"features"`
+	Name         string         `json:"name"`
+	MaxTokens    int            `json:"max_tokens"`
+	ModelTypes   []string       `json:"model_types"`
+	Features     Features       `json:"features"`
+	Thinking     *ModelThinking `json:"thinking,omitempty"`
 	ModelTypeMap map[string]bool
 }
 
@@ -150,6 +174,7 @@ type Provider struct {
 	URL         map[string]string `json:"url"`
 	URLSuffix   models.URLSuffix  `json:"url_suffix"`
 	Models      []*Model          `json:"models"`
+	Features    ProviderFeatures  `json:"features"`
 	ModelDriver models.ModelDriver
 }
 
@@ -209,6 +234,12 @@ func NewProviderManager(dirPath string) (*ProviderManager, error) {
 		}
 
 		for _, model := range provider.Models {
+			if provider.Features.Thinking != nil && modelNameHasPrefix(model.Name, provider.Features.Thinking.SupportedModels) {
+				model.Thinking = &ModelThinking{
+					DefaultValue: provider.Features.Thinking.DefaultValue,
+					ClearContent: provider.Features.Thinking.Clear.DefaultValue,
+				}
+			}
 			model.ModelTypeMap = make(map[string]bool)
 			for _, modelType := range model.ModelTypes {
 				model.ModelTypeMap[modelType] = true
@@ -286,7 +317,7 @@ func (pm *ProviderManager) ListModels(providerName string) ([]map[string]interfa
 			"name":        model.Name,
 			"max_tokens":  model.MaxTokens,
 			"model_types": model.ModelTypes,
-			"features":    getFeaturesMap(model.Features),
+			"features":    getFeatureNames(model),
 		}
 		models = append(models, modelData)
 	}
@@ -395,7 +426,7 @@ func (pm *ProviderManager) SearchModelInfo(providerName, modelName string, filte
 			"name":        model.Name,
 			"max_tokens":  model.MaxTokens,
 			"model_types": model.ModelTypes,
-			"features":    getFeaturesMap(model.Features),
+			"features":    getFeaturesMap(model),
 		}
 
 		if filterBy != "" && filterValue != nil {
@@ -421,13 +452,13 @@ func (pm *ProviderManager) SearchByFeature(featureType string) ModelResponse {
 
 	for _, provider := range pm.Providers {
 		for _, model := range provider.Models {
-			if modelHasFeature(model.Features, featureType) {
+			if modelHasFeature(model, featureType) {
 				modelData := map[string]interface{}{
 					"provider":    provider.Name,
 					"name":        model.Name,
 					"max_tokens":  model.MaxTokens,
 					"model_types": model.ModelTypes,
-					"features":    getFeaturesMap(model.Features),
+					"features":    getFeaturesMap(model),
 				}
 				resp.Data = append(resp.Data, modelData)
 			}
@@ -458,7 +489,7 @@ func (pm *ProviderManager) SearchByType(modelType string) ModelResponse {
 					"name":        model.Name,
 					"max_tokens":  model.MaxTokens,
 					"model_types": model.ModelTypes,
-					"features":    getFeaturesMap(model.Features),
+					"features":    getFeaturesMap(model),
 				}
 				resp.Data = append(resp.Data, modelData)
 			}
@@ -474,8 +505,24 @@ func (pm *ProviderManager) SearchByType(modelType string) ModelResponse {
 }
 
 // Helper: Get features map for response
-func getFeaturesMap(features Features) map[string]interface{} {
+func getFeatureNames(model *Model) []string {
+	featureNames := make([]string, 0, 3)
+	if model.Features.Multimodal != nil && model.Features.Multimodal.Enabled {
+		featureNames = append(featureNames, "multimodal")
+	}
+	if model.Features.Reasoning != nil {
+		featureNames = append(featureNames, "reasoning")
+	}
+	if model.Thinking != nil {
+		featureNames = append(featureNames, "thinking")
+	}
+	return featureNames
+}
+
+// Helper: Get features map for response
+func getFeaturesMap(model *Model) map[string]interface{} {
 	featuresMap := make(map[string]interface{})
+	features := model.Features
 
 	if features.Multimodal != nil && features.Multimodal.Enabled {
 		multimodalMap := map[string]interface{}{
@@ -516,11 +563,19 @@ func getFeaturesMap(features Features) map[string]interface{} {
 		featuresMap["reasoning"] = reasoningMap
 	}
 
+	if model.Thinking != nil {
+		featuresMap["thinking"] = map[string]interface{}{
+			"default_value": model.Thinking.DefaultValue,
+			"clear_content": model.Thinking.ClearContent,
+		}
+	}
+
 	return featuresMap
 }
 
 // Helper: Check if model has a specific feature
-func modelHasFeature(features Features, featureType string) bool {
+func modelHasFeature(model *Model, featureType string) bool {
+	features := model.Features
 	switch strings.ToLower(featureType) {
 	case "multimodal":
 		return features.Multimodal != nil && features.Multimodal.Enabled
@@ -532,9 +587,20 @@ func modelHasFeature(features Features, featureType string) bool {
 		return features.Reasoning != nil && features.Reasoning.RawType == "budget"
 	case "reasoning_effort":
 		return features.Reasoning != nil && features.Reasoning.RawType == "effort"
+	case "thinking":
+		return model.Thinking != nil
 	default:
 		return false
 	}
+}
+
+func modelNameHasPrefix(modelName string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(modelName, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // Helper: Find provider by name
