@@ -1,5 +1,7 @@
 import importlib.util
+import json
 import sys
+from functools import partial
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
@@ -183,3 +185,55 @@ def test_invoke_keeps_non_json_strings_in_json_mode(monkeypatch):
     invoke._invoke()
 
     assert mock_post.call_args[1]["json"] == {"message": "plain text"}
+
+
+def test_invoke_renders_templates_in_args_url_and_headers(monkeypatch):
+    module = _load_invoke_module(monkeypatch)
+    invoke = _make_invoke(
+        module,
+        variables=[{"key": "message", "ref": "", "value": "Hello:{begin@name}"}],
+    )
+    invoke._param.url = "{begin@base_url}/token"
+    invoke._param.headers = json.dumps(
+        {
+            "Authorization": "Bearer {token}",
+            "X-Trace": "{begin@trace}",
+        },
+    )
+    mock_post = MagicMock(return_value=SimpleNamespace(text="ok"))
+    monkeypatch.setattr(module.requests, "post", mock_post)
+
+    result = invoke._invoke(
+        **{
+            "begin@name": "Ada",
+            "begin@base_url": "https://example.test",
+            "token": "secret",
+            "begin@trace": "trace-1",
+        },
+    )
+
+    assert result == "ok"
+    assert mock_post.call_args[1] == {
+        "url": "https://example.test/token",
+        "headers": {"Authorization": "Bearer secret", "X-Trace": "trace-1"},
+        "proxies": None,
+        "timeout": 60,
+        "data": {"message": "Hello:Ada"},
+    }
+    invoke._canvas.get_variable_value.assert_not_called()
+
+
+def test_invoke_materializes_streaming_ref_values(monkeypatch):
+    module = _load_invoke_module(monkeypatch)
+    invoke = _make_invoke(
+        module,
+        variables=[{"key": "message", "ref": "begin@stream", "value": ""}],
+        variable_values={"begin@stream": partial(lambda: iter(["hel", "lo"]))},
+    )
+    mock_post = MagicMock(return_value=SimpleNamespace(text="ok"))
+    monkeypatch.setattr(module.requests, "post", mock_post)
+
+    invoke._invoke()
+
+    assert mock_post.call_args[1]["data"] == {"message": "hello"}
+    assert invoke._param.inputs["begin@stream"]["value"] == "hello"

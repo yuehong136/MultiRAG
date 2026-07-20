@@ -1,6 +1,9 @@
 import json
+from functools import partial
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
-from agent.component.docs_generator import DocGeneratorParam, sanitize_filename
+from agent.component.docs_generator import DocGenerator, DocGeneratorParam, sanitize_filename
 from agent.component.message import Message, MessageParam
 
 
@@ -54,3 +57,28 @@ def test_message_param_exposes_downloads_output():
         "content": {"type": "str"},
         "downloads": {"type": "list"},
     }
+
+
+def test_doc_generator_uses_runtime_content_when_param_content_is_empty():
+    generator = object.__new__(DocGenerator)
+    generator._param = SimpleNamespace(content="")
+    generator._canvas = MagicMock()
+
+    assert generator._resolve_content({"content": "runtime content"}) == "runtime content"
+    generator._canvas.get_variable_value.assert_not_called()
+
+
+def test_doc_generator_resolves_mixed_stream_and_structured_variables():
+    generator = object.__new__(DocGenerator)
+    generator._param = SimpleNamespace(
+        content="Answer={begin@answer}; metadata={begin@metadata}; missing={begin@missing}",
+    )
+    values = {
+        "begin@answer": partial(lambda: iter(["hel", "lo"])),
+        "begin@metadata": {"status": "ok"},
+        "begin@missing": None,
+    }
+    generator._canvas = MagicMock()
+    generator._canvas.get_variable_value.side_effect = values.get
+
+    assert generator._resolve_content({}) == 'Answer=hello; metadata={"status": "ok"}; missing='
