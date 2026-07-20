@@ -146,3 +146,40 @@ def test_invoke_falls_back_to_canvas_for_ref_variables(monkeypatch):
 
     assert mock_post.call_args[1]["data"] == {"username": "from-canvas"}
     assert invoke._param.inputs["begin@username"]["value"] == "from-canvas"
+
+
+def test_invoke_coerces_stringified_json_arguments(monkeypatch):
+    module = _load_invoke_module(monkeypatch)
+    invoke = _make_invoke(
+        module,
+        variables=[
+            {"key": "payload", "ref": "begin@payload", "value": ""},
+            {"key": "enabled", "ref": "", "value": False},
+        ],
+        datatype="json",
+    )
+    mock_post = MagicMock(return_value=SimpleNamespace(text="ok"))
+    monkeypatch.setattr(module.requests, "post", mock_post)
+
+    invoke._invoke(**{"begin@payload": '{"items": [1, 2]}'})
+
+    assert mock_post.call_args[1]["json"] == {
+        "payload": {"items": [1, 2]},
+        "enabled": False,
+    }
+    assert invoke._param.inputs["begin@payload"]["value"] == {"items": [1, 2]}
+
+
+def test_invoke_keeps_non_json_strings_in_json_mode(monkeypatch):
+    module = _load_invoke_module(monkeypatch)
+    invoke = _make_invoke(
+        module,
+        variables=[{"key": "message", "ref": "", "value": "plain text"}],
+        datatype="json",
+    )
+    mock_post = MagicMock(return_value=SimpleNamespace(text="ok"))
+    monkeypatch.setattr(module.requests, "post", mock_post)
+
+    invoke._invoke()
+
+    assert mock_post.call_args[1]["json"] == {"message": "plain text"}
