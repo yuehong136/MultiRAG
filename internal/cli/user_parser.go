@@ -93,6 +93,8 @@ func (p *Parser) parseListCommand() (*Command, error) {
 		return p.parseListModelProviders()
 	case TokenModels:
 		return p.parseListModelsOfProvider()
+	case TokenSupported:
+		return p.parseListModelsOfProvider()
 	case TokenProviders:
 		return p.parseListProviders()
 	case TokenInstances:
@@ -1317,18 +1319,42 @@ func (p *Parser) parseChatCommand() (*Command, error) {
 		cmd.Params["model_name"] = modelName
 	}
 	cmd.Params["message"] = message
-	cmd.Params["reasoning"] = false
+	cmd.Params["thinking"] = false
+	cmd.Params["stream"] = false
 	return cmd, nil
 }
 
 func (p *Parser) parseThinkCommand() (*Command, error) {
 	p.nextToken() // consume THINK
+	if p.curToken.Type != TokenChat {
+		return nil, fmt.Errorf("expected CHAT after THINK")
+	}
 	command, err := p.parseChatCommand()
 	if err != nil {
 		return nil, err
 	}
-	command.Type = "think_chat_to_model"
-	command.Params["reasoning"] = true
+	command.Params["thinking"] = true
+	return command, nil
+}
+
+func (p *Parser) parseStreamCommand() (*Command, error) {
+	p.nextToken() // consume STREAM
+	var (
+		command *Command
+		err     error
+	)
+	switch p.curToken.Type {
+	case TokenChat:
+		command, err = p.parseChatCommand()
+	case TokenThink:
+		command, err = p.parseThinkCommand()
+	default:
+		return nil, fmt.Errorf("expected CHAT or THINK CHAT after STREAM")
+	}
+	if err != nil {
+		return nil, err
+	}
+	command.Params["stream"] = true
 	return command, nil
 }
 

@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 
@@ -377,6 +378,37 @@ func (c *MultiRAGClient) ListModels(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("%s", result.Message)
 	}
 	result.Duration = 0
+	return &result, nil
+}
+
+func (c *MultiRAGClient) ListSupportedModels(cmd *Command) (ResponseIf, error) {
+	providerName, ok := cmd.Params["provider_name"].(string)
+	if !ok {
+		return nil, fmt.Errorf("provider_name not provided")
+	}
+	instanceName, ok := cmd.Params["instance_name"].(string)
+	if !ok {
+		return nil, fmt.Errorf("instance_name not provided")
+	}
+
+	endpoint := fmt.Sprintf("/providers/%s/instances/%s/models?supported=true", providerName, instanceName)
+	if c.ServerType == "admin" {
+		endpoint = fmt.Sprintf("/admin/providers/%s/instances/%s/models?supported=true", providerName, instanceName)
+	}
+	resp, err := c.HTTPClient.Request("GET", endpoint, true, "web", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list supported models: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to list supported models: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+	var result CommonResponse
+	if err = json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("failed to list supported models: invalid JSON (%w)", err)
+	}
+	if result.Code != 0 {
+		return nil, fmt.Errorf("%s", result.Message)
+	}
 	return &result, nil
 }
 

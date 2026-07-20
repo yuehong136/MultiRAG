@@ -460,6 +460,19 @@ func (h *ProviderHandler) ListInstanceModels(c *gin.Context) {
 		})
 		return
 	}
+	if strings.EqualFold(c.Query("supported"), "true") {
+		modelNames, err := h.modelProviderService.ListSupportedModels(providerName, instanceName, c.GetString("user_id"))
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": common.CodeServerError, "message": err.Error()})
+			return
+		}
+		models := make([]map[string]string, 0, len(modelNames))
+		for _, modelName := range modelNames {
+			models = append(models, map[string]string{"model_name": modelName})
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": models})
+		return
+	}
 	models, err := h.modelProviderService.ListInstanceModels(providerName, instanceName, c.GetString("user_id"))
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -535,9 +548,9 @@ func (h *ProviderHandler) EnableOrDisableModel(c *gin.Context) {
 }
 
 type ChatToModelRequest struct {
-	Message   string `json:"message" binding:"required"`
-	Stream    bool   `json:"stream"`
-	Reasoning bool   `json:"reasoning"`
+	Message  string `json:"message" binding:"required"`
+	Stream   bool   `json:"stream"`
+	Thinking bool   `json:"thinking"`
 }
 
 func (h *ProviderHandler) ChatToModel(c *gin.Context) {
@@ -611,19 +624,19 @@ func (h *ProviderHandler) ChatToModel(c *gin.Context) {
 			return nil
 		}
 
+		apiConfig := models.APIConfig{}
 		chatConfig := models.ChatConfig{
-			Reasoning:   &req.Reasoning,
+			Thinking:    &req.Thinking,
 			Stream:      &req.Stream,
 			Stop:        &[]string{},
 			DoSample:    nil,
 			MaxTokens:   nil,
 			Temperature: nil,
 			TopP:        nil,
-			Region:      nil,
 		}
 
 		// Stream response using sender function (best performance, no channel)
-		errorCode := h.modelProviderService.ChatToModelStreamWithSender(providerName, instanceName, modelName, userID, req.Message, &chatConfig, sender)
+		errorCode := h.modelProviderService.ChatToModelStreamWithSender(providerName, instanceName, modelName, userID, req.Message, &apiConfig, &chatConfig, sender)
 
 		if errorCode != common.CodeSuccess {
 			c.SSEvent("error", "stream failed")
@@ -631,19 +644,19 @@ func (h *ProviderHandler) ChatToModel(c *gin.Context) {
 		return
 	}
 
+	apiConfig := models.APIConfig{}
 	chatConfig := models.ChatConfig{
-		Reasoning:   &req.Reasoning,
+		Thinking:    &req.Thinking,
 		Stream:      &req.Stream,
 		Stop:        &[]string{},
 		DoSample:    nil,
 		MaxTokens:   nil,
 		Temperature: nil,
 		TopP:        nil,
-		Region:      nil,
 	}
 
 	// Non-stream response
-	response, errorCode, err := h.modelProviderService.ChatToModel(providerName, instanceName, modelName, userID, req.Message, &chatConfig)
+	response, errorCode, err := h.modelProviderService.ChatToModel(providerName, instanceName, modelName, userID, req.Message, &apiConfig, &chatConfig)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    errorCode,
@@ -653,7 +666,8 @@ func (h *ProviderHandler) ChatToModel(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": response,
+		"code":              0,
+		"reasoning_content": response.ReasoningContent,
+		"answer":            response.Answer,
 	})
 }

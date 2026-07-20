@@ -136,19 +136,20 @@ type Features struct {
 
 // ThinkingClearConfig describes whether reasoning content is cleared by default.
 type ThinkingClearConfig struct {
-	DefaultValue bool `json:"default_value"`
+	DefaultValue    bool     `json:"default_value"`
+	SupportedModels []string `json:"supported_models"`
 }
 
 // ThinkingConfig describes provider-level thinking support.
 type ThinkingConfig struct {
-	DefaultValue    bool                `json:"default_value"`
-	SupportedModels []string            `json:"supported_models"`
-	Clear           ThinkingClearConfig `json:"clear"`
+	DefaultValue    bool     `json:"default_value"`
+	SupportedModels []string `json:"supported_models"`
 }
 
 // ProviderFeatures describes capabilities shared by selected provider models.
 type ProviderFeatures struct {
-	Thinking *ThinkingConfig `json:"thinking,omitempty"`
+	Thinking      *ThinkingConfig      `json:"thinking,omitempty"`
+	ClearThinking *ThinkingClearConfig `json:"clear_thinking,omitempty"`
 }
 
 // ModelThinking contains the resolved thinking defaults for one model.
@@ -237,8 +238,10 @@ func NewProviderManager(dirPath string) (*ProviderManager, error) {
 			if provider.Features.Thinking != nil && modelNameHasPrefix(model.Name, provider.Features.Thinking.SupportedModels) {
 				model.Thinking = &ModelThinking{
 					DefaultValue: provider.Features.Thinking.DefaultValue,
-					ClearContent: provider.Features.Thinking.Clear.DefaultValue,
 				}
+			}
+			if provider.Features.ClearThinking != nil && model.Thinking != nil && modelNameHasPrefix(model.Name, provider.Features.ClearThinking.SupportedModels) {
+				model.Thinking.ClearContent = provider.Features.ClearThinking.DefaultValue
 			}
 			model.ModelTypeMap = make(map[string]bool)
 			for _, modelType := range model.ModelTypes {

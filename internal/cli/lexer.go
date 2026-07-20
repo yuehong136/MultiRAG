@@ -273,6 +273,8 @@ func (l *Lexer) lookupIdent(ident string) Token {
 		return Token{Type: TokenGenerate, Value: ident}
 	case "AVAILABLE":
 		return Token{Type: TokenAvailable, Value: ident}
+	case "SUPPORTED":
+		return Token{Type: TokenSupported, Value: ident}
 	case "MODEL":
 		return Token{Type: TokenModel, Value: ident}
 	case "MODELS":
@@ -289,6 +291,8 @@ func (l *Lexer) lookupIdent(ident string) Token {
 		return Token{Type: TokenChat, Value: ident}
 	case "THINK":
 		return Token{Type: TokenThink, Value: ident}
+	case "STREAM":
+		return Token{Type: TokenStream, Value: ident}
 	case "FILES":
 		return Token{Type: TokenFiles, Value: ident}
 	case "AS":

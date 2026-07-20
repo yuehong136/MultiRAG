@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -32,15 +33,39 @@ func TestZhipuAIChatUsesConfiguredRegionURL(t *testing.T) {
 
 	response, err := model.Chat(
 		&modelName,
-		&apiKey,
 		&message,
-		&ChatConfig{Region: &region},
+		&APIConfig{APIKey: &apiKey, Region: &region},
+		&ChatConfig{},
 	)
 	if err != nil {
 		t.Fatalf("Chat() error = %v", err)
 	}
-	if response != "regional response" {
-		t.Fatalf("Chat() response = %q", response)
+	if response.Answer == nil || *response.Answer != "regional response" {
+		t.Fatalf("Chat() response = %#v", response)
+	}
+}
+
+func TestZhipuAIChatReturnsThinkingContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		if thinking, ok := body["thinking"].(map[string]interface{}); !ok || thinking["type"] != "enabled" {
+			t.Errorf("thinking = %#v", body["thinking"])
+		}
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"answer","reasoning_content":"\nreason"}}]}`)
+	}))
+	t.Cleanup(server.Close)
+
+	apiKey, modelName, message, thinking := "key", "glm-test", "hello", true
+	model := NewZhipuAIModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions"})
+	response, err := model.Chat(&modelName, &message, &APIConfig{APIKey: &apiKey}, &ChatConfig{Thinking: &thinking})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if response.Answer == nil || *response.Answer != "answer" || response.ReasoningContent == nil || *response.ReasoningContent != "reason" {
+		t.Fatalf("response = %#v", response)
 	}
 }
 
@@ -67,9 +92,9 @@ func TestZhipuAIEmbeddingUsesConfiguredRegionURL(t *testing.T) {
 
 	embeddings, err := model.EncodeToEmbedding(
 		&modelName,
-		&apiKey,
 		[]string{"hello"},
-		&EmbeddingConfig{Region: &region},
+		&APIConfig{APIKey: &apiKey, Region: &region},
+		&EmbeddingConfig{},
 	)
 	if err != nil {
 		t.Fatalf("EncodeToEmbedding() error = %v", err)
@@ -111,9 +136,9 @@ func TestZhipuAIStreamUsesConfiguredRegionURL(t *testing.T) {
 
 	err := model.ChatStreamlyWithSender(
 		&modelName,
-		&apiKey,
 		&message,
-		&ChatConfig{Region: &region, Stream: &stream},
+		&APIConfig{APIKey: &apiKey, Region: &region},
+		&ChatConfig{Stream: &stream},
 		sender,
 	)
 	if err != nil {
@@ -136,9 +161,9 @@ func TestZhipuAIRejectsUnknownRegion(t *testing.T) {
 
 	_, err := model.Chat(
 		&modelName,
-		&apiKey,
 		&message,
-		&ChatConfig{Region: &region},
+		&APIConfig{APIKey: &apiKey, Region: &region},
+		&ChatConfig{},
 	)
 	if err == nil || !strings.Contains(err.Error(), `region "missing"`) {
 		t.Fatalf("Chat() error = %v", err)

@@ -75,6 +75,7 @@ const (
 	TokenTokens
 	TokenGenerate
 	TokenAvailable
+	TokenSupported
 	TokenModel
 	TokenModels
 	TokenProvider
@@ -82,6 +83,7 @@ const (
 	TokenDefault
 	TokenChats
 	TokenChat
+	TokenStream
 	TokenFiles
 	TokenAs
 	TokenParse

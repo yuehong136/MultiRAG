@@ -155,6 +155,8 @@ func (c *MultiRAGClient) ExecuteAdminCommand(cmd *Command) (ResponseIf, error) {
 		return c.ShowProvider(cmd)
 	case "list_provider_models":
 		return c.ListModels(cmd)
+	case "list_supported_models":
+		return c.ListSupportedModels(cmd)
 	case "list_instance_models":
 		return c.ListInstanceModels(cmd)
 	case "show_model":
@@ -201,6 +203,8 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 		return c.ShowProvider(cmd)
 	case "list_provider_models":
 		return c.ListModels(cmd)
+	case "list_supported_models":
+		return c.ListSupportedModels(cmd)
 	case "list_instance_models":
 		return c.ListInstanceModels(cmd)
 	case "show_model":
@@ -228,8 +232,6 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 	case "disable_model":
 		return c.EnableOrDisableModel(cmd, "disable")
 	case "chat_to_model":
-		return c.ChatToModel(cmd)
-	case "think_chat_to_model":
 		return c.ChatToModel(cmd)
 	case "use_model":
 		return c.UseModel(cmd)

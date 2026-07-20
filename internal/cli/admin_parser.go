@@ -70,6 +70,8 @@ func (p *Parser) parseAdminListCommand() (*Command, error) {
 		return p.parseCommonListProviders()
 	case TokenModels:
 		return p.parseListModelsOfProvider()
+	case TokenSupported:
+		return p.parseListModelsOfProvider()
 	default:
 		return nil, fmt.Errorf("unknown LIST target: %s", p.curToken.Value)
 	}

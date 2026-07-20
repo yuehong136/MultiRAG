@@ -182,6 +182,8 @@ func (p *Parser) parseUserCommand() (*Command, error) {
 		return p.parseEnableCommand()
 	case TokenDisable:
 		return p.parseDisableCommand()
+	case TokenStream:
+		return p.parseStreamCommand()
 	case TokenChat:
 		return p.parseChatCommand()
 	case TokenThink:
@@ -427,6 +429,30 @@ func (p *Parser) parseCommonListProviders() (*Command, error) {
 //	LIST MODELS FROM '<provider>';
 //	LIST MODELS FROM '<provider>' '<instance>';
 func (p *Parser) parseListModelsOfProvider() (*Command, error) {
+	if p.curToken.Type == TokenSupported {
+		p.nextToken()
+		if p.curToken.Type != TokenModels {
+			return nil, fmt.Errorf("expected MODELS")
+		}
+		p.nextToken()
+		if p.curToken.Type != TokenFrom {
+			return nil, fmt.Errorf("expected FROM")
+		}
+		p.nextToken()
+		providerName, err := p.parseQuotedString()
+		if err != nil {
+			return nil, err
+		}
+		p.nextToken()
+		instanceName, err := p.parseQuotedString()
+		if err != nil {
+			return nil, err
+		}
+		cmd := NewCommand("list_supported_models")
+		cmd.Params["provider_name"] = providerName
+		cmd.Params["instance_name"] = instanceName
+		return cmd, nil
+	}
 	if p.curToken.Type != TokenModels {
 		return nil, fmt.Errorf("expected MODELS")
 	}

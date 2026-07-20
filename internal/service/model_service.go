@@ -256,6 +256,35 @@ func (m *ModelProviderService) DeleteModelProvider(providerName, userID string) 
 	return common.CodeSuccess, nil
 }
 
+func (m *ModelProviderService) ListSupportedModels(providerName, instanceName, userID string) ([]string, error) {
+	tenants, err := m.userTenantDAO.GetByUserIDAndRole(userID, "owner")
+	if err != nil {
+		return nil, errors.New("fail to get tenant")
+	}
+	if len(tenants) == 0 {
+		return nil, errors.New("user has no tenants")
+	}
+
+	provider, err := m.modelProviderDAO.GetByTenantIDAndProviderName(tenants[0].TenantID, providerName)
+	if err != nil {
+		return nil, err
+	}
+	instance, err := m.modelInstanceDAO.GetByProviderIDAndInstanceName(provider.ID, instanceName)
+	if err != nil {
+		return nil, err
+	}
+	providerInfo := dao.GetModelProviderManager().FindProvider(providerName)
+	if providerInfo == nil {
+		return nil, fmt.Errorf("provider %s not found", providerName)
+	}
+	region, err := decodeModelInstanceRegion(instance.Extra)
+	if err != nil {
+		return nil, err
+	}
+	apiConfig := &modelModule.APIConfig{APIKey: &instance.APIKey, Region: &region}
+	return providerInfo.ModelDriver.ListModels(apiConfig)
+}
+
 func (m *ModelProviderService) CreateProviderInstance(providerName, instanceName, apiKey, userID, region string) (common.ErrorCode, error) {
 	// Get tenant ID from user
 	tenants, err := m.userTenantDAO.GetByUserIDAndRole(userID, "owner")
@@ -547,7 +576,7 @@ func (m *ModelProviderService) UpdateModelStatus(providerName, instanceName, mod
 	return common.CodeSuccess, nil
 }
 
-func (m *ModelProviderService) ChatToModel(providerName, instanceName, modelName, userID, message string, modelConfig *modelModule.ChatConfig) (*string, common.ErrorCode, error) {
+func (m *ModelProviderService) ChatToModel(providerName, instanceName, modelName, userID, message string, apiConfig *modelModule.APIConfig, modelConfig *modelModule.ChatConfig) (*modelModule.ChatResponse, common.ErrorCode, error) {
 
 	// Get tenant ID from user
 	tenants, err := m.userTenantDAO.GetByUserIDAndRole(userID, "owner")
@@ -587,18 +616,18 @@ func (m *ModelProviderService) ChatToModel(providerName, instanceName, modelName
 		if err != nil {
 			return nil, common.CodeServerError, err
 		}
-		if modelConfig == nil {
-			modelConfig = &modelModule.ChatConfig{}
+		if apiConfig == nil {
+			apiConfig = &modelModule.APIConfig{}
 		}
-		modelConfig.Region = &region
+		apiConfig.Region = &region
+		apiConfig.APIKey = &instance.APIKey
 
-		var response string
-		response, err = providerInfo.ModelDriver.Chat(&modelName, &instance.APIKey, &message, modelConfig)
+		response, err := providerInfo.ModelDriver.Chat(&modelName, &message, apiConfig, modelConfig)
 		if err != nil {
 			return nil, common.CodeServerError, err
 		}
 
-		return &response, common.CodeSuccess, nil
+		return response, common.CodeSuccess, nil
 	}
 
 	return nil, common.CodeServerError, errors.New("model is disabled")
@@ -676,7 +705,7 @@ func (m *ModelProviderService) ChatToModelStream(providerName, instanceName, mod
 }
 
 // ChatToModelStreamWithSender streams chat response directly via sender function (best performance, no channel)
-func (m *ModelProviderService) ChatToModelStreamWithSender(providerName, instanceName, modelName, userID, message string, modelConfig *modelModule.ChatConfig, sender func(*string, *string) error) common.ErrorCode {
+func (m *ModelProviderService) ChatToModelStreamWithSender(providerName, instanceName, modelName, userID, message string, apiConfig *modelModule.APIConfig, modelConfig *modelModule.ChatConfig, sender func(*string, *string) error) common.ErrorCode {
 	// Get tenant ID from user
 	tenants, err := m.userTenantDAO.GetByUserIDAndRole(userID, "owner")
 	if err != nil {
@@ -715,13 +744,14 @@ func (m *ModelProviderService) ChatToModelStreamWithSender(providerName, instanc
 		if err != nil {
 			return common.CodeServerError
 		}
-		if modelConfig == nil {
-			modelConfig = &modelModule.ChatConfig{}
+		if apiConfig == nil {
+			apiConfig = &modelModule.APIConfig{}
 		}
-		modelConfig.Region = &region
+		apiConfig.Region = &region
+		apiConfig.APIKey = &instance.APIKey
 
 		// Direct call with sender function
-		err = providerInfo.ModelDriver.ChatStreamlyWithSender(&modelName, &instance.APIKey, &message, modelConfig, sender)
+		err = providerInfo.ModelDriver.ChatStreamlyWithSender(&modelName, &message, apiConfig, modelConfig, sender)
 		if err != nil {
 			return common.CodeServerError
 		}
