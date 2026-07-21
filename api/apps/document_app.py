@@ -1374,10 +1374,18 @@ def list_docs(
         return construct_error_response(e)
 
 
-@router.post("/filter", summary="获取文档过滤器", response_description="成功获取文档过滤器")
+@router.post(
+    "/filter",
+    summary="获取文档过滤器（已弃用）",
+    response_description="成功获取文档过滤器",
+    deprecated=True,
+)
 def get_filter(request_body: FilterRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取指定知识库的文档过滤器统计信息。
+
+    > **已弃用**：仅为兼容存量调用保留。新调用方请使用
+    > `GET /api/v1/datasets/{dataset_id}/documents?type=filter`。
 
     该接口根据提供的过滤条件，返回知识库中文档的统计信息，包括文件后缀分布和运行状态分布。
 

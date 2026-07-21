@@ -235,6 +235,7 @@ async def list_documents(
     page_size: int = Query(30, ge=1, le=100),
     orderby: str = Query("create_time"),
     desc: bool = Query(True),
+    list_type: str | None = Query(None, alias="type", description="filter=返回过滤面板聚合统计（忽略分页与元数据参数）"),
     keywords: str | None = Query(None),
     document_id: str | None = Query(None, alias="id"),
     document_name: str | None = Query(None, alias="name"),
@@ -250,7 +251,7 @@ async def list_documents(
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
 ) -> Response:
-    """统一 web 会话与 API token 的 RESTful 文档列表入口。"""
+    """统一 web 会话与 API token 的 RESTful 文档列表入口；``type=filter`` 返回过滤面板聚合统计。"""
     file_types = file_types or []
     invalid_types = {file_type for file_type in file_types if file_type not in VALID_FILE_TYPES}
     if invalid_types:
@@ -282,6 +283,20 @@ async def list_documents(
     def _list(sync_db: Session) -> Response:
         if not KnowledgebaseService.accessible(sync_db, kb_id=dataset_id, user_id=tenant_id):
             return get_error_data_result(retmsg=f"You don't own the dataset {dataset_id}.")
+
+        if list_type == "filter":
+            try:
+                docs_filter, filter_total = DocumentService.get_filter_by_kb_id(
+                    sync_db,
+                    dataset_id,
+                    keywords,
+                    converted_statuses,
+                    file_types,
+                    suffix or [],
+                )
+                return get_result(data={"total": filter_total, "filter": docs_filter})
+            except Exception as exc:
+                return server_error_response(exc)
 
         if document_id and not DocumentService.query(sync_db, id=document_id, kb_id=dataset_id):
             return get_error_data_result(retmsg=f"You don't own the document {document_id}.")

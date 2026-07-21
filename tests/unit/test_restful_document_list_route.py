@@ -197,6 +197,76 @@ def test_list_documents_denies_inaccessible_dataset(client, monkeypatch):
     _assert_sync_facade(sessions)
 
 
+def test_list_documents_type_filter_aggregates_via_sql(client, monkeypatch):
+    """type=filter 短路进 get_filter_by_kb_id（SQL 全量聚合），不跑分页文档查询。"""
+    sessions: list[object] = []
+    filter_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        KnowledgebaseService,
+        "accessible",
+        classmethod(lambda cls, db, kb_id, user_id: sessions.append(db) or True),
+    )
+
+    def _fail_get_by_kb_id(cls, *args, **kwargs):
+        raise AssertionError("filter mode must not run the paginated doc query")
+
+    monkeypatch.setattr(DocumentService, "get_by_kb_id", classmethod(_fail_get_by_kb_id))
+
+    def _get_filter_by_kb_id(cls, db, kb_id, keywords, run_status, types, suffix):
+        sessions.append(db)
+        filter_calls.append({"kb_id": kb_id, "keywords": keywords, "run_status": run_status, "types": types, "suffix": suffix})
+        return {"suffix": {"pdf": 2}, "run_status": {"3": 2}, "metadata": {"empty_metadata": {"true": 0}}}, 2
+
+    monkeypatch.setattr(DocumentService, "get_filter_by_kb_id", classmethod(_get_filter_by_kb_id))
+
+    response = client.get(
+        _PATH,
+        params=[
+            ("type", "filter"),
+            ("page", "5"),
+            ("page_size", "1"),
+            ("keywords", "report"),
+            ("run_status", "DONE"),
+            ("types", "pdf"),
+            ("suffix", "pdf"),
+        ],
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["code"] == 0
+    assert body["data"] == {
+        "total": 2,
+        "filter": {"suffix": {"pdf": 2}, "run_status": {"3": 2}, "metadata": {"empty_metadata": {"true": 0}}},
+    }
+    assert filter_calls == [{"kb_id": "kb1", "keywords": "report", "run_status": ["3"], "types": ["pdf"], "suffix": ["pdf"]}]
+    _assert_sync_facade(sessions)
+
+
+def test_list_documents_type_filter_rejects_invalid_status_before_db(client, monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda cls, *args, **kwargs: calls.append("db") or True))
+
+    body = client.get(_PATH, params={"type": "filter", "run_status": "BOGUS"}).json()
+
+    assert body["code"] == int(RetCode.DATA_ERROR)
+    assert body["message"] == "Invalid filter run status conditions: BOGUS"
+    assert calls == []
+
+
+def test_legacy_document_filter_post_is_deprecated(client):
+    legacy_routes = []
+    for context in iter_route_contexts(client.app.routes):
+        route = context.original_route
+        if isinstance(route, APIRoute) and context.path == "/v1/document/filter" and "POST" in context.methods:
+            legacy_routes.append(route)
+
+    assert len(legacy_routes) == 1
+    assert legacy_routes[0].endpoint.__module__ == "api.apps.document"
+    assert legacy_routes[0].deprecated is True
+    assert client.app.openapi()["paths"]["/v1/document/filter"]["post"]["deprecated"] is True
+
+
 def test_document_list_has_one_restful_route_and_deprecated_legacy_post(client):
     restful_routes = []
     legacy_routes = []
