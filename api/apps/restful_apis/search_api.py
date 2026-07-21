@@ -6,16 +6,19 @@ Routes are mounted under ``/api/v1`` by ``api.apps.register_page``:
     GET    /searches/{search_id}
     PUT    /searches/{search_id}
     DELETE /searches/{search_id}
+    POST   /searches/{search_id}/completions
 
 The legacy ``/v1/search/*`` endpoints remain in ``api/apps/search_app.py``.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -23,6 +26,8 @@ from sqlalchemy.orm import Session
 from api.constants import DATASET_NAME_LIMIT
 from api.db.db_models import get_async_db
 from api.db.services import duplicate_name
+from api.db.services.dialog_service import async_ask
+from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.search_service import SearchService
 from api.db.services.user_service import TenantService, UserTenantService
 from api.utils.api_utils import async_current_tenant_id, get_error_data_result, get_result
@@ -44,6 +49,11 @@ class UpdateSearchRequest(BaseModel):
     search_config: Any = Field(..., description="Search config patch")
     description: str | None = None
     avatar: str | None = None
+
+
+class SearchCompletionRequest(BaseModel):
+    question: str
+    kb_ids: list[str] | None = None
 
 
 def _respond(success: bool, result: Any, retcode: RetCode | None = None):
@@ -274,3 +284,51 @@ async def delete_search(
     except Exception as e:
         logger.exception(e)
         return get_error_data_result(retmsg="Internal server error")
+
+
+@router.post("/searches/{search_id}/completions", summary="Search completion")
+async def completions(
+    search_id: str,
+    request: SearchCompletionRequest,
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_current_tenant_id),
+):
+    """基于 search app 配置的检索问答(SSE 流式)。kb_ids 优先取 search_config,body 兜底。"""
+    if not await db.run_sync(lambda s: SearchService.accessible4deletion(s, search_id, tenant_id)):  # TODO(async-phase4)
+        return _respond(False, "No authorization.", RetCode.AUTHENTICATION_ERROR)
+
+    search_app = await db.run_sync(lambda s: SearchService.get_detail(s, search_id))  # TODO(async-phase4)
+    if not search_app:
+        return get_error_data_result(retmsg=f"Cannot find search {search_id}")
+
+    search_config = search_app.get("search_config", {})
+    kb_ids = search_config.get("kb_ids") or request.kb_ids or []
+    if not kb_ids:
+        return get_error_data_result(retmsg="`kb_ids` is required.")
+
+    # kb 归属校验,防止经 body 传任意 kb_ids 越权检索
+    for kb_id in kb_ids:
+        if not await db.run_sync(lambda s, _kb_id=kb_id: KnowledgebaseService.accessible(s, kb_id=_kb_id, user_id=tenant_id)):  # TODO(async-phase4)
+            return get_error_data_result(retmsg=f"You don't own the dataset {kb_id}")
+
+    async def stream_response():
+        try:
+            async for ans in async_ask(db, request.question, kb_ids, tenant_id, search_config=search_config):
+                yield "data:" + json.dumps({"code": 0, "message": "", "data": ans}, ensure_ascii=False) + "\n\n"
+        except Exception as e:
+            yield (
+                "data:"
+                + json.dumps(
+                    {"code": 500, "message": str(e), "data": {"answer": "**ERROR**: " + str(e), "reference": []}},
+                    ensure_ascii=False,
+                )
+                + "\n\n"
+            )
+        yield "data:" + json.dumps({"code": 0, "message": "", "data": True}, ensure_ascii=False) + "\n\n"
+
+    resp = StreamingResponse(stream_response(), media_type="text/event-stream")
+    resp.headers["Cache-control"] = "no-cache"
+    resp.headers["Connection"] = "keep-alive"
+    resp.headers["X-Accel-Buffering"] = "no"
+    resp.headers["Content-Type"] = "text/event-stream; charset=utf-8"
+    return resp

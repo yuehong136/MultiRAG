@@ -60,7 +60,7 @@ def test_sdk_related_questions_shape(auth_client, rq_stubs):
 
 
 def test_chat_api_related_questions_shape(auth_client, rq_stubs):
-    resp = auth_client.post("/api/v1/chats/related_questions", json={"question": "kw", "search_id": "s1"})
+    resp = auth_client.post("/api/v1/chat/recommendation", json={"question": "kw", "search_id": "s1"})
 
     assert resp.status_code == 200
     body = resp.json()
@@ -92,7 +92,7 @@ def test_related_questions_bundles_strip_facade(auth_client, rq_stubs):
     """四路由的 LLMBundle 全部经 run_sync 构造后剥离 facade（db is None，AGENTS.md 规约）。"""
     for path, payload in [
         ("/api/v1/sessions/related_questions", {"question": "kw"}),
-        ("/api/v1/chats/related_questions", {"question": "kw", "search_id": "s1"}),
+        ("/api/v1/chat/recommendation", {"question": "kw", "search_id": "s1"}),
         ("/api/v1/searchbots/related_questions", {"question": "kw", "search_id": "s1"}),
         ("/v1/conversation/related_questions", {"question": "kw", "search_id": "s1"}),
     ]:

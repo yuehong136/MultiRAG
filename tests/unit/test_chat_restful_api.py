@@ -377,14 +377,14 @@ def test_update_session_rejects_message_and_reference_changes(client, monkeypatc
     monkeypatch.setattr(chat_api.DialogService, "query", lambda _db, **_kw: [Obj(id="chat-1")])
     monkeypatch.setattr(chat_api.ConversationService, "query", lambda *_args, **_kwargs: [Obj(id="session-1")])
 
-    messages = client.put("/api/v1/chats/chat-1/sessions/session-1", json={"messages": []}).json()
+    messages = client.patch("/api/v1/chats/chat-1/sessions/session-1", json={"messages": []}).json()
     assert messages["message"] == "`messages` cannot be changed."
 
-    reference = client.put("/api/v1/chats/chat-1/sessions/session-1", json={"reference": []}).json()
+    reference = client.patch("/api/v1/chats/chat-1/sessions/session-1", json={"reference": []}).json()
     assert reference["message"] == "`reference` cannot be changed."
 
 
-def test_session_completion_non_stream_uses_session_rest_path(monkeypatch):
+def test_session_completion_non_stream_reads_ids_from_body(monkeypatch):
     monkeypatch.setattr(chat_api, "_owned_chat_exists", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(chat_api, "get_uuid", lambda: "msg-1")
     conv = Obj(id="session-1", dialog_id="chat-1", message=[], reference=[])
@@ -421,12 +421,15 @@ def test_session_completion_non_stream_uses_session_rest_path(monkeypatch):
     class RequestStub:
         @staticmethod
         def model_dump(exclude_unset=True):
-            return {"messages": [{"role": "user", "content": "hi"}], "stream": False}
+            return {
+                "chat_id": "chat-1",
+                "session_id": "session-1",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+            }
 
     response = asyncio.run(
         chat_api.session_completion(
-            "chat-1",
-            "session-1",
             RequestStub(),
             db=db_stub,
             tenant_id="tenant-1",
@@ -436,6 +439,7 @@ def test_session_completion_non_stream_uses_session_rest_path(monkeypatch):
 
     assert body["data"]["answer"] == "ok"
     assert body["data"]["session_id"] == "session-1"
+    assert body["data"]["chat_id"] == "chat-1"
     assert body["data"]["id"] == "msg-1"
     assert updates
     assert updates[0]["message"][-1]["content"] == "ok"
@@ -475,7 +479,7 @@ def test_related_questions_uses_search_chat_config(monkeypatch, async_db):
     monkeypatch.setattr(chat_api, "LLMBundle", FakeLLMBundle)
 
     response = asyncio.run(
-        chat_api.related_questions(
+        chat_api.recommendation(
             chat_api.RelatedQuestionsRequest(question="hybrid search", search_id="search-1"),
             db=async_db,
             tenant_id="tenant-1",
@@ -491,14 +495,24 @@ def test_related_questions_uses_search_chat_config(monkeypatch, async_db):
     assert body["data"] == ["first term", "second term"]
 
 
-def test_chat_restful_routes_cover_ragflow_b7daf628_static_endpoints():
+def test_chat_restful_routes_cover_ragflow_6baf74af_endpoints():
     routes = {(route.path, method) for route in chat_api.router.routes for method in getattr(route, "methods", set())}
 
-    assert ("/chats/tts", "POST") in routes
-    assert ("/chats/transcriptions", "POST") in routes
-    assert ("/chats/mindmap", "POST") in routes
-    assert ("/chats/related_questions", "POST") in routes
-    assert ("/chats/ask", "POST") in routes
+    assert ("/chat/audio/speech", "POST") in routes
+    assert ("/chat/audio/transcription", "POST") in routes
+    assert ("/chat/mindmap", "POST") in routes
+    assert ("/chat/recommendation", "POST") in routes
+    assert ("/chat/completions", "POST") in routes
+    assert ("/chats/{chat_id}/sessions/{session_id}", "PATCH") in routes
+
+    # 旧路由随上游 6baf74af 直接删除(restful 面零消费方,不留 deprecated)
+    assert ("/chats/tts", "POST") not in routes
+    assert ("/chats/transcriptions", "POST") not in routes
+    assert ("/chats/mindmap", "POST") not in routes
+    assert ("/chats/related_questions", "POST") not in routes
+    assert ("/chats/ask", "POST") not in routes
+    assert ("/chats/{chat_id}/sessions/{session_id}", "PUT") not in routes
+    assert ("/chats/{chat_id}/sessions/{session_id}/completions", "POST") not in routes
 
 
 def test_legacy_conversation_app_remains_deprecated_for_compatibility():

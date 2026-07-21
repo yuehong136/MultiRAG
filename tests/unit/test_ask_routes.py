@@ -1,10 +1,11 @@
-"""async_ask 服务与四条 ask 路由契约（§11 Phase 2 任务 7）。
+"""async_ask 服务与 ask 类路由契约（§11 Phase 2 任务 7）。
 
 服务层：AsyncSession 化后 bundles 剥离 facade；citation finalize（decorate_answer）
 经 asyncio.to_thread 在工作线程执行（非事件循环线程）；非空 retrieval 桩覆盖
 citation 真分支（空 Milvus 冒烟只走空分支，不足以验收）。
-路由层：REST/SDK 的 code/message 帧与 conversation 的 legacy retcode/retmsg 帧
-两套 SSE 契约分别钉住。
+路由层：REST（/searches/{id}/completions，上游 6baf74af 由 /chats/ask 迁入）/SDK
+的 code/message 帧与 conversation 的 legacy retcode/retmsg 帧两套 SSE 契约分别钉住；
+search completions 另钉 kb_ids 兜底、归属校验与鉴权分支。
 """
 
 import json
@@ -116,11 +117,21 @@ def _fake_async_ask(answers):
 @pytest.fixture
 def ask_route_stubs(monkeypatch, client):
     answers = [{"answer": "你好", "reference": {}, "final": False}]
-    for mod_name in ("api.apps.sdk.session", "api.apps.restful_apis.chat", "api.apps.conversation"):
+    for mod_name in ("api.apps.sdk.session", "api.apps.restful_apis.search", "api.apps.conversation"):
         monkeypatch.setattr(_route_module(mod_name), "async_ask", _fake_async_ask(answers))
     kb = _fake_kb()
-    monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda cls, s, kb_id, tid: True))
+    monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda cls, s, *args, **kwargs: True))
     monkeypatch.setattr(KnowledgebaseService, "query", classmethod(lambda cls, s, **kw: [kb]))
+
+
+@pytest.fixture
+def search_app_stubs(monkeypatch):
+    from api.db.services.search_service import SearchService
+
+    detail = {"id": "s1", "search_config": {"kb_ids": ["kb1"]}}
+    monkeypatch.setattr(SearchService, "accessible4deletion", classmethod(lambda cls, s, sid, uid: True))
+    monkeypatch.setattr(SearchService, "get_detail", classmethod(lambda cls, s, sid: dict(detail)))
+    return detail
 
 
 @pytest.fixture
@@ -134,14 +145,54 @@ def auth_client(client):
     return client
 
 
-def test_chat_api_ask_sse_code_frames(auth_client, ask_route_stubs):
-    resp = auth_client.post("/api/v1/chats/ask", json={"question": "q", "kb_ids": ["kb1"]})
+def test_search_completions_sse_code_frames(auth_client, ask_route_stubs, search_app_stubs):
+    """REST 检索问答已随上游 6baf74af 从 /chats/ask 迁至 /searches/{id}/completions。"""
+    resp = auth_client.post("/api/v1/searches/s1/completions", json={"question": "q"})
 
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/event-stream")
     frames = _sse_frames(resp.text)
     assert frames[0] == {"code": 0, "message": "", "data": {"answer": "你好", "reference": {}, "final": False}}
     assert frames[-1] == {"code": 0, "message": "", "data": True}
+
+
+def test_search_completions_falls_back_to_body_kb_ids(auth_client, ask_route_stubs, search_app_stubs):
+    search_app_stubs["search_config"] = {}
+
+    resp = auth_client.post("/api/v1/searches/s1/completions", json={"question": "q", "kb_ids": ["kb1"]})
+
+    frames = _sse_frames(resp.text)
+    assert frames[-1] == {"code": 0, "message": "", "data": True}
+
+
+def test_search_completions_requires_kb_ids(auth_client, ask_route_stubs, search_app_stubs):
+    search_app_stubs["search_config"] = {}
+
+    body = auth_client.post("/api/v1/searches/s1/completions", json={"question": "q"}).json()
+
+    assert body["code"] != 0
+    assert body["message"] == "`kb_ids` is required."
+
+
+def test_search_completions_rejects_foreign_kb(auth_client, ask_route_stubs, search_app_stubs, monkeypatch):
+    monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda cls, s, *args, **kwargs: False))
+
+    body = auth_client.post("/api/v1/searches/s1/completions", json={"question": "q"}).json()
+
+    assert body["code"] != 0
+    assert body["message"] == "You don't own the dataset kb1"
+
+
+def test_search_completions_requires_search_ownership(auth_client, ask_route_stubs, search_app_stubs, monkeypatch):
+    from api.db.services.search_service import SearchService
+    from common.constants import RetCode
+
+    monkeypatch.setattr(SearchService, "accessible4deletion", classmethod(lambda cls, s, sid, uid: False))
+
+    body = auth_client.post("/api/v1/searches/s1/completions", json={"question": "q"}).json()
+
+    assert body["code"] == int(RetCode.AUTHENTICATION_ERROR)
+    assert body["message"] == "No authorization."
 
 
 def test_sdk_ask_about_sse_code_frames(auth_client, ask_route_stubs):

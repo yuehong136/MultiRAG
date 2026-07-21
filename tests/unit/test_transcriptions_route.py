@@ -48,7 +48,7 @@ def asr_stubs(monkeypatch):
 
 
 def _post_audio(client, name: str = "a.wav", stream: str | None = None):
-    url = "/api/v1/chats/transcriptions" + (f"?stream={stream}" if stream else "")
+    url = "/api/v1/chat/audio/transcription" + (f"?stream={stream}" if stream else "")
     return client.post(url, files={"file": (name, b"RIFFfakewav", "audio/wav")})
 
 

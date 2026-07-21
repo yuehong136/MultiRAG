@@ -1683,10 +1683,14 @@ class MultiRAGClient:
         dialog_id = self._get_chat_id_by_name(chat_name)
         if dialog_id is None:
             return
-        payload = {"messages": [{"role": "user", "content": message}]}
+        payload = {
+            "chat_id": dialog_id,
+            "session_id": session_id,
+            "messages": [{"role": "user", "content": message}],
+        }
         response = self.http_client.request(
             "POST",
-            f"chats/{dialog_id}/sessions/{session_id}/completions",
+            "chat/completions",
             json_body=payload,
             use_api_base=True,
             auth_kind="web",

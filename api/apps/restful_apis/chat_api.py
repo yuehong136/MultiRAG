@@ -13,6 +13,7 @@ import os
 import re
 import tempfile
 from copy import deepcopy
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Query, Response, UploadFile
@@ -26,7 +27,7 @@ from api.db.db_models import get_async_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.chunk_feedback_service import ChunkFeedbackService
 from api.db.services.conversation_service import ConversationService, structure_answer
-from api.db.services.dialog_service import DialogService, async_ask, async_chat, gen_mindmap
+from api.db.services.dialog_service import DialogService, async_chat, gen_mindmap
 from api.db.services.knowledgebase_service import EmbeddingModelMismatchError, KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
@@ -60,6 +61,15 @@ _DEFAULT_PROMPT_CONFIG = {
     "tts": False,
     "refine_multiturn": True,
 }
+_DEFAULT_DIRECT_CHAT_PROMPT_CONFIG = {
+    "system": "",
+    "prologue": "",
+    "parameters": [],
+    "empty_response": "",
+    "quote": False,
+    "tts": False,
+    "refine_multiturn": True,
+}
 _DEFAULT_RERANK_MODELS = {"BAAI/bge-reranker-v2-m3", "maidalun1020/bce-reranker-base_v1"}
 _READONLY_FIELDS = {"id", "tenant_id", "created_by", "create_time", "create_date", "update_time", "update_date"}
 _PERSISTED_FIELDS = {column.name for column in DialogService.model.__table__.columns}
@@ -79,7 +89,6 @@ class CreateSessionRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     name: str | None = "New session"
-    user_id: str | None = None
 
 
 class UpdateSessionRequest(BaseModel):
@@ -97,12 +106,6 @@ class TTSRequest(BaseModel):
     text: str
 
 
-class AskRequest(BaseModel):
-    question: str
-    kb_ids: list[str]
-    search_id: str | None = ""
-
-
 class MindmapRequest(BaseModel):
     question: str
     kb_ids: list[str]
@@ -113,6 +116,8 @@ class SessionCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     messages: list[dict[str, Any]]
+    chat_id: str | None = None
+    session_id: str | None = None
     stream: bool | None = True
     internet: bool | None = None
 
@@ -458,6 +463,54 @@ def _owned_chat_exists(db: Session, tenant_id: str, chat_id: str) -> bool:
     return bool(DialogService.query(db, tenant_id=tenant_id, id=chat_id, status=StatusEnum.VALID.value))
 
 
+def _build_default_completion_dialog(db: Session, tenant_id: str, llm_id: str) -> SimpleNamespace:
+    """直连聊天(无 chat_id)用的临时 dialog。
+
+    未显式传 llm_id 时回退租户默认 chat 模型:我方模型解析链拒绝空名,
+    须在此显式取 tenant 默认(上游在解析层隐式回退,语义一致)。
+    """
+    tenant_llm_id = None
+    if not llm_id:
+        tenant = TenantService.get_by_id(db, tenant_id)
+        if not tenant:
+            raise LookupError("Tenant not found!")
+        llm_id = tenant.llm_id
+        tenant_llm_id = tenant.tenant_llm_id
+    return SimpleNamespace(
+        tenant_id=tenant_id,
+        llm_id=llm_id,
+        tenant_llm_id=tenant_llm_id,
+        llm_setting={},
+        prompt_config=deepcopy(_DEFAULT_DIRECT_CHAT_PROMPT_CONFIG),
+        kb_ids=[],
+        top_n=6,
+        top_k=1024,
+        rerank_id="",
+        similarity_threshold=0.1,
+        vector_similarity_weight=0.3,
+        meta_data_filter=None,
+        # 无 KB 聊天在我方走主管线(无 solo 回退),这两个字段也会被读到
+        search_mode=None,
+        tenant_rerank_id=None,
+    )
+
+
+def _create_session_for_completion(db: Session, chat_id: str, dialog: Any, user_id: str) -> Any:
+    conv = {
+        "id": get_uuid(),
+        "dialog_id": chat_id,
+        "name": "New session",
+        "message": [{"role": "assistant", "content": (dialog.prompt_config or {}).get("prologue", "")}],
+        "user_id": user_id,
+        "reference": [],
+    }
+    ConversationService.save(db, **conv)
+    saved = ConversationService.get_by_id(db, conv["id"])
+    if not saved:
+        raise LookupError("Fail to create a session!")
+    return saved
+
+
 @router.post("/chats", summary="Create chat")
 async def create_chat(
     request: ChatRequest,
@@ -660,7 +713,7 @@ async def bulk_delete_chats(
     return await db.run_sync(_bulk_delete)  # TODO(async-phase4)
 
 
-@router.post("/chats/tts", summary="Text to speech")
+@router.post("/chat/audio/speech", summary="Text to speech")
 async def tts(
     request: TTSRequest,
     db: AsyncSession = Depends(get_async_db),
@@ -697,8 +750,8 @@ async def tts(
     return resp
 
 
-@router.post("/chats/transcriptions", summary="Transcribe audio")
-async def transcriptions(
+@router.post("/chat/audio/transcription", summary="Transcribe audio")
+async def transcription(
     file: UploadFile = File(...),
     stream: str = "false",
     db: AsyncSession = Depends(get_async_db),
@@ -755,7 +808,7 @@ async def transcriptions(
                 logging.error("Failed to remove temp audio file: %s", str(e))
 
 
-@router.post("/chats/mindmap", summary="Generate mindmap")
+@router.post("/chat/mindmap", summary="Generate mindmap")
 async def mindmap(
     request: MindmapRequest,
     db: AsyncSession = Depends(get_async_db),
@@ -785,8 +838,8 @@ async def mindmap(
         return _error("Internal server error")
 
 
-@router.post("/chats/related_questions", summary="Generate related questions")
-async def related_questions(
+@router.post("/chat/recommendation", summary="Generate related questions")
+async def recommendation(
     request: RelatedQuestionsRequest,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
@@ -832,42 +885,6 @@ async def related_questions(
         return _error("Internal server error")
 
 
-@router.post("/chats/ask", summary="Ask over datasets")
-async def ask(
-    request: AskRequest,
-    db: AsyncSession = Depends(get_async_db),
-    tenant_id: str = Depends(async_current_tenant_id),
-):
-    req = request.model_dump()
-    search_id = req.get("search_id", "")
-    search_config = {}
-    if search_id:
-        if search_app := await db.run_sync(lambda s: SearchService.get_detail(s, search_id)):  # TODO(async-phase4)
-            search_config = search_app.get("search_config", {})
-
-    async def stream_response():
-        try:
-            async for ans in async_ask(db, req["question"], req["kb_ids"], tenant_id, search_config=search_config):
-                yield "data:" + json.dumps({"code": 0, "message": "", "data": ans}, ensure_ascii=False) + "\n\n"
-        except Exception as e:
-            yield (
-                "data:"
-                + json.dumps(
-                    {"code": 500, "message": str(e), "data": {"answer": "**ERROR**: " + str(e), "reference": []}},
-                    ensure_ascii=False,
-                )
-                + "\n\n"
-            )
-        yield "data:" + json.dumps({"code": 0, "message": "", "data": True}, ensure_ascii=False) + "\n\n"
-
-    resp = StreamingResponse(stream_response(), media_type="text/event-stream")
-    resp.headers["Cache-control"] = "no-cache"
-    resp.headers["Connection"] = "keep-alive"
-    resp.headers["X-Accel-Buffering"] = "no"
-    resp.headers["Content-Type"] = "text/event-stream; charset=utf-8"
-    return resp
-
-
 @router.post("/chats/{chat_id}/sessions", summary="Create chat session")
 async def create_session(
     chat_id: str,
@@ -895,7 +912,8 @@ async def create_session(
                 "dialog_id": chat_id,
                 "name": name,
                 "message": [{"role": "assistant", "content": (dialog.prompt_config or {}).get("prologue", "")}],
-                "user_id": req.get("user_id") or tenant_id,
+                # user_id 一律取认证身份,不收 body(会话归属可被伪造)
+                "user_id": tenant_id,
                 "reference": [],
             }
             ConversationService.save(s, **conv)
@@ -974,7 +992,7 @@ async def get_session(
     return await db.run_sync(_get)  # TODO(async-phase4)
 
 
-@router.put("/chats/{chat_id}/sessions/{session_id}", summary="Update chat session")
+@router.patch("/chats/{chat_id}/sessions/{session_id}", summary="Update chat session")
 async def update_session(
     chat_id: str,
     session_id: str,
@@ -1143,20 +1161,19 @@ async def update_message_feedback(
     return await db.run_sync(_feedback)  # TODO(async-phase4)
 
 
-@router.post(
-    "/chats/{chat_id}/sessions/{session_id}/completions",
-    summary="Complete chat session",
-)
+@router.post("/chat/completions", summary="Chat completion")
 async def session_completion(
-    chat_id: str,
-    session_id: str,
     request: SessionCompletionRequest,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
 ):
-    if not await db.run_sync(lambda s: _owned_chat_exists(s, tenant_id, chat_id)):  # TODO(async-phase4)
-        return _error("No authorization.", RetCode.AUTHENTICATION_ERROR)
+    """聊天补全统一入口。
 
+    - 无 chat_id:直连 LLM 聊天(临时默认 dialog,不落库);
+    - 有 chat_id 无 session_id:自动创建会话;
+    - 两者齐全:在既有会话上补全;
+    - 仅有 session_id:400。
+    """
     req = request.model_dump(exclude_unset=True)
     raw_messages = req.pop("messages", [])
     messages = []
@@ -1174,6 +1191,8 @@ async def session_completion(
         messages[-1]["id"] = get_uuid()
 
     message_id = messages[-1].get("id")
+    chat_id = req.pop("chat_id", "") or ""
+    session_id = req.pop("session_id", "") or ""
     chat_model_id = req.pop("llm_id", "")
     stream_mode = req.pop("stream", True)
 
@@ -1183,22 +1202,35 @@ async def session_completion(
         if config:
             chat_model_config[model_config] = config
 
+    if session_id and not chat_id:
+        return _error("`chat_id` is required when `session_id` is provided.")
+
     try:
-        conv = await db.run_sync(lambda s: ConversationService.get_by_id(s, session_id))  # TODO(async-phase4)
-        if not conv:
-            return _error("Session not found!")
-        if conv.dialog_id != chat_id:
-            return _error("Session does not belong to this chat!")
-
-        dialog = await db.run_sync(lambda s: DialogService.get_by_id(s, chat_id))  # TODO(async-phase4)
-        if not dialog:
-            return _error("Chat not found!")
-
-        conv.message = deepcopy(raw_messages)
-        if not conv.reference:
-            conv.reference = []
-        conv.reference = [reference for reference in conv.reference if reference]
-        conv.reference.append({"chunks": [], "doc_aggs": []})
+        conv = None
+        if chat_id:
+            if not await db.run_sync(lambda s: _owned_chat_exists(s, tenant_id, chat_id)):  # TODO(async-phase4)
+                return _error("No authorization.", RetCode.AUTHENTICATION_ERROR)
+            dialog = await db.run_sync(lambda s: DialogService.get_by_id(s, chat_id))  # TODO(async-phase4)
+            if not dialog:
+                return _error("Chat not found!")
+            if session_id:
+                conv = await db.run_sync(lambda s: ConversationService.get_by_id(s, session_id))  # TODO(async-phase4)
+                if not conv:
+                    return _error("Session not found!")
+                if conv.dialog_id != chat_id:
+                    return _error("Session does not belong to this chat!")
+            else:
+                # user_id 一律取认证身份,不收 body(会话归属可被伪造)
+                conv = await db.run_sync(lambda s: _create_session_for_completion(s, chat_id, dialog, tenant_id))  # TODO(async-phase4)
+                session_id = conv.id
+            conv.message = deepcopy(raw_messages)
+            if not conv.reference:
+                conv.reference = []
+            conv.reference = [reference for reference in conv.reference if reference]
+            conv.reference.append({"chunks": [], "doc_aggs": []})
+        else:
+            dialog = await db.run_sync(lambda s: _build_default_completion_dialog(s, tenant_id, chat_model_id))  # TODO(async-phase4)
+            dialog.llm_setting = chat_model_config
 
         if chat_model_id:
             try:
@@ -1211,14 +1243,17 @@ async def session_completion(
             dialog.tenant_llm_id = override_model_config.get("id")
             dialog.llm_setting = chat_model_config
 
-        is_embedded = bool(chat_model_id)
+        def _format_answer(ans: dict[str, Any]) -> dict[str, Any]:
+            formatted = structure_answer(conv, ans, message_id, session_id)
+            if chat_id:
+                formatted["chat_id"] = chat_id
+            return formatted
 
         async def stream_response():
             try:
                 async for ans in async_chat(dialog, messages, db, True, **req):
-                    ans = structure_answer(conv, ans, message_id, conv.id)
-                    yield "data:" + json.dumps({"code": 0, "message": "", "data": ans}, ensure_ascii=False) + "\n\n"
-                if not is_embedded:
+                    yield "data:" + json.dumps({"code": 0, "message": "", "data": _format_answer(ans)}, ensure_ascii=False) + "\n\n"
+                if conv is not None:
                     await db.run_sync(lambda s: ConversationService.update_by_id(s, conv.id, conv.to_dict()))  # TODO(async-phase4)
             except Exception as e:
                 logger.exception(e)
@@ -1246,8 +1281,8 @@ async def session_completion(
 
         answer = None
         async for ans in async_chat(dialog, messages, db, False, **req):
-            answer = structure_answer(conv, ans, message_id, conv.id)
-            if not is_embedded:
+            answer = _format_answer(ans)
+            if conv is not None:
                 await db.run_sync(lambda s: ConversationService.update_by_id(s, conv.id, conv.to_dict()))  # TODO(async-phase4)
             break
         return get_result(data=answer)

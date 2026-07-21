@@ -107,7 +107,7 @@ def auth_client(client):
 
 
 def test_chat_api_mindmap_shape(auth_client, mindmap_route_stubs):
-    resp = auth_client.post("/api/v1/chats/mindmap", json={"question": "q", "kb_ids": ["k"]})
+    resp = auth_client.post("/api/v1/chat/mindmap", json={"question": "q", "kb_ids": ["k"]})
 
     assert resp.status_code == 200
     body = resp.json()

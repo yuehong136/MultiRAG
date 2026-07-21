@@ -115,8 +115,8 @@ def test_session_completion_streams(client, monkeypatch, chat_route_stubs):
     monkeypatch.setattr(chat_api, "async_chat", _fake_async_chat([{"answer": "answer", "reference": {}, "final": True}], calls))
 
     resp = client.post(
-        "/api/v1/chats/dlg-1/sessions/conv-1/completions",
-        json={"messages": [{"role": "user", "content": "hi"}], "stream": True, "internet": True},
+        "/api/v1/chat/completions",
+        json={"chat_id": "dlg-1", "session_id": "conv-1", "messages": [{"role": "user", "content": "hi"}], "stream": True, "internet": True},
     )
 
     assert resp.status_code == 200
@@ -125,8 +125,79 @@ def test_session_completion_streams(client, monkeypatch, chat_route_stubs):
     assert frames[-1]["data"] is True
     answer_frames = [f for f in frames if isinstance(f.get("data"), dict)]
     assert answer_frames and answer_frames[0]["code"] == 0
+    assert answer_frames[0]["data"]["chat_id"] == "dlg-1"
     assert calls[0]["internet"] is True
     assert chat_route_stubs.updates == ["conv-1"]
+
+
+def test_chat_completion_autocreates_session_when_missing(client, monkeypatch, chat_route_stubs):
+    chat_api = _route_module("api.apps.restful_apis.chat")
+    created = {}
+
+    def fake_create(s, chat_id, dialog, user_id):
+        created["args"] = (chat_id, user_id)
+        return _fake_conv(dialog_id=chat_id)
+
+    monkeypatch.setattr(chat_api, "_owned_chat_exists", lambda s, tenant_id, chat_id: True)
+    monkeypatch.setattr(chat_api, "_create_session_for_completion", fake_create)
+    monkeypatch.setattr(chat_api, "async_chat", _fake_async_chat([{"answer": "ok", "reference": {}, "final": True}]))
+
+    resp = client.post(
+        "/api/v1/chat/completions",
+        json={"chat_id": "dlg-1", "messages": [{"role": "user", "content": "hi"}], "stream": False},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["chat_id"] == "dlg-1"
+    assert body["data"]["session_id"] == "conv-1"
+    assert created["args"] == ("dlg-1", "tenant-unit")
+    assert chat_route_stubs.updates == ["conv-1"]
+
+
+def test_chat_completion_direct_mode_without_chat_id(client, monkeypatch, chat_route_stubs):
+    """无 chat_id 直连聊天:临时默认 dialog(租户默认模型),不落库。"""
+    chat_api = _route_module("api.apps.restful_apis.chat")
+    seen = {}
+
+    async def fake_async_chat(dialog, messages, db, stream=True, **kwargs):
+        seen["dialog"] = dialog
+        yield {"answer": "直答", "reference": {}, "final": True}
+
+    monkeypatch.setattr(chat_api, "async_chat", fake_async_chat)
+    monkeypatch.setattr(
+        chat_api.TenantService,
+        "get_by_id",
+        classmethod(lambda cls, s, tid: types.SimpleNamespace(llm_id="default-llm", tenant_llm_id=7)),
+    )
+
+    resp = client.post(
+        "/api/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hi"}], "stream": False},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["answer"] == "直答"
+    assert "chat_id" not in body["data"]
+    assert seen["dialog"].llm_id == "default-llm"
+    assert seen["dialog"].tenant_llm_id == 7
+    assert seen["dialog"].kb_ids == []
+    assert chat_route_stubs.updates == []
+
+
+def test_chat_completion_rejects_session_without_chat(client):
+    resp = client.post(
+        "/api/v1/chat/completions",
+        json={"session_id": "conv-1", "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["code"] != 0
+    assert body["message"] == "`chat_id` is required when `session_id` is provided."
 
 
 def test_chat_completion_openai_like_streams(client, monkeypatch, chat_route_stubs):

@@ -103,11 +103,12 @@ def test_chat_session_create_uses_prologue(client, monkeypatch):
     monkeypatch.setattr(ConversationService, "save", classmethod(_save))
     monkeypatch.setattr(ConversationService, "get_by_id", classmethod(lambda cls, s, cid: _record(records, s) or Obj(**saved[0])))
 
-    body = client.post("/api/v1/chats/chat-1/sessions", json={"name": " Demo "}).json()
+    body = client.post("/api/v1/chats/chat-1/sessions", json={"name": " Demo ", "user_id": "spoofed"}).json()
 
     assert body["code"] == 0
     assert saved[0]["name"] == "Demo"
     assert saved[0]["message"] == [{"role": "assistant", "content": "Hi!"}]
+    assert saved[0]["user_id"] != "spoofed"  # 会话归属取认证身份,body 不可伪造
     assert body["data"]["chat_id"] == "chat-1"
     _assert_sync_facade(records)
 
@@ -131,7 +132,7 @@ def test_chat_tts_streams_off_loop_with_stripped_bundle(client, monkeypatch):
 
     monkeypatch.setattr(_route_module(), "LLMBundle", _FakeBundle)
 
-    resp = client.post("/api/v1/chats/tts", json={"text": "你好。世界"})
+    resp = client.post("/api/v1/chat/audio/speech", json={"text": "你好。世界"})
 
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("audio/mpeg")
@@ -144,11 +145,11 @@ def test_chat_tts_streams_off_loop_with_stripped_bundle(client, monkeypatch):
 
 
 def test_all_chat_routes_have_pure_async_dependency_tree(client, route_dependency_calls):
-    """全量扫 /api/v1/chats* 前缀：现在与未来的路由都不得回到同步轨。"""
+    """全量扫 /api/v1/chat* 前缀（含 6baf74af 改名后的 /chat/* 静态路由）：现在与未来的路由都不得回到同步轨。"""
     import api.apps as api_apps
 
-    chat_routes = [(sorted(r.methods)[0], r.path) for r in iter_api_routes(client.app) if r.path.startswith("/api/v1/chats")]
-    assert len(chat_routes) >= 20  # 文件当前 20 条路由全部在册
+    chat_routes = [(sorted(r.methods)[0], r.path) for r in iter_api_routes(client.app) if r.path.startswith(("/api/v1/chats", "/api/v1/chat/"))]
+    assert len(chat_routes) >= 21  # chat 面路由全部在册
 
     for method, path in chat_routes:
         calls = route_dependency_calls(client.app, method, path)
