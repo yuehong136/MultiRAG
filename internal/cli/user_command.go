@@ -1061,6 +1061,47 @@ func (c *MultiRAGClient) ShowProviderInstance(cmd *Command) (ResponseIf, error) 
 	return &result, nil
 }
 
+// ShowInstanceBalance shows balance of a specific instance
+// SHOW BALANCE FROM <provider_name> <instance_name>
+func (c *MultiRAGClient) ShowInstanceBalance(cmd *Command) (ResponseIf, error) {
+	if c.ServerType != "user" {
+		return nil, fmt.Errorf("this command is only allowed in USER mode")
+	}
+
+	instanceName, ok := cmd.Params["instance_name"].(string)
+	if !ok {
+		return nil, fmt.Errorf("instance name not provided")
+	}
+
+	providerName, ok := cmd.Params["provider_name"].(string)
+	if !ok {
+		return nil, fmt.Errorf("provider name not provided")
+	}
+
+	url := fmt.Sprintf("/providers/%s/instances/%s/balance", providerName, instanceName)
+
+	resp, err := c.HTTPClient.Request("GET", url, true, "web", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to show balance: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to show balance: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	var result CommonDataResponse
+	if err = json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("show balance failed: invalid JSON (%w)", err)
+	}
+
+	if result.Code != 0 {
+		return nil, fmt.Errorf("%s", result.Message)
+	}
+
+	result.Duration = 0
+	return &result, nil
+}
+
 // AlterProviderInstance renames a provider instance
 // ALTER INSTANCE <name> NAME <new_name> FROM PROVIDER <name>
 

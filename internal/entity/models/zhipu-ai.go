@@ -68,6 +68,10 @@ func joinModelURL(baseURL, suffix string) string {
 	return baseURL + "/" + strings.TrimLeft(suffix, "/")
 }
 
+func (z *ZhipuAIModel) Name() string {
+	return "zhipu"
+}
+
 // Chat sends a message and returns response
 func (z *ZhipuAIModel) Chat(modelName, message *string, apiConfig *APIConfig, modelConfig *ChatConfig) (*ChatResponse, error) {
 	if message == nil {
@@ -652,4 +656,8 @@ func (z *ZhipuAIModel) EncodeToEmbedding(modelName *string, texts []string, apiC
 
 func (z *ZhipuAIModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 	return nil, fmt.Errorf("listing supported models is not available for Zhipu AI")
+}
+
+func (z *ZhipuAIModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
+	return nil, fmt.Errorf("balance query is not available for Zhipu AI")
 }

@@ -201,6 +201,8 @@ func (p *Parser) parseShowCommand() (*Command, error) {
 		return p.parseShowModel()
 	case TokenInstance:
 		return p.parseShowInstance()
+	case TokenBalance:
+		return p.parseShowBalance()
 	default:
 		return nil, fmt.Errorf("unknown SHOW target: %s", p.curToken.Value)
 	}
@@ -1092,6 +1094,39 @@ func (p *Parser) parseShowInstance() (*Command, error) {
 	}
 
 	cmd := NewCommand("show_provider_instance")
+	cmd.Params["instance_name"] = instanceName
+	cmd.Params["provider_name"] = providerName
+
+	p.nextToken()
+	// Semicolon is optional
+	if p.curToken.Type == TokenSemicolon {
+		p.nextToken()
+	}
+	return cmd, nil
+}
+
+// parseShowBalance parses SHOW BALANCE FROM <provider_name> <instance_name> command
+
+func (p *Parser) parseShowBalance() (*Command, error) {
+	p.nextToken() // consume BALANCE
+
+	if p.curToken.Type != TokenFrom {
+		return nil, fmt.Errorf("expected FROM")
+	}
+	p.nextToken()
+
+	providerName, err := p.parseQuotedString()
+	if err != nil {
+		return nil, fmt.Errorf("expected provider name after FROM: %w", err)
+	}
+	p.nextToken()
+
+	instanceName, err := p.parseQuotedString()
+	if err != nil {
+		return nil, fmt.Errorf("expected instance name: %w", err)
+	}
+
+	cmd := NewCommand("show_instance_balance")
 	cmd.Params["instance_name"] = instanceName
 	cmd.Params["provider_name"] = providerName
 

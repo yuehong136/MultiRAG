@@ -420,6 +420,50 @@ func (m *ModelProviderService) ShowProviderInstance(providerName, instanceName, 
 	return result, common.CodeSuccess, nil
 }
 
+func (m *ModelProviderService) ShowInstanceBalance(providerName, instanceName, userID string) (map[string]interface{}, common.ErrorCode, error) {
+
+	// Get tenant ID from user
+	tenants, err := m.userTenantDAO.GetByUserIDAndRole(userID, "owner")
+	if err != nil {
+		return nil, common.CodeServerError, err
+	}
+
+	if len(tenants) == 0 {
+		return nil, common.CodeNotFound, errors.New("user has no tenants")
+	}
+
+	tenantID := tenants[0].TenantID
+
+	// Check if provider exists
+	provider, err := m.modelProviderDAO.GetByTenantIDAndProviderName(tenantID, providerName)
+	if err != nil {
+		return nil, common.CodeServerError, err
+	}
+
+	instance, err := m.modelInstanceDAO.GetByProviderIDAndInstanceName(provider.ID, instanceName)
+	if err != nil {
+		return nil, common.CodeServerError, err
+	}
+
+	providerInfo := dao.GetModelProviderManager().FindProvider(providerName)
+	if providerInfo == nil {
+		return nil, common.CodeServerError, fmt.Errorf("provider %s not found", providerName)
+	}
+
+	region, err := decodeModelInstanceRegion(instance.Extra)
+	if err != nil {
+		return nil, common.CodeServerError, err
+	}
+
+	apiConfig := &modelModule.APIConfig{APIKey: &instance.APIKey, Region: &region}
+
+	result, err := providerInfo.ModelDriver.Balance(apiConfig)
+	if err != nil {
+		return nil, common.CodeServerError, err
+	}
+	return result, common.CodeSuccess, nil
+}
+
 func (m *ModelProviderService) AlterProviderInstance(providerName, instanceName, newInstanceName, apiKey, userID string) (common.ErrorCode, error) {
 	return common.CodeSuccess, nil
 }

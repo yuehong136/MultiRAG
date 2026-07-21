@@ -223,6 +223,8 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 		return c.ListProviderInstances(cmd)
 	case "show_provider_instance":
 		return c.ShowProviderInstance(cmd)
+	case "show_instance_balance":
+		return c.ShowInstanceBalance(cmd)
 	case "alter_provider_instance":
 		return c.AlterProviderInstance(cmd)
 	case "drop_provider_instance":

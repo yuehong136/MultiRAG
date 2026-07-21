@@ -2,6 +2,8 @@ package models
 
 // EmbeddingModel interface for embedding models
 type ModelDriver interface {
+	Name() string
+
 	// Chat sends a message and returns response
 	Chat(modelName, message *string, apiConfig *APIConfig, modelConfig *ChatConfig) (*ChatResponse, error)
 	// ChatStreamly sends a message and streams response
@@ -14,6 +16,8 @@ type ModelDriver interface {
 	EncodeToEmbedding(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error)
 	// ListModels lists models supported by the configured provider instance.
 	ListModels(apiConfig *APIConfig) ([]string, error)
+
+	Balance(apiConfig *APIConfig) (map[string]interface{}, error)
 }
 
 type ChatResponse struct {

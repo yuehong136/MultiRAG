@@ -23,6 +23,10 @@ func NewDeepSeekModel(baseURL map[string]string, urlSuffix URLSuffix) *DeepSeekM
 	}
 }
 
+func (m *DeepSeekModel) Name() string {
+	return "deepseek"
+}
+
 func (m *DeepSeekModel) Chat(modelName, message *string, apiConfig *APIConfig, modelConfig *ChatConfig) (*ChatResponse, error) {
 	return nil, fmt.Errorf("not implemented")
 }
@@ -80,6 +84,10 @@ func (m *DeepSeekModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 		models = append(models, model.ID)
 	}
 	return models, nil
+}
+
+func (m *DeepSeekModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
+	return nil, fmt.Errorf("balance query is not available for DeepSeek")
 }
 
 func resolveModelBaseURL(baseURLs map[string]string, region *string) (string, error) {

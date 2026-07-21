@@ -22,6 +22,10 @@ func NewMoonshotModel(baseURL map[string]string, urlSuffix URLSuffix) *MoonshotM
 	}
 }
 
+func (m *MoonshotModel) Name() string {
+	return "moonshot"
+}
+
 func (m *MoonshotModel) Chat(modelName, message *string, apiConfig *APIConfig, modelConfig *ChatConfig) (*ChatResponse, error) {
 	return nil, fmt.Errorf("not implemented")
 }
@@ -51,7 +55,7 @@ func (m *MoonshotModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 		return nil, err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, joinModelURL(baseURL, m.URLSuffix.Models), http.NoBody)
+	req, err := http.NewRequest(http.MethodGet, joinModelURL(baseURL, m.URLSuffix.Models), http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("create model list request: %w", err)
 	}
@@ -67,13 +71,57 @@ func (m *MoonshotModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 	}
 
 	var payload struct {
-		Models []string `json:"models"`
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
 	}
 	if err = json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("decode Moonshot model list: %w", err)
 	}
-	if len(payload.Models) == 0 {
-		return nil, fmt.Errorf("no models in response")
+	models := make([]string, 0, len(payload.Data))
+	for _, model := range payload.Data {
+		models = append(models, model.ID)
 	}
-	return payload.Models, nil
+	return models, nil
+}
+
+func (m *MoonshotModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
+	if apiConfig == nil || apiConfig.APIKey == nil {
+		return nil, fmt.Errorf("API key is nil")
+	}
+	baseURL, err := resolveModelBaseURL(m.BaseURL, apiConfig.Region)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, joinModelURL(baseURL, m.URLSuffix.Balance), http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("create balance request: %w", err)
+	}
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiConfig.APIKey))
+
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("query Moonshot balance: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("query Moonshot balance: status %d", resp.StatusCode)
+	}
+
+	var payload struct {
+		Data struct {
+			AvailableBalance *float64 `json:"available_balance"`
+		} `json:"data"`
+	}
+	if err = json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("decode Moonshot balance: %w", err)
+	}
+	if payload.Data.AvailableBalance == nil {
+		return nil, fmt.Errorf("no balance in response")
+	}
+	return map[string]interface{}{
+		"balance":  *payload.Data.AvailableBalance,
+		"currency": "CNY",
+	}, nil
 }
