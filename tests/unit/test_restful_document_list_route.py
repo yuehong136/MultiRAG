@@ -254,6 +254,68 @@ def test_list_documents_type_filter_rejects_invalid_status_before_db(client, mon
     assert calls == []
 
 
+def test_list_documents_ids_param_filters_documents(client, monkeypatch):
+    sessions: list[object] = []
+    calls: list[dict[str, Any]] = []
+    _stub_list(monkeypatch, sessions, calls)
+
+    response = client.get(_PATH, params=[("ids", "doc1"), ("ids", "doc2")])
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 0
+    assert calls[0]["doc_ids"] == ["doc1", "doc2"]
+    _assert_sync_facade(sessions)
+
+
+def test_list_documents_rejects_both_id_and_ids_before_db(client, monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda cls, *args, **kwargs: calls.append("db") or True))
+
+    body = client.get(_PATH, params=[("id", "doc1"), ("ids", "doc2")]).json()
+
+    assert body["code"] == int(RetCode.DATA_ERROR)
+    assert body["message"] == "Should not provide both 'id':doc1 and 'ids':['doc2']"
+    assert calls == []
+
+
+def test_list_documents_ids_intersects_metadata_filter(client, monkeypatch):
+    sessions: list[object] = []
+    calls: list[dict[str, Any]] = []
+    _stub_list(monkeypatch, sessions, calls)
+    monkeypatch.setattr(
+        DocMetadataService,
+        "get_flatted_meta_by_kbs",
+        classmethod(lambda cls, db, kb_ids: sessions.append(db) or {"author": {"alice": ["doc1"]}}),
+    )
+
+    response = client.get(
+        _PATH,
+        params=[
+            ("metadata", json.dumps({"author": ["alice"]})),
+            ("ids", "doc1"),
+            ("ids", "doc2"),
+        ],
+    )
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 0
+    assert calls[0]["doc_ids"] == ["doc1"]
+    _assert_sync_facade(sessions)
+
+
+def test_legacy_document_infos_post_is_deprecated(client):
+    legacy_routes = []
+    for context in iter_route_contexts(client.app.routes):
+        route = context.original_route
+        if isinstance(route, APIRoute) and context.path == "/v1/document/infos" and "POST" in context.methods:
+            legacy_routes.append(route)
+
+    assert len(legacy_routes) == 1
+    assert legacy_routes[0].endpoint.__module__ == "api.apps.document"
+    assert legacy_routes[0].deprecated is True
+    assert client.app.openapi()["paths"]["/v1/document/infos"]["post"]["deprecated"] is True
+
+
 def test_legacy_document_filter_post_is_deprecated(client):
     legacy_routes = []
     for context in iter_route_contexts(client.app.routes):

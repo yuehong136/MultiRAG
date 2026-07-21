@@ -238,6 +238,7 @@ async def list_documents(
     list_type: str | None = Query(None, alias="type", description="filter=返回过滤面板聚合统计（忽略分页与元数据参数）"),
     keywords: str | None = Query(None),
     document_id: str | None = Query(None, alias="id"),
+    document_ids: list[str] | None = Query(None, alias="ids", description="按文档 ID 批量过滤（与 id 互斥）"),
     document_name: str | None = Query(None, alias="name"),
     suffix: list[str] | None = Query(None),
     file_types: list[str] | None = Query(None, alias="types"),
@@ -265,6 +266,9 @@ async def list_documents(
     invalid_statuses = {status for status in converted_statuses if status not in valid_statuses}
     if invalid_statuses:
         return get_error_data_result(retmsg=f"Invalid filter run status conditions: {', '.join(sorted(invalid_statuses))}")
+
+    if document_id and document_ids:
+        return get_error_data_result(retmsg=f"Should not provide both 'id':{document_id} and 'ids':{document_ids}")
 
     metadata_condition_value, error = _parse_object_query_param(metadata_condition, "metadata_condition")
     if error is not None:
@@ -306,6 +310,8 @@ async def list_documents(
         doc_ids = _metadata_document_ids(sync_db, dataset_id, metadata_condition_value, metadata_value)
         if document_id:
             doc_ids = [document_id] if doc_ids is None or document_id in doc_ids else []
+        if document_ids:
+            doc_ids = list(document_ids) if doc_ids is None else [candidate for candidate in document_ids if candidate in set(doc_ids)]
 
         try:
             docs, total = DocumentService.get_by_kb_id(

@@ -1665,8 +1665,20 @@ def web_parse(request: WebParseRequest, db: Session = Depends(get_db), user=Depe
         return construct_error_response(e)
 
 
-@router.post("/infos", summary="获取文档信息", response_description="成功获取文档信息")
+@router.post(
+    "/infos",
+    summary="获取文档信息（已弃用）",
+    response_description="成功获取文档信息",
+    deprecated=True,
+)
 def doc_infos(doc_ids: list[str], db: Session = Depends(get_db), user=Depends(manager)):
+    """
+    按文档 ID 列表批量获取文档信息（跨知识库，逐文档鉴权）。
+
+    > **已弃用**：仅为兼容存量调用保留（admin CLI 的跨库 kb_id 反查仍依赖）。
+    > 单一数据集内的批量查询请改用
+    > `GET /api/v1/datasets/{dataset_id}/documents?ids=id1&ids=id2`。
+    """
     for doc_id in doc_ids:
         if not DocumentService.accessible(db, doc_id, user.id):
             return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
