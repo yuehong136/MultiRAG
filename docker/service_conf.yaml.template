@@ -227,15 +227,15 @@ permission:
   dataset: false
 
 smtp:
-  mail_server: "${SMTP_SERVER:-}"
+  mail_server: '${SMTP_SERVER:-}'
   mail_port: ${SMTP_PORT:-465}
   mail_use_ssl: true
   mail_use_tls: false
-  mail_username: "${SMTP_USERNAME:-}"
-  mail_password: "${SMTP_PASSWORD:-}"
+  mail_username: '${SMTP_USERNAME:-}'
+  mail_password: '${SMTP_PASSWORD:-}'
   mail_default_sender:
     - "MultiRAG"
-    - "${SMTP_SENDER_EMAIL:-}"
+    - '${SMTP_SENDER_EMAIL:-}'
   mail_frontend_url: "${MAIL_FRONTEND_URL:-https://your-frontend.example.com}"
 
 tcadp_config:
