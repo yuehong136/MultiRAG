@@ -411,7 +411,7 @@ pretty = true
 
 # 配置重构新增模块直接以严格姿态纳管（棘轮只进不退）
 [[tool.mypy.overrides]]
-module = ["common.app_config", "common.resources", "common.bootstrap"]
+module = ["common.app_config", "common.resources", "common.bootstrap", "common.url_utils"]
 check_untyped_defs = true
 disallow_untyped_defs = true
 

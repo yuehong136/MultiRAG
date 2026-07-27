@@ -18,7 +18,6 @@ import re
 import threading
 from abc import ABC
 from collections.abc import Iterable
-from urllib.parse import urljoin
 
 import httpx
 import numpy as np
@@ -30,6 +29,7 @@ from api.utils.file_utils import get_home_cache_dir
 from common import settings
 from common.log_utils import log_exception
 from common.token_utils import num_tokens_from_string, total_token_count_from_response, truncate
+from common.url_utils import append_path_segment, ensure_api_version, strip_trailing_segment
 
 
 class Base(ABC):
@@ -209,12 +209,9 @@ class XInferenceRerank(Base):
     _FACTORY_NAME = "Xinference"
 
     def __init__(self, key="x", model_name="", base_url=""):
-        if base_url.find("/v1") == -1:
-            base_url = urljoin(base_url, "/v1/rerank")
-        if base_url.find("/rerank") == -1:
-            base_url = urljoin(base_url, "/v1/rerank")
         self.model_name = model_name
-        self.base_url = base_url
+        # 用户可能把完整端点填进来（.../rerank，甚至不带 /v1），先摘端点段再补版本段
+        self.base_url = append_path_segment(ensure_api_version(strip_trailing_segment(base_url, "rerank")), "rerank")
         self.headers = {"Content-Type": "application/json", "accept": "application/json"}
         if key and key != "x":
             self.headers["Authorization"] = f"Bearer {key}"
@@ -241,10 +238,7 @@ class LocalAIRerank(Base):
     _FACTORY_NAME = "LocalAI"
 
     def __init__(self, key, model_name, base_url):
-        if base_url.find("/rerank") == -1:
-            self.base_url = urljoin(base_url, "/rerank")
-        else:
-            self.base_url = base_url
+        self.base_url = append_path_segment(base_url, "rerank")
         self.headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
         self.model_name = model_name.split("___")[0]
 
@@ -282,11 +276,14 @@ class NvidiaRerank(Base):
         self.model_name = model_name
 
         if self.model_name == "nvidia/nv-rerankqa-mistral-4b-v3":
-            self.base_url = urljoin(base_url, "nv-rerankqa-mistral-4b-v3/reranking")
-
-        if self.model_name == "nvidia/rerank-qa-mistral-4b":
-            self.base_url = urljoin(base_url, "reranking")
+            self.base_url = append_path_segment(base_url, "nv-rerankqa-mistral-4b-v3/reranking")
+        elif self.model_name == "nvidia/rerank-qa-mistral-4b":
+            self.base_url = append_path_segment(base_url, "reranking")
             self.model_name = "nv-rerank-qa-mistral-4b:1"
+        else:
+            # 目录里还有 llama-3.2-nv-rerankqa-1b-v1/v2，两个 if 都不命中时
+            # self.base_url 根本不存在，similarity 里会 AttributeError
+            self.base_url = append_path_segment(base_url, "reranking")
 
         self.headers = {
             "accept": "application/json",
@@ -327,11 +324,7 @@ class OpenAI_APIRerank(Base):
     _FACTORY_NAME = "OpenAI-API-Compatible"
 
     def __init__(self, key, model_name, base_url):
-        normalized_base_url = (base_url or "").strip()
-        if "/rerank" in normalized_base_url:
-            self.base_url = normalized_base_url.rstrip("/")
-        else:
-            self.base_url = urljoin(f"{normalized_base_url.rstrip('/')}/", "rerank").rstrip("/")
+        self.base_url = append_path_segment(base_url, "rerank")
         self.headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
         self.model_name = model_name.split("___")[0]
 
@@ -408,8 +401,7 @@ class SILICONFLOWRerank(Base):
         normalized_base_url = (base_url or "").strip()
         if not normalized_base_url:
             normalized_base_url = "https://api.siliconflow.cn/v1/rerank"
-        if "/rerank" not in normalized_base_url:
-            normalized_base_url = urljoin(f"{normalized_base_url.rstrip('/')}/", "rerank").rstrip("/")
+        normalized_base_url = append_path_segment(normalized_base_url, "rerank")
         self.model_name = model_name
         self.base_url = normalized_base_url
         self.headers = {

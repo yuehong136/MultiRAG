@@ -86,7 +86,10 @@ LITELLM_PROVIDER_PREFIX = {
     SupportedLiteLLMProvider.DeepSeek: "deepseek/",
     SupportedLiteLLMProvider.Nvidia: "nvidia_nim/",
     SupportedLiteLLMProvider.TogetherAI: "together_ai/",
-    SupportedLiteLLMProvider.Anthropic: "",  # don't need a prefix
+    # 必须显式带前缀：LiteLLM 靠模型名反查 provider，缺前缀时只有内置的 claude-* 能解析，
+    # 智谱 /api/anthropic、百炼 /apps/anthropic 这类 Anthropic 兼容端点用的是自家模型名
+    # （glm-*、qwen-*），会在 get_llm_provider 阶段就报 "LLM Provider NOT provided"。
+    SupportedLiteLLMProvider.Anthropic: "anthropic/",
     SupportedLiteLLMProvider.Ollama: "ollama_chat/",
     SupportedLiteLLMProvider.LongCat: "openai/",
     SupportedLiteLLMProvider.CometAPI: "openai/",

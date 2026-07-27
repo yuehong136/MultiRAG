@@ -539,75 +539,23 @@ def split_file_attachments(files: list[dict] | None, raw: bool = False) -> tuple
     return text_attachments, image_attachments
 
 
-_DATA_URI_RE = re.compile(r"^data:(?P<mime>[^;]+);base64,(?P<b64>[A-Za-z0-9+/=\s]+)$")
-
-
-def _parse_data_uri_or_b64(s: str, default_mime: str = "image/png") -> tuple[str, str]:
-    s = (s or "").strip()
-    match = _DATA_URI_RE.match(s)
-    if match:
-        mime = match.group("mime").strip()
-        b64 = match.group("b64").strip()
-        return mime, b64
-    return default_mime, s
-
-
-def _normalize_text_from_content(content) -> str:
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        texts = []
-        for blk in content:
-            if isinstance(blk, dict):
-                if blk.get("type") in {"text", "input_text"}:
-                    txt = blk.get("text")
-                    if txt:
-                        texts.append(str(txt))
-                elif "text" in blk and isinstance(blk.get("text"), (str, int, float)):
-                    texts.append(str(blk["text"]))
-        return "\n".join(texts).strip()
-    return str(content)
-
-
 def convert_last_user_msg_to_multimodal(msg: list[dict], image_data_uris: list[str], factory: str) -> None:
+    """把最后一条 user 消息改写成 OpenAI 多模态格式（content 数组 + image_url）。
+
+    统一产出 OpenAI 形态，不按厂商预转成 Anthropic / Gemini 的原生 block：
+    这两家的 chat 通道都走 LiteLLM，而 LiteLLM 只接受 OpenAI 格式并会严格校验
+    （原生 block 直接 "Invalid user message"），provider 侧的形态转换由它自己完成。
+
+    factory 已不参与转换，保留形参是为了与上游签名一致（调用方无需改动）。
+    """
     if not msg or not image_data_uris:
         return
-
-    factory_norm = (factory or "").strip().lower()
 
     for idx in range(len(msg) - 1, -1, -1):
         if msg[idx].get("role") != "user":
             continue
 
         original_content = msg[idx].get("content", "")
-        text = _normalize_text_from_content(original_content)
-
-        if factory_norm == "gemini":
-            parts = []
-            if text:
-                parts.append({"text": text})
-            for image in image_data_uris:
-                mime, b64 = _parse_data_uri_or_b64(str(image), default_mime="image/png")
-                parts.append({"inline_data": {"mime_type": mime, "data": b64}})
-            msg[idx]["content"] = parts
-            return
-
-        if factory_norm == "anthropic":
-            blocks = []
-            if text:
-                blocks.append({"type": "text", "text": text})
-            for image in image_data_uris:
-                mime, b64 = _parse_data_uri_or_b64(str(image), default_mime="image/png")
-                blocks.append(
-                    {
-                        "type": "image",
-                        "source": {"type": "base64", "media_type": mime, "data": b64},
-                    }
-                )
-            msg[idx]["content"] = blocks
-            return
 
         multimodal_content = []
         if isinstance(original_content, list):

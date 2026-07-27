@@ -23,7 +23,6 @@ import time
 from abc import ABC
 from copy import deepcopy
 from enum import StrEnum
-from urllib.parse import urljoin
 
 import json_repair
 import litellm
@@ -32,6 +31,7 @@ from openai import AsyncOpenAI, OpenAI
 
 from common.misc_utils import thread_pool_exec
 from common.token_utils import num_tokens_from_string, total_token_count_from_response
+from common.url_utils import append_path_segment, ensure_api_version, strip_trailing_segment
 from core.llm import FACTORY_DEFAULT_BASE_URL, LITELLM_PROVIDER_PREFIX, SupportedLiteLLMProvider
 from core.nlp import is_chinese, is_english
 
@@ -266,10 +266,14 @@ class Base(ABC):
         logging.exception("OpenAI chat_with_tools")
         # Classify the error
         error_code = self._classify_error(e)
-        if attempt == self.max_retries:
+        # max_retries=0（如添加模型时的探测）本就没有重试，报 MAX_RETRIES_EXCEEDED 会盖掉
+        # 真正的分类（AUTH_ERROR / INVALID_REQUEST …），把用户往错方向引
+        if attempt == self.max_retries and self.max_retries > 0:
             error_code = LLMErrorCode.ERROR_MAX_RETRIES
 
-        if self._should_retry(error_code):
+        # 必须同时看「还有剩余次数」：max_retries=0（探测）时分类仍可能落在可重试集合里，
+        # 只判分类会白睡一次 20~300s 的退避、并且一个 chunk 都不 yield（错误被整条吞掉）
+        if self._should_retry(error_code) and attempt < self.max_retries:
             delay = self._get_delay()
             logging.warning(f"Error: {error_code}. Retrying in {delay:.2f} seconds... (Attempt {attempt + 1}/{self.max_retries})")
             time.sleep(delay)
@@ -282,10 +286,14 @@ class Base(ABC):
     async def _exceptions_async(self, e, attempt):
         logging.exception("OpenAI async completion")
         error_code = self._classify_error(e)
-        if attempt == self.max_retries:
+        # max_retries=0（如添加模型时的探测）本就没有重试，报 MAX_RETRIES_EXCEEDED 会盖掉
+        # 真正的分类（AUTH_ERROR / INVALID_REQUEST …），把用户往错方向引
+        if attempt == self.max_retries and self.max_retries > 0:
             error_code = LLMErrorCode.ERROR_MAX_RETRIES
 
-        if self._should_retry(error_code):
+        # 必须同时看「还有剩余次数」：max_retries=0（探测）时分类仍可能落在可重试集合里，
+        # 只判分类会白睡一次 20~300s 的退避、并且一个 chunk 都不 yield（错误被整条吞掉）
+        if self._should_retry(error_code) and attempt < self.max_retries:
             delay = self._get_delay()
             logging.warning(f"Error: {error_code}. Retrying in {delay:.2f} seconds... (Attempt {attempt + 1}/{self.max_retries})")
             await asyncio.sleep(delay)
@@ -601,7 +609,7 @@ class XinferenceChat(Base):
     def __init__(self, key=None, model_name="", base_url="", **kwargs):
         if not base_url:
             raise ValueError("Local llm url cannot be None")
-        base_url = urljoin(base_url, "v1")
+        base_url = ensure_api_version(base_url)
         super().__init__(key, model_name, base_url, **kwargs)
 
 
@@ -611,7 +619,7 @@ class HuggingFaceChat(Base):
     def __init__(self, key=None, model_name="", base_url="", **kwargs):
         if not base_url:
             raise ValueError("Local llm url cannot be None")
-        base_url = urljoin(base_url, "v1")
+        base_url = ensure_api_version(base_url)
         super().__init__(key, model_name.split("___")[0], base_url, **kwargs)
 
 
@@ -621,7 +629,7 @@ class ModelScopeChat(Base):
     def __init__(self, key=None, model_name="", base_url="", **kwargs):
         if not base_url:
             raise ValueError("Local llm url cannot be None")
-        base_url = urljoin(base_url, "v1")
+        base_url = ensure_api_version(base_url)
         super().__init__(key, model_name.split("___")[0], base_url, **kwargs)
 
 
@@ -704,11 +712,12 @@ class LocalAIChat(Base):
     _FACTORY_NAME = "LocalAI"
 
     def __init__(self, key, model_name, base_url=None, **kwargs):
-        super().__init__(key, model_name, base_url=base_url, **kwargs)
-
         if not base_url:
             raise ValueError("Local llm url cannot be None")
-        base_url = urljoin(base_url, "v1")
+        # 必须先规范化再 super()：Base.__init__ 会用传入的 base_url 建 async_client，
+        # 探测与生产的流式路径都走 async_client，顺序反了就会漏掉 /v1
+        base_url = ensure_api_version(base_url)
+        super().__init__(key, model_name, base_url=base_url, **kwargs)
         self.client = OpenAI(api_key="empty", base_url=base_url)
         self.model_name = model_name.split("___")[0]
 
@@ -835,7 +844,7 @@ class LmStudioChat(Base):
     def __init__(self, key, model_name, base_url, **kwargs):
         if not base_url:
             raise ValueError("Local llm url cannot be None")
-        base_url = urljoin(base_url, "v1")
+        base_url = ensure_api_version(base_url)
         super().__init__(key, model_name, base_url, **kwargs)
         self.client = OpenAI(api_key="lm-studio", base_url=base_url)
         self.model_name = model_name
@@ -848,7 +857,9 @@ class OpenAI_APIChat(Base):
         if not base_url:
             raise ValueError("url cannot be None")
         model_name = model_name.split("___")[0]
-        super().__init__(key, model_name, base_url, **kwargs)
+        # 与同厂商的 embedding / vision / rerank 通道保持一致：同一个 base_url
+        # 不该在四种模型类型上被解释成四个不同地址
+        super().__init__(key, model_name, ensure_api_version(base_url), **kwargs)
 
 
 class LeptonAIChat(Base):
@@ -856,7 +867,7 @@ class LeptonAIChat(Base):
 
     def __init__(self, key, model_name, base_url=None, **kwargs):
         if not base_url:
-            base_url = urljoin("https://" + model_name + ".lepton.run", "api/v1")
+            base_url = append_path_segment("https://" + model_name + ".lepton.run", "api/v1")
         super().__init__(key, model_name, base_url, **kwargs)
 
 
@@ -1212,6 +1223,10 @@ class LiteLLMBase(ABC):
         self.model_name = f"{self.prefix}{model_name}"
         self.api_key = key
         self.base_url = (base_url or FACTORY_DEFAULT_BASE_URL.get(self.provider, "")).rstrip("/")
+        if self.provider == SupportedLiteLLMProvider.Anthropic:
+            # Anthropic 是原生 /v1/messages 协议，LiteLLM 会自己补这一段。用户沿 OpenAI
+            # 习惯多填的 /v1 必须先摘掉，否则拼成 .../v1/v1/messages 而 404。
+            self.base_url = strip_trailing_segment(self.base_url, "v1")
         # Configure retry parameters
         self.max_retries = kwargs.get("max_retries", int(os.environ.get("LLM_MAX_RETRIES", 5)))
         self.base_delay = kwargs.get("retry_interval", float(os.environ.get("LLM_BASE_DELAY", 2.0)))
@@ -1382,10 +1397,14 @@ class LiteLLMBase(ABC):
     async def _exceptions_async(self, e, attempt):
         logging.exception("LiteLLMBase async completion")
         error_code = self._classify_error(e)
-        if attempt == self.max_retries:
+        # max_retries=0（如添加模型时的探测）本就没有重试，报 MAX_RETRIES_EXCEEDED 会盖掉
+        # 真正的分类（AUTH_ERROR / INVALID_REQUEST …），把用户往错方向引
+        if attempt == self.max_retries and self.max_retries > 0:
             error_code = LLMErrorCode.ERROR_MAX_RETRIES
 
-        if self._should_retry(error_code):
+        # 必须同时看「还有剩余次数」：max_retries=0（探测）时分类仍可能落在可重试集合里，
+        # 只判分类会白睡一次 20~300s 的退避、并且一个 chunk 都不 yield（错误被整条吞掉）
+        if self._should_retry(error_code) and attempt < self.max_retries:
             delay = self._get_delay()
             logging.warning(f"Error: {error_code}. Retrying in {delay:.2f} seconds... (Attempt {attempt + 1}/{self.max_retries})")
             await asyncio.sleep(delay)
@@ -1738,7 +1757,7 @@ class LiteLLMBase(ABC):
         elif self.provider == SupportedLiteLLMProvider.GPUStack:
             completion_args.update(
                 {
-                    "api_base": urljoin(self.base_url, "v1"),
+                    "api_base": ensure_api_version(self.base_url),
                 }
             )
         elif self.provider == SupportedLiteLLMProvider.Azure_OpenAI:

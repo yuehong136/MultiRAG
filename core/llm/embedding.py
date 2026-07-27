@@ -22,7 +22,6 @@ import threading
 from abc import ABC
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Annotated, Any, Literal
-from urllib.parse import urljoin
 
 import dashscope
 import numpy as np
@@ -36,6 +35,7 @@ from api.utils.file_utils import get_home_cache_dir
 from common import settings
 from common.log_utils import log_exception
 from common.token_utils import num_tokens_from_string, total_token_count_from_response, truncate
+from common.url_utils import append_path_segment, ensure_api_version
 
 
 class Base(ABC):
@@ -201,7 +201,7 @@ class LocalAIEmbed(Base):
     def __init__(self, key, model_name, base_url):
         if not base_url:
             raise ValueError("Local embedding model url cannot be None")
-        base_url = urljoin(base_url, "v1")
+        base_url = ensure_api_version(base_url)
         self.client = OpenAI(api_key="empty", base_url=base_url)
         self.model_name = model_name.split("___")[0]
 
@@ -447,7 +447,7 @@ class XinferenceEmbed(Base):
     _FACTORY_NAME = "Xinference"
 
     def __init__(self, key, model_name="", base_url=""):
-        base_url = urljoin(base_url, "v1")
+        base_url = ensure_api_version(base_url)
         self.client = OpenAI(api_key=key, base_url=base_url)
         self.model_name = model_name
 
@@ -838,7 +838,7 @@ class LmStudioEmbed(LocalAIEmbed):
     def __init__(self, key, model_name, base_url):
         if not base_url:
             raise ValueError("Local llm url cannot be None")
-        base_url = urljoin(base_url, "v1")
+        base_url = ensure_api_version(base_url)
         self.client = OpenAI(api_key="lm-studio", base_url=base_url)
         self.model_name = model_name
 
@@ -849,7 +849,7 @@ class OpenAI_APIEmbed(OpenAIEmbed):
     def __init__(self, key, model_name, base_url):
         if not base_url:
             raise ValueError("url cannot be None")
-        base_url = urljoin(base_url, "v1")
+        base_url = ensure_api_version(base_url)
         self.client = OpenAI(api_key=key, base_url=base_url)
         self.model_name = model_name.split("___")[0]
 
@@ -1166,7 +1166,7 @@ class VolcEngineEmbed(Base):
             raise ValueError("VolcEngine 模型名称缺失，请显式传入 model_name")
 
         self.base_url = base_url.rstrip("/")
-        self.multimodal_endpoint = urljoin(f"{self.base_url}/", "embeddings/multimodal")
+        self.multimodal_endpoint = append_path_segment(self.base_url, "embeddings/multimodal")
         self.timeout = kwargs.get("timeout", 30)
         self.default_dimensions = kwargs.get("dimensions") or key_payload.get("dimensions")
         self.default_encoding_format = kwargs.get("encoding_format") or key_payload.get("encoding_format") or "float"
@@ -1316,7 +1316,7 @@ class GPUStackEmbed(OpenAIEmbed):
     def __init__(self, key, model_name, base_url):
         if not base_url:
             raise ValueError("url cannot be None")
-        base_url = urljoin(base_url, "v1")
+        base_url = ensure_api_version(base_url)
 
         self.client = OpenAI(api_key=key, base_url=base_url)
         self.model_name = model_name

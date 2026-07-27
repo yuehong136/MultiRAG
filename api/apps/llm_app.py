@@ -802,6 +802,20 @@ def factories(db: Session = Depends(get_db), user=Depends(manager)):
         return server_error_response(e)
 
 
+def probe_timeout_seconds() -> int:
+    """添加模型时的连通性探测超时。
+
+    独立于 LLM_TIMEOUT_SECONDS（那是生产 LLM 客户端的 transport 超时，默认 600s），
+    避免用户为了让探测跑完而把全站生成超时一起改掉；未设置时沿用旧变量以保持兼容。
+    默认 25s：带思考的模型（GLM-4.6/4.7、claude thinking）首个 chunk 常超 10s，
+    同时要留在前端 30s abort 之内，否则诊断文案根本到不了界面。
+    """
+    explicit = os.environ.get("LLM_PROBE_TIMEOUT_SECONDS")
+    if explicit:
+        return int(explicit)
+    return int(os.environ.get("LLM_TIMEOUT_SECONDS", 25))
+
+
 @router.post("/set_api_key", summary="新增模型厂商api key", response_description="成功保存该模型服务厂商的api key")
 async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request.model_dump()
@@ -809,8 +823,9 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
     factory = req["llm_factory"]
     base_url = req.get("base_url", "")
     source_factory = req.get("source_fid") or factory
-    extra = {"provider": factory}
-    timeout_seconds = int(os.environ.get("LLM_TIMEOUT_SECONDS", 10))
+    # 探测阶段禁用重试，理由同 add_llm：退避 20~300s 必然睡穿探测超时
+    extra = {"provider": factory, "max_retries": 0}
+    timeout_seconds = probe_timeout_seconds()
     source_llms = list(LLMService.query(db, fid=source_factory))
     if not source_llms:
         msg = f"No models configured for {factory} (source: {source_factory})."
@@ -819,51 +834,77 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
         return get_data_error_result(retmsg=msg)
 
     msg = ""
+    # 这里最多串行探测 embedding + chat + rerank 三个模型（通义千问三样都有），
+    # 每个都按满额超时会把总耗时推到 3 倍、超过前端的请求 abort；给整轮一个总预算。
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+
+    def remaining_budget() -> float:
+        return deadline - asyncio.get_running_loop().time()
+
+    def probe_failure(prefix: str, err: BaseException) -> str:
+        """把探测异常拼成对用户有意义的一行（str(TimeoutError()) 是空串，必须自己补文案）。"""
+        if isinstance(err, TimeoutError):
+            detail = f"timed out after {timeout_seconds}s in total, raise LLM_PROBE_TIMEOUT_SECONDS if the models need longer."
+        else:
+            detail = str(err) or type(err).__name__
+        return f"\n{prefix} {detail}"
+
     for llm in source_llms:
+        if remaining_budget() <= 0:
+            break
         if not embd_passed and llm.mdl_type == LLMType.EMBEDDING.value:
-            assert factory in EmbeddingModel, f"Embedding model from {factory} is not supported yet."
-            mdl = EmbeddingModel[factory](req["api_key"], llm.llm_name, base_url=base_url)
             try:
+                if factory not in EmbeddingModel:
+                    raise LookupError(f"Embedding model from {factory} is not supported yet.")
+                mdl = EmbeddingModel[factory](req["api_key"], llm.llm_name, base_url=base_url)
                 arr, tc = await asyncio.wait_for(
                     thread_pool_exec(mdl.encode, ["Test if the api key is available"]),
-                    timeout=timeout_seconds,
+                    timeout=remaining_budget(),
                 )
                 if len(arr[0]) == 0:
-                    raise Exception("Fail")
+                    raise ValueError("Empty embedding returned.")
                 embd_passed = True
             except Exception as e:
-                msg += f"\nFail to access embedding model({llm.llm_name}) using this api key." + str(e)
+                msg += probe_failure(f"Fail to access embedding model({llm.llm_name}) using this api key.", e)
         elif not chat_passed and llm.mdl_type == LLMType.CHAT.value:
-            assert factory in ChatModel, f"Chat model from {factory} is not supported yet."
-            mdl = ChatModel[factory](req["api_key"], llm.llm_name, base_url=base_url, **extra)
             try:
-                async with asyncio.timeout(timeout_seconds):
+                if factory not in ChatModel:
+                    raise LookupError(f"Chat model from {factory} is not supported yet.")
+                mdl = ChatModel[factory](req["api_key"], llm.llm_name, base_url=base_url, **extra)
+                # 上游报错以 "**ERROR**: ..." 字符串 yield 出来，必须留下来回灌给用户
+                upstream_error = ""
+                async with asyncio.timeout(remaining_budget()):
                     async for chunk in mdl.async_chat_streamly(
                         "",
                         [{"role": "user", "content": "Hi"}],
                         {"temperature": 0.9},
                     ):
-                        if chunk and isinstance(chunk, str) and chunk.find("**ERROR**") < 0:
-                            chat_passed = True
-                            break
+                        if not chunk or not isinstance(chunk, str):
+                            continue
+                        if chunk.find("**ERROR**") >= 0:
+                            upstream_error = chunk
+                            continue
+                        chat_passed = True
+                        break
                     if not chat_passed:
-                        raise Exception("No valid response received")
+                        raise ValueError(upstream_error or "No valid response received")
             except Exception as e:
-                msg += f"\nFail to access model({llm.fid}/{llm.llm_name}) using this api key." + str(e)
+                msg += probe_failure(f"Fail to access model({llm.fid}/{llm.llm_name}) using this api key.", e)
         elif not rerank_passed and llm.mdl_type == LLMType.RERANK.value:
-            assert factory in RerankModel, f"Re-rank model from {factory} is not supported yet."
-            mdl = RerankModel[factory](req["api_key"], llm.llm_name, base_url=base_url)
             try:
+                if factory not in RerankModel:
+                    raise LookupError(f"Re-rank model from {factory} is not supported yet.")
+                mdl = RerankModel[factory](req["api_key"], llm.llm_name, base_url=base_url)
                 arr, tc = await asyncio.wait_for(
                     thread_pool_exec(mdl.similarity, "What's the weather?", ["Is it sunny today?"]),
-                    timeout=timeout_seconds,
+                    timeout=remaining_budget(),
                 )
                 if len(arr) == 0 or tc == 0:
-                    raise Exception("Fail")
+                    raise ValueError("Empty rerank scores returned.")
                 rerank_passed = True
                 logging.debug(f"passed model rerank {llm.llm_name}")
             except Exception as e:
-                msg += f"\nFail to access model({llm.fid}/{llm.llm_name}) using this api key." + str(e)
+                msg += probe_failure(f"Fail to access model({llm.fid}/{llm.llm_name}) using this api key.", e)
 
     if req.get("verify", False):
         return get_json_result(data={"message": msg, "success": len(msg.strip()) == 0})
@@ -954,7 +995,8 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
     ## 错误码
     | 错误码 | 描述 |
     |--------|------|
-    | 400 | 请求参数错误或模型已存在或模型验证失败 |
+    | 102（HTTP 200 + retcode） | 模型验证失败、模型已存在或工厂不被允许，retmsg 里带上游报错原文 |
+    | 422 | 请求参数不合法（pydantic 校验） |
     | 401 | 用户未认证 |
 
     ## 示例
@@ -990,15 +1032,17 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
 
     ## 注意事项
     1. 不同的模型提供商需要不同的API密钥格式，请确保提供正确的参数组合
-    2. 添加前，系统会验证模型连接，如果验证失败将返回400错误
+    2. 添加前，系统会验证模型连接；验证失败时返回 HTTP 200 + retcode=102，retmsg 里带上游报错原文（不落库）
     3. 对于同一个租户，相同工厂和名称的模型不能重复添加
     4. 对于某些特殊的模型工厂，系统会自动在模型名称后添加后缀，例如LocalAI会添加"___LocalAI"
     """
     req = request.model_dump()
     factory = req["llm_factory"]
-    api_key = req.get("api_key", "x")
+    # AddLLMRequest.api_key 默认就是 None，model_dump() 一定带上该键，所以 get 的兜底值取不到，
+    # 必须用 or：否则 OpenAI(api_key=None) 直接抛异常（本地模型场景常留空）。
+    api_key = req.get("api_key") or "x"
     llm_name = req["llm_name"]
-    timeout_seconds = int(os.environ.get("LLM_TIMEOUT_SECONDS", 10))
+    timeout_seconds = probe_timeout_seconds()
 
     # 验证工厂是否在允许列表中
     allowed_factories = get_allowed_llm_factories(db)
@@ -1070,79 +1114,100 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
 
     msg = ""
     mdl_nm = llm["llm_name"].split("___")[0]
-    extra = {"provider": factory}
+    # 探测阶段禁用重试：Base/LiteLLMBase 的退避是 base_delay * uniform(10,150)（20~300s），
+    # 一旦命中可重试错误就必然睡穿探测超时，把真实的 429/5xx 掩盖成一条空 timeout。
+    extra = {"provider": factory, "max_retries": 0}
     model_type = llm["mdl_type"]
     model_api_key = llm["api_key"]
     model_base_url = llm.get("api_base", "")
+
+    def probe_failure(prefix: str, err: BaseException) -> str:
+        """把探测异常拼成对用户有意义的一行（str(TimeoutError()) 是空串，必须自己补文案）。"""
+        if isinstance(err, TimeoutError):
+            detail = f"timed out after {timeout_seconds}s, raise LLM_PROBE_TIMEOUT_SECONDS if the model needs longer."
+        else:
+            detail = str(err) or type(err).__name__
+        return f"\n{prefix} {detail}"
+
     match model_type:
         case LLMType.EMBEDDING.value:
-            assert factory in EmbeddingModel, f"Embedding model from {factory} is not supported yet."
-            mdl = EmbeddingModel[factory](key=model_api_key, model_name=mdl_nm, base_url=model_base_url)
             try:
+                if factory not in EmbeddingModel:
+                    raise LookupError(f"Embedding model from {factory} is not supported yet.")
+                mdl = EmbeddingModel[factory](key=model_api_key, model_name=mdl_nm, base_url=model_base_url)
                 arr, tc = await asyncio.wait_for(
                     thread_pool_exec(mdl.encode, ["Test if the api key is available"]),
                     timeout=timeout_seconds,
                 )
                 if len(arr[0]) == 0:
-                    raise Exception("Fail")
+                    raise ValueError("Empty embedding returned.")
             except Exception as e:
-                msg += f"\nFail to access embedding model({mdl_nm})." + str(e)
+                msg += probe_failure(f"Fail to access embedding model({mdl_nm}).", e)
         case LLMType.CHAT.value:
-            assert factory in ChatModel, f"Chat model from {factory} is not supported yet."
-            mdl = ChatModel[factory](
-                key=model_api_key,
-                model_name=mdl_nm,
-                base_url=model_base_url,
-                **extra,
-            )
             try:
+                if factory not in ChatModel:
+                    raise LookupError(f"Chat model from {factory} is not supported yet.")
+                mdl = ChatModel[factory](
+                    key=model_api_key,
+                    model_name=mdl_nm,
+                    base_url=model_base_url,
+                    **extra,
+                )
                 verified = False
+                # 上游报错是以 "**ERROR**: ..." 字符串 yield 出来的，必须留下来回灌给用户，
+                # 否则 401/404/参数错误全被统一成一句 "No valid response received"。
+                upstream_error = ""
                 async with asyncio.timeout(timeout_seconds):
                     async for chunk in mdl.async_chat_streamly(
                         "",
                         [{"role": "user", "content": "Hi"}],
                         {"temperature": 0.9},
                     ):
-                        if chunk and isinstance(chunk, str) and chunk.find("**ERROR**:") < 0:
-                            verified = True
-                            break
+                        if not chunk or not isinstance(chunk, str):
+                            continue
+                        if chunk.find("**ERROR**:") >= 0:
+                            upstream_error = chunk
+                            continue
+                        verified = True
+                        break
                     if not verified:
-                        raise Exception("No valid response received")
+                        raise ValueError(upstream_error or "No valid response received")
             except Exception as e:
-                msg += f"\nFail to access model({factory}/{mdl_nm})." + str(e)
+                msg += probe_failure(f"Fail to access model({factory}/{mdl_nm}).", e)
 
         case LLMType.RERANK.value:
-            assert factory in RerankModel, f"RE-rank model from {factory} is not supported yet."
             try:
+                if factory not in RerankModel:
+                    raise LookupError(f"RE-rank model from {factory} is not supported yet.")
                 mdl = RerankModel[factory](key=model_api_key, model_name=mdl_nm, base_url=model_base_url)
                 arr, tc = await asyncio.wait_for(
                     thread_pool_exec(mdl.similarity, "Hello~ MultiRAGer!", ["Hi, there!", "Ohh, my friend!"]),
                     timeout=timeout_seconds,
                 )
                 if len(arr) == 0:
-                    raise Exception("Not known.")
-            except KeyError:
-                msg += f"{factory} dose not support this model({factory}/{mdl_nm})"
+                    raise ValueError("Empty rerank scores returned.")
             except Exception as e:
-                msg += f"\nFail to access model({factory}/{mdl_nm})." + str(e)
+                msg += probe_failure(f"Fail to access model({factory}/{mdl_nm}).", e)
 
         case LLMType.IMAGE2TEXT.value:
-            assert factory in CvModel, f"Image to text model from {factory} is not supported yet."
-            mdl = CvModel[factory](key=model_api_key, model_name=mdl_nm, base_url=model_base_url)
             try:
+                if factory not in CvModel:
+                    raise LookupError(f"Image to text model from {factory} is not supported yet.")
+                mdl = CvModel[factory](key=model_api_key, model_name=mdl_nm, base_url=model_base_url)
                 image_data = test_image
                 m, tc = await asyncio.wait_for(
                     thread_pool_exec(mdl.describe, image_data),
                     timeout=timeout_seconds,
                 )
                 if not tc and m.find("**ERROR**:") >= 0:
-                    raise Exception(m)
+                    raise ValueError(m)
             except Exception as e:
-                msg += f"\nFail to access model({factory}/{mdl_nm})." + str(e)
+                msg += probe_failure(f"Fail to access model({factory}/{mdl_nm}).", e)
         case LLMType.TTS.value:
-            assert factory in TTSModel, f"TTS model from {factory} is not supported yet."
-            mdl = TTSModel[factory](key=model_api_key, model_name=mdl_nm, base_url=model_base_url)
             try:
+                if factory not in TTSModel:
+                    raise LookupError(f"TTS model from {factory} is not supported yet.")
+                mdl = TTSModel[factory](key=model_api_key, model_name=mdl_nm, base_url=model_base_url)
 
                 def drain_tts():
                     for _ in mdl.tts("Hello~ MultiRAGer!"):
@@ -1152,11 +1217,12 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
                     thread_pool_exec(drain_tts),
                     timeout=timeout_seconds,
                 )
-            except RuntimeError as e:
-                msg += f"\nFail to access model({factory}/{mdl_nm})." + str(e)
+            except Exception as e:
+                msg += probe_failure(f"Fail to access model({factory}/{mdl_nm}).", e)
         case LLMType.OCR.value:
-            assert factory in OcrModel, f"OCR model from {factory} is not supported yet."
             try:
+                if factory not in OcrModel:
+                    raise LookupError(f"OCR model from {factory} is not supported yet.")
                 mdl = OcrModel[factory](key=model_api_key, model_name=mdl_nm, base_url=model_base_url)
                 ok, reason = await asyncio.wait_for(
                     thread_pool_exec(mdl.check_available),
@@ -1165,28 +1231,31 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
                 if not ok:
                     raise RuntimeError(reason or "Model not available")
             except Exception as e:
-                msg += f"\nFail to access model({factory}/{mdl_nm})." + str(e)
+                msg += probe_failure(f"Fail to access model({factory}/{mdl_nm}).", e)
         case LLMType.SPEECH2TEXT.value:
-            assert factory in Seq2txtModel, f"Speech model from {factory} is not supported yet."
             try:
+                if factory not in Seq2txtModel:
+                    raise LookupError(f"Speech model from {factory} is not supported yet.")
                 mdl = Seq2txtModel[factory](key=model_api_key, model_name=mdl_nm, base_url=model_base_url)
                 # TODO: check the availability
             except Exception as e:
-                msg += f"\nFail to access model({factory}/{mdl_nm})." + str(e)
+                msg += probe_failure(f"Fail to access model({factory}/{mdl_nm}).", e)
         case _:
-            raise RuntimeError(f"Unknown model type: {model_type}")
+            msg += f"\nUnknown model type: {model_type}"
 
     if req.get("verify", False):
         return get_json_result(data={"message": msg, "success": len(msg.strip()) == 0})
 
+    # 用 retcode 信封而不是 HTTPException：{"detail": ...} 不带 retcode/code，前端会当成
+    # 正常数据放过去，表现为「点保存没反应、也没报错、库里没记录」。
     if msg:
-        raise HTTPException(status_code=400, detail=msg)
+        return get_data_error_result(retmsg=msg.strip())
 
     try:
         if not TenantLLMService.filter_update(db, [TenantLLM.tenant_id == user.id, TenantLLM.llm_factory == factory, TenantLLM.llm_name == llm["llm_name"]], llm):
             TenantLLMService.save(db, **llm)
     except IntegrityError:
-        raise HTTPException(status_code=400, detail="LLM already exists for this tenant, factory, and name.")
+        return get_data_error_result(retmsg="LLM already exists for this tenant, factory, and name.")
 
     return get_json_result(data=True)
 

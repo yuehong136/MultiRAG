@@ -23,7 +23,6 @@ from abc import ABC
 from copy import deepcopy
 from io import BytesIO
 from pathlib import Path
-from urllib.parse import urljoin
 
 import requests
 from openai import AsyncOpenAI, OpenAI
@@ -31,6 +30,7 @@ from openai.lib.azure import AsyncAzureOpenAI, AzureOpenAI
 
 from common.misc_utils import thread_pool_exec
 from common.token_utils import num_tokens_from_string, total_token_count_from_response
+from common.url_utils import append_path_segment, ensure_api_version, strip_trailing_segment
 from core.nlp import is_english
 from core.prompts.generator import vision_llm_describe_prompt
 
@@ -560,7 +560,7 @@ class LmStudioCV(GptV4):
     def __init__(self, key, model_name, lang="Chinese", base_url="", **kwargs):
         if not base_url:
             raise ValueError("Local llm url cannot be None")
-        base_url = urljoin(base_url, "v1")
+        base_url = ensure_api_version(base_url)
         self.client = OpenAI(api_key="lm-studio", base_url=base_url)
         self.async_client = AsyncOpenAI(api_key="lm-studio", base_url=base_url)
         self.model_name = model_name
@@ -574,7 +574,7 @@ class OpenAI_APICV(GptV4):
     def __init__(self, key, model_name, lang="Chinese", base_url="", **kwargs):
         if not base_url:
             raise ValueError("url cannot be None")
-        base_url = urljoin(base_url, "v1")
+        base_url = ensure_api_version(base_url)
         self.client = OpenAI(api_key=key, base_url=base_url)
         self.async_client = AsyncOpenAI(api_key=key, base_url=base_url)
         self.model_name = model_name.split("___")[0]
@@ -647,7 +647,7 @@ class LocalAICV(GptV4):
     def __init__(self, key, model_name, base_url, lang="Chinese", **kwargs):
         if not base_url:
             raise ValueError("Local cv model url cannot be None")
-        base_url = urljoin(base_url, "v1")
+        base_url = ensure_api_version(base_url)
         self.client = OpenAI(api_key="empty", base_url=base_url)
         self.async_client = AsyncOpenAI(api_key="empty", base_url=base_url)
         self.model_name = model_name.split("___")[0]
@@ -659,7 +659,7 @@ class XinferenceCV(GptV4):
     _FACTORY_NAME = "Xinference"
 
     def __init__(self, key, model_name="", lang="Chinese", base_url="", **kwargs):
-        base_url = urljoin(base_url, "v1")
+        base_url = ensure_api_version(base_url)
         self.client = OpenAI(api_key=key, base_url=base_url)
         self.async_client = AsyncOpenAI(api_key=key, base_url=base_url)
         self.model_name = model_name
@@ -673,7 +673,7 @@ class GPUStackCV(GptV4):
     def __init__(self, key, model_name, lang="Chinese", base_url="", **kwargs):
         if not base_url:
             raise ValueError("Local llm url cannot be None")
-        base_url = urljoin(base_url, "v1")
+        base_url = ensure_api_version(base_url)
         self.client = OpenAI(api_key=key, base_url=base_url)
         self.async_client = AsyncOpenAI(api_key=key, base_url=base_url)
         self.model_name = model_name
@@ -1029,13 +1029,13 @@ class NvidiaCV(Base):
 
     def __init__(self, key, model_name, lang="Chinese", base_url="https://ai.api.nvidia.com/v1/vlm", **kwargs):
         if not base_url:
-            base_url = ("https://ai.api.nvidia.com/v1/vlm",)
+            base_url = "https://ai.api.nvidia.com/v1/vlm"
         self.lang = lang
         factory, llm_name = model_name.split("/")
         if factory != "liuhaotian":
-            self.base_url = urljoin(base_url, f"{factory}/{llm_name}")
+            self.base_url = append_path_segment(base_url, f"{factory}/{llm_name}")
         else:
-            self.base_url = urljoin(f"{base_url}/community", llm_name.replace("-v1.6", "16"))
+            self.base_url = append_path_segment(f"{base_url}/community", llm_name.replace("-v1.6", "16"))
         self.key = key
         Base.__init__(self, **kwargs)
 
@@ -1106,12 +1106,21 @@ class NvidiaCV(Base):
 class AnthropicCV(Base):
     _FACTORY_NAME = "Anthropic"
 
-    def __init__(self, key, model_name, base_url=None, **kwargs):
+    # 子类（GoogleCV/Vertex 上的 Claude）不走本类 __init__，兜底给一个默认值，
+    # 否则 describe / _clean_conf 取 self.max_tokens 会 AttributeError。
+    max_tokens = 8192
+
+    def __init__(self, key, model_name, lang="Chinese", base_url=None, **kwargs):
         import anthropic
 
-        self.client = anthropic.Anthropic(api_key=key)
-        self.async_client = anthropic.AsyncAnthropic(api_key=key)
+        # TenantLLMService.model_instance 按位置传 lang，缺这个形参会让 base_url 被顶掉
+        # （TypeError: got multiple values for argument 'base_url'）。
+        # /v1/messages 由 SDK 自己拼，用户多填的 /v1 或整条端点都要先摘掉
+        base_url = strip_trailing_segment(strip_trailing_segment(base_url, "v1/messages"), "v1") or None
+        self.client = anthropic.Anthropic(api_key=key, base_url=base_url)
+        self.async_client = anthropic.AsyncAnthropic(api_key=key, base_url=base_url)
         self.model_name = model_name
+        self.lang = lang
         self.system = ""
         self.max_tokens = 8192
         if "haiku" in self.model_name or "opus" in self.model_name:
@@ -1121,8 +1130,13 @@ class AnthropicCV(Base):
     def _image_prompt(self, text, images):
         if not images:
             return text
+        # 单张图片按 str/bytes 传入时不能直接迭代（会逐字符拆开），与 Base 的处理保持一致
+        if isinstance(images, str) or "bytes" in type(images).__name__:
+            images = [images]
         pmpt = [{"type": "text", "text": text}]
-        for img in images:
+        for raw in images:
+            # 会话上传的图片是原始 blob，不归一化会 "Object of type bytes is not JSON serializable"
+            img = self._normalize_image(raw)
             pmpt.append(
                 {
                     "type": "image",
@@ -1135,25 +1149,39 @@ class AnthropicCV(Base):
             )
         return pmpt
 
+    @staticmethod
+    def _answer_text(response: dict) -> str:
+        """从 /v1/messages 响应里取出正文。
+
+        不能直接取 content[0]["text"]：开了思考的模型（kimi-k2.5、claude thinking，
+        很多第三方 Anthropic 兼容端点默认就开）第一个块是 {"type": "thinking", ...}，
+        取 ["text"] 会 KeyError('text')；正文可能还被拆成多个 text 块。
+        """
+        blocks = response.get("content") or []
+        return "\n".join(str(blk.get("text", "")) for blk in blocks if isinstance(blk, dict) and blk.get("type") == "text").strip()
+
+    def _describe(self, messages):
+        response = self.client.messages.create(model=self.model_name, max_tokens=self.max_tokens, messages=messages).to_dict()
+        answer = self._answer_text(response)
+        if not answer:
+            # 思考块吃满 max_tokens 时会没有正文，给出可行动的原因而不是空字符串
+            raise ValueError(f"No text content in response (stop_reason={response.get('stop_reason')}, max_tokens={self.max_tokens}).")
+        return answer, total_token_count_from_response(response)
+
     def describe(self, image):
-        b64 = self.image2base64(image)
-        response = self.client.messages.create(model=self.model_name, max_tokens=self.max_tokens, messages=self.prompt(b64))
-        return response["content"][0]["text"].strip(), response["usage"]["input_tokens"] + response["usage"]["output_tokens"]
+        return self._describe(self.prompt(self.image2base64(image)))
 
     def describe_with_prompt(self, image, prompt=None):
-        b64 = self.image2base64(image)
-        prompt = self.prompt(b64, prompt if prompt else vision_llm_describe_prompt())
-
-        response = self.client.messages.create(model=self.model_name, max_tokens=self.max_tokens, messages=prompt)
-        return response["content"][0]["text"].strip(), total_token_count_from_response(response)
+        return self._describe(self.vision_llm_prompt(self.image2base64(image), prompt if prompt else vision_llm_describe_prompt()))
 
     def _clean_conf(self, gen_conf):
-        if "presence_penalty" in gen_conf:
-            del gen_conf["presence_penalty"]
-        if "frequency_penalty" in gen_conf:
-            del gen_conf["frequency_penalty"]
-        if "max_token" in gen_conf:
-            gen_conf["max_tokens"] = self.max_tokens
+        gen_conf.pop("presence_penalty", None)
+        gen_conf.pop("frequency_penalty", None)
+        # /v1/messages 要求 max_tokens 必填，且不认 OpenAI 那套 max_token(s) 之外的别名
+        requested = gen_conf.pop("max_tokens", None)
+        legacy = gen_conf.pop("max_token", None)
+        limit = requested or legacy
+        gen_conf["max_tokens"] = int(limit) if limit else self.max_tokens
         return gen_conf
 
     async def async_chat(self, system, history, gen_conf, images=None, **kwargs):
@@ -1162,14 +1190,15 @@ class AnthropicCV(Base):
         try:
             response = await self.async_client.messages.create(
                 model=self.model_name,
-                messages=self._form_history(system, history, images),
+                # system 是 /v1/messages 的顶层参数，messages 里不能再出现 system 角色
+                messages=self._form_history("", history, images),
                 system=system,
                 stream=False,
                 **gen_conf,
             )
             response = response.to_dict()
-            ans = response["content"][0]["text"]
-            if response["stop_reason"] == "max_tokens":
+            ans = self._answer_text(response)
+            if response.get("stop_reason") == "max_tokens":
                 ans += "...\nFor the content length reason, it stopped, continue?" if is_english([ans]) else "······\n由于长度的原因，回答被截断了，要继续吗？"
             return (
                 ans,
@@ -1182,9 +1211,10 @@ class AnthropicCV(Base):
         gen_conf = self._clean_conf(gen_conf)
         total_tokens = 0
         try:
-            response = self.async_client.messages.create(
+            response = await self.async_client.messages.create(
                 model=self.model_name,
-                messages=self._form_history(system, history, images),
+                # system 是 /v1/messages 的顶层参数，messages 里不能再出现 system 角色
+                messages=self._form_history("", history, images),
                 system=system,
                 stream=True,
                 **gen_conf,
@@ -1198,11 +1228,15 @@ class AnthropicCV(Base):
                             think = True
                         yield res.delta.thinking
                         total_tokens += num_tokens_from_string(res.delta.thinking)
-                    elif think:
-                        yield "</think>"
                     else:
-                        yield res.delta.text
-                        total_tokens += num_tokens_from_string(res.delta.text)
+                        text = getattr(res.delta, "text", "") or ""
+                        if think:
+                            # 思考段结束，闭合标签后继续吐正文，不能把这段正文丢掉
+                            yield "</think>"
+                            think = False
+                        if text:
+                            yield text
+                            total_tokens += num_tokens_from_string(text)
         except Exception as e:
             yield "\n**ERROR**: " + str(e)
 
