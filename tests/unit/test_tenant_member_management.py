@@ -1,4 +1,7 @@
-"""tenant_app 路由契约测试（迁移示范：TestClient 走真实中间件/路由/依赖/异常 handler 栈）。
+"""[Deprecated] ``/v1/tenant/*`` 路由契约测试（迁移示范：TestClient 走真实中间件/路由/依赖/异常 handler 栈）。
+
+正典 ``/api/v1/tenants/*`` 的契约测试在 ``test_tenant_restful_api.py``；本文件锁的是
+旧 web 端点在收编后行为不变（前端过渡期仍在打这些路径）。
 
 形态说明（internal/test_form_upgrade_plan.md Phase B）：
 - 路由行为测试打真实 HTTP（conftest 的 session 级 ``client``），service 层用
@@ -13,6 +16,7 @@ from types import SimpleNamespace
 
 from sqlalchemy.orm import Session
 
+from api.apps.services import tenant_api_service
 from api.db import UserTenantRole
 from api.db.services.user_service import UserService, UserTenantService
 from common.constants import RetCode
@@ -35,7 +39,7 @@ def test_user_list_allows_admin_and_denies_normal(client, client_user, monkeypat
     memberships = {client_user.id: _membership(client_user.id, UserTenantRole.ADMIN)}
     monkeypatch.setattr(UserTenantService, "get_membership", lambda _db, tenant_id, user_id: memberships.get(user_id))
     monkeypatch.setattr(UserTenantService, "get_by_tenant_id", lambda _db, _tenant_id: [{"user_id": "member-1", "update_date": "2024-01-01 00:00:00"}])
-    monkeypatch.setattr(_tenant_module(), "delta_seconds", lambda _value: 42)
+    monkeypatch.setattr(tenant_api_service, "delta_seconds", lambda _value: 42)
 
     ok_res = client.get("/v1/tenant/tenant-1/user/list")
     assert ok_res.status_code == 200, ok_res.text
