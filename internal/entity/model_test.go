@@ -66,3 +66,57 @@ func TestProviderModelsResolveThinkingFeatures(t *testing.T) {
 	}
 	t.Fatal("glm-4.7 not found")
 }
+
+// SHOW BALANCE 依赖 provider 配置里的 balance suffix：Moonshot 的驱动早已实现
+// Balance()，但在补上这份配置之前 FindProvider 返回 nil，命令直接 404。
+func TestMoonshotProviderSupportsBalanceLookup(t *testing.T) {
+	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	if err != nil {
+		t.Fatalf("NewProviderManager() error = %v", err)
+	}
+
+	provider := manager.FindProvider("moonshot")
+	if provider == nil {
+		t.Fatal("FindProvider(\"moonshot\") returned nil")
+	}
+	if got := provider.URL["default"]; got != "https://api.moonshot.cn/v1" {
+		t.Fatalf("default provider URL = %q", got)
+	}
+	if got := provider.URLSuffix.Balance; got != "users/me/balance" {
+		t.Fatalf("balance suffix = %q, want users/me/balance", got)
+	}
+	if got := provider.URLSuffix.Models; got != "models" {
+		t.Fatalf("models suffix = %q, want models", got)
+	}
+
+	model, err := manager.GetModelByName("moonshot", "kimi-k2.6")
+	if err != nil {
+		t.Fatalf("GetModelByName() error = %v", err)
+	}
+	if model.Thinking == nil || !model.Thinking.ClearContent {
+		t.Fatalf("kimi-k2.6 thinking = %#v, want clear_thinking enabled", model.Thinking)
+	}
+}
+
+func TestDeepSeekProviderIsConfigured(t *testing.T) {
+	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	if err != nil {
+		t.Fatalf("NewProviderManager() error = %v", err)
+	}
+
+	provider := manager.FindProvider("deepseek")
+	if provider == nil {
+		t.Fatal("FindProvider(\"deepseek\") returned nil")
+	}
+	if got := provider.URL["default"]; got != "https://api.deepseek.com" {
+		t.Fatalf("default provider URL = %q", got)
+	}
+
+	model, err := manager.GetModelByName("deepseek", "deepseek-reasoner")
+	if err != nil {
+		t.Fatalf("GetModelByName() error = %v", err)
+	}
+	if !model.ModelTypeMap["chat"] {
+		t.Fatalf("ModelTypeMap = %#v, want chat", model.ModelTypeMap)
+	}
+}
