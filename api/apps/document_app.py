@@ -2035,7 +2035,12 @@ def change_auth(
         return construct_json_result(code=RetCode.ARGUMENT_ERROR, message=str(e))
 
 
-@router.post("/rm", summary="删除文档", response_description="成功删除文档")
+# ---------------------------------------------------------------------------
+# [Deprecated] 文档删除已收编到 DELETE /api/v1/datasets/{dataset_id}/documents，
+# 该 RESTful 端点是 web 会话与 API token 的统一入口。本路由仅为前端等既有消费方
+# 保留，待其全部迁移后移除。
+# ---------------------------------------------------------------------------
+@router.post("/rm", summary="[Deprecated] 删除文档（请改用 DELETE /api/v1/datasets/{dataset_id}/documents）", response_description="成功删除文档", deprecated=True)
 def rm(request_body: RemoveRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/rm` 删除文档接口

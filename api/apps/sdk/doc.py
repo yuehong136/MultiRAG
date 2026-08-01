@@ -103,11 +103,6 @@ class ChunkModel(BaseModel):
         return value
 
 
-class DeleteDocumentsRequest(BaseModel):
-    ids: list[str] | None = None
-    delete_all: bool = False
-
-
 class ParseDocumentRequest(BaseModel):
     document_ids: list[str]
 
@@ -321,69 +316,6 @@ def metadata_batch_update(dataset_id: str, request: MetadataUpdateRequestSDK, db
     target_doc_ids = list(target_doc_ids)
     updated = DocMetadataService.batch_update_metadata(db, dataset_id, target_doc_ids, updates, deletes)
     return get_result(data={"updated": updated, "matched_docs": len(target_doc_ids)})
-
-
-@router.delete("/datasets/{dataset_id}/documents", summary="批量删除文档")
-def delete_documents(dataset_id: str, request: DeleteDocumentsRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
-    """
-    批量删除数据集中的文档
-
-    Args:
-        dataset_id: 数据集ID
-        request: 删除请求参数
-        db: 数据库会话
-        tenant_id: 租户ID
-
-    Returns:
-        删除结果
-    """
-    req = request.model_dump()
-
-    if not KnowledgebaseService.query(db, id=dataset_id, tenant_id=tenant_id):
-        return get_error_data_result(retmsg="You don't own the dataset.")
-
-    ids = req.get("ids")
-    if not ids:
-        if req.get("delete_all") is True:
-            ids = [doc.id for doc in DocumentService.query(db, kb_id=dataset_id)]
-            if not ids:
-                return get_result()
-        else:
-            return get_result()
-
-    doc_ids = ids
-
-    unique_doc_ids, duplicate_messages = check_duplicate_ids(doc_ids, "document")
-    errors = []
-    success_count = 0
-
-    for doc_id in unique_doc_ids:
-        doc = DocumentService.query(db, kb_id=dataset_id, id=doc_id)
-        if not doc:
-            errors.append(f"Document {doc_id} not found")
-            continue
-
-        try:
-            if not DocumentService.remove_document(db, doc[0], tenant_id):
-                errors.append(f"Failed to remove document {doc_id}")
-                continue
-            success_count += 1
-        except Exception as e:
-            errors.append(f"Error deleting document {doc_id}: {e!s}")
-
-    if errors:
-        if success_count > 0:
-            return get_result(data={"success_count": success_count, "errors": errors[:5]}, retmsg=f"Partially deleted {success_count} documents with {len(errors)} errors")
-        else:
-            return get_error_data_result(retmsg=f"Failed to delete documents: {'; '.join(errors)}")
-
-    if duplicate_messages:
-        if success_count > 0:
-            return get_result(data={"success_count": success_count, "errors": duplicate_messages}, retmsg=f"Partially deleted {success_count} documents with {len(duplicate_messages)} errors")
-        else:
-            return get_error_data_result(retmsg=";".join(duplicate_messages))
-
-    return get_result(retmsg=f"Successfully deleted {success_count} documents")
 
 
 @router.post("/datasets/{dataset_id}/chunks", summary="解析文档")
