@@ -41,6 +41,13 @@ class DeleteDocumentsRequest(BaseModel):
     delete_all: bool = False
 
 
+class UpdateMetadataConfigRequest(BaseModel):
+    # 元数据模板既可以是字段定义数组（前端保存时发的形状：[{key, type, description, enum}, ...]），
+    # 也可以是 JSON schema 对象（{type, properties, ...}，历史数据与 turn2jsonschema 的产物）。
+    # 读侧两种都吃，写侧就不能只收其中一种——只标 dict 会让数组载荷 422。
+    metadata: list[dict[str, Any]] | dict[str, Any]
+
+
 # PATCH 是本端点的正典方法；PUT 为历史别名（前端 updateDocumentMeta / 旧集成仍在发
 # PUT），标注 deprecated 留旧，待消费方全部迁移 PATCH 后移除。
 @router.patch("/datasets/{dataset_id}/documents/{document_id}", summary="更新文档")
@@ -101,6 +108,42 @@ async def update_document(
         return get_result(data=document_api_service.map_doc_keys(s, doc))
 
     return await db.run_sync(_update)  # TODO(async-phase4)
+
+
+@router.put("/datasets/{dataset_id}/documents/{document_id}/metadata/config", summary="更新文档元数据配置")
+async def update_metadata_config(
+    dataset_id: str,
+    document_id: str,
+    request: UpdateMetadataConfigRequest,
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_current_tenant_id),
+):
+    """更新单个文档的元数据模板配置（写入 parser_config.metadata）。"""
+
+    def _update_config(s: Session) -> Response:
+        kb = KnowledgebaseService.get_by_id(s, dataset_id)
+        if not kb:
+            return get_error_data_result(retmsg=f"You don't own the dataset {dataset_id}.")
+        if not document_api_service.can_update_dataset(s, tenant_id, kb):
+            return get_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
+
+        doc = DocumentService.query(s, kb_id=dataset_id, id=document_id)
+        if not doc:
+            return get_error_data_result(retmsg=f"Document {document_id} not found in dataset {dataset_id}")
+        doc = doc[0]
+
+        try:
+            DocumentService.update_parser_config(s, doc.id, {"metadata": request.metadata})
+            doc = DocumentService.get_by_id(s, doc.id)
+        except Exception as e:
+            logger.exception(e)
+            return get_error_data_result(retmsg="Failed to update metadata config", retcode=RetCode.EXCEPTION_ERROR)
+        if not doc:
+            return get_error_data_result(retmsg="Document not found!")
+
+        return get_result(data=document_api_service.map_doc_keys(s, doc))
+
+    return await db.run_sync(_update_config)  # TODO(async-phase4)
 
 
 @router.get("/datasets/{dataset_id}/metadata/summary", summary="获取元数据汇总")

@@ -262,7 +262,8 @@ class SetMetaRequest(BaseModel):
 
 class UpdateMetadataSettingRequest(BaseModel):
     doc_id: str = Field(..., description="文档ID")
-    metadata: dict[str, Any] = Field(..., description="元数据设置")
+    # 字段定义数组（前端保存时发的形状）或 JSON schema 对象（历史数据）——只收 dict 会让前端载荷 422。
+    metadata: list[dict[str, Any]] | dict[str, Any] = Field(..., description="元数据设置")
 
 
 class FilterRequest(BaseModel):
@@ -3043,7 +3044,17 @@ def metadata_update(request: MetadataUpdateRequest, db: Session = Depends(get_db
     return get_json_result(data={"updated": updated, "matched_docs": len(document_ids)})
 
 
-@router.post("/update_metadata_setting", summary="更新文档元数据设置", response_description="成功更新文档元数据设置")
+# ---------------------------------------------------------------------------
+# [Deprecated] 文档元数据配置已收编到
+#   PUT /api/v1/datasets/{dataset_id}/documents/{document_id}/metadata/config。
+# 本路由仅为前端等既有消费方保留，待其全部迁移后移除。
+# ---------------------------------------------------------------------------
+@router.post(
+    "/update_metadata_setting",
+    summary="[Deprecated] 更新文档元数据设置（请改用 PUT /api/v1/datasets/{dataset_id}/documents/{document_id}/metadata/config）",
+    response_description="成功更新文档元数据设置",
+    deprecated=True,
+)
 def update_metadata_setting(request: UpdateMetadataSettingRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """更新文档的元数据设置（存储在 parser_config 中）。
 
