@@ -129,7 +129,7 @@ def create_folder(db: Session, tenant_id: str, name: str, pf_id: str | None = No
     if FileService.query(db, name=name, parent_id=pf_id):
         return False, "Duplicated folder name in the same folder."
 
-    if file_type == FileType.FOLDER.value:
+    if (file_type or "").lower() == FileType.FOLDER.value:
         ft = FileType.FOLDER.value
     else:
         ft = FileType.VIRTUAL.value

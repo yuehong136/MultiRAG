@@ -78,6 +78,28 @@ def test_create_folder_success_folder_type(monkeypatch, db):
     assert captured["type"] == svc.FileType.FOLDER.value
 
 
+@pytest.mark.parametrize("file_type", ["FOLDER", "Folder"])
+def test_create_folder_accepts_folder_type_case_insensitively(monkeypatch, db, file_type):
+    """调用方按枚举名大写传 FOLDER 时，不能悄悄建成 VIRTUAL 文件。"""
+    monkeypatch.setattr(svc.FileService, "is_parent_folder_exist", lambda d, pid: True)
+    monkeypatch.setattr(svc.FileService, "query", lambda d, **kw: [])
+    captured = {}
+    monkeypatch.setattr(svc.FileService, "insert", lambda d, data: (captured.update(data), _file(**data))[1])
+    ok, _ = svc.create_folder(db, "t1", "docs", pf_id="pf1", file_type=file_type)
+    assert ok is True
+    assert captured["type"] == svc.FileType.FOLDER.value
+
+
+def test_create_folder_without_file_type_stays_virtual(monkeypatch, db):
+    monkeypatch.setattr(svc.FileService, "is_parent_folder_exist", lambda d, pid: True)
+    monkeypatch.setattr(svc.FileService, "query", lambda d, **kw: [])
+    captured = {}
+    monkeypatch.setattr(svc.FileService, "insert", lambda d, data: (captured.update(data), _file(**data))[1])
+    ok, _ = svc.create_folder(db, "t1", "note", pf_id="pf1")
+    assert ok is True
+    assert captured["type"] == svc.FileType.VIRTUAL.value
+
+
 # ============================ list_files ============================
 
 
