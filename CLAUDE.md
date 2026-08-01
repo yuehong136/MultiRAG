@@ -82,12 +82,12 @@ MultiRAG supports multiple vector database backends:
 ## Docker Operations（AGENTS.md 未覆盖的部分）
 
 ```bash
-# Full Docker deployment
+# Full Docker deployment（profile 由 docker/.env 的 COMPOSE_PROFILES 决定）
 cd docker && docker compose up -d
 
-# Start with specific profile
-docker compose up -d --profile cpu
-docker compose up -d --profile gpu
+# 临时指定 profile：--profile 必须在子命令之前，放在 up 之后会 unknown flag
+docker compose --profile cpu up -d
+docker compose --profile gpu up -d
 
 # Build production image
 docker build -t multirag:latest .
@@ -95,9 +95,14 @@ docker build -t multirag:latest .
 # Build lightweight image
 docker build --build-arg LIGHTEN=1 -t multirag:slim .
 
-# Check server logs
-docker logs -f multirag-server
+# 看日志：compose 用服务名（multirag-cpu），docker 用容器名（multirag）
+docker compose logs -f multirag-cpu
+docker logs -f multirag --tail 100
 ```
+
+主机重启后所有服务自动拉起（全部 `restart: unless-stopped`）；若主服务早于依赖启动而停在
+unhealthy，`docker compose restart multirag-cpu` 即可。开机自启 systemd 单元与排查方式见
+[docker/README.md](docker/README.md) 的「主机重启与自动恢复」。
 
 其他入口（基础服务、API server、task executor 的启动命令）见 AGENTS.md「服务与运行」。
 MCP server（self-host）：`uv run python mcp/server/server.py --host=127.0.0.1 --port=9382 --mode=self-host --api-key=<your-key>`；

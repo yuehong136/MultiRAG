@@ -661,18 +661,31 @@ docker compose -f docker/docker-compose.yml --profile cpu up -d
 ```bash
 cd docker
 
-# 查看主服务日志
-docker compose logs -f multirag
+# 查看主服务日志（compose 认服务名 multirag-cpu / multirag-gpu）
+docker compose logs -f multirag-cpu
+
+# 也可以用容器名（docker 命令认容器名 multirag）
+docker logs -f multirag --tail 100
 
 # 查看 TEI 服务日志（如果启用）
 docker compose logs -f tei-cpu
 ```
 
+> [!IMPORTANT]
+> **服务名 ≠ 容器名**：`docker compose` 系列命令用**服务名**（`multirag-cpu`、`postgres`、`redis`…），
+> `docker logs` / `docker exec` / `docker inspect` 用**容器名**（`multirag`、`multirag-postgres`…）。
+> 对 compose 传容器名会报 `no such service: multirag`。
+
 ### 🔄 重启服务
 
 ```bash
 cd docker
+
+# 全部重启
 docker compose restart
+
+# 只重启主服务（依赖起来晚于主服务时最常用）
+docker compose restart multirag-cpu
 ```
 
 ### 🛑 停止服务
@@ -681,6 +694,67 @@ docker compose restart
 cd docker
 docker compose down
 ```
+
+### 🔁 主机重启与自动恢复
+
+所有服务均为 `restart: unless-stopped`，**主机重启后自动拉起，无需手动操作**。
+
+| 场景 | `unless-stopped` 的行为 |
+|---|---|
+| 容器崩溃（非零退出） | 自动重启 |
+| 主机 / Docker 守护进程重启 | **自动拉起** |
+| 人为 `docker compose stop` | 保持停止（尊重人为操作） |
+
+> [!WARNING]
+> 早期的 `docker-compose-base.yml` 用的是 `restart: on-failure`，它**只覆盖非零退出**。
+> 主机重启时守护进程对容器做的是清洁停止（退出码 0），基础服务因此不会被拉起；
+> 而主服务本就是 `unless-stopped`，会起来并对着不存在的依赖栈停在 unhealthy——
+> 表现就是每次重启都得手动跑一遍 `docker compose up -d`。
+> 排查用 `docker inspect <容器名> --format '{{.HostConfig.RestartPolicy.Name}}'`，
+> 若仍是 `on-failure`，更新 compose 后重建容器，或对运行中的容器就地改：
+> `docker update --restart=unless-stopped <容器名>`。
+
+**手动兜底**（容器被删除、或上次是人为 stop 的，这两种 `unless-stopped` 管不到）：
+
+```bash
+cd docker && docker compose up -d
+```
+
+**开机自动执行上面这条**（可选，把上述两种情况也兜住）：
+
+```bash
+sudo tee /etc/systemd/system/multirag.service > /dev/null <<'EOF'
+[Unit]
+Description=MultiRAG docker compose stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/path/to/multirag/docker
+ExecStart=/usr/bin/docker compose up -d
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload && sudo systemctl enable multirag.service
+```
+
+**验证恢复情况**：
+
+```bash
+docker ps -a --format '{{.Names}}\t{{.Status}}' | sort
+curl -s localhost/api/v1/system/healthz
+```
+
+判读：compose 管理的容器应全部 `healthy`；沙箱执行器派生的 `sandbox_python_0` /
+`sandbox_nodejs_0` 没有健康检查，显示 `Up` 即正常。healthz 里
+`db` / `db_pool` / `redis` / `doc_engine` / `storage` 为 `ok` 即服务可用
+（`chat` 取决于是否配置了 `user_default_llm.factory`，未配置时为 `nok`，不影响其他功能）。
 
 ### 🔧 使用外部 Redis
 
@@ -722,7 +796,7 @@ Docling 是一个高级的 PDF 解析器，支持复杂文档的解析。
 
 3. 查看安装日志：
    ```bash
-   docker compose logs multirag | grep docling
+   docker compose logs multirag-cpu | grep docling
    ```
 
 > [!TIP]
