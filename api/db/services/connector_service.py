@@ -542,40 +542,61 @@ class Connector2KbService(CommonService):
             错误信息（如果有）
         """
         # 获取现有关联
-        arr = cls.query(db, kb_id=kb_id)
-        old_conn_ids = [a.connector_id for a in arr]
+        old_conn_ids = [a.connector_id for a in cls.query(db, kb_id=kb_id)]
 
-        # 添加新关联
+        # 添加或更新传入的关联
         connector_ids = []
         for conn in connectors:
             conn_id = conn["id"]
             connector_ids.append(conn_id)
-            if conn_id in old_conn_ids:
-                cls.filter_update(db, [cls.model.connector_id == conn_id, cls.model.kb_id == kb_id], {"auto_parse": conn.get("auto_parse", "1")})
-                continue
-            cls.insert(db, **{"id": get_uuid(), "connector_id": conn_id, "kb_id": kb_id, "auto_parse": conn.get("auto_parse", "1")})
-            SyncLogsService.schedule(db, conn_id, kb_id, reindex=True)
+            cls.link_connector(db, kb_id, conn_id, conn.get("auto_parse", "1"))
 
         # 删除不再需要的关联
-        errs = []
         for conn_id in old_conn_ids:
             if conn_id in connector_ids:
                 continue
+            cls.unlink_connector(db, kb_id, conn_id)
 
-            # 删除关联
-            cls.filter_delete(db, [cls.model.kb_id == kb_id, cls.model.connector_id == conn_id])
+        return ""
 
-            # 获取连接器信息
-            conn = ConnectorService.get_by_id(db, conn_id)
-            if not conn:
-                continue
+    @classmethod
+    def link_connector(cls, db: Session, kb_id: str, connector_id: str, auto_parse: str = "1") -> None:
+        """关联单个连接器到知识库；已关联时只更新 auto_parse（幂等）。
 
-            # 取消调度中或运行中的同步任务（不删除已同步的文档）
-            SyncLogsService.filter_update(
-                db, [SyncLogs.connector_id == conn_id, SyncLogs.kb_id == kb_id, SyncLogs.status.in_([TaskStatus.SCHEDULE, TaskStatus.RUNNING])], {"status": TaskStatus.CANCEL}
-            )
+        Args:
+            db: 数据库会话
+            kb_id: 知识库ID
+            connector_id: 连接器ID
+            auto_parse: 是否自动解析（"0" / "1"）
+        """
+        if cls.query(db, kb_id=kb_id, connector_id=connector_id):
+            cls.filter_update(db, [cls.model.connector_id == connector_id, cls.model.kb_id == kb_id], {"auto_parse": auto_parse})
+            return
 
-        return "\n".join(errs)
+        cls.insert(db, **{"id": get_uuid(), "connector_id": connector_id, "kb_id": kb_id, "auto_parse": auto_parse})
+        SyncLogsService.schedule(db, connector_id, kb_id, reindex=True)
+
+    @classmethod
+    def unlink_connector(cls, db: Session, kb_id: str, connector_id: str) -> None:
+        """解除单个连接器与知识库的关联。
+
+        取消调度中/运行中的同步任务，但不删除已同步入库的文档。
+
+        Args:
+            db: 数据库会话
+            kb_id: 知识库ID
+            connector_id: 连接器ID
+        """
+        cls.filter_delete(db, [cls.model.kb_id == kb_id, cls.model.connector_id == connector_id])
+
+        if not ConnectorService.get_by_id(db, connector_id):
+            return
+
+        SyncLogsService.filter_update(
+            db,
+            [SyncLogs.connector_id == connector_id, SyncLogs.kb_id == kb_id, SyncLogs.status.in_([TaskStatus.SCHEDULE, TaskStatus.RUNNING])],
+            {"status": TaskStatus.CANCEL},
+        )
 
     @classmethod
     def list_connectors(cls, db: Session, kb_id: str) -> list[dict]:

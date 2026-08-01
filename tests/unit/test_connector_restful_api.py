@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from api.apps.services import connector_api_service, connector_oauth_service
 from api.db.services.connector_service import Connector2KbService, ConnectorService, SyncLogsService
+from api.db.services.knowledgebase_service import KnowledgebaseService
 from common.constants import RetCode, TaskStatus
 
 CONNECTOR_ID = "conn-1"
@@ -263,3 +264,90 @@ def test_oauth_start_rejects_unknown_source(client, monkeypatch):
     body = resp.json()
     assert body["retcode"] == RetCode.ARGUMENT_ERROR, body
     assert body["retmsg"] == "Invalid Google OAuth type.", body
+
+
+# ---------------------------------------------------------------------------
+# 连接器 ↔ 知识库关联（承接前端 LinkDataSource 的逐条勾选交互）
+# ---------------------------------------------------------------------------
+
+_DATASET_LINK = f"/api/v1/datasets/kb-1/connectors/{CONNECTOR_ID}"
+
+
+def _stub_kb_accessible(monkeypatch, sessions, allowed: bool):
+    monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda cls, s, kb_id, user_id: sessions.append(s) or allowed))
+
+
+def test_list_dataset_connectors(client, monkeypatch, sessions):
+    _stub_kb_accessible(monkeypatch, sessions, True)
+    monkeypatch.setattr(
+        Connector2KbService,
+        "list_connectors",
+        classmethod(lambda cls, s, kb_id: sessions.append(s) or [{"id": CONNECTOR_ID, "auto_parse": "1"}]),
+    )
+
+    resp = client.get("/api/v1/datasets/kb-1/connectors")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"] == [{"id": CONNECTOR_ID, "auto_parse": "1"}], resp.text
+    _assert_sync_facade(sessions)
+
+
+def test_link_maps_auto_parse_to_the_column_flag(client, monkeypatch, sessions):
+    linked: list[tuple] = []
+    _stub_kb_accessible(monkeypatch, sessions, True)
+    _stub_accessible(monkeypatch, sessions, True)
+    monkeypatch.setattr(
+        Connector2KbService,
+        "link_connector",
+        classmethod(lambda cls, s, kb_id, conn_id, auto_parse="1": sessions.append(s) or linked.append((kb_id, conn_id, auto_parse))),
+    )
+
+    assert client.put(_DATASET_LINK, json={"auto_parse": True}).status_code == 200
+    assert client.put(_DATASET_LINK, json={"auto_parse": False}).status_code == 200
+    assert client.put(_DATASET_LINK, json={}).status_code == 200  # 默认开启
+
+    assert linked == [("kb-1", CONNECTOR_ID, "1"), ("kb-1", CONNECTOR_ID, "0"), ("kb-1", CONNECTOR_ID, "1")], linked
+    _assert_sync_facade(sessions)
+
+
+def test_unlink_removes_the_pair(client, monkeypatch, sessions):
+    unlinked: list[tuple] = []
+    _stub_kb_accessible(monkeypatch, sessions, True)
+    monkeypatch.setattr(
+        Connector2KbService,
+        "unlink_connector",
+        classmethod(lambda cls, s, kb_id, conn_id: sessions.append(s) or unlinked.append((kb_id, conn_id))),
+    )
+
+    resp = client.delete(_DATASET_LINK)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"] is True, resp.text
+    assert unlinked == [("kb-1", CONNECTOR_ID)], unlinked
+
+
+def test_dataset_link_routes_require_dataset_access(client, monkeypatch, sessions):
+    """够不到知识库就一律拒绝，且不落写。"""
+    touched: list[str] = []
+    _stub_kb_accessible(monkeypatch, sessions, False)
+    _stub_accessible(monkeypatch, sessions, True)
+    for name in ("list_connectors", "link_connector", "unlink_connector"):
+        monkeypatch.setattr(Connector2KbService, name, classmethod(lambda cls, *a, _n=name, **kw: touched.append(_n)))
+
+    assert client.get("/api/v1/datasets/kb-1/connectors").json()["retcode"] == RetCode.AUTHENTICATION_ERROR
+    assert client.put(_DATASET_LINK, json={"auto_parse": True}).json()["retcode"] == RetCode.AUTHENTICATION_ERROR
+    assert client.delete(_DATASET_LINK).json()["retcode"] == RetCode.AUTHENTICATION_ERROR
+    assert touched == [], touched
+
+
+def test_link_also_requires_access_to_the_connector(client, monkeypatch, sessions):
+    """能改知识库不等于能挂别人的连接器（其 config 里带凭证）。"""
+    touched: list[str] = []
+    _stub_kb_accessible(monkeypatch, sessions, True)
+    _stub_accessible(monkeypatch, sessions, False)
+    monkeypatch.setattr(Connector2KbService, "link_connector", classmethod(lambda cls, *a, **kw: touched.append("link")))
+
+    resp = client.put(_DATASET_LINK, json={"auto_parse": True})
+
+    assert resp.json()["retcode"] == RetCode.AUTHENTICATION_ERROR, resp.text
+    assert touched == [], touched

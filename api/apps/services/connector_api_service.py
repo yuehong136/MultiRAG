@@ -25,7 +25,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from api.db import InputType
-from api.db.services.connector_service import ConnectorService, SyncLogsService
+from api.db.services.connector_service import Connector2KbService, ConnectorService, SyncLogsService
 from common.constants import RetCode, TaskStatus
 from common.misc_utils import get_uuid
 
@@ -105,4 +105,24 @@ def rebuild_connector(db: Session, connector_id: str, kb_id: str, tenant_id: str
 def remove_connector(db: Session, connector_id: str) -> bool:
     ConnectorService.resume(db, connector_id, TaskStatus.CANCEL)
     ConnectorService.delete_by_id(db, connector_id)
+    return True
+
+
+# ==================== 连接器 ↔ 知识库关联 ====================
+#
+# 整集写入走数据集更新端点的 ``connectors`` 字段（``dataset_api_service``）；下面是按单个
+# 连接器操作的入口，供"知识库设置里逐条勾选/解绑/切自动解析"的界面使用。
+
+
+def list_dataset_connectors(db: Session, dataset_id: str) -> list[dict]:
+    return Connector2KbService.list_connectors(db, dataset_id)
+
+
+def link_dataset_connector(db: Session, dataset_id: str, connector_id: str, auto_parse: bool) -> bool:
+    Connector2KbService.link_connector(db, dataset_id, connector_id, "1" if auto_parse else "0")
+    return True
+
+
+def unlink_dataset_connector(db: Session, dataset_id: str, connector_id: str) -> bool:
+    Connector2KbService.unlink_connector(db, dataset_id, connector_id)
     return True

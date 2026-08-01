@@ -41,6 +41,7 @@ from sqlalchemy.orm import Session
 
 from api.apps.services import connector_api_service, connector_oauth_service
 from api.db.db_models import get_async_db
+from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils.api_utils import Principal, async_current_user, get_data_error_result, get_json_result, server_error_response
 from common.constants import RetCode
 
@@ -80,6 +81,12 @@ class RebuildRequest(BaseModel):
     """重建连接器请求"""
 
     kb_id: str
+
+
+class LinkDatasetConnectorRequest(BaseModel):
+    """关联连接器到知识库请求"""
+
+    auto_parse: bool = True  # 同步进来的文档是否自动解析
 
 
 class GoogleWebOAuthStartRequest(BaseModel):
@@ -267,6 +274,67 @@ async def rebuild(
         if not await _require_access(db, connector_id, user.id):
             return _auth_error()
         return _respond(*await db.run_sync(lambda s: connector_api_service.rebuild_connector(s, connector_id, request.kb_id, user.id)))  # TODO(async-phase4)
+    except Exception as e:
+        return server_error_response(e)
+
+
+# ==================== 连接器 ↔ 知识库关联 ====================
+#
+# 整集写入走 ``PATCH /api/v1/datasets/{dataset_id}`` 的 ``connectors`` 字段；下面三条是按
+# 单个连接器操作的入口，对应知识库设置页里逐条勾选/解绑/切自动解析的交互，避免前端拿着
+# 可能过期的列表做读-改-写而误删他人刚加的关联。
+
+
+@router.get("/datasets/{dataset_id}/connectors", summary="获取知识库关联的连接器", response_description="连接器列表")
+async def list_dataset_connectors(
+    dataset_id: str,
+    db: AsyncSession = Depends(get_async_db),
+    user: Principal = Depends(async_current_user),
+):
+    """列出该知识库已关联的连接器（含 auto_parse 状态）。"""
+    try:
+        if not await db.run_sync(lambda s: KnowledgebaseService.accessible(s, dataset_id, user.id)):  # TODO(async-phase4)
+            return _auth_error()
+        connectors = await db.run_sync(lambda s: connector_api_service.list_dataset_connectors(s, dataset_id))  # TODO(async-phase4)
+        return get_json_result(data=connectors)
+    except Exception as e:
+        return server_error_response(e)
+
+
+@router.put("/datasets/{dataset_id}/connectors/{connector_id}", summary="关联连接器到知识库", response_description="操作结果")
+async def link_dataset_connector(
+    dataset_id: str,
+    connector_id: str,
+    request: LinkDatasetConnectorRequest,
+    db: AsyncSession = Depends(get_async_db),
+    user: Principal = Depends(async_current_user),
+):
+    """关联连接器到知识库；已关联时只更新 auto_parse（幂等）。"""
+    try:
+        if not await db.run_sync(lambda s: KnowledgebaseService.accessible(s, dataset_id, user.id)):  # TODO(async-phase4)
+            return _auth_error()
+        if not await _require_access(db, connector_id, user.id):
+            return _auth_error()
+
+        linked = await db.run_sync(lambda s: connector_api_service.link_dataset_connector(s, dataset_id, connector_id, request.auto_parse))  # TODO(async-phase4)
+        return get_json_result(data=linked)
+    except Exception as e:
+        return server_error_response(e)
+
+
+@router.delete("/datasets/{dataset_id}/connectors/{connector_id}", summary="解除连接器与知识库的关联", response_description="操作结果")
+async def unlink_dataset_connector(
+    dataset_id: str,
+    connector_id: str,
+    db: AsyncSession = Depends(get_async_db),
+    user: Principal = Depends(async_current_user),
+):
+    """解绑连接器，取消其在该知识库下调度中/运行中的同步任务，已入库文档保留。"""
+    try:
+        if not await db.run_sync(lambda s: KnowledgebaseService.accessible(s, dataset_id, user.id)):  # TODO(async-phase4)
+            return _auth_error()
+        unlinked = await db.run_sync(lambda s: connector_api_service.unlink_dataset_connector(s, dataset_id, connector_id))  # TODO(async-phase4)
+        return get_json_result(data=unlinked)
     except Exception as e:
         return server_error_response(e)
 
