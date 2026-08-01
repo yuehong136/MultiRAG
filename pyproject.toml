@@ -69,7 +69,9 @@ dependencies = [
     "jsonschema>=4.23.0,<5.0.0",
     "referencing>=0.35.0,<1.0.0",
     "jsonpath-ng>=1.6.1",
-    "langfuse>=3.2.4",
+    # v4 移除了 start_generation()，改用 start_observation(as_type="generation")；
+    # 下界必须钉在 4.0.1，否则解析到 4.x 而代码还按 v3 写就是全线 AttributeError
+    "langfuse>=4.0.1",
     "litellm~=1.82.0,!=1.82.7,!=1.82.8",
     "mammoth>=1.11.0",
     "markdown==3.8.2",

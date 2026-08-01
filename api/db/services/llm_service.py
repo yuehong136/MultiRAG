@@ -120,7 +120,7 @@ class LLMBundle(LLM4Tenant):
 
     def encode(self, texts: list):
         if self.langfuse:
-            generation = self.langfuse.start_generation(trace_context=self.trace_context, name="encode", model=self.llm_name, input={"texts": texts})
+            generation = self.langfuse.start_observation(as_type="generation", trace_context=self.trace_context, name="encode", model=self.llm_name, input={"texts": texts})
 
         safe_texts = []
         for text in texts:
@@ -146,7 +146,7 @@ class LLMBundle(LLM4Tenant):
 
     def encode_queries(self, query: str):
         if self.langfuse:
-            generation = self.langfuse.start_generation(trace_context=self.trace_context, name="encode_queries", model=self.llm_name, input={"query": query})
+            generation = self.langfuse.start_observation(as_type="generation", trace_context=self.trace_context, name="encode_queries", model=self.llm_name, input={"query": query})
 
         # 避免在外部模型调用期间持有 idle-in-transaction
         self._release_db_before_long_io()
@@ -162,7 +162,7 @@ class LLMBundle(LLM4Tenant):
 
     def similarity(self, query: str, texts: list):
         if self.langfuse:
-            generation = self.langfuse.start_generation(trace_context=self.trace_context, name="similarity", model=self.llm_name, input={"query": query, "texts": texts})
+            generation = self.langfuse.start_observation(as_type="generation", trace_context=self.trace_context, name="similarity", model=self.llm_name, input={"query": query, "texts": texts})
 
         # 避免在外部模型调用期间持有 idle-in-transaction
         self._release_db_before_long_io()
@@ -178,7 +178,7 @@ class LLMBundle(LLM4Tenant):
 
     def describe(self, image, max_tokens: int = 300):
         if self.langfuse:
-            generation = self.langfuse.start_generation(trace_context=self.trace_context, name="describe", metadata={"model": self.llm_name})
+            generation = self.langfuse.start_observation(as_type="generation", trace_context=self.trace_context, name="describe", metadata={"model": self.llm_name})
 
         # 避免在外部模型调用期间持有 idle-in-transaction
         self._release_db_before_long_io()
@@ -194,7 +194,7 @@ class LLMBundle(LLM4Tenant):
 
     def describe_with_prompt(self, image, prompt):
         if self.langfuse:
-            generation = self.langfuse.start_generation(trace_context=self.trace_context, name="describe_with_prompt", metadata={"model": self.llm_name, "prompt": prompt})
+            generation = self.langfuse.start_observation(as_type="generation", trace_context=self.trace_context, name="describe_with_prompt", metadata={"model": self.llm_name, "prompt": prompt})
 
         # 避免在外部模型调用期间持有 idle-in-transaction
         self._release_db_before_long_io()
@@ -210,7 +210,7 @@ class LLMBundle(LLM4Tenant):
 
     def transcription(self, audio):
         if self.langfuse:
-            generation = self.langfuse.start_generation(trace_context=self.trace_context, name="transcription", metadata={"model": self.llm_name})
+            generation = self.langfuse.start_observation(as_type="generation", trace_context=self.trace_context, name="transcription", metadata={"model": self.llm_name})
 
         # 避免在外部模型调用期间持有 idle-in-transaction
         self._release_db_before_long_io()
@@ -234,7 +234,8 @@ class LLMBundle(LLM4Tenant):
 
         if supports_stream:
             if self.langfuse:
-                generation = self.langfuse.start_generation(
+                generation = self.langfuse.start_observation(
+                    as_type="generation",
                     trace_context=self.trace_context,
                     name="stream_transcription",
                     metadata={"model": self.llm_name},
@@ -270,7 +271,8 @@ class LLMBundle(LLM4Tenant):
 
         # 回退到非流式模式
         if self.langfuse:
-            generation = self.langfuse.start_generation(
+            generation = self.langfuse.start_observation(
+                as_type="generation",
                 trace_context=self.trace_context,
                 name="stream_transcription",
                 metadata={"model": self.llm_name},
@@ -297,7 +299,7 @@ class LLMBundle(LLM4Tenant):
 
     def tts(self, text: str) -> Generator[bytes, None, None]:
         if self.langfuse:
-            generation = self.langfuse.start_generation(trace_context=self.trace_context, name="tts", input={"text": text})
+            generation = self.langfuse.start_observation(as_type="generation", trace_context=self.trace_context, name="tts", input={"text": text})
 
         # 避免在外部模型调用期间持有 idle-in-transaction
         self._release_db_before_long_io()
@@ -462,7 +464,7 @@ class LLMBundle(LLM4Tenant):
 
         generation = None
         if self.langfuse:
-            generation = self.langfuse.start_generation(trace_context=self.trace_context, name="chat", model=self.llm_name, input={"system": system, "history": history})
+            generation = self.langfuse.start_observation(as_type="generation", trace_context=self.trace_context, name="chat", model=self.llm_name, input={"system": system, "history": history})
 
         chat_partial = partial(base_fn, system, history, gen_conf)
         use_kwargs = self._clean_param(chat_partial, **kwargs)
@@ -506,7 +508,9 @@ class LLMBundle(LLM4Tenant):
 
         generation = None
         if self.langfuse:
-            generation = self.langfuse.start_generation(trace_context=self.trace_context, name="chat_streamly", model=self.llm_name, input={"system": system, "history": history})
+            generation = self.langfuse.start_observation(
+                as_type="generation", trace_context=self.trace_context, name="chat_streamly", model=self.llm_name, input={"system": system, "history": history}
+            )
 
         if stream_fn:
             chat_partial = partial(stream_fn, system, history, gen_conf)
@@ -556,7 +560,9 @@ class LLMBundle(LLM4Tenant):
 
         generation = None
         if self.langfuse:
-            generation = self.langfuse.start_generation(trace_context=self.trace_context, name="chat_streamly", model=self.llm_name, input={"system": system, "history": history})
+            generation = self.langfuse.start_observation(
+                as_type="generation", trace_context=self.trace_context, name="chat_streamly", model=self.llm_name, input={"system": system, "history": history}
+            )
 
         if stream_fn:
             chat_partial = partial(stream_fn, system, history, gen_conf)

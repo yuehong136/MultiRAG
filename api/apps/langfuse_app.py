@@ -108,8 +108,7 @@ def get_api_key(db: Session = Depends(get_db), user=Depends(manager)):
         except Exception as e:
             return server_error_response(e)
 
-        # langfuse fern SDK 的模型是 pydantic.v1 风格（无 model_dump），保留 .dict()
-        project = langfuse.api.projects.get().dict()["data"][0]
+        project = langfuse.api.projects.get().model_dump()["data"][0]
         langfuse_entry["project_id"] = project["id"]
         langfuse_entry["project_name"] = project["name"]
 
