@@ -37,6 +37,42 @@ class ConnectorService(CommonService):
     model = Connector
 
     @classmethod
+    def accessible(cls, db: Session, connector_id: str, user_id: str) -> bool:
+        """判断用户能否访问该连接器。
+
+        连接器的 config 里存着数据源凭证（Google/Box 的 OAuth token 等），按 id 直取
+        必须先过这一关，否则任意登录用户都能读走别人的凭证。
+
+        Args:
+            db: 数据库会话
+            connector_id: 连接器ID
+            user_id: 当前用户ID
+
+        Returns:
+            属于本人租户或本人已加入该租户时为 True
+        """
+        connector = cls.get_by_id(db, connector_id)
+        if not connector:
+            logger.warning("connector access denied: connector not found connector_id=%s user_id=%s", connector_id, user_id)
+            return False
+
+        if connector.tenant_id == user_id:
+            return True
+
+        from api.db.services.user_service import UserTenantService
+
+        role = UserTenantService.get_role_in_tenant(db, user_id=user_id, tenant_id=connector.tenant_id)
+        has_access = UserTenantService.can_access_tenant_resources(role)
+        if not has_access:
+            logger.warning(
+                "connector access denied: tenant mismatch connector_id=%s user_id=%s tenant_id=%s",
+                connector_id,
+                user_id,
+                connector.tenant_id,
+            )
+        return has_access
+
+    @classmethod
     def resume(cls, db: Session, connector_id: str, status: str):
         """
         恢复连接器任务状态
@@ -494,7 +530,7 @@ class Connector2KbService(CommonService):
     @classmethod
     def link_connectors(cls, db: Session, kb_id: str, connectors: list[dict], tenant_id: str) -> str:
         """
-        关联连接器到知识库（与 link_kb 相反的方向）
+        关联连接器到知识库
 
         Args:
             db: 数据库会话
@@ -561,52 +597,3 @@ class Connector2KbService(CommonService):
         )
         rows = db.execute(stmt).mappings().all()
         return [dict(row) for row in rows]
-
-    @classmethod
-    def link_kb(cls, db: Session, conn_id: str, kb_ids: list[str], tenant_id: str) -> str:
-        """
-        关联连接器与知识库
-
-        Args:
-            db: 数据库会话
-            conn_id: 连接器ID
-            kb_ids: 知识库ID列表
-            tenant_id: 租户ID
-
-        Returns:
-            错误信息（如果有）
-        """
-        # 获取现有关联
-        arr = cls.query(db, connector_id=conn_id)
-        old_kb_ids = [a.kb_id for a in arr]
-
-        # 添加新关联
-        for kb_id in kb_ids:
-            if kb_id in old_kb_ids:
-                continue
-            cls.insert(db, **{"id": get_uuid(), "connector_id": conn_id, "kb_id": kb_id})
-            SyncLogsService.schedule(db, conn_id, kb_id, reindex=True)
-
-        # 删除不再需要的关联
-        errs = []
-        conn = ConnectorService.get_by_id(db, conn_id)
-        if not conn:
-            return "连接器不存在"
-
-        for kb_id in old_kb_ids:
-            if kb_id in kb_ids:
-                continue
-
-            # 删除关联
-            cls.filter_delete(db, [cls.model.kb_id == kb_id, cls.model.connector_id == conn_id])
-
-            # 取消调度中的同步任务
-            SyncLogsService.filter_update(db, [SyncLogs.connector_id == conn_id, SyncLogs.kb_id == kb_id, SyncLogs.status == TaskStatus.SCHEDULE], {"status": TaskStatus.CANCEL})
-
-            # 删除相关文档
-            docs = DocumentService.query(db, source_type=f"{conn.source}/{conn.id}")
-            err = FileService.delete_docs(db, [d.id for d in docs], tenant_id)
-            if err:
-                errs.append(err)
-
-        return "\n".join(errs)

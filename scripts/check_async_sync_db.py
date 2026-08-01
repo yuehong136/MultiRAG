@@ -69,6 +69,7 @@ SYNC_DEP_EXTRA = frozenset({"manager"})
 # （config_api.py 的端点已并入 system_api.py，后者在管）。
 MANAGED_PURE_ASYNC: tuple[Path, ...] = (
     Path("api/apps/restful_apis/chat_api.py"),
+    Path("api/apps/restful_apis/connector_api.py"),
     Path("api/apps/restful_apis/dataset_api.py"),
     Path("api/apps/restful_apis/document_api.py"),
     Path("api/apps/restful_apis/file_api.py"),
