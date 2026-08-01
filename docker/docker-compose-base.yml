@@ -45,7 +45,7 @@ services:
       interval: 10s
       timeout: 10s
       retries: 120
-    restart: on-failure
+    restart: unless-stopped
 
   # ==========================================================
   # 可选服务（需要指定 profile 启动）
@@ -85,7 +85,7 @@ services:
       retries: 120
     networks:
       - multirag
-    restart: on-failure
+    restart: unless-stopped
 
   # ========== OpenSearch 搜索引擎 ==========
   opensearch01:
@@ -123,7 +123,7 @@ services:
       retries: 120
     networks:
       - multirag
-    restart: on-failure
+    restart: unless-stopped
 
   # ========== Infinity 向量数据库 ==========
   infinity:
@@ -152,7 +152,7 @@ services:
       interval: 10s
       timeout: 10s
       retries: 120
-    restart: on-failure
+    restart: unless-stopped
 
   # ========== Milvus 向量数据库 ==========
   # 参考官方配置：https://github.com/milvus-io/milvus/releases/download/v2.6.7/milvus-standalone-docker-compose.yml
@@ -176,7 +176,7 @@ services:
       retries: 3
     networks:
       - multirag
-    restart: on-failure
+    restart: unless-stopped
 
   milvus-minio:
     profiles:
@@ -199,7 +199,7 @@ services:
       retries: 3
     networks:
       - multirag
-    restart: on-failure
+    restart: unless-stopped
 
   milvus-standalone:
     profiles:
@@ -231,7 +231,7 @@ services:
       - milvus-minio
     networks:
       - multirag
-    restart: on-failure
+    restart: unless-stopped
 
   # ========== OceanBase 向量数据库 ==========
   oceanbase:
@@ -258,7 +258,7 @@ services:
       timeout: 10s
     networks:
       - multirag
-    restart: on-failure
+    restart: unless-stopped
 
   # ========== SeekDB 向量数据库 ==========
   seekdb:
@@ -313,7 +313,7 @@ services:
       interval: 10s
       timeout: 10s
       retries: 120
-    restart: on-failure
+    restart: unless-stopped
 
   # ========== MinIO 对象存储 ==========
   minio:
@@ -331,7 +331,7 @@ services:
       - minio_data:/data
     networks:
       - multirag
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 10s
@@ -351,7 +351,7 @@ services:
       - redis_data:/data
     networks:
       - multirag
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
@@ -381,7 +381,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 120s
-    restart: on-failure
+    restart: unless-stopped
 
   # ========== TEI 服务 (GPU 版本) ==========
   tei-gpu:
@@ -413,7 +413,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 120s
-    restart: on-failure
+    restart: unless-stopped
 
   # ========== Kibana (Elasticsearch 可视化) ==========
   kibana:
@@ -436,7 +436,7 @@ services:
       retries: 120
     networks:
       - multirag
-    restart: on-failure
+    restart: unless-stopped
 
 # ========== 数据卷定义 ==========
 volumes:
