@@ -5899,6 +5899,320 @@
                     "mdl_type": "embedding"
                 }
             ]
+        },
+        {
+            "name": "Astraflow",
+            "logo": "",
+            "tags": "LLM,TEXT EMBEDDING",
+            "status": "1",
+            "rank": "250",
+            "url": "https://api-us-ca.umodelverse.ai/v1",
+            "llm": [
+                {
+                    "llm_name": "claude-opus-4-7",
+                    "tags": "LLM,CHAT,200k",
+                    "max_tokens": 200000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "claude-opus-4-6",
+                    "tags": "LLM,CHAT,200k",
+                    "max_tokens": 200000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "claude-sonnet-4-5-20250929",
+                    "tags": "LLM,CHAT,200k",
+                    "max_tokens": 200000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "claude-haiku-4-5-20251001",
+                    "tags": "LLM,CHAT,200k",
+                    "max_tokens": 200000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "gpt-5.4",
+                    "tags": "LLM,CHAT,400k",
+                    "max_tokens": 400000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "gpt-5.4-mini",
+                    "tags": "LLM,CHAT,400k",
+                    "max_tokens": 400000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "gpt-5.4-nano",
+                    "tags": "LLM,CHAT,400k",
+                    "max_tokens": 400000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "gpt-4o-mini",
+                    "tags": "LLM,CHAT,128k",
+                    "max_tokens": 128000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "Qwen/Qwen3-Max",
+                    "tags": "LLM,CHAT,131k",
+                    "max_tokens": 131072,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "Qwen/Qwen3-Coder",
+                    "tags": "LLM,CHAT,131k",
+                    "max_tokens": 131072,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "Qwen/Qwen3-32B",
+                    "tags": "LLM,CHAT,131k",
+                    "max_tokens": 131072,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "Qwen/Qwen3-VL-235B-A22B-Instruct",
+                    "tags": "LLM,CHAT,131k",
+                    "max_tokens": 131072,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "kimi-k2.6",
+                    "tags": "LLM,CHAT,200k",
+                    "max_tokens": 200000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "glm-5.1",
+                    "tags": "LLM,CHAT,128k",
+                    "max_tokens": 128000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "MiniMax-M2.7",
+                    "tags": "LLM,CHAT,1M",
+                    "max_tokens": 1000000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "MiniMax-M2",
+                    "tags": "LLM,CHAT,1M",
+                    "max_tokens": 1000000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "gemini-2.5-pro",
+                    "tags": "LLM,CHAT,1M",
+                    "max_tokens": 1000000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "gemini-2.5-flash",
+                    "tags": "LLM,CHAT,1M",
+                    "max_tokens": 1000000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "qwen3-embedding-8b",
+                    "tags": "TEXT EMBEDDING,8K",
+                    "max_tokens": 8192,
+                    "is_tools": false,
+                    "mdl_type": "embedding"
+                },
+                {
+                    "llm_name": "text-embedding-3-large",
+                    "tags": "TEXT EMBEDDING,8K",
+                    "max_tokens": 8191,
+                    "is_tools": false,
+                    "mdl_type": "embedding"
+                },
+                {
+                    "llm_name": "text-embedding-ada-002",
+                    "tags": "TEXT EMBEDDING,8K",
+                    "max_tokens": 8191,
+                    "is_tools": false,
+                    "mdl_type": "embedding"
+                }
+            ]
+        },
+        {
+            "name": "Astraflow-CN",
+            "logo": "",
+            "tags": "LLM,TEXT EMBEDDING",
+            "status": "1",
+            "rank": "249",
+            "url": "https://api.modelverse.cn/v1",
+            "llm": [
+                {
+                    "llm_name": "claude-opus-4-7",
+                    "tags": "LLM,CHAT,200k",
+                    "max_tokens": 200000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "claude-opus-4-6",
+                    "tags": "LLM,CHAT,200k",
+                    "max_tokens": 200000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "claude-sonnet-4-5-20250929",
+                    "tags": "LLM,CHAT,200k",
+                    "max_tokens": 200000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "claude-haiku-4-5-20251001",
+                    "tags": "LLM,CHAT,200k",
+                    "max_tokens": 200000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "gpt-5.4",
+                    "tags": "LLM,CHAT,400k",
+                    "max_tokens": 400000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "gpt-5.4-mini",
+                    "tags": "LLM,CHAT,400k",
+                    "max_tokens": 400000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "gpt-5.4-nano",
+                    "tags": "LLM,CHAT,400k",
+                    "max_tokens": 400000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "gpt-4o-mini",
+                    "tags": "LLM,CHAT,128k",
+                    "max_tokens": 128000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "Qwen/Qwen3-Max",
+                    "tags": "LLM,CHAT,131k",
+                    "max_tokens": 131072,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "Qwen/Qwen3-Coder",
+                    "tags": "LLM,CHAT,131k",
+                    "max_tokens": 131072,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "Qwen/Qwen3-32B",
+                    "tags": "LLM,CHAT,131k",
+                    "max_tokens": 131072,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "Qwen/Qwen3-VL-235B-A22B-Instruct",
+                    "tags": "LLM,CHAT,131k",
+                    "max_tokens": 131072,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "kimi-k2.6",
+                    "tags": "LLM,CHAT,200k",
+                    "max_tokens": 200000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "glm-5.1",
+                    "tags": "LLM,CHAT,128k",
+                    "max_tokens": 128000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "MiniMax-M2.7",
+                    "tags": "LLM,CHAT,1M",
+                    "max_tokens": 1000000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "MiniMax-M2",
+                    "tags": "LLM,CHAT,1M",
+                    "max_tokens": 1000000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "gemini-2.5-pro",
+                    "tags": "LLM,CHAT,1M",
+                    "max_tokens": 1000000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "gemini-2.5-flash",
+                    "tags": "LLM,CHAT,1M",
+                    "max_tokens": 1000000,
+                    "is_tools": true,
+                    "mdl_type": "chat"
+                },
+                {
+                    "llm_name": "qwen3-embedding-8b",
+                    "tags": "TEXT EMBEDDING,8K",
+                    "max_tokens": 8192,
+                    "is_tools": false,
+                    "mdl_type": "embedding"
+                },
+                {
+                    "llm_name": "text-embedding-3-large",
+                    "tags": "TEXT EMBEDDING,8K",
+                    "max_tokens": 8191,
+                    "is_tools": false,
+                    "mdl_type": "embedding"
+                },
+                {
+                    "llm_name": "text-embedding-ada-002",
+                    "tags": "TEXT EMBEDDING,8K",
+                    "max_tokens": 8191,
+                    "is_tools": false,
+                    "mdl_type": "embedding"
+                }
+            ]
         }
     ]
 }
