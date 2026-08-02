@@ -293,8 +293,9 @@ def test_multirag_server_alive_uses_restful_ping(monkeypatch):
     class DummyResponse:
         status_code = 200
 
-    def fake_get(url):
+    def fake_get(url, *, timeout):
         seen["url"] = url
+        seen["timeout"] = timeout
         return DummyResponse()
 
     monkeypatch.setattr(health_utils.settings, "HOST_IP", "0.0.0.0")
@@ -303,3 +304,4 @@ def test_multirag_server_alive_uses_restful_ping(monkeypatch):
 
     assert health_utils.check_multirag_server_alive()["status"] == "alive"
     assert seen["url"] == "http://127.0.0.1:9380/api/v1/system/ping"
+    assert seen["timeout"] == 10
