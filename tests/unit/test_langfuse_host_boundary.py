@@ -16,6 +16,10 @@ def _route_module():
     return sys.modules["api.apps.langfuse"]
 
 
+def _restful_route_module():
+    return sys.modules["api.apps.restful_apis.langfuse"]
+
+
 # ---------------------------------------------------------------------------
 # 校验器（无网络：字面量 IP 直判，域名解析打桩）
 # ---------------------------------------------------------------------------
@@ -107,6 +111,25 @@ def test_set_api_key_blocks_private_host_before_probe(client, monkeypatch):
     body = resp.json()
     assert body["code"] != 0
     assert "Invalid Langfuse host" in body["message"]
+
+
+def test_restful_set_api_key_blocks_private_host_before_probe(client, monkeypatch):
+    module = _restful_route_module()
+    monkeypatch.setattr(module.legacy, "Langfuse", _BombLangfuse)
+
+    resp = client.post("/api/v1/langfuse/api-key", json=_KEYS)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["code"] != 0
+    assert "Invalid Langfuse host" in body["message"]
+
+
+def test_langfuse_restful_route_is_canonical_and_legacy_is_deprecated(client):
+    schema = client.app.openapi()
+
+    assert schema["paths"]["/api/v1/langfuse/api-key"]["post"].get("deprecated") is not True
+    assert schema["paths"]["/v1/langfuse/api_key"]["post"]["deprecated"] is True
 
 
 def test_set_api_key_allowlisted_host_passes_boundary(client, monkeypatch):

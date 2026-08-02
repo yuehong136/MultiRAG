@@ -20,8 +20,8 @@ class LangfuseKeysRequest(BaseModel):
 router = APIRouter()
 
 
-@router.post("/api_key", summary="设置Langfuse API密钥")
-@router.put("/api_key", summary="更新Langfuse API密钥")
+@router.post("/api_key", summary="[Deprecated] 设置Langfuse API密钥", deprecated=True)
+@router.put("/api_key", summary="[Deprecated] 更新Langfuse API密钥", deprecated=True)
 def set_api_key(request: LangfuseKeysRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     设置或更新Langfuse API密钥
@@ -77,7 +77,7 @@ def set_api_key(request: LangfuseKeysRequest, db: Session = Depends(get_db), use
         return server_error_response(e)
 
 
-@router.get("/api_key", summary="获取Langfuse API密钥")
+@router.get("/api_key", summary="[Deprecated] 获取Langfuse API密钥", deprecated=True)
 def get_api_key(db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取Langfuse API密钥
@@ -117,7 +117,7 @@ def get_api_key(db: Session = Depends(get_db), user=Depends(manager)):
         return server_error_response(e)
 
 
-@router.delete("/api_key", summary="删除Langfuse API密钥")
+@router.delete("/api_key", summary="[Deprecated] 删除Langfuse API密钥", deprecated=True)
 def delete_api_key(db: Session = Depends(get_db), user=Depends(manager)):
     """
     删除Langfuse API密钥
