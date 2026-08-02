@@ -23,10 +23,10 @@ import (
 	"fmt"
 	"strings"
 
+	"multirag/internal/logger"
+
 	infinity "github.com/infiniflow/infinity-go-sdk"
 	"go.uber.org/zap"
-
-	"multirag/internal/logger"
 )
 
 // Delete deletes rows from either a dataset table or metadata table.
@@ -176,7 +176,22 @@ func (o *orderedFields) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// existsCondition builds a "field != default" condition used by buildFilterFromCondition.
+// fieldKeyword checks if field is a keyword field
+func fieldKeyword(fieldName string) bool {
+	if fieldName == "source_id" {
+		return true
+	}
+	if strings.HasSuffix(fieldName, "_kwd") &&
+		fieldName != "knowledge_graph_kwd" &&
+		fieldName != "docnm_kwd" &&
+		fieldName != "important_kwd" &&
+		fieldName != "question_kwd" {
+		return true
+	}
+	return false
+}
+
+// existsCondition builds a NOT EXISTS or field!=" condition
 func existsCondition(field string, tableColumns map[string]struct {
 	Type    string
 	Default interface{}
@@ -228,20 +243,29 @@ func buildFilterFromCondition(condition map[string]interface{}, tableColumns map
 
 		// Handle keyword fields -> filter_fulltext with converted field name
 		if fieldKeyword(k) {
-			if listVal, ok := v.([]interface{}); ok {
-				var orConds []string
-				for _, item := range listVal {
-					if strItem, ok := item.(string); ok {
-						strItem = strings.ReplaceAll(strItem, "'", "''")
-						orConds = append(orConds, fmt.Sprintf("filter_fulltext('%s', '%s')", convertMatchingField(k), strItem))
-					}
+			var orConds []string
+			addFullText := func(item string) {
+				item = strings.ReplaceAll(item, "'", "''")
+				orConds = append(orConds, fmt.Sprintf("filter_fulltext('%s', '%s')", convertMatchingField(k), item))
+			}
+
+			switch val := v.(type) {
+			case []string:
+				for _, item := range val {
+					addFullText(item)
 				}
-				if len(orConds) > 0 {
-					conditions = append(conditions, "("+strings.Join(orConds, " OR ")+")")
+			case []interface{}:
+				for _, item := range val {
+					addFullText(fmt.Sprintf("%v", item))
 				}
-			} else if strVal, ok := v.(string); ok {
-				strVal = strings.ReplaceAll(strVal, "'", "''")
-				conditions = append(conditions, fmt.Sprintf("filter_fulltext('%s', '%s')", convertMatchingField(k), strVal))
+			case string:
+				addFullText(val)
+			default:
+				addFullText(fmt.Sprintf("%v", val))
+			}
+
+			if len(orConds) > 0 {
+				conditions = append(conditions, "("+strings.Join(orConds, " OR ")+")")
 			}
 			continue
 		}

@@ -31,6 +31,10 @@ func (m *DeepSeekModel) Chat(modelName, message *string, apiConfig *APIConfig, m
 	return nil, fmt.Errorf("not implemented")
 }
 
+func (m *DeepSeekModel) ChatWithMessages(modelName string, apiKey *string, messages []Message, modelConfig *ChatConfig) (string, error) {
+	return "", fmt.Errorf("%s, ChatWithMessages not implemented", m.Name())
+}
+
 func (m *DeepSeekModel) ChatStreamly(modelName, apiKey, message *string, genConf map[string]interface{}) (<-chan string, error) {
 	return nil, fmt.Errorf("not implemented")
 }

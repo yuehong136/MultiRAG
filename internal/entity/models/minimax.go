@@ -30,6 +30,10 @@ func (m *MinimaxModel) Chat(modelName, message *string, apiConfig *APIConfig, mo
 	return nil, fmt.Errorf("chat is not implemented for %s", m.Name())
 }
 
+func (m *MinimaxModel) ChatWithMessages(modelName string, apiKey *string, messages []Message, modelConfig *ChatConfig) (string, error) {
+	return "", fmt.Errorf("%s, ChatWithMessages not implemented", m.Name())
+}
+
 func (m *MinimaxModel) ChatStreamly(modelName, apiKey, message *string, genConf map[string]interface{}) (<-chan string, error) {
 	return nil, fmt.Errorf("streaming chat is not implemented for %s", m.Name())
 }
