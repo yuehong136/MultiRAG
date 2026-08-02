@@ -152,6 +152,7 @@ def test_batch_invite_returns_statuses_and_summary(client, client_user, monkeypa
     invitee = _user("invitee-1", "invitee@example.com", "Invitee")
     member = _user("member-1", "member@example.com", "Member")
     saved: list[dict] = []
+    sent: list[dict[str, object]] = []
 
     users_by_email = {u.email: u for u in (invitee, member)}
     memberships = {
@@ -162,6 +163,12 @@ def test_batch_invite_returns_statuses_and_summary(client, client_user, monkeypa
     monkeypatch.setattr(UserTenantService, "save", lambda *args, **kwargs: saved.append(kwargs) or True)
     monkeypatch.setattr(UserService, "query", lambda _db, email: [users_by_email[email]] if email in users_by_email else [])
     monkeypatch.setattr(UserService, "get_by_id", lambda _db, user_id: inviter if user_id == client_user.id else None)
+
+    async def fake_send_invite_email(**kwargs: object) -> bool:
+        sent.append(kwargs)
+        return True
+
+    monkeypatch.setattr(sys.modules["api.apps.restful_apis.tenant"], "send_invite_email", fake_send_invite_email)
 
     res = client.post(
         f"/api/v1/tenants/{TENANT}/users/batch",
@@ -181,6 +188,7 @@ def test_batch_invite_returns_statuses_and_summary(client, client_user, monkeypa
     assert body["data"]["summary"]["total"] == 4, body
     assert body["data"]["summary"]["invited"] == 1, body
     assert len(saved) == 1, saved
+    assert len(sent) == 1 and sent[0]["to_email"] == invitee.email, sent
     _assert_sync_facade(sessions)
 
 
