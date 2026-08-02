@@ -178,3 +178,30 @@ def test_title_chunker_group_uses_outlines_when_available():
     assert len(chunks) == 2
     assert chunks[0]["text"].startswith("Intro\n")
     assert chunks[1]["text"].startswith("Next\n")
+
+
+def test_title_chunker_can_promote_root_chunk_to_heading():
+    param = TitleChunkerParam()
+    param.hierarchy = 1
+    param.levels = [[r"^\d+ "]]
+    param.root_chunk_as_heading = True
+    chunker = _make_process(TitleChunker, param)
+
+    asyncio.run(
+        chunker._invoke(
+            name="sample.pdf",
+            output_format="json",
+            json=[
+                {"text": "Document root", "doc_type_kwd": "text"},
+                {"text": "1 First", "doc_type_kwd": "text"},
+                {"text": "First body", "doc_type_kwd": "text"},
+                {"text": "2 Second", "doc_type_kwd": "text"},
+                {"text": "Second body", "doc_type_kwd": "text"},
+            ],
+        )
+    )
+
+    chunks = _outputs(chunker)["chunks"]
+    assert len(chunks) == 2
+    assert chunks[0]["text"] == "Document root\n\n1 First\nFirst body\n"
+    assert chunks[1]["text"] == "Document root\n\n2 Second\nSecond body\n"
