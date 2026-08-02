@@ -51,7 +51,6 @@ class DeleteAgentsRequest(BaseModel):
     ids: list[str] | None = None
 
 
-@router.get("/agents", summary="获取代理列表")
 def list_agents(
     id: str | None = Query(None),
     title: str | None = Query(None),
@@ -87,7 +86,6 @@ def list_agents(
     return get_result(data=canvas)
 
 
-@router.post("/agents", summary="创建代理")
 def create_agent(request: CreateAgentRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     """
     创建新的代理
@@ -131,7 +129,6 @@ def create_agent(request: CreateAgentRequest, db: Session = Depends(get_db), ten
     return get_result(data=True)
 
 
-@router.put("/agents/{agent_id}", summary="更新代理")
 def update_agent(agent_id: str, request: UpdateAgentRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     """
     更新代理
@@ -172,7 +169,6 @@ def update_agent(agent_id: str, request: UpdateAgentRequest, db: Session = Depen
     return get_result(data=True)
 
 
-@router.delete("/agents/{agent_id}", summary="删除代理")
 def delete_agent(agent_id: str, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     """
     删除代理

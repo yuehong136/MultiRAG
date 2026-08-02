@@ -9,7 +9,7 @@
 import json
 import sys
 import threading
-import types
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -128,8 +128,11 @@ def agent_route_stubs(monkeypatch, client):
     async def _fake_completion(db, tenant_id, agent_id, session_id=None, **kwargs):
         yield "data:" + json.dumps({"event": "message", "data": {"content": "hi"}}) + "\n\n"
 
-    for mod in ("api.apps.canvas", "api.apps.sdk.session"):
+    for mod in ("api.apps.restful_apis.agent", "api.apps.sdk.session"):
         monkeypatch.setattr(_route_module(mod), "agent_completion", _fake_completion)
+
+    monkeypatch.setattr(API4ConversationService, "get_by_id", classmethod(lambda cls, s, sid: SimpleNamespace(dialog_id="agent-1")))
+    monkeypatch.setattr(UserCanvasService, "accessible", classmethod(lambda cls, s, cid, tid: True))
 
     from api.utils.api_utils import async_beta_token_required, async_token_required
 
@@ -138,8 +141,11 @@ def agent_route_stubs(monkeypatch, client):
     return client
 
 
-def test_sdk_agent_completions_stream_frames(agent_route_stubs):
-    resp = agent_route_stubs.post("/api/v1/agents/agent-1/completions", json={"question": "hi", "stream": True})
+def test_restful_agent_completions_stream_frames(agent_route_stubs):
+    resp = agent_route_stubs.post(
+        "/api/v1/agents/chat/completion",
+        json={"agent_id": "agent-1", "session_id": "sess-1", "query": "hi", "stream": True},
+    )
 
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/event-stream")
@@ -147,17 +153,33 @@ def test_sdk_agent_completions_stream_frames(agent_route_stubs):
     assert "data:[DONE]" in resp.text
 
 
-def test_canvas_exp_completion_stream_frames(agent_route_stubs):
-    resp = agent_route_stubs.post("/v1/canvas/agent-1/completion", json={"query": "hi"})
+def test_legacy_agent_completion_routes_are_not_registered(agent_route_stubs):
+    assert agent_route_stubs.post("/api/v1/agents/agent-1/completions", json={"query": "hi"}).status_code == 404
+    assert agent_route_stubs.post("/v1/canvas/agent-1/completion", json={"query": "hi"}).status_code == 404
 
-    assert resp.status_code == 200
-    assert '"content": "hi"' in resp.text
+
+def test_restful_agent_routes_replace_legacy_canvas_and_sdk_surfaces(client):
+    registered = {(method.upper(), path) for path, operations in client.app.openapi()["paths"].items() for method in operations}
+    assert {
+        ("GET", "/api/v1/agents"),
+        ("POST", "/api/v1/agents"),
+        ("GET", "/api/v1/agents/{canvas_id}"),
+        ("PUT", "/api/v1/agents/{agent_id}"),
+        ("DELETE", "/api/v1/agents/{agent_id}"),
+        ("POST", "/api/v1/agents/chat/completion"),
+        ("GET", "/api/v1/agents/{canvas_id}/sessions"),
+        ("POST", "/api/v1/agents/{canvas_id}/sessions"),
+        ("GET", "/api/v1/agents/{canvas_id}/sessions/{session_id}"),
+        ("DELETE", "/api/v1/agents/{canvas_id}/sessions/{session_id}"),
+    } <= registered
+    assert ("POST", "/v1/canvas/set") not in registered
+    assert ("POST", "/api/v1/agents/{agent_id}/completions") not in registered
 
 
 def test_canvas_run_rejects_non_owner(client, monkeypatch):
     monkeypatch.setattr(UserCanvasService, "accessible", classmethod(lambda cls, s, cid, tid: False))
 
-    resp = client.post("/v1/canvas/completion", json={"id": "c1", "query": "hi"})
+    resp = client.post("/api/v1/agents/chat/completion", json={"agent_id": "c1", "query": "hi"})
 
     assert resp.status_code == 200
     body = resp.json()
@@ -165,31 +187,21 @@ def test_canvas_run_rejects_non_owner(client, monkeypatch):
     assert "authorized" in body["retmsg"]
 
 
-def test_sdk_agents_openai_ownership_check_runs_on_sync_facade(agent_route_stubs, monkeypatch):
-    """所有权校验必须经 run_sync 拿同步 facade——直接把 AsyncSession 递给同步 service 是
-    f0bd9154 判例的同型回归（假件保留真实类型契约，直递必红）。"""
-    seen: dict[str, object] = {}
-
-    def _fake_query(cls, s, **kw):
-        seen["session_type_ok"] = isinstance(s, Session)
-        return [types.SimpleNamespace(id=kw.get("id"))]
-
-    monkeypatch.setattr(UserCanvasService, "query", classmethod(_fake_query))
-
+def test_restful_agents_openai_mode_streams(agent_route_stubs, monkeypatch):
     async def _fake_completion_openai(db, tenant_id, agent_id, question, session_id=None, stream=True, **kw):
         yield 'data: {"choices": []}\n\n'
         yield "data: [DONE]\n\n"
 
-    monkeypatch.setattr(_route_module("api.apps.sdk.session"), "completion_openai", _fake_completion_openai)
+    monkeypatch.setattr(_route_module("api.apps.restful_apis.agent"), "completion_openai", _fake_completion_openai)
 
     resp = agent_route_stubs.post(
-        "/api/v1/agents_openai/agent-1/chat/completions",
-        json={"model": "m", "stream": True, "messages": [{"role": "user", "content": "hi"}]},
+        "/api/v1/agents/chat/completion",
+        json={"agent_id": "agent-1", "openai-compatible": True, "model": "m", "stream": True, "messages": [{"role": "user", "content": "hi"}]},
     )
 
     assert resp.status_code == 200
     assert "[DONE]" in resp.text
-    assert seen["session_type_ok"] is True
+    assert agent_route_stubs.post("/api/v1/agents_openai/agent-1/chat/completions", json={}).status_code == 404
 
 
 def test_sdk_agent_bot_completions_stream_frames(agent_route_stubs):

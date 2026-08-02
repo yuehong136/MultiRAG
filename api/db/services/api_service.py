@@ -79,6 +79,15 @@ class API4ConversationService(CommonService):
     def __init__(self):
         super().__init__(API4Conversation)
 
+    @staticmethod
+    def _normalize_query_date(value: str, *, is_end: bool = False) -> datetime:
+        if "T" in value:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone().replace(tzinfo=None)
+        if len(value) == 10:
+            suffix = "23:59:59" if is_end else "00:00:00"
+            return datetime.strptime(f"{value} {suffix}", "%Y-%m-%d %H:%M:%S")
+        return datetime.fromisoformat(value)
+
     # ---------- 辅助：字段选择 ----------
     @classmethod
     def _all_columns(cls) -> list[ColumnElement]:
@@ -128,30 +137,11 @@ class API4ConversationService(CommonService):
             # message 若为 JSON/Text，这里统一转 text 处理再 lower
             base = base.where(func.lower(func.cast(cls.model.message, SAText)).contains(keywords.lower()))
 
-        # 处理时间过滤 —— 兼容字符串 / datetime
-        def _to_dt(v: str | datetime | None) -> datetime | None:
-            if v is None:
-                return None
-            if isinstance(v, datetime):
-                return v
-            # 字符串解析：尽量宽松，常见 10位/19位
-            try:
-                if len(v) == 10:
-                    return datetime.strptime(v, "%Y-%m-%d")
-                if len(v) == 19:
-                    return datetime.strptime(v, "%Y-%m-%d %H:%M:%S")
-                # 尝试 ISO
-                return datetime.fromisoformat(v)
-            except Exception:
-                # 兜底：直接返回 None（不加过滤）
-                return None
-
-        _from = _to_dt(from_date)
-        _to = _to_dt(to_date)
-        if _from:
-            base = base.where(cls.model.create_date >= _from)
-        if _to:
-            base = base.where(cls.model.create_date <= _to)
+        date_field = cls.model.update_date if orderby.startswith("update_") else cls.model.create_date
+        if from_date:
+            base = base.where(date_field >= cls._normalize_query_date(from_date))
+        if to_date:
+            base = base.where(date_field <= cls._normalize_query_date(to_date, is_end=True))
         if exp_user_id:
             base = base.where(cls.model.exp_user_id == exp_user_id)
 

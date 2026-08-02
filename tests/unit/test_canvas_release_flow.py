@@ -4,11 +4,13 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy.orm import Session
 
-from api.apps import canvas_app as canvas_app_module
+from api.apps.restful_apis import agent_api as canvas_app_module
 from api.apps.sdk import session as session_module
-from api.db import CanvasCategory
+from api.db import CanvasCategory, TenantPermission
 from api.db.db_models import UserCanvas
 from api.db.services import canvas_service as canvas_service_module
+from api.db.services.api_service import API4ConversationService
+from api.db.services.user_service import UserTenantService
 
 
 def test_get_agent_dsl_with_release_prefers_latest_published_version(monkeypatch) -> None:
@@ -63,6 +65,33 @@ def test_get_agent_dsl_with_release_rejects_missing_published_version(monkeypatc
         )
 
     fake_db.close()
+
+
+def test_agent_accessible_allows_owner_and_team_members_only(monkeypatch) -> None:
+    fake_db = Session()
+    canvas = {"user_id": "owner-1", "permission": TenantPermission.ME.value}
+    monkeypatch.setattr(
+        canvas_service_module.UserCanvasService,
+        "get_by_canvas_id",
+        classmethod(lambda cls, db, canvas_id: (True, canvas)),
+    )
+    monkeypatch.setattr(
+        UserTenantService,
+        "query",
+        classmethod(lambda cls, db, **kwargs: [SimpleNamespace(tenant_id="owner-1")]),
+    )
+
+    assert canvas_service_module.UserCanvasService.accessible(fake_db, "agent-1", "owner-1") is True
+    assert canvas_service_module.UserCanvasService.accessible(fake_db, "agent-1", "member-1") is False
+
+    canvas["permission"] = TenantPermission.TEAM.value
+    assert canvas_service_module.UserCanvasService.accessible(fake_db, "agent-1", "member-1") is True
+    fake_db.close()
+
+
+def test_agent_session_date_filter_normalization_covers_full_end_day() -> None:
+    assert API4ConversationService._normalize_query_date("2026-04-23").strftime("%Y-%m-%d %H:%M:%S") == "2026-04-23 00:00:00"
+    assert API4ConversationService._normalize_query_date("2026-04-23", is_end=True).strftime("%Y-%m-%d %H:%M:%S") == "2026-04-23 23:59:59"
 
 
 def test_create_agent_session_uses_release_dsl(monkeypatch) -> None:
