@@ -95,7 +95,7 @@ def test_sdk_exposes_the_observation_api_we_call():
 
 
 def test_projects_response_is_pydantic_v2():
-    """langfuse_app 用 model_dump() 读项目信息；v3 的 fern SDK 是 pydantic.v1 风格。"""
+    """langfuse_api_service 用 model_dump() 读项目信息；v3 的 fern SDK 是 pydantic.v1 风格。"""
     from langfuse.api.projects.types.projects import Projects
 
     assert hasattr(Projects, "model_dump")

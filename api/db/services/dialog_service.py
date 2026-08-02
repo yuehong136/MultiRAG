@@ -668,7 +668,7 @@ def chat(
     langfuse_keys = TenantLangfuseService.filter_by_tenant(db, tenant_id=dialog.tenant_id)
     if langfuse_keys:
         # 零 preflight：auth_check 是阻塞 HTTP（默认 5s 超时），凭据有效性在配置写入期
-        # 校验（langfuse_app）；此处 fail-open，构造失败不阻塞聊天，导出错误由 SDK 后台记录。
+        # 校验（langfuse_api_service）；此处 fail-open，构造失败不阻塞聊天，导出错误由 SDK 后台记录。
         try:
             langfuse_tracer = Langfuse(public_key=langfuse_keys.public_key, secret_key=langfuse_keys.secret_key, host=langfuse_keys.host)
             trace_context = {"trace_id": langfuse_tracer.create_trace_id()}
@@ -1018,7 +1018,7 @@ async def async_chat(
     langfuse_keys = await db.run_sync(lambda s: TenantLangfuseService.filter_by_tenant(s, tenant_id=dialog.tenant_id))  # TODO(async-phase4)
     if langfuse_keys:
         # 零 preflight：auth_check 是阻塞 HTTP（默认 5s 超时，会冻结事件循环），凭据有效性
-        # 在配置写入期校验（langfuse_app）；此处 fail-open，构造失败不阻塞聊天，导出错误由 SDK 后台记录。
+        # 在配置写入期校验（langfuse_api_service）；此处 fail-open，构造失败不阻塞聊天，导出错误由 SDK 后台记录。
         try:
             langfuse_tracer = Langfuse(public_key=langfuse_keys.public_key, secret_key=langfuse_keys.secret_key, host=langfuse_keys.host)
             trace_context = {"trace_id": langfuse_tracer.create_trace_id()}
