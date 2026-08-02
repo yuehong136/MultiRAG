@@ -48,13 +48,9 @@ api/apps/nl2sql_app.py::generate_echarts
 api/apps/nl2sql_app.py::re_query
 api/apps/nl2sql_app.py::rewrite_natural_language_query
 api/apps/nl2sql_app.py::sql_templating
-api/apps/plugin_app.py::install_dep
-api/apps/plugin_app.py::run_plugin_script
-api/apps/plugin_app.py::uninstall_dep
 api/apps/sdk/agents.py::webhook
 api/apps/sdk/dify_retrieval.py::retrieval
 api/apps/sdk/dify_retrieval.py::retrieval_get
-api/apps/sdk/doc.py::list_chunks
 api/apps/sdk/doc.py::retrieval_test
 api/apps/semantic_layer_app.py::delete_embeddings_by_element_type_and_id
 api/apps/semantic_layer_app.py::delete_embeddings_by_owner_type_and_id

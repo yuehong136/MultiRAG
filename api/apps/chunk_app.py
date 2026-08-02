@@ -166,7 +166,7 @@ class RetrievalTestRequest(BaseModel):
         return {mode_type: mode_data}
 
 
-@router.post("/list", summary="列出文档块")
+@router.post("/list", summary="列出文档块", deprecated=True)
 async def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
         ### POST `/list` 列出文档块接口
@@ -413,7 +413,7 @@ async def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), u
         return server_error_response(e)
 
 
-@router.get("/get", summary="获取文档块")
+@router.get("/get", summary="获取文档块", deprecated=True)
 def get(chunk_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### GET `/get` 获取文档块详细信息接口
@@ -663,7 +663,7 @@ async def query_vector_store(request: VectorStoreQueryRequest, db: Session = Dep
         return server_error_response(e)
 
 
-@router.post("/set", summary="设置文档块")
+@router.post("/set", summary="设置文档块", deprecated=True)
 def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/set` 更新文档块
@@ -829,7 +829,7 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
         return server_error_response(e)
 
 
-@router.post("/switch", summary="切换文档块状态")
+@router.post("/switch", summary="切换文档块状态", deprecated=True)
 def switch(request: SwitchChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/switch` 切换文档块状态接口
@@ -913,7 +913,7 @@ def switch(request: SwitchChunkRequest, db: Session = Depends(get_db), user=Depe
         return server_error_response(e)
 
 
-@router.post("/rm", summary="删除文档块")
+@router.post("/rm", summary="删除文档块", deprecated=True)
 def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
         ### POST `/rm` 删除文档块接口
@@ -1116,7 +1116,7 @@ def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(mana
         return server_error_response(e)
 
 
-@router.post("/create", summary="创建文档块")
+@router.post("/create", summary="创建文档块", deprecated=True)
 def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/create` 创建文档块接口
