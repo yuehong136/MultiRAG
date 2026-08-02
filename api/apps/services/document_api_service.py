@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from api.db.db_models import Document
+from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
@@ -17,7 +18,62 @@ from api.utils.api_utils import get_error_data_result, get_parser_config, server
 from api.utils.validation_utils import UpdateDocumentReq
 from common import settings
 from common.constants import TaskStatus
+from common.metadata_utils import convert_conditions, meta_filter
 from core.nlp import rag_tokenizer, search
+
+
+class MetadataBatchUpdateError(ValueError):
+    """Raised when a document metadata batch request is invalid or unauthorized."""
+
+
+def batch_update_document_metadata(
+    db: Session,
+    dataset_id: str,
+    user_id: str,
+    selector: Any,
+    updates: Any,
+    deletes: Any,
+) -> dict[str, int]:
+    if not KnowledgebaseService.accessible(db, kb_id=dataset_id, user_id=user_id):
+        raise MetadataBatchUpdateError(f"You don't own the dataset {dataset_id}.")
+    if not isinstance(selector, dict):
+        raise MetadataBatchUpdateError("selector must be an object.")
+    if not isinstance(updates, list) or not isinstance(deletes, list):
+        raise MetadataBatchUpdateError("updates and deletes must be lists.")
+
+    metadata_condition = selector.get("metadata_condition") or {}
+    if metadata_condition and not isinstance(metadata_condition, dict):
+        raise MetadataBatchUpdateError("metadata_condition must be an object.")
+
+    raw_document_ids = selector.get("document_ids")
+    if raw_document_ids is not None and not isinstance(raw_document_ids, list):
+        raise MetadataBatchUpdateError("document_ids must be a list.")
+    for update in updates:
+        if not isinstance(update, dict) or not update.get("key") or "value" not in update:
+            raise MetadataBatchUpdateError("Each update requires key and value.")
+    for delete in deletes:
+        if not isinstance(delete, dict) or not delete.get("key"):
+            raise MetadataBatchUpdateError("Each delete requires key.")
+
+    dataset_document_ids = set(KnowledgebaseService.list_documents_by_ids(db, [dataset_id]))
+    if raw_document_ids is None:
+        target_document_ids = dataset_document_ids
+    else:
+        requested_document_ids = set(raw_document_ids)
+        invalid_ids = requested_document_ids - dataset_document_ids
+        if invalid_ids:
+            invalid_list = ", ".join(sorted(invalid_ids))
+            raise MetadataBatchUpdateError(f"These documents do not belong to dataset {dataset_id}: {invalid_list}")
+        target_document_ids = requested_document_ids
+
+    if metadata_condition:
+        metadata = DocMetadataService.get_flatted_meta_by_kbs(db, [dataset_id])
+        filtered_ids = set(meta_filter(metadata, convert_conditions(metadata_condition), metadata_condition.get("logic", "and")))
+        target_document_ids &= filtered_ids
+
+    document_ids = sorted(target_document_ids)
+    updated = DocMetadataService.batch_update_metadata(db, dataset_id, document_ids, updates, deletes)
+    return {"updated": updated, "matched_docs": len(document_ids)}
 
 
 def can_update_dataset(db: Session, user_id: str, kb) -> bool:

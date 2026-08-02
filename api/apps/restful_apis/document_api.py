@@ -7,7 +7,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -46,6 +46,41 @@ class UpdateMetadataConfigRequest(BaseModel):
     # 也可以是 JSON schema 对象（{type, properties, ...}，历史数据与 turn2jsonschema 的产物）。
     # 读侧两种都吃，写侧就不能只收其中一种——只标 dict 会让数组载荷 422。
     metadata: list[dict[str, Any]] | dict[str, Any]
+
+
+class MetadataBatchUpdateRequest(BaseModel):
+    selector: Any = Field(default_factory=dict)
+    updates: Any = Field(default_factory=list)
+    deletes: Any = Field(default_factory=list)
+
+
+@router.patch("/datasets/{dataset_id}/documents/metadatas", summary="批量更新文档元数据")
+async def update_metadata(
+    dataset_id: str,
+    request: MetadataBatchUpdateRequest,
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_current_tenant_id),
+) -> Response:
+    req = request.model_dump()
+
+    def _update(s: Session) -> Response:
+        try:
+            result = document_api_service.batch_update_document_metadata(
+                s,
+                dataset_id,
+                tenant_id,
+                req["selector"],
+                req["updates"],
+                req["deletes"],
+            )
+            return get_result(data=result)
+        except document_api_service.MetadataBatchUpdateError as e:
+            return get_error_data_result(retmsg=str(e))
+        except Exception as e:
+            logger.exception(e)
+            return server_error_response(e)
+
+    return await db.run_sync(_update)  # TODO(async-phase4)
 
 
 # PATCH 是本端点的正典方法；PUT 为历史别名（前端 updateDocumentMeta / 旧集成仍在发

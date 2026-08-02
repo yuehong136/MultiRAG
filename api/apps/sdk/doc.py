@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Discriminator, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 
+from api.apps.services import document_api_service
 from api.db.db_models import APIToken, Document, Task, get_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.doc_metadata_service import DocMetadataService
@@ -244,12 +245,17 @@ class MetadataUpdateRequestSDK(BaseModel):
     """元数据批量更新请求"""
 
     selector: MetadataUpdateSelectorSDK | None = None
-    updates: list[dict] = []
-    deletes: list[dict] = []
+    updates: list[dict] = Field(default_factory=list)
+    deletes: list[dict] = Field(default_factory=list)
 
 
-@router.post("/datasets/{dataset_id}/metadata/update", summary="批量更新元数据")
-def metadata_batch_update(dataset_id: str, request: MetadataUpdateRequestSDK, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
+@router.post("/datasets/{dataset_id}/metadata/update", summary="[Deprecated] 批量更新元数据", deprecated=True)
+def metadata_batch_update(
+    dataset_id: str,
+    request: MetadataUpdateRequestSDK,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(token_required),
+) -> Any:
     """
     批量更新或删除文档元数据。
 
@@ -270,52 +276,21 @@ def metadata_batch_update(dataset_id: str, request: MetadataUpdateRequestSDK, db
     Returns:
         {"updated": 更新的文档数, "matched_docs": 匹配的文档数}
     """
-    if not KnowledgebaseService.accessible(db, kb_id=dataset_id, user_id=tenant_id):
-        return get_error_data_result(retmsg=f"You don't own the dataset {dataset_id}.")
-
     req = request.model_dump()
-    selector = req.get("selector") or {}
-    updates = req.get("updates") or []
-    deletes = req.get("deletes") or []
-
-    if not isinstance(selector, dict):
-        return get_error_data_result(retmsg="selector must be an object.")
-    if not isinstance(updates, list) or not isinstance(deletes, list):
-        return get_error_data_result(retmsg="updates and deletes must be lists.")
-
-    metadata_condition = selector.get("metadata_condition") or {}
-    if metadata_condition and not isinstance(metadata_condition, dict):
-        return get_error_data_result(retmsg="metadata_condition must be an object.")
-
-    document_ids = selector.get("document_ids") or []
-    if document_ids and not isinstance(document_ids, list):
-        return get_error_data_result(retmsg="document_ids must be a list.")
-
-    for upd in updates:
-        if not isinstance(upd, dict) or not upd.get("key") or "value" not in upd:
-            return get_error_data_result(retmsg="Each update requires key and value.")
-    for d in deletes:
-        if not isinstance(d, dict) or not d.get("key"):
-            return get_error_data_result(retmsg="Each delete requires key.")
-
-    if document_ids:
-        kb_doc_ids = KnowledgebaseService.list_documents_by_ids(db, [dataset_id])
-        target_doc_ids = set(kb_doc_ids)
-        invalid_ids = set(document_ids) - set(kb_doc_ids)
-        if invalid_ids:
-            return get_error_data_result(retmsg=f"These documents do not belong to dataset {dataset_id}: {', '.join(invalid_ids)}")
-        target_doc_ids = set(document_ids)
-
-    if metadata_condition:
-        metas = DocMetadataService.get_flatted_meta_by_kbs(db, [dataset_id])
-        filtered_ids = set(meta_filter(metas, convert_conditions(metadata_condition), metadata_condition.get("logic", "and")))
-        target_doc_ids = target_doc_ids & filtered_ids
-        if metadata_condition.get("conditions") and not target_doc_ids:
-            return get_result(data={"updated": 0, "matched_docs": 0})
-
-    target_doc_ids = list(target_doc_ids)
-    updated = DocMetadataService.batch_update_metadata(db, dataset_id, target_doc_ids, updates, deletes)
-    return get_result(data={"updated": updated, "matched_docs": len(target_doc_ids)})
+    try:
+        result = document_api_service.batch_update_document_metadata(
+            db,
+            dataset_id,
+            tenant_id,
+            req.get("selector") or {},
+            req.get("updates") or [],
+            req.get("deletes") or [],
+        )
+        return get_result(data=result)
+    except document_api_service.MetadataBatchUpdateError as e:
+        return get_error_data_result(retmsg=str(e))
+    except Exception as e:
+        return server_error_response(e)
 
 
 @router.post("/datasets/{dataset_id}/chunks", summary="解析文档")

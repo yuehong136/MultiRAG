@@ -22,6 +22,7 @@ from starlette.status import (
 )
 
 from api.apps import manager
+from api.apps.services import document_api_service
 from api.common.check_team_permission import check_kb_team_permission
 from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
 from api.db import VALID_FILE_TYPES, FileType
@@ -3007,8 +3008,12 @@ def metadata_summary(request: MetadataSummaryRequest, db: Session = Depends(get_
         return server_error_response(e)
 
 
-@router.post("/metadata/update", summary="批量更新元数据", response_description="成功批量更新元数据")
-def metadata_update(request: MetadataUpdateRequest, db: Session = Depends(get_db), user=Depends(manager)):
+@router.post("/metadata/update", summary="[Deprecated] 批量更新元数据", response_description="成功批量更新元数据", deprecated=True)
+def metadata_update(
+    request: MetadataUpdateRequest,
+    db: Session = Depends(get_db),
+    user: Any = Depends(manager),
+) -> Any:
     """批量更新或删除文档元数据。
 
     - **request.doc_ids**: 文档ID列表
@@ -3022,6 +3027,9 @@ def metadata_update(request: MetadataUpdateRequest, db: Session = Depends(get_db
 
     - **返回值**: {"updated": 更新的文档数}
     """
+    if not request.kb_id:
+        return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=RetCode.ARGUMENT_ERROR)
+
     document_ids = request.doc_ids
     updates = request.updates or []
     deletes = request.deletes or []
@@ -3030,18 +3038,20 @@ def metadata_update(request: MetadataUpdateRequest, db: Session = Depends(get_db
     updates = [u.model_dump() if hasattr(u, "model_dump") else u for u in updates]
     deletes = [d.model_dump() if hasattr(d, "model_dump") else d for d in deletes]
 
-    if not isinstance(updates, list) or not isinstance(deletes, list):
-        return get_json_result(data=False, retmsg="updates and deletes must be lists.", retcode=RetCode.ARGUMENT_ERROR)
-
-    for upd in updates:
-        if not isinstance(upd, dict) or not upd.get("key") or "value" not in upd:
-            return get_json_result(data=False, retmsg="Each update requires key and value.", retcode=RetCode.ARGUMENT_ERROR)
-    for d in deletes:
-        if not isinstance(d, dict) or not d.get("key"):
-            return get_json_result(data=False, retmsg="Each delete requires key.", retcode=RetCode.ARGUMENT_ERROR)
-
-    updated = DocMetadataService.batch_update_metadata(db, request.kb_id, document_ids, updates, deletes)
-    return get_json_result(data={"updated": updated, "matched_docs": len(document_ids)})
+    try:
+        result = document_api_service.batch_update_document_metadata(
+            db,
+            request.kb_id,
+            user.id,
+            {"document_ids": document_ids},
+            updates,
+            deletes,
+        )
+        return get_json_result(data=result)
+    except document_api_service.MetadataBatchUpdateError as e:
+        return get_data_error_result(retmsg=str(e))
+    except Exception as e:
+        return server_error_response(e)
 
 
 # ---------------------------------------------------------------------------
