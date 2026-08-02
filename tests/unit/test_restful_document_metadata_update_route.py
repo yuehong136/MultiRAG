@@ -83,9 +83,10 @@ def test_batch_update_rejects_documents_from_another_dataset(db, monkeypatch):
         )
 
 
-def test_metadata_update_route_is_canonical_and_compat_routes_are_deprecated(client):
+def test_metadata_update_routes_replace_removed_legacy_routes(client):
     schema = client.app.openapi()
 
     assert schema["paths"]["/api/v1/datasets/{dataset_id}/documents/metadatas"]["patch"].get("deprecated") is not True
-    assert schema["paths"]["/api/v1/datasets/{dataset_id}/metadata/update"]["post"]["deprecated"] is True
-    assert schema["paths"]["/v1/document/metadata/update"]["post"]["deprecated"] is True
+    assert "/api/v1/datasets/{dataset_id}/metadata/update" not in schema["paths"]
+    assert "/v1/document/metadata/update" not in schema["paths"]
+    assert "put" not in schema["paths"]["/api/v1/datasets/{dataset_id}/documents/{document_id}"]

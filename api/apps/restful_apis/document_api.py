@@ -83,10 +83,7 @@ async def update_metadata(
     return await db.run_sync(_update)  # TODO(async-phase4)
 
 
-# PATCH 是本端点的正典方法；PUT 为历史别名（前端 updateDocumentMeta / 旧集成仍在发
-# PUT），标注 deprecated 留旧，待消费方全部迁移 PATCH 后移除。
 @router.patch("/datasets/{dataset_id}/documents/{document_id}", summary="更新文档")
-@router.put("/datasets/{dataset_id}/documents/{document_id}", summary="[Deprecated] 更新文档（请改用 PATCH）", deprecated=True)
 async def update_document(
     dataset_id: str,
     document_id: str,

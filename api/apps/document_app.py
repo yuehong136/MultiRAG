@@ -22,7 +22,6 @@ from starlette.status import (
 )
 
 from api.apps import manager
-from api.apps.services import document_api_service
 from api.common.check_team_permission import check_kb_team_permission
 from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
 from api.db import VALID_FILE_TYPES, FileType
@@ -371,37 +370,6 @@ class DocumentAnalysisRequest(BaseModel):
     summary_type: str = Field(default="short", description="摘要类型: short|long")
     raptor_config: RaptorConfig | None = Field(default=None, description="RAPTOR配置")
     use_cache: bool = Field(default=True, description="是否使用缓存")
-
-
-class MetadataUpdateSelector(BaseModel):
-    """元数据批量更新的选择器"""
-
-    document_ids: list[str] | None = Field(default=None, description="文档ID列表")
-    metadata_condition: MetadataCondition | dict | None = Field(default=None, description="元数据过滤条件")
-
-
-class MetadataUpdateItem(BaseModel):
-    """元数据更新项"""
-
-    key: str = Field(..., description="元数据键名")
-    value: Any = Field(..., description="新值")
-    match: Any | None = Field(default=None, description="匹配值（可选）")
-
-
-class MetadataDeleteItem(BaseModel):
-    """元数据删除项"""
-
-    key: str = Field(..., description="元数据键名")
-    value: Any | None = Field(default=None, description="匹配值（可选，不提供则删除整个键）")
-
-
-class MetadataUpdateRequest(BaseModel):
-    """元数据批量更新请求"""
-
-    kb_id: str | None = Field(default=None, description="知识库ID（ES/Infinity 引擎必填）")
-    doc_ids: list[str] = Field(..., description="文档ID列表")
-    updates: list[MetadataUpdateItem] | list[dict] = Field(default=[], description="更新操作列表")
-    deletes: list[MetadataDeleteItem] | list[dict] = Field(default=[], description="删除操作列表")
 
 
 class MetadataSummaryRequest(BaseModel):
@@ -3004,52 +2972,6 @@ def metadata_summary(request: MetadataSummaryRequest, db: Session = Depends(get_
     try:
         summary = DocMetadataService.get_metadata_summary(db, kb_id, request.doc_ids)
         return get_json_result(data={"summary": summary})
-    except Exception as e:
-        return server_error_response(e)
-
-
-@router.post("/metadata/update", summary="[Deprecated] 批量更新元数据", response_description="成功批量更新元数据", deprecated=True)
-def metadata_update(
-    request: MetadataUpdateRequest,
-    db: Session = Depends(get_db),
-    user: Any = Depends(manager),
-) -> Any:
-    """批量更新或删除文档元数据。
-
-    - **request.doc_ids**: 文档ID列表
-    - **request.updates**: 更新操作列表
-        - key: 元数据键名
-        - value: 新值
-        - match: 匹配值（可选，对于列表会替换匹配的元素）
-    - **request.deletes**: 删除操作列表
-        - key: 元数据键名
-        - value: 匹配值（可选，对于列表会删除匹配的元素；不提供则删除整个键）
-
-    - **返回值**: {"updated": 更新的文档数}
-    """
-    if not request.kb_id:
-        return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=RetCode.ARGUMENT_ERROR)
-
-    document_ids = request.doc_ids
-    updates = request.updates or []
-    deletes = request.deletes or []
-
-    # 转换 Pydantic 模型为字典
-    updates = [u.model_dump() if hasattr(u, "model_dump") else u for u in updates]
-    deletes = [d.model_dump() if hasattr(d, "model_dump") else d for d in deletes]
-
-    try:
-        result = document_api_service.batch_update_document_metadata(
-            db,
-            request.kb_id,
-            user.id,
-            {"document_ids": document_ids},
-            updates,
-            deletes,
-        )
-        return get_json_result(data=result)
-    except document_api_service.MetadataBatchUpdateError as e:
-        return get_data_error_result(retmsg=str(e))
     except Exception as e:
         return server_error_response(e)
 

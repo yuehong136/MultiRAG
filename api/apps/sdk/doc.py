@@ -12,7 +12,6 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Discriminator, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 
-from api.apps.services import document_api_service
 from api.db.db_models import APIToken, Document, Task, get_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.doc_metadata_service import DocMetadataService
@@ -232,65 +231,6 @@ def download_doc(
     file = BytesIO(file_stream)
     encoded_filename = quote(doc[0].name)
     return StreamingResponse(file, media_type="application/octet-stream", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"})
-
-
-class MetadataUpdateSelectorSDK(BaseModel):
-    """元数据批量更新的选择器"""
-
-    document_ids: list[str] | None = None
-    metadata_condition: dict | None = None
-
-
-class MetadataUpdateRequestSDK(BaseModel):
-    """元数据批量更新请求"""
-
-    selector: MetadataUpdateSelectorSDK | None = None
-    updates: list[dict] = Field(default_factory=list)
-    deletes: list[dict] = Field(default_factory=list)
-
-
-@router.post("/datasets/{dataset_id}/metadata/update", summary="[Deprecated] 批量更新元数据", deprecated=True)
-def metadata_batch_update(
-    dataset_id: str,
-    request: MetadataUpdateRequestSDK,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required),
-) -> Any:
-    """
-    批量更新或删除文档元数据。
-
-    如果 selector 中的 document_ids 和 metadata_condition 都未提供，则选择数据集中的所有文档。
-    如果同时提供，则取交集。
-
-    Args:
-        dataset_id: 数据集ID
-        request: 更新请求参数
-            - selector: 文档选择器
-                - document_ids: 文档ID列表
-                - metadata_condition: 元数据过滤条件
-            - updates: 更新操作列表，每个包含 {"key": str, "value": any, "match": any (optional)}
-            - deletes: 删除操作列表，每个包含 {"key": str, "value": any (optional)}
-        db: 数据库会话
-        tenant_id: 租户ID
-
-    Returns:
-        {"updated": 更新的文档数, "matched_docs": 匹配的文档数}
-    """
-    req = request.model_dump()
-    try:
-        result = document_api_service.batch_update_document_metadata(
-            db,
-            dataset_id,
-            tenant_id,
-            req.get("selector") or {},
-            req.get("updates") or [],
-            req.get("deletes") or [],
-        )
-        return get_result(data=result)
-    except document_api_service.MetadataBatchUpdateError as e:
-        return get_error_data_result(retmsg=str(e))
-    except Exception as e:
-        return server_error_response(e)
 
 
 @router.post("/datasets/{dataset_id}/chunks", summary="解析文档")

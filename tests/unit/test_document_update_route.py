@@ -1,7 +1,6 @@
 """document RESTful 更新路由契约测试（Phase 2.5 批次 1：AsyncSession 收口）。
 
-PATCH /api/v1/datasets/{id}/documents/{id} 走真实 ``api.apps.app`` 的 HTTP 契约式
-（PUT 为 deprecated 别名，另有钉板锁兼容面）；
+PATCH /api/v1/datasets/{id}/documents/{id} 走真实 ``api.apps.app`` 的 HTTP 契约式；
 整个更新体运行在单一 run_sync 回调内——service 桩保留真实类型契约（记录并断言
 收到 ``sqlalchemy.orm.Session``），各分支 envelope 在回调内产生后跨 greenlet 返回。
 service 层纯逻辑测试见 test_document_update_api_parity.py，此处只锁路由行为。
@@ -101,31 +100,19 @@ def test_update_document_helper_error_response_passes_through(client, monkeypatc
     _assert_sync_facade(sessions)
 
 
-def test_update_document_put_alias_still_served(client, monkeypatch):
-    """PUT 为 deprecated 别名（前端 updateDocumentMeta 仍在发），行为须与 PATCH 一致。"""
-    sessions: list[object] = []
-    _stub_happy_chain(monkeypatch, sessions)
-    renamed: list[tuple[str, str]] = []
-    monkeypatch.setattr(document_api_service, "update_document_name_only", lambda s, did, name: sessions.append(s) or renamed.append((did, name)) or None)
-
+def test_update_document_put_alias_is_removed(client):
     resp = client.put(_PATH, json={"name": "new.pdf"})
 
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["code"] == 0
-    assert body["data"] == {"id": "doc1", "chunk_method": "naive"}
-    assert renamed == [("doc1", "new.pdf")]
-    _assert_sync_facade(sessions)
+    assert resp.status_code == 405
 
 
 def test_update_document_route_has_pure_async_dependency_tree(client, route_dependency_calls):
     import api.apps as api_apps
 
-    for method in ("PATCH", "PUT"):
-        calls = route_dependency_calls(client.app, method, "/api/v1/datasets/{dataset_id}/documents/{document_id}")
+    calls = route_dependency_calls(client.app, "PATCH", "/api/v1/datasets/{dataset_id}/documents/{document_id}")
 
-        assert get_db not in calls
-        assert current_tenant_id not in calls
-        assert api_apps.manager not in calls
-        assert async_current_tenant_id in calls
-        assert get_async_db in calls
+    assert get_db not in calls
+    assert current_tenant_id not in calls
+    assert api_apps.manager not in calls
+    assert async_current_tenant_id in calls
+    assert get_async_db in calls
