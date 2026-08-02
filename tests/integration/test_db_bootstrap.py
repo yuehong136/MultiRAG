@@ -43,3 +43,12 @@ def test_fresh_install_is_stamped_to_head(bootstrapped_engine, alembic_cfg):
     with bootstrapped_engine.connect() as conn:
         version = conn.execute(sa.text("SELECT version_num FROM usr_ai.alembic_version")).scalar_one()
     assert version == head
+
+
+def test_sync_cursor_columns_are_native_timestamptz(bootstrapped_engine):
+    """Sync cursors must retain timezone semantics in PostgreSQL itself."""
+    columns = {column["name"]: column for column in sa.inspect(bootstrapped_engine).get_columns("t_ai_sync_logs", schema="usr_ai")}
+    for column_name in ("time_started", "poll_range_start", "poll_range_end"):
+        column_type = columns[column_name]["type"]
+        assert isinstance(column_type, sa.DateTime)
+        assert column_type.timezone is True

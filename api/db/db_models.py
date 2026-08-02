@@ -1792,9 +1792,9 @@ class SyncLogs(BaseModel):
     error_msg: Mapped[str] = mapped_column(Text, index=False, nullable=False, default="", doc="process message")
     error_count: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=0)
     full_exception_trace: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, default="", doc="process message")
-    time_started: Mapped[datetime | None] = mapped_column(DateTime, index=True, nullable=True)
-    poll_range_start: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True, doc="ISO datetime with timezone")
-    poll_range_end: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True, doc="ISO datetime with timezone")
+    time_started: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True, nullable=True)
+    poll_range_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True, nullable=True, doc="UTC synchronization cursor")
+    poll_range_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True, nullable=True, doc="UTC synchronization window end")
     kb_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="Knowledgebase ID")
 
     def to_dict(self):
