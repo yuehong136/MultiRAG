@@ -69,6 +69,19 @@ class TestMCPServerRequest(BaseModel):
     timeout: float = 10.0
 
 
+class TestMCPToolRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    arguments: JsonObject
+    timeout: float = 10.0
+
+
+class CacheMCPToolsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tools: list[JsonObject]
+
+
 def _normalize_mcp_ids(mcp_ids: list[str] | None, mcp_id: str) -> list[str]:
     values = mcp_ids or ([mcp_id] if mcp_id else [])
     return [value for item in values for value in item.split(",") if value]
@@ -90,6 +103,22 @@ def _export_payload(db: Session, mcp_id: str, tenant_id: str) -> dict[str, JsonO
                 "tools": variables.get("tools", {}),
             }
         }
+    }
+
+
+def _owned_server_payload(db: Session, mcp_id: str, tenant_id: str) -> JsonObject | None:
+    server = MCPServerService.get_by_id(db, mcp_id)
+    if server is None or server.tenant_id != tenant_id:
+        return None
+    return {
+        "id": server.id,
+        "name": server.name,
+        "tenant_id": server.tenant_id,
+        "url": server.url,
+        "server_type": server.server_type,
+        "description": server.description,
+        "variables": server.variables or {},
+        "headers": server.headers or {},
     }
 
 
@@ -400,5 +429,89 @@ async def test_mcp(
             tool_payload["enabled"] = True
             result.append(tool_payload)
         return get_json_result(data=result)
+    except Exception as error:
+        return server_error_response(error)
+
+
+@router.get("/mcp/servers/{mcp_id}/tools", summary="获取MCP工具列表", response_description="成功获取MCP工具列表")
+async def list_tools(
+    mcp_id: str,
+    timeout: float = Query(10.0, gt=0),
+    db: AsyncSession = Depends(get_async_db),
+    user: Principal = Depends(async_current_user),
+):
+    try:
+        payload = await db.run_sync(lambda session: _owned_server_payload(session, mcp_id, user.id))  # TODO(async-phase4)
+        if payload is None:
+            return get_data_error_result(retmsg=f"Cannot find MCP server {mcp_id} for user {user.id}")
+
+        server = MCPServer(**payload)
+        server_tools, error_message = await thread_pool_exec(get_mcp_tools, [server], timeout)
+        if error_message:
+            return get_data_error_result(retmsg=f"MCP list tools error: {error_message}")
+        return get_json_result(data=server_tools[mcp_id])
+    except Exception as error:
+        return server_error_response(error)
+
+
+@router.post(
+    "/mcp/servers/{mcp_id}/tools/{tool_name}/test",
+    summary="测试MCP工具",
+    response_description="成功测试MCP工具",
+)
+async def test_tool(
+    mcp_id: str,
+    tool_name: str,
+    request: TestMCPToolRequest,
+    db: AsyncSession = Depends(get_async_db),
+    user: Principal = Depends(async_current_user),
+):
+    tool_call_session: MCPToolCallSession | None = None
+    try:
+        payload = await db.run_sync(lambda session: _owned_server_payload(session, mcp_id, user.id))  # TODO(async-phase4)
+        if payload is None:
+            return get_data_error_result(retmsg=f"Cannot find MCP server {mcp_id} for user {user.id}")
+
+        server = MCPServer(**payload)
+        tool_call_session = MCPToolCallSession(server, server.variables)
+        result = await thread_pool_exec(tool_call_session.tool_call, tool_name, request.arguments, request.timeout)
+        return get_json_result(data=result)
+    except Exception as error:
+        return server_error_response(error)
+    finally:
+        if tool_call_session is not None:
+            await thread_pool_exec(close_multiple_mcp_toolcall_sessions, [tool_call_session])
+
+
+@router.put("/mcp/servers/{mcp_id}/tools", summary="更新MCP工具配置", response_description="成功更新MCP工具配置")
+async def cache_tools(
+    mcp_id: str,
+    request: CacheMCPToolsRequest,
+    db: AsyncSession = Depends(get_async_db),
+    user: Principal = Depends(async_current_user),
+):
+    try:
+
+        def _cache(session: Session) -> tuple[bool, bool, dict[str, JsonObject]]:
+            payload = _owned_server_payload(session, mcp_id, user.id)
+            if payload is None:
+                return False, False, {}
+
+            tools = {tool["name"]: tool for tool in request.tools if "name" in tool}
+            variables = dict(payload["variables"] or {})
+            variables["tools"] = tools
+            updated = MCPServerService.filter_update(
+                session,
+                [MCPServer.id == mcp_id, MCPServer.tenant_id == user.id],
+                {"variables": variables},
+            )
+            return True, bool(updated), tools
+
+        found, updated, tools = await db.run_sync(_cache)  # TODO(async-phase4)
+        if not found:
+            return get_data_error_result(retmsg=f"Cannot find MCP server {mcp_id} for user {user.id}")
+        if not updated:
+            return get_data_error_result(retmsg="Failed to update MCP server tools.")
+        return get_json_result(data=tools)
     except Exception as error:
         return server_error_response(error)

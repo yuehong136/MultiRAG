@@ -294,6 +294,73 @@ def test_mcp_test_endpoint_returns_enabled_tools(client, monkeypatch):
     assert len(closed) == 1
 
 
+def test_mcp_tools_list_refreshes_owned_server_tools(client, monkeypatch):
+    monkeypatch.setattr(MCPServerService, "get_by_id", classmethod(lambda cls, session, mcp_id: _server()))
+    monkeypatch.setattr(
+        _route_module(),
+        "get_mcp_tools",
+        lambda servers, timeout: ({servers[0].id: [{"name": "search", "enabled": False}]}, ""),
+    )
+
+    body = client.get("/api/v1/mcp/servers/mcp-1/tools?timeout=3").json()
+
+    assert body["retcode"] == 0
+    assert body["data"] == [{"name": "search", "enabled": False}]
+
+
+def test_mcp_tool_test_uses_resource_path_and_closes_session(client, monkeypatch):
+    monkeypatch.setattr(MCPServerService, "get_by_id", classmethod(lambda cls, session, mcp_id: _server()))
+    calls = []
+    closed = []
+
+    class ToolSession:
+        def __init__(self, server, variables):
+            assert server.id == "mcp-1"
+            assert variables["authorization_token"] == "secret"
+
+        def tool_call(self, name, arguments, timeout):
+            calls.append((name, arguments, timeout))
+            return {"content": [{"text": "ok"}], "isError": False}
+
+    monkeypatch.setattr(_route_module(), "MCPToolCallSession", ToolSession)
+    monkeypatch.setattr(_route_module(), "close_multiple_mcp_toolcall_sessions", lambda sessions: closed.extend(sessions))
+
+    body = client.post(
+        "/api/v1/mcp/servers/mcp-1/tools/search/test",
+        json={"arguments": {"query": "q"}, "timeout": 4},
+    ).json()
+
+    assert body["retcode"] == 0
+    assert body["data"] == {"content": [{"text": "ok"}], "isError": False}
+    assert calls == [("search", {"query": "q"}, 4)]
+    assert len(closed) == 1
+
+
+def test_mcp_tools_cache_preserves_variables_and_tenant_scope(client, monkeypatch):
+    monkeypatch.setattr(MCPServerService, "get_by_id", classmethod(lambda cls, session, mcp_id: _server()))
+    updates = []
+
+    def _update(cls, session, filters, payload):
+        assert isinstance(session, Session)
+        assert filters[1].right.value == "user-unit"
+        updates.append(payload)
+        return True
+
+    monkeypatch.setattr(MCPServerService, "filter_update", classmethod(_update))
+
+    body = client.put(
+        "/api/v1/mcp/servers/mcp-1/tools",
+        json={"tools": [{"name": "search", "enabled": False}]},
+    ).json()
+
+    assert body["retcode"] == 0
+    assert body["data"] == {"search": {"name": "search", "enabled": False}}
+    assert updates[0]["variables"] == {
+        "authorization_token": "secret",
+        "tools": {"search": {"name": "search", "enabled": False}},
+    }
+
+
 def test_mcp_restful_routes_have_pure_async_dependency_tree(client, route_dependency_calls):
     import api.apps as api_apps
 
@@ -305,6 +372,9 @@ def test_mcp_restful_routes_have_pure_async_dependency_tree(client, route_depend
         ("DELETE", "/api/v1/mcp/servers/{mcp_id}"),
         ("POST", "/api/v1/mcp/servers/import"),
         ("POST", "/api/v1/mcp/servers/{mcp_id}/test"),
+        ("GET", "/api/v1/mcp/servers/{mcp_id}/tools"),
+        ("POST", "/api/v1/mcp/servers/{mcp_id}/tools/{tool_name}/test"),
+        ("PUT", "/api/v1/mcp/servers/{mcp_id}/tools"),
     ):
         calls = route_dependency_calls(client.app, method, path)
         assert get_db not in calls, f"{method} {path} 依赖树含同步 get_db"
