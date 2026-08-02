@@ -125,3 +125,8 @@ func (m *MoonshotModel) Balance(apiConfig *APIConfig) (map[string]interface{}, e
 		"currency": "CNY",
 	}, nil
 }
+
+func (m *MoonshotModel) CheckConnection(apiConfig *APIConfig) error {
+	_, err := m.ListModels(apiConfig)
+	return err
+}

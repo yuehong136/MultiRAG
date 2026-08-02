@@ -661,3 +661,7 @@ func (z *ZhipuAIModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 func (z *ZhipuAIModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
 	return nil, fmt.Errorf("balance query is not available for Zhipu AI")
 }
+
+func (z *ZhipuAIModel) CheckConnection(apiConfig *APIConfig) error {
+	return checkBearerEndpointConnection(z.httpClient, z.BaseURL, z.URLSuffix.Files, apiConfig, z.Name())
+}

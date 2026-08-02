@@ -1378,6 +1378,41 @@ func (c *MultiRAGClient) ChatToModel(cmd *Command) (ResponseIf, error) {
 	return &result, nil
 }
 
+func (c *MultiRAGClient) CheckProviderConnection(cmd *Command) (ResponseIf, error) {
+	if c.HTTPClient.APIKey == "" && c.HTTPClient.LoginToken == "" {
+		return nil, fmt.Errorf("API token not set. Please login first")
+	}
+	if c.ServerType != "user" {
+		return nil, fmt.Errorf("this command is only allowed in USER mode")
+	}
+	instanceName, ok := cmd.Params["instance_name"].(string)
+	if !ok || instanceName == "" {
+		return nil, fmt.Errorf("instance name not provided")
+	}
+	providerName, ok := cmd.Params["provider_name"].(string)
+	if !ok || providerName == "" {
+		return nil, fmt.Errorf("provider name not provided")
+	}
+
+	url := fmt.Sprintf("/providers/%s/instances/%s/connection", providerName, instanceName)
+	resp, err := c.HTTPClient.Request(http.MethodGet, url, true, "web", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check provider connection: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to check provider connection: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+	var result SimpleResponse
+	if err = json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("check provider connection failed: invalid JSON (%w)", err)
+	}
+	if result.Code != 0 {
+		return nil, fmt.Errorf("%s", result.Message)
+	}
+	result.Duration = 0
+	return &result, nil
+}
+
 // UseModel sets the current model for chat
 
 // UseModel sets the current model for chat

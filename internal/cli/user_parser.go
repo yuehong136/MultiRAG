@@ -1418,6 +1418,36 @@ func (p *Parser) parseUseCommand() (*Command, error) {
 	return cmd, nil
 }
 
+func (p *Parser) parseCheckCommand() (*Command, error) {
+	p.nextToken() // consume CHECK
+	if p.curToken.Type != TokenInstance {
+		return nil, fmt.Errorf("expected INSTANCE after CHECK")
+	}
+	p.nextToken()
+	instanceName, err := p.parseQuotedString()
+	if err != nil {
+		return nil, fmt.Errorf("expected instance name after INSTANCE: %w", err)
+	}
+	p.nextToken()
+	if p.curToken.Type != TokenFrom {
+		return nil, fmt.Errorf("expected FROM after instance name")
+	}
+	p.nextToken()
+	providerName, err := p.parseQuotedString()
+	if err != nil {
+		return nil, fmt.Errorf("expected provider name after FROM: %w", err)
+	}
+	p.nextToken()
+	if err = p.expectSemicolon(); err != nil {
+		return nil, err
+	}
+
+	cmd := NewCommand("check_provider_connection")
+	cmd.Params["provider_name"] = providerName
+	cmd.Params["instance_name"] = instanceName
+	return cmd, nil
+}
+
 // Internal
 // parseUpdateCommand parses: UPDATE CHUNK 'chunk_id' OF DATASET 'dataset_name' SET '{"content": "..."}'
 func (p *Parser) parseUpdateCommand() (*Command, error) {

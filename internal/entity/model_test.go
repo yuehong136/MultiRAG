@@ -16,8 +16,8 @@ func TestProviderModelsKeepInitializedTypeMaps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetModelByName() error = %v", err)
 	}
-	if !model.ModelTypeMap["chat"] || !model.ModelTypeMap["image2text"] {
-		t.Fatalf("ModelTypeMap = %#v, want chat and image2text", model.ModelTypeMap)
+	if !model.ModelTypeMap["chat"] || !model.ModelTypeMap["vision"] {
+		t.Fatalf("ModelTypeMap = %#v, want chat and vision", model.ModelTypeMap)
 	}
 
 	provider := manager.FindProvider("zhipu-ai")
@@ -118,5 +118,31 @@ func TestDeepSeekProviderIsConfigured(t *testing.T) {
 	}
 	if !model.ModelTypeMap["chat"] {
 		t.Fatalf("ModelTypeMap = %#v, want chat", model.ModelTypeMap)
+	}
+}
+
+func TestMinimaxProviderIsConfigured(t *testing.T) {
+	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	if err != nil {
+		t.Fatalf("NewProviderManager() error = %v", err)
+	}
+
+	provider := manager.FindProvider("minimax")
+	if provider == nil {
+		t.Fatal("FindProvider(\"minimax\") returned nil")
+	}
+	if got := provider.URL["global"]; got != "https://api.minimax.io/" {
+		t.Fatalf("global provider URL = %q", got)
+	}
+	if got := provider.URLSuffix.Files; got != "v1/files/list" {
+		t.Fatalf("files suffix = %q", got)
+	}
+
+	model, err := manager.GetModelByName("minimax", "minimax-m2.7")
+	if err != nil {
+		t.Fatalf("GetModelByName() error = %v", err)
+	}
+	if !model.ModelTypeMap["chat"] || model.Thinking == nil || !model.Thinking.DefaultValue {
+		t.Fatalf("MiniMax model = %#v", model)
 	}
 }

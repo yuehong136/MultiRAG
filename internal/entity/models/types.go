@@ -18,6 +18,8 @@ type ModelDriver interface {
 	ListModels(apiConfig *APIConfig) ([]string, error)
 
 	Balance(apiConfig *APIConfig) (map[string]interface{}, error)
+
+	CheckConnection(apiConfig *APIConfig) error
 }
 
 type ChatResponse struct {
@@ -34,6 +36,7 @@ type URLSuffix struct {
 	Rerank      string `json:"rerank"`
 	Models      string `json:"models"`
 	Balance     string `json:"balance"`
+	Files       string `json:"files"`
 }
 
 type ChatConfig struct {

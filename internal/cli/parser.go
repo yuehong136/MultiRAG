@@ -190,6 +190,8 @@ func (p *Parser) parseUserCommand() (*Command, error) {
 		return p.parseThinkCommand()
 	case TokenUse:
 		return p.parseUseCommand()
+	case TokenCheck:
+		return p.parseCheckCommand()
 	case TokenUpdate:
 		return p.parseUpdateCommand()
 	case TokenRemove:

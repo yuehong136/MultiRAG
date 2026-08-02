@@ -90,6 +90,11 @@ func (m *DeepSeekModel) Balance(apiConfig *APIConfig) (map[string]interface{}, e
 	return nil, fmt.Errorf("balance query is not available for DeepSeek")
 }
 
+func (m *DeepSeekModel) CheckConnection(apiConfig *APIConfig) error {
+	_, err := m.ListModels(apiConfig)
+	return err
+}
+
 func resolveModelBaseURL(baseURLs map[string]string, region *string) (string, error) {
 	regionName := "default"
 	if region != nil && *region != "" {

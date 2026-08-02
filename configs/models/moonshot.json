@@ -16,8 +16,7 @@
       "model_types": [
         "chat",
         "vision"
-      ],
-      "features": {}
+      ]
     },
     {
       "name": "kimi-k2.5",
@@ -25,8 +24,7 @@
       "model_types": [
         "chat",
         "vision"
-      ],
-      "features": {}
+      ]
     },
     {
       "name": "moonshot-v1-8k",
@@ -34,24 +32,21 @@
       "model_types": [
         "chat",
         "vision"
-      ],
-      "features": {}
+      ]
     },
     {
       "name": "moonshot-v1-32k",
       "max_tokens": 32000,
       "model_types": [
         "chat"
-      ],
-      "features": {}
+      ]
     },
     {
       "name": "moonshot-v1-128k",
       "max_tokens": 128000,
       "model_types": [
         "chat"
-      ],
-      "features": {}
+      ]
     },
     {
       "name": "moonshot-v1-8k-vision-preview",
@@ -59,8 +54,7 @@
       "model_types": [
         "chat",
         "vision"
-      ],
-      "features": {}
+      ]
     },
     {
       "name": "moonshot-v1-32k-vision-preview",
@@ -68,8 +62,7 @@
       "model_types": [
         "chat",
         "vision"
-      ],
-      "features": {}
+      ]
     },
     {
       "name": "moonshot-v1-128k-vision-preview",
@@ -77,8 +70,7 @@
       "model_types": [
         "chat",
         "vision"
-      ],
-      "features": {}
+      ]
     }
   ],
   "features": {

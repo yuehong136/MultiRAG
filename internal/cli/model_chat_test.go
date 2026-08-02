@@ -43,6 +43,20 @@ func TestParseListSupportedModels(t *testing.T) {
 	}
 }
 
+func TestParseCheckProviderConnection(t *testing.T) {
+	cmd, err := NewParser(`CHECK INSTANCE "primary" FROM "minimax";`).Parse(false)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if cmd.Type != "check_provider_connection" || cmd.Params["provider_name"] != "minimax" || cmd.Params["instance_name"] != "primary" {
+		t.Fatalf("command = %#v", cmd)
+	}
+
+	if _, err = NewParser(`CHECK INSTANCE "primary" FROM "minimax"`).Parse(false); err == nil {
+		t.Fatal("Parse() error = nil, want missing semicolon error")
+	}
+}
+
 func TestNonStreamChatUsesThinkingPayload(t *testing.T) {
 	var body map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
