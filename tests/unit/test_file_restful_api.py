@@ -241,16 +241,25 @@ def test_file_download_denied(client, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_sdk_file_convert_schedules_background_work(client, monkeypatch):
+def test_file_link_to_datasets_schedules_background_work(client, monkeypatch):
     records: list[dict] = []
     folder = SimpleNamespace(id="folder-1", type="folder")
-    monkeypatch.setattr(FileService, "get_by_ids", classmethod(lambda cls, s, ids: _record(records, s) or [folder]))
+    inner = SimpleNamespace(id="inner-1", type="doc")
+    monkeypatch.setattr(
+        FileService,
+        "get_by_ids",
+        classmethod(lambda cls, s, ids: _record(records, s) or ([folder] if ids == ["folder-1"] else [inner])),
+    )
     monkeypatch.setattr(FileService, "get_all_innermost_file_ids", classmethod(lambda cls, s, fid, acc: _record(records, s) or ["inner-1"]))
-    monkeypatch.setattr(KnowledgebaseService, "get_by_id", classmethod(lambda cls, s, kid: _record(records, s) or SimpleNamespace(id=kid)))
+    kb = SimpleNamespace(id="kb-1")
+    monkeypatch.setattr(KnowledgebaseService, "get_by_id", classmethod(lambda cls, s, kid: _record(records, s) or kb))
+    route_module = _route_module()
+    monkeypatch.setattr(route_module, "check_file_team_permission", lambda *_args: True)
+    monkeypatch.setattr(route_module, "check_kb_team_permission", lambda *_args: True)
     scheduled: list[tuple] = []
-    monkeypatch.setattr(_route_module(), "convert_files_with_new_session", lambda *args: scheduled.append(args))
+    monkeypatch.setattr(route_module, "convert_files_with_new_session", lambda *args: scheduled.append(args))
 
-    resp = client.post("/api/v1/file/convert", json={"kb_ids": ["kb-1"], "file_ids": ["folder-1"]})
+    resp = client.post("/api/v1/files/link-to-datasets", json={"kb_ids": ["kb-1"], "file_ids": ["folder-1"]})
 
     body = resp.json()
     assert body["retcode"] == 0
@@ -270,6 +279,30 @@ def test_sdk_file_convert_rejects_missing_file(client, monkeypatch):
     assert scheduled == []
 
 
+def test_file_link_to_datasets_rejects_unauthorized_file(client, monkeypatch):
+    file = SimpleNamespace(id="file-1", type="doc")
+    monkeypatch.setattr(FileService, "get_by_ids", classmethod(lambda cls, s, ids: [file]))
+    monkeypatch.setattr(KnowledgebaseService, "get_by_id", classmethod(lambda cls, s, kid: SimpleNamespace(id=kid)))
+    route_module = _route_module()
+    monkeypatch.setattr(route_module, "check_file_team_permission", lambda *_args: False)
+    monkeypatch.setattr(route_module, "check_kb_team_permission", lambda *_args: True)
+    scheduled: list[tuple] = []
+    monkeypatch.setattr(route_module, "convert_files_with_new_session", lambda *args: scheduled.append(args))
+
+    body = client.post("/api/v1/files/link-to-datasets", json={"kb_ids": ["kb-1"], "file_ids": ["file-1"]}).json()
+
+    assert body["message"] == "No authorization."
+    assert scheduled == []
+
+
+def test_file_link_route_is_canonical_and_compat_routes_are_deprecated(client):
+    schema = client.app.openapi()
+
+    assert schema["paths"]["/api/v1/files/link-to-datasets"]["post"].get("deprecated") is not True
+    assert schema["paths"]["/api/v1/file/convert"]["post"]["deprecated"] is True
+    assert schema["paths"]["/v1/file2document/convert"]["post"]["deprecated"] is True
+
+
 def test_file_download_attachment_off_loop(client):
     storage = _FakeStorage({("tenant-unit", "att-1"): b"# md"})
     client.app.dependency_overrides[deps.get_storage] = lambda: storage
@@ -282,7 +315,7 @@ def test_file_download_attachment_off_loop(client):
 
 
 # ---------------------------------------------------------------------------
-# 依赖树（11 条路由全部纯异步轨）
+# 依赖树（12 条路由全部纯异步轨）
 # ---------------------------------------------------------------------------
 
 
@@ -299,6 +332,7 @@ def test_file_routes_have_pure_async_dependency_tree(client, route_dependency_ca
         ("GET", "/api/v1/files/{file_id}"),
         ("GET", "/api/v1/files/{file_id}/parent"),
         ("GET", "/api/v1/files/{file_id}/ancestors"),
+        ("POST", "/api/v1/files/link-to-datasets"),
         ("POST", "/api/v1/file/convert"),
         ("GET", "/api/v1/file/download/{attachment_id}"),
     ):

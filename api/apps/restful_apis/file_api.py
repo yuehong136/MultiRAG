@@ -39,6 +39,7 @@ from starlette.responses import StreamingResponse
 from api.apps.deps import get_storage
 from api.apps.services import file_api_service
 from api.apps.services.file_convert_service import convert_files_with_new_session
+from api.common.check_team_permission import check_file_team_permission, check_kb_team_permission
 from api.db import FileType
 from api.db.db_models import get_async_db
 from api.db.services.file2document_service import File2DocumentService
@@ -314,12 +315,13 @@ async def ancestors(
 
 
 # ---------------------------------------------------------------------------
-# multirag 专有端点（ragflow #13741 无对应，路径在 /file 单数下），收编自退役的
-# sdk/files.py，鉴权统一为 async_current_tenant_id。
+# 文件关联知识库的正典入口为 /files/link-to-datasets；旧 /file/convert 路径继续
+# 兼容 SDK，标记 deprecated。鉴权统一为 async_current_tenant_id。
 # ---------------------------------------------------------------------------
 
 
-@router.post("/file/convert", summary="文件转换为知识库文档（SDK）")
+@router.post("/files/link-to-datasets", summary="关联文件到知识库")
+@router.post("/file/convert", summary="[Deprecated] 文件转换为知识库文档", deprecated=True)
 async def convert(
     kb_ids: list[str],
     file_ids: list[str],
@@ -338,10 +340,12 @@ async def convert(
                 if not file:
                     return None, get_json_result(retmsg="File not found!", retcode=RetCode.NOT_FOUND)
 
+            knowledgebases = {}
             for kb_id in kb_ids:
                 kb = KnowledgebaseService.get_by_id(s, kb_id)
                 if not kb:
                     return None, get_json_result(retmsg="Can't find this dataset!", retcode=RetCode.NOT_FOUND)
+                knowledgebases[kb_id] = kb
 
             all_file_ids: list[str] = []
             for file_id in file_ids:
@@ -350,6 +354,18 @@ async def convert(
                     all_file_ids.extend(FileService.get_all_innermost_file_ids(s, file_id, []))
                 else:
                     all_file_ids.append(file_id)
+
+            expanded_files = FileService.get_by_ids(s, all_file_ids)
+            expanded_files_set = {file.id: file for file in expanded_files}
+            for file_id in all_file_ids:
+                file = expanded_files_set.get(file_id)
+                if not file:
+                    return None, get_json_result(retmsg="File not found!", retcode=RetCode.NOT_FOUND)
+                if not check_file_team_permission(s, file, tenant_id):
+                    return None, get_error_data_result(retmsg="No authorization.")
+            for kb in knowledgebases.values():
+                if not check_kb_team_permission(s, kb, tenant_id):
+                    return None, get_error_data_result(retmsg="No authorization.")
             return all_file_ids, None
 
         all_file_ids, error = await db.run_sync(_collect)  # TODO(async-phase4)

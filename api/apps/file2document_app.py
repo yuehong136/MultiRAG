@@ -15,7 +15,7 @@ from common.constants import RetCode
 router = APIRouter()
 
 
-@router.post("/convert", summary="转换文件", response_description="成功转换文件")
+@router.post("/convert", summary="[Deprecated] 转换文件", response_description="成功转换文件", deprecated=True)
 def convert(kb_ids: list[str], file_ids: list[str], background_tasks: BackgroundTasks, db: Session = Depends(get_db), user=Depends(manager)):
     """
     转换文件。
