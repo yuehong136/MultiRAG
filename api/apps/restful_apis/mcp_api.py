@@ -1,8 +1,4 @@
-"""RESTful MCP server management API.
-
-Routes are mounted under ``/api/v1`` by ``api.apps.register_page``.  The
-legacy ``/v1/mcp_server/*`` surface remains until its dedicated removal step.
-"""
+"""RESTful MCP server management API mounted under ``/api/v1``."""
 
 from __future__ import annotations
 

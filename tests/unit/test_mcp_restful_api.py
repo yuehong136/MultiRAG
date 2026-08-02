@@ -381,3 +381,7 @@ def test_mcp_restful_routes_have_pure_async_dependency_tree(client, route_depend
         assert api_apps.manager not in calls, f"{method} {path} 依赖树含同步 manager"
         assert async_current_user in calls, f"{method} {path} 缺异步鉴权依赖"
         assert get_async_db in calls, f"{method} {path} 缺 AsyncSession 依赖"
+
+
+def test_legacy_mcp_server_routes_are_not_registered(client):
+    assert client.post("/v1/mcp_server/list", json={}).status_code == 404
