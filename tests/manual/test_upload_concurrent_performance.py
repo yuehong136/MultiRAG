@@ -51,12 +51,12 @@ async def upload_file_async(session: aiohttp.ClientSession, url: str, file_data:
 
 
 async def test_file_upload_concurrent():
-    """测试 file_app.py 的 upload() 并发性能"""
+    """测试 RESTful file_api.py 的上传并发性能"""
     print("\n" + "=" * 60)
-    print("测试 1: file_app.py - upload() 并发上传")
+    print("测试 1: RESTful file_api.py - 并发上传")
     print("=" * 60)
 
-    url = f"{BASE_URL}/v1/file/upload"
+    url = f"{BASE_URL}/api/v1/files"
 
     # 准备测试数据
     files_data = []
@@ -64,7 +64,7 @@ async def test_file_upload_concurrent():
         file_obj = create_test_file(f"test_file_{i}.txt")
         data = aiohttp.FormData()
         data.add_field("parent_id", "root")  # 需要替换为实际的 parent_id
-        data.add_field("files", file_obj, filename=f"test_file_{i}.txt")
+        data.add_field("file", file_obj, filename=f"test_file_{i}.txt")
         files_data.append(data)
 
     async with aiohttp.ClientSession() as session:
@@ -146,50 +146,6 @@ async def test_document_upload_concurrent():
             print("  ❌ 差！近似串行执行")
 
 
-async def test_media_upload_concurrent():
-    """测试 file_app.py 的 upload_media_redirect() 并发性能"""
-    print("\n" + "=" * 60)
-    print("测试 3: file_app.py - upload_media_redirect() 并发上传")
-    print("=" * 60)
-
-    url = f"{BASE_URL}/v1/file/upload_media_redirect"
-
-    # 准备测试数据
-    files_data = []
-    for i in range(CONCURRENT_REQUESTS):
-        file_obj = create_test_file(f"test_media_{i}.mp4", size=1024 * 200)  # 200KB
-        data = aiohttp.FormData()
-        data.add_field("file", file_obj, filename=f"test_media_{i}.mp4")
-        files_data.append(data)
-
-    async with aiohttp.ClientSession() as session:
-        print(f"\n🚀 开始 {CONCURRENT_REQUESTS} 个并发上传...")
-        start_time = time.time()
-
-        tasks = [upload_file_async(session, url, files_data[i], i) for i in range(CONCURRENT_REQUESTS)]
-        results = await asyncio.gather(*tasks)
-
-        total_time = time.time() - start_time
-
-        # 统计结果
-        success_count = sum(1 for r in results if r["success"])
-        avg_time = sum(r["elapsed"] for r in results) / len(results)
-
-        print("\n📊 测试结果:")
-        print(f"  总耗时:     {total_time:.3f}s")
-        print(f"  成功请求:   {success_count}/{CONCURRENT_REQUESTS}")
-        print(f"  平均响应:   {avg_time:.3f}s")
-
-        # 性能评估
-        print("\n💡 性能评估:")
-        if total_time < avg_time * 1.5:
-            print("  ✅ 优秀！真正的并发执行")
-        elif total_time < avg_time * 3:
-            print("  ⚠️  一般，部分并发")
-        else:
-            print("  ❌ 差！近似串行执行")
-
-
 async def main():
     """主测试函数"""
     print("\n" + "🔥" * 30)
@@ -201,14 +157,11 @@ async def main():
     print(f"  测试文件大小:   {TEST_FILE_SIZE // 1024}KB")
 
     try:
-        # 测试 1: file_app.py - upload()
-        # await test_file_upload_concurrent()
+        # 测试 1: RESTful file_api.py - upload
+        await test_file_upload_concurrent()
 
         # 测试 2: document_app.py - upload()
         # await test_document_upload_concurrent()
-
-        # 测试 3: file_app.py - upload_media_redirect()
-        await test_media_upload_concurrent()
 
         print("\n" + "=" * 60)
         print("✅ 所有测试完成！")

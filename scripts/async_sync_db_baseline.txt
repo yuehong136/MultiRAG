@@ -33,7 +33,6 @@ api/apps/document_app.py::run_analyze_v2
 api/apps/document_app.py::upload
 api/apps/document_app.py::upload_and_parse
 api/apps/docx2zjform_app.py::convert
-api/apps/file_app.py::upload_media_redirect
 api/apps/kb_app.py::knowledge_graph
 api/apps/llm_app.py::add_llm
 api/apps/llm_app.py::embeddings_api

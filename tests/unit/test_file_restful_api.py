@@ -1,14 +1,13 @@
 """file RESTful API 契约测试（Phase 2.5 批次 3：AsyncSession 收口）。
 
 路由按 IO 面分形态，测试锁各自的类型契约：
-- 纯 DB（create_folder/list/root/parent/ancestors/convert）：路由层 run_sync——桩断言
+- 纯 DB（create_folder/list/root/parent/ancestors/link-to-datasets）：路由层 run_sync——桩断言
   收到同步 facade（``sqlalchemy.orm.Session``）且在事件循环线程上；
 - 混轨（upload/delete/move，存储与 DB 交错在共享 helper 内）：service ``*_async``
   包装——桩断言在工作线程收到 ``db_connection`` 自开的同步 Session；
 - download：DB 面 run_sync（回调内取纯字段，ORM 不逸出），存储读取 to_thread。
 upload_info 已于 11.11 转换（tests 见 test_upload_info_routes.py）。
-convert 的 HTTP 契约测试由 test_file2document_convert_parity.py 的 sys.modules
-伪造直调版迁移而来（路由转 async 后旧形态失效，按 AGENTS「坏了才按契约式重写」）。
+link-to-datasets 使用独立的 ``restful_apis/file2document_api.py`` 网关。
 """
 
 import sys
@@ -42,6 +41,10 @@ def _assert_sync_facade(records, *, off_loop=None):
 def _route_module():
     """app 绑定的是 register_page spec-load 的模块实例（无 `_api` 后缀）。"""
     return sys.modules["api.apps.restful_apis.file"]
+
+
+def _link_route_module():
+    return sys.modules["api.apps.restful_apis.file2document"]
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +256,7 @@ def test_file_link_to_datasets_schedules_background_work(client, monkeypatch):
     monkeypatch.setattr(FileService, "get_all_innermost_file_ids", classmethod(lambda cls, s, fid, acc: _record(records, s) or ["inner-1"]))
     kb = SimpleNamespace(id="kb-1")
     monkeypatch.setattr(KnowledgebaseService, "get_by_id", classmethod(lambda cls, s, kid: _record(records, s) or kb))
-    route_module = _route_module()
+    route_module = _link_route_module()
     monkeypatch.setattr(route_module, "check_file_team_permission", lambda *_args: True)
     monkeypatch.setattr(route_module, "check_kb_team_permission", lambda *_args: True)
     scheduled: list[tuple] = []
@@ -268,12 +271,12 @@ def test_file_link_to_datasets_schedules_background_work(client, monkeypatch):
     _assert_sync_facade(records)
 
 
-def test_sdk_file_convert_rejects_missing_file(client, monkeypatch):
+def test_file_link_to_datasets_rejects_missing_file(client, monkeypatch):
     monkeypatch.setattr(FileService, "get_by_ids", classmethod(lambda cls, s, ids: []))
     scheduled: list[tuple] = []
-    monkeypatch.setattr(_route_module(), "convert_files_with_new_session", lambda *args: scheduled.append(args))
+    monkeypatch.setattr(_link_route_module(), "convert_files_with_new_session", lambda *args: scheduled.append(args))
 
-    body = client.post("/api/v1/file/convert", json={"kb_ids": ["kb-1"], "file_ids": ["missing"]}).json()
+    body = client.post("/api/v1/files/link-to-datasets", json={"kb_ids": ["kb-1"], "file_ids": ["missing"]}).json()
 
     assert body["retmsg"] == "File not found!"
     assert scheduled == []
@@ -283,7 +286,7 @@ def test_file_link_to_datasets_rejects_unauthorized_file(client, monkeypatch):
     file = SimpleNamespace(id="file-1", type="doc")
     monkeypatch.setattr(FileService, "get_by_ids", classmethod(lambda cls, s, ids: [file]))
     monkeypatch.setattr(KnowledgebaseService, "get_by_id", classmethod(lambda cls, s, kid: SimpleNamespace(id=kid)))
-    route_module = _route_module()
+    route_module = _link_route_module()
     monkeypatch.setattr(route_module, "check_file_team_permission", lambda *_args: False)
     monkeypatch.setattr(route_module, "check_kb_team_permission", lambda *_args: True)
     scheduled: list[tuple] = []
@@ -295,12 +298,12 @@ def test_file_link_to_datasets_rejects_unauthorized_file(client, monkeypatch):
     assert scheduled == []
 
 
-def test_file_link_route_is_canonical_and_compat_routes_are_deprecated(client):
+def test_file_link_route_replaces_removed_legacy_routes(client):
     schema = client.app.openapi()
 
     assert schema["paths"]["/api/v1/files/link-to-datasets"]["post"].get("deprecated") is not True
-    assert schema["paths"]["/api/v1/file/convert"]["post"]["deprecated"] is True
-    assert schema["paths"]["/v1/file2document/convert"]["post"]["deprecated"] is True
+    assert "/api/v1/file/convert" not in schema["paths"]
+    assert "/v1/file2document/convert" not in schema["paths"]
 
 
 def test_file_download_attachment_off_loop(client):
@@ -315,7 +318,7 @@ def test_file_download_attachment_off_loop(client):
 
 
 # ---------------------------------------------------------------------------
-# 依赖树（12 条路由全部纯异步轨）
+# 依赖树（11 条路由全部纯异步轨）
 # ---------------------------------------------------------------------------
 
 
@@ -333,7 +336,6 @@ def test_file_routes_have_pure_async_dependency_tree(client, route_dependency_ca
         ("GET", "/api/v1/files/{file_id}/parent"),
         ("GET", "/api/v1/files/{file_id}/ancestors"),
         ("POST", "/api/v1/files/link-to-datasets"),
-        ("POST", "/api/v1/file/convert"),
         ("GET", "/api/v1/file/download/{attachment_id}"),
     ):
         calls = route_dependency_calls(client.app, method, path)
