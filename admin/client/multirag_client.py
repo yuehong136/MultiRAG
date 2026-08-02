@@ -957,7 +957,7 @@ class MultiRAGClient:
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
-        response = self.http_client.request("GET", "user/tenant_info", use_api_base=False, auth_kind="web")
+        response = self.http_client.request("GET", "users/me/models", use_api_base=True, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200:
             new_input = []
@@ -1037,7 +1037,7 @@ class MultiRAGClient:
         password: str = command["password"]
         print(f"Register user: {nickname}, email: {user_name}, password: ******")
         payload = {"email": user_name, "nickname": nickname, "password": password}
-        response = self.http_client.request("POST", "user/register", json_body=payload, use_api_base=False, auth_kind=None)
+        response = self.http_client.request("POST", "users", json_body=payload, use_api_base=True, auth_kind=None)
         res_json = response.json()
         code = res_json.get("code", res_json.get("retcode", -1))
         if response.status_code == 200 and code == 0:
@@ -1050,7 +1050,7 @@ class MultiRAGClient:
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
-        response = self.http_client.request("GET", "user/info", use_api_base=False, auth_kind="web")
+        response = self.http_client.request("GET", "users/me", use_api_base=True, auth_kind="web")
         res_json = response.json()
         code = res_json.get("code", res_json.get("retcode", -1))
         if response.status_code == 200 and code == 0:
@@ -1830,7 +1830,7 @@ class MultiRAGClient:
         return None
 
     def _get_default_models(self) -> dict | None:
-        response = self.http_client.request("GET", "user/tenant_info", use_api_base=False, auth_kind="web")
+        response = self.http_client.request("GET", "users/me/models", use_api_base=True, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200:
             code = res_json.get("code", res_json.get("retcode", -1))
@@ -1857,7 +1857,7 @@ class MultiRAGClient:
             "tts_id": current.get("tts_id", ""),
             "rerank_id": current.get("rerank_id", ""),
         }
-        response = self.http_client.request("POST", "user/set_tenant_info", json_body=payload, use_api_base=False, auth_kind="web")
+        response = self.http_client.request("PATCH", "users/me/models", json_body=payload, use_api_base=True, auth_kind="web")
         res_json = response.json()
         code = res_json.get("code", res_json.get("retcode", -1))
         if response.status_code == 200 and code == 0:

@@ -57,10 +57,6 @@ api/apps/semantic_layer_app.py::delete_embeddings_by_owner_type_and_id
 api/apps/semantic_layer_app.py::save_text_to_embedding
 api/apps/semantic_layer_app.py::save_texts_to_embedding_batch
 api/apps/semantic_layer_app.py::search_similar_vectors
-api/apps/user_app.py::feishu_callback
-api/apps/user_app.py::forget_send_otp
-api/apps/user_app.py::github_callback
-api/apps/user_app.py::oauth_callback
 api/apps/workflow_app.py::run
 api/apps/workflow_v2_app.py::component_run
 api/apps/workflow_v2_app.py::run

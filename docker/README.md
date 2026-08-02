@@ -295,18 +295,18 @@ HF_ENDPOINT=https://hf-mirror.com uv run --script download_deps.py \
 
 ```bash
 # HTTP（端口 80）
-curl http://your-server/api/v1/user/login
+curl http://your-server/api/v1/auth/login
 curl http://your-server/api/v1/admin/users
 
 # HTTPS（端口 443，需配置证书）
-curl https://your-server/api/v1/user/login
+curl https://your-server/api/v1/auth/login
 ```
 
 #### 方式二：直连后端（兼容/调试）
 
 ```bash
 # 主服务 API（端口 8123）
-curl http://your-server:8123/api/v1/user/login
+curl http://your-server:8123/api/v1/auth/login
 
 # 管理后台 API（端口 8130）
 curl http://your-server:8130/api/v1/admin/users

@@ -10,17 +10,18 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.apps.auth import get_auth_client
 from api.db import FileType, UserTenantRole
-from api.db.db_models import TenantLLM, get_db
+from api.db.db_models import TenantLLM, get_async_db
 from api.db.services.file_service import FileService
 from api.db.services.llm_service import get_init_tenant_llm
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService, UserService, UserTenantService
-from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
+from api.utils.api_utils import Principal, async_current_user, get_data_error_result, get_json_result, server_error_response
 from api.utils.crypt import decrypt
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from api.utils.web_utils import (
@@ -38,7 +39,6 @@ from api.utils.web_utils import (
 from common import settings
 from common.connection_utils import construct_response
 from common.constants import RetCode
-from common.http_client import async_request
 from common.misc_utils import download_img, get_uuid
 from common.time_utils import current_timestamp, datetime_format, get_format_time
 from core.utils.redis_conn import REDIS_CONN
@@ -125,7 +125,7 @@ class ResetPasswordRequest(BaseModel):
     confirm_new_password: str = Field(..., description="确认新密码")
 
 
-@router.get("/login/channels", summary="获取登录渠道")
+@router.get("/auth/login/channels", summary="获取登录渠道")
 def get_login_channels():
     """
     获取所有支持的认证渠道
@@ -152,8 +152,8 @@ def get_login_channels():
         return get_json_result(data=[], retmsg=f"Load channels failure, error: {e!s}", retcode=RetCode.EXCEPTION_ERROR)
 
 
-@router.post("/login", summary="登录")
-def login(request: LoginRequest, db: Session = Depends(get_db)):
+@router.post("/auth/login", summary="登录")
+async def login(request: LoginRequest, db: AsyncSession = Depends(get_async_db)):
     """
     登录
 
@@ -169,7 +169,7 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
     - 失败时返回错误信息
     """
     email = request.username
-    users = UserService.query(db, email=email)
+    users = await db.run_sync(lambda s: UserService.query(s, email=email))  # TODO(async-phase4)
     if not users:
         return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg=f"Email: {email} is not registered!")
 
@@ -179,7 +179,7 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
     except Exception:
         return get_json_result(data=False, retcode=RetCode.SERVER_ERROR, retmsg="Fail to crypt password")
 
-    user = UserService.query_user(db, email, password)
+    user = await db.run_sync(lambda s: UserService.query_user(s, email, password))  # TODO(async-phase4)
 
     if user and hasattr(user, "is_active") and not user.is_active:
         return get_json_result(
@@ -196,189 +196,19 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
         user.update_date = current_date
         db.add(user)
         try:
-            db.commit()
+            await db.commit()
             msg = "Welcome back!"
             jwt_token = manager.create_access_token(data={"sub": email})
             return construct_response(data=response_data, auth=jwt_token, retmsg=msg)
         except Exception as e:
-            db.rollback()
+            await db.rollback()
             raise HTTPException(status_code=500, detail=f"Login error: {e!s}")
     else:
         return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg="Email and password do not match!")
 
 
-@router.get("/github_callback", summary="GitHub 回调")
-async def github_callback(code: str, db: Session = Depends(get_db)):
-    """
-    **Deprecated**, Use `/oauth/callback/<channel>` instead.
-
-    GitHub 回调
-
-    该接口用于处理GitHub OAuth登录回调。
-
-    参数:
-    - code: str 从GitHub获取的授权码
-
-    返回:
-    - 成功时返回包含访问令牌的JSON结果
-    - 失败时返回错误信息
-    """
-    res = await async_request(
-        "POST",
-        settings.GITHUB_OAUTH["url"],
-        data={
-            "client_id": settings.GITHUB_OAUTH["client_id"],
-            "client_secret": settings.GITHUB_OAUTH["secret_key"],
-            "code": code,
-        },
-        headers={"Accept": "application/json"},
-    )
-    res = res.json()
-    if "error" in res:
-        return HTTPException(status_code=400, detail=res["error_description"])
-
-    if "user:email" not in res["scope"].split(","):
-        return HTTPException(status_code=400, detail="user:email not in scope")
-
-    userinfo = await user_info_from_github(res["access_token"])
-    user_id = get_uuid()
-    users = UserService.query(db, email=userinfo["email"])
-    if not users:
-        try:
-            avatar = await download_img(userinfo["avatar_url"])
-            users = user_register(
-                db,
-                user_id,
-                {
-                    "access_token": get_uuid(),
-                    "email": userinfo["email"],
-                    "avatar": avatar,
-                    "nickname": userinfo["login"],
-                    "login_channel": "github",
-                    "last_login_time": get_format_time(),
-                    "is_superuser": False,
-                },
-            )
-            if not users:
-                raise HTTPException(status_code=500, detail="Register user failure.")
-            if len(users) > 1:
-                raise HTTPException(status_code=500, detail=f"Same email: {userinfo['email']} exists!")
-
-            user = users[0]
-            login_user(user)
-            db.add(user)
-            db.commit()
-            return RedirectResponse(url=f"/?auth={user.id}")
-        except Exception as e:
-            rollback_user_registration(db, user_id)
-            logging.exception(e)
-            return RedirectResponse(url=f"/?error={e!s}")
-
-    # User exists, try to log in
-    user = users[0]
-    user.access_token = get_uuid()
-    if user and hasattr(user, "is_active") and not user.is_active:
-        return RedirectResponse(url="/?error=user_inactive")
-
-    login_user(user)
-    db.add(user)
-    db.commit()
-    return RedirectResponse(url=f"/?auth={user.id}")
-
-
-@router.get("/feishu_callback", summary="飞书回调")
-async def feishu_callback(code: str, db: Session = Depends(get_db)):
-    """
-    飞书回调
-
-    该接口用于处理飞书OAuth登录回调。
-
-    参数:
-    - code: str 从飞书获取的授权码
-
-    返回:
-    - 成功时返回包含访问令牌的JSON结果
-    - 失败时返回错误信息
-    """
-    app_access_token_res = await async_request(
-        "POST",
-        settings.FEISHU_OAUTH["app_access_token_url"],
-        json={
-            "app_id": settings.FEISHU_OAUTH["app_id"],
-            "app_secret": settings.FEISHU_OAUTH["app_secret"],
-        },
-        headers={"Content-Type": "application/json; charset=utf-8"},
-    )
-    app_access_token_res = app_access_token_res.json()
-    if app_access_token_res["code"] != 0:
-        return HTTPException(status_code=400, detail=app_access_token_res)
-
-    res = await async_request(
-        "POST",
-        settings.FEISHU_OAUTH["user_access_token_url"],
-        json={
-            "grant_type": settings.FEISHU_OAUTH["grant_type"],
-            "code": code,
-        },
-        headers={
-            "Content-Type": "application/json; charset=utf-8",
-            "Authorization": f"Bearer {app_access_token_res['app_access_token']}",
-        },
-    )
-    res = res.json()
-    if res["code"] != 0:
-        return HTTPException(status_code=400, detail=res["message"])
-
-    if "contact:user.email:readonly" not in res["data"]["scope"].split():
-        return HTTPException(status_code=400, detail="contact:user.email:readonly not in scope")
-
-    userinfo = await user_info_from_feishu(res["data"]["access_token"])
-    user_id = get_uuid()
-    users = UserService.query(db, email=userinfo["email"])
-    if not users:
-        try:
-            avatar = await download_img(userinfo["avatar_url"])
-            users = user_register(
-                db,
-                user_id,
-                {
-                    "access_token": get_uuid(),
-                    "email": userinfo["email"],
-                    "avatar": avatar,
-                    "nickname": userinfo["en_name"],
-                    "login_channel": "feishu",
-                    "last_login_time": get_format_time(),
-                    "is_superuser": False,
-                },
-            )
-            if not users:
-                raise HTTPException(status_code=500, detail="Register user failure.")
-            if len(users) > 1:
-                raise HTTPException(status_code=500, detail=f"Same email: {userinfo['email']} exists!")
-
-            user = users[0]
-            login_user(user)
-            db.add(user)
-            db.commit()
-            return RedirectResponse(url=f"/?auth={user.id}")
-        except Exception as e:
-            rollback_user_registration(db, user_id)
-            logging.exception(e)
-            return RedirectResponse(url=f"/?error={e!s}")
-
-    # User exists, try to log in
-    user = users[0]
-    user.access_token = get_uuid()
-    if user and hasattr(user, "is_active") and not user.is_active:
-        return RedirectResponse(url="/?error=user_inactive")
-    login_user(user)
-    db.add(user)
-    db.commit()
-    return RedirectResponse(url=f"/?auth={user.id}")
-
-
-@router.get("/logout", summary="退出登录")
-def log_out(db: Session = Depends(get_db), user=Depends(manager)):
+@router.post("/auth/logout", summary="退出登录")
+async def log_out(db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)):
     """
     退出登录
 
@@ -388,16 +218,26 @@ def log_out(db: Session = Depends(get_db), user=Depends(manager)):
     - 成功时返回成功退出的JSON结果
     """
     try:
-        user.access_token = f"INVALID_{secrets.token_hex(16)}"
-        db.add(user)
-        db.commit()
+        invalid_token = f"INVALID_{secrets.token_hex(16)}"
+
+        def _invalidate(s: Session) -> bool:
+            user_obj = UserService.get_by_id(s, user.id)
+            if user_obj is None:
+                return False
+            user_obj.access_token = invalid_token
+            s.add(user_obj)
+            return True
+
+        if not await db.run_sync(_invalidate):  # TODO(async-phase4)
+            return get_data_error_result(retmsg="User not found!")
+        await db.commit()
         return get_json_result(data=True)
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(status_code=500, detail=f"An error occurred: {e!s}")
 
 
-@router.get("/login/{channel}", summary="OAuth登录入口")
+@router.get("/auth/login/{channel}", summary="OAuth登录入口")
 def oauth_login(channel: str, request: Request):
     """
     OAuth登录入口
@@ -429,8 +269,8 @@ def oauth_login(channel: str, request: Request):
         raise HTTPException(status_code=500, detail=f"OAuth login error: {e!s}")
 
 
-@router.get("/oauth/callback/{channel}", summary="OAuth回调处理")
-async def oauth_callback(channel: str, code: str, state: str = None, request: Request = None, db: Session = Depends(get_db)):
+@router.get("/auth/oauth/{channel}/callback", summary="OAuth回调处理")
+async def oauth_callback(channel: str, code: str, state: str = None, request: Request = None, db: AsyncSession = Depends(get_async_db)):
     """
     OAuth回调处理
 
@@ -484,7 +324,7 @@ async def oauth_callback(channel: str, code: str, state: str = None, request: Re
             return RedirectResponse(url="/?error=email_missing")
 
         # 登录或注册
-        users = UserService.query(db, email=user_info.email)
+        users = await db.run_sync(lambda s: UserService.query(s, email=user_info.email))  # TODO(async-phase4)
         user_id = get_uuid()
 
         if not users:
@@ -495,19 +335,16 @@ async def oauth_callback(channel: str, code: str, state: str = None, request: Re
                     logging.exception(e)
                     avatar = ""
 
-                users = user_register(
-                    db,
-                    user_id,
-                    {
-                        "access_token": get_uuid(),
-                        "email": user_info.email,
-                        "avatar": avatar,
-                        "nickname": user_info.nickname,
-                        "login_channel": channel,
-                        "last_login_time": get_format_time(),
-                        "is_superuser": False,
-                    },
-                )
+                user_data = {
+                    "access_token": get_uuid(),
+                    "email": user_info.email,
+                    "avatar": avatar,
+                    "nickname": user_info.nickname,
+                    "login_channel": channel,
+                    "last_login_time": get_format_time(),
+                    "is_superuser": False,
+                }
+                users = await db.run_sync(lambda s: user_register(s, user_id, user_data))  # TODO(async-phase4)
 
                 if not users:
                     raise Exception(f"Failed to register {user_info.email}")
@@ -518,11 +355,11 @@ async def oauth_callback(channel: str, code: str, state: str = None, request: Re
                 user = users[0]
                 login_user(user)
                 db.add(user)
-                db.commit()
+                await db.commit()
                 return RedirectResponse(url=f"/?auth={user.id}")
 
             except Exception as e:
-                rollback_user_registration(db, user_id)
+                await db.run_sync(lambda s: rollback_user_registration(s, user_id))  # TODO(async-phase4)
                 logging.exception(e)
                 return RedirectResponse(url=f"/?error={e!s}")
 
@@ -533,7 +370,7 @@ async def oauth_callback(channel: str, code: str, state: str = None, request: Re
         user.access_token = get_uuid()
         login_user(user)
         db.add(user)
-        db.commit()
+        await db.commit()
 
         return RedirectResponse(url=f"/?auth={user.id}")
 
@@ -542,8 +379,12 @@ async def oauth_callback(channel: str, code: str, state: str = None, request: Re
         return RedirectResponse(url=f"/?error={e!s}")
 
 
-@router.post("/setting", summary="设置用户信息")
-def setting_user(request: UserUpdateRequest, db: Session = Depends(get_db), user=Depends(manager)):
+@router.patch("/users/me", summary="设置用户信息")
+async def setting_user(
+    request: UserUpdateRequest,
+    db: AsyncSession = Depends(get_async_db),
+    user: Principal = Depends(async_current_user),
+):
     """
     **功能描述**:
     此接口用于更新用户的个人信息，如密码、邮箱、状态等字段。用户可以通过此接口更新自身信息，密码更新时需验证旧密码。
@@ -589,7 +430,10 @@ def setting_user(request: UserUpdateRequest, db: Session = Depends(get_db), user
     request_data = request.model_dump(exclude_none=True)
     if request_data.get("password"):
         new_password = request_data.get("new_password")
-        if not UserService.verify_password(request_data["password"], user.password):
+        current_password = await db.run_sync(  # TODO(async-phase4)
+            lambda s: user_obj.password if (user_obj := UserService.get_by_id(s, user.id)) is not None else None
+        )
+        if current_password is None or not UserService.verify_password(request_data["password"], current_password):
             return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg="Password error!")
         if new_password:
             update_dict["password"] = UserService.hash_password(new_password)
@@ -602,16 +446,21 @@ def setting_user(request: UserUpdateRequest, db: Session = Depends(get_db), user
         update_dict[field] = value
 
     try:
-        UserService.update_by_id(db, user.id, update_dict)
+        await db.run_sync(lambda s: UserService.update_by_id(s, user.id, update_dict))  # TODO(async-phase4)
         return get_json_result(data=True)
     except Exception as e:
         logging.exception(e)
         return get_json_result(data=False, retmsg="Update failure!", retcode=RetCode.EXCEPTION_ERROR)
 
 
-@router.get("/info", summary="获取用户信息")
-def user_profile(user=Depends(manager)):
-    return get_json_result(data=user.to_dict())
+@router.get("/users/me", summary="获取用户信息")
+async def user_profile(db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)):
+    payload = await db.run_sync(  # TODO(async-phase4)
+        lambda s: user_obj.to_dict() if (user_obj := UserService.get_by_id(s, user.id)) is not None else None
+    )
+    if payload is None:
+        return get_data_error_result(retmsg="User not found!")
+    return get_json_result(data=payload)
 
 
 def login_user(user):
@@ -687,8 +536,8 @@ def user_register(db: Session, user_id: str, user: dict):
         raise HTTPException(status_code=500, detail=f"Error during user registration: {e!s}")
 
 
-@router.post("/register", summary="注册用户")
-def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
+@router.post("/users", summary="注册用户")
+async def user_add(request: RegisterRequest, db: AsyncSession = Depends(get_async_db)):
     if not settings.REGISTER_ENABLED:
         return get_json_result(
             data=False,
@@ -703,7 +552,7 @@ def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
         return get_json_result(data=False, retmsg=f"Invalid email address: {email_address}!", retcode=RetCode.OPERATING_ERROR)
 
     # Check if the email address is already used
-    if UserService.query(db, email=email_address):
+    if await db.run_sync(lambda s: UserService.query(s, email=email_address)):  # TODO(async-phase4)
         return get_json_result(data=False, retmsg=f"Email: {email_address} has already registered!", retcode=RetCode.OPERATING_ERROR)
 
     # Construct user info data
@@ -725,7 +574,7 @@ def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
 
     user_id = get_uuid()
     try:
-        users = user_register(db, user_id, user_dict)
+        users = await db.run_sync(lambda s: user_register(s, user_id, user_dict))  # TODO(async-phase4)
         if not users:
             raise Exception(f"Fail to register {email_address}.")
         if len(users) > 1:
@@ -734,15 +583,15 @@ def user_add(request: RegisterRequest, db: Session = Depends(get_db)):
         access_token = manager.create_access_token(data={"sub": user.email})
         return construct_response(data=user.to_dict(), auth=access_token, retmsg=f"{nickname}, welcome aboard!")
     except Exception as e:
-        rollback_user_registration(db, user_id)
+        await db.run_sync(lambda s: rollback_user_registration(s, user_id))  # TODO(async-phase4)
         logging.exception(e)
         return get_json_result(data=False, retmsg=f"User registration failure, error: {e!s}", retcode=RetCode.EXCEPTION_ERROR)
 
 
-@router.get("/tenant_info", summary="获取租户信息")
-def tenant_info(user=Depends(manager), db: Session = Depends(get_db)):
+@router.get("/users/me/models", summary="获取租户信息")
+async def tenant_info(user: Principal = Depends(async_current_user), db: AsyncSession = Depends(get_async_db)):
     try:
-        tenants = TenantService.get_info_by(db, user.id)
+        tenants = await db.run_sync(lambda s: TenantService.get_info_by(s, user.id))  # TODO(async-phase4)
         if not tenants:
             return get_data_error_result(retmsg="Tenant not found!")
         return get_json_result(data=tenants[0])
@@ -750,46 +599,24 @@ def tenant_info(user=Depends(manager), db: Session = Depends(get_db)):
         return server_error_response(e)
 
 
-@router.post("/set_tenant_info", summary="设置租户信息")
-def set_tenant_info(request: SetTenantInfoRequest, user=Depends(manager), db: Session = Depends(get_db)):
+@router.patch("/users/me/models", summary="设置租户信息")
+async def set_tenant_info(
+    request: SetTenantInfoRequest,
+    _user: Principal = Depends(async_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
     req = request.model_dump()
     try:
         tid = req.pop("tenant_id")
-        req = ensure_tenant_model_id_for_params(db, tid, req)
-        TenantService.update_by_id(db, tid, req)
+        req = await db.run_sync(lambda s: ensure_tenant_model_id_for_params(s, tid, req))  # TODO(async-phase4)
+        await db.run_sync(lambda s: TenantService.update_by_id(s, tid, req))  # TODO(async-phase4)
         return get_json_result(data=True)
     except Exception as e:
         return server_error_response(e)
 
 
-async def user_info_from_github(access_token: str):
-    headers = {"Accept": "application/json", "Authorization": f"token {access_token}"}
-    res = await async_request(
-        "GET",
-        f"https://api.github.com/user?access_token={access_token}",
-        headers=headers,
-    )
-    user_info = res.json()
-    email_info_response = await async_request(
-        "GET",
-        f"https://api.github.com/user/emails?access_token={access_token}",
-        headers=headers,
-    )
-    email_info = email_info_response.json()
-    user_info["email"] = next((email for email in email_info if email["primary"]), None)["email"]
-    return user_info
-
-
-async def user_info_from_feishu(access_token: str):
-    headers = {"Content-Type": "application/json; charset=utf-8", "Authorization": f"Bearer {access_token}"}
-    res = await async_request("GET", "https://open.feishu.cn/open-apis/authen/v1/user_info", headers=headers)
-    user_info = res.json()["data"]
-    user_info["email"] = None if user_info.get("email") == "" else user_info["email"]
-    return user_info
-
-
-@router.get("/forget/captcha", summary="获取图片验证码")
-def forget_get_captcha(email: str, db: Session = Depends(get_db)):
+@router.post("/auth/password/forgot/captcha", summary="获取图片验证码")
+async def forget_get_captcha(email: str, db: AsyncSession = Depends(get_async_db)):
     """
     获取图片验证码
 
@@ -805,7 +632,7 @@ def forget_get_captcha(email: str, db: Session = Depends(get_db)):
     if not email:
         return get_json_result(data=False, retcode=RetCode.ARGUMENT_ERROR, retmsg="email is required")
 
-    users = UserService.query(db, email=email)
+    users = await db.run_sync(lambda s: UserService.query(s, email=email))  # TODO(async-phase4)
     if not users:
         return get_json_result(data=False, retcode=RetCode.DATA_ERROR, retmsg="invalid email")
 
@@ -822,8 +649,8 @@ def forget_get_captcha(email: str, db: Session = Depends(get_db)):
     return Response(content=img_bytes, media_type="image/jpeg")
 
 
-@router.post("/forget/otp", summary="发送邮箱OTP验证码")
-async def forget_send_otp(request: SendOtpRequest, db: Session = Depends(get_db)):
+@router.post("/auth/password/forgot/otp", summary="发送邮箱OTP验证码")
+async def forget_send_otp(request: SendOtpRequest, db: AsyncSession = Depends(get_async_db)):
     """
     发送邮箱OTP验证码
 
@@ -844,7 +671,7 @@ async def forget_send_otp(request: SendOtpRequest, db: Session = Depends(get_db)
     if not email or not captcha:
         return get_json_result(data=False, retcode=RetCode.ARGUMENT_ERROR, retmsg="email and captcha required")
 
-    users = UserService.query(db, email=email)
+    users = await db.run_sync(lambda s: UserService.query(s, email=email))  # TODO(async-phase4)
     if not users:
         return get_json_result(data=False, retcode=RetCode.DATA_ERROR, retmsg="invalid email")
 
@@ -899,8 +726,8 @@ async def forget_send_otp(request: SendOtpRequest, db: Session = Depends(get_db)
     return get_json_result(data=True, retcode=RetCode.SUCCESS, retmsg="verification passed, email sent")
 
 
-@router.post("/forget/verify-otp", summary="验证OTP")
-def forget_verify_otp(request: VerifyOtpRequest, db: Session = Depends(get_db)):
+@router.post("/auth/password/forgot/otp/verify", summary="验证OTP")
+async def forget_verify_otp(request: VerifyOtpRequest, db: AsyncSession = Depends(get_async_db)):
     """
     验证邮箱OTP验证码
 
@@ -922,7 +749,7 @@ def forget_verify_otp(request: VerifyOtpRequest, db: Session = Depends(get_db)):
     if not all([email, otp]):
         return get_json_result(data=False, retcode=RetCode.ARGUMENT_ERROR, retmsg="email and otp are required")
 
-    users = UserService.query(db, email=email)
+    users = await db.run_sync(lambda s: UserService.query(s, email=email))  # TODO(async-phase4)
     if not users:
         return get_json_result(data=False, retcode=RetCode.DATA_ERROR, retmsg="invalid email")
 
@@ -973,8 +800,8 @@ def forget_verify_otp(request: VerifyOtpRequest, db: Session = Depends(get_db)):
     return get_json_result(data=True, retcode=RetCode.SUCCESS, retmsg="otp verified")
 
 
-@router.post("/forget/reset-password", summary="重置密码")
-def forget_reset_password(request: ResetPasswordRequest, db: Session = Depends(get_db)):
+@router.post("/auth/password/reset", summary="重置密码")
+async def forget_reset_password(request: ResetPasswordRequest, db: AsyncSession = Depends(get_async_db)):
     """
     OTP验证成功后重置密码
 
@@ -1004,7 +831,7 @@ def forget_reset_password(request: ResetPasswordRequest, db: Session = Depends(g
     if new_pwd != new_pwd2:
         return get_json_result(data=False, retcode=RetCode.ARGUMENT_ERROR, retmsg="passwords do not match")
 
-    users = UserService.query(db, email=email)
+    users = await db.run_sync(lambda s: UserService.query(s, email=email))  # TODO(async-phase4)
     if not users:
         return get_json_result(data=False, retcode=RetCode.DATA_ERROR, retmsg="invalid email")
 
@@ -1012,7 +839,7 @@ def forget_reset_password(request: ResetPasswordRequest, db: Session = Depends(g
 
     # Reset password
     try:
-        UserService.update_user_password(db, user.id, new_pwd)
+        await db.run_sync(lambda s: UserService.update_user_password(s, user.id, new_pwd))  # TODO(async-phase4)
     except Exception as e:
         logging.exception(e)
         return get_json_result(data=False, retcode=RetCode.EXCEPTION_ERROR, retmsg="failed to reset password")
