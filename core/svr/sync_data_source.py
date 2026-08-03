@@ -48,7 +48,7 @@ from common.data_source.confluence_connector import ConfluenceConnector
 from common.data_source.github.connector import GithubConnector
 from common.data_source.gitlab_connector import GitlabConnector
 from common.data_source.gmail_connector import GmailConnector
-from common.data_source.interfaces import CheckpointOutputWrapper
+from common.data_source.interfaces import CheckpointOutputWrapper, GenerateDocumentsOutput
 from common.data_source.models import ConnectorFailure, SeafileSyncScope
 from common.data_source.webdav_connector import WebDAVConnector
 from common.log_utils import init_root_logger
@@ -185,7 +185,7 @@ class SyncBase:
             logging.info(f"{prefix}{doc_num} docs synchronized till {next_update}{removed_info}")
         return next_update
 
-    async def _generate(self, task: dict):
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
         raise NotImplementedError
 
     def _get_source_prefix(self):
@@ -203,6 +203,7 @@ class _BlobLikeBase(SyncBase):
             bucket_name=self.conf["bucket_name"],
             prefix=self.conf.get("prefix", ""),
         )
+        self.connector.set_allow_images(self.conf.get("allow_images", False))
         self.connector.load_credentials(self.conf["credentials"])
 
         document_batch_generator = (
