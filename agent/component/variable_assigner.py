@@ -16,6 +16,7 @@
 import numbers
 import os
 from abc import ABC
+from typing import Any
 
 from agent.component.base import ComponentBase, ComponentParamBase
 from api.utils.api_utils import timeout
@@ -139,21 +140,19 @@ class VariableAssigner(ComponentBase, ABC):
         else:
             return variable + parameter
 
-    def _remove_first(self, variable):
-        if len(variable) == 0:
-            return variable
+    def _remove_first(self, variable: Any) -> list[Any] | str:
         if not isinstance(variable, list):
             return "ERROR:VARIABLE_NOT_LIST"
-        else:
-            return variable[1:]
+        if len(variable) == 0:
+            return variable
+        return variable[1:]
 
-    def _remove_last(self, variable):
-        if len(variable) == 0:
-            return variable
+    def _remove_last(self, variable: Any) -> list[Any] | str:
         if not isinstance(variable, list):
             return "ERROR:VARIABLE_NOT_LIST"
-        else:
-            return variable[:-1]
+        if len(variable) == 0:
+            return variable
+        return variable[:-1]
 
     def is_number(self, value):
         if isinstance(value, bool):
