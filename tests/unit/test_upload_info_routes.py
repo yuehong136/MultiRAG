@@ -6,9 +6,12 @@
 
 import threading
 import types
+from contextlib import nullcontext
 
+import crawl4ai
 import pytest
 
+import api.db.services.file_service as file_service_module
 from api.db.services.canvas_service import UserCanvasService
 from api.db.services.document_service import DocumentService
 from api.db.services.file_service import FileService
@@ -46,6 +49,133 @@ async def test_upload_info_file_branch_bridges_db_and_thread(async_db, monkeypat
 async def test_upload_info_rejects_invalid_file_object(async_db):
     with pytest.raises(ValueError, match="Invalid file object"):
         await FileService.upload_info(async_db, "user-unit", types.SimpleNamespace(filename="x"), None)
+
+
+class _RedirectResponse:
+    def __init__(self, status_code: int, location: str | None = None) -> None:
+        self.status_code = status_code
+        self.headers = {"Location": location} if location else {}
+
+    def close(self) -> None:
+        return None
+
+
+def test_resolve_safe_crawl_url_blocks_private_redirect_before_request(monkeypatch):
+    calls: list[tuple[str, bool]] = []
+
+    def validate(url: str) -> tuple[str, str]:
+        if "metadata.internal" in url:
+            raise ValueError("URL resolves to a non-public address")
+        return "example.com", "93.184.216.34"
+
+    def get(url: str, *, timeout: int, allow_redirects: bool):
+        del timeout
+        calls.append((url, allow_redirects))
+        return _RedirectResponse(302, "http://metadata.internal/latest/meta-data")
+
+    monkeypatch.setattr(FileService, "_validate_url_for_crawl", staticmethod(validate))
+    monkeypatch.setattr(file_service_module, "pin_dns", lambda *_args: nullcontext())
+    monkeypatch.setattr(file_service_module.requests, "get", get)
+
+    with pytest.raises(ValueError, match="non-public"):
+        FileService._resolve_safe_crawl_url("https://example.com/start")
+
+    assert calls == [("https://example.com/start", False)]
+
+
+def test_resolve_safe_crawl_url_validates_and_pins_each_redirect(monkeypatch):
+    validations: list[str] = []
+    pins: list[tuple[str, str]] = []
+    responses = iter(
+        [
+            _RedirectResponse(302, "/next"),
+            _RedirectResponse(301, "https://cdn.example.net/final"),
+            _RedirectResponse(200),
+        ]
+    )
+
+    def validate(url: str) -> tuple[str, str]:
+        validations.append(url)
+        if "cdn.example.net" in url:
+            return "cdn.example.net", "203.0.113.20"
+        return "example.com", "93.184.216.34"
+
+    def pinned(hostname: str, ip: str):
+        pins.append((hostname, ip))
+        return nullcontext()
+
+    monkeypatch.setattr(FileService, "_validate_url_for_crawl", staticmethod(validate))
+    monkeypatch.setattr(file_service_module, "pin_dns", pinned)
+    monkeypatch.setattr(file_service_module.requests, "get", lambda *_args, **_kwargs: next(responses))
+
+    final_url, host_pins = FileService._resolve_safe_crawl_url("https://example.com/start")
+
+    assert final_url == "https://cdn.example.net/final"
+    assert validations == [
+        "https://example.com/start",
+        "https://example.com/next",
+        "https://cdn.example.net/final",
+    ]
+    assert pins == [
+        ("example.com", "93.184.216.34"),
+        ("example.com", "93.184.216.34"),
+        ("cdn.example.net", "203.0.113.20"),
+    ]
+    assert host_pins == {"example.com": "93.184.216.34", "cdn.example.net": "203.0.113.20"}
+
+
+async def test_upload_info_url_uses_validated_final_url_and_browser_dns_pins(async_db, monkeypatch):
+    seen: dict[str, object] = {}
+
+    class FakeBrowserConfig:
+        def __init__(self, **kwargs) -> None:
+            seen["browser_config"] = kwargs
+
+    class FakeCrawlerRunConfig:
+        def __init__(self, **kwargs) -> None:
+            seen["crawler_config"] = kwargs
+
+    class FakeCrawler:
+        def __init__(self, *, config) -> None:
+            del config
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            return None
+
+        async def arun(self, *, url: str, config):
+            seen["crawl_url"] = url
+            seen["run_config"] = config
+            return types.SimpleNamespace(
+                pdf=None,
+                markdown="safe content",
+                response_headers={"content-type": "text/html"},
+            )
+
+    monkeypatch.setattr(
+        FileService,
+        "_resolve_safe_crawl_url",
+        staticmethod(lambda _url: ("https://cdn.example.net/final", {"example.com": "93.184.216.34", "cdn.example.net": "1.1.1.1"})),
+    )
+    monkeypatch.setattr(FileService, "put_blob", staticmethod(lambda _user_id, _location, blob: seen.setdefault("blob", blob)))
+    monkeypatch.setattr(crawl4ai, "AsyncWebCrawler", FakeCrawler)
+    monkeypatch.setattr(crawl4ai, "BrowserConfig", FakeBrowserConfig)
+    monkeypatch.setattr(crawl4ai, "CrawlerRunConfig", FakeCrawlerRunConfig)
+    monkeypatch.setattr(crawl4ai, "DefaultMarkdownGenerator", lambda **_kwargs: object())
+    monkeypatch.setattr(crawl4ai, "PruningContentFilter", lambda **_kwargs: object())
+
+    result = await FileService.upload_info(async_db, "user-unit", None, "https://example.com/start")
+
+    assert seen["crawl_url"] == "https://cdn.example.net/final"
+    assert seen["browser_config"] == {
+        "headless": True,
+        "verbose": False,
+        "extra_args": ["--host-resolver-rules=MAP example.com 93.184.216.34,MAP cdn.example.net 1.1.1.1"],
+    }
+    assert seen["blob"] == b"safe content"
+    assert result["mime_type"] == "text/html"
 
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,10 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
+from urllib.parse import urljoin
 
+import requests
 import xxhash
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,11 +27,15 @@ from api.utils.file_utils import filename_type, read_potential_broken_pdf, sanit
 from common import settings
 from common.constants import FileSource, ParserType, TaskStatus
 from common.misc_utils import get_uuid
+from common.ssrf_guard import assert_url_is_safe, pin_dns
 from core.llm.cv_model.models.gptv4 import GptV4
 
 
 class FileService(CommonService):
     model = File
+    _ALLOWED_CRAWL_SCHEMES = frozenset({"http", "https"})
+    _MAX_CRAWL_REDIRECTS = 10
+    _REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
 
     def __init__(self):
         super().__init__(File)
@@ -544,7 +551,48 @@ class FileService(CommonService):
         return errors
 
     @staticmethod
-    async def upload_info(db: AsyncSession, user_id, file, url: str | None = None):
+    def _validate_url_for_crawl(url: str) -> tuple[str, str]:
+        return assert_url_is_safe(url, allowed_schemes=FileService._ALLOWED_CRAWL_SCHEMES)
+
+    @staticmethod
+    def _resolve_safe_crawl_url(url: str) -> tuple[str, dict[str, str]]:
+        """Validate and DNS-pin every redirect before the browser crawl."""
+        current_url = url
+        current_hostname, current_ip = FileService._validate_url_for_crawl(current_url)
+        host_pins = {current_hostname: current_ip}
+
+        for redirect_count in range(FileService._MAX_CRAWL_REDIRECTS + 1):
+            try:
+                with pin_dns(current_hostname, current_ip):
+                    response = requests.get(current_url, timeout=10, allow_redirects=False)
+            except requests.RequestException as exc:
+                raise ValueError("Failed to fetch the validated URL.") from exc
+
+            try:
+                status_code = response.status_code
+                location = response.headers.get("Location")
+            finally:
+                response.close()
+
+            if status_code not in FileService._REDIRECT_STATUS_CODES or not location:
+                return current_url, host_pins
+            if redirect_count >= FileService._MAX_CRAWL_REDIRECTS:
+                break
+
+            next_url = urljoin(current_url, location)
+            current_hostname, current_ip = FileService._validate_url_for_crawl(next_url)
+            host_pins[current_hostname] = current_ip
+            current_url = next_url
+
+        raise ValueError(f"Exceeded {FileService._MAX_CRAWL_REDIRECTS} redirects while fetching URL.")
+
+    @staticmethod
+    async def upload_info(
+        db: AsyncSession,
+        user_id: str,
+        file: Any | None,
+        url: str | None = None,
+    ) -> dict[str, Any]:
         """
         上传文件或从URL下载内容
 
@@ -556,7 +604,7 @@ class FileService(CommonService):
         """
 
         # PDF 修复（CPU）+ 存储写入（同步 HTTP）都不持有 Session，整体在工作线程执行
-        def structured(filename, filetype, blob, content_type):
+        def structured(filename: str, filetype: str, blob: bytes, content_type: str) -> dict[str, Any]:
             nonlocal user_id
             if filetype == FileType.PDF.value:
                 blob = read_potential_broken_pdf(blob)
@@ -576,6 +624,9 @@ class FileService(CommonService):
             }
 
         if url:
+            current_url, host_pins = await asyncio.to_thread(FileService._resolve_safe_crawl_url, url)
+            map_rules = ",".join(f"MAP {hostname} {ip}" for hostname, ip in host_pins.items())
+
             from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CrawlResult, DefaultMarkdownGenerator, PruningContentFilter
 
             filename = re.sub(r"\?.*", "", url.split("/")[-1])
@@ -583,10 +634,11 @@ class FileService(CommonService):
             browser_config = BrowserConfig(
                 headless=True,
                 verbose=False,
+                extra_args=[f"--host-resolver-rules={map_rules}"],
             )
             async with AsyncWebCrawler(config=browser_config) as crawler:
                 crawler_config = CrawlerRunConfig(markdown_generator=DefaultMarkdownGenerator(content_filter=PruningContentFilter()), pdf=True, screenshot=False)
-                page: CrawlResult = await crawler.arun(url=url, config=crawler_config)
+                page: CrawlResult = await crawler.arun(url=current_url, config=crawler_config)
 
             if page.pdf:
                 if filename.split(".")[-1].lower() != "pdf":

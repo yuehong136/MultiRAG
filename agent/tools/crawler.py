@@ -15,6 +15,7 @@
 #
 import asyncio
 from abc import ABC
+from typing import Any
 
 from crawl4ai import AsyncWebCrawler
 
@@ -38,22 +39,25 @@ class CrawlerParam(ToolParamBase):
 class Crawler(ToolBase, ABC):
     component_name = "Crawler"
 
-    def _run(self, history, **kwargs):
-        from api.utils.web_utils import is_valid_url
+    def _run(self, history: Any, **kwargs: Any) -> Any:
+        from common.ssrf_guard import assert_url_is_safe, pin_dns_global
 
         ans = self.get_input()
         ans = " - ".join(ans["content"]) if "content" in ans else ""
-        if not is_valid_url(ans):
+        try:
+            hostname, ip = assert_url_is_safe(ans)
+        except ValueError:
             return Crawler.be_output("URL not valid")
         try:
-            result = asyncio.run(self.get_web(ans))
+            with pin_dns_global(hostname, ip):
+                result = asyncio.run(self.get_web(ans))
 
             return Crawler.be_output(result)
 
         except Exception as e:
             return Crawler.be_output(f"An unexpected error occurred: {e!s}")
 
-    async def get_web(self, url):
+    async def get_web(self, url: str) -> str | None:
         if self.check_if_canceled("Crawler async operation"):
             return
 

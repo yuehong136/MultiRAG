@@ -17,11 +17,13 @@ import logging
 import os
 import time
 from abc import ABC
+from typing import Any
 
 import requests
 
 from agent.tools.base import ToolBase, ToolMeta, ToolParamBase
 from common.connection_utils import timeout
+from common.ssrf_guard import assert_url_is_safe, pin_dns
 
 
 class SearXNGParam(ToolParamBase):
@@ -70,7 +72,7 @@ class SearXNG(ToolBase, ABC):
     component_name = "SearXNG"
 
     @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 12)))
-    def _invoke(self, **kwargs):
+    def _invoke(self, **kwargs: Any) -> str | None:
         if self.check_if_canceled("SearXNG processing"):
             return
 
@@ -86,6 +88,12 @@ class SearXNG(ToolBase, ABC):
             self.set_output("formalized_content", "")
             return ""
 
+        try:
+            hostname, ip = assert_url_is_safe(searxng_url)
+        except ValueError as e:
+            self.set_output("_ERROR", str(e))
+            return f"SearXNG error: SSRF guard blocked the configured URL: {e}"
+
         last_e = ""
         for _ in range(self._param.max_retries + 1):
             if self.check_if_canceled("SearXNG processing"):
@@ -94,7 +102,13 @@ class SearXNG(ToolBase, ABC):
             try:
                 search_params = {"q": query, "format": "json", "categories": "general", "language": "auto", "safesearch": 1, "pageno": 1}
 
-                response = requests.get(f"{searxng_url}/search", params=search_params, timeout=10)
+                with pin_dns(hostname, ip):
+                    response = requests.get(
+                        f"{searxng_url}/search",
+                        params=search_params,
+                        timeout=10,
+                        allow_redirects=False,
+                    )
                 response.raise_for_status()
 
                 if self.check_if_canceled("SearXNG processing"):
