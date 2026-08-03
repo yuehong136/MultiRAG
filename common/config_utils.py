@@ -2,6 +2,7 @@ import copy
 import importlib
 import logging
 import os
+from typing import Any
 
 from filelock import FileLock
 from ruamel.yaml import YAML
@@ -14,7 +15,7 @@ def load_yaml_conf(conf_path):
     if not os.path.isabs(conf_path):
         conf_path = os.path.join(get_project_base_directory(), conf_path)
     try:
-        with open(conf_path) as f:
+        with open(conf_path, encoding="utf-8") as f:
             yaml = YAML(typ="safe", pure=True)
             return yaml.load(f)
     except Exception as e:
@@ -25,7 +26,7 @@ def rewrite_yaml_conf(conf_path, config):
     if not os.path.isabs(conf_path):
         conf_path = os.path.join(get_project_base_directory(), conf_path)
     try:
-        with open(conf_path, "w") as f:
+        with open(conf_path, "w", encoding="utf-8") as f:
             yaml = YAML(typ="safe")
             yaml.dump(config, f)
     except Exception as e:
@@ -60,7 +61,7 @@ def read_config(conf_name=SERVICE_CONF):
 CONFIGS = read_config()
 
 
-def _mask_sensitive_fields(config, _already_copied=False):
+def _mask_sensitive_fields(config: Any, _already_copied: bool = False) -> Any:
     """递归处理配置字典，将敏感字段替换为 *
 
     Args:
@@ -75,14 +76,28 @@ def _mask_sensitive_fields(config, _already_copied=False):
         config = copy.deepcopy(config)
 
     # 定义需要脱敏的字段列表
-    sensitive_fields = {"password", "api_key", "access_key", "secret_key", "secret", "sas_token", "client_secret", "http_secret_key"}
+    sensitive_fields = {
+        "password",
+        "api_key",
+        "api_token",
+        "access_key",
+        "secret_key",
+        "secret",
+        "app_secret",
+        "agent_api_token",
+        "internal_api_token",
+        "secret_encryption_key",
+        "sas_token",
+        "client_secret",
+        "http_secret_key",
+    }
 
     for key, value in config.items():
         # 如果值是字典，递归处理（传入 True 表示已经拷贝过）
         if isinstance(value, dict):
             config[key] = _mask_sensitive_fields(value, _already_copied=True)
         # 如果键是敏感字段，替换为 *
-        elif key in sensitive_fields:
+        elif str(key).lower() in sensitive_fields:
             config[key] = "*" * 8
 
     return config

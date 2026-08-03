@@ -3708,6 +3708,22 @@ wheels = [
 ]
 
 [[package]]
+name = "lark-oapi"
+version = "1.7.1"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pycryptodome" },
+    { name = "requests" },
+    { name = "requests-toolbelt" },
+    { name = "websockets" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/57/d0/0d4abc5e6dce888d71683d84a8ceb6fa9b798c2766e0f070eaacbdca5770/lark_oapi-1.7.1.tar.gz", hash = "sha256:57dc4616010cb9355dba11be3cf9b571b1a088b13abc22baf233c7e3527dd396" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/a5/32/3650ba9230ade1245fa8d6021c9fe8febd27c9b5fdec78ffa465dbbc962e/lark_oapi-1.7.1-py3-none-any.whl", hash = "sha256:16945576a8c783a10e50911c00e421c1212fde3a76b2c2a6a4879b8606c1af8f" },
+]
+
+[[package]]
 name = "libclang"
 version = "18.1.1"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -4349,6 +4365,7 @@ dependencies = [
     { name = "cn2an" },
     { name = "cohere" },
     { name = "crawl4ai" },
+    { name = "cryptography" },
     { name = "dashscope" },
     { name = "deepl" },
     { name = "demjson3" },
@@ -4387,6 +4404,7 @@ dependencies = [
     { name = "jsonpath-ng" },
     { name = "jsonschema" },
     { name = "langfuse" },
+    { name = "lark-oapi" },
     { name = "litellm" },
     { name = "mammoth" },
     { name = "markdown" },
@@ -4519,6 +4537,7 @@ requires-dist = [
     { name = "cn2an", specifier = "==0.5.22" },
     { name = "cohere", specifier = "==5.6.2" },
     { name = "crawl4ai", specifier = ">=0.8.0,<1.0.0" },
+    { name = "cryptography", specifier = ">=46.0.3,<49.0.0" },
     { name = "dashscope", specifier = "==1.25.11" },
     { name = "deepl", specifier = "==1.18.0" },
     { name = "demjson3", specifier = "==3.0.6" },
@@ -4557,6 +4576,7 @@ requires-dist = [
     { name = "jsonpath-ng", specifier = ">=1.6.1" },
     { name = "jsonschema", specifier = ">=4.23.0,<5.0.0" },
     { name = "langfuse", specifier = ">=3.2.4" },
+    { name = "lark-oapi", specifier = ">=1.2.0,<2.0.0" },
     { name = "litellm", specifier = "~=1.82.0,!=1.82.7,!=1.82.8" },
     { name = "mammoth", specifier = ">=1.11.0" },
     { name = "markdown", specifier = "==3.8.2" },

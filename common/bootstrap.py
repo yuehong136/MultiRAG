@@ -20,9 +20,10 @@ from common.app_config import get_app_config
 _lock = threading.Lock()
 
 
-def ensure_initialized(force: bool = False) -> None:
-    """加载配置 + OTel 埋点 + 初始化资源。可重复调用；force=True 强制重建资源。"""
+def ensure_initialized(force: bool = False, *, initialize_resources: bool = True) -> None:
+    """加载配置和 OTel；默认初始化资源，轻量进程可显式跳过资源。"""
     with _lock:
         get_app_config()  # 配置类型错误在此 fail-fast（AppConfigError 含字段路径）
         observability.init_otel()  # 进程唯一初始化点（自身幂等，默认关闭）
-        resources.init_resources(force=force)
+        if initialize_resources:
+            resources.init_resources(force=force)

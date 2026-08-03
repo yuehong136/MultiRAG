@@ -19,14 +19,17 @@
 """
 
 import copy
+import ipaddress
 import json
 import os
 from functools import lru_cache
-from typing import Any
+from typing import Any, Literal, Self
+from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, PositiveInt, PrivateAttr, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt, PrivateAttr, SecretStr, ValidationError, field_validator, model_validator
 
+from common.channel_secret_crypto import ChannelSecretCipherError, decode_channel_secret_key
 from common.config_utils import decrypt_database_password, read_config
 from common.constants import SERVICE_CONF
 from common.file_utils import get_project_base_directory
@@ -269,6 +272,144 @@ class ObservabilityConfig(_Section):
     langfuse_allowed_hosts: list[str] = []
 
 
+def _is_loopback_host(host: str) -> bool:
+    if host.rstrip(".").lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _validate_http_origin(value: str, field_name: str) -> str:
+    if not value:
+        return value
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.hostname is None:
+        raise ValueError(f"{field_name} must be an http or https URL with a host")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(f"{field_name} must not contain userinfo")
+    if parsed.query or parsed.fragment:
+        raise ValueError(f"{field_name} must not contain a query or fragment")
+    if parsed.path not in {"", "/"}:
+        raise ValueError(f"{field_name} must use the origin root path")
+    try:
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must contain a valid port") from exc
+    if parsed.scheme == "http" and not _is_loopback_host(parsed.hostname):
+        raise ValueError(f"{field_name} requires https for non-loopback hosts")
+    return value
+
+
+class FeishuChannelConfig(_Section):
+    """本机飞书长连接 Channel 配置；默认关闭且不要求凭据。"""
+
+    enabled: bool = False
+    app_id: str = ""
+    app_secret: SecretStr = SecretStr("")
+    domain: Literal["feishu", "lark"] = "feishu"
+    multirag_base_url: str = ""
+    agent_id: str = ""
+    agent_api_token: SecretStr = SecretStr("")
+    release_marker: str = ""
+    allowed_open_ids: list[str] = Field(default_factory=list)
+    queue_size: PositiveInt = 100
+    worker_concurrency: PositiveInt = 2
+    session_ttl_seconds: PositiveInt = 86400
+    dedupe_ttl_seconds: PositiveInt = 86400
+    max_question_chars: PositiveInt = 4000
+    max_answer_chars: PositiveInt = 4000
+    connect_timeout_seconds: PositiveInt = 5
+    total_timeout_seconds: PositiveInt = 120
+    leader_ttl_seconds: PositiveInt = 30
+    leader_renew_seconds: PositiveInt = 10
+
+    @field_validator("multirag_base_url")
+    @classmethod
+    def validate_multirag_base_url(cls, value: str) -> str:
+        """限制 Agent API 基址结构，并只允许回环主机使用明文 HTTP。"""
+        return _validate_http_origin(value, "multirag_base_url")
+
+    @field_validator("allowed_open_ids")
+    @classmethod
+    def validate_allowed_open_ids(cls, value: list[str]) -> list[str]:
+        """空列表表示依赖飞书应用可用范围；配置列表时不接受空主体。"""
+        if any(not open_id.strip() for open_id in value):
+            raise ValueError("allowed_open_ids must not contain empty values")
+        return value
+
+    @model_validator(mode="after")
+    def validate_enabled_configuration(self) -> Self:
+        """启用时拒绝不完整凭据和无法安全续租的时序。"""
+        if not self.enabled:
+            return self
+
+        required_strings = {
+            "app_id": self.app_id,
+            "multirag_base_url": self.multirag_base_url,
+            "agent_id": self.agent_id,
+            "release_marker": self.release_marker,
+        }
+        missing = [name for name, value in required_strings.items() if not value.strip()]
+        if not self.app_secret.get_secret_value().strip():
+            missing.append("app_secret")
+        if not self.agent_api_token.get_secret_value().strip():
+            missing.append("agent_api_token")
+        if missing:
+            raise ValueError(f"enabled feishu channel requires non-empty fields: {', '.join(missing)}")
+
+        if self.leader_renew_seconds >= self.leader_ttl_seconds:
+            raise ValueError("leader_renew_seconds must be less than leader_ttl_seconds")
+        return self
+
+
+class ChannelControlConfig(_Section):
+    """Channel 控制面与独立 Runtime 的进程级安全配置。"""
+
+    secret_encryption_key: SecretStr = SecretStr("")
+    internal_api_token: SecretStr = SecretStr("")
+    runtime_api_base_url: str = ""
+    reconcile_interval_seconds: PositiveInt = 10
+    runtime_heartbeat_seconds: PositiveInt = 15
+    session_ttl_seconds: PositiveInt = 86_400
+    dedupe_ttl_seconds: PositiveInt = 86_400
+
+    @field_validator("runtime_api_base_url")
+    @classmethod
+    def validate_runtime_api_base_url(cls, value: str) -> str:
+        return _validate_http_origin(value, "runtime_api_base_url")
+
+    @field_validator("secret_encryption_key")
+    @classmethod
+    def validate_secret_encryption_key(cls, value: SecretStr) -> SecretStr:
+        """非空主密钥必须是 URL-safe base64 编码的 32 字节随机值。"""
+        encoded = value.get_secret_value().strip()
+        if not encoded:
+            return value
+        try:
+            decode_channel_secret_key(encoded)
+        except ChannelSecretCipherError as exc:
+            raise ValueError("secret_encryption_key must be URL-safe base64") from exc
+        return SecretStr(encoded)
+
+    @field_validator("internal_api_token")
+    @classmethod
+    def validate_internal_api_token(cls, value: SecretStr) -> SecretStr:
+        """配置内部静态凭据时拒绝明显过短的值；空值表示内部接口关闭。"""
+        token = value.get_secret_value().strip()
+        if token and len(token) < 32:
+            raise ValueError("internal_api_token must contain at least 32 characters")
+        return SecretStr(token)
+
+
+class ChannelsConfig(_Section):
+    """外部消息 Channel 配置。"""
+
+    control: ChannelControlConfig = Field(default_factory=ChannelControlConfig)
+    feishu: FeishuChannelConfig = Field(default_factory=FeishuChannelConfig)
+
+
 # ---------------------------------------------------------------------------
 # 根模型
 # ---------------------------------------------------------------------------
@@ -303,6 +444,7 @@ class AppConfig(BaseModel):
     smtp: SmtpConfig = SmtpConfig()
     task_executor: TaskExecutorConfig = TaskExecutorConfig()
     observability: ObservabilityConfig = ObservabilityConfig()
+    channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
 
     _raw: dict[str, Any] = PrivateAttr(default_factory=dict)
 

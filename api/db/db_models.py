@@ -1194,6 +1194,116 @@ class Dialog(BaseModel):
     status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
 
 
+class ChatChannel(BaseModel):
+    """Tenant-owned external chat provider connection.
+
+    The core columns intentionally mirror the upstream ``chat_channel`` shape,
+    while credentials and execution bindings live in dedicated tables.
+    """
+
+    __tablename__ = "t_ai_chat_channels"
+    __table_args__ = (
+        sa.CheckConstraint("status IN (0, 1)", name="ck_chat_channels_status"),
+        sa.CheckConstraint("generation >= 1", name="ck_chat_channels_generation"),
+        sa.Index("ix_chat_channels_tenant_channel", "tenant_id", "channel"),
+        sa.Index("ix_chat_channels_tenant_status", "tenant_id", "status"),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    channel: Mapped[str] = mapped_column(String(128), nullable=False)
+    config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    chat_id: Mapped[str | None] = mapped_column(String(32), nullable=True, default=None)
+    status: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+
+
+class ChannelSecret(BaseModel):
+    """Encrypted provider credential envelope for one channel connection."""
+
+    __tablename__ = "t_ai_channel_secrets"
+    __table_args__ = (
+        sa.UniqueConstraint("channel_id", name="uq_channel_secrets_channel_id"),
+        sa.CheckConstraint("version >= 1", name="ck_channel_secrets_version"),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    channel_id: Mapped[str] = mapped_column(
+        String(32),
+        sa.ForeignKey("usr_ai.t_ai_chat_channels.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    key_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+
+
+class ChannelBinding(BaseModel):
+    """Desired execution target and policy for a channel connection."""
+
+    __tablename__ = "t_ai_channel_bindings"
+    __table_args__ = (
+        sa.UniqueConstraint("channel_id", name="uq_channel_bindings_channel_id"),
+        sa.CheckConstraint(
+            "target_type IN ('multirag.canvas_agent', 'multirag.dialog')",
+            name="ck_channel_bindings_target_type",
+        ),
+        sa.CheckConstraint(
+            "(target_type = 'multirag.canvas_agent' AND target_revision_id IS NOT NULL) OR (target_type = 'multirag.dialog' AND target_revision_id IS NULL)",
+            name="ck_channel_bindings_revision",
+        ),
+        sa.CheckConstraint("generation >= 1", name="ck_channel_bindings_generation"),
+        sa.Index("ix_channel_bindings_enabled", "enabled"),
+        sa.Index("ix_channel_bindings_target", "target_type", "target_id"),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    channel_id: Mapped[str] = mapped_column(
+        String(32),
+        sa.ForeignKey("usr_ai.t_ai_chat_channels.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    target_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_revision_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    policy: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sa.false())
+    generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+
+
+class ChannelRuntimeStatus(BaseModel):
+    """Last observed runtime state reported by a channel runner."""
+
+    __tablename__ = "t_ai_channel_runtime_status"
+    __table_args__ = (
+        sa.UniqueConstraint("binding_id", name="uq_channel_runtime_status_binding_id"),
+        sa.CheckConstraint("observed_generation >= 0", name="ck_channel_runtime_observed_generation"),
+        sa.CheckConstraint(
+            "state IN ('waiting', 'starting', 'connected', 'stopping', 'stopped', 'error')",
+            name="ck_channel_runtime_state",
+        ),
+        sa.Index("ix_channel_runtime_state_heartbeat", "state", "heartbeat_at"),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    binding_id: Mapped[str] = mapped_column(
+        String(32),
+        sa.ForeignKey("usr_ai.t_ai_channel_bindings.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    observed_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="waiting", server_default=text("'waiting'"))
+    runner_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
 class Conversation(BaseModel):
     __tablename__ = "t_ai_conversations"
     __table_args__ = {"schema": "usr_ai"}
