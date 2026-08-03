@@ -45,6 +45,7 @@ type URLSuffix struct {
 	Models      string `json:"models"`
 	Balance     string `json:"balance"`
 	Files       string `json:"files"`
+	Status      string `json:"status"`
 }
 
 type ChatConfig struct {
@@ -55,6 +56,9 @@ type ChatConfig struct {
 	TopP        *float64
 	DoSample    *bool
 	Stop        *[]string
+	ModelSeries *string
+	Effort      *string
+	Verbosity   *string
 }
 
 type APIConfig struct {

@@ -112,12 +112,39 @@ func TestDeepSeekProviderIsConfigured(t *testing.T) {
 		t.Fatalf("default provider URL = %q", got)
 	}
 
-	model, err := manager.GetModelByName("deepseek", "deepseek-reasoner")
+	model, err := manager.GetModelByName("deepseek", "deepseek-v4-pro")
 	if err != nil {
 		t.Fatalf("GetModelByName() error = %v", err)
 	}
 	if !model.ModelTypeMap["chat"] {
 		t.Fatalf("ModelTypeMap = %#v, want chat", model.ModelTypeMap)
+	}
+	if model.Series == nil || *model.Series != "deepseek" {
+		t.Fatalf("Series = %#v, want deepseek", model.Series)
+	}
+}
+
+func TestGiteeAndSiliconFlowProvidersAreConfigured(t *testing.T) {
+	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	if err != nil {
+		t.Fatalf("NewProviderManager() error = %v", err)
+	}
+
+	for _, testCase := range []struct {
+		provider string
+		model    string
+	}{
+		{provider: "gitee", model: "qwen3-8b"},
+		{provider: "siliconflow", model: "qwen/qwen3-8b"},
+	} {
+		provider := manager.FindProvider(testCase.provider)
+		if provider == nil || provider.ModelDriver.Name() != testCase.provider {
+			t.Fatalf("provider %q = %#v", testCase.provider, provider)
+		}
+		model, modelErr := manager.GetModelByName(testCase.provider, testCase.model)
+		if modelErr != nil || !model.ModelTypeMap["chat"] {
+			t.Fatalf("model %q/%q = %#v, %v", testCase.provider, testCase.model, model, modelErr)
+		}
 	}
 }
 

@@ -1,3 +1,19 @@
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
 package models
 
 import (
@@ -12,26 +28,39 @@ import (
 	"time"
 )
 
-// DeepSeekModel implements provider model discovery for DeepSeek.
-type DeepSeekModel struct {
+// SiliconFlowModel implements ModelDriver for SiliconFlow.
+type SiliconFlowModel struct {
 	BaseURL    map[string]string
 	URLSuffix  URLSuffix
-	httpClient *http.Client
+	httpClient *http.Client // Reusable HTTP client with connection pool
 }
 
-func NewDeepSeekModel(baseURL map[string]string, urlSuffix URLSuffix) *DeepSeekModel {
-	return &DeepSeekModel{
-		BaseURL:    baseURL,
-		URLSuffix:  urlSuffix,
-		httpClient: &http.Client{Timeout: 120 * time.Second},
+// NewSiliconFlowModel creates a new SiliconFlow model instance.
+func NewSiliconFlowModel(baseURL map[string]string, urlSuffix URLSuffix) *SiliconFlowModel {
+	return &SiliconFlowModel{
+		BaseURL:   baseURL,
+		URLSuffix: urlSuffix,
+		httpClient: &http.Client{
+			Timeout: 120 * time.Second,
+			Transport: &http.Transport{
+				MaxIdleConns:        100,
+				MaxIdleConnsPerHost: 10,
+				IdleConnTimeout:     90 * time.Second,
+				DisableCompression:  false,
+			},
+		},
 	}
 }
 
-func (m *DeepSeekModel) Name() string {
-	return "deepseek"
+func (m *SiliconFlowModel) Name() string {
+	return "siliconflow"
 }
 
-func (m *DeepSeekModel) Chat(modelName, message *string, apiConfig *APIConfig, chatModelConfig *ChatConfig) (*ChatResponse, error) {
+// Chat sends a message and returns response
+func (m *SiliconFlowModel) Chat(modelName, message *string, apiConfig *APIConfig, chatModelConfig *ChatConfig) (*ChatResponse, error) {
+	if modelName == nil {
+		return nil, fmt.Errorf("model name is nil")
+	}
 	if message == nil {
 		return nil, fmt.Errorf("message is nil")
 	}
@@ -46,6 +75,13 @@ func (m *DeepSeekModel) Chat(modelName, message *string, apiConfig *APIConfig, c
 	}
 
 	url := fmt.Sprintf("%s/%s", m.BaseURL[region], m.URLSuffix.Chat)
+
+	// I need to get the model series, such as qwen3 is the prefix, the model series will be qwen. glm is the prefix, the model series will be glm. such as the model name: qwen3-0.6b, the model series will be qwen3
+	// the model name is glm-4.7, the model series will be glm
+	modelSeries := strings.Split(*modelName, "-")[0]
+	if modelSeries == "qwen" || modelSeries == "glm" {
+		url = fmt.Sprintf("%s/%s", m.BaseURL[region], m.URLSuffix.AsyncChat)
+	}
 
 	// Build request body
 	reqBody := map[string]interface{}{
@@ -79,37 +115,8 @@ func (m *DeepSeekModel) Chat(modelName, message *string, apiConfig *APIConfig, c
 
 	if chatModelConfig.Thinking != nil {
 		if *chatModelConfig.Thinking {
-			var thinkingFlag string
-			switch *chatModelConfig.Effort {
-			case "none":
-				thinkingFlag = "disabled"
-				chatModelConfig.Thinking = nil
-				break
-			case "low":
-				thinkingFlag = "disabled"
-				chatModelConfig.Thinking = nil
-				break
-			case "medium":
-				thinkingFlag = "disabled"
-				chatModelConfig.Thinking = nil
-				break
-			case "high":
-				thinkingFlag = "enabled"
-				reqBody["reasoning_effort"] = "high"
-				break
-			case "default":
-				thinkingFlag = "enabled"
-				reqBody["reasoning_effort"] = "high"
-				break
-			case "max":
-				thinkingFlag = "enabled"
-				reqBody["reasoning_effort"] = "max"
-				break
-			default:
-				return nil, fmt.Errorf("invalid effort level")
-			}
 			reqBody["thinking"] = map[string]interface{}{
-				"type": thinkingFlag,
+				"type": "enabled",
 			}
 		} else {
 			reqBody["thinking"] = map[string]interface{}{
@@ -172,39 +179,31 @@ func (m *DeepSeekModel) Chat(modelName, message *string, apiConfig *APIConfig, c
 		return nil, fmt.Errorf("invalid content format")
 	}
 
-	var reasonContent string
-	if chatModelConfig.Thinking != nil && *chatModelConfig.Thinking {
-		reasonContent, ok = messageMap["reasoning_content"].(string)
-		if !ok {
-			return nil, fmt.Errorf("invalid content format")
-		}
-		// if first char of reasonContent is \n remove the '\n'
-		if reasonContent != "" && reasonContent[0] == '\n' {
-			reasonContent = reasonContent[1:]
-		}
-	}
+	thinking, answer := GetThinkingAndAnswer(chatModelConfig.ModelSeries, &content)
 
 	chatResponse := &ChatResponse{
-		Answer:           &content,
-		ReasoningContent: &reasonContent,
+		Answer:           answer,
+		ReasoningContent: thinking,
 	}
 
 	return chatResponse, nil
 }
 
-func (m *DeepSeekModel) ChatWithMessages(modelName string, apiKey *string, messages []Message, modelConfig *ChatConfig) (string, error) {
+// ChatWithMessages sends multiple messages with roles and returns response
+func (m *SiliconFlowModel) ChatWithMessages(modelName string, apiKey *string, messages []Message, chatModelConfig *ChatConfig) (string, error) {
 	return "", fmt.Errorf("%s, ChatWithMessages not implemented", m.Name())
 }
 
-func (m *DeepSeekModel) ChatStreamly(modelName, apiKey, message *string, genConf map[string]interface{}) (<-chan string, error) {
-	return nil, fmt.Errorf("not implemented")
+func (m *SiliconFlowModel) ChatStreamly(modelName, apiKey, message *string, genConf map[string]interface{}) (<-chan string, error) {
+	return nil, fmt.Errorf("streaming chat is not implemented for %s", m.Name())
 }
 
-func (m *DeepSeekModel) ChatStreamlyWithChannel(modelName, apiKey, message *string, genConf map[string]interface{}, resultChan chan<- string) error {
-	return fmt.Errorf("not implemented")
+func (m *SiliconFlowModel) ChatStreamlyWithChannel(modelName, apiKey, message *string, genConf map[string]interface{}, resultChan chan<- string) error {
+	return fmt.Errorf("streaming chat is not implemented for %s", m.Name())
 }
 
-func (m *DeepSeekModel) ChatStreamlyWithSender(modelName, message *string, apiConfig *APIConfig, chatModelConfig *ChatConfig, sender func(*string, *string) error) error {
+// ChatStreamlyWithSender sends a message and streams response via sender function (best performance, no channel)
+func (m *SiliconFlowModel) ChatStreamlyWithSender(modelName, message *string, apiConfig *APIConfig, chatModelConfig *ChatConfig, sender func(*string, *string) error) error {
 	if message == nil || apiConfig == nil || apiConfig.APIKey == nil {
 		return fmt.Errorf("message or API key is nil")
 	}
@@ -252,37 +251,8 @@ func (m *DeepSeekModel) ChatStreamlyWithSender(modelName, message *string, apiCo
 
 	if chatModelConfig.Thinking != nil {
 		if *chatModelConfig.Thinking {
-			var thinkingFlag string
-			switch *chatModelConfig.Effort {
-			case "none":
-				thinkingFlag = "disabled"
-				chatModelConfig.Thinking = nil
-				break
-			case "low":
-				thinkingFlag = "disabled"
-				chatModelConfig.Thinking = nil
-				break
-			case "medium":
-				thinkingFlag = "disabled"
-				chatModelConfig.Thinking = nil
-				break
-			case "high":
-				thinkingFlag = "enabled"
-				reqBody["reasoning_effort"] = "high"
-				break
-			case "default":
-				thinkingFlag = "enabled"
-				reqBody["reasoning_effort"] = "high"
-				break
-			case "max":
-				thinkingFlag = "enabled"
-				reqBody["reasoning_effort"] = "max"
-				break
-			default:
-				return fmt.Errorf("invalid effort level")
-			}
 			reqBody["thinking"] = map[string]interface{}{
-				"type": thinkingFlag,
+				"type": "enabled",
 			}
 		} else {
 			reqBody["thinking"] = map[string]interface{}{
@@ -314,6 +284,10 @@ func (m *DeepSeekModel) ChatStreamlyWithSender(modelName, message *string, apiCo
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
 	}
+
+	reserveText := ""
+	thinkingPhase := false
+	answerPhase := false
 
 	// SSE parsing: read line by line
 	scanner := bufio.NewScanner(resp.Body)
@@ -357,21 +331,44 @@ func (m *DeepSeekModel) ChatStreamlyWithSender(modelName, message *string, apiCo
 
 		content, ok := delta["content"].(string)
 		if ok && content != "" {
-			if err := sender(&content, nil); err != nil {
-				return err
-			}
-		}
+			if content == "<think>" {
+				thinkingPhase = true
+				continue
 
-		reasoningContent, ok := delta["reasoning_content"].(string)
-		if ok && reasoningContent != "" {
-			if err := sender(nil, &reasoningContent); err != nil {
-				return err
+			} else if content == "</think>" {
+				thinkingPhase = false
+				answerPhase = true
+				continue
+			}
+
+			if thinkingPhase {
+				if err = sender(nil, &content); err != nil {
+					return err
+				}
+				reserveText = ""
+			} else if answerPhase {
+				if err = sender(&content, nil); err != nil {
+					return err
+				}
+				reserveText = ""
+			} else {
+				content = strings.Trim(content, "\n")
+				content = strings.Trim(content, " ")
+				if content != "" {
+					reserveText += content
+				}
 			}
 		}
 
 		finishReason, ok := firstChoice["finish_reason"].(string)
 		if ok && finishReason != "" {
 			break
+		}
+	}
+
+	if reserveText != "" {
+		if err = sender(&reserveText, nil); err != nil {
+			return err
 		}
 	}
 
@@ -384,66 +381,76 @@ func (m *DeepSeekModel) ChatStreamlyWithSender(modelName, message *string, apiCo
 	return scanner.Err()
 }
 
-func (m *DeepSeekModel) EncodeToEmbedding(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
-	return nil, fmt.Errorf("not implemented")
+// EncodeToEmbedding encodes a list of texts into embeddings
+func (m *SiliconFlowModel) EncodeToEmbedding(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
+	return nil, fmt.Errorf("%s, no such method", m.Name())
 }
 
-func (m *DeepSeekModel) ListModels(apiConfig *APIConfig) ([]string, error) {
-	if apiConfig == nil || apiConfig.APIKey == nil {
-		return nil, fmt.Errorf("API key is nil")
-	}
-	baseURL, err := resolveModelBaseURL(m.BaseURL, apiConfig.Region)
-	if err != nil {
-		return nil, err
+func (m *SiliconFlowModel) ListModels(apiConfig *APIConfig) ([]string, error) {
+	var region = "default"
+	if apiConfig.Region != nil {
+		region = *apiConfig.Region
 	}
 
-	req, err := http.NewRequest(http.MethodGet, joinModelURL(baseURL, m.URLSuffix.Models), nil)
+	url := fmt.Sprintf("%s/%s", m.BaseURL[region], m.URLSuffix.Models)
+
+	// Build request body
+	reqBody := map[string]interface{}{}
+
+	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, fmt.Errorf("create model list request: %w", err)
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
+
+	req, err := http.NewRequest("GET", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiConfig.APIKey))
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("list DeepSeek models: %w", err)
+		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("list DeepSeek models: status %d", resp.StatusCode)
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
-	var payload struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
 	}
-	if err = json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("decode DeepSeek model list: %w", err)
+
+	// Parse response
+	var modelList providerModelList
+	if err = json.Unmarshal(body, &modelList); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
-	models := make([]string, 0, len(payload.Data))
-	for _, model := range payload.Data {
-		models = append(models, model.ID)
+
+	var models []string
+	for _, model := range modelList.Models {
+		modelName := model.ID
+		if model.OwnedBy != "" {
+			modelName = model.ID + "@" + model.OwnedBy
+		}
+		models = append(models, modelName)
 	}
+
 	return models, nil
 }
 
-func (m *DeepSeekModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
-	return nil, fmt.Errorf("balance query is not available for DeepSeek")
+func (m *SiliconFlowModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
+	return nil, fmt.Errorf("%s, no such method", m.Name())
 }
 
-func (m *DeepSeekModel) CheckConnection(apiConfig *APIConfig) error {
+func (m *SiliconFlowModel) CheckConnection(apiConfig *APIConfig) error {
 	_, err := m.ListModels(apiConfig)
-	return err
-}
-
-func resolveModelBaseURL(baseURLs map[string]string, region *string) (string, error) {
-	regionName := "default"
-	if region != nil && *region != "" {
-		regionName = *region
+	if err != nil {
+		return err
 	}
-	baseURL := strings.TrimRight(baseURLs[regionName], "/")
-	if baseURL == "" {
-		return "", fmt.Errorf("no base URL configured for region %q", regionName)
-	}
-	return baseURL, nil
+	return nil
 }

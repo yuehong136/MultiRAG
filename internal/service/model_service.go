@@ -738,10 +738,15 @@ func (m *ModelProviderService) ChatToModel(providerName, instanceName, modelName
 			return nil, common.CodeNotFound, errors.New("provider not found")
 		}
 
-		_, err = dao.GetModelProviderManager().GetModelByName(providerName, modelName)
+		var model *entity.Model
+		model, err = dao.GetModelProviderManager().GetModelByName(providerName, modelName)
 		if err != nil {
 			return nil, common.CodeNotFound, errors.New(fmt.Sprintf("provider %s model %s not found", providerName, modelName))
 		}
+		if modelConfig == nil {
+			modelConfig = &modelModule.ChatConfig{}
+		}
+		modelConfig.ModelSeries = model.Series
 		region, err := decodeModelInstanceRegion(instance.Extra)
 		if err != nil {
 			return nil, common.CodeServerError, err
