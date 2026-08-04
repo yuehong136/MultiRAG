@@ -185,7 +185,9 @@ async def test_binding_execution_failure_exposes_only_classified_code(caplog: py
             await client.ask(
                 question="private-question",
                 event_id="event-1",
-                conversation_key="conversation-1",
+                # 与本文件其他用例统一：短横线加数字的写法（如 conversation-1）香农熵 3.52，
+                # 越过 gitleaks generic-api-key 的 3.5 阈值，CI 泄密扫描会把测试假值当密钥拦下。
+                conversation_key="opaque-conversation-key",
                 provider="feishu",
                 subject="ou-user",
                 conversation="oc-chat",
