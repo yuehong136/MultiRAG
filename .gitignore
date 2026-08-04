@@ -222,6 +222,13 @@ admin/release
 # 本地服务配置覆盖（按顶层 section 整体覆盖 configs/service_conf.yaml）
 configs/local.service_conf.yaml
 
+# 飞书 Channel 本机启动配置；可能包含 App Secret 和标准 API Token
+scripts/run_feishu_channel.local.ps1
+
+# 本地笔记：internal/ 顶层的 .md 是个人分析与计划，不入库。
+# 只匹配顶层——internal/<pkg>/README.md 是 Go 移植的正当文档，不受影响。
+internal/*.md
+
 docs
 temp/
 
