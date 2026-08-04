@@ -41,6 +41,17 @@ def test_pdf_positions_restore_one_based_page_from_position_tag():
     assert extract_pdf_positions(item) == [[2, 10.6, 30.2, 12.9, 25.1]]
 
 
+def test_pdf_positions_do_not_double_offset_when_positions_and_tag_coexist():
+    item = {
+        "text": "alpha @@2\t10.6\t30.2\t12.9\t25.1##",
+        "page_number": 2,
+        "positions": [[2, 10.6, 30.2, 12.9, 25.1]],
+        "position_tag": "@@2\t10.6\t30.2\t12.9\t25.1##",
+    }
+
+    assert extract_pdf_positions(item) == [[2, 10.6, 30.2, 12.9, 25.1]]
+
+
 def test_pdf_positions_merge_deduplicates_and_sorts():
     merged = merge_pdf_positions(
         [

@@ -115,7 +115,16 @@ const (
 	TokenDisable
 	TokenEnable
 	TokenUse
+	TokenCheck
 	TokenThink
+	TokenEffort
+	TokenVerbosity
+	TokenNone
+	TokenMinimal
+	TokenLow
+	TokenMedium
+	TokenHigh
+	TokenMax
 	TokenInsert
 	TokenFile
 	TokenMetadata

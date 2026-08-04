@@ -1,7 +1,7 @@
 """add MultiRAG channel control plane tables
 
-Revision ID: f6a7b8c9d0e1
-Revises: e5f6a7b8c9d0
+Revision ID: c1dbaa153d0a
+Revises: f6a7b8c9d0e1
 Create Date: 2026-07-31 00:00:00.000000
 """
 
@@ -11,8 +11,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "f6a7b8c9d0e1"
-down_revision: str | None = "e5f6a7b8c9d0"
+revision: str = "c1dbaa153d0a"
+down_revision: str | None = "f6a7b8c9d0e1"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

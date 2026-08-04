@@ -668,7 +668,7 @@ def chat(
     langfuse_keys = TenantLangfuseService.filter_by_tenant(db, tenant_id=dialog.tenant_id)
     if langfuse_keys:
         # 零 preflight：auth_check 是阻塞 HTTP（默认 5s 超时），凭据有效性在配置写入期
-        # 校验（langfuse_app）；此处 fail-open，构造失败不阻塞聊天，导出错误由 SDK 后台记录。
+        # 校验（langfuse_api_service）；此处 fail-open，构造失败不阻塞聊天，导出错误由 SDK 后台记录。
         try:
             langfuse_tracer = Langfuse(public_key=langfuse_keys.public_key, secret_key=langfuse_keys.secret_key, host=langfuse_keys.host)
             trace_context = {"trace_id": langfuse_tracer.create_trace_id()}
@@ -941,8 +941,8 @@ def chat(
         return {"answer": think + answer, "reference": refs, "prompt": re.sub(r"\n", "  \n", prompt), "created_at": time.time()}
 
     if langfuse_tracer:
-        langfuse_generation = langfuse_tracer.start_generation(
-            trace_context=trace_context, name="chat", model=llm_model_config["llm_name"], input={"prompt": prompt, "prompt4citation": prompt4citation, "messages": msg}
+        langfuse_generation = langfuse_tracer.start_observation(
+            as_type="generation", trace_context=trace_context, name="chat", model=llm_model_config["llm_name"], input={"prompt": prompt, "prompt4citation": prompt4citation, "messages": msg}
         )
 
     if stream:
@@ -1018,7 +1018,7 @@ async def async_chat(
     langfuse_keys = await db.run_sync(lambda s: TenantLangfuseService.filter_by_tenant(s, tenant_id=dialog.tenant_id))  # TODO(async-phase4)
     if langfuse_keys:
         # 零 preflight：auth_check 是阻塞 HTTP（默认 5s 超时，会冻结事件循环），凭据有效性
-        # 在配置写入期校验（langfuse_app）；此处 fail-open，构造失败不阻塞聊天，导出错误由 SDK 后台记录。
+        # 在配置写入期校验（langfuse_api_service）；此处 fail-open，构造失败不阻塞聊天，导出错误由 SDK 后台记录。
         try:
             langfuse_tracer = Langfuse(public_key=langfuse_keys.public_key, secret_key=langfuse_keys.secret_key, host=langfuse_keys.host)
             trace_context = {"trace_id": langfuse_tracer.create_trace_id()}
@@ -1290,8 +1290,8 @@ async def async_chat(
         return {"answer": think + answer, "reference": refs, "prompt": re.sub(r"\n", "  \n", prompt), "created_at": time.time()}
 
     if langfuse_tracer:
-        langfuse_generation = langfuse_tracer.start_generation(
-            trace_context=trace_context, name="chat", model=llm_model_config["llm_name"], input={"prompt": prompt, "prompt4citation": prompt4citation, "messages": msg}
+        langfuse_generation = langfuse_tracer.start_observation(
+            as_type="generation", trace_context=trace_context, name="chat", model=llm_model_config["llm_name"], input={"prompt": prompt, "prompt4citation": prompt4citation, "messages": msg}
         )
 
     if stream:
@@ -1309,7 +1309,7 @@ async def async_chat(
             yield {"answer": value, "reference": {}, "audio_binary": tts(tts_mdl, value), "final": False}
         full_answer = last_state.full_text if last_state else ""
         if full_answer:
-            final = decorate_answer(thought + full_answer)
+            final = decorate_answer(_extract_visible_answer(thought + full_answer))
             final["final"] = True
             final["audio_binary"] = None
             yield final
@@ -1774,6 +1774,24 @@ class _ThinkStreamState:
         self.buffer = ""
 
 
+def _extract_visible_answer(text: str) -> str:
+    """把流式累积的全文归一成最多一对 think 标签。
+
+    模型可能吐出重复或未闭合的 ``<think>``/``</think>``；最终答案按最后一个
+    ``</think>`` 切分，思考段与正文各自剥净标签后重组，思考段为空则只留正文。
+    """
+    text = text or ""
+    if "</think>" not in text:
+        return re.sub(r"</?think>", "", text)
+
+    thought, answer = text.rsplit("</think>", 1)
+    thought = re.sub(r"</?think>", "", thought).strip()
+    answer = re.sub(r"</?think>", "", answer)
+    if not thought:
+        return answer
+    return f"<think>{thought}</think>{answer}"
+
+
 def _next_think_delta(state: _ThinkStreamState) -> str:
     full_text = state.full_text
     if full_text == state.last_full:
@@ -2041,7 +2059,7 @@ async def async_ask(db: AsyncSession, question, kb_ids, tenant_id, chat_llm_name
     full_answer = last_state.full_text if last_state else ""
     # citation finalize：同步 embedding HTTP + 自开连接记账，不持有请求 Session
     # （bundles 已剥离 facade），整段外移工作线程，避免阻塞事件循环
-    final = await asyncio.to_thread(decorate_answer, full_answer)
+    final = await asyncio.to_thread(decorate_answer, _extract_visible_answer(full_answer))
     final["final"] = True
     yield final
 

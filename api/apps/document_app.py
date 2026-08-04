@@ -262,7 +262,8 @@ class SetMetaRequest(BaseModel):
 
 class UpdateMetadataSettingRequest(BaseModel):
     doc_id: str = Field(..., description="文档ID")
-    metadata: dict[str, Any] = Field(..., description="元数据设置")
+    # 字段定义数组（前端保存时发的形状）或 JSON schema 对象（历史数据）——只收 dict 会让前端载荷 422。
+    metadata: list[dict[str, Any]] | dict[str, Any] = Field(..., description="元数据设置")
 
 
 class FilterRequest(BaseModel):
@@ -369,37 +370,6 @@ class DocumentAnalysisRequest(BaseModel):
     summary_type: str = Field(default="short", description="摘要类型: short|long")
     raptor_config: RaptorConfig | None = Field(default=None, description="RAPTOR配置")
     use_cache: bool = Field(default=True, description="是否使用缓存")
-
-
-class MetadataUpdateSelector(BaseModel):
-    """元数据批量更新的选择器"""
-
-    document_ids: list[str] | None = Field(default=None, description="文档ID列表")
-    metadata_condition: MetadataCondition | dict | None = Field(default=None, description="元数据过滤条件")
-
-
-class MetadataUpdateItem(BaseModel):
-    """元数据更新项"""
-
-    key: str = Field(..., description="元数据键名")
-    value: Any = Field(..., description="新值")
-    match: Any | None = Field(default=None, description="匹配值（可选）")
-
-
-class MetadataDeleteItem(BaseModel):
-    """元数据删除项"""
-
-    key: str = Field(..., description="元数据键名")
-    value: Any | None = Field(default=None, description="匹配值（可选，不提供则删除整个键）")
-
-
-class MetadataUpdateRequest(BaseModel):
-    """元数据批量更新请求"""
-
-    kb_id: str | None = Field(default=None, description="知识库ID（ES/Infinity 引擎必填）")
-    doc_ids: list[str] = Field(..., description="文档ID列表")
-    updates: list[MetadataUpdateItem] | list[dict] = Field(default=[], description="更新操作列表")
-    deletes: list[MetadataDeleteItem] | list[dict] = Field(default=[], description="删除操作列表")
 
 
 class MetadataSummaryRequest(BaseModel):
@@ -2035,7 +2005,12 @@ def change_auth(
         return construct_json_result(code=RetCode.ARGUMENT_ERROR, message=str(e))
 
 
-@router.post("/rm", summary="删除文档", response_description="成功删除文档")
+# ---------------------------------------------------------------------------
+# [Deprecated] 文档删除已收编到 DELETE /api/v1/datasets/{dataset_id}/documents，
+# 该 RESTful 端点是 web 会话与 API token 的统一入口。本路由仅为前端等既有消费方
+# 保留，待其全部迁移后移除。
+# ---------------------------------------------------------------------------
+@router.post("/rm", summary="[Deprecated] 删除文档（请改用 DELETE /api/v1/datasets/{dataset_id}/documents）", response_description="成功删除文档", deprecated=True)
 def rm(request_body: RemoveRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/rm` 删除文档接口
@@ -3001,44 +2976,17 @@ def metadata_summary(request: MetadataSummaryRequest, db: Session = Depends(get_
         return server_error_response(e)
 
 
-@router.post("/metadata/update", summary="批量更新元数据", response_description="成功批量更新元数据")
-def metadata_update(request: MetadataUpdateRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    """批量更新或删除文档元数据。
-
-    - **request.doc_ids**: 文档ID列表
-    - **request.updates**: 更新操作列表
-        - key: 元数据键名
-        - value: 新值
-        - match: 匹配值（可选，对于列表会替换匹配的元素）
-    - **request.deletes**: 删除操作列表
-        - key: 元数据键名
-        - value: 匹配值（可选，对于列表会删除匹配的元素；不提供则删除整个键）
-
-    - **返回值**: {"updated": 更新的文档数}
-    """
-    document_ids = request.doc_ids
-    updates = request.updates or []
-    deletes = request.deletes or []
-
-    # 转换 Pydantic 模型为字典
-    updates = [u.model_dump() if hasattr(u, "model_dump") else u for u in updates]
-    deletes = [d.model_dump() if hasattr(d, "model_dump") else d for d in deletes]
-
-    if not isinstance(updates, list) or not isinstance(deletes, list):
-        return get_json_result(data=False, retmsg="updates and deletes must be lists.", retcode=RetCode.ARGUMENT_ERROR)
-
-    for upd in updates:
-        if not isinstance(upd, dict) or not upd.get("key") or "value" not in upd:
-            return get_json_result(data=False, retmsg="Each update requires key and value.", retcode=RetCode.ARGUMENT_ERROR)
-    for d in deletes:
-        if not isinstance(d, dict) or not d.get("key"):
-            return get_json_result(data=False, retmsg="Each delete requires key.", retcode=RetCode.ARGUMENT_ERROR)
-
-    updated = DocMetadataService.batch_update_metadata(db, request.kb_id, document_ids, updates, deletes)
-    return get_json_result(data={"updated": updated, "matched_docs": len(document_ids)})
-
-
-@router.post("/update_metadata_setting", summary="更新文档元数据设置", response_description="成功更新文档元数据设置")
+# ---------------------------------------------------------------------------
+# [Deprecated] 文档元数据配置已收编到
+#   PUT /api/v1/datasets/{dataset_id}/documents/{document_id}/metadata/config。
+# 本路由仅为前端等既有消费方保留，待其全部迁移后移除。
+# ---------------------------------------------------------------------------
+@router.post(
+    "/update_metadata_setting",
+    summary="[Deprecated] 更新文档元数据设置（请改用 PUT /api/v1/datasets/{dataset_id}/documents/{document_id}/metadata/config）",
+    response_description="成功更新文档元数据设置",
+    deprecated=True,
+)
 def update_metadata_setting(request: UpdateMetadataSettingRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """更新文档的元数据设置（存储在 parser_config 中）。
 

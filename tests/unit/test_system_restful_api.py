@@ -14,9 +14,11 @@ from fastapi import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
+from api.apps.deps import get_doc_store, get_storage
 from api.apps.restful_apis import system_api
 from api.db.db_models import get_async_db, get_db
 from api.db.services.api_service import APITokenService
+from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import UserTenantService
 from api.utils import health_utils
 from api.utils.api_utils import async_current_user
@@ -84,6 +86,77 @@ def test_system_restful_version_returns_version_envelope(client):
     body = resp.json()
     assert body["retcode"] == 0
     assert body["data"] == get_multirag_version()
+
+
+def test_system_restful_status_reports_components(client, monkeypatch):
+    sessions: list[object] = []
+
+    class FakeDocStore:
+        def health(self):
+            return {"type": "milvus", "status": "green"}
+
+    class FakeStorage:
+        def health(self):
+            return True
+
+    def _get_kb(cls, db, kb_id):
+        sessions.append(db)
+        assert kb_id == "x"
+        return None
+
+    route_module = _system_route_module()
+    monkeypatch.setattr(KnowledgebaseService, "get_by_id", classmethod(_get_kb))
+    monkeypatch.setattr(
+        route_module,
+        "get_pool_status",
+        lambda: {
+            "pool_size": 10,
+            "checked_out": 2,
+            "checked_in": 8,
+            "overflow": 0,
+            "total_connections": 10,
+            "usage_rate": 20,
+        },
+    )
+    monkeypatch.setattr(route_module.settings, "STORAGE_IMPL_TYPE", "MINIO")
+    monkeypatch.setattr(route_module.REDIS_CONN, "health", lambda: True)
+    monkeypatch.setattr(route_module.REDIS_CONN, "smembers", lambda key: ["executor-1"] if key == "TASKEXE" else [])
+    monkeypatch.setattr(
+        route_module.REDIS_CONN,
+        "zrangebyscore",
+        lambda key, _minimum, _maximum: ['{"name":"worker-1","pending":0}'] if key == "executor-1" else [],
+    )
+    client.app.dependency_overrides[get_doc_store] = FakeDocStore
+    client.app.dependency_overrides[get_storage] = FakeStorage
+
+    resp = client.get("/api/v1/system/status")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["retcode"] == 0
+    assert body["data"]["doc_engine"]["type"] == "milvus"
+    assert body["data"]["storage"]["storage"] == "minio"
+    assert body["data"]["storage"]["status"] == "green"
+    assert body["data"]["database"]["status"] == "green"
+    assert body["data"]["database_pool"]["usage_rate"] == "20%"
+    assert body["data"]["redis"]["status"] == "green"
+    assert body["data"]["task_executor_heartbeats"] == {"executor-1": [{"name": "worker-1", "pending": 0}]}
+    _assert_sync_facade(sessions)
+
+
+def test_system_restful_oceanbase_status_and_config(client, monkeypatch):
+    route_module = _system_route_module()
+    monkeypatch.setattr(route_module, "get_oceanbase_status", lambda: {"status": "alive"})
+    monkeypatch.setattr(route_module.settings, "REGISTER_ENABLED", 0)
+    monkeypatch.setattr(route_module.settings, "DISABLE_PASSWORD_LOGIN", True)
+
+    oceanbase = client.get("/api/v1/system/oceanbase/status")
+    config = client.get("/api/v1/system/config")
+
+    assert oceanbase.status_code == 200
+    assert oceanbase.json()["data"] == {"status": "alive"}
+    assert config.status_code == 200
+    assert config.json()["data"] == {"registerEnabled": 0, "disablePasswordLogin": True}
 
 
 def test_system_restful_token_list_backfills_missing_beta(client, monkeypatch):
@@ -229,11 +302,12 @@ def _dependency_calls(app, method: str, path: str) -> set:
 
 
 def test_system_authenticated_routes_have_pure_async_dependency_tree(client):
-    """四条已换轨路由的依赖树不得再出现 get_db / manager 同步轨。"""
+    """需要数据库的已换轨路由不得再出现 get_db / manager 同步轨。"""
     import api.apps as api_apps
 
     for method, path in (
         ("GET", "/api/v1/system/version"),
+        ("GET", "/api/v1/system/status"),
         ("GET", "/api/v1/system/tokens"),
         ("POST", "/api/v1/system/tokens"),
         ("DELETE", "/api/v1/system/tokens/{token}"),
@@ -243,6 +317,30 @@ def test_system_authenticated_routes_have_pure_async_dependency_tree(client):
         assert api_apps.manager not in calls, f"{method} {path} 依赖树含同步 manager"
         assert async_current_user in calls, f"{method} {path} 缺异步鉴权依赖"
         assert get_async_db in calls, f"{method} {path} 缺 AsyncSession 依赖"
+
+    oceanbase_calls = _dependency_calls(client.app, "GET", "/api/v1/system/oceanbase/status")
+    assert get_db not in oceanbase_calls
+    assert api_apps.manager not in oceanbase_calls
+    assert async_current_user in oceanbase_calls
+
+
+def test_legacy_system_routes_are_removed(client):
+    routes = {(method, route.path) for route in iter_api_routes(client.app) for method in route.methods}
+
+    for method, path in (
+        ("GET", "/v1/system/status"),
+        ("GET", "/v1/system/config"),
+        ("GET", "/v1/system/oceanbase/status"),
+        ("GET", "/v1/system/version"),
+        ("GET", "/v1/system/healthz"),
+        ("GET", "/v1/system/ping"),
+        ("POST", "/v1/system/new_token"),
+        ("GET", "/v1/system/token_list"),
+        ("POST", "/v1/system/rm"),
+        ("GET", "/v1/system/log_levels"),
+        ("PUT", "/v1/system/log_levels"),
+    ):
+        assert (method, path) not in routes
 
 
 def _system_route_module():
@@ -293,8 +391,9 @@ def test_multirag_server_alive_uses_restful_ping(monkeypatch):
     class DummyResponse:
         status_code = 200
 
-    def fake_get(url):
+    def fake_get(url, *, timeout):
         seen["url"] = url
+        seen["timeout"] = timeout
         return DummyResponse()
 
     monkeypatch.setattr(health_utils.settings, "HOST_IP", "0.0.0.0")
@@ -303,3 +402,4 @@ def test_multirag_server_alive_uses_restful_ping(monkeypatch):
 
     assert health_utils.check_multirag_server_alive()["status"] == "alive"
     assert seen["url"] == "http://127.0.0.1:9380/api/v1/system/ping"
+    assert seen["timeout"] == 10

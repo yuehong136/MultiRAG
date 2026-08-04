@@ -30,6 +30,10 @@ func (m *MoonshotModel) Chat(modelName, message *string, apiConfig *APIConfig, m
 	return nil, fmt.Errorf("not implemented")
 }
 
+func (m *MoonshotModel) ChatWithMessages(modelName string, apiKey *string, messages []Message, modelConfig *ChatConfig) (string, error) {
+	return "", fmt.Errorf("%s, ChatWithMessages not implemented", m.Name())
+}
+
 func (m *MoonshotModel) ChatStreamly(modelName, apiKey, message *string, genConf map[string]interface{}) (<-chan string, error) {
 	return nil, fmt.Errorf("not implemented")
 }
@@ -124,4 +128,9 @@ func (m *MoonshotModel) Balance(apiConfig *APIConfig) (map[string]interface{}, e
 		"balance":  *payload.Data.AvailableBalance,
 		"currency": "CNY",
 	}, nil
+}
+
+func (m *MoonshotModel) CheckConnection(apiConfig *APIConfig) error {
+	_, err := m.ListModels(apiConfig)
+	return err
 }

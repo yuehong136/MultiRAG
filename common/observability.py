@@ -8,7 +8,8 @@
     api.db.db_models（模块级建 engine/async_engine）与 api.apps（模块级建
     FastAPI 实例）导入之前执行，因此同步/异步两个引擎与 app 都被覆盖；
   - 这也规避了 common → api 的 import-linter 契约违规。
-- langfuse v3 使用自己独立的 TracerProvider，与此处设置的全局 provider 互不干扰。
+- langfuse 自建独立的 TracerProvider（v3/v4 皆然，v4 可经 ``tracer_provider=``
+  显式注入，我们不注入），与此处设置的全局 provider 互不干扰。
 """
 
 import logging

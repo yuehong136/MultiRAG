@@ -9,15 +9,7 @@
 鉴权：复用统一异步鉴权依赖 async_current_tenant_id（同时接受 web 会话 JWT 与 SDK API-key），
       与 dataset_api.py 一致；对外既服务 web 前端又服务 SDK。
 
-与旧 file_app.py（/v1/file/*）的端点映射：
-    POST   /files            <- /upload(multipart) + /create(json)（按 content-type 分发）
-    GET    /files            <- /list
-    DELETE /files            <- /rm（file_ids -> ids）
-    POST   /files/move       <- /mv + /rename（Linux mv 语义合并）
-    GET    /files/{id}       <- /get/{id}
-    GET    /files/{id}/parent    <- /parent_folder
-    GET    /files/{id}/ancestors <- /all_parent_folder
-旧路由保留并标 deprecated（生产仍在用），见 file_app.py。
+旧 ``file_app.py`` 已随 RESTful 迁移删除；本模块是文件管理的唯一网关。
 """
 
 from __future__ import annotations
@@ -29,7 +21,7 @@ from io import BytesIO
 from typing import Any
 from urllib.parse import quote
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,15 +30,12 @@ from starlette.responses import StreamingResponse
 
 from api.apps.deps import get_storage
 from api.apps.services import file_api_service
-from api.apps.services.file_convert_service import convert_files_with_new_session
 from api.db import FileType
 from api.db.db_models import get_async_db
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
-from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.utils.api_utils import async_current_tenant_id, get_error_argument_result, get_error_data_result, get_json_result, get_result, server_error_response
+from api.utils.api_utils import async_current_tenant_id, get_error_argument_result, get_error_data_result, get_result, server_error_response
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers
-from common.constants import RetCode
 from common.misc_utils import thread_pool_exec
 
 router = APIRouter()
@@ -311,55 +300,6 @@ async def ancestors(
     except Exception as e:
         logger.exception(e)
         return get_error_data_result(retmsg="Internal server error")
-
-
-# ---------------------------------------------------------------------------
-# multirag 专有端点（ragflow #13741 无对应，路径在 /file 单数下），收编自退役的
-# sdk/files.py，鉴权统一为 async_current_tenant_id。
-# ---------------------------------------------------------------------------
-
-
-@router.post("/file/convert", summary="文件转换为知识库文档（SDK）")
-async def convert(
-    kb_ids: list[str],
-    file_ids: list[str],
-    background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_async_db),
-    tenant_id: str = Depends(async_current_tenant_id),
-):
-    """把文件（含文件夹内最内层文件）转换/关联为指定知识库的文档。"""
-    try:
-
-        def _collect(s: Session) -> tuple[list[str] | None, JSONResponse | None]:
-            files = FileService.get_by_ids(s, file_ids)
-            files_set = {file.id: file for file in files}
-            for file_id in file_ids:
-                file = files_set.get(file_id)
-                if not file:
-                    return None, get_json_result(retmsg="File not found!", retcode=RetCode.NOT_FOUND)
-
-            for kb_id in kb_ids:
-                kb = KnowledgebaseService.get_by_id(s, kb_id)
-                if not kb:
-                    return None, get_json_result(retmsg="Can't find this dataset!", retcode=RetCode.NOT_FOUND)
-
-            all_file_ids: list[str] = []
-            for file_id in file_ids:
-                file = files_set[file_id]
-                if file.type == FileType.FOLDER.value:
-                    all_file_ids.extend(FileService.get_all_innermost_file_ids(s, file_id, []))
-                else:
-                    all_file_ids.append(file_id)
-            return all_file_ids, None
-
-        all_file_ids, error = await db.run_sync(_collect)  # TODO(async-phase4)
-        if error is not None:
-            return error
-
-        background_tasks.add_task(convert_files_with_new_session, all_file_ids, kb_ids, tenant_id)
-        return get_json_result(data=True)
-    except Exception as e:
-        return server_error_response(e)
 
 
 @router.get("/file/download/{attachment_id}", summary="下载 attachment 文件（SDK）")

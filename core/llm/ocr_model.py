@@ -19,6 +19,7 @@ import os
 from typing import Any
 
 from deepdoc.parser.mineru_parser import MinerUParser
+from deepdoc.parser.opendataloader_parser import OpenDataLoaderParser
 from deepdoc.parser.paddleocr_parser import PaddleOCRParser
 
 
@@ -136,3 +137,60 @@ class PaddleOCROcrModel(Base, PaddleOCRParser):
 
         sections, tables = PaddleOCRParser.parse_pdf(self, filepath=filepath, binary=binary, callback=callback, parse_method=parse_method, **kwargs)
         return sections, tables
+
+
+class OpenDataLoaderOcrModel(Base, OpenDataLoaderParser):
+    _FACTORY_NAME = "OpenDataLoader"
+
+    def __init__(self, key: str | dict, model_name: str, **kwargs: Any) -> None:
+        Base.__init__(self, key, model_name, **kwargs)
+        raw_config: dict[str, Any] = {}
+        if key:
+            try:
+                raw_config = json.loads(key) if isinstance(key, str) else key
+            except (TypeError, json.JSONDecodeError):
+                raw_config = {}
+
+        config = raw_config.get("api_key", raw_config)
+        if not isinstance(config, dict):
+            config = {}
+
+        def resolve_config(config_key: str, env_key: str, default: Any = "") -> Any:
+            return config.get(config_key, config.get(env_key, os.environ.get(env_key, default)))
+
+        redacted_config = {config_key: "[REDACTED]" if any(sensitive in config_key.lower() for sensitive in ("key", "password", "token", "secret")) else value for config_key, value in config.items()}
+        logging.info("Parsed OpenDataLoader config (sensitive fields redacted): %s", redacted_config)
+
+        OpenDataLoaderParser.__init__(self)
+        self.api_url = str(resolve_config("opendataloader_apiserver", "OPENDATALOADER_APISERVER", "")).rstrip("/")
+        self.api_key = str(resolve_config("opendataloader_api_key", "OPENDATALOADER_API_KEY", "")).strip()
+        timeout_value = resolve_config("opendataloader_timeout", "OPENDATALOADER_TIMEOUT", "600") or "600"
+        try:
+            self.timeout = int(timeout_value)
+        except (TypeError, ValueError):
+            self.timeout = 600
+
+    def check_available(self) -> tuple[bool, str]:
+        available = self.check_installation()
+        return available, "" if available else "OpenDataLoader service not reachable"
+
+    def parse_pdf(
+        self,
+        filepath: str,
+        binary: Any = None,
+        callback: Any = None,
+        parse_method: str = "raw",
+        **kwargs: Any,
+    ) -> tuple[Any, Any]:
+        available, reason = self.check_available()
+        if not available:
+            raise RuntimeError(f"OpenDataLoader service not accessible: {reason}")
+
+        return OpenDataLoaderParser.parse_pdf(
+            self,
+            filepath=filepath,
+            binary=binary,
+            callback=callback,
+            parse_method=parse_method,
+            **kwargs,
+        )

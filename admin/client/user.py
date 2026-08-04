@@ -41,7 +41,7 @@ def login_user(client: HttpClient, server_type: str, email: str, password: str) 
         response = client.request("POST", "/admin/login", use_api_base=True, auth_kind=None, json_body=payload)
     else:
         payload = {"username": email, "password": password_enc}
-        response = client.request("POST", "/user/login", use_api_base=False, auth_kind=None, json_body=payload)
+        response = client.request("POST", "/auth/login", use_api_base=True, auth_kind=None, json_body=payload)
     try:
         res = response.json()
     except Exception as exc:
@@ -59,7 +59,7 @@ def login_user(client: HttpClient, server_type: str, email: str, password: str) 
 
 def register_user(client: HttpClient, email: str, nickname: str, password: str) -> None:
     payload = {"email": email, "nickname": nickname, "password": encrypt_password(password)}
-    res = client.request_json("POST", "/user/register", use_api_base=False, auth_kind=None, json_body=payload)
+    res = client.request_json("POST", "/users", use_api_base=True, auth_kind=None, json_body=payload)
     if res.get("code", res.get("retcode", -1)) == 0:
         return
     msg = res.get("message", res.get("retmsg", ""))

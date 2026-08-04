@@ -3,6 +3,7 @@ import logging
 import os
 import random
 import re
+from typing import Any
 
 import numpy as np
 from fastapi import APIRouter, Depends, Query
@@ -103,7 +104,9 @@ class CheckEmbeddingRequest(BaseModel):
 
 class UpdateMetadataSettingRequest(BaseModel):
     kb_id: str
-    metadata: dict
+    # 字段定义数组（前端保存时发的形状）或 JSON schema 对象（历史数据，detail 读出时经
+    # turn2jsonschema 转换）——只收 dict 会让前端载荷 422，模板永远存不进去。
+    metadata: list[dict[str, Any]] | dict[str, Any]
     enable_metadata: bool = True
 
 
@@ -294,9 +297,11 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
 
 @router.post("/update_metadata_setting", summary="更新知识库元数据配置")
 def update_metadata_setting(request: UpdateMetadataSettingRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    if not KnowledgebaseService.accessible(db, request.kb_id, user.id):
+        return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
     kb = KnowledgebaseService.get_by_id(db, request.kb_id)
     if not kb:
-        return get_data_error_result(retmsg="Database error (Knowledgebase rename)!")
+        return get_data_error_result(retmsg="Can't find this dataset!")
     kb_dict = kb.to_dict()
     if kb_dict.get("parser_config") is None:
         kb_dict["parser_config"] = {}

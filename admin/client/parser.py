@@ -75,17 +75,11 @@ sql_command: login_user
            | list_user_documents_metadata_summary
            | create_user_chat
            | drop_user_chat
-           | create_dataset_table
-           | drop_dataset_table
-           | create_metadata_table
-           | drop_metadata_table
            | create_chat_session
            | drop_chat_session
            | list_chat_sessions
            | chat_on_session
            | import_docs_into_dataset
-           | insert_dataset_from_file
-           | insert_metadata_from_file
            | update_chunk
            | set_metadata
            | remove_tags
@@ -181,14 +175,11 @@ RERANKER: "RERANKER"i
 ASR: "ASR"i
 TTS: "TTS"i
 IMPORT: "IMPORT"i
-INSERT: "INSERT"i
-FILE: "FILE"i
 UPDATE: "UPDATE"i
 REMOVE: "REMOVE"i
 TAGS: "TAGS"i
 INTO: "INTO"i
 WITH: "WITH"i
-VECTOR: "VECTOR"i
 PARSER: "PARSER"i
 PIPELINE: "PIPELINE"i
 PARSE: "PARSE"i
@@ -202,7 +193,6 @@ LICENSE: "LICENSE"i
 CHECK: "CHECK"i
 CONFIG: "CONFIG"i
 INDEX: "INDEX"i
-TABLE: "TABLE"i
 BENCHMARK: "BENCHMARK"i
 AS: "AS"i
 RESET: "RESET"i
@@ -298,18 +288,11 @@ list_user_datasets_metadata: LIST METADATA OF DATASETS quoted_string (COMMA quot
 list_user_documents_metadata_summary: LIST METADATA SUMMARY OF DATASET quoted_string (DOCUMENTS quoted_string (COMMA quoted_string)*)? ";"
 create_user_chat: CREATE CHAT quoted_string ";"
 drop_user_chat: DROP CHAT quoted_string ";"
-create_dataset_table: CREATE DATASET TABLE quoted_string VECTOR SIZE NUMBER ";"
-drop_dataset_table: DROP DATASET TABLE quoted_string ";"
-create_metadata_table: CREATE METADATA TABLE ";"
-drop_metadata_table: DROP METADATA TABLE ";"
 create_chat_session: CREATE CHAT quoted_string SESSION ";"
 drop_chat_session: DROP CHAT quoted_string SESSION quoted_string ";"
 list_chat_sessions: LIST CHAT quoted_string SESSIONS ";"
 chat_on_session: CHAT quoted_string ON quoted_string SESSION quoted_string ";"
 import_docs_into_dataset: IMPORT quoted_string INTO DATASET quoted_string ";"
-// Internal CLI for GO
-insert_dataset_from_file: INSERT DATASET FROM FILE quoted_string ";"
-insert_metadata_from_file: INSERT METADATA FROM FILE quoted_string ";"
 update_chunk: UPDATE CHUNK quoted_string OF DATASET quoted_string SET quoted_string ";"
 set_metadata: SET METADATA OF DOCUMENT quoted_string TO quoted_string ";"
 remove_tags: REMOVE TAGS quoted_string (COMMA quoted_string)* FROM DATASET quoted_string ";"
@@ -666,30 +649,6 @@ class MultiRAGCLITransformer(Transformer):
         chat_name = items[2].children[0].strip("'\"")
         return {"type": "drop_user_chat", "chat_name": chat_name}
 
-    def create_dataset_table(self, items):
-        dataset_name = None
-        vector_size = None
-        for i, item in enumerate(items):
-            if hasattr(item, "data") and item.data == "quoted_string":
-                dataset_name = item.children[0].strip("'\"")
-            if hasattr(item, "type") and item.type == "NUMBER":
-                if i > 0 and items[i - 1].type == "SIZE" and items[i - 2].type == "VECTOR":
-                    vector_size = int(item)
-        return {"type": "create_dataset_table", "dataset_name": dataset_name, "vector_size": vector_size}
-
-    def drop_dataset_table(self, items):
-        dataset_name = None
-        for item in items:
-            if hasattr(item, "data") and item.data == "quoted_string":
-                dataset_name = item.children[0].strip("'\"")
-        return {"type": "drop_dataset_table", "dataset_name": dataset_name}
-
-    def create_metadata_table(self, items):
-        return {"type": "create_metadata_table"}
-
-    def drop_metadata_table(self, items):
-        return {"type": "drop_metadata_table"}
-
     def create_chat_session(self, items):
         chat_name = items[2].children[0].strip("'\"")
         return {"type": "create_chat_session", "chat_name": chat_name}
@@ -714,14 +673,6 @@ class MultiRAGCLITransformer(Transformer):
         document_paths = [p.strip() for p in document_list_str.split(",")]
         dataset_name = items[4].children[0].strip("'\"")
         return {"type": "import_docs_into_dataset", "dataset_name": dataset_name, "document_paths": document_paths}
-
-    def insert_dataset_from_file(self, items):
-        file_path = items[4].children[0].strip("'\"")
-        return {"type": "insert_dataset_from_file", "file_path": file_path}
-
-    def insert_metadata_from_file(self, items):
-        file_path = items[4].children[0].strip("'\"")
-        return {"type": "insert_metadata_from_file", "file_path": file_path}
 
     def update_chunk(self, items):
         def get_quoted_value(item):

@@ -20,13 +20,13 @@ import (
 	"fmt"
 )
 
-// DummyModel implements ModelDriver for Zhipu AI (智谱 AI)
+// DummyModel implements ModelDriver for providers without a Go driver.
 type DummyModel struct {
 	BaseURL   map[string]string
 	URLSuffix URLSuffix
 }
 
-// NewDummyModel creates a new Zhipu AI model instance
+// NewDummyModel creates a fallback model instance.
 func NewDummyModel(baseURL map[string]string, urlSuffix URLSuffix) *DummyModel {
 	return &DummyModel{
 		BaseURL:   baseURL,
@@ -41,6 +41,11 @@ func (z *DummyModel) Name() string {
 // Chat sends a message and returns response
 func (z *DummyModel) Chat(modelName, message *string, apiConfig *APIConfig, modelConfig *ChatConfig) (*ChatResponse, error) {
 	return nil, fmt.Errorf("not implemented")
+}
+
+// ChatWithMessages sends multiple role-tagged messages and returns a response.
+func (z *DummyModel) ChatWithMessages(modelName string, apiKey *string, messages []Message, modelConfig *ChatConfig) (string, error) {
+	return "", fmt.Errorf("not implemented")
 }
 
 // ChatStreamly sends a message and streams response
@@ -69,4 +74,8 @@ func (z *DummyModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 
 func (z *DummyModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
 	return nil, fmt.Errorf("not implemented")
+}
+
+func (z *DummyModel) CheckConnection(apiConfig *APIConfig) error {
+	return fmt.Errorf("connection check is not implemented for %s", z.Name())
 }

@@ -343,12 +343,14 @@ class DoclingParser(RAGFlowPdfParser):
         self,
         filepath: str | PathLike[str],
         binary: BytesIO | bytes | None = None,
-        callback: Callable | None = None,
+        callback: Callable[[float, str], Any] | None = None,
         *,
         parse_method: str = "raw",
         docling_server_url: str | None = None,
         request_timeout: int | None = None,
-    ):
+    ) -> tuple[list[tuple[str, ...]], list[Any]]:
+        """Parse a PDF through Docling, preferring server-side chunking."""
+
         server_url = self._effective_server_url(docling_server_url)
         if not server_url:
             raise RuntimeError("[Docling] DOCLING_SERVER_URL is not configured.")
@@ -371,7 +373,7 @@ class DoclingParser(RAGFlowPdfParser):
 
         filename = Path(filepath).name or "input.pdf"
         b64 = base64.b64encode(pdf_bytes).decode("ascii")
-        v1_payload = {
+        v1_payload_standard = {
             "options": {
                 "from_formats": ["pdf"],
                 "to_formats": ["json", "md", "text"],
@@ -384,7 +386,7 @@ class DoclingParser(RAGFlowPdfParser):
                 }
             ],
         }
-        v1alpha_payload = {
+        v1alpha_payload_standard = {
             "options": {
                 "from_formats": ["pdf"],
                 "to_formats": ["json", "md", "text"],
@@ -396,11 +398,45 @@ class DoclingParser(RAGFlowPdfParser):
                 }
             ],
         }
-        errors = []
-        response_json = None
-        for endpoint, payload in (
-            ("/v1/convert/source", v1_payload),
-            ("/v1alpha/convert/source", v1alpha_payload),
+
+        chunking_options = {
+            "from_formats": ["pdf"],
+            "to_formats": ["json", "md", "text"],
+            "do_chunking": True,
+            "chunking_options": {
+                "max_tokens": 512,
+                "overlap": 50,
+                "tokenizer": "sentencepiece",
+            },
+        }
+        v1_payload_chunked = {
+            "options": chunking_options,
+            "sources": [
+                {
+                    "kind": "file",
+                    "filename": filename,
+                    "base64_string": b64,
+                }
+            ],
+        }
+        v1alpha_payload_chunked = {
+            "options": chunking_options,
+            "file_sources": [
+                {
+                    "filename": filename,
+                    "base64_string": b64,
+                }
+            ],
+        }
+
+        errors: list[str] = []
+        response_json: Any = None
+        is_chunked_response = False
+        for endpoint, payload, chunked in (
+            ("/v1/convert/source", v1_payload_chunked, True),
+            ("/v1alpha/convert/source", v1alpha_payload_chunked, True),
+            ("/v1/convert/source", v1_payload_standard, False),
+            ("/v1alpha/convert/source", v1alpha_payload_standard, False),
         ):
             try:
                 resp = requests.post(
@@ -410,20 +446,45 @@ class DoclingParser(RAGFlowPdfParser):
                 )
                 if resp.status_code < 300:
                     response_json = resp.json()
+                    is_chunked_response = chunked
+                    if chunked:
+                        self.logger.info(f"[Docling] Successfully used native chunking on: {endpoint}")
+                    else:
+                        self.logger.info(f"[Docling] Chunking unavailable, fell back to standard: {endpoint}")
                     break
+                if chunked:
+                    self.logger.warning(f"[Docling] Server rejected chunking parameters: HTTP {resp.status_code}")
+                    continue
                 errors.append(f"{endpoint}: HTTP {resp.status_code} {resp.text[:300]}")
             except Exception as exc:
+                self.logger.error(f"[Docling] Request error on {endpoint}: {exc}")
                 errors.append(f"{endpoint}: {exc}")
 
         if response_json is None:
             raise RuntimeError("[Docling] remote convert failed: " + " | ".join(errors))
 
+        sections: list[tuple[str, ...]] = []
+        tables: list[Any] = []
+
+        if is_chunked_response:
+            chunks = response_json if isinstance(response_json, list) else response_json.get("results", [])
+            for chunk_data in chunks:
+                if not isinstance(chunk_data, dict):
+                    continue
+                chunk_text = chunk_data.get("text", "")
+                if not chunk_text and isinstance(chunk_data.get("chunk"), dict):
+                    chunk_text = chunk_data["chunk"].get("text", "")
+                if isinstance(chunk_text, str) and chunk_text.strip():
+                    sections.extend(self._sections_from_remote_text(chunk_text, parse_method=parse_method))
+
+            if callback:
+                callback(0.95, f"[Docling] Native chunks received: {len(sections)}")
+            return sections, tables
+
         docs = self._extract_remote_document_entries(response_json)
         if not docs:
             raise RuntimeError("[Docling] remote response does not contain parsed documents.")
 
-        sections: list[tuple[str, ...]] = []
-        tables = []
         for doc in docs:
             md = doc.get("md_content")
             txt = doc.get("text_content")

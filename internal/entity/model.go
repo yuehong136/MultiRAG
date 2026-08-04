@@ -165,6 +165,7 @@ type Model struct {
 	ModelTypes   []string       `json:"model_types"`
 	Features     Features       `json:"features"`
 	Thinking     *ModelThinking `json:"thinking,omitempty"`
+	Series       *string        `json:"series,omitempty"`
 	ModelTypeMap map[string]bool
 }
 
@@ -176,6 +177,7 @@ type Provider struct {
 	URLSuffix   models.URLSuffix  `json:"url_suffix"`
 	Models      []*Model          `json:"models"`
 	Features    ProviderFeatures  `json:"features"`
+	Series      string            `json:"series,omitempty"`
 	ModelDriver models.ModelDriver
 }
 
@@ -243,6 +245,14 @@ func NewProviderManager(dirPath string) (*ProviderManager, error) {
 			if provider.Features.ClearThinking != nil && model.Thinking != nil && modelNameHasPrefix(model.Name, provider.Features.ClearThinking.SupportedModels) {
 				model.Thinking.ClearContent = provider.Features.ClearThinking.DefaultValue
 			}
+			modelSeries := provider.Series
+			if modelSeries == "" {
+				modelSeries = model.Name
+				if separator := strings.Index(modelSeries, "-"); separator >= 0 {
+					modelSeries = modelSeries[:separator]
+				}
+			}
+			model.Series = &modelSeries
 			model.ModelTypeMap = make(map[string]bool)
 			for _, modelType := range model.ModelTypes {
 				model.ModelTypeMap[modelType] = true

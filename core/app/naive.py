@@ -17,9 +17,11 @@
 import logging
 import os
 import re
+from collections.abc import Callable
 from functools import reduce
 from io import BytesIO
 from timeit import default_timer as timer
+from typing import Any
 
 from docx import Document
 from docx.opc.oxml import parse_xml
@@ -173,6 +175,58 @@ def by_docling(filename, binary=None, from_page=0, to_page=100000, lang="Chinese
     return sections, tables, pdf_parser
 
 
+def by_opendataloader(
+    filename: str,
+    binary: bytes | BytesIO | None = None,
+    from_page: int = 0,
+    to_page: int = 100000,
+    lang: str = "Chinese",
+    callback: Callable[..., Any] | None = None,
+    pdf_cls: type | None = None,
+    parse_method: str = "raw",
+    opendataloader_llm_name: str | None = None,
+    tenant_id: str | None = None,
+    **kwargs: Any,
+) -> tuple[Any, Any, Any]:
+    del from_page, to_page, pdf_cls
+    if tenant_id:
+        if not opendataloader_llm_name:
+            try:
+                from api.db.services.tenant_llm_service import TenantLLMService
+
+                with db_connection() as db:
+                    env_name = TenantLLMService.ensure_opendataloader_from_env(db, tenant_id)
+                    candidates = TenantLLMService.query(db, tenant_id=tenant_id, llm_factory="OpenDataLoader", mdl_type=LLMType.OCR.value)
+                    if candidates:
+                        opendataloader_llm_name = candidates[0].llm_name
+                    elif env_name:
+                        opendataloader_llm_name = env_name
+            except Exception as exc:
+                logging.warning("fallback to env opendataloader: %s", exc)
+
+        if opendataloader_llm_name:
+            try:
+                with db_connection() as db:
+                    model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.OCR.value, opendataloader_llm_name)
+                    ocr_model = LLMBundle(db, tenant_id, model_config, lang=lang)
+                    pdf_parser = ocr_model.mdl
+                parse_options = {key: kwargs[key] for key in ("hybrid", "image_output", "sanitize") if key in kwargs}
+                sections, tables = pdf_parser.parse_pdf(
+                    filepath=filename,
+                    binary=binary,
+                    callback=callback,
+                    parse_method=parse_method,
+                    **parse_options,
+                )
+                return sections, tables, pdf_parser
+            except Exception as exc:
+                logging.error("Failed to parse pdf via LLMBundle OpenDataLoader (%s): %s", opendataloader_llm_name, exc)
+
+    if callback:
+        callback(-1, "OpenDataLoader not found.")
+    return None, None, None
+
+
 def by_tcadp(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, pdf_cls=None, **kwargs):
     tcadp_parser = TCADPParser()
 
@@ -261,6 +315,7 @@ PARSERS = {
     "deepdoc": by_deepdoc,
     "mineru": by_mineru,
     "docling": by_docling,
+    "opendataloader": by_opendataloader,
     "tcadp parser": by_tcadp,
     "paddleocr": by_paddleocr,
     "plaintext": by_plaintext,  # default
@@ -846,6 +901,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
             layout_recognizer=layout_recognizer,  # 传递原始值给 plaintext_parser 以支持 VLM
             mineru_llm_name=parser_model_name,
             paddleocr_llm_name=parser_model_name,
+            opendataloader_llm_name=parser_model_name,
             **kwargs,
         )
         sections = _normalize_section_text_for_rtl_presentation_forms(sections)
@@ -856,7 +912,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
         if table_context_size or image_context_size:
             tables = append_context2table_image4pdf(sections, tables, image_context_size)
 
-        if name in ["tcadp", "docling", "mineru", "paddleocr"]:
+        if name in ["tcadp", "docling", "mineru", "paddleocr", "opendataloader"]:
             if int(parser_config.get("chunk_token_num", 0)) <= 0:
                 parser_config["chunk_token_num"] = 0
 

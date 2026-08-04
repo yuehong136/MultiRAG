@@ -61,3 +61,41 @@ def test_initialize_without_keys_skips_tracer(monkeypatch, db):
 
     assert bundle.langfuse is None
     assert bundle.trace_context == {}
+
+
+# ---------------------------------------------------------------------------
+# SDK v4 API 面契约
+# ---------------------------------------------------------------------------
+
+
+def test_sdk_exposes_the_observation_api_we_call():
+    """langfuse v4 删掉了 start_generation，只剩 start_observation(as_type=...)。
+
+    两个方向都要钉：真装的 SDK 必须有我们调的方法与参数；同时 start_generation
+    必须不存在——它一旦复活就说明依赖被降回 v3，而我们全部埋点已按 v4 写。
+    """
+    import inspect
+
+    from langfuse import Langfuse
+    from langfuse._client.span import LangfuseGeneration
+
+    assert not hasattr(Langfuse, "start_generation"), "依赖疑似降回 langfuse v3"
+
+    params = inspect.signature(Langfuse.start_observation).parameters
+    for name in ("trace_context", "as_type", "name", "model", "input", "metadata"):
+        assert name in params, f"start_observation 缺少我们在用的参数 {name}"
+
+    # 我们的 end() 一律无参调用（v4 只接受 end_time），输出走 update()
+    end_params = inspect.signature(LangfuseGeneration.end).parameters
+    assert all(p.default is not inspect.Parameter.empty for p in end_params.values() if p.name != "self")
+
+    update_params = inspect.signature(LangfuseGeneration.update).parameters
+    for name in ("output", "usage_details"):
+        assert name in update_params, f"update 缺少我们在用的参数 {name}"
+
+
+def test_projects_response_is_pydantic_v2():
+    """langfuse_api_service 用 model_dump() 读项目信息；v3 的 fern SDK 是 pydantic.v1 风格。"""
+    from langfuse.api.projects.types.projects import Projects
+
+    assert hasattr(Projects, "model_dump")

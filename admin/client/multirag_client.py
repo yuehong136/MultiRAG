@@ -957,7 +957,7 @@ class MultiRAGClient:
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
-        response = self.http_client.request("GET", "user/tenant_info", use_api_base=False, auth_kind="web")
+        response = self.http_client.request("GET", "users/me/models", use_api_base=True, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200:
             new_input = []
@@ -1037,7 +1037,7 @@ class MultiRAGClient:
         password: str = command["password"]
         print(f"Register user: {nickname}, email: {user_name}, password: ******")
         payload = {"email": user_name, "nickname": nickname, "password": password}
-        response = self.http_client.request("POST", "user/register", json_body=payload, use_api_base=False, auth_kind=None)
+        response = self.http_client.request("POST", "users", json_body=payload, use_api_base=True, auth_kind=None)
         res_json = response.json()
         code = res_json.get("code", res_json.get("retcode", -1))
         if response.status_code == 200 and code == 0:
@@ -1050,7 +1050,7 @@ class MultiRAGClient:
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
-        response = self.http_client.request("GET", "user/info", use_api_base=False, auth_kind="web")
+        response = self.http_client.request("GET", "users/me", use_api_base=True, auth_kind="web")
         res_json = response.json()
         code = res_json.get("code", res_json.get("retcode", -1))
         if response.status_code == 200 and code == 0:
@@ -1344,98 +1344,6 @@ class MultiRAGClient:
         else:
             msg = res_json.get("message", res_json.get("retmsg", ""))
             print(f"Fail to drop chat {chat_name}: {msg}")
-
-    def create_dataset_table(self, command: dict):
-        if self.server_type != "user":
-            print("This command is only allowed in USER mode")
-            return
-        dataset_name = command["dataset_name"]
-        vector_size = command.get("vector_size")
-        if not vector_size:
-            print("vector_size is required")
-            return
-        # Get dataset ID by name
-        dataset_id = self._get_dataset_id(dataset_name)
-        if dataset_id is None:
-            return
-        payload = {"kb_id": dataset_id, "vector_size": vector_size}
-        response = self.http_client.request("POST", "kb/doc_engine_table", json_body=payload, use_api_base=False, auth_kind="web")
-        res_json = response.json()
-        if response.status_code == 200 and res_json.get("code") == 0:
-            print(f"Success to create table for dataset: {dataset_name}")
-        else:
-            print(f"Fail to create table for dataset {dataset_name}, code: {res_json.get('code')}, message: {res_json.get('message')}")
-
-    def drop_dataset_table(self, command: dict):
-        if self.server_type != "user":
-            print("This command is only allowed in USER mode")
-            return
-        dataset_name = command["dataset_name"]
-        # Get dataset ID by name
-        dataset_id = self._get_dataset_id(dataset_name)
-        if dataset_id is None:
-            return
-        payload = {"kb_id": dataset_id}
-        response = self.http_client.request("DELETE", "kb/doc_engine_table", json_body=payload, use_api_base=False, auth_kind="web")
-        res_json = response.json()
-        if response.status_code == 200 and res_json.get("code") == 0:
-            print(f"Success to drop table for dataset: {dataset_name}")
-        else:
-            print(f"Fail to drop table for dataset {dataset_name}, code: {res_json.get('code')}, message: {res_json.get('message')}")
-
-    def create_metadata_table(self, command: dict):
-        if self.server_type != "user":
-            print("This command is only allowed in USER mode")
-            return
-        response = self.http_client.request("POST", "tenant/doc_engine_metadata_table", use_api_base=False, auth_kind="web")
-        res_json = response.json()
-        if response.status_code == 200 and res_json.get("code") == 0:
-            print("Success to create metadata table")
-        else:
-            print(f"Fail to create metadata table, code: {res_json.get('code')}, message: {res_json.get('message')}")
-
-    def drop_metadata_table(self, command: dict):
-        if self.server_type != "user":
-            print("This command is only allowed in USER mode")
-            return
-        response = self.http_client.request("DELETE", "tenant/doc_engine_metadata_table", use_api_base=False, auth_kind="web")
-        res_json = response.json()
-        if response.status_code == 200 and res_json.get("code") == 0:
-            print("Success to drop metadata table")
-        else:
-            print(f"Fail to drop metadata table, code: {res_json.get('code')}, message: {res_json.get('message')}")
-
-    # Internal CLI for GO
-    def insert_dataset_from_file(self, command: dict):
-        if self.server_type != "user":
-            print("This command is only allowed in USER mode")
-            return
-        file_path = command["file_path"]
-        payload = {"file_path": file_path}
-        response = self.http_client.request("POST", "kb/insert_from_file", json_body=payload, use_api_base=False, auth_kind="web")
-        res_json = response.json()
-        if response.status_code == 200 and res_json.get("code") == 0:
-            print(f"Success to insert dataset from file: {file_path}")
-            if res_json.get("data"):
-                self._print_key_value(res_json["data"])
-        else:
-            print(f"Fail to insert dataset from file, code: {res_json.get('code')}, message: {res_json.get('message')}")
-
-    # Internal CLI for GO
-    def insert_metadata_from_file(self, command: dict):
-        if self.server_type != "user":
-            print("This command is only allowed in USER mode")
-            return
-        file_path = command["file_path"]
-        payload = {"file_path": file_path}
-        response = self.http_client.request("POST", "tenant/insert_metadata_from_file", json_body=payload, use_api_base=False, auth_kind="web")
-        res_json = response.json()
-        if response.status_code == 200 and res_json.get("code") == 0:
-            print(f"Success to insert metadata from file: {file_path}")
-            if res_json.get("data"):
-                self._print_key_value(res_json["data"])
-        else:
-            print(f"Fail to insert metadata from file, code: {res_json.get('code')}, message: {res_json.get('message')}")
 
     def update_chunk(self, command_dict):
         if self.server_type != "user":
@@ -1922,7 +1830,7 @@ class MultiRAGClient:
         return None
 
     def _get_default_models(self) -> dict | None:
-        response = self.http_client.request("GET", "user/tenant_info", use_api_base=False, auth_kind="web")
+        response = self.http_client.request("GET", "users/me/models", use_api_base=True, auth_kind="web")
         res_json = response.json()
         if response.status_code == 200:
             code = res_json.get("code", res_json.get("retcode", -1))
@@ -1949,7 +1857,7 @@ class MultiRAGClient:
             "tts_id": current.get("tts_id", ""),
             "rerank_id": current.get("rerank_id", ""),
         }
-        response = self.http_client.request("POST", "user/set_tenant_info", json_body=payload, use_api_base=False, auth_kind="web")
+        response = self.http_client.request("PATCH", "users/me/models", json_body=payload, use_api_base=True, auth_kind="web")
         res_json = response.json()
         code = res_json.get("code", res_json.get("retcode", -1))
         if response.status_code == 200 and code == 0:
@@ -2104,18 +2012,6 @@ def run_command(client: MultiRAGClient, command_dict: dict):
             client.create_user_chat(command_dict)
         case "drop_user_chat":
             client.drop_user_chat(command_dict)
-        case "create_dataset_table":
-            client.create_dataset_table(command_dict)
-        case "drop_dataset_table":
-            client.drop_dataset_table(command_dict)
-        case "create_metadata_table":
-            client.create_metadata_table(command_dict)
-        case "drop_metadata_table":
-            client.drop_metadata_table(command_dict)
-        case "insert_dataset_from_file":
-            client.insert_dataset_from_file(command_dict)
-        case "insert_metadata_from_file":
-            client.insert_metadata_from_file(command_dict)
         case "update_chunk":
             client.update_chunk(command_dict)
         case "set_metadata":

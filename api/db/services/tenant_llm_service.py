@@ -14,7 +14,15 @@ from api.db.services.common_service import CommonService
 from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.user_service import TenantService
 from common import settings
-from common.constants import MINERU_DEFAULT_CONFIG, MINERU_ENV_KEYS, PADDLEOCR_DEFAULT_CONFIG, PADDLEOCR_ENV_KEYS, LLMType
+from common.constants import (
+    MINERU_DEFAULT_CONFIG,
+    MINERU_ENV_KEYS,
+    OPENDATALOADER_DEFAULT_CONFIG,
+    OPENDATALOADER_ENV_KEYS,
+    PADDLEOCR_DEFAULT_CONFIG,
+    PADDLEOCR_ENV_KEYS,
+    LLMType,
+)
 from core.llm import ChatModel, CvModel, EmbeddingModel, OcrModel, RerankModel, Seq2txtModel, TTSModel
 
 
@@ -567,6 +575,65 @@ class TenantLLMService(CommonService):
                 idx += 1
                 continue
 
+    @classmethod
+    def _collect_opendataloader_env_config(cls) -> dict[str, str] | None:
+        cfg = OPENDATALOADER_DEFAULT_CONFIG.copy()
+        found = False
+        for key in OPENDATALOADER_ENV_KEYS:
+            value = os.environ.get(key)
+            if value:
+                found = True
+                cfg[key] = value
+        return cfg if found else None
+
+    @classmethod
+    def ensure_opendataloader_from_env(cls, db: Session, tenant_id: str) -> str | None:
+        """Ensure one tenant-scoped OpenDataLoader OCR model for the env config."""
+        cfg = cls._collect_opendataloader_env_config()
+        if not cfg:
+            return None
+
+        saved_models = cls.query(db, tenant_id=tenant_id, llm_factory="OpenDataLoader", mdl_type=LLMType.OCR.value)
+
+        def parse_api_key(raw: str) -> dict[str, object]:
+            try:
+                parsed = json.loads(raw or "{}")
+            except json.JSONDecodeError:
+                return {}
+            return parsed if isinstance(parsed, dict) else {}
+
+        for item in saved_models:
+            api_cfg = parse_api_key(item.api_key)
+            normalized = {key: api_cfg.get(key, OPENDATALOADER_DEFAULT_CONFIG.get(key)) for key in OPENDATALOADER_ENV_KEYS}
+            if normalized == cfg:
+                return item.llm_name
+
+        used_names = {item.llm_name for item in saved_models}
+        idx = 1
+        base_name = "opendataloader-from-env"
+        while True:
+            candidate = f"{base_name}-{idx}"
+            if candidate in used_names:
+                idx += 1
+                continue
+            try:
+                cls.save(
+                    db,
+                    tenant_id=tenant_id,
+                    llm_factory="OpenDataLoader",
+                    llm_name=candidate,
+                    mdl_type=LLMType.OCR.value,
+                    api_key=json.dumps(cfg),
+                    api_base="",
+                    max_tokens=0,
+                )
+                return candidate
+            except IntegrityError:
+                logging.warning("OpenDataLoader env model %s already exists for tenant %s, retry with next name", candidate, tenant_id)
+                db.rollback()
+                used_names.add(candidate)
+                idx += 1
+
 
 class LLM4Tenant:
     def __init__(self, db: Session | None, tenant_id: str, model_config: dict, lang: str = "Chinese", **kwargs):
@@ -601,7 +668,7 @@ class LLM4Tenant:
         langfuse_keys = TenantLangfuseService.filter_by_tenant(db, tenant_id=tenant_id)
         if langfuse_keys:
             # 零 preflight：auth_check 是阻塞 HTTP（默认 5s 超时；经 run_sync 构造 LLMBundle 时
-            # 会冻结整个事件循环）。凭据有效性在配置写入期校验（langfuse_app）；此处 fail-open。
+            # 会冻结整个事件循环）。凭据有效性在配置写入期校验（langfuse_api_service）；此处 fail-open。
             try:
                 self.langfuse = Langfuse(public_key=langfuse_keys.public_key, secret_key=langfuse_keys.secret_key, host=langfuse_keys.host)
                 self.trace_context = {"trace_id": self.langfuse.create_trace_id()}

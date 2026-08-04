@@ -29,6 +29,7 @@ import (
 	"go.uber.org/zap"
 
 	rag "multirag/internal/binding"
+	"multirag/internal/engine"
 	"multirag/internal/logger"
 )
 
@@ -436,6 +437,9 @@ func withAnalyzerResult[T any](fn func(*rag.Analyzer) (T, error)) (T, error) {
 // Tokenize tokenizes the text and returns a space-separated string of tokens
 // Example: "hello world" -> "hello world"
 func Tokenize(text string) (string, error) {
+	if engine.GetEngineType() == engine.EngineInfinity {
+		return text, nil
+	}
 	return withAnalyzerResult(func(a *rag.Analyzer) (string, error) {
 		return a.Tokenize(text)
 	})
@@ -468,6 +472,9 @@ func SetFineGrained(fineGrained bool) {
 // Input: space-separated tokens (e.g., "hello world 测试")
 // Output: space-separated fine-grained tokens (e.g., "hello world 测 试")
 func FineGrainedTokenize(tokens string) (string, error) {
+	if engine.GetEngineType() == engine.EngineInfinity {
+		return tokens, nil
+	}
 	return withAnalyzerResult(func(a *rag.Analyzer) (string, error) {
 		return a.FineGrainedTokenize(tokens)
 	})

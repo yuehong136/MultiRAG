@@ -2,6 +2,7 @@ import logging
 import os
 import time
 from io import BytesIO
+from typing import Any
 
 from azure.storage.blob import ContainerClient
 
@@ -37,7 +38,7 @@ class MultiRAGAzureSasBlob:
         _bucket, fnm, binary = "txtxtxtxt1", "txtxtxtxt1", b"_t@@@1"
         return self.conn.upload_blob(name=fnm, data=BytesIO(binary), length=len(binary))
 
-    def put(self, bucket, fnm, binary):
+    def put(self, bucket: str, fnm: str, binary: bytes, tenant_id: str | None = None) -> Any:
         for _ in range(3):
             try:
                 return self.conn.upload_blob(name=fnm, data=BytesIO(binary), length=len(binary))

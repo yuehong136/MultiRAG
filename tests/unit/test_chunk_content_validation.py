@@ -1,22 +1,31 @@
-"""chunk 写接口空内容校验钉板（web set / sdk add_chunk / sdk update_chunk 三写点）。
+"""Canonical chunk RESTful route and empty-content regression contracts."""
 
-回归背景：空或纯空白 content（""、" "、"\\n"）曾绕过校验直达 embedding 模型，
-由模型报错兜底且报错语义不明。现约定：三写点统一用
-common.string_utils.is_content_empty 在进入分词/向量化前拒绝；
-update_chunk 未提供 content 时仍走原有「保留旧内容」分支，不受影响。
-路由走真实 ``api.apps.app`` 的 HTTP 契约式，服务层与 doc store 打桩。
-"""
-
+from contextlib import nullcontext
 from types import SimpleNamespace
 
-from api.db.services.document_service import DocumentService
-from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.utils.api_utils import token_required
+from fastapi.routing import APIRoute, iter_route_contexts
+
+from api.db.db_models import get_async_db, get_db
+from api.utils.api_utils import async_current_tenant_id
 from common import settings
 from common.constants import RetCode
 from common.string_utils import is_content_empty
 
-# ---- is_content_empty 纯函数 ----
+_CHUNKS = "/api/v1/datasets/kb1/documents/doc1/chunks"
+_CHUNK_ROUTE = "/api/v1/datasets/{dataset_id}/documents/{document_id}/chunks"
+
+
+def _chunk_route_module():
+    import sys
+
+    return sys.modules["api.apps.restful_apis.chunk"]
+
+
+def _iter_routes(app):
+    for context in iter_route_contexts(app.routes):
+        route = context.original_route
+        if isinstance(route, APIRoute):
+            yield SimpleNamespace(path=context.path, methods=context.methods)
 
 
 def test_is_content_empty_truth_table():
@@ -28,98 +37,103 @@ def test_is_content_empty_truth_table():
     assert not is_content_empty(" x ")
 
 
-# ---- web POST /v1/chunk/set ----
+def _stub_write_context(monkeypatch, db):
+    module = _chunk_route_module()
+    monkeypatch.setattr(module, "db_connection", lambda: nullcontext(db))
+    monkeypatch.setattr(
+        module,
+        "_write_context",
+        lambda _db, _user_id, _dataset_id, _document_id: (
+            SimpleNamespace(id="kb1", tenant_id="tenant-unit", name="kb", tenant_embd_id=None, embd_id="embed"),
+            SimpleNamespace(id="doc1", kb_id="kb1", name="d.txt", parser_id="naive"),
+        ),
+    )
 
 
-def test_web_set_rejects_whitespace_content(client):
-    resp = client.post("/v1/chunk/set", json={"doc_id": "doc1", "chunk_id": "c1", "content_with_weight": " \n"})
+def test_restful_add_chunk_rejects_whitespace_content(client, monkeypatch, db):
+    _stub_write_context(monkeypatch, db)
 
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["retcode"] == int(RetCode.DATA_ERROR)
-    assert body["retmsg"] == "`content_with_weight` is required"
+    response = client.post(_CHUNKS, json={"content": "  \n "})
 
-
-# ---- sdk chunk 端点公共桩 ----
-
-_SDK_CHUNKS = "/api/v1/datasets/kb1/documents/doc1/chunks"
-
-
-def _stub_sdk_ownership(client, monkeypatch):
-    client.app.dependency_overrides[token_required] = lambda: "tenant-unit"
-    monkeypatch.setattr(KnowledgebaseService, "query", classmethod(lambda cls, db, **kw: [SimpleNamespace(id="kb1")]))
-    monkeypatch.setattr(DocumentService, "query", classmethod(lambda cls, db, **kw: [SimpleNamespace(id="doc1", name="d.txt")]))
-
-
-# ---- sdk POST .../chunks（add_chunk） ----
-
-
-def test_sdk_add_chunk_rejects_whitespace_content(client, monkeypatch):
-    _stub_sdk_ownership(client, monkeypatch)
-
-    resp = client.post(_SDK_CHUNKS, json={"content": "  \n "})
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["code"] == int(RetCode.DATA_ERROR)
-    assert body["message"] == "`content` is required"
-
-
-def test_sdk_add_chunk_rejects_empty_string_content(client, monkeypatch):
-    _stub_sdk_ownership(client, monkeypatch)
-
-    resp = client.post(_SDK_CHUNKS, json={"content": ""})
-
-    body = resp.json()
-    assert body["code"] == int(RetCode.DATA_ERROR)
-    assert body["message"] == "`content` is required"
-
-
-# ---- sdk PUT .../chunks/{chunk_id}（update_chunk） ----
+    assert response.status_code == 200
+    assert response.json() == {"code": int(RetCode.DATA_ERROR), "message": "`content` is required"}
 
 
 class _FakeDocStore:
-    def __init__(self, chunk_id, chunk_data):
-        self._chunk_id = chunk_id
-        self._chunk_data = chunk_data
-        self.upserts = []
+    def __init__(self):
+        self.updates = []
 
-    def get(self, chunk_id, index_name, kb_id):
-        return {self._chunk_id: dict(self._chunk_data)} if chunk_id == self._chunk_id else None
+    def get(self, chunk_id, index_name, dataset_ids):
+        del index_name, dataset_ids
+        if chunk_id != "c1":
+            return None
+        return {"id": "c1", "doc_id": "doc1", "content_with_weight": "old content", "available_int": 1}
 
-    def upsert(self, chunk_ids, chunk_datas, index_name, kb_id):
-        self.upserts.append((chunk_ids, chunk_datas))
+    def update(self, condition, patch, index_name, dataset_id):
+        self.updates.append((condition, patch, index_name, dataset_id))
+        return True
 
 
-def _stub_update_chain(client, monkeypatch):
-    _stub_sdk_ownership(client, monkeypatch)
-    store = _FakeDocStore("c1", {"content_with_weight": "old content", "available_int": 1})
+def test_restful_update_chunk_rejects_whitespace_content(client, monkeypatch, db):
+    _stub_write_context(monkeypatch, db)
+    store = _FakeDocStore()
     monkeypatch.setattr(settings, "docStoreConn", store, raising=False)
-    return store
+
+    response = client.patch(f"{_CHUNKS}/c1", json={"content": " "})
+
+    assert response.status_code == 200
+    assert response.json() == {"code": int(RetCode.DATA_ERROR), "message": "`content` is required"}
+    assert store.updates == []
 
 
-def test_sdk_update_chunk_rejects_whitespace_content(client, monkeypatch):
-    store = _stub_update_chain(client, monkeypatch)
+def test_chunk_routes_are_canonical_and_web_legacy_routes_are_deprecated(client):
+    routes = {(method, route.path) for route in _iter_routes(client.app) for method in route.methods}
 
-    resp = client.put(f"{_SDK_CHUNKS}/c1", json={"content": " "})
+    for method, path in (
+        ("GET", _CHUNK_ROUTE),
+        ("GET", f"{_CHUNK_ROUTE}/{{chunk_id}}"),
+        ("POST", _CHUNK_ROUTE),
+        ("DELETE", _CHUNK_ROUTE),
+        ("PATCH", f"{_CHUNK_ROUTE}/{{chunk_id}}"),
+        ("PATCH", _CHUNK_ROUTE),
+    ):
+        assert (method, path) in routes
 
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["code"] == int(RetCode.DATA_ERROR)
-    assert body["message"] == "`content` is required"
-    assert store.upserts == []  # 回归点：空内容绝不落库，也绝不触发 embedding
+    legacy_routes = (
+        ("POST", "/v1/chunk/list"),
+        ("GET", "/v1/chunk/get"),
+        ("POST", "/v1/chunk/set"),
+        ("POST", "/v1/chunk/switch"),
+        ("POST", "/v1/chunk/rm"),
+        ("POST", "/v1/chunk/create"),
+    )
+    for method, path in legacy_routes:
+        assert (method, path) in routes
+
+    schema = client.app.openapi()
+    for method, path in legacy_routes:
+        assert schema["paths"][path][method.lower()]["deprecated"] is True
+
+    for method, path in (
+        ("PUT", f"{_CHUNK_ROUTE}/{{chunk_id}}"),
+        ("POST", f"{_CHUNK_ROUTE}/switch"),
+    ):
+        assert (method, path) not in routes
 
 
-def test_sdk_update_chunk_without_content_still_updates(client, monkeypatch):
-    """未提供 content 时不受空判影响，其余字段照常更新落库。"""
-    store = _stub_update_chain(client, monkeypatch)
+def test_chunk_routes_use_only_async_auth_and_db(client, route_dependency_calls):
+    import api.apps as api_apps
 
-    resp = client.put(f"{_SDK_CHUNKS}/c1", json={"available": False})
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["code"] == 0
-    ((chunk_ids, chunk_datas),) = store.upserts
-    assert chunk_ids == ["c1"]
-    assert chunk_datas[0]["available_int"] == 0
-    assert chunk_datas[0]["content_with_weight"] == "old content"
+    for method, path in (
+        ("GET", _CHUNK_ROUTE),
+        ("GET", f"{_CHUNK_ROUTE}/{{chunk_id}}"),
+        ("POST", _CHUNK_ROUTE),
+        ("DELETE", _CHUNK_ROUTE),
+        ("PATCH", f"{_CHUNK_ROUTE}/{{chunk_id}}"),
+        ("PATCH", _CHUNK_ROUTE),
+    ):
+        calls = route_dependency_calls(client.app, method, path)
+        assert get_db not in calls
+        assert api_apps.manager not in calls
+        assert async_current_tenant_id in calls
+        assert get_async_db in calls

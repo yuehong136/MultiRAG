@@ -34,7 +34,7 @@ async def filter_openapi_post(rule: FilterRule = Body(..., description="过滤�
     - paths: list[str]（必填）
       - 说明：要保留的路径集合。与 match 联合使用。
       - 示例：
-        - 精确：["/v1/system/status"]
+        - 精确：["/api/v1/system/status"]
         - 前缀：["/api/v1/"]
         - 通配：["/api/v1/*", "/v1/datasets/*"]
         - 正则：["^/api/v1/(files|datasets)/.*$"]

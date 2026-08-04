@@ -23,7 +23,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils.common import hash128
 from common import settings
 from common.config_utils import show_configs
-from common.constants import FileSource, TaskStatus
+from common.constants import FileSource
 from common.data_source import (
     AirtableConnector,
     AsanaConnector,
@@ -48,7 +48,7 @@ from common.data_source.confluence_connector import ConfluenceConnector
 from common.data_source.github.connector import GithubConnector
 from common.data_source.gitlab_connector import GitlabConnector
 from common.data_source.gmail_connector import GmailConnector
-from common.data_source.interfaces import CheckpointOutputWrapper
+from common.data_source.interfaces import CheckpointOutputWrapper, GenerateDocumentsOutput
 from common.data_source.models import ConnectorFailure, SeafileSyncScope
 from common.data_source.webdav_connector import WebDAVConnector
 from common.log_utils import init_root_logger
@@ -65,34 +65,48 @@ class SyncBase:
     def __init__(self, conf: dict) -> None:
         self.conf = conf
 
-    async def __call__(self, task: dict):
-        with db_connection() as db:
-            SyncLogsService.start(db, task["id"], task["connector_id"])
+    async def __call__(self, task: dict) -> None:
+        try:
+            with db_connection() as db:
+                SyncLogsService.start(db, task["id"], task["connector_id"])
 
-        async with task_limiter:
-            try:
-                await asyncio.wait_for(self._run_task_logic(task), timeout=task["timeout_secs"])
+            async with task_limiter:
+                checkpoint = await asyncio.wait_for(self._run_task_logic(task), timeout=task["timeout_secs"])
 
-            except TimeoutError:
-                msg = f"Task timeout after {task['timeout_secs']} seconds"
-                with db_connection() as db:
-                    SyncLogsService.update_by_id(db, task["id"], {"status": TaskStatus.FAIL, "error_msg": msg})
-                return
-
-            except Exception as ex:
-                msg = "\n".join(
-                    [
-                        "".join(traceback.format_exception_only(None, ex)).strip(),
-                        "".join(traceback.format_exception(None, ex, ex.__traceback__)).strip(),
-                    ]
+            with db_connection() as db:
+                SyncLogsService.complete_and_schedule_next(
+                    db,
+                    task["id"],
+                    task["connector_id"],
+                    task["kb_id"],
+                    checkpoint,
                 )
-                with db_connection() as db:
-                    SyncLogsService.update_by_id(db, task["id"], {"status": TaskStatus.FAIL, "full_exception_trace": msg, "error_msg": str(ex)})
-                return
-        with db_connection() as db:
-            SyncLogsService.schedule(db, task["connector_id"], task["kb_id"], task["poll_range_start"])
+        except TimeoutError:
+            self._mark_failed(task, f"Task timeout after {task['timeout_secs']} seconds")
+        except Exception as ex:
+            trace = "\n".join(
+                [
+                    "".join(traceback.format_exception_only(None, ex)).strip(),
+                    "".join(traceback.format_exception(None, ex, ex.__traceback__)).strip(),
+                ]
+            )
+            self._mark_failed(task, str(ex), trace)
 
-    async def _run_task_logic(self, task: dict):
+    @staticmethod
+    def _mark_failed(task: dict, error_msg: str, full_exception_trace: str = "") -> None:
+        try:
+            with db_connection() as db:
+                SyncLogsService.fail(
+                    db,
+                    task["id"],
+                    task["connector_id"],
+                    error_msg,
+                    full_exception_trace,
+                )
+        except Exception:
+            logging.exception("Failed to persist sync task failure: task_id=%s", task.get("id"))
+
+    async def _run_task_logic(self, task: dict) -> datetime:
         generate_output = await self._generate(task)
         if isinstance(generate_output, tuple):
             document_batch_generator, file_list = generate_output
@@ -166,13 +180,12 @@ class SyncBase:
         removed_info = f", {removed_docs} deleted" if file_list is not None else ""
         if failed_docs > 0:
             logging.info(f"{prefix}{doc_num} docs synchronized till {next_update} ({failed_docs} skipped{removed_info})")
+            raise RuntimeError(f"{failed_docs} document(s) failed during synchronization; checkpoint was not committed")
         else:
             logging.info(f"{prefix}{doc_num} docs synchronized till {next_update}{removed_info}")
-        with db_connection() as db:
-            SyncLogsService.done(db, task["id"], task["connector_id"])
-        task["poll_range_start"] = next_update
+        return next_update
 
-    async def _generate(self, task: dict):
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
         raise NotImplementedError
 
     def _get_source_prefix(self):
@@ -190,6 +203,7 @@ class _BlobLikeBase(SyncBase):
             bucket_name=self.conf["bucket_name"],
             prefix=self.conf.get("prefix", ""),
         )
+        self.connector.set_allow_images(self.conf.get("allow_images", False))
         self.connector.load_credentials(self.conf["credentials"])
 
         document_batch_generator = (
@@ -1348,6 +1362,14 @@ func_factory = {
 }
 
 
+async def _gather_connector_tasks(tasks: list[asyncio.Task[None]]) -> None:
+    """Wait for every connector task without letting one failure cancel its peers."""
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for result in results:
+        if isinstance(result, BaseException):
+            logging.error("Unhandled connector task failure", exc_info=(type(result), result, result.__traceback__))
+
+
 async def dispatch_tasks():
     while True:
         try:
@@ -1369,14 +1391,7 @@ async def dispatch_tasks():
             func = func_factory[task["source"]](task["config"])
             tasks.append(asyncio.create_task(func(task)))
 
-    try:
-        await asyncio.gather(*tasks, return_exceptions=False)
-    except Exception as e:
-        logging.error(f"Error in dispatch_tasks: {e}")
-        for t in tasks:
-            t.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        raise
+    await _gather_connector_tasks(tasks)
     await asyncio.sleep(1)
 
 
@@ -1417,7 +1432,11 @@ async def main():
 
     logging.info(f"MultiRAG data sync is ready after {time.time() - start_ts}s initialization.")
     while not stop_event.is_set():
-        await dispatch_tasks()
+        try:
+            await dispatch_tasks()
+        except Exception:
+            logging.exception("Data sync dispatch cycle failed; retrying")
+            await asyncio.sleep(3)
     logging.error("BUG!!! You should not reach here!!!")
 
 

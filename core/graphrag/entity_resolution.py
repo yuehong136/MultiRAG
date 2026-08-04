@@ -143,8 +143,13 @@ class EntityResolution(Extractor):
         connect_graph = nx.Graph()
         connect_graph.add_edges_from(resolution_result)
 
+        # merge 阶段必须完全串行：多个协程改的是同一张 networkx 图，
+        # _merge_graph_nodes 在遍历邻居的过程中还会 await，放并发就会撞上
+        # "dictionary keys changed during iteration"。semaphore（并发 5）只限流不互斥。
+        merge_lock = asyncio.Lock()
+
         async def limited_merge_nodes(graph, nodes, change):
-            async with semaphore:
+            async with merge_lock:
                 await self._merge_graph_nodes(graph, nodes, change, task_id)
 
         tasks = []

@@ -8,10 +8,10 @@
 
 import logging
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 
 from pydantic import BaseModel
-from sqlalchemy import cast, func, literal_column, select, text
+from sqlalchemy import case, cast, delete, func, literal_column, select, text, update
 from sqlalchemy.dialects.postgresql import INTERVAL as Interval
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import desc as sa_desc
@@ -29,12 +29,62 @@ from common.misc_utils import get_uuid
 logger = logging.getLogger(__name__)
 
 
+def _to_utc(value: datetime | None) -> datetime | None:
+    """Normalize connector timestamps at the persistence boundary.
+
+    A few upstream connectors still return naive datetimes.  RAGFlow treats
+    those values as UTC, so we keep that compatibility in one explicit place
+    while ensuring every value persisted by the sync service is timezone-aware.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 class ConnectorService(CommonService):
     """
     数据源连接器服务类，提供连接器的CRUD操作。
     """
 
     model = Connector
+
+    @classmethod
+    def accessible(cls, db: Session, connector_id: str, user_id: str) -> bool:
+        """判断用户能否访问该连接器。
+
+        连接器的 config 里存着数据源凭证（Google/Box 的 OAuth token 等），按 id 直取
+        必须先过这一关，否则任意登录用户都能读走别人的凭证。
+
+        Args:
+            db: 数据库会话
+            connector_id: 连接器ID
+            user_id: 当前用户ID
+
+        Returns:
+            属于本人租户或本人已加入该租户时为 True
+        """
+        connector = cls.get_by_id(db, connector_id)
+        if not connector:
+            logger.warning("connector access denied: connector not found connector_id=%s user_id=%s", connector_id, user_id)
+            return False
+
+        if connector.tenant_id == user_id:
+            return True
+
+        from api.db.services.user_service import UserTenantService
+
+        role = UserTenantService.get_role_in_tenant(db, user_id=user_id, tenant_id=connector.tenant_id)
+        has_access = UserTenantService.can_access_tenant_resources(role)
+        if not has_access:
+            logger.warning(
+                "connector access denied: tenant mismatch connector_id=%s user_id=%s tenant_id=%s",
+                connector_id,
+                user_id,
+                connector.tenant_id,
+            )
+        return has_access
 
     @classmethod
     def resume(cls, db: Session, connector_id: str, status: str):
@@ -264,8 +314,11 @@ class SyncLogsService(CommonService):
             task_id: 任务ID
             connector_id: 连接器ID
         """
-        cls.update_by_id(db, task_id, {"status": TaskStatus.RUNNING, "time_started": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
-        ConnectorService.update_by_id(db, connector_id, {"status": TaskStatus.RUNNING})
+        now = datetime.now(UTC)
+        timestamp = cls.current_timestamp()
+        db.execute(update(cls.model).where(cls.model.id == task_id).values(status=TaskStatus.RUNNING, time_started=now, update_date=now, update_time=timestamp))
+        db.execute(update(Connector).where(Connector.id == connector_id).values(status=TaskStatus.RUNNING, update_date=now, update_time=timestamp))
+        db.commit()
 
     @classmethod
     def done(cls, db: Session, task_id: str, connector_id: str):
@@ -277,11 +330,41 @@ class SyncLogsService(CommonService):
             task_id: 任务ID
             connector_id: 连接器ID
         """
-        cls.update_by_id(db, task_id, {"status": TaskStatus.DONE})
-        ConnectorService.update_by_id(db, connector_id, {"status": TaskStatus.DONE})
+        now = datetime.now(UTC)
+        timestamp = cls.current_timestamp()
+        db.execute(update(cls.model).where(cls.model.id == task_id).values(status=TaskStatus.DONE, update_date=now, update_time=timestamp))
+        db.execute(update(Connector).where(Connector.id == connector_id).values(status=TaskStatus.DONE, update_date=now, update_time=timestamp))
+        db.commit()
 
     @classmethod
-    def schedule(cls, db: Session, connector_id: str, kb_id: str, poll_range_start: str | None = None, reindex: bool = False, total_docs_indexed: int = 0):
+    def fail(cls, db: Session, task_id: str, connector_id: str, error_msg: str, full_exception_trace: str = "") -> None:
+        """Fail a sync task and its connector in one transaction."""
+        now = datetime.now(UTC)
+        timestamp = cls.current_timestamp()
+        db.execute(
+            update(cls.model)
+            .where(cls.model.id == task_id)
+            .values(
+                status=TaskStatus.FAIL,
+                error_msg=error_msg,
+                full_exception_trace=full_exception_trace,
+                update_date=now,
+                update_time=timestamp,
+            )
+        )
+        db.execute(update(Connector).where(Connector.id == connector_id).values(status=TaskStatus.FAIL, update_date=now, update_time=timestamp))
+        db.commit()
+
+    @classmethod
+    def schedule(
+        cls,
+        db: Session,
+        connector_id: str,
+        kb_id: str,
+        poll_range_start: datetime | None = None,
+        reindex: bool = False,
+        total_docs_indexed: int = 0,
+    ) -> SyncLogs | None:
         """
         调度同步任务
 
@@ -293,60 +376,84 @@ class SyncLogsService(CommonService):
             reindex: 是否重新索引
             total_docs_indexed: 已索引文档总数
         """
-        try:
-            if cls.query_count(db, kb_id=kb_id, connector_id=connector_id) > 100:
-                rm_objs = cls.query(db, kb_id=kb_id, connector_id=connector_id, order_by="update_time", desc=False, limit=70)
-                rm_ids = [m.id for m in rm_objs]
-                deleted = cls.delete_by_ids(db, rm_ids)
-                logger.info(f"[SyncLogService] Cleaned {deleted} old logs.")
-        except Exception as e:
-            logger.exception(e)
+        poll_range_start = _to_utc(poll_range_start)
+        log_count = db.scalar(select(func.count()).select_from(cls.model).where(cls.model.kb_id == kb_id, cls.model.connector_id == connector_id)) or 0
+        if log_count > 100:
+            old_ids = list(db.scalars(select(cls.model.id).where(cls.model.kb_id == kb_id, cls.model.connector_id == connector_id).order_by(cls.model.update_time.asc()).limit(70)))
+            if old_ids:
+                deleted = db.execute(delete(cls.model).where(cls.model.id.in_(old_ids))).rowcount
+                logger.info("[SyncLogService] Cleaned %s old logs.", deleted)
 
-        try:
-            # 检查是否已有调度中的任务
-            existing = cls.query(db, kb_id=kb_id, connector_id=connector_id, status=TaskStatus.SCHEDULE)
-            if existing:
-                logger.warning(f"{kb_id}--{connector_id} 已有调度中的同步任务，这是异常情况。")
-                return None
-
-            reindex_flag = "1" if reindex else "0"
-            ConnectorService.update_by_id(db, connector_id, {"status": TaskStatus.SCHEDULE})
-            return cls.insert(
-                db,
-                **{
-                    "id": get_uuid(),
-                    "kb_id": kb_id,
-                    "status": TaskStatus.SCHEDULE,
-                    "connector_id": connector_id,
-                    "poll_range_start": poll_range_start,
-                    "from_beginning": reindex_flag,
-                    "total_docs_indexed": total_docs_indexed,
-                },
+        existing = db.scalar(
+            select(cls.model.id).where(
+                cls.model.kb_id == kb_id,
+                cls.model.connector_id == connector_id,
+                cls.model.status == TaskStatus.SCHEDULE,
             )
-        except Exception as e:
-            logger.exception(f"调度同步任务失败: {e}")
-            task = cls.get_latest_task(db, connector_id, kb_id)
-            if task:
-                # 更新已有任务的状态
-                update_data = {
-                    "status": TaskStatus.SCHEDULE,
-                    "poll_range_start": poll_range_start,
-                }
-                # 追加错误信息
-                if task.error_msg:
-                    update_data["error_msg"] = task.error_msg + str(e)
-                else:
-                    update_data["error_msg"] = str(e)
-                if task.full_exception_trace:
-                    update_data["full_exception_trace"] = task.full_exception_trace + str(e)
-                else:
-                    update_data["full_exception_trace"] = str(e)
+        )
+        if existing:
+            logger.warning("%s--%s already has a scheduled sync task.", kb_id, connector_id)
+            db.rollback()
+            return None
 
-                cls.filter_update(db, [cls.model.id == task.id], update_data)
-                ConnectorService.update_by_id(db, connector_id, {"status": TaskStatus.SCHEDULE})
+        now = datetime.now(UTC)
+        timestamp = cls.current_timestamp()
+        task = cls.model(
+            id=get_uuid(),
+            kb_id=kb_id,
+            status=TaskStatus.SCHEDULE,
+            connector_id=connector_id,
+            poll_range_start=poll_range_start,
+            from_beginning="1" if reindex else "0",
+            total_docs_indexed=total_docs_indexed,
+        )
+        db.add(task)
+        db.execute(update(Connector).where(Connector.id == connector_id).values(status=TaskStatus.SCHEDULE, update_date=now, update_time=timestamp))
+        db.commit()
+        db.refresh(task)
+        return task
 
     @classmethod
-    def increase_docs(cls, db: Session, task_id: str, max_update: str, doc_num: int, err_msg: str = "", error_count: int = 0):
+    def complete_and_schedule_next(
+        cls,
+        db: Session,
+        task_id: str,
+        connector_id: str,
+        kb_id: str,
+        checkpoint: datetime,
+    ) -> str:
+        """Commit task completion, its checkpoint, and the next task atomically."""
+        checkpoint = _to_utc(checkpoint)
+        if checkpoint is None:
+            raise ValueError("A completed sync task requires a checkpoint")
+
+        current = db.scalar(select(cls.model).where(cls.model.id == task_id).with_for_update())
+        if current is None:
+            raise RuntimeError(f"Sync task {task_id} no longer exists")
+
+        now = datetime.now(UTC)
+        timestamp = cls.current_timestamp()
+        current.status = TaskStatus.DONE
+        current.poll_range_end = checkpoint
+        current.update_date = now
+        current.update_time = timestamp
+
+        next_task = cls.model(
+            id=get_uuid(),
+            kb_id=kb_id,
+            status=TaskStatus.SCHEDULE,
+            connector_id=connector_id,
+            poll_range_start=checkpoint,
+            from_beginning="0",
+            total_docs_indexed=current.total_docs_indexed,
+        )
+        db.add(next_task)
+        db.execute(update(Connector).where(Connector.id == connector_id).values(status=TaskStatus.SCHEDULE, update_date=now, update_time=timestamp))
+        db.commit()
+        return next_task.id
+
+    @classmethod
+    def increase_docs(cls, db: Session, task_id: str, max_update: datetime, doc_num: int, err_msg: str = "", error_count: int = 0) -> int:
         """
         增加已索引文档数量
 
@@ -358,36 +465,36 @@ class SyncLogsService(CommonService):
             err_msg: 错误消息
             error_count: 错误计数
         """
-        # 获取当前任务
-        task = cls.get_by_id(db, task_id)
-        if not task:
-            return None
+        max_update = _to_utc(max_update)
+        if max_update is None:
+            raise ValueError("A synchronized document batch requires max_update")
 
-        # 计算新的 poll_range_start，保持游标单调前移，避免边界附近的更新被漏掉
-        if task.poll_range_start:
-            new_poll_range_start = max(task.poll_range_start, max_update) if max_update else task.poll_range_start
-        else:
-            new_poll_range_start = max_update
-
-        # 计算新的 poll_range_end
-        if task.poll_range_end:
-            new_poll_range_end = max(task.poll_range_end, max_update) if max_update else task.poll_range_end
-        else:
-            new_poll_range_end = max_update
-
-        update_data = {
-            "new_docs_indexed": task.new_docs_indexed + doc_num,
-            "total_docs_indexed": task.total_docs_indexed + doc_num,
-            "poll_range_start": new_poll_range_start,
-            "poll_range_end": new_poll_range_end,
-            "error_count": task.error_count + error_count,
-        }
-
-        # 追加错误信息
-        if err_msg:
-            update_data["error_msg"] = (task.error_msg or "") + err_msg
-
-        cls.update_by_id(db, task_id, update_data)
+        monotonic_start = case(
+            (cls.model.poll_range_start.is_(None), max_update),
+            (cls.model.poll_range_start < max_update, max_update),
+            else_=cls.model.poll_range_start,
+        )
+        monotonic_end = case(
+            (cls.model.poll_range_end.is_(None), max_update),
+            (cls.model.poll_range_end < max_update, max_update),
+            else_=cls.model.poll_range_end,
+        )
+        result = db.execute(
+            update(cls.model)
+            .where(cls.model.id == task_id)
+            .values(
+                new_docs_indexed=cls.model.new_docs_indexed + doc_num,
+                total_docs_indexed=cls.model.total_docs_indexed + doc_num,
+                poll_range_start=monotonic_start,
+                poll_range_end=monotonic_end,
+                error_msg=func.coalesce(cls.model.error_msg, "") + err_msg,
+                error_count=cls.model.error_count + error_count,
+                update_time=cls.current_timestamp(),
+                update_date=datetime.now(UTC),
+            )
+        )
+        db.commit()
+        return result.rowcount
 
     @classmethod
     def increase_removed_docs(
@@ -397,22 +504,23 @@ class SyncLogsService(CommonService):
         removed_count: int,
         err_msg: str = "",
         error_count: int = 0,
-    ):
+    ) -> int:
         """
         增加从索引中移除的文档数量。
         """
-        task = cls.get_by_id(db, task_id)
-        if not task:
-            return None
-
-        update_data = {
-            "docs_removed_from_index": (task.docs_removed_from_index or 0) + removed_count,
-            "error_count": (task.error_count or 0) + error_count,
-        }
-        if err_msg:
-            update_data["error_msg"] = (task.error_msg or "") + err_msg
-
-        cls.update_by_id(db, task_id, update_data)
+        result = db.execute(
+            update(cls.model)
+            .where(cls.model.id == task_id)
+            .values(
+                docs_removed_from_index=cls.model.docs_removed_from_index + removed_count,
+                error_msg=func.coalesce(cls.model.error_msg, "") + err_msg,
+                error_count=cls.model.error_count + error_count,
+                update_time=cls.current_timestamp(),
+                update_date=datetime.now(UTC),
+            )
+        )
+        db.commit()
+        return result.rowcount
 
     @classmethod
     def duplicate_and_parse(cls, db: Session, kb, docs: list, tenant_id, src: str, auto_parse=True):
@@ -494,7 +602,7 @@ class Connector2KbService(CommonService):
     @classmethod
     def link_connectors(cls, db: Session, kb_id: str, connectors: list[dict], tenant_id: str) -> str:
         """
-        关联连接器到知识库（与 link_kb 相反的方向）
+        关联连接器到知识库
 
         Args:
             db: 数据库会话
@@ -506,40 +614,61 @@ class Connector2KbService(CommonService):
             错误信息（如果有）
         """
         # 获取现有关联
-        arr = cls.query(db, kb_id=kb_id)
-        old_conn_ids = [a.connector_id for a in arr]
+        old_conn_ids = [a.connector_id for a in cls.query(db, kb_id=kb_id)]
 
-        # 添加新关联
+        # 添加或更新传入的关联
         connector_ids = []
         for conn in connectors:
             conn_id = conn["id"]
             connector_ids.append(conn_id)
-            if conn_id in old_conn_ids:
-                cls.filter_update(db, [cls.model.connector_id == conn_id, cls.model.kb_id == kb_id], {"auto_parse": conn.get("auto_parse", "1")})
-                continue
-            cls.insert(db, **{"id": get_uuid(), "connector_id": conn_id, "kb_id": kb_id, "auto_parse": conn.get("auto_parse", "1")})
-            SyncLogsService.schedule(db, conn_id, kb_id, reindex=True)
+            cls.link_connector(db, kb_id, conn_id, conn.get("auto_parse", "1"))
 
         # 删除不再需要的关联
-        errs = []
         for conn_id in old_conn_ids:
             if conn_id in connector_ids:
                 continue
+            cls.unlink_connector(db, kb_id, conn_id)
 
-            # 删除关联
-            cls.filter_delete(db, [cls.model.kb_id == kb_id, cls.model.connector_id == conn_id])
+        return ""
 
-            # 获取连接器信息
-            conn = ConnectorService.get_by_id(db, conn_id)
-            if not conn:
-                continue
+    @classmethod
+    def link_connector(cls, db: Session, kb_id: str, connector_id: str, auto_parse: str = "1") -> None:
+        """关联单个连接器到知识库；已关联时只更新 auto_parse（幂等）。
 
-            # 取消调度中或运行中的同步任务（不删除已同步的文档）
-            SyncLogsService.filter_update(
-                db, [SyncLogs.connector_id == conn_id, SyncLogs.kb_id == kb_id, SyncLogs.status.in_([TaskStatus.SCHEDULE, TaskStatus.RUNNING])], {"status": TaskStatus.CANCEL}
-            )
+        Args:
+            db: 数据库会话
+            kb_id: 知识库ID
+            connector_id: 连接器ID
+            auto_parse: 是否自动解析（"0" / "1"）
+        """
+        if cls.query(db, kb_id=kb_id, connector_id=connector_id):
+            cls.filter_update(db, [cls.model.connector_id == connector_id, cls.model.kb_id == kb_id], {"auto_parse": auto_parse})
+            return
 
-        return "\n".join(errs)
+        cls.insert(db, **{"id": get_uuid(), "connector_id": connector_id, "kb_id": kb_id, "auto_parse": auto_parse})
+        SyncLogsService.schedule(db, connector_id, kb_id, reindex=True)
+
+    @classmethod
+    def unlink_connector(cls, db: Session, kb_id: str, connector_id: str) -> None:
+        """解除单个连接器与知识库的关联。
+
+        取消调度中/运行中的同步任务，但不删除已同步入库的文档。
+
+        Args:
+            db: 数据库会话
+            kb_id: 知识库ID
+            connector_id: 连接器ID
+        """
+        cls.filter_delete(db, [cls.model.kb_id == kb_id, cls.model.connector_id == connector_id])
+
+        if not ConnectorService.get_by_id(db, connector_id):
+            return
+
+        SyncLogsService.filter_update(
+            db,
+            [SyncLogs.connector_id == connector_id, SyncLogs.kb_id == kb_id, SyncLogs.status.in_([TaskStatus.SCHEDULE, TaskStatus.RUNNING])],
+            {"status": TaskStatus.CANCEL},
+        )
 
     @classmethod
     def list_connectors(cls, db: Session, kb_id: str) -> list[dict]:
@@ -561,52 +690,3 @@ class Connector2KbService(CommonService):
         )
         rows = db.execute(stmt).mappings().all()
         return [dict(row) for row in rows]
-
-    @classmethod
-    def link_kb(cls, db: Session, conn_id: str, kb_ids: list[str], tenant_id: str) -> str:
-        """
-        关联连接器与知识库
-
-        Args:
-            db: 数据库会话
-            conn_id: 连接器ID
-            kb_ids: 知识库ID列表
-            tenant_id: 租户ID
-
-        Returns:
-            错误信息（如果有）
-        """
-        # 获取现有关联
-        arr = cls.query(db, connector_id=conn_id)
-        old_kb_ids = [a.kb_id for a in arr]
-
-        # 添加新关联
-        for kb_id in kb_ids:
-            if kb_id in old_kb_ids:
-                continue
-            cls.insert(db, **{"id": get_uuid(), "connector_id": conn_id, "kb_id": kb_id})
-            SyncLogsService.schedule(db, conn_id, kb_id, reindex=True)
-
-        # 删除不再需要的关联
-        errs = []
-        conn = ConnectorService.get_by_id(db, conn_id)
-        if not conn:
-            return "连接器不存在"
-
-        for kb_id in old_kb_ids:
-            if kb_id in kb_ids:
-                continue
-
-            # 删除关联
-            cls.filter_delete(db, [cls.model.kb_id == kb_id, cls.model.connector_id == conn_id])
-
-            # 取消调度中的同步任务
-            SyncLogsService.filter_update(db, [SyncLogs.connector_id == conn_id, SyncLogs.kb_id == kb_id, SyncLogs.status == TaskStatus.SCHEDULE], {"status": TaskStatus.CANCEL})
-
-            # 删除相关文档
-            docs = DocumentService.query(db, source_type=f"{conn.source}/{conn.id}")
-            err = FileService.delete_docs(db, [d.id for d in docs], tenant_id)
-            if err:
-                errs.append(err)
-
-        return "\n".join(errs)

@@ -50,6 +50,13 @@ def get_model_config_by_type_and_name(
                 "mdl_type": LLMType.EMBEDDING.value,
                 "max_tokens": embedding_cfg.get("max_tokens", 8192),
             }
+        elif model_type_value == LLMType.CHAT.value:
+            model_config = TenantLLMService.get_api_key(db, tenant_id, pure_model_name, LLMType.CHAT.value)
+            if not model_config:
+                model_config = TenantLLMService.get_api_key(db, tenant_id, pure_model_name, LLMType.IMAGE2TEXT.value)
+            if not model_config:
+                raise LookupError(f"Tenant Model with name {model_name} and type {model_type_value} not found")
+            config_dict = model_config.to_dict()
         else:
             model_config = TenantLLMService.get_api_key(db, tenant_id, pure_model_name, model_type_value)
             if not model_config:
@@ -60,7 +67,7 @@ def get_model_config_by_type_and_name(
 
     config_model_type = config_dict.get("mdl_type") or config_dict.get("model_type")
     config_model_type = config_model_type.value if hasattr(config_model_type, "value") else config_model_type
-    if config_model_type != model_type_value:
+    if config_model_type != model_type_value and not (model_type_value == LLMType.CHAT.value and config_model_type == LLMType.IMAGE2TEXT.value):
         raise LookupError(f"Tenant Model with name {model_name} has type {config_model_type}, expected {model_type_value}")
 
     pure_model_name, fid = TenantLLMService.split_model_name_and_factory(config_dict["llm_name"])

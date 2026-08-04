@@ -138,7 +138,9 @@ func (r *StreamMessageResponse) SetOutputFormat(format OutputFormat) {
 }
 
 func (r *StreamMessageResponse) PrintOut() {
-	if r.Code != 0 {
+	if r.Code == 0 {
+		fmt.Printf("Time: %f\n", r.Duration)
+	} else {
 		fmt.Println("ERROR")
 		fmt.Printf("%d, %s\n", r.Code, r.Message)
 	}

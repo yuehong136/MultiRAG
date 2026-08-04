@@ -7,7 +7,7 @@ from typing import Any
 
 from common.data_source.config import BLOB_STORAGE_SIZE_THRESHOLD, INDEX_BATCH_SIZE, BlobType, DocumentSource
 from common.data_source.exceptions import ConnectorMissingCredentialError, ConnectorValidationError, CredentialExpiredError, InsufficientPermissionsError
-from common.data_source.interfaces import LoadConnector, PollConnector
+from common.data_source.interfaces import LoadConnector, OnyxExtensionType, PollConnector
 from common.data_source.models import Document, GenerateDocumentsOutput, SecondsSinceUnixEpoch
 from common.data_source.utils import (
     create_s3_client,
@@ -15,6 +15,7 @@ from common.data_source.utils import (
     download_object,
     extract_size_bytes,
     get_file_ext,
+    is_accepted_file_ext,
 )
 
 
@@ -108,15 +109,23 @@ class BlobStorageConnector(LoadConnector, PollConnector):
 
         # Collect all objects first to count filename occurrences
         all_objects = []
+        extension_type = OnyxExtensionType.Plain | OnyxExtensionType.Document
+        if bool(self._allow_images):
+            extension_type |= OnyxExtensionType.Multimedia
         for page in pages:
             if "Contents" not in page:
                 continue
             for obj in page["Contents"]:
-                if obj["Key"].endswith("/"):
+                key = obj["Key"]
+                if key.endswith("/"):
                     continue
                 last_modified = obj["LastModified"].replace(tzinfo=UTC)
-                if start < last_modified <= end:
-                    all_objects.append(obj)
+                if not (start < last_modified <= end):
+                    continue
+                file_name = os.path.basename(key)
+                if not is_accepted_file_ext(get_file_ext(file_name), extension_type):
+                    continue
+                all_objects.append(obj)
 
         # Count filename occurrences to determine which need full paths
         filename_counts: dict[str, int] = {}

@@ -9,6 +9,8 @@
    _score，丢失即静默退化为 0 分/全量过滤，不报任何错误。
 """
 
+from types import SimpleNamespace
+
 from core.utils.es_conn import ESConnection
 
 
@@ -77,3 +79,48 @@ def test_source_value_wins_over_fields_response() -> None:
 
 def test_empty_fields_returns_empty() -> None:
     assert _conn().get_fields(_res(_hit("doc1", {"x": 1})), []) == {}
+
+
+def _captured_search_query(condition: dict) -> dict:
+    conn = _conn()
+    captured: dict = {}
+    conn.logger = SimpleNamespace(debug=lambda *_args, **_kwargs: None)
+
+    def fake_search(_index_names, query, *, track_total_hits):
+        captured.update(query)
+        assert track_total_hits is True
+        return {"hits": {"hits": []}}
+
+    conn._es_search_once = fake_search
+    conn.search([], [], condition, [], None, 0, 10, "tenant", ["kb1"])
+    return captured
+
+
+def test_search_id_list_matches_source_and_metadata_ids() -> None:
+    query = _captured_search_query({"id": ["chunk-1", "chunk-2"]})
+
+    filters = query["query"]["bool"]["filter"]
+    assert {
+        "bool": {
+            "minimum_should_match": 1,
+            "should": [
+                {"terms": {"id": ["chunk-1", "chunk-2"]}},
+                {"terms": {"_id": ["chunk-1", "chunk-2"]}},
+            ],
+        }
+    } in filters
+
+
+def test_search_scalar_id_matches_source_and_metadata_ids() -> None:
+    query = _captured_search_query({"id": "chunk-1"})
+
+    filters = query["query"]["bool"]["filter"]
+    assert {
+        "bool": {
+            "minimum_should_match": 1,
+            "should": [
+                {"term": {"id": "chunk-1"}},
+                {"term": {"_id": "chunk-1"}},
+            ],
+        }
+    } in filters

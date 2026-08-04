@@ -1313,14 +1313,11 @@ func (p *Parser) parseChatCommand() (*Command, error) {
 	var modelName string
 	var message string
 
-	// Check if we have a quoted string that looks like a model identifier (contains two slashes)
-	// Format: 'provider/instance/model' or just 'message'
+	// Format: 'model@instance@provider' or just 'message'.
 	if p.curToken.Type == TokenQuotedString {
 		firstArg := p.curToken.Value
 
-		// Check if it looks like a model identifier (contains exactly 2 slashes)
-		slashCount := strings.Count(firstArg, "/")
-		if slashCount == 2 {
+		if strings.Count(firstArg, "@") == 2 {
 			// This is likely a model identifier, expect another quoted string for message
 			modelName = firstArg
 			p.nextToken()
@@ -1344,6 +1341,37 @@ func (p *Parser) parseChatCommand() (*Command, error) {
 		return nil, fmt.Errorf("expected model name (quoted string) or message")
 	}
 
+	effort := "default"
+	verbosity := "low"
+	if p.curToken.Type == TokenWith {
+		p.nextToken()
+		switch p.curToken.Type {
+		case TokenEffort:
+			p.nextToken()
+			effortLevels := map[int]string{
+				TokenNone: "none", TokenMinimal: "minimal", TokenLow: "low",
+				TokenMedium: "medium", TokenHigh: "high", TokenMax: "max",
+			}
+			level, ok := effortLevels[p.curToken.Type]
+			if !ok {
+				return nil, fmt.Errorf("invalid effort level")
+			}
+			effort = level
+			p.nextToken()
+		case TokenVerbosity:
+			p.nextToken()
+			verbosityLevels := map[int]string{TokenLow: "low", TokenMedium: "medium", TokenHigh: "high"}
+			level, ok := verbosityLevels[p.curToken.Type]
+			if !ok {
+				return nil, fmt.Errorf("invalid verbosity level")
+			}
+			verbosity = level
+			p.nextToken()
+		default:
+			return nil, fmt.Errorf("expected EFFORT or VERBOSITY")
+		}
+	}
+
 	// Semicolon is optional
 	if p.curToken.Type == TokenSemicolon {
 		p.nextToken()
@@ -1356,6 +1384,8 @@ func (p *Parser) parseChatCommand() (*Command, error) {
 	cmd.Params["message"] = message
 	cmd.Params["thinking"] = false
 	cmd.Params["stream"] = false
+	cmd.Params["effort"] = effort
+	cmd.Params["verbosity"] = verbosity
 	return cmd, nil
 }
 
@@ -1401,10 +1431,10 @@ func (p *Parser) parseUseCommand() (*Command, error) {
 	}
 	p.nextToken() // consume MODEL
 
-	// Parse model identifier in format 'provider/instance/model'
+	// Parse model identifier in format 'model@instance@provider'.
 	modelIdentifier, err := p.parseQuotedString()
 	if err != nil {
-		return nil, fmt.Errorf("expected model identifier in format 'provider/instance/model': %w", err)
+		return nil, fmt.Errorf("expected model identifier in format 'model@instance@provider': %w", err)
 	}
 	p.nextToken()
 
@@ -1415,6 +1445,36 @@ func (p *Parser) parseUseCommand() (*Command, error) {
 
 	cmd := NewCommand("use_model")
 	cmd.Params["model_identifier"] = modelIdentifier
+	return cmd, nil
+}
+
+func (p *Parser) parseCheckCommand() (*Command, error) {
+	p.nextToken() // consume CHECK
+	if p.curToken.Type != TokenInstance {
+		return nil, fmt.Errorf("expected INSTANCE after CHECK")
+	}
+	p.nextToken()
+	instanceName, err := p.parseQuotedString()
+	if err != nil {
+		return nil, fmt.Errorf("expected instance name after INSTANCE: %w", err)
+	}
+	p.nextToken()
+	if p.curToken.Type != TokenFrom {
+		return nil, fmt.Errorf("expected FROM after instance name")
+	}
+	p.nextToken()
+	providerName, err := p.parseQuotedString()
+	if err != nil {
+		return nil, fmt.Errorf("expected provider name after FROM: %w", err)
+	}
+	p.nextToken()
+	if err = p.expectSemicolon(); err != nil {
+		return nil, err
+	}
+
+	cmd := NewCommand("check_provider_connection")
+	cmd.Params["provider_name"] = providerName
+	cmd.Params["instance_name"] = instanceName
 	return cmd, nil
 }
 

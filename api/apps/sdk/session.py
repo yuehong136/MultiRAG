@@ -186,7 +186,6 @@ class CreateAgentSessionRequest(BaseModel):
     release: bool = False
 
 
-@router.post("/agents/{agent_id}/sessions", summary="创建代理会话")
 def create_agent_session(agent_id: str, request_body: CreateAgentSessionRequest = None, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
     user_id = (request_body.user_id if request_body and request_body.user_id else None) or tenant_id
     release_mode = request_body.release if request_body else False
@@ -565,7 +564,6 @@ async def chat_completion_openai_like(
         return response
 
 
-@router.post("/agents_openai/{agent_id}/chat/completions", summary="代理OpenAI兼容补全")
 async def agents_completion_openai_compatibility(agent_id: str, request: ChatCompletionOpenAIRequest, db: AsyncSession = Depends(get_async_db), tenant_id: str = Depends(async_token_required)):
     req = request.model_dump()
     messages = req.get("messages", [])
@@ -621,7 +619,6 @@ async def agents_completion_openai_compatibility(agent_id: str, request: ChatCom
             return response
 
 
-@router.post("/agents/{agent_id}/completions", summary="代理补全")
 async def agent_completions(agent_id: str, request: AgentCompletionRequest, db: AsyncSession = Depends(get_async_db), tenant_id: str = Depends(async_token_required)):
     req = request.model_dump()
     return_trace = bool(req.get("return_trace", False))
@@ -706,7 +703,6 @@ async def agent_completions(agent_id: str, request: AgentCompletionRequest, db: 
     return get_result(data=final_ans)
 
 
-@router.get("/agents/{agent_id}/sessions", summary="获取代理会话列表")
 def list_agent_sessions(
     agent_id: str,
     id: str | None = Query(None),

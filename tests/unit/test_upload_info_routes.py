@@ -88,7 +88,7 @@ def test_file_api_upload_info_rejects_file_plus_url(client, upload_info_stub):
 def test_canvas_upload_shape(client, upload_info_stub, monkeypatch):
     monkeypatch.setattr(UserCanvasService, "get_by_canvas_id", classmethod(lambda cls, s, cid: (True, {"user_id": "owner-1"})))
 
-    resp = client.post("/v1/canvas/upload/c1", files={"file": ("b.txt", b"data", "text/plain")})
+    resp = client.post("/api/v1/agents/c1/upload", files={"file": ("b.txt", b"data", "text/plain")})
 
     assert resp.status_code == 200
     body = resp.json()
@@ -100,7 +100,7 @@ def test_canvas_upload_shape(client, upload_info_stub, monkeypatch):
 def test_canvas_upload_missing_canvas_shape(client, upload_info_stub, monkeypatch):
     monkeypatch.setattr(UserCanvasService, "get_by_canvas_id", classmethod(lambda cls, s, cid: (False, None)))
 
-    resp = client.post("/v1/canvas/upload/missing", files={"file": ("b.txt", b"data", "text/plain")})
+    resp = client.post("/api/v1/agents/missing/upload", files={"file": ("b.txt", b"data", "text/plain")})
 
     assert resp.status_code == 200
     body = resp.json()

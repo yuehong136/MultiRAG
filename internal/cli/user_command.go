@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 // PingServer pings the server to check if it's alive.
@@ -1291,11 +1292,11 @@ func (c *MultiRAGClient) ChatToModel(cmd *Command) (ResponseIf, error) {
 
 	var providerName, instanceName, modelName string
 	if compositeModelName, ok := cmd.Params["model_name"].(string); ok && compositeModelName != "" {
-		names := strings.Split(compositeModelName, "/")
+		names := strings.Split(compositeModelName, "@")
 		if len(names) != 3 {
-			return nil, fmt.Errorf("model name must be in format 'provider/instance/model'")
+			return nil, fmt.Errorf("model name must be in format 'model@instance@provider'")
 		}
-		providerName, instanceName, modelName = names[0], names[1], names[2]
+		modelName, instanceName, providerName = names[0], names[1], names[2]
 	} else if c.CurrentModel != nil {
 		providerName = c.CurrentModel.Provider
 		instanceName = c.CurrentModel.Instance
@@ -1307,11 +1308,23 @@ func (c *MultiRAGClient) ChatToModel(cmd *Command) (ResponseIf, error) {
 	message := cmd.Params["message"].(string)
 	thinking, _ := cmd.Params["thinking"].(bool)
 	stream, _ := cmd.Params["stream"].(bool)
-	url := fmt.Sprintf("/providers/%s/instances/%s/models/%s", providerName, instanceName, modelName)
-	payload := map[string]interface{}{"message": message, "stream": stream, "thinking": thinking}
+	effort, _ := cmd.Params["effort"].(string)
+	verbosity, _ := cmd.Params["verbosity"].(string)
+	url := fmt.Sprintf("/providers/%s/instances/%s/models", providerName, instanceName)
+	payload := map[string]interface{}{
+		"model_name": modelName,
+		"message":    message,
+		"stream":     stream,
+		"thinking":   thinking,
+	}
+	if thinking {
+		payload["effort"] = effort
+		payload["verbosity"] = verbosity
+	}
 
 	if stream {
-		reader, duration, err := c.HTTPClient.RequestStream("POST", url, true, "web", nil, payload)
+		startTime := time.Now()
+		reader, err := c.HTTPClient.RequestStream("POST", url, true, "web", nil, payload)
 		if err != nil {
 			return nil, fmt.Errorf("failed to chat model: %w", err)
 		}
@@ -1329,6 +1342,7 @@ func (c *MultiRAGClient) ChatToModel(cmd *Command) (ResponseIf, error) {
 					if reasoningPrint {
 						fmt.Print("Thinking: ")
 						reasoningPrint = false
+						thinking = true
 					}
 					fmt.Print(data)
 					_ = os.Stdout.Sync()
@@ -1354,6 +1368,7 @@ func (c *MultiRAGClient) ChatToModel(cmd *Command) (ResponseIf, error) {
 				return nil, fmt.Errorf("chat error: received error event from server")
 			}
 		}
+		duration := time.Since(startTime).Seconds()
 		if err := scanner.Err(); err != nil {
 			return nil, fmt.Errorf("error reading stream: %w", err)
 		}
@@ -1378,6 +1393,41 @@ func (c *MultiRAGClient) ChatToModel(cmd *Command) (ResponseIf, error) {
 	return &result, nil
 }
 
+func (c *MultiRAGClient) CheckProviderConnection(cmd *Command) (ResponseIf, error) {
+	if c.HTTPClient.APIKey == "" && c.HTTPClient.LoginToken == "" {
+		return nil, fmt.Errorf("API token not set. Please login first")
+	}
+	if c.ServerType != "user" {
+		return nil, fmt.Errorf("this command is only allowed in USER mode")
+	}
+	instanceName, ok := cmd.Params["instance_name"].(string)
+	if !ok || instanceName == "" {
+		return nil, fmt.Errorf("instance name not provided")
+	}
+	providerName, ok := cmd.Params["provider_name"].(string)
+	if !ok || providerName == "" {
+		return nil, fmt.Errorf("provider name not provided")
+	}
+
+	url := fmt.Sprintf("/providers/%s/instances/%s/connection", providerName, instanceName)
+	resp, err := c.HTTPClient.Request(http.MethodGet, url, true, "web", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check provider connection: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to check provider connection: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	}
+	var result SimpleResponse
+	if err = json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("check provider connection failed: invalid JSON (%w)", err)
+	}
+	if result.Code != 0 {
+		return nil, fmt.Errorf("%s", result.Message)
+	}
+	result.Duration = 0
+	return &result, nil
+}
+
 // UseModel sets the current model for chat
 
 // UseModel sets the current model for chat
@@ -1394,20 +1444,20 @@ func (c *MultiRAGClient) UseModel(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("model identifier not provided")
 	}
 
-	names := strings.Split(modelIdentifier, "/")
+	names := strings.Split(modelIdentifier, "@")
 	if len(names) != 3 {
-		return nil, fmt.Errorf("model identifier must be in format 'provider/instance/model'")
+		return nil, fmt.Errorf("model identifier must be in format 'model@instance@provider'")
 	}
 
 	c.CurrentModel = &CurrentModel{
-		Provider: names[0],
+		Provider: names[2],
 		Instance: names[1],
-		Model:    names[2],
+		Model:    names[0],
 	}
 
 	var result SimpleResponse
 	result.Code = 0
-	result.Message = fmt.Sprintf("Current model set to: %s/%s/%s", c.CurrentModel.Provider, c.CurrentModel.Instance, c.CurrentModel.Model)
+	result.Message = fmt.Sprintf("Current model set to: %s@%s@%s", c.CurrentModel.Model, c.CurrentModel.Instance, c.CurrentModel.Provider)
 	return &result, nil
 }
 

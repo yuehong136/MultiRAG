@@ -42,6 +42,7 @@ class TitleChunkerParam(ProcessParamBase):
         self.levels = []
         self.hierarchy = None
         self.include_heading_content = False
+        self.root_chunk_as_heading = False
 
     def check(self):
         if self.method in {"hierarchy", "group"}:
@@ -244,6 +245,12 @@ class BaseTitleChunker(ABC):
                     chunk["image"] = records[0]["image"]
 
             chunks.append(chunk)
+
+        if self.param.root_chunk_as_heading and len(chunks) > 1:
+            root_text = chunks[0].get("text", "")
+            for chunk in chunks[1:]:
+                chunk["text"] = f"{root_text}\n{chunk.get('text', '')}"
+            return chunks[1:]
 
         return chunks
 

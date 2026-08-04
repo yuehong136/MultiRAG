@@ -1,14 +1,13 @@
-"""System RESTful API.
-
-Routes are mounted under ``/api/v1`` by ``api.apps.register_page``.
-Legacy ``/v1/system/*`` endpoints stay in ``api/apps/system_app.py`` for
-backward compatibility.
-"""
+"""System RESTful API mounted under ``/api/v1``."""
 
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
 from datetime import datetime
-from typing import Annotated
+from timeit import default_timer as timer
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, Query, Response
 from fastapi.responses import PlainTextResponse
@@ -16,14 +15,18 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from api.db.db_models import APIToken, get_async_db
+from api.apps.deps import get_doc_store, get_storage
+from api.db.db_models import DATABASE_TYPE, APIToken, get_async_db, get_pool_status
 from api.db.services.api_service import APITokenService
+from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import UserTenantService
 from api.utils.api_utils import Principal, async_current_user, generate_confirmation_token, get_data_error_result, get_json_result, server_error_response
-from api.utils.health_utils import run_health_checks_async
+from api.utils.health_utils import get_oceanbase_status, is_health_result_ok, run_health_checks_async
+from common import settings
 from common.log_utils import get_log_levels, set_log_level
 from common.time_utils import current_timestamp, datetime_format
 from common.versions import get_multirag_version
+from core.utils.redis_conn import REDIS_CONN
 
 router = APIRouter()
 
@@ -67,6 +70,144 @@ async def version(user: Principal = Depends(async_current_user)):
     - dict: 包含系统版本信息的 JSON 结果。
     """
     return get_json_result(data=get_multirag_version())
+
+
+@router.get("/system/status", summary="获取系统状态", response_description="成功获取系统状态")
+async def status(
+    db: AsyncSession = Depends(get_async_db),
+    doc_store: Any = Depends(get_doc_store),
+    storage: Any = Depends(get_storage),
+    user: Principal = Depends(async_current_user),
+) -> dict[str, Any]:
+    res: dict[str, Any] = {}
+
+    st = timer()
+    try:
+        doc_engine = await asyncio.to_thread(doc_store.health)
+        res["doc_engine"] = dict(doc_engine or {})
+        res["doc_engine"]["elapsed"] = f"{(timer() - st) * 1000.0:.1f}"
+    except Exception as e:
+        res["doc_engine"] = {
+            "type": "unknown",
+            "status": "red",
+            "elapsed": f"{(timer() - st) * 1000.0:.1f}",
+            "error": str(e),
+        }
+
+    st = timer()
+    try:
+        health_result = await asyncio.to_thread(storage.health)
+        storage_ok = is_health_result_ok(health_result)
+        res["storage"] = {
+            "storage": settings.STORAGE_IMPL_TYPE.lower(),
+            "status": "green" if storage_ok else "red",
+            "elapsed": f"{(timer() - st) * 1000.0:.1f}",
+        }
+        if not storage_ok:
+            res["storage"]["error"] = f"storage health returned unhealthy result: {health_result!r}"
+            if isinstance(health_result, dict):
+                res["storage"]["health"] = health_result
+    except Exception as e:
+        res["storage"] = {
+            "storage": settings.STORAGE_IMPL_TYPE.lower(),
+            "status": "red",
+            "elapsed": f"{(timer() - st) * 1000.0:.1f}",
+            "error": str(e),
+        }
+
+    st = timer()
+    try:
+        await db.run_sync(lambda sync_db: KnowledgebaseService.get_by_id(sync_db, "x"))  # TODO(async-phase4)
+        res["database"] = {
+            "database": DATABASE_TYPE.lower(),
+            "status": "green",
+            "elapsed": f"{(timer() - st) * 1000.0:.1f}",
+        }
+    except Exception as e:
+        res["database"] = {
+            "database": DATABASE_TYPE.lower(),
+            "status": "red",
+            "elapsed": f"{(timer() - st) * 1000.0:.1f}",
+            "error": str(e),
+        }
+
+    st = timer()
+    try:
+        pool_status = await asyncio.to_thread(get_pool_status)
+        usage_rate = pool_status.get("usage_rate", 0)
+        if usage_rate > 90:
+            pool_health = "red"
+        elif usage_rate > 80:
+            pool_health = "yellow"
+        else:
+            pool_health = "green"
+        res["database_pool"] = {
+            "status": pool_health,
+            "elapsed": f"{(timer() - st) * 1000.0:.1f}",
+            "pool_size": pool_status.get("pool_size"),
+            "checked_out": pool_status.get("checked_out"),
+            "checked_in": pool_status.get("checked_in"),
+            "overflow": pool_status.get("overflow"),
+            "total_connections": pool_status.get("total_connections"),
+            "usage_rate": f"{usage_rate}%",
+        }
+    except Exception as e:
+        res["database_pool"] = {
+            "status": "red",
+            "elapsed": f"{(timer() - st) * 1000.0:.1f}",
+            "error": str(e),
+        }
+
+    st = timer()
+    try:
+        if not await asyncio.to_thread(REDIS_CONN.health):
+            raise RuntimeError("Lost connection!")
+        res["redis"] = {
+            "status": "green",
+            "elapsed": f"{(timer() - st) * 1000.0:.1f}",
+        }
+    except Exception as e:
+        res["redis"] = {
+            "status": "red",
+            "elapsed": f"{(timer() - st) * 1000.0:.1f}",
+            "error": str(e),
+        }
+
+    def _load_task_executor_heartbeats() -> dict[str, list[Any]]:
+        heartbeats_by_executor: dict[str, list[Any]] = {}
+        task_executors = REDIS_CONN.smembers("TASKEXE")
+        now = datetime.now().timestamp()
+        for task_executor_id in task_executors:
+            heartbeats = REDIS_CONN.zrangebyscore(task_executor_id, now - 60 * 30, now)
+            heartbeats_by_executor[task_executor_id] = [json.loads(heartbeat) for heartbeat in heartbeats]
+        return heartbeats_by_executor
+
+    try:
+        res["task_executor_heartbeats"] = await asyncio.to_thread(_load_task_executor_heartbeats)
+    except Exception:
+        logging.exception("get task executor heartbeats failed!")
+        res["task_executor_heartbeats"] = {}
+
+    return get_json_result(data=res)
+
+
+@router.get("/system/oceanbase/status", summary="获取OceanBase状态")
+async def oceanbase_status(user: Principal = Depends(async_current_user)) -> dict[str, Any]:
+    try:
+        status_info = await asyncio.to_thread(get_oceanbase_status)
+        return get_json_result(data=status_info)
+    except Exception as e:
+        return get_json_result(data={"status": "error", "message": f"Failed to get OceanBase status: {e!s}"})
+
+
+@router.get("/system/config", summary="获取系统配置")
+async def get_config() -> dict[str, Any]:
+    return get_json_result(
+        data={
+            "registerEnabled": settings.REGISTER_ENABLED,
+            "disablePasswordLogin": settings.DISABLE_PASSWORD_LOGIN,
+        }
+    )
 
 
 @router.get("/system/healthz", summary="健康检查", response_description="返回系统健康状态")

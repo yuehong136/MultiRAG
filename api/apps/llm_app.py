@@ -1102,6 +1102,9 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
     elif factory == "PaddleOCR":
         api_key = apikey_json(["api_key", "provider_order"])
 
+    elif factory == "OpenDataLoader":
+        api_key = apikey_json(["api_key", "provider_order"])
+
     llm = {
         "tenant_id": user.id,
         "llm_factory": factory,
@@ -1302,6 +1305,7 @@ def delete_factory_restful(request: DeleteFactoryRequest, db: Session = Depends(
 def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=Depends(manager), request: Request = None):
     try:
         TenantLLMService.ensure_mineru_from_env(db, user.id)
+        TenantLLMService.ensure_opendataloader_from_env(db, user.id)
 
         if include_details:
             res = {}
@@ -1695,6 +1699,7 @@ def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=De
     tenant_id = user.id
     try:
         TenantLLMService.ensure_mineru_from_env(db, tenant_id)
+        TenantLLMService.ensure_opendataloader_from_env(db, tenant_id)
         objs = TenantLLMService.query(db, tenant_id=tenant_id)
         facts = {o.llm_factory for o in objs if o.api_key and o.status == StatusEnum.VALID.value}
         tenant_llm_mapping = {f"{o.llm_name}@{o.llm_factory}": o for o in objs}

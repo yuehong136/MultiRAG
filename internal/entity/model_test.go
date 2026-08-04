@@ -16,8 +16,8 @@ func TestProviderModelsKeepInitializedTypeMaps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetModelByName() error = %v", err)
 	}
-	if !model.ModelTypeMap["chat"] || !model.ModelTypeMap["image2text"] {
-		t.Fatalf("ModelTypeMap = %#v, want chat and image2text", model.ModelTypeMap)
+	if !model.ModelTypeMap["chat"] || !model.ModelTypeMap["vision"] {
+		t.Fatalf("ModelTypeMap = %#v, want chat and vision", model.ModelTypeMap)
 	}
 
 	provider := manager.FindProvider("zhipu-ai")
@@ -65,4 +65,111 @@ func TestProviderModelsResolveThinkingFeatures(t *testing.T) {
 		}
 	}
 	t.Fatal("glm-4.7 not found")
+}
+
+// SHOW BALANCE 依赖 provider 配置里的 balance suffix：Moonshot 的驱动早已实现
+// Balance()，但在补上这份配置之前 FindProvider 返回 nil，命令直接 404。
+func TestMoonshotProviderSupportsBalanceLookup(t *testing.T) {
+	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	if err != nil {
+		t.Fatalf("NewProviderManager() error = %v", err)
+	}
+
+	provider := manager.FindProvider("moonshot")
+	if provider == nil {
+		t.Fatal("FindProvider(\"moonshot\") returned nil")
+	}
+	if got := provider.URL["default"]; got != "https://api.moonshot.cn/v1" {
+		t.Fatalf("default provider URL = %q", got)
+	}
+	if got := provider.URLSuffix.Balance; got != "users/me/balance" {
+		t.Fatalf("balance suffix = %q, want users/me/balance", got)
+	}
+	if got := provider.URLSuffix.Models; got != "models" {
+		t.Fatalf("models suffix = %q, want models", got)
+	}
+
+	model, err := manager.GetModelByName("moonshot", "kimi-k2.6")
+	if err != nil {
+		t.Fatalf("GetModelByName() error = %v", err)
+	}
+	if model.Thinking == nil || !model.Thinking.ClearContent {
+		t.Fatalf("kimi-k2.6 thinking = %#v, want clear_thinking enabled", model.Thinking)
+	}
+}
+
+func TestDeepSeekProviderIsConfigured(t *testing.T) {
+	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	if err != nil {
+		t.Fatalf("NewProviderManager() error = %v", err)
+	}
+
+	provider := manager.FindProvider("deepseek")
+	if provider == nil {
+		t.Fatal("FindProvider(\"deepseek\") returned nil")
+	}
+	if got := provider.URL["default"]; got != "https://api.deepseek.com" {
+		t.Fatalf("default provider URL = %q", got)
+	}
+
+	model, err := manager.GetModelByName("deepseek", "deepseek-v4-pro")
+	if err != nil {
+		t.Fatalf("GetModelByName() error = %v", err)
+	}
+	if !model.ModelTypeMap["chat"] {
+		t.Fatalf("ModelTypeMap = %#v, want chat", model.ModelTypeMap)
+	}
+	if model.Series == nil || *model.Series != "deepseek" {
+		t.Fatalf("Series = %#v, want deepseek", model.Series)
+	}
+}
+
+func TestGiteeAndSiliconFlowProvidersAreConfigured(t *testing.T) {
+	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	if err != nil {
+		t.Fatalf("NewProviderManager() error = %v", err)
+	}
+
+	for _, testCase := range []struct {
+		provider string
+		model    string
+	}{
+		{provider: "gitee", model: "qwen3-8b"},
+		{provider: "siliconflow", model: "qwen/qwen3-8b"},
+	} {
+		provider := manager.FindProvider(testCase.provider)
+		if provider == nil || provider.ModelDriver.Name() != testCase.provider {
+			t.Fatalf("provider %q = %#v", testCase.provider, provider)
+		}
+		model, modelErr := manager.GetModelByName(testCase.provider, testCase.model)
+		if modelErr != nil || !model.ModelTypeMap["chat"] {
+			t.Fatalf("model %q/%q = %#v, %v", testCase.provider, testCase.model, model, modelErr)
+		}
+	}
+}
+
+func TestMinimaxProviderIsConfigured(t *testing.T) {
+	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	if err != nil {
+		t.Fatalf("NewProviderManager() error = %v", err)
+	}
+
+	provider := manager.FindProvider("minimax")
+	if provider == nil {
+		t.Fatal("FindProvider(\"minimax\") returned nil")
+	}
+	if got := provider.URL["global"]; got != "https://api.minimax.io/" {
+		t.Fatalf("global provider URL = %q", got)
+	}
+	if got := provider.URLSuffix.Files; got != "v1/files/list" {
+		t.Fatalf("files suffix = %q", got)
+	}
+
+	model, err := manager.GetModelByName("minimax", "minimax-m2.7")
+	if err != nil {
+		t.Fatalf("GetModelByName() error = %v", err)
+	}
+	if !model.ModelTypeMap["chat"] || model.Thinking == nil || !model.Thinking.DefaultValue {
+		t.Fatalf("MiniMax model = %#v", model)
+	}
 }

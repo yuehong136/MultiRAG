@@ -1,6 +1,7 @@
 import logging
 import os
 import time
+from typing import Any
 
 from azure.identity import AzureAuthorityHosts, ClientSecretCredential
 from azure.storage.filedatalake import FileSystemClient
@@ -52,7 +53,7 @@ class MultiRAGAzureSpnBlob:
         f.append_data(binary, offset=0, length=len(binary))
         return f.flush_data(len(binary))
 
-    def put(self, bucket, fnm, binary):
+    def put(self, bucket: str, fnm: str, binary: bytes, tenant_id: str | None = None) -> Any:
         for _ in range(3):
             try:
                 f = self.conn.create_file(fnm)

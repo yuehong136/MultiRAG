@@ -183,6 +183,22 @@ func IsEmpty(v interface{}) bool {
 	return false
 }
 
+// IsNumericValue reports whether v is a numeric value or a numeric string.
+func IsNumericValue(v interface{}) bool {
+	if v == nil {
+		return false
+	}
+	switch value := v.(type) {
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+		return true
+	case string:
+		_, err := strconv.ParseFloat(value, 64)
+		return err == nil
+	default:
+		return false
+	}
+}
+
 // SetFieldArray sets result[destKey] to v, or an empty slice when v is empty.
 func SetFieldArray(result map[string]interface{}, destKey string, v interface{}) {
 	if IsEmpty(v) {
@@ -316,4 +332,13 @@ func ConvertMapToJSONString(v interface{}) interface{} {
 		return string(jsonBytes)
 	}
 	return v
+}
+
+// FloatToString formats a float like Python's str(), retaining a decimal point for integers.
+func FloatToString(value float64) string {
+	result := strconv.FormatFloat(value, 'f', -1, 64)
+	if !strings.Contains(result, ".") && !strings.Contains(result, "e") {
+		result += ".0"
+	}
+	return result
 }
