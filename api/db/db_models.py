@@ -2083,6 +2083,27 @@ class SystemSettings(BaseModel):
 """
 
 
+def models_in_fk_creation_order() -> list[type[BaseModel]]:
+    """按外键拓扑序返回全部映射模型类——父表一定排在引用它的子表之前。
+
+    `init_database_tables` 是逐张 `Table.create()` 建表，而 `inspect.getmembers`
+    只按**类名字母序**返回，两者叠加会在真实外键上炸掉：ChannelBinding /
+    ChannelSecret / ChannelRuntimeStatus 都 `ForeignKey` 引用 ChatChannel，
+    而字母序上 "Chann..." < "Chat..."（n < t），父表反而排在三个子表之后——
+    空库首次初始化时三张子表全部 `UndefinedTable` 失败。这条路径只在**空库**
+    首启时才真正建表，已有库全部走 skip，所以本地长期不暴露，CI 每次都是新库
+    则必然复现。
+
+    `metadata.sorted_tables` 是 SQLAlchemy 依据外键算出的拓扑序，用它排序即可
+    一次修好，也自动覆盖以后任何新增的带外键模型。
+    """
+    members = inspect.getmembers(sys.modules[__name__], inspect.isclass)
+    models = [obj for _, obj in members if obj is not BaseModel and issubclass(obj, BaseModel)]
+    creation_order = {table: index for index, table in enumerate(Base.metadata.sorted_tables)}
+    # 未映射到具体 Table 的（抽象基类等）排到末尾，保持原有的宽松行为
+    return sorted(models, key=lambda model: creation_order.get(getattr(model, "__table__", None), len(creation_order)))
+
+
 def init_database_tables():
     # 需要检查的 schema 名称
     schema_name = "usr_ai"
@@ -2109,36 +2130,35 @@ def init_database_tables():
     # 获取现有表列表
     inspector = sa_inspect(engine)
     existing_tables = set(inspector.get_table_names(schema=schema_name))  # 使用 set 提高查找效率
-    members = inspect.getmembers(sys.modules[__name__], inspect.isclass)
     table_objs = []
     create_failed_list = []
 
-    for name, obj in members:
-        if obj != BaseModel and issubclass(obj, BaseModel):
-            table_objs.append(obj)
-            table_name = obj.__tablename__
+    # 外键拓扑序，不是类名字母序——理由见 models_in_fk_creation_order 的 docstring
+    for obj in models_in_fk_creation_order():
+        table_objs.append(obj)
+        table_name = obj.__tablename__
 
-            # 检查表是否存在
-            if table_name not in existing_tables:
-                logging.info(f"Table {table_name} does not exist, creating...")
-                try:
-                    # 使用更安全的方式创建表
-                    # checkfirst=True 确保 SQLAlchemy 再次检查表是否存在
-                    obj.__table__.create(bind=engine, checkfirst=True)
-                    logging.info(f"Successfully created table: {table_name}")
+        # 检查表是否存在
+        if table_name not in existing_tables:
+            logging.info(f"Table {table_name} does not exist, creating...")
+            try:
+                # 使用更安全的方式创建表
+                # checkfirst=True 确保 SQLAlchemy 再次检查表是否存在
+                obj.__table__.create(bind=engine, checkfirst=True)
+                logging.info(f"Successfully created table: {table_name}")
 
-                    # 更新已存在的表列表，避免后续重复检查
-                    existing_tables.add(table_name)
+                # 更新已存在的表列表，避免后续重复检查
+                existing_tables.add(table_name)
 
-                except OperationalError as e:
-                    logging.exception(f"Error creating table {table_name}: {e}")
-                    create_failed_list.append(table_name)
-                except Exception as e:
-                    # 捕获其他可能的异常
-                    logging.exception(f"Unexpected error creating table {table_name}: {e}")
-                    create_failed_list.append(table_name)
-            else:
-                logging.debug(f"Table {table_name} already exists, skipping creation")
+            except OperationalError as e:
+                logging.exception(f"Error creating table {table_name}: {e}")
+                create_failed_list.append(table_name)
+            except Exception as e:
+                # 捕获其他可能的异常
+                logging.exception(f"Unexpected error creating table {table_name}: {e}")
+                create_failed_list.append(table_name)
+        else:
+            logging.debug(f"Table {table_name} already exists, skipping creation")
 
     if create_failed_list:
         error_msg = f"Failed to create tables: {create_failed_list}"
