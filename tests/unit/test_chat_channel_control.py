@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -26,6 +26,7 @@ from api.channel_control.service import (
     InvalidChannelConfiguration,
 )
 from api.db.db_models import ChannelBinding, ChannelRuntimeStatus, ChannelSecret, ChatChannel
+from common.app_config import get_app_config
 from common.constants import RetCode
 
 
@@ -406,6 +407,74 @@ async def test_runtime_bundle_and_heartbeat_are_internal_and_generation_fenced()
             runner_id="runner-1",
             heartbeat_at=heartbeat,
         )
+
+
+async def _enabled_dialog_channel() -> tuple[ChannelControlService, str, str, int]:
+    repository = FakeRepository()
+    repository.dialogs.add(("tenant-a", "dialog-1"))
+    service = ChannelControlService(repository, FakeSecretStore())
+    created = await service.create_channel("tenant-a", _create_request(chat_id="dialog-1"))
+    enabled = await service.set_enabled("tenant-a", created["id"], enabled=True)
+    return service, created["id"], enabled["binding"]["id"], enabled["binding"]["generation"]
+
+
+async def test_live_runtime_state_expires_once_the_heartbeat_stops() -> None:
+    service, channel_id, binding_id, generation = await _enabled_dialog_channel()
+    interval = get_app_config().channels.control.runtime_heartbeat_seconds
+
+    fresh = datetime.now(UTC)
+    await service.report_runtime(
+        binding_id=binding_id,
+        observed_generation=generation,
+        state="connected",
+        runner_id="runner-1",
+        heartbeat_at=fresh,
+        connected_at=fresh,
+    )
+    assert (await service.get_runtime("tenant-a", channel_id))["state"] == "connected"
+
+    # A killed worker leaves its last row behind: the generation still matches, so
+    # only heartbeat silence can disprove "connected".
+    dead = datetime.now(UTC) - timedelta(seconds=interval * 10)
+    await service.report_runtime(
+        binding_id=binding_id,
+        observed_generation=generation,
+        state="connected",
+        runner_id="runner-1",
+        heartbeat_at=dead,
+        connected_at=dead,
+        last_error_code="WORKER_GONE",
+    )
+
+    stale = await service.get_runtime("tenant-a", channel_id)
+    assert stale["state"] == "waiting"
+    assert stale["runner_id"] is None
+    assert stale["connected_at"] is None
+    # The last heartbeat and error code are the only evidence of when it died.
+    assert stale["heartbeat_at"] is not None
+    assert stale["last_error_code"] == "WORKER_GONE"
+    assert stale["observed_generation"] == generation
+
+
+async def test_non_live_runtime_states_survive_heartbeat_silence() -> None:
+    service, channel_id, binding_id, generation = await _enabled_dialog_channel()
+
+    # ``error`` is terminal: no runner is expected to keep reporting, so silence
+    # must not be mistaken for staleness and must not erase the diagnosis.
+    long_ago = datetime.now(UTC) - timedelta(hours=1)
+    await service.report_runtime(
+        binding_id=binding_id,
+        observed_generation=generation,
+        state="error",
+        runner_id="runner-1",
+        heartbeat_at=long_ago,
+        last_error_code="CHANNEL_RUNTIME_CONFIG_INVALID",
+    )
+
+    reported = await service.get_runtime("tenant-a", channel_id)
+    assert reported["state"] == "error"
+    assert reported["runner_id"] == "runner-1"
+    assert reported["last_error_code"] == "CHANNEL_RUNTIME_CONFIG_INVALID"
 
 
 def test_provider_and_list_routes_use_stable_envelopes(client) -> None:

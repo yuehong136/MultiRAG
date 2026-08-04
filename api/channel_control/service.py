@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from api.channel_control.repository import ChannelRepository
@@ -21,7 +21,14 @@ from api.channel_control.schemas import (
 )
 from api.channel_control.secret_store import EncryptedSecret, SecretStore, SecretStoreUnavailable
 from api.db.db_models import ChannelBinding, ChannelRuntimeStatus, ChannelSecret, ChatChannel
+from common.app_config import get_app_config
 from common.misc_utils import get_uuid
+
+# States that only a live runner can hold, so heartbeat silence disproves them.
+# ``waiting``/``stopped``/``error`` legitimately stop reporting a heartbeat.
+_LIVE_RUNTIME_STATES = frozenset({"starting", "connected", "stopping"})
+# Tolerate a few missed reports before calling a runner dead.
+_HEARTBEAT_STALE_INTERVALS = 3
 
 _SENSITIVE_CONFIG_KEYS = frozenset(
     {
@@ -632,17 +639,52 @@ class ChannelControlService:
         return response.model_dump(mode="json")
 
     @staticmethod
-    def _serialize_runtime(binding: ChannelBinding, runtime: ChannelRuntimeStatus | None) -> dict[str, Any]:
+    def _heartbeat_is_stale(runtime: ChannelRuntimeStatus) -> bool:
+        """Decide whether a live-looking runtime row is only a dead runner's leftover.
+
+        A runner rewrites this row on a fixed interval, so silence disproves the
+        states only a live process can hold. Without this check a killed worker
+        keeps the management page on ``connected`` forever, because its final row
+        still matches the desired generation.
+        """
+
+        if runtime.state not in _LIVE_RUNTIME_STATES:
+            return False
+        heartbeat_at = runtime.heartbeat_at
+        if heartbeat_at is None:
+            # A live state that never reported is already self-contradictory.
+            return True
+        if heartbeat_at.tzinfo is None:
+            heartbeat_at = heartbeat_at.replace(tzinfo=UTC)
+        deadline = get_app_config().channels.control.runtime_heartbeat_seconds * _HEARTBEAT_STALE_INTERVALS
+        return (datetime.now(UTC) - heartbeat_at).total_seconds() > deadline
+
+    @classmethod
+    def _serialize_runtime(cls, binding: ChannelBinding, runtime: ChannelRuntimeStatus | None) -> dict[str, Any]:
+        idle_state = "waiting" if binding.enabled else "stopped"
         if runtime is None or runtime.observed_generation != binding.generation:
             response = ChannelRuntimeResponse(
                 binding_id=binding.id,
                 desired_generation=binding.generation,
                 observed_generation=runtime.observed_generation if runtime is not None else 0,
-                state="waiting" if binding.enabled else "stopped",
+                state=idle_state,
                 runner_id=None,
                 heartbeat_at=None,
                 connected_at=None,
                 last_error_code=None,
+            )
+        elif cls._heartbeat_is_stale(runtime):
+            # Keep the last heartbeat and error code: they are the operator's only
+            # evidence of when the runner died and why.
+            response = ChannelRuntimeResponse(
+                binding_id=binding.id,
+                desired_generation=binding.generation,
+                observed_generation=runtime.observed_generation,
+                state=idle_state,
+                runner_id=None,
+                heartbeat_at=runtime.heartbeat_at,
+                connected_at=None,
+                last_error_code=runtime.last_error_code,
             )
         else:
             response = ChannelRuntimeResponse(
