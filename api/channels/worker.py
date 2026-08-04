@@ -20,7 +20,7 @@ from api.channel_runtime.schemas import RuntimeState
 from api.channels.agent_bridge import FeishuAgentBridge, MultiRAGAgentClient
 from api.channels.binding_bridge import FeishuBindingBridge
 from api.channels.core.base import IncomingMessage, MessageHandler
-from api.channels.feishu.channel import FeishuAccount, FeishuChannel
+from api.channels.provider import ChannelWorkerError, supported_provider_names, worker_provider
 from api.channels.runtime_client import ChannelRuntimeClient, MultiRAGBindingExecutionClient
 from api.channels.state_store import RedisChannelStateStore
 from common.app_config import AppConfig, AppConfigError, FeishuChannelConfig, get_app_config
@@ -28,16 +28,10 @@ from common.bootstrap import ensure_initialized
 
 LOGGER = logging.getLogger(__name__)
 
-_CHANNEL_NAME = "feishu"
-_LEASE_NAME = "feishu"
 _QUEUE_DRAIN_TIMEOUT_SECONDS = 5
 _CHANNEL_MONITOR_INTERVAL_SECONDS = 2
 _REDIS_CONNECT_TIMEOUT_SECONDS = 5
 _REDIS_OPERATION_TIMEOUT_SECONDS = 5
-
-
-class ChannelWorkerError(RuntimeError):
-    """A classified, non-sensitive worker lifecycle failure."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,19 +97,6 @@ def _short_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
-def _resolve_provider_domain(public_config: dict[str, object]) -> str:
-    """Resolve canonical and upstream-compatible domain shapes, fail closed."""
-
-    domain = public_config.get("domain")
-    if domain is None:
-        credential = public_config.get("credential")
-        if isinstance(credential, dict):
-            domain = credential.get("domain")
-    if domain not in {"feishu", "lark"}:
-        raise ChannelWorkerError("CHANNEL_RUNTIME_CONFIG_INVALID")
-    return domain
-
-
 def _message_order_key(message: IncomingMessage) -> str:
     digest = hashlib.sha256()
     for value in (
@@ -144,12 +125,17 @@ def _redis_host_port(raw_host: str) -> tuple[str, int]:
     return normalized_host, port
 
 
-class FeishuChannelWorker:
-    """Owns one Feishu transport, a bounded queue, and its stateful bridge."""
+class ChannelWorker:
+    """Owns one transport, a bounded queue, and its stateful bridge.
+
+    Transport-agnostic: the concrete SDK arrives as a ``WorkerChannel``, and
+    ``provider_name`` only names the leader lease, tasks and log lines.
+    """
 
     def __init__(
         self,
         *,
+        provider_name: str,
         channel: WorkerChannel,
         bridge: MessageBridge,
         agent_client: PreflightAgentClient,
@@ -158,6 +144,7 @@ class FeishuChannelWorker:
         queue_size: int,
         worker_concurrency: int,
     ) -> None:
+        self._provider_name = provider_name
         self._channel = channel
         self._bridge = bridge
         self._agent_client = agent_client
@@ -178,19 +165,19 @@ class FeishuChannelWorker:
         graceful_shutdown = False
         try:
             await self._preflight()
-            owner_token = await self._state_store.acquire_leader(lease_name=_LEASE_NAME)
+            owner_token = await self._state_store.acquire_leader(lease_name=self._provider_name)
             if owner_token is None:
                 raise ChannelWorkerError("LEADER_LEASE_HELD")
             self._owner_token = owner_token
 
             self._accepting_messages = True
             self._channel.set_message_handler(self.enqueue)
-            self._tasks = [asyncio.create_task(self._consume(index), name=f"feishu-channel-worker-{index}") for index in range(self._worker_concurrency)]
-            self._tasks.append(asyncio.create_task(self._renew_leader(), name="feishu-channel-leader-renew"))
+            self._tasks = [asyncio.create_task(self._consume(index), name=f"{self._provider_name}-channel-worker-{index}") for index in range(self._worker_concurrency)]
+            self._tasks.append(asyncio.create_task(self._renew_leader(), name=f"{self._provider_name}-channel-leader-renew"))
             await self._channel.start()
             self._started = True
-            self._tasks.append(asyncio.create_task(self._monitor_channel(), name="feishu-channel-monitor"))
-            LOGGER.info("channel_event=worker_started channel=feishu result=ok")
+            self._tasks.append(asyncio.create_task(self._monitor_channel(), name=f"{self._provider_name}-channel-monitor"))
+            LOGGER.info("channel_event=worker_started channel=%s result=ok", self._provider_name)
             await stop_event.wait()
             if self._runtime_error_code:
                 raise ChannelWorkerError(self._runtime_error_code)
@@ -260,14 +247,14 @@ class FeishuChannelWorker:
 
         if self._owner_token is not None:
             try:
-                await self._state_store.release_leader(self._owner_token, lease_name=_LEASE_NAME)
+                await self._state_store.release_leader(self._owner_token, lease_name=self._provider_name)
             except Exception:
                 LOGGER.error("channel_event=leader_release result=failed error_code=REDIS_RELEASE_FAILED")
             self._owner_token = None
 
         await self._agent_client.close()
         await self._redis.aclose()
-        LOGGER.info("channel_event=worker_stopped channel=feishu result=ok")
+        LOGGER.info("channel_event=worker_stopped channel=%s result=ok", self._provider_name)
 
     async def _preflight(self) -> None:
         try:
@@ -324,7 +311,7 @@ class FeishuChannelWorker:
             if owner_token is None:
                 return
             try:
-                renewed = await self._state_store.renew_leader(owner_token, lease_name=_LEASE_NAME)
+                renewed = await self._state_store.renew_leader(owner_token, lease_name=self._provider_name)
             except Exception:
                 renewed = False
             if not renewed:
@@ -362,7 +349,16 @@ def _build_redis(config: AppConfig) -> Redis:
     )
 
 
-def _build_worker(app_config: AppConfig, channel_config: FeishuChannelConfig) -> FeishuChannelWorker:
+def _build_worker(app_config: AppConfig, channel_config: FeishuChannelConfig) -> ChannelWorker:
+    """Build the demo runner, which stays Feishu-only by design.
+
+    Demo mode reads one fixed published Agent out of environment variables, so it
+    has no binding, no revision guard and no encrypted credential. Imports stay
+    local to keep the transport SDK out of the managed code path.
+    """
+
+    from api.channels.feishu.channel import FeishuAccount, FeishuChannel
+
     if not channel_config.enabled:
         raise ChannelWorkerError("FEISHU_CHANNEL_DISABLED")
 
@@ -405,7 +401,8 @@ def _build_worker(app_config: AppConfig, channel_config: FeishuChannelConfig) ->
         allowed_open_ids=set(channel_config.allowed_open_ids),
         max_question_chars=channel_config.max_question_chars,
     )
-    return FeishuChannelWorker(
+    return ChannelWorker(
+        provider_name="feishu",
         channel=channel,
         bridge=bridge,
         agent_client=agent_client,
@@ -419,10 +416,12 @@ def _build_worker(app_config: AppConfig, channel_config: FeishuChannelConfig) ->
 async def _run_managed_channel(
     *,
     app_config: AppConfig,
+    provider_name: str,
     binding_id: str,
     binding_generation: int,
     stop_event: asyncio.Event,
 ) -> None:
+    provider = worker_provider(provider_name)
     control_config = app_config.channels.control
     base_url = control_config.runtime_api_base_url.strip()
     token = control_config.internal_api_token.get_secret_value()
@@ -437,46 +436,37 @@ async def _run_managed_channel(
         binding_id=binding_id,
         binding_generation=binding_generation,
     )
-    worker: FeishuChannelWorker | None = None
+    worker: ChannelWorker | None = None
     redis: Redis | None = None
     execution_client: MultiRAGBindingExecutionClient | None = None
     heartbeat_task: asyncio.Task[None] | None = None
     generation = 0
     try:
         runtime = await runtime_client.fetch_binding(binding_id)
-        if runtime.binding_id != binding_id or runtime.generation != binding_generation or runtime.provider != _CHANNEL_NAME:
+        if runtime.binding_id != binding_id or runtime.generation != binding_generation or runtime.provider != provider.name:
             raise ChannelWorkerError("CHANNEL_RUNTIME_BINDING_INVALID")
         generation = runtime.generation
-        public_config = runtime.public_config
-        domain = _resolve_provider_domain(public_config)
-        raw_allowed = public_config.get("allowed_open_ids", [])
-        if not isinstance(raw_allowed, list) or any(not isinstance(open_id, str) or not open_id.strip() for open_id in raw_allowed):
-            raise ChannelWorkerError("CHANNEL_RUNTIME_CONFIG_INVALID")
 
-        tuning = app_config.channels.feishu
+        # The provider owns its credential shape, its account rules and its
+        # tuning section; everything below is transport-agnostic.
+        tuning = provider.tuning(app_config)
+        plan = provider.build_managed(credential=runtime.credential, public_config=runtime.public_config)
         redis = _build_redis(app_config)
         state_store = RedisChannelStateStore(
             redis,
-            app_id=runtime.credential.app_id,
+            app_id=plan.account_id,
             dedupe_ttl_seconds=tuning.dedupe_ttl_seconds,
             session_ttl_seconds=tuning.session_ttl_seconds,
             leader_ttl_seconds=tuning.leader_ttl_seconds,
             leader_renew_interval_seconds=tuning.leader_renew_seconds,
         )
-        channel = FeishuChannel(
-            FeishuAccount(
-                account_id=_short_hash(runtime.credential.app_id),
-                app_id=runtime.credential.app_id,
-                app_secret=runtime.credential.app_secret,
-                domain=domain,
-            )
-        )
+        channel = plan.channel
         execution_client = MultiRAGBindingExecutionClient(
             base_url=base_url,
             binding_id=binding_id,
             binding_generation=binding_generation,
             api_token=token,
-            total_timeout_seconds=float(tuning.total_timeout_seconds),
+            total_timeout_seconds=tuning.total_timeout_seconds,
             max_answer_chars=tuning.max_answer_chars,
         )
         bridge = FeishuBindingBridge(
@@ -484,10 +474,11 @@ async def _run_managed_channel(
             executor=execution_client,
             state_store=state_store,
             binding_id=binding_id,
-            allowed_open_ids=set(raw_allowed),
+            allowed_open_ids=set(plan.allowed_sender_ids),
             max_question_chars=tuning.max_question_chars,
         )
-        worker = FeishuChannelWorker(
+        worker = ChannelWorker(
+            provider_name=provider.name,
             channel=channel,
             bridge=bridge,
             agent_client=execution_client,
@@ -510,7 +501,7 @@ async def _run_managed_channel(
                 generation=generation,
                 interval_seconds=control_config.runtime_heartbeat_seconds,
             ),
-            name="feishu-channel-runtime-heartbeat",
+            name=f"{provider.name}-channel-runtime-heartbeat",
         )
         await worker.run(stop_event)
     except ChannelWorkerError as exc:
@@ -626,7 +617,7 @@ async def _run_channel(
     binding_id: str | None = None,
     binding_generation: int | None = None,
 ) -> None:
-    if channel_name != _CHANNEL_NAME:
+    if channel_name not in supported_provider_names():
         raise ChannelWorkerError("CHANNEL_NOT_SUPPORTED")
     app_config = get_app_config()
     stop_event = asyncio.Event()
@@ -636,18 +627,22 @@ async def _run_channel(
             raise ChannelWorkerError("CHANNEL_RUNTIME_BINDING_INVALID")
         await _run_managed_channel(
             app_config=app_config,
+            provider_name=channel_name,
             binding_id=binding_id,
             binding_generation=binding_generation,
             stop_event=stop_event,
         )
         return
+    # Demo mode has no binding, so it stays on the Feishu-only env config.
+    if channel_name != "feishu":
+        raise ChannelWorkerError("CHANNEL_DEMO_MODE_UNSUPPORTED")
     worker = _build_worker(app_config, app_config.channels.feishu)
     await worker.run(stop_event)
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run one external MultiRAG messaging channel")
-    parser.add_argument("--channel", choices=[_CHANNEL_NAME], required=True)
+    parser.add_argument("--channel", choices=list(supported_provider_names()), required=True)
     parser.add_argument("--binding-id")
     parser.add_argument("--binding-generation", type=int)
     args = parser.parse_args(argv)

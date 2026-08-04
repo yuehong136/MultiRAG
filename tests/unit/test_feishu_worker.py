@@ -7,7 +7,8 @@ import pytest
 
 from api.channels import worker as worker_module
 from api.channels.core.base import IncomingMessage, MessageHandler
-from api.channels.worker import ChannelWorkerError, FeishuChannelWorker
+from api.channels.feishu import provider as feishu_provider
+from api.channels.worker import ChannelWorker, ChannelWorkerError
 from common.app_config import AppConfig, ChannelsConfig, FeishuChannelConfig
 
 
@@ -111,8 +112,9 @@ def _worker(
     redis: FakeRedis,
     queue_size: int = 2,
     worker_concurrency: int = 1,
-) -> FeishuChannelWorker:
-    return FeishuChannelWorker(
+) -> ChannelWorker:
+    return ChannelWorker(
+        provider_name="feishu",
         channel=channel,
         bridge=bridge,
         agent_client=agent_client,
@@ -138,8 +140,8 @@ def _message(message_id: str) -> IncomingMessage:
 
 
 def test_managed_domain_resolver_prefers_root_and_accepts_upstream_nested_shape() -> None:
-    assert worker_module._resolve_provider_domain({"domain": "feishu", "credential": {"domain": "lark"}}) == "feishu"
-    assert worker_module._resolve_provider_domain({"credential": {"domain": "lark"}}) == "lark"
+    assert feishu_provider._resolve_domain({"domain": "feishu", "credential": {"domain": "lark"}}) == "feishu"
+    assert feishu_provider._resolve_domain({"credential": {"domain": "lark"}}) == "lark"
 
 
 @pytest.mark.parametrize(
@@ -154,7 +156,7 @@ def test_managed_domain_resolver_never_silently_defaults(
     public_config: dict[str, object],
 ) -> None:
     with pytest.raises(ChannelWorkerError, match="CHANNEL_RUNTIME_CONFIG_INVALID"):
-        worker_module._resolve_provider_domain(public_config)
+        feishu_provider._resolve_domain(public_config)
 
 
 @pytest.mark.asyncio
@@ -335,7 +337,7 @@ async def test_build_worker_casts_integer_timeout_config_for_runtime_type_check(
 
     worker = worker_module._build_worker(app_config, channel_config)
 
-    assert isinstance(worker, FeishuChannelWorker)
+    assert isinstance(worker, ChannelWorker)
     await worker.close(drain=False)
 
 

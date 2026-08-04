@@ -18,6 +18,7 @@ from uuid import uuid4
 
 from api.channel_runtime.schemas import DesiredRuntime
 from api.channel_runtime.tokens import derive_binding_workload_token
+from api.channels.provider import supported_provider_names
 from api.channels.runtime_client import ChannelRuntimeClient, ChannelRuntimeClientError
 from common.app_config import AppConfigError, get_app_config
 from common.bootstrap import ensure_initialized
@@ -31,7 +32,7 @@ _DEMO_SECRET_ENVS = (
     "MULTIRAG_CHANNELS__FEISHU__APP_SECRET",
     "MULTIRAG_CHANNELS__FEISHU__AGENT_API_TOKEN",
 )
-_SUPPORTED_PROVIDERS = frozenset({"feishu"})
+_SUPPORTED_PROVIDERS = frozenset(supported_provider_names())
 _STOP_TIMEOUT_SECONDS = 10
 
 
