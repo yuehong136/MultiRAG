@@ -1,0 +1,41 @@
+[Unit]
+Description=MultiRAG API
+Documentation=file:/opt/multirag/api/channels/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=multirag
+Group=multirag
+WorkingDirectory=/opt/multirag
+Environment=PYTHONUNBUFFERED=1
+# Holds the Channel master encryption key and the shared internal workload
+# token. Install as root:multirag 0640 and never commit it. The supervisor
+# unit must use its own file, which carries no encryption key.
+EnvironmentFile=/etc/multirag/api.env
+ExecStart=/opt/multirag/.venv/bin/python -m api.multirag_server
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+KillMode=control-group
+UMask=0077
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+# Unlike the supervisor, the API initialises a rotating file logger, so its log
+# directory must stay writable under ProtectSystem=strict.
+ReadWritePaths=/opt/multirag/logs
+
+[Install]
+WantedBy=multi-user.target

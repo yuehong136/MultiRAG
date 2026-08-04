@@ -188,7 +188,27 @@ supervisor 会停止或重启相应进程；异常退出采用有上限的指数
 
 ### 控制面环境变量与最小权限
 
-生成值时只把输出写入正式 secret manager，不要粘贴到仓库文件、CLI 参数或日志：
+每台机器执行一次初始化脚本即可。它就地生成两个值、直接写入仓库外的 per-process env
+文件，**不把任何密钥打印到终端或命令历史**，只回显非机密的 key 指纹（等于数据库里的
+`ChannelSecret.key_id`，日后可用来确认某条密文是哪把密钥加密的）：
+
+```powershell
+# Windows
+powershell -ExecutionPolicy Bypass -File scripts/init_channel_secrets.example.ps1
+```
+
+```bash
+# macOS / Linux
+sh scripts/init_channel_secrets.example.sh
+```
+
+写入位置（可用 `MULTIRAG_SECRETS_DIR` 覆盖）：Windows 是
+`%LOCALAPPDATA%\MultiRAG\secrets\`（ACL 收紧到当前用户），macOS/Linux 是
+`${XDG_CONFIG_HOME:-$HOME/.config}/multirag/secrets/`（目录 `0700`、文件 `0600`）。
+脚本默认**拒绝覆盖已存在的 `api.env`**——主密钥没有重加密流程，覆盖等于让所有已存凭据
+永久无法解密，确需轮换时才显式加 `-Force` / `--force`。
+
+生成的密钥请立即备份到密码管理器或 secret manager。仍可手工生成：
 
 ```bash
 # AES-256-GCM 主密钥：URL-safe base64 编码的 32 个随机字节
@@ -196,6 +216,26 @@ uv run python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.
 
 # API 与 supervisor 共享的内部 workload token，至少 32 个字符
 uv run python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+**主密钥必须经环境变量注入，不能写进 `configs/local.service_conf.yaml`。**
+`common/config_utils.py::read_config` 对任何调用 `get_app_config()` 的进程都会加载该
+YAML，而 supervisor fork 出的 worker 子进程正以仓库根目录为 cwd 运行——密钥一旦落在配置
+文件里，worker 就能直接读到，`_spawn_worker` 里剥离环境变量的加固随之失效。同理也不要把
+它设成用户级环境变量：那样 supervisor 会继承到它，`run_channel_supervisor.example.*`
+的安全门禁会直接拒绝启动。
+
+配套启动脚本会读取上面对应的 env 文件（已存在的环境变量优先，便于 CI/生产覆盖），
+并在缺少密钥时**启动即报错**，而不是等到运行期才 fail closed：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run_api.example.ps1
+powershell -ExecutionPolicy Bypass -File scripts/run_channel_supervisor.example.ps1
+```
+
+```bash
+sh scripts/run_api.example.sh
+sh scripts/run_channel_supervisor.example.sh
 ```
 
 进程权限应按下表拆分：
@@ -242,27 +282,69 @@ uv run python -m api.channels.supervisor
 powershell -ExecutionPolicy Bypass -File scripts/run_channel_supervisor.example.ps1
 ```
 
-### macOS、Linux 或 Ubuntu 启动 Managed supervisor
+### macOS 开发机启动（两个终端，不用包装脚本）
+
+密钥建议交给系统 Keychain，而不是 `~/.zshrc`——写进 shell profile 会让 supervisor 一并
+继承主加密密钥，破坏最小权限。**只存一次**：
 
 ```bash
-export MULTIRAG_CHANNELS__CONTROL__RUNTIME_API_BASE_URL='http://127.0.0.1:8123'
-export MULTIRAG_CHANNELS__CONTROL__INTERNAL_API_TOKEN='<from-secret-manager>'
-
-uv run python -m api.channels.supervisor
-
-# 或使用只读取既有环境变量的包装器
-sh scripts/run_channel_supervisor.example.sh
+security add-generic-password -a "$USER" -s multirag-channel-key \
+  -w "$(python3 -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("="))')"
+security add-generic-password -a "$USER" -s multirag-internal-token \
+  -w "$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
 ```
 
-`uv run` 在所有平台执行的是同一个 Python 模块；PowerShell 脚本只是一层本地便利包装，
-不是 Channel 的 Windows 专有启动机制。
+终端 1 —— API（**唯一**持有加密密钥的进程）：
+
+```bash
+cd ~/path/to/MultiRAG
+env MULTIRAG_CHANNELS__CONTROL__SECRET_ENCRYPTION_KEY="$(security find-generic-password -w -s multirag-channel-key)" \
+    MULTIRAG_CHANNELS__CONTROL__INTERNAL_API_TOKEN="$(security find-generic-password -w -s multirag-internal-token)" \
+    uv run python -m api.multirag_server
+```
+
+终端 2 —— Supervisor（**不带**加密密钥）：
+
+```bash
+cd ~/path/to/MultiRAG
+env MULTIRAG_CHANNELS__CONTROL__RUNTIME_API_BASE_URL='http://127.0.0.1:8123' \
+    MULTIRAG_CHANNELS__CONTROL__INTERNAL_API_TOKEN="$(security find-generic-password -w -s multirag-internal-token)" \
+    uv run python -m api.channels.supervisor
+```
+
+用 `env VAR=... 命令` 前缀而不是 `export`，可以把变量限制在单条命令内，避免泄漏到同一
+终端的其他进程。worker 由 supervisor 自行 fork，不需要手工启动。
+
+### Linux 源码方式启动（不走 systemd 时）
+
+```bash
+cd /opt/multirag
+# API：从 0600 的文件读取，不让密钥出现在命令行或 shell 历史
+env $(grep -v '^#' /etc/multirag/api.env | xargs) uv run python -m api.multirag_server
+
+# Supervisor：另一个终端 / 另一个 shell
+env $(grep -v '^#' /etc/multirag/channel-supervisor.env | xargs) uv run python -m api.channels.supervisor
+```
+
+生产长期运行请用下一节的 systemd，而不是裸终端。
+
+`uv run` 在所有平台执行的是同一个 Python 模块；仓库里的 PowerShell/sh 包装脚本只是本地
+便利层，不是任何平台的专有启动机制。
 
 ### systemd 建议
 
 Ubuntu/Linux 生产环境建议使用独立 systemd service，而不是把 supervisor 放进 API
-service。仓库提供可直接安装的
-`deploy/systemd/multirag-channel-supervisor.service` 和
-`deploy/systemd/channel-supervisor.env.example`；示例中的路径、用户和环境文件应按部署目录调整：
+service。仓库提供两套可直接安装的 unit 与对应 env 模板，**权限按进程拆开**：
+
+| Unit | Env 文件 | 是否持有主加密密钥 |
+|---|---|---:|
+| `deploy/systemd/multirag-api.service` | `deploy/systemd/api.env.example` → `/etc/multirag/api.env` | **是**（唯一持有者） |
+| `deploy/systemd/multirag-channel-supervisor.service` | `deploy/systemd/channel-supervisor.env.example` → `/etc/multirag/channel-supervisor.env` | 否 |
+
+两个 env 文件都装成 `0640`（或 `0600`）且不入 Git。两个 unit 都开了
+`ProtectSystem=strict`；差别在于 API 会初始化滚动文件日志，所以它额外声明
+`ReadWritePaths=/opt/multirag/logs`，而 supervisor 只写 journald、不需要可写路径。
+示例中的路径、用户和环境文件应按部署目录调整：
 
 ```ini
 [Unit]
@@ -318,6 +400,43 @@ sudo systemctl status multirag-channel-supervisor
   Pod/主机并通过回环地址访问。
 - 当前 supervisor 不暴露 HTTP health endpoint。进程存活用于 liveness，管理 API 中的
   `heartbeat_at`、`observed_generation` 和 `state=connected` 用于 readiness/运维判断。
+
+#### docker compose 最小形态
+
+同一镜像、两个 service、两套 secret，**只有 API 那个挂加密密钥**：
+
+```yaml
+services:
+  multirag-api:
+    image: multirag:latest
+    command: ["python", "-m", "api.multirag_server"]
+    env_file: [/etc/multirag/api.env]          # 含 SECRET_ENCRYPTION_KEY
+    ports: ["8123:8123"]
+    restart: unless-stopped
+
+  multirag-channel-supervisor:
+    image: multirag:latest
+    command: ["python", "-m", "api.channels.supervisor"]
+    env_file: [/etc/multirag/channel-supervisor.env]   # 不含 SECRET_ENCRYPTION_KEY
+    environment:
+      MULTIRAG_CHANNELS__CONTROL__RUNTIME_API_BASE_URL: http://multirag-api:8123
+    depends_on: [multirag-api]
+    init: true                 # supervisor 会 fork worker 子进程，需要 PID 1 收割僵尸
+    stop_grace_period: 40s     # 留足时间优雅停止全部 child
+    deploy:
+      replicas: 1              # 单副本：一个 supervisor 协调全部 binding
+    restart: unless-stopped
+```
+
+```bash
+docker compose up -d multirag-api multirag-channel-supervisor
+docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / worker_started
+```
+
+两点容易踩：`init: true` 不加会积累僵尸进程（worker 是 supervisor fork 出来的）；
+`stop_grace_period` 太短会让 child 被硬杀，runtime 行留在 `connected` 直到心跳超时才被
+判定过期。另外 API 对 Milvus 是**硬启动依赖**（探活 10 秒失败即退出），所以
+`depends_on` 应配合向量库的健康检查，或依赖 `restart: unless-stopped` 自愈。
 
 ## 安全模型和当前边界
 

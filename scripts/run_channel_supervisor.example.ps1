@@ -6,6 +6,27 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# Load the supervisor's own env file when the environment is not already
+# populated. It deliberately holds no encryption key, which is why the
+# supervisor gets a separate file from the API.
+$secretsDir = $env:MULTIRAG_SECRETS_DIR
+if ([string]::IsNullOrWhiteSpace($secretsDir)) {
+    $secretsDir = Join-Path $env:LOCALAPPDATA "MultiRAG\secrets"
+}
+$supervisorEnvPath = Join-Path $secretsDir "supervisor.env"
+if (Test-Path $supervisorEnvPath) {
+    foreach ($line in [System.IO.File]::ReadAllLines($supervisorEnvPath)) {
+        $trimmed = $line.Trim()
+        if ($trimmed -eq "" -or $trimmed.StartsWith("#")) { continue }
+        $separator = $trimmed.IndexOf("=")
+        if ($separator -lt 1) { continue }
+        $name = $trimmed.Substring(0, $separator).Trim()
+        if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name, "Process"))) {
+            [Environment]::SetEnvironmentVariable($name, $trimmed.Substring($separator + 1), "Process")
+        }
+    }
+}
+
 $requiredVariables = @(
     "MULTIRAG_CHANNELS__CONTROL__RUNTIME_API_BASE_URL",
     "MULTIRAG_CHANNELS__CONTROL__INTERNAL_API_TOKEN"
