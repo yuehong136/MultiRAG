@@ -198,6 +198,15 @@ if __name__ == "__main__":
     #   SMTP、workflow_state_manager
     # 热重载：uvicorn --reload 为新进程，bootstrap 重新执行，天然正确
 
+    # Windows 必须跑 SelectorEventLoop：psycopg3 异步驱动依赖 loop.add_reader/add_writer，
+    # 在 ProactorEventLoop 上建连直接抛 InterfaceError（全部 Depends(get_async_db) 路由挂掉，
+    # 且经 async_current_user 的宽 except 伪装成 401）。而 uvicorn 的 asyncio_loop_factory
+    # 在 win32 且非 reload/多 worker 时恰好返回 ProactorEventLoop——即"不带 --debug 就全挂"。
+    # 传自定义工厂导入串是唯一出路：uvicorn>=0.36 用 Runner(loop_factory=...) 显式建循环，
+    # set_event_loop_policy(WindowsSelectorEventLoopPolicy()) 会被绕过、设了也无效。
+    # 非 Windows 保持 "auto"（有 uvloop 则用 uvloop）。
+    loop_setup = "asyncio:SelectorEventLoop" if sys.platform == "win32" else "auto"
+
     try:
         logging.info(f"MultiRAG server is ready after {time.time() - start_ts}s initialization.")
         uvicorn.run(
@@ -206,6 +215,7 @@ if __name__ == "__main__":
             port=settings.HOST_PORT,
             log_level="info",
             reload=RuntimeConfig.DEBUG,
+            loop=loop_setup,
         )
     except Exception:
         logging.exception("Failed to start MultiRAG server")

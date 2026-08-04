@@ -8,9 +8,15 @@
 
 from pathlib import Path
 
-from scripts.check_async_sync_db import MANAGED_PURE_ASYNC, collect_managed_sync
+from scripts.check_async_sync_db import MANAGED_PURE_ASYNC, Violation, collect_managed_sync
 
 TAINTED = frozenset({"get_db", "manager", "current_tenant_id"})
+
+
+def test_violation_key_uses_portable_path_separator():
+    violation = Violation(Path("api") / "apps" / "example.py", 1, "route", "A")
+
+    assert violation.key == "api/apps/example.py::route"
 
 
 def _check(tmp_path: Path, source: str):

@@ -108,7 +108,8 @@ class Violation:
 
     @property
     def key(self) -> str:
-        return f"{self.file}::{self.func}"
+        # Baselines are repository artifacts and must be stable across host OSes.
+        return f"{self.file.as_posix()}::{self.func}"
 
     @property
     def is_class_a(self) -> bool:
