@@ -137,6 +137,26 @@ def _message(message_id: str) -> IncomingMessage:
     )
 
 
+def test_managed_domain_resolver_prefers_root_and_accepts_upstream_nested_shape() -> None:
+    assert worker_module._resolve_provider_domain({"domain": "feishu", "credential": {"domain": "lark"}}) == "feishu"
+    assert worker_module._resolve_provider_domain({"credential": {"domain": "lark"}}) == "lark"
+
+
+@pytest.mark.parametrize(
+    "public_config",
+    [
+        {},
+        {"domain": ""},
+        {"domain": "international", "credential": {"domain": "lark"}},
+    ],
+)
+def test_managed_domain_resolver_never_silently_defaults(
+    public_config: dict[str, object],
+) -> None:
+    with pytest.raises(ChannelWorkerError, match="CHANNEL_RUNTIME_CONFIG_INVALID"):
+        worker_module._resolve_provider_domain(public_config)
+
+
 @pytest.mark.asyncio
 async def test_worker_runs_preflight_consumes_message_and_releases_lease(
     caplog: pytest.LogCaptureFixture,

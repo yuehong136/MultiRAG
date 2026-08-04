@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
+import pytest
 from fastapi import HTTPException
 from pydantic import SecretStr
 from starlette.requests import Request
@@ -15,6 +16,7 @@ from api.channel_execution.dependencies import (
     require_channel_workload,
 )
 from api.channel_execution.models import ChannelExecutionCommand, ExecutionEvent, WorkloadIdentity
+from api.channel_runtime.tokens import derive_binding_workload_token
 
 
 class _RouteService:
@@ -120,3 +122,59 @@ async def test_static_bearer_authenticator_uses_constant_time_credential(monkeyp
         assert "wrong" not in exc.detail
     else:
         raise AssertionError("invalid workload credential was accepted")
+
+
+async def test_static_bearer_authenticator_scopes_child_token_to_binding_generation() -> None:
+    master_token = "master-token-unit"
+    authenticator = StaticBearerWorkloadAuthenticator(SecretStr(master_token), subject="runner-unit")
+    child_token = derive_binding_workload_token(
+        master_token,
+        binding_id="binding-1",
+        generation=7,
+    )
+    request = Request(
+        {
+            "type": "http",
+            "path_params": {"binding_id": "binding-1"},
+            "headers": [
+                (b"authorization", f"Bearer {child_token}".encode()),
+                (b"x-channel-binding-generation", b"7"),
+            ],
+        }
+    )
+
+    identity = await authenticator.authenticate(request)
+
+    assert identity == WorkloadIdentity(
+        subject="runner-unit",
+        binding_id="binding-1",
+        binding_generation=7,
+    )
+
+    wrong_binding = Request(
+        {
+            "type": "http",
+            "path_params": {"binding_id": "binding-2"},
+            "headers": [
+                (b"authorization", f"Bearer {child_token}".encode()),
+                (b"x-channel-binding-generation", b"7"),
+            ],
+        }
+    )
+    with pytest.raises(HTTPException) as raised:
+        await authenticator.authenticate(wrong_binding)
+    assert raised.value.status_code == 401
+
+    oversized_generation = Request(
+        {
+            "type": "http",
+            "path_params": {"binding_id": "binding-1"},
+            "headers": [
+                (b"authorization", f"Bearer {child_token}".encode()),
+                (b"x-channel-binding-generation", str(2**63).encode()),
+            ],
+        }
+    )
+    with pytest.raises(HTTPException) as raised:
+        await authenticator.authenticate(oversized_generation)
+    assert raised.value.status_code == 401

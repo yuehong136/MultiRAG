@@ -103,6 +103,19 @@ def _short_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
+def _resolve_provider_domain(public_config: dict[str, object]) -> str:
+    """Resolve canonical and upstream-compatible domain shapes, fail closed."""
+
+    domain = public_config.get("domain")
+    if domain is None:
+        credential = public_config.get("credential")
+        if isinstance(credential, dict):
+            domain = credential.get("domain")
+    if domain not in {"feishu", "lark"}:
+        raise ChannelWorkerError("CHANNEL_RUNTIME_CONFIG_INVALID")
+    return domain
+
+
 def _message_order_key(message: IncomingMessage) -> str:
     digest = hashlib.sha256()
     for value in (
@@ -407,6 +420,7 @@ async def _run_managed_channel(
     *,
     app_config: AppConfig,
     binding_id: str,
+    binding_generation: int,
     stop_event: asyncio.Event,
 ) -> None:
     control_config = app_config.channels.control
@@ -420,6 +434,8 @@ async def _run_managed_channel(
         base_url=base_url,
         api_token=token,
         runner_id=runner_id,
+        binding_id=binding_id,
+        binding_generation=binding_generation,
     )
     worker: FeishuChannelWorker | None = None
     redis: Redis | None = None
@@ -428,13 +444,11 @@ async def _run_managed_channel(
     generation = 0
     try:
         runtime = await runtime_client.fetch_binding(binding_id)
-        if runtime.binding_id != binding_id or runtime.provider != _CHANNEL_NAME:
+        if runtime.binding_id != binding_id or runtime.generation != binding_generation or runtime.provider != _CHANNEL_NAME:
             raise ChannelWorkerError("CHANNEL_RUNTIME_BINDING_INVALID")
         generation = runtime.generation
         public_config = runtime.public_config
-        domain = public_config.get("domain", "feishu")
-        if domain not in {"feishu", "lark"}:
-            raise ChannelWorkerError("CHANNEL_RUNTIME_CONFIG_INVALID")
+        domain = _resolve_provider_domain(public_config)
         raw_allowed = public_config.get("allowed_open_ids", [])
         if not isinstance(raw_allowed, list) or any(not isinstance(open_id, str) or not open_id.strip() for open_id in raw_allowed):
             raise ChannelWorkerError("CHANNEL_RUNTIME_CONFIG_INVALID")
@@ -460,6 +474,7 @@ async def _run_managed_channel(
         execution_client = MultiRAGBindingExecutionClient(
             base_url=base_url,
             binding_id=binding_id,
+            binding_generation=binding_generation,
             api_token=token,
             total_timeout_seconds=float(tuning.total_timeout_seconds),
             max_answer_chars=tuning.max_answer_chars,
@@ -605,16 +620,24 @@ def _install_signal_handlers(stop_event: asyncio.Event) -> None:
             )
 
 
-async def _run_channel(channel_name: str, *, binding_id: str | None = None) -> None:
+async def _run_channel(
+    channel_name: str,
+    *,
+    binding_id: str | None = None,
+    binding_generation: int | None = None,
+) -> None:
     if channel_name != _CHANNEL_NAME:
         raise ChannelWorkerError("CHANNEL_NOT_SUPPORTED")
     app_config = get_app_config()
     stop_event = asyncio.Event()
     _install_signal_handlers(stop_event)
     if binding_id is not None:
+        if binding_generation is None:
+            raise ChannelWorkerError("CHANNEL_RUNTIME_BINDING_INVALID")
         await _run_managed_channel(
             app_config=app_config,
             binding_id=binding_id,
+            binding_generation=binding_generation,
             stop_event=stop_event,
         )
         return
@@ -626,7 +649,13 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run one external MultiRAG messaging channel")
     parser.add_argument("--channel", choices=[_CHANNEL_NAME], required=True)
     parser.add_argument("--binding-id")
-    return parser.parse_args(argv)
+    parser.add_argument("--binding-generation", type=int)
+    args = parser.parse_args(argv)
+    if (args.binding_id is None) != (args.binding_generation is None):
+        parser.error("--binding-id and --binding-generation must be provided together")
+    if args.binding_generation is not None and args.binding_generation < 1:
+        parser.error("--binding-generation must be positive")
+    return args
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -639,7 +668,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         # would add unrelated startup dependencies.
         ensure_initialized(initialize_resources=False)
         if args.binding_id:
-            asyncio.run(_run_channel(args.channel, binding_id=args.binding_id))
+            asyncio.run(
+                _run_channel(
+                    args.channel,
+                    binding_id=args.binding_id,
+                    binding_generation=args.binding_generation,
+                )
+            )
         else:
             asyncio.run(_run_channel(args.channel))
     except KeyboardInterrupt:

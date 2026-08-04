@@ -152,6 +152,10 @@ class ChannelBindingResponse(BaseModel):
     policy: dict[str, Any]
     enabled: bool
     generation: int
+    # Read-only hint resolved on read paths only, mirroring ``runtime`` below:
+    # True once the bound Canvas release stops being the latest published one,
+    # None when the target is not version-addressable or was not resolved.
+    revision_stale: bool | None = None
 
 
 class ChannelRuntimeResponse(BaseModel):

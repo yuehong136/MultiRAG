@@ -71,6 +71,14 @@ def _command(provider: str = "feishu") -> ChannelExecutionCommand:
     )
 
 
+def _workload(*, binding_id: str = "binding-1", generation: int = 3) -> WorkloadIdentity:
+    return WorkloadIdentity(
+        subject="multirag-channel-runtime",
+        binding_id=binding_id,
+        binding_generation=generation,
+    )
+
+
 @pytest.mark.asyncio
 async def test_binding_resolver_uses_only_server_owned_target_and_tenant() -> None:
     channel = SimpleNamespace(id="channel-1", tenant_id="tenant-trusted", channel="feishu", status=1)
@@ -87,7 +95,7 @@ async def test_binding_resolver_uses_only_server_owned_target_and_tenant() -> No
 
     context = await resolver.resolve(
         binding_id="binding-1",
-        workload=WorkloadIdentity(subject="multirag-channel-runtime"),
+        workload=_workload(),
         command=_command(),
     )
 
@@ -117,7 +125,7 @@ async def test_binding_resolver_rejects_provider_mismatch_and_disabled_state() -
     assert (
         await resolver.resolve(
             binding_id="binding-1",
-            workload=WorkloadIdentity(subject="runtime"),
+            workload=_workload(generation=2),
             command=_command(provider="other"),
         )
         is None
@@ -125,11 +133,20 @@ async def test_binding_resolver_rejects_provider_mismatch_and_disabled_state() -
 
     context = await resolver.resolve(
         binding_id="binding-1",
-        workload=WorkloadIdentity(subject="runtime"),
+        workload=_workload(generation=2),
         command=_command(),
     )
     assert context is not None
     assert context.enabled is False
+
+    assert (
+        await resolver.resolve(
+            binding_id="binding-1",
+            workload=_workload(generation=1),
+            command=_command(),
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio

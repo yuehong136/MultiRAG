@@ -24,8 +24,8 @@ Channel 运行时只允许以下 MultiRAG 目标类型：
 日志和执行服务不得使用其他产品的运行时命名空间，也不得调用其他产品的 API、数据库或
 Dialog 服务。
 
-本包的传输布局参考了 RAGFlow commit
-`d6f1475c5c1fe266a6eab2c0acee9722d6720fea`。RAGFlow 在这里仅是 Apache-2.0
+本包的传输布局参考了上游开源项目 commit
+`d6f1475c5c1fe266a6eab2c0acee9722d6720fea`（各源文件保留其原始版权头）。该上游在这里仅是 Apache-2.0
 代码来源、实现风格和后续 Git 跟进参考；MultiRAG 的控制面、binding、执行服务、状态、
 安全模型和运行进程全部是本项目自己的实现。
 
@@ -158,7 +158,7 @@ supervisor 会停止或重启相应进程；异常退出采用有上限的指数
 
 ### Canvas 发布版本兼容策略
 
-最新 RAGFlow 基线中的 Canvas 执行契约仍是 `release=true` 时读取“最新已发布版本”，并不
+最新上游基线中的 Canvas 执行契约仍是 `release=true` 时读取“最新已发布版本”，并不
 支持按历史 revision ID 直接执行。MultiRAG Channel 不修改这条 Canvas 核心路径，也不向
 `canvas_service.completion()` 增加 Channel 专用参数：
 
@@ -169,7 +169,7 @@ supervisor 会停止或重启相应进程；异常退出采用有上限的指数
 4. Agent 发布新版本后，旧 binding 会 fail closed。管理员更新 binding 后 generation 增加，
    服务端使用新的会话命名空间，避免复用旧 DSL 会话。
 
-这不是“按版本精确执行历史 DSL”。在 RAGFlow 上游提供相应能力前，如确需历史版本执行，
+这不是“按版本精确执行历史 DSL”。在上游提供相应能力前，如确需历史版本执行，
 应在 MultiRAG 自有适配层增加独立执行器并保持 Canvas 核心不变，不能直接扩写上游同步文件。
 
 ### 启动前提
@@ -203,7 +203,7 @@ uv run python -c "import secrets; print(secrets.token_urlsafe(48))"
 | 环境变量 | MultiRAG API | Supervisor/child worker | 说明 |
 |---|---:|---:|---|
 | `MULTIRAG_CHANNELS__CONTROL__SECRET_ENCRYPTION_KEY` | 必需 | 禁止 | AES-256-GCM 主密钥；必须稳定保存，当前没有自动轮换/重加密流程 |
-| `MULTIRAG_CHANNELS__CONTROL__INTERNAL_API_TOKEN` | 必需 | 必需 | 私有 runtime 和 execution API 的静态 workload 凭据；两端值必须一致 |
+| `MULTIRAG_CHANNELS__CONTROL__INTERNAL_API_TOKEN` | 必需 | supervisor 必需；child 自动派生 | API 与 supervisor 共享主 workload token；supervisor 为每个 child 派生仅限 binding + generation 的 token，不把主 token 传给 child |
 | `MULTIRAG_CHANNELS__CONTROL__RUNTIME_API_BASE_URL` | 可选 | 必需 | API origin；远程必须 HTTPS，同机开发可用 `http://127.0.0.1:8123` |
 | `MULTIRAG_CHANNELS__CONTROL__RECONCILE_INTERVAL_SECONDS` | 可选 | 可选 | desired-state 对账间隔，默认 10 秒 |
 | `MULTIRAG_CHANNELS__CONTROL__RUNTIME_HEARTBEAT_SECONDS` | 可选 | 可选 | worker 状态心跳间隔，默认 15 秒 |
@@ -225,7 +225,10 @@ MULTIRAG_CHANNELS__CONTROL__INTERNAL_API_TOKEN=<shared-workload-token>
 ```
 
 不要把主加密密钥发给 supervisor。即使运维平台误把它注入 supervisor，supervisor 也会在
-创建 child worker 前显式删除该环境变量；正确部署仍应从源头实行最小权限。
+创建 child worker 前显式删除该环境变量；正确部署仍应从源头实行最小权限。Supervisor 使用
+主 workload token 拉取 desired state，启动 child 时会把它替换成 HMAC 派生的 binding +
+generation 专用 token。旧 generation 或其他 binding 的 runtime-config、状态、执行和 reset
+请求都会被服务端拒绝。
 
 ### Windows 启动 Managed supervisor
 
@@ -257,7 +260,9 @@ sh scripts/run_channel_supervisor.example.sh
 ### systemd 建议
 
 Ubuntu/Linux 生产环境建议使用独立 systemd service，而不是把 supervisor 放进 API
-service。示例中的路径、用户和环境文件应按部署目录调整：
+service。仓库提供可直接安装的
+`deploy/systemd/multirag-channel-supervisor.service` 和
+`deploy/systemd/channel-supervisor.env.example`；示例中的路径、用户和环境文件应按部署目录调整：
 
 ```ini
 [Unit]
@@ -286,7 +291,7 @@ ProtectSystem=strict
 WantedBy=multi-user.target
 ```
 
-`/etc/multirag/channel-supervisor.env` 只应包含 runtime API base URL、internal token 和可选
+`/etc/multirag/channel-supervisor.env` 只应包含 runtime API base URL、主 internal token 和可选
 tuning，权限设为 root/服务账号可读（例如 `0600`）；不要放主加密密钥、飞书 App Secret
 或 Demo Agent Token。更成熟的环境应由 Vault/KMS/云 Secret Manager 在启动时注入。
 
@@ -325,13 +330,16 @@ sudo systemctl status multirag-channel-supervisor
 - 私有 desired-state API 不返回 tenant、target、revision 或凭据。
 - 私有 runtime/execution API 使用 workload token；目标、租户和发布版本只从服务端
   binding 解析，不接受 worker 或用户消息覆盖。
+- Supervisor 的主 workload token 不下发给 child；child token 绑定 binding ID 和 generation，
+  修改配置、轮换凭据、禁用或更新 binding 后，旧 worker 会被服务端 generation fence 拒绝。
 - execution 使用事件幂等键和 Redis 会话隔离；外部用户只能作为 transport actor 记录，
   不会被提升为 MultiRAG Principal。
 - Supervisor 不记录原始 binding ID，worker 不记录原始飞书 ID、问题、答案或 SSE 帧。
 
 ### 尚未实现或不能宣称
 
-- internal token 目前是静态 workload token，不等于 mTLS 或短期 delegated token。
+- API 与 supervisor 之间的主 internal token 目前仍是静态 workload token，不等于 mTLS 或
+  短期 delegated token；child token 虽已缩小作用域，仍由该主 token 确定性派生。
 - 飞书用户尚未正式映射为 MultiRAG 用户 Principal。
 - 尚未实现基于 `RunContext.principal` 的用户级 MCP/SQL 授权。
 - 主加密密钥尚无在线轮换和存量密文重加密流程；不得直接替换旧 key。
@@ -349,7 +357,8 @@ sudo systemctl status multirag-channel-supervisor
 - 禁用或删除 binding：supervisor 优雅停止对应 worker。
 - Child 异常退出：supervisor 记录脱敏错误并指数退避重启。
 - MultiRAG API/Redis 不可用：停止执行，不能降级到进程内无状态模式。
-- internal token 轮换：协调更新 API 和 supervisor，并重启 supervisor。
+- internal token 轮换：协调更新 API 和 supervisor，并重启 supervisor；旧 child 派生 token
+  会立即失效并由 supervisor 重建。
 - 主加密密钥丢失：现有飞书凭据无法恢复；必须从 secret manager 备份恢复或重新录入。
 
 正常日志可包含：
@@ -363,11 +372,11 @@ channel_event=worker_started
 日志不得包含 App Secret、internal token、tenant access token、完整 WebSocket URL、原始
 事件、问题、答案、完整用户/会话/message ID 或 MCP 参数。
 
-## 与 RAGFlow 上游同步策略
+## 与上游同步策略
 
 ### Feishu / Lark 域名兼容
 
-MultiRAG 的规范公开字段是 `config.domain`。为兼容新版 RAGFlow 的请求结构，控制面在根字段
+MultiRAG 的规范公开字段是 `config.domain`。为兼容新版上游的请求结构，控制面在根字段
 缺失时也接受 `config.credential.domain`；两处同时存在时以根字段为准。兼容值会被提升到公开
 配置，不会随 App Secret 一起进入加密凭据存储。这样国际版的 `lark` 不会因为字段位置差异，
 在请求正常保存后被 Pydantic 默认值静默替换成国区 `feishu`。
@@ -381,16 +390,16 @@ MultiRAG 的规范公开字段是 `config.domain`。为兼容新版 RAGFlow 的�
 | `state_store.py`、`runtime_client.py` | MultiRAG | 不用上游文件覆盖 |
 | `worker.py`、`supervisor.py` | MultiRAG | 不用上游 Bootstrap/进程模型覆盖 |
 | `api/channel_control`、`api/channel_execution`、`api/channel_runtime` | MultiRAG | 作为本项目长期主线维护 |
-| `api/db/services/canvas_service.py`、`user_canvas_version.py` | RAGFlow 同步核心 | Channel 不加参数、不改发布语义；只从独立适配器调用公开契约 |
+| `api/db/services/canvas_service.py`、`user_canvas_version.py` | 上游同步核心 | Channel 不加参数、不改发布语义；只从独立适配器调用公开契约 |
 
-跟进新版 RAGFlow 时：
+跟进新版上游时：
 
 1. 在本文件更新所参考的 upstream SHA。
 2. 对比 `api/channels/core/{base,registry}.py`、`api/channels/feishu/channel.py` 的传输层变化，
    同时核对 Canvas 发布与 completion 契约是否有上游变化。
 3. 按上表语义移植，不整文件覆盖加固版本。
 4. 把上游产品名、模型、路由、表名和运行时值翻写为 MultiRAG 自己的实现。
-5. 禁止引入任何指向 RAGFlow 运行服务的 HTTP、RPC、数据库或消息队列依赖。
+5. 禁止引入任何指向上游运行服务的 HTTP、RPC、数据库或消息队列依赖。
 6. 运行 Channel 契约测试和全仓验证，通过后再更新 SHA。
 
 ## 验证

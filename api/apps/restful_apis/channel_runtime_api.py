@@ -56,11 +56,16 @@ async def list_desired_channel_runtimes(
 )
 async def get_channel_runtime_config(
     binding_id: str = Path(min_length=1, max_length=32),
-    _workload: WorkloadIdentity = Depends(require_channel_workload),
+    workload: WorkloadIdentity = Depends(require_channel_workload),
     service: ChannelControlService = Depends(get_runtime_control_service),
 ) -> RuntimeBindingConfig:
+    if workload.binding_id != binding_id or workload.binding_generation is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized channel runtime.")
     try:
-        runtime = await service.resolve_runtime_binding(binding_id)
+        runtime = await service.resolve_runtime_binding(
+            binding_id,
+            expected_generation=workload.binding_generation,
+        )
     except ChannelControlError as error:
         _raise_private_error(error)
         raise AssertionError("unreachable")
@@ -84,9 +89,11 @@ async def get_channel_runtime_config(
 async def report_channel_runtime_status(
     report: RuntimeReport,
     binding_id: str = Path(min_length=1, max_length=32),
-    _workload: WorkloadIdentity = Depends(require_channel_workload),
+    workload: WorkloadIdentity = Depends(require_channel_workload),
     service: ChannelControlService = Depends(get_runtime_control_service),
 ) -> Response:
+    if workload.binding_id != binding_id or workload.binding_generation is None or workload.binding_generation != report.observed_generation:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized channel runtime.")
     try:
         await service.report_runtime(
             binding_id=binding_id,

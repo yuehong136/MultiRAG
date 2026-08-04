@@ -106,7 +106,11 @@ class _LarkOapiSDK:
         self._reply_message_body = im_api.ReplyMessageRequestBody
 
     def _domain(self, domain: str) -> Any:
-        return self._lark.LARK_DOMAIN if domain == "lark" else self._lark.FEISHU_DOMAIN
+        if domain == "lark":
+            return self._lark.LARK_DOMAIN
+        if domain == "feishu":
+            return self._lark.FEISHU_DOMAIN
+        raise ValueError("Feishu account domain must be 'feishu' or 'lark'")
 
     def _log_level(self) -> Any:
         # SDK INFO logs the complete WebSocket URL, whose query string contains

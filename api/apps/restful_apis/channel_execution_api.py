@@ -90,18 +90,22 @@ async def execute_channel_binding(
 async def reset_channel_conversation(
     binding_id: str = Path(min_length=1, max_length=32),
     conversation_key: str = Path(min_length=1, max_length=512),
-    _workload: WorkloadIdentity = Depends(require_channel_workload),
+    workload: WorkloadIdentity = Depends(require_channel_workload),
     store: ChannelConversationStore = Depends(get_channel_conversation_store),
     db: AsyncSession = Depends(get_async_db),
 ) -> Response:
     """Reset only a server-resolved active binding conversation."""
 
+    if workload.binding_id != binding_id or workload.binding_generation is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized channel runtime.")
     bundle = await SqlAlchemyChannelRepository(db).get_runtime_binding(binding_id)
     if bundle is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BINDING_NOT_FOUND")
     channel, binding, _secret = bundle
     if channel.status != 1 or not binding.enabled:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="BINDING_DISABLED")
+    if workload.binding_generation != binding.generation:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="BINDING_GENERATION_STALE")
     try:
         await store.reset_session(
             binding_id=binding_id,

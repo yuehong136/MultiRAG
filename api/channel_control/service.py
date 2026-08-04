@@ -221,6 +221,11 @@ class ChannelControlService:
                 self._ensure_ready(channel, secret, binding)
 
             self._repository.add(channel)
+            # No ORM relationships are declared between the control-plane
+            # models, so SQLAlchemy cannot infer parent/child flush ordering
+            # from the foreign keys alone.  Persist the channel first while
+            # keeping the whole operation in the same transaction.
+            await self._repository.flush()
             if secret is not None:
                 self._repository.add(secret)
             if binding is not None:
@@ -483,10 +488,17 @@ class ChannelControlService:
             if secret is not None
         ]
 
-    async def resolve_runtime_binding(self, binding_id: str) -> ResolvedRuntimeBindingSpec:
+    async def resolve_runtime_binding(
+        self,
+        binding_id: str,
+        *,
+        expected_generation: int | None = None,
+    ) -> ResolvedRuntimeBindingSpec:
         """Decrypt one active provider credential for a trusted runner."""
 
         runtime = await self.load_runtime_binding(binding_id)
+        if expected_generation is not None and runtime.generation != expected_generation:
+            raise InvalidChannelConfiguration("The channel binding generation is stale.")
         try:
             plaintext = await self._secret_store.decrypt(
                 tenant_id=runtime.tenant_id,
@@ -529,7 +541,7 @@ class ChannelControlService:
             if bundle is None:
                 raise ChannelAccessDenied
             _channel, binding, _secret = bundle
-            if observed_generation < 0 or observed_generation > binding.generation:
+            if observed_generation != binding.generation:
                 raise InvalidChannelConfiguration("The observed channel generation is invalid.")
             runtime = await self._repository.get_runtime(binding_id, for_update=True)
             if runtime is None:
@@ -561,7 +573,32 @@ class ChannelControlService:
         secret = await self._repository.get_secret(channel.id)
         binding = await self._repository.get_binding(channel.id)
         runtime = await self._repository.get_runtime(binding.id) if binding is not None else None
-        return self._serialize(channel, secret, binding, runtime=runtime, include_runtime=True)
+        revision_stale = await self._binding_revision_stale(channel.tenant_id, binding)
+        return self._serialize(
+            channel,
+            secret,
+            binding,
+            runtime=runtime,
+            include_runtime=True,
+            revision_stale=revision_stale,
+        )
+
+    async def _binding_revision_stale(self, tenant_id: str, binding: ChannelBinding | None) -> bool | None:
+        """Report whether the bound Canvas release stopped being the latest one.
+
+        The executor re-checks the same guard for every message, so a stale
+        binding keeps failing closed while its runtime row legitimately stays
+        ``connected`` at the current generation. Without this hint the management
+        page shows a healthy runner for a channel that answers nothing.
+        """
+
+        if binding is None or binding.target_type != "multirag.canvas_agent" or binding.target_revision_id is None:
+            return None
+        return not await self._repository.canvas_revision_is_latest_published(
+            tenant_id,
+            binding.target_id,
+            binding.target_revision_id,
+        )
 
     def _serialize(
         self,
@@ -571,8 +608,9 @@ class ChannelControlService:
         *,
         runtime: ChannelRuntimeStatus | None = None,
         include_runtime: bool = False,
+        revision_stale: bool | None = None,
     ) -> dict[str, Any]:
-        binding_response = ChannelBindingResponse.model_validate(binding) if binding is not None else None
+        binding_response = ChannelBindingResponse.model_validate(binding).model_copy(update={"revision_stale": revision_stale}) if binding is not None else None
         response = ChatChannelResponse(
             id=channel.id,
             tenant_id=channel.tenant_id,
@@ -595,12 +633,12 @@ class ChannelControlService:
 
     @staticmethod
     def _serialize_runtime(binding: ChannelBinding, runtime: ChannelRuntimeStatus | None) -> dict[str, Any]:
-        if runtime is None:
+        if runtime is None or runtime.observed_generation != binding.generation:
             response = ChannelRuntimeResponse(
                 binding_id=binding.id,
                 desired_generation=binding.generation,
-                observed_generation=0,
-                state="waiting",
+                observed_generation=runtime.observed_generation if runtime is not None else 0,
+                state="waiting" if binding.enabled else "stopped",
                 runner_id=None,
                 heartbeat_at=None,
                 connected_at=None,

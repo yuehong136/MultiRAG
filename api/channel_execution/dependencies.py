@@ -28,6 +28,7 @@ from api.channel_execution.protocols import (
 )
 from api.channel_execution.registry import TargetExecutorRegistry
 from api.channel_execution.service import ChannelExecutionService, PublishedTargetExecutionService
+from api.channel_runtime.tokens import derive_binding_workload_token
 from api.db.db_models import get_async_db
 from common.app_config import get_app_config
 
@@ -44,10 +45,11 @@ class DenyAllWorkloadAuthenticator:
 
 
 class StaticBearerWorkloadAuthenticator:
-    """Constant-time authenticator for the first private Runner deployment.
+    """Constant-time authenticator for control and binding-scoped runtimes.
 
-    The class is intentionally injectable so mTLS or workload-OIDC can replace
-    it without changing the execution route or domain services.
+    The configured token authenticates only supervisor control requests. Child
+    workers receive an HMAC-derived token scoped to one binding generation.
+    The class remains injectable so mTLS or workload-OIDC can replace it.
     """
 
     def __init__(
@@ -62,14 +64,36 @@ class StaticBearerWorkloadAuthenticator:
     async def authenticate(self, request: Request) -> WorkloadIdentity:
         authorization = request.headers.get("Authorization", "")
         scheme, separator, supplied_token = authorization.partition(" ")
-        expected_token = self._token.get_secret_value()
+        master_token = self._token.get_secret_value()
+        raw_binding_id = request.path_params.get("binding_id")
+        binding_id = str(raw_binding_id) if raw_binding_id is not None else None
+        binding_generation: int | None = None
+        expected_token = master_token
+        if binding_id is not None:
+            raw_generation = request.headers.get("X-Channel-Binding-Generation", "")
+            try:
+                binding_generation = int(raw_generation)
+            except ValueError:
+                binding_generation = None
+            try:
+                expected_token = derive_binding_workload_token(
+                    master_token,
+                    binding_id=binding_id,
+                    generation=binding_generation if binding_generation is not None else 0,
+                )
+            except ValueError:
+                expected_token = ""
         invalid_credential = separator != " " or scheme.lower() != "bearer" or not supplied_token or not expected_token or not secrets.compare_digest(supplied_token, expected_token)
         if invalid_credential:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Unauthorized channel runtime.",
             )
-        return WorkloadIdentity(subject=self._subject)
+        return WorkloadIdentity(
+            subject=self._subject,
+            binding_id=binding_id,
+            binding_generation=binding_generation,
+        )
 
 
 class MissingBindingResolver:

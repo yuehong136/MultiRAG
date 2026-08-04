@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from common.app_config import get_app_config
 from common.channel_secret_crypto import ChannelSecretCipher, ChannelSecretCipherError
@@ -21,6 +21,7 @@ class EncryptedSecret:
     version: int
 
 
+@runtime_checkable
 class SecretStore(Protocol):
     async def encrypt(
         self,

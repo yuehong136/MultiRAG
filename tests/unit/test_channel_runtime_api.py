@@ -18,8 +18,14 @@ class _RuntimeService:
     async def list_desired_runtimes(self) -> list[dict[str, Any]]:
         return [{"binding_id": "binding-1", "provider": "feishu", "generation": 4}]
 
-    async def resolve_runtime_binding(self, binding_id: str) -> ResolvedRuntimeBindingSpec:
+    async def resolve_runtime_binding(
+        self,
+        binding_id: str,
+        *,
+        expected_generation: int | None = None,
+    ) -> ResolvedRuntimeBindingSpec:
         assert binding_id == "binding-1"
+        assert expected_generation == 4
         return ResolvedRuntimeBindingSpec(
             binding_id=binding_id,
             provider="feishu",
@@ -33,6 +39,14 @@ class _RuntimeService:
 
 
 def _authenticate_runner() -> WorkloadIdentity:
+    return WorkloadIdentity(
+        subject="runner-unit",
+        binding_id="binding-1",
+        binding_generation=4,
+    )
+
+
+def _authenticate_supervisor() -> WorkloadIdentity:
     return WorkloadIdentity(subject="runner-unit")
 
 
@@ -53,7 +67,7 @@ def test_runtime_control_routes_require_workload_authentication(client) -> None:
 
 def test_desired_runtime_contract_contains_no_credentials_or_execution_target(client) -> None:
     service = _RuntimeService()
-    client.app.dependency_overrides[require_channel_workload] = _authenticate_runner
+    client.app.dependency_overrides[require_channel_workload] = _authenticate_supervisor
     client.app.dependency_overrides[get_runtime_control_service] = lambda: service
 
     response = client.get("/api/v1/internal/channel-runtimes/desired")
@@ -154,8 +168,13 @@ def test_runtime_status_rejects_trusted_context_overrides_and_forwards_only_repo
 
 def test_runtime_config_secret_store_failure_is_sanitized(client, caplog) -> None:
     class _UnavailableService(_RuntimeService):
-        async def resolve_runtime_binding(self, binding_id: str) -> ResolvedRuntimeBindingSpec:
-            del binding_id
+        async def resolve_runtime_binding(
+            self,
+            binding_id: str,
+            *,
+            expected_generation: int | None = None,
+        ) -> ResolvedRuntimeBindingSpec:
+            del binding_id, expected_generation
             raise ChannelCredentialUnavailable
 
     client.app.dependency_overrides[require_channel_workload] = _authenticate_runner

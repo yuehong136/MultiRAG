@@ -65,6 +65,8 @@ class WorkloadIdentity:
     """Authenticated identity of a Channel runtime process."""
 
     subject: str
+    binding_id: str | None = None
+    binding_generation: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

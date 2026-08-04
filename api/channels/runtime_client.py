@@ -33,11 +33,21 @@ class ChannelRuntimeClient:
         base_url: str,
         api_token: str,
         runner_id: str,
+        binding_id: str | None = None,
+        binding_generation: int | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
+        if (binding_id is None) != (binding_generation is None):
+            raise ValueError("binding_id and binding_generation must be configured together")
+        if binding_generation is not None and binding_generation < 1:
+            raise ValueError("channel binding generation must be positive")
         self._base_url = base_url.rstrip("/")
         self._runner_id = runner_id
         self._headers = {"Authorization": f"Bearer {api_token}"}
+        self._binding_id = binding_id
+        self._binding_generation = binding_generation
+        if binding_generation is not None:
+            self._headers["X-Channel-Binding-Generation"] = str(binding_generation)
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(connect=5, read=30, write=5, pool=5),
@@ -60,6 +70,8 @@ class ChannelRuntimeClient:
             raise ChannelRuntimeClientError("RUNTIME_DESIRED_INVALID") from exc
 
     async def fetch_binding(self, binding_id: str) -> RuntimeBindingConfig:
+        if self._binding_id is not None and binding_id != self._binding_id:
+            raise ChannelRuntimeClientError("RUNTIME_BINDING_SCOPE_MISMATCH")
         encoded = quote(binding_id, safe="")
         response = await self._request(
             "GET",
@@ -79,6 +91,8 @@ class ChannelRuntimeClient:
         connected_at: datetime | None = None,
         error_code: str | None = None,
     ) -> None:
+        if self._binding_id is not None and (binding_id != self._binding_id or generation != self._binding_generation):
+            raise ChannelRuntimeClientError("RUNTIME_BINDING_SCOPE_MISMATCH")
         encoded = quote(binding_id, safe="")
         payload = {
             "observed_generation": generation,
@@ -132,11 +146,14 @@ class MultiRAGBindingExecutionClient:
         *,
         base_url: str,
         binding_id: str,
+        binding_generation: int,
         api_token: str,
         max_answer_chars: int = 4000,
         total_timeout_seconds: float = 120,
         client: httpx.AsyncClient | None = None,
     ) -> None:
+        if binding_generation < 1:
+            raise ValueError("channel binding generation must be positive")
         self._base_url = base_url.rstrip("/")
         self._binding_id = binding_id
         self._max_answer_chars = max_answer_chars
@@ -149,6 +166,7 @@ class MultiRAGBindingExecutionClient:
             "Accept": "text/event-stream",
             "Authorization": f"Bearer {api_token}",
             "Content-Type": "application/json",
+            "X-Channel-Binding-Generation": str(binding_generation),
         }
         self._client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(connect=5, read=total_timeout_seconds, write=5, pool=5),

@@ -4,11 +4,14 @@ import asyncio
 import logging
 import signal
 from collections.abc import Awaitable, Callable
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from pydantic import SecretStr
 
 from api.channel_runtime.schemas import DesiredRuntime
+from api.channel_runtime.tokens import derive_binding_workload_token
 from api.channels import supervisor as supervisor_module
 from api.channels.runtime_client import ChannelRuntimeClientError
 from api.channels.supervisor import ChannelRuntimeSupervisor
@@ -238,6 +241,12 @@ async def test_spawn_worker_removes_master_and_demo_secrets(
     monkeypatch.setenv("MULTIRAG_CHANNELS__FEISHU__APP_SECRET", "app-secret")
     monkeypatch.setenv("MULTIRAG_CHANNELS__FEISHU__AGENT_API_TOKEN", "agent-token")
     monkeypatch.setenv("MULTIRAG_CHANNELS__FEISHU__ENABLED", "true")
+    master_token = "m" * 48
+    monkeypatch.setattr(
+        supervisor_module,
+        "get_app_config",
+        lambda: SimpleNamespace(channels=SimpleNamespace(control=SimpleNamespace(internal_api_token=SecretStr(master_token)))),
+    )
     captured: dict[str, Any] = {}
     process = _FakeProcess()
 
@@ -256,7 +265,53 @@ async def test_spawn_worker_removes_master_and_demo_secrets(
     assert "MULTIRAG_CHANNELS__FEISHU__APP_SECRET" not in child_env
     assert "MULTIRAG_CHANNELS__FEISHU__AGENT_API_TOKEN" not in child_env
     assert child_env["MULTIRAG_CHANNELS__FEISHU__ENABLED"] == "false"
+    assert child_env["MULTIRAG_CHANNELS__CONTROL__INTERNAL_API_TOKEN"] == derive_binding_workload_token(
+        master_token,
+        binding_id="managed-binding",
+        generation=1,
+    )
+    assert child_env["MULTIRAG_CHANNELS__CONTROL__INTERNAL_API_TOKEN"] != master_token
     assert "managed-binding" in captured["args"]
+    assert captured["args"][-2:] == ("--binding-generation", "1")
+
+
+@pytest.mark.asyncio
+async def test_run_supervisor_normalizes_configured_integer_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _Client:
+        def __init__(self, **kwargs: Any) -> None:
+            captured["client"] = kwargs
+
+    class _Supervisor:
+        def __init__(self, **kwargs: Any) -> None:
+            captured["supervisor"] = kwargs
+
+        async def run(self, _stop_event: asyncio.Event) -> None:
+            return None
+
+    monkeypatch.setattr(
+        supervisor_module,
+        "get_app_config",
+        lambda: SimpleNamespace(
+            channels=SimpleNamespace(
+                control=SimpleNamespace(
+                    runtime_api_base_url="http://127.0.0.1:8123",
+                    internal_api_token=SecretStr("t" * 32),
+                    reconcile_interval_seconds=10,
+                )
+            )
+        ),
+    )
+    monkeypatch.setattr(supervisor_module, "ChannelRuntimeClient", _Client)
+    monkeypatch.setattr(supervisor_module, "ChannelRuntimeSupervisor", _Supervisor)
+    monkeypatch.setattr(supervisor_module, "_install_signal_handlers", lambda _event: None)
+
+    await supervisor_module._run_supervisor()
+
+    assert captured["supervisor"]["reconcile_interval_seconds"] == 10.0
 
 
 @pytest.mark.asyncio

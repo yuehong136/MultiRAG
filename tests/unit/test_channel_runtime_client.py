@@ -106,6 +106,7 @@ async def test_binding_execution_request_cannot_override_trusted_context(caplog:
         captured["path"] = request.url.path
         captured["raw_path"] = request.url.raw_path.decode("ascii")
         captured["authorization"] = request.headers.get("Authorization")
+        captured["binding_generation"] = request.headers.get("X-Channel-Binding-Generation")
         captured["idempotency_key"] = request.headers.get("Idempotency-Key")
         captured["body"] = json.loads(request.content)
         return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
@@ -115,6 +116,7 @@ async def test_binding_execution_request_cannot_override_trusted_context(caplog:
         client = MultiRAGBindingExecutionClient(
             base_url="http://multirag.local",
             binding_id="binding/one",
+            binding_generation=7,
             api_token=api_token,
             client=http_client,
         )
@@ -135,6 +137,7 @@ async def test_binding_execution_request_cannot_override_trusted_context(caplog:
         "path": "/api/v1/internal/channel-bindings/binding/one/executions",
         "raw_path": "/api/v1/internal/channel-bindings/binding%2Fone/executions",
         "authorization": f"Bearer {api_token}",
+        "binding_generation": "7",
         "idempotency_key": "event-1",
         "body": {
             "event_id": "event-1",
@@ -174,6 +177,7 @@ async def test_binding_execution_failure_exposes_only_classified_code(caplog: py
         client = MultiRAGBindingExecutionClient(
             base_url="http://multirag.local",
             binding_id="binding-1",
+            binding_generation=1,
             api_token=token,
             client=http_client,
         )

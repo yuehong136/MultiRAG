@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol, TypeVar
+from typing import Protocol, TypeVar, runtime_checkable
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +20,7 @@ from api.db.db_models import (
 ModelT = TypeVar("ModelT", ChatChannel, ChannelSecret, ChannelBinding, ChannelRuntimeStatus)
 
 
+@runtime_checkable
 class ChannelRepository(Protocol):
     async def list_channels(self, tenant_id: str) -> tuple[list[ChatChannel], int]: ...
 

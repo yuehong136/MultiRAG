@@ -7,7 +7,12 @@ from typing import Any
 import pytest
 
 from api.channels.core.base import IncomingMessage, OutgoingMessage
-from api.channels.feishu.channel import FeishuAccount, FeishuChannel, FeishuSendError
+from api.channels.feishu.channel import (
+    FeishuAccount,
+    FeishuChannel,
+    FeishuSendError,
+    _LarkOapiSDK,
+)
 
 
 class _Response:
@@ -185,6 +190,16 @@ def test_normalize_preserves_non_user_sender_type() -> None:
     message = channel._normalize(_event(sender_type="app"))
 
     assert message.sender_type == "app"
+
+
+def test_sdk_domain_mapping_never_defaults_unknown_values_to_feishu() -> None:
+    sdk = object.__new__(_LarkOapiSDK)
+    sdk._lark = SimpleNamespace(FEISHU_DOMAIN="feishu-domain", LARK_DOMAIN="lark-domain")
+
+    assert sdk._domain("feishu") == "feishu-domain"
+    assert sdk._domain("lark") == "lark-domain"
+    with pytest.raises(ValueError, match="domain"):
+        sdk._domain("unknown")
 
 
 async def test_sdk_callback_schedules_handler_without_waiting() -> None:

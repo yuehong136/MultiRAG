@@ -17,6 +17,7 @@ from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
 from api.channel_runtime.schemas import DesiredRuntime
+from api.channel_runtime.tokens import derive_binding_workload_token
 from api.channels.runtime_client import ChannelRuntimeClient, ChannelRuntimeClientError
 from common.app_config import AppConfigError, get_app_config
 from common.bootstrap import ensure_initialized
@@ -24,6 +25,7 @@ from common.file_utils import get_project_base_directory
 
 LOGGER = logging.getLogger(__name__)
 _SECRET_KEY_ENV = "MULTIRAG_CHANNELS__CONTROL__SECRET_ENCRYPTION_KEY"
+_CONTROL_TOKEN_ENV = "MULTIRAG_CHANNELS__CONTROL__INTERNAL_API_TOKEN"
 _DEMO_ENABLED_ENV = "MULTIRAG_CHANNELS__FEISHU__ENABLED"
 _DEMO_SECRET_ENVS = (
     "MULTIRAG_CHANNELS__FEISHU__APP_SECRET",
@@ -228,6 +230,14 @@ async def _spawn_worker(item: DesiredRuntime) -> WorkerProcess:
     child_env[_DEMO_ENABLED_ENV] = "false"
     for env_name in _DEMO_SECRET_ENVS:
         child_env.pop(env_name, None)
+    master_token = get_app_config().channels.control.internal_api_token.get_secret_value()
+    if not master_token:
+        raise ChannelSupervisorError("CHANNEL_RUNTIME_CONTROL_NOT_CONFIGURED")
+    child_env[_CONTROL_TOKEN_ENV] = derive_binding_workload_token(
+        master_token,
+        binding_id=item.binding_id,
+        generation=item.generation,
+    )
     return await asyncio.create_subprocess_exec(
         sys.executable,
         "-m",
@@ -236,6 +246,8 @@ async def _spawn_worker(item: DesiredRuntime) -> WorkerProcess:
         item.provider,
         "--binding-id",
         item.binding_id,
+        "--binding-generation",
+        str(item.generation),
         cwd=get_project_base_directory(),
         env=child_env,
     )
@@ -268,7 +280,11 @@ async def _run_supervisor() -> None:
     supervisor = ChannelRuntimeSupervisor(
         client=client,
         process_factory=_spawn_worker,
-        reconcile_interval_seconds=config.reconcile_interval_seconds,
+        # Pydantic exposes the configured PositiveInt as ``int`` while the
+        # reconciler deliberately accepts sub-second floats in tests and
+        # embeddings.  Normalize at this boundary for strict beartype runtime
+        # checking.
+        reconcile_interval_seconds=float(config.reconcile_interval_seconds),
     )
     stop_event = asyncio.Event()
     _install_signal_handlers(stop_event)

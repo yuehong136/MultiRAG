@@ -74,6 +74,16 @@ class FakeRepository:
         channel = self.channels[binding.channel_id]
         return channel, binding, self.secrets.get(channel.id)
 
+    async def list_runtime_bindings(
+        self,
+    ) -> list[tuple[ChatChannel, ChannelBinding, ChannelSecret | None]]:
+        bundles: list[tuple[ChatChannel, ChannelBinding, ChannelSecret | None]] = []
+        for binding in self.bindings.values():
+            channel = self.channels[binding.channel_id]
+            if channel.status == 1 and binding.enabled:
+                bundles.append((channel, binding, self.secrets.get(channel.id)))
+        return bundles
+
     async def dialog_belongs_to_tenant(self, tenant_id: str, dialog_id: str) -> bool:
         return (tenant_id, dialog_id) in self.dialogs
 
@@ -262,6 +272,56 @@ async def test_canvas_binding_requires_latest_owned_published_revision() -> None
     assert response["binding"]["target_revision_id"] == "revision-1"
 
 
+async def test_read_paths_flag_a_stale_canvas_revision_without_mutating_state() -> None:
+    repository = FakeRepository()
+    repository.latest_canvas_revisions.add(("tenant-a", "agent-1", "revision-1"))
+    service = ChannelControlService(repository, FakeSecretStore())
+    created = await service.create_channel("tenant-a", _create_request())
+    channel_id = created["id"]
+    upserted = await service.upsert_binding(
+        "tenant-a",
+        channel_id,
+        ChannelBindingUpsertRequest(
+            target_type="multirag.canvas_agent",
+            target_id="agent-1",
+            target_revision_id="revision-1",
+        ),
+    )
+    # Mutation responses resolve no staleness, exactly like ``runtime``.
+    assert upserted["binding"]["revision_stale"] is None
+    assert upserted["runtime"] is None
+
+    fresh = await service.get_channel("tenant-a", channel_id)
+    assert fresh["binding"]["revision_stale"] is False
+
+    # Publishing a newer Canvas release strands the bound revision.
+    repository.latest_canvas_revisions.discard(("tenant-a", "agent-1", "revision-1"))
+    repository.latest_canvas_revisions.add(("tenant-a", "agent-1", "revision-2"))
+
+    stale = await service.get_channel("tenant-a", channel_id)
+    assert stale["binding"]["revision_stale"] is True
+    # The hint is read-only: it must not rebind, advance generation or fake runtime.
+    assert stale["binding"]["target_revision_id"] == "revision-1"
+    assert stale["binding"]["generation"] == fresh["binding"]["generation"]
+    assert stale["generation"] == fresh["generation"]
+    assert stale["runtime"] == fresh["runtime"]
+
+    listed = await service.list_channels("tenant-a")
+    assert [item["binding"]["revision_stale"] for item in listed["items"]] == [True]
+
+
+async def test_dialog_binding_reports_no_revision_staleness() -> None:
+    repository = FakeRepository()
+    repository.dialogs.add(("tenant-a", "dialog-1"))
+    service = ChannelControlService(repository, FakeSecretStore())
+    created = await service.create_channel("tenant-a", _create_request(chat_id="dialog-1"))
+
+    detail = await service.get_channel("tenant-a", created["id"])
+
+    assert detail["binding"]["target_type"] == "multirag.dialog"
+    assert detail["binding"]["revision_stale"] is None
+
+
 def test_target_type_rejects_external_namespace() -> None:
     with pytest.raises(ValidationError):
         ChannelBindingUpsertRequest.model_validate(
@@ -328,6 +388,21 @@ async def test_runtime_bundle_and_heartbeat_are_internal_and_generation_fenced()
             binding_id=binding_id,
             observed_generation=spec.generation + 1,
             state="connected",
+            runner_id="runner-1",
+            heartbeat_at=heartbeat,
+        )
+
+    await service.set_enabled("tenant-a", created["id"], enabled=False)
+    stopped = await service.get_runtime("tenant-a", created["id"])
+    assert stopped["desired_generation"] == spec.generation + 1
+    assert stopped["observed_generation"] == spec.generation
+    assert stopped["state"] == "stopped"
+    assert stopped["runner_id"] is None
+    with pytest.raises(InvalidChannelConfiguration, match="generation"):
+        await service.report_runtime(
+            binding_id=binding_id,
+            observed_generation=spec.generation,
+            state="stopped",
             runner_id="runner-1",
             heartbeat_at=heartbeat,
         )

@@ -5,13 +5,13 @@ from __future__ import annotations
 import hashlib
 from typing import Protocol, runtime_checkable
 
-from api.channel_control.repository import ChannelRepository
 from api.channel_execution.models import (
     ChannelExecutionCommand,
     ExecutionTargetRef,
     TrustedChannelContext,
     WorkloadIdentity,
 )
+from api.db.db_models import ChannelBinding, ChannelSecret, ChatChannel
 
 _STATE_PREFIX = "multirag:channel-execution:v1"
 _PROCESSING_TTL_SECONDS = 600
@@ -36,6 +36,18 @@ class AsyncExecutionRedis(Protocol):
     async def delete(self, *names: str) -> int: ...
 
 
+@runtime_checkable
+class RuntimeBindingRepository(Protocol):
+    """Least-privilege repository surface needed during execution."""
+
+    async def get_runtime_binding(
+        self,
+        binding_id: str,
+        *,
+        for_update: bool = False,
+    ) -> tuple[ChatChannel, ChannelBinding, ChannelSecret | None] | None: ...
+
+
 def _opaque_key(*values: str) -> str:
     digest = hashlib.sha256()
     for value in values:
@@ -48,7 +60,7 @@ def _opaque_key(*values: str) -> str:
 class SqlAlchemyBindingResolver:
     """Resolve execution authority exclusively from MultiRAG control state."""
 
-    def __init__(self, repository: ChannelRepository) -> None:
+    def __init__(self, repository: RuntimeBindingRepository) -> None:
         self._repository = repository
 
     async def resolve(
@@ -58,13 +70,13 @@ class SqlAlchemyBindingResolver:
         workload: WorkloadIdentity,
         command: ChannelExecutionCommand,
     ) -> TrustedChannelContext | None:
-        if not workload.subject.strip():
+        if not workload.subject.strip() or workload.binding_id != binding_id:
             return None
         bundle = await self._repository.get_runtime_binding(binding_id)
         if bundle is None:
             return None
         channel, binding, _secret = bundle
-        if binding.channel_id != channel.id or command.actor.provider != channel.channel:
+        if binding.channel_id != channel.id or workload.binding_generation != binding.generation or command.actor.provider != channel.channel:
             return None
         try:
             target = ExecutionTargetRef(
