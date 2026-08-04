@@ -37,6 +37,11 @@
       enabled: false,
     },
     {
+      description: "cryptography 天花板 <49.0.0：agentrun-sdk>=0.0.23 → alibabacloud-tea-openapi 要求 cryptography>=3.0.0,<49.0.0，49/50 修复线结构性不可达（PR #9 就是这么撞死的：只改了 pyproject 而 uv lock 解不出来，lint 的 uv lock --check 必红）。当前告警已按 ID 记入 osv-scanner.toml。放开条件 = 上游 SDK 抬上界，届时人工升",
+      matchPackageNames: ["cryptography"],
+      enabled: false,
+    },
+    {
       description: "上游协同档（§6.1b）：调用点在上游跟踪文件内。『跟随上游节奏』项抢跑会让未来上游 diff 打不上；『对齐上游版本』项（anthropic/groq/boto3）目标是上游 pin 的版本而非 latest——两类都只人工按上游对照升级，不接受 Renovate 的 latest 提案",
       matchPackageNames: [
         "mistralai",

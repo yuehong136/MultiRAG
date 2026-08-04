@@ -61,10 +61,28 @@ id = "GHSA-rgxp-2hwp-jwgg"
 reason = "pyarrow 修复线 23.0.1 被 infinity-sdk pin <23 挡死（别名 PYSEC-2026-113）；CVSS 7.0。复查：infinity-sdk 放开 pin。"
 
 [[IgnoredVulns]]
-id = "GHSA-6w46-j5rx-g56g"
-reason = "pytest 修复线 9.0.3 为大版本升级（别名 PYSEC-2026-1845；dev 依赖组，不进生产镜像）。复查：pytest 9 迁移时。"
-
-[[IgnoredVulns]]
 id = "GHSA-h35f-9h28-mq5c"
 reason = "setuptools 修复线 83.0.0 被 infinity-sdk pin <81 挡死（别名 PYSEC-2026-3447/CVE-2026-59890，0.7.0 正式版仍未放开）；CVSS 6.1。复查：infinity-sdk 放开 pin。"
+
+# cryptography 三条：修复线 49.0.0 / 50.0.0 全被 agentrun-sdk>=0.0.23 →
+# alibabacloud-tea-openapi 的 cryptography>=3.0.0,<49.0.0 结构性挡死
+# （`uv lock --upgrade-package cryptography` 直接报 unsatisfiable；pyproject 里
+# 那个 <49.0.0 上界就是照这个上游天花板设的）。lock-only 小步升无路可走，
+# 48.x 内没有任何修复版本。三条的受影响面我方均无调用点：全仓只用
+# AESGCM（Channel 凭据加密）、AES-CBC + PKCS7 分组填充、PBKDF2HMAC，
+# 没有任何 cryptography.x509 用法，也不碰 pkcs7_decrypt_*。
+# 复查：agentrun-sdk / alibabacloud-tea-openapi 放开 cryptography 上界时；
+# 届时若已有传递依赖开始使用 x509 verifier 或 PKCS#7 解密，须重新评估而非续期。
+
+[[IgnoredVulns]]
+id = "GHSA-jwv3-5hgf-82ww"
+reason = "cryptography 修复线 49.0.0，被 agentrun-sdk → alibabacloud-tea-openapi 的 <49.0.0 挡死（别名 CVE-2026-69249）；severity high。受影响面是 cryptography.x509.verification 的证书链构建：重复自签中间证书触发指数级膨胀，属资源耗尽型 DoS，不影响校验正确性。我方无任何 cryptography.x509 调用点。复查：上游放开 cryptography 上界。"
+
+[[IgnoredVulns]]
+id = "GHSA-m2h6-j472-rp4c"
+reason = "cryptography 修复线 49.0.0，同上被 <49.0.0 挡死（别名 CVE-2026-69248）；severity medium。受影响面是 x509 verifier 接受过宽通配符 SAN（叶证书 *.example.com 可逃出中间 CA 的 permittedSubtrees=foo.example.com 名称约束）。我方不做证书链校验，TLS 校验走 OpenSSL 而非本库的 Python verifier。复查：上游放开 cryptography 上界。"
+
+[[IgnoredVulns]]
+id = "GHSA-g6cj-pr64-35w5"
+reason = "cryptography 修复线 50.0.0（Renovate PR #9 追的就是这条，因结构性不可达已关闭）；别名 CVE-2026-69247，severity high。受影响面是 pkcs7_decrypt_der/pem/smime 解密不可信 EnvelopedData 时暴露 Bleichenbacher 预言机，利用前提是 S/MIME 网关那类自动解密并高频回显结果的服务。我方不解密 PKCS#7 EnvelopedData——代码里的 PKCS7 只是 AES-CBC 的分组填充（common/crypto_utils.py、common/datav_persondata_crypto.py），是同名不同物。复查：上游放开 cryptography 上界。"
 
