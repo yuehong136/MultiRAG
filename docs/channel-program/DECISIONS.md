@@ -239,6 +239,24 @@ reconcile——所有 binding，包括健康的飞书 binding，都不再被拉�
 **流程强制**：每个 emit PR 的 body 必须写明它对应的 tolerate PR 与最低 supervisor/worker 版本，
 以及运维确认版本的命令。**没写就打回。**
 
+### 补充（2026-08-05，CHN-P4 实测补上）：tolerate 步不得改变线格
+
+原文说的是「消费方先接受新形状」，但漏了一个前提：**这些模型被生产方和消费方共用**。
+往 `RuntimeCredential` 加一个带默认值的字段，FastAPI 序列化响应时就会立刻把
+`"fields": {}` 放到线上——而没升级的 worker 用 `extra="forbid"` 解析这个响应，
+会**整包拒绝**、binding 永远起不来。也就是说，一个「只加字段没填值」的 tolerate 步
+本身就是破坏性变更。
+
+所以规则补一条：
+
+> **tolerate 步落地后，线格必须逐字节不变。** 共用模型加了字段，就要在**路由层**
+> 排除它（`response_model_exclude={"credential": {"fields"}}`），直到 emit 步才放开。
+> 验收方式是既有的线格断言**不加修改地继续通过**——CHN-P4 正是被
+> `test_runtime_config_releases_only_provider_connection_material_to_authenticated_runner`
+> 抓住的，那条测试断言的是完整响应体相等。
+
+这条不是理论推演：CHN-P4 第一版就踩了，测试当场变红。
+
 **一条能缩小整个问题的运维安排**：CHN-O5（supervisor 进 compose）刻意排在两个 tolerate 步
 （CHN-P4、CHN-O2）之后。对任何今天没跑 supervisor 的部署——按 compose 现状那是**默认情况**——
 它跑起来的第一个 supervisor 就已经越过了两个 tolerate 步。这条规则因此只约束当前手工运行

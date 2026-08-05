@@ -78,17 +78,25 @@ class FeishuWorkerProvider:
         credential: RuntimeCredential,
         public_config: Mapping[str, object],
     ) -> ManagedChannelPlan:
+        # Read through ``value`` so this works on both sides of the
+        # tolerate/emit window (CHN-P4 → CHN-P8): the generic map when the API
+        # sends one, the legacy pair while it does not.
+        app_id = credential.value("app_id", legacy=credential.app_id)
+        app_secret = credential.value("app_secret", legacy=credential.app_secret)
+        if not app_id or not app_secret:
+            raise ChannelWorkerError("CHANNEL_RUNTIME_CONFIG_INVALID")
+
         return ManagedChannelPlan(
             channel=FeishuChannel(
                 FeishuAccount(
                     # The transport only logs a hashed account id.
-                    account_id=hashlib.sha256(credential.app_id.encode("utf-8")).hexdigest()[:16],
-                    app_id=credential.app_id,
-                    app_secret=credential.app_secret,
+                    account_id=hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:16],
+                    app_id=app_id,
+                    app_secret=app_secret,
                     domain=_resolve_domain(public_config),
                 )
             ),
-            account_id=credential.app_id,
+            account_id=app_id,
             allowed_sender_ids=_resolve_allowed_open_ids(public_config),
         )
 

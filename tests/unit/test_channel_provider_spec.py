@@ -44,8 +44,8 @@ def test_importing_specs_stays_pure() -> None:
         check=False,
     )
 
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "[]", f"spec import pulled in {result.stdout.strip()}"
+    assert result.returncode == 0, f"subprocess exited {result.returncode}:\n{result.stderr}"
+    assert result.stdout.strip() == "[]", f"spec import pulled in {result.stdout.strip()}\nstderr:\n{result.stderr}"
 
 
 def test_registry_fails_closed_on_unknown_names() -> None:

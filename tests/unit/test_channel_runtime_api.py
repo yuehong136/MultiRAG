@@ -141,6 +141,10 @@ def test_runtime_config_releases_only_provider_connection_material_to_authentica
     response = client.get("/api/v1/internal/channel-bindings/binding-1/runtime-config")
 
     assert response.status_code == 200
+    # No `fields` key: CHN-P4 is the tolerate half, so the wire shape must be
+    # byte-identical to what a worker on an older build already parses. That
+    # parser is extra="forbid" -- an extra key would stop the binding, not
+    # degrade it. The emit half (CHN-P8) drops the route's exclude.
     assert response.json() == {
         "binding_id": "binding-1",
         "provider": "feishu",

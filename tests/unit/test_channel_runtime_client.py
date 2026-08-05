@@ -9,6 +9,7 @@ from collections.abc import Mapping
 import httpx
 import pytest
 
+from api.channel_runtime.schemas import RuntimeCredential
 from api.channels.agent_bridge import AgentExecutionError, AgentReply
 from api.channels.runtime_client import ChannelRuntimeClient, ChannelRuntimeClientError, MultiRAGBindingExecutionClient
 
@@ -222,3 +223,33 @@ async def test_runtime_client_http_failure_does_not_include_response_or_token() 
     assert captured.value.code == "RUNTIME_API_HTTP_503"
     assert token not in repr(captured.value)
     assert response_secret not in repr(captured.value)
+
+
+def test_runtime_credential_tolerates_both_contract_halves() -> None:
+    """The tolerate step of CHN-P4 → CHN-P8.
+
+    A worker running this build has to parse what today's API sends (the legacy
+    pair only) and what tomorrow's will (a generic ``fields`` map), because the
+    two are deployed separately — the supervisor is a long-lived process that an
+    API deploy does not restart. See CHN-ADR-06.
+    """
+
+    legacy = RuntimeCredential.model_validate({"app_id": "cli_aaaa", "app_secret": "aaaa-aaaa"})
+    assert legacy.value("app_id", legacy=legacy.app_id) == "cli_aaaa"
+    assert legacy.value("app_secret", legacy=legacy.app_secret) == "aaaa-aaaa"
+
+    both = RuntimeCredential.model_validate(
+        {
+            "app_id": "cli_aaaa",
+            "app_secret": "aaaa-aaaa",
+            "fields": {"app_id": "cli_bbbb", "app_secret": "bbbb-bbbb"},
+        }
+    )
+    # The generic map wins once it is populated; the legacy pair is only a
+    # fallback for the window where the API has not caught up.
+    assert both.value("app_id", legacy=both.app_id) == "cli_bbbb"
+    assert both.value("app_secret", legacy=both.app_secret) == "bbbb-bbbb"
+
+    # An unknown key is not an error here: enable-time checks report a missing
+    # credential, this only reads one.
+    assert both.value("client_id") == ""

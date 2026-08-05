@@ -33,12 +33,39 @@ class DesiredRuntimeList(BaseModel):
 
 
 class RuntimeCredential(BaseModel):
-    """Credential returned only through the authenticated private route."""
+    """Credential returned only through the authenticated private route.
+
+    **Tolerate half of a two-step contract change (CHN-P4 → CHN-P8).** ``fields``
+    is accepted here but the API emits nothing into it yet; the emit half only
+    ships once every supervisor and worker runs a build containing this model.
+    See CHN-ADR-06 — these models are ``extra="forbid"``, and the supervisor is
+    a long-lived process that an API deploy does not restart, so a field added
+    in one step would make every affected binding fail to start.
+
+    The legacy pair stays required for now. It is deleted in CHN-P11, which is
+    step three of a three-step field removal: stop reading, stop emitting, drop.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     app_id: str = Field(min_length=1, max_length=128)
     app_secret: str = Field(min_length=1, json_schema_extra={"writeOnly": True})
+
+    # Provider-agnostic credential, keyed by the leaf names a provider spec
+    # declares in ``credential_paths``. Empty until CHN-P8.
+    fields: dict[str, str] = Field(default_factory=dict, json_schema_extra={"writeOnly": True})
+
+    def value(self, key: str, *, legacy: str | None = None) -> str:
+        """Read one credential value, preferring the generic map.
+
+        Lets a provider descriptor be written against ``fields`` today and keep
+        working across the whole tolerate/emit window, in both directions.
+        """
+
+        found = self.fields.get(key)
+        if found:
+            return found
+        return legacy or ""
 
 
 class RuntimeBindingConfig(BaseModel):
