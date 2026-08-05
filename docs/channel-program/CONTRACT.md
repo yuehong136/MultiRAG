@@ -114,9 +114,13 @@ RuntimeState = Literal["waiting", "starting", "connected", "stopping", "stopped"
 | `stopped` | 已停止 | |
 | `error` | 运行错误，看 `last_error_code` | |
 
-⚠️ **前端历史上自建了一份 12 条的词表**，其中 `pending` / `running` / `healthy` / `online` /
-`disabled` / `failed` 六个服务端**永远不会返回**；`utils.ts:10-13` 的 `isRuntimeHealthy`
-列了 4 个值而其中 3 个永不可达。→ CHN-U3。
+前端镜像在 `web:src/api/channel.ts` 的 `RUNTIME_STATES`，类型带 `(string & {})`
+以便未知的新值仍能原样渲染而不是崩掉。`isRuntimeHealthy` 只认 `connected`。
+
+历史：前端曾自建一份 12 条的词表，其中 `pending` / `running` / `healthy` / `online` /
+`disabled` / `failed` 六个服务端永远不会返回，`isRuntimeHealthy` 列的 4 个值里 3 个
+永不可达（结果碰巧正确，靠的是运气）。CHN-U3 已收敛，并在
+`src/api/__tests__/channel.test.ts` 里加了断言把词表钉死。
 
 ---
 
@@ -127,25 +131,22 @@ RuntimeState = Literal["waiting", "starting", "connected", "stopping", "stopped"
 
 ### 4.1 控制面错误码（`ChannelControlError.error_code`）
 
-| error_code | retcode | 语义 | 管理员该做什么 |
+失败信封的 `data` 就是 `{"error_code": "..."}`（CHN-U1 起），前端 `APIError.details`
+直接是它。前端映射在 `web:src/api/channel.ts` 的 `CHANNEL_ERROR_CODES` +
+`channelErrorMessageKey`，文案在 `channel.errorCodes.*`（CHN-U2 起）。
+
+| error_code | retcode | 出处 / 语义 | 管理员该做什么 |
 |---|---|---|---|
-| `CHANNEL_NOT_ACCESSIBLE` | 109 AUTHENTICATION_ERROR | 渠道不属于你 | 换账号，或联系渠道所有者 |
-| `INVALID_CHANNEL_CONFIGURATION` | 101 ARGUMENT_ERROR | 配置不完整/不合法（缺凭据、绑定缺失、版本过期、目标不可用） | 按 `retmsg` 补齐配置 |
-| `CHANNEL_SECRET_STORE_UNAVAILABLE` | 105 CONNECTION_ERROR | 密钥库不可用 | **联系运维**，不是管理员能修的 |
+| `CHANNEL_NOT_ACCESSIBLE` | 109 AUTHENTICATION_ERROR | `ChannelAccessDenied`：渠道不属于你 | 换账号，或联系渠道所有者 |
+| `CHANNEL_TARGET_NOT_ACCESSIBLE` | 101 ARGUMENT_ERROR | `ChannelTargetNotAccessible`（CHN-S5）：看得见该目标，但无权把它发布到外部渠道 | 联系目标所属团队的管理员 |
+| `INVALID_CHANNEL_CONFIGURATION` | 101 ARGUMENT_ERROR | `InvalidChannelConfiguration`：缺凭据、无绑定、版本过期、目标不可用、同账号已有启用渠道 | 按 `retmsg` 补齐配置 |
+| `CHANNEL_SECRET_STORE_UNAVAILABLE` | 105 CONNECTION_ERROR | `ChannelCredentialUnavailable`：密钥库不可用 | **联系运维**，不是管理员能修的 |
+| `CHANNEL_OPERATION_FAILED` | 100 EXCEPTION_ERROR | `_respond` 的兜底分支 | 联系运维并提供操作时间 |
 
-失败信封的 `data` 是 `{"error_code": "..."}`（CHN-U1 起）。前端 `APIError.details`
-直接就是它，无需额外接线。完整取值：
-
-| error_code | 出处 |
-|---|---|
-| `CHANNEL_NOT_ACCESSIBLE` | `ChannelAccessDenied` |
-| `INVALID_CHANNEL_CONFIGURATION` | `InvalidChannelConfiguration` |
-| `CHANNEL_TARGET_NOT_ACCESSIBLE` | `ChannelTargetNotAccessible`（CHN-S5 新增：可以看见该目标，但无权把它发布到外部渠道） |
-| `CHANNEL_SECRET_STORE_UNAVAILABLE` | `ChannelCredentialUnavailable` |
-| `CHANNEL_OPERATION_FAILED` | `_respond` 的兜底分支——**它也有码**，否则最可能到达管理员的那类失败反而没有可映射的文案 |
-
-⚠️ **前端还没消费**：三处裸 `catch { toast.error(通用文案) }` 仍然把 `retmsg` 和
-`error_code` 一起丢掉。→ CHN-U2。
+兜底分支**也有码**，否则最可能到达管理员的那类失败反而是唯一没有可映射文案的。
+新增码时两侧都要加：服务端的 `ChannelControlError` 子类，以及前端的
+`CHANNEL_ERROR_CODES` 数组 + 两份 locale——前端对不认识的码回落到通用文案，
+所以漏了不会崩，只会静默退化。
 
 ### 4.2 运行时错误码（`last_error_code`）
 
@@ -174,8 +175,9 @@ grep -rhoE '(ChannelWorkerError|_request_stop|error_code=)\("?[A-Z][A-Z0-9_]{2,6
 | `REDIS_ADDRESS_INVALID` | Redis 地址配置错误 | 运维 |
 | `REDIS_PREFLIGHT_FAILED` | Redis 预检失败 | 运维；Redis 不可用时 channel fail closed |
 
-⚠️ 前端今天原样渲染这个大写码（`t('channel.runtime.errorCode', {code})`），没有任何 i18n 映射。
-把它映射成「这是什么意思 + 你该做什么」是一次性成本，收益是把「联系研发」变成「自己能修」。
+⚠️ 前端仍原样渲染这个大写码（`t('channel.runtime.errorCode', {code})`），没有 i18n 映射。
+与 §4.1 的控制面错误码不同，这批还没做——把它们映射成「这是什么意思 + 你该做什么」
+是一次性成本，收益是把「联系研发」变成「自己能修」。归 CHN-O 阶段。
 
 ---
 
@@ -244,4 +246,4 @@ for the Feishu form only'`。
 | 日期 | 版本 | 变更 | 提交 |
 |---|---|---|---|
 | 2026-08-05 | v1 | 建立。从 `channel.test.ts` 的 11 条断言反推出现状契约；标出 3 处编码了错误行为的断言（§6）与 5 处契约空白（§7）；运行时错误码表由实测 grep 枚举（12 个），命令写在 §4.2 供重跑 | cdc09928 |
-| 2026-08-05 | v1（加法，不 bump） | 失败信封的 `data` 由 `False` 改为 `{"error_code": "..."}`（CHN-U1）；新增 `CHANNEL_TARGET_NOT_ACCESSIBLE`（CHN-S5）与兜底码 `CHANNEL_OPERATION_FAILED`。**向后兼容**：老前端只在成功路径读 `data`，失败路径读的是 `retcode`/`retmsg`，两者未变。按本文件头部的语义化规则，加法只记日志不 bump——这条规则本身是这次实测出来的，原先写的「契约变更就 bump」会让版本断言天天误报 | 本次提交 |
+| 2026-08-05 | v1（加法，不 bump） | 失败信封的 `data` 由 `False` 改为 `{"error_code": "..."}`（CHN-U1）；新增 `CHANNEL_TARGET_NOT_ACCESSIBLE`（CHN-S5）与兜底码 `CHANNEL_OPERATION_FAILED`。**向后兼容**：老前端只在成功路径读 `data`，失败路径读的是 `retcode`/`retmsg`，两者未变。按本文件头部的语义化规则，加法只记日志不 bump——这条规则本身是这次实测出来的，原先写的「契约变更就 bump」会让版本断言天天误报 | 86e76adc |

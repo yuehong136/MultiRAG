@@ -82,12 +82,12 @@ web 侧 commit scope 从 `settings` 切到 `channel`（后端已有 `feat(channe
 | ID | 仓 | 任务 | 状态 | 依赖 | 锚点 |
 |---|---|---|:---:|---|---|
 | CHN-U1 | MR | `_respond` 把 `data=False` 换成 `data={"error_code": ...}`。`retcode`/`retmsg` 不动，前端 `APIError.details` 零改动就能拿到 | ✅ | — | `api/apps/restful_apis/chat_channel_api.py:35-65` |
-| CHN-U2 | WEB | 错误码接线（三处裸 `catch` 改为按 code 映射文案）+ providers 查询失败不再清空整页，改内联横幅 + 禁用新建，渠道列表照常渲染 | ⬜ | — | `src/api/channel.ts`、`index.tsx:44-47,67-69,78-80,97-106`、`channel-form-sheet.tsx:140-142`、两份 locale |
-| CHN-U3 | WEB | 运行时状态词表对齐：`state` 收紧为 6 值联合 + `(string & {})`；`isRuntimeHealthy` 变成 `=== 'connected'`；删 6 个服务端永不上报的 locale 条目；**把测试从 `pages/.../__tests__/` 移到 `src/api/__tests__/`**（前者跑在所有门禁之外） | ⬜ | — | `src/api/channel.ts:56`、`utils.ts:10-13`、两份 locale |
-| CHN-U4 | WEB | 表单重置守卫：按 `currentChannel?.id` 而非对象引用触发，`isDirty` 时不重置；detail 查询关掉 `refetchOnReconnect`/`refetchOnWindowFocus`。修「网络抖动静默清空已输入的 App Secret」 | ⬜ | — | `channel-form-sheet.tsx:89-92`、`use-channel-request.ts:29-34` |
-| CHN-U5 | WEB | `setQueryData` 改 `invalidateQueries`——mutation 响应不带 runtime，写进读缓存会抹掉实时面板 | ⬜ | — | `use-channel-request.ts:71-75,83-89` |
-| CHN-U6 | WEB | 提交前 `fetchQuery` 拿新鲜的 `binding.enabled`，不用 5 分钟旧缓存。修「A 改个名把 B 刚停用的渠道静默重新启用」 | ⬜ | — | `channel-form-sheet.tsx:114-143` |
-| CHN-U7 | WEB | 绑定下拉服务端搜索（`useFetchAgentList` 已支持 `keywords`），去掉硬编码 `page_size: 100` | ⬜ | — | `binding-fields.tsx:37-44` |
+| CHN-U2 | WEB | 错误码接线（三处裸 `catch` 改为按 code 映射文案）+ providers 查询失败不再清空整页，改内联横幅 + 禁用新建，渠道列表照常渲染 | ✅ | — | `src/api/channel.ts`、`index.tsx:44-47,67-69,78-80,97-106`、`channel-form-sheet.tsx:140-142`、两份 locale |
+| CHN-U3 | WEB | 运行时状态词表对齐：`state` 收紧为 6 值联合 + `(string & {})`；`isRuntimeHealthy` 变成 `=== 'connected'`；删 6 个服务端永不上报的 locale 条目；**把测试从 `pages/.../__tests__/` 移到 `src/api/__tests__/`**（前者跑在所有门禁之外） | ✅ | — | `src/api/channel.ts:56`、`utils.ts:10-13`、两份 locale |
+| CHN-U4 | WEB | 表单重置守卫：按 `currentChannel?.id` 而非对象引用触发，`isDirty` 时不重置；detail 查询关掉 `refetchOnReconnect`/`refetchOnWindowFocus`。修「网络抖动静默清空已输入的 App Secret」 | ✅ | — | `channel-form-sheet.tsx:89-92`、`use-channel-request.ts:29-34` |
+| CHN-U5 | WEB | `setQueryData` 改 `invalidateQueries`——mutation 响应不带 runtime，写进读缓存会抹掉实时面板 | ✅ | — | `use-channel-request.ts:71-75,83-89` |
+| CHN-U6 | WEB | 提交前 `fetchQuery` 拿新鲜的 `binding.enabled`，不用 5 分钟旧缓存。修「A 改个名把 B 刚停用的渠道静默重新启用」 | ✅ | — | `channel-form-sheet.tsx:114-143` |
+| CHN-U7 | WEB | 绑定下拉服务端搜索（`useFetchAgentList` 已支持 `keywords`），去掉硬编码 `page_size: 100` | ✅ | — | `binding-fields.tsx:37-44` |
 
 **CHN-U6 为什么是 refetch 而不是省略字段或加后端令牌**：省略 `enabled` 时老后端会读到
 `ChannelBindingUpsertRequest.enabled` 的 `False` 默认值 → 静默**停用**渠道，这是坏的半态；
@@ -186,9 +186,9 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 
 | CHN ID（后端） | 状态 | CHN ID（前端） | 状态 | web 路线图 ID | 部署顺序 | 兼容窗口 / 备注 |
 |---|:---:|---|:---:|---|---|---|
-| CHN-U1 | ✅ | CHN-U2 | ⬜ | ARCH-6 | 后端先 | 前端可先落地（无 `error_code` 时回落到今天的通用文案），后端补齐后自动变准 |
-| — | — | CHN-U3 | ⬜ | ARCH-6 | 无依赖 | 服务端从今天起就只发 6 个状态，前端删幽灵条目不需要等后端 |
-| — | — | CHN-U6 | ⬜ | SEC-4 | 无依赖 | 刻意做成纯前端，见阶段 U 的说明 |
+| CHN-U1 | ✅ | CHN-U2 | ✅ | ARCH-6 | 后端先 | 前端可先落地（无 `error_code` 时回落到今天的通用文案），后端补齐后自动变准 |
+| — | — | CHN-U3 | ✅ | ARCH-6 | 无依赖 | 服务端从今天起就只发 6 个状态，前端删幽灵条目不需要等后端 |
+| — | — | CHN-U6 | ✅ | SEC-4 | 无依赖 | 刻意做成纯前端，见阶段 U 的说明 |
 | CHN-P2 | ⬜ | CHN-P5 | ⬜ | ARCH-6 | 后端先 | manifest 加 `form` 是加法，老前端忽略即可 |
 | CHN-P2 | ⬜ | CHN-P7 | ⬜ | ARCH-6 | **后端先（硬依赖）** | 全程序唯一一条真跨仓依赖。半态已设计成「降级且可读」：老后端 → `listProviders` 过滤空 → 横幅提示 + 禁用新建，列表/启停/删除照常 |
 
@@ -366,8 +366,9 @@ tests/unit/test_service_conf_template_render.py::test_values_are_not_re_interpre
 | 2026-08-05 | **CHN-S6 完成**。新增 `scripts/audit_channel_target_authz.py`，只读枚举会被 S5 拒绝的存量 binding，输出 channel/tenant/target/owner/reason 五列，`--strict` 时有发现即 exit 1 供流水线用。**验证**：`mypy scripts/audit_channel_target_authz.py`（scripts 在纳管范围，全注解）Success、`ruff check` 通过、`--help` 实跑可用。踩到 `ModuleNotFoundError: No module named 'api'`——脚本从 `scripts/` 跑时仓库根不在 `sys.path`，照 `init_ai_guard_system.py:14` 的既有先例补 `sys.path.insert` | cdc09928 | Claude |
 | 2026-08-05 | **阶段 S 全部完成（S1–S6）**。全门禁实跑：`ruff format --check .`（1155 files）/ `ruff check .` / `lint-imports`（5 kept, 0 broken——新增的 `api.channel_control` → `api.db.services.user_service` 依赖不违约）/ `mypy`（62 files, no issues）/ `check_async_sync_db`（新增 0、双轨 0）；`pytest tests/unit -k "channel or feishu"` **212 passed** | cdc09928 | Claude |
 | 2026-08-05 | **全量回归对基线**：`pytest tests/unit -q` 得 **6 failed / 1504 passed**，失败集合与开工基线**逐条相同**（那 6 条 Windows 模板渲染），通过数 1486 → 1504，+18 正好是本阶段新增的测试数。顺带修掉一个既有 gitignore bug：`.dmypy.json  # 说明` 写成了行尾注释，而 **gitignore 不支持行尾注释**，整行被当成模式，所以那条规则从来没生效过，dmypy 守护进程状态文件一直暴露在未跟踪列表里 | cdc09928 | Claude |
-| 2026-08-05 | **CHN-U1 完成**。`_respond` 的四个失败分支把 `data=False` 换成 `{"error_code": ...}`，兜底分支也给了自己的码 `CHANNEL_OPERATION_FAILED`——否则最可能到达管理员的那类失败反而是唯一没有可映射文案的。`retcode`/`retmsg` 一个字节没动，前端 `APIError.details` 就是这个对象，零接线。**验证**：新增 `test_failure_envelope_carries_a_machine_readable_error_code`，覆盖三条分支（`ChannelTargetNotAccessible` → ARGUMENT_ERROR + 码、`ChannelAccessDenied` → AUTHENTICATION_ERROR + 码、`RuntimeError("boom…")` → EXCEPTION_ERROR + 兜底码**且响应里不含 "boom"**）；`pytest test_chat_channel_control.py` **32 passed**。跨仓义务已履行：CONTRACT §4.1 改写为已实现形态并列全 5 个码、跨仓联动表 U1 置 ✅ | 本次提交 | Claude |
-| 2026-08-05 | **修正自己定的规则：契约版本按语义 bump**。原维护协议第 4 条写的是「契约变更 = 改 CONTRACT + bump `channel-api/vN`」，CHN-U1 第一次真用就发现太粗——它是**向后兼容的加法**（老前端只在成功路径读 `data`，失败路径读 `retcode`/`retmsg`，两者未变），bump 它会让 CHN-X2 那条版本断言天天误报，反而训练出「红了就改常量」的坏习惯。改为：加法只记 CONTRACT 变更日志，破坏性变更（删字段/改含义/改必填性）才 bump | 本次提交 | Claude |
+| 2026-08-05 | **CHN-U1 完成**。`_respond` 的四个失败分支把 `data=False` 换成 `{"error_code": ...}`，兜底分支也给了自己的码 `CHANNEL_OPERATION_FAILED`——否则最可能到达管理员的那类失败反而是唯一没有可映射文案的。`retcode`/`retmsg` 一个字节没动，前端 `APIError.details` 就是这个对象，零接线。**验证**：新增 `test_failure_envelope_carries_a_machine_readable_error_code`，覆盖三条分支（`ChannelTargetNotAccessible` → ARGUMENT_ERROR + 码、`ChannelAccessDenied` → AUTHENTICATION_ERROR + 码、`RuntimeError("boom…")` → EXCEPTION_ERROR + 兜底码**且响应里不含 "boom"**）；`pytest test_chat_channel_control.py` **32 passed**。跨仓义务已履行：CONTRACT §4.1 改写为已实现形态并列全 5 个码、跨仓联动表 U1 置 ✅ | 86e76adc | Claude |
+| 2026-08-05 | **阶段 U 前端六条完成（CHN-U2~U7）**，一个提交，因为同一批文件、彼此无依赖、拆开只会重复跑六遍门禁。要点：① 错误码映射做成纯函数 `channelErrorMessageKey(error, fallbackKey)`，**对任何后端版本都安全**——没有 `error_code` 时回落到今天的文案，未知码也回落而不是把大写标识符甩给管理员；② providers 查询失败不再返回整页 `PageErrorState`，改成内联横幅 + 禁用新建，**渠道列表照常渲染**——原先那个行为在事故中最要命，它把「停用出问题的渠道」这个唯一有用的操作也一起藏了；③ 表单重置守卫用 **ref 而不是 `eslint-disable`**（`react-hooks/exhaustive-deps` 是 error 级，规范明令不许 disable 糊过去），配合 detail 查询关掉 `refetchOnReconnect`/`refetchOnWindowFocus`；④ `setQueryData` 改 `invalidateQueries`；⑤ 提交前 `fetchQuery` 拿新鲜 `binding.enabled`；⑥ 绑定下拉改服务端搜索，`page_size` 100→50 并加搜索框（Radix Select 把可打印键当 type-ahead，所以输入框要 `stopPropagation`）。**验证**：`npm run test:api` **61 passed**（新增 4 条：错误映射在四种降级输入下都回落、每个码各自成键且兜底码在闭集内、状态词表恰好 6 值且三个凭空发明的值不再算健康、`revision_stale` 只在服务端明说时才警告）；`eslint` 0 errors（顺手把 `role="status"` 改成语义化的 `<output>`）；`tsc -b` 通过；`build` + `check:bundle-size` 三档全过（入口 gzip 116/120 KB）；file-size 棘轮通过 | web a2c98c0 | Claude |
+| 2026-08-05 | **修正自己定的规则：契约版本按语义 bump**。原维护协议第 4 条写的是「契约变更 = 改 CONTRACT + bump `channel-api/vN`」，CHN-U1 第一次真用就发现太粗——它是**向后兼容的加法**（老前端只在成功路径读 `data`，失败路径读 `retcode`/`retmsg`，两者未变），bump 它会让 CHN-X2 那条版本断言天天误报，反而训练出「红了就改常量」的坏习惯。改为：加法只记 CONTRACT 变更日志，破坏性变更（删字段/改含义/改必填性）才 bump | 86e76adc | Claude |
 | 2026-08-05 | **实测对账机制并修正它**。提交后立刻跑了「复盘节奏」里那两条 git log 对账，机制确实生效——但它把 `041d5df1`、`9a62a81a` 两个**账本建立之前**的 channel 提交也报成了漂移。原命令缺起点边界，会把全部历史都算进去，第一次真用就会淹没在噪声里。已加上 `cdc09928..`（web 侧 `8cbaf3a..`）并补了一行 `comm -13` 的差集写法 | f3fd0a83 后续 | Claude |
 | 2026-08-05 | **踩坑记录（会重复踩，写在这里）**：`.claude/settings.json` 的 PostToolUse ruff hook 带 autofix。分两步编辑「先加 import、再加使用点」时，第一步结束的瞬间那个 import 还没有使用者，autofix 判定 F401 未使用**直接删掉**，第二步就报 F821 undefined。规律：**import 必须与使用点在同一次 Edit 里，或者先写使用点再补 import**。本次在三个文件上各踩一次 | — | Claude |
 | 2026-08-05 | **修一处账本自身的漂移**：`README.md` §3「下一批」表用的是早期 ID 分配（S1=lease、S3=脱敏），与 `PROGRESS.md` 的一一对应 PR 方案（S1=脱敏、S3=lease）冲突。账本建立当天就漂移，正是维护协议第 1 条要抓的东西——已按 PROGRESS 的分配订正 | cdc09928 | Claude |
