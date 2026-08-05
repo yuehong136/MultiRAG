@@ -234,15 +234,21 @@ JSON Schema（`config_schema`）仅用于服务端请求校验与 OpenAPI，**�
    「空」与「未改」在线格上不可区分，只能这么定义。
 4. **前端按 `fields` 顺序渲染**，不排序、不解析 `$ref`、不求值任何 JSON Schema 关键字。
 5. **提交时按 `path` 重组嵌套 config**，所以前端不需要知道任何 provider 的形状。
+6. **`form.version` 只在破坏性变更时 bump**（CHN-X2 定死）。加字段、加 kind、加 option
+   **不 bump**——未知 kind 已经渲染成 disabled、未知键本来就被忽略，加法零协调成本。
+   bump 的含义是反过来的那半边：**不认识这个版本的客户端必须拒绝渲染，不许猜**。
+   前端 `SUPPORTED_FORM_VERSION` 就是这条的执行者，把这种 manifest 丢进与「缺 form」
+   同一条降级路径（横幅 + 禁用新建，列表/启停/删除照常）。所以 bump 一次 = 一次强制的
+   跨仓部署顺序，别为了「更规范」而 bump。
 
 服务端有四条一致性测试把 `form` 与 `config_model` 绑在一起
 （`tests/unit/test_channel_provider_spec.py`）：每个 `path` 必须是模型真实接受的字段、
 `secret=true` 的集合必须与 `secret_paths` 完全相同、select 必须有 options 且 default
 在其中、path 不得重复。两份派生物因此不会漂移到互相矛盾。
 
-⚠️ **前端还没消费**：仍从 `config_schema` 硬编码地推导飞书四个字段——
-`channel.test.ts:68` 那条测试的名字自己就承认了：`'nested provider schema is flattened
-for the Feishu form only'`。→ CHN-P5/P6/P7。
+**前端已消费**（CHN-P5/P6/P7 已落地，web `c294088` / `a09a09c`）：按 `form.fields`
+渲染，客户端兜底 manifest 与飞书编译分支已删除，`listProviders` 丢弃缺 `form` 或
+`form.version` 过高的 manifest，返回类型收窄为 `RenderableProviderManifest`。
 
 ---
 
@@ -291,3 +297,4 @@ for the Feishu form only'`。→ CHN-P5/P6/P7。
 | 2026-08-05 | v1（消费侧，线格未变） | 前端接上了 §4.1 的错误码与 §3 的状态词表（CHN-U2/U3）。契约本身没变，只是两侧终于一致：§3 与 §4.1 里那批「前端还没消费 / 前端自建 12 条词表」的 ⚠️ 已按本文件规则清理，§4.2 的运行时错误码**仍未**做映射，与 §4.1 区分开并归入 CHN-O | web a2c98c0 |
 | 2026-08-05 | v1（加法，不 bump） | manifest 新增 `form`（CHN-P2），§5 从「尚未存在」改写为实际下发的形状并给出完整 payload 示例。**向后兼容**：老前端忽略未知键；`config_schema` 一个字节没动，仍由 pydantic 生成、仍只服务校验与 OpenAPI。四条一致性测试把 `form` 与 `config_model` 绑住，防止两份派生物漂移 | 819e7ec2 |
 | 2026-08-05 | v1（加法，不 bump） | `state="error"` 增加一个合成来源、`last_error_code` 增加一个取值 `TARGET_REVISION_UNAVAILABLE`（CHN-O1），§3 已写明。**向后兼容**：`error` 与 `last_error_code` 都是既有字段，老前端原样渲染即可；复用执行层已有的错误码而不是新造 `TARGET_REVISION_STALE`，是为了让面板和日志能 grep 同一个串。web 侧同批把 sheet 的 runtime 横幅补上原因行（卡片早就有） | 本次提交 + web `a752f3e` |
+| 2026-08-05 | v1（规则澄清，不 bump） | 定死 `form.version` 的 bump 语义（§5 规则 6）：加法不 bump，破坏性才 bump，且 bump 的含义是「老客户端必须拒绝渲染」而非「尽力而为」（CHN-X2）。服务端 `ProviderForm.version` 原来的注释自相矛盾——一句说「只在客户端必须反应时 bump」，下一句说「未知的更高版本仍应渲染」，两条不能同时成立，已改写。前端落地 `CHANNEL_API_VERSION` 与 `SUPPORTED_FORM_VERSION` 两个常量并加断言，`listProviders` 按后者过滤 | 本次提交 + web `9873e25` |

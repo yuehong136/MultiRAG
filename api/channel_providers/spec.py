@@ -80,8 +80,17 @@ class ProviderForm(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    # Bumped only when the shape changes in a way a client must react to.
-    # Unknown-but-newer versions should still render: fields are additive.
+    # Bumped only when an older client would render this form *wrongly* --
+    # changed path semantics, or a field it must honour and cannot know about.
+    #
+    # Adding fields, kinds or options never bumps it: an unknown ``kind``
+    # already renders as a disabled input rather than throwing, and unknown
+    # keys are ignored, so additive change costs no coordination at all.
+    #
+    # The flip side is the contract a bump buys: a client that does not know
+    # this version must refuse to render the provider, not guess. See
+    # ``SUPPORTED_FORM_VERSION`` in ``web:src/api/channel.ts``, which drops such
+    # a manifest into the same "providers unavailable" path as a missing form.
     version: int = 1
     fields: list[FormField] = Field(default_factory=list)
 
