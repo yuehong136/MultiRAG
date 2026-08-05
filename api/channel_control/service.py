@@ -43,6 +43,15 @@ def _short_hash(value: str) -> str:
 _LIVE_RUNTIME_STATES = frozenset({"starting", "connected", "stopping"})
 # Tolerate a few missed reports before calling a runner dead.
 _HEARTBEAT_STALE_INTERVALS = 3
+# Reported when the bound Canvas release stopped being the latest published one.
+#
+# Deliberately the same code the executor already raises per message
+# (``TargetRevisionUnavailableError``) rather than a second name for one fact:
+# an operator tracing a silent channel greps one string, not two. It is
+# duplicated instead of imported because ``api.channel_execution`` imports this
+# package, and a constant is not worth an import cycle;
+# ``test_stale_revision_error_code_matches_the_executor`` binds the two.
+_REVISION_STALE_ERROR_CODE = "TARGET_REVISION_UNAVAILABLE"
 
 _SENSITIVE_CONFIG_KEYS = frozenset(
     {
@@ -493,7 +502,12 @@ class ChannelControlService:
                 last_error_code=None,
             ).model_dump(mode="json")
         runtime = await self._repository.get_runtime(binding.id)
-        return self._serialize_runtime(binding, runtime)
+        # The dedicated runtime route used to be the *least* accurate view of a
+        # channel: the list response resolved staleness and this one did not, so
+        # the panel an operator opens to diagnose a silent channel was the one
+        # place that never mentioned the reason.
+        revision_stale = await self._binding_revision_stale(channel.tenant_id, binding)
+        return self._serialize_runtime(binding, runtime, revision_stale=revision_stale)
 
     async def load_runtime_binding(self, binding_id: str) -> RuntimeBindingSpec:
         """Load one active desired-state bundle for an authenticated runner."""
@@ -697,7 +711,7 @@ class ChannelControlService:
                 version=secret.version if secret is not None else None,
             ),
             binding=binding_response,
-            runtime=(ChannelRuntimeResponse.model_validate(self._serialize_runtime(binding, runtime)) if include_runtime and binding is not None else None),
+            runtime=(ChannelRuntimeResponse.model_validate(self._serialize_runtime(binding, runtime, revision_stale=revision_stale)) if include_runtime and binding is not None else None),
         )
         return response.model_dump(mode="json")
 
@@ -723,7 +737,13 @@ class ChannelControlService:
         return (datetime.now(UTC) - heartbeat_at).total_seconds() > deadline
 
     @classmethod
-    def _serialize_runtime(cls, binding: ChannelBinding, runtime: ChannelRuntimeStatus | None) -> dict[str, Any]:
+    def _serialize_runtime(
+        cls,
+        binding: ChannelBinding,
+        runtime: ChannelRuntimeStatus | None,
+        *,
+        revision_stale: bool | None = None,
+    ) -> dict[str, Any]:
         idle_state = "waiting" if binding.enabled else "stopped"
         if runtime is None or runtime.observed_generation != binding.generation:
             response = ChannelRuntimeResponse(
@@ -759,6 +779,15 @@ class ChannelControlService:
                 heartbeat_at=runtime.heartbeat_at,
                 connected_at=runtime.connected_at,
                 last_error_code=runtime.last_error_code,
+            )
+        if revision_stale and binding.enabled:
+            # A stale binding fails every single message in the executor while
+            # its runner stays genuinely connected and on-generation, so a fresh
+            # heartbeat is not evidence of health here -- it is the thing that
+            # makes the fault invisible. The runner fields are kept: the process
+            # really is alive, and an operator needs to know which one to look at.
+            response = response.model_copy(
+                update={"state": "error", "last_error_code": _REVISION_STALE_ERROR_CODE},
             )
         return response.model_dump(mode="json")
 

@@ -19,6 +19,10 @@ from api.channel_providers import (
 )
 from api.channel_providers.spec import ProviderSpec
 
+# STATUS_DLL_INIT_FAILED. Windows raises it when a process cannot be created at
+# all, typically under resource pressure late in a long run.
+_WINDOWS_DLL_INIT_FAILED = 0xC0000142
+
 
 def test_importing_specs_stays_pure() -> None:
     """No ORM, no web framework, no transport SDK.
@@ -43,6 +47,14 @@ def test_importing_specs_stays_pure() -> None:
         text=True,
         check=False,
     )
+
+    if result.returncode == _WINDOWS_DLL_INIT_FAILED and not result.stdout.strip():
+        # The interpreter never started, so this check produced no signal at
+        # all -- calling that a pass would be a lie and calling it a failure
+        # would blame the code under test. Seen on Windows late in a full-suite
+        # run, same return code as the template-render tests that fail there
+        # for the same reason; it never reproduces in isolation or on CI Linux.
+        pytest.skip(f"subprocess could not start (rc={result.returncode}); purity unverified")
 
     assert result.returncode == 0, f"subprocess exited {result.returncode}:\n{result.stderr}"
     assert result.stdout.strip() == "[]", f"spec import pulled in {result.stdout.strip()}\nstderr:\n{result.stderr}"

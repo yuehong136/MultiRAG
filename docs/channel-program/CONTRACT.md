@@ -112,7 +112,15 @@ RuntimeState = Literal["waiting", "starting", "connected", "stopping", "stopped"
 | `connected` | 连接已建立 | 唯一的「健康」状态 |
 | `stopping` | 正在优雅停止 | |
 | `stopped` | 已停止 | |
-| `error` | 运行错误，看 `last_error_code` | |
+| `error` | 运行错误，看 `last_error_code` | **不一定来自 worker**：绑定启用且 Canvas 版本已过期时，由控制面读路径合成，见下方 |
+
+**`error` 有两个来源，前端不必区分**（CHN-O1）。一个是 worker 上报的；另一个是控制面
+在读路径上合成的：绑定已启用、但它锁定的 Canvas 版本不再是最新发布版时，`state` 报
+`error`、`last_error_code` 报 `TARGET_REVISION_UNAVAILABLE`，**无视新鲜心跳**——执行层
+对每一条消息都用同一个错误码拒绝，而 runner 本身确实活着、代次也对得上，新鲜心跳恰恰
+是让这个故障隐形的东西。两条边界：runner 字段保留（进程是真的在跑）；绑定**未启用**时
+不合成，`stopped` 才是真话。这个合成对私有运行时契约零影响（不动 `RuntimeReport`），
+`GET /{id}/runtime` 与列表内嵌的 `runtime` 块**必须给出同一个答案**。
 
 前端镜像在 `web:src/api/channel.ts` 的 `RUNTIME_STATES`，类型带 `(string & {})`
 以便未知的新值仍能原样渲染而不是崩掉。`isRuntimeHealthy` 只认 `connected`。
@@ -282,3 +290,4 @@ for the Feishu form only'`。→ CHN-P5/P6/P7。
 | 2026-08-05 | v1（加法，不 bump） | 失败信封的 `data` 由 `False` 改为 `{"error_code": "..."}`（CHN-U1）；新增 `CHANNEL_TARGET_NOT_ACCESSIBLE`（CHN-S5）与兜底码 `CHANNEL_OPERATION_FAILED`。**向后兼容**：老前端只在成功路径读 `data`，失败路径读的是 `retcode`/`retmsg`，两者未变。按本文件头部的语义化规则，加法只记日志不 bump——这条规则本身是这次实测出来的，原先写的「契约变更就 bump」会让版本断言天天误报 | 86e76adc |
 | 2026-08-05 | v1（消费侧，线格未变） | 前端接上了 §4.1 的错误码与 §3 的状态词表（CHN-U2/U3）。契约本身没变，只是两侧终于一致：§3 与 §4.1 里那批「前端还没消费 / 前端自建 12 条词表」的 ⚠️ 已按本文件规则清理，§4.2 的运行时错误码**仍未**做映射，与 §4.1 区分开并归入 CHN-O | web a2c98c0 |
 | 2026-08-05 | v1（加法，不 bump） | manifest 新增 `form`（CHN-P2），§5 从「尚未存在」改写为实际下发的形状并给出完整 payload 示例。**向后兼容**：老前端忽略未知键；`config_schema` 一个字节没动，仍由 pydantic 生成、仍只服务校验与 OpenAPI。四条一致性测试把 `form` 与 `config_model` 绑住，防止两份派生物漂移 | 819e7ec2 |
+| 2026-08-05 | v1（加法，不 bump） | `state="error"` 增加一个合成来源、`last_error_code` 增加一个取值 `TARGET_REVISION_UNAVAILABLE`（CHN-O1），§3 已写明。**向后兼容**：`error` 与 `last_error_code` 都是既有字段，老前端原样渲染即可；复用执行层已有的错误码而不是新造 `TARGET_REVISION_STALE`，是为了让面板和日志能 grep 同一个串。web 侧同批把 sheet 的 runtime 横幅补上原因行（卡片早就有） | 本次提交 + web `a752f3e` |

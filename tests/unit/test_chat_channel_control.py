@@ -20,6 +20,7 @@ from api.channel_control.schemas import (
 )
 from api.channel_control.secret_store import EncryptedSecret, SecretStoreUnavailable, UnavailableSecretStore
 from api.channel_control.service import (
+    _REVISION_STALE_ERROR_CODE,
     ChannelAccessDenied,
     ChannelControlService,
     ChannelCredentialUnavailable,
@@ -28,6 +29,7 @@ from api.channel_control.service import (
     _contains_sensitive_key,
     _sanitize_public_config,
 )
+from api.channel_execution.errors import TargetRevisionUnavailableError
 from api.db.db_models import ChannelBinding, ChannelRuntimeStatus, ChannelSecret, ChatChannel
 from common.app_config import get_app_config
 from common.constants import RetCode
@@ -447,14 +449,98 @@ async def test_read_paths_flag_a_stale_canvas_revision_without_mutating_state() 
 
     stale = await service.get_channel("tenant-a", channel_id)
     assert stale["binding"]["revision_stale"] is True
-    # The hint is read-only: it must not rebind, advance generation or fake runtime.
+    # The hint is read-only: it must not rebind or advance a generation.
     assert stale["binding"]["target_revision_id"] == "revision-1"
     assert stale["binding"]["generation"] == fresh["binding"]["generation"]
     assert stale["generation"] == fresh["generation"]
+    # This binding is disabled, so nothing is expected to be running and the
+    # runtime block stays untouched. An *enabled* stale binding does change it --
+    # see ``test_a_stale_revision_is_a_fault_even_while_the_runner_looks_healthy``.
+    assert stale["binding"]["enabled"] is False
     assert stale["runtime"] == fresh["runtime"]
 
     listed = await service.list_channels("tenant-a")
     assert [item["binding"]["revision_stale"] for item in listed["items"]] == [True]
+
+
+async def _enabled_canvas_channel() -> tuple[ChannelControlService, FakeRepository, str, str, int]:
+    repository = FakeRepository()
+    repository.canvases["agent-1"] = ("tenant-a", "me")
+    repository.latest_canvas_revisions.add(("tenant-a", "agent-1", "revision-1"))
+    service = ChannelControlService(repository, FakeSecretStore())
+    created = await service.create_channel("tenant-a", _create_request())
+    channel_id = created["id"]
+    await service.upsert_binding(
+        "tenant-a",
+        channel_id,
+        ChannelBindingUpsertRequest(
+            target_type="multirag.canvas_agent",
+            target_id="agent-1",
+            target_revision_id="revision-1",
+        ),
+    )
+    enabled = await service.set_enabled("tenant-a", channel_id, enabled=True)
+    return service, repository, channel_id, enabled["binding"]["id"], enabled["binding"]["generation"]
+
+
+async def test_a_stale_revision_is_a_fault_even_while_the_runner_looks_healthy() -> None:
+    service, repository, channel_id, binding_id, generation = await _enabled_canvas_channel()
+    now = datetime.now(UTC)
+    await service.report_runtime(
+        binding_id=binding_id,
+        observed_generation=generation,
+        state="connected",
+        runner_id="runner-1",
+        heartbeat_at=now,
+        connected_at=now,
+    )
+
+    healthy = await service.get_runtime("tenant-a", channel_id)
+    assert healthy["state"] == "connected"
+    assert healthy["last_error_code"] is None
+
+    # Publishing a newer release strands the bound revision. Nothing about the
+    # runner changes: it stays alive, on-generation and heartbeating, which is
+    # exactly what used to hide the fault -- every message now fails in the
+    # executor while this panel reported a healthy channel.
+    repository.latest_canvas_revisions.discard(("tenant-a", "agent-1", "revision-1"))
+    repository.latest_canvas_revisions.add(("tenant-a", "agent-1", "revision-2"))
+
+    faulted = await service.get_runtime("tenant-a", channel_id)
+    assert faulted["state"] == "error"
+    assert faulted["last_error_code"] == _REVISION_STALE_ERROR_CODE
+    # The runner really is alive and the operator needs to know which one.
+    assert faulted["runner_id"] == "runner-1"
+    assert faulted["observed_generation"] == generation
+
+    # The dedicated route and the embedded block must not disagree -- the whole
+    # point of this item is that they used to.
+    detail = await service.get_channel("tenant-a", channel_id)
+    assert detail["runtime"] == faulted
+    assert detail["binding"]["revision_stale"] is True
+
+
+async def test_a_disabled_stale_binding_is_stopped_rather_than_faulted() -> None:
+    service, repository, channel_id, _binding_id, _generation = await _enabled_canvas_channel()
+    repository.latest_canvas_revisions.discard(("tenant-a", "agent-1", "revision-1"))
+    repository.latest_canvas_revisions.add(("tenant-a", "agent-1", "revision-2"))
+    await service.set_enabled("tenant-a", channel_id, enabled=False)
+
+    runtime = await service.get_runtime("tenant-a", channel_id)
+
+    # Deliberately off is not broken. Reporting ``error`` here would put a red
+    # badge on every channel an operator ever paused, and the staleness is still
+    # legible on ``binding.revision_stale``.
+    assert runtime["state"] == "stopped"
+    assert runtime["last_error_code"] is None
+    assert (await service.get_channel("tenant-a", channel_id))["binding"]["revision_stale"] is True
+
+
+def test_stale_revision_error_code_matches_the_executor() -> None:
+    # The control plane duplicates this string instead of importing it, because
+    # ``api.channel_execution`` imports ``api.channel_control``. One fact, one
+    # code: an operator greps a single string across the panel and the logs.
+    assert _REVISION_STALE_ERROR_CODE == TargetRevisionUnavailableError.code
 
 
 async def test_dialog_binding_reports_no_revision_staleness() -> None:
