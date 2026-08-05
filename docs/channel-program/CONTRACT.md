@@ -238,7 +238,7 @@ for the Feishu form only'`。→ CHN-P5/P6/P7。
 
 ---
 
-## 6. v1 里编码了「错误行为」的三条断言
+## 6. v1 里编码了「错误行为」的三条断言（A 已解决，B/C 未解决）
 
 按 CHN-X1 的任务要求逐条标出。修这些条目时，**这些断言的语义要跟着改，不是绕过它们**。
 
@@ -246,7 +246,9 @@ for the Feishu form only'`。→ CHN-P5/P6/P7。
 测试名本身就把飞书特例固化成了期望。它断言 `getProviderFields` 能从嵌套 `$ref` 里挖出
 `app_secret` 并判定为 `secret`——但那条 `$ref` 解析路径**只在 `provider === 'feishu'` 分支里
 被调用**。第二个 provider 走另一条分支，拿到的是根级 `{credential: {$ref}}`，
-会渲染出一个明文输入框。→ CHN-P5/P6/P7 落地后，这条断言应改为「按服务端 `form.fields` 渲染」。
+会渲染出一个明文输入框。
+
+**已解决（CHN-P7）**：这条断言连同 `getProviderFields` 一起删除。它值钱的那半边语义——服务端发来的密钥不得进入表单——由 `the form seeded from a stored channel never carries a secret` 继承（同一份 fixture，同一个 `must-not-reach-form` 哨兵值，但按服务端 `form.fields` 渲染，不再提飞书）；半态那半边由 `listProviders drops a manifest this client cannot render` 守住。
 
 **B. `channel.test.ts:219` 与 `:252` — `assert.equal(putCalled, false)`**
 把「绑定修改必须塞进 PATCH」固化成了契约。`PUT /{id}/binding` 这条为「只改绑定、不碰连接
