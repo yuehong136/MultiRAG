@@ -229,7 +229,12 @@ scripts/run_feishu_channel.local.ps1
 # 只匹配顶层——internal/<pkg>/README.md 是 Go 移植的正当文档，不受影响。
 internal/*.md
 
-docs
+# 文档：默认不入库（docs/feishu-multitenant/ 是本地规划笔记），逐个白名单放行。
+# 必须写 docs/* 而不是 docs——git 无法在被排除的父目录下重新包含文件，
+# 写成裸 docs 时下面的 ! 行会静默失效，文件看着已加其实谁都看不到。
+docs/*
+!docs/references/
+!docs/channel-program/
 temp/
 
 .hypothesis
@@ -267,4 +272,7 @@ internal/cpp/cmake-build-debug/
 !configs/alembic/versions/*.py
 internal/cpp/cmake-build-release/
 internal/cpp/cmake-build-debug/
-.dmypy.json  # mypy daemon 状态文件（PostToolUse 钩子）
+# mypy daemon 状态文件（PostToolUse 钩子产生）。
+# 注释必须独占一行——gitignore 不支持行尾注释，写成 `.dmypy.json  # 说明`
+# 会把整行当成模式，于是这条规则从来没生效过。
+.dmypy.json

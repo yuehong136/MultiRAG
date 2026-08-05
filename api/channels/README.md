@@ -3,6 +3,12 @@
 `api/channels` 是 MultiRAG 的外部消息通道运行时。它把飞书等平台事件规范化后交给
 MultiRAG 自己的执行边界，不在传输层拼提示词，也不让外部消息决定租户、目标、发布版本或权限。
 
+> **本文件描述的是「已上线的形态」。正在进行的加固与通用化工作看
+> [`docs/channel-program/`](../../docs/channel-program/README.md)**——那里有任务账本（CHN ID）、
+> 决策记录、前后端契约与跨仓部署顺序规则。动到 `api/channels/`、`api/channel_control/`、
+> `api/channel_execution/`、`api/channel_runtime/` 时提交要带 CHN ID（AGENTS.md 核心规则 5）。
+> 下面的「已实现 / 尚未实现或不能宣称」两节仍是**已上线行为的权威描述**，账本不重复它。
+
 当前提供两种运行模式：
 
 | 模式 | 入口 | 绑定来源 | 适用场景 |
@@ -479,6 +485,23 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
 - internal token 轮换：协调更新 API 和 supervisor，并重启 supervisor；旧 child 派生 token
   会立即失效并由 supervisor 重建。
 - 主加密密钥丢失：现有飞书凭据无法恢复；必须从 secret manager 备份恢复或重新录入。
+
+### 一次性升级代价：Redis 命名空间 v1 → v2（CHN-S3）
+
+Redis 命名空间从「按 provider 账号」改为「按 binding」（`multirag:channel:v1` →
+`multirag:channel:v2`），修掉的是一个跨租户拒绝服务面：leader lease 在凭据校验**之前**获取，
+而命名空间只由非机密的 App ID 派生，于是任何租户都能用别人的 App ID 加一个假 secret 建渠道
+并启用，抢走租约，让原租户的 worker 在下一次重启后再也起不来。
+
+**接住这次改动的那一次 worker 重启会有一次性影响**，之后恢复正常：
+
+- 飞书用户的 Agent 会话映射重置一次——下一条消息开启新会话，不接续上文。
+- 消息去重窗口空一次——重启瞬间在途的消息有可能被回答两次。
+- v1 的旧 key 不再被读取，按自身 TTL（会话与去重均为 24 小时）自然过期，无需清理。
+
+顺带修掉一个既有缺陷：删除渠道后用同一个 App ID 重建，过去会复用旧的去重命名空间，
+导致重建后一段时间内老 message_id 被判重复而**静默丢消息**；binding ID 每次重建都是新的，
+这条路径不复存在。
 
 正常日志可包含：
 

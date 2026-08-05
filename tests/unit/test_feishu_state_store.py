@@ -104,7 +104,7 @@ def test_conversation_key_is_stable_opaque_and_boundary_safe() -> None:
 
 async def test_message_dedupe_statuses_and_ttls() -> None:
     redis = _FakeAsyncRedis()
-    store = RedisChannelStateStore(redis, app_id="cli-app-id", dedupe_ttl_seconds=7_200)
+    store = RedisChannelStateStore(redis, scope=("binding", "binding-1"), dedupe_ttl_seconds=7_200)
 
     assert await store.claim_message("om-sensitive-message") is True
     message_key = redis.only_key()
@@ -136,7 +136,7 @@ async def test_message_dedupe_statuses_and_ttls() -> None:
 
 async def test_session_round_trip_expiry_override_and_reset() -> None:
     redis = _FakeAsyncRedis()
-    store = RedisChannelStateStore(redis, app_id="cli-app-id", session_ttl_seconds=90)
+    store = RedisChannelStateStore(redis, scope=("binding", "binding-1"), session_ttl_seconds=90)
     conversation = conversation_key("cli-app-id", "agent-id", "release-1", "chat-id", "open-id")
 
     assert await store.get_session(conversation) is None
@@ -161,7 +161,7 @@ async def test_leader_lease_is_owner_safe_and_configurable() -> None:
     owner_tokens = iter(("owner-token-1", "owner-token-2", "owner-token-3"))
     store = RedisChannelStateStore(
         redis,
-        app_id="cli-app-id",
+        scope=("binding", "binding-1"),
         leader_ttl_seconds=20,
         leader_renew_interval_seconds=7,
         owner_token_factory=lambda: next(owner_tokens),
@@ -205,7 +205,7 @@ async def test_redis_errors_propagate_without_in_memory_fallback() -> None:
         ) -> bool | None:
             raise ConnectionError("redis unavailable")
 
-    store = RedisChannelStateStore(_FailingRedis(), app_id="cli-app-id")
+    store = RedisChannelStateStore(_FailingRedis(), scope=("binding", "binding-1"))
 
     with pytest.raises(ConnectionError, match="redis unavailable"):
         await store.claim_message("om-sensitive-message")
@@ -222,14 +222,60 @@ async def test_redis_errors_propagate_without_in_memory_fallback() -> None:
 )
 def test_store_rejects_non_positive_ttls(field: str, kwargs: dict[str, int]) -> None:
     with pytest.raises(ValueError, match=field):
-        RedisChannelStateStore(_FakeAsyncRedis(), app_id="cli-app-id", **kwargs)
+        RedisChannelStateStore(_FakeAsyncRedis(), scope=("binding", "binding-1"), **kwargs)
 
 
 def test_store_rejects_renew_interval_not_shorter_than_lease() -> None:
     with pytest.raises(ValueError, match="must be less"):
         RedisChannelStateStore(
             _FakeAsyncRedis(),
-            app_id="cli-app-id",
+            scope=("binding", "binding-1"),
             leader_ttl_seconds=20,
             leader_renew_interval_seconds=20,
         )
+
+
+async def test_two_bindings_on_one_provider_account_do_not_share_a_namespace() -> None:
+    """Closes the cross-tenant lease-squatting hole.
+
+    The lease is taken *before* the credential is verified, so while the
+    namespace came from the provider account id alone, any tenant that knew
+    another tenant's (non-secret) app id could enable a channel with a junk
+    secret, win the lease, and keep the rightful tenant's worker from ever
+    restarting. Same Redis, same lease name, different binding: both must win.
+    """
+
+    redis = _FakeAsyncRedis()
+    victim = RedisChannelStateStore(redis, scope=("binding", "binding-tenant-a"))
+    squatter = RedisChannelStateStore(redis, scope=("binding", "binding-tenant-b"))
+
+    assert await victim.acquire_leader(lease_name="feishu") is not None
+    assert await squatter.acquire_leader(lease_name="feishu") is not None
+    assert len(redis.entries) == 2
+
+
+async def test_one_binding_still_holds_its_own_lease_exclusively() -> None:
+    """Per-binding scoping must not weaken the single-runner guarantee."""
+
+    redis = _FakeAsyncRedis()
+    first = RedisChannelStateStore(redis, scope=("binding", "binding-1"))
+    second = RedisChannelStateStore(redis, scope=("binding", "binding-1"))
+
+    assert await first.acquire_leader(lease_name="feishu") is not None
+    assert await second.acquire_leader(lease_name="feishu") is None
+
+
+async def test_demo_scope_cannot_collide_with_a_managed_binding() -> None:
+    redis = _FakeAsyncRedis()
+    demo = RedisChannelStateStore(redis, scope=("demo", "feishu", "cli-app-id"))
+    managed = RedisChannelStateStore(redis, scope=("binding", "cli-app-id"))
+
+    assert await demo.acquire_leader(lease_name="feishu") is not None
+    assert await managed.acquire_leader(lease_name="feishu") is not None
+    assert len(redis.entries) == 2
+
+
+@pytest.mark.parametrize("scope", [(), ("",), ("binding", "")])
+def test_store_rejects_an_empty_scope(scope: tuple[str, ...]) -> None:
+    with pytest.raises(ValueError, match="scope"):
+        RedisChannelStateStore(_FakeAsyncRedis(), scope=scope)

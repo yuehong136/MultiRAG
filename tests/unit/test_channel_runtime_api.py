@@ -88,6 +88,47 @@ def test_desired_runtime_contract_contains_no_credentials_or_execution_target(cl
         assert forbidden not in serialized
 
 
+class _MixedDesiredService(_RuntimeService):
+    """Desired list holding one row the model cannot accept."""
+
+    async def list_desired_runtimes(self) -> list[dict[str, Any]]:
+        return [
+            {"binding_id": "binding-1", "provider": "feishu", "generation": 4},
+            {"binding_id": "binding-2", "provider": "NOT A PROVIDER", "generation": 1},
+            {"binding_id": "binding-3", "provider": "dingtalk", "generation": 2},
+        ]
+
+
+def test_one_unparseable_desired_row_does_not_stall_the_whole_reconcile(client, caplog) -> None:
+    """One bad row must drop alone rather than fail the response.
+
+    The supervisor reads a failed response as "skip this entire tick", so
+    validating the list as a whole let a single unrecognised row stop *every*
+    binding -- healthy ones included -- from being started or reaped.
+
+    ``dingtalk`` passing also pins the widened provider field: the runner, not
+    this schema, is what fails closed on a name it cannot resolve.
+    """
+
+    service = _MixedDesiredService()
+    client.app.dependency_overrides[require_channel_workload] = _authenticate_supervisor
+    client.app.dependency_overrides[get_runtime_control_service] = lambda: service
+    caplog.set_level(logging.ERROR)
+
+    response = client.get("/api/v1/internal/channel-runtimes/desired")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "items": [
+            {"binding_id": "binding-1", "provider": "feishu", "generation": 4},
+            {"binding_id": "binding-3", "provider": "dingtalk", "generation": 2},
+        ]
+    }
+    assert "CHANNEL_DESIRED_ROW_INVALID" in caplog.text
+    # The rejected row is reported by hash; raw binding ids stay out of logs.
+    assert "binding-2" not in caplog.text
+
+
 def test_runtime_config_releases_only_provider_connection_material_to_authenticated_runner(
     client,
     caplog,

@@ -23,7 +23,10 @@ from api.channel_control.service import (
     ChannelAccessDenied,
     ChannelControlService,
     ChannelCredentialUnavailable,
+    ChannelTargetNotAccessible,
     InvalidChannelConfiguration,
+    _contains_sensitive_key,
+    _sanitize_public_config,
 )
 from api.db.db_models import ChannelBinding, ChannelRuntimeStatus, ChannelSecret, ChatChannel
 from common.app_config import get_app_config
@@ -38,6 +41,11 @@ class FakeRepository:
         self.runtimes: dict[str, ChannelRuntimeStatus] = {}
         self.dialogs: set[tuple[str, str]] = set()
         self.latest_canvas_revisions: set[tuple[str, str, str]] = set()
+        # canvas_id -> (owning tenant, permission). Registering a revision also
+        # implies the canvas exists, so same-tenant tests need not do both.
+        self.canvases: dict[str, tuple[str, str]] = {}
+        # (user_id, tenant_id) -> role, for cross-tenant authorization tests.
+        self.tenant_roles: dict[tuple[str, str], str] = {}
         self.commits = 0
         self.rollbacks = 0
 
@@ -62,6 +70,9 @@ class FakeRepository:
         del for_update
         return self.runtimes.get(binding_id)
 
+    async def list_enabled_channels(self, tenant_id: str, provider: str) -> list[ChatChannel]:
+        return [channel for channel in self.channels.values() if channel.tenant_id == tenant_id and channel.channel == provider and channel.status == 1]
+
     async def get_runtime_binding(
         self,
         binding_id: str,
@@ -85,16 +96,27 @@ class FakeRepository:
                 bundles.append((channel, binding, self.secrets.get(channel.id)))
         return bundles
 
-    async def dialog_belongs_to_tenant(self, tenant_id: str, dialog_id: str) -> bool:
-        return (tenant_id, dialog_id) in self.dialogs
+    async def resolve_dialog_owner(self, dialog_id: str) -> str | None:
+        for owner, known_dialog_id in self.dialogs:
+            if known_dialog_id == dialog_id:
+                return owner
+        return None
 
-    async def canvas_revision_is_latest_published(
-        self,
-        tenant_id: str,
-        canvas_id: str,
-        revision_id: str,
-    ) -> bool:
-        return (tenant_id, canvas_id, revision_id) in self.latest_canvas_revisions
+    async def resolve_canvas_owner(self, canvas_id: str) -> tuple[str, str] | None:
+        if canvas_id in self.canvases:
+            return self.canvases[canvas_id]
+        for owner, known_canvas_id, _revision in self.latest_canvas_revisions:
+            if known_canvas_id == canvas_id:
+                return owner, "me"
+        return None
+
+    async def user_can_update_tenant_resources(self, user_id: str, tenant_id: str) -> bool:
+        if user_id == tenant_id:
+            return True
+        return self.tenant_roles.get((user_id, tenant_id)) in {"owner", "admin"}
+
+    async def canvas_revision_is_latest_published(self, canvas_id: str, revision_id: str) -> bool:
+        return any(known_canvas_id == canvas_id and known_revision == revision_id for _owner, known_canvas_id, known_revision in self.latest_canvas_revisions)
 
     def add(self, model: ModelT) -> None:
         if isinstance(model, ChatChannel):
@@ -193,14 +215,14 @@ class FakeSecretStore:
         return {}
 
 
-def _create_request(*, chat_id: str | None = None, status: int = 0) -> ChannelCreateRequest:
+def _create_request(*, chat_id: str | None = None, status: int = 0, app_id: str = "cli_unit") -> ChannelCreateRequest:
     return ChannelCreateRequest.model_validate(
         {
             "name": "Leadership demo",
             "channel": "feishu",
             "config": {
                 "credential": {
-                    "app_id": "cli_unit",
+                    "app_id": app_id,
                     "app_secret": "never-return-this-secret",
                 }
             },
@@ -258,6 +280,9 @@ async def test_canvas_binding_requires_latest_owned_published_revision() -> None
     repository = FakeRepository()
     service = ChannelControlService(repository, FakeSecretStore())
     created = await service.create_channel("tenant-a", _create_request())
+    # The canvas exists and is ours; only its bound revision is out of date.
+    # "Agent unavailable" and "revision stale" are now two distinct answers.
+    repository.canvases["agent-1"] = ("tenant-a", "me")
     request = ChannelBindingUpsertRequest(
         target_type="multirag.canvas_agent",
         target_id="agent-1",
@@ -271,6 +296,127 @@ async def test_canvas_binding_requires_latest_owned_published_revision() -> None
     response = await service.upsert_binding("tenant-a", created["id"], request)
     assert response["binding"]["target_type"] == "multirag.canvas_agent"
     assert response["binding"]["target_revision_id"] == "revision-1"
+
+
+async def test_team_shared_agent_binds_for_a_tenant_updater() -> None:
+    """The live bug: the dropdown lists team targets, the backend refused them.
+
+    The frontend lists bindable targets in team scope, so a shared Agent shows
+    up, gets picked, and used to be rejected -- with the reason swallowed by a
+    bare catch in the UI.
+    """
+
+    repository = FakeRepository()
+    service = ChannelControlService(repository, FakeSecretStore())
+    created = await service.create_channel("tenant-a", _create_request())
+    repository.canvases["agent-shared"] = ("tenant-owner", "team")
+    repository.latest_canvas_revisions.add(("tenant-owner", "agent-shared", "revision-1"))
+    repository.tenant_roles[("tenant-a", "tenant-owner")] = "admin"
+
+    response = await service.upsert_binding(
+        "tenant-a",
+        created["id"],
+        ChannelBindingUpsertRequest(
+            target_type="multirag.canvas_agent",
+            target_id="agent-shared",
+            target_revision_id="revision-1",
+        ),
+    )
+
+    assert response["binding"]["target_id"] == "agent-shared"
+
+
+async def test_team_shared_agent_is_refused_to_a_plain_member() -> None:
+    """Widening the lookup without a role check would be the worse bug.
+
+    Binding re-publishes someone's Agent to an entire external workspace, so
+    reading it is not enough.
+    """
+
+    repository = FakeRepository()
+    service = ChannelControlService(repository, FakeSecretStore())
+    created = await service.create_channel("tenant-a", _create_request())
+    repository.canvases["agent-shared"] = ("tenant-owner", "team")
+    repository.latest_canvas_revisions.add(("tenant-owner", "agent-shared", "revision-1"))
+    repository.tenant_roles[("tenant-a", "tenant-owner")] = "normal"
+
+    with pytest.raises(ChannelTargetNotAccessible, match="do not have permission"):
+        await service.upsert_binding(
+            "tenant-a",
+            created["id"],
+            ChannelBindingUpsertRequest(
+                target_type="multirag.canvas_agent",
+                target_id="agent-shared",
+                target_revision_id="revision-1",
+            ),
+        )
+
+
+async def test_private_agent_of_another_tenant_is_refused_even_to_an_admin() -> None:
+    """``permission='me'`` is the owner's own decision; a role cannot override it."""
+
+    repository = FakeRepository()
+    service = ChannelControlService(repository, FakeSecretStore())
+    created = await service.create_channel("tenant-a", _create_request())
+    repository.canvases["agent-private"] = ("tenant-owner", "me")
+    repository.latest_canvas_revisions.add(("tenant-owner", "agent-private", "revision-1"))
+    repository.tenant_roles[("tenant-a", "tenant-owner")] = "admin"
+
+    with pytest.raises(ChannelTargetNotAccessible):
+        await service.upsert_binding(
+            "tenant-a",
+            created["id"],
+            ChannelBindingUpsertRequest(
+                target_type="multirag.canvas_agent",
+                target_id="agent-private",
+                target_revision_id="revision-1",
+            ),
+        )
+
+
+async def test_dialog_of_a_joined_tenant_follows_the_same_role_rule() -> None:
+    """Dialogs have no per-object share flag, so membership + role is the whole test."""
+
+    repository = FakeRepository()
+    service = ChannelControlService(repository, FakeSecretStore())
+    created = await service.create_channel("tenant-a", _create_request())
+    repository.dialogs.add(("tenant-owner", "dialog-shared"))
+    request = ChannelBindingUpsertRequest(
+        target_type="multirag.dialog",
+        target_id="dialog-shared",
+    )
+
+    with pytest.raises(ChannelTargetNotAccessible):
+        await service.upsert_binding("tenant-a", created["id"], request)
+
+    repository.tenant_roles[("tenant-a", "tenant-owner")] = "owner"
+    response = await service.upsert_binding("tenant-a", created["id"], request)
+
+    assert response["binding"]["target_id"] == "dialog-shared"
+
+
+async def test_a_missing_target_is_reported_separately_from_an_unauthorized_one() -> None:
+    repository = FakeRepository()
+    service = ChannelControlService(repository, FakeSecretStore())
+    created = await service.create_channel("tenant-a", _create_request())
+
+    with pytest.raises(InvalidChannelConfiguration, match="dialog is unavailable"):
+        await service.upsert_binding(
+            "tenant-a",
+            created["id"],
+            ChannelBindingUpsertRequest(target_type="multirag.dialog", target_id="ghost"),
+        )
+
+    with pytest.raises(InvalidChannelConfiguration, match="agent is unavailable"):
+        await service.upsert_binding(
+            "tenant-a",
+            created["id"],
+            ChannelBindingUpsertRequest(
+                target_type="multirag.canvas_agent",
+                target_id="ghost",
+                target_revision_id="revision-1",
+            ),
+        )
 
 
 async def test_read_paths_flag_a_stale_canvas_revision_without_mutating_state() -> None:
@@ -586,6 +732,122 @@ async def test_policy_rejects_embedded_credentials() -> None:
                 policy={"api_token": "must-not-live-here"},
             ),
         )
+
+
+async def test_second_enabled_channel_on_one_account_is_rejected_inside_a_tenant() -> None:
+    """Per-binding leases (CHN-S3) removed the Redis-level guard against this.
+
+    Two enabled bindings on one provider account would both connect and answer
+    the same message twice, so the invariant moves to the control plane.
+    """
+
+    repository = FakeRepository()
+    repository.dialogs.add(("tenant-a", "dialog-1"))
+    service = ChannelControlService(repository, FakeSecretStore())
+    first = await service.create_channel("tenant-a", _create_request(chat_id="dialog-1"))
+    await service.set_enabled("tenant-a", first["id"], enabled=True)
+
+    # Creating it is fine -- only enabling a second connection is not.
+    second = await service.create_channel("tenant-a", _create_request(chat_id="dialog-1"))
+
+    with pytest.raises(InvalidChannelConfiguration, match="already uses this provider account"):
+        await service.set_enabled("tenant-a", second["id"], enabled=True)
+
+
+async def test_two_tenants_may_enable_the_same_provider_account() -> None:
+    """The uniqueness guard must not become a fresh cross-tenant squatting vector.
+
+    A global check would let whoever registers an account id first lock every
+    other tenant out of an account they may legitimately own -- reintroducing
+    the class of bug CHN-S3 just closed.
+    """
+
+    repository = FakeRepository()
+    repository.dialogs.add(("tenant-a", "dialog-a"))
+    repository.dialogs.add(("tenant-b", "dialog-b"))
+    service = ChannelControlService(repository, FakeSecretStore())
+    first = await service.create_channel("tenant-a", _create_request(chat_id="dialog-a"))
+    second = await service.create_channel("tenant-b", _create_request(chat_id="dialog-b"))
+
+    await service.set_enabled("tenant-a", first["id"], enabled=True)
+    await service.set_enabled("tenant-b", second["id"], enabled=True)
+
+    assert repository.channels[first["id"]].status == 1
+    assert repository.channels[second["id"]].status == 1
+
+
+async def test_re_enabling_the_same_channel_is_not_a_self_conflict() -> None:
+    repository = FakeRepository()
+    repository.dialogs.add(("tenant-a", "dialog-1"))
+    service = ChannelControlService(repository, FakeSecretStore())
+    created = await service.create_channel("tenant-a", _create_request(chat_id="dialog-1"))
+
+    await service.set_enabled("tenant-a", created["id"], enabled=True)
+    again = await service.set_enabled("tenant-a", created["id"], enabled=True)
+
+    assert again["status"] == 1
+
+
+def test_sanitizer_strips_provider_credential_names_but_keeps_public_ids() -> None:
+    """The read path must not echo credentials spelled the way providers spell them.
+
+    The previous exact-match blocklist only knew the bare words (``secret``,
+    ``token``, ...), so every real provider field sailed straight through into
+    ``ChatChannelResponse.config``, which is returned to the browser.
+    """
+
+    sanitized = _sanitize_public_config(
+        {
+            "credential": {
+                "app_id": "cli_aaaaaaaaaaaaaaaa",
+                "corp_id": "ww_aaaaaaaaaaaaaaaa",
+                "client_secret": "aaaa-aaaa-aaaa",
+                "bot_token": "aaaa-aaaa-aaaa",
+                "channel_access_token": "aaaa-aaaa-aaaa",
+                "signing_secret": "aaaa-aaaa-aaaa",
+                "aes_key": "a" * 43,
+                "private_key": "aaaa-aaaa-aaaa",
+                "cookies": "aaaa-aaaa-aaaa",
+            },
+            "domain": "feishu",
+            "allowed_open_ids": ["ou_aaaa"],
+        }
+    )
+
+    # Public identifiers survive -- they are what the management form redisplays.
+    assert sanitized["credential"] == {
+        "app_id": "cli_aaaaaaaaaaaaaaaa",
+        "corp_id": "ww_aaaaaaaaaaaaaaaa",
+    }
+    assert sanitized["domain"] == "feishu"
+    assert sanitized["allowed_open_ids"] == ["ou_aaaa"]
+
+
+def test_sanitizer_leaves_non_secret_key_names_alone() -> None:
+    """``key_id`` labels which master key encrypted a row -- it is not a secret.
+
+    Guards the reason ``*_key`` is matched by suffix instead of by a bare
+    ``key`` substring.
+    """
+
+    public = {"key_id": "aaaaaaaa", "keywords": ["a"], "monkey": "a"}
+
+    assert _sanitize_public_config(public) == public
+
+
+def test_policy_forbids_the_credential_block_that_config_may_carry() -> None:
+    """The two predicates differ by exactly one key, deliberately.
+
+    A binding policy carrying a credential block is always wrong; a public
+    config legitimately holds ``credential.app_id``.
+    """
+
+    credential_block = {"credential": {"app_id": "cli_aaaaaaaaaaaaaaaa"}}
+
+    assert _contains_sensitive_key(credential_block) is True
+    assert _sanitize_public_config(credential_block) == credential_block
+    # Provider-shaped names are caught inside nested policy structures too.
+    assert _contains_sensitive_key({"nested": [{"client_secret": "aaaa"}]}) is True
 
 
 async def test_unavailable_store_protocol_does_not_decrypt() -> None:

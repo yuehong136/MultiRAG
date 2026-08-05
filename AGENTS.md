@@ -34,6 +34,11 @@ MultiRAG：基于深度文档理解的企业级 RAG 后端（Python >=3.12,<3.15
 4. **格式交给工具**：提交前 `make fix`。全库曾做过一次性 `ruff format`
    （见 `.git-blame-ignore-revs`；本地执行
    `git config blame.ignoreRevsFile .git-blame-ignore-revs` 可让 blame 跳过该提交）。
+5. **Channel 子系统的改动要记账**：动到 `api/channels/`、`api/channel_control/`、
+   `api/channel_execution/`、`api/channel_runtime/` 时，提交标题带上
+   [`docs/channel-program/PROGRESS.md`](docs/channel-program/PROGRESS.md) 的 `CHN-<面><n>` ID，
+   并按该文档的维护协议更新状态。与 `make verify` 同级——**没记账不算完成**。
+   冷启动先读 [`docs/channel-program/README.md`](docs/channel-program/README.md)。
 
 ## 写测试
 

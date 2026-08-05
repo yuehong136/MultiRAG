@@ -17,7 +17,10 @@ DEFAULT_SESSION_TTL_SECONDS = 86_400
 DEFAULT_LEADER_TTL_SECONDS = 30
 DEFAULT_LEADER_RENEW_INTERVAL_SECONDS = 10
 
-_KEY_PREFIX = "multirag:channel:v1"
+# v2 namespaces state per binding rather than per provider account. The bump is
+# deliberate and total: v1 keys are unreachable afterwards and expire on their
+# own TTL, which is what makes the cutover safe to roll out in one step.
+_KEY_PREFIX = "multirag:channel:v2"
 _DEFAULT_LEASE_NAME = "event-consumer"
 
 _RENEW_LEADER_LUA = """
@@ -106,15 +109,31 @@ class RedisChannelStateStore:
         self,
         redis: AsyncRedisClient,
         *,
-        app_id: str,
+        scope: tuple[str, ...],
         dedupe_ttl_seconds: int = DEFAULT_DEDUPE_TTL_SECONDS,
         session_ttl_seconds: int = DEFAULT_SESSION_TTL_SECONDS,
         leader_ttl_seconds: int = DEFAULT_LEADER_TTL_SECONDS,
         leader_renew_interval_seconds: int = DEFAULT_LEADER_RENEW_INTERVAL_SECONDS,
         owner_token_factory: Callable[[], str] | None = None,
     ) -> None:
+        """Namespace every key under ``scope``.
+
+        ``scope`` used to be a bare provider account id, which put two tenants
+        configuring the same provider account into one namespace -- and the
+        leader lease is taken *before* the credential is verified, so a tenant
+        could squat on an account it does not own and keep the rightful
+        tenant's worker from ever restarting. Managed runners pass
+        ``("binding", binding_id)``: already tenant-scoped by construction, and
+        available without touching the private runtime contract.
+
+        Parts are length-prefixed before hashing, so ``("a", "bc")`` and
+        ``("ab", "c")`` cannot collide.
+        """
+
         self._redis = redis
-        self._namespace = f"{_KEY_PREFIX}:{_hash_identifiers(app_id)}"
+        if not scope or any(not part for part in scope):
+            raise ValueError("scope must be a non-empty tuple of non-empty parts")
+        self._namespace = f"{_KEY_PREFIX}:{_hash_identifiers(*scope)}"
         self._dedupe_ttl_seconds = self._positive_ttl("dedupe_ttl_seconds", dedupe_ttl_seconds)
         self._session_ttl_seconds = self._positive_ttl("session_ttl_seconds", session_ttl_seconds)
         self._leader_ttl_seconds = self._positive_ttl("leader_ttl_seconds", leader_ttl_seconds)

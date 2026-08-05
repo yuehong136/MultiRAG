@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import logging
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -22,7 +24,17 @@ from api.channel_control.schemas import (
 from api.channel_control.secret_store import EncryptedSecret, SecretStore, SecretStoreUnavailable
 from api.db.db_models import ChannelBinding, ChannelRuntimeStatus, ChannelSecret, ChatChannel
 from common.app_config import get_app_config
+from common.constants import TenantPermission
 from common.misc_utils import get_uuid
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _short_hash(value: str) -> str:
+    """Log-safe identifier, matching how the supervisor redacts binding ids."""
+
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
 
 # States that only a live runner can hold, so heartbeat silence disproves them.
 # ``waiting``/``stopped``/``error`` legitimately stop reporting a heartbeat.
@@ -43,6 +55,13 @@ _SENSITIVE_CONFIG_KEYS = frozenset(
     }
 )
 
+# Substrings that mark a config key as credential-bearing. Providers spell their
+# credentials as ``client_secret`` / ``bot_token`` / ``channel_access_token`` /
+# ``signing_secret`` / ``zalo cookies``, so matching has to be by substring --
+# an exact-match list lets every one of those through. ``*_key`` is handled
+# separately in :func:`_is_secret_leaf_key`.
+_SECRET_KEY_SUBSTRINGS = ("secret", "token", "password", "passwd", "authorization", "cookie")
+
 
 class ChannelControlError(RuntimeError):
     """Base error with a message safe to return to management clients."""
@@ -61,6 +80,22 @@ class ChannelAccessDenied(ChannelControlError):
 class InvalidChannelConfiguration(ChannelControlError):
     def __init__(self, message: str) -> None:
         super().__init__(message, error_code="INVALID_CHANNEL_CONFIGURATION")
+
+
+class ChannelTargetNotAccessible(ChannelControlError):
+    """The caller may see this target but may not publish it to a channel.
+
+    Distinct from :class:`ChannelAccessDenied`, which is about the channel row
+    itself. Binding a target re-publishes someone's Agent or Dialog to an
+    entire external workspace, so it takes an updater role in the tenant that
+    owns the target -- not merely the ability to read it.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "You do not have permission to bind this target to an external channel.",
+            error_code="CHANNEL_TARGET_NOT_ACCESSIBLE",
+        )
 
 
 class ChannelCredentialUnavailable(ChannelControlError):
@@ -96,11 +131,35 @@ class ResolvedRuntimeBindingSpec:
     generation: int
 
 
+def _is_secret_leaf_key(name: str) -> bool:
+    """Whether one config key holds a credential rather than a public setting.
+
+    Substring matching, not exact membership: provider credential fields are
+    named ``client_secret`` / ``bot_token`` / ``channel_access_token``, never
+    the bare words, so an exact-match blocklist passes every one of them
+    through to a read path that echoes ``config`` back to the browser.
+
+    ``*_key`` is tested separately from the substring list because a bare
+    ``key`` substring would also strike ``key_id`` -- the non-secret label
+    identifying which master key encrypted a row -- and ``keywords``.
+    """
+
+    return any(marker in name for marker in _SECRET_KEY_SUBSTRINGS) or name == "key" or name.endswith("_key")
+
+
 def _contains_sensitive_key(value: Any) -> bool:
+    """Whether a binding policy carries anything credential-shaped.
+
+    Stricter than :func:`_is_secret_leaf_key` by exactly one key: ``credential``
+    is rejected outright here while :func:`_sanitize_public_config` recurses
+    into it. A policy has no business carrying a credential block at all, but a
+    public config legitimately holds ``credential.app_id``.
+    """
+
     if isinstance(value, dict):
         for key, nested in value.items():
             normalized = str(key).strip().lower()
-            if normalized in _SENSITIVE_CONFIG_KEYS or "secret" in normalized or "token" in normalized or "password" in normalized:
+            if normalized in _SENSITIVE_CONFIG_KEYS or _is_secret_leaf_key(normalized):
                 return True
             if _contains_sensitive_key(nested):
                 return True
@@ -110,14 +169,20 @@ def _contains_sensitive_key(value: Any) -> bool:
 
 
 def _sanitize_public_config(value: Any) -> dict[str, Any]:
-    """Defensively strip credentials if an old row contains legacy plaintext."""
+    """Defensively strip credentials if an old row contains legacy plaintext.
+
+    A blocklist backstop, not the primary defence: credentials are supposed to
+    live in the encrypted secret store and never reach ``config`` at all. It
+    guards the two paths that hand ``config`` to someone -- the tenant read
+    response and the public config handed to a worker.
+    """
 
     if not isinstance(value, dict):
         return {}
     sanitized: dict[str, Any] = {}
     for key, nested in value.items():
         normalized = str(key).strip().lower()
-        if normalized in {"app_secret", "secret", "token", "api_token", "api_key", "password", "authorization"}:
+        if _is_secret_leaf_key(normalized):
             continue
         if isinstance(nested, dict):
             sanitized[str(key)] = _sanitize_public_config(nested)
@@ -126,6 +191,21 @@ def _sanitize_public_config(value: Any) -> dict[str, Any]:
         else:
             sanitized[str(key)] = nested
     return sanitized
+
+
+def _account_identity(channel: ChatChannel) -> str | None:
+    """Which provider account a channel connects as, or None if unset.
+
+    Feishu-specific for now (``credential.app_id``). One of the sites CHN-P3
+    replaces with a provider-declared accessor so that adding a provider stops
+    meaning "edit the control plane".
+    """
+
+    credential = _sanitize_public_config(channel.config).get("credential")
+    if not isinstance(credential, dict):
+        return None
+    account_id = credential.get("app_id")
+    return account_id if isinstance(account_id, str) and account_id else None
 
 
 def _create_public_config(config: FeishuConfigInput) -> tuple[dict[str, Any], dict[str, str] | None]:
@@ -225,7 +305,7 @@ class ChannelControlService:
             secret = self._new_secret(channel_id, encrypted) if encrypted is not None else None
             binding = self._new_binding(channel_id, binding_request) if binding_request is not None else None
             if binding is not None and binding.enabled:
-                self._ensure_ready(channel, secret, binding)
+                await self._ensure_ready(channel, secret, binding)
 
             self._repository.add(channel)
             # No ORM relationships are declared between the control-plane
@@ -339,7 +419,7 @@ class ChannelControlService:
                     binding.generation += 1
             if binding is not None and binding.enabled:
                 await self._validate_existing_binding(tenant_id, binding)
-                self._ensure_ready(channel, secret, binding)
+                await self._ensure_ready(channel, secret, binding)
 
             await self._repository.flush()
             await self._repository.commit()
@@ -401,7 +481,7 @@ class ChannelControlService:
                     binding.generation += 1
 
             if binding.enabled:
-                self._ensure_ready(channel, secret, binding)
+                await self._ensure_ready(channel, secret, binding)
             if changed:
                 channel.chat_id = binding.target_id if binding.target_type == "multirag.dialog" else None
                 channel.status = int(binding.enabled)
@@ -422,7 +502,7 @@ class ChannelControlService:
                 raise InvalidChannelConfiguration("A channel binding is required before enabling the channel.")
             if enabled:
                 await self._validate_existing_binding(tenant_id, binding)
-                self._ensure_ready(channel, secret, binding)
+                await self._ensure_ready(channel, secret, binding)
             if binding.enabled != enabled or channel.status != int(enabled):
                 binding.enabled = enabled
                 binding.generation += 1
@@ -485,15 +565,28 @@ class ChannelControlService:
         """Return credential-free desired state for the external supervisor."""
 
         bundles = await self._repository.list_runtime_bindings()
-        return [
-            {
-                "binding_id": binding.id,
-                "provider": channel.channel,
-                "generation": binding.generation,
-            }
-            for channel, binding, secret in bundles
-            if secret is not None
-        ]
+        desired: list[dict[str, Any]] = []
+        for channel, binding, secret in bundles:
+            if secret is None:
+                # Skipping is right -- a worker cannot start without a
+                # credential -- but skipping *silently* left the admin staring
+                # at `waiting` forever with no error code anywhere in the
+                # system. The runtime row is untouched on purpose: this is an
+                # observation, not a state transition.
+                LOGGER.warning(
+                    "channel_control_event=desired_binding_skipped error_code=CHANNEL_SECRET_MISSING binding_id_hash=%s provider=%s",
+                    _short_hash(binding.id),
+                    channel.channel,
+                )
+                continue
+            desired.append(
+                {
+                    "binding_id": binding.id,
+                    "provider": channel.channel,
+                    "generation": binding.generation,
+                }
+            )
+        return desired
 
     async def resolve_runtime_binding(
         self,
@@ -601,8 +694,8 @@ class ChannelControlService:
 
         if binding is None or binding.target_type != "multirag.canvas_agent" or binding.target_revision_id is None:
             return None
+        del tenant_id
         return not await self._repository.canvas_revision_is_latest_published(
-            tenant_id,
             binding.target_id,
             binding.target_revision_id,
         )
@@ -712,19 +805,48 @@ class ChannelControlService:
         return channel
 
     async def _validate_target(self, tenant_id: str, request: ChannelBindingUpsertRequest) -> None:
+        """Resolve the target, then authorize the caller against its owner.
+
+        Ownership and authorization are two answers, not one. Matching only the
+        caller's own tenant made every team-shared target fail here while the
+        frontend dropdown listed it from the team scope -- so picking one
+        produced a rejection with no way to act on it. Widening the lookup
+        without a role check would be worse: any member could re-publish a
+        colleague's Agent to a whole external workspace.
+        """
+
         if _contains_sensitive_key(request.policy):
             raise InvalidChannelConfiguration("Channel policy must not contain credentials.")
+
         if request.target_type == "multirag.dialog":
-            if not await self._repository.dialog_belongs_to_tenant(tenant_id, request.target_id):
+            owner = await self._repository.resolve_dialog_owner(request.target_id)
+            if owner is None:
                 raise InvalidChannelConfiguration("The selected dialog is unavailable.")
+            await self._ensure_may_publish_target(tenant_id, owner)
             return
+
+        resolved = await self._repository.resolve_canvas_owner(request.target_id)
+        if resolved is None:
+            raise InvalidChannelConfiguration("The selected agent is unavailable.")
+        owner, permission = resolved
+        # Canvases carry an explicit share flag; a private one is only ever
+        # bindable by its owner, whatever role the caller holds elsewhere.
+        if owner != tenant_id and permission != TenantPermission.TEAM:
+            raise ChannelTargetNotAccessible()
+        await self._ensure_may_publish_target(tenant_id, owner)
+
         revision_id = request.target_revision_id
         if revision_id is None or not await self._repository.canvas_revision_is_latest_published(
-            tenant_id,
             request.target_id,
             revision_id,
         ):
             raise InvalidChannelConfiguration("The selected agent revision is not the latest published version.")
+
+    async def _ensure_may_publish_target(self, actor_id: str, owner_tenant_id: str) -> None:
+        if owner_tenant_id == actor_id:
+            return
+        if not await self._repository.user_can_update_tenant_resources(actor_id, owner_tenant_id):
+            raise ChannelTargetNotAccessible()
 
     async def _validate_existing_binding(self, tenant_id: str, binding: ChannelBinding) -> None:
         await self._validate_target(
@@ -784,18 +906,37 @@ class ChannelControlService:
             generation=1,
         )
 
-    @staticmethod
-    def _ensure_ready(
+    async def _ensure_ready(
+        self,
         channel: ChatChannel,
         secret: ChannelSecret | None,
         binding: ChannelBinding,
     ) -> None:
         del binding
-        public_config = _sanitize_public_config(channel.config)
-        credential = public_config.get("credential")
-        app_id = credential.get("app_id") if isinstance(credential, dict) else None
-        if not app_id or secret is None:
+        account_id = _account_identity(channel)
+        if not account_id or secret is None:
             raise InvalidChannelConfiguration("Feishu App ID and App Secret are required before enabling the channel.")
+        await self._ensure_account_not_already_enabled(channel, account_id)
+
+    async def _ensure_account_not_already_enabled(self, channel: ChatChannel, account_id: str) -> None:
+        """Reject a second enabled channel on the same provider account.
+
+        The leader lease is per binding (CHN-S3), so nothing at the Redis layer
+        stops two enabled bindings on one provider account from both connecting
+        and answering the same message twice. That invariant moves here, to the
+        control plane.
+
+        Scoped to one tenant deliberately. A global uniqueness check would
+        itself become a cross-tenant squatting vector: whoever registers an
+        account id first would lock every other tenant out of an account they
+        may legitimately own.
+        """
+
+        for other in await self._repository.list_enabled_channels(channel.tenant_id, channel.channel):
+            if other.id == channel.id:
+                continue
+            if _account_identity(other) == account_id:
+                raise InvalidChannelConfiguration("Another enabled channel already uses this provider account.")
 
     async def _apply_compatibility_chat_id(
         self,

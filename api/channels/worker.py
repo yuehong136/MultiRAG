@@ -365,7 +365,9 @@ def _build_worker(app_config: AppConfig, channel_config: FeishuChannelConfig) ->
     redis = _build_redis(app_config)
     state_store = RedisChannelStateStore(
         redis,
-        app_id=channel_config.app_id,
+        # Demo mode has no binding, so it namespaces by account -- and says so,
+        # which also keeps it from ever colliding with a managed runner.
+        scope=("demo", "feishu", channel_config.app_id),
         dedupe_ttl_seconds=channel_config.dedupe_ttl_seconds,
         session_ttl_seconds=channel_config.session_ttl_seconds,
         leader_ttl_seconds=channel_config.leader_ttl_seconds,
@@ -454,7 +456,12 @@ async def _run_managed_channel(
         redis = _build_redis(app_config)
         state_store = RedisChannelStateStore(
             redis,
-            app_id=plan.account_id,
+            # Per binding, not per provider account: the lease is taken before
+            # the credential is verified, so an account-scoped namespace let one
+            # tenant squat on another tenant's account and block its worker from
+            # restarting. binding_id is already tenant-scoped and needs nothing
+            # added to the private runtime contract.
+            scope=("binding", binding_id),
             dedupe_ttl_seconds=tuning.dedupe_ttl_seconds,
             session_ttl_seconds=tuning.session_ttl_seconds,
             leader_ttl_seconds=tuning.leader_ttl_seconds,

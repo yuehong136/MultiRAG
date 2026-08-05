@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import logging
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Response, status
+from pydantic import ValidationError
 
 from api.channel_control.dependencies import get_runtime_control_service
 from api.channel_control.service import (
@@ -16,6 +19,7 @@ from api.channel_control.service import (
 from api.channel_execution.dependencies import require_channel_workload
 from api.channel_execution.models import WorkloadIdentity
 from api.channel_runtime.schemas import (
+    DesiredRuntime,
     DesiredRuntimeList,
     RuntimeBindingConfig,
     RuntimeCredential,
@@ -23,6 +27,18 @@ from api.channel_runtime.schemas import (
 )
 
 router = APIRouter()
+LOGGER = logging.getLogger(__name__)
+
+
+def _short_hash(value: str) -> str:
+    """Log-safe binding identifier, matching what the supervisor logs.
+
+    Defined locally rather than imported from ``api.channels``: this module
+    runs inside the API process, and importing the transport package would
+    pull a provider SDK (and its process-global event loop) in with it.
+    """
+
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
 def _raise_private_error(error: ChannelControlError) -> None:
@@ -43,10 +59,27 @@ async def list_desired_channel_runtimes(
     service: ChannelControlService = Depends(get_runtime_control_service),
 ) -> DesiredRuntimeList:
     try:
-        return DesiredRuntimeList.model_validate({"items": await service.list_desired_runtimes()})
+        rows = await service.list_desired_runtimes()
     except ChannelControlError as error:
         _raise_private_error(error)
         raise AssertionError("unreachable")
+
+    # Validate row by row and drop what will not parse. Validating the list as
+    # a whole meant one unrecognised row raised out of this route -- uncaught,
+    # since ValidationError is not a ChannelControlError -- and the supervisor
+    # reads that HTTP 500 as "skip this entire reconcile tick". A single bad
+    # row therefore stopped *every* binding from being started or reaped, not
+    # just its own. Fail isolated, not fail closed.
+    items: list[DesiredRuntime] = []
+    for row in rows:
+        try:
+            items.append(DesiredRuntime.model_validate(row))
+        except ValidationError:
+            LOGGER.error(
+                "channel_runtime_event=desired_row_rejected error_code=CHANNEL_DESIRED_ROW_INVALID binding_id_hash=%s",
+                _short_hash(str(row.get("binding_id", ""))),
+            )
+    return DesiredRuntimeList(items=items)
 
 
 @router.get(

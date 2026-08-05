@@ -114,4 +114,7 @@ MCP server（self-host）：`uv run python mcp/server/server.py --host=127.0.0.1
   单文件即时 ruff 自动修复 + mypy 纳管范围内 dmypy 增量类型检查，残留问题通过 exit 2
   回灌给 Claude 当场修复；`server/`、`internal/` 等停滞/笔记目录自动跳过。
 - **项目 skill**：`port-ragflow-commit`——跟进 ragflow 上游提交时必用。
-- `internal/*.md` 是用户本地笔记：可读可编辑，**绝不 git add**。
+- `internal/*.md` 是用户本地笔记：可读可编辑，**绝不 git add**。Channel 审计的完整版
+  （含未修复问题的复现细节、上游对照）在 `internal/channel-audit-2026-08.md`；
+  收敛后的方案、账本与前后端契约在 `docs/channel-program/`（**已入库**，冷启动读它的
+  [README](docs/channel-program/README.md)）。分层原则：入库讲我们自己的代码，本地讲别人的。

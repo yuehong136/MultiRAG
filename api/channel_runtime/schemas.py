@@ -3,16 +3,26 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+# Provider names are an application-level set, deliberately not a Literal here.
+# Pinning this to one provider made a single unrecognised row fail the whole
+# response, and the supervisor treats that as "skip this entire reconcile tick"
+# -- so one bad row stopped every binding, including healthy ones, from being
+# started or reaped. The runner still fails closed on names it cannot resolve
+# (`api/channels/provider.py::worker_provider`), which is where that check
+# belongs. See CHN-ADR-06 for why this widening ships well before anything
+# emits a second provider name.
+ProviderName = Annotated[str, Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")]
 
 
 class DesiredRuntime(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     binding_id: str = Field(min_length=1, max_length=32)
-    provider: Literal["feishu"]
+    provider: ProviderName
     generation: int = Field(ge=1)
 
 
@@ -35,7 +45,7 @@ class RuntimeBindingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     binding_id: str = Field(min_length=1, max_length=32)
-    provider: Literal["feishu"]
+    provider: ProviderName
     generation: int = Field(ge=1)
     public_config: dict[str, Any]
     credential: RuntimeCredential

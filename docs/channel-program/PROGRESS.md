@@ -1,0 +1,356 @@
+# Channel 程序 · 进度看板
+
+## 维护协议（MANDATORY — 任何处理本文档条目的 agent 必须遵守）
+
+1. **开工前**：用当前代码重新核实目标条目的锚点（文件、行号、符号）。本文档是时点快照，
+   行号一定会漂移；以实际代码为准，**发现漂移先改锚点再动手**，不要带着错的锚点开工。
+2. **完工后**：改任务表的 `状态`，并在「变更日志」追加一行，写清
+   日期 / 做了什么 / 提交哈希 / **怎么验证的**。状态取值：
+   `⬜ 未开始` / `🔵 进行中` / `✅ 完成` / `🚫 阻塞` / `⏸ 挂起` / `❌ 取消`。
+   **「跑了 make verify」不算验证记录**——要写这条改动本身是怎么被证明成立的
+   （新增的测试名、实测的 grep 结果、手动复现步骤）。
+3. **范围变化**：发现新问题 → 按 §ID 规则**追加新 ID**，不要塞进无关条目；发现某条目不成立
+   → 状态置 `❌ 取消` 并写明原因，**不要删行**（保留判断历史）。
+4. **跨仓义务**：动到前后端契约的条目，必须在同一批工作里
+   ① 更新 [CONTRACT.md](CONTRACT.md) 并 bump `channel-api/vN`；
+   ② 更新本文档「跨仓联动」表两侧状态与部署顺序；
+   ③ 在 web 仓 `docs/engineering-modernization-roadmap.md` 对应条目补进展行。
+   **只改一侧就宣布完成 = 未完成。**
+5. **ID 出现在哪**：`CHN-<面><n>` 必须出现在提交标题的尾括号里；前端提交同时带上其路线图 ID，
+   形如 `fix(channel): surface server error codes (ARCH-6, CHN-U2)`。
+   `git log --grep=CHN-` 是本账本唯一的交叉校验手段——**ID 不进提交信息，账本就是废的**。
+6. **硬不变量**（[README §6](README.md#6-硬不变量破坏之前先写-chn-adr)）任何条目都不得破坏。
+   确需破坏 → 先写 `CHN-ADR-NN`，不允许在任务行里顺手改掉。
+
+> 更新方式：改任务的 `状态` 列，在「变更日志」追加一行。
+
+## ID 规则
+
+```
+CHN-<面><n>       任务    面 ∈ {S,U,P,O,X}，n 不补零，一个 ID 对应一个 PR
+CHN-ADR-<nn>      决策    两位补零，追加式，永不复用
+```
+
+用 `CHN-` 而不是 `CH-`：`grep "CH-6"` 会命中 web 路线图的 `ARCH-6`（那份文档里有 21 处
+`CH-` 子串）。`CHN-` 在两个仓零命中。
+
+**不设里程碑命名空间**——`docs/feishu-multitenant/`（FMT）已经占了 `M0`–`M6`，第二套 `M1`
+会让 `grep M1` 失效。所以**阶段即工作面字母**：S → U → P → O，X 贯穿。
+
+| 面 | 含义 |
+|---|---|
+| **S** | 安全加固 |
+| **U** | 今天就可见的缺陷（管理员现在就在踩） |
+| **P** | Provider 通用化 |
+| **O** | 运维能力与运行时诚实 |
+| **X** | 跨仓契约 |
+
+前端提交**双标**：既带路线图 ID（web 协议强制），也带 CHN ID，
+`git log --grep=CHN-` 与 `git log --grep=ARCH-6` 都能还原真相。
+web 侧 commit scope 从 `settings` 切到 `channel`（后端已有 `feat(channel):` 先例）。
+
+---
+
+## 阶段 S · 安全加固
+
+全部纯后端，无跨仓依赖，**先做**。
+
+| ID | 任务 | 状态 | 依赖 | 锚点 |
+|---|---|:---:|---|---|
+| CHN-S1 | 脱敏对齐：`_sanitize_public_config` 的精确匹配集合换成同文件 `_contains_sensitive_key` 已有的子串谓词。两个谓词分开——`credential` 在 config 里要**递归进去**（它含 `app_id`），在 `policy` 里要**整键拒绝** | ✅ | — | `api/channel_control/service.py:99-128` |
+| CHN-S2 | desired-list 逐行降级：单条坏记录只跳过自己并记 `error_code`，不再让整轮 reconcile 停摆；`provider` 由 `Literal["feishu"]` 放宽为受约束的 `str`（**tolerate 半步**）。顺带修 `:495` `if secret is not None` 的静默过滤，补 `CHANNEL_SECRET_MISSING` 日志 | ✅ | — | `api/channel_runtime/schemas.py:15,38`、`api/apps/restful_apis/channel_runtime_api.py:41-49`、`api/channel_control/service.py:484-496` |
+| CHN-S3 | Redis 命名空间改 **per-binding**：`RedisChannelStateStore(redis, *, scope: tuple[str,...])` 取代 `app_id: str`，`_KEY_PREFIX` → `multirag:channel:v2` | ✅ | — | `api/channels/state_store.py:105-124,238-245`、`api/channels/worker.py:366-373,455-462` |
+| CHN-S4 | 同租户 provider 账号唯一性守卫（S3 之后两个 binding 会同时连上并重复回答）。**只在租户内**——全局唯一性检查本身就是跨租户抢占面 | ✅ | CHN-S3 | `api/channel_control/repository.py`（+`account_in_use`）、`service.py:787-798` |
+| CHN-S5 | 目标授权：查询放宽到团队口径（与前端下拉同源），同时按**目标的归属租户**判 `can_update_tenant_resources`。新错误码 `CHANNEL_TARGET_NOT_ACCESSIBLE` | ✅ | — | `api/channel_control/repository.py:141-168`、`service.py:714-739` |
+| CHN-S6 | 只读审计脚本，枚举会被 S5 拒绝的存量 binding 供运维处置 | ✅ | CHN-S5 | `scripts/audit_channel_target_authz.py` |
+
+**CHN-S3 为什么是 binding 维度而不是租户维度**：worker 手上根本没有 `tenant_id`——
+`RuntimeBindingConfig` 不携带它。租户维度需要往 `extra="forbid"` 的私有契约模型加字段，
+把一个必须**现在**上线的安全修复变成两次部署的协议升级。`binding_id` 已在手、全局唯一、
+按构造即租户隔离，还顺带白送修掉「同 `app_id` 重建渠道复用 dedupe 命名空间导致静默丢消息」。
+**已知代价**（要写进 PR body 与 `api/channels/README.md`）：接住这次改动的那一次 worker 重启，
+会话重置一次、dedupe 窗口空一次。
+
+**CHN-S5 为什么不是「九条路由补 `can_manage_*`」**：`UserTenantService.get_role_in_tenant`
+（`api/db/services/user_service.py:289-290`）是 `if user_id == tenant_id: return OWNER`，
+而 channel 路由传的正是 `Principal.id`——那个检查恒为 True，是纯表演。详见 `CHN-ADR-01`。
+
+---
+
+## 阶段 U · 今日可见缺陷
+
+| ID | 仓 | 任务 | 状态 | 依赖 | 锚点 |
+|---|---|---|:---:|---|---|
+| CHN-U1 | MR | `_respond` 把 `data=False` 换成 `data={"error_code": ...}`。`retcode`/`retmsg` 不动，前端 `APIError.details` 零改动就能拿到 | ⬜ | — | `api/apps/restful_apis/chat_channel_api.py:35-65` |
+| CHN-U2 | WEB | 错误码接线（三处裸 `catch` 改为按 code 映射文案）+ providers 查询失败不再清空整页，改内联横幅 + 禁用新建，渠道列表照常渲染 | ⬜ | — | `src/api/channel.ts`、`index.tsx:44-47,67-69,78-80,97-106`、`channel-form-sheet.tsx:140-142`、两份 locale |
+| CHN-U3 | WEB | 运行时状态词表对齐：`state` 收紧为 6 值联合 + `(string & {})`；`isRuntimeHealthy` 变成 `=== 'connected'`；删 6 个服务端永不上报的 locale 条目；**把测试从 `pages/.../__tests__/` 移到 `src/api/__tests__/`**（前者跑在所有门禁之外） | ⬜ | — | `src/api/channel.ts:56`、`utils.ts:10-13`、两份 locale |
+| CHN-U4 | WEB | 表单重置守卫：按 `currentChannel?.id` 而非对象引用触发，`isDirty` 时不重置；detail 查询关掉 `refetchOnReconnect`/`refetchOnWindowFocus`。修「网络抖动静默清空已输入的 App Secret」 | ⬜ | — | `channel-form-sheet.tsx:89-92`、`use-channel-request.ts:29-34` |
+| CHN-U5 | WEB | `setQueryData` 改 `invalidateQueries`——mutation 响应不带 runtime，写进读缓存会抹掉实时面板 | ⬜ | — | `use-channel-request.ts:71-75,83-89` |
+| CHN-U6 | WEB | 提交前 `fetchQuery` 拿新鲜的 `binding.enabled`，不用 5 分钟旧缓存。修「A 改个名把 B 刚停用的渠道静默重新启用」 | ⬜ | — | `channel-form-sheet.tsx:114-143` |
+| CHN-U7 | WEB | 绑定下拉服务端搜索（`useFetchAgentList` 已支持 `keywords`），去掉硬编码 `page_size: 100` | ⬜ | — | `binding-fields.tsx:37-44` |
+
+**CHN-U6 为什么是 refetch 而不是省略字段或加后端令牌**：省略 `enabled` 时老后端会读到
+`ChannelBindingUpsertRequest.enabled` 的 `False` 默认值 → 静默**停用**渠道，这是坏的半态；
+加后端令牌会为一个亚秒级竞态制造硬跨仓顺序约束。refetch 是纯前端、对任何后端版本都安全，
+把窗口从 5 分钟压到一次往返。残余竞态已知并接受。
+
+---
+
+## 阶段 P · Provider 通用化
+
+**验收标准：钉钉落地时 `git diff --stat` 里零个 `web/` 路径。**
+
+| ID | 仓 | 任务 | 状态 | 依赖 | 锚点 |
+|---|---|---|:---:|---|---|
+| CHN-P1 | MR | 新建 `api/channel_providers/` 纯规格包（无 ORM / 无 web 框架 / 无 SDK）+ 飞书 spec；**删除死注册表** `api/channels/core/registry.py`；加 import-linter 契约 + 子进程纯度测试 | ⬜ | — | 新包、`channel_control/schemas.py`、`pyproject.toml` |
+| CHN-P2 | MR | 发 `manifest.form`——服务端展平的有序 FieldSpec。`config_schema` 原样保留，继续只服务请求校验 + OpenAPI | ⬜ | CHN-P1 | `api/channel_providers/base.py`、`feishu/spec.py`、`channel_control/schemas.py:199-223` |
+| CHN-P3 | MR | 配置/凭据拆分改由 spec 驱动，消掉 5 个硬编码 `app_id`/`app_secret` 门里的 4 个 | ⬜ | CHN-P1、CHN-P2、CHN-S4 | `service.py:131-173,498-531,787-798` |
+| CHN-P4 | MR | `RuntimeCredential.fields` — **tolerate 半步**（API 不发新字段） | ⬜ | — | `api/channel_runtime/schemas.py:25-31`、`channels/feishu/provider.py:75-93` |
+| CHN-P5 | WEB | 新建 `form-spec.ts`：`resolveFormFields`（有 `manifest.form` 用它，否则回落到既有飞书编译分支——**前端的 tolerate 步**）+ `assembleConfig`（走点号路径，空 secret 字段整个省略）。`buildChannelMutationPayload` 改 spec 驱动。**纯函数，不碰组件** | ⬜ | CHN-P2（软） | `src/pages/settings/channels/form-spec.ts`、`src/api/channel.ts:85-179` |
+| CHN-P6 | WEB | UI 接线到 spec；**修死表单**（zod 改用 `selectedManifest` 而非 `providers[0]`）；`ChannelFormValues.config` 改成能表达嵌套与布尔的类型；拆出 runtime banner 与 basics section 把 `channel-form-sheet.tsx` 从 310 行降到 250 以下 | ⬜ | CHN-P5、CHN-U2 | `form-model.ts:144-262`、`provider-fields.tsx`、`channel-form-sheet.tsx` |
+| CHN-P7 | WEB | 删客户端兜底 manifest 与飞书编译分支。**半态修复写在这个 PR 内部**：`listProviders()` 丢弃缺 `form` 的 manifest | ⬜ | CHN-P5、CHN-P6、**CHN-P2 已部署** | `form-model.ts:71-142`、`index.tsx:44-47` |
+| CHN-P8 | MR | `RuntimeCredential.fields` — **emit 半步**，同时保留 legacy 字段对 | ⬜ | **CHN-P4 已部署** | `channel_runtime_api.py:72-81` |
+| CHN-P9 | MR | `ChannelProvider` 改注册表驱动；`config` 改 `dict[str, Any]` 在 service 层按 `channel` 判别后二次校验。**这是 CHN-S2 的 emit 闸门** | ⬜ | **CHN-S2 已部署**、CHN-P1、CHN-P3、**CHN-P8 已部署** | `channel_control/schemas.py:10,99-136,172-188` |
+| CHN-P10 | MR | **钉钉 provider**（`credential.client_id` + `credential.client_secret`）。零前端改动的验收 PR | ⬜ | CHN-P9 | 新 spec + transport |
+| CHN-P11 | MR | 删除 legacy `RuntimeCredential.app_id/app_secret`（浸泡后清理，删字段三步的第三步） | ⬜ | CHN-P8 已浸泡 | `api/channel_runtime/schemas.py` |
+| CHN-P12 | — | ⏸ 交互式配对（QR / OAuth）。**不做**，但 `FormField.kind` 保持开放联合、前端渲染未知 kind 为 disabled，就是它的全部留缝成本 | ⏸ | — | — |
+
+**CHN-P2 的 FormField 形状**（这是解开渲染契约僵局的一步——`required` 落在 form 层，
+`FeishuConfigInput` 因此名正言顺地保持全字段可选以支持 PATCH merge）：
+
+```
+FormField:
+  path: str          # 点号路径，"credential.app_id"
+  kind: "text" | "password" | "string_list" | "select" | "switch"   # 开放联合
+  label: str         # 服务端英文默认值
+  i18n_key: str|None # 让既有 locale 继续赢
+  required: bool     # 真正的答案（JSON Schema 里没有 required 数组）
+  secret: bool       # 留空 = 保持不变
+  default / options / placeholder / help / max_items / max_length
+```
+
+`kind` 必须是**开放联合**，前端渲染未知 kind 为 disabled 字段而非抛错——这是将来加企微
+`visible_when`、加 OAuth 按钮时老前端能优雅降级的唯一保障。**第二个 provider 已定为钉钉**
+（两个字段，现有 kind 枚举即可表达），所以 CHN-P2 不做条件可见性；但 fixture 里要同时放
+飞书与钉钉两份，把「零前端改动」在设计期就验证掉。
+
+**CHN-P1 的分层约束**（`api/channels/feishu/__init__.py:1` 会 eager import lark-oapi，
+所以 spec 绝不能放在 `api/channels/<name>/`）：
+
+```toml
+[[tool.importlinter.contracts]]
+name = "channel_providers 是纯规格层：不依赖 ORM/路由/传输实现"
+type = "forbidden"
+source_modules = ["api.channel_providers"]
+forbidden_modules = ["api.db", "api.apps", "api.channels", "api.channel_control", "api.channel_runtime"]
+```
+
+import-linter 表达不了「不许第三方 SDK」，所以补一个子进程测试：`import api.channel_providers`
+之后 `sys.modules` 里不得出现 `lark_oapi` / `sqlalchemy` / `fastapi`。
+
+---
+
+## 阶段 O · 运维能力与运行时诚实
+
+| ID | 任务 | 状态 | 依赖 | 锚点 |
+|---|---|:---:|---|---|
+| CHN-O1 | `revision_stale` 升级为**故障态**：stale 时报 `state="error"` + `last_error_code="TARGET_REVISION_STALE"`，无视新鲜心跳。`get_runtime` 也要算这个标志——今天只有 `_serialize_channel` 算，专用 runtime 路由**更**不准。**零私有契约影响**（控制面读路径合成） | ⬜ | — | `service.py:438-453,579-591,662-700` |
+| CHN-O2 | `RuntimeBindingConfig.policy` — **tolerate 半步**。今天 `policy.private_chat_only` 被表单收集、被服务端校验、被存进 DB，然后**永远到不了 worker**，管理端那个开关是装饰品 | ⬜ | — | `api/channel_runtime/schemas.py:34-41`、`binding_bridge.py:74-76` |
+| CHN-O3 | `policy` — **emit 半步** | ⬜ | **CHN-O2 已部署到所有 worker** | `service.py:498-531`、`channel_runtime_api.py:72-81` |
+| CHN-O4 | worker 传输层无关化：`FEISHU_WS_STOPPED` → `CHANNEL_TRANSPORT_STOPPED`；`:472` 不再硬编码 `FeishuBindingBridge`；`chat_type != "p2p"` 过滤移到 policy + provider 能力后面 | ⬜ | CHN-O3、CHN-P1 | `worker.py:322-329,472-479`、`binding_bridge.py` |
+| CHN-O5 | **supervisor 进 `docker/docker-compose.yml`**。今天 compose 只有 `multirag-cpu`/`multirag-gpu`，默认部署下 channel 功能 100% 不工作且 UI 一个字不说。刻意排在 O2/P4 之后——第一次跑起来的 supervisor 就已经在最新契约上 | ⬜ | CHN-P4、CHN-O2 在镜像里 | `docker/docker-compose.yml`、`api/channels/README.md:405-433` |
+| CHN-O6 | 连接自检端点（保存前验证凭据，把数十秒的反馈环压到 2 秒） | ⬜ | CHN-U1 | 未排期 |
+| CHN-O7 | 主密钥 keyring 读侧（今天丢钥 = 全租户凭据永久不可解密，且无回退路径） | ⬜ | — | 未排期 |
+| CHN-O8 | 凭据变更审计轨迹 | ⬜ | — | 未排期 |
+| CHN-O9 | binding 级可观测（消息量、丢弃原因、时延分位） | ⬜ | — | 未排期 |
+| CHN-O10 | 自适应轮询（**SSE 已否决**，见 `CHN-ADR-02`） | ⬜ | — | 未排期 |
+| CHN-O11 | 渠道数配额 | ⬜ | — | 未排期 |
+
+---
+
+## 阶段 X · 跨仓契约
+
+| ID | 任务 | 状态 | 锚点 |
+|---|---|:---:|---|
+| CHN-X1 | 从 `web:src/api/__tests__/channel.test.ts` 已有的断言反推出 [CONTRACT.md](CONTRACT.md)，标出其中编码了「今天的错误行为」而非「意图行为」的那几条 | ✅ | `CONTRACT.md` |
+| CHN-X2 | `channel-api/vN` 版本标记落地 + web 侧 5 行断言（唯一的工具预算） | ⬜ | `web:src/api/__tests__/channel.test.ts` |
+| CHN-X3 | 端到端联调验收：钉钉注册后，CHN-P7 那次构建出来的前端不重新部署就能渲染并保存 | ⬜ | — |
+| CHN-X4 | ⏸ Go 侧 channel。**不做**——JSON 形状本身就是缝，且已被下面的规则版本化 | ⏸ | — |
+
+---
+
+## 跨仓联动
+
+> 部署顺序取值：`后端先` / `同批` / `前端先（禁止）`。
+> 「后端 ✅ + 前端 🔵」是正常中间态，必须写清兼容窗口何时关闭。
+
+| CHN ID（后端） | 状态 | CHN ID（前端） | 状态 | web 路线图 ID | 部署顺序 | 兼容窗口 / 备注 |
+|---|:---:|---|:---:|---|---|---|
+| CHN-U1 | ⬜ | CHN-U2 | ⬜ | ARCH-6 | 后端先 | 前端可先落地（无 `error_code` 时回落到今天的通用文案），后端补齐后自动变准 |
+| — | — | CHN-U3 | ⬜ | ARCH-6 | 无依赖 | 服务端从今天起就只发 6 个状态，前端删幽灵条目不需要等后端 |
+| — | — | CHN-U6 | ⬜ | SEC-4 | 无依赖 | 刻意做成纯前端，见阶段 U 的说明 |
+| CHN-P2 | ⬜ | CHN-P5 | ⬜ | ARCH-6 | 后端先 | manifest 加 `form` 是加法，老前端忽略即可 |
+| CHN-P2 | ⬜ | CHN-P7 | ⬜ | ARCH-6 | **后端先（硬依赖）** | 全程序唯一一条真跨仓依赖。半态已设计成「降级且可读」：老后端 → `listProviders` 过滤空 → 横幅提示 + 禁用新建，列表/启停/删除照常 |
+
+---
+
+## 部署顺序矩阵
+
+两个仓独立部署，**每一行都必须在两种半态下都不坏**。上一轮设计正是因为缺这张表被评审否决。
+
+| CHN ID | 仓 | 后端已上线、前端未上线 | 前端已上线、后端未上线 | 坏? |
+|---|---|---|---|:---:|
+| S1 | MR | `GET /chat-channels` 不再返回 `client_secret` 等；前端只读 `credential.app_id`/`domain`/`allowed_open_ids`，都不匹配该谓词 | n/a | 否 |
+| S2 | MR | 无可见变化。原本会 500 整条私有路由、跳过整轮 reconcile 的坏行，现在只跳过自己 | n/a | 否 |
+| S3 | MR | worker 重启后如常 `connected`；会话重置一次、dedupe 窗口空一次（已知代价） | n/a | 否 |
+| S4 | MR | 同租户内启用第二个同 app 渠道会失败并弹通用文案（U2 之前）；存量已启用的不受影响 | n/a | 否 |
+| S5 | MR | 团队共享的 Agent 之前出现即被拒，现在对 OWNER/ADMIN **成功**；NORMAL 成员看到与今天一样的通用失败 | n/a | 否 |
+| S6 | MR | 无可见变化 | n/a | 否 |
+| U1 | MR | 无可见变化——前端还是裸 catch，没人读 `data` | n/a | 否 |
+| U2 | WEB | n/a | 老后端不给 `error_code`，映射函数回落到今天的通用文案；providers 失败改横幅是任何后端下的严格改进 | 否 |
+| U3 | WEB | n/a | 服务端从来就只发这 6 个；未知值仍由 `defaultValue` 原样渲染 | 否 |
+| U4 | WEB | n/a | 纯本地表单行为 | 否 |
+| U5 | WEB | n/a | 每次 mutation 多一个 GET；保存后 runtime 面板不再变空 | 否 |
+| U6 | WEB | n/a | 提交前多一个 GET；`enabled` 仍按 bool 发送，`status`/`enabled` 一致性校验与今天一样通过 | 否 |
+| U7 | WEB | n/a | `keywords` 是 agent 列表路由本来就接受的参数 | 否 |
+| P1 | MR | 无可见变化——`provider_manifests()` 输出逐字节相同 | n/a | 否 |
+| P2 | MR | 无可见变化——多一个 JSON 键，现有前端忽略 | n/a | 否 |
+| P3 | MR | 无可见变化——行为保持，由未修改的既有测试证明 | n/a | 否 |
+| P4 | MR | 无可见变化。API 仍只发 legacy 字段对。**这个窗口里必须重启 supervisor** | n/a | 否 |
+| P5 | WEB | n/a | 有 `form` 用 `form`，没有就走 legacy 编译分支 → 对老后端逐字节相同的渲染 | 否 |
+| P6 | WEB | n/a | 同上回落。多 provider 提交死锁在两种后端下都被修好 | 否 |
+| **P7** | WEB | n/a | **唯一真依赖**。老后端 → `listProviders` 丢弃无 `form` 的 manifest → providers 为空 → U2 的横幅「provider 不可用、新建已禁用」，而列表/卡片/启停/删除全部照常。降级且可读，不是静默 | 否（靠设计） |
+| P8 | MR | 无可见变化。legacy 字段对仍在发，老 worker 照样能解析 | n/a | 否 |
+| P9 | MR | 无可见变化，直到第二个 spec 存在 | n/a | 否 |
+| P10 | MR | provider 下拉多一项且表单能渲染——**用的是 P7 那次构建的前端，不重新部署** | n/a | 否 |
+| P11 | MR | 无可见变化。任何早于 P4 的 worker 会停止解析凭据 → 那条 binding 报 `RUNTIME_CONFIG_INVALID`。闸门是浸泡时间 | n/a | 否（遵守规则的前提下） |
+| O1 | MR | 卡片与面板对 stale binding 显示 **运行错误** + `TARGET_REVISION_STALE`，而不是虚假的 `connected`。U3 之前的前端也能渲染（`error` locale 条目今天就有） | n/a | 否 |
+| O2 | MR | 无可见变化。API 不发新字段。**这个窗口里必须重启 supervisor** | n/a | 否 |
+| O3 | MR | 「仅私聊」开关终于生效。若还有早于 O2 的 worker 在跑，**那条 binding 起不来**——`extra="forbid"` → `RUNTIME_CONFIG_INVALID` → 管理员看到 `waiting` 且无错误码。**这正是下面那条规则存在的理由，闸门是流程不是代码** | n/a | 否（遵守规则的前提下） |
+| O4 | MR | 新的 WS 断开报 `CHANNEL_TRANSPORT_STOPPED` 而非 `FEISHU_WS_STOPPED`；两者都原样渲染，老行保留老码 | n/a | 否 |
+| O5 | MR | 默认部署下 channel 第一次真正工作起来；原本永远 `waiting` 的渠道会走到 `starting` → `connected` | n/a | 否 |
+
+**被这张表逼着改掉的六条 PR 边界**（每一条都替换掉了一个坏半态）：
+
+1. **S3 改成 binding 维度**——租户维度要往 `extra="forbid"` 的私有模型加字段，把紧急安全修复变成两次部署的协议升级。
+2. **U6 改成提交前 refetch**——省略 `enabled` 会让老后端读默认 `False` 静默停用渠道。
+3. **P7 的 `listProviders` 过滤掉无 `form` 的 manifest**——否则对老后端会渲染出零字段但保存按钮可点的表单。
+4. **P5/P6 保留 legacy 编译分支**，删除单独放 P7——否则消费 PR 硬依赖 P2 已部署。
+5. **O1 做成控制面读路径合成**，不加 `RuntimeReport` 字段——否则 worker 得懂 Canvas 发布，且要两次部署。
+6. **P4/P8 与 O2/O3 各拆成 tolerate/emit 对**，中间强制一次 worker 部署。
+
+---
+
+## 私有运行时契约升级规则
+
+`DesiredRuntime` / `DesiredRuntimeList` / `RuntimeCredential` / `RuntimeBindingConfig` /
+`RuntimeReport`（全在 `api/channel_runtime/schemas.py`）都是 `extra="forbid"`，
+而 supervisor 与 worker 是长驻进程、**API 部署不会重启它们**——`docker/docker-compose.yml`
+里压根没有 supervisor 服务（CHN-O5 才补上）。所以两侧永远假定在不同的提交上。
+
+> **这五个模型的每一次变更都拆成两个 PR，中间夹一次运行时部署。教会*消费方*接受新形状的
+> 那个 PR 先合并并部署到位（tolerate），之后让*生产方*发出它的 PR 才能合（emit）。
+> 一个 PR 同时做两件事就是协议破坏，不管那个字段看起来多「加法」——`extra="forbid"`
+> 会把未知键变成整次调用的解析失败，而对 `DesiredRuntimeList` 来说那意味着一个 binding
+> 都不会被 reconcile。**
+
+方向决定谁先动：
+
+| 模型 | 生产方 | 消费方 | 谁先动 |
+|---|---|---|---|
+| `DesiredRuntime` / `DesiredRuntimeList` | API | supervisor | 消费方 |
+| `RuntimeBindingConfig` / `RuntimeCredential` | API | worker | 消费方 |
+| `RuntimeReport` | worker | API | 消费方（即 API） |
+
+- **放宽 `Literal` 也是 tolerate-then-emit**，只是发生在值域：`DesiredRuntime.provider`
+  在 CHN-S2 放宽，但第一条非 feishu 行要等 CHN-P9。
+- **删字段是三步**：先停止读（消费方，部署）→ 停止发（生产方，部署）→ 删。CHN-P11 是第三步。
+- **能在控制面合成的语义变更豁免**（无 schema 变更），CHN-O1 就是刻意这么做的。
+
+跳过 tolerate 的实际后果，**每个 emit PR 的 release note 必须写明它对应的 tolerate PR 与最低运行时版本**：
+
+| 对 | 跳过会看到什么 |
+|---|---|
+| `policy`（O2 → O3） | worker `fetch_binding` 抛 `RUNTIME_CONFIG_INVALID` → 在报任何状态之前退出 → `_serialize_runtime` 给出 `waiting`/`null`/`null`，**与「正在启动」逐字节相同**。全子系统最坏的失败模式 |
+| `provider` 放宽（S2 → P9） | `supervisor.py:96-101` 跳过**整轮** tick，健康的飞书 binding 也一起停止被 reconcile 和回收 |
+| `credential.fields`（P4 → P8） | P8 仍在发 legacy 字段对，所以这一对不会立刻咬人；闸门在 **CHN-P11** 才变硬 |
+
+**一条能缩小整个问题的运维事实**：CHN-O5（supervisor 进 compose）刻意排在 P4 与 O2 之后。
+对任何今天没跑 supervisor 的部署——按 compose 现状那是**默认情况**——它跑起来的第一个
+supervisor 就已经越过了两个 tolerate 步。这条规则因此只约束当前手工运行 supervisor 的少数环境。
+
+---
+
+## 复盘节奏
+
+| 时点 | 动作 |
+|---|---|
+| 每个阶段结束 | 跑下面两条 git log 对账，补漏记的提交；关闭该阶段全部条目 |
+| 阶段 S 结束 | 更新 `api/channels/README.md` 的「尚未实现或不能宣称」清单，删掉已实现项 |
+| 阶段 U 结束 | 核对 CONTRACT 的状态词表与错误码表和前端实际渲染是否一致 |
+| 阶段 P 结束 | bump `channel-api/v2`；确认 web 侧 `CHANNEL_API_VERSION` 已跟上 |
+| 阶段 O 结束 | README §6 硬不变量逐条实测复核 |
+| 每次跨仓条目完成 | 两侧账本都更新了才算完成（协议第 4 条） |
+
+**对账用的两条命令**（第二条里有、第一条里没有的提交，就是漂移）：
+
+```bash
+git log --grep=CHN-
+git log --oneline -- api/channels api/channel_control api/channel_execution api/channel_runtime
+```
+
+这是**人工对账**，不是脚本。唯一的工具预算是 CHN-X2 在 web 既有测试文件里加的 5 行断言。
+
+---
+
+## `tests/unit` 先天失败基线
+
+2026-08-05 在 `main @ 75f125d5` 实测：**6 failed / 1486 passed / 761.94s**。
+
+**比对的是失败集合，不是通过数。** 下面这 6 条与 channel 无关，全是 Windows 上通过 bash
+子进程渲染配置模板导致的环境性失败。改动后出现**不在这个名单里**的失败才是回归：
+
+```
+tests/unit/test_docker_config_template.py::test_default_docker_template_renders_valid_app_config
+tests/unit/test_docker_config_template.py::test_docker_template_yaml_escapes_environment_values
+tests/unit/test_service_conf_template_render.py::test_rendered_config_passes_app_config_validation
+tests/unit/test_service_conf_template_render.py::test_empty_defaults_render_as_strings_not_null
+tests/unit/test_service_conf_template_render.py::test_env_values_reach_the_rendered_config
+tests/unit/test_service_conf_template_render.py::test_values_are_not_re_interpreted
+```
+
+前两条报 `subprocess.CalledProcessError`（`bash D:\project\MultiRAG\docker\...`），
+后四条报 `TypeError: 'NoneType' object is not subscriptable`（同一渲染函数返回 None）。
+全量跑一次要 **12 分 41 秒**，所以日常用 channel 快速回路，提交前才跑全量。
+
+> 这个基线会随环境和其他人的改动变化。**发现数字对不上先重新测一次并更新本节**，
+> 不要默认「多出来的失败是我造成的」，也不要默认「就是这 6 条」。
+
+## 待决事项
+
+| ID | 问题 | 需要谁定 |
+|---|---|---|
+| CHN-Q1 | 第三个 provider 是不是企业微信？它的 `connection_type` 判别式分支会逼出 `visible_when` 与 number 控件，届时 `FormField` 需要扩展 | 产品 |
+| CHN-Q2 | 阶段 O 里 O6–O11 的相对优先级（连接自检 / keyring / 审计 / 可观测 / 轮询 / 配额） | 产品 + 运维 |
+
+---
+
+## 变更日志
+
+| 日期 | 变更 | 提交 | 记录人 |
+|---|---|---|---|
+| 2026-08-05 | 文档集建立。审计结论收敛为 CHN-S/U/P/O/X 五族共 40 个条目；`.gitignore:232` 由裸 `docs` 改为 `docs/*` + 白名单。**验证**：`git check-ignore -v docs/channel-program/README.md` 返回空（exit 1 = 未被忽略）、`docs/feishu-multitenant/PROGRESS.md` 仍命中 `.gitignore:235:docs/*`、`git ls-files docs` 仍只有既有的 `references/http_api_reference.md`、`git status --untracked-files=all docs/` 列出 4 个新文件 | 待回填 | Claude |
+| 2026-08-05 | **记录 `tests/unit` 先天失败基线**（见下方专节）。实测 `PYTHONUTF8=1 uv run --no-sync pytest tests/unit -q`：**6 failed / 1486 passed / 761.94s** | — | Claude |
+| 2026-08-05 | **CHN-X1 完成**：读完 `web:src/api/__tests__/channel.test.ts` 全部 **11 条**（不是 10 条）断言，逐条反推出 CONTRACT v1——端点清单、写请求形状、凭据写入语义、状态词表、错误信封。标出 **3 条编码了错误行为的断言**（§6）：`:68` 的测试名 `'…for the Feishu form only'` 把飞书特例固化成期望、`:219`/`:252` 的 `putCalled === false` 把「绑定修改必须塞进 PATCH」固化、`:251` 的 `enabled` 取自可能陈旧 5 分钟的缓存。运行时错误码表**不手抄**——用 grep 实测枚举出 12 个，命令写进 §4.2 供重跑（这条是评审明确指出手抄码表必漏而改的） | — | Claude |
+| 2026-08-05 | **PR-0a 完成**（MultiRAG docs-only）：`.gitignore` 修正 + 4 个程序文件 + `AGENTS.md` 核心规则第 5 条（按目录触发的记账义务）+ `CLAUDE.md` 本地/入库分层说明 + `api/channels/README.md` 顶部指针。**验证**：`git status --untracked-files=all docs/` 列出 4 个新文件、`docs/feishu-multitenant/` 仍不可见、`git ls-files docs` 未变 | 待回填 | Claude |
+| 2026-08-05 | **CHN-S1 完成**。抽出共享叶子谓词 `_is_secret_leaf_key`（子串 `secret`/`token`/`password`/`passwd`/`authorization`/`cookie`，外加 `*_key` 后缀与裸 `key`）；`_sanitize_public_config` 改用它，`_contains_sensitive_key` 保持「叶子谓词 ∪ `credential` 整键」——两者**故意只差一个键**，policy 带 credential 块永远是错的，而 config 合法地持有 `credential.app_id`。`*_key` 用后缀而非裸 `key` 子串判定，否则会误杀 `key_id`（标识哪把主密钥加密了该行，非机密）与 `keywords`。**验证**：新增 3 条测试 `test_sanitizer_strips_provider_credential_names_but_keeps_public_ids`（9 个真实 provider 凭据名全被剥离、`app_id`/`corp_id` 保留）、`test_sanitizer_leaves_non_secret_key_names_alone`（`key_id`/`keywords`/`monkey` 不误杀）、`test_policy_forbids_the_credential_block_that_config_may_carry`（两谓词差异被断言锁死）；`pytest tests/unit/test_chat_channel_control.py` **23 passed**（原 20）；`grep '"app_secret", "secret", "token", "api_token"' service.py` 返回空；`ruff format --check` / `ruff check api/channel*` / `lint-imports`（5 kept, 0 broken）全绿 | 待回填 | Claude |
+| 2026-08-05 | **CHN-S2 完成（tolerate 半步）**。三处改动：① `DesiredRuntime.provider` 与 `RuntimeBindingConfig.provider` 由 `Literal["feishu"]` 改为共享的 `ProviderName = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$")]`（用 `Annotated` 而非共享 `Field()` 实例——后者在 Pydantic v2 里是把同一个 `FieldInfo` 挂到两个模型上的坑）；② 逐行降级放在**路由层**而非 service 层，因为 FastAPI 的 `response_model` 会二次校验，只有让路由交出已验过的对象才真正安全；`_short_hash` 在路由文件里本地定义而不是从 `api.channels` import，否则会把 provider SDK 及其进程级事件循环拖进 API 进程；③ `list_desired_runtimes` 的静默过滤补 `CHANNEL_SECRET_MISSING` 警告，刻意不改 runtime 行状态（这是观察不是状态转移）。**验证**：新增 `test_one_unparseable_desired_row_does_not_stall_the_whole_reconcile`——三行输入（feishu / 非法名 / dingtalk）断言响应 200、非法行被丢、**dingtalk 通过**（这同时钉住了放宽本身）、日志含 `CHANNEL_DESIRED_ROW_INVALID` 且**不含原始 binding id**；`pytest` 四个 channel 测试文件 **44 passed**；`ruff format --check .`（1154 files）/ `ruff check .` / `lint-imports`（5 kept, 0 broken）/ `mypy`（61 files, no issues）/ `check_async_sync_db`（新增 0）全绿。**emit 侧仍锁着**：`api/channel_control/schemas.py:10` 的 `ChannelProvider = Literal["feishu"]` 原样不动，那是 CHN-P9 的闸门——按 CHN-ADR-06，第一条非 feishu 行只能在所有 supervisor 都跑上本次改动之后才允许存在 | 待回填 | Claude |
+| 2026-08-05 | **CHN-S3 完成**。`RedisChannelStateStore` 的 `app_id: str` 换成 `scope: tuple[str, ...]`，`_KEY_PREFIX` 升 `v2`；managed 传 `("binding", binding_id)`、demo 传 `("demo", "feishu", app_id)`。`_hash_identifiers` 本来就是 length-prefixed 的，所以 `("a","bc")` 与 `("ab","c")` 不会碰撞。**验证**：新增 4 条测试——`test_two_bindings_on_one_provider_account_do_not_share_a_namespace`（**同一个 Redis、同一个 lease_name**，两个 binding 都能拿到租约；修复前第二个必失败）、`test_one_binding_still_holds_its_own_lease_exclusively`（per-binding 不削弱单 runner 保证）、`test_demo_scope_cannot_collide_with_a_managed_binding`、`test_store_rejects_an_empty_scope`；`pytest test_feishu_state_store.py test_feishu_worker.py` **28 passed**。**一次性代价已写进 `api/channels/README.md` 新增小节**：接住改动的那次 worker 重启，会话重置一次、去重窗口空一次；顺带白送修掉「同 app_id 重建渠道复用 dedupe 命名空间导致静默丢消息」 | 待回填 | Claude |
+| 2026-08-05 | **CHN-S4 完成**。`_ensure_ready` 由 `@staticmethod` 改为 async 实例方法（4 个调用点加 `await`），新增 `_ensure_account_not_already_enabled` + repository 的 `list_enabled_channels`。**查行不查 JSON**：account id 在 `config` 里的位置是 provider 特定的，留在 Python 侧既避开 JSONB 方言差异，也把这份知识集中到 `_account_identity` 一处，等 CHN-P3 接管。**验证**：新增 3 条测试——同租户第二个同账号渠道启用被拒、**两个租户可以各自启用同一个 provider 账号**（这条是防止修复本身变成新的抢占面）、重复启用同一渠道不算自冲突；`pytest test_chat_channel_control.py` **26 passed** | 待回填 | Claude |
+| 2026-08-05 | **CHN-S5 完成（权限 PR）**。归属与授权拆成两个答案：repository 的 `dialog_belongs_to_tenant` 换成 `resolve_dialog_owner`、新增 `resolve_canvas_owner`（返回 `(owner, permission)`）与 `user_can_update_tenant_resources`，`canvas_revision_is_latest_published` 去掉 tenant 过滤。**实测发现两类目标的模型不同**：`UserCanvas` 有 `permission`（me|team），**`Dialog` 没有**——`dialog_service` 的团队口径是 `tenant_id ∈ joined_tenant_ids`，不看 permission。所以规则必须分开：canvas 私有则只有 owner 能绑（角色也不能覆盖），dialog 只看成员身份 + 角色。角色谓词 `can_update_tenant_resources` 直接 import 复用（纯函数），只把查询 async 化，因为 service 层版本收 sync `Session` 而本包受 `check_async_sync_db` 约束必须纯 async。新异常 `ChannelTargetNotAccessible` / `CHANNEL_TARGET_NOT_ACCESSIBLE`。**验证**：新增 5 条测试覆盖「团队共享 + admin → 放行」「团队共享 + normal → 拒绝」「他人私有 + admin → 仍拒绝」「dialog 跨租户按角色」「目标不存在与无权限报不同错误」；既有 `test_canvas_binding_requires_latest_owned_published_revision` 显式注册 canvas 以区分「不存在」与「版本过期」两个新分开的错误；`pytest test_chat_channel_control.py` **31 passed**。**存量不受影响**：`list_desired_runtimes` 与 `resolve_runtime_binding`（私有面）都不调 `_validate_target`，已 grep 确认——检查只在下一次管理面写操作时咬人 | 待回填 | Claude |
+| 2026-08-05 | **CHN-S6 完成**。新增 `scripts/audit_channel_target_authz.py`，只读枚举会被 S5 拒绝的存量 binding，输出 channel/tenant/target/owner/reason 五列，`--strict` 时有发现即 exit 1 供流水线用。**验证**：`mypy scripts/audit_channel_target_authz.py`（scripts 在纳管范围，全注解）Success、`ruff check` 通过、`--help` 实跑可用。踩到 `ModuleNotFoundError: No module named 'api'`——脚本从 `scripts/` 跑时仓库根不在 `sys.path`，照 `init_ai_guard_system.py:14` 的既有先例补 `sys.path.insert` | 待回填 | Claude |
+| 2026-08-05 | **阶段 S 全部完成（S1–S6）**。全门禁实跑：`ruff format --check .`（1155 files）/ `ruff check .` / `lint-imports`（5 kept, 0 broken——新增的 `api.channel_control` → `api.db.services.user_service` 依赖不违约）/ `mypy`（62 files, no issues）/ `check_async_sync_db`（新增 0、双轨 0）；`pytest tests/unit -k "channel or feishu"` **212 passed** | 待回填 | Claude |
+| 2026-08-05 | **全量回归对基线**：`pytest tests/unit -q` 得 **6 failed / 1504 passed**，失败集合与开工基线**逐条相同**（那 6 条 Windows 模板渲染），通过数 1486 → 1504，+18 正好是本阶段新增的测试数。顺带修掉一个既有 gitignore bug：`.dmypy.json  # 说明` 写成了行尾注释，而 **gitignore 不支持行尾注释**，整行被当成模式，所以那条规则从来没生效过，dmypy 守护进程状态文件一直暴露在未跟踪列表里 | 待回填 | Claude |
+| 2026-08-05 | **踩坑记录（会重复踩，写在这里）**：`.claude/settings.json` 的 PostToolUse ruff hook 带 autofix。分两步编辑「先加 import、再加使用点」时，第一步结束的瞬间那个 import 还没有使用者，autofix 判定 F401 未使用**直接删掉**，第二步就报 F821 undefined。规律：**import 必须与使用点在同一次 Edit 里，或者先写使用点再补 import**。本次在三个文件上各踩一次 | — | Claude |
+| 2026-08-05 | **修一处账本自身的漂移**：`README.md` §3「下一批」表用的是早期 ID 分配（S1=lease、S3=脱敏），与 `PROGRESS.md` 的一一对应 PR 方案（S1=脱敏、S3=lease）冲突。账本建立当天就漂移，正是维护协议第 1 条要抓的东西——已按 PROGRESS 的分配订正 | 待回填 | Claude |
+| 2026-08-05 | **PR-0b 完成**（web docs-only）：`.gitignore` 白名单 + `docs/channel-frontend-design.md` + 路线图新增 `SEC-4`/`ARCH-6`（ARCH-6 首行是**补记行**，回填 `9ee3c1e`/`6f0e5bd`/`162fb1f` 三个未记账提交）+ `ARCH-2` 状态由「未开始」订正为「部分完成」（`test:api` 已进 CI，10 个契约测试；顺带确认后端 spec 现状，解除该条目的开工前提）+ 攻坚顺序表插入 `1b`/`4b` + `CLAUDE.md`/`AGENTS.md` 双语第 6 项（按目录触发）。**验证**：`git status --short --untracked-files=all docs/` 显示 `?? docs/channel-frontend-design.md`（可入库）、未白名单的 `docs/*` 仍被忽略、`npx prettier --write` 已把表格排版定死避免提交时二次重排 | 待回填 | Claude |
