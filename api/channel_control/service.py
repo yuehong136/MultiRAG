@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from pydantic import BaseModel
+
 from api.channel_control.repository import ChannelRepository
 from api.channel_control.schemas import (
     ChannelBindingResponse,
@@ -17,11 +19,11 @@ from api.channel_control.schemas import (
     ChannelRuntimeResponse,
     ChannelUpdateRequest,
     ChatChannelResponse,
-    FeishuConfigInput,
-    FeishuConfigPatch,
     SecretStatus,
 )
 from api.channel_control.secret_store import EncryptedSecret, SecretStore, SecretStoreUnavailable
+from api.channel_providers import ProviderSpec, provider_spec, resolve_path
+from api.channel_providers.functions import merge_config_patch, missing_required_fields, split_config
 from api.db.db_models import ChannelBinding, ChannelRuntimeStatus, ChannelSecret, ChatChannel
 from common.app_config import get_app_config
 from common.constants import TenantPermission
@@ -193,64 +195,24 @@ def _sanitize_public_config(value: Any) -> dict[str, Any]:
     return sanitized
 
 
+def _spec_for(channel: ChatChannel) -> ProviderSpec:
+    """The registered spec for a stored channel row."""
+
+    return provider_spec(channel.channel)
+
+
 def _account_identity(channel: ChatChannel) -> str | None:
-    """Which provider account a channel connects as, or None if unset.
+    """Which provider account a channel connects as, or None if unset."""
 
-    Feishu-specific for now (``credential.app_id``). One of the sites CHN-P3
-    replaces with a provider-declared accessor so that adding a provider stops
-    meaning "edit the control plane".
-    """
-
-    credential = _sanitize_public_config(channel.config).get("credential")
-    if not isinstance(credential, dict):
-        return None
-    account_id = credential.get("app_id")
-    return account_id if isinstance(account_id, str) and account_id else None
+    return _spec_for(channel).account_identity(_sanitize_public_config(channel.config))
 
 
-def _create_public_config(config: FeishuConfigInput) -> tuple[dict[str, Any], dict[str, str] | None]:
-    credential: dict[str, str] = {}
-    if config.credential.app_id:
-        credential["app_id"] = config.credential.app_id
-    public = {
-        "credential": credential,
-        "domain": config.domain,
-        "allowed_open_ids": list(config.allowed_open_ids),
-    }
-    secret = config.credential.app_secret
-    plaintext = {"app_secret": secret.get_secret_value()} if secret is not None else None
-    return public, plaintext
+def _create_public_config(spec: ProviderSpec, config: BaseModel) -> tuple[dict[str, Any], dict[str, str] | None]:
+    return split_config(spec, config)
 
 
-def _patch_public_config(current: dict[str, Any], patch: FeishuConfigPatch) -> tuple[dict[str, Any], dict[str, str] | None, bool]:
-    public = _sanitize_public_config(deepcopy(current))
-    public.setdefault("credential", {})
-    changed = False
-
-    if "domain" in patch.model_fields_set and patch.domain is not None and public.get("domain") != patch.domain:
-        public["domain"] = patch.domain
-        changed = True
-    if "allowed_open_ids" in patch.model_fields_set and patch.allowed_open_ids is not None:
-        allowed_open_ids = list(patch.allowed_open_ids)
-        if public.get("allowed_open_ids") != allowed_open_ids:
-            public["allowed_open_ids"] = allowed_open_ids
-            changed = True
-
-    plaintext: dict[str, str] | None = None
-    credential_patch = patch.credential
-    if credential_patch is not None:
-        credential = public["credential"]
-        if not isinstance(credential, dict):
-            credential = {}
-            public["credential"] = credential
-            changed = True
-        if "app_id" in credential_patch.model_fields_set and credential_patch.app_id is not None and credential.get("app_id") != credential_patch.app_id:
-            credential["app_id"] = credential_patch.app_id
-            changed = True
-        if credential_patch.app_secret is not None:
-            plaintext = {"app_secret": credential_patch.app_secret.get_secret_value()}
-
-    return public, plaintext, changed
+def _patch_public_config(spec: ProviderSpec, current: dict[str, Any], patch: BaseModel) -> tuple[dict[str, Any], dict[str, str] | None, bool]:
+    return merge_config_patch(spec, current, patch, sanitize=_sanitize_public_config)
 
 
 class ChannelControlService:
@@ -269,7 +231,8 @@ class ChannelControlService:
 
     async def create_channel(self, tenant_id: str, request: ChannelCreateRequest) -> dict[str, Any]:
         channel_id = get_uuid()
-        public_config, plaintext = _create_public_config(request.config)
+        spec = provider_spec(request.channel)
+        public_config, plaintext = _create_public_config(spec, request.config)
         binding_request = request.binding
         if binding_request is None and request.chat_id is not None:
             binding_request = ChannelBindingUpsertRequest(
@@ -335,7 +298,7 @@ class ChannelControlService:
             if request.name is not None:
                 channel.name = request.name
             if request.config is not None:
-                public, plaintext, config_changed = _patch_public_config(channel.config, request.config)
+                public, plaintext, config_changed = _patch_public_config(_spec_for(channel), channel.config, request.config)
                 if config_changed:
                     channel.config = public
                     runtime_changed = True
@@ -608,12 +571,19 @@ class ChannelControlService:
         except SecretStoreUnavailable as error:
             raise ChannelCredentialUnavailable from error
         credentials = {key: value for key, value in plaintext.items() if isinstance(key, str) and isinstance(value, str)}
-        credential_config = runtime.public_config.get("credential")
-        if isinstance(credential_config, dict):
-            app_id = credential_config.get("app_id")
-            if isinstance(app_id, str) and app_id:
-                credentials["app_id"] = app_id
-        if not credentials.get("app_id") or not credentials.get("app_secret"):
+
+        # A provider's credential is split across two stores: the secret half is
+        # encrypted, the non-secret half (an app id, a corp id) legitimately
+        # lives in the public config. Reassemble it here so the worker receives
+        # one credential and never has to know about the split.
+        spec = provider_spec(runtime.provider)
+        for path in sorted(spec.credential_paths - spec.secret_paths):
+            value = resolve_path(runtime.public_config, path)
+            if isinstance(value, str) and value:
+                credentials[path.rsplit(".", 1)[-1]] = value
+
+        missing = missing_required_fields(spec, runtime.public_config, configured_secrets=bool(plaintext))
+        if missing:
             raise InvalidChannelConfiguration("The channel credential is incomplete.")
         return ResolvedRuntimeBindingSpec(
             binding_id=runtime.binding_id,
@@ -913,10 +883,21 @@ class ChannelControlService:
         binding: ChannelBinding,
     ) -> None:
         del binding
-        account_id = _account_identity(channel)
-        if not account_id or secret is None:
-            raise InvalidChannelConfiguration("Feishu App ID and App Secret are required before enabling the channel.")
-        await self._ensure_account_not_already_enabled(channel, account_id)
+        spec = _spec_for(channel)
+        missing = missing_required_fields(
+            spec,
+            _sanitize_public_config(channel.config),
+            configured_secrets=secret is not None,
+        )
+        if missing:
+            # Names the actual fields rather than one provider's two, so the
+            # message stays true when a provider needs a different set.
+            labels = ", ".join(field.label for field in spec.form.fields if field.path in set(missing))
+            raise InvalidChannelConfiguration(f"{labels} must be set before enabling the channel.")
+
+        account_id = spec.account_identity(_sanitize_public_config(channel.config))
+        if account_id is not None:
+            await self._ensure_account_not_already_enabled(channel, account_id)
 
     async def _ensure_account_not_already_enabled(self, channel: ChatChannel, account_id: str) -> None:
         """Reject a second enabled channel on the same provider account.

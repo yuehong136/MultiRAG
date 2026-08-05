@@ -144,6 +144,7 @@ PROVIDER_SPEC = ProviderSpec(
     ),
     config_model=FeishuConfigInput,
     config_patch_model=FeishuConfigPatch,
+    credential_paths=frozenset({"credential.app_id", "credential.app_secret"}),
     # ``app_id`` is a non-secret identifier and legitimately stays in the public
     # config; only the secret half is encrypted.
     secret_paths=frozenset({"credential.app_secret"}),

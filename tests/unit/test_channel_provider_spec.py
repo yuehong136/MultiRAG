@@ -175,6 +175,18 @@ def test_select_fields_carry_options_and_a_valid_default(spec: ProviderSpec) -> 
 
 
 @pytest.mark.parametrize("spec", provider_specs(), ids=lambda spec: spec.name)
+def test_secret_paths_are_a_subset_of_the_credential(spec: ProviderSpec) -> None:
+    """A secret that is not part of the credential could never be reassembled.
+
+    The worker receives one credential built from ``credential_paths``; a
+    secret outside that set would be encrypted, stored, and then never handed
+    to anyone.
+    """
+
+    assert spec.secret_paths <= spec.credential_paths
+
+
+@pytest.mark.parametrize("spec", provider_specs(), ids=lambda spec: spec.name)
 def test_form_field_paths_are_unique(spec: ProviderSpec) -> None:
     """Two fields on one path would silently overwrite each other on submit."""
 

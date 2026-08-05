@@ -142,8 +142,16 @@ class ProviderSpec:
     config_model: type[BaseModel]
     config_patch_model: type[BaseModel]
 
-    # Dotted paths inside a validated config whose values belong in the
-    # encrypted secret store and must never reach the public config column.
+    # Every path that makes up this provider's credential, secret or not. A
+    # credential is split across two stores -- the secret half encrypted, the
+    # non-secret half (an app id, a corp id) legitimately in the public config
+    # -- and the worker is handed it reassembled. Declaring the whole set is
+    # what lets that reassembly be generic instead of pattern-matching on a
+    # ``credential.`` prefix.
+    credential_paths: frozenset[str]
+
+    # The subset of ``credential_paths`` that belongs in the encrypted secret
+    # store and must never reach the public config column.
     secret_paths: frozenset[str]
 
     # Dotted path to the provider account this channel connects as. Two enabled
