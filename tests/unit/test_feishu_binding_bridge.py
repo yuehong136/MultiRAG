@@ -88,17 +88,19 @@ def _message(
     content: str = "hello",
     sender_id: str = "ou-user",
     chat_id: str = "oc-chat",
+    chat_type: str = "p2p",
+    sender_type: str = "user",
 ) -> IncomingMessage:
     return IncomingMessage(
         channel="feishu",
         account_id="account-1",
         chat_id=chat_id,
-        chat_type="p2p",
+        chat_type=chat_type,
         message_id=message_id,
         sender_id=sender_id,
         content=content,
         message_type="text",
-        sender_type="user",
+        sender_type=sender_type,
     )
 
 
@@ -109,6 +111,7 @@ def _bridge(
     executor: _Executor,
     binding_id: str = "binding-1",
     allowed_open_ids: set[str] | None = None,
+    private_chat_only: bool = True,
 ) -> FeishuBindingBridge:
     return FeishuBindingBridge(
         channel=channel,
@@ -117,6 +120,7 @@ def _bridge(
         binding_id=binding_id,
         allowed_open_ids=allowed_open_ids or set(),
         max_question_chars=100,
+        private_chat_only=private_chat_only,
     )
 
 
@@ -225,3 +229,34 @@ async def test_execution_error_is_tombstoned_and_logs_no_raw_message_or_identity
     for sensitive in (binding_id, message_id, sender_id, chat_id, question, "server-session"):
         assert sensitive not in caplog.text
         assert sensitive not in repr(bridge)
+
+
+@pytest.mark.asyncio
+async def test_private_chat_only_policy_decides_whether_group_messages_are_served() -> None:
+    """The admin toggle used to be decoration; the runner now honours it."""
+
+    group = _message(chat_type="group")
+
+    ignored = _Executor()
+    await _bridge(channel=_Channel(), state=_StateStore(), executor=ignored).handle_message(group)
+    assert ignored.calls == []
+
+    served = _Executor()
+    await _bridge(
+        channel=_Channel(),
+        state=_StateStore(),
+        executor=served,
+        private_chat_only=False,
+    ).handle_message(group)
+    assert len(served.calls) == 1
+
+    # Widening the chat scope must not widen anything else: a non-user sender
+    # (a bot echo, a system notice) is still refused, or two bots could loop.
+    echoed = _Executor()
+    await _bridge(
+        channel=_Channel(),
+        state=_StateStore(),
+        executor=echoed,
+        private_chat_only=False,
+    ).handle_message(_message(chat_type="group", sender_type="bot"))
+    assert echoed.calls == []

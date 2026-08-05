@@ -62,6 +62,7 @@ class FeishuBindingBridge:
         binding_id: str,
         allowed_open_ids: set[str] | frozenset[str],
         max_question_chars: int,
+        private_chat_only: bool = True,
     ) -> None:
         self._channel = channel
         self._executor = executor
@@ -69,10 +70,18 @@ class FeishuBindingBridge:
         self._binding_id = binding_id
         self._allowed_open_ids = frozenset(allowed_open_ids)
         self._max_question_chars = max_question_chars
+        self._private_chat_only = private_chat_only
         self._locks: dict[str, _ConversationLock] = {}
 
     async def handle_message(self, message: IncomingMessage) -> None:
-        if message.chat_type != "p2p" or getattr(message, "sender_type", "") != "user":
+        # The admin toggle behind this was collected by the form, validated by
+        # the service and stored in the binding row, and then never reached a
+        # runner: the filter below was unconditional, so the switch was
+        # decoration. Defaults to the old behaviour, which is also the
+        # fail-safe one -- see ``RuntimeBindingConfig.private_chat_only``.
+        if self._private_chat_only and message.chat_type != "p2p":
+            return
+        if getattr(message, "sender_type", "") != "user":
             return
         if not message.message_id or not message.chat_id or not message.sender_id:
             self._log(logging.WARNING, "event_rejected", message, "MESSAGE_IDENTITY_MISSING")

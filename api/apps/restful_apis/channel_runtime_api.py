@@ -85,13 +85,14 @@ async def list_desired_channel_runtimes(
 @router.get(
     "/internal/channel-bindings/{binding_id}/runtime-config",
     response_model=RuntimeBindingConfig,
-    # Withhold the generic credential map until CHN-P8. This is what makes
-    # CHN-P4 an actual tolerate step: adding the field to the shared model
-    # would otherwise put `"fields": {}` on the wire immediately, and a worker
-    # running an older build parses this response with extra="forbid" -- it
-    # would reject the whole payload and never start. A tolerate step that
-    # changes the wire is not a tolerate step. See CHN-ADR-06.
-    response_model_exclude={"credential": {"fields"}},
+    # Withhold the generic credential map until CHN-P8 and the binding policy
+    # until CHN-O3. This is what makes CHN-P4 and CHN-O2 actual tolerate steps:
+    # adding a field to the shared model would otherwise put `"fields": {}` and
+    # `"policy": {}` on the wire immediately, and a worker running an older
+    # build parses this response with extra="forbid" -- it would reject the
+    # whole payload and never start. A tolerate step that changes the wire is
+    # not a tolerate step. See CHN-ADR-06.
+    response_model_exclude={"credential": {"fields"}, "policy": ...},
     include_in_schema=False,
 )
 async def get_channel_runtime_config(

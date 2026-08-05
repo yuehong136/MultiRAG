@@ -9,7 +9,7 @@ from collections.abc import Mapping
 import httpx
 import pytest
 
-from api.channel_runtime.schemas import RuntimeCredential
+from api.channel_runtime.schemas import RuntimeBindingConfig, RuntimeCredential
 from api.channels.agent_bridge import AgentExecutionError, AgentReply
 from api.channels.runtime_client import ChannelRuntimeClient, ChannelRuntimeClientError, MultiRAGBindingExecutionClient
 
@@ -253,3 +253,46 @@ def test_runtime_credential_tolerates_both_contract_halves() -> None:
     # An unknown key is not an error here: enable-time checks report a missing
     # credential, this only reads one.
     assert both.value("client_id") == ""
+
+
+def _binding_config(policy: object | None = None) -> RuntimeBindingConfig:
+    payload = {
+        "binding_id": "binding-1",
+        "provider": "feishu",
+        "generation": 1,
+        "public_config": {},
+        "credential": {"app_id": "cli_aaaa", "app_secret": "aaaa-aaaa"},
+    }
+    if policy is not None:
+        payload["policy"] = policy
+    return RuntimeBindingConfig.model_validate(payload)
+
+
+def test_runtime_binding_config_tolerates_a_policy_the_api_does_not_send_yet() -> None:
+    """The tolerate step of CHN-O2 → CHN-O3.
+
+    A worker running this build has to parse what today's API sends (no policy
+    at all) and what tomorrow's will, because the two are deployed separately.
+    See CHN-ADR-06.
+    """
+
+    # Today's payload. Absent policy must mean today's behaviour, not a new one.
+    assert _binding_config().policy == {}
+    assert _binding_config().private_chat_only is True
+
+    assert _binding_config({"private_chat_only": False}).private_chat_only is False
+    assert _binding_config({"private_chat_only": True}).private_chat_only is True
+
+    # Unknown keys ride along: the policy column is free-form by design, and a
+    # worker that rejected an unrecognised key would turn any future toggle
+    # into a fleet-wide outage rather than an ignored field.
+    forward = _binding_config({"private_chat_only": False, "locale": "zh-CN"})
+    assert forward.private_chat_only is False
+    assert forward.policy["locale"] == "zh-CN"
+
+
+def test_a_malformed_policy_never_widens_where_a_bot_answers() -> None:
+    # Fail safe in the direction that matters: the failure mode of guessing
+    # wrong is a bot that starts answering in every group chat it sits in.
+    for broken in ({"private_chat_only": "false"}, {"private_chat_only": None}, {"private_chat_only": 0}):
+        assert _binding_config(broken).private_chat_only is True

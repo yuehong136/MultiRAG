@@ -483,6 +483,7 @@ async def _run_managed_channel(
             binding_id=binding_id,
             allowed_open_ids=set(plan.allowed_sender_ids),
             max_question_chars=tuning.max_question_chars,
+            private_chat_only=runtime.private_chat_only,
         )
         worker = ChannelWorker(
             provider_name=provider.name,
