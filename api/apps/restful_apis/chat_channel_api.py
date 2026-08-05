@@ -33,35 +33,49 @@ ResultT = TypeVar("ResultT")
 
 
 async def _respond(operation: Callable[[], Awaitable[ResultT]]):
+    """Run one control-plane operation and shape its failure for the UI.
+
+    Failures carry a machine-readable ``error_code`` in ``data``. The service
+    layer has always produced those codes; this boundary used to drop them and
+    return ``data=False``, so the client saw four operationally distinct
+    failures -- stale agent revision, credential missing, secret store down,
+    not your channel -- as one indistinguishable rejection. ``retcode`` and
+    ``retmsg`` are unchanged, and the client already surfaces ``data`` as
+    ``APIError.details``, so nothing else has to move for this to be readable.
+    """
+
     try:
         return get_json_result(data=await operation())
     except ChannelAccessDenied as error:
         return get_json_result(
             retcode=RetCode.AUTHENTICATION_ERROR,
             retmsg=error.safe_message,
-            data=False,
+            data={"error_code": error.error_code},
         )
     except ChannelCredentialUnavailable as error:
         return get_json_result(
             retcode=RetCode.CONNECTION_ERROR,
             retmsg=error.safe_message,
-            data=False,
+            data={"error_code": error.error_code},
         )
     except ChannelControlError as error:
         return get_json_result(
             retcode=RetCode.ARGUMENT_ERROR,
             retmsg=error.safe_message,
-            data=False,
+            data={"error_code": error.error_code},
         )
     except Exception as error:
         LOGGER.error(
             "channel_control_event=request_failed error_type=%s",
             type(error).__name__,
         )
+        # The catch-all needs a code of its own: it is the most likely failure
+        # to reach an admin, and leaving it uncoded would be the one case with
+        # no actionable text.
         return get_json_result(
             retcode=RetCode.EXCEPTION_ERROR,
             retmsg="Channel operation failed.",
-            data=False,
+            data={"error_code": "CHANNEL_OPERATION_FAILED"},
         )
 
 

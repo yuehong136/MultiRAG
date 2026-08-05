@@ -3,8 +3,13 @@
 > **契约版本**：`channel-api/v1` · **最后变更**：2026-08-05 · **变更提交**：`cdc09928`
 >
 > 本文件是 channel 前后端接口的**唯一真源**。前端仓不得保存第二份契约描述。
-> 契约变更 = 改本文件 + bump 版本 + 更新 `web:src/api/channel.ts` 的 `CHANNEL_API_VERSION`
+> 契约变更 = 改本文件 + 在本文件末尾的变更日志追加一行
 > （见 [PROGRESS 维护协议第 4 条](PROGRESS.md#维护协议mandatory--任何处理本文档条目的-agent-必须遵守)）。
+>
+> **版本号按语义 bump，不是每次改动都 bump**：向后兼容的**加法**（新增字段、新增端点、
+> 新增错误码取值）只记变更日志；**破坏性**变更（删字段、改字段含义、改必填性）才 bump
+> `channel-api/vN` 并同步 `web:src/api/channel.ts` 的 `CHANNEL_API_VERSION`。
+> 前者 bump 会让 CHN-X2 那条版本断言天天误报，反而训练出「红了就改常量」的习惯。
 >
 > **v1 记录的是「今天实际是什么」，不是「应该是什么」。** 已知不符之处逐条标了 ⚠️
 > 并挂到对应的 CHN ID 上——修好之后回来把标记去掉。
@@ -128,10 +133,19 @@ RuntimeState = Literal["waiting", "starting", "connected", "stopping", "stopped"
 | `INVALID_CHANNEL_CONFIGURATION` | 101 ARGUMENT_ERROR | 配置不完整/不合法（缺凭据、绑定缺失、版本过期、目标不可用） | 按 `retmsg` 补齐配置 |
 | `CHANNEL_SECRET_STORE_UNAVAILABLE` | 105 CONNECTION_ERROR | 密钥库不可用 | **联系运维**，不是管理员能修的 |
 
-⚠️ **这三个码今天到不了前端**：`_respond`（`api/apps/restful_apis/chat_channel_api.py:35-65`）
-把 `data` 写死成 `False`，`error_code` 被丢弃；前端三处裸 `catch { toast.error(通用文案) }`
-又把 `retmsg` 也丢掉。四类处置路径完全不同的失败被压成一句「渠道状态更新失败」。
-→ CHN-U1（后端透出）+ CHN-U2（前端映射）。
+失败信封的 `data` 是 `{"error_code": "..."}`（CHN-U1 起）。前端 `APIError.details`
+直接就是它，无需额外接线。完整取值：
+
+| error_code | 出处 |
+|---|---|
+| `CHANNEL_NOT_ACCESSIBLE` | `ChannelAccessDenied` |
+| `INVALID_CHANNEL_CONFIGURATION` | `InvalidChannelConfiguration` |
+| `CHANNEL_TARGET_NOT_ACCESSIBLE` | `ChannelTargetNotAccessible`（CHN-S5 新增：可以看见该目标，但无权把它发布到外部渠道） |
+| `CHANNEL_SECRET_STORE_UNAVAILABLE` | `ChannelCredentialUnavailable` |
+| `CHANNEL_OPERATION_FAILED` | `_respond` 的兜底分支——**它也有码**，否则最可能到达管理员的那类失败反而没有可映射的文案 |
+
+⚠️ **前端还没消费**：三处裸 `catch { toast.error(通用文案) }` 仍然把 `retmsg` 和
+`error_code` 一起丢掉。→ CHN-U2。
 
 ### 4.2 运行时错误码（`last_error_code`）
 
@@ -230,3 +244,4 @@ for the Feishu form only'`。
 | 日期 | 版本 | 变更 | 提交 |
 |---|---|---|---|
 | 2026-08-05 | v1 | 建立。从 `channel.test.ts` 的 11 条断言反推出现状契约；标出 3 处编码了错误行为的断言（§6）与 5 处契约空白（§7）；运行时错误码表由实测 grep 枚举（12 个），命令写在 §4.2 供重跑 | cdc09928 |
+| 2026-08-05 | v1（加法，不 bump） | 失败信封的 `data` 由 `False` 改为 `{"error_code": "..."}`（CHN-U1）；新增 `CHANNEL_TARGET_NOT_ACCESSIBLE`（CHN-S5）与兜底码 `CHANNEL_OPERATION_FAILED`。**向后兼容**：老前端只在成功路径读 `data`，失败路径读的是 `retcode`/`retmsg`，两者未变。按本文件头部的语义化规则，加法只记日志不 bump——这条规则本身是这次实测出来的，原先写的「契约变更就 bump」会让版本断言天天误报 | 本次提交 |

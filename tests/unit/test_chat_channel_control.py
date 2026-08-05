@@ -649,6 +649,45 @@ def test_provider_and_list_routes_use_stable_envelopes(client) -> None:
     }
 
 
+def test_failure_envelope_carries_a_machine_readable_error_code(client) -> None:
+    """Operationally distinct failures must not reach the UI as one blob.
+
+    The service layer has always produced these codes; the route boundary used
+    to drop them and return ``data=False``, leaving the admin with a single
+    "operation failed" for four failures whose fixes have nothing in common.
+    """
+
+    class StubService:
+        async def set_enabled(self, tenant_id: str, channel_id: str, *, enabled: bool) -> dict[str, Any]:
+            del tenant_id, channel_id, enabled
+            raise ChannelTargetNotAccessible()
+
+        async def delete_channel(self, tenant_id: str, channel_id: str) -> bool:
+            del tenant_id, channel_id
+            raise ChannelAccessDenied()
+
+        async def get_channel(self, tenant_id: str, channel_id: str) -> dict[str, Any]:
+            del tenant_id, channel_id
+            raise RuntimeError("boom: internal detail that must not escape")
+
+    client.app.dependency_overrides[get_channel_control_service] = StubService
+
+    refused = client.post("/api/v1/chat-channels/channel-1/enable").json()
+    assert refused["retcode"] == int(RetCode.ARGUMENT_ERROR)
+    assert refused["data"] == {"error_code": "CHANNEL_TARGET_NOT_ACCESSIBLE"}
+    assert "permission" in refused["retmsg"]
+
+    denied = client.delete("/api/v1/chat-channels/channel-1").json()
+    assert denied["retcode"] == int(RetCode.AUTHENTICATION_ERROR)
+    assert denied["data"] == {"error_code": "CHANNEL_NOT_ACCESSIBLE"}
+
+    # The catch-all gets a code of its own, and still leaks nothing.
+    crashed = client.get("/api/v1/chat-channels/channel-1").json()
+    assert crashed["retcode"] == int(RetCode.EXCEPTION_ERROR)
+    assert crashed["data"] == {"error_code": "CHANNEL_OPERATION_FAILED"}
+    assert "boom" not in str(crashed)
+
+
 async def test_secret_rotation_increments_version_without_returning_secret() -> None:
     repository = FakeRepository()
     secret_store = FakeSecretStore()
