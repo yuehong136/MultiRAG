@@ -19,9 +19,71 @@ rather than by the JSON Schema.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
+
+# Widget kinds the management form knows how to render. Deliberately an open
+# union on the wire: a client that meets an unknown kind must render a disabled
+# field showing its label rather than throwing, which is what lets the server
+# introduce a control type without a coordinated frontend release. That is also
+# the entire seam cost of deferring interactive pairing (CHN-P12).
+FieldKind = Literal["text", "password", "string_list", "select", "switch"]
+
+
+class FieldOption(BaseModel):
+    """One choice of a ``select`` field."""
+
+    model_config = ConfigDict(frozen=True)
+
+    value: str
+    label: str
+
+
+class FormField(BaseModel):
+    """One rendered input, already flattened out of the nested config shape.
+
+    ``required`` lives here rather than in the JSON Schema on purpose. Every
+    provider config field carries a default so that PATCH can mean "merge",
+    which makes the schema's ``required`` array disappear entirely -- the
+    frontend was hardcoding a required set to compensate, and hardcoding it
+    *wrongly*, since the schema said everything was optional. Stating it in the
+    form layer lets both halves be true at once. See CHN-ADR-03.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    # Dotted path into the config object, e.g. ``credential.app_id``. The client
+    # reassembles the nested payload from these, so it never needs to know a
+    # provider's shape.
+    path: str
+    kind: FieldKind
+    # Server-owned English default. The client prefers its own translation via
+    # ``i18n_key`` and falls back to this, so a new provider is usable before
+    # anyone writes locale entries for it.
+    label: str
+    i18n_key: str | None = None
+    required: bool = False
+    # Blank means "keep what is stored" -- the server never echoes a secret, so
+    # a blank secret input cannot be distinguished from an unchanged one.
+    secret: bool = False
+    placeholder: str | None = None
+    help_text: str | None = None
+    default: str | bool | list[str] | None = None
+    options: list[FieldOption] | None = None
+    max_length: int | None = None
+    max_items: int | None = None
+
+
+class ProviderForm(BaseModel):
+    """The ordered field list a client renders for one provider."""
+
+    model_config = ConfigDict(frozen=True)
+
+    # Bumped only when the shape changes in a way a client must react to.
+    # Unknown-but-newer versions should still render: fields are additive.
+    version: int = 1
+    fields: list[FormField] = Field(default_factory=list)
 
 
 class ProviderCapabilities(BaseModel):
@@ -67,6 +129,11 @@ class ProviderSpec:
     name: str
     display_name: str
     capabilities: ProviderCapabilities
+
+    # The render contract: an ordered, flattened field list. The client sorts
+    # nothing, resolves no $ref and evaluates no JSON Schema keyword — it maps
+    # each entry to a widget and reassembles the nested payload from the paths.
+    form: ProviderForm
 
     # Request models. ``config_model`` validates a create; ``config_patch_model``
     # a merge-patch, where every field is optional so "absent" keeps the stored

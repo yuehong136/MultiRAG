@@ -12,7 +12,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
-from api.channel_providers.spec import ProviderCapabilities, ProviderSpec
+from api.channel_providers.spec import (
+    FieldOption,
+    FormField,
+    ProviderCapabilities,
+    ProviderForm,
+    ProviderSpec,
+)
 
 
 class FeishuCredentialInput(BaseModel):
@@ -81,9 +87,53 @@ class FeishuConfigPatch(BaseModel):
         return normalized
 
 
+_FORM = ProviderForm(
+    fields=[
+        FormField(
+            path="credential.app_id",
+            kind="text",
+            label="App ID",
+            i18n_key="channel.fields.app_id",
+            required=True,
+            placeholder="cli_xxxxxxxxxxxxxxxx",
+        ),
+        FormField(
+            path="credential.app_secret",
+            kind="password",
+            label="App Secret",
+            i18n_key="channel.fields.app_secret",
+            required=True,
+            secret=True,
+        ),
+        FormField(
+            path="domain",
+            kind="select",
+            label="Domain",
+            i18n_key="channel.fields.domain",
+            required=True,
+            default="feishu",
+            # Feishu (mainland) and Lark (international) are separate API hosts,
+            # so this picks an endpoint rather than a display preference.
+            options=[
+                FieldOption(value="feishu", label="Feishu (mainland)"),
+                FieldOption(value="lark", label="Lark (international)"),
+            ],
+        ),
+        FormField(
+            path="allowed_open_ids",
+            kind="string_list",
+            label="Allowed open IDs",
+            i18n_key="channel.fields.allowed_open_ids",
+            max_items=1000,
+        ),
+    ]
+)
+
+
 PROVIDER_SPEC = ProviderSpec(
     name="feishu",
     display_name="Feishu / Lark",
+    form=_FORM,
     capabilities=ProviderCapabilities(
         private_chat=True,
         group_chat=False,

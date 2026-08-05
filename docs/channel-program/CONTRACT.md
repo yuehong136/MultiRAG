@@ -181,29 +181,60 @@ grep -rhoE '(ChannelWorkerError|_request_stop|error_code=)\("?[A-Z][A-Z0-9_]{2,6
 
 ---
 
-## 5. FieldSpec 渲染契约（CHN-P2 引入，v1 尚未存在）
+## 5. FieldSpec 渲染契约（CHN-P2 起已下发）
 
 服务端展平后的有序字段列表，前端**直接按序渲染，不做二次编译**。
 JSON Schema（`config_schema`）仅用于服务端请求校验与 OpenAPI，**不下发给前端渲染**。
 决策依据见 [CHN-ADR-03](DECISIONS.md#chn-adr-03--服务端展平-fieldspec前端不编译-json-schema)。
 
-```
-FormField:
-  path: str          # 点号路径，"credential.app_id"
-  kind: "text" | "password" | "string_list" | "select" | "switch"   # 开放联合
-  label: str
-  i18n_key: str|None
-  required: bool
-  secret: bool
-  default / options / placeholder / help / max_items / max_length
+`GET /chat-channels/providers` 的每个 manifest 现在带 `form`：
+
+```jsonc
+{
+  "provider": "feishu",
+  "display_name": "Feishu / Lark",
+  "capabilities": { "private_chat": true, "group_chat": false, ... },
+  "form": {
+    "version": 1,
+    "fields": [
+      { "path": "credential.app_id",     "kind": "text",        "label": "App ID",
+        "i18n_key": "channel.fields.app_id", "required": true, "secret": false,
+        "placeholder": "cli_xxxxxxxxxxxxxxxx" },
+      { "path": "credential.app_secret", "kind": "password",    "label": "App Secret",
+        "i18n_key": "channel.fields.app_secret", "required": true, "secret": true },
+      { "path": "domain",                "kind": "select",      "label": "Domain",
+        "required": true, "default": "feishu",
+        "options": [ { "value": "feishu", "label": "Feishu (mainland)" },
+                     { "value": "lark",   "label": "Lark (international)" } ] },
+      { "path": "allowed_open_ids",      "kind": "string_list", "label": "Allowed open IDs",
+        "max_items": 1000 }
+    ]
+  },
+  "config_schema": { /* pydantic 生成，只服务校验与 OpenAPI */ }
+}
 ```
 
-**`kind` 是开放联合**：前端遇到不认识的 kind 必须渲染为 disabled 字段并显示 label，
-**不得抛错**。这是老前端在服务端加入新控件类型时优雅降级的唯一保障。
+规则：
 
-⚠️ v1 里这个字段还不存在。前端当前从 `config_schema` 硬编码地推导飞书四个字段——
+1. **`kind` 是开放联合**。前端遇到不认识的 kind 必须渲染为 disabled 字段并显示 label，
+   **不得抛错**——这是老前端在服务端加入新控件类型时优雅降级的唯一保障，也是推迟
+   交互式配对（CHN-P12）的全部留缝成本。
+2. **`required` 只在 form 里**。`config_schema` 的 `required` 数组是空的，而且会一直空：
+   provider 的每个字段都带默认值，PATCH 才能是 merge 语义。前端曾为此硬编码一份
+   required 集合，而且编码错了——schema 说全都可选。两处各自为真，就是这个设计。
+3. **`secret: true` 的字段留空 = 保持不变**，不是清空。服务端永不回显密钥，所以
+   「空」与「未改」在线格上不可区分，只能这么定义。
+4. **前端按 `fields` 顺序渲染**，不排序、不解析 `$ref`、不求值任何 JSON Schema 关键字。
+5. **提交时按 `path` 重组嵌套 config**，所以前端不需要知道任何 provider 的形状。
+
+服务端有四条一致性测试把 `form` 与 `config_model` 绑在一起
+（`tests/unit/test_channel_provider_spec.py`）：每个 `path` 必须是模型真实接受的字段、
+`secret=true` 的集合必须与 `secret_paths` 完全相同、select 必须有 options 且 default
+在其中、path 不得重复。两份派生物因此不会漂移到互相矛盾。
+
+⚠️ **前端还没消费**：仍从 `config_schema` 硬编码地推导飞书四个字段——
 `channel.test.ts:68` 那条测试的名字自己就承认了：`'nested provider schema is flattened
-for the Feishu form only'`。
+for the Feishu form only'`。→ CHN-P5/P6/P7。
 
 ---
 
@@ -248,3 +279,4 @@ for the Feishu form only'`。
 | 2026-08-05 | v1 | 建立。从 `channel.test.ts` 的 11 条断言反推出现状契约；标出 3 处编码了错误行为的断言（§6）与 5 处契约空白（§7）；运行时错误码表由实测 grep 枚举（12 个），命令写在 §4.2 供重跑 | cdc09928 |
 | 2026-08-05 | v1（加法，不 bump） | 失败信封的 `data` 由 `False` 改为 `{"error_code": "..."}`（CHN-U1）；新增 `CHANNEL_TARGET_NOT_ACCESSIBLE`（CHN-S5）与兜底码 `CHANNEL_OPERATION_FAILED`。**向后兼容**：老前端只在成功路径读 `data`，失败路径读的是 `retcode`/`retmsg`，两者未变。按本文件头部的语义化规则，加法只记日志不 bump——这条规则本身是这次实测出来的，原先写的「契约变更就 bump」会让版本断言天天误报 | 86e76adc |
 | 2026-08-05 | v1（消费侧，线格未变） | 前端接上了 §4.1 的错误码与 §3 的状态词表（CHN-U2/U3）。契约本身没变，只是两侧终于一致：§3 与 §4.1 里那批「前端还没消费 / 前端自建 12 条词表」的 ⚠️ 已按本文件规则清理，§4.2 的运行时错误码**仍未**做映射，与 §4.1 区分开并归入 CHN-O | web a2c98c0 |
+| 2026-08-05 | v1（加法，不 bump） | manifest 新增 `form`（CHN-P2），§5 从「尚未存在」改写为实际下发的形状并给出完整 payload 示例。**向后兼容**：老前端忽略未知键；`config_schema` 一个字节没动，仍由 pydantic 生成、仍只服务校验与 OpenAPI。四条一致性测试把 `form` 与 `config_model` 绑住，防止两份派生物漂移 | 本次提交 |

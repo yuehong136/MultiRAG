@@ -129,6 +129,87 @@ def test_account_identity_reads_the_declared_path() -> None:
     assert spec.account_identity({}) is None
 
 
+@pytest.mark.parametrize("spec", provider_specs(), ids=lambda spec: spec.name)
+def test_form_fields_describe_real_config_paths(spec: ProviderSpec) -> None:
+    """The render contract and the validation contract must not drift apart.
+
+    ``form`` and ``config_schema`` are two derived views of one spec. If a form
+    field names a path the model does not accept, the client renders an input
+    whose value the server will reject with ``extra="forbid"`` -- and the admin
+    gets a validation error about a field the page told them to fill in.
+    """
+
+    empty = spec.config_model().model_dump(mode="python")
+
+    for field in spec.form.fields:
+        cursor: object = empty
+        for part in field.path.split("."):
+            assert isinstance(cursor, dict), f"{spec.name}: {field.path} traverses a non-mapping"
+            assert part in cursor, f"{spec.name}: form field {field.path} is not accepted by {spec.config_model.__name__}"
+            cursor = cursor[part]
+
+
+@pytest.mark.parametrize("spec", provider_specs(), ids=lambda spec: spec.name)
+def test_form_secret_flags_agree_with_the_declared_secret_paths(spec: ProviderSpec) -> None:
+    """`secret=True` and `secret_paths` are the same fact stated twice.
+
+    A field marked secret but not routed to the secret store would be written
+    into the public config column; routed but not marked and the form would
+    render it as a plain text input with the value echoed back.
+    """
+
+    marked = {field.path for field in spec.form.fields if field.secret}
+    assert marked == set(spec.secret_paths)
+
+
+@pytest.mark.parametrize("spec", provider_specs(), ids=lambda spec: spec.name)
+def test_select_fields_carry_options_and_a_valid_default(spec: ProviderSpec) -> None:
+    for field in spec.form.fields:
+        if field.kind == "select":
+            assert field.options, f"{spec.name}: select field {field.path} has no options"
+            values = {option.value for option in field.options}
+            if field.default is not None:
+                assert field.default in values, f"{spec.name}: {field.path} default is not one of its options"
+        else:
+            assert field.options is None, f"{spec.name}: {field.path} is {field.kind} but carries options"
+
+
+@pytest.mark.parametrize("spec", provider_specs(), ids=lambda spec: spec.name)
+def test_form_field_paths_are_unique(spec: ProviderSpec) -> None:
+    """Two fields on one path would silently overwrite each other on submit."""
+
+    paths = [field.path for field in spec.form.fields]
+    assert len(paths) == len(set(paths))
+
+
+def test_manifest_exposes_the_form_alongside_the_schema() -> None:
+    """The wire shape the frontend consumes (CHN-P5 onward)."""
+
+    from api.channel_control.schemas import provider_manifests
+
+    manifest = next(item for item in provider_manifests() if item.provider == "feishu")
+    payload = manifest.model_dump(mode="json")
+
+    assert payload["form"]["version"] == 1
+    assert [field["path"] for field in payload["form"]["fields"]] == [
+        "credential.app_id",
+        "credential.app_secret",
+        "domain",
+        "allowed_open_ids",
+    ]
+    # required lives in the form, not the schema: every config field carries a
+    # default so PATCH can mean merge, which erases the schema's required array.
+    assert payload["config_schema"].get("required") is None
+    assert [field["path"] for field in payload["form"]["fields"] if field["required"]] == [
+        "credential.app_id",
+        "credential.app_secret",
+        "domain",
+    ]
+    secret_fields = [field for field in payload["form"]["fields"] if field["secret"]]
+    assert [field["path"] for field in secret_fields] == ["credential.app_secret"]
+    assert secret_fields[0]["kind"] == "password"
+
+
 def test_resolve_path_never_raises_on_malformed_config() -> None:
     assert resolve_path({"a": {"b": 1}}, "a.b") == 1
     assert resolve_path({"a": 1}, "a.b") is None
