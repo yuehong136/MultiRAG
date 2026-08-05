@@ -313,6 +313,23 @@ ignore_imports = [
     "deepdoc.parser.figure_parser -> api.db.services.llm_service",
 ]
 
+[[tool.importlinter.contracts]]
+# channel_providers 是纯规格层：控制面（持有 ORM）与 worker 进程（刻意不依赖
+# ORM 与 web 框架）都要 import 它，所以它不能沾任何一边的依赖。
+# import-linter 表达不了「不许第三方 SDK」，那半边由
+# tests/unit/test_channel_provider_spec.py 的子进程纯度测试守。
+name = "channel_providers 是纯规格层：不依赖 ORM／路由／传输实现"
+type = "forbidden"
+source_modules = ["api.channel_providers"]
+forbidden_modules = [
+    "api.db",
+    "api.apps",
+    "api.channels",
+    "api.channel_control",
+    "api.channel_runtime",
+    "api.channel_execution",
+]
+
 [tool.ruff]
 line-length = 200
 target-version = "py312"

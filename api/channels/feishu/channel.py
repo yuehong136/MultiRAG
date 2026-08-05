@@ -29,7 +29,6 @@ from importlib import import_module
 from typing import Any, Protocol, runtime_checkable
 
 from ..core.base import Channel, IncomingMessage, OutgoingMessage
-from ..core.registry import ChannelConfig, register_channel
 
 LOGGER = logging.getLogger(__name__)
 
@@ -542,19 +541,9 @@ class FeishuChannel(Channel):
         )
 
 
-def _build(account_id: str, config: ChannelConfig) -> Channel:
-    app_id = config.get("app_id")
-    app_secret = config.get("app_secret")
-    if not app_id or not app_secret:
-        raise ValueError(f"feishu account '{account_id}' is missing app_id or app_secret")
-    return FeishuChannel(
-        FeishuAccount(
-            account_id=account_id,
-            app_id=str(app_id),
-            app_secret=str(app_secret),
-            domain=str(config.get("domain", "feishu")),
-        )
-    )
-
-
-register_channel("feishu", _build)
+# The builder that used to be registered here is gone with the dead registry
+# (CHN-P1). It read credentials straight out of a plaintext config dict -- the
+# upstream shape this project replaced with an encrypted secret store -- and
+# nothing ever called it. Channels are built by
+# ``api.channels.feishu.provider.WORKER_PROVIDER.build_managed`` from
+# server-owned binding state instead.

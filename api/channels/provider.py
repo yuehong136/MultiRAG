@@ -18,13 +18,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+from api.channel_providers import UnknownChannelProvider, provider_names, transport_module
 from api.channel_runtime.schemas import RuntimeCredential
 from api.channels.core.base import Channel
 from common.app_config import AppConfig
-
-_PROVIDER_MODULES: dict[str, str] = {
-    "feishu": "api.channels.feishu.provider",
-}
 
 
 class ChannelWorkerError(RuntimeError):
@@ -85,17 +82,23 @@ class WorkerProvider(Protocol):
 
 
 def supported_provider_names() -> tuple[str, ...]:
-    """Provider names the runner and supervisor accept, in stable order."""
+    """Provider names the runner and supervisor accept, in stable order.
 
-    return tuple(sorted(_PROVIDER_MODULES))
+    Delegated to ``api.channel_providers.registry`` so the name list exists in
+    exactly one place. Keeping a second copy here is how a provider ends up
+    half-registered -- resolvable by one half of the system and not the other.
+    """
+
+    return provider_names()
 
 
 def worker_provider(name: str) -> WorkerProvider:
     """Import and return one provider descriptor, failing closed on unknowns."""
 
-    module_path = _PROVIDER_MODULES.get(name)
-    if module_path is None:
-        raise UnsupportedChannelProvider("CHANNEL_NOT_SUPPORTED")
+    try:
+        module_path = transport_module(name)
+    except UnknownChannelProvider as error:
+        raise UnsupportedChannelProvider("CHANNEL_NOT_SUPPORTED") from error
     provider = getattr(importlib.import_module(module_path), "WORKER_PROVIDER", None)
     if not isinstance(provider, WorkerProvider) or provider.name != name:
         raise UnsupportedChannelProvider("CHANNEL_NOT_SUPPORTED")
