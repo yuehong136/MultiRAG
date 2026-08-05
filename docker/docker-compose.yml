@@ -13,6 +13,7 @@
 #    - milvus / infinity / oceanbase: 向量数据库（可选）
 #    - tei-cpu / tei-gpu: Embedding 服务
 #    - sandbox: 沙箱执行器
+#    - channel: Channel supervisor（飞书等外部消息渠道；不启用则 channel 功能不工作）
 #
 # 示例启动命令：
 #   # 最小化部署（使用内置 Redis）
@@ -74,6 +75,11 @@ services:
 
       # Web Server 开关（1=启用 Nginx，0=禁用）
       - ENABLE_WEBSERVER=${ENABLE_WEBSERVER:-1}
+
+      # Channel 控制面。两个都留空 = 内部私有路由关闭 = channel 不工作，
+      # 这也是不启用 channel profile 时的默认状态。主密钥只出现在这里。
+      - MULTIRAG_CHANNELS__CONTROL__SECRET_ENCRYPTION_KEY=${CHANNEL_SECRET_ENCRYPTION_KEY:-}
+      - MULTIRAG_CHANNELS__CONTROL__INTERNAL_API_TOKEN=${CHANNEL_INTERNAL_API_TOKEN:-}
 
     # ========== 数据卷挂载 ==========
     volumes:
@@ -159,6 +165,11 @@ services:
       - WS=1
       - ENABLE_WEBSERVER=${ENABLE_WEBSERVER:-1}
 
+      # Channel 控制面。两个都留空 = 内部私有路由关闭 = channel 不工作，
+      # 这也是不启用 channel profile 时的默认状态。主密钥只出现在这里。
+      - MULTIRAG_CHANNELS__CONTROL__SECRET_ENCRYPTION_KEY=${CHANNEL_SECRET_ENCRYPTION_KEY:-}
+      - MULTIRAG_CHANNELS__CONTROL__INTERNAL_API_TOKEN=${CHANNEL_INTERNAL_API_TOKEN:-}
+
     # ========== 数据卷挂载 ==========
     volumes:
       # Nginx 配置文件（默认镜像内置，见 Dockerfile / entrypoint 自动选择）
@@ -202,3 +213,71 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+  # ========== Channel supervisor（外部消息渠道，如飞书） ==========
+  # 没有这个服务，channel 功能在默认部署下 100% 不工作：管理页能建渠道、能保存、
+  # 能点启用，运行时状态永远停在 waiting，而且这个 waiting 与「正在启动」逐字节相同，
+  # UI 一个字都不会提示。它是独立进程，API 容器不会替它跑。
+  #
+  # 启用：COMPOSE_PROFILES 里加 channel，并在 .env 里设好下面三个变量。
+  #   CHANNEL_INTERNAL_API_TOKEN      供 supervisor/worker 访问内部路由（≥32 字符）
+  #   CHANNEL_SECRET_ENCRYPTION_KEY   凭据主密钥，**只给 API**，见下方 environment
+  #   CHANNEL_RUNTIME_API_BASE_URL    可选，默认指向同网络的 API 容器
+  #
+  # 刻意不写 depends_on：它要依赖的是 cpu 或 gpu（取决于对方的 profile），跨 profile
+  # 声明依赖会在只启一个 profile 时报 undefined service。API 未就绪时 supervisor 只是
+  # 跳过这一轮 reconcile，下一轮自愈；配置缺失时它 exit 1，由 docker 的重启退避接住。
+  multirag-channel-supervisor:
+    profiles:
+      - channel
+    image: ${MULTIRAG_IMAGE:-multirag:latest}
+    container_name: multirag-channel-supervisor
+    restart: unless-stopped
+
+    # supervisor 会 fork worker 子进程，需要 PID 1 收割僵尸
+    init: true
+    # 留足时间让全部 worker 子进程优雅停止
+    stop_grace_period: 40s
+
+    env_file:
+      - ./.env
+
+    environment:
+      - PYTHONIOENCODING=utf-8
+      - LANG=zh_CN.UTF-8
+      - LC_ALL=zh_CN.UTF-8
+
+      # ----------------------------------------------------------
+      # 主加密密钥**必须为空**。这个容器只需要按 binding 取凭据的能力，
+      # 解密由 API 侧完成。environment 优先级高于 env_file，所以即使运维
+      # 把密钥写进了 .env，这里也会把它盖掉——把「只有 API 挂主密钥」从
+      # 一条约定变成一行可核对的配置。
+      # ----------------------------------------------------------
+      - CHANNEL_SECRET_ENCRYPTION_KEY=
+      - MULTIRAG_CHANNELS__CONTROL__SECRET_ENCRYPTION_KEY=
+
+      # 内部私有路由
+      - MULTIRAG_CHANNELS__CONTROL__RUNTIME_API_BASE_URL=${CHANNEL_RUNTIME_API_BASE_URL:-http://multirag:8123}
+      - MULTIRAG_CHANNELS__CONTROL__INTERNAL_API_TOKEN=${CHANNEL_INTERNAL_API_TOKEN:-}
+
+      # ----------------------------------------------------------
+      # worker 子进程要连 Redis（会话、去重、leader lease）。这里显式传，
+      # 而不是挂 ../configs：那个目录是 API 容器渲染配置的落点，共享它等于
+      # 把主密钥一起共享，正是上面那条要避免的事。镜像内置的 configs 写的是
+      # 127.0.0.1:6379，在容器里没有意义，所以必须覆盖。
+      # ----------------------------------------------------------
+      - MULTIRAG_REDIS__HOST=${REDIS_HOST:-redis}:6379
+      - MULTIRAG_REDIS__DB=${REDIS_DB:-1}
+      - MULTIRAG_REDIS__USERNAME=${REDIS_USERNAME:-}
+      - MULTIRAG_REDIS__PASSWORD=${REDIS_PASSWORD:-}
+
+    entrypoint: ["python", "-m", "api.channels.supervisor"]
+
+    volumes:
+      - ../logs:/multirag/logs
+
+    networks:
+      - multirag
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

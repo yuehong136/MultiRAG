@@ -409,6 +409,11 @@ sudo systemctl status multirag-channel-supervisor
 
 #### docker compose 最小形态
 
+> **已随仓库落地（CHN-O5）**：`docker/docker-compose.yml` 里的 `multirag-channel-supervisor`
+> 服务就是下面这个形态的实现，用 `channel` profile 开关。运维步骤、要配哪些变量、
+> 怎么排查，见 [docker/README.md](../../docker/README.md) 的「Channel supervisor」一节。
+> 下面保留原理示意。
+
 同一镜像、两个 service、两套 secret，**只有 API 那个挂加密密钥**：
 
 ```yaml

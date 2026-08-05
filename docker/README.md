@@ -111,6 +111,7 @@
 | `tei-gpu` | tei-gpu | TEI 服务（GPU 版本） |
 | `sandbox` | sandbox-executor-manager | 沙箱执行器 |
 | `kibana` | kibana | Elasticsearch 可视化工具 |
+| `channel` | multirag-channel-supervisor | 外部消息渠道（飞书等）的 supervisor，见下方专节 |
 
 ### 快速启动示例
 
@@ -134,7 +135,53 @@ docker compose --profile cpu --profile milvus --profile tei-cpu up -d
 
 # GPU 模式
 docker compose --profile gpu --profile milvus --profile tei-gpu up -d
+
+# 带外部消息渠道（飞书等）
+docker compose --profile cpu --profile channel up -d
 ```
+
+### Channel supervisor（外部消息渠道）
+
+**不启用 `channel` profile，channel 功能就是完全不工作的**，而且不工作的方式没有任何提示：
+管理页照常能建渠道、能保存凭据、能点「启用」，运行时状态永远停在 `waiting`——而这个
+`waiting` 与「worker 正在启动」是同一个值，UI 分不出来，也就不会告诉你少了个进程。
+supervisor 是独立进程，API 容器不会替它跑。
+
+启用前先在 `.env` 里补三个变量：
+
+| 变量 | 必填 | 说明 |
+|------|:---:|------|
+| `CHANNEL_INTERNAL_API_TOKEN` | 是 | supervisor / worker 访问内部私有路由的静态凭据，**至少 32 字符**。留空 = 内部接口关闭 |
+| `CHANNEL_SECRET_ENCRYPTION_KEY` | 是 | 渠道凭据主密钥，URL-safe base64 编码的 32 字节。**只发给 API 容器** |
+| `CHANNEL_RUNTIME_API_BASE_URL` | 否 | 默认 `http://multirag:8123`（同一 compose 网络内的 API 容器） |
+
+生成两个值：
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"   # INTERNAL_API_TOKEN
+python -c "import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"  # ENCRYPTION_KEY
+```
+
+**主密钥只给 API 容器**。supervisor 的 `environment` 里把它显式置空——compose 的
+`environment` 优先级高于 `env_file`，所以即使这个值写在 `.env` 里，supervisor 也拿不到；
+它同样不挂 `../configs`（那是 API 渲染配置的落点，共享它等于用文件系统把密钥递过去）。
+解密在 API 侧完成，runner 只通过私有路由按 binding 拿到连接材料。
+`tests/unit/test_docker_channel_supervisor_service.py` 把这几条钉住了。
+
+丢失主密钥 = 全部已存凭据永久不可解密，且没有回退路径——**先备份再上线**。
+
+```bash
+docker compose logs -f multirag-channel-supervisor   # 应出现 worker_started / ws_connected
+```
+
+排查：
+
+- 日志反复出现 `error_code=CHANNEL_RUNTIME_CONTROL_NOT_CONFIGURED` → 两个必填变量没配
+  或没到容器里；容器会退出并由 docker 的重启退避接住，不会打满 CPU。
+- 起来了但渠道仍是 `waiting` → 看 API 侧是否也拿到了同一个 `CHANNEL_INTERNAL_API_TOKEN`，
+  两边不一致时 supervisor 每轮 reconcile 都会被拒。
+- 单副本即可：一个 supervisor 协调全部 binding，Redis leader lease 是故障保护，
+  不是主动扩容手段。滚动升级用 recreate。
 
 ### 启动的容器数量
 
