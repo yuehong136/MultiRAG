@@ -41,15 +41,14 @@
 | PUT | `/chat-channels/{id}/binding` | 只改绑定目标 | `channelAPI.putBinding` | v1 ⚠️ |
 | POST | `/chat-channels/{id}/enable` | 启用 binding | `channelAPI.enable` | v1 |
 | POST | `/chat-channels/{id}/disable` | 停用 binding | `channelAPI.disable` | v1 |
-| POST | `/chat-channels/{id}/verify` | 用**已存**凭据向 provider 做一次连接自检 | 尚未接入 | v1 |
+| POST | `/chat-channels/{id}/verify` | 用**已存**凭据向 provider 做一次连接自检 | `channelAPI.verify` | v1 |
 | GET | `/chat-channels/{id}/runtime` | 脱敏后的运行状态 | `channelAPI.runtime` | v1 |
 
 ⚠️ **`PUT /{id}/binding` 在前端是死代码**：`channelAPI.putBinding` 有定义、无生产调用点，
 而且 `channel.test.ts:219,252` 两处**主动断言 `putCalled === false`**。所有绑定修改都被塞进
 PATCH，导致改一次绑定必须连带重发整个 `config`。→ 见 §6-C。
 
-**`POST /{id}/verify`（CHN-O6）后端已上线、前端未接**。这是[跨仓部署顺序](README.md#5-跨仓部署顺序硬规则)
-里正常且安全的中间态。要点：
+**`POST /{id}/verify`（CHN-O6 后端 + CHN-O13 前端，两侧均已上线）**。要点：
 
 - **请求体为空**。被检查的是服务端已存的凭据，不是请求里带来的。多开一个明文
   App Secret 的入口就多一处泄漏面，而且它回答的是「一个还没保存的值好不好用」。
@@ -321,3 +320,4 @@ JSON Schema（`config_schema`）仅用于服务端请求校验与 OpenAPI，**�
 | 2026-08-06 | v1（加法，不 bump） | `GET /chat-channels/providers` 现在返回**两个** manifest（`dingtalk`、`feishu`，按注册表顺序）。**这是本程序的核心验收，不是普通加法**：钉钉的 spec / transport / 注册全在后端，`git diff --stat` 里零个 `web/` 路径，前端不重新部署即可渲染并保存。四个字段用的都是既有 kind，所以 `form.version` 保持 1 | 本次提交 |
 | 2026-08-06 | v1（加法，不 bump） | manifest 新增 `description` 与 `description_i18n_key`（CHN-P13），供客户端列出「还没接入的 provider」。**向后兼容**：两个字段都可选，老前端忽略；老后端不发时新前端渲染没有副标题的卡片，而不是渲染不出来 | `3a82e5f6` |
 | 2026-08-06 | v1（加法，不 bump） | 新增 `POST /chat-channels/{id}/verify`（CHN-O6）与五个错误码（§4.1）。**向后兼容**：新端点，老前端不调用即可；错误码只出现在这条新路径上，其它端点的信封一个字节没动。§7 那条「保存前无法验证凭据」的空白随之收窄——**只**收窄到「已保存的渠道」，创建表单里的即时试连仍然不做，理由写在 §1 与 §7 | 本次提交 |
+| 2026-08-06 | v1（消费侧，线格未变） | 前端接上了 `POST /{id}/verify`（CHN-O13）：五个错误码进 `CHANNEL_ERROR_CODES` + 两份 locale，编辑抽屉页脚出现「测试连接」。§1 的「尚未接入」随之改成 `channelAPI.verify`。契约本身一个字节没动。前端多了一个纯函数 `channelVerifyFailure`，把 `CHANNEL_CREDENTIAL_REJECTED` 与 `CHANNEL_VERIFICATION_UNAVAILABLE` 分成两种结局并由测试钉住——§1 里「必须分开渲染」那条从此有断言撑着，不只是一句叮嘱 | web `ea0e5af` |
