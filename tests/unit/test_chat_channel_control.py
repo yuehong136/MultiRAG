@@ -875,7 +875,11 @@ def test_provider_and_list_routes_use_stable_envelopes(client) -> None:
 
     provider_body = client.get("/api/v1/chat-channels/providers").json()
     assert provider_body["retcode"] == int(RetCode.SUCCESS)
-    assert provider_body["data"]["items"][0]["provider"] == "feishu"
+    # Derived, not pinned: this asserted `items[0]["provider"] == "feishu"`
+    # until CHN-P10 registered a second provider and sorting put it first. The
+    # envelope shape is what this test is for; which providers exist is
+    # `test_channel_provider_spec.py`'s business.
+    assert [item["provider"] for item in provider_body["data"]["items"]] == list(provider_names())
     assert set(provider_body["data"]["items"][0]) >= {
         "provider",
         "display_name",

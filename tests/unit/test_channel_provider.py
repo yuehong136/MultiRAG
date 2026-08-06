@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from api.channel_providers import provider_names
 from api.channel_runtime.schemas import RuntimeCredential
 from api.channels.feishu.channel import FeishuChannel
 from api.channels.provider import (
@@ -18,7 +19,18 @@ from common.app_config import AppConfig
 
 
 def test_supported_provider_names_is_stable_and_complete() -> None:
-    assert supported_provider_names() == ("feishu",)
+    """Sorted, deduplicated, and the same list the control plane offers.
+
+    Pinned the literal ``("feishu",)`` until CHN-P10 added a second provider,
+    which is the assertion failing that told us the runner and the control
+    plane were in fact reading one registry. Comparing the two derived lists
+    keeps that guarantee without re-pinning a name that will change again.
+    """
+
+    names = supported_provider_names()
+    assert names == tuple(sorted(set(names)))
+    assert names == provider_names()
+    assert "feishu" in names
 
 
 def test_worker_provider_resolves_a_registered_descriptor() -> None:

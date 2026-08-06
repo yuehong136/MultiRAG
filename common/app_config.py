@@ -403,11 +403,38 @@ class ChannelControlConfig(_Section):
         return SecretStr(token)
 
 
+class DingTalkChannelConfig(_Section):
+    """钉钉 Channel 的运行参数。
+
+    只有调优项，没有连接凭据：钉钉只走 managed 模式（凭据按 binding 从私有接口取），
+    不像飞书那样还保留一条读环境配置的 demo 路径。默认值与飞书一致——它们是队列与
+    租约的通用参数，不是 provider 特性。
+    """
+
+    queue_size: PositiveInt = 100
+    worker_concurrency: PositiveInt = 2
+    session_ttl_seconds: PositiveInt = 86400
+    dedupe_ttl_seconds: PositiveInt = 86400
+    max_question_chars: PositiveInt = 4000
+    max_answer_chars: PositiveInt = 4000
+    total_timeout_seconds: PositiveInt = 120
+    leader_ttl_seconds: PositiveInt = 30
+    leader_renew_seconds: PositiveInt = 10
+
+    @model_validator(mode="after")
+    def validate_lease_timing(self) -> Self:
+        """续租必须早于过期，否则 leader 会在自己还活着的时候被别人抢走。"""
+        if self.leader_renew_seconds >= self.leader_ttl_seconds:
+            raise ValueError("leader_renew_seconds must be less than leader_ttl_seconds")
+        return self
+
+
 class ChannelsConfig(_Section):
     """外部消息 Channel 配置。"""
 
     control: ChannelControlConfig = Field(default_factory=ChannelControlConfig)
     feishu: FeishuChannelConfig = Field(default_factory=FeishuChannelConfig)
+    dingtalk: DingTalkChannelConfig = Field(default_factory=DingTalkChannelConfig)
 
 
 # ---------------------------------------------------------------------------

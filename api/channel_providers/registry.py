@@ -30,6 +30,7 @@ class UnknownChannelProvider(LookupError):
 # name -> (spec module, transport module). The spec half is pure pydantic and
 # safe to import anywhere; the transport half is not.
 _PROVIDERS: Final[dict[str, tuple[str, str]]] = {
+    "dingtalk": ("api.channel_providers.dingtalk", "api.channels.dingtalk.provider"),
     "feishu": ("api.channel_providers.feishu", "api.channels.feishu.provider"),
 }
 
