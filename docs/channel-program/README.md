@@ -45,15 +45,15 @@
 
 **当前阶段**：24 个 PR **全部落地**，第二个 provider（钉钉）已注册，排期外追加落地
 CHN-O7（主密钥密钥环）、CHN-O12（空 env 变量）、CHN-O6（连接自检）·
-**唯一待办**：CHN-P11 的 API 重启（见下）·
-**最后更新**：2026-08-06
+**部署**：CHN-P11 的两道闸门均已完成（2026-08-06 14:44 重启 API 与 supervisor）·
+**无待办** · **最后更新**：2026-08-06
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | **PR-0** | 建立账本与契约文档（两仓 docs-only） | ✅ 完成 |
 | **S** | 安全加固（S1–S6） | ✅ 完成 |
 | **U** | 今日可见缺陷（U1–U7） | ✅ 完成 |
-| **P** | Provider 通用化（P1–P11、P13 全部完成；**P11 的 API 重启未做**） | ✅ 完成 |
+| **P** | Provider 通用化（P1–P11、P13 全部完成并部署） | ✅ 完成 |
 | **O** | 运维（O1–O7、O12 完成；O8–O11 未排期） | ✅ 完成（排期内） |
 | **X** | 跨仓契约（X1–X3 完成） | ✅ 完成 |
 
@@ -66,13 +66,19 @@ CHN-O7（主密钥密钥环）、CHN-O12（空 env 变量）、CHN-O6（连接�
 worker `10:55:01`、API `11:15:01`，全部晚于提交一小时以上；用户确认目前只有这一台机器。
 浸泡期防的是「你数不清的 runner」，这里能数清，所以它的目的已经达成。
 
-> ⚠️ **闸门②还没做，而且它现在就是一个故障窗口。**
-> 盘上是 P11，**跑着的 API 还是旧的、还在发 legacy 那一对**。跑着的 worker 也是旧的、
-> 仍接受那一对，所以此刻是稳的——**但 worker 是 supervisor 每次 spawn 时从盘上加载的**。
-> 只要发生一次 worker 重启，新 worker 就用 P11 的 `extra="forbid"` 去解析旧 API 发来的
-> legacy 字段，整包拒绝 → `RUNTIME_CONFIG_INVALID` → 那条 binding 起不来。
->
-> **把 API 重启到含 CHN-P11 的构建即可解除**，越早越好。
+**闸门②也已完成（2026-08-06 14:41–14:44，用户批准后执行）**，顺序是先 API 后 supervisor——
+反过来会让新 worker 先起来撞上还在发 legacy 的旧 API。实测结果：
+
+| 进程 | 起于 | 证据 |
+|---|---|---|
+| API | 14:41:03 | `POST /api/v1/chat-channels/x/verify` 返回 **401 而非 404**，说明 CHN-O6 的路由在册 = 新构建 |
+| supervisor | 14:44:04 | `worker_started result=ok` |
+| worker | 14:44:07 | `ws_connected result=ok`；DB 里新 runner `vm-duxiaolong-34692`、`connected`、`last_error_code` 为空 |
+
+**这就是 P11 的决定性验证**：一个 P11 worker 解析了一个 P11 API 发来的载荷并连上了，
+日志里搜不到任何 `RUNTIME_CONFIG_INVALID` / `validation error` / `extra_forbidden`。
+Redis `multirag:channel:v2:*:leader:*` 键已回来。**已知代价**（与 CHN-S3 同类）：
+飞书会话重置了一次、dedupe 窗口空了一次。
 
 ### 新增第二个 provider 时的独立闸门（与契约版本无关）
 
@@ -80,10 +86,10 @@ worker `10:55:01`、API `11:15:01`，全部晚于提交一小时以上；用户�
 **注册任何新 provider 都要重启一次 supervisor**。好在它 fail-safe：不认识的 provider 走
 `:128` 的 `provider_unsupported` **逐条跳过**，健康的 binding 照常 reconcile。
 
-> **2026-08-06 复核：这条警告已经不成立了，别照着做。** 原文写的是「当前 supervisor 起于
-> 10:30，早于钉钉注册，会跳过钉钉 binding」。实测当前进程起于 **10:54:57**，而 CHN-P10
-> （注册钉钉）的提交是 **10:46:30**——**它晚于注册 8 分半，认识钉钉**。建第一个钉钉渠道
-> **不需要**为此重启 supervisor。
+> **2026-08-06 复核：曾经写在这里的「supervisor 早于钉钉注册、会跳过钉钉 binding」
+> 已不成立，别照着做。** 当前 supervisor 起于 **14:44:04**（P11 部署那次重启），
+> CHN-P10（注册钉钉）提交于 **10:46:30**——**进程远晚于注册，认识钉钉**。
+> 建第一个钉钉渠道**不需要**为此重启 supervisor。
 >
 > 这句话会反复过期，所以记录的是**怎么重新判定**而不是结论：把下面查到的进程
 > `CreationDate` 与 `git log --grep='CHN-P10' --format=%cd --date=iso-local` 比一下，
@@ -269,3 +275,4 @@ MultiRAG 与 web 是两个仓、两条 CI、两次部署，**不存在跨仓原�
 | 2026-08-05 | 文档集建立；审计结论收敛为 CHN-S/U/P/O/X 五族 | Claude |
 | 2026-08-06 | CHN-O7 落地（主密钥有序密钥环，轮换不再等于全量凭据丢失）；追加并落地 CHN-O12（留空的 env 变量不再打死配置加载——默认 docker 部署原本起不来）；CHN-O6 落地（连接自检端点，后端已上线、前端未接，契约见 CONTRACT §1）。§3 阶段表随之更新 | Claude |
 | 2026-08-06 | CHN-P11 落地（删掉每个 provider 都得共用的飞书字段，删字段三步走完）——**但 API 重启未做，那是个现存的故障窗口，见 §3**；CHN-O13 落地（自检的前端接线，web `ea0e5af`）。至此 24 个 PR 全部完成 | Claude |
+| 2026-08-06 | CHN-P11 部署完成（重启 API 与 supervisor，先后顺序有讲究，见 §3）。至此 24 个 PR 全部落地**且全部部署**，无待办 | Claude |

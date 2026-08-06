@@ -209,8 +209,7 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 
 ### CHN-P11 · 删掉 legacy `RuntimeCredential.app_id/app_secret`
 
-- **状态**：✅ 代码已落地（2026-08-06）。**但部署只做了一半，见本条末尾的「现在这台机器处在半态」——
-  那不是提醒，是一个现在就存在的故障窗口。**
+- **状态**：✅ 完成并**已部署**（2026-08-06）。两道闸门都关了，证据见本条末尾。
 - **问题**：删字段三步的第三步。① 停止读 = CHN-P4（已部署）② 停止发 = CHN-P8（已部署）
   ③ 删除 = 本条。`api/channel_runtime/schemas.py::RuntimeCredential` 上那对字段是飞书的
   命名，第二个 provider 一旦去够它们就等于把刚拆掉的耦合请回来（`dingtalk/provider.py`
@@ -233,14 +232,21 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
   supervisor 起于 `10:54:57`、worker 起于 `10:55:01`、API 起于 `11:15:01`，三者全部晚于
   提交一小时以上。用户确认目前只有这一台机器，Mac 那台将来直接用最新代码，
   **不存在数不清的旧 runner**——这正是浸泡期本来要防的东西。
-- **⚠️ 现在这台机器处在半态（代码已合、API 未重启）**：
-  盘上是 P11，**跑着的 API 仍是旧的，还在发 legacy 那一对**。跑着的 worker 也是旧的、
-  仍接受那一对，所以此刻是稳的。**但 worker 是 supervisor 每次 spawn 时从盘上加载的**——
-  只要发生一次重启（崩溃、改配置、generation 变化、重启 supervisor），新 worker 就带着
-  P11 的 `extra="forbid"` 模型去解析旧 API 发来的 legacy 字段，**整包拒绝 →
-  `RUNTIME_CONFIG_INVALID` → 那条 binding 起不来**。
-  **解除办法只有一个：把 API 重启到含 P11 的构建**，越早越好。这个窗口不是设计的一部分，
-  是「合并」与「部署」之间必然存在的一小段，把它写在这里是为了别让它被忘掉。
+- **闸门②（部署）已完成，14:41–14:44，用户批准后执行**。合并与部署之间那段窗口是真实的：
+  盘上一旦是 P11，任何一次 worker respawn 都会用 `extra="forbid"` 去解析旧 API 还在发的
+  legacy 字段并整包拒绝。所以顺序**必须先 API 后 supervisor**，反过来就是自己制造那次故障。
+  实测：
+  - API 起于 `14:41:03`。判据不是时间戳而是行为——`POST /chat-channels/x/verify`
+    返回 **401 而非 404**，说明 CHN-O6 的路由在册，即新构建。
+  - supervisor `14:44:04` → `worker_started result=ok`；worker `14:44:07` →
+    `ws_connected result=ok`。
+  - DB 新 runner `vm-duxiaolong-34692`、`connected`、**`last_error_code` 为空**；
+    Redis `multirag:channel:v2:*:leader:*` 键回来了。
+  - **决定性的一条**：日志里搜 `RUNTIME_CONFIG_INVALID|validation error|extra_forbidden`
+    **零命中**——一个 P11 worker 解析了一个 P11 API 的载荷并连上了。这是「三步删字段」
+    走完之后唯一能真正证明它成立的观察。
+  - **已知代价**（与 CHN-S3 同类，写在这里免得被当成故障）：飞书会话重置一次、
+    dedupe 窗口空一次。
 
 ### CHN-O6 · 连接自检端点
 
@@ -635,3 +641,4 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 | 2026-08-06 | **两处「查了之后发现自己说错了」的订正**。① CHN-O6 落地补充里「Redis 全局限流要给控制面加一个它今天没有的有状态依赖」**不成立**：`api/channel_execution/dependencies.py::get_channel_execution_redis` 已经是同一个 API 进程里现成的 async Redis 依赖，私有 execution 路由一直在用。已改写成真正还剩的两个决定（11 条路由是否都拴上 Redis、Redis 挂时放行还是拒绝）与建议时机（等 CHN-O9 需要 Redis 时一起做）。② README §3「当前 supervisor 起于 10:30，早于钉钉注册，会跳过钉钉 binding」**已过期**：实测当前进程起于 `10:54:57`，CHN-P10 提交于 `10:46:30`，**进程晚于注册 8 分半，认识钉钉**——建第一个钉钉渠道不需要为此重启 supervisor。README 里改成记录「怎么重新判定」而不是结论，因为这句话每注册一个 provider 就会过期一次。**顺带查清 CHN-P11 的闸门**：CHN-P8 提交 `09:42:26`，supervisor `10:54:57`、worker `10:55:01`、API `11:15:01`——**本机三个进程全部晚于 P8，闸门①在这台机器上已可验证地满足**；剩下的未知只有「别处还有没有 runner」，那不是时间问题 | 本次提交 | Claude |
 | 2026-08-06 | **CHN-P11 完成：legacy `RuntimeCredential.app_id/app_secret` 删除，删字段三步走完**。同时删掉 `value()` 的 `legacy` 参数与飞书 provider 里最后一个读它的地方——留着参数等于留着回来的路。**闸门①是被证实的不是等出来的**：CHN-P8 提交 `09:42:26`，本机 supervisor `10:54:57` / worker `10:55:01` / API `11:15:01`，三者全部晚于提交一小时以上；用户确认目前只有这一台机器、Mac 那台将来直接用最新代码，所以「数不清的旧 runner」这个浸泡期真正要防的东西不存在。**验证**：`test_runtime_config_releases_only_provider_connection_material_to_authenticated_runner` 的线格断言里那两个键消失、**其余断言一字未动**（含那六个 forbidden 键与日志脱敏）；`test_runtime_credential_tolerates_both_contract_halves` 按新语义重写成 `..._is_a_generic_map_with_no_provider_named_in_it`，并新增 `..._refuses_the_deleted_legacy_pair`——`extra="forbid"` 让老 API 发来的 legacy 字段**响亮地失败**而不是被静默忽略，那个拒绝正是部署顺序要避免制造的信号；钉钉那条「不许读 legacy」的测试改写成「不许读别的 provider 的键」，因为原来的场景已经构造不出来了。`-k "channel or feishu or dingtalk"` **300 passed**。**⚠️ 半态**：代码已合、API 未重启，此刻稳定但**任何一次 worker 重启都会让新 worker 拒绝旧 API 的载荷**，详见简报末尾与 README §3 | 本次提交 | Claude |
 | 2026-08-06 | **CHN-O13 完成（WEB）：CHN-O6 的前端半边**。`channelAPI.verify(id)`（无请求体）、五个错误码进 `CHANNEL_ERROR_CODES` + 两份 locale、编辑抽屉页脚加「测试连接」（**只对已保存渠道出现**——它测的是已存的凭据，不是正在输入的那个，所以放在保存旁边而不是密钥输入框旁边，后者会暗示相反的意思）、`useVerifyChannel` 带 10 秒冷却禁用。核心是纯函数 `channelVerifyFailure`：把「被拒」和「没查成」分成两种结局，两条文案措辞刻意不同。**验证**：纯逻辑放在 `src/api/__tests__/channel.test.ts`（唯一被门禁覆盖的位置）——端点路径带 encode、**body 为 undefined**、五个码各自的分类、冷却常量与服务端一致；`test:api` **83 pass**。其余门禁：`lint` 0 error / `typecheck:agent-strict` 通过 / `lint:file-size` 通过 / `test:design-tokens` 11 pass / `test:streaming` 43 pass / `test:agent-t1` 70 pass / `build` + `check:bundle-size` 通过 / 两个棘轮 JSON `git diff --exit-code` 无输出。**`lint:typed` 在 Windows 上跑不了**（`ESLINT_TYPED=true` 是 bash 语法，cmd 报「不是内部或外部命令」），它只覆盖 `src/lib/agent.ts` 与 agent operators/adapters，本次一个都没碰——如实记这里，不当作跑过。按钮本身靠人工验证，**没有假装有测试** | web `ea0e5af` | Claude |
+| 2026-08-06 | **CHN-P11 部署完成，删字段三步真正走完**。用户批准后重启 API 与 supervisor，**顺序先 API 后 supervisor**——反过来会让新 worker 先起来撞上还在发 legacy 的旧 API，等于自己制造那次故障。API `14:41:03`（判据是行为不是时间戳：`POST /chat-channels/x/verify` 返回 **401 而非 404**，CHN-O6 路由在册 = 新构建）、supervisor `14:44:04`、worker `14:44:07`。**验证**：`worker_started result=ok` + `ws_connected result=ok`；DB 新 runner `vm-duxiaolong-34692`、`connected`、`last_error_code` 为空、`connected_at 14:44:28`；Redis `multirag:channel:v2:*:leader:*` 键回来；日志搜 `RUNTIME_CONFIG_INVALID\|validation error\|extra_forbidden` **零命中**——**一个 P11 worker 解析了一个 P11 API 的载荷并连上了，这是三步删字段唯一能真正证明成立的观察**。已知代价：飞书会话重置一次、dedupe 窗口空一次。**过程中踩了一个自己的坑**：重启脚本原本先轮转日志再杀进程，日志被活着的进程占着 → `Move-Item` 失败；好在它失败在杀进程之前，什么都没动，改成先杀后轮转即可 | 本次提交 | Claude |
