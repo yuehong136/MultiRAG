@@ -140,6 +140,10 @@ class ResolvedRuntimeBindingSpec:
     public_config: dict[str, Any]
     credentials: dict[str, str]
     generation: int
+    # The admin's binding policy, free-form by design. It has always been
+    # validated to carry no credentials, which is what makes it safe to hand a
+    # runner verbatim rather than transcribing known keys one at a time.
+    policy: dict[str, Any]
 
 
 def _is_secret_leaf_key(name: str) -> bool:
@@ -605,6 +609,7 @@ class ChannelControlService:
             public_config=runtime.public_config,
             credentials=credentials,
             generation=runtime.generation,
+            policy=runtime.policy,
         )
 
     async def report_runtime(

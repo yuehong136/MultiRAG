@@ -85,14 +85,6 @@ async def list_desired_channel_runtimes(
 @router.get(
     "/internal/channel-bindings/{binding_id}/runtime-config",
     response_model=RuntimeBindingConfig,
-    # Withhold the generic credential map until CHN-P8 and the binding policy
-    # until CHN-O3. This is what makes CHN-P4 and CHN-O2 actual tolerate steps:
-    # adding a field to the shared model would otherwise put `"fields": {}` and
-    # `"policy": {}` on the wire immediately, and a worker running an older
-    # build parses this response with extra="forbid" -- it would reject the
-    # whole payload and never start. A tolerate step that changes the wire is
-    # not a tolerate step. See CHN-ADR-06.
-    response_model_exclude={"credential": {"fields"}, "policy": ...},
     include_in_schema=False,
 )
 async def get_channel_runtime_config(
@@ -116,9 +108,19 @@ async def get_channel_runtime_config(
         generation=runtime.generation,
         public_config=runtime.public_config,
         credential=RuntimeCredential(
+            # Emit half of CHN-P4 -> CHN-P8. The legacy pair rides along until
+            # CHN-P11: a runner that started before CHN-P4 still requires it,
+            # and dropping it here would fail its parse outright rather than
+            # degrade. `fields` is the whole credential, keyed by the leaf names
+            # the provider spec declares -- which is what lets a second provider
+            # exist without this route naming any of its fields.
             app_id=runtime.credentials["app_id"],
             app_secret=runtime.credentials["app_secret"],
+            fields=runtime.credentials,
         ),
+        # Emit half of CHN-O2 -> CHN-O3. Until now this reached the database and
+        # stopped there, so the "private chats only" toggle was decoration.
+        policy=runtime.policy,
     )
 
 

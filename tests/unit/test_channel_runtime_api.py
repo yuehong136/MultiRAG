@@ -32,6 +32,7 @@ class _RuntimeService:
             generation=4,
             public_config={"domain": "feishu", "allowed_open_ids": ["ou-user"]},
             credentials={"app_id": "cli-app", "app_secret": "app-secret-private"},
+            policy={"private_chat_only": False},
         )
 
     async def report_runtime(self, **kwargs: Any) -> None:
@@ -141,17 +142,28 @@ def test_runtime_config_releases_only_provider_connection_material_to_authentica
     response = client.get("/api/v1/internal/channel-bindings/binding-1/runtime-config")
 
     assert response.status_code == 200
-    # No `fields` key: CHN-P4 is the tolerate half, so the wire shape must be
-    # byte-identical to what a worker on an older build already parses. That
-    # parser is extra="forbid" -- an extra key would stop the binding, not
-    # degrade it. The emit half (CHN-P8) drops the route's exclude.
+    # Emit halves of CHN-P4 -> CHN-P8 and CHN-O2 -> CHN-O3. Both `fields` and
+    # `policy` are on the wire now; the legacy credential pair rides along
+    # until CHN-P11, because a runner started before CHN-P4 still *requires*
+    # it and its absence would fail the parse rather than degrade.
     assert response.json() == {
         "binding_id": "binding-1",
         "provider": "feishu",
         "generation": 4,
         "public_config": {"domain": "feishu", "allowed_open_ids": ["ou-user"]},
-        "credential": {"app_id": "cli-app", "app_secret": "app-secret-private"},
+        "credential": {
+            "app_id": "cli-app",
+            "app_secret": "app-secret-private",
+            "fields": {"app_id": "cli-app", "app_secret": "app-secret-private"},
+        },
+        "policy": {"private_chat_only": False},
     }
+    # Everything below is unchanged and must stay that way: what a runner may
+    # learn is its own connection material and its own behaviour switches, and
+    # nothing about who owns the binding or what it points at. `policy` left
+    # this list because it is now deliberately emitted -- it is the runner's
+    # own policy, and the control plane already refuses to store a credential
+    # inside it.
     for forbidden in (
         "tenant_id",
         "target_id",
@@ -159,7 +171,6 @@ def test_runtime_config_releases_only_provider_connection_material_to_authentica
         "revision_id",
         "target_revision_id",
         "session_id",
-        "policy",
     ):
         assert forbidden not in response.text
     assert "app-secret-private" not in caplog.text

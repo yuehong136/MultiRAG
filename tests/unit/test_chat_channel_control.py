@@ -213,7 +213,13 @@ class FakeSecretStore:
         channel_id: str,
         encrypted: EncryptedSecret,
     ) -> Mapping[str, str]:
-        del tenant_id, channel_id, encrypted
+        del tenant_id, channel_id
+        # Round-trip for real. Returning {} unconditionally meant every caller
+        # of resolve_runtime_binding saw "credential incomplete", so nothing
+        # ever reached the code that reassembles a credential for a runner.
+        for stored in reversed(self.plaintexts):
+            if stored:
+                return dict(stored)
         return {}
 
 
@@ -585,6 +591,76 @@ async def test_enable_disable_is_idempotent_and_advances_generation() -> None:
     assert disabled["status"] == 0
     assert disabled["generation"] == 3
     assert disabled["binding"]["generation"] == 3
+
+
+async def test_the_resolver_hands_a_runner_a_whole_credential_and_its_own_policy() -> None:
+    """Emit halves of CHN-P4 -> CHN-P8 and CHN-O2 -> CHN-O3.
+
+    Both used to stop at the database. ``policy.private_chat_only`` was
+    collected, validated and stored, and then never reached the process that
+    enforces it; the generic credential map existed but was withheld from the
+    wire while older runners were still being taught to accept it.
+    """
+
+    repository = FakeRepository()
+    repository.dialogs.add(("tenant-a", "dialog-1"))
+    service = ChannelControlService(repository, FakeSecretStore())
+    created = await service.create_channel("tenant-a", _create_request(chat_id="dialog-1"))
+    await service.upsert_binding(
+        "tenant-a",
+        created["id"],
+        ChannelBindingUpsertRequest(
+            target_type="multirag.dialog",
+            target_id="dialog-1",
+            policy={"private_chat_only": False},
+        ),
+    )
+    enabled = await service.set_enabled("tenant-a", created["id"], enabled=True)
+
+    resolved = await service.resolve_runtime_binding(enabled["binding"]["id"])
+
+    assert resolved.policy == {"private_chat_only": False}
+    # The credential is whole: the encrypted half plus the non-secret half that
+    # legitimately lives in the public config, reassembled under the leaf names
+    # the provider spec declares. That reassembly is what lets a second
+    # provider work without the runtime route naming any of its fields.
+    assert resolved.credentials["app_secret"] == "never-return-this-secret"
+    assert resolved.credentials["app_id"] == "cli_unit"
+
+
+async def test_a_runner_policy_is_the_stored_one_and_still_carries_no_credential() -> None:
+    repository = FakeRepository()
+    repository.dialogs.add(("tenant-a", "dialog-1"))
+    service = ChannelControlService(repository, FakeSecretStore())
+    created = await service.create_channel("tenant-a", _create_request(chat_id="dialog-1"))
+
+    # Handing the policy to a runner verbatim is only safe because this check
+    # exists; it is what makes the free-form column releasable at all.
+    with pytest.raises(InvalidChannelConfiguration, match="credentials"):
+        await service.upsert_binding(
+            "tenant-a",
+            created["id"],
+            ChannelBindingUpsertRequest(
+                target_type="multirag.dialog",
+                target_id="dialog-1",
+                policy={"private_chat_only": True, "app_secret": "leaked"},
+            ),
+        )
+
+    # Unknown but harmless keys ride along untouched, so a future toggle needs
+    # no control-plane change to reach the runner.
+    await service.upsert_binding(
+        "tenant-a",
+        created["id"],
+        ChannelBindingUpsertRequest(
+            target_type="multirag.dialog",
+            target_id="dialog-1",
+            policy={"private_chat_only": True, "locale": "zh-CN"},
+        ),
+    )
+    enabled = await service.set_enabled("tenant-a", created["id"], enabled=True)
+    resolved = await service.resolve_runtime_binding(enabled["binding"]["id"])
+    assert resolved.policy == {"private_chat_only": True, "locale": "zh-CN"}
 
 
 async def test_runtime_bundle_and_heartbeat_are_internal_and_generation_fenced() -> None:
