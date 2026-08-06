@@ -43,7 +43,7 @@
 
 ## 3. 当前阶段 · 现在该干什么
 
-**当前阶段**：24 个 PR 里 23 个已落地 · **最后更新**：2026-08-06
+**当前阶段**：24 个 PR 里 23 个已落地，supervisor 已重启到当前代码 · **最后更新**：2026-08-06
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
@@ -63,9 +63,8 @@
 webhook 回调，但那要开一个公网入站路由，安全面完全不同。**这是用户的决定，不要自作主张
 加依赖。**
 
-注册前还必须重启 supervisor，理由是链式的：注册 → 管理页出现钉钉 → 建一个并启用 →
-`DesiredRuntimeList` 里出现 `provider: "dingtalk"` → **旧 supervisor 会 ValidationError
-并跳过整轮 tick，把健康的飞书 binding 一起拖停**。
+~~注册前还必须重启 supervisor~~ **已于 2026-08-06 10:30 重启**，现在跑的是当前代码，
+`provider` 已放宽为 `str`，注册第二个 provider 不再会让它跳过整轮 tick。
 
 **② CHN-P11——刻意等浸泡，不是漏了。**
 
@@ -98,12 +97,27 @@ worker 决定，`DesiredRuntimeList` 的闸门由 supervisor 决定，两者不�
 
 解除 supervisor 闸门（**会重置一次会话、清空一次 dedupe 窗口，先问用户**）：
 
-```bash
-# 本机手起的 supervisor：停掉旧进程后重新拉起
-#   Stop-Process -Id <supervisor pid>
-uv run python -m api.channels.supervisor
-# 或按 docker/README.md「Channel supervisor」一节走 compose
+```powershell
+# 整棵树一起杀：uv.exe -> python shim -> supervisor -> worker shim -> worker
+taskkill /PID <uv.exe 的 PID> /T /F
+Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass',
+  '-File','D:\project\MultiRAG\scripts\run_channel_supervisor.example.ps1' `
+  -WorkingDirectory 'D:\project\MultiRAG' -WindowStyle Hidden `
+  -RedirectStandardOutput 'D:\project\MultiRAG\logs\channel-supervisor.log' `
+  -RedirectStandardError  'D:\project\MultiRAG\logs\channel-supervisor.err.log'
 ```
+
+> ⚠️ **必须走那个启动脚本，不能直接 `uv run python -m api.channels.supervisor`。**
+> supervisor 的两个必填项（`RUNTIME_API_BASE_URL` / `INTERNAL_API_TOKEN`）**不在
+> `configs/*.yaml` 里**——`service_conf.yaml` 与 `local.service_conf.yaml` 都没有
+> `channels:` 段。脚本从 `%LOCALAPPDATA%\MultiRAG\secrets\supervisor.env` 读它们
+> （该文件刻意不含主加密密钥，脚本还会主动拒绝带着密钥启动）。直接 `uv run` 起来的进程
+> 环境是空的，会立刻 `error_code=CHANNEL_RUNTIME_CONTROL_NOT_CONFIGURED` 退出。
+>
+> 日志走 stderr（logging 默认），`channel-supervisor.log` 通常是空的，**看 `.err.log`**。
+> 起来后确认这三样：`ws_connected` + `worker_started result=ok`；
+> `t_ai_channel_runtime_status` 出现新 `runner_id` 与新鲜心跳；
+> Redis `multirag:channel:v2:*:leader:*` 键回来了。
 
 ## 4. 验证命令（两个仓）
 
