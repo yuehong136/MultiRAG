@@ -112,6 +112,7 @@ web 侧 commit scope 从 `settings` 切到 `channel`（后端已有 `feat(channe
 | CHN-P8 | MR | `RuntimeCredential.fields` — **emit 半步**，同时保留 legacy 字段对 | ✅ | **CHN-P4 已部署** | `channel_runtime_api.py:72-81` |
 | CHN-P9 | MR | `ChannelProvider` 改注册表驱动；`config` 改 `dict[str, Any]` 在 service 层按 `channel` 判别后二次校验。**这是 CHN-S2 的 emit 闸门** | ✅ | **CHN-S2 已部署**、CHN-P1、CHN-P3、**CHN-P8 已部署** | `channel_control/schemas.py:10,99-136,172-188` |
 | CHN-P10 | MR | **钉钉 provider**（`credential.client_id` + `credential.client_secret`）。零前端改动的验收 PR | ✅ | CHN-P9 | 新 spec + transport |
+| CHN-P13 | MR+WEB | provider **可发现性**：manifest 加 `description` / `description_i18n_key`；前端把「一个新建按钮 + 抽屉里的下拉」改成「已接入 / 可接入」两段，可接入是服务端驱动的卡片画廊 | ✅ | CHN-P10 | `channel_providers/spec.py`、`web:components/provider-gallery.tsx` |
 | CHN-P11 | MR | 删除 legacy `RuntimeCredential.app_id/app_secret`（浸泡后清理，删字段三步的第三步） | ⬜ | CHN-P8 已浸泡 | `api/channel_runtime/schemas.py` |
 | CHN-P12 | — | ⏸ 交互式配对（QR / OAuth）。**不做**，但 `FormField.kind` 保持开放联合、前端渲染未知 kind 为 disabled，就是它的全部留缝成本 | ⏸ | — | — |
 
@@ -191,6 +192,109 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 | — | — | CHN-U6 | ✅ | SEC-4 | 无依赖 | 刻意做成纯前端，见阶段 U 的说明 |
 | CHN-P2 | ✅ | CHN-P5 | ✅ | ARCH-6 | 后端先 | manifest 加 `form` 是加法，老前端忽略即可。**兼容窗口已于 CHN-P7 关闭** |
 | CHN-P2 | ✅ | CHN-P7 | ✅ | ARCH-6 | **后端先（硬依赖，已满足：CHN-P2 = `819e7ec2`）** | 全程序唯一一条真跨仓依赖。半态已设计成「降级且可读」：老后端 → `listProviders` 过滤空 → 横幅提示 + 禁用新建，列表/启停/删除照常 |
+
+---
+
+## 待办任务简报（零上下文可直接开工）
+
+上面的任务表是一句话索引；这一节是**交接用的执行简报**。每条都给了「问题是什么（带证据）
+/ 为什么值得做 / 闸门 / 验收标准 / 从哪读起」。**开工前仍按维护协议第 1 条复核锚点**——
+行号一定会漂。
+
+### CHN-P11 · 删掉 legacy `RuntimeCredential.app_id/app_secret`
+
+- **状态**：⬜ 等浸泡。**这是唯一一条「等时间」而不是「等人」的任务。**
+- **问题**：删字段三步的第三步。① 停止读 = CHN-P4（已部署）② 停止发 = CHN-P8（已部署）
+  ③ 删除 = 本条。`api/channel_runtime/schemas.py::RuntimeCredential` 上那对字段是飞书的
+  命名，第二个 provider 一旦去够它们就等于把刚拆掉的耦合请回来（`dingtalk/provider.py`
+  已经**只读** `value("client_id")`，没有 legacy 回退，可作范本）。
+- **闸门（两条都要满足，缺一不可）**：
+  1. 线上**所有** worker 都跑在含 CHN-P8 的构建上。worker 是 supervisor spawn 时从盘上
+     加载的，所以「重启 supervisor」通常就够；但如果别处还有独立跑的 runner，要一并确认。
+     查法见 README §3 的「先查，别假设」。
+  2. **API 进程也要重启到含本条的构建**。方向和上面相反：删字段后**老 API 仍在发**
+     legacy 那一对，而新 worker 的 `extra="forbid"` 会整包拒绝。
+- **改哪里**：`api/channel_runtime/schemas.py`（删两个字段，`value()` 的 `legacy` 参数
+  一并删）、`api/apps/restful_apis/channel_runtime_api.py`（构造 `RuntimeCredential` 时
+  不再传）、`api/channels/feishu/provider.py`（`value("app_id", legacy=...)` → `value("app_id")`）。
+- **验收**：`test_runtime_config_releases_only_provider_connection_material_to_authenticated_runner`
+  的线格断言里那两个键消失，且**其余断言一字不改**；`test_runtime_credential_tolerates_both_contract_halves`
+  按新语义重写（不再有 legacy 一侧）；`-k "channel or feishu or dingtalk"` 全绿。
+- **别做的事**：不要顺手给 `fields` 加校验或改成 `extra="allow"`——那是另一次契约变更。
+
+### CHN-O6 · 连接自检端点
+
+- **问题**：今天填错 App Secret 的反馈环是**几十秒起步**：保存 → 启用 → 等 supervisor
+  下一轮 reconcile（默认 10s）→ worker 起来 → 握手失败 → 上报 → 前端轮询（15s）拿到
+  `error`。中间任何一步慢一点，管理员看到的都是「转圈然后不知道为什么不行」。
+- **值得做的理由**：这是这个页面**唯一**一个「用户做对了事却要等很久才知道」的地方，
+  其余错误（缺字段、目标不可访问）都已经是同步返回。
+- **设计要点**：
+  - 端点形如 `POST /chat-channels/{id}/verify`（对已存渠道，用存着的密钥，**请求体不带
+    凭据**）。对「还没保存」的场景不要做——那需要把明文凭据放进一个新的请求体，
+    多一个凭据入口就多一处泄漏面，收益不抵。
+  - 传输层要暴露一个「只认证、不建长连接」的能力。飞书可以调一次 `tenant_access_token`；
+    钉钉可以只做 `connections/open` 拿到 ticket 就断开（`api/channels/dingtalk/channel.py::_open_connection`
+    已经是独立方法，可直接复用）。**建议在 `WorkerProvider` 上加一个可选的
+    `verify_credential()`**，没实现的 provider 返回「不支持自检」而不是报错。
+  - **必须限流**，否则这是一个用别人租户的凭据去打第三方 API 的放大器。
+- **闸门**：无。纯加法，老前端不调用即可。
+- **验收**：错误凭据在 2 秒内返回带 `error_code` 的失败信封；正确凭据返回成功；
+  日志与响应体里都搜不到凭据值。
+
+### CHN-O7 · 主密钥 keyring 读侧（**风险最高的一条**）
+
+- **问题（已核实）**：`api/channel_control/secret_store.py::AESGCMChannelSecretStore.decrypt`
+  的第一行判断是 `encrypted.key_id != self._cipher.key_id → SecretStoreUnavailable`。
+  也就是说**只有一把活跃密钥**：换掉 `channels.control.secret_encryption_key`，全部租户
+  已存的凭据立刻永久不可解密，**没有回退路径**，只能让每个管理员重新填一遍。
+- **值得做的理由**：这不是功能缺失，是一个**没有安全出口的运维陷阱**。密钥泄漏时正确的
+  反应是轮换，而今天轮换的代价等于全量凭据丢失，等于「泄漏了也不敢换」。
+- **设计要点**：`EncryptedSecret.key_id` **已经存在并已随密文一起存**，所以读侧改造是
+  纯加法：配置从一把密钥变成一个 `key_id -> key` 的映射（外加一个 `active_key_id`），
+  `decrypt` 按密文自带的 `key_id` 选密钥，`encrypt` 永远用 active。**先只做读侧**，
+  重加密（把旧密文迁到新密钥）单独一条，不要合在一起。
+- **闸门**：无。配置向后兼容（单密钥写法要继续能用）。
+- **验收**：用旧密钥加密的密文在配置了新 active 密钥后**仍能解密**；移除某个 key_id 后
+  对应密文报 `CHANNEL_SECRET_STORE_UNAVAILABLE` 而不是静默返回空；测试覆盖「两把密钥
+  并存」这一种状态。
+
+### CHN-O8 · 凭据变更审计轨迹
+
+- **问题**：谁在什么时候换了哪个渠道的密钥，今天查不到。`ChannelSecret.version` 只告诉你
+  换过几次。
+- **设计要点**：只记**事实**不记**内容**——租户、渠道、principal、动作、时间、新版本号。
+  绝不记密钥前缀、长度、哈希以外的任何派生物。
+- **闸门**：无。
+
+### CHN-O9 · binding 级可观测
+
+- **问题**：消息量、丢弃原因（`allowed_sender_ids` 拒绝 / 群聊被 policy 拒 / 去重命中）、
+  时延分位，今天全部只存在于日志行里，没有聚合。
+- **提示**：丢弃分支已经都带结构化 `error_code`，做聚合不需要改业务代码，只需要一个计数器
+  出口。
+
+### CHN-O10 · 自适应轮询（**SSE 已否决，先读 CHN-ADR-02**）
+
+- **问题**：`web:src/hooks/use-channel-request.ts` 的 `refetchInterval: 15 * 1000` 是固定的，
+  渠道停用、页面失焦时照样打。
+- **设计要点**：状态是终态（`stopped` / 无 binding）时停止轮询；`starting` 这类过渡态可以
+  更密；页面不可见时暂停。**不要做 SSE**——心跳 15s、reconcile 10s、状态存在 Postgres 且
+  无 pub/sub，SSE 端点只能自己在服务端轮询那张表，把一次轮询换成两次。
+
+### CHN-O11 · 渠道数配额
+
+- **设计要点**：落点是创建路径上的一次 count + 一个配置值，任何时候都是纯加法。
+- **闸门**：无。
+
+### 还未排期但已知的两条
+
+- **CHN-P12 · 交互式配对（扫码 / OAuth）**：⏸ 明确不做。留缝成本已经付过了——
+  `FormField.kind` 是开放联合、前端渲染未知 kind 为 disabled，将来只是多一个 kind 值
+  加一条回调路由。
+- **CHN-X4 · Go 侧 channel**：⏸ 明确不做。JSON 形状本身就是缝，且已被
+  [CHN-ADR-06](DECISIONS.md) 版本化。要守的是 `api/channel_providers/` 保持纯数据 +
+  pydantic（import-linter 契约与子进程纯度测试已强制）。
 
 ---
 
@@ -404,3 +508,5 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 | 2026-08-06 | **CHN-P10 完成（transport + 注册），依赖问题不存在**。按用户要求先读了上游 ragflow 的实现（`api/channels/dingtalk/channel.py`，423 行）：它**用 aiohttp 手写 DingTalk Stream 协议**——`POST /v1.0/gateway/connections/open` 拿 endpoint + ticket → websocket → 每条 callback 回 ack → 回复发到消息自带的 `sessionWebhook`。**没有引入 `dingtalk-stream`**，而 `aiohttp` 我们早就有。所以我之前提给用户的「加依赖 vs webhook」二选一是个伪命题，第三条路才是对的。目录结构照上游：`api/channels/dingtalk/{__init__,channel,provider}.py`。**没有照抄的三处**：① 上游在 channel 里维护 `_processed_message_ids` / `_inflight_message_ids` 两个进程内去重字典——我们有 Redis `ChannelStateStore` 按 binding 去重，再加一层进程内的会是第二套更弱的机制，去重留在 bridge；② 上游每发一条消息新建一个 `aiohttp.ClientSession`，改成复用；③ 上游 websocket 连接试三种模式（query/header/bare）——保留前两种（endpoint 实测可能自带 query，这是唯一没有真实租户就验不了的地方），去掉 bare，并按我们的结构化日志约定重写全部日志、标识符一律哈希。**安全细节**：`connections/open` 的请求体带 client_secret 而钉钉失败时会回显请求上下文，所以**响应体永不进日志**，只记 status。**一处刻意的行为**：拿不到 chat_id/sender_id/正文时**仍然先 ack 再丢弃**——不 ack 的 callback 会被无限重投，为了一条我们本来就不打算回的消息制造死循环，比丢一次回复糟得多。**新增配置段** `channels.dingtalk`（只有调优项，没有连接凭据：钉钉只走 managed 模式，不像飞书还留了一条读环境配置的 demo 路径）。**两条钉死「只有飞书」的测试按预期红了**，改成从注册表推导而不是换个名字继续钉——`supported_provider_names()` 现在断言「已排序、去重、且与 `provider_names()` 相等」，providers 路由断言「返回顺序 == 注册表顺序」。**验证**：新增 `test_dingtalk_channel.py` **11 条**（callback 归一化、群聊标注、三种不可回答载荷仍被 ack、回复目标来自消息而非 chat_id、畸形信封不进 handler、ticket 拼接保住 endpoint 自带的 query、worker 描述符**只读 generic 凭据**且拿 legacy 对时 fail closed、畸形 allowlist fail closed、租约续租早于过期）；`-k "channel or feishu or binding or dingtalk"` **254 passed**；全量 **6 failed / 1557 passed**（失败集合＝基线）；`ruff` / `lint-imports`(6 kept) / `mypy`(62) / `check_async_sync_db` 全绿；`provider_manifests()` 实测 `['dingtalk', 'feishu']` | 本次提交 | Claude |
 | 2026-08-06 | **CHN-P10 验收：`git diff --stat` 里零个 `web/` 路径**——本条从 spec 到 transport 到注册，web 仓一次提交都没有。前端能渲染钉钉表单这件事由 CHN-X3 那对咬合测试固定（web `d4adb18` 用后端真实 manifest 作 fixture，MR 侧断言同一字面量被 `DingTalkConfigInput` 接受并正确切分）。**至此整个程序的核心命题成立**：第二个 provider 落地，前端零改动。| 本次提交 | Claude |
 | 2026-08-06 | **发现一条与 tolerate/emit 无关的独立闸门**：`supervisor.py:35` 的 `_SUPPORTED_PROVIDERS = frozenset(supported_provider_names())` 是**模块级常量、import 时冻结**。也就是说**注册任何新 provider 都需要重启一次 supervisor**，与契约版本无关。好消息是它 fail-safe 而不是 fail-stop：不认识的 provider 走 `:128` 的 `provider_unsupported` 分支**逐条跳过**，健康的飞书 binding 照常 reconcile（这正是 CHN-S4 逐行降级的形状）。当前跑着的 supervisor 起于 10:30、早于本次注册，所以**它现在会跳过钉钉 binding**——建钉钉渠道前需要再重启一次。没有自作主张再重启：用户只授权了一次，而且目前一个钉钉渠道都还没有 | 本次提交 | Claude |
+| 2026-08-06 | **CHN-P13 完成：provider 可发现性 + 钉钉 i18n**。原交互是「一个新建按钮 → 抽屉里一个下拉」，**页面上没有任何地方告诉用户能接入什么**，答案只有开始创建之后才看得到。改成两段：「已接入渠道（N）」+「可接入渠道」卡片画廊（logo / 名称 / 一句话说明 / 接入按钮 / 已接入数量徽章），点卡片直接带着选中的 provider 打开抽屉。**参照了上游 ragflow 的 UX 形状，但没抄它的数据来源**：上游的 `channelTemplates` 是客户端硬编码的 `ChatChannelKey` 枚举过滤出 7 个——正是这个程序花了 24 个 PR 消灭的模式（provider 的第二个声明点，且是会被忘掉的那个）。我们的画廊完全由 manifest 驱动，服务端注册一个 provider 就自动出现，**只有 logo 是客户端资产**（不认识的 provider 回落到中性图标，与未知 `kind` 渲染成 disabled 同一原则）。**可达性也没抄**：上游把 `onClick` 挂在 `<article>` 上，Tab 到不了、回车不响应；我们用 `<button>`。**服务端加了 `description` + `description_i18n_key`**——描述必须服务端拥有，否则加 provider 又要改前端，CHN-P10 刚证明的那条不变量就破了；前端按 `t(key, {defaultValue: manifest.description})` 消费，本地翻译优先、服务端英文兜底。同批做掉钉钉四个字段的中英文案；locale 里 `providers.<name>` 从字符串改成 `{name, description}`（原来只有 `feishu: '飞书'`，与新的描述块撞键，tsc 直接报 TS1117），`channel-card.tsx` 与抽屉下拉同步改成读 `.name`。**从 ragflow 复制了两个 logo**（`dingtalk.svg` / `feishu.svg` → `web:src/assets/svg/chat-channel/`），只复制已注册的两个而不是全部 21 个——用不上的资产就是死资产，需要时再复制。**验证**：`tsc` / `eslint`（channel 目录 0 error）/ `test:api` **76 passed** / `lint:file-size` / `build` / `check:bundle-size`（入口 gzip 116KB，未增长）全绿、两个棘轮无 diff；后端 `-k "channel or feishu or dingtalk or binding"` **264 passed**、`ruff` / `lint-imports`(6 kept) / `mypy`(62) 全绿 | `3a82e5f6` + web | Claude |
+| 2026-08-06 | **补齐待办任务的执行简报 + 交接说明**。用户要把剩余任务派给「没有任何上下文的我」，原来的任务表只有一句话索引，不够开工。PROGRESS 新增「待办任务简报」一节：CHN-P11 / O6–O11 每条给出**问题（带已核实的证据）/ 为什么值得做 / 闸门 / 验收标准 / 从哪读起**，并写明每条**不该做什么**（例如 CHN-O6 不要给「还没保存」的场景做自检——那需要新开一个明文凭据入口；CHN-O7 先只做读侧，重加密单独排）。核实过的两处新证据： 的  判断确认了**只有一把活跃密钥、轮换即全量不可解**（CHN-O7 的问题陈述）； 的  是固定值（CHN-O10）。README 新增 §3.5「怎么把一条任务派给没有任何上下文的我」：**说 ID 别说需求**，并给了反面例子与四条补充（一次一条、要先复核锚点就明说、涉及重启线上进程的要先问、不确定派哪条就让它读 README 给建议） | 本次提交 | Claude |
