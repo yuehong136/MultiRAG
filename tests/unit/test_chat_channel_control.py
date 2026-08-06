@@ -26,12 +26,18 @@ from api.channel_control.service import (
     ChannelControlService,
     ChannelCredentialUnavailable,
     ChannelTargetNotAccessible,
+    ChannelVerificationInconclusive,
+    ChannelVerificationNotSupported,
+    ChannelVerificationRejected,
+    ChannelVerificationThrottled,
     InvalidChannelConfiguration,
     _contains_sensitive_key,
     _sanitize_public_config,
 )
+from api.channel_control.verification_throttle import VerificationThrottle
 from api.channel_execution.errors import TargetRevisionUnavailableError
 from api.channel_providers import provider_names
+from api.channels.verification import ChannelCredentialRejected, ChannelVerificationUnavailable
 from api.db.db_models import ChannelBinding, ChannelRuntimeStatus, ChannelSecret, ChatChannel
 from common.app_config import get_app_config
 from common.channel_secret_crypto import ChannelSecretCipher
@@ -1179,3 +1185,156 @@ async def test_rotating_the_master_key_keeps_stored_credentials_readable() -> No
     with pytest.raises(ChannelCredentialUnavailable) as captured:
         await retired_for_real.resolve_runtime_binding(binding_id)
     assert captured.value.error_code == "CHANNEL_SECRET_STORE_UNAVAILABLE"
+
+
+# --- credential self-check (CHN-O6) -----------------------------------------
+
+
+class _StubVerifier:
+    """Stands in for one provider's HTTP probe; records what it was handed."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self._error = error
+        self.calls: list[tuple[dict[str, str], dict[str, Any]]] = []
+
+    async def verify_credential(self, *, credential: Mapping[str, str], public_config: Mapping[str, Any]) -> None:
+        self.calls.append((dict(credential), dict(public_config)))
+        if self._error is not None:
+            raise self._error
+
+
+async def _channel_awaiting_verification(
+    monkeypatch: pytest.MonkeyPatch,
+    verifier: object | None,
+) -> tuple[ChannelControlService, FakeRepository, str]:
+    repository = FakeRepository()
+    service = ChannelControlService(repository, FakeSecretStore(), verification_throttle=VerificationThrottle())
+    created = await service.create_channel("tenant-a", _create_request())
+    monkeypatch.setattr("api.channel_control.service.credential_verifier", lambda name: verifier)
+    return service, repository, created["id"]
+
+
+async def test_verify_hands_the_provider_a_whole_credential_and_returns_no_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    verifier = _StubVerifier()
+    service, _, channel_id = await _channel_awaiting_verification(monkeypatch, verifier)
+
+    result = await service.verify_channel_credential("tenant-a", channel_id)
+
+    assert result == {"verified": True, "provider": "feishu"}
+    # Same reassembly the runner gets: the encrypted half plus the non-secret
+    # half that lives in the public config.
+    credential, public_config = verifier.calls[0]
+    assert credential["app_secret"] == "never-return-this-secret"
+    assert credential["app_id"] == "cli_unit"
+    assert "app_secret" not in repr(public_config)
+    assert "never-return-this-secret" not in repr(result)
+
+
+async def test_verify_passes_the_providers_own_rejection_code_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    verifier = _StubVerifier(ChannelCredentialRejected("CHANNEL_CREDENTIAL_INCOMPLETE"))
+    service, _, channel_id = await _channel_awaiting_verification(monkeypatch, verifier)
+
+    with pytest.raises(ChannelVerificationRejected) as captured:
+        await service.verify_channel_credential("tenant-a", channel_id)
+
+    assert captured.value.error_code == "CHANNEL_CREDENTIAL_INCOMPLETE"
+
+
+async def test_verify_reports_an_unreachable_provider_as_inconclusive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The distinction the endpoint lives or dies by.
+
+    Calling a timeout a rejection would send an admin to re-enter a credential
+    that was correct the whole time -- the exact wasted loop CHN-O6 removes.
+    """
+
+    verifier = _StubVerifier(ChannelVerificationUnavailable())
+    service, _, channel_id = await _channel_awaiting_verification(monkeypatch, verifier)
+
+    with pytest.raises(ChannelVerificationInconclusive) as captured:
+        await service.verify_channel_credential("tenant-a", channel_id)
+
+    assert captured.value.error_code == "CHANNEL_VERIFICATION_UNAVAILABLE"
+
+
+async def test_verify_refuses_a_second_attempt_inside_the_cooldown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One request in, one third-party call out -- so it has to be bounded."""
+
+    verifier = _StubVerifier()
+    service, _, channel_id = await _channel_awaiting_verification(monkeypatch, verifier)
+
+    await service.verify_channel_credential("tenant-a", channel_id)
+    with pytest.raises(ChannelVerificationThrottled):
+        await service.verify_channel_credential("tenant-a", channel_id)
+
+    assert len(verifier.calls) == 1
+
+
+async def test_verify_on_a_provider_without_a_probe_says_so_instead_of_failing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Not every transport can cheaply answer this, and that is not an error."""
+
+    service, _, channel_id = await _channel_awaiting_verification(monkeypatch, None)
+
+    with pytest.raises(ChannelVerificationNotSupported) as captured:
+        await service.verify_channel_credential("tenant-a", channel_id)
+
+    assert captured.value.error_code == "CHANNEL_VERIFICATION_NOT_SUPPORTED"
+
+
+async def test_verify_is_tenant_scoped_like_every_other_channel_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    service, _, channel_id = await _channel_awaiting_verification(monkeypatch, _StubVerifier())
+
+    with pytest.raises(ChannelAccessDenied):
+        await service.verify_channel_credential("tenant-b", channel_id)
+
+
+async def test_verify_without_a_stored_credential_is_a_configuration_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    verifier = _StubVerifier()
+    service, repository, channel_id = await _channel_awaiting_verification(monkeypatch, verifier)
+    repository.secrets.pop(channel_id)
+
+    with pytest.raises(InvalidChannelConfiguration):
+        await service.verify_channel_credential("tenant-a", channel_id)
+
+    assert verifier.calls == []
+
+
+def test_throttle_admits_once_per_window_then_reopens() -> None:
+    throttle = VerificationThrottle(cooldown_seconds=10.0)
+
+    assert throttle.admit(tenant_id="tenant-a", channel_id="channel-a", now=100.0) is True
+    assert throttle.admit(tenant_id="tenant-a", channel_id="channel-a", now=105.0) is False
+    # A different channel is a different bucket; one noisy admin must not lock
+    # out everybody else's self-check.
+    assert throttle.admit(tenant_id="tenant-a", channel_id="channel-b", now=105.0) is True
+    assert throttle.admit(tenant_id="tenant-a", channel_id="channel-a", now=111.0) is True
+
+
+def test_verify_route_separates_rejected_from_unreachable_from_throttled(client) -> None:
+    """Three outcomes, three retcodes. Collapsing them re-creates CHN-U1."""
+
+    outcomes = iter(
+        [
+            ChannelVerificationRejected(),
+            ChannelVerificationInconclusive(),
+            ChannelVerificationThrottled(),
+        ]
+    )
+
+    class StubService:
+        async def verify_channel_credential(self, tenant_id: str, channel_id: str) -> dict[str, Any]:
+            del tenant_id, channel_id
+            raise next(outcomes)
+
+    client.app.dependency_overrides[get_channel_control_service] = StubService
+
+    rejected = client.post("/api/v1/chat-channels/channel-1/verify").json()
+    assert rejected["retcode"] == int(RetCode.ARGUMENT_ERROR)
+    assert rejected["data"] == {"error_code": "CHANNEL_CREDENTIAL_REJECTED"}
+
+    inconclusive = client.post("/api/v1/chat-channels/channel-1/verify").json()
+    assert inconclusive["retcode"] == int(RetCode.CONNECTION_ERROR)
+    assert inconclusive["data"] == {"error_code": "CHANNEL_VERIFICATION_UNAVAILABLE"}
+
+    throttled = client.post("/api/v1/chat-channels/channel-1/verify").json()
+    assert throttled["retcode"] == int(RetCode.RESOURCE_EXHAUSTED)
+    assert throttled["data"] == {"error_code": "CHANNEL_VERIFICATION_THROTTLED"}

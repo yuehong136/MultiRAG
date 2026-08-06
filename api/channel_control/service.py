@@ -23,8 +23,10 @@ from api.channel_control.schemas import (
     SecretStatus,
 )
 from api.channel_control.secret_store import EncryptedSecret, SecretStore, SecretStoreUnavailable
+from api.channel_control.verification_throttle import VERIFICATION_THROTTLE, VerificationThrottle
 from api.channel_providers import ProviderSpec, provider_spec, resolve_path
 from api.channel_providers.functions import ProviderConfigInvalid, merge_config_patch, missing_required_fields, split_config, validate_config
+from api.channels.verification import ChannelCredentialRejected, ChannelVerificationUnavailable, credential_verifier
 from api.db.db_models import ChannelBinding, ChannelRuntimeStatus, ChannelSecret, ChatChannel
 from common.app_config import get_app_config
 from common.constants import TenantPermission
@@ -113,6 +115,38 @@ class ChannelTargetNotAccessible(ChannelControlError):
 class ChannelCredentialUnavailable(ChannelControlError):
     def __init__(self) -> None:
         super().__init__("Channel credential encryption is unavailable.", error_code="CHANNEL_SECRET_STORE_UNAVAILABLE")
+
+
+class ChannelVerificationRejected(ChannelControlError):
+    """The provider was asked and said no. A verdict, not a symptom."""
+
+    def __init__(self, error_code: str = "CHANNEL_CREDENTIAL_REJECTED") -> None:
+        super().__init__("The provider rejected this channel credential.", error_code=error_code)
+
+
+class ChannelVerificationInconclusive(ChannelControlError):
+    """The check did not complete, so it says nothing about the credential.
+
+    Separate from rejection deliberately: telling an admin their App Secret is
+    wrong because our egress timed out sends them to re-type a correct value.
+    """
+
+    def __init__(self, error_code: str = "CHANNEL_VERIFICATION_UNAVAILABLE") -> None:
+        super().__init__("The channel credential could not be verified right now.", error_code=error_code)
+
+
+class ChannelVerificationNotSupported(ChannelControlError):
+    """This provider declares no credential probe. Not a failure of the channel."""
+
+    def __init__(self) -> None:
+        super().__init__("This provider does not support credential verification.", error_code="CHANNEL_VERIFICATION_NOT_SUPPORTED")
+
+
+class ChannelVerificationThrottled(ChannelControlError):
+    """Refused to make another outbound call for this channel just yet."""
+
+    def __init__(self) -> None:
+        super().__init__("Channel credential verification was attempted too recently.", error_code="CHANNEL_VERIFICATION_THROTTLED")
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,9 +280,18 @@ def _patch_public_config(spec: ProviderSpec, current: dict[str, Any], patch: Bas
 
 
 class ChannelControlService:
-    def __init__(self, repository: ChannelRepository, secret_store: SecretStore) -> None:
+    def __init__(
+        self,
+        repository: ChannelRepository,
+        secret_store: SecretStore,
+        *,
+        verification_throttle: VerificationThrottle | None = None,
+    ) -> None:
         self._repository = repository
         self._secret_store = secret_store
+        # Process-wide by default: the service itself is built per request, so
+        # a cooldown kept on it would reset on every call and bound nothing.
+        self._verification_throttle = verification_throttle or VERIFICATION_THROTTLE
 
     async def list_channels(self, tenant_id: str) -> dict[str, Any]:
         channels, total = await self._repository.list_channels(tenant_id)
@@ -560,6 +603,63 @@ class ChannelControlService:
             ),
         )
 
+    async def verify_channel_credential(self, tenant_id: str, channel_id: str) -> dict[str, Any]:
+        """Ask the provider whether this channel's stored credential works.
+
+        The request carries no credential and this reads the stored one. A
+        second way to submit a plaintext App Secret would be a second place for
+        one to leak, and it would answer a question about a value nobody saved.
+
+        Without this, the feedback loop for a mistyped secret is: save, enable,
+        wait for the next reconcile, wait for a worker to start, watch the
+        handshake fail, wait for the report, wait for the UI to poll. Every
+        other way to get this form wrong already answers synchronously.
+        """
+
+        channel = await self._require_channel(tenant_id, channel_id)
+        verifier = credential_verifier(channel.channel)
+        if verifier is None:
+            raise ChannelVerificationNotSupported
+        if not self._verification_throttle.admit(tenant_id=tenant_id, channel_id=channel.id):
+            raise ChannelVerificationThrottled
+
+        secret = await self._repository.get_secret(channel.id)
+        if secret is None:
+            raise InvalidChannelConfiguration("The channel credential is not configured.")
+        public_config = _sanitize_public_config(channel.config)
+        credentials, _ = await self._whole_credential(
+            tenant_id=channel.tenant_id,
+            channel_id=channel.id,
+            provider=channel.channel,
+            public_config=public_config,
+            encrypted=EncryptedSecret(ciphertext=secret.ciphertext, key_id=secret.key_id, version=secret.version),
+        )
+
+        try:
+            await verifier.verify_credential(credential=credentials, public_config=public_config)
+        except ChannelCredentialRejected as error:
+            LOGGER.info(
+                "channel_control_event=credential_verified channel_id_hash=%s provider=%s result=rejected error_code=%s",
+                _short_hash(channel.id),
+                channel.channel,
+                error.error_code,
+            )
+            raise ChannelVerificationRejected(error.error_code) from error
+        except ChannelVerificationUnavailable as error:
+            LOGGER.warning(
+                "channel_control_event=credential_verified channel_id_hash=%s provider=%s result=inconclusive error_code=%s",
+                _short_hash(channel.id),
+                channel.channel,
+                error.error_code,
+            )
+            raise ChannelVerificationInconclusive(error.error_code) from error
+        LOGGER.info(
+            "channel_control_event=credential_verified channel_id_hash=%s provider=%s result=ok",
+            _short_hash(channel.id),
+            channel.channel,
+        )
+        return {"verified": True, "provider": channel.channel}
+
     async def list_desired_runtimes(self) -> list[dict[str, Any]]:
         """Return credential-free desired state for the external supervisor."""
 
@@ -598,27 +698,15 @@ class ChannelControlService:
         runtime = await self.load_runtime_binding(binding_id)
         if expected_generation is not None and runtime.generation != expected_generation:
             raise InvalidChannelConfiguration("The channel binding generation is stale.")
-        try:
-            plaintext = await self._secret_store.decrypt(
-                tenant_id=runtime.tenant_id,
-                channel_id=runtime.channel_id,
-                encrypted=runtime.encrypted_secret,
-            )
-        except SecretStoreUnavailable as error:
-            raise ChannelCredentialUnavailable from error
-        credentials = {key: value for key, value in plaintext.items() if isinstance(key, str) and isinstance(value, str)}
-
-        # A provider's credential is split across two stores: the secret half is
-        # encrypted, the non-secret half (an app id, a corp id) legitimately
-        # lives in the public config. Reassemble it here so the worker receives
-        # one credential and never has to know about the split.
+        credentials, has_stored_secret = await self._whole_credential(
+            tenant_id=runtime.tenant_id,
+            channel_id=runtime.channel_id,
+            provider=runtime.provider,
+            public_config=runtime.public_config,
+            encrypted=runtime.encrypted_secret,
+        )
         spec = provider_spec(runtime.provider)
-        for path in sorted(spec.credential_paths - spec.secret_paths):
-            value = resolve_path(runtime.public_config, path)
-            if isinstance(value, str) and value:
-                credentials[path.rsplit(".", 1)[-1]] = value
-
-        missing = missing_required_fields(spec, runtime.public_config, configured_secrets=bool(plaintext))
+        missing = missing_required_fields(spec, runtime.public_config, configured_secrets=has_stored_secret)
         if missing:
             raise InvalidChannelConfiguration("The channel credential is incomplete.")
         return ResolvedRuntimeBindingSpec(
@@ -813,6 +901,41 @@ class ChannelControlService:
                 update={"state": "error", "last_error_code": _REVISION_STALE_ERROR_CODE},
             )
         return response.model_dump(mode="json")
+
+    async def _whole_credential(
+        self,
+        *,
+        tenant_id: str,
+        channel_id: str,
+        provider: str,
+        public_config: Mapping[str, Any],
+        encrypted: EncryptedSecret,
+    ) -> tuple[dict[str, str], bool]:
+        """Decrypt the secret half and fold the non-secret half back in.
+
+        A provider's credential is split across two stores: the secret half is
+        encrypted, the non-secret half (an app id, a corp id) legitimately
+        lives in the public config. Callers get one whole credential and never
+        have to know about the split. The flag reports whether anything was
+        actually stored encrypted, which is not the same question as whether
+        the assembled credential is non-empty.
+        """
+
+        try:
+            plaintext = await self._secret_store.decrypt(
+                tenant_id=tenant_id,
+                channel_id=channel_id,
+                encrypted=encrypted,
+            )
+        except SecretStoreUnavailable as error:
+            raise ChannelCredentialUnavailable from error
+        credentials = {key: value for key, value in plaintext.items() if isinstance(key, str) and isinstance(value, str)}
+        spec = provider_spec(provider)
+        for path in sorted(spec.credential_paths - spec.secret_paths):
+            value = resolve_path(public_config, path)
+            if isinstance(value, str) and value:
+                credentials[path.rsplit(".", 1)[-1]] = value
+        return credentials, bool(plaintext)
 
     async def _require_channel(
         self,

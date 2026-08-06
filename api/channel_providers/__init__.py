@@ -12,6 +12,7 @@ from api.channel_providers.registry import (
     provider_spec,
     provider_specs,
     transport_module,
+    verify_module,
 )
 from api.channel_providers.spec import ProviderCapabilities, ProviderSpec, resolve_path
 
@@ -25,4 +26,5 @@ __all__ = [
     "provider_specs",
     "resolve_path",
     "transport_module",
+    "verify_module",
 ]

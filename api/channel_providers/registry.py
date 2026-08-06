@@ -18,7 +18,7 @@ without paying for that.
 from __future__ import annotations
 
 import importlib
-from typing import Final
+from typing import Final, NamedTuple
 
 from api.channel_providers.spec import ProviderSpec
 
@@ -27,11 +27,37 @@ class UnknownChannelProvider(LookupError):
     """Raised for a provider name that is not registered. Fails closed."""
 
 
-# name -> (spec module, transport module). The spec half is pure pydantic and
-# safe to import anywhere; the transport half is not.
-_PROVIDERS: Final[dict[str, tuple[str, str]]] = {
-    "dingtalk": ("api.channel_providers.dingtalk", "api.channels.dingtalk.provider"),
-    "feishu": ("api.channel_providers.feishu", "api.channels.feishu.provider"),
+class _Registration(NamedTuple):
+    """Where one provider's three halves live, by dotted path.
+
+    ``spec`` is pure pydantic and safe to import anywhere. ``transport`` pulls
+    in an SDK. ``verify`` is the odd one out: it is imported by the *API*
+    process, so it is an SDK-free HTTP probe, and it is optional -- a provider
+    that cannot cheaply answer "is this credential good?" simply omits it.
+
+    "Omitted" is the empty string rather than ``None`` on purpose: this module
+    runs under ``from __future__ import annotations``, so a ``str | None``
+    field here reaches beartype as the *string* ``"str | None"`` and it
+    declines to decorate the whole namedtuple. ``verify_module`` translates
+    back to ``None`` at the boundary, where the annotation is a real object.
+    """
+
+    spec: str
+    transport: str
+    verify: str = ""
+
+
+_PROVIDERS: Final[dict[str, _Registration]] = {
+    "dingtalk": _Registration(
+        spec="api.channel_providers.dingtalk",
+        transport="api.channels.dingtalk.provider",
+        verify="api.channels.dingtalk.verify",
+    ),
+    "feishu": _Registration(
+        spec="api.channel_providers.feishu",
+        transport="api.channels.feishu.provider",
+        verify="api.channels.feishu.verify",
+    ),
 }
 
 
@@ -51,7 +77,7 @@ def provider_spec(name: str) -> ProviderSpec:
     entry = _PROVIDERS.get(name)
     if entry is None:
         raise UnknownChannelProvider(name)
-    spec = getattr(importlib.import_module(entry[0]), "PROVIDER_SPEC", None)
+    spec = getattr(importlib.import_module(entry.spec), "PROVIDER_SPEC", None)
     if not isinstance(spec, ProviderSpec) or spec.name != name:
         raise UnknownChannelProvider(name)
     return spec
@@ -73,4 +99,18 @@ def transport_module(name: str) -> str:
     entry = _PROVIDERS.get(name)
     if entry is None:
         raise UnknownChannelProvider(name)
-    return entry[1]
+    return entry.transport
+
+
+def verify_module(name: str) -> str | None:
+    """Dotted path to a provider's credential probe, or ``None`` if it has none.
+
+    Same string-not-object reason as ``transport_module``, plus one of its own:
+    the probe is optional, and "this provider cannot self-check" has to be
+    expressible without inventing a stub module that always fails.
+    """
+
+    entry = _PROVIDERS.get(name)
+    if entry is None:
+        raise UnknownChannelProvider(name)
+    return entry.verify or None

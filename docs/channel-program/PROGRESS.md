@@ -160,7 +160,7 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 | CHN-O3 | `policy` — **emit 半步** | ✅ | **CHN-O2 已部署到所有 worker** | `service.py:498-531`、`channel_runtime_api.py:72-81` |
 | CHN-O4 | worker 传输层无关化：`FEISHU_WS_STOPPED` → `CHANNEL_TRANSPORT_STOPPED`；`:472` 不再硬编码 `FeishuBindingBridge`；`chat_type != "p2p"` 过滤移到 policy + provider 能力后面 | ✅ | CHN-O3、CHN-P1 | `worker.py:322-329,472-479`、`binding_bridge.py` |
 | CHN-O5 | **supervisor 进 `docker/docker-compose.yml`**。今天 compose 只有 `multirag-cpu`/`multirag-gpu`，默认部署下 channel 功能 100% 不工作且 UI 一个字不说。刻意排在 O2/P4 之后——第一次跑起来的 supervisor 就已经在最新契约上 | ✅ | CHN-P4、CHN-O2 在镜像里 | `docker/docker-compose.yml`、`api/channels/README.md:405-433` |
-| CHN-O6 | 连接自检端点（保存前验证凭据，把数十秒的反馈环压到 2 秒） | ⬜ | CHN-U1 | 未排期 |
+| CHN-O6 | 连接自检端点 `POST /chat-channels/{id}/verify`：用**已存**凭据向 provider 打一次「只认证、不建连」的探针，把数十秒的反馈环压到一次往返。探针是 SDK-free 的 `api/channels/<name>/verify.py`，由 API 进程按名字懒加载 | ✅ | CHN-U1 | `api/channels/verification.py`、`api/channels/{feishu,dingtalk}/verify.py`、`service.py::verify_channel_credential` |
 | CHN-O7 | 主密钥 keyring 读侧：`secret_encryption_key` 由一把变成**有序密钥环**（第 0 把 active 负责加密，其余按 `key_id` 解密自己写下的存量密文）。轮换从「全租户凭据永久不可解密」变成一次前插 + 重启 API | ✅ | — | `common/app_config.py::ChannelControlConfig`、`api/channel_control/secret_store.py::AESGCMChannelSecretStore` |
 | CHN-O8 | 凭据变更审计轨迹 | ⬜ | — | 未排期 |
 | CHN-O9 | binding 级可观测（消息量、丢弃原因、时延分位） | ⬜ | — | 未排期 |
@@ -193,6 +193,7 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 | — | — | CHN-U6 | ✅ | SEC-4 | 无依赖 | 刻意做成纯前端，见阶段 U 的说明 |
 | CHN-P2 | ✅ | CHN-P5 | ✅ | ARCH-6 | 后端先 | manifest 加 `form` 是加法，老前端忽略即可。**兼容窗口已于 CHN-P7 关闭** |
 | CHN-P2 | ✅ | CHN-P7 | ✅ | ARCH-6 | **后端先（硬依赖，已满足：CHN-P2 = `819e7ec2`）** | 全程序唯一一条真跨仓依赖。半态已设计成「降级且可读」：老后端 → `listProviders` 过滤空 → 横幅提示 + 禁用新建，列表/启停/删除照常 |
+| CHN-O6 | ✅ | — | ⬜ | ARCH-6 | 后端先 | **兼容窗口无限期开放**：新端点是纯加法，前端不调用就完全不受影响。前端接的时候要点在 [CONTRACT §1](CONTRACT.md#1-端点清单)：请求体为空、三种失败分开渲染、按 10 秒冷却禁用按钮 |
 
 ---
 
@@ -228,6 +229,7 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 
 ### CHN-O6 · 连接自检端点
 
+- **状态**：✅ 完成（2026-08-06）。**落地与设计要点的一处偏差 + 一处诚实降级**，见本条末尾。
 - **问题**：今天填错 App Secret 的反馈环是**几十秒起步**：保存 → 启用 → 等 supervisor
   下一轮 reconcile（默认 10s）→ worker 起来 → 握手失败 → 上报 → 前端轮询（15s）拿到
   `error`。中间任何一步慢一点，管理员看到的都是「转圈然后不知道为什么不行」。
@@ -245,6 +247,27 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 - **闸门**：无。纯加法，老前端不调用即可。
 - **验收**：错误凭据在 2 秒内返回带 `error_code` 的失败信封；正确凭据返回成功；
   日志与响应体里都搜不到凭据值。
+- **落地补充**：
+  1. **不是加在 `WorkerProvider` 上**（设计要点里建议的位置）。`WorkerProvider` 的解析
+     路径要 import 传输实现，而 `api/channels/feishu/provider.py` 拉的是 lark-oapi ——
+     **它会在 import 时装一个进程级事件循环**，装进 API 进程里正是这个端点想避免的东西。
+     改成一个**平行的可选能力**：`api/channels/<name>/verify.py` 暴露 `CREDENTIAL_VERIFIER`，
+     只用 httpx，由注册表第三个字段按名字懒加载（`api/channels/verification.py`）。
+     顺带把 `api/channels/feishu/__init__.py` 的三个 re-export 删了——它们**零消费方**，
+     却让「碰这个包的任何模块」都等于加载 SDK。钉钉包早就是空的，注释里写着同一条规则。
+     子进程测试钉住：解析出两个 verifier 之后 `sys.modules` 里没有 `lark_oapi`。
+  2. **限流是进程内的，不是全局的**（`api/channel_control/verification_throttle.py`）。
+     每渠道 10 秒冷却，N 个 API worker 就是每窗口最多 N 次。做成 Redis 全局需要给控制面
+     加一个它今天没有的有状态依赖（只有 Postgres），那是另一个决定，不该由这个端点顺手带进来。
+     **这是诚实的降级不是遗漏**：威胁是「拿租户自己的凭据 1:1 转发到第三方」，不是放大器，
+     真正要消灭的是「无上界」，那一条已经消灭了。要收紧就是换掉 `VerificationThrottle` 的
+     实现，服务层已经按接口注入。
+  3. **两种失败必须分开**：`CHANNEL_CREDENTIAL_REJECTED`（provider 说不对）与
+     `CHANNEL_VERIFICATION_UNAVAILABLE`（没查成）。把超时报成「密钥错了」会让管理员去重填
+     一个本来正确的密钥——那正是本条要消灭的浪费。飞书的坑：**密钥错时返回 HTTP 400**，
+     所以判据只能是信封里的 `code`，不能是状态码。
+  4. **只对已保存的渠道可用**。「创建表单里填完就想试」没做：那需要一个接收明文凭据的新入口。
+     §7 的空白因此是**收窄**不是消除，CONTRACT.md 里照这个措辞写了。
 
 ### CHN-O7 · 主密钥 keyring 读侧（**风险最高的一条**）
 
@@ -491,6 +514,10 @@ git log --oneline 8cbaf3a.. -- src/pages/settings/channels src/api/channel.ts sr
 ## `tests/unit` 先天失败基线
 
 2026-08-05 在 `main @ 75f125d5` 实测：**6 failed / 1486 passed / 761.94s**。
+2026-08-06 在 CHN-O6 完工树上复测：**6 failed / 1599 passed / 179.88s**，
+**失败集合与下面这份名单逐条相同**。两个数字都变了而结论没变，正好说明为什么比对的是集合：
+通过数会随新增测试涨（这一天 +113 条），而耗时受机器状态支配（同一台机器同一套测试
+快了 4 倍；本次复测时 `milvus-standalone` 容器恰好是停的，但没有任何测试因此改变结果）。
 
 **比对的是失败集合，不是通过数。** 下面这 6 条与 channel 无关，全是 Windows 上通过 bash
 子进程渲染配置模板导致的环境性失败。改动后出现**不在这个名单里**的失败才是回归：
@@ -579,3 +606,4 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 | 2026-08-06 | **订正 CHN-O7 简报的设计要点**。写简报时我说「配置改成 `key_id -> key` 映射 + `active_key_id`」，后来一条后台跑完的 grep 带回了关键事实：`common/channel_secret_crypto.py:68` 的 `key_id = sha256(key)[:16]` 是**从密钥材料自己派生的**，不是配置项。所以那套映射结构是多余的——配置只要从一把密钥变成一个有序列表，key_id 自动得出、`decrypt` 按密文自带的 key_id 在列表里找即可，改动面小一档。已同步补上「从哪读起」的三个锚点与「单把密钥旧写法必须继续能用」这条验收。**记这一条是因为它正是简报存在的意义**：写错的设计要点会让零上下文接手的人照着走一条不必要的复杂路，而这个错误来自我凭印象补设计而没读 cipher 实现 | 本次提交 | Claude |
 | 2026-08-06 | **CHN-O7 完成：主密钥从一把变成有序密钥环（读侧）**。`ChannelControlConfig.secret_encryption_key` 由 `SecretStr` 改为 `list[SecretStr]`（第 0 把 active 负责加密，其余只解密自己写下的密文），`AESGCMChannelSecretStore.__init__` 改成变参收整个环并按 `key_id` 建查表，`decrypt` 的 `key_id != self._cipher.key_id` 换成 `self._by_key_id.get(...)`。**简报里那两个前提都成立**，所以没发明任何新概念：`key_id` 已随密文入库（`db_models.py:1240`），且它是 `sha256(key)[:16]` 从密钥材料自己派生的，不需要 `key_id -> key` 映射配置。三处判断是我加的、简报里没有：① 环上**任意**一把密钥格式非法 → 整个环退回 `UnavailableSecretStore`（退役密钥打错字是运维错误，不能静默跳过）② 重复 key_id 首个优先 ③ 空条目丢弃。**同时发现并顺手修掉**：空 env 变量经 `yaml.safe_load("")` 变成 `None`，打在 `SecretStr` 上直接 `AppConfigError`——主密钥这一侧已随本条修好，`internal_api_token` 同病未修，已追加 [CHN-O12](#阶段-o--运维能力与运行时诚实)。**验证**：新增 6 条 store 测试（`test_retired_key_left_on_the_ring_still_decrypts_the_rows_it_wrote` / `test_first_key_on_the_ring_is_the_one_that_encrypts` / `test_dropping_a_key_from_the_ring_fails_closed_instead_of_returning_empty` / `test_empty_key_ring_is_rejected_at_construction` / `test_dependency_builds_the_ring_in_configured_order` / `test_dependency_fails_closed_when_any_key_on_the_ring_is_malformed`）+ 4 条配置测试（含 `test_blank_key_material_reads_as_no_key_configured` 参数化 5 种空写法、`test_key_ring_environment_overlay_accepts_a_yaml_sequence` 引号/无引号各一）+ 1 条**服务层端到端**（`test_rotating_the_master_key_keeps_stored_credentials_readable`：真 cipher，建渠道 → 换环 → 仍解得开 → 摘掉旧密钥 → `error_code == "CHANNEL_SECRET_STORE_UNAVAILABLE"`）。**做了变异验证**：把 `decrypt` 临时改回只认 active 密钥，两条环测试如期失败，改回后 10 passed——证明新测试不是空转。全门禁：`ruff format --check`（1166 files）/ `ruff check`（All checks passed）/ `lint-imports`（6 kept, 0 broken）/ `check_async_sync_db`（新增 0）/ `mypy`（62 files, no issues）/ `pytest -k "channel or feishu or dingtalk or config"` **360 passed, 4 failed**——4 条全在[先天失败基线](#testsunit-先天失败基线)名单内（另 2 条名字不含 `config` 未被 `-k` 选中） | 本次提交 | Claude |
 | 2026-08-06 | **CHN-O12 完成：留空的 env 变量不再打死配置加载**。收敛点是 `_Section` 基类上的一个 `mode="before"` model validator——**只把「类型容不下 None」的 `str`/`SecretStr` 字段的 `None` 收成 `""`**，`x \| None` 原样保留。与简报的偏差有两处，都写进了简报末尾的「落地补充」：① 问题不限于 `SecretStr`（`app_id`、`postgresql.password` 这些普通 `str` 一样会被打挂），所以落在基类而不是三个字段；② 判据是**字段类型容不容得下 None**，不是 env 层统一处理——`timeout: float \| None` 这类字段的 `None` 是合法取值，一起收成 `""` 是拿一个 bug 换另一个。**验证**：先把最后一个没实测的环节钉死了——用本地 `alpine` 起一个只含 `- PROBE_EMPTY=${PROBE_SOURCE:-}` 的 compose 服务，容器里该变量**存在且为空串**，所以「默认部署起不来」不是推断而是事实。新增 3 条测试：`test_app_config.py::test_blank_env_value_clears_a_field_instead_of_killing_the_load`（通用规则）、`::test_blank_env_value_leaves_a_nullable_field_null`（边界，`multirag.secret_key` 仍为 `None`）、`test_channel_config.py::test_the_default_docker_deployment_can_boot_with_channel_left_off`（照抄 compose 在 `.env` 没填时的实际两行）。`docker-compose.yml` 里 CHN-O7 那次加的「token 那一侧仍会报错」警告行随本条删除。三个配置测试文件 **91 passed** | 本次提交 | Claude |
+| 2026-08-06 | **CHN-O6 完成：连接自检端点 `POST /chat-channels/{id}/verify`**。请求体为空——检查的是**已存**凭据，多开一个明文凭据入口就多一处泄漏面。**与设计要点的偏差**：没加在 `WorkerProvider` 上。解析 `WorkerProvider` 要 import 传输实现，而飞书那半边拉 lark-oapi，**import 即装进程级事件循环**——把它装进 API 进程正是这个端点要避免的。改成平行的可选能力：`api/channels/<name>/verify.py` 暴露 `CREDENTIAL_VERIFIER`（只用 httpx），注册表加第三个字段按名字懒加载。顺带删掉 `api/channels/feishu/__init__.py` 的三个 re-export（**零消费方**，却让碰这个包的任何模块都等于加载 SDK；钉钉包早就是空的且注释写着同一条规则）。**诚实降级**：限流是进程内每渠道 10 秒冷却，N 个 worker 就是每窗口 N 次；做成 Redis 全局要给控制面加一个它今天没有的有状态依赖，那是另一个决定。**验证**：新增 `test_channel_credential_verify.py` 14 条（飞书判定表 7 条——含「密钥错时飞书返回 HTTP 400，所以只能看信封 `code`」这条坑；钉钉 4 条；注册表 3 条，其中纯度检查跑**子进程**，避免变成「本次测试顺序有没有人先 import 过 SDK」的断言）+ `test_chat_channel_control.py` 新增 9 条（服务层四种结局 + 冷却 + 跨租户 + 无凭据 + 路由三码分流 + 节流器单测）。实跑确认 API 侧解析出两个 verifier 后 `sys.modules` 里没有 `lark_oapi`/`aiohttp`。**顺手修掉一处自己引入的噪声**：注册表的 `_Registration` NamedTuple 用 `str \| None` 字段，在 `from __future__ import annotations` 下会被 beartype 当成前向引用而拒绝装饰整个 namedtuple（每次 import 打一段 traceback 到 stderr）；改用 `""` 哨兵 + 边界翻译，实测警告归零。**全量回归**：`pytest tests/unit` **6 failed / 1599 passed / 179.88s**，失败集合与[先天失败基线](#testsunit-先天失败基线)逐条相同（该节的数字已按本次实测更新）。全门禁绿：`ruff format --check`（1171 files）/ `ruff check` / `lint-imports`（6 kept, 0 broken）/ `check_async_sync_db` / `mypy`（62 files）。**一个门禁没跑成**：`import api.apps` 冒烟需要 Milvus，而 `milvus-standalone` 在本次会话中途自行退出（etcd 租约超时，exit 80，与本批改动无关），已如实记在这里而不是当作跑过 | 本次提交 | Claude |

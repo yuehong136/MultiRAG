@@ -1,6 +1,6 @@
 # Channel 前后端契约
 
-> **契约版本**：`channel-api/v1` · **最后变更**：2026-08-05 · **变更提交**：`cdc09928`
+> **契约版本**：`channel-api/v1` · **最后变更**：2026-08-06 · **变更提交**：见文末变更日志
 >
 > 本文件是 channel 前后端接口的**唯一真源**。前端仓不得保存第二份契约描述。
 > 契约变更 = 改本文件 + 在本文件末尾的变更日志追加一行
@@ -41,11 +41,25 @@
 | PUT | `/chat-channels/{id}/binding` | 只改绑定目标 | `channelAPI.putBinding` | v1 ⚠️ |
 | POST | `/chat-channels/{id}/enable` | 启用 binding | `channelAPI.enable` | v1 |
 | POST | `/chat-channels/{id}/disable` | 停用 binding | `channelAPI.disable` | v1 |
+| POST | `/chat-channels/{id}/verify` | 用**已存**凭据向 provider 做一次连接自检 | 尚未接入 | v1 |
 | GET | `/chat-channels/{id}/runtime` | 脱敏后的运行状态 | `channelAPI.runtime` | v1 |
 
 ⚠️ **`PUT /{id}/binding` 在前端是死代码**：`channelAPI.putBinding` 有定义、无生产调用点，
 而且 `channel.test.ts:219,252` 两处**主动断言 `putCalled === false`**。所有绑定修改都被塞进
 PATCH，导致改一次绑定必须连带重发整个 `config`。→ 见 §6-C。
+
+**`POST /{id}/verify`（CHN-O6）后端已上线、前端未接**。这是[跨仓部署顺序](README.md#5-跨仓部署顺序硬规则)
+里正常且安全的中间态。要点：
+
+- **请求体为空**。被检查的是服务端已存的凭据，不是请求里带来的。多开一个明文
+  App Secret 的入口就多一处泄漏面，而且它回答的是「一个还没保存的值好不好用」。
+  因此**只对已存在的渠道可用**，「还没保存就想试一下」不在这条的范围内。
+- 成功：`data = {"verified": true, "provider": "<name>"}`。
+- 失败：走标准错误信封，四个新错误码见 §4.1。**`CHANNEL_CREDENTIAL_REJECTED`
+  与 `CHANNEL_VERIFICATION_UNAVAILABLE` 必须分开渲染**——前者是「凭据错了，去改」，
+  后者是「这次没查成，凭据可能没问题」。混成一句文案会让管理员去重填一个本来正确的密钥。
+- 有**每渠道冷却**（默认 10 秒），超出返回 `CHANNEL_VERIFICATION_THROTTLED`（retcode 107）。
+  前端接的时候按钮要按这个禁用，不要靠用户自觉。
 
 ---
 
@@ -149,6 +163,11 @@ RuntimeState = Literal["waiting", "starting", "connected", "stopping", "stopped"
 | `CHANNEL_TARGET_NOT_ACCESSIBLE` | 101 ARGUMENT_ERROR | `ChannelTargetNotAccessible`（CHN-S5）：看得见该目标，但无权把它发布到外部渠道 | 联系目标所属团队的管理员 |
 | `INVALID_CHANNEL_CONFIGURATION` | 101 ARGUMENT_ERROR | `InvalidChannelConfiguration`：缺凭据、无绑定、版本过期、目标不可用、同账号已有启用渠道 | 按 `retmsg` 补齐配置 |
 | `CHANNEL_SECRET_STORE_UNAVAILABLE` | 105 CONNECTION_ERROR | `ChannelCredentialUnavailable`：密钥库不可用 | **联系运维**，不是管理员能修的 |
+| `CHANNEL_CREDENTIAL_REJECTED` | 101 ARGUMENT_ERROR | `ChannelVerificationRejected`（CHN-O6）：provider 明确说这份凭据不对 | 重填凭据 |
+| `CHANNEL_CREDENTIAL_INCOMPLETE` | 101 ARGUMENT_ERROR | 同上，但缺的是字段本身（自检在发请求前就拦下了） | 补齐缺的字段 |
+| `CHANNEL_VERIFICATION_UNAVAILABLE` | 105 CONNECTION_ERROR | `ChannelVerificationInconclusive`（CHN-O6）：**没查成**，不是凭据错了 | 稍后重试；持续如此联系运维查出网 |
+| `CHANNEL_VERIFICATION_NOT_SUPPORTED` | 101 ARGUMENT_ERROR | 该 provider 没有自检探针 | 不是错误；照常保存并看运行状态 |
+| `CHANNEL_VERIFICATION_THROTTLED` | 107 RESOURCE_EXHAUSTED | 距上次自检不足冷却时间 | 等几秒再点 |
 | `CHANNEL_OPERATION_FAILED` | 100 EXCEPTION_ERROR | `_respond` 的兜底分支 | 联系运维并提供操作时间 |
 
 兜底分支**也有码**，否则最可能到达管理员的那类失败反而是唯一没有可映射文案的。
@@ -282,7 +301,7 @@ JSON Schema（`config_schema`）仅用于服务端请求校验与 OpenAPI，**�
 |---|---|---|
 | supervisor 存活性没有任何信号 | supervisor 没跑时 `_serialize_runtime` 返回 `waiting`/`null`/`null`，**与「正在拉起」逐字节相同**。而 `docker/docker-compose.yml` 里压根没有 supervisor 服务——按默认方式部署，channel 功能 100% 不工作且 UI 一个字不说 | CHN-O5（先补 compose，这是主因）；存活信号的缝是 `ChannelRuntimeResponse` 上一个可空字段，随时可加 |
 | `revision_stale` 只是提示，不是故障态 | 绑定的 Agent 发布新版本后，`executors.py:40-58` 会让**每条**消息失败，而管理页仍显示 `connected` / `last_error_code=null` | CHN-O1 |
-| 保存前无法验证凭据 | 唯一验证路径是保存 → 启用 → 等一轮 reconcile → 读一个不透明错误码 | CHN-O6 |
+| ~~保存前无法验证凭据~~ | 已由 `POST /{id}/verify` 填上（后端已上线、前端未接，见 §1）。**残留的空白**：只能检查**已保存**的渠道，创建表单里「填完就想试」仍然没有——那需要一个接收明文凭据的入口，收益不抵新增的泄漏面 | CHN-O6 ✅ |
 | 无 binding 级指标 | 「机器人在线但不回消息」无法定位 | CHN-O9 |
 | 无凭据变更审计 | 「谁在什么时候把这个渠道关了」答不出来 | CHN-O8 |
 
@@ -301,3 +320,4 @@ JSON Schema（`config_schema`）仅用于服务端请求校验与 OpenAPI，**�
 | 2026-08-06 | v1（加法，不 bump） | 运行时错误码 `FEISHU_WS_STOPPED` → `CHANNEL_TRANSPORT_STOPPED`（CHN-O4），§4.2 已改。**不算破坏性**：`last_error_code` 一直是自由字符串（`str | None`，无 Literal），前端本来就原样渲染未映射的大写码，两侧都不需要协调 | 本次提交 |
 | 2026-08-06 | v1（加法，不 bump） | `GET /chat-channels/providers` 现在返回**两个** manifest（`dingtalk`、`feishu`，按注册表顺序）。**这是本程序的核心验收，不是普通加法**：钉钉的 spec / transport / 注册全在后端，`git diff --stat` 里零个 `web/` 路径，前端不重新部署即可渲染并保存。四个字段用的都是既有 kind，所以 `form.version` 保持 1 | 本次提交 |
 | 2026-08-06 | v1（加法，不 bump） | manifest 新增 `description` 与 `description_i18n_key`（CHN-P13），供客户端列出「还没接入的 provider」。**向后兼容**：两个字段都可选，老前端忽略；老后端不发时新前端渲染没有副标题的卡片，而不是渲染不出来 | `3a82e5f6` |
+| 2026-08-06 | v1（加法，不 bump） | 新增 `POST /chat-channels/{id}/verify`（CHN-O6）与五个错误码（§4.1）。**向后兼容**：新端点，老前端不调用即可；错误码只出现在这条新路径上，其它端点的信封一个字节没动。§7 那条「保存前无法验证凭据」的空白随之收窄——**只**收窄到「已保存的渠道」，创建表单里的即时试连仍然不做，理由写在 §1 与 §7 | 本次提交 |

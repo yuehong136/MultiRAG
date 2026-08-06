@@ -23,6 +23,8 @@ from api.channel_control.service import (
     ChannelControlError,
     ChannelControlService,
     ChannelCredentialUnavailable,
+    ChannelVerificationInconclusive,
+    ChannelVerificationThrottled,
 )
 from api.utils.api_utils import Principal, async_current_user, get_json_result
 from common.constants import RetCode
@@ -55,6 +57,22 @@ async def _respond(operation: Callable[[], Awaitable[ResultT]]):
     except ChannelCredentialUnavailable as error:
         return get_json_result(
             retcode=RetCode.CONNECTION_ERROR,
+            retmsg=error.safe_message,
+            data={"error_code": error.error_code},
+        )
+    except ChannelVerificationInconclusive as error:
+        # Not an argument error: the credential may be perfectly good and the
+        # probe simply could not reach the provider. Mapping this to the same
+        # code as a rejection is what would make an admin re-enter a working
+        # secret, which is the failure this endpoint exists to prevent.
+        return get_json_result(
+            retcode=RetCode.CONNECTION_ERROR,
+            retmsg=error.safe_message,
+            data={"error_code": error.error_code},
+        )
+    except ChannelVerificationThrottled as error:
+        return get_json_result(
+            retcode=RetCode.RESOURCE_EXHAUSTED,
             retmsg=error.safe_message,
             data={"error_code": error.error_code},
         )
@@ -156,6 +174,17 @@ async def disable_chat_channel(
     user: Principal = Depends(async_current_user),
 ):
     return await _respond(lambda: service.set_enabled(user.id, channel_id, enabled=False))
+
+
+@router.post("/chat-channels/{channel_id}/verify", summary="Check a saved channel credential against its provider")
+async def verify_chat_channel_credential(
+    channel_id: str,
+    service: ChannelControlService = Depends(get_channel_control_service),
+    user: Principal = Depends(async_current_user),
+):
+    # No request body on purpose: the credential being checked is the stored
+    # one. See ChannelControlService.verify_channel_credential.
+    return await _respond(lambda: service.verify_channel_credential(user.id, channel_id))
 
 
 @router.get("/chat-channels/{channel_id}/runtime", summary="Get sanitized channel runtime state")
