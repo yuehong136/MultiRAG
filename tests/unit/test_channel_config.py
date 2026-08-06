@@ -30,6 +30,10 @@ def conf_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[Calla
     reset_app_config()
 
 
+def _encoded_key() -> str:
+    return base64.urlsafe_b64encode(os.urandom(32)).decode("ascii")
+
+
 def _enabled_feishu_config() -> dict[str, object]:
     return {
         "enabled": True,
@@ -186,9 +190,8 @@ class TestChannelControlConfig:
     def test_default_is_disabled_by_empty_typed_secrets(self) -> None:
         control = AppConfig().channels.control
 
-        assert isinstance(control.secret_encryption_key, SecretStr)
         assert isinstance(control.internal_api_token, SecretStr)
-        assert control.secret_encryption_key.get_secret_value() == ""
+        assert control.secret_encryption_key == []
         assert control.internal_api_token.get_secret_value() == ""
         assert control.runtime_api_base_url == ""
         assert control.session_ttl_seconds == 86_400
@@ -207,7 +210,7 @@ class TestChannelControlConfig:
             }
         )
 
-        assert config.channels.control.secret_encryption_key.get_secret_value() == encoded_key
+        assert [key.get_secret_value() for key in config.channels.control.secret_encryption_key] == [encoded_key]
         assert config.channels.control.internal_api_token.get_secret_value() == "i" * 32
         assert encoded_key not in repr(config)
 
@@ -218,6 +221,31 @@ class TestChannelControlConfig:
     def test_rejects_invalid_encryption_key(self, encoded_key: str) -> None:
         with pytest.raises(ValidationError, match=r"channels\.control\.secret_encryption_key"):
             AppConfig.model_validate({"channels": {"control": {"secret_encryption_key": encoded_key}}})
+
+    def test_rejects_invalid_key_anywhere_on_the_ring(self) -> None:
+        """一把坏的退役密钥不能被静默跳过——它是配置错误，必须报出来。"""
+        with pytest.raises(ValidationError, match=r"channels\.control\.secret_encryption_key"):
+            AppConfig.model_validate({"channels": {"control": {"secret_encryption_key": [_encoded_key(), "not-base64!"]}}})
+
+    def test_key_ring_keeps_configured_order_with_active_key_first(self) -> None:
+        active_key, retired_key = _encoded_key(), _encoded_key()
+
+        control = AppConfig.model_validate({"channels": {"control": {"secret_encryption_key": [active_key, retired_key]}}}).channels.control
+
+        assert [key.get_secret_value() for key in control.secret_encryption_key] == [active_key, retired_key]
+        assert active_key not in repr(control)
+        assert retired_key not in repr(control)
+
+    @pytest.mark.parametrize("configured", [None, "", "   ", [], ["", "  "]])
+    def test_blank_key_material_reads_as_no_key_configured(self, configured: object) -> None:
+        """``MULTIRAG_...__SECRET_ENCRYPTION_KEY=`` 经 YAML 解析后是 None，不能炸配置加载。
+
+        docker-compose 默认就把这个变量设成空串（``${CHANNEL_SECRET_ENCRYPTION_KEY:-}``），
+        语义是「不启用 channel」，不是「配置非法」。
+        """
+        control = AppConfig.model_validate({"channels": {"control": {"secret_encryption_key": configured}}}).channels.control
+
+        assert control.secret_encryption_key == []
 
     def test_rejects_short_internal_api_token(self) -> None:
         with pytest.raises(ValidationError, match=r"channels\.control\.internal_api_token"):
@@ -241,15 +269,30 @@ class TestChannelControlConfig:
             AppConfig.model_validate({"channels": {"control": {"runtime_api_base_url": url}}})
 
     def test_control_environment_overlay(self, conf_dir: Callable[[str, str], None], monkeypatch: pytest.MonkeyPatch) -> None:
-        encoded_key = base64.urlsafe_b64encode(os.urandom(32)).decode("ascii")
+        encoded_key = _encoded_key()
         conf_dir(SERVICE_CONF, "{}\n")
         monkeypatch.setenv("MULTIRAG_CHANNELS__CONTROL__SECRET_ENCRYPTION_KEY", encoded_key)
         monkeypatch.setenv("MULTIRAG_CHANNELS__CONTROL__INTERNAL_API_TOKEN", "t" * 32)
 
         control = load_app_config().channels.control
 
-        assert control.secret_encryption_key.get_secret_value() == encoded_key
+        assert [key.get_secret_value() for key in control.secret_encryption_key] == [encoded_key]
         assert control.internal_api_token.get_secret_value() == "t" * 32
+
+    @pytest.mark.parametrize("quote", ["", '"'])
+    def test_key_ring_environment_overlay_accepts_a_yaml_sequence(self, quote: str, conf_dir: Callable[[str, str], None], monkeypatch: pytest.MonkeyPatch) -> None:
+        """env 只能传字符串，所以密钥环走 YAML flow sequence。
+
+        引号可加可不加：URL-safe base64 的 ``-`` / ``_`` / ``=`` 在 flow 上下文里都是
+        合法的 plain scalar 字符。两种写法都钉住，免得以后有人「顺手加引号」时踩空。
+        """
+        active_key, retired_key = _encoded_key(), _encoded_key()
+        conf_dir(SERVICE_CONF, "{}\n")
+        monkeypatch.setenv("MULTIRAG_CHANNELS__CONTROL__SECRET_ENCRYPTION_KEY", f"[{quote}{active_key}{quote}, {quote}{retired_key}{quote}]")
+
+        control = load_app_config().channels.control
+
+        assert [key.get_secret_value() for key in control.secret_encryption_key] == [active_key, retired_key]
 
 
 class TestFeishuEnvironmentOverlay:
@@ -295,7 +338,7 @@ class TestChannelConfigMasking:
                 },
                 "control": {
                     "internal_api_token": "internal-token-plaintext",
-                    "secret_encryption_key": "encryption-key-plaintext",
+                    "secret_encryption_key": ["encryption-key-plaintext", "retired-key-plaintext"],
                 },
             }
         }
@@ -308,7 +351,10 @@ class TestChannelConfigMasking:
         assert masked["channels"]["feishu"]["agent_api_token"] == "********"
         assert masked["channels"]["feishu"]["app_id"] == "cli_demo"
         assert masked["channels"]["control"]["internal_api_token"] == "********"
+        # 密钥环是列表，脱敏按键名整体替换——列表里的每一把都不能漏出去
         assert masked["channels"]["control"]["secret_encryption_key"] == "********"
+        assert "encryption-key-plaintext" not in serialized
+        assert "retired-key-plaintext" not in serialized
         assert "app-secret-plaintext" not in serialized
         assert "api-token-plaintext" not in serialized
         assert "agent-token-plaintext" not in serialized

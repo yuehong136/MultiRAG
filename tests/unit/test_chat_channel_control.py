@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -18,7 +19,7 @@ from api.channel_control.schemas import (
     FeishuConfigInput,
     FeishuConfigPatch,
 )
-from api.channel_control.secret_store import EncryptedSecret, SecretStoreUnavailable, UnavailableSecretStore
+from api.channel_control.secret_store import AESGCMChannelSecretStore, EncryptedSecret, SecretStoreUnavailable, UnavailableSecretStore
 from api.channel_control.service import (
     _REVISION_STALE_ERROR_CODE,
     ChannelAccessDenied,
@@ -33,6 +34,7 @@ from api.channel_execution.errors import TargetRevisionUnavailableError
 from api.channel_providers import provider_names
 from api.db.db_models import ChannelBinding, ChannelRuntimeStatus, ChannelSecret, ChatChannel
 from common.app_config import get_app_config
+from common.channel_secret_crypto import ChannelSecretCipher
 from common.constants import RetCode
 
 
@@ -1142,3 +1144,38 @@ async def test_unavailable_store_protocol_does_not_decrypt() -> None:
             channel_id="channel-a",
             encrypted=EncryptedSecret(ciphertext="cipher", key_id="key", version=1),
         )
+
+
+async def test_rotating_the_master_key_keeps_stored_credentials_readable() -> None:
+    """CHN-O7 end to end, on the real cipher rather than the fake store.
+
+    Rotation used to mean every tenant re-enters every credential, so the
+    honest advice was "never rotate" -- which is not advice you can follow
+    after a leak. A row remembers which key wrote it, so keeping the retired
+    key on the ring keeps that row readable while new writes move to the new
+    key. Dropping the retired key for real must fail closed with an error
+    code, not hand a runner an empty credential.
+    """
+
+    retired = ChannelSecretCipher(os.urandom(32))
+    repository = FakeRepository()
+    repository.dialogs.add(("tenant-a", "dialog-1"))
+
+    before_rotation = ChannelControlService(repository, AESGCMChannelSecretStore(retired))
+    created = await before_rotation.create_channel("tenant-a", _create_request(chat_id="dialog-1"))
+    await before_rotation.upsert_binding(
+        "tenant-a",
+        created["id"],
+        ChannelBindingUpsertRequest(target_type="multirag.dialog", target_id="dialog-1"),
+    )
+    enabled = await before_rotation.set_enabled("tenant-a", created["id"], enabled=True)
+    binding_id = enabled["binding"]["id"]
+
+    rotated = ChannelControlService(repository, AESGCMChannelSecretStore(ChannelSecretCipher(os.urandom(32)), retired))
+    resolved = await rotated.resolve_runtime_binding(binding_id)
+    assert resolved.credentials["app_secret"] == "never-return-this-secret"
+
+    retired_for_real = ChannelControlService(repository, AESGCMChannelSecretStore(ChannelSecretCipher(os.urandom(32))))
+    with pytest.raises(ChannelCredentialUnavailable) as captured:
+        await retired_for_real.resolve_runtime_binding(binding_id)
+    assert captured.value.error_code == "CHANNEL_SECRET_STORE_UNAVAILABLE"

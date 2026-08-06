@@ -161,11 +161,12 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 | CHN-O4 | worker 传输层无关化：`FEISHU_WS_STOPPED` → `CHANNEL_TRANSPORT_STOPPED`；`:472` 不再硬编码 `FeishuBindingBridge`；`chat_type != "p2p"` 过滤移到 policy + provider 能力后面 | ✅ | CHN-O3、CHN-P1 | `worker.py:322-329,472-479`、`binding_bridge.py` |
 | CHN-O5 | **supervisor 进 `docker/docker-compose.yml`**。今天 compose 只有 `multirag-cpu`/`multirag-gpu`，默认部署下 channel 功能 100% 不工作且 UI 一个字不说。刻意排在 O2/P4 之后——第一次跑起来的 supervisor 就已经在最新契约上 | ✅ | CHN-P4、CHN-O2 在镜像里 | `docker/docker-compose.yml`、`api/channels/README.md:405-433` |
 | CHN-O6 | 连接自检端点（保存前验证凭据，把数十秒的反馈环压到 2 秒） | ⬜ | CHN-U1 | 未排期 |
-| CHN-O7 | 主密钥 keyring 读侧（今天丢钥 = 全租户凭据永久不可解密，且无回退路径） | ⬜ | — | 未排期 |
+| CHN-O7 | 主密钥 keyring 读侧：`secret_encryption_key` 由一把变成**有序密钥环**（第 0 把 active 负责加密，其余按 `key_id` 解密自己写下的存量密文）。轮换从「全租户凭据永久不可解密」变成一次前插 + 重启 API | ✅ | — | `common/app_config.py::ChannelControlConfig`、`api/channel_control/secret_store.py::AESGCMChannelSecretStore` |
 | CHN-O8 | 凭据变更审计轨迹 | ⬜ | — | 未排期 |
 | CHN-O9 | binding 级可观测（消息量、丢弃原因、时延分位） | ⬜ | — | 未排期 |
 | CHN-O10 | 自适应轮询（**SSE 已否决**，见 `CHN-ADR-02`） | ⬜ | — | 未排期 |
 | CHN-O11 | 渠道数配额 | ⬜ | — | 未排期 |
+| CHN-O12 | 空 env 变量把 `SecretStr` 配置项打成 `None` → 配置加载直接抛 `AppConfigError`。**默认 docker 部署今天起不来**（CHN-O7 已修掉主密钥那一侧，`internal_api_token` 那一侧还在） | ⬜ | — | `common/app_config.py::ChannelControlConfig.internal_api_token`、`docker/docker-compose.yml:81-84` |
 
 ---
 
@@ -244,6 +245,7 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 
 ### CHN-O7 · 主密钥 keyring 读侧（**风险最高的一条**）
 
+- **状态**：✅ 完成（2026-08-06）。**落地与计划一致**，两处补充写在本条末尾。
 - **问题（已核实）**：`api/channel_control/secret_store.py::AESGCMChannelSecretStore.decrypt`
   的第一行判断是 `encrypted.key_id != self._cipher.key_id → SecretStoreUnavailable`。
   也就是说**只有一把活跃密钥**：换掉 `channels.control.secret_encryption_key`，全部租户
@@ -265,6 +267,44 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 - **验收**：用旧密钥加密的密文在新密钥成为 active 之后**仍能解密**；从列表里移掉某把
   密钥后，对应密文报 `CHANNEL_SECRET_STORE_UNAVAILABLE` 而不是静默返回空；测试覆盖
   「两把密钥并存」这一种状态；**单把密钥的既有配置写法不改也能启动**。
+- **落地补充（写给后来人）**：
+  1. **不是试解密循环**。密钥环是 `key_id -> cipher` 的一次查表——每行密文都存了写它
+     那把密钥的指纹（`ChannelSecret.key_id`，`db_models.py:1240`），错的密钥根本不会被
+     尝试。这也是「读侧」能这么便宜的原因。
+  2. **环上任意一把密钥格式非法 = 整个环被拒**（fail closed，退回 `UnavailableSecretStore`），
+     不是跳过坏的那把。退役密钥打错字是运维错误，必须报出来。
+  3. **存量密文的迁移路径已经存在但是被动的**：`service.py:347-350` 在管理员**重新保存
+     凭据**时会用 active 密钥重写 `ciphertext` + `key_id`。所以「重加密」那条后续任务要做的
+     是批量主动版本，不是从零发明机制。
+  4. **顺手修掉了空 env 变量炸配置加载**——见 [CHN-O12](#阶段-o--运维能力与运行时诚实)，
+     那条只剩 `internal_api_token` 一侧。
+
+### CHN-O12 · 空 env 变量把配置加载打死（**默认 docker 部署起不来**）
+
+- **问题（已实测复现）**：`_coerce_env_value` 用 `yaml.safe_load` 解析 env 值，而
+  `yaml.safe_load("") is None`。于是 `MULTIRAG_CHANNELS__CONTROL__INTERNAL_API_TOKEN=`
+  这种「留空表示不启用」的写法，进到 `SecretStr` 字段上是 `None` → `ValidationError`
+  → `AppConfigError`，**进程根本起不来**。复现（两步就是 `load_app_config` 的全部）：
+
+  ```python
+  merged = {}; os.environ["MULTIRAG_CHANNELS__CONTROL__INTERNAL_API_TOKEN"] = ""
+  _apply_env_overlay(merged)          # -> {'channels': {'control': {'internal_api_token': None}}}
+  AppConfig.model_validate(merged)    # -> channels.control.internal_api_token <- Input should be a valid string
+  ```
+
+- **为什么值得做**：`docker/docker-compose.yml` 对 `multirag-cpu`/`multirag-gpu` 写的正是
+  `=${CHANNEL_INTERNAL_API_TOKEN:-}`，注释还明说「两个都留空 = channel 不工作」——
+  **意图是禁用，实际是崩溃**。不启用 channel 的用户是绝大多数，他们撞上的是一条与
+  channel 毫无关系的启动失败。supervisor 容器那段 `:257` 更是**故意**把主密钥设成空。
+- **闸门**：无。纯放宽校验。
+- **改哪里**：`ChannelControlConfig.internal_api_token` 加一个 `mode="before"` 的
+  validator 把 `None` 收成 `""`（`secret_encryption_key` 已在 CHN-O7 这么做了，抄它即可）。
+  **先查一遍还有没有别的 `SecretStr` 字段吃同一套 env 覆盖**——`grep -n "SecretStr" common/app_config.py`，
+  这不是 channel 独有的坑。
+- **验收**：`MULTIRAG_CHANNELS__CONTROL__INTERNAL_API_TOKEN=` 空串下 `load_app_config()`
+  正常返回且该字段为 `""`；新增测试覆盖「空 env 变量 = 未配置」而不是 `AppConfigError`。
+- **别做的事**：不要把 `_coerce_env_value` 改成「空串不覆盖」——那会让「用 env 显式清空
+  一个 yaml 里配了值的字段」这条既有能力消失，副作用比问题大。
 
 ### CHN-O8 · 凭据变更审计轨迹
 
@@ -464,7 +504,7 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 | ID | 问题 | 需要谁定 |
 |---|---|---|
 | CHN-Q1 | 第三个 provider 是不是企业微信？它的 `connection_type` 判别式分支会逼出 `visible_when` 与 number 控件，届时 `FormField` 需要扩展 | 产品 |
-| CHN-Q2 | 阶段 O 里 O6–O11 的相对优先级（连接自检 / keyring / 审计 / 可观测 / 轮询 / 配额） | 产品 + 运维 |
+| CHN-Q2 | 阶段 O 里剩余条目的相对优先级（连接自检 O6 / 审计 O8 / 可观测 O9 / 轮询 O10 / 配额 O11 / 空 env 崩溃 O12）。keyring 已于 2026-08-06 落地，不在此列 | 产品 + 运维 |
 
 ---
 
@@ -518,3 +558,4 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 | 2026-08-06 | **CHN-P13 完成：provider 可发现性 + 钉钉 i18n**。原交互是「一个新建按钮 → 抽屉里一个下拉」，**页面上没有任何地方告诉用户能接入什么**，答案只有开始创建之后才看得到。改成两段：「已接入渠道（N）」+「可接入渠道」卡片画廊（logo / 名称 / 一句话说明 / 接入按钮 / 已接入数量徽章），点卡片直接带着选中的 provider 打开抽屉。**参照了上游 ragflow 的 UX 形状，但没抄它的数据来源**：上游的 `channelTemplates` 是客户端硬编码的 `ChatChannelKey` 枚举过滤出 7 个——正是这个程序花了 24 个 PR 消灭的模式（provider 的第二个声明点，且是会被忘掉的那个）。我们的画廊完全由 manifest 驱动，服务端注册一个 provider 就自动出现，**只有 logo 是客户端资产**（不认识的 provider 回落到中性图标，与未知 `kind` 渲染成 disabled 同一原则）。**可达性也没抄**：上游把 `onClick` 挂在 `<article>` 上，Tab 到不了、回车不响应；我们用 `<button>`。**服务端加了 `description` + `description_i18n_key`**——描述必须服务端拥有，否则加 provider 又要改前端，CHN-P10 刚证明的那条不变量就破了；前端按 `t(key, {defaultValue: manifest.description})` 消费，本地翻译优先、服务端英文兜底。同批做掉钉钉四个字段的中英文案；locale 里 `providers.<name>` 从字符串改成 `{name, description}`（原来只有 `feishu: '飞书'`，与新的描述块撞键，tsc 直接报 TS1117），`channel-card.tsx` 与抽屉下拉同步改成读 `.name`。**从 ragflow 复制了两个 logo**（`dingtalk.svg` / `feishu.svg` → `web:src/assets/svg/chat-channel/`），只复制已注册的两个而不是全部 21 个——用不上的资产就是死资产，需要时再复制。**验证**：`tsc` / `eslint`（channel 目录 0 error）/ `test:api` **76 passed** / `lint:file-size` / `build` / `check:bundle-size`（入口 gzip 116KB，未增长）全绿、两个棘轮无 diff；后端 `-k "channel or feishu or dingtalk or binding"` **264 passed**、`ruff` / `lint-imports`(6 kept) / `mypy`(62) 全绿 | `3a82e5f6` + web | Claude |
 | 2026-08-06 | **补齐待办任务的执行简报 + 交接说明**。用户要把剩余任务派给「没有任何上下文的我」，而原来的任务表只有一句话索引，不够开工。PROGRESS 新增「待办任务简报」一节：CHN-P11 / O6–O11 每条给出**问题（带已核实的证据）/ 为什么值得做 / 闸门 / 验收标准 / 从哪读起**，并写明每条**不该做什么**（例如 CHN-O6 不要给「还没保存」的场景做自检——那需要新开一个明文凭据入口，多一处泄漏面不抵收益；CHN-O7 先只做读侧，重加密单独排一条）。**两处证据是现查的不是回忆的**：`secret_store.py` 的 `decrypt` 第一行判断 `encrypted.key_id != self._cipher.key_id` 就报 `SecretStoreUnavailable`，确认了**只有一把活跃密钥、轮换即全量凭据永久不可解**——所以 CHN-O7 是个「泄漏了也不敢换」的运维陷阱，不是缺功能；`web:use-channel-request.ts` 的 `refetchInterval` 是固定 15 秒，与渠道状态和页面可见性无关，那是 CHN-O10 的全部主题。README 新增 §3.5「怎么把一条任务派给没有任何上下文的我」：**说 ID，别说需求**——复述背景反而危险，因为复述的是作者记忆里的仓库状态，而文档跟的是它现在的状态。附反面例子与四条补充：一次只派一条（任务间有闸门依赖）、要先复核锚点就明说、涉及重启线上进程的先问、不确定派哪条就让我读 README 给建议 | 本次提交 | Claude |
 | 2026-08-06 | **订正 CHN-O7 简报的设计要点**。写简报时我说「配置改成 `key_id -> key` 映射 + `active_key_id`」，后来一条后台跑完的 grep 带回了关键事实：`common/channel_secret_crypto.py:68` 的 `key_id = sha256(key)[:16]` 是**从密钥材料自己派生的**，不是配置项。所以那套映射结构是多余的——配置只要从一把密钥变成一个有序列表，key_id 自动得出、`decrypt` 按密文自带的 key_id 在列表里找即可，改动面小一档。已同步补上「从哪读起」的三个锚点与「单把密钥旧写法必须继续能用」这条验收。**记这一条是因为它正是简报存在的意义**：写错的设计要点会让零上下文接手的人照着走一条不必要的复杂路，而这个错误来自我凭印象补设计而没读 cipher 实现 | 本次提交 | Claude |
+| 2026-08-06 | **CHN-O7 完成：主密钥从一把变成有序密钥环（读侧）**。`ChannelControlConfig.secret_encryption_key` 由 `SecretStr` 改为 `list[SecretStr]`（第 0 把 active 负责加密，其余只解密自己写下的密文），`AESGCMChannelSecretStore.__init__` 改成变参收整个环并按 `key_id` 建查表，`decrypt` 的 `key_id != self._cipher.key_id` 换成 `self._by_key_id.get(...)`。**简报里那两个前提都成立**，所以没发明任何新概念：`key_id` 已随密文入库（`db_models.py:1240`），且它是 `sha256(key)[:16]` 从密钥材料自己派生的，不需要 `key_id -> key` 映射配置。三处判断是我加的、简报里没有：① 环上**任意**一把密钥格式非法 → 整个环退回 `UnavailableSecretStore`（退役密钥打错字是运维错误，不能静默跳过）② 重复 key_id 首个优先 ③ 空条目丢弃。**同时发现并顺手修掉**：空 env 变量经 `yaml.safe_load("")` 变成 `None`，打在 `SecretStr` 上直接 `AppConfigError`——主密钥这一侧已随本条修好，`internal_api_token` 同病未修，已追加 [CHN-O12](#阶段-o--运维能力与运行时诚实)。**验证**：新增 6 条 store 测试（`test_retired_key_left_on_the_ring_still_decrypts_the_rows_it_wrote` / `test_first_key_on_the_ring_is_the_one_that_encrypts` / `test_dropping_a_key_from_the_ring_fails_closed_instead_of_returning_empty` / `test_empty_key_ring_is_rejected_at_construction` / `test_dependency_builds_the_ring_in_configured_order` / `test_dependency_fails_closed_when_any_key_on_the_ring_is_malformed`）+ 4 条配置测试（含 `test_blank_key_material_reads_as_no_key_configured` 参数化 5 种空写法、`test_key_ring_environment_overlay_accepts_a_yaml_sequence` 引号/无引号各一）+ 1 条**服务层端到端**（`test_rotating_the_master_key_keeps_stored_credentials_readable`：真 cipher，建渠道 → 换环 → 仍解得开 → 摘掉旧密钥 → `error_code == "CHANNEL_SECRET_STORE_UNAVAILABLE"`）。**做了变异验证**：把 `decrypt` 临时改回只认 active 密钥，两条环测试如期失败，改回后 10 passed——证明新测试不是空转。全门禁：`ruff format --check`（1166 files）/ `ruff check`（All checks passed）/ `lint-imports`（6 kept, 0 broken）/ `check_async_sync_db`（新增 0）/ `mypy`（62 files, no issues）/ `pytest -k "channel or feishu or dingtalk or config"` **360 passed, 4 failed**——4 条全在[先天失败基线](#testsunit-先天失败基线)名单内（另 2 条名字不含 `config` 未被 `-k` 选中） | 本次提交 | Claude |

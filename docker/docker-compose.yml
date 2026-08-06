@@ -78,6 +78,8 @@ services:
 
       # Channel 控制面。两个都留空 = 内部私有路由关闭 = channel 不工作，
       # 这也是不启用 channel profile 时的默认状态。主密钥只出现在这里。
+      # 主密钥是**有序密钥环**：轮换是 [新密钥, 旧密钥]，不是原地替换（api/channels/README.md）。
+      # ⚠️ 留空目前只有密钥这一侧真的等于「关闭」；token 那一侧留空会让配置加载报错（CHN-O12）。
       - MULTIRAG_CHANNELS__CONTROL__SECRET_ENCRYPTION_KEY=${CHANNEL_SECRET_ENCRYPTION_KEY:-}
       - MULTIRAG_CHANNELS__CONTROL__INTERNAL_API_TOKEN=${CHANNEL_INTERNAL_API_TOKEN:-}
 
@@ -167,6 +169,8 @@ services:
 
       # Channel 控制面。两个都留空 = 内部私有路由关闭 = channel 不工作，
       # 这也是不启用 channel profile 时的默认状态。主密钥只出现在这里。
+      # 主密钥是**有序密钥环**：轮换是 [新密钥, 旧密钥]，不是原地替换（api/channels/README.md）。
+      # ⚠️ 留空目前只有密钥这一侧真的等于「关闭」；token 那一侧留空会让配置加载报错（CHN-O12）。
       - MULTIRAG_CHANNELS__CONTROL__SECRET_ENCRYPTION_KEY=${CHANNEL_SECRET_ENCRYPTION_KEY:-}
       - MULTIRAG_CHANNELS__CONTROL__INTERNAL_API_TOKEN=${CHANNEL_INTERNAL_API_TOKEN:-}
 

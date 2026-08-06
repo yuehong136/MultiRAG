@@ -367,7 +367,10 @@ class FeishuChannelConfig(_Section):
 class ChannelControlConfig(_Section):
     """Channel 控制面与独立 Runtime 的进程级安全配置。"""
 
-    secret_encryption_key: SecretStr = SecretStr("")
+    # 主密钥是一个**有序密钥环**：第 0 把是 active（负责加密新凭据），其余只用于解密
+    # 存量密文。轮换 = 把新密钥插到最前面、旧密钥留在后面，而不是原地替换（CHN-O7）。
+    # 单把密钥的标量写法继续有效，等价于长度为 1 的密钥环。
+    secret_encryption_key: list[SecretStr] = []
     internal_api_token: SecretStr = SecretStr("")
     runtime_api_base_url: str = ""
     reconcile_interval_seconds: PositiveInt = 10
@@ -380,18 +383,38 @@ class ChannelControlConfig(_Section):
     def validate_runtime_api_base_url(cls, value: str) -> str:
         return _validate_http_origin(value, "runtime_api_base_url")
 
+    @field_validator("secret_encryption_key", mode="before")
+    @classmethod
+    def lift_secret_encryption_key_ring(cls, value: Any) -> Any:
+        """把标量写法升成单元素密钥环；空值（含设成空串的 env 变量）视为未配置。
+
+        ``MULTIRAG_CHANNELS__CONTROL__SECRET_ENCRYPTION_KEY=`` 这种「留空表示不启用」的
+        写法（docker-compose 的默认状态）经 YAML 标量解析后是 ``None``，这里必须接住。
+        """
+        if value is None:
+            return []
+        if isinstance(value, str | SecretStr):
+            return [value]
+        return value
+
     @field_validator("secret_encryption_key")
     @classmethod
-    def validate_secret_encryption_key(cls, value: SecretStr) -> SecretStr:
-        """非空主密钥必须是 URL-safe base64 编码的 32 字节随机值。"""
-        encoded = value.get_secret_value().strip()
-        if not encoded:
-            return value
-        try:
-            decode_channel_secret_key(encoded)
-        except ChannelSecretCipherError as exc:
-            raise ValueError("secret_encryption_key must be URL-safe base64") from exc
-        return SecretStr(encoded)
+    def validate_secret_encryption_key(cls, value: list[SecretStr]) -> list[SecretStr]:
+        """每把非空主密钥都必须是 URL-safe base64 编码的 32 字节随机值。
+
+        空串条目直接丢弃（等价于没写），顺序保持不变——调用方依赖第 0 把是 active。
+        """
+        keys: list[SecretStr] = []
+        for item in value:
+            encoded = item.get_secret_value().strip()
+            if not encoded:
+                continue
+            try:
+                decode_channel_secret_key(encoded)
+            except ChannelSecretCipherError as exc:
+                raise ValueError("secret_encryption_key must be URL-safe base64") from exc
+            keys.append(SecretStr(encoded))
+        return keys
 
     @field_validator("internal_api_token")
     @classmethod

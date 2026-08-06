@@ -67,10 +67,28 @@ class UnavailableSecretStore:
 
 
 class AESGCMChannelSecretStore:
-    """Adapter over MultiRAG's row-bound AES-256-GCM credential cipher."""
+    """Adapter over MultiRAG's row-bound AES-256-GCM credential cipher.
 
-    def __init__(self, cipher: ChannelSecretCipher) -> None:
-        self._cipher = cipher
+    Holds an ordered key ring rather than one cipher. The first key is active
+    and encrypts every new row; every key still on the ring can decrypt the
+    rows it wrote. That is what makes rotating the master key survivable:
+    put the new key in front, leave the retired one behind it, and credentials
+    stored under the retired key keep opening instead of becoming unreadable.
+
+    Rows carry the fingerprint of the key that wrote them, so this is a lookup
+    and not a trial-decryption loop -- a wrong key never even gets attempted.
+    """
+
+    def __init__(self, *ciphers: ChannelSecretCipher) -> None:
+        if not ciphers:
+            raise SecretStoreUnavailable("channel credential encryption is unavailable")
+        self._cipher = ciphers[0]
+        by_key_id: dict[str, ChannelSecretCipher] = {}
+        for cipher in ciphers:
+            # First occurrence wins so a duplicated key cannot displace the
+            # active one as the answer for its own fingerprint.
+            by_key_id.setdefault(cipher.key_id, cipher)
+        self._by_key_id = by_key_id
 
     async def encrypt(
         self,
@@ -103,10 +121,11 @@ class AESGCMChannelSecretStore:
         channel_id: str,
         encrypted: EncryptedSecret,
     ) -> Mapping[str, str]:
-        if encrypted.version < 1 or encrypted.key_id != self._cipher.key_id:
+        cipher = self._by_key_id.get(encrypted.key_id)
+        if encrypted.version < 1 or cipher is None:
             raise SecretStoreUnavailable("channel credential decryption is unavailable")
         try:
-            return self._cipher.decrypt(
+            return cipher.decrypt(
                 tenant_id=tenant_id,
                 channel_id=channel_id,
                 ciphertext=encrypted.ciphertext,
@@ -121,12 +140,15 @@ _UNAVAILABLE_SECRET_STORE = UnavailableSecretStore()
 def get_channel_secret_store() -> SecretStore:
     """Build the configured store, failing closed when no master key exists."""
 
-    encoded_key = get_app_config().channels.control.secret_encryption_key.get_secret_value()
-    if not encoded_key:
+    encoded_keys = [key.get_secret_value() for key in get_app_config().channels.control.secret_encryption_key]
+    if not encoded_keys:
         return _UNAVAILABLE_SECRET_STORE
     try:
-        return AESGCMChannelSecretStore(ChannelSecretCipher.from_base64_key(encoded_key))
+        ciphers = [ChannelSecretCipher.from_base64_key(encoded_key) for encoded_key in encoded_keys]
     except ChannelSecretCipherError:
         # AppConfig validates the same key shape. Keep this defensive boundary
-        # non-sensitive in case a custom configuration source bypasses it.
+        # non-sensitive in case a custom configuration source bypasses it, and
+        # reject the whole ring rather than half of it: a malformed retired key
+        # is an operator error that must surface, not be silently skipped.
         return _UNAVAILABLE_SECRET_STORE
+    return AESGCMChannelSecretStore(*ciphers)

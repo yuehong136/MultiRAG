@@ -211,8 +211,9 @@ sh scripts/init_channel_secrets.example.sh
 写入位置（可用 `MULTIRAG_SECRETS_DIR` 覆盖）：Windows 是
 `%LOCALAPPDATA%\MultiRAG\secrets\`（ACL 收紧到当前用户），macOS/Linux 是
 `${XDG_CONFIG_HOME:-$HOME/.config}/multirag/secrets/`（目录 `0700`、文件 `0600`）。
-脚本默认**拒绝覆盖已存在的 `api.env`**——主密钥没有重加密流程，覆盖等于让所有已存凭据
-永久无法解密，确需轮换时才显式加 `-Force` / `--force`。
+脚本默认**拒绝覆盖已存在的 `api.env`**——它写的是单把密钥，覆盖等于把旧密钥从环上抹掉，
+所有已存凭据永久无法解密。要轮换请手工把新密钥**插到列表最前面并保留旧密钥**
+（见下方「主密钥是一个有序密钥环」）；`-Force` / `--force` 是覆盖，不是轮换。
 
 生成的密钥请立即备份到密码管理器或 secret manager。仍可手工生成：
 
@@ -248,7 +249,7 @@ sh scripts/run_channel_supervisor.example.sh
 
 | 环境变量 | MultiRAG API | Supervisor/child worker | 说明 |
 |---|---:|---:|---|
-| `MULTIRAG_CHANNELS__CONTROL__SECRET_ENCRYPTION_KEY` | 必需 | 禁止 | AES-256-GCM 主密钥；必须稳定保存，当前没有自动轮换/重加密流程 |
+| `MULTIRAG_CHANNELS__CONTROL__SECRET_ENCRYPTION_KEY` | 必需 | 禁止 | AES-256-GCM 主密钥**环**（见下）；必须稳定保存，仍无存量密文自动重加密 |
 | `MULTIRAG_CHANNELS__CONTROL__INTERNAL_API_TOKEN` | 必需 | supervisor 必需；child 自动派生 | API 与 supervisor 共享主 workload token；supervisor 为每个 child 派生仅限 binding + generation 的 token，不把主 token 传给 child |
 | `MULTIRAG_CHANNELS__CONTROL__RUNTIME_API_BASE_URL` | 可选 | 必需 | API origin；远程必须 HTTPS，同机开发可用 `http://127.0.0.1:8123` |
 | `MULTIRAG_CHANNELS__CONTROL__RECONCILE_INTERVAL_SECONDS` | 可选 | 可选 | desired-state 对账间隔，默认 10 秒 |
@@ -262,6 +263,32 @@ API 进程示例（值仅表示由 secret manager 注入）：
 MULTIRAG_CHANNELS__CONTROL__SECRET_ENCRYPTION_KEY=<persistent-key-from-secret-manager>
 MULTIRAG_CHANNELS__CONTROL__INTERNAL_API_TOKEN=<shared-workload-token>
 ```
+
+#### 主密钥是一个有序密钥环（CHN-O7）
+
+`SECRET_ENCRYPTION_KEY` 收的是**列表**：**第 0 把是 active**，负责加密新凭据；其余的只
+用于解密它们各自写下的存量密文（每行密文都存了写它那把密钥的指纹 `ChannelSecret.key_id`，
+所以这是一次查表，不是逐把试解）。**轮换 = 前插新密钥、旧密钥留在后面**，而不是原地替换。
+
+单把密钥的标量写法完全不变，等价于长度为 1 的密钥环。列表写法：
+
+```yaml
+# configs/*.yaml —— 只是示意形状；主密钥不能写进配置文件，理由见上一节
+channels:
+  control:
+    secret_encryption_key:
+      - <new-active-key>
+      - <previous-key-still-decrypting-old-rows>
+```
+
+```text
+# env 只能传字符串，所以走 YAML flow sequence（引号可加可不加）
+MULTIRAG_CHANNELS__CONTROL__SECRET_ENCRYPTION_KEY=[<new-active-key>, <previous-key>]
+```
+
+留空（含 `...SECRET_ENCRYPTION_KEY=` 这种空串写法）= 未配置 = 控制面 fail closed，
+不是配置非法。环上**任意一把**密钥格式不合法则整个环被拒绝——退役密钥打错字是运维
+错误，必须报出来，不能被静默跳过。
 
 Supervisor 进程示例：
 
@@ -472,7 +499,9 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
   短期 delegated token；child token 虽已缩小作用域，仍由该主 token 确定性派生。
 - 飞书用户尚未正式映射为 MultiRAG 用户 Principal。
 - 尚未实现基于 `RunContext.principal` 的用户级 MCP/SQL 授权。
-- 主加密密钥尚无在线轮换和存量密文重加密流程；不得直接替换旧 key。
+- 主加密密钥支持在线轮换（密钥环，见上），但**没有存量密文重加密流程**：旧密文要靠旧
+  密钥留在环上才读得到，只有该渠道下次保存新凭据时才会改用 active 密钥重写。因此
+  **仍然不得直接替换旧 key**——替换 ≠ 轮换。
 - 当前只支持飞书私聊文本，不支持群聊、卡片流式、图片、文件或语音。
 
 因此，生产 binding 仍应绑定只读、最小权限的 Agent/Dialog；涉及副作用的 MCP 工具必须
@@ -489,6 +518,10 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
 - MultiRAG API/Redis 不可用：停止执行，不能降级到进程内无状态模式。
 - internal token 轮换：协调更新 API 和 supervisor，并重启 supervisor；旧 child 派生 token
   会立即失效并由 supervisor 重建。
+- 主加密密钥轮换：把新密钥插到 `SECRET_ENCRYPTION_KEY` 列表**最前面**、旧密钥留在后面，
+  重启 API 即可（只有 API 持有主密钥，supervisor/worker 不受影响）。新凭据用新密钥加密，
+  存量密文继续由旧密钥解密。确认没有旧密钥的密文了，才能把旧密钥从列表里摘掉——
+  摘早了那些渠道会直接报 `CHANNEL_SECRET_STORE_UNAVAILABLE`。
 - 主加密密钥丢失：现有飞书凭据无法恢复；必须从 secret manager 备份恢复或重新录入。
 
 ### 一次性升级代价：Redis 命名空间 v1 → v2（CHN-S3）
