@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
-from api.channel_providers import provider_specs
+from api.channel_providers import is_registered, provider_names, provider_specs
 from api.channel_providers.feishu import (
     FeishuConfigInput,
     FeishuConfigPatch,
@@ -27,7 +27,27 @@ __all__ = [
     "ProviderCapabilities",
 ]
 
-ChannelProvider = Literal["feishu"]
+
+def _registered_provider(name: str) -> str:
+    """Fail closed on a provider nobody declared.
+
+    Was ``Literal["feishu"]``, which meant adding a provider required editing
+    the control plane's request schema -- one of the places that gets
+    forgotten, and the reason "multi-provider" was true of the registry and
+    false of the API. The registry is the single list now; this reads it.
+
+    Only requests are validated this way. Responses keep a plain ``str``: a
+    stored row must stay readable even if its provider is later unregistered,
+    or a deregistration would make existing channels unfetchable rather than
+    merely unstartable.
+    """
+
+    if not is_registered(name):
+        raise ValueError(f"unknown channel provider: expected one of {', '.join(provider_names())}")
+    return name
+
+
+ChannelProvider = Annotated[str, Field(min_length=1, max_length=64), AfterValidator(_registered_provider)]
 ChannelTargetType = Literal["multirag.canvas_agent", "multirag.dialog"]
 SUPPORTED_TARGET_TYPES: frozenset[str] = frozenset({"multirag.canvas_agent", "multirag.dialog"})
 
@@ -55,7 +75,10 @@ class ChannelCreateRequest(BaseModel):
 
     name: str = Field(min_length=1, max_length=128)
     channel: ChannelProvider
-    config: FeishuConfigInput = Field(default_factory=FeishuConfigInput)
+    # An open object here, parsed by the provider's own model in the service
+    # layer (`validate_config`). Naming one provider's model at this level is
+    # what made every other provider's credentials get silently dropped.
+    config: dict[str, Any] = Field(default_factory=dict)
     chat_id: str | None = Field(default=None, min_length=1, max_length=32)
     binding: ChannelBindingUpsertRequest | None = None
     status: Literal[0, 1] = 0
@@ -73,7 +96,9 @@ class ChannelUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     name: str | None = Field(default=None, min_length=1, max_length=128)
-    config: FeishuConfigPatch | None = None
+    # A PATCH body carries no provider name -- only the stored row knows which
+    # one this is -- so the dispatch cannot happen here. See `validate_config`.
+    config: dict[str, Any] | None = None
     chat_id: str | None = Field(default=None, min_length=1, max_length=32)
     binding: ChannelBindingUpsertRequest | None = None
     status: Literal[0, 1] | None = None
@@ -129,7 +154,7 @@ class ChatChannelResponse(BaseModel):
     id: str
     tenant_id: str
     name: str
-    channel: ChannelProvider
+    channel: str
     config: dict[str, Any]
     chat_id: str | None
     status: int
@@ -156,7 +181,7 @@ class ProviderManifest(BaseModel):
     the pair cannot drift into disagreeing about what a provider accepts.
     """
 
-    provider: ChannelProvider
+    provider: str
     display_name: str
     capabilities: ProviderCapabilities
     form: ProviderForm

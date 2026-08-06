@@ -8,12 +8,41 @@ meaning "edit the control plane".
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, SecretStr, ValidationError
 
 from api.channel_providers.spec import ProviderSpec
+
+
+class ProviderConfigInvalid(ValueError):
+    """A config payload the declaring provider refuses.
+
+    Carries only field locations and pydantic's own messages -- never the
+    submitted values. ``ValidationError.errors()`` includes an ``input`` key,
+    and echoing it would put a rejected ``app_secret`` straight into an API
+    error body and the logs that carry it.
+    """
+
+
+def validate_config(spec: ProviderSpec, payload: Mapping[str, Any], *, partial: bool = False) -> BaseModel:
+    """Parse a raw config payload with the model its provider declares.
+
+    The request models cannot do this themselves: a PATCH body says nothing
+    about which provider it is for -- only the stored row knows -- so the type
+    on the wire is an open object and the real check happens here, dispatched
+    on the provider. Strictness is unchanged; it just stopped being one
+    provider's model hardcoded into the control plane's request schema.
+    """
+
+    model = spec.config_patch_model if partial else spec.config_model
+    try:
+        return model.model_validate(dict(payload))
+    except ValidationError as error:
+        details = "; ".join(f"{'.'.join(str(part) for part in item['loc']) or '(root)'}: {item['msg']}" for item in error.errors())
+        raise ProviderConfigInvalid(f"{spec.name}: {details}") from None
 
 
 def _leaf(path: str) -> str:

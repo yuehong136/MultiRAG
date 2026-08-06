@@ -30,6 +30,7 @@ from api.channel_control.service import (
     _sanitize_public_config,
 )
 from api.channel_execution.errors import TargetRevisionUnavailableError
+from api.channel_providers import provider_names
 from api.db.db_models import ChannelBinding, ChannelRuntimeStatus, ChannelSecret, ChatChannel
 from common.app_config import get_app_config
 from common.constants import RetCode
@@ -661,6 +662,85 @@ async def test_a_runner_policy_is_the_stored_one_and_still_carries_no_credential
     enabled = await service.set_enabled("tenant-a", created["id"], enabled=True)
     resolved = await service.resolve_runtime_binding(enabled["binding"]["id"])
     assert resolved.policy == {"private_chat_only": True, "locale": "zh-CN"}
+
+
+def test_an_unregistered_provider_is_refused_by_the_registry_not_by_a_literal() -> None:
+    """CHN-P9: the request schema reads the registry instead of naming feishu.
+
+    The old `Literal["feishu"]` meant adding a provider required editing the
+    control plane's request model -- one of the places that gets forgotten,
+    and the reason "multi-provider" was true of the registry and false of the
+    API.
+    """
+
+    with pytest.raises(ValidationError, match="unknown channel provider"):
+        ChannelCreateRequest.model_validate({"name": "Demo", "channel": "wecom", "config": {}})
+
+    # Every registered name is accepted without listing any of them here.
+    for name in provider_names():
+        parsed = ChannelCreateRequest.model_validate(
+            {
+                "name": "Demo",
+                "channel": name,
+                "config": {},
+            }
+        )
+        assert parsed.channel == name
+
+
+async def test_a_rejected_config_names_the_field_and_never_echoes_the_value() -> None:
+    """The error body and the logs behind it must not carry a rejected secret.
+
+    ``ValidationError.errors()`` carries an ``input`` key, so the obvious
+    implementation -- forwarding pydantic's message verbatim -- would put a
+    submitted ``app_secret`` into an API response.
+    """
+
+    repository = FakeRepository()
+    service = ChannelControlService(repository, FakeSecretStore())
+
+    with pytest.raises(InvalidChannelConfiguration) as caught:
+        await service.create_channel(
+            "tenant-a",
+            ChannelCreateRequest.model_validate(
+                {
+                    "name": "Demo",
+                    "channel": "feishu",
+                    "config": {
+                        "credential": {"app_id": "cli_unit", "app_secret": "never-return-this-secret"},
+                        "domain": "not-a-real-domain",
+                    },
+                }
+            ),
+        )
+
+    message = str(caught.value)
+    assert "domain" in message
+    assert "never-return-this-secret" not in message
+    assert "not-a-real-domain" not in message
+
+
+async def test_a_patch_is_validated_against_the_stored_channel_provider() -> None:
+    """A PATCH body carries no provider name; only the row knows which it is."""
+
+    repository = FakeRepository()
+    service = ChannelControlService(repository, FakeSecretStore())
+    created = await service.create_channel("tenant-a", _create_request())
+
+    with pytest.raises(InvalidChannelConfiguration, match="feishu"):
+        await service.update_channel(
+            "tenant-a",
+            created["id"],
+            ChannelUpdateRequest.model_validate({"config": {"domain": "not-a-real-domain"}}),
+        )
+
+    # A well-formed patch still merges, so the open type did not weaken anything.
+    updated = await service.update_channel(
+        "tenant-a",
+        created["id"],
+        ChannelUpdateRequest.model_validate({"config": {"domain": "lark"}}),
+    )
+    assert updated["config"]["domain"] == "lark"
 
 
 async def test_runtime_bundle_and_heartbeat_are_internal_and_generation_fenced() -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -23,7 +24,7 @@ from api.channel_control.schemas import (
 )
 from api.channel_control.secret_store import EncryptedSecret, SecretStore, SecretStoreUnavailable
 from api.channel_providers import ProviderSpec, provider_spec, resolve_path
-from api.channel_providers.functions import merge_config_patch, missing_required_fields, split_config
+from api.channel_providers.functions import ProviderConfigInvalid, merge_config_patch, missing_required_fields, split_config, validate_config
 from api.db.db_models import ChannelBinding, ChannelRuntimeStatus, ChannelSecret, ChatChannel
 from common.app_config import get_app_config
 from common.constants import TenantPermission
@@ -220,6 +221,22 @@ def _account_identity(channel: ChatChannel) -> str | None:
     return _spec_for(channel).account_identity(_sanitize_public_config(channel.config))
 
 
+def _parse_config(spec: ProviderSpec, payload: Mapping[str, Any], *, partial: bool = False) -> BaseModel:
+    """Validate a raw config body against the model its provider declares.
+
+    Surfaces as ``INVALID_CHANNEL_CONFIGURATION`` rather than a bare 422: the
+    request models can no longer type this field (a PATCH body does not say
+    which provider it is for), and the client already renders that code as a
+    real message. The wrapped error names field locations only, never the
+    submitted values.
+    """
+
+    try:
+        return validate_config(spec, payload, partial=partial)
+    except ProviderConfigInvalid as error:
+        raise InvalidChannelConfiguration(str(error)) from None
+
+
 def _create_public_config(spec: ProviderSpec, config: BaseModel) -> tuple[dict[str, Any], dict[str, str] | None]:
     return split_config(spec, config)
 
@@ -245,7 +262,7 @@ class ChannelControlService:
     async def create_channel(self, tenant_id: str, request: ChannelCreateRequest) -> dict[str, Any]:
         channel_id = get_uuid()
         spec = provider_spec(request.channel)
-        public_config, plaintext = _create_public_config(spec, request.config)
+        public_config, plaintext = _create_public_config(spec, _parse_config(spec, request.config))
         binding_request = request.binding
         if binding_request is None and request.chat_id is not None:
             binding_request = ChannelBindingUpsertRequest(
@@ -311,7 +328,8 @@ class ChannelControlService:
             if request.name is not None:
                 channel.name = request.name
             if request.config is not None:
-                public, plaintext, config_changed = _patch_public_config(_spec_for(channel), channel.config, request.config)
+                spec = _spec_for(channel)
+                public, plaintext, config_changed = _patch_public_config(spec, channel.config, _parse_config(spec, request.config, partial=True))
                 if config_changed:
                     channel.config = public
                     runtime_changed = True
