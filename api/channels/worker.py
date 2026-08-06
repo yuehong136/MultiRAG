@@ -16,9 +16,10 @@ from typing import Protocol, runtime_checkable
 
 from redis.asyncio import Redis
 
+from api.channel_providers import provider_spec
 from api.channel_runtime.schemas import RuntimeState
 from api.channels.agent_bridge import FeishuAgentBridge, MultiRAGAgentClient
-from api.channels.binding_bridge import FeishuBindingBridge
+from api.channels.binding_bridge import BindingBridge
 from api.channels.core.base import IncomingMessage, MessageHandler
 from api.channels.provider import ChannelWorkerError, supported_provider_names, worker_provider
 from api.channels.runtime_client import ChannelRuntimeClient, MultiRAGBindingExecutionClient
@@ -323,8 +324,12 @@ class ChannelWorker:
         await asyncio.sleep(_CHANNEL_MONITOR_INTERVAL_SECONDS)
         while True:
             if not self._channel.is_running:
-                LOGGER.error("channel_event=ws_stopped result=failed error_code=FEISHU_WS_STOPPED")
-                self._request_stop("FEISHU_WS_STOPPED")
+                # Provider-neutral: this monitor watches the `Channel`
+                # protocol, which every provider implements over its own
+                # transport. A code naming one of them would be wrong on the
+                # first channel that is not a Feishu websocket.
+                LOGGER.error("channel_event=transport_stopped result=failed error_code=CHANNEL_TRANSPORT_STOPPED")
+                self._request_stop("CHANNEL_TRANSPORT_STOPPED")
                 return
             await asyncio.sleep(_CHANNEL_MONITOR_INTERVAL_SECONDS)
 
@@ -476,14 +481,19 @@ async def _run_managed_channel(
             total_timeout_seconds=tuning.total_timeout_seconds,
             max_answer_chars=tuning.max_answer_chars,
         )
-        bridge = FeishuBindingBridge(
+        bridge = BindingBridge(
             channel=channel,
             executor=execution_client,
             state_store=state_store,
             binding_id=binding_id,
-            allowed_open_ids=set(plan.allowed_sender_ids),
+            allowed_sender_ids=set(plan.allowed_sender_ids),
             max_question_chars=tuning.max_question_chars,
-            private_chat_only=runtime.private_chat_only,
+            # Two independent gates, and the narrower one wins. The admin can
+            # only widen down to what the provider can actually carry: a
+            # provider without group support must ignore group traffic no
+            # matter what the policy says, or the bot would read messages it
+            # has no way to answer.
+            private_chat_only=runtime.private_chat_only or not provider_spec(provider.name).capabilities.group_chat,
         )
         worker = ChannelWorker(
             provider_name=provider.name,

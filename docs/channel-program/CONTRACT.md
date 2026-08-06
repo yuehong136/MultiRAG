@@ -172,7 +172,7 @@ grep -rhoE '(ChannelWorkerError|_request_stop|error_code=)\("?[A-Z][A-Z0-9_]{2,6
 |---|---|---|
 | `LEADER_LEASE_HELD` | 另一个 worker 已持有租约 | 通常是重复部署；⚠️ 也可能是跨租户抢占（CHN-S3 修） |
 | `LEADER_LEASE_LOST` | 运行中丢失租约 | 同上 |
-| `FEISHU_WS_STOPPED` | 飞书长连接断开 | 多半是 App Secret 被轮换或应用被停用。⚠️ 这个码由**传输层无关**的代码发出 → CHN-O4 改名为 `CHANNEL_TRANSPORT_STOPPED` |
+| `CHANNEL_TRANSPORT_STOPPED` | provider 长连接断开 | 多半是凭据被轮换或应用被停用。CHN-O4 已从 `FEISHU_WS_STOPPED` 改名——发出它的 `_monitor_channel` 监视的是 `Channel` 协议，与具体传输无关，旧名字在第一个非飞书 provider 上就是错的 |
 | `FEISHU_CHANNEL_DISABLED` | 飞书侧应用被停用 | 去开放平台查应用状态 |
 | `CHANNEL_NOT_SUPPORTED` | provider 名未注册 | 配置错误或版本不匹配 |
 | `CHANNEL_RUNTIME_CONFIG_INVALID` | 私有 runtime 配置解析失败 | ⚠️ **多半是 tolerate/emit 顺序被违反**，见 [CHN-ADR-06](DECISIONS.md#chn-adr-06--私有-runtime-契约的每次变更都拆成-tolerate--emit-两个-pr) |
@@ -298,3 +298,4 @@ JSON Schema（`config_schema`）仅用于服务端请求校验与 OpenAPI，**�
 | 2026-08-05 | v1（加法，不 bump） | manifest 新增 `form`（CHN-P2），§5 从「尚未存在」改写为实际下发的形状并给出完整 payload 示例。**向后兼容**：老前端忽略未知键；`config_schema` 一个字节没动，仍由 pydantic 生成、仍只服务校验与 OpenAPI。四条一致性测试把 `form` 与 `config_model` 绑住，防止两份派生物漂移 | 819e7ec2 |
 | 2026-08-05 | v1（加法，不 bump） | `state="error"` 增加一个合成来源、`last_error_code` 增加一个取值 `TARGET_REVISION_UNAVAILABLE`（CHN-O1），§3 已写明。**向后兼容**：`error` 与 `last_error_code` 都是既有字段，老前端原样渲染即可；复用执行层已有的错误码而不是新造 `TARGET_REVISION_STALE`，是为了让面板和日志能 grep 同一个串。web 侧同批把 sheet 的 runtime 横幅补上原因行（卡片早就有） | 本次提交 + web `a752f3e` |
 | 2026-08-05 | v1（规则澄清，不 bump） | 定死 `form.version` 的 bump 语义（§5 规则 6）：加法不 bump，破坏性才 bump，且 bump 的含义是「老客户端必须拒绝渲染」而非「尽力而为」（CHN-X2）。服务端 `ProviderForm.version` 原来的注释自相矛盾——一句说「只在客户端必须反应时 bump」，下一句说「未知的更高版本仍应渲染」，两条不能同时成立，已改写。前端落地 `CHANNEL_API_VERSION` 与 `SUPPORTED_FORM_VERSION` 两个常量并加断言，`listProviders` 按后者过滤 | 本次提交 + web `9873e25` |
+| 2026-08-06 | v1（加法，不 bump） | 运行时错误码 `FEISHU_WS_STOPPED` → `CHANNEL_TRANSPORT_STOPPED`（CHN-O4），§4.2 已改。**不算破坏性**：`last_error_code` 一直是自由字符串（`str | None`，无 Literal），前端本来就原样渲染未映射的大写码，两侧都不需要协调 | 本次提交 |

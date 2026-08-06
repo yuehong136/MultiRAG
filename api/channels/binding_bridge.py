@@ -1,4 +1,4 @@
-"""Feishu message bridge for trusted server-side Channel bindings."""
+"""Message bridge for trusted server-side Channel bindings, any provider."""
 
 from __future__ import annotations
 
@@ -50,8 +50,14 @@ class _ConversationLock:
     users: int = 0
 
 
-class FeishuBindingBridge:
-    """Apply transport policy, then invoke a fixed trusted binding."""
+class BindingBridge:
+    """Apply transport policy, then invoke a fixed trusted binding.
+
+    Named for Feishu until CHN-O4, which was never true of the body: it talks
+    to a ``Channel`` protocol, keys conversations off ``message.channel`` and
+    never imports a provider. The name was the only thing a second provider
+    would have had to work around.
+    """
 
     def __init__(
         self,
@@ -60,7 +66,7 @@ class FeishuBindingBridge:
         executor: BindingExecutor,
         state_store: ChannelStateStore,
         binding_id: str,
-        allowed_open_ids: set[str] | frozenset[str],
+        allowed_sender_ids: set[str] | frozenset[str],
         max_question_chars: int,
         private_chat_only: bool = True,
     ) -> None:
@@ -68,7 +74,7 @@ class FeishuBindingBridge:
         self._executor = executor
         self._state_store = state_store
         self._binding_id = binding_id
-        self._allowed_open_ids = frozenset(allowed_open_ids)
+        self._allowed_sender_ids = frozenset(allowed_sender_ids)
         self._max_question_chars = max_question_chars
         self._private_chat_only = private_chat_only
         self._locks: dict[str, _ConversationLock] = {}
@@ -114,7 +120,7 @@ class FeishuBindingBridge:
             self._log(logging.INFO, "duplicate_dropped", message, "", result="duplicate")
             return
 
-        if self._allowed_open_ids and message.sender_id not in self._allowed_open_ids:
+        if self._allowed_sender_ids and message.sender_id not in self._allowed_sender_ids:
             await self._reply_and_complete(message, DEMO_ONLY_TEXT)
             return
         if message.message_type != "text":

@@ -1,4 +1,4 @@
-"""Policy and trust-boundary tests for the managed Feishu binding bridge."""
+"""Transport policy the binding bridge applies before invoking a target."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from api.channels.agent_bridge import SERVICE_UNAVAILABLE_TEXT, SESSION_RESET_TEXT, AgentExecutionError, AgentReply
-from api.channels.binding_bridge import FeishuBindingBridge
+from api.channels.binding_bridge import BindingBridge
 from api.channels.core.base import Channel, IncomingMessage, OutgoingMessage
 from api.channels.state_store import binding_conversation_key
 
@@ -110,15 +110,15 @@ def _bridge(
     state: _StateStore,
     executor: _Executor,
     binding_id: str = "binding-1",
-    allowed_open_ids: set[str] | None = None,
+    allowed_sender_ids: set[str] | None = None,
     private_chat_only: bool = True,
-) -> FeishuBindingBridge:
-    return FeishuBindingBridge(
+) -> BindingBridge:
+    return BindingBridge(
         channel=channel,
         executor=executor,
         state_store=state,
         binding_id=binding_id,
-        allowed_open_ids=allowed_open_ids or set(),
+        allowed_sender_ids=allowed_sender_ids or set(),
         max_question_chars=100,
         private_chat_only=private_chat_only,
     )
@@ -211,7 +211,7 @@ async def test_execution_error_is_tombstoned_and_logs_no_raw_message_or_identity
         state=state,
         executor=executor,
         binding_id=binding_id,
-        allowed_open_ids={sender_id},
+        allowed_sender_ids={sender_id},
     )
     message = _message(
         message_id=message_id,
@@ -260,3 +260,34 @@ async def test_private_chat_only_policy_decides_whether_group_messages_are_serve
         private_chat_only=False,
     ).handle_message(_message(chat_type="group", sender_type="bot"))
     assert echoed.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_provider_without_group_support_ignores_group_traffic_regardless_of_policy() -> None:
+    """CHN-O4: two independent gates, and the narrower one wins.
+
+    The worker computes ``private_chat_only`` as policy OR-ed with the
+    provider's declared inability to carry group chat, so an admin can only
+    widen down to what the transport can actually do. Without that, turning the
+    toggle off on a private-chat-only provider would have the bot read group
+    messages it has no way to answer.
+    """
+
+    from api.channel_providers import provider_spec
+
+    capabilities = provider_spec("feishu").capabilities
+    resolved = False or not capabilities.group_chat
+
+    executor = _Executor()
+    await _bridge(
+        channel=_Channel(),
+        state=_StateStore(),
+        executor=executor,
+        private_chat_only=resolved,
+    ).handle_message(_message(chat_type="group"))
+
+    # Feishu declares no group support today, so the resolved gate stays shut
+    # even though the policy asked for it to open.
+    assert capabilities.group_chat is False
+    assert resolved is True
+    assert executor.calls == []
