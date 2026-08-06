@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib
+import pkgutil
 import subprocess
 import sys
 
@@ -13,7 +15,6 @@ from api.channel_providers import (
     is_registered,
     provider_names,
     provider_spec,
-    provider_specs,
     resolve_path,
     transport_module,
 )
@@ -86,7 +87,54 @@ def test_every_registered_name_resolves_to_a_matching_spec() -> None:
         assert transport_module(name).startswith("api.channels.")
 
 
-@pytest.mark.parametrize("spec", provider_specs(), ids=lambda spec: spec.name)
+def _declared_specs() -> tuple[ProviderSpec, ...]:
+    """Every spec module in the package, registered or not.
+
+    The consistency checks below used to run over ``provider_specs()``, which
+    is the *registered* set -- so a spec written but not yet wired in got no
+    coverage at all, and the first thing that would exercise it was
+    registration itself. Registration is exactly when a broken spec is most
+    expensive: it becomes reachable from the API in the same commit.
+    """
+
+    package = importlib.import_module("api.channel_providers")
+    found: list[ProviderSpec] = []
+    for module_info in pkgutil.iter_modules(package.__path__):
+        module = importlib.import_module(f"api.channel_providers.{module_info.name}")
+        candidate = getattr(module, "PROVIDER_SPEC", None)
+        if isinstance(candidate, ProviderSpec):
+            found.append(candidate)
+    assert found, "no provider specs discovered"
+    return tuple(sorted(found, key=lambda spec: spec.name))
+
+
+def test_every_registered_provider_has_a_declared_spec() -> None:
+    declared = {spec.name for spec in _declared_specs()}
+    assert set(provider_names()) <= declared
+
+
+# Mirrors `ChannelFieldKind` in `web:src/api/channel.ts`. A provider using a
+# kind outside this set needs a frontend release before its form is usable,
+# which is the one thing the FieldSpec contract exists to avoid -- so a new
+# entry here is a deliberate cross-repo decision, not an implementation detail.
+_CLIENT_RENDERED_KINDS = frozenset({"text", "password", "string_list", "select", "switch"})
+
+
+@pytest.mark.parametrize("spec", _declared_specs(), ids=lambda spec: spec.name)
+def test_a_provider_form_needs_no_widget_the_client_lacks(spec: ProviderSpec) -> None:
+    """The acceptance criterion for the provider work, in test form (CHN-P10).
+
+    A second provider must be renderable by a frontend build made before it
+    existed. That holds exactly while its fields use kinds the client already
+    has -- an unknown kind renders as a disabled input, which is a safe
+    degradation but not a usable form.
+    """
+
+    unknown = sorted({field.kind for field in spec.form.fields} - _CLIENT_RENDERED_KINDS)
+    assert not unknown, f"{spec.name} needs a frontend release for: {', '.join(unknown)}"
+
+
+@pytest.mark.parametrize("spec", _declared_specs(), ids=lambda spec: spec.name)
 def test_spec_paths_resolve_against_the_provider_config_model(spec: ProviderSpec) -> None:
     """Every declared path must exist in the model it claims to describe.
 
@@ -105,7 +153,7 @@ def test_spec_paths_resolve_against_the_provider_config_model(spec: ProviderSpec
             cursor = cursor[part]
 
 
-@pytest.mark.parametrize("spec", provider_specs(), ids=lambda spec: spec.name)
+@pytest.mark.parametrize("spec", _declared_specs(), ids=lambda spec: spec.name)
 def test_declared_secret_paths_match_the_models_secret_fields(spec: ProviderSpec) -> None:
     """`secret_paths` and `SecretStr` must agree.
 
@@ -141,7 +189,7 @@ def test_account_identity_reads_the_declared_path() -> None:
     assert spec.account_identity({}) is None
 
 
-@pytest.mark.parametrize("spec", provider_specs(), ids=lambda spec: spec.name)
+@pytest.mark.parametrize("spec", _declared_specs(), ids=lambda spec: spec.name)
 def test_form_fields_describe_real_config_paths(spec: ProviderSpec) -> None:
     """The render contract and the validation contract must not drift apart.
 
@@ -161,7 +209,7 @@ def test_form_fields_describe_real_config_paths(spec: ProviderSpec) -> None:
             cursor = cursor[part]
 
 
-@pytest.mark.parametrize("spec", provider_specs(), ids=lambda spec: spec.name)
+@pytest.mark.parametrize("spec", _declared_specs(), ids=lambda spec: spec.name)
 def test_form_secret_flags_agree_with_the_declared_secret_paths(spec: ProviderSpec) -> None:
     """`secret=True` and `secret_paths` are the same fact stated twice.
 
@@ -174,7 +222,7 @@ def test_form_secret_flags_agree_with_the_declared_secret_paths(spec: ProviderSp
     assert marked == set(spec.secret_paths)
 
 
-@pytest.mark.parametrize("spec", provider_specs(), ids=lambda spec: spec.name)
+@pytest.mark.parametrize("spec", _declared_specs(), ids=lambda spec: spec.name)
 def test_select_fields_carry_options_and_a_valid_default(spec: ProviderSpec) -> None:
     for field in spec.form.fields:
         if field.kind == "select":
@@ -186,7 +234,7 @@ def test_select_fields_carry_options_and_a_valid_default(spec: ProviderSpec) -> 
             assert field.options is None, f"{spec.name}: {field.path} is {field.kind} but carries options"
 
 
-@pytest.mark.parametrize("spec", provider_specs(), ids=lambda spec: spec.name)
+@pytest.mark.parametrize("spec", _declared_specs(), ids=lambda spec: spec.name)
 def test_secret_paths_are_a_subset_of_the_credential(spec: ProviderSpec) -> None:
     """A secret that is not part of the credential could never be reassembled.
 
@@ -198,7 +246,7 @@ def test_secret_paths_are_a_subset_of_the_credential(spec: ProviderSpec) -> None
     assert spec.secret_paths <= spec.credential_paths
 
 
-@pytest.mark.parametrize("spec", provider_specs(), ids=lambda spec: spec.name)
+@pytest.mark.parametrize("spec", _declared_specs(), ids=lambda spec: spec.name)
 def test_form_field_paths_are_unique(spec: ProviderSpec) -> None:
     """Two fields on one path would silently overwrite each other on submit."""
 
