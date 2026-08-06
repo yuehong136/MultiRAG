@@ -250,14 +250,21 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
   已存的凭据立刻永久不可解密，**没有回退路径**，只能让每个管理员重新填一遍。
 - **值得做的理由**：这不是功能缺失，是一个**没有安全出口的运维陷阱**。密钥泄漏时正确的
   反应是轮换，而今天轮换的代价等于全量凭据丢失，等于「泄漏了也不敢换」。
-- **设计要点**：`EncryptedSecret.key_id` **已经存在并已随密文一起存**，所以读侧改造是
-  纯加法：配置从一把密钥变成一个 `key_id -> key` 的映射（外加一个 `active_key_id`），
-  `decrypt` 按密文自带的 `key_id` 选密钥，`encrypt` 永远用 active。**先只做读侧**，
-  重加密（把旧密文迁到新密钥）单独一条，不要合在一起。
+- **设计要点**：比看上去简单，因为两个前提已经具备。① `EncryptedSecret.key_id` 已经
+  随密文一起存了；② `common/channel_secret_crypto.py::ChannelSecretCipher` 的
+  `key_id` 是 **`sha256(key)[:16]` 从密钥材料自己派生的**，不是配置项。
+  所以**不需要**发明 key id、也不需要 `key_id -> key` 映射加 `active_key_id` 这种配置
+  结构——把 `secret_encryption_key` 从一把变成一个**有序列表**即可：第一把是 active
+  （`encrypt` 用它），`decrypt` 在列表里找 `key_id` 与密文匹配的那把。单把密钥的旧写法
+  必须继续能用（`_Section` 上加个 before-validator 把标量升成单元素列表就行）。
+  **先只做读侧**，重加密（把旧密文迁到新密钥）单独排一条，不要合在一起。
 - **闸门**：无。配置向后兼容（单密钥写法要继续能用）。
-- **验收**：用旧密钥加密的密文在配置了新 active 密钥后**仍能解密**；移除某个 key_id 后
-  对应密文报 `CHANNEL_SECRET_STORE_UNAVAILABLE` 而不是静默返回空；测试覆盖「两把密钥
-  并存」这一种状态。
+- **从哪读起**：`common/channel_secret_crypto.py`（cipher 与 key_id 派生）→
+  `api/channel_control/secret_store.py`（`decrypt` 的那行 key_id 判断）→
+  `common/app_config.py::ChannelControlConfig.validate_secret_encryption_key`。
+- **验收**：用旧密钥加密的密文在新密钥成为 active 之后**仍能解密**；从列表里移掉某把
+  密钥后，对应密文报 `CHANNEL_SECRET_STORE_UNAVAILABLE` 而不是静默返回空；测试覆盖
+  「两把密钥并存」这一种状态；**单把密钥的既有配置写法不改也能启动**。
 
 ### CHN-O8 · 凭据变更审计轨迹
 
@@ -510,3 +517,4 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 | 2026-08-06 | **发现一条与 tolerate/emit 无关的独立闸门**：`supervisor.py:35` 的 `_SUPPORTED_PROVIDERS = frozenset(supported_provider_names())` 是**模块级常量、import 时冻结**。也就是说**注册任何新 provider 都需要重启一次 supervisor**，与契约版本无关。好消息是它 fail-safe 而不是 fail-stop：不认识的 provider 走 `:128` 的 `provider_unsupported` 分支**逐条跳过**，健康的飞书 binding 照常 reconcile（这正是 CHN-S4 逐行降级的形状）。当前跑着的 supervisor 起于 10:30、早于本次注册，所以**它现在会跳过钉钉 binding**——建钉钉渠道前需要再重启一次。没有自作主张再重启：用户只授权了一次，而且目前一个钉钉渠道都还没有 | 本次提交 | Claude |
 | 2026-08-06 | **CHN-P13 完成：provider 可发现性 + 钉钉 i18n**。原交互是「一个新建按钮 → 抽屉里一个下拉」，**页面上没有任何地方告诉用户能接入什么**，答案只有开始创建之后才看得到。改成两段：「已接入渠道（N）」+「可接入渠道」卡片画廊（logo / 名称 / 一句话说明 / 接入按钮 / 已接入数量徽章），点卡片直接带着选中的 provider 打开抽屉。**参照了上游 ragflow 的 UX 形状，但没抄它的数据来源**：上游的 `channelTemplates` 是客户端硬编码的 `ChatChannelKey` 枚举过滤出 7 个——正是这个程序花了 24 个 PR 消灭的模式（provider 的第二个声明点，且是会被忘掉的那个）。我们的画廊完全由 manifest 驱动，服务端注册一个 provider 就自动出现，**只有 logo 是客户端资产**（不认识的 provider 回落到中性图标，与未知 `kind` 渲染成 disabled 同一原则）。**可达性也没抄**：上游把 `onClick` 挂在 `<article>` 上，Tab 到不了、回车不响应；我们用 `<button>`。**服务端加了 `description` + `description_i18n_key`**——描述必须服务端拥有，否则加 provider 又要改前端，CHN-P10 刚证明的那条不变量就破了；前端按 `t(key, {defaultValue: manifest.description})` 消费，本地翻译优先、服务端英文兜底。同批做掉钉钉四个字段的中英文案；locale 里 `providers.<name>` 从字符串改成 `{name, description}`（原来只有 `feishu: '飞书'`，与新的描述块撞键，tsc 直接报 TS1117），`channel-card.tsx` 与抽屉下拉同步改成读 `.name`。**从 ragflow 复制了两个 logo**（`dingtalk.svg` / `feishu.svg` → `web:src/assets/svg/chat-channel/`），只复制已注册的两个而不是全部 21 个——用不上的资产就是死资产，需要时再复制。**验证**：`tsc` / `eslint`（channel 目录 0 error）/ `test:api` **76 passed** / `lint:file-size` / `build` / `check:bundle-size`（入口 gzip 116KB，未增长）全绿、两个棘轮无 diff；后端 `-k "channel or feishu or dingtalk or binding"` **264 passed**、`ruff` / `lint-imports`(6 kept) / `mypy`(62) 全绿 | `3a82e5f6` + web | Claude |
 | 2026-08-06 | **补齐待办任务的执行简报 + 交接说明**。用户要把剩余任务派给「没有任何上下文的我」，而原来的任务表只有一句话索引，不够开工。PROGRESS 新增「待办任务简报」一节：CHN-P11 / O6–O11 每条给出**问题（带已核实的证据）/ 为什么值得做 / 闸门 / 验收标准 / 从哪读起**，并写明每条**不该做什么**（例如 CHN-O6 不要给「还没保存」的场景做自检——那需要新开一个明文凭据入口，多一处泄漏面不抵收益；CHN-O7 先只做读侧，重加密单独排一条）。**两处证据是现查的不是回忆的**：`secret_store.py` 的 `decrypt` 第一行判断 `encrypted.key_id != self._cipher.key_id` 就报 `SecretStoreUnavailable`，确认了**只有一把活跃密钥、轮换即全量凭据永久不可解**——所以 CHN-O7 是个「泄漏了也不敢换」的运维陷阱，不是缺功能；`web:use-channel-request.ts` 的 `refetchInterval` 是固定 15 秒，与渠道状态和页面可见性无关，那是 CHN-O10 的全部主题。README 新增 §3.5「怎么把一条任务派给没有任何上下文的我」：**说 ID，别说需求**——复述背景反而危险，因为复述的是作者记忆里的仓库状态，而文档跟的是它现在的状态。附反面例子与四条补充：一次只派一条（任务间有闸门依赖）、要先复核锚点就明说、涉及重启线上进程的先问、不确定派哪条就让我读 README 给建议 | 本次提交 | Claude |
+| 2026-08-06 | **订正 CHN-O7 简报的设计要点**。写简报时我说「配置改成 `key_id -> key` 映射 + `active_key_id`」，后来一条后台跑完的 grep 带回了关键事实：`common/channel_secret_crypto.py:68` 的 `key_id = sha256(key)[:16]` 是**从密钥材料自己派生的**，不是配置项。所以那套映射结构是多余的——配置只要从一把密钥变成一个有序列表，key_id 自动得出、`decrypt` 按密文自带的 key_id 在列表里找即可，改动面小一档。已同步补上「从哪读起」的三个锚点与「单把密钥旧写法必须继续能用」这条验收。**记这一条是因为它正是简报存在的意义**：写错的设计要点会让零上下文接手的人照着走一条不必要的复杂路，而这个错误来自我凭印象补设计而没读 cipher 实现 | 本次提交 | Claude |
