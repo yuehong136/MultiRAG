@@ -287,3 +287,40 @@ def test_resolve_path_never_raises_on_malformed_config() -> None:
     assert resolve_path({"a": 1}, "a.b") is None
     assert resolve_path(None, "a") is None
     assert resolve_path([], "a") is None
+
+
+def test_the_payload_the_client_assembles_is_the_one_the_provider_accepts() -> None:
+    """The backend half of the cross-repo acceptance (CHN-X3).
+
+    The literal below is copied from `assembleConfig`'s asserted output in
+    `web:src/api/__tests__/channel.test.ts`, where a frontend build that
+    predates DingTalk turns the server's field list into this shape. If either
+    side drifts, one of the two tests goes red -- which is the only mechanism
+    binding them, since the repos have separate CI and no shared fixture.
+    """
+
+    from api.channel_providers.dingtalk import PROVIDER_SPEC as dingtalk
+    from api.channel_providers.functions import split_config
+
+    assembled = {
+        "credential": {
+            "client_id": "dingaaaaaaaaaaaaaaaa",
+            "client_secret": "secret-aaaa-bbbb-cccc",
+        },
+        "robot_code": "robot-aaaa",
+        "allowed_user_ids": ["user_a", "user_b"],
+    }
+
+    parsed = dingtalk.config_model.model_validate(assembled)
+    public, plaintext = split_config(dingtalk, parsed)
+
+    # The secret half is routed to the encrypted store and the public half to
+    # the column that read paths echo -- keyed by leaf name, so this provider
+    # needed no control-plane change to get its own split.
+    assert plaintext == {"client_secret": "secret-aaaa-bbbb-cccc"}
+    assert public == {
+        "credential": {"client_id": "dingaaaaaaaaaaaaaaaa"},
+        "robot_code": "robot-aaaa",
+        "allowed_user_ids": ["user_a", "user_b"],
+    }
+    assert "secret-aaaa-bbbb-cccc" not in str(public)
