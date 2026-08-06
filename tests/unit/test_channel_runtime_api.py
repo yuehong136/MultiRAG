@@ -142,18 +142,15 @@ def test_runtime_config_releases_only_provider_connection_material_to_authentica
     response = client.get("/api/v1/internal/channel-bindings/binding-1/runtime-config")
 
     assert response.status_code == 200
-    # Emit halves of CHN-P4 -> CHN-P8 and CHN-O2 -> CHN-O3. Both `fields` and
-    # `policy` are on the wire now; the legacy credential pair rides along
-    # until CHN-P11, because a runner started before CHN-P4 still *requires*
-    # it and its absence would fail the parse rather than degrade.
+    # `fields` and `policy` are the wire (CHN-P8, CHN-O3). The Feishu-shaped
+    # legacy credential pair that used to ride alongside is gone as of CHN-P11,
+    # the third step of stop-reading / stop-emitting / drop.
     assert response.json() == {
         "binding_id": "binding-1",
         "provider": "feishu",
         "generation": 4,
         "public_config": {"domain": "feishu", "allowed_open_ids": ["ou-user"]},
         "credential": {
-            "app_id": "cli-app",
-            "app_secret": "app-secret-private",
             "fields": {"app_id": "cli-app", "app_secret": "app-secret-private"},
         },
         "policy": {"private_chat_only": False},

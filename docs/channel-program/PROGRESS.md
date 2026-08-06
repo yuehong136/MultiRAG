@@ -113,7 +113,7 @@ web 侧 commit scope 从 `settings` 切到 `channel`（后端已有 `feat(channe
 | CHN-P9 | MR | `ChannelProvider` 改注册表驱动；`config` 改 `dict[str, Any]` 在 service 层按 `channel` 判别后二次校验。**这是 CHN-S2 的 emit 闸门** | ✅ | **CHN-S2 已部署**、CHN-P1、CHN-P3、**CHN-P8 已部署** | `channel_control/schemas.py:10,99-136,172-188` |
 | CHN-P10 | MR | **钉钉 provider**（`credential.client_id` + `credential.client_secret`）。零前端改动的验收 PR | ✅ | CHN-P9 | 新 spec + transport |
 | CHN-P13 | MR+WEB | provider **可发现性**：manifest 加 `description` / `description_i18n_key`；前端把「一个新建按钮 + 抽屉里的下拉」改成「已接入 / 可接入」两段，可接入是服务端驱动的卡片画廊 | ✅ | CHN-P10 | `channel_providers/spec.py`、`web:components/provider-gallery.tsx` |
-| CHN-P11 | MR | 删除 legacy `RuntimeCredential.app_id/app_secret`（浸泡后清理，删字段三步的第三步） | ⬜ | CHN-P8 已浸泡 | `api/channel_runtime/schemas.py` |
+| CHN-P11 | MR | 删除 legacy `RuntimeCredential.app_id/app_secret`（删字段三步的第三步）。`value()` 的 `legacy` 参数一并删，飞书 provider 的回退随之消失 | ✅ | CHN-P8 已浸泡 | `api/channel_runtime/schemas.py`、`channel_runtime_api.py:110-116`、`feishu/provider.py:81-85` |
 | CHN-P12 | — | ⏸ 交互式配对（QR / OAuth）。**不做**，但 `FormField.kind` 保持开放联合、前端渲染未知 kind 为 disabled，就是它的全部留缝成本 | ⏸ | — | — |
 
 **CHN-P2 的 FormField 形状**（这是解开渲染契约僵局的一步——`required` 落在 form 层，
@@ -208,7 +208,8 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 
 ### CHN-P11 · 删掉 legacy `RuntimeCredential.app_id/app_secret`
 
-- **状态**：⬜ 等浸泡。**这是唯一一条「等时间」而不是「等人」的任务。**
+- **状态**：✅ 代码已落地（2026-08-06）。**但部署只做了一半，见本条末尾的「现在这台机器处在半态」——
+  那不是提醒，是一个现在就存在的故障窗口。**
 - **问题**：删字段三步的第三步。① 停止读 = CHN-P4（已部署）② 停止发 = CHN-P8（已部署）
   ③ 删除 = 本条。`api/channel_runtime/schemas.py::RuntimeCredential` 上那对字段是飞书的
   命名，第二个 provider 一旦去够它们就等于把刚拆掉的耦合请回来（`dingtalk/provider.py`
@@ -226,6 +227,19 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
   的线格断言里那两个键消失，且**其余断言一字不改**；`test_runtime_credential_tolerates_both_contract_halves`
   按新语义重写（不再有 legacy 一侧）；`-k "channel or feishu or dingtalk"` 全绿。
 - **别做的事**：不要顺手给 `fields` 加校验或改成 `extra="allow"`——那是另一次契约变更。
+- **闸门①怎么被证实的（2026-08-06 实测，不是等够了天数）**：浸泡期从来不是一个时长，是
+  「能不能证明每个 runner 都在含 P8 的构建上」。本机实测——CHN-P8 提交 `09:42:26`，
+  supervisor 起于 `10:54:57`、worker 起于 `10:55:01`、API 起于 `11:15:01`，三者全部晚于
+  提交一小时以上。用户确认目前只有这一台机器，Mac 那台将来直接用最新代码，
+  **不存在数不清的旧 runner**——这正是浸泡期本来要防的东西。
+- **⚠️ 现在这台机器处在半态（代码已合、API 未重启）**：
+  盘上是 P11，**跑着的 API 仍是旧的，还在发 legacy 那一对**。跑着的 worker 也是旧的、
+  仍接受那一对，所以此刻是稳的。**但 worker 是 supervisor 每次 spawn 时从盘上加载的**——
+  只要发生一次重启（崩溃、改配置、generation 变化、重启 supervisor），新 worker 就带着
+  P11 的 `extra="forbid"` 模型去解析旧 API 发来的 legacy 字段，**整包拒绝 →
+  `RUNTIME_CONFIG_INVALID` → 那条 binding 起不来**。
+  **解除办法只有一个：把 API 重启到含 P11 的构建**，越早越好。这个窗口不是设计的一部分，
+  是「合并」与「部署」之间必然存在的一小段，把它写在这里是为了别让它被忘掉。
 
 ### CHN-O6 · 连接自检端点
 
@@ -618,3 +632,4 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 | 2026-08-06 | **CHN-O6 完成：连接自检端点 `POST /chat-channels/{id}/verify`**。请求体为空——检查的是**已存**凭据，多开一个明文凭据入口就多一处泄漏面。**与设计要点的偏差**：没加在 `WorkerProvider` 上。解析 `WorkerProvider` 要 import 传输实现，而飞书那半边拉 lark-oapi，**import 即装进程级事件循环**——把它装进 API 进程正是这个端点要避免的。改成平行的可选能力：`api/channels/<name>/verify.py` 暴露 `CREDENTIAL_VERIFIER`（只用 httpx），注册表加第三个字段按名字懒加载。顺带删掉 `api/channels/feishu/__init__.py` 的三个 re-export（**零消费方**，却让碰这个包的任何模块都等于加载 SDK；钉钉包早就是空的且注释写着同一条规则）。**诚实降级**：限流是进程内每渠道 10 秒冷却，N 个 worker 就是每窗口 N 次；做成 Redis 全局要给控制面加一个它今天没有的有状态依赖，那是另一个决定。**验证**：新增 `test_channel_credential_verify.py` 14 条（飞书判定表 7 条——含「密钥错时飞书返回 HTTP 400，所以只能看信封 `code`」这条坑；钉钉 4 条；注册表 3 条，其中纯度检查跑**子进程**，避免变成「本次测试顺序有没有人先 import 过 SDK」的断言）+ `test_chat_channel_control.py` 新增 9 条（服务层四种结局 + 冷却 + 跨租户 + 无凭据 + 路由三码分流 + 节流器单测）。实跑确认 API 侧解析出两个 verifier 后 `sys.modules` 里没有 `lark_oapi`/`aiohttp`。**顺手修掉一处自己引入的噪声**：注册表的 `_Registration` NamedTuple 用 `str \| None` 字段，在 `from __future__ import annotations` 下会被 beartype 当成前向引用而拒绝装饰整个 namedtuple（每次 import 打一段 traceback 到 stderr）；改用 `""` 哨兵 + 边界翻译，实测警告归零。**全量回归**：`pytest tests/unit` **6 failed / 1599 passed / 179.88s**，失败集合与[先天失败基线](#testsunit-先天失败基线)逐条相同（该节的数字已按本次实测更新）。全门禁绿：`ruff format --check`（1171 files）/ `ruff check` / `lint-imports`（6 kept, 0 broken）/ `check_async_sync_db` / `mypy`（62 files）。**提交时有一个门禁没跑成**：`import api.apps` 冒烟需要 Milvus，而 `milvus-standalone` 在会话中途自行退出（etcd 租约超时，exit 80，与本批改动无关）——当时如实记成「没跑」而不是当作跑过。**用户重启容器后已补跑并通过**（见下一行） | 本次提交 | Claude |
 | 2026-08-06 | **补跑 CHN-O6 提交时缺的那个门禁**。用户重启 `milvus-standalone` 后：`import api.apps, api.channel_control.schemas` → `import ok`。顺带做了一个比冒烟更强的检查——把 `chat_channel_api.router` 的路由列出来，`POST /chat-channels/{channel_id}/verify` 在册，且**这 11 条与 [CONTRACT §1](CONTRACT.md#1-端点清单) 的端点表逐条对得上**（`/api/v1` 前缀由 `register_page` 按 `restful_apis/` 目录统一挂，已由新增的路由测试实打实走通 `POST /api/v1/chat-channels/channel-1/verify` 证明，不是靠推断）。至此 CHN-O6 的门禁无缺口 | 本次提交 | Claude |
 | 2026-08-06 | **两处「查了之后发现自己说错了」的订正**。① CHN-O6 落地补充里「Redis 全局限流要给控制面加一个它今天没有的有状态依赖」**不成立**：`api/channel_execution/dependencies.py::get_channel_execution_redis` 已经是同一个 API 进程里现成的 async Redis 依赖，私有 execution 路由一直在用。已改写成真正还剩的两个决定（11 条路由是否都拴上 Redis、Redis 挂时放行还是拒绝）与建议时机（等 CHN-O9 需要 Redis 时一起做）。② README §3「当前 supervisor 起于 10:30，早于钉钉注册，会跳过钉钉 binding」**已过期**：实测当前进程起于 `10:54:57`，CHN-P10 提交于 `10:46:30`，**进程晚于注册 8 分半，认识钉钉**——建第一个钉钉渠道不需要为此重启 supervisor。README 里改成记录「怎么重新判定」而不是结论，因为这句话每注册一个 provider 就会过期一次。**顺带查清 CHN-P11 的闸门**：CHN-P8 提交 `09:42:26`，supervisor `10:54:57`、worker `10:55:01`、API `11:15:01`——**本机三个进程全部晚于 P8，闸门①在这台机器上已可验证地满足**；剩下的未知只有「别处还有没有 runner」，那不是时间问题 | 本次提交 | Claude |
+| 2026-08-06 | **CHN-P11 完成：legacy `RuntimeCredential.app_id/app_secret` 删除，删字段三步走完**。同时删掉 `value()` 的 `legacy` 参数与飞书 provider 里最后一个读它的地方——留着参数等于留着回来的路。**闸门①是被证实的不是等出来的**：CHN-P8 提交 `09:42:26`，本机 supervisor `10:54:57` / worker `10:55:01` / API `11:15:01`，三者全部晚于提交一小时以上；用户确认目前只有这一台机器、Mac 那台将来直接用最新代码，所以「数不清的旧 runner」这个浸泡期真正要防的东西不存在。**验证**：`test_runtime_config_releases_only_provider_connection_material_to_authenticated_runner` 的线格断言里那两个键消失、**其余断言一字未动**（含那六个 forbidden 键与日志脱敏）；`test_runtime_credential_tolerates_both_contract_halves` 按新语义重写成 `..._is_a_generic_map_with_no_provider_named_in_it`，并新增 `..._refuses_the_deleted_legacy_pair`——`extra="forbid"` 让老 API 发来的 legacy 字段**响亮地失败**而不是被静默忽略，那个拒绝正是部署顺序要避免制造的信号；钉钉那条「不许读 legacy」的测试改写成「不许读别的 provider 的键」，因为原来的场景已经构造不出来了。`-k "channel or feishu or dingtalk"` **300 passed**。**⚠️ 半态**：代码已合、API 未重启，此刻稳定但**任何一次 worker 重启都会让新 worker 拒绝旧 API 的载荷**，详见简报末尾与 README §3 | 本次提交 | Claude |

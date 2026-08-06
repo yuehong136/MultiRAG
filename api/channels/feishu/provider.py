@@ -78,11 +78,11 @@ class FeishuWorkerProvider:
         credential: RuntimeCredential,
         public_config: Mapping[str, object],
     ) -> ManagedChannelPlan:
-        # Read through ``value`` so this works on both sides of the
-        # tolerate/emit window (CHN-P4 → CHN-P8): the generic map when the API
-        # sends one, the legacy pair while it does not.
-        app_id = credential.value("app_id", legacy=credential.app_id)
-        app_secret = credential.value("app_secret", legacy=credential.app_secret)
+        # Read through the generic map. The legacy fallback this used to carry
+        # was the last reader of `RuntimeCredential.app_id`/`app_secret`, and
+        # it went away with them in CHN-P11.
+        app_id = credential.value("app_id")
+        app_secret = credential.value("app_secret")
         if not app_id or not app_secret:
             raise ChannelWorkerError("CHANNEL_RUNTIME_CONFIG_INVALID")
 

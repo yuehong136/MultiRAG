@@ -35,37 +35,33 @@ class DesiredRuntimeList(BaseModel):
 class RuntimeCredential(BaseModel):
     """Credential returned only through the authenticated private route.
 
-    **Tolerate half of a two-step contract change (CHN-P4 → CHN-P8).** ``fields``
-    is accepted here but the API emits nothing into it yet; the emit half only
-    ships once every supervisor and worker runs a build containing this model.
-    See CHN-ADR-06 — these models are ``extra="forbid"``, and the supervisor is
-    a long-lived process that an API deploy does not restart, so a field added
-    in one step would make every affected binding fail to start.
+    Provider-agnostic: keyed by the leaf names a provider spec declares in
+    ``credential_paths``, which is what lets a second provider exist without
+    the runtime route naming any of its fields.
 
-    The legacy pair stays required for now. It is deleted in CHN-P11, which is
-    step three of a three-step field removal: stop reading, stop emitting, drop.
+    **CHN-P11 completed the three-step field removal here.** ``app_id`` and
+    ``app_secret`` — Feishu's names, sitting in a model every provider has to
+    share — went stop-reading (CHN-P4), stop-emitting (CHN-P8), drop (this).
+    Each step shipped and was deployed on its own, because these models are
+    ``extra="forbid"`` and the supervisor is a long-lived process an API deploy
+    does not restart; see CHN-ADR-06. Anything added here later owes the same
+    three steps, in the same order.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    app_id: str = Field(min_length=1, max_length=128)
-    app_secret: str = Field(min_length=1, json_schema_extra={"writeOnly": True})
-
-    # Provider-agnostic credential, keyed by the leaf names a provider spec
-    # declares in ``credential_paths``. Empty until CHN-P8.
     fields: dict[str, str] = Field(default_factory=dict, json_schema_extra={"writeOnly": True})
 
-    def value(self, key: str, *, legacy: str | None = None) -> str:
-        """Read one credential value, preferring the generic map.
+    def value(self, key: str) -> str:
+        """Read one credential value, or an empty string when it is absent.
 
-        Lets a provider descriptor be written against ``fields`` today and keep
-        working across the whole tolerate/emit window, in both directions.
+        Absent and empty deliberately collapse: a provider descriptor checks
+        the result for truthiness and raises its own classified error, which
+        keeps "no such key" and "key present but blank" from becoming two
+        indistinguishable failure paths in every provider.
         """
 
-        found = self.fields.get(key)
-        if found:
-            return found
-        return legacy or ""
+        return self.fields.get(key) or ""
 
 
 class RuntimeBindingConfig(BaseModel):

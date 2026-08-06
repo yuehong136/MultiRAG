@@ -140,21 +140,16 @@ def test_the_ticket_survives_an_endpoint_that_already_has_a_query() -> None:
 
 
 def test_the_worker_descriptor_reads_only_the_generic_credential() -> None:
-    """Written after CHN-P8, so it has no legacy pair to fall back to.
+    """Written after CHN-P8, so it never had a legacy pair to fall back to.
 
-    The legacy `app_id`/`app_secret` fields are Feishu's names and are being
-    deleted in CHN-P11; a second provider reaching for them would resurrect the
-    very coupling the generic map exists to remove.
+    Those fields were Feishu's names living in a model every provider shares;
+    CHN-P11 deleted them, so this now reads as the ordinary case rather than
+    the disciplined one. What it still pins is that DingTalk's keys are just
+    keys in the generic map, special-cased nowhere.
     """
 
     plan = WORKER_PROVIDER.build_managed(
-        credential=RuntimeCredential.model_validate(
-            {
-                "app_id": "cli_unused",
-                "app_secret": "unused-aaaa",
-                "fields": {"client_id": "dingaaaaaaaaaaaaaaaa", "client_secret": "secret-aaaa-bbbb-cccc"},
-            }
-        ),
+        credential=RuntimeCredential.model_validate({"fields": {"client_id": "dingaaaaaaaaaaaaaaaa", "client_secret": "secret-aaaa-bbbb-cccc"}}),
         public_config={"robot_code": "robot-aaaa", "allowed_user_ids": ["user_a"]},
     )
 
@@ -162,23 +157,19 @@ def test_the_worker_descriptor_reads_only_the_generic_credential() -> None:
     assert plan.allowed_sender_ids == frozenset({"user_a"})
     assert isinstance(plan.channel, DingTalkChannel)
 
-    # The legacy pair alone is not a DingTalk credential, and silently using it
-    # would connect as whatever Feishu app happened to be in that field.
+    # Another provider's credential is not a DingTalk credential. Before
+    # CHN-P11 the danger was reading the legacy pair and connecting as whatever
+    # Feishu app sat in it; now the same mistake would be reading someone
+    # else's keys out of the shared map, so the check still earns its place.
     with pytest.raises(ChannelWorkerError):
         WORKER_PROVIDER.build_managed(
-            credential=RuntimeCredential.model_validate({"app_id": "cli_unused", "app_secret": "unused-aaaa"}),
+            credential=RuntimeCredential.model_validate({"fields": {"app_id": "cli_unused", "app_secret": "unused-aaaa"}}),
             public_config={"robot_code": "robot-aaaa"},
         )
 
 
 def test_a_malformed_allowlist_fails_closed() -> None:
-    credential = RuntimeCredential.model_validate(
-        {
-            "app_id": "cli_unused",
-            "app_secret": "unused-aaaa",
-            "fields": {"client_id": "dingaaaaaaaaaaaaaaaa", "client_secret": "secret-aaaa-bbbb-cccc"},
-        }
-    )
+    credential = RuntimeCredential.model_validate({"fields": {"client_id": "dingaaaaaaaaaaaaaaaa", "client_secret": "secret-aaaa-bbbb-cccc"}})
     for allowlist in ("user_a", [""], [1]):
         with pytest.raises(ChannelWorkerError):
             WORKER_PROVIDER.build_managed(credential=credential, public_config={"allowed_user_ids": allowlist})

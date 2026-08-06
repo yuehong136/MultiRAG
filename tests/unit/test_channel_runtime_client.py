@@ -8,6 +8,7 @@ from collections.abc import Mapping
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from api.channel_runtime.schemas import RuntimeBindingConfig, RuntimeCredential
 from api.channels.agent_bridge import AgentExecutionError, AgentReply
@@ -225,34 +226,40 @@ async def test_runtime_client_http_failure_does_not_include_response_or_token() 
     assert response_secret not in repr(captured.value)
 
 
-def test_runtime_credential_tolerates_both_contract_halves() -> None:
-    """The tolerate step of CHN-P4 → CHN-P8.
+def test_runtime_credential_is_a_generic_map_with_no_provider_named_in_it() -> None:
+    """What CHN-P4 → CHN-P8 → CHN-P11 was for.
 
-    A worker running this build has to parse what today's API sends (the legacy
-    pair only) and what tomorrow's will (a generic ``fields`` map), because the
-    two are deployed separately — the supervisor is a long-lived process that an
-    API deploy does not restart. See CHN-ADR-06.
+    The credential model used to carry ``app_id``/``app_secret`` — Feishu's
+    names, in a model every provider shares. Reaching for them was how the
+    coupling would have grown back, so the three-step removal ended by making
+    them unreachable rather than merely unused.
     """
 
-    legacy = RuntimeCredential.model_validate({"app_id": "cli_aaaa", "app_secret": "aaaa-aaaa"})
-    assert legacy.value("app_id", legacy=legacy.app_id) == "cli_aaaa"
-    assert legacy.value("app_secret", legacy=legacy.app_secret) == "aaaa-aaaa"
+    credential = RuntimeCredential.model_validate({"fields": {"app_id": "cli_aaaa", "app_secret": "aaaa-aaaa"}})
+    assert credential.value("app_id") == "cli_aaaa"
+    assert credential.value("app_secret") == "aaaa-aaaa"
+    # A second provider's names are not special-cased anywhere; they are just
+    # other keys in the same map.
+    dingtalk = RuntimeCredential.model_validate({"fields": {"client_id": "ding_aaaa", "client_secret": "aaaa-aaaa"}})
+    assert dingtalk.value("client_id") == "ding_aaaa"
 
-    both = RuntimeCredential.model_validate(
-        {
-            "app_id": "cli_aaaa",
-            "app_secret": "aaaa-aaaa",
-            "fields": {"app_id": "cli_bbbb", "app_secret": "bbbb-bbbb"},
-        }
-    )
-    # The generic map wins once it is populated; the legacy pair is only a
-    # fallback for the window where the API has not caught up.
-    assert both.value("app_id", legacy=both.app_id) == "cli_bbbb"
-    assert both.value("app_secret", legacy=both.app_secret) == "bbbb-bbbb"
+    # Absent and blank collapse to the same falsy answer on purpose; each
+    # provider raises its own classified error rather than distinguishing them.
+    assert credential.value("client_id") == ""
+    assert RuntimeCredential.model_validate({"fields": {"app_id": ""}}).value("app_id") == ""
 
-    # An unknown key is not an error here: enable-time checks report a missing
-    # credential, this only reads one.
-    assert both.value("client_id") == ""
+
+def test_runtime_credential_refuses_the_deleted_legacy_pair() -> None:
+    """``extra="forbid"`` is what makes the deletion real.
+
+    An old API still emitting the legacy pair must fail the parse loudly rather
+    than have it silently ignored — that rejection is precisely the signal the
+    deployment order exists to avoid producing, and CHN-ADR-06's three steps
+    are what earn the right to it.
+    """
+
+    with pytest.raises(ValidationError):
+        RuntimeCredential.model_validate({"app_id": "cli_aaaa", "app_secret": "aaaa-aaaa", "fields": {}})
 
 
 def _binding_config(policy: object | None = None) -> RuntimeBindingConfig:
@@ -261,7 +268,7 @@ def _binding_config(policy: object | None = None) -> RuntimeBindingConfig:
         "provider": "feishu",
         "generation": 1,
         "public_config": {},
-        "credential": {"app_id": "cli_aaaa", "app_secret": "aaaa-aaaa"},
+        "credential": {"fields": {"app_id": "cli_aaaa", "app_secret": "aaaa-aaaa"}},
     }
     if policy is not None:
         payload["policy"] = policy

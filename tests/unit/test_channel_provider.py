@@ -65,7 +65,7 @@ def test_tuning_maps_the_provider_section_and_normalizes_the_timeout() -> None:
 
 
 def test_build_managed_keeps_the_raw_account_id_for_state_isolation() -> None:
-    credential = RuntimeCredential(app_id="cli_unit", app_secret="unit-secret")
+    credential = RuntimeCredential(fields={"app_id": "cli_unit", "app_secret": "unit-secret"})
 
     plan = worker_provider("feishu").build_managed(
         credential=credential,
@@ -93,7 +93,7 @@ def test_build_managed_keeps_the_raw_account_id_for_state_isolation() -> None:
     ],
 )
 def test_build_managed_rejects_untrustworthy_public_config(public_config: dict[str, object]) -> None:
-    credential = RuntimeCredential(app_id="cli_unit", app_secret="unit-secret")
+    credential = RuntimeCredential(fields={"app_id": "cli_unit", "app_secret": "unit-secret"})
 
     with pytest.raises(Exception, match="CHANNEL_RUNTIME_CONFIG_INVALID"):
         worker_provider("feishu").build_managed(credential=credential, public_config=public_config)

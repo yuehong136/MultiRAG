@@ -108,14 +108,10 @@ async def get_channel_runtime_config(
         generation=runtime.generation,
         public_config=runtime.public_config,
         credential=RuntimeCredential(
-            # Emit half of CHN-P4 -> CHN-P8. The legacy pair rides along until
-            # CHN-P11: a runner that started before CHN-P4 still requires it,
-            # and dropping it here would fail its parse outright rather than
-            # degrade. `fields` is the whole credential, keyed by the leaf names
-            # the provider spec declares -- which is what lets a second provider
-            # exist without this route naming any of its fields.
-            app_id=runtime.credentials["app_id"],
-            app_secret=runtime.credentials["app_secret"],
+            # The whole credential, keyed by the leaf names the provider spec
+            # declares -- which is what lets a second provider exist without
+            # this route naming any of its fields. The Feishu-shaped legacy
+            # pair that used to ride alongside is gone as of CHN-P11.
             fields=runtime.credentials,
         ),
         # Emit half of CHN-O2 -> CHN-O3. Until now this reached the database and
