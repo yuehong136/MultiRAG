@@ -279,6 +279,21 @@ class TestChannelControlConfig:
         assert [key.get_secret_value() for key in control.secret_encryption_key] == [encoded_key]
         assert control.internal_api_token.get_secret_value() == "t" * 32
 
+    def test_the_default_docker_deployment_can_boot_with_channel_left_off(self, conf_dir: Callable[[str, str], None], monkeypatch: pytest.MonkeyPatch) -> None:
+        """CHN-O12：这两行就是 `docker/docker-compose.yml:83-86` 在 `.env` 没填时的实际状态。
+
+        实测过 compose 的行为：`- FOO=${BAR:-}` 会把 FOO 以**空串**的形式传进容器
+        （变量存在、值为空），不是不传。所以这条不是假想的配置，是默认部署本身。
+        """
+        conf_dir(SERVICE_CONF, "{}\n")
+        monkeypatch.setenv("MULTIRAG_CHANNELS__CONTROL__SECRET_ENCRYPTION_KEY", "")
+        monkeypatch.setenv("MULTIRAG_CHANNELS__CONTROL__INTERNAL_API_TOKEN", "")
+
+        control = load_app_config().channels.control
+
+        assert control.secret_encryption_key == []
+        assert control.internal_api_token.get_secret_value() == ""
+
     @pytest.mark.parametrize("quote", ["", '"'])
     def test_key_ring_environment_overlay_accepts_a_yaml_sequence(self, quote: str, conf_dir: Callable[[str, str], None], monkeypatch: pytest.MonkeyPatch) -> None:
         """env 只能传字符串，所以密钥环走 YAML flow sequence。

@@ -46,6 +46,34 @@ class _Section(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _empty_env_value_is_a_blank_not_a_null(cls, data: Any) -> Any:
+        """`MULTIRAG_X__Y=`（留空）经 YAML 解析是 None，收成该字段的空值（CHN-O12）。
+
+        env 只能传字符串，「设成空」只有留空这一种写法，语义永远是**空值**；而
+        `yaml.safe_load("")` 给的是 `None`（那是「空 YAML 文档」的规则，套到单个标量上
+        并不成立）。打在 `str` / `SecretStr` 字段上就是 `ValidationError` → 进程起不来，
+        而 `docker/docker-compose.yml` 恰恰把「不启用 channel」写成了留空。
+
+        **只收敛类型本身容不下 None 的 `str` / `SecretStr` 字段**：`x: str | None` 的
+        `None` 是一个有意义的取值（「没有 schema」不等于「schema 叫空字符串」），
+        `timeout: float | None` 更是必须留着——把它们一起收成 `""` 才是真的改坏语义。
+        """
+        if not isinstance(data, dict):
+            return data
+        coerced: dict[str, Any] | None = None
+        for name, value in data.items():
+            if value is not None:
+                continue
+            field = cls.model_fields.get(name)
+            if field is None or field.annotation not in (str, SecretStr):
+                continue
+            if coerced is None:
+                coerced = dict(data)
+            coerced[name] = ""
+        return data if coerced is None else coerced
+
 
 # ---------------------------------------------------------------------------
 # 核心 section（字段名严格镜像 service_conf.yaml）

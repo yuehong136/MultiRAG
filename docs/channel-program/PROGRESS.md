@@ -166,7 +166,7 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 | CHN-O9 | binding 级可观测（消息量、丢弃原因、时延分位） | ⬜ | — | 未排期 |
 | CHN-O10 | 自适应轮询（**SSE 已否决**，见 `CHN-ADR-02`） | ⬜ | — | 未排期 |
 | CHN-O11 | 渠道数配额 | ⬜ | — | 未排期 |
-| CHN-O12 | 空 env 变量把 `SecretStr` 配置项打成 `None` → 配置加载直接抛 `AppConfigError`。**默认 docker 部署今天起不来**（CHN-O7 已修掉主密钥那一侧，`internal_api_token` 那一侧还在） | ⬜ | — | `common/app_config.py::ChannelControlConfig.internal_api_token`、`docker/docker-compose.yml:81-84` |
+| CHN-O12 | 空 env 变量把 `str`/`SecretStr` 配置项打成 `None` → 配置加载抛 `AppConfigError`，**默认 docker 部署起不来**。收敛点落在 `_Section` 基类：只把「类型容不下 None」的 `str`/`SecretStr` 字段的 `None` 收成 `""`，`x \| None` 不动 | ✅ | — | `common/app_config.py::_Section._empty_env_value_is_a_blank_not_a_null` |
 
 ---
 
@@ -284,6 +284,7 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 
 ### CHN-O12 · 空 env 变量把配置加载打死（**默认 docker 部署起不来**）
 
+- **状态**：✅ 完成（2026-08-06）。**落地位置与简报不同**，原因写在本条末尾。
 - **问题（已实测复现）**：`_coerce_env_value` 用 `yaml.safe_load` 解析 env 值，而
   `yaml.safe_load("") is None`。于是 `MULTIRAG_CHANNELS__CONTROL__INTERNAL_API_TOKEN=`
   这种「留空表示不启用」的写法，进到 `SecretStr` 字段上是 `None` → `ValidationError`
@@ -308,6 +309,21 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
   正常返回且该字段为 `""`；新增测试覆盖「空 env 变量 = 未配置」而不是 `AppConfigError`。
 - **别做的事**：不要把 `_coerce_env_value` 改成「空串不覆盖」——那会让「用 env 显式清空
   一个 yaml 里配了值的字段」这条既有能力消失，副作用比问题大。
+- **落地补充（与简报的两处偏差，都是查了之后改的）**：
+  1. **不是三个字段各加一个 validator，而是 `_Section` 基类上一个 `mode="before"`**。
+     简报说「先查一遍还有没有别的 `SecretStr` 字段」，查完发现问题根本不限于 `SecretStr`——
+     `app_id`、`multirag_base_url`、`postgresql.password` 这些普通 `str` 字段一样会被
+     `None` 打挂。逐个字段贴 validator 是把一条通用规则抄 N 遍。
+  2. **也不是改 `_coerce_env_value`**（那条「别做的事」仍然成立，但真正的理由比原来写的更准）：
+     「留空到底意味着 `""` 还是 `None`」**是字段的属性，不是 env 层的属性**。
+     `timeout: float \| None`、`kwargs: dict \| None` 这些字段的 `None` 是合法取值，
+     在 env 层统一收成 `""` 会把它们从「可用」变成「配置报错」——那是拿一个 bug 换另一个。
+     所以判据是**类型本身容不容得下 None**：`str` / `SecretStr` 收成 `""`，`x \| None` 不动。
+     实测边界：`channels.control.internal_api_token` → `""`、`postgresql.password` → `""`、
+     `multirag.secret_key`（`str \| None`）→ 仍是 `None`。
+  3. **compose 那一步也实跑了**：用本地 `alpine` 起了一个只有
+     `- PROBE_EMPTY=${PROBE_SOURCE:-}` 的 compose 服务，容器里 `PROBE_EMPTY` **存在且为空串**
+     （不是不传）。这条原本是我按文档推的，现在是实测的。
 
 ### CHN-O8 · 凭据变更审计轨迹
 
@@ -507,7 +523,7 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 | ID | 问题 | 需要谁定 |
 |---|---|---|
 | CHN-Q1 | 第三个 provider 是不是企业微信？它的 `connection_type` 判别式分支会逼出 `visible_when` 与 number 控件，届时 `FormField` 需要扩展 | 产品 |
-| CHN-Q2 | 阶段 O 里剩余条目的相对优先级（连接自检 O6 / 审计 O8 / 可观测 O9 / 轮询 O10 / 配额 O11 / 空 env 崩溃 O12）。keyring 已于 2026-08-06 落地，不在此列 | 产品 + 运维 |
+| CHN-Q2 | 阶段 O 里剩余条目的相对优先级（审计 O8 / 可观测 O9 / 轮询 O10 / 配额 O11）。2026-08-06 用户按「先修在坏的、再做体验」的建议直接派了 O12 → O6，keyring O7 同日落地，这四条不在此列 | 产品 + 运维 |
 
 ---
 
@@ -562,3 +578,4 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 | 2026-08-06 | **补齐待办任务的执行简报 + 交接说明**。用户要把剩余任务派给「没有任何上下文的我」，而原来的任务表只有一句话索引，不够开工。PROGRESS 新增「待办任务简报」一节：CHN-P11 / O6–O11 每条给出**问题（带已核实的证据）/ 为什么值得做 / 闸门 / 验收标准 / 从哪读起**，并写明每条**不该做什么**（例如 CHN-O6 不要给「还没保存」的场景做自检——那需要新开一个明文凭据入口，多一处泄漏面不抵收益；CHN-O7 先只做读侧，重加密单独排一条）。**两处证据是现查的不是回忆的**：`secret_store.py` 的 `decrypt` 第一行判断 `encrypted.key_id != self._cipher.key_id` 就报 `SecretStoreUnavailable`，确认了**只有一把活跃密钥、轮换即全量凭据永久不可解**——所以 CHN-O7 是个「泄漏了也不敢换」的运维陷阱，不是缺功能；`web:use-channel-request.ts` 的 `refetchInterval` 是固定 15 秒，与渠道状态和页面可见性无关，那是 CHN-O10 的全部主题。README 新增 §3.5「怎么把一条任务派给没有任何上下文的我」：**说 ID，别说需求**——复述背景反而危险，因为复述的是作者记忆里的仓库状态，而文档跟的是它现在的状态。附反面例子与四条补充：一次只派一条（任务间有闸门依赖）、要先复核锚点就明说、涉及重启线上进程的先问、不确定派哪条就让我读 README 给建议 | 本次提交 | Claude |
 | 2026-08-06 | **订正 CHN-O7 简报的设计要点**。写简报时我说「配置改成 `key_id -> key` 映射 + `active_key_id`」，后来一条后台跑完的 grep 带回了关键事实：`common/channel_secret_crypto.py:68` 的 `key_id = sha256(key)[:16]` 是**从密钥材料自己派生的**，不是配置项。所以那套映射结构是多余的——配置只要从一把密钥变成一个有序列表，key_id 自动得出、`decrypt` 按密文自带的 key_id 在列表里找即可，改动面小一档。已同步补上「从哪读起」的三个锚点与「单把密钥旧写法必须继续能用」这条验收。**记这一条是因为它正是简报存在的意义**：写错的设计要点会让零上下文接手的人照着走一条不必要的复杂路，而这个错误来自我凭印象补设计而没读 cipher 实现 | 本次提交 | Claude |
 | 2026-08-06 | **CHN-O7 完成：主密钥从一把变成有序密钥环（读侧）**。`ChannelControlConfig.secret_encryption_key` 由 `SecretStr` 改为 `list[SecretStr]`（第 0 把 active 负责加密，其余只解密自己写下的密文），`AESGCMChannelSecretStore.__init__` 改成变参收整个环并按 `key_id` 建查表，`decrypt` 的 `key_id != self._cipher.key_id` 换成 `self._by_key_id.get(...)`。**简报里那两个前提都成立**，所以没发明任何新概念：`key_id` 已随密文入库（`db_models.py:1240`），且它是 `sha256(key)[:16]` 从密钥材料自己派生的，不需要 `key_id -> key` 映射配置。三处判断是我加的、简报里没有：① 环上**任意**一把密钥格式非法 → 整个环退回 `UnavailableSecretStore`（退役密钥打错字是运维错误，不能静默跳过）② 重复 key_id 首个优先 ③ 空条目丢弃。**同时发现并顺手修掉**：空 env 变量经 `yaml.safe_load("")` 变成 `None`，打在 `SecretStr` 上直接 `AppConfigError`——主密钥这一侧已随本条修好，`internal_api_token` 同病未修，已追加 [CHN-O12](#阶段-o--运维能力与运行时诚实)。**验证**：新增 6 条 store 测试（`test_retired_key_left_on_the_ring_still_decrypts_the_rows_it_wrote` / `test_first_key_on_the_ring_is_the_one_that_encrypts` / `test_dropping_a_key_from_the_ring_fails_closed_instead_of_returning_empty` / `test_empty_key_ring_is_rejected_at_construction` / `test_dependency_builds_the_ring_in_configured_order` / `test_dependency_fails_closed_when_any_key_on_the_ring_is_malformed`）+ 4 条配置测试（含 `test_blank_key_material_reads_as_no_key_configured` 参数化 5 种空写法、`test_key_ring_environment_overlay_accepts_a_yaml_sequence` 引号/无引号各一）+ 1 条**服务层端到端**（`test_rotating_the_master_key_keeps_stored_credentials_readable`：真 cipher，建渠道 → 换环 → 仍解得开 → 摘掉旧密钥 → `error_code == "CHANNEL_SECRET_STORE_UNAVAILABLE"`）。**做了变异验证**：把 `decrypt` 临时改回只认 active 密钥，两条环测试如期失败，改回后 10 passed——证明新测试不是空转。全门禁：`ruff format --check`（1166 files）/ `ruff check`（All checks passed）/ `lint-imports`（6 kept, 0 broken）/ `check_async_sync_db`（新增 0）/ `mypy`（62 files, no issues）/ `pytest -k "channel or feishu or dingtalk or config"` **360 passed, 4 failed**——4 条全在[先天失败基线](#testsunit-先天失败基线)名单内（另 2 条名字不含 `config` 未被 `-k` 选中） | 本次提交 | Claude |
+| 2026-08-06 | **CHN-O12 完成：留空的 env 变量不再打死配置加载**。收敛点是 `_Section` 基类上的一个 `mode="before"` model validator——**只把「类型容不下 None」的 `str`/`SecretStr` 字段的 `None` 收成 `""`**，`x \| None` 原样保留。与简报的偏差有两处，都写进了简报末尾的「落地补充」：① 问题不限于 `SecretStr`（`app_id`、`postgresql.password` 这些普通 `str` 一样会被打挂），所以落在基类而不是三个字段；② 判据是**字段类型容不容得下 None**，不是 env 层统一处理——`timeout: float \| None` 这类字段的 `None` 是合法取值，一起收成 `""` 是拿一个 bug 换另一个。**验证**：先把最后一个没实测的环节钉死了——用本地 `alpine` 起一个只含 `- PROBE_EMPTY=${PROBE_SOURCE:-}` 的 compose 服务，容器里该变量**存在且为空串**，所以「默认部署起不来」不是推断而是事实。新增 3 条测试：`test_app_config.py::test_blank_env_value_clears_a_field_instead_of_killing_the_load`（通用规则）、`::test_blank_env_value_leaves_a_nullable_field_null`（边界，`multirag.secret_key` 仍为 `None`）、`test_channel_config.py::test_the_default_docker_deployment_can_boot_with_channel_left_off`（照抄 compose 在 `.env` 没填时的实际两行）。`docker-compose.yml` 里 CHN-O7 那次加的「token 那一侧仍会报错」警告行随本条删除。三个配置测试文件 **91 passed** | 本次提交 | Claude |

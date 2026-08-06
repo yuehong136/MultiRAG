@@ -113,6 +113,33 @@ class TestEnvOverlay:
 
         assert cfg.get_section("debugpy") is None
 
+    def test_blank_env_value_clears_a_field_instead_of_killing_the_load(self, conf_dir, monkeypatch):
+        """CHN-O12：留空的 env 变量是「空值」，不是「非法值」。
+
+        env 只能传字符串，所以「把这个字段设成空」只有留空一种写法，而
+        `yaml.safe_load("")` 是 `None`——打在 `str` 字段上就是 ValidationError，
+        整个进程起不来。`docker/docker-compose.yml` 正是用留空表示「不启用 channel」。
+        """
+        conf_dir(SERVICE_CONF, BASE_YAML)
+        monkeypatch.setenv("MULTIRAG_POSTGRESQL__PASSWORD", "")
+
+        cfg = load_app_config()
+
+        assert cfg.postgresql.password == ""
+
+    def test_blank_env_value_leaves_a_nullable_field_null(self, conf_dir, monkeypatch):
+        """收敛只针对类型容不下 None 的字段。
+
+        `secret_key: str | None` 的 `None` 是有意义的取值——「没有配」不等于
+        「配成了空字符串」。把它一起收成 `""` 才是真的改坏语义。
+        """
+        conf_dir(SERVICE_CONF, BASE_YAML)
+        monkeypatch.setenv("MULTIRAG_MULTIRAG__SECRET_KEY", "")
+
+        cfg = load_app_config()
+
+        assert cfg.multirag.secret_key is None
+
     def test_infinity_pool_size_supports_upstream_env_and_typed_override(self, conf_dir, monkeypatch):
         conf_dir(SERVICE_CONF, BASE_YAML)
         monkeypatch.setenv("INFINITY_POOL_MAX_SIZE", "12")
