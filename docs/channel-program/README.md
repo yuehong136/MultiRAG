@@ -43,34 +43,40 @@
 
 ## 3. 当前阶段 · 现在该干什么
 
-**当前阶段**：24 个 PR 里 23 个已落地，supervisor 已重启到当前代码 · **最后更新**：2026-08-06
+**当前阶段**：24 个 PR 落地 23 个，第二个 provider（钉钉）已注册 · **最后更新**：2026-08-06
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | **PR-0** | 建立账本与契约文档（两仓 docs-only） | ✅ 完成 |
 | **S** | 安全加固（S1–S6） | ✅ 完成 |
 | **U** | 今日可见缺陷（U1–U7） | ✅ 完成 |
-| **P** | Provider 通用化（P1–P9 完成；P10 spec 半边完成；P11 待浸泡） | 🔵 部分 |
+| **P** | Provider 通用化（P1–P10 完成；P11 待浸泡） | 🔵 部分 |
 | **O** | 运维（O1–O5 完成；O6–O11 排期外） | ✅ 完成（排期内） |
-| **X** | 跨仓契约（X1/X2 完成；X3 静态验收完成、活体待 transport） | 🔵 部分 |
+| **X** | 跨仓契约（X1–X3 完成） | ✅ 完成 |
 
-### 只剩两件事，都不是「接着写就行」
+### 只剩 CHN-P11，而且它在等的是时间，不是人
 
-**① CHN-P10 的 transport 半边——需要一个依赖决定。**
+**24 个 PR 落地 23 个。** 唯一未做的 CHN-P11 是删 `RuntimeCredential.app_id/app_secret`，
+也就是「删字段三步」的第三步：① 停止读（CHN-P4，已部署）② 停止发（CHN-P8，已部署）
+③ 删除（CHN-P11）。**第三步刻意等浸泡期**——不是流程形式，是让任何角落里还没轮换过的
+runner 有时间被换掉。CHN-P8 刚落地几小时就做第三步，等于把这三步压成一步，那正是
+[CHN-ADR-06](DECISIONS.md) 要防的事。
 
-钉钉的 spec 已经落地并通过全部一致性检查，但**没有注册**。收消息需要 `dingtalk-stream`
-（未安装；已有的 `alibabacloud-dingtalk` 是 HTTP API SDK，只能发不能收），另一条路是
-webhook 回调，但那要开一个公网入站路由，安全面完全不同。**这是用户的决定，不要自作主张
-加依赖。**
+做它之前确认两件事：
 
-~~注册前还必须重启 supervisor~~ **已于 2026-08-06 10:30 重启**，现在跑的是当前代码，
-`provider` 已放宽为 `str`，注册第二个 provider 不再会让它跳过整轮 tick。
+1. 线上**所有** worker 都跑在含 CHN-P8 的构建上（worker 是 spawn 时从盘上加载的，
+   见下方查法；本机这台已经是了，但如果别处还有 runner，得一并确认）。
+2. API 进程也要重启到含 CHN-P11 的构建——方向反过来了：删字段后 **老 API 仍在发**
+   legacy 那一对，而新 worker 的 `extra="forbid"` 会整包拒绝。
 
-**② CHN-P11——刻意等浸泡，不是漏了。**
+### 新增第二个 provider 时的独立闸门（与契约版本无关）
 
-删 `RuntimeCredential.app_id/app_secret` 是删字段三步的第三步。CHN-P8 刚发出 `fields`，
-此刻仍在跑的 worker 把 legacy 那一对标成 required，现在删就是解析失败而不是降级。等
-worker 自然轮换到 P8 之后的构建，再做。
+`supervisor.py:35` 的 `_SUPPORTED_PROVIDERS` 是 **import 时冻结的模块级常量**，所以
+**注册任何新 provider 都要重启一次 supervisor**。好在它 fail-safe：不认识的 provider 走
+`:128` 的 `provider_unsupported` **逐条跳过**，健康的 binding 照常 reconcile。
+
+> 当前跑着的 supervisor 起于 2026-08-06 10:30，早于钉钉注册，**它会跳过钉钉 binding**。
+> 建第一个钉钉渠道前按下面的方式重启一次。
 
 ### ⚠️ 关于「部署闸门」：先查，别假设
 
