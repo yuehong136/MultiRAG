@@ -43,58 +43,67 @@
 
 ## 3. 当前阶段 · 现在该干什么
 
-**当前阶段**：**全部卡在一次运行时部署上** · **最后更新**：2026-08-06
+**当前阶段**：24 个 PR 里 23 个已落地 · **最后更新**：2026-08-06
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | **PR-0** | 建立账本与契约文档（两仓 docs-only） | ✅ 完成 |
 | **S** | 安全加固（S1–S6） | ✅ 完成 |
 | **U** | 今日可见缺陷（U1–U7） | ✅ 完成 |
-| **P** | Provider 通用化（P1–P7 完成；P8–P11 待部署） | 🔵 部分 |
-| **O** | 运维（O1/O2/O5 完成；O3/O4 待部署；O6–O11 未排期） | 🔵 部分 |
-| **X** | 跨仓契约（X1/X2 完成；X3 待 P10） | 🔵 部分 |
+| **P** | Provider 通用化（P1–P9 完成；P10 spec 半边完成；P11 待浸泡） | 🔵 部分 |
+| **O** | 运维（O1–O5 完成；O6–O11 排期外） | ✅ 完成（排期内） |
+| **X** | 跨仓契约（X1/X2 完成；X3 静态验收完成、活体待 transport） | 🔵 部分 |
 
-### ⛔ 接手前先读这段：剩下的都不是「还没写」，是「不许现在合」
+### 只剩两件事，都不是「接着写就行」
 
-**没有任何未完成条目是缺代码。** 计划里 24 个 PR 除下面这批之外全部落地。剩下的每一条都是
-[CHN-ADR-06](DECISIONS.md) 的 emit 半步，**必须等对应的 tolerate 半步真正部署到所有
-supervisor / worker 之后才能合并**。这五个模型是 `extra="forbid"`，而 supervisor 是长驻
-进程、**API 部署不会重启它**。跳过 tolerate 的后果不是「有点风险」，是具体的：
+**① CHN-P10 的 transport 半边——需要一个依赖决定。**
 
-| 提前合并谁 | 会看到什么 |
-|---|---|
-| CHN-O3（emit `policy`） | worker `fetch_binding` 抛 `RUNTIME_CONFIG_INVALID` → **在报告任何状态之前退出** → 管理页给出 `waiting`/`null`/`null`，与「正在启动」**逐字节相同**。全子系统最坏的失败模式 |
-| CHN-P8（emit `credential.fields`） | 同上，老 worker 整包拒绝解析，binding 永不启动 |
-| CHN-P9（发出非 feishu 的 provider 行） | `supervisor.py:96-101` 跳过**整轮** tick，健康的飞书 binding 一起停止被 reconcile 和回收 |
+钉钉的 spec 已经落地并通过全部一致性检查，但**没有注册**。收消息需要 `dingtalk-stream`
+（未安装；已有的 `alibabacloud-dingtalk` 是 HTTP API SDK，只能发不能收），另一条路是
+webhook 回调，但那要开一个公网入站路由，安全面完全不同。**这是用户的决定，不要自作主张
+加依赖。**
 
-**解除闸门的动作**（不是写代码，是运维）：
+注册前还必须重启 supervisor，理由是链式的：注册 → 管理页出现钉钉 → 建一个并启用 →
+`DesiredRuntimeList` 里出现 `provider: "dingtalk"` → **旧 supervisor 会 ValidationError
+并跳过整轮 tick，把健康的飞书 binding 一起拖停**。
+
+**② CHN-P11——刻意等浸泡，不是漏了。**
+
+删 `RuntimeCredential.app_id/app_secret` 是删字段三步的第三步。CHN-P8 刚发出 `fields`，
+此刻仍在跑的 worker 把 legacy 那一对标成 required，现在删就是解析失败而不是降级。等
+worker 自然轮换到 P8 之后的构建，再做。
+
+### ⚠️ 关于「部署闸门」：先查，别假设
+
+上一轮我按计划文本假设「所有 emit 半步都卡在部署上」，**查了之后有三条并不卡**。查法：
 
 ```bash
-cd docker
-# 1. 先按 docker/README.md「Channel supervisor」一节配好 .env 三个变量
-# 2. 重建镜像，让 CHN-P4 / CHN-O2 的 tolerate 半步进到 supervisor 与 worker 里
-docker compose --profile cpu --profile channel up -d --build
-docker compose logs -f multirag-channel-supervisor    # 应出现 worker_started
+docker ps -a                                     # 有没有 supervisor 容器
+docker exec multirag-redis valkey-cli -n 1 --scan --pattern 'multirag:channel*'
+docker exec multirag-postgres psql -U usr_ai -d postgres \
+  -c "select runner_id, state, heartbeat_at from t_ai_channel_runtime_status"
 ```
 
-确认线上跑的 supervisor 已经是含 `1dc940a9`（CHN-P4）与 `00e4c2c0`（CHN-O2）的构建之后，
-再回到下表。**如果这套 compose 从来没被部署过、全网没有任何 supervisor/worker 在跑**，
-闸门自然不成立——但这要由运维确认，不能由读代码推断。
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+  Select-Object ProcessId, CreationDate, CommandLine |
+  Where-Object { $_.CommandLine -match 'api.channels' }
+```
 
-下一批（闸门解除后，按顺序做，别跳）：
+把进程 `CreationDate` 与 tolerate 提交的 `git show -s --format=%cd` 对比即可。
+**关键事实**：worker 是 supervisor 每次 spawn 的**全新解释器**，按盘上代码加载，所以它
+往往比 supervisor 新得多——2026-08-06 实测 supervisor 起于 8/5 09:44（旧代码），
+worker 起于 8/6 08:37（已含 CHN-P4 与 CHN-O2）。**`RuntimeBindingConfig` 的闸门由
+worker 决定，`DesiredRuntimeList` 的闸门由 supervisor 决定，两者不是一回事。**
 
-| 顺序 | ID | 一句话 | 闸门 |
-|---|---|---|---|
-| 1 | CHN-P8 | `RuntimeCredential.fields` emit：路由填值 + 去掉 `response_model_exclude` 里的 `credential.fields` | CHN-P4 已部署 |
-| 2 | CHN-O3 | `policy` emit：`resolve_runtime_binding` 带上 policy + 去掉 exclude 里的 `policy` | CHN-O2 已部署 |
-| 3 | CHN-P9 | `ChannelProvider` 改注册表驱动（**CHN-S2 的 emit 闸门**） | CHN-S2 + CHN-P8 已部署 |
-| 4 | CHN-P10 | 钉钉 provider。**验收标准：`git diff --stat` 里零个 `web/` 路径** | CHN-P9 |
-| 5 | CHN-O4 | worker 传输层无关化（`FEISHU_WS_STOPPED` → `CHANNEL_TRANSPORT_STOPPED` 等） | CHN-O3 |
-| 6 | CHN-X3 | 端到端验收：不重新部署前端就能渲染并保存钉钉渠道 | CHN-P10 |
-| 7 | CHN-P11 | 删 legacy `RuntimeCredential.app_id/app_secret`（删字段三步的第三步） | CHN-P8 浸泡够久 |
+解除 supervisor 闸门（**会重置一次会话、清空一次 dedupe 窗口，先问用户**）：
 
-> CHN-O6–O11（连接自检、keyring、审计、可观测、自适应轮询、配额）是**排期外**的后续能力，
-> 不属于本次 24 个 PR，不要因为它们标着 ⬜ 就顺手开工。
+```bash
+# 本机手起的 supervisor：停掉旧进程后重新拉起
+#   Stop-Process -Id <supervisor pid>
+uv run python -m api.channels.supervisor
+# 或按 docker/README.md「Channel supervisor」一节走 compose
+```
 
 ## 4. 验证命令（两个仓）
 
