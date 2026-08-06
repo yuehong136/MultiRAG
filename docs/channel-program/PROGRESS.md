@@ -257,11 +257,20 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
      却让「碰这个包的任何模块」都等于加载 SDK。钉钉包早就是空的，注释里写着同一条规则。
      子进程测试钉住：解析出两个 verifier 之后 `sys.modules` 里没有 `lark_oapi`。
   2. **限流是进程内的，不是全局的**（`api/channel_control/verification_throttle.py`）。
-     每渠道 10 秒冷却，N 个 API worker 就是每窗口最多 N 次。做成 Redis 全局需要给控制面
-     加一个它今天没有的有状态依赖（只有 Postgres），那是另一个决定，不该由这个端点顺手带进来。
-     **这是诚实的降级不是遗漏**：威胁是「拿租户自己的凭据 1:1 转发到第三方」，不是放大器，
-     真正要消灭的是「无上界」，那一条已经消灭了。要收紧就是换掉 `VerificationThrottle` 的
-     实现，服务层已经按接口注入。
+     每渠道 10 秒冷却，N 个 API worker 就是每窗口最多 N 次。
+     **⚠️ 订正（2026-08-06，当天晚些时候查证）**：我最初给的理由是「做成 Redis 全局要给
+     控制面加一个它今天没有的有状态依赖」——**这个理由不成立**。
+     `api/channel_execution/dependencies.py::get_channel_execution_redis` 已经是一个跑在
+     **同一个 API 进程**里的 async Redis 依赖（连 `host:port` 解析和超时都写好了），私有
+     execution 路由天天在用。所以 Redis 不是新基础设施，改造成本比我说的低。
+     真正还剩的两个决定是：① `get_channel_control_service` 加 Redis 会把**全部 11 条**
+     控制面路由都拴上 Redis 可用性（只有 verify 需要），要么接受、要么把节流器改成只在
+     verify 路由上单独注入；② Redis 挂了时**放行还是拒绝**——放行等于限流静默消失，
+     拒绝等于 Redis 抖一下就不能自检，这条没有显然答案。
+     **降级本身仍然是诚实的**：威胁是「拿租户自己的凭据 1:1 转发到第三方」，不是放大器，
+     要消灭的「无上界」已经消灭了。要收紧就是换掉 `VerificationThrottle` 的实现，服务层
+     已经按接口注入。**建议的动手时机**：等控制面第二次需要 Redis 时（CHN-O9 的计数器
+     出口是最可能的那次）一起做，而不是为这一个冷却单独拉一条依赖。
   3. **两种失败必须分开**：`CHANNEL_CREDENTIAL_REJECTED`（provider 说不对）与
      `CHANNEL_VERIFICATION_UNAVAILABLE`（没查成）。把超时报成「密钥错了」会让管理员去重填
      一个本来正确的密钥——那正是本条要消灭的浪费。飞书的坑：**密钥错时返回 HTTP 400**，
@@ -608,3 +617,4 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 | 2026-08-06 | **CHN-O12 完成：留空的 env 变量不再打死配置加载**。收敛点是 `_Section` 基类上的一个 `mode="before"` model validator——**只把「类型容不下 None」的 `str`/`SecretStr` 字段的 `None` 收成 `""`**，`x \| None` 原样保留。与简报的偏差有两处，都写进了简报末尾的「落地补充」：① 问题不限于 `SecretStr`（`app_id`、`postgresql.password` 这些普通 `str` 一样会被打挂），所以落在基类而不是三个字段；② 判据是**字段类型容不容得下 None**，不是 env 层统一处理——`timeout: float \| None` 这类字段的 `None` 是合法取值，一起收成 `""` 是拿一个 bug 换另一个。**验证**：先把最后一个没实测的环节钉死了——用本地 `alpine` 起一个只含 `- PROBE_EMPTY=${PROBE_SOURCE:-}` 的 compose 服务，容器里该变量**存在且为空串**，所以「默认部署起不来」不是推断而是事实。新增 3 条测试：`test_app_config.py::test_blank_env_value_clears_a_field_instead_of_killing_the_load`（通用规则）、`::test_blank_env_value_leaves_a_nullable_field_null`（边界，`multirag.secret_key` 仍为 `None`）、`test_channel_config.py::test_the_default_docker_deployment_can_boot_with_channel_left_off`（照抄 compose 在 `.env` 没填时的实际两行）。`docker-compose.yml` 里 CHN-O7 那次加的「token 那一侧仍会报错」警告行随本条删除。三个配置测试文件 **91 passed** | 本次提交 | Claude |
 | 2026-08-06 | **CHN-O6 完成：连接自检端点 `POST /chat-channels/{id}/verify`**。请求体为空——检查的是**已存**凭据，多开一个明文凭据入口就多一处泄漏面。**与设计要点的偏差**：没加在 `WorkerProvider` 上。解析 `WorkerProvider` 要 import 传输实现，而飞书那半边拉 lark-oapi，**import 即装进程级事件循环**——把它装进 API 进程正是这个端点要避免的。改成平行的可选能力：`api/channels/<name>/verify.py` 暴露 `CREDENTIAL_VERIFIER`（只用 httpx），注册表加第三个字段按名字懒加载。顺带删掉 `api/channels/feishu/__init__.py` 的三个 re-export（**零消费方**，却让碰这个包的任何模块都等于加载 SDK；钉钉包早就是空的且注释写着同一条规则）。**诚实降级**：限流是进程内每渠道 10 秒冷却，N 个 worker 就是每窗口 N 次；做成 Redis 全局要给控制面加一个它今天没有的有状态依赖，那是另一个决定。**验证**：新增 `test_channel_credential_verify.py` 14 条（飞书判定表 7 条——含「密钥错时飞书返回 HTTP 400，所以只能看信封 `code`」这条坑；钉钉 4 条；注册表 3 条，其中纯度检查跑**子进程**，避免变成「本次测试顺序有没有人先 import 过 SDK」的断言）+ `test_chat_channel_control.py` 新增 9 条（服务层四种结局 + 冷却 + 跨租户 + 无凭据 + 路由三码分流 + 节流器单测）。实跑确认 API 侧解析出两个 verifier 后 `sys.modules` 里没有 `lark_oapi`/`aiohttp`。**顺手修掉一处自己引入的噪声**：注册表的 `_Registration` NamedTuple 用 `str \| None` 字段，在 `from __future__ import annotations` 下会被 beartype 当成前向引用而拒绝装饰整个 namedtuple（每次 import 打一段 traceback 到 stderr）；改用 `""` 哨兵 + 边界翻译，实测警告归零。**全量回归**：`pytest tests/unit` **6 failed / 1599 passed / 179.88s**，失败集合与[先天失败基线](#testsunit-先天失败基线)逐条相同（该节的数字已按本次实测更新）。全门禁绿：`ruff format --check`（1171 files）/ `ruff check` / `lint-imports`（6 kept, 0 broken）/ `check_async_sync_db` / `mypy`（62 files）。**提交时有一个门禁没跑成**：`import api.apps` 冒烟需要 Milvus，而 `milvus-standalone` 在会话中途自行退出（etcd 租约超时，exit 80，与本批改动无关）——当时如实记成「没跑」而不是当作跑过。**用户重启容器后已补跑并通过**（见下一行） | 本次提交 | Claude |
 | 2026-08-06 | **补跑 CHN-O6 提交时缺的那个门禁**。用户重启 `milvus-standalone` 后：`import api.apps, api.channel_control.schemas` → `import ok`。顺带做了一个比冒烟更强的检查——把 `chat_channel_api.router` 的路由列出来，`POST /chat-channels/{channel_id}/verify` 在册，且**这 11 条与 [CONTRACT §1](CONTRACT.md#1-端点清单) 的端点表逐条对得上**（`/api/v1` 前缀由 `register_page` 按 `restful_apis/` 目录统一挂，已由新增的路由测试实打实走通 `POST /api/v1/chat-channels/channel-1/verify` 证明，不是靠推断）。至此 CHN-O6 的门禁无缺口 | 本次提交 | Claude |
+| 2026-08-06 | **两处「查了之后发现自己说错了」的订正**。① CHN-O6 落地补充里「Redis 全局限流要给控制面加一个它今天没有的有状态依赖」**不成立**：`api/channel_execution/dependencies.py::get_channel_execution_redis` 已经是同一个 API 进程里现成的 async Redis 依赖，私有 execution 路由一直在用。已改写成真正还剩的两个决定（11 条路由是否都拴上 Redis、Redis 挂时放行还是拒绝）与建议时机（等 CHN-O9 需要 Redis 时一起做）。② README §3「当前 supervisor 起于 10:30，早于钉钉注册，会跳过钉钉 binding」**已过期**：实测当前进程起于 `10:54:57`，CHN-P10 提交于 `10:46:30`，**进程晚于注册 8 分半，认识钉钉**——建第一个钉钉渠道不需要为此重启 supervisor。README 里改成记录「怎么重新判定」而不是结论，因为这句话每注册一个 provider 就会过期一次。**顺带查清 CHN-P11 的闸门**：CHN-P8 提交 `09:42:26`，supervisor `10:54:57`、worker `10:55:01`、API `11:15:01`——**本机三个进程全部晚于 P8，闸门①在这台机器上已可验证地满足**；剩下的未知只有「别处还有没有 runner」，那不是时间问题 | 本次提交 | Claude |
