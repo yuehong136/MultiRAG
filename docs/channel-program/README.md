@@ -43,26 +43,58 @@
 
 ## 3. 当前阶段 · 现在该干什么
 
-**当前阶段**：阶段 U（今日可见缺陷）· **最后更新**：2026-08-05
+**当前阶段**：**全部卡在一次运行时部署上** · **最后更新**：2026-08-06
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | **PR-0** | 建立账本与契约文档（两仓 docs-only） | ✅ 完成 |
 | **S** | 安全加固（S1–S6） | ✅ 完成 |
-| **U** | 今日可见缺陷（U1–U7） | ⬜ 未开始 ← **下一步** |
-| **P** | Provider 通用化（P1–P5） | ⬜ 未开始 |
-| **O** | 运维能力（O1–O8） | ⬜ 未开始 |
+| **U** | 今日可见缺陷（U1–U7） | ✅ 完成 |
+| **P** | Provider 通用化（P1–P7 完成；P8–P11 待部署） | 🔵 部分 |
+| **O** | 运维（O1/O2/O5 完成；O3/O4 待部署；O6–O11 未排期） | 🔵 部分 |
+| **X** | 跨仓契约（X1/X2 完成；X3 待 P10） | 🔵 部分 |
 
-下一批（按顺序做，别跳）：
+### ⛔ 接手前先读这段：剩下的都不是「还没写」，是「不许现在合」
 
-| 顺序 | ID | 一句话 | 在哪 |
+**没有任何未完成条目是缺代码。** 计划里 24 个 PR 除下面这批之外全部落地。剩下的每一条都是
+[CHN-ADR-06](DECISIONS.md) 的 emit 半步，**必须等对应的 tolerate 半步真正部署到所有
+supervisor / worker 之后才能合并**。这五个模型是 `extra="forbid"`，而 supervisor 是长驻
+进程、**API 部署不会重启它**。跳过 tolerate 的后果不是「有点风险」，是具体的：
+
+| 提前合并谁 | 会看到什么 |
+|---|---|
+| CHN-O3（emit `policy`） | worker `fetch_binding` 抛 `RUNTIME_CONFIG_INVALID` → **在报告任何状态之前退出** → 管理页给出 `waiting`/`null`/`null`，与「正在启动」**逐字节相同**。全子系统最坏的失败模式 |
+| CHN-P8（emit `credential.fields`） | 同上，老 worker 整包拒绝解析，binding 永不启动 |
+| CHN-P9（发出非 feishu 的 provider 行） | `supervisor.py:96-101` 跳过**整轮** tick，健康的飞书 binding 一起停止被 reconcile 和回收 |
+
+**解除闸门的动作**（不是写代码，是运维）：
+
+```bash
+cd docker
+# 1. 先按 docker/README.md「Channel supervisor」一节配好 .env 三个变量
+# 2. 重建镜像，让 CHN-P4 / CHN-O2 的 tolerate 半步进到 supervisor 与 worker 里
+docker compose --profile cpu --profile channel up -d --build
+docker compose logs -f multirag-channel-supervisor    # 应出现 worker_started
+```
+
+确认线上跑的 supervisor 已经是含 `1dc940a9`（CHN-P4）与 `00e4c2c0`（CHN-O2）的构建之后，
+再回到下表。**如果这套 compose 从来没被部署过、全网没有任何 supervisor/worker 在跑**，
+闸门自然不成立——但这要由运维确认，不能由读代码推断。
+
+下一批（闸门解除后，按顺序做，别跳）：
+
+| 顺序 | ID | 一句话 | 闸门 |
 |---|---|---|---|
-| 1 | CHN-U1 | `_respond` 把 `data=False` 换成 `data={"error_code": ...}`（后端先，前端可独立落地） | `api/apps/restful_apis/chat_channel_api.py:35-65` |
-| 2 | CHN-U2 | 前端错误码接线 + providers 失败不再清空整页 | `web:src/pages/settings/channels/index.tsx` |
-| 3 | CHN-U3 | 运行时状态词表收紧到服务端的 6 个，测试挪进有门禁的目录 | `web:src/api/channel.ts:56`、`utils.ts:10-13` |
-| 4 | CHN-U4~U7 | 表单重置守卫 / invalidate 替代 setQueryData / 提交前 refetch / 下拉服务端搜索 | `web:channel-form-sheet.tsx`、`use-channel-request.ts` |
+| 1 | CHN-P8 | `RuntimeCredential.fields` emit：路由填值 + 去掉 `response_model_exclude` 里的 `credential.fields` | CHN-P4 已部署 |
+| 2 | CHN-O3 | `policy` emit：`resolve_runtime_binding` 带上 policy + 去掉 exclude 里的 `policy` | CHN-O2 已部署 |
+| 3 | CHN-P9 | `ChannelProvider` 改注册表驱动（**CHN-S2 的 emit 闸门**） | CHN-S2 + CHN-P8 已部署 |
+| 4 | CHN-P10 | 钉钉 provider。**验收标准：`git diff --stat` 里零个 `web/` 路径** | CHN-P9 |
+| 5 | CHN-O4 | worker 传输层无关化（`FEISHU_WS_STOPPED` → `CHANNEL_TRANSPORT_STOPPED` 等） | CHN-O3 |
+| 6 | CHN-X3 | 端到端验收：不重新部署前端就能渲染并保存钉钉渠道 | CHN-P10 |
+| 7 | CHN-P11 | 删 legacy `RuntimeCredential.app_id/app_secret`（删字段三步的第三步） | CHN-P8 浸泡够久 |
 
-> 阶段 U 的 U2–U7 全在 web 仓，与后端无顺序依赖，可与 U1 并行。
+> CHN-O6–O11（连接自检、keyring、审计、可观测、自适应轮询、配额）是**排期外**的后续能力，
+> 不属于本次 24 个 PR，不要因为它们标着 ⬜ 就顺手开工。
 
 ## 4. 验证命令（两个仓）
 
