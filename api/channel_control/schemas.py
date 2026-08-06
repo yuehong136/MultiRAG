@@ -186,6 +186,10 @@ class ProviderManifest(BaseModel):
     capabilities: ProviderCapabilities
     form: ProviderForm
     config_schema: dict[str, Any]
+    # One line for a client listing providers nobody has connected yet. Server
+    # owned so a provider gallery is not a second place to declare a provider.
+    description: str = ""
+    description_i18n_key: str | None = None
 
 
 def provider_manifests() -> list[ProviderManifest]:
@@ -203,6 +207,8 @@ def provider_manifests() -> list[ProviderManifest]:
             capabilities=spec.capabilities,
             form=spec.form,
             config_schema=spec.config_model.model_json_schema(),
+            description=spec.description,
+            description_i18n_key=spec.description_i18n_key,
         )
         for spec in provider_specs()
     ]

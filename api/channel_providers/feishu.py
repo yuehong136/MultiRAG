@@ -149,4 +149,6 @@ PROVIDER_SPEC = ProviderSpec(
     # config; only the secret half is encrypted.
     secret_paths=frozenset({"credential.app_secret"}),
     account_identity_path="credential.app_id",
+    description="Answer direct messages from a Feishu or Lark bot over a long-lived connection.",
+    description_i18n_key="channel.providers.feishu.description",
 )

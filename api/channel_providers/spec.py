@@ -168,6 +168,18 @@ class ProviderSpec:
     # every message twice, so the control plane rejects the second (CHN-S4).
     account_identity_path: str
 
+    # One line of English, for a client that lists providers a user has not
+    # connected yet. Server-owned for the same reason the field list is: a
+    # provider gallery built from a client-side enum is a second place every
+    # new provider has to be declared, and the one that gets forgotten.
+    #
+    # ``description_i18n_key`` lets a client prefer its own translation and
+    # fall back to this string, so a provider added after the last frontend
+    # release still shows real copy instead of a blank card. Trails the
+    # required fields because a dataclass cannot put a default before one.
+    description: str = ""
+    description_i18n_key: str | None = None
+
     def account_identity(self, public_config: Any) -> str | None:
         """The provider account a channel connects as, or None if unset."""
 

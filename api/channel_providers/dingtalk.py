@@ -131,4 +131,6 @@ PROVIDER_SPEC = ProviderSpec(
     # same split Feishu uses for `app_id`.
     secret_paths=frozenset({"credential.client_secret"}),
     account_identity_path="credential.client_id",
+    description="Answer messages from a DingTalk robot over its stream connection.",
+    description_i18n_key="channel.providers.dingtalk.description",
 )
