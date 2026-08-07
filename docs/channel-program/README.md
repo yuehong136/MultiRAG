@@ -34,6 +34,7 @@
 | [PROGRESS](PROGRESS.md) | 📌 **进度账本**（维护协议 + 四阶段任务表 + 跨仓联动 + 部署矩阵 + 变更日志） | 全体 |
 | [DECISIONS](DECISIONS.md) | `CHN-ADR-NN` 决策记录 | 全体 |
 | [CONTRACT](CONTRACT.md) | ⭐ 前后端接口契约与 `channel-api/vN` 版本标记 | 前后端 |
+| [企业身份与 MCP 项目](../enterprise-identity-mcp/README.md) | 飞书企业身份、Principal、MCP 委托和 of_mcp 授权的后续扩展 | 后端 / 安全 / 运维 |
 | [`api/channels/README.md`](../../api/channels/README.md) | 已上线行为、部署形态、上游所有权表（**不在本文档集内，勿重复**） | 研发 / 运维 |
 | `web:docs/channel-frontend-design.md` | 前端设计稿（ARCH-6） | 前端 |
 | `internal/channel-audit-2026-08.md` | 原始审计：复现步骤、上游对照（本地，不入库） | — |
@@ -43,10 +44,14 @@
 
 ## 3. 当前阶段 · 现在该干什么
 
-**当前阶段**：24 个 PR **全部落地**，第二个 provider（钉钉）已注册，排期外追加落地
+**既有阶段**：24 个 PR **全部落地**，第二个 provider（钉钉）已注册，排期外追加落地
 CHN-O7（主密钥密钥环）、CHN-O12（空 env 变量）、CHN-O6（连接自检）·
-**部署**：CHN-P11 的两道闸门均已完成（2026-08-06 14:44 重启 API 与 supervisor）·
-**无待办** · **最后更新**：2026-08-06
+**部署**：CHN-P11 的两道闸门均已完成（2026-08-06 14:44 重启 API 与 supervisor）。
+
+**新增企业身份扩展**：CHN-X5～X8、CHN-P14 均未开始，统一由
+[`docs/enterprise-identity-mcp/`](../enterprise-identity-mcp/README.md) 的 EIM 路线图驱动；
+旧程序“全部完成”的历史结论保持成立，但不再表示 Channel 子系统没有后续待办。
+**最后更新**：2026-08-07
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
@@ -56,6 +61,7 @@ CHN-O7（主密钥密钥环）、CHN-O12（空 env 变量）、CHN-O6（连接�
 | **P** | Provider 通用化（P1–P11、P13 全部完成并部署） | ✅ 完成 |
 | **O** | 运维（O1–O7、O12 完成；O8–O11 未排期） | ✅ 完成（排期内） |
 | **X** | 跨仓契约（X1–X3 完成） | ✅ 完成 |
+| **EIM 扩展** | 结构化外部身份 X5–X8；官方飞书 transport P14 | ⬜ 未开始 |
 
 ### 24 个 PR 全部落地并部署完毕
 
@@ -276,3 +282,4 @@ MultiRAG 与 web 是两个仓、两条 CI、两次部署，**不存在跨仓原�
 | 2026-08-06 | CHN-O7 落地（主密钥有序密钥环，轮换不再等于全量凭据丢失）；追加并落地 CHN-O12（留空的 env 变量不再打死配置加载——默认 docker 部署原本起不来）；CHN-O6 落地（连接自检端点，后端已上线、前端未接，契约见 CONTRACT §1）。§3 阶段表随之更新 | Claude |
 | 2026-08-06 | CHN-P11 落地（删掉每个 provider 都得共用的飞书字段，删字段三步走完）——**但 API 重启未做，那是个现存的故障窗口，见 §3**；CHN-O13 落地（自检的前端接线，web `ea0e5af`）。至此 24 个 PR 全部完成 | Claude |
 | 2026-08-06 | CHN-P11 部署完成（重启 API 与 supervisor，先后顺序有讲究，见 §3）。至此 24 个 PR 全部落地**且全部部署**，无待办 | Claude |
+| 2026-08-07 | 建立 EIM 企业身份与 MCP 授权项目，登记 CHN-X5～X8 与 CHN-P14。既有 24 个 PR 完成结论不变；“无待办”只对旧范围成立 | Codex |

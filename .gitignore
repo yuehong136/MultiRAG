@@ -235,6 +235,7 @@ internal/*.md
 docs/*
 !docs/references/
 !docs/channel-program/
+!docs/enterprise-identity-mcp/
 temp/
 
 .hypothesis

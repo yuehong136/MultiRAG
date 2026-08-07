@@ -115,6 +115,7 @@ web 侧 commit scope 从 `settings` 切到 `channel`（后端已有 `feat(channe
 | CHN-P13 | MR+WEB | provider **可发现性**：manifest 加 `description` / `description_i18n_key`；前端把「一个新建按钮 + 抽屉里的下拉」改成「已接入 / 可接入」两段，可接入是服务端驱动的卡片画廊 | ✅ | CHN-P10 | `channel_providers/spec.py`、`web:components/provider-gallery.tsx` |
 | CHN-P11 | MR | 删除 legacy `RuntimeCredential.app_id/app_secret`（删字段三步的第三步）。`value()` 的 `legacy` 参数一并删，飞书 provider 的回退随之消失 | ✅ | CHN-P8 已浸泡 | `api/channel_runtime/schemas.py`、`channel_runtime_api.py:110-116`、`feishu/provider.py:81-85` |
 | CHN-P12 | — | ⏸ 交互式配对（QR / OAuth）。**不做**，但 `FormField.kind` 保持开放联合、前端渲染未知 kind 为 disabled，就是它的全部留缝成本 | ⏸ | — | — |
+| CHN-P14 | MR | 对官方 `lark-channel-sdk` 1.2.x 做 transport PoC；完整 OpenAPI 仍保留 `lark-oapi`。身份字段、公开生命周期、Redis 去重、凭据日志和回滚门禁全过才切换，失败则保留现有实现；先 `audit` 后 `strict` | ⬜ | CHN-X8、EIM-F1 | [EIM-C5](../enterprise-identity-mcp/ROADMAP.md)、`api/channels/feishu/` |
 
 **CHN-P2 的 FormField 形状**（这是解开渲染契约僵局的一步——`required` 落在 form 层，
 `FeishuConfigInput` 因此名正言顺地保持全字段可选以支持 PATCH merge）：
@@ -179,6 +180,21 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 | CHN-X2 | `channel-api/vN` 版本标记落地 + web 侧 5 行断言（唯一的工具预算） | ✅ | `web:src/api/__tests__/channel.test.ts` |
 | CHN-X3 | 端到端联调验收：钉钉注册后，CHN-P7 那次构建出来的前端不重新部署就能渲染并保存 | ✅ | — |
 | CHN-X4 | ⏸ Go 侧 channel。**不做**——JSON 形状本身就是缝，且已被下面的规则版本化 | ⏸ | — |
+| CHN-X5 | private command **tolerate** 结构化 `ExternalIdentityAssertion`，保持旧 payload 逐字节不变并继续读 legacy `subject` | ⬜ | [EIM-C1](../enterprise-identity-mcp/ROADMAP.md) |
+| CHN-X6 | 飞书 worker **emit** `tenant_key` 与全部类型化用户 ID；resolver 继续兼容 legacy | ⬜ | CHN-X5；[EIM-C2](../enterprise-identity-mcp/ROADMAP.md) |
+| CHN-X7 | execution resolver 只把 IdentityService 已验证主体提升为 Principal；外部 subject 永不直通 | ⬜ | CHN-X6、EIM-I6、EIM-P1；[EIM-C3](../enterprise-identity-mcp/ROADMAP.md) |
+| CHN-X8 | 全部 runner 浸泡并有部署证据后，删除 legacy `ChannelActor.subject` | ⬜ | CHN-X7；[EIM-C4](../enterprise-identity-mcp/ROADMAP.md) |
+
+---
+
+### 企业身份扩展的权威简报
+
+CHN-X5～X8 与 CHN-P14 属于 EIM 项目，不在本文件重复字段、数据库、JWT 和安全设计。零上下文
+开工时先读 [`docs/enterprise-identity-mcp/README.md`](../enterprise-identity-mcp/README.md)，
+再按对应 EIM 任务的依赖和验收执行。两套 ID 必须同时出现在提交标题和两边变更日志中。
+
+这五条仍受本文件维护协议约束，尤其是：private DTO `extra="forbid"`、长驻 worker/supervisor 不随
+API 自动重启，以及 tolerate → emit → consume → remove 的部署顺序。身份字段不得顺手塞进一个 PR。
 
 ---
 
@@ -642,3 +658,4 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 | 2026-08-06 | **CHN-P11 完成：legacy `RuntimeCredential.app_id/app_secret` 删除，删字段三步走完**。同时删掉 `value()` 的 `legacy` 参数与飞书 provider 里最后一个读它的地方——留着参数等于留着回来的路。**闸门①是被证实的不是等出来的**：CHN-P8 提交 `09:42:26`，本机 supervisor `10:54:57` / worker `10:55:01` / API `11:15:01`，三者全部晚于提交一小时以上；用户确认目前只有这一台机器、Mac 那台将来直接用最新代码，所以「数不清的旧 runner」这个浸泡期真正要防的东西不存在。**验证**：`test_runtime_config_releases_only_provider_connection_material_to_authenticated_runner` 的线格断言里那两个键消失、**其余断言一字未动**（含那六个 forbidden 键与日志脱敏）；`test_runtime_credential_tolerates_both_contract_halves` 按新语义重写成 `..._is_a_generic_map_with_no_provider_named_in_it`，并新增 `..._refuses_the_deleted_legacy_pair`——`extra="forbid"` 让老 API 发来的 legacy 字段**响亮地失败**而不是被静默忽略，那个拒绝正是部署顺序要避免制造的信号；钉钉那条「不许读 legacy」的测试改写成「不许读别的 provider 的键」，因为原来的场景已经构造不出来了。`-k "channel or feishu or dingtalk"` **300 passed**。**⚠️ 半态**：代码已合、API 未重启，此刻稳定但**任何一次 worker 重启都会让新 worker 拒绝旧 API 的载荷**，详见简报末尾与 README §3 | 本次提交 | Claude |
 | 2026-08-06 | **CHN-O13 完成（WEB）：CHN-O6 的前端半边**。`channelAPI.verify(id)`（无请求体）、五个错误码进 `CHANNEL_ERROR_CODES` + 两份 locale、编辑抽屉页脚加「测试连接」（**只对已保存渠道出现**——它测的是已存的凭据，不是正在输入的那个，所以放在保存旁边而不是密钥输入框旁边，后者会暗示相反的意思）、`useVerifyChannel` 带 10 秒冷却禁用。核心是纯函数 `channelVerifyFailure`：把「被拒」和「没查成」分成两种结局，两条文案措辞刻意不同。**验证**：纯逻辑放在 `src/api/__tests__/channel.test.ts`（唯一被门禁覆盖的位置）——端点路径带 encode、**body 为 undefined**、五个码各自的分类、冷却常量与服务端一致；`test:api` **83 pass**。其余门禁：`lint` 0 error / `typecheck:agent-strict` 通过 / `lint:file-size` 通过 / `test:design-tokens` 11 pass / `test:streaming` 43 pass / `test:agent-t1` 70 pass / `build` + `check:bundle-size` 通过 / 两个棘轮 JSON `git diff --exit-code` 无输出。**`lint:typed` 在 Windows 上跑不了**（`ESLINT_TYPED=true` 是 bash 语法，cmd 报「不是内部或外部命令」），它只覆盖 `src/lib/agent.ts` 与 agent operators/adapters，本次一个都没碰——如实记这里，不当作跑过。按钮本身靠人工验证，**没有假装有测试** | web `ea0e5af` | Claude |
 | 2026-08-06 | **CHN-P11 部署完成，删字段三步真正走完**。用户批准后重启 API 与 supervisor，**顺序先 API 后 supervisor**——反过来会让新 worker 先起来撞上还在发 legacy 的旧 API，等于自己制造那次故障。API `14:41:03`（判据是行为不是时间戳：`POST /chat-channels/x/verify` 返回 **401 而非 404**，CHN-O6 路由在册 = 新构建）、supervisor `14:44:04`、worker `14:44:07`。**验证**：`worker_started result=ok` + `ws_connected result=ok`；DB 新 runner `vm-duxiaolong-34692`、`connected`、`last_error_code` 为空、`connected_at 14:44:28`；Redis `multirag:channel:v2:*:leader:*` 键回来；日志搜 `RUNTIME_CONFIG_INVALID\|validation error\|extra_forbidden` **零命中**——**一个 P11 worker 解析了一个 P11 API 的载荷并连上了，这是三步删字段唯一能真正证明成立的观察**。已知代价：飞书会话重置一次、dedupe 窗口空一次。**过程中踩了一个自己的坑**：重启脚本原本先轮转日志再杀进程，日志被活着的进程占着 → `Move-Item` 失败；好在它失败在杀进程之前，什么都没动，改成先杀后轮转即可 | 本次提交 | Claude |
+| 2026-08-07 | **登记 EIM 企业身份扩展**：新增 CHN-X5～X8（结构化外部身份的 tolerate / emit / verified consume / remove）与 CHN-P14（官方 `lark-channel-sdk` transport 迁移），全部保持未开始；完整设计、依赖、契约、安全与 Agent 手册统一链接到 `docs/enterprise-identity-mcp/`。**验证**：两套任务 ID 双向 grep 命中、相对链接检查通过后记录；本次只改文档，未改变运行时契约 | 本次提交 | Codex |
