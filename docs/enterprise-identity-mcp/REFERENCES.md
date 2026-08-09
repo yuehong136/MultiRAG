@@ -32,6 +32,7 @@
 | 生产安全 | `docs/security.md` | `compat -> audit -> strict`、签名、WS 限额、安全文本和审计 recorder |
 | 高层接口 | `docs/reference.md` | typed inbound、policy、public lifecycle、send opts、reaction、media 和 Reply/stream 能力 |
 | 流式卡片 | `docs/cardkit-streaming.md` | EIM-U1 的 CardKit 创建、sequence、patch、最终 finish 与错误状态 |
+| 流式刷新调度 | `lark_channel/channel/outbound/streaming/markdown_stream.py`、`throttle.py`、`update_queue.py` | EIM-U10 的 producer 非阻塞、定时触发、最多 1 running + 1 latest pending 和终态 drain |
 | 去重 | `docs/dedup-architecture.md` | 对照现有 Redis 去重，确定 SDK 去重与平台去重的唯一责任边界 |
 | 对话入口 | `lark_channel/__init__.py` 公开导出 | 只从稳定 public API import，不依赖内部模块 |
 | CardKit OpenAPI | `lark_channel/api/cardkit/v1/` | 卡片服务的 typed request/response；不要手拼 HTTP |
@@ -164,7 +165,8 @@
 
 ### 后续任务应该参考
 
-- `src/langbot/pkg/platform/sources/lark.py`：Provider adapter 最小接口、非阻塞 WebSocket；
+- `src/langbot/pkg/platform/sources/lark.py`：Provider adapter 最小接口、非阻塞 WebSocket，以及
+  CardKit `print_step` / `print_frequency_ms` / `fast` 流式打印配置；
 - `src/langbot/pkg/platform/sources/lark.yaml`：Provider 声明式元数据；
 - `tests/unit_tests/platform/test_lark_adapter.py`：事件到平台消息契约测试；
 - `tests/unit_tests/platform/test_lark_ws_nonblocking.py`：SDK callback 不阻塞；
@@ -183,10 +185,11 @@
 
 项目：[`shareAI-lab/lark-channel`](https://github.com/shareAI-lab/lark-channel)
 
-参考 `src/lark.ts` 和 README 中的：
+参考 `src/lark.ts`、`src/reply.ts` 和 README 中的：
 
 - 每群/每线程会话隔离；
 - streaming card 的块级展示；
+- 单 patch 在途、待发快照 latest-value 覆盖和 final flush；
 - reaction 表达 queued/running/done/error；
 - follow-up 保持在原线程。
 

@@ -226,17 +226,23 @@ stage；patch/finish 的 stage 纳入 sequence。Redis 执行 claim 仍按 bindi
 1. 最早可用时添加 Typing reaction；失败只记指标，不阻塞主流程。
 2. 创建 CardKit JSON 2.0 实体，`streaming_mode=true`，摘要为“生成中”。
 3. 回复原消息并保存 `card_id` 和发送返回的 `message_id`。
-4. 聚合 delta；首个正文在 250ms 闸门后尽快显示，后续默认至少积累 16 个新字符或在持续收到
-   delta 时距上次成功 patch 达到 1s 才发送；CardKit 请求 RTT 不计入下一批等待。最多 4 次/秒，
-   最终 flush 不受字符或时间等待限制。
-5. 每次 patch 使用严格递增 sequence；中间限流更新可合并或丢弃，但最终更新不能丢。
-6. 完成时强制 final flush，再用更大的 sequence 调 `finish_streaming_card()`。
+4. delta 只更新内存中的权威全文并通知后台单写者，`append()` 不等待 CardKit HTTP；单写者按
+   250ms 窗口取最新快照，最多一个 patch 在途，期间到达的待发状态始终 latest-value 覆盖。
+5. 定时刷新独立于后续 delta，短尾也会按时显示；每次 patch 使用严格递增 sequence。中间状态可
+   合并或跳过，但最终状态不能丢。
+6. 完成时取消未开始的定时刷新或等待在途 patch，然后强制 final flush，再用更大的 sequence 调
+   `finish_streaming_card()`。
 7. 完成后才添加按钮、完整来源、反馈区或 one-shot 卡片替换。
 8. 清理 Typing reaction；失败时尝试错误卡片或文本降级。
 
-飞书官方单卡 OpenAPI 上限是 10 次/秒，本项目使用更保守的 4 次/秒硬上限，并对首屏后的短 delta
-做字符/时间双闸门合并，既给重试和最终 flush 留出余量，也避免同步 patch RTT 把模型消费串行化成
-四字一刷。节流配置属于 Provider outbound config，不属于模型参数。
+飞书官方单卡 OpenAPI 上限是 10 次/秒，本项目使用更保守的 4 次/秒硬上限。卡片创建时显式固定
+`print_frequency_ms=70`、`print_step=1`、`print_strategy=fast`，后续不修改：客户端负责平滑逐字
+展示，`fast` 在新快照到达时不会让旧动画形成长队；服务端负责限流、latest-value 合并与最终一致性。
+该分工对齐飞书[流式更新卡片](https://open.feishu.cn/document/cardkit-v1/streaming-updates-openapi-overview)
+的配置/前缀更新约束、官方 Channel SDK 的 throttle + 单写者合并队列，以及 OpenClaw 的定时 flush、
+在途互斥和终态 drain；latest-value 模式也与 `shareAI-lab/lark-channel` 一致，固定参数参考 LangBot
+已验证的 CardKit 配置。快照源码见 [REFERENCES §2/§4/§6/§7](REFERENCES.md)。节流配置属于
+Provider outbound config，不属于模型参数。
 
 ### 5.2 内容渲染
 
@@ -250,7 +256,7 @@ stage；patch/finish 的 stage 纳入 sequence。Redis 执行 claim 仍按 bindi
 - 长答案优先卡片/分段，不再用固定 4,000 字符静默截断；
 - `summary` 在完成后改成可读的短摘要，兼容通知栏和低版本客户端。
 
-### 5.3 EIM-U1 落地映射
+### 5.3 EIM-U1 / EIM-U10 落地映射
 
 - `api/channels/feishu/reply.py` 独立承载 renderer、节流、ReplySession 状态、sequence、delivery UUID
   和 post/text fallback；`BindingBridge` 与 execution event 未增加任何飞书字段。
@@ -261,6 +267,9 @@ stage；patch/finish 的 stage 纳入 sequence。Redis 执行 claim 仍按 bindi
 - Card create/reply/patch 失败只把 session 切到 fallback 并继续消费同一次 Agent stream；最终正文
   已 patch、只有 finish 失败时不重复发送文本。Reaction 与首卡并发启动、添加/删除始终
   best-effort；慢 reaction 不阻塞首卡，终态后迟到会立即清理。
+- CHN-U13 的刷新器只允许一个 CardKit patch 在途；等待窗口和网络请求都运行在后台 task，多个模型
+  delta 只改变最新权威全文。终态会 drain 在途请求并强制 final patch，保持 U1 的 strict sequence、
+  delivery UUID 与 post/text fallback 语义不变。
 - manifest 只在实现和回归测试落地后声明 `streaming_cards=true`。上线前仍须按
   `FEISHU_ONBOARDING.md` 在目标租户申请、发布并实测 CardKit、消息回复和 reaction 权限。
 
@@ -483,6 +492,7 @@ SLO 是上线初始目标，真实压测和灰度后可调整；调整必须写�
 |---|---|---|---|
 | EIM-U0 | CHN-X9 | 加法暴露执行事件流 + ReplySession，保留 `ask()` | 现有 execution SSE |
 | EIM-U1 | CHN-U8 | Typing、CardKit 流式卡片、富文本和 fallback | U0；不依赖 C5/M3 |
+| EIM-U10 | CHN-U13 | 后台单写者刷新、latest-value 合并、固定客户端打印参数 | U9；不依赖 C5 |
 | EIM-U4 | CHN-U9 | follow-up queue、纯生成取消、重新生成、反馈 | U1 |
 | EIM-U3 | CHN-U10 | mention-only 群聊、话题、thread session | U1、U2、C3、O2 |
 | EIM-U5 | CHN-X10 | references/artifacts 结构化事件与渲染 | U0、P2 |

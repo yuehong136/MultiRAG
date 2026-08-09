@@ -31,9 +31,6 @@ class _Clock:
     def __call__(self) -> float:
         return self.now
 
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
-
 
 class _Transport:
     def __init__(self, *, failures: set[str] | None = None) -> None:
@@ -42,6 +39,7 @@ class _Transport:
         self.reactions_removed: list[tuple[str, str]] = []
         self.cards: list[str] = []
         self.card_replies: list[tuple[str, str, str]] = []
+        self.update_attempted = asyncio.Event()
         self.updates: list[tuple[str, str, int, str]] = []
         self.finishes: list[tuple[str, int, str]] = []
         self.fallback_attempts: list[tuple[str, str, str, str]] = []
@@ -80,6 +78,7 @@ class _Transport:
         sequence: int,
         delivery_uuid: str,
     ) -> None:
+        self.update_attempted.set()
         self._fail("card_update")
         self.updates.append((card_id, content, sequence, delivery_uuid))
 
@@ -123,10 +122,13 @@ class _SlowReactionTransport(_Transport):
         return "reaction-1"
 
 
-class _SlowUpdateTransport(_Transport):
-    def __init__(self, clock: _Clock) -> None:
+class _BlockingUpdateTransport(_Transport):
+    def __init__(self) -> None:
         super().__init__()
-        self._clock = clock
+        self.update_started = asyncio.Event()
+        self.release_update = asyncio.Event()
+        self.active_updates = 0
+        self.max_active_updates = 0
 
     async def update_card_text(
         self,
@@ -136,13 +138,49 @@ class _SlowUpdateTransport(_Transport):
         sequence: int,
         delivery_uuid: str,
     ) -> None:
-        await super().update_card_text(
-            card_id,
-            content,
-            sequence=sequence,
-            delivery_uuid=delivery_uuid,
-        )
-        self._clock.advance(2.0)
+        self.active_updates += 1
+        self.max_active_updates = max(self.max_active_updates, self.active_updates)
+        self.update_started.set()
+        try:
+            await self.release_update.wait()
+            await super().update_card_text(
+                card_id,
+                content,
+                sequence=sequence,
+                delivery_uuid=delivery_uuid,
+            )
+        finally:
+            self.active_updates -= 1
+
+
+class _ManualSleeper:
+    def __init__(self) -> None:
+        self.delays: list[float] = []
+        self._waiters: list[asyncio.Event] = []
+
+    async def __call__(self, seconds: float) -> None:
+        waiter = asyncio.Event()
+        self.delays.append(seconds)
+        self._waiters.append(waiter)
+        await waiter.wait()
+
+    async def wait_for_call(self, count: int) -> None:
+        for _ in range(100):
+            if len(self._waiters) >= count:
+                return
+            await asyncio.sleep(0)
+        raise AssertionError(f"expected {count} scheduled sleeps, got {len(self._waiters)}")
+
+    def release(self, index: int) -> None:
+        self._waiters[index].set()
+
+
+async def _wait_for_updates(transport: _Transport, count: int) -> None:
+    for _ in range(100):
+        if len(transport.updates) >= count:
+            return
+        await asyncio.sleep(0)
+    raise AssertionError(f"expected {count} card updates, got {len(transport.updates)}")
 
 
 def _source() -> IncomingMessage:
@@ -195,6 +233,8 @@ import api.channels.feishu.reply
 async def _session(
     transport: _Transport,
     clock: _Clock,
+    *,
+    sleeper: _ManualSleeper | None = None,
 ) -> FeishuProgressiveReplySession:
     return await FeishuProgressiveReplySession.begin(
         transport=transport,
@@ -202,6 +242,7 @@ async def _session(
         max_content_chars=4000,
         update_interval_seconds=0.25,
         clock=clock,
+        sleep=sleeper or asyncio.sleep,
     )
 
 
@@ -242,6 +283,11 @@ def test_streaming_card_is_json_2_with_one_stable_markdown_element() -> None:
 
     assert card["schema"] == "2.0"
     assert card["config"]["streaming_mode"] is True
+    assert card["config"]["streaming_config"] == {
+        "print_step": {"default": 1},
+        "print_frequency_ms": {"default": 70},
+        "print_strategy": "fast",
+    }
     assert card["body"]["elements"] == [
         {
             "tag": "markdown",
@@ -266,18 +312,23 @@ def test_delivery_uuid_is_deterministic_opaque_and_stage_scoped() -> None:
 async def test_progressive_reply_throttles_updates_then_flushes_and_finishes_in_order() -> None:
     clock = _Clock()
     transport = _Transport()
-    session = await _session(transport, clock)
+    sleeper = _ManualSleeper()
+    session = await _session(transport, clock, sleeper=sleeper)
 
     await session.append("第一段")
-    clock.advance(0.249)
     await session.append("第二段")
+    await session.append("第三段")
+    await sleeper.wait_for_call(1)
+    assert sleeper.delays == [0.25]
     assert transport.updates == []
 
-    clock.advance(0.001)
-    await session.append("第三段")
+    sleeper.release(0)
+    await _wait_for_updates(transport, 1)
     assert [update[2] for update in transport.updates] == [1]
+    assert transport.updates[0][1] == "第一段第二段第三段"
 
     await session.append("第四段")
+    await sleeper.wait_for_call(2)
     assert [update[2] for update in transport.updates] == [1]
     await session.complete()
 
@@ -293,58 +344,98 @@ async def test_progressive_reply_throttles_updates_then_flushes_and_finishes_in_
 
 
 @pytest.mark.asyncio
-async def test_short_model_deltas_are_coalesced_after_the_first_visible_text() -> None:
+async def test_append_never_waits_for_cardkit_network() -> None:
     clock = _Clock()
-    transport = _Transport()
-    session = await _session(transport, clock)
-    clock.advance(0.25)
-
-    await session.append("首屏")
-    assert [update[1] for update in transport.updates] == ["首屏"]
-
-    for delta in ("甲乙丙丁", "戊己庚辛", "壬癸子丑"):
-        clock.advance(0.25)
-        await session.append(delta)
-    assert [update[1] for update in transport.updates] == ["首屏"]
-
-    clock.advance(0.25)
-    await session.append("寅卯辰巳")
-
-    assert [update[1] for update in transport.updates] == [
-        "首屏",
-        "首屏甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_small_pending_delta_flushes_at_the_maximum_wait() -> None:
-    clock = _Clock()
-    transport = _Transport()
-    session = await _session(transport, clock)
-    clock.advance(0.25)
-    await session.append("首屏")
-
-    clock.advance(1.0)
-    await session.append("少量")
-
-    assert [update[1] for update in transport.updates] == ["首屏", "首屏少量"]
-
-
-@pytest.mark.asyncio
-async def test_cardkit_round_trip_does_not_trigger_a_back_to_back_tiny_patch() -> None:
-    clock = _Clock()
-    transport = _SlowUpdateTransport(clock)
-    session = await _session(transport, clock)
-    clock.advance(0.25)
-    await session.append("首屏")
-    assert clock.now == 102.25
+    transport = _BlockingUpdateTransport()
+    sleeper = _ManualSleeper()
+    session = await _session(transport, clock, sleeper=sleeper)
 
     await session.append("甲乙丙丁")
-    assert [update[1] for update in transport.updates] == ["首屏"]
+    await sleeper.wait_for_call(1)
+    sleeper.release(0)
+    await transport.update_started.wait()
 
-    clock.advance(1.0)
-    await session.append("戊己庚辛")
-    assert [update[1] for update in transport.updates] == ["首屏", "首屏甲乙丙丁戊己庚辛"]
+    await asyncio.wait_for(session.append("戊己庚辛"), timeout=0.01)
+    assert transport.active_updates == 1
+    assert transport.updates == []
+
+    transport.release_update.set()
+    await _wait_for_updates(transport, 1)
+    await session.complete()
+    assert transport.updates[-1][1] == "甲乙丙丁戊己庚辛"
+
+
+@pytest.mark.asyncio
+async def test_card_updates_keep_one_in_flight_and_only_the_latest_pending_snapshot() -> None:
+    clock = _Clock()
+    transport = _BlockingUpdateTransport()
+    sleeper = _ManualSleeper()
+    session = await _session(transport, clock, sleeper=sleeper)
+
+    await session.append("甲")
+    await sleeper.wait_for_call(1)
+    sleeper.release(0)
+    await transport.update_started.wait()
+
+    await session.append("乙")
+    await session.append("丙")
+    transport.release_update.set()
+    await _wait_for_updates(transport, 1)
+    await sleeper.wait_for_call(2)
+    sleeper.release(1)
+    await _wait_for_updates(transport, 2)
+
+    assert [update[1] for update in transport.updates] == [
+        "甲",
+        "甲乙丙",
+    ]
+    assert transport.max_active_updates == 1
+    await session.complete()
+    assert [update[2] for update in transport.updates] == [1, 2]
+    assert [finish[1] for finish in transport.finishes] == [3]
+
+
+@pytest.mark.asyncio
+async def test_complete_drains_in_flight_update_then_forces_the_latest_snapshot() -> None:
+    clock = _Clock()
+    transport = _BlockingUpdateTransport()
+    sleeper = _ManualSleeper()
+    session = await _session(transport, clock, sleeper=sleeper)
+
+    await session.append("第一段")
+    await sleeper.wait_for_call(1)
+    sleeper.release(0)
+    await transport.update_started.wait()
+    await session.append("第二段")
+
+    completion = asyncio.create_task(session.complete())
+    await asyncio.sleep(0)
+    assert completion.done() is False
+
+    transport.release_update.set()
+    await completion
+
+    assert [update[1] for update in transport.updates] == ["第一段", "第一段第二段"]
+    assert [update[2] for update in transport.updates] == [1, 2]
+    assert [finish[1] for finish in transport.finishes] == [3]
+    assert transport.max_active_updates == 1
+
+
+@pytest.mark.asyncio
+async def test_scheduled_flush_fires_without_a_later_model_delta() -> None:
+    clock = _Clock()
+    transport = _Transport()
+    sleeper = _ManualSleeper()
+    session = await _session(transport, clock, sleeper=sleeper)
+
+    await session.append("只有一次 delta")
+    await sleeper.wait_for_call(1)
+    assert transport.updates == []
+    sleeper.release(0)
+    await _wait_for_updates(transport, 1)
+
+    assert [update[1] for update in transport.updates] == ["只有一次 delta"]
+    await session.complete()
 
 
 @pytest.mark.asyncio
@@ -418,11 +509,14 @@ async def test_final_card_patch_failure_falls_back_post_then_text_with_same_uuid
 async def test_intermediate_card_patch_failure_keeps_buffering_the_complete_answer() -> None:
     clock = _Clock()
     transport = _Transport(failures={"card_update"})
-    session = await _session(transport, clock)
+    sleeper = _ManualSleeper()
+    session = await _session(transport, clock, sleeper=sleeper)
     await session.append("第一段")
-    clock.advance(0.25)
-
     await session.append("第二段")
+    await sleeper.wait_for_call(1)
+    sleeper.release(0)
+    await transport.update_attempted.wait()
+
     await session.append("第三段")
     await session.complete()
 
@@ -449,9 +543,12 @@ async def test_finish_failure_does_not_duplicate_already_visible_final_answer() 
 async def test_execution_failure_replaces_partial_card_with_safe_terminal_text() -> None:
     clock = _Clock()
     transport = _Transport()
-    session = await _session(transport, clock)
-    clock.advance(0.25)
+    sleeper = _ManualSleeper()
+    session = await _session(transport, clock, sleeper=sleeper)
     await session.append("不能作为最终结果的半截内容")
+    await sleeper.wait_for_call(1)
+    sleeper.release(0)
+    await _wait_for_updates(transport, 1)
 
     await session.fail("TARGET_EXECUTION_FAILED")
 

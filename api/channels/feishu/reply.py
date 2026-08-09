@@ -8,7 +8,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
@@ -20,9 +20,9 @@ LOGGER = logging.getLogger(__name__)
 CARD_ANSWER_ELEMENT_ID = "answer"
 _CARD_GENERATING_TEXT = "正在生成回答…"
 _CARD_BYTE_LIMIT = 24_000
+_CARD_PRINT_FREQUENCY_MS = 70
+_CARD_PRINT_STEP = 1
 _DELIVERY_UUID_LENGTH = 40
-_DEFAULT_MAX_UPDATE_INTERVAL_SECONDS = 1.0
-_DEFAULT_MIN_UPDATE_CHARS = 16
 _IMAGE_RE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)(?:\s+[^)]*)?\)")
 _MASS_MENTION_RE = re.compile(r"(?i)@(all|everyone)\b")
@@ -131,6 +131,11 @@ def streaming_card_json() -> str:
         "schema": "2.0",
         "config": {
             "streaming_mode": True,
+            "streaming_config": {
+                "print_step": {"default": _CARD_PRINT_STEP},
+                "print_frequency_ms": {"default": _CARD_PRINT_FREQUENCY_MS},
+                "print_strategy": "fast",
+            },
             "summary": {"content": "[生成中]"},
         },
         "body": {
@@ -157,27 +162,20 @@ class FeishuProgressiveReplySession:
         source: IncomingMessage,
         max_content_chars: int,
         update_interval_seconds: float = 0.25,
-        min_update_chars: int = _DEFAULT_MIN_UPDATE_CHARS,
-        max_update_interval_seconds: float = _DEFAULT_MAX_UPDATE_INTERVAL_SECONDS,
         clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         if max_content_chars < 1:
             raise ValueError("reply content limit must be positive")
         if update_interval_seconds <= 0:
             raise ValueError("update interval must be positive")
-        if min_update_chars < 1:
-            raise ValueError("minimum update characters must be positive")
-        if max_update_interval_seconds < update_interval_seconds:
-            raise ValueError("maximum update interval must not be shorter than minimum interval")
         self._transport = transport
         self._source = source
         self._max_content_chars = max_content_chars
         self._update_interval_seconds = update_interval_seconds
-        self._min_update_chars = min_update_chars
-        self._max_update_interval_seconds = max_update_interval_seconds
         self._clock = clock
+        self._sleep = sleep
         self._started_at = clock()
-        self._last_update_at = self._started_at
         self._parts: list[str] = []
         self._state = ReplySessionState.OPEN
         self._reaction_id = ""
@@ -187,6 +185,9 @@ class FeishuProgressiveReplySession:
         self._card_active = False
         self._sequence = 0
         self._last_rendered = ""
+        self._flush_task: asyncio.Task[None] | None = None
+        self._flush_in_flight = False
+        self._terminal_flush_requested = False
 
     @classmethod
     async def begin(
@@ -196,18 +197,16 @@ class FeishuProgressiveReplySession:
         source: IncomingMessage,
         max_content_chars: int,
         update_interval_seconds: float = 0.25,
-        min_update_chars: int = _DEFAULT_MIN_UPDATE_CHARS,
-        max_update_interval_seconds: float = _DEFAULT_MAX_UPDATE_INTERVAL_SECONDS,
         clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> FeishuProgressiveReplySession:
         session = cls(
             transport=transport,
             source=source,
             max_content_chars=max_content_chars,
             update_interval_seconds=update_interval_seconds,
-            min_update_chars=min_update_chars,
-            max_update_interval_seconds=max_update_interval_seconds,
             clock=clock,
+            sleep=sleep,
         )
         await session._start_progression()
         return session
@@ -223,32 +222,23 @@ class FeishuProgressiveReplySession:
         self._parts.append(content)
         if not content or not self._card_active:
             return
-        now = self._clock()
-        if now - self._last_update_at < self._update_interval_seconds:
-            return
-        try:
-            await self._patch_answer(now=now)
-        except Exception:
-            # A renderer/transport failure is a delivery-mode failure, not an
-            # Agent failure. Keep buffering subsequent deltas and deliver the
-            # one final answer through the post/text fallback on completion.
-            self._card_active = False
-            self._log("card_update_failed", "FEISHU_CARD_UPDATE_FAILED")
+        self._schedule_card_update()
 
     async def complete(self) -> None:
         self._require_open("complete")
         answer = strip_reasoning("".join(self._parts))
         self._state = ReplySessionState.COMPLETED
-        if not answer:
-            await self._remove_typing()
-            raise ReplySessionStateError("cannot complete an empty reply")
+        self._terminal_flush_requested = True
 
         try:
+            await self._drain_card_update()
+            if not answer:
+                raise ReplySessionStateError("cannot complete an empty reply")
             if not self._card_active:
                 await self._fallback(answer, stage="final_fallback")
                 return
             try:
-                await self._patch_answer(answer=answer, now=self._clock(), force=True)
+                await self._patch_answer(answer=answer)
             except Exception:
                 self._card_active = False
                 self._log("card_update_failed", "FEISHU_CARD_UPDATE_FAILED")
@@ -270,16 +260,14 @@ class FeishuProgressiveReplySession:
         if not error_code:
             raise ValueError("reply failure code must not be empty")
         self._state = ReplySessionState.FAILED
-        self._parts.clear()
+        self._terminal_flush_requested = True
 
         try:
+            await self._drain_card_update()
+            self._parts.clear()
             if self._card_active:
                 try:
-                    await self._patch_answer(
-                        answer=SERVICE_UNAVAILABLE_TEXT,
-                        now=self._clock(),
-                        force=True,
-                    )
+                    await self._patch_answer(answer=SERVICE_UNAVAILABLE_TEXT)
                     await self._finish_card()
                     return
                 except Exception:
@@ -306,8 +294,6 @@ class FeishuProgressiveReplySession:
             )
             self._card_visible = True
             self._card_active = True
-            now = self._clock()
-            self._last_update_at = now
             self._log_latency("streaming_card_created", self._started_at)
         except Exception:
             self._card_active = False
@@ -332,8 +318,6 @@ class FeishuProgressiveReplySession:
         self,
         *,
         answer: str | None = None,
-        now: float,
-        force: bool = False,
     ) -> None:
         if not self._card_active or not self._card_id:
             return
@@ -341,8 +325,6 @@ class FeishuProgressiveReplySession:
         if not rendered:
             return
         if rendered == self._last_rendered:
-            return
-        if not force and not self._should_patch(rendered, now):
             return
         sequence = self._next_sequence()
         await self._transport.update_card_text(
@@ -352,22 +334,58 @@ class FeishuProgressiveReplySession:
             delivery_uuid=delivery_uuid(self._source, f"card_update:{sequence}"),
         )
         self._last_rendered = rendered
-        # Start the next coalescing window after the outbound request returns.
-        # Counting CardKit network latency here causes the next tiny model delta
-        # to patch immediately, serializing generation behind API round-trips.
-        self._last_update_at = self._clock()
 
-    def _should_patch(self, rendered: str, now: float) -> bool:
-        elapsed = now - self._last_update_at
-        if elapsed < self._update_interval_seconds:
-            return False
-        if not self._last_rendered:
-            return True
-        if rendered.startswith(self._last_rendered):
-            pending_chars = len(rendered) - len(self._last_rendered)
-        else:
-            pending_chars = len(rendered)
-        return pending_chars >= self._min_update_chars or elapsed >= self._max_update_interval_seconds
+    def _schedule_card_update(self) -> None:
+        if self._terminal_flush_requested:
+            return
+        task = self._flush_task
+        if task is None or task.done():
+            self._flush_task = asyncio.create_task(self._flush_latest())
+
+    async def _flush_latest(self) -> None:
+        try:
+            await self._sleep(self._update_interval_seconds)
+            while self._card_active and not self._terminal_flush_requested:
+                self._flush_in_flight = True
+                try:
+                    await self._patch_answer()
+                finally:
+                    self._flush_in_flight = False
+
+                if self._terminal_flush_requested or self._rendered_answer() == self._last_rendered:
+                    return
+                await self._sleep(self._update_interval_seconds)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # A renderer/transport failure is a delivery-mode failure, not an
+            # Agent failure. Keep buffering subsequent deltas and deliver the
+            # one final answer through the post/text fallback on completion.
+            self._card_active = False
+            self._log("card_update_failed", "FEISHU_CARD_UPDATE_FAILED")
+        finally:
+            self._flush_in_flight = False
+
+    async def _drain_card_update(self) -> None:
+        task = self._flush_task
+        if task is None:
+            return
+        cancelled_pending = False
+        if not task.done() and not self._flush_in_flight:
+            task.cancel()
+            cancelled_pending = True
+        try:
+            if cancelled_pending:
+                await task
+            else:
+                await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if not cancelled_pending:
+                raise
+        self._flush_task = None
+
+    def _rendered_answer(self) -> str:
+        return _truncate_utf8(render_markdown("".join(self._parts)))
 
     async def _finish_card(self) -> None:
         if not self._card_id:

@@ -182,10 +182,12 @@ delta 渲染到一个 CardKit 2.0 streaming card；卡片失败只切换交付�
 
 `FeishuProgressiveReplySession` 在执行开始时并发启动 best-effort `Typing` reaction 与 CardKit 创建，
 慢 reaction 不阻塞首卡；迟到终态之后的 reaction 会立即清理。卡片使用 `schema=2.0`、
-`streaming_mode=true` 并以 `interactive` 回复原消息。首个正文 delta 在距建卡至少 250ms 后尽快
-显示；后续短 delta 默认合并到至少 16 个新字符，持续有输出时最长等待 1 秒。成功 patch 的下一轮
-计时从 CardKit 请求返回后开始，网络 RTT 不会触发背靠背小更新；250ms 硬下限仍保证正常更新不超过
-4 QPS。`complete()` 无条件重渲染并 flush 最终正文，再用更大的 sequence 关闭 streaming。所有
+`streaming_mode=true` 并以 `interactive` 回复原消息；`streaming_config` 固定为 70ms、每步 1 字和
+`fast` 策略，避免客户端因默认值或旧动画积压而出现不同节奏。正文 delta 只写入内存并唤醒后台
+单写者，`append()` 不等待 CardKit 网络；单写者按 250ms 窗口合并最新全文，任何时刻最多一个 patch
+在途，期间到达的多个快照只保留最新值。定时刷新不依赖下一条 delta，因此短尾不会悬空；网络 RTT
+也不会反向阻塞 execution SSE。正常更新不超过 4 QPS。`complete()` 会取消尚未开始的定时刷新或
+等待在途 patch，再无条件重渲染并 flush 最终正文，最后用更大的 sequence 关闭 streaming。所有
 卡片更新在发请求前先消费 sequence，失败或结果不明时不会复用旧 sequence。
 
 消息发送和卡片 OpenAPI 使用确定性 SHA-256 delivery UUID：输入只包含 provider account 的不透明
