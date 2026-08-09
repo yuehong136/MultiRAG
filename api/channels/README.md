@@ -158,7 +158,8 @@ Managed 模式是管理页面和生产部署使用的长期架构：
   -> 原有 execution SSE
   -> MultiRAGBindingExecutionClient.stream()
   -> BindingBridge -> transport-neutral ReplySession
-  -> 普通 Provider buffered complete -> Channel.send() 一次
+     ├── 飞书：Typing -> CardKit 2.0 -> throttled patch -> final flush/finish
+     └── 普通 Provider：buffered complete -> Channel.send() 一次
 ```
 
 Supervisor 只协调 desired state，不接触飞书 App Secret。每个 child worker 只在内存中获得
@@ -168,14 +169,40 @@ supervisor 会停止或重启相应进程；异常退出采用有上限的指数
 
 Managed worker 的唯一核心执行路径是 `MultiRAGBindingExecutionClient.stream()`：它统一构造请求、
 读取和校验 SSE、检查 completion/`[DONE]`、传播 session、执行跨 delta reasoning 过滤，并映射安全
-错误码。`BindingBridge` 直接按序把类型化 delta 写入 `ReplySession`，不再调用 `ask()`；默认
-buffered session 只在成功完成时发送一次，执行中途失败会丢弃半截答案并交付固定安全提示，不会
-重跑 Agent。`reply_to_message_id`、Redis claim、同会话串行和 executed/replied tombstone 语义保持不变。
+错误码。`BindingBridge` 直接按序把类型化 delta 写入 `ReplySession`，不再调用 `ask()`；普通
+Provider 的默认 buffered session 只在成功完成时发送一次。飞书 override `begin_reply()`，把同一批
+delta 渲染到一个 CardKit 2.0 streaming card；卡片失败只切换交付方式，不会重新执行 Agent。
+`reply_to_message_id`、Redis claim、同会话串行和 executed/replied tombstone 语义保持不变。
 
 `ask()` 仅是消费同一个 `stream()` 并聚合为 `AgentReply` 的阶段性兼容 facade，用于迁移和回滚
 安全；它不是推荐接口，新代码不得增加调用。生产调用归零且 EIM-U1 稳定后应在独立任务中删除。
-当前默认实现仍是最终单条纯文本；Typing、CardKit、富文本 renderer 和渐进式 Provider session
-属于 EIM-U1/CHN-U8，尚未实现。
+默认实现仍是最终单条纯文本；飞书已实现 EIM-U1/CHN-U8 渐进式 Provider session。
+
+### 飞书渐进式回复
+
+`FeishuProgressiveReplySession` 在执行开始时并发启动 best-effort `Typing` reaction 与 CardKit 创建，
+慢 reaction 不阻塞首卡；迟到终态之后的 reaction 会立即清理。卡片使用 `schema=2.0`、
+`streaming_mode=true` 并以 `interactive` 回复原消息。delta 只在距上次
+成功 patch 至少 250ms 后发送，因此正常更新不超过 4 QPS；未发送的中间 delta 在内存中合并，
+`complete()` 无条件重渲染并 flush 最终正文，再用更大的 sequence 关闭 streaming。所有卡片更新在
+发请求前先消费 sequence，失败或结果不明时不会复用旧 sequence。
+
+消息发送和卡片 OpenAPI 使用确定性 SHA-256 delivery UUID：输入只包含 provider account 的不透明
+标识、飞书 event/message ID 和稳定 stage；普通日志只记录这些值的短哈希。`running_card`、
+`final_fallback`、`error` 分 stage，卡片 patch/finish 还把 sequence 纳入 stage。post 到 text 的兼容
+降级复用同一个 fallback UUID，避免第一次响应结果不明时换键制造重复消息。
+
+Renderer 独立于 Bridge：CardKit Markdown 只保留 `https` 链接，模型生成的 `@all/@everyone` 不会
+变成真实 mention，原始 `<at>` 标签被转义，表格降级为可读等宽块，未闭合代码块在每次 patch 时
+暂态闭合。卡片正文按 UTF-8 24KB 安全预算截断并明确显示后缀；只有 post/text fallback 沿用渠道的
+`max_answer_chars`。CardKit create/reply/update 失败时继续消费同一次 execution stream，并在完成时
+发送一条 post；post 不可用再发 text。最终正文已成功 patch、只有 finish 失败时不再补发文本，避免
+重复交付。执行失败则用安全固定文案覆盖当前卡片并 finish，覆盖失败才走 fallback。
+
+启用这项能力前，飞书应用需要在测试租户验证 `cardkit:card:write`、消息回复和 reaction 所需权限，
+修改权限后重新发布并安装应用。Reaction 始终是 best-effort；缺权限不会阻塞卡片或文本回答。
+应用若订阅 `im.message.message_read_v1`，worker 会消费并忽略该回执，避免 SDK 把无业务用途的已读
+事件记成 `processor not found` ERROR。
 
 ### Canvas 发布版本兼容策略
 
@@ -517,7 +544,7 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
 - 主加密密钥支持在线轮换（密钥环，见上），但**没有存量密文重加密流程**：旧密文要靠旧
   密钥留在环上才读得到，只有该渠道下次保存新凭据时才会改用 active 密钥重写。因此
   **仍然不得直接替换旧 key**——替换 ≠ 轮换。
-- 当前只支持飞书私聊文本，不支持群聊、卡片流式、图片、文件或语音。
+- 当前支持飞书私聊文本与 CardKit 渐进式回复；仍不支持群聊、图片、文件或语音。
 
 因此，生产 binding 仍应绑定只读、最小权限的 Agent/Dialog；涉及副作用的 MCP 工具必须
 自行验证授权和幂等键。正式 Principal/ToolRuntime 接入后，可替换内部执行适配器，而无需
@@ -525,10 +552,9 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
 
 上述体验缺口的目标契约、任务拆分和安全边界统一见
 [`docs/enterprise-identity-mcp/FEISHU_BOT_UX.md`](../../docs/enterprise-identity-mcp/FEISHU_BOT_UX.md)。
-其中 EIM-U0 已使用现有 execution SSE 完成 transport-neutral 流式执行契约；EIM-U1 可继续使用
-`lark-oapi` OpenAPI 开工，不等待 `lark-channel-sdk` transport PoC。群聊、多模态和敏感确认仍分别
-受 verified identity、资源可见性和 Confirmation/幂等依赖约束。该文档描述目标态，不把 U1
-能力算作当前生产能力。
+其中 EIM-U0 已使用现有 execution SSE 完成 transport-neutral 流式执行契约，EIM-U1 已基于
+`lark-oapi` OpenAPI 落地且没有等待 `lark-channel-sdk` transport PoC。群聊、多模态和敏感确认仍分别
+受 verified identity、资源可见性和 Confirmation/幂等依赖约束。
 
 ## 运维与故障判断
 

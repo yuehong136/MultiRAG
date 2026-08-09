@@ -189,6 +189,12 @@ def test_account_identity_reads_the_declared_path() -> None:
     assert spec.account_identity({}) is None
 
 
+def test_feishu_manifest_advertises_implemented_streaming_card_capability() -> None:
+    spec = provider_spec("feishu")
+
+    assert spec.capabilities.streaming_cards is True
+
+
 @pytest.mark.parametrize("spec", _declared_specs(), ids=lambda spec: spec.name)
 def test_form_fields_describe_real_config_paths(spec: ProviderSpec) -> None:
     """The render contract and the validation contract must not drift apart.

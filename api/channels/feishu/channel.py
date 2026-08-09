@@ -28,7 +28,8 @@ from dataclasses import dataclass, field
 from importlib import import_module
 from typing import Any, Protocol, runtime_checkable
 
-from ..core.base import Channel, IncomingMessage, OutgoingMessage
+from ..core.base import Channel, IncomingMessage, OutgoingMessage, ReplySession
+from .reply import CARD_ANSWER_ELEMENT_ID, FeishuProgressiveReplySession
 
 LOGGER = logging.getLogger(__name__)
 
@@ -67,9 +68,42 @@ class _FeishuSDK(Protocol):
         callback: Any,
     ) -> Any: ...
 
-    def reply_message(self, client: Any, message_id: str, content: str) -> Any: ...
+    def reply_message(
+        self,
+        client: Any,
+        message_id: str,
+        content: str,
+        *,
+        message_type: str = "text",
+        delivery_uuid: str | None = None,
+    ) -> Any: ...
 
     def create_message(self, client: Any, chat_id: str, content: str) -> Any: ...
+
+    def create_card(self, client: Any, card_json: str) -> Any: ...
+
+    def update_card_text(
+        self,
+        client: Any,
+        card_id: str,
+        content: str,
+        *,
+        sequence: int,
+        delivery_uuid: str,
+    ) -> Any: ...
+
+    def finish_streaming_card(
+        self,
+        client: Any,
+        card_id: str,
+        *,
+        sequence: int,
+        delivery_uuid: str,
+    ) -> Any: ...
+
+    def create_reaction(self, client: Any, message_id: str, emoji_type: str) -> Any: ...
+
+    def delete_reaction(self, client: Any, message_id: str, reaction_id: str) -> Any: ...
 
     def stop_ws_client(self, client: Any) -> Any: ...
 
@@ -96,6 +130,7 @@ class _LarkOapiSDK:
                 self._lark = import_module("lark_oapi")
                 self._ws_module = import_module("lark_oapi.ws.client")
                 im_api = import_module("lark_oapi.api.im.v1")
+                cardkit_api = import_module("lark_oapi.api.cardkit.v1")
         except ImportError as error:
             raise FeishuDependencyError("Feishu channel requires the optional 'lark-oapi' dependency") from error
 
@@ -103,6 +138,16 @@ class _LarkOapiSDK:
         self._create_message_body = im_api.CreateMessageRequestBody
         self._reply_message_request = im_api.ReplyMessageRequest
         self._reply_message_body = im_api.ReplyMessageRequestBody
+        self._create_reaction_request = im_api.CreateMessageReactionRequest
+        self._create_reaction_body = im_api.CreateMessageReactionRequestBody
+        self._delete_reaction_request = im_api.DeleteMessageReactionRequest
+        self._emoji = im_api.Emoji
+        self._create_card_request = cardkit_api.CreateCardRequest
+        self._create_card_body = cardkit_api.CreateCardRequestBody
+        self._content_card_element_request = cardkit_api.ContentCardElementRequest
+        self._content_card_element_body = cardkit_api.ContentCardElementRequestBody
+        self._settings_card_request = cardkit_api.SettingsCardRequest
+        self._settings_card_body = cardkit_api.SettingsCardRequestBody
 
     def _domain(self, domain: str) -> Any:
         if domain == "lark":
@@ -130,7 +175,15 @@ class _LarkOapiSDK:
         self._ws_module.loop = loop
 
     def build_ws_client(self, account: FeishuAccount, callback: Any) -> Any:
-        handler = self._lark.EventDispatcherHandler.builder("", "").register_p2_im_message_receive_v1(callback).build()
+        handler = (
+            self._lark.EventDispatcherHandler.builder("", "")
+            .register_p2_im_message_receive_v1(callback)
+            # Some Feishu apps also subscribe to the read-receipt event. It is
+            # transport noise for MultiRAG, but leaving it unregistered makes
+            # lark-oapi emit a misleading processor-not-found ERROR per read.
+            .register_p2_im_message_message_read_v1(self._ignore_message_read)
+            .build()
+        )
         kwargs: dict[str, Any] = {
             "domain": self._domain(account.domain),
             "event_handler": handler,
@@ -145,8 +198,23 @@ class _LarkOapiSDK:
             **kwargs,
         )
 
-    def reply_message(self, client: Any, message_id: str, content: str) -> Any:
-        request = self._reply_message_request.builder().message_id(message_id).request_body(self._reply_message_body.builder().content(content).msg_type("text").build()).build()
+    @staticmethod
+    def _ignore_message_read(data: Any) -> None:
+        del data
+
+    def reply_message(
+        self,
+        client: Any,
+        message_id: str,
+        content: str,
+        *,
+        message_type: str = "text",
+        delivery_uuid: str | None = None,
+    ) -> Any:
+        body = self._reply_message_body.builder().content(content).msg_type(message_type)
+        if delivery_uuid:
+            body = body.uuid(delivery_uuid)
+        request = self._reply_message_request.builder().message_id(message_id).request_body(body.build()).build()
         return client.im.v1.message.reply(request)
 
     def create_message(self, client: Any, chat_id: str, content: str) -> Any:
@@ -154,6 +222,58 @@ class _LarkOapiSDK:
             self._create_message_request.builder().receive_id_type("chat_id").request_body(self._create_message_body.builder().receive_id(chat_id).content(content).msg_type("text").build()).build()
         )
         return client.im.v1.message.create(request)
+
+    def create_card(self, client: Any, card_json: str) -> Any:
+        request = self._create_card_request.builder().request_body(self._create_card_body.builder().type("card_json").data(card_json).build()).build()
+        return client.cardkit.v1.card.create(request)
+
+    def update_card_text(
+        self,
+        client: Any,
+        card_id: str,
+        content: str,
+        *,
+        sequence: int,
+        delivery_uuid: str,
+    ) -> Any:
+        request = (
+            self._content_card_element_request.builder()
+            .card_id(card_id)
+            .element_id(CARD_ANSWER_ELEMENT_ID)
+            .request_body(self._content_card_element_body.builder().content(content).sequence(sequence).uuid(delivery_uuid).build())
+            .build()
+        )
+        return client.cardkit.v1.card_element.content(request)
+
+    def finish_streaming_card(
+        self,
+        client: Any,
+        card_id: str,
+        *,
+        sequence: int,
+        delivery_uuid: str,
+    ) -> Any:
+        settings = json.dumps(
+            {
+                "config": {
+                    "streaming_mode": False,
+                    "summary": {"content": "回答完成"},
+                }
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        request = self._settings_card_request.builder().card_id(card_id).request_body(self._settings_card_body.builder().settings(settings).sequence(sequence).uuid(delivery_uuid).build()).build()
+        return client.cardkit.v1.card.settings(request)
+
+    def create_reaction(self, client: Any, message_id: str, emoji_type: str) -> Any:
+        reaction = self._emoji.builder().emoji_type(emoji_type).build()
+        request = self._create_reaction_request.builder().message_id(message_id).request_body(self._create_reaction_body.builder().reaction_type(reaction).build()).build()
+        return client.im.v1.message_reaction.create(request)
+
+    def delete_reaction(self, client: Any, message_id: str, reaction_id: str) -> Any:
+        request = self._delete_reaction_request.builder().message_id(message_id).reaction_id(reaction_id).build()
+        return client.im.v1.message_reaction.delete(request)
 
     def stop_ws_client(self, client: Any) -> Any:
         # lark-oapi 1.x has no stable public shutdown API across releases.
@@ -203,18 +323,22 @@ class FeishuChannel(Channel):
         sdk: _FeishuSDK | None = None,
         start_timeout_seconds: float = 30.0,
         stop_timeout_seconds: float = 5.0,
+        stream_update_interval_seconds: float = 0.25,
     ) -> None:
         super().__init__()
         if start_timeout_seconds <= 0:
             raise ValueError("start_timeout_seconds must be positive")
         if stop_timeout_seconds <= 0:
             raise ValueError("stop_timeout_seconds must be positive")
+        if stream_update_interval_seconds <= 0:
+            raise ValueError("stream_update_interval_seconds must be positive")
 
         self.account = account
         self.account_id = account.account_id
         self._sdk = sdk or _LarkOapiSDK()
         self._start_timeout_seconds = start_timeout_seconds
         self._stop_timeout_seconds = stop_timeout_seconds
+        self._stream_update_interval_seconds = stream_update_interval_seconds
         self._loop: asyncio.AbstractEventLoop | None = None
         self._ws_loop: asyncio.AbstractEventLoop | None = None
         self._ws_client: Any = None
@@ -449,6 +573,136 @@ class FeishuChannel(Channel):
                 code,
             )
             raise FeishuSendError(code)
+
+    async def begin_reply(
+        self,
+        source: IncomingMessage,
+        *,
+        max_content_chars: int,
+    ) -> ReplySession:
+        return await FeishuProgressiveReplySession.begin(
+            transport=self,
+            source=source,
+            max_content_chars=max_content_chars,
+            update_interval_seconds=self._stream_update_interval_seconds,
+        )
+
+    async def add_typing_reaction(self, message_id: str) -> str:
+        response = await asyncio.to_thread(
+            self._sdk.create_reaction,
+            self._rest,
+            message_id,
+            "Typing",
+        )
+        self._require_success(response)
+        return self._require_response_value(response, "reaction_id")
+
+    async def remove_reaction(self, message_id: str, reaction_id: str) -> None:
+        response = await asyncio.to_thread(
+            self._sdk.delete_reaction,
+            self._rest,
+            message_id,
+            reaction_id,
+        )
+        self._require_success(response)
+
+    async def create_streaming_card(self, card_json: str) -> str:
+        response = await asyncio.to_thread(
+            self._sdk.create_card,
+            self._rest,
+            card_json,
+        )
+        self._require_success(response)
+        return self._require_response_value(response, "card_id")
+
+    async def reply_card(
+        self,
+        message_id: str,
+        card_id: str,
+        *,
+        delivery_uuid: str,
+    ) -> str:
+        content = json.dumps(
+            {"type": "card", "data": {"card_id": card_id}},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        response = await asyncio.to_thread(
+            self._sdk.reply_message,
+            self._rest,
+            message_id,
+            content,
+            message_type="interactive",
+            delivery_uuid=delivery_uuid,
+        )
+        self._require_success(response)
+        return self._require_response_value(response, "message_id")
+
+    async def update_card_text(
+        self,
+        card_id: str,
+        content: str,
+        *,
+        sequence: int,
+        delivery_uuid: str,
+    ) -> None:
+        response = await asyncio.to_thread(
+            self._sdk.update_card_text,
+            self._rest,
+            card_id,
+            content,
+            sequence=sequence,
+            delivery_uuid=delivery_uuid,
+        )
+        self._require_success(response)
+
+    async def finish_streaming_card(
+        self,
+        card_id: str,
+        *,
+        sequence: int,
+        delivery_uuid: str,
+    ) -> None:
+        response = await asyncio.to_thread(
+            self._sdk.finish_streaming_card,
+            self._rest,
+            card_id,
+            sequence=sequence,
+            delivery_uuid=delivery_uuid,
+        )
+        self._require_success(response)
+
+    async def reply_content(
+        self,
+        message_id: str,
+        content: str,
+        *,
+        message_type: str,
+        delivery_uuid: str,
+    ) -> None:
+        response = await asyncio.to_thread(
+            self._sdk.reply_message,
+            self._rest,
+            message_id,
+            content,
+            message_type=message_type,
+            delivery_uuid=delivery_uuid,
+        )
+        self._require_success(response)
+
+    def _require_success(self, response: Any) -> None:
+        if self._sdk.response_success(response):
+            return
+        code = _string(self._sdk.response_code(response)) or "unknown"
+        raise FeishuSendError(code)
+
+    @staticmethod
+    def _require_response_value(response: Any, name: str) -> str:
+        data = getattr(response, "data", None)
+        value = _string(getattr(data, name, None))
+        if not value:
+            raise FeishuSendError(f"MISSING_{name.upper()}")
+        return value
 
     def _on_message_receive(self, data: Any) -> None:
         """SDK callback: normalize and enqueue; never await business handling."""

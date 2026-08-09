@@ -101,7 +101,7 @@ Channel 创建后使用现有“测试连接”能力验证 `app_id/app_secret`�
 
 ### 4.2 渐进式回复阶段必需
 
-EIM-U1/CHN-U8 上线前，按飞书开发者后台当时展示的最小可用组合申请并在测试租户验证：
+EIM-U1/CHN-U8 代码已落地；部署到目标租户前，按飞书开发者后台当时展示的最小可用组合申请并验证：
 
 | Scope ID | 用途 |
 |---|---|
@@ -114,6 +114,9 @@ EIM-U1/CHN-U8 上线前，按飞书开发者后台当时展示的最小可用组
 不会自动证明新 scope 已生效。
 
 Reaction 用于即时 acknowledgement，失败只能降级为初始卡片/文本，不能阻塞回答。
+当前实现正是这个边界：`cardkit:card:write` 缺失会让同一次执行在完成时降级为 post/text，
+reaction 权限缺失只影响 Typing，不会重跑 Agent。manifest 声明能力不等于某个租户已经授权；
+上线检查必须实际观察到 Typing、单卡渐进更新和 final finish，再逐项撤掉权限验证降级。
 
 官方来源：
 

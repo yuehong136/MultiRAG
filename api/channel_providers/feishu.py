@@ -140,7 +140,7 @@ PROVIDER_SPEC = ProviderSpec(
         text=True,
         files=False,
         images=False,
-        streaming_cards=False,
+        streaming_cards=True,
     ),
     config_model=FeishuConfigInput,
     config_patch_model=FeishuConfigPatch,

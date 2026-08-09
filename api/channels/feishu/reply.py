@@ -1,0 +1,464 @@
+"""Feishu progressive reply lifecycle and user-visible renderers."""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import logging
+import re
+import time
+from collections.abc import Callable
+from typing import Protocol
+from urllib.parse import urlsplit
+
+from api.channels.core.base import IncomingMessage, ReplySessionState, ReplySessionStateError
+from api.channels.core.reply import SERVICE_UNAVAILABLE_TEXT, strip_reasoning, truncate_answer
+
+LOGGER = logging.getLogger(__name__)
+
+CARD_ANSWER_ELEMENT_ID = "answer"
+_CARD_GENERATING_TEXT = "正在生成回答…"
+_CARD_BYTE_LIMIT = 24_000
+_DELIVERY_UUID_LENGTH = 40
+_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
+_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)(?:\s+[^)]*)?\)")
+_MASS_MENTION_RE = re.compile(r"(?i)@(all|everyone)\b")
+_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
+
+
+class FeishuReplyTransport(Protocol):
+    """Provider operations used by the progressive session."""
+
+    async def add_typing_reaction(self, message_id: str) -> str: ...
+
+    async def remove_reaction(self, message_id: str, reaction_id: str) -> None: ...
+
+    async def create_streaming_card(self, card_json: str) -> str: ...
+
+    async def reply_card(
+        self,
+        message_id: str,
+        card_id: str,
+        *,
+        delivery_uuid: str,
+    ) -> str: ...
+
+    async def update_card_text(
+        self,
+        card_id: str,
+        content: str,
+        *,
+        sequence: int,
+        delivery_uuid: str,
+    ) -> None: ...
+
+    async def finish_streaming_card(
+        self,
+        card_id: str,
+        *,
+        sequence: int,
+        delivery_uuid: str,
+    ) -> None: ...
+
+    async def reply_content(
+        self,
+        message_id: str,
+        content: str,
+        *,
+        message_type: str,
+        delivery_uuid: str,
+    ) -> None: ...
+
+
+def delivery_uuid(source: IncomingMessage, stage: str) -> str:
+    """Return a deterministic, opaque idempotency key for one delivery stage."""
+
+    event_id = source.event_id or source.message_id
+    material = f"{source.account_id}\0{event_id}\0{stage}"
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:_DELIVERY_UUID_LENGTH]
+
+
+def render_markdown(content: str) -> str:
+    """Render model Markdown into the safe CardKit Markdown subset."""
+
+    safe = strip_reasoning(content)
+    safe = _IMAGE_RE.sub(lambda match: match.group(1), safe)
+    safe = _LINK_RE.sub(_safe_markdown_link, safe)
+    safe = _MASS_MENTION_RE.sub(lambda match: f"＠{match.group(1)}", safe)
+    safe = safe.replace("<", "&lt;").replace(">", "&gt;")
+    safe = _fence_tables(safe)
+    if _has_unclosed_fence(safe):
+        safe += "\n```"
+    return safe.strip()
+
+
+def render_text(content: str, *, max_chars: int) -> str:
+    """Render safe plain text for the terminal compatibility fallback."""
+
+    if max_chars < 1:
+        raise ValueError("reply content limit must be positive")
+    markdown = render_markdown(content)
+    text = _LINK_RE.sub(lambda match: f"{match.group(1)} ({match.group(2)})", markdown)
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", text)
+    text = re.sub(r"(?m)^\s*```[^\n]*$", "", text)
+    text = re.sub(r"(?<!\\)(\*\*|__|~~|`)", "", text)
+    text = text.replace("&lt;", "＜").replace("&gt;", "＞").strip()
+    return truncate_answer(text, max_chars)
+
+
+def render_post(content: str, *, max_chars: int) -> str:
+    """Render a conservative Feishu rich-text post without active mentions."""
+
+    text = render_text(content, max_chars=max_chars)
+    paragraphs = text.splitlines() or [text]
+    payload = {
+        "zh_cn": {
+            "title": "MultiRAG",
+            "content": [[{"tag": "text", "text": paragraph or " "}] for paragraph in paragraphs],
+        }
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def streaming_card_json() -> str:
+    """Build the minimal CardKit JSON 2.0 streaming answer shell."""
+
+    card = {
+        "schema": "2.0",
+        "config": {
+            "streaming_mode": True,
+            "summary": {"content": "[生成中]"},
+        },
+        "body": {
+            "direction": "vertical",
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "element_id": CARD_ANSWER_ELEMENT_ID,
+                    "content": _CARD_GENERATING_TEXT,
+                }
+            ],
+        },
+    }
+    return json.dumps(card, ensure_ascii=False, separators=(",", ":"))
+
+
+class FeishuProgressiveReplySession:
+    """Coalesce deltas into one CardKit stream with post/text fallback."""
+
+    def __init__(
+        self,
+        *,
+        transport: FeishuReplyTransport,
+        source: IncomingMessage,
+        max_content_chars: int,
+        update_interval_seconds: float = 0.25,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if max_content_chars < 1:
+            raise ValueError("reply content limit must be positive")
+        if update_interval_seconds <= 0:
+            raise ValueError("update interval must be positive")
+        self._transport = transport
+        self._source = source
+        self._max_content_chars = max_content_chars
+        self._update_interval_seconds = update_interval_seconds
+        self._clock = clock
+        self._started_at = clock()
+        self._last_update_at = self._started_at
+        self._parts: list[str] = []
+        self._state = ReplySessionState.OPEN
+        self._reaction_id = ""
+        self._reaction_task: asyncio.Task[None] | None = None
+        self._card_id = ""
+        self._card_visible = False
+        self._card_active = False
+        self._sequence = 0
+        self._last_rendered = ""
+
+    @classmethod
+    async def begin(
+        cls,
+        *,
+        transport: FeishuReplyTransport,
+        source: IncomingMessage,
+        max_content_chars: int,
+        update_interval_seconds: float = 0.25,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> FeishuProgressiveReplySession:
+        session = cls(
+            transport=transport,
+            source=source,
+            max_content_chars=max_content_chars,
+            update_interval_seconds=update_interval_seconds,
+            clock=clock,
+        )
+        await session._start_progression()
+        return session
+
+    @property
+    def state(self) -> ReplySessionState:
+        return self._state
+
+    async def append(self, content: str) -> None:
+        self._require_open("append")
+        if not isinstance(content, str):
+            raise TypeError("reply delta must be a string")
+        self._parts.append(content)
+        if not content or not self._card_active:
+            return
+        now = self._clock()
+        if now - self._last_update_at < self._update_interval_seconds:
+            return
+        try:
+            await self._patch_answer(now=now)
+        except Exception:
+            # A renderer/transport failure is a delivery-mode failure, not an
+            # Agent failure. Keep buffering subsequent deltas and deliver the
+            # one final answer through the post/text fallback on completion.
+            self._card_active = False
+            self._log("card_update_failed", "FEISHU_CARD_UPDATE_FAILED")
+
+    async def complete(self) -> None:
+        self._require_open("complete")
+        answer = strip_reasoning("".join(self._parts))
+        self._state = ReplySessionState.COMPLETED
+        if not answer:
+            await self._remove_typing()
+            raise ReplySessionStateError("cannot complete an empty reply")
+
+        try:
+            if not self._card_active:
+                await self._fallback(answer, stage="final_fallback")
+                return
+            try:
+                await self._patch_answer(answer=answer, now=self._clock(), force=True)
+            except Exception:
+                self._card_active = False
+                self._log("card_update_failed", "FEISHU_CARD_UPDATE_FAILED")
+                await self._fallback(answer, stage="final_fallback")
+                return
+
+            try:
+                await self._finish_card()
+            except Exception:
+                # The complete answer is already visible. A second text reply
+                # would duplicate delivery, so leave the card to its platform
+                # auto-close window and report only a safe operational signal.
+                self._log("card_finish_failed", "FEISHU_CARD_FINISH_FAILED")
+        finally:
+            await self._remove_typing()
+
+    async def fail(self, error_code: str) -> None:
+        self._require_open("fail")
+        if not error_code:
+            raise ValueError("reply failure code must not be empty")
+        self._state = ReplySessionState.FAILED
+        self._parts.clear()
+
+        try:
+            if self._card_active:
+                try:
+                    await self._patch_answer(
+                        answer=SERVICE_UNAVAILABLE_TEXT,
+                        now=self._clock(),
+                        force=True,
+                    )
+                    await self._finish_card()
+                    return
+                except Exception:
+                    self._card_active = False
+                    self._log("card_failure_render_failed", "FEISHU_CARD_FAILURE_RENDER_FAILED")
+            await self._fallback(SERVICE_UNAVAILABLE_TEXT, stage="error")
+        finally:
+            await self._remove_typing()
+
+    async def _start_progression(self) -> None:
+        # Reaction and card creation start concurrently. A slow best-effort ack
+        # must never hold the first card behind it. The task catches all of its
+        # own failures and removes a reaction that arrives after the reply has
+        # already reached a terminal state.
+        self._reaction_task = asyncio.create_task(self._add_typing())
+        await asyncio.sleep(0)
+
+        try:
+            self._card_id = await self._transport.create_streaming_card(streaming_card_json())
+            await self._transport.reply_card(
+                self._source.message_id,
+                self._card_id,
+                delivery_uuid=delivery_uuid(self._source, "running_card"),
+            )
+            self._card_visible = True
+            self._card_active = True
+            now = self._clock()
+            self._last_update_at = now
+            self._log_latency("streaming_card_created", self._started_at)
+        except Exception:
+            self._card_active = False
+            self._log("card_create_failed", "FEISHU_CARD_CREATE_FAILED")
+
+    async def _add_typing(self) -> None:
+        try:
+            reaction_id = await self._transport.add_typing_reaction(self._source.message_id)
+            self._log_latency("typing_added", self._started_at)
+        except Exception:
+            self._log("typing_add_failed", "FEISHU_TYPING_ADD_FAILED")
+            return
+        if self._state is ReplySessionState.OPEN:
+            self._reaction_id = reaction_id
+            return
+        try:
+            await self._transport.remove_reaction(self._source.message_id, reaction_id)
+        except Exception:
+            self._log("typing_remove_failed", "FEISHU_TYPING_REMOVE_FAILED")
+
+    async def _patch_answer(
+        self,
+        *,
+        answer: str | None = None,
+        now: float,
+        force: bool = False,
+    ) -> None:
+        if not self._card_active or not self._card_id:
+            return
+        rendered = _truncate_utf8(render_markdown(answer if answer is not None else "".join(self._parts)))
+        if not rendered:
+            return
+        if rendered == self._last_rendered:
+            return
+        if not force and now - self._last_update_at < self._update_interval_seconds:
+            return
+        sequence = self._next_sequence()
+        await self._transport.update_card_text(
+            self._card_id,
+            rendered,
+            sequence=sequence,
+            delivery_uuid=delivery_uuid(self._source, f"card_update:{sequence}"),
+        )
+        self._last_rendered = rendered
+        self._last_update_at = now
+
+    async def _finish_card(self) -> None:
+        if not self._card_id:
+            return
+        sequence = self._next_sequence()
+        await self._transport.finish_streaming_card(
+            self._card_id,
+            sequence=sequence,
+            delivery_uuid=delivery_uuid(self._source, f"card_finish:{sequence}"),
+        )
+        self._card_active = False
+
+    async def _fallback(self, answer: str, *, stage: str) -> None:
+        fallback_uuid = delivery_uuid(self._source, stage)
+        post = render_post(answer, max_chars=self._max_content_chars)
+        try:
+            await self._transport.reply_content(
+                self._source.message_id,
+                post,
+                message_type="post",
+                delivery_uuid=fallback_uuid,
+            )
+            return
+        except Exception:
+            self._log("post_fallback_failed", "FEISHU_POST_FALLBACK_FAILED")
+        await self._transport.reply_content(
+            self._source.message_id,
+            json.dumps(
+                {"text": render_text(answer, max_chars=self._max_content_chars)},
+                ensure_ascii=False,
+            ),
+            message_type="text",
+            delivery_uuid=fallback_uuid,
+        )
+
+    async def _remove_typing(self) -> None:
+        reaction_id = self._reaction_id
+        self._reaction_id = ""
+        if not reaction_id:
+            return
+        try:
+            await self._transport.remove_reaction(self._source.message_id, reaction_id)
+        except Exception:
+            self._log("typing_remove_failed", "FEISHU_TYPING_REMOVE_FAILED")
+
+    def _next_sequence(self) -> int:
+        self._sequence += 1
+        return self._sequence
+
+    def _require_open(self, operation: str) -> None:
+        if self._state is not ReplySessionState.OPEN:
+            raise ReplySessionStateError(f"cannot {operation} a {self._state.value} reply")
+
+    def _log(self, event: str, error_code: str) -> None:
+        LOGGER.warning(
+            "channel_event=%s channel=feishu account_id_hash=%s message_id_hash=%s card_visible=%s result=failed error_code=%s",
+            event,
+            _short_hash(self._source.account_id),
+            _short_hash(self._source.message_id),
+            str(self._card_visible).lower(),
+            error_code,
+        )
+
+    def _log_latency(self, event: str, started_at: float) -> None:
+        elapsed_ms = round((self._clock() - started_at) * 1000)
+        LOGGER.info(
+            "channel_event=%s channel=feishu account_id_hash=%s message_id_hash=%s elapsed_ms=%s result=ok error_code=",
+            event,
+            _short_hash(self._source.account_id),
+            _short_hash(self._source.message_id),
+            elapsed_ms,
+        )
+
+
+def _safe_markdown_link(match: re.Match[str]) -> str:
+    label, url = match.group(1), match.group(2)
+    parsed = urlsplit(url)
+    if parsed.scheme.lower() != "https" or parsed.hostname is None or parsed.username or parsed.password:
+        return label
+    host = parsed.hostname
+    return f"[{label} · {host}]({url})"
+
+
+def _fence_tables(markdown: str) -> str:
+    lines = markdown.splitlines()
+    rendered: list[str] = []
+    index = 0
+    in_fence = False
+    while index < len(lines):
+        line = lines[index]
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            rendered.append(line)
+            index += 1
+            continue
+        if not in_fence and index + 1 < len(lines) and "|" in line and _TABLE_SEPARATOR_RE.match(lines[index + 1]):
+            table: list[str] = [line, lines[index + 1]]
+            index += 2
+            while index < len(lines) and "|" in lines[index] and lines[index].strip():
+                table.append(lines[index])
+                index += 1
+            rendered.extend(["```text", *table, "```"])
+            continue
+        rendered.append(line)
+        index += 1
+    return "\n".join(rendered)
+
+
+def _has_unclosed_fence(markdown: str) -> bool:
+    return sum(1 for line in markdown.splitlines() if line.lstrip().startswith("```")) % 2 == 1
+
+
+def _truncate_utf8(content: str) -> str:
+    encoded = content.encode("utf-8")
+    if len(encoded) <= _CARD_BYTE_LIMIT:
+        return content
+    suffix = "\n\n（回答过长，卡片已截断）"
+    budget = _CARD_BYTE_LIMIT - len(suffix.encode("utf-8"))
+    prefix = encoded[:budget].decode("utf-8", errors="ignore").rstrip()
+    return prefix + suffix
+
+
+def _short_hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]

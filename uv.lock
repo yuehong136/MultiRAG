@@ -4575,7 +4575,7 @@ requires-dist = [
     { name = "jsonpath-ng", specifier = ">=1.6.1" },
     { name = "jsonschema", specifier = ">=4.23.0,<5.0.0" },
     { name = "langfuse", specifier = ">=4.0.1" },
-    { name = "lark-oapi", specifier = ">=1.2.0,<2.0.0" },
+    { name = "lark-oapi", specifier = ">=1.7.1,<2.0.0" },
     { name = "litellm", specifier = "~=1.82.0,!=1.82.7,!=1.82.8" },
     { name = "mammoth", specifier = ">=1.11.0" },
     { name = "markdown", specifier = "==3.8.2" },

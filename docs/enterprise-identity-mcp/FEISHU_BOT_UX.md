@@ -182,8 +182,8 @@ class Channel(ABC):
 状态机只有 `open -> completed | failed`，终态后 append/double finish/complete-fail 互换全部拒绝。
 默认 `BufferedReplySession` 把 delta 留在内存，`complete()` 沿用 reasoning 清理和长度截断后调用
 `Channel.send()` 一次，`fail()` 丢弃半截答案并只发安全提示，同时保留 `reply_to_message_id`。
-U1 可由飞书 override `begin_reply()` 并在 Provider 内保存
-`card_id/message_id/sequence/reaction_id/delivery_uuid`；业务 bridge 不能 `isinstance(Feishu...)`。
+U1 已由飞书 override `begin_reply()` 并在 Provider 内保存
+`card_id/message_id/sequence/reaction_id/delivery_uuid`；业务 bridge 没有 `isinstance(Feishu...)`。
 `status` 与 references 不属于 U0，分别留给 U1/U5 以加法扩展。
 
 ### 4.3 入站消息
@@ -213,7 +213,9 @@ delivery_uuid = sha256(binding_id + event_id + delivery_stage)[:40]
 ```
 
 `delivery_stage` 使用稳定枚举，例如 `running_card`、`final_fallback`、`error`。不得在网络结果未知时
-换 UUID 重发同一阶段；CardKit patch 还要为每张卡维护严格递增的 sequence。
+换 UUID 重发同一阶段；CardKit patch 还要为每张卡维护严格递增的 sequence。U1 的 transport
+session 不持有 binding ID，因此实现使用服务端生成的不透明 provider account ID + 飞书 event ID +
+stage；patch/finish 的 stage 纳入 sequence。Redis 执行 claim 仍按 binding 单独隔离，两层幂等不混用。
 
 ---
 
@@ -224,7 +226,7 @@ delivery_uuid = sha256(binding_id + event_id + delivery_stage)[:40]
 1. 最早可用时添加 Typing reaction；失败只记指标，不阻塞主流程。
 2. 创建 CardKit JSON 2.0 实体，`streaming_mode=true`，摘要为“生成中”。
 3. 回复原消息并保存 `card_id` 和发送返回的 `message_id`。
-4. 聚合 delta；默认每 250ms 或达到最小字符增量时 patch，最多 4 次/秒。
+4. 聚合 delta；距上次成功 patch 至少 250ms 才发送，最多 4 次/秒；最终 flush 不受该等待限制。
 5. 每次 patch 使用严格递增 sequence；中间限流更新可合并或丢弃，但最终更新不能丢。
 6. 完成时强制 final flush，再用更大的 sequence 调 `finish_streaming_card()`。
 7. 完成后才添加按钮、完整来源、反馈区或 one-shot 卡片替换。
@@ -245,7 +247,21 @@ delivery_uuid = sha256(binding_id + event_id + delivery_stage)[:40]
 - 长答案优先卡片/分段，不再用固定 4,000 字符静默截断；
 - `summary` 在完成后改成可读的短摘要，兼容通知栏和低版本客户端。
 
-### 5.3 引用和产物
+### 5.3 EIM-U1 落地映射
+
+- `api/channels/feishu/reply.py` 独立承载 renderer、节流、ReplySession 状态、sequence、delivery UUID
+  和 post/text fallback；`BindingBridge` 与 execution event 未增加任何飞书字段。
+- `api/channels/feishu/channel.py` 只负责把上述操作映射到 `lark-oapi` CardKit/reaction/message API；
+  CardKit SDK transport 迁移仍不是前置条件。
+- 卡片正文使用 UTF-8 24KB 安全预算并带显式截断后缀；post/text fallback 继续遵守 binding 的
+  `max_answer_chars`，不会把固定 4,000 字符限制套在正常流式卡片上。
+- Card create/reply/patch 失败只把 session 切到 fallback 并继续消费同一次 Agent stream；最终正文
+  已 patch、只有 finish 失败时不重复发送文本。Reaction 与首卡并发启动、添加/删除始终
+  best-effort；慢 reaction 不阻塞首卡，终态后迟到会立即清理。
+- manifest 只在实现和回归测试落地后声明 `streaming_cards=true`。上线前仍须按
+  `FEISHU_ONBOARDING.md` 在目标租户申请、发布并实测 CardKit、消息回复和 reaction 权限。
+
+### 5.4 引用和产物
 
 RAG 来源必须通过 `references_ready` 结构化事件输出，而不是从答案文本或内部 A2UI/tool payload
 反向解析。每个引用只包含用户有权看到的标题、受控 URL/文档定位和可选摘要。

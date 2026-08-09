@@ -20,6 +20,7 @@ from api.channels.agent_bridge import (
 from api.channels.binding_bridge import BindingBridge
 from api.channels.core.base import Channel, IncomingMessage, OutgoingMessage, ReplySessionState
 from api.channels.execution_events import ExecutionFailedEvent, MessageCompletedEvent, MessageDeltaEvent
+from api.channels.feishu.reply import FeishuProgressiveReplySession
 from api.channels.state_store import binding_conversation_key
 
 
@@ -39,6 +40,75 @@ class _Channel(Channel):
 
     async def send(self, message: OutgoingMessage) -> None:
         self.sent.append(message)
+
+
+class _CardFailureChannel(_Channel):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fallbacks: list[tuple[str, str, str, str]] = []
+
+    async def begin_reply(
+        self,
+        source: IncomingMessage,
+        *,
+        max_content_chars: int,
+    ) -> FeishuProgressiveReplySession:
+        return await FeishuProgressiveReplySession.begin(
+            transport=self,
+            source=source,
+            max_content_chars=max_content_chars,
+        )
+
+    async def add_typing_reaction(self, message_id: str) -> str:
+        del message_id
+        return "reaction-1"
+
+    async def remove_reaction(self, message_id: str, reaction_id: str) -> None:
+        del message_id, reaction_id
+
+    async def create_streaming_card(self, card_json: str) -> str:
+        del card_json
+        return "card-1"
+
+    async def reply_card(
+        self,
+        message_id: str,
+        card_id: str,
+        *,
+        delivery_uuid: str,
+    ) -> str:
+        del message_id, card_id, delivery_uuid
+        return "reply-1"
+
+    async def update_card_text(
+        self,
+        card_id: str,
+        content: str,
+        *,
+        sequence: int,
+        delivery_uuid: str,
+    ) -> None:
+        del card_id, content, sequence, delivery_uuid
+        raise RuntimeError("CardKit unavailable")
+
+    async def finish_streaming_card(
+        self,
+        card_id: str,
+        *,
+        sequence: int,
+        delivery_uuid: str,
+    ) -> None:
+        del card_id, sequence, delivery_uuid
+
+    async def reply_content(
+        self,
+        message_id: str,
+        content: str,
+        *,
+        message_type: str,
+        delivery_uuid: str,
+    ) -> None:
+        self.fallbacks.append((message_id, content, message_type, delivery_uuid))
 
 
 class _StateStore:
@@ -383,6 +453,28 @@ async def test_execution_failed_after_partial_deltas_delivers_only_the_safe_fail
         )
     ]
     assert state.status == {"message-1": "executed"}
+
+
+@pytest.mark.asyncio
+async def test_cardkit_delivery_failure_falls_back_without_reexecuting_agent() -> None:
+    channel = _CardFailureChannel()
+    state = _StateStore()
+    executor = _Executor(
+        [
+            MessageDeltaEvent(content="完整", session_id="server-session"),
+            MessageDeltaEvent(content="回答", session_id="server-session"),
+            MessageCompletedEvent(session_id="server-session"),
+        ]
+    )
+
+    await _bridge(channel=channel, state=state, executor=executor).handle_message(_message())
+
+    assert len(executor.calls) == 1
+    assert len(channel.fallbacks) == 1
+    assert channel.fallbacks[0][0] == "message-1"
+    assert "完整回答" in channel.fallbacks[0][1]
+    assert channel.fallbacks[0][2] == "post"
+    assert state.status == {"message-1": "replied"}
 
 
 @pytest.mark.asyncio

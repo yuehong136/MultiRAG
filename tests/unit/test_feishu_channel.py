@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from api.channels.core.base import IncomingMessage, OutgoingMessage
+from api.channels.core.base import IncomingMessage, OutgoingMessage, ReplySessionState
 from api.channels.feishu.channel import (
     FeishuAccount,
     FeishuChannel,
@@ -19,6 +19,11 @@ class _Response:
     def __init__(self, *, ok: bool = True, code: int = 0) -> None:
         self.ok = ok
         self.code = code
+        self.data = SimpleNamespace(
+            card_id="card-1",
+            message_id="reply-1",
+            reaction_id="reaction-1",
+        )
 
     def success(self) -> bool:
         return self.ok
@@ -57,7 +62,13 @@ class _FakeSDK:
         self.callback: Any = None
         self.bound_loop: asyncio.AbstractEventLoop | None = None
         self.replies: list[tuple[str, str]] = []
+        self.reply_details: list[tuple[str, str, str, str | None]] = []
         self.creates: list[tuple[str, str]] = []
+        self.cards: list[str] = []
+        self.card_updates: list[tuple[str, str, int, str]] = []
+        self.card_finishes: list[tuple[str, int, str]] = []
+        self.reaction_creates: list[tuple[str, str]] = []
+        self.reaction_deletes: list[tuple[str, str]] = []
         self.response = _Response()
 
     def build_rest_client(self, account: FeishuAccount) -> object:
@@ -71,12 +82,56 @@ class _FakeSDK:
         self.callback = callback
         return self.websocket
 
-    def reply_message(self, client: Any, message_id: str, content: str) -> _Response:
+    def reply_message(
+        self,
+        client: Any,
+        message_id: str,
+        content: str,
+        *,
+        message_type: str = "text",
+        delivery_uuid: str | None = None,
+    ) -> _Response:
         self.replies.append((message_id, content))
+        self.reply_details.append((message_id, content, message_type, delivery_uuid))
         return self.response
 
     def create_message(self, client: Any, chat_id: str, content: str) -> _Response:
         self.creates.append((chat_id, content))
+        return self.response
+
+    def create_card(self, client: Any, card_json: str) -> _Response:
+        self.cards.append(card_json)
+        return self.response
+
+    def update_card_text(
+        self,
+        client: Any,
+        card_id: str,
+        content: str,
+        *,
+        sequence: int,
+        delivery_uuid: str,
+    ) -> _Response:
+        self.card_updates.append((card_id, content, sequence, delivery_uuid))
+        return self.response
+
+    def finish_streaming_card(
+        self,
+        client: Any,
+        card_id: str,
+        *,
+        sequence: int,
+        delivery_uuid: str,
+    ) -> _Response:
+        self.card_finishes.append((card_id, sequence, delivery_uuid))
+        return self.response
+
+    def create_reaction(self, client: Any, message_id: str, emoji_type: str) -> _Response:
+        self.reaction_creates.append((message_id, emoji_type))
+        return self.response
+
+    def delete_reaction(self, client: Any, message_id: str, reaction_id: str) -> _Response:
+        self.reaction_deletes.append((message_id, reaction_id))
         return self.response
 
     def stop_ws_client(self, client: Any) -> None:
@@ -202,6 +257,106 @@ def test_sdk_domain_mapping_never_defaults_unknown_values_to_feishu() -> None:
         sdk._domain("unknown")
 
 
+def test_lark_sdk_builds_cardkit_reaction_and_idempotent_reply_requests() -> None:
+    sdk = _LarkOapiSDK()
+    captured: dict[str, Any] = {}
+
+    def capture(name: str) -> Any:
+        def call(request: Any) -> Any:
+            captured[name] = request
+            return request
+
+        return call
+
+    client = SimpleNamespace(
+        im=SimpleNamespace(
+            v1=SimpleNamespace(
+                message=SimpleNamespace(reply=capture("reply")),
+                message_reaction=SimpleNamespace(
+                    create=capture("reaction_create"),
+                    delete=capture("reaction_delete"),
+                ),
+            )
+        ),
+        cardkit=SimpleNamespace(
+            v1=SimpleNamespace(
+                card=SimpleNamespace(
+                    create=capture("card_create"),
+                    settings=capture("card_finish"),
+                ),
+                card_element=SimpleNamespace(content=capture("card_update")),
+            )
+        ),
+    )
+
+    sdk.reply_message(
+        client,
+        "om-message",
+        '{"text":"answer"}',
+        message_type="post",
+        delivery_uuid="reply-uuid",
+    )
+    sdk.create_card(client, '{"schema":"2.0"}')
+    sdk.update_card_text(
+        client,
+        "card-1",
+        "answer",
+        sequence=1,
+        delivery_uuid="update-uuid",
+    )
+    sdk.finish_streaming_card(
+        client,
+        "card-1",
+        sequence=2,
+        delivery_uuid="finish-uuid",
+    )
+    sdk.create_reaction(client, "om-message", "Typing")
+    sdk.delete_reaction(client, "om-message", "reaction-1")
+
+    assert captured["reply"].body.msg_type == "post"
+    assert captured["reply"].body.uuid == "reply-uuid"
+    assert captured["card_create"].body.type == "card_json"
+    assert captured["card_create"].body.data == '{"schema":"2.0"}'
+    assert captured["card_update"].card_id == "card-1"
+    assert captured["card_update"].element_id == "answer"
+    assert captured["card_update"].body.sequence == 1
+    assert captured["card_update"].body.uuid == "update-uuid"
+    settings = json.loads(captured["card_finish"].body.settings)
+    assert settings["config"]["streaming_mode"] is False
+    assert captured["card_finish"].body.sequence == 2
+    assert captured["reaction_create"].body.reaction_type.emoji_type == "Typing"
+    assert captured["reaction_delete"].reaction_id == "reaction-1"
+
+
+def test_lark_sdk_registers_read_receipt_as_intentionally_ignored() -> None:
+    sdk = _LarkOapiSDK()
+    dispatcher = sdk._lark.EventDispatcherHandler
+    captured: dict[str, Any] = {}
+
+    def client_factory(app_id: str, app_secret: str, **kwargs: Any) -> object:
+        captured.update(app_id=app_id, app_secret=app_secret, **kwargs)
+        return object()
+
+    sdk._lark = SimpleNamespace(
+        EventDispatcherHandler=dispatcher,
+        FEISHU_DOMAIN="feishu-domain",
+        LARK_DOMAIN="lark-domain",
+        LogLevel=SimpleNamespace(WARNING="warning"),
+        ws=SimpleNamespace(Client=client_factory),
+    )
+    account = FeishuAccount(
+        account_id="bot-1",
+        app_id="app-id",
+        app_secret="app-secret",
+    )
+
+    sdk.build_ws_client(account, lambda data: None)
+
+    processors = captured["event_handler"]._processorMap
+    assert "p2.im.message.receive_v1" in processors
+    assert "p2.im.message.message_read_v1" in processors
+
+
 async def test_sdk_callback_schedules_handler_without_waiting() -> None:
     channel, _ = _channel()
     channel._loop = asyncio.get_running_loop()
@@ -257,6 +412,38 @@ async def test_send_failure_raises_safe_error_code() -> None:
     assert raised.value.code == "230001"
     assert str(raised.value) == "Feishu send failed with code 230001"
     assert "message body" not in str(raised.value)
+
+
+async def test_begin_reply_wires_cardkit_and_reaction_operations_through_sdk() -> None:
+    channel, sdk = _channel()
+    source = IncomingMessage(
+        channel="feishu",
+        account_id="bot-1",
+        chat_id="oc-chat",
+        chat_type="p2p",
+        message_id="om-message",
+        sender_id="ou-user",
+        content="question",
+        sender_type="user",
+        event_id="evt-1",
+    )
+
+    session = await channel.begin_reply(source, max_content_chars=4000)
+    await session.append("回答")
+    await session.complete()
+
+    assert session.state is ReplySessionState.COMPLETED
+    assert sdk.reaction_creates == [("om-message", "Typing")]
+    assert sdk.reaction_deletes == [("om-message", "reaction-1")]
+    assert json.loads(sdk.cards[0])["config"]["streaming_mode"] is True
+    message_id, content, message_type, message_uuid = sdk.reply_details[0]
+    assert message_id == "om-message"
+    assert message_type == "interactive"
+    assert json.loads(content) == {"type": "card", "data": {"card_id": "card-1"}}
+    assert message_uuid is not None
+    assert sdk.card_updates[0][1] == "回答"
+    assert sdk.card_updates[0][2] == 1
+    assert sdk.card_finishes[0][1] == 2
 
 
 async def test_start_and_stop_use_isolated_thread_with_bounded_join() -> None:
