@@ -17,13 +17,16 @@ from api.db.db_models import ChannelBinding, ChannelSecret, ChatChannel
 class _AcceptingTargetRepository(SqlAlchemyChannelRepository):
     """Keep this test focused on transaction ordering, not Canvas fixtures."""
 
+    async def resolve_canvas_owner(self, canvas_id: str) -> tuple[str, str] | None:
+        del canvas_id
+        return "3" * 32, "me"
+
     async def canvas_revision_is_latest_published(
         self,
-        tenant_id: str,
         canvas_id: str,
         revision_id: str,
     ) -> bool:
-        del tenant_id, canvas_id, revision_id
+        del canvas_id, revision_id
         return True
 
 

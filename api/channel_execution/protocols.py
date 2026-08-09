@@ -15,6 +15,7 @@ from api.channel_execution.models import (
     TrustedChannelContext,
     WorkloadIdentity,
 )
+from api.channel_execution.session_models import PreparedChannelSession
 
 
 @runtime_checkable
@@ -91,6 +92,49 @@ class WorkloadAuthenticator(Protocol):
     """Authenticates a Channel runner independently of end-user credentials."""
 
     async def authenticate(self, request: Request) -> WorkloadIdentity: ...
+
+
+@runtime_checkable
+class ChannelSessionManager(Protocol):
+    """Owns Channel copy-on-write history without extending upstream services."""
+
+    async def prepare_canvas(
+        self,
+        *,
+        target_id: str,
+        session_id: str | None,
+        question: str,
+        operation: ExecutionOperation,
+    ) -> PreparedChannelSession: ...
+
+    async def prepare_dialog(
+        self,
+        *,
+        target_id: str,
+        session_id: str | None,
+        question: str,
+        operation: ExecutionOperation,
+    ) -> PreparedChannelSession: ...
+
+    async def complete_canvas(
+        self,
+        prepared: PreparedChannelSession,
+        generated_session_id: str,
+    ) -> str: ...
+
+    async def complete_dialog(
+        self,
+        prepared: PreparedChannelSession,
+        generated_session_id: str,
+        *,
+        require_visible_answer: bool,
+    ) -> str: ...
+
+    async def abort(
+        self,
+        prepared: PreparedChannelSession,
+        generated_session_id: str | None,
+    ) -> None: ...
 
 
 @runtime_checkable

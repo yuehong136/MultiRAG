@@ -1,5 +1,6 @@
 """Tests for concrete Channel execution boundary adapters."""
 
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
 
@@ -7,15 +8,84 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.channel_execution.adapters import RedisChannelExecutionStateStore, SqlAlchemyBindingResolver
-from api.channel_execution.errors import TargetRevisionUnavailableError
-from api.channel_execution.executors import SqlAlchemyCanvasCompletionAdapter
+from api.channel_execution.errors import TargetExecutionFailedError, TargetRevisionUnavailableError
+from api.channel_execution.executors import (
+    SqlAlchemyCanvasCompletionAdapter,
+    SqlAlchemyDialogCompletionAdapter,
+)
 from api.channel_execution.models import (
     ChannelActor,
     ChannelExecutionCommand,
     ChannelMessage,
+    ExecutionOperation,
     ExecutionTargetRef,
     WorkloadIdentity,
 )
+from api.channel_execution.session_models import PreparedChannelSession
+
+
+class FakeChannelSessionManager:
+    def __init__(self) -> None:
+        self.prepared: list[tuple[str, str | None, str, ExecutionOperation]] = []
+        self.completed: list[tuple[str, str, bool | None]] = []
+        self.aborted: list[tuple[str, str | None]] = []
+
+    async def prepare_canvas(
+        self,
+        *,
+        target_id: str,
+        session_id: str | None,
+        question: str,
+        operation: ExecutionOperation,
+    ) -> PreparedChannelSession:
+        self.prepared.append((target_id, session_id, question, operation))
+        return PreparedChannelSession(
+            "canvas",
+            session_id,
+            "candidate-canvas" if session_id else None,
+            "source-fingerprint" if session_id else None,
+        )
+
+    async def prepare_dialog(
+        self,
+        *,
+        target_id: str,
+        session_id: str | None,
+        question: str,
+        operation: ExecutionOperation,
+    ) -> PreparedChannelSession:
+        self.prepared.append((target_id, session_id, question, operation))
+        return PreparedChannelSession(
+            "dialog",
+            session_id,
+            "candidate-dialog" if session_id else None,
+            "source-fingerprint" if session_id else None,
+        )
+
+    async def complete_canvas(
+        self,
+        prepared: PreparedChannelSession,
+        generated_session_id: str,
+    ) -> str:
+        self.completed.append((prepared.kind, generated_session_id, None))
+        return prepared.public_session_id or generated_session_id
+
+    async def complete_dialog(
+        self,
+        prepared: PreparedChannelSession,
+        generated_session_id: str,
+        *,
+        require_visible_answer: bool,
+    ) -> str:
+        self.completed.append((prepared.kind, generated_session_id, require_visible_answer))
+        return prepared.public_session_id or generated_session_id
+
+    async def abort(
+        self,
+        prepared: PreparedChannelSession,
+        generated_session_id: str | None,
+    ) -> None:
+        self.aborted.append((prepared.kind, generated_session_id))
 
 
 class FakeRepository:
@@ -223,7 +293,8 @@ async def test_canvas_adapter_guards_latest_release_without_extending_canvas_con
         return operation(SimpleNamespace())
 
     monkeypatch.setattr(db, "run_sync", _run_sync)
-    adapter = SqlAlchemyCanvasCompletionAdapter(db)
+    sessions = FakeChannelSessionManager()
+    adapter = SqlAlchemyCanvasCompletionAdapter(db, sessions)
 
     monkeypatch.setattr(
         UserCanvasService,
@@ -240,44 +311,170 @@ async def test_canvas_adapter_guards_latest_release_without_extending_canvas_con
 
     captured: dict[str, object] = {}
 
-    async def _frames():
-        if False:  # pragma: no cover - keeps this an async iterator
-            yield ""
-
-    def _completion(**kwargs):
+    def _completion(**kwargs: Any) -> AsyncIterator[str]:
         captured.update(kwargs)
+
+        async def _frames() -> AsyncIterator[str]:
+            yield 'data:{"event":"message","data":{"content":"answer"},"session_id":"candidate-canvas"}\n\n'
+            yield 'data:{"event":"message_end","data":{},"session_id":"candidate-canvas"}\n\n'
+
         return _frames()
 
     monkeypatch.setattr(canvas_service_module, "completion", _completion)
-    assert (
-        adapter.stream(
+    frames = [
+        frame
+        async for frame in adapter.stream(
             tenant_id="tenant-1",
             target=target,
             question="hello",
-            session_id=None,
+            session_id="session-1",
             principal_id=None,
+            operation="regenerate",
         )
-        is not None
-    )
-    assert captured["release"] is True
-    assert captured["regenerate"] is False
-    assert captured["persist_reasoning"] is False
-    assert captured["require_visible_answer"] is True
-    assert "release_revision_id" not in captured
+    ]
 
-    adapter.stream(
-        tenant_id="tenant-1",
-        target=target,
-        question="hello",
-        session_id="session-1",
-        principal_id=None,
-        operation="regenerate",
-    )
-    assert captured["regenerate"] is True
+    assert captured["release"] is True
+    assert captured["session_id"] == "candidate-canvas"
+    assert "regenerate" not in captured
+    assert "persist_reasoning" not in captured
+    assert "require_visible_answer" not in captured
+    assert "release_revision_id" not in captured
+    assert all("candidate-canvas" not in frame for frame in frames)
+    assert all('"session_id": "session-1"' in frame for frame in frames)
+    assert sessions.prepared == [("agent-1", "session-1", "hello", "regenerate")]
+    assert sessions.completed == [("canvas", "candidate-canvas", None)]
+    assert sessions.aborted == []
 
     stale_target = target.model_copy(update={"revision_id": "revision-stale"})
     with pytest.raises(TargetRevisionUnavailableError):
         await adapter.validate_revision(tenant_id="tenant-1", target=stale_target)
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_dialog_adapter_promotes_only_complete_stream_and_hides_candidate_id(monkeypatch) -> None:
+    from api.db.services import conversation_service as conversation_service_module
+
+    target = ExecutionTargetRef(
+        target_type="multirag.dialog",
+        target_id="dialog-1",
+    )
+    db = AsyncSession()
+    sessions = FakeChannelSessionManager()
+    adapter = SqlAlchemyDialogCompletionAdapter(db, sessions)
+    captured: dict[str, object] = {}
+
+    def _completion(**kwargs: Any) -> AsyncIterator[str]:
+        captured.update(kwargs)
+
+        async def _frames() -> AsyncIterator[str]:
+            yield 'data:{"code":0,"data":{"answer":"answer","session_id":"candidate-dialog"}}\n\n'
+            yield 'data:{"code":0,"data":true}\n\n'
+
+        return _frames()
+
+    monkeypatch.setattr(conversation_service_module, "async_completion", _completion)
+    frames = [
+        frame
+        async for frame in adapter.stream(
+            tenant_id="tenant-1",
+            target=target,
+            question="same question",
+            session_id="dialog-session",
+            principal_id="principal-1",
+            operation="regenerate",
+        )
+    ]
+
+    assert captured["session_id"] == "candidate-dialog"
+    assert "regenerate" not in captured
+    assert "persist_reasoning" not in captured
+    assert "require_visible_answer" not in captured
+    assert "candidate-dialog" not in "".join(frames)
+    assert '"session_id": "dialog-session"' in frames[0]
+    assert sessions.completed == [("dialog", "candidate-dialog", True)]
+    assert sessions.aborted == []
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_dialog_adapter_publishes_new_session_only_after_bootstrap_completes(
+    monkeypatch,
+) -> None:
+    from api.db.services import conversation_service as conversation_service_module
+
+    target = ExecutionTargetRef(
+        target_type="multirag.dialog",
+        target_id="dialog-1",
+    )
+    db = AsyncSession()
+    sessions = FakeChannelSessionManager()
+    adapter = SqlAlchemyDialogCompletionAdapter(db, sessions)
+
+    def _completion(**kwargs: Any) -> AsyncIterator[str]:
+        assert kwargs["session_id"] is None
+
+        async def _frames() -> AsyncIterator[str]:
+            yield 'data:{"code":0,"data":{"answer":"prologue","session_id":"new-session"}}\n\n'
+            yield 'data:{"code":0,"data":true}\n\n'
+
+        return _frames()
+
+    monkeypatch.setattr(conversation_service_module, "async_completion", _completion)
+    frames = [
+        frame
+        async for frame in adapter.stream(
+            tenant_id="tenant-1",
+            target=target,
+            question="hello",
+            session_id=None,
+            principal_id="principal-1",
+        )
+    ]
+
+    assert "new-session" in frames[0]
+    assert sessions.completed == [("dialog", "new-session", False)]
+    assert sessions.aborted == []
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_dialog_adapter_aborts_candidate_when_upstream_stream_fails(monkeypatch) -> None:
+    from api.db.services import conversation_service as conversation_service_module
+
+    target = ExecutionTargetRef(
+        target_type="multirag.dialog",
+        target_id="dialog-1",
+    )
+    db = AsyncSession()
+    sessions = FakeChannelSessionManager()
+    adapter = SqlAlchemyDialogCompletionAdapter(db, sessions)
+
+    async def _failed_frames() -> AsyncIterator[str]:
+        yield 'data:{"code":500,"data":false}\n\n'
+        yield 'data:{"code":0,"data":true}\n\n'
+
+    def _completion(**kwargs: Any) -> AsyncIterator[str]:
+        del kwargs
+        return _failed_frames()
+
+    monkeypatch.setattr(conversation_service_module, "async_completion", _completion)
+
+    with pytest.raises(TargetExecutionFailedError):
+        _ = [
+            frame
+            async for frame in adapter.stream(
+                tenant_id="tenant-1",
+                target=target,
+                question="same question",
+                session_id="dialog-session",
+                principal_id=None,
+                operation="regenerate",
+            )
+        ]
+
+    assert sessions.completed == []
+    assert sessions.aborted == [("dialog", "candidate-dialog")]
     await db.close()
 
 

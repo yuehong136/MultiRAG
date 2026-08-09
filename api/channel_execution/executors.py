@@ -10,8 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.channel_execution.errors import TargetExecutionFailedError, TargetRevisionUnavailableError
+from api.channel_execution.history import SqlAlchemyChannelSessionManager
 from api.channel_execution.models import ChannelExecutionCommand, ExecutionEvent, ExecutionOperation, ExecutionTargetRef, TrustedChannelContext
-from api.channel_execution.protocols import CanvasCompletionAdapter, DialogCompletionAdapter
+from api.channel_execution.protocols import CanvasCompletionAdapter, ChannelSessionManager, DialogCompletionAdapter
 
 
 def _decode_sse_payload(frame: str) -> dict[str, Any] | None:
@@ -31,11 +32,52 @@ def _decode_sse_payload(frame: str) -> dict[str, Any] | None:
     return payload
 
 
+def _payload_session_id(payload: dict[str, Any]) -> str | None:
+    raw_session_id = payload.get("session_id")
+    if isinstance(raw_session_id, str) and raw_session_id:
+        return raw_session_id
+    data = payload.get("data")
+    if isinstance(data, dict):
+        raw_session_id = data.get("session_id")
+        if isinstance(raw_session_id, str) and raw_session_id:
+            return raw_session_id
+    return None
+
+
+def _rewrite_frame_session(
+    payload: dict[str, Any],
+    *,
+    public_session_id: str | None,
+) -> str:
+    if public_session_id:
+        if isinstance(payload.get("session_id"), str):
+            payload["session_id"] = public_session_id
+        data = payload.get("data")
+        if isinstance(data, dict) and isinstance(data.get("session_id"), str):
+            data["session_id"] = public_session_id
+    return "data:" + json.dumps(payload, ensure_ascii=False) + "\n\n"
+
+
+def _merge_generated_session(
+    current: str | None,
+    payload: dict[str, Any],
+) -> str | None:
+    observed = _payload_session_id(payload)
+    if observed and current and observed != current:
+        raise TargetExecutionFailedError()
+    return observed or current
+
+
 class SqlAlchemyCanvasCompletionAdapter:
     """Guard the binding revision, then use the upstream latest-release path."""
 
-    def __init__(self, db: AsyncSession) -> None:
+    def __init__(
+        self,
+        db: AsyncSession,
+        session_manager: ChannelSessionManager | None = None,
+    ) -> None:
         self._db = db
+        self._sessions = session_manager or SqlAlchemyChannelSessionManager(db)
 
     async def validate_revision(self, *, tenant_id: str, target: ExecutionTargetRef) -> None:
         revision_id = target.revision_id
@@ -67,27 +109,76 @@ class SqlAlchemyCanvasCompletionAdapter:
         principal_id: str | None,
         operation: ExecutionOperation = "message",
     ) -> AsyncIterator[str]:
+        return self._stream(
+            tenant_id=tenant_id,
+            target=target,
+            question=question,
+            session_id=session_id,
+            principal_id=principal_id,
+            operation=operation,
+        )
+
+    async def _stream(
+        self,
+        *,
+        tenant_id: str,
+        target: ExecutionTargetRef,
+        question: str,
+        session_id: str | None,
+        principal_id: str | None,
+        operation: ExecutionOperation,
+    ) -> AsyncIterator[str]:
         from api.db.services.canvas_service import completion as canvas_completion
 
-        return canvas_completion(
-            db=self._db,
-            tenant_id=tenant_id,
-            agent_id=target.target_id,
+        prepared = await self._sessions.prepare_canvas(
+            target_id=target.target_id,
             session_id=session_id,
-            query=question,
-            release=True,
-            user_id=principal_id or "",
-            regenerate=operation == "regenerate",
-            persist_reasoning=False,
-            require_visible_answer=True,
+            question=question,
+            operation=operation,
         )
+        generated_session_id = prepared.execution_session_id
+        terminal = False
+        promoted = False
+        try:
+            frames = canvas_completion(
+                db=self._db,
+                tenant_id=tenant_id,
+                agent_id=target.target_id,
+                session_id=prepared.execution_session_id,
+                query=question,
+                release=True,
+                user_id=principal_id or "",
+            )
+            async for frame in frames:
+                payload = _decode_sse_payload(frame)
+                if payload is None:
+                    yield frame
+                    continue
+                generated_session_id = _merge_generated_session(generated_session_id, payload)
+                terminal = terminal or payload.get("event") == "message_end"
+                yield _rewrite_frame_session(
+                    payload,
+                    public_session_id=prepared.public_session_id,
+                )
+            if not terminal or not generated_session_id:
+                raise TargetExecutionFailedError()
+            await self._sessions.complete_canvas(prepared, generated_session_id)
+            promoted = True
+        finally:
+            if not promoted:
+                await self._sessions.abort(prepared, generated_session_id)
 
 
 class SqlAlchemyDialogCompletionAdapter:
     """Reuses the async MultiRAG Dialog completion implementation."""
 
-    def __init__(self, db: AsyncSession) -> None:
+    def __init__(
+        self,
+        db: AsyncSession,
+        session_manager: ChannelSessionManager | None = None,
+    ) -> None:
         self._db = db
+        self._sessions = session_manager or SqlAlchemyChannelSessionManager(db)
 
     def stream(
         self,
@@ -99,20 +190,70 @@ class SqlAlchemyDialogCompletionAdapter:
         principal_id: str | None,
         operation: ExecutionOperation = "message",
     ) -> AsyncIterator[str]:
-        from api.db.services.conversation_service import async_completion as dialog_completion
-
-        return dialog_completion(
-            db=self._db,
+        return self._stream(
             tenant_id=tenant_id,
-            chat_id=target.target_id,
+            target=target,
             question=question,
             session_id=session_id,
-            stream=True,
-            user_id=principal_id or "",
-            regenerate=operation == "regenerate",
-            persist_reasoning=False,
-            require_visible_answer=True,
+            principal_id=principal_id,
+            operation=operation,
         )
+
+    async def _stream(
+        self,
+        *,
+        tenant_id: str,
+        target: ExecutionTargetRef,
+        question: str,
+        session_id: str | None,
+        principal_id: str | None,
+        operation: ExecutionOperation,
+    ) -> AsyncIterator[str]:
+        from api.db.services.conversation_service import async_completion as dialog_completion
+
+        prepared = await self._sessions.prepare_dialog(
+            target_id=target.target_id,
+            session_id=session_id,
+            question=question,
+            operation=operation,
+        )
+        generated_session_id = prepared.execution_session_id
+        terminal = False
+        failed = False
+        promoted = False
+        try:
+            frames = dialog_completion(
+                db=self._db,
+                tenant_id=tenant_id,
+                chat_id=target.target_id,
+                question=question,
+                session_id=prepared.execution_session_id,
+                stream=True,
+                user_id=principal_id or "",
+            )
+            async for frame in frames:
+                payload = _decode_sse_payload(frame)
+                if payload is None:
+                    yield frame
+                    continue
+                generated_session_id = _merge_generated_session(generated_session_id, payload)
+                failed = failed or payload.get("code") != 0
+                terminal = terminal or (payload.get("code") == 0 and payload.get("data") is True)
+                yield _rewrite_frame_session(
+                    payload,
+                    public_session_id=prepared.public_session_id,
+                )
+            if failed or not terminal or not generated_session_id:
+                raise TargetExecutionFailedError()
+            await self._sessions.complete_dialog(
+                prepared,
+                generated_session_id,
+                require_visible_answer=prepared.public_session_id is not None,
+            )
+            promoted = True
+        finally:
+            if not promoted:
+                await self._sessions.abort(prepared, generated_session_id)
 
 
 class MultiRAGCanvasAgentExecutor:

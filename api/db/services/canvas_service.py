@@ -6,9 +6,6 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import AsyncIterator
-from copy import deepcopy
-from typing import Any
 from uuid import uuid4
 
 import tiktoken
@@ -26,32 +23,6 @@ from api.db.services.common_service import CommonService
 from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.utils.api_utils import get_data_openai
 from common.misc_utils import get_uuid
-from common.reasoning import strip_reasoning
-
-_REGENERATE_SAFE_COMPONENTS = {
-    "A2UI",
-    "Agent",
-    "Begin",
-    "Categorize",
-    "DataOperations",
-    "DocGenerator",
-    "ExcelProcessor",
-    "ExitLoop",
-    "Generate",
-    "HTMLReport",
-    "Iteration",
-    "IterationItem",
-    "LLM",
-    "ListOperations",
-    "Loop",
-    "LoopItem",
-    "Message",
-    "Retrieval",
-    "StringTransform",
-    "Switch",
-    "VariableAggregator",
-    "VariableAssigner",
-}
 
 
 class CanvasTemplateService(CommonService):
@@ -302,115 +273,13 @@ class UserCanvasService(CommonService):
 # ---------------------------
 # 推理流程（SSE / OpenAI 兼容）
 # ---------------------------
-
-
-def _rewind_latest_turn(messages: list[dict[str, Any]], question: str) -> None:
-    """Remove exactly the latest completed user/assistant pair for regeneration."""
-
-    if len(messages) < 2:
-        raise LookupError("No completed turn is available for regeneration")
-    user_message, assistant_message = messages[-2:]
-    if user_message.get("role") != "user" or assistant_message.get("role") != "assistant" or user_message.get("content") != question:
-        raise LookupError("Only the latest matching turn can be regenerated")
-    user_id = user_message.get("id")
-    assistant_id = assistant_message.get("id")
-    if user_id and assistant_id and user_id != assistant_id:
-        raise LookupError("The latest conversation turn is inconsistent")
-    del messages[-2:]
-
-
-def _sanitize_conversation_messages(messages: list[dict[str, Any]]) -> None:
-    """Remove private reasoning from every persisted assistant message in place."""
-
-    for message in messages:
-        if message.get("role") != "assistant":
-            continue
-        content = message.get("content")
-        if isinstance(content, str):
-            message["content"] = strip_reasoning(content)
-
-
-def _canvas_history_from_messages(messages: list[dict[str, Any]]) -> list[tuple[str, str | dict[str, Any]]]:
-    """Build prompt history from the sanitized, externally visible transcript."""
-
-    history: list[tuple[str, str | dict[str, Any]]] = []
-    for message in messages:
-        role = message.get("role")
-        content = message.get("content")
-        if role not in {"user", "assistant"} or not isinstance(content, str):
-            continue
-        a2ui = message.get("a2ui")
-        if isinstance(a2ui, dict):
-            history.append((role, {"content": content, "a2ui": deepcopy(a2ui)}))
-        else:
-            history.append((role, content))
-    return history
-
-
-def _assert_canvas_regeneration_safe(dsl: dict[str, Any]) -> None:
-    """Fail closed when a workflow may replay tools or external side effects."""
-
-    components = dsl.get("components")
-    if not isinstance(components, dict):
-        raise PermissionError("Canvas regeneration requires a supported component graph")
-    for component in components.values():
-        if not isinstance(component, dict):
-            raise PermissionError("Canvas regeneration requires a supported component graph")
-        obj = component.get("obj")
-        if not isinstance(obj, dict):
-            raise PermissionError("Canvas regeneration requires a supported component graph")
-        name = obj.get("component_name")
-        if not isinstance(name, str) or name not in _REGENERATE_SAFE_COMPONENTS:
-            raise PermissionError("Canvas regeneration is unavailable for workflows with external tools")
-        if name != "Agent":
-            continue
-        params = obj.get("params")
-        if not isinstance(params, dict) or params.get("tools") or params.get("mcp"):
-            raise PermissionError("Canvas regeneration is unavailable for tool-enabled agents")
-
-
-def _prepare_channel_canvas_dsl(
-    dsl: str,
-    messages: list[dict[str, Any]],
-    *,
-    regenerate: bool,
-) -> str:
-    """Make the visible transcript authoritative for a Channel Canvas prompt."""
-
-    parsed = json.loads(dsl)
-    if not isinstance(parsed, dict):
-        raise ValueError("Canvas DSL must be an object")
-    if regenerate:
-        _assert_canvas_regeneration_safe(parsed)
-    history = _canvas_history_from_messages(messages)
-    parsed["history"] = history
-    globals_ = parsed.get("globals")
-    if not isinstance(globals_, dict):
-        globals_ = {}
-        parsed["globals"] = globals_
-    globals_["sys.history"] = [f"{role}: {value.get('content', '') if isinstance(value, dict) else value}" for role, value in history]
-    globals_["sys.conversation_turns"] = sum(role == "user" for role, _value in history)
-    return json.dumps(parsed, ensure_ascii=False)
-
-
-def _replace_canvas_latest_assistant(canvas: Canvas, visible_answer: str) -> None:
-    """Keep Canvas prompt history aligned with the visible assistant answer."""
-
-    if not canvas.history or canvas.history[-1][0] != "assistant":
-        raise RuntimeError("Canvas did not finish with an assistant history item")
-    canvas.history[-1] = ("assistant", visible_answer)
-    sys_history = canvas.globals.get("sys.history")
-    if isinstance(sys_history, list) and sys_history:
-        sys_history[-1] = f"assistant: {visible_answer}"
-
-
 async def completion(
     db: AsyncSession,
     tenant_id: str,
     agent_id: str,
     session_id: str | None = None,
-    **kwargs: Any,
-) -> AsyncIterator[str]:
+    **kwargs,
+):
     """
     FastAPI 里可直接作为 StreamingResponse 的迭代器：
         return StreamingResponse(completion(db, tenant_id, agent_id, **payload), media_type="text/event-stream")
@@ -427,15 +296,7 @@ async def completion(
     user_id = kwargs.get("user_id", "") or ""
     custom_header = kwargs.get("custom_header", "")
     release_mode = str(kwargs.get("release", "")).strip().lower()
-    regenerate = kwargs.get("regenerate") is True
-    persist_reasoning = kwargs.get("persist_reasoning") is not False
-    require_visible_answer = kwargs.get("require_visible_answer") is True
     is_new_session = not session_id
-    if regenerate and is_new_session:
-        raise LookupError("A session is required for regeneration")
-    if regenerate:
-        persist_reasoning = False
-        require_visible_answer = True
 
     def _setup(s: Session) -> tuple[dict, str, str]:
         """会话与 DSL 装配。产物**只有纯 dict/str**——ORM 对象不得跨下方的流式期存活。"""
@@ -475,17 +336,6 @@ async def completion(
 
     conv, dsl, canvas_id = await db.run_sync(_setup)  # TODO(async-phase4)
     session_id = conv["id"]
-    messages = deepcopy(conv.get("message") or [])
-    if regenerate:
-        _rewind_latest_turn(messages, query)
-    if not persist_reasoning:
-        _sanitize_conversation_messages(messages)
-        dsl = _prepare_channel_canvas_dsl(
-            dsl,
-            messages,
-            regenerate=regenerate,
-        )
-    conv["message"] = messages
 
     def _build_canvas() -> Canvas:
         canvas = Canvas(dsl, tenant_id, agent_id, canvas_id=canvas_id, custom_header=custom_header)
@@ -542,13 +392,7 @@ async def completion(
         yield "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
 
     # 结束：写入 assistant 消息、引用、错误，并更新持久层
-    visible_txt = strip_reasoning(txt)
-    if require_visible_answer and not visible_txt:
-        return
-    persisted_txt = txt if persist_reasoning else visible_txt
-    if not persist_reasoning:
-        _replace_canvas_latest_assistant(canvas, visible_txt)
-    assistant_message = {"role": "assistant", "content": persisted_txt, "created_at": time.time(), "id": message_id}
+    assistant_message = {"role": "assistant", "content": txt, "created_at": time.time(), "id": message_id}
     if a2ui_commands:
         assistant_message["a2ui"] = {
             "commands": a2ui_commands,

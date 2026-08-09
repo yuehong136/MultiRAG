@@ -217,13 +217,17 @@ Managed binding 默认允许当前运行项之后再排 5 条 follow-up，可用
 worker 全局队列满时，Bridge 会先 claim 消息再回复固定 busy 文案，不静默丢弃。重新生成不是旁路
 调用：它保留原来源消息用于 reply threading，以飞书回调 event ID 建立新的 `request_id`，然后重新
 进入同一会话队列，因此不会与当前生成并发写同一会话。只有当前会话最新的完成卡可重新生成；
-已有后续追问时点击旧卡会直接提示过期。完成卡发出显式 `regenerate` operation，执行层先撤回最新且
-问题匹配的 user/assistant 对，再原位写入一个新 assistant 版本；连续点击不会重复追加同一句 user。
+已有后续追问时点击旧卡会直接提示过期。完成卡发出显式 `regenerate` operation；Channel execution
+反腐层从公开会话头创建一个不可见的私有候选，在候选中撤回最新且问题匹配的 user/assistant 对，
+再调用未经扩展的 RAGFlow completion 契约。只有流完整结束且产生可见答案时才在行锁内校验公开头
+指纹并原子晋升候选；失败、取消或并发冲突只删除候选，公开历史始终不动。连续点击不会重复追加
+同一句 user。
 error/cancelled 卡的按钮按普通 retry 处理，因为失败轮次没有提交，不能误删上一轮成功历史。
 
-Channel 目标的下一轮提示词和持久化历史只使用用户可见答案，不保存或回灌 `<think>` reasoning；
-reasoning-only、取消或失败不会提交半轮消息。Dialog 直接替换最新轮次；Canvas 从可见 transcript
-重建内部 history，修复存量 raw reasoning 污染，并仅允许无外部工具/MCP/副作用组件的图重新生成。
+Channel 目标的候选提示词和晋升后的持久化历史只使用用户可见答案，不保存或回灌 `<think>`
+reasoning；reasoning-only、取消或失败不会提交半轮消息。Dialog 和 Canvas 都在私有候选中生成，
+Canvas 额外从可见 transcript 重建内部 history，修复存量 raw reasoning 污染，并仅允许无外部
+工具/MCP/副作用组件的图重新生成。
 未知组件 fail closed，避免“重新生成”静默重放邮件、SQL、代码执行或其他外部操作。
 `operation` 是私有 execution command 的可选加法字段：普通消息仍省略它；action 请求必须显式发送。
 部署窗口里，新 API 遇到未携带 operation 的旧 worker action 会返回
@@ -249,14 +253,15 @@ reasoning-only、取消或失败不会提交半轮消息。Dialog 直接替换�
 ### Canvas 发布版本兼容策略
 
 最新上游基线中的 Canvas 执行契约仍是 `release=true` 时读取“最新已发布版本”，并不
-支持按历史 revision ID 直接执行。MultiRAG Channel 不修改 release/revision 选择语义；自有执行
-适配层只传递 `regenerate`、`persist_reasoning=false`、`require_visible_answer=true` 三个内部生命周期
-选项，不把它们暴露成公共 Agent API 契约：
+支持按历史 revision ID 直接执行。MultiRAG Channel 不修改 release/revision 选择语义，也不向
+Canvas/Dialog completion 增加 Channel 私有参数。重新生成、reasoning 隔离、候选会话与成功晋升
+全部由 `api/channel_execution` 的反腐层拥有：
 
 1. 管理端只能把 `multirag.canvas_agent` 绑定到当时的最新已发布版本，并把该版本 ID 保存为
    服务端 revision guard。
 2. 每次执行前，Channel 适配器重新校验该 guard 仍等于最新已发布版本。
-3. 校验通过后，仅调用原生 `release=true` 执行路径；不会把 revision ID 注入 Canvas 或提示词。
+3. 校验通过后，适配器以私有候选 session ID 调用原生 `release=true` 执行路径；只传上游已有参数，
+   不会把 revision ID 或 `regenerate` 等 Channel 生命周期字段注入 Canvas。
 4. Agent 发布新版本后，旧 binding 会 fail closed。管理员更新 binding 后 generation 增加，
    服务端使用新的会话命名空间，避免复用旧 DSL 会话。
 
@@ -661,7 +666,7 @@ MultiRAG 的规范公开字段是 `config.domain`。为兼容新版上游的请�
 | `state_store.py`、`runtime_client.py` | MultiRAG | 不用上游文件覆盖 |
 | `worker.py`、`supervisor.py` | MultiRAG | 不用上游 Bootstrap/进程模型覆盖 |
 | `api/channel_control`、`api/channel_execution`、`api/channel_runtime` | MultiRAG | 作为本项目长期主线维护 |
-| `api/db/services/canvas_service.py`、`user_canvas_version.py` | 上游同步核心 | Channel 不加参数、不改发布语义；只从独立适配器调用公开契约 |
+| `api/db/services/canvas_service.py`、`conversation_service.py`、`user_canvas_version.py` | 上游同步核心 | Channel 不加参数、不改历史/发布语义；只从独立适配器调用公开契约 |
 
 跟进新版上游时：
 

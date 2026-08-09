@@ -1,8 +1,6 @@
 import json
 import logging
 import time
-from collections.abc import AsyncIterator
-from copy import deepcopy
 from typing import Any
 from uuid import uuid4
 
@@ -16,7 +14,6 @@ from api.db.services.common_service import CommonService
 from api.db.services.dialog_service import DialogService, async_chat, chat
 from common.constants import StatusEnum
 from common.misc_utils import get_uuid
-from common.reasoning import strip_reasoning
 from core.prompts.generator import chunks_format
 
 
@@ -89,53 +86,7 @@ class ConversationService(CommonService):
         return res
 
 
-def _rewind_latest_conversation_turn(
-    messages: list[dict[str, Any]],
-    references: list[dict[str, Any]],
-    question: str,
-) -> None:
-    """Remove exactly the latest completed turn before an explicit regenerate."""
-
-    if len(messages) < 2:
-        raise LookupError("No completed turn is available for regeneration")
-    user_message, assistant_message = messages[-2:]
-    if user_message.get("role") != "user" or assistant_message.get("role") != "assistant" or user_message.get("content") != question:
-        raise LookupError("Only the latest matching turn can be regenerated")
-    user_id = user_message.get("id")
-    assistant_id = assistant_message.get("id")
-    if user_id and assistant_id and user_id != assistant_id:
-        raise LookupError("The latest conversation turn is inconsistent")
-    del messages[-2:]
-    if references:
-        references.pop()
-
-
-def _sanitize_assistant_messages(messages: list[dict[str, Any]]) -> None:
-    """Remove private reasoning from prompt and persisted assistant history."""
-
-    for message in messages:
-        if message.get("role") != "assistant":
-            continue
-        content = message.get("content")
-        if isinstance(content, str):
-            message["content"] = strip_reasoning(content)
-
-
-def _has_visible_latest_assistant(messages: list[dict[str, Any]]) -> bool:
-    if not messages or messages[-1].get("role") != "assistant":
-        return False
-    content = messages[-1].get("content")
-    return isinstance(content, str) and bool(strip_reasoning(content))
-
-
-def structure_answer(
-    conv: Any,
-    ans: dict[str, Any],
-    message_id: str,
-    session_id: str,
-    *,
-    persist_reasoning: bool = True,
-) -> dict[str, Any]:
+def structure_answer(conv, ans, message_id, session_id):
     reference = ans["reference"]
     if not isinstance(reference, dict):
         reference = {}
@@ -164,8 +115,7 @@ def structure_answer(
     else:
         if is_final:
             if ans.get("answer"):
-                final_content = ans["answer"] if persist_reasoning else strip_reasoning(ans["answer"])
-                conv.message[-1] = {"role": "assistant", "content": final_content, "created_at": time.time(), "id": message_id}
+                conv.message[-1] = {"role": "assistant", "content": ans["answer"], "created_at": time.time(), "id": message_id}
             else:
                 conv.message[-1]["created_at"] = time.time()
                 conv.message[-1]["id"] = message_id
@@ -258,26 +208,9 @@ def completion(db, tenant_id, chat_id, question, name="New session", session_id=
         yield answer
 
 
-async def async_completion(
-    db: AsyncSession,
-    tenant_id: str,
-    chat_id: str,
-    question: str,
-    name: str = "New session",
-    session_id: str | None = None,
-    stream: bool = True,
-    **kwargs: Any,
-) -> AsyncIterator[str | dict[str, Any] | None]:
+async def async_completion(db: AsyncSession, tenant_id, chat_id, question, name="New session", session_id=None, stream=True, **kwargs):
     """异步版本的 completion(AsyncSession;遗留同步 service 经 run_sync 桥接)"""
     assert name, "`name` can not be empty."
-    regenerate = kwargs.pop("regenerate", False) is True
-    persist_reasoning = kwargs.pop("persist_reasoning", True) is not False
-    require_visible_answer = kwargs.pop("require_visible_answer", False) is True
-    if regenerate and not session_id:
-        raise LookupError("A session is required for regeneration")
-    if regenerate:
-        persist_reasoning = False
-        require_visible_answer = True
     dia = await db.run_sync(lambda s: DialogService.query(s, id=chat_id, tenant_id=tenant_id, status=StatusEnum.VALID.value))  # TODO(async-phase4)
     assert dia, "You do not own the chat."
 
@@ -311,14 +244,6 @@ async def async_completion(
         raise LookupError("Session does not exist")
 
     conv = conv[0]
-    messages = deepcopy(conv.message or [])
-    references = deepcopy(conv.reference or [])
-    if regenerate:
-        _rewind_latest_conversation_turn(messages, references, question)
-    if not persist_reasoning:
-        _sanitize_assistant_messages(messages)
-    conv.message = messages
-    conv.reference = references
     msg = []
     question = {"content": question, "role": "user", "id": str(uuid4())}
 
@@ -346,42 +271,17 @@ async def async_completion(
     if stream:
         try:
             async for ans in async_chat(dia, msg, db, True, **kwargs):
-                ans = structure_answer(
-                    conv,
-                    ans,
-                    message_id,
-                    session_id,
-                    persist_reasoning=persist_reasoning,
-                )
+                ans = structure_answer(conv, ans, message_id, session_id)
                 yield "data:" + json.dumps({"code": 0, "data": ans}, ensure_ascii=False) + "\n\n"
-            if require_visible_answer and not _has_visible_latest_assistant(conv.message):
-                await db.rollback()
-                yield "data:" + json.dumps({"code": 500, "message": "No visible answer", "data": False}, ensure_ascii=False) + "\n\n"
-                return
-            if not persist_reasoning:
-                _sanitize_assistant_messages(conv.message)
             await db.run_sync(lambda s: ConversationService.update_by_id(s, conv.id, conv.to_dict()))  # TODO(async-phase4)
         except Exception as e:
-            await db.rollback()
             yield "data:" + json.dumps({"code": 500, "message": str(e), "data": {"answer": "**ERROR**: " + str(e), "reference": []}}, ensure_ascii=False) + "\n\n"
         yield "data:" + json.dumps({"code": 0, "data": True}, ensure_ascii=False) + "\n\n"
 
     else:
         answer = None
         async for ans in async_chat(dia, msg, db, False, **kwargs):
-            answer = structure_answer(
-                conv,
-                ans,
-                message_id,
-                session_id,
-                persist_reasoning=persist_reasoning,
-            )
-            if require_visible_answer and not _has_visible_latest_assistant(conv.message):
-                await db.rollback()
-                yield None
-                return
-            if not persist_reasoning:
-                _sanitize_assistant_messages(conv.message)
+            answer = structure_answer(conv, ans, message_id, session_id)
             await db.run_sync(lambda s: ConversationService.update_by_id(s, conv.id, conv.to_dict()))  # TODO(async-phase4)
             break
         yield answer

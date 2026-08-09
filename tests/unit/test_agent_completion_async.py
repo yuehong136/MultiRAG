@@ -9,14 +9,12 @@
 import json
 import sys
 import threading
-from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from agent.canvas import Canvas
 from api.db.services import canvas_service
 from api.db.services.api_service import API4ConversationService
 from api.db.services.canvas_service import UserCanvasService
@@ -118,181 +116,6 @@ async def test_completion_raises_when_session_missing(monkeypatch):
 
     with pytest.raises(LookupError, match="Session not found"):
         [f async for f in canvas_service.completion(db, "tenant-unit", "agent-1", session_id="ghost", query="hi")]
-
-
-class _ChannelHistoryCanvas(Canvas):
-    initial_histories: list[list[list[object]]] = []
-    visible_answer = "new answer"
-
-    def __init__(self, dsl, tenant_id, agent_id=None, canvas_id=None, custom_header=""):
-        del tenant_id, agent_id, canvas_id, custom_header
-        parsed = json.loads(dsl)
-        self.dsl = parsed
-        self.history = parsed.get("history", [])
-        self.globals = parsed.get("globals", {})
-        self.error = ""
-        type(self).initial_histories.append(deepcopy(self.history))
-
-    def reset(self):
-        pass
-
-    async def run(self, **kwargs):
-        question = kwargs["query"]
-        self.history.append(("user", question))
-        self.globals.setdefault("sys.history", []).append(f"user: {question}")
-        yield {"event": "message", "data": {"content": "", "start_to_think": True}}
-        yield {"event": "message", "data": {"content": "private new thought"}}
-        yield {"event": "message", "data": {"content": "", "end_to_think": True}}
-        if self.visible_answer:
-            yield {"event": "message", "data": {"content": self.visible_answer}}
-        self.history.append(("assistant", "private new thought" + self.visible_answer))
-        self.globals.setdefault("sys.history", []).append("assistant: private new thought" + self.visible_answer)
-        yield {"event": "message_end", "data": {}}
-
-    def get_reference(self):
-        return {"chunks": []}
-
-    def __str__(self):
-        self.dsl["history"] = self.history
-        self.dsl["globals"] = self.globals
-        return json.dumps(self.dsl)
-
-
-def _safe_channel_dsl() -> str:
-    return json.dumps(
-        {
-            "components": {
-                "begin": {"obj": {"component_name": "Begin", "params": {}}},
-                "agent": {"obj": {"component_name": "Agent", "params": {"tools": [], "mcp": []}}},
-                "message": {"obj": {"component_name": "Message", "params": {}}},
-            },
-            "history": [
-                ["user", "previous"],
-                ["assistant", "private previous thoughtprevious answer"],
-                ["user", "same question"],
-                ["assistant", "private old thoughtold answer"],
-            ],
-            "globals": {"sys.history": ["contaminated"], "sys.conversation_turns": 2},
-        }
-    )
-
-
-async def test_channel_regenerate_replaces_latest_canvas_turn_and_sanitizes_history(monkeypatch):
-    _ChannelHistoryCanvas.initial_histories = []
-    _ChannelHistoryCanvas.visible_answer = "new answer"
-    saved: dict[str, object] = {}
-    conv_row = {
-        "id": "sess-1",
-        "message": [
-            {"role": "user", "content": "previous", "id": "turn-1"},
-            {"role": "assistant", "content": "<think>private previous thought</think>previous answer", "id": "turn-1"},
-            {"role": "user", "content": "same question", "id": "turn-2"},
-            {"role": "assistant", "content": "<think>private old thought</think>old answer", "id": "turn-2"},
-        ],
-        "reference": [],
-        "dsl": _safe_channel_dsl(),
-        "errors": "",
-    }
-
-    class _FakeConv:
-        def __init__(self):
-            self.id = "sess-1"
-            self.message = deepcopy(conv_row["message"])
-            self.dsl = conv_row["dsl"]
-
-        def to_dict(self):
-            return deepcopy(conv_row)
-
-    monkeypatch.setattr(canvas_service, "Canvas", _ChannelHistoryCanvas)
-    monkeypatch.setattr(API4ConversationService, "get_by_id", classmethod(lambda cls, s, sid: _FakeConv()))
-    monkeypatch.setattr(
-        API4ConversationService,
-        "append_message",
-        classmethod(lambda cls, s, cid, conv: saved.setdefault("payload", deepcopy(conv))),
-    )
-    db = _RecordingAsyncSession(conv_row)
-
-    frames = [
-        frame
-        async for frame in canvas_service.completion(
-            db,
-            "tenant-unit",
-            "agent-1",
-            session_id="sess-1",
-            query="same question",
-            regenerate=True,
-            persist_reasoning=False,
-            require_visible_answer=True,
-        )
-    ]
-
-    assert any('"content": "new answer"' in frame for frame in frames)
-    assert _ChannelHistoryCanvas.initial_histories == [[["user", "previous"], ["assistant", "previous answer"]]]
-    payload = saved["payload"]
-    assert [message["role"] for message in payload["message"]] == ["user", "assistant", "user", "assistant"]
-    assert [message["content"] for message in payload["message"] if message["role"] == "user"].count("same question") == 1
-    assert payload["message"][-1]["content"] == "new answer"
-    assert "private" not in json.dumps(payload, ensure_ascii=False)
-
-
-async def test_channel_reasoning_only_canvas_does_not_commit_history(monkeypatch):
-    _ChannelHistoryCanvas.initial_histories = []
-    _ChannelHistoryCanvas.visible_answer = ""
-    saved: dict[str, object] = {}
-    conv_row = {
-        "id": "sess-1",
-        "message": [],
-        "reference": [],
-        "dsl": _safe_channel_dsl(),
-        "errors": "",
-    }
-
-    class _FakeConv:
-        id = "sess-1"
-        message = []
-        dsl = _safe_channel_dsl()
-
-        def to_dict(self):
-            return deepcopy(conv_row)
-
-    monkeypatch.setattr(canvas_service, "Canvas", _ChannelHistoryCanvas)
-    monkeypatch.setattr(API4ConversationService, "get_by_id", classmethod(lambda cls, s, sid: _FakeConv()))
-    monkeypatch.setattr(
-        API4ConversationService,
-        "append_message",
-        classmethod(lambda cls, s, cid, conv: saved.setdefault("payload", deepcopy(conv))),
-    )
-    db = _RecordingAsyncSession(conv_row)
-
-    frames = [
-        frame
-        async for frame in canvas_service.completion(
-            db,
-            "tenant-unit",
-            "agent-1",
-            session_id="sess-1",
-            query="question",
-            persist_reasoning=False,
-            require_visible_answer=True,
-        )
-    ]
-
-    assert any('"event": "message_end"' in frame for frame in frames)
-    assert saved == {}
-
-
-def test_canvas_regenerate_fails_closed_for_side_effect_components() -> None:
-    unsafe_dsl = json.dumps(
-        {
-            "components": {
-                "begin": {"obj": {"component_name": "Begin", "params": {}}},
-                "email": {"obj": {"component_name": "Email", "params": {}}},
-            }
-        }
-    )
-
-    with pytest.raises(PermissionError, match="external tools"):
-        canvas_service._prepare_channel_canvas_dsl(unsafe_dsl, [], regenerate=True)
 
 
 # ---------------------------------------------------------------------------

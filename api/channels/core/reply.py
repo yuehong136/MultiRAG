@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from common.reasoning import strip_reasoning as strip_reasoning
+from api.channel_execution.reasoning import strip_reasoning as strip_reasoning
 
 SERVICE_UNAVAILABLE_TEXT = "服务暂时不可用，请稍后再试。"
 ANSWER_TRUNCATED_SUFFIX = "\n\n（回答过长，演示版已截断）"
