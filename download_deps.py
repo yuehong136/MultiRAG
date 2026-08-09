@@ -19,11 +19,11 @@ from pathlib import Path
 import nltk
 from huggingface_hub import snapshot_download
 
-UV_VERSION = "0.11.27"
+UV_VERSION = "0.12.3"
 UV_RELEASE_BASE_URL = f"https://releases.astral.sh/github/uv/releases/download/{UV_VERSION}"
 UV_ARCHIVE_SHA256 = {
-    "uv-x86_64-unknown-linux-gnu.tar.gz": "0f4088a04ac92e4c52b4b76759d227a1047355e0ce1dd57cd738a6dec5966bd9",
-    "uv-aarch64-unknown-linux-gnu.tar.gz": "321580b9a7069d0cdbd8db9482a5fb62b4f1285110f847746e3b495408e3a08c",
+    "uv-x86_64-unknown-linux-gnu.tar.gz": "600cf9a742aca00d292673b16b5acffaa7b8c269a364ad0c2e79498dcb1fe101",
+    "uv-aarch64-unknown-linux-gnu.tar.gz": "bb66cb52e7b1823aed1183630d8d8e5c958840d584a4c55ec10a4cfc168dcca2",
 }
 NLTK_RESOURCES = {
     "wordnet": Path("corpora/wordnet.zip"),

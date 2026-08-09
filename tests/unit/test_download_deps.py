@@ -21,7 +21,7 @@ def test_download_file_replaces_invalid_cached_uv(
     tmp_path: Path,
 ) -> None:
     filename = "uv-x86_64-unknown-linux-gnu.tar.gz"
-    expected_content = b"uv 0.11.27 test archive"
+    expected_content = b"uv 0.12.3 test archive"
     expected_sha256 = hashlib.sha256(expected_content).hexdigest()
     monkeypatch.setitem(download_deps.UV_ARCHIVE_SHA256, filename, expected_sha256)
     monkeypatch.chdir(tmp_path)

@@ -2,7 +2,7 @@
 #
 FROM scratch
 
-ARG UV_VERSION=0.11.27
+ARG UV_VERSION=0.12.3
 LABEL org.opencontainers.image.title="MultiRAG build dependencies" \
       io.multirag.uv.version="${UV_VERSION}" \
       io.multirag.runtime-models="excluded"

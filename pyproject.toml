@@ -5,7 +5,7 @@ description = "基于RAG、Agent、Workflow体系赋能LLM应用"
 readme = "README.md"
 # 上界 <3.14：CI 矩阵 3.12/3.13、Docker 3.12.10，3.14 无真实消费者；
 # 且 3.14 解析分支会迫使 pymilvus 静默换 3.0.0（grpcio 钉子冲突）——收紧上界
-# 让锁文件不再产生任何多版本分叉（uv 0.11.x 写入器对分叉引用有自毁 bug）
+# 让锁文件不再产生任何多版本分叉（避免分叉引用导致锁文件损坏）
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "akshare>=1.15.78,<2.0.0",
@@ -224,9 +224,9 @@ test = [
 ]
 
 [tool.uv]
-# 工具链防漂：本地与 CI 必须同一 minor 的 uv（锁文件由 0.11.x 产出；
+# 工具链防漂：本地与 CI 必须同一 minor 的 uv（锁文件由 0.12.x 产出；
 # 升级 uv 时本地、CI 四处 pin、重锁三者同一提交完成）
-required-version = ">=0.11,<0.12"
+required-version = ">=0.12,<0.13"
 override-dependencies = [
     # moodlepy 0.24.1（最新版、上游停更）pin attrs/cattrs <23.0，与现代栈硬冲突，
     # override 是唯一出路；日落点 = 弃用或内联 moodlepy 连接器

@@ -1,4 +1,4 @@
-ARG MULTIRAG_DEPS_IMAGE=multirag_deps:uv0.11.27-tika3.3.0-build-only
+ARG MULTIRAG_DEPS_IMAGE=multirag_deps:uv0.12.3-tika3.3.0-build-only
 FROM ${MULTIRAG_DEPS_IMAGE} AS multirag_deps
 
 # base stage
@@ -8,7 +8,7 @@ SHELL ["/bin/bash", "-c"]
 
 ARG NEED_MIRROR=0
 ARG MULTIRAG_DEPS_IMAGE
-ARG UV_VERSION=0.11.27
+ARG UV_VERSION=0.12.3
 
 # 创建必要的目录
 RUN mkdir -p /root/.ragdatav /root/nltk_data && \
