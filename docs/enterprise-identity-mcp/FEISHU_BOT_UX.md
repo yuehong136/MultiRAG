@@ -226,14 +226,17 @@ stage；patch/finish 的 stage 纳入 sequence。Redis 执行 claim 仍按 bindi
 1. 最早可用时添加 Typing reaction；失败只记指标，不阻塞主流程。
 2. 创建 CardKit JSON 2.0 实体，`streaming_mode=true`，摘要为“生成中”。
 3. 回复原消息并保存 `card_id` 和发送返回的 `message_id`。
-4. 聚合 delta；距上次成功 patch 至少 250ms 才发送，最多 4 次/秒；最终 flush 不受该等待限制。
+4. 聚合 delta；首个正文在 250ms 闸门后尽快显示，后续默认至少积累 16 个新字符或在持续收到
+   delta 时距上次成功 patch 达到 1s 才发送；CardKit 请求 RTT 不计入下一批等待。最多 4 次/秒，
+   最终 flush 不受字符或时间等待限制。
 5. 每次 patch 使用严格递增 sequence；中间限流更新可合并或丢弃，但最终更新不能丢。
 6. 完成时强制 final flush，再用更大的 sequence 调 `finish_streaming_card()`。
 7. 完成后才添加按钮、完整来源、反馈区或 one-shot 卡片替换。
 8. 清理 Typing reaction；失败时尝试错误卡片或文本降级。
 
-飞书官方单卡 OpenAPI 上限是 10 次/秒，本项目使用更保守的 4 次/秒默认值，给重试和最终 flush
-留出余量。节流配置属于 Provider outbound config，不属于模型参数。
+飞书官方单卡 OpenAPI 上限是 10 次/秒，本项目使用更保守的 4 次/秒硬上限，并对首屏后的短 delta
+做字符/时间双闸门合并，既给重试和最终 flush 留出余量，也避免同步 patch RTT 把模型消费串行化成
+四字一刷。节流配置属于 Provider outbound config，不属于模型参数。
 
 ### 5.2 内容渲染
 

@@ -123,6 +123,28 @@ class _SlowReactionTransport(_Transport):
         return "reaction-1"
 
 
+class _SlowUpdateTransport(_Transport):
+    def __init__(self, clock: _Clock) -> None:
+        super().__init__()
+        self._clock = clock
+
+    async def update_card_text(
+        self,
+        card_id: str,
+        content: str,
+        *,
+        sequence: int,
+        delivery_uuid: str,
+    ) -> None:
+        await super().update_card_text(
+            card_id,
+            content,
+            sequence=sequence,
+            delivery_uuid=delivery_uuid,
+        )
+        self._clock.advance(2.0)
+
+
 def _source() -> IncomingMessage:
     return IncomingMessage(
         channel="feishu",
@@ -268,6 +290,61 @@ async def test_progressive_reply_throttles_updates_then_flushes_and_finishes_in_
     assert transport.reactions_removed == [("message-1", "reaction-1")]
     operation_uuids = [transport.card_replies[0][2], *(item[3] for item in transport.updates), transport.finishes[0][2]]
     assert len(operation_uuids) == len(set(operation_uuids))
+
+
+@pytest.mark.asyncio
+async def test_short_model_deltas_are_coalesced_after_the_first_visible_text() -> None:
+    clock = _Clock()
+    transport = _Transport()
+    session = await _session(transport, clock)
+    clock.advance(0.25)
+
+    await session.append("首屏")
+    assert [update[1] for update in transport.updates] == ["首屏"]
+
+    for delta in ("甲乙丙丁", "戊己庚辛", "壬癸子丑"):
+        clock.advance(0.25)
+        await session.append(delta)
+    assert [update[1] for update in transport.updates] == ["首屏"]
+
+    clock.advance(0.25)
+    await session.append("寅卯辰巳")
+
+    assert [update[1] for update in transport.updates] == [
+        "首屏",
+        "首屏甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_small_pending_delta_flushes_at_the_maximum_wait() -> None:
+    clock = _Clock()
+    transport = _Transport()
+    session = await _session(transport, clock)
+    clock.advance(0.25)
+    await session.append("首屏")
+
+    clock.advance(1.0)
+    await session.append("少量")
+
+    assert [update[1] for update in transport.updates] == ["首屏", "首屏少量"]
+
+
+@pytest.mark.asyncio
+async def test_cardkit_round_trip_does_not_trigger_a_back_to_back_tiny_patch() -> None:
+    clock = _Clock()
+    transport = _SlowUpdateTransport(clock)
+    session = await _session(transport, clock)
+    clock.advance(0.25)
+    await session.append("首屏")
+    assert clock.now == 102.25
+
+    await session.append("甲乙丙丁")
+    assert [update[1] for update in transport.updates] == ["首屏"]
+
+    clock.advance(1.0)
+    await session.append("戊己庚辛")
+    assert [update[1] for update in transport.updates] == ["首屏", "首屏甲乙丙丁戊己庚辛"]
 
 
 @pytest.mark.asyncio

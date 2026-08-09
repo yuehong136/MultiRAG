@@ -21,6 +21,8 @@ CARD_ANSWER_ELEMENT_ID = "answer"
 _CARD_GENERATING_TEXT = "正在生成回答…"
 _CARD_BYTE_LIMIT = 24_000
 _DELIVERY_UUID_LENGTH = 40
+_DEFAULT_MAX_UPDATE_INTERVAL_SECONDS = 1.0
+_DEFAULT_MIN_UPDATE_CHARS = 16
 _IMAGE_RE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)(?:\s+[^)]*)?\)")
 _MASS_MENTION_RE = re.compile(r"(?i)@(all|everyone)\b")
@@ -155,16 +157,24 @@ class FeishuProgressiveReplySession:
         source: IncomingMessage,
         max_content_chars: int,
         update_interval_seconds: float = 0.25,
+        min_update_chars: int = _DEFAULT_MIN_UPDATE_CHARS,
+        max_update_interval_seconds: float = _DEFAULT_MAX_UPDATE_INTERVAL_SECONDS,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if max_content_chars < 1:
             raise ValueError("reply content limit must be positive")
         if update_interval_seconds <= 0:
             raise ValueError("update interval must be positive")
+        if min_update_chars < 1:
+            raise ValueError("minimum update characters must be positive")
+        if max_update_interval_seconds < update_interval_seconds:
+            raise ValueError("maximum update interval must not be shorter than minimum interval")
         self._transport = transport
         self._source = source
         self._max_content_chars = max_content_chars
         self._update_interval_seconds = update_interval_seconds
+        self._min_update_chars = min_update_chars
+        self._max_update_interval_seconds = max_update_interval_seconds
         self._clock = clock
         self._started_at = clock()
         self._last_update_at = self._started_at
@@ -186,6 +196,8 @@ class FeishuProgressiveReplySession:
         source: IncomingMessage,
         max_content_chars: int,
         update_interval_seconds: float = 0.25,
+        min_update_chars: int = _DEFAULT_MIN_UPDATE_CHARS,
+        max_update_interval_seconds: float = _DEFAULT_MAX_UPDATE_INTERVAL_SECONDS,
         clock: Callable[[], float] = time.monotonic,
     ) -> FeishuProgressiveReplySession:
         session = cls(
@@ -193,6 +205,8 @@ class FeishuProgressiveReplySession:
             source=source,
             max_content_chars=max_content_chars,
             update_interval_seconds=update_interval_seconds,
+            min_update_chars=min_update_chars,
+            max_update_interval_seconds=max_update_interval_seconds,
             clock=clock,
         )
         await session._start_progression()
@@ -328,7 +342,7 @@ class FeishuProgressiveReplySession:
             return
         if rendered == self._last_rendered:
             return
-        if not force and now - self._last_update_at < self._update_interval_seconds:
+        if not force and not self._should_patch(rendered, now):
             return
         sequence = self._next_sequence()
         await self._transport.update_card_text(
@@ -338,7 +352,22 @@ class FeishuProgressiveReplySession:
             delivery_uuid=delivery_uuid(self._source, f"card_update:{sequence}"),
         )
         self._last_rendered = rendered
-        self._last_update_at = now
+        # Start the next coalescing window after the outbound request returns.
+        # Counting CardKit network latency here causes the next tiny model delta
+        # to patch immediately, serializing generation behind API round-trips.
+        self._last_update_at = self._clock()
+
+    def _should_patch(self, rendered: str, now: float) -> bool:
+        elapsed = now - self._last_update_at
+        if elapsed < self._update_interval_seconds:
+            return False
+        if not self._last_rendered:
+            return True
+        if rendered.startswith(self._last_rendered):
+            pending_chars = len(rendered) - len(self._last_rendered)
+        else:
+            pending_chars = len(rendered)
+        return pending_chars >= self._min_update_chars or elapsed >= self._max_update_interval_seconds
 
     async def _finish_card(self) -> None:
         if not self._card_id:
