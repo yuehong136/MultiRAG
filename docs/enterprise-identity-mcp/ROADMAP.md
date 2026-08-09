@@ -1,6 +1,6 @@
 # EIM 实施路线图与进度账本
 
-> 最后更新：2026-08-07
+> 最后更新：2026-08-09
 > 当前状态：文档基线完成；生产代码尚未开始。
 
 ---
@@ -80,6 +80,10 @@ flowchart TD
     F1 --> C5["C5 official Channel SDK"]
     C4 --> C5
 
+    F0 --> U0["U0 execution stream + ReplySession"]
+    U0 --> U1["U1 Feishu progressive reply"]
+    U1 --> U4["U4 queue/cancel/feedback"]
+
     I3 --> P1["P1 Principal model"]
     C3 --> P2["P2 Principal propagation"]
     P1 --> P2
@@ -100,17 +104,26 @@ flowchart TD
     M1 --> M2["M2 business authorization"]
     M2 --> M3["M3 confirmation workflow"]
     M3 --> M4["M4 idempotency/recovery"]
-    M4 --> M5["M5 end-to-end"]
-
-    C5 --> U1["U1 streaming/confirmation cards"]
-    M3 --> U1
     I6 --> U2["U2 identity admin/link UI"]
+    I8 --> U2
+    P2 --> U5["U5 references/artifacts"]
+    U0 --> U5
+    U5 --> U6["U6 multimodal"]
+    C3 --> U7["U7 sensitive confirmation card"]
+    M3 --> U7
+    M4 --> U7
+    U1 --> U7
+    U7 --> M5["M5 end-to-end"]
+    I8 --> M5
     U1 --> U3["U3 optional group policy"]
+    U2 --> U3
+    C3 --> U3
 
     I8 --> O1["O1 production config/secrets"]
     A6 --> O1
     M5 --> O2["O2 staged rollout"]
     U1 --> O2
+    O2 --> U3
     O2 --> O3["O3 EMA/independent broker review"]
 ```
 
@@ -122,7 +135,7 @@ flowchart TD
 
 | ID | 仓库 | 任务 | 状态 | 依赖 | 验收证据 |
 |---|---|---|:---:|---|---|
-| EIM-F0 | MR docs | 建立本权威文档集、版本和上游快照 | ✅ | — | 本目录 10 份文档互链；官方/PyPI/HEAD 于 2026-08-07 复核 |
+| EIM-F0 | MR docs | 建立并维护本权威文档集、版本和上游快照 | ✅ | — | 本目录 11 份文档互链；官方/PyPI/HEAD 于 2026-08-09 复核 |
 | EIM-F1 | MR | `lark-oapi` 1.7.1 -> 当时最新 1.x；增加 Contact V3 contract fixture，不改变生产身份行为 | ⬜ | F0 | 现有 Channel 测试；token/client import 无事件循环副作用；Contact typed response 测试 |
 | EIM-F2 | MR + of_mcp test fixture | 建 MCP SDK 2 兼容矩阵：现代 2026 server、legacy server、401/403、tool error、取消/超时 | ⬜ | F0 | 测试先在旧生产 client 上暴露差异；结果和迁移清单入账 |
 | EIM-F3 | MR | `common/mcp_tool_call_conn.py` 迁到官方 `mcp.Client` v2；保留 legacy 自动回退 | ⬜ | F2 | 不再手调 initialize；现代/legacy fixture 全绿；无身份静态 header |
@@ -252,7 +265,7 @@ forward。
 | EIM-M2 | of_mcp | `medic:submit` scope + 企业主体类型 + 业务授权 adapter/preflight | ⬜ | M1 | allow/deny/unavailable；业务拒绝不泄露规则；真实执行前检查 |
 | EIM-M3 | 两仓 + of_mcp | prepare/confirm/execute 两阶段、Confirmation Store、过期/取消/操作者绑定 | ⬜ | M2 | action digest 固定；他人点击无效；参数变化需重确认；持久化状态机 |
 | EIM-M4 | of_mcp | 端到端幂等、Jira request key/查询恢复、unknown outcome 队列 | ⬜ | M3 | 双击、网络超时、模型重试不重复建单；未知结果不自动重放 |
-| EIM-M5 | 两仓 integration | 从飞书消息到测试 Jira 的完整成功/拒绝/离职/重放测试 | ⬜ | M4,U1 | sandbox/test project；零真实生产工单；跨仓 trace/audit 对账 |
+| EIM-M5 | 两仓 integration | 从飞书消息到测试 Jira 的完整成功/拒绝/离职/重放测试 | ⬜ | M4,U7,I8 | sandbox/test project；零真实生产工单；跨仓 trace/audit 对账 |
 
 M1 需要修改 medic 每个工具文件，但先在共享 submission/application service 收口企业主体，不复制
 四份授权逻辑。domain 仍不 import FastMCP；dependency 只存在 tools/adapters 边界。
@@ -261,13 +274,22 @@ M1 需要修改 medic 每个工具文件，但先在共享 submission/applicatio
 
 ## 10. Phase U · 用户与管理员体验
 
-| ID | 仓库 | 任务 | 状态 | 依赖 | 完成条件 |
-|---|---|---|:---:|---|---|
-| EIM-U1 | MR + web/飞书 | 流式卡片、确认/取消/完成/失败状态；接 `card.action.trigger` | ⬜ | C5,M3 | 节流、最终 flush、回调身份校验、重启恢复；参考官方 OpenClaw/Channel SDK |
-| EIM-U2 | MR + web | tenant identity policy、link code、自身身份、冲突/revalidate 管理 UI/API | ⬜ | I6,I8 | Secret/subject 脱敏；管理员权限；link-only 完整流程；additive-first |
-| EIM-U3 | MR + web | 可选群聊：@ only、thread/sender session scope、高风险工具默认关闭 | ⏸ | U1,O2 | 单独风险评审；群内身份隔离；机器人消息 loop guard；未批准前不启用 |
+实现契约、交互状态和测试矩阵以 [FEISHU_BOT_UX](FEISHU_BOT_UX.md) 为准。SDK transport PoC
+EIM-C5 与 U0/U1 并行，不是前置依赖。
 
-U1 的工具过程卡片只显示安全摘要；不能显示完整 MCP 参数、企业工号、token、文件内容或底层错误。
+| ID | CHN ID | 仓库 | 任务 | 状态 | 依赖 | 完成条件 |
+|---|---|---|---|:---:|---|---|
+| EIM-U0 | CHN-X9 | MR | `runtime_client` 以加法暴露 async execution event stream；新增 transport-neutral ReplySession，保留 `ask()` 兼容聚合 | ⬜ | F0 | 现有 SSE wire 不变；delta 不再被新 bridge 吞掉；旧 `ask()`/纯文本 Provider 行为不变；非法状态转移拒绝 |
+| EIM-U1 | CHN-U8 | MR + 飞书 | Typing reaction、CardKit 2.0 流式卡片、Markdown/post/text renderer、delivery uuid 和 fallback | ⬜ | U0 | 首 ack/首卡 SLO；<=4 QPS 节流；strict sequence；最终 flush/finish；卡片失败不重跑 Agent且仍交付文本 |
+| EIM-U2 | — | MR + web | tenant identity policy、link code、自身身份、冲突/revalidate 管理 UI/API | ⬜ | I6,I8 | Secret/subject 脱敏；管理员权限；link-only 完整流程；additive-first |
+| EIM-U3 | CHN-U10 | MR + web/飞书 | 可选群聊：@ only、群 allowlist、thread session、reply hydration、高风险工具默认关闭 | ⏸ | U1,U2,C3,O2 | 单独风险评审；群内身份隔离；机器人 loop guard；未批准前不启用 |
+| EIM-U4 | CHN-U9 | MR + 飞书 | follow-up 有界队列、queued/running/final 状态、纯生成取消、重新生成和低风险反馈 | ⬜ | U1 | 队列满不静默；每来源消息独立状态；副作用已开始不伪装回滚；回调幂等 |
+| EIM-U5 | CHN-X10 | MR + 飞书 | `references_ready/artifact_ready` 安全事件、来源和产物渲染 | ⬜ | U0,P2 | 不解析内部 tool/A2UI payload；资源可见性；无本地路径/临时 token URL；降级可用 |
+| EIM-U6 | CHN-X11 | MR + 飞书 | 图片、文件、输出 artifact、语音转写的结构化附件链 | ⬜ | U0,U5,C3 | message_id+resource key 下载；大小/MIME/扫描/TTL；tenant/user/session 隔离；不支持类型明确提示 |
+| EIM-U7 | CHN-X12 | MR + 飞书 + of_mcp | 敏感确认卡、`card.action.trigger`、取消/完成/失败与持久化恢复 | ⬜ | U1,C3,M3,M4 | 操作者/tenant/digest/expiry/nonce 绑定；重复点击一次执行；重启恢复；执行前重授权 |
+
+所有工具过程卡片只显示服务端白名单安全摘要；不能显示完整 MCP 参数、模型推理、企业工号、token、
+文件内容或底层错误。纯输出 U1 不订阅 `card.action.trigger`，只有 U4/U7 需要交互回调。
 
 ---
 
@@ -291,7 +313,7 @@ U1 的工具过程卡片只显示安全摘要；不能显示完整 MCP 参数、
 
 ## 12. 当前任务推荐顺序
 
-第一批互不冲突：
+第一批可启动候选（其中 C1 与 U0 会改同一执行契约，必须串行）：
 
 ```text
 EIM-F1  lark-oapi patch 升级
@@ -299,15 +321,25 @@ EIM-F2  MCP v2 兼容测试
 EIM-F4  of_mcp FastMCP beta 升级
 EIM-I1  User 外部账号模型
 EIM-C1  Channel tolerate structured assertion
+EIM-U0  execution stream + ReplySession（与 C1 都会触碰 execution contract，不同 Agent 不并行）
 ```
 
-若只能串行，推荐：
+体验快速通道（不等待身份/MCP/SDK 迁移）：
+
+```text
+U0 -> U1 -> U4
+```
+
+身份、MCP 与敏感操作主通道：
 
 ```text
 F1 -> I1 -> I2 -> I3 -> I4 -> I6 -> P1 -> C1 -> C2 -> C3
    -> F2 -> F3 -> F4 -> A1 -> A2/A3 -> A4 -> P2/P3 -> A5
-   -> I5 -> M1 -> M2 -> M3 -> C5/U1 -> M4/M5 -> I7/I8 -> O1/O2
+   -> I5 -> I7 -> I8 -> M1 -> M2 -> M3 -> M4 -> U7 -> M5 -> U2 -> O1/O2 -> U3
 ```
+
+C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任务并行；不得为了迁移 SDK
+把 UX 任务重新绑回 C5。
 
 实际开工仍以依赖图和当时仓库状态为准。
 
@@ -318,3 +350,4 @@ F1 -> I1 -> I2 -> I3 -> I4 -> I6 -> P1 -> C1 -> C2 -> C3
 | 日期 | ID | 变更 | 仓库/提交 | 验证证据 | 记录人 |
 |---|---|---|---|---|---|
 | 2026-08-07 | EIM-F0 | 建立企业身份与 MCP 授权权威文档集；核验飞书/MCP 最新官方文档、PyPI 版本和参考仓 HEAD | MultiRAG docs / 本次提交 | 文档互链与本地路径检查；版本来源见 VERSION_BASELINE | Codex |
+| 2026-08-09 | EIM-F0 | 按当前 Channel 代码和官方/主流飞书项目重构体验路线：新增 ReplySession/渐进式回复基线，拆开 SDK、普通 UX 与敏感确认依赖，登记 U0/U4-U7 和 CHN 映射 | MultiRAG docs / 本次提交 | PyPI/官方仓 HEAD 复核；任务 ID 双向检查；相对链接和 `git diff --check` | Codex |

@@ -1,7 +1,7 @@
 # 飞书企业应用申请与接入清单
 
 本文件是管理员、开发和运维共同使用的交付清单。飞书控制台名称可能调整；权限 scope ID 和 API
-文档链接是 2026-08-07 核验结果，实施当天仍须在具体 API/事件页面重新确认。
+文档链接最近于 2026-08-09 核验，实施当天仍须在具体 API/事件页面重新确认。
 
 ---
 
@@ -99,16 +99,39 @@ Channel 创建后使用现有“测试连接”能力验证 `app_id/app_secret`�
 - [API 权限列表](https://open.feishu.cn/document/server-docs/application-scope/scope-list?lang=zh-CN)
 - [用户资源字段](https://open.feishu.cn/document/server-docs/contact-v3/user/field-overview?lang=zh-CN)
 
-### 4.2 群聊后续可选
+### 4.2 渐进式回复阶段必需
+
+EIM-U1/CHN-U8 上线前，按飞书开发者后台当时展示的最小可用组合申请并在测试租户验证：
+
+| Scope ID | 用途 |
+|---|---|
+| `cardkit:card:write` | 创建和更新 CardKit 2.0 卡片实体、结束流式模式 |
+| `im:message` | CardKit 引用发送、消息回复和 reaction 所需的消息能力；若后台提供更细权限则取窄 |
+
+`im:message:send_as_bot` 已在首期必需权限中。不同租户 UI 可能仍显示旧的
+`cardkit:card:read/cardkit:card:update` 拆分；以开工时官方文档和测试租户 API 实测为准，并把
+最终 scope ID 记录到 ROADMAP 任务证据。修改权限后要重新发布/安装应用，旧安装获得的 token
+不会自动证明新 scope 已生效。
+
+Reaction 用于即时 acknowledgement，失败只能降级为初始卡片/文本，不能阻塞回答。
+
+官方来源：
+
+- [流式更新卡片](https://open.feishu.cn/document/cardkit-v1/streaming-updates-openapi-overview)
+- [添加消息表情回复](https://open.feishu.cn/document/server-docs/im-v1/message-reaction/create?lang=zh-CN)
+- [回复消息](https://open.feishu.cn/document/server-docs/im-v1/message/reply?lang=zh-CN)
+
+### 4.3 群聊后续可选
 
 | Scope ID | 用途 |
 |---|---|
 | `im:message.group_at_msg:readonly` | 接收群聊中 @ 机器人消息 |
 
-首期不申请 `im:message.group_msg` 全群消息权限。群聊高风险工具必须等待 EIM-U2 完成，且默认
-只响应 @、按 `(chat/thread/sender)` 隔离会话。
+首期不申请 `im:message.group_msg` 全群消息权限。群聊必须等待 EIM-U2 身份管理能力和 EIM-U3
+独立风险评审完成，默认只响应 @、按 tenant/provider account/chat/thread 策略隔离会话；高风险
+工具默认关闭。
 
-### 4.3 明确不申请
+### 4.4 明确不申请
 
 没有独立需求和评审时，不申请：
 
@@ -162,21 +185,22 @@ Contact API 仍会权限失败。官方说明：[配置应用数据权限](https
 | Event type | 用途 | 阶段 |
 |---|---|---|
 | `im.message.receive_v1` | 接收消息 | 现有 Channel |
-| `contact.user.created_v3` | 员工加入/入职 | EIM-I4 |
-| `contact.user.updated_v3` | 状态、工号等变更后刷新已链接身份 | EIM-I4 |
-| `contact.user.deleted_v3` | 员工离职，立即禁用 | EIM-I4 |
-| `contact.scope.updated_v3` | 应用通讯录范围变化，清缓存并重验 | EIM-I4 |
+| `contact.user.created_v3` | 员工加入/入职 | EIM-I7 |
+| `contact.user.updated_v3` | 状态、工号等变更后刷新已链接身份 | EIM-I7 |
+| `contact.user.deleted_v3` | 员工离职，立即禁用 | EIM-I7 |
+| `contact.scope.updated_v3` | 应用通讯录范围变化，清缓存并重验 | EIM-I7 |
 
 飞书可能重复推送事件。消息以 `message_id` 去重；通讯录事件以 `event_id + event_type` 去重，
 同时数据库更新必须幂等。不要依赖“只会收到一次”。
 
 ### 卡片回调
 
-EIM-U1 时在“回调配置”中使用长连接，订阅：
+纯流式输出 EIM-U1 不需要 `card.action.trigger`。EIM-U4 的重新生成/反馈或 EIM-U7 的敏感确认
+上线时，才在“回调配置”中使用长连接订阅：
 
 | Callback | 用途 |
 |---|---|
-| `card.action.trigger` | 敏感操作确认、取消、查看状态 |
+| `card.action.trigger` | 低风险反馈/重新生成，或敏感操作确认、取消、查看状态 |
 
 卡片 action payload 中的用户 ID 仍要走外部身份 resolver，并校验与待确认操作的
 `platform_user_id` 相同；不能只信 action 中的按钮 value。
@@ -287,7 +311,8 @@ INACTIVE       -> 禁止执行和新会话
 - [ ] 权限列表与本文必需 scope 对账，无多余高危权限。
 - [ ] 应用可用范围与通讯录数据范围已由管理员确认。
 - [ ] 消息和四个 Contact 事件已订阅并发布生效。
-- [ ] card action 仅在 EIM-U1 上线时订阅。
+- [ ] `cardkit:card:write`、消息/reaction 权限已在测试租户实测，应用重新发布/安装。
+- [ ] card action 仅在 EIM-U4 或 EIM-U7 实际上线时订阅；纯流式输出不提前申请。
 - [ ] 正常、范围外、冻结/离职测试账号行为符合预期。
 - [ ] `employee_no -> talent_id` 语义已经 HR/OA 负责人签字确认，或已配置 OA resolver。
 - [ ] 事件 callback 3 秒内返回，模型和 Contact API 不在 SDK callback 内执行。

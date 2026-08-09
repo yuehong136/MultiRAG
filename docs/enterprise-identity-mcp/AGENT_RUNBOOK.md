@@ -35,7 +35,8 @@ MultiRAG 与 `of_mcp`；不要把相邻任务“顺手”并入一个提交。
 | EIM-C | 上述三份 + `docs/channel-program/README.md`、`PROGRESS.md`、`CONTRACT.md` |
 | EIM-P / EIM-A | [CONTRACTS](CONTRACTS.md)、[TESTING_SECURITY](TESTING_SECURITY.md)、`of_mcp` 本仓说明 |
 | EIM-M | [ARCHITECTURE](ARCHITECTURE.md)、[REFERENCES](REFERENCES.md)、[TESTING_SECURITY](TESTING_SECURITY.md) |
-| EIM-U / EIM-O | [FEISHU_ONBOARDING](FEISHU_ONBOARDING.md)、[TESTING_SECURITY](TESTING_SECURITY.md) |
+| EIM-U | [FEISHU_BOT_UX](FEISHU_BOT_UX.md)、[FEISHU_ONBOARDING](FEISHU_ONBOARDING.md)、[TESTING_SECURITY](TESTING_SECURITY.md)、Channel `PROGRESS.md` |
+| EIM-O | [FEISHU_ONBOARDING](FEISHU_ONBOARDING.md)、[TESTING_SECURITY](TESTING_SECURITY.md) |
 
 ### 2.2 核实工作区与锚点
 
@@ -115,6 +116,11 @@ FastAPI 自动序列化出去，因此 tolerate PR 必须用线格测试证明�
 - 参考项目只借设计和测试思路，按 [REFERENCES](REFERENCES.md) 的“采用/不采用”边界执行；
 - 复制代码前核对 license、保留版权要求，并在 PR 说明具体来源路径和 commit SHA；
 - 不把 SDK 的全局事件循环或重依赖 eager import 到 API 进程，provider/transport 按需加载。
+- EIM-U0/U1 不得顺手迁移 `lark-channel-sdk`；EIM-C5 也不得改变 ReplySession、执行事件或用户
+  体验语义。先证明稳定 Provider 契约，再让两条支线独立演进。
+- 飞书流式更新必须有节流、严格 sequence、final flush、finish 和 post/text fallback；不得每个
+  token 调一次 OpenAPI，也不得在 fallback 时重新执行 Agent。
+- 卡片状态只用服务端白名单；不展示 chain-of-thought、原始 tool trace、MCP 参数或底层异常。
 
 ### 4.5 密钥和外部配置
 

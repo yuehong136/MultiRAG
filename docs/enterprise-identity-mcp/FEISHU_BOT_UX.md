@@ -1,0 +1,458 @@
+# 飞书机器人对话体验设计与实施基线
+
+> 状态：设计基线，生产代码尚未实现。
+> 最后核验：2026-08-09（Asia/Shanghai）。
+> 适用范围：MultiRAG `api/channels/`、`api/channel_execution/`、飞书企业自建应用，以及后续
+> 与 `of_mcp` 的确认交互。
+
+本文负责回答“如何把当前飞书私聊文本桥升级为飞书原生 AI 对话体验”。身份、JWT、MCP 授权和
+业务确认的数据契约仍分别以 [CONTRACTS](CONTRACTS.md) 和 [TESTING_SECURITY](TESTING_SECURITY.md)
+为准；任务状态和依赖以 [ROADMAP](ROADMAP.md) 为准。
+
+---
+
+## 1. 结论和实施边界
+
+当前最值得先做的不是迁移 SDK，而是打通 MultiRAG 已经存在的执行流：
+
+```text
+Agent message_delta
+  -> Channel execution SSE
+  -> transport-neutral ReplySession
+  -> 飞书 Typing reaction + CardKit 2.0 流式卡片
+  -> final flush + finish_streaming_card
+  -> 富文本/纯文本降级
+```
+
+三件事必须拆开：
+
+1. **执行流式化**：MultiRAG 自己的跨模块契约，不依赖飞书 SDK、企业身份或 MCP。
+2. **飞书渐进式回复**：可以继续用现有 `lark-oapi` 调 IM、Reaction 和 CardKit OpenAPI，不等待
+   `lark-channel-sdk` transport PoC。
+3. **敏感操作确认**：必须等待 verified Principal、MCP 授权、Confirmation Store 和幂等链完成。
+
+`lark-channel-sdk` 仍是 transport 优先 PoC 候选，但迁移成功与否不得改变上层消息和回复契约。
+
+---
+
+## 2. 当前代码事实
+
+| 层 | 当前行为 | 直接后果 |
+|---|---|---|
+| `api/channel_execution` | executor 已产生 `message_delta` / `message_completed` | 上游本来具备流式基础 |
+| `api/channels/runtime_client.py` | `_consume_sse()` 聚合所有 delta，最后返回一个 `AgentReply` | 首 token 优势被丢弃 |
+| `api/channels/binding_bridge.py` | 等完整执行结束后只调用一次 `Channel.send()` | 用户等待期间没有进度 |
+| `api/channels/core/base.py` | `OutgoingMessage` 只有 `chat_id/content/reply_to_message_id` | 无卡片、状态、媒体、幂等键和 handle |
+| `api/channels/feishu/channel.py` | 出站固定 `msg_type="text"` | Markdown、表格、代码和来源展示退化 |
+| `api/channels/feishu/channel.py` | 入站只提取 text，并折叠 open/user/union ID | 无话题、引用、附件、mention 和结构化身份 |
+| `api/channel_providers/feishu.py` | capabilities 只声明私聊文本 | 管理面必须继续如实显示当前能力 |
+
+必须保留的已有优势：SDK 回调只规范化并入队、有界队列、每会话顺序、Redis 原子去重、
+binding leader lease、generation fence、Secret/日志脱敏，以及产生副作用后不盲目自动重试。
+
+---
+
+## 3. 目标用户体验
+
+### 3.1 一次正常私聊
+
+```mermaid
+sequenceDiagram
+    participant U as Employee
+    participant F as Feishu
+    participant W as Channel Worker
+    participant X as Channel Execution
+    participant R as Feishu ReplySession
+
+    U->>F: 发送问题
+    F->>W: im.message.receive_v1
+    W->>W: 规范化、去重、入队
+    W->>R: add Typing reaction / create running card
+    W->>X: stream execution
+    X-->>W: status_changed(retrieving)
+    X-->>W: message_delta...
+    W->>R: 250-500ms 合并更新
+    X-->>W: references_ready
+    X-->>W: message_completed
+    W->>R: final flush + finish streaming + summary
+    W->>R: remove Typing / optional DONE
+```
+
+用户看到的状态只能来自服务端白名单：
+
+```text
+queued -> accepted -> retrieving -> using_authorized_tool -> composing
+       -> completed | failed | cancelled
+```
+
+不得展示模型思维链、原始工具参数、企业工号、token、文件正文、SQL、底层异常或内部 URL。
+
+### 3.2 降级顺序
+
+任何 CardKit 权限、客户端版本、限流、网络或卡片结构错误都不能吞掉最终答案：
+
+```text
+CardKit streaming
+  -> one-shot interactive/card
+  -> post rich text
+  -> chunked text
+  -> concise failure text with trace reference
+```
+
+降级只改变渲染，不重新执行 Agent 或有副作用工具。
+
+### 3.3 用户可见错误
+
+| 类别 | 建议文案语义 | 是否建议重试 |
+|---|---|---|
+| 未通过企业身份 | 当前账号尚未完成企业身份验证或不在应用范围 | 否，给管理员/绑定入口 |
+| 无 Agent/资源权限 | 你没有使用此助手或目标资源的权限 | 否 |
+| 队列已满 | 当前请求较多，请稍后再试 | 是 |
+| 执行超时 | 本次生成超时，可以重新生成 | 是，但不得重复副作用 |
+| 上游服务不可用 | 依赖服务暂时不可用 | 视错误类型 |
+| 内容/附件不支持 | 明确列出支持类型和上限 | 修改输入后重试 |
+| 未知错误 | 通用文案 + 短 trace reference | 联系管理员 |
+
+错误卡片和日志只使用稳定错误码，不能回显飞书响应体、异常栈或用户内容。
+
+---
+
+## 4. Transport-neutral 契约
+
+### 4.1 执行事件
+
+`ExecutionEvent` 的演进目标：
+
+```python
+ExecutionEventType = Literal[
+    "message_delta",
+    "status_changed",
+    "references_ready",
+    "artifact_ready",
+    "message_completed",
+    "execution_failed",
+]
+```
+
+建议的结构化载荷：
+
+```text
+event
+content?                 # 仅用户可见正文 delta
+status?                  # 白名单状态
+references?              # 脱敏引用数组
+artifact?                # 受控下载/发送描述符，不是本地路径
+session_id?
+error_code?
+```
+
+`runtime_client` 以加法提供 `stream()` async iterator；原有 `ask()` 继续通过消费 iterator 聚合，
+结果保持兼容，但新的 Channel bridge 不得再走聚合路径。EIM-U0 不改变现有 SSE wire；后续新增
+`references_ready/artifact_ready` 时，老 worker 必须能忽略未知加法事件，再按 API -> worker 部署。
+
+### 4.2 ReplySession
+
+Provider-neutral 接口表达生命周期，不暴露飞书 `card_id`：
+
+```python
+class ReplySession(Protocol):
+    async def append(self, content: str) -> None: ...
+    async def set_status(self, status: ReplyStatus) -> None: ...
+    async def set_references(self, references: tuple[Reference, ...]) -> None: ...
+    async def complete(self) -> None: ...
+    async def fail(self, error_code: str) -> None: ...
+
+class ProgressiveReplyChannel(Channel, Protocol):
+    async def begin_reply(self, source: IncomingMessage) -> ReplySession: ...
+```
+
+纯文本 Provider 可以用内存 buffer 实现该协议，并在 `complete()` 时发送一次；飞书实现保存
+`card_id/message_id/sequence/reaction_id/delivery_uuid`。业务 bridge 不能 `isinstance(Feishu...)`。
+
+### 4.3 入站消息
+
+最终 `IncomingMessage`/执行 command 至少要保留：
+
+```text
+event_id, message_id, chat_id, chat_type
+root_id, parent_id, thread_id
+sender_type
+structured identity identifiers
+mentions, mentioned_bot, mentioned_all
+quoted_message_id
+content type + normalized text
+attachments[]
+tenant_key/header app_id（仅作为 assertion，与服务端 binding 交叉验证）
+```
+
+不持久化或排队完整 SDK event；只提取业务需要的白名单字段。`raw` 继续默认为 `None`。
+
+### 4.4 出站幂等
+
+Redis `event_id/message_id` claim 负责业务执行幂等；飞书 `uuid` 负责消息 API 幂等。建议：
+
+```text
+delivery_uuid = sha256(binding_id + event_id + delivery_stage)[:40]
+```
+
+`delivery_stage` 使用稳定枚举，例如 `running_card`、`final_fallback`、`error`。不得在网络结果未知时
+换 UUID 重发同一阶段；CardKit patch 还要为每张卡维护严格递增的 sequence。
+
+---
+
+## 5. 飞书渐进式回复实现
+
+### 5.1 卡片生命周期
+
+1. 最早可用时添加 Typing reaction；失败只记指标，不阻塞主流程。
+2. 创建 CardKit JSON 2.0 实体，`streaming_mode=true`，摘要为“生成中”。
+3. 回复原消息并保存 `card_id` 和发送返回的 `message_id`。
+4. 聚合 delta；默认每 250ms 或达到最小字符增量时 patch，最多 4 次/秒。
+5. 每次 patch 使用严格递增 sequence；中间限流更新可合并或丢弃，但最终更新不能丢。
+6. 完成时强制 final flush，再用更大的 sequence 调 `finish_streaming_card()`。
+7. 完成后才添加按钮、完整来源、反馈区或 one-shot 卡片替换。
+8. 清理 Typing reaction；失败时尝试错误卡片或文本降级。
+
+飞书官方单卡 OpenAPI 上限是 10 次/秒，本项目使用更保守的 4 次/秒默认值，给重试和最终 flush
+留出余量。节流配置属于 Provider outbound config，不属于模型参数。
+
+### 5.2 内容渲染
+
+实现独立 renderer，不在 bridge 里拼卡片 JSON：
+
+- 保留标题、列表、粗体、链接、代码块；
+- Markdown 表格转换成飞书兼容卡片结构或可读列表；
+- 未闭合代码块在每次 patch 时做暂态闭合，最终内容按原始正文重渲染；
+- 链接只允许 `https` 或配置的受控 scheme，显示实际主机；
+- mention 使用结构化 API，普通模型文本中的 `@all` 不产生真实 mention；
+- 长答案优先卡片/分段，不再用固定 4,000 字符静默截断；
+- `summary` 在完成后改成可读的短摘要，兼容通知栏和低版本客户端。
+
+### 5.3 引用和产物
+
+RAG 来源必须通过 `references_ready` 结构化事件输出，而不是从答案文本或内部 A2UI/tool payload
+反向解析。每个引用只包含用户有权看到的标题、受控 URL/文档定位和可选摘要。
+
+生成文件、图片或报告使用 `artifact_ready`；Channel 负责上传/发送，绝不能把本地路径、对象存储
+临时签名或内部下载 URL直接发给用户。
+
+---
+
+## 6. 连续追问、排队与取消
+
+当前 per-conversation lock 保证顺序但会让后续消息无提示等待。目标行为：
+
+- 同一会话运行中收到新消息时，建立有界 follow-up 队列；默认最多 5 条；
+- 每条来源消息拥有自己的状态：`queued -> running -> final/error`；
+- 卡片显示队列位置，但不承诺精确等待时间；
+- 队列溢出立即返回 busy 文案，不静默 drop；
+- `/new` 或“开始新对话”需要确认是否清空未运行的 follow-up；
+- “取消生成”只停止可取消的模型/RAG 阶段；已经发起的副作用工具不能伪装成已回滚；
+- 网络结果未知或副作用已开始时，卡片显示“结果待确认”，进入幂等恢复流程。
+
+首期可先做安全的“排队 + 纯生成取消”；steering/中途修改当前 run 留到执行引擎有明确语义后。
+
+---
+
+## 7. 话题、群聊和会话键
+
+首期继续保持 `private_chat_only=true`。结构化字段和 thread-aware reply 可以先实现，但正式开放
+群聊必须等待 verified Principal 和独立风险评审。
+
+默认策略：
+
+- 群组 allowlist；
+- 只响应明确 `@机器人`，`@all` 不算；
+- 忽略 bot/app/system sender，防止机器人循环；
+- DM 会话按 tenant + provider account + platform user 隔离；
+- 群话题按 tenant + provider account + chat + thread 隔离；
+- 是否额外按 sender 隔离由 binding policy 明确选择，不能隐式变化；
+- 回复保留 `reply_in_thread`，必要时从消息查询补全缺失的 `thread_id`；
+- 群内高风险 MCP 工具默认关闭，即使私聊已获授权也不自动继承。
+
+任何会话键不得直接使用一个裸 `open_id`，也不得让不同租户、App、群或话题碰撞。
+
+---
+
+## 8. 卡片操作、反馈和敏感确认
+
+### 8.1 低风险操作
+
+完成卡片可提供：
+
+- 重新生成；
+- 开始新对话；
+- 有帮助 / 没帮助；
+- 查看来源；
+- 下载已授权产物。
+
+`card.action.trigger` 回调只做验签/长连接信任检查、规范化、身份解析前置、幂等 claim 和入队，
+必须快速返回；业务执行异步完成。按钮 value 只携带 opaque nonce/action ID，不携带 Principal、
+scope、工具参数、工号或目标 URL。
+
+### 8.2 敏感操作
+
+敏感确认卡依赖 [CONTRACTS §9](CONTRACTS.md#9-confirmation-与幂等契约)：
+
+```text
+prepare -> persistent confirmation -> card -> verified click
+        -> compare-and-set confirm -> re-authorize -> idempotent execute
+```
+
+确认记录绑定 tenant、platform user、tool、规范化参数摘要、过期时间和一次性状态。流式卡片完成前
+不承载确认按钮；不能用“用户点击过某个按钮”替代执行时重新授权。
+
+---
+
+## 9. 多模态输入输出
+
+建议实现顺序：图片 -> PDF/Office 文件 -> 生成文件/图片 -> 语音转写 -> 视频附件。
+
+统一附件描述符：
+
+```text
+kind, file_key/image_key, file_name, mime_type?, size?, duration?
+source_message_id
+```
+
+处理规则：
+
+- 只通过官方 `message_id + file_key/image_key` 资源 API 下载；
+- 官方上限不是业务默认值，首期建议业务上限 20-30MB；
+- 下载采用流式、超时、MIME/扩展名双校验、病毒/内容扫描和临时存储 TTL；
+- 不把 token-bearing URL 传给模型、sandbox 或第三方工具；
+- 不支持类型返回明确提示，不把原始 JSON 当作用户文本；
+- 文件进入 RAG/解析流程时建立用户、tenant、session 和 retention 绑定；
+- 输出文件先上传到飞书或受控 artifact 服务，再发送可审计引用。
+
+---
+
+## 10. 两个官方库的责任边界
+
+### `lark-oapi`
+
+继续负责完整 OpenAPI：IM send/reply/reaction、CardKit、Contact V3、消息资源、token 生命周期以及
+未来文档/日历 API。EIM-U1 不需要等待 EIM-C5，可以基于当前 REST client 实现。
+
+### `lark-channel-sdk`
+
+PoC 重点验证：
+
+- `InboundMessage` 的 thread/mention/resources/safe text 是否能无损映射本项目 DTO；
+- `channel.stream()` 的预分配、节流、finish 和异常行为；
+- public connect/disconnect/reconnect 生命周期；
+- `compat -> audit -> strict` 安全迁移；
+- 多 worker、连接上限、日志脱敏和回滚；
+- SDK 两层去重如何与 Redis 原子 claim 分工。
+
+即使采用，也只替换飞书 Provider 内部 transport/outbound adapter；不得替换 MultiRAG binding、
+Secret、tenant、Principal、执行边界、Redis 状态和审计。
+
+---
+
+## 11. 上游项目参考边界
+
+| 项目 | 应借鉴 | 不应照搬 |
+|---|---|---|
+| 官方 Channel SDK | typed inbound、Reply/stream lifecycle、CardKit、public lifecycle、安全模式 | 内存 policy/dedup 代替平台控制面和 Redis |
+| `lark-oapi` | 完整 typed OpenAPI、token 管理、IM/CardKit/Contact/资源接口 | 依赖私有 WS 字段形成新的上层耦合 |
+| OpenClaw | streaming card、typing reaction、thread hydration、mention/group policy、媒体 fallback | 私人 Agent 的 pairing/信任模型充当企业授权 |
+| DeerFlow | 单卡 patch、queued -> running -> final、来源消息预览、follow-up buffer | 共享 internal token 下用户 ID 的信任假设 |
+| LangBot | Provider adapter、WS 非阻塞/重连测试、Markdown 表格兼容 | API key/allowlist 充当员工身份和业务权限 |
+| shareAI-lab/lark-channel | thread 隔离、reaction 状态、块级流式展示 | 本地工作区和代码执行权限模型 |
+
+具体源码路径和快照见 [REFERENCES](REFERENCES.md) 与 [VERSION_BASELINE](VERSION_BASELINE.md)。
+
+---
+
+## 12. 安全不变量
+
+- 不展示或记录 chain-of-thought、原始 tool trace、MCP 参数、token、Secret、完整身份 ID 或答案正文；
+- Markdown/卡片链接、mention、图片和媒体源必须经过结构化校验；
+- card action 必须绑定操作者、tenant、动作、参数摘要、过期时间和 nonce；
+- 群聊、引用来源、附件和反馈都必须做资源可见性校验；
+- SDK 回调必须在 3 秒内返回，耗时逻辑只入队；
+- 事件处理和出站发送分别幂等；重连/重复投递不得重复执行或重复发最终消息；
+- SDK 失败只能触发渲染降级，不能绕过身份、授权或业务确认；
+- 媒体下载防 SSRF、路径穿越、压缩炸弹、超限和保密消息错误降级；
+- 任何状态文案来自服务端 allowlist，不能直接转发模型或异常文本。
+
+---
+
+## 13. 指标和 SLO
+
+每条消息至少关联 `trace_id/event_id/run_id/reply_handle_id`。新增指标：
+
+```text
+first_ack_ms
+first_card_ms
+first_delta_ms
+queue_wait_ms / queue_depth
+card_update_count / card_update_throttled_total
+card_create_failure / card_patch_failure / final_flush_failure
+fallback_by_type
+reaction_add/remove_failure
+duplicate_event / duplicate_delivery
+execution_total_ms
+thread_hydration_ms
+attachment_download/scan/parse_ms
+```
+
+首期验收目标：
+
+- p95 `first_ack_ms <= 500ms`（在 worker 已接收事件后计时）；
+- p95 `first_card_ms <= 1s`，飞书 API 故障时明确记录降级；
+- 单卡正常更新 `<= 4 QPS`，最终 flush 不丢；
+- 同一 event 只产生一次 Agent 执行和一次同阶段出站消息；
+- CardKit 失败仍能交付最终文本；
+- queue full、身份拒绝、超时和上游故障都有独立错误码与用户文案。
+
+SLO 是上线初始目标，真实压测和灰度后可调整；调整必须写进任务日志，不能靠提高限额掩盖设计问题。
+
+---
+
+## 14. 测试与验收矩阵
+
+### 单元/契约
+
+- SSE delta 按序向 bridge 暴露，兼容 `ask()` 聚合结果逐字节不变；
+- ReplySession begin/append/complete/fail 状态机拒绝非法转移和 double finish；
+- 节流合并中间 delta，最终 flush 永不丢；
+- sequence 严格递增；相同 delivery UUID 不变；
+- Markdown 代码块、表格、链接、mention 和超长内容 golden tests；
+- CardKit create/patch/finish 任一步失败均走正确 fallback，且不重跑 Agent；
+- Typing reaction add/remove 是 best-effort，不污染主结果；
+- queue 顺序、溢出、取消和重启恢复；
+- thread/message/identity/attachment 规范化 fixture；
+- card action 重放、换人点击、跨租户、过期和参数变化全部拒绝。
+
+### 集成/真实飞书测试租户
+
+- 首卡、流式刷新、完成摘要和低版本客户端 fallback；
+- 5 QPS 消息和 10 QPS CardKit 限制下的节流/429 行为；
+- WS 重连、重复事件、worker 重启和 final 未知结果恢复；
+- 普通群、话题群、消息转话题和缺失 thread_id hydration；
+- 图片、文件、保密消息、超限、撤回消息和不匹配 file_key；
+- 权限缺少、应用未重新安装、机器人不在群和卡片 schema 错误；
+- 两个用户、两个 tenant、两个 App 的会话/身份/反馈隔离。
+
+生产验收只使用测试应用和测试业务系统。真实员工范围、正式 App 权限、生产重启和真实副作用仍需
+用户明确批准。
+
+---
+
+## 15. 实施任务与依赖
+
+| EIM | CHN | 内容 | 依赖 |
+|---|---|---|---|
+| EIM-U0 | CHN-X9 | 加法暴露执行事件流 + ReplySession，保留 `ask()` | 现有 execution SSE |
+| EIM-U1 | CHN-U8 | Typing、CardKit 流式卡片、富文本和 fallback | U0；不依赖 C5/M3 |
+| EIM-U4 | CHN-U9 | follow-up queue、纯生成取消、重新生成、反馈 | U1 |
+| EIM-U3 | CHN-U10 | mention-only 群聊、话题、thread session | U1、U2、C3、O2 |
+| EIM-U5 | CHN-X10 | references/artifacts 结构化事件与渲染 | U0、P2 |
+| EIM-U6 | CHN-X11 | 图片/文件/语音输入输出 | U0、U5、C3、附件安全基建 |
+| EIM-U7 | CHN-X12 | 敏感确认卡和 action callback | U1、C3、M3、M4 |
+| EIM-C5 | CHN-P14 | 官方 Channel SDK transport PoC | 与上述 UX 并行，非阻塞依赖 |
+
+一次只执行一个 ID。涉及 private DTO 的任务必须按安全部署半步拆 PR；涉及 Channel 目录时同步更新
+`docs/channel-program/PROGRESS.md`。详细状态以 [ROADMAP](ROADMAP.md) 为准。

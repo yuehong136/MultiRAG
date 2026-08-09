@@ -199,3 +199,32 @@ MCP access token 不携带 `open_id`、飞书 access token、手机号、邮箱�
 `FastMCP 4.0.0b1 -> b2` 都必须各自有独立验证和回滚面。版本事实会过期；每个版本任务开工前
 按 [VERSION_BASELINE](VERSION_BASELINE.md) 重新核验官方源，不得因为本文写了某个版本号就
 跳过检查。
+
+---
+
+## EIM-ADR-15：飞书体验能力不以 Channel SDK 迁移为前置条件
+
+**状态**：Accepted
+
+MultiRAG 的流式执行、ReplySession、CardKit 渲染、reaction、富文本、发送幂等和降级链是独立
+能力。`lark-oapi` 已提供完整 IM、Reaction 与 CardKit OpenAPI，EIM-U0/U1 可以在当前 transport
+上实现；EIM-C5/CHN-P14 只评估是否用官方 `lark-channel-sdk` 替换 Provider 内部 transport 和
+outbound adapter。
+
+因此，SDK PoC 失败不能阻塞用户体验改造；UX 任务也不能顺手引入或切换 SDK。两条支线只在稳定
+Provider 接口汇合，并以同一组消息规范化、流式、幂等、日志和回滚契约验收。
+
+---
+
+## EIM-ADR-16：渐进式回复展示安全状态，不展示模型推理或原始工具轨迹
+
+**状态**：Accepted
+
+Channel 只消费服务端白名单 `status_changed`、用户可见 `message_delta`、脱敏 references/artifacts
+和稳定错误码。卡片可以展示“检索资料”“调用已授权服务”“整理答案”等粗粒度状态，但不得展示
+chain-of-thought、MCP 参数、SQL、企业工号、token、文件正文、异常栈或内部 URL。
+
+所有 Provider 通过 transport-neutral ReplySession 表达 `begin/append/status/complete/fail`；
+飞书 CardKit 只是一个 renderer。CardKit、reaction 或客户端兼容失败时只降级渲染，不能重新执行
+Agent、放宽身份授权或自动重试已有副作用的工具。具体契约见
+[FEISHU_BOT_UX](FEISHU_BOT_UX.md)。

@@ -95,6 +95,27 @@ class ChannelActor(BaseModel):
 
 每一步是独立 PR/任务，映射的 `CHN-*` 见 [ROADMAP](ROADMAP.md)。
 
+### 2.4 Channel 交互契约的所有权
+
+身份 assertion 之外，入站消息最终还要结构化保留 `root_id/parent_id/thread_id`、mention、quote、
+content type 和 attachments；这些字段是 transport data，不能自动成为 Principal 或授权证据。
+完整形状和升级顺序由 [FEISHU_BOT_UX §4](FEISHU_BOT_UX.md#4-transport-neutral-契约) 负责。
+
+出站不把飞书卡片字段塞进 `ExecutionEvent`。执行层只发用户可见 delta、白名单 status、脱敏
+references/artifacts 和稳定错误码；Provider-neutral ReplySession 管理
+`begin/append/status/complete/fail`，飞书 adapter 才拥有 `card_id/message_id/sequence/reaction_id`。
+
+两层幂等分别固定为：
+
+```text
+业务执行：binding + event_id/message_id -> Redis atomic claim
+飞书发送：binding + event_id + delivery_stage -> deterministic uuid
+```
+
+同一个网络结果未知的 delivery stage 不得换 UUID 重发；渲染降级不得重新执行 Agent 或 MCP。
+该契约由 EIM-U0/CHN-X9 先以加法提供 `stream()`/ReplySession 并保留 `ask()`，再由
+EIM-U1/CHN-U8 消费；第一步不改变现有 SSE wire。
+
 ---
 
 ## 3. 数据模型

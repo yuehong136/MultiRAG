@@ -125,6 +125,12 @@
 | E2E-08 | 飞书目录临时不可用 | 首次身份 fail closed；已验证会话按缓存策略降级且报警 |
 | E2E-09 | MCP 服务不可用 | 返回可诊断错误，不重试有副作用调用，不伪装为成功 |
 | E2E-10 | 回滚一个版本 | 满足 ROADMAP 部署矩阵，旧新组合不出现 `extra_forbidden` |
+| E2E-11 | 普通私聊流式回答 | 500ms 内 ack、单卡渐进更新、最终 flush/finish；无推理或工具参数泄漏 |
+| E2E-12 | CardKit/reaction 权限缺失或限流 | 自动降级 post/text，最终答案只执行/交付一次，错误指标可诊断 |
+| E2E-13 | 重复事件、发送响应丢失、WS 重连 | Redis claim 只执行一次；确定性 delivery uuid 不重复发送同阶段消息 |
+| E2E-14 | 同会话快速连续追问 | 每条来源消息 queued -> running -> final；容量溢出明确 busy，不静默 drop |
+| E2E-15 | 普通群/话题群 follow-up | mention/allowlist 生效；thread session 不串群、不串人、不串 tenant |
+| E2E-16 | 图片/文件/保密或超限资源 | 合法附件受控下载；不匹配、保密、超限和不支持类型明确拒绝，无临时 URL 泄漏 |
 
 ## 4. 安全专项测试
 
@@ -152,6 +158,12 @@
 - prompt 声称“我的工号是…”、“切换到管理员”；身份上下文不可由模型文本覆盖；
 - 卡片字段夹带 `principal_id`、scope、任意 URL；服务端按 allowlist 读取字段；
 - 群聊/话题串会话键碰撞；键中必须包含 provider、tenant/account、conversation/thread。
+- Markdown 伪造 `@all`、`javascript:`/隐藏跳转链接、未闭合代码块或超大卡片；renderer 必须转义、
+  限制和安全降级；模型文本不能产生真实 mention。
+- 重放同一出站 stage、故意制造 API 成功但响应丢失；确定性 UUID 不变，不能换键盲重试。
+- CardKit patch 乱序、sequence 复用、完成后继续 patch、double finish；ReplySession 状态机必须拒绝。
+- 卡片/Reaction 失败触发 fallback 时，不能重跑 Agent、放宽身份或绕过 Confirmation。
+- 附件 file_key 与 message_id 不匹配、路径穿越、压缩炸弹、伪造 MIME、SSRF URL；下载层 fail closed。
 
 ### 4.4 高风险工具攻击
 
@@ -183,7 +195,14 @@ confirmation_id, idempotency_key_hash, latency_ms, result
 - JIT 创建、人工待审批、停用命中、缓存命中与 stale 使用量；
 - contact event lag、对账扫描滞后、漏事件修复数；
 - MCP auth 拒绝原因、工具授权拒绝、确认过期、幂等命中；
-- 每 binding 收/丢/重复消息数和端到端时延。
+- 每 binding 收/丢/重复消息数和端到端时延；
+- `first_ack_ms/first_card_ms/first_delta_ms` 的 p50/p95/p99；
+- reply queue wait/depth/overflow、CardKit create/patch/final flush、节流和按类型 fallback；
+- reaction add/remove、duplicate delivery、thread hydration 和附件 download/scan/parse。
+
+飞书体验首期目标：p95 first ack 不超过 500ms、p95 first card 不超过 1s、正常卡片更新不超过
+4 QPS、CardKit 故障仍交付最终文本。同一事件必须只有一次执行和每个 delivery stage 一次发送。
+详细计时边界见 [FEISHU_BOT_UX §13](FEISHU_BOT_UX.md#13-指标和-slo)。
 
 告警不得只报“500”。至少按 `IDENTITY_*`、`MCP_TOKEN_*`、`MCP_SCOPE_DENIED`、
 `CONFIRMATION_*`、`DIRECTORY_UNAVAILABLE` 分组。

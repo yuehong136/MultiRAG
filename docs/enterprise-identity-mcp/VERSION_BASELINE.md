@@ -1,13 +1,14 @@
 # 技术版本与上游基线
 
-> **事实核验时间：2026-08-07（Asia/Shanghai）**
+> **基础版本核验：2026-08-07；飞书 SDK、官方文档和交互参考仓刷新：2026-08-09
+> （Asia/Shanghai）**
 > 版本会变化。本文记录的是可复现快照和选型规则，不是“永远最新”的承诺。
 
 ---
 
 ## 1. 当前与目标版本
 
-| 组件 | 当前仓库 | 2026-08-07 官方最新 | 本项目目标 | 处理方式 |
+| 组件 | 当前仓库 | 最近核验的官方最新 | 本项目目标 | 处理方式 |
 |---|---|---|---|---|
 | Python | MultiRAG `>=3.12,<3.15`；of_mcp `>=3.12` | — | 保持 3.12+ | 不降级 |
 | `lark-oapi` | 声明 `>=1.2,<2`，lock 为 1.7.1 | **1.7.2** | `>=1.7.2,<2` | EIM-F1 独立升级 |
@@ -41,7 +42,7 @@ FastMCP 继续作为 of_mcp 的 server/composition 框架，但授权契约必�
 
 ## 2. 官方上游提交快照
 
-以下 SHA 由 `git ls-remote <repo> HEAD` 于 2026-08-07 获取。后续参考源码时，先用 SHA
+以下 SHA 由 `git ls-remote <repo> HEAD` 获取；飞书交互相关仓于 2026-08-09 刷新。后续参考源码时，先用 SHA
 重现本文看到的行为，再对比最新 HEAD，避免文档链接随 main 漂移。
 
 | 项目 | 快照 SHA | 用途 |
@@ -49,8 +50,9 @@ FastMCP 继续作为 of_mcp 的 server/composition 框架，但授权契约必�
 | `larksuite/channel-sdk-python` | `731d459cca55ac76e85911bba2b1666508145e03` | 飞书 Channel SDK、strict security、卡片与去重 |
 | `larksuite/oapi-sdk-python` | `8d6402635d0a9314ddae765ae64931aabca30f79` | 通讯录 V3、token 生命周期、完整 OpenAPI |
 | `larksuite/openclaw-lark` | `dde0be3680d6fd5443cab426c8f4b3216266346a` | 流式卡片、敏感确认、飞书资源工具和安全警告 |
-| `bytedance/deer-flow` | `6556d09d7f3800ca570820819455c39b4584482f` | `channel_connections`、平台用户绑定、owner 隔离 |
-| `langbot-app/LangBot` | `78068db9c866b8a2d208d24c52602466e4e62073` | 多 Provider、访问控制、MCP 与运维面 |
+| `openclaw/openclaw` | `73bdb4b924f6db3c4ab45c5e40fbf61b06fa56a0` | 生产 Feishu channel 能力矩阵、typing/streaming/media/thread policy |
+| `bytedance/deer-flow` | `e16ef2969b1446162e19af7bdde1446674851e66` | `channel_connections`、单卡 streaming、follow-up queue、owner 隔离 |
+| `langbot-app/LangBot` | `22c389edc16149828380c7153c0b492400f66a5f` | 多 Provider、访问控制、Lark WS/Markdown 与运维面 |
 | `shareAI-lab/lark-channel` | `cf056995730a3775529c3bf87fce8033cea554a4` | 群组/线程隔离、工具过程流式卡片 |
 | `modelcontextprotocol/python-sdk` | `a4f4ccd091138771535e17191123f20b30fda68e` | MCP SDK v2 客户端、双协议兼容和 OAuth |
 
@@ -112,6 +114,10 @@ git ls-remote https://github.com/modelcontextprotocol/ext-auth.git HEAD
 - 生产从 `SecurityConfig(mode="audit")` 观察，再进入 `strict`；
 - MultiRAG 继续拥有队列、Redis 去重、会话、binding、Secret、租户和执行控制。
 
+该 PoC 不阻塞 [EIM-U0/U1](ROADMAP.md#10-phase-u--用户与管理员体验)。现有 `lark-oapi`
+OpenAPI 已足以实现 reaction、reply UUID、CardKit 流式更新和媒体资源；UX 先落在稳定
+ReplySession/Provider 接口上，transport 后续可替换。
+
 官方文档：
 
 - [Channel SDK README](https://github.com/larksuite/channel-sdk-python)
@@ -124,9 +130,16 @@ git ls-remote https://github.com/modelcontextprotocol/ext-auth.git HEAD
 
 - Contact V3 `GET /contact/v3/users/:user_id`；
 - tenant access token 生命周期；
+- IM reply/create 的 `uuid`、`reply_in_thread`，消息 reaction、CardKit create/update/finish；
+- 消息图片/文件/音视频资源上传下载；
 - 用户状态和 employee_no；
 - 通讯录 created/updated/deleted/scope events；
 - 未来可选的飞书文档、日历等 OpenAPI。
+
+2026-08-09 已复核当前 lock 对应的 `lark-oapi` 1.7.1 tag（commit `2cecb91d`）：
+`lark_oapi/api/cardkit/v1/` 已包含 create card、element content update 和 card settings typed request，
+`lark_oapi/api/im/v1/` 已包含消息发送/回复模型。因此 EIM-U1 不把 F1/C5 设为硬依赖；F1 仍应作为
+独立补丁升级尽早完成，但不能和 U1 混成一个提交。
 
 禁止重新手写 token 刷新、请求签名或完整通讯录 HTTP client；只有为解决 SDK 未覆盖/阻塞行为且有
 测试证据时，才允许封装最小 httpx adapter。
@@ -171,6 +184,8 @@ SEP 为准，不能因此退回旧 session 设计。
 - 多 worker/leader lease 行为实测；
 - `audit` 无未解释告警后才进 `strict`；
 - 回滚到现有 transport 不改变上层 `IncomingMessage` 契约。
+- 对 `channel.stream()` 的节流、sequence、finish、取消和错误行为做 contract comparison；即使比
+  现有 renderer 更方便，也不能把 EIM-U1 重新变成 C5 的依赖。
 
 ### MCP SDK 2
 

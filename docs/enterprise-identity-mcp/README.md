@@ -3,7 +3,7 @@
 > 项目代号：**EIM**（Enterprise Identity & MCP Authorization）
 > 建立日期：2026-08-07
 > 适用仓库：`/Users/xldu/project/multirag`、`/Users/xldu/project/of/of_mcp`
-> 外部事实核验日期：2026-08-07（版本与上游提交见 [VERSION_BASELINE](VERSION_BASELINE.md)）
+> 外部事实核验日期：2026-08-09（版本与上游提交见 [VERSION_BASELINE](VERSION_BASELINE.md)）
 
 本目录是后续实现“企业级飞书身份接入、MultiRAG 平台用户、MCP 身份委托、of_mcp
 授权和敏感操作确认”的**项目级单一事实来源**。后续 Agent 可以没有任何历史对话，但必须从
@@ -141,6 +141,7 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
 | [ARCHITECTURE](ARCHITECTURE.md) | 端到端组件、时序、失败语义、部署边界 | 精确字段契约 |
 | [CONTRACTS](CONTRACTS.md) | DTO、数据库约束、Principal、JWT、错误码和 API 契约 | 飞书后台操作步骤 |
 | [FEISHU_ONBOARDING](FEISHU_ONBOARDING.md) | 去哪里申请 App、拿什么凭据、开什么权限和事件 | MCP 内部授权实现 |
+| [FEISHU_BOT_UX](FEISHU_BOT_UX.md) | 飞书流式卡片、ReplySession、话题、队列、多模态和体验验收 | 身份/JWT 的最终字段 |
 | [REFERENCES](REFERENCES.md) | 每个开源/官方项目参考什么、不参考什么、当前提交锚点 | 我们自己的最终架构 |
 | [VERSION_BASELINE](VERSION_BASELINE.md) | 已核验版本、目标版本、升级闸门和重新核验命令 | 功能排期 |
 | [ROADMAP](ROADMAP.md) | `EIM-*` 任务、依赖、仓库、锚点、完成证据和进度 | 背景论证 |
@@ -169,6 +170,11 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   兼容设计和迁移。
 - MCP 客户端仍使用旧式 `ClientSession + initialize` 和静态 headers，需要升级为请求级 token
   与 MCP SDK 2 客户端。
+- Channel Execution 已产生 `message_delta`，但 `api/channels/runtime_client.py::_consume_sse`
+  会重新聚合为单个 `AgentReply`；飞书再以一次 `msg_type=text` 回复。体验首要缺口是执行流与
+  Provider 渲染之间缺少 transport-neutral ReplySession，而不是必须先迁移 SDK。
+- 当前 `IncomingMessage`/`OutgoingMessage` 不表达 thread、mention、attachment、reference、
+  card handle 或 delivery UUID；这些目标契约统一见 [FEISHU_BOT_UX](FEISHU_BOT_UX.md)。
 
 ### of_mcp
 
@@ -192,5 +198,9 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
 - of_mcp 对所有远程入口强制鉴权、audience、scope 和审计；mount/proxy 形态语义一致。
 - medic 不再信任 `workcode` 参数，敏感提交需要确认且具备端到端幂等性。
 - 飞书普通对话不会每次查询通讯录/OA；没有全量日同步依赖。
+- 飞书普通对话具备即时 acknowledgement、渐进式回复、最终 flush 和明确降级；CardKit 故障不会
+  吞掉最终答案，同一事件不会重复执行或重复发送同阶段回复。
+- 群聊、话题、多模态和敏感卡片只在各自身份/授权依赖满足后开放，不因 transport SDK 切换而
+  绕过安全闸门。
 - 两个仓库各自验证门禁全绿，跨仓契约测试和真实集成测试通过。
 - [ROADMAP](ROADMAP.md) 所有必做任务为 `✅ 完成`，变更日志记录了提交和具体证据。

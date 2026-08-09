@@ -88,6 +88,9 @@ web 侧 commit scope 从 `settings` 切到 `channel`（后端已有 `feat(channe
 | CHN-U5 | WEB | `setQueryData` 改 `invalidateQueries`——mutation 响应不带 runtime，写进读缓存会抹掉实时面板 | ✅ | — | `use-channel-request.ts:71-75,83-89` |
 | CHN-U6 | WEB | 提交前 `fetchQuery` 拿新鲜的 `binding.enabled`，不用 5 分钟旧缓存。修「A 改个名把 B 刚停用的渠道静默重新启用」 | ✅ | — | `channel-form-sheet.tsx:114-143` |
 | CHN-U7 | WEB | 绑定下拉服务端搜索（`useFetchAgentList` 已支持 `keywords`），去掉硬编码 `page_size: 100` | ✅ | — | `binding-fields.tsx:37-44` |
+| CHN-U8 | MR | 飞书渐进式回复：Typing reaction、CardKit 2.0 streaming、Markdown/post/text renderer、确定性 delivery UUID 和 fallback；SDK transport 迁移不是前置 | ⬜ | CHN-X9 | [EIM-U1](../enterprise-identity-mcp/ROADMAP.md)、[UX 基线](../enterprise-identity-mcp/FEISHU_BOT_UX.md) |
+| CHN-U9 | MR | follow-up 有界队列、queued/running/final、纯生成取消、重新生成与低风险反馈；副作用结果未知不能伪装回滚 | ⬜ | CHN-U8 | [EIM-U4](../enterprise-identity-mcp/ROADMAP.md)、`api/channels/binding_bridge.py` |
+| CHN-U10 | MR+WEB | 可选群聊/话题：群 allowlist、@ only、thread-aware session/reply、bot loop guard、高风险工具默认关闭 | ⏸ | CHN-U8、EIM-U2、CHN-X7、EIM-O2 | [EIM-U3](../enterprise-identity-mcp/ROADMAP.md)、[UX §7](../enterprise-identity-mcp/FEISHU_BOT_UX.md#7-话题群聊和会话键) |
 
 **CHN-U6 为什么是 refetch 而不是省略字段或加后端令牌**：省略 `enabled` 时老后端会读到
 `ChannelBindingUpsertRequest.enabled` 的 `False` 默认值 → 静默**停用**渠道，这是坏的半态；
@@ -184,17 +187,25 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 | CHN-X6 | 飞书 worker **emit** `tenant_key` 与全部类型化用户 ID；resolver 继续兼容 legacy | ⬜ | CHN-X5；[EIM-C2](../enterprise-identity-mcp/ROADMAP.md) |
 | CHN-X7 | execution resolver 只把 IdentityService 已验证主体提升为 Principal；外部 subject 永不直通 | ⬜ | CHN-X6、EIM-I6、EIM-P1；[EIM-C3](../enterprise-identity-mcp/ROADMAP.md) |
 | CHN-X8 | 全部 runner 浸泡并有部署证据后，删除 legacy `ChannelActor.subject` | ⬜ | CHN-X7；[EIM-C4](../enterprise-identity-mcp/ROADMAP.md) |
+| CHN-X9 | 不改现有 execution SSE wire，以加法暴露 async event stream 与 transport-neutral ReplySession，兼容 `ask()`/纯文本 Provider 行为 | ⬜ | [EIM-U0](../enterprise-identity-mcp/ROADMAP.md)、[UX §4](../enterprise-identity-mcp/FEISHU_BOT_UX.md#4-transport-neutral-契约) |
+| CHN-X10 | `references_ready/artifact_ready` 安全事件和 Provider 渲染；资源可见性、无本地路径/临时 token URL | ⬜ | CHN-X9、EIM-P2；[EIM-U5](../enterprise-identity-mcp/ROADMAP.md) |
+| CHN-X11 | 结构化附件链：图片/文件/语音输入输出，受控下载、大小/MIME/扫描/TTL 和 tenant/user/session 隔离 | ⬜ | CHN-X9、CHN-X10、CHN-X7；[EIM-U6](../enterprise-identity-mcp/ROADMAP.md) |
+| CHN-X12 | 敏感确认卡 + `card.action.trigger`：操作者/tenant/digest/expiry/nonce 绑定、回调幂等、重启恢复和执行前重授权 | ⬜ | CHN-U8、CHN-X7、EIM-M3/M4；[EIM-U7](../enterprise-identity-mcp/ROADMAP.md) |
 
 ---
 
 ### 企业身份扩展的权威简报
 
-CHN-X5～X8 与 CHN-P14 属于 EIM 项目，不在本文件重复字段、数据库、JWT 和安全设计。零上下文
+CHN-X5～X12、CHN-U8～U10 与 CHN-P14 属于 EIM 项目，不在本文件重复字段、数据库、JWT 和
+飞书交互设计。零上下文
 开工时先读 [`docs/enterprise-identity-mcp/README.md`](../enterprise-identity-mcp/README.md)，
-再按对应 EIM 任务的依赖和验收执行。两套 ID 必须同时出现在提交标题和两边变更日志中。
+其中 UX 任务还必须完整读取
+[`FEISHU_BOT_UX.md`](../enterprise-identity-mcp/FEISHU_BOT_UX.md)，再按对应 EIM 任务的依赖和
+验收执行。两套 ID 必须同时出现在提交标题和两边变更日志中。
 
-这五条仍受本文件维护协议约束，尤其是：private DTO `extra="forbid"`、长驻 worker/supervisor 不随
-API 自动重启，以及 tolerate → emit → consume → remove 的部署顺序。身份字段不得顺手塞进一个 PR。
+这些任务仍受本文件维护协议约束，尤其是：private DTO `extra="forbid"`、长驻 worker/supervisor
+不随 API 自动重启，以及 tolerate → emit → consume → remove 的部署顺序。身份、UX、SDK 迁移和
+敏感确认不得顺手塞进一个 PR。
 
 ---
 
@@ -659,3 +670,4 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 | 2026-08-06 | **CHN-O13 完成（WEB）：CHN-O6 的前端半边**。`channelAPI.verify(id)`（无请求体）、五个错误码进 `CHANNEL_ERROR_CODES` + 两份 locale、编辑抽屉页脚加「测试连接」（**只对已保存渠道出现**——它测的是已存的凭据，不是正在输入的那个，所以放在保存旁边而不是密钥输入框旁边，后者会暗示相反的意思）、`useVerifyChannel` 带 10 秒冷却禁用。核心是纯函数 `channelVerifyFailure`：把「被拒」和「没查成」分成两种结局，两条文案措辞刻意不同。**验证**：纯逻辑放在 `src/api/__tests__/channel.test.ts`（唯一被门禁覆盖的位置）——端点路径带 encode、**body 为 undefined**、五个码各自的分类、冷却常量与服务端一致；`test:api` **83 pass**。其余门禁：`lint` 0 error / `typecheck:agent-strict` 通过 / `lint:file-size` 通过 / `test:design-tokens` 11 pass / `test:streaming` 43 pass / `test:agent-t1` 70 pass / `build` + `check:bundle-size` 通过 / 两个棘轮 JSON `git diff --exit-code` 无输出。**`lint:typed` 在 Windows 上跑不了**（`ESLINT_TYPED=true` 是 bash 语法，cmd 报「不是内部或外部命令」），它只覆盖 `src/lib/agent.ts` 与 agent operators/adapters，本次一个都没碰——如实记这里，不当作跑过。按钮本身靠人工验证，**没有假装有测试** | web `ea0e5af` | Claude |
 | 2026-08-06 | **CHN-P11 部署完成，删字段三步真正走完**。用户批准后重启 API 与 supervisor，**顺序先 API 后 supervisor**——反过来会让新 worker 先起来撞上还在发 legacy 的旧 API，等于自己制造那次故障。API `14:41:03`（判据是行为不是时间戳：`POST /chat-channels/x/verify` 返回 **401 而非 404**，CHN-O6 路由在册 = 新构建）、supervisor `14:44:04`、worker `14:44:07`。**验证**：`worker_started result=ok` + `ws_connected result=ok`；DB 新 runner `vm-duxiaolong-34692`、`connected`、`last_error_code` 为空、`connected_at 14:44:28`；Redis `multirag:channel:v2:*:leader:*` 键回来；日志搜 `RUNTIME_CONFIG_INVALID\|validation error\|extra_forbidden` **零命中**——**一个 P11 worker 解析了一个 P11 API 的载荷并连上了，这是三步删字段唯一能真正证明成立的观察**。已知代价：飞书会话重置一次、dedupe 窗口空一次。**过程中踩了一个自己的坑**：重启脚本原本先轮转日志再杀进程，日志被活着的进程占着 → `Move-Item` 失败；好在它失败在杀进程之前，什么都没动，改成先杀后轮转即可 | 本次提交 | Claude |
 | 2026-08-07 | **登记 EIM 企业身份扩展**：新增 CHN-X5～X8（结构化外部身份的 tolerate / emit / verified consume / remove）与 CHN-P14（官方 `lark-channel-sdk` transport 迁移），全部保持未开始；完整设计、依赖、契约、安全与 Agent 手册统一链接到 `docs/enterprise-identity-mcp/`。**验证**：两套任务 ID 双向 grep 命中、相对链接检查通过后记录；本次只改文档，未改变运行时契约 | 本次提交 | Codex |
+| 2026-08-09 | **登记飞书机器人体验扩展**：新增 CHN-X9～X12、CHN-U8～U10，把执行流/ReplySession、渐进式 CardKit、follow-up、群话题、引用/产物、多模态和敏感确认拆成独立任务；CHN-P14 SDK PoC 明确不再是流式 UX 前置。**验证**：当前 execution/bridge/Feishu adapter 锚点复核；EIM/CHN ID 双向检查、相对链接和 `git diff --check` | 本次提交 | Codex |

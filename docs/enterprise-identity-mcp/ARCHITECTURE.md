@@ -45,6 +45,23 @@ flowchart LR
 
 负责飞书协议、消息/卡片收发、队列、去重、会话顺序；不创建 Principal。
 
+Transport 内部再拆两层：
+
+```text
+Inbound adapter
+  -> 白名单规范化：identity/thread/mention/content/attachment
+  -> Channel Execution async event stream
+
+Progressive reply adapter
+  -> transport-neutral ReplySession
+  -> 飞书 reaction/CardKit/post/text renderer
+```
+
+执行层已经产生的 `message_delta` 不得在 Channel client 中重新聚合后才交给 Provider。CardKit
+创建、节流、sequence、最终 flush 和降级属于飞书 renderer；业务 bridge 只理解 ReplySession
+状态。该体验链不依赖 transport 从 `lark-oapi.ws.Client` 迁移到 `lark-channel-sdk`，完整设计见
+[FEISHU_BOT_UX](FEISHU_BOT_UX.md)。
+
 #### Channel control/runtime
 
 负责 provider account、加密凭据、tenant-owned binding、supervisor/worker 和 runtime 状态。
@@ -285,6 +302,8 @@ sequenceDiagram
 | of_mcp verifier/JWKS 不可用 | 不调用 MCP | 拒绝 | 使用短期缓存的已验证 JWKS；过期后 fail closed |
 | 业务系统不可用 | RAG 可继续 | tool error，不自动重试副作用 | 幂等后人工/任务重试 |
 | 离职/冻结事件 | 结束新执行、失效 link | 立即拒绝 | 审计并清缓存 |
+| Reaction/CardKit 不可用 | 降级 post/text，继续交付最终答案 | 不影响授权结果 | 指标告警并检查 scope/限流/客户端版本 |
+| Channel follow-up 队列满 | 明确 busy，不静默丢弃 | 不开始新的副作用执行 | 检查 binding 容量和执行时延 |
 
 故障时不把底层 Secret、飞书响应体、OA 判断或完整身份 ID 返回给模型。
 

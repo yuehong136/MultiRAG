@@ -28,9 +28,10 @@
 
 | 目标 | 精确参考位置 | 用法 |
 |---|---|---|
-| SDK 迁移 | `docs/migration-from-lark-oapi.md` | EIM-C4 的依赖、import、ws/webhook 迁移清单 |
+| SDK 迁移 | `docs/migration-from-lark-oapi.md` | EIM-C5 的 import、ws/webhook 迁移清单；不作为 U0/U1 依赖 |
 | 生产安全 | `docs/security.md` | `compat -> audit -> strict`、签名、WS 限额、安全文本和审计 recorder |
-| 流式卡片 | `docs/cardkit-streaming.md` | EIM-U1 的 CardKit 创建、patch、完成与错误状态 |
+| 高层接口 | `docs/reference.md` | typed inbound、policy、public lifecycle、send opts、reaction、media 和 Reply/stream 能力 |
+| 流式卡片 | `docs/cardkit-streaming.md` | EIM-U1 的 CardKit 创建、sequence、patch、最终 finish 与错误状态 |
 | 去重 | `docs/dedup-architecture.md` | 对照现有 Redis 去重，确定 SDK 去重与平台去重的唯一责任边界 |
 | 对话入口 | `lark_channel/__init__.py` 公开导出 | 只从稳定 public API import，不依赖内部模块 |
 | CardKit OpenAPI | `lark_channel/api/cardkit/v1/` | 卡片服务的 typed request/response；不要手拼 HTTP |
@@ -43,6 +44,8 @@
 - strict mode 与审计 recorder；
 - WebSocket 资源上限和安全文本渲染；
 - 卡片 streaming 的明确生命周期。
+- `InboundMessage` 对 thread、mention、resources、safe text 的结构化表达；只映射到本项目 DTO，
+  不让 SDK 对象穿透执行域。
 
 ### 不能照搬
 
@@ -62,6 +65,8 @@
 ### 后续任务应该参考
 
 - `lark_oapi/api/contact/v3/`：按 `open_id` 获取单个用户、User/Status typed model；
+- `lark_oapi/api/im/v1/`、`lark_oapi/api/cardkit/v1/`：EIM-U1 在不迁移 transport 的情况下实现
+  reply、uuid、reaction、卡片创建/更新/完成和媒体资源；
 - SDK Client 的 tenant access token 自动管理；
 - v2 event dispatcher 的 `contact.user.*_v3` 事件类型；
 - SDK 示例仓中的“获取部门用户”和机器人 quickstart，仅用于 API 调用形状。
@@ -76,9 +81,13 @@
 
 ---
 
-## 4. 飞书官方 OpenClaw 插件
+## 4. 飞书官方 OpenClaw 插件与 OpenClaw 主项目
 
-项目：[`larksuite/openclaw-lark`](https://github.com/larksuite/openclaw-lark)
+项目：
+
+- [`larksuite/openclaw-lark`](https://github.com/larksuite/openclaw-lark)
+- [`openclaw/openclaw`](https://github.com/openclaw/openclaw) 的
+  `docs/channels/feishu.md` 和生产 Feishu channel
 
 这是飞书 AI 体验最值得参考的实现，但它的 README 明确警告用户身份授权、prompt injection、
 群聊滥用和数据泄漏风险。它更接近“私人 Agent + 飞书资源工具”，不能作为企业共享权限模型。
@@ -96,13 +105,14 @@
 | 事件与交互 | `src/channel/event-handlers.ts`、`interactive-dispatch.ts` | 消息与 card action 分流 |
 | 安全检查 | `src/core/security-check.ts`、`src/core/auth-errors.ts` | 错误分类和用户可见安全文案 |
 | 飞书 OAuth UI | `src/tools/oauth*.ts` | 仅用于未来飞书文档/日历用户授权，不用于聊天身份确认 |
+| 主项目能力矩阵 | `openclaw/docs/channels/feishu.md` | typing reaction、streaming fallback、媒体上限、群 mention policy、话题 hydration |
 
 ### 不能照搬
 
 - 不用某个用户的飞书 `user_access_token` 代表整个共享机器人；
 - 不把飞书文档/日历权限等同于 MCP 业务权限；
 - 不把 prompt、群配置或 allowlist 当企业授权事实来源；
-- 不在 MultiRAG 首期开放群聊高风险工具。群聊必须在 EIM-U2 单独验收后启用。
+- 不在 MultiRAG 首期开放群聊高风险工具。群聊必须在 EIM-U2 身份管理与 EIM-U3 风险评审后启用。
 
 ---
 
@@ -121,7 +131,8 @@
 | 外部身份解析 | `backend/app/channels/connection_identity.py` | Channel 身份查 connection，不把原始 ID 当 owner |
 | Channel connection API | `backend/app/gateway/routers/channel_connections.py` | link code 生命周期与路由授权 |
 | 持久化模型 | `backend/packages/harness/deerflow/persistence/channel_connections/` | 唯一约束、active connection 和迁移测试 |
-| 飞书 transport | `backend/app/channels/feishu.py`、`feishu_run_policy.py` | WebSocket、流式卡片和 run policy |
+| 飞书 transport | `backend/app/channels/feishu.py`、`feishu_run_policy.py` | 单张 running card 持续 patch、reaction 和 run policy |
+| 快速追问 | `backend/AGENTS.md` 描述的 follow-up buffer/状态机 | 同话题消息 queued -> running -> final、容量上限和来源预览 |
 | Principal/授权 | `backend/packages/harness/deerflow/authz/principal.py`、`enforcement.py`、`tool_filter.py` | request-scoped Principal 与工具可见性 |
 | MCP OAuth | `backend/packages/harness/deerflow/mcp/oauth.py` | 客户端 OAuth 缓存和错误流，仅作对照 |
 | 中间件顺序 | `backend/docs/middleware-execution-flow.md` | 认证必须早于授权、审计和工具执行 |
@@ -133,6 +144,7 @@
 - 浏览器绑定码适合通用 `link_only`；
 - owner 级线程、文件、Memory 隔离；
 - Channel worker 只能通过内部认证调用平台 gateway。
+- 一次执行只维护一张可恢复的回复卡片，后续消息有独立 queued/running/final 状态。
 
 ### 不能照搬
 
@@ -141,6 +153,8 @@
 - 原力 `jit` 模式优先通过飞书 Contact V3 验证，不要求每个员工先打开 Web 输入绑定码。
 - 不把 channel user ID 暴露到 sandbox 环境变量或任意工具；只有受控 Principal dependency
   能读取企业主体。
+- 不把其共享 internal auth 对 `channel_user_id` 的信任前提移植到 MultiRAG；本项目仍必须经
+  binding-scoped workload 身份和 EnterpriseIdentityService 验证。
 
 ---
 

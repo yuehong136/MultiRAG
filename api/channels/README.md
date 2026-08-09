@@ -508,6 +508,12 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
 自行验证授权和幂等键。正式 Principal/ToolRuntime 接入后，可替换内部执行适配器，而无需
 重写飞书传输、队列、状态或 supervisor。
 
+上述体验缺口的目标契约、任务拆分和安全边界统一见
+[`docs/enterprise-identity-mcp/FEISHU_BOT_UX.md`](../../docs/enterprise-identity-mcp/FEISHU_BOT_UX.md)。
+其中 EIM-U0/U1 使用现有 execution SSE 和 `lark-oapi` OpenAPI 即可开工，不等待
+`lark-channel-sdk` transport PoC；群聊、多模态和敏感确认仍分别受 verified identity、资源可见性
+和 Confirmation/幂等依赖约束。该文档描述目标态，不改变本节列出的当前生产能力。
+
 ## 运维与故障判断
 
 - 新增或启用 binding：下一次 reconcile 启动 worker。
