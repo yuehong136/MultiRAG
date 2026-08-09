@@ -1,6 +1,7 @@
 # 飞书机器人对话体验设计与实施基线
 
-> 状态：设计基线，生产代码尚未实现。
+> 状态：设计基线；EIM-U0/CHN-X9 的执行流与 buffered ReplySession 已实现，
+> EIM-U1/CHN-U8 的飞书 CardKit 渐进式回复尚未实现。
 > 最后核验：2026-08-09（Asia/Shanghai）。
 > 适用范围：MultiRAG `api/channels/`、`api/channel_execution/`、飞书企业自建应用，以及后续
 > 与 `of_mcp` 的确认交互。
@@ -39,10 +40,10 @@ Agent message_delta
 
 | 层 | 当前行为 | 直接后果 |
 |---|---|---|
-| `api/channel_execution` | executor 已产生 `message_delta` / `message_completed` | 上游本来具备流式基础 |
-| `api/channels/runtime_client.py` | `_consume_sse()` 聚合所有 delta，最后返回一个 `AgentReply` | 首 token 优势被丢弃 |
-| `api/channels/binding_bridge.py` | 等完整执行结束后只调用一次 `Channel.send()` | 用户等待期间没有进度 |
-| `api/channels/core/base.py` | `OutgoingMessage` 只有 `chat_id/content/reply_to_message_id` | 无卡片、状态、媒体、幂等键和 handle |
+| `api/channel_execution` | executor 产生现有 `message_delta` / `message_completed` / `execution_failed` SSE | 跨进程 wire 已能承载正文流，U0 未修改它 |
+| `api/channels/runtime_client.py` | `stream()` 是 HTTP、SSE、校验、超时、错误映射和安全过滤的唯一执行路径；`ask()` 只聚合该 iterator | 新 bridge 不再丢弃 delta；旧调用仍可迁移/回滚 |
+| `api/channels/binding_bridge.py` | 直接消费 `stream()`，按序写入 Provider-neutral `ReplySession` | Provider 可独立选择 buffered 或渐进式交付 |
+| `api/channels/core/base.py` | `Channel.begin_reply()` 默认创建 buffered session；`OutgoingMessage` 仍只有 `chat_id/content/reply_to_message_id` | 普通 Provider 完成时只发一条文本；尚无卡片、状态、媒体和 handle |
 | `api/channels/feishu/channel.py` | 出站固定 `msg_type="text"` | Markdown、表格、代码和来源展示退化 |
 | `api/channels/feishu/channel.py` | 入站只提取 text，并折叠 open/user/union ID | 无话题、引用、附件、mention 和结构化身份 |
 | `api/channel_providers/feishu.py` | capabilities 只声明私聊文本 | 管理面必须继续如实显示当前能力 |
@@ -121,7 +122,17 @@ CardKit streaming
 
 ### 4.1 执行事件
 
-`ExecutionEvent` 的演进目标：
+EIM-U0 已在 worker 内提供三个 immutable、transport-neutral 类型：
+
+```python
+BindingExecutionEvent = MessageDeltaEvent | MessageCompletedEvent | ExecutionFailedEvent
+```
+
+它们只携带用户可见 `content`、稳定 `error_code` 和必要 `session_id`，不携带飞书
+`card_id/message_id/sequence` 等字段。`stream()` 负责跨 delta reasoning 过滤、SSE 完整性与安全错误
+归一；未知加法事件会被忽略。跨进程 SSE wire 没有改变。
+
+后续事件的演进目标仍是：
 
 ```python
 ExecutionEventType = Literal[
@@ -146,28 +157,34 @@ session_id?
 error_code?
 ```
 
-`runtime_client` 以加法提供 `stream()` async iterator；原有 `ask()` 继续通过消费 iterator 聚合，
-结果保持兼容，但新的 Channel bridge 不得再走聚合路径。EIM-U0 不改变现有 SSE wire；后续新增
-`references_ready/artifact_ready` 时，老 worker 必须能忽略未知加法事件，再按 API -> worker 部署。
+`ask()` 不是长期推荐接口：U0 只为迁移和回滚安全保留它，且禁止新代码新增调用。它不得拥有第二套
+HTTP/SSE/校验逻辑。生产调用归零且 U1 稳定后，可在单独任务中删除。后续新增
+`references_ready/artifact_ready` 时，老 worker 必须继续忽略未知加法事件，再按 API -> worker 部署。
 
 ### 4.2 ReplySession
 
-Provider-neutral 接口表达生命周期，不暴露飞书 `card_id`：
+U0 的 Provider-neutral 接口表达最小回复生命周期，不暴露飞书 `card_id`：
 
 ```python
 class ReplySession(Protocol):
+    @property
+    def state(self) -> ReplySessionState: ...
     async def append(self, content: str) -> None: ...
-    async def set_status(self, status: ReplyStatus) -> None: ...
-    async def set_references(self, references: tuple[Reference, ...]) -> None: ...
     async def complete(self) -> None: ...
     async def fail(self, error_code: str) -> None: ...
 
-class ProgressiveReplyChannel(Channel, Protocol):
-    async def begin_reply(self, source: IncomingMessage) -> ReplySession: ...
+class Channel(ABC):
+    async def begin_reply(
+        self, source: IncomingMessage, *, max_content_chars: int
+    ) -> ReplySession: ...
 ```
 
-纯文本 Provider 可以用内存 buffer 实现该协议，并在 `complete()` 时发送一次；飞书实现保存
-`card_id/message_id/sequence/reaction_id/delivery_uuid`。业务 bridge 不能 `isinstance(Feishu...)`。
+状态机只有 `open -> completed | failed`，终态后 append/double finish/complete-fail 互换全部拒绝。
+默认 `BufferedReplySession` 把 delta 留在内存，`complete()` 沿用 reasoning 清理和长度截断后调用
+`Channel.send()` 一次，`fail()` 丢弃半截答案并只发安全提示，同时保留 `reply_to_message_id`。
+U1 可由飞书 override `begin_reply()` 并在 Provider 内保存
+`card_id/message_id/sequence/reaction_id/delivery_uuid`；业务 bridge 不能 `isinstance(Feishu...)`。
+`status` 与 references 不属于 U0，分别留给 U1/U5 以加法扩展。
 
 ### 4.3 入站消息
 

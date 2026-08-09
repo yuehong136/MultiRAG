@@ -155,12 +155,27 @@ Managed 模式是管理页面和生产部署使用的长期架构：
   -> 服务端解析 tenant/target/revision/session
   -> PublishedTargetExecutionService
   -> multirag.canvas_agent 或 multirag.dialog
+  -> 原有 execution SSE
+  -> MultiRAGBindingExecutionClient.stream()
+  -> BindingBridge -> transport-neutral ReplySession
+  -> 普通 Provider buffered complete -> Channel.send() 一次
 ```
 
 Supervisor 只协调 desired state，不接触飞书 App Secret。每个 child worker 只在内存中获得
 自己 binding 的凭据；凭据不出现在命令行、环境变量或日志中。由于 `lark-oapi` 的限制，
 一个 binding/account 对应一个独立子进程。binding 被禁用、删除或 generation 改变时，
 supervisor 会停止或重启相应进程；异常退出采用有上限的指数退避。
+
+Managed worker 的唯一核心执行路径是 `MultiRAGBindingExecutionClient.stream()`：它统一构造请求、
+读取和校验 SSE、检查 completion/`[DONE]`、传播 session、执行跨 delta reasoning 过滤，并映射安全
+错误码。`BindingBridge` 直接按序把类型化 delta 写入 `ReplySession`，不再调用 `ask()`；默认
+buffered session 只在成功完成时发送一次，执行中途失败会丢弃半截答案并交付固定安全提示，不会
+重跑 Agent。`reply_to_message_id`、Redis claim、同会话串行和 executed/replied tombstone 语义保持不变。
+
+`ask()` 仅是消费同一个 `stream()` 并聚合为 `AgentReply` 的阶段性兼容 facade，用于迁移和回滚
+安全；它不是推荐接口，新代码不得增加调用。生产调用归零且 EIM-U1 稳定后应在独立任务中删除。
+当前默认实现仍是最终单条纯文本；Typing、CardKit、富文本 renderer 和渐进式 Provider session
+属于 EIM-U1/CHN-U8，尚未实现。
 
 ### Canvas 发布版本兼容策略
 
@@ -510,9 +525,10 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
 
 上述体验缺口的目标契约、任务拆分和安全边界统一见
 [`docs/enterprise-identity-mcp/FEISHU_BOT_UX.md`](../../docs/enterprise-identity-mcp/FEISHU_BOT_UX.md)。
-其中 EIM-U0/U1 使用现有 execution SSE 和 `lark-oapi` OpenAPI 即可开工，不等待
-`lark-channel-sdk` transport PoC；群聊、多模态和敏感确认仍分别受 verified identity、资源可见性
-和 Confirmation/幂等依赖约束。该文档描述目标态，不改变本节列出的当前生产能力。
+其中 EIM-U0 已使用现有 execution SSE 完成 transport-neutral 流式执行契约；EIM-U1 可继续使用
+`lark-oapi` OpenAPI 开工，不等待 `lark-channel-sdk` transport PoC。群聊、多模态和敏感确认仍分别
+受 verified identity、资源可见性和 Confirmation/幂等依赖约束。该文档描述目标态，不把 U1
+能力算作当前生产能力。
 
 ## 运维与故障判断
 
@@ -596,7 +612,7 @@ Channel 相关快速验证：
 uv run pytest tests/unit/test_channel_config.py tests/unit/test_channel_secret_crypto.py tests/unit/test_channel_secret_store.py
 uv run pytest tests/unit/test_chat_channel_control.py tests/unit/test_channel_execution.py tests/unit/test_channel_execution_api.py
 uv run pytest tests/unit/test_channel_execution_adapters.py tests/unit/test_channel_runtime_api.py tests/unit/test_channel_runtime_client.py
-uv run pytest tests/unit/test_feishu_agent_bridge.py tests/unit/test_feishu_binding_bridge.py tests/unit/test_feishu_channel.py
+uv run pytest tests/unit/test_feishu_agent_bridge.py tests/unit/test_binding_bridge.py tests/unit/test_reply_session.py tests/unit/test_feishu_channel.py
 uv run pytest tests/unit/test_feishu_state_store.py tests/unit/test_feishu_worker.py tests/unit/test_channel_supervisor.py
 uv run ruff check api/channels api/channel_control api/channel_execution api/channel_runtime
 ```

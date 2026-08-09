@@ -6,19 +6,25 @@ import asyncio
 import hashlib
 import logging
 import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from api.channels.agent_bridge import (
     DEMO_ONLY_TEXT,
     QUESTION_TOO_LONG_TEXT,
-    SERVICE_UNAVAILABLE_TEXT,
     SESSION_RESET_TEXT,
     TEXT_ONLY_TEXT,
     AgentExecutionError,
-    AgentReply,
 )
-from api.channels.core.base import Channel, IncomingMessage, OutgoingMessage
+from api.channels.core.base import Channel, IncomingMessage, OutgoingMessage, ReplySession
+from api.channels.core.reply import SERVICE_UNAVAILABLE_TEXT
+from api.channels.execution_events import (
+    BindingExecutionEvent,
+    ExecutionFailedEvent,
+    MessageCompletedEvent,
+    MessageDeltaEvent,
+)
 from api.channels.state_store import ChannelStateStore, binding_conversation_key
 
 LOGGER = logging.getLogger(__name__)
@@ -26,7 +32,7 @@ LOGGER = logging.getLogger(__name__)
 
 @runtime_checkable
 class BindingExecutor(Protocol):
-    async def ask(
+    def stream(
         self,
         *,
         question: str,
@@ -35,7 +41,7 @@ class BindingExecutor(Protocol):
         provider: str,
         subject: str,
         conversation: str,
-    ) -> AgentReply: ...
+    ) -> AsyncIterator[BindingExecutionEvent]: ...
 
     async def reset(self, *, conversation_key: str) -> None: ...
 
@@ -68,6 +74,7 @@ class BindingBridge:
         binding_id: str,
         allowed_sender_ids: set[str] | frozenset[str],
         max_question_chars: int,
+        max_answer_chars: int,
         private_chat_only: bool = True,
     ) -> None:
         self._channel = channel
@@ -76,6 +83,7 @@ class BindingBridge:
         self._binding_id = binding_id
         self._allowed_sender_ids = frozenset(allowed_sender_ids)
         self._max_question_chars = max_question_chars
+        self._max_answer_chars = max_answer_chars
         self._private_chat_only = private_chat_only
         self._locks: dict[str, _ConversationLock] = {}
 
@@ -143,36 +151,87 @@ class BindingBridge:
             await self._reply_and_complete(message, SESSION_RESET_TEXT)
             return
 
+        try:
+            reply_session = await self._channel.begin_reply(
+                message,
+                max_content_chars=self._max_answer_chars,
+            )
+        except Exception:
+            self._log(logging.ERROR, "reply_failed", message, "REPLY_BEGIN_FAILURE")
+            await self._mark_executed(message)
+            await self._safe_reply(message, SERVICE_UNAVAILABLE_TEXT)
+            return
+
         started_at = time.monotonic()
         try:
-            reply = await self._executor.ask(
+            terminal_seen = False
+            async for event in self._executor.stream(
                 question=question,
                 event_id=message.message_id,
                 conversation_key=conversation_key,
                 provider=message.channel,
                 subject=message.sender_id,
                 conversation=message.chat_id,
-            )
+            ):
+                if terminal_seen:
+                    raise AgentExecutionError("CHANNEL_EXECUTION_INVALID_STREAM")
+                if isinstance(event, MessageDeltaEvent):
+                    try:
+                        await reply_session.append(event.content)
+                    except Exception:
+                        self._log(logging.ERROR, "reply_failed", message, "REPLY_APPEND_FAILURE")
+                        await self._mark_executed(message)
+                        await self._fail_reply_session(
+                            reply_session,
+                            message,
+                            "REPLY_APPEND_FAILURE",
+                        )
+                        return
+                    continue
+                if isinstance(event, ExecutionFailedEvent):
+                    terminal_seen = True
+                    error_code = f"CHANNEL_EXECUTION_{event.error_code}"
+                    self._log(logging.ERROR, "execution_failed", message, error_code)
+                    await self._mark_executed(message)
+                    await self._fail_reply_session(reply_session, message, error_code)
+                    continue
+                if isinstance(event, MessageCompletedEvent):
+                    terminal_seen = True
+                    await self._complete_reply(
+                        reply_session,
+                        message,
+                        session_id=event.session_id,
+                        started_at=started_at,
+                    )
+            if terminal_seen:
+                return
+            raise AgentExecutionError("CHANNEL_EXECUTION_INCOMPLETE")
         except AgentExecutionError as exc:
             self._log(logging.ERROR, "execution_failed", message, exc.code)
             await self._mark_executed(message)
-            await self._safe_reply(message, SERVICE_UNAVAILABLE_TEXT)
+            await self._fail_reply_session(reply_session, message, exc.code)
             return
         except Exception:
             self._log(logging.ERROR, "execution_failed", message, "CHANNEL_EXECUTION_FAILURE")
             await self._mark_executed(message)
-            await self._safe_reply(message, SERVICE_UNAVAILABLE_TEXT)
+            await self._fail_reply_session(
+                reply_session,
+                message,
+                "CHANNEL_EXECUTION_FAILURE",
+            )
             return
 
+    async def _complete_reply(
+        self,
+        reply_session: ReplySession,
+        message: IncomingMessage,
+        *,
+        session_id: str,
+        started_at: float,
+    ) -> None:
         elapsed_ms = round((time.monotonic() - started_at) * 1000)
         try:
-            await self._channel.send(
-                OutgoingMessage(
-                    chat_id=message.chat_id,
-                    content=reply.content,
-                    reply_to_message_id=message.message_id,
-                )
-            )
+            await reply_session.complete()
             await self._state_store.mark_replied(message.message_id)
         except Exception:
             self._log(logging.ERROR, "reply_failed", message, "REPLY_OR_STATE_FAILURE")
@@ -185,8 +244,19 @@ class BindingBridge:
             "",
             result="ok",
             execution_ms=elapsed_ms,
-            session_id=reply.session_id,
+            session_id=session_id,
         )
+
+    async def _fail_reply_session(
+        self,
+        reply_session: ReplySession,
+        message: IncomingMessage,
+        error_code: str,
+    ) -> None:
+        try:
+            await reply_session.fail(error_code)
+        except Exception:
+            self._log(logging.ERROR, "reply_failed", message, "REPLY_FAILED")
 
     async def _reply_and_complete(self, message: IncomingMessage, content: str) -> None:
         try:

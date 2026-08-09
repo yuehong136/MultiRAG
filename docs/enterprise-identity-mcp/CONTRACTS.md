@@ -101,9 +101,11 @@ class ChannelActor(BaseModel):
 content type 和 attachments；这些字段是 transport data，不能自动成为 Principal 或授权证据。
 完整形状和升级顺序由 [FEISHU_BOT_UX §4](FEISHU_BOT_UX.md#4-transport-neutral-契约) 负责。
 
-出站不把飞书卡片字段塞进 `ExecutionEvent`。执行层只发用户可见 delta、白名单 status、脱敏
-references/artifacts 和稳定错误码；Provider-neutral ReplySession 管理
-`begin/append/status/complete/fail`，飞书 adapter 才拥有 `card_id/message_id/sequence/reaction_id`。
+出站不把飞书卡片字段塞进执行事件。EIM-U0 已落地的 worker 内事件只有用户可见
+`MessageDeltaEvent`、带必要 session 的 `MessageCompletedEvent` 和稳定错误码
+`ExecutionFailedEvent`；白名单 status、脱敏 references/artifacts 是后续加法契约。
+Provider-neutral ReplySession 已管理 `begin/append/complete/fail` 和明确终态，飞书 adapter 才能拥有
+`card_id/message_id/sequence/reaction_id`。
 
 两层幂等分别固定为：
 
@@ -113,8 +115,10 @@ references/artifacts 和稳定错误码；Provider-neutral ReplySession 管理
 ```
 
 同一个网络结果未知的 delivery stage 不得换 UUID 重发；渲染降级不得重新执行 Agent 或 MCP。
-该契约由 EIM-U0/CHN-X9 先以加法提供 `stream()`/ReplySession 并保留 `ask()`，再由
-EIM-U1/CHN-U8 消费；第一步不改变现有 SSE wire。
+该契约由 EIM-U0/CHN-X9 以加法提供 `stream()`/ReplySession：`stream()` 是 HTTP/SSE/校验/错误
+处理的唯一核心路径，BindingBridge 已直接消费它；`ask()` 仅为迁移与回滚安全保留为薄聚合层，
+不是新代码入口。生产调用归零且 EIM-U1/CHN-U8 稳定后再单独删除；U0 未改变现有 SSE wire，
+也未实现 CardKit。
 
 ---
 

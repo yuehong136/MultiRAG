@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 
 import httpx
 import pytest
@@ -12,6 +13,8 @@ from pydantic import ValidationError
 
 from api.channel_runtime.schemas import RuntimeBindingConfig, RuntimeCredential
 from api.channels.agent_bridge import AgentExecutionError, AgentReply
+from api.channels.core.reply import truncate_answer
+from api.channels.execution_events import ExecutionFailedEvent, MessageCompletedEvent, MessageDeltaEvent
 from api.channels.runtime_client import ChannelRuntimeClient, ChannelRuntimeClientError, MultiRAGBindingExecutionClient
 
 
@@ -303,3 +306,261 @@ def test_a_malformed_policy_never_widens_where_a_bot_answers() -> None:
     # wrong is a bot that starts answering in every group chat it sits in.
     for broken in ({"private_chat_only": "false"}, {"private_chat_only": None}, {"private_chat_only": 0}):
         assert _binding_config(broken).private_chat_only is True
+
+
+_STREAM_ARGUMENTS = {
+    "question": "private-question",
+    "event_id": "event-1",
+    "conversation_key": "opaque-conversation-key",
+    "provider": "feishu",
+    "subject": "ou-user",
+    "conversation": "oc-chat",
+}
+
+
+async def _collect_execution_stream(
+    client: MultiRAGBindingExecutionClient,
+) -> list[MessageDeltaEvent | MessageCompletedEvent | ExecutionFailedEvent]:
+    return [event async for event in client.stream(**_STREAM_ARGUMENTS)]
+
+
+def _execution_client(
+    http_client: httpx.AsyncClient,
+    *,
+    max_answer_chars: int = 4000,
+    total_timeout_seconds: float = 120.0,
+) -> MultiRAGBindingExecutionClient:
+    return MultiRAGBindingExecutionClient(
+        base_url="http://multirag.local",
+        binding_id="binding-1",
+        binding_generation=3,
+        api_token="runtime-token",
+        max_answer_chars=max_answer_chars,
+        total_timeout_seconds=total_timeout_seconds,
+        client=http_client,
+    )
+
+
+@pytest.mark.asyncio
+async def test_execution_stream_yields_ordered_typed_events_and_ignores_additive_frames() -> None:
+    sse = (
+        ": keepalive\n\n"
+        "event: ignored-by-data-parser\n"
+        "data:\n\n"
+        'data:{"event":"status_changed","status":"retrieving","card_id":"provider-private"}\n\n'
+        'data:{"event":"message_delta","content":"Hello ","session_id":"session-server"}\n\n'
+        'data:{"event":"message_delta","content":"world","session_id":"session-server"}\n\n'
+        'data:{"event":"message_completed","session_id":"session-server"}\n\n'
+        "data:[DONE]\n\n"
+    )
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        events = await _collect_execution_stream(_execution_client(http_client))
+
+    assert events == [
+        MessageDeltaEvent(content="Hello ", session_id="session-server"),
+        MessageDeltaEvent(content="world", session_id="session-server"),
+        MessageCompletedEvent(session_id="session-server"),
+    ]
+    assert not any(hasattr(event, field) for event in events for field in ("card_id", "message_id", "sequence"))
+
+
+@pytest.mark.parametrize(
+    ("sse", "expected_code"),
+    [
+        ('data:{"event":"message_delta","content":"answer"}\n\ndata:[DONE]\n\n', "CHANNEL_EXECUTION_INCOMPLETE"),
+        (
+            'data:{"event":"message_delta","content":"answer","session_id":"session-server"}\n\ndata:{"event":"message_completed","session_id":"session-server"}\n\n',
+            "CHANNEL_EXECUTION_INCOMPLETE",
+        ),
+        ("data:{not-json}\n\n", "CHANNEL_EXECUTION_INVALID_SSE"),
+        ("data:[]\n\n", "CHANNEL_EXECUTION_INVALID_SSE"),
+        (
+            'data:{"event":"message_delta","content":42}\n\ndata:[DONE]\n\n',
+            "CHANNEL_EXECUTION_INVALID_SSE",
+        ),
+        ('data:{"event":"message_completed"}\n\ndata:[DONE]\n\n', "CHANNEL_EXECUTION_INCOMPLETE"),
+    ],
+    ids=[
+        "missing-completed",
+        "missing-done",
+        "invalid-json",
+        "non-object-json",
+        "invalid-known-event",
+        "completed-without-session",
+    ],
+)
+@pytest.mark.asyncio
+async def test_execution_stream_rejects_incomplete_or_invalid_sse(sse: str, expected_code: str) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        with pytest.raises(AgentExecutionError) as captured:
+            await _collect_execution_stream(_execution_client(http_client))
+
+    assert captured.value.code == expected_code
+
+
+@pytest.mark.parametrize(
+    ("wire_code", "safe_code"),
+    [
+        ("TARGET_EXECUTION_FAILED", "TARGET_EXECUTION_FAILED"),
+        ("unsafe error=secret", "FAILED"),
+        (42, "FAILED"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_execution_stream_exposes_only_safe_execution_failure_codes(
+    wire_code: object,
+    safe_code: str,
+) -> None:
+    payload = json.dumps({"event": "execution_failed", "error_code": wire_code})
+    sse = f"data:{payload}\n\ndata:[DONE]\n\n"
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        events = await _collect_execution_stream(_execution_client(http_client))
+
+    assert events == [ExecutionFailedEvent(error_code=safe_code)]
+    assert "secret" not in repr(events)
+
+
+@pytest.mark.parametrize(
+    ("exception_type", "expected_code"),
+    [
+        (httpx.ConnectError, "CHANNEL_EXECUTION_TRANSPORT"),
+        (httpx.ReadTimeout, "CHANNEL_EXECUTION_TIMEOUT"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_execution_stream_classifies_transport_and_timeout_failures(
+    exception_type: type[httpx.HTTPError],
+    expected_code: str,
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise exception_type("private transport detail", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        with pytest.raises(AgentExecutionError) as captured:
+            await _collect_execution_stream(_execution_client(http_client))
+
+    assert captured.value.code == expected_code
+    assert "private transport detail" not in str(captured.value)
+
+
+@pytest.mark.asyncio
+async def test_execution_stream_enforces_its_total_timeout() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.05)
+        return httpx.Response(200, text="data:[DONE]\n\n")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        with pytest.raises(AgentExecutionError) as captured:
+            await _collect_execution_stream(_execution_client(http_client, total_timeout_seconds=0.001))
+
+    assert captured.value.code == "CHANNEL_EXECUTION_TIMEOUT"
+
+
+class _InterruptedSSEBody(httpx.AsyncByteStream):
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b'data:{"event":"message_delta","content":"partial"}\n\n'
+        raise httpx.ReadError("private interrupted response detail")
+
+
+@pytest.mark.asyncio
+async def test_execution_stream_classifies_a_connection_interrupted_after_a_delta() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=_InterruptedSSEBody())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        with pytest.raises(AgentExecutionError) as captured:
+            await _collect_execution_stream(_execution_client(http_client))
+
+    assert captured.value.code == "CHANNEL_EXECUTION_TRANSPORT"
+
+
+@pytest.mark.asyncio
+async def test_execution_stream_filters_reasoning_markers_across_delta_boundaries() -> None:
+    sse = (
+        'data:{"event":"message_delta","content":"visible<thi","session_id":"session-server"}\n\n'
+        'data:{"event":"message_delta","content":"nk>private reasoning</th","session_id":"session-server"}\n\n'
+        'data:{"event":"message_delta","content":"ink> answer","session_id":"session-server"}\n\n'
+        'data:{"event":"message_completed","session_id":"session-server"}\n\n'
+        "data:[DONE]\n\n"
+    )
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        events = await _collect_execution_stream(_execution_client(http_client))
+
+    visible = "".join(event.content for event in events if isinstance(event, MessageDeltaEvent))
+    assert visible == "visible answer"
+    assert "private reasoning" not in visible
+    assert "think" not in visible.lower()
+
+
+@pytest.mark.asyncio
+async def test_ask_aggregates_stream_deltas_with_the_established_limit() -> None:
+    answer = "a" * 45 + "b" * 45
+    sse = (
+        f'data:{{"event":"message_delta","content":"{answer[:30]}","session_id":"session-server"}}\n\n'
+        f'data:{{"event":"message_delta","content":"{answer[30:60]}","session_id":"session-server"}}\n\n'
+        f'data:{{"event":"message_delta","content":"{answer[60:]}","session_id":"session-server"}}\n\n'
+        'data:{"event":"message_completed","session_id":"session-server"}\n\n'
+        "data:[DONE]\n\n"
+    )
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        reply = await _execution_client(http_client, max_answer_chars=60).ask(**_STREAM_ARGUMENTS)
+
+    assert reply == AgentReply(
+        content=truncate_answer(answer, 60),
+        session_id="session-server",
+    )
+
+
+@pytest.mark.asyncio
+async def test_ask_preserves_the_legacy_execution_failed_classification() -> None:
+    sse = 'data:{"event":"execution_failed","error_code":"TARGET_EXECUTION_FAILED"}\n\ndata:[DONE]\n\n'
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        with pytest.raises(AgentExecutionError) as captured:
+            await _execution_client(http_client).ask(**_STREAM_ARGUMENTS)
+
+    assert captured.value.code == "CHANNEL_EXECUTION_TARGET_EXECUTION_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_ask_is_only_a_thin_consumer_of_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def forbidden_handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("ask must not maintain a second HTTP or SSE path")
+
+    captured: dict[str, object] = {}
+
+    async def fake_stream(**kwargs: object) -> AsyncIterator[MessageDeltaEvent | MessageCompletedEvent]:
+        captured.update(kwargs)
+        yield MessageDeltaEvent(content="answer ", session_id="session-stream")
+        yield MessageDeltaEvent(content="from stream", session_id="session-stream")
+        yield MessageCompletedEvent(session_id="session-stream")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(forbidden_handler)) as http_client:
+        client = _execution_client(http_client)
+        monkeypatch.setattr(client, "stream", fake_stream)
+        reply = await client.ask(**_STREAM_ARGUMENTS)
+
+    assert captured == _STREAM_ARGUMENTS
+    assert reply == AgentReply(content="answer from stream", session_id="session-stream")

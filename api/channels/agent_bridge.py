@@ -4,7 +4,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import re
 import time
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
@@ -13,19 +12,15 @@ from urllib.parse import quote
 import httpx
 
 from api.channels.core.base import Channel, IncomingMessage, OutgoingMessage
+from api.channels.core.reply import SERVICE_UNAVAILABLE_TEXT, strip_reasoning, truncate_answer
 from api.channels.state_store import ChannelStateStore, conversation_key
 
 LOGGER = logging.getLogger(__name__)
 
-SERVICE_UNAVAILABLE_TEXT = "服务暂时不可用，请稍后再试。"
 TEXT_ONLY_TEXT = "当前演示仅支持文字消息。"
 QUESTION_TOO_LONG_TEXT = "问题过长，请缩短后重试。"
 DEMO_ONLY_TEXT = "当前机器人仅用于定向演示。"
 SESSION_RESET_TEXT = "会话已重置，下一个问题将开始新会话。"
-ANSWER_TRUNCATED_SUFFIX = "\n\n（回答过长，演示版已截断）"
-
-_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", flags=re.IGNORECASE | re.DOTALL)
-_UNCLOSED_THINK_RE = re.compile(r"<think>.*$", flags=re.IGNORECASE | re.DOTALL)
 
 
 class AgentExecutionError(RuntimeError):
@@ -49,21 +44,6 @@ class AgentExecutor(Protocol):
 
 def _short_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
-
-
-def _strip_reasoning(text: str) -> str:
-    without_blocks = _THINK_BLOCK_RE.sub("", text)
-    without_unclosed = _UNCLOSED_THINK_RE.sub("", without_blocks)
-    return without_unclosed.replace("</think>", "").strip()
-
-
-def _truncate_answer(text: str, max_chars: int) -> str:
-    if len(text) <= max_chars:
-        return text
-    if max_chars <= len(ANSWER_TRUNCATED_SUFFIX):
-        return ANSWER_TRUNCATED_SUFFIX[:max_chars]
-    prefix_length = max_chars - len(ANSWER_TRUNCATED_SUFFIX)
-    return text[:prefix_length].rstrip() + ANSWER_TRUNCATED_SUFFIX
 
 
 class MultiRAGAgentClient:
@@ -226,11 +206,11 @@ class MultiRAGAgentClient:
         if not response_session_id:
             raise AgentExecutionError("AGENT_SESSION_MISSING")
 
-        content = _strip_reasoning("".join(content_parts))
+        content = strip_reasoning("".join(content_parts))
         if not content or content.startswith("**ERROR**:"):
             raise AgentExecutionError("AGENT_EMPTY_RESULT")
         return AgentReply(
-            content=_truncate_answer(content, self._max_answer_chars),
+            content=truncate_answer(content, self._max_answer_chars),
             session_id=response_session_id,
         )
 

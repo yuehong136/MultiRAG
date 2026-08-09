@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 
-from api.channels.agent_bridge import SERVICE_UNAVAILABLE_TEXT, SESSION_RESET_TEXT, AgentExecutionError, AgentReply
+from api.channels.agent_bridge import (
+    DEMO_ONLY_TEXT,
+    QUESTION_TOO_LONG_TEXT,
+    SERVICE_UNAVAILABLE_TEXT,
+    SESSION_RESET_TEXT,
+    TEXT_ONLY_TEXT,
+    AgentExecutionError,
+)
 from api.channels.binding_bridge import BindingBridge
-from api.channels.core.base import Channel, IncomingMessage, OutgoingMessage
+from api.channels.core.base import Channel, IncomingMessage, OutgoingMessage, ReplySessionState
+from api.channels.execution_events import ExecutionFailedEvent, MessageCompletedEvent, MessageDeltaEvent
 from api.channels.state_store import binding_conversation_key
 
 
@@ -64,21 +74,41 @@ class _StateStore:
 
 
 class _Executor:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        events: list[MessageDeltaEvent | MessageCompletedEvent | ExecutionFailedEvent] | None = None,
+    ) -> None:
         self.calls: list[dict[str, Any]] = []
         self.resets: list[str] = []
+        self.events = (
+            events
+            if events is not None
+            else [
+                MessageDeltaEvent(content="managed ", session_id="server-session"),
+                MessageDeltaEvent(content="answer", session_id="server-session"),
+                MessageCompletedEvent(session_id="server-session"),
+            ]
+        )
 
-    async def ask(self, **kwargs: Any) -> AgentReply:
+    async def stream(
+        self,
+        **kwargs: Any,
+    ) -> AsyncIterator[MessageDeltaEvent | MessageCompletedEvent | ExecutionFailedEvent]:
         self.calls.append(kwargs)
-        return AgentReply(content="managed answer", session_id="server-session")
+        for event in self.events:
+            yield event
 
     async def reset(self, *, conversation_key: str) -> None:
         self.resets.append(conversation_key)
 
 
 class _FailingExecutor(_Executor):
-    async def ask(self, **kwargs: Any) -> AgentReply:
+    async def stream(
+        self,
+        **kwargs: Any,
+    ) -> AsyncIterator[MessageDeltaEvent | MessageCompletedEvent | ExecutionFailedEvent]:
         self.calls.append(kwargs)
+        yield MessageDeltaEvent(content="partial answer", session_id="server-session")
         raise AgentExecutionError("CHANNEL_EXECUTION_TIMEOUT")
 
 
@@ -90,6 +120,7 @@ def _message(
     chat_id: str = "oc-chat",
     chat_type: str = "p2p",
     sender_type: str = "user",
+    message_type: str = "text",
 ) -> IncomingMessage:
     return IncomingMessage(
         channel="feishu",
@@ -99,7 +130,7 @@ def _message(
         message_id=message_id,
         sender_id=sender_id,
         content=content,
-        message_type="text",
+        message_type=message_type,
         sender_type=sender_type,
     )
 
@@ -120,6 +151,7 @@ def _bridge(
         binding_id=binding_id,
         allowed_sender_ids=allowed_sender_ids or set(),
         max_question_chars=100,
+        max_answer_chars=4000,
         private_chat_only=private_chat_only,
     )
 
@@ -176,6 +208,43 @@ async def test_duplicate_message_never_reaches_binding_executor_twice() -> None:
 
     assert len(executor.calls) == 1
     assert len(channel.sent) == 1
+
+
+@pytest.mark.parametrize(
+    ("message", "allowed_sender_ids", "expected_text"),
+    [
+        (_message(sender_id="blocked-user"), {"allowed-user"}, DEMO_ONLY_TEXT),
+        (_message(message_type="image"), set(), TEXT_ONLY_TEXT),
+        (_message(content="x" * 101), set(), QUESTION_TOO_LONG_TEXT),
+    ],
+    ids=["sender-allowlist", "text-only", "question-limit"],
+)
+@pytest.mark.asyncio
+async def test_existing_input_guards_still_finish_without_starting_execution(
+    message: IncomingMessage,
+    allowed_sender_ids: set[str],
+    expected_text: str,
+) -> None:
+    channel = _Channel()
+    state = _StateStore()
+    executor = _Executor()
+
+    await _bridge(
+        channel=channel,
+        state=state,
+        executor=executor,
+        allowed_sender_ids=allowed_sender_ids,
+    ).handle_message(message)
+
+    assert executor.calls == []
+    assert channel.sent == [
+        OutgoingMessage(
+            chat_id=message.chat_id,
+            content=expected_text,
+            reply_to_message_id=message.message_id,
+        )
+    ]
+    assert state.status == {message.message_id: "replied"}
 
 
 @pytest.mark.asyncio
@@ -291,3 +360,179 @@ async def test_a_provider_without_group_support_ignores_group_traffic_regardless
     assert capabilities.group_chat is False
     assert resolved is True
     assert executor.calls == []
+
+
+@pytest.mark.asyncio
+async def test_execution_failed_after_partial_deltas_delivers_only_the_safe_failure() -> None:
+    channel = _Channel()
+    state = _StateStore()
+    executor = _Executor(
+        [
+            MessageDeltaEvent(content="partial answer", session_id="server-session"),
+            ExecutionFailedEvent(error_code="TARGET_EXECUTION_FAILED", session_id="server-session"),
+        ]
+    )
+
+    await _bridge(channel=channel, state=state, executor=executor).handle_message(_message())
+
+    assert channel.sent == [
+        OutgoingMessage(
+            chat_id="oc-chat",
+            content=SERVICE_UNAVAILABLE_TEXT,
+            reply_to_message_id="message-1",
+        )
+    ]
+    assert state.status == {"message-1": "executed"}
+
+
+@pytest.mark.asyncio
+async def test_bridge_buffers_split_reasoning_markers_without_leaking_them() -> None:
+    channel = _Channel()
+    state = _StateStore()
+    executor = _Executor(
+        [
+            MessageDeltaEvent(content="visible<thi", session_id="server-session"),
+            MessageDeltaEvent(content="nk>private reasoning</th", session_id="server-session"),
+            MessageDeltaEvent(content="ink> answer", session_id="server-session"),
+            MessageCompletedEvent(session_id="server-session"),
+        ]
+    )
+
+    await _bridge(channel=channel, state=state, executor=executor).handle_message(_message())
+
+    assert channel.sent == [
+        OutgoingMessage(
+            chat_id="oc-chat",
+            content="visible answer",
+            reply_to_message_id="message-1",
+        )
+    ]
+    assert "private reasoning" not in channel.sent[0].content
+
+
+class _ControlledReplySession:
+    def __init__(self, *, fail_operation: str) -> None:
+        self.state = ReplySessionState.OPEN
+        self.fail_operation = fail_operation
+        self.appended: list[str] = []
+        self.complete_calls = 0
+        self.fail_calls = 0
+
+    async def append(self, content: str) -> None:
+        if self.fail_operation == "append":
+            raise RuntimeError("append failed")
+        self.appended.append(content)
+
+    async def complete(self) -> None:
+        self.complete_calls += 1
+        self.state = ReplySessionState.COMPLETED
+        if self.fail_operation == "complete":
+            raise RuntimeError("complete failed")
+
+    async def fail(self, error_code: str) -> None:
+        del error_code
+        self.fail_calls += 1
+        self.state = ReplySessionState.FAILED
+        if self.fail_operation == "fail":
+            raise RuntimeError("fail failed")
+
+
+class _ReplySessionChannel(_Channel):
+    def __init__(self, session: _ControlledReplySession) -> None:
+        super().__init__()
+        self.session = session
+        self.begin_calls = 0
+
+    async def begin_reply(
+        self,
+        source: IncomingMessage,
+        *,
+        max_content_chars: int,
+    ) -> _ControlledReplySession:
+        del source, max_content_chars
+        self.begin_calls += 1
+        return self.session
+
+
+@pytest.mark.parametrize(
+    ("session_failure", "events", "expected_complete_calls", "expected_fail_calls"),
+    [
+        (
+            "append",
+            [MessageDeltaEvent(content="answer"), MessageCompletedEvent(session_id="session-server")],
+            0,
+            1,
+        ),
+        (
+            "complete",
+            [MessageDeltaEvent(content="answer"), MessageCompletedEvent(session_id="session-server")],
+            1,
+            0,
+        ),
+        (
+            "fail",
+            [ExecutionFailedEvent(error_code="TARGET_EXECUTION_FAILED")],
+            0,
+            1,
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_reply_session_failures_are_tombstoned_without_duplicate_delivery(
+    session_failure: str,
+    events: list[MessageDeltaEvent | MessageCompletedEvent | ExecutionFailedEvent],
+    expected_complete_calls: int,
+    expected_fail_calls: int,
+) -> None:
+    session = _ControlledReplySession(fail_operation=session_failure)
+    channel = _ReplySessionChannel(session)
+    state = _StateStore()
+
+    await _bridge(channel=channel, state=state, executor=_Executor(events)).handle_message(_message())
+
+    assert channel.begin_calls == 1
+    assert channel.sent == []
+    assert session.complete_calls == expected_complete_calls
+    assert session.fail_calls == expected_fail_calls
+    assert state.status == {"message-1": "executed"}
+
+
+class _SerialExecutor(_Executor):
+    def __init__(self) -> None:
+        super().__init__()
+        self.active = 0
+        self.max_active = 0
+
+    async def stream(
+        self,
+        **kwargs: Any,
+    ) -> AsyncIterator[MessageDeltaEvent | MessageCompletedEvent | ExecutionFailedEvent]:
+        self.calls.append(kwargs)
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
+            await asyncio.sleep(0)
+            question = str(kwargs["question"])
+            yield MessageDeltaEvent(content=question, session_id=f"session-{question}")
+            await asyncio.sleep(0)
+            yield MessageCompletedEvent(session_id=f"session-{question}")
+        finally:
+            self.active -= 1
+
+
+@pytest.mark.asyncio
+async def test_same_conversation_streams_remain_strictly_serial() -> None:
+    channel = _Channel()
+    state = _StateStore()
+    executor = _SerialExecutor()
+    bridge = _bridge(channel=channel, state=state, executor=executor)
+
+    await asyncio.gather(
+        bridge.handle_message(_message(message_id="message-1", content="first")),
+        bridge.handle_message(_message(message_id="message-2", content="second")),
+    )
+
+    assert executor.max_active == 1
+    assert [call["question"] for call in executor.calls] == ["first", "second"]
+    assert [message.content for message in channel.sent] == ["first", "second"]
+    assert state.status == {"message-1": "replied", "message-2": "replied"}

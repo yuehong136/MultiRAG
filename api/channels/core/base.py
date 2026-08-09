@@ -21,7 +21,8 @@ import logging
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from enum import StrEnum
+from typing import Any, ClassVar, Protocol, runtime_checkable
 
 LOGGER = logging.getLogger(__name__)
 
@@ -139,6 +140,32 @@ class OutgoingMessage:
 MessageHandler = Callable[[IncomingMessage], Awaitable[None]]
 
 
+class ReplySessionState(StrEnum):
+    """Provider-neutral reply lifecycle states."""
+
+    OPEN = "open"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class ReplySessionStateError(RuntimeError):
+    """Raised when a reply lifecycle attempts an illegal transition."""
+
+
+@runtime_checkable
+class ReplySession(Protocol):
+    """Append-only reply lifecycle implemented by each outbound provider."""
+
+    @property
+    def state(self) -> ReplySessionState: ...
+
+    async def append(self, content: str) -> None: ...
+
+    async def complete(self) -> None: ...
+
+    async def fail(self, error_code: str) -> None: ...
+
+
 class Channel(ABC):
     """One configured bot identity on one messaging platform."""
 
@@ -163,6 +190,22 @@ class Channel(ABC):
                 _short_hash(self.account_id),
                 _short_hash(message.message_id),
             )
+
+    async def begin_reply(
+        self,
+        source: IncomingMessage,
+        *,
+        max_content_chars: int,
+    ) -> ReplySession:
+        """Begin a buffered text reply unless a provider offers progression."""
+
+        from api.channels.reply_session import BufferedReplySession
+
+        return BufferedReplySession(
+            channel=self,
+            source=source,
+            max_content_chars=max_content_chars,
+        )
 
     @abstractmethod
     async def start(self) -> None: ...

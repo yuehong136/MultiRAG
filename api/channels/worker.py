@@ -488,6 +488,7 @@ async def _run_managed_channel(
             binding_id=binding_id,
             allowed_sender_ids=set(plan.allowed_sender_ids),
             max_question_chars=tuning.max_question_chars,
+            max_answer_chars=tuning.max_answer_chars,
             # Two independent gates, and the narrower one wins. The admin can
             # only widen down to what the provider can actually carry: a
             # provider without group support must ignore group traffic no

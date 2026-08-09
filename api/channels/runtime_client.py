@@ -5,13 +5,21 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from urllib.parse import quote
 
 import httpx
 
 from api.channel_runtime.schemas import DesiredRuntime, DesiredRuntimeList, RuntimeBindingConfig, RuntimeState
-from api.channels.agent_bridge import AgentExecutionError, AgentReply, _strip_reasoning, _truncate_answer
+from api.channels.agent_bridge import AgentExecutionError, AgentReply
+from api.channels.core.reply import StreamingReasoningFilter, strip_reasoning, truncate_answer
+from api.channels.execution_events import (
+    BindingExecutionEvent,
+    ExecutionFailedEvent,
+    MessageCompletedEvent,
+    MessageDeltaEvent,
+)
 
 _SAFE_ERROR_CODE = re.compile(r"^[A-Z0-9_]{1,64}$")
 
@@ -198,6 +206,47 @@ class MultiRAGBindingExecutionClient:
         subject: str,
         conversation: str,
     ) -> AgentReply:
+        """Compatibility facade that aggregates the canonical event stream."""
+
+        chunks: list[str] = []
+        session_id = ""
+        async for event in self.stream(
+            question=question,
+            event_id=event_id,
+            conversation_key=conversation_key,
+            provider=provider,
+            subject=subject,
+            conversation=conversation,
+        ):
+            if isinstance(event, MessageDeltaEvent):
+                chunks.append(event.content)
+            elif isinstance(event, MessageCompletedEvent):
+                session_id = event.session_id
+            elif isinstance(event, ExecutionFailedEvent):
+                raise AgentExecutionError(f"CHANNEL_EXECUTION_{event.error_code}")
+
+        content = strip_reasoning("".join(chunks))
+        if not session_id:
+            raise AgentExecutionError("CHANNEL_EXECUTION_INCOMPLETE")
+        if not content:
+            raise AgentExecutionError("CHANNEL_EXECUTION_EMPTY")
+        return AgentReply(
+            content=truncate_answer(content, self._max_answer_chars),
+            session_id=session_id,
+        )
+
+    async def stream(
+        self,
+        *,
+        question: str,
+        event_id: str,
+        conversation_key: str,
+        provider: str,
+        subject: str,
+        conversation: str,
+    ) -> AsyncIterator[BindingExecutionEvent]:
+        """Execute a binding and yield its only trusted, user-visible event stream."""
+
         body = {
             "event_id": event_id,
             "conversation_key": conversation_key,
@@ -219,7 +268,8 @@ class MultiRAGBindingExecutionClient:
                 ) as response:
                     if response.status_code != httpx.codes.OK:
                         raise AgentExecutionError(f"CHANNEL_EXECUTION_HTTP_{response.status_code}")
-                    return await self._consume_sse(response)
+                    async for event in self._stream_sse(response):
+                        yield event
         except AgentExecutionError:
             raise
         except (TimeoutError, httpx.TimeoutException) as exc:
@@ -239,18 +289,27 @@ class MultiRAGBindingExecutionClient:
         if response.status_code != httpx.codes.NO_CONTENT:
             raise AgentExecutionError(f"CHANNEL_RESET_HTTP_{response.status_code}")
 
-    async def _consume_sse(self, response: httpx.Response) -> AgentReply:
-        chunks: list[str] = []
+    async def _stream_sse(self, response: httpx.Response) -> AsyncIterator[BindingExecutionEvent]:
+        reasoning_filter = StreamingReasoningFilter()
         session_id = ""
-        saw_completed = False
-        saw_done = False
+        terminal: MessageCompletedEvent | ExecutionFailedEvent | None = None
+        saw_visible_content = False
         async for line in response.aiter_lines():
             if not line.startswith("data:"):
                 continue
             payload_text = line[5:].strip()
             if payload_text == "[DONE]":
-                saw_done = True
-                break
+                if terminal is None:
+                    raise AgentExecutionError("CHANNEL_EXECUTION_INCOMPLETE")
+                if isinstance(terminal, MessageCompletedEvent):
+                    tail = reasoning_filter.finish()
+                    if tail:
+                        saw_visible_content = saw_visible_content or bool(tail.strip())
+                        yield MessageDeltaEvent(content=tail, session_id=session_id or None)
+                    if not saw_visible_content:
+                        raise AgentExecutionError("CHANNEL_EXECUTION_EMPTY")
+                yield terminal
+                return
             if not payload_text:
                 continue
             try:
@@ -260,26 +319,44 @@ class MultiRAGBindingExecutionClient:
             if not isinstance(payload, dict):
                 raise AgentExecutionError("CHANNEL_EXECUTION_INVALID_SSE")
             event = payload.get("event")
+            if not isinstance(event, str):
+                raise AgentExecutionError("CHANNEL_EXECUTION_INVALID_SSE")
+            if event not in {"message_delta", "message_completed", "execution_failed"}:
+                # Future additive events are ignored until this worker has a
+                # typed, security-reviewed representation for them.
+                continue
+            if terminal is not None:
+                raise AgentExecutionError("CHANNEL_EXECUTION_INVALID_SSE")
+
             raw_session_id = payload.get("session_id")
-            if isinstance(raw_session_id, str) and raw_session_id:
+            if raw_session_id is not None and not isinstance(raw_session_id, str):
+                raise AgentExecutionError("CHANNEL_EXECUTION_INVALID_SSE")
+            if raw_session_id:
                 session_id = raw_session_id
+
             if event == "execution_failed":
                 code = payload.get("error_code")
                 safe_code = code if isinstance(code, str) and _SAFE_ERROR_CODE.fullmatch(code) else "FAILED"
-                raise AgentExecutionError(f"CHANNEL_EXECUTION_{safe_code}")
+                terminal = ExecutionFailedEvent(
+                    error_code=safe_code,
+                    session_id=session_id or None,
+                )
+                continue
             if event == "message_delta":
                 content = payload.get("content")
-                if isinstance(content, str):
-                    chunks.append(content)
-            elif event == "message_completed":
-                saw_completed = True
+                if not isinstance(content, str):
+                    raise AgentExecutionError("CHANNEL_EXECUTION_INVALID_SSE")
+                safe_content = reasoning_filter.feed(content)
+                if safe_content:
+                    saw_visible_content = saw_visible_content or bool(safe_content.strip())
+                    yield MessageDeltaEvent(
+                        content=safe_content,
+                        session_id=session_id or None,
+                    )
+                continue
 
-        if not saw_completed or not saw_done or not session_id:
-            raise AgentExecutionError("CHANNEL_EXECUTION_INCOMPLETE")
-        content = _strip_reasoning("".join(chunks))
-        if not content:
-            raise AgentExecutionError("CHANNEL_EXECUTION_EMPTY")
-        return AgentReply(
-            content=_truncate_answer(content, self._max_answer_chars),
-            session_id=session_id,
-        )
+            if not session_id:
+                raise AgentExecutionError("CHANNEL_EXECUTION_INCOMPLETE")
+            terminal = MessageCompletedEvent(session_id=session_id)
+
+        raise AgentExecutionError("CHANNEL_EXECUTION_INCOMPLETE")
