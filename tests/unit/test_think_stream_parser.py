@@ -134,7 +134,7 @@ class _DeltaOnlyChatModel:
     max_length = 4096
 
     def __init__(self) -> None:
-        self.delta_called = False
+        self.reasoning_modes: list[bool] = []
 
     async def async_chat_streamly_delta(
         self,
@@ -143,17 +143,40 @@ class _DeltaOnlyChatModel:
         gen_conf: dict[str, Any],
         **kwargs: Any,
     ) -> AsyncIterator[str]:
-        del system, history, gen_conf, kwargs
-        self.delta_called = True
+        del system, history, gen_conf
+        self.reasoning_modes.append(kwargs.get("with_reasoning", True) is not False)
         for value in _CASES["deepseek_repeated_close"].chunks:
             yield value
 
 
-async def test_agent_canvas_uses_the_shared_delta_parser() -> None:
-    """Pin the RAGFlow June fix at the actual Canvas message output seam."""
+class _ReasoningOnlyThenVisibleChatModel:
+    max_length = 4096
 
-    model = _DeltaOnlyChatModel()
+    def __init__(self, *, close_reasoning: bool) -> None:
+        self.close_reasoning = close_reasoning
+        self.reasoning_modes: list[bool] = []
+
+    async def async_chat_streamly_delta(
+        self,
+        system: str,
+        history: list[dict[str, str]],
+        gen_conf: dict[str, Any],
+        **kwargs: Any,
+    ) -> AsyncIterator[str]:
+        del system, history, gen_conf
+        with_reasoning = kwargs.get("with_reasoning", True) is not False
+        self.reasoning_modes.append(with_reasoning)
+        if with_reasoning:
+            yield "<think>provider returned only private reasoning"
+            if self.close_reasoning:
+                yield "</think>"
+            return
+        yield "重试后可见回答"
+
+
+def _make_component(model: Any) -> tuple[LLM, dict[str, Any]]:
     component = object.__new__(LLM)
+    component._id = "llm-test"
     component.chat_mdl = model
     component.imgs = []
     component._param = SimpleNamespace(gen_conf=lambda: {})
@@ -177,18 +200,47 @@ async def test_agent_canvas_uses_the_shared_delta_parser() -> None:
         component,
     )
     component.set_output = MethodType(set_output, component)
+    return component, outputs
 
-    emitted = [
+
+async def _run_component(component: LLM) -> list[str]:
+    return [
         value
         async for value in component._stream_output_async(
             "system",
             [{"role": "user", "content": "hello"}],
         )
     ]
+
+
+async def test_agent_canvas_uses_the_shared_delta_parser() -> None:
+    """Pin the RAGFlow June fix at the actual Canvas message output seam."""
+
+    model = _DeltaOnlyChatModel()
+    component, outputs = _make_component(model)
+
+    emitted = await _run_component(component)
     reasoning, answer, markers = await _collect(_chunks(tuple(emitted)), min_tokens=0)
 
-    assert model.delta_called is True
+    assert model.reasoning_modes == [True]
     assert reasoning == "We need to answer"
     assert answer == "我也爱你呀～"
     assert markers == ("<think>", "</think>")
     assert outputs["content"] == "<think>We need to answer</think>我也爱你呀～"
+
+
+@pytest.mark.parametrize("close_reasoning", [True, False])
+async def test_agent_canvas_retries_reasoning_only_stream_without_exposing_cot(
+    close_reasoning: bool,
+) -> None:
+    model = _ReasoningOnlyThenVisibleChatModel(close_reasoning=close_reasoning)
+    component, outputs = _make_component(model)
+
+    emitted = await _run_component(component)
+    reasoning, answer, markers = await _collect(_chunks(tuple(emitted)), min_tokens=0)
+
+    assert model.reasoning_modes == [True, False]
+    assert reasoning == "provider returned only private reasoning"
+    assert answer == "重试后可见回答"
+    assert markers == ("<think>", "</think>")
+    assert outputs["content"] == ("<think>provider returned only private reasoning</think>重试后可见回答")

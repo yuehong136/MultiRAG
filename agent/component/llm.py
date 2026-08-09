@@ -297,14 +297,70 @@ class LLM(ComponentBase):
     ) -> AsyncGenerator[str, None]:
         stream_kwargs = {"images": self.imgs} if self.imgs else {}
         stream_kwargs.update(kwargs)
-        stream = self.chat_mdl.async_chat_streamly_delta(
-            msg[0]["content"],
-            msg[1:],
-            self._param.gen_conf(),
-            **stream_kwargs,
-        )
-        async for _kind, value, _state in _stream_with_think_delta(stream, min_tokens=0):
+        async for value in self._reasoning_safe_stream(msg, stream_kwargs):
             yield value
+
+    async def _reasoning_safe_stream(
+        self,
+        msg: list[dict[str, Any]],
+        stream_kwargs: dict[str, Any],
+    ) -> AsyncGenerator[str, None]:
+        """Yield one visible answer, retrying a reasoning-only provider once.
+
+        Some OpenAI-compatible reasoning providers occasionally finish with
+        every token in ``reasoning_content`` and no ``content`` tokens. Never
+        promote that private reasoning to an answer. Instead, repeat only this
+        pure LLM generation once with reasoning suppressed. The Canvas run,
+        tools, Channel execution and Feishu card all keep their original
+        identity, so no external side effect is replayed.
+        """
+
+        allow_fallback = stream_kwargs.get("with_reasoning", True) is not False
+        attempt_count = 2 if allow_fallback else 1
+        for attempt in range(attempt_count):
+            request_kwargs = dict(stream_kwargs)
+            if attempt:
+                request_kwargs["with_reasoning"] = False
+
+            stream = self.chat_mdl.async_chat_streamly_delta(
+                msg[0]["content"],
+                msg[1:],
+                self._param.gen_conf(),
+                **request_kwargs,
+            )
+            in_reasoning = False
+            saw_visible_answer = False
+            saw_error = False
+            async for kind, value, _state in _stream_with_think_delta(
+                stream,
+                min_tokens=0,
+            ):
+                if kind == "marker":
+                    in_reasoning = value == "<think>"
+                elif value.strip() and not in_reasoning:
+                    saw_visible_answer = True
+                if "**ERROR**" in value:
+                    saw_error = True
+                yield value
+
+            if saw_visible_answer or saw_error:
+                return
+            if attempt + 1 >= attempt_count:
+                logging.error(
+                    "llm_stream_event=visible_answer_missing component_id=%s action=failed_after_fallback",
+                    getattr(self, "_id", ""),
+                )
+                return
+            if in_reasoning:
+                # Balance an unterminated provider marker before the fallback
+                # answer so downstream consumers cannot mistake it for CoT.
+                yield "</think>"
+            if self.check_if_canceled("LLM reasoning fallback"):
+                return
+            logging.warning(
+                "llm_stream_event=visible_answer_missing component_id=%s action=retry_without_reasoning",
+                getattr(self, "_id", ""),
+            )
 
     async def _stream_output_async(
         self,
@@ -316,13 +372,7 @@ class LLM(ComponentBase):
         answer = ""
 
         stream_kwargs = {"images": self.imgs} if self.imgs else {}
-        stream = self.chat_mdl.async_chat_streamly_delta(
-            msg[0]["content"],
-            msg[1:],
-            self._param.gen_conf(),
-            **stream_kwargs,
-        )
-        async for _kind, ans, _state in _stream_with_think_delta(stream, min_tokens=0):
+        async for ans in self._reasoning_safe_stream(msg, stream_kwargs):
             if self.check_if_canceled("LLM streaming"):
                 return
 
