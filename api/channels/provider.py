@@ -42,6 +42,7 @@ class WorkerTuning:
     """
 
     queue_size: int
+    followup_queue_size: int
     worker_concurrency: int
     dedupe_ttl_seconds: int
     session_ttl_seconds: int

@@ -28,7 +28,15 @@ from dataclasses import dataclass, field
 from importlib import import_module
 from typing import Any, Protocol, runtime_checkable
 
-from ..core.base import Channel, IncomingMessage, OutgoingMessage, ReplySession
+from ..core.base import (
+    Channel,
+    ChannelAction,
+    ChannelActionResponse,
+    IncomingMessage,
+    OutgoingMessage,
+    ReplyContext,
+    ReplySession,
+)
 from .reply import CARD_ANSWER_ELEMENT_ID, FeishuProgressiveReplySession
 
 LOGGER = logging.getLogger(__name__)
@@ -65,8 +73,11 @@ class _FeishuSDK(Protocol):
     def build_ws_client(
         self,
         account: FeishuAccount,
-        callback: Any,
+        message_callback: Any,
+        action_callback: Any,
     ) -> Any: ...
+
+    def card_action_response(self, response: ChannelActionResponse) -> Any: ...
 
     def reply_message(
         self,
@@ -87,6 +98,16 @@ class _FeishuSDK(Protocol):
         client: Any,
         card_id: str,
         content: str,
+        *,
+        sequence: int,
+        delivery_uuid: str,
+    ) -> Any: ...
+
+    def batch_update_card(
+        self,
+        client: Any,
+        card_id: str,
+        actions: list[dict[str, object]],
         *,
         sequence: int,
         delivery_uuid: str,
@@ -131,6 +152,7 @@ class _LarkOapiSDK:
                 self._ws_module = import_module("lark_oapi.ws.client")
                 im_api = import_module("lark_oapi.api.im.v1")
                 cardkit_api = import_module("lark_oapi.api.cardkit.v1")
+                callback_models = import_module("lark_oapi.event.callback.model.p2_card_action_trigger")
         except ImportError as error:
             raise FeishuDependencyError("Feishu channel requires the optional 'lark-oapi' dependency") from error
 
@@ -144,10 +166,13 @@ class _LarkOapiSDK:
         self._emoji = im_api.Emoji
         self._create_card_request = cardkit_api.CreateCardRequest
         self._create_card_body = cardkit_api.CreateCardRequestBody
+        self._batch_update_card_request = cardkit_api.BatchUpdateCardRequest
+        self._batch_update_card_body = cardkit_api.BatchUpdateCardRequestBody
         self._content_card_element_request = cardkit_api.ContentCardElementRequest
         self._content_card_element_body = cardkit_api.ContentCardElementRequestBody
         self._settings_card_request = cardkit_api.SettingsCardRequest
         self._settings_card_body = cardkit_api.SettingsCardRequestBody
+        self._card_action_response = callback_models.P2CardActionTriggerResponse
 
     def _domain(self, domain: str) -> Any:
         if domain == "lark":
@@ -174,10 +199,16 @@ class _LarkOapiSDK:
         # therefore intentionally supports one Feishu account per process.
         self._ws_module.loop = loop
 
-    def build_ws_client(self, account: FeishuAccount, callback: Any) -> Any:
+    def build_ws_client(
+        self,
+        account: FeishuAccount,
+        message_callback: Any,
+        action_callback: Any,
+    ) -> Any:
         handler = (
             self._lark.EventDispatcherHandler.builder("", "")
-            .register_p2_im_message_receive_v1(callback)
+            .register_p2_im_message_receive_v1(message_callback)
+            .register_p2_card_action_trigger(action_callback)
             # Some Feishu apps also subscribe to the read-receipt event. It is
             # transport noise for MultiRAG, but leaving it unregistered makes
             # lark-oapi emit a misleading processor-not-found ERROR per read.
@@ -196,6 +227,16 @@ class _LarkOapiSDK:
             account.app_id,
             account.app_secret,
             **kwargs,
+        )
+
+    def card_action_response(self, response: ChannelActionResponse) -> Any:
+        return self._card_action_response(
+            {
+                "toast": {
+                    "type": response.toast_type,
+                    "content": response.content,
+                }
+            }
         )
 
     @staticmethod
@@ -244,6 +285,19 @@ class _LarkOapiSDK:
             .build()
         )
         return client.cardkit.v1.card_element.content(request)
+
+    def batch_update_card(
+        self,
+        client: Any,
+        card_id: str,
+        actions: list[dict[str, object]],
+        *,
+        sequence: int,
+        delivery_uuid: str,
+    ) -> Any:
+        body = self._batch_update_card_body.builder().actions(json.dumps(actions, ensure_ascii=False, separators=(",", ":"))).sequence(sequence).uuid(delivery_uuid).build()
+        request = self._batch_update_card_request.builder().card_id(card_id).request_body(body).build()
+        return client.cardkit.v1.card.batch_update(request)
 
     def finish_streaming_card(
         self,
@@ -423,6 +477,7 @@ class FeishuChannel(Channel):
             self._ws_client = self._sdk.build_ws_client(
                 self.account,
                 self._on_message_receive,
+                self._on_card_action,
             )
             self._thread_ready.set()
             # lark-oapi start() blocks for the life of the connection.
@@ -579,11 +634,13 @@ class FeishuChannel(Channel):
         source: IncomingMessage,
         *,
         max_content_chars: int,
+        context: ReplyContext | None = None,
     ) -> ReplySession:
         return await FeishuProgressiveReplySession.begin(
             transport=self,
             source=source,
             max_content_chars=max_content_chars,
+            context=context,
             update_interval_seconds=self._stream_update_interval_seconds,
         )
 
@@ -651,6 +708,24 @@ class FeishuChannel(Channel):
             self._rest,
             card_id,
             content,
+            sequence=sequence,
+            delivery_uuid=delivery_uuid,
+        )
+        self._require_success(response)
+
+    async def batch_update_card(
+        self,
+        card_id: str,
+        actions: list[dict[str, object]],
+        *,
+        sequence: int,
+        delivery_uuid: str,
+    ) -> None:
+        response = await asyncio.to_thread(
+            self._sdk.batch_update_card,
+            self._rest,
+            card_id,
+            actions,
             sequence=sequence,
             delivery_uuid=delivery_uuid,
         )
@@ -729,6 +804,69 @@ class FeishuChannel(Channel):
                 "channel_event=normalize_failed channel=feishu account_id_hash=%s result=dropped error_code=FEISHU_EVENT_INVALID",
                 _short_hash(self.account_id),
             )
+
+    def _on_card_action(self, data: Any) -> Any:
+        """Normalize, claim and enqueue a card action within Feishu's deadline."""
+
+        try:
+            action = self._normalize_card_action(data)
+            loop = self._loop
+            if loop is None or loop.is_closed():
+                response = ChannelActionResponse(
+                    toast_type="error",
+                    content="服务正在重启，请稍后再试。",
+                )
+            else:
+                future = asyncio.run_coroutine_threadsafe(
+                    self._dispatch_action(action),
+                    loop,
+                )
+                # Feishu requires callback completion in three seconds. The
+                # application handler only validates an opaque token and
+                # enqueues work; all Redis/HTTP/card writes happen later.
+                response = future.result(timeout=2.5)
+        except TimeoutError:
+            response = ChannelActionResponse(
+                toast_type="error",
+                content="操作确认超时，请重试。",
+            )
+        except Exception:
+            response = ChannelActionResponse(
+                toast_type="error",
+                content="无效操作，请刷新后重试。",
+            )
+        return self._sdk.card_action_response(response)
+
+    def _normalize_card_action(self, data: Any) -> ChannelAction:
+        event = getattr(data, "event", None)
+        action = getattr(event, "action", None)
+        value = getattr(action, "value", None)
+        if not isinstance(value, dict):
+            raise ValueError("Feishu card action has no value")
+        action_id = value.get("action_id")
+        if not isinstance(action_id, str) or not action_id:
+            raise ValueError("Feishu card action has no opaque action ID")
+
+        operator = getattr(event, "operator", None)
+        context = getattr(event, "context", None)
+        header = getattr(data, "header", None)
+        operator_id = _first_non_empty(
+            getattr(operator, "open_id", None),
+            getattr(operator, "union_id", None),
+            getattr(operator, "user_id", None),
+        )
+        chat_id = _string(getattr(context, "open_chat_id", None))
+        message_id = _string(getattr(context, "open_message_id", None))
+        event_id = _string(getattr(header, "event_id", None))
+        if not operator_id or not chat_id or not message_id or not event_id:
+            raise ValueError("Feishu card action identity is incomplete")
+        return ChannelAction(
+            action_id=action_id,
+            operator_id=operator_id,
+            chat_id=chat_id,
+            message_id=message_id,
+            event_id=event_id,
+        )
 
     def _log_dispatch_result(self, future: Any, message_id: str) -> None:
         try:

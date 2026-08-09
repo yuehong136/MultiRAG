@@ -2,11 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 
 import pytest
 
 from api.channels import worker as worker_module
-from api.channels.core.base import IncomingMessage, MessageHandler
+from api.channels.core.base import (
+    ActionHandler,
+    ChannelAction,
+    ChannelActionResponse,
+    IncomingMessage,
+    MessageHandler,
+)
 from api.channels.feishu import provider as feishu_provider
 from api.channels.worker import ChannelWorker, ChannelWorkerError
 from common.app_config import AppConfig, ChannelsConfig, FeishuChannelConfig
@@ -15,12 +22,16 @@ from common.app_config import AppConfig, ChannelsConfig, FeishuChannelConfig
 class FakeChannel:
     def __init__(self) -> None:
         self.handler: MessageHandler | None = None
+        self.action_handler: ActionHandler | None = None
         self.is_running = False
         self.started = asyncio.Event()
         self.stopped = False
 
     def set_message_handler(self, handler: MessageHandler) -> None:
         self.handler = handler
+
+    def set_action_handler(self, handler: ActionHandler) -> None:
+        self.action_handler = handler
 
     async def start(self) -> None:
         self.is_running = True
@@ -50,6 +61,43 @@ class BlockingBridge(FakeBridge):
         if len(self.messages) == 1:
             self.first_started.set()
             await self.release_first.wait()
+
+
+class LifecycleBlockingBridge(BlockingBridge):
+    def __init__(self) -> None:
+        super().__init__()
+        self.queued: list[tuple[str, int]] = []
+        self.rejected: list[tuple[str, str]] = []
+        self.scheduler: Callable[[IncomingMessage], Awaitable[None]] | None = None
+        self.closed = False
+
+    def accepts_message(self, message: IncomingMessage) -> bool:
+        del message
+        return True
+
+    def set_message_scheduler(
+        self,
+        scheduler: Callable[[IncomingMessage], Awaitable[None]],
+    ) -> None:
+        self.scheduler = scheduler
+
+    def message_queued(
+        self,
+        message: IncomingMessage,
+        *,
+        queue_position: int,
+    ) -> None:
+        self.queued.append((message.message_id, queue_position))
+
+    def message_rejected(self, message: IncomingMessage, *, reason: str) -> None:
+        self.rejected.append((message.message_id, reason))
+
+    async def handle_action(self, action: ChannelAction) -> ChannelActionResponse:
+        del action
+        return ChannelActionResponse("success", "ok")
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 class FakeAgentClient:
@@ -112,6 +160,7 @@ def _worker(
     redis: FakeRedis,
     queue_size: int = 2,
     worker_concurrency: int = 1,
+    followup_queue_size: int = 5,
 ) -> ChannelWorker:
     return ChannelWorker(
         provider_name="feishu",
@@ -122,6 +171,7 @@ def _worker(
         redis=redis,
         queue_size=queue_size,
         worker_concurrency=worker_concurrency,
+        followup_queue_size=followup_queue_size,
     )
 
 
@@ -279,6 +329,54 @@ async def test_worker_preserves_same_conversation_arrival_order_with_two_consume
         "message-first",
         "message-second",
     ]
+
+
+@pytest.mark.asyncio
+async def test_worker_exposes_bounded_followup_positions_and_rejects_overflow() -> None:
+    channel = FakeChannel()
+    bridge = LifecycleBlockingBridge()
+    worker = _worker(
+        channel=channel,
+        bridge=bridge,
+        agent_client=FakeAgentClient(),
+        state_store=FakeStateStore(),
+        redis=FakeRedis(),
+        queue_size=10,
+        worker_concurrency=2,
+        followup_queue_size=2,
+    )
+    stop_event = asyncio.Event()
+    run_task = asyncio.create_task(worker.run(stop_event))
+    await channel.started.wait()
+    assert channel.handler is not None
+
+    for message_id in ("first", "followup-1", "followup-2", "overflow"):
+        await channel.handler(_message(message_id))
+
+    assert bridge.queued == [
+        ("first", 0),
+        ("followup-1", 1),
+        ("followup-2", 2),
+    ]
+    assert bridge.rejected == [("overflow", "FOLLOWUP_QUEUE_FULL")]
+    assert channel.action_handler is not None
+    assert bridge.scheduler is not None
+
+    await asyncio.wait_for(bridge.first_started.wait(), timeout=1)
+    bridge.release_first.set()
+    for _ in range(100):
+        if len(bridge.messages) == 3:
+            break
+        await asyncio.sleep(0.01)
+    stop_event.set()
+    await run_task
+
+    assert [message.message_id for message in bridge.messages] == [
+        "first",
+        "followup-1",
+        "followup-2",
+    ]
+    assert bridge.closed is True
 
 
 @pytest.mark.asyncio

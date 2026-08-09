@@ -6,7 +6,13 @@ from typing import Any
 
 import pytest
 
-from api.channels.core.base import IncomingMessage, OutgoingMessage, ReplySessionState
+from api.channels.core.base import (
+    ChannelAction,
+    ChannelActionResponse,
+    IncomingMessage,
+    OutgoingMessage,
+    ReplySessionState,
+)
 from api.channels.feishu.channel import (
     FeishuAccount,
     FeishuChannel,
@@ -60,12 +66,14 @@ class _FakeSDK:
     def __init__(self) -> None:
         self.websocket = _BlockingWebSocket()
         self.callback: Any = None
+        self.action_callback: Any = None
         self.bound_loop: asyncio.AbstractEventLoop | None = None
         self.replies: list[tuple[str, str]] = []
         self.reply_details: list[tuple[str, str, str, str | None]] = []
         self.creates: list[tuple[str, str]] = []
         self.cards: list[str] = []
         self.card_updates: list[tuple[str, str, int, str]] = []
+        self.card_batch_updates: list[tuple[str, list[dict[str, object]], int, str]] = []
         self.card_finishes: list[tuple[str, int, str]] = []
         self.reaction_creates: list[tuple[str, str]] = []
         self.reaction_deletes: list[tuple[str, str]] = []
@@ -78,9 +86,18 @@ class _FakeSDK:
         self.bound_loop = loop
         self.websocket.loop = loop
 
-    def build_ws_client(self, account: FeishuAccount, callback: Any) -> Any:
-        self.callback = callback
+    def build_ws_client(
+        self,
+        account: FeishuAccount,
+        message_callback: Any,
+        action_callback: Any,
+    ) -> Any:
+        self.callback = message_callback
+        self.action_callback = action_callback
         return self.websocket
+
+    def card_action_response(self, response: ChannelActionResponse) -> Any:
+        return response
 
     def reply_message(
         self,
@@ -113,6 +130,18 @@ class _FakeSDK:
         delivery_uuid: str,
     ) -> _Response:
         self.card_updates.append((card_id, content, sequence, delivery_uuid))
+        return self.response
+
+    def batch_update_card(
+        self,
+        client: Any,
+        card_id: str,
+        actions: list[dict[str, object]],
+        *,
+        sequence: int,
+        delivery_uuid: str,
+    ) -> _Response:
+        self.card_batch_updates.append((card_id, actions, sequence, delivery_uuid))
         return self.response
 
     def finish_streaming_card(
@@ -168,6 +197,24 @@ def _event(
                 message_type="text",
                 create_time="1710000000000",
                 content=content,
+            ),
+        ),
+    )
+
+
+def _card_action_event() -> Any:
+    return SimpleNamespace(
+        header=SimpleNamespace(event_id="card-event-1"),
+        event=SimpleNamespace(
+            operator=SimpleNamespace(
+                open_id="ou-user",
+                union_id="on-user",
+                user_id="user-id",
+            ),
+            action=SimpleNamespace(value={"action_id": "opaque-action-1"}),
+            context=SimpleNamespace(
+                open_chat_id="oc-chat",
+                open_message_id="om-bot-reply",
             ),
         ),
     )
@@ -282,6 +329,7 @@ def test_lark_sdk_builds_cardkit_reaction_and_idempotent_reply_requests() -> Non
             v1=SimpleNamespace(
                 card=SimpleNamespace(
                     create=capture("card_create"),
+                    batch_update=capture("card_batch_update"),
                     settings=capture("card_finish"),
                 ),
                 card_element=SimpleNamespace(content=capture("card_update")),
@@ -304,10 +352,17 @@ def test_lark_sdk_builds_cardkit_reaction_and_idempotent_reply_requests() -> Non
         sequence=1,
         delivery_uuid="update-uuid",
     )
+    sdk.batch_update_card(
+        client,
+        "card-1",
+        [{"action": "delete_elements", "params": {"element_ids": ["old"]}}],
+        sequence=2,
+        delivery_uuid="batch-uuid",
+    )
     sdk.finish_streaming_card(
         client,
         "card-1",
-        sequence=2,
+        sequence=3,
         delivery_uuid="finish-uuid",
     )
     sdk.create_reaction(client, "om-message", "Typing")
@@ -321,9 +376,12 @@ def test_lark_sdk_builds_cardkit_reaction_and_idempotent_reply_requests() -> Non
     assert captured["card_update"].element_id == "answer"
     assert captured["card_update"].body.sequence == 1
     assert captured["card_update"].body.uuid == "update-uuid"
+    assert json.loads(captured["card_batch_update"].body.actions)[0]["action"] == "delete_elements"
+    assert captured["card_batch_update"].body.sequence == 2
+    assert captured["card_batch_update"].body.uuid == "batch-uuid"
     settings = json.loads(captured["card_finish"].body.settings)
     assert settings["config"]["streaming_mode"] is False
-    assert captured["card_finish"].body.sequence == 2
+    assert captured["card_finish"].body.sequence == 3
     assert captured["reaction_create"].body.reaction_type.emoji_type == "Typing"
     assert captured["reaction_delete"].reaction_id == "reaction-1"
 
@@ -350,11 +408,12 @@ def test_lark_sdk_registers_read_receipt_as_intentionally_ignored() -> None:
         app_secret="app-secret",
     )
 
-    sdk.build_ws_client(account, lambda data: None)
+    sdk.build_ws_client(account, lambda data: None, lambda data: None)
 
     processors = captured["event_handler"]._processorMap
     assert "p2.im.message.receive_v1" in processors
     assert "p2.im.message.message_read_v1" in processors
+    assert "p2.card.action.trigger" in captured["event_handler"]._callback_processor_map
 
 
 async def test_sdk_callback_schedules_handler_without_waiting() -> None:
@@ -378,6 +437,30 @@ async def test_sdk_callback_schedules_handler_without_waiting() -> None:
     assert not finished.is_set()
     release.set()
     await asyncio.wait_for(finished.wait(), timeout=1)
+
+
+async def test_card_action_callback_normalizes_and_acknowledges_within_ws_thread() -> None:
+    channel, _ = _channel()
+    channel._loop = asyncio.get_running_loop()
+    received: list[ChannelAction] = []
+
+    async def handle(action: ChannelAction) -> ChannelActionResponse:
+        received.append(action)
+        return ChannelActionResponse("success", "accepted")
+
+    channel.set_action_handler(handle)
+    response = await asyncio.to_thread(channel._on_card_action, _card_action_event())
+
+    assert response == ChannelActionResponse("success", "accepted")
+    assert received == [
+        ChannelAction(
+            action_id="opaque-action-1",
+            operator_id="ou-user",
+            chat_id="oc-chat",
+            message_id="om-bot-reply",
+            event_id="card-event-1",
+        )
+    ]
 
 
 async def test_send_replies_to_source_message_or_creates_chat_message() -> None:
@@ -444,6 +527,7 @@ async def test_begin_reply_wires_cardkit_and_reaction_operations_through_sdk() -
     assert sdk.card_updates[0][1] == "回答"
     assert sdk.card_updates[0][2] == 1
     assert sdk.card_finishes[0][1] == 2
+    assert sdk.card_batch_updates[0][2] == 3
 
 
 async def test_start_and_stop_use_isolated_thread_with_bounded_join() -> None:

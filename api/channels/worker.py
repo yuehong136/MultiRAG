@@ -9,7 +9,7 @@ import os
 import signal
 import socket
 import time
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol, runtime_checkable
@@ -20,7 +20,13 @@ from api.channel_providers import provider_spec
 from api.channel_runtime.schemas import RuntimeState
 from api.channels.agent_bridge import FeishuAgentBridge, MultiRAGAgentClient
 from api.channels.binding_bridge import BindingBridge
-from api.channels.core.base import IncomingMessage, MessageHandler
+from api.channels.core.base import (
+    ActionHandler,
+    ChannelAction,
+    ChannelActionResponse,
+    IncomingMessage,
+    MessageHandler,
+)
 from api.channels.provider import ChannelWorkerError, supported_provider_names, worker_provider
 from api.channels.runtime_client import ChannelRuntimeClient, MultiRAGBindingExecutionClient
 from api.channels.state_store import RedisChannelStateStore
@@ -58,6 +64,8 @@ class WorkerChannel(Protocol):
 
     def set_message_handler(self, handler: MessageHandler) -> None: ...
 
+    def set_action_handler(self, handler: ActionHandler) -> None: ...
+
     async def start(self) -> None: ...
 
     async def stop(self) -> None: ...
@@ -66,6 +74,26 @@ class WorkerChannel(Protocol):
 @runtime_checkable
 class MessageBridge(Protocol):
     async def handle_message(self, message: IncomingMessage) -> None: ...
+
+
+@runtime_checkable
+class LifecycleMessageBridge(Protocol):
+    """Optional bridge hooks for visible queue and card-action lifecycles."""
+
+    def accepts_message(self, message: IncomingMessage) -> bool: ...
+
+    def set_message_scheduler(
+        self,
+        scheduler: Callable[[IncomingMessage], Awaitable[None]],
+    ) -> None: ...
+
+    def message_queued(self, message: IncomingMessage, *, queue_position: int) -> None: ...
+
+    def message_rejected(self, message: IncomingMessage, *, reason: str) -> None: ...
+
+    async def handle_action(self, action: ChannelAction) -> ChannelActionResponse: ...
+
+    async def close(self) -> None: ...
 
 
 @runtime_checkable
@@ -144,6 +172,7 @@ class ChannelWorker:
         redis: WorkerRedis,
         queue_size: int,
         worker_concurrency: int,
+        followup_queue_size: int = 5,
     ) -> None:
         self._provider_name = provider_name
         self._channel = channel
@@ -154,6 +183,9 @@ class ChannelWorker:
         self._queue: asyncio.Queue[_QueuedMessage] = asyncio.Queue(maxsize=queue_size)
         self._conversation_orders: dict[str, _ConversationOrder] = {}
         self._worker_concurrency = worker_concurrency
+        if followup_queue_size < 1:
+            raise ValueError("followup_queue_size must be positive")
+        self._followup_queue_size = followup_queue_size
         self._tasks: list[asyncio.Task[None]] = []
         self._owner_token: str | None = None
         self._stop_event: asyncio.Event | None = None
@@ -173,6 +205,9 @@ class ChannelWorker:
 
             self._accepting_messages = True
             self._channel.set_message_handler(self.enqueue)
+            if isinstance(self._bridge, LifecycleMessageBridge):
+                self._bridge.set_message_scheduler(self.enqueue)
+                self._channel.set_action_handler(self._bridge.handle_action)
             self._tasks = [asyncio.create_task(self._consume(index), name=f"{self._provider_name}-channel-worker-{index}") for index in range(self._worker_concurrency)]
             self._tasks.append(asyncio.create_task(self._renew_leader(), name=f"{self._provider_name}-channel-leader-renew"))
             await self._channel.start()
@@ -189,6 +224,10 @@ class ChannelWorker:
     async def enqueue(self, message: IncomingMessage) -> None:
         """Fast SDK callback target: no Redis, HTTP, or reply I/O is allowed."""
 
+        lifecycle = self._bridge if isinstance(self._bridge, LifecycleMessageBridge) else None
+        if lifecycle is not None and not lifecycle.accepts_message(message):
+            return
+
         if not self._accepting_messages:
             LOGGER.warning(
                 "channel_event=queue_rejected trace_id=%s message_id_hash=%s result=dropped error_code=WORKER_STOPPING",
@@ -203,6 +242,18 @@ class ChannelWorker:
             order = _ConversationOrder(condition=asyncio.Condition())
             self._conversation_orders[order_key] = order
         ticket = order.next_ticket
+        queue_position = ticket - order.next_to_run
+        if lifecycle is not None and queue_position > self._followup_queue_size:
+            if order.pending == 0:
+                self._conversation_orders.pop(order_key, None)
+            lifecycle.message_rejected(message, reason="FOLLOWUP_QUEUE_FULL")
+            LOGGER.warning(
+                "channel_event=followup_queue_full trace_id=%s message_id_hash=%s queue_position=%s result=rejected error_code=FOLLOWUP_QUEUE_FULL",
+                _short_hash(message.execution_id),
+                _short_hash(message.execution_id),
+                queue_position,
+            )
+            return
 
         try:
             self._queue.put_nowait(
@@ -216,15 +267,19 @@ class ChannelWorker:
         except asyncio.QueueFull:
             if order.pending == 0:
                 self._conversation_orders.pop(order_key, None)
+            if lifecycle is not None:
+                lifecycle.message_rejected(message, reason="GLOBAL_QUEUE_FULL")
             LOGGER.error(
                 "channel_event=queue_full trace_id=%s message_id_hash=%s result=dropped error_code=QUEUE_FULL",
-                _short_hash(message.message_id),
-                _short_hash(message.message_id),
+                _short_hash(message.execution_id),
+                _short_hash(message.execution_id),
             )
             return
 
         order.next_ticket += 1
         order.pending += 1
+        if lifecycle is not None:
+            lifecycle.message_queued(message, queue_position=queue_position)
 
     async def close(self, *, drain: bool = True) -> None:
         self._accepting_messages = False
@@ -245,6 +300,9 @@ class ChannelWorker:
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
+
+        if isinstance(self._bridge, LifecycleMessageBridge):
+            await self._bridge.close()
 
         if self._owner_token is not None:
             try:
@@ -283,8 +341,8 @@ class ChannelWorker:
                 queue_wait_ms = round((time.monotonic() - queued.enqueued_at) * 1000)
                 LOGGER.info(
                     "channel_event=message_dequeued trace_id=%s message_id_hash=%s queue_wait_ms=%s result=ok",
-                    _short_hash(queued.message.message_id),
-                    _short_hash(queued.message.message_id),
+                    _short_hash(queued.message.execution_id),
+                    _short_hash(queued.message.execution_id),
                     queue_wait_ms,
                 )
                 try:
@@ -292,8 +350,8 @@ class ChannelWorker:
                 except Exception:
                     LOGGER.error(
                         "channel_event=handler_failed trace_id=%s message_id_hash=%s result=failed error_code=MESSAGE_HANDLER_FAILURE",
-                        _short_hash(queued.message.message_id),
-                        _short_hash(queued.message.message_id),
+                        _short_hash(queued.message.execution_id),
+                        _short_hash(queued.message.execution_id),
                     )
             finally:
                 if turn_acquired:
@@ -417,6 +475,7 @@ def _build_worker(app_config: AppConfig, channel_config: FeishuChannelConfig) ->
         redis=redis,
         queue_size=channel_config.queue_size,
         worker_concurrency=channel_config.worker_concurrency,
+        followup_queue_size=channel_config.followup_queue_size,
     )
 
 
@@ -505,6 +564,7 @@ async def _run_managed_channel(
             redis=redis,
             queue_size=tuning.queue_size,
             worker_concurrency=tuning.worker_concurrency,
+            followup_queue_size=tuning.followup_queue_size,
         )
         await _safe_runtime_report(
             runtime_client,

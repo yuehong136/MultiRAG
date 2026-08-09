@@ -11,7 +11,14 @@ from typing import cast
 import pytest
 from beartype.roar import BeartypeCallHintParamViolation
 
-from api.channels.core.base import IncomingMessage, ReplySessionState, ReplySessionStateError
+from api.channels.core.base import (
+    IncomingMessage,
+    ReplyActionIds,
+    ReplyContext,
+    ReplySessionState,
+    ReplySessionStateError,
+    ReplyStatus,
+)
 from api.channels.core.reply import SERVICE_UNAVAILABLE_TEXT
 from api.channels.feishu.reply import (
     FeishuProgressiveReplySession,
@@ -41,6 +48,7 @@ class _Transport:
         self.card_replies: list[tuple[str, str, str]] = []
         self.update_attempted = asyncio.Event()
         self.updates: list[tuple[str, str, int, str]] = []
+        self.batch_updates: list[tuple[str, list[dict[str, object]], int, str]] = []
         self.finishes: list[tuple[str, int, str]] = []
         self.fallback_attempts: list[tuple[str, str, str, str]] = []
         self.fallbacks: list[tuple[str, str, str, str]] = []
@@ -81,6 +89,17 @@ class _Transport:
         self.update_attempted.set()
         self._fail("card_update")
         self.updates.append((card_id, content, sequence, delivery_uuid))
+
+    async def batch_update_card(
+        self,
+        card_id: str,
+        actions: list[dict[str, object]],
+        *,
+        sequence: int,
+        delivery_uuid: str,
+    ) -> None:
+        self._fail("card_batch_update")
+        self.batch_updates.append((card_id, actions, sequence, delivery_uuid))
 
     async def finish_streaming_card(
         self,
@@ -278,7 +297,7 @@ print('still streaming')"""
     assert all(element[0]["tag"] == "text" for element in post["zh_cn"]["content"])
 
 
-def test_streaming_card_is_json_2_with_one_stable_markdown_element() -> None:
+def test_streaming_card_is_json_2_with_lifecycle_and_answer_elements() -> None:
     card = json.loads(streaming_card_json())
 
     assert card["schema"] == "2.0"
@@ -288,13 +307,61 @@ def test_streaming_card_is_json_2_with_one_stable_markdown_element() -> None:
         "print_frequency_ms": {"default": 70},
         "print_strategy": "fast",
     }
-    assert card["body"]["elements"] == [
-        {
-            "tag": "markdown",
-            "element_id": "answer",
-            "content": "正在生成回答…",
-        }
+    assert card["config"]["update_multi"] is True
+    assert [element["element_id"] for element in card["body"]["elements"]] == [
+        "status",
+        "answer",
+        "actions",
     ]
+    assert card["body"]["elements"][0]["content"] == "✨ 正在生成"
+    assert card["body"]["elements"][1]["content"] == "正在生成回答…"
+
+
+def test_queued_card_shows_position_and_only_opaque_action_value() -> None:
+    card = json.loads(
+        streaming_card_json(
+            ReplyContext(
+                status=ReplyStatus.QUEUED,
+                queue_position=3,
+                actions=ReplyActionIds(cancel="opaque-cancel-id"),
+            )
+        )
+    )
+
+    status, _answer, actions = card["body"]["elements"]
+    assert status["content"] == "⏳ 已排队 · 前面还有 3 条"
+    assert actions["actions"][0]["value"] == {"action_id": "opaque-cancel-id"}
+    assert "question" not in json.dumps(actions)
+
+
+@pytest.mark.asyncio
+async def test_queued_session_starts_typing_only_when_running_and_can_cancel() -> None:
+    transport = _Transport()
+    session = await FeishuProgressiveReplySession.begin(
+        transport=transport,
+        source=_source(),
+        max_content_chars=4000,
+        context=ReplyContext(
+            status=ReplyStatus.QUEUED,
+            queue_position=1,
+            actions=ReplyActionIds(
+                cancel="cancel-id",
+                regenerate="regenerate-id",
+            ),
+        ),
+        clock=_Clock(),
+    )
+
+    assert transport.reactions_added == []
+    await session.set_status(ReplyStatus.RUNNING)
+    await asyncio.sleep(0)
+    assert transport.reactions_added == [("message-1", "Typing")]
+    await session.cancel()
+
+    assert session.state is ReplySessionState.CANCELLED
+    assert transport.finishes[0][1] < transport.batch_updates[-1][2]
+    final_actions = transport.batch_updates[-1][1][2]["params"]["element"]
+    assert final_actions["actions"][0]["value"] == {"action_id": "regenerate-id"}
 
 
 def test_delivery_uuid_is_deterministic_opaque_and_stage_scoped() -> None:

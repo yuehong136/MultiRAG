@@ -55,6 +55,7 @@ class IncomingMessage:
     sender_type: str = ""
     event_id: str = ""
     create_time: str = ""
+    request_id: str = ""
 
     def __init__(
         self,
@@ -72,6 +73,7 @@ class IncomingMessage:
         sender_type: str = "",
         event_id: str = "",
         create_time: str = "",
+        request_id: str = "",
     ) -> None:
         """Accept the RAGFlow ``text`` contract and local ``content`` alias."""
 
@@ -93,12 +95,25 @@ class IncomingMessage:
         self.sender_type = sender_type
         self.event_id = event_id
         self.create_time = create_time
+        self.request_id = request_id
 
     @property
     def text(self) -> str:
         """Compatibility alias used by the upstream channel contract."""
 
         return self.content
+
+    @property
+    def execution_id(self) -> str:
+        """Stable idempotency key for this execution attempt.
+
+        Ordinary provider messages keep using their message ID. Internally
+        generated attempts (for example a card's "regenerate" action) retain
+        the original source message for reply threading while carrying a fresh
+        request ID for execution and delivery idempotency.
+        """
+
+        return self.request_id or self.message_id
 
 
 @dataclass(slots=True, init=False)
@@ -146,6 +161,64 @@ class ReplySessionState(StrEnum):
     OPEN = "open"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class ReplyStatus(StrEnum):
+    """User-visible lifecycle of one source message's reply."""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    FINAL = "final"
+    ERROR = "error"
+    CANCELLED = "cancelled"
+
+
+class ReplyActionKind(StrEnum):
+    """Low-risk actions supported by a completed or active reply."""
+
+    CANCEL = "cancel"
+    REGENERATE = "regenerate"
+    HELPFUL = "helpful"
+    UNHELPFUL = "unhelpful"
+
+
+@dataclass(frozen=True, slots=True)
+class ReplyActionIds:
+    """Opaque server-generated IDs rendered into provider controls."""
+
+    cancel: str = ""
+    regenerate: str = ""
+    helpful: str = ""
+    unhelpful: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ReplyContext:
+    """Initial lifecycle state and controls for a reply session."""
+
+    status: ReplyStatus = ReplyStatus.RUNNING
+    queue_position: int = 0
+    actions: ReplyActionIds = ReplyActionIds()
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelAction:
+    """Provider-normalized card interaction with no trusted business data."""
+
+    action_id: str
+    operator_id: str
+    chat_id: str
+    message_id: str
+    event_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelActionResponse:
+    """Small synchronous acknowledgement returned to the provider."""
+
+    toast_type: str
+    content: str
 
 
 class ReplySessionStateError(RuntimeError):
@@ -159,11 +232,28 @@ class ReplySession(Protocol):
     @property
     def state(self) -> ReplySessionState: ...
 
+    @property
+    def reply_message_id(self) -> str: ...
+
     async def append(self, content: str) -> None: ...
+
+    async def set_status(
+        self,
+        status: ReplyStatus,
+        *,
+        queue_position: int = 0,
+    ) -> None: ...
 
     async def complete(self) -> None: ...
 
     async def fail(self, error_code: str) -> None: ...
+
+    async def cancel(self) -> None: ...
+
+    async def acknowledge_feedback(self, *, helpful: bool) -> None: ...
+
+
+ActionHandler = Callable[[ChannelAction], Awaitable[ChannelActionResponse]]
 
 
 class Channel(ABC):
@@ -174,9 +264,15 @@ class Channel(ABC):
 
     def __init__(self) -> None:
         self._handler: MessageHandler | None = None
+        self._action_handler: ActionHandler | None = None
 
     def set_message_handler(self, handler: MessageHandler) -> None:
         self._handler = handler
+
+    def set_action_handler(self, handler: ActionHandler) -> None:
+        """Register the application callback for provider card actions."""
+
+        self._action_handler = handler
 
     async def _dispatch(self, message: IncomingMessage) -> None:
         if self._handler is None:
@@ -191,11 +287,26 @@ class Channel(ABC):
                 _short_hash(message.message_id),
             )
 
+    async def _dispatch_action(self, action: ChannelAction) -> ChannelActionResponse:
+        if self._action_handler is None:
+            return ChannelActionResponse(toast_type="warning", content="该操作当前不可用。")
+        try:
+            return await self._action_handler(action)
+        except Exception:  # callback boundary: acknowledge safely within the provider deadline
+            LOGGER.error(
+                "channel_event=action_dispatch_failed channel=%s account_id_hash=%s action_id_hash=%s result=failed error_code=ACTION_HANDLER_FAILURE",
+                self.channel_id,
+                _short_hash(self.account_id),
+                _short_hash(action.action_id),
+            )
+            return ChannelActionResponse(toast_type="error", content="操作失败，请稍后再试。")
+
     async def begin_reply(
         self,
         source: IncomingMessage,
         *,
         max_content_chars: int,
+        context: ReplyContext | None = None,
     ) -> ReplySession:
         """Begin a buffered text reply unless a provider offers progression."""
 
@@ -205,6 +316,7 @@ class Channel(ABC):
             channel=self,
             source=source,
             max_content_chars=max_content_chars,
+            context=context or ReplyContext(),
         )
 
     @abstractmethod

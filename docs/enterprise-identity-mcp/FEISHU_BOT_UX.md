@@ -297,6 +297,12 @@ RAG 来源必须通过 `references_ready` 结构化事件输出，而不是从�
 
 首期可先做安全的“排队 + 纯生成取消”；steering/中途修改当前 run 留到执行引擎有明确语义后。
 
+> **EIM-U4 / CHN-U9 已实现的首期边界（2026-08-09）**：worker 是唯一会话队列所有者，
+> `followup_queue_size` 默认 5；每条正常问题有独立 queued/running/final/error/cancelled 卡片，
+> 溢出返回 busy。停止按钮取消当前 SSE 子任务或阻止 queued 项启动，卡片明确声明外部操作不视为
+> 已撤销。重新生成以新 request ID 重入同一队列；反馈与操作均绑定操作者、chat、回复卡片和
+> one-shot opaque action ID。`/new` 清队列确认、跨进程恢复和 steering 不在本首期内。
+
 ---
 
 ## 7. 话题、群聊和会话键

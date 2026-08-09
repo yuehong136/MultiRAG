@@ -343,6 +343,7 @@ class FeishuChannelConfig(_Section):
     release_marker: str = ""
     allowed_open_ids: list[str] = Field(default_factory=list)
     queue_size: PositiveInt = 100
+    followup_queue_size: PositiveInt = 5
     worker_concurrency: PositiveInt = 2
     session_ttl_seconds: PositiveInt = 86400
     dedupe_ttl_seconds: PositiveInt = 86400
@@ -463,6 +464,7 @@ class DingTalkChannelConfig(_Section):
     """
 
     queue_size: PositiveInt = 100
+    followup_queue_size: PositiveInt = 5
     worker_concurrency: PositiveInt = 2
     session_ttl_seconds: PositiveInt = 86400
     dedupe_ttl_seconds: PositiveInt = 86400

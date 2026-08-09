@@ -157,7 +157,8 @@ Managed 模式是管理页面和生产部署使用的长期架构：
   -> multirag.canvas_agent 或 multirag.dialog
   -> 原有 execution SSE
   -> MultiRAGBindingExecutionClient.stream()
-  -> BindingBridge -> transport-neutral ReplySession
+  -> ChannelWorker per-conversation bounded queue
+  -> BindingBridge lifecycle -> transport-neutral ReplySession
      ├── 飞书：Typing -> CardKit 2.0 -> throttled patch -> final flush/finish
      └── 普通 Provider：buffered complete -> Channel.send() 一次
 ```
@@ -172,7 +173,8 @@ Managed worker 的唯一核心执行路径是 `MultiRAGBindingExecutionClient.st
 错误码。`BindingBridge` 直接按序把类型化 delta 写入 `ReplySession`，不再调用 `ask()`；普通
 Provider 的默认 buffered session 只在成功完成时发送一次。飞书 override `begin_reply()`，把同一批
 delta 渲染到一个 CardKit 2.0 streaming card；卡片失败只切换交付方式，不会重新执行 Agent。
-`reply_to_message_id`、Redis claim、同会话串行和 executed/replied tombstone 语义保持不变。
+`reply_to_message_id`、Redis claim 和 executed/replied tombstone 语义保持不变。同会话串行只有
+`ChannelWorker` 一个所有者；Bridge 不再叠第二把会话锁。
 
 `ask()` 仅是消费同一个 `stream()` 并聚合为 `AgentReply` 的阶段性兼容 facade，用于迁移和回滚
 安全；它不是推荐接口，新代码不得增加调用。生产调用归零且 EIM-U1 稳定后应在独立任务中删除。
@@ -206,6 +208,29 @@ Renderer 独立于 Bridge：CardKit Markdown 只保留 `https` 链接，模型�
 修改权限后重新发布并安装应用。Reaction 始终是 best-effort；缺权限不会阻塞卡片或文本回答。
 应用若订阅 `im.message.message_read_v1`，worker 会消费并忽略该回执，避免 SDK 把无业务用途的已读
 事件记成 `processor not found` ERROR。
+
+### 连续追问、取消和反馈
+
+Managed binding 默认允许当前运行项之后再排 5 条 follow-up，可用 provider 配置的
+`followup_queue_size` 调整。每条可执行的来源消息会立刻创建自己的卡片，生命周期是
+`queued -> running -> final/error/cancelled`；queued 卡只显示当前位置，不承诺等待时间。会话队列或
+worker 全局队列满时，Bridge 会先 claim 消息再回复固定 busy 文案，不静默丢弃。重新生成不是旁路
+调用：它保留原来源消息用于 reply threading，以飞书回调 event ID 建立新的 `request_id`，然后重新
+进入同一会话队列，因此不会与当前生成并发写同一会话。
+
+飞书完成卡片在关闭 `streaming_mode` 后，使用 CardKit batch update 添加“重新生成 / 有帮助 /
+没帮助”；生成中的卡片提供“停止生成”。按钮 value 只有 24 小时有效的不透明 action ID。worker
+内存记录把 action 绑定到当前 binding 进程、操作者、chat 和实际回复卡片 ID，并执行 one-shot claim；
+重复点击不会重复取消、重新生成或反馈。worker 重启后旧卡片按钮安全过期，不会恢复执行。
+`card.action.trigger` 长连接回调的同步路径只做规范化、绑定校验、幂等 claim 和入队，在飞书 3 秒
+窗口内返回 toast；Redis、execution 和卡片更新均在回调确认之后异步完成。
+
+“停止生成”会取消当前 execution SSE 子任务或阻止 queued 项启动，并把卡片改为已停止；它只表示
+停止等待后续模型/RAG 输出。由于现有 execution event 还没有可验证的 tool side-effect boundary，
+卡片明确提示“外部操作不视为已撤销”，不会把网络结果未知或已经发起的副作用伪装成回滚成功。
+低风险反馈会幂等更新原卡片并发出不含原文/身份明文的 `feedback_recorded` 结构化事件；产品级反馈
+仓库与分析面板仍不在本阶段范围。`/new` 清空未运行 follow-up 与中途 steering 也继续等待执行引擎
+具备明确语义后单独实现。
 
 ### Canvas 发布版本兼容策略
 

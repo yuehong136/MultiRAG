@@ -12,12 +12,22 @@ from collections.abc import Awaitable, Callable
 from typing import Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
-from api.channels.core.base import IncomingMessage, ReplySessionState, ReplySessionStateError
+from api.channels.core.base import (
+    IncomingMessage,
+    ReplyActionIds,
+    ReplyContext,
+    ReplySessionState,
+    ReplySessionStateError,
+    ReplyStatus,
+)
 from api.channels.core.reply import SERVICE_UNAVAILABLE_TEXT, strip_reasoning, truncate_answer
+from api.channels.reply_session import CANCELLED_TEXT
 
 LOGGER = logging.getLogger(__name__)
 
 CARD_ANSWER_ELEMENT_ID = "answer"
+CARD_STATUS_ELEMENT_ID = "status"
+CARD_ACTIONS_ELEMENT_ID = "actions"
 _CARD_GENERATING_TEXT = "正在生成回答…"
 _CARD_BYTE_LIMIT = 24_000
 _CARD_PRINT_FREQUENCY_MS = 70
@@ -51,6 +61,15 @@ class FeishuReplyTransport(Protocol):
         self,
         card_id: str,
         content: str,
+        *,
+        sequence: int,
+        delivery_uuid: str,
+    ) -> None: ...
+
+    async def batch_update_card(
+        self,
+        card_id: str,
+        actions: list[dict[str, object]],
         *,
         sequence: int,
         delivery_uuid: str,
@@ -124,28 +143,117 @@ def render_post(content: str, *, max_chars: int) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
-def streaming_card_json() -> str:
-    """Build the minimal CardKit JSON 2.0 streaming answer shell."""
+def _status_text(status: ReplyStatus, *, queue_position: int = 0) -> str:
+    if status is ReplyStatus.QUEUED:
+        if queue_position > 0:
+            return f"⏳ 已排队 · 前面还有 {queue_position} 条"
+        return "⏳ 已接收 · 等待开始"
+    if status is ReplyStatus.RUNNING:
+        return "✨ 正在生成"
+    if status is ReplyStatus.FINAL:
+        return "✅ 回答完成"
+    if status is ReplyStatus.CANCELLED:
+        return "⏹️ 已停止生成 · 外部操作不视为已撤销"
+    return "⚠️ 生成失败"
+
+
+def _summary_text(status: ReplyStatus) -> str:
+    if status is ReplyStatus.FINAL:
+        return "回答完成"
+    if status is ReplyStatus.CANCELLED:
+        return "已停止生成"
+    if status is ReplyStatus.ERROR:
+        return "生成失败"
+    if status is ReplyStatus.QUEUED:
+        return "[排队中]"
+    return "[生成中]"
+
+
+def _button(label: str, action_id: str, *, button_type: str = "default") -> dict[str, object]:
+    return {
+        "tag": "button",
+        "text": {"tag": "plain_text", "content": label},
+        "type": button_type,
+        # The provider callback carries only this opaque value. Identity,
+        # question text and execution parameters stay in server-owned state.
+        "value": {"action_id": action_id},
+    }
+
+
+def _action_element(
+    status: ReplyStatus,
+    actions: ReplyActionIds,
+    *,
+    feedback: bool | None = None,
+) -> dict[str, object]:
+    if feedback is not None:
+        content = "感谢反馈：这个回答有帮助。" if feedback else "感谢反馈：我们会继续改进。"
+        return {
+            "tag": "markdown",
+            "element_id": CARD_ACTIONS_ELEMENT_ID,
+            "content": content,
+        }
+
+    buttons: list[dict[str, object]] = []
+    if status in {ReplyStatus.QUEUED, ReplyStatus.RUNNING} and actions.cancel:
+        buttons.append(_button("停止生成", actions.cancel))
+    elif status is ReplyStatus.FINAL:
+        if actions.regenerate:
+            buttons.append(_button("重新生成", actions.regenerate))
+        if actions.helpful:
+            buttons.append(_button("有帮助", actions.helpful, button_type="primary"))
+        if actions.unhelpful:
+            buttons.append(_button("没帮助", actions.unhelpful))
+    elif status in {ReplyStatus.ERROR, ReplyStatus.CANCELLED} and actions.regenerate:
+        buttons.append(_button("重新生成", actions.regenerate))
+
+    if not buttons:
+        return {
+            "tag": "markdown",
+            "element_id": CARD_ACTIONS_ELEMENT_ID,
+            "content": " ",
+        }
+    return {
+        "tag": "action",
+        "element_id": CARD_ACTIONS_ELEMENT_ID,
+        "actions": buttons,
+    }
+
+
+def streaming_card_json(context: ReplyContext | None = None) -> str:
+    """Build one CardKit JSON 2.0 shell for the full reply lifecycle."""
+
+    initial = context or ReplyContext()
 
     card = {
         "schema": "2.0",
         "config": {
+            "update_multi": True,
             "streaming_mode": True,
             "streaming_config": {
                 "print_step": {"default": _CARD_PRINT_STEP},
                 "print_frequency_ms": {"default": _CARD_PRINT_FREQUENCY_MS},
                 "print_strategy": "fast",
             },
-            "summary": {"content": "[生成中]"},
+            "summary": {"content": _summary_text(initial.status)},
         },
         "body": {
             "direction": "vertical",
             "elements": [
                 {
                     "tag": "markdown",
+                    "element_id": CARD_STATUS_ELEMENT_ID,
+                    "content": _status_text(
+                        initial.status,
+                        queue_position=initial.queue_position,
+                    ),
+                },
+                {
+                    "tag": "markdown",
                     "element_id": CARD_ANSWER_ELEMENT_ID,
                     "content": _CARD_GENERATING_TEXT,
-                }
+                },
+                _action_element(initial.status, initial.actions),
             ],
         },
     }
@@ -161,6 +269,7 @@ class FeishuProgressiveReplySession:
         transport: FeishuReplyTransport,
         source: IncomingMessage,
         max_content_chars: int,
+        context: ReplyContext = ReplyContext(),
         update_interval_seconds: float = 0.25,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -172,6 +281,9 @@ class FeishuProgressiveReplySession:
         self._transport = transport
         self._source = source
         self._max_content_chars = max_content_chars
+        self._reply_status = context.status
+        self._queue_position = context.queue_position
+        self._action_ids = context.actions
         self._update_interval_seconds = update_interval_seconds
         self._clock = clock
         self._sleep = sleep
@@ -181,6 +293,7 @@ class FeishuProgressiveReplySession:
         self._reaction_id = ""
         self._reaction_task: asyncio.Task[None] | None = None
         self._card_id = ""
+        self._reply_message_id = ""
         self._card_visible = False
         self._card_active = False
         self._sequence = 0
@@ -196,6 +309,7 @@ class FeishuProgressiveReplySession:
         transport: FeishuReplyTransport,
         source: IncomingMessage,
         max_content_chars: int,
+        context: ReplyContext | None = None,
         update_interval_seconds: float = 0.25,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -204,6 +318,7 @@ class FeishuProgressiveReplySession:
             transport=transport,
             source=source,
             max_content_chars=max_content_chars,
+            context=context or ReplyContext(),
             update_interval_seconds=update_interval_seconds,
             clock=clock,
             sleep=sleep,
@@ -215,6 +330,10 @@ class FeishuProgressiveReplySession:
     def state(self) -> ReplySessionState:
         return self._state
 
+    @property
+    def reply_message_id(self) -> str:
+        return self._reply_message_id
+
     async def append(self, content: str) -> None:
         self._require_open("append")
         if not isinstance(content, str):
@@ -223,6 +342,24 @@ class FeishuProgressiveReplySession:
         if not content or not self._card_active:
             return
         self._schedule_card_update()
+
+    async def set_status(
+        self,
+        status: ReplyStatus,
+        *,
+        queue_position: int = 0,
+    ) -> None:
+        self._require_open("set status")
+        if status not in {ReplyStatus.QUEUED, ReplyStatus.RUNNING}:
+            raise ValueError("only non-terminal reply status can be set directly")
+        if status is self._reply_status:
+            return
+        self._reply_status = status
+        self._queue_position = queue_position
+        if status is ReplyStatus.RUNNING and self._reaction_task is None:
+            self._reaction_task = asyncio.create_task(self._add_typing())
+        if self._card_active:
+            await self._patch_lifecycle(status, queue_position=queue_position)
 
     async def complete(self) -> None:
         self._require_open("complete")
@@ -252,6 +389,11 @@ class FeishuProgressiveReplySession:
                 # would duplicate delivery, so leave the card to its platform
                 # auto-close window and report only a safe operational signal.
                 self._log("card_finish_failed", "FEISHU_CARD_FINISH_FAILED")
+                return
+            try:
+                await self._patch_lifecycle(ReplyStatus.FINAL)
+            except Exception:
+                self._log("card_controls_failed", "FEISHU_CARD_CONTROLS_FAILED")
         finally:
             await self._remove_typing()
 
@@ -269,6 +411,7 @@ class FeishuProgressiveReplySession:
                 try:
                     await self._patch_answer(answer=SERVICE_UNAVAILABLE_TEXT)
                     await self._finish_card()
+                    await self._patch_lifecycle(ReplyStatus.ERROR)
                     return
                 except Exception:
                     self._card_active = False
@@ -277,17 +420,56 @@ class FeishuProgressiveReplySession:
         finally:
             await self._remove_typing()
 
+    async def cancel(self) -> None:
+        self._require_open("cancel")
+        self._state = ReplySessionState.CANCELLED
+        self._reply_status = ReplyStatus.CANCELLED
+        self._terminal_flush_requested = True
+
+        try:
+            await self._drain_card_update()
+            self._parts.clear()
+            if self._card_active:
+                try:
+                    await self._patch_answer(answer=CANCELLED_TEXT)
+                    await self._finish_card()
+                    await self._patch_lifecycle(ReplyStatus.CANCELLED)
+                    return
+                except Exception:
+                    self._card_active = False
+                    self._log("card_cancel_render_failed", "FEISHU_CARD_CANCEL_RENDER_FAILED")
+            await self._fallback(CANCELLED_TEXT, stage="cancelled")
+        finally:
+            await self._remove_typing()
+
+    async def acknowledge_feedback(self, *, helpful: bool) -> None:
+        if self._state is not ReplySessionState.COMPLETED or not self._card_id:
+            return
+        try:
+            await self._patch_lifecycle(ReplyStatus.FINAL, feedback=helpful)
+        except Exception:
+            self._log("card_feedback_failed", "FEISHU_CARD_FEEDBACK_FAILED")
+
     async def _start_progression(self) -> None:
         # Reaction and card creation start concurrently. A slow best-effort ack
         # must never hold the first card behind it. The task catches all of its
         # own failures and removes a reaction that arrives after the reply has
         # already reached a terminal state.
-        self._reaction_task = asyncio.create_task(self._add_typing())
-        await asyncio.sleep(0)
+        if self._reply_status is ReplyStatus.RUNNING:
+            self._reaction_task = asyncio.create_task(self._add_typing())
+            await asyncio.sleep(0)
 
         try:
-            self._card_id = await self._transport.create_streaming_card(streaming_card_json())
-            await self._transport.reply_card(
+            self._card_id = await self._transport.create_streaming_card(
+                streaming_card_json(
+                    ReplyContext(
+                        status=self._reply_status,
+                        queue_position=self._queue_position,
+                        actions=self._action_ids,
+                    )
+                )
+            )
+            self._reply_message_id = await self._transport.reply_card(
                 self._source.message_id,
                 self._card_id,
                 delivery_uuid=delivery_uuid(self._source, "running_card"),
@@ -334,6 +516,58 @@ class FeishuProgressiveReplySession:
             delivery_uuid=delivery_uuid(self._source, f"card_update:{sequence}"),
         )
         self._last_rendered = rendered
+
+    async def _patch_lifecycle(
+        self,
+        status: ReplyStatus,
+        *,
+        queue_position: int = 0,
+        feedback: bool | None = None,
+    ) -> None:
+        if not self._card_id:
+            return
+        status_element = {
+            "tag": "markdown",
+            "element_id": CARD_STATUS_ELEMENT_ID,
+            "content": _status_text(status, queue_position=queue_position),
+        }
+        actions = [
+            {
+                "action": "partial_update_setting",
+                "params": {
+                    "settings": {
+                        "config": {
+                            "summary": {"content": _summary_text(status)},
+                        }
+                    }
+                },
+            },
+            {
+                "action": "update_element",
+                "params": {
+                    "element_id": CARD_STATUS_ELEMENT_ID,
+                    "element": status_element,
+                },
+            },
+            {
+                "action": "update_element",
+                "params": {
+                    "element_id": CARD_ACTIONS_ELEMENT_ID,
+                    "element": _action_element(
+                        status,
+                        self._action_ids,
+                        feedback=feedback,
+                    ),
+                },
+            },
+        ]
+        sequence = self._next_sequence()
+        await self._transport.batch_update_card(
+            self._card_id,
+            actions,
+            sequence=sequence,
+            delivery_uuid=delivery_uuid(self._source, f"card_lifecycle:{sequence}"),
+        )
 
     def _schedule_card_update(self) -> None:
         if self._terminal_flush_requested:

@@ -18,7 +18,15 @@ from api.channels.agent_bridge import (
     AgentExecutionError,
 )
 from api.channels.binding_bridge import BindingBridge
-from api.channels.core.base import Channel, IncomingMessage, OutgoingMessage, ReplySessionState
+from api.channels.core.base import (
+    Channel,
+    ChannelAction,
+    IncomingMessage,
+    OutgoingMessage,
+    ReplyContext,
+    ReplySessionState,
+    ReplyStatus,
+)
 from api.channels.execution_events import ExecutionFailedEvent, MessageCompletedEvent, MessageDeltaEvent
 from api.channels.feishu.reply import FeishuProgressiveReplySession
 from api.channels.state_store import binding_conversation_key
@@ -52,11 +60,13 @@ class _CardFailureChannel(_Channel):
         source: IncomingMessage,
         *,
         max_content_chars: int,
+        context: ReplyContext | None = None,
     ) -> FeishuProgressiveReplySession:
         return await FeishuProgressiveReplySession.begin(
             transport=self,
             source=source,
             max_content_chars=max_content_chars,
+            context=context,
         )
 
     async def add_typing_reaction(self, message_id: str) -> str:
@@ -90,6 +100,16 @@ class _CardFailureChannel(_Channel):
     ) -> None:
         del card_id, content, sequence, delivery_uuid
         raise RuntimeError("CardKit unavailable")
+
+    async def batch_update_card(
+        self,
+        card_id: str,
+        actions: list[dict[str, object]],
+        *,
+        sequence: int,
+        delivery_uuid: str,
+    ) -> None:
+        del card_id, actions, sequence, delivery_uuid
 
     async def finish_streaming_card(
         self,
@@ -510,10 +530,22 @@ class _ControlledReplySession:
         self.complete_calls = 0
         self.fail_calls = 0
 
+    @property
+    def reply_message_id(self) -> str:
+        return ""
+
     async def append(self, content: str) -> None:
         if self.fail_operation == "append":
             raise RuntimeError("append failed")
         self.appended.append(content)
+
+    async def set_status(
+        self,
+        status: ReplyStatus,
+        *,
+        queue_position: int = 0,
+    ) -> None:
+        del status, queue_position
 
     async def complete(self) -> None:
         self.complete_calls += 1
@@ -528,6 +560,12 @@ class _ControlledReplySession:
         if self.fail_operation == "fail":
             raise RuntimeError("fail failed")
 
+    async def cancel(self) -> None:
+        self.state = ReplySessionState.CANCELLED
+
+    async def acknowledge_feedback(self, *, helpful: bool) -> None:
+        del helpful
+
 
 class _ReplySessionChannel(_Channel):
     def __init__(self, session: _ControlledReplySession) -> None:
@@ -540,8 +578,9 @@ class _ReplySessionChannel(_Channel):
         source: IncomingMessage,
         *,
         max_content_chars: int,
+        context: ReplyContext | None = None,
     ) -> _ControlledReplySession:
-        del source, max_content_chars
+        del source, max_content_chars, context
         self.begin_calls += 1
         return self.session
 
@@ -613,7 +652,7 @@ class _SerialExecutor(_Executor):
 
 
 @pytest.mark.asyncio
-async def test_same_conversation_streams_remain_strictly_serial() -> None:
+async def test_bridge_does_not_add_a_second_conversation_lock() -> None:
     channel = _Channel()
     state = _StateStore()
     executor = _SerialExecutor()
@@ -624,7 +663,214 @@ async def test_same_conversation_streams_remain_strictly_serial() -> None:
         bridge.handle_message(_message(message_id="message-2", content="second")),
     )
 
-    assert executor.max_active == 1
+    # Conversation ordering belongs to ChannelWorker. Direct bridge calls are
+    # independent, which prevents the old worker-lock + bridge-lock layering
+    # from returning when the lifecycle is changed.
+    assert executor.max_active == 2
     assert [call["question"] for call in executor.calls] == ["first", "second"]
     assert [message.content for message in channel.sent] == ["first", "second"]
     assert state.status == {"message-1": "replied", "message-2": "replied"}
+
+
+class _LifecycleReplySession:
+    def __init__(self) -> None:
+        self.state = ReplySessionState.OPEN
+        self.statuses: list[ReplyStatus] = []
+        self.appended: list[str] = []
+        self.feedback: list[bool] = []
+        self.cancel_calls = 0
+
+    @property
+    def reply_message_id(self) -> str:
+        return "reply-message-1"
+
+    async def append(self, content: str) -> None:
+        self.appended.append(content)
+
+    async def set_status(
+        self,
+        status: ReplyStatus,
+        *,
+        queue_position: int = 0,
+    ) -> None:
+        del queue_position
+        self.statuses.append(status)
+
+    async def complete(self) -> None:
+        self.state = ReplySessionState.COMPLETED
+
+    async def fail(self, error_code: str) -> None:
+        del error_code
+        self.state = ReplySessionState.FAILED
+
+    async def cancel(self) -> None:
+        self.cancel_calls += 1
+        self.state = ReplySessionState.CANCELLED
+
+    async def acknowledge_feedback(self, *, helpful: bool) -> None:
+        self.feedback.append(helpful)
+
+
+class _LifecycleChannel(_Channel):
+    def __init__(self) -> None:
+        super().__init__()
+        self.contexts: list[ReplyContext] = []
+        self.sessions: list[_LifecycleReplySession] = []
+
+    async def begin_reply(
+        self,
+        source: IncomingMessage,
+        *,
+        max_content_chars: int,
+        context: ReplyContext | None = None,
+    ) -> _LifecycleReplySession:
+        del source, max_content_chars
+        assert context is not None
+        session = _LifecycleReplySession()
+        self.contexts.append(context)
+        self.sessions.append(session)
+        return session
+
+
+class _BlockingExecutor(_Executor):
+    def __init__(self) -> None:
+        super().__init__([])
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.cancelled = asyncio.Event()
+
+    async def stream(
+        self,
+        **kwargs: Any,
+    ) -> AsyncIterator[MessageDeltaEvent | MessageCompletedEvent | ExecutionFailedEvent]:
+        self.calls.append(kwargs)
+        try:
+            yield MessageDeltaEvent(content="partial", session_id="session-1")
+            self.started.set()
+            await self.release.wait()
+            yield MessageCompletedEvent(session_id="session-1")
+        finally:
+            self.cancelled.set()
+
+
+def _action(action_id: str, *, event_id: str = "action-event-1") -> ChannelAction:
+    return ChannelAction(
+        action_id=action_id,
+        operator_id="ou-user",
+        chat_id="oc-chat",
+        message_id="reply-message-1",
+        event_id=event_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_prepared_followup_owns_queued_running_and_final_lifecycle() -> None:
+    channel = _LifecycleChannel()
+    state = _StateStore()
+    bridge = _bridge(channel=channel, state=state, executor=_Executor())
+    message = _message()
+
+    bridge.message_queued(message, queue_position=2)
+    await bridge.handle_message(message)
+
+    context = channel.contexts[0]
+    assert context.status is ReplyStatus.QUEUED
+    assert context.queue_position == 2
+    assert all(
+        action_id and "ou-user" not in action_id and "oc-chat" not in action_id
+        for action_id in (
+            context.actions.cancel,
+            context.actions.regenerate,
+            context.actions.helpful,
+            context.actions.unhelpful,
+        )
+    )
+    assert channel.sessions[0].statuses == [ReplyStatus.RUNNING]
+    assert channel.sessions[0].state is ReplySessionState.COMPLETED
+    assert state.status == {"message-1": "replied"}
+
+
+@pytest.mark.asyncio
+async def test_cancel_action_stops_active_stream_once_and_tombstones_reply() -> None:
+    channel = _LifecycleChannel()
+    state = _StateStore()
+    executor = _BlockingExecutor()
+    bridge = _bridge(channel=channel, state=state, executor=executor)
+    message = _message()
+
+    bridge.message_queued(message, queue_position=0)
+    running = asyncio.create_task(bridge.handle_message(message))
+    await asyncio.wait_for(executor.started.wait(), timeout=1)
+    cancel_id = channel.contexts[0].actions.cancel
+
+    first = await bridge.handle_action(_action(cancel_id))
+    duplicate = await bridge.handle_action(_action(cancel_id))
+    await asyncio.wait_for(running, timeout=1)
+
+    assert first.toast_type == "success"
+    assert duplicate.content == "该操作已经处理。"
+    assert executor.cancelled.is_set()
+    assert channel.sessions[0].cancel_calls == 1
+    assert channel.sessions[0].state is ReplySessionState.CANCELLED
+    assert state.status == {"message-1": "replied"}
+
+
+@pytest.mark.asyncio
+async def test_regenerate_reenters_scheduler_with_fresh_execution_identity() -> None:
+    channel = _LifecycleChannel()
+    bridge = _bridge(channel=channel, state=_StateStore(), executor=_Executor())
+    scheduled: list[IncomingMessage] = []
+
+    async def schedule(message: IncomingMessage) -> None:
+        scheduled.append(message)
+
+    bridge.set_message_scheduler(schedule)
+    await bridge.handle_message(_message(content="original question"))
+    regenerate_id = channel.contexts[0].actions.regenerate
+
+    response = await bridge.handle_action(_action(regenerate_id, event_id="regenerate-event-1"))
+    await asyncio.sleep(0)
+
+    assert response.content == "已加入当前会话队列。"
+    assert len(scheduled) == 1
+    regenerated = scheduled[0]
+    assert regenerated.message_id == "message-1"
+    assert regenerated.event_id == "regenerate-event-1"
+    assert regenerated.execution_id == "action:regenerate-event-1"
+    assert regenerated.content == "original question"
+
+
+@pytest.mark.asyncio
+async def test_feedback_is_operator_bound_and_idempotent() -> None:
+    channel = _LifecycleChannel()
+    bridge = _bridge(channel=channel, state=_StateStore(), executor=_Executor())
+    await bridge.handle_message(_message())
+    actions = channel.contexts[0].actions
+
+    denied = await bridge.handle_action(
+        ChannelAction(
+            action_id=actions.helpful,
+            operator_id="another-user",
+            chat_id="oc-chat",
+            message_id="reply-message-1",
+            event_id="feedback-denied",
+        )
+    )
+    wrong_card = await bridge.handle_action(
+        ChannelAction(
+            action_id=actions.helpful,
+            operator_id="ou-user",
+            chat_id="oc-chat",
+            message_id="another-card",
+            event_id="feedback-wrong-card",
+        )
+    )
+    accepted = await bridge.handle_action(_action(actions.helpful))
+    duplicate = await bridge.handle_action(_action(actions.unhelpful))
+    await asyncio.sleep(0)
+
+    assert denied.toast_type == "error"
+    assert wrong_card.toast_type == "error"
+    assert accepted.content == "感谢反馈。"
+    assert duplicate.content == "该操作已经处理。"
+    assert channel.sessions[0].feedback == [True]

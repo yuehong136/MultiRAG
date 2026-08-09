@@ -1,19 +1,33 @@
 from .base import (
+    ActionHandler,
     Channel,
+    ChannelAction,
+    ChannelActionResponse,
     IncomingMessage,
     MessageHandler,
     OutgoingMessage,
+    ReplyActionIds,
+    ReplyActionKind,
+    ReplyContext,
     ReplySession,
     ReplySessionState,
     ReplySessionStateError,
+    ReplyStatus,
 )
 
 __all__ = [
+    "ActionHandler",
     "Channel",
+    "ChannelAction",
+    "ChannelActionResponse",
     "IncomingMessage",
     "MessageHandler",
     "OutgoingMessage",
+    "ReplyActionIds",
+    "ReplyActionKind",
+    "ReplyContext",
     "ReplySession",
     "ReplySessionState",
     "ReplySessionStateError",
+    "ReplyStatus",
 ]

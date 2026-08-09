@@ -60,6 +60,7 @@ class FeishuWorkerProvider:
         section = app_config.channels.feishu
         return WorkerTuning(
             queue_size=section.queue_size,
+            followup_queue_size=section.followup_queue_size,
             worker_concurrency=section.worker_concurrency,
             dedupe_ttl_seconds=section.dedupe_ttl_seconds,
             session_ttl_seconds=section.session_ttl_seconds,
