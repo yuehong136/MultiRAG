@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
+import sys
+from typing import cast
 
 import pytest
+from beartype.roar import BeartypeCallHintParamViolation
 
 from api.channels.core.base import IncomingMessage, ReplySessionState, ReplySessionStateError
 from api.channels.core.reply import SERVICE_UNAVAILABLE_TEXT
 from api.channels.feishu.reply import (
     FeishuProgressiveReplySession,
+    FeishuReplyTransport,
     delivery_uuid,
     render_markdown,
     render_post,
@@ -130,6 +135,39 @@ def _source() -> IncomingMessage:
         sender_type="user",
         event_id="event-1",
     )
+
+
+def test_reply_transport_is_runtime_checkable() -> None:
+    assert isinstance(_Transport(), FeishuReplyTransport)
+    assert not isinstance(object(), FeishuReplyTransport)
+
+
+def test_reply_session_rejects_transport_that_misses_protocol() -> None:
+    invalid_transport = cast(FeishuReplyTransport, object())
+
+    with pytest.raises(BeartypeCallHintParamViolation):
+        FeishuProgressiveReplySession(
+            transport=invalid_transport,
+            source=_source(),
+            max_content_chars=4000,
+        )
+
+
+def test_reply_module_import_is_clean_under_beartype() -> None:
+    script = """
+import warnings
+from beartype.roar import BeartypeClawDecorWarning
+warnings.simplefilter("error", BeartypeClawDecorWarning)
+import api.channels.feishu.reply
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 async def _session(

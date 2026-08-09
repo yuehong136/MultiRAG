@@ -9,7 +9,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
 from api.channels.core.base import IncomingMessage, ReplySessionState, ReplySessionStateError
@@ -27,6 +27,7 @@ _MASS_MENTION_RE = re.compile(r"(?i)@(all|everyone)\b")
 _TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
 
 
+@runtime_checkable
 class FeishuReplyTransport(Protocol):
     """Provider operations used by the progressive session."""
 

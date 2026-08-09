@@ -49,16 +49,17 @@
 CHN-O7（主密钥密钥环）、CHN-O12（空 env 变量）、CHN-O6（连接自检）·
 **部署**：CHN-P11 的两道闸门均已完成（2026-08-06 14:44 重启 API 与 supervisor）。
 
-**新增 EIM 身份与体验扩展**：CHN-X5～X12、CHN-U8～U10、CHN-P14 均未开始，统一由
-[`docs/enterprise-identity-mcp/`](../enterprise-identity-mcp/README.md) 的 EIM 路线图驱动；
-旧程序“全部完成”的历史结论保持成立，但不再表示 Channel 子系统没有后续待办。
+**新增 EIM 身份与体验扩展**：CHN-X5～X12、CHN-U8～U11、CHN-P14 统一由
+[`docs/enterprise-identity-mcp/`](../enterprise-identity-mcp/README.md) 的 EIM 路线图驱动；其中
+CHN-X9、CHN-U8、CHN-U11 已完成，其余状态以 [PROGRESS](PROGRESS.md) 为准。旧程序“全部完成”
+的历史结论保持成立，但不再表示 Channel 子系统没有后续待办。
 **最后更新**：2026-08-09
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | **PR-0** | 建立账本与契约文档（两仓 docs-only） | ✅ 完成 |
 | **S** | 安全加固（S1–S6） | ✅ 完成 |
-| **U** | 今日可见缺陷（U1–U7） | ✅ 完成 |
+| **U** | 今日可见缺陷（U1–U8、U11 完成；U9 未开始；U10 挂起） | 🔵 扩展中 |
 | **P** | Provider 通用化（P1–P11、P13 全部完成并部署） | ✅ 完成 |
 | **O** | 运维（O1–O7、O12 完成；O8–O11 未排期） | ✅ 完成（排期内） |
 | **X** | 跨仓契约（X1–X3 完成） | ✅ 完成 |
@@ -285,3 +286,4 @@ MultiRAG 与 web 是两个仓、两条 CI、两次部署，**不存在跨仓原�
 | 2026-08-06 | CHN-P11 部署完成（重启 API 与 supervisor，先后顺序有讲究，见 §3）。至此 24 个 PR 全部落地**且全部部署**，无待办 | Claude |
 | 2026-08-07 | 建立 EIM 企业身份与 MCP 授权项目，登记 CHN-X5～X8 与 CHN-P14。既有 24 个 PR 完成结论不变；“无待办”只对旧范围成立 | Codex |
 | 2026-08-09 | 登记飞书机器人体验任务 CHN-X9～X12、CHN-U8～U10；新增权威 UX 基线，并把 `lark-channel-sdk` PoC 从流式卡片前置依赖中解耦 | Codex |
+| 2026-08-09 | CHN-U11 修复飞书渐进式 reply transport 的 beartype 运行时检查告警；CHN-X9、CHN-U8、CHN-U11 当前均已完成 | Codex |

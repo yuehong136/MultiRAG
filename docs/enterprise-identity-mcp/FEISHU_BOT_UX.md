@@ -1,7 +1,7 @@
 # 飞书机器人对话体验设计与实施基线
 
-> 状态：设计基线；EIM-U0/CHN-X9 的执行流与 buffered ReplySession 已实现，
-> EIM-U1/CHN-U8 的飞书 CardKit 渐进式回复尚未实现。
+> 状态：设计基线；EIM-U0/CHN-X9 的执行流与 buffered ReplySession、
+> EIM-U1/CHN-U8 的飞书 CardKit 渐进式回复均已实现。
 > 最后核验：2026-08-09（Asia/Shanghai）。
 > 适用范围：MultiRAG `api/channels/`、`api/channel_execution/`、飞书企业自建应用，以及后续
 > 与 `of_mcp` 的确认交互。
