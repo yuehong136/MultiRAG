@@ -28,6 +28,7 @@ import json_repair
 from agent.component.base import ComponentBase, ComponentParamBase
 from api.db.db_models import db_connection
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+from api.db.services.dialog_service import _stream_with_think_delta
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
 from common.connection_utils import timeout
@@ -289,83 +290,41 @@ class LLM(ComponentBase):
             return await self.chat_mdl.async_chat(msg[0]["content"], msg[1:], self._param.gen_conf(), **kwargs)
         return await self.chat_mdl.async_chat(msg[0]["content"], msg[1:], self._param.gen_conf(), images=self.imgs, **kwargs)
 
-    async def _generate_streamly(self, msg: list[dict], **kwargs) -> AsyncGenerator[str, None]:
-        async def delta_wrapper(txt_iter):
-            ans = ""
-            last_idx = 0
-            endswith_think = False
+    async def _generate_streamly(
+        self,
+        msg: list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> AsyncGenerator[str, None]:
+        stream_kwargs = {"images": self.imgs} if self.imgs else {}
+        stream_kwargs.update(kwargs)
+        stream = self.chat_mdl.async_chat_streamly_delta(
+            msg[0]["content"],
+            msg[1:],
+            self._param.gen_conf(),
+            **stream_kwargs,
+        )
+        async for _kind, value, _state in _stream_with_think_delta(stream, min_tokens=0):
+            yield value
 
-            def delta(txt):
-                nonlocal ans, last_idx, endswith_think
-                delta_ans = txt[last_idx:]
-                ans = txt
-
-                if delta_ans.find("<think>") == 0:
-                    last_idx += len("<think>")
-                    return "<think>"
-                elif delta_ans.find("<think>") > 0:
-                    delta_ans = txt[last_idx : last_idx + delta_ans.find("<think>")]
-                    last_idx += delta_ans.find("<think>")
-                    return delta_ans
-                elif delta_ans.endswith("</think>"):
-                    endswith_think = True
-                elif endswith_think:
-                    endswith_think = False
-                    return "</think>"
-
-                last_idx = len(ans)
-                if ans.endswith("</think>"):
-                    last_idx -= len("</think>")
-                return re.sub(r"(<think>|</think>)", "", delta_ans)
-
-            async for t in txt_iter:
-                yield delta(t)
-
-        if not self.imgs:
-            async for t in delta_wrapper(self.chat_mdl.async_chat_streamly(msg[0]["content"], msg[1:], self._param.gen_conf(), **kwargs)):
-                yield t
-            return
-
-        async for t in delta_wrapper(self.chat_mdl.async_chat_streamly(msg[0]["content"], msg[1:], self._param.gen_conf(), images=self.imgs, **kwargs)):
-            yield t
-
-    async def _stream_output_async(self, prompt, msg) -> AsyncGenerator[str, None]:
+    async def _stream_output_async(
+        self,
+        prompt: str,
+        msg: list[dict[str, Any]],
+    ) -> AsyncGenerator[str, None]:
         """Asynchronous streaming output method using async_chat_streamly."""
         _, msg = message_fit_in([{"role": "system", "content": prompt}, *msg], int(self.chat_mdl.max_length * 0.97))
         answer = ""
-        last_idx = 0
-        endswith_think = False
-
-        def delta(txt):
-            nonlocal answer, last_idx, endswith_think
-            delta_ans = txt[last_idx:]
-            answer = txt
-
-            if delta_ans.find("<think>") == 0:
-                last_idx += len("<think>")
-                return "<think>"
-            elif delta_ans.find("<think>") > 0:
-                delta_ans = txt[last_idx : last_idx + delta_ans.find("<think>")]
-                last_idx += delta_ans.find("<think>")
-                return delta_ans
-            elif delta_ans.endswith("</think>"):
-                endswith_think = True
-            elif endswith_think:
-                endswith_think = False
-                return "</think>"
-
-            last_idx = len(answer)
-            if answer.endswith("</think>"):
-                last_idx -= len("</think>")
-            return re.sub(r"(<think>|</think>)", "", delta_ans)
 
         stream_kwargs = {"images": self.imgs} if self.imgs else {}
-        async for ans in self.chat_mdl.async_chat_streamly(msg[0]["content"], msg[1:], self._param.gen_conf(), **stream_kwargs):
+        stream = self.chat_mdl.async_chat_streamly_delta(
+            msg[0]["content"],
+            msg[1:],
+            self._param.gen_conf(),
+            **stream_kwargs,
+        )
+        async for _kind, ans, _state in _stream_with_think_delta(stream, min_tokens=0):
             if self.check_if_canceled("LLM streaming"):
                 return
-
-            if isinstance(ans, int):
-                continue
 
             if ans.find("**ERROR**") >= 0:
                 if self.get_exception_default_value():
@@ -375,7 +334,8 @@ class LLM(ComponentBase):
                     self.set_output("_ERROR", ans)
                 return
 
-            yield delta(ans)
+            answer += ans
+            yield ans
 
         self.set_output("content", answer)
 

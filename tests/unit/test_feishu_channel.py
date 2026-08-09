@@ -413,6 +413,9 @@ def test_lark_sdk_registers_read_receipt_as_intentionally_ignored() -> None:
     processors = captured["event_handler"]._processorMap
     assert "p2.im.message.receive_v1" in processors
     assert "p2.im.message.message_read_v1" in processors
+    assert "p2.im.message.reaction.created_v1" in processors
+    assert "p2.im.message.reaction.deleted_v1" in processors
+    assert "p2.im.chat.access_event.bot_p2p_chat_entered_v1" in processors
     assert "p2.card.action.trigger" in captured["event_handler"]._callback_processor_map
 
 

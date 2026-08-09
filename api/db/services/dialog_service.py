@@ -3,7 +3,7 @@ import binascii
 import logging
 import re
 import time
-from collections.abc import AsyncGenerator, AsyncIterator, Generator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator, Mapping
 from contextlib import aclosing, suppress
 from copy import deepcopy
 from datetime import datetime
@@ -1768,7 +1768,9 @@ class _ThinkStreamState:
         self.full_text = ""
         self.last_model_full = ""
         self.in_think = False
-        self.buffer = ""
+        self.close_pending = False
+        self.pending_after_close = ""
+        self.answer_buffer = ""
         self.marker_pending = ""
 
 
@@ -1802,43 +1804,159 @@ def _partial_think_marker_suffix(value: str) -> int:
     )
 
 
-def _split_think_tokens(
-    state: _ThinkStreamState,
-    content: str,
-    *,
-    final: bool = False,
-) -> list[_ThinkToken]:
-    """Split every marker in one model delta, including boundary-spanning tags."""
+def _remove_think_markers(value: str) -> str:
+    return re.sub(r"</?think>", "", value, flags=re.IGNORECASE)
 
-    pending = state.marker_pending + content
-    state.marker_pending = ""
-    tokens: list[_ThinkToken] = []
+
+def _emit_think_text(
+    state: _ThinkStreamState,
+    section: Literal["think", "answer"],
+    value: str,
+    *,
+    min_tokens: int,
+) -> str | None:
+    if not value:
+        return None
+    # Reasoning is emitted immediately so a thinking UI remains responsive;
+    # only user-visible answer text is coalesced.
+    if section == "think":
+        return value
+    state.answer_buffer += value
+    if num_tokens_from_string(state.answer_buffer) < min_tokens:
+        return None
+    output = state.answer_buffer
+    state.answer_buffer = ""
+    return output
+
+
+def _flush_answer_buffer(state: _ThinkStreamState) -> str | None:
+    if not state.answer_buffer:
+        return None
+    output = state.answer_buffer
+    state.answer_buffer = ""
+    return output
+
+
+def _parse_think_chunk(
+    state: _ThinkStreamState,
+    pending: str,
+    *,
+    min_tokens: int,
+) -> Iterator[_ThinkToken]:
+    """Parse one logical model delta while preserving repeated close markers.
+
+    Some reasoning providers append ``</think>`` to every reasoning delta and
+    only reveal that the previous close was final when the next delta contains
+    ordinary answer text. Delaying a close that lands at a delta boundary is
+    therefore required to distinguish those synthetic closes from the real
+    transition to the answer.
+    """
+
+    if state.close_pending and "</think>" not in pending.lower():
+        state.close_pending = False
+        state.in_think = False
+        yield ("marker", "</think>")
+        if state.pending_after_close:
+            output = _emit_think_text(
+                state,
+                "answer",
+                state.pending_after_close,
+                min_tokens=min_tokens,
+            )
+            state.pending_after_close = ""
+            if output is not None:
+                yield ("text", output)
+        answer_piece = _remove_think_markers(pending)
+        if answer_piece:
+            output = _emit_think_text(
+                state,
+                "answer",
+                answer_piece,
+                min_tokens=min_tokens,
+            )
+            if output is not None:
+                yield ("text", output)
+        return
+
     while pending:
         lowered = pending.lower()
-        positions = [(lowered.find(marker), marker) for marker in _THINK_MARKERS]
-        positions = [(position, marker) for position, marker in positions if position >= 0]
-        if positions:
-            position, marker = min(positions, key=lambda item: item[0])
-            if position:
-                tokens.append(("text", pending[:position]))
-            tokens.append(("marker", marker))
-            pending = pending[position + len(marker) :]
+        open_at = lowered.find("<think>")
+        close_at = lowered.find("</think>")
+
+        if open_at < 0 and close_at < 0:
+            piece = _remove_think_markers(pending)
+            if piece:
+                section: Literal["think", "answer"] = "think" if state.in_think else "answer"
+                output = _emit_think_text(
+                    state,
+                    section,
+                    piece,
+                    min_tokens=min_tokens,
+                )
+                if output is not None:
+                    yield ("text", output)
+            return
+
+        if open_at >= 0 and (close_at < 0 or open_at < close_at):
+            before = pending[:open_at]
+            if before:
+                section = "think" if state.in_think else "answer"
+                output = _emit_think_text(
+                    state,
+                    section,
+                    _remove_think_markers(before),
+                    min_tokens=min_tokens,
+                )
+                if output is not None:
+                    yield ("text", output)
+            pending = pending[open_at + len("<think>") :]
+            if not state.in_think:
+                answer_piece = _flush_answer_buffer(state)
+                if answer_piece is not None:
+                    yield ("text", answer_piece)
+                state.in_think = True
+                yield ("marker", "<think>")
             continue
 
-        keep = 0 if final else _partial_think_marker_suffix(pending)
-        visible = pending[:-keep] if keep else pending
-        if visible:
-            tokens.append(("text", visible))
-        state.marker_pending = pending[-keep:] if keep else ""
+        before = pending[:close_at]
+        after = pending[close_at + len("</think>") :]
+        if before:
+            section = "think" if state.in_think else "answer"
+            output = _emit_think_text(
+                state,
+                section,
+                _remove_think_markers(before),
+                min_tokens=min_tokens,
+            )
+            if output is not None:
+                yield ("text", output)
+        after_visible = _remove_think_markers(after)
+        if after_visible.strip():
+            state.in_think = False
+            yield ("marker", "</think>")
+            pending = after_visible
+            continue
+
+        state.close_pending = True
+        if after_visible:
+            state.pending_after_close += after_visible
         break
-    return tokens
 
 
 async def _stream_with_think_delta(
     stream_iter: AsyncIterator[str],
     min_tokens: int = 16,
 ) -> AsyncIterator[tuple[Literal["text", "marker"], str, _ThinkStreamState]]:
-    """Normalize cumulative model chunks into ordered text and think markers."""
+    """Normalize cumulative or delta model chunks into ordered stream events.
+
+    This is the typed local port of RAGFlow's June 2026 think-stream fixes,
+    with marker-boundary buffering retained for providers that split XML tags.
+    Dialog and Canvas/Agent must use this single parser so the two surfaces do
+    not drift back to different reasoning semantics.
+    """
+
+    if min_tokens < 0:
+        raise ValueError("min_tokens must be non-negative")
 
     state = _ThinkStreamState()
     async for chunk in stream_iter:
@@ -1853,38 +1971,37 @@ async def _stream_with_think_delta(
         if not new_part:
             continue
         state.full_text += new_part
-        for kind, value in _split_think_tokens(state, new_part):
-            if kind == "marker":
-                if value == "<think>" and state.in_think:
-                    continue
-                if value == "</think>" and not state.in_think:
-                    continue
-                if state.buffer:
-                    yield ("text", state.buffer, state)
-                    state.buffer = ""
-                state.in_think = value == "<think>"
-                yield ("marker", value, state)
-                continue
-            state.buffer += value
-            if num_tokens_from_string(state.buffer) < min_tokens:
-                continue
-            yield ("text", state.buffer, state)
-            state.buffer = ""
-
-    for kind, value in _split_think_tokens(state, "", final=True):
-        if kind == "text":
-            state.buffer += value
+        state.marker_pending += new_part
+        if _partial_think_marker_suffix(state.marker_pending):
             continue
-        if state.buffer:
-            yield ("text", state.buffer, state)
-            state.buffer = ""
-        if value == "</think>" and state.in_think:
-            state.in_think = False
-            yield ("marker", value, state)
+        pending = state.marker_pending
+        state.marker_pending = ""
+        for kind, value in _parse_think_chunk(
+            state,
+            pending,
+            min_tokens=min_tokens,
+        ):
+            yield (kind, value, state)
 
-    if state.buffer:
-        yield ("text", state.buffer, state)
-        state.buffer = ""
+    if state.marker_pending:
+        for kind, value in _parse_think_chunk(
+            state,
+            state.marker_pending,
+            min_tokens=min_tokens,
+        ):
+            yield (kind, value, state)
+        state.marker_pending = ""
+
+    if state.close_pending:
+        state.close_pending = False
+        state.in_think = False
+        yield ("marker", "</think>", state)
+    answer_piece = _flush_answer_buffer(state)
+    if answer_piece is not None:
+        yield ("text", answer_piece, state)
+    if state.pending_after_close:
+        yield ("text", state.pending_after_close, state)
+        state.pending_after_close = ""
 
 
 def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_config=None):
