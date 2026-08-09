@@ -32,7 +32,10 @@ _CARD_CANCEL_BUTTON_ID = "reply_cancel"
 _CARD_REGENERATE_BUTTON_ID = "reply_regenerate"
 _CARD_HELPFUL_BUTTON_ID = "reply_helpful"
 _CARD_UNHELPFUL_BUTTON_ID = "reply_unhelpful"
-_CARD_GENERATING_TEXT = "正在生成回答…"
+# CardKit needs the answer element to exist before streaming updates begin.
+# Keep a non-empty but invisible placeholder so the lifecycle status remains
+# the single user-visible progress indicator until the first answer token.
+_CARD_ANSWER_PLACEHOLDER = " "
 _CARD_BYTE_LIMIT = 24_000
 _CARD_PRINT_FREQUENCY_MS = 70
 _CARD_PRINT_STEP = 1
@@ -318,7 +321,7 @@ def streaming_card_json(context: ReplyContext | None = None) -> str:
                 {
                     "tag": "markdown",
                     "element_id": CARD_ANSWER_ELEMENT_ID,
-                    "content": _CARD_GENERATING_TEXT,
+                    "content": _CARD_ANSWER_PLACEHOLDER,
                 },
                 _action_element(initial.status, initial.actions),
             ],

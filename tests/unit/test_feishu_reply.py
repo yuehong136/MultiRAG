@@ -314,7 +314,8 @@ def test_streaming_card_is_json_2_with_lifecycle_and_answer_elements() -> None:
         "actions",
     ]
     assert card["body"]["elements"][0]["content"] == "✨ 正在生成"
-    assert card["body"]["elements"][1]["content"] == "正在生成回答…"
+    assert card["body"]["elements"][1]["content"] == " "
+    assert json.dumps(card, ensure_ascii=False).count("正在生成") == 1
 
 
 def test_queued_card_shows_position_and_only_opaque_action_value() -> None:
