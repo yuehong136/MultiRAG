@@ -155,7 +155,7 @@ services:
     restart: unless-stopped
 
   # ========== Milvus 向量数据库 ==========
-  # 参考官方配置：https://github.com/milvus-io/milvus/releases/download/v2.6.7/milvus-standalone-docker-compose.yml
+  # 参考官方配置：https://github.com/milvus-io/milvus/releases/download/v2.6.22/milvus-standalone-docker-compose.yml
   milvus-etcd:
     profiles:
       - milvus
@@ -204,7 +204,7 @@ services:
   milvus-standalone:
     profiles:
       - milvus
-    image: milvusdb/milvus:v2.6.7
+    image: milvusdb/milvus:v2.6.22
     hostname: milvus
     container_name: multirag-milvus
     command: ["milvus", "run", "standalone"]
