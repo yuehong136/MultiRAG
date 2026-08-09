@@ -10,6 +10,7 @@ from fastapi import Request
 from api.channel_execution.models import (
     ChannelExecutionCommand,
     ExecutionEvent,
+    ExecutionOperation,
     ExecutionTargetRef,
     TrustedChannelContext,
     WorkloadIdentity,
@@ -111,6 +112,7 @@ class CanvasCompletionAdapter(Protocol):
         question: str,
         session_id: str | None,
         principal_id: str | None,
+        operation: ExecutionOperation,
     ) -> AsyncIterator[str]: ...
 
 
@@ -126,4 +128,5 @@ class DialogCompletionAdapter(Protocol):
         question: str,
         session_id: str | None,
         principal_id: str | None,
+        operation: ExecutionOperation,
     ) -> AsyncIterator[str]: ...

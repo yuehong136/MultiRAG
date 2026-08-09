@@ -10,7 +10,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from api.channels.agent_bridge import (
     DEMO_ONLY_TEXT,
@@ -59,6 +59,7 @@ class BindingExecutor(Protocol):
         provider: str,
         subject: str,
         conversation: str,
+        operation: Literal["message", "regenerate"] = "message",
     ) -> AsyncIterator[BindingExecutionEvent]: ...
 
     async def reset(self, *, conversation_key: str) -> None: ...
@@ -139,6 +140,7 @@ class BindingBridge:
         self._scheduler: Callable[[IncomingMessage], Awaitable[None]] | None = None
         self._preparations: dict[int, asyncio.Task[_PreparedMessage | None]] = {}
         self._actions: dict[str, _RegisteredAction] = {}
+        self._latest_execution_by_conversation: dict[str, str] = {}
         self._background_tasks: set[asyncio.Task[None]] = set()
 
     def set_message_scheduler(
@@ -244,8 +246,15 @@ class BindingBridge:
                 return ChannelActionResponse("warning", "请等待当前生成结束。")
             if self._scheduler is None:
                 return ChannelActionResponse("error", "重新生成暂时不可用。")
+            if self._latest_execution_by_conversation.get(record.conversation_key) != record.source.execution_id:
+                registered.used = True
+                return ChannelActionResponse("warning", "只能重新生成当前会话的最新回答。")
             registered.used = True
-            regenerated = self._regenerated_message(record.source, action)
+            regenerated = self._regenerated_message(
+                record.source,
+                action,
+                replace_completed=record.status is ReplyStatus.FINAL,
+            )
             self._spawn_background(
                 self._scheduler(regenerated),
                 name=f"channel-regenerate-{_short_hash(regenerated.execution_id)}",
@@ -278,6 +287,7 @@ class BindingBridge:
         self._preparations.clear()
         self._background_tasks.clear()
         self._actions.clear()
+        self._latest_execution_by_conversation.clear()
 
     async def _prepare_message(
         self,
@@ -363,6 +373,8 @@ class BindingBridge:
             await self._safe_reply(message, SERVICE_UNAVAILABLE_TEXT)
             return None
 
+        self._latest_execution_by_conversation[conversation] = message.execution_id
+
         return _PreparedMessage(
             source=message,
             conversation_key=conversation,
@@ -426,6 +438,7 @@ class BindingBridge:
                 provider=message.channel,
                 subject=message.sender_id,
                 conversation=message.chat_id,
+                operation=message.operation,
             ):
                 if terminal_seen:
                     raise AgentExecutionError("CHANNEL_EXECUTION_INVALID_STREAM")
@@ -555,6 +568,7 @@ class BindingBridge:
             await self._mark_executed(prepared.source)
             await self._safe_reply(prepared.source, SERVICE_UNAVAILABLE_TEXT)
             return
+        self._latest_execution_by_conversation.pop(prepared.conversation_key, None)
         await self._reply_and_complete(prepared.source, SESSION_RESET_TEXT)
 
     async def _reply_queue_rejected(
@@ -625,6 +639,10 @@ class BindingBridge:
             )[:overflow]
             for action_id, _registered in oldest:
                 self._actions.pop(action_id, None)
+        live_execution_ids = {registered.record.source.execution_id for registered in self._actions.values()}
+        stale_conversations = [conversation for conversation, execution_id in self._latest_execution_by_conversation.items() if execution_id not in live_execution_ids]
+        for conversation in stale_conversations:
+            self._latest_execution_by_conversation.pop(conversation, None)
 
     def _drop_actions(self, record: _ExecutionRecord) -> None:
         for action_id in (
@@ -645,6 +663,8 @@ class BindingBridge:
     def _regenerated_message(
         source: IncomingMessage,
         action: ChannelAction,
+        *,
+        replace_completed: bool,
     ) -> IncomingMessage:
         return IncomingMessage(
             channel=source.channel,
@@ -658,6 +678,7 @@ class BindingBridge:
             sender_type=source.sender_type,
             event_id=action.event_id,
             request_id=f"action:{action.event_id}",
+            operation="regenerate" if replace_completed else "message",
         )
 
     def _spawn_background(

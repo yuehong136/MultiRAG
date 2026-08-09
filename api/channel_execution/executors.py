@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.channel_execution.errors import TargetExecutionFailedError, TargetRevisionUnavailableError
-from api.channel_execution.models import ChannelExecutionCommand, ExecutionEvent, ExecutionTargetRef, TrustedChannelContext
+from api.channel_execution.models import ChannelExecutionCommand, ExecutionEvent, ExecutionOperation, ExecutionTargetRef, TrustedChannelContext
 from api.channel_execution.protocols import CanvasCompletionAdapter, DialogCompletionAdapter
 
 
@@ -65,6 +65,7 @@ class SqlAlchemyCanvasCompletionAdapter:
         question: str,
         session_id: str | None,
         principal_id: str | None,
+        operation: ExecutionOperation = "message",
     ) -> AsyncIterator[str]:
         from api.db.services.canvas_service import completion as canvas_completion
 
@@ -76,6 +77,9 @@ class SqlAlchemyCanvasCompletionAdapter:
             query=question,
             release=True,
             user_id=principal_id or "",
+            regenerate=operation == "regenerate",
+            persist_reasoning=False,
+            require_visible_answer=True,
         )
 
 
@@ -93,6 +97,7 @@ class SqlAlchemyDialogCompletionAdapter:
         question: str,
         session_id: str | None,
         principal_id: str | None,
+        operation: ExecutionOperation = "message",
     ) -> AsyncIterator[str]:
         from api.db.services.conversation_service import async_completion as dialog_completion
 
@@ -104,6 +109,9 @@ class SqlAlchemyDialogCompletionAdapter:
             session_id=session_id,
             stream=True,
             user_id=principal_id or "",
+            regenerate=operation == "regenerate",
+            persist_reasoning=False,
+            require_visible_answer=True,
         )
 
 
@@ -128,6 +136,7 @@ class MultiRAGCanvasAgentExecutor:
             question=command.message.content,
             session_id=context.session_id,
             principal_id=context.principal_id,
+            operation=command.operation,
         )
         return self._events(frames)
 
@@ -135,6 +144,7 @@ class MultiRAGCanvasAgentExecutor:
         session_id: str | None = None
         in_reasoning = False
         saw_completion = False
+        saw_content = False
         async for frame in frames:
             payload = _decode_sse_payload(frame)
             if payload is None:
@@ -163,9 +173,10 @@ class MultiRAGCanvasAgentExecutor:
                 continue
             sanitized = content.replace("<think>", "").replace("</think>", "")
             if sanitized:
+                saw_content = True
                 yield ExecutionEvent(event="message_delta", content=sanitized, session_id=session_id)
 
-        if not saw_completion or not session_id:
+        if not saw_completion or not session_id or not saw_content:
             raise TargetExecutionFailedError()
         yield ExecutionEvent(event="message_completed", session_id=session_id)
 
@@ -203,6 +214,7 @@ class MultiRAGDialogExecutor:
                 question=command.message.content,
                 session_id=None,
                 principal_id=context.principal_id,
+                operation=command.operation,
             )
             session_id = await self._consume_dialog_bootstrap(bootstrap_frames)
 
@@ -212,6 +224,7 @@ class MultiRAGDialogExecutor:
             question=command.message.content,
             session_id=session_id,
             principal_id=context.principal_id,
+            operation=command.operation,
         )
         async for event in self._dialog_events(frames, require_content=True):
             yield event

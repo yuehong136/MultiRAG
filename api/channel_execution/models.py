@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 TargetType = Literal["multirag.canvas_agent", "multirag.dialog"]
+ExecutionOperation = Literal["message", "regenerate"]
 ExecutionEventType = Literal[
     "message_delta",
     "message_completed",
@@ -56,6 +57,7 @@ class ChannelExecutionCommand(BaseModel):
 
     event_id: str = Field(min_length=1, max_length=255)
     conversation_key: str = Field(min_length=1, max_length=512)
+    operation: ExecutionOperation = "message"
     message: ChannelMessage
     actor: ChannelActor
 

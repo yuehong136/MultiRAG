@@ -260,7 +260,20 @@ async def test_canvas_adapter_guards_latest_release_without_extending_canvas_con
         is not None
     )
     assert captured["release"] is True
+    assert captured["regenerate"] is False
+    assert captured["persist_reasoning"] is False
+    assert captured["require_visible_answer"] is True
     assert "release_revision_id" not in captured
+
+    adapter.stream(
+        tenant_id="tenant-1",
+        target=target,
+        question="hello",
+        session_id="session-1",
+        principal_id=None,
+        operation="regenerate",
+    )
+    assert captured["regenerate"] is True
 
     stale_target = target.model_copy(update={"revision_id": "revision-stale"})
     with pytest.raises(TargetRevisionUnavailableError):

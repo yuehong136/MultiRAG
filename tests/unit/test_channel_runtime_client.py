@@ -170,6 +170,53 @@ async def test_binding_execution_request_cannot_override_trusted_context(caplog:
 
 
 @pytest.mark.asyncio
+async def test_binding_execution_sends_regenerate_only_for_explicit_action() -> None:
+    captured: list[dict[str, object]] = []
+    sse = 'data:{"event":"message_delta","content":"answer","session_id":"session-server"}\n\ndata:{"event":"message_completed","session_id":"session-server"}\n\ndata:[DONE]\n\n'
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = MultiRAGBindingExecutionClient(
+            base_url="http://multirag.local",
+            binding_id="binding-1",
+            binding_generation=7,
+            api_token="runtime-token",
+            client=http_client,
+        )
+        events = [
+            event
+            async for event in client.stream(
+                question="same question",
+                event_id="action:regenerate-event",
+                conversation_key="conversation-key",
+                provider="feishu",
+                subject="ou-user",
+                conversation="oc-chat",
+                operation="regenerate",
+            )
+        ]
+        retry_events = [
+            event
+            async for event in client.stream(
+                question="failed question",
+                event_id="action:retry-event",
+                conversation_key="conversation-key",
+                provider="feishu",
+                subject="ou-user",
+                conversation="oc-chat",
+                operation="message",
+            )
+        ]
+
+    assert events[-1] == MessageCompletedEvent(session_id="session-server")
+    assert retry_events[-1] == MessageCompletedEvent(session_id="session-server")
+    assert [body["operation"] for body in captured] == ["regenerate", "message"]
+
+
+@pytest.mark.asyncio
 async def test_binding_execution_failure_exposes_only_classified_code(caplog: pytest.LogCaptureFixture) -> None:
     token = "execution-secret-token"
     response_secret = "upstream-body-secret"

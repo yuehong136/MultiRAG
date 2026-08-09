@@ -7,6 +7,7 @@ import json
 import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from typing import Literal
 from urllib.parse import quote
 
 import httpx
@@ -244,6 +245,7 @@ class MultiRAGBindingExecutionClient:
         provider: str,
         subject: str,
         conversation: str,
+        operation: Literal["message", "regenerate"] = "message",
     ) -> AsyncIterator[BindingExecutionEvent]:
         """Execute a binding and yield its only trusted, user-visible event stream."""
 
@@ -257,6 +259,8 @@ class MultiRAGBindingExecutionClient:
                 "conversation": conversation,
             },
         }
+        if operation == "regenerate" or event_id.startswith("action:"):
+            body["operation"] = operation
         headers = {**self._headers, "Idempotency-Key": event_id}
         try:
             async with asyncio.timeout(self._total_timeout_seconds):

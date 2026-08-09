@@ -22,7 +22,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, ClassVar, Protocol, runtime_checkable
+from typing import Any, ClassVar, Literal, Protocol, runtime_checkable
 
 LOGGER = logging.getLogger(__name__)
 
@@ -56,6 +56,7 @@ class IncomingMessage:
     event_id: str = ""
     create_time: str = ""
     request_id: str = ""
+    operation: Literal["message", "regenerate"] = "message"
 
     def __init__(
         self,
@@ -74,6 +75,7 @@ class IncomingMessage:
         event_id: str = "",
         create_time: str = "",
         request_id: str = "",
+        operation: Literal["message", "regenerate"] = "message",
     ) -> None:
         """Accept the RAGFlow ``text`` contract and local ``content`` alias."""
 
@@ -96,6 +98,7 @@ class IncomingMessage:
         self.event_id = event_id
         self.create_time = create_time
         self.request_id = request_id
+        self.operation = operation
 
     @property
     def text(self) -> str:

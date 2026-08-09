@@ -216,7 +216,19 @@ Managed binding 默认允许当前运行项之后再排 5 条 follow-up，可用
 `queued -> running -> final/error/cancelled`；queued 卡只显示当前位置，不承诺等待时间。会话队列或
 worker 全局队列满时，Bridge 会先 claim 消息再回复固定 busy 文案，不静默丢弃。重新生成不是旁路
 调用：它保留原来源消息用于 reply threading，以飞书回调 event ID 建立新的 `request_id`，然后重新
-进入同一会话队列，因此不会与当前生成并发写同一会话。
+进入同一会话队列，因此不会与当前生成并发写同一会话。只有当前会话最新的完成卡可重新生成；
+已有后续追问时点击旧卡会直接提示过期。完成卡发出显式 `regenerate` operation，执行层先撤回最新且
+问题匹配的 user/assistant 对，再原位写入一个新 assistant 版本；连续点击不会重复追加同一句 user。
+error/cancelled 卡的按钮按普通 retry 处理，因为失败轮次没有提交，不能误删上一轮成功历史。
+
+Channel 目标的下一轮提示词和持久化历史只使用用户可见答案，不保存或回灌 `<think>` reasoning；
+reasoning-only、取消或失败不会提交半轮消息。Dialog 直接替换最新轮次；Canvas 从可见 transcript
+重建内部 history，修复存量 raw reasoning 污染，并仅允许无外部工具/MCP/副作用组件的图重新生成。
+未知组件 fail closed，避免“重新生成”静默重放邮件、SQL、代码执行或其他外部操作。
+`operation` 是私有 execution command 的可选加法字段：普通消息仍省略它；action 请求必须显式发送。
+部署窗口里，新 API 遇到未携带 operation 的旧 worker action 会返回
+`CHANNEL_RUNTIME_UPGRADE_REQUIRED`，新 worker 调旧 API 则因 `extra="forbid"` 失败；两种方向都只让
+卡片操作失败，不会猜测并污染历史。部署顺序仍是 API 在前、随后立即重启 supervisor/worker。
 
 飞书完成卡片在关闭 `streaming_mode` 后，使用 CardKit batch update 添加“重新生成 / 有帮助 /
 没帮助”；生成中的卡片提供“停止生成”。交互区使用 JSON 2.0 的 `column_set` 直接承载 `button`，
@@ -237,8 +249,9 @@ worker 全局队列满时，Bridge 会先 claim 消息再回复固定 busy 文�
 ### Canvas 发布版本兼容策略
 
 最新上游基线中的 Canvas 执行契约仍是 `release=true` 时读取“最新已发布版本”，并不
-支持按历史 revision ID 直接执行。MultiRAG Channel 不修改这条 Canvas 核心路径，也不向
-`canvas_service.completion()` 增加 Channel 专用参数：
+支持按历史 revision ID 直接执行。MultiRAG Channel 不修改 release/revision 选择语义；自有执行
+适配层只传递 `regenerate`、`persist_reasoning=false`、`require_visible_answer=true` 三个内部生命周期
+选项，不把它们暴露成公共 Agent API 契约：
 
 1. 管理端只能把 `multirag.canvas_agent` 绑定到当时的最新已发布版本，并把该版本 ID 保存为
    服务端 revision guard。

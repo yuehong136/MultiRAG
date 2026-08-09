@@ -2,23 +2,13 @@
 
 from __future__ import annotations
 
-import re
+from common.reasoning import strip_reasoning as strip_reasoning
 
 SERVICE_UNAVAILABLE_TEXT = "服务暂时不可用，请稍后再试。"
 ANSWER_TRUNCATED_SUFFIX = "\n\n（回答过长，演示版已截断）"
 
-_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", flags=re.IGNORECASE | re.DOTALL)
-_UNCLOSED_THINK_RE = re.compile(r"<think>.*$", flags=re.IGNORECASE | re.DOTALL)
 _OPEN_MARKER = "<think>"
 _CLOSE_MARKER = "</think>"
-
-
-def strip_reasoning(text: str) -> str:
-    """Remove complete or unterminated reasoning blocks from one reply."""
-
-    without_blocks = _THINK_BLOCK_RE.sub("", text)
-    without_unclosed = _UNCLOSED_THINK_RE.sub("", without_blocks)
-    return without_unclosed.replace("</think>", "").strip()
 
 
 def truncate_answer(text: str, max_chars: int) -> str:

@@ -264,6 +264,7 @@ async def test_bridge_passes_only_transport_command_fields_to_binding_executor()
             "provider": "feishu",
             "subject": "ou-user",
             "conversation": "oc-chat",
+            "operation": "message",
         }
     ]
     assert (
@@ -838,6 +839,49 @@ async def test_regenerate_reenters_scheduler_with_fresh_execution_identity() -> 
     assert regenerated.event_id == "regenerate-event-1"
     assert regenerated.execution_id == "action:regenerate-event-1"
     assert regenerated.content == "original question"
+    assert regenerated.operation == "regenerate"
+
+
+@pytest.mark.asyncio
+async def test_regenerate_rejects_a_superseded_card() -> None:
+    channel = _LifecycleChannel()
+    bridge = _bridge(channel=channel, state=_StateStore(), executor=_Executor())
+    scheduled: list[IncomingMessage] = []
+
+    async def schedule(message: IncomingMessage) -> None:
+        scheduled.append(message)
+
+    bridge.set_message_scheduler(schedule)
+    await bridge.handle_message(_message(message_id="message-1", content="first"))
+    old_regenerate_id = channel.contexts[0].actions.regenerate
+    await bridge.handle_message(_message(message_id="message-2", content="follow-up"))
+
+    response = await bridge.handle_action(_action(old_regenerate_id, event_id="old-card-event"))
+
+    assert response.toast_type == "warning"
+    assert response.content == "只能重新生成当前会话的最新回答。"
+    assert scheduled == []
+
+
+@pytest.mark.asyncio
+async def test_retry_after_failed_execution_does_not_rewind_uncommitted_history() -> None:
+    channel = _LifecycleChannel()
+    executor = _Executor([ExecutionFailedEvent(error_code="TARGET_EXECUTION_FAILED")])
+    bridge = _bridge(channel=channel, state=_StateStore(), executor=executor)
+    scheduled: list[IncomingMessage] = []
+
+    async def schedule(message: IncomingMessage) -> None:
+        scheduled.append(message)
+
+    bridge.set_message_scheduler(schedule)
+    await bridge.handle_message(_message(content="failed question"))
+    regenerate_id = channel.contexts[0].actions.regenerate
+
+    response = await bridge.handle_action(_action(regenerate_id, event_id="retry-event"))
+    await asyncio.sleep(0)
+
+    assert response.toast_type == "success"
+    assert scheduled[0].operation == "message"
 
 
 @pytest.mark.asyncio

@@ -87,6 +87,12 @@ class ChannelExecutionService:
         workload: WorkloadIdentity,
         command: ChannelExecutionCommand,
     ) -> AsyncIterator[ExecutionEvent]:
+        if command.event_id.startswith("action:") and "operation" not in command.model_fields_set:
+            # Workers predating explicit regeneration semantics used the same
+            # shape for completed-turn replacement and failed-turn retry.
+            # Fail closed during a mixed-version deploy instead of guessing
+            # and corrupting conversation history.
+            return _one_failure("CHANNEL_RUNTIME_UPGRADE_REQUIRED")
         context = await self._binding_resolver.resolve(
             binding_id=binding_id,
             workload=workload,

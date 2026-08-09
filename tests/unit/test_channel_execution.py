@@ -12,6 +12,7 @@ from api.channel_execution.errors import (
     BindingDisabledError,
     BindingNotFoundError,
     DuplicateEventError,
+    TargetExecutionFailedError,
     TargetRevisionUnavailableError,
 )
 from api.channel_execution.executors import MultiRAGCanvasAgentExecutor, MultiRAGDialogExecutor
@@ -42,6 +43,7 @@ def _context(
     target_type: str = "multirag.canvas_agent",
     revision_id: str | None = "rev-1",
     enabled: bool = True,
+    session_id: str | None = None,
 ) -> TrustedChannelContext:
     return TrustedChannelContext(
         binding_id="binding-1",
@@ -54,6 +56,7 @@ def _context(
         enabled=enabled,
         binding_generation=7,
         principal_id="principal-trusted",
+        session_id=session_id,
     )
 
 
@@ -163,6 +166,9 @@ def test_command_rejects_trust_fields_from_payload() -> None:
         with pytest.raises(ValidationError):
             ChannelExecutionCommand.model_validate({**base, field: "attacker-value"})
 
+    with pytest.raises(ValidationError):
+        _command(operation="retry-anything")
+
 
 async def test_service_uses_resolved_target_and_server_side_session() -> None:
     resolver = _Resolver(_context())
@@ -191,6 +197,28 @@ async def test_service_uses_resolved_target_and_server_side_session() -> None:
     assert claims.claims == [("binding-1", "evt-1")]
     assert claims.completed == [("binding-1", "evt-1")]
     assert claims.failed == []
+
+
+async def test_legacy_action_without_operation_fails_closed_before_execution() -> None:
+    executor = _RecordingExecutor()
+    claims = _ClaimStore()
+    service = ChannelExecutionService(
+        binding_resolver=_Resolver(_context()),
+        conversation_store=_ConversationStore("session-existing"),
+        claim_store=claims,
+        target_service=PublishedTargetExecutionService(TargetExecutorRegistry([executor])),
+    )
+    command = _command(event_id="action:legacy-event")
+
+    events = await service.execute(
+        binding_id="binding-1",
+        workload=WorkloadIdentity(subject="runner-1"),
+        command=command,
+    )
+
+    assert [event.model_dump(exclude_none=True) for event in await _collect(events)] == [{"event": "execution_failed", "error_code": "CHANNEL_RUNTIME_UPGRADE_REQUIRED"}]
+    assert claims.claims == []
+    assert executor.context is None
 
 
 async def test_registry_rejects_non_multirag_namespace_and_duplicates() -> None:
@@ -259,6 +287,7 @@ class _CanvasAdapter:
         self.frames = frames
         self.invalid_revision = invalid_revision
         self.validated: tuple[str, str | None] | None = None
+        self.operations: list[object] = []
 
     async def validate_revision(self, *, tenant_id: str, target: ExecutionTargetRef) -> None:
         self.validated = (tenant_id, target.revision_id)
@@ -273,8 +302,10 @@ class _CanvasAdapter:
         question: str,
         session_id: str | None,
         principal_id: str | None,
+        operation: object,
     ) -> AsyncIterator[str]:
         del tenant_id, target, question, session_id, principal_id
+        self.operations.append(operation)
 
         async def _frames() -> AsyncIterator[str]:
             for frame in self.frames:
@@ -308,11 +339,29 @@ async def test_canvas_executor_filters_reasoning_trace_and_tool_events() -> None
         {"event": "message_completed", "session_id": "s-1"},
     ]
     assert adapter.validated == ("tenant-trusted", "rev-1")
+    assert adapter.operations == ["message"]
+
+
+async def test_canvas_executor_rejects_a_reasoning_only_completion() -> None:
+    adapter = _CanvasAdapter(
+        [
+            _frame({"event": "message", "data": {"start_to_think": True}, "session_id": "s-1"}),
+            _frame({"event": "message", "data": {"content": "private"}, "session_id": "s-1"}),
+            _frame({"event": "message", "data": {"end_to_think": True}, "session_id": "s-1"}),
+            _frame({"event": "message_end", "data": {}, "session_id": "s-1"}),
+        ]
+    )
+    executor = MultiRAGCanvasAgentExecutor(adapter)
+    events = await executor.execute(context=_context(), command=_command())
+
+    with pytest.raises(TargetExecutionFailedError):
+        await _collect(events)
 
 
 class _DialogAdapter:
     def __init__(self) -> None:
         self.sessions: list[str | None] = []
+        self.operations: list[object] = []
 
     def stream(
         self,
@@ -322,9 +371,11 @@ class _DialogAdapter:
         question: str,
         session_id: str | None,
         principal_id: str | None,
+        operation: object,
     ) -> AsyncIterator[str]:
         del tenant_id, target, question, principal_id
         self.sessions.append(session_id)
+        self.operations.append(operation)
 
         async def _frames() -> AsyncIterator[str]:
             if session_id is None:
@@ -348,6 +399,26 @@ async def test_dialog_executor_bootstraps_then_answers_using_multirag_dialog() -
         {"event": "message_completed", "session_id": "dialog-session"},
     ]
     assert adapter.sessions == [None, "dialog-session"]
+    assert adapter.operations == ["message", "message"]
+
+
+async def test_dialog_regenerate_forwards_explicit_operation_to_existing_session() -> None:
+    adapter = _DialogAdapter()
+    executor = MultiRAGDialogExecutor(adapter)
+    context = _context(
+        target_type="multirag.dialog",
+        revision_id=None,
+        session_id="dialog-session",
+    )
+
+    events = await executor.execute(
+        context=context,
+        command=_command(operation="regenerate"),
+    )
+
+    assert [event.event for event in await _collect(events)] == ["message_delta", "message_completed"]
+    assert adapter.sessions == ["dialog-session"]
+    assert adapter.operations == ["regenerate"]
 
 
 async def test_unexpected_target_error_is_desensitized(caplog: pytest.LogCaptureFixture) -> None:
