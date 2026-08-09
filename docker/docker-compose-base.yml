@@ -204,7 +204,7 @@ services:
   milvus-standalone:
     profiles:
       - milvus
-    image: milvusdb/milvus:v2.6.7
+    image: milvusdb/milvus:v2.6.22
     hostname: milvus
     container_name: multirag-milvus
     command: ["milvus", "run", "standalone"]
