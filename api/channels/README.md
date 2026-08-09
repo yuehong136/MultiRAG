@@ -219,7 +219,9 @@ worker 全局队列满时，Bridge 会先 claim 消息再回复固定 busy 文�
 进入同一会话队列，因此不会与当前生成并发写同一会话。
 
 飞书完成卡片在关闭 `streaming_mode` 后，使用 CardKit batch update 添加“重新生成 / 有帮助 /
-没帮助”；生成中的卡片提供“停止生成”。按钮 value 只有 24 小时有效的不透明 action ID。worker
+没帮助”；生成中的卡片提供“停止生成”。交互区使用 JSON 2.0 的 `column_set` 直接承载 `button`，
+按钮通过 callback behavior 只回传 24 小时有效的不透明 action ID；禁止使用 JSON 2.0 已移除的
+`tag: action` 旧交互模块，否则飞书会拒绝整张卡片并触发 post/text fallback。worker
 内存记录把 action 绑定到当前 binding 进程、操作者、chat 和实际回复卡片 ID，并执行 one-shot claim；
 重复点击不会重复取消、重新生成或反馈。worker 重启后旧卡片按钮安全过期，不会恢复执行。
 `card.action.trigger` 长连接回调的同步路径只做规范化、绑定校验、幂等 claim 和入队，在飞书 3 秒

@@ -232,7 +232,8 @@ stage；patch/finish 的 stage 纳入 sequence。Redis 执行 claim 仍按 bindi
    合并或跳过，但最终状态不能丢。
 6. 完成时取消未开始的定时刷新或等待在途 patch，然后强制 final flush，再用更大的 sequence 调
    `finish_streaming_card()`。
-7. 完成后才添加按钮、完整来源、反馈区或 one-shot 卡片替换。
+7. 生成阶段可显示停止按钮；完成后先关闭 streaming，再把交互区替换为重新生成和反馈按钮。JSON 2.0
+   使用 `column_set` 直接承载 `button` 与 callback behavior，禁止使用已移除的 `tag: action` 模块。
 8. 清理 Typing reaction；失败时尝试错误卡片或文本降级。
 
 飞书官方单卡 OpenAPI 上限是 10 次/秒，本项目使用更保守的 4 次/秒硬上限。卡片创建时显式固定

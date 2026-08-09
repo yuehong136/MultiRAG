@@ -10,6 +10,7 @@ final 事件是同一模式，共用该契约。
 """
 
 import types
+from collections.abc import AsyncIterator
 
 import pytest
 
@@ -78,6 +79,29 @@ async def test_async_ask_final_event_normalizes_think_tags(async_db, final_answe
     final_events = [event for event in events if event.get("final")]
     assert len(final_events) == 1
     assert final_events[0]["answer"] == "<think>step onestep two</think>visible answer"
+
+
+async def test_think_stream_keeps_short_answer_after_closing_marker() -> None:
+    """The final body must not remain classified as reasoning by chunk shape."""
+
+    async def cumulative_chunks() -> AsyncIterator[str]:
+        yield "<thi"
+        yield "<think>内部推理</think>我也爱你"
+
+    events = [
+        (kind, value, state.in_think)
+        async for kind, value, state in dialog_service._stream_with_think_delta(
+            cumulative_chunks(),
+            min_tokens=1,
+        )
+    ]
+
+    assert events == [
+        ("marker", "<think>", True),
+        ("text", "内部推理", True),
+        ("marker", "</think>", False),
+        ("text", "我也爱你", False),
+    ]
 
 
 @pytest.mark.parametrize(

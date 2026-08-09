@@ -293,7 +293,7 @@ print('still streaming')"""
     assert "```text\n| A | B |" in markdown
     assert markdown.endswith("```")
     assert "标题" in text
-    assert post["zh_cn"]["title"] == "MultiRAG"
+    assert post["zh_cn"]["title"] == ""
     assert all(element[0]["tag"] == "text" for element in post["zh_cn"]["content"])
 
 
@@ -329,9 +329,52 @@ def test_queued_card_shows_position_and_only_opaque_action_value() -> None:
     )
 
     status, _answer, actions = card["body"]["elements"]
+    cancel_button = actions["columns"][0]["elements"][0]
     assert status["content"] == "⏳ 已排队 · 前面还有 3 条"
-    assert actions["actions"][0]["value"] == {"action_id": "opaque-cancel-id"}
+    assert actions["tag"] == "column_set"
+    assert cancel_button["tag"] == "button"
+    assert cancel_button["behaviors"] == [
+        {
+            "type": "callback",
+            "value": {"action_id": "opaque-cancel-id"},
+        }
+    ]
+    assert '"tag": "action"' not in json.dumps(card)
     assert "question" not in json.dumps(actions)
+
+
+def test_final_card_uses_json_2_column_buttons_and_preserves_formula_markdown() -> None:
+    formula = r"\(\sin^2\alpha + \cos^2\alpha = 1\)"
+    card = json.loads(
+        streaming_card_json(
+            ReplyContext(
+                status=ReplyStatus.FINAL,
+                actions=ReplyActionIds(
+                    regenerate="opaque-regenerate",
+                    helpful="opaque-helpful",
+                    unhelpful="opaque-unhelpful",
+                ),
+            )
+        )
+    )
+
+    actions = card["body"]["elements"][2]
+    buttons = [column["elements"][0] for column in actions["columns"]]
+    assert actions["tag"] == "column_set"
+    assert [button["text"]["content"] for button in buttons] == [
+        "重新生成",
+        "有帮助",
+        "没帮助",
+    ]
+    assert [button["behaviors"][0]["value"]["action_id"] for button in buttons] == [
+        "opaque-regenerate",
+        "opaque-helpful",
+        "opaque-unhelpful",
+    ]
+    assert all(button["tag"] == "button" for button in buttons)
+    assert all(button["element_id"].startswith("reply_") for button in buttons)
+    assert '"tag": "action"' not in json.dumps(card)
+    assert render_markdown(formula) == formula
 
 
 @pytest.mark.asyncio
@@ -361,7 +404,8 @@ async def test_queued_session_starts_typing_only_when_running_and_can_cancel() -
     assert session.state is ReplySessionState.CANCELLED
     assert transport.finishes[0][1] < transport.batch_updates[-1][2]
     final_actions = transport.batch_updates[-1][1][2]["params"]["element"]
-    assert final_actions["actions"][0]["value"] == {"action_id": "regenerate-id"}
+    regenerate_button = final_actions["columns"][0]["elements"][0]
+    assert regenerate_button["behaviors"][0]["value"] == {"action_id": "regenerate-id"}
 
 
 def test_delivery_uuid_is_deterministic_opaque_and_stage_scoped() -> None:

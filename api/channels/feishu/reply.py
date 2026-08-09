@@ -28,6 +28,10 @@ LOGGER = logging.getLogger(__name__)
 CARD_ANSWER_ELEMENT_ID = "answer"
 CARD_STATUS_ELEMENT_ID = "status"
 CARD_ACTIONS_ELEMENT_ID = "actions"
+_CARD_CANCEL_BUTTON_ID = "reply_cancel"
+_CARD_REGENERATE_BUTTON_ID = "reply_regenerate"
+_CARD_HELPFUL_BUTTON_ID = "reply_helpful"
+_CARD_UNHELPFUL_BUTTON_ID = "reply_unhelpful"
 _CARD_GENERATING_TEXT = "正在生成回答…"
 _CARD_BYTE_LIMIT = 24_000
 _CARD_PRINT_FREQUENCY_MS = 70
@@ -136,7 +140,10 @@ def render_post(content: str, *, max_chars: int) -> str:
     paragraphs = text.splitlines() or [text]
     payload = {
         "zh_cn": {
-            "title": "MultiRAG",
+            # The application name is already visible beside every reply. Keep
+            # the compatibility fallback unbranded so a transport downgrade
+            # does not look like model-authored content.
+            "title": "",
             "content": [[{"tag": "text", "text": paragraph or " "}] for paragraph in paragraphs],
         }
     }
@@ -169,14 +176,28 @@ def _summary_text(status: ReplyStatus) -> str:
     return "[生成中]"
 
 
-def _button(label: str, action_id: str, *, button_type: str = "default") -> dict[str, object]:
+def _button(
+    label: str,
+    action_id: str,
+    *,
+    element_id: str,
+    button_type: str = "default",
+) -> dict[str, object]:
     return {
         "tag": "button",
+        "element_id": element_id,
         "text": {"tag": "plain_text", "content": label},
         "type": button_type,
+        "size": "medium",
+        "width": "default",
         # The provider callback carries only this opaque value. Identity,
         # question text and execution parameters stay in server-owned state.
-        "value": {"action_id": action_id},
+        "behaviors": [
+            {
+                "type": "callback",
+                "value": {"action_id": action_id},
+            }
+        ],
     }
 
 
@@ -196,16 +217,47 @@ def _action_element(
 
     buttons: list[dict[str, object]] = []
     if status in {ReplyStatus.QUEUED, ReplyStatus.RUNNING} and actions.cancel:
-        buttons.append(_button("停止生成", actions.cancel))
+        buttons.append(
+            _button(
+                "停止生成",
+                actions.cancel,
+                element_id=_CARD_CANCEL_BUTTON_ID,
+            )
+        )
     elif status is ReplyStatus.FINAL:
         if actions.regenerate:
-            buttons.append(_button("重新生成", actions.regenerate))
+            buttons.append(
+                _button(
+                    "重新生成",
+                    actions.regenerate,
+                    element_id=_CARD_REGENERATE_BUTTON_ID,
+                )
+            )
         if actions.helpful:
-            buttons.append(_button("有帮助", actions.helpful, button_type="primary"))
+            buttons.append(
+                _button(
+                    "有帮助",
+                    actions.helpful,
+                    element_id=_CARD_HELPFUL_BUTTON_ID,
+                    button_type="primary",
+                )
+            )
         if actions.unhelpful:
-            buttons.append(_button("没帮助", actions.unhelpful))
+            buttons.append(
+                _button(
+                    "没帮助",
+                    actions.unhelpful,
+                    element_id=_CARD_UNHELPFUL_BUTTON_ID,
+                )
+            )
     elif status in {ReplyStatus.ERROR, ReplyStatus.CANCELLED} and actions.regenerate:
-        buttons.append(_button("重新生成", actions.regenerate))
+        buttons.append(
+            _button(
+                "重新生成",
+                actions.regenerate,
+                element_id=_CARD_REGENERATE_BUTTON_ID,
+            )
+        )
 
     if not buttons:
         return {
@@ -213,10 +265,25 @@ def _action_element(
             "element_id": CARD_ACTIONS_ELEMENT_ID,
             "content": " ",
         }
+    # Card JSON 2.0 removed the legacy ``tag: action`` module. A column set is
+    # the documented horizontal layout for direct button components and can be
+    # atomically replaced through CardKit's ``update_element`` operation.
     return {
-        "tag": "action",
+        "tag": "column_set",
         "element_id": CARD_ACTIONS_ELEMENT_ID,
-        "actions": buttons,
+        "flex_mode": "none",
+        "background_style": "default",
+        "horizontal_spacing": "default",
+        "margin": "0px",
+        "columns": [
+            {
+                "tag": "column",
+                "width": "auto",
+                "vertical_align": "top",
+                "elements": [button],
+            }
+            for button in buttons
+        ],
     }
 
 

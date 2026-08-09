@@ -3,13 +3,13 @@ import binascii
 import logging
 import re
 import time
-from collections.abc import AsyncGenerator, Generator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Generator, Mapping
 from contextlib import aclosing, suppress
 from copy import deepcopy
 from datetime import datetime
 from functools import partial
 from timeit import default_timer as timer
-from typing import Any
+from typing import Any, Literal
 
 from langfuse import Langfuse
 from sqlalchemy import func, select
@@ -1766,12 +1766,10 @@ def tts(tts_mdl, text):
 class _ThinkStreamState:
     def __init__(self) -> None:
         self.full_text = ""
-        self.last_idx = 0
-        self.endswith_think = False
-        self.last_full = ""
         self.last_model_full = ""
         self.in_think = False
         self.buffer = ""
+        self.marker_pending = ""
 
 
 def _extract_visible_answer(text: str) -> str:
@@ -1792,33 +1790,56 @@ def _extract_visible_answer(text: str) -> str:
     return f"<think>{thought}</think>{answer}"
 
 
-def _next_think_delta(state: _ThinkStreamState) -> str:
-    full_text = state.full_text
-    if full_text == state.last_full:
-        return ""
-    state.last_full = full_text
-    delta_ans = full_text[state.last_idx :]
-
-    if delta_ans.find("<think>") == 0:
-        state.last_idx += len("<think>")
-        return "<think>"
-    if delta_ans.find("<think>") > 0:
-        delta_text = full_text[state.last_idx : state.last_idx + delta_ans.find("<think>")]
-        state.last_idx += delta_ans.find("<think>")
-        return delta_text
-    if delta_ans.endswith("</think>"):
-        state.endswith_think = True
-    elif state.endswith_think:
-        state.endswith_think = False
-        return "</think>"
-
-    state.last_idx = len(full_text)
-    if full_text.endswith("</think>"):
-        state.last_idx -= len("</think>")
-    return re.sub(r"(<think>|</think>)", "", delta_ans)
+_THINK_MARKERS = ("<think>", "</think>")
+_ThinkToken = tuple[Literal["text", "marker"], str]
 
 
-async def _stream_with_think_delta(stream_iter, min_tokens: int = 16):
+def _partial_think_marker_suffix(value: str) -> int:
+    lowered = value.lower()
+    return max(
+        (length for marker in _THINK_MARKERS for length in range(1, min(len(lowered), len(marker) - 1) + 1) if marker.startswith(lowered[-length:])),
+        default=0,
+    )
+
+
+def _split_think_tokens(
+    state: _ThinkStreamState,
+    content: str,
+    *,
+    final: bool = False,
+) -> list[_ThinkToken]:
+    """Split every marker in one model delta, including boundary-spanning tags."""
+
+    pending = state.marker_pending + content
+    state.marker_pending = ""
+    tokens: list[_ThinkToken] = []
+    while pending:
+        lowered = pending.lower()
+        positions = [(lowered.find(marker), marker) for marker in _THINK_MARKERS]
+        positions = [(position, marker) for position, marker in positions if position >= 0]
+        if positions:
+            position, marker = min(positions, key=lambda item: item[0])
+            if position:
+                tokens.append(("text", pending[:position]))
+            tokens.append(("marker", marker))
+            pending = pending[position + len(marker) :]
+            continue
+
+        keep = 0 if final else _partial_think_marker_suffix(pending)
+        visible = pending[:-keep] if keep else pending
+        if visible:
+            tokens.append(("text", visible))
+        state.marker_pending = pending[-keep:] if keep else ""
+        break
+    return tokens
+
+
+async def _stream_with_think_delta(
+    stream_iter: AsyncIterator[str],
+    min_tokens: int = 16,
+) -> AsyncIterator[tuple[Literal["text", "marker"], str, _ThinkStreamState]]:
+    """Normalize cumulative model chunks into ordered text and think markers."""
+
     state = _ThinkStreamState()
     async for chunk in stream_iter:
         if not chunk:
@@ -1832,31 +1853,38 @@ async def _stream_with_think_delta(stream_iter, min_tokens: int = 16):
         if not new_part:
             continue
         state.full_text += new_part
-        delta = _next_think_delta(state)
-        if not delta:
-            continue
-        if delta in ("<think>", "</think>"):
-            if delta == "<think>" and state.in_think:
+        for kind, value in _split_think_tokens(state, new_part):
+            if kind == "marker":
+                if value == "<think>" and state.in_think:
+                    continue
+                if value == "</think>" and not state.in_think:
+                    continue
+                if state.buffer:
+                    yield ("text", state.buffer, state)
+                    state.buffer = ""
+                state.in_think = value == "<think>"
+                yield ("marker", value, state)
                 continue
-            if delta == "</think>" and not state.in_think:
+            state.buffer += value
+            if num_tokens_from_string(state.buffer) < min_tokens:
                 continue
-            if state.buffer:
-                yield ("text", state.buffer, state)
-                state.buffer = ""
-            state.in_think = delta == "<think>"
-            yield ("marker", delta, state)
+            yield ("text", state.buffer, state)
+            state.buffer = ""
+
+    for kind, value in _split_think_tokens(state, "", final=True):
+        if kind == "text":
+            state.buffer += value
             continue
-        state.buffer += delta
-        if num_tokens_from_string(state.buffer) < min_tokens:
-            continue
-        yield ("text", state.buffer, state)
-        state.buffer = ""
+        if state.buffer:
+            yield ("text", state.buffer, state)
+            state.buffer = ""
+        if value == "</think>" and state.in_think:
+            state.in_think = False
+            yield ("marker", value, state)
 
     if state.buffer:
         yield ("text", state.buffer, state)
         state.buffer = ""
-    if state.endswith_think:
-        yield ("marker", "</think>", state)
 
 
 def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_config=None):
