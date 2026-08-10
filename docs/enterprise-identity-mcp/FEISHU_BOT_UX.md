@@ -303,11 +303,16 @@ RAG 来源必须通过 `references_ready` 结构化事件输出，而不是从�
 > 溢出返回 busy。停止按钮取消当前 SSE 子任务或阻止 queued 项启动，卡片明确声明外部操作不视为
 > 已撤销。重新生成以新 request ID 重入同一队列，只替换当前会话最新且问题匹配的完成轮次；
 > 旧卡在出现后续追问后 fail closed，失败/取消轮次按普通 retry 处理。替换通过 Channel execution
-> 的私有候选会话完成：未经扩展的 RAGFlow completion 只写候选，成功且公开头未变化才原子晋升；
+> 的私有工作态完成：当前 MultiRAG Dialog/Canvas completion 只写候选，成功且公开头未变化才原子晋升；
 > 失败、取消或并发冲突不改公开历史。Channel 历史只提交可见答案，reasoning-only 不提交；含
 > 外部工具/MCP/未知组件的 Canvas 不允许直接重放。反馈与操作均绑定
 > 操作者、chat、回复卡片和 one-shot opaque action ID。`/new` 清队列确认、跨进程恢复和 steering
 > 不在本首期内。
+>
+> **2026-08-10 目标架构订正**：上述“Dialog/Canvas 都写候选”是安全过渡态，不是永久通用抽象。
+> 后续由 [MultiRAG Channel 执行架构](../channel-program/EXECUTION_ARCHITECTURE.md) 分阶段收敛：
+> Dialog 使用内存工作副本 + 终态 CAS，Canvas 在无落库执行端口出现前保留专属候选；Provider
+> 卡片行为只消费 capabilities 和执行事件，不感知两种历史策略。
 
 ---
 
@@ -506,6 +511,9 @@ SLO 是上线初始目标，真实压测和灰度后可调整；调整必须写�
 | EIM-U1 | CHN-U8 | Typing、CardKit 流式卡片、富文本和 fallback | U0；不依赖 C5/M3 |
 | EIM-U10 | CHN-U13 | 后台单写者刷新、latest-value 合并、固定客户端打印参数 | U9；不依赖 C5 |
 | EIM-U4 | CHN-U9 | follow-up queue、纯生成取消、重新生成、反馈 | U1 |
+| EIM-U11 | CHN-X13 | Provider/Target capabilities 与目标私有 driver | U4 |
+| EIM-U12 | CHN-U14 | Dialog detached working copy + 终态 CAS | U11 |
+| EIM-U13 | CHN-U15 | Canvas 专属候选与周期 GC | U11 |
 | EIM-U3 | CHN-U10 | mention-only 群聊、话题、thread session | U1、U2、C3、O2 |
 | EIM-U5 | CHN-X10 | references/artifacts 结构化事件与渲染 | U0、P2 |
 | EIM-U6 | CHN-X11 | 图片/文件/语音输入输出 | U0、U5、C3、附件安全基建 |

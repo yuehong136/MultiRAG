@@ -142,6 +142,7 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
 | [CONTRACTS](CONTRACTS.md) | DTO、数据库约束、Principal、JWT、错误码和 API 契约 | 飞书后台操作步骤 |
 | [FEISHU_ONBOARDING](FEISHU_ONBOARDING.md) | 去哪里申请 App、拿什么凭据、开什么权限和事件 | MCP 内部授权实现 |
 | [FEISHU_BOT_UX](FEISHU_BOT_UX.md) | 飞书流式卡片、ReplySession、话题、队列、多模态和体验验收 | 身份/JWT 的最终字段 |
+| [Channel 执行架构](../channel-program/EXECUTION_ARCHITECTURE.md) | Provider × Dialog/Canvas 正交边界、历史事务、能力与 I/O 预算 | 飞书卡片细节 |
 | [REFERENCES](REFERENCES.md) | 每个开源/官方项目参考什么、不参考什么、当前提交锚点 | 我们自己的最终架构 |
 | [VERSION_BASELINE](VERSION_BASELINE.md) | 已核验版本、目标版本、升级闸门和重新核验命令 | 功能排期 |
 | [ROADMAP](ROADMAP.md) | `EIM-*` 任务、依赖、仓库、锚点、完成证据和进度 | 背景论证 |
@@ -162,7 +163,7 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   是不可信外部标识，不能直接作为 Principal。这条边界必须保留。
 - `api/channels/feishu/channel.py::_normalize` 当前只从 `open_id/union_id/user_id` 中取第一个
   非空字符串，无法支持正式身份解析。
-- `api/channel_execution/adapters.py::DatabaseChannelExecutionResolver.resolve` 当前把
+- `api/channel_execution/adapters.py::SqlAlchemyBindingResolver.resolve` 当前把
   `principal_id` 固定为 `None`，这里是验证后身份提升的装配点。
 - `api/utils/api_utils.py::Principal` 当前只有 `id/email/nickname`，不足以表达租户、认证方式、
   企业业务主体和委托上下文。
@@ -170,9 +171,10 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   兼容设计和迁移。
 - MCP 客户端仍使用旧式 `ClientSession + initialize` 和静态 headers，需要升级为请求级 token
   与 MCP SDK 2 客户端。
-- Channel Execution 已产生 `message_delta`，但 `api/channels/runtime_client.py::_consume_sse`
-  会重新聚合为单个 `AgentReply`；飞书再以一次 `msg_type=text` 回复。体验首要缺口是执行流与
-  Provider 渲染之间缺少 transport-neutral ReplySession，而不是必须先迁移 SDK。
+- Channel Execution 已通过 `stream()` 直接向 transport-neutral ReplySession 交付类型化事件；
+  飞书已实现 CardKit 渐进式回复，`ask()` 只保留为兼容聚合入口。下一项执行层缺口不是 transport，
+  而是把 Provider/Target capabilities 与 Dialog/Canvas 各自的提交策略按
+  [执行架构](../channel-program/EXECUTION_ARCHITECTURE.md) 收口。
 - 当前 `IncomingMessage`/`OutgoingMessage` 不表达 thread、mention、attachment、reference、
   card handle 或 delivery UUID；这些目标契约统一见 [FEISHU_BOT_UX](FEISHU_BOT_UX.md)。
 

@@ -1,7 +1,8 @@
 # EIM 实施路线图与进度账本
 
-> 最后更新：2026-08-09
-> 当前状态：文档基线、EIM-U0、EIM-U1、EIM-U4、EIM-U8～U10 已完成。
+> 最后更新：2026-08-10
+> 当前状态：文档基线、EIM-U0、EIM-U1、EIM-U4、EIM-U8～U10 已完成；
+> EIM-U11～U13 已完成架构定案、尚未实现；EIM-O4 挂起到出现明确的跨进程恢复需求。
 
 ---
 
@@ -290,6 +291,9 @@ EIM-C5 与 U0/U1 并行，不是前置依赖。
 | EIM-U8 | CHN-U11 | MR | 飞书渐进式回复 transport Protocol 运行时可检查，恢复 beartype 对 reply session 构造入口的参数校验 | ✅ | U1 | supervisor 启动不再产生对应 `BeartypeClawDecorWarning`；结构化 transport 可通过运行时实例检查；不合规实现被拒绝 |
 | EIM-U9 | CHN-U12 | MR + 飞书 | CardKit 自适应增量合并，减少模型四字 delta 与同步 patch RTT 叠加造成的碎片化慢更新 | ✅ | U1 | 首个正文快速显示；持续输出时后续 patch 默认至少合并 16 字或等待 1s；patch RTT 不计入下一批等待；final flush 不丢 |
 | EIM-U10 | CHN-U13 | MR + 飞书 | CardKit 后台单写者刷新与客户端流式打印参数，彻底解除模型 delta 消费对飞书 patch RTT 的背压 | ✅ | U9 | `append()` 不等待 CardKit 网络；最多 1 个 patch 在途且只保留最新待发快照；定时刷新不依赖后续 delta；终态 drain + final flush；显式 `fast` 打印策略 |
+| EIM-U11 | CHN-X13 | MR | Provider/Target capabilities 与目标私有 driver；Dialog 为主目标、Canvas 为扩展目标，拆除具体目标方法组成的通用 session manager | ⬜ | U4 | Provider × Target 无组合分支；现有行为逐事件等价；新增目标不修改既有 Provider；见 [执行架构](../channel-program/EXECUTION_ARCHITECTURE.md) |
+| EIM-U12 | CHN-U14 | MR | Dialog detached working copy + 终态单次 CAS，移除 Dialog 候选会话写放大 | ⬜ | U11 | 失败/取消/仅推理零公开历史写；并发头冲突不覆盖；新会话终态才发布；普通/重新生成均无候选 insert/delete |
+| EIM-U13 | CHN-U15 | MR | Canvas candidate strategy 独立化、候选元数据显式化、TTL GC 移出请求热路径 | ⬜ | U11 | 保持 MultiRAG Canvas 同步区零 Channel 私参；周期批量回收；公开历史 CAS；完整 `make integration` |
 
 所有工具过程卡片只显示服务端白名单安全摘要；不能显示完整 MCP 参数、模型推理、企业工号、token、
 文件内容或底层错误。纯输出 U1 不订阅 `card.action.trigger`，只有 U4/U7 需要交互回调。
@@ -303,6 +307,7 @@ EIM-C5 与 U0/U1 并行，不是前置依赖。
 | EIM-O1 | 两仓 + infra | production config、issuer/resource DNS+TLS、KMS/JWKS、Secret rotation、网络策略 | ⬜ | I8,A6 | runbook 演练；proxy 不可公网直达；密钥轮换无中断；配置无明文 |
 | EIM-O2 | 两仓 + 飞书 | 分阶段 rollout：shadow identity -> RAG Principal -> read-only MCP -> medic canary | ⬜ | O1,M5,U1 | 每阶段 rollback/指标/审计；离职演练；管理员签字；无 big-bang |
 | EIM-O3 | 架构评审 | 判断是否抽 identity-broker、接企业 IdP EMA/ID-JAG、开放外部 MCP client | ⏸ | O2 + 实际需求 | 满足 README 抽取条件；独立 ADR/威胁模型；不提前实现 |
+| EIM-O4 | MR + 架构评审 | API 侧 durable run ledger、单会话单活和 cancel/final CAS；Provider worker 继续只走内部 API/SSE | ⏸ | U11～U13 + 明确的 worker 重启恢复需求 | 不按 token 写库；DB 约束兜底单活；已接受取消不被迟到成功覆盖；未满足需求前不实现完整 workflow runtime |
 
 推荐 rollout：
 
@@ -330,7 +335,7 @@ EIM-U0  execution stream + ReplySession（与 C1 都会触碰 execution contract
 体验快速通道（不等待身份/MCP/SDK 迁移）：
 
 ```text
-U0 -> U1 -> U4
+U0 -> U1 -> U4 -> U11 -> U12/U13
 ```
 
 身份、MCP 与敏感操作主通道：
@@ -359,3 +364,4 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 | 2026-08-09 | EIM-U8 / CHN-U11 | `FeishuReplyTransport` 声明为运行时可检查 Protocol，恢复 beartype 对渐进式 reply session 构造入口的 transport 参数校验；同步订正 UX 基线中的 U1 实现状态 | MultiRAG / `fix(channel): restore Feishu reply runtime checks (EIM-U8, CHN-U11)` | `test_feishu_reply.py` **15 passed in 0.22s**，覆盖运行时结构检查、无关实现拒绝和告警升级为 error 的全新进程 import；现场复现命令修复前 exit 1、修复后零输出 exit 0；`make verify` format/Ruff、6 import contracts、async DB gate、mypy 62 files 全绿，unit **1661 passed, 1 unrelated warning in 25.46s**；`git diff --check` 通过 | Codex |
 | 2026-08-09 | EIM-U9 / CHN-U12 | 飞书流式卡片改为自适应增量合并：首个正文快速显示，后续默认合并 16 个新字符或在持续输出 1s 后更新；下一轮窗口从 CardKit patch 返回后计时，避免同步 RTT 造成背靠背四字刷新；final flush 语义不变 | MultiRAG / `fix(channel): coalesce short Feishu card deltas (EIM-U9, CHN-U12)` | 定向两文件 **34 passed in 0.33s**，覆盖四字中文 delta 合并、1s 上限、2s 模拟 RTT 与既有 final flush/sequence/fallback；`make verify` format/Ruff、6 import contracts、async DB gate、mypy 62 files 全绿，unit **1664 passed, 1 unrelated warning in 25.23s**；`git diff --check` 通过 | Codex |
 | 2026-08-09 | EIM-U10 / CHN-U13 | `append()` 改为非阻塞后台刷新：250ms 定时器、单 patch 在途、latest-value 待发合并，终态 drain 后强制 final patch/finish；保留 strict sequence、delivery UUID 与 card→post→text 降级。CardKit 显式配置 70ms/1 字/`fast` 客户端打印节奏；设计对照官方流式卡片文档、Channel SDK、OpenClaw、LangBot 和 shareAI-lab 快照源码 | MultiRAG / `perf(channel): decouple Feishu card flushing (EIM-U10, CHN-U13)` | 六个飞书/Bridge 定向文件 **95 passed in 2.84s**；覆盖 append 不等待慢 patch、1 running + latest pending、独立定时 flush、terminal drain/final、客户端配置与后台失败 fallback；`make fix` 1177 files unchanged；`make verify` format/Ruff、6 import contracts、async DB gate、mypy 62 files全绿，unit **1665 passed, 1 unrelated warning in 23.41s** | Codex |
+| 2026-08-10 | EIM-U11～U13 / CHN-X13、U14、U15 | 定案 MultiRAG Channel 执行架构：Provider 与目标正交，Dialog 是主目标并迁移到 detached CAS，Canvas 是扩展目标并保留独立 candidate CAS；能力取 Provider/Target/RunPolicy 交集，worker 继续无数据库；候选 GC 移出请求热路径。EIM-O4/CHN-O14 durable run ledger 挂起到真实恢复需求成立 | MultiRAG docs / 本次变更 | 核对当前 `TargetExecutorRegistry`、`runtime_client`、`ChannelSessionManager`、Dialog/Canvas completion；刷新 RAGFlow、DeerFlow、Open WebUI、LangBot HEAD 与官方执行/持久化资料；相对链接、ID 双向 grep、`make verify` | Codex |

@@ -96,7 +96,7 @@ class WorkloadAuthenticator(Protocol):
 
 @runtime_checkable
 class ChannelSessionManager(Protocol):
-    """Owns Channel copy-on-write history without extending upstream services."""
+    """Owns Channel copy-on-write history without extending MultiRAG sync-area services."""
 
     async def prepare_canvas(
         self,

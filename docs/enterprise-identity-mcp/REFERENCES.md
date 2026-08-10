@@ -227,7 +227,10 @@ allowlist 不能替代本项目 identity resolver。
 
 ---
 
-## 9. MultiRAG/RAGFlow 既有实现
+## 9. MultiRAG 与 RAGFlow 上游兼容边界
+
+这里的 `RAGFlow` 只表示外部源码来源和兼容基线。本仓中的表、函数、方法、路由和运行时一律称为
+MultiRAG 实体；不得把外部项目名当作本仓运行时组件名。
 
 必须保留并优先复用：
 
@@ -243,7 +246,68 @@ allowlist 不能替代本项目 identity resolver。
 
 ---
 
-## 10. 引用与复制规则
+## 10. 对话执行与重新生成的最新参考
+
+本节只记录形成 MultiRAG 决策所需的外部事实；最终架构以
+[`EXECUTION_ARCHITECTURE`](../channel-program/EXECUTION_ARCHITECTURE.md) 为准。
+
+### RAGFlow 上游
+
+核验快照：`b5bffa0fa3213bbc0fee046422c7de4a3db2e39c`。
+
+- Dialog Chat API 支持客户端显式传完整历史；`store_history_messages=false` 时不创建/更新持久化
+  会话，并要求 `pass_all_history_messages=true`；
+- Web 侧重新生成会截断到目标问题之前，再提交原问题和明确的截断历史，包括空历史；
+- Canvas completion 仍会自行读取/创建 `API4Conversation`，并在流结束后 append message、reference、
+  DSL 和 errors，尚无对等的 no-store 参数。
+
+因此 MultiRAG 不应让 Dialog 永久承担 Canvas 的候选写放大，也不能在 Canvas 无替代端口时直接删除
+隔离候选。参考：
+
+- [`chat_api.py`](https://github.com/infiniflow/ragflow/blob/b5bffa0fa3213bbc0fee046422c7de4a3db2e39c/api/apps/restful_apis/chat_api.py#L1225-L1397)
+- [`logic-hooks.ts`](https://github.com/infiniflow/ragflow/blob/b5bffa0fa3213bbc0fee046422c7de4a3db2e39c/web/src/hooks/logic-hooks.ts#L729-L749)
+- [`canvas_service.py`](https://github.com/infiniflow/ragflow/blob/b5bffa0fa3213bbc0fee046422c7de4a3db2e39c/api/db/services/canvas_service.py#L357-L426)
+
+### DeerFlow 与 LangGraph
+
+DeerFlow 当前把 run 与 thread 分开：run 有独立状态、owner lease、cancel request，并用数据库条件
+更新解决取消与成功终态竞争；数据库部分唯一索引保证一个 thread 最多一个 active run。重新生成先
+准备 checkpoint/input，再创建新 run，不把旧问题当普通 follow-up 追加。
+
+LangGraph 官方把 thread state 保存为 checkpoints，replay 从指定 checkpoint 之后重新执行；官方也
+明确说明 replay 会再次触发后续 LLM、API 和 interrupt。因此 MultiRAG 只借鉴 run/thread 分离、
+checkpoint/CAS 和恢复边界，绝不把未知副作用图的 replay 当安全重新生成。
+
+- [DeerFlow run model](https://github.com/bytedance/deer-flow/blob/17531d7c118d6111b863f945ff910a7889a235b0/backend/packages/harness/deerflow/persistence/run/model.py)
+- [DeerFlow regenerate API](https://github.com/bytedance/deer-flow/blob/17531d7c118d6111b863f945ff910a7889a235b0/backend/app/gateway/routers/thread_runs.py#L814-L833)
+- [LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence)
+
+### Open WebUI
+
+Open WebUI 当前用独立 chat message 表的 `parent_id` 重建 `childrenIds`，能表达真正的消息分支。
+MultiRAG 目前 Dialog/Canvas 是线性公开会话，因此只采用“新 run + 替换最新完成尾轮”的产品语义，
+不提前引入只有 Channel 理解的半套分支 DAG。
+
+- [Open WebUI chat message model](https://github.com/open-webui/open-webui/blob/01f4282f1ffe0d6212f58d3afbeae21fffd0c4be/backend/open_webui/models/chat_messages.py#L130-L195)
+
+### Vercel AI SDK
+
+官方持久化指南把完整消息保存放在流 `onFinish`，并建议持久化场景使用服务端消息 ID；这支持
+MultiRAG “流式展示不等于已提交历史、终态才发布”的选择。其恢复流文档同时明确 abort 与 resume
+存在取舍，所以 MultiRAG 不把取消和跨进程恢复混成一个首期功能。
+
+- [Chatbot Message Persistence](https://ai-sdk.dev/docs/ai-sdk-ui/chatbot-message-persistence)
+- [Chatbot Resume Streams](https://ai-sdk.dev/docs/ai-sdk-ui/chatbot-resume-streams)
+
+### 飞书官方边界
+
+飞书仍只负责 Provider 交互：CardKit 单卡流式更新、关闭 streaming 后再进入终态交互、回调快速
+确认和耗时逻辑异步执行。它不拥有 MultiRAG Dialog/Canvas 历史事务。
+
+- [流式更新卡片](https://open.feishu.cn/document/cardkit-v1/streaming-updates-openapi-overview)
+- [接收并处理回调](https://open.feishu.cn/document/event-subscription-guide/callback-subscription/receive-and-handle-callbacks)
+
+## 11. 引用与复制规则
 
 - 参考代码前固定上游 SHA，并在 PR 描述中写明路径和许可证。
 - 复制代码时保留原许可证要求和 notices；能按接口重写就不复制。

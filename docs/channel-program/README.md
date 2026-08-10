@@ -34,6 +34,7 @@
 | [PROGRESS](PROGRESS.md) | 📌 **进度账本**（维护协议 + 四阶段任务表 + 跨仓联动 + 部署矩阵 + 变更日志） | 全体 |
 | [DECISIONS](DECISIONS.md) | `CHN-ADR-NN` 决策记录 | 全体 |
 | [CONTRACT](CONTRACT.md) | ⭐ 前后端接口契约与 `channel-api/vN` 版本标记 | 前后端 |
+| [EXECUTION_ARCHITECTURE](EXECUTION_ARCHITECTURE.md) | ⭐ Provider × Dialog/Canvas 正交架构、历史事务、能力协商与实施顺序 | Channel / 执行层 |
 | [企业身份与 MCP 项目](../enterprise-identity-mcp/README.md) | 飞书企业身份、Principal、MCP 委托和 of_mcp 授权的后续扩展 | 后端 / 安全 / 运维 |
 | [飞书机器人体验基线](../enterprise-identity-mcp/FEISHU_BOT_UX.md) | ReplySession、流式卡片、队列/话题、多模态与验收 | Channel / Agent / 测试 |
 | [`api/channels/README.md`](../../api/channels/README.md) | 已上线行为、部署形态、上游所有权表（**不在本文档集内，勿重复**） | 研发 / 运维 |
@@ -49,21 +50,25 @@
 CHN-O7（主密钥密钥环）、CHN-O12（空 env 变量）、CHN-O6（连接自检）·
 **部署**：CHN-P11 的两道闸门均已完成（2026-08-06 14:44 重启 API 与 supervisor）。
 
-**新增 EIM 身份与体验扩展**：CHN-X5～X12、CHN-U8～U13、CHN-P14 统一由
+**新增 EIM 身份与体验扩展**：CHN-X5～X13、CHN-U8～U15、CHN-O14、CHN-P14 统一由
 [`docs/enterprise-identity-mcp/`](../enterprise-identity-mcp/README.md) 的 EIM 路线图驱动；其中
 CHN-X9、CHN-U8、CHN-U11～U13 已完成，其余状态以 [PROGRESS](PROGRESS.md) 为准。旧程序“全部完成”
 的历史结论保持成立，但不再表示 Channel 子系统没有后续待办。
-**最后更新**：2026-08-09
+**最后更新**：2026-08-10
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | **PR-0** | 建立账本与契约文档（两仓 docs-only） | ✅ 完成 |
 | **S** | 安全加固（S1–S6） | ✅ 完成 |
-| **U** | 今日可见缺陷（U1–U9、U11–U13 完成；U10 挂起） | 🔵 扩展中 |
+| **U** | 今日可见缺陷（U1–U9、U11–U13 完成；U10 挂起；U14–U15 已规划） | 🔵 扩展中 |
 | **P** | Provider 通用化（P1–P11、P13 全部完成并部署） | ✅ 完成 |
 | **O** | 运维（O1–O7、O12 完成；O8–O11 未排期） | ✅ 完成（排期内） |
 | **X** | 跨仓契约（X1–X3 完成） | ✅ 完成 |
 | **EIM 扩展** | 结构化身份 X5–X8；渐进式回复/群聊/多模态 X9–X12、U8–U10；官方 transport P14 | ⬜ 未开始 |
+
+执行架构的下一组任务是 CHN-X13、CHN-U14、CHN-U15；它们不继续扩大已完成的 CHN-U9，
+而是按 [`EXECUTION_ARCHITECTURE`](EXECUTION_ARCHITECTURE.md) 把 Provider/Target 契约、Dialog
+无候选提交和 Canvas 兼容候选分别收口。CHN-O14 只在确认需要 worker 重启恢复后启动。
 
 ### 24 个 PR 全部落地并部署完毕
 
@@ -275,6 +280,11 @@ MultiRAG 与 web 是两个仓、两条 CI、两次部署，**不存在跨仓原�
 7. **前端不得自建服务端已有的词表**（运行时状态、错误码、provider 字段）。单一真源在
    [CONTRACT](CONTRACT.md)。
 8. **不许放宽门禁换绿**（AGENTS.md 核心规则）。修根因，不改棘轮。
+9. **本仓实体一律使用 MultiRAG 口径。** 表、函数、方法、路由、执行器和运行时都称为 MultiRAG
+   实体；`RAGFlow` 只用于外部上游来源、commit/PR、许可证和差异对比，不用于描述本仓运行时。
+10. **Provider 与执行目标正交。** Provider 不读取 Dialog/Canvas 表，目标驱动不渲染 Provider
+    卡片；任何 Provider × Target 组合分支都必须先经 [CHN-ADR-07](DECISIONS.md#chn-adr-07--provider-与执行目标正交历史事务由目标驱动拥有)
+    评审。
 
 ## 变更日志
 
@@ -289,3 +299,4 @@ MultiRAG 与 web 是两个仓、两条 CI、两次部署，**不存在跨仓原�
 | 2026-08-09 | CHN-U11 修复飞书渐进式 reply transport 的 beartype 运行时检查告警；CHN-X9、CHN-U8、CHN-U11 当前均已完成 | Codex |
 | 2026-08-09 | CHN-U12 修复飞书 CardKit 四字 delta 高频同步 patch：首屏后按 16 字/1s 双闸门合并，且网络 RTT 不触发背靠背小更新 | Codex |
 | 2026-08-09 | CHN-U13 将飞书 CardKit patch 改为后台单写者与 latest-value 合并，显式固定客户端 `fast` 流式打印参数，解除 execution SSE 的网络背压 | Codex |
+| 2026-08-10 | 定案 CHN-ADR-07：Provider 与 Dialog/Canvas 正交，Dialog 为主目标、Canvas 为扩展目标；新增执行架构文档和 MultiRAG 术语不变量，并把后续实现拆成 X13/U14/U15/O14 | Codex |

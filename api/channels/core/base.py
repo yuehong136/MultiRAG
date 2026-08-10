@@ -77,7 +77,7 @@ class IncomingMessage:
         request_id: str = "",
         operation: Literal["message", "regenerate"] = "message",
     ) -> None:
-        """Accept the RAGFlow ``text`` contract and local ``content`` alias."""
+        """Accept the MultiRAG ``text`` contract and local ``content`` alias."""
 
         if text is not None and content is not None and text != content:
             raise ValueError("content and text cannot contain different values")

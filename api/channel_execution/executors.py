@@ -69,7 +69,7 @@ def _merge_generated_session(
 
 
 class SqlAlchemyCanvasCompletionAdapter:
-    """Guard the binding revision, then use the upstream latest-release path."""
+    """Guard the binding revision, then use the MultiRAG latest-release path."""
 
     def __init__(
         self,

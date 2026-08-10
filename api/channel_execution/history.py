@@ -1,9 +1,9 @@
-"""Channel-owned conversation branching over upstream RAGFlow sessions.
+"""Channel-owned branching over MultiRAG Dialog and Canvas sessions.
 
-The upstream completion services intentionally know nothing about Channel
+The MultiRAG completion services intentionally know nothing about Channel
 operations.  This module gives Channel executions copy-on-write semantics:
 run against a private candidate session, then atomically promote it only after
-the upstream stream completed successfully.
+the target stream completed successfully.
 """
 
 from __future__ import annotations

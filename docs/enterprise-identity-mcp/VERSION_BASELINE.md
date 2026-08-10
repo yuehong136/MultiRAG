@@ -1,6 +1,7 @@
 # 技术版本与上游基线
 
-> **基础版本核验：2026-08-07；飞书 SDK、官方文档和交互参考仓刷新：2026-08-09
+> **基础版本核验：2026-08-07；飞书 SDK、官方文档和交互参考仓刷新：2026-08-09；
+> 对话执行、重新生成和持久化参考刷新：2026-08-10
 > （Asia/Shanghai）**
 > 版本会变化。本文记录的是可复现快照和选型规则，不是“永远最新”的承诺。
 
@@ -51,10 +52,12 @@ FastMCP 继续作为 of_mcp 的 server/composition 框架，但授权契约必�
 | `larksuite/oapi-sdk-python` | `8d6402635d0a9314ddae765ae64931aabca30f79` | 通讯录 V3、token 生命周期、完整 OpenAPI |
 | `larksuite/openclaw-lark` | `dde0be3680d6fd5443cab426c8f4b3216266346a` | 流式卡片、敏感确认、飞书资源工具和安全警告 |
 | `openclaw/openclaw` | `73bdb4b924f6db3c4ab45c5e40fbf61b06fa56a0` | 生产 Feishu channel 能力矩阵、typing/streaming/media/thread policy |
-| `bytedance/deer-flow` | `e16ef2969b1446162e19af7bdde1446674851e66` | `channel_connections`、单卡 streaming、follow-up queue、owner 隔离 |
-| `langbot-app/LangBot` | `22c389edc16149828380c7153c0b492400f66a5f` | 多 Provider、访问控制、Lark WS/Markdown 与运维面 |
+| `bytedance/deer-flow` | `17531d7c118d6111b863f945ff910a7889a235b0` | `channel_connections`、run/thread 分离、重新生成 checkpoint、单活与取消 CAS |
+| `langbot-app/LangBot` | `e37987215e8465818e373fa523075b5482b70a6e` | 多 Provider、访问控制、Lark WS/Markdown 与运维面 |
 | `shareAI-lab/lark-channel` | `cf056995730a3775529c3bf87fce8033cea554a4` | 群组/线程隔离、工具过程流式卡片 |
 | `modelcontextprotocol/python-sdk` | `a4f4ccd091138771535e17191123f20b30fda68e` | MCP SDK v2 客户端、双协议兼容和 OAuth |
+| `infiniflow/ragflow` | `b5bffa0fa3213bbc0fee046422c7de4a3db2e39c` | 外部兼容基线：Dialog no-store/全量历史与 Canvas 自持久化差异 |
+| `open-webui/open-webui` | `01f4282f1ffe0d6212f58d3afbeae21fffd0c4be` | 独立消息表、parent/children 分支和重新生成语义对照 |
 
 源码参考的具体内容和禁止照搬项见 [REFERENCES](REFERENCES.md)。
 
@@ -87,6 +90,10 @@ git ls-remote https://github.com/larksuite/channel-sdk-python.git HEAD
 git ls-remote https://github.com/larksuite/oapi-sdk-python.git HEAD
 git ls-remote https://github.com/modelcontextprotocol/python-sdk.git HEAD
 git ls-remote https://github.com/modelcontextprotocol/ext-auth.git HEAD
+git ls-remote https://github.com/infiniflow/ragflow.git HEAD
+git ls-remote https://github.com/bytedance/deer-flow.git HEAD
+git ls-remote https://github.com/open-webui/open-webui.git HEAD
+git ls-remote https://github.com/langbot-app/LangBot.git HEAD
 ```
 
 每次升级 PR 必须在 ROADMAP 变更日志记录：

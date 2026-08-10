@@ -16,6 +16,7 @@
 | [CHN-ADR-04](#chn-adr-04--leader-lease-用-binding-维度而不是租户维度) | leader lease 用 binding 维度而不是租户维度 | ✅ 采纳 |
 | [CHN-ADR-05](#chn-adr-05--文档分层入库讲我们的代码本地讲别人的代码) | 文档分层：入库讲我们的代码，本地讲别人的代码 | ✅ 采纳 |
 | [CHN-ADR-06](#chn-adr-06--私有-runtime-契约的每次变更都拆成-tolerate--emit-两个-pr) | 私有 runtime 契约的每次变更都拆成 tolerate + emit 两个 PR | ✅ 采纳 |
+| [CHN-ADR-07](#chn-adr-07--provider-与执行目标正交历史事务由目标驱动拥有) | Provider 与执行目标正交，历史事务由目标驱动拥有 | ✅ 采纳 |
 
 ---
 
@@ -261,3 +262,56 @@ reconcile——所有 binding，包括健康的飞书 binding，都不再被拉�
 （CHN-P4、CHN-O2）之后。对任何今天没跑 supervisor 的部署——按 compose 现状那是**默认情况**——
 它跑起来的第一个 supervisor 就已经越过了两个 tolerate 步。这条规则因此只约束当前手工运行
 supervisor 的少数环境。
+
+---
+
+## CHN-ADR-07 · Provider 与执行目标正交，历史事务由目标驱动拥有
+
+**日期**：2026-08-10 · **状态**：✅ 采纳
+
+**背景**：CHN-U9 为连续追问、取消和重新生成建立了正确的安全底线：生成成功且有可见答案前，
+不得污染公开历史。首期实现让 MultiRAG Dialog 和 MultiRAG Canvas 都在私有数据库候选上执行，
+再由 `ChannelSessionManager` 原子晋升。这个方案修复了线上错误，但若把它固化成最终抽象，会出现
+三个长期问题：
+
+1. `ChannelSessionManager` 每增加一个目标就增加一组 `prepare_xxx/complete_xxx`，不是可扩展端口；
+2. Dialog 本身可以对 detached transcript 生成，仍创建数据库候选造成不必要写放大；
+3. Canvas completion 当前会自行持久化，不能因为 Dialog 可无落库就直接删掉 Canvas 隔离层。
+
+同时，后续会增加多个 Provider，而 MultiRAG 的主适配目标仍是 Dialog，Canvas 只是本项目额外支持。
+如果历史策略落在飞书 worker 或 Provider bridge，未来每个 Provider 都会复制一份 Dialog/Canvas
+分支，跟进上游也会不断触碰同步区。
+
+### 方案比较
+
+| 方案 | 结论 |
+|---|---|
+| A. 给 MultiRAG 同步区的 Dialog/Canvas completion 增加 Channel 私有 flags | ❌ 上游每次同步都冲突，且把 transport 生命周期泄漏进业务核心 |
+| B. 所有目标永久共用数据库候选 | ❌ 表面统一，实际把 Canvas 的限制强加给 Dialog，并让新目标继承无谓写放大 |
+| C. 每个 Provider 自己处理历史、重新生成和取消 | ❌ Provider × Target 组合爆炸，worker 被迫理解数据库和业务副作用 |
+| D. Provider/Target 正交；每个目标驱动实现相同生命周期、不同提交策略 | ✅ 采纳 |
+
+**决策**：
+
+- Provider 只拥有 inbound/outbound、ReplySession 和交互回调；目标执行、历史投影、CAS 和副作用
+  判定属于 `api/channel_execution`；
+- 保留 `TargetExecutorRegistry`，在执行器内部引入目标私有 driver；公共 Protocol 不出现
+  `prepare_canvas()` 或 `complete_dialog()`；
+- Dialog 为默认主目标，采用内存工作副本 + 终态单次 CAS（`detached_cas`）；
+- Canvas 是扩展目标，在获得无落库端口前采用专属候选 + 终态 CAS（`candidate_cas`）；候选回收
+  离开请求热路径；
+- 用户可见操作由 Provider capabilities、Target capabilities 与 run policy 取交集；
+- worker 不直连数据库，继续只通过 MultiRAG 内部 API/SSE；不得按 token 或卡片 patch 读写数据库；
+- 本仓表、函数、方法和运行时一律使用 MultiRAG 口径；外部项目名只用于来源与差异说明。
+
+完整组件关系、I/O 预算、重新生成语义和实施拆分见
+[`EXECUTION_ARCHITECTURE.md`](EXECUTION_ARCHITECTURE.md)。
+
+**为什么现在不直接引入完整 durable workflow runtime**：DeerFlow/LangGraph 一类实现证明，跨进程
+恢复需要 run ledger、lease、checkpoint 和取消/终态 CAS；但 MultiRAG 当前首期只承诺进程内队列，
+且同步核心不是 LangGraph thread。先引入整套运行时会把“去掉 Dialog 候选写放大”变成平台重写。
+本决策只固定不可逆的边界；持久化 run ledger 由 CHN-O14 在真实恢复需求成立后独立评审。
+
+**失效条件**：如果未来 MultiRAG Dialog/Canvas 都改为同一个原生 checkpoint runtime，且该 runtime
+同时提供无副作用 fork、可见历史投影和条件提交，则两个 driver 可以共享其实现；Provider/Target
+正交、worker 无数据库和能力交集三条仍不失效。

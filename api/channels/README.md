@@ -219,7 +219,7 @@ worker 全局队列满时，Bridge 会先 claim 消息再回复固定 busy 文�
 进入同一会话队列，因此不会与当前生成并发写同一会话。只有当前会话最新的完成卡可重新生成；
 已有后续追问时点击旧卡会直接提示过期。完成卡发出显式 `regenerate` operation；Channel execution
 反腐层从公开会话头创建一个不可见的私有候选，在候选中撤回最新且问题匹配的 user/assistant 对，
-再调用未经扩展的 RAGFlow completion 契约。只有流完整结束且产生可见答案时才在行锁内校验公开头
+再调用既有的 MultiRAG Dialog/Canvas completion 契约。只有流完整结束且产生可见答案时才在行锁内校验公开头
 指纹并原子晋升候选；失败、取消或并发冲突只删除候选，公开历史始终不动。连续点击不会重复追加
 同一句 user。
 error/cancelled 卡的按钮按普通 retry 处理，因为失败轮次没有提交，不能误删上一轮成功历史。
@@ -249,6 +249,11 @@ Canvas 额外从可见 transcript 重建内部 history，修复存量 raw reason
 低风险反馈会幂等更新原卡片并发出不含原文/身份明文的 `feedback_recorded` 结构化事件；产品级反馈
 仓库与分析面板仍不在本阶段范围。`/new` 清空未运行 follow-up 与中途 steering 也继续等待执行引擎
 具备明确语义后单独实现。
+
+上述“Dialog/Canvas 都使用数据库候选”是 CHN-U9 的当前安全实现，不是永久公共抽象。目标架构见
+[`docs/channel-program/EXECUTION_ARCHITECTURE.md`](../../docs/channel-program/EXECUTION_ARCHITECTURE.md)：
+Provider 与执行目标正交；Dialog 先迁移到内存工作副本 + 终态 CAS，Canvas 在 MultiRAG 提供无落库
+执行端口前保留专属候选；worker 始终只走内部 API/SSE，不为卡片或 delta 访问数据库。
 
 ### Canvas 发布版本兼容策略
 
@@ -666,15 +671,16 @@ MultiRAG 的规范公开字段是 `config.domain`。为兼容新版上游的请�
 | `state_store.py`、`runtime_client.py` | MultiRAG | 不用上游文件覆盖 |
 | `worker.py`、`supervisor.py` | MultiRAG | 不用上游 Bootstrap/进程模型覆盖 |
 | `api/channel_control`、`api/channel_execution`、`api/channel_runtime` | MultiRAG | 作为本项目长期主线维护 |
-| `api/db/services/canvas_service.py`、`conversation_service.py`、`user_canvas_version.py` | 上游同步核心 | Channel 不加参数、不改历史/发布语义；只从独立适配器调用公开契约 |
+| `api/db/services/canvas_service.py`、`conversation_service.py`、`user_canvas_version.py` | MultiRAG 上游同步区 | Channel 不加参数、不改历史/发布语义；只从独立适配器调用公开契约 |
 
 跟进新版上游时：
 
-1. 在本文件更新所参考的 upstream SHA。
+1. 在本文件更新所参考的 RAGFlow 上游 SHA；它只表示来源基线，不改变本仓实体的 MultiRAG 命名。
 2. 对比 `api/channels/core/{base,registry}.py`、`api/channels/feishu/channel.py` 的传输层变化，
    同时核对 Canvas 发布与 completion 契约是否有上游变化。
 3. 按上表语义移植，不整文件覆盖加固版本。
-4. 把上游产品名、模型、路由、表名和运行时值翻写为 MultiRAG 自己的实现。
+4. 把上游产品名、模型、路由、表名和运行时值翻写为 MultiRAG 自己的实现；本仓表、函数、方法、
+   路由和运行时不得称为“RAGFlow 的”。
 5. 禁止引入任何指向上游运行服务的 HTTP、RPC、数据库或消息队列依赖。
 6. 运行 Channel 契约测试和全仓验证，通过后再更新 SHA。
 
