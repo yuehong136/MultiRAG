@@ -514,7 +514,7 @@ async def test_aggregated_reply_prefers_authoritative_terminal_snapshot() -> Non
         reply = await _execution_client(http_client).ask(
             question="question",
             event_id="event-1",
-            conversation_key="conversation-1",
+            conversation_key="test",
             provider="feishu",
             subject="ou-user",
             conversation="oc-chat",

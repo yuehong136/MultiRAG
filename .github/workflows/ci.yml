@@ -1,5 +1,6 @@
 # MultiRAG CI —— 与本地 Makefile 对应的分层验证
 #   lint      = make lint      (Tier 0)
+#   security  = gitleaks + osv-scanner（版本无关，独立执行一次）
 #   typecheck = make typecheck (Tier 1)
 #   unit      = make coverage  (Tier 2)
 #   integration + smoke        (Tier 3+4，服务容器)
@@ -19,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # dev 工具组（ruff/import-linter/门禁脚本）已验证 3.13 可跑，两版本均必过；
-    # 版本无关的安全扫描（uv lock --check/gitleaks/osv）只在 3.12 跑一次省时避噪
+    # 版本无关的锁文件一致性检查只在 3.12 跑一次省时避噪。
     strategy:
       fail-fast: false
       matrix:
@@ -47,9 +48,15 @@ jobs:
       - run: uv run --no-sync lint-imports
       # async 路由 × 同步 Session 门禁（基线燃尽：新增即红，见 scripts/async_sync_db_baseline.txt）
       - run: uv run --no-sync python scripts/check_async_sync_db.py
+
+  # 安全扫描与 Python 版本无关，独立执行一次，避免矩阵重复及与 lint 结果耦合。
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
       # 泄密扫描（当前工作树；规则与豁免见 .gitleaks.toml，历史泄露靠轮换处理）
       - name: gitleaks secret scan
-        if: matrix.python-version == '3.12'
         run: |
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz | tar -xz gitleaks
           ./gitleaks dir . --no-banner --redact
@@ -57,7 +64,6 @@ jobs:
       # 豁免清单及理由见 osv-scanner.toml（只出不进）；新告警 = 红，
       # 处置顺序：先试 lock-only 小步升，确认被约束锁死才进豁免。
       - name: osv-scanner dependency audit
-        if: matrix.python-version == '3.12'
         run: |
           curl -sSfL -o osv-scanner https://github.com/google/osv-scanner/releases/download/v2.4.0/osv-scanner_linux_amd64
           chmod +x osv-scanner
