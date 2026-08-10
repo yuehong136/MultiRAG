@@ -23,6 +23,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from api.channel_capabilities import ProviderCapabilities
+
 # Widget kinds the management form knows how to render. Deliberately an open
 # union on the wire: a client that meets an unknown kind must render a disabled
 # field showing its label rather than throwing, which is what lets the server
@@ -93,21 +95,6 @@ class ProviderForm(BaseModel):
     # a manifest into the same "providers unavailable" path as a missing form.
     version: int = 1
     fields: list[FormField] = Field(default_factory=list)
-
-
-class ProviderCapabilities(BaseModel):
-    """What kinds of message traffic a provider can carry.
-
-    Distinct from how its credential is obtained -- that is onboarding, a
-    different axis, and it does not exist yet (CHN-P12).
-    """
-
-    private_chat: bool
-    group_chat: bool
-    text: bool
-    files: bool
-    images: bool
-    streaming_cards: bool
 
 
 def resolve_path(source: Any, path: str) -> Any:

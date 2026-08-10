@@ -24,7 +24,17 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, ClassVar, Literal, Protocol, runtime_checkable
 
+from api.channel_capabilities import EffectiveReplyCapabilities
+
 LOGGER = logging.getLogger(__name__)
+_DEFAULT_REPLY_CAPABILITIES = EffectiveReplyCapabilities(
+    progressive_reply=True,
+    cancel_queued=True,
+    cancel_running=True,
+    regenerate=True,
+    retry=True,
+    feedback=True,
+)
 
 
 def _short_hash(value: str) -> str:
@@ -182,6 +192,7 @@ class ReplyActionKind(StrEnum):
 
     CANCEL = "cancel"
     REGENERATE = "regenerate"
+    RETRY = "retry"
     HELPFUL = "helpful"
     UNHELPFUL = "unhelpful"
 
@@ -194,6 +205,7 @@ class ReplyActionIds:
     regenerate: str = ""
     helpful: str = ""
     unhelpful: str = ""
+    retry: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,6 +215,7 @@ class ReplyContext:
     status: ReplyStatus = ReplyStatus.RUNNING
     queue_position: int = 0
     actions: ReplyActionIds = ReplyActionIds()
+    capabilities: EffectiveReplyCapabilities = _DEFAULT_REPLY_CAPABILITIES
 
 
 @dataclass(frozen=True, slots=True)

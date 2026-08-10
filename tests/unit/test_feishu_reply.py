@@ -391,6 +391,7 @@ async def test_queued_session_starts_typing_only_when_running_and_can_cancel() -
             actions=ReplyActionIds(
                 cancel="cancel-id",
                 regenerate="regenerate-id",
+                retry="retry-id",
             ),
         ),
         clock=_Clock(),
@@ -405,8 +406,8 @@ async def test_queued_session_starts_typing_only_when_running_and_can_cancel() -
     assert session.state is ReplySessionState.CANCELLED
     assert transport.finishes[0][1] < transport.batch_updates[-1][2]
     final_actions = transport.batch_updates[-1][1][2]["params"]["element"]
-    regenerate_button = final_actions["columns"][0]["elements"][0]
-    assert regenerate_button["behaviors"][0]["value"] == {"action_id": "regenerate-id"}
+    retry_button = final_actions["columns"][0]["elements"][0]
+    assert retry_button["behaviors"][0]["value"] == {"action_id": "retry-id"}
 
 
 def test_delivery_uuid_is_deterministic_opaque_and_stage_scoped() -> None:

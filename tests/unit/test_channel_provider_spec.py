@@ -193,6 +193,11 @@ def test_feishu_manifest_advertises_implemented_streaming_card_capability() -> N
     spec = provider_spec("feishu")
 
     assert spec.capabilities.streaming_cards is True
+    assert spec.capabilities.progressive_reply is True
+    assert spec.capabilities.interactive_actions is True
+    assert spec.capabilities.cancel_control is True
+    assert spec.capabilities.feedback_control is True
+    assert spec.capabilities.threaded_reply is True
 
 
 @pytest.mark.parametrize("spec", _declared_specs(), ids=lambda spec: spec.name)

@@ -70,13 +70,27 @@ class SqlAlchemyBindingResolver:
         workload: WorkloadIdentity,
         command: ChannelExecutionCommand,
     ) -> TrustedChannelContext | None:
+        context = await self.resolve_capabilities(
+            binding_id=binding_id,
+            workload=workload,
+        )
+        if context is None or command.actor.provider != context.provider:
+            return None
+        return context
+
+    async def resolve_capabilities(
+        self,
+        *,
+        binding_id: str,
+        workload: WorkloadIdentity,
+    ) -> TrustedChannelContext | None:
         if not workload.subject.strip() or workload.binding_id != binding_id:
             return None
         bundle = await self._repository.get_runtime_binding(binding_id)
         if bundle is None:
             return None
         channel, binding, _secret = bundle
-        if binding.channel_id != channel.id or workload.binding_generation != binding.generation or command.actor.provider != channel.channel:
+        if binding.channel_id != channel.id or workload.binding_generation != binding.generation:
             return None
         try:
             target = ExecutionTargetRef(
@@ -92,6 +106,8 @@ class SqlAlchemyBindingResolver:
             target=target,
             enabled=bool(channel.status == 1 and binding.enabled),
             binding_generation=binding.generation,
+            provider=channel.channel,
+            run_policy=dict(binding.policy or {}),
             # External actor identity is deliberately not promoted to a
             # MultiRAG principal. A later verified identity mapper can set it.
             principal_id=None,

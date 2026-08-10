@@ -1,6 +1,6 @@
 # MultiRAG Channel 执行架构
 
-> 状态：目标架构已定案，实施分阶段进行
+> 状态：EIM-U11 / CHN-X13 已实现；U14 / U15 按目标私有事务继续演进
 > 决策：[`CHN-ADR-07`](DECISIONS.md#chn-adr-07--provider-与执行目标正交历史事务由目标驱动拥有)
 > 核验日期：2026-08-10（外部版本与证据见
 > [`VERSION_BASELINE`](../enterprise-identity-mcp/VERSION_BASELINE.md) 和
@@ -36,28 +36,39 @@
    `provider == "feishu" and target_type == "multirag.canvas_agent"` 一类组合分支。
 4. **运行中的内容不是已提交历史。** 生成只在私有工作态进行；只有完整终态、存在可见答案且公开
    会话头未变化时，才以 compare-and-swap（CAS）提交一次。
-5. **历史事务由目标驱动拥有，不追求伪通用。** Dialog 用内存工作副本；Canvas 在当前能力下使用
-   隔离候选会话。二者共用生命周期语义，不共用持久化技巧。
+5. **历史事务由目标驱动拥有，不追求伪通用。** 当前两者仍保持原候选语义；U14 将 Dialog 改为
+   内存工作副本，Canvas 继续使用隔离候选会话。二者共用生命周期语义，不共用持久化技巧。
 6. **Channel worker 不访问数据库。** worker 只调用 MultiRAG 内部执行 API 并消费 SSE；数据库访问
    只发生在 API 进程的目标驱动中，卡片 patch 和模型 delta 不触发数据库轮询。
 7. **功能由能力交集决定。** 用户可见的停止、重新生成、反馈和渐进式展示，取 Provider 能力、
    目标能力与本次执行策略的交集；不支持时明确降级或隐藏，不能猜测。
 
-## 3. 当前事实与需要收口的地方
+## 3. 当前事实与需要继续收口的地方
 
 已经正确的基础：
 
 - `api/channel_execution/registry.py::TargetExecutorRegistry` 已按 `target_type` 注册目标执行器；
+- `SqlAlchemyDialogTargetDriver` 与 `SqlAlchemyCanvasTargetDriver` 分别持有目标私有 history transaction，
+  公共协议不再出现目标名称；
 - `api/channels/runtime_client.py` 通过内部 HTTP/SSE 调用执行 API，worker 不直接访问 SQLAlchemy；
+- managed worker 启动时为当前 binding generation 读取一次脱敏能力信封，进程重启允许重新读取；消息、
+  delta 和卡片 patch 均不读取目标数据库；
 - `ExecutionEvent` 与 `ReplySession` 已把目标输出和 Provider 渲染分开；
 - binding 在服务端解析 tenant、target、revision 和 session，worker 不能覆盖这些字段。
 
-当前需要演进的部分：
+EIM-U11 / CHN-X13 已收口的部分：
 
-- `ChannelSessionManager` 同时暴露 `prepare_canvas()` / `prepare_dialog()`，把两个目标的持久化细节
-  塞进一个 Protocol；新增第三个目标会继续扩大这个接口；
-- `SqlAlchemyChannelSessionManager` 目前让 Dialog 和 Canvas 都创建数据库候选，虽然保证了失败、
-  取消、reasoning-only 不污染公开历史，但对 Dialog 来说写放大并非必要；
+- 原 `ChannelSessionManager` 已删除，替换为泛型 `TargetHistoryTransaction[PreparedT]`；Dialog 与 Canvas
+  分别拥有不透明 prepared 类型和 `prepare/commit/abort` 实现；
+- Provider、Target 与 RunPolicy 通过纯函数求交；Bridge 只签发有效 action ID，渲染与回调均二次校验；
+- 完成后的 regenerate 与失败/取消后的 retry 已分开建模；未解析的 conditional capability、旧 API、
+  预取异常和未知 Canvas 组件均 fail closed；
+- 飞书在 `progressive_reply=false` 时回退 buffered reply，而不是继续假装流式能力存在。
+
+后续 U14 / U15 需要演进的部分：
+
+- 两个目标私有 history transaction 目前都创建数据库候选，虽然保证了失败、取消、reasoning-only
+  不污染公开历史，但对 Dialog 来说写放大并非必要；
 - 候选 TTL 清理目前位于每次执行的准备热路径，会为每条消息增加一次删除扫描和提交；
 - Canvas 候选依靠会话行中的名称/用户字段识别，能工作但不是理想的长期所有权模型。
 
@@ -100,22 +111,31 @@ Provider 不知道 MultiRAG 对话表结构，目标驱动也不知道飞书 Car
 
 ## 5. 目标驱动契约
 
-保留现有 `TargetExecutor` 作为注册表入口，在每个执行器内部引入各自的目标驱动。目标形态如下，
-名称表达职责，不要求一次 PR 机械照抄接口：
+注册表继续以 `TargetExecutor` 为入口；具体 driver 在执行器内部拥有目标私有 history transaction。
+当前公共形态为：
 
 ```python
-class TargetExecutionDriver(Protocol):
+class TargetExecutor(Protocol):
     target_type: str
 
     async def capabilities(self, context: TrustedChannelContext) -> TargetCapabilities: ...
-    async def prepare(self, context: TrustedChannelContext, command: ChannelExecutionCommand) -> PreparedExecution: ...
-    def stream(self, prepared: PreparedExecution) -> AsyncIterator[ExecutionEvent]: ...
-    async def commit(self, prepared: PreparedExecution, result: VisibleResult) -> str: ...
-    async def abort(self, prepared: PreparedExecution) -> None: ...
+    async def execute(
+        self,
+        context: TrustedChannelContext,
+        command: ChannelExecutionCommand,
+    ) -> AsyncIterator[ExecutionEvent]: ...
+
+
+class TargetHistoryTransaction[PreparedT](Protocol):
+    async def prepare(...) -> PreparedT: ...
+    async def commit(self, prepared: PreparedT, generated_session_id: str) -> str: ...
+    async def abort(self, prepared: PreparedT, generated_session_id: str | None) -> None: ...
 ```
 
-`PreparedExecution` 是目标私有的不透明工作态。公共 Protocol 不再出现 `prepare_canvas()`、
-`complete_dialog()` 等具体目标方法。新增目标只注册新驱动，不修改既有 Provider。
+`PreparedCanvasExecution` 与 `PreparedDialogExecution` 是各自 driver 的私有工作态。对应实现是
+`SqlAlchemyCanvasHistoryTransaction` 和 `SqlAlchemyDialogHistoryTransaction`；公共 Protocol 不再出现
+`prepare_canvas()`、`complete_dialog()` 等具体目标方法。新增目标只注册新 executor/driver，不修改
+既有 Provider。
 
 ## 6. 能力协商
 
@@ -135,8 +155,9 @@ class TargetExecutionDriver(Protocol):
 |---|---|
 | `streaming` | 目标能产出增量事件 |
 | `cancellable` | 当前阶段可合作取消；不代表副作用回滚 |
-| `regeneratable` | 当前会话尾部可按已定义语义重新生成 |
-| `feedback` | 目标或 MultiRAG 反馈仓可接受本轮反馈 |
+| `regeneration` | `always`、`conditional` 或 `never`；只有解析后的 `always` 可展示重新生成 |
+| `retryable` | 失败/取消且未提交的 run 是否可安全重试；与 regenerate 分开 |
+| `feedback` | Channel 可接收本轮低风险反馈；当前是卡片确认与脱敏事件，不宣称已有持久反馈仓 |
 | `commit_mode` | `detached_cas`、`candidate_cas` 或未来模式 |
 | `effect_class` | `generation_only`、`external_effects`、`unknown` |
 
@@ -146,9 +167,17 @@ class TargetExecutionDriver(Protocol):
 visible_actions = ProviderCapabilities ∩ TargetCapabilities ∩ RunPolicy
 ```
 
-Dialog 默认支持 `detached_cas`；Canvas 的 `regeneratable` 必须按已发布图动态判断。含工具、MCP、
-代码执行、写 SQL、消息发送或未知组件时，重新生成 fail closed。停止按钮只表示停止等待后续输出，
+Dialog 当前为 `candidate_cas`，由 U14 迁移到 `detached_cas`。Canvas 的 `regeneration` 与 `retryable`
+按已发布图动态判断：含工具、MCP、代码执行、写 SQL、未知组件、文档/Excel 持久输出，或带附件输出/
+Memory 保存的 Message 时均 fail closed；纯文本 Message 可安全重放。停止按钮只表示停止等待后续输出，
 不得宣称已撤销外部副作用。
+
+能力通过 workload-authenticated 的
+`GET /api/v1/internal/channel-bindings/{binding_id}/execution-capabilities` 下发。响应只含最终布尔能力，
+不含 target type/id/revision、图结构、`commit_mode` 或 `effect_class`。worker 在每次启动时为当前 binding
+generation 读取并缓存一次；同 generation 的崩溃重启会重新读取，正常消息、token、CardKit patch 不读取。
+旧 API、超时或非法响应时继续正常回答，但关闭渐进式和所有交互动作。regenerate/retry 在执行 API
+claim event 之前还会按 Target 与 RunPolicy 再授权；隐藏按钮不是唯一保护。
 
 ## 7. 历史事务模型
 
@@ -223,6 +252,7 @@ run ledger：
 | Dialog 新会话 | 目标配置读；终态一次 insert | 开始生成就发布空会话 |
 | Canvas 已有会话 | 快照读 + 候选写；终态 CAS copy/delete | 每请求全表/目标范围 TTL 清理 |
 | Canvas 新会话 | 私有候选创建；终态发布映射 | 半成品直接成为公开会话 |
+| capability preflight | 每次 worker 启动、每个 binding generation 一次脱敏读取；动作时按目标安全性再授权 | 每消息、每 token、每卡片 patch 查询 |
 | Provider 渲染 | 0 次目标历史 SQL | 为卡片 patch 轮询数据库 |
 | run ledger（后续） | 状态迁移时小次数 CAS | 每 token、每 CardKit sequence 写库 |
 
@@ -247,12 +277,13 @@ Open WebUI 一类消息树能支持任意节点分支，但 MultiRAG 当前 Dial
 
 | 顺序 | EIM / CHN | 单 PR 目标 | 行为风险 |
 |---:|---|---|---|
-| 1 | EIM-U11 / CHN-X13 | 引入 Provider/Target capabilities 和目标私有 driver；拆掉具体目标方法组成的 `ChannelSessionManager`，保持行为等价 | 低 |
+| 1 | EIM-U11 / CHN-X13 | ✅ 已完成：Provider/Target capabilities、启动预取和目标私有 driver；删除 `ChannelSessionManager`，保持目标执行行为等价 | 低 |
 | 2 | EIM-U12 / CHN-U14 | Dialog 改为 detached working copy + 单次 CAS；删除 Dialog 候选写放大 | 中 |
 | 3 | EIM-U13 / CHN-U15 | Canvas 候选策略独立化；候选元数据显式化；GC 移出请求热路径 | 中，涉及 DB |
 | 4 | EIM-O4 / CHN-O14 | 仅在确认需要重启恢复后增加 durable run ledger、单活约束和 cancel/final CAS | 高，需独立 ADR 复核 |
 
-前三步不改变 Provider runtime 私有 DTO，因而不需要 tolerate/emit 双部署。若实现时需要修改
+前三步不改变 Provider runtime 私有 DTO 或执行 SSE wire。X13 使用独立的 additive private preflight：
+旧 API 时 worker 降级为无交互 buffered reply，因此不需要 tolerate/emit 双部署。后续若修改
 `RuntimeBindingConfig` 或执行 SSE wire，必须停止并按 CHN-ADR-06 重新拆分。
 
 ## 12. 验收不变量
@@ -261,7 +292,7 @@ Open WebUI 一类消息树能支持任意节点分支，但 MultiRAG 当前 Dial
 - Dialog/Canvas 的正常消息与重新生成均满足失败、取消、仅推理不改公开历史；
 - 同一公开头上的并发提交最多一个成功，失败方不覆盖后来消息；
 - 新会话在首个完整终态前对外不可见，session mapping 只在发布后写入；
-- Dialog 热路径没有候选 insert/delete，Canvas 热路径没有 TTL prune；
+- U14 完成后 Dialog 热路径没有候选 insert/delete；U15 完成后 Canvas 热路径没有 TTL prune；
 - worker 导入图中没有 SQLAlchemy 和 `api.db`，并继续只走内部 API/SSE；
 - Provider capability、Target capability 和实际按钮/错误行为有契约测试；
 - 上游同步区相对移植基线不新增 Channel 私有参数或历史分支；

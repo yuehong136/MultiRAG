@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal, Protocol, runtime_checkable
 
+from api.channel_capabilities import EffectiveReplyCapabilities
 from api.channels.agent_bridge import (
     DEMO_ONLY_TEXT,
     QUESTION_TOO_LONG_TEXT,
@@ -78,6 +79,7 @@ class _ExecutionRecord:
     conversation_key: str
     question: str
     action_ids: ReplyActionIds
+    capabilities: EffectiveReplyCapabilities
     status: ReplyStatus = ReplyStatus.QUEUED
     reply_session: ReplySession | None = None
     reply_message_id: str = ""
@@ -127,6 +129,7 @@ class BindingBridge:
         allowed_sender_ids: set[str] | frozenset[str],
         max_question_chars: int,
         max_answer_chars: int,
+        capabilities: EffectiveReplyCapabilities,
         private_chat_only: bool = True,
     ) -> None:
         self._channel = channel
@@ -137,6 +140,7 @@ class BindingBridge:
         self._max_question_chars = max_question_chars
         self._max_answer_chars = max_answer_chars
         self._private_chat_only = private_chat_only
+        self._capabilities = capabilities
         self._scheduler: Callable[[IncomingMessage], Awaitable[None]] | None = None
         self._preparations: dict[int, asyncio.Task[_PreparedMessage | None]] = {}
         self._actions: dict[str, _RegisteredAction] = {}
@@ -225,6 +229,10 @@ class BindingBridge:
             if record.status not in {ReplyStatus.QUEUED, ReplyStatus.RUNNING}:
                 registered.used = True
                 return ChannelActionResponse("info", "生成已经结束。")
+            can_cancel = record.capabilities.cancel_queued if record.status is ReplyStatus.QUEUED else record.capabilities.cancel_running
+            if not can_cancel:
+                registered.used = True
+                return ChannelActionResponse("warning", "当前阶段不支持停止生成。")
             registered.used = True
             record.cancel_requested = True
             task = record.execution_task
@@ -237,12 +245,14 @@ class BindingBridge:
                 )
             return ChannelActionResponse("success", "正在停止生成。")
 
-        if registered.kind is ReplyActionKind.REGENERATE:
-            if record.status not in {
-                ReplyStatus.FINAL,
-                ReplyStatus.ERROR,
-                ReplyStatus.CANCELLED,
-            }:
+        if registered.kind in {ReplyActionKind.REGENERATE, ReplyActionKind.RETRY}:
+            replace_completed = registered.kind is ReplyActionKind.REGENERATE
+            capability_enabled = record.capabilities.regenerate if replace_completed else record.capabilities.retry
+            if not capability_enabled:
+                registered.used = True
+                return ChannelActionResponse("warning", "当前回答不支持该操作。")
+            expected_statuses = {ReplyStatus.FINAL} if replace_completed else {ReplyStatus.ERROR, ReplyStatus.CANCELLED}
+            if record.status not in expected_statuses:
                 return ChannelActionResponse("warning", "请等待当前生成结束。")
             if self._scheduler is None:
                 return ChannelActionResponse("error", "重新生成暂时不可用。")
@@ -253,7 +263,7 @@ class BindingBridge:
             regenerated = self._regenerated_message(
                 record.source,
                 action,
-                replace_completed=record.status is ReplyStatus.FINAL,
+                replace_completed=replace_completed,
             )
             self._spawn_background(
                 self._scheduler(regenerated),
@@ -263,6 +273,9 @@ class BindingBridge:
 
         if record.status is not ReplyStatus.FINAL:
             return ChannelActionResponse("warning", "回答尚未完成。")
+        if not record.capabilities.feedback:
+            registered.used = True
+            return ChannelActionResponse("warning", "当前回答不支持反馈。")
         if record.feedback is not None:
             self._mark_feedback_actions_used(record)
             return ChannelActionResponse("info", "感谢，你已经反馈过了。")
@@ -353,6 +366,7 @@ class BindingBridge:
             conversation_key=conversation,
             question=question,
             action_ids=action_ids,
+            capabilities=self._capabilities,
         )
         self._register_actions(record)
         try:
@@ -363,6 +377,7 @@ class BindingBridge:
                     status=ReplyStatus.QUEUED,
                     queue_position=queue_position,
                     actions=action_ids,
+                    capabilities=self._capabilities,
                 ),
             )
             record.reply_message_id = record.reply_session.reply_message_id
@@ -373,7 +388,10 @@ class BindingBridge:
             await self._safe_reply(message, SERVICE_UNAVAILABLE_TEXT)
             return None
 
-        self._latest_execution_by_conversation[conversation] = message.execution_id
+        if action_ids.regenerate or action_ids.retry:
+            self._latest_execution_by_conversation[conversation] = message.execution_id
+        else:
+            self._latest_execution_by_conversation.pop(conversation, None)
 
         return _PreparedMessage(
             source=message,
@@ -605,10 +623,11 @@ class BindingBridge:
 
     def _new_action_ids(self) -> ReplyActionIds:
         return ReplyActionIds(
-            cancel=secrets.token_urlsafe(24),
-            regenerate=secrets.token_urlsafe(24),
-            helpful=secrets.token_urlsafe(24),
-            unhelpful=secrets.token_urlsafe(24),
+            cancel=secrets.token_urlsafe(24) if self._capabilities.cancel_queued or self._capabilities.cancel_running else "",
+            regenerate=secrets.token_urlsafe(24) if self._capabilities.regenerate else "",
+            retry=secrets.token_urlsafe(24) if self._capabilities.retry else "",
+            helpful=secrets.token_urlsafe(24) if self._capabilities.feedback else "",
+            unhelpful=secrets.token_urlsafe(24) if self._capabilities.feedback else "",
         )
 
     def _register_actions(self, record: _ExecutionRecord) -> None:
@@ -617,9 +636,12 @@ class BindingBridge:
         for kind, action_id in (
             (ReplyActionKind.CANCEL, record.action_ids.cancel),
             (ReplyActionKind.REGENERATE, record.action_ids.regenerate),
+            (ReplyActionKind.RETRY, record.action_ids.retry),
             (ReplyActionKind.HELPFUL, record.action_ids.helpful),
             (ReplyActionKind.UNHELPFUL, record.action_ids.unhelpful),
         ):
+            if not action_id:
+                continue
             self._actions[action_id] = _RegisteredAction(
                 record=record,
                 kind=kind,
@@ -648,6 +670,7 @@ class BindingBridge:
         for action_id in (
             record.action_ids.cancel,
             record.action_ids.regenerate,
+            record.action_ids.retry,
             record.action_ids.helpful,
             record.action_ids.unhelpful,
         ):

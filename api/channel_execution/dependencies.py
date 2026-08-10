@@ -16,11 +16,12 @@ from api.channel_execution.errors import ChannelStateUnavailableError
 from api.channel_execution.executors import (
     MultiRAGCanvasAgentExecutor,
     MultiRAGDialogExecutor,
-    SqlAlchemyCanvasCompletionAdapter,
-    SqlAlchemyDialogCompletionAdapter,
+    SqlAlchemyCanvasTargetDriver,
+    SqlAlchemyDialogTargetDriver,
 )
 from api.channel_execution.models import ChannelExecutionCommand, TrustedChannelContext, WorkloadIdentity
 from api.channel_execution.protocols import (
+    BindingCapabilityResolver,
     BindingResolver,
     ChannelConversationStore,
     ExecutionClaimStore,
@@ -187,6 +188,14 @@ def get_binding_resolver(db: AsyncSession = Depends(get_async_db)) -> BindingRes
     return SqlAlchemyBindingResolver(SqlAlchemyChannelRepository(db))
 
 
+def get_binding_capability_resolver(
+    db: AsyncSession = Depends(get_async_db),
+) -> BindingCapabilityResolver:
+    """Resolve one binding for a generation-scoped capability preflight."""
+
+    return SqlAlchemyBindingResolver(SqlAlchemyChannelRepository(db))
+
+
 def _redis_host_port(raw_host: str) -> tuple[str, int]:
     host, separator, raw_port = raw_host.rpartition(":")
     if not separator:
@@ -251,23 +260,31 @@ def get_execution_claim_store(
     return store
 
 
-def get_channel_execution_service(
+def get_published_target_execution_service(
     db: AsyncSession = Depends(get_async_db),
-    binding_resolver: BindingResolver = Depends(get_binding_resolver),
-    conversation_store: ChannelConversationStore = Depends(get_channel_conversation_store),
-    claim_store: ExecutionClaimStore = Depends(get_execution_claim_store),
-) -> ChannelExecutionService:
-    """Build the request-scoped execution graph over one AsyncSession."""
+) -> PublishedTargetExecutionService:
+    """Build the registered MultiRAG target execution graph."""
 
     registry = TargetExecutorRegistry(
         [
-            MultiRAGCanvasAgentExecutor(SqlAlchemyCanvasCompletionAdapter(db)),
-            MultiRAGDialogExecutor(SqlAlchemyDialogCompletionAdapter(db)),
+            MultiRAGCanvasAgentExecutor(SqlAlchemyCanvasTargetDriver(db)),
+            MultiRAGDialogExecutor(SqlAlchemyDialogTargetDriver(db)),
         ]
     )
+    return PublishedTargetExecutionService(registry)
+
+
+def get_channel_execution_service(
+    binding_resolver: BindingResolver = Depends(get_binding_resolver),
+    conversation_store: ChannelConversationStore = Depends(get_channel_conversation_store),
+    claim_store: ExecutionClaimStore = Depends(get_execution_claim_store),
+    target_service: PublishedTargetExecutionService = Depends(get_published_target_execution_service),
+) -> ChannelExecutionService:
+    """Build the request-scoped execution graph over one AsyncSession."""
+
     return ChannelExecutionService(
         binding_resolver=binding_resolver,
         conversation_store=conversation_store,
         claim_store=claim_store,
-        target_service=PublishedTargetExecutionService(registry),
+        target_service=target_service,
     )

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -80,6 +80,8 @@ class TrustedChannelContext:
     target: ExecutionTargetRef
     enabled: bool
     binding_generation: int
+    provider: str = ""
+    run_policy: dict[str, Any] = field(default_factory=dict)
     principal_id: str | None = None
     session_id: str | None = None
 

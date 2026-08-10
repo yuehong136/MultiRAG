@@ -1,4 +1,4 @@
-"""Transactional copy-on-write contracts for Channel-owned RAGFlow sessions."""
+"""Transactional copy-on-write contracts for Channel-owned MultiRAG sessions."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from api.channel_execution.errors import TargetExecutionFailedError
-from api.channel_execution.history import SqlAlchemyChannelSessionManager
+from api.channel_execution.history import SqlAlchemyCanvasHistoryTransaction, SqlAlchemyDialogHistoryTransaction
 from api.db.db_models import API4Conversation, Conversation
 
 
@@ -35,7 +35,7 @@ def _safe_canvas_dsl() -> dict[str, object]:
     return {
         "components": {
             "begin": {"obj": {"component_name": "Begin", "params": {}}},
-            "message": {"obj": {"component_name": "Message", "params": {}}},
+            "llm": {"obj": {"component_name": "LLM", "params": {}}},
         },
         "history": [],
         "globals": {},
@@ -62,8 +62,8 @@ async def test_dialog_regenerate_promotes_candidate_atomically(
         )
         await db.commit()
 
-        manager = SqlAlchemyChannelSessionManager(db)
-        prepared = await manager.prepare_dialog(
+        transaction = SqlAlchemyDialogHistoryTransaction(db)
+        prepared = await transaction.prepare(
             target_id="dialog-1",
             session_id=public_id,
             question="same question",
@@ -96,11 +96,7 @@ async def test_dialog_regenerate_promotes_candidate_atomically(
         candidate.reference = [*candidate.reference, {"chunks": ["new"]}]
         await db.commit()
 
-        promoted_id = await manager.complete_dialog(
-            prepared,
-            candidate.id,
-            require_visible_answer=True,
-        )
+        promoted_id = await transaction.commit(prepared, candidate.id)
         assert promoted_id == public_id
 
         public = await db.get(Conversation, public_id)
@@ -128,8 +124,8 @@ async def test_dialog_conflict_keeps_public_head_and_abort_removes_candidate(
             )
         )
         await db.commit()
-        manager = SqlAlchemyChannelSessionManager(db)
-        prepared = await manager.prepare_dialog(
+        transaction = SqlAlchemyDialogHistoryTransaction(db)
+        prepared = await transaction.prepare(
             target_id="dialog-2",
             session_id=public_id,
             question="same question",
@@ -151,12 +147,8 @@ async def test_dialog_conflict_keeps_public_head_and_abort_removes_candidate(
         await db.commit()
 
         with pytest.raises(TargetExecutionFailedError):
-            await manager.complete_dialog(
-                prepared,
-                candidate.id,
-                require_visible_answer=True,
-            )
-        await manager.abort(prepared, candidate.id)
+            await transaction.commit(prepared, candidate.id)
+        await transaction.abort(prepared, candidate.id)
 
         public = await db.get(Conversation, public_id)
         assert public is not None and public.message[-1]["content"] == "newer head"
@@ -183,9 +175,9 @@ async def test_canvas_regenerate_projects_visible_history_before_execution(
             )
         )
         await db.commit()
-        manager = SqlAlchemyChannelSessionManager(db)
+        transaction = SqlAlchemyCanvasHistoryTransaction(db)
 
-        prepared = await manager.prepare_canvas(
+        prepared = await transaction.prepare(
             target_id="canvas-1",
             session_id=public_id,
             question="same question",
@@ -213,7 +205,7 @@ async def test_canvas_regenerate_projects_visible_history_before_execution(
             ],
         ]
         await db.commit()
-        await manager.complete_canvas(prepared, candidate.id)
+        await transaction.commit(prepared, candidate.id)
 
         public = await db.get(API4Conversation, public_id)
         assert public is not None
@@ -254,8 +246,8 @@ async def test_prepare_prunes_only_expired_internal_candidates(
         expired.update_time = expired_ms
         await db.commit()
 
-        manager = SqlAlchemyChannelSessionManager(db)
-        prepared = await manager.prepare_dialog(
+        transaction = SqlAlchemyDialogHistoryTransaction(db)
+        prepared = await transaction.prepare(
             target_id="dialog-gc",
             session_id=None,
             question="bootstrap",

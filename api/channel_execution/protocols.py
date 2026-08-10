@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Protocol, runtime_checkable
+from typing import Protocol, TypeVar, runtime_checkable
 
 from fastapi import Request
 
+from api.channel_capabilities import TargetCapabilities
 from api.channel_execution.models import (
     ChannelExecutionCommand,
     ExecutionEvent,
@@ -15,7 +16,8 @@ from api.channel_execution.models import (
     TrustedChannelContext,
     WorkloadIdentity,
 )
-from api.channel_execution.session_models import PreparedChannelSession
+
+PreparedExecutionT = TypeVar("PreparedExecutionT")
 
 
 @runtime_checkable
@@ -24,6 +26,12 @@ class TargetExecutor(Protocol):
 
     @property
     def target_type(self) -> str: ...
+
+    async def capabilities(
+        self,
+        *,
+        context: TrustedChannelContext,
+    ) -> TargetCapabilities: ...
 
     async def execute(
         self,
@@ -43,6 +51,18 @@ class BindingResolver(Protocol):
         binding_id: str,
         workload: WorkloadIdentity,
         command: ChannelExecutionCommand,
+    ) -> TrustedChannelContext | None: ...
+
+
+@runtime_checkable
+class BindingCapabilityResolver(Protocol):
+    """Resolves the trusted binding scope for a startup capability preflight."""
+
+    async def resolve_capabilities(
+        self,
+        *,
+        binding_id: str,
+        workload: WorkloadIdentity,
     ) -> TrustedChannelContext | None: ...
 
 
@@ -95,51 +115,41 @@ class WorkloadAuthenticator(Protocol):
 
 
 @runtime_checkable
-class ChannelSessionManager(Protocol):
-    """Owns Channel copy-on-write history without extending MultiRAG sync-area services."""
+class TargetHistoryTransaction(Protocol[PreparedExecutionT]):
+    """Target-private copy-on-write transaction around MultiRAG history."""
 
-    async def prepare_canvas(
+    async def prepare(
         self,
         *,
         target_id: str,
         session_id: str | None,
         question: str,
         operation: ExecutionOperation,
-    ) -> PreparedChannelSession: ...
+    ) -> PreparedExecutionT: ...
 
-    async def prepare_dialog(
+    async def commit(
         self,
-        *,
-        target_id: str,
-        session_id: str | None,
-        question: str,
-        operation: ExecutionOperation,
-    ) -> PreparedChannelSession: ...
-
-    async def complete_canvas(
-        self,
-        prepared: PreparedChannelSession,
+        prepared: PreparedExecutionT,
         generated_session_id: str,
-    ) -> str: ...
-
-    async def complete_dialog(
-        self,
-        prepared: PreparedChannelSession,
-        generated_session_id: str,
-        *,
-        require_visible_answer: bool,
     ) -> str: ...
 
     async def abort(
         self,
-        prepared: PreparedChannelSession,
+        prepared: PreparedExecutionT,
         generated_session_id: str | None,
     ) -> None: ...
 
 
 @runtime_checkable
-class CanvasCompletionAdapter(Protocol):
-    """Narrow adapter over the existing published Canvas execution service."""
+class CanvasTargetDriver(Protocol):
+    """Target-private driver over the existing published Canvas service."""
+
+    async def capabilities(
+        self,
+        *,
+        tenant_id: str,
+        target: ExecutionTargetRef,
+    ) -> TargetCapabilities: ...
 
     async def validate_revision(
         self,
@@ -161,8 +171,8 @@ class CanvasCompletionAdapter(Protocol):
 
 
 @runtime_checkable
-class DialogCompletionAdapter(Protocol):
-    """Narrow adapter over the existing MultiRAG Dialog service."""
+class DialogTargetDriver(Protocol):
+    """Target-private driver over the existing MultiRAG Dialog service."""
 
     def stream(
         self,

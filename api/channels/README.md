@@ -150,6 +150,7 @@ Managed 模式是管理页面和生产部署使用的长期架构：
   -> 私有 desired-state API（仅 binding_id/provider/generation）
   -> 每个 binding 启动一个隔离 worker 进程
   -> worker 从私有 runtime-config API 取一次解密后的飞书凭据
+  -> worker 从 execution-capabilities API 取一次脱敏能力交集
   -> 飞书事件
   -> POST /api/v1/internal/channel-bindings/{binding_id}/executions
   -> 服务端解析 tenant/target/revision/session
@@ -168,11 +169,18 @@ Supervisor 只协调 desired state，不接触飞书 App Secret。每个 child w
 一个 binding/account 对应一个独立子进程。binding 被禁用、删除或 generation 改变时，
 supervisor 会停止或重启相应进程；异常退出采用有上限的指数退避。
 
-Managed worker 的唯一核心执行路径是 `MultiRAGBindingExecutionClient.stream()`：它统一构造请求、
+Managed worker 每次启动会为当前 binding generation 调一次 workload-authenticated 的
+`execution-capabilities` preflight；进程内缓存的结果只含渐进式、queued/running cancel、regenerate、
+retry 和 feedback 布尔值，不含 target type/id/revision 或图结构。同 generation 的
+worker 崩溃重启允许重新读取；普通消息、模型 delta 和卡片 patch 不查目标数据库。旧 API、超时或
+非法响应时继续交付 buffered 回答，但不签发任何交互 action ID。
+
+Managed worker 的唯一核心**执行**路径是 `MultiRAGBindingExecutionClient.stream()`：它统一构造请求、
 读取和校验 SSE、检查 completion/`[DONE]`、传播 session、执行跨 delta reasoning 过滤，并映射安全
 错误码。`BindingBridge` 直接按序把类型化 delta 写入 `ReplySession`，不再调用 `ask()`；普通
-Provider 的默认 buffered session 只在成功完成时发送一次。飞书 override `begin_reply()`，把同一批
-delta 渲染到一个 CardKit 2.0 streaming card；卡片失败只切换交付方式，不会重新执行 Agent。
+Provider 的默认 buffered session 只在成功完成时发送一次。飞书仅在协商出的
+`progressive_reply=true` 时 override `begin_reply()`，把同一批 delta 渲染到一个 CardKit 2.0
+streaming card；否则回退 buffered reply。卡片失败只切换交付方式，不会重新执行 Agent。
 `reply_to_message_id`、Redis claim 和 executed/replied tombstone 语义保持不变。同会话串行只有
 `ChannelWorker` 一个所有者；Bridge 不再叠第二把会话锁。
 
@@ -222,20 +230,25 @@ worker 全局队列满时，Bridge 会先 claim 消息再回复固定 busy 文�
 再调用既有的 MultiRAG Dialog/Canvas completion 契约。只有流完整结束且产生可见答案时才在行锁内校验公开头
 指纹并原子晋升候选；失败、取消或并发冲突只删除候选，公开历史始终不动。连续点击不会重复追加
 同一句 user。
-error/cancelled 卡的按钮按普通 retry 处理，因为失败轮次没有提交，不能误删上一轮成功历史。
+error/cancelled 卡的按钮按普通 retry 处理，因为失败轮次没有提交，不能误删上一轮成功历史；它与
+完成卡的 regenerate 使用不同 action kind 和目标能力。
 
 Channel 目标的候选提示词和晋升后的持久化历史只使用用户可见答案，不保存或回灌 `<think>`
 reasoning；reasoning-only、取消或失败不会提交半轮消息。Dialog 和 Canvas 都在私有候选中生成，
-Canvas 额外从可见 transcript 重建内部 history，修复存量 raw reasoning 污染，并仅允许无外部
-工具/MCP/副作用组件的图重新生成。
-未知组件 fail closed，避免“重新生成”静默重放邮件、SQL、代码执行或其他外部操作。
+Canvas 额外从可见 transcript 重建内部 history，修复存量 raw reasoning 污染。Canvas capability
+按最新发布图动态解析：未知组件、工具/MCP、文档/Excel 持久输出、带附件输出或 Memory 保存的
+Message 同时关闭 regenerate 与 retry；纯文本 Message 仍可安全重放。
 `operation` 是私有 execution command 的可选加法字段：普通消息仍省略它；action 请求必须显式发送。
 部署窗口里，新 API 遇到未携带 operation 的旧 worker action 会返回
 `CHANNEL_RUNTIME_UPGRADE_REQUIRED`，新 worker 调旧 API 则因 `extra="forbid"` 失败；两种方向都只让
 卡片操作失败，不会猜测并污染历史。部署顺序仍是 API 在前、随后立即重启 supervisor/worker。
+新 API 还会在 claim action event 前按 binding RunPolicy 和目标动态能力授权 regenerate/retry；拒绝
+返回 `CHANNEL_OPERATION_NOT_ALLOWED` 且不占用 event claim。worker 隐藏按钮和 opaque action 校验是
+第一道 UX/进程边界，服务端授权是独立第二道边界。
 
-飞书完成卡片在关闭 `streaming_mode` 后，使用 CardKit batch update 添加“重新生成 / 有帮助 /
-没帮助”；生成中的卡片提供“停止生成”。交互区使用 JSON 2.0 的 `column_set` 直接承载 `button`，
+当 Provider、Target 与 RunPolicy 的交集允许时，飞书完成卡片在关闭 `streaming_mode` 后使用 CardKit
+batch update 添加“重新生成 / 有帮助 / 没帮助”，生成中的卡片提供“停止生成”；不允许的动作不生成、
+不注册 action ID。交互区使用 JSON 2.0 的 `column_set` 直接承载 `button`，
 按钮通过 callback behavior 只回传 24 小时有效的不透明 action ID；禁止使用 JSON 2.0 已移除的
 `tag: action` 旧交互模块，否则飞书会拒绝整张卡片并触发 post/text fallback。worker
 内存记录把 action 绑定到当前 binding 进程、操作者、chat 和实际回复卡片 ID，并执行 one-shot claim；
@@ -250,7 +263,9 @@ Canvas 额外从可见 transcript 重建内部 history，修复存量 raw reason
 仓库与分析面板仍不在本阶段范围。`/new` 清空未运行 follow-up 与中途 steering 也继续等待执行引擎
 具备明确语义后单独实现。
 
-上述“Dialog/Canvas 都使用数据库候选”是 CHN-U9 的当前安全实现，不是永久公共抽象。目标架构见
+上述“Dialog/Canvas 都使用数据库候选”是 CHN-U9 的当前安全实现，不是永久公共抽象。CHN-X13 已将
+两者拆为 `SqlAlchemyDialogTargetDriver` / `SqlAlchemyCanvasTargetDriver` 与各自的
+`TargetHistoryTransaction`；目标架构见
 [`docs/channel-program/EXECUTION_ARCHITECTURE.md`](../../docs/channel-program/EXECUTION_ARCHITECTURE.md)：
 Provider 与执行目标正交；Dialog 先迁移到内存工作副本 + 终态 CAS，Canvas 在 MultiRAG 提供无落库
 执行端口前保留专属候选；worker 始终只走内部 API/SSE，不为卡片或 delta 访问数据库。

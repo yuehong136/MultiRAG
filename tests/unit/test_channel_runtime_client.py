@@ -100,6 +100,64 @@ async def test_runtime_report_has_a_narrow_body_and_drops_unsafe_error_code() ->
 
 
 @pytest.mark.asyncio
+async def test_runtime_fetches_sanitized_execution_capabilities_once() -> None:
+    captured: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "progressive_reply": True,
+                "cancel_queued": True,
+                "cancel_running": True,
+                "regenerate": True,
+                "retry": True,
+                "feedback": False,
+                "future_additive_capability": True,
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = ChannelRuntimeClient(
+            base_url="http://multirag.local",
+            api_token="runtime-token",
+            runner_id="runner-1",
+            binding_id="binding/one",
+            binding_generation=7,
+            client=http_client,
+        )
+        capabilities = await client.fetch_execution_capabilities("binding/one")
+
+    assert capabilities.regenerate is True
+    assert capabilities.retry is True
+    assert capabilities.feedback is False
+    assert len(captured) == 1
+    assert captured[0].url.path == "/api/v1/internal/channel-bindings/binding/one/execution-capabilities"
+    assert captured[0].headers["X-Channel-Binding-Generation"] == "7"
+
+
+@pytest.mark.asyncio
+async def test_runtime_rejects_malformed_execution_capabilities() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"regenerate": "yes"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = ChannelRuntimeClient(
+            base_url="http://multirag.local",
+            api_token="runtime-token",
+            runner_id="runner-1",
+            binding_id="binding-1",
+            binding_generation=7,
+            client=http_client,
+        )
+        with pytest.raises(ChannelRuntimeClientError) as captured:
+            await client.fetch_execution_capabilities("binding-1")
+
+    assert captured.value.code == "RUNTIME_CAPABILITIES_INVALID"
+
+
+@pytest.mark.asyncio
 async def test_binding_execution_request_cannot_override_trusted_context(caplog: pytest.LogCaptureFixture) -> None:
     api_token = "execution-token-that-must-never-appear"
     question = "question-that-must-never-be-logged"

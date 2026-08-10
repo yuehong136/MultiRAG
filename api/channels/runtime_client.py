@@ -12,6 +12,7 @@ from urllib.parse import quote
 
 import httpx
 
+from api.channel_capabilities import EffectiveReplyCapabilities, parse_effective_reply_capabilities
 from api.channel_runtime.schemas import DesiredRuntime, DesiredRuntimeList, RuntimeBindingConfig, RuntimeState
 from api.channels.agent_bridge import AgentExecutionError, AgentReply
 from api.channels.core.reply import StreamingReasoningFilter, strip_reasoning, truncate_answer
@@ -90,6 +91,24 @@ class ChannelRuntimeClient:
             return RuntimeBindingConfig.model_validate(response.json())
         except (ValueError, TypeError) as exc:
             raise ChannelRuntimeClientError("RUNTIME_CONFIG_INVALID") from exc
+
+    async def fetch_execution_capabilities(
+        self,
+        binding_id: str,
+    ) -> EffectiveReplyCapabilities:
+        """Fetch the generation-scoped capability envelope once at startup."""
+
+        if self._binding_id is not None and binding_id != self._binding_id:
+            raise ChannelRuntimeClientError("RUNTIME_BINDING_SCOPE_MISMATCH")
+        encoded = quote(binding_id, safe="")
+        response = await self._request(
+            "GET",
+            f"{self._base_url}/api/v1/internal/channel-bindings/{encoded}/execution-capabilities",
+        )
+        try:
+            return parse_effective_reply_capabilities(response.json())
+        except (ValueError, TypeError) as exc:
+            raise ChannelRuntimeClientError("RUNTIME_CAPABILITIES_INVALID") from exc
 
     async def report(
         self,

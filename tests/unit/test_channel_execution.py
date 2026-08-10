@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 import pytest
 from pydantic import ValidationError
 
+from api.channel_capabilities import TargetCapabilities
 from api.channel_execution.errors import (
     BindingDisabledError,
     BindingNotFoundError,
@@ -44,6 +45,7 @@ def _context(
     revision_id: str | None = "rev-1",
     enabled: bool = True,
     session_id: str | None = None,
+    run_policy: dict[str, object] | None = None,
 ) -> TrustedChannelContext:
     return TrustedChannelContext(
         binding_id="binding-1",
@@ -55,6 +57,8 @@ def _context(
         ),
         enabled=enabled,
         binding_generation=7,
+        provider="feishu",
+        run_policy=run_policy or {},
         principal_id="principal-trusted",
         session_id=session_id,
     )
@@ -77,7 +81,7 @@ class _Resolver:
         command: ChannelExecutionCommand,
     ) -> TrustedChannelContext | None:
         self.seen = (binding_id, workload.subject)
-        assert command.event_id == "evt-1"
+        assert command.conversation_key == "feishu:chat:user"
         return self.context
 
 
@@ -144,6 +148,22 @@ class _RecordingExecutor:
 
     def __init__(self) -> None:
         self.context: TrustedChannelContext | None = None
+
+    async def capabilities(
+        self,
+        *,
+        context: TrustedChannelContext,
+    ) -> TargetCapabilities:
+        del context
+        return TargetCapabilities(
+            streaming=True,
+            cancellable=True,
+            regeneration="always",
+            retryable=True,
+            feedback=True,
+            commit_mode="candidate_cas",
+            effect_class="generation_only",
+        )
 
     async def execute(
         self,
@@ -221,6 +241,70 @@ async def test_legacy_action_without_operation_fails_closed_before_execution() -
     assert executor.context is None
 
 
+@pytest.mark.parametrize("denied_by", ["run_policy", "target"])
+async def test_regenerate_is_authorized_before_claiming_the_event(denied_by: str) -> None:
+    class _NoRegenerationExecutor(_RecordingExecutor):
+        async def capabilities(
+            self,
+            *,
+            context: TrustedChannelContext,
+        ) -> TargetCapabilities:
+            capabilities = await super().capabilities(context=context)
+            return capabilities.model_copy(update={"regeneration": "never"})
+
+    executor = _NoRegenerationExecutor() if denied_by == "target" else _RecordingExecutor()
+    claims = _ClaimStore()
+    context = _context(run_policy={"reply_capabilities": {"regenerate": False}} if denied_by == "run_policy" else None)
+    service = ChannelExecutionService(
+        binding_resolver=_Resolver(context),
+        conversation_store=_ConversationStore("session-existing"),
+        claim_store=claims,
+        target_service=PublishedTargetExecutionService(TargetExecutorRegistry([executor])),
+    )
+
+    events = await service.execute(
+        binding_id="binding-1",
+        workload=WorkloadIdentity(subject="runner-1"),
+        command=_command(operation="regenerate"),
+    )
+
+    assert [event.model_dump(exclude_none=True) for event in await _collect(events)] == [{"event": "execution_failed", "error_code": "CHANNEL_OPERATION_NOT_ALLOWED"}]
+    assert claims.claims == []
+    assert executor.context is None
+
+
+@pytest.mark.parametrize("denied_by", ["run_policy", "target"])
+async def test_failed_action_retry_is_authorized_before_claiming_the_event(denied_by: str) -> None:
+    class _NoRetryExecutor(_RecordingExecutor):
+        async def capabilities(
+            self,
+            *,
+            context: TrustedChannelContext,
+        ) -> TargetCapabilities:
+            capabilities = await super().capabilities(context=context)
+            return capabilities.model_copy(update={"retryable": False})
+
+    executor = _NoRetryExecutor() if denied_by == "target" else _RecordingExecutor()
+    claims = _ClaimStore()
+    context = _context(run_policy={"reply_capabilities": {"retry": False}} if denied_by == "run_policy" else None)
+    service = ChannelExecutionService(
+        binding_resolver=_Resolver(context),
+        conversation_store=_ConversationStore("session-existing"),
+        claim_store=claims,
+        target_service=PublishedTargetExecutionService(TargetExecutorRegistry([executor])),
+    )
+
+    events = await service.execute(
+        binding_id="binding-1",
+        workload=WorkloadIdentity(subject="runner-1"),
+        command=_command(event_id="action:retry-event", operation="message"),
+    )
+
+    assert [event.model_dump(exclude_none=True) for event in await _collect(events)] == [{"event": "execution_failed", "error_code": "CHANNEL_OPERATION_NOT_ALLOWED"}]
+    assert claims.claims == []
+    assert executor.context is None
+
+
 async def test_registry_rejects_non_multirag_namespace_and_duplicates() -> None:
     executor = _RecordingExecutor()
     registry = TargetExecutorRegistry([executor])
@@ -289,6 +373,23 @@ class _CanvasAdapter:
         self.validated: tuple[str, str | None] | None = None
         self.operations: list[object] = []
 
+    async def capabilities(
+        self,
+        *,
+        tenant_id: str,
+        target: ExecutionTargetRef,
+    ) -> TargetCapabilities:
+        del tenant_id, target
+        return TargetCapabilities(
+            streaming=True,
+            cancellable=True,
+            regeneration="conditional",
+            retryable=True,
+            feedback=True,
+            commit_mode="candidate_cas",
+            effect_class="unknown",
+        )
+
     async def validate_revision(self, *, tenant_id: str, target: ExecutionTargetRef) -> None:
         self.validated = (tenant_id, target.revision_id)
         if self.invalid_revision:
@@ -340,6 +441,21 @@ async def test_canvas_executor_filters_reasoning_trace_and_tool_events() -> None
     ]
     assert adapter.validated == ("tenant-trusted", "rev-1")
     assert adapter.operations == ["message"]
+
+
+async def test_target_executors_declare_current_target_private_capabilities() -> None:
+    canvas = MultiRAGCanvasAgentExecutor(_CanvasAdapter([]))
+    dialog = MultiRAGDialogExecutor(_DialogAdapter())
+
+    canvas_capabilities = await canvas.capabilities(context=_context())
+    dialog_capabilities = await dialog.capabilities(context=_context(target_type="multirag.dialog", revision_id=None))
+
+    assert canvas_capabilities.regeneration == "conditional"
+    assert canvas_capabilities.commit_mode == "candidate_cas"
+    assert canvas_capabilities.effect_class == "unknown"
+    assert dialog_capabilities.regeneration == "always"
+    assert dialog_capabilities.commit_mode == "candidate_cas"
+    assert dialog_capabilities.effect_class == "generation_only"
 
 
 async def test_canvas_executor_rejects_a_reasoning_only_completion() -> None:

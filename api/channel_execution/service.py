@@ -7,6 +7,7 @@ import logging
 from collections.abc import AsyncIterator
 from dataclasses import replace
 
+from api.channel_capabilities import RunCapabilityPolicy, TargetCapabilities
 from api.channel_execution.errors import BindingDisabledError, BindingNotFoundError, ChannelExecutionError, DuplicateEventError
 from api.channel_execution.models import ChannelExecutionCommand, ExecutionEvent, TrustedChannelContext, WorkloadIdentity
 from api.channel_execution.protocols import BindingResolver, ChannelConversationStore, ExecutionClaimStore
@@ -24,6 +25,17 @@ class PublishedTargetExecutionService:
 
     def __init__(self, registry: TargetExecutorRegistry) -> None:
         self._registry = registry
+
+    async def capabilities(
+        self,
+        *,
+        context: TrustedChannelContext,
+    ) -> TargetCapabilities:
+        """Return a validated declaration without exposing target identity."""
+
+        executor = self._registry.get(context.target.target_type)
+        capabilities = await executor.capabilities(context=context)
+        return TargetCapabilities.model_validate(capabilities.model_dump())
 
     async def execute(
         self,
@@ -102,6 +114,28 @@ class ChannelExecutionService:
             raise BindingNotFoundError()
         if not context.enabled:
             raise BindingDisabledError()
+        is_regenerate = command.operation == "regenerate"
+        is_action_retry = command.operation == "message" and command.event_id.startswith("action:")
+        if is_regenerate or is_action_retry:
+            policy = RunCapabilityPolicy.from_binding_policy(context.run_policy)
+            policy_allows_operation = policy.regenerate if is_regenerate else policy.retry
+            if not policy_allows_operation:
+                return _one_failure("CHANNEL_OPERATION_NOT_ALLOWED")
+            try:
+                target_capabilities = await self._target_service.capabilities(context=context)
+            except asyncio.CancelledError:
+                raise
+            except ChannelExecutionError as exc:
+                return _one_failure(exc.code)
+            except Exception as exc:
+                LOGGER.warning(
+                    "channel_execution_event=capability_check_failed error_type=%s",
+                    type(exc).__name__,
+                )
+                return _one_failure("TARGET_EXECUTION_FAILED")
+            target_allows_operation = target_capabilities.regeneration == "always" if is_regenerate else target_capabilities.retryable
+            if not target_allows_operation:
+                return _one_failure("CHANNEL_OPERATION_NOT_ALLOWED")
         try:
             claimed = await self._claim_store.claim(binding_id=binding_id, event_id=command.event_id)
         except asyncio.CancelledError:

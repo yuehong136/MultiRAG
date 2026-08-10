@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.channel_execution.errors import TargetExecutionFailedError
 from api.channel_execution.models import ExecutionOperation
 from api.channel_execution.reasoning import strip_reasoning
-from api.channel_execution.session_models import PreparedChannelSession
+from api.channel_execution.session_models import PreparedCanvasExecution, PreparedDialogExecution
 from api.db.db_models import API4Conversation, Conversation
 from common.misc_utils import get_uuid
 
@@ -30,10 +30,7 @@ _REGENERATE_SAFE_COMPONENTS = {
     "Begin",
     "Categorize",
     "DataOperations",
-    "DocGenerator",
-    "ExcelProcessor",
     "ExitLoop",
-    "Generate",
     "HTMLReport",
     "Iteration",
     "IterationItem",
@@ -115,11 +112,31 @@ def _assert_canvas_regeneration_safe(dsl: dict[str, Any]) -> None:
         name = obj.get("component_name")
         if not isinstance(name, str) or name not in _REGENERATE_SAFE_COMPONENTS:
             raise PermissionError("Canvas regeneration is unavailable for workflows with external tools")
+        params = obj.get("params")
+        if name == "Message":
+            if not isinstance(params, dict) or params.get("output_format") or params.get("memory_ids"):
+                raise PermissionError("Canvas regeneration is unavailable for messages with persistent outputs")
+            continue
         if name != "Agent":
             continue
-        params = obj.get("params")
         if not isinstance(params, dict) or params.get("tools") or params.get("mcp"):
             raise PermissionError("Canvas regeneration is unavailable for tool-enabled agents")
+
+
+def canvas_regeneration_is_safe(dsl: dict[str, Any] | str | None) -> bool:
+    """Whether a published Canvas graph is safe to replay from visible history."""
+
+    try:
+        parsed = json.loads(dsl) if isinstance(dsl, str) else deepcopy(dsl)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+    if not isinstance(parsed, dict):
+        return False
+    try:
+        _assert_canvas_regeneration_safe(parsed)
+    except PermissionError:
+        return False
+    return True
 
 
 def _prepare_canvas_dsl(
@@ -180,25 +197,25 @@ def _has_visible_assistant(messages: list[dict[str, Any]]) -> bool:
     return isinstance(content, str) and bool(strip_reasoning(content))
 
 
-class SqlAlchemyChannelSessionManager:
-    """Copy-on-write session manager for Channel completion adapters."""
+class SqlAlchemyCanvasHistoryTransaction:
+    """Canvas-owned candidate transaction around MultiRAG completion."""
 
     def __init__(self, db: AsyncSession) -> None:
         self._db = db
 
-    async def prepare_canvas(
+    async def prepare(
         self,
         *,
         target_id: str,
         session_id: str | None,
         question: str,
         operation: ExecutionOperation,
-    ) -> PreparedChannelSession:
-        await self._prune_stale_candidates(API4Conversation, target_id)
+    ) -> PreparedCanvasExecution:
+        await _prune_stale_candidates(self._db, API4Conversation, target_id)
         if session_id is None:
             if operation == "regenerate":
                 raise LookupError("A session is required for regeneration")
-            return PreparedChannelSession("canvas", None, None, None)
+            return PreparedCanvasExecution(None, None, None)
 
         source = await self._db.get(API4Conversation, session_id)
         if source is None or source.dialog_id != target_id:
@@ -231,74 +248,33 @@ class SqlAlchemyChannelSessionManager:
             version_title=source.version_title,
         )
         self._db.add(candidate)
-        await self._commit()
-        return PreparedChannelSession(
-            "canvas",
+        await _commit(self._db)
+        return PreparedCanvasExecution(
             session_id,
             candidate_id,
             _canvas_fingerprint(source),
         )
 
-    async def prepare_dialog(
+    async def commit(
         self,
-        *,
-        target_id: str,
-        session_id: str | None,
-        question: str,
-        operation: ExecutionOperation,
-    ) -> PreparedChannelSession:
-        await self._prune_stale_candidates(Conversation, target_id)
-        if session_id is None:
-            if operation == "regenerate":
-                raise LookupError("A session is required for regeneration")
-            return PreparedChannelSession("dialog", None, None, None)
-
-        source = await self._db.get(Conversation, session_id)
-        if source is None or source.dialog_id != target_id:
-            raise LookupError("Session not found")
-        messages = _sanitize_messages(source.message)
-        references = deepcopy(source.reference or [])
-        if operation == "regenerate":
-            _rewind_latest_turn(messages, references, question)
-        candidate_id = get_uuid()
-        candidate = Conversation(
-            id=candidate_id,
-            dialog_id=source.dialog_id,
-            name=_CANDIDATE_NAME,
-            message=messages,
-            reference=references,
-            user_id=candidate_id,
-        )
-        self._db.add(candidate)
-        await self._commit()
-        return PreparedChannelSession(
-            "dialog",
-            session_id,
-            candidate_id,
-            _dialog_fingerprint(source),
-        )
-
-    async def complete_canvas(
-        self,
-        prepared: PreparedChannelSession,
+        prepared: PreparedCanvasExecution,
         generated_session_id: str,
     ) -> str:
-        if prepared.kind != "canvas":
-            raise TypeError("Canvas completion received a Dialog session")
         if prepared.execution_session_id and generated_session_id != prepared.execution_session_id:
             raise TargetExecutionFailedError()
 
         if prepared.public_session_id is None:
-            row = await self._locked_one(API4Conversation, generated_session_id)
+            row = await _locked_one(self._db, API4Conversation, generated_session_id)
             messages = _sanitize_messages(row.message)
             if not _has_visible_assistant(messages):
                 raise TargetExecutionFailedError()
             row.message = messages
             row.dsl = _prepare_canvas_dsl(row.dsl, messages, validate_replay=False)
-            await self._commit()
+            await _commit(self._db)
             return generated_session_id
 
-        public, candidate = await self._locked_pair(
+        public, candidate = await _locked_pair(
+            self._db,
             API4Conversation,
             prepared.public_session_id,
             generated_session_id,
@@ -317,31 +293,87 @@ class SqlAlchemyChannelSessionManager:
         public.thumb_up = candidate.thumb_up
         public.errors = candidate.errors
         await self._db.delete(candidate)
-        await self._commit()
+        await _commit(self._db)
         return prepared.public_session_id
 
-    async def complete_dialog(
+    async def abort(
         self,
-        prepared: PreparedChannelSession,
-        generated_session_id: str,
+        prepared: PreparedCanvasExecution,
+        generated_session_id: str | None,
+    ) -> None:
+        await _abort_candidate(
+            self._db,
+            API4Conversation,
+            prepared.public_session_id,
+            prepared.execution_session_id,
+            generated_session_id,
+        )
+
+
+class SqlAlchemyDialogHistoryTransaction:
+    """Dialog-owned candidate transaction around MultiRAG completion."""
+
+    def __init__(self, db: AsyncSession) -> None:
+        self._db = db
+
+    async def prepare(
+        self,
         *,
-        require_visible_answer: bool,
+        target_id: str,
+        session_id: str | None,
+        question: str,
+        operation: ExecutionOperation,
+    ) -> PreparedDialogExecution:
+        await _prune_stale_candidates(self._db, Conversation, target_id)
+        if session_id is None:
+            if operation == "regenerate":
+                raise LookupError("A session is required for regeneration")
+            return PreparedDialogExecution(None, None, None, False)
+
+        source = await self._db.get(Conversation, session_id)
+        if source is None or source.dialog_id != target_id:
+            raise LookupError("Session not found")
+        messages = _sanitize_messages(source.message)
+        references = deepcopy(source.reference or [])
+        if operation == "regenerate":
+            _rewind_latest_turn(messages, references, question)
+        candidate_id = get_uuid()
+        candidate = Conversation(
+            id=candidate_id,
+            dialog_id=source.dialog_id,
+            name=_CANDIDATE_NAME,
+            message=messages,
+            reference=references,
+            user_id=candidate_id,
+        )
+        self._db.add(candidate)
+        await _commit(self._db)
+        return PreparedDialogExecution(
+            session_id,
+            candidate_id,
+            _dialog_fingerprint(source),
+            True,
+        )
+
+    async def commit(
+        self,
+        prepared: PreparedDialogExecution,
+        generated_session_id: str,
     ) -> str:
-        if prepared.kind != "dialog":
-            raise TypeError("Dialog completion received a Canvas session")
         if prepared.execution_session_id and generated_session_id != prepared.execution_session_id:
             raise TargetExecutionFailedError()
 
         if prepared.public_session_id is None:
-            row = await self._locked_one(Conversation, generated_session_id)
+            row = await _locked_one(self._db, Conversation, generated_session_id)
             messages = _sanitize_messages(row.message)
-            if require_visible_answer and not _has_visible_assistant(messages):
+            if prepared.require_visible_answer and not _has_visible_assistant(messages):
                 raise TargetExecutionFailedError()
             row.message = messages
-            await self._commit()
+            await _commit(self._db)
             return generated_session_id
 
-        public, candidate = await self._locked_pair(
+        public, candidate = await _locked_pair(
+            self._db,
             Conversation,
             prepared.public_session_id,
             generated_session_id,
@@ -349,75 +381,94 @@ class SqlAlchemyChannelSessionManager:
         if _dialog_fingerprint(public) != prepared.source_fingerprint:
             raise TargetExecutionFailedError()
         messages = _sanitize_messages(candidate.message)
-        if require_visible_answer and not _has_visible_assistant(messages):
+        if prepared.require_visible_answer and not _has_visible_assistant(messages):
             raise TargetExecutionFailedError()
         public.message = messages
         public.reference = deepcopy(candidate.reference)
         await self._db.delete(candidate)
-        await self._commit()
+        await _commit(self._db)
         return prepared.public_session_id
 
     async def abort(
         self,
-        prepared: PreparedChannelSession,
+        prepared: PreparedDialogExecution,
         generated_session_id: str | None,
     ) -> None:
-        candidate_id = prepared.execution_session_id or generated_session_id
-        if not candidate_id or candidate_id == prepared.public_session_id:
+        await _abort_candidate(
+            self._db,
+            Conversation,
+            prepared.public_session_id,
+            prepared.execution_session_id,
+            generated_session_id,
+        )
+
+
+async def _abort_candidate(
+    db: AsyncSession,
+    model: type[Any],
+    public_session_id: str | None,
+    execution_session_id: str | None,
+    generated_session_id: str | None,
+) -> None:
+    candidate_id = execution_session_id or generated_session_id
+    if not candidate_id or candidate_id == public_session_id:
+        return
+    try:
+        await db.rollback()
+        candidate = await db.get(model, candidate_id)
+        if candidate is None:
             return
-        model = API4Conversation if prepared.kind == "canvas" else Conversation
-        try:
-            await self._db.rollback()
-            candidate = await self._db.get(model, candidate_id)
-            if candidate is None:
-                return
-            await self._db.delete(candidate)
-            await self._db.commit()
-        except Exception:
-            await self._db.rollback()
+        await db.delete(candidate)
+        await db.commit()
+    except Exception:
+        await db.rollback()
 
-    async def _locked_one(self, model: type[Any], session_id: str) -> Any:
-        stmt = select(model).where(model.id == session_id).with_for_update().execution_options(populate_existing=True)
-        row = (await self._db.scalars(stmt)).one_or_none()
-        if row is None:
-            raise LookupError("Session not found")
-        return row
 
-    async def _prune_stale_candidates(
-        self,
-        model: type[Any],
-        target_id: str,
-    ) -> None:
-        cutoff = int(time.time() * 1000) - _CANDIDATE_MAX_AGE_MS
-        conditions = [
-            model.dialog_id == target_id,
-            model.name == _CANDIDATE_NAME,
-            model.user_id == model.id,
-            model.update_time < cutoff,
-        ]
-        if model is API4Conversation:
-            conditions.append(model.exp_user_id == model.id)
-        stmt = delete(model).where(*conditions).execution_options(synchronize_session=False)
-        await self._db.execute(stmt)
-        await self._commit()
+async def _locked_one(db: AsyncSession, model: type[Any], session_id: str) -> Any:
+    stmt = select(model).where(model.id == session_id).with_for_update().execution_options(populate_existing=True)
+    row = (await db.scalars(stmt)).one_or_none()
+    if row is None:
+        raise LookupError("Session not found")
+    return row
 
-    async def _locked_pair(
-        self,
-        model: type[Any],
-        public_session_id: str,
-        candidate_session_id: str,
-    ) -> tuple[Any, Any]:
-        stmt = select(model).where(model.id.in_([public_session_id, candidate_session_id])).with_for_update().execution_options(populate_existing=True)
-        rows = {row.id: row for row in (await self._db.scalars(stmt)).all()}
-        public = rows.get(public_session_id)
-        candidate = rows.get(candidate_session_id)
-        if public is None or candidate is None:
-            raise LookupError("Session not found")
-        return public, candidate
 
-    async def _commit(self) -> None:
-        try:
-            await self._db.commit()
-        except Exception:
-            await self._db.rollback()
-            raise
+async def _prune_stale_candidates(
+    db: AsyncSession,
+    model: type[Any],
+    target_id: str,
+) -> None:
+    cutoff = int(time.time() * 1000) - _CANDIDATE_MAX_AGE_MS
+    conditions = [
+        model.dialog_id == target_id,
+        model.name == _CANDIDATE_NAME,
+        model.user_id == model.id,
+        model.update_time < cutoff,
+    ]
+    if model is API4Conversation:
+        conditions.append(model.exp_user_id == model.id)
+    stmt = delete(model).where(*conditions).execution_options(synchronize_session=False)
+    await db.execute(stmt)
+    await _commit(db)
+
+
+async def _locked_pair(
+    db: AsyncSession,
+    model: type[Any],
+    public_session_id: str,
+    candidate_session_id: str,
+) -> tuple[Any, Any]:
+    stmt = select(model).where(model.id.in_([public_session_id, candidate_session_id])).with_for_update().execution_options(populate_existing=True)
+    rows = {row.id: row for row in (await db.scalars(stmt)).all()}
+    public = rows.get(public_session_id)
+    candidate = rows.get(candidate_session_id)
+    if public is None or candidate is None:
+        raise LookupError("Session not found")
+    return public, candidate
+
+
+async def _commit(db: AsyncSession) -> None:
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise

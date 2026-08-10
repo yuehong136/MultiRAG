@@ -9,10 +9,31 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
+from api.channel_capabilities import TargetCapabilities
 from api.channel_execution.errors import TargetExecutionFailedError, TargetRevisionUnavailableError
-from api.channel_execution.history import SqlAlchemyChannelSessionManager
+from api.channel_execution.history import SqlAlchemyCanvasHistoryTransaction, SqlAlchemyDialogHistoryTransaction, canvas_regeneration_is_safe
 from api.channel_execution.models import ChannelExecutionCommand, ExecutionEvent, ExecutionOperation, ExecutionTargetRef, TrustedChannelContext
-from api.channel_execution.protocols import CanvasCompletionAdapter, ChannelSessionManager, DialogCompletionAdapter
+from api.channel_execution.protocols import CanvasTargetDriver, DialogTargetDriver, TargetHistoryTransaction
+from api.channel_execution.session_models import PreparedCanvasExecution, PreparedDialogExecution
+
+_CANVAS_CAPABILITIES = TargetCapabilities(
+    streaming=True,
+    cancellable=True,
+    regeneration="conditional",
+    retryable=False,
+    feedback=True,
+    commit_mode="candidate_cas",
+    effect_class="unknown",
+)
+_DIALOG_CAPABILITIES = TargetCapabilities(
+    streaming=True,
+    cancellable=True,
+    regeneration="always",
+    retryable=True,
+    feedback=True,
+    commit_mode="candidate_cas",
+    effect_class="generation_only",
+)
 
 
 def _decode_sse_payload(frame: str) -> dict[str, Any] | None:
@@ -68,16 +89,49 @@ def _merge_generated_session(
     return observed or current
 
 
-class SqlAlchemyCanvasCompletionAdapter:
-    """Guard the binding revision, then use the MultiRAG latest-release path."""
+class SqlAlchemyCanvasTargetDriver:
+    """Guard the binding revision and own the Canvas history transaction."""
 
     def __init__(
         self,
         db: AsyncSession,
-        session_manager: ChannelSessionManager | None = None,
+        history: TargetHistoryTransaction[PreparedCanvasExecution] | None = None,
     ) -> None:
         self._db = db
-        self._sessions = session_manager or SqlAlchemyChannelSessionManager(db)
+        self._history = history or SqlAlchemyCanvasHistoryTransaction(db)
+
+    async def capabilities(
+        self,
+        *,
+        tenant_id: str,
+        target: ExecutionTargetRef,
+    ) -> TargetCapabilities:
+        revision_id = target.revision_id
+        if not revision_id:
+            raise TargetRevisionUnavailableError()
+
+        def _resolve(sync_db: Session) -> bool | None:
+            from api.db.services.canvas_service import UserCanvasService
+            from api.db.services.user_canvas_version import UserCanvasVersionService
+
+            canvas = UserCanvasService.get_by_id(sync_db, target.target_id)
+            if canvas is None or canvas.user_id != tenant_id:
+                return None
+            latest_release = UserCanvasVersionService.get_latest_released(sync_db, target.target_id)
+            if latest_release is None or latest_release.id != revision_id:
+                return None
+            return canvas_regeneration_is_safe(latest_release.dsl)
+
+        regeneration_safe = await self._db.run_sync(_resolve)  # TODO(async-phase4)
+        if regeneration_safe is None:
+            raise TargetRevisionUnavailableError()
+        return _CANVAS_CAPABILITIES.model_copy(
+            update={
+                "regeneration": "always" if regeneration_safe else "never",
+                "retryable": regeneration_safe,
+                "effect_class": "generation_only" if regeneration_safe else "unknown",
+            }
+        )
 
     async def validate_revision(self, *, tenant_id: str, target: ExecutionTargetRef) -> None:
         revision_id = target.revision_id
@@ -130,7 +184,7 @@ class SqlAlchemyCanvasCompletionAdapter:
     ) -> AsyncIterator[str]:
         from api.db.services.canvas_service import completion as canvas_completion
 
-        prepared = await self._sessions.prepare_canvas(
+        prepared = await self._history.prepare(
             target_id=target.target_id,
             session_id=session_id,
             question=question,
@@ -162,23 +216,23 @@ class SqlAlchemyCanvasCompletionAdapter:
                 )
             if not terminal or not generated_session_id:
                 raise TargetExecutionFailedError()
-            await self._sessions.complete_canvas(prepared, generated_session_id)
+            await self._history.commit(prepared, generated_session_id)
             promoted = True
         finally:
             if not promoted:
-                await self._sessions.abort(prepared, generated_session_id)
+                await self._history.abort(prepared, generated_session_id)
 
 
-class SqlAlchemyDialogCompletionAdapter:
-    """Reuses the async MultiRAG Dialog completion implementation."""
+class SqlAlchemyDialogTargetDriver:
+    """Own the Dialog history transaction around MultiRAG completion."""
 
     def __init__(
         self,
         db: AsyncSession,
-        session_manager: ChannelSessionManager | None = None,
+        history: TargetHistoryTransaction[PreparedDialogExecution] | None = None,
     ) -> None:
         self._db = db
-        self._sessions = session_manager or SqlAlchemyChannelSessionManager(db)
+        self._history = history or SqlAlchemyDialogHistoryTransaction(db)
 
     def stream(
         self,
@@ -211,7 +265,7 @@ class SqlAlchemyDialogCompletionAdapter:
     ) -> AsyncIterator[str]:
         from api.db.services.conversation_service import async_completion as dialog_completion
 
-        prepared = await self._sessions.prepare_dialog(
+        prepared = await self._history.prepare(
             target_id=target.target_id,
             session_id=session_id,
             question=question,
@@ -245,15 +299,11 @@ class SqlAlchemyDialogCompletionAdapter:
                 )
             if failed or not terminal or not generated_session_id:
                 raise TargetExecutionFailedError()
-            await self._sessions.complete_dialog(
-                prepared,
-                generated_session_id,
-                require_visible_answer=prepared.public_session_id is not None,
-            )
+            await self._history.commit(prepared, generated_session_id)
             promoted = True
         finally:
             if not promoted:
-                await self._sessions.abort(prepared, generated_session_id)
+                await self._history.abort(prepared, generated_session_id)
 
 
 class MultiRAGCanvasAgentExecutor:
@@ -261,8 +311,18 @@ class MultiRAGCanvasAgentExecutor:
 
     target_type = "multirag.canvas_agent"
 
-    def __init__(self, adapter: CanvasCompletionAdapter) -> None:
-        self._adapter = adapter
+    def __init__(self, driver: CanvasTargetDriver) -> None:
+        self._driver = driver
+
+    async def capabilities(
+        self,
+        *,
+        context: TrustedChannelContext,
+    ) -> TargetCapabilities:
+        return await self._driver.capabilities(
+            tenant_id=context.tenant_id,
+            target=context.target,
+        )
 
     async def execute(
         self,
@@ -270,8 +330,8 @@ class MultiRAGCanvasAgentExecutor:
         context: TrustedChannelContext,
         command: ChannelExecutionCommand,
     ) -> AsyncIterator[ExecutionEvent]:
-        await self._adapter.validate_revision(tenant_id=context.tenant_id, target=context.target)
-        frames = self._adapter.stream(
+        await self._driver.validate_revision(tenant_id=context.tenant_id, target=context.target)
+        frames = self._driver.stream(
             tenant_id=context.tenant_id,
             target=context.target,
             question=command.message.content,
@@ -327,8 +387,16 @@ class MultiRAGDialogExecutor:
 
     target_type = "multirag.dialog"
 
-    def __init__(self, adapter: DialogCompletionAdapter) -> None:
-        self._adapter = adapter
+    def __init__(self, driver: DialogTargetDriver) -> None:
+        self._driver = driver
+
+    async def capabilities(
+        self,
+        *,
+        context: TrustedChannelContext,
+    ) -> TargetCapabilities:
+        del context
+        return _DIALOG_CAPABILITIES
 
     async def execute(
         self,
@@ -349,7 +417,7 @@ class MultiRAGDialogExecutor:
     ) -> AsyncIterator[ExecutionEvent]:
         session_id = context.session_id
         if session_id is None:
-            bootstrap_frames = self._adapter.stream(
+            bootstrap_frames = self._driver.stream(
                 tenant_id=context.tenant_id,
                 target=context.target,
                 question=command.message.content,
@@ -359,7 +427,7 @@ class MultiRAGDialogExecutor:
             )
             session_id = await self._consume_dialog_bootstrap(bootstrap_frames)
 
-        frames = self._adapter.stream(
+        frames = self._driver.stream(
             tenant_id=context.tenant_id,
             target=context.target,
             question=command.message.content,

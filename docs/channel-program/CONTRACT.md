@@ -1,6 +1,6 @@
 # Channel 前后端契约
 
-> **契约版本**：`channel-api/v1` · **最后变更**：2026-08-06 · **变更提交**：见文末变更日志
+> **契约版本**：`channel-api/v1` · **最后变更**：2026-08-10 · **变更提交**：见文末变更日志
 >
 > 本文件是 channel 前后端接口的**唯一真源**。前端仓不得保存第二份契约描述。
 > 契约变更 = 改本文件 + 在本文件末尾的变更日志追加一行
@@ -59,6 +59,32 @@ PATCH，导致改一次绑定必须连带重发整个 `config`。→ 见 §6-C�
   后者是「这次没查成，凭据可能没问题」。混成一句文案会让管理员去重填一个本来正确的密钥。
 - 有**每渠道冷却**（默认 10 秒），超出返回 `CHANNEL_VERIFICATION_THROTTLED`（retcode 107）。
   前端接的时候按钮要按这个禁用，不要靠用户自觉。
+
+### 1.1 私有 execution capability preflight（EIM-U11 / CHN-X13）
+
+`GET /api/v1/internal/channel-bindings/{binding_id}/execution-capabilities` 只供 generation-scoped managed
+worker 使用，不属于前端 `channel-api/v1`。它沿用 workload bearer token 与
+`X-Channel-Binding-Generation`，响应严格为：
+
+```json
+{
+  "progressive_reply": true,
+  "cancel_queued": true,
+  "cancel_running": true,
+  "regenerate": true,
+  "retry": true,
+  "feedback": true
+}
+```
+
+- 这是 Provider × Target × RunPolicy 的服务端交集，不下发 target type/id/revision、Canvas DSL、
+  `commit_mode` 或 `effect_class`；响应为 `Cache-Control: private, no-store`。
+- worker 每次启动时为当前 binding generation 读取一次；同 generation 的进程重启可重新读取，消息、
+  delta 和卡片 patch 不调用该端点。
+- 旧 API、超时、非 200 或已知字段校验失败时，worker 继续 buffered 回答，但所有交互能力为 false；
+  worker 忽略未来新增字段，以允许服务端做加法演进，删除或改变既有字段语义则必须升级端点版本。
+- `regenerate` 与 action retry 在 `POST .../executions` claim event 前再次按 Target 和 RunPolicy 授权；
+  拒绝产生 SSE `execution_failed(error_code="CHANNEL_OPERATION_NOT_ALLOWED")`，且不占用 event claim。
 
 ---
 
@@ -219,7 +245,19 @@ JSON Schema（`config_schema`）仅用于服务端请求校验与 OpenAPI，**�
 {
   "provider": "feishu",
   "display_name": "Feishu / Lark",
-  "capabilities": { "private_chat": true, "group_chat": false, ... },
+  "capabilities": {
+    "private_chat": true,
+    "group_chat": false,
+    "text": true,
+    "files": false,
+    "images": false,
+    "streaming_cards": true,
+    "progressive_reply": true,
+    "interactive_actions": true,
+    "cancel_control": true,
+    "feedback_control": true,
+    "threaded_reply": true
+  },
   "form": {
     "version": 1,
     "fields": [
@@ -321,3 +359,4 @@ JSON Schema（`config_schema`）仅用于服务端请求校验与 OpenAPI，**�
 | 2026-08-06 | v1（加法，不 bump） | manifest 新增 `description` 与 `description_i18n_key`（CHN-P13），供客户端列出「还没接入的 provider」。**向后兼容**：两个字段都可选，老前端忽略；老后端不发时新前端渲染没有副标题的卡片，而不是渲染不出来 | `3a82e5f6` |
 | 2026-08-06 | v1（加法，不 bump） | 新增 `POST /chat-channels/{id}/verify`（CHN-O6）与五个错误码（§4.1）。**向后兼容**：新端点，老前端不调用即可；错误码只出现在这条新路径上，其它端点的信封一个字节没动。§7 那条「保存前无法验证凭据」的空白随之收窄——**只**收窄到「已保存的渠道」，创建表单里的即时试连仍然不做，理由写在 §1 与 §7 | 本次提交 |
 | 2026-08-06 | v1（消费侧，线格未变） | 前端接上了 `POST /{id}/verify`（CHN-O13）：五个错误码进 `CHANNEL_ERROR_CODES` + 两份 locale，编辑抽屉页脚出现「测试连接」。§1 的「尚未接入」随之改成 `channelAPI.verify`。契约本身一个字节没动。前端多了一个纯函数 `channelVerifyFailure`，把 `CHANNEL_CREDENTIAL_REJECTED` 与 `CHANNEL_VERIFICATION_UNAVAILABLE` 分成两种结局并由测试钉住——§1 里「必须分开渲染」那条从此有断言撑着，不只是一句叮嘱 | web `ea0e5af` |
+| 2026-08-10 | v1（公开 manifest 加法 + 私有端点加法，不 bump） | Provider capabilities 增加渐进式、交互、取消、反馈与 threading 声明；新增 generation-scoped `execution-capabilities` 私有 preflight。旧前端忽略 manifest 新键；旧 API 时新 worker 降级为 buffered/无操作，不修改 `RuntimeBindingConfig` 或 execution SSE wire（EIM-U11 / CHN-X13） | 本次提交 |

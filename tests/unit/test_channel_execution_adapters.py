@@ -10,8 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.channel_execution.adapters import RedisChannelExecutionStateStore, SqlAlchemyBindingResolver
 from api.channel_execution.errors import TargetExecutionFailedError, TargetRevisionUnavailableError
 from api.channel_execution.executors import (
-    SqlAlchemyCanvasCompletionAdapter,
-    SqlAlchemyDialogCompletionAdapter,
+    SqlAlchemyCanvasTargetDriver,
+    SqlAlchemyDialogTargetDriver,
 )
 from api.channel_execution.models import (
     ChannelActor,
@@ -21,71 +21,84 @@ from api.channel_execution.models import (
     ExecutionTargetRef,
     WorkloadIdentity,
 )
-from api.channel_execution.session_models import PreparedChannelSession
+from api.channel_execution.session_models import PreparedCanvasExecution, PreparedDialogExecution
 
 
-class FakeChannelSessionManager:
+class FakeCanvasHistoryTransaction:
     def __init__(self) -> None:
         self.prepared: list[tuple[str, str | None, str, ExecutionOperation]] = []
-        self.completed: list[tuple[str, str, bool | None]] = []
-        self.aborted: list[tuple[str, str | None]] = []
+        self.completed: list[str] = []
+        self.aborted: list[str | None] = []
 
-    async def prepare_canvas(
+    async def prepare(
         self,
         *,
         target_id: str,
         session_id: str | None,
         question: str,
         operation: ExecutionOperation,
-    ) -> PreparedChannelSession:
+    ) -> PreparedCanvasExecution:
         self.prepared.append((target_id, session_id, question, operation))
-        return PreparedChannelSession(
-            "canvas",
+        return PreparedCanvasExecution(
             session_id,
             "candidate-canvas" if session_id else None,
             "source-fingerprint" if session_id else None,
         )
 
-    async def prepare_dialog(
+    async def commit(
+        self,
+        prepared: PreparedCanvasExecution,
+        generated_session_id: str,
+    ) -> str:
+        self.completed.append(generated_session_id)
+        return prepared.public_session_id or generated_session_id
+
+    async def abort(
+        self,
+        prepared: PreparedCanvasExecution,
+        generated_session_id: str | None,
+    ) -> None:
+        del prepared
+        self.aborted.append(generated_session_id)
+
+
+class FakeDialogHistoryTransaction:
+    def __init__(self) -> None:
+        self.prepared: list[tuple[str, str | None, str, ExecutionOperation]] = []
+        self.completed: list[tuple[str, bool]] = []
+        self.aborted: list[str | None] = []
+
+    async def prepare(
         self,
         *,
         target_id: str,
         session_id: str | None,
         question: str,
         operation: ExecutionOperation,
-    ) -> PreparedChannelSession:
+    ) -> PreparedDialogExecution:
         self.prepared.append((target_id, session_id, question, operation))
-        return PreparedChannelSession(
-            "dialog",
+        return PreparedDialogExecution(
             session_id,
             "candidate-dialog" if session_id else None,
             "source-fingerprint" if session_id else None,
+            session_id is not None,
         )
 
-    async def complete_canvas(
+    async def commit(
         self,
-        prepared: PreparedChannelSession,
+        prepared: PreparedDialogExecution,
         generated_session_id: str,
     ) -> str:
-        self.completed.append((prepared.kind, generated_session_id, None))
-        return prepared.public_session_id or generated_session_id
-
-    async def complete_dialog(
-        self,
-        prepared: PreparedChannelSession,
-        generated_session_id: str,
-        *,
-        require_visible_answer: bool,
-    ) -> str:
-        self.completed.append((prepared.kind, generated_session_id, require_visible_answer))
+        self.completed.append((generated_session_id, prepared.require_visible_answer))
         return prepared.public_session_id or generated_session_id
 
     async def abort(
         self,
-        prepared: PreparedChannelSession,
+        prepared: PreparedDialogExecution,
         generated_session_id: str | None,
     ) -> None:
-        self.aborted.append((prepared.kind, generated_session_id))
+        del prepared
+        self.aborted.append(generated_session_id)
 
 
 class FakeRepository:
@@ -160,6 +173,7 @@ async def test_binding_resolver_uses_only_server_owned_target_and_tenant() -> No
         target_revision_id="revision-trusted",
         enabled=True,
         generation=3,
+        policy={},
     )
     resolver = SqlAlchemyBindingResolver(FakeRepository((channel, binding, None)))  # type: ignore[arg-type]
 
@@ -189,6 +203,7 @@ async def test_binding_resolver_rejects_provider_mismatch_and_disabled_state() -
         target_revision_id=None,
         enabled=True,
         generation=2,
+        policy={},
     )
     resolver = SqlAlchemyBindingResolver(FakeRepository((channel, binding, None)))  # type: ignore[arg-type]
 
@@ -293,21 +308,45 @@ async def test_canvas_adapter_guards_latest_release_without_extending_canvas_con
         return operation(SimpleNamespace())
 
     monkeypatch.setattr(db, "run_sync", _run_sync)
-    sessions = FakeChannelSessionManager()
-    adapter = SqlAlchemyCanvasCompletionAdapter(db, sessions)
+    sessions = FakeCanvasHistoryTransaction()
+    adapter = SqlAlchemyCanvasTargetDriver(db, sessions)
 
     monkeypatch.setattr(
         UserCanvasService,
         "get_by_id",
         lambda db, canvas_id: SimpleNamespace(id=canvas_id, user_id="tenant-1"),
     )
+    released = SimpleNamespace(
+        id="revision-latest",
+        user_canvas_id="agent-1",
+        dsl={
+            "components": {
+                "begin": {"obj": {"component_name": "Begin", "params": {}}},
+                "llm": {"obj": {"component_name": "LLM", "params": {}}},
+            }
+        },
+    )
     monkeypatch.setattr(
         UserCanvasVersionService,
         "get_latest_released",
-        lambda db, canvas_id: SimpleNamespace(id="revision-latest", user_canvas_id=canvas_id),
+        lambda db, canvas_id: released,
     )
 
     await adapter.validate_revision(tenant_id="tenant-1", target=target)
+    safe_capabilities = await adapter.capabilities(tenant_id="tenant-1", target=target)
+    assert safe_capabilities.regeneration == "always"
+    assert safe_capabilities.retryable is True
+    assert safe_capabilities.effect_class == "generation_only"
+
+    released.dsl = {
+        "components": {
+            "tool": {"obj": {"component_name": "Tool", "params": {}}},
+        }
+    }
+    unsafe_capabilities = await adapter.capabilities(tenant_id="tenant-1", target=target)
+    assert unsafe_capabilities.regeneration == "never"
+    assert unsafe_capabilities.retryable is False
+    assert unsafe_capabilities.effect_class == "unknown"
 
     captured: dict[str, object] = {}
 
@@ -342,7 +381,7 @@ async def test_canvas_adapter_guards_latest_release_without_extending_canvas_con
     assert all("candidate-canvas" not in frame for frame in frames)
     assert all('"session_id": "session-1"' in frame for frame in frames)
     assert sessions.prepared == [("agent-1", "session-1", "hello", "regenerate")]
-    assert sessions.completed == [("canvas", "candidate-canvas", None)]
+    assert sessions.completed == ["candidate-canvas"]
     assert sessions.aborted == []
 
     stale_target = target.model_copy(update={"revision_id": "revision-stale"})
@@ -360,8 +399,8 @@ async def test_dialog_adapter_promotes_only_complete_stream_and_hides_candidate_
         target_id="dialog-1",
     )
     db = AsyncSession()
-    sessions = FakeChannelSessionManager()
-    adapter = SqlAlchemyDialogCompletionAdapter(db, sessions)
+    sessions = FakeDialogHistoryTransaction()
+    adapter = SqlAlchemyDialogTargetDriver(db, sessions)
     captured: dict[str, object] = {}
 
     def _completion(**kwargs: Any) -> AsyncIterator[str]:
@@ -392,7 +431,7 @@ async def test_dialog_adapter_promotes_only_complete_stream_and_hides_candidate_
     assert "require_visible_answer" not in captured
     assert "candidate-dialog" not in "".join(frames)
     assert '"session_id": "dialog-session"' in frames[0]
-    assert sessions.completed == [("dialog", "candidate-dialog", True)]
+    assert sessions.completed == [("candidate-dialog", True)]
     assert sessions.aborted == []
     await db.close()
 
@@ -408,8 +447,8 @@ async def test_dialog_adapter_publishes_new_session_only_after_bootstrap_complet
         target_id="dialog-1",
     )
     db = AsyncSession()
-    sessions = FakeChannelSessionManager()
-    adapter = SqlAlchemyDialogCompletionAdapter(db, sessions)
+    sessions = FakeDialogHistoryTransaction()
+    adapter = SqlAlchemyDialogTargetDriver(db, sessions)
 
     def _completion(**kwargs: Any) -> AsyncIterator[str]:
         assert kwargs["session_id"] is None
@@ -433,7 +472,7 @@ async def test_dialog_adapter_publishes_new_session_only_after_bootstrap_complet
     ]
 
     assert "new-session" in frames[0]
-    assert sessions.completed == [("dialog", "new-session", False)]
+    assert sessions.completed == [("new-session", False)]
     assert sessions.aborted == []
     await db.close()
 
@@ -447,8 +486,8 @@ async def test_dialog_adapter_aborts_candidate_when_upstream_stream_fails(monkey
         target_id="dialog-1",
     )
     db = AsyncSession()
-    sessions = FakeChannelSessionManager()
-    adapter = SqlAlchemyDialogCompletionAdapter(db, sessions)
+    sessions = FakeDialogHistoryTransaction()
+    adapter = SqlAlchemyDialogTargetDriver(db, sessions)
 
     async def _failed_frames() -> AsyncIterator[str]:
         yield 'data:{"code":500,"data":false}\n\n'
@@ -474,7 +513,7 @@ async def test_dialog_adapter_aborts_candidate_when_upstream_stream_fails(monkey
         ]
 
     assert sessions.completed == []
-    assert sessions.aborted == [("dialog", "candidate-dialog")]
+    assert sessions.aborted == ["candidate-dialog"]
     await db.close()
 
 

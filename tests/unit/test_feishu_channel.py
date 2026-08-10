@@ -6,11 +6,13 @@ from typing import Any
 
 import pytest
 
+from api.channel_capabilities import EffectiveReplyCapabilities
 from api.channels.core.base import (
     ChannelAction,
     ChannelActionResponse,
     IncomingMessage,
     OutgoingMessage,
+    ReplyContext,
     ReplySessionState,
 )
 from api.channels.feishu.channel import (
@@ -531,6 +533,32 @@ async def test_begin_reply_wires_cardkit_and_reaction_operations_through_sdk() -
     assert sdk.card_updates[0][2] == 1
     assert sdk.card_finishes[0][1] == 2
     assert sdk.card_batch_updates[0][2] == 3
+
+
+async def test_begin_reply_uses_buffered_delivery_when_progression_is_not_negotiated() -> None:
+    channel, sdk = _channel()
+    source = IncomingMessage(
+        channel="feishu",
+        account_id="bot-1",
+        chat_id="oc-chat",
+        chat_type="p2p",
+        message_id="om-message",
+        sender_id="ou-user",
+        content="question",
+        sender_type="user",
+        event_id="evt-1",
+    )
+    context = ReplyContext(capabilities=EffectiveReplyCapabilities())
+
+    session = await channel.begin_reply(source, max_content_chars=4000, context=context)
+    await session.append("完整回答")
+    await session.complete()
+
+    assert session.state is ReplySessionState.COMPLETED
+    assert sdk.cards == []
+    assert sdk.card_updates == []
+    assert sdk.reaction_creates == []
+    assert sdk.replies == [("om-message", json.dumps({"text": "完整回答"}, ensure_ascii=False))]
 
 
 async def test_start_and_stop_use_isolated_thread_with_bounded_join() -> None:

@@ -16,16 +16,20 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Path, Response, s
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.channel_capabilities import EffectiveReplyCapabilities, RunCapabilityPolicy, resolve_effective_reply_capabilities
 from api.channel_control.repository import SqlAlchemyChannelRepository
 from api.channel_execution.dependencies import (
+    get_binding_capability_resolver,
     get_channel_conversation_store,
     get_channel_execution_service,
+    get_published_target_execution_service,
     require_channel_workload,
 )
-from api.channel_execution.errors import BindingDisabledError, BindingNotFoundError, DuplicateEventError
+from api.channel_execution.errors import BindingDisabledError, BindingNotFoundError, ChannelExecutionError, DuplicateEventError
 from api.channel_execution.models import ChannelExecutionCommand, ExecutionEvent, WorkloadIdentity
-from api.channel_execution.protocols import ChannelConversationStore
-from api.channel_execution.service import ChannelExecutionService
+from api.channel_execution.protocols import BindingCapabilityResolver, ChannelConversationStore
+from api.channel_execution.service import ChannelExecutionService, PublishedTargetExecutionService
+from api.channel_providers.registry import UnknownChannelProvider, provider_spec
 from api.db.db_models import get_async_db
 
 router = APIRouter()
@@ -34,6 +38,41 @@ router = APIRouter()
 def _encode_sse(event: ExecutionEvent) -> str:
     payload = event.model_dump(mode="json", exclude_none=True)
     return "data:" + json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n\n"
+
+
+@router.get(
+    "/internal/channel-bindings/{binding_id}/execution-capabilities",
+    response_model=EffectiveReplyCapabilities,
+    include_in_schema=False,
+)
+async def get_channel_execution_capabilities(
+    response: Response,
+    binding_id: str = Path(min_length=1, max_length=32),
+    workload: WorkloadIdentity = Depends(require_channel_workload),
+    resolver: BindingCapabilityResolver = Depends(get_binding_capability_resolver),
+    target_service: PublishedTargetExecutionService = Depends(get_published_target_execution_service),
+) -> EffectiveReplyCapabilities:
+    """Resolve one sanitized capability envelope per binding generation."""
+
+    context = await resolver.resolve_capabilities(
+        binding_id=binding_id,
+        workload=workload,
+    )
+    if context is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BINDING_NOT_FOUND")
+    if not context.enabled:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="BINDING_DISABLED")
+    try:
+        target = await target_service.capabilities(context=context)
+        provider = provider_spec(context.provider).capabilities
+    except (ChannelExecutionError, UnknownChannelProvider) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="EXECUTION_CAPABILITIES_UNAVAILABLE") from exc
+    response.headers["Cache-Control"] = "private, no-store"
+    return resolve_effective_reply_capabilities(
+        provider,
+        target,
+        RunCapabilityPolicy.from_binding_policy(context.run_policy),
+    )
 
 
 @router.post(

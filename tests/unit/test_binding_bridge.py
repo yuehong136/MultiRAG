@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from api.channel_capabilities import EffectiveReplyCapabilities
 from api.channels.agent_bridge import (
     DEMO_ONLY_TEXT,
     QUESTION_TOO_LONG_TEXT,
@@ -30,6 +31,15 @@ from api.channels.core.base import (
 from api.channels.execution_events import ExecutionFailedEvent, MessageCompletedEvent, MessageDeltaEvent
 from api.channels.feishu.reply import FeishuProgressiveReplySession
 from api.channels.state_store import binding_conversation_key
+
+_FULL_REPLY_CAPABILITIES = EffectiveReplyCapabilities(
+    progressive_reply=True,
+    cancel_queued=True,
+    cancel_running=True,
+    regenerate=True,
+    retry=True,
+    feedback=True,
+)
 
 
 class _Channel(Channel):
@@ -233,6 +243,7 @@ def _bridge(
     binding_id: str = "binding-1",
     allowed_sender_ids: set[str] | None = None,
     private_chat_only: bool = True,
+    capabilities: EffectiveReplyCapabilities | None = None,
 ) -> BindingBridge:
     return BindingBridge(
         channel=channel,
@@ -243,6 +254,7 @@ def _bridge(
         max_question_chars=100,
         max_answer_chars=4000,
         private_chat_only=private_chat_only,
+        capabilities=capabilities or _FULL_REPLY_CAPABILITIES,
     )
 
 
@@ -782,6 +794,7 @@ async def test_prepared_followup_owns_queued_running_and_final_lifecycle() -> No
         for action_id in (
             context.actions.cancel,
             context.actions.regenerate,
+            context.actions.retry,
             context.actions.helpful,
             context.actions.unhelpful,
         )
@@ -875,13 +888,40 @@ async def test_retry_after_failed_execution_does_not_rewind_uncommitted_history(
 
     bridge.set_message_scheduler(schedule)
     await bridge.handle_message(_message(content="failed question"))
-    regenerate_id = channel.contexts[0].actions.regenerate
+    retry_id = channel.contexts[0].actions.retry
 
-    response = await bridge.handle_action(_action(regenerate_id, event_id="retry-event"))
+    response = await bridge.handle_action(_action(retry_id, event_id="retry-event"))
     await asyncio.sleep(0)
 
     assert response.toast_type == "success"
     assert scheduled[0].operation == "message"
+
+
+@pytest.mark.asyncio
+async def test_bridge_issues_and_registers_only_negotiated_actions() -> None:
+    channel = _LifecycleChannel()
+    capabilities = EffectiveReplyCapabilities(retry=True)
+    executor = _Executor([ExecutionFailedEvent(error_code="TARGET_EXECUTION_FAILED")])
+    bridge = _bridge(
+        channel=channel,
+        state=_StateStore(),
+        executor=executor,
+        capabilities=capabilities,
+    )
+
+    await bridge.handle_message(_message(content="failed question"))
+
+    context = channel.contexts[0]
+    assert context.capabilities == capabilities
+    assert context.actions.retry
+    assert context.actions.cancel == ""
+    assert context.actions.regenerate == ""
+    assert context.actions.helpful == ""
+    assert context.actions.unhelpful == ""
+    assert set(bridge._actions) == {context.actions.retry}
+
+    forged = await bridge.handle_action(_action("forged-disabled-action"))
+    assert forged.content == "操作已过期，请使用最新卡片。"
 
 
 @pytest.mark.asyncio

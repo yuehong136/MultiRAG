@@ -52,7 +52,7 @@ CHN-O7（主密钥密钥环）、CHN-O12（空 env 变量）、CHN-O6（连接�
 
 **新增 EIM 身份与体验扩展**：CHN-X5～X13、CHN-U8～U15、CHN-O14、CHN-P14 统一由
 [`docs/enterprise-identity-mcp/`](../enterprise-identity-mcp/README.md) 的 EIM 路线图驱动；其中
-CHN-X9、CHN-U8、CHN-U11～U13 已完成，其余状态以 [PROGRESS](PROGRESS.md) 为准。旧程序“全部完成”
+CHN-X9、CHN-X13、CHN-U8、CHN-U11～U13 已完成，其余状态以 [PROGRESS](PROGRESS.md) 为准。旧程序“全部完成”
 的历史结论保持成立，但不再表示 Channel 子系统没有后续待办。
 **最后更新**：2026-08-10
 
@@ -63,12 +63,12 @@ CHN-X9、CHN-U8、CHN-U11～U13 已完成，其余状态以 [PROGRESS](PROGRESS.
 | **U** | 今日可见缺陷（U1–U9、U11–U13 完成；U10 挂起；U14–U15 已规划） | 🔵 扩展中 |
 | **P** | Provider 通用化（P1–P11、P13 全部完成并部署） | ✅ 完成 |
 | **O** | 运维（O1–O7、O12 完成；O8–O11 未排期） | ✅ 完成（排期内） |
-| **X** | 跨仓契约（X1–X3 完成） | ✅ 完成 |
-| **EIM 扩展** | 结构化身份 X5–X8；渐进式回复/群聊/多模态 X9–X12、U8–U10；官方 transport P14 | ⬜ 未开始 |
+| **X** | 跨仓契约（X1–X3、X9、X13 完成；其余按 EIM 路线图） | 🔵 扩展中 |
+| **EIM 扩展** | 执行架构 X13 已完成；身份、多模态与后续目标事务继续按路线图实施 | 🔵 进行中 |
 
-执行架构的下一组任务是 CHN-X13、CHN-U14、CHN-U15；它们不继续扩大已完成的 CHN-U9，
-而是按 [`EXECUTION_ARCHITECTURE`](EXECUTION_ARCHITECTURE.md) 把 Provider/Target 契约、Dialog
-无候选提交和 Canvas 兼容候选分别收口。CHN-O14 只在确认需要 worker 重启恢复后启动。
+执行架构的下一组任务是 CHN-U14、CHN-U15：X13 已完成 Provider/Target 能力协商和目标私有 driver，
+接下来按 [`EXECUTION_ARCHITECTURE`](EXECUTION_ARCHITECTURE.md) 分别收口 Dialog 无候选提交和 Canvas
+兼容候选。CHN-O14 只在确认需要 worker 重启恢复后启动。
 
 ### 24 个 PR 全部落地并部署完毕
 
@@ -300,3 +300,4 @@ MultiRAG 与 web 是两个仓、两条 CI、两次部署，**不存在跨仓原�
 | 2026-08-09 | CHN-U12 修复飞书 CardKit 四字 delta 高频同步 patch：首屏后按 16 字/1s 双闸门合并，且网络 RTT 不触发背靠背小更新 | Codex |
 | 2026-08-09 | CHN-U13 将飞书 CardKit patch 改为后台单写者与 latest-value 合并，显式固定客户端 `fast` 流式打印参数，解除 execution SSE 的网络背压 | Codex |
 | 2026-08-10 | 定案 CHN-ADR-07：Provider 与 Dialog/Canvas 正交，Dialog 为主目标、Canvas 为扩展目标；新增执行架构文档和 MultiRAG 术语不变量，并把后续实现拆成 X13/U14/U15/O14 | Codex |
+| 2026-08-10 | CHN-X13 / EIM-U11 完成：目标私有 driver/history transaction、启动时 capability preflight、Provider × Target × RunPolicy 交集及 regenerate/retry fail-closed 控制落地；worker 保持无数据库 | Codex |

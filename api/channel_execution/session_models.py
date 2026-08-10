@@ -1,18 +1,24 @@
-"""Pure data types shared by Channel session protocols and implementations."""
+"""Opaque prepared states owned by individual MultiRAG target drivers."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
-
-SessionKind = Literal["canvas", "dialog"]
 
 
 @dataclass(frozen=True, slots=True)
-class PreparedChannelSession:
-    """A private execution head and the public head it may replace."""
+class PreparedCanvasExecution:
+    """Canvas candidate head and the public head it may replace."""
 
-    kind: SessionKind
     public_session_id: str | None
     execution_session_id: str | None
     source_fingerprint: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedDialogExecution:
+    """Dialog candidate head and the public head it may replace."""
+
+    public_session_id: str | None
+    execution_session_id: str | None
+    source_fingerprint: str | None
+    require_visible_answer: bool

@@ -16,6 +16,7 @@ from typing import Protocol, runtime_checkable
 
 from redis.asyncio import Redis
 
+from api.channel_capabilities import EffectiveReplyCapabilities
 from api.channel_providers import provider_spec
 from api.channel_runtime.schemas import RuntimeState
 from api.channels.agent_bridge import FeishuAgentBridge, MultiRAGAgentClient
@@ -28,7 +29,7 @@ from api.channels.core.base import (
     MessageHandler,
 )
 from api.channels.provider import ChannelWorkerError, supported_provider_names, worker_provider
-from api.channels.runtime_client import ChannelRuntimeClient, MultiRAGBindingExecutionClient
+from api.channels.runtime_client import ChannelRuntimeClient, ChannelRuntimeClientError, MultiRAGBindingExecutionClient
 from api.channels.state_store import RedisChannelStateStore
 from common.app_config import AppConfig, AppConfigError, FeishuChannelConfig, get_app_config
 from common.bootstrap import ensure_initialized
@@ -512,6 +513,18 @@ async def _run_managed_channel(
         if runtime.binding_id != binding_id or runtime.generation != binding_generation or runtime.provider != provider.name:
             raise ChannelWorkerError("CHANNEL_RUNTIME_BINDING_INVALID")
         generation = runtime.generation
+        try:
+            execution_capabilities = await runtime_client.fetch_execution_capabilities(binding_id)
+        except ChannelRuntimeClientError as exc:
+            # Capability negotiation is additive. During a rolling deploy, or
+            # if its preflight is temporarily unavailable, keep answering but
+            # expose no callback controls rather than guessing target safety.
+            execution_capabilities = EffectiveReplyCapabilities()
+            LOGGER.warning(
+                "channel_event=capabilities_unavailable binding_id_hash=%s result=degraded error_code=%s",
+                _short_hash(binding_id),
+                exc.code,
+            )
 
         # The provider owns its credential shape, its account rules and its
         # tuning section; everything below is transport-agnostic.
@@ -548,6 +561,7 @@ async def _run_managed_channel(
             allowed_sender_ids=set(plan.allowed_sender_ids),
             max_question_chars=tuning.max_question_chars,
             max_answer_chars=tuning.max_answer_chars,
+            capabilities=execution_capabilities,
             # Two independent gates, and the narrower one wins. The admin can
             # only widen down to what the provider can actually carry: a
             # provider without group support must ignore group traffic no

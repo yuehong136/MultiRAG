@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable
 from typing import Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
+from api.channel_capabilities import EffectiveReplyCapabilities
 from api.channels.core.base import (
     IncomingMessage,
     ReplyActionIds,
@@ -30,6 +31,7 @@ CARD_STATUS_ELEMENT_ID = "status"
 CARD_ACTIONS_ELEMENT_ID = "actions"
 _CARD_CANCEL_BUTTON_ID = "reply_cancel"
 _CARD_REGENERATE_BUTTON_ID = "reply_regenerate"
+_CARD_RETRY_BUTTON_ID = "reply_retry"
 _CARD_HELPFUL_BUTTON_ID = "reply_helpful"
 _CARD_UNHELPFUL_BUTTON_ID = "reply_unhelpful"
 # CardKit needs the answer element to exist before streaming updates begin.
@@ -207,6 +209,7 @@ def _button(
 def _action_element(
     status: ReplyStatus,
     actions: ReplyActionIds,
+    capabilities: EffectiveReplyCapabilities,
     *,
     feedback: bool | None = None,
 ) -> dict[str, object]:
@@ -219,7 +222,8 @@ def _action_element(
         }
 
     buttons: list[dict[str, object]] = []
-    if status in {ReplyStatus.QUEUED, ReplyStatus.RUNNING} and actions.cancel:
+    can_cancel = capabilities.cancel_queued if status is ReplyStatus.QUEUED else capabilities.cancel_running
+    if status in {ReplyStatus.QUEUED, ReplyStatus.RUNNING} and can_cancel and actions.cancel:
         buttons.append(
             _button(
                 "停止生成",
@@ -228,7 +232,7 @@ def _action_element(
             )
         )
     elif status is ReplyStatus.FINAL:
-        if actions.regenerate:
+        if capabilities.regenerate and actions.regenerate:
             buttons.append(
                 _button(
                     "重新生成",
@@ -236,7 +240,7 @@ def _action_element(
                     element_id=_CARD_REGENERATE_BUTTON_ID,
                 )
             )
-        if actions.helpful:
+        if capabilities.feedback and actions.helpful:
             buttons.append(
                 _button(
                     "有帮助",
@@ -245,7 +249,7 @@ def _action_element(
                     button_type="primary",
                 )
             )
-        if actions.unhelpful:
+        if capabilities.feedback and actions.unhelpful:
             buttons.append(
                 _button(
                     "没帮助",
@@ -253,12 +257,12 @@ def _action_element(
                     element_id=_CARD_UNHELPFUL_BUTTON_ID,
                 )
             )
-    elif status in {ReplyStatus.ERROR, ReplyStatus.CANCELLED} and actions.regenerate:
+    elif status in {ReplyStatus.ERROR, ReplyStatus.CANCELLED} and capabilities.retry and actions.retry:
         buttons.append(
             _button(
                 "重新生成",
-                actions.regenerate,
-                element_id=_CARD_REGENERATE_BUTTON_ID,
+                actions.retry,
+                element_id=_CARD_RETRY_BUTTON_ID,
             )
         )
 
@@ -323,7 +327,7 @@ def streaming_card_json(context: ReplyContext | None = None) -> str:
                     "element_id": CARD_ANSWER_ELEMENT_ID,
                     "content": _CARD_ANSWER_PLACEHOLDER,
                 },
-                _action_element(initial.status, initial.actions),
+                _action_element(initial.status, initial.actions, initial.capabilities),
             ],
         },
     }
@@ -354,6 +358,7 @@ class FeishuProgressiveReplySession:
         self._reply_status = context.status
         self._queue_position = context.queue_position
         self._action_ids = context.actions
+        self._capabilities = context.capabilities
         self._update_interval_seconds = update_interval_seconds
         self._clock = clock
         self._sleep = sleep
@@ -536,6 +541,7 @@ class FeishuProgressiveReplySession:
                         status=self._reply_status,
                         queue_position=self._queue_position,
                         actions=self._action_ids,
+                        capabilities=self._capabilities,
                     )
                 )
             )
@@ -626,6 +632,7 @@ class FeishuProgressiveReplySession:
                     "element": _action_element(
                         status,
                         self._action_ids,
+                        self._capabilities,
                         feedback=feedback,
                     ),
                 },

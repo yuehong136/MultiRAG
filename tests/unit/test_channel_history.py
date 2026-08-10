@@ -10,6 +10,7 @@ from api.channel_execution.history import (
     _prepare_canvas_dsl,
     _rewind_latest_turn,
     _sanitize_messages,
+    canvas_regeneration_is_safe,
 )
 
 
@@ -23,7 +24,7 @@ def _safe_dsl() -> dict[str, object]:
                     "params": {"tools": [], "mcp": []},
                 }
             },
-            "message": {"obj": {"component_name": "Message", "params": {}}},
+            "llm": {"obj": {"component_name": "LLM", "params": {}}},
         },
         "history": [["assistant", "stale private history"]],
         "globals": {
@@ -110,3 +111,47 @@ def test_canvas_regenerate_fails_closed_for_side_effect_components() -> None:
 
     with pytest.raises(PermissionError, match="external tools"):
         _prepare_canvas_dsl(unsafe_dsl, [], validate_replay=True)
+
+
+def test_canvas_replay_rejects_unavailable_legacy_components() -> None:
+    dsl = _safe_dsl()
+    components = dsl["components"]
+    assert isinstance(components, dict)
+    components["legacy"] = {"obj": {"component_name": "Generate", "params": {}}}
+
+    assert canvas_regeneration_is_safe(dsl) is False
+
+
+@pytest.mark.parametrize(
+    ("component_name", "params"),
+    [
+        ("DocGenerator", {}),
+        ("ExcelProcessor", {}),
+        ("Message", {"output_format": "pdf"}),
+        ("Message", {"memory_ids": ["memory-1"]}),
+    ],
+)
+def test_canvas_replay_rejects_components_with_conditional_persistent_effects(
+    component_name: str,
+    params: dict[str, object],
+) -> None:
+    dsl = _safe_dsl()
+    components = dsl["components"]
+    assert isinstance(components, dict)
+    components["effect"] = {"obj": {"component_name": component_name, "params": params}}
+
+    assert canvas_regeneration_is_safe(dsl) is False
+
+
+def test_canvas_replay_allows_a_plain_text_message_component() -> None:
+    dsl = _safe_dsl()
+    components = dsl["components"]
+    assert isinstance(components, dict)
+    components["message"] = {
+        "obj": {
+            "component_name": "Message",
+            "params": {"output_format": None, "memory_ids": []},
+        }
+    }
+
+    assert canvas_regeneration_is_safe(dsl) is True

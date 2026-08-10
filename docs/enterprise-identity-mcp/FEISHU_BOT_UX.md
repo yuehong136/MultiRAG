@@ -40,13 +40,13 @@ Agent message_delta
 
 | 层 | 当前行为 | 直接后果 |
 |---|---|---|
-| `api/channel_execution` | executor 产生现有 `message_delta` / `message_completed` / `execution_failed` SSE | 跨进程 wire 已能承载正文流，U0 未修改它 |
-| `api/channels/runtime_client.py` | `stream()` 是 HTTP、SSE、校验、超时、错误映射和安全过滤的唯一执行路径；`ask()` 只聚合该 iterator | 新 bridge 不再丢弃 delta；旧调用仍可迁移/回滚 |
-| `api/channels/binding_bridge.py` | 直接消费 `stream()`，按序写入 Provider-neutral `ReplySession` | Provider 可独立选择 buffered 或渐进式交付 |
-| `api/channels/core/base.py` | `Channel.begin_reply()` 默认创建 buffered session；`OutgoingMessage` 仍只有 `chat_id/content/reply_to_message_id` | 普通 Provider 完成时只发一条文本；尚无卡片、状态、媒体和 handle |
-| `api/channels/feishu/channel.py` | 出站固定 `msg_type="text"` | Markdown、表格、代码和来源展示退化 |
+| `api/channel_execution` | executor 产生现有 SSE；Dialog/Canvas 各有私有 driver/history transaction；私有 preflight 计算 Target 能力 | execution wire 不承载目标差异；新增目标不修改 Provider |
+| `api/channels/runtime_client.py` | `stream()` 是执行 HTTP/SSE 的唯一路径；worker 启动另取一次脱敏 capability envelope | 正常消息、delta、卡片 patch 不查目标数据库；旧 API 降级为无交互 buffered reply |
+| `api/channels/binding_bridge.py` | 按能力交集创建 queued/running/final 状态，只签发允许的 cancel/regenerate/retry/feedback action ID | 渲染与回调二次校验；完成后替换与失败后重试语义分开 |
+| `api/channels/core/base.py` | `Channel.begin_reply()` 默认 buffered；`ReplyContext` 携带状态、动作与最终能力 | 普通 Provider 完成时只发一条文本，支持逐 Provider 覆盖 |
+| `api/channels/feishu/channel.py` | 协商允许时使用 Typing + CardKit 2.0；否则 buffered text，CardKit 故障仍有 post/text fallback | Markdown/公式走 CardKit renderer，能力缺失时仍能交付最终答案 |
 | `api/channels/feishu/channel.py` | 入站只提取 text，并折叠 open/user/union ID | 无话题、引用、附件、mention 和结构化身份 |
-| `api/channel_providers/feishu.py` | capabilities 只声明私聊文本 | 管理面必须继续如实显示当前能力 |
+| `api/channel_providers/feishu.py` | 声明私聊文本、CardKit 渐进式、交互、取消、反馈与 threaded reply；文件/图片仍为 false | 管理面与运行时共用同一 Provider 事实源 |
 
 必须保留的已有优势：SDK 回调只规范化并入队、有界队列、每会话顺序、Redis 原子去重、
 binding leader lease、generation fence、Secret/日志脱敏，以及产生副作用后不盲目自动重试。
@@ -309,10 +309,12 @@ RAG 来源必须通过 `references_ready` 结构化事件输出，而不是从�
 > 操作者、chat、回复卡片和 one-shot opaque action ID。`/new` 清队列确认、跨进程恢复和 steering
 > 不在本首期内。
 >
-> **2026-08-10 目标架构订正**：上述“Dialog/Canvas 都写候选”是安全过渡态，不是永久通用抽象。
-> 后续由 [MultiRAG Channel 执行架构](../channel-program/EXECUTION_ARCHITECTURE.md) 分阶段收敛：
-> Dialog 使用内存工作副本 + 终态 CAS，Canvas 在无落库执行端口出现前保留专属候选；Provider
-> 卡片行为只消费 capabilities 和执行事件，不感知两种历史策略。
+> **2026-08-10 EIM-U11 / CHN-X13 已实现**：上述“Dialog/Canvas 都写候选”仍是安全过渡态，但已
+> 拆为目标私有 driver/history transaction。worker 启动时读取一次 Provider × Target × RunPolicy
+> 的脱敏交集，不按消息查库；飞书只渲染和注册允许的动作。Canvas 对未知/工具图、持久文档输出、
+> 带附件或 Memory 保存的 Message 同时关闭 regenerate/retry，纯文本 Message 保持可用。后续由
+> [MultiRAG Channel 执行架构](../channel-program/EXECUTION_ARCHITECTURE.md) 分阶段让 Dialog 使用内存
+> 工作副本 + 终态 CAS，Canvas 在无落库执行端口出现前保留专属候选。
 
 ---
 
@@ -511,7 +513,7 @@ SLO 是上线初始目标，真实压测和灰度后可调整；调整必须写�
 | EIM-U1 | CHN-U8 | Typing、CardKit 流式卡片、富文本和 fallback | U0；不依赖 C5/M3 |
 | EIM-U10 | CHN-U13 | 后台单写者刷新、latest-value 合并、固定客户端打印参数 | U9；不依赖 C5 |
 | EIM-U4 | CHN-U9 | follow-up queue、纯生成取消、重新生成、反馈 | U1 |
-| EIM-U11 | CHN-X13 | Provider/Target capabilities 与目标私有 driver | U4 |
+| EIM-U11 | CHN-X13 | ✅ Provider/Target capabilities、启动预取与目标私有 driver | U4 |
 | EIM-U12 | CHN-U14 | Dialog detached working copy + 终态 CAS | U11 |
 | EIM-U13 | CHN-U15 | Canvas 专属候选与周期 GC | U11 |
 | EIM-U3 | CHN-U10 | mention-only 群聊、话题、thread session | U1、U2、C3、O2 |

@@ -641,6 +641,12 @@ class FeishuChannel(Channel):
         max_content_chars: int,
         context: ReplyContext | None = None,
     ) -> ReplySession:
+        if context is not None and not context.capabilities.progressive_reply:
+            return await super().begin_reply(
+                source,
+                max_content_chars=max_content_chars,
+                context=context,
+            )
         return await FeishuProgressiveReplySession.begin(
             transport=self,
             source=source,
