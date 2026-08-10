@@ -7,6 +7,7 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 import common
+from common import ssrf_guard
 
 
 @pytest.fixture
@@ -29,7 +30,7 @@ def rss_module(monkeypatch):
     monkeypatch.setattr(common, "data_source", data_source_pkg, raising=False)
 
     module = importlib.import_module("common.data_source.rss_connector")
-    monkeypatch.setattr(module.socket, "gethostbyname", lambda _hostname: "93.184.216.34")
+    monkeypatch.setattr(ssrf_guard, "_ORIGINAL_GETADDRINFO", lambda *_args, **_kwargs: [(2, 1, 6, "", ("93.184.216.34", 0))])
     yield module
 
     for name, saved_module in saved_modules.items():
@@ -40,11 +41,15 @@ def rss_module(monkeypatch):
 
 
 class _FakeResponse:
-    def __init__(self, content: bytes = b"feed", url: str = "https://example.com/feed.xml") -> None:
+    def __init__(self, content: bytes = b"feed", status_code: int = 200, location: str | None = None) -> None:
         self.content = content
-        self.url = url
+        self.status_code = status_code
+        self.headers = {"Location": location} if location else {}
 
     def raise_for_status(self) -> None:
+        return None
+
+    def close(self) -> None:
         return None
 
 
@@ -61,6 +66,27 @@ def test_validate_connector_settings_rejects_invalid_feed_url(rss_module):
 
     with pytest.raises(ValueError, match="valid http or https URL"):
         connector.validate_connector_settings()
+
+
+def test_read_feed_blocks_private_redirect_before_following(monkeypatch, rss_module):
+    requests: list[str] = []
+
+    def resolve(hostname, *_args, **_kwargs):
+        ip = "169.254.169.254" if hostname == "metadata.internal" else "93.184.216.34"
+        return [(2, 1, 6, "", (ip, 0))]
+
+    def get(url: str, **_kwargs):
+        requests.append(url)
+        return _FakeResponse(status_code=302, location="http://metadata.internal/latest/meta-data")
+
+    monkeypatch.setattr(ssrf_guard, "_ORIGINAL_GETADDRINFO", resolve)
+    monkeypatch.setattr(rss_module.requests, "get", get)
+    connector = rss_module.RSSConnector(feed_url="https://example.com/feed.xml")
+
+    with pytest.raises(ValueError, match="non-public"):
+        connector.load_from_state().__next__()
+
+    assert requests == ["https://example.com/feed.xml"]
 
 
 def test_validate_connector_settings_rejects_empty_feed(monkeypatch, rss_module):

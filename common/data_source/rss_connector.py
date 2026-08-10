@@ -1,11 +1,9 @@
 import hashlib
-import ipaddress
-import socket
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from time import struct_time
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import bs4
 import feedparser
@@ -14,28 +12,9 @@ import requests
 from common.data_source.config import INDEX_BATCH_SIZE, REQUEST_TIMEOUT_SECONDS, DocumentSource
 from common.data_source.interfaces import GenerateDocumentsOutput, LoadConnector, PollConnector
 from common.data_source.models import Document, SecondsSinceUnixEpoch
+from common.ssrf_guard import assert_url_is_safe, pin_dns
 
-
-def _is_private_ip(ip: str) -> bool:
-    try:
-        ip_obj = ipaddress.ip_address(ip)
-        return ip_obj.is_private or ip_obj.is_link_local or ip_obj.is_loopback
-    except ValueError:
-        return False
-
-
-def _validate_url_no_ssrf(url: str) -> None:
-    parsed = urlparse(url)
-    hostname = parsed.hostname
-    if not hostname:
-        raise ValueError("URL must have a valid hostname")
-
-    try:
-        ip = socket.gethostbyname(hostname)
-        if _is_private_ip(ip):
-            raise ValueError(f"URL resolves to private/internal IP address: {ip}")
-    except socket.gaierror as e:
-        raise ValueError(f"Failed to resolve hostname: {hostname}") from e
+_MAX_REDIRECTS = 10
 
 
 class RSSConnector(LoadConnector, PollConnector):
@@ -87,7 +66,7 @@ class RSSConnector(LoadConnector, PollConnector):
         if batch:
             yield batch
 
-    def _validate_feed_url(self) -> None:
+    def _validate_feed_url(self) -> tuple[str, str]:
         if not self.feed_url:
             raise ValueError("feed_url is required")
 
@@ -95,7 +74,7 @@ class RSSConnector(LoadConnector, PollConnector):
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise ValueError("feed_url must be a valid http or https URL")
 
-        _validate_url_no_ssrf(self.feed_url)
+        return assert_url_is_safe(self.feed_url)
 
     def _read_feed(self, require_entries: bool) -> Any:
         if self._cached_feed is not None:
@@ -103,14 +82,29 @@ class RSSConnector(LoadConnector, PollConnector):
                 raise ValueError("RSS feed contains no entries")
             return self._cached_feed
 
-        self._validate_feed_url()
+        current_hostname, current_ip = self._validate_feed_url()
+        current_url = self.feed_url
+        response: requests.Response | None = None
 
-        response = requests.get(self.feed_url, timeout=REQUEST_TIMEOUT_SECONDS, allow_redirects=True)
+        for redirect_count in range(_MAX_REDIRECTS + 1):
+            with pin_dns(current_hostname, current_ip):
+                response = requests.get(current_url, timeout=REQUEST_TIMEOUT_SECONDS, allow_redirects=False)
+
+            if response.status_code not in (301, 302, 303, 307, 308):
+                break
+
+            location = response.headers.get("Location")
+            if not location:
+                break
+            response.close()
+            if redirect_count >= _MAX_REDIRECTS:
+                raise ValueError(f"Exceeded {_MAX_REDIRECTS} redirects while fetching RSS feed.")
+
+            current_url = urljoin(current_url, location)
+            current_hostname, current_ip = assert_url_is_safe(current_url)
+        if response is None:
+            raise ValueError("RSS feed request did not return a response")
         response.raise_for_status()
-
-        final_url = getattr(response, "url", self.feed_url)
-        if final_url != self.feed_url and urlparse(final_url).hostname:
-            _validate_url_no_ssrf(final_url)
 
         feed = feedparser.parse(response.content)
         if getattr(feed, "bozo", False) and not feed.entries:
