@@ -7,6 +7,10 @@
 > 适用范围：MultiRAG `api/channels/`、`api/channel_execution/`、飞书企业自建应用，以及后续
 > 与 `of_mcp` 的确认交互。
 
+> **近期优先级**：U15 迁移与 API/supervisor 重启已完成；先补 Dialog/Canvas 真实飞书 smoke，再做 CHN-U16 的正常停机
+> 终态化和跨层测试、CHN-O9 最小可观测，随后稳定浸泡。EIM-F5 / CHN-X14 保留为 upstream-first
+> 长期入口，但挂起到用户恢复从约 2026-04-24 本地同步点逐 commit 跟进 RAGFlow 时。
+
 本文负责回答“如何把当前飞书私聊文本桥升级为飞书原生 AI 对话体验”。身份、JWT、MCP 授权和
 业务确认的数据契约仍分别以 [CONTRACTS](CONTRACTS.md) 和 [TESTING_SECURITY](TESTING_SECURITY.md)
 为准；任务状态和依赖以 [ROADMAP](ROADMAP.md) 为准。
@@ -310,7 +314,8 @@ RAG 来源必须通过 `references_ready` 结构化事件输出，而不是从�
 > 溢出返回 busy。停止按钮取消当前 SSE 子任务或阻止 queued 项启动，卡片明确声明外部操作不视为
 > 已撤销。重新生成以新 request ID 重入同一队列，只替换当前会话最新且问题匹配的完成轮次；
 > 旧卡在出现后续追问后 fail closed，失败/取消轮次以“重试”按钮按普通 retry 处理。替换通过 Channel execution
-> 的私有工作态完成：当前 MultiRAG Dialog/Canvas completion 只写候选，成功且公开头未变化才原子晋升；
+> 的私有工作态完成。**以下是 U4 当时的过渡实现，不是当前事实**：当时 MultiRAG Dialog/Canvas
+> completion 都只写候选，成功且公开头未变化才原子晋升；
 > 失败、取消或并发冲突不改公开历史。Channel 历史只提交可见答案，reasoning-only 不提交；含
 > 外部工具/MCP/未知组件的 Canvas 不允许直接重放。反馈与操作均绑定
 > 操作者、chat、回复卡片和 one-shot opaque action ID。`/new` 清队列确认、跨进程恢复和 steering
@@ -320,8 +325,9 @@ RAG 来源必须通过 `references_ready` 结构化事件输出，而不是从�
 > 拆为目标私有 driver/history transaction。worker 启动时读取一次 Provider × Target × RunPolicy
 > 的脱敏交集，不按消息查库；飞书只渲染和注册允许的动作。Canvas 对未知/工具图、持久文档输出、
 > 带附件或 Memory 保存的 Message 同时关闭 regenerate/retry，纯文本 Message 保持可用。后续由
-> [MultiRAG Channel 执行架构](../channel-program/EXECUTION_ARCHITECTURE.md) 分阶段让 Dialog 使用内存
-> 工作副本 + 终态 CAS，Canvas 在无落库执行端口出现前保留专属候选。
+> [MultiRAG Channel 执行架构](../channel-program/EXECUTION_ARCHITECTURE.md) 已让 Dialog 使用内存
+> 工作副本 + 终态 CAS，Canvas 则以 sidecar 管理专属候选并由 API 周期 GC 回收孤儿。长期演进遵循
+> CHN-ADR-08：持续跟进 RAGFlow 上游，不预设 Canvas 必然改成 detached 或自研 checkpoint runtime。
 >
 > **2026-08-10 EIM-U12 / CHN-U14、EIM-U13 / CHN-U15 已实现**：Dialog 已改为 detached working
 > copy + terminal CAS；Canvas 保留目标私有 candidate CAS，但所有权不再依靠会话哨兵，而由
@@ -332,6 +338,11 @@ RAG 来源必须通过 `references_ready` 结构化事件输出，而不是从�
 > 每条消息热路径移到 API router lifespan，启动即执行并周期运行有界 `SKIP LOCKED` batch，同时
 > 只按完整旧哨兵兼容回收遗留 Canvas/Dialog 候选。TTL 只是 crash orphan 安全网；worker 仍无数据库，
 > COMMIT 结果不明及提交后卡片交付失败仍不伪装成回滚，CHN-O14 保持挂起。
+
+正常发布或 generation 变更触发的可控 worker/supervisor 停机，与崩溃恢复是两个问题。CHN-U16
+只要求停止接收新消息后，将已经创建的 queued/running 卡片更新为 cancelled/error 等明确终态，
+再退出进程；它不持久化队列、run 或 action。`kill -9`、主机掉电、跨实例取消、数据库 COMMIT
+结果未知和提交后交付结果未知仍不自动恢复，只有真实需求成立时才评估 CHN-O14 / EIM-O4。
 
 ---
 
@@ -503,7 +514,7 @@ SLO 是上线初始目标，真实压测和灰度后可调整；调整必须写�
 - Markdown 代码块、表格、链接、mention 和超长内容 golden tests；
 - CardKit create/patch/finish 任一步失败均走正确 fallback，且不重跑 Agent；
 - Typing reaction add/remove 是 best-effort，不污染主结果；
-- queue 顺序、溢出、取消和重启恢复；
+- queue 顺序、溢出、queued/running 取消；CHN-U16 另测正常停机终态化，不把它写成崩溃恢复；
 - thread/message/identity/attachment 规范化 fixture；
 - card action 重放、换人点击、跨租户、过期和参数变化全部拒绝。
 
@@ -511,7 +522,8 @@ SLO 是上线初始目标，真实压测和灰度后可调整；调整必须写�
 
 - 首卡、流式刷新、完成摘要和低版本客户端 fallback；
 - 5 QPS 消息和 10 QPS CardKit 限制下的节流/429 行为；
-- WS 重连、重复事件、worker 重启和 final 未知结果恢复；
+- WS 重连、重复事件；正常 worker 重启验收 U16 的卡片终态化与新进程重新接流；
+- `kill -9`、跨实例和 final 未知结果只验证 fail-closed/可诊断边界，当前不宣称自动恢复；
 - 普通群、话题群、消息转话题和缺失 thread_id hydration；
 - 图片、文件、保密消息、超限、撤回消息和不匹配 file_key；
 - 权限缺少、应用未重新安装、机器人不在群和卡片 schema 错误；
@@ -519,6 +531,13 @@ SLO 是上线初始目标，真实压测和灰度后可调整；调整必须写�
 
 生产验收只使用测试应用和测试业务系统。真实员工范围、正式 App 权限、生产重启和真实副作用仍需
 用户明确批准。
+
+近期真实 smoke 至少对 Dialog 与 Canvas 各执行：短答/长答/Markdown/公式且无 reasoning 泄漏；
+连续三条追问按 queued -> running -> final 串行；超过上限明确 busy；queued 与 running 分别取消；
+取消后 retry；final regenerate 只替换最新轮且旧卡 fail closed；正反反馈重复点击只处理一次；
+CardKit/reaction 失败只降级 post/text 且不重跑目标。Canvas 还要核对成功、失败和取消后没有活跃
+candidate，公开历史不含半轮或 `<think>`。这些现场结果和相关结构化日志是进入稳定浸泡的闸门，
+不能只用单元测试或 `/healthz` 代替。
 
 ---
 
@@ -533,6 +552,8 @@ SLO 是上线初始目标，真实压测和灰度后可调整；调整必须写�
 | EIM-U11 | CHN-X13 | ✅ Provider/Target capabilities、启动预取与目标私有 driver | U4 |
 | EIM-U12 | CHN-U14 | ✅ 权威快照 consumer 已部署；Dialog detached working copy + 终态 CAS emit | U11 |
 | EIM-U13 | CHN-U15 | ✅ Canvas sidecar 所有权、同 flush 新会话捕获与 API 周期 GC | U11、U12 |
+| — | CHN-U16 | 正常停机终态化；queued cancel、busy 交付和 worker→HTTP/SSE→target→ReplySession 跨层测试 | U15 真实 smoke |
+| — | CHN-O9 | 稳定性最小可观测：首卡/首正文、队列、CardKit update/fallback、终态与停机结果 | CHN-U16 |
 | EIM-U3 | CHN-U10 | mention-only 群聊、话题、thread session | U1、U2、C3、O2 |
 | EIM-U5 | CHN-X10 | references/artifacts 结构化事件与渲染 | U0、P2 |
 | EIM-U6 | CHN-X11 | 图片/文件/语音输入输出 | U0、U5、C3、附件安全基建 |

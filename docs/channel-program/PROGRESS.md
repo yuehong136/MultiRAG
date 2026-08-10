@@ -96,6 +96,11 @@ web 侧 commit scope 从 `settings` 切到 `channel`（后端已有 `feat(channe
 | CHN-U13 | MR | 飞书 CardKit 后台单写者刷新：SSE 消费与网络 patch 解耦，latest-value 合并，并固定客户端流式打印参数 | ✅ | CHN-U12 | `api/channels/feishu/reply.py::FeishuProgressiveReplySession`、`tests/unit/test_feishu_reply.py`、[EIM-U10](../enterprise-identity-mcp/ROADMAP.md) |
 | CHN-U14 | MR | Dialog 目标改为 detached working copy + 终态单次 CAS，移除普通消息与重新生成的候选行写放大；私有 SSE 按 consumer/tolerate → worker 部署 → producer/emit 执行 | ✅ | CHN-X13 | generation 8 worker 已部署 consumer，producer 已 emit；[执行架构 §7](EXECUTION_ARCHITECTURE.md#dialogdetached_cas)、[EIM-U12](../enterprise-identity-mcp/ROADMAP.md) |
 | CHN-U15 | MR | Canvas 候选策略独立化：显式候选元数据、周期 GC，清理退出每请求热路径；兼容回收 U14 前遗留的 Dialog 候选 | ✅ | CHN-X13、CHN-U14 | `api/channel_execution/history.py::SqlAlchemyCanvasHistoryTransaction`、[执行架构 §7](EXECUTION_ARCHITECTURE.md#canvascandidate_cas)、[EIM-U13](../enterprise-identity-mcp/ROADMAP.md) |
+| CHN-U16 | MR | 正常优雅停机时，把已创建的 queued/running 回复卡收口为明确终态；停止接收后 queued 请求不得再启动 MultiRAG 执行，running 执行按现有安全取消语义关闭；补 worker → Bridge → ReplySession 跨层测试。**不包含** kill -9、进程崩溃、跨实例恢复或 durable run | ⬜ | CHN-U9；U15 真实 smoke | `api/channels/worker.py::ChannelWorker.close`、`api/channels/binding_bridge.py::BindingBridge.close`、`tests/unit/test_feishu_worker.py`、`tests/unit/test_binding_bridge.py` |
+
+**近期执行顺序**：U15 的数据库迁移已到 `e4f6a8b0c2d4 (head)`，API 与 supervisor 也已在 U15
+提交后重启且 healthz 全绿；当前只差飞书测试会话的 Dialog/Canvas smoke。确认 sidecar/GC 与正常
+问答后开始 U16，U16 完成后紧接 O9。X14/F5 不在当前稳定化关键路径。
 
 **CHN-U6 为什么是 refetch 而不是省略字段或加后端令牌**：省略 `enabled` 时老后端会读到
 `ChannelBindingUpsertRequest.enabled` 的 `False` 默认值 → 静默**停用**渠道，这是坏的半态；
@@ -172,12 +177,12 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 | CHN-O6 | 连接自检端点 `POST /chat-channels/{id}/verify`：用**已存**凭据向 provider 打一次「只认证、不建连」的探针，把数十秒的反馈环压到一次往返。探针是 SDK-free 的 `api/channels/<name>/verify.py`，由 API 进程按名字懒加载 | ✅ | CHN-U1 | `api/channels/verification.py`、`api/channels/{feishu,dingtalk}/verify.py`、`service.py::verify_channel_credential` |
 | CHN-O7 | 主密钥 keyring 读侧：`secret_encryption_key` 由一把变成**有序密钥环**（第 0 把 active 负责加密，其余按 `key_id` 解密自己写下的存量密文）。轮换从「全租户凭据永久不可解密」变成一次前插 + 重启 API | ✅ | — | `common/app_config.py::ChannelControlConfig`、`api/channel_control/secret_store.py::AESGCMChannelSecretStore` |
 | CHN-O8 | 凭据变更审计轨迹 | ⬜ | — | 未排期 |
-| CHN-O9 | binding 级可观测（消息量、丢弃原因、时延分位） | ⬜ | — | 未排期 |
+| CHN-O9 | binding 级可观测（消息量、丢弃原因、时延分位） | ⬜ | CHN-U16 | U16 后下一项；[UX §13](../enterprise-identity-mcp/FEISHU_BOT_UX.md#13-指标和-slo) |
 | CHN-O10 | 自适应轮询（**SSE 已否决**，见 `CHN-ADR-02`） | ⬜ | — | 未排期 |
 | CHN-O11 | 渠道数配额 | ⬜ | — | 未排期 |
 | CHN-O13 | **WEB**：CHN-O6 的前端半边。`channelAPI.verify(id)`（无请求体）+ 五个错误码 + 两份 locale + 编辑抽屉页脚的「测试连接」+ 10 秒冷却禁用。`channelVerifyFailure` 把「被拒」和「没查成」分成两种结局 | ✅ | CHN-O6 | `web:src/api/channel.ts`、`use-channel-request.ts::useVerifyChannel`、`channel-form-sheet.tsx` |
 | CHN-O12 | 空 env 变量把 `str`/`SecretStr` 配置项打成 `None` → 配置加载抛 `AppConfigError`，**默认 docker 部署起不来**。收敛点落在 `_Section` 基类：只把「类型容不下 None」的 `str`/`SecretStr` 字段的 `None` 收成 `""`，`x \| None` 不动 | ✅ | — | `common/app_config.py::_Section._empty_env_value_is_a_blank_not_a_null` |
-| CHN-O14 | API 侧 durable run ledger：worker 重启恢复、单会话单活、跨实例取消与终态 CAS；只有真实恢复需求确认后才启动 | ⏸ | CHN-X13、CHN-U14/U15 | [执行架构 §8](EXECUTION_ARCHITECTURE.md#8-run-生命周期与会话历史分离)、[EIM-O4](../enterprise-identity-mcp/ROADMAP.md) |
+| CHN-O14 | Channel API 侧 durable run ledger：worker 重启恢复、单会话单活、跨实例取消与终态 CAS；不替代或复制 Canvas 目标 checkpoint runtime，只有真实恢复需求确认后才启动 | ⏸ | CHN-X13、CHN-U14/U15 | [执行架构 §8](EXECUTION_ARCHITECTURE.md#8-run-生命周期与会话历史分离)、[EIM-O4](../enterprise-identity-mcp/ROADMAP.md) |
 
 ---
 
@@ -197,14 +202,15 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 | CHN-X10 | `references_ready/artifact_ready` 安全事件和 Provider 渲染；资源可见性、无本地路径/临时 token URL | ⬜ | CHN-X9、EIM-P2；[EIM-U5](../enterprise-identity-mcp/ROADMAP.md) |
 | CHN-X11 | 结构化附件链：图片/文件/语音输入输出，受控下载、大小/MIME/扫描/TTL 和 tenant/user/session 隔离 | ⬜ | CHN-X9、CHN-X10、CHN-X7；[EIM-U6](../enterprise-identity-mcp/ROADMAP.md) |
 | CHN-X12 | 敏感确认卡 + `card.action.trigger`：操作者/tenant/digest/expiry/nonce 绑定、回调幂等、重启恢复和执行前重授权 | ⬜ | CHN-U8、CHN-X7、EIM-M3/M4；[EIM-U7](../enterprise-identity-mcp/ROADMAP.md) |
-| CHN-X13 | Provider/Target capabilities、启动预取与目标私有 driver：删除 `ChannelSessionManager`，按交集控制渐进式、取消、重新生成、重试与反馈 | ✅ | CHN-U9 | [执行架构 §5–6](EXECUTION_ARCHITECTURE.md#5-目标驱动契约)、[EIM-U11](../enterprise-identity-mcp/ROADMAP.md) |
+| CHN-X13 | Provider/Target capabilities、启动预取与目标私有 driver：删除 `ChannelSessionManager`，按交集控制渐进式、取消、重新生成、重试与反馈 | ✅ | 依赖 CHN-U9；[执行架构 §5–6](EXECUTION_ARCHITECTURE.md#5-目标驱动契约)、[EIM-U11](../enterprise-identity-mcp/ROADMAP.md) |
+| CHN-X14 | RAGFlow Canvas/Agent/Channel 上游对齐审计：Channel 稳定且用户恢复从约 4 月 24 日上游基线逐 commit 跟进时启动；固定版本三层语义，随正常同步分类“直接跟进 / 语义移植 / 适配层吸收 / 暂不采纳”，判断 no-store 或 checkpoint 执行缝；只读审计，不预设重构结论 | ⏸ | 触发条件未满足；[CHN-ADR-08](DECISIONS.md#chn-adr-08--canvas-与-channel-演进以上游同步为主只在适配层吸收现代执行不变量)、[EIM-F5](../enterprise-identity-mcp/ROADMAP.md) |
 
 ---
 
 ### 企业身份扩展的权威简报
 
-CHN-X5～X13、CHN-U8～U15、CHN-O14 与 CHN-P14 属于 EIM 项目，不在本文件重复字段、数据库、JWT 和
-飞书交互设计。零上下文
+CHN-X5～X14、CHN-U8～U15、CHN-O14 与 CHN-P14 属于 EIM 项目，不在本文件重复字段、数据库、JWT 和
+飞书交互设计；CHN-U16 是 Channel 稳定化的独立近期任务，不新增 EIM 对应项。零上下文
 开工时先读 [`docs/enterprise-identity-mcp/README.md`](../enterprise-identity-mcp/README.md)，
 其中 UX 任务还必须完整读取
 [`FEISHU_BOT_UX.md`](../enterprise-identity-mcp/FEISHU_BOT_UX.md)，再按对应 EIM 任务的依赖和
@@ -412,6 +418,21 @@ CHN-X5～X13、CHN-U8～U15、CHN-O14 与 CHN-P14 属于 EIM 项目，不在本�
      `- PROBE_EMPTY=${PROBE_SOURCE:-}` 的 compose 服务，容器里 `PROBE_EMPTY` **存在且为空串**
      （不是不传）。这条原本是我按文档推的，现在是实测的。
 
+### CHN-U16 · 正常优雅停机终态化（近期下一项）
+
+- **问题**：当前 `ChannelWorker.close(drain=True)` 在停止接收后仍等待队列 drain，queued 项可能在
+  停机窗口启动执行；随后 task 与 `BindingBridge.close()` 被取消时，已经创建的 queued/running
+  回复卡也可能没有机会进入明确终态。进程虽然退出，用户仍看到“排队中”或“正在生成”。
+- **范围**：仅处理正常 SIGTERM、supervisor generation 切换和显式 close 这类有合作式清理窗口的
+  优雅停机。停止接收后，queued 项终态化且不得调用执行 client；running 项关闭现有 stream，并按
+  当前安全取消语义终态化。不得把停止等待模型输出描述成外部工具副作用已经回滚。
+- **验收**：补 worker → Bridge → ReplySession 跨层测试，同时断言 queued 卡只进入一次终态、
+  execution client 零调用；running 路径断言 stream 被关闭且卡片终态完成；重复 close 幂等，不留下
+  后台 task。只测某个内部 task 被 `cancel()` 不算验收。
+- **明确不做**：kill -9、进程崩溃、机器掉电、跨实例接管和重启恢复。这些没有合作式清理窗口，
+  继续由挂起的 CHN-O14 评审；U16 不新增数据库 run ledger，也不让 worker 访问数据库。
+- **闸门**：U15 数据库迁移与 API/supervisor 重启已完成；先补齐 Dialog/Canvas 现场 smoke。
+
 ### CHN-O8 · 凭据变更审计轨迹
 
 - **问题**：谁在什么时候换了哪个渠道的密钥，今天查不到。`ChannelSecret.version` 只告诉你
@@ -422,10 +443,19 @@ CHN-X5～X13、CHN-U8～U15、CHN-O14 与 CHN-P14 属于 EIM 项目，不在本�
 
 ### CHN-O9 · binding 级可观测
 
-- **问题**：消息量、丢弃原因（`allowed_sender_ids` 拒绝 / 群聊被 policy 拒 / 去重命中）、
-  时延分位，今天全部只存在于日志行里，没有聚合。
-- **提示**：丢弃分支已经都带结构化 `error_code`，做聚合不需要改业务代码，只需要一个计数器
-  出口。
+- **顺序**：CHN-U16 完成后紧接实施；先让正常优雅停机行为确定，再固定对应终态和时延指标。
+- **问题**：消息量、拒绝/丢弃原因、队列等待、失败/取消时延、卡片 delivery/fallback 与 GC 结果
+  没有统一聚合；部分 policy/non-user 分支仍是静默 return，当前 JSON 日志也只是把 `k=v` 放在
+  `message` 字符串里，不能假定“所有分支已经结构化”。
+- **设计**：新增 Provider-neutral、默认 no-op 的 `ChannelTelemetry` seam，在 worker/Bridge/ReplySession
+  热路径只做进程内 counter/histogram observe，不增加 Redis、HTTP 或数据库 I/O。首批统一封闭的
+  disposition/reason 枚举，并覆盖 `messages_total`、queue wait、execution duration、delivery failure
+  与 candidate GC 周期/删除结果。
+- **基数与隐私**：指标 label 只允许 provider、operation、result 和封闭 reason/stage；binding hash
+  只进入日志/trace drill-down，不进入 Prometheus label。sender/chat/message/session、问题、答案和任意
+  原始 ID 均不得进入指标。`runtime-status` 继续只表达最新心跳状态，禁止塞计数或分位造成热点写。
+- **验收**：每条输入只有一个最终 disposition；静默 policy drop 可统计；失败/取消也有时延；label
+  集合固定；enqueue 不新增 await/外部 I/O；日志和指标均不泄露身份、正文或原始 binding ID。
 
 ### CHN-O10 · 自适应轮询（**SSE 已否决，先读 CHN-ADR-02**）
 
@@ -614,7 +644,7 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 | ID | 问题 | 需要谁定 |
 |---|---|---|
 | CHN-Q1 | 第三个 provider 是不是企业微信？它的 `connection_type` 判别式分支会逼出 `visible_when` 与 number 控件，届时 `FormField` 需要扩展 | 产品 |
-| CHN-Q2 | 阶段 O 里剩余条目的相对优先级（审计 O8 / 可观测 O9 / 轮询 O10 / 配额 O11）。2026-08-06 用户按「先修在坏的、再做体验」的建议直接派了 O12 → O6，keyring O7 同日落地，这四条不在此列 | 产品 + 运维 |
+| CHN-Q2 | O9 已确定在 U16 后优先实施；O8 / O10 / O11 的后续相对顺序仍待产品与运维决定 | 产品 + 运维 |
 
 ---
 
@@ -697,3 +727,5 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 | 2026-08-10 | **CHN-U14 / EIM-U12 consumer/tolerate 半步完成，producer 尚未 emit。** `MessageCompletedEvent` 可接受可选权威正文；runtime client 严格校验并二次过滤 reasoning，`ask()` 以终态快照替换 delta 聚合。Provider-neutral `ReplySession.replace()` 只替换内存正文，Buffered 与飞书均在 `complete()` 前使用；飞书继续由单写者 drain 在途 patch 后用更高 sequence 写终态。Bridge 把可信 completed 设为取消屏障，replace 失败安全转 ERROR，不留“正在生成”卡。Streaming reasoning filter 下沉到 execution 纯层，worker 与后续 producer 共用。**兼容闸门**：本提交不改 API producer，execution SSE 线格逐字节不变；新 worker + 旧 API 回退 delta，下一半步必须在 worker 部署确认后才 emit。**验证**：runtime/Bridge/Buffered/Feishu **97 passed**；覆盖旧/新 wire、非法/空/reasoning-only snapshot、权威聚合、replace→complete 顺序、replace 失败、buffered/CardKit 最终覆盖；`make fix` 1 file reformatted、1188 unchanged；`make verify` format/Ruff、6 import contracts、async DB gate、mypy 63 files全绿，unit **1758 passed, 1 unrelated warning in 26.39s**；producer/route 零 diff、`git diff --check` 通过 | 本次提交：`feat(channel): tolerate authoritative reply snapshots (EIM-U12, CHN-U14)` | Codex |
 | 2026-08-10 | **CHN-U14 / EIM-U12 producer/emit 完成。** generation 8 worker 已先加载 `77429712` consumer 并取得 `execution-capabilities 200`、`ws_connected`、`worker_started`，满足 CHN-ADR-06。Dialog driver 不再调用会提前落库的 completion facade，而是以 transient Dialog 配置和 detached transcript 调用既有 `async_chat()`；普通追问与 regenerate 都只在内存修改，完整可见终态后 existing session 执行一次 `id/dialog_id/message/reference/user_id` CAS UPDATE，新 session 到终态才 INSERT。`message_completed.content` 只在提交成功后 emit，旧 worker 仍可消费保留的 delta；公开 executor 的 `aclose()` 显式关闭 driver/模型流并触发 abort。Canvas 保持专属 candidate CAS。**准确边界**：零公开历史写保证到 terminal commit barrier 之前；DB COMMIT 结果不明或提交后交付失败留给 CHN-O14。MultiRAG 同步区 `conversation_service.py` / `dialog_service.py` 零 diff。**验证**：producer/consumer/Bridge/Provider 与真库历史定向 **144 passed**；`make fix` **1189 files unchanged**；`make verify` format/Ruff、6 import contracts、async DB gate、mypy 63 files全绿，unit **1764 passed, 1 unrelated warning in 25.66s**；完整 `make integration` **26 passed in 7.55s**；`git diff --check` 通过 | 本次提交：`feat(channel): emit detached Dialog snapshots (EIM-U12, CHN-U14)` | Codex |
 | 2026-08-10 | **CHN-U15 / EIM-U13 完成：Canvas 候选所有权与回收退出请求热路径。** 新增 MultiRAG 自有 sidecar 元数据，以 owner token、目标、公开会话和到期时间显式声明候选；新会话候选与元数据同一 flush/commit，候选在发布前使用自身 `dialog_id`，不进入普通目标列表或批量删除，终态事务才恢复公开身份。existing/new 均按 `candidate → public → metadata` 固定锁序完成 CAS 发布或仅清理候选；请求路径不再 TTL prune。API router lifespan 启动并周期运行有界、DB 时钟、`SKIP LOCKED` 清理，同时严格兼容回收遗留 Canvas/Dialog marker；worker 继续无数据库。迁移兼容当前 model-first 启动顺序，并对不兼容的既有表 fail closed。MultiRAG 同步区 `canvas_service.py` / `conversation_service.py` / `dialog_service.py` / `user_canvas_version.py` 零 diff。**验证**：候选事务、迁移、列表隔离、GC/lifecycle 定向单元 **97 passed**、真 PostgreSQL **23 passed**；`make fix` **1194 files unchanged**；`make verify` format/Ruff、6 import contracts、async DB gate、mypy 63 files全绿，unit **1781 passed, 1 unrelated warning**；完整 `make integration` **35 passed**；单 Alembic head `e4f6a8b0c2d4`；`git diff --check` 通过 | 本次提交：`refactor(channel): isolate Canvas candidate lifecycle (EIM-U13, CHN-U15)` | Codex |
+| 2026-08-10 | **定案 CHN-ADR-08，登记并挂起 CHN-X14 / EIM-F5。** 明确持续跟进 RAGFlow Canvas/Agent/Channel 是长期主线，Channel 只在 MultiRAG 目标适配层吸收 terminal publish、CAS、run/history 分离、幂等和副作用门禁。Canvas 后续不预设 detached：上游继续自持久化则保留 candidate，出现 no-store 才评估 detached，出现原生 checkpoint 则优先适配上游；审计待 Channel 稳定且用户恢复从约 4 月 24 日基线逐 commit 跟进时随同步启动，CHN-O14 继续挂起。**验证**：ADR/执行架构/两份账本 ID 双向 grep、相对链接检查、`make verify` | 本次文档变更 | Codex |
+| 2026-08-10 | **纠正近期优先级并登记 CHN-U16。** U15 数据库迁移、API/supervisor 重启与 healthz 已确认，先补 Dialog/Canvas 现场 smoke；随后收口正常优雅停机：queued/running 卡进入明确终态、queued 项不再启动执行，并用 worker → Bridge → ReplySession 跨层测试固定。kill -9、进程崩溃与跨实例恢复明确留在挂起的 CHN-O14；U16 后紧接 CHN-O9，不新增 O15 | 本次文档变更 | Codex |

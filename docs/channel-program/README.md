@@ -2,7 +2,8 @@
 
 > 项目代号：**CHN**（Channel Program）
 > 建立日期：2026-08-05 · 后端审计基线：`main` @ `75f125d5` · 前端基线：`web` @ `2c32928`
-> 上游对照基线：`infiniflow/ragflow` @ `d6f1475c5c1fe266a6eab2c0acee9722d6720fea`
+> 项目建立时上游来源基线：`infiniflow/ragflow` @ `d6f1475c5c1fe266a6eab2c0acee9722d6720fea`
+> （滚动兼容审计基线见 [`VERSION_BASELINE`](../enterprise-identity-mcp/VERSION_BASELINE.md)，两者不可混用）
 
 ## 五分钟上手
 
@@ -50,26 +51,31 @@
 CHN-O7（主密钥密钥环）、CHN-O12（空 env 变量）、CHN-O6（连接自检）·
 **部署**：CHN-P11 的两道闸门均已完成（2026-08-06 14:44 重启 API 与 supervisor）。
 
-**新增 EIM 身份与体验扩展**：CHN-X5～X13、CHN-U8～U15、CHN-O14、CHN-P14 统一由
+**新增 EIM 身份与体验扩展**：CHN-X5～X14、CHN-U8～U15、CHN-O14、CHN-P14 统一由
 [`docs/enterprise-identity-mcp/`](../enterprise-identity-mcp/README.md) 的 EIM 路线图驱动；其中
 CHN-X9、CHN-X13、CHN-U8、CHN-U11～U15 已完成，其余状态以 [PROGRESS](PROGRESS.md) 为准。旧程序“全部完成”
-的历史结论保持成立，但不再表示 Channel 子系统没有后续待办。
+的历史结论保持成立，但不再表示 Channel 子系统没有后续待办。CHN-U16 是 Channel 稳定化的独立
+近期任务，不新增 EIM 对应项。
 **最后更新**：2026-08-10
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | **PR-0** | 建立账本与契约文档（两仓 docs-only） | ✅ 完成 |
 | **S** | 安全加固（S1–S6） | ✅ 完成 |
-| **U** | 今日可见缺陷（U1–U9、U11–U15 完成；U10 挂起） | 🔵 扩展中 |
+| **U** | 今日可见缺陷（U1–U9、U11–U15 完成；U10 挂起，U16 下一项） | 🔵 扩展中 |
 | **P** | Provider 通用化（P1–P11、P13 全部完成并部署） | ✅ 完成 |
-| **O** | 运维（O1–O7、O12 完成；O8–O11 未排期） | ✅ 完成（排期内） |
+| **O** | 运维（O1–O7、O12 完成；O9 排在 U16 后，O8/O10/O11 未排期） | 🔵 扩展中 |
 | **X** | 跨仓契约（X1–X3、X9、X13 完成；其余按 EIM 路线图） | 🔵 扩展中 |
-| **EIM 扩展** | 执行架构 X13/U14/U15 已完成；身份、多模态等后续任务继续按路线图实施 | 🔵 进行中 |
+| **EIM 扩展** | 执行架构 X13/U14/U15 已完成；U15 现场 smoke 后做 U16 与 O9；F5/X14 挂起到恢复逐 commit 上游同步 | 🔵 进行中 |
 
 执行架构的 CHN-U15 已实现：X13 完成 Provider/Target 能力协商和目标私有 driver，U14 完成 Dialog
 内存工作副本、终态单次 CAS 与权威终态快照；U15 再把 Canvas 候选所有权移入 MultiRAG 自有
-sidecar，并将 TTL 回收移到 API 启动/周期任务。当前没有自动续接的执行架构开发项；先按账本完成
-数据库迁移与验证。CHN-O14 继续挂起，只在确认确实需要 worker 重启恢复后另行启动。
+sidecar，并将 TTL 回收移到 API 启动/周期任务。U15 是在当前 Canvas 自持久化契约上的安全兼容桥，
+不是另起一套 Canvas runtime 的起点。数据库迁移、API/supervisor 重启与 healthz 已确认，当前只差
+Dialog/Canvas 现场 smoke；随后做 CHN-U16，确保正常优雅停机时 queued/running 卡进入明确终态且 queued 请求不再
+启动执行，再紧接 CHN-O9 补齐 binding 级可观测。U16 不承诺 kill -9、进程崩溃或跨实例恢复；这些
+仍属于挂起的 CHN-O14。EIM-F5 / CHN-X14 同步挂起，待 Channel 稳定且用户恢复从约 4 月 24 日
+上游基线逐 commit 跟进时，随正常同步节奏审计 Canvas/Agent/Channel 差异。
 
 ### 24 个 PR 全部落地并部署完毕
 
@@ -289,6 +295,10 @@ MultiRAG 与 web 是两个仓、两条 CI、两次部署，**不存在跨仓原�
 11. **Canvas 候选所有权只存在于 MultiRAG sidecar。** 候选期使用自身 `dialog_id` 命名空间，普通
     target list/delete-all 不发现它；公开 Dialog/Canvas 表不增加 Channel 私有列。TTL 只是崩溃孤儿
     的安全网，不是运行协调、取消或终态判定机制。Channel worker 继续不访问数据库。
+12. **RAGFlow upstream-first，分叉必须可退出。** Canvas/Agent/Channel 持续按上游 commit 演进；
+    MultiRAG 只在目标适配层吸收 terminal publish、CAS、run/history 分离、幂等和副作用门禁等现代
+    不变量。不得复制完整上游编排建立长期平行 runtime；本地差异必须记录来源、测试与删除条件，
+    具体决策见 [CHN-ADR-08](DECISIONS.md#chn-adr-08--canvas-与-channel-演进以上游同步为主只在适配层吸收现代执行不变量)。
 
 ## 变更日志
 
@@ -307,3 +317,5 @@ MultiRAG 与 web 是两个仓、两条 CI、两次部署，**不存在跨仓原�
 | 2026-08-10 | CHN-X13 / EIM-U11 完成：目标私有 driver/history transaction、启动时 capability preflight、Provider × Target × RunPolicy 交集及 regenerate/retry fail-closed 控制落地；worker 保持无数据库 | Codex |
 | 2026-08-10 | CHN-U14 / EIM-U12 完成：generation 8 worker 先部署权威快照 consumer，随后 Dialog 切换为 detached working copy + 终态 CAS 并 emit 权威正文；下一项 CHN-U15 | Codex |
 | 2026-08-10 | CHN-U15 / EIM-U13 实现完成：Canvas 候选使用 MultiRAG sidecar 显式记录所有权，新会话行与元数据同 flush 捕获；API 启动/周期执行有界 `SKIP LOCKED` GC，并严格兼容回收旧 Canvas/Dialog 候选；CHN-O14 保持挂起 | Codex |
+| 2026-08-10 | 定案 CHN-ADR-08 并登记 EIM-F5 / CHN-X14：持续跟进 RAGFlow Canvas/Agent/Channel 是长期主线；现代项目只提供执行不变量校准。Canvas 是否继续 candidate、评估 detached 或适配上游 checkpoint，必须在恢复逐 commit 跟进时由上游审计决定；不提前启动 O14 或自研平行 runtime | Codex |
+| 2026-08-10 | 纠正近期优先级：U15 数据库迁移、API/supervisor 重启与 healthz 已确认，先补 Dialog/Canvas 现场 smoke；下一项 CHN-U16 收口正常优雅停机中的 queued/running 卡与未启动队列，随后 CHN-O9 补可观测。EIM-F5 / CHN-X14 挂起到 Channel 稳定且用户恢复从约 4 月 24 日基线逐 commit 跟进；kill -9 与跨实例恢复仍不属于 U16 | Codex |

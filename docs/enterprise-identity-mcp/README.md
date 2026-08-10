@@ -172,9 +172,16 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
 - MCP 客户端仍使用旧式 `ClientSession + initialize` 和静态 headers，需要升级为请求级 token
   与 MCP SDK 2 客户端。
 - Channel Execution 已通过 `stream()` 直接向 transport-neutral ReplySession 交付类型化事件；
-  飞书已实现 CardKit 渐进式回复，`ask()` 只保留为兼容聚合入口。下一项执行层缺口不是 transport，
-  而是把 Provider/Target capabilities 与 Dialog/Canvas 各自的提交策略按
-  [执行架构](../channel-program/EXECUTION_ARCHITECTURE.md) 收口。
+  飞书已实现 CardKit 渐进式回复，`ask()` 只保留为兼容聚合入口。Provider/Target capabilities、
+  Dialog detached CAS 与 Canvas candidate sidecar/周期 GC 已分别由 EIM-U11～U13 收口。U15 迁移与
+  API/supervisor 重启已完成；先补 Dialog/Canvas 真实飞书 smoke，再做 CHN-U16 的优雅停机终态化和跨层测试，
+  随后补 CHN-O9 可观测并稳定浸泡。EIM-F5 / CHN-X14 保留为 upstream-first 长期任务，但挂起到
+  Channel 稳定、且用户恢复从约 2026-04-24 本地同步点逐 commit 跟进 RAGFlow 时再启动；不预设自行
+  实现 Canvas runtime。
+- CHN-U16 只收口**正常、可控的 worker/supervisor 停机**：停止接收新消息，取消未完成执行并把
+  已创建的 queued/running 卡片更新为明确终态，再退出进程。它不持久化队列或 action，也不声称恢复
+  `kill -9`、主机掉电、跨实例取消、数据库 COMMIT 结果未知等场景；后者仍属于挂起的 EIM-O4 /
+  CHN-O14。CHN-U16 与 CHN-O9 是 Channel 稳定性任务，不新增或挪用 EIM 映射。
 - 当前 `IncomingMessage`/`OutgoingMessage` 不表达 thread、mention、attachment、reference、
   card handle 或 delivery UUID；这些目标契约统一见 [FEISHU_BOT_UX](FEISHU_BOT_UX.md)。
 

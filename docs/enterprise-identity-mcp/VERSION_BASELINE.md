@@ -43,8 +43,20 @@ FastMCP 继续作为 of_mcp 的 server/composition 框架，但授权契约必�
 
 ## 2. 官方上游提交快照
 
-以下 SHA 由 `git ls-remote <repo> HEAD` 获取；飞书交互相关仓于 2026-08-09 刷新。后续参考源码时，先用 SHA
-重现本文看到的行为，再对比最新 HEAD，避免文档链接随 main 漂移。
+上游版本分三层记录，禁止混用：
+
+1. **历史来源基线**：项目最初派生或某阶段建立时使用的 SHA，保留为来源事实，不随升级覆盖；
+2. **滚动兼容审计基线**：下表最近一次完成语义核验的固定快照，可在完成新审计后更新；
+3. **单次移植 commit**：每个具体跟进任务实际采用、语义移植或拒绝的上游 commit，记录在任务日志。
+
+以下 SHA 由 `git ls-remote <repo> HEAD` 获取，是第二类滚动兼容审计基线；飞书交互相关仓于
+2026-08-09 刷新。后续参考源码时，先用 SHA 重现本文看到的行为，再对比最新 HEAD，避免文档链接
+随 main 漂移。不得只因上游 HEAD 前进就更新本表；必须先完成对应契约与差异核验。
+
+特别注意：下表的 RAGFlow SHA 是**外部滚动兼容审计快照**，不是 MultiRAG 当前逐 commit 同步到的
+代码位置。当前本地上游同步进度约停在 2026-04-24；恢复同步时先确定准确起始 commit，再按顺序逐个
+跟进。EIM-F5 / CHN-X14 当前保持挂起，只有 Channel 完成 U15 rollout/真实 smoke、CHN-U16、
+CHN-O9 和稳定浸泡，且用户明确恢复这条同步主线后，才重新获取 HEAD 并更新审计结论。
 
 | 项目 | 快照 SHA | 用途 |
 |---|---|---|
@@ -56,7 +68,7 @@ FastMCP 继续作为 of_mcp 的 server/composition 框架，但授权契约必�
 | `langbot-app/LangBot` | `e37987215e8465818e373fa523075b5482b70a6e` | 多 Provider、访问控制、Lark WS/Markdown 与运维面 |
 | `shareAI-lab/lark-channel` | `cf056995730a3775529c3bf87fce8033cea554a4` | 群组/线程隔离、工具过程流式卡片 |
 | `modelcontextprotocol/python-sdk` | `a4f4ccd091138771535e17191123f20b30fda68e` | MCP SDK v2 客户端、双协议兼容和 OAuth |
-| `infiniflow/ragflow` | `b5bffa0fa3213bbc0fee046422c7de4a3db2e39c` | 外部兼容基线：Dialog no-store/全量历史与 Canvas 自持久化差异 |
+| `infiniflow/ragflow` | `b5bffa0fa3213bbc0fee046422c7de4a3db2e39c` | 滚动兼容审计基线：Dialog no-store/全量历史与 Canvas 自持久化差异；F5/X14 当前挂起，待稳定闸门和用户恢复逐 commit 同步后才刷新 |
 | `open-webui/open-webui` | `01f4282f1ffe0d6212f58d3afbeae21fffd0c4be` | 独立消息表、parent/children 分支和重新生成语义对照 |
 
 源码参考的具体内容和禁止照搬项见 [REFERENCES](REFERENCES.md)。

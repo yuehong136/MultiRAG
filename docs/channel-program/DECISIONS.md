@@ -17,6 +17,7 @@
 | [CHN-ADR-05](#chn-adr-05--文档分层入库讲我们的代码本地讲别人的代码) | 文档分层：入库讲我们的代码，本地讲别人的代码 | ✅ 采纳 |
 | [CHN-ADR-06](#chn-adr-06--私有-runtime-契约的每次变更都拆成-tolerate--emit-两个-pr) | 私有 runtime 契约的每次变更都拆成 tolerate + emit 两个 PR | ✅ 采纳 |
 | [CHN-ADR-07](#chn-adr-07--provider-与执行目标正交历史事务由目标驱动拥有) | Provider 与执行目标正交，历史事务由目标驱动拥有 | ✅ 采纳 |
+| [CHN-ADR-08](#chn-adr-08--canvas-与-channel-演进以上游同步为主只在适配层吸收现代执行不变量) | Canvas 与 Channel 演进以上游同步为主，只在适配层吸收现代执行不变量 | ✅ 采纳 |
 
 ---
 
@@ -315,3 +316,59 @@ supervisor 的少数环境。
 **失效条件**：如果未来 MultiRAG Dialog/Canvas 都改为同一个原生 checkpoint runtime，且该 runtime
 同时提供无副作用 fork、可见历史投影和条件提交，则两个 driver 可以共享其实现；Provider/Target
 正交、worker 无数据库和能力交集三条仍不失效。
+
+---
+
+## CHN-ADR-08 · Canvas 与 Channel 演进以上游同步为主，只在适配层吸收现代执行不变量
+
+**日期**：2026-08-10 · **状态**：✅ 采纳 · **补充**：CHN-ADR-07
+
+**背景**：CHN-U14/U15 已证明 Dialog 与 Canvas 可以对外遵守同一套
+`prepare -> execute -> publish/abort` 语义，但当前实现方式不同。Dialog 有不持久化会话的生成缝，
+可以使用内存工作副本；Canvas completion 仍自行创建、读取和写回会话，因此需要私有 candidate
+和 sidecar 隔离公开历史。与此同时，MultiRAG 会持续跟进 RAGFlow 的 Canvas、Agent 和 Channel
+源码，不计划另造一套与上游长期并行的 Canvas runtime。
+
+LangGraph、DeerFlow、Open WebUI 和同类现代项目提供了 run/thread 分离、checkpoint、取消与终态
+竞争 CAS 等有价值的校准基线，但它们不是要求 MultiRAG 替换 RAGFlow Canvas 内核的理由。需要固定
+的是一致性和安全不变量，而不是照搬某个项目的存储表或框架。
+
+**决策**：
+
+1. **RAGFlow upstream-first。** MultiRAG Canvas/Agent 核心和 Channel transport 持续按上游 commit
+   迭代；每次升级先固定上游 SHA、审计实际差异，再按路径所有权语义移植。不得因本地架构偏好复制
+   或分叉完整 Canvas completion、Agent 编排和 checkpoint runtime。
+2. **优化留在反腐层。** Channel 的终态发布、CAS、operation、能力协商、Provider 渲染和候选所有权
+   优先落在 `api/channel_execution`、`api/channel_providers` 及 MultiRAG 自有表；上游同步区不增加
+   Channel 私有参数、历史分支或 Provider 判断。
+3. **长期只固定不变量。** 中间执行状态不冒充公开历史；完整可见终态才发布；并发发布必须 CAS；
+   run 状态与公开消息分离；未知或外部副作用不得自动重放；Provider 不理解目标数据库；worker 不
+   直连数据库。这些规则独立于 `detached_cas`、`candidate_cas` 或未来上游 runtime 的具体名称。
+4. **Canvas 按上游实际形态条件演进。** 若上游继续自持久化，保留 U15 candidate bridge；若上游
+   提供稳定 no-store/snapshot 执行缝，再评估在目标 driver 内切换 detached CAS；若上游提供原生
+   run/checkpoint/resume，则优先适配该原生模型并评估删除 candidate，而不是并行维护本地 runtime。
+   任一路径切换前都必须证明历史、发布版本、取消、并发和工具副作用语义等价。
+5. **两类运行状态不得混淆。** Canvas 内部 workflow checkpoint 属于目标执行状态；CHN-O14 的
+   Channel run ledger 属于跨 Provider 的排队、取消和交付协调。U15 sidecar 只证明候选所有权，
+   三者不能互相冒充。O14 仍只在明确需要跨进程恢复时启动。
+6. **本地分叉必须可退出。** 每项偏离上游的实现都要记录上游 SHA/路径、本地落点、保护的不变量、
+   契约测试和删除条件；上游出现等价或更好的原生能力时，优先收敛并删除兼容债。
+
+### Canvas 演进决策门
+
+| 上游事实 | MultiRAG 选择 | 禁止项 |
+|---|---|---|
+| completion 继续自行持久化会话 | 保留 candidate + sidecar + terminal CAS | 为追求形式统一直接写公开历史 |
+| 出现稳定 no-store/snapshot 执行缝 | 先做语义等价审计，再评估 driver 内 detached CAS | 复制整段 completion 建平行入口 |
+| 出现原生 run/checkpoint/resume | 适配上游目标 runtime，终态仍投影到公开历史 | 同时维护本地和上游两套 checkpoint runtime |
+| 跨进程恢复成为真实 Channel 需求 | 独立评审 CHN-O14 run ledger | 把 Canvas sidecar 当 durable run ledger |
+
+**执行方式**：EIM-F5 / CHN-X14 当前挂起。触发条件是 Channel 已稳定，且用户恢复从约 4 月 24 日
+上游基线逐 commit 跟进；届时审计随正常同步节奏进行，并给出“直接跟进 / 语义移植 / 适配层吸收 /
+暂不采纳”清单。只有识别出稳定、可验证的执行缝后，才新增代码任务。审计本身不授权重写 Canvas，
+也不自动启动 CHN-O14。
+
+这一排期变化不修改本 ADR 的 upstream-first 长期原则。U15 数据库迁移与 API/supervisor 重启已经
+完成，近期先补 Dialog/Canvas 现场 smoke，再做 CHN-U16 的正常优雅停机终态化，随后实施 CHN-O9
+可观测。
+CHN-U16 只覆盖进程能够协作清理的 queued/running 回复，不包含 kill -9、进程崩溃或跨实例恢复。

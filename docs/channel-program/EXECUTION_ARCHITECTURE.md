@@ -1,6 +1,7 @@
 # MultiRAG Channel 执行架构
 
-> 状态：EIM-U11 / CHN-X13、EIM-U12 / CHN-U14、EIM-U13 / CHN-U15 已实现；CHN-O14 挂起
+> 状态：EIM-U11 / CHN-X13、EIM-U12 / CHN-U14、EIM-U13 / CHN-U15 已实现，U15 迁移/API 重启已完成、现场 smoke 待完成；
+> CHN-U16 是下一项，CHN-O9 紧随其后；EIM-F5 / CHN-X14 与 CHN-O14 挂起
 > 决策：[`CHN-ADR-07`](DECISIONS.md#chn-adr-07--provider-与执行目标正交历史事务由目标驱动拥有)
 > 核验日期：2026-08-10（外部版本与证据见
 > [`VERSION_BASELINE`](../enterprise-identity-mcp/VERSION_BASELINE.md) 和
@@ -36,8 +37,9 @@
    `provider == "feishu" and target_type == "multirag.canvas_agent"` 一类组合分支。
 4. **运行中的内容不是已提交历史。** 生成只在私有工作态进行；只有完整终态、存在可见答案且公开
    会话头未变化时，才以 compare-and-swap（CAS）提交一次。
-5. **历史事务由目标驱动拥有，不追求伪通用。** Dialog 使用内存工作副本与终态 CAS，Canvas 继续
-   使用隔离候选会话。二者共用生命周期语义，不共用持久化技巧。
+5. **历史事务由目标驱动拥有，不追求伪通用。** Dialog 当前使用内存工作副本与终态 CAS，Canvas
+   当前使用隔离候选会话。二者共用生命周期语义，不要求持久化技巧永久相同；Canvas 后续形态由
+   RAGFlow 上游可用执行缝和语义等价审计决定。
 6. **Channel worker 不访问数据库。** worker 只调用 MultiRAG 内部执行 API 并消费 SSE；数据库访问
    只发生在 API 进程的目标驱动中，卡片 patch 和模型 delta 不触发数据库轮询。
 7. **功能由能力交集决定。** 用户可见的停止、重新生成、反馈和渐进式展示，取 Provider 能力、
@@ -255,8 +257,9 @@ CAS 和可见历史投影都留在 `api/channel_execution`。禁止给同步区�
    不一致或未过期行不会被删除；普通轮次失败记录脱敏日志并留给下一周期，task cancellation 继续传播；
 7. TTL 仅是 API/进程崩溃后孤儿候选的**安全网**，不是运行 lease、心跳、取消或 terminal barrier。
    活跃 run 的上限必须短于 TTL；正常成功/失败仍由执行事务立即 commit/abort；
-8. 一旦 MultiRAG Canvas 获得稳定的无落库执行端口，驱动内部切到 `detached_cas`，Provider、
-   binding、事件协议和卡片均不变。
+8. candidate 是当前上游持久化契约的兼容桥，不是承诺永久保留的终态，也不是必须删除的临时补丁；
+   后续按 [CHN-ADR-08](DECISIONS.md#chn-adr-08--canvas-与-channel-演进以上游同步为主只在适配层吸收现代执行不变量)
+   的上游事实决策门选择继续 candidate、评估 detached CAS 或适配上游原生 checkpoint runtime。
 
 ```mermaid
 flowchart LR
@@ -273,6 +276,29 @@ flowchart LR
     G["API lifespan bounded GC"] -. "expired crash orphan only" .-> F
     G -. "expired crash orphan only" .-> C
 ```
+
+### 长期演进：RAGFlow upstream-first，现代不变量驱动
+
+“Canvas 是扩展目标”只表示 Canvas 特性不得反向成为所有 Provider 的必填契约，不表示 MultiRAG
+要降低 Canvas 的上游跟进优先级或独立重写 Canvas 内核。MultiRAG 后续仍以持续跟进 RAGFlow 的
+Canvas、Agent 与 Channel 源码为主线；本地优化优先位于目标 driver、执行编排和 Provider 适配边界。
+
+现代项目用于校准以下不变量：Thread/公开历史与 Run/Execution 分离；中间 checkpoint/event 不冒充
+已完成消息；完整终态才发布；取消与成功终态通过 CAS 竞争；外部操作需幂等且未知副作用不得自动
+重放。这些不变量可以落在不同的上游执行形态上，不要求 MultiRAG 先替换 RAGFlow Canvas runtime。
+
+| RAGFlow 上游演进事实 | Channel 目标 driver 的选择 | 对 Provider / wire 的影响 |
+|---|---|---|
+| Canvas completion 继续自行持久化 | 保留 U15 `candidate_cas` 反腐层 | 无 |
+| 提供稳定 no-store/snapshot 输入输出 | 做等价审计后，才评估切换 `detached_cas` | 无 |
+| 提供原生 run/checkpoint/resume | 优先适配上游 runtime，评估删除 candidate | 仍保持目标中立 |
+| 没有稳定新执行缝 | 不自研平行 Canvas runtime，继续 candidate | 无 |
+
+所谓 `CanvasExecutionPort` 只是对“稳定、无 Channel 私参的目标执行缝”的条件性称呼，不承诺一定
+自研这个接口。每次上游跟进都要记录来源 SHA、同步区差异、本地适配点、被保护的不变量、契约测试
+和本地兼容层退出条件；上游出现等价能力时优先删除兼容债。具体决策见 CHN-ADR-08。EIM-F5 /
+CHN-X14 当前挂起，待 Channel 稳定且用户恢复从约 4 月 24 日上游基线逐 commit 跟进时，随正常
+同步节奏启动，而不是抢占当前稳定化工作。
 
 ## 8. Run 生命周期与会话历史分离
 
@@ -291,7 +317,21 @@ run ledger：
 - 不按 token 写 run 表，只在有限状态迁移和终态写入。
 
 CHN-O14 当前保持挂起。在明确需要重启恢复前，不提前引入完整 durable workflow runtime；MultiRAG
-只吸收其一致性不变量。U15 sidecar 只描述 Canvas 候选所有权，不能替代 run ledger。
+只吸收其一致性不变量。Canvas 目标内部未来可能采用的 workflow checkpoint 负责目标执行恢复，
+CHN-O14 run ledger 负责跨 Provider 的队列、取消与交付协调；U15 sidecar 只描述候选所有权，三者
+不能互相替代。
+
+### 正常优雅停机边界（CHN-U16）
+
+正常 SIGTERM、supervisor generation 切换或显式关闭属于当前进程能够协作完成的生命周期，不需要
+durable run ledger。CHN-U16 在现有 worker → Bridge → ReplySession 链内固定以下行为：停止接收后，
+已经展示 queued 卡但尚未开始的请求进入明确终态且不得启动 MultiRAG 执行；running 请求关闭现有
+execution stream，并按既有安全取消语义终态化回复卡；跨层测试同时证明卡片状态与“执行从未启动”
+两个事实，不能只断言 task 被 cancel。
+
+这项任务不承诺 kill -9、进程崩溃、机器掉电、跨实例接管或重启后恢复。上述场景没有合作式清理
+窗口，仍属于挂起的 CHN-O14；不得借 U16 引入数据库 run ledger、worker 数据库访问或第二套恢复
+协议。
 
 ## 9. 数据库 I/O 预算
 
@@ -330,7 +370,11 @@ Open WebUI 一类消息树能支持任意节点分支，但 MultiRAG 当前 Dial
 | 1 | EIM-U11 / CHN-X13 | ✅ 已完成：Provider/Target capabilities、启动预取和目标私有 driver；删除 `ChannelSessionManager`，保持目标执行行为等价 | 低 |
 | 2 | EIM-U12 / CHN-U14 | ✅ generation 8 worker 先部署 consumer；随后 emit 权威终态快照并切换 Dialog detached working copy + 单次 CAS | 中 |
 | 3 | EIM-U13 / CHN-U15 | ✅ 已实现：Canvas sidecar 显式所有权；新行同 flush 捕获；API bounded GC 移出请求热路径 | 中，涉及 DB |
-| 4 | EIM-O4 / CHN-O14 | ⏸ 挂起：仅在确认需要重启恢复后增加 durable run ledger、单活约束和 cancel/final CAS | 高，需独立 ADR 复核 |
+| 4 | CHN-U15 rollout gate | 🔵 数据库迁移、API/supervisor 重启与 healthz 已确认；还需完成飞书 Dialog/Canvas 现场 smoke | 中，现场验证 |
+| 5 | CHN-U16 | ⬜ 下一项：正常优雅停机时终态化 queued/running 卡，queued 项不得启动执行；补 worker → Bridge → ReplySession 跨层测试 | 中，生命周期 |
+| 6 | CHN-O9 | ⬜ U16 后紧接：补 binding 级消息量、丢弃原因与时延分位，使现场浸泡有可聚合证据 | 低，运维可见性 |
+| 7 | EIM-F5 / CHN-X14 | ⏸ 挂起：Channel 稳定且用户恢复从约 4 月 24 日基线逐 commit 跟进时，随同步做只读差异审计 | 低，只读 |
+| 8 | EIM-O4 / CHN-O14 | ⏸ 挂起：仅在确认需要重启恢复后增加 Channel durable run ledger、单活约束和 cancel/final CAS；不复制 Canvas checkpoint runtime | 高，需独立 ADR 复核 |
 
 X13 不改变 Provider runtime 私有 DTO 或执行 SSE wire，并使用独立 additive private preflight。
 U14 在既有 `message_completed.content` 可选字段上启用权威终态快照，并严格完成两步：先让 worker
@@ -352,4 +396,6 @@ producer 才 emit。旧 API 时新 worker 回退 delta，旧 worker 遇到新字
 - worker 导入图中没有 SQLAlchemy 和 `api.db`，并继续只走内部 API/SSE；
 - Provider capability、Target capability 和实际按钮/错误行为有契约测试；
 - 上游同步区相对移植基线不新增 Channel 私有参数或历史分支；
+- RAGFlow 上游变化只在单一目标适配点消化；不复制完整 Canvas/Agent 编排，不长期并行维护本地与
+  上游两套 runtime；每项本地兼容层都有上游来源、保护不变量、测试和退出条件；
 - DB 改动执行 `make verify` + `make integration`，其余改动至少执行 `make verify`。

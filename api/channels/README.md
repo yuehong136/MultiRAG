@@ -258,7 +258,8 @@ MultiRAG sidecar 所有权的数据库候选并原子晋升。terminal commit ba
 冲突不改公开历史，
 连续点击不会重复追加同一句 user。数据库 COMMIT 已发出但结果不明、或提交后卡片交付失败的窗口不
 伪装成可回滚；U15 的 TTL GC 只清理仍带 metadata 的过期孤儿，不能判定这类跨存储终态。CHN-O14
-durable run ledger 继续挂起，只有确认需要 worker 重启恢复后才会另行启动。
+durable run ledger 继续挂起，只有确认需要 `kill -9`/主机故障、跨实例取消或终态结果未知恢复后才会
+另行启动；正常可控重启的卡片终态化由 CHN-U16 负责。
 error/cancelled 卡使用独立 retry action。普通消息失败后的 retry 仍是 `message`；若失败的是一次
 `regenerate`，retry 会继承 `regenerate`，因为公开历史中的旧成功尾轮仍然存在，降成普通消息反而会
 重复追加问题。完成卡的 regenerate 始终显式使用 `regenerate`。
@@ -286,6 +287,12 @@ batch update 添加“重新生成 / 有帮助 / 没帮助”，生成中的卡�
 重复点击不会重复取消、重新生成或反馈。worker 重启后旧卡片按钮安全过期，不会恢复执行。
 `card.action.trigger` 长连接回调的同步路径只做规范化、绑定校验、幂等 claim 和入队，在飞书 3 秒
 窗口内返回 toast；Redis、execution 和卡片更新均在回调确认之后异步完成。
+
+这里的“安全过期”不是“重启恢复”。当前 queue、execution record 和 action registry 都在 worker
+内存中；在 CHN-U16 完成前，正常停机若超过有限 drain 窗口，也可能留下仍显示 queued/running 的
+旧卡。CHN-U16 只为**可控正常停机**增加终态化：先停止接收新消息，再取消未完成执行并更新已创建
+卡片，最后退出。它不保存或恢复队列/action，`kill -9`、主机掉电、跨实例取消以及 terminal commit /
+delivery 结果未知仍属于挂起的 CHN-O14，不能用“优雅重启”验收替代。
 
 “停止生成”会取消当前 execution SSE 子任务或阻止 queued 项启动，并把卡片改为已停止；它只表示
 停止等待后续模型/RAG 输出。由于现有 execution event 还没有可验证的 tool side-effect boundary，
@@ -670,7 +677,8 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
 - 修改 App ID、App Secret、allowlist、domain、目标或发布版本：generation 增加并重启
   对应 worker。
 - 禁用或删除 binding：supervisor 优雅停止对应 worker。
-- Child 异常退出：supervisor 记录脱敏错误并指数退避重启。
+- Child 异常退出：supervisor 记录脱敏错误并指数退避重启；新进程恢复接收后续消息，但不恢复旧进程
+  的内存队列、action 或未完成 run。
 - MultiRAG API/Redis 不可用：停止执行，不能降级到进程内无状态模式。
 - API 启动后会立即执行一次 Canvas candidate GC，之后按
   `channels.execution.candidate_gc` 的 interval/jitter 周期执行；它只清理超过 TTL 的孤儿候选和严格
@@ -711,7 +719,41 @@ channel_event=worker_started
 日志不得包含 App Secret、internal token、tenant access token、完整 WebSocket URL、原始
 事件、问题、答案、完整用户/会话/message ID 或 MCP 参数。
 
+## 近期稳定性收口顺序
+
+upstream-first 长期原则不变，但当前不立即执行 EIM-F5 / CHN-X14。近期顺序固定为：
+
+1. U15 数据库迁移与 API/supervisor 重启已经完成；补齐真实飞书 smoke，Dialog、Canvas 都要覆盖短答/长答、
+   Markdown/公式、连续追问、queue full、queued/running cancel、retry、regenerate 和 feedback；
+   Canvas 额外核对 candidate 收口及公开历史无 reasoning/半轮污染。
+2. CHN-U16 修复可控正常停机遗留 queued/running 卡，并补 worker → private HTTP/SSE →
+   Dialog/Canvas target → ReplySession 的跨层测试；同时钉住 queued cancel 不启动执行、queue full
+   确实向用户交付 busy。
+3. CHN-O9 补最小可观测：首卡/首正文、queue wait/depth/overflow、CardKit update/fallback、
+   terminal 与 shutdown outcome，能够支撑真实浸泡判断。
+4. 稳定浸泡期间不新增执行架构；记录失败率、悬空卡、重复执行/交付、候选孤儿和重启结果。
+5. Channel 稳定后，等待用户恢复从约 2026-04-24 本地同步点逐 commit 跟进 RAGFlow，再解除
+   EIM-F5 / CHN-X14 挂起并把本轮改动随上游迭代一并审计。
+
+CHN-U16、CHN-O9 是 Channel 账本任务，不新增 EIM 映射。正常停机终态化不等于 durable recovery；
+没有 `kill -9`/跨实例/终态不确定性等明确恢复需求时，CHN-O14 继续挂起。
+
 ## 与上游同步策略
+
+MultiRAG 会持续跟进 RAGFlow 的 Canvas、Agent 和 Channel 源码。默认选择是采用或语义移植上游
+原生架构，而不是在 Channel 层建立一套长期平行 runtime。DeerFlow、LangGraph、Open WebUI 等项目
+只用于校准 terminal publish、CAS、run/history 分离、幂等和副作用门禁；这些不变量由
+MultiRAG 目标适配层承接，不反向污染上游同步区。完整决策见
+[`CHN-ADR-08`](../../docs/channel-program/DECISIONS.md#chn-adr-08--canvas-与-channel-演进以上游同步为主只在适配层吸收现代执行不变量)。
+
+Canvas 当前的 candidate + sidecar 是对自持久化 completion 的兼容桥。如果上游继续保持该形态，
+它可以继续存在；如果上游提供稳定 no-store/snapshot 缝，先做语义等价审计再评估 detached CAS；
+如果上游提供原生 checkpoint/runtime，则优先适配上游模型。`CanvasExecutionPort` 只是条件性执行缝
+的称呼，不代表已经决定自研接口或删除 candidate。
+
+EIM-F5 / CHN-X14 当前为挂起状态；本文保留的是恢复同步时的审计方法，不是立即拉齐最新 HEAD 的
+指令。恢复时从 MultiRAG 当前约 2026-04-24 的本地同步点确定准确 commit，按顺序逐个跟进，不跳过
+中间提交做一次性大合并。
 
 ### Feishu / Lark 域名兼容
 
@@ -729,18 +771,24 @@ MultiRAG 的规范公开字段是 `config.domain`。为兼容新版上游的请�
 | `state_store.py`、`runtime_client.py` | MultiRAG | 不用上游文件覆盖 |
 | `worker.py`、`supervisor.py` | MultiRAG | 不用上游 Bootstrap/进程模型覆盖 |
 | `api/channel_control`、`api/channel_execution`、`api/channel_runtime` | MultiRAG | 作为本项目长期主线维护 |
-| `api/db/services/canvas_service.py`、`conversation_service.py`、`user_canvas_version.py` | MultiRAG 上游同步区 | Channel 不加参数、不改历史/发布语义；只从独立适配器调用公开契约 |
+| `api/db/services/canvas_service.py`、`conversation_service.py`、`dialog_service.py`、`user_canvas_version.py` | MultiRAG 上游同步区 | Channel 不加参数、不改历史/发布语义；只从独立适配器调用公开契约 |
 
 跟进新版上游时：
 
-1. 在本文件更新所参考的 RAGFlow 上游 SHA；它只表示来源基线，不改变本仓实体的 MultiRAG 命名。
-2. 对比 `api/channels/core/{base,registry}.py`、`api/channels/feishu/channel.py` 的传输层变化，
-   同时核对 Canvas 发布与 completion 契约是否有上游变化。
-3. 按上表语义移植，不整文件覆盖加固版本。
-4. 把上游产品名、模型、路由、表名和运行时值翻写为 MultiRAG 自己的实现；本仓表、函数、方法、
+1. 区分三类版本：项目建立时的历史来源基线不覆盖；完成语义核验后才刷新滚动兼容审计基线；
+   每个实际跟进的上游 commit 单独进入移植记录。定义见
+   [`VERSION_BASELINE`](../../docs/enterprise-identity-mcp/VERSION_BASELINE.md)。
+2. 固定开工时 RAGFlow HEAD，逐 commit 对比 `api/channels/core/{base,registry}.py`、
+   `api/channels/feishu/channel.py` 的传输层变化，同时核对 Canvas/Agent 发布、completion、
+   no-store、checkpoint、取消和副作用契约。
+3. 每项差异明确归入“直接跟进 / 语义移植 / 适配层吸收 / 暂不采纳”，按上表处理；不整文件覆盖
+   加固版本，也不复制完整 Canvas/Agent 编排。
+4. 每项本地差异记录上游 SHA/路径、本地落点、保护的不变量、契约测试和删除条件；上游出现等价
+   或更好的原生能力时，优先删除兼容债，不长期并行维护两套 runtime。
+5. 把上游产品名、模型、路由、表名和运行时值翻写为 MultiRAG 自己的实现；本仓表、函数、方法、
    路由和运行时不得称为“RAGFlow 的”。
-5. 禁止引入任何指向上游运行服务的 HTTP、RPC、数据库或消息队列依赖。
-6. 运行 Channel 契约测试和全仓验证，通过后再更新 SHA。
+6. 禁止引入任何指向上游运行服务的 HTTP、RPC、数据库或消息队列依赖。
+7. 运行 Channel 契约测试和全仓验证，通过后再更新滚动兼容审计 SHA。
 
 ## 验证
 

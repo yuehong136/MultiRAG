@@ -250,6 +250,10 @@ MultiRAG 实体；不得把外部项目名当作本仓运行时组件名。
 
 本节只记录形成 MultiRAG 决策所需的外部事实；最终架构以
 [`EXECUTION_ARCHITECTURE`](../channel-program/EXECUTION_ARCHITECTURE.md) 为准。
+RAGFlow 是 MultiRAG Canvas/Agent/Channel 持续迭代的主要上游；DeerFlow、LangGraph、Open WebUI、
+Vercel AI SDK 等项目用于校准 terminal publish、run/history 分离、checkpoint、幂等和副作用边界，
+不构成另起框架替换 RAGFlow Canvas 的授权。具体收敛规则见
+[CHN-ADR-08](../channel-program/DECISIONS.md#chn-adr-08--canvas-与-channel-演进以上游同步为主只在适配层吸收现代执行不变量)。
 
 ### RAGFlow 上游
 

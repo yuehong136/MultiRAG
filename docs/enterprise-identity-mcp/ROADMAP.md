@@ -2,7 +2,8 @@
 
 > 最后更新：2026-08-10
 > 当前状态：文档基线、EIM-U0、EIM-U1、EIM-U4、EIM-U8～U13 已完成；
-> EIM-O4 挂起到出现明确的跨进程恢复需求。
+> U15 迁移/API 重启已完成；近期先补真实 smoke，再做 CHN-U16、CHN-O9 与稳定浸泡；EIM-F5 / CHN-X14 和
+> EIM-O4 均保持挂起。
 
 ---
 
@@ -59,6 +60,7 @@ flowchart TD
     F0["EIM-F0 文档基线"] --> F1["F1 lark-oapi 升级"]
     F0 --> F2["F2 MCP v2 兼容测试"]
     F0 --> F4["F4 FastMCP b2 升级"]
+    F0 --> F5["F5 RAGFlow Canvas/Channel 上游审计 (held)"]
     F2 --> F3["F3 MultiRAG MCP Client v2"]
 
     F0 --> I1["I1 User 外部账号模型"]
@@ -141,8 +143,11 @@ flowchart TD
 | EIM-F2 | MR + of_mcp test fixture | 建 MCP SDK 2 兼容矩阵：现代 2026 server、legacy server、401/403、tool error、取消/超时 | ⬜ | F0 | 测试先在旧生产 client 上暴露差异；结果和迁移清单入账 |
 | EIM-F3 | MR | `common/mcp_tool_call_conn.py` 迁到官方 `mcp.Client` v2；保留 legacy 自动回退 | ⬜ | F2 | 不再手调 initialize；现代/legacy fixture 全绿；无身份静态 header |
 | EIM-F4 | of_mcp | FastMCP 4 b1 -> 开工时最新 beta（当前 b2），纯版本 PR | ⬜ | F0 | of_mcp AGENTS 的 b1 实测行为逐项复测；mount/proxy snapshots；`ofmcp verify` |
+| EIM-F5 | MR docs + 上游审计 | RAGFlow Canvas/Agent/Channel 逐 commit 对齐审计，定义来源基线、滚动兼容基线和单次移植 commit 三层版本语义；按“直接跟进 / 语义移植 / 适配层吸收 / 暂不采纳”分类并判断 no-store/checkpoint 执行缝 | ⏸ | F0,U13；Channel 完成 U15 rollout/真实 smoke、CHN-U16、CHN-O9 与稳定浸泡；用户明确恢复从约 2026-04-24 本地同步点逐 commit 跟进 | 固定恢复同步时的 HEAD；同步区/反腐层边界清单；移植冲突预算；契约测试建议；给出继续 candidate、采用上游缝或向上游提交可合入重构的单一结论；审计不改运行行为 |
 
-F1/F3/F4 禁止携带身份功能。若升级失败，记录 `🚫` 和上游 issue，不通过放宽门禁解决。
+F1/F3/F4 禁止携带身份功能。F5 是只读决策任务，长期 upstream-first 原则不变，但当前不是近期任务；
+只有上述稳定性闸门完成且用户恢复逐 commit 同步后才解除挂起。F5 不得顺手实现 Canvas runtime 或
+启动 O4。若升级或移植审计失败，记录 `🚫` 和上游 issue，不通过放宽门禁解决。
 
 ---
 
@@ -307,7 +312,7 @@ EIM-C5 与 U0/U1 并行，不是前置依赖。
 | EIM-O1 | 两仓 + infra | production config、issuer/resource DNS+TLS、KMS/JWKS、Secret rotation、网络策略 | ⬜ | I8,A6 | runbook 演练；proxy 不可公网直达；密钥轮换无中断；配置无明文 |
 | EIM-O2 | 两仓 + 飞书 | 分阶段 rollout：shadow identity -> RAG Principal -> read-only MCP -> medic canary | ⬜ | O1,M5,U1 | 每阶段 rollback/指标/审计；离职演练；管理员签字；无 big-bang |
 | EIM-O3 | 架构评审 | 判断是否抽 identity-broker、接企业 IdP EMA/ID-JAG、开放外部 MCP client | ⏸ | O2 + 实际需求 | 满足 README 抽取条件；独立 ADR/威胁模型；不提前实现 |
-| EIM-O4 | MR + 架构评审 | API 侧 durable run ledger、单会话单活和 cancel/final CAS；Provider worker 继续只走内部 API/SSE | ⏸ | U11～U13 + 明确的 worker 重启恢复需求 | 不按 token 写库；DB 约束兜底单活；已接受取消不被迟到成功覆盖；未满足需求前不实现完整 workflow runtime |
+| EIM-O4 | MR + 架构评审 | Channel API 侧 durable run ledger、单会话单活和 cancel/final CAS；Provider worker 继续只走内部 API/SSE，不替代或复制 Canvas 目标 checkpoint runtime | ⏸ | U11～U13 + 明确的 `kill -9`/主机故障、跨实例取消或终态结果未知恢复需求 | 不按 token 写库；DB 约束兜底单活；已接受取消不被迟到成功覆盖；未满足需求前不实现完整 workflow runtime。正常可控重启的卡片终态化由 CHN-U16 解决，不构成启动本项的理由 |
 
 推荐 rollout：
 
@@ -321,7 +326,24 @@ EIM-C5 与 U0/U1 并行，不是前置依赖。
 
 ## 12. 当前任务推荐顺序
 
-第一批可启动候选（其中 C1 与 U0 会改同一执行契约，必须串行）：
+Channel 近期只走下面这条稳定性收口路径：
+
+```text
+U15 迁移/API 重启已完成，补 Dialog/Canvas 真实飞书 smoke
+  -> CHN-U16 优雅停机终态化 + 跨层 integration smoke
+  -> CHN-O9 最小可观测
+  -> 稳定浸泡
+  -> 用户恢复从约 2026-04-24 本地同步点逐 commit 跟进时，再启动 EIM-F5 / CHN-X14
+```
+
+CHN-U16 只保证正常、可控的 supervisor/worker 停机不会留下 queued/running 卡片；不恢复进程内
+队列或旧 action，不涵盖 `kill -9`、主机掉电、跨实例恢复和数据库终态不确定性。后者继续由挂起的
+EIM-O4 / CHN-O14 守门。CHN-U16、CHN-O9 均沿用 Channel 账本自己的 ID，不新造 EIM 映射。
+
+EIM-F5 / CHN-X14 仍是长期 upstream-first 的上游审计入口，但当前状态为挂起，不得因为文档已经
+登记就提前刷新滚动兼容基线、批量拉取上游或实现 Canvas execution port。
+
+其余可启动候选：
 
 ```text
 EIM-F1  lark-oapi patch 升级
@@ -329,7 +351,6 @@ EIM-F2  MCP v2 兼容测试
 EIM-F4  of_mcp FastMCP beta 升级
 EIM-I1  User 外部账号模型
 EIM-C1  Channel tolerate structured assertion
-EIM-U0  execution stream + ReplySession（与 C1 都会触碰 execution contract，不同 Agent 不并行）
 ```
 
 体验快速通道（不等待身份/MCP/SDK 迁移）：
@@ -371,3 +392,4 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 | 2026-08-10 | EIM-U12 / CHN-U14 | 完成权威终态快照 consumer/tolerate：typed completed 可选正文，runtime 严格校验/reasoning 过滤，`ask()` 权威替换；ReplySession 新增纯内存 `replace()`，Bridge 在取消屏障后 replace→complete，Buffered/Feishu 保持 Provider-neutral。producer 与 wire 本提交不变，等待 worker 部署后才 emit | MultiRAG / `feat(channel): tolerate authoritative reply snapshots (EIM-U12, CHN-U14)` | 四个 consumer/Bridge 文件 **97 passed**；覆盖新旧 wire、非法/空/推理快照、聚合替换、失败终态和 CardKit 高 sequence 覆盖；`make verify` unit **1758 passed** 且静态门禁全绿；producer/route 零 diff、`git diff --check` 通过 | Codex |
 | 2026-08-10 | EIM-U12 / CHN-U14 | generation 8 worker 先完成 consumer 部署后启用 producer：Dialog 以 transient 配置 + detached transcript 直接调用既有 `async_chat()`，终态 existing CAS UPDATE / new INSERT，提交成功后在 `message_completed.content` emit 权威正文；公开 executor 关闭会立即传递到 driver/模型流。Canvas candidate CAS 不变；terminal commit barrier 后的跨存储不确定性留 EIM-O4 | MultiRAG / `feat(channel): emit detached Dialog snapshots (EIM-U12, CHN-U14)` | producer/consumer 与真库定向 **144 passed**；`make verify` unit **1764 passed**、全部静态门禁绿；完整 `make integration` **26 passed**；MultiRAG `conversation_service.py` / `dialog_service.py` 零 diff；`git diff --check` 通过 | Codex |
 | 2026-08-10 | EIM-U13 / CHN-U15 | Canvas 使用 MultiRAG 自有 sidecar 显式管理候选 owner/target/public session/expiry；新会话与元数据同事务创建，候选在发布前移出普通目标会话命名空间，终态按固定锁序恢复公开身份或清理。API 侧启动及周期运行有界 `SKIP LOCKED` GC，兼容回收遗留 Canvas/Dialog marker；请求热路径不再 prune，worker 继续无数据库。迁移兼容 model-first 启动并严格拒绝不兼容既有表，MultiRAG Canvas/Dialog 同步区零 diff | MultiRAG / `refactor(channel): isolate Canvas candidate lifecycle (EIM-U13, CHN-U15)` | 定向单元 **97 passed**、真 PostgreSQL **23 passed**；`make verify` unit **1781 passed** 且全部静态门禁绿；完整 `make integration` **35 passed**；单 Alembic head `e4f6a8b0c2d4`；`git diff --check` 通过 | Codex |
+| 2026-08-10 | EIM-F5 / CHN-X14 | 定案 RAGFlow upstream-first 的 Canvas/Channel 长期收敛策略：现代项目提供 terminal publish、CAS、run/history 分离、幂等和副作用门禁等不变量，不替换上游 Canvas 内核。登记逐 commit 只读审计入口并明确保持挂起：U15 迁移/API 重启已确认，先补真实 smoke，再完成 CHN-U16、CHN-O9 和稳定浸泡；待用户恢复从约 2026-04-24 本地同步点逐 commit 跟进后再启动。历史来源、滚动兼容与单次移植三层版本语义不变，EIM-O4 继续挂起 | MultiRAG docs / 本次变更 | CHN-ADR-08、执行架构与两份账本双向 ID/链接检查；`make verify` | Codex |
