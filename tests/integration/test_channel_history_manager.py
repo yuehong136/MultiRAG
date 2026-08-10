@@ -3,18 +3,25 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
-from sqlalchemy import event, null, update
+import sqlalchemy as sa
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+from alembic.script import ScriptDirectory
+from sqlalchemy import delete, event, null, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
-from sqlalchemy.orm import object_session
+from sqlalchemy.orm import Session, object_session
 
 from api.channel_execution.errors import TargetExecutionFailedError
 from api.channel_execution.executors import SqlAlchemyDialogTargetDriver
 from api.channel_execution.history import SqlAlchemyCanvasHistoryTransaction, SqlAlchemyDialogHistoryTransaction
 from api.channel_execution.models import ExecutionOperation
-from api.db.db_models import API4Conversation, Conversation, Dialog
+from api.db.db_models import API4Conversation, ChannelCanvasCandidate, Conversation, Dialog
+from api.db.services.api_service import API4ConversationService
 
 
 def _dialog_messages() -> list[dict[str, str]]:
@@ -33,6 +40,20 @@ def _dialog_messages() -> list[dict[str, str]]:
             "id": "turn-2",
         },
     ]
+
+
+def _listed_canvas_session_ids(sync_db: Session, target_id: str) -> set[str]:
+    _total, rows = API4ConversationService.get_list(
+        sync_db,
+        target_id,
+        "tenant-for-list-contract",
+        1,
+        100,
+        "create_time",
+        False,
+        include_dsl=False,
+    )
+    return {str(row["id"]) for row in rows}
 
 
 def _safe_canvas_dsl() -> dict[str, object]:
@@ -396,11 +417,21 @@ async def test_canvas_regenerate_projects_visible_history_before_execution(
         assert candidate is not None
         assert candidate.user_id == candidate.id
         assert candidate.exp_user_id == candidate.id
+        metadata = (await db.scalars(select(ChannelCanvasCandidate).where(ChannelCanvasCandidate.candidate_session_id == candidate.id))).one()
+        assert metadata.owner_token == prepared.owner_token
+        assert metadata.target_id == prepared.target_id == "canvas-1"
+        assert metadata.public_session_id == public_id
+        assert candidate.id not in await db.run_sync(lambda sync_db: _listed_canvas_session_ids(sync_db, "canvas-1"))
         assert candidate.dsl["history"] == [
             ["user", "previous"],
             ["assistant", "previous answer"],
         ]
 
+        # Presentation markers are not ownership credentials. The private
+        # dialog scope keeps this row out of normal target list/delete paths.
+        candidate.name = "marker-was-changed"
+        candidate.user_id = "identity-was-changed"
+        candidate.exp_user_id = None
         candidate.message = [
             *candidate.message,
             *[
@@ -420,6 +451,216 @@ async def test_canvas_regenerate_projects_visible_history_before_execution(
         assert public.message[-1]["content"] == "new canvas answer"
         assert public.dsl["history"][-1] == ["assistant", "new canvas answer"]
         assert await db.get(API4Conversation, candidate.id) is None
+        assert await db.get(ChannelCanvasCandidate, metadata.id) is None
+
+
+async def test_canvas_new_session_is_registered_atomically_and_restores_publish_identity(
+    bootstrapped_async_engine: AsyncEngine,
+) -> None:
+    factory = async_sessionmaker(bootstrapped_async_engine, expire_on_commit=False)
+
+    async with factory() as db:
+        transaction = SqlAlchemyCanvasHistoryTransaction(db)
+        prepared = await transaction.prepare(
+            target_id="canvas-new",
+            session_id=None,
+            question="hello",
+            operation="message",
+        )
+
+        def _core_save(sync_db: Session) -> str:
+            candidate = API4ConversationService.save(
+                sync_db,
+                id="canvas-new-candidate-00000000001",
+                name="publish title",
+                dialog_id="canvas-new",
+                user_id="principal-new",
+                exp_user_id="external-new",
+                message=[],
+                reference=[],
+                source="agent",
+                dsl=_safe_canvas_dsl(),
+            )
+            return candidate.id
+
+        candidate_id = await db.run_sync(_core_save)
+        candidate = await db.get(API4Conversation, candidate_id)
+        assert candidate is not None
+        assert candidate.name == "[channel-candidate]"
+        assert candidate.user_id == candidate.id
+        assert candidate.exp_user_id == candidate.id
+
+        metadata = (await db.scalars(select(ChannelCanvasCandidate).where(ChannelCanvasCandidate.owner_token == prepared.owner_token))).one()
+        assert metadata.candidate_session_id == candidate_id
+        assert metadata.publish_user_id == "principal-new"
+        assert metadata.publish_exp_user_id == "external-new"
+        assert metadata.publish_name == "publish title"
+        assert candidate_id not in await db.run_sync(lambda sync_db: _listed_canvas_session_ids(sync_db, "canvas-new"))
+
+        candidate.message = [
+            {"role": "user", "content": "hello", "id": "new-turn"},
+            {
+                "role": "assistant",
+                "content": "<think>private</think>published answer",
+                "id": "new-turn",
+            },
+        ]
+        await db.commit()
+
+        assert await transaction.commit(prepared, candidate_id) == candidate_id
+        published = await db.get(API4Conversation, candidate_id)
+        assert published is not None
+        assert published.name == "publish title"
+        assert published.user_id == "principal-new"
+        assert published.exp_user_id == "external-new"
+        assert published.message[-1]["content"] == "published answer"
+        assert await db.get(ChannelCanvasCandidate, metadata.id) is None
+        assert candidate_id in await db.run_sync(lambda sync_db: _listed_canvas_session_ids(sync_db, "canvas-new"))
+
+
+async def test_canvas_owner_token_fences_commit_and_abort(
+    bootstrapped_async_engine: AsyncEngine,
+) -> None:
+    factory = async_sessionmaker(bootstrapped_async_engine, expire_on_commit=False)
+    public_id = "canvas-owner-public-00000000001"
+
+    async with factory() as db:
+        db.add(
+            API4Conversation(
+                id=public_id,
+                name="public",
+                dialog_id="canvas-owner",
+                user_id="principal-owner",
+                message=_dialog_messages()[1:],
+                reference=[],
+                source="agent",
+                dsl=_safe_canvas_dsl(),
+            )
+        )
+        await db.commit()
+        transaction = SqlAlchemyCanvasHistoryTransaction(db)
+        prepared = await transaction.prepare(
+            target_id="canvas-owner",
+            session_id=public_id,
+            question="follow up",
+            operation="message",
+        )
+        candidate_id = prepared.execution_session_id
+        assert candidate_id is not None
+        candidate = await db.get(API4Conversation, candidate_id)
+        assert candidate is not None
+        candidate.message = [
+            *candidate.message,
+            {"role": "user", "content": "follow up", "id": "owner-turn"},
+            {"role": "assistant", "content": "answer", "id": "owner-turn"},
+        ]
+        await db.commit()
+
+        forged = replace(prepared, owner_token="wrong-owner-token-000000000000")
+        with pytest.raises(TargetExecutionFailedError):
+            await transaction.commit(forged, candidate_id)
+        await transaction.abort(forged, candidate_id)
+        assert await db.get(API4Conversation, candidate_id) is not None
+        assert await db.scalar(select(ChannelCanvasCandidate.id).where(ChannelCanvasCandidate.owner_token == prepared.owner_token)) is not None
+
+        await transaction.abort(prepared, candidate_id)
+        assert await db.get(API4Conversation, candidate_id) is None
+        assert await db.get(API4Conversation, public_id) is not None
+
+
+async def test_canvas_abort_finds_core_candidate_before_first_frame(
+    bootstrapped_async_engine: AsyncEngine,
+) -> None:
+    factory = async_sessionmaker(bootstrapped_async_engine, expire_on_commit=False)
+    candidate_id = "canvas-pre-frame-000000000000001"
+    retry_candidate_id = "canvas-pre-frame-retry-000000001"
+
+    async with factory() as db:
+        transaction = SqlAlchemyCanvasHistoryTransaction(db)
+        prepared = await transaction.prepare(
+            target_id="canvas-pre-frame",
+            session_id=None,
+            question="hello",
+            operation="message",
+        )
+
+        def _commit_then_fail(sync_db: Session) -> None:
+            sync_db.add(
+                API4Conversation(
+                    id=candidate_id,
+                    dialog_id="canvas-pre-frame",
+                    user_id="principal-pre-frame",
+                    message=[],
+                    reference=[],
+                    source="agent",
+                    dsl=_safe_canvas_dsl(),
+                )
+            )
+            sync_db.commit()
+            raise RuntimeError("simulated refresh failure after commit")
+
+        with pytest.raises(RuntimeError, match="refresh failure"):
+            await db.run_sync(_commit_then_fail)
+        assert await db.get(API4Conversation, candidate_id) is not None
+        assert await db.scalar(select(ChannelCanvasCandidate.id).where(ChannelCanvasCandidate.owner_token == prepared.owner_token)) is not None
+
+        def _core_retry(sync_db: Session) -> None:
+            sync_db.add(
+                API4Conversation(
+                    id=retry_candidate_id,
+                    dialog_id="canvas-pre-frame",
+                    user_id="principal-pre-frame",
+                    message=[],
+                    reference=[],
+                    source="agent",
+                    dsl=_safe_canvas_dsl(),
+                )
+            )
+            sync_db.commit()
+
+        with pytest.raises(RuntimeError, match="cannot be reused"):
+            await db.run_sync(_core_retry)
+
+        await transaction.abort(prepared, None)
+        assert await db.get(API4Conversation, candidate_id) is None
+        assert await db.get(API4Conversation, retry_candidate_id) is None
+        assert await db.scalar(select(ChannelCanvasCandidate.id).where(ChannelCanvasCandidate.owner_token == prepared.owner_token)) is None
+
+
+async def test_canvas_core_insert_failure_leaves_no_unowned_candidate(
+    bootstrapped_async_engine: AsyncEngine,
+) -> None:
+    factory = async_sessionmaker(bootstrapped_async_engine, expire_on_commit=False)
+    candidate_id = "canvas-insert-fail-0000000000001"
+
+    async with factory() as db:
+        transaction = SqlAlchemyCanvasHistoryTransaction(db)
+        prepared = await transaction.prepare(
+            target_id="canvas-insert-fail",
+            session_id=None,
+            question="hello",
+            operation="message",
+        )
+
+        def _invalid_core_insert(sync_db: Session) -> None:
+            sync_db.add(
+                API4Conversation(
+                    id=candidate_id,
+                    dialog_id="canvas-insert-fail",
+                    user_id=None,
+                    message=[],
+                    reference=[],
+                    source="agent",
+                    dsl=_safe_canvas_dsl(),
+                )
+            )
+            sync_db.commit()
+
+        with pytest.raises(RuntimeError, match="publish identity"):
+            await db.run_sync(_invalid_core_insert)
+        await transaction.abort(prepared, None)
+        assert await db.get(API4Conversation, candidate_id) is None
+        assert await db.scalar(select(ChannelCanvasCandidate.id).where(ChannelCanvasCandidate.owner_token == prepared.owner_token)) is None
 
 
 async def test_dialog_prepare_leaves_legacy_candidate_cleanup_outside_hot_path(
@@ -465,5 +706,122 @@ async def test_dialog_prepare_leaves_legacy_candidate_cleanup_outside_hot_path(
         assert prepared.public_session_id
 
     async with factory() as verification_db:
-        assert await verification_db.get(Conversation, expired_id) is not None
-        assert await verification_db.get(Conversation, active_id) is not None
+        try:
+            assert await verification_db.get(Conversation, expired_id) is not None
+            assert await verification_db.get(Conversation, active_id) is not None
+        finally:
+            await verification_db.rollback()
+            await verification_db.execute(delete(Conversation).where(Conversation.id.in_([expired_id, active_id])))
+            await verification_db.commit()
+
+
+async def test_canvas_public_table_has_no_candidate_metadata_columns(
+    bootstrapped_async_engine: AsyncEngine,
+) -> None:
+    async with bootstrapped_async_engine.connect() as connection:
+
+        def _column_names(sync_connection: sa.Connection) -> set[str]:
+            inspector = sa.inspect(sync_connection)
+            return {
+                column["name"]
+                for column in inspector.get_columns(
+                    API4Conversation.__tablename__,
+                    schema="usr_ai",
+                )
+            }
+
+        columns = await connection.run_sync(_column_names)
+
+    assert not columns.intersection(
+        {
+            "candidate_session_id",
+            "owner_token",
+            "public_session_id",
+            "source_fingerprint",
+            "state",
+            "expires_at",
+            "publish_user_id",
+            "publish_exp_user_id",
+            "publish_name",
+        }
+    )
+
+
+def test_channel_canvas_candidate_migration_matches_orm(
+    pg_scratch_engine: sa.Engine,
+    alembic_cfg: Any,
+) -> None:
+    revision = ScriptDirectory.from_config(alembic_cfg).get_revision("e4f6a8b0c2d4")
+    assert revision is not None
+    migration = revision.module
+    schema = "ccm_migration"
+    original_schema = migration.SCHEMA
+    original_op = migration.op
+
+    try:
+        with pg_scratch_engine.begin() as connection:
+            connection.execute(sa.text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+            connection.execute(sa.text(f'CREATE SCHEMA "{schema}"'))
+            connection.execute(sa.text(f'CREATE TABLE "{schema}"."t_ai_api4conversations" (id VARCHAR(32) PRIMARY KEY)'))
+            migration.SCHEMA = schema
+            migration.op = Operations(MigrationContext.configure(connection))
+            migration.upgrade()
+
+            inspector = sa.inspect(connection)
+            table = ChannelCanvasCandidate.__table__
+            columns = {column["name"]: column for column in inspector.get_columns(migration.TABLE, schema=schema)}
+            assert set(columns) == {column.name for column in table.columns}
+            for column in table.columns:
+                assert columns[column.name]["nullable"] is column.nullable
+                expected_length = getattr(column.type, "length", None)
+                if expected_length is not None:
+                    assert columns[column.name]["type"].length == expected_length
+
+            assert {
+                constraint["name"]
+                for constraint in inspector.get_unique_constraints(
+                    migration.TABLE,
+                    schema=schema,
+                )
+            } == {
+                "uq_channel_canvas_candidates_owner",
+                "uq_channel_canvas_candidates_session",
+            }
+            assert {
+                constraint["name"]
+                for constraint in inspector.get_check_constraints(
+                    migration.TABLE,
+                    schema=schema,
+                )
+            } == {
+                "ck_channel_canvas_candidates_distinct_sessions",
+                "ck_channel_canvas_candidates_identity",
+                "ck_channel_canvas_candidates_state",
+            }
+            indexes = {index["name"]: tuple(index["column_names"]) for index in inspector.get_indexes(migration.TABLE, schema=schema) if not index.get("duplicates_constraint")}
+            assert indexes == {
+                "ix_channel_canvas_candidates_state_expiry": (
+                    "state",
+                    "expires_at",
+                    "candidate_session_id",
+                ),
+                f"ix_{schema}_t_ai_channel_canvas_candidates_create_date": ("create_date",),
+                f"ix_{schema}_t_ai_channel_canvas_candidates_create_time": ("create_time",),
+                f"ix_{schema}_t_ai_channel_canvas_candidates_update_date": ("update_date",),
+                f"ix_{schema}_t_ai_channel_canvas_candidates_update_time": ("update_time",),
+            }
+            foreign_keys = inspector.get_foreign_keys(migration.TABLE, schema=schema)
+            assert len(foreign_keys) == 1
+            assert foreign_keys[0]["constrained_columns"] == ["candidate_session_id"]
+            assert foreign_keys[0]["referred_table"] == "t_ai_api4conversations"
+            assert foreign_keys[0]["options"].get("ondelete") == "CASCADE"
+
+            migration.downgrade()
+            assert not sa.inspect(connection).has_table(migration.TABLE, schema=schema)
+            connection.execute(sa.text(f'CREATE TABLE "{schema}"."{migration.TABLE}" (id VARCHAR(32) PRIMARY KEY)'))
+            with pytest.raises(RuntimeError, match="incompatible columns"):
+                migration.upgrade()
+            connection.execute(sa.text(f'DROP SCHEMA "{schema}" CASCADE'))
+    finally:
+        migration.SCHEMA = original_schema
+        migration.op = original_op

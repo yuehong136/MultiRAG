@@ -10,6 +10,8 @@
 """
 
 import sqlalchemy as sa
+from alembic import command
+from alembic.config import Config
 from alembic.script import ScriptDirectory
 
 from api.db.db_models import Base
@@ -42,6 +44,27 @@ def test_fresh_install_is_stamped_to_head(bootstrapped_engine, alembic_cfg):
     head = ScriptDirectory.from_config(alembic_cfg).get_current_head()
     with bootstrapped_engine.connect() as conn:
         version = conn.execute(sa.text("SELECT version_num FROM usr_ai.alembic_version")).scalar_one()
+    assert version == head
+
+
+def test_model_first_existing_database_can_upgrade_candidate_revision(
+    bootstrapped_engine: sa.Engine,
+    alembic_cfg: Config,
+) -> None:
+    """Model-first startup accepts the exact sidecar instead of recreating it."""
+
+    head = ScriptDirectory.from_config(alembic_cfg).get_current_head()
+    cfg = Config(alembic_cfg.config_file_name)
+    cfg.set_main_option(
+        "script_location",
+        alembic_cfg.get_main_option("script_location"),
+    )
+    with bootstrapped_engine.begin() as connection:
+        connection.execute(sa.text("UPDATE usr_ai.alembic_version SET version_num = 'c1dbaa153d0a'"))
+        cfg.attributes["connection"] = connection
+        command.upgrade(cfg, "head")
+        version = connection.execute(sa.text("SELECT version_num FROM usr_ai.alembic_version")).scalar_one()
+
     assert version == head
 
 

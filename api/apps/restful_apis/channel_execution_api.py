@@ -9,15 +9,20 @@ the shared application bootstrap solely for this endpoint.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Path, Response, status
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Path, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.channel_capabilities import EffectiveReplyCapabilities, RunCapabilityPolicy, resolve_effective_reply_capabilities
 from api.channel_control.repository import SqlAlchemyChannelRepository
+from api.channel_execution.candidate_gc import build_channel_candidate_gc_worker
 from api.channel_execution.dependencies import (
     get_binding_capability_resolver,
     get_channel_conversation_store,
@@ -32,7 +37,99 @@ from api.channel_execution.service import ChannelExecutionService, PublishedTarg
 from api.channel_providers.registry import UnknownChannelProvider, provider_spec
 from api.db.db_models import get_async_db
 
-router = APIRouter()
+LOGGER = logging.getLogger(__name__)
+_CANDIDATE_GC_STATE_KEY = "_multirag_channel_candidate_gc"
+
+
+@dataclass(slots=True)
+class _CandidateGCLifecycleHandle:
+    stop_event: asyncio.Event
+    task: asyncio.Task[None]
+
+
+def _observe_candidate_gc_task_exit(
+    task: asyncio.Task[None],
+    *,
+    stop_event: asyncio.Event,
+) -> None:
+    """Consume and report an unexpected terminal task state immediately."""
+
+    if stop_event.is_set():
+        return
+    if task.cancelled():
+        LOGGER.error(
+            "channel_execution_event=candidate_gc_task_exit result=failed error_code=CANDIDATE_GC_TASK_CANCELLED",
+        )
+        return
+    error = task.exception()
+    if error is None:
+        LOGGER.error(
+            "channel_execution_event=candidate_gc_task_exit result=failed error_code=CANDIDATE_GC_TASK_STOPPED",
+        )
+        return
+    LOGGER.error(
+        "channel_execution_event=candidate_gc_task_exit result=failed error_code=CANDIDATE_GC_TASK_CRASHED error_type=%s",
+        type(error).__name__,
+    )
+
+
+@asynccontextmanager
+async def _channel_execution_lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Own exactly one API-local candidate collector for this application."""
+
+    existing = getattr(app.state, _CANDIDATE_GC_STATE_KEY, None)
+    if isinstance(existing, _CandidateGCLifecycleHandle) and not existing.task.done():
+        # Defensive only: current route discovery includes this router once, but
+        # a future nested router must not double the database sweep.
+        yield
+        return
+
+    worker = build_channel_candidate_gc_worker()
+    if worker is None:
+        yield
+        return
+
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(
+        worker.run(stop_event),
+        name="multirag-channel-candidate-gc",
+    )
+    task.add_done_callback(
+        lambda completed: _observe_candidate_gc_task_exit(
+            completed,
+            stop_event=stop_event,
+        )
+    )
+    handle = _CandidateGCLifecycleHandle(stop_event, task)
+    setattr(app.state, _CANDIDATE_GC_STATE_KEY, handle)
+    LOGGER.info(
+        "channel_execution_event=candidate_gc_start result=ok error_code=",
+    )
+    try:
+        yield
+    finally:
+        stop_event.set()
+        task.cancel()
+        stopped_cleanly = True
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            stopped_cleanly = False
+            LOGGER.warning(
+                "channel_execution_event=candidate_gc_stop result=failed error_code=CANDIDATE_GC_STOP_FAILED error_type=%s",
+                type(exc).__name__,
+            )
+        if getattr(app.state, _CANDIDATE_GC_STATE_KEY, None) is handle:
+            delattr(app.state, _CANDIDATE_GC_STATE_KEY)
+        if stopped_cleanly:
+            LOGGER.info(
+                "channel_execution_event=candidate_gc_stop result=ok error_code=",
+            )
+
+
+router = APIRouter(lifespan=_channel_execution_lifespan)
 
 
 def _encode_sse(event: ExecutionEvent) -> str:

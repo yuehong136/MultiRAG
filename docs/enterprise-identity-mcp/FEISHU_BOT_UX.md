@@ -1,8 +1,9 @@
 # 飞书机器人对话体验设计与实施基线
 
 > 状态：设计基线；EIM-U0/CHN-X9 的执行流与 buffered ReplySession、
-> EIM-U1/CHN-U8 的飞书 CardKit 渐进式回复均已实现。
-> 最后核验：2026-08-09（Asia/Shanghai）。
+> EIM-U1/CHN-U8 的飞书 CardKit 渐进式回复、EIM-U11/CHN-X13、EIM-U12/CHN-U14 与
+> EIM-U13/CHN-U15 的目标事务均已实现。
+> 最后核验：2026-08-10（Asia/Shanghai）。
 > 适用范围：MultiRAG `api/channels/`、`api/channel_execution/`、飞书企业自建应用，以及后续
 > 与 `of_mcp` 的确认交互。
 
@@ -40,7 +41,7 @@ Agent message_delta
 
 | 层 | 当前行为 | 直接后果 |
 |---|---|---|
-| `api/channel_execution` | executor 产生现有 SSE；Dialog/Canvas 各有私有 driver/history transaction；私有 preflight 计算 Target 能力 | execution wire 不承载目标差异；新增目标不修改 Provider |
+| `api/channel_execution` | executor 产生现有 SSE；Dialog/Canvas 各有私有 driver/history transaction；Canvas sidecar 显式持有候选所有权；私有 preflight 计算 Target 能力 | execution wire 不承载目标差异；新增目标不修改 Provider；候选 GC 只在 API 生命周期运行 |
 | `api/channels/runtime_client.py` | `stream()` 是执行 HTTP/SSE 的唯一路径；worker 启动另取一次脱敏 capability envelope | 正常消息、delta、卡片 patch 不查目标数据库；旧 API 降级为无交互 buffered reply |
 | `api/channels/binding_bridge.py` | 按能力交集创建 queued/running/final 状态，只签发允许的 cancel/regenerate/retry/feedback action ID | 渲染与回调二次校验；完成后替换与失败后重试语义分开 |
 | `api/channels/core/base.py` | `Channel.begin_reply()` 默认 buffered；`ReplyContext` 携带状态、动作与最终能力 | 普通 Provider 完成时只发一条文本，支持逐 Provider 覆盖 |
@@ -321,6 +322,16 @@ RAG 来源必须通过 `references_ready` 结构化事件输出，而不是从�
 > 带附件或 Memory 保存的 Message 同时关闭 regenerate/retry，纯文本 Message 保持可用。后续由
 > [MultiRAG Channel 执行架构](../channel-program/EXECUTION_ARCHITECTURE.md) 分阶段让 Dialog 使用内存
 > 工作副本 + 终态 CAS，Canvas 在无落库执行端口出现前保留专属候选。
+>
+> **2026-08-10 EIM-U12 / CHN-U14、EIM-U13 / CHN-U15 已实现**：Dialog 已改为 detached working
+> copy + terminal CAS；Canvas 保留目标私有 candidate CAS，但所有权不再依靠会话哨兵，而由
+> MultiRAG sidecar 显式记录。新 Canvas 会话行与 metadata 在同一次 flush 中捕获，现有会话的
+> 候选行与 metadata 在同一短事务创建；候选期 `dialog_id` 位于自身私有命名空间，普通 target
+> list/delete-all 不会发现或误删，发布新会话时才恢复真实 target；公开 Dialog/Canvas 表不增加
+> Channel 列。TTL 回收已从
+> 每条消息热路径移到 API router lifespan，启动即执行并周期运行有界 `SKIP LOCKED` batch，同时
+> 只按完整旧哨兵兼容回收遗留 Canvas/Dialog 候选。TTL 只是 crash orphan 安全网；worker 仍无数据库，
+> COMMIT 结果不明及提交后卡片交付失败仍不伪装成回滚，CHN-O14 保持挂起。
 
 ---
 
@@ -521,7 +532,7 @@ SLO 是上线初始目标，真实压测和灰度后可调整；调整必须写�
 | EIM-U4 | CHN-U9 | follow-up queue、纯生成取消、重新生成、反馈 | U1 |
 | EIM-U11 | CHN-X13 | ✅ Provider/Target capabilities、启动预取与目标私有 driver | U4 |
 | EIM-U12 | CHN-U14 | ✅ 权威快照 consumer 已部署；Dialog detached working copy + 终态 CAS emit | U11 |
-| EIM-U13 | CHN-U15 | Canvas 专属候选与周期 GC | U11、U12 |
+| EIM-U13 | CHN-U15 | ✅ Canvas sidecar 所有权、同 flush 新会话捕获与 API 周期 GC | U11、U12 |
 | EIM-U3 | CHN-U10 | mention-only 群聊、话题、thread session | U1、U2、C3、O2 |
 | EIM-U5 | CHN-X10 | references/artifacts 结构化事件与渲染 | U0、P2 |
 | EIM-U6 | CHN-X11 | 图片/文件/语音输入输出 | U0、U5、C3、附件安全基建 |

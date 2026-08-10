@@ -13,6 +13,8 @@ class PreparedCanvasExecution:
     public_session_id: str | None
     execution_session_id: str | None
     source_fingerprint: str | None
+    owner_token: str
+    target_id: str
 
 
 @dataclass(frozen=True, slots=True)

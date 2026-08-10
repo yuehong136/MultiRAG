@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 
+from api.channel_execution.candidate_metadata import candidate_expires_at
 from api.channel_execution.history import (
     _prepare_canvas_dsl,
     _rewind_latest_turn,
@@ -155,3 +158,24 @@ def test_canvas_replay_allows_a_plain_text_message_component() -> None:
     }
 
     assert canvas_regeneration_is_safe(dsl) is True
+
+
+def test_canvas_candidate_expiry_uses_typed_retention_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = SimpleNamespace(
+        channels=SimpleNamespace(
+            execution=SimpleNamespace(
+                candidate_gc=SimpleNamespace(max_age_seconds=900),
+            )
+        )
+    )
+    monkeypatch.setattr(
+        "api.channel_execution.candidate_metadata.get_app_config",
+        lambda: config,
+    )
+
+    expression = candidate_expires_at()
+    compiled = expression.compile()
+
+    assert timedelta(seconds=900) in compiled.params.values()

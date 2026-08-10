@@ -310,6 +310,65 @@ class TestChannelControlConfig:
         assert [key.get_secret_value() for key in control.secret_encryption_key] == [active_key, retired_key]
 
 
+class TestChannelCandidateGCConfig:
+    def test_defaults_are_bounded_and_enabled(self) -> None:
+        candidate_gc = AppConfig().channels.execution.candidate_gc
+
+        assert candidate_gc.enabled is True
+        assert candidate_gc.max_age_seconds == 86_400
+        assert candidate_gc.interval_seconds == 3_600
+        assert candidate_gc.batch_size == 100
+        assert candidate_gc.max_batches_per_cycle == 4
+        assert candidate_gc.jitter_ratio == 0.1
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("max_age_seconds", 299),
+            ("interval_seconds", 9),
+            ("batch_size", 0),
+            ("batch_size", 1_001),
+            ("max_batches_per_cycle", 0),
+            ("jitter_ratio", 0.51),
+        ],
+    )
+    def test_resource_limits_fail_fast(self, field: str, value: int | float) -> None:
+        with pytest.raises(ValidationError, match=rf"channels\.execution\.candidate_gc\.{field}"):
+            AppConfig.model_validate(
+                {
+                    "channels": {
+                        "execution": {
+                            "candidate_gc": {field: value},
+                        }
+                    }
+                }
+            )
+
+    def test_nested_environment_overlay(self, conf_dir: Callable[[str, str], None], monkeypatch: pytest.MonkeyPatch) -> None:
+        conf_dir(SERVICE_CONF, "{}\n")
+        monkeypatch.setenv("MULTIRAG_CHANNELS__EXECUTION__CANDIDATE_GC__ENABLED", "false")
+        monkeypatch.setenv("MULTIRAG_CHANNELS__EXECUTION__CANDIDATE_GC__BATCH_SIZE", "25")
+
+        candidate_gc = load_app_config().channels.execution.candidate_gc
+
+        assert candidate_gc.enabled is False
+        assert candidate_gc.batch_size == 25
+
+    def test_retention_must_exceed_every_provider_execution_timeout(self) -> None:
+        with pytest.raises(
+            ValidationError,
+            match=r"channels\.execution\.candidate_gc\.max_age_seconds must be greater",
+        ):
+            AppConfig.model_validate(
+                {
+                    "channels": {
+                        "execution": {"candidate_gc": {"max_age_seconds": 300}},
+                        "dingtalk": {"total_timeout_seconds": 300},
+                    }
+                }
+            )
+
+
 class TestFeishuEnvironmentOverlay:
     def test_nested_environment_values_build_typed_config(self, conf_dir: Callable[[str, str], None], monkeypatch: pytest.MonkeyPatch) -> None:
         conf_dir(SERVICE_CONF, "{}\n")

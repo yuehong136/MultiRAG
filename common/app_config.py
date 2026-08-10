@@ -482,12 +482,39 @@ class DingTalkChannelConfig(_Section):
         return self
 
 
+class ChannelCandidateGCConfig(_Section):
+    """API 进程负责的 Canvas 私有候选清理策略。"""
+
+    enabled: bool = True
+    max_age_seconds: int = Field(default=86_400, ge=300, le=2_592_000)
+    interval_seconds: int = Field(default=3_600, ge=10, le=86_400)
+    batch_size: int = Field(default=100, ge=1, le=1_000)
+    max_batches_per_cycle: int = Field(default=4, ge=1, le=100)
+    jitter_ratio: float = Field(default=0.1, ge=0.0, le=0.5)
+
+
+class ChannelExecutionConfig(_Section):
+    """Channel 目标执行所需的 API 侧维护配置。"""
+
+    candidate_gc: ChannelCandidateGCConfig = Field(default_factory=ChannelCandidateGCConfig)
+
+
 class ChannelsConfig(_Section):
     """外部消息 Channel 配置。"""
 
     control: ChannelControlConfig = Field(default_factory=ChannelControlConfig)
+    execution: ChannelExecutionConfig = Field(default_factory=ChannelExecutionConfig)
     feishu: FeishuChannelConfig = Field(default_factory=FeishuChannelConfig)
     dingtalk: DingTalkChannelConfig = Field(default_factory=DingTalkChannelConfig)
+
+    @model_validator(mode="after")
+    def validate_candidate_retention_exceeds_execution_timeout(self) -> Self:
+        """GC 不得把仍可能处于硬执行时限内的候选当作孤儿。"""
+
+        longest_execution = max(self.feishu.total_timeout_seconds, self.dingtalk.total_timeout_seconds)
+        if self.execution.candidate_gc.max_age_seconds <= longest_execution:
+            raise ValueError("channels.execution.candidate_gc.max_age_seconds must be greater than every provider total_timeout_seconds")
+        return self
 
 
 # ---------------------------------------------------------------------------

@@ -11,15 +11,22 @@ from __future__ import annotations
 
 import hashlib
 import json
-import time
 from copy import deepcopy
 from typing import Any
 
-from sqlalchemy import delete, or_, select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.types import JSON as SQLAlchemyJSON
 
+from api.channel_execution.candidate_metadata import (
+    CANVAS_CANDIDATE_LEGACY_NAME,
+    CANVAS_CANDIDATE_STATE_ACTIVE,
+    CANVAS_CANDIDATE_STATE_FINALIZING,
+    arm_new_canvas_candidate_capture,
+    candidate_expires_at,
+    clear_new_canvas_candidate_capture,
+)
 from api.channel_execution.errors import TargetExecutionFailedError
 from api.channel_execution.models import ExecutionOperation
 from api.channel_execution.reasoning import strip_reasoning
@@ -29,7 +36,12 @@ from api.channel_execution.session_models import (
     PreparedCanvasExecution,
     PreparedDialogExecution,
 )
-from api.db.db_models import API4Conversation, Conversation, normalize_update_data
+from api.db.db_models import (
+    API4Conversation,
+    ChannelCanvasCandidate,
+    Conversation,
+    normalize_update_data,
+)
 from common.misc_utils import get_uuid
 
 _REGENERATE_SAFE_COMPONENTS = {
@@ -53,9 +65,6 @@ _REGENERATE_SAFE_COMPONENTS = {
     "VariableAggregator",
     "VariableAssigner",
 }
-
-_CANDIDATE_NAME = "[channel-candidate]"
-_CANDIDATE_MAX_AGE_MS = 24 * 60 * 60 * 1000
 
 
 def _sanitize_messages(messages: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -210,11 +219,25 @@ class SqlAlchemyCanvasHistoryTransaction:
         question: str,
         operation: ExecutionOperation,
     ) -> PreparedCanvasExecution:
-        await _prune_stale_candidates(self._db, API4Conversation, target_id)
+        # Revision validation may have opened a read transaction. Candidate
+        # creation owns a short, independent transaction before the long stream.
+        await self._db.rollback()
+        owner_token = get_uuid()
         if session_id is None:
             if operation == "regenerate":
                 raise LookupError("A session is required for regeneration")
-            return PreparedCanvasExecution(None, None, None)
+            arm_new_canvas_candidate_capture(
+                self._db,
+                owner_token=owner_token,
+                target_id=target_id,
+            )
+            return PreparedCanvasExecution(
+                public_session_id=None,
+                execution_session_id=None,
+                source_fingerprint=None,
+                owner_token=owner_token,
+                target_id=target_id,
+            )
 
         source = await self._db.get(API4Conversation, session_id)
         if source is None or source.dialog_id != target_id:
@@ -231,8 +254,8 @@ class SqlAlchemyCanvasHistoryTransaction:
         candidate_id = get_uuid()
         candidate = API4Conversation(
             id=candidate_id,
-            name=_CANDIDATE_NAME,
-            dialog_id=source.dialog_id,
+            name=CANVAS_CANDIDATE_LEGACY_NAME,
+            dialog_id=candidate_id,
             user_id=candidate_id,
             exp_user_id=candidate_id,
             message=messages,
@@ -246,12 +269,32 @@ class SqlAlchemyCanvasHistoryTransaction:
             errors=source.errors,
             version_title=source.version_title,
         )
-        self._db.add(candidate)
+        source_fingerprint = _canvas_fingerprint(source)
+        self._db.add_all(
+            [
+                candidate,
+                ChannelCanvasCandidate(
+                    id=get_uuid(),
+                    candidate_session_id=candidate_id,
+                    owner_token=owner_token,
+                    target_id=target_id,
+                    public_session_id=session_id,
+                    source_fingerprint=source_fingerprint,
+                    state=CANVAS_CANDIDATE_STATE_ACTIVE,
+                    expires_at=candidate_expires_at(),
+                    publish_user_id=None,
+                    publish_exp_user_id=None,
+                    publish_name=None,
+                ),
+            ]
+        )
         await _commit(self._db)
         return PreparedCanvasExecution(
-            session_id,
-            candidate_id,
-            _canvas_fingerprint(source),
+            public_session_id=session_id,
+            execution_session_id=candidate_id,
+            source_fingerprint=source_fingerprint,
+            owner_token=owner_token,
+            target_id=target_id,
         )
 
     async def commit(
@@ -259,30 +302,62 @@ class SqlAlchemyCanvasHistoryTransaction:
         prepared: PreparedCanvasExecution,
         generated_session_id: str,
     ) -> str:
-        if prepared.execution_session_id and generated_session_id != prepared.execution_session_id:
+        await self._db.rollback()
+        candidate_id = await _candidate_id_for_owner(self._db, prepared.owner_token)
+        if candidate_id is None or generated_session_id != candidate_id:
+            raise TargetExecutionFailedError()
+        if prepared.execution_session_id and candidate_id != prepared.execution_session_id:
             raise TargetExecutionFailedError()
 
+        candidate = await _locked_one(self._db, API4Conversation, candidate_id)
         if prepared.public_session_id is None:
-            row = await _locked_one(self._db, API4Conversation, generated_session_id)
-            messages = _sanitize_messages(row.message)
+            metadata = await _locked_candidate_metadata(
+                self._db,
+                candidate_id=candidate_id,
+                owner_token=prepared.owner_token,
+            )
+            _validate_candidate_metadata(prepared, candidate, metadata)
+            messages = _sanitize_messages(candidate.message)
             if not _has_visible_assistant(messages):
                 raise TargetExecutionFailedError()
-            row.message = messages
-            row.dsl = _prepare_canvas_dsl(row.dsl, messages, validate_replay=False)
+            if metadata.publish_user_id is None:
+                raise TargetExecutionFailedError()
+            metadata.state = CANVAS_CANDIDATE_STATE_FINALIZING
+            candidate.message = messages
+            candidate.dsl = _prepare_canvas_dsl(
+                candidate.dsl,
+                messages,
+                validate_replay=False,
+            )
+            candidate.dialog_id = metadata.target_id
+            candidate.user_id = metadata.publish_user_id
+            candidate.exp_user_id = metadata.publish_exp_user_id
+            candidate.name = metadata.publish_name
+            await self._db.delete(metadata)
             await _commit(self._db)
-            return generated_session_id
+            clear_new_canvas_candidate_capture(
+                self._db,
+                owner_token=prepared.owner_token,
+            )
+            return candidate_id
 
-        public, candidate = await _locked_pair(
+        public = await _locked_one(
             self._db,
             API4Conversation,
             prepared.public_session_id,
-            generated_session_id,
         )
-        if _canvas_fingerprint(public) != prepared.source_fingerprint:
+        metadata = await _locked_candidate_metadata(
+            self._db,
+            candidate_id=candidate_id,
+            owner_token=prepared.owner_token,
+        )
+        _validate_candidate_metadata(prepared, candidate, metadata)
+        if metadata.source_fingerprint != prepared.source_fingerprint or _canvas_fingerprint(public) != metadata.source_fingerprint:
             raise TargetExecutionFailedError()
         messages = _sanitize_messages(candidate.message)
         if not _has_visible_assistant(messages):
             raise TargetExecutionFailedError()
+        metadata.state = CANVAS_CANDIDATE_STATE_FINALIZING
         public.message = messages
         public.reference = deepcopy(candidate.reference)
         public.dsl = _prepare_canvas_dsl(candidate.dsl, messages, validate_replay=False)
@@ -291,8 +366,14 @@ class SqlAlchemyCanvasHistoryTransaction:
         public.round = candidate.round
         public.thumb_up = candidate.thumb_up
         public.errors = candidate.errors
+        await self._db.delete(metadata)
+        await self._db.flush()
         await self._db.delete(candidate)
         await _commit(self._db)
+        clear_new_canvas_candidate_capture(
+            self._db,
+            owner_token=prepared.owner_token,
+        )
         return prepared.public_session_id
 
     async def abort(
@@ -300,13 +381,14 @@ class SqlAlchemyCanvasHistoryTransaction:
         prepared: PreparedCanvasExecution,
         generated_session_id: str | None,
     ) -> None:
-        await _abort_candidate(
-            self._db,
-            API4Conversation,
-            prepared.public_session_id,
-            prepared.execution_session_id,
-            generated_session_id,
-        )
+        del generated_session_id
+        try:
+            await _abort_canvas_candidate(self._db, prepared)
+        finally:
+            clear_new_canvas_candidate_capture(
+                self._db,
+                owner_token=prepared.owner_token,
+            )
 
 
 class SqlAlchemyDialogHistoryTransaction:
@@ -440,67 +522,112 @@ class SqlAlchemyDialogHistoryTransaction:
             pass
 
 
-async def _abort_candidate(
+async def _candidate_id_for_owner(
     db: AsyncSession,
-    model: type[Any],
-    public_session_id: str | None,
-    execution_session_id: str | None,
-    generated_session_id: str | None,
+    owner_token: str,
+) -> str | None:
+    stmt = select(ChannelCanvasCandidate.candidate_session_id).where(ChannelCanvasCandidate.owner_token == owner_token)
+    return (await db.scalars(stmt)).one_or_none()
+
+
+async def _locked_candidate_metadata(
+    db: AsyncSession,
+    *,
+    candidate_id: str,
+    owner_token: str,
+) -> ChannelCanvasCandidate:
+    stmt = (
+        select(ChannelCanvasCandidate)
+        .where(
+            ChannelCanvasCandidate.candidate_session_id == candidate_id,
+            ChannelCanvasCandidate.owner_token == owner_token,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    metadata = (await db.scalars(stmt)).one_or_none()
+    if metadata is None:
+        raise TargetExecutionFailedError()
+    return metadata
+
+
+def _validate_candidate_metadata(
+    prepared: PreparedCanvasExecution,
+    candidate: API4Conversation,
+    metadata: ChannelCanvasCandidate,
 ) -> None:
-    candidate_id = execution_session_id or generated_session_id
-    if not candidate_id or candidate_id == public_session_id:
-        return
+    if (
+        metadata.candidate_session_id != candidate.id
+        or metadata.owner_token != prepared.owner_token
+        or metadata.target_id != prepared.target_id
+        or metadata.public_session_id != prepared.public_session_id
+        or metadata.state != CANVAS_CANDIDATE_STATE_ACTIVE
+        # The self-scoped dialog id is a privacy invariant, not an ownership
+        # credential. Ownership comes exclusively from metadata + owner token.
+        or candidate.dialog_id != candidate.id
+    ):
+        raise TargetExecutionFailedError()
+
+
+async def _abort_canvas_candidate(
+    db: AsyncSession,
+    prepared: PreparedCanvasExecution,
+) -> None:
     try:
         await db.rollback()
-        candidate = await db.get(model, candidate_id)
-        if candidate is None:
+        candidate_id = await _candidate_id_for_owner(db, prepared.owner_token)
+        if candidate_id is None or candidate_id == prepared.public_session_id:
+            await db.rollback()
             return
+        if prepared.execution_session_id and prepared.execution_session_id != candidate_id:
+            await db.rollback()
+            return
+
+        # All terminal paths use candidate -> public -> metadata lock order.
+        candidate = await _locked_one_or_none(db, API4Conversation, candidate_id)
+        if candidate is None:
+            await db.rollback()
+            return
+        if prepared.public_session_id is not None:
+            await _locked_one_or_none(
+                db,
+                API4Conversation,
+                prepared.public_session_id,
+            )
+        metadata = await _locked_candidate_metadata(
+            db,
+            candidate_id=candidate_id,
+            owner_token=prepared.owner_token,
+        )
+        if metadata.public_session_id != prepared.public_session_id or metadata.target_id != prepared.target_id:
+            await db.rollback()
+            return
+        await db.delete(metadata)
+        await db.flush()
         await db.delete(candidate)
-        await db.commit()
+        await _commit(db)
     except Exception:
-        await db.rollback()
+        try:
+            await db.rollback()
+        except Exception:
+            # Abort is best-effort and must never mask the execution failure.
+            pass
 
 
 async def _locked_one(db: AsyncSession, model: type[Any], session_id: str) -> Any:
-    stmt = select(model).where(model.id == session_id).with_for_update().execution_options(populate_existing=True)
-    row = (await db.scalars(stmt)).one_or_none()
+    row = await _locked_one_or_none(db, model, session_id)
     if row is None:
         raise LookupError("Session not found")
     return row
 
 
-async def _prune_stale_candidates(
+async def _locked_one_or_none(
     db: AsyncSession,
     model: type[Any],
-    target_id: str,
-) -> None:
-    cutoff = int(time.time() * 1000) - _CANDIDATE_MAX_AGE_MS
-    conditions = [
-        model.dialog_id == target_id,
-        model.name == _CANDIDATE_NAME,
-        model.user_id == model.id,
-        model.update_time < cutoff,
-    ]
-    if model is API4Conversation:
-        conditions.append(model.exp_user_id == model.id)
-    stmt = delete(model).where(*conditions).execution_options(synchronize_session=False)
-    await db.execute(stmt)
-    await _commit(db)
-
-
-async def _locked_pair(
-    db: AsyncSession,
-    model: type[Any],
-    public_session_id: str,
-    candidate_session_id: str,
-) -> tuple[Any, Any]:
-    stmt = select(model).where(model.id.in_([public_session_id, candidate_session_id])).with_for_update().execution_options(populate_existing=True)
-    rows = {row.id: row for row in (await db.scalars(stmt)).all()}
-    public = rows.get(public_session_id)
-    candidate = rows.get(candidate_session_id)
-    if public is None or candidate is None:
-        raise LookupError("Session not found")
-    return public, candidate
+    session_id: str,
+) -> Any | None:
+    stmt = select(model).where(model.id == session_id).with_for_update().execution_options(populate_existing=True)
+    return (await db.scalars(stmt)).one_or_none()
 
 
 async def _commit(db: AsyncSession) -> None:

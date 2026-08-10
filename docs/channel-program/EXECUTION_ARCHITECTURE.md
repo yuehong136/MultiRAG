@@ -1,6 +1,6 @@
 # MultiRAG Channel 执行架构
 
-> 状态：EIM-U11 / CHN-X13、EIM-U12 / CHN-U14 已实现；下一步 U15
+> 状态：EIM-U11 / CHN-X13、EIM-U12 / CHN-U14、EIM-U13 / CHN-U15 已实现；CHN-O14 挂起
 > 决策：[`CHN-ADR-07`](DECISIONS.md#chn-adr-07--provider-与执行目标正交历史事务由目标驱动拥有)
 > 核验日期：2026-08-10（外部版本与证据见
 > [`VERSION_BASELINE`](../enterprise-identity-mcp/VERSION_BASELINE.md) 和
@@ -43,7 +43,7 @@
 7. **功能由能力交集决定。** 用户可见的停止、重新生成、反馈和渐进式展示，取 Provider 能力、
    目标能力与本次执行策略的交集；不支持时明确降级或隐藏，不能猜测。
 
-## 3. 当前事实与需要继续收口的地方
+## 3. 当前实现事实
 
 已经正确的基础：
 
@@ -56,7 +56,7 @@
 - `ExecutionEvent` 与 `ReplySession` 已把目标输出和 Provider 渲染分开；
 - binding 在服务端解析 tenant、target、revision 和 session，worker 不能覆盖这些字段。
 
-EIM-U11 / CHN-X13 与 EIM-U12 / CHN-U14 已收口的部分：
+EIM-U11 / CHN-X13、EIM-U12 / CHN-U14 与 EIM-U13 / CHN-U15 已收口的部分：
 
 - 原 `ChannelSessionManager` 已删除；Dialog 与 Canvas 分别拥有不透明 prepared 类型和不同签名的
   `DialogHistoryTransaction` / `CanvasHistoryTransaction`；
@@ -66,11 +66,14 @@ EIM-U11 / CHN-X13 与 EIM-U12 / CHN-U14 已收口的部分：
 - 飞书在 `progressive_reply=false` 时回退 buffered reply，而不是继续假装流式能力存在。
 - Dialog 生成只修改 detached working copy，完整终态按公开头执行一次 CAS；新会话终态才 INSERT；
 - generation 8 worker 先部署 completed snapshot consumer，随后 Dialog producer 才 emit 权威终态正文。
-
-后续 U15 需要演进的部分：
-
-- Canvas 候选 TTL 清理目前位于每次执行的准备热路径，会为每条消息增加一次删除扫描和提交；
-- Canvas 候选依靠会话行中的名称/用户字段识别，能工作但不是理想的长期所有权模型。
+- Canvas 私有候选由 MultiRAG 自有 `ChannelCanvasCandidate` sidecar 记录 owner、目标、公开头、状态、
+  创建/过期时间和新会话发布身份；公开 Dialog/Canvas 表没有增加 Channel 私有列；
+- 新 Canvas 会话仍由原有 completion 创建，但 API 执行层通过 execution-scoped `Session.info` 和
+  `before_flush` 在同一次 flush 中附加所有权元数据，把 `dialog_id` 暂时移入候选自身命名空间并遮蔽
+  发布身份；现有会话也使用自作用域 `dialog_id`，并在短事务内同时创建候选行和 sidecar；
+- 候选提交/中止按不透明 owner token 定位，不再把名称/用户哨兵当作所有权证明；已有会话终态继续
+  校验公开头 CAS，新会话终态恢复发布身份，两类路径都在成功终态删除 sidecar；
+- TTL 清理已移出每次执行的准备热路径，由 API router lifespan 在启动时及之后周期性执行有界回收。
 
 不能据此直接删除现有隔离层。当前 MultiRAG completion 在内部流结束时可能已经写入空答案、仅推理
 内容或部分状态；在无副作用执行缝建立前改为直接写公开会话，会重新引入历史污染。
@@ -207,6 +210,12 @@ stateDiagram-v2
 - 最终提交必须携带 `expected_head`（版本号或稳定指纹），条件不成立返回冲突，不覆盖后来消息；
 - 公开会话只在终态写一次。流式事件、卡片刷新和反馈渲染不写对话历史。
 
+这里的 terminal commit barrier 是“API 已把终态事务交给数据库提交”的边界。边界前的异常可以安全
+abort 私有工作态；COMMIT 已发出但结果不明时，数据库内要么完整保持旧头、要么完整提交新头，但
+API 不能猜测是哪一种，也不能再用补偿删除冒充回滚。若数据库已提交而 Provider 卡片交付失败，
+跨存储结果同样未知。U15 GC 只会在 TTL 到期后删除仍带 sidecar 的孤儿候选，不判断卡片或 run 终态；
+这类结果核对与恢复仍属于当前挂起的 CHN-O14。
+
 ### Dialog：`detached_cas`
 
 Dialog 是主目标，U14 已收敛到：
@@ -225,13 +234,45 @@ CAS 和可见历史投影都留在 `api/channel_execution`。禁止给同步区�
 当前 MultiRAG Canvas completion 自己读取和持久化会话，尚无等价的无落库执行端口，因此：
 
 1. 保留数据库候选作为**Canvas 专属兼容策略**，不再伪装成所有目标的通用方案；
-2. 候选所有权、创建时间和状态由 MultiRAG 自有元数据记录；公开 Canvas 会话表不增加 Channel
-   私有列；
-3. 成功后锁定公开行并校验 `expected_head`，再复制允许字段并删除候选；失败只删除候选；
-4. 候选 GC 改为启动时/周期性低频批处理，不在每条消息准备路径执行；
-   同一批处理兼容回收 U14 上线前遗留的 Dialog `[channel-candidate]`，Dialog 不再产生新候选；
-5. 一旦 MultiRAG Canvas 获得稳定的无落库执行端口，驱动内部切到 `detached_cas`，Provider、
+2. `usr_ai.t_ai_channel_canvas_candidates` 是 MultiRAG 自有 sidecar，显式保存唯一 `owner_token`、
+   candidate/target/public session、源头指纹、`active|finalizing` 状态、过期时间，以及新会话最终需要
+   恢复的发布身份；公开 Canvas/Dialog 表不增加 Channel 私有列；
+3. 新会话 prepare 先在当前 API `AsyncSession` 上注册 execution-scoped capture；原有 Canvas
+   completion 创建会话时，全局 `before_flush` observer 只消费这次 capture，把候选行与 sidecar 放入
+   **同一次 flush/commit**，并在终态前把 `dialog_id` 放入候选自身命名空间、用兼容哨兵遮蔽发布
+   身份。现有会话的复制候选与 sidecar 也在同一短事务创建。普通 Canvas list/delete-all 只按真实
+   target 命名空间操作，因此不会发现或误删活跃候选；
+4. commit/abort 只能用 prepared state 中的不透明 owner token 找回 sidecar。已有会话提交按
+   candidate → public → metadata 的固定锁序校验 `expected_head`，复制允许字段后删除候选；新会话
+   提交恢复真实 target 与 sidecar 保存的发布身份并删除 metadata。失败/取消只删除自己拥有的候选；
+   修改兼容哨兵不能转移所有权；
+5. API router lifespan 启动一个 API-local collector：启动即执行，随后按带 jitter 的间隔周期运行；
+   每个 batch 使用新 `AsyncSession`、共享条数预算、`LIMIT` 和
+   `FOR UPDATE ... SKIP LOCKED`，每个 cycle 还有最大 batch 数。多个 API 实例以候选行作为锁锚点，
+   无需 Redis leader，也不会阻塞正在终态提交的候选；
+6. collector 优先按 sidecar 的数据库过期时间回收显式 Canvas 候选；剩余预算只匹配完整旧哨兵组合，
+   兼容回收无 sidecar 的旧 Canvas 候选和 U14 前遗留的 Dialog `[channel-candidate]`。近似命名、身份
+   不一致或未过期行不会被删除；普通轮次失败记录脱敏日志并留给下一周期，task cancellation 继续传播；
+7. TTL 仅是 API/进程崩溃后孤儿候选的**安全网**，不是运行 lease、心跳、取消或 terminal barrier。
+   活跃 run 的上限必须短于 TTL；正常成功/失败仍由执行事务立即 commit/abort；
+8. 一旦 MultiRAG Canvas 获得稳定的无落库执行端口，驱动内部切到 `detached_cas`，Provider、
    binding、事件协议和卡片均不变。
+
+```mermaid
+flowchart LR
+    P["prepare"] --> N{"公开 session 存在?"}
+    N -- "否" --> A["arm Session.info capture"]
+    A --> F["Canvas row + sidecar\nsame before_flush\nprivate target namespace"]
+    N -- "是" --> C["copy candidate + sidecar\nsame short transaction"]
+    F --> R["private generation"]
+    C --> R
+    R --> V{"visible final + owner valid?"}
+    V -- "否" --> X["abort owned candidate"]
+    V -- "是, existing" --> S["public-head CAS\ncopy + delete candidate"]
+    V -- "是, new" --> U["restore publish identity\ndelete sidecar"]
+    G["API lifespan bounded GC"] -. "expired crash orphan only" .-> F
+    G -. "expired crash orphan only" .-> C
+```
 
 ## 8. Run 生命周期与会话历史分离
 
@@ -239,7 +280,7 @@ CAS 和可见历史投影都留在 `api/channel_execution`。禁止给同步区�
 不是把旧问题当普通消息再次追加。`queued/running/final/error/cancelled` 是 run 状态，不是 Dialog
 或 Canvas 会话消息。
 
-当前首期可继续由 worker 持有有界队列，因为它能以最低延迟驱动 Provider 卡片；但这只是进程内
+当前首期继续由 worker 持有有界队列，因为它能以最低延迟驱动 Provider 卡片；但这只是进程内
 体验状态。若要支持 worker 重启恢复、跨实例取消或长期可查询状态，按 CHN-O14 增加 API 侧持久化
 run ledger：
 
@@ -249,7 +290,8 @@ run ledger：
 - run 事件和目标历史分表，不能把运行状态塞进 Dialog/Canvas 消息数组；
 - 不按 token 写 run 表，只在有限状态迁移和终态写入。
 
-在明确需要重启恢复前，不提前引入完整 durable workflow runtime；MultiRAG 只吸收其一致性不变量。
+CHN-O14 当前保持挂起。在明确需要重启恢复前，不提前引入完整 durable workflow runtime；MultiRAG
+只吸收其一致性不变量。U15 sidecar 只描述 Canvas 候选所有权，不能替代 run ledger。
 
 ## 9. 数据库 I/O 预算
 
@@ -257,8 +299,9 @@ run ledger：
 |---|---|---|
 | Dialog 已有会话 | 准备阶段一次快照读；终态一次 CAS update | 候选 insert/delete、每 delta 写库 |
 | Dialog 新会话 | 目标配置读；终态一次 insert | 开始生成就发布空会话 |
-| Canvas 已有会话 | 快照读 + 候选写；终态 CAS copy/delete | 每请求全表/目标范围 TTL 清理 |
-| Canvas 新会话 | 私有候选创建；终态发布映射 | 半成品直接成为公开会话 |
+| Canvas 已有会话 | 快照读；候选 + sidecar 同短事务写；终态 CAS copy/delete | 每请求全表/目标范围 TTL 清理 |
+| Canvas 新会话 | 原生会话行 + sidecar 同 flush；终态恢复发布身份 | 半成品直接成为公开会话 |
+| Canvas 候选 GC | API 启动/周期执行；每 batch 新 session、共享 `LIMIT`、`SKIP LOCKED`；每 cycle 有上限 | worker 查库、Redis leader、无界扫描、把 TTL 当取消 |
 | capability preflight | 每次 worker 启动、每个 binding generation 一次脱敏读取；动作时按目标安全性再授权 | 每消息、每 token、每卡片 patch 查询 |
 | Provider 渲染 | 0 次目标历史 SQL | 为卡片 patch 轮询数据库 |
 | run ledger（后续） | 状态迁移时小次数 CAS | 每 token、每 CardKit sequence 写库 |
@@ -286,8 +329,8 @@ Open WebUI 一类消息树能支持任意节点分支，但 MultiRAG 当前 Dial
 |---:|---|---|---|
 | 1 | EIM-U11 / CHN-X13 | ✅ 已完成：Provider/Target capabilities、启动预取和目标私有 driver；删除 `ChannelSessionManager`，保持目标执行行为等价 | 低 |
 | 2 | EIM-U12 / CHN-U14 | ✅ generation 8 worker 先部署 consumer；随后 emit 权威终态快照并切换 Dialog detached working copy + 单次 CAS | 中 |
-| 3 | EIM-U13 / CHN-U15 | Canvas 候选策略独立化；候选元数据显式化；GC 移出请求热路径 | 中，涉及 DB |
-| 4 | EIM-O4 / CHN-O14 | 仅在确认需要重启恢复后增加 durable run ledger、单活约束和 cancel/final CAS | 高，需独立 ADR 复核 |
+| 3 | EIM-U13 / CHN-U15 | ✅ 已实现：Canvas sidecar 显式所有权；新行同 flush 捕获；API bounded GC 移出请求热路径 | 中，涉及 DB |
+| 4 | EIM-O4 / CHN-O14 | ⏸ 挂起：仅在确认需要重启恢复后增加 durable run ledger、单活约束和 cancel/final CAS | 高，需独立 ADR 复核 |
 
 X13 不改变 Provider runtime 私有 DTO 或执行 SSE wire，并使用独立 additive private preflight。
 U14 在既有 `message_completed.content` 可选字段上启用权威终态快照，并严格完成两步：先让 worker
@@ -300,8 +343,12 @@ producer 才 emit。旧 API 时新 worker 回退 delta，旧 worker 遇到新字
 - 飞书和钉钉针对同一目标执行相同的目标驱动，不存在 Provider × Target 组合实现；
 - Dialog/Canvas 的正常消息与重新生成均满足 terminal commit barrier 前失败、取消、仅推理不改公开历史；
 - 同一公开头上的并发提交最多一个成功，失败方不覆盖后来消息；
-- 新会话在首个完整终态前对外不可见，session mapping 只在发布后写入；
-- U14 完成后 Dialog 热路径没有候选 insert/delete；U15 完成后 Canvas 热路径没有 TTL prune；
+- 新会话在首个完整终态前不进入普通 target list/delete-all 命名空间，session mapping 只在发布后写入；
+- Dialog 热路径没有候选 insert/delete；Canvas 热路径没有 TTL prune，TTL 只清理 crash orphan；
+- Canvas owner/create/state/expiry 位于 MultiRAG sidecar，新会话行与 metadata 同 flush；公开
+  Dialog/Canvas 表无 Channel 私有列；
+- GC 只在 API 进程启动/周期运行且严格有界，多实例用 candidate-row `SKIP LOCKED` 协调；旧
+  Canvas/Dialog 只按完整兼容哨兵回收；
 - worker 导入图中没有 SQLAlchemy 和 `api.db`，并继续只走内部 API/SSE；
 - Provider capability、Target capability 和实际按钮/错误行为有契约测试；
 - 上游同步区相对移植基线不新增 Channel 私有参数或历史分支；

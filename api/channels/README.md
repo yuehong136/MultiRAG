@@ -190,6 +190,26 @@ EIM-U12 / CHN-U14 允许 `message_completed` 携带可选的用户可见权威�
 额外字段并继续消费原 delta。按 CHN-ADR-06，consumer/tolerate 已先部署到 generation 8 worker，随后
 Dialog producer 才开始 emit；Canvas 的终态 wire 保持不变。
 
+EIM-U13 / CHN-U15 在 API 执行层为 Canvas `candidate_cas` 增加 MultiRAG 自有 sidecar。已有会话的
+候选副本与 owner metadata 在同一短事务创建；新会话仍由原有 Canvas completion 创建，但
+execution-scoped `Session.info` capture 会由 `before_flush` observer 在**同一次 flush**附加 metadata，
+保存终态需要恢复的发布身份，并把候选 `dialog_id` 暂时移入自身私有命名空间；普通 Canvas
+list/delete-all 因而不会发现或误删活跃候选。commit/abort 只认不透明 owner token，名称/用户哨兵只
+保留为旧版本兼容形状，不再作为所有权证明；新会话发布时再恢复真实 target。公开 Dialog/Canvas 表
+均未增加 Channel 私有列。
+
+候选 TTL 扫描不再出现在每条消息的 prepare 热路径。MultiRAG API 的 Channel execution router
+lifespan 启动一个进程内 collector：启动即执行，之后按配置带 jitter 周期运行；每个 batch 使用新
+`AsyncSession`、共享 `LIMIT` 和 `FOR UPDATE ... SKIP LOCKED` 预算，每个 cycle 也有 batch 上限。
+多个 API 实例依靠候选行锁处理互不重叠的行，不需要 Redis leader。collector 同时严格兼容回收无
+sidecar 的旧 Canvas 候选和 U14 前 Dialog 候选；只匹配完整哨兵且已经过期的行。TTL 仅处理 crash
+orphan，不能充当运行 lease、取消或终态判断，worker 仍不导入数据库代码。
+
+部署 U15 必须先完成数据库迁移，再重启 MultiRAG API，让新 sidecar 和 router lifespan 同时生效。
+当前 API 启动顺序会先按 ORM 补建缺表，再由迁移严格校验已有 sidecar 的列/约束/索引/FK；存量环境
+也可预先执行 `uv run alembic upgrade head`。它没有修改 worker runtime DTO 或 execution SSE wire，
+因此不需要仅为 U15 重启 supervisor/worker；是否重启仍以同一发布中是否包含其他运行时契约变更为准。
+
 `ask()` 仅是消费同一个 `stream()` 并聚合为 `AgentReply` 的阶段性兼容 facade，用于迁移和回滚
 安全；它不是推荐接口，新代码不得增加调用。生产调用归零且 EIM-U1 稳定后应在独立任务中删除。
 默认实现仍是最终单条纯文本；飞书已实现 EIM-U1/CHN-U8 渐进式 Provider session。
@@ -233,10 +253,12 @@ worker 全局队列满时，Bridge 会先 claim 消息再回复固定 busy 文�
 进入同一会话队列，因此不会与当前生成并发写同一会话。只有当前会话最新的完成卡可重新生成；
 已有后续追问时点击旧卡会直接提示过期。完成卡发出显式 `regenerate` operation；Channel execution
 反腐层从公开会话头创建目标私有 working state，撤回最新且问题匹配的 user/assistant 对，再调用
-既有 MultiRAG 生成能力。Dialog 使用 detached 内存副本并在完整终态执行一次 CAS；Canvas 仍使用
-自己的数据库候选并原子晋升。terminal commit barrier 前的失败、取消或并发冲突不改公开历史，
+既有 MultiRAG 生成能力。Dialog 使用 detached 内存副本并在完整终态执行一次 CAS；Canvas 使用带
+MultiRAG sidecar 所有权的数据库候选并原子晋升。terminal commit barrier 前的失败、取消或并发
+冲突不改公开历史，
 连续点击不会重复追加同一句 user。数据库 COMMIT 已发出但结果不明、或提交后卡片交付失败的窗口不
-伪装成可回滚；该跨存储终态由未来 CHN-O14 durable run ledger 解决。
+伪装成可回滚；U15 的 TTL GC 只清理仍带 metadata 的过期孤儿，不能判定这类跨存储终态。CHN-O14
+durable run ledger 继续挂起，只有确认需要 worker 重启恢复后才会另行启动。
 error/cancelled 卡使用独立 retry action。普通消息失败后的 retry 仍是 `message`；若失败的是一次
 `regenerate`，retry 会继承 `regenerate`，因为公开历史中的旧成功尾轮仍然存在，降成普通消息反而会
 重复追加问题。完成卡的 regenerate 始终显式使用 `regenerate`。
@@ -274,10 +296,10 @@ batch update 添加“重新生成 / 有帮助 / 没帮助”，生成中的卡�
 
 CHN-X13 已将两者拆为 `SqlAlchemyDialogTargetDriver` / `SqlAlchemyCanvasTargetDriver` 与各自的
 history transaction；CHN-U14 已在 worker tolerate 部署后完成 Dialog `detached_cas` 与权威终态
-快照 emit。目标架构见
+快照 emit；CHN-U15 已完成 Canvas sidecar ownership 与 API bounded GC。目标架构见
 [`docs/channel-program/EXECUTION_ARCHITECTURE.md`](../../docs/channel-program/EXECUTION_ARCHITECTURE.md)：
 Provider 与执行目标正交；Dialog 使用内存副本 + 终态 CAS，Canvas 在 MultiRAG 提供无落库
-执行端口前保留专属候选；worker 始终只走内部 API/SSE，不为卡片或 delta 访问数据库。
+执行端口前保留专属候选；worker 始终只走内部 API/SSE，不为卡片、delta 或候选 GC 访问数据库。
 
 ### Canvas 发布版本兼容策略
 
@@ -290,7 +312,8 @@ Canvas/Dialog completion 增加 Channel 私有参数。重新生成、reasoning 
    服务端 revision guard。
 2. 每次执行前，Channel 适配器重新校验该 guard 仍等于最新已发布版本。
 3. 校验通过后，适配器以私有候选 session ID 调用原生 `release=true` 执行路径；只传上游已有参数，
-   不会把 revision ID 或 `regenerate` 等 Channel 生命周期字段注入 Canvas。
+   不会把 revision ID、`regenerate`、owner token 或其他 Channel 生命周期字段注入 Canvas；候选所有权
+   只存在于独立的 MultiRAG execution sidecar。
 4. Agent 发布新版本后，旧 binding 会 fail closed。管理员更新 binding 后 generation 增加，
    服务端使用新的会话命名空间，避免复用旧 DSL 会话。
 
@@ -375,6 +398,12 @@ sh scripts/run_channel_supervisor.example.sh
 | `MULTIRAG_CHANNELS__CONTROL__RUNTIME_HEARTBEAT_SECONDS` | 可选 | 可选 | worker 状态心跳间隔，默认 15 秒 |
 | `MULTIRAG_CHANNELS__CONTROL__SESSION_TTL_SECONDS` | 可选 | 可选 | 服务端 binding 会话 TTL，默认 86400 秒 |
 | `MULTIRAG_CHANNELS__CONTROL__DEDUPE_TTL_SECONDS` | 可选 | 可选 | 服务端 execution 幂等窗口，默认 86400 秒 |
+| `MULTIRAG_CHANNELS__EXECUTION__CANDIDATE_GC__ENABLED` | 可选 | 禁止 | API 侧 Canvas 孤儿候选回收开关，默认 `true` |
+| `MULTIRAG_CHANNELS__EXECUTION__CANDIDATE_GC__MAX_AGE_SECONDS` | 可选 | 禁止 | 显式候选/legacy 回收保留期，默认 86400 秒，必须大于所有 Provider 硬执行超时 |
+| `MULTIRAG_CHANNELS__EXECUTION__CANDIDATE_GC__INTERVAL_SECONDS` | 可选 | 禁止 | 启动清理后的周期，默认 3600 秒；实际等待叠加 jitter |
+| `MULTIRAG_CHANNELS__EXECUTION__CANDIDATE_GC__BATCH_SIZE` | 可选 | 禁止 | 三类候选共享的单批上限，默认 100 |
+| `MULTIRAG_CHANNELS__EXECUTION__CANDIDATE_GC__MAX_BATCHES_PER_CYCLE` | 可选 | 禁止 | 单周期最多批数，默认 4 |
+| `MULTIRAG_CHANNELS__EXECUTION__CANDIDATE_GC__JITTER_RATIO` | 可选 | 禁止 | 多 API 实例周期错峰比例，默认 0.1 |
 
 API 进程示例（值仅表示由 secret manager 注入）：
 
@@ -610,6 +639,8 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
   修改配置、轮换凭据、禁用或更新 binding 后，旧 worker 会被服务端 generation fence 拒绝。
 - execution 使用事件幂等键和 Redis 会话隔离；外部用户只能作为 transport actor 记录，
   不会被提升为 MultiRAG Principal。
+- Canvas 候选 owner/create/state/expiry 位于 MultiRAG 自有 sidecar；公开 Canvas/Dialog 表无 Channel
+  私有列。API 侧 collector 有 batch/cycle 上限并用 `SKIP LOCKED` 协调多实例；worker 不查数据库。
 - Supervisor 不记录原始 binding ID，worker 不记录原始飞书 ID、问题、答案或 SSE 帧。
 
 ### 尚未实现或不能宣称
@@ -641,6 +672,9 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
 - 禁用或删除 binding：supervisor 优雅停止对应 worker。
 - Child 异常退出：supervisor 记录脱敏错误并指数退避重启。
 - MultiRAG API/Redis 不可用：停止执行，不能降级到进程内无状态模式。
+- API 启动后会立即执行一次 Canvas candidate GC，之后按
+  `channels.execution.candidate_gc` 的 interval/jitter 周期执行；它只清理超过 TTL 的孤儿候选和严格
+  匹配的旧版候选。正常运行不应依赖等待 TTL，终态应由 commit/abort 立即收口。
 - internal token 轮换：协调更新 API 和 supervisor，并重启 supervisor；旧 child 派生 token
   会立即失效并由 supervisor 重建。
 - 主加密密钥轮换：把新密钥插到 `SECRET_ENCRYPTION_KEY` 列表**最前面**、旧密钥留在后面，
@@ -716,6 +750,8 @@ Channel 相关快速验证：
 uv run pytest tests/unit/test_channel_config.py tests/unit/test_channel_secret_crypto.py tests/unit/test_channel_secret_store.py
 uv run pytest tests/unit/test_chat_channel_control.py tests/unit/test_channel_execution.py tests/unit/test_channel_execution_api.py
 uv run pytest tests/unit/test_channel_execution_adapters.py tests/unit/test_channel_runtime_api.py tests/unit/test_channel_runtime_client.py
+uv run pytest tests/unit/test_channel_candidate_gc.py tests/unit/test_channel_config.py
+uv run pytest tests/integration/test_channel_history_manager.py tests/integration/test_channel_candidate_gc.py
 uv run pytest tests/unit/test_feishu_agent_bridge.py tests/unit/test_binding_bridge.py tests/unit/test_reply_session.py tests/unit/test_feishu_channel.py
 uv run pytest tests/unit/test_feishu_state_store.py tests/unit/test_feishu_worker.py tests/unit/test_channel_supervisor.py
 uv run ruff check api/channels api/channel_control api/channel_execution api/channel_runtime

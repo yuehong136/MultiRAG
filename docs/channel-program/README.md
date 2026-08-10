@@ -52,7 +52,7 @@ CHN-O7（主密钥密钥环）、CHN-O12（空 env 变量）、CHN-O6（连接�
 
 **新增 EIM 身份与体验扩展**：CHN-X5～X13、CHN-U8～U15、CHN-O14、CHN-P14 统一由
 [`docs/enterprise-identity-mcp/`](../enterprise-identity-mcp/README.md) 的 EIM 路线图驱动；其中
-CHN-X9、CHN-X13、CHN-U8、CHN-U11～U14 已完成，下一项是 CHN-U15，其余状态以 [PROGRESS](PROGRESS.md) 为准。旧程序“全部完成”
+CHN-X9、CHN-X13、CHN-U8、CHN-U11～U15 已完成，其余状态以 [PROGRESS](PROGRESS.md) 为准。旧程序“全部完成”
 的历史结论保持成立，但不再表示 Channel 子系统没有后续待办。
 **最后更新**：2026-08-10
 
@@ -60,16 +60,16 @@ CHN-X9、CHN-X13、CHN-U8、CHN-U11～U14 已完成，下一项是 CHN-U15，其
 |---|---|---|
 | **PR-0** | 建立账本与契约文档（两仓 docs-only） | ✅ 完成 |
 | **S** | 安全加固（S1–S6） | ✅ 完成 |
-| **U** | 今日可见缺陷（U1–U9、U11–U14 完成；U10 挂起；U15 已规划） | 🔵 扩展中 |
+| **U** | 今日可见缺陷（U1–U9、U11–U15 完成；U10 挂起） | 🔵 扩展中 |
 | **P** | Provider 通用化（P1–P11、P13 全部完成并部署） | ✅ 完成 |
 | **O** | 运维（O1–O7、O12 完成；O8–O11 未排期） | ✅ 完成（排期内） |
 | **X** | 跨仓契约（X1–X3、X9、X13 完成；其余按 EIM 路线图） | 🔵 扩展中 |
-| **EIM 扩展** | 执行架构 X13 已完成；身份、多模态与后续目标事务继续按路线图实施 | 🔵 进行中 |
+| **EIM 扩展** | 执行架构 X13/U14/U15 已完成；身份、多模态等后续任务继续按路线图实施 | 🔵 进行中 |
 
-执行架构当前任务是 CHN-U15：X13 已完成 Provider/Target 能力协商和目标私有 driver；U14 已按
-consumer/tolerate → generation 8 worker 部署 → producer/emit 完成 Dialog 内存工作副本、终态单次
-CAS 与权威终态快照。下一步按 [`EXECUTION_ARCHITECTURE`](EXECUTION_ARCHITECTURE.md) 实施 Canvas
-专属候选元数据与周期 GC。CHN-O14 只在确认需要 worker 重启恢复后启动。
+执行架构的 CHN-U15 已实现：X13 完成 Provider/Target 能力协商和目标私有 driver，U14 完成 Dialog
+内存工作副本、终态单次 CAS 与权威终态快照；U15 再把 Canvas 候选所有权移入 MultiRAG 自有
+sidecar，并将 TTL 回收移到 API 启动/周期任务。当前没有自动续接的执行架构开发项；先按账本完成
+数据库迁移与验证。CHN-O14 继续挂起，只在确认确实需要 worker 重启恢复后另行启动。
 
 ### 24 个 PR 全部落地并部署完毕
 
@@ -286,6 +286,9 @@ MultiRAG 与 web 是两个仓、两条 CI、两次部署，**不存在跨仓原�
 10. **Provider 与执行目标正交。** Provider 不读取 Dialog/Canvas 表，目标驱动不渲染 Provider
     卡片；任何 Provider × Target 组合分支都必须先经 [CHN-ADR-07](DECISIONS.md#chn-adr-07--provider-与执行目标正交历史事务由目标驱动拥有)
     评审。
+11. **Canvas 候选所有权只存在于 MultiRAG sidecar。** 候选期使用自身 `dialog_id` 命名空间，普通
+    target list/delete-all 不发现它；公开 Dialog/Canvas 表不增加 Channel 私有列。TTL 只是崩溃孤儿
+    的安全网，不是运行协调、取消或终态判定机制。Channel worker 继续不访问数据库。
 
 ## 变更日志
 
@@ -303,3 +306,4 @@ MultiRAG 与 web 是两个仓、两条 CI、两次部署，**不存在跨仓原�
 | 2026-08-10 | 定案 CHN-ADR-07：Provider 与 Dialog/Canvas 正交，Dialog 为主目标、Canvas 为扩展目标；新增执行架构文档和 MultiRAG 术语不变量，并把后续实现拆成 X13/U14/U15/O14 | Codex |
 | 2026-08-10 | CHN-X13 / EIM-U11 完成：目标私有 driver/history transaction、启动时 capability preflight、Provider × Target × RunPolicy 交集及 regenerate/retry fail-closed 控制落地；worker 保持无数据库 | Codex |
 | 2026-08-10 | CHN-U14 / EIM-U12 完成：generation 8 worker 先部署权威快照 consumer，随后 Dialog 切换为 detached working copy + 终态 CAS 并 emit 权威正文；下一项 CHN-U15 | Codex |
+| 2026-08-10 | CHN-U15 / EIM-U13 实现完成：Canvas 候选使用 MultiRAG sidecar 显式记录所有权，新会话行与元数据同 flush 捕获；API 启动/周期执行有界 `SKIP LOCKED` GC，并严格兼容回收旧 Canvas/Dialog 候选；CHN-O14 保持挂起 | Codex |

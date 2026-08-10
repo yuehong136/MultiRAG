@@ -1350,6 +1350,67 @@ class API4Conversation(BaseModel):
     version_title: Mapped[str | None] = mapped_column(String(255), index=False, nullable=True, doc="canvas version title when session created")
 
 
+class ChannelCanvasCandidate(BaseModel):
+    """MultiRAG-owned ownership metadata for a private Canvas execution."""
+
+    __tablename__ = "t_ai_channel_canvas_candidates"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "candidate_session_id",
+            name="uq_channel_canvas_candidates_session",
+        ),
+        sa.UniqueConstraint(
+            "owner_token",
+            name="uq_channel_canvas_candidates_owner",
+        ),
+        sa.CheckConstraint(
+            "state IN ('active', 'finalizing')",
+            name="ck_channel_canvas_candidates_state",
+        ),
+        sa.CheckConstraint(
+            "public_session_id IS NULL OR public_session_id <> candidate_session_id",
+            name="ck_channel_canvas_candidates_distinct_sessions",
+        ),
+        sa.CheckConstraint(
+            "(public_session_id IS NULL AND source_fingerprint IS NULL AND publish_user_id IS NOT NULL) "
+            "OR (public_session_id IS NOT NULL AND source_fingerprint IS NOT NULL "
+            "AND publish_user_id IS NULL AND publish_exp_user_id IS NULL AND publish_name IS NULL)",
+            name="ck_channel_canvas_candidates_identity",
+        ),
+        sa.Index(
+            "ix_channel_canvas_candidates_state_expiry",
+            "state",
+            "expires_at",
+            "candidate_session_id",
+        ),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
+    candidate_session_id: Mapped[str] = mapped_column(
+        String(32),
+        sa.ForeignKey(
+            "usr_ai.t_ai_api4conversations.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    owner_token: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    public_session_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    state: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="active",
+        server_default=text("'active'"),
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    publish_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    publish_exp_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    publish_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
 class UserCanvas(BaseModel):
     __tablename__ = "t_ai_user_canvases"
     __table_args__ = {"schema": "usr_ai"}

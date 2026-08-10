@@ -49,6 +49,8 @@ class FakeCanvasHistoryTransaction:
             session_id,
             "candidate-canvas" if session_id else None,
             "source-fingerprint" if session_id else None,
+            "owner-token",
+            "canvas-1",
         )
 
     async def commit(
@@ -413,6 +415,46 @@ async def test_canvas_adapter_guards_latest_release_without_extending_canvas_con
     stale_target = target.model_copy(update={"revision_id": "revision-stale"})
     with pytest.raises(TargetRevisionUnavailableError):
         await adapter.validate_revision(tenant_id="tenant-1", target=stale_target)
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_canvas_driver_closes_inner_stream_and_aborts_when_consumer_cancels(monkeypatch) -> None:
+    from api.db.services import canvas_service as canvas_service_module
+
+    target = ExecutionTargetRef(
+        target_type="multirag.canvas_agent",
+        target_id="canvas-1",
+        revision_id="revision-latest",
+    )
+    db = AsyncSession()
+    sessions = FakeCanvasHistoryTransaction()
+    adapter = SqlAlchemyCanvasTargetDriver(db, sessions)
+    inner_closed = False
+
+    async def _completion(**_kwargs: Any) -> AsyncIterator[str]:
+        nonlocal inner_closed
+        try:
+            yield 'data:{"event":"message","data":{"content":"partial"},"session_id":"candidate-canvas"}\n\n'
+            yield 'data:{"event":"message_end","data":{},"session_id":"candidate-canvas"}\n\n'
+        finally:
+            inner_closed = True
+
+    monkeypatch.setattr(canvas_service_module, "completion", _completion)
+    stream = adapter.stream(
+        tenant_id="tenant-1",
+        target=target,
+        question="hello",
+        session_id="session-1",
+        principal_id=None,
+    )
+
+    assert "partial" in await anext(stream)
+    await stream.aclose()
+
+    assert inner_closed is True
+    assert sessions.completed == []
+    assert sessions.aborted == ["candidate-canvas"]
     await db.close()
 
 

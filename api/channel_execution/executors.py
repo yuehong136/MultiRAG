@@ -206,26 +206,28 @@ class SqlAlchemyCanvasTargetDriver:
         terminal = False
         promoted = False
         try:
-            frames = canvas_completion(
-                db=self._db,
-                tenant_id=tenant_id,
-                agent_id=target.target_id,
-                session_id=prepared.execution_session_id,
-                query=question,
-                release=True,
-                user_id=principal_id or "",
-            )
-            async for frame in frames:
-                payload = _decode_sse_payload(frame)
-                if payload is None:
-                    yield frame
-                    continue
-                generated_session_id = _merge_generated_session(generated_session_id, payload)
-                terminal = terminal or payload.get("event") == "message_end"
-                yield _rewrite_frame_session(
-                    payload,
-                    public_session_id=prepared.public_session_id,
+            async with aclosing(
+                canvas_completion(
+                    db=self._db,
+                    tenant_id=tenant_id,
+                    agent_id=target.target_id,
+                    session_id=prepared.execution_session_id,
+                    query=question,
+                    release=True,
+                    user_id=principal_id or "",
                 )
+            ) as frames:
+                async for frame in frames:
+                    payload = _decode_sse_payload(frame)
+                    if payload is None:
+                        yield frame
+                        continue
+                    generated_session_id = _merge_generated_session(generated_session_id, payload)
+                    terminal = terminal or payload.get("event") == "message_end"
+                    yield _rewrite_frame_session(
+                        payload,
+                        public_session_id=prepared.public_session_id,
+                    )
             if not terminal or not generated_session_id:
                 raise TargetExecutionFailedError()
             await self._history.commit(prepared, generated_session_id)
