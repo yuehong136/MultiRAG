@@ -372,6 +372,7 @@ class _CanvasAdapter:
         self.invalid_revision = invalid_revision
         self.validated: tuple[str, str | None] | None = None
         self.operations: list[object] = []
+        self.closed = False
 
     async def capabilities(
         self,
@@ -409,8 +410,11 @@ class _CanvasAdapter:
         self.operations.append(operation)
 
         async def _frames() -> AsyncIterator[str]:
-            for frame in self.frames:
-                yield frame
+            try:
+                for frame in self.frames:
+                    yield frame
+            finally:
+                self.closed = True
 
         return _frames()
 
@@ -454,7 +458,7 @@ async def test_target_executors_declare_current_target_private_capabilities() ->
     assert canvas_capabilities.commit_mode == "candidate_cas"
     assert canvas_capabilities.effect_class == "unknown"
     assert dialog_capabilities.regeneration == "always"
-    assert dialog_capabilities.commit_mode == "candidate_cas"
+    assert dialog_capabilities.commit_mode == "detached_cas"
     assert dialog_capabilities.effect_class == "generation_only"
 
 
@@ -475,9 +479,11 @@ async def test_canvas_executor_rejects_a_reasoning_only_completion() -> None:
 
 
 class _DialogAdapter:
-    def __init__(self) -> None:
+    def __init__(self, frames: list[str] | None = None) -> None:
         self.sessions: list[str | None] = []
         self.operations: list[object] = []
+        self.frames = frames
+        self.closed = False
 
     def stream(
         self,
@@ -494,16 +500,21 @@ class _DialogAdapter:
         self.operations.append(operation)
 
         async def _frames() -> AsyncIterator[str]:
-            if session_id is None:
-                yield _frame({"code": 0, "data": {"answer": "prologue", "session_id": "dialog-session"}})
-            else:
-                yield _frame({"code": 0, "data": {"answer": "dialog-answer", "session_id": session_id}})
-            yield _frame({"code": 0, "data": True})
+            try:
+                public_session_id = session_id or "dialog-session"
+                if self.frames is not None:
+                    for frame in self.frames:
+                        yield frame
+                    return
+                yield _frame({"code": 0, "data": {"answer": "dialog-answer", "session_id": public_session_id}})
+                yield _frame({"code": 0, "data": True})
+            finally:
+                self.closed = True
 
         return _frames()
 
 
-async def test_dialog_executor_bootstraps_then_answers_using_multirag_dialog() -> None:
+async def test_dialog_executor_generates_first_answer_in_one_target_run() -> None:
     adapter = _DialogAdapter()
     executor = MultiRAGDialogExecutor(adapter)
     context = _context(target_type="multirag.dialog", revision_id=None)
@@ -512,10 +523,186 @@ async def test_dialog_executor_bootstraps_then_answers_using_multirag_dialog() -
 
     assert [event.model_dump(exclude_none=True) for event in await _collect(events)] == [
         {"event": "message_delta", "content": "dialog-answer", "session_id": "dialog-session"},
-        {"event": "message_completed", "session_id": "dialog-session"},
+        {
+            "event": "message_completed",
+            "content": "dialog-answer",
+            "session_id": "dialog-session",
+        },
     ]
-    assert adapter.sessions == [None, "dialog-session"]
-    assert adapter.operations == ["message", "message"]
+    assert adapter.sessions == [None]
+    assert adapter.operations == ["message"]
+
+
+async def test_dialog_executor_streams_deltas_and_completes_with_decorated_snapshot() -> None:
+    adapter = _DialogAdapter(
+        [
+            _frame(
+                {
+                    "code": 0,
+                    "data": {
+                        "answer": "foo ",
+                        "final": False,
+                        "session_id": "dialog-session",
+                    },
+                }
+            ),
+            _frame(
+                {
+                    "code": 0,
+                    "data": {
+                        "answer": "bar baz",
+                        "final": False,
+                        "session_id": "dialog-session",
+                    },
+                }
+            ),
+            _frame(
+                {
+                    "code": 0,
+                    "data": {
+                        "answer": "foo bar ##0$$ baz",
+                        "final": True,
+                        "session_id": "dialog-session",
+                    },
+                }
+            ),
+            _frame({"code": 0, "data": True}),
+        ]
+    )
+    executor = MultiRAGDialogExecutor(adapter)
+
+    events = await executor.execute(
+        context=_context(target_type="multirag.dialog", revision_id=None),
+        command=_command(),
+    )
+
+    assert [event.model_dump(exclude_none=True) for event in await _collect(events)] == [
+        {"event": "message_delta", "content": "foo ", "session_id": "dialog-session"},
+        {"event": "message_delta", "content": "bar baz", "session_id": "dialog-session"},
+        {
+            "event": "message_completed",
+            "content": "foo bar ##0$$ baz",
+            "session_id": "dialog-session",
+        },
+    ]
+
+
+async def test_dialog_executor_never_exposes_split_or_uppercase_reasoning_markers() -> None:
+    adapter = _DialogAdapter(
+        [
+            _frame(
+                {
+                    "code": 0,
+                    "data": {
+                        "answer": "<THI",
+                        "final": False,
+                        "session_id": "dialog-session",
+                    },
+                }
+            ),
+            _frame(
+                {
+                    "code": 0,
+                    "data": {
+                        "answer": "NK>private reasoning</TH",
+                        "final": False,
+                        "session_id": "dialog-session",
+                    },
+                }
+            ),
+            _frame(
+                {
+                    "code": 0,
+                    "data": {
+                        "answer": "INK>visible answer",
+                        "final": False,
+                        "session_id": "dialog-session",
+                    },
+                }
+            ),
+            _frame(
+                {
+                    "code": 0,
+                    "data": {
+                        "answer": "visible answer",
+                        "final": True,
+                        "session_id": "dialog-session",
+                    },
+                }
+            ),
+            _frame({"code": 0, "data": True}),
+        ]
+    )
+    executor = MultiRAGDialogExecutor(adapter)
+
+    events = await executor.execute(
+        context=_context(target_type="multirag.dialog", revision_id=None),
+        command=_command(),
+    )
+    payloads = [event.model_dump(exclude_none=True) for event in await _collect(events)]
+
+    assert payloads == [
+        {
+            "event": "message_delta",
+            "content": "visible answer",
+            "session_id": "dialog-session",
+        },
+        {
+            "event": "message_completed",
+            "content": "visible answer",
+            "session_id": "dialog-session",
+        },
+    ]
+    assert "private reasoning" not in str(payloads)
+
+
+async def test_target_executors_close_driver_stream_when_consumer_stops() -> None:
+    canvas_adapter = _CanvasAdapter(
+        [
+            _frame({"event": "message", "data": {"content": "partial"}, "session_id": "canvas-session"}),
+            _frame({"event": "message_end", "data": {}, "session_id": "canvas-session"}),
+        ]
+    )
+    canvas_events = await MultiRAGCanvasAgentExecutor(canvas_adapter).execute(
+        context=_context(),
+        command=_command(),
+    )
+    assert (await anext(canvas_events)).content == "partial"
+    await canvas_events.aclose()
+    assert canvas_adapter.closed is True
+
+    dialog_adapter = _DialogAdapter(
+        [
+            _frame(
+                {
+                    "code": 0,
+                    "data": {
+                        "answer": "partial",
+                        "final": False,
+                        "session_id": "dialog-session",
+                    },
+                }
+            ),
+            _frame(
+                {
+                    "code": 0,
+                    "data": {
+                        "answer": "complete",
+                        "final": True,
+                        "session_id": "dialog-session",
+                    },
+                }
+            ),
+            _frame({"code": 0, "data": True}),
+        ]
+    )
+    dialog_events = await MultiRAGDialogExecutor(dialog_adapter).execute(
+        context=_context(target_type="multirag.dialog", revision_id=None),
+        command=_command(),
+    )
+    assert (await anext(dialog_events)).content == "partial"
+    await dialog_events.aclose()
+    assert dialog_adapter.closed is True
 
 
 async def test_dialog_regenerate_forwards_explicit_operation_to_existing_session() -> None:

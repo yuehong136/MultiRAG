@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import AsyncIterator
+from contextlib import aclosing
+from copy import deepcopy
 from typing import Any
+from uuid import uuid4
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -13,8 +18,15 @@ from api.channel_capabilities import TargetCapabilities
 from api.channel_execution.errors import TargetExecutionFailedError, TargetRevisionUnavailableError
 from api.channel_execution.history import SqlAlchemyCanvasHistoryTransaction, SqlAlchemyDialogHistoryTransaction, canvas_regeneration_is_safe
 from api.channel_execution.models import ChannelExecutionCommand, ExecutionEvent, ExecutionOperation, ExecutionTargetRef, TrustedChannelContext
-from api.channel_execution.protocols import CanvasTargetDriver, DialogTargetDriver, TargetHistoryTransaction
-from api.channel_execution.session_models import PreparedCanvasExecution, PreparedDialogExecution
+from api.channel_execution.protocols import (
+    CanvasHistoryTransaction,
+    CanvasTargetDriver,
+    DialogHistoryTransaction,
+    DialogTargetDriver,
+)
+from api.channel_execution.reasoning import StreamingReasoningFilter, strip_reasoning
+from api.db.db_models import Dialog
+from common.constants import StatusEnum
 
 _CANVAS_CAPABILITIES = TargetCapabilities(
     streaming=True,
@@ -31,7 +43,7 @@ _DIALOG_CAPABILITIES = TargetCapabilities(
     regeneration="always",
     retryable=True,
     feedback=True,
-    commit_mode="candidate_cas",
+    commit_mode="detached_cas",
     effect_class="generation_only",
 )
 
@@ -95,7 +107,7 @@ class SqlAlchemyCanvasTargetDriver:
     def __init__(
         self,
         db: AsyncSession,
-        history: TargetHistoryTransaction[PreparedCanvasExecution] | None = None,
+        history: CanvasHistoryTransaction | None = None,
     ) -> None:
         self._db = db
         self._history = history or SqlAlchemyCanvasHistoryTransaction(db)
@@ -229,7 +241,7 @@ class SqlAlchemyDialogTargetDriver:
     def __init__(
         self,
         db: AsyncSession,
-        history: TargetHistoryTransaction[PreparedDialogExecution] | None = None,
+        history: DialogHistoryTransaction | None = None,
     ) -> None:
         self._db = db
         self._history = history or SqlAlchemyDialogHistoryTransaction(db)
@@ -263,47 +275,118 @@ class SqlAlchemyDialogTargetDriver:
         principal_id: str | None,
         operation: ExecutionOperation,
     ) -> AsyncIterator[str]:
-        from api.db.services.conversation_service import async_completion as dialog_completion
+        from api.db.services.conversation_service import structure_answer
+        from api.db.services.dialog_service import async_chat
 
+        dialog = await self._load_dialog_snapshot(
+            tenant_id=tenant_id,
+            target_id=target.target_id,
+        )
         prepared = await self._history.prepare(
             target_id=target.target_id,
             session_id=session_id,
             question=question,
             operation=operation,
+            user_id=principal_id or "",
         )
-        generated_session_id = prepared.execution_session_id
-        terminal = False
-        failed = False
-        promoted = False
-        try:
-            frames = dialog_completion(
-                db=self._db,
-                tenant_id=tenant_id,
-                chat_id=target.target_id,
-                question=question,
-                session_id=prepared.execution_session_id,
-                stream=True,
-                user_id=principal_id or "",
+        working = prepared.working_copy
+        if prepared.expected_head is None:
+            working.message.append(
+                {
+                    "role": "assistant",
+                    "content": dialog.prompt_config.get("prologue"),
+                    "created_at": time.time(),
+                }
             )
-            async for frame in frames:
-                payload = _decode_sse_payload(frame)
-                if payload is None:
-                    yield frame
-                    continue
-                generated_session_id = _merge_generated_session(generated_session_id, payload)
-                failed = failed or payload.get("code") != 0
-                terminal = terminal or (payload.get("code") == 0 and payload.get("data") is True)
-                yield _rewrite_frame_session(
-                    payload,
-                    public_session_id=prepared.public_session_id,
+
+        question_message: dict[str, Any] = {
+            "content": question,
+            "role": "user",
+            "id": str(uuid4()),
+        }
+        working.message.append(question_message)
+        prompt_messages: list[dict[str, Any]] = []
+        for message in working.message:
+            if message.get("role") == "system":
+                continue
+            if message.get("role") == "assistant" and not prompt_messages:
+                continue
+            prompt_messages.append(deepcopy(message))
+
+        message_id = question_message["id"]
+        working.message.append(
+            {
+                "role": "assistant",
+                "content": "",
+                "id": message_id,
+            }
+        )
+        working.reference.append({"chunks": [], "doc_aggs": []})
+
+        saw_final = False
+        committed = False
+        try:
+            async with aclosing(
+                async_chat(
+                    dialog,
+                    prompt_messages,
+                    self._db,
+                    True,
+                    user_id=principal_id or "",
                 )
-            if failed or not terminal or not generated_session_id:
+            ) as answers:
+                async for answer in answers:
+                    if not isinstance(answer, dict):
+                        raise TargetExecutionFailedError()
+                    is_final = answer.get("final", True) is True
+                    structured = structure_answer(
+                        working,
+                        answer,
+                        message_id,
+                        prepared.public_session_id,
+                    )
+                    # Keep MultiRAG's final snapshot distinct from its deltas.
+                    # The target executor projects it into terminal content so
+                    # every Channel can replace, rather than append, decorated
+                    # answers such as citations inserted in the middle.
+                    yield (
+                        "data:"
+                        + json.dumps(
+                            {"code": 0, "data": structured},
+                            ensure_ascii=False,
+                        )
+                        + "\n\n"
+                    )
+                    saw_final = saw_final or is_final
+            if not saw_final:
                 raise TargetExecutionFailedError()
-            await self._history.commit(prepared, generated_session_id)
-            promoted = True
+            await self._history.commit(prepared)
+            committed = True
+            yield "data:" + json.dumps({"code": 0, "data": True}, ensure_ascii=False) + "\n\n"
         finally:
-            if not promoted:
-                await self._history.abort(prepared, generated_session_id)
+            if not committed:
+                await self._history.abort(prepared)
+
+    async def _load_dialog_snapshot(
+        self,
+        *,
+        tenant_id: str,
+        target_id: str,
+    ) -> Dialog:
+        try:
+            stmt = select(Dialog).where(
+                Dialog.id == target_id,
+                Dialog.tenant_id == tenant_id,
+                Dialog.status == StatusEnum.VALID.value,
+            )
+            row = (await self._db.scalars(stmt)).one_or_none()
+            if row is None:
+                raise TargetExecutionFailedError()
+            snapshot = deepcopy(row.to_dict())
+        finally:
+            # The generator must never retain an attached Dialog ORM instance.
+            await self._db.rollback()
+        return Dialog(**snapshot)
 
 
 class MultiRAGCanvasAgentExecutor:
@@ -346,36 +429,37 @@ class MultiRAGCanvasAgentExecutor:
         in_reasoning = False
         saw_completion = False
         saw_content = False
-        async for frame in frames:
-            payload = _decode_sse_payload(frame)
-            if payload is None:
-                continue
+        async with aclosing(frames) as managed_frames:
+            async for frame in managed_frames:
+                payload = _decode_sse_payload(frame)
+                if payload is None:
+                    continue
 
-            raw_session_id = payload.get("session_id")
-            if isinstance(raw_session_id, str) and raw_session_id:
-                session_id = raw_session_id
+                raw_session_id = payload.get("session_id")
+                if isinstance(raw_session_id, str) and raw_session_id:
+                    session_id = raw_session_id
 
-            event = payload.get("event")
-            data = payload.get("data")
-            if event == "message_end":
-                saw_completion = True
-                continue
-            if event != "message" or not isinstance(data, dict):
-                # node traces, references, A2UI and tool details are private.
-                continue
-            if data.get("start_to_think") is True:
-                in_reasoning = True
-                continue
-            if data.get("end_to_think") is True:
-                in_reasoning = False
-                continue
-            content = data.get("content")
-            if in_reasoning or not isinstance(content, str) or not content:
-                continue
-            sanitized = content.replace("<think>", "").replace("</think>", "")
-            if sanitized:
-                saw_content = True
-                yield ExecutionEvent(event="message_delta", content=sanitized, session_id=session_id)
+                event = payload.get("event")
+                data = payload.get("data")
+                if event == "message_end":
+                    saw_completion = True
+                    continue
+                if event != "message" or not isinstance(data, dict):
+                    # node traces, references, A2UI and tool details are private.
+                    continue
+                if data.get("start_to_think") is True:
+                    in_reasoning = True
+                    continue
+                if data.get("end_to_think") is True:
+                    in_reasoning = False
+                    continue
+                content = data.get("content")
+                if in_reasoning or not isinstance(content, str) or not content:
+                    continue
+                sanitized = content.replace("<think>", "").replace("</think>", "")
+                if sanitized:
+                    saw_content = True
+                    yield ExecutionEvent(event="message_delta", content=sanitized, session_id=session_id)
 
         if not saw_completion or not session_id or not saw_content:
             raise TargetExecutionFailedError()
@@ -407,87 +491,79 @@ class MultiRAGDialogExecutor:
         if context.target.revision_id is not None:
             # Dialog snapshots are not version-addressable in the current model.
             raise TargetRevisionUnavailableError()
-        return self._events(context=context, command=command)
-
-    async def _events(
-        self,
-        *,
-        context: TrustedChannelContext,
-        command: ChannelExecutionCommand,
-    ) -> AsyncIterator[ExecutionEvent]:
-        session_id = context.session_id
-        if session_id is None:
-            bootstrap_frames = self._driver.stream(
-                tenant_id=context.tenant_id,
-                target=context.target,
-                question=command.message.content,
-                session_id=None,
-                principal_id=context.principal_id,
-                operation=command.operation,
-            )
-            session_id = await self._consume_dialog_bootstrap(bootstrap_frames)
-
         frames = self._driver.stream(
             tenant_id=context.tenant_id,
             target=context.target,
             question=command.message.content,
-            session_id=session_id,
+            session_id=context.session_id,
             principal_id=context.principal_id,
             operation=command.operation,
         )
-        async for event in self._dialog_events(frames, require_content=True):
-            yield event
-
-    async def _consume_dialog_bootstrap(self, frames: AsyncIterator[str]) -> str:
-        session_id: str | None = None
-        async for event in self._dialog_events(frames, require_content=False):
-            if event.session_id:
-                session_id = event.session_id
-        if not session_id:
-            raise TargetExecutionFailedError()
-        return session_id
+        return self._dialog_events(frames)
 
     async def _dialog_events(
         self,
         frames: AsyncIterator[str],
-        *,
-        require_content: bool,
     ) -> AsyncIterator[ExecutionEvent]:
         session_id: str | None = None
         saw_completion = False
-        saw_content = False
-        in_reasoning = False
+        reasoning_filter = StreamingReasoningFilter()
+        visible_fragments: list[str] = []
+        saw_visible_delta = False
+        authoritative_content: str | None = None
 
-        async for frame in frames:
-            payload = _decode_sse_payload(frame)
-            if payload is None:
-                continue
-            if payload.get("code") != 0:
-                raise TargetExecutionFailedError()
-            data = payload.get("data")
-            if data is True:
-                saw_completion = True
-                continue
-            if not isinstance(data, dict):
-                continue
+        async with aclosing(frames) as managed_frames:
+            async for frame in managed_frames:
+                payload = _decode_sse_payload(frame)
+                if payload is None:
+                    continue
+                if payload.get("code") != 0:
+                    raise TargetExecutionFailedError()
+                data = payload.get("data")
+                if data is True:
+                    saw_completion = True
+                    continue
+                if not isinstance(data, dict):
+                    continue
 
-            raw_session_id = data.get("session_id")
-            if isinstance(raw_session_id, str) and raw_session_id:
-                session_id = raw_session_id
-            if data.get("start_to_think") is True:
-                in_reasoning = True
-                continue
-            if data.get("end_to_think") is True:
-                in_reasoning = False
-                continue
-            answer = data.get("answer")
-            if in_reasoning or not isinstance(answer, str) or not answer:
-                continue
-            sanitized = answer.replace("<think>", "").replace("</think>", "")
-            if sanitized:
-                saw_content = True
-                yield ExecutionEvent(event="message_delta", content=sanitized, session_id=session_id)
+                raw_session_id = data.get("session_id")
+                if isinstance(raw_session_id, str) and raw_session_id:
+                    session_id = raw_session_id
+                if data.get("start_to_think") is True:
+                    reasoning_filter.feed("<think>")
+                    continue
+                if data.get("end_to_think") is True:
+                    reasoning_filter.feed("</think>")
+                    continue
+                answer = data.get("answer")
+                if not isinstance(answer, str):
+                    continue
+                if data.get("final", True) is True:
+                    authoritative_content = strip_reasoning(answer) or strip_reasoning("".join(visible_fragments))
+                    # Older workers ignore terminal content and require at least
+                    # one visible delta. Preserve that mixed-version path for
+                    # final-only Dialog responses while newer workers replace it
+                    # with the same authoritative snapshot before completion.
+                    if authoritative_content and not saw_visible_delta:
+                        saw_visible_delta = True
+                        yield ExecutionEvent(
+                            event="message_delta",
+                            content=authoritative_content,
+                            session_id=session_id,
+                        )
+                    continue
+                if not answer:
+                    continue
+                sanitized = reasoning_filter.feed(answer)
+                if sanitized:
+                    visible_fragments.append(sanitized)
+                    saw_visible_delta = saw_visible_delta or bool(sanitized.strip())
+                    yield ExecutionEvent(event="message_delta", content=sanitized, session_id=session_id)
 
-        if not saw_completion or not session_id or (require_content and not saw_content):
+        if not saw_completion or not session_id or not authoritative_content:
             raise TargetExecutionFailedError()
-        yield ExecutionEvent(event="message_completed", session_id=session_id)
+        yield ExecutionEvent(
+            event="message_completed",
+            content=authoritative_content,
+            session_id=session_id,
+        )

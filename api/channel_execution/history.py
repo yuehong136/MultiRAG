@@ -1,9 +1,10 @@
-"""Channel-owned branching over MultiRAG Dialog and Canvas sessions.
+"""Target-private history transactions over MultiRAG sessions.
 
-The MultiRAG completion services intentionally know nothing about Channel
-operations.  This module gives Channel executions copy-on-write semantics:
-run against a private candidate session, then atomically promote it only after
-the target stream completed successfully.
+Dialog generation mutates a detached in-memory copy and publishes it with one
+terminal compare-and-swap. Canvas retains a private database candidate until
+its completion service exposes an equivalent non-persisting execution port.
+The MultiRAG synchronization surface intentionally knows nothing about Channel
+operations in either case.
 """
 
 from __future__ import annotations
@@ -14,14 +15,21 @@ import time
 from copy import deepcopy
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.types import JSON as SQLAlchemyJSON
 
 from api.channel_execution.errors import TargetExecutionFailedError
 from api.channel_execution.models import ExecutionOperation
 from api.channel_execution.reasoning import strip_reasoning
-from api.channel_execution.session_models import PreparedCanvasExecution, PreparedDialogExecution
-from api.db.db_models import API4Conversation, Conversation
+from api.channel_execution.session_models import (
+    DialogHistoryHead,
+    DialogWorkingCopy,
+    PreparedCanvasExecution,
+    PreparedDialogExecution,
+)
+from api.db.db_models import API4Conversation, Conversation, normalize_update_data
 from common.misc_utils import get_uuid
 
 _REGENERATE_SAFE_COMPONENTS = {
@@ -170,15 +178,6 @@ def _fingerprint(payload: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _dialog_fingerprint(row: Conversation) -> str:
-    return _fingerprint(
-        {
-            "message": row.message or [],
-            "reference": row.reference or [],
-        }
-    )
-
-
 def _canvas_fingerprint(row: API4Conversation) -> str:
     return _fingerprint(
         {
@@ -311,7 +310,7 @@ class SqlAlchemyCanvasHistoryTransaction:
 
 
 class SqlAlchemyDialogHistoryTransaction:
-    """Dialog-owned candidate transaction around MultiRAG completion."""
+    """Dialog-owned detached history with one terminal compare-and-swap."""
 
     def __init__(self, db: AsyncSession) -> None:
         self._db = db
@@ -323,84 +322,122 @@ class SqlAlchemyDialogHistoryTransaction:
         session_id: str | None,
         question: str,
         operation: ExecutionOperation,
+        user_id: str | None = None,
     ) -> PreparedDialogExecution:
-        await _prune_stale_candidates(self._db, Conversation, target_id)
+        # This target driver owns the session for the request. Ensure no earlier
+        # resolver read transaction can span the model stream.
+        await self._db.rollback()
         if session_id is None:
             if operation == "regenerate":
                 raise LookupError("A session is required for regeneration")
-            return PreparedDialogExecution(None, None, None, False)
+            public_session_id = get_uuid()
+            return PreparedDialogExecution(
+                public_session_id=public_session_id,
+                target_id=target_id,
+                expected_head=None,
+                working_copy=DialogWorkingCopy(
+                    id=public_session_id,
+                    dialog_id=target_id,
+                    name="New session",
+                    message=[],
+                    reference=[],
+                    user_id=user_id,
+                ),
+            )
 
-        source = await self._db.get(Conversation, session_id)
-        if source is None or source.dialog_id != target_id:
-            raise LookupError("Session not found")
-        messages = _sanitize_messages(source.message)
-        references = deepcopy(source.reference or [])
-        if operation == "regenerate":
-            _rewind_latest_turn(messages, references, question)
-        candidate_id = get_uuid()
-        candidate = Conversation(
-            id=candidate_id,
-            dialog_id=source.dialog_id,
-            name=_CANDIDATE_NAME,
-            message=messages,
-            reference=references,
-            user_id=candidate_id,
-        )
-        self._db.add(candidate)
-        await _commit(self._db)
-        return PreparedDialogExecution(
-            session_id,
-            candidate_id,
-            _dialog_fingerprint(source),
-            True,
-        )
+        try:
+            source = await self._db.get(Conversation, session_id)
+            if source is None or source.dialog_id != target_id:
+                raise LookupError("Session not found")
+            expected_head = DialogHistoryHead(
+                messages=deepcopy(source.message),
+                references=deepcopy(source.reference),
+                user_id=source.user_id,
+            )
+            messages = _sanitize_messages(source.message)
+            references = deepcopy(source.reference or [])
+            if operation == "regenerate":
+                _rewind_latest_turn(messages, references, question)
+            prepared = PreparedDialogExecution(
+                public_session_id=session_id,
+                target_id=target_id,
+                expected_head=expected_head,
+                working_copy=DialogWorkingCopy(
+                    id=session_id,
+                    dialog_id=target_id,
+                    name=source.name or "New session",
+                    message=messages,
+                    reference=references,
+                    user_id=source.user_id,
+                ),
+            )
+        finally:
+            # Release the read transaction before the potentially long model stream.
+            await self._db.rollback()
+        return prepared
 
-    async def commit(
-        self,
-        prepared: PreparedDialogExecution,
-        generated_session_id: str,
-    ) -> str:
-        if prepared.execution_session_id and generated_session_id != prepared.execution_session_id:
+    async def commit(self, prepared: PreparedDialogExecution) -> str:
+        # async_chat performs reads through this session. End that transaction
+        # before validating and starting the short terminal CAS/insert.
+        await self._db.rollback()
+        working = prepared.working_copy
+        if working.id != prepared.public_session_id or working.dialog_id != prepared.target_id:
             raise TargetExecutionFailedError()
+        messages = _sanitize_messages(working.message)
+        if not _has_visible_assistant(messages):
+            raise TargetExecutionFailedError()
+        references = deepcopy(working.reference)
 
-        if prepared.public_session_id is None:
-            row = await _locked_one(self._db, Conversation, generated_session_id)
-            messages = _sanitize_messages(row.message)
-            if prepared.require_visible_answer and not _has_visible_assistant(messages):
-                raise TargetExecutionFailedError()
-            row.message = messages
-            await _commit(self._db)
-            return generated_session_id
+        expected = prepared.expected_head
+        if expected is None:
+            self._db.add(
+                Conversation(
+                    id=prepared.public_session_id,
+                    dialog_id=working.dialog_id,
+                    name=working.name,
+                    message=messages,
+                    reference=references,
+                    user_id=working.user_id,
+                )
+            )
+            try:
+                await _commit(self._db)
+            except IntegrityError as exc:
+                raise TargetExecutionFailedError() from exc
+            return prepared.public_session_id
 
-        public, candidate = await _locked_pair(
-            self._db,
+        conditions = [
+            Conversation.id == prepared.public_session_id,
+            Conversation.dialog_id == working.dialog_id,
+            (or_(Conversation.message.is_(None), Conversation.message == SQLAlchemyJSON.NULL) if expected.messages is None else Conversation.message == expected.messages),
+            (or_(Conversation.reference.is_(None), Conversation.reference == SQLAlchemyJSON.NULL) if expected.references is None else Conversation.reference == expected.references),
+            Conversation.user_id.is_(None) if expected.user_id is None else Conversation.user_id == expected.user_id,
+        ]
+        values = normalize_update_data(
             Conversation,
-            prepared.public_session_id,
-            generated_session_id,
+            {
+                Conversation.message: messages,
+                Conversation.reference: references,
+            },
         )
-        if _dialog_fingerprint(public) != prepared.source_fingerprint:
+        try:
+            result = await self._db.execute(update(Conversation).where(*conditions).values(values).execution_options(synchronize_session=False))
+        except Exception:
+            await self._db.rollback()
+            raise
+        if result.rowcount != 1:
+            await self._db.rollback()
             raise TargetExecutionFailedError()
-        messages = _sanitize_messages(candidate.message)
-        if prepared.require_visible_answer and not _has_visible_assistant(messages):
-            raise TargetExecutionFailedError()
-        public.message = messages
-        public.reference = deepcopy(candidate.reference)
-        await self._db.delete(candidate)
         await _commit(self._db)
         return prepared.public_session_id
 
-    async def abort(
-        self,
-        prepared: PreparedDialogExecution,
-        generated_session_id: str | None,
-    ) -> None:
-        await _abort_candidate(
-            self._db,
-            Conversation,
-            prepared.public_session_id,
-            prepared.execution_session_id,
-            generated_session_id,
-        )
+    async def abort(self, prepared: PreparedDialogExecution) -> None:
+        del prepared
+        try:
+            await self._db.rollback()
+        except Exception:
+            # Abort is best-effort and must never mask the execution failure.
+            pass
 
 
 async def _abort_candidate(

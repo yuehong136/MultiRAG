@@ -1,6 +1,7 @@
 """Tests for concrete Channel execution boundary adapters."""
 
 from collections.abc import AsyncIterator
+from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
 
@@ -21,7 +22,12 @@ from api.channel_execution.models import (
     ExecutionTargetRef,
     WorkloadIdentity,
 )
-from api.channel_execution.session_models import PreparedCanvasExecution, PreparedDialogExecution
+from api.channel_execution.session_models import (
+    DialogHistoryHead,
+    DialogWorkingCopy,
+    PreparedCanvasExecution,
+    PreparedDialogExecution,
+)
 
 
 class FakeCanvasHistoryTransaction:
@@ -64,9 +70,9 @@ class FakeCanvasHistoryTransaction:
 
 class FakeDialogHistoryTransaction:
     def __init__(self) -> None:
-        self.prepared: list[tuple[str, str | None, str, ExecutionOperation]] = []
-        self.completed: list[tuple[str, bool]] = []
-        self.aborted: list[str | None] = []
+        self.prepared: list[tuple[str, str | None, str, ExecutionOperation, str | None]] = []
+        self.completed: list[DialogWorkingCopy] = []
+        self.aborted: list[str] = []
 
     async def prepare(
         self,
@@ -75,30 +81,50 @@ class FakeDialogHistoryTransaction:
         session_id: str | None,
         question: str,
         operation: ExecutionOperation,
+        user_id: str | None = None,
     ) -> PreparedDialogExecution:
-        self.prepared.append((target_id, session_id, question, operation))
+        self.prepared.append((target_id, session_id, question, operation, user_id))
+        public_session_id = session_id or "new-dialog-session"
         return PreparedDialogExecution(
-            session_id,
-            "candidate-dialog" if session_id else None,
-            "source-fingerprint" if session_id else None,
-            session_id is not None,
+            public_session_id=public_session_id,
+            target_id=target_id,
+            expected_head=(
+                DialogHistoryHead(
+                    messages=[{"role": "assistant", "content": "prologue"}],
+                    references=[],
+                    user_id="existing-user",
+                )
+                if session_id
+                else None
+            ),
+            working_copy=DialogWorkingCopy(
+                id=public_session_id,
+                dialog_id=target_id,
+                name="existing" if session_id else "New session",
+                message=([{"role": "assistant", "content": "prologue"}] if session_id else []),
+                reference=[],
+                user_id="existing-user" if session_id else user_id,
+            ),
         )
 
-    async def commit(
-        self,
-        prepared: PreparedDialogExecution,
-        generated_session_id: str,
-    ) -> str:
-        self.completed.append((generated_session_id, prepared.require_visible_answer))
-        return prepared.public_session_id or generated_session_id
+    async def commit(self, prepared: PreparedDialogExecution) -> str:
+        self.completed.append(deepcopy(prepared.working_copy))
+        return prepared.public_session_id
 
-    async def abort(
-        self,
-        prepared: PreparedDialogExecution,
-        generated_session_id: str | None,
-    ) -> None:
-        del prepared
-        self.aborted.append(generated_session_id)
+    async def abort(self, prepared: PreparedDialogExecution) -> None:
+        self.aborted.append(prepared.public_session_id)
+
+
+def _install_dialog_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    adapter: SqlAlchemyDialogTargetDriver,
+) -> None:
+    async def _snapshot(*, tenant_id: str, target_id: str) -> SimpleNamespace:
+        assert tenant_id == "tenant-1"
+        assert target_id == "dialog-1"
+        return SimpleNamespace(prompt_config={"prologue": "prologue"})
+
+    monkeypatch.setattr(adapter, "_load_dialog_snapshot", _snapshot)
 
 
 class FakeRepository:
@@ -391,8 +417,8 @@ async def test_canvas_adapter_guards_latest_release_without_extending_canvas_con
 
 
 @pytest.mark.asyncio
-async def test_dialog_adapter_promotes_only_complete_stream_and_hides_candidate_id(monkeypatch) -> None:
-    from api.db.services import conversation_service as conversation_service_module
+async def test_dialog_driver_commits_complete_answer_from_detached_working_copy(monkeypatch) -> None:
+    from api.db.services import dialog_service as dialog_service_module
 
     target = ExecutionTargetRef(
         target_type="multirag.dialog",
@@ -401,18 +427,28 @@ async def test_dialog_adapter_promotes_only_complete_stream_and_hides_candidate_
     db = AsyncSession()
     sessions = FakeDialogHistoryTransaction()
     adapter = SqlAlchemyDialogTargetDriver(db, sessions)
+    _install_dialog_snapshot(monkeypatch, adapter)
     captured: dict[str, object] = {}
 
-    def _completion(**kwargs: Any) -> AsyncIterator[str]:
-        captured.update(kwargs)
+    async def _chat(
+        dialog: object,
+        messages: list[dict[str, Any]],
+        chat_db: AsyncSession,
+        stream: bool,
+        **kwargs: Any,
+    ) -> AsyncIterator[dict[str, Any]]:
+        captured.update(
+            {
+                "dialog": dialog,
+                "messages": messages,
+                "db": chat_db,
+                "stream": stream,
+                **kwargs,
+            }
+        )
+        yield {"answer": "answer", "reference": {}, "final": True}
 
-        async def _frames() -> AsyncIterator[str]:
-            yield 'data:{"code":0,"data":{"answer":"answer","session_id":"candidate-dialog"}}\n\n'
-            yield 'data:{"code":0,"data":true}\n\n'
-
-        return _frames()
-
-    monkeypatch.setattr(conversation_service_module, "async_completion", _completion)
+    monkeypatch.setattr(dialog_service_module, "async_chat", _chat)
     frames = [
         frame
         async for frame in adapter.stream(
@@ -425,22 +461,23 @@ async def test_dialog_adapter_promotes_only_complete_stream_and_hides_candidate_
         )
     ]
 
-    assert captured["session_id"] == "candidate-dialog"
-    assert "regenerate" not in captured
-    assert "persist_reasoning" not in captured
-    assert "require_visible_answer" not in captured
-    assert "candidate-dialog" not in "".join(frames)
+    assert captured["stream"] is True
+    assert captured["db"] is db
+    assert captured["messages"] == [{"content": "same question", "role": "user", "id": captured["messages"][0]["id"]}]
     assert '"session_id": "dialog-session"' in frames[0]
-    assert sessions.completed == [("candidate-dialog", True)]
+    assert frames[-1] == 'data:{"code": 0, "data": true}\n\n'
+    assert sessions.prepared == [("dialog-1", "dialog-session", "same question", "regenerate", "principal-1")]
+    assert sessions.completed[0].message[-1]["content"] == "answer"
+    assert sessions.completed[0].reference == [{"chunks": []}]
     assert sessions.aborted == []
     await db.close()
 
 
 @pytest.mark.asyncio
-async def test_dialog_adapter_publishes_new_session_only_after_bootstrap_completes(
+async def test_dialog_driver_generates_new_session_once_without_exposing_prologue(
     monkeypatch,
 ) -> None:
-    from api.db.services import conversation_service as conversation_service_module
+    from api.db.services import dialog_service as dialog_service_module
 
     target = ExecutionTargetRef(
         target_type="multirag.dialog",
@@ -449,17 +486,23 @@ async def test_dialog_adapter_publishes_new_session_only_after_bootstrap_complet
     db = AsyncSession()
     sessions = FakeDialogHistoryTransaction()
     adapter = SqlAlchemyDialogTargetDriver(db, sessions)
+    _install_dialog_snapshot(monkeypatch, adapter)
+    calls = 0
 
-    def _completion(**kwargs: Any) -> AsyncIterator[str]:
-        assert kwargs["session_id"] is None
+    async def _chat(
+        dialog: object,
+        messages: list[dict[str, Any]],
+        chat_db: AsyncSession,
+        stream: bool,
+        **kwargs: Any,
+    ) -> AsyncIterator[dict[str, Any]]:
+        nonlocal calls
+        del dialog, chat_db, stream, kwargs
+        calls += 1
+        assert [message["content"] for message in messages] == ["hello"]
+        yield {"answer": "first answer", "reference": {}, "final": True}
 
-        async def _frames() -> AsyncIterator[str]:
-            yield 'data:{"code":0,"data":{"answer":"prologue","session_id":"new-session"}}\n\n'
-            yield 'data:{"code":0,"data":true}\n\n'
-
-        return _frames()
-
-    monkeypatch.setattr(conversation_service_module, "async_completion", _completion)
+    monkeypatch.setattr(dialog_service_module, "async_chat", _chat)
     frames = [
         frame
         async for frame in adapter.stream(
@@ -471,15 +514,18 @@ async def test_dialog_adapter_publishes_new_session_only_after_bootstrap_complet
         )
     ]
 
-    assert "new-session" in frames[0]
-    assert sessions.completed == [("new-session", False)]
+    assert calls == 1
+    assert "prologue" not in "".join(frames)
+    assert "new-dialog-session" in frames[0]
+    assert sessions.completed[0].message[0]["content"] == "prologue"
+    assert sessions.completed[0].message[-1]["content"] == "first answer"
     assert sessions.aborted == []
     await db.close()
 
 
 @pytest.mark.asyncio
-async def test_dialog_adapter_aborts_candidate_when_upstream_stream_fails(monkeypatch) -> None:
-    from api.db.services import conversation_service as conversation_service_module
+async def test_dialog_driver_discards_working_copy_when_generation_fails(monkeypatch) -> None:
+    from api.db.services import dialog_service as dialog_service_module
 
     target = ExecutionTargetRef(
         target_type="multirag.dialog",
@@ -488,18 +534,16 @@ async def test_dialog_adapter_aborts_candidate_when_upstream_stream_fails(monkey
     db = AsyncSession()
     sessions = FakeDialogHistoryTransaction()
     adapter = SqlAlchemyDialogTargetDriver(db, sessions)
+    _install_dialog_snapshot(monkeypatch, adapter)
 
-    async def _failed_frames() -> AsyncIterator[str]:
-        yield 'data:{"code":500,"data":false}\n\n'
-        yield 'data:{"code":0,"data":true}\n\n'
+    async def _chat(*args: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        del args, kwargs
+        yield {"answer": "partial", "reference": {}, "final": False}
+        raise RuntimeError("upstream failed")
 
-    def _completion(**kwargs: Any) -> AsyncIterator[str]:
-        del kwargs
-        return _failed_frames()
+    monkeypatch.setattr(dialog_service_module, "async_chat", _chat)
 
-    monkeypatch.setattr(conversation_service_module, "async_completion", _completion)
-
-    with pytest.raises(TargetExecutionFailedError):
+    with pytest.raises(RuntimeError, match="upstream failed"):
         _ = [
             frame
             async for frame in adapter.stream(
@@ -513,7 +557,110 @@ async def test_dialog_adapter_aborts_candidate_when_upstream_stream_fails(monkey
         ]
 
     assert sessions.completed == []
-    assert sessions.aborted == ["candidate-dialog"]
+    assert sessions.aborted == ["dialog-session"]
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_dialog_driver_rejects_partial_stream_without_final_snapshot(monkeypatch) -> None:
+    from api.db.services import dialog_service as dialog_service_module
+
+    db = AsyncSession()
+    sessions = FakeDialogHistoryTransaction()
+    adapter = SqlAlchemyDialogTargetDriver(db, sessions)
+    _install_dialog_snapshot(monkeypatch, adapter)
+
+    async def _chat(*args: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        del args, kwargs
+        yield {"answer": "partial", "reference": {}, "final": False}
+
+    monkeypatch.setattr(dialog_service_module, "async_chat", _chat)
+
+    with pytest.raises(TargetExecutionFailedError):
+        _ = [
+            frame
+            async for frame in adapter.stream(
+                tenant_id="tenant-1",
+                target=ExecutionTargetRef(target_type="multirag.dialog", target_id="dialog-1"),
+                question="hello",
+                session_id="dialog-session",
+                principal_id=None,
+            )
+        ]
+
+    assert sessions.completed == []
+    assert sessions.aborted == ["dialog-session"]
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_dialog_driver_preserves_complete_snapshot_for_terminal_projection(monkeypatch) -> None:
+    from api.db.services import dialog_service as dialog_service_module
+
+    db = AsyncSession()
+    sessions = FakeDialogHistoryTransaction()
+    adapter = SqlAlchemyDialogTargetDriver(db, sessions)
+    _install_dialog_snapshot(monkeypatch, adapter)
+
+    async def _chat(*args: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        del args, kwargs
+        yield {"answer": "a", "reference": {}, "final": False}
+        yield {"answer": "b", "reference": {}, "final": False}
+        yield {"answer": "ab", "reference": {}, "final": True}
+
+    monkeypatch.setattr(dialog_service_module, "async_chat", _chat)
+    frames = [
+        frame
+        async for frame in adapter.stream(
+            tenant_id="tenant-1",
+            target=ExecutionTargetRef(target_type="multirag.dialog", target_id="dialog-1"),
+            question="hello",
+            session_id="dialog-session",
+            principal_id=None,
+        )
+    ]
+
+    assert sum('"answer": "a"' in frame for frame in frames) == 1
+    assert sum('"answer": "b"' in frame for frame in frames) == 1
+    assert sum('"answer": "ab"' in frame for frame in frames) == 1
+    assert sessions.completed[0].message[-1]["content"] == "ab"
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_dialog_driver_closes_inner_stream_and_aborts_when_consumer_cancels(monkeypatch) -> None:
+    from api.db.services import dialog_service as dialog_service_module
+
+    db = AsyncSession()
+    sessions = FakeDialogHistoryTransaction()
+    adapter = SqlAlchemyDialogTargetDriver(db, sessions)
+    _install_dialog_snapshot(monkeypatch, adapter)
+    inner_closed = False
+
+    async def _chat(*args: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        nonlocal inner_closed
+        del args, kwargs
+        try:
+            yield {"answer": "partial", "reference": {}, "final": False}
+            yield {"answer": "never", "reference": {}, "final": True}
+        finally:
+            inner_closed = True
+
+    monkeypatch.setattr(dialog_service_module, "async_chat", _chat)
+    stream = adapter.stream(
+        tenant_id="tenant-1",
+        target=ExecutionTargetRef(target_type="multirag.dialog", target_id="dialog-1"),
+        question="hello",
+        session_id="dialog-session",
+        principal_id=None,
+    )
+
+    assert "partial" in await anext(stream)
+    await stream.aclose()
+
+    assert inner_closed is True
+    assert sessions.completed == []
+    assert sessions.aborted == ["dialog-session"]
     await db.close()
 
 

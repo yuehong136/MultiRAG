@@ -131,8 +131,9 @@ BindingExecutionEvent = MessageDeltaEvent | MessageCompletedEvent | ExecutionFai
 它们只携带用户可见 `content`、稳定 `error_code` 和必要 `session_id`，不携带飞书
 `card_id/message_id/sequence` 等字段。`stream()` 负责跨 delta reasoning 过滤、SSE 完整性与安全错误
 归一；未知加法事件会被忽略。EIM-U12 / CHN-U14 复用既有可选 `content` 字段表示
-`message_completed` 的权威终态正文：consumer/tolerate 半步先落 worker 且不改变线格，部署确认后
-Dialog producer 才 emit。新 worker 对旧 API 回退 delta；旧 worker 忽略额外字段并继续消费原 delta。
+`message_completed` 的权威终态正文：consumer/tolerate 先落 worker 且不改变线格，generation 8
+部署确认后 Dialog producer 才 emit。新 worker 对旧 API 回退 delta；旧 worker 忽略额外字段并继续
+消费原 delta。
 
 后续事件的演进目标仍是：
 
@@ -519,7 +520,7 @@ SLO 是上线初始目标，真实压测和灰度后可调整；调整必须写�
 | EIM-U10 | CHN-U13 | 后台单写者刷新、latest-value 合并、固定客户端打印参数 | U9；不依赖 C5 |
 | EIM-U4 | CHN-U9 | follow-up queue、纯生成取消、重新生成、反馈 | U1 |
 | EIM-U11 | CHN-X13 | ✅ Provider/Target capabilities、启动预取与目标私有 driver | U4 |
-| EIM-U12 | CHN-U14 | 🔵 权威快照 consumer 已实现、等待部署；随后 Dialog detached working copy + 终态 CAS emit | U11 |
+| EIM-U12 | CHN-U14 | ✅ 权威快照 consumer 已部署；Dialog detached working copy + 终态 CAS emit | U11 |
 | EIM-U13 | CHN-U15 | Canvas 专属候选与周期 GC | U11、U12 |
 | EIM-U3 | CHN-U10 | mention-only 群聊、话题、thread session | U1、U2、C3、O2 |
 | EIM-U5 | CHN-X10 | references/artifacts 结构化事件与渲染 | U0、P2 |

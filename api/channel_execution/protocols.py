@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Protocol, TypeVar, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from fastapi import Request
 
@@ -16,8 +16,7 @@ from api.channel_execution.models import (
     TrustedChannelContext,
     WorkloadIdentity,
 )
-
-PreparedExecutionT = TypeVar("PreparedExecutionT")
+from api.channel_execution.session_models import PreparedCanvasExecution, PreparedDialogExecution
 
 
 @runtime_checkable
@@ -115,8 +114,8 @@ class WorkloadAuthenticator(Protocol):
 
 
 @runtime_checkable
-class TargetHistoryTransaction(Protocol[PreparedExecutionT]):
-    """Target-private copy-on-write transaction around MultiRAG history."""
+class CanvasHistoryTransaction(Protocol):
+    """Canvas-private candidate transaction around MultiRAG history."""
 
     async def prepare(
         self,
@@ -125,19 +124,38 @@ class TargetHistoryTransaction(Protocol[PreparedExecutionT]):
         session_id: str | None,
         question: str,
         operation: ExecutionOperation,
-    ) -> PreparedExecutionT: ...
+    ) -> PreparedCanvasExecution: ...
 
     async def commit(
         self,
-        prepared: PreparedExecutionT,
+        prepared: PreparedCanvasExecution,
         generated_session_id: str,
     ) -> str: ...
 
     async def abort(
         self,
-        prepared: PreparedExecutionT,
+        prepared: PreparedCanvasExecution,
         generated_session_id: str | None,
     ) -> None: ...
+
+
+@runtime_checkable
+class DialogHistoryTransaction(Protocol):
+    """Dialog-private detached transaction around MultiRAG history."""
+
+    async def prepare(
+        self,
+        *,
+        target_id: str,
+        session_id: str | None,
+        question: str,
+        operation: ExecutionOperation,
+        user_id: str | None = None,
+    ) -> PreparedDialogExecution: ...
+
+    async def commit(self, prepared: PreparedDialogExecution) -> str: ...
+
+    async def abort(self, prepared: PreparedDialogExecution) -> None: ...
 
 
 @runtime_checkable

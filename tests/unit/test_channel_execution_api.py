@@ -33,7 +33,11 @@ class _RouteService:
 
         async def _events() -> AsyncIterator[ExecutionEvent]:
             yield ExecutionEvent(event="message_delta", content="answer", session_id="session-1")
-            yield ExecutionEvent(event="message_completed", session_id="session-1")
+            yield ExecutionEvent(
+                event="message_completed",
+                content="authoritative ##0$$ answer",
+                session_id="session-1",
+            )
 
         return _events()
 
@@ -93,7 +97,7 @@ def test_internal_route_returns_only_sanitized_sse_contract(client) -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     assert 'data:{"event":"message_delta","content":"answer","session_id":"session-1"}' in response.text
-    assert 'data:{"event":"message_completed","session_id":"session-1"}' in response.text
+    assert 'data:{"event":"message_completed","content":"authoritative ##0$$ answer","session_id":"session-1"}' in response.text
     assert "data:[DONE]" in response.text
     assert "trace" not in response.text
 
