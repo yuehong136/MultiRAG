@@ -57,9 +57,10 @@ Progressive reply adapter
   -> 飞书 reaction/CardKit/post/text renderer
 ```
 
-执行层已经产生的 `message_delta` 不得在 Channel client 中重新聚合后才交给 Provider。CardKit
-创建、节流、sequence、最终 flush 和降级属于飞书 renderer；业务 bridge 只理解 ReplySession
-状态。该体验链不依赖 transport 从 `lark-oapi.ws.Client` 迁移到 `lark-channel-sdk`，完整设计见
+执行层产生的 `message_delta` 不得在 Channel client 中等待完整回答后才交给 Provider；若
+`message_completed` 携带引用装饰后的权威正文，Bridge 通过 `ReplySession.replace()` 整体校正后再
+完成。CardKit 创建、节流、sequence、最终 flush 和降级属于飞书 renderer；业务 bridge 只理解
+ReplySession 状态。该体验链不依赖 transport 从 `lark-oapi.ws.Client` 迁移到 `lark-channel-sdk`，完整设计见
 [FEISHU_BOT_UX](FEISHU_BOT_UX.md)。
 
 #### Channel control/runtime

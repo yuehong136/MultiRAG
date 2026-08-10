@@ -52,6 +52,14 @@ class BufferedReplySession:
             raise TypeError("reply delta must be a string")
         self._parts.append(content)
 
+    async def replace(self, content: str) -> None:
+        """Replace buffered deltas with one authoritative answer snapshot."""
+
+        self._require_open("replace")
+        if not isinstance(content, str):
+            raise TypeError("reply snapshot must be a string")
+        self._parts = [content]
+
     async def set_status(
         self,
         status: ReplyStatus,

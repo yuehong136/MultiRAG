@@ -75,6 +75,24 @@ async def test_buffered_reply_session_preserves_append_order_and_sends_once_on_c
 
 
 @pytest.mark.asyncio
+async def test_buffered_reply_session_replaces_deltas_with_authoritative_snapshot() -> None:
+    channel = _Channel()
+    session = await channel.begin_reply(_source(), max_content_chars=100)
+
+    await session.append("raw answer")
+    await session.replace("raw ##0$$ answer")
+    await session.complete()
+
+    assert channel.sent == [
+        OutgoingMessage(
+            chat_id="chat-1",
+            content="raw ##0$$ answer",
+            reply_to_message_id="message-1",
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_buffered_reply_session_applies_the_limit_across_multiple_appends() -> None:
     channel = _Channel()
     session = await channel.begin_reply(_source(), max_content_chars=50)
@@ -88,7 +106,7 @@ async def test_buffered_reply_session_applies_the_limit_across_multiple_appends(
     assert channel.sent[0].content == truncate_answer(answer, 50)
 
 
-@pytest.mark.parametrize("operation", ["append", "complete", "fail"])
+@pytest.mark.parametrize("operation", ["append", "replace", "complete", "fail"])
 @pytest.mark.asyncio
 async def test_buffered_reply_session_rejects_every_transition_after_complete(operation: str) -> None:
     channel = _Channel()
@@ -99,6 +117,8 @@ async def test_buffered_reply_session_rejects_every_transition_after_complete(op
     with pytest.raises(ReplySessionStateError):
         if operation == "append":
             await session.append("late")
+        elif operation == "replace":
+            await session.replace("late")
         elif operation == "complete":
             await session.complete()
         else:

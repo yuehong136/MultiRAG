@@ -184,6 +184,12 @@ streaming card；否则回退 buffered reply。卡片失败只切换交付方式
 `reply_to_message_id`、Redis claim 和 executed/replied tombstone 语义保持不变。同会话串行只有
 `ChannelWorker` 一个所有者；Bridge 不再叠第二把会话锁。
 
+EIM-U12 / CHN-U14 的 consumer/tolerate 半步允许 `message_completed` 携带可选的用户可见权威正文。
+新 worker 收到时先用 `ReplySession.replace()` 整体替换内存中的 delta，再执行 `complete()`；这能表达
+引用标记插入正文中间等非 append-only 终态。旧 API 缺字段时继续聚合 delta，旧 worker 也会忽略该
+额外字段。按 CHN-ADR-06，本半步不改变 SSE 线格；只有 worker 部署确认后，Dialog producer 才开始
+emit 该字段。
+
 `ask()` 仅是消费同一个 `stream()` 并聚合为 `AgentReply` 的阶段性兼容 facade，用于迁移和回滚
 安全；它不是推荐接口，新代码不得增加调用。生产调用归零且 EIM-U1 稳定后应在独立任务中删除。
 默认实现仍是最终单条纯文本；飞书已实现 EIM-U1/CHN-U8 渐进式 Provider session。
@@ -226,16 +232,17 @@ worker 全局队列满时，Bridge 会先 claim 消息再回复固定 busy 文�
 调用：它保留原来源消息用于 reply threading，以飞书回调 event ID 建立新的 `request_id`，然后重新
 进入同一会话队列，因此不会与当前生成并发写同一会话。只有当前会话最新的完成卡可重新生成；
 已有后续追问时点击旧卡会直接提示过期。完成卡发出显式 `regenerate` operation；Channel execution
-反腐层从公开会话头创建一个不可见的私有候选，在候选中撤回最新且问题匹配的 user/assistant 对，
-再调用既有的 MultiRAG Dialog/Canvas completion 契约。只有流完整结束且产生可见答案时才在行锁内校验公开头
-指纹并原子晋升候选；失败、取消或并发冲突只删除候选，公开历史始终不动。连续点击不会重复追加
-同一句 user。
-error/cancelled 卡的按钮按普通 retry 处理，因为失败轮次没有提交，不能误删上一轮成功历史；它与
-完成卡的 regenerate 使用不同 action kind 和目标能力。
+反腐层从公开会话头创建目标私有 working state，撤回最新且问题匹配的 user/assistant 对，再调用
+既有 MultiRAG 生成能力。当前 Dialog/Canvas 仍使用各自数据库候选并原子晋升；U14 的 producer/emit
+半步将在 worker 部署 consumer 后把 Dialog 切到纯内存副本 + 终态 CAS。commit barrier 前的失败、
+取消或并发冲突不改公开历史，连续点击不会重复追加同一句 user。
+error/cancelled 卡使用独立 retry action。普通消息失败后的 retry 仍是 `message`；若失败的是一次
+`regenerate`，retry 会继承 `regenerate`，因为公开历史中的旧成功尾轮仍然存在，降成普通消息反而会
+重复追加问题。完成卡的 regenerate 始终显式使用 `regenerate`。
 
-Channel 目标的候选提示词和晋升后的持久化历史只使用用户可见答案，不保存或回灌 `<think>`
-reasoning；reasoning-only、取消或失败不会提交半轮消息。Dialog 和 Canvas 都在私有候选中生成，
-Canvas 额外从可见 transcript 重建内部 history，修复存量 raw reasoning 污染。Canvas capability
+Channel 目标的 working state 和提交后的持久化历史只使用用户可见答案，不保存或回灌 `<think>`
+reasoning；reasoning-only、取消或失败不会提交半轮消息。Canvas 额外从可见 transcript 重建内部
+history，修复存量 raw reasoning 污染。Canvas capability
 按最新发布图动态解析：未知组件、工具/MCP、文档/Excel 持久输出、带附件输出或 Memory 保存的
 Message 同时关闭 regenerate 与 retry；纯文本 Message 仍可安全重放。
 `operation` 是私有 execution command 的可选加法字段：普通消息仍省略它；action 请求必须显式发送。
@@ -264,11 +271,11 @@ batch update 添加“重新生成 / 有帮助 / 没帮助”，生成中的卡�
 仓库与分析面板仍不在本阶段范围。`/new` 清空未运行 follow-up 与中途 steering 也继续等待执行引擎
 具备明确语义后单独实现。
 
-上述“Dialog/Canvas 都使用数据库候选”是 CHN-U9 的当前安全实现，不是永久公共抽象。CHN-X13 已将
-两者拆为 `SqlAlchemyDialogTargetDriver` / `SqlAlchemyCanvasTargetDriver` 与各自的
-`TargetHistoryTransaction`；目标架构见
+CHN-X13 已将两者拆为 `SqlAlchemyDialogTargetDriver` / `SqlAlchemyCanvasTargetDriver` 与各自的
+history transaction；CHN-U14 已完成权威终态快照的 worker tolerate 半步，Dialog `detached_cas`
+producer 要等该 worker 部署后再 emit。目标架构见
 [`docs/channel-program/EXECUTION_ARCHITECTURE.md`](../../docs/channel-program/EXECUTION_ARCHITECTURE.md)：
-Provider 与执行目标正交；Dialog 先迁移到内存工作副本 + 终态 CAS，Canvas 在 MultiRAG 提供无落库
+Provider 与执行目标正交；Dialog 将先迁移到内存副本 + 终态 CAS，Canvas 在 MultiRAG 提供无落库
 执行端口前保留专属候选；worker 始终只走内部 API/SSE，不为卡片或 delta 访问数据库。
 
 ### Canvas 发布版本兼容策略

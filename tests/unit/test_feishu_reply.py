@@ -479,6 +479,20 @@ async def test_progressive_reply_throttles_updates_then_flushes_and_finishes_in_
 
 
 @pytest.mark.asyncio
+async def test_terminal_snapshot_replaces_streamed_deltas_before_finishing_card() -> None:
+    transport = _Transport()
+    session = await _session(transport, _Clock())
+
+    await session.append("raw answer")
+    await session.replace("raw ##0$$ answer")
+    await session.complete()
+
+    assert transport.updates[-1][1] == "raw ##0$$ answer"
+    assert [update[2] for update in transport.updates] == sorted(update[2] for update in transport.updates)
+    assert transport.finishes[0][1] > transport.updates[-1][2]
+
+
+@pytest.mark.asyncio
 async def test_append_never_waits_for_cardkit_network() -> None:
     clock = _Clock()
     transport = _BlockingUpdateTransport()

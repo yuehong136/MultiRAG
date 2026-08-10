@@ -473,6 +473,59 @@ async def test_execution_stream_yields_ordered_typed_events_and_ignores_additive
     assert not any(hasattr(event, field) for event in events for field in ("card_id", "message_id", "sequence"))
 
 
+@pytest.mark.asyncio
+async def test_execution_stream_uses_authoritative_terminal_snapshot() -> None:
+    sse = (
+        'data:{"event":"message_delta","content":"foo ","session_id":"session-server"}\n\n'
+        'data:{"event":"message_delta","content":"bar baz","session_id":"session-server"}\n\n'
+        'data:{"event":"message_completed","content":"foo bar ##0$$ baz","session_id":"session-server"}\n\n'
+        "data:[DONE]\n\n"
+    )
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = _execution_client(http_client)
+        events = await _collect_execution_stream(client)
+
+    assert events == [
+        MessageDeltaEvent(content="foo ", session_id="session-server"),
+        MessageDeltaEvent(content="bar baz", session_id="session-server"),
+        MessageCompletedEvent(
+            session_id="session-server",
+            content="foo bar ##0$$ baz",
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_aggregated_reply_prefers_authoritative_terminal_snapshot() -> None:
+    sse = (
+        'data:{"event":"message_delta","content":"foo bar baz","session_id":"session-server"}\n\n'
+        'data:{"event":"message_completed","content":"foo bar ##0$$ baz","session_id":"session-server"}\n\n'
+        "data:[DONE]\n\n"
+    )
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        reply = await _execution_client(http_client).ask(
+            question="question",
+            event_id="event-1",
+            conversation_key="conversation-1",
+            provider="feishu",
+            subject="ou-user",
+            conversation="oc-chat",
+        )
+
+    assert reply == AgentReply(
+        content="foo bar ##0$$ baz",
+        session_id="session-server",
+    )
+
+
 @pytest.mark.parametrize(
     ("sse", "expected_code"),
     [
@@ -487,6 +540,14 @@ async def test_execution_stream_yields_ordered_typed_events_and_ignores_additive
             'data:{"event":"message_delta","content":42}\n\ndata:[DONE]\n\n',
             "CHANNEL_EXECUTION_INVALID_SSE",
         ),
+        (
+            'data:{"event":"message_delta","content":"answer","session_id":"session-server"}\n\ndata:{"event":"message_completed","content":42,"session_id":"session-server"}\n\ndata:[DONE]\n\n',
+            "CHANNEL_EXECUTION_INVALID_SSE",
+        ),
+        (
+            'data:{"event":"message_delta","content":"answer","session_id":"session-server"}\n\ndata:{"event":"message_completed","content":"<think>private</think>","session_id":"session-server"}\n\ndata:[DONE]\n\n',
+            "CHANNEL_EXECUTION_EMPTY",
+        ),
         ('data:{"event":"message_completed"}\n\ndata:[DONE]\n\n', "CHANNEL_EXECUTION_INCOMPLETE"),
     ],
     ids=[
@@ -495,6 +556,8 @@ async def test_execution_stream_yields_ordered_typed_events_and_ignores_additive
         "invalid-json",
         "non-object-json",
         "invalid-known-event",
+        "invalid-completed-snapshot",
+        "reasoning-only-completed-snapshot",
         "completed-without-session",
     ],
 )

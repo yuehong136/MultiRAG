@@ -167,7 +167,8 @@ class TargetHistoryTransaction[PreparedT](Protocol):
 visible_actions = ProviderCapabilities ∩ TargetCapabilities ∩ RunPolicy
 ```
 
-Dialog 当前为 `candidate_cas`，由 U14 迁移到 `detached_cas`。Canvas 的 `regeneration` 与 `retryable`
+Dialog 当前为 `candidate_cas`；U14 的 worker tolerate 部署后再由 producer 切换到 `detached_cas`。
+Canvas 仍为 `candidate_cas`。Canvas 的 `regeneration` 与 `retryable`
 按已发布图动态判断：含工具、MCP、代码执行、写 SQL、未知组件、文档/Excel 持久输出，或带附件输出/
 Memory 保存的 Message 时均 fail closed；纯文本 Message 可安全重放。停止按钮只表示停止等待后续输出，
 不得宣称已撤销外部副作用。
@@ -203,7 +204,7 @@ stateDiagram-v2
 
 ### Dialog：`detached_cas`
 
-Dialog 是主目标，应先收敛到：
+Dialog 是主目标，U14 将收敛到：
 
 1. 读取一次 MultiRAG Dialog 公开会话和目标配置；
 2. 清洗为可见 transcript，在内存中构造 detached working copy；
@@ -223,6 +224,7 @@ CAS 和可见历史投影都留在 `api/channel_execution`。禁止给同步区�
    私有列；
 3. 成功后锁定公开行并校验 `expected_head`，再复制允许字段并删除候选；失败只删除候选；
 4. 候选 GC 改为启动时/周期性低频批处理，不在每条消息准备路径执行；
+   同一批处理兼容回收 U14 上线前遗留的 Dialog `[channel-candidate]`，Dialog 不再产生新候选；
 5. 一旦 MultiRAG Canvas 获得稳定的无落库执行端口，驱动内部切到 `detached_cas`，Provider、
    binding、事件协议和卡片均不变。
 
@@ -278,13 +280,15 @@ Open WebUI 一类消息树能支持任意节点分支，但 MultiRAG 当前 Dial
 | 顺序 | EIM / CHN | 单 PR 目标 | 行为风险 |
 |---:|---|---|---|
 | 1 | EIM-U11 / CHN-X13 | ✅ 已完成：Provider/Target capabilities、启动预取和目标私有 driver；删除 `ChannelSessionManager`，保持目标执行行为等价 | 低 |
-| 2 | EIM-U12 / CHN-U14 | Dialog 改为 detached working copy + 单次 CAS；删除 Dialog 候选写放大 | 中 |
+| 2 | EIM-U12 / CHN-U14 | 🔵 consumer/tolerate 已实现、等待 worker 部署；随后 emit 权威终态快照并切换 Dialog detached working copy + 单次 CAS | 中 |
 | 3 | EIM-U13 / CHN-U15 | Canvas 候选策略独立化；候选元数据显式化；GC 移出请求热路径 | 中，涉及 DB |
 | 4 | EIM-O4 / CHN-O14 | 仅在确认需要重启恢复后增加 durable run ledger、单活约束和 cancel/final CAS | 高，需独立 ADR 复核 |
 
-前三步不改变 Provider runtime 私有 DTO 或执行 SSE wire。X13 使用独立的 additive private preflight：
-旧 API 时 worker 降级为无交互 buffered reply，因此不需要 tolerate/emit 双部署。后续若修改
-`RuntimeBindingConfig` 或执行 SSE wire，必须停止并按 CHN-ADR-06 重新拆分。
+X13 不改变 Provider runtime 私有 DTO 或执行 SSE wire，并使用独立 additive private preflight。
+U14 需要在既有 `message_completed.content` 可选字段上启用权威终态快照，因此严格拆成两步：先让
+worker 接受字段、在 ReplySession 内整体替换且保持线格逐字节不变；部署确认后 Dialog producer 才
+emit。旧 API 时新 worker 回退 delta，旧 worker 遇到新字段会忽略但继续消费原 delta。
+后续修改 `RuntimeBindingConfig` 或执行 SSE wire仍必须按 CHN-ADR-06 拆分。
 
 ## 12. 验收不变量
 

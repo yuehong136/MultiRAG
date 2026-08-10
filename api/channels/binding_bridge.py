@@ -489,6 +489,7 @@ class BindingBridge:
                     await self._complete_reply(
                         record,
                         session_id=event.session_id,
+                        authoritative_content=event.content,
                         started_at=started_at,
                     )
             if terminal_seen:
@@ -515,20 +516,32 @@ class BindingBridge:
         record: _ExecutionRecord,
         *,
         session_id: str,
+        authoritative_content: str | None,
         started_at: float,
     ) -> None:
         message = record.source
         elapsed_ms = round((time.monotonic() - started_at) * 1000)
-        record.status = ReplyStatus.FINAL
         reply_session = record.reply_session
         if reply_session is None:
             return
+        # Receiving the trusted terminal event is the cancellation barrier.
+        # Delivery may still fail and downgrade to ERROR below, but a late
+        # stop callback must not cancel final card replacement mid-flight.
+        record.status = ReplyStatus.FINAL
         try:
+            if authoritative_content is not None:
+                await reply_session.replace(authoritative_content)
             await reply_session.complete()
             await self._state_store.mark_replied(message.execution_id)
         except Exception:
             self._log(logging.ERROR, "reply_failed", message, "REPLY_OR_STATE_FAILURE")
             await self._mark_executed(message)
+            if reply_session.state is ReplySessionState.OPEN:
+                await self._fail_reply_session(record, "REPLY_OR_STATE_FAILURE")
+            elif reply_session.state is ReplySessionState.COMPLETED:
+                record.status = ReplyStatus.FINAL
+            else:
+                record.status = ReplyStatus.ERROR
             return
         self._log(
             logging.INFO,

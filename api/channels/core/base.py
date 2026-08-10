@@ -243,7 +243,12 @@ class ReplySessionStateError(RuntimeError):
 
 @runtime_checkable
 class ReplySession(Protocol):
-    """Append-only reply lifecycle implemented by each outbound provider."""
+    """Provider-neutral reply lifecycle implemented by each outbound provider.
+
+    Incremental content is appended while a target runs. A target may publish
+    one authoritative terminal snapshot when its final projection adds
+    citations or other decorations that cannot be represented as an append.
+    """
 
     @property
     def state(self) -> ReplySessionState: ...
@@ -252,6 +257,8 @@ class ReplySession(Protocol):
     def reply_message_id(self) -> str: ...
 
     async def append(self, content: str) -> None: ...
+
+    async def replace(self, content: str) -> None: ...
 
     async def set_status(
         self,

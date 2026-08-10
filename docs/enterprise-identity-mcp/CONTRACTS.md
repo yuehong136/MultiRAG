@@ -102,9 +102,9 @@ content type 和 attachments；这些字段是 transport data，不能自动成�
 完整形状和升级顺序由 [FEISHU_BOT_UX §4](FEISHU_BOT_UX.md#4-transport-neutral-契约) 负责。
 
 出站不把飞书卡片字段塞进执行事件。EIM-U0 已落地的 worker 内事件只有用户可见
-`MessageDeltaEvent`、带必要 session 的 `MessageCompletedEvent` 和稳定错误码
+`MessageDeltaEvent`、带必要 session 及可选权威正文的 `MessageCompletedEvent` 和稳定错误码
 `ExecutionFailedEvent`；白名单 status、脱敏 references/artifacts 是后续加法契约。
-Provider-neutral ReplySession 已管理 `begin/append/complete/fail` 和明确终态，飞书 adapter 才能拥有
+Provider-neutral ReplySession 已管理 `begin/append/replace/complete/fail` 和明确终态，飞书 adapter 才能拥有
 `card_id/message_id/sequence/reaction_id`。
 
 两层幂等分别固定为：

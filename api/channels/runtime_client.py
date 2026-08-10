@@ -230,6 +230,7 @@ class MultiRAGBindingExecutionClient:
 
         chunks: list[str] = []
         session_id = ""
+        authoritative_content: str | None = None
         async for event in self.stream(
             question=question,
             event_id=event_id,
@@ -242,10 +243,11 @@ class MultiRAGBindingExecutionClient:
                 chunks.append(event.content)
             elif isinstance(event, MessageCompletedEvent):
                 session_id = event.session_id
+                authoritative_content = event.content
             elif isinstance(event, ExecutionFailedEvent):
                 raise AgentExecutionError(f"CHANNEL_EXECUTION_{event.error_code}")
 
-        content = strip_reasoning("".join(chunks))
+        content = authoritative_content if authoritative_content is not None else strip_reasoning("".join(chunks))
         if not session_id:
             raise AgentExecutionError("CHANNEL_EXECUTION_INCOMPLETE")
         if not content:
@@ -329,7 +331,10 @@ class MultiRAGBindingExecutionClient:
                     if tail:
                         saw_visible_content = saw_visible_content or bool(tail.strip())
                         yield MessageDeltaEvent(content=tail, session_id=session_id or None)
-                    if not saw_visible_content:
+                    if terminal.content is not None:
+                        if not terminal.content:
+                            raise AgentExecutionError("CHANNEL_EXECUTION_EMPTY")
+                    elif not saw_visible_content:
                         raise AgentExecutionError("CHANNEL_EXECUTION_EMPTY")
                 yield terminal
                 return
@@ -380,6 +385,15 @@ class MultiRAGBindingExecutionClient:
 
             if not session_id:
                 raise AgentExecutionError("CHANNEL_EXECUTION_INCOMPLETE")
-            terminal = MessageCompletedEvent(session_id=session_id)
+            snapshot: str | None = None
+            if "content" in payload:
+                raw_snapshot = payload.get("content")
+                if not isinstance(raw_snapshot, str):
+                    raise AgentExecutionError("CHANNEL_EXECUTION_INVALID_SSE")
+                snapshot = strip_reasoning(raw_snapshot)
+            terminal = MessageCompletedEvent(
+                session_id=session_id,
+                content=snapshot,
+            )
 
         raise AgentExecutionError("CHANNEL_EXECUTION_INCOMPLETE")

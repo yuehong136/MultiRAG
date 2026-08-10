@@ -130,7 +130,9 @@ BindingExecutionEvent = MessageDeltaEvent | MessageCompletedEvent | ExecutionFai
 
 它们只携带用户可见 `content`、稳定 `error_code` 和必要 `session_id`，不携带飞书
 `card_id/message_id/sequence` 等字段。`stream()` 负责跨 delta reasoning 过滤、SSE 完整性与安全错误
-归一；未知加法事件会被忽略。跨进程 SSE wire 没有改变。
+归一；未知加法事件会被忽略。EIM-U12 / CHN-U14 复用既有可选 `content` 字段表示
+`message_completed` 的权威终态正文：consumer/tolerate 半步先落 worker 且不改变线格，部署确认后
+Dialog producer 才 emit。新 worker 对旧 API 回退 delta；旧 worker 忽略额外字段并继续消费原 delta。
 
 后续事件的演进目标仍是：
 
@@ -149,7 +151,7 @@ ExecutionEventType = Literal[
 
 ```text
 event
-content?                 # 仅用户可见正文 delta
+content?                 # 用户可见正文 delta，或 message_completed 的权威终态快照
 status?                  # 白名单状态
 references?              # 脱敏引用数组
 artifact?                # 受控下载/发送描述符，不是本地路径
@@ -170,6 +172,7 @@ class ReplySession(Protocol):
     @property
     def state(self) -> ReplySessionState: ...
     async def append(self, content: str) -> None: ...
+    async def replace(self, content: str) -> None: ...
     async def complete(self) -> None: ...
     async def fail(self, error_code: str) -> None: ...
 
@@ -179,8 +182,10 @@ class Channel(ABC):
     ) -> ReplySession: ...
 ```
 
-状态机只有 `open -> completed | failed`，终态后 append/double finish/complete-fail 互换全部拒绝。
-默认 `BufferedReplySession` 把 delta 留在内存，`complete()` 沿用 reasoning 清理和长度截断后调用
+状态机只有 `open -> completed | failed`，终态后 append/replace/double finish/complete-fail 互换全部拒绝。
+`replace()` 只整体替换 Provider 内存中的正文，不发网络请求；Bridge 紧接着调用 `complete()`，因此
+飞书仍由单写者 drain 旧 patch 后用更高 sequence 写入权威终态。默认 `BufferedReplySession` 把 delta
+留在内存，`complete()` 沿用 reasoning 清理和长度截断后调用
 `Channel.send()` 一次，`fail()` 丢弃半截答案并只发安全提示，同时保留 `reply_to_message_id`。
 U1 已由飞书 override `begin_reply()` 并在 Provider 内保存
 `card_id/message_id/sequence/reaction_id/delivery_uuid`；业务 bridge 没有 `isinstance(Feishu...)`。
@@ -514,8 +519,8 @@ SLO 是上线初始目标，真实压测和灰度后可调整；调整必须写�
 | EIM-U10 | CHN-U13 | 后台单写者刷新、latest-value 合并、固定客户端打印参数 | U9；不依赖 C5 |
 | EIM-U4 | CHN-U9 | follow-up queue、纯生成取消、重新生成、反馈 | U1 |
 | EIM-U11 | CHN-X13 | ✅ Provider/Target capabilities、启动预取与目标私有 driver | U4 |
-| EIM-U12 | CHN-U14 | Dialog detached working copy + 终态 CAS | U11 |
-| EIM-U13 | CHN-U15 | Canvas 专属候选与周期 GC | U11 |
+| EIM-U12 | CHN-U14 | 🔵 权威快照 consumer 已实现、等待部署；随后 Dialog detached working copy + 终态 CAS emit | U11 |
+| EIM-U13 | CHN-U15 | Canvas 专属候选与周期 GC | U11、U12 |
 | EIM-U3 | CHN-U10 | mention-only 群聊、话题、thread session | U1、U2、C3、O2 |
 | EIM-U5 | CHN-X10 | references/artifacts 结构化事件与渲染 | U0、P2 |
 | EIM-U6 | CHN-X11 | 图片/文件/语音输入输出 | U0、U5、C3、附件安全基建 |

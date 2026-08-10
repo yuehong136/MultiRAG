@@ -542,6 +542,8 @@ class _ControlledReplySession:
         self.state = ReplySessionState.OPEN
         self.fail_operation = fail_operation
         self.appended: list[str] = []
+        self.replaced: list[str] = []
+        self.operations: list[str] = []
         self.complete_calls = 0
         self.fail_calls = 0
 
@@ -550,9 +552,16 @@ class _ControlledReplySession:
         return ""
 
     async def append(self, content: str) -> None:
+        self.operations.append("append")
         if self.fail_operation == "append":
             raise RuntimeError("append failed")
         self.appended.append(content)
+
+    async def replace(self, content: str) -> None:
+        self.operations.append("replace")
+        if self.fail_operation == "replace":
+            raise RuntimeError("replace failed")
+        self.replaced.append(content)
 
     async def set_status(
         self,
@@ -563,6 +572,7 @@ class _ControlledReplySession:
         del status, queue_position
 
     async def complete(self) -> None:
+        self.operations.append("complete")
         self.complete_calls += 1
         self.state = ReplySessionState.COMPLETED
         if self.fail_operation == "complete":
@@ -570,6 +580,7 @@ class _ControlledReplySession:
 
     async def fail(self, error_code: str) -> None:
         del error_code
+        self.operations.append("fail")
         self.fail_calls += 1
         self.state = ReplySessionState.FAILED
         if self.fail_operation == "fail":
@@ -616,6 +627,18 @@ class _ReplySessionChannel(_Channel):
             0,
         ),
         (
+            "replace",
+            [
+                MessageDeltaEvent(content="raw answer"),
+                MessageCompletedEvent(
+                    session_id="session-server",
+                    content="authoritative answer",
+                ),
+            ],
+            0,
+            1,
+        ),
+        (
             "fail",
             [ExecutionFailedEvent(error_code="TARGET_EXECUTION_FAILED")],
             0,
@@ -641,6 +664,29 @@ async def test_reply_session_failures_are_tombstoned_without_duplicate_delivery(
     assert session.complete_calls == expected_complete_calls
     assert session.fail_calls == expected_fail_calls
     assert state.status == {"message-1": "executed"}
+
+
+@pytest.mark.asyncio
+async def test_terminal_snapshot_replaces_deltas_before_reply_completion() -> None:
+    session = _ControlledReplySession(fail_operation="")
+    channel = _ReplySessionChannel(session)
+    state = _StateStore()
+    executor = _Executor(
+        [
+            MessageDeltaEvent(content="raw answer"),
+            MessageCompletedEvent(
+                session_id="session-server",
+                content="raw ##0$$ answer",
+            ),
+        ]
+    )
+
+    await _bridge(channel=channel, state=state, executor=executor).handle_message(_message())
+
+    assert session.appended == ["raw answer"]
+    assert session.replaced == ["raw ##0$$ answer"]
+    assert session.operations == ["append", "replace", "complete"]
+    assert state.status == {"message-1": "replied"}
 
 
 class _SerialExecutor(_Executor):
@@ -692,6 +738,7 @@ class _LifecycleReplySession:
         self.state = ReplySessionState.OPEN
         self.statuses: list[ReplyStatus] = []
         self.appended: list[str] = []
+        self.replaced: list[str] = []
         self.feedback: list[bool] = []
         self.cancel_calls = 0
 
@@ -701,6 +748,9 @@ class _LifecycleReplySession:
 
     async def append(self, content: str) -> None:
         self.appended.append(content)
+
+    async def replace(self, content: str) -> None:
+        self.replaced.append(content)
 
     async def set_status(
         self,

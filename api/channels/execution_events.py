@@ -17,9 +17,10 @@ class MessageDeltaEvent:
 
 @dataclass(frozen=True, slots=True)
 class MessageCompletedEvent:
-    """Successful terminal event carrying the trusted target session."""
+    """Successful terminal event with an optional authoritative answer."""
 
     session_id: str
+    content: str | None = None
     event: Literal["message_completed"] = field(default="message_completed", init=False)
 
 
