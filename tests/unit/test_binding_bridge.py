@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
@@ -221,6 +221,7 @@ def _message(
     chat_type: str = "p2p",
     sender_type: str = "user",
     message_type: str = "text",
+    operation: Literal["message", "regenerate"] = "message",
 ) -> IncomingMessage:
     return IncomingMessage(
         channel="feishu",
@@ -232,6 +233,7 @@ def _message(
         content=content,
         message_type=message_type,
         sender_type=sender_type,
+        operation=operation,
     )
 
 
@@ -876,8 +878,11 @@ async def test_regenerate_rejects_a_superseded_card() -> None:
     assert scheduled == []
 
 
+@pytest.mark.parametrize("failed_operation", ["message", "regenerate"], ids=["ordinary-message", "failed-regenerate"])
 @pytest.mark.asyncio
-async def test_retry_after_failed_execution_does_not_rewind_uncommitted_history() -> None:
+async def test_retry_after_failed_execution_preserves_original_operation(
+    failed_operation: Literal["message", "regenerate"],
+) -> None:
     channel = _LifecycleChannel()
     executor = _Executor([ExecutionFailedEvent(error_code="TARGET_EXECUTION_FAILED")])
     bridge = _bridge(channel=channel, state=_StateStore(), executor=executor)
@@ -887,7 +892,8 @@ async def test_retry_after_failed_execution_does_not_rewind_uncommitted_history(
         scheduled.append(message)
 
     bridge.set_message_scheduler(schedule)
-    await bridge.handle_message(_message(content="failed question"))
+    original = _message(content="failed question", operation=failed_operation)
+    await bridge.handle_message(original)
     retry_id = channel.contexts[0].actions.retry
 
     response = await bridge.handle_action(_action(retry_id, event_id="retry-event"))
@@ -895,7 +901,12 @@ async def test_retry_after_failed_execution_does_not_rewind_uncommitted_history(
     await asyncio.sleep(0)
 
     assert response.toast_type == "success"
-    assert scheduled[0].operation == "message"
+    assert len(scheduled) == 1
+    assert scheduled[0].operation == failed_operation
+    assert scheduled[0].event_id == "retry-event"
+    assert scheduled[0].execution_id == "action:retry-event"
+    assert scheduled[0].message_id == original.message_id
+    assert scheduled[0].content == original.content
 
 
 @pytest.mark.asyncio

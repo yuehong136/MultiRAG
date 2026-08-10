@@ -704,7 +704,7 @@ class BindingBridge:
             sender_type=source.sender_type,
             event_id=action.event_id,
             request_id=f"action:{action.event_id}",
-            operation="regenerate" if replace_completed else "message",
+            operation="regenerate" if replace_completed else source.operation,
         )
 
     def _spawn_background(
