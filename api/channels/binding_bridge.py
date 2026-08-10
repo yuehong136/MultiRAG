@@ -247,6 +247,9 @@ class BindingBridge:
 
         if registered.kind in {ReplyActionKind.REGENERATE, ReplyActionKind.RETRY}:
             replace_completed = registered.kind is ReplyActionKind.REGENERATE
+            action_label = "重新生成" if replace_completed else "重试"
+            latest_subject = "回答" if replace_completed else "请求"
+            task_kind = "regenerate" if replace_completed else "retry"
             capability_enabled = record.capabilities.regenerate if replace_completed else record.capabilities.retry
             if not capability_enabled:
                 registered.used = True
@@ -255,10 +258,10 @@ class BindingBridge:
             if record.status not in expected_statuses:
                 return ChannelActionResponse("warning", "请等待当前生成结束。")
             if self._scheduler is None:
-                return ChannelActionResponse("error", "重新生成暂时不可用。")
+                return ChannelActionResponse("error", f"{action_label}暂时不可用。")
             if self._latest_execution_by_conversation.get(record.conversation_key) != record.source.execution_id:
                 registered.used = True
-                return ChannelActionResponse("warning", "只能重新生成当前会话的最新回答。")
+                return ChannelActionResponse("warning", f"只能{action_label}当前会话的最新{latest_subject}。")
             registered.used = True
             regenerated = self._regenerated_message(
                 record.source,
@@ -267,7 +270,7 @@ class BindingBridge:
             )
             self._spawn_background(
                 self._scheduler(regenerated),
-                name=f"channel-regenerate-{_short_hash(regenerated.execution_id)}",
+                name=f"channel-{task_kind}-{_short_hash(regenerated.execution_id)}",
             )
             return ChannelActionResponse("success", "已加入当前会话队列。")
 

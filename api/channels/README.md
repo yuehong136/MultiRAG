@@ -248,7 +248,8 @@ Message 同时关闭 regenerate 与 retry；纯文本 Message 仍可安全重放
 
 当 Provider、Target 与 RunPolicy 的交集允许时，飞书完成卡片在关闭 `streaming_mode` 后使用 CardKit
 batch update 添加“重新生成 / 有帮助 / 没帮助”，生成中的卡片提供“停止生成”；不允许的动作不生成、
-不注册 action ID。交互区使用 JSON 2.0 的 `column_set` 直接承载 `button`，
+不注册 action ID。失败或取消卡片提供独立的“重试”，不会把未成功提交的 run 伪装成完成答案的
+重新生成。交互区使用 JSON 2.0 的 `column_set` 直接承载 `button`，
 按钮通过 callback behavior 只回传 24 小时有效的不透明 action ID；禁止使用 JSON 2.0 已移除的
 `tag: action` 旧交互模块，否则飞书会拒绝整张卡片并触发 post/text fallback。worker
 内存记录把 action 绑定到当前 binding 进程、操作者、chat 和实际回复卡片 ID，并执行 one-shot claim；

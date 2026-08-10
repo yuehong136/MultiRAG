@@ -891,10 +891,48 @@ async def test_retry_after_failed_execution_does_not_rewind_uncommitted_history(
     retry_id = channel.contexts[0].actions.retry
 
     response = await bridge.handle_action(_action(retry_id, event_id="retry-event"))
+    assert any(task.get_name().startswith("channel-retry-") for task in asyncio.all_tasks())
     await asyncio.sleep(0)
 
     assert response.toast_type == "success"
     assert scheduled[0].operation == "message"
+
+
+@pytest.mark.asyncio
+async def test_retry_reports_when_the_scheduler_is_unavailable() -> None:
+    channel = _LifecycleChannel()
+    executor = _Executor([ExecutionFailedEvent(error_code="TARGET_EXECUTION_FAILED")])
+    bridge = _bridge(channel=channel, state=_StateStore(), executor=executor)
+
+    await bridge.handle_message(_message(content="failed question"))
+    retry_id = channel.contexts[0].actions.retry
+
+    response = await bridge.handle_action(_action(retry_id, event_id="retry-event"))
+
+    assert response.toast_type == "error"
+    assert response.content == "重试暂时不可用。"
+
+
+@pytest.mark.asyncio
+async def test_retry_rejects_a_superseded_failed_request() -> None:
+    channel = _LifecycleChannel()
+    executor = _Executor([ExecutionFailedEvent(error_code="TARGET_EXECUTION_FAILED")])
+    bridge = _bridge(channel=channel, state=_StateStore(), executor=executor)
+    scheduled: list[IncomingMessage] = []
+
+    async def schedule(message: IncomingMessage) -> None:
+        scheduled.append(message)
+
+    bridge.set_message_scheduler(schedule)
+    await bridge.handle_message(_message(message_id="message-1", content="first failure"))
+    old_retry_id = channel.contexts[0].actions.retry
+    await bridge.handle_message(_message(message_id="message-2", content="latest failure"))
+
+    response = await bridge.handle_action(_action(old_retry_id, event_id="old-retry-event"))
+
+    assert response.toast_type == "warning"
+    assert response.content == "只能重试当前会话的最新请求。"
+    assert scheduled == []
 
 
 @pytest.mark.asyncio

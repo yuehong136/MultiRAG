@@ -378,6 +378,28 @@ def test_final_card_uses_json_2_column_buttons_and_preserves_formula_markdown() 
     assert render_markdown(formula) == formula
 
 
+@pytest.mark.parametrize("status", [ReplyStatus.ERROR, ReplyStatus.CANCELLED])
+def test_unsuccessful_card_uses_a_distinct_retry_action(status: ReplyStatus) -> None:
+    card = json.loads(
+        streaming_card_json(
+            ReplyContext(
+                status=status,
+                actions=ReplyActionIds(
+                    regenerate="unused-regenerate",
+                    retry="opaque-retry",
+                ),
+            )
+        )
+    )
+
+    actions = card["body"]["elements"][2]
+    retry_button = actions["columns"][0]["elements"][0]
+    assert retry_button["text"]["content"] == "重试"
+    assert retry_button["element_id"] == "reply_retry"
+    assert retry_button["behaviors"][0]["value"]["action_id"] == "opaque-retry"
+    assert "unused-regenerate" not in json.dumps(actions)
+
+
 @pytest.mark.asyncio
 async def test_queued_session_starts_typing_only_when_running_and_can_cancel() -> None:
     transport = _Transport()

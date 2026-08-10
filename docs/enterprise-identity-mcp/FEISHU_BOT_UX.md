@@ -302,7 +302,7 @@ RAG 来源必须通过 `references_ready` 结构化事件输出，而不是从�
 > `followup_queue_size` 默认 5；每条正常问题有独立 queued/running/final/error/cancelled 卡片，
 > 溢出返回 busy。停止按钮取消当前 SSE 子任务或阻止 queued 项启动，卡片明确声明外部操作不视为
 > 已撤销。重新生成以新 request ID 重入同一队列，只替换当前会话最新且问题匹配的完成轮次；
-> 旧卡在出现后续追问后 fail closed，失败/取消轮次按普通 retry 处理。替换通过 Channel execution
+> 旧卡在出现后续追问后 fail closed，失败/取消轮次以“重试”按钮按普通 retry 处理。替换通过 Channel execution
 > 的私有工作态完成：当前 MultiRAG Dialog/Canvas completion 只写候选，成功且公开头未变化才原子晋升；
 > 失败、取消或并发冲突不改公开历史。Channel 历史只提交可见答案，reasoning-only 不提交；含
 > 外部工具/MCP/未知组件的 Canvas 不允许直接重放。反馈与操作均绑定

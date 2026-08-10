@@ -260,7 +260,7 @@ def _action_element(
     elif status in {ReplyStatus.ERROR, ReplyStatus.CANCELLED} and capabilities.retry and actions.retry:
         buttons.append(
             _button(
-                "重新生成",
+                "重试",
                 actions.retry,
                 element_id=_CARD_RETRY_BUTTON_ID,
             )
