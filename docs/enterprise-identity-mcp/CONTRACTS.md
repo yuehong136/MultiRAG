@@ -76,11 +76,17 @@ class ChannelActor(BaseModel):
 
 ### 2.2 信任约束
 
+- 首期只支持平台托管 adapter。受管 worker 按 transport 验证 webhook 签名/加密或受认证的长连接，
+  再校验应用、租户、事件时间和重放；worker 随后用 binding-scoped workload credential 调用
+  private API。单独通过任一层都不能把外部主体提升为 Principal。
 - `provider` 必须与服务端 binding 的 channel provider 一致。
 - `provider_tenant_key` 必须与 provider account 首次已验证 tenant key 一致；首次绑定时通过应用
   凭据和 Contact/event 共同确认后保存。
 - `app_id` 不从消息 assertion 读取；它来自解密后的 provider account credential/config。
+- `event_id`/事件时间属于受限 transport envelope，用于时效与重放校验，不是主体字段；
+  `provider_account_key` 也始终取服务端 binding，不接受 payload 覆盖。
 - `tenant_id/target/revision/session/principal/scopes` 不存在于 worker command body。
+- role、group、department、audience、确认状态同样不得出现在 assertion 中或参与主体提升。
 - 即使事件直接带 `user_id`，首次仍要验证其处于应用数据范围且 status 可用。
 
 ### 2.3 兼容升级
@@ -203,6 +209,7 @@ UNIQUE(provider, provider_tenant_key, provider_account_key, alias_type, alias_va
 | `subject_type` | non-null | `employee_no/talent_id/workcode` |
 | `subject_value` | non-null | 业务主体；API 默认不回显完整值 |
 | `issuer` | non-null | `feishu_contact/oa/hr` |
+| `issuer_tenant` | non-null | issuer 内的企业/namespace；来自 resolver 配置或权威响应，不接受调用方覆盖 |
 | `state` | non-null | `active/inactive/conflict` |
 | `verified_at` | timestamptz | 最近验证 |
 | `source_revision` | string/null | OA/HR 版本或飞书 identity revision |
@@ -263,6 +270,7 @@ class EnterpriseSubject:
     type: str
     value: str
     issuer: str
+    issuer_tenant: str
     verified_at: datetime
 
 
@@ -343,36 +351,66 @@ class EnterpriseSubjectResolver:
 
 ---
 
-## 6. MCP access token
+## 6. MCP token profiles
 
-### 6.1 外部 token（MultiRAG -> of_mcp Gateway）
+EIM-A1 冻结的是本项目私有、**RFC 9068-shaped** 的 JWT profile，不表示 MCP 规范要求所有实现
+使用 JWT 或 ES256。MCP Client 把 token 当 opaque bearer；只有 issuer 与 Resource Server 解释
+claims。Channel `ExternalIdentityAssertion` 不属于本节，不能被任一 Resource Server 当作 token。
 
-算法：ES256；header 必须有 `kid`。对称 HS256 不用于跨服务生产部署。
+### 6.1 两个 profile 的共同 JOSE、时间与 resource 规则
 
-Claims：
+- JOSE header 必须且只能使用 `typ="at+jwt"`、`alg="ES256"` 和非空 `kid`；`alg` 不从 token
+  动态选择。拒绝 `none`、其他算法、未知 `crit`，以及试图通过 `jku`、`x5u`、内联 `jwk` 改变
+  服务端固定信任源的 header。
+- compact JWT UTF-8 序列化后默认不得超过 4096 bytes，超限在密码学解析前拒绝。
+- `iss` 和 `aud` 都是大小写敏感的 canonical HTTPS URI。`aud` v1 必须是单个 JSON string，拒绝
+  array/multiple audience；校验不做尾斜杠、默认端口、host alias 或 path 的隐式归一化。
+- `iat`、`nbf`、`exp` 都是 integer NumericDate。issuer 默认令 `nbf=iat`；verifier 独立校验
+  `nbf<=exp`、`iat<exp`、最大 TTL 和当前时间。允许的 clock skew 固定 30 秒；超出该窗口的未来
+  `iat/nbf` 或过期 `exp` 拒绝。
+- scope 使用 RFC 6749 的 `scope-token` 字符范围和单个 ASCII space 分隔；拒绝空项、重复项、控制
+  字符和未在目标 resource registry 登记的 token。一个 token 包含调用当前工具不需要、但已登记
+  且对同一 resource 有效的额外 scope 时，token 仍然有效。
+- token、JWKS 和校验上下文都按 profile 固定 issuer、keyset、resource、允许的 `token_use` 和
+  claim allowlist/scope registry；未知 claim fail closed，不能因两个 profile 使用相同用户或 scope 名
+  就互相接受。
 
-| Claim | 必需 | 语义 |
-|---|:---:|---|
-| `iss` | 是 | Authorization issuer canonical HTTPS URL |
-| `sub` | 是 | `platform_user_id`，不是 open_id/工号 |
-| `aud` | 是 | of_mcp gateway canonical MCP resource URI |
-| `iat` / `nbf` / `exp` | 是 | 短期 token；默认 5 分钟 |
-| `jti` | 是 | 唯一 token ID，用于审计/高风险防重放 |
-| `scope` | 是 | 空格分隔 OAuth scope，例如 `medic:submit` |
-| `tenant_id` | 是 | MultiRAG tenant |
-| `client_id` | 是 | 预注册 MultiRAG MCP client |
-| `agent_id` | 是 | 发起工具选择的已发布 Agent |
-| `authn_provider` | 是 | `feishu` / `oidc` / `web` |
-| `auth_time` | 是 | 最近满足该操作 assurance 的时间 |
-| `enterprise_subject` | 条件 | `{type, value, issuer}`；仅目标 service 需要时签发 |
-| `token_use` | 是 | 固定 `mcp_access` |
+### 6.2 `mcp_access`（MultiRAG -> of_mcp Gateway）
 
-不允许的 claims：`open_id`、`union_id`、姓名、邮箱、手机号、飞书/OA access token、完整
-Channel message/chat ID、模型提示词。
+算法固定 ES256；默认/最大 TTL 为 300 秒。必需 claims：
 
-`enterprise_subject.value` 对目标 of_mcp 是必要业务身份，不属于公开日志；审计默认记录 hash。
+| Claim | 语义 |
+|---|---|
+| `iss` | MultiRAG Authorization issuer canonical HTTPS URL |
+| `sub` | 不透明 `platform_user_id`；不是 Provider ID、邮箱或工号 |
+| `aud` | of_mcp gateway canonical MCP resource URI，单个精确 string |
+| `client_id` | 预注册 MultiRAG MCP client |
+| `iat` / `nbf` / `exp` | 短时委托；`exp-iat<=300` |
+| `jti` | 全局不可预测的唯一 token ID；日志只记录 hash |
+| `scope` | 目标 resource 已登记 scope 的空格分隔字符串 |
+| `tenant_id` | MultiRAG tenant；签发前从 Principal/服务端执行上下文取得 |
+| `agent_id` | 发起工具选择的已发布 Agent |
+| `token_use` | 固定 `mcp_access` |
 
-### 6.2 audience 和 scope
+条件 claims：
+
+| Claim | 出现条件与语义 |
+|---|---|
+| `auth_time` | 上游确实证明满足当前操作 assurance 时；integer NumericDate，不能晚于 `iat` |
+| `acr` | 已验证的 assurance class；A1 按 profile `allowed_acr_values` 校验，A4 决定工具需要哪一级 |
+| `amr` | 已验证的 authentication methods；A1 校验非空、无重复且均在 `allowed_amr_values`，A4 决定工具策略 |
+| `enterprise_subject` | 目标 service 明确要求时；`{type, issuer, subject, tenant}` |
+
+`enterprise_subject.subject` 是面向目标 resource 的不透明业务主体，`type` 固定为 service 声明的
+`workcode/talent_id/...` 类型；`tenant` 是该 issuer 的局部边界，不等于可由调用方选择的 MultiRAG
+`tenant_id`。issuer 只选择该类型的已验证 link 后签发；Resource Server 必须同时匹配 `type`、
+`issuer` 和 `tenant`，不能“随便取第一个”。主体缺失不使普通
+低风险 token 的认证失败，只会让要求该 assurance 的操作在授权层拒绝。
+
+不允许的 claims：`authn_provider`、role、group、department、`open_id`、`union_id`、Provider 原始
+user ID、姓名、邮箱、手机号、员工号明文、飞书/OA access token、Channel message/chat ID、表单值、
+确认状态、模型提示词。Provider 和认证来源留在 MultiRAG Principal/审计；只有可验证保证才映射为
+标准 `auth_time/acr/amr`。
 
 首期 canonical resource 示例：
 
@@ -380,57 +418,173 @@ Channel message/chat ID、模型提示词。
 https://mcp.example.internal/mcp
 ```
 
-token 只允许该完整 audience。scope 必须来自服务 `service.toml` 与平台策略交集；请求工具不在
-scope 中时，of_mcp 返回标准 403/scope challenge。
+Token Broker 最终签发的 scopes 固定取：当前工具需要 scopes、已发布 Agent policy、tenant policy、
+当前用户 grants 与 assurance policy 的交集；调用方请求不能扩大结果。
 
-### 6.3 JWKS 和轮换
+### 6.3 认证、scope 与业务授权的错误分层
 
-- issuer 提供 HTTPS JWKS；private key 只在 issuer secret/KMS。
-- 新 key 先加入 JWKS，再开始签发；旧 key 保留至少“最大 token TTL + 时钟偏差 + cache TTL”。
-- verifier 按 `kid` 缓存，未知 `kid` 触发一次受限刷新；刷新失败且 cache 过期则 fail closed。
-- verifier 允许的算法白名单固定 ES256，拒绝 `none` 和 header 指定的任意算法。
+| 情况 | HTTP / OAuth 语义 | `failure_reason` / 运维指标族 |
+|---|---|---|
+| JOSE、签名、issuer、audience、时间、必需 claim、类型、profile 或 `token_use` 无效 | 401 `invalid_token` | 精确 reason（如 `signature_invalid`/`audience_invalid`）/ `MCP_TOKEN_INVALID` |
+| token 有效，但缺当前工具全部所需 scope | 403 `insufficient_scope`；一次返回完整所需 scopes | `required_scope_missing` / `MCP_SCOPE_DENIED` |
+| tenant/membership/role/policy/业务对象拒绝 | 403；`oauth_error=null`，不返回 scope challenge | `tenant_mismatch` 或策略 reason / `MCP_AUTHORIZATION_DENIED` |
+| 当前工具要求企业身份保证但 token 未携带/类型不符 | 403；`oauth_error=null`，不返回 scope challenge | `enterprise_subject_required`/`enterprise_subject_type_mismatch` / `MCP_ASSURANCE_REQUIRED` |
+| JWKS 不可用且没有仍新鲜的可信缓存 | 503，fail closed | `verifier_unavailable` / `MCP_VERIFIER_UNAVAILABLE` |
 
-### 6.4 首期标准化程度
+缺少或畸形 `scope` 属于无效 token；缺少某个合法工具 scope 属于认证成功后的
+`insufficient_scope`。额外的合法已登记 scope 不导致 token 失效。`tenant_id` claim 缺失/类型错误
+是 401；有效 token 的 tenant 与当前服务端 resource context 不匹配是 403 authorization denial。
+角色或业务策略拒绝不得伪装成 step-up scope，否则会泄露策略并诱导客户端无意义重试。
+
+### 6.4 JWKS 和轮换
+
+- issuer 通过 HTTPS 提供只含 public EC keys 的 JWKS；private key 只在 issuer secret/KMS。
+- 每个 key 固定 `kty=EC`、`crv=P-256`、`use=sig`、`alg=ES256` 和唯一 `kid`；拒绝重复 `kid`、
+  私钥参数或与 profile 不一致的 key metadata。
+- 新 key 先加入 JWKS，再开始签发；旧 key 保留至少“最大 token TTL + clock skew + cache TTL”。
+- verifier 只访问配置的 issuer/JWKS URI，按 `kid` 缓存；未知 `kid` 最多触发一次受限刷新。刷新失败
+  且 cache 过期时返回 verifier unavailable，不把基础设施故障误报成用户 token 无效。
+
+FastMCP `JWTVerifier` 可以承担基础 JWT/JWKS 解析，但 EIM-A3 必须在 composition root 组合项目
+自己的严格 profile validator，补齐 header、必需 claims、类型、max TTL、`token_use`、tenant、
+scope registry 和 cross-profile 规则，再投影为 FastMCP `AccessToken`。领域 Principal 不依赖
+FastMCP 类型。
+
+### 6.5 EIM-A1 corpus wire contract
+
+MultiRAG 与 of_mcp 各自保存字节一致、无需网络的 `eim-a1/v1` corpus：
+
+```text
+manifest.json
+manifest.schema.json
+jwks/access.json
+jwks/internal_actor.json
+jwks/invalid/*.json
+tokens/*.jwt
+SHA256SUMS
+```
+
+`manifest.json` 必含：
+
+```text
+contract_version
+validation_time
+clock_skew_seconds
+max_token_bytes
+profiles
+resources
+scope_registry
+cases[]
+issuance_policy_cases[]
+delegation_cases[]
+```
+
+每个 `profiles` entry 固定 `issuer/token_use/max_ttl_seconds`、`required_claims/allowed_claims` 与
+`allowed_acr_values/allowed_amr_values`；Resource Server 不能在运行时从 token 自行扩充这些 registry。
+
+每个 `cases[]` case 必含：
+
+```text
+id
+expected_profile
+token_file
+jwks_file
+request_context:
+  expected_resource
+  required_scopes
+  expected_tenant
+  requires_enterprise_subject
+  required_enterprise_subject_type
+expected:
+  authentication = accept | reject
+  authorization = allow | deny | not_evaluated
+  http_status
+  oauth_error
+  failure_reason
+  normalized_claims
+```
+
+成功 case 的 `oauth_error/failure_reason` 为 null。失败 case 的 `oauth_error` 只保存可公开的 OAuth
+错误（如 `invalid_token`/`insufficient_scope`），`failure_reason` 保存本项目稳定内部分类；不得把
+PyJWT/joserfc 异常类型或原文写入 manifest/public response。
+
+`issuance_policy_cases[]` 使用 `id/request/expected.{issuance,failure_reason}` 固定 signer 输入；
+`request` 明确携带 `subject_source`、`tenant_source`、`requested_claims`、`assurance_verified`、
+`requires_assurance` 和 requested/allowed/registered scopes。raw Provider subject、调用方选择 tenant、
+禁止 claim、未登记/未授权 scope 或未验证 assurance 必须**拒绝签发**；它们不是伪造一个 token 后
+期待 Resource Server 返回 401。
+`delegation_cases[]` 使用
+`id/parent_case_id/actor_case_id/required_preserved_claims/expected.{delegation,failure_reason}` 固定父
+`mcp_access` 与 actor token 的关系。actor 不能新增或改写 assurance/enterprise subject；低风险目标
+可以省略不需要的条件 claims，要求保留时则必须按 `required_preserved_claims` 逐字段相同。scope
+扩大、service audience 串用或 internal token 超过父 token 剩余时间必须在 gateway 换发阶段拒绝。
+
+`validation_time` 是唯一测试时钟；测试不得读取当天时间。合法 token 的 `normalized_claims` 在两个
+仓逐字段相同；非法 token 比较本项目稳定错误码，不比较密码库异常文本。corpus 提交固定 token
+bytes 和只读 public JWKS；canonical PEP 723 generator 使用 test-only key 和 deterministic RFC 6979
+ES256，只负责可复现地产生 corpus。验证仍必须读取提交的固定 token，不能靠运行时重新签发替代。
+两仓 CI 不做 sibling import、网络下载或运行时共享 verifier。
+
+### 6.6 首期标准化程度
 
 首期 MultiRAG 是唯一预注册 MCP client，issuer 根据已经认证的内部 Principal 签发 access token；
 不对外宣称支持任意第三方 OAuth grant。of_mcp 仍按标准 protected resource 实现 metadata、
 challenge、audience 和 bearer validation。
 
 未来外部客户端接入时，优先接真实企业 IdP 的 EMA/ID-JAG；机器后台任务使用 OAuth Client
-Credentials extension。不能通过自定义 Header 扩张首期协议。
+Credentials extension。不能通过自定义 Header 扩张首期协议，也不能把飞书事件字段伪造成 ID
+Token/SAML/Identity Assertion。
 
-### 6.5 MultiRAG 入站 MCP Resource Server
+### 6.7 MultiRAG 入站 MCP Resource Server
 
 `mcp/server/` 是不同于 `of_mcp` gateway 的另一个 protected resource。正式启用用户级或企业级
-访问前必须为它定义独立的 canonical HTTPS resource URI、audience 和最小 scope 集；发给
-`of_mcp` 的 token 即使签名和 Principal 都合法，也必须因 audience 不匹配被拒绝，反向同理。
+访问前必须为它定义独立的 canonical HTTPS resource URI、audience、issuer policy、keyset 和最小
+scope 集；发给 `of_mcp` 的 token 即使签名和 Principal 都合法，也必须因 resource/profile 不匹配
+被拒绝，反向同理。
 
-入站 token 可以复用本节的签名、TTL、JWKS 和基础 Principal claims 约束，但不能复用目标 resource
-或未经重新计算的 scopes。MultiRAG MCP Server 调后端 API 时使用受控的内部 actor credential 或
-显式 token exchange；不得把外部 bearer 原样当作后端 API token 透传。当前 API-key 兼容模式只算
-现状兼容，不代表本契约已完成，边界见 [`mcp/README.md`](../../mcp/README.md)。
+入站 token 可以复用本节的基础 JOSE/时间/JWKS 规则，但不能复用目标 resource 或未经重新计算的
+scopes。MultiRAG MCP Server 调后端 API 时使用受控 internal actor credential 或显式 token
+exchange；不得把外部 bearer 原样当后端 API token 透传。当前 API-key 模式只算现状兼容，不代表
+本契约已完成，边界见 [`mcp/README.md`](../../mcp/README.md)。
 
 ---
 
 ## 7. mount/proxy 内部委托
 
-外部 user token 的 audience 是 gateway，不得原样透传到 proxy service。
+外部 `mcp_access` 的 audience 是 gateway，不得原样透传到 proxy service。
 
 | runtime | Principal 到 service 的方式 |
 |---|---|
 | `mount` | root gateway middleware 注入 request-scoped Principal dependency |
-| `proxy` | gateway 生成短期 internal actor token，audience=`ofmcp-service:<id>`；远端 composition root 验证后注入同一 Principal |
+| `proxy` | gateway 为精确 service resource 换发 `mcp_internal_actor`；远端 composition root 验证后注入同一 Principal |
 
-internal actor token：
+`mcp_internal_actor` 继续使用 `typ=at+jwt`/ES256，但使用独立 issuer、P-256 keyset/`kid` 和精确
+service HTTPS audience。TTL 最长 60 秒，且 `exp` 不得晚于父 `mcp_access.exp`。必需 claims：
 
-- TTL 不超过外部 token 剩余 TTL，建议 60 秒；
-- scope 只能缩减；
-- 包含原 `jti` 的 hash/parent token ID、gateway workload identity 和 trace ID；
-- 只能在私网 TLS/mTLS 链路使用；
-- service 不接受外部 gateway audience token。
+| Claim | 语义 |
+|---|---|
+| `iss` / `aud` | internal issuer 与单个精确 proxy service resource |
+| `sub` | 原已验证 `platform_user_id`，与父 token 相同 |
+| `client_id` | gateway 的预注册 workload client |
+| `iat` / `nbf` / `exp` / `jti` | 最长 60 秒的新内部委托 |
+| `scope` | 父 token scope 与目标 service/tool 所需 scope 的严格子集或相等集合 |
+| `tenant_id` / `agent_id` | 从已验证父 Principal/执行上下文复制，不接受请求覆盖 |
+| `auth_time` / `acr` / `amr` | 条件；父 token 已携带且目标 service 需要 assurance 时原样复制，不能提升 |
+| `enterprise_subject` | 条件；只有父 token 已携带且目标 service 需要时原样复制，不能新增或改写 |
+| `act` | RFC 8693-shaped `{sub: <gateway workload id>}`；当前 actor，不改变顶层用户 `sub` |
+| `parent_jti_hash` | `base64url(sha256(parent_jti))`，无 padding；只作关联，不泄露父 jti |
+| `trace_id` | 跨 gateway/service 的不透明 correlation ID |
+| `token_use` | 固定 `mcp_internal_actor` |
 
-这不是 token passthrough，而是 gateway 在已验证主体基础上的内部下游委托。mount/proxy
-等价测试必须证明 service 获得的 Principal 和授权结果一致。
+internal token 只能在受控私网 TLS/mTLS 链路使用。gateway 必须拒绝
+`mcp_internal_actor`；proxy service 必须拒绝 `mcp_access`；service A 必须拒绝 service B 的
+audience。proxy 形态重新验证 token 和本地业务策略，不能把 gateway 的“已验证”当成跳过授权的
+理由。A1 corpus 用同一份合法 compact bytes 同时证明：它按 `mcp_internal_actor` profile 在目标
+proxy 可接受，但按 Gateway 的 `mcp_access` profile/resource 必须拒绝；畸形或 hybrid token 不能
+替代这条 cross-profile 断言。
+
+这不是 token passthrough，而是 gateway 在已验证主体基础上的内部下游委托。mount/proxy 等价测试
+必须证明 service 获得的 Principal、工具可见性、直接调用授权和审计结果一致。
 
 ---
 

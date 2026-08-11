@@ -56,6 +56,26 @@ Channel 仓内的强制记账，不是重复任务。
   -> of_mcp Principal + scope + 业务侧授权
 ```
 
+首期第三方 Channel 固定为**平台托管 adapter**：Provider 事件先在受管 worker/adapter 按 transport
+验证 webhook 签名/加密或受认证的长连接，并校验应用、租户、时间和重放，再把结构化外部标识交给
+MultiRAG。该结构仍只是
+`ExternalIdentityAssertion`，不是 Principal、OAuth Identity Assertion 或 MCP access token；
+MultiRAG 必须结合服务端 binding/provider account 和目录验证才能构造 Principal。外部托管 Connector、
+EMA/ID-JAG 与多个真实 issuer 继续由 EIM-A8 守门。
+
+三类信任工件严格分离：
+
+```text
+Provider ExternalIdentityAssertion
+  -> MultiRAG verified Principal
+  -> resource-bound mcp_access
+  -> of_mcp Gateway verified Principal
+  -> 必要时换发 service-bound mcp_internal_actor
+```
+
+Channel payload 不得声明 `principal_id`、`tenant_id`、role、scope、audience 或确认状态；外部 token
+也不得原样穿过 gateway 到 proxy service。完整决策见 [EIM-ADR-20](DECISIONS.md#eim-adr-20channel-assertionmcp-access-token-与-internal-actor-token-是三类独立信任工件)。
+
 不可混用的四类身份：
 
 | 标识 | 含义 | 谁生成 | 是否可直接做 MCP 业务身份 |
@@ -229,6 +249,15 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
 - `medic` 的 `workcode` 是工具调用者自报，且工具会产生真实副作用。
 - EIM-F4 已独立完成：of_mcp 精确升级到 FastMCP `4.0.0b2`，没有把身份或授权改造混入
   版本升级。
+- EIM-A1 已完成：两仓冻结了字节一致的 91-file JWT/JWKS corpus、严格 claims 和正反互操作测试；
+  79 个 token cases 包含同一合法 `mcp_internal_actor` bytes 在目标 proxy 被接受、转交 Gateway 时
+  被 `mcp_access` profile fail closed 的 cross-profile 向量，不能只靠畸形 hybrid token 证明隔离。
+  MultiRAG 定向 **96 passed**，完整 `make verify` 的 Ruff format/check、6 条 import contracts、
+  async DB gate、mypy 65 files 全绿，unit **1904 passed in 25.76s**；of_mcp `3e1d5ac` 定向
+  **100 passed**、完整门禁 **216 passed、2 existing skipped**；
+  `sha256(SHA256SUMS raw bytes)` 为
+  `59f82684aa06365f45623ce9bfad336d487f2c9351879266a6b2ab21bf8fe208`。A1 仍只交付
+  test/docs/schema/corpus，不包含生产 issuer、verifier、Channel Principal 或动态 bearer。
 - of_mcp 的 profile/catalog/mount/proxy/contract 基础可继续演进为私有 MCP 服务中心，但当前
   `auth=`、持久 storage、scope enforcement、proxy internal actor token、Action/Idempotency Ledger
   尚未落地，不能因为使用 FastMCP 4 就宣称已经是企业授权网关。

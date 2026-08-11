@@ -1,0 +1,13 @@
+{
+  "keys": [
+    {
+      "alg": "ES384",
+      "crv": "P-256",
+      "kid": "test-only-eim-a1-access-current",
+      "kty": "EC",
+      "use": "sig",
+      "x": "PtETt4g7TFkGODedsMIc2hZ0LtAlUEi_QzOR03S8IdE",
+      "y": "kJkgmszEyKIkyEOvpPTGigkNBNpemIna4vju_OgqN0A"
+    }
+  ]
+}

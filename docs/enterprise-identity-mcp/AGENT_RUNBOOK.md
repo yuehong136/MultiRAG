@@ -143,8 +143,8 @@ MCP Foundation 的 F2/F3/F4/F6/F7/F8 已于 2026-08-12 完成。冷启动 Agent 
 3. **真实 legacy 只留在测试边界**：FastMCP 3 通过 PEP 723 锁定的真实子进程 fixture 运行，
    不与根环境在同一解释器导入。`make mcp-compat` 当前协议矩阵为 **13/13 PASS**；任何后续
    SDK/FastMCP/transport 改动都必须复跑，而不能用 mock 或 sibling import 替代。
-4. **下一协议相关入口**：EIM-A1 的 F3/F4 依赖已满足，可先固定 token/JWKS test vectors；EIM-A7
-   还必须等待 A1/P1，才实现 inbound OAuth Resource Server、Principal/scope 和工具可见性；
+4. **下一协议相关入口**：EIM-A1 已完成并固定 token/JWKS test vectors；EIM-A7 的 A1 前置已满足，
+   还必须等待 P1，才实现 inbound OAuth Resource Server、Principal/scope 和工具可见性；
    `InputRequiredResult` 目前只由 EIM-F3 暴露，EIM-U14 还必须等待 P3/A4/C3，才实现持久化暂停/恢复、
    Principal 绑定、revision/CAS 和重授权。当前协议升级**不证明** Principal、scope、delegated token、
    OAuth Resource Server 或 InteractionSession 已实现。
@@ -161,12 +161,45 @@ head-of-line blocking；远端是否停止取决于 transport/server 的协作�
 本地配置应进入已 gitignore 的 secret/env 载体；测试使用低熵、明显虚假的占位值。需要管理员在
 飞书后台授权、发布版本、修改可见范围或重启线上进程时，先给出精确操作和影响，等待用户批准。
 
+### 4.6 EIM-A1 专用执行契约
+
+A1 是跨仓 test/docs/schema/corpus 任务，不是生产 auth 实现。开工先确认 F3/F4 为 `✅`，然后：
+
+1. 在 MultiRAG `tests/fixtures/eim_a1/v1/` 和 of_mcp
+   `packages/ofmcp-contracts/tests/fixtures/eim_a1/v1/` 保存字节一致的 corpus；
+2. 使用 MultiRAG canonical `scripts/generate_eim_a1_vectors.py` PEP 723 脚本，以 test-only P-256 key
+   和 deterministic RFC 6979 ES256 生成固定 token、manifest/schema、public JWKS 和 `SHA256SUMS`；
+3. `manifest.json` 必须分开 `cases`、`issuance_policy_cases`、`delegation_cases`；token case 用
+   `token_file/jwks_file` 引用 corpus，公开/内部错误分别用 `oauth_error/failure_reason`；不能把 signer
+   拒绝、gateway 换发拒绝和 Resource Server 401 混成一种结果；cross-profile 至少用同一份合法
+   `mcp_internal_actor` compact bytes 证明“目标 proxy 接受、Gateway 拒绝”，不能只测 malformed hybrid；
+4. MultiRAG 用显式 `PyJWT[crypto]==2.13.0` direct dev dependency，of_mcp 用显式
+   `joserfc==1.7.4` direct test dependency；两边各有项目 profile oracle，不共享 verifier；
+5. corpus 测试关闭密码库自身 wall-clock `exp/nbf/iat` 判断，统一用 manifest `validation_time`；
+   签名、algorithm、key 和 issuer/audience 仍真实校验；
+6. 先提交 of_mcp 的 corpus/tests，再把同一 corpus/tests/docs 提交到 MultiRAG；每个仓独立运行本仓
+   全量门禁，最后比较文件集合和 SHA-256。
+
+A1 交付阶段在门禁满足前，ROADMAP 必须保持 `🔵`；尚未产生的 commit 可以明确写 `pending`，但不能
+预填或猜测 SHA，corpus digest 必须从实际文件计算。本轮已完成两仓独立 oracle、全部 case 无
+skip/xfail 和 corpus 字节一致性检查，ROADMAP 保持 `✅`。最终 corpus 为 91 files、79 token +
+7 issuance + 5 delegation，摘要为
+`59f82684aa06365f45623ce9bfad336d487f2c9351879266a6b2ab21bf8fe208`。当前验证证据为 MultiRAG
+定向 **96 passed**；完整 `make verify` 的 Ruff format/check、6 条 import contracts、async DB gate、
+mypy 65 files 全绿，unit **1904 passed in 25.76s**。of_mcp `3e1d5ac` 定向 **100 passed**、完整
+门禁 **216 passed、2 existing skipped**。
+
+A1 禁止顺手添加生产 issuer/verifier、FastMCP `auth=`、JWKS HTTP route、KMS/DB、Channel Principal、
+动态 Authorization 或真实 Secret。A3 才把基础 JWT/JWKS verifier 与严格项目 validator 装配到
+of_mcp composition root；A2/P3 才签发和传递 request-scoped token。
+
 ## 5. 跨仓协调
 
 | 变更 | 生产者 | 消费者 | 安全部署顺序 |
 |---|---|---|---|
 | Channel structured assertion | worker | MultiRAG private API | tolerate API → emit worker → consume API → remove legacy |
 | MCP access token | MultiRAG signer | `of_mcp` verifier | verifier/JWKS 能力先 → signer emit → 强制 auth → 移除旧 auth |
+| EIM-A1 corpus | MultiRAG canonical generator + 两仓本地副本 | PyJWT/joserfc 独立 oracle | 已完成：of_mcp `3e1d5ac` → MultiRAG 本次 A1 变更；91-file corpus 字节一致，digest `59f82684aa06365f45623ce9bfad336d487f2c9351879266a6b2ab21bf8fe208`；运行时无依赖 |
 | 新 scope/tool metadata | `of_mcp` policy | MultiRAG Agent/MCP config | resource 端先兼容 → 调用端请求；未知 scope fail closed |
 | confirmation contract | `of_mcp` challenge | MultiRAG card/channel | resource 端先返回可识别 challenge → UI 接线 → 强制确认 |
 | MCP 双向兼容 fixture | MCP SDK 2/FastMCP 4 主运行时 + PEP 723 FastMCP 3 真实 legacy 子进程 | 两仓 compatibility test | F2/F3/F4/F6/F7/F8 已完成并形成 13/13 基线；后续每次协议/transport 变更逐格复跑；`of_mcp` F4 锚点 `23dd1fd`；不得用本机 sibling import 代替可复现安装 |

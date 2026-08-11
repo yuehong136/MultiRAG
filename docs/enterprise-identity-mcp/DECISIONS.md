@@ -301,3 +301,39 @@ HTTP timeout 的边界是取消本地等待和底层本地调用 task，并消�
 是否停止仍依赖 transport/server 协作，可能在调用方超时后完成。因此 timeout 不是业务“未执行”证明，
 写工具必须继续使用 Confirmation、幂等键和结果未知对账。回滚以 MultiRAG commit + 根 lock 为单位；
 PEP 723 legacy fixture 是兼容证据，不是生产回滚运行时。
+
+---
+
+## EIM-ADR-20：Channel assertion、MCP access token 与 internal actor token 是三类独立信任工件
+
+**状态**：Accepted
+**日期**：2026-08-12
+
+首期第三方 Channel 采用**平台托管 adapter**。飞书等 Provider 的事件先由受管 worker/adapter 按
+transport 验证 webhook 签名/加密或受认证的长连接，并校验应用、租户、时间和重放，再把结构化但
+仍不可信的外部标识交给 MultiRAG。
+MultiRAG 只能结合服务端 binding、provider account 和目录查询，把它解析为自己的 Principal；
+Channel payload 不得声明或覆盖 `principal_id`、`tenant_id`、role、scope、audience 或确认状态。
+
+端到端链路存在三类不得互换的工件：
+
+1. **ExternalIdentityAssertion**：Provider 事件中的外部身份材料，不是 OAuth/JWT access token；
+2. **`mcp_access`**：MultiRAG 根据已验证 Principal 为一个精确 MCP resource 签发的短时用户委托；
+3. **`mcp_internal_actor`**：of_mcp gateway 验证外部委托后，为一个精确 proxy service 换发的更短、
+   scope 只减不增的内部委托。
+
+EIM-A1 为后两类工件冻结项目私有、RFC 9068-shaped 的 ES256/JWKS profile。这里的
+“RFC 9068-shaped”只描述本项目选择的 JWT claims 和验证规则，不表示 MCP 规范要求所有实现使用
+JWT 或 ES256。两个 profile 使用不同 issuer/keyset/resource audience 和 `token_use`；gateway 与
+proxy service 必须互相拒绝对方 profile，即使签名、用户和 scope 看起来合法。cross-profile 门禁
+必须让合法 internal actor 在目标 proxy 可接受、同一 compact token 到 Gateway 被拒绝，不能只依赖
+malformed/hybrid 样本。
+
+`mcp_access.sub` 只使用不透明的 `platform_user_id`。Provider 原始 ID、姓名、邮箱、员工号、role、
+group、department 和上游 access token 不进入 token。Provider 与认证方式保留在 Principal/审计；
+只有上游确实证明认证保证时才映射到标准 `auth_time`、`acr`、`amr`。只有目标 resource 明确要求
+时，才以最小、resource-local 的 `enterprise_subject={type, issuer, subject, tenant}` 签发；
+`subject` 为不透明值，仍须独立通过业务对象授权。
+
+外部托管 Connector、EMA/ID-JAG 和多个真实 issuer 仍属于 EIM-A8 闸门。没有真实需求时，不为
+Channel 事件伪造 Identity Assertion grant，也不因为 FastMCP 提供 MultiAuth 就提前扩大 A1 profile。

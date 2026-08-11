@@ -3,7 +3,7 @@
 > 最后更新：2026-08-12
 > 当前状态：文档基线、EIM-U0、EIM-U1、EIM-U4、EIM-U8～U13 已完成；
 > CHN-U15 迁移/API 重启已完成，CHN-U16 已完成；真实 smoke 仍欠，下一项 CHN-O9，随后稳定浸泡；
-> EIM-F5 / CHN-X14 和 EIM-O4 均保持挂起。
+> EIM-A1 已完成；EIM-F5 / CHN-X14 和 EIM-O4 均保持挂起。
 
 ---
 
@@ -245,7 +245,7 @@ server binding tenant + provider account + structured assertion
 |---|---|---|:---:|---|---|
 | EIM-P1 | MR | 扩展/统一 immutable Principal 与 AuthenticationContext，不把 ORM 对象带出请求 | ⬜ | I3 | [CONTRACTS §4](CONTRACTS.md#4-identity-service-接口)；web/token auth 基线不回归 |
 | EIM-P2 | MR | Channel Execution -> Agent/RAG/Memory/Workflow 全链传 Principal；按 platform user 隔离 | ⬜ | P1,C3 | 不再用 `principal_id or ""` 静默匿名；跨用户会话/Memory 隔离测试 |
-| EIM-P3 | MR | MCP request-scoped credential provider；按 Principal/resource/scope 获取 token | ⬜ | P2,F3,A2,A4 | Agent 初始化不缓存用户 token；并发用户不串 token；每 HTTP request 携带 bearer |
+| EIM-P3 | MR | MCP request-scoped credential provider；按 Principal/resource/scope 获取 token | ⬜ | P2,F3,A2,A4 | Agent 初始化不缓存用户 token；cache key 绑定 principal/tenant/agent/resource/scope/policy revision/credential generation；并发用户不串 token；每 HTTP request 携带 bearer |
 
 P1 必须评估现有 `api.utils.api_utils.Principal` 的所有消费方。不要同时存在两个同名但语义不同的
 Principal；如需迁移 facade，明确 owner 模块和删除计划。
@@ -256,29 +256,87 @@ Principal；如需迁移 facade，明确 owner 模块和删除计划。
 
 | ID | 仓库 | 任务 | 状态 | 依赖 | 完成条件 |
 |---|---|---|:---:|---|---|
-| EIM-A1 | 两仓测试/文档 | 固定 access/internal actor token claims、ES256 test key/JWKS、正反 test vectors | ⬜ | F3,F4 | 同一 token 两仓解析一致；wrong aud/kid/scope/expiry/tamper 全拒绝；无真实 Secret |
+| EIM-A1 | 两仓测试/文档 | 固定 `mcp_access`/`mcp_internal_actor` claims、ES256 test JWKS、语言中立 corpus 和正反 vectors | ✅ | F3,F4 | PyJWT/joserfc 独立解析同一固定 token 并得到相同 normalized claims/稳定错误类；cross-profile、aud/kid/JOSE/time/scope/privacy 全覆盖；两仓 corpus 摘要一致；无真实 Secret |
 | EIM-A2 | MR | issuer 模块、KMS/file key provider、JWKS、短 token 签发和轮换 | ⬜ | A1,P2 | scopes 取交集；audience 固定；5 分钟；private key 不入 DB/log；轮换测试 |
-| EIM-A3 | of_mcp | gateway protected-resource metadata、WWW-Authenticate、JWT/JWKS verifier | ⬜ | A1,F4 | `oauth_enabled=true`；401/403 标准化；issuer/aud/alg/kid/clock 验证；无 auth 绕过路由 |
-| EIM-A4 | of_mcp | immutable Principal dependency、service scope enforcement、tool visibility/step-up | ⬜ | A3 | `service.toml.scopes` 真正生效；缺 scope 工具不可调用；domain 不 import FastMCP |
-| EIM-A5 | of_mcp | proxy internal actor token，mount/proxy Principal 与授权等价 | ⬜ | A4,P3 | 外部 token 不透传；两形态成功/拒绝/audit 逐字节等价 |
-| EIM-A6 | of_mcp | auth audit、OTel、jti 高风险重放防护、指标和脱敏 | ⬜ | A4 | trace 跨两仓；审计无 token/PII；高风险 jti/confirmation 重放被拒 |
+| EIM-A3 | of_mcp | gateway protected-resource metadata、WWW-Authenticate、JWT/JWKS + strict profile verifier | ⬜ | A1,F4 | `RemoteAuthProvider`/自定义 verifier 组合；401/403/503 分层；issuer/resource/JOSE/claims/clock/profile 全验；无 auth 绕过路由 |
+| EIM-A4 | of_mcp | immutable Principal dependency、service scope enforcement、tool visibility/step-up | ⬜ | A3 | `service.toml.scopes` 真正生效；`tools/list` 与 direct call 同策略；role/business denial 不伪装 scope；domain 不 import FastMCP |
+| EIM-A5 | of_mcp | proxy `mcp_internal_actor` 换发，mount/proxy Principal 与授权等价 | ⬜ | A4,P3 | 独立 issuer/keyset/service audience；scope/TTL attenuation；外部 token 不透传；两形态成功/拒绝/audit 等价 |
+| EIM-A6 | of_mcp | auth audit、OTel、jti 高风险重放防护、指标和脱敏 | ⬜ | A4 | trace 跨两仓；记录 jti/parent hash/resource/tool/policy revision；审计无 token/PII；高风险重放被拒 |
 | EIM-A7 | MR MCP server | 把 inbound MultiRAG MCP 变成独立 OAuth Resource Server：protected-resource metadata、audience、scope、Principal 和工具可见性 | ⬜ | F8,A1,P1 | inbound/outbound resource 与 bearer 不复用；401/403/WWW-Authenticate 标准化；`tools/list` 与 direct call 均授权；dataset/tenant 隔离；legacy API-key 仅按明确迁移门禁保留 |
 | EIM-A8 | 两仓架构/PoC | 企业托管与多 issuer 采用闸门：有真实企业 IdP/外部 MCP client 需求时评估 EMA + ID-JAG；FastMCP MultiAuth 只作为组合实现候选；Horizon 只作托管平台 build-vs-buy | ⏸ | A2,A4,A7 + 真实需求 | ADR/威胁模型区分标准、扩展、框架实现和托管产品；EMA fixture 使用真实形状的 IdP assertion，不伪造飞书事件；首期短时 issuer/resource-token 路径不回归；无需求不引入依赖或平台锁定 |
 
 ### EIM-A1 test vectors
 
-使用测试私钥生成固定 token fixture，至少包括：
+使用明确的 test-only P-256 key/JWKS 生成并提交**固定 token bytes**；测试只读 corpus，不在断言时
+重新签发。`manifest.json` 固定 validation time、30 秒 clock skew、4096 bytes 上限、两个 profile、
+resources、scope registry，以及分层的 `cases`、`issuance_policy_cases`、
+`delegation_cases`。Resource Server token 校验、MultiRAG signer policy 与 gateway delegation policy
+分别断言，不能把“拒绝签发/拒绝换发”伪装成伪造 token 后的 401。
 
-- valid gateway token；
-- expired、not-yet-valid；
-- wrong issuer、wrong audience、wrong tenant；
-- missing/extra scope；
-- unknown kid、wrong algorithm、tampered signature；
-- missing enterprise subject；
-- internal actor token with parent jti；
-- external gateway token 被 proxy service 直接拒绝。
+正向至少包括：
 
-fixture 中企业主体使用低熵重复占位值，避免 gitleaks；私钥必须明确是 test-only。
+- 合法 `mcp_access`，以及带多个合法已登记 scope 的 token；
+- 普通低风险 token 不带 `enterprise_subject`；需要业务主体的 token 使用
+  `{type, issuer, subject, tenant}` 最小结构；同一无主体 token 调要求 assurance 的工具时在授权层
+  返回 403 `enterprise_subject_required` 且不发 scope challenge，不能在认证层误报 401；
+- old/new `kid` 在轮换重叠期都能验证；
+- `mcp_internal_actor` 顶层 `sub` 保持用户，`act.sub` 为 gateway workload，并带
+  `parent_jti_hash`、service audience、trace 和 scope attenuation。
+
+JOSE/JWKS 负向至少包括：
+
+- 缺失/错误 `typ`，缺失/未知 `kid`，`alg=none`、算法混淆、错误 `kty/crv/use/alg`；
+- 重复 `kid`、JWKS 私钥参数、`jku/x5u/jwk`、未知 critical header；
+- header/payload/signature 篡改，malformed compact JWT/Base64/JSON，超长 token。
+
+时间/claims/scope 至少包括：
+
+- expired、not-yet-valid、未来 `iat`、`exp<=iat`、超过 profile TTL；
+- wrong issuer、wrong audience、尾斜杠 audience、必需 claim 缺失/空值/
+  类型错误、多 audience；
+- malformed、重复、未知 scope；合法额外 scope 必须仍通过认证，缺工具所需 scope 必须进入
+  403 `insufficient_scope` 而不是 401；
+- 有效 token 的 wrong tenant 在授权层返回 403；缺失/畸形 tenant claim 才是 401。
+
+`issuance_policy_cases` 必须证明 `open_id`/Provider 原始 ID 不能被请求为 `sub`，role/department/
+Channel 内容不能被加入 claims，调用方声明的 tenant/scope 不能扩大服务端交集；这些情况由 signer
+拒绝签发，不能伪装成 Resource Server 收到危险 token 后再返回 401。
+
+cross-profile/resource 至少证明 Channel workload/assertion、MultiRAG inbound token、gateway
+`mcp_access`、proxy `mcp_internal_actor` 和不同 proxy service audience 不能互换。gateway 必须拒绝
+internal token，proxy service 必须拒绝 external gateway token，即使签名、用户和 scope 合法。
+corpus 必须让同一份合法 `mcp_internal_actor` compact bytes 在目标 proxy 的 internal profile 下通过、
+在 Gateway 的 access profile 下拒绝，不能用 malformed 或 hybrid token 代替这条 confused-deputy 边界。
+
+fixture 中企业主体使用低熵重复占位值，避免 gitleaks；private key 若为生成器所需，只能作为明确的
+test-only 资料保留，运行时 JWKS 只含 public parameters。corpus 不能包含姓名、邮箱、电话、员工号、
+飞书/OA token、聊天/表单正文或真实 Secret。
+
+### EIM-A1 corpus 与跨仓交付
+
+- 两仓各自保存字节一致的 `manifest.json`/schema、`jwks/access.json`、
+  `jwks/internal_actor.json`、`jwks/invalid/*.json`、`tokens/*.jwt` 和 `SHA256SUMS`；
+  CI 不做 sibling import、网络下载或共享 verifier。
+- canonical `scripts/generate_eim_a1_vectors.py` 使用 PEP 723 锁定依赖和 deterministic RFC 6979
+  ES256，输出 token、manifest/schema、JWKS 与摘要；生成器只处理 test-only key，验证读取固定输出。
+- MultiRAG 用显式 direct dev dependency `PyJWT[crypto]==2.13.0`；of_mcp 用显式 direct test
+  dependency `joserfc==1.7.4`。两端都要叠加项目 profile oracle，不能把依赖库默认校验当完整契约。
+- `validation_time` 是唯一测试时钟；底层库的 wall-clock `exp/nbf/iat` 校验须关闭，再由项目 oracle
+  确定性执行。测试比较稳定错误码，不锁第三方异常文案。
+- 初次交付按 of_mcp corpus/tests、MultiRAG 同一 corpus/tests/docs 的顺序完成。门禁未满足阶段
+  ROADMAP 保持 `🔵`；清单中的跨仓 commit 可以写 `pending`，但 corpus 摘要必须从实际文件计算，
+  禁止填写占位 hash 或猜测 SHA。本轮两仓门禁与字节一致性现已全部通过。
+- 只有两仓各自完整 verify 全绿、corpus 文件集合与 SHA-256 一致，并在本页变更日志登记两个 commit
+  和 corpus aggregate digest（`sha256(SHA256SUMS raw bytes)`）后，A1 才能改为 `✅`。A1 不添加
+  生产 issuer/verifier、DB/JWKS route、Channel Principal、动态 Authorization 或 KMS。
+
+最终冻结 corpus 为 **91 个文件：79 个 `cases` + 7 个
+`issuance_policy_cases` + 5 个 `delegation_cases`**；`sha256(SHA256SUMS raw bytes)` 为
+`59f82684aa06365f45623ce9bfad336d487f2c9351879266a6b2ab21bf8fe208`。两仓目录字节一致；
+MultiRAG EIM-A1 定向测试 **96 passed**，完整 `make verify` 的 Ruff format/check、6 条 import
+contracts、async DB gate、mypy 65 files 全绿，unit **1904 passed in 25.76s**；of_mcp 已 amend 为
+`3e1d5ac`，定向 **100 passed**，完整 `uv run --locked ofmcp verify` **216 passed、2 existing
+skipped**。A1 状态为 `✅`。
 
 ### EIM-A3/A4 装配边界
 
@@ -405,7 +463,7 @@ EIM-F5 / CHN-X14 仍是长期 upstream-first 的上游审计入口，但当前�
 EIM-F1  lark-oapi patch 升级
 EIM-I1  User 外部账号模型
 EIM-C1  Channel tolerate structured assertion
-EIM-A1  两仓 JWT/JWKS 正反 test vectors（F3/F4 已完成）
+EIM-A3  of_mcp protected resource + strict verifier（A1/F4 已完成）
 ```
 
 MCP Foundation 的实际串并行轨道：
@@ -416,7 +474,7 @@ F0 -> F2 (✅) ---+
                  +-> F6 单根环境决策 -> F7 原子依赖升级 -> F3 outbound Client v2（✅）
                                                           -> F8 inbound modern Server（✅）
 
-协议基础轨已完成。后续不得继续把“升级 MCP”当作身份/授权完成；A1、A3/A4、P1/P3、A7 和
+协议基础轨与 A1 契约轨已完成。后续不得继续把“升级 MCP”当作身份/授权完成；A3/A4、P1/P3、A7 和
 U14/U15 仍按各自依赖推进。
 ```
 
@@ -434,7 +492,7 @@ C1 -> C2 -> C3                         (C3 另需 I6 + P1)
 P1 + C3 -> P2
 
 F2 -> F6 -> F7/F3/F8                   (已按整根方案原子完成)
-F3 + F4 -> A1
+F3 + F4 -> A1 (✅)
 A1 + F4 -> A3 -> A4
 A1 + P2 -> A2
 P2 + F3 + A2 + A4 -> P3
@@ -447,6 +505,12 @@ I5 -> I7 -> I8 -> M1 -> M2 -> M3 -> M4 -> U7 -> M5 -> U2 -> O1/O2 -> U3
 
 A8 -> O3  仅在真实企业 IdP、多 issuer 或托管平台需求成立后解除挂起。
 ```
+
+A1 完成后的执行顺序固定为：of_mcp 可立即做 `A3 -> A4`；MultiRAG 同时沿
+`I1 -> I2 -> I3 -> P1`、`F1 + I3 -> I4 -> I6` 和 `C1 -> C2` 推进，只有
+`C2 + I6 + P1 -> C3 -> P2` 后才能做 A2。随后必须等 `P2 + F3 + A2 + A4 -> P3`，再启动
+A5/U14 等真实委托消费者。A6 可在 A4 后并行；A7 保持独立入站 resource；A8 仍无真实需求不启动。
+这样既让 of_mcp verifier 先于 signer 强制上线，又不把未验证的 Channel subject 塞进 token。
 
 C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任务并行；不得为了迁移 SDK
 把 UX 任务重新绑回 C5。
@@ -478,3 +542,4 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 | 2026-08-12 | EIM-F2 | 首次完成升级前双方向、双解释器 MCP 兼容实验室与 12 格基线；该行记录的是**迁移前 characterization**，后续 F3/F8 已将生产协商结果升级为 modern，legacy fixture 继续作为回退 oracle | MultiRAG `956bff4e`；of_mcp `9fa3a33` | 当时 `make mcp-compat` 12/12、MultiRAG `make verify` 1796 passed；of_mcp verify 116 passed、2 skipped；两份隔离锁与无残留进程检查通过 | Codex |
 | 2026-08-12 | EIM-F4 | of_mcp 从 FastMCP 4.0.0b1 精确升级到 b2；只刷新 b2 自动派生的 tool title 契约，名称、schema、annotations、授权面和业务语义不变 | of_mcp `23dd1fd` | `uv lock --check`；定向 24 passed；`uv run --locked ofmcp verify` 六步全绿，116 passed、2 skipped；`git diff --check` | Codex |
 | 2026-08-12 | EIM-F3/F6/F7/F8 | 用户确认无生产 FastMCP 3 运行负担后选择单根环境原子升级：exact FastMCP 4.0.0b2/MCP SDK 2.0.0；outbound 改为官方 Client auto/legacy、HTTP response-hook 保留 401/403、MRTR 表面化、并发无旧队列；inbound 真实进入 2026-07-28 modern era，同时以隔离 FastMCP 3 保留 legacy 回退门禁。身份、scope、EMA、持久 InteractionSession 均未实现 | MultiRAG / 本次提交 | SDK2 client + inbound 定向 **33 passed**（其中 lifecycle 在 asyncio debug + ResourceWarning-as-error 下 19 passed）；升级后 `make mcp-compat` **13/13 PASS**；`uv lock --check`、独立 FastMCP3/MCP2 script locks、无残留进程；`make verify` 全部门禁绿、unit **1808 passed** | Codex |
+| 2026-08-12 | EIM-A1 | 完成 91-file、RFC 9068-shaped `mcp_access`/`mcp_internal_actor` 契约；PyJWT/joserfc 独立 oracle 共同覆盖 79 token、7 issuance policy、5 delegation cases；增加同一合法 internal actor 在 proxy 通过、Gateway cross-profile 拒绝的向量，固定 401/403/issuance/delegation 分层与跨 resource 安全边界 | of_mcp `3e1d5ac`；MultiRAG 本次变更；corpus `59f82684aa06365f45623ce9bfad336d487f2c9351879266a6b2ab21bf8fe208` | MultiRAG 定向 **96 passed**；`make verify` Ruff format/check、6 条 import contracts、async DB gate、mypy 65 files 全绿，unit **1904 passed in 25.76s**；of_mcp 定向 **100 passed**、`uv run --locked ofmcp verify` **216 passed、2 existing skipped**；两仓 91-file corpus 字节一致、摘要一致，A1 cases 无 skip/xfail | Codex |

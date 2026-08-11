@@ -44,8 +44,11 @@
 - 目录验证失败、用户停用、企业映射冲突时必须 fail closed；
 - `platform_user_id` 始终是 MultiRAG `User.id`，不是飞书 `open_id`；
 - `enterprise_subject_id` 与 `platform_user_id` 分离，员工号不能成为公开认证凭据；
-- MCP access token 必须校验 `iss`、`aud/resource`、`exp`、`nbf`、`jti`、算法和签名；
+- MCP token 必须校验 `typ/alg/kid`、`iss`、单一精确 `aud/resource`、`iat/nbf/exp/max_ttl`、`jti`、
+  `token_use`、必需 claim 类型、scope registry 和签名，compact token 默认不超过 4096 bytes；
 - MultiRAG 不把飞书 access token、用户 OAuth token或收到的外部 bearer token透传给 `of_mcp`；
+- Channel `ExternalIdentityAssertion`、`mcp_access` 与 `mcp_internal_actor` 是三类不可互换的信任工件；
+  gateway、proxy service 和 MultiRAG inbound Resource Server 必须按自己的 profile/resource 互相拒绝；
 - MultiRAG 出站 MCP Client 与入站 MCP Resource Server 使用不同 resource/audience；任一方向的
   bearer、session 或 continuation 不得在另一方向复用；
 - `requestState`、form value、H5 nonce 和卡片 action 不能决定 Principal、tenant、scope 或确认状态；
@@ -68,7 +71,7 @@
 | IdentityService | JIT、link-only、冲突、停用、缓存、事件失效 | async service + monkeypatch 官方客户端 |
 | DB | 唯一约束、事务并发、别名归一化、幂等事件 | `tests/integration/` 真 PostgreSQL |
 | Principal | 未验证 subject 不提升；验证后携带 tenant/membership | execution 路由契约测试 |
-| MCP token | claims、TTL、JWKS、轮换、scope 交集 | 纯密码学 + HTTP 契约测试 |
+| MCP token | 两个 profile、claims/types、固定时钟、TTL、JWKS、轮换、scope registry/交集、cross-resource | 两库独立纯密码学 corpus + HTTP 契约测试 |
 | MCP client | resource/audience、失败映射、无静态用户 header | mock transport/官方 SDK 测试 |
 | MCP resource server | modern/legacy 协议、独立 audience、scope、无 bearer 透传 | ASGI/官方 Client 契约测试 |
 | InteractionSession | MRTR 多轮、revision/CAS、decline/cancel/expire、重启恢复 | service 单测 + 真库集成 |
@@ -116,11 +119,15 @@
 
 `of_mcp` 自己必须建立以下测试层，不得只依赖 MultiRAG 测试：
 
-- auth middleware：无 token、错 issuer、错 audience、错 resource、过期、未来 `nbf`、未知 `kid`、
-  `alg=none`/算法混淆全部拒绝；
+- auth middleware：无 token、错 `typ/issuer/audience/resource/token_use`、过期、未来 `iat/nbf`、
+  超过 max TTL、未知 `kid`、`alg=none`/算法混淆、超长 token 全部拒绝；
 - JWKS：正常刷新、缓存、key rotation 双钥窗口、未知 key 强制刷新一次、上游失败 fail closed；
-- scope policy：token scope 与工具声明 scope 取交集，缺一项即在调用工具前拒绝；
-- business subject：只能从已验证 claim 读取 `enterprise_subject_id`，请求参数的 `workcode` 被忽略；
+- scope policy：已登记额外 scope 不使 token 无效；缺工具所需 scope 在认证成功后返回 403
+  `insufficient_scope`，一次给全所需 scopes；未知/畸形 scope fail closed；
+- business subject：只能从已验证 `{type, issuer, subject, tenant}` 读取，并与 service 所需类型/issuer/
+  tenant 一致；请求参数的 `workcode` 被忽略；
+- policy error：tenant/membership/role/business denial 返回 403 且不伪装 scope challenge；没有可用的
+  新鲜 JWKS cache 时返回 503 verifier unavailable，不把基础设施故障误报为 401；
 - sensitive tool：确认挑战、过期、不同用户/不同参数重放、双击和并发只执行一次；
 - MRTR：合法 `inputResponses + requestState` 可恢复，篡改/过期/错误 schema/revision 明确失败；再次
   返回 `InputRequiredResult` 时不丢失 actor/resource 绑定；
@@ -179,6 +186,66 @@ timeout 后仍完成是允许且必须观测的结果，不得据此推断副作
 Resource Server/Principal/scope，也不是 EIM-U14 的持久化 InteractionSession 证据。上述任务完成时
 必须在本矩阵之外增加各自的安全正反路径。
 
+### 3.6 EIM-A1 固定 corpus 与两仓互操作门禁
+
+canonical corpus 位置固定为：
+
+```text
+MultiRAG: tests/fixtures/eim_a1/v1/
+of_mcp:  packages/ofmcp-contracts/tests/fixtures/eim_a1/v1/
+```
+
+两个目录必须字节一致，至少包含 `manifest.json`、`manifest.schema.json`、
+`jwks/access.json`、`jwks/internal_actor.json`、`jwks/invalid/*.json`、`tokens/*.jwt` 和覆盖这些
+输出的 `SHA256SUMS`。两仓都从本地目录读取，不能通过 sibling checkout、
+editable install、网络 URL、父进程 `sys.path` 或共享 validator 偷渡另一仓实现。完成日志记录两个
+commit SHA 和实际 corpus aggregate digest；aggregate digest 定义为对 `SHA256SUMS` 文件原始 bytes
+再做一次 SHA-256。实现尚未提交时写 `pending`，不能使用占位或猜测 hash。
+
+canonical `scripts/generate_eim_a1_vectors.py` 是 PEP 723 脚本，依赖精确锁定，并用 test-only P-256
+key + deterministic RFC 6979 ES256 可复现生成 corpus。生成器不得读取环境 Secret；JWKS 只有 public
+parameters；测试验证的是提交的固定 token，不得在测试运行时重新签发来掩盖 corpus 漂移。
+
+`manifest.json` 把三种不同责任拆开：
+
+| 集合 | 验证边界 | 典型断言 |
+|---|---|---|
+| `cases` | Resource Server 认证 + 操作授权 | JOSE/claims/profile 为 401；缺 scope、wrong tenant、assurance 为 403 |
+| `issuance_policy_cases` | MultiRAG signer policy | raw Provider subject、越权 tenant、未登记 scope、缺 assurance 时不签发 |
+| `delegation_cases` | of_mcp gateway 换发 policy | service audience 精确、scope 只减不增、TTL 不超过 60 秒/父 token；按 `required_preserved_claims` 条件保持 assurance |
+
+Resource Server 测试不能把 issuance/delegation denial 伪造成 `invalid_token`；反之，signer policy
+测试也不能靠构造一个事后必被拒绝的 token 代替“根本不签发”。
+
+每个 `cases[]` 用相对 `token_file`/`jwks_file` 引用 corpus 文件；公开错误写 `oauth_error`，稳定内部
+分类写 `failure_reason`。成功两者都为 null；失败不能把第三方异常类型或原文当稳定契约。
+
+互操作实现必须独立：
+
+- MultiRAG 声明显式 direct dev dependency `PyJWT[crypto]==2.13.0`；
+- of_mcp 声明显式 direct test dependency `joserfc==1.7.4`；
+- 两边都在密码库完成 ES256 签名校验后执行项目 profile oracle；不能假设库的默认 required claims、
+  clock、audience 或 scope 行为就是 EIM 契约；
+- `validation_time` 是唯一时钟。PyJWT 等库内置的 wall-clock `exp/nbf/iat` 校验在 corpus 测试中关闭，
+  再由项目 oracle 用 manifest 时间、30 秒 skew 和 profile max TTL 确定性判断；签名、alg、key 和
+  issuer/audience 校验仍必须真实执行；
+- A1 冻结 assurance claim 的结构和 profile registry：`auth_time<=iat`，`acr` 必须在
+  `allowed_acr_values`，`amr` 为非空无重复且每项在 `allowed_amr_values`。A4 才决定具体工具要求的
+  ACR/AMR 组合、风险等级与 step-up policy；
+- 合法 case 的 normalized claims 必须逐字段相同；非法 case 比较项目稳定错误码，不锁第三方异常
+  类型/文案。所有 case 必须执行，无 skip/xfail。
+
+A1 只交付 test/docs/schema/corpus。生产 issuer、FastMCP auth adapter、JWKS HTTP route、KMS、DB、
+Channel Principal 和动态 Authorization 分别属于 A2/A3/C3/P3，不能为让 A1 测试通过提前混入。
+
+2026-08-12 完成基线为 **91 个文件：79 token cases、7 issuance policy cases、5 delegation cases**；
+`sha256(SHA256SUMS raw bytes)` 是
+`59f82684aa06365f45623ce9bfad336d487f2c9351879266a6b2ab21bf8fe208`。两仓目录字节一致，MultiRAG
+定向 **96 passed**；完整 `make verify` 的 Ruff format/check、6 条 import contracts、async DB gate、
+mypy 65 files 全绿，unit **1904 passed in 25.76s**。of_mcp `3e1d5ac` 定向 **100 passed**、完整
+门禁 **216 passed、2 existing skipped**。计数/摘要不替代逐 case 执行；任一生成物变化都必须重新
+生成摘要、复制整目录并同时更新两仓证据。
+
 ## 4. 安全专项测试
 
 ### 4.1 身份和租户攻击
@@ -191,14 +258,37 @@ Resource Server/Principal/scope，也不是 EIM-U14 的持久化 InteractionSess
 
 ### 4.2 令牌和 confused-deputy 攻击
 
+- JOSE/header：缺失或错误 `typ`，缺失/未知 `kid`，`alg=none`、HS/RS/ES 混淆，错误
+  `kty/crv/use/alg`，重复 `kid`、JWKS 私钥参数，`jku/x5u/jwk` 和未知 critical header；
+- compact token：header/payload/signature 任一篡改、malformed Base64/JSON、重复 claim、超过 4096
+  bytes；必须在有界资源内稳定拒绝；
+- 时间：expired、not-yet-valid、超过 30 秒 skew 的未来 `iat/nbf`、`exp<=iat`、超过 profile max TTL；
+- claims：必需 claim 缺失、空值、类型错误、多 audience、wrong `token_use`；
+- scope：空项/重复/控制字符/未知 scope 拒绝；额外合法已登记 scope 认证成功；缺工具所需 scope
+  返回 403 `insufficient_scope`，不能错误变成 401；
+- issuance policy：prompt/Channel payload 夹带 `principal_id/tenant_id/role/scope`，要求把 raw
+  `open_id`/Provider subject 签成 `sub`，或提供不满足 assurance 的 enterprise subject；MultiRAG
+  signer 必须拒绝签发，而不是生成一个危险 token 再依赖 Resource Server 拦截；
+- delegation policy：gateway 请求比父 token 更多的 scope、更长的剩余 TTL、另一个 service audience
+  或替换 `sub/tenant/agent`；必须在换发前拒绝，不能只在 proxy service 事后兜底；
 - A 用户 token 调 B 用户确认记录；A Agent token 调 B Agent 资源；
 - 为 MultiRAG API 签发的 token 拿去调用 `of_mcp`；audience/resource 不同必须拒绝；
 - 为 `of_mcp` 签发的 token 拿去调用 MultiRAG RAG MCP Resource Server，或反向搬运其 token；两个
   入站 resource 都必须按自己的 canonical audience 拒绝；
+- Channel workload credential/`ExternalIdentityAssertion` 放入 of_mcp Authorization；不是
+  `mcp_access`，必须拒绝；
+- 同一合法 `mcp_internal_actor` compact bytes 在目标 proxy 通过、调 Gateway 时按 access profile
+  fail closed；另测 `mcp_access` 调 proxy service、service A token 调 service B；
+  即使签名、用户和 scope 合法，也必须因 profile/resource 不匹配拒绝；
 - 把飞书 tenant access token 放进 MCP Authorization；issuer/格式不符必须拒绝；
-- JWT header 注入 `jku`/`x5u` 或外部 JWKS URL；服务端只能使用静态配置的 issuer/JWKS；
-- `kid` 路径注入、超大 JWT、重复 claim、时钟边界；限制大小并使用成熟库解析；
 - 下游返回 token 请求继续委托；禁止 token exchange 之外的任意 bearer 转发。
+
+错误层也必须钉板：无效 profile/claims/签名为 401；有效 token 的 tenant/membership/role/business
+拒绝为 403 且不返回 scope challenge；缺企业主体只在工具要求 assurance 时返回 403；JWKS 故障且
+无新鲜缓存为 503。测试必须断言第三方库异常不会直接成为公开错误文本。
+
+corpus 还要扫描 normalized claims/JWKS/token payload，确认不存在 Provider 原始 ID、姓名、邮箱、
+手机号、员工号明文、role/group/department、飞书/OA token、Channel/表单正文、确认状态或真实 Secret。
 
 ### 4.3 Channel 与卡片攻击
 
@@ -263,6 +353,7 @@ interaction_revision, confirmation_id, idempotency_key_hash, latency_ms, result
 详细计时边界见 [FEISHU_BOT_UX §13](FEISHU_BOT_UX.md#13-指标和-slo)。
 
 告警不得只报“500”。至少按 `IDENTITY_*`、`MCP_TOKEN_*`、`MCP_SCOPE_DENIED`、
+`MCP_AUTHORIZATION_DENIED`、`MCP_ASSURANCE_REQUIRED`、`MCP_VERIFIER_UNAVAILABLE`、
 `MCP_INTERACTION_*`、`CONFIRMATION_*`、`DIRECTORY_UNAVAILABLE` 分组。
 
 ## 6. 上线和回滚演练

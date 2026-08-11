@@ -1,0 +1,13 @@
+{
+  "keys": [
+    {
+      "alg": "ES256",
+      "crv": "P-256",
+      "kid": "test-only-eim-a1-internal-current",
+      "kty": "EC",
+      "use": "sig",
+      "x": "MlD89oZjfHsuSshutHO8pTpYITn0KxUj_XY2Tmc5noM",
+      "y": "QufDQmZ9NZOXswkNHX64jIl808M7VmqCFd4koHHUjAk"
+    }
+  ]
+}

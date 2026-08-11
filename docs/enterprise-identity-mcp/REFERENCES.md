@@ -204,6 +204,7 @@ allowlist 不能替代本项目 identity resolver。
 
 - [MCP 2026-07-28 specification](https://modelcontextprotocol.io/specification/2026-07-28)
 - [MCP 2026-07-28 release](https://blog.modelcontextprotocol.io/posts/2026-07-28/)
+- [MCP 2026-07-28 Authorization](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization)
 - [`modelcontextprotocol/python-sdk`](https://github.com/modelcontextprotocol/python-sdk) 与
   [SDK v2 What's New](https://github.com/modelcontextprotocol/python-sdk/blob/main/docs/whats-new.md)
 - [MCP Authorization](https://modelcontextprotocol.io/docs/tutorials/security/authorization) 与
@@ -223,6 +224,10 @@ allowlist 不能替代本项目 identity resolver。
 FastMCP 实现/产品资料（不是 MCP 标准）：
 
 - [FastMCP MultiAuth](https://gofastmcp.com/servers/auth/multi-auth)
+- [FastMCP token verification](https://gofastmcp.com/servers/auth/token-verification)
+- [FastMCP Remote OAuth](https://gofastmcp.com/servers/auth/remote-oauth)
+- [FastMCP component authorization](https://gofastmcp.com/servers/authorization)
+- [FastMCP 4.0.0b2 `JWTVerifier` source](https://github.com/PrefectHQ/fastmcp/blob/v4.0.0b2/fastmcp_slim/fastmcp/server/auth/providers/jwt.py)
 - [Prefect Horizon](https://gofastmcp.com/deployment/prefect-horizon)
 - [FastMCP PyPI releases](https://pypi.org/project/fastmcp/#history)
 
@@ -233,6 +238,8 @@ FastMCP 实现/产品资料（不是 MCP 标准）：
 | MultiRAG SDK v2 客户端 | Python SDK `docs/whats-new.md`、migration、Client、OAuth for clients |
 | resource metadata | [RFC 9728](https://www.rfc-editor.org/rfc/rfc9728) well-known、`WWW-Authenticate resource_metadata=...` |
 | audience/resource | [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707) Resource Indicators 和 server audience validation |
+| 项目 JWT profile | [RFC 9068](https://www.rfc-editor.org/rfc/rfc9068) 的 `at+jwt`、标准 access-token claims 和非对称签名；只称 RFC 9068-shaped，不声称 MCP 强制 JWT |
+| 用户/actor 委托 | [RFC 8693](https://www.rfc-editor.org/rfc/rfc8693) 的 `act` 语义；顶层 `sub` 保持用户，内部 token 另做 resource/scope attenuation |
 | 禁止 token passthrough | MCP Security Best Practices |
 | 机器到机器 | `io.modelcontextprotocol/oauth-client-credentials` extension |
 | 企业 IdP | `io.modelcontextprotocol/enterprise-managed-authorization`、[SEP-990](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/990)、ID-JAG |
@@ -262,6 +269,31 @@ FastMCP 实现/产品资料（不是 MCP 标准）：
 - MRTR `input_required` 不是“已获用户确认”；飞书表单提交也不是 authorization decision。
 - MultiAuth/Horizon 是 FastMCP 生态能力，不得写成 MCP 标准或升级 Python SDK v2 后自动获得的能力。
 - Tasks 和 Apps 都不能替代本项目的 Principal、scope、业务授权、幂等和持久化 interaction state。
+
+### FastMCP 4 的采用边界
+
+- `RemoteAuthProvider` 适合在 EIM-A3 组合 token verifier 与 RFC 9728 protected-resource metadata；
+  `require_scopes`/component auth 适合在 A4 同时过滤 `tools/list` 和保护 direct call。
+- `JWTVerifier` 可以复用成熟 JOSE/JWKS、issuer/audience 和基础 scope 检查，但 4.0.0b2 的实现不是
+  EIM-A1 profile oracle；项目仍需检查 `typ/kid`、必需 claims/types、`iat/nbf/max_ttl`、
+  `token_use`、tenant、scope registry 和 cross-profile/resource。
+- MultiAuth 只有出现多个真实 token issuer 后才评估；“第一个 verifier 成功”不等于 tenant、角色、
+  业务对象或 assurance 已授权。
+- 领域 Principal、policy 和业务 service 不 import FastMCP。auth/provider 对象只存在 composition root
+  与 tool adapter 边界，避免框架升级改写业务契约。
+
+### 企业 MCP 平台的可复用模式
+
+| 项目 | 参考内容 | 本项目采用/拒绝 |
+|---|---|---|
+| [agentgateway](https://agentgateway.dev/docs/standalone/latest/configuration/security/mcp-authz/) | MCP JWT/resource policy、工具可见性、backend credential exchange | 采用 gateway 验证、`tools/list`/direct call 同策略、resource-bound 下游换发；不透传外部 bearer |
+| [IBM ContextForge](https://ibm.github.io/mcp-context-forge/latest/manage/rbac/) | resource visibility 与 RBAC 双层授权、server-side membership | 采用“可见不等于可执行”和 fail closed；不把易变 team/role 复制进短 token |
+| [LibreChat MCP authority](https://github.com/danny-avila/LibreChat/blob/d89b11d34dce834ed600c48e2f2856500c806af3/packages/api/src/mcp/authority/index.ts) | Principal/resource credential 隔离、执行前 authority proof | 采用 per-principal/per-resource 隔离和 TOCTOU 重验；不照搬其应用数据模型 |
+| [Open WebUI tool grants](https://github.com/open-webui/open-webui/blob/main/backend/open_webui/utils/tools.py) | user/group grants 在工具暴露前过滤 | 采用服务端工具可见性思想；group grant 不能替代 MultiRAG tenant 和业务对象授权 |
+
+这些项目用于校准网关/策略/凭据隔离，不构成引入另一个 MCP 平台的决定。MultiRAG 继续拥有
+Principal 与 Agent/知识库权限，of_mcp 继续拥有 Resource Server、工具策略和业务 adapter；任何
+平台的 unsigned identity header、全局 server credential 或 UI 可见性都不能作为最终授权证据。
 
 ---
 
