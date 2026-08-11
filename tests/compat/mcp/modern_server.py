@@ -6,8 +6,8 @@
 # ///
 """Isolated MCP SDK 2 fixture and probe for EIM-F2.
 
-The PEP 723 environment prevents MCP SDK 2 from entering MultiRAG's production
-dependency graph while FastMCP 3 still requires ``mcp<2``.
+The exact PEP 723 lock keeps the compatibility oracle independent from
+MultiRAG's production dependency resolution.
 """
 
 import argparse
@@ -18,11 +18,10 @@ from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from typing import Any
 
-import httpx2
 import uvicorn
 
 from mcp.client import Client
-from mcp.client.streamable_http import streamable_http_client
+from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
 from mcp.server import MCPServer
 
 _VALID_TOKEN = "eim-f2-valid"
@@ -129,11 +128,12 @@ async def _probe(
     cancel: bool,
     list_only: bool,
     token: str | None,
+    tool_name: str | None,
 ) -> dict[str, Any]:
     async with AsyncExitStack() as stack:
         client_target: Any = url
         if token is not None:
-            http_client = await stack.enter_async_context(httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"}))
+            http_client = await stack.enter_async_context(create_mcp_http_client(headers={"Authorization": f"Bearer {token}"}))
             client_target = streamable_http_client(url, http_client=http_client)
         client = await stack.enter_async_context(Client(client_target, mode=mode))
         tools = await client.list_tools()
@@ -142,6 +142,16 @@ async def _probe(
                 "event": "probe",
                 "protocol_version": client.protocol_version,
                 "tools": sorted(tool.name for tool in tools.tools),
+            }
+        if tool_name is not None:
+            tool_result = await client.call_tool(tool_name, {})
+            return {
+                "event": "probe",
+                "protocol_version": client.protocol_version,
+                "tools": sorted(tool.name for tool in tools.tools),
+                "tool_name": tool_name,
+                "tool_result": tool_result.structured_content,
+                "is_error": tool_result.is_error,
             }
         echo = await client.call_tool("compat_echo", {"value": "modern-probe"})
         result: dict[str, Any] = {
@@ -208,6 +218,7 @@ def main() -> None:
     parser.add_argument("--cancel", action="store_true")
     parser.add_argument("--list-only", action="store_true")
     parser.add_argument("--token")
+    parser.add_argument("--tool")
     args = parser.parse_args()
     if args.serve:
         _serve()
@@ -223,6 +234,7 @@ def main() -> None:
                     args.cancel,
                     args.list_only,
                     args.token,
+                    args.tool,
                 )
             ),
             sort_keys=True,

@@ -110,9 +110,13 @@ async def test_tools_are_read_only_annotated_and_retrieval_is_structured(monkeyp
     monkeypatch.setattr(server.MultiRAGConnector, "list_datasets_structured", fake_list_datasets)
 
     async with Client(mcp) as client:
-        # 回归点：缺省会误报 fastmcp 库版本
-        assert client.initialize_result.serverInfo.version == server._server_version()
-        assert client.initialize_result.serverInfo.version != fastmcp.__version__
+        # FastMCP 4 / MCP SDK 2 uses the sessionless 2026-07-28
+        # server/discover path.  A successful modern connection has no legacy
+        # initialize result, while server_info remains the stable public view.
+        assert client.protocol_version == "2026-07-28"
+        assert client.initialize_result is None
+        assert client.server_info.version == server._server_version()
+        assert client.server_info.version != fastmcp.__version__
 
         tools = {t.name: t for t in await client.list_tools()}
         assert set(tools) == {"list_datasets", "multirag_retrieval"}

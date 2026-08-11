@@ -105,8 +105,10 @@ inbound： 外部 MCP Client -> MultiRAG RAG Resource Server -> MultiRAG API
 ```
 
 这两个方向的 resource URI、token audience、Principal、工具策略和发布/回滚面必须独立；当前又共享
-FastMCP 3 / MCP SDK 1 的 Python 依赖，因此不能把“客户端升 SDK 2”当成一个孤立依赖修改。完整
-术语、当前事实、依赖拓扑、能力取舍、MRTR/飞书交互和分阶段门禁见
+Python 依赖和一个 lock。EIM-F6/F7 已基于兼容证据选择整仓协调切换，当前精确锁定
+`fastmcp==4.0.0b2` 与 `mcp==2.0.0`，未拆出独立 Server runtime。这是技术基线，不会合并
+两个方向的 resource、credential 或授权策略。完整术语、当前事实、依赖拓扑、能力取舍、
+MRTR/飞书交互和分阶段门禁见
 [Modern MCP 与企业服务中心](MCP_ENTERPRISE_PLATFORM.md)。
 
 当出现下面任一条件时，再把 MultiRAG 内的身份模块抽成独立 `identity-broker`：
@@ -185,15 +187,23 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   企业业务主体和委托上下文。
 - `User.email` 当前非空且唯一；JIT 不能靠伪造邮箱长期绕过，必须按 ROADMAP 先完成账户模型
   兼容设计和迁移。
-- MCP 客户端仍使用旧式 `ClientSession + initialize` 和静态 headers，需要升级为请求级 token
-  与 MCP SDK 2 客户端。
+- MCP 出站已使用官方 SDK 2 `Client`：Streamable HTTP 使用 `mode="auto"` 和 SDK
+  `create_mcp_http_client()` 受管 client（30 秒 connect/write/pool、300 秒 read），SSE 使用
+  `mode="legacy"`，业务代码不再手调 `initialize()`。HTTP
+  response hook 保留 `401`/`403` 分类，但 headers 仍来自 Server 配置/调用参数，不是
+  request-scoped Principal 委托 token。
+- 出站旧串行队列已删除，并发调用不再形成 HOL；超时会取消本地 task，但远端取消仍是
+  协作式，不能由本地超时推断业务未执行。
+- `InputRequiredResult` 已表面化为 `interaction_required` 结构和旁路 metadata，但尚无
+  持久 `InteractionSession`、resume 或自动重试；这只完成 EIM-F3 的协议接线，不等于 U14/U15。
 - MultiRAG 还通过 [`mcp/server/server.py`](../../mcp/server/server.py) 对外提供 `/mcp` 与 legacy
-  `/sse`。它已有 Streamable HTTP、结构化结果、output schema 和错误脱敏，但仍由 FastMCP 3.4.4 /
-  MCP SDK 1.28.1 承载；`stateless_http=True` 不等于已经实现无握手的 MCP `2026-07-28`。
-- 当前 `fastmcp-slim[client,server] 3.4.4` 明确约束 `mcp>=1.24,<2`。EIM-F2 已用隔离解释器完成
-  双方向兼容矩阵，并证明调用成功仍可能只是 legacy fallback；下一步 EIM-F6 必须先冻结依赖拓扑，
-  F3 不得直接在根环境加入 `mcp>=2`。模块当前行为与不能
-  宣称的能力见 [`mcp/README.md`](../../mcp/README.md)。
+  `/sse`。入站已升级到 FastMCP `4.0.0b2` / MCP SDK `2.0.0`；真实 Server 已验证
+  `2026-07-28` `server/discover`、路由 headers 和无 session 的 Streamable HTTP，同时保留
+  legacy HTTP/SSE 兼容。这不代表 Principal、scope 或 OAuth Resource Server 已完成。
+- EIM-F2 兼容矩阵已转化为 EIM-F6/F7/F3/F8 实施与回归；当前共享运行时的 exact pins
+  是 `fastmcp==4.0.0b2` 与 `mcp==2.0.0`。顶层 `mcp/` 目录故意不包含
+  `__init__.py`，避免遮蔽官方 `mcp` 依赖。模块当前行为与不能宣称的能力见
+  [`mcp/README.md`](../../mcp/README.md)。
 - Channel Execution 已通过 `stream()` 直接向 transport-neutral ReplySession 交付类型化事件；
   飞书已实现 CardKit 渐进式回复，`ask()` 只保留为兼容聚合入口。Provider/Target capabilities、
   Dialog detached CAS 与 Canvas candidate sidecar/周期 GC 已分别由 EIM-U11～U13 收口。CHN-U15 迁移与
@@ -217,8 +227,8 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
 - `house_middleware()` / `house_extensions()` 是 P3 平台能力装配点。
 - `service.toml` 已声明 `scopes`，但尚未形成真实请求授权。
 - `medic` 的 `workcode` 是工具调用者自报，且工具会产生真实副作用。
-- of_mcp 使用 FastMCP 4.0.0b1；2026-08-07 已有 b2，必须先做独立兼容升级，不能和身份改造
-  混在同一个 PR。
+- EIM-F4 已独立完成：of_mcp 精确升级到 FastMCP `4.0.0b2`，没有把身份或授权改造混入
+  版本升级。
 - of_mcp 的 profile/catalog/mount/proxy/contract 基础可继续演进为私有 MCP 服务中心，但当前
   `auth=`、持久 storage、scope enforcement、proxy internal actor token、Action/Idempotency Ledger
   尚未落地，不能因为使用 FastMCP 4 就宣称已经是企业授权网关。

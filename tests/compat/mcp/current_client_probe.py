@@ -45,6 +45,7 @@ def main() -> None:
     started = time.monotonic()
     output: dict[str, Any] = {
         "initial_ready": initial_ready,
+        "protocol_version": session.protocol_version,
         "scenario": args.scenario,
         "transport": args.transport,
     }
@@ -52,6 +53,7 @@ def main() -> None:
     if args.scenario in {"echo", "auth"}:
         output["text"] = session.tool_call("compat_echo", {"value": args.scenario}, timeout=1)
         output["structured_content"] = _structured(session)
+        output["meta"] = session.get_last_tool_call_meta()
     elif args.scenario == "fail":
         output["text"] = session.tool_call("compat_fail", {}, timeout=1)
         output["meta"] = session.get_last_tool_call_meta()

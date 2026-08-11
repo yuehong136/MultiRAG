@@ -74,6 +74,11 @@
 | InteractionSession | MRTR 多轮、revision/CAS、decline/cancel/expire、重启恢复 | service 单测 + 真库集成 |
 | Structured result | `structuredContent`/`outputSchema` 一致性和安全事件转换 | schema/golden tests |
 
+截至 2026-08-12，EIM-F3/F8 只完成了 MCP SDK 2/FastMCP 4 的协议运行时迁移和
+`InputRequiredResult` 的 transport-level 暴露。EIM-A1 先固定 token/JWKS test vectors；Principal、
+独立 audience/scope 和 OAuth Resource Server 仍属于依赖 A1/P1 的 EIM-A7；InteractionSession 仍
+属于依赖 P3/A4/C3 的 EIM-U14。不能因为 modern/legacy 协议测试通过就把这些安全测试标为已满足。
+
 最少必须覆盖这些命名场景：
 
 1. 同一个飞书用户通过同一企业的两个应用进入：`open_id` 不同、`user_id` 相同，最终只能有一个
@@ -150,6 +155,29 @@
 | E2E-19 | H5 URL mode | URL 只含短期一次性 nonce；免登同人校验；`requestState`/token 不出现在 URL、卡片或日志 |
 | E2E-20 | MultiRAG 双 MCP 角色 audience 混用 | 发给 of_mcp 的 token 不能调用 MultiRAG MCP Server，反向同样拒绝 |
 | E2E-21 | Host 或 Resource Server 版本回滚 | 现代/legacy 兼容矩阵内可回滚，不要求两个 MCP 方向同时升级或同时回滚 |
+
+### 3.5 MCP Foundation 当前兼容基线
+
+EIM-F2/F3/F4/F6/F7/F8 完成后的可复现基线是 MCP SDK 2/FastMCP 4 主运行时，加上 PEP 723 锁定的
+真实 FastMCP 3 legacy 子进程 fixture；`of_mcp` F4 commit 为 `23dd1fd`。执行：
+
+```bash
+make mcp-compat
+```
+
+当前结果必须为 **13/13 PASS**。矩阵至少证明双方向真实协商分支、tools/list/call、401/403、tool
+error、caller cancel/timeout、现代 inbound discover/sessionless/structured result、legacy 回退和
+fixture 有界退出。PEP 723 fixture 必须使用自己的 lock/解释器，不得因根依赖已经升级而改成 mock，
+也不得用 sibling checkout 或父进程 `sys.path` 假装可复现。
+
+HTTP timeout/caller cancellation 的安全断言只到本地边界：等待必须有界，被取消的本地调用不能继续
+占用旧式串行队列，同 server 的快调用不能被慢调用形成 HOL。远端取消是协作式；服务端在调用方
+timeout 后仍完成是允许且必须观测的结果，不得据此推断副作用没有发生。高风险工具另以 Confirmation、
+业务幂等、结果未知对账和恢复前重授权验收。
+
+这份 13/13 是协议兼容证据，不是 EIM-A1 的 token/JWKS test vectors、EIM-A7 的 inbound OAuth
+Resource Server/Principal/scope，也不是 EIM-U14 的持久化 InteractionSession 证据。上述任务完成时
+必须在本矩阵之外增加各自的安全正反路径。
 
 ## 4. 安全专项测试
 
@@ -277,6 +305,14 @@ MultiRAG 每个实现任务完成前：
 make fix
 make verify
 ```
+
+改动 MCP SDK、FastMCP、transport、`common/mcp_tool_call_conn.py` 或 `mcp/server/` 时追加：
+
+```bash
+make mcp-compat
+```
+
+必须得到完整 **13/13 PASS**；单仓 `make verify` 或只跑 modern happy path 不能替代该矩阵。
 
 涉及数据库/身份存储：
 

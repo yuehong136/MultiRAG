@@ -268,3 +268,36 @@ Principal、授权凭据或防重放令牌，必须绑定 InteractionSession 后
 InteractionSession 只证明“哪次交互收到了什么输入”。敏感副作用仍必须独立满足 ADR-12 的可信
 身份、scope/业务授权、持久化 Confirmation 和端到端幂等；不能用 MRTR、表单提交或一次按钮点击
 替代执行前重新授权。
+
+---
+
+## EIM-ADR-19：当前无 FastMCP 3 生产消费者，MCP 2/FastMCP 4 采用全根协同切换
+
+**状态**：Accepted
+**日期**：2026-08-12
+**取代范围**：只取代 ADR-17 中“版本冲突时默认先拆独立 Server 运行时”的本次部署选择；
+Host/Client 与 Resource Server 的安全、resource、audience、scope 和发布边界继续由 ADR-17 约束。
+
+EIM-F6 已复现 FastMCP 3 `mcp<2` 与 MCP SDK 2 `mcp>=2` 的依赖冲突。由于当前没有生产环境使用
+MultiRAG 的 FastMCP 3 服务，用户明确批准不保留该生产运行时，选择把 MultiRAG 根依赖协同切换到
+MCP SDK 2/FastMCP 4，而不是为旧 Server 新建独立 project/venv。`of_mcp` 的对应纯版本升级锚点为
+EIM-F4 commit `23dd1fd`。
+
+当前协议基线是 MCP SDK `2.0.0`/FastMCP `4.0.0b2`：
+
+- MultiRAG outbound 使用官方 MCP 2 高层 `Client`，HTTP 现代优先并自动协商 legacy；
+- MultiRAG inbound 使用 FastMCP 4/MCP 2 的 `2026-07-28` modern Server，同时保留 legacy 协议兼容；
+- FastMCP 3 只以 PEP 723 + 独立 lock 的真实子进程 fixture 存在，不与根运行时混装；
+- `make mcp-compat` 的双向协议矩阵为 13/13，通过依据包括实际协商分支，而不只是 tools/list/call
+  的业务结果。
+
+这次依赖协同切换不把两个 MCP 角色合并成同一安全主体，也不证明身份/授权链已经落地。EIM-A1 先
+固定 token/JWKS test vectors；EIM-A7 仍依赖 A1/P1，才实现 inbound OAuth Resource Server、
+Principal、audience/scope 和工具可见性；EIM-U14 仍依赖 P3/A4/C3，才把 `InputRequiredResult` 接入
+持久化 InteractionSession、CAS 和恢复前重授权。协议层可以暴露输入请求，但在这些任务完成前不得
+宣称 delegated token、企业级授权或飞书表单闭环完成。
+
+HTTP timeout 的边界是取消本地等待和底层本地调用 task，并消除旧单 server FIFO 导致的 HOL；远端
+是否停止仍依赖 transport/server 协作，可能在调用方超时后完成。因此 timeout 不是业务“未执行”证明，
+写工具必须继续使用 Confirmation、幂等键和结果未知对账。回滚以 MultiRAG commit + 根 lock 为单位；
+PEP 723 legacy fixture 是兼容证据，不是生产回滚运行时。

@@ -148,10 +148,12 @@ flowchart TD
     A8 --> O3
 ```
 
-可并行但不共文件的首批支线：`F1/F2/F4/I1/C1`；`F2` 完成后必须串行经过 `F6 -> F7`
-才允许启动 F3/F8，F4 仍可在 `of_mcp` 独立推进。`A2` 与 `A3` 在 A1 契约固定后可跨仓并行。
-U14 的 transport-neutral 契约可在 F3/P3/A4/C3 完成后独立开发，U15 再接飞书渲染；A8/O3
-是出现真实企业 IdP、多 issuer 或托管平台需求后的评审轨，不在首期关键路径。
+可并行但不共文件的首批支线：`F1/F2/F4/I1/C1`；`F2` 完成后必须先做 F6，MultiRAG
+的 F7/F3/F8 再按已选整根方案原子落地，F4 可在 `of_mcp` 独立推进。授权主线不可简化成
+“A1 后 A2/A3 同时开工”：`P1+C3 -> P2`，`F3+F4 -> A1`，随后 `A1+F4 -> A3 -> A4`
+与 `A1+P2 -> A2` 才能跨仓推进，`P2+F3+A2+A4 -> P3`。U14 必须等待 F3/P3/A4/C3，
+U15 再接飞书渲染；A8/O3 是出现真实企业 IdP、多 issuer 或托管平台需求后的评审轨，
+不在首期关键路径。
 
 ---
 
@@ -161,13 +163,13 @@ U14 的 transport-neutral 契约可在 F3/P3/A4/C3 完成后独立开发，U15 �
 |---|---|---|:---:|---|---|
 | EIM-F0 | MR docs | 建立并维护本权威文档集、版本和上游快照 | ✅ | — | 本目录 13 份文档互链；官方/PyPI/HEAD 于 2026-08-12 复核 |
 | EIM-F1 | MR | `lark-oapi` 1.7.1 -> 当时最新 1.x；增加 Contact V3 contract fixture，不改变生产身份行为 | ⬜ | F0 | 现有 Channel 测试；token/client import 无事件循环副作用；Contact typed response 测试 |
-| EIM-F2 | 两仓 test fixture | 建**双方向**兼容矩阵：当前 MultiRAG legacy client -> `of_mcp`/官方 MCP 2 双时代 server；官方 MCP 2 `Client` -> 当前 MultiRAG FastMCP 3 legacy server；覆盖现代/回退握手、401/403、tool error、取消/超时 | ✅ | F0 | 两个隔离解释器/锁分别运行 MCP 1 与 MCP 2，不改生产依赖；每格记录实际协商路径而非只看业务成功；旧 client 的超时/队列残留被 characterization test 固定；结果和 F3/F6 清单入账 |
-| EIM-F3 | MR | `common/mcp_tool_call_conn.py` 迁到官方 `mcp.Client` v2；保留 legacy 自动回退 | ⬜ | F2,F7 | 不再手调 initialize；现代/legacy fixture 全绿且证明协商路径；无身份静态 header；超时会取消底层调用并释放串行队列 |
-| EIM-F4 | of_mcp | FastMCP 4 b1 -> 开工时最新 beta（当前 b2），纯版本 PR | ⬜ | F0 | of_mcp AGENTS 的 b1 实测行为逐项复测；mount/proxy snapshots；`ofmcp verify` |
+| EIM-F2 | 两仓 test fixture | 建并维护**双方向**兼容矩阵：MultiRAG 生产 Client、真实 inbound Server、官方 MCP 2 fixture 与隔离 FastMCP 3 legacy fixture；覆盖 modern/回退握手、SSE、401/403、tool error、取消/超时 | ✅ | F0 | PEP 723 独立锁固定 MCP 2 与 FastMCP 3 oracle；每格记录实际协商路径而非只看业务成功；迁移前 12/12，迁移后增加 inbound legacy 反向格为 13/13；无 sibling import、真实 Secret、固定端口或残留进程 |
+| EIM-F3 | MR | `common/mcp_tool_call_conn.py` 迁到官方 `mcp.Client` v2；保留 legacy 自动回退 | ✅ | F2,F7 | HTTP `mode=auto`、SSE `mode=legacy`，不再手调 initialize；现代/legacy fixture 全绿；`InputRequiredResult` 只表面化给 Host；并发调用无旧串行队列/HOL；timeout 取消本地调用，远端取消明确为协作式 |
+| EIM-F4 | of_mcp | FastMCP 4 b1 -> 开工时最新 beta（b2），纯版本 PR | ✅ | F0 | exact b2；mount/proxy/contract snapshots；`uv run --locked ofmcp verify` 116 passed、2 skipped，六步全绿；提交 `23dd1fd` |
 | EIM-F5 | MR docs + 上游审计 | RAGFlow Canvas/Agent/Channel 逐 commit 对齐审计，定义来源基线、滚动兼容基线和单次移植 commit 三层版本语义；按“直接跟进 / 语义移植 / 适配层吸收 / 暂不采纳”分类并判断 no-store/checkpoint 执行缝 | ⏸ | F0,U13；Channel 完成 CHN-U15 rollout/真实 smoke、CHN-U16、CHN-O9 与稳定浸泡；用户明确恢复从约 2026-04-24 本地同步点逐 commit 跟进 | 固定恢复同步时的 HEAD；同步区/反腐层边界清单；移植冲突预算；契约测试建议；给出继续 candidate、采用上游缝或向上游提交可合入重构的单一结论；审计不改运行行为 |
-| EIM-F6 | MR docs + resolver PoC | 冻结 MCP client/server 依赖拓扑：复现 FastMCP 3 的 `mcp<2` 与 MCP SDK 2 冲突，并审计本仓顶层 `mcp/` 与官方包同名边界；比较“`mcp/server` 独立 project/venv/lock”（默认推荐）、经批准同步升 FastMCP 4 beta、等待 stable 三案 | ⬜ | F2 | ADR/变更清单固定依赖/导入 owner、进程边界、启动/CI/部署和回滚；选中方案可在干净环境确定性解析；任何隐式 prerelease、未解释 major 替换或仅靠本机 sibling path 才成功都停止，不启动 F7/F3 |
-| EIM-F7 | MR | 执行 F6 选定边界；默认把 `mcp/server` 变成独立可锁定运行单元，若用户明确批准才采用全仓 FastMCP 4 beta 协同升级 | ⬜ | F6 | 根环境与 server 环境各自 `lock --check`/冷安装；现有启动入口、健康检查、tools/list/call 和 legacy client 契约不回归；F2 双向矩阵跨进程全绿；提交不包含 F3 客户端改写或身份功能 |
-| EIM-F8 | MR MCP server | 将 inbound MultiRAG RAG MCP Server 升到 `2026-07-28` modern era，同时保留受门禁控制的 legacy 兼容 | ⬜ | F2,F7 | modern `server/discover`、`Mcp-Method/Mcp-Name`、无 session 调用和 structured result 全绿；旧 Client 仍可回退；不在本任务引入 Principal/scope/EMA；legacy 退出另立数据化门禁 |
+| EIM-F6 | MR docs + resolver PoC | 冻结 MCP client/server 依赖拓扑：复现 FastMCP 3 的 `mcp<2` 与 MCP SDK 2 冲突，审计顶层 `mcp/` 同名边界，并在独立 runtime、全根协同 beta、等待 stable 三案中决策 | ✅ | F2 | 用户确认当前无生产 FastMCP 3 服务，选择单根环境原子升级；exact pin `fastmcp==4.0.0b2`、`mcp==2.0.0`；本地 `mcp/` 继续无 `__init__.py` 且入口保持文件路径；F3/F7/F8 因 import/依赖原子性同提交落地 |
+| EIM-F7 | MR | 执行 F6 选定的单根 FastMCP 4 / MCP SDK 2 运行时边界 | ✅ | F6 | 根 lock 确定解析为 FastMCP/slim 4.0.0b2、MCP/mcp-types 2.0.0、sse-starlette 3.4.8；启动、SSE、HTTP、tools/list/call 和结构化结果全绿；未引入身份功能 |
+| EIM-F8 | MR MCP server | 将 inbound MultiRAG RAG MCP Server 升到 `2026-07-28` modern era，同时保留受门禁控制的 legacy 兼容 | ✅ | F2,F7 | 真实跨进程 `server/discover`、`Mcp-Method/Mcp-Name`、无 session、structured result 全绿；隔离 FastMCP 3 legacy Client/Server 路径保留；未引入 Principal/scope/EMA |
 
 F1/F3/F4/F7/F8 禁止携带身份功能。F2 只是 characterization/兼容矩阵，不得修改根 `pyproject.toml`
 或 `uv.lock`；F6 只做依赖拓扑决策和可解析 PoC，F7 才实施选定边界。F5 是只读决策任务，
@@ -401,21 +403,21 @@ EIM-F5 / CHN-X14 仍是长期 upstream-first 的上游审计入口，但当前�
 
 ```text
 EIM-F1  lark-oapi patch 升级
-EIM-F4  of_mcp FastMCP beta 升级
-EIM-F6  MCP client/server 依赖拓扑决策闸门
 EIM-I1  User 外部账号模型
 EIM-C1  Channel tolerate structured assertion
+EIM-A1  两仓 JWT/JWKS 正反 test vectors（F3/F4 已完成）
 ```
 
 MCP Foundation 的实际串并行轨道：
 
 ```text
-                 +-> F4 of_mcp FastMCP 4 b2 beta（独立版本轨）
+                 +-> F4 of_mcp FastMCP 4 b2 beta（✅ `23dd1fd`）
 F0 -> F2 (✅) ---+
-                 +-> F6 依赖拓扑闸门 -> F7 边界实施 -> F3 outbound Client v2
-                                                       -> F8 inbound modern Server
+                 +-> F6 单根环境决策 -> F7 原子依赖升级 -> F3 outbound Client v2（✅）
+                                                          -> F8 inbound modern Server（✅）
 
-F1 / I1 / C1 可与上面两条轨道并行；F6 未作出可解析、可部署、可回滚的结论时停止 F7/F3/F8。
+协议基础轨已完成。后续不得继续把“升级 MCP”当作身份/授权完成；A1、A3/A4、P1/P3、A7 和
+U14/U15 仍按各自依赖推进。
 ```
 
 体验快速通道（不等待身份/MCP/SDK 迁移）：
@@ -424,15 +426,24 @@ F1 / I1 / C1 可与上面两条轨道并行；F6 未作出可解析、可部署�
 U0 -> U1 -> U4 -> U11 -> U12/U13
 ```
 
-身份、MCP 与敏感操作主通道：
+身份、MCP 与敏感操作主通道（`+` 表示全部前置均需完成）：
 
 ```text
-F1 -> I1 -> I2 -> I3 -> I4 -> I6 -> P1 -> C1 -> C2 -> C3
-F2 -> F6 -> F7 -> F3 --+
-                \-> F8 -> A7
-F4 ---------------------+-> A1 -> A2/A3 -> A4 -> P2/P3 -> A5/A6
-                                          +-> U14 -> U15
-   -> I5 -> I7 -> I8 -> M1 -> M2 -> M3 -> M4 -> U7 -> M5 -> U2 -> O1/O2 -> U3
+F1 -> I1 -> I2 -> I3 -> I4 -> I6 -> P1
+C1 -> C2 -> C3                         (C3 另需 I6 + P1)
+P1 + C3 -> P2
+
+F2 -> F6 -> F7/F3/F8                   (已按整根方案原子完成)
+F3 + F4 -> A1
+A1 + F4 -> A3 -> A4
+A1 + P2 -> A2
+P2 + F3 + A2 + A4 -> P3
+F8 + A1 + P1 -> A7
+F3 + P3 + A4 + C3 -> U14 -> U15
+A4 + P3 -> A5
+A4 -> A6
+
+I5 -> I7 -> I8 -> M1 -> M2 -> M3 -> M4 -> U7 -> M5 -> U2 -> O1/O2 -> U3
 
 A8 -> O3  仅在真实企业 IdP、多 issuer 或托管平台需求成立后解除挂起。
 ```
@@ -464,4 +475,6 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 | 2026-08-10 | EIM-U13 / CHN-U15 | Canvas 使用 MultiRAG 自有 sidecar 显式管理候选 owner/target/public session/expiry；新会话与元数据同事务创建，候选在发布前移出普通目标会话命名空间，终态按固定锁序恢复公开身份或清理。API 侧启动及周期运行有界 `SKIP LOCKED` GC，兼容回收遗留 Canvas/Dialog marker；请求热路径不再 prune，worker 继续无数据库。迁移兼容 model-first 启动并严格拒绝不兼容既有表，MultiRAG Canvas/Dialog 同步区零 diff | MultiRAG / `refactor(channel): isolate Canvas candidate lifecycle (EIM-U13, CHN-U15)` | 定向单元 **97 passed**、真 PostgreSQL **23 passed**；`make verify` unit **1781 passed** 且全部静态门禁绿；完整 `make integration` **35 passed**；单 Alembic head `e4f6a8b0c2d4`；`git diff --check` 通过 | Codex |
 | 2026-08-10 | EIM-F5 / CHN-X14 | 定案 RAGFlow upstream-first 的 Canvas/Channel 长期收敛策略：现代项目提供 terminal publish、CAS、run/history 分离、幂等和副作用门禁等不变量，不替换上游 Canvas 内核。登记逐 commit 只读审计入口并明确保持挂起：CHN-U15 迁移/API 重启已确认，先补真实 smoke，再完成 CHN-U16、CHN-O9 和稳定浸泡；待用户恢复从约 2026-04-24 本地同步点逐 commit 跟进后再启动。历史来源、滚动兼容与单次移植三层版本语义不变，EIM-O4 继续挂起 | MultiRAG docs / 本次变更 | CHN-ADR-08、执行架构与两份账本双向 ID/链接检查；`make verify` | Codex |
 | 2026-08-12 | EIM-F0/F2/F6～F8/A7/A8/U14/U15 | 按 MCP 2026 与两仓实锁重排 MCP Foundation：F2 扩为双方向、双解释器矩阵；依赖边界、outbound Client、inbound modern Server 与 inbound Resource Server auth 分任务；另登记 EMA/MultiAuth/Horizon 可选闸门及 MRTR 到飞书表单闭环，明确 Tasks/Apps 不作为首期依赖 | MultiRAG docs / 本次变更 | 文档 ID/版本/相对链接检查；`git diff --check` | Codex |
-| 2026-08-12 | EIM-F2 | 完成双方向、双解释器 MCP 兼容实验室：MultiRAG 增加 legacy/modern/真实 inbound Server fixture、当前 Client probe、7 条 characterization 单测与 12 格协议矩阵；of_mcp 增加可复用双时代 auth/error/cancel fixture，并把 mount/proxy 等价测试参数化到 modern/legacy。实测双方跨仓调用成功时仍协商 `2025-11-25`，旧 Client 折叠 401/403，timeout/caller cancel 后服务端仍完成；根生产依赖与 lock 零改动 | MultiRAG + of_mcp / 工作树（未提交） | `make mcp-compat` **12/12 PASS**；MultiRAG `make verify` **1796 passed, 1 unrelated warning**；of_mcp `uv run --locked ofmcp verify` **116 passed, 2 skipped，6 gates passed**；真实跨仓 `compat_echo` 返回 `protocol_version=2025-11-25`；`git diff --check`、独立 script lock、无残留 fixture 进程 | Codex |
+| 2026-08-12 | EIM-F2 | 首次完成升级前双方向、双解释器 MCP 兼容实验室与 12 格基线；该行记录的是**迁移前 characterization**，后续 F3/F8 已将生产协商结果升级为 modern，legacy fixture 继续作为回退 oracle | MultiRAG `956bff4e`；of_mcp `9fa3a33` | 当时 `make mcp-compat` 12/12、MultiRAG `make verify` 1796 passed；of_mcp verify 116 passed、2 skipped；两份隔离锁与无残留进程检查通过 | Codex |
+| 2026-08-12 | EIM-F4 | of_mcp 从 FastMCP 4.0.0b1 精确升级到 b2；只刷新 b2 自动派生的 tool title 契约，名称、schema、annotations、授权面和业务语义不变 | of_mcp `23dd1fd` | `uv lock --check`；定向 24 passed；`uv run --locked ofmcp verify` 六步全绿，116 passed、2 skipped；`git diff --check` | Codex |
+| 2026-08-12 | EIM-F3/F6/F7/F8 | 用户确认无生产 FastMCP 3 运行负担后选择单根环境原子升级：exact FastMCP 4.0.0b2/MCP SDK 2.0.0；outbound 改为官方 Client auto/legacy、HTTP response-hook 保留 401/403、MRTR 表面化、并发无旧队列；inbound 真实进入 2026-07-28 modern era，同时以隔离 FastMCP 3 保留 legacy 回退门禁。身份、scope、EMA、持久 InteractionSession 均未实现 | MultiRAG / 本次提交 | SDK2 client + inbound 定向 **33 passed**（其中 lifecycle 在 asyncio debug + ResourceWarning-as-error 下 19 passed）；升级后 `make mcp-compat` **13/13 PASS**；`uv lock --check`、独立 FastMCP3/MCP2 script locks、无残留进程；`make verify` 全部门禁绿、unit **1808 passed** | Codex |

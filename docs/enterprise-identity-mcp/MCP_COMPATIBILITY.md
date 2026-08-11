@@ -1,242 +1,367 @@
-# EIM-F2 MCP 兼容矩阵与迁移清单
+# MCP 2026 兼容矩阵与迁移后运行基线
 
-> 状态：2026-08-12 首轮基线已完成。本文记录可重复的活体协议证据，不替代
-> [ROADMAP](ROADMAP.md) 的任务状态、[VERSION_BASELINE](VERSION_BASELINE.md) 的版本选择或
-> [MCP_ENTERPRISE_PLATFORM](MCP_ENTERPRISE_PLATFORM.md) 的目标架构。
->
-> 本文中的 token 全是公开、低熵、仅 loopback fixture 使用的测试值；没有生产 Secret。
+> 状态：EIM-F2/F3/F4/F6/F7/F8 已完成后的可执行事实。
+> 最近验证：2026-08-12（Asia/Shanghai）。
+> 长期架构见 [MCP_ENTERPRISE_PLATFORM](MCP_ENTERPRISE_PLATFORM.md)，版本来源见
+> [VERSION_BASELINE](VERSION_BASELINE.md)，任务状态只以 [ROADMAP](ROADMAP.md) 为准。
 
----
+本文既保留升级前 characterization 的结论，也记录升级后的生产运行面。阅读时必须区分：
 
-## 1. 为什么先做这份矩阵
-
-MultiRAG 当前同时包含：
-
-- outbound MCP SDK 1 Client：`common/mcp_tool_call_conn.py`；
-- inbound FastMCP 3 Server：`mcp/server/server.py`；
-- 根环境中的 `fastmcp-slim 3.4.4` 要求 `mcp>=1.24,<2`。
-
-所以不能把根环境直接改成 `mcp>=2`，再把“能启动”当成升级完成。EIM-F2 先回答四个问题：
-
-1. 当前 Client 对 legacy 和 modern dual-era Server 实际协商到哪个协议；
-2. SDK 2 Client 对当前 MultiRAG Server 是否真的走 modern，还是回退到 initialize；
-3. 401/403、tool error、timeout/cancel 是否保留了可恢复语义；
-4. MCP 1 与 MCP 2 能否在不污染生产 lock 的独立解释器中重复验证。
-
-F2 不改变生产行为。它发现的缺口进入 F6/F7/F3/F8，不在测试中用 skip、xfail 或宽松断言掩盖。
+1. **历史基线**：证明旧 SDK1/FastMCP3 的真实限制，避免迁移后把旧问题忘掉；
+2. **当前基线**：MultiRAG 已采用 MCP SDK2/FastMCP4，modern 是主路径；
+3. **目标能力**：Principal、OAuth scope、持久交互和飞书表单仍是后续任务，协议升级没有自动完成它们。
 
 ---
 
-## 2. 已核验环境
+## 1. 当前结论
 
-| 项目 | 代码/版本 | 锁定证据 |
+截至本次提交：
+
+- MultiRAG outbound 使用官方 `mcp.client.Client` 2.0.0；
+- Streamable HTTP 使用 `mode="auto"`，会先 `server/discover`，必要时回退 legacy `initialize`；
+- SSE 明确使用 `mode="legacy"`，它不会由 `auto` 自动切换 transport；
+- MultiRAG inbound 使用 FastMCP 4.0.0b2，真实协商 MCP `2026-07-28`，同时保留 legacy HTTP/SSE；
+- of_mcp 已在提交 `23dd1fd` 固定 FastMCP 4.0.0b2、MCP/mcp-types 2.0.0；
+- 生产主环境不再安装 FastMCP3/MCP1，但测试用 PEP 723 独立锁固定 FastMCP 3.4.7，继续证明
+  legacy fallback；
+- `make mcp-compat` 的每一格都跑真实 loopback 子进程，不以 mock 或“工具调用成功”替代 wire 证据。
+
+这不代表：
+
+- 当前飞书用户已经成为 MCP Principal；
+- 静态 server header 已经变成 request-scoped delegated token；
+- inbound/outbound Resource Server 已有标准 OAuth metadata、audience 或 scope；
+- `InputRequiredResult` 已有数据库持久化、跨进程恢复或飞书 Form renderer；
+- timeout 一定能终止远端业务 handler。
+
+---
+
+## 2. 精确版本与锁
+
+| 运行单元 | 版本 | 锁/提交 |
 |---|---|---|
-| MultiRAG baseline commit | `2d3836e8f72ff3b40fc7169084dcbdd4ab048100` | 本次工作树在其上增加文档与 F2 fixture |
-| MultiRAG root | FastMCP `3.4.4`、fastmcp-slim `3.4.4`、MCP SDK `1.28.1` | `uv.lock` SHA-256 `d8afd4764f16aac2d4c21f51557b6064375e53bfd957ca87885d368093706c00` |
-| isolated modern fixture | MCP SDK `2.0.0` | PEP 723 script lock SHA-256 `84b2c9bb83231bec210b4a7b8a49a789637cacd2f4a1d8d9e62375de36d40907` |
-| of_mcp baseline commit | `ffa08853cfcb1424ddbec1858edf47fb2a48d366` | 本次工作树只增加 F2 测试基建 |
-| of_mcp | FastMCP `4.0.0b1`、MCP SDK/mcp-types `2.0.0` | `uv.lock` SHA-256 `1c29c955b40f984dcc592eb79c727f1d348ca694a9036ef9ff8622fd783372fe` |
+| MultiRAG root | FastMCP/slim `4.0.0b2`、MCP/mcp-types `2.0.0`、httpx2 `2.10.0`、sse-starlette `3.4.8` | `uv.lock` SHA-256 `298728583b2deadcb7c59e170653df1abd1de324b6fd5cccbc10fa87a0d00794` |
+| legacy oracle | FastMCP `3.4.7` 及其 MCP1 依赖 | `tests/compat/mcp/legacy_server.py.lock` SHA-256 `deadb04931edf60400b23544d7be3f1a94c2fd570062d35b92d6db4da23b96fc` |
+| modern oracle | MCP SDK `2.0.0` | `tests/compat/mcp/modern_server.py.lock` SHA-256 `84b2c9bb83231bec210b4a7b8a49a789637cacd2f4a1d8d9e62375de36d40907` |
+| of_mcp | FastMCP/slim `4.0.0b2`、MCP/mcp-types `2.0.0` | EIM-F4 `23dd1fd`；lock SHA-256 `2d8c7f7201fa96e35b3455a578188b20b989450ab4ebc1fc38fe2c6f8478c45c` |
 
-版本事实会漂移。重跑时先执行 VERSION_BASELINE 的查询命令；不要把这里的 SHA 当成未来升级目标。
+FastMCP 4 仍是 beta，因此 MultiRAG 同时：
+
+- 直接依赖 `fastmcp==4.0.0b2`；
+- 直接依赖 `mcp==2.0.0`，因为业务代码直接使用官方 Client；
+- 直接依赖 `httpx2>=2.10.0,<3.0.0`，因为业务代码拥有并管理 HTTP transport client；
+- 在 uv constraints 固定 `fastmcp-slim==4.0.0b2`，防止 wrapper/slim 漂到不同 beta；
+- 不直接依赖 `mcp-types`，代码继续从 `mcp.types` 导入；
+- 把后续 b3/RC/GA 当作新任务，不使用开放的 `>=4` 静默升级。
+
+### 顶层目录同名边界
+
+仓库有本地 `mcp/` 目录，官方依赖也叫 `mcp`。当前安全成立的原因是本地目录**没有
+`__init__.py`**，而 site-packages 中官方 `mcp` 是 regular package。
+
+必须保持：
+
+```bash
+uv run mcp/server/server.py ...
+```
+
+不得改成：
+
+```bash
+python -m mcp.server.server
+```
+
+也不得为了“包化”给本地目录添加 `__init__.py`，否则会遮蔽官方 SDK。
 
 ---
 
-## 3. 测试结构
+## 3. Fixture 与职责
 
-### 3.1 MultiRAG 仓
-
-| 文件 | 责任 |
+| 文件 | 职责 |
 |---|---|
-| `tests/unit/test_mcp_tool_call_conn_compat.py` | 不走网络，固定当前 transport/header/manual initialize、401/403 文本化、tool error metadata、timeout 队头阻塞和 processor cancellation |
-| `tests/compat/mcp/legacy_server.py` | 使用根环境 FastMCP 3/MCP 1，提供 legacy HTTP/SSE、structured echo、tool error 和 wait/status |
-| `tests/compat/mcp/multirag_server.py` | 启动真实 `mcp/server/server.py` 组装面，随机 loopback 端口，供 SDK 2 验证 inbound 当前协议 |
-| `tests/compat/mcp/modern_server.py` | PEP 723 独立 MCP SDK 2 Server/Client；提供 modern/legacy dual-era、路由 Header、401/403、error、wait/status |
-| `tests/compat/mcp/modern_server.py.lock` | 现代 fixture 的独立、确定性依赖锁；不进入根 lock |
-| `tests/compat/mcp/current_client_probe.py` | 每次只在独立子进程运行一个真实 `MCPToolCallSession` 场景，避免失败连接的旧 event loop 污染矩阵进程 |
-| `scripts/check_mcp_compat.py` | 拉起随机端口子进程、读取 ready JSON、执行矩阵、输出 Markdown/JSON、finally terminate/kill 并检查退出 |
+| `tests/compat/mcp/legacy_server.py` | PEP 723 FastMCP3 legacy-only HTTP/SSE；echo、tool error、wait/status |
+| `tests/compat/mcp/legacy_server.py.lock` | 真实旧时代 oracle 的独立锁，不污染 root |
+| `tests/compat/mcp/modern_server.py` | PEP 723 MCPServer2 dual-era、protected endpoint、routing-header capture、SDK2 probe |
+| `tests/compat/mcp/modern_server.py.lock` | modern oracle 独立锁 |
+| `tests/compat/mcp/current_client_probe.py` | 从 MultiRAG root 调真实生产 `MCPToolCallSession` |
+| `tests/compat/mcp/multirag_server.py` | 启动真实 inbound Server，隔离后端 API，并只暴露协议路由 header 证据 |
+| `scripts/check_mcp_compat.py` | 分配随机 loopback 端口、启动/回收四类 server、执行矩阵、输出 Markdown + JSON |
+| `tests/unit/test_mcp_tool_call_conn_compat.py` | 不走网络，固定 SDK2 API、类型、并发、MRTR、auth 分类和 owner-loop close |
 
-### 3.2 of_mcp 仓
+fixture 禁止：
 
-| 文件 | 责任 |
-|---|---|
-| `packages/ofmcp-testing/src/ofmcp/testing/compat_server.py` | FastMCP 4 b1 loopback/stateless 双时代 fixture，含 valid/invalid/insufficient token、结构化结果、ToolError、wait/cancel/status |
-| `packages/ofmcp-testing/tests/test_compat_server.py` | modern/legacy、401/403、tool error、等待和受控取消回归 |
-| `tests/equivalence/test_mount_vs_proxy.py` | mount/proxy 在 modern/legacy 两种 mode 下比较完整 `CallToolResult` |
+- 导入本机 sibling checkout；
+- 使用真实 OA/飞书/JWT Secret；
+- 固定端口；
+- 默认 unit 在线下载依赖；
+- 用 skip/xfail 掩盖矩阵缺口；
+- 在报告中输出 bearer、完整 header、响应 body 或个人数据。
 
-两个仓只通过 HTTP/协议交互。MultiRAG 测试不 import sibling `of_mcp`，也不把本机绝对路径写入默认
-门禁。
+PEP 723 fixture 只在显式 `make mcp-compat` 中运行；默认 unit 使用已经同步的根环境。
 
 ---
 
-## 4. 2026-08-12 活体结果
-
-默认自包含命令：
+## 4. 执行命令
 
 ```bash
-cd /Users/xldu/project/multirag
-make mcp-compat
-```
-
-结果：**12/12 PASS**；全部 fixture 使用随机 loopback 端口，命令退出后未发现残留 server 进程。
-
-| ID | Client | Server | 实际协议 | 结果与含义 |
-|---|---|---|---|---|
-| `legacy-sse-success` | MultiRAG SDK 1 | FastMCP 3 fixture | legacy initialize/SSE | 结构化 echo 成功；SSE 只保留迁移冒烟，不扩成全矩阵 |
-| `modern-client-to-current-multirag` | SDK 2 `mode=auto` | 真实 MultiRAG FastMCP 3 | `2025-11-25` | SDK 2 先 probe，再回退 initialize；当前 inbound Server **不是** modern |
-| `legacy-http-success` | MultiRAG SDK 1 | FastMCP 3 fixture | legacy initialize/HTTP | 结构化 echo 成功 |
-| `modern-self-probe` | SDK 2 `mode=2026-07-28` | MCPServer 2 | `2026-07-28` | 收到 `Mcp-Method=tools/call`、`Mcp-Name=compat_echo`，无 session ID |
-| `legacy-client-to-modern-server` | MultiRAG SDK 1 | MCPServer 2 dual-era | `2025-11-25` | 工具成功但明确是 legacy fallback，不能误报为 MultiRAG 已支持 modern |
-| `modern-client-auto-fallback` | SDK 2 `mode=auto` | FastMCP 3 legacy-only | `2025-11-25` | 证明 SDK 2 的 discover -> initialize 回退路径 |
-| `auth-valid` | MultiRAG SDK 1 | protected MCPServer 2 | `2025-11-25` | fixture bearer 可通过，报告不输出凭据 |
-| `auth-401` | MultiRAG SDK 1 | protected MCPServer 2 | HTTP 401 | fixture 的确返回 401，但当前 Client 对外只给普通 connection error |
-| `auth-403` | MultiRAG SDK 1 | protected MCPServer 2 | HTTP 403 | fixture 的确返回 403，但当前 Client 不能与 401 做 typed 区分 |
-| `tool-error` | MultiRAG SDK 1 | MCPServer 2 | `2025-11-25` | 主返回被压成文本，`is_error=true` 只留在旁路 metadata |
-| `timeout-does-not-cancel` | MultiRAG SDK 1 | MCPServer 2 | `2025-11-25` | 调用方超时后 handler 仍完成；串行 worker 在此期间继续被占用 |
-| `modern-caller-cancel` | SDK 2 modern | MCPServer 2 | `2026-07-28` | caller task 已取消，但 server 状态从 `running` 到 `completed`；不能把 transport cancel 当业务回滚 |
-
-矩阵的 PASS 表示“预期现状已被可靠观察”，不表示现状已经满足目标。例如 401/403 折叠和超时不取消
-是通过测试固定的迁移缺口，不是被认可的生产终态。
-
----
-
-## 5. 两仓真实交叉验证
-
-终端 A：
-
-```bash
-cd /Users/xldu/project/of/of_mcp
-uv run --locked python -m ofmcp.testing.compat_server \
-  --host 127.0.0.1 --port 18765
-```
-
-终端 B 使用 MultiRAG 当前真实 Client，URL 为 `http://127.0.0.1:18765/mcp`，测试 bearer 为
-`ofmcp-eim-f2-valid`。2026-08-12 实测 `compat_echo` 返回：
-
-```json
-{
-  "value": "multirag-cross-repo",
-  "protocol_version": "2025-11-25"
-}
-```
-
-这再次证明：of_mcp 虽然运行 MCP SDK 2/FastMCP 4，MultiRAG 当前 Client 与它协商的仍是 legacy
-era。不能仅凭“调用成功”宣布 SDK 2/modern 升级完成。
-
-of_mcp 自身验证：
-
-```text
-compat fixture tests: 14 passed
-uv run --locked ofmcp verify: 116 passed, 2 skipped; six gates passed
-```
-
-其中 FastMCP 4 b1 的 `StaticTokenVerifier` 会把已知但缺 scope 的 token 提前折叠为 401；测试 fixture
-使用专用 verifier/middleware 才能稳定产生 HTTP 403。这个适配只存在测试包，没有修改 gateway 或
-领域服务。
-
----
-
-## 6. 当前缺口与迁移要求
-
-### 6.1 协议与 API
-
-- outbound Client 手调 `initialize()`，不能发 modern self-describing request；
-- inbound MultiRAG Server 对 SDK 2 `auto` 只协商到 `2025-11-25`；
-- 当前成功路径会把 `structuredContent` 再序列化为模型字符串，typed 结果只在旁路 metadata；
-- 当前 Client 不支持 `InputRequiredResult/inputResponses/requestState`。
-
-### 6.2 错误与取消
-
-- 401/403 在真实 transport 的异常组中折叠，调用方无法安全决定登录、step-up 或永久拒绝；
-- 初始化事件可能在底层连接错误完成归类前被置位，矩阵中 401/403 的 `initial_ready` 观察为 `true`；
-- `tool error` 主路径是文本，错误 taxonomy 不稳定；
-- `_call_mcp_server()` timeout 只取消 `results.get()`，不取消 `ClientSession.call_tool()`；
-- 一个 server 的后台 worker 串行处理任务，慢调用继续造成 head-of-line blocking；
-- modern caller task cancellation 也没有自动形成服务端业务取消；Action/Task/OA 状态必须另建契约。
-
-### 6.3 依赖与发布
-
-- FastMCP 3 `mcp<2` 与新 Client 的 `mcp>=2` 不能在根环境直接共存；
-- MultiRAG 顶层源码目录也叫 `mcp/`，拆 runtime 时必须审计包名和 `sys.path`，避免遮蔽官方包；
-- of_mcp FastMCP 4 仍是 beta，b1 -> b2 必须留在 F4 纯版本任务；
-- F2 的 PEP 723 环境是测试隔离，不是生产部署方案。
-
----
-
-## 7. 后续任务的精确清单
-
-### EIM-F6：选择依赖拓扑
-
-1. 在干净 resolver 中重现 `fastmcp-slim 3.4.4 -> mcp<2` 冲突；
-2. 比较独立 `mcp/server` project/venv/lock、经批准同步升 FastMCP 4 beta、等待 stable 三案；
-3. 审计顶层 `mcp/` 与官方 `mcp` 包同名；
-4. 固定进程、启动、健康、CI、部署、lock owner 和回滚；
-5. 默认推荐独立 Server runtime，除非证据证明同环境 beta 升级风险更低。
-
-### EIM-F7：实施运行时边界
-
-- 只实施 F6 选定的依赖/进程边界；
-- 根和 Server 环境分别 cold install、lock check、start、health、rollback；
-- 不改生产 Client API，不加身份/授权功能。
-
-### EIM-F3：outbound Client v2
-
-- 使用官方 `mcp.Client(mode="auto")`，不再手调 initialize；
-- 每次逻辑调用从 request-scoped credential provider 获取 bearer；
-- typed 保留 structured result、tool error、401、403 和 negotiated protocol；
-- timeout/caller cancel 必须终止底层调用或把未知执行状态显式上报，不能继续阻塞串行队列；
-- 支持 `InputRequiredResult`，但持久化/UI 属于 U14/U15；
-- 完整重跑本文两方向矩阵。
-
-### EIM-F8：inbound modern Server
-
-- 单独迁移 `mcp/server/server.py` 到 MCP `2026-07-28`；
-- modern probe 必须看到 `server/discover`、routing headers 和无 session 调用；
-- legacy SDK 1 仍按门禁回退；
-- `/health`、structured output、Host/Origin 防护和现有只读工具不回归；
-- Principal/scope/protected-resource metadata 留给 A7，不混入协议任务。
-
-### EIM-A7：inbound Resource Server auth
-
-- 为 MultiRAG MCP 定义独立 resource URI、audience、scope namespace 和 protected-resource metadata；
-- 不能接受或转发 of_mcp bearer；
-- `tools/list` 可见性和 direct call 同时授权；
-- dataset/tenant 业务授权保留在 MultiRAG；
-- legacy API key 退出必须有真实调用量和回滚门禁。
-
----
-
-## 8. 重新运行与停止条件
-
-默认封闭验证：
-
-```bash
-cd /Users/xldu/project/multirag
+# SDK2 wrapper 的封闭行为测试
 uv run --no-sync pytest -q tests/unit/test_mcp_tool_call_conn_compat.py
+
+# inbound Server modern/legacy/security 契约
+uv run --no-sync pytest -q \
+  tests/unit/test_mcp_server_transport.py \
+  tests/unit/test_mcp_server_security.py \
+  tests/unit/test_mcp_server_datasets.py
+
+# 两个独立锁 + 真实进程矩阵
 make mcp-compat
+
+# 仓库完成门禁
 make verify
 ```
 
-of_mcp：
+`make mcp-compat` 先执行：
 
 ```bash
-cd /Users/xldu/project/of/of_mcp
-uv run --locked pytest -q packages/ofmcp-testing/tests/test_compat_server.py \
-  tests/equivalence/test_mount_vs_proxy.py
-uv run --locked ofmcp verify
+uv lock --check --script tests/compat/mcp/legacy_server.py
+uv lock --check --script tests/compat/mcp/modern_server.py
 ```
 
-完成命令后还要检查没有残留 `legacy_server.py`、`modern_server.py`、`multirag_server.py` 或
-`compat_server.py` 进程。
+然后才执行矩阵。脚本的 `finally` 必须回收全部进程；完成后不应残留
+`legacy_server.py`、`modern_server.py`、`multirag_server.py`。
 
-遇到以下任一情况停止，不启动 F3/F8：
+---
 
-- 根 `pyproject.toml`/`uv.lock` 因 F2 发生变化；
-- modern self-probe 没有明确得到 `2026-07-28`；
-- SDK 2 -> 当前 MultiRAG 的成功没有证明是 legacy fallback；
-- 401/403 fixture 自己不能稳定产生两个状态；
-- fixture 依赖 sibling import、固定端口、真实 Secret、外网服务或 skip/xfail；
-- 子进程不能有界停止或遗留端口；
-- resolver 只能通过未批准的 prerelease/major 变化求解。
+## 5. 当前 13 格矩阵
 
-这份结果回答的是“现在的边界是什么”。它不授权生产依赖升级、FastMCP 4 beta 迁移、飞书后台变更、
-真实 OA/Jira 调用或删除 legacy endpoint。
+| ID | Client | Server | 预期协议/行为 | 证明什么 |
+|---|---|---|---|---|
+| `legacy-sse-success` | MultiRAG SDK2 `mode=legacy` | FastMCP3 fixture | `2025-11-25` / SSE | 显式 legacy SSE 仍可连接并返回 structured echo |
+| `modern-client-to-multirag` | 官方 SDK2 `auto` | MultiRAG FastMCP4 | `2026-07-28` | 真实 inbound 使用 discover、routing headers、无 session、structured result |
+| `legacy-mode-client-to-multirag` | 官方 SDK2 `legacy` | MultiRAG FastMCP4 | `2025-11-25` | inbound dual-era 仍接受 initialize 路径，modern routing headers 不泄漏到 legacy |
+| `legacy-http-success` | MultiRAG SDK2 `auto` | FastMCP3 fixture | `2025-11-25` | production wrapper 对 legacy-only HTTP 自动 fallback |
+| `modern-self-probe` | 官方 SDK2 modern | MCPServer2 | `2026-07-28` | oracle 本身确实是 modern，不把 fallback 误报为 modern |
+| `multirag-client-to-modern-server` | MultiRAG SDK2 `auto` | MCPServer2 | `2026-07-28` | production wrapper 真实发送 `Mcp-Method/Mcp-Name` 且无 session |
+| `modern-client-auto-fallback` | 官方 SDK2 `auto` | FastMCP3 fixture | `2025-11-25` | SDK 标准 discover -> initialize fallback |
+| `auth-valid` | MultiRAG SDK2 `auto` | protected MCPServer2 | modern | bearer 被 fixture 接受且报告不泄漏 credential |
+| `auth-401` | MultiRAG SDK2 `auto` | protected MCPServer2 | HTTP 401 | raw fixture 与 wrapper side-channel 均保留 authentication 类别 |
+| `auth-403` | MultiRAG SDK2 `auto` | protected MCPServer2 | HTTP 403 | 与 401 区分为 authorization 类别 |
+| `tool-error` | MultiRAG SDK2 `auto` | MCPServer2 | `is_error=true` | 模型可读文本与旁路 error metadata 同时保留 |
+| `timeout-bounds-local-wait` | MultiRAG SDK2 `auto` | MCPServer2 | bounded local cancellation | 调用方按时返回；远端最终 `cancelled/completed` 都如实记录 |
+| `modern-caller-cancel` | 官方 SDK2 modern | MCPServer2 | cooperative cancel | 显式 task cancel 的 caller/remote terminal outcome 被记录 |
+
+关键断言不是“返回成功”，而是：
+
+- modern：`protocol_version=2026-07-28`、`Mcp-Method=tools/call`、`Mcp-Name=<tool>`、无
+  `Mcp-Session-Id`；
+- legacy：`protocol_version=2025-11-25`，经过 initialize，不能出现 modern routing headers；
+- auth：raw HTTP status 与 wrapper `connection_status` 一致；
+- timeout/cancel：本地任务和进程有界退出，远端状态不被包装层伪造。
+
+---
+
+## 6. Outbound Client 当前实现契约
+
+生产入口仍是 `common/mcp_tool_call_conn.py::MCPToolCallSession`，同步调用面保持不变，但内部已经
+迁到 SDK2。
+
+### 6.1 Transport 与协商
+
+Streamable HTTP：
+
+```text
+configured headers
+  -> SDK create_mcp_http_client(headers=...)
+     (connect/write/pool 30s; read 300s; follow redirects)
+  -> append response hook for 401/403 only
+  -> streamable_http_client(url, http_client=...)
+  -> Client(mode="auto")
+  -> server/discover 或 initialize fallback
+```
+
+SSE：
+
+```text
+sse_client(url, headers=...)
+  -> Client(mode="legacy")
+  -> initialize
+```
+
+SDK2 的 `streamable_http_client` 不再接收 `headers=`/`timeout=`；旧的
+`streamablehttp_client` 名字也已经删除。调用方使用 SDK 的 `create_mcp_http_client()` 建立并拥有
+`httpx2.AsyncClient`，沿用 MCP 的 30/300 秒 transport 默认值，再由外层 per-call deadline 决定
+业务等待上限；不能回落到 httpx2 的 5 秒通用默认值。谁创建 client，谁负责进入和退出它。
+
+### 6.2 生命周期
+
+- 每个 server wrapper 仍有一个 owner event loop/thread，长期持有 SDK Client；
+- 初始化 timeout 只包围 Client/transport 进入，不包围整个连接寿命；
+- 工具调用直接并发进入 SDK session，不再经过一个串行 `asyncio.Queue` worker；
+- `get_last_tool_call_meta()` 仍是兼容旧调用面的 session 级 latest-value，不保证并发调用逐请求
+  关联；本轮只保证实际返回值、进度 accumulator 与 401/403 ContextVar 状态互不串线；
+- close 使用单一 deadline：在 owner loop 取消 in-flight calls、发 shutdown、等待 AsyncExitStack
+  退出，再由外部线程停止并 join owner thread；确认 thread 已退出后显式 `event_loop.close()`，
+  仍在运行时绝不强关 loop；
+- 构造器先用 thread event 确认 owner loop 已进入 `run_forever()`，再调度 MCP runner；因此构造后
+  立即 close 也走 runner 的正常取消/退出路径，不会销毁 pending task；批量清理临时 loop 在
+  helper thread join 后同样显式关闭；
+- join 超时不会再无界 `shutdown(wait=True)`；Python 无法强杀被同步代码永久阻塞的线程，因此仍会
+  记录错误并 fail the gate。
+
+### 6.3 SDK2 类型
+
+Python 属性必须使用：
+
+- `is_error`，不是 `isError`；
+- `structured_content`，不是 `structuredContent`；
+- `input_schema`/`output_schema`，不是 `inputSchema`/`outputSchema`；
+- `mime_type`，不是 `mimeType`。
+
+只有输出 wire JSON 时才使用 `model_dump(by_alias=True)`。业务代码继续从 `mcp.types` 导入，避免
+穿透 `mcp` 对 `mcp-types` 的依赖边界。
+
+### 6.4 401/403
+
+SDK2 transport 当前可能把非 2xx 归一成不含 HTTP status 的 `MCPError(-32603)`。MultiRAG 在自己
+通过 `create_mcp_http_client()` 创建的 `httpx2.AsyncClient` 上安装 response hook，只在 401/403
+时记录状态码；不读取或存储响应
+body、credential 或完整 headers。异常对外变成 typed `MCPConnectionError.status_code`，同步调用面
+分别返回 authentication/permission 文案，并在旁路 metadata 写 `connection_status`。
+
+这只是错误分类，不是 OAuth Resource Server 实现。标准 metadata、challenge、token verification
+仍属于 A3/A7。
+
+### 6.5 Timeout 与取消
+
+`asyncio.timeout()` 会取消本地正在等待的 SDK 调用，因此：
+
+- 调用方有界返回；
+- 旧串行 worker/HOL 已消失，其他调用可继续；
+- close 能取消仍在等待的本地任务。
+
+但 HTTP cancellation 是协作式的。server handler 可能收到取消并终止，也可能已经进入不可取消区间
+而最终完成。业务写操作不能依赖 coroutine cancellation 达成 exactly-once；必须靠 M3/M4 的
+prepare/execute、幂等台账和 reconciliation。
+
+---
+
+## 7. MRTR / `InputRequiredResult` 当前边界
+
+Client wrapper 使用低层 `client.session.call_tool(..., allow_input_required=True)`，原因是 Host 必须
+把交互暂停交给将来的 InteractionSession，而不是在没有用户 UI 的后台自动驱动多轮回调。
+
+当前行为：
+
+1. 收到 `InputRequiredResult`；
+2. `model_dump(mode="json", by_alias=True, exclude_none=True)`；
+3. 返回 `interaction_required=true` 的模型可读 JSON；
+4. 旁路 metadata 保留 JSON-safe `input_requests` 和 opaque `request_state`；
+5. 本次不自动重跑工具。
+
+当前**没有**：
+
+- durable `InteractionSession`；
+- revision/CAS、TTL、owner Principal binding；
+- 飞书 Form/H5 renderer；
+- 收到表单后的 `input_responses + request_state` resume；
+- process restart 后的 server key/state 可用性保证；
+- confirmation、authorization 或 idempotency。
+
+因此 F3 只完成协议接收面。U14 才建设 transport-neutral pause/resume，U15 才接飞书；任何
+`input_required`、按钮或表单 `confirm` 都不是授权事实。
+
+---
+
+## 8. Inbound Server 当前实现契约
+
+`mcp/server/server.py` 继续使用独立 FastMCP 框架的 `fastmcp.FastMCP`；不要按官方低层 SDK 的
+`FastMCP -> MCPServer` rename 机械改名。
+
+FastMCP4 同一个 HTTP server 自动支持 modern 与 legacy：
+
+- modern `2026-07-28` 本身无 session；
+- legacy HTTP 仍可 initialize；
+- `stateless_http=True` 只影响 legacy session 管理，不是 modern 开关；
+- SSE 永远属于 legacy。
+
+当前 security/业务边界不因升级改变：self-host 静态 API key、host 模式后端 API credential、
+Host/Origin 防护、进程内限流、error redaction、read-only annotations 和 structured output 仍在；
+企业 Principal、canonical resource/audience、scope、tool visibility 和分布式限流仍未完成。
+
+---
+
+## 9. 历史 characterization：为什么 F6/F7 必须原子决策
+
+升级前 MultiRAG root 是 FastMCP 3.4.4 + MCP SDK 1.28.1：
+
+- outbound 手调 `ClientSession.initialize()`；
+- 所有调用进入一个串行 queue；
+- timeout 只停止等待，远端调用继续占住 worker；
+- 401/403 被压成普通连接字符串；
+- inbound 对 SDK2 auto 只协商 legacy；
+- FastMCP3 metadata 约束 `mcp<2`，不能在同一 root 单独加入 MCP2。
+
+F6 比较三案：
+
+1. 拆 `mcp/server` 独立 project/runtime；
+2. 经批准全根同步 FastMCP4 beta + MCP2；
+3. 等 FastMCP4 stable。
+
+用户明确说明当前无生产 FastMCP3 服务，批准直接采用最新 4.x 预发布。最终选择 2，并 exact pin
+b2。因为只改依赖会立即破坏旧 Client import，而只改 Client 又无法与 FastMCP3 同解，F7/F3/F8
+必须在一个原子技术提交完成；逻辑任务和安全边界仍分别验收。
+
+---
+
+## 10. 后续任务入口
+
+协议基础已完成。正确后续顺序不是继续笼统“升级 MCP”，而是：
+
+```text
+P1 + C3
+  -> P2 MultiRAG Principal 全链传递
+
+F3 + F4
+  -> A1 两仓 JWT/JWKS claims + test vectors
+
+A1 + F4
+  -> A3 of_mcp Resource Server auth
+  -> A4 of_mcp Principal/scope enforcement
+
+A1 + P2
+  -> A2 MultiRAG issuer
+
+P2 + F3 + A2 + A4
+  -> P3 request-scoped delegated credential
+
+F8 + A1 + P1
+  -> A7 MultiRAG inbound 独立 Resource Server auth
+
+F3 + P3 + A4 + C3
+  -> U14 durable InteractionSession / MRTR resume
+  -> U15 Feishu Form/H5 adapter
+
+A5 -> M1/M2 -> M3/M4
+  -> prepare/confirm/execute + idempotency/reconciliation
+```
+
+FastMCP/MCP Tasks、MCP Apps、EMA/MultiAuth/Horizon 都不是 U14/U15 或敏感写操作的首期前置。
+
+---
+
+## 11. 停止条件
+
+后续任何 MCP 版本、auth 或交互任务遇到以下情况立即停止并记录：
+
+- FastMCP wrapper/slim 离开同一 exact prerelease；
+- root lock 或任一 script lock 不能 `--check`；
+- modern 调用无法证明 `2026-07-28` routing headers/no-session；
+- legacy fallback、SSE、401/403、tool error、timeout/cancel 任一被 skip/xfail；
+- 测试需要真实 Secret、外网业务服务、固定 sibling path 或固定端口；
+- owner loop/thread 或 fixture 子进程不能有界退出；
+- 把 `InputRequiredResult`、飞书确认或 annotations 当成鉴权；
+- 为“完成升级”顺手引入 Principal/scope/EMA/Tasks/Apps，模糊独立发布面；
+- 给本地 `mcp/` 添加 `__init__.py` 或改用会遮蔽官方包的 module 入口。
+
+本文件只证明协议/runtime 基础。上线安全最终以 [TESTING_SECURITY](TESTING_SECURITY.md) 和对应
+ROADMAP 任务的拒绝路径为准。

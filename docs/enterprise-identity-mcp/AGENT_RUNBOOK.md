@@ -129,18 +129,29 @@ FastAPI 自动序列化出去，因此 tolerate PR 必须用线格测试证明�
   token 调一次 OpenAPI，也不得在 fallback 时重新执行 Agent。
 - 卡片状态只用服务端白名单；不展示 chain-of-thought、原始 tool trace、MCP 参数或底层异常。
 
-MCP Foundation 任务必须再遵守下面的隔离顺序：
+MCP Foundation 的 F2/F3/F4/F6/F7/F8 已于 2026-08-12 完成。冷启动 Agent 必须先区分下面两层：
 
-1. **F2 只做 fixture/characterization**：MCP 1 和 MCP 2 各在独立解释器、独立 lock、独立进程；
-   禁止在同一 Python 进程导入两代 SDK，也不得改 MultiRAG 根 `pyproject.toml`/`uv.lock`。
-2. F2 的两个方向都要跑：当前 MultiRAG legacy client -> `of_mcp`/官方 MCP 2 双时代 server；
-   官方 MCP 2 `Client` -> 当前 MultiRAG FastMCP 3 legacy server。每格必须观测并断言实际
-   `server/discover` 或 legacy `initialize` 分支，不能仅以 tools/call 成功判定。
-3. **F6 决策、F7 实施、F3/F8 分方向迁移**：F6 先证明 FastMCP 3 `mcp<2` 与新 client 的
-   `mcp>=2` 冲突并选择可部署边界；F7 让根/server 分别可锁定、冷安装和回滚；F3 最后才改
-   outbound 生产 Client，F8 单独改 inbound Server。
-4. 默认边界是把 `mcp/server` 放入独立 project/venv/lock。同步升级整个 MultiRAG 到 FastMCP 4
-   beta 会改变生产 prerelease/公共 API，必须先取得用户明确批准。
+1. **历史迁移顺序（保留为审计/重做约束）**：F2 先用独立解释器、独立 lock、独立进程固定
+   MCP 1/2 双向 characterization；F6 再证明 FastMCP 3 `mcp<2` 与 MCP SDK 2 `mcp>=2` 的
+   依赖冲突并选择边界；F4 在 `of_mcp` 独立完成，MultiRAG 的 F7 依赖切换、F3 outbound Client
+   与 F8 inbound Server 则在 F6 决策后按整根方案原子落地。不得把尚未完成的身份或授权功能
+   混进协议升级。
+2. **当前根代码运行时基线**：MultiRAG 根运行时统一使用 MCP SDK 2/FastMCP 4；outbound HTTP 使用
+   官方高层 `Client` 的现代优先、legacy 自动协商，inbound Server 进入 `2026-07-28` modern era
+   并保留 legacy 协议兼容。F6 因当前没有 FastMCP 3 生产消费者，经用户明确批准选择了全根协同
+   升级，而不是原默认的 `mcp/server` 独立 project/venv。
+3. **真实 legacy 只留在测试边界**：FastMCP 3 通过 PEP 723 锁定的真实子进程 fixture 运行，
+   不与根环境在同一解释器导入。`make mcp-compat` 当前协议矩阵为 **13/13 PASS**；任何后续
+   SDK/FastMCP/transport 改动都必须复跑，而不能用 mock 或 sibling import 替代。
+4. **下一协议相关入口**：EIM-A1 的 F3/F4 依赖已满足，可先固定 token/JWKS test vectors；EIM-A7
+   还必须等待 A1/P1，才实现 inbound OAuth Resource Server、Principal/scope 和工具可见性；
+   `InputRequiredResult` 目前只由 EIM-F3 暴露，EIM-U14 还必须等待 P3/A4/C3，才实现持久化暂停/恢复、
+   Principal 绑定、revision/CAS 和重授权。当前协议升级**不证明** Principal、scope、delegated token、
+   OAuth Resource Server 或 InteractionSession 已实现。
+
+HTTP 调用超时的已验证契约是：本地等待及时取消，直接并发调用不再被单 server FIFO 队列产生
+head-of-line blocking；远端是否停止取决于 transport/server 的协作式取消，服务端仍可能完成调用。
+有副作用的工具因此仍必须依靠授权、Confirmation 和业务幂等，不能把客户端 timeout 当作“未执行”。
 
 ### 4.5 密钥和外部配置
 
@@ -158,7 +169,7 @@ MCP Foundation 任务必须再遵守下面的隔离顺序：
 | MCP access token | MultiRAG signer | `of_mcp` verifier | verifier/JWKS 能力先 → signer emit → 强制 auth → 移除旧 auth |
 | 新 scope/tool metadata | `of_mcp` policy | MultiRAG Agent/MCP config | resource 端先兼容 → 调用端请求；未知 scope fail closed |
 | confirmation contract | `of_mcp` challenge | MultiRAG card/channel | resource 端先返回可识别 challenge → UI 接线 → 强制确认 |
-| MCP 双向兼容 fixture | 两仓各自锁定的 server/client 子进程 | 对侧 compatibility test | 先固定当前行为 → F6/F7 解依赖边界 → F3/F4/F8 后逐格复跑；不得用本机 sibling import 代替可复现安装 |
+| MCP 双向兼容 fixture | MCP SDK 2/FastMCP 4 主运行时 + PEP 723 FastMCP 3 真实 legacy 子进程 | 两仓 compatibility test | F2/F3/F4/F6/F7/F8 已完成并形成 13/13 基线；后续每次协议/transport 变更逐格复跑；`of_mcp` F4 锚点 `23dd1fd`；不得用本机 sibling import 代替可复现安装 |
 | MRTR interaction | `of_mcp` `input_required`/legacy adapter | MultiRAG U14 state machine，再到 U15 renderer | 先固定 transport-neutral request/response 与恢复语义 → 飞书表单渲染 → 敏感动作最后强制 U7/M3/M4 |
 
 跨仓任务必须在两边都留下同一个 `EIM-*` ID；完成日志列出两个 SHA。不能只改一侧后把另一侧
@@ -195,21 +206,23 @@ make smoke
 以该仓实时规则为准。最低证据必须包含 formatter/lint、typecheck、unit、auth negative tests、
 integration；FastMCP/MCP 升级任务还要跑协议版本、legacy client 和 sessionless/stateless 组合测试。
 
-### 6.3 F2/F4/F7/F8 跨仓矩阵
+### 6.3 F2/F3/F4/F6/F7/F8 跨仓矩阵
 
 跨仓版本任务不能只在某一 checkout 绿。至少保留以下可复现证据：
 
-| server 子进程 | client 子进程 | 必测 |
+| 运行面 | 当前基线 | 必测 |
 |---|---|---|
-| of_mcp 当前 lock（MCP 2/FastMCP 4） | MultiRAG 当前 root lock（MCP 1/FastMCP 3） | legacy client 对双时代 server 的协商、list/call、401/403、tool error、取消/超时 |
-| MultiRAG 当前 server lock（MCP 1/FastMCP 3） | 独立官方 `mcp==2.*` fixture lock | v2 Client 探测后回退 legacy、相同正反路径、进程和队列无残留 |
+| MultiRAG outbound Host/Client -> `of_mcp` | 两侧主运行时均为 MCP SDK 2/FastMCP 4；`of_mcp` F4 commit `23dd1fd` | modern 优先与 legacy 协商、list/call、401/403、tool error、caller cancel/timeout、本地调用无 HOL |
+| 外部 Client -> MultiRAG inbound Server | MultiRAG MCP SDK 2/FastMCP 4 modern Server，同时保留 legacy 协议面 | `2026-07-28` discover/header/sessionless/structured result，以及真实旧 Client 回退 |
+| 历史兼容方向 | PEP 723 + 独立 lock 启动的真实 FastMCP 3 server/client 子进程 | 不能与根解释器混装；必须观测实际协商分支、终止并确认无残留进程 |
 
 - server 以随机本机端口启动，输出结构化 ready/protocol 证据；测试负责终止并检查退出，不遗留进程。
-- 两个 fixture 必须能从各自 lock 在干净 cache/临时环境冷安装；不能依赖父进程 `sys.path`、绝对
-  sibling checkout 或同时包含 MCP 1/2 的解释器。
-- F4 升级后重跑第一行；F7 重跑两行并额外验证 root/server 的启动、健康和 rollback；F3 再用新
-  outbound Client 重跑两行，F8 再以新 inbound Server 重跑第二行及 legacy 回退。完成日志同时
-  记录 MultiRAG SHA、of_mcp SHA、lock 摘要和每格协商分支。
+- legacy fixture 必须能从自己的 PEP 723 lock 在干净 cache/临时环境冷安装；不能依赖父进程
+  `sys.path`、绝对 sibling checkout，或把 FastMCP 3/MCP 1 混入根运行时。
+- 当前 `make mcp-compat` 必须保持 **13/13 PASS**。完成日志同时记录 MultiRAG SHA、of_mcp SHA、
+  主/legacy lock 摘要和每格协商分支；新增或减少格子必须说明协议风险，不能只改分母换绿。
+- timeout/caller cancel 必须证明本地等待有界、同 server 快调用不被慢调用阻塞；远端取消是协作式，
+  远端仍完成不等于矩阵失败，但必须被观测，副作用路径还要另证业务幂等与结果未知处置。
 - 两仓分别执行各自 `AGENTS.md` 的完整 verify；matrix 通过不能替代任一仓本地门禁，skip 也不能
   记作通过。
 
@@ -254,9 +267,11 @@ feat(auth): verify delegated MCP access tokens (EIM-A2)
 - 需要从 JIT 改为全量组织镜像，或要把身份服务拆成独立项目；
 - 必须变更一个企业对应一个 tenant 的默认模型；
 - 上游最新版是 prerelease，且升级会改变生产协议或公共 API；
-- resolver 需要未批准的 prerelease/major，或不能同时满足 FastMCP 3 `mcp<2` 与 MCP SDK 2；
+- resolver 需要本轮已批准范围之外的新 prerelease/major，或不能确定性复现当前 MCP SDK 2/
+  FastMCP 4 主 lock 与 PEP 723 FastMCP 3 legacy fixture lock；
 - 依赖方案只有本机 editable/sibling path、已有 cache 或未提交 lock 能工作，干净环境不能复现；
-- F2/F7/F8 无法证明实际协商分支、超时取消后仍有悬挂调用/阻塞队列，或不能安全终止 fixture 进程；
+- MCP 兼容矩阵无法证明实际协商分支、本地 timeout/cancel 等待无界、仍出现 HOL，或不能安全终止
+  fixture 进程；远端因协作式取消而完成调用本身不是此处的“悬挂”判据；
 - 官方发布说明、extension 仓和 SDK 对 Tasks/Apps/EMA 的成熟度不一致，而任务又要把它当生产硬依赖；
 - 发现依赖任务未完成、现有实现与 ADR 冲突、无法构造安全兼容半态；
 - 需要复制第三方代码但许可证或归属不清楚。

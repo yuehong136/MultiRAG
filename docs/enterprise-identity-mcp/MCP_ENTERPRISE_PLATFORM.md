@@ -14,7 +14,9 @@
 
 ## 1. 零上下文先读结论
 
-本项目不采用“先把整个 MultiRAG 一次性升级成 MCP 2.0”的方案。原因有三点：
+本项目不把“整仓升级了 SDK/框架”等同于“整个系统完成 MCP 2.0”。EIM-F6 在兼容
+矩阵和无存量生产 FastMCP 3 服务的条件下，已选择整仓协调升级作为技术边界；
+但以下三点仍然成立：
 
 1. 官方没有名为“MCP 2.0”的协议；`2.x` 是 SDK 大版本，协议版本是日期
    `2026-07-28`。
@@ -23,11 +25,11 @@
 3. 协议升级只提供传输和互操作基础，不自动提供企业 Principal、租户授权、PDP、私有 Registry、
    幂等、审计或飞书交互。
 
-固定策略是：
+固定策略及当前进度是：
 
 ```text
-先建立双方向兼容矩阵和依赖拓扑证明
-  -> 再分别升级 outbound Client 与 inbound Server
+已完成：双方向兼容矩阵和依赖拓扑证明
+  -> 已完成：整仓 exact pin + outbound Client / inbound Server 分向迁移
   -> 身份/Principal 支线并行推进
   -> OAuth Resource Server、scope、PDP 到位后开放只读 MCP
   -> 再接 InteractionSession + MRTR + 飞书 Form/H5
@@ -45,8 +47,8 @@
 |---|---|---|---|
 | MCP `2026-07-28` | 官方协议修订版；modern/stateless era | 已正式发布 | 新架构目标协议 |
 | MCP Python SDK `2.x` | 官方 Python SDK 大版本 | `2.0.0` 稳定线 | MultiRAG outbound Client 首选实现 |
-| FastMCP `3.x` | FastMCP 当前稳定框架线 | 最新稳定 `3.4.7` | MultiRAG 当前 lock 为 `3.4.4`，只作迁移起点 |
-| FastMCP `4.x` | 基于 MCP SDK 2 的框架大版本 | 最新 `4.0.0b2`，仍是 beta | of_mcp 与 MultiRAG inbound Server 的受控候选 |
+| FastMCP `3.x` | FastMCP 稳定框架线 | 最新稳定 `3.4.7` | 只作 legacy 兼容 fixture/回滚参考，不再是两仓当前运行时 |
+| FastMCP `4.x` | 基于 MCP SDK 2 的框架大版本 | 最新 `4.0.0b2`，仍是 beta | MultiRAG 与 of_mcp 当前均 exact pin `4.0.0b2` |
 | MCP Authorization | OAuth Resource Server、resource/audience、scope challenge | 核心规范 | 两个远程 MCP Server 都必须实现 |
 | Enterprise-Managed Authorization | 企业 IdP 经 ID-JAG 集中授权的官方扩展 | 扩展稳定；底层 ID-JAG 仍引用 IETF draft | 真实企业 IdP 到位后按租户启用 |
 | OAuth Client Credentials | 机器到机器授权扩展 | 可选扩展 | 后台任务/CI，不代表某位员工 |
@@ -65,8 +67,8 @@
 
 项目内统一用语：
 
-> 升级到 MCP `2026-07-28` modern/stateless protocol era；客户端基于 MCP Python SDK 2.x，
-> 服务端按兼容门禁评估 FastMCP 4.x。
+> 技术基线已切换到 MCP `2026-07-28` modern/stateless protocol era；客户端基于 MCP
+> Python SDK `2.0.0`，服务端在兼容门禁下 exact pin FastMCP `4.0.0b2`，同时保留 legacy 路径。
 
 禁止在任务、提交或上线说明中只写“完成 MCP 2.0 升级”。必须写清调用方向、协议时代、SDK/框架
 版本、认证模式和兼容范围。
@@ -79,53 +81,63 @@
 
 当前生产路径在 `common/mcp_tool_call_conn.py`：
 
-- 使用 MCP SDK `1.28.1` 的 `ClientSession`；
-- Streamable HTTP 和 SSE 都手工创建 transport；
-- 显式调用 `initialize()`；
-- 一个 `MCPToolCallSession` 自建线程和 event loop，长期持有连接；
-- headers 来自 MCP server 配置和调用方传入的静态字典；
+- 使用 MCP SDK `2.0.0` 官方高层 `Client`；
+- Streamable HTTP 使用 `Client(mode="auto")`，先协商 modern `server/discover`，对 legacy
+  HTTP server 自动回退；SSE 固定 `mode="legacy"`；业务代码不手调 `initialize()`；
+- 一个 `MCPToolCallSession` 仍自建线程和 event loop，长期持有 SDK `Client`；
+- Streamable HTTP 通过 SDK `create_mcp_http_client()` 创建受管 `httpx2.AsyncClient`，注入配置
+  headers 并沿用 MCP 的 30 秒 connect/write/pool、300 秒 read 默认值；response hook 在 SDK
+  归一化错误前保留 `401`/`403`，并转换为带 status 的类型化连接错误/旁路 metadata；
 - 已能读取 `structuredContent`、`meta`、多段 Content 和 tool annotations；
-- 不能处理 `InputRequiredResult`/MRTR；
+- 旧的每 Server 串行队列已删除，并发调用不再受 HOL 阻塞；超时取消并清理本地 task，
+  但远端取消取决于 server/transport 的协作；
+- `InputRequiredResult` 会被表面化为 `interaction_required` 结构和旁路 metadata；不会自动
+  重调工具，尚无持久化或 resume；
 - 没有 request-scoped Principal credential provider；
 - 没有按 resource/scope 的 OAuth discovery、step-up 或 delegated token。
 
-因此它能兼容 handshake-era server，但不是 `2026-07-28` modern Client。
+因此它现在是双时代协议 Client，但仍不是能代表当前用户完成企业委托和 scope
+step-up 的授权 Host。`401`/`403` 分类是后续授权编排的技术前提，不是 A1/A2/A4 已完成。
 
 ### 3.2 MultiRAG inbound：自己暴露 RAG MCP Server
 
 当前实现位于 `mcp/server/server.py`：
 
 - 暴露 `/mcp` Streamable HTTP、`/sse` legacy SSE 和 `/health`；
-- `/mcp` 已配置 `stateless_http=True`，但这只是 FastMCP 3 的 transport 选项，**不等于**已经实现
-  无 `initialize` 的 MCP `2026-07-28`；
-- 使用 FastMCP `3.4.4`，底层 MCP SDK `1.28.1`；
+- 使用 FastMCP `4.0.0b2`，底层 MCP SDK `2.0.0`；
+- `/mcp` 已用真实 Server 验证 MCP `2026-07-28` `server/discover`、
+  `Mcp-Protocol-Version` / `Mcp-Method` / `Mcp-Name` 路由 headers 和无
+  `Mcp-Session-Id` 的 stateless HTTP；
+- 迁移期继续保留 legacy HTTP/SSE，现代能力不以删除存量路径为代价；
 - self-host 模式使用静态 API key，host 模式把收到的 bearer/API key 当 MultiRAG 后端 API key；
 - 兼容 `Authorization`、`api_key`、`x-api-key` 三种历史凭据形态；
 - 有 Host/Origin 防护、限流、错误脱敏、结构化输出和 output schema；
 - 没有 RFC 9728 Protected Resource Metadata；
 - 没有用户 Principal、tenant/scope policy、标准 step-up 或每用户 tool visibility；
-- 没有 MRTR。
+- 没有 MRTR Host/InteractionSession；入站 modern transport 不会自动生成用户交互编排。
 
 该 Server 的外部客户端、resource URI、token audience 和发布周期与“MultiRAG 调用 of_mcp”是另一条
 独立链，不能共用 bearer 或静态 headers。
 
-### 3.3 共享依赖冲突
+### 3.3 共享依赖边界的已实施选择
 
-MultiRAG 当前同一个 lock 中：
+EIM-F2 证明旧 `fastmcp-slim 3.4.4` 与 `mcp>=2` 不可同一解析。EIM-F6 随后在当前无
+生产 FastMCP 3 服务的前提下选定方案 A，EIM-F7 实施整仓协调升级。MultiRAG 当前同一个
+lock 中 exact pin：
 
 ```text
-fastmcp==3.4.4
-fastmcp-slim[client,server]==3.4.4
-mcp==1.28.1
+fastmcp==4.0.0b2
+mcp==2.0.0
 ```
 
-已安装 metadata 明确显示 `fastmcp-slim 3.4.4` 的 `client/server` extras 需要
-`mcp>=1.24,<2.0`。所以不能只把 outbound Client 的 `mcp` 升到 `2.x`；这会直接与 inbound
-FastMCP Server 的依赖约束冲突。
+本次没有拆独立 MCP Server 运行时；outbound 与 inbound 在安全和发布语义上仍独立，但依赖
+回滚面是整个技术切换。FastMCP 4 仍为 beta，因此 exact pin、双方向兼容矩阵和整仓
+验证不得被宽松版本范围替代。顶层 `mcp/` 故意无 `__init__.py`，以防遮蔽官方 SDK package。
 
 ### 3.4 of_mcp
 
-当前 `of_mcp` 已精确锁定 FastMCP `4.0.0b1`、MCP SDK/mcp-types `2.0.0`，具备：
+当前 `of_mcp` 已通过 EIM-F4 独立升级并精确锁定 FastMCP `4.0.0b2`、MCP
+SDK/mcp-types `2.0.0`，具备：
 
 - apps composition root、services domain library、packages platform library；
 - `service.toml` 目录、profile overlay、namespace、mount/proxy；
@@ -148,7 +160,8 @@ FastMCP Server 的依赖约束冲突。
 ### 3.5 飞书交互
 
 MultiRAG 已有 CardKit 渐进式回复、ReplySession、低风险 stop/regenerate/retry/feedback、Redis
-事件去重和确定性 delivery UUID。当前还没有：
+事件去重和确定性 delivery UUID。EIM-F3 已让 outbound Client 能识别并表面化
+`InputRequiredResult`，但还没有：
 
 - 通用 Form/H5 交互协议；
 - `InputRequiredResult` 持久化和恢复；
@@ -268,8 +281,8 @@ flowchart LR
 | 主体 | 当前 MultiRAG Principal | 外部 client 所代表的企业主体/机器身份 |
 | tool policy | Agent/tenant policy ∩ of_mcp scopes | MultiRAG dataset/Agent/tenant policy |
 | 主要代码 | `common/mcp_tool_call_conn.py` | `mcp/server/server.py` |
-| 当前实现 | MCP SDK 1 手工 initialize | FastMCP 3 + MCP SDK 1 |
-| 目标实现 | 官方 `mcp.Client` 2.x | FastMCP 4 或官方 MCPServer 2.x |
+| 当前实现 | 官方 SDK 2 `Client`：HTTP `auto`、SSE `legacy` | FastMCP 4 / SDK 2：modern HTTP + legacy HTTP/SSE |
+| 下一目标 | request-scoped Principal/token/scope 和 MRTR resume | OAuth Resource Server、Principal 和 tool policy |
 | 回滚面 | Agent 的 MCP 调用 | 外部 MCP 接入 |
 | 审计 | 当前用户发起的外部工具调用 | 外部 client 对 MultiRAG 资源的访问 |
 
@@ -282,12 +295,12 @@ flowchart LR
 
 ### 5.1 依赖拓扑选项
 
-#### 方案 A：同环境耦合升级，默认优先验证
+#### 方案 A：同环境耦合升级，已选择并实施
 
 一次纯技术依赖任务把 MultiRAG 的 FastMCP Server 升到 FastMCP 4，同时把 MCP SDK 升到 2.x；
 随后 outbound/inbound 行为分别用独立任务迁移。优点是仓库和部署不拆分；缺点是 beta 框架影响面大。
 
-只有满足以下条件才选 A：
+本项目已在 EIM-F2/F6 证明下列条件、且当前没有生产 FastMCP 3 服务后选择 A：
 
 - lock 可解且 exact pin；
 - 当前 `/mcp`、`/sse`、三种旧凭据、structured output 测试全绿；
@@ -299,13 +312,14 @@ flowchart LR
 
 把 `mcp/server` 变成独立 uv project/process/lock；MultiRAG 主 API 可以先使用 MCP SDK 2 Client，
 inbound Server 另行升级。优点是风险隔离；缺点是多一个部署、健康检查和版本矩阵。
+当前未采用；若后续 beta 框架与主 API 发生无法受控的依赖/运行冲突，再以新任务重新评估。
 
 #### 方案 C：改用官方 MCP SDK 2 `MCPServer`
 
 只有 FastMCP 依赖长期成为战略阻塞时评估。它减少框架绑定，但会重写当前 middleware、auth、
 transport 和工具装饰层，首期成本最高，不是默认方案。
 
-选择由 EIM-F2 的兼容证据和后续 runtime-boundary 任务决定，不由个人偏好决定。
+当前选择由 EIM-F2 兼容证据和 EIM-F6 runtime-boundary 决策形成，不是个人偏好。
 
 ---
 
@@ -324,6 +338,15 @@ transport 和工具装饰层，首期成本最高，不是默认方案。
 | resource/audience binding | 防 confused deputy/token passthrough | 两个 MCP 方向 audience 分开 |
 | 401/403 + scope step-up | 最小权限和可恢复授权 | 角色拒绝不能伪装为 scope challenge |
 | MRTR/InputRequiredResult | 通用表单/确认/补参数 | 先建 InteractionSession，再接飞书 UI |
+
+当前落地边界：
+
+- EIM-F3/F8 已落地无 handshake modern HTTP、`server/discover`、路由 headers、无 session、
+  `structuredContent`/`outputSchema` 和 legacy 回退；
+- 出站 Client 已能把 `401`/`403` 分类及 `InputRequiredResult` 交给上层，但上层尚无
+  scope step-up 或持久 MRTR resume；
+- production tool list 的按 Principal/scope 可见性、`cacheScope=private`、OAuth Resource Server 和
+  resource/audience binding 仍归 A/P 轨，不得因协议 fixture 已验证就宣称生产落地。
 
 ### 6.2 后续按条件采用
 
@@ -685,10 +708,11 @@ MRTR 只承载交互轮次，不替代这些持久安全语义。
 
 ---
 
-## 12. EIM-F2 兼容矩阵：升级前先证明什么
+## 12. EIM-F2 兼容矩阵与技术切换结果
 
-EIM-F2 不直接升级生产依赖。它先建立可重复的 fixture/probe，记录当前结果和迁移目标。
-首轮可执行结果、命令与缺口见 [MCP 兼容矩阵](MCP_COMPATIBILITY.md)。
+EIM-F2 当时不直接升级依赖；它先建立可重复的 fixture/probe，记录 SDK 1/FastMCP 3
+起点与迁移目标。该基线已被 EIM-F6/F7/F3/F8 消费，但仍作为 legacy 回归和回滚
+对照保留。实际结果、命令与缺口见 [MCP 兼容矩阵](MCP_COMPATIBILITY.md)。
 
 ### 12.1 两个方向
 
@@ -696,6 +720,8 @@ EIM-F2 不直接升级生产依赖。它先建立可重复的 fixture/probe，�
 outbound: MultiRAG current Client -> legacy fixture / modern fixture / of_mcp
 inbound:  legacy Client / modern Client -> MultiRAG current MCP Server
 ```
+
+上述 `current` 是 fixture 名称和 F2 建立时的对照语境；实施后当前代码已是 SDK 2/FastMCP 4。
 
 ### 12.2 最小矩阵
 
@@ -709,13 +735,13 @@ inbound:  legacy Client / modern Client -> MultiRAG current MCP Server
 | scope shortfall | 403 | 403 + insufficient_scope | 可 step-up，有限次重试 |
 | timeout | server delay | server delay | Client 取消请求并清理 task |
 | cancellation | explicit cancel/close | request cancellation | 无悬挂线程/stream |
-| interaction | legacy elicitation | InputRequiredResult | 当前缺口明确，F3 后应可驱动 |
+| interaction | legacy elicitation | InputRequiredResult | 仅由封闭 unit 固定，不计入当前 13 格跨进程矩阵；F3 已表面化，U14 前不能持久/恢复（见 [兼容矩阵 §5 与 §7](MCP_COMPATIBILITY.md)） |
 | cache | connection-era list | private/public scope | 不跨 Principal 复用 |
 | headers | legacy transport | protocol/method/name | Gateway 可观测和路由 |
 
 ### 12.3 测试状态的表达
 
-F2 允许把“当前预期不支持 modern”记录成**显式能力矩阵结果**，但不允许：
+F2 阶段曾允许把“起点预期不支持 modern”记录成**显式能力矩阵结果**，但不允许：
 
 - 用永久 skip/宽泛 xfail 把未来门禁做成永远绿；
 - 依赖外网或临时下载包的 unit test；
@@ -736,6 +762,18 @@ fixture 应使用本地、确定、无真实服务的协议适配器或独立受
 - F3/F8 迁移清单；
 - ROADMAP 中精确命令和结果。
 
+### 12.5 F3/F6/F7/F8 实施后的当前基线
+
+| 任务 | 已实施事实 | 仍未获得的能力 |
+|---|---|---|
+| EIM-F6 | 决定保留单一主仓运行时，做整仓协调切换 | 不是 outbound/inbound 安全面合并 |
+| EIM-F7 | exact pin `fastmcp==4.0.0b2` + `mcp==2.0.0`，lock 与主环境协调解析 | 不是 beta 风险消失；仍需固定版本与矩阵回归 |
+| EIM-F3 | HTTP `Client(mode="auto")` + managed `httpx2`，SSE `legacy`，无手调 initialize；类型化 401/403；无串行 HOL；本地 timeout cancellation；表面化 `InputRequiredResult` | 无 request-scoped Principal/token/scope、InteractionSession、resume、step-up；远端取消仍是协作式 |
+| EIM-F8 | 真实入站 Server 通过 `2026-07-28` discover、routing headers、no-session 验证，同时保留 legacy | 无 OAuth Resource Server、Principal、scope/tool visibility 或 MRTR Host |
+
+of_mcp 的 EIM-F4 也已独立完成：FastMCP exact pin 由 `4.0.0b1` 升到 `4.0.0b2`，身份和
+授权能力没有藉此版本任务被误报为完成。
+
 ---
 
 ## 13. 开发轨道和汇合闸门
@@ -745,13 +783,16 @@ fixture 应使用本地、确定、无真实服务的协议适配器或独立受
 ### 13.1 协议与依赖轨
 
 ```text
-F2 双向兼容矩阵/依赖证明
-  -> F6 MultiRAG client/server runtime boundary
-       -> F7 实施独立依赖/运行时边界
-            -> F3 outbound 官方 mcp.Client 2
-            -> F8 inbound modern Server
-F4 of_mcp FastMCP beta 纯版本升级可独立并行
+F2 双向兼容矩阵/依赖证明 ✅
+  -> F6 选择 MultiRAG 整仓共享 runtime boundary ✅
+       -> F7 实施 exact-pin 协调升级 ✅
+            -> F3 outbound 官方 mcp.Client 2 ✅
+            -> F8 inbound modern Server + legacy 保留 ✅
+F4 of_mcp FastMCP beta 纯版本升级 ✅（独立完成）
 ```
+
+这条轨道只完成技术 modern 基线。授权轨 A1+、身份轨 I1+、交互轨 U14/U15 仍按下述
+依赖独立实施，不能从 F3/F8 状态推导它们已完成。
 
 ### 13.2 身份轨
 
@@ -822,6 +863,9 @@ Dialog/Canvas 真实飞书 smoke
 | 6 sandbox write | prepare/confirm/execute 到测试系统 | 生产 OA/Jira | 幂等、unknown outcome、对账 |
 | 7 canary | 指定 tenant/user/tool allowlist | 全员全工具 | 指标、回滚、管理员批准 |
 | 8 optional enterprise extensions | EMA/MultiAuth/M2M/Tasks/Apps | 默认全局启用 | 独立 ADR/威胁模型/兼容证明 |
+
+当前代码已达到阶段 1 的**本地技术基线**：双时代 fixture 与两个调用方向均已验证。
+这不表示已部署到生产，也不允许跳过阶段 2～6 的身份、授权、交互和幂等门禁。
 
 ---
 

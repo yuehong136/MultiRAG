@@ -17,6 +17,10 @@ MultiRAG 同时出现在 MCP 的两个方向：
 两个方向不得复用 bearer、MCP connection/session、audience、scope policy 或用户状态。架构定案见
 [EIM-ADR-17](../docs/enterprise-identity-mcp/DECISIONS.md#eim-adr-17multirag-的-mcp-hostclient-与-mcp-resource-server-是独立安全和发布面)。
 
+本目录故意不创建顶层 `mcp/__init__.py`。生产代码里的 `import mcp` 必须解析到官方 MCP Python SDK；
+把本目录变成同名 Python package 会遮蔽第三方依赖，破坏 Client/Server 导入与兼容测试。示例客户端应以
+脚本运行，不得通过新增 `__init__.py` 把本目录包化。
+
 ## 当前入站 Server
 
 入口：
@@ -30,7 +34,9 @@ uv run mcp/server/server.py \
 
 端点与传输：
 
-- `/mcp`：Streamable HTTP，当前默认 `stateless_http=True`、JSON response；
+- `/mcp`：Streamable HTTP，默认 `stateless_http=True`、JSON response；已实测通过 MCP
+  `2026-07-28` 的 `server/discover`、`Mcp-Protocol-Version` / `Mcp-Method` / `Mcp-Name`
+  路由头与无 `Mcp-Session-Id` 请求；
 - `/sse`：只为存量消费者保留的 legacy SSE；
 - `/health`：进程健康和 launch mode，不证明后端检索或授权可用；
 - 默认同时开放 `/mcp` 与 `/sse`，可通过 CLI/env 独立关闭；未完成调用方审计前不要删除 legacy
@@ -46,6 +52,8 @@ uv run mcp/server/server.py \
 
 安全与运行时：
 
+- 全仓精确使用 `fastmcp==4.0.0b2` 和 `mcp==2.0.0`；FastMCP 4 仍为 beta，因此锁定版本和
+  modern/legacy 双向回归都是运行边界的一部分；
 - FastMCP error middleware 隐藏底层异常细节；结构化日志不包含 payload；
 - Streamable HTTP 保留 Host/Origin DNS-rebinding 防护；公网域名必须显式配置 allowlist；
 - 当前限流是进程内桶，多 worker 之间不共享；
@@ -58,21 +66,35 @@ uv run mcp/server/server.py \
 
 生产 Agent 不使用 `mcp/client/` 示例，而是通过 `common/mcp_tool_call_conn.py`：
 
-- 当前创建长生命周期 `ClientSession` 并显式 `initialize()`；
+- Streamable HTTP 创建官方 SDK 2 `Client(mode="auto")`，由 SDK 先尝试 modern
+  `server/discover`并对 legacy server 回退；SSE 显式使用 `mode="legacy"`；业务代码不再手调
+  `initialize()`；
+- Streamable HTTP 的 headers 由 SDK `create_mcp_http_client()` 创建的受管 client 携带，保留
+  MCP 30 秒 connect/write/pool、300 秒 read 默认值；response hook 保留 HTTP `401`/`403`
+  分类，调用方可从错误文本和旁路 metadata 区分未认证与已认证但被拒绝；
 - MCP URL、variables、server headers 和 custom headers 来自已保存的 server 配置；
 - `structuredContent` 会被保留到旁路 metadata，但主要工具返回仍聚合为模型可读字符串；
-- 当前没有 request-scoped Principal credential provider、MRTR `InputRequiredResult`/resume 或
-  InteractionSession。
+- 旧的每 Server 串行队列已删除；同一 Client 上的调用可并发发送，不再因一个慢请求形成
+  队列头阻塞（HOL）；
+- `get_last_tool_call_meta()` 仍只是 session 级“最后完成值”，不保证并发调用逐请求关联；并发
+  上层应以各自调用返回值为准，后续事件化 Host 不应依赖这个兼容旁路做 durable correlation；
+- 超时会取消本地调用 task 并从 in-flight 集合清理；远端是否停止仍取决于 transport/server
+  的协作式取消，超时不得被解读为远端未执行；
+- `InputRequiredResult` 现在会以 `interaction_required` 结构和旁路 metadata 表面化，供后续 Host
+  编排识别；当前不持久化、不自动补参重试，也不提供 resume；
+- 当前仍没有 request-scoped Principal credential provider 或 `InteractionSession`。
 
 ## 尚未实现或不能宣称
 
-- `stateless_http=True` 只描述当前 HTTP transport 行为，**不证明**入站 Server 已全面实现 MCP
-  2026-07-28；现有兼容测试仍覆盖 legacy initialize/session 语义；
+- 入站 `/mcp` 已实现并验证 MCP `2026-07-28` modern 基线，但这只是协议/传输事实，
+  **不证明**企业身份、OAuth Resource Server、scope 或 MRTR Host 已完成；legacy HTTP/SSE
+  兼容仍保留并回归；
 - 入站 Server 尚未提供企业级 protected-resource metadata、独立 canonical audience、Principal、
   tool scope/step-up 和跨 worker 分布式限流；
-- 出站 Client 尚未迁移到官方 MCP SDK v2，也不能代表当前飞书用户安全调用 `of_mcp`；
-- 两个方向当前共享主仓依赖解析面；在升级 MCP SDK/FastMCP 前，必须先按 ROADMAP 的兼容任务证明
-  依赖可解、部署可分和回滚互不绑定；
+- 出站 Client 已迁移到官方 MCP SDK 2，但尚无 Principal/token/scope 链，因此仍不能代表
+  当前飞书用户已被安全委托到 `of_mcp`；
+- 两个方向仍共享主仓依赖解析面；EIM-F6/F7 已选择并实施整仓协调升级，未拆独立
+  Server runtime。回滚因此是整个技术切换面，不得把 outbound/inbound 任一方单独降级到 SDK 1；
 - 本模块没有 MCP InteractionSession、飞书 form/H5 renderer、Confirmation Store 或端到端副作用
   幂等。这些属于 EIM 项目，不应直接塞进 `mcp/server/server.py`；
 - FastMCP/SDK 提供的 auth、provider 或 middleware 不能替代 MultiRAG tenant/Principal，也不能替代
@@ -80,14 +102,25 @@ uv run mcp/server/server.py \
 
 ## 验证入口
 
-与入站 Server 直接相关的现有回归：
+出站 Client 与入站 Server 的封闭回归：
 
 ```bash
 uv run pytest -q \
+  tests/unit/test_mcp_tool_call_conn_compat.py \
   tests/unit/test_mcp_server_transport.py \
   tests/unit/test_mcp_server_security.py \
   tests/unit/test_mcp_server_datasets.py
 ```
+
+真实 loopback 子进程的 modern/legacy 双方向矩阵（含协商、路由 headers、无 session、
+401/403、structured result 和 timeout/cancellation）：
+
+```bash
+make mcp-compat
+```
+
+`InputRequiredResult` 的 SDK2 类型、JSON-safe 旁路 metadata 和“不自动重跑”边界由上面的封闭
+`test_mcp_tool_call_conn_compat.py` 固定；当前跨进程矩阵不宣称已经实现 MRTR Host 或恢复状态机。
 
 任何实现任务完成前仍必须按仓库根 [`AGENTS.md`](../AGENTS.md) 执行 `make verify`；改到 DB、存储或
 检索路径时另跑 `make integration`。版本、身份、授权或 MRTR 任务还必须执行对应 ROADMAP 行声明的

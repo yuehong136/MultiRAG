@@ -1,3 +1,9 @@
+# /// script
+# requires-python = ">=3.12,<3.15"
+# dependencies = [
+#   "fastmcp==3.4.7",
+# ]
+# ///
 """Hermetic MCP SDK 1 / FastMCP 3 compatibility fixture for EIM-F2."""
 
 import argparse

@@ -41,6 +41,7 @@ smoke: ## Tier 4：冒烟测试（对运行中的服务器打健康端点；启�
 	$(UV) python scripts/smoke.py
 
 mcp-compat: ## EIM-F2：隔离 MCP 1/2 解释器，运行双方向真实协议兼容矩阵
+	uv lock --check --script tests/compat/mcp/legacy_server.py
 	uv lock --check --script tests/compat/mcp/modern_server.py
 	$(UV) python scripts/check_mcp_compat.py
 

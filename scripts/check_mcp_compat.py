@@ -144,6 +144,7 @@ def _modern_probe(
     cancel: bool = False,
     list_only: bool = False,
     token: str | None = None,
+    tool: str | None = None,
 ) -> dict[str, Any]:
     command = [
         uv,
@@ -163,7 +164,14 @@ def _modern_probe(
         command.append("--list-only")
     if token is not None:
         command.extend(("--token", token))
+    if tool is not None:
+        command.extend(("--tool", tool))
     return _run(command, timeout=30)
+
+
+def _read_json(url: str) -> dict[str, Any]:
+    with urllib.request.urlopen(url, timeout=3) as response:
+        return json.loads(response.read())
 
 
 def _raw_status(url: str, token: str | None) -> int:
@@ -216,9 +224,17 @@ def run_matrix() -> list[dict[str, Any]]:
         str(MODERN_SERVER),
         "--serve",
     ]
+    legacy_command = [
+        uv,
+        "run",
+        "--locked",
+        "--no-project",
+        "--script",
+        str(LEGACY_SERVER),
+    ]
     servers = [
-        ManagedServer("legacy-http", [sys.executable, str(LEGACY_SERVER), "--transport", "http"]),
-        ManagedServer("legacy-sse", [sys.executable, str(LEGACY_SERVER), "--transport", "sse"]),
+        ManagedServer("legacy-http", [*legacy_command, "--transport", "http"]),
+        ManagedServer("legacy-sse", [*legacy_command, "--transport", "sse"]),
         ManagedServer("multirag-current", [sys.executable, str(MULTIRAG_SERVER)]),
         ManagedServer("modern-http", modern_command),
     ]
@@ -230,9 +246,9 @@ def run_matrix() -> list[dict[str, Any]]:
         rows.append(
             _row(
                 "legacy-sse-success",
-                "MultiRAG MCP SDK 1",
+                "MultiRAG MCP SDK 2 legacy mode",
                 "FastMCP 3",
-                "legacy initialize",
+                str(legacy_sse_result.get("protocol_version")),
                 "SSE",
                 legacy_sse_result.get("structured_content", {}).get("server_era") == "legacy",
                 "structured echo",
@@ -244,23 +260,66 @@ def run_matrix() -> list[dict[str, Any]]:
             uv,
             url=multirag_current["url"],
             mode="auto",
-            list_only=True,
             token="eim-f2-multirag",
+            tool="list_datasets",
         )
         inbound_tools = inbound_current.get("tools", [])
-        inbound_ok = inbound_current.get("protocol_version") == "2025-11-25" and inbound_tools == ["list_datasets", "multirag_retrieval"]
+        inbound_headers = _read_json(multirag_current["headers_url"])
+        inbound_ok = (
+            inbound_current.get("protocol_version") == "2026-07-28"
+            and inbound_tools == ["list_datasets", "multirag_retrieval"]
+            and inbound_current.get("tool_result") == {"result": []}
+            and inbound_headers.get("mcp-protocol-version") == "2026-07-28"
+            and inbound_headers.get("mcp-method") == "tools/call"
+            and inbound_headers.get("mcp-name") == "list_datasets"
+            and "mcp-session-id" not in inbound_headers
+        )
         rows.append(
             _row(
-                "modern-client-to-current-multirag",
+                "modern-client-to-multirag",
                 "MCP Python SDK 2 auto",
-                "MultiRAG FastMCP 3",
+                "MultiRAG FastMCP 4",
                 str(inbound_current.get("protocol_version")),
-                "Streamable HTTP",
+                "stateless HTTP",
                 inbound_ok,
-                "real inbound server falls back to initialize",
+                "real inbound server uses modern server/discover",
                 {
                     "protocol_version": inbound_current.get("protocol_version"),
                     "tools": inbound_tools,
+                    "headers": inbound_headers,
+                },
+            )
+        )
+
+        inbound_legacy = _modern_probe(
+            uv,
+            url=multirag_current["url"],
+            mode="legacy",
+            token="eim-f2-multirag",
+            tool="list_datasets",
+        )
+        inbound_legacy_headers = _read_json(multirag_current["headers_url"])
+        inbound_legacy_ok = (
+            inbound_legacy.get("protocol_version") == "2025-11-25"
+            and inbound_legacy.get("tools") == ["list_datasets", "multirag_retrieval"]
+            and inbound_legacy.get("tool_result") == {"result": []}
+            and inbound_legacy_headers.get("mcp-protocol-version") == "2025-11-25"
+            and "mcp-method" not in inbound_legacy_headers
+            and "mcp-name" not in inbound_legacy_headers
+        )
+        rows.append(
+            _row(
+                "legacy-mode-client-to-multirag",
+                "MCP Python SDK 2 legacy mode",
+                "MultiRAG FastMCP 4 dual-era",
+                str(inbound_legacy.get("protocol_version")),
+                "Streamable HTTP",
+                inbound_legacy_ok,
+                "legacy initialize remains an explicit compatibility path",
+                {
+                    "protocol_version": inbound_legacy.get("protocol_version"),
+                    "tools": inbound_legacy.get("tools"),
+                    "headers": inbound_legacy_headers,
                 },
             )
         )
@@ -269,13 +328,16 @@ def run_matrix() -> list[dict[str, Any]]:
         rows.append(
             _row(
                 "legacy-http-success",
-                "MultiRAG MCP SDK 1",
+                "MultiRAG MCP SDK 2 auto",
                 "FastMCP 3",
-                "legacy initialize",
+                str(legacy_http_result.get("protocol_version")),
                 "Streamable HTTP",
-                legacy_http_result.get("structured_content", {}).get("server_era") == "legacy",
-                "structured echo",
-                legacy_http_result.get("structured_content"),
+                legacy_http_result.get("protocol_version") == "2025-11-25" and legacy_http_result.get("structured_content", {}).get("server_era") == "legacy",
+                "server/discover falls back to initialize",
+                {
+                    "protocol_version": legacy_http_result.get("protocol_version"),
+                    "structured_content": legacy_http_result.get("structured_content"),
+                },
             )
         )
 
@@ -301,18 +363,24 @@ def run_matrix() -> list[dict[str, Any]]:
         )
 
         current_to_modern = _current_probe(url=modern["url"], transport="streamable-http", scenario="echo")
-        fallback_headers = current_to_modern.get("structured_content", {}).get("request_headers", {})
-        fallback_ok = fallback_headers.get("mcp-protocol-version") == "2025-11-25" and "mcp-method" not in fallback_headers
+        current_headers = current_to_modern.get("structured_content", {}).get("request_headers", {})
+        current_modern_ok = (
+            current_to_modern.get("protocol_version") == "2026-07-28"
+            and current_headers.get("mcp-protocol-version") == "2026-07-28"
+            and current_headers.get("mcp-method") == "tools/call"
+            and current_headers.get("mcp-name") == "compat_echo"
+            and "mcp-session-id" not in current_headers
+        )
         rows.append(
             _row(
-                "legacy-client-to-modern-server",
-                "MultiRAG MCP SDK 1",
+                "multirag-client-to-modern-server",
+                "MultiRAG MCP SDK 2 auto",
                 "MCPServer 2 dual-era",
-                "2025-11-25 fallback",
+                str(current_to_modern.get("protocol_version")),
                 "Streamable HTTP",
-                fallback_ok,
-                "successful legacy initialize; not a modern call",
-                fallback_headers,
+                current_modern_ok,
+                "server/discover selects sessionless modern protocol",
+                current_headers,
             )
         )
 
@@ -340,9 +408,9 @@ def run_matrix() -> list[dict[str, Any]]:
         rows.append(
             _row(
                 "auth-valid",
-                "MultiRAG MCP SDK 1",
+                "MultiRAG MCP SDK 2 auto",
                 "MCPServer 2 protected fixture",
-                "2025-11-25 fallback",
+                str(valid_auth.get("protocol_version")),
                 "Streamable HTTP",
                 valid_auth.get("structured_content", {}).get("server_era") == "modern",
                 "fixture bearer accepted without exposing credential",
@@ -361,19 +429,21 @@ def run_matrix() -> list[dict[str, Any]]:
                 scenario="auth",
                 auth=auth,
             )
-            collapsed = "Error calling tool" in auth_result.get("text", "")
+            auth_meta = auth_result.get("meta") or {}
+            expected_text = "Authentication required" if status == 401 else "Permission denied"
             rows.append(
                 _row(
                     f"auth-{status}",
-                    "MultiRAG MCP SDK 1",
+                    "MultiRAG MCP SDK 2 auto",
                     "MCPServer 2 protected fixture",
-                    "legacy initialize",
+                    "connection rejected before negotiation",
                     "Streamable HTTP",
-                    raw_status == status and collapsed,
-                    f"fixture emits {status}; current client collapses typed status",
+                    raw_status == status and auth_meta.get("connection_status") == status and expected_text in auth_result.get("text", ""),
+                    f"fixture and wrapper preserve HTTP {status} category without credential data",
                     {
                         "http_status": raw_status,
                         "client_category": "connection_error",
+                        "connection_status": auth_meta.get("connection_status"),
                         "initial_ready": auth_result.get("initial_ready"),
                     },
                 )
@@ -384,9 +454,9 @@ def run_matrix() -> list[dict[str, Any]]:
         rows.append(
             _row(
                 "tool-error",
-                "MultiRAG MCP SDK 1",
+                "MultiRAG MCP SDK 2 auto",
                 "MCPServer 2",
-                "2025-11-25 fallback",
+                str(tool_error.get("protocol_version")),
                 "Streamable HTTP",
                 error_meta.get("is_error") is True,
                 "text result plus side-channel is_error",
@@ -396,16 +466,19 @@ def run_matrix() -> list[dict[str, Any]]:
 
         timeout_result = _current_probe(url=modern["url"], transport="streamable-http", scenario="timeout")
         server_status = timeout_result.get("server_status", {}).get("status")
-        timeout_ok = "Timeout calling tool" in timeout_result.get("text", "") and server_status == "completed"
+        timeout_ok = "Timeout calling tool" in timeout_result.get("text", "") and server_status in {
+            "cancelled",
+            "completed",
+        }
         rows.append(
             _row(
-                "timeout-does-not-cancel",
-                "MultiRAG MCP SDK 1",
+                "timeout-bounds-local-wait",
+                "MultiRAG MCP SDK 2 auto",
                 "MCPServer 2",
-                "2025-11-25 fallback",
+                str(timeout_result.get("protocol_version")),
                 "Streamable HTTP",
                 timeout_ok,
-                "caller timed out; server handler completed",
+                "local wait is cancelled; remote handler cancellation remains cooperative",
                 {
                     "server_status": server_status,
                     "duration_ms": timeout_result.get("duration_ms"),

@@ -82,7 +82,13 @@ dependencies = [
     "markdown==3.8.2",
     "markdown-to-json==2.1.1",
     "markdownify>=1.2.0",
-    "fastmcp>=3.4.4",
+    # FastMCP 4 is still a prerelease; pin the verified beta exactly so a future
+    # beta cannot enter the runtime without rerunning the MCP compatibility gate.
+    # MCP SDK 2 and httpx2 are direct dependencies because MultiRAG implements
+    # the client and owns the HTTP transport lifecycle.
+    "fastmcp==4.0.0b2",
+    "mcp==2.0.0",
+    "httpx2>=2.10.0,<3.0.0",
     "mini-racer>=0.12.4,<0.13.0",
     "minio==7.2.4",
     "mistralai==0.4.2",
@@ -156,7 +162,7 @@ dependencies = [
     "slack-sdk==3.37.0",
     "sqladmin>=0.21.0",
     "sqlalchemy>=2.0.40",
-    "sse-starlette>=2.2.1",
+    "sse-starlette>=3.0.0",
     "tavily-python==0.5.4",
     "tencentcloud-sdk-python==3.0.1478",
     "tika==2.6.0",
@@ -236,6 +242,9 @@ override-dependencies = [
     "cattrs>=23.1.0",
 ]
 constraint-dependencies = [
+    # FastMCP 4 remains a prerelease. Keep the wrapper and slim runtime on the
+    # same verified beta even if a future package metadata range becomes wider.
+    "fastmcp-slim==4.0.0b2",
     # CVE-2026-30922: pyasn1 < 0.6.3 ASN.1 解码无界递归 DoS（CVSS 7.5）；
     # 依赖图内无任何 <0.6.3 上界的冲突方，constraint 即可钳住（曾误放 override，
     # 那会抹掉 pyasn1-modules 的 <0.7.0 上界，未来 0.7 破坏版会静默越界）
