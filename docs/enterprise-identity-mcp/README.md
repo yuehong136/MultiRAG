@@ -5,7 +5,7 @@
 > 适用仓库：**MultiRAG**（本仓）与 **`of_mcp`**（另一个独立 checkout）。
 > 两者的本地路径随机器而变（本仓同时被 Windows 与 macOS 开发机使用），本目录一律按仓名指代；
 > 需要绝对路径时以你当前机器上的实际 checkout 为准。
-> 外部事实核验日期：2026-08-09（版本与上游提交见 [VERSION_BASELINE](VERSION_BASELINE.md)）
+> 外部事实最近核验：2026-08-12（版本与上游提交见 [VERSION_BASELINE](VERSION_BASELINE.md)）
 
 本目录是后续实现“企业级飞书身份接入、MultiRAG 平台用户、MCP 身份委托、of_mcp
 授权和敏感操作确认”的**项目级单一事实来源**。后续 Agent 可以没有任何历史对话，但必须从
@@ -97,6 +97,18 @@ of_mcp
   - business service adapters
 ```
 
+MultiRAG 同时还有第二个、方向相反的 MCP 角色：
+
+```text
+outbound：MultiRAG Host/Client -> of_mcp Resource Server
+inbound： 外部 MCP Client -> MultiRAG RAG Resource Server -> MultiRAG API
+```
+
+这两个方向的 resource URI、token audience、Principal、工具策略和发布/回滚面必须独立；当前又共享
+FastMCP 3 / MCP SDK 1 的 Python 依赖，因此不能把“客户端升 SDK 2”当成一个孤立依赖修改。完整
+术语、当前事实、依赖拓扑、能力取舍、MRTR/飞书交互和分阶段门禁见
+[Modern MCP 与企业服务中心](MCP_ENTERPRISE_PLATFORM.md)。
+
 当出现下面任一条件时，再把 MultiRAG 内的身份模块抽成独立 `identity-broker`：
 
 - 两个以上 AI 平台都需要复用同一企业身份；
@@ -141,6 +153,8 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
 |---|---|---|
 | [DECISIONS](DECISIONS.md) | 已定案的架构选择、禁止项和替代方案 | 任务状态 |
 | [ARCHITECTURE](ARCHITECTURE.md) | 端到端组件、时序、失败语义、部署边界 | 精确字段契约 |
+| [Modern MCP 与企业服务中心](MCP_ENTERPRISE_PLATFORM.md) | modern protocol、双 MCP 角色、企业服务中心、EMA/MultiAuth/MRTR 和开发门禁 | 精确字段与任务状态 |
+| [MCP 兼容矩阵](MCP_COMPATIBILITY.md) | EIM-F2 可执行 fixture、实际协商结果、已知缺口和 F3/F8 迁移清单 | 长期目标架构与业务权限模型 |
 | [CONTRACTS](CONTRACTS.md) | DTO、数据库约束、Principal、JWT、错误码和 API 契约 | 飞书后台操作步骤 |
 | [FEISHU_ONBOARDING](FEISHU_ONBOARDING.md) | 去哪里申请 App、拿什么凭据、开什么权限和事件 | MCP 内部授权实现 |
 | [FEISHU_BOT_UX](FEISHU_BOT_UX.md) | 飞书流式卡片、ReplySession、话题、队列、多模态和体验验收 | 身份/JWT 的最终字段 |
@@ -173,9 +187,16 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   兼容设计和迁移。
 - MCP 客户端仍使用旧式 `ClientSession + initialize` 和静态 headers，需要升级为请求级 token
   与 MCP SDK 2 客户端。
+- MultiRAG 还通过 [`mcp/server/server.py`](../../mcp/server/server.py) 对外提供 `/mcp` 与 legacy
+  `/sse`。它已有 Streamable HTTP、结构化结果、output schema 和错误脱敏，但仍由 FastMCP 3.4.4 /
+  MCP SDK 1.28.1 承载；`stateless_http=True` 不等于已经实现无握手的 MCP `2026-07-28`。
+- 当前 `fastmcp-slim[client,server] 3.4.4` 明确约束 `mcp>=1.24,<2`。EIM-F2 已用隔离解释器完成
+  双方向兼容矩阵，并证明调用成功仍可能只是 legacy fallback；下一步 EIM-F6 必须先冻结依赖拓扑，
+  F3 不得直接在根环境加入 `mcp>=2`。模块当前行为与不能
+  宣称的能力见 [`mcp/README.md`](../../mcp/README.md)。
 - Channel Execution 已通过 `stream()` 直接向 transport-neutral ReplySession 交付类型化事件；
   飞书已实现 CardKit 渐进式回复，`ask()` 只保留为兼容聚合入口。Provider/Target capabilities、
-  Dialog detached CAS 与 Canvas candidate sidecar/周期 GC 已分别由 EIM-U11～U13 收口。U15 迁移与
+  Dialog detached CAS 与 Canvas candidate sidecar/周期 GC 已分别由 EIM-U11～U13 收口。CHN-U15 迁移与
   API/supervisor 重启已完成，CHN-U16 优雅停机终态化与跨层测试已于 2026-08-11 完成；
   **Dialog/Canvas 真实飞书 smoke 仍然欠着**，下一项是 CHN-O9 可观测，随后稳定浸泡。
   EIM-F5 / CHN-X14 保留为 upstream-first 长期任务，但挂起到
@@ -198,6 +219,9 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
 - `medic` 的 `workcode` 是工具调用者自报，且工具会产生真实副作用。
 - of_mcp 使用 FastMCP 4.0.0b1；2026-08-07 已有 b2，必须先做独立兼容升级，不能和身份改造
   混在同一个 PR。
+- of_mcp 的 profile/catalog/mount/proxy/contract 基础可继续演进为私有 MCP 服务中心，但当前
+  `auth=`、持久 storage、scope enforcement、proxy internal actor token、Action/Idempotency Ledger
+  尚未落地，不能因为使用 FastMCP 4 就宣称已经是企业授权网关。
 
 ---
 

@@ -200,23 +200,58 @@ allowlist 不能替代本项目 identity resolver。
 
 ## 8. MCP 官方实现
 
-项目：
+核心规范与 SDK：
 
-- [`modelcontextprotocol/python-sdk`](https://github.com/modelcontextprotocol/python-sdk)
-- [`modelcontextprotocol/ext-auth`](https://github.com/modelcontextprotocol/ext-auth)
-- [MCP Authorization 文档](https://modelcontextprotocol.io/docs/tutorials/security/authorization)
+- [MCP 2026-07-28 specification](https://modelcontextprotocol.io/specification/2026-07-28)
+- [MCP 2026-07-28 release](https://blog.modelcontextprotocol.io/posts/2026-07-28/)
+- [`modelcontextprotocol/python-sdk`](https://github.com/modelcontextprotocol/python-sdk) 与
+  [SDK v2 What's New](https://github.com/modelcontextprotocol/python-sdk/blob/main/docs/whats-new.md)
+- [MCP Authorization](https://modelcontextprotocol.io/docs/tutorials/security/authorization) 与
+  [Authorization extensions](https://modelcontextprotocol.io/extensions/auth/overview)
+
+官方扩展/提案：
+
+- [`modelcontextprotocol/ext-auth`](https://github.com/modelcontextprotocol/ext-auth) 与
+  [Enterprise-Managed Authorization](https://modelcontextprotocol.io/extensions/auth/enterprise-managed-authorization)
+- [`modelcontextprotocol/ext-apps`](https://github.com/modelcontextprotocol/ext-apps)
+- [`modelcontextprotocol/ext-tasks`](https://github.com/modelcontextprotocol/ext-tasks) 与
+  [SEP-2663 Tasks extension](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2663)
+- [SEP-2322 Multi-Round Tool Results](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2322)
+- [SEP-2575 stateless protocol](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575)
+- [IETF ID-JAG draft](https://datatracker.ietf.org/doc/draft-ietf-oauth-identity-assertion-authz-grant/)
+
+FastMCP 实现/产品资料（不是 MCP 标准）：
+
+- [FastMCP MultiAuth](https://gofastmcp.com/servers/auth/multi-auth)
+- [Prefect Horizon](https://gofastmcp.com/deployment/prefect-horizon)
+- [FastMCP PyPI releases](https://pypi.org/project/fastmcp/#history)
 
 ### 后续任务应该参考
 
 | 目标 | 官方内容 |
 |---|---|
 | MultiRAG SDK v2 客户端 | Python SDK `docs/whats-new.md`、migration、Client、OAuth for clients |
-| resource metadata | RFC 9728 well-known、`WWW-Authenticate resource_metadata=...` |
-| audience/resource | RFC 8707 Resource Indicators 和 server audience validation |
+| resource metadata | [RFC 9728](https://www.rfc-editor.org/rfc/rfc9728) well-known、`WWW-Authenticate resource_metadata=...` |
+| audience/resource | [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707) Resource Indicators 和 server audience validation |
 | 禁止 token passthrough | MCP Security Best Practices |
 | 机器到机器 | `io.modelcontextprotocol/oauth-client-credentials` extension |
-| 企业 IdP | `io.modelcontextprotocol/enterprise-managed-authorization`、SEP-990、ID-JAG |
+| 企业 IdP | `io.modelcontextprotocol/enterprise-managed-authorization`、[SEP-990](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/990)、ID-JAG |
 | 现代无会话协议 | 2026-07-28 发布说明和 SDK v2 protocol compatibility |
+| 缺参后恢复工具调用 | MRTR/SEP-2322 的 `input_required` 与后续 `inputResponses`；映射到 EIM-U14，不替代授权/持久化 |
+| 富 UI | `ext-apps` 的 host/UI resource 协议；host 不支持时不能假设可渲染 |
+| 长任务实验 | 2026 发布说明、SEP-2663、`ext-tasks` README 与 Python SDK 实现状态交叉核验，按最保守状态采用 |
+
+### 采用边界（截至 2026-08-12）
+
+| 概念 | 来源层级 | 本项目结论 |
+|---|---|---|
+| MCP 2026 + MRTR | 核心协议/最终 SEP | 采用；U14 自己持久化 pause/resume，MRTR 只承载跨请求补充输入 |
+| EMA | 官方稳定 auth extension | 有真实企业 IdP、多 issuer 需求时才启动 A8；Feishu `open_id/user_id` 不是 assertion |
+| ID-JAG | IETF draft，EMA 的底层工作项 | 实施前重核 draft、库和威胁模型；不把未定稿字段写死为内部主身份 |
+| MultiAuth | FastMCP server 实现 | 可作为多 issuer 组合候选；不写入跨框架 domain contract，也不能代替 tool/business policy |
+| Horizon | Prefect/FastMCP 托管产品 | 只作 hosting/auth/registry 的 build-vs-buy；不是“企业 MCP 服务中心”的标准架构依赖 |
+| MCP Apps | 官方 extension，依赖 host 支持和隔离 UI | 飞书 CardKit 不是 Apps host；U15 直接走飞书官方 CardKit callback，未来 Web host 再评估 Apps |
+| Tasks | 官方材料状态尚未完全收敛：发布说明/SEP 指向 extension，当前 `ext-tasks` README 仍标 experimental/not official，Python SDK v2 尚未实现 | 按实验性处理；不阻塞 U14/U15、Confirmation Store 或 durable run ledger |
 
 ### 不能照搬或误解
 
@@ -224,6 +259,9 @@ allowlist 不能替代本项目 identity resolver。
 - EMA 需要真实企业 IdP Identity Assertion，不能把飞书事件字段伪造成 ID Token/SAML；
 - MCP auth 只定义 transport/resource 授权，不替代 medic/Jira 的业务对象授权；
 - legacy `initialize` 和 session sticky 只能作为迁移兼容，不是新架构目标。
+- MRTR `input_required` 不是“已获用户确认”；飞书表单提交也不是 authorization decision。
+- MultiAuth/Horizon 是 FastMCP 生态能力，不得写成 MCP 标准或升级 Python SDK v2 后自动获得的能力。
+- Tasks 和 Apps 都不能替代本项目的 Principal、scope、业务授权、幂等和持久化 interaction state。
 
 ---
 

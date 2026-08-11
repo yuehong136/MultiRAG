@@ -3,7 +3,7 @@
 .DEFAULT_GOAL := help
 UV := uv run --no-sync
 
-.PHONY: help install fix lint typecheck test test-all coverage integration smoke verify
+.PHONY: help install fix lint typecheck test test-all coverage integration smoke mcp-compat verify
 
 help: ## 列出全部可用目标
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -39,5 +39,9 @@ integration: ## Tier 3：集成测试（需要 docker compose base 服务）
 
 smoke: ## Tier 4：冒烟测试（对运行中的服务器打健康端点；启动：uv run python -m api.multirag_server）
 	$(UV) python scripts/smoke.py
+
+mcp-compat: ## EIM-F2：隔离 MCP 1/2 解释器，运行双方向真实协议兼容矩阵
+	uv lock --check --script tests/compat/mcp/modern_server.py
+	$(UV) python scripts/check_mcp_compat.py
 
 verify: lint typecheck test ## 标准编码后门禁（Tier 0+1+2）——任务完成前必须全绿

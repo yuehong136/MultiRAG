@@ -228,3 +228,43 @@ chain-of-thought、MCP 参数、SQL、企业工号、token、文件正文、异�
 飞书 CardKit 只是一个 renderer。CardKit、reaction 或客户端兼容失败时只降级渲染，不能重新执行
 Agent、放宽身份授权或自动重试已有副作用的工具。具体契约见
 [FEISHU_BOT_UX](FEISHU_BOT_UX.md)。
+
+---
+
+## EIM-ADR-17：MultiRAG 的 MCP Host/Client 与 MCP Resource Server 是独立安全和发布面
+
+**状态**：Accepted
+**日期**：2026-08-12
+
+MultiRAG 同时承担两个方向相反的 MCP 角色：
+
+1. **出站 Host/Client**：Agent 代表当前 request-scoped Principal 调用 `of_mcp` 等外部资源；
+2. **入站 Resource Server**：`mcp/server/` 向外部 MCP Client 暴露 MultiRAG 检索能力。
+
+两者可以共享标准 MCP 类型和契约测试思想，但必须使用不同的 resource URI、audience、credential
+生命周期、scope policy、依赖边界、部署顺序和回滚面。任一方向收到的 bearer、连接状态或
+`requestState` 都不得被另一个方向复用，也不得把 MultiRAG 后端 API token 当成通用委托凭据。
+
+协议升级前先证明两个运行时的依赖图可解且可以独立回滚。若同一 Python 环境中的 SDK/FastMCP
+版本约束互斥，先建立可独立部署的依赖边界，再分别迁移 Client 与 Resource Server；禁止为追求
+“一次升级到最新”把两个方向、身份功能和授权功能合进一个 big-bang 变更。
+
+---
+
+## EIM-ADR-18：MCP 多轮输入由持久化 InteractionSession 承载，不复用 ReplySession 或连接状态
+
+**状态**：Accepted
+**日期**：2026-08-12
+
+MCP Multi-Round-Trip Request 返回 `InputRequiredResult` 时，由 MultiRAG 作为 Host 创建或更新
+provider-neutral `InteractionSession`，持久化当前 Principal、tenant、resource、tool、输入请求、
+opaque `requestState`、revision 和过期时间。飞书卡片或 H5 只是该会话的 UI renderer；用户响应经
+验证、幂等 claim 和 schema 校验后，才以 `inputResponses + requestState` 恢复同一逻辑工具调用。
+
+`ReplySession` 只负责单次回答的渐进式输出和终态交付，不保存待输入业务状态；MCP transport
+connection/session 也不承载身份或恢复语义。`requestState` 是服务端不透明 continuation，不是
+Principal、授权凭据或防重放令牌，必须绑定 InteractionSession 后再原样回传。
+
+InteractionSession 只证明“哪次交互收到了什么输入”。敏感副作用仍必须独立满足 ADR-12 的可信
+身份、scope/业务授权、持久化 Confirmation 和端到端幂等；不能用 MRTR、表单提交或一次按钮点击
+替代执行前重新授权。

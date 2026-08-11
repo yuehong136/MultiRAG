@@ -206,12 +206,13 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 | CHN-X12 | 敏感确认卡 + `card.action.trigger`：操作者/tenant/digest/expiry/nonce 绑定、回调幂等、重启恢复和执行前重授权 | ⬜ | CHN-U8、CHN-X7、EIM-M3/M4；[EIM-U7](../enterprise-identity-mcp/ROADMAP.md) |
 | CHN-X13 | Provider/Target capabilities、启动预取与目标私有 driver：删除 `ChannelSessionManager`，按交集控制渐进式、取消、重新生成、重试与反馈 | ✅ | 依赖 CHN-U9；[执行架构 §5–6](EXECUTION_ARCHITECTURE.md#5-目标驱动契约)、[EIM-U11](../enterprise-identity-mcp/ROADMAP.md) |
 | CHN-X14 | RAGFlow Canvas/Agent/Channel 上游对齐审计：Channel 稳定且用户恢复从约 4 月 24 日上游基线逐 commit 跟进时启动；固定版本三层语义，随正常同步分类“直接跟进 / 语义移植 / 适配层吸收 / 暂不采纳”，判断 no-store 或 checkpoint 执行缝；只读审计，不预设重构结论 | ⏸ | 触发条件未满足；[CHN-ADR-08](DECISIONS.md#chn-adr-08--canvas-与-channel-演进以上游同步为主只在适配层吸收现代执行不变量)、[EIM-F5](../enterprise-identity-mcp/ROADMAP.md) |
+| CHN-X15 | MCP InteractionSession 的飞书 renderer：结束流式卡片后按批准 schema 渲染 Card JSON 2.0 form，复杂/凭据流程转 H5 URL mode；callback 只规范化 `form_value`、验证 operator、持久化响应、幂等 claim 当前 revision、快速 ACK 并异步恢复工具调用。卡片只携带 opaque action ID/nonce，不携带 `requestState`、Principal、scope 或工具参数 | ⬜ | CHN-U8、CHN-U9、CHN-X7、EIM-U14；[EIM-U15](../enterprise-identity-mcp/ROADMAP.md)、[UX §8.2](../enterprise-identity-mcp/FEISHU_BOT_UX.md#82-mcp-结构化表单与-h5url-elicitation) |
 
 ---
 
 ### 企业身份扩展的权威简报
 
-CHN-X5～X14、CHN-U8～U15、CHN-O14 与 CHN-P14 属于 EIM 项目，不在本文件重复字段、数据库、JWT 和
+CHN-X5～X15、CHN-U8～U15、CHN-O14 与 CHN-P14 属于 EIM 项目，不在本文件重复字段、数据库、JWT 和
 飞书交互设计；CHN-U16 是 Channel 稳定化的独立近期任务，不新增 EIM 对应项。零上下文
 开工时先读 [`docs/enterprise-identity-mcp/README.md`](../enterprise-identity-mcp/README.md)，
 其中 UX 任务还必须完整读取

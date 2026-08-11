@@ -1,7 +1,7 @@
 # 技术版本与上游基线
 
 > **基础版本核验：2026-08-07；飞书 SDK、官方文档和交互参考仓刷新：2026-08-09；
-> 对话执行、重新生成和持久化参考刷新：2026-08-10
+> 对话执行、重新生成和持久化参考刷新：2026-08-10；MCP/FastMCP/扩展边界刷新：2026-08-12
 > （Asia/Shanghai）**
 > 版本会变化。本文记录的是可复现快照和选型规则，不是“永远最新”的承诺。
 
@@ -11,14 +11,14 @@
 
 | 组件 | 当前仓库 | 最近核验的官方最新 | 本项目目标 | 处理方式 |
 |---|---|---|---|---|
-| Python | MultiRAG `>=3.12,<3.15`；of_mcp `>=3.12` | — | 保持 3.12+ | 不降级 |
-| `lark-oapi` | 声明 `>=1.2,<2`，lock 为 1.7.1 | **1.7.2** | `>=1.7.2,<2` | EIM-F1 独立升级 |
+| Python | MultiRAG `>=3.12,<3.14`；of_mcp `>=3.12` | — | 保持各仓声明范围 | 不降级 |
+| `lark-oapi` | 声明 `>=1.7.1,<2`，lock 为 1.7.1 | **1.7.2** | `>=1.7.2,<2` | EIM-F1 独立升级 |
 | `lark-channel-sdk` | 未安装 | **1.2.0** | `>=1.2.0,<2` | EIM-C5 PoC 通过后才引入 |
-| MCP Python SDK `mcp` | MultiRAG 仍走 v1 风格客户端 | **2.0.0 stable** | `>=2.0,<3`，直接使用官方 `Client` | EIM-F2 独立迁移 |
-| `mcp-types` | of_mcp 传递依赖 | **2.0.0 stable** | 由 `mcp==2.0.*` 精确匹配 | 不单独 pin，除非只消费 wire types |
-| FastMCP stable | MultiRAG lock 3.4.4 | **3.4.6** | 不作为新 MCP 客户端抽象 | 上游需要时单独升级 |
-| FastMCP 4 prerelease | of_mcp 固定 4.0.0b1 | **4.0.0b2** | 先兼容验证，再固定 b2 或当时更新版本 | EIM-F3，禁止顺手升级 |
-| MCP 协议 | 混合旧客户端/新 server | **2026-07-28** | 新请求走 2026-07-28；迁移期保留 legacy 兼容 | 兼容测试固定 |
+| MCP Python SDK `mcp` | MultiRAG lock 1.28.1、v1 `ClientSession`；of_mcp lock 2.0.0 | **2.0.0 stable** | MultiRAG 最终使用官方 `Client` v2 | F2 双向矩阵 -> F6/F7 解依赖边界 -> F3 迁移 |
+| `mcp-types` | of_mcp lock 2.0.0 | **2.0.0 stable** | 与实际 SDK/框架锁一致 | 不单独 pin，除非只消费 wire types |
+| FastMCP stable | MultiRAG lock 3.4.4 | **3.4.7** | 不作为新 MCP 客户端抽象 | FastMCP 3 约束 `mcp<2`；由 F6/F7 隔离或经批准协同升级 |
+| FastMCP 4 prerelease | of_mcp 固定 4.0.0b1 | **4.0.0b2 beta** | 先兼容验证，再固定 b2 或开工时更新 beta | EIM-F4 纯版本任务 |
+| MCP 协议 | MultiRAG inbound/outbound 均 legacy；of_mcp 2026/MCP 2 | **2026-07-28** | F3 升 outbound Client，F8 升 inbound Server；迁移期保留 legacy 兼容 | F2 必须证明两个方向的实际协商路径 |
 
 版本来源：
 
@@ -38,6 +38,20 @@ SDK v2 提供一等 `Client`，能连接 URL、自动选择现代 `server/discov
 
 FastMCP 继续作为 of_mcp 的 server/composition 框架，但授权契约必须基于标准 HTTP/OAuth/MCP，
 不得使用只有某个 FastMCP beta 才认识的私有 Header 作为唯一方案。
+
+这里不能直接在 MultiRAG 根环境加 `mcp>=2`：当前 FastMCP 3.4.4 依赖线约束 `mcp<2`，而 of_mcp
+已经是 `mcp==2.0.0`/FastMCP 4 beta。F2 因而只用隔离解释器做双向 compatibility fixture；F6
+先冻结依赖拓扑，F7 实施边界，之后 F3 才改生产客户端。默认方案是把当前 `mcp/server` 变成独立
+project/venv/lock；若要让 MultiRAG 全仓同步升 FastMCP 4 beta，因会引入生产 prerelease 和公共 API
+变化，必须另获用户明确批准。
+
+### “MCP 2.0”应该怎么说
+
+`mcp==2.0.0` 是 **Python SDK 的 major 版本**；`2026-07-28` 是 **MCP 协议修订版**。官方没有一个
+名为“MCP 2.0 企业服务中心版”的总开关，也不存在先把整个项目一次性“全面升级成 MCP 2.0”就自动
+获得身份、网关、多租户、表单和持久任务的路径。本项目应准确表述为：采用 MCP 2026 的无会话/
+MRTR 等协议能力，把 MultiRAG client 迁到 Python SDK v2，并分别建设 Principal、OAuth resource
+server、授权策略、持久交互和企业身份扩展。
 
 ---
 
@@ -175,6 +189,8 @@ ReplySession/Provider 接口上，transport 后续可替换。
 - MCP server 是 OAuth protected resource，token 必须绑定目标 resource/audience。
 - DCR 已走向弃用；通用交互式客户端优先 Client ID Metadata Documents。
 - 企业员工统一授权的长期方向是 EMA；纯机器到机器使用 OAuth Client Credentials extension。
+- 多轮工具结果（MRTR）允许工具返回 `input_required`，由 host 在后续请求携带
+  `inputResponses` 恢复；它是补充输入的协议机制，不是授权、幂等或任务存储。
 
 官方入口：
 
@@ -185,6 +201,18 @@ ReplySession/Provider 接口上，transport 后续可替换。
 
 在官方站点尚未把所有导航页切到 `2026-07-28` 路径时，以 2026 发布说明、SDK v2 文档和最终
 SEP 为准，不能因此退回旧 session 设计。
+
+### 标准、扩展、实现和产品边界（2026-08-12）
+
+| 名称 | 当前边界 | 本项目采用时机 |
+|---|---|---|
+| MRTR | MCP 2026 核心协议能力；跨请求补充工具输入 | U14 用它映射 transport-neutral pause/resume；授权、持久化和幂等仍由两仓实现 |
+| EMA | MCP 官方稳定 auth extension；把真实企业 IdP assertion 引入授权流程 | 仅当真实 enterprise IdP/多 issuer 需求成立时进入 A8；飞书事件字段不能伪装 assertion |
+| ID-JAG | EMA 依赖的 IETF Identity Assertion Authorization Grant 工作项，当前仍须按 draft 状态治理 | A8 每次实施前重核 IETF 版本、支持库和安全模型，不锁死未定稿字段 |
+| MultiAuth | FastMCP 的多 auth provider 组合实现，不是 MCP 标准 | 只有多 issuer/多入口路由确有需求且 fail-closed 测试成立时评估 |
+| Horizon | Prefect/FastMCP 托管平台，提供托管、认证、访问控制和 registry；不是 MCP 标准 | 仅作运维 build-vs-buy；不作为 MultiRAG/of_mcp 运行时依赖 |
+| MCP Apps | 官方 extension，当前稳定 spec 为 2026-01-26；定义 host 承载受控 web UI，必须由 host 显式支持 | 飞书 CardKit 不是 Apps host；未来独立 Web host 需要富 UI 时另立项 |
+| Tasks | 2026 发布说明/SEP 已指向官方扩展，但当前 `ext-tasks` 仍标 experimental/not official，Python SDK v2 也未实现 | 按最低共同成熟度视为实验性；首期 U14/U15、确认和 run ledger 不依赖它 |
 
 ---
 
@@ -207,13 +235,26 @@ SEP 为准，不能因此退回旧 session 设计。
 - 对 `channel.stream()` 的节流、sequence、finish、取消和错误行为做 contract comparison；即使比
   现有 renderer 更方便，也不能把 EIM-U1 重新变成 C5 的依赖。
 
-### MCP SDK 2
+### MCP SDK 2 与依赖拓扑
 
-- 对 of_mcp 2026 server 走现代模式；
-- 对至少一个 legacy fixture 自动回退；
+- F2 在独立 MCP 1/MCP 2 解释器中同时验证“旧 MultiRAG client -> 双时代 server”和
+  “官方 v2 Client -> 当前 MultiRAG legacy server”；
+- 每格记录 `server/discover`、legacy `initialize` 等实际协商路径，不能只断言工具返回值；
 - list/call/tool error、取消、超时和认证 401/403 行为固定；
 - 请求级 token 不被跨 Principal 复用；
-- 移除旧 `streamablehttp_client`/手动 `initialize` 后无悬挂 task。
+- F2 不得修改根生产依赖；F6 用干净 resolver PoC 选定边界，F7 证明两个环境均可冷安装和回滚；
+- F3 移除旧 `streamablehttp_client`/手动 `initialize` 后无悬挂 task，且超时释放底层调用和串行队列。
+- F8 单独升级 inbound Server；现代、legacy、结构化结果和当前启动/健康路径均可独立回滚，且不夹带
+  A7 的 Principal/scope 改造。
+
+以下任一情况立即停止依赖解析并请用户决策，不得靠放宽范围或隐式升级“解出来”：
+
+- resolver 需要把任一生产依赖切到未批准的 prerelease/major，或同时满足不了 FastMCP 3
+  `mcp<2` 与新 client 的 `mcp>=2`；
+- 只有 editable sibling path、已有本机 cache 或未提交 lock 才能安装，干净环境不能复现；
+- 选中方案无法分别给 root/server 生成确定性 lock、冷安装、启动、验证和回滚；
+- F2 只得到“调用成功”，无法证明现代或 legacy 协商分支，或取消/超时留下悬挂调用；
+- Tasks/Apps/EMA 等扩展的官方状态、SDK 支持和本项目假设不一致，却需要把它们当生产硬依赖。
 
 ### FastMCP 4 beta
 

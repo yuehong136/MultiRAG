@@ -399,6 +399,17 @@ challenge、audience 和 bearer validation。
 未来外部客户端接入时，优先接真实企业 IdP 的 EMA/ID-JAG；机器后台任务使用 OAuth Client
 Credentials extension。不能通过自定义 Header 扩张首期协议。
 
+### 6.5 MultiRAG 入站 MCP Resource Server
+
+`mcp/server/` 是不同于 `of_mcp` gateway 的另一个 protected resource。正式启用用户级或企业级
+访问前必须为它定义独立的 canonical HTTPS resource URI、audience 和最小 scope 集；发给
+`of_mcp` 的 token 即使签名和 Principal 都合法，也必须因 audience 不匹配被拒绝，反向同理。
+
+入站 token 可以复用本节的签名、TTL、JWKS 和基础 Principal claims 约束，但不能复用目标 resource
+或未经重新计算的 scopes。MultiRAG MCP Server 调后端 API 时使用受控的内部 actor credential 或
+显式 token exchange；不得把外部 bearer 原样当作后端 API token 透传。当前 API-key 兼容模式只算
+现状兼容，不代表本契约已完成，边界见 [`mcp/README.md`](../../mcp/README.md)。
+
 ---
 
 ## 7. mount/proxy 内部委托
@@ -444,12 +455,63 @@ async def submit_wtd(
 
 ---
 
-## 9. Confirmation 与幂等契约
+## 9. Interaction、Confirmation 与幂等契约
 
-### Confirmation record
+### 9.1 InteractionSession
+
+MCP 多轮输入是持久化业务交互，不依赖 MCP transport session 或进程内 future。规范记录：
+
+```text
+interaction_id            opaque random
+tenant_id
+platform_user_id
+agent_id
+resource_uri              canonical MCP resource/audience
+tool_name
+call_digest               canonical tool + original arguments hash
+mode                      form/url
+requested_schema          approved canonical schema; null for url mode
+schema_digest             canonical JSON hash
+request_state             encrypted opaque continuation
+input_response            encrypted normalized response; null before submit
+result                    encrypted validated structured result; null before completion
+state                     awaiting_input/resuming/completed/declined/cancelled/expired/failed
+revision                  monotonically increasing integer
+expires_at
+provider                  feishu/web/other
+presentation_ref          opaque provider card/page locator
+created_at
+updated_at
+```
+
+不变量：
+
+- `platform_user_id`、tenant、resource 和 tool 来自服务端执行上下文，不从表单、URL 或
+  `requestState` 读取；
+- `agent_id` 与 `call_digest` 绑定发起调用和原始参数；恢复时不能把本轮输入附加到另一个 Agent、工具
+  或参数集合；
+- `request_state` 按敏感 continuation 加密存储，不写日志、不进入模型上下文、不放入卡片 value 或
+  URL；用户响应必须先规范化并加密落库，再快速 ACK 和异步恢复；结构化结果也按其数据分级加密或
+  脱敏保存；URL mode 只携带另一个短期一次性 opaque nonce；
+- form mode 只接受已批准的有限 schema；Host 先校验 `inputResponses`，resource server 恢复调用后
+  必须再次验证；密码、API key、access token、OAuth code 和支付凭据禁止经 form mode 收集；
+- 回调先把飞书 operator 解析为 verified Principal，再以
+  `(interaction_id, revision, state=awaiting_input)` compare-and-set 进入 `resuming`；换人、跨 tenant、
+  过期 revision、重复响应和过期会话全部拒绝；
+- 一次恢复可以再次得到 `InputRequiredResult`；此时生成下一 revision 并回到 `awaiting_input`。成功
+  结果必须按工具 `outputSchema` 校验后保存为结构化结果，再由 Provider 渲染；
+- decline、cancel 和 expire 是持久化终态。网络超时不能擅自当作 cancel，也不能自动重放可能已有
+  副作用的工具调用。
+
+InteractionSession 只证明用户对一次输入请求作出了响应，不代表敏感动作已经获批。需要副作用确认
+时，服务端从已验证的规范化输入生成下面的 Confirmation record，并通过 `interaction_id` 建立审计
+关联。
+
+### 9.2 Confirmation record
 
 ```text
 confirmation_id          opaque random
+interaction_id           optional originating interaction
 tenant_id
 platform_user_id
 tool_name
@@ -464,7 +526,7 @@ consumed_at
 确认回调必须校验点击者解析后的 `platform_user_id`，并用 compare-and-set 从 `pending` 进入
 `confirmed`。确认只授权 digest 对应的精确参数，任何参数变化都需要新确认。
 
-### Idempotency record
+### 9.3 Idempotency record
 
 键：
 

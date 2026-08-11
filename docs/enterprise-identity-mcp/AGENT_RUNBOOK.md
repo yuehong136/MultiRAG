@@ -80,6 +80,10 @@ rg -n "相关模型、迁移、测试或错误码" .
 - 业务员工号是 enterprise subject 映射，不是登录凭据；歧义时人工处理；
 - 敏感写操作必须授权 + 确认 + 幂等；参数里的 `workcode` 不可信；
 - 先平台资源授权，再 MCP 工具 scope，再业务对象授权，三层都不可省略。
+- MCP 2026 MRTR 只承载“需要补充输入/恢复调用”；不能把 `input_required`、飞书表单 `confirm`
+  或按钮点击当授权事实，恢复前仍要重验 Principal、scope、业务授权、参数 digest 和幂等键。
+- EMA 是官方 auth extension，MultiAuth 是 FastMCP 实现，Horizon 是厂商托管产品；三者不可互换。
+  Tasks/Apps 也不是飞书表单闭环的首期前置依赖。
 
 出现与这些约束冲突的新事实时，不要自行改方向。新增 ADR/任务 ID，写证据并请用户决策。
 
@@ -125,6 +129,19 @@ FastAPI 自动序列化出去，因此 tolerate PR 必须用线格测试证明�
   token 调一次 OpenAPI，也不得在 fallback 时重新执行 Agent。
 - 卡片状态只用服务端白名单；不展示 chain-of-thought、原始 tool trace、MCP 参数或底层异常。
 
+MCP Foundation 任务必须再遵守下面的隔离顺序：
+
+1. **F2 只做 fixture/characterization**：MCP 1 和 MCP 2 各在独立解释器、独立 lock、独立进程；
+   禁止在同一 Python 进程导入两代 SDK，也不得改 MultiRAG 根 `pyproject.toml`/`uv.lock`。
+2. F2 的两个方向都要跑：当前 MultiRAG legacy client -> `of_mcp`/官方 MCP 2 双时代 server；
+   官方 MCP 2 `Client` -> 当前 MultiRAG FastMCP 3 legacy server。每格必须观测并断言实际
+   `server/discover` 或 legacy `initialize` 分支，不能仅以 tools/call 成功判定。
+3. **F6 决策、F7 实施、F3/F8 分方向迁移**：F6 先证明 FastMCP 3 `mcp<2` 与新 client 的
+   `mcp>=2` 冲突并选择可部署边界；F7 让根/server 分别可锁定、冷安装和回滚；F3 最后才改
+   outbound 生产 Client，F8 单独改 inbound Server。
+4. 默认边界是把 `mcp/server` 放入独立 project/venv/lock。同步升级整个 MultiRAG 到 FastMCP 4
+   beta 会改变生产 prerelease/公共 API，必须先取得用户明确批准。
+
 ### 4.5 密钥和外部配置
 
 开发前按 [FEISHU_ONBOARDING](FEISHU_ONBOARDING.md) 取得测试应用配置。Agent 只能说明或消费用户
@@ -141,6 +158,8 @@ FastAPI 自动序列化出去，因此 tolerate PR 必须用线格测试证明�
 | MCP access token | MultiRAG signer | `of_mcp` verifier | verifier/JWKS 能力先 → signer emit → 强制 auth → 移除旧 auth |
 | 新 scope/tool metadata | `of_mcp` policy | MultiRAG Agent/MCP config | resource 端先兼容 → 调用端请求；未知 scope fail closed |
 | confirmation contract | `of_mcp` challenge | MultiRAG card/channel | resource 端先返回可识别 challenge → UI 接线 → 强制确认 |
+| MCP 双向兼容 fixture | 两仓各自锁定的 server/client 子进程 | 对侧 compatibility test | 先固定当前行为 → F6/F7 解依赖边界 → F3/F4/F8 后逐格复跑；不得用本机 sibling import 代替可复现安装 |
+| MRTR interaction | `of_mcp` `input_required`/legacy adapter | MultiRAG U14 state machine，再到 U15 renderer | 先固定 transport-neutral request/response 与恢复语义 → 飞书表单渲染 → 敏感动作最后强制 U7/M3/M4 |
 
 跨仓任务必须在两边都留下同一个 `EIM-*` ID；完成日志列出两个 SHA。不能只改一侧后把另一侧
 写成“后续处理”。如果本次任务只负责 tolerate 半步，要明确写成安全中间态，并保留旧行为。
@@ -176,7 +195,25 @@ make smoke
 以该仓实时规则为准。最低证据必须包含 formatter/lint、typecheck、unit、auth negative tests、
 integration；FastMCP/MCP 升级任务还要跑协议版本、legacy client 和 sessionless/stateless 组合测试。
 
-### 6.3 手工/线上验证
+### 6.3 F2/F4/F7/F8 跨仓矩阵
+
+跨仓版本任务不能只在某一 checkout 绿。至少保留以下可复现证据：
+
+| server 子进程 | client 子进程 | 必测 |
+|---|---|---|
+| of_mcp 当前 lock（MCP 2/FastMCP 4） | MultiRAG 当前 root lock（MCP 1/FastMCP 3） | legacy client 对双时代 server 的协商、list/call、401/403、tool error、取消/超时 |
+| MultiRAG 当前 server lock（MCP 1/FastMCP 3） | 独立官方 `mcp==2.*` fixture lock | v2 Client 探测后回退 legacy、相同正反路径、进程和队列无残留 |
+
+- server 以随机本机端口启动，输出结构化 ready/protocol 证据；测试负责终止并检查退出，不遗留进程。
+- 两个 fixture 必须能从各自 lock 在干净 cache/临时环境冷安装；不能依赖父进程 `sys.path`、绝对
+  sibling checkout 或同时包含 MCP 1/2 的解释器。
+- F4 升级后重跑第一行；F7 重跑两行并额外验证 root/server 的启动、健康和 rollback；F3 再用新
+  outbound Client 重跑两行，F8 再以新 inbound Server 重跑第二行及 legacy 回退。完成日志同时
+  记录 MultiRAG SHA、of_mcp SHA、lock 摘要和每格协商分支。
+- 两仓分别执行各自 `AGENTS.md` 的完整 verify；matrix 通过不能替代任一仓本地门禁，skip 也不能
+  记作通过。
+
+### 6.4 手工/线上验证
 
 只有自动化覆盖不到长连接、管理后台授权或真实卡片时才做。记录：测试企业、脱敏 binding、时间、
 预期、实际、日志查询、回滚点。不得用生产患者数据。重启/换钥/发布飞书应用属于外部状态变更，
@@ -217,6 +254,10 @@ feat(auth): verify delegated MCP access tokens (EIM-A2)
 - 需要从 JIT 改为全量组织镜像，或要把身份服务拆成独立项目；
 - 必须变更一个企业对应一个 tenant 的默认模型；
 - 上游最新版是 prerelease，且升级会改变生产协议或公共 API；
+- resolver 需要未批准的 prerelease/major，或不能同时满足 FastMCP 3 `mcp<2` 与 MCP SDK 2；
+- 依赖方案只有本机 editable/sibling path、已有 cache 或未提交 lock 能工作，干净环境不能复现；
+- F2/F7/F8 无法证明实际协商分支、超时取消后仍有悬挂调用/阻塞队列，或不能安全终止 fixture 进程；
+- 官方发布说明、extension 仓和 SDK 对 Tasks/Apps/EMA 的成熟度不一致，而任务又要把它当生产硬依赖；
 - 发现依赖任务未完成、现有实现与 ADR 冲突、无法构造安全兼容半态；
 - 需要复制第三方代码但许可证或归属不清楚。
 

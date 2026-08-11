@@ -22,7 +22,7 @@
 - 飞书 `app_secret`、OAuth refresh token、MCP 签名私钥和企业 IdP 凭据；
 - 员工号、邮箱、手机号、组织关系等个人信息；
 - `of_mcp` 中诊疗、患者、处方等业务数据和有副作用的工具；
-- 审计日志的完整性、幂等记录和确认记录。
+- 审计日志的完整性、InteractionSession、opaque `requestState`、幂等记录和确认记录。
 
 ### 2.2 攻击者与失效来源
 
@@ -46,6 +46,11 @@
 - `enterprise_subject_id` 与 `platform_user_id` 分离，员工号不能成为公开认证凭据；
 - MCP access token 必须校验 `iss`、`aud/resource`、`exp`、`nbf`、`jti`、算法和签名；
 - MultiRAG 不把飞书 access token、用户 OAuth token或收到的外部 bearer token透传给 `of_mcp`；
+- MultiRAG 出站 MCP Client 与入站 MCP Resource Server 使用不同 resource/audience；任一方向的
+  bearer、session 或 continuation 不得在另一方向复用；
+- `requestState`、form value、H5 nonce 和卡片 action 不能决定 Principal、tenant、scope 或确认状态；
+- InteractionSession 的响应必须绑定 verified operator、tenant、resource、tool、revision 和 expiry，
+  并以 compare-and-set 只消费一次；
 - `of_mcp` 不采信参数中的 `workcode`/`talent_id` 作为调用者身份；
 - 高风险工具必须同时满足授权、用户确认、短时有效和幂等；
 - 日志不得记录 secret、完整 bearer token、OAuth code、手机号或患者敏感正文。
@@ -65,6 +70,9 @@
 | Principal | 未验证 subject 不提升；验证后携带 tenant/membership | execution 路由契约测试 |
 | MCP token | claims、TTL、JWKS、轮换、scope 交集 | 纯密码学 + HTTP 契约测试 |
 | MCP client | resource/audience、失败映射、无静态用户 header | mock transport/官方 SDK 测试 |
+| MCP resource server | modern/legacy 协议、独立 audience、scope、无 bearer 透传 | ASGI/官方 Client 契约测试 |
+| InteractionSession | MRTR 多轮、revision/CAS、decline/cancel/expire、重启恢复 | service 单测 + 真库集成 |
+| Structured result | `structuredContent`/`outputSchema` 一致性和安全事件转换 | schema/golden tests |
 
 最少必须覆盖这些命名场景：
 
@@ -91,6 +99,9 @@
 - `SELECT ... FOR UPDATE` 或唯一约束重试能收敛首次绑定竞态；
 - event receipt 的 `(provider_account_id, event_id)` 幂等；
 - `jti`/confirmation/idempotency key 在并发提交下只消费一次；
+- `(interaction_id, revision)` 在两个并发 callback 下只有一个进入 `resuming`，重启后仍可恢复或明确过期；
+- opaque `requestState`、规范化用户响应和敏感结构化结果按数据分级加密保存；跨 tenant、跨 Principal、
+  跨 agent/tool/call digest、跨 resource 搬运全部拒绝；
 - 删除/停用不是只清缓存，数据库状态也能阻断下一次请求。
 
 改 DB 后除了 `make verify`，还必须按 AGENTS.md 运行 `make integration`。服务不可用导致 skip
@@ -106,6 +117,9 @@
 - scope policy：token scope 与工具声明 scope 取交集，缺一项即在调用工具前拒绝；
 - business subject：只能从已验证 claim 读取 `enterprise_subject_id`，请求参数的 `workcode` 被忽略；
 - sensitive tool：确认挑战、过期、不同用户/不同参数重放、双击和并发只执行一次；
+- MRTR：合法 `inputResponses + requestState` 可恢复，篡改/过期/错误 schema/revision 明确失败；再次
+  返回 `InputRequiredResult` 时不丢失 actor/resource 绑定；
+- structured result：输出不符合 `outputSchema` 时返回稳定 tool error，不把未经验证的 JSON 交给 UI；
 - audit：成功、拒绝、确认、业务异常都生成同一 correlation chain，且无 token/患者正文。
 
 ### 3.4 跨仓端到端测试
@@ -131,6 +145,11 @@
 | E2E-14 | 同会话快速连续追问 | 每条来源消息 queued -> running -> final；容量溢出明确 busy，不静默 drop |
 | E2E-15 | 普通群/话题群 follow-up | mention/allowlist 生效；thread session 不串群、不串人、不串 tenant |
 | E2E-16 | 图片/文件/保密或超限资源 | 合法附件受控下载；不匹配、保密、超限和不支持类型明确拒绝，无临时 URL 泄漏 |
+| E2E-17 | 只读 MCP 返回一次或多次 `InputRequiredResult` | 飞书表单逐 revision 恢复；最终结果按 `outputSchema` 渲染；不重跑已完成轮次 |
+| E2E-18 | 同一 form callback 双击/重放/换人点击 | 只有 verified operator 的当前 revision 被消费一次，其余明确拒绝 |
+| E2E-19 | H5 URL mode | URL 只含短期一次性 nonce；免登同人校验；`requestState`/token 不出现在 URL、卡片或日志 |
+| E2E-20 | MultiRAG 双 MCP 角色 audience 混用 | 发给 of_mcp 的 token 不能调用 MultiRAG MCP Server，反向同样拒绝 |
+| E2E-21 | Host 或 Resource Server 版本回滚 | 现代/legacy 兼容矩阵内可回滚，不要求两个 MCP 方向同时升级或同时回滚 |
 
 ## 4. 安全专项测试
 
@@ -146,6 +165,8 @@
 
 - A 用户 token 调 B 用户确认记录；A Agent token 调 B Agent 资源；
 - 为 MultiRAG API 签发的 token 拿去调用 `of_mcp`；audience/resource 不同必须拒绝；
+- 为 `of_mcp` 签发的 token 拿去调用 MultiRAG RAG MCP Resource Server，或反向搬运其 token；两个
+  入站 resource 都必须按自己的 canonical audience 拒绝；
 - 把飞书 tenant access token 放进 MCP Authorization；issuer/格式不符必须拒绝；
 - JWT header 注入 `jku`/`x5u` 或外部 JWKS URL；服务端只能使用静态配置的 issuer/JWKS；
 - `kid` 路径注入、超大 JWT、重复 claim、时钟边界；限制大小并使用成熟库解析；
@@ -157,6 +178,11 @@
 - 长连接重复投递、进程重连、两个连接同时收到同一事件；dedupe 必须覆盖；
 - prompt 声称“我的工号是…”、“切换到管理员”；身份上下文不可由模型文本覆盖；
 - 卡片字段夹带 `principal_id`、scope、任意 URL；服务端按 allowlist 读取字段；
+- 篡改 `interaction_id`、revision、H5 nonce 或 form component name，把 A 用户响应搬到 B 用户、
+  tenant 或 resource；Interaction Store 必须在恢复工具前拒绝；
+- 在 form value 中提交超深 JSON、超长文本、schema 外字段、伪造 enum、无效日期和凭据字段；Host
+  必须限制大小、按批准 schema 校验，并拒绝密码/token/API key 的 form-mode 收集；
+- `requestState` 被放入卡片 value、H5 URL、模型 prompt 或日志；测试必须扫描并阻断这些泄漏面；
 - 群聊/话题串会话键碰撞；键中必须包含 provider、tenant/account、conversation/thread。
 - Markdown 伪造 `@all`、`javascript:`/隐藏跳转链接、未闭合代码块或超大卡片；renderer 必须转义、
   限制和安全降级；模型文本不能产生真实 mention。
@@ -171,19 +197,22 @@
 - 第一次执行超时后再次确认；业务幂等键必须能区分“未执行”和“结果未知”；
 - 用户确认后管理员撤权、患者状态改变；执行前重新做授权和业务前置检查；
 - Agent 把读工具伪装成写工具或反之；风险级别由服务端注册表定义，不由模型声明。
+- 把 `InputRequiredResult`、form submit 或 H5 完成伪装成最终确认；没有独立 Confirmation record、
+  当前授权和幂等键时，Resource Server 必须拒绝执行副作用。
 
 ## 5. 可观测与审计契约
 
-每条用户消息生成 `trace_id`；渠道事件同时保留 provider `event_id`，MCP 调用生成 `mcp_call_id`。
+每条用户消息生成 `trace_id`；渠道事件同时保留 provider `event_id`，MCP 调用生成 `mcp_call_id`，
+多轮输入另生成 `interaction_id`。
 审计记录建议字段：
 
 ```text
-occurred_at, trace_id, event_id, mcp_call_id
+occurred_at, trace_id, event_id, mcp_call_id, interaction_id
 provider, provider_account_id_hash, tenant_id
 platform_user_id, enterprise_subject_id
 agent_id, tool_name, decision, reason_code
 token_issuer, token_audience, token_jti_hash, scopes
-confirmation_id, idempotency_key_hash, latency_ms, result
+interaction_revision, confirmation_id, idempotency_key_hash, latency_ms, result
 ```
 
 必须 hash 或省略：`open_id`、`user_id`、`employee_no`、邮箱、手机号。绝不记录：secret、token
@@ -195,6 +224,7 @@ confirmation_id, idempotency_key_hash, latency_ms, result
 - JIT 创建、人工待审批、停用命中、缓存命中与 stale 使用量；
 - contact event lag、对账扫描滞后、漏事件修复数；
 - MCP auth 拒绝原因、工具授权拒绝、确认过期、幂等命中；
+- InteractionSession 创建/恢复/拒绝/过期、form/H5 mode、revision 冲突和 output schema 失败；
 - 每 binding 收/丢/重复消息数和端到端时延；
 - `first_ack_ms/first_card_ms/first_delta_ms` 的 p50/p95/p99；
 - reply queue wait/depth/overflow、CardKit create/patch/final flush、节流和按类型 fallback；
@@ -205,7 +235,7 @@ confirmation_id, idempotency_key_hash, latency_ms, result
 详细计时边界见 [FEISHU_BOT_UX §13](FEISHU_BOT_UX.md#13-指标和-slo)。
 
 告警不得只报“500”。至少按 `IDENTITY_*`、`MCP_TOKEN_*`、`MCP_SCOPE_DENIED`、
-`CONFIRMATION_*`、`DIRECTORY_UNAVAILABLE` 分组。
+`MCP_INTERACTION_*`、`CONFIRMATION_*`、`DIRECTORY_UNAVAILABLE` 分组。
 
 ## 6. 上线和回滚演练
 
@@ -227,6 +257,10 @@ confirmation_id, idempotency_key_hash, latency_ms, result
 4. Contact 事件停收：对账任务在目标窗口发现并修复停用用户。
 5. 回滚 API 与 supervisor：严格遵循 [ROADMAP](ROADMAP.md) 的兼容半步，不跨越 remove 闸门。
 6. Redis、PostgreSQL、飞书 OpenAPI、JWKS、`of_mcp` 分别故障；确认各边界都 fail closed 或按文档降级。
+7. MCP 出站 Client 与入站 Resource Server 分别回滚一个版本；一侧回滚不得要求另一侧同时回滚，
+   legacy compatibility 退出前必须有调用方清单和零流量证据。
+8. Interaction worker 在 `awaiting_input`、CAS 后 `resuming` 和收到 structured result 三个位置重启；
+   分别证明可恢复、不会双消费，结果未知时不自动重放副作用。
 
 ### 6.3 事故处置优先级
 

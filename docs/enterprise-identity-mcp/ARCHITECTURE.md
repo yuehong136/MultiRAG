@@ -99,6 +99,30 @@ MCP tool call 传递。模型看不到或修改不了 Principal。
 逻辑上是 Authorization Server：根据已认证 Principal、目标 MCP resource、Agent 允许的工具和
 租户策略签发短 token。首期与 MultiRAG 同部署，但包和配置独立。
 
+#### MCP Host/Client
+
+Agent Runtime 是出站 MCP Host，按每次工具请求携带当前 Principal，通过 credential provider 获取
+目标 resource 的短期 token，再由标准 MCP Client 调用 `of_mcp`。Client 不缓存某位用户的 bearer，
+不把身份写进静态 server headers，也不依赖连接状态恢复用户上下文。
+
+当工具返回多轮输入请求时，Host 拥有 InteractionSession、用户呈现、响应校验和恢复调用；MCP
+service 不直接依赖飞书。详细状态与字段见 [CONTRACTS §9](CONTRACTS.md#9-interactionconfirmation-与幂等契约)。
+
+#### MultiRAG RAG MCP Resource Server
+
+MultiRAG 还通过独立的入站 MCP Resource Server 向外部 Client 暴露数据集和检索能力。这是与上面的
+出站 Host/Client 不同的安全和发布面：
+
+```mermaid
+flowchart LR
+    EC["External MCP Client"] -->|"resource-bound credential"| RS["MultiRAG RAG MCP Resource Server"]
+    RS -->|"verified Principal / workload identity"| API["MultiRAG API and retrieval services"]
+```
+
+入站 Server 有自己的 canonical resource、audience、scope policy、兼容端点和回滚计划。它不能
+复用发给 `of_mcp` 的 token，也不能把收到的 bearer 不加区分地透传到 MultiRAG 后端。当前实现事实
+和尚未实现项只在 [`mcp/README.md`](../../mcp/README.md) 维护；本文件只定义目标边界。
+
 ### of_mcp
 
 #### Gateway resource server
@@ -239,6 +263,38 @@ tenant policy ∩ agent/tool policy ∩ user/platform eligibility ∩ service de
 
 业务系统仍可拒绝。of_mcp 返回：缺身份/无效 token 为 401，scope 不足为 403/标准 scope
 challenge，业务拒绝是可审计的 tool error，不泄露内部策略细节。
+
+### MCP 多轮交互与结构化结果
+
+MCP 2026 Multi-Round-Trip Request 的通用承载流程是：
+
+```mermaid
+sequenceDiagram
+    participant A as Agent / MCP Host
+    participant S as MCP Resource Server
+    participant I as Interaction Store
+    participant F as Feishu Card or H5
+
+    A->>S: tools/call + Principal-bound credential
+    S-->>A: InputRequiredResult + opaque requestState
+    A->>I: persist interaction, actor, resource, tool, revision, expiry
+    A->>F: render approved form schema or URL handoff
+    F-->>A: verified user response / decline / cancel
+    A->>I: compare-and-set claim + schema validation
+    A->>S: tools/call + inputResponses + requestState
+    S-->>A: structuredContent / outputSchema result or next input request
+    A->>F: render next interaction or terminal result
+```
+
+关键边界：
+
+- InteractionSession 与 ReplySession 分离；前者可跨请求恢复输入，后者只交付单次回答；
+- `requestState` 仅作为不透明 continuation 保存和原样回传，不能生成 Principal、tenant 或 scope；
+- 表单字段由已批准的 MCP schema 映射，用户响应仍由 resource server 再验证；
+- `structuredContent` 在客户端按 `outputSchema` 校验后进入类型化执行事件，不能只转成模型文本再猜测；
+- decline、cancel、过期和 schema/revision 不匹配都是显式终态，不自动改写为普通模型追问；
+- 需要密码、API key、access token、OAuth 或复杂动态 UI 时只返回受控 URL，由 H5/授权页重新认证；
+- 写操作即使通过 MRTR 收集完参数，也必须继续走下一节的持久化确认、重授权和幂等执行。
 
 ---
 
