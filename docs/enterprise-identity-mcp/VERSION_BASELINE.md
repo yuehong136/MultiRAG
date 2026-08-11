@@ -217,7 +217,7 @@ SEP 为准，不能因此退回旧 session 设计。
 
 ### FastMCP 4 beta
 
-- 完整执行 `/Users/xldu/project/of/of_mcp/AGENTS.md` 中的实测修正回归；
+- 完整执行 `of_mcp` 仓自己的 `AGENTS.md` 中的实测修正回归；
 - mount/proxy 契约逐字节等价；
 - `provider_error_strategy`、FileSystemProvider、依赖注入和 auth middleware 行为复测；
 - `uv run ofmcp verify` 全绿；

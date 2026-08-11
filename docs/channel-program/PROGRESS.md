@@ -650,14 +650,22 @@ git log --oneline 8cbaf3a.. -- src/pages/settings/channels src/api/channel.ts sr
 
 ## `tests/unit` 先天失败基线
 
-2026-08-05 在 `main @ 75f125d5` 实测：**6 failed / 1486 passed / 761.94s**。
+> ⚠️ **基线是机器条件化的，先自测再比对，不要照抄下面的名单。**
+> 本仓同时被 Windows 与 macOS 开发机使用，两边跑出来的失败集合**不一样**：
+> 下面这 6 条是 **Windows 宿主机专有**的（根因是 bash 子进程），在能正常跑 `bash` 的
+> 环境（macOS / Linux / CI）里应当是 **0 条**。
+> **开工第一步是在未改动的树上跑一次 `tests/unit`，把你这台机器的失败集合记下来**，
+> 收工时和它比。拿另一台机器的名单当自己的基线，会同时制造两种错误：
+> 把别人的环境失败当成自己改坏了，以及把自己真造成的回归当成"名单里本来就有的"。
+
+2026-08-05 在 `main @ 75f125d5`（Windows）实测：**6 failed / 1486 passed / 761.94s**。
 2026-08-06 在 CHN-O6 完工树上复测：**6 failed / 1599 passed / 179.88s**，
 **失败集合与下面这份名单逐条相同**。两个数字都变了而结论没变，正好说明为什么比对的是集合：
 通过数会随新增测试涨（这一天 +113 条），而耗时受机器状态支配（同一台机器同一套测试
 快了 4 倍；本次复测时 `milvus-standalone` 容器恰好是停的，但没有任何测试因此改变结果）。
 
 **比对的是失败集合，不是通过数。** 下面这 6 条与 channel 无关，全是 Windows 上通过 bash
-子进程渲染配置模板导致的环境性失败。改动后出现**不在这个名单里**的失败才是回归：
+子进程渲染配置模板导致的环境性失败。**在 Windows 上**改动后出现不在这个名单里的失败才是回归：
 
 ```
 tests/unit/test_docker_config_template.py::test_default_docker_template_renders_valid_app_config
@@ -668,9 +676,10 @@ tests/unit/test_service_conf_template_render.py::test_env_values_reach_the_rende
 tests/unit/test_service_conf_template_render.py::test_values_are_not_re_interpreted
 ```
 
-前两条报 `subprocess.CalledProcessError`（`bash D:\project\MultiRAG\docker\...`），
+前两条报 `subprocess.CalledProcessError`（`bash <仓根>\docker\...`），
 后四条报 `TypeError: 'NoneType' object is not subscriptable`（同一渲染函数返回 None）。
-全量跑一次要 **12 分 41 秒**，所以日常用 channel 快速回路，提交前才跑全量。
+全量耗时在 Windows 上实测跨度很大（2026-08-05 的 12 分 41 秒 ~ 2026-08-11 的 1 分 48 秒，
+同机同套测试），所以日常用 channel 快速回路，提交前才跑全量——**别把耗时当判据**。
 
 **2026-08-05 追加（CHN-O1 时发现）**：全量跑偶发第 7 条
 `test_channel_provider_spec.py::test_importing_specs_stays_pure`，rc `3221225794`
@@ -685,8 +694,17 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 `test_importing_specs_stays_pure` 那道 skip 守卫，所以直接报 `assert 3221225794 == 0`。
 当天 `-k "channel or feishu"`（415 条、194s）里两条都挂，**单独重跑两条 2 passed in 5.36s**，
 同一棵树的全量 `tests/unit` 里也都是 passed——判据仍是「rc 是 3221225794 就是没起来子进程」。
-遇到时按小切片复跑确认，别当回归。要不要把那道 skip 守卫抽成共用 helper 贴到这两条上，
-留给下一个碰到的人决定：**它们各挂各的，不影响失败集合的判读方式**。
+
+**同日再一次实测，把"名单"这个说法彻底证伪**：同一棵树（只多了 docs 改动，零 `.py`）在机器
+更忙时跑出 **8 failed / 1779 passed / 2 skipped**——比上面那份名单多了这两条 purity 测试，
+且 `test_service_conf_template_render.py` 那 4 条的报错从 `TypeError: 'NoneType' ...` 变成了
+直接的 `AssertionError: 渲染失败 rc=3221225794`（同一根因的不同暴露点）。此时**小切片也会红**
+（6 failed in 3.45s），必须**单条**跑才绿（`1 passed in 4.16s`）；同时裸
+`subprocess.run([sys.executable, "-c", "print(1)"])` 返回 rc=0，说明不是"完全起不来子进程"，
+而是**并发跑测试时才触发**。所以：**失败集合随机器负载浮动，判据是根因不是名单**——
+看到 rc 3221225794 或它的下游断言，就单条复跑确认，别当回归。要不要把
+`test_importing_specs_stays_pure` 那道 skip 守卫抽成共用 helper 贴到这两条 purity 测试上，
+留给下一个碰到的人决定。
 
 **2026-08-11 全量基线复测**（CHN-U16 完工树）：`tests/unit` **6 failed / 1783 passed**，
 失败集合与上面名单**逐条相同**——判据是：单独跑这 6 条得 `6 failed in 2.36s`（确定性复现），
@@ -789,3 +807,4 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 | 2026-08-10 | **定案 CHN-ADR-08，登记并挂起 CHN-X14 / EIM-F5。** 明确持续跟进 RAGFlow Canvas/Agent/Channel 是长期主线，Channel 只在 MultiRAG 目标适配层吸收 terminal publish、CAS、run/history 分离、幂等和副作用门禁。Canvas 后续不预设 detached：上游继续自持久化则保留 candidate，出现 no-store 才评估 detached，出现原生 checkpoint 则优先适配上游；审计待 Channel 稳定且用户恢复从约 4 月 24 日基线逐 commit 跟进时随同步启动，CHN-O14 继续挂起。**验证**：ADR/执行架构/两份账本 ID 双向 grep、相对链接检查、`make verify` | 本次文档变更 | Codex |
 | 2026-08-10 | **纠正近期优先级并登记 CHN-U16。** U15 数据库迁移、API/supervisor 重启与 healthz 已确认，先补 Dialog/Canvas 现场 smoke；随后收口正常优雅停机：queued/running 卡进入明确终态、queued 项不再启动执行，并用 worker → Bridge → ReplySession 跨层测试固定。kill -9、进程崩溃与跨实例恢复明确留在挂起的 CHN-O14；U16 后紧接 CHN-O9，不新增 O15 | 本次文档变更 | Codex |
 | 2026-08-11 | **CHN-U16 完成：正常优雅停机把已创建的卡收口为明确终态。** `ChannelWorker.close` 删掉 `drain` 参数——正常与错误停机从此逐字同路；顺序改为「拒收 + 清空队列（无 await 间隔）→ 停传输 → Bridge 终态化 → 取消 consumer → 释放租约」，清空队列排在 `channel.stop()` 之前是因为真实 `FeishuChannel.stop()` 会让出事件循环，那一让就够 consumer 取走一条 queued ticket 并真的发起执行。`BindingBridge` 新增 `_live_records` registry 与 `_closing`：queued 卡零 executor 调用直接终态化，running 卡先 `cancel()` 再无 await 地写终态（`finalizing` 兜住 stop 回调与停机的重入），**已越过 terminal barrier 的 run 不取消而是等它交付完**——目标已提交时报「已停止」是撒谎。`_consume_execution` 改用 `contextlib.aclosing`，私有 SSE 响应在停机当场释放而不是等事件循环回收 generator；`stream` 的返回标注随之改为 `AsyncGenerator`。预算 2s + 5s < supervisor 的 10s。**验证（差分实测，不是「跑了测试」）**：新增 `tests/unit/test_channel_graceful_shutdown.py` 6 条跨层用例（真 worker 队列 → 真 Bridge → 真 `MultiRAGBindingExecutionClient` 走 `httpx.MockTransport` 的可控 SSE → 真 `FeishuProgressiveReplySession` + 记录型 CardKit transport），把三个源文件 `git checkout` 回 `b50ccb21` 后复跑，**4 条按 U16 的四项承诺逐条红**（日志同时出现 `QUEUE_DRAIN_TIMEOUT`）：① `..._gives_a_queued_reply_a_terminal_card_and_never_starts_it` → `assert False is True`（`_Card.finished`）；② `..._closes_the_running_execution_stream_and_finishes_its_card` → 同上；③ `test_close_is_idempotent_...` → `assert [(0, '✨ 正在生成', ''), (0, '⏳ 已排队 · 前面还有 1 条', '')] == [(1, '⏹️ 已停止生成 …')]`，直接印出改动前用户看到的两张悬空卡；④ worker 层 `test_normal_stop_drops_queued_tickets_instead_of_starting_them` → `assert ['message-in-flight', 'message-never-started'] == ['message-in-flight']`，坐实旧 drain 真的会在停机窗口里启动 queued 项。恢复实现后这 4 条与其余全绿，并断言 `api.executed_event_ids == ["message-running"]`（queued 项零执行）、`_GatedSSEStream.closed is True` 且 `release.is_set() is False`（流被主动关闭而非跑完）、终态卡 `finish_calls == 1` 且状态文案恰好出现一次、二次/三次 `close()` 不产生任何新卡片调用、`_live_channel_tasks() == []`。另有 2 条是**既有行为的钉板**（改动前后都绿，按 `api/channels/README.md` 近期收口顺序第 2 条要求补的）：queued 卡手动 cancel 不启动执行、queue full 确实向用户交付 busy 文案。worker 用例 `test_a_transport_stop_that_yields_cannot_let_a_queued_ticket_slip_through` 钉的是**顺序本身**：它的假传输在 `stop()` 里 `await`（真 `FeishuChannel.stop()` 走 `asyncio.to_thread`，必然让出事件循环），把清空队列挪到 `channel.stop()` 之后就会红成 `['message-in-flight', 'message-never-started']`——实测确认过。普通不让出的假传输**测不出**这个洞，所以这条不能省。**门禁**：`ruff format --check`（1195 files）/ `ruff check` / `lint-imports` 6 contracts / `check_async_sync_db`（新增 0）/ `mypy` 63 files 全绿（当时本机 uv 0.11.32 撞 `required-version` 闸门，全程走 `.venv\Scripts\` 兜底；用户升到 uv 0.12.2 后这套静态门禁与 U16 定向测试已用 `uv run --no-sync` 原样复跑一遍，结果相同）；`tests/unit` **6 failed / 1783 passed**，失败集合与先天基线逐条相同（那 6 条单独跑仍 6 failed in 2.36s，全量也恰好 6 条，故两个集合相等）；collected 1789 = 改前 1781 + 新增 8。**未跑 integration**：本条零 DB/存储/检索改动，不触发 AGENTS.md 的 Tier 3；顺带实测发现**本机 `tests/integration` 目前整体跑不了**——20 条全部死在 `psycopg.InterfaceError: Psycopg cannot use the 'ProactorEventLoop' to run in async mode`（Windows 默认 Proactor，async psycopg 要 Selector），连 `test_async_engine_select_one` 都红，与 Channel 无关且早于本次改动。**边界**：Windows 上 supervisor 的 `terminate()` 是 `TerminateProcess`，本条代码不会执行（已登记 CHN-Q3）；kill -9、跨实例与 COMMIT 结果未知仍属挂起的 CHN-O14。**未做**：Dialog/Canvas 现场 smoke 仍欠着，U16 不替代它 | 本次提交：`fix(channel): finalize replies on graceful stop (CHN-U16)` | Claude |
+| 2026-08-11 | **文档基建（无 CHN ID，未动 `api/channel*` 代码）：让仓库不再假装只有一台机器。** 起因是复盘 U16 的派发提示词——它之所以必须写那么长，不是缺一份「怎么写提示词」的指南，而是仓库把**机器条件化的事实写成了断言**。查证后发现三件事：① 零上下文派发协议已被独立发明两次（`channel-program/README §3.5` 与 `enterprise-identity-mcp/AGENT_RUNBOOK`），再加第三份就是漂移源；② 文档里硬编码了 4 处 macOS 绝对路径（`/Users/xldu/...`），在 Windows 上直接是错的；③ 本节「先天失败基线」写成了单机断言，另一台机器照抄会同时制造两类误判。据此：把**跨程序四条不变量**（说 ID 不说需求 / 提示词只补机器状态·围栏·未入库事实 / 验证基线必须自测 / **AI agent 持久记忆按项目路径分区，不跨机器也不入库**）收进 `AGENTS.md` 新增的「零上下文交接」，并附文档三层分工表（规则=AGENTS.md / 程序=docs/<program>/ / 模块=<package>/README.md）；两份程序手册各加一行指针，声明不重复那四条；4 处绝对路径改为按仓名指代；本节改为「先自测建立本机基线，Windows 那 6 条在能跑 bash 的环境应为 0 条」，并停止把耗时当判据（同机实测跨度 12m41s ~ 1m48s）。**验证**：`grep -rn "/Users/\|D:\\project\|C:\\Users" docs/ AGENTS.md CLAUDE.md api/channels/README.md` 返回**无**；5 条新增相对链接逐条 resolve 通过；锚点 `#零上下文交接` 与 `#35-怎么把一条任务派给没有任何上下文的我` 按 GitHub 规则核对；零 `.py` 改动，`ruff format --check`（1195）/ `ruff check` / 6 import contracts / async-db gate / `mypy` 63 files 全绿。`tests/unit` 本次得 **8 failed / 1779 passed / 2 skipped**，比 U16 完工时的 6 failed / 1783 passed 多了两条 purity 测试——**逐条查证为 Windows 子进程 rc 3221225794，不是回归**：单条重跑 `1 passed in 4.16s`、裸 `subprocess.run` rc=0（不是完全起不来）、且本次零 `.py` 改动使代码回归在构造上不可能。这次浮动本身成了新一节措辞的现场证据，已一并写进「先天失败基线」 | 本次文档变更 | Claude |

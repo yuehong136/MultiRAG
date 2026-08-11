@@ -2,6 +2,9 @@
 
 > 目标：一个没有任何历史对话的 Agent，只凭本目录就能安全接手一个独立任务。
 > 本文规定工作方式；技术事实以 [CONTRACTS](CONTRACTS.md)、[DECISIONS](DECISIONS.md) 和任务行本身为准。
+> 跨程序共通的四条不变量（说 ID 不说需求 / 提示词只补哪三样 / 验证基线要自测 /
+> agent 记忆不跨机器）在 [`AGENTS.md` 的「零上下文交接」](../../AGENTS.md#零上下文交接)；
+> 本文是 EIM 特有的加码（跨两个仓、外部管理后台操作要批准），不重复那四条。
 
 ## 1. 接单格式
 
@@ -49,8 +52,8 @@ rg -n "目标符号或旧契约名" api common tests docs
 
 - 工作树里的既有改动属于用户；不覆盖、不 reset、不混入本任务。
 - ROADMAP 和 REFERENCES 里的路径是时点快照。先用 `rg` 找当前符号，再更新任务锚点。
-- 在 `/Users/xldu/project/of/of_mcp` 工作时，重新读取那里实际存在的 `AGENTS.md`；MultiRAG 规则
-  不能代替另一个仓库的规则。
+- 在 `of_mcp` 仓工作时（另一个独立 checkout，路径随机器而变），重新读取**那里实际存在的**
+  `AGENTS.md`；MultiRAG 规则不能代替另一个仓库的规则。
 - 核对 ROADMAP 依赖均为 `✅`。依赖未满足时不要跳过半步，记录阻塞并停止。
 
 ### 2.3 确认任务尚未完成

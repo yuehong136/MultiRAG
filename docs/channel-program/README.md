@@ -168,6 +168,10 @@ Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass',
 
 ## 3.5 怎么把一条任务派给「没有任何上下文的我」
 
+> 跨程序共通的四条不变量（说 ID 不说需求 / 提示词只补哪三样 / 验证基线要自测 /
+> agent 记忆不跨机器）已收在 [`AGENTS.md` 的「零上下文交接」](../../AGENTS.md#零上下文交接)。
+> 本节只讲 CHN 特有的部分，别在这里重复那四条。
+
 一句话版本：**说 ID，别说需求。**
 
 ```

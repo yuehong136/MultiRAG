@@ -2,7 +2,9 @@
 
 > 项目代号：**EIM**（Enterprise Identity & MCP Authorization）
 > 建立日期：2026-08-07
-> 适用仓库：`/Users/xldu/project/multirag`、`/Users/xldu/project/of/of_mcp`
+> 适用仓库：**MultiRAG**（本仓）与 **`of_mcp`**（另一个独立 checkout）。
+> 两者的本地路径随机器而变（本仓同时被 Windows 与 macOS 开发机使用），本目录一律按仓名指代；
+> 需要绝对路径时以你当前机器上的实际 checkout 为准。
 > 外部事实核验日期：2026-08-09（版本与上游提交见 [VERSION_BASELINE](VERSION_BASELINE.md)）
 
 本目录是后续实现“企业级飞书身份接入、MultiRAG 平台用户、MCP 身份委托、of_mcp
@@ -25,7 +27,7 @@
 4. 按任务的“开工前必读”和“验收证据”执行。
 5. 改 MultiRAG 的 Channel 子系统时，同一提交还必须带任务表指定的 `CHN-*` ID，并更新
    Channel 进度账本。
-6. 改 of_mcp 时先完整读取 `/Users/xldu/project/of/of_mcp/AGENTS.md`，最终必须执行
+6. 改 of_mcp 时先完整读取**那个仓自己的** `AGENTS.md`（在它的 checkout 根目录），最终必须执行
    `uv run ofmcp verify`；改 MultiRAG 时最终必须执行 `make verify`，涉及身份表、迁移或
    token 持久化时另跑 `make integration`。
 
