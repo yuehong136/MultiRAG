@@ -224,20 +224,23 @@ uv run --no-sync pytest tests/unit -q -k "channel or feishu"
 uv run --no-sync ruff check api/channels api/channel_control api/channel_execution api/channel_runtime
 ```
 
-⚠️ **2026-08-11 起还有一个前置坑：本机 `uv run` 直接起不来。** `pyproject.toml` 的
-`required-version` 已在 `58d9e82e`（2026-08-09）升到 `>=0.12,<0.13`，而本机 uv 是 **0.11.32**
-（WinGet 装的），所以上面每一条 `uv run --no-sync` 都会立刻报
-`error: Required uv version >=0.12, <0.13 does not match the running version 0.11.32`，
-`.claude/settings.json` 的 PostToolUse ruff/mypy 钩子同样每次编辑都失败。
-两条出路，二选一：
+⚠️ **先确认 uv 版本闸门**：`pyproject.toml` 有 `required-version`（`58d9e82e` 起是
+`>=0.12,<0.13`），uv 比它旧时**上面每一条命令都不会执行**，而是立刻报
+`error: Required uv version ... does not match the running version ...`；
+`.claude/settings.json` 的 PostToolUse ruff/mypy 钩子会以同样理由每次编辑都失败——
+那是工具链闸门，不是你的代码有问题。先 `uv --version` 对一下再动手。
+
+真撞上时有两条路：升级 uv（本机是 winget 装的，`uv self update` 会拒绝），或者绕开 uv
+直接用项目 venv 里的同一批工具——`uv run --no-sync` 本来就等价于此：
 
 ```powershell
-winget upgrade astral-sh.uv          # 根治；uv self update 对包管理器装的会拒绝
-# 或者绕开 uv，直接用项目 venv 里的同一批工具（uv run --no-sync 本来就只是这个）
 .venv\Scripts\ruff.exe format --check .; .venv\Scripts\ruff.exe check .
 .venv\Scripts\lint-imports.exe; .venv\Scripts\python.exe scripts/check_async_sync_db.py
 .venv\Scripts\mypy.exe; .venv\Scripts\python.exe -m pytest tests/unit -q
 ```
+
+（2026-08-11 实测记录：本机 uv 0.11.32 撞闸门，CHN-U16 全程走上面的 venv 兜底；用户随后升到
+**0.12.2**，`uv run --no-sync` 与钩子均已恢复，静态门禁与 U16 测试都用 uv 复跑过一遍。）
 
 ⚠️ **`tests/integration` 在本机目前整体不可用**（2026-08-11 实测 20 failed / 15 passed）：
 全部死在 `psycopg.InterfaceError: Psycopg cannot use the 'ProactorEventLoop' to run in async
