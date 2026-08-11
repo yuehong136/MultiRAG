@@ -369,6 +369,7 @@ LangGraph、DeerFlow、Open WebUI 和同类现代项目提供了 run/thread 分�
 也不自动启动 CHN-O14。
 
 这一排期变化不修改本 ADR 的 upstream-first 长期原则。U15 数据库迁移与 API/supervisor 重启已经
-完成，近期先补 Dialog/Canvas 现场 smoke，再做 CHN-U16 的正常优雅停机终态化，随后实施 CHN-O9
-可观测。
-CHN-U16 只覆盖进程能够协作清理的 queued/running 回复，不包含 kill -9、进程崩溃或跨实例恢复。
+完成；**CHN-U16 已于 2026-08-11 完成**，Dialog/Canvas 现场 smoke 仍然欠着（U16 不替代它），
+下一项是 CHN-O9 可观测。
+CHN-U16 只覆盖进程能够协作清理的 queued/running 回复，不包含 kill -9、进程崩溃或跨实例恢复，
+在 Windows 上也不覆盖 supervisor 触发的停止（`TerminateProcess` 不给合作窗口）。

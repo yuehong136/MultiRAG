@@ -3,12 +3,13 @@
 > 状态：设计基线；EIM-U0/CHN-X9 的执行流与 buffered ReplySession、
 > EIM-U1/CHN-U8 的飞书 CardKit 渐进式回复、EIM-U11/CHN-X13、EIM-U12/CHN-U14 与
 > EIM-U13/CHN-U15 的目标事务均已实现。
-> 最后核验：2026-08-10（Asia/Shanghai）。
+> 最后核验：2026-08-11（Asia/Shanghai）。
 > 适用范围：MultiRAG `api/channels/`、`api/channel_execution/`、飞书企业自建应用，以及后续
 > 与 `of_mcp` 的确认交互。
 
-> **近期优先级**：U15 迁移与 API/supervisor 重启已完成；先补 Dialog/Canvas 真实飞书 smoke，再做 CHN-U16 的正常停机
-> 终态化和跨层测试、CHN-O9 最小可观测，随后稳定浸泡。EIM-F5 / CHN-X14 保留为 upstream-first
+> **近期优先级**：U15 迁移与 API/supervisor 重启已完成，CHN-U16 正常停机终态化与跨层测试已于
+> 2026-08-11 完成；**Dialog/Canvas 真实飞书 smoke 仍然欠着**（U16 的跨层测试不替代它），
+> 下一项 CHN-O9 最小可观测，随后稳定浸泡。EIM-F5 / CHN-X14 保留为 upstream-first
 > 长期入口，但挂起到用户恢复从约 2026-04-24 本地同步点逐 commit 跟进 RAGFlow 时。
 
 本文负责回答“如何把当前飞书私聊文本桥升级为飞书原生 AI 对话体验”。身份、JWT、MCP 授权和
@@ -340,9 +341,12 @@ RAG 来源必须通过 `references_ready` 结构化事件输出，而不是从�
 > COMMIT 结果不明及提交后卡片交付失败仍不伪装成回滚，CHN-O14 保持挂起。
 
 正常发布或 generation 变更触发的可控 worker/supervisor 停机，与崩溃恢复是两个问题。CHN-U16
-只要求停止接收新消息后，将已经创建的 queued/running 卡片更新为 cancelled/error 等明确终态，
-再退出进程；它不持久化队列、run 或 action。`kill -9`、主机掉电、跨实例取消、数据库 COMMIT
-结果未知和提交后交付结果未知仍不自动恢复，只有真实需求成立时才评估 CHN-O14 / EIM-O4。
+**已实现**：停止接收后立即清空队列，queued 卡以零执行调用改为 cancelled，running 卡先关闭私有
+execution SSE 再改为同一终态，**已经拿到完整终态答案、正在交付卡片的那次 run 不被取消而是等它
+交付完**；重复 close 幂等且不留后台 task。它不持久化队列、run 或 action。`kill -9`、主机掉电、
+跨实例取消、数据库 COMMIT 结果未知和提交后交付结果未知仍不自动恢复，只有真实需求成立时才评估
+CHN-O14 / EIM-O4。Windows 上 supervisor 停子进程走 `TerminateProcess`，没有合作窗口，这套清理
+不会执行——在 Windows 开发机上看到的悬空卡不能当作回归。
 
 ---
 
@@ -514,7 +518,10 @@ SLO 是上线初始目标，真实压测和灰度后可调整；调整必须写�
 - Markdown 代码块、表格、链接、mention 和超长内容 golden tests；
 - CardKit create/patch/finish 任一步失败均走正确 fallback，且不重跑 Agent；
 - Typing reaction add/remove 是 best-effort，不污染主结果；
-- queue 顺序、溢出、queued/running 取消；CHN-U16 另测正常停机终态化，不把它写成崩溃恢复；
+- queue 顺序、溢出、queued/running 取消；正常停机终态化由
+  `tests/unit/test_channel_graceful_shutdown.py` 覆盖（真 worker 队列 → 真 Bridge → 真执行
+  client 走 mock SSE → 真 CardKit ReplySession），断言卡片终态、queued 项零执行调用、SSE 流被
+  主动关闭、已提交 run 允许交付完与重复 close 幂等；**不把它写成崩溃恢复**；
 - thread/message/identity/attachment 规范化 fixture；
 - card action 重放、换人点击、跨租户、过期和参数变化全部拒绝。
 
@@ -552,8 +559,8 @@ candidate，公开历史不含半轮或 `<think>`。这些现场结果和相关�
 | EIM-U11 | CHN-X13 | ✅ Provider/Target capabilities、启动预取与目标私有 driver | U4 |
 | EIM-U12 | CHN-U14 | ✅ 权威快照 consumer 已部署；Dialog detached working copy + 终态 CAS emit | U11 |
 | EIM-U13 | CHN-U15 | ✅ Canvas sidecar 所有权、同 flush 新会话捕获与 API 周期 GC | U11、U12 |
-| — | CHN-U16 | 正常停机终态化；queued cancel、busy 交付和 worker→HTTP/SSE→target→ReplySession 跨层测试 | U15 真实 smoke |
-| — | CHN-O9 | 稳定性最小可观测：首卡/首正文、队列、CardKit update/fallback、终态与停机结果 | CHN-U16 |
+| — | CHN-U16 | ✅ 正常停机终态化；queued cancel、busy 交付和 worker→HTTP/SSE→ReplySession 跨层测试（target 段仍由 integration 覆盖） | U15 真实 smoke（仍欠，不阻塞本条） |
+| — | CHN-O9 | 稳定性最小可观测：首卡/首正文、队列、CardKit update/fallback、终态与停机结果 | CHN-U16 ✅ |
 | EIM-U3 | CHN-U10 | mention-only 群聊、话题、thread session | U1、U2、C3、O2 |
 | EIM-U5 | CHN-X10 | references/artifacts 结构化事件与渲染 | U0、P2 |
 | EIM-U6 | CHN-X11 | 图片/文件/语音输入输出 | U0、U5、C3、附件安全基建 |

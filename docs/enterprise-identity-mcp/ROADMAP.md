@@ -1,9 +1,9 @@
 # EIM 实施路线图与进度账本
 
-> 最后更新：2026-08-10
+> 最后更新：2026-08-11
 > 当前状态：文档基线、EIM-U0、EIM-U1、EIM-U4、EIM-U8～U13 已完成；
-> U15 迁移/API 重启已完成；近期先补真实 smoke，再做 CHN-U16、CHN-O9 与稳定浸泡；EIM-F5 / CHN-X14 和
-> EIM-O4 均保持挂起。
+> U15 迁移/API 重启已完成，CHN-U16 已完成；真实 smoke 仍欠，下一项 CHN-O9，随后稳定浸泡；
+> EIM-F5 / CHN-X14 和 EIM-O4 均保持挂起。
 
 ---
 
@@ -329,15 +329,19 @@ EIM-C5 与 U0/U1 并行，不是前置依赖。
 Channel 近期只走下面这条稳定性收口路径：
 
 ```text
-U15 迁移/API 重启已完成，补 Dialog/Canvas 真实飞书 smoke
-  -> CHN-U16 优雅停机终态化 + 跨层 integration smoke
-  -> CHN-O9 最小可观测
+U15 迁移/API 重启已完成，补 Dialog/Canvas 真实飞书 smoke   <- 仍然欠着
+CHN-U16 优雅停机终态化 + 跨层测试                          <- ✅ 2026-08-11 完成
+  -> CHN-O9 最小可观测                                     <- 当前下一项
   -> 稳定浸泡
   -> 用户恢复从约 2026-04-24 本地同步点逐 commit 跟进时，再启动 EIM-F5 / CHN-X14
 ```
 
+U16 先于现场 smoke 落地并不注销那条：跨层测试证明的是进程行为（卡片终态、零执行调用、流被
+关闭），真实飞书会话行为仍要现场跑。
+
 CHN-U16 只保证正常、可控的 supervisor/worker 停机不会留下 queued/running 卡片；不恢复进程内
-队列或旧 action，不涵盖 `kill -9`、主机掉电、跨实例恢复和数据库终态不确定性。后者继续由挂起的
+队列或旧 action，不涵盖 `kill -9`、主机掉电、跨实例恢复和数据库终态不确定性，在 Windows 上也
+不涵盖 supervisor 触发的停止（`TerminateProcess` 不给合作窗口）。后者继续由挂起的
 EIM-O4 / CHN-O14 守门。CHN-U16、CHN-O9 均沿用 Channel 账本自己的 ID，不新造 EIM 映射。
 
 EIM-F5 / CHN-X14 仍是长期 upstream-first 的上游审计入口，但当前状态为挂起，不得因为文档已经

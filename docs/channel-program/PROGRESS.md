@@ -96,11 +96,13 @@ web 侧 commit scope 从 `settings` 切到 `channel`（后端已有 `feat(channe
 | CHN-U13 | MR | 飞书 CardKit 后台单写者刷新：SSE 消费与网络 patch 解耦，latest-value 合并，并固定客户端流式打印参数 | ✅ | CHN-U12 | `api/channels/feishu/reply.py::FeishuProgressiveReplySession`、`tests/unit/test_feishu_reply.py`、[EIM-U10](../enterprise-identity-mcp/ROADMAP.md) |
 | CHN-U14 | MR | Dialog 目标改为 detached working copy + 终态单次 CAS，移除普通消息与重新生成的候选行写放大；私有 SSE 按 consumer/tolerate → worker 部署 → producer/emit 执行 | ✅ | CHN-X13 | generation 8 worker 已部署 consumer，producer 已 emit；[执行架构 §7](EXECUTION_ARCHITECTURE.md#dialogdetached_cas)、[EIM-U12](../enterprise-identity-mcp/ROADMAP.md) |
 | CHN-U15 | MR | Canvas 候选策略独立化：显式候选元数据、周期 GC，清理退出每请求热路径；兼容回收 U14 前遗留的 Dialog 候选 | ✅ | CHN-X13、CHN-U14 | `api/channel_execution/history.py::SqlAlchemyCanvasHistoryTransaction`、[执行架构 §7](EXECUTION_ARCHITECTURE.md#canvascandidate_cas)、[EIM-U13](../enterprise-identity-mcp/ROADMAP.md) |
-| CHN-U16 | MR | 正常优雅停机时，把已创建的 queued/running 回复卡收口为明确终态；停止接收后 queued 请求不得再启动 MultiRAG 执行，running 执行按现有安全取消语义关闭；补 worker → Bridge → ReplySession 跨层测试。**不包含** kill -9、进程崩溃、跨实例恢复或 durable run | ⬜ | CHN-U9；U15 真实 smoke | `api/channels/worker.py::ChannelWorker.close`、`api/channels/binding_bridge.py::BindingBridge.close`、`tests/unit/test_feishu_worker.py`、`tests/unit/test_binding_bridge.py` |
+| CHN-U16 | MR | 正常优雅停机时，把已创建的 queued/running 回复卡收口为明确终态；停止接收后 queued 请求不得再启动 MultiRAG 执行，running 执行按现有安全取消语义关闭；补 worker → Bridge → ReplySession 跨层测试。**不包含** kill -9、进程崩溃、跨实例恢复或 durable run | ✅ | CHN-U9；U15 真实 smoke | `api/channels/worker.py::ChannelWorker.close`、`api/channels/binding_bridge.py::BindingBridge.close`、`tests/unit/test_channel_graceful_shutdown.py`、`tests/unit/test_feishu_worker.py` |
 
 **近期执行顺序**：U15 的数据库迁移已到 `e4f6a8b0c2d4 (head)`，API 与 supervisor 也已在 U15
-提交后重启且 healthz 全绿；当前只差飞书测试会话的 Dialog/Canvas smoke。确认 sidecar/GC 与正常
-问答后开始 U16，U16 完成后紧接 O9。X14/F5 不在当前稳定化关键路径。
+提交后重启且 healthz 全绿；飞书测试会话的 Dialog/Canvas 现场 smoke **仍未完成**。U16 的代码与
+跨层测试已落地（不依赖现场 smoke 即可证明卡片终态与零执行调用），但它**不替代**那次 smoke——
+进入稳定浸泡前仍要按 [UX §14](../enterprise-identity-mcp/FEISHU_BOT_UX.md#14-测试与验收矩阵)
+跑完 Dialog/Canvas 现场用例。下一项是 O9。X14/F5 不在当前稳定化关键路径。
 
 **CHN-U6 为什么是 refetch 而不是省略字段或加后端令牌**：省略 `enabled` 时老后端会读到
 `ChannelBindingUpsertRequest.enabled` 的 `False` 默认值 → 静默**停用**渠道，这是坏的半态；
@@ -177,7 +179,7 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 | CHN-O6 | 连接自检端点 `POST /chat-channels/{id}/verify`：用**已存**凭据向 provider 打一次「只认证、不建连」的探针，把数十秒的反馈环压到一次往返。探针是 SDK-free 的 `api/channels/<name>/verify.py`，由 API 进程按名字懒加载 | ✅ | CHN-U1 | `api/channels/verification.py`、`api/channels/{feishu,dingtalk}/verify.py`、`service.py::verify_channel_credential` |
 | CHN-O7 | 主密钥 keyring 读侧：`secret_encryption_key` 由一把变成**有序密钥环**（第 0 把 active 负责加密，其余按 `key_id` 解密自己写下的存量密文）。轮换从「全租户凭据永久不可解密」变成一次前插 + 重启 API | ✅ | — | `common/app_config.py::ChannelControlConfig`、`api/channel_control/secret_store.py::AESGCMChannelSecretStore` |
 | CHN-O8 | 凭据变更审计轨迹 | ⬜ | — | 未排期 |
-| CHN-O9 | binding 级可观测（消息量、丢弃原因、时延分位） | ⬜ | CHN-U16 | U16 后下一项；[UX §13](../enterprise-identity-mcp/FEISHU_BOT_UX.md#13-指标和-slo) |
+| CHN-O9 | binding 级可观测（消息量、丢弃原因、时延分位） | ⬜ | CHN-U16 ✅ | **闸门已满足，现在就是下一项**；[UX §13](../enterprise-identity-mcp/FEISHU_BOT_UX.md#13-指标和-slo) |
 | CHN-O10 | 自适应轮询（**SSE 已否决**，见 `CHN-ADR-02`） | ⬜ | — | 未排期 |
 | CHN-O11 | 渠道数配额 | ⬜ | — | 未排期 |
 | CHN-O13 | **WEB**：CHN-O6 的前端半边。`channelAPI.verify(id)`（无请求体）+ 五个错误码 + 两份 locale + 编辑抽屉页脚的「测试连接」+ 10 秒冷却禁用。`channelVerifyFailure` 把「被拒」和「没查成」分成两种结局 | ✅ | CHN-O6 | `web:src/api/channel.ts`、`use-channel-request.ts::useVerifyChannel`、`channel-form-sheet.tsx` |
@@ -418,8 +420,10 @@ CHN-X5～X14、CHN-U8～U15、CHN-O14 与 CHN-P14 属于 EIM 项目，不在本�
      `- PROBE_EMPTY=${PROBE_SOURCE:-}` 的 compose 服务，容器里 `PROBE_EMPTY` **存在且为空串**
      （不是不传）。这条原本是我按文档推的，现在是实测的。
 
-### CHN-U16 · 正常优雅停机终态化（近期下一项）
+### CHN-U16 · 正常优雅停机终态化
 
+- **状态**：✅ 完成（2026-08-11）。**落地与简报的三处偏差**（drain 参数直接删除、
+  registry 而非按状态筛选、Windows 上 supervisor 停机没有合作窗口）写在本条末尾。
 - **问题**：当前 `ChannelWorker.close(drain=True)` 在停止接收后仍等待队列 drain，queued 项可能在
   停机窗口启动执行；随后 task 与 `BindingBridge.close()` 被取消时，已经创建的 queued/running
   回复卡也可能没有机会进入明确终态。进程虽然退出，用户仍看到“排队中”或“正在生成”。
@@ -432,6 +436,42 @@ CHN-X5～X14、CHN-U8～U15、CHN-O14 与 CHN-P14 属于 EIM 项目，不在本�
 - **明确不做**：kill -9、进程崩溃、机器掉电、跨实例接管和重启恢复。这些没有合作式清理窗口，
   继续由挂起的 CHN-O14 评审；U16 不新增数据库 run ledger，也不让 worker 访问数据库。
 - **闸门**：U15 数据库迁移与 API/supervisor 重启已完成；先补齐 Dialog/Canvas 现场 smoke。
+- **落地补充（写给后来人）**：
+  1. **`drain` 参数直接删掉，不是改默认值。** 简报把问题描述成「drain 期间可能启动 queued 项」，
+     查完发现 drain 在新语义下没有任何剩余含义：正常停机不允许启动 queued 项，错误停机
+     （`LEADER_LEASE_LOST` / `CHANNEL_TRANSPORT_STOPPED`）同样需要终态化已创建的卡，两条路径
+     从此逐字相同。留一个恒为假的布尔只会让下一个人以为还有第二种停机模式。
+     `close()` 现在的顺序是：**拒收 + 清空队列（中间无 await，原子）→ 停传输 → Bridge 终态化
+     → 取消 consumer → 释放租约与客户端**。清空队列必须排在 `channel.stop()` **之前**——
+     真实 `FeishuChannel.stop()` 会 `await asyncio.to_thread(...)` 让出事件循环，那一让就够
+     consumer 取走一条 queued ticket 并真的发起一次执行。
+  2. **筛选依据是 registry 成员资格，不是 `record.status`。** `BindingBridge` 新增
+     `_live_records`（`execution_id -> _ExecutionRecord`，创建时登记、**交付真正结束时**注销）。
+     按状态筛选会漏掉最重要的一类：已经越过 terminal barrier（`status=FINAL`）但卡片还在交付
+     途中的 run——目标已经提交，此时取消它等于对用户撒谎说「已停止」。现在这类 run 不取消，
+     而是在预算内 `await` 它交付完成；只有 `QUEUED`/`RUNNING` 才取消。
+     `_finalize_on_shutdown` 里 `task.cancel()` 与终态写卡之间**没有 await**，所以取消后
+     execution task 再也无法 append，终态写卡是无竞争的；`_ExecutionRecord.finalizing` 兜住
+     「stop 回调与停机同时到达」这一种重入。
+  3. **queued 项零执行调用是结构性的，不是靠判断**：queued record 根本没有 `execution_task`，
+     终态化路径上没有任何 executor 引用；`handle_message`/`accepts_message`/`message_queued`
+     在 `_closing` 后直接返回，所以停机窗口里连准备工作都不会新起。
+  4. **stream 关闭改用 `contextlib.aclosing`**（`_consume_execution`）。原来靠 `async for` 被
+     取消后由事件循环回收 async generator，时机不确定，而 worker 紧接着就会关掉 httpx client。
+     `aclosing` 让 `GeneratorExit` 立刻走到 `async with self._client.stream(...)` 的 `__aexit__`，
+     私有 SSE 响应在停机当场释放。`BindingExecutor.stream` 与
+     `MultiRAGBindingExecutionClient.stream` 的返回标注同步改成 `AsyncGenerator`——`AsyncIterator`
+     没有 `aclose()`，标注 `AsyncGenerator` 才是对「消费方会主动关闭」这件事的真实声明。
+  5. **预算**：准备阶段 2s + 终态化 5s，合计 7s，卡在 supervisor `_STOP_TIMEOUT_SECONDS = 10`
+     之内；超时记 `SHUTDOWN_FINALIZE_TIMEOUT` 并继续退出，不把停机拖成挂死。
+  6. **⚠️ Windows 上 supervisor 触发的停机没有合作窗口**（实测代码路径，非推断）：
+     `supervisor.py::_stop_one` 走 `process.terminate()`，而 Windows 的
+     `asyncio.subprocess` 把它实现为 `TerminateProcess`，**不是** SIGTERM，子进程收不到任何
+     信号，本条的清理代码一行都不会跑。Linux/macOS（含 docker 部署）是真 SIGTERM，Ctrl+C
+     两边都是真 SIGINT。所以在 Windows 开发机上「改配置触发 generation 切换」看到的悬空卡
+     **不是回归**。要不要为此给 Windows 子进程加 `CREATE_NEW_PROCESS_GROUP` +
+     `CTRL_BREAK_EVENT` 是一个有爆炸半径的决定（信号发给整个进程组，而 supervisor 自己由
+     PowerShell 脚本拉起），已登记为 **CHN-Q3** 待用户决定，未擅自实施。
 
 ### CHN-O8 · 凭据变更审计轨迹
 
@@ -443,7 +483,10 @@ CHN-X5～X14、CHN-U8～U15、CHN-O14 与 CHN-P14 属于 EIM 项目，不在本�
 
 ### CHN-O9 · binding 级可观测
 
-- **顺序**：CHN-U16 完成后紧接实施；先让正常优雅停机行为确定，再固定对应终态和时延指标。
+- **顺序**：**闸门已满足**——CHN-U16 已完成，正常优雅停机行为已经确定，现在固定对应终态和
+  时延指标。U16 落地时已经放好两条结构化事件供 O9 收编，别再发明第三种写法：
+  `channel_event=shutdown_finalized ... queued=<n> running=<n> result=ok|failed`（Bridge）与
+  `channel_event=queue_abandoned channel=<provider> abandoned=<n> result=ok`（worker）。
 - **问题**：消息量、拒绝/丢弃原因、队列等待、失败/取消时延、卡片 delivery/fallback 与 GC 结果
   没有统一聚合；部分 policy/non-user 分支仍是静默 return，当前 JSON 日志也只是把 `k=v` 放在
   `message` 字符串里，不能假定“所有分支已经结构化”。
@@ -636,6 +679,21 @@ Windows 在长跑后期起不来子进程。单独跑或小切片跑必过。已
 stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本没启动，判过是撒谎、
 判挂是冤枉被测代码，**只有「这次没测到」是真话**。CI（Linux）不会触发。
 
+**2026-08-11 追加（CHN-U16 时实测）**：同一个 rc 还会打到另外**两条**子进程纯度测试——
+`test_channel_capabilities.py::test_worker_capability_negotiation_imports_no_database_runtime`
+与 `test_feishu_reply.py::test_reply_module_import_is_clean_under_beartype`。它们没有
+`test_importing_specs_stays_pure` 那道 skip 守卫，所以直接报 `assert 3221225794 == 0`。
+当天 `-k "channel or feishu"`（415 条、194s）里两条都挂，**单独重跑两条 2 passed in 5.36s**，
+同一棵树的全量 `tests/unit` 里也都是 passed——判据仍是「rc 是 3221225794 就是没起来子进程」。
+遇到时按小切片复跑确认，别当回归。要不要把那道 skip 守卫抽成共用 helper 贴到这两条上，
+留给下一个碰到的人决定：**它们各挂各的，不影响失败集合的判读方式**。
+
+**2026-08-11 全量基线复测**（CHN-U16 完工树）：`tests/unit` **6 failed / 1783 passed**，
+失败集合与上面名单**逐条相同**——判据是：单独跑这 6 条得 `6 failed in 2.36s`（确定性复现），
+而全量也恰好 6 条，两个集合因此相等。collected **1789**，等于改动前的 1781 加上本次新增的
+8 条，没有测试被静默漏收。注意 U15 那次记的 1781 是**全通过**的数字——那 6 条依赖 bash 的
+模板测试只在本机 Windows 上失败，能跑 `make` 的环境里是绿的。
+
 > 这个基线会随环境和其他人的改动变化。**发现数字对不上先重新测一次并更新本节**，
 > 不要默认「多出来的失败是我造成的」，也不要默认「就是这 6 条」。
 
@@ -645,6 +703,7 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 |---|---|---|
 | CHN-Q1 | 第三个 provider 是不是企业微信？它的 `connection_type` 判别式分支会逼出 `visible_when` 与 number 控件，届时 `FormField` 需要扩展 | 产品 |
 | CHN-Q2 | O9 已确定在 U16 后优先实施；O8 / O10 / O11 的后续相对顺序仍待产品与运维决定 | 产品 + 运维 |
+| CHN-Q3 | Windows 上 supervisor 停子 worker 走 `TerminateProcess`（`asyncio` 在 Windows 对 `terminate()` 的实现），子进程收不到信号，CHN-U16 的合作式清理**一行都不会跑**；Linux/macOS 与 Ctrl+C 不受影响。要不要给 Windows 子进程加 `CREATE_NEW_PROCESS_GROUP` + `CTRL_BREAK_EVENT`？代价是信号发给整个进程组，而 supervisor 自身由 PowerShell 脚本拉起，爆炸半径需要评估；也可以判定「Windows 只是开发机，生产在 docker/Linux」而不做 | 用户 + 运维 |
 
 ---
 
@@ -729,3 +788,4 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 | 2026-08-10 | **CHN-U15 / EIM-U13 完成：Canvas 候选所有权与回收退出请求热路径。** 新增 MultiRAG 自有 sidecar 元数据，以 owner token、目标、公开会话和到期时间显式声明候选；新会话候选与元数据同一 flush/commit，候选在发布前使用自身 `dialog_id`，不进入普通目标列表或批量删除，终态事务才恢复公开身份。existing/new 均按 `candidate → public → metadata` 固定锁序完成 CAS 发布或仅清理候选；请求路径不再 TTL prune。API router lifespan 启动并周期运行有界、DB 时钟、`SKIP LOCKED` 清理，同时严格兼容回收遗留 Canvas/Dialog marker；worker 继续无数据库。迁移兼容当前 model-first 启动顺序，并对不兼容的既有表 fail closed。MultiRAG 同步区 `canvas_service.py` / `conversation_service.py` / `dialog_service.py` / `user_canvas_version.py` 零 diff。**验证**：候选事务、迁移、列表隔离、GC/lifecycle 定向单元 **97 passed**、真 PostgreSQL **23 passed**；`make fix` **1194 files unchanged**；`make verify` format/Ruff、6 import contracts、async DB gate、mypy 63 files全绿，unit **1781 passed, 1 unrelated warning**；完整 `make integration` **35 passed**；单 Alembic head `e4f6a8b0c2d4`；`git diff --check` 通过 | 本次提交：`refactor(channel): isolate Canvas candidate lifecycle (EIM-U13, CHN-U15)` | Codex |
 | 2026-08-10 | **定案 CHN-ADR-08，登记并挂起 CHN-X14 / EIM-F5。** 明确持续跟进 RAGFlow Canvas/Agent/Channel 是长期主线，Channel 只在 MultiRAG 目标适配层吸收 terminal publish、CAS、run/history 分离、幂等和副作用门禁。Canvas 后续不预设 detached：上游继续自持久化则保留 candidate，出现 no-store 才评估 detached，出现原生 checkpoint 则优先适配上游；审计待 Channel 稳定且用户恢复从约 4 月 24 日基线逐 commit 跟进时随同步启动，CHN-O14 继续挂起。**验证**：ADR/执行架构/两份账本 ID 双向 grep、相对链接检查、`make verify` | 本次文档变更 | Codex |
 | 2026-08-10 | **纠正近期优先级并登记 CHN-U16。** U15 数据库迁移、API/supervisor 重启与 healthz 已确认，先补 Dialog/Canvas 现场 smoke；随后收口正常优雅停机：queued/running 卡进入明确终态、queued 项不再启动执行，并用 worker → Bridge → ReplySession 跨层测试固定。kill -9、进程崩溃与跨实例恢复明确留在挂起的 CHN-O14；U16 后紧接 CHN-O9，不新增 O15 | 本次文档变更 | Codex |
+| 2026-08-11 | **CHN-U16 完成：正常优雅停机把已创建的卡收口为明确终态。** `ChannelWorker.close` 删掉 `drain` 参数——正常与错误停机从此逐字同路；顺序改为「拒收 + 清空队列（无 await 间隔）→ 停传输 → Bridge 终态化 → 取消 consumer → 释放租约」，清空队列排在 `channel.stop()` 之前是因为真实 `FeishuChannel.stop()` 会让出事件循环，那一让就够 consumer 取走一条 queued ticket 并真的发起执行。`BindingBridge` 新增 `_live_records` registry 与 `_closing`：queued 卡零 executor 调用直接终态化，running 卡先 `cancel()` 再无 await 地写终态（`finalizing` 兜住 stop 回调与停机的重入），**已越过 terminal barrier 的 run 不取消而是等它交付完**——目标已提交时报「已停止」是撒谎。`_consume_execution` 改用 `contextlib.aclosing`，私有 SSE 响应在停机当场释放而不是等事件循环回收 generator；`stream` 的返回标注随之改为 `AsyncGenerator`。预算 2s + 5s < supervisor 的 10s。**验证（差分实测，不是「跑了测试」）**：新增 `tests/unit/test_channel_graceful_shutdown.py` 6 条跨层用例（真 worker 队列 → 真 Bridge → 真 `MultiRAGBindingExecutionClient` 走 `httpx.MockTransport` 的可控 SSE → 真 `FeishuProgressiveReplySession` + 记录型 CardKit transport），把三个源文件 `git checkout` 回 `b50ccb21` 后复跑，**4 条按 U16 的四项承诺逐条红**（日志同时出现 `QUEUE_DRAIN_TIMEOUT`）：① `..._gives_a_queued_reply_a_terminal_card_and_never_starts_it` → `assert False is True`（`_Card.finished`）；② `..._closes_the_running_execution_stream_and_finishes_its_card` → 同上；③ `test_close_is_idempotent_...` → `assert [(0, '✨ 正在生成', ''), (0, '⏳ 已排队 · 前面还有 1 条', '')] == [(1, '⏹️ 已停止生成 …')]`，直接印出改动前用户看到的两张悬空卡；④ worker 层 `test_normal_stop_drops_queued_tickets_instead_of_starting_them` → `assert ['message-in-flight', 'message-never-started'] == ['message-in-flight']`，坐实旧 drain 真的会在停机窗口里启动 queued 项。恢复实现后这 4 条与其余全绿，并断言 `api.executed_event_ids == ["message-running"]`（queued 项零执行）、`_GatedSSEStream.closed is True` 且 `release.is_set() is False`（流被主动关闭而非跑完）、终态卡 `finish_calls == 1` 且状态文案恰好出现一次、二次/三次 `close()` 不产生任何新卡片调用、`_live_channel_tasks() == []`。另有 2 条是**既有行为的钉板**（改动前后都绿，按 `api/channels/README.md` 近期收口顺序第 2 条要求补的）：queued 卡手动 cancel 不启动执行、queue full 确实向用户交付 busy 文案。worker 用例 `test_a_transport_stop_that_yields_cannot_let_a_queued_ticket_slip_through` 钉的是**顺序本身**：它的假传输在 `stop()` 里 `await`（真 `FeishuChannel.stop()` 走 `asyncio.to_thread`，必然让出事件循环），把清空队列挪到 `channel.stop()` 之后就会红成 `['message-in-flight', 'message-never-started']`——实测确认过。普通不让出的假传输**测不出**这个洞，所以这条不能省。**门禁**：`ruff format --check`（1195 files）/ `ruff check` / `lint-imports` 6 contracts / `check_async_sync_db`（新增 0）/ `mypy` 63 files 全绿；`tests/unit` **6 failed / 1783 passed**，失败集合与先天基线逐条相同（那 6 条单独跑仍 6 failed in 2.36s，全量也恰好 6 条，故两个集合相等）；collected 1789 = 改前 1781 + 新增 8。**未跑 integration**：本条零 DB/存储/检索改动，不触发 AGENTS.md 的 Tier 3；顺带实测发现**本机 `tests/integration` 目前整体跑不了**——20 条全部死在 `psycopg.InterfaceError: Psycopg cannot use the 'ProactorEventLoop' to run in async mode`（Windows 默认 Proactor，async psycopg 要 Selector），连 `test_async_engine_select_one` 都红，与 Channel 无关且早于本次改动。**边界**：Windows 上 supervisor 的 `terminate()` 是 `TerminateProcess`，本条代码不会执行（已登记 CHN-Q3）；kill -9、跨实例与 COMMIT 结果未知仍属挂起的 CHN-O14。**未做**：Dialog/Canvas 现场 smoke 仍欠着，U16 不替代它 | 本次提交：`fix(channel): finalize replies on graceful stop (CHN-U16)` | Claude |

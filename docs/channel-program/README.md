@@ -55,27 +55,31 @@ CHN-O7（主密钥密钥环）、CHN-O12（空 env 变量）、CHN-O6（连接�
 [`docs/enterprise-identity-mcp/`](../enterprise-identity-mcp/README.md) 的 EIM 路线图驱动；其中
 CHN-X9、CHN-X13、CHN-U8、CHN-U11～U15 已完成，其余状态以 [PROGRESS](PROGRESS.md) 为准。旧程序“全部完成”
 的历史结论保持成立，但不再表示 Channel 子系统没有后续待办。CHN-U16 是 Channel 稳定化的独立
-近期任务，不新增 EIM 对应项。
-**最后更新**：2026-08-10
+近期任务，不新增 EIM 对应项，**已于 2026-08-11 完成**。
+**最后更新**：2026-08-11
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | **PR-0** | 建立账本与契约文档（两仓 docs-only） | ✅ 完成 |
 | **S** | 安全加固（S1–S6） | ✅ 完成 |
-| **U** | 今日可见缺陷（U1–U9、U11–U15 完成；U10 挂起，U16 下一项） | 🔵 扩展中 |
+| **U** | 今日可见缺陷（U1–U9、U11–U16 完成；U10 挂起） | 🔵 扩展中 |
 | **P** | Provider 通用化（P1–P11、P13 全部完成并部署） | ✅ 完成 |
-| **O** | 运维（O1–O7、O12 完成；O9 排在 U16 后，O8/O10/O11 未排期） | 🔵 扩展中 |
+| **O** | 运维（O1–O7、O12 完成；**O9 是当前下一项**，O8/O10/O11 未排期） | 🔵 扩展中 |
 | **X** | 跨仓契约（X1–X3、X9、X13 完成；其余按 EIM 路线图） | 🔵 扩展中 |
-| **EIM 扩展** | 执行架构 X13/U14/U15 已完成；U15 现场 smoke 后做 U16 与 O9；F5/X14 挂起到恢复逐 commit 上游同步 | 🔵 进行中 |
+| **EIM 扩展** | 执行架构 X13/U14/U15 已完成；U16 已完成，下一项 O9；U15 现场 smoke 仍欠；F5/X14 挂起到恢复逐 commit 上游同步 | 🔵 进行中 |
 
 执行架构的 CHN-U15 已实现：X13 完成 Provider/Target 能力协商和目标私有 driver，U14 完成 Dialog
 内存工作副本、终态单次 CAS 与权威终态快照；U15 再把 Canvas 候选所有权移入 MultiRAG 自有
 sidecar，并将 TTL 回收移到 API 启动/周期任务。U15 是在当前 Canvas 自持久化契约上的安全兼容桥，
-不是另起一套 Canvas runtime 的起点。数据库迁移、API/supervisor 重启与 healthz 已确认，当前只差
-Dialog/Canvas 现场 smoke；随后做 CHN-U16，确保正常优雅停机时 queued/running 卡进入明确终态且 queued 请求不再
-启动执行，再紧接 CHN-O9 补齐 binding 级可观测。U16 不承诺 kill -9、进程崩溃或跨实例恢复；这些
-仍属于挂起的 CHN-O14。EIM-F5 / CHN-X14 同步挂起，待 Channel 稳定且用户恢复从约 4 月 24 日
-上游基线逐 commit 跟进时，随正常同步节奏审计 Canvas/Agent/Channel 差异。
+不是另起一套 Canvas runtime 的起点。数据库迁移、API/supervisor 重启与 healthz 已确认。
+CHN-U16 已完成：停止接收后清空队列，queued 卡零执行调用地进入终态，running 卡关闭私有 SSE 流后
+按安全取消语义终态化，已越过 terminal barrier 的 run 则允许交付完；`drain` 参数随之删除。
+**Dialog/Canvas 现场 smoke 仍然欠着，U16 不替代它**——跨层测试证明的是进程行为，不是真实飞书
+会话行为。下一项是 CHN-O9 补齐 binding 级可观测。U16 不承诺 kill -9、进程崩溃或跨实例恢复；这些
+仍属于挂起的 CHN-O14。Windows 上 supervisor 停子进程走 `TerminateProcess`，没有合作窗口，
+本条清理不会执行（见 [PROGRESS 待决事项 CHN-Q3](PROGRESS.md#待决事项)）。EIM-F5 / CHN-X14 同步挂起，
+待 Channel 稳定且用户恢复从约 4 月 24 日上游基线逐 commit 跟进时，随正常同步节奏审计
+Canvas/Agent/Channel 差异。
 
 ### 24 个 PR 全部落地并部署完毕
 
@@ -220,6 +224,27 @@ uv run --no-sync pytest tests/unit -q -k "channel or feishu"
 uv run --no-sync ruff check api/channels api/channel_control api/channel_execution api/channel_runtime
 ```
 
+⚠️ **2026-08-11 起还有一个前置坑：本机 `uv run` 直接起不来。** `pyproject.toml` 的
+`required-version` 已在 `58d9e82e`（2026-08-09）升到 `>=0.12,<0.13`，而本机 uv 是 **0.11.32**
+（WinGet 装的），所以上面每一条 `uv run --no-sync` 都会立刻报
+`error: Required uv version >=0.12, <0.13 does not match the running version 0.11.32`，
+`.claude/settings.json` 的 PostToolUse ruff/mypy 钩子同样每次编辑都失败。
+两条出路，二选一：
+
+```powershell
+winget upgrade astral-sh.uv          # 根治；uv self update 对包管理器装的会拒绝
+# 或者绕开 uv，直接用项目 venv 里的同一批工具（uv run --no-sync 本来就只是这个）
+.venv\Scripts\ruff.exe format --check .; .venv\Scripts\ruff.exe check .
+.venv\Scripts\lint-imports.exe; .venv\Scripts\python.exe scripts/check_async_sync_db.py
+.venv\Scripts\mypy.exe; .venv\Scripts\python.exe -m pytest tests/unit -q
+```
+
+⚠️ **`tests/integration` 在本机目前整体不可用**（2026-08-11 实测 20 failed / 15 passed）：
+全部死在 `psycopg.InterfaceError: Psycopg cannot use the 'ProactorEventLoop' to run in async
+mode`——Windows 默认 ProactorEventLoop，而 async psycopg 需要 SelectorEventLoop。这是测试基建
+问题，不是被测代码问题（连 `test_async_engine_select_one` 都红），改动 Channel 时不必被它挡住；
+真要修就是给 `tests/integration/conftest.py` 设 `WindowsSelectorEventLoopPolicy`，那是独立一条。
+
 ⚠️ **三个必须知道的坑**：
 
 1. **`tests/unit` 有 6 条先天失败**（2026-08-05 实测 6 failed / 1486 passed / 761.94s，
@@ -319,3 +344,4 @@ MultiRAG 与 web 是两个仓、两条 CI、两次部署，**不存在跨仓原�
 | 2026-08-10 | CHN-U15 / EIM-U13 实现完成：Canvas 候选使用 MultiRAG sidecar 显式记录所有权，新会话行与元数据同 flush 捕获；API 启动/周期执行有界 `SKIP LOCKED` GC，并严格兼容回收旧 Canvas/Dialog 候选；CHN-O14 保持挂起 | Codex |
 | 2026-08-10 | 定案 CHN-ADR-08 并登记 EIM-F5 / CHN-X14：持续跟进 RAGFlow Canvas/Agent/Channel 是长期主线；现代项目只提供执行不变量校准。Canvas 是否继续 candidate、评估 detached 或适配上游 checkpoint，必须在恢复逐 commit 跟进时由上游审计决定；不提前启动 O14 或自研平行 runtime | Codex |
 | 2026-08-10 | 纠正近期优先级：U15 数据库迁移、API/supervisor 重启与 healthz 已确认，先补 Dialog/Canvas 现场 smoke；下一项 CHN-U16 收口正常优雅停机中的 queued/running 卡与未启动队列，随后 CHN-O9 补可观测。EIM-F5 / CHN-X14 挂起到 Channel 稳定且用户恢复从约 4 月 24 日基线逐 commit 跟进；kill -9 与跨实例恢复仍不属于 U16 | Codex |
+| 2026-08-11 | CHN-U16 完成：`close()` 删除 `drain`，改为「拒收 + 清空队列 → 停传输 → Bridge 终态化 → 取消 consumer」；queued 卡零执行调用终态化，running 卡用 `contextlib.aclosing` 当场关闭私有 SSE 后终态化，已提交的 run 允许交付完。差分验证：源文件回退到 `b50ccb21` 时新增跨层用例失败于「卡片从未 finish」。下一项 CHN-O9；新增待决事项 CHN-Q3（Windows `TerminateProcess` 没有合作窗口） | Claude |

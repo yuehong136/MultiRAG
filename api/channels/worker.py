@@ -36,7 +36,6 @@ from common.bootstrap import ensure_initialized
 
 LOGGER = logging.getLogger(__name__)
 
-_QUEUE_DRAIN_TIMEOUT_SECONDS = 5
 _CHANNEL_MONITOR_INTERVAL_SECONDS = 2
 _REDIS_CONNECT_TIMEOUT_SECONDS = 5
 _REDIS_OPERATION_TIMEOUT_SECONDS = 5
@@ -196,7 +195,6 @@ class ChannelWorker:
 
     async def run(self, stop_event: asyncio.Event) -> None:
         self._stop_event = stop_event
-        graceful_shutdown = False
         try:
             await self._preflight()
             owner_token = await self._state_store.acquire_leader(lease_name=self._provider_name)
@@ -218,9 +216,8 @@ class ChannelWorker:
             await stop_event.wait()
             if self._runtime_error_code:
                 raise ChannelWorkerError(self._runtime_error_code)
-            graceful_shutdown = True
         finally:
-            await self.close(drain=graceful_shutdown)
+            await self.close()
 
     async def enqueue(self, message: IncomingMessage) -> None:
         """Fast SDK callback target: no Redis, HTTP, or reply I/O is allowed."""
@@ -282,28 +279,48 @@ class ChannelWorker:
         if lifecycle is not None:
             lifecycle.message_queued(message, queue_position=queue_position)
 
-    async def close(self, *, drain: bool = True) -> None:
+    async def close(self) -> None:
+        """Stop intake, terminalize what is already visible, then release.
+
+        Only a cooperative stop reaches this: a normal SIGTERM, a supervisor
+        generation switch, or an explicit close. Nothing here is a recovery
+        protocol -- an uncooperative death still leaves whatever it left.
+        """
+
+        # Refusing new tickets and dropping the queued ones is one step with no
+        # await between the two halves, so no consumer can claim a ticket in
+        # the gap. Draining used to mean "run what is queued", which started
+        # brand-new target executions inside the shutdown window; the bridge
+        # turns each abandoned card into a terminal state instead, without
+        # ever calling the execution client. Both happen before the transport
+        # is stopped, because a real provider's stop() yields to the loop --
+        # long enough for a consumer to claim a ticket and start executing it.
         self._accepting_messages = False
+        abandoned = self._abandon_queue()
+        if abandoned:
+            LOGGER.info(
+                "channel_event=queue_abandoned channel=%s abandoned=%s result=ok",
+                self._provider_name,
+                abandoned,
+            )
+
         # Always stop: channel.start() can fail after creating its isolated
         # thread but before the worker marks itself started.
         with contextlib.suppress(Exception):
             await self._channel.stop()
         self._started = False
 
-        if drain:
-            try:
-                await asyncio.wait_for(self._queue.join(), timeout=_QUEUE_DRAIN_TIMEOUT_SECONDS)
-            except TimeoutError:
-                LOGGER.error("channel_event=queue_drain result=failed error_code=QUEUE_DRAIN_TIMEOUT")
+        # Before the consumers are cancelled, not after: cancelling a consumer
+        # mid-delivery can strand a reply that already crossed its terminal
+        # barrier, and only the bridge knows which replies those are.
+        if isinstance(self._bridge, LifecycleMessageBridge):
+            await self._bridge.close()
 
         for task in self._tasks:
             task.cancel()
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
-
-        if isinstance(self._bridge, LifecycleMessageBridge):
-            await self._bridge.close()
 
         if self._owner_token is not None:
             try:
@@ -315,6 +332,19 @@ class ChannelWorker:
         await self._agent_client.close()
         await self._redis.aclose()
         LOGGER.info("channel_event=worker_stopped channel=%s result=ok", self._provider_name)
+
+    def _abandon_queue(self) -> int:
+        """Drop every ticket that has not started, so none can start now."""
+
+        abandoned = 0
+        while True:
+            try:
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            self._queue.task_done()
+            abandoned += 1
+        return abandoned
 
     async def _preflight(self) -> None:
         try:

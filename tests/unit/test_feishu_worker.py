@@ -42,6 +42,18 @@ class FakeChannel:
         self.stopped = True
 
 
+class YieldingStopChannel(FakeChannel):
+    """A transport whose stop awaits, the way a real SDK handoff does."""
+
+    async def stop(self) -> None:
+        # ``FeishuChannel.stop`` awaits a thread handoff. That yield is long
+        # enough for a consumer to claim a queued ticket, so intake has to be
+        # closed before it, not after.
+        for _ in range(5):
+            await asyncio.sleep(0)
+        await super().stop()
+
+
 class FakeBridge:
     def __init__(self) -> None:
         self.messages: list[IncomingMessage] = []
@@ -380,6 +392,68 @@ async def test_worker_exposes_bounded_followup_positions_and_rejects_overflow() 
 
 
 @pytest.mark.asyncio
+async def test_normal_stop_drops_queued_tickets_instead_of_starting_them() -> None:
+    channel = FakeChannel()
+    bridge = LifecycleBlockingBridge()
+    worker = _worker(
+        channel=channel,
+        bridge=bridge,
+        agent_client=FakeAgentClient(),
+        state_store=FakeStateStore(),
+        redis=FakeRedis(),
+        queue_size=10,
+        worker_concurrency=1,
+    )
+    stop_event = asyncio.Event()
+    run_task = asyncio.create_task(worker.run(stop_event))
+    await channel.started.wait()
+    assert channel.handler is not None
+    await channel.handler(_message("message-in-flight"))
+    await channel.handler(_message("message-never-started"))
+    await asyncio.wait_for(bridge.first_started.wait(), timeout=1)
+
+    # The queued ticket becomes runnable at the same moment the stop lands.
+    # A shutdown that still drains would pick it up and start a brand-new
+    # execution while the process is on its way out.
+    stop_event.set()
+    bridge.release_first.set()
+    await asyncio.wait_for(run_task, timeout=5)
+
+    assert [message.message_id for message in bridge.messages] == ["message-in-flight"]
+    assert bridge.closed is True
+    assert channel.stopped is True
+
+
+@pytest.mark.asyncio
+async def test_a_transport_stop_that_yields_cannot_let_a_queued_ticket_slip_through() -> None:
+    channel = YieldingStopChannel()
+    bridge = LifecycleBlockingBridge()
+    worker = _worker(
+        channel=channel,
+        bridge=bridge,
+        agent_client=FakeAgentClient(),
+        state_store=FakeStateStore(),
+        redis=FakeRedis(),
+        queue_size=10,
+        worker_concurrency=1,
+    )
+    stop_event = asyncio.Event()
+    run_task = asyncio.create_task(worker.run(stop_event))
+    await channel.started.wait()
+    assert channel.handler is not None
+    await channel.handler(_message("message-in-flight"))
+    await channel.handler(_message("message-never-started"))
+    await asyncio.wait_for(bridge.first_started.wait(), timeout=1)
+
+    stop_event.set()
+    bridge.release_first.set()
+    await asyncio.wait_for(run_task, timeout=5)
+
+    assert [message.message_id for message in bridge.messages] == ["message-in-flight"]
+    assert channel.stopped is True
+
+
+@pytest.mark.asyncio
 async def test_leader_loss_cancels_consumers_without_draining_old_queue() -> None:
     channel = FakeChannel()
     bridge = BlockingBridge()
@@ -436,7 +510,7 @@ async def test_build_worker_casts_integer_timeout_config_for_runtime_type_check(
     worker = worker_module._build_worker(app_config, channel_config)
 
     assert isinstance(worker, ChannelWorker)
-    await worker.close(drain=False)
+    await worker.close()
 
 
 def test_worker_main_uses_lightweight_unified_bootstrap(

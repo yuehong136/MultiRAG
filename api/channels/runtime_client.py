@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from datetime import UTC, datetime
 from typing import Literal
 from urllib.parse import quote
@@ -267,8 +267,13 @@ class MultiRAGBindingExecutionClient:
         subject: str,
         conversation: str,
         operation: Literal["message", "regenerate"] = "message",
-    ) -> AsyncIterator[BindingExecutionEvent]:
-        """Execute a binding and yield its only trusted, user-visible event stream."""
+    ) -> AsyncGenerator[BindingExecutionEvent, None]:
+        """Execute a binding and yield its only trusted, user-visible event stream.
+
+        Declared as a generator, not a bare iterator: the consumer closes this
+        on a cooperative shutdown, and only ``aclose`` releases the underlying
+        private SSE response deterministically.
+        """
 
         body = {
             "event_id": event_id,

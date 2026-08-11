@@ -259,7 +259,7 @@ MultiRAG sidecar 所有权的数据库候选并原子晋升。terminal commit ba
 连续点击不会重复追加同一句 user。数据库 COMMIT 已发出但结果不明、或提交后卡片交付失败的窗口不
 伪装成可回滚；U15 的 TTL GC 只清理仍带 metadata 的过期孤儿，不能判定这类跨存储终态。CHN-O14
 durable run ledger 继续挂起，只有确认需要 `kill -9`/主机故障、跨实例取消或终态结果未知恢复后才会
-另行启动；正常可控重启的卡片终态化由 CHN-U16 负责。
+另行启动；正常可控重启的卡片终态化已由 CHN-U16 落地（见下方「安全过期不是重启恢复」）。
 error/cancelled 卡使用独立 retry action。普通消息失败后的 retry 仍是 `message`；若失败的是一次
 `regenerate`，retry 会继承 `regenerate`，因为公开历史中的旧成功尾轮仍然存在，降成普通消息反而会
 重复追加问题。完成卡的 regenerate 始终显式使用 `regenerate`。
@@ -289,10 +289,17 @@ batch update 添加“重新生成 / 有帮助 / 没帮助”，生成中的卡�
 窗口内返回 toast；Redis、execution 和卡片更新均在回调确认之后异步完成。
 
 这里的“安全过期”不是“重启恢复”。当前 queue、execution record 和 action registry 都在 worker
-内存中；在 CHN-U16 完成前，正常停机若超过有限 drain 窗口，也可能留下仍显示 queued/running 的
-旧卡。CHN-U16 只为**可控正常停机**增加终态化：先停止接收新消息，再取消未完成执行并更新已创建
-卡片，最后退出。它不保存或恢复队列/action，`kill -9`、主机掉电、跨实例取消以及 terminal commit /
-delivery 结果未知仍属于挂起的 CHN-O14，不能用“优雅重启”验收替代。
+内存中。**CHN-U16 已完成**，为**可控正常停机**做了终态化：停止接收后立刻清空队列（因此 queued
+项不会在停机窗口里被启动，executor 调用次数为 0），已经显示的 queued 卡直接改为“已停止生成”，
+running 卡先关闭私有 execution SSE 再改为同一终态，**已经拿到完整终态答案、正在交付卡片的那次
+run 不被取消**——目标已提交时报“已停止”是撒谎。重复 close 幂等，退出时不留后台 task。
+
+它仍然不保存或恢复队列/action。`kill -9`、主机掉电、跨实例取消以及 terminal commit / delivery
+结果未知仍属于挂起的 CHN-O14，不能用“优雅重启”验收替代。**另一条必须知道的边界**：Windows 上
+supervisor 停子 worker 用的是 `TerminateProcess`（`asyncio` 在 Windows 对 `terminate()` 的实现），
+子进程收不到任何信号，上面这套清理**一行都不会跑**；Linux/macOS（含 docker 部署）是真 SIGTERM，
+Ctrl+C 两边都是真 SIGINT。所以在 Windows 开发机上改配置触发 generation 切换、看到悬空卡，
+不是回归——判据见 [PROGRESS 待决事项 CHN-Q3](../../docs/channel-program/PROGRESS.md#待决事项)。
 
 “停止生成”会取消当前 execution SSE 子任务或阻止 queued 项启动，并把卡片改为已停止；它只表示
 停止等待后续模型/RAG 输出。由于现有 execution event 还没有可验证的 tool side-effect boundary，
@@ -660,6 +667,9 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
   密钥留在环上才读得到，只有该渠道下次保存新凭据时才会改用 active 密钥重写。因此
   **仍然不得直接替换旧 key**——替换 ≠ 轮换。
 - 当前支持飞书私聊文本与 CardKit 渐进式回复；仍不支持群聊、图片、文件或语音。
+- 停机终态化只覆盖**有合作窗口**的停机（POSIX SIGTERM、两端的 Ctrl+C、显式 close）。
+  `kill -9`、主机掉电、容器被强杀，以及 **Windows 上 supervisor 触发的 worker 停止**都没有这个
+  窗口，卡片会停在最后一次显示的状态；这不是 CHN-U16 的回归，也不能靠它验收。
 
 因此，生产 binding 仍应绑定只读、最小权限的 Agent/Dialog；涉及副作用的 MCP 工具必须
 自行验证授权和幂等键。正式 Principal/ToolRuntime 接入后，可替换内部执行适配器，而无需
@@ -676,9 +686,12 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
 - 新增或启用 binding：下一次 reconcile 启动 worker。
 - 修改 App ID、App Secret、allowlist、domain、目标或发布版本：generation 增加并重启
   对应 worker。
-- 禁用或删除 binding：supervisor 优雅停止对应 worker。
+- 禁用或删除 binding：supervisor 优雅停止对应 worker。**在 Linux/macOS 上**这是真 SIGTERM，
+  worker 会先清空队列、把已显示的 queued/running 卡改成“已停止生成”再退出（CHN-U16）；
+  正常日志会出现 `channel_event=queue_abandoned` 与 `channel_event=shutdown_finalized`。
+  **在 Windows 上不会**——`terminate()` 是 `TerminateProcess`，进程直接消失，旧卡会悬空。
 - Child 异常退出：supervisor 记录脱敏错误并指数退避重启；新进程恢复接收后续消息，但不恢复旧进程
-  的内存队列、action 或未完成 run。
+  的内存队列、action 或未完成 run。异常退出没有合作窗口，因此**不适用**上面那套卡片终态化。
 - MultiRAG API/Redis 不可用：停止执行，不能降级到进程内无状态模式。
 - API 启动后会立即执行一次 Canvas candidate GC，之后按
   `channels.execution.candidate_gc` 的 interval/jitter 周期执行；它只清理超过 TTL 的孤儿候选和严格
@@ -723,14 +736,18 @@ channel_event=worker_started
 
 upstream-first 长期原则不变，但当前不立即执行 EIM-F5 / CHN-X14。近期顺序固定为：
 
-1. U15 数据库迁移与 API/supervisor 重启已经完成；补齐真实飞书 smoke，Dialog、Canvas 都要覆盖短答/长答、
-   Markdown/公式、连续追问、queue full、queued/running cancel、retry、regenerate 和 feedback；
-   Canvas 额外核对 candidate 收口及公开历史无 reasoning/半轮污染。
-2. CHN-U16 修复可控正常停机遗留 queued/running 卡，并补 worker → private HTTP/SSE →
-   Dialog/Canvas target → ReplySession 的跨层测试；同时钉住 queued cancel 不启动执行、queue full
-   确实向用户交付 busy。
-3. CHN-O9 补最小可观测：首卡/首正文、queue wait/depth/overflow、CardKit update/fallback、
-   terminal 与 shutdown outcome，能够支撑真实浸泡判断。
+1. U15 数据库迁移与 API/supervisor 重启已经完成；**真实飞书 smoke 仍然欠着**，Dialog、Canvas
+   都要覆盖短答/长答、Markdown/公式、连续追问、queue full、queued/running cancel、retry、
+   regenerate 和 feedback；Canvas 额外核对 candidate 收口及公开历史无 reasoning/半轮污染。
+   U16 先行落地不改变这条：跨层测试证明的是进程行为，不是真实飞书会话行为。
+2. ✅ CHN-U16 已完成（2026-08-11）：可控正常停机不再遗留 queued/running 卡，跨层测试从 worker
+   队列穿过私有 HTTP/SSE 直到 ReplySession 的卡片调用；queued cancel 不启动执行、queue full
+   确实向用户交付 busy 都已钉住。目标侧（Dialog/Canvas driver）那一段仍由
+   `tests/integration/test_channel_history_manager.py` 覆盖，单元层不接真库。
+3. CHN-O9（**当前下一项**）补最小可观测：首卡/首正文、queue wait/depth/overflow、
+   CardKit update/fallback、terminal 与 shutdown outcome，能够支撑真实浸泡判断。U16 已经放出
+   `channel_event=shutdown_finalized`（含 `queued=`/`running=`）与 `channel_event=queue_abandoned`
+   两条结构化事件，O9 直接收编，不要另发明第三种写法。
 4. 稳定浸泡期间不新增执行架构；记录失败率、悬空卡、重复执行/交付、候选孤儿和重启结果。
 5. Channel 稳定后，等待用户恢复从约 2026-04-24 本地同步点逐 commit 跟进 RAGFlow，再解除
    EIM-F5 / CHN-X14 挂起并把本轮改动随上游迭代一并审计。

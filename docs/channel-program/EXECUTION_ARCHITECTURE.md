@@ -1,7 +1,7 @@
 # MultiRAG Channel 执行架构
 
-> 状态：EIM-U11 / CHN-X13、EIM-U12 / CHN-U14、EIM-U13 / CHN-U15 已实现，U15 迁移/API 重启已完成、现场 smoke 待完成；
-> CHN-U16 是下一项，CHN-O9 紧随其后；EIM-F5 / CHN-X14 与 CHN-O14 挂起
+> 状态：EIM-U11 / CHN-X13、EIM-U12 / CHN-U14、EIM-U13 / CHN-U15、CHN-U16 已实现，U15 迁移/API 重启已完成、现场 smoke 待完成；
+> CHN-O9 是下一项；EIM-F5 / CHN-X14 与 CHN-O14 挂起
 > 决策：[`CHN-ADR-07`](DECISIONS.md#chn-adr-07--provider-与执行目标正交历史事务由目标驱动拥有)
 > 核验日期：2026-08-10（外部版本与证据见
 > [`VERSION_BASELINE`](../enterprise-identity-mcp/VERSION_BASELINE.md) 和
@@ -321,17 +321,35 @@ CHN-O14 当前保持挂起。在明确需要重启恢复前，不提前引入完
 CHN-O14 run ledger 负责跨 Provider 的队列、取消与交付协调；U15 sidecar 只描述候选所有权，三者
 不能互相替代。
 
-### 正常优雅停机边界（CHN-U16）
+### 正常优雅停机边界（CHN-U16，已实现）
 
 正常 SIGTERM、supervisor generation 切换或显式关闭属于当前进程能够协作完成的生命周期，不需要
-durable run ledger。CHN-U16 在现有 worker → Bridge → ReplySession 链内固定以下行为：停止接收后，
-已经展示 queued 卡但尚未开始的请求进入明确终态且不得启动 MultiRAG 执行；running 请求关闭现有
-execution stream，并按既有安全取消语义终态化回复卡；跨层测试同时证明卡片状态与“执行从未启动”
-两个事实，不能只断言 task 被 cancel。
+durable run ledger。CHN-U16 已在现有 worker → Bridge → ReplySession 链内固定下列行为：
+
+| 停机瞬间的 run 状态 | 行为 | 理由 |
+|---|---|---|
+| queued（卡已显示，执行未开始） | 直接终态化为 cancelled，**executor 调用 0 次** | queued record 根本没有 execution task，零调用是结构性的而非判断出来的 |
+| running（流在途） | 先 cancel execution task 关闭私有 SSE，再写终态卡 | 取消与写卡之间没有 await，终态写入无竞争 |
+| 已越过 terminal barrier（`status=FINAL`，卡片交付中） | **不取消**，在预算内等它交付完 | 目标已经提交，此时告诉用户“已停止”是撒谎 |
+
+`ChannelWorker.close()` 的顺序是**拒收 + 清空队列（两者之间没有 await）→ 停传输 → Bridge 终态化
+→ 取消 consumer → 释放租约与客户端**。清空队列必须早于停传输：真实 provider 的 `stop()` 会让出
+事件循环，那一让就足够一个 consumer 取走 queued ticket 并真的发起一次执行。原来的 `drain` 参数
+已删除——正常停机不允许启动 queued 项，错误停机同样要终态化已创建的卡，两条路径从此相同。
+
+流的关闭由 `contextlib.aclosing` 保证：`async for` 被取消后靠事件循环回收 async generator 的时机
+不确定，而 worker 紧接着就会关掉 HTTP client。因此 `BindingExecutor.stream` 的契约类型是
+`AsyncGenerator` 而不是 `AsyncIterator`——后者没有 `aclose()`，无法表达“消费方会主动关闭”。
+
+预算：准备阶段 2s + 终态化 5s，合计小于 supervisor 的 10s terminate→kill 窗口；超时记
+`SHUTDOWN_FINALIZE_TIMEOUT` 后继续退出，不把停机拖成挂死。
 
 这项任务不承诺 kill -9、进程崩溃、机器掉电、跨实例接管或重启后恢复。上述场景没有合作式清理
 窗口，仍属于挂起的 CHN-O14；不得借 U16 引入数据库 run ledger、worker 数据库访问或第二套恢复
-协议。
+协议。**平台边界**：Windows 上 supervisor 的 `process.terminate()` 是 `TerminateProcess` 而非
+SIGTERM，子进程收不到信号，本节的清理代码不会执行；Linux/macOS（含 docker 部署）与两端的
+Ctrl+C 才是真正的合作式窗口。是否要为 Windows 增加 `CTRL_BREAK_EVENT` 通道见
+[PROGRESS 待决事项 CHN-Q3](PROGRESS.md#待决事项)。
 
 ## 9. 数据库 I/O 预算
 
@@ -371,8 +389,8 @@ Open WebUI 一类消息树能支持任意节点分支，但 MultiRAG 当前 Dial
 | 2 | EIM-U12 / CHN-U14 | ✅ generation 8 worker 先部署 consumer；随后 emit 权威终态快照并切换 Dialog detached working copy + 单次 CAS | 中 |
 | 3 | EIM-U13 / CHN-U15 | ✅ 已实现：Canvas sidecar 显式所有权；新行同 flush 捕获；API bounded GC 移出请求热路径 | 中，涉及 DB |
 | 4 | CHN-U15 rollout gate | 🔵 数据库迁移、API/supervisor 重启与 healthz 已确认；还需完成飞书 Dialog/Canvas 现场 smoke | 中，现场验证 |
-| 5 | CHN-U16 | ⬜ 下一项：正常优雅停机时终态化 queued/running 卡，queued 项不得启动执行；补 worker → Bridge → ReplySession 跨层测试 | 中，生命周期 |
-| 6 | CHN-O9 | ⬜ U16 后紧接：补 binding 级消息量、丢弃原因与时延分位，使现场浸泡有可聚合证据 | 低，运维可见性 |
+| 5 | CHN-U16 | ✅ 已实现：正常优雅停机终态化 queued/running 卡，queued 项零 executor 调用；跨层测试覆盖 worker → 私有 SSE → Bridge → ReplySession | 中，生命周期 |
+| 6 | CHN-O9 | ⬜ **当前下一项**：补 binding 级消息量、丢弃原因与时延分位，使现场浸泡有可聚合证据 | 低，运维可见性 |
 | 7 | EIM-F5 / CHN-X14 | ⏸ 挂起：Channel 稳定且用户恢复从约 4 月 24 日基线逐 commit 跟进时，随同步做只读差异审计 | 低，只读 |
 | 8 | EIM-O4 / CHN-O14 | ⏸ 挂起：仅在确认需要重启恢复后增加 Channel durable run ledger、单活约束和 cancel/final CAS；不复制 Canvas checkpoint runtime | 高，需独立 ADR 复核 |
 
@@ -393,6 +411,8 @@ producer 才 emit。旧 API 时新 worker 回退 delta，旧 worker 遇到新字
   Dialog/Canvas 表无 Channel 私有列；
 - GC 只在 API 进程启动/周期运行且严格有界，多实例用 candidate-row `SKIP LOCKED` 协调；旧
   Canvas/Dialog 只按完整兼容哨兵回收；
+- 合作式停机后没有仍处于 queued/running 的可见卡片，且停机窗口内 executor 调用次数为 0；已提交
+  但尚未交付完的 run 不被取消；重复 close 不产生第二次终态；
 - worker 导入图中没有 SQLAlchemy 和 `api.db`，并继续只走内部 API/SSE；
 - Provider capability、Target capability 和实际按钮/错误行为有契约测试；
 - 上游同步区相对移植基线不新增 Channel 私有参数或历史分支；

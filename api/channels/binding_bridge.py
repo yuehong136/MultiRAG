@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import logging
 import secrets
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal, Protocol, runtime_checkable
@@ -45,8 +46,16 @@ from api.channels.state_store import ChannelStateStore, binding_conversation_key
 LOGGER = logging.getLogger(__name__)
 
 QUEUE_BUSY_TEXT = "当前会话排队较多，请稍后再试。"
+SHUTDOWN_BUSY_TEXT = "服务正在停止，请稍后重试。"
 _ACTION_TTL_SECONDS = 86_400
 _MAX_ACTIONS = 4_096
+# Cooperative shutdown budgets. Both are spent inside one worker close, and
+# their sum stays under the supervisor's 10s wait before it escalates to a
+# kill -- a killed process has no cleanup window at all, which is exactly the
+# case this lifecycle refuses to claim it handles.
+_SHUTDOWN_PREPARATION_GRACE_SECONDS = 2.0
+_SHUTDOWN_FINALIZE_BUDGET_SECONDS = 5.0
+_TERMINAL_REPLY_STATUSES = frozenset({ReplyStatus.FINAL, ReplyStatus.ERROR, ReplyStatus.CANCELLED})
 
 
 @runtime_checkable
@@ -61,7 +70,7 @@ class BindingExecutor(Protocol):
         subject: str,
         conversation: str,
         operation: Literal["message", "regenerate"] = "message",
-    ) -> AsyncIterator[BindingExecutionEvent]: ...
+    ) -> AsyncGenerator[BindingExecutionEvent, None]: ...
 
     async def reset(self, *, conversation_key: str) -> None: ...
 
@@ -86,6 +95,10 @@ class _ExecutionRecord:
     execution_task: asyncio.Task[None] | None = None
     cancel_requested: bool = False
     feedback: bool | None = None
+    # A stop callback and a cooperative shutdown can both reach one reply. The
+    # flag keeps the provider-visible terminal transition single even while the
+    # first attempt is suspended on provider I/O.
+    finalizing: bool = False
 
 
 @dataclass(slots=True)
@@ -146,6 +159,11 @@ class BindingBridge:
         self._actions: dict[str, _RegisteredAction] = {}
         self._latest_execution_by_conversation: dict[str, str] = {}
         self._background_tasks: set[asyncio.Task[None]] = set()
+        # Every reply whose card can still change. Membership -- not status --
+        # is what a cooperative shutdown walks, so a reply that already crossed
+        # its terminal barrier stays here until its delivery really finished.
+        self._live_records: dict[str, _ExecutionRecord] = {}
+        self._closing = False
 
     def set_message_scheduler(
         self,
@@ -156,6 +174,8 @@ class BindingBridge:
     def accepts_message(self, message: IncomingMessage) -> bool:
         """Apply transport-only policy before the worker allocates a ticket."""
 
+        if self._closing:
+            return False
         if self._private_chat_only and message.chat_type != "p2p":
             return False
         if message.sender_type != "user":
@@ -168,6 +188,8 @@ class BindingBridge:
     def message_queued(self, message: IncomingMessage, *, queue_position: int) -> None:
         """Start claim/card preparation without blocking the SDK callback."""
 
+        if self._closing:
+            return
         task = asyncio.create_task(
             self._prepare_message(message, queue_position=queue_position),
             name=f"channel-prepare-{_short_hash(message.execution_id)}",
@@ -185,6 +207,10 @@ class BindingBridge:
     async def handle_message(self, message: IncomingMessage) -> None:
         """Run a previously prepared message after its worker ticket starts."""
 
+        if self._closing:
+            # Intake already stopped, so this ticket must not reach the target.
+            # ``close`` owns the terminal state of the card it already showed.
+            return
         preparation = self._preparations.pop(id(message), None)
         if preparation is None:
             if not self.accepts_message(message):
@@ -208,6 +234,8 @@ class BindingBridge:
     async def handle_action(self, action: ChannelAction) -> ChannelActionResponse:
         """Claim a low-risk action and enqueue work without provider I/O."""
 
+        if self._closing:
+            return ChannelActionResponse("warning", SHUTDOWN_BUSY_TEXT)
         self._cleanup_actions()
         registered = self._actions.get(action.action_id)
         if registered is None or registered.expires_at <= time.monotonic():
@@ -293,7 +321,20 @@ class BindingBridge:
         return ChannelActionResponse("success", "感谢反馈。")
 
     async def close(self) -> None:
-        """Cancel bridge-owned preparation and callback tasks on shutdown."""
+        """Give every visible reply one terminal state, then drop bridge tasks.
+
+        This is the cooperative window only: the caller has already stopped
+        intake, so nothing queued may still reach the target. A reply that
+        never started is cancelled without touching the execution client, a
+        running reply has its stream closed and is cancelled, and a reply that
+        already crossed its terminal barrier is allowed to finish delivering.
+        Repeat calls are no-ops. Nothing here survives the process: a kill -9
+        still leaves the queue, the records and the cards where they were.
+        """
+
+        self._closing = True
+        await self._settle_preparations()
+        await self._finalize_visible_replies()
 
         tasks = [*self._preparations.values(), *self._background_tasks]
         for task in tasks:
@@ -304,6 +345,65 @@ class BindingBridge:
         self._background_tasks.clear()
         self._actions.clear()
         self._latest_execution_by_conversation.clear()
+        self._live_records.clear()
+
+    async def _settle_preparations(self) -> None:
+        """Let in-flight card creation land so its card can be terminalized.
+
+        A preparation cancelled between ``create`` and ``reply`` would leave a
+        card nobody holds a handle to, which is the one shape this lifecycle
+        cannot repair. Waiting a bounded moment is cheaper than that.
+        """
+
+        pending = [task for task in self._preparations.values() if not task.done()]
+        if not pending:
+            return
+        await asyncio.wait(pending, timeout=_SHUTDOWN_PREPARATION_GRACE_SECONDS)
+
+    async def _finalize_visible_replies(self) -> None:
+        records = list(self._live_records.values())
+        if not records:
+            return
+        queued = sum(1 for record in records if record.status is ReplyStatus.QUEUED)
+        running = sum(1 for record in records if record.status is ReplyStatus.RUNNING)
+        try:
+            async with asyncio.timeout(_SHUTDOWN_FINALIZE_BUDGET_SECONDS):
+                for record in records:
+                    await self._finalize_on_shutdown(record)
+        except TimeoutError:
+            LOGGER.error(
+                "channel_event=shutdown_finalized binding_id_hash=%s queued=%s running=%s result=failed error_code=SHUTDOWN_FINALIZE_TIMEOUT",
+                _short_hash(self._binding_id),
+                queued,
+                running,
+            )
+            return
+        LOGGER.info(
+            "channel_event=shutdown_finalized binding_id_hash=%s queued=%s running=%s result=ok error_code=",
+            _short_hash(self._binding_id),
+            queued,
+            running,
+        )
+
+    async def _finalize_on_shutdown(self, record: _ExecutionRecord) -> None:
+        task = record.execution_task
+        if record.status in {ReplyStatus.QUEUED, ReplyStatus.RUNNING}:
+            # Cancel and finalize with no await in between: once the execution
+            # task is cancelled it can no longer append to this reply, so the
+            # terminal card write below is uncontended. A queued record has no
+            # task at all, which is why this path reaches the executor zero
+            # times. ``cancel_requested`` tells ``_run_question`` that the
+            # unwind is a shutdown rather than a stream that failed by itself.
+            record.cancel_requested = True
+            if task is not None and not task.done():
+                task.cancel()
+            await self._finalize_cancel(record)
+        if task is not None and not task.done():
+            # Reached for a record past its terminal barrier, which was not
+            # cancelled above: it holds a real answer from a target that
+            # already committed, so the honest move is to let its delivery
+            # finish. For a cancelled task this is what closes the stream.
+            await asyncio.gather(task, return_exceptions=True)
 
     async def _prepare_message(
         self,
@@ -371,6 +471,7 @@ class BindingBridge:
             action_ids=action_ids,
             capabilities=self._capabilities,
         )
+        self._live_records[message.execution_id] = record
         self._register_actions(record)
         try:
             record.reply_session = await self._channel.begin_reply(
@@ -386,6 +487,7 @@ class BindingBridge:
             record.reply_message_id = record.reply_session.reply_message_id
         except Exception:
             self._drop_actions(record)
+            self._release_record(record)
             self._log(logging.ERROR, "reply_failed", message, "REPLY_BEGIN_FAILURE")
             await self._mark_executed(message)
             await self._safe_reply(message, SERVICE_UNAVAILABLE_TEXT)
@@ -414,9 +516,14 @@ class BindingBridge:
         try:
             await reply_session.set_status(ReplyStatus.RUNNING)
         except Exception:
-            self._log(logging.ERROR, "reply_failed", record.source, "REPLY_STATUS_FAILURE")
-            await self._mark_executed(record.source)
-            await self._fail_reply_session(record, "REPLY_STATUS_FAILURE")
+            if record.status not in _TERMINAL_REPLY_STATUSES:
+                self._log(logging.ERROR, "reply_failed", record.source, "REPLY_STATUS_FAILURE")
+                await self._mark_executed(record.source)
+                await self._fail_reply_session(record, "REPLY_STATUS_FAILURE")
+            return
+        if record.status in _TERMINAL_REPLY_STATUSES:
+            # A cooperative shutdown can terminalize this card while the status
+            # patch is still in flight. Never resurrect a finished reply.
             return
         record.status = ReplyStatus.RUNNING
         if record.cancel_requested:
@@ -452,46 +559,53 @@ class BindingBridge:
         message = record.source
         try:
             terminal_seen = False
-            async for event in self._executor.stream(
-                question=record.question,
-                event_id=message.execution_id,
-                conversation_key=record.conversation_key,
-                provider=message.channel,
-                subject=message.sender_id,
-                conversation=message.chat_id,
-                operation=message.operation,
-            ):
-                if terminal_seen:
-                    raise AgentExecutionError("CHANNEL_EXECUTION_INVALID_STREAM")
-                if isinstance(event, MessageDeltaEvent):
-                    try:
-                        await reply_session.append(event.content)
-                    except Exception:
-                        self._log(
-                            logging.ERROR,
-                            "reply_failed",
-                            message,
-                            "REPLY_APPEND_FAILURE",
-                        )
+            # ``aclosing`` is what makes a cancelled execution release its
+            # private SSE response now instead of whenever the loop happens to
+            # finalize an abandoned generator. Cooperative shutdown depends on
+            # it: the transport must be closed before the client is torn down.
+            async with contextlib.aclosing(
+                self._executor.stream(
+                    question=record.question,
+                    event_id=message.execution_id,
+                    conversation_key=record.conversation_key,
+                    provider=message.channel,
+                    subject=message.sender_id,
+                    conversation=message.chat_id,
+                    operation=message.operation,
+                )
+            ) as events:
+                async for event in events:
+                    if terminal_seen:
+                        raise AgentExecutionError("CHANNEL_EXECUTION_INVALID_STREAM")
+                    if isinstance(event, MessageDeltaEvent):
+                        try:
+                            await reply_session.append(event.content)
+                        except Exception:
+                            self._log(
+                                logging.ERROR,
+                                "reply_failed",
+                                message,
+                                "REPLY_APPEND_FAILURE",
+                            )
+                            await self._mark_executed(message)
+                            await self._fail_reply_session(record, "REPLY_APPEND_FAILURE")
+                            return
+                        continue
+                    if isinstance(event, ExecutionFailedEvent):
+                        terminal_seen = True
+                        error_code = f"CHANNEL_EXECUTION_{event.error_code}"
+                        self._log(logging.ERROR, "execution_failed", message, error_code)
                         await self._mark_executed(message)
-                        await self._fail_reply_session(record, "REPLY_APPEND_FAILURE")
-                        return
-                    continue
-                if isinstance(event, ExecutionFailedEvent):
-                    terminal_seen = True
-                    error_code = f"CHANNEL_EXECUTION_{event.error_code}"
-                    self._log(logging.ERROR, "execution_failed", message, error_code)
-                    await self._mark_executed(message)
-                    await self._fail_reply_session(record, error_code)
-                    continue
-                if isinstance(event, MessageCompletedEvent):
-                    terminal_seen = True
-                    await self._complete_reply(
-                        record,
-                        session_id=event.session_id,
-                        authoritative_content=event.content,
-                        started_at=started_at,
-                    )
+                        await self._fail_reply_session(record, error_code)
+                        continue
+                    if isinstance(event, MessageCompletedEvent):
+                        terminal_seen = True
+                        await self._complete_reply(
+                            record,
+                            session_id=event.session_id,
+                            authoritative_content=event.content,
+                            started_at=started_at,
+                        )
             if terminal_seen:
                 return
             raise AgentExecutionError("CHANNEL_EXECUTION_INCOMPLETE")
@@ -523,10 +637,12 @@ class BindingBridge:
         elapsed_ms = round((time.monotonic() - started_at) * 1000)
         reply_session = record.reply_session
         if reply_session is None:
+            self._release_record(record)
             return
         # Receiving the trusted terminal event is the cancellation barrier.
-        # Delivery may still fail and downgrade to ERROR below, but a late
-        # stop callback must not cancel final card replacement mid-flight.
+        # Delivery may still fail and downgrade to ERROR below, but neither a
+        # late stop callback nor a cooperative shutdown may cancel final card
+        # replacement mid-flight.
         record.status = ReplyStatus.FINAL
         try:
             if authoritative_content is not None:
@@ -542,7 +658,9 @@ class BindingBridge:
                 record.status = ReplyStatus.FINAL
             else:
                 record.status = ReplyStatus.ERROR
+            self._release_record(record)
             return
+        self._release_record(record)
         self._log(
             logging.INFO,
             "execution_completed",
@@ -560,33 +678,41 @@ class BindingBridge:
     ) -> None:
         reply_session = record.reply_session
         if reply_session is None:
+            self._release_record(record)
             return
         record.status = ReplyStatus.ERROR
         try:
             await reply_session.fail(error_code)
         except Exception:
             self._log(logging.ERROR, "reply_failed", record.source, "REPLY_FAILED")
+        self._release_record(record)
 
     async def _finalize_cancel(self, record: _ExecutionRecord) -> None:
-        if record.status is ReplyStatus.CANCELLED:
+        if record.status in _TERMINAL_REPLY_STATUSES or record.finalizing:
             return
         reply_session = record.reply_session
         if reply_session is None:
+            self._release_record(record)
             return
-        if reply_session.state is ReplySessionState.OPEN:
-            try:
-                await reply_session.cancel()
-                await self._state_store.mark_replied(record.source.execution_id)
-            except Exception:
-                self._log(
-                    logging.ERROR,
-                    "reply_failed",
-                    record.source,
-                    "REPLY_CANCEL_FAILURE",
-                )
-                await self._mark_executed(record.source)
-                return
-        record.status = ReplyStatus.CANCELLED
+        record.finalizing = True
+        try:
+            if reply_session.state is ReplySessionState.OPEN:
+                try:
+                    await reply_session.cancel()
+                    await self._state_store.mark_replied(record.source.execution_id)
+                except Exception:
+                    self._log(
+                        logging.ERROR,
+                        "reply_failed",
+                        record.source,
+                        "REPLY_CANCEL_FAILURE",
+                    )
+                    await self._mark_executed(record.source)
+                    return
+            record.status = ReplyStatus.CANCELLED
+            self._release_record(record)
+        finally:
+            record.finalizing = False
         self._log(
             logging.INFO,
             "execution_cancelled",
@@ -681,6 +807,12 @@ class BindingBridge:
         stale_conversations = [conversation for conversation, execution_id in self._latest_execution_by_conversation.items() if execution_id not in live_execution_ids]
         for conversation in stale_conversations:
             self._latest_execution_by_conversation.pop(conversation, None)
+
+    def _release_record(self, record: _ExecutionRecord) -> None:
+        """Drop a reply whose card can no longer be changed by this process."""
+
+        if self._live_records.get(record.source.execution_id) is record:
+            del self._live_records[record.source.execution_id]
 
     def _drop_actions(self, record: _ExecutionRecord) -> None:
         for action_id in (
