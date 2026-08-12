@@ -93,11 +93,11 @@ def invited_user_profile(db: Session, user_id: str) -> dict | None:
     return {"id": user.id, "avatar": user.avatar, "email": user.email, "nickname": user.nickname}
 
 
-def inviter_display_name(db: Session, user_id: str, fallback_email: str) -> str:
+def inviter_display_name(db: Session, user_id: str, fallback_email: str | None) -> str:
     inviter = UserService.get_by_id(db, user_id)
     if inviter and inviter.nickname:
         return inviter.nickname
-    return fallback_email
+    return fallback_email or "MultiRAG user"
 
 
 # ---------------------------------------------------------------------------

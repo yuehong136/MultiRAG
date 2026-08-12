@@ -147,10 +147,22 @@ Provider-neutral ReplySession 已管理 `begin/append/replace/complete/fail` 和
 
 迁移规则：
 
-- 现有用户初始 `account_kind=local`；有明确外部登录关联的账号可在后续 link 时变成 `hybrid`。
+- 存量行按旧字段可逆分类：`login_channel` 为空或为 `password` 时写 `local`；非密码渠道且
+  `password is null` 时写 `external`；非密码渠道且仍有密码时写 `hybrid`。这只是兼容分类，
+  不把旧 OAuth 邮箱升级为已验证外部身份。只要 `email` 非空且 `account_kind` 仍能由旧字段
+  重建，upgrade → downgrade → upgrade 必须逐字段恢复；否则 downgrade fail closed。
 - JIT 创建：`email=null`、`password=null`、`account_kind=external`、`login_channel=feishu`。
 - 后续绑定本地/OIDC 登录时显式升级 `hybrid`；禁止按相同邮箱静默合并。
 - 密码登录、找回密码、邮件通知入口必须对 `email is null` 给出确定行为，不能 500。
+- `account_kind=external` 在数据库和 service 层都禁止本地密码；密码登录/找回只查
+  `local/hybrid`，对 external-only 账号按无可用密码凭据 fail closed，不对 null 密码调用 bcrypt。
+- 新建密码账号显式写 `local`。I1 不新建 OAuth-only 账号；未来 I6/JIT 只有在 Provider subject
+  绑定验证完成后才可新建 `external` 或通过显式 link/merge 升级为 `hybrid`。
+- 现有 Web OAuth callback 在 I1 期间完成 Provider 回调校验后固定返回
+  `oauth_identity_binding_required`，**不按 email 登录、注册或合并任何平台账号**；OAuth `state`
+  必须存在且逐字匹配 session 中的一次性值。I6 建立显式 Provider subject binding/link/merge 后才可
+  重新开放账号动作；Channel/JIT 也不得复用 email callback。存量 `login_channel != password`
+  账户仅由迁移保守分类为 `external/hybrid`，不因此获得可用的 verified external identity。
 
 ### 3.2 `t_ai_external_identities`
 

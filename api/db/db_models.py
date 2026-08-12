@@ -24,6 +24,8 @@ from sqlalchemy.inspection import inspect as sa_inspect
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, object_session, sessionmaker
 from sqlalchemy.orm.attributes import get_history
 
+from api.db import UserAccountKind
+
 # from common.time_utils import current_timestamp, timestamp_to_date, date_string_to_timestamp
 from common.config_utils import decrypt_database_config
 from common.constants import ParserType
@@ -674,13 +676,34 @@ def before_update(mapper, connection, target):
 
 class User(BaseModel):
     __tablename__ = "t_ai_users"
-    __table_args__ = {"schema": "usr_ai"}
+    __table_args__ = (
+        sa.CheckConstraint(
+            "account_kind IN ('local', 'external', 'hybrid')",
+            name="ck_users_account_kind",
+        ),
+        sa.CheckConstraint(
+            "account_kind <> 'external' OR password IS NULL",
+            name="ck_users_external_password_null",
+        ),
+        sa.CheckConstraint(
+            "account_kind = 'external' OR email IS NOT NULL",
+            name="ck_users_password_account_email",
+        ),
+        {"schema": "usr_ai"},
+    )
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
     access_token: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
     nickname: Mapped[str] = mapped_column(String(100), index=True, nullable=False)
     password: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
-    email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    email: Mapped[str | None] = mapped_column(String(255), unique=True, index=True, nullable=True)
+    account_kind: Mapped[str] = mapped_column(
+        String(16),
+        index=True,
+        nullable=False,
+        default=UserAccountKind.LOCAL.value,
+        server_default=text(f"'{UserAccountKind.LOCAL.value}'"),
+    )
     avatar: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="avatar base64 string")
     language: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, default="English")
     color_schema: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, default="Bright")
@@ -693,17 +716,18 @@ class User(BaseModel):
     status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1")
     is_superuser: Mapped[bool | None] = mapped_column(Boolean, index=True, nullable=True, default=False)
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
+        """Return the public user projection; credentials never cross this boundary."""
+
         return {
             "id": self.id,
-            "access_token": self.access_token,
             "avatar": self.avatar,
             "email": self.email,
+            "account_kind": self.account_kind,
             "is_active": self.is_active,
             "is_anonymous": self.is_anonymous,
             "language": self.language,
             "nickname": self.nickname,
-            "password": self.password,
             "status": self.status,
             "timezone": self.timezone,
             "last_login_time": self.last_login_time,

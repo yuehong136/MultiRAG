@@ -164,11 +164,8 @@ def create_user(user_data: UserCreate, user=Depends(admin_manager), db: Session 
     try:
         res = UserMgr.create_user(db, user_data.username, user_data.password, user_data.role)
         if res["success"]:
-            user_info = res["user_info"]
-            # 移除密码字段（不返回敏感信息）
-            if "password" in user_info:
-                user_info.pop("password")
-            logging.info(f"User created successfully: {user_info}")
+            user_info = {key: value for key, value in res["user_info"].items() if key not in {"password", "access_token"}}
+            logging.info("Admin created user: user_id=%s", user_info.get("id"))
             return success_response(user_info, "User created successfully")
         else:
             logging.warning(f"Failed to create user: {res}")

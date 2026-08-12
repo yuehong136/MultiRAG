@@ -72,11 +72,12 @@ def test_save_duplicate_email_raises_http_500_and_rolls_back(session_factory):
         UserService.insert(db, **payload)
 
     with session_factory() as db:
-        # UserService.save 的真实契约：唯一约束冲突 → 内部 rollback → HTTPException(500)
+        # 唯一约束冲突会 rollback，并且公开异常不得携带 SQL 参数或凭据。
         with pytest.raises(HTTPException) as exc_info:
             UserService.save(db, **_payload(email=payload["email"]))
         assert exc_info.value.status_code == 500
-        assert "Integrity error" in exc_info.value.detail
+        assert exc_info.value.detail == "user_integrity_error"
+        assert payload["email"] not in exc_info.value.detail
         # 已 rollback：同一会话立即可继续使用，且冲突行未落库
         count = db.execute(sa.select(sa.func.count()).select_from(User).where(User.email == payload["email"])).scalar_one()
         assert count == 1

@@ -1,6 +1,14 @@
 from enum import IntEnum, StrEnum
 
 
+class UserAccountKind(StrEnum):
+    """How a platform user can authenticate to MultiRAG."""
+
+    LOCAL = "local"
+    EXTERNAL = "external"
+    HYBRID = "hybrid"
+
+
 class UserTenantRole(StrEnum):
     OWNER = "owner"
     ADMIN = "admin"

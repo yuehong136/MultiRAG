@@ -75,6 +75,7 @@ class UserAdmin(ModelView, model=User):
         User.id,
         User.nickname,
         User.email,
+        User.account_kind,
         User.language,
         User.color_schema,
         User.timezone,
@@ -90,7 +91,7 @@ class UserAdmin(ModelView, model=User):
     ]
     column_searchable_list = [User.nickname, User.email]
     column_sortable_list = [User.create_date, User.last_login_time]
-    form_excluded_columns = [User.password, User.access_token]
+    form_excluded_columns = [User.password, User.access_token, User.account_kind]
     column_default_sort = [(User.create_date, True)]
 
 

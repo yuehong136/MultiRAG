@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.apps.auth import get_auth_client
-from api.db import FileType, UserTenantRole
+from api.db import FileType, UserAccountKind, UserTenantRole
 from api.db.db_models import TenantLLM, get_async_db
 from api.db.services.file_service import FileService
 from api.db.services.llm_service import get_init_tenant_llm
@@ -39,7 +39,7 @@ from api.utils.web_utils import (
 from common import settings
 from common.connection_utils import construct_response
 from common.constants import RetCode
-from common.misc_utils import download_img, get_uuid
+from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, datetime_format, get_format_time
 from core.utils.redis_conn import REDIS_CONN
 
@@ -270,7 +270,13 @@ def oauth_login(channel: str, request: Request):
 
 
 @router.get("/auth/oauth/{channel}/callback", summary="OAuth回调处理")
-async def oauth_callback(channel: str, code: str, state: str = None, request: Request = None, db: AsyncSession = Depends(get_async_db)):
+async def oauth_callback(
+    channel: str,
+    code: str,
+    request: Request,
+    state: str | None = None,
+    db: AsyncSession = Depends(get_async_db),
+):
     """
     OAuth回调处理
 
@@ -290,13 +296,11 @@ async def oauth_callback(channel: str, code: str, state: str = None, request: Re
         if not channel_config:
             return RedirectResponse(url=f"/?error=invalid_channel_{channel}")
 
-        # 验证状态参数（如果提供了的话）
-        if state and request:
-            stored_state = request.session.get("oauth_state")
-            if not stored_state or stored_state != state:
-                return RedirectResponse(url="/?error=invalid_state")
-            # 验证成功后删除状态
-            request.session.pop("oauth_state", None)
+        # State is mandatory: accepting an omitted state turns the callback
+        # into a login-CSRF/account-confusion endpoint.
+        stored_state = request.session.pop("oauth_state", None)
+        if not state or not isinstance(stored_state, str) or not secrets.compare_digest(stored_state, state):
+            return RedirectResponse(url="/?error=invalid_state")
 
         auth_cli = get_auth_client(channel_config)
 
@@ -323,56 +327,13 @@ async def oauth_callback(channel: str, code: str, state: str = None, request: Re
         if not user_info.email:
             return RedirectResponse(url="/?error=email_missing")
 
-        # 登录或注册
-        users = await db.run_sync(lambda s: UserService.query(s, email=user_info.email))  # TODO(async-phase4)
-        user_id = get_uuid()
-
-        if not users:
-            try:
-                try:
-                    avatar = await download_img(user_info.avatar_url)
-                except Exception as e:
-                    logging.exception(e)
-                    avatar = ""
-
-                user_data = {
-                    "access_token": get_uuid(),
-                    "email": user_info.email,
-                    "avatar": avatar,
-                    "nickname": user_info.nickname,
-                    "login_channel": channel,
-                    "last_login_time": get_format_time(),
-                    "is_superuser": False,
-                }
-                users = await db.run_sync(lambda s: user_register(s, user_id, user_data))  # TODO(async-phase4)
-
-                if not users:
-                    raise Exception(f"Failed to register {user_info.email}")
-                if len(users) > 1:
-                    raise Exception(f"Same email: {user_info.email} exists!")
-
-                # 尝试登录
-                user = users[0]
-                login_user(user)
-                db.add(user)
-                await db.commit()
-                return RedirectResponse(url=f"/?auth={user.id}")
-
-            except Exception as e:
-                await db.run_sync(lambda s: rollback_user_registration(s, user_id))  # TODO(async-phase4)
-                logging.exception(e)
-                return RedirectResponse(url=f"/?error={e!s}")
-
-        # 用户已存在，尝试登录
-        user = users[0]
-        if user and hasattr(user, "is_active") and not user.is_active:
-            return RedirectResponse(url="/?error=user_inactive")
-        user.access_token = get_uuid()
-        login_user(user)
-        db.add(user)
-        await db.commit()
-
-        return RedirectResponse(url=f"/?auth={user.id}")
+        # I1 deliberately does not elevate an email returned by OAuth into a
+        # platform identity. Until I6 persists and verifies provider subject
+        # bindings, both first-time registration and existing-email reuse are
+        # disabled. This avoids silently turning an email attribute into an
+        # account-linking credential.
+        logging.warning("OAuth identity binding is not available for channel=%s", channel)
+        return RedirectResponse(url="/?error=oauth_identity_binding_required")
 
     except Exception as e:
         logging.exception(e)
@@ -531,9 +492,10 @@ def user_register(db: Session, user_id: str, user: dict):
         FileService.insert(db, file)
         db.commit()
         return UserService.query(db, email=user["email"])
-    except Exception as e:
+    except Exception as exc:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error during user registration: {e!s}")
+        logging.error("User registration transaction failed safely: %s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="user_registration_failed") from None
 
 
 @router.post("/users", summary="注册用户")
@@ -565,6 +527,7 @@ async def user_add(request: RegisterRequest, db: AsyncSession = Depends(get_asyn
     user_dict = {
         "access_token": get_uuid(),
         "email": email_address,
+        "account_kind": UserAccountKind.LOCAL.value,
         "nickname": nickname,
         "password": decrypted_password,
         "login_channel": "password",
@@ -584,8 +547,12 @@ async def user_add(request: RegisterRequest, db: AsyncSession = Depends(get_asyn
         return construct_response(data=user.to_dict(), auth=access_token, retmsg=f"{nickname}, welcome aboard!")
     except Exception as e:
         await db.run_sync(lambda s: rollback_user_registration(s, user_id))  # TODO(async-phase4)
-        logging.exception(e)
-        return get_json_result(data=False, retmsg=f"User registration failure, error: {e!s}", retcode=RetCode.EXCEPTION_ERROR)
+        logging.error("User registration failed safely: %s", type(e).__name__)
+        return get_json_result(
+            data=False,
+            retmsg="User registration failed.",
+            retcode=RetCode.EXCEPTION_ERROR,
+        )
 
 
 @router.get("/users/me/models", summary="获取租户信息")
@@ -632,8 +599,8 @@ async def forget_get_captcha(email: str, db: AsyncSession = Depends(get_async_db
     if not email:
         return get_json_result(data=False, retcode=RetCode.ARGUMENT_ERROR, retmsg="email is required")
 
-    users = await db.run_sync(lambda s: UserService.query(s, email=email))  # TODO(async-phase4)
-    if not users:
+    user = await db.run_sync(lambda s: UserService.query_password_user_by_email(s, email))  # TODO(async-phase4)
+    if user is None:
         return get_json_result(data=False, retcode=RetCode.DATA_ERROR, retmsg="invalid email")
 
     # Generate captcha text
@@ -671,8 +638,8 @@ async def forget_send_otp(request: SendOtpRequest, db: AsyncSession = Depends(ge
     if not email or not captcha:
         return get_json_result(data=False, retcode=RetCode.ARGUMENT_ERROR, retmsg="email and captcha required")
 
-    users = await db.run_sync(lambda s: UserService.query(s, email=email))  # TODO(async-phase4)
-    if not users:
+    user = await db.run_sync(lambda s: UserService.query_password_user_by_email(s, email))  # TODO(async-phase4)
+    if user is None:
         return get_json_result(data=False, retcode=RetCode.DATA_ERROR, retmsg="invalid email")
 
     stored_captcha = REDIS_CONN.get(captcha_key(email))
@@ -749,8 +716,8 @@ async def forget_verify_otp(request: VerifyOtpRequest, db: AsyncSession = Depend
     if not all([email, otp]):
         return get_json_result(data=False, retcode=RetCode.ARGUMENT_ERROR, retmsg="email and otp are required")
 
-    users = await db.run_sync(lambda s: UserService.query(s, email=email))  # TODO(async-phase4)
-    if not users:
+    user = await db.run_sync(lambda s: UserService.query_password_user_by_email(s, email))  # TODO(async-phase4)
+    if user is None:
         return get_json_result(data=False, retcode=RetCode.DATA_ERROR, retmsg="invalid email")
 
     # Verify OTP from Redis
@@ -831,11 +798,9 @@ async def forget_reset_password(request: ResetPasswordRequest, db: AsyncSession 
     if new_pwd != new_pwd2:
         return get_json_result(data=False, retcode=RetCode.ARGUMENT_ERROR, retmsg="passwords do not match")
 
-    users = await db.run_sync(lambda s: UserService.query(s, email=email))  # TODO(async-phase4)
-    if not users:
+    user = await db.run_sync(lambda s: UserService.query_password_user_by_email(s, email))  # TODO(async-phase4)
+    if user is None:
         return get_json_result(data=False, retcode=RetCode.DATA_ERROR, retmsg="invalid email")
-
-    user = users[0]
 
     # Reset password
     try:

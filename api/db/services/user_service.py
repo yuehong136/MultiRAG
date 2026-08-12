@@ -1,6 +1,7 @@
 import hashlib
 import logging
 from datetime import datetime
+from typing import Any
 
 import bcrypt
 from fastapi import HTTPException
@@ -8,7 +9,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError, NoResultFound
 from sqlalchemy.orm import Session
 
-from api.db import UserTenantRole
+from api.db import UserAccountKind, UserTenantRole
 from api.db.db_models import Tenant, User, UserTenant
 from api.db.services.common_service import CommonService
 from common import settings
@@ -30,9 +31,15 @@ class UserService(CommonService):
         return hashed.decode("utf-8")
 
     @staticmethod
-    def verify_password(password: str, hashed_password: str) -> bool:
-        # 验证密码
-        return bcrypt.checkpw(password.encode("utf-8"), hashed_password.encode("utf-8"))
+    def verify_password(password: str, hashed_password: str | None) -> bool:
+        """Fail closed for identity-only accounts and malformed legacy hashes."""
+
+        if not hashed_password:
+            return False
+        try:
+            return bcrypt.checkpw(password.encode("utf-8"), hashed_password.encode("utf-8"))
+        except ValueError:
+            return False
 
     @classmethod
     def query(cls, db: Session, cols: list[str] | None = None, reverse: bool | None = None, order_by: str | None = None, **kwargs):
@@ -63,12 +70,22 @@ class UserService(CommonService):
         return db.get(cls.model, user_id)
 
     @classmethod
-    def query_user(cls, db: Session, email: str, password: str):
-        stmt = select(cls.model).where(cls.model.email == email, cls.model.status == StatusEnum.VALID.value)
-        user = db.scalars(stmt).first()
-        if user and cls.verify_password(password, user.password):
+    def query_user(cls, db: Session, email: str, password: str) -> User | None:
+        user = cls.query_password_user_by_email(db, email)
+        if user is not None and cls.verify_password(password, user.password):
             return user
         return None
+
+    @classmethod
+    def query_password_user_by_email(cls, db: Session, email: str) -> User | None:
+        """Return accounts allowed to use password login or password recovery."""
+
+        stmt = select(cls.model).where(
+            cls.model.email == email,
+            cls.model.status == StatusEnum.VALID.value,
+            cls.model.account_kind.in_((UserAccountKind.LOCAL.value, UserAccountKind.HYBRID.value)),
+        )
+        return db.scalars(stmt).first()
 
     @classmethod
     def query_user_onlywith_email(cls, db: Session, email: str):
@@ -82,10 +99,18 @@ class UserService(CommonService):
         return db.scalars(stmt).all()
 
     @classmethod
-    def save(cls, db: Session, **kwargs):
+    def save(cls, db: Session, **kwargs: Any) -> User:
         if "id" not in kwargs:
             kwargs["id"] = get_uuid()
-        if "password" in kwargs:
+        account_kind = str(kwargs.get("account_kind", UserAccountKind.LOCAL.value))
+        try:
+            normalized_account_kind = UserAccountKind(account_kind)
+        except ValueError as exc:
+            raise ValueError(f"Unsupported user account_kind: {account_kind!r}") from exc
+        if normalized_account_kind is UserAccountKind.EXTERNAL and kwargs.get("password") is not None:
+            raise ValueError("External-only users cannot have a local password")
+        kwargs["account_kind"] = normalized_account_kind.value
+        if kwargs.get("password") is not None:
             # kwargs["password"] = pwd_context.hash(str(kwargs["password"]))
             kwargs["password"] = cls.hash_password(str(kwargs["password"]))
         current_ts = current_timestamp()
@@ -101,12 +126,14 @@ class UserService(CommonService):
         try:
             db.commit()
             db.refresh(user)
-        except IntegrityError as e:
+        except IntegrityError:
             db.rollback()
-            raise HTTPException(status_code=500, detail=f"Integrity error: {e!s}")
-        except Exception as e:
+            logging.warning("User persistence rejected by an integrity constraint")
+            raise HTTPException(status_code=500, detail="user_integrity_error") from None
+        except Exception as exc:
             db.rollback()
-            raise HTTPException(status_code=500, detail=f"An error occurred: {e!s}")
+            logging.error("User persistence failed safely: %s", type(exc).__name__)
+            raise HTTPException(status_code=500, detail="user_persistence_failed") from None
         return user
 
     @classmethod
@@ -135,9 +162,12 @@ class UserService(CommonService):
             raise e
 
     @classmethod
-    def update_user_password(cls, db: Session, user_id: str, new_password: str):
+    def update_user_password(cls, db: Session, user_id: str, new_password: str) -> None:
         """更新用户密码"""
         try:
+            account_kind = db.scalar(select(cls.model.account_kind).where(cls.model.id == user_id))
+            if account_kind == UserAccountKind.EXTERNAL.value:
+                raise ValueError("External-only users cannot reset a local password")
             current_ts = current_timestamp()
             current_date = datetime_format(datetime.now())
             stmt = update(cls.model).where(cls.model.id == user_id).values(password=cls.hash_password(str(new_password)), update_time=current_ts, update_date=current_date)

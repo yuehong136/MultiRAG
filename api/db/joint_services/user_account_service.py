@@ -131,10 +131,10 @@ def create_new_user(db: Session, user_info: dict) -> dict:
         logging.info("Creating root folder for user")
         FileService.insert(db, file)
 
-        logging.info(f"User {user_info.get('email')} created successfully")
+        logging.info("User created successfully: user_id=%s", user_id)
         return {
             "success": True,
-            "user_info": user_info,
+            "user_info": user.to_dict(),
         }
 
     except Exception as create_error:
