@@ -5,16 +5,23 @@ description: 跟进/移植一个 ragflow 上游 commit 到本项目。当用户�
 
 # port-ragflow-commit：ragflow 提交跟进流程
 
-本项目持续逐 commit 跟进 ragflow（`/Users/dxl/project/python/ragflow`）。本 skill 是该工作流的权威流程；判例随每次跟进沉淀在文末判例库与记忆 `project-ragflow-followup`。
+本项目持续逐 commit 跟进 ragflow。默认上游 checkout 是 MultiRAG 仓库的兄弟目录
+`../ragflow`；不同机器可用 `RAGFLOW_REPO` 显式覆盖。本 skill 是该工作流的权威流程；判例随每次
+跟进沉淀在文末判例库与记忆 `project-ragflow-followup`。
 
 ## 0. 参考基准（先做，不可跳过）
 
 ```bash
-cd /Users/dxl/project/python/ragflow && git fetch origin
+MULTIRAG_REPO="$(git rev-parse --show-toplevel)"
+RAGFLOW_REPO="${RAGFLOW_REPO:-$(dirname "$MULTIRAG_REPO")/ragflow}"
+git -C "$RAGFLOW_REPO" fetch origin
 ```
 
 **一律以 `origin/main` 为基准。**
-⚠ 本地 ragflow 克隆的 `main` 领先 `origin/main` 5832 个提交（含被上游重写的历史与本地合并），工作区还有未提交改动——**绝不能拿本地 main / 工作树当上游基准**。取某提交当时的文件版本用 `git show <commit>:<path>`（HEAD 可能已演进，cp 工作树会取错——判例 #13887）。
+本地 `main` 与工作树可能落后、领先、含被上游重写的历史、合并或未提交改动；这些都是每台机器、
+每个时点不同的状态，必须在当次任务实时检查，**绝不能拿本地 main / 工作树当上游基准**。取某提交
+当时的文件版本用 `git -C "$RAGFLOW_REPO" show <commit>:<path>`（HEAD 可能已演进，cp 工作树会
+取错——判例 #13887）。
 
 ## 1. 输入
 
