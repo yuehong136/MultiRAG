@@ -12,9 +12,9 @@ from sqlalchemy.orm import Session
 
 from api.db import UserTenantRole
 from api.db.db_models import LLM, Dialog, GuardDimension, Knowledgebase, LLMFactories, Memory, TenantLLM, db_connection
-from api.db.db_models import init_database_tables as init_web_db
 from api.db.joint_services.memory_message_service import fix_missing_tokenized_memory, init_memory_size_cache, init_message_id_sequence
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+from api.db.schema_bootstrap import bootstrap_database_schema
 from api.db.services import UserService
 from api.db.services.canvas_service import CanvasTemplateService
 from api.db.services.dialog_service import DialogService
@@ -432,5 +432,5 @@ def init_web_data(db: Session | None = None):
 
 
 if __name__ == "__main__":
-    init_web_db()
+    bootstrap_database_schema()
     init_web_data()

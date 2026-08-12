@@ -134,8 +134,9 @@ EIM-C1 / CHN-X5 当前源码处于 tolerate 收口中：private API 可解析可
 consume，C2/C3/C4 均未完成。C1 必须拒绝 command/actor/assertion/identifier 任一层的 Tenant、Principal、
 Provider Account/app_id、role/scope/audience/confirmation/token 夹带，拒绝重复 kind 和 legacy/
 structured provider 不一致；未知但有界 kind 只允许保留，不产生信任。等价完整 `make verify` 和 C1
-三文件定向均已在隔离 clean tree 通过；当前运行旧 API 的通用 smoke 也通过，但不是 C1 部署证据。
-唯一仍缺旧 worker -> 新 API 混合版本活体，故任务继续为 `🔵`。
+三文件定向均已在隔离 clean tree 通过。用户批准后的新 API 切换确认加载 `536a1ea5`，但在 serving
+前被存量 schema bootstrap 顺序缺陷阻断，并未产生旧 worker -> 新 API 请求；EIM-I2.2 / CHN-O15
+修复与安全恢复完成前，C1 继续为 `🔵`。
 
 EIM-F1 已以 1.7.2 contract fixture 收口，并准确区分两个 import 边界：平台 control/provider/
 verification/identity 模块导入不得加载 `lark_oapi` 或创建 event loop；显式导入官方 SDK 则允许其已知
@@ -878,9 +879,10 @@ assertion 可解析但不能替代 legacy subject；重复 kind、Provider misma
 `make smoke` 也为 **PASS**：ping/healthz 均 HTTP 200，db/chat/db_pool/redis/doc_engine/storage
 全部 `ok`；但该进程仍是旧 API，没有加载 C1，因此这不是新 private DTO 的部署证据。
 
-唯一仍缺的是实际运行的旧 worker 调新 API：需用户批准后重启 API，再确认请求成功、日志无
-`extra_forbidden`，且日志不含 assertion tenant key、完整 external ID、token 或请求正文。完成前
-C1/X5 保持 `🔵`，不得宣称 deployed，也不得进入 C2 emit。
+用户已批准并尝试切换；新 API 在 serving 前被存量 schema bootstrap 顺序缺陷阻断，未产生混合版本
+请求。先完成 EIM-I2.2 / CHN-O15 的备份、无 CASCADE 安全恢复及新 API smoke，再让仍运行的旧 worker
+调用新 API，确认请求成功、日志无 `extra_forbidden`，且日志不含 assertion tenant key、完整 external
+ID、token 或请求正文。完成前 C1/X5 保持 `🔵`，不得宣称 deployed，也不得进入 C2 emit。
 
 涉及启动、路由、JWKS 端点：启动受控服务后追加：
 

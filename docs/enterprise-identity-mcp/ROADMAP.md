@@ -217,6 +217,7 @@ F1/F3/F4/F7/F8 禁止携带身份功能。F2 只是 characterization/兼容矩�
 | EIM-I1 | MR | 让 `User` 支持 external-only：nullable email、`account_kind`、登录/找回密码兼容 | ✅ | F0 | `api/db/db_models.py::User`、auth/user APIs；存量迁移 + fresh DB；null email 不 500，不造假邮箱 |
 | EIM-I2 | MR | 新增 provider tenant/account ownership、canonical identity、alias、enterprise subject、event receipt 六表与 Alembic | ✅ | I1 | [CONTRACTS §3](CONTRACTS.md#3-数据模型) 的固定单 Tenant、唯一/复合外键、RESTRICT、脱敏与安全回滚约束；并发 insert 真库测试；head `8f2c4d6e7a9b` |
 | EIM-I2.1 | MR | Provider Account 去除 Channel 所有权；新增 tenant/provider-safe 一对一 `IdentityProviderChannelLink`，迁移旧关系且保留现有 ChannelSecret 归属 | ✅ | I2 | forward revision/单 head `9a3b5c7d8e0f`；account 可无 Channel，link 两端复合 FK + 双唯一 + RESTRICT；旧 account→link 无损 backfill；account/link 任一有数据则 downgrade fail closed；不宣称凭据已解耦 |
+| EIM-I2.2 | CHN-O15 / MR | 修复存量库启动编排：Alembic 先安装父约束、model-first 后补缺表；全新库仍 create→stamp，并安全恢复一次失败启动留下的零行 partial schema | 🔵 | I2.1,I6 | unit 顺序/失败短路；隔离真 PostgreSQL old schema→head；备份后无 CASCADE 恢复；新 API smoke |
 | EIM-I3 | MR | `api/identity` contracts/repository/policy/service 骨架，三种 provisioning policy | ✅ | I2.1 | `ProviderContext + AliasKey` 单 SQL 权威快照，revision + scope marker/alias proof freshness；五个窄 port；定向 57 passed，完整 verify 1969 / integration 82 |
 | EIM-I4 | MR | `FeishuEnterpriseIdentityProvider`：open_id -> user_id/status/employee_no，token/cache/限流；I4.1 修正 Auth live response 与阶段化错误码 | ✅ | F1,I3 | I4+F1 定向 118；credential 真 PG 1；production adapter live sandbox 三步通过；完整 verify/integration 全绿 |
 | EIM-I5 | MR | `FeishuEmployeeNumberResolver` + 可插拔 OA/HR resolver SPI | ⬜ | I4 | resolved/not-found/ambiguous/unavailable/inactive 五态；不含原力 if/else |
@@ -386,8 +387,9 @@ private API 保持 `extra="forbid"` 并拒绝 Tenant/Principal/Provider Account/
 隔离于 `HEAD a0581f2f`、只应用 C1 13 条路径的等价完整 `make verify` 已全绿（unit **2223
 passed in 32.28s**，全部静态门禁绿），C1 三文件定向 **74 passed in 12.94s**。当前运行旧 API 的
 通用 smoke 也通过（ping/healthz 200、六项组件均 ok），但旧进程并未加载 C1，不能作为新 private DTO
-部署证据。唯一仍缺旧 worker -> 新 API 混合版本活体，需要用户批准后重启 API；因此 C1 保持 `🔵`，
-C2/C3/C4 不得提前启动或标记完成。
+部署证据。用户已批准并尝试切换；新 API 确认加载 `536a1ea5`，但在 serving 前被存量 schema 的
+model-first→Alembic 旧顺序阻断，未产生混合版本请求。EIM-I2.2 / CHN-O15 已进入修复与安全恢复，
+恢复、新 API smoke 及旧 worker -> 新 API 活体完成前 C1 保持 `🔵`，C2/C3/C4 不得提前启动或标记完成。
 
 ### Channel 部署硬规则
 
@@ -808,7 +810,8 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 
 | 日期 | ID | 变更 | 仓库/提交 | 验证证据 | 记录人 |
 |---|---|---|---|---|---|
-| 2026-08-13 | EIM-C1 / CHN-X5 | private execution consumer 已完成 optional structured assertion tolerate：legacy 三字段与旧 request bytes 不变，nested extra-forbid 拒绝 authority 夹带，resolver 不 consume，worker 不 emit；公开 `channel-api/v1` 不变。任务因部署闸门仍保持 `🔵` | MultiRAG / 本次提交（进行中） | 以 `HEAD a0581f2f` 为基线、只应用 C1 13 路径的隔离等价 `make verify` 全绿：Ruff format 1242 files、Ruff check、7 import contracts（832 files/2611 dependencies）、async DB gate、mypy 81 files、unit **2223 passed in 32.28s**；C1 三文件 **74 passed in 12.94s**；当前旧 API 通用 smoke PASS（ping/healthz 200、六组件 ok），但不算 C1 部署；唯一缺旧 worker -> 新 API 混合版本活体，需用户批准重启 API | Codex |
+| 2026-08-13 | EIM-I2.2 / CHN-O15 | C1 切换暴露存量库 bootstrap 顺序缺陷：model-first 在 Alembic 安装 I2.1 父复合唯一键前尝试创建 Link，API 在 serving 前 fail closed。统一 fresh create→stamp / stored migrate→model-first 两条路径，迁移失败不继续建表，独立 init-data 入口复用同一编排。现场 partial identity sidecar 已核为零行；禁止 stamp 或零散补约束，真实恢复仍待备份与显式无 CASCADE 操作批准 | MultiRAG / 本次提交（进行中） | bootstrap unit **8 passed**；隔离真 PostgreSQL old-schema→head **2 passed**；identity/bootstrap schema **49 passed**；隔离完整 `make verify` 全绿、unit **2226 passed in 69.49s**；完整 integration 的 identity/迁移路径通过，套件 **128 passed / 1 个既有 MinIO `SignatureDoesNotMatch` 环境失败**；真实库恢复待收口 | Codex |
+| 2026-08-13 | EIM-C1 / CHN-X5 | private execution consumer 已完成 optional structured assertion tolerate：legacy 三字段与旧 request bytes 不变，nested extra-forbid 拒绝 authority 夹带，resolver 不 consume，worker 不 emit；公开 `channel-api/v1` 不变。任务因部署闸门仍保持 `🔵` | MultiRAG / `536a1ea5` | 以 `HEAD a0581f2f` 为基线、只应用 C1 13 路径的隔离等价 `make verify` 全绿：Ruff format 1242 files、Ruff check、7 import contracts（832 files/2611 dependencies）、async DB gate、mypy 81 files、unit **2223 passed in 32.28s**；C1 三文件 **74 passed in 12.94s**。用户已批准并尝试切换，新 API 在 serving 前被 EIM-I2.2 schema bootstrap 缺陷阻断；仍缺实际旧 worker -> 新 API 混合版本活体 | Codex |
 | 2026-08-07 | EIM-F0 | 建立企业身份与 MCP 授权权威文档集；核验飞书/MCP 最新官方文档、PyPI 版本和参考仓 HEAD | MultiRAG docs / 本次提交 | 文档互链与本地路径检查；版本来源见 VERSION_BASELINE | Codex |
 | 2026-08-09 | EIM-F0 | 按当前 Channel 代码和官方/主流飞书项目重构体验路线：新增 ReplySession/渐进式回复基线，拆开 SDK、普通 UX 与敏感确认依赖，登记 U0/U4-U7 和 CHN 映射 | MultiRAG docs / 本次提交 | PyPI/官方仓 HEAD 复核；任务 ID 双向检查；相对链接和 `git diff --check` | Codex |
 | 2026-08-09 | EIM-U0 / CHN-X9 | 完成 worker 侧类型化 `message_delta/message_completed/execution_failed` 流；`stream()` 统一 command/header/HTTP/SSE/超时/完整性/session/安全错误与跨 delta reasoning 过滤，`ask()` 仅聚合同一流；BindingBridge 改为 `stream() -> ReplySession`，普通 Channel 默认 buffer，成功只发送一次，部分结果失败时丢弃并发送安全提示。未改服务端 SSE wire，未实现 CardKit/U1；`ask()` 只为迁移/回滚保留，新代码禁用，待生产调用归零且 U1 稳定后单独删除 | MultiRAG / `feat(channel): stream execution replies (EIM-U0, CHN-X9)` | 定向 `test_channel_runtime_client.py test_reply_session.py test_binding_bridge.py`: **50 passed in 0.26s**，覆盖有序 delta、DONE/非法/中断/超时/未知事件、安全码、跨片 reasoning、跨片截断、ask 单路径、ReplySession 全状态机/发送失败、Bridge 去重/reset/顺序/异常与 tombstone；`make fix`: Ruff 全绿、1175 files unchanged；`make verify`: format/Ruff、6 import contracts、async DB gate、mypy 62 files 全绿，unit **1641 passed, 1 warning in 25.60s**；`git diff --check` 通过 | Codex |

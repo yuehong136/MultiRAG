@@ -27,11 +27,10 @@ import uvicorn
 # uvicorn.run("api.multirag_server:app", ...) 按字符串引用本模块的 app 属性。
 # （api.apps 自身带幂等初始化守卫，与上方显式 bootstrap 双保险。）
 from api.apps import app  # noqa: F401
-from api.db.db_models import SessionLocal, db_connection, engine
-from api.db.db_models import init_database_tables as init_web_db
-from api.db.db_models import upgrade_database_tables as upgrade_database
+from api.db.db_models import SessionLocal, db_connection
 from api.db.init_data import init_superuser, init_web_data
 from api.db.runtime_config import RuntimeConfig
+from api.db.schema_bootstrap import bootstrap_database_schema
 from api.db.services.document_service import DocumentService
 from common import settings
 from common.file_utils import get_project_base_directory
@@ -155,13 +154,7 @@ if __name__ == "__main__":
     # ============ 数据库初始化（一次性操作，必须在服务启动前完成）============
     # 这些操作必须在进程启动时执行，不适合放在 lifespan 中
     logging.info("Initializing database schema...")
-    # 建表前检测是否为全新环境（无任何表），用于后续迁移策略判断
-    from sqlalchemy import inspect as sa_inspect
-
-    _inspector = sa_inspect(engine)
-    _is_fresh_install = len(_inspector.get_table_names(schema="usr_ai")) == 0
-    init_web_db()  # 创建数据库表结构
-    upgrade_database(_is_fresh_install)  # 执行数据库迁移
+    bootstrap_database_schema()
 
     # 初始化超级用户（如果指定了 --init-superuser 参数）
     # 必须在数据库表创建后、init_web_data 之前执行

@@ -9,6 +9,8 @@
 因此这里验证"fresh-install 引导 + 迁移链结构完整性"，而非空库全量上行。
 """
 
+import uuid
+
 import pytest
 import sqlalchemy as sa
 from alembic import command
@@ -23,6 +25,45 @@ from api.db.services.user_service import UserService
 
 _USER_ACCOUNT_REVISION = "7c8d9e0f1a2b"
 _PRE_USER_ACCOUNT_REVISION = "e4f6a8b0c2d4"
+
+
+@pytest.fixture
+def stored_schema_bootstrap_engine(
+    pg_scratch_engine: sa.Engine,
+    alembic_cfg: Config,
+):
+    """An isolated stored database at the revision used before identity work."""
+
+    database_name = f"multirag_bootstrap_{uuid.uuid4().hex[:12]}"
+    admin_engine = sa.create_engine(
+        pg_scratch_engine.url,
+        isolation_level="AUTOCOMMIT",
+    )
+    stored_engine = sa.create_engine(
+        pg_scratch_engine.url.set(database=database_name),
+    )
+    try:
+        with admin_engine.connect() as connection:
+            connection.execute(sa.text(f'CREATE DATABASE "{database_name}"'))
+        with stored_engine.begin() as connection:
+            connection.execute(sa.text("CREATE SCHEMA usr_ai"))
+            Base.metadata.create_all(connection)
+            cfg = Config(alembic_cfg.config_file_name)
+            cfg.set_main_option(
+                "script_location",
+                alembic_cfg.get_main_option("script_location"),
+            )
+            cfg.attributes["connection"] = connection
+            command.stamp(cfg, "head")
+            command.downgrade(cfg, _PRE_USER_ACCOUNT_REVISION)
+        yield stored_engine
+    finally:
+        stored_engine.dispose()
+        with admin_engine.connect() as connection:
+            connection.execute(
+                sa.text(f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)'),
+            )
+        admin_engine.dispose()
 
 
 def test_migration_chain_is_linear_and_loadable(alembic_cfg):
@@ -88,6 +129,69 @@ def test_model_first_existing_database_can_upgrade_candidate_revision(
         version = connection.execute(sa.text("SELECT version_num FROM usr_ai.alembic_version")).scalar_one()
 
     assert version == head
+
+
+def test_stored_database_bootstrap_migrates_parents_before_model_first_children(
+    stored_schema_bootstrap_engine: sa.Engine,
+    alembic_cfg: Config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Production orchestration upgrades an old parent before creating new children."""
+
+    from api.db import db_models, schema_bootstrap
+
+    before = sa.inspect(stored_schema_bootstrap_engine)
+    assert not before.has_table(
+        "t_ai_identity_provider_channel_links",
+        schema="usr_ai",
+    )
+    assert {
+        str(item["name"])
+        for item in before.get_unique_constraints(
+            "t_ai_chat_channels",
+            schema="usr_ai",
+        )
+    }.isdisjoint(
+        {
+            "uq_chat_channels_tenant_scope",
+            "uq_chat_channels_identity_scope",
+        },
+    )
+
+    monkeypatch.setattr(schema_bootstrap, "engine", stored_schema_bootstrap_engine)
+    monkeypatch.setattr(db_models, "engine", stored_schema_bootstrap_engine)
+
+    schema_bootstrap.bootstrap_database_schema()
+
+    head = ScriptDirectory.from_config(alembic_cfg).get_current_head()
+    with stored_schema_bootstrap_engine.connect() as connection:
+        version = connection.execute(
+            sa.text("SELECT version_num FROM usr_ai.alembic_version"),
+        ).scalar_one()
+    assert version == head
+
+    after = sa.inspect(stored_schema_bootstrap_engine)
+    assert after.has_table(
+        "t_ai_identity_provider_channel_links",
+        schema="usr_ai",
+    )
+    chat_uniques = {
+        str(item["name"])
+        for item in after.get_unique_constraints(
+            "t_ai_chat_channels",
+            schema="usr_ai",
+        )
+    }
+    assert {
+        "uq_chat_channels_tenant_scope",
+        "uq_chat_channels_identity_scope",
+    } <= chat_uniques
+    membership_indexes = {str(item["name"]): item for item in after.get_indexes("t_ai_user_tenants", schema="usr_ai")}
+    active_membership = membership_indexes["uq_user_tenants_active_tenant_user"]
+    assert active_membership["unique"] is True
+    assert "status" in str(
+        active_membership["dialect_options"]["postgresql_where"],
+    )
 
 
 def test_fresh_install_supports_multiple_external_users_without_email(

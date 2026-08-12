@@ -204,9 +204,10 @@ subject。
 因此当前源码能解析新旧两种 private command，却仍只有旧 worker 形状在运行。C2 才能在 C1 API
 部署后让 worker emit；C3 才能沿 Provider Account link、I4/I6/P1 验证并 consume；C4 才会在全部 runner
 浸泡后删除 legacy `subject`。这项 private 加法不改变公开 `channel-api/v1`。截至 2026-08-13，C1
-已在隔离 clean tree 通过等价完整 `make verify` 与三文件定向；当前运行旧 API 的通用 smoke 也通过，
-但它没有加载本改动。唯一仍缺旧 worker -> 新 API 混合版本活体，需要用户批准后重启 API；所以
-不能宣称该半态已经部署。
+已在隔离 clean tree 通过等价完整 `make verify` 与三文件定向。用户随后批准并尝试切换 API；新进程
+确认加载 `536a1ea5`，但在开始 serving 前被存量库 model-first 早于 Alembic 的 bootstrap 顺序缺陷
+阻断，因而没有产生旧 worker -> 新 API 混合版本请求。EIM-I2.2 / CHN-O15 正在统一修复启动编排并
+安全恢复该零行 partial schema；新 API smoke 与混合版本活体完成前，不能宣称该半态已经部署。
 
 EIM-U12 / CHN-U14 允许 `message_completed` 携带可选的用户可见权威正文。
 新 worker 收到时先用 `ReplySession.replace()` 整体替换内存中的 delta，再执行 `complete()`；这能表达

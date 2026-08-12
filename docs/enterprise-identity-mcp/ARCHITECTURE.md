@@ -81,8 +81,9 @@ EIM-C1 / CHN-X5 当前只在 Channel Execution 的 private consumer 上增加可
 不一致以及 `tenant_id/principal_id/app_id/provider_account_key/role/scopes/token` 等 authority
 夹带，但 execution resolver 暂不读取合法 assertion。C2 emit、C3 verified consume 和 C4 legacy remove
 均未发生；公开 `channel-api/v1` 不受这条 private 加法影响。C1 的 clean-tree 等价完整门禁与定向测试
-已全绿，当前旧 API 的通用 smoke 也通过；但该进程没有加载 C1，唯一仍缺旧 worker -> 新 API
-混合版本活体。因此本段描述的是已验证源码兼容边界，不是已部署身份链。
+已全绿。用户批准后的新 API 切换确认加载 `536a1ea5`，但在 serving 前被存量 schema bootstrap 顺序
+缺陷阻断，没有产生旧 worker -> 新 API 混合版本请求；EIM-I2.2 / CHN-O15 正在修复并恢复。因此本段
+描述的是已验证源码兼容边界，不是已部署身份链。
 
 #### Channel control/runtime
 
