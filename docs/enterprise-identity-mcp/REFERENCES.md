@@ -278,9 +278,13 @@ FastMCP 实现/产品资料（不是 MCP 标准）：
   binding 到 MultiRAG Tenant 的 ownership 模型；自行建立这些表不是重复造其工具开放、auth provider
   或 middleware。I2 已以 Alembic head `8f2c4d6e7a9b` 和真 PostgreSQL 门禁完成；I2.1 已以单
   Alembic head `9a3b5c7d8e0f`、identity integration **23 passed** 和完整 integration **65 passed**
-  完成；下一项 I3 继续保持
-  domain/repository 框架无关，并用 revision/CAS/行锁保护 ownership，
-  不把普通换绑或 hard-delete 委托给 FastMCP。
+  完成。I3 已完成且 domain/service/repository 仍框架无关：service 只依赖最小 lookup port，单 SQL
+  取得 account revision/scope marker、alias proof、identity/live membership 权威快照；ordinary mutation、
+  verified identity mutation 与 provider-account control 三种 capability 分权，verified ownership 再独立。
+  alias proof freshness、account 行锁 + CAS、health 时间单调与稳定脱敏都由本领域实现，不把普通换绑、
+  hard-delete、JIT 开户或 Principal 构造委托给 FastMCP。定向 unit **40 passed**、真 PostgreSQL
+  **17 passed**，合计定向 **57 passed**；完整 `make verify` unit **1969 passed**、强制完整
+  integration **82 passed**，证据见 ROADMAP。
 - `RemoteAuthProvider` 已用于 EIM-A3，负责 RFC 9728 protected-resource metadata 和 FastMCP
   auth 接口；框架默认 backend 无法把 typed JWKS outage 映射为 503，因此精确 `/mcp` bearer 和
   401/503 由项目 middleware 控制。EIM-A4 继续保持 production endpoint `required_scopes=[]`，把
@@ -301,6 +305,15 @@ FastMCP 实现/产品资料（不是 MCP 标准）：
   业务对象或 assurance 已授权。
 - 领域 Principal、policy 和业务 service 不 import FastMCP。auth/provider 对象只存在 composition root
   与 tool adapter 边界，避免框架升级改写业务契约。
+
+I3 对外部平台实践的吸收仅限于不变量，不复制其数据模型：DeerFlow 的 external connection lookup
+支持“Channel 原始 ID 不能直升平台用户”；LibreChat 的 authority proof 支持“执行/写入前从当前
+Principal/resource context 重新证明 authority”；ContextForge/agentgateway 的 server-side isolation
+支持“可见连接、身份所有权和运行授权分层”。本项目据此采用 server-built ProviderContext、每次
+解析重查 live membership、ordinary/verified/account-control/ownership capability 分权、alias proof
+freshness 和 CAS/TOCTOU 防护；仍由
+MultiRAG 自己的 Tenant/User/UserTenant/schema 决定最终契约，不引入 unsigned identity header、全局
+credential 或 UI connection 作为授权事实。
 
 ### A6 审计、trace 与日志安全参考
 

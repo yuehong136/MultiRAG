@@ -11,7 +11,7 @@
 用户应尽量按 ID 派工：
 
 ```text
-读 docs/enterprise-identity-mcp/README.md 和 AGENT_RUNBOOK.md，执行 EIM-I3。
+读 docs/enterprise-identity-mcp/README.md 和 AGENT_RUNBOOK.md，执行 EIM-P1。
 先复核依赖和当前代码；按 ROADMAP 维护协议记账。涉及部署或外部管理后台操作时先停下来征得批准。
 ```
 
@@ -134,6 +134,35 @@ FastAPI 自动序列化出去，因此 tolerate PR 必须用线格测试证明�
   换取回滚成功；
 - 迁移前输出冲突审计，只读脚本不得自动猜测合并；
 - 测试里使用 scratch 数据库，绝不连接配置中的生产 dbname。
+
+#### EIM-I3 当前边界与后续接手
+
+I3 已完成，代码锚点为 `api/identity/contracts.py`、`policy.py`、`service.py`、
+`validation.py`、`repository.py`。接手者先保持以下边界，不要把 I4/I6/P1/C3 混回本任务：
+
+1. identity core 输入是服务端构造的 `ProviderContext + AliasKey`，没有 `channel_id`；
+2. `IdentityService` 只依赖 `IdentityLookupRepository` 和 policy resolver，不取得 ordinary mutation、
+   verified identity mutation、provider-account control 或 verified-ownership port；
+3. resolution 是一条 account-rooted SQL snapshot，同时带 account revision/scope marker、alias proof、
+   identity 与 live User/UserTenant；`None` 仅表示 context 无效，`identity=None` 才表示有效 account 下
+   alias miss；旧 alias proof 要求 Provider 重验，identity conflict/revoked 终态优先于 freshness且不提示
+   可重验；
+4. provisioning 三态只返回 `provider_verification_required` plan，不调用飞书、不创建
+   `User/UserTenant`、不激活 identity、不构造 Principal；
+5. write 前锁 account 并复核 revision + scope marker，从 account 派生 scope；ordinary mutation 只允许
+   pending identity insert/单向收紧 CAS，verified identity mutation 独占 alias refresh/activation，
+   provider-account control 独占 health/scope/event CAS；conflict/revoked 终态；
+6. 旧 alias proof 早于 scope marker 时拒绝，较旧 proof 不倒退已有时间；health CAS 省略时间保留旧值、
+   显式时间只前进。Core DML 显式写审计时间，输入和 SQLAlchemy/driver 异常稳定脱敏；
+7. ownership 只有两个 verified insert 命令且不属于聚合 identity repository；所有 port 禁止 generic
+   CRUD/commit/delete 和 Channel unlink/rebind，调用方拥有事务；
+8. 完成证据为 unit **40 passed**、真 PostgreSQL **17 passed**，定向共 **57 passed**；repository +
+   schema 连续真库 **40 passed**；`make verify` unit **1969 passed in 28.85s** 且静态门禁全绿；
+   `REQUIRE_SERVICES=1 make integration` **82 passed in 12.48s**。
+
+I3 完成后优先可做 `P1`。`I4` 还依赖 `F1`，只能在 F1 完成后接入 Contact Provider；`I6` 再拥有
+User/UserTenant/link 的完整事务，C3 才把 Channel assertion 组合成 Principal。FastMCP 4 的 auth 与
+tool list/call 能力仍在 MCP composition/adapter 层复用，不进入上述 identity domain。
 
 ### 4.4 外部 API 和 SDK 任务
 
@@ -286,8 +315,8 @@ git diff --check
 ```
 
 A4 定向 **201 passed**；`uv run --locked ofmcp verify` 六步全绿、**417 passed、2 existing skipped**，
-contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG 已完成 I2/I2.1，当前可并行做
-`I3 -> P1`、`F1 + I3 -> I4 -> I6`、`C1 -> C2`，只有
+contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG I3 已完成，当前可并行做
+`P1`、`F1 -> I4 -> I6`、`C1 -> C2`，只有
 `C3 -> P2` 后才能进入 A2/P3。secure 在独立远程发布闸门解除前仍不能作为远程业务入口。
 
 ### 4.8 EIM-A6 phase 1 接手与完成边界

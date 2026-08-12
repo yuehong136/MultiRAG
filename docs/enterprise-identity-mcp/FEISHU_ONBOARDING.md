@@ -55,9 +55,11 @@
 4. 获取：
    - `App ID`，格式通常为 `cli_...`；
    - `App Secret`。
-5. 在 MultiRAG 身份控制面创建独立 Feishu Provider Account，固定已验证的 Tenant、provider、
-   `tenant_key/app_id`。该 account 可以先于 Channel 存在，但在首期凭据仍归 Channel 的过渡期，
-   无 Channel link 时不能调用飞书 API。
+5. 在 MultiRAG 身份控制面完成企业/安装实例所有权验证后，创建独立 Feishu Provider Account，固定
+   已验证的 Tenant、provider、`tenant_key/app_id`。该 account 可以先于 Channel 存在，但在首期凭据
+   仍归 Channel 的过渡期，无 Channel link 时不能调用飞书 API。EIM-I3 只提供
+   `VerifiedOwnershipRepository` 的两个窄持久化命令；它不是所有权证明来源，也不是可直接调用的
+   管理 API。
 6. 在 MultiRAG Channel 管理端创建 Feishu Channel，由现有 Channel Secret 写入流程保存
    `app_secret`；不得写进 Git、普通 YAML、日志、截图、聊天记录或本文档。
 7. 创建 tenant/provider-safe 的 `IdentityProviderChannelLink`。首期一个 account 和一个 Channel
@@ -77,9 +79,15 @@
 Channel 建立 link 后使用现有“测试连接”能力验证 `app_id/app_secret`，但该验证只证明应用凭据有效，
 不证明通讯录字段权限、数据范围和事件订阅都正确。
 
-当前管理 API/界面可能仍按 Channel-first 顺序创建配置；EIM-I2.1 只落数据库关系，不宣称控制面
-编排或 credential vault 已经完成。I3/I4 接线前不得用人工 SQL 代替正式 onboarding，也不得按
-`app_id` 猜测 Provider Account 和 Channel 的关系。
+当前管理 API/界面可能仍按 Channel-first 顺序创建配置；EIM-I2.1 只落数据库关系，EIM-I3 只落窄
+repository/policy/service seam，都不宣称控制面编排、外部 ownership verification 或 credential vault
+已经完成。I4/onboarding composition 接线前不得用人工 SQL、直接实例化 privileged repository 或普通
+Channel update 代替正式 onboarding，也不得按 `app_id` 猜测 Provider Account 和 Channel 的关系。
+
+I4/I7 组合代码接入 I3 时必须按 capability 注入：普通 provisioning 只能拿 pending identity/单向收紧
+CAS；只有刚完成 Provider 验证的路径能拿 alias refresh/activation；只有目录/account 控制路径能拿
+health/scope/event CAS；ownership 仍只给 onboarding。不能为了调用方便把完整
+`SqlAlchemyIdentityRepository` 注入所有路径。
 
 ---
 
@@ -205,6 +213,11 @@ Contact API 仍会权限失败。官方说明：[配置应用数据权限](https
 飞书可能重复推送事件。消息以 `message_id` 去重；通讯录事件以 `event_id + event_type` 去重，
 同时数据库更新必须幂等。不要依赖“只会收到一次”。
 
+`contact.scope.updated_v3` 后，account control 必须以 CAS 单调推进 revision/scope marker；后续 read
+若发现 alias proof 早于 marker，只返回“需要 Provider 重验”，不能继续使用旧 link。新 proof
+`verified_at` 早于 marker 时写入拒绝，早于当前 alias proof 时也不能倒退已有时间。省略 event/scope
+时间表示保留旧值，不是清空；乱序旧事件不得回拨 marker。
+
 ### 卡片回调
 
 纯流式输出 EIM-U1 不需要 `card.action.trigger`。EIM-U4 的重新生成/反馈或 EIM-U7 的敏感确认
@@ -254,6 +267,10 @@ approved_at: <时间>
 ---
 
 ## 8. 首次身份联调
+
+本节是 I4/I6/C3 的后续联调清单，**不是 EIM-I3 当前可执行能力**。I3 不持有飞书 SDK/Secret，不调用
+Contact，不创建 `User/UserTenant`，也不返回 Principal；只有 F1、I4、I6、P1/C3 依赖全部满足后才能
+按本节宣称端到端结果。
 
 使用一个普通员工测试账号和一个管理员控制账号，执行：
 

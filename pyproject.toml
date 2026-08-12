@@ -315,6 +315,18 @@ ignore_imports = [
 ]
 
 [[tool.importlinter.contracts]]
+name = "enterprise identity core 不依赖路由、Channel 或传输实现"
+type = "forbidden"
+source_modules = ["api.identity"]
+forbidden_modules = [
+    "api.apps",
+    "api.channels",
+    "api.channel_control",
+    "api.channel_runtime",
+    "api.channel_execution",
+]
+
+[[tool.importlinter.contracts]]
 name = "deepdoc（文档解析）不依赖 api/agent/workflow*"
 type = "forbidden"
 source_modules = ["deepdoc"]
@@ -425,7 +437,7 @@ known-first-party = ["api", "common", "core", "agent", "deepdoc", "workflow", "w
 # ============================================================
 [tool.mypy]
 python_version = "3.12"
-files = ["common", "api/utils", "scripts"]
+files = ["common", "api/utils", "api/identity", "scripts"]
 exclude = [
     "^server/", "^internal/", "^tests/", "^docker/", "^temp/", "^tmp/",
     # 燃尽目标：SaaS 连接器与向量库后端存量类型问题较多（各约 60/30 个），
@@ -446,6 +458,11 @@ pretty = true
 # 配置重构新增模块直接以严格姿态纳管（棘轮只进不退）
 [[tool.mypy.overrides]]
 module = ["common.app_config", "common.resources", "common.bootstrap", "common.url_utils"]
+check_untyped_defs = true
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["api.identity", "api.identity.*"]
 check_untyped_defs = true
 disallow_untyped_defs = true
 

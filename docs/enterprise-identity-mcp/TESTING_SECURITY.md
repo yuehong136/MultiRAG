@@ -46,6 +46,14 @@
   `(provider, provider_tenant_key, provider_account_key)` 与同一 Channel 也各自只能归属一个 Tenant；
   account↔Channel link 必须同时匹配两端 tenant/provider scope，任何消息或动态路由不能改写 ownership；
 - 目录验证失败、用户停用、企业映射冲突时必须 fail closed；
+- identity core 只接受服务端构造的 ProviderContext；无效 account/scope/revision 与“有效 account 下
+  alias 未链接”必须是两个不同结果。后者只可产生 verification-gated plan，不能直接创建用户、激活
+  identity 或生成 Principal；
+- identity resolution 每次从数据库重查 live User/UserTenant；重复 active membership、停用/匿名用户、
+  非法 role 或 stale revision 都 fail closed，不能任选第一条或沿用旧缓存授权；
+- ProviderContext 的 account revision 与 scope marker 必须同时匹配；read 必须携 alias proof 时间。scope
+  变化后的旧 alias 要求 Provider 重验，旧 proof 不能写入或倒退已存 proof；identity conflict 的安全
+  结论优先于 freshness，不能被降格成普通重验；
 - `platform_user_id` 始终是 MultiRAG `User.id`，不是飞书 `open_id`；
 - `enterprise_subject_id` 与 `platform_user_id` 分离，员工号不能成为公开认证凭据；
 - MCP token 必须校验 `typ/alg/kid`、`iss`、单一精确 `aud/resource`、`iat/nbf/exp/max_ttl`、`jti`、
@@ -72,8 +80,10 @@
 |---|---|---|
 | Channel DTO | tolerate/emit/remove 各半步、`extra="forbid"`、旧/新进程组合 | Pydantic 纯测试 + private HTTP 契约测试 |
 | Feishu assertion | 保留 `open_id/user_id/union_id/tenant_key/app_id`，不再 first-nonempty | 纯函数测试 |
-| IdentityService | JIT、link-only、冲突、停用、缓存、事件失效 | async service + monkeypatch 官方客户端 |
-| DB | 唯一约束、事务并发、别名归一化、幂等事件 | `tests/integration/` 真 PostgreSQL |
+| I3 IdentityService | context/alias 结构校验、account health、无效 context 与 alias miss 区分、live membership、三态 plan、policy failure | 框架无关 async unit；只 mock lookup/policy ports |
+| I3 repository | 单 SQL authority snapshot、account generation/alias freshness、ordinary/verified/account-control/ownership 分权、CAS/锁、审计时间、输入/driver 脱敏 | `tests/integration/` 真 PostgreSQL |
+| I4/I6 Identity flow | Contact status/scope/cache/event、JIT/link-only/preprovisioned 的真实写事务 | async provider/service + 真 PostgreSQL；尚未实现 |
+| DB schema/event | 唯一约束、事务并发、别名归一化、幂等事件 | `tests/integration/` 真 PostgreSQL |
 | Principal | 未验证 subject 不提升；验证后携带 tenant/membership | execution 路由契约测试 |
 | MCP token | 两个 profile、claims/types、固定时钟、TTL、JWKS、轮换、scope registry/交集、cross-resource | 两库独立纯密码学 corpus + HTTP 契约测试 |
 | MCP client | resource/audience、失败映射、无静态用户 header | mock transport/官方 SDK 测试 |
@@ -81,8 +91,10 @@
 | InteractionSession | MRTR 多轮、revision/CAS、decline/cancel/expire、重启恢复 | service 单测 + 真库集成 |
 | Structured result | `structuredContent`/`outputSchema` 一致性和安全事件转换 | schema/golden tests |
 
-截至 2026-08-12，EIM-F3/F8 只完成了 MCP SDK 2/FastMCP 4 的协议运行时迁移和
-`InputRequiredResult` 的 transport-level 暴露。EIM-A1 先固定 token/JWKS test vectors；Principal、
+截至 2026-08-12，EIM-I3 已完成 ProviderContext 驱动的本地 identity lookup、
+verification-gated policy plan 与窄 repository/CAS seam，不包含飞书 Provider、开户、Principal 或
+Channel 接线。EIM-F3/F8 只完成了 MCP SDK 2/FastMCP 4 的协议运行时迁移和
+`InputRequiredResult` 的 transport-level 暴露。EIM-A1 已固定 token/JWKS test vectors；Principal、
 独立 audience/scope 和 OAuth Resource Server 仍属于依赖 A1/P1 的 EIM-A7；InteractionSession 仍
 属于依赖 P3/A4/C3 的 EIM-U14。不能因为 modern/legacy 协议测试通过就把这些安全测试标为已满足。
 
@@ -109,6 +121,34 @@
     service 不能用 `app_id` 猜测、任选第一条或自动换绑。
 15. I2 旧 account/channel 数据升级：每条 account 恰好 backfill 一条同 Tenant/Provider link 后才删除
     旧列；account/link 任一有数据时 downgrade 必须 fail closed，不能丢弃独立企业连接。
+16. 精确 Provider Account 不存在，或 tenant/provider/key/revision 任一不符：lookup 返回 invalid
+    context，policy resolver 零调用；不能伪装为普通 alias miss 后进入 JIT plan。
+17. Provider Account 有效但 alias 不存在：单 SQL snapshot 必须保留 account 且 `identity=None`；三种
+    policy 只返回 `provider_verification_required=true` 的 plan，数据库和用户表零写入。
+18. alias 命中但 `User` 停用/匿名/无效，或同 Tenant `UserTenant` 缺失/无效/角色非法：每次解析都
+    fail closed；不能依赖过去的 identity active 状态继续执行。
+19. 同一 user/tenant 出现多条 active membership：repository 返回稳定 link conflict，而不是任选
+    第一条；错误和 DTO repr 不包含 account/alias/subject/user 原值。
+20. identity/alias 重复 insert：完全相同请求幂等重读；不同 user/identity 占用同一自然键稳定冲突，
+    并发两个 session 只有一个 winner，不发生后写覆盖。
+21. identity insert 固定落 `pending_link`；ordinary CAS 只能单向收紧，不能转 `active`。只有 verified
+    identity mutation 能写/刷新 alias，并显式从 `pending_link/inactive` activation；
+    `conflict/revoked` 是终态且彼此不能转换。
+22. stale identity/account revision 不能更新；两个并发 writer 只有一个 `applied`，另一个明确
+    `revision_conflict`。持有 account `FOR UPDATE` 时另一 writer 确实被数据库锁阻断。
+23. lookup、ordinary mutation、verified identity mutation、provider-account control 与 ownership
+    ports 权限精确且互不越权；聚合 identity repository 不继承 ownership，所有 port 均无 generic
+    save/update/delete/commit/rollback、Channel bind/rebind/unlink。
+24. account scope marker 晚于 alias proof：普通 active identity 返回 inactive + provider verification
+    required，同一 identity fresh proof 后恢复 resolved。早于 marker 的 proof 写入 revision conflict，
+    早于当前 alias 但仍合法的 proof 不得倒退 `verified_at`；conflict/revoked 两个终态都先于 freshness
+    分类，分别保持 conflict/inactive 且不提示可重验，verified port 也不能复活。
+25. account health CAS 省略 scope/event 时间时保留原值；显式时间只能单调前进，rewind 返回 invalid
+    transition。并发 CAS 只有一个 winner，ownership 字段保持不变。
+26. 所有 Core insert/update 都更新预期 BaseModel audit 时间；事务失败时此前 identity insert 与后续
+    alias conflict 一起回滚，不能留下半条映射。
+27. 超长/空白/未知 enum、重复或未知 attributes 在发 SQL 前拒绝；故意携敏感 bind parameter 的
+    SQLAlchemy/driver exception 只暴露 `IDENTITY_REPOSITORY_UNAVAILABLE`，错误文本与 repr 无原值。
 
 ### 3.2 MultiRAG 集成测试
 
@@ -124,6 +164,11 @@
 - canonical、alias、enterprise subject 与 receipt 在各自 tenant-scoped 唯一边界内拒绝重复，在合法的
   不同 Tenant/不同 account 边界不误合并；
 - `SELECT ... FOR UPDATE` 或唯一约束重试能收敛首次绑定竞态；
+- I3 identity resolution 必须以精确 Provider Account 为 SQL 起点，在一条 statement 中携回可选
+  alias/identity 与 live User/UserTenant；无 account row 与 account 存在但 alias miss 使用不同结果；
+- I3 mutation 写前锁 account 并复核 revision + scope marker；ordinary pending insert/单向收紧 CAS、
+  verified alias refresh/activation、provider health CAS、proof freshness/不倒退、终态、Core 审计时间、
+  输入/driver 脱敏和事务回滚都由真库测试证明；
 - event receipt 的 `(tenant_id, provider, provider_tenant_key, provider_account_key, event_type,
   event_id)` 幂等，且表结构不存在原始 body/payload/headers/metadata 列；
 - 所有 Tenant/User/Channel/identity/provider-account/link 外键均为 `ON DELETE RESTRICT`；有任意 ownership/
@@ -157,6 +202,17 @@ EIM-I2.1 完成基线（2026-08-12）：Alembic 单 head `9a3b5c7d8e0f`；I2.1 i
 identity schema + Channel control persistence **25 passed**，相关 identity + Channel control unit
 **67 passed**；完整 `make verify` unit **1929 passed**，`REQUIRE_SERVICES=1 make integration`
 **65 passed**，`git diff --check` 通过。
+
+EIM-I3 完成基线（2026-08-12）：`tests/unit/test_identity_domain.py`
+**40 passed**，覆盖三态 plan、无效 context/alias miss 分层、healthy/active/live membership、不可变脱敏
+DTO、最小权限 ports 和无 FastMCP/Channel import；`tests/integration/test_identity_repository.py` 真
+PostgreSQL **17 passed**，覆盖无 Channel account、verified ownership 幂等/冲突、单 SQL resolution、
+live/重复 membership、account scope marker + alias proof 重验、identity/alias 幂等与并发、状态/account
+CAS、health 时间 preserve/monotonic、Core 审计时间、行锁、事务回滚、输入与 driver 错误脱敏。
+两者合计 I3 定向 **57 passed**；repository + identity schema 连续真库 **40 passed**，包含每例按
+child→parent 显式清理，证明测试数据不污染共享 scratch schema。完整 `make verify` 全绿：Ruff
+format/check、7 import contracts、async gate、mypy 71 files、unit **1969 passed in 28.85s**；
+`REQUIRE_SERVICES=1 make integration` **82 passed in 12.48s**。
 
 ### 3.3 `of_mcp` 测试
 
@@ -567,6 +623,17 @@ make mcp-compat
 ```bash
 REQUIRE_SERVICES=1 make integration
 ```
+
+EIM-I3 的快速证据必须分别保留纯领域与真库边界；它们不能替代上面的完整门禁：
+
+```bash
+uv run pytest tests/unit/test_identity_domain.py
+REQUIRE_SERVICES=1 uv run pytest tests/integration/test_identity_repository.py
+```
+
+当前定向结果分别为 **40 passed** 与 **17 passed**，合计 **57 passed**；连续 repository + schema
+**40 passed**。完整结果：`make verify` unit **1969 passed in 28.85s**，静态门禁全绿；
+`REQUIRE_SERVICES=1 make integration` **82 passed in 12.48s**。
 
 涉及启动、路由、JWKS 端点：启动受控服务后追加：
 

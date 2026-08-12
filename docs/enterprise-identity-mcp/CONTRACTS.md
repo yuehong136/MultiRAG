@@ -223,9 +223,9 @@ credential vault 落地前，无 Channel link 的 account 不得调用 Provider 
 | `provider` | non-null | `feishu` 等 Provider 路由 |
 | `provider_tenant_key` | non-null | 首次 onboarding 验证的外部企业边界 |
 | `provider_account_key` | non-null | 应用安装实例/account；飞书为 `app_id` |
-| `identity_revision` | bigint, default 1 | scope/状态变化时单调增加 |
-| `last_scope_change_at` | timestamptz/null | 最近目录 scope 变化 |
-| `last_directory_event_at` | timestamptz/null | 最近可信目录事件 |
+| `identity_revision` | bigint, default 1 | scope/状态变化时单调增加；与 scope marker 一起进入 ProviderContext |
+| `last_scope_change_at` | timestamptz/null | 最近目录 scope 变化的单调 marker；read/write context 必须精确匹配 |
+| `last_directory_event_at` | timestamptz/null | 最近可信目录事件；只允许保留或前进 |
 | `identity_health_state` | non-null | `pending/healthy/degraded/error/disabled` |
 | `identity_health_error_code` | string/null | 只在 `error` 状态存在的稳定脱敏错误码 |
 
@@ -338,7 +338,7 @@ projection 整体省略 `provider_tenant_key`、`subject_value` 和 `attributes`
 | `provider_account_key` | non-null | 飞书 app_id；union alias 可使用开发商 key |
 | `alias_type` | non-null | `open_id` / `union_id` |
 | `alias_value` | non-null | alias |
-| `verified_at` | timestamptz | 最近验证 |
+| `verified_at` | timestamptz | 最近 Provider 验证 proof；刷新只允许保留或前进 |
 
 唯一约束：
 
@@ -451,9 +451,9 @@ closed，也不会静默丢掉独立企业连接或误恢复 ownership。
 
 ### 3.10 Provider account 控制面后续接线
 
-I2 已把下列字段持久化到 §3.3 Provider Account；I2.1 用 §3.4 link 解耦 account 与 Channel；I3/I4
-再接入现有 `ChatChannel` onboarding、
-scope event 和 rotation 控制面：
+I2 已把下列字段持久化到 §3.3 Provider Account；I2.1 用 §3.4 link 解耦 account 与 Channel；I3
+已经提供窄 repository/CAS seam，I4/I7 后续再接入现有 `ChatChannel` onboarding、scope event 和
+rotation 控制面：
 
 ```text
 provider_tenant_key
@@ -465,21 +465,22 @@ identity_health_error_code
 ```
 
 这些字段属于私有/管理员面，公开响应必须脱敏。`provider_tenant_key` 不能从普通 Channel update
-请求任意修改；只通过 verified onboarding/rotation 流程更新。I3/I4 必须从 provider tenant/account
+请求任意修改；只通过 verified onboarding/rotation 流程更新。I3 只能从 provider tenant/account
 ownership 取得固定 `tenant_id`，不能信任 payload 或另建旁路 mapping。六表约束是持久化防线，但
 普通 Channel update 仍不能直接创建、换绑或覆盖 ownership。
 
-EIM-I3 repository 必须继续保持这条不可变边界：普通业务路径不得修改 provider tenant/account 的
+EIM-I3 repository 已保持这条不可变边界：普通业务路径不得修改 provider tenant/account 的
 `tenant_id/provider/provider_tenant_key`，也不得 unlink/rebind link 的
 `tenant_id/provider/provider_account_id/channel_id`，不得 hard-delete ownership 或其 identity 历史。
 verified onboarding/rotation 只能通过显式领域操作执行；account/identity 状态、scope 与 revision 更新
 使用 `identity_revision` compare-and-set，或在事务中 `SELECT ... FOR UPDATE` 后复核 revision。并发
 冲突 fail closed，禁止先查后写、last-write-wins 或删除重建来“换绑”。
 
-### 3.11 EIM-I2/I2.1 与 FastMCP 4 的边界
+### 3.11 EIM-I2/I2.1/I3 与 FastMCP 4 的边界
 
-I2/I2.1 只实现 MultiRAG 领域身份持久化、Alembic 和数据库不变量，因此不 import FastMCP，也不复制
-FastMCP 的工具/provider/auth 类型。这不是重复造工具开放层：FastMCP 4 的
+I2/I2.1 实现 MultiRAG 领域身份持久化、Alembic 和数据库不变量；I3 增加 identity contracts、policy、
+service 与 repository。三者都不 import FastMCP，也不复制 FastMCP 的工具/provider/auth 类型。这不是
+重复造工具开放层：FastMCP 4 的
 `RemoteAuthProvider`、`AccessToken`、root `on_list_tools/on_call_tool` middleware 与 HTTP
 Host/Origin 防护已经分别由 A3/A4 使用；未来 A7/P3 继续在 MCP composition/adapter 边界复用。
 
@@ -488,9 +489,167 @@ external identity、业务 subject 或事件 receipt，也不能替代上述数�
 Tenant 映射。领域 Principal/identity service 继续保持框架无关；只有进入 MCP Resource Server 或
 tool adapter 时才投影到 FastMCP 类型。
 
+### 3.12 EIM-I3 repository 权限与事务契约
+
+I3 把仓储拆成五个最小权限 Protocol；其中三类 write/control capability 与 ownership 相互独立，业务
+`IdentityService` 只持有 lookup：
+
+| Port | 允许的方法 | 明确禁止 |
+|---|---|---|
+| `IdentityLookupRepository` | 精确读取 Provider Account；解析 account + alias + identity + live membership | insert/update/delete/commit、ownership、Channel link 操作 |
+| `IdentityMutationRepository` | 新建 `pending_link` identity；ordinary 单向收紧 state CAS | alias 写/刷新、activation、account health/scope、ownership、generic CRUD |
+| `VerifiedIdentityMutationRepository` | 持有 fresh Provider proof 后新建/刷新 alias；显式 verified activation | ordinary 调用方注入、account control、ownership、hard delete |
+| `ProviderAccountControlRepository` | account health、scope marker、directory-event marker CAS | identity/alias 写入、ownership、Channel link 操作 |
+| `VerifiedOwnershipRepository` | `insert_verified_provider_tenant`、`insert_verified_provider_account` | 普通 service 注入、Channel unlink/rebind、任意 CRUD |
+
+聚合 `IdentityRepository` 只等于 lookup + ordinary mutation + verified identity mutation + provider-account
+control；它不继承 `VerifiedOwnershipRepository`。这是能力隔离，不是建议式命名：普通 provisioning
+用例不能拿 alias/activation 或 account-control capability，fresh Provider verifier 也不能顺带换绑
+ownership。
+
+`SqlAlchemyIdentityRepository` 使用 `AsyncSession`，但**调用方拥有事务和 commit/rollback**；repository
+不得把半个 identity/alias 事务自行提交。所有 identity/alias mutation command 都携带完整
+`ProviderContext`。写入前锁定精确 Provider Account，并重新核对
+`tenant_id/provider/provider_tenant_key/provider_account_key/identity_revision/last_scope_change_at`，后续
+scope 只从锁住的 account 派生，不能从请求字段重新拼出另一个租户。read 也同时匹配 account revision
+与 scope marker，避免 scope 已变化但 revision/context 仍被旧调用链复用。
+
+状态规则固定为：
+
+- ordinary `insert_identity` 只创建 `pending_link`，`verified_at/last_seen_at` 初始为空；调用前还要证明目标
+  `User` 活跃、非匿名且在同一 Tenant 有且只有一条有效 `UserTenant` membership；
+- ordinary `cas_identity_state` 只允许
+  `pending_link/active -> inactive/conflict/revoked` 与 `inactive -> conflict/revoked`，不能进入
+  `active`；`active` 只能通过 verified capability 中携带 `verified_at` 的
+  `activate_verified_identity` 从 `pending_link/inactive` 进入；
+- `conflict/revoked` 是终态，彼此也不能转换，不能由 JIT、重复消息或普通 CAS 自动复活；
+- alias 新建/刷新只存在于 `VerifiedIdentityMutationRepository`。proof 早于 account
+  `last_scope_change_at` 时以 revision conflict 拒绝；同一 alias/identity 的更新只允许
+  `verified_at` 前进，相等或更旧 proof 不会把已有时间倒退；
+- verified activation 同样要求 healthy account、live membership，且 proof 不得早于 scope marker；
+- 相同自然键的幂等 identity insert 只在 ownership-relevant scope 与 user 相同、且已有 identity 非
+  `conflict/revoked` 时重读；已有 mutable state/revision/attributes 保持数据库权威且绝不覆盖。若已被
+  不同 user/identity 占用则返回稳定 `IDENTITY_LINK_CONFLICT`；
+- account health 与 identity state 更新都以当前 revision 为 CAS 条件；并发只允许一个 writer 成功，
+  stale writer 得到 `revision_conflict`。health command 省略 `last_scope_change_at` 或
+  `last_directory_event_at` 表示保留当前值，不是清空；显式时间只能等于或晚于当前值，倒退返回
+  `invalid_transition`；
+- 所有 I3 SQLAlchemy Core INSERT/UPDATE 显式写入 BaseModel 的 `create_date/update_date` 与
+  `create_time/update_time`（update 只刷新 update 字段），不依赖 ORM event 在 Core DML 上碰巧生效；
+- repository error 只携稳定 error code，DTO 默认 `repr` 隐去 provider tenant/account key、alias、
+  subject、user/identity ID，不能把 SQL/Provider 原值混入错误。
+
+输入边界在 SQL 之前 fail closed：context 的 tenant/account ID、provider/key、int64 revision 与 aware
+scope marker，alias type/value，
+onboarding scope、identity subject/user 与 attributes 都做非空和最大长度检查；attributes 只接受
+`display_name/provider_status` 且值为 string/null，重复 key、未知 key、嵌套/超长值拒绝。所有公开
+repository 方法将 SQLAlchemy/driver 异常统一转换为
+`IDENTITY_REPOSITORY_UNAVAILABLE`，不传播 statement、bind parameter 或底层异常文本。
+
+verified ownership insert 只是**持久化权限边界**，不等于外部所有权已经验证。I4/onboarding composition
+必须先完成 Provider 凭据和企业/安装实例证明，再构造 `VerifiedProviderTenantOnboarding` 或
+`VerifiedProviderAccountOnboarding`；普通 `IdentityService` 永远拿不到这个 port。I3 没有提供
+Channel link 写 API、credential vault、目录调用或管理员 HTTP API。
+
 ---
 
 ## 4. Identity Service 接口
+
+### 4.1 I3 当前已实现的解析契约
+
+I3 的核心输入由服务端可信配置构造，不是 Channel payload：
+
+```python
+from dataclasses import dataclass
+from datetime import datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderContext:
+    tenant_id: str
+    provider: str
+    provider_tenant_key: str
+    provider_account_id: str
+    provider_account_key: str
+    provider_account_revision: int
+    provider_account_last_scope_change_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AliasKey:
+    alias_type: ProviderAliasType  # v1: open_id | union_id
+    alias_value: str
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityResolutionRequest:
+    context: ProviderContext
+    alias: AliasKey
+```
+
+`ProviderContext` 必须来自 server-side Provider Account ownership。revision 与
+`provider_account_last_scope_change_at` 共同构成 account generation；两者任一不匹配都不是 alias miss，
+而是无效/stale context。它故意没有 `channel_id`；Channel、目录事件、Web OAuth 与管理员预绑定将来
+都先解析同一种 context，再复用 identity core。
+
+lookup repository 用**一条 SQL**从精确 account 起点 outer join alias、canonical identity、活跃非匿名
+`User` 与当前有效 `UserTenant`，契约严格区分：
+
+```text
+None
+  = ProviderContext 不存在、scope/revision 不匹配；不得当成 alias miss 或触发 provisioning
+
+IdentityResolutionSnapshot(account=..., identity=None, membership=None)
+  = account 有效且健康状态可另行判定，但该 alias 尚未链接；可以进入 policy plan
+
+IdentityResolutionSnapshot(account=..., identity=..., membership=None)
+  = link 存在，但当前 User/membership 不满足；必须 inactive/fail closed
+
+IdentityResolutionSnapshot(..., alias_verified_at=<time>)
+  = alias proof 时间的 read projection；若早于 account last_scope_change_at，必须 Provider 重验
+```
+
+重复有效 membership、跨 scope identity、非 healthy account、非 active identity、无效/匿名/停用用户都
+fail closed。解析每次重查 `User/UserTenant`，不能把旧缓存或“以前有效”当当前 membership。
+
+判定顺序也是契约：identity `state=conflict/revoked` 两个终态都先于 alias proof freshness 分类；
+conflict 返回 `IDENTITY_LINK_CONFLICT`，revoked 返回 `IDENTITY_INACTIVE`，两者都不提示可重验。这样
+scope marker 变化不会把终态降格成普通“请重验”，verified port 也不能复活它们。非终态 alias 早于
+marker 时返回 inactive + `provider_verification_required=true`，且不进入 provisioning policy；fresh
+alias、active identity 和 live membership 才能 resolved。
+
+当前 service 接口是：
+
+```python
+class IdentityService:
+    def __init__(
+        self,
+        repository: IdentityLookupRepository,
+        policy_resolver: ProvisioningPolicyResolver,
+    ) -> None: ...
+
+    async def resolve_external_identity(
+        self,
+        request: IdentityResolutionRequest,
+    ) -> IdentityResolutionResult: ...
+```
+
+`IdentityService` 不持有 ordinary mutation、verified identity mutation、provider-account control 或
+ownership repository。返回状态只有
+`resolved/missing/inactive/conflict`；resolved 才携带 immutable identity/membership record，仍然不是
+P1 Principal。缺 alias 时三种策略只产生：
+
+| mode | action plan | I3 是否立即写库 |
+|---|---|:---:|
+| `preprovisioned` | `bind_preprovisioned` | 否 |
+| `link_only` | `require_link` + `IDENTITY_LINK_REQUIRED` | 否 |
+| `jit` | `create_normal_member`（角色上限 `NORMAL`） | 否 |
+
+三种 plan 都必须 `provider_verification_required=true`。未知 mode、policy exception 或无法取得 policy
+返回 `IDENTITY_POLICY_UNAVAILABLE` 并 fail closed；I3 不调用 Contact、不开户、不激活 identity，也不
+把“plan”误当成已验证用户。
+
+### 4.2 P1/I4/I6/C3 目标组合接口（尚未实现）
 
 ```python
 from dataclasses import dataclass
@@ -531,25 +690,14 @@ class Principal:
 ```
 
 Principal 不包含 tenant role、业务权限集合或飞书 access token。角色和业务权限是变化更快的授权
-状态，按对应边界查询。
+状态，按对应边界查询。以上 DTO 属于 P1 目标，不是 I3 当前返回类型。
 
-核心接口：
-
-```python
-class EnterpriseIdentityService:
-    async def resolve_channel_actor(
-        self,
-        *,
-        tenant_id: str,
-        channel_id: str,
-        assertion: ExternalIdentityAssertion,
-        required_assurance: IdentityAssurance,
-    ) -> Principal: ...
-
-    async def consume_directory_event(self, event: DirectoryIdentityEvent) -> None: ...
-
-    async def revalidate_linked_identity(self, external_identity_id: str) -> None: ...
-```
+旧提案中的 `EnterpriseIdentityService.resolve_channel_actor(tenant_id, channel_id, ...) -> Principal`
+**不再是 identity core 契约**。C3 的 Channel adapter 将来负责
+`channel_id -> IdentityProviderChannelLink -> ProviderContext`，再组合 I4 Provider verification、I6
+provision/link transaction、I3 `resolve_external_identity()` 与 P1 Principal builder。`channel_id` 只留在
+该 adapter，不得重新进入通用 identity repository/service。目录事件消费和 linked identity 重验分别
+由 I7/I8 落地。
 
 Provider SPI：
 
@@ -567,6 +715,8 @@ class EnterpriseSubjectResolver:
     async def resolve(self, provider_identity: ProviderIdentity) -> EnterpriseSubjectResolution: ...
 ```
 
+Provider SPI 属于 I4，Enterprise subject SPI 属于 I5；本轮只有文档契约，I3 未实现这两个 SPI。
+
 ---
 
 ## 5. 身份状态与错误码
@@ -582,6 +732,12 @@ class EnterpriseSubjectResolver:
 | `IDENTITY_INACTIVE` | 403 | 冻结、离职、退出或平台禁用 |
 | `IDENTITY_LINK_REQUIRED` | safe user result | `link_only` 需要一次性绑定 |
 | `IDENTITY_LINK_CONFLICT` | 409/fail closed | canonical/alias/企业主体冲突 |
+| `IDENTITY_NOT_FOUND` | safe domain result | mutation 目标不存在；不泄露其他 Tenant 是否存在同 ID |
+| `IDENTITY_REVISION_CONFLICT` | 409/retry from fresh context | account/identity revision 已变化，stale writer 不得覆盖 |
+| `IDENTITY_TRANSITION_INVALID` | 409/fail closed | 非法状态转换；普通路径不能激活或复活终态 identity |
+| `IDENTITY_OWNERSHIP_CONFLICT` | 409/security audit | verified onboarding 或写命令与固定 tenant/provider ownership 不符 |
+| `IDENTITY_POLICY_UNAVAILABLE` | 503/safe domain result | provisioning policy 缺失、无效或读取失败；不采用默认放行 |
+| `IDENTITY_REPOSITORY_UNAVAILABLE` | 503/safe domain result | repository 无法安全判定结果；错误不含 SQL/Provider 标识 |
 | `IDENTITY_PROVIDER_UNAVAILABLE` | 503 | 飞书/OA 暂时不可用且无可接受 cache |
 | `ENTERPRISE_SUBJECT_REQUIRED` | 403/tool error | 当前工具需要 talent/workcode，但未解析 |
 | `IDENTITY_ASSURANCE_INSUFFICIENT` | 403/step-up | cache freshness 不满足操作风险 |

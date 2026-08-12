@@ -7,6 +7,9 @@
 
 ## 1. 系统与信任边界
 
+下图是端到端目标，不表示每条边都已上线；当前实现/目标的分界以本节后的任务标记和
+[ROADMAP](ROADMAP.md) 为准。
+
 ```mermaid
 flowchart LR
     O["Customer Organization\n首期 1:1 Tenant"] --> U["企业员工"]
@@ -84,15 +87,21 @@ Provider credential vault 是后续独立任务，不能把 I2.1 描述成凭据
 
 #### Enterprise Identity Service
 
-建议包边界：
+EIM-I3 当前包边界：
 
 ```text
 api/identity/
 ├── contracts.py
-├── policies.py
+├── policy.py
 ├── service.py
-├── repository.py
-├── errors.py
+├── validation.py
+└── repository.py
+```
+
+I4/I5 再按需要加 Provider 与 enterprise-subject adapter：
+
+```text
+api/identity/
 ├── providers/
 │   └── feishu.py
 └── enterprise_subjects/
@@ -100,12 +109,38 @@ api/identity/
     └── oa.py
 ```
 
-新 service 按仓库规范 async-first，使用 `AsyncSession`；Provider client 通过依赖注入，单元测试不
-访问真实飞书/OA。
+当前 repository 按仓库规范 async-first，使用 `AsyncSession`；`IdentityService` 本身只依赖框架无关
+`IdentityLookupRepository` 与 provisioning policy resolver。I3 不存在 Provider client，也不访问真实
+飞书/OA。
 
 核心入口接收服务端构造的 Provider Context，而不是 `channel_id`。Channel adapter 先解析唯一 link，
 再调用同一核心接口；目录事件、管理员预绑定、Web OAuth 或未来 SSO 因而可以复用身份服务而不伪造
 聊天入口。
+
+I3 当前解析路径是：
+
+```mermaid
+flowchart LR
+    C["server-built ProviderContext + AliasKey"] --> Q["one SQL authoritative snapshot"]
+    Q --> A["exact Provider Account + revision + scope marker"]
+    Q --> I["alias proof time + canonical identity"]
+    Q --> M["live User + UserTenant"]
+    Q -->|"no account row"| R["invalid context / fail closed"]
+    Q -->|"valid account; no identity"| P["verification-gated policy plan only"]
+    Q -->|"active identity + live membership"| V["resolved identity records"]
+```
+
+`None` 只表示 Provider Context 无效；有效 account 下 alias miss 由 `identity=None` 明确表达。三种
+provisioning mode 都只返回需要 Provider verification 的 plan，不在 I3 开户、绑定、激活或构造
+Principal。account revision 与 `last_scope_change_at` 共同绑定 ProviderContext；read snapshot 同时投影
+`alias_verified_at`。scope marker 晚于 alias proof 时要求 Provider 重验；若 identity 已是
+conflict/revoked 终态，则终态结论优先，不能被 freshness 降格或提示可重验。
+
+写权限再拆为三类 capability：ordinary mutation 只能 pending identity insert/单向收紧 CAS；verified
+identity mutation 独占 alias 新建/只前进刷新和显式 activation；provider-account control 独占
+health/scope/event marker CAS。verified ownership 仍是独立 port，普通 `IdentityService` 无法取得任何
+写 capability；事务 commit/rollback 由上层用例拥有。省略 health command 的 scope/event 时间会保留
+旧值，显式时间不得倒退；Core DML 显式写审计时间，输入和 driver 异常在 repository 边界稳定脱敏。
 
 #### Principal propagation
 
@@ -155,7 +190,7 @@ service 的 `build_server()` 不自行决定 auth，保持 mount/proxy 等价。
 
 ---
 
-## 3. 首次私聊：JIT 身份解析
+## 3. 首次私聊：JIT 身份解析（跨 I3/I4/I6/P1 的目标时序）
 
 ```mermaid
 sequenceDiagram
@@ -172,17 +207,18 @@ sequenceDiagram
     F->>W: im.message.receive_v1
     W->>W: 3 秒内规范化、入队、返回
     W->>X: authenticated binding command + identity assertion
-    X->>X: 由 workload/binding 得到 tenant_id
-    X->>I: resolve(tenant_id, provider_account, assertion)
-    I->>D: 查 open_id alias
+    X->>X: 由 workload/binding + account link 构造 ProviderContext
+    X->>I: resolve_external_identity(ProviderContext, AliasKey) [I3]
+    I->>D: 单 SQL 查 account generation + alias proof + identity + live membership
     alt 命中且未过期
-        D-->>I: platform_user_id + status
-    else 缺失或需要刷新
-        I->>C: GET user by open_id with tenant_access_token
-        C-->>I: user_id + status + employee_no?
-        I->>D: 事务内 upsert identity / provision UserTenant
+        D-->>I: active identity + live UserTenant
+    else account 有效但 alias 缺失
+        I-->>X: verification-gated provisioning plan [I3]
+        X->>C: Provider verify open_id/status [I4]
+        C-->>X: user_id + status + employee_no?
+        X->>D: 事务内 link/provision + verified activation [I6]
     end
-    I-->>X: Trusted Principal
+    X->>X: immutable Principal construction [P1/C3]
     X->>A: execute(message, principal)
     A-->>E: 回复
 ```
@@ -190,11 +226,20 @@ sequenceDiagram
 关键规则：
 
 - Contact 调用在 SDK callback 之外；
+- I3 的 `IdentityService` 不调用 Contact；I4 Provider adapter 在组合层消费 I3 返回的验证计划；
+- ProviderContext 必须携最新 account revision + scope marker；旧 alias proof 先进入 Provider 重验，
+  verified mutation 只允许 proof 时间前进，绝不倒退已有 alias verification；
 - 同一 `(tenant_key, app_id, open_id)` 首次解析使用 single-flight，避免并发重复开户；
 - JIT 事务内锁定 canonical provider identity，数据库唯一约束是最终并发保护；
 - `User`、`UserTenant`、`ExternalIdentity` 创建要么一起提交，要么全部回滚；
+- identity insert 固定为 `pending_link`，只有本次权威 Provider 验证成功后的显式 activation 才能进入
+  `active`；`conflict/revoked` 不能因新消息自动恢复；
 - Provider 返回 active 不自动授予管理员角色；
 - enterprise subject 缺失时，普通 RAG 是否继续由 policy 决定，高风险 MCP 一律拒绝。
+
+截至 I3 完成，图中只有 `ProviderContext/AliasKey`、单 SQL snapshot、三态 plan 与窄
+repository/CAS seam 已落地；I4、I6、P1、C3 仍未实现，所以该图不能作为真实飞书端到端已打通的
+证据。
 
 ---
 

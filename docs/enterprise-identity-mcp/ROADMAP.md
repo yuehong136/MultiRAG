@@ -5,8 +5,9 @@
 > CHN-U15 迁移/API 重启已完成，CHN-U16 已完成；真实 smoke 仍欠，下一项 CHN-O9，随后稳定浸泡；
 > EIM-A1、EIM-A3、EIM-A4 已完成；EIM-A6 phase 1 正在收口且保持 `🔵`；MultiRAG 已完成
 > EIM-I2 首期固定 Tenant ownership 与 identity schema；EIM-I2.1 已把 Provider Account 与 Channel
-> 解耦为 tenant/provider-safe 显式 link，下一项 EIM-I3 repository/policy，然后继续
-> binding、Channel assertion 与 Principal 轨；EIM-F5 / CHN-X14 和 EIM-O4 均保持挂起。
+> 解耦为 tenant/provider-safe 显式 link；EIM-I3 repository/policy/service 已完成并首先解锁
+> EIM-P1。EIM-I4 仍同时等待 EIM-F1，Channel assertion 轨可独立推进；EIM-F5 /
+> CHN-X14 和 EIM-O4 均保持挂起。
 
 ---
 
@@ -190,7 +191,7 @@ F1/F3/F4/F7/F8 禁止携带身份功能。F2 只是 characterization/兼容矩�
 | EIM-I1 | MR | 让 `User` 支持 external-only：nullable email、`account_kind`、登录/找回密码兼容 | ✅ | F0 | `api/db/db_models.py::User`、auth/user APIs；存量迁移 + fresh DB；null email 不 500，不造假邮箱 |
 | EIM-I2 | MR | 新增 provider tenant/account ownership、canonical identity、alias、enterprise subject、event receipt 六表与 Alembic | ✅ | I1 | [CONTRACTS §3](CONTRACTS.md#3-数据模型) 的固定单 Tenant、唯一/复合外键、RESTRICT、脱敏与安全回滚约束；并发 insert 真库测试；head `8f2c4d6e7a9b` |
 | EIM-I2.1 | MR | Provider Account 去除 Channel 所有权；新增 tenant/provider-safe 一对一 `IdentityProviderChannelLink`，迁移旧关系且保留现有 ChannelSecret 归属 | ✅ | I2 | forward revision/单 head `9a3b5c7d8e0f`；account 可无 Channel，link 两端复合 FK + 双唯一 + RESTRICT；旧 account→link 无损 backfill；account/link 任一有数据则 downgrade fail closed；不宣称凭据已解耦 |
-| EIM-I3 | MR | `api/identity` contracts/repository/policy/service 骨架，三种 provisioning policy | ⬜ | I2.1 | **下一项**；核心入口接收 Provider Context，不把 `channel_id` 写进 identity core；async-first、冲突 fail closed、revision + CAS/行锁 |
+| EIM-I3 | MR | `api/identity` contracts/repository/policy/service 骨架，三种 provisioning policy | ✅ | I2.1 | `ProviderContext + AliasKey` 单 SQL 权威快照，revision + scope marker/alias proof freshness；五个窄 port；定向 57 passed，完整 verify 1969 / integration 82 |
 | EIM-I4 | MR | `FeishuEnterpriseIdentityProvider`：open_id -> user_id/status/employee_no，token/cache/限流 | ⬜ | F1,I3 | Contact V3 fixture + 可选真实 sandbox；scope/status/error 分类；single-flight |
 | EIM-I5 | MR | `FeishuEmployeeNumberResolver` + 可插拔 OA/HR resolver SPI | ⬜ | I4 | resolved/not-found/ambiguous/unavailable/inactive 五态；不含原力 if/else |
 | EIM-I6 | MR | `preprovisioned/link_only/jit`、User/UserTenant 事务、一次性 link code、显式合并 | ⬜ | I3,I4 | JIT 只能 NORMAL；并发首次消息只建一个用户；绑定码单次/短 TTL；无邮箱匹配 |
@@ -230,14 +231,31 @@ F1/F3/F4/F7/F8 禁止携带身份功能。F2 只是 characterization/兼容矩�
 
 ### EIM-I3 开工简报
 
-- repository 只能在 verified onboarding 事务中创建 provider tenant/account ownership；普通更新、
-  Channel 配置或 resolver 路径禁止更换 `tenant_id/provider/provider_tenant_key` 或 link 的
-  `provider_account_id/channel_id`，也禁止
-  hard-delete ownership、identity、alias、subject 或 receipt 历史。
-- identity/account 状态和 scope 变化必须在事务内使用 `identity_revision` 的 compare-and-set，或先
-  `SELECT ... FOR UPDATE` 再校验 revision；冲突返回稳定领域结果并 fail closed，不做 check-then-write。
-- provisioning policy/service 保持框架无关、async-first；FastMCP 仅留在未来 MCP adapter/composition
-  边界，不能进入 identity repository/domain contract。
+- 当前实现的 identity core 只接受服务端构造的 `ProviderContext + AliasKey`，没有 `channel_id`、飞书
+  SDK、FastMCP 或 Channel import。`IdentityService` 只依赖 `IdentityLookupRepository`；repository
+  用一条 SQL 返回 account + alias/canonical identity + live `User/UserTenant` 快照。返回 `None` 只表示
+  Provider Context 无效；有效 account 下 alias 缺失用 `snapshot.identity=None` 明确表达，不能混成同一
+  “not found”。
+- `preprovisioned/link_only/jit` 只返回 verification-gated action plan，不在 I3 创建 `User/UserTenant`、
+  写 link、调用 Contact、激活 identity 或构造 Principal。真正 Provider 验证属于 I4，开户/绑定事务
+  属于 I6，Principal 属于 P1/C3。
+- `ProviderContext` 同时携 account revision 与 `provider_account_last_scope_change_at`；read query 精确
+  匹配二者并投影 `alias_verified_at`。旧 alias proof 早于最新 scope marker 时结果要求 Provider 重验；
+  conflict/revoked 终态仍优先返回各自结果且不提示可重验，不能被 freshness 掩盖。
+- 写命令都携带完整 `ProviderContext`，repository 先锁 Provider Account 并复核 revision + scope marker，
+  再从权威 account 派生 tenant/provider scope。ordinary mutation 只允许 pending identity insert 和
+  单向收紧状态 CAS；verified identity mutation 独占 alias 新建/刷新与显式 activation；provider-account
+  control 独占 health/scope/event marker CAS；ownership 仍独立且只暴露两个 verified insert。
+- alias proof 早于 scope marker 时写入拒绝；比现有 proof 更旧的时间不得倒退 alias `verified_at`。
+  account health CAS 中省略的时间字段保留原值，显式 scope/event 时间只能单调前进；所有 Core
+  INSERT/UPDATE 显式写 BaseModel 审计时间。`conflict/revoked` 是终态。
+- lookup、三种 write/control capability 与 ownership ports 相互分离，普通 service 只拿 lookup。所有
+  协议都没有 generic CRUD、commit/rollback/delete、Channel unlink/rebind；事务边界由调用方拥有。
+  结构/长度/attributes allowlist 在 SQL 前校验，SQLAlchemy/driver 异常统一脱敏为稳定 repository code。
+- 完成证据：领域 unit **40 passed**、真 PostgreSQL repository **17 passed**，合计定向 **57 passed**；
+  repository + identity schema 连续真库 **40 passed**；`make verify` 全绿（Ruff format/check、**7** 条
+  import contracts、async gate、mypy **71 files**、unit **1969 passed in 28.85s**）；
+  `REQUIRE_SERVICES=1 make integration` **82 passed in 12.48s**。I3 已完成，下一项为 P1；I4 仍等待 F1。
 
 ### EIM-I4 开工简报
 
@@ -601,7 +619,9 @@ EIM-F1  lark-oapi patch 升级
 EIM-I1  ✅ User 外部账号模型
 EIM-I2  ✅ provider ownership + external identity schema
 EIM-I2.1 ✅ Provider Account / Channel explicit link
-EIM-I3  repository + policy                         <- 当前下一项
+EIM-I3  ✅ repository + policy/service
+EIM-P1  immutable Principal                         <- 当前下一项
+EIM-I4  Feishu directory provider                   <- 仍需先完成 F1
 EIM-C1  Channel tolerate structured assertion
 ```
 
@@ -626,7 +646,8 @@ U0 -> U1 -> U4 -> U11 -> U12/U13
 身份、MCP 与敏感操作主通道（`+` 表示全部前置均需完成）：
 
 ```text
-F1 -> I1 -> I2 -> I2.1 -> I3 -> I4 -> I6 -> P1
+I1 -> I2 -> I2.1 -> I3 -> P1
+F1 + I3 -> I4 -> I6
 C1 -> C2 -> C3                         (C3 另需 I6 + P1)
 P1 + C3 -> P2
 
@@ -646,8 +667,8 @@ A8 -> O3  仅在真实企业 IdP、多 issuer 或托管平台需求成立后解�
 ```
 
 A3/A4 已完成，of_mcp 的 A6 phase 1 已落但保持进行中；下一步不是把内存 store 当生产后端，而是完成
-durable multi-instance replay/audit、HMAC key rotation 和跨仓 OTel。MultiRAG 已完成 I2，当前从
-`I3 -> P1`、`F1 + I3 -> I4 -> I6` 和 `C1 -> C2` 推进，只有
+durable multi-instance replay/audit、HMAC key rotation 和跨仓 OTel。MultiRAG 已完成 I2/I2.1/I3，
+当前从 `P1`、`F1 -> I4 -> I6` 和 `C1 -> C2` 推进，只有
 `C2 + I6 + P1 -> C3 -> P2` 后才能做 A2。
 随后必须等 `P2 + F3 + A2 + A4 -> P3`，再启动 A5/U14 等真实委托消费者。A7 保持独立入站
 resource；A8 仍无真实需求不启动。这个顺序既保留 of_mcp 的 fail-closed verifier/authorizer 先行，
@@ -689,4 +710,5 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 | 2026-08-12 | EIM-I1 | `User` 支持 nullable email 与 `local/external/hybrid` 账户类型；数据库与 service 双层禁止 external-only 本地密码，登录/找回密码只接受 password-capable 账户；公共 user projection、Admin 创建用户响应与注册失败响应不暴露密码哈希、存量 access token 或 SQL 参数；邀请人姓名在 nickname/email 都缺失时使用稳定非 PII fallback。迁移按存量 `login_channel/password` 可逆分类 local/external/hybrid，fresh DB、upgrade → downgrade → upgrade 与不可重建状态均有真 PostgreSQL 守门；Web OAuth 强制一次性 state 且在 I6 建立 provider-subject binding 前不执行 email 登录、注册或合并 | MultiRAG `7041f92a` | `make verify`：format/Ruff、6 import contracts、async DB gate、mypy 65 files 全绿，unit **1915 passed in 24.79s**；`REQUIRE_SERVICES=1 make integration`：**41 passed in 6.50s**；Alembic 单 head `7c8d9e0f1a2b`；安全复核无剩余 blocker | Codex |
 | 2026-08-12 | EIM-I2 | 新增 provider tenant/account ownership、canonical identity、tenant-scoped alias、enterprise subject 与 body-free event receipt 六表；首期由数据库 ownership/复合外键强制一个飞书企业、安装实例和 Channel 固定单 Tenant，所有身份历史外键 RESTRICT；attributes 关闭白名单，默认 projection 脱敏；model-first 逐项核对 CHECK SQL/server default，错误 default 与六表部分存在的半迁移 schema 均 fail closed；downgrade 先锁六表并在有数据或并发写竞争时 fail closed。该任务未引入 repository、Channel Principal、动态 MCP token 或 FastMCP domain 依赖；下一项 EIM-I3 | MultiRAG / 本次提交 | Alembic 单 head `8f2c4d6e7a9b`；I2 unit **10 passed**；identity integration **11 passed**，含错误 default/partial schema 负向、并发 alias 单 winner、空表 down/up、有历史拒绝与 `ACCESS EXCLUSIVE` 锁竞争 SQLSTATE `55P03`；`make verify` 静态门禁全绿、unit **1925 passed**；`REQUIRE_SERVICES=1 make integration` **52 passed**；`git diff --check` 通过 | Codex |
 | 2026-08-12 | EIM-I2.1 | Provider Account 去除 Channel 所有权并可独立存在；新增 tenant/provider-safe 首期一对一 `IdentityProviderChannelLink`，旧 `account.channel_id` 无损 backfill 后删除；link 双唯一、两端复合 FK 与 RESTRICT 机器拒绝跨 Tenant/Provider、一端多绑和级联删除；Channel 控制面保护改为沿 link 查询。飞书凭据仍归 `ChannelSecret`，Customer Organization 仅进入首期 1:1 Tenant 的目标术语；未引入通用 Provider credential vault、Principal、动态 MCP token 或 FastMCP domain 依赖；下一项 EIM-I3 | MultiRAG / 本次提交 | Alembic 单 head `9a3b5c7d8e0f`；I2.1 identity integration **23 passed**；相关 I2.1 unit **14 passed**；identity schema + Channel control persistence **25 passed**；相关 identity + Channel control unit **67 passed**；`make verify` 全绿、unit **1929 passed**；`REQUIRE_SERVICES=1 make integration` **65 passed**；`git diff --check` 通过 | Codex |
+| 2026-08-12 | EIM-I3 | 新增框架无关 `ProviderContext`/identity contracts、三态 provisioning plan、只读 `IdentityService`、共享输入 validation 与纯异步 SQLAlchemy repository；单 SQL 区分无效 account context 与有效 alias miss，重查 live User/UserTenant，并用 account revision + scope marker/alias proof 判 freshness。ordinary mutation 仅 pending insert/单向收紧 CAS；verified identity mutation 独占 alias refresh/activation；provider control 独占 health CAS；ownership 独立。旧 proof 拒绝/不降级，health 时间 preserve/monotonic，Core 写显式审计时间，输入和 SQLAlchemy 异常稳定脱敏；conflict/revoked 终态均先于 freshness 分类且不可复活。本任务不交付飞书 Provider、开户、Principal、Channel 接线、动态 MCP token 或 FastMCP 运行时变更 | MultiRAG / 本次提交 | I3 定向 **57 passed**（unit 40 + 真 PG 17）；repository + identity schema 连续真库 **40 passed**；`make verify` 全绿：Ruff format/check、7 import contracts、async gate、mypy 71 files、unit **1969 passed in 28.85s**；`REQUIRE_SERVICES=1 make integration` **82 passed in 12.48s**；`git diff --check` 通过 | Codex |
 | 2026-08-12 | EIM-A6 phase 1 | of_mcp 为所有实际工具增加 effect/replay policy 并把它纳入 canonical snapshot/revision；新增冻结脱敏 audit schema、单 capability JTI replay claim/state machine、HMAC request fingerprint、框架无关 security coordinator 与 OTel API adapter；Gateway 在 A4 最终 allow 后、业务执行前 prepare，重复/冲突/依赖故障分别稳定映射 409/403/503，业务结果未知不释放 claim。仅完成安全中间态：生产 durable backend、HMAC/KMS 轮换、OTel SDK/exporter/跨仓 trace、A5 parent JTI、P3 动态 token、业务幂等和远程发布仍未完成，A6 保持 `🔵` | of_mcp `0d1224d`；MultiRAG docs / 本次提交；policy revision `7bf9e09082ca4f1d529e51bf3fe8e6dd5c4334c62deaf9a5b6be204af9fca446` | A6/Gateway 定向 **65 passed**；`uv run --locked ofmcp verify` 六步全绿、**453 passed、2 existing skipped**；MultiRAG `make verify` 静态门禁全绿、**1915 passed**；当前 secure 无生产 coordinator 后端时 fail-fast，remote gate 未开放 | Codex |

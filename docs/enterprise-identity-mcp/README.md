@@ -34,7 +34,7 @@
 推荐的派工方式：
 
 ```text
-读 docs/enterprise-identity-mcp/README.md，然后做 EIM-I1。
+读 docs/enterprise-identity-mcp/README.md，然后做 EIM-P1。
 先复核任务锚点和依赖，把准备修改的文件与验收标准告诉我；确认后再写代码。
 ```
 
@@ -182,6 +182,10 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
 
 任何模式都不得把首次用户创建成 `OWNER` 或 `ADMIN`。
 
+该表描述 I4+I6 完成后的策略效果。I3 当前只把三种 mode 映射为
+`bind_preprovisioned/require_link/create_normal_member` 的 verification-gated plan，未执行表中的
+绑定或开户动作。
+
 ---
 
 ## 5. 文档索引与单一职责
@@ -236,12 +240,39 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   Alembic 单 head 为 `9a3b5c7d8e0f`；I2.1 identity integration **23 passed**，相关 I2.1 unit
   **14 passed**，完整 `make verify` unit **1929 passed**，完整 integration **65 passed**。飞书 Secret
   仍在 `ChannelSecret`，因此这里只能宣称数据模型解耦，不能宣称凭据已解耦。
-- I2/I2.1 不 import FastMCP，因为 FastMCP 不拥有平台 Tenant、飞书安装实例或身份库。后续 MCP 入口仍
+- EIM-I3 已完成 `api/identity/` 的框架无关 contracts、policy、service、共享输入 validation 与纯异步 SQLAlchemy
+  repository。核心解析只接收服务端构造的 `ProviderContext + AliasKey`，不接收 `channel_id`；
+  repository 用一条 SQL 同时取得精确 Provider Account、alias、canonical identity 与**当前有效的**
+  `User/UserTenant`。因此 `None` 只表示 Provider Context 无效，
+  `snapshot.identity=None` 才表示“account 有效但 alias 未绑定”。`IdentityService` 只持有
+  `IdentityLookupRepository` 和 provisioning policy resolver，不持有写仓储。`ProviderContext` 同时
+  固定 account revision 与 `last_scope_change_at` marker，read snapshot 投影 `alias_verified_at`；alias
+  早于最近 scope 变化时即使 identity 仍 active 也必须要求 Provider 重验。
+- I3 的三种 provisioning policy 目前只产生
+  `bind_preprovisioned/require_link/create_normal_member` 的**待 Provider 验证计划**；三种结果都带
+  `provider_verification_required=true`。它不会调用飞书、创建 `User/UserTenant`、激活 identity、
+  构造 Principal 或接入 Channel。写侧按 capability 分权：ordinary mutation 只能创建
+  `pending_link` identity 与执行单向收紧状态 CAS；verified identity mutation 独占 alias 新建/刷新和
+  显式 activation；provider-account control 独占 health/scope/event marker CAS；verified ownership
+  仍是独立的两个窄 insert 命令。`conflict/revoked` 是终态，两者都优先于 alias freshness 且不提示
+  可重验；
+  所有 port 都不暴露 CRUD、commit、delete、unlink 或 rebind。
+- alias proof 早于 account scope marker 时写入会以 revision conflict 拒绝；proof 不早于 marker 但比
+  当前 alias proof 旧时不会倒退 `verified_at`。health CAS 对省略的 scope/event 时间保留旧值，只接受
+  时间单调前进；所有 SQLAlchemy Core INSERT/UPDATE 显式维护审计时间。输入在发 SQL 前做长度、枚举
+  和 attributes allowlist 校验，SQLAlchemy/driver 异常统一映射为不含 bind parameter 的稳定错误码。
+- I3 定向证据为 `test_identity_domain.py` **40 passed**、真 PostgreSQL
+  `test_identity_repository.py` **17 passed**，合计 **57 passed**；repository + identity schema 连续真库
+  **40 passed**。`make verify` 全绿：Ruff format/check、7 import contracts、async gate、mypy 71 files、
+  unit **1969 passed in 28.85s**；`REQUIRE_SERVICES=1 make integration` **82 passed in 12.48s**。
+  本层仍不 import FastMCP：FastMCP 4 的 auth、tool list/call middleware 继续只在 MCP
+  composition/adapter 边界复用。
+- I2/I2.1/I3 不 import FastMCP，因为 FastMCP 不拥有平台 Tenant、飞书安装实例或身份库。后续 MCP 入口仍
   优先复用 FastMCP 4 的 `RemoteAuthProvider`、`AccessToken`、`on_list_tools/on_call_tool` middleware
   和 transport 防护；领域 identity/Principal 保持框架无关，避免重复实现框架已有工具开放能力。
-- 下一项 EIM-I3 repository/policy 已解除暂停：核心入口依赖 Provider
-  Context 而非 Channel，普通路径禁止 ownership/link 换绑或 hard-delete；状态、scope 和
-  revision 变化必须使用 `identity_revision` CAS，或同一事务内行锁后复核 revision，冲突 fail closed。
+- I3 已首先解锁 MultiRAG immutable Principal，下一项为 P1；I4 还同时依赖尚未完成的
+  F1，不能因 I3 repository 已存在就提前宣称飞书目录解析可用。I4/I5/I6/I7、P1、C1-C3、A2/P3
+  均不属于 I3 当前完成面。
 - MCP 出站已使用官方 SDK 2 `Client`：Streamable HTTP 使用 `mode="auto"` 和 SDK
   `create_mcp_http_client()` 受管 client（30 秒 connect/write/pool、300 秒 read），SSE 使用
   `mode="legacy"`，业务代码不再手调 `initialize()`。HTTP
@@ -360,8 +391,9 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   OAuth 获取 token 流。of_mcp 仍缺 A5 proxy internal actor；A6 虽已有 phase-1 domain/runtime
   安全边界，但仍缺生产多实例 replay/audit、HMAC/KMS 轮换、OTel SDK/exporter 与跨仓 trace，因此
   保持 `🔵`。M1/M2 企业主体与业务对象授权、持久 Interaction/Confirmation/Idempotency 也未完成。
-  MultiRAG 应继续推进 `I3 -> P1`、`F1 + I3 -> I4 -> I6` 与 `C1 -> C2`，不能跳过
-  `C3 -> P2` 直接做 A2/P3。本仓文档收口后的 `make verify` 全绿、**1915 passed**。
+  MultiRAG 当前推进 `P1`、`F1 -> I4 -> I6` 与 `C1 -> C2`；不能跳过 `C3 -> P2` 直接做 A2/P3。
+  I3 当前完整门禁为 unit **1969 passed**、integration **82 passed**；先前 A6 文档中的
+  **1915 passed** 只是其当时快照，不覆盖 I3 证据。
 
 ---
 
