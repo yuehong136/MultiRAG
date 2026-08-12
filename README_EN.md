@@ -565,6 +565,7 @@ OpenAPI docs are available at `/docs` after service startup.
 
 ### Documentation index
 
+- Run Platform (remote Run API, events, state machine, and rollout): [`docs/run-platform/README.md`](./docs/run-platform/README.md)
 - Getting started: [`docs/get_started.md`](./docs/get_started.md)
 - Deployment guide: [`docs/DEPLOYMENT_GUIDE.md`](./docs/DEPLOYMENT_GUIDE.md)
 - Architecture: [`docs/architecture.md`](./docs/architecture.md)
