@@ -119,20 +119,45 @@
 
 `of_mcp` 自己必须建立以下测试层，不得只依赖 MultiRAG 测试：
 
-- auth middleware：无 token、错 `typ/issuer/audience/resource/token_use`、过期、未来 `iat/nbf`、
+- **A3 auth middleware**：无 token、错 `typ/issuer/audience/resource/token_use`、过期、未来 `iat/nbf`、
   超过 max TTL、未知 `kid`、`alg=none`/算法混淆、超长 token 全部拒绝；
-- JWKS：正常刷新、缓存、key rotation 双钥窗口、未知 key 强制刷新一次、上游失败 fail closed；
-- scope policy：已登记额外 scope 不使 token 无效；缺工具所需 scope 在认证成功后返回 403
-  `insufficient_scope`，一次给全所需 scopes；未知/畸形 scope fail closed；
-- business subject：只能从已验证 `{type, issuer, subject, tenant}` 读取，并与 service 所需类型/issuer/
+- **A3 JWKS**：正常刷新、cache、key rotation 双钥窗口、并发 single-flight、未知 key 受限刷新、
+  per-key 负缓存、跨未知 key 全局 cooldown、负缓存硬上限、完成时钟退避、原子 last-known-good 替换、
+  上游失败且无新鲜 snapshot 时 fail closed；
+- **A3/A4 scope policy**：A3 证明已登记额外 scope 不使 token 无效、未知/畸形 scope fail closed，并以
+  test-only endpoint 门槛钉住 FastMCP 403 seam；A4 才证明缺当前工具所需 scope 在认证成功后返回 403
+  `insufficient_scope`，一次给全所需 scopes；
+- **A4 business subject**：只能从已验证 `{type, issuer, subject, tenant}` 读取，并与 service 所需类型/issuer/
   tenant 一致；请求参数的 `workcode` 被忽略；
-- policy error：tenant/membership/role/business denial 返回 403 且不伪装 scope challenge；没有可用的
+- **A3/A4 policy error**：A3 的 verifier 故障在认证 middleware 内返回 503，且第三方异常不泄露；A4
+  的 tenant/membership/role/business denial 返回 403 且不伪装 scope challenge；没有可用的
   新鲜 JWKS cache 时返回 503 verifier unavailable，不把基础设施故障误报为 401；
 - sensitive tool：确认挑战、过期、不同用户/不同参数重放、双击和并发只执行一次；
 - MRTR：合法 `inputResponses + requestState` 可恢复，篡改/过期/错误 schema/revision 明确失败；再次
   返回 `InputRequiredResult` 时不丢失 actor/resource 绑定；
 - structured result：输出不符合 `outputSchema` 时返回稳定 tool error，不把未经验证的 JSON 交给 UI；
 - audit：成功、拒绝、确认、业务异常都生成同一 correlation chain，且无 token/患者正文。
+
+A3 完成态的最小回归集合包括：
+
+- production strict verifier 逐条执行 A1 中 **68** 个 Gateway authentication cases，合法 case 比较
+  normalized claims，非法 case 比较稳定 `failure_reason`；scope/tenant/assurance 的 authorization
+  deny case 在这里仍只断言 authentication accept，不提前冒充 A4；
+- 真实 HTTP 覆盖 RFC 9728 metadata、缺 token 与 malformed token 的 401/challenge、typed JWKS outage
+  的 503/no challenge/no-store/retry-after，以及 test-only global-scope 403 seam；
+- metadata、最小 health 和未知 route 携带恶意 Authorization 时不触发 verifier/JWKS；重复
+  Authorization、错误 scheme、credential 内空白全部 fail closed；
+- JWKS 覆盖 fixed HTTPS/no redirect/bounded response、严格 public P-256 document、fresh cache、
+  unknown-`kid` refresh/negative cache/global cooldown/bounded entries、rotation、single-flight、慢失败按
+  完成时钟 backoff、过期 snapshot 的 503，以及 NaN/Infinity cache/timeout 配置拒绝；
+- Gateway composition 覆盖 local 匿名 loopback、secure 配置 fail-fast、resource/audience 精确一致、
+  scope/profile constants 与 A1 manifest 锁定、hello 关闭、secure mount-only/proxy 拒绝、最小 health
+  输出；CLI 与 `fastmcp.json` 启用 `host_origin_protection=auto`，A4 前 local/secure 都拒绝非 loopback。
+
+完成证据：of_mcp `e4ab560` 定向 **126 passed**；`uv run --locked ofmcp verify` 六步全绿、
+**342 passed、2 existing skipped**，contract 无漂移。A3 这些测试仍不证明 A4 的 immutable Principal、
+真实 tool required-scopes、`tools/list`/direct call 同策略、tenant/business authorization，也不证明
+A2/P3 的 token 获取与逐请求委托；A4 前 secure 被机器限制为仅本机验证，不得做远程业务发布验收。
 
 ### 3.4 跨仓端到端测试
 
@@ -283,9 +308,10 @@ mypy 65 files 全绿，unit **1904 passed in 25.76s**。of_mcp `3e1d5ac` 定向 
 - 把飞书 tenant access token 放进 MCP Authorization；issuer/格式不符必须拒绝；
 - 下游返回 token 请求继续委托；禁止 token exchange 之外的任意 bearer 转发。
 
-错误层也必须钉板：无效 profile/claims/签名为 401；有效 token 的 tenant/membership/role/business
-拒绝为 403 且不返回 scope challenge；缺企业主体只在工具要求 assurance 时返回 403；JWKS 故障且
-无新鲜缓存为 503。测试必须断言第三方库异常不会直接成为公开错误文本。
+错误层也必须钉板：A3 负责无效 profile/claims/签名的 401 与 JWKS 故障且无新鲜 cache 的 503；A4
+负责有效 token 的 tenant/membership/role/business 403 和工具所需 scope/assurance 403。A3 的
+test-only endpoint scope seam 可以证明框架保持标准 `insufficient_scope`，但不能替代 A4 对真实工具
+策略的测试。所有分层都必须断言第三方库异常不会直接成为公开错误文本。
 
 corpus 还要扫描 normalized claims/JWKS/token payload，确认不存在 Provider 原始 ID、姓名、邮箱、
 手机号、员工号明文、role/group/department、飞书/OA token、Channel/表单正文、确认状态或真实 Secret。

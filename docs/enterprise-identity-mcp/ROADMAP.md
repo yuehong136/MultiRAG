@@ -3,7 +3,7 @@
 > 最后更新：2026-08-12
 > 当前状态：文档基线、EIM-U0、EIM-U1、EIM-U4、EIM-U8～U13 已完成；
 > CHN-U15 迁移/API 重启已完成，CHN-U16 已完成；真实 smoke 仍欠，下一项 CHN-O9，随后稳定浸泡；
-> EIM-A1 已完成；EIM-F5 / CHN-X14 和 EIM-O4 均保持挂起。
+> EIM-A1、EIM-A3 已完成，下一项 MCP 授权任务是 EIM-A4；EIM-F5 / CHN-X14 和 EIM-O4 均保持挂起。
 
 ---
 
@@ -258,7 +258,7 @@ Principal；如需迁移 facade，明确 owner 模块和删除计划。
 |---|---|---|:---:|---|---|
 | EIM-A1 | 两仓测试/文档 | 固定 `mcp_access`/`mcp_internal_actor` claims、ES256 test JWKS、语言中立 corpus 和正反 vectors | ✅ | F3,F4 | PyJWT/joserfc 独立解析同一固定 token 并得到相同 normalized claims/稳定错误类；cross-profile、aud/kid/JOSE/time/scope/privacy 全覆盖；两仓 corpus 摘要一致；无真实 Secret |
 | EIM-A2 | MR | issuer 模块、KMS/file key provider、JWKS、短 token 签发和轮换 | ⬜ | A1,P2 | scopes 取交集；audience 固定；5 分钟；private key 不入 DB/log；轮换测试 |
-| EIM-A3 | of_mcp | gateway protected-resource metadata、WWW-Authenticate、JWT/JWKS + strict profile verifier | ⬜ | A1,F4 | `RemoteAuthProvider`/自定义 verifier 组合；401/403/503 分层；issuer/resource/JOSE/claims/clock/profile 全验；无 auth 绕过路由 |
+| EIM-A3 | of_mcp | gateway protected-resource metadata、WWW-Authenticate、JWT/JWKS + strict profile verifier | ✅ | A1,F4 | `RemoteAuthProvider`/自定义 verifier 组合；认证层 401 与 verifier 故障 503 分层；保留可测 403 seam、真实工具级 403 由 A4 交付；issuer/resource/JOSE/claims/clock/profile 全验；A4 前 local/secure 都禁止非 loopback；无 auth 绕过路由 |
 | EIM-A4 | of_mcp | immutable Principal dependency、service scope enforcement、tool visibility/step-up | ⬜ | A3 | `service.toml.scopes` 真正生效；`tools/list` 与 direct call 同策略；role/business denial 不伪装 scope；domain 不 import FastMCP |
 | EIM-A5 | of_mcp | proxy `mcp_internal_actor` 换发，mount/proxy Principal 与授权等价 | ⬜ | A4,P3 | 独立 issuer/keyset/service audience；scope/TTL attenuation；外部 token 不透传；两形态成功/拒绝/audit 等价 |
 | EIM-A6 | of_mcp | auth audit、OTel、jti 高风险重放防护、指标和脱敏 | ⬜ | A4 | trace 跨两仓；记录 jti/parent hash/resource/tool/policy revision；审计无 token/PII；高风险重放被拒 |
@@ -340,8 +340,44 @@ skipped**。A1 状态为 `✅`。
 
 ### EIM-A3/A4 装配边界
 
-auth 属于 of_mcp root composition，不能加到 service `build_server(auth=...)`。公共 metadata/JWKS
-路由、MCP endpoint 和健康端点的认证策略逐条列出，不得用“一律放行 health”掩盖 service 缺失。
+auth 属于 of_mcp root composition，不能加到 service `build_server(auth=...)`。公共 metadata、
+受保护的 MCP endpoint、最小健康端点和只由 verifier 访问的 issuer JWKS trust source 必须逐条列出，
+不得用“一律放行 health”掩盖 service 缺失。
+
+A3 已由 of_mcp `e4ab560` 完成：
+
+- 新增独立 `ofmcp-auth` 平台包；production verifier 以 joserfc 做真实 ES256 验签，再执行 A1 冻结的
+  `typ/kid/issuer/audience/time/max_ttl/token_use/claim/scope-registry/cross-profile` 严格规则，最后才
+  投影为 FastMCP `AccessToken`；运行时代码不 import A1 测试 oracle。
+- Gateway 用 FastMCP 4 `RemoteAuthProvider` 发布 RFC 9728 metadata 和 challenge，但用项目自定义
+  bearer middleware 消除两个框架默认缺口：只在精确 `/mcp` 校验 Authorization，以及把 typed
+  verifier outage 映射为 `503 verifier_unavailable` 而不是 500/401。
+- JWKS trust source 是启动时冻结的固定 HTTPS URI；无重定向/环境代理、响应与 key 数有界。cache
+  使用 last-known-good 的**新鲜**快照、原子全量替换、single-flight、每 `kid` 负缓存、跨未知 `kid`
+  的全局 refresh cooldown 和负缓存条目硬上限；慢失败按请求完成时钟开始 backoff。没有新鲜可信
+  snapshot 时 fail closed 为 503，不把过期 key 无限延寿；NaN/Infinity cache/timeout 配置在启动时拒绝。
+- `local` profile 仍匿名；`secure` profile 缺 issuer/JWKS/resource 配置即
+  fail-fast，只允许 mount，并显式关闭 scope registry 外的 hello。A5 完成 actor token 前，任何
+  proxy 在 secure profile 下都拒绝装配。
+- production profile/scope constants 与 A1 manifest 逐字段锁定，防止测试 corpus 与运行时信任词表
+  单边漂移。
+- A4 前 `local` 和 `secure` 都由 CLI 机器拒绝绑定非 loopback；`fastmcp.json` 固定 loopback，CLI 与
+  JSON 启动面同时启用 `host_origin_protection=auto`，覆盖 Host/Origin/DNS rebinding 防线。secure 的
+  bearer 认证不能替代尚未实现的工具授权，因此只允许本机验证，不能远程发布业务入口。
+- Protected Resource Metadata 与 `/health/live`、`/health/ready` 是公开 route；health 只返回最小
+  状态，公开/未知 route 上的 bearer 不触发 JWKS。除这些显式公开面外，业务入口固定为受保护的
+  `/mcp`。
+- A3 的 production `required_scopes=[]` 是安全边界，不是“无需 scope”：endpoint verifier 只判断
+  token 是否属于当前 resource 和登记词表；若此处要求所有 enabled service scopes，会把合法的
+  最小权限 token 错误拒绝。FastMCP global scope denial 的 403 seam 单独以 HTTP 测试钉住；A4 才按
+  tool registry 对 `tools/list` 和 direct `tools/call` 执行同一 required-scopes/tenant/assurance policy。
+- production verifier 已逐条消费 A1 的 **68** 个 Gateway 认证 case；定向 **126 passed**；
+  `uv run --locked ofmcp verify` 六步全绿、**342 passed、2 existing skipped**，contract 无漂移。
+
+A3 是安全的“先部署验证能力”半步，但现在既没有 A2 issuer/P3 request-scoped bearer，也没有 A4
+工具级授权。通用 MCP Client 的 OAuth 取 token 流尚未闭环；在 A4 前不得把 secure Gateway 发布为
+可安全使用的业务入口。A3 不构造领域 Principal，不消费 role/group/department，不实现 internal
+actor token、audit/PDP、确认或幂等。
 
 ### EIM-A5 两种 token
 
@@ -457,13 +493,13 @@ EIM-O4 / CHN-O14 守门。CHN-U16、CHN-O9 均沿用 Channel 账本自己的 ID�
 EIM-F5 / CHN-X14 仍是长期 upstream-first 的上游审计入口，但当前状态为挂起，不得因为文档已经
 登记就提前刷新滚动兼容基线、批量拉取上游或实现 Canvas execution port。
 
-其余可启动候选：
+下一 MCP 授权任务与其余可启动候选：
 
 ```text
+EIM-A4  of_mcp immutable Principal + tool scope/visibility/authorization（A3 已完成）
 EIM-F1  lark-oapi patch 升级
 EIM-I1  User 外部账号模型
 EIM-C1  Channel tolerate structured assertion
-EIM-A3  of_mcp protected resource + strict verifier（A1/F4 已完成）
 ```
 
 MCP Foundation 的实际串并行轨道：
@@ -543,3 +579,4 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 | 2026-08-12 | EIM-F4 | of_mcp 从 FastMCP 4.0.0b1 精确升级到 b2；只刷新 b2 自动派生的 tool title 契约，名称、schema、annotations、授权面和业务语义不变 | of_mcp `23dd1fd` | `uv lock --check`；定向 24 passed；`uv run --locked ofmcp verify` 六步全绿，116 passed、2 skipped；`git diff --check` | Codex |
 | 2026-08-12 | EIM-F3/F6/F7/F8 | 用户确认无生产 FastMCP 3 运行负担后选择单根环境原子升级：exact FastMCP 4.0.0b2/MCP SDK 2.0.0；outbound 改为官方 Client auto/legacy、HTTP response-hook 保留 401/403、MRTR 表面化、并发无旧队列；inbound 真实进入 2026-07-28 modern era，同时以隔离 FastMCP 3 保留 legacy 回退门禁。身份、scope、EMA、持久 InteractionSession 均未实现 | MultiRAG / 本次提交 | SDK2 client + inbound 定向 **33 passed**（其中 lifecycle 在 asyncio debug + ResourceWarning-as-error 下 19 passed）；升级后 `make mcp-compat` **13/13 PASS**；`uv lock --check`、独立 FastMCP3/MCP2 script locks、无残留进程；`make verify` 全部门禁绿、unit **1808 passed** | Codex |
 | 2026-08-12 | EIM-A1 | 完成 91-file、RFC 9068-shaped `mcp_access`/`mcp_internal_actor` 契约；PyJWT/joserfc 独立 oracle 共同覆盖 79 token、7 issuance policy、5 delegation cases；增加同一合法 internal actor 在 proxy 通过、Gateway cross-profile 拒绝的向量，固定 401/403/issuance/delegation 分层与跨 resource 安全边界 | of_mcp `3e1d5ac`；MultiRAG 本次变更；corpus `59f82684aa06365f45623ce9bfad336d487f2c9351879266a6b2ab21bf8fe208` | MultiRAG 定向 **96 passed**；`make verify` Ruff format/check、6 条 import contracts、async DB gate、mypy 65 files 全绿，unit **1904 passed in 25.76s**；of_mcp 定向 **100 passed**、`uv run --locked ofmcp verify` **216 passed、2 existing skipped**；两仓 91-file corpus 字节一致、摘要一致，A1 cases 无 skip/xfail | Codex |
+| 2026-08-12 | EIM-A3 | of_mcp 新增独立 strict `mcp_access` verifier、固定 HTTPS JWKS/LKG/轮换/single-flight/cache 防放大、RFC 9728 PRM 与稳定 401/503；secure profile 缺配置 fail-fast、mount-only/hello disabled，production endpoint scopes 保持空并把真实工具 403 留给 A4；A4 前 local/secure 均机器限制 loopback，Host/Origin protection 开启 | of_mcp `e4ab560`；MultiRAG docs / 本次变更 | production verifier 全跑 68 个 A1 Gateway cases；定向 **126 passed**；`uv run --locked ofmcp verify` 六步全绿、**342 passed、2 existing skipped**；contract no drift；MultiRAG `make verify` 全绿、**1904 passed**；scope/profile constants 与 A1 manifest 锁定，NaN/Infinity、随机 unknown kid、慢失败 backoff 和非 loopback 负向均覆盖 | Codex |

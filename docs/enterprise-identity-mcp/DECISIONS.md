@@ -337,3 +337,37 @@ group、department 和上游 access token 不进入 token。Provider 与认证�
 
 外部托管 Connector、EMA/ID-JAG 和多个真实 issuer 仍属于 EIM-A8 闸门。没有真实需求时，不为
 Channel 事件伪造 Identity Assertion grant，也不因为 FastMCP 提供 MultiAuth 就提前扩大 A1 profile。
+
+---
+
+## EIM-ADR-21：Resource Server 认证与工具授权分阶段、同入口 fail closed
+
+**状态**：Accepted
+**日期**：2026-08-12
+
+of_mcp 的远程认证只能在 Gateway composition root 装配，service `build_server()` 不得持有 `auth=`。
+EIM-A3 先交付一个可独立验证的 OAuth Protected Resource 认证边界：严格验证 `mcp_access`、发布
+RFC 9728 metadata/challenge，并把客户端 token 错误与 verifier 基础设施故障分别映射为 401/503。
+EIM-A4 再在同一个受保护入口内构造 immutable Principal，执行工具 scope、tenant、assurance 与业务
+policy。分阶段不允许产生第二条绕过 Gateway 的业务入口。
+
+A3 production verifier 的 FastMCP `required_scopes` 固定为空。原因不是 scope 可选，而是 Gateway
+承载多个工具：把所有 enabled service scopes 合并成 endpoint-level required set，会迫使只调用
+`leave:read` 的最小权限 token 同时拥有 `medic:submit`，破坏 least privilege；只要求任意一个 scope
+又会让它越权调用其他工具。FastMCP global scope 403 作为 typed HTTP seam 保留测试，真实
+`tool -> required scopes` 由 A4 显式注册，并对 `tools/list` 和 direct `tools/call` 使用同一策略。
+
+部署 profile 同样分层但不能静默降级：
+
+- `local` 的 `resource_auth_mode=disabled` 只用于 loopback 开发，不能绑定远程地址后冒充安全模式；
+- `secure` 的 `resource_auth_mode=enforce` 缺 canonical issuer/JWKS/resource 配置即启动失败，只允许
+  mount，且只装配 A1 scope registry 内服务；
+- A5 完成 `mcp_internal_actor` 换发前，proxy 在 secure profile 下拒绝装配，外部 bearer 永不透传；
+- RFC 9728 metadata 与最小 health 是显式公开面，health 不泄露 profile/服务拓扑/scope；这些公开
+  route 和未知 route 上的 Authorization 不得触发 JWKS I/O，受保护业务 path 固定为精确 `/mcp`。
+- A4 前 secure 与 local 一样由 CLI 机器拒绝绑定非 loopback；CLI 和 `fastmcp.json` 都启用
+  `host_origin_protection=auto`。secure bearer 认证不能替代尚未实现的工具授权。
+
+因此，A3 通过只证明“Gateway 能正确认证属于自己的短 token，并在 trust source 故障时 fail
+closed”。它不证明调用者拥有任何具体工具、企业主体或业务对象权限。A4 未完成前不发布 secure
+业务入口；A2/P3 未完成前也不宣称通用 MCP Client OAuth 取 token 或飞书用户逐请求委托已闭环。

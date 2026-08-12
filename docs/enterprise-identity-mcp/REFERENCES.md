@@ -272,11 +272,16 @@ FastMCP 实现/产品资料（不是 MCP 标准）：
 
 ### FastMCP 4 的采用边界
 
-- `RemoteAuthProvider` 适合在 EIM-A3 组合 token verifier 与 RFC 9728 protected-resource metadata；
-  `require_scopes`/component auth 适合在 A4 同时过滤 `tools/list` 和保护 direct call。
-- `JWTVerifier` 可以复用成熟 JOSE/JWKS、issuer/audience 和基础 scope 检查，但 4.0.0b2 的实现不是
-  EIM-A1 profile oracle；项目仍需检查 `typ/kid`、必需 claims/types、`iat/nbf/max_ttl`、
-  `token_use`、tenant、scope registry 和 cross-profile/resource。
+- `RemoteAuthProvider` 已用于 EIM-A3，负责 RFC 9728 protected-resource metadata 和 FastMCP
+  auth 接口；框架默认 backend 无法把 typed JWKS outage 映射为 503，因此精确 `/mcp` bearer 和
+  401/503 由项目 middleware 控制。`require_scopes`/component auth 留给 A4 同时过滤 `tools/list` 和
+  保护 direct call。
+- `JWTVerifier` 可以复用基础 JOSE/JWKS、issuer/audience 和 scope 检查，但 4.0.0b2 的实现不是 EIM-A1
+  profile oracle。A3 因此使用 joserfc + 项目 `StrictMcpAccessVerifier`，补齐 `typ/kid`、必需
+  claims/types、`iat/nbf/max_ttl`、`token_use`、tenant、scope registry 和 cross-profile/resource；
+  production `required_scopes=[]`，真实工具级 403 不提前从 A4 挪入认证层。
+- FastMCP HTTP `host_origin_protection="auto"` 已同时用于 CLI 和 `fastmcp.json` 启动面；它是
+  Host/Origin/DNS rebinding 防线，不是工具授权。A4 前 local/secure 仍一律拒绝非 loopback。
 - MultiAuth 只有出现多个真实 token issuer 后才评估；“第一个 verifier 成功”不等于 tenant、角色、
   业务对象或 assurance 已授权。
 - 领域 Principal、policy 和业务 service 不 import FastMCP。auth/provider 对象只存在 composition root

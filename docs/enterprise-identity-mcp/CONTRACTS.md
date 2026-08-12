@@ -436,6 +436,16 @@ Token Broker 最终签发的 scopes 固定取：当前工具需要 scopes、已�
 是 401；有效 token 的 tenant 与当前服务端 resource context 不匹配是 403 authorization denial。
 角色或业务策略拒绝不得伪装成 step-up scope，否则会泄露策略并诱导客户端无意义重试。
 
+以上表格是 **A3+A4 的最终错误契约**，不能把它误读为 A3 单独交付全部分支。A3 已实现的
+Resource Server 认证边界公开两类结果：客户端 bearer/profile 无效为 401；verifier/JWKS trust source
+不可用且无新鲜可信 cache 为 503。FastMCP 的 endpoint-level `required_scopes` 仍保留并有独立 403
+HTTP 回归，但生产 Gateway 固定传空列表；否则把所有 enabled services 的 scope 放在一个 endpoint
+门槛上，会错误要求最小权限 token 同时拥有所有服务权限。
+
+真实生产 403 从 A4 开始：先把验证后的 claims 构造为 immutable Principal，再按当前 tool 的完整
+required scopes、tenant/membership、enterprise assurance 和业务 policy 决策；`tools/list` 与 direct
+`tools/call` 必须走同一策略。A3 前后都不得因为 token 在认证层通过，就推断它有权调用列表中的工具。
+
 ### 6.4 JWKS 和轮换
 
 - issuer 通过 HTTPS 提供只含 public EC keys 的 JWKS；private key 只在 issuer secret/KMS。
@@ -444,11 +454,33 @@ Token Broker 最终签发的 scopes 固定取：当前工具需要 scopes、已�
 - 新 key 先加入 JWKS，再开始签发；旧 key 保留至少“最大 token TTL + clock skew + cache TTL”。
 - verifier 只访问配置的 issuer/JWKS URI，按 `kid` 缓存；未知 `kid` 最多触发一次受限刷新。刷新失败
   且 cache 过期时返回 verifier unavailable，不把基础设施故障误报成用户 token 无效。
+- A3 fetcher 固定 absolute HTTPS URI，拒绝 userinfo/fragment、重定向和环境代理；网络超时、响应字节数
+  和 key 数均有界。完整 JWKS 只有在所有 keys 都通过 public EC P-256 metadata/坐标/唯一 `kid` 校验后
+  才原子替换 last-known-good snapshot，不能逐 key 局部更新。
+- 同一刷新窗口使用 single-flight；未知 `kid` 有短负缓存，不同随机 `kid` 共享全局 refresh cooldown，
+  负缓存条目有硬上限；刷新故障有短 backoff，防止 attacker 放大 issuer 流量或内存。慢刷新失败的
+  backoff 从请求**完成时钟**开始，不能让上游延迟吃掉退避窗口。只有**仍在 freshness TTL 内**的
+  last-known-good snapshot 可在刷新故障时继续判断已知/未知 key；snapshot 过期后 fail closed 为 503，
+  不能把旧 key 无限延寿。所有浮点 cache/timeout 配置必须为 finite positive number，NaN/Infinity
+  在启动时拒绝。
 
-FastMCP `JWTVerifier` 可以承担基础 JWT/JWKS 解析，但 EIM-A3 必须在 composition root 组合项目
-自己的严格 profile validator，补齐 header、必需 claims、类型、max TTL、`token_use`、tenant、
-scope registry 和 cross-profile 规则，再投影为 FastMCP `AccessToken`。领域 Principal 不依赖
-FastMCP 类型。
+FastMCP `JWTVerifier` 可以承担基础 JWT/JWKS 解析，但 4.0.0b2 没有强制本项目全部规则。A3 实现
+因此使用独立 `StrictMcpAccessVerifier`：由 joserfc 完成真实 ES256 验签，由项目 validator 补齐
+header、必需 claims、类型、max TTL、`token_use`、tenant、scope registry 和 cross-profile 规则，
+再投影为 FastMCP `AccessToken`。领域 Principal 不依赖 FastMCP 类型，A3 runtime 也不 import A1
+test oracle。
+
+Gateway 部署契约额外固定：`resource_auth_mode` 与历史 `oauth_enabled` 是不同配置维度；`local` 为
+`disabled`，`secure` 为 `enforce`。secure 启动时必须提供 canonical issuer、
+固定 JWKS URI、resource base URL 和精确 expected audience，且
+`expected_audience == resource_base_url + "/mcp"`；缺失、非 HTTPS、尾斜杠漂移或 service scope 超出
+A1 registry 都在装配期失败。secure 在 A5 前只接受 mount service，proxy 不能形成绕过 Gateway 的
+直连面。production profile/scope constants 必须以测试逐字段匹配 A1 manifest，不得只改运行时词表。
+
+A4 前 `local` 与 `secure` 两种 profile 都必须在 CLI/启动门禁机器拒绝非 loopback host；secure 已有
+bearer 认证也不例外，因为尚无工具级授权。`fastmcp.json` 固定 loopback，CLI 与 JSON 启动面都启用
+`host_origin_protection=auto`，防止 Host/Origin/DNS rebinding 绕开本机边界。直到 A4 完成并新增独立
+远程发布门禁前，secure 只能用于本机验证。
 
 ### 6.5 EIM-A1 corpus wire contract
 

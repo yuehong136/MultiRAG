@@ -243,9 +243,30 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
 
 ### of_mcp
 
-- 当前 `oauth_enabled=false`，gateway 没有认证。
-- `house_middleware()` / `house_extensions()` 是 P3 平台能力装配点。
-- `service.toml` 已声明 `scopes`，但尚未形成真实请求授权。
+- EIM-A3 已在 of_mcp `e4ab560` 完成：新增独立 `ofmcp-auth` 平台包，使用 joserfc 执行 ES256
+  签名验证，并叠加项目自己的严格
+  `mcp_access` profile verifier；Gateway composition root 通过 FastMCP 4
+  `RemoteAuthProvider` 发布 RFC 9728 Protected Resource Metadata 和标准 bearer challenge。
+- 对外 `/mcp` 已按精确 resource/audience、issuer、JOSE header、必需 claims/types、固定时钟偏差、
+  最大 TTL、`token_use` 和 scope 词表执行认证。无效 bearer 为 `401 invalid_token`；JWKS 不可用且
+  无新鲜 last-known-good cache 时为 `503 verifier_unavailable`，不把基础设施故障伪装成用户 token
+  无效。固定 HTTPS JWKS 拉取拒绝重定向和环境代理，响应/key 数有界；cache 使用原子替换、
+  single-flight、轮换重叠、未知 `kid` 负缓存与跨 `kid` 全局刷新冷却、负缓存条目硬上限和刷新退避。
+  慢失败从请求**完成时钟**开始计算 backoff，所有浮点 cache/timeout 配置拒绝 NaN/Infinity。
+- profile 现在把“是否是 OAuth Resource Server”与历史 `oauth_enabled` 分开：`local` 保持匿名且
+  `secure` 强制认证、缺 issuer/JWKS/resource 配置即启动失败，只允许 mount，并因 A1 scope registry
+  未登记 `hello:greet` 而关闭 hello。生产 profile/scope constants 与 A1 manifest 有机器锁定测试，
+  不能单边漂移。A5 完成 internal actor token 之前，proxy 在 secure profile 下直接拒绝装配。
+- A4 前 `local` 和 `secure` 都由 CLI 机器拒绝绑定非 loopback；`fastmcp.json` 固定
+  `127.0.0.1`，CLI 与 JSON 启动面都启用 FastMCP `host_origin_protection=auto`。secure 已有认证不等于
+  已有工具授权，因此它当前也只用于本机验证，不能作为远程业务入口。
+- Protected Resource Metadata 与两条最小 health route 是显式公开面；它们不消费 bearer、不触发
+  JWKS I/O，health 只返回单一状态，不暴露 profile、服务拓扑或 scope。其余未知 route 也不会被
+  attacker-controlled bearer 诱导访问 trust source；真正受保护面固定为精确 `/mcp`。
+- `service.toml` 已声明 scopes，但生产 verifier 刻意使用 `required_scopes=[]`：A3 只认证 token 与
+  resource，不把“任一合法 scope”误当成“有权调用所有工具”。FastMCP endpoint-level 403 seam 已有
+  HTTP 回归，真正的工具所需 scope、immutable Principal、tenant/role/business/assurance policy 以及
+  `tools/list` 与 direct `tools/call` 一致授权仍属于 EIM-A4。
 - `medic` 的 `workcode` 是工具调用者自报，且工具会产生真实副作用。
 - EIM-F4 已独立完成：of_mcp 精确升级到 FastMCP `4.0.0b2`，没有把身份或授权改造混入
   版本升级。
@@ -258,9 +279,13 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   `sha256(SHA256SUMS raw bytes)` 为
   `59f82684aa06365f45623ce9bfad336d487f2c9351879266a6b2ab21bf8fe208`。A1 仍只交付
   test/docs/schema/corpus，不包含生产 issuer、verifier、Channel Principal 或动态 bearer。
-- of_mcp 的 profile/catalog/mount/proxy/contract 基础可继续演进为私有 MCP 服务中心，但当前
-  `auth=`、持久 storage、scope enforcement、proxy internal actor token、Action/Idempotency Ledger
-  尚未落地，不能因为使用 FastMCP 4 就宣称已经是企业授权网关。
+- A3 用生产 verifier 逐条回归 A1 中面向 Gateway 的 **68** 个认证 case；定向 **126 passed**，
+  `uv run --locked ofmcp verify` 六步全绿、**342 passed、2 existing skipped**，contract 无漂移；
+  本仓文档账本的 `make verify` 同样全绿、**1904 passed**。
+- A2/P2/P3 尚未实现，因此 MultiRAG 还不会为当前 Principal 签发并逐请求发送 token；通用 MCP Client
+  也尚无完整 OAuth 获取 token 流。A3 后仍缺 A4 工具授权、A5 proxy internal actor token、持久
+  storage、审计和 Action/Idempotency Ledger。在 A4 前不得把 secure profile 作为可安全发布的业务
+  入口，也不能因为已经使用 FastMCP 4 `auth=` 就宣称企业身份链已经打通。下一认证授权任务是 A4。
 
 ---
 

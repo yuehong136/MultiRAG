@@ -143,8 +143,10 @@ MCP Foundation 的 F2/F3/F4/F6/F7/F8 已于 2026-08-12 完成。冷启动 Agent 
 3. **真实 legacy 只留在测试边界**：FastMCP 3 通过 PEP 723 锁定的真实子进程 fixture 运行，
    不与根环境在同一解释器导入。`make mcp-compat` 当前协议矩阵为 **13/13 PASS**；任何后续
    SDK/FastMCP/transport 改动都必须复跑，而不能用 mock 或 sibling import 替代。
-4. **下一协议相关入口**：EIM-A1 已完成并固定 token/JWKS test vectors；EIM-A7 的 A1 前置已满足，
-   还必须等待 P1，才实现 inbound OAuth Resource Server、Principal/scope 和工具可见性；
+4. **下一协议相关入口**：EIM-A1 已完成并固定 token/JWKS test vectors；of_mcp EIM-A3 已由
+   `e4ab560` 完成 strict Resource Server，但它只交付 401/503 认证边界，工具级
+   403/Principal/可见性仍等待下一项 A4。MultiRAG EIM-A7 的 A1 前置已满足，仍必须等待 P1，才实现
+   自己独立的 inbound OAuth Resource Server、Principal/scope 和工具可见性；
    `InputRequiredResult` 目前只由 EIM-F3 暴露，EIM-U14 还必须等待 P3/A4/C3，才实现持久化暂停/恢复、
    Principal 绑定、revision/CAS 和重授权。当前协议升级**不证明** Principal、scope、delegated token、
    OAuth Resource Server 或 InteractionSession 已实现。
@@ -193,12 +195,54 @@ A1 禁止顺手添加生产 issuer/verifier、FastMCP `auth=`、JWKS HTTP route�
 动态 Authorization 或真实 Secret。A3 才把基础 JWT/JWKS verifier 与严格项目 validator 装配到
 of_mcp composition root；A2/P3 才签发和传递 request-scoped token。
 
+### 4.7 EIM-A3 完成基线与 A4 开工边界
+
+接手 A4 或修改 A3 认证基线时，以 of_mcp `e4ab560` 为完成锚点。A3 实现包含
+`packages/ofmcp-auth/`、Gateway `auth.py/settings.py`、`resource_auth_mode` 和
+`deploy/profiles/secure.toml`。不得回退以下不变量：
+
+1. production strict verifier 真实验 ES256，并独立校验 A1 profile；runtime 不 import
+   `ofmcp-contracts` 的测试 oracle；
+2. FastMCP `RemoteAuthProvider` 只承载 RFC 9728 metadata/discovery 与框架接口，精确 `/mcp` bearer
+   和 typed `VerifierUnavailable -> 503` 由项目 middleware 控制；公开 route 不触发 JWKS；
+3. JWKS 只从固定 HTTPS URI 拉取，拒绝 redirect/env proxy，大小与 key 数有界；cache 是 fresh
+   last-known-good + atomic replacement + single-flight + per-key negative cache + 全局 unknown-kid
+   refresh cooldown + 负缓存硬上限；慢失败从完成时钟开始 backoff，过期后 fail closed，NaN/Infinity
+   配置拒绝；
+4. `local` 是匿名开发 profile；`secure` 缺配置即 fail-fast、hello disabled、mount-only。A5 前 proxy
+   不能进入 secure Gateway；production scope/profile constants 必须逐字段匹配 A1 manifest；
+5. production `required_scopes=[]`。这不是放弃授权，而是避免 endpoint 级 union-of-all-scopes；
+   test-only 403 seam 继续保留，真实 `tool -> required scopes`、Principal、tenant/assurance 和
+   `tools/list`/direct call 同策略必须由 A4 实现；
+6. health 只返回最小状态；日志、HTTP 错误和 fixture 不包含 bearer、claims、subject、患者或真实配置；
+7. A4 前 local/secure 都由 CLI 机器拒绝非 loopback；CLI 与 `fastmcp.json` 都启用
+   `host_origin_protection=auto`。secure 有 bearer 认证也不能远程发布，因为工具授权尚未实现。
+
+在 `of_mcp` checkout 至少执行并记录：
+
+```bash
+uv run --locked pytest packages/ofmcp-auth/tests apps/gateway/tests packages/ofmcp-core/tests packages/ofmcp-devkit/tests
+uv lock --check
+uv run --locked ofmcp verify
+git diff --check
+```
+
+完成证据为定向 **126 passed**，production verifier 其中逐条消费 A1 的 **68** 个 Gateway
+authentication cases；`uv run --locked ofmcp verify` 六步全绿、**342 passed、2 existing skipped**，
+contract 无漂移。后续触碰 A3 路径必须至少复跑上述命令并保持这些安全负向。
+
+A3 完成后的下一项是 A4，不是先部署业务入口。A4 可以复用已经验证的 FastMCP `AccessToken.claims`，
+但必须立即转成框架无关的 immutable Principal，再建立显式 tool policy registry；不得把
+`AccessToken.scopes`、工具不可见或 metadata 声明当成完整授权。A2 issuer、P2/P3 request-scoped bearer
+仍未实现，因此即使 secure Gateway 能验证固定测试 token，通用客户端 OAuth 获取 token 和飞书用户
+委托链也尚未闭环。
+
 ## 5. 跨仓协调
 
 | 变更 | 生产者 | 消费者 | 安全部署顺序 |
 |---|---|---|---|
 | Channel structured assertion | worker | MultiRAG private API | tolerate API → emit worker → consume API → remove legacy |
-| MCP access token | MultiRAG signer | `of_mcp` verifier | verifier/JWKS 能力先 → signer emit → 强制 auth → 移除旧 auth |
+| MCP access token | MultiRAG signer | `of_mcp` verifier | A3 verifier/JWKS 能力先并保持业务未发布 → A4 工具授权 → A2 signer emit → P3 逐请求 bearer → 强制 secure 入口；不得在 A4/A2/P3 前把固定测试 token 能通过误作闭环 |
 | EIM-A1 corpus | MultiRAG canonical generator + 两仓本地副本 | PyJWT/joserfc 独立 oracle | 已完成：of_mcp `3e1d5ac` → MultiRAG 本次 A1 变更；91-file corpus 字节一致，digest `59f82684aa06365f45623ce9bfad336d487f2c9351879266a6b2ab21bf8fe208`；运行时无依赖 |
 | 新 scope/tool metadata | `of_mcp` policy | MultiRAG Agent/MCP config | resource 端先兼容 → 调用端请求；未知 scope fail closed |
 | confirmation contract | `of_mcp` challenge | MultiRAG card/channel | resource 端先返回可识别 challenge → UI 接线 → 强制确认 |
