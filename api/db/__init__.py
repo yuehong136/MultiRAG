@@ -9,6 +9,57 @@ class UserAccountKind(StrEnum):
     HYBRID = "hybrid"
 
 
+class ExternalIdentityState(StrEnum):
+    """Lifecycle state for one tenant-scoped provider identity link."""
+
+    PENDING_LINK = "pending_link"
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    REVOKED = "revoked"
+    CONFLICT = "conflict"
+
+
+class ExternalIdentityAliasType(StrEnum):
+    """Provider identifiers that may resolve to a canonical identity."""
+
+    OPEN_ID = "open_id"
+    UNION_ID = "union_id"
+
+
+class EnterpriseSubjectType(StrEnum):
+    """Supported enterprise business-identity namespaces."""
+
+    EMPLOYEE_NO = "employee_no"
+    TALENT_ID = "talent_id"
+    WORKCODE = "workcode"
+
+
+class EnterpriseSubjectState(StrEnum):
+    """Lifecycle state for a verified enterprise subject link."""
+
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    CONFLICT = "conflict"
+
+
+class IdentityEventReceiptState(StrEnum):
+    """Durable processing state for a provider directory event receipt."""
+
+    PROCESSING = "processing"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class IdentityProviderHealthState(StrEnum):
+    """Operational health of one server-owned provider installation."""
+
+    PENDING = "pending"
+    HEALTHY = "healthy"
+    DEGRADED = "degraded"
+    ERROR = "error"
+    DISABLED = "disabled"
+
+
 class UserTenantRole(StrEnum):
     OWNER = "owner"
     ADMIN = "admin"

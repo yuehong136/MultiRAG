@@ -272,6 +272,12 @@ FastMCP 实现/产品资料（不是 MCP 标准）：
 
 ### FastMCP 4 的采用边界
 
+- EIM-I2 的 provider tenant/account ownership、canonical identity、alias、enterprise subject 与 event
+  receipt 是 MultiRAG 领域持久化，不是 MCP component，因而不 import FastMCP。FastMCP 没有飞书
+  tenant/app/channel binding 到 MultiRAG Tenant 的 ownership 模型；自行建立这六张表不是重复造其
+  工具开放、auth provider 或 middleware。I2 已以 Alembic head `8f2c4d6e7a9b` 和真 PostgreSQL
+  门禁完成；下一项 I3 继续保持 domain/repository 框架无关，并用 revision/CAS/行锁保护 ownership，
+  不把普通换绑或 hard-delete 委托给 FastMCP。
 - `RemoteAuthProvider` 已用于 EIM-A3，负责 RFC 9728 protected-resource metadata 和 FastMCP
   auth 接口；框架默认 backend 无法把 typed JWKS outage 映射为 503，因此精确 `/mcp` bearer 和
   401/503 由项目 middleware 控制。EIM-A4 继续保持 production endpoint `required_scopes=[]`，把

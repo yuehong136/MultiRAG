@@ -21,6 +21,21 @@
 
 禁止使用裸 `open_id`、姓名、邮箱或手机号做跨 App/跨租户唯一键。
 
+首期租户映射是服务端固定关系，而不是请求级路由：
+
+```text
+(provider, provider_tenant_key) -> exactly one tenant_id
+(provider, provider_tenant_key, provider_account_key) -> exactly one tenant_id
+channel_id（及其唯一 binding）-> exactly one (provider_account_key, tenant_id)
+```
+
+一个飞书企业默认且首期强制只对应一个 MultiRAG Tenant；一个应用安装实例/provider account 和一个
+Channel binding 在整个生命周期内也只能指向一个 Tenant。消息、卡片、prompt、worker command 或
+resolver 返回值都不能选择/覆盖目标 `tenant_id`。未来集团级多 Tenant 只能作为受控例外启用，并为
+每个目标 Tenant 使用不同的 Provider Account/应用安装实例；即使进入该例外，一个 Provider Account
+或 binding 仍不得动态路由多个 Tenant。完整决策见
+[EIM-ADR-23](DECISIONS.md#eim-adr-23首期一个飞书企业一个-tenantprovider-account-与-binding-固定单-tenant)。
+
 ---
 
 ## 2. Channel 私有输入契约
@@ -82,6 +97,8 @@ class ChannelActor(BaseModel):
 - `provider` 必须与服务端 binding 的 channel provider 一致。
 - `provider_tenant_key` 必须与 provider account 首次已验证 tenant key 一致；首次绑定时通过应用
   凭据和 Contact/event 共同确认后保存。
+- 服务端还必须验证 provider account 与 Channel binding 的固定 `tenant_id`；首期若同一
+  `(provider, provider_tenant_key)` 已绑定其他 Tenant，onboarding fail closed，不创建第二条映射。
 - `app_id` 不从消息 assertion 读取；它来自解密后的 provider account credential/config。
 - `event_id`/事件时间属于受限 transport envelope，用于时效与重放校验，不是主体字段；
   `provider_account_key` 也始终取服务端 binding，不接受 payload 覆盖。
@@ -164,7 +181,70 @@ Provider-neutral ReplySession 已管理 `begin/append/replace/complete/fail` 和
   重新开放账号动作；Channel/JIT 也不得复用 email callback。存量 `login_channel != password`
   账户仅由迁移保守分类为 `external/hybrid`，不因此获得可用的 verified external identity。
 
-### 3.2 `t_ai_external_identities`
+### 3.2 `t_ai_identity_provider_tenants`
+
+Provider Tenant ownership 在数据库层把一个已验证外部企业固定到一个 MultiRAG Tenant：
+
+| 字段 | 类型/约束 | 说明 |
+|---|---|---|
+| `id` | string PK | opaque ownership ID |
+| `tenant_id` | non-null | 唯一归属的 MultiRAG Tenant |
+| `provider` | non-null | `feishu` 等 Provider 路由 |
+| `provider_tenant_key` | non-null | 已验证外部企业边界 |
+| `verified_at` | timestamptz, non-null | ownership 的权威验证时间 |
+
+```text
+UNIQUE(provider, provider_tenant_key)
+UNIQUE(tenant_id, provider, provider_tenant_key)
+FOREIGN KEY(tenant_id) -> t_ai_tenants(id) ON DELETE RESTRICT
+```
+
+第一条唯一约束就是首期“一飞书企业恰好一个 MultiRAG Tenant”的机器防线；第二条是 Provider
+Account 复合外键的引用目标。`provider/provider_tenant_key` 不允许空白。未来集团级多 Tenant 必须
+以新 ADR 和显式 schema 迁移改变此约束，不在首期代码中设置可跳过开关或动态路由。默认安全
+projection 省略 `provider_tenant_key`。
+
+### 3.3 `t_ai_identity_provider_accounts`
+
+Provider Account 是服务端管理的应用安装 ownership 边界，也是 alias/receipt 进入身份库前的固定
+Tenant 锚点：
+
+| 字段 | 类型/约束 | 说明 |
+|---|---|---|
+| `id` | string PK | opaque ownership ID |
+| `tenant_id` | non-null | 唯一归属的 MultiRAG Tenant |
+| `channel_id` | non-null, unique | 唯一关联的 `ChatChannel.id` |
+| `provider` | non-null | `feishu` 等 Provider 路由 |
+| `provider_tenant_key` | non-null | 首次 onboarding 验证的外部企业边界 |
+| `provider_account_key` | non-null | 应用安装实例/account；飞书为 `app_id` |
+| `identity_revision` | bigint, default 1 | scope/状态变化时单调增加 |
+| `last_scope_change_at` | timestamptz/null | 最近目录 scope 变化 |
+| `last_directory_event_at` | timestamptz/null | 最近可信目录事件 |
+| `identity_health_state` | non-null | `pending/healthy/degraded/error/disabled` |
+| `identity_health_error_code` | string/null | 只在 `error` 状态存在的稳定脱敏错误码 |
+
+数据库约束：
+
+```text
+UNIQUE(provider, provider_tenant_key, provider_account_key)
+UNIQUE(channel_id)
+UNIQUE(tenant_id, provider, provider_tenant_key, provider_account_key)
+FOREIGN KEY(tenant_id, provider, provider_tenant_key)
+  -> t_ai_identity_provider_tenants(tenant_id, provider, provider_tenant_key) ON DELETE RESTRICT
+FOREIGN KEY(channel_id, tenant_id) -> t_ai_chat_channels(id, tenant_id) ON DELETE RESTRICT
+FOREIGN KEY(tenant_id) -> t_ai_tenants(id) ON DELETE RESTRICT
+```
+
+第三条复合唯一键是 alias/receipt tenant-scoped 外键的引用目标；第一条保证同一 Provider Account
+不能在另一个 Tenant 重建；第二条保证同一 Channel 安装/binding 入口不能挂多个 Provider Account。
+`identity_revision >= 1`。`identity_health_state=error` 时 error code 必填，其他状态必须为空。
+
+每条 account 还通过复合 `ON DELETE RESTRICT` 外键
+`(tenant_id, provider, provider_tenant_key)` 引用 §3.2 的 enterprise ownership；因此同一企业即使
+使用不同 app/account，也不能写入另一个 Tenant。默认安全 projection 省略
+`channel_id/provider_tenant_key/provider_account_key/identity_health_error_code`。
+
+### 3.4 `t_ai_external_identities`
 
 | 字段 | 类型/约束 | 说明 |
 |---|---|---|
@@ -184,16 +264,36 @@ Provider-neutral ReplySession 已管理 `begin/append/replace/complete/fail` 和
 唯一约束：
 
 ```text
-UNIQUE(provider, provider_tenant_key, subject_type, subject_value)
+UNIQUE(tenant_id, provider, provider_tenant_key, subject_type, subject_value)
 ```
 
-状态变化使用行锁/乐观 revision。`revoked` 不物理删除，不允许普通 JIT 自动复活。
+`tenant_id` 和 `user_id` 分别以 `ON DELETE RESTRICT` 引用现有 Tenant/User；另有复合
+`ON DELETE RESTRICT` 外键
+`(tenant_id, provider, provider_tenant_key) -> t_ai_identity_provider_tenants`，因此 canonical identity
+也不能伪造另一个外部企业 scope。该 tenant-scoped 唯一键是数据库隔离和未来受控多 Tenant 例外的
+防御纵深，**不是**允许同一飞书企业或同一 binding 在首期映射多个 Tenant；映射层仍必须遵守 §1
+的固定关系。
 
-### 3.3 `t_ai_external_identity_aliases`
+`attributes` v1 是关闭的 allowlist，只允许：
+
+| key | 值类型 | 用途 |
+|---|---|---|
+| `display_name` | string/null | 最近一次受信目录显示名；仅用于受控显示，仍按个人信息处理 |
+| `provider_status` | string/null | Provider 的低敏状态快照；不据此授予权限 |
+
+JSON 顶层必须是 object；未知 key、数组/数字/布尔/嵌套对象一律拒绝。不得保存 role、group、department、
+scope、tenant/app/user access token、Secret、原始 Provider 响应或任意 metadata bag。默认安全
+projection 整体省略 `provider_tenant_key`、`subject_value` 和 `attributes`。
+
+状态变化使用行锁/乐观 revision。`identity_revision >= 1`；`active` 必须有 `verified_at`；`revoked`
+不物理删除，不允许普通 JIT 自动复活。
+
+### 3.5 `t_ai_external_identity_aliases`
 
 | 字段 | 类型/约束 | 说明 |
 |---|---|---|
 | `id` | string PK | opaque ID |
+| `tenant_id` | non-null | MultiRAG tenant；不可从消息覆盖 |
 | `external_identity_id` | non-null, indexed | canonical identity |
 | `provider` | non-null | 冗余用于唯一约束/查询隔离 |
 | `provider_tenant_key` | non-null | 外部租户 |
@@ -205,13 +305,17 @@ UNIQUE(provider, provider_tenant_key, subject_type, subject_value)
 唯一约束：
 
 ```text
-UNIQUE(provider, provider_tenant_key, provider_account_key, alias_type, alias_value)
+UNIQUE(tenant_id, provider, provider_tenant_key, provider_account_key, alias_type, alias_value)
 ```
 
 同一个 canonical identity 可以有多个 App 的 open_id alias。alias 冲突进入 `conflict`，不得
-“后写覆盖前写”。
+“后写覆盖前写”。复合 `ON DELETE RESTRICT` 外键同时绑定
+`(external_identity_id, tenant_id, provider, provider_tenant_key)`，因此不能把另一个 Tenant、Provider
+或外部企业的 canonical identity 挂到当前 alias；另有 tenant 外键阻止孤立租户。`alias_type` v1 只
+接受 `open_id/union_id`，`verified_at` 必填。默认安全 projection 省略
+`provider_tenant_key/provider_account_key/alias_value`。
 
-### 3.4 `t_ai_enterprise_subject_links`
+### 3.6 `t_ai_enterprise_subject_links`
 
 | 字段 | 类型/约束 | 说明 |
 |---|---|---|
@@ -233,21 +337,76 @@ UNIQUE(tenant_id, subject_type, subject_value)
 ```
 
 一个 user 可以有不同业务域的多个 subject；MCP service 必须声明需要哪种类型，不能“随便取第一
-个”。
+个”。`tenant_id/user_id` 均使用 `ON DELETE RESTRICT`；同一 user、subject type、issuer namespace
+只能占一个 resolver slot：
 
-### 3.5 `t_ai_identity_event_receipts`
+```text
+UNIQUE(tenant_id, user_id, subject_type, issuer, issuer_tenant)
+```
+
+`active` 必须有 `verified_at`。默认安全 projection 省略 `subject_value` 和 `issuer_tenant`；只有受授权
+的内部 resolver/token issuer 可以读取原值。
+
+### 3.7 `t_ai_identity_event_receipts`
 
 用于 Contact 事件幂等：
 
 ```text
-UNIQUE(provider, provider_account_key, event_type, event_id)
+UNIQUE(tenant_id, provider, provider_tenant_key, provider_account_key, event_type, event_id)
 ```
 
-只保存 hash/ID、处理状态、时间、错误码和 identity ID；不保存完整事件体。
+精确字段：
 
-### 3.6 Provider account 状态
+| 字段 | 类型/约束 | 说明 |
+|---|---|---|
+| `id` | string PK | opaque receipt ID |
+| `tenant_id` | non-null | 固定 binding 解析出的 MultiRAG tenant |
+| `provider` | non-null | Provider 路由 |
+| `provider_tenant_key` | non-null | 外部企业边界 |
+| `provider_account_key` | non-null | 应用安装实例/account 边界 |
+| `event_type` | non-null | Provider 事件类型 |
+| `event_id` | non-null | Provider 事件 ID |
+| `event_hash` | 64-char lowercase hex | 事件摘要；v1 为 SHA-256 形状，具体规范化输入由 I7 固定 |
+| `processing_state` | non-null | `processing/succeeded/failed` |
+| `event_at` | timestamptz/null | Provider 声明的事件时间 |
+| `processed_at` | timestamptz/null | 本次处理完成时间 |
+| `error_code` | string/null | 稳定、脱敏的内部错误码 |
+| `external_identity_id` | string/null | 已解析 identity；事件尚未绑定时允许 null |
 
-在现有 `ChatChannel` 控制面增加或关联 identity provider state：
+状态组合固定为：`processing` 时 `processed_at/error_code` 都为 null；`succeeded` 时
+`processed_at` 非空且 `error_code` 为 null；`failed` 时两者均非空。receipt 不存在 body/payload/
+headers/attributes 列，不保存完整事件体、聊天正文或 Provider token。若关联 identity，复合
+`ON DELETE RESTRICT` 外键强制 identity 与 receipt 的 `tenant_id/provider/provider_tenant_key` 一致；
+tenant 本身也为 `RESTRICT`。默认安全 projection 省略
+`provider_tenant_key/provider_account_key/event_id/event_hash`。
+
+该 tenant-scoped 幂等键防止跨 Tenant 碰撞，也不放宽 §1：同一个 Provider Account/binding 仍只能
+对应一个 Tenant。I7 的处理器必须在固定 binding 上原子 claim；不得因换一个 `tenant_id` 就绕过
+重复事件。
+
+### 3.8 迁移、删除与回滚约束
+
+- 六张表的 Tenant/User/Channel/provider ownership/parent identity 外键统一 `ON DELETE RESTRICT`。
+  解绑、停用和 revoked 保留历史，不能靠级联删除清理认证证据。
+- migration 在现有 `t_ai_chat_channels` 增加 `UNIQUE(id, tenant_id)`，仅作为 Provider Account
+  `(channel_id, tenant_id)` 复合外键的 parent key；不改变 Channel 公共 API。若同名约束形状不符则
+  upgrade fail closed；空表 downgrade 删除六表后再删除该 parent unique。
+- Alembic upgrade 遇到同名表时逐列、server default、主键、唯一约束、**规范化后的 CHECK SQL**、
+  索引和外键核对完整 shape；不兼容即 fail closed。只比较 CHECK 名称或只看列存在不够，不能把 ORM
+  `create_all` 生成、弱化默认值/检查表达式或人工残留的近似表当成已迁移。错误 server default 和
+  “六表仅部分存在”的半迁移 schema 都必须有真库负向测试并 fail closed，不能补齐后继续启动。
+- downgrade 按 receipt → enterprise subject → alias → canonical identity → provider account →
+  provider tenant 的依赖逆序删除。计数与 DROP 前先在同一事务对所有现存 I2 表取得
+  `ACCESS EXCLUSIVE` 锁，消除“空表检查后、DROP 前并发写入”的 TOCTOU；只有六表全部为空时允许
+  执行。任一表存在身份历史都拒绝 downgrade，不能静默丢失映射或幂等证据。真库门禁还必须让并发
+  writer 被锁阻断；当前固定证据为 PostgreSQL SQLSTATE `55P03`。
+- fresh install、Alembic upgrade、空表 downgrade → upgrade 与有数据 downgrade 拒绝都必须在真
+  PostgreSQL 验证。生产迁移/删除仍需独立批准；本契约不授权执行外部环境操作。
+
+### 3.9 Provider account 控制面后续接线
+
+I2 已把下列字段持久化到 §3.3 Provider Account；I3/I4 再接入现有 `ChatChannel` onboarding、
+scope event 和 rotation 控制面：
 
 ```text
 provider_tenant_key
@@ -259,7 +418,27 @@ identity_health_error_code
 ```
 
 这些字段属于私有/管理员面，公开响应必须脱敏。`provider_tenant_key` 不能从普通 Channel update
-请求任意修改；只通过 verified onboarding/rotation 流程更新。
+请求任意修改；只通过 verified onboarding/rotation 流程更新。I3/I4 必须从 provider tenant/account
+ownership 取得固定 `tenant_id`，不能信任 payload 或另建旁路 mapping。六表约束是持久化防线，但
+普通 Channel update 仍不能直接创建、换绑或覆盖 ownership。
+
+EIM-I3 repository 必须继续保持这条不可变边界：普通业务路径不得修改 provider tenant/account 的
+`tenant_id/provider/provider_tenant_key/channel_id`，不得 hard-delete ownership 或其 identity 历史。
+verified onboarding/rotation 只能通过显式领域操作执行；account/identity 状态、scope 与 revision 更新
+使用 `identity_revision` compare-and-set，或在事务中 `SELECT ... FOR UPDATE` 后复核 revision。并发
+冲突 fail closed，禁止先查后写、last-write-wins 或删除重建来“换绑”。
+
+### 3.10 EIM-I2 与 FastMCP 4 的边界
+
+I2 只实现 MultiRAG 领域身份持久化、Alembic 和数据库不变量，因此不 import FastMCP，也不复制
+FastMCP 的工具/provider/auth 类型。这不是重复造工具开放层：FastMCP 4 的
+`RemoteAuthProvider`、`AccessToken`、root `on_list_tools/on_call_tool` middleware 与 HTTP
+Host/Origin 防护已经分别由 A3/A4 使用；未来 A7/P3 继续在 MCP composition/adapter 边界复用。
+
+FastMCP 不拥有 MultiRAG 的 Tenant、`User/UserTenant`、飞书 provider account/binding、canonical
+external identity、业务 subject 或事件 receipt，也不能替代上述数据库唯一约束、目录验证和固定
+Tenant 映射。领域 Principal/identity service 继续保持框架无关；只有进入 MCP Resource Server 或
+tool adapter 时才投影到 FastMCP 类型。
 
 ---
 

@@ -21,10 +21,16 @@ from sqlalchemy.engine import URL
 from sqlalchemy.exc import DisconnectionError, OperationalError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncAttrs, AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.inspection import inspect as sa_inspect
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, object_session, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, object_session, sessionmaker, validates
 from sqlalchemy.orm.attributes import get_history
 
-from api.db import UserAccountKind
+from api.db import (
+    EnterpriseSubjectState,
+    ExternalIdentityState,
+    IdentityEventReceiptState,
+    IdentityProviderHealthState,
+    UserAccountKind,
+)
 
 # from common.time_utils import current_timestamp, timestamp_to_date, date_string_to_timestamp
 from common.config_utils import decrypt_database_config
@@ -793,6 +799,647 @@ class UserTenant(BaseModel):
         return {"tenant_id": self.tenant_id, "user_id": self.user_id, "role": self.role}
 
 
+EXTERNAL_IDENTITY_ATTRIBUTE_KEYS = frozenset(
+    {
+        "display_name",
+        "provider_status",
+    }
+)
+
+
+class IdentityProviderTenant(BaseModel):
+    """Verified ownership of one external enterprise by one platform tenant."""
+
+    __tablename__ = "t_ai_identity_provider_tenants"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "provider",
+            "provider_tenant_key",
+            name="uq_identity_provider_tenants_provider_tenant",
+        ),
+        sa.UniqueConstraint(
+            "tenant_id",
+            "provider",
+            "provider_tenant_key",
+            name="uq_identity_provider_tenants_scope",
+        ),
+        sa.CheckConstraint(
+            "btrim(provider) <> '' AND btrim(provider_tenant_key) <> ''",
+            name="ck_identity_provider_tenants_nonempty",
+        ),
+        sa.Index(
+            "ix_identity_provider_tenants_tenant_provider",
+            "tenant_id",
+            "provider",
+        ),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(32),
+        primary_key=True,
+        index=False,
+        nullable=False,
+        default=lambda: uuid.uuid4().hex,
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        String(32),
+        sa.ForeignKey(
+            "usr_ai.t_ai_tenants.id",
+            name="fk_identity_provider_tenants_tenant_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider_tenant_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = super().to_dict()
+        payload.pop("provider_tenant_key", None)
+        return payload
+
+
+class IdentityProviderAccount(BaseModel):
+    """Server-owned installation boundary: one Provider Account, one tenant."""
+
+    __tablename__ = "t_ai_identity_provider_accounts"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "provider",
+            "provider_tenant_key",
+            "provider_account_key",
+            name="uq_identity_provider_accounts_provider_account",
+        ),
+        sa.UniqueConstraint(
+            "channel_id",
+            name="uq_identity_provider_accounts_channel",
+        ),
+        sa.UniqueConstraint(
+            "tenant_id",
+            "provider",
+            "provider_tenant_key",
+            "provider_account_key",
+            name="uq_identity_provider_accounts_scope",
+        ),
+        sa.CheckConstraint(
+            "btrim(provider) <> '' AND btrim(provider_tenant_key) <> '' AND btrim(provider_account_key) <> ''",
+            name="ck_identity_provider_accounts_nonempty",
+        ),
+        sa.CheckConstraint(
+            "identity_revision >= 1",
+            name="ck_identity_provider_accounts_revision",
+        ),
+        sa.CheckConstraint(
+            "identity_health_state IN ('pending', 'healthy', 'degraded', 'error', 'disabled')",
+            name="ck_identity_provider_accounts_health_state",
+        ),
+        sa.CheckConstraint(
+            "(identity_health_state = 'error' AND identity_health_error_code IS NOT NULL) OR (identity_health_state <> 'error' AND identity_health_error_code IS NULL)",
+            name="ck_identity_provider_accounts_health_error",
+        ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "provider", "provider_tenant_key"],
+            [
+                "usr_ai.t_ai_identity_provider_tenants.tenant_id",
+                "usr_ai.t_ai_identity_provider_tenants.provider",
+                "usr_ai.t_ai_identity_provider_tenants.provider_tenant_key",
+            ],
+            name="fk_identity_provider_accounts_provider_tenant",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["channel_id", "tenant_id"],
+            [
+                "usr_ai.t_ai_chat_channels.id",
+                "usr_ai.t_ai_chat_channels.tenant_id",
+            ],
+            name="fk_identity_provider_accounts_channel_tenant",
+            ondelete="RESTRICT",
+        ),
+        sa.Index(
+            "ix_identity_provider_accounts_tenant_health",
+            "tenant_id",
+            "identity_health_state",
+        ),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(32),
+        primary_key=True,
+        index=False,
+        nullable=False,
+        default=lambda: uuid.uuid4().hex,
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        String(32),
+        sa.ForeignKey(
+            "usr_ai.t_ai_tenants.id",
+            name="fk_identity_provider_accounts_tenant_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    channel_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider_tenant_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    provider_account_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    identity_revision: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=1,
+        server_default=text("1"),
+    )
+    last_scope_change_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    last_directory_event_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    identity_health_state: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default=IdentityProviderHealthState.PENDING.value,
+        server_default=text(f"'{IdentityProviderHealthState.PENDING.value}'"),
+    )
+    identity_health_error_code: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = super().to_dict()
+        payload.pop("channel_id", None)
+        payload.pop("provider_tenant_key", None)
+        payload.pop("provider_account_key", None)
+        payload.pop("identity_health_error_code", None)
+        return payload
+
+
+class ExternalIdentity(BaseModel):
+    """Tenant-scoped link from a verified provider subject to ``User.id``."""
+
+    __tablename__ = "t_ai_external_identities"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "tenant_id",
+            "provider",
+            "provider_tenant_key",
+            "subject_type",
+            "subject_value",
+            name="uq_external_identities_tenant_provider_subject",
+        ),
+        sa.UniqueConstraint(
+            "id",
+            "tenant_id",
+            "provider",
+            "provider_tenant_key",
+            name="uq_external_identities_alias_parent",
+        ),
+        sa.CheckConstraint(
+            "btrim(provider) <> '' AND btrim(provider_tenant_key) <> '' AND btrim(subject_type) <> '' AND btrim(subject_value) <> ''",
+            name="ck_external_identities_nonempty",
+        ),
+        sa.CheckConstraint(
+            "state IN ('pending_link', 'active', 'inactive', 'revoked', 'conflict')",
+            name="ck_external_identities_state",
+        ),
+        sa.CheckConstraint(
+            "identity_revision >= 1",
+            name="ck_external_identities_revision",
+        ),
+        sa.CheckConstraint(
+            "jsonb_typeof(attributes) = 'object'",
+            name="ck_external_identities_attributes_object",
+        ),
+        sa.CheckConstraint(
+            "attributes - ARRAY['display_name', 'provider_status']::text[] = '{}'::jsonb",
+            name="ck_external_identities_attributes_keys",
+        ),
+        sa.CheckConstraint(
+            "(NOT attributes ? 'display_name' OR attributes->'display_name' = 'null'::jsonb OR jsonb_typeof(attributes->'display_name') = 'string') "
+            "AND (NOT attributes ? 'provider_status' OR attributes->'provider_status' = 'null'::jsonb OR jsonb_typeof(attributes->'provider_status') = 'string')",
+            name="ck_external_identities_attributes_values",
+        ),
+        sa.CheckConstraint(
+            "state <> 'active' OR verified_at IS NOT NULL",
+            name="ck_external_identities_active_verified",
+        ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "provider", "provider_tenant_key"],
+            [
+                "usr_ai.t_ai_identity_provider_tenants.tenant_id",
+                "usr_ai.t_ai_identity_provider_tenants.provider",
+                "usr_ai.t_ai_identity_provider_tenants.provider_tenant_key",
+            ],
+            name="fk_external_identities_provider_tenant",
+            ondelete="RESTRICT",
+        ),
+        sa.Index(
+            "ix_external_identities_tenant_user_state",
+            "tenant_id",
+            "user_id",
+            "state",
+        ),
+        sa.Index(
+            "ix_external_identities_tenant_state_verified",
+            "tenant_id",
+            "state",
+            "verified_at",
+        ),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(32),
+        primary_key=True,
+        index=False,
+        nullable=False,
+        default=lambda: uuid.uuid4().hex,
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        String(32),
+        sa.ForeignKey(
+            "usr_ai.t_ai_tenants.id",
+            name="fk_external_identities_tenant_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(32),
+        sa.ForeignKey(
+            "usr_ai.t_ai_users.id",
+            name="fk_external_identities_user_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider_tenant_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    subject_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    subject_value: Mapped[str] = mapped_column(String(255), nullable=False)
+    state: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default=ExternalIdentityState.PENDING_LINK.value,
+        server_default=text(f"'{ExternalIdentityState.PENDING_LINK.value}'"),
+    )
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    identity_revision: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=1,
+        server_default=text("1"),
+    )
+    attributes: Mapped[dict[str, str | None]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
+
+    @validates("attributes")
+    def validate_attributes(
+        self,
+        _key: str,
+        value: dict[str, str | None],
+    ) -> dict[str, str | None]:
+        """Reject unapproved provider payload fields before persistence."""
+
+        if not isinstance(value, dict):
+            raise ValueError("external identity attributes must be an object")
+        unknown = set(value) - EXTERNAL_IDENTITY_ATTRIBUTE_KEYS
+        if unknown:
+            raise ValueError(f"unsupported external identity attributes: {sorted(unknown)}")
+        invalid = sorted(key for key, item in value.items() if item is not None and not isinstance(item, str))
+        if invalid:
+            raise ValueError(f"external identity attributes must contain strings or null: {invalid}")
+        return dict(value)
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = super().to_dict()
+        payload.pop("provider_tenant_key", None)
+        payload.pop("subject_value", None)
+        payload.pop("attributes", None)
+        return payload
+
+
+class ExternalIdentityAlias(BaseModel):
+    """Tenant-scoped app/developer alias for a canonical external identity."""
+
+    __tablename__ = "t_ai_external_identity_aliases"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "tenant_id",
+            "provider",
+            "provider_tenant_key",
+            "provider_account_key",
+            "alias_type",
+            "alias_value",
+            name="uq_external_identity_aliases_tenant_provider_alias",
+        ),
+        sa.CheckConstraint(
+            "alias_type IN ('open_id', 'union_id')",
+            name="ck_external_identity_aliases_type",
+        ),
+        sa.CheckConstraint(
+            "btrim(provider) <> '' AND btrim(provider_tenant_key) <> '' AND btrim(provider_account_key) <> '' AND btrim(alias_value) <> ''",
+            name="ck_external_identity_aliases_nonempty",
+        ),
+        sa.ForeignKeyConstraint(
+            [
+                "external_identity_id",
+                "tenant_id",
+                "provider",
+                "provider_tenant_key",
+            ],
+            [
+                "usr_ai.t_ai_external_identities.id",
+                "usr_ai.t_ai_external_identities.tenant_id",
+                "usr_ai.t_ai_external_identities.provider",
+                "usr_ai.t_ai_external_identities.provider_tenant_key",
+            ],
+            name="fk_external_identity_aliases_parent",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            [
+                "tenant_id",
+                "provider",
+                "provider_tenant_key",
+                "provider_account_key",
+            ],
+            [
+                "usr_ai.t_ai_identity_provider_accounts.tenant_id",
+                "usr_ai.t_ai_identity_provider_accounts.provider",
+                "usr_ai.t_ai_identity_provider_accounts.provider_tenant_key",
+                "usr_ai.t_ai_identity_provider_accounts.provider_account_key",
+            ],
+            name="fk_external_identity_aliases_provider_account",
+            ondelete="RESTRICT",
+        ),
+        sa.Index(
+            "ix_external_identity_aliases_tenant_identity",
+            "tenant_id",
+            "external_identity_id",
+        ),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(32),
+        primary_key=True,
+        index=False,
+        nullable=False,
+        default=lambda: uuid.uuid4().hex,
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        String(32),
+        sa.ForeignKey(
+            "usr_ai.t_ai_tenants.id",
+            name="fk_external_identity_aliases_tenant_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    external_identity_id: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider_tenant_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    provider_account_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    alias_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    alias_value: Mapped[str] = mapped_column(String(255), nullable=False)
+    verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = super().to_dict()
+        payload.pop("provider_tenant_key", None)
+        payload.pop("provider_account_key", None)
+        payload.pop("alias_value", None)
+        return payload
+
+
+class EnterpriseSubjectLink(BaseModel):
+    """Verified tenant-local business identity, separate from provider login."""
+
+    __tablename__ = "t_ai_enterprise_subject_links"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "tenant_id",
+            "subject_type",
+            "subject_value",
+            name="uq_enterprise_subject_links_tenant_subject",
+        ),
+        sa.UniqueConstraint(
+            "tenant_id",
+            "user_id",
+            "subject_type",
+            "issuer",
+            "issuer_tenant",
+            name="uq_enterprise_subject_links_resolver_slot",
+        ),
+        sa.CheckConstraint(
+            "subject_type IN ('employee_no', 'talent_id', 'workcode')",
+            name="ck_enterprise_subject_links_type",
+        ),
+        sa.CheckConstraint(
+            "state IN ('active', 'inactive', 'conflict')",
+            name="ck_enterprise_subject_links_state",
+        ),
+        sa.CheckConstraint(
+            "state <> 'active' OR verified_at IS NOT NULL",
+            name="ck_enterprise_subject_links_active_verified",
+        ),
+        sa.CheckConstraint(
+            "btrim(subject_value) <> '' AND btrim(issuer) <> '' AND btrim(issuer_tenant) <> ''",
+            name="ck_enterprise_subject_links_nonempty",
+        ),
+        sa.Index(
+            "ix_enterprise_subject_links_tenant_user_type_state",
+            "tenant_id",
+            "user_id",
+            "subject_type",
+            "state",
+        ),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(32),
+        primary_key=True,
+        index=False,
+        nullable=False,
+        default=lambda: uuid.uuid4().hex,
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        String(32),
+        sa.ForeignKey(
+            "usr_ai.t_ai_tenants.id",
+            name="fk_enterprise_subject_links_tenant_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(32),
+        sa.ForeignKey(
+            "usr_ai.t_ai_users.id",
+            name="fk_enterprise_subject_links_user_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    subject_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    subject_value: Mapped[str] = mapped_column(String(255), nullable=False)
+    issuer: Mapped[str] = mapped_column(String(128), nullable=False)
+    issuer_tenant: Mapped[str] = mapped_column(String(255), nullable=False)
+    state: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default=EnterpriseSubjectState.INACTIVE.value,
+        server_default=text(f"'{EnterpriseSubjectState.INACTIVE.value}'"),
+    )
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_revision: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = super().to_dict()
+        payload.pop("subject_value", None)
+        payload.pop("issuer_tenant", None)
+        return payload
+
+
+class IdentityEventReceipt(BaseModel):
+    """Minimal, body-free idempotency receipt for provider identity events."""
+
+    __tablename__ = "t_ai_identity_event_receipts"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "tenant_id",
+            "provider",
+            "provider_tenant_key",
+            "provider_account_key",
+            "event_type",
+            "event_id",
+            name="uq_identity_event_receipts_provider_event",
+        ),
+        sa.CheckConstraint(
+            "processing_state IN ('processing', 'succeeded', 'failed')",
+            name="ck_identity_event_receipts_state",
+        ),
+        sa.CheckConstraint(
+            "event_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_identity_event_receipts_hash",
+        ),
+        sa.CheckConstraint(
+            "(processing_state = 'processing' AND processed_at IS NULL AND error_code IS NULL) "
+            "OR (processing_state = 'succeeded' AND processed_at IS NOT NULL AND error_code IS NULL) "
+            "OR (processing_state = 'failed' AND processed_at IS NOT NULL AND error_code IS NOT NULL)",
+            name="ck_identity_event_receipts_processed_at",
+        ),
+        sa.CheckConstraint(
+            "btrim(provider) <> '' AND btrim(provider_tenant_key) <> '' AND btrim(provider_account_key) <> '' AND btrim(event_type) <> '' AND btrim(event_id) <> ''",
+            name="ck_identity_event_receipts_nonempty",
+        ),
+        sa.ForeignKeyConstraint(
+            [
+                "external_identity_id",
+                "tenant_id",
+                "provider",
+                "provider_tenant_key",
+            ],
+            [
+                "usr_ai.t_ai_external_identities.id",
+                "usr_ai.t_ai_external_identities.tenant_id",
+                "usr_ai.t_ai_external_identities.provider",
+                "usr_ai.t_ai_external_identities.provider_tenant_key",
+            ],
+            name="fk_identity_event_receipts_identity_scope",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            [
+                "tenant_id",
+                "provider",
+                "provider_tenant_key",
+                "provider_account_key",
+            ],
+            [
+                "usr_ai.t_ai_identity_provider_accounts.tenant_id",
+                "usr_ai.t_ai_identity_provider_accounts.provider",
+                "usr_ai.t_ai_identity_provider_accounts.provider_tenant_key",
+                "usr_ai.t_ai_identity_provider_accounts.provider_account_key",
+            ],
+            name="fk_identity_event_receipts_provider_account",
+            ondelete="RESTRICT",
+        ),
+        sa.Index(
+            "ix_identity_event_receipts_identity_id",
+            "tenant_id",
+            "external_identity_id",
+        ),
+        sa.Index(
+            "ix_identity_event_receipts_tenant_state_created",
+            "tenant_id",
+            "processing_state",
+            "create_date",
+        ),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(32),
+        primary_key=True,
+        index=False,
+        nullable=False,
+        default=lambda: uuid.uuid4().hex,
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        String(32),
+        sa.ForeignKey(
+            "usr_ai.t_ai_tenants.id",
+            name="fk_identity_event_receipts_tenant_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider_tenant_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    provider_account_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    event_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    event_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    processing_state: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default=IdentityEventReceiptState.PROCESSING.value,
+        server_default=text(f"'{IdentityEventReceiptState.PROCESSING.value}'"),
+    )
+    event_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    external_identity_id: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = super().to_dict()
+        payload.pop("provider_tenant_key", None)
+        payload.pop("provider_account_key", None)
+        payload.pop("event_id", None)
+        payload.pop("event_hash", None)
+        return payload
+
+
 class LLMFactories(BaseModel):
     __tablename__ = "t_ai_llm_factories"
     __table_args__ = {"schema": "usr_ai"}
@@ -1227,6 +1874,11 @@ class ChatChannel(BaseModel):
 
     __tablename__ = "t_ai_chat_channels"
     __table_args__ = (
+        sa.UniqueConstraint(
+            "id",
+            "tenant_id",
+            name="uq_chat_channels_tenant_scope",
+        ),
         sa.CheckConstraint("status IN (0, 1)", name="ck_chat_channels_status"),
         sa.CheckConstraint("generation >= 1", name="ck_chat_channels_generation"),
         sa.Index("ix_chat_channels_tenant_channel", "tenant_id", "channel"),

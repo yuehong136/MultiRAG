@@ -71,9 +71,12 @@ rg -n "相关模型、迁移、测试或错误码" .
 
 任何实现都不得违背：
 
-- 默认一个企业对应一个 MultiRAG tenant，全体员工是“可识别主体”，不等于自动拥有所有资源权限；
+- MultiRAG 是多租户平台，但首期一个飞书企业强制对应一个 MultiRAG tenant；同一 Provider Account/
+  应用安装实例和 Channel binding 永远固定单 Tenant。未来集团级多 Tenant 必须使用不同安装实例，
+  经新 ADR/schema 迁移受控开放，不允许一个 binding 动态路由；全体员工是“可识别主体”，不等于
+  自动拥有所有资源权限；
 - `platform_user_id = MultiRAG User.id`；飞书长连接返回的 `open_id` 只是外部 alias；
-- 飞书规范主键为 `(tenant_key, user_id)`；`(provider_account_id, open_id)` 是解析入口；
+- 飞书规范主键为 `(tenant_key, user_id)`；`(provider_account_key, open_id)` 是解析入口；
 - 不做每日全量组织复制：首次 JIT + Contact 事件失效 + 周期性增量/对账；
 - 身份服务和表归 MultiRAG；`of_mcp` 是受保护资源，不拥有企业主身份库；
 - MCP 使用短时 ES256 access token、JWKS、resource/audience 校验；不透传外部 token；
@@ -113,6 +116,14 @@ FastAPI 自动序列化出去，因此 tolerate PR 必须用线格测试证明�
 - 新 service 一律 async-first，使用 `AsyncSession`，遵守根 AGENTS.md 的 session 规则；
 - 迁移只新增表/列/索引时先保证老代码可运行，再切读写，最后才删除旧字段；
 - 用数据库约束守住身份唯一性，不只靠应用层“先查再插”；
+- I2 必须先用 provider-tenant ownership 强制外部企业单 Tenant，再让 provider account、alias 和
+  receipt 通过复合外键逐级继承同一 tenant/provider scope；只给每张业务表加 `tenant_id` 不等于守住
+  account/binding ownership；
+- I3 不把 ownership 实现成普通 CRUD：普通路径禁止修改其 tenant/provider/channel scope、禁止
+  hard-delete；verified onboarding/rotation 用显式领域方法。状态和 revision 更新必须使用
+  `identity_revision` CAS，或在同一事务 `SELECT ... FOR UPDATE` 后复核 revision，冲突 fail closed；
+- 身份历史外键使用 `ON DELETE RESTRICT`；有数据 downgrade 必须 fail closed，不用 CASCADE 或清表
+  换取回滚成功；
 - 迁移前输出冲突审计，只读脚本不得自动猜测合并；
 - 测试里使用 scratch 数据库，绝不连接配置中的生产 dbname。
 
@@ -267,8 +278,8 @@ git diff --check
 ```
 
 A4 定向 **201 passed**；`uv run --locked ofmcp verify` 六步全绿、**417 passed、2 existing skipped**，
-contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG 已完成 I1，可并行做
-`I2 -> I3 -> P1`、`F1 + I3 -> I4 -> I6`、`C1 -> C2`，只有
+contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG 已完成 I2，当前可并行做
+`I3 -> P1`、`F1 + I3 -> I4 -> I6`、`C1 -> C2`，只有
 `C3 -> P2` 后才能进入 A2/P3。secure 在独立远程发布闸门解除前仍不能作为远程业务入口。
 
 ### 4.8 EIM-A6 phase 1 接手与完成边界

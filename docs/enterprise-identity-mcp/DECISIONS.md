@@ -438,3 +438,53 @@ unknown-outcome 对账。A5 未完成前也没有 `parent_jti_hash` 链。
 ownership/rotation、OTel SDK/exporter/collector 与 W3C 跨仓 trace、A5/P3/M3/M4 集成和 remote-release
 演练完成后才可标 `✅`。memory store/sink 的结构属性固定不是 production-ready；真实 secure Gateway
 没有生产 coordinator 时必须 fail-fast，不能用普通配置布尔值解锁。
+
+---
+
+## EIM-ADR-23：首期一个飞书企业一个 Tenant，Provider Account 与 binding 固定单 Tenant
+
+**状态**：Accepted
+**日期**：2026-08-12
+**取代范围**：收紧 ADR-01 中“一个飞书租户可由不同 binding、应用或服务端路由策略映射多个
+MultiRAG Tenant”的例外措辞；ADR-01 的企业边界由服务端决定、消息不得选择 Tenant 继续有效。
+
+MultiRAG 平台本身保持多租户，但首期每个接入企业采用单租户模型：一个已验证飞书
+`tenant_key` 恰好对应一个 MultiRAG `Tenant.id`。一个飞书应用安装实例/Provider Account 恰好归属
+一个 Tenant；一个 Channel binding 也恰好绑定一个 Provider Account 和一个 Tenant。该关系由服务端
+onboarding 持久化并以数据库唯一约束强制，不能由消息、卡片、prompt、worker command、目录返回值
+或运行时路由规则动态选择。
+
+EIM-I2 因此新增两级 ownership 表，在身份数据入口机器强制：
+
+```text
+t_ai_identity_provider_tenants:
+  UNIQUE(provider, provider_tenant_key) -> one tenant_id
+
+t_ai_identity_provider_accounts:
+  FOREIGN KEY(tenant_id, provider, provider_tenant_key) -> provider tenant ownership
+  UNIQUE(provider, provider_tenant_key, provider_account_key) -> one tenant_id
+  UNIQUE(channel_id) -> the same provider account and tenant_id
+```
+
+alias 与 event receipt 必须用 tenant/provider/provider-tenant/provider-account 的复合外键引用该
+account ownership；account 又必须引用企业 ownership。只有 canonical identity 没有 app/account 维度。
+这样，调用方即使篡改 `tenant_id`，也不能在另一个 Tenant 下重用同一安装实例、alias 或 event ID。
+所有外键 `ON DELETE RESTRICT`，
+解绑或停用不能级联抹掉身份历史。
+
+未来集团级多 Tenant 只允许作为经过独立 ADR、迁移和上线评审的受控例外。每个目标 Tenant 必须使用
+**不同**的 Provider Account/应用安装实例（以及对应独立 binding）；同一个 Provider Account 或
+binding 在任何阶段都不能路由多个 Tenant。未来若要放开同一
+`(provider, provider_tenant_key)` 归属多个 Tenant，必须新增 ADR 和显式 schema 迁移、数据冲突审计、
+控制面策略及上线门禁；首期 schema 不预埋能绕过 enterprise ownership 的动态路由旁路，且无论如何
+不能放开 account/binding 的单 Tenant 不变量。
+
+这项 ownership 是 MultiRAG 身份/Channel 控制面的领域约束，不属于 MCP 或 FastMCP 的工具开放能力。
+FastMCP 4 继续负责 MCP auth、工具发现/调用 middleware 和 transport 防护；它既不识别飞书安装实例，
+也不能替代 Provider Account 到 Tenant 的持久映射。
+
+I2 只建立持久化不变量；I3 repository 不得把 ownership 暴露为普通 CRUD。普通 Channel/管理员更新
+禁止换绑 `tenant_id/provider/provider_tenant_key/channel_id`，所有 ownership 与 identity 历史禁止
+hard-delete。verified onboarding/rotation 使用显式领域命令；状态、scope 和 revision 变化必须通过
+`identity_revision` 的 compare-and-set，或同一事务内的行锁 + revision 复核。冲突 fail closed，不能
+last-write-wins、删除重建或靠 FastMCP middleware 修补身份库竞态。

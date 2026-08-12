@@ -3,8 +3,9 @@
 > 最后更新：2026-08-12
 > 当前状态：文档基线、EIM-U0、EIM-U1、EIM-U4、EIM-U8～U13 已完成；
 > CHN-U15 迁移/API 重启已完成，CHN-U16 已完成；真实 smoke 仍欠，下一项 CHN-O9，随后稳定浸泡；
-> EIM-A1、EIM-A3、EIM-A4 已完成；EIM-A6 phase 1 正在收口且保持 `🔵`，MultiRAG 已完成 I1、
-> 后续继续身份 binding、Channel assertion 与 Principal 轨；EIM-F5 / CHN-X14 和 EIM-O4 均保持挂起。
+> EIM-A1、EIM-A3、EIM-A4 已完成；EIM-A6 phase 1 正在收口且保持 `🔵`；MultiRAG 已完成
+> EIM-I2 首期固定 Tenant ownership 与 identity schema，下一项是 I3 repository/policy，然后继续
+> binding、Channel assertion 与 Principal 轨；EIM-F5 / CHN-X14 和 EIM-O4 均保持挂起。
 
 ---
 
@@ -185,8 +186,8 @@ F1/F3/F4/F7/F8 禁止携带身份功能。F2 只是 characterization/兼容矩�
 | ID | 仓库 | 任务 | 状态 | 依赖 | 主要锚点与完成条件 |
 |---|---|---|:---:|---|---|
 | EIM-I1 | MR | 让 `User` 支持 external-only：nullable email、`account_kind`、登录/找回密码兼容 | ✅ | F0 | `api/db/db_models.py::User`、auth/user APIs；存量迁移 + fresh DB；null email 不 500，不造假邮箱 |
-| EIM-I2 | MR | 新增 canonical identity、alias、enterprise subject、event receipt 表与 Alembic | ⬜ | I1 | [CONTRACTS §3](CONTRACTS.md#3-数据模型) 的唯一约束；并发 upsert 真库测试 |
-| EIM-I3 | MR | `api/identity` contracts/repository/policy/service 骨架，三种 provisioning policy | ⬜ | I2 | async-first；封闭单测；无 api route import；冲突 fail closed |
+| EIM-I2 | MR | 新增 provider tenant/account ownership、canonical identity、alias、enterprise subject、event receipt 六表与 Alembic | ✅ | I1 | [CONTRACTS §3](CONTRACTS.md#3-数据模型) 的固定单 Tenant、唯一/复合外键、RESTRICT、脱敏与安全回滚约束；并发 insert 真库测试；head `8f2c4d6e7a9b` |
+| EIM-I3 | MR | `api/identity` contracts/repository/policy/service 骨架，三种 provisioning policy | ⬜ | I2 | **下一项**；async-first；封闭单测；无 api route import；冲突 fail closed；普通路径禁止 ownership 换绑/hard-delete，revision + CAS/行锁守住状态迁移 |
 | EIM-I4 | MR | `FeishuEnterpriseIdentityProvider`：open_id -> user_id/status/employee_no，token/cache/限流 | ⬜ | F1,I3 | Contact V3 fixture + 可选真实 sandbox；scope/status/error 分类；single-flight |
 | EIM-I5 | MR | `FeishuEmployeeNumberResolver` + 可插拔 OA/HR resolver SPI | ⬜ | I4 | resolved/not-found/ambiguous/unavailable/inactive 五态；不含原力 if/else |
 | EIM-I6 | MR | `preprovisioned/link_only/jit`、User/UserTenant 事务、一次性 link code、显式合并 | ⬜ | I3,I4 | JIT 只能 NORMAL；并发首次消息只建一个用户；绑定码单次/短 TTL；无邮箱匹配 |
@@ -202,8 +203,23 @@ F1/F3/F4/F7/F8 禁止携带身份功能。F2 只是 characterization/兼容矩�
 ### EIM-I2 开工简报
 
 - 先实现模型和迁移，再 repository；不要让 ORM `create_all` 掩盖缺失 Alembic。
+- 首期用 `provider tenant ownership` 机器强制 `(provider, provider_tenant_key) -> exactly one
+  tenant_id`；Provider Account/Channel 再逐级固定到同一 Tenant。未来集团多 Tenant 不在本轮预埋
+  动态路由旁路，必须不同安装实例并另走 ADR/schema 迁移。
 - 用两个并发 AsyncSession 模拟相同 open_id 首次解析，证明唯一约束而非应用层先查后插承担最终保护。
 - enterprise subject/API/log 默认脱敏；JSONB attributes 只能白名单写入。
+- I2 是 MultiRAG 身份持久化，不 import FastMCP；后续 A7/P3 的 MCP 暴露继续优先复用 FastMCP 4
+  auth、AccessToken 和 list/call middleware，不把领域 identity/Principal 改造成框架类型。
+
+### EIM-I3 开工简报
+
+- repository 只能在 verified onboarding 事务中创建 provider tenant/account ownership；普通更新、
+  Channel 配置或 resolver 路径禁止更换 `tenant_id/provider/provider_tenant_key/channel_id`，也禁止
+  hard-delete ownership、identity、alias、subject 或 receipt 历史。
+- identity/account 状态和 scope 变化必须在事务内使用 `identity_revision` 的 compare-and-set，或先
+  `SELECT ... FOR UPDATE` 再校验 revision；冲突返回稳定领域结果并 fail closed，不做 check-then-write。
+- provisioning policy/service 保持框架无关、async-first；FastMCP 仅留在未来 MCP adapter/composition
+  边界，不能进入 identity repository/domain contract。
 
 ### EIM-I4 开工简报
 
@@ -565,7 +581,8 @@ EIM-F5 / CHN-X14 仍是长期 upstream-first 的上游审计入口，但当前�
 EIM-A6  🔵 phase 1 已落；下一半完成生产 durable backend、key rotation 与跨仓 trace
 EIM-F1  lark-oapi patch 升级
 EIM-I1  ✅ User 外部账号模型
-EIM-I2  external identity schema
+EIM-I2  ✅ provider ownership + external identity schema
+EIM-I3  repository + policy                         <- 当前下一项
 EIM-C1  Channel tolerate structured assertion
 ```
 
@@ -610,8 +627,9 @@ A8 -> O3  仅在真实企业 IdP、多 issuer 或托管平台需求成立后解�
 ```
 
 A3/A4 已完成，of_mcp 的 A6 phase 1 已落但保持进行中；下一步不是把内存 store 当生产后端，而是完成
-durable multi-instance replay/audit、HMAC key rotation 和跨仓 OTel。MultiRAG 同时沿 `I2 -> I3 -> P1`、
-`F1 + I3 -> I4 -> I6` 和 `C1 -> C2` 推进，只有 `C2 + I6 + P1 -> C3 -> P2` 后才能做 A2。
+durable multi-instance replay/audit、HMAC key rotation 和跨仓 OTel。MultiRAG 已完成 I2，当前从
+`I3 -> P1`、`F1 + I3 -> I4 -> I6` 和 `C1 -> C2` 推进，只有
+`C2 + I6 + P1 -> C3 -> P2` 后才能做 A2。
 随后必须等 `P2 + F3 + A2 + A4 -> P3`，再启动 A5/U14 等真实委托消费者。A7 保持独立入站
 resource；A8 仍无真实需求不启动。这个顺序既保留 of_mcp 的 fail-closed verifier/authorizer 先行，
 又不把未验证的 Channel subject 塞进 token；A4 的 Principal 不能替代 MultiRAG P1/P2。
@@ -650,4 +668,5 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 | 2026-08-12 | EIM-A3 | of_mcp 新增独立 strict `mcp_access` verifier、固定 HTTPS JWKS/LKG/轮换/single-flight/cache 防放大、RFC 9728 PRM 与稳定 401/503；secure profile 缺配置 fail-fast、mount-only/hello disabled，production endpoint scopes 保持空并把真实工具 403 留给 A4；A3 交接时 local/secure 均机器限制 loopback，Host/Origin protection 开启 | of_mcp `e4ab560`；MultiRAG docs / 本次变更 | production verifier 全跑 68 个 A1 Gateway cases；定向 **126 passed**；`uv run --locked ofmcp verify` 六步全绿、**342 passed、2 existing skipped**；contract no drift；MultiRAG `make verify` 全绿、**1904 passed**；scope/profile constants 与 A1 manifest 锁定，NaN/Infinity、随机 unknown kid、慢失败 backoff 和非 loopback 负向均覆盖 | Codex |
 | 2026-08-12 | EIM-A4 | of_mcp 将 A3 verified claims 投影为 framework-independent immutable Principal；在 post-assembly canonical tool catalog 上建立完整逐工具 policy registry，生成确定性 snapshot/revision；outer ASGI 返回真实 HTTP 403，inner FastMCP 对 `tools/list` 过滤并在 `tools/call` 执行前重验；default SSE response guard 保持二次拒绝的 403/500；scope/tenant/assurance 分层，external business resolver 与 `auth_time` freshness 明确保留为 future seam；local/secure 继续 loopback | of_mcp `74117a0`；policy revision `6f79e7ddf8f630993a054f284ebd5213424ffe39b252c661d16a2967ed6fdd67`；MultiRAG docs / 本次变更 | of_mcp 定向 **201 passed**；`uv run --locked ofmcp verify` 六步全绿、**417 passed、2 existing skipped**；contract snapshot no drift；MultiRAG `make verify` 全绿、**1904 passed**；本行不宣称 A2/P3、飞书 Principal、M1/M2、A5/A6 已完成 | Codex |
 | 2026-08-12 | EIM-I1 | `User` 支持 nullable email 与 `local/external/hybrid` 账户类型；数据库与 service 双层禁止 external-only 本地密码，登录/找回密码只接受 password-capable 账户；公共 user projection、Admin 创建用户响应与注册失败响应不暴露密码哈希、存量 access token 或 SQL 参数；邀请人姓名在 nickname/email 都缺失时使用稳定非 PII fallback。迁移按存量 `login_channel/password` 可逆分类 local/external/hybrid，fresh DB、upgrade → downgrade → upgrade 与不可重建状态均有真 PostgreSQL 守门；Web OAuth 强制一次性 state 且在 I6 建立 provider-subject binding 前不执行 email 登录、注册或合并 | MultiRAG `7041f92a` | `make verify`：format/Ruff、6 import contracts、async DB gate、mypy 65 files 全绿，unit **1915 passed in 24.79s**；`REQUIRE_SERVICES=1 make integration`：**41 passed in 6.50s**；Alembic 单 head `7c8d9e0f1a2b`；安全复核无剩余 blocker | Codex |
+| 2026-08-12 | EIM-I2 | 新增 provider tenant/account ownership、canonical identity、tenant-scoped alias、enterprise subject 与 body-free event receipt 六表；首期由数据库 ownership/复合外键强制一个飞书企业、安装实例和 Channel 固定单 Tenant，所有身份历史外键 RESTRICT；attributes 关闭白名单，默认 projection 脱敏；model-first 逐项核对 CHECK SQL/server default，错误 default 与六表部分存在的半迁移 schema 均 fail closed；downgrade 先锁六表并在有数据或并发写竞争时 fail closed。该任务未引入 repository、Channel Principal、动态 MCP token 或 FastMCP domain 依赖；下一项 EIM-I3 | MultiRAG / 本次提交 | Alembic 单 head `8f2c4d6e7a9b`；I2 unit **10 passed**；identity integration **11 passed**，含错误 default/partial schema 负向、并发 alias 单 winner、空表 down/up、有历史拒绝与 `ACCESS EXCLUSIVE` 锁竞争 SQLSTATE `55P03`；`make verify` 静态门禁全绿、unit **1925 passed**；`REQUIRE_SERVICES=1 make integration` **52 passed**；`git diff --check` 通过 | Codex |
 | 2026-08-12 | EIM-A6 phase 1 | of_mcp 为所有实际工具增加 effect/replay policy 并把它纳入 canonical snapshot/revision；新增冻结脱敏 audit schema、单 capability JTI replay claim/state machine、HMAC request fingerprint、框架无关 security coordinator 与 OTel API adapter；Gateway 在 A4 最终 allow 后、业务执行前 prepare，重复/冲突/依赖故障分别稳定映射 409/403/503，业务结果未知不释放 claim。仅完成安全中间态：生产 durable backend、HMAC/KMS 轮换、OTel SDK/exporter/跨仓 trace、A5 parent JTI、P3 动态 token、业务幂等和远程发布仍未完成，A6 保持 `🔵` | of_mcp `0d1224d`；MultiRAG docs / 本次提交；policy revision `7bf9e09082ca4f1d529e51bf3fe8e6dd5c4334c62deaf9a5b6be204af9fca446` | A6/Gateway 定向 **65 passed**；`uv run --locked ofmcp verify` 六步全绿、**453 passed、2 existing skipped**；MultiRAG `make verify` 静态门禁全绿、**1915 passed**；当前 secure 无生产 coordinator 后端时 fail-fast，remote gate 未开放 | Codex |

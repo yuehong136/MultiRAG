@@ -40,7 +40,11 @@
 以下不变量必须有自动化测试；任何一条失败都禁止上线：
 
 - prompt、工具参数、卡片表单字段不得决定 `principal_id`、`tenant_id`、`employee_no` 或 scopes；
-- `open_id` 的唯一键必须包含 `provider_account_id`，`user_id` 的唯一键必须包含 `tenant_key`；
+- `open_id` 的唯一键必须包含 tenant-scoped `provider_account_key`，`user_id` 的唯一键必须包含
+  tenant-scoped `provider_tenant_key`；
+- 首期数据库必须强制 `(provider, provider_tenant_key) -> exactly one tenant_id`；同一
+  `(provider, provider_tenant_key, provider_account_key)` 与同一 Channel 也各自只能归属一个 Tenant，
+  任何消息或动态路由不能改写 ownership；
 - 目录验证失败、用户停用、企业映射冲突时必须 fail closed；
 - `platform_user_id` 始终是 MultiRAG `User.id`，不是飞书 `open_id`；
 - `enterprise_subject_id` 与 `platform_user_id` 分离，员工号不能成为公开认证凭据；
@@ -85,9 +89,9 @@
 最少必须覆盖这些命名场景：
 
 1. 同一个飞书用户通过同一企业的两个应用进入：`open_id` 不同、`user_id` 相同，最终只能有一个
-   enterprise subject 和一个已绑定平台账号。
+   enterprise subject 和一个已绑定平台账号；两个应用安装实例都必须归属同一个 MultiRAG Tenant。
 2. 两个企业碰巧出现相同 `user_id`：因为 `tenant_key` 不同，绝不能合并。
-3. 同一个 `open_id` 字符串出现在不同应用：因为 `provider_account_id` 不同，绝不能合并。
+3. 同一个 `open_id` 字符串出现在不同应用：因为 `provider_account_key` 不同，绝不能合并。
 4. `open_id`、`user_id` 同时出现但目录返回的用户不一致：返回 `IDENTITY_CONFLICT`，不猜测。
 5. 飞书返回用户 `status.is_activated=false`、已离职或不可见：拒绝建立/使用会话。
 6. 已存在 alias 的用户更换部门或姓名：身份主体不变化，只更新 profile 快照。
@@ -95,6 +99,10 @@
 8. 目录接口超时且无可用缓存：拒绝首次登录；已有短期正缓存可按策略工作并打 `stale` 指标。
 9. 负缓存命中后收到 `contact.user.updated_v3`：负缓存立即失效，可重新验证。
 10. `ChannelActor.subject` 被任意伪造：在 C3 之后仍不能直接进入 `Principal.id`。
+11. 同一 `(provider, tenant_key)` 以不同 app/account 写入另一个 MultiRAG Tenant：provider tenant
+    ownership 唯一约束必须拒绝；不能因 app_id 不同而绕过首期企业单 Tenant。
+12. 同一 provider account 或 `channel_id` 换一个 Tenant 重建：account/channel 唯一约束或复合外键
+    必须拒绝；未来集团级多 Tenant 即使经新 ADR/schema 迁移开放，也只能用不同安装实例和 binding。
 
 ### 3.2 MultiRAG 集成测试
 
@@ -103,9 +111,24 @@
 
 - schema upgrade 与 downgrade/rollback 路径；
 - 部署旧代码读取新表时不受影响；
-- 部分唯一索引能允许 nullable alias，同时拒绝同一边界内重复；
+- provider tenant ownership 拒绝同一外部企业跨 Tenant；provider account/channel ownership 拒绝同一
+  安装实例或 Channel 跨 Tenant；
+- alias/receipt 的 provider-account 复合外键、canonical identity 复合外键都拒绝 tenant/provider/
+  provider-tenant 任一维度错配；
+- canonical、alias、enterprise subject 与 receipt 在各自 tenant-scoped 唯一边界内拒绝重复，在合法的
+  不同 Tenant/不同 account 边界不误合并；
 - `SELECT ... FOR UPDATE` 或唯一约束重试能收敛首次绑定竞态；
-- event receipt 的 `(provider_account_id, event_id)` 幂等；
+- event receipt 的 `(tenant_id, provider, provider_tenant_key, provider_account_key, event_type,
+  event_id)` 幂等，且表结构不存在原始 body/payload/headers/metadata 列；
+- 所有 Tenant/User/Channel/identity/provider-account 外键均为 `ON DELETE RESTRICT`；有任意 ownership/
+  identity/alias/subject/receipt 历史时 downgrade fail closed，空表才能按依赖逆序回滚再升级；
+- model-first upgrade 对现存表逐项比较 server default 与规范化 CHECK SQL，不只比较名称；任一默认值、
+  检查表达式或 shape 漂移都 fail closed；错误 server default 与六表部分存在的半迁移 schema 分别有
+  真库负向，不能自动补齐或接受；
+- downgrade 在“空表计数 + DROP”的完整临界区先取得六表 `ACCESS EXCLUSIVE` 锁；并发 writer 不能在
+  计数后插入历史。真 PostgreSQL 测试固定覆盖锁竞争，并断言 SQLSTATE `55P03`；
+- `attributes` ORM 与 PostgreSQL 双层只接受 `display_name/provider_status` 的 string/null object；安全
+  projection 不回显 Provider 原始 ID、事件 ID/hash、业务 subject 或 health error；
 - `jti`/confirmation/idempotency key 在并发提交下只消费一次；
 - `(interaction_id, revision)` 在两个并发 callback 下只有一个进入 `resuming`，重启后仍可恢复或明确过期；
 - opaque `requestState`、规范化用户响应和敏感结构化结果按数据分级加密保存；跨 tenant、跨 Principal、
@@ -114,6 +137,12 @@
 
 改 DB 后除了 `make verify`，还必须按 AGENTS.md 运行 `make integration`。服务不可用导致 skip
 不能作为验收；CI 或受控环境必须用 `REQUIRE_SERVICES=1` 跑出真实结果。
+
+EIM-I2 完成基线（2026-08-12）：Alembic 单 head `8f2c4d6e7a9b`；模型安全单元测试
+**10 passed**；identity 真 PostgreSQL integration **11 passed**，覆盖精确 schema/default、错误
+server default、六表部分存在的半迁移 schema、model-first shape、空表 downgrade → upgrade、有历史
+拒绝、六表锁竞争、唯一/复合外键和双 AsyncSession 并发 alias 单 winner；完整 `make verify`
+**1925 passed** 且 lint/import/async/mypy 全绿；`REQUIRE_SERVICES=1 make integration` **52 passed**。
 
 ### 3.3 `of_mcp` 测试
 
@@ -349,7 +378,7 @@ mypy 65 files 全绿，unit **1904 passed in 25.76s**。of_mcp `3e1d5ac` 定向 
 
 ### 4.1 身份和租户攻击
 
-- 修改 private API 的 `tenant_key`、`provider_account_id`、所有 ID 排列组合；
+- 修改 private API 的 `tenant_key`、`provider_account_key`、所有 ID 排列组合；
 - 把另一个租户合法 assertion 搬到当前 binding；binding 的服务端配置必须否决它；
 - 用 `union_id`/`open_id` 伪装成企业 `user_id`；类型化 identifier 必须阻止混用；
 - 员工号重复、复用、空值、前导零、大小写、离职后重新入职；任何歧义都进入人工处理；
@@ -431,7 +460,7 @@ of_mcp current span，尚未实现 MultiRAG → of_mcp 的 `traceparent/tracesta
 
 ```text
 occurred_at, trace_id, event_id, mcp_call_id, interaction_id
-provider, provider_account_id_hash, tenant_id
+provider, provider_account_key_hash, tenant_id
 platform_user_id, enterprise_subject_id
 agent_id, tool_name, decision, reason_code
 token_issuer, token_audience, token_jti_hash, scopes
