@@ -113,7 +113,8 @@ MultiRAG
 of_mcp
   - OAuth/MCP protected-resource metadata
   - bearer token verifier
-  - Principal / scope / audit middleware
+  - immutable Principal / per-tool policy middleware
+  - auth audit / OTel / replay protection（EIM-A6）
   - business service adapters
 ```
 
@@ -257,17 +258,33 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   `secure` 强制认证、缺 issuer/JWKS/resource 配置即启动失败，只允许 mount，并因 A1 scope registry
   未登记 `hello:greet` 而关闭 hello。生产 profile/scope constants 与 A1 manifest 有机器锁定测试，
   不能单边漂移。A5 完成 internal actor token 之前，proxy 在 secure profile 下直接拒绝装配。
-- A4 前 `local` 和 `secure` 都由 CLI 机器拒绝绑定非 loopback；`fastmcp.json` 固定
-  `127.0.0.1`，CLI 与 JSON 启动面都启用 FastMCP `host_origin_protection=auto`。secure 已有认证不等于
-  已有工具授权，因此它当前也只用于本机验证，不能作为远程业务入口。
+- A4 完成后 `local` 和 `secure` 仍由 CLI 机器拒绝绑定非 loopback；`fastmcp.json` 固定
+  `127.0.0.1`，CLI 与 JSON 启动面都启用 FastMCP `host_origin_protection=auto`。这条限制现在是独立的
+  remote-release gate：工具授权完成不等于 A2/P3 动态委托、企业主体绑定、A6 审计或远程发布条件已经
+  完成，不能因 secure 已有 bearer 认证与 A4 授权就直接开放远程业务入口。
 - Protected Resource Metadata 与两条最小 health route 是显式公开面；它们不消费 bearer、不触发
   JWKS I/O，health 只返回单一状态，不暴露 profile、服务拓扑或 scope。其余未知 route 也不会被
   attacker-controlled bearer 诱导访问 trust source；真正受保护面固定为精确 `/mcp`。
-- `service.toml` 已声明 scopes，但生产 verifier 刻意使用 `required_scopes=[]`：A3 只认证 token 与
-  resource，不把“任一合法 scope”误当成“有权调用所有工具”。FastMCP endpoint-level 403 seam 已有
-  HTTP 回归，真正的工具所需 scope、immutable Principal、tenant/role/business/assurance policy 以及
-  `tools/list` 与 direct `tools/call` 一致授权仍属于 EIM-A4。
-- `medic` 的 `workcode` 是工具调用者自报，且工具会产生真实副作用。
+- `service.toml.scopes` 继续只定义服务的 scope 词表；A4 新增逐工具 policy，把 post-assembly 的 canonical
+  tool name 精确映射到 required scopes/tenant/assurance 等约束。缺 policy、孤儿 policy、重复 canonical
+  name、namespace collision 或未在当前 service scope 词表登记的 scope 都在启动/contract check 时
+  fail closed。确定性
+  `tool-policies.json` 快照的 `policy_revision` 为
+  `6f79e7ddf8f630993a054f284ebd5213424ffe39b252c661d16a2967ed6fdd67`；生产 verifier 的
+  endpoint-level `required_scopes=[]` 保持不变，避免把所有服务 scope 错误合并成一个全局门槛。
+- EIM-A4 已把 A3 严格 verifier 产出的 allowlisted claims 投影为框架无关、不可变的领域 Principal，并用
+  独立测试证明所有 A1 Gateway authentication-accepted vectors 都能经过该桥接。Principal 不携带
+  role/group/department、Provider 原始 ID 或上游 token；`auth_time` 只被携带并满足
+  `auth_time<=iat`，本轮没有实现 freshness/max-age step-up。
+- A4 使用两层同策略重验：外层 ASGI preflight 对真实 MCP 调用返回标准 HTTP 403；内层 FastMCP
+  middleware 过滤 `tools/list`，并在 `tools/call` 的实际执行前再次授权，防止“列表不可见”或一次
+  preflight 被误当作最终授权。缺 scope 返回 `insufficient_scope` 和完整 required scopes；tenant、
+  enterprise assurance 与业务拒绝不伪装为 scope challenge。外部 membership/role/business resolver
+  当前只是 fail-closed 扩展接口，现有 service policy 未启用它，也没有完成 schema-normalized 的业务
+  对象授权。
+- `medic` 的 `workcode` 和其他业务主体字段目前仍是工具调用者自报，且工具会产生真实副作用；从
+  verified Principal 注入并忽略调用方同名参数仍属于 M1/M2，不能把 A4 的 resolver seam 解释为该缺口
+  已经修复。
 - EIM-F4 已独立完成：of_mcp 精确升级到 FastMCP `4.0.0b2`，没有把身份或授权改造混入
   版本升级。
 - EIM-A1 已完成：两仓冻结了字节一致的 91-file JWT/JWKS corpus、严格 claims 和正反互操作测试；
@@ -282,10 +299,16 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
 - A3 用生产 verifier 逐条回归 A1 中面向 Gateway 的 **68** 个认证 case；定向 **126 passed**，
   `uv run --locked ofmcp verify` 六步全绿、**342 passed、2 existing skipped**，contract 无漂移；
   本仓文档账本的 `make verify` 同样全绿、**1904 passed**。
-- A2/P2/P3 尚未实现，因此 MultiRAG 还不会为当前 Principal 签发并逐请求发送 token；通用 MCP Client
-  也尚无完整 OAuth 获取 token 流。A3 后仍缺 A4 工具授权、A5 proxy internal actor token、持久
-  storage、审计和 Action/Idempotency Ledger。在 A4 前不得把 secure profile 作为可安全发布的业务
-  入口，也不能因为已经使用 FastMCP 4 `auth=` 就宣称企业身份链已经打通。下一认证授权任务是 A4。
+- EIM-A4 已在 of_mcp `74117a0` 完成；定向 **201 passed**，`uv run --locked ofmcp verify`
+  六步全绿、**417 passed、2 existing skipped**，contract snapshot 无漂移。该完成态只证明 of_mcp
+  能把已验证 token 构造成 Principal，并按确定性逐工具策略做发现/调用授权；不证明 MultiRAG 已经
+  产生这样的 token 或第三方 Channel 身份已经进入该 Principal。
+- A2/P1/P2/P3 尚未实现，因此 MultiRAG 还不会为当前 Principal 签发并逐请求发送 token；飞书的
+  `ExternalIdentityAssertion -> binding/directory -> Principal` 链也尚未完成，通用 MCP Client 仍无完整
+  OAuth 获取 token 流。of_mcp 仍缺 A5 proxy internal actor、A6 审计/OTel/replay、M1/M2 企业主体与
+  业务对象授权；持久 Interaction/Confirmation/Idempotency 也未完成。下一项 of_mcp 任务是 A6；
+  MultiRAG 应并行推进 `I1 -> I2 -> I3 -> P1`、`F1 + I3 -> I4 -> I6` 与 `C1 -> C2`，不能跳过
+  `C3 -> P2` 直接做 A2/P3。本仓文档收口后的 `make verify` 全绿、**1904 passed**。
 
 ---
 

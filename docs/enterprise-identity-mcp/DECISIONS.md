@@ -348,14 +348,31 @@ Channel 事件伪造 Identity Assertion grant，也不因为 FastMCP 提供 Mult
 of_mcp 的远程认证只能在 Gateway composition root 装配，service `build_server()` 不得持有 `auth=`。
 EIM-A3 先交付一个可独立验证的 OAuth Protected Resource 认证边界：严格验证 `mcp_access`、发布
 RFC 9728 metadata/challenge，并把客户端 token 错误与 verifier 基础设施故障分别映射为 401/503。
-EIM-A4 再在同一个受保护入口内构造 immutable Principal，执行工具 scope、tenant、assurance 与业务
-policy。分阶段不允许产生第二条绕过 Gateway 的业务入口。
+EIM-A4 已在同一个受保护入口内把 A3 allowlisted verified claims 投影为框架无关的 immutable
+Principal，并执行工具 scope、tenant、assurance 与业务 policy。Principal 不复制 role/group/department、
+Provider 原始标识或上游 token；FastMCP `AccessToken` 只存在于 auth adapter/composition 边界。分阶段
+实现不允许产生第二条绕过 Gateway 的业务入口。
 
 A3 production verifier 的 FastMCP `required_scopes` 固定为空。原因不是 scope 可选，而是 Gateway
 承载多个工具：把所有 enabled service scopes 合并成 endpoint-level required set，会迫使只调用
 `leave:read` 的最小权限 token 同时拥有 `medic:submit`，破坏 least privilege；只要求任意一个 scope
 又会让它越权调用其他工具。FastMCP global scope 403 作为 typed HTTP seam 保留测试，真实
-`tool -> required scopes` 由 A4 显式注册，并对 `tools/list` 和 direct `tools/call` 使用同一策略。
+`tool -> required scopes` 已由 A4 在 post-assembly canonical tool catalog 上显式注册，并对
+`tools/list` 和 direct `tools/call` 使用同一策略。`service.toml.scopes` 是词表，逐工具 policy 才是
+执行授权；缺失/孤儿 policy、重复 canonical name、namespace collision 和未在当前 service scope 词表
+登记的 scope 均 fail closed。
+Gateway 生成确定性 `tool-policies.json` contract snapshot，`policy_revision` 是不含自身 revision 字段的
+canonical policy document 的 SHA-256；当前 revision 为
+`6f79e7ddf8f630993a054f284ebd5213424ffe39b252c661d16a2967ed6fdd67`。
+
+A4 刻意保留两层重验。外层 ASGI preflight 在受保护 MCP HTTP request 上解析有界请求并返回真实
+HTTP 403；内层 FastMCP middleware 用同一个 registry 过滤 `tools/list`，且在 `tools/call` 进入实际工具
+前再次授权。这样既不把“不可见”误当成不可调用，也不把 preflight 结果跨越请求解析/执行边界当成
+永久 authority proof。FastMCP 默认 SSE 会提前发 response start，项目 response guard 因此把它保留到
+内层检查完成，确保 TOCTOU 二次拒绝/基础设施故障仍是 HTTP 403/500。缺 scope 返回
+`insufficient_scope` 和完整 required scopes；tenant、assurance、
+membership/role/business denial 不伪装 scope challenge。resolver 缺失、返回非法值或自身失败属于
+服务端 policy infrastructure failure，不能降成普通用户 403，更不能 fail open。
 
 部署 profile 同样分层但不能静默降级：
 
@@ -365,9 +382,16 @@ A3 production verifier 的 FastMCP `required_scopes` 固定为空。原因不是
 - A5 完成 `mcp_internal_actor` 换发前，proxy 在 secure profile 下拒绝装配，外部 bearer 永不透传；
 - RFC 9728 metadata 与最小 health 是显式公开面，health 不泄露 profile/服务拓扑/scope；这些公开
   route 和未知 route 上的 Authorization 不得触发 JWKS I/O，受保护业务 path 固定为精确 `/mcp`。
-- A4 前 secure 与 local 一样由 CLI 机器拒绝绑定非 loopback；CLI 和 `fastmcp.json` 都启用
-  `host_origin_protection=auto`。secure bearer 认证不能替代尚未实现的工具授权。
+- A4 完成后 secure 与 local 仍由 CLI 机器拒绝绑定非 loopback；CLI 和 `fastmcp.json` 都启用
+  `host_origin_protection=auto`。这是独立 remote-release gate，而不是 A4 完成条件的自动副作用；
+  A2/P3 动态委托、企业主体、A6 审计/重放与上线证据未完成前继续保持 loopback。
 
 因此，A3 通过只证明“Gateway 能正确认证属于自己的短 token，并在 trust source 故障时 fail
-closed”。它不证明调用者拥有任何具体工具、企业主体或业务对象权限。A4 未完成前不发布 secure
-业务入口；A2/P3 未完成前也不宣称通用 MCP Client OAuth 取 token 或飞书用户逐请求委托已闭环。
+closed”；A4 通过证明“Gateway 能把该 token 构造成 Principal，并按完整工具策略快照同时约束发现与
+执行”。两者仍不证明 MultiRAG issuer/request-scoped bearer 或飞书用户逐请求委托已闭环。
+
+A4 的 external membership/role/business resolver 是 future seam，当前启用的 service policy 没有依赖
+这些 resolver；业务对象输入也尚未经过统一 tool schema normalization，所以不能宣称已经具备生产级
+对象授权。`auth_time` 目前只作为已验证 claim 携带并满足 `auth_time<=iat`，没有 freshness/max-age
+策略。secure 继续保持 loopback，下一项 of_mcp 任务是 A6；MultiRAG 先推进身份数据、binding、
+Channel assertion 与 P1/P2，再进入 A2/P3。

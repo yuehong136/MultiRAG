@@ -125,13 +125,22 @@
   per-key 负缓存、跨未知 key 全局 cooldown、负缓存硬上限、完成时钟退避、原子 last-known-good 替换、
   上游失败且无新鲜 snapshot 时 fail closed；
 - **A3/A4 scope policy**：A3 证明已登记额外 scope 不使 token 无效、未知/畸形 scope fail closed，并以
-  test-only endpoint 门槛钉住 FastMCP 403 seam；A4 才证明缺当前工具所需 scope 在认证成功后返回 403
+  test-only endpoint 门槛钉住 FastMCP 403 seam；A4 证明缺当前工具所需 scope 在认证成功后返回 403
   `insufficient_scope`，一次给全所需 scopes；
-- **A4 business subject**：只能从已验证 `{type, issuer, subject, tenant}` 读取，并与 service 所需类型/issuer/
-  tenant 一致；请求参数的 `workcode` 被忽略；
+- **A4 Principal bridge**：A1 Gateway authentication-accepted vectors 经 A3 production verifier 后全部能
+  投影为 immutable Principal；mutable claims 后改不影响 Principal，role/group/department/Provider 原始
+  字段被 allowlist 拒绝，跨请求/并发 context 不串主体且请求结束后清空；
+- **A4 tool registry**：真实 assembly 后的 canonical tool catalog 与 `service.toml.tool_policies` 一一对应；
+  缺失/孤儿 policy、未在当前 service scope 词表登记的 scope、重复 canonical name、namespace
+  collision 拒绝；snapshot 排序稳定、
+  `policy_revision` 可复算且 contract drift 被门禁发现；
+- **A4 business subject 边界**：已验证 `{type, issuer, subject, tenant}` 与 policy 所需类型/issuer/tenant
+  精确匹配；当前 service policy 未启用 external business requirement，使调用参数 `workcode` 真正被
+  忽略仍是 M1/M2 的未来验收，不能记入 A4 完成证据；
 - **A3/A4 policy error**：A3 的 verifier 故障在认证 middleware 内返回 503，且第三方异常不泄露；A4
-  的 tenant/membership/role/business denial 返回 403 且不伪装 scope challenge；没有可用的
-  新鲜 JWKS cache 时返回 503 verifier unavailable，不把基础设施故障误报为 401；
+  的 tenant/membership/role/business denial 返回 403 且不伪装 scope challenge，external resolver
+  缺失/失败/非法结果返回 500 invariant failure 而不是用户 403；没有可用的新鲜 JWKS cache 时返回
+  503 verifier unavailable，不把基础设施故障误报为 401；
 - sensitive tool：确认挑战、过期、不同用户/不同参数重放、双击和并发只执行一次；
 - MRTR：合法 `inputResponses + requestState` 可恢复，篡改/过期/错误 schema/revision 明确失败；再次
   返回 `InputRequiredResult` 时不丢失 actor/resource 绑定；
@@ -152,12 +161,39 @@ A3 完成态的最小回归集合包括：
   完成时钟 backoff、过期 snapshot 的 503，以及 NaN/Infinity cache/timeout 配置拒绝；
 - Gateway composition 覆盖 local 匿名 loopback、secure 配置 fail-fast、resource/audience 精确一致、
   scope/profile constants 与 A1 manifest 锁定、hello 关闭、secure mount-only/proxy 拒绝、最小 health
-  输出；CLI 与 `fastmcp.json` 启用 `host_origin_protection=auto`，A4 前 local/secure 都拒绝非 loopback。
+  输出；CLI 与 `fastmcp.json` 启用 `host_origin_protection=auto`，A3 handoff 时 local/secure 都拒绝非
+  loopback。
 
 完成证据：of_mcp `e4ab560` 定向 **126 passed**；`uv run --locked ofmcp verify` 六步全绿、
-**342 passed、2 existing skipped**，contract 无漂移。A3 这些测试仍不证明 A4 的 immutable Principal、
-真实 tool required-scopes、`tools/list`/direct call 同策略、tenant/business authorization，也不证明
-A2/P3 的 token 获取与逐请求委托；A4 前 secure 被机器限制为仅本机验证，不得做远程业务发布验收。
+**342 passed、2 existing skipped**，contract 无漂移。该段是 A3 历史证据，不用 A4 后来的测试结果
+倒填。
+
+A4 完成态的最小回归集合包括：
+
+- 所有 A1 Gateway authentication-accepted vectors 经过 production verifier 与
+  `principal_from_verified_claims()`，normalized subject/tenant/scopes 等关键字段一致；
+- Principal、enterprise subject、policy model 和 registry 深度不可变；forbidden role/provider claims
+  fail closed；同一进程中的并发请求获得各自 Principal，结束后 context reset；
+- enabled service 的实际工具清单逐项匹配 policy，缺失/孤儿/重复/namespace collision 负向全部执行；
+  `tool-policies.json` 无漂移且 revision 为
+  `6f79e7ddf8f630993a054f284ebd5213424ffe39b252c661d16a2967ed6fdd67`；
+- `tools/list` 与 direct `tools/call` 使用同一 registry；外层 preflight 通过后，内层仍在执行前重验，
+  resolver/策略在两次检查之间变化时不得执行工具；default SSE 模式不得提前固定 HTTP 200，二次
+  deny 和 resolver/invariant failure 必须分别保持真实 403/500；
+- 真实 HTTP 分层断言 scope 缺失为 403 `insufficient_scope` 且 challenge 给出完整 scopes，tenant/ACR/
+  AMR/enterprise subject 为 403 `authorization_denied` 或 `assurance_required` 且无 scope challenge，
+  external resolver invariant failure 为 500；
+- malformed/超界 MCP request、方法/工具路由不一致、未知或未注册 tool 必须在业务函数前 fail closed；
+  body size、现代 MCP header 与 JSON 最大嵌套深度 64 需单独测试，900 层参数必须返回 400 且不执行，
+  不能只靠 FastMCP parser 的后置错误；
+- local 保持匿名 loopback，secure 保持 bearer-authenticated loopback，Host/Origin protection 与 A3
+  401/503 负向不回归。
+
+A4 提交锚点为 of_mcp `74117a0`；定向 **201 passed**，`uv run --locked ofmcp verify` 六步全绿、
+**417 passed、2 existing skipped**，contract snapshot 无漂移。这些测试仍不证明
+A2/P3 token 获取与逐请求委托、飞书 Channel identity→Principal、M1/M2 业务主体/对象授权、A5 internal
+actor、A6 audit/replay 或 `auth_time` freshness；secure 仍被机器限制为仅本机验证，不得做远程业务发布
+验收。
 
 ### 3.4 跨仓端到端测试
 
@@ -255,8 +291,9 @@ Resource Server 测试不能把 issuance/delegation denial 伪造成 `invalid_to
   再由项目 oracle 用 manifest 时间、30 秒 skew 和 profile max TTL 确定性判断；签名、alg、key 和
   issuer/audience 校验仍必须真实执行；
 - A1 冻结 assurance claim 的结构和 profile registry：`auth_time<=iat`，`acr` 必须在
-  `allowed_acr_values`，`amr` 为非空无重复且每项在 `allowed_amr_values`。A4 才决定具体工具要求的
-  ACR/AMR 组合、风险等级与 step-up policy；
+  `allowed_acr_values`，`amr` 为非空无重复且每项在 `allowed_amr_values`。A4 已支持逐工具的 ACR
+  允许值、完整 required AMR 与 enterprise subject 匹配；`auth_time` freshness/max-age 仍未实现，不能
+  只因 claim 存在就宣称完成近期 step-up；
 - 合法 case 的 normalized claims 必须逐字段相同；非法 case 比较项目稳定错误码，不锁第三方异常
   类型/文案。所有 case 必须执行，无 skip/xfail。
 
@@ -311,7 +348,9 @@ mypy 65 files 全绿，unit **1904 passed in 25.76s**。of_mcp `3e1d5ac` 定向 
 错误层也必须钉板：A3 负责无效 profile/claims/签名的 401 与 JWKS 故障且无新鲜 cache 的 503；A4
 负责有效 token 的 tenant/membership/role/business 403 和工具所需 scope/assurance 403。A3 的
 test-only endpoint scope seam 可以证明框架保持标准 `insufficient_scope`，但不能替代 A4 对真实工具
-策略的测试。所有分层都必须断言第三方库异常不会直接成为公开错误文本。
+策略的测试。external resolver 缺失、失败或返回非法结果是 500 `authorization_invariant_failure`，
+不是 `authorization_denied`；外层 HTTP preflight 与内层 FastMCP call-before-execute 两层都必须
+fail closed。所有分层都必须断言第三方库异常和内部 resolver reason 不会直接成为公开错误文本。
 
 corpus 还要扫描 normalized claims/JWKS/token payload，确认不存在 Provider 原始 ID、姓名、邮箱、
 手机号、员工号明文、role/group/department、飞书/OA token、Channel/表单正文、确认状态或真实 Secret。
@@ -446,3 +485,19 @@ make smoke
 `of_mcp` 代理必须先读该仓自己的 `AGENTS.md`/README/CI，再记录等价的 lint、typecheck、unit、
 integration 命令；不得把 MultiRAG 的门禁命令机械复制过去。真实飞书和业务沙箱 E2E 需要管理员
 明确批准，且必须使用测试企业/测试患者数据。
+
+EIM-A4 的最终证据至少要记录以下命令，不得只运行一个 happy-path HTTP 测试：
+
+```bash
+uv lock --check
+uv run --locked pytest packages/ofmcp-auth/tests packages/ofmcp-core/tests \
+  packages/ofmcp-devkit/tests apps/gateway/tests
+uv run --locked ofmcp contract diff
+uv run --locked ofmcp verify
+git diff --check
+```
+
+当前提交锚点为 of_mcp `74117a0`：上述定向命令 **201 passed**，完整 `ofmcp verify` 六步全绿、
+**417 passed、2 existing skipped**，contract snapshot 无漂移；MultiRAG 文档收口后的 `make verify`
+全绿、**1904 passed**。`contract diff` 的可读输出不能替代 `ofmcp verify` 的 no-drift gate，A4 单仓
+全绿也不能替代未来 A2/P3/飞书链的跨仓 E2E。

@@ -274,14 +274,20 @@ FastMCP 实现/产品资料（不是 MCP 标准）：
 
 - `RemoteAuthProvider` 已用于 EIM-A3，负责 RFC 9728 protected-resource metadata 和 FastMCP
   auth 接口；框架默认 backend 无法把 typed JWKS outage 映射为 503，因此精确 `/mcp` bearer 和
-  401/503 由项目 middleware 控制。`require_scopes`/component auth 留给 A4 同时过滤 `tools/list` 和
-  保护 direct call。
+  401/503 由项目 middleware 控制。EIM-A4 继续保持 production endpoint `required_scopes=[]`，把
+  A3 `AccessToken.claims` 立即投影成项目 immutable Principal，再由逐工具 policy registry 授权。
 - `JWTVerifier` 可以复用基础 JOSE/JWKS、issuer/audience 和 scope 检查，但 4.0.0b2 的实现不是 EIM-A1
   profile oracle。A3 因此使用 joserfc + 项目 `StrictMcpAccessVerifier`，补齐 `typ/kid`、必需
   claims/types、`iat/nbf/max_ttl`、`token_use`、tenant、scope registry 和 cross-profile/resource；
-  production `required_scopes=[]`，真实工具级 403 不提前从 A4 挪入认证层。
+  A4 不替换或放宽这条认证边界。
+- FastMCP root `Middleware.on_list_tools`/`on_call_tool` 已用于 A4 内层策略：前者过滤发现，后者在实际
+  `call_next` 前再次授权。FastMCP component middleware 的拒绝会表现为 MCP tool result/HTTP 200，不能
+  单独满足 OAuth Resource Server 的真实 HTTP 403 契约；因此项目外层 ASGI preflight 负责
+  `insufficient_scope`/`authorization_denied`/`assurance_required` 的 HTTP 403，内层仍负责 direct/internal
+  call 与 TOCTOU 重验。两层消费同一 policy registry，不能合并成单次检查。
 - FastMCP HTTP `host_origin_protection="auto"` 已同时用于 CLI 和 `fastmcp.json` 启动面；它是
-  Host/Origin/DNS rebinding 防线，不是工具授权。A4 前 local/secure 仍一律拒绝非 loopback。
+  Host/Origin/DNS rebinding 防线，不是工具授权。A4 完成后 local/secure 仍一律拒绝非 loopback；
+  解除需要独立 remote-release gate，不是框架开关。
 - MultiAuth 只有出现多个真实 token issuer 后才评估；“第一个 verifier 成功”不等于 tenant、角色、
   业务对象或 assurance 已授权。
 - 领域 Principal、policy 和业务 service 不 import FastMCP。auth/provider 对象只存在 composition root
@@ -291,14 +297,16 @@ FastMCP 实现/产品资料（不是 MCP 标准）：
 
 | 项目 | 参考内容 | 本项目采用/拒绝 |
 |---|---|---|
-| [agentgateway](https://agentgateway.dev/docs/standalone/latest/configuration/security/mcp-authz/) | MCP JWT/resource policy、工具可见性、backend credential exchange | 采用 gateway 验证、`tools/list`/direct call 同策略、resource-bound 下游换发；不透传外部 bearer |
-| [IBM ContextForge](https://ibm.github.io/mcp-context-forge/latest/manage/rbac/) | resource visibility 与 RBAC 双层授权、server-side membership | 采用“可见不等于可执行”和 fail closed；不把易变 team/role 复制进短 token |
-| [LibreChat MCP authority](https://github.com/danny-avila/LibreChat/blob/d89b11d34dce834ed600c48e2f2856500c806af3/packages/api/src/mcp/authority/index.ts) | Principal/resource credential 隔离、执行前 authority proof | 采用 per-principal/per-resource 隔离和 TOCTOU 重验；不照搬其应用数据模型 |
+| [agentgateway](https://agentgateway.dev/docs/standalone/latest/configuration/security/mcp-authz/) | MCP JWT/resource policy、工具可见性、backend credential exchange | A4 已采用 Gateway verifier 后构造 Principal、`tools/list`/direct call 同策略；A5 才做 resource-bound 下游换发，外部 bearer 永不透传 |
+| [IBM ContextForge](https://ibm.github.io/mcp-context-forge/latest/manage/rbac/) | resource visibility 与 RBAC 双层授权、server-side membership | A4 已采用“可见不等于可执行”、显式 policy snapshot/revision 与 fail closed；不把易变 team/role 复制进短 token，external membership/business resolver 仍只是 future seam |
+| [LibreChat MCP authority](https://github.com/danny-avila/LibreChat/blob/d89b11d34dce834ed600c48e2f2856500c806af3/packages/api/src/mcp/authority/index.ts) | Principal/resource credential 隔离、执行前 authority proof | A4 已采用 request-scoped Principal isolation 和 call-before-execute TOCTOU 重验；P3 才做 per-principal/per-resource credential 隔离，不照搬其应用数据模型 |
 | [Open WebUI tool grants](https://github.com/open-webui/open-webui/blob/main/backend/open_webui/utils/tools.py) | user/group grants 在工具暴露前过滤 | 采用服务端工具可见性思想；group grant 不能替代 MultiRAG tenant 和业务对象授权 |
 
 这些项目用于校准网关/策略/凭据隔离，不构成引入另一个 MCP 平台的决定。MultiRAG 继续拥有
 Principal 与 Agent/知识库权限，of_mcp 继续拥有 Resource Server、工具策略和业务 adapter；任何
 平台的 unsigned identity header、全局 server credential 或 UI 可见性都不能作为最终授权证据。
+当前 A4 的 external resolver API 也不等于已经获得 ContextForge 式生产 PDP：现有 service policy 未
+启用外部要求，raw tool arguments 尚无统一 schema-normalized 业务对象契约，M1/M2 必须另行验收。
 
 ---
 

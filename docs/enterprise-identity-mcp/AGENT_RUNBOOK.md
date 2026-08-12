@@ -144,12 +144,13 @@ MCP Foundation 的 F2/F3/F4/F6/F7/F8 已于 2026-08-12 完成。冷启动 Agent 
    不与根环境在同一解释器导入。`make mcp-compat` 当前协议矩阵为 **13/13 PASS**；任何后续
    SDK/FastMCP/transport 改动都必须复跑，而不能用 mock 或 sibling import 替代。
 4. **下一协议相关入口**：EIM-A1 已完成并固定 token/JWKS test vectors；of_mcp EIM-A3 已由
-   `e4ab560` 完成 strict Resource Server，但它只交付 401/503 认证边界，工具级
-   403/Principal/可见性仍等待下一项 A4。MultiRAG EIM-A7 的 A1 前置已满足，仍必须等待 P1，才实现
-   自己独立的 inbound OAuth Resource Server、Principal/scope 和工具可见性；
+   `e4ab560` 完成 strict Resource Server，EIM-A4 已由 `74117a0` 接续 immutable Principal、
+   per-tool policy 与真实 403。MultiRAG EIM-A7 的 A1 前置已满足，仍必须等待 P1，才实现自己独立的
+   inbound OAuth Resource Server、Principal/scope 和工具可见性；
    `InputRequiredResult` 目前只由 EIM-F3 暴露，EIM-U14 还必须等待 P3/A4/C3，才实现持久化暂停/恢复、
    Principal 绑定、revision/CAS 和重授权。当前协议升级**不证明** Principal、scope、delegated token、
-   OAuth Resource Server 或 InteractionSession 已实现。
+   OAuth Resource Server 或 InteractionSession 已在 MultiRAG/Channel 端到端实现；of_mcp A4 的完成态
+   不能替代 P1/P2、A2/P3 或飞书 identity resolver。
 
 HTTP 调用超时的已验证契约是：本地等待及时取消，直接并发调用不再被单 server FIFO 队列产生
 head-of-line blocking；远端是否停止取决于 transport/server 的协作式取消，服务端仍可能完成调用。
@@ -195,9 +196,9 @@ A1 禁止顺手添加生产 issuer/verifier、FastMCP `auth=`、JWKS HTTP route�
 动态 Authorization 或真实 Secret。A3 才把基础 JWT/JWKS verifier 与严格项目 validator 装配到
 of_mcp composition root；A2/P3 才签发和传递 request-scoped token。
 
-### 4.7 EIM-A3 完成基线与 A4 开工边界
+### 4.7 EIM-A3/A4 完成基线与下一任务边界
 
-接手 A4 或修改 A3 认证基线时，以 of_mcp `e4ab560` 为完成锚点。A3 实现包含
+修改 A3 认证基线时，以 of_mcp `e4ab560` 为完成锚点。A3 实现包含
 `packages/ofmcp-auth/`、Gateway `auth.py/settings.py`、`resource_auth_mode` 和
 `deploy/profiles/secure.toml`。不得回退以下不变量：
 
@@ -212,11 +213,10 @@ of_mcp composition root；A2/P3 才签发和传递 request-scoped token。
 4. `local` 是匿名开发 profile；`secure` 缺配置即 fail-fast、hello disabled、mount-only。A5 前 proxy
    不能进入 secure Gateway；production scope/profile constants 必须逐字段匹配 A1 manifest；
 5. production `required_scopes=[]`。这不是放弃授权，而是避免 endpoint 级 union-of-all-scopes；
-   test-only 403 seam 继续保留，真实 `tool -> required scopes`、Principal、tenant/assurance 和
-   `tools/list`/direct call 同策略必须由 A4 实现；
+   test-only 403 seam 继续保留，真实 `tool -> required scopes` 由 A4 registry 独立执行；
 6. health 只返回最小状态；日志、HTTP 错误和 fixture 不包含 bearer、claims、subject、患者或真实配置；
-7. A4 前 local/secure 都由 CLI 机器拒绝非 loopback；CLI 与 `fastmcp.json` 都启用
-   `host_origin_protection=auto`。secure 有 bearer 认证也不能远程发布，因为工具授权尚未实现。
+7. A3 handoff 时 local/secure 都由 CLI 机器拒绝非 loopback；CLI 与 `fastmcp.json` 都启用
+   `host_origin_protection=auto`。A4 后这条限制继续作为独立 remote-release gate。
 
 在 `of_mcp` checkout 至少执行并记录：
 
@@ -227,24 +227,56 @@ uv run --locked ofmcp verify
 git diff --check
 ```
 
-完成证据为定向 **126 passed**，production verifier 其中逐条消费 A1 的 **68** 个 Gateway
+以上 A3 完成证据为定向 **126 passed**，production verifier 其中逐条消费 A1 的 **68** 个 Gateway
 authentication cases；`uv run --locked ofmcp verify` 六步全绿、**342 passed、2 existing skipped**，
 contract 无漂移。后续触碰 A3 路径必须至少复跑上述命令并保持这些安全负向。
 
-A3 完成后的下一项是 A4，不是先部署业务入口。A4 可以复用已经验证的 FastMCP `AccessToken.claims`，
-但必须立即转成框架无关的 immutable Principal，再建立显式 tool policy registry；不得把
-`AccessToken.scopes`、工具不可见或 metadata 声明当成完整授权。A2 issuer、P2/P3 request-scoped bearer
-仍未实现，因此即使 secure Gateway 能验证固定测试 token，通用客户端 OAuth 获取 token 和飞书用户
-委托链也尚未闭环。
+A4 以 of_mcp `74117a0` 为完成锚点；冷启动 agent 必须同时阅读以下实现面，不能只看
+FastMCP middleware：
+
+1. `packages/ofmcp-auth/.../claims.py` 与 `context.py`：A3 allowlisted claims 立即投影成 framework-
+   independent immutable Principal；role/group/department/Provider raw ID 不进入模型，请求结束恢复
+   context；A1 Gateway accept vectors 全部走 bridge；
+2. `packages/ofmcp-core/.../tool_policy.py`、`assembly.py` 与各 service `service.toml`：registry 针对
+   post-assembly canonical tool catalog 完整构造；缺失/孤儿/重复/namespace collision/未在当前
+   service scope 词表登记的 scope fail closed；
+3. `apps/gateway/contract/tool-policies.json` 与 devkit contract：snapshot 排序稳定，
+   `policy_revision=6f79e7ddf8f630993a054f284ebd5213424ffe39b252c661d16a2967ed6fdd67`，策略
+   变更必须通过 snapshot review，不能只改运行时；
+4. 外层 ASGI authorization preflight：对真实 MCP `tools/call` 返回标准 HTTP 403；内层 FastMCP
+   middleware：用同一 registry 过滤 `tools/list`，并在工具执行前再次授权。两层都要保留，不能因为
+   component denial 最终也能产生 MCP error 就删除外层 HTTP 语义，也不能因为 preflight 存在就删除
+   call-before-execute 的 TOCTOU 重验；default SSE response guard 还会把响应起始消息保留到内层检查
+   完成，确保第二次拒绝/基础设施故障仍是真实 403/500，而不是 FastMCP 默认的 HTTP 200 tool error；
+5. tenant、ACR/AMR 与可选 enterprise subject 已进入 A4 policy；external membership/role/business
+   resolver 只是 fail-closed future seam，当前 service policy 未启用。resolver missing/invalid/failure
+   是 500 invariant failure；raw business arguments 尚未形成 schema-normalized object authorization；
+6. `auth_time` 只携带并校验 `<=iat`，没有 freshness/max-age；local anonymous 与 secure bearer profile
+   继续 machine-enforced loopback。A4 不交付 A2/P3、飞书 Principal、A5/A6、M1/M2 或 U14/U15。
+
+在 `of_mcp` checkout 对 A4 至少执行并记录：
+
+```bash
+uv lock --check
+uv run --locked pytest packages/ofmcp-auth/tests packages/ofmcp-core/tests packages/ofmcp-devkit/tests apps/gateway/tests
+uv run --locked ofmcp contract diff
+uv run --locked ofmcp verify
+git diff --check
+```
+
+A4 定向 **201 passed**；`uv run --locked ofmcp verify` 六步全绿、**417 passed、2 existing skipped**，
+contract snapshot 无漂移。A4 后下一项 of_mcp 任务是 A6；MultiRAG 可并行做
+`I1 -> I2 -> I3 -> P1`、`F1 + I3 -> I4 -> I6`、`C1 -> C2`，只有
+`C3 -> P2` 后才能进入 A2/P3。secure 在独立远程发布闸门解除前仍不能作为远程业务入口。
 
 ## 5. 跨仓协调
 
 | 变更 | 生产者 | 消费者 | 安全部署顺序 |
 |---|---|---|---|
 | Channel structured assertion | worker | MultiRAG private API | tolerate API → emit worker → consume API → remove legacy |
-| MCP access token | MultiRAG signer | `of_mcp` verifier | A3 verifier/JWKS 能力先并保持业务未发布 → A4 工具授权 → A2 signer emit → P3 逐请求 bearer → 强制 secure 入口；不得在 A4/A2/P3 前把固定测试 token 能通过误作闭环 |
+| MCP access token | MultiRAG signer | `of_mcp` verifier/authorizer | A3 verifier/JWKS + A4 Principal/tool policy 已先行并保持业务未远程发布 → P1/P2 → A2 signer emit → P3 逐请求 bearer → A6/企业主体/上线证据 → 独立闸门决定 secure 远程入口；不得把固定测试 token 通过误作 Channel 委托闭环 |
 | EIM-A1 corpus | MultiRAG canonical generator + 两仓本地副本 | PyJWT/joserfc 独立 oracle | 已完成：of_mcp `3e1d5ac` → MultiRAG 本次 A1 变更；91-file corpus 字节一致，digest `59f82684aa06365f45623ce9bfad336d487f2c9351879266a6b2ab21bf8fe208`；运行时无依赖 |
-| 新 scope/tool metadata | `of_mcp` policy | MultiRAG Agent/MCP config | resource 端先兼容 → 调用端请求；未知 scope fail closed |
+| 新 scope/tool metadata | `of_mcp` policy snapshot | MultiRAG Agent/MCP config、P3 cache/audit | resource 端先提交 canonical `tool-policies.json` 与 `policy_revision` → 调用端按 revision 重算请求与缓存；未知 scope fail closed，不从运行时可见列表反推权限，也不把 revision 自动塞入当前 A1 token profile |
 | confirmation contract | `of_mcp` challenge | MultiRAG card/channel | resource 端先返回可识别 challenge → UI 接线 → 强制确认 |
 | MCP 双向兼容 fixture | MCP SDK 2/FastMCP 4 主运行时 + PEP 723 FastMCP 3 真实 legacy 子进程 | 两仓 compatibility test | F2/F3/F4/F6/F7/F8 已完成并形成 13/13 基线；后续每次协议/transport 变更逐格复跑；`of_mcp` F4 锚点 `23dd1fd`；不得用本机 sibling import 代替可复现安装 |
 | MRTR interaction | `of_mcp` `input_required`/legacy adapter | MultiRAG U14 state machine，再到 U15 renderer | 先固定 transport-neutral request/response 与恢复语义 → 飞书表单渲染 → 敏感动作最后强制 U7/M3/M4 |

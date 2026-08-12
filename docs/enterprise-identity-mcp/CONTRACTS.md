@@ -396,9 +396,9 @@ claims。Channel `ExternalIdentityAssertion` 不属于本节，不能被任一 R
 
 | Claim | 出现条件与语义 |
 |---|---|
-| `auth_time` | 上游确实证明满足当前操作 assurance 时；integer NumericDate，不能晚于 `iat` |
-| `acr` | 已验证的 assurance class；A1 按 profile `allowed_acr_values` 校验，A4 决定工具需要哪一级 |
-| `amr` | 已验证的 authentication methods；A1 校验非空、无重复且均在 `allowed_amr_values`，A4 决定工具策略 |
+| `auth_time` | 上游确实证明认证时间时；integer NumericDate，不能晚于 `iat`；A4 只携带该值，未实现 freshness/max-age |
+| `acr` | 已验证的 assurance class；A1 按 profile `allowed_acr_values` 校验，A4 可按工具 policy 要求允许值集合 |
+| `amr` | 已验证的 authentication methods；A1 校验非空、无重复且均在 `allowed_amr_values`，A4 可按工具 policy 要求完整 method 集合 |
 | `enterprise_subject` | 目标 service 明确要求时；`{type, issuer, subject, tenant}` |
 
 `enterprise_subject.subject` 是面向目标 resource 的不透明业务主体，`type` 固定为 service 声明的
@@ -429,6 +429,7 @@ Token Broker 最终签发的 scopes 固定取：当前工具需要 scopes、已�
 | token 有效，但缺当前工具全部所需 scope | 403 `insufficient_scope`；一次返回完整所需 scopes | `required_scope_missing` / `MCP_SCOPE_DENIED` |
 | tenant/membership/role/policy/业务对象拒绝 | 403；`oauth_error=null`，不返回 scope challenge | `tenant_mismatch` 或策略 reason / `MCP_AUTHORIZATION_DENIED` |
 | 当前工具要求企业身份保证但 token 未携带/类型不符 | 403；`oauth_error=null`，不返回 scope challenge | `enterprise_subject_required`/`enterprise_subject_type_mismatch` / `MCP_ASSURANCE_REQUIRED` |
+| 工具 policy 声明需要 external resolver，但 resolver 缺失、失败或返回非法结果 | 500 `authorization_invariant_failure`，fail closed；不伪装成用户 403 | 内部 `policy_resolver_required`/`policy_resolver_failed`/`policy_resolver_invalid`；公开响应不泄露细节 |
 | JWKS 不可用且没有仍新鲜的可信缓存 | 503，fail closed | `verifier_unavailable` / `MCP_VERIFIER_UNAVAILABLE` |
 
 缺少或畸形 `scope` 属于无效 token；缺少某个合法工具 scope 属于认证成功后的
@@ -436,15 +437,48 @@ Token Broker 最终签发的 scopes 固定取：当前工具需要 scopes、已�
 是 401；有效 token 的 tenant 与当前服务端 resource context 不匹配是 403 authorization denial。
 角色或业务策略拒绝不得伪装成 step-up scope，否则会泄露策略并诱导客户端无意义重试。
 
-以上表格是 **A3+A4 的最终错误契约**，不能把它误读为 A3 单独交付全部分支。A3 已实现的
+以上表格是 **A3+A4 的当前错误契约**，不能把它误读为 A3 单独交付全部分支。A3 已实现的
 Resource Server 认证边界公开两类结果：客户端 bearer/profile 无效为 401；verifier/JWKS trust source
 不可用且无新鲜可信 cache 为 503。FastMCP 的 endpoint-level `required_scopes` 仍保留并有独立 403
 HTTP 回归，但生产 Gateway 固定传空列表；否则把所有 enabled services 的 scope 放在一个 endpoint
 门槛上，会错误要求最小权限 token 同时拥有所有服务权限。
 
-真实生产 403 从 A4 开始：先把验证后的 claims 构造为 immutable Principal，再按当前 tool 的完整
-required scopes、tenant/membership、enterprise assurance 和业务 policy 决策；`tools/list` 与 direct
-`tools/call` 必须走同一策略。A3 前后都不得因为 token 在认证层通过，就推断它有权调用列表中的工具。
+A4 已把验证后的 claims 构造为 immutable Principal，再按当前 tool 的完整 required scopes、tenant、
+enterprise assurance 和配置化业务 policy 决策。外层 ASGI authorization preflight 对直接 MCP
+`tools/call` 返回真实 HTTP 403；内层 FastMCP middleware 用同一 registry 过滤 `tools/list`，并在
+`tools/call` 实际执行前再次授权。二次检查是 TOCTOU 防线，列表不可见和一次 preflight 都不能替代
+执行点授权。FastMCP 默认 SSE 可能先发 HTTP 200，因此外层 response guard 必须保留响应起始消息，
+直到内层检查允许或给出覆盖结果；二次拒绝与授权基础设施故障仍分别输出真实 403/500。A3 前后都
+不得因为 token 在认证层通过，就推断它有权调用列表中的工具。
+
+当前 external membership/role/business resolver 只是 fail-closed 扩展接口，启用的 service policy
+没有声明这些 external requirements。resolver 输入虽使用不可变 canonical JSON bytes，但尚未形成所有
+工具共享的 schema-normalized 业务对象 contract；因此不能据此宣称 production business-object
+authorization 已完成。DISCOVER 阶段没有具体业务对象上下文，带 external requirement 的 future tool
+当前会保守隐藏；M2 在任何实际 service 启用前还必须冻结 discovery UX 与对象输入契约。该能力必须在
+M2 结合验证后的 tool input 与权威业务系统再落地。
+
+#### 6.3.1 逐工具 policy registry 与 contract snapshot
+
+`service.toml.scopes` 只登记服务可用的 scope 词表；`tool_policies` 才给每个工具分配
+`required_scopes`、`accepted_acr_values`、`required_amr`、可选 `enterprise_subject` 和
+`external_requirements`。registry 必须在所有 mount/namespace assembly 完成后，针对最终 canonical
+tool catalog 一次性构造：
+
+- 每个暴露工具必须且只能有一个 policy；缺失或孤儿 policy fail closed；
+- policy scope 必须属于当前 service 的 scope 词表；secure profile 是否属于 A1 resource registry 仍由
+  A3 的 profile assembly 门禁单独校验，local 的 `hello:greet` 不因此伪装成 production scope；
+- 重复 canonical tool name、service namespace/canonicalization collision 在启动时拒绝；
+- policy model、registry 和投影后的 Principal 都是不可变对象，调用期间不能被原位改写；
+- 发现与执行只消费同一个 registry，不允许维护两套逐渐漂移的策略表。
+
+`ofmcp contract` 必须生成并校验排序稳定的 `apps/gateway/contract/tool-policies.json`。快照包含
+`snapshot_format`、`profile`、service id/namespace/scope 词表，以及每个 canonical tool 的 service id、
+required scopes、ACR/AMR、enterprise subject 和 external requirements。`policy_revision` 等于移除
+revision 字段后的 canonical JSON document 的 SHA-256；当前值为
+`6f79e7ddf8f630993a054f284ebd5213424ffe39b252c661d16a2967ed6fdd67`。策略变更必须显式刷新快照并
+经过 contract review；A6 运行时审计和后续 P3 token/cache key 必须使用同一 revision，不从文件
+mtime 或未排序映射推导。
 
 ### 6.4 JWKS 和轮换
 
@@ -477,10 +511,11 @@ Gateway 部署契约额外固定：`resource_auth_mode` 与历史 `oauth_enabled
 A1 registry 都在装配期失败。secure 在 A5 前只接受 mount service，proxy 不能形成绕过 Gateway 的
 直连面。production profile/scope constants 必须以测试逐字段匹配 A1 manifest，不得只改运行时词表。
 
-A4 前 `local` 与 `secure` 两种 profile 都必须在 CLI/启动门禁机器拒绝非 loopback host；secure 已有
-bearer 认证也不例外，因为尚无工具级授权。`fastmcp.json` 固定 loopback，CLI 与 JSON 启动面都启用
-`host_origin_protection=auto`，防止 Host/Origin/DNS rebinding 绕开本机边界。直到 A4 完成并新增独立
-远程发布门禁前，secure 只能用于本机验证。
+A4 完成后 `local` 与 `secure` 两种 profile 仍必须在 CLI/启动门禁机器拒绝非 loopback host。
+`fastmcp.json` 固定 loopback，CLI 与 JSON 启动面都启用 `host_origin_protection=auto`，防止
+Host/Origin/DNS rebinding 绕开本机边界。工具授权完成不会自动解除这条独立 remote-release gate；
+至少在 A2/P3 request-scoped delegation、权威企业主体、A6 审计/重放与远程发布证据完成前，secure
+仍只能用于本机验证。
 
 ### 6.5 EIM-A1 corpus wire contract
 
@@ -622,7 +657,14 @@ proxy 可接受，但按 Gateway 的 `mcp_access` profile/resource 必须拒绝�
 
 ## 8. of_mcp Principal dependency
 
-service/domain 不 import auth framework。工具适配层通过 FastMCP dependency 取得只读 Principal：
+A4 已提供 request-scoped `current_principal()`：外层把 A3 verified claims 投影为不可变领域 Principal，
+内层 list/call middleware 与后续工具 dependency 读取同一 context-local 值，并在请求结束时恢复上下文。
+领域 Principal 只包含稳定平台主体、tenant/agent/client/resource/token metadata、scopes 与可验证的条件
+assurance；role/group/department、Provider 原始字段和上游 token 不属于其模型。service/domain 不 import
+FastMCP 或 auth provider 类型。
+
+当前 leave/medic 业务工具尚未消费 Principal；下面是 M1/M2 需要落地的工具适配层目标，而不是 A4 已完成
+的业务主体注入证明：
 
 ```python
 async def submit_wtd(
@@ -631,13 +673,20 @@ async def submit_wtd(
 ) -> SubmissionResult: ...
 ```
 
-身份参数不出现在 tool schema。`medic` 现有 `workcode` 为保持兼容可暂时保留：
+身份参数不得出现在 tool schema。`medic` 现有 `workcode` 等字段目前仍由调用方提供；M1/M2 为保持兼容
+可暂时保留，但必须完成以下迁移：
 
 - 改为 optional；
 - description 标注 deprecated/ignored；
 - 无论模型传什么都忽略；
 - 使用 `principal.require_enterprise_subject("workcode" | configured type)`；
 - 契约 diff 预计 additive/behavioral，按 of_mcp 门禁核实。
+
+A4 的 external resolver interface 不能替代上述迁移，也不能直接信任 raw tool arguments。生产业务对象
+授权必须先由各工具的 Pydantic/input schema 完成类型、默认值与 canonicalization，再把最小不可变
+授权上下文交给权威 resolver/PDP；resolver 缺失、失败或结果非法必须走 500 invariant failure。
+`auth_time` 当前可从 Principal 读取，但没有 freshness/max-age 判定；要求“最近重新认证”的工具必须在
+后续策略契约完成前保持不可发布，不能只检查字段存在。
 
 ---
 
