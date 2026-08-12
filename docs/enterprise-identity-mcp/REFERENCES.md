@@ -293,12 +293,27 @@ FastMCP 实现/产品资料（不是 MCP 标准）：
 - 领域 Principal、policy 和业务 service 不 import FastMCP。auth/provider 对象只存在 composition root
   与 tool adapter 边界，避免框架升级改写业务契约。
 
+### A6 审计、trace 与日志安全参考
+
+| 来源 | 采用 | 不误读 |
+|---|---|---|
+| [OpenTelemetry Trace API](https://opentelemetry.io/docs/specs/otel/trace/api/) | instrumentation 只通过 API 获取 current span；span 生命周期/父子上下文由 SDK/provider 负责；A6 adapter 异常隔离 | 引入 API 包不等于配置 SDK、sampler、processor、exporter 或 collector |
+| [OpenTelemetry Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/) | 使用通用的低基数命名原则；项目字段放 `ofmcp.security.*`；MCP/GenAI 字段只在受控 adapter 内使用 | GenAI/MCP conventions 仍会演进，不能把 development 属性变成持久 audit schema 或授权输入 |
+| [W3C Trace Context](https://www.w3.org/TR/trace-context/) | 后续 MultiRAG → of_mcp 用标准 `traceparent`/`tracestate` 传播 vendor-neutral trace | 当前只丰富 of_mcp current span，尚未证明跨仓 propagation、采样连续或 collector 对账 |
+| [OWASP Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html#data-to-exclude) | access token、认证 secret、敏感 PII/医疗正文、connection string/key 不落日志；低熵主体先 HMAC | “可审计”不代表把完整请求、token claims、参数、结果或异常原文都存下来 |
+
+基于这些边界，A6 使用独立的 frozen audit schema，不直接把 span attributes 或 logging dict 当
+authoritative ledger。OTel 是 best-effort observation；audit/replay 是 fail-closed security dependency。
+metrics 只用 effect/replay mode/result 等闭集维度，tool name 与 policy revision 最多进入 span，用户、
+tenant、JTI、fingerprint、参数和结果不做 metric labels。`MemoryAuditSink` 与
+`MemoryReplayClaimStore` 只是 contract/test oracle，不是 OpenTelemetry exporter，也不是生产审计库。
+
 ### 企业 MCP 平台的可复用模式
 
 | 项目 | 参考内容 | 本项目采用/拒绝 |
 |---|---|---|
-| [agentgateway](https://agentgateway.dev/docs/standalone/latest/configuration/security/mcp-authz/) | MCP JWT/resource policy、工具可见性、backend credential exchange | A4 已采用 Gateway verifier 后构造 Principal、`tools/list`/direct call 同策略；A5 才做 resource-bound 下游换发，外部 bearer 永不透传 |
-| [IBM ContextForge](https://ibm.github.io/mcp-context-forge/latest/manage/rbac/) | resource visibility 与 RBAC 双层授权、server-side membership | A4 已采用“可见不等于可执行”、显式 policy snapshot/revision 与 fail closed；不把易变 team/role 复制进短 token，external membership/business resolver 仍只是 future seam |
+| [agentgateway](https://agentgateway.dev/docs/standalone/latest/configuration/security/mcp-authz/) | MCP JWT/resource policy、工具可见性、backend credential exchange | A4 已采用 Gateway verifier 后构造 Principal、`tools/list`/direct call 同策略；A6 phase 1 在最终 allow 后增加 audit/replay seam；A5 才做 resource-bound 下游换发，外部 bearer 永不透传 |
+| [IBM ContextForge](https://ibm.github.io/mcp-context-forge/latest/manage/rbac/) | resource visibility 与 RBAC 双层授权、server-side membership | A4 已采用“可见不等于可执行”、显式 policy snapshot/revision 与 fail closed；A6 audit schema 不复制易变 team/role，external membership/business resolver 仍只是 future seam |
 | [LibreChat MCP authority](https://github.com/danny-avila/LibreChat/blob/d89b11d34dce834ed600c48e2f2856500c806af3/packages/api/src/mcp/authority/index.ts) | Principal/resource credential 隔离、执行前 authority proof | A4 已采用 request-scoped Principal isolation 和 call-before-execute TOCTOU 重验；P3 才做 per-principal/per-resource credential 隔离，不照搬其应用数据模型 |
 | [Open WebUI tool grants](https://github.com/open-webui/open-webui/blob/main/backend/open_webui/utils/tools.py) | user/group grants 在工具暴露前过滤 | 采用服务端工具可见性思想；group grant 不能替代 MultiRAG tenant 和业务对象授权 |
 
@@ -307,6 +322,8 @@ Principal 与 Agent/知识库权限，of_mcp 继续拥有 Resource Server、工�
 平台的 unsigned identity header、全局 server credential 或 UI 可见性都不能作为最终授权证据。
 当前 A4 的 external resolver API 也不等于已经获得 ContextForge 式生产 PDP：现有 service policy 未
 启用外部要求，raw tool arguments 尚无统一 schema-normalized 业务对象契约，M1/M2 必须另行验收。
+A6 的 in-memory replay/audit 也不等于 agentgateway/ContextForge 式生产分布式控制面：没有 durable
+multi-instance backend、KMS rotation、真实 exporter/collector 和 remote rollout 前始终保持 loopback。
 
 ---
 

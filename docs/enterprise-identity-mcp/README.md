@@ -114,7 +114,7 @@ of_mcp
   - OAuth/MCP protected-resource metadata
   - bearer token verifier
   - immutable Principal / per-tool policy middleware
-  - auth audit / OTel / replay protection（EIM-A6）
+  - auth audit / OTel API / replay protection（EIM-A6 phase 1 已落；生产持久后端未落）
   - business service adapters
 ```
 
@@ -206,8 +206,9 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   `principal_id` 固定为 `None`，这里是验证后身份提升的装配点。
 - `api/utils/api_utils.py::Principal` 当前只有 `id/email/nickname`，不足以表达租户、认证方式、
   企业业务主体和委托上下文。
-- `User.email` 当前非空且唯一；JIT 不能靠伪造邮箱长期绕过，必须按 ROADMAP 先完成账户模型
-  兼容设计和迁移。
+- EIM-I1 已使 `User.email` 可空，并引入 `local/external/hybrid` 账户类型；external-only 账户不能使用
+  本地密码登录或找回密码。它只解决账户承载形状，尚未建立 Provider identity/binding 或 Channel
+  Principal。
 - MCP 出站已使用官方 SDK 2 `Client`：Streamable HTTP 使用 `mode="auto"` 和 SDK
   `create_mcp_http_client()` 受管 client（30 秒 connect/write/pool、300 秒 read），SSE 使用
   `mode="legacy"`，业务代码不再手调 `initialize()`。HTTP
@@ -270,7 +271,7 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   name、namespace collision 或未在当前 service scope 词表登记的 scope 都在启动/contract check 时
   fail closed。确定性
   `tool-policies.json` 快照的 `policy_revision` 为
-  `6f79e7ddf8f630993a054f284ebd5213424ffe39b252c661d16a2967ed6fdd67`；生产 verifier 的
+  `7bf9e09082ca4f1d529e51bf3fe8e6dd5c4334c62deaf9a5b6be204af9fca446`；生产 verifier 的
   endpoint-level `required_scopes=[]` 保持不变，避免把所有服务 scope 错误合并成一个全局门槛。
 - EIM-A4 已把 A3 严格 verifier 产出的 allowlisted claims 投影为框架无关、不可变的领域 Principal，并用
   独立测试证明所有 A1 Gateway authentication-accepted vectors 都能经过该桥接。Principal 不携带
@@ -282,6 +283,24 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   enterprise assurance 与业务拒绝不伪装为 scope challenge。外部 membership/role/business resolver
   当前只是 fail-closed 扩展接口，现有 service policy 未启用它，也没有完成 schema-normalized 的业务
   对象授权。
+- EIM-A6 已进入 `🔵` phase 1。每个工具 policy 现在显式声明 `effect=read|prepare|side_effect` 和
+  `replay_mode=reusable|single_use`，并强制 `side_effect -> single_use`；leave 的 create/submit 与
+  四个 medic submit 被归为单次副作用，其余当前工具为可复用只读。canonical policy snapshot
+  升级为 format 2，Gateway 运行时与 contract devkit 复用同一计算，不从磁盘文件或硬编码读取
+  revision。
+- A6 的框架无关安全执行协调器已接在 A4 **内层最终 allow 之后、业务 `call_next` 之前**，并消费
+  同一次 evaluation 的 immutable policy 与当前 runtime revision。单次工具先原子 claim，再写
+  pre-execution audit，成功后才进入业务函数；同一逻辑请求重复返回 HTTP 409
+  `duplicate_operation`，同一 JTI 被换参数或主体使用返回 HTTP 403 `replay_detected`，replay/audit
+  前置依赖不可用返回 HTTP 503，均 `no-store`、不发 OAuth scope challenge 且不执行工具。
+- 审计 schema 是冻结白名单，没有任意 `metadata`：只保存 resource/tool/effect/replay mode/
+  policy revision、trace/call correlation、request fingerprint 和脱敏主体；低熵主体标识使用 keyed
+  HMAC，JTI 只存摘要，不记录 bearer、工具参数/结果、Provider PII、企业 subject 或医疗正文。
+  `ToolResult.is_error`、异常和取消都保守记为 `OUTCOME_UNKNOWN`，不会释放 claim 或自动重放副作用。
+- 当前 OTel 只使用官方 API 丰富 current span 并产生低基数 counters；未配置 SDK/exporter 时为 no-op，
+  exporter 故障不改变安全决定。`MemoryReplayClaimStore`/`MemoryAuditSink` 只用于单进程测试；secure
+  必须显式注入 coordinator，且只有 shared multi-instance replay store + durable audit sink 才
+  `production_ready`。真实 secure CLI 目前因没有生产后端 fail-fast，remote-release gate 继续关闭。
 - `medic` 的 `workcode` 和其他业务主体字段目前仍是工具调用者自报，且工具会产生真实副作用；从
   verified Principal 注入并忽略调用方同名参数仍属于 M1/M2，不能把 A4 的 resolver seam 解释为该缺口
   已经修复。
@@ -305,10 +324,11 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   产生这样的 token 或第三方 Channel 身份已经进入该 Principal。
 - A2/P1/P2/P3 尚未实现，因此 MultiRAG 还不会为当前 Principal 签发并逐请求发送 token；飞书的
   `ExternalIdentityAssertion -> binding/directory -> Principal` 链也尚未完成，通用 MCP Client 仍无完整
-  OAuth 获取 token 流。of_mcp 仍缺 A5 proxy internal actor、A6 审计/OTel/replay、M1/M2 企业主体与
-  业务对象授权；持久 Interaction/Confirmation/Idempotency 也未完成。下一项 of_mcp 任务是 A6；
-  MultiRAG 应并行推进 `I1 -> I2 -> I3 -> P1`、`F1 + I3 -> I4 -> I6` 与 `C1 -> C2`，不能跳过
-  `C3 -> P2` 直接做 A2/P3。本仓文档收口后的 `make verify` 全绿、**1904 passed**。
+  OAuth 获取 token 流。of_mcp 仍缺 A5 proxy internal actor；A6 虽已有 phase-1 domain/runtime
+  安全边界，但仍缺生产多实例 replay/audit、HMAC/KMS 轮换、OTel SDK/exporter 与跨仓 trace，因此
+  保持 `🔵`。M1/M2 企业主体与业务对象授权、持久 Interaction/Confirmation/Idempotency 也未完成。
+  MultiRAG 应从已完成 I1 继续推进 `I2 -> I3 -> P1`、`F1 + I3 -> I4 -> I6` 与 `C1 -> C2`，不能跳过
+  `C3 -> P2` 直接做 A2/P3。本仓文档收口后的 `make verify` 全绿、**1915 passed**。
 
 ---
 

@@ -362,8 +362,9 @@ A3 production verifier 的 FastMCP `required_scopes` 固定为空。原因不是
 执行授权；缺失/孤儿 policy、重复 canonical name、namespace collision 和未在当前 service scope 词表
 登记的 scope 均 fail closed。
 Gateway 生成确定性 `tool-policies.json` contract snapshot，`policy_revision` 是不含自身 revision 字段的
-canonical policy document 的 SHA-256；当前 revision 为
-`6f79e7ddf8f630993a054f284ebd5213424ffe39b252c661d16a2967ed6fdd67`。
+canonical policy document 的 SHA-256；A4 落地时的 format-1 revision 为
+`6f79e7ddf8f630993a054f284ebd5213424ffe39b252c661d16a2967ed6fdd67`，A6 按 ADR-22 把 effect/replay
+mode 纳入 format 2 后已产生新 revision。
 
 A4 刻意保留两层重验。外层 ASGI preflight 在受保护 MCP HTTP request 上解析有界请求并返回真实
 HTTP 403；内层 FastMCP middleware 用同一个 registry 过滤 `tools/list`，且在 `tools/call` 进入实际工具
@@ -393,5 +394,47 @@ closed”；A4 通过证明“Gateway 能把该 token 构造成 Principal，并�
 A4 的 external membership/role/business resolver 是 future seam，当前启用的 service policy 没有依赖
 这些 resolver；业务对象输入也尚未经过统一 tool schema normalization，所以不能宣称已经具备生产级
 对象授权。`auth_time` 目前只作为已验证 claim 携带并满足 `auth_time<=iat`，没有 freshness/max-age
-策略。secure 继续保持 loopback，下一项 of_mcp 任务是 A6；MultiRAG 先推进身份数据、binding、
-Channel assertion 与 P1/P2，再进入 A2/P3。
+策略。secure 继续保持 loopback；A6 phase 1 已接续但尚非生产完成态。MultiRAG 先推进身份数据、
+binding、Channel assertion 与 P1/P2，再进入 A2/P3。
+
+---
+
+## EIM-ADR-22：工具副作用显式分类；JTI 是单 capability，replay guard 不冒充业务幂等
+
+**状态**：Accepted
+**日期**：2026-08-12
+
+每个 of_mcp 工具 policy 必须显式声明 `effect=read|prepare|side_effect` 和
+`replay_mode=reusable|single_use`。所有 policy model/registry/auth projection 都强制
+`side_effect => single_use`；不得从工具名、description、scope 或 FastMCP annotation 推断风险。
+effect/replay mode 属于可评审授权快照并进入 canonical `policy_revision`，Gateway runtime 与 contract
+devkit 复用同一 builder。A6 format-2 local revision 为
+`7bf9e09082ca4f1d529e51bf3fe8e6dd5c4334c62deaf9a5b6be204af9fca446`。
+
+single-use replay key 只由 domain-separated `(token_use, issuer, audience, jti)` digest 构造，代表整枚
+token/JTI 的一个 capability；它故意不包含 tool。完整 Principal、tool、policy revision 和 canonical
+arguments 进入另一个 secret-keyed HMAC fingerprint：同 key/同 fingerprint 是 duplicate；同 key/不同
+fingerprint 是 replay conflict。这样可阻止拿同一授权 capability 改参数、换主体或换工具。相应代价是
+一枚 JTI 只能承载一个高风险逻辑执行；未来 P3 必须每次执行换发新的短期 token/JTI，不能给一个 Agent
+run 发一枚“多次提交券”。
+
+coordinator 只能插在 A4 inner final allow 后、业务执行前。它先原子 claim、写 pre-execution audit、
+标记 dispatched，再给出不可伪造的 process-local permit。duplicate/conflict/replay-or-audit unavailable
+分别稳定映射为 409/403/503，均 no-store、无 OAuth scope challenge 且零业务调用。成功记录
+`SUCCEEDED`；工具错误、异常和取消保守记录 `OUTCOME_UNKNOWN`。已经 dispatch 后的 outcome 持久化
+失败不得释放 claim、自动重试或覆盖业务响应。
+
+审计 schema 采用 frozen allowlist，不提供任意 metadata bag；低熵主体用 keyed HMAC，JTI 只保留
+issuer-domain-separated digest，参数/结果/token/Provider PII/enterprise subject/业务正文禁止进入审计。
+OTel 只是 best-effort 观察面：API adapter 可丰富 current span 和低基数 counter，但 exporter 故障不能
+改变安全决定。
+
+这个 replay guard **不是业务幂等、结果缓存或外部系统事实查询**。duplicate 只拒绝，不返回先前
+结果；`OUTCOME_UNKNOWN` 也不能证明 OA/Jira 未执行。M3/M4 仍需业务 idempotency key、查询恢复和
+unknown-outcome 对账。A5 未完成前也没有 `parent_jti_hash` 链。
+
+采用分阶段交付：phase 1 落 domain contract、内存测试 oracle、OTel API 和 Gateway execution seam，
+但 A6 保持 `🔵`。只有 shared multi-instance replay store、durable append-only audit、HMAC key 的 KMS
+ownership/rotation、OTel SDK/exporter/collector 与 W3C 跨仓 trace、A5/P3/M3/M4 集成和 remote-release
+演练完成后才可标 `✅`。memory store/sink 的结构属性固定不是 production-ready；真实 secure Gateway
+没有生产 coordinator 时必须 fail-fast，不能用普通配置布尔值解锁。

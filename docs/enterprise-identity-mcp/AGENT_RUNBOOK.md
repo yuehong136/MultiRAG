@@ -241,7 +241,9 @@ FastMCP middleware：
    post-assembly canonical tool catalog 完整构造；缺失/孤儿/重复/namespace collision/未在当前
    service scope 词表登记的 scope fail closed；
 3. `apps/gateway/contract/tool-policies.json` 与 devkit contract：snapshot 排序稳定，
-   `policy_revision=6f79e7ddf8f630993a054f284ebd5213424ffe39b252c661d16a2967ed6fdd67`，策略
+   A4 历史 revision 为 `6f79e7ddf8f630993a054f284ebd5213424ffe39b252c661d16a2967ed6fdd67`；A6
+   把 effect/replay mode 纳入 format 2 后当前 revision 为
+   `7bf9e09082ca4f1d529e51bf3fe8e6dd5c4334c62deaf9a5b6be204af9fca446`。策略
    变更必须通过 snapshot review，不能只改运行时；
 4. 外层 ASGI authorization preflight：对真实 MCP `tools/call` 返回标准 HTTP 403；内层 FastMCP
    middleware：用同一 registry 过滤 `tools/list`，并在工具执行前再次授权。两层都要保留，不能因为
@@ -265,18 +267,68 @@ git diff --check
 ```
 
 A4 定向 **201 passed**；`uv run --locked ofmcp verify` 六步全绿、**417 passed、2 existing skipped**，
-contract snapshot 无漂移。A4 后下一项 of_mcp 任务是 A6；MultiRAG 可并行做
-`I1 -> I2 -> I3 -> P1`、`F1 + I3 -> I4 -> I6`、`C1 -> C2`，只有
+contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG 已完成 I1，可并行做
+`I2 -> I3 -> P1`、`F1 + I3 -> I4 -> I6`、`C1 -> C2`，只有
 `C3 -> P2` 后才能进入 A2/P3。secure 在独立远程发布闸门解除前仍不能作为远程业务入口。
+
+### 4.8 EIM-A6 phase 1 接手与完成边界
+
+冷启动 agent 先确认 ROADMAP 中 A6 仍是 `🔵`，然后按以下顺序读当前 of_mcp 实现：
+
+1. `ofmcp.core.service/tool_policy/policy_snapshot` 与三份 `service.toml`：effect/replay mode 必填，
+   `side_effect=>single_use`，真实工具全覆盖，format-2 revision 只有一个 canonical builder；
+2. `ofmcp.auth.replay`：atomic `claim` 和不释放的 outcome state machine；memory store 只供测试；
+3. `ofmcp.auth.audit`：无 extension bag 的 frozen allowlist、主体 HMAC 与安全 reason code；
+4. `ofmcp.auth.security_execution`：单 capability replay key、完整 request fingerprint、pre-execution
+   audit、ExecutionPermit 与 outcome；
+5. `ofmcp.auth.security_telemetry`：OTel API-only、低基数 counters、异常隔离；
+6. `ToolAuthorizationMiddleware.on_call_tool` 与 Gateway composition：A4 final allow 后才 prepare，传入
+   同一 policy/revision；secure 要求显式 production-ready coordinator。
+
+不得回退的 phase-1 不变量：
+
+- replay key 只绑定 `(token_use,issuer,audience,jti)`，是整枚 token/JTI 的单一 capability，不按工具
+  分桶；fingerprint 才绑定完整 Principal、tool、policy revision 与 canonical arguments。同一 JTI
+  只能对应一个高风险逻辑操作，未来 P3 每次执行必须换新短 token/JTI；
+- duplicate 只返回 409，不回放结果；不同 fingerprint 返回 403 replay detected；store/audit 前置
+  故障返回 503。均 no-store、无 OAuth challenge、业务零调用；
+- claim 在业务 dispatch 后不释放。成功为 `SUCCEEDED`；tool error/异常/取消保守为
+  `OUTCOME_UNKNOWN`。outcome 持久化失败保留 `DISPATCHED` 且不能篡改业务响应；
+- audit/permit/telemetry/log 不含 token、参数、结果、Provider PII、enterprise subject 或医疗正文；
+  JTI digest 必须隔离 issuer domain，低熵主体用 keyed HMAC；
+- OTel 失败不改变安全决定；API 已接线不等于 SDK/exporter/collector/跨仓 trace 已部署；
+- `production_ready` 只能由 shared replay + durable audit 的实现属性成立。memory backend 不得通过
+  配置伪装生产；当前真实 secure CLI 应因缺 production backend fail-fast，remote gate 保持关闭。
+
+修改 A6 代码至少运行：
+
+```bash
+uv lock --check
+uv run --locked pytest packages/ofmcp-auth/tests/test_replay.py \
+  packages/ofmcp-auth/tests/test_security_execution.py \
+  packages/ofmcp-auth/tests/test_security_telemetry.py \
+  packages/ofmcp-auth/tests/test_fastmcp_adapter.py \
+  packages/ofmcp-core/tests/test_tool_policy_registry.py \
+  apps/gateway/tests/test_auth.py
+uv run --locked ofmcp contract diff
+uv run --locked ofmcp verify
+git diff --check
+```
+
+本轮 A6/Gateway 定向 **65 passed**，完整 `uv run --locked ofmcp verify` 六步全绿、
+**453 passed、2 existing skipped**；提交锚点统一以 ROADMAP 变更日志为准。即使以上全绿，也只有完成
+production multi-instance durable replay/audit、HMAC KMS/rotation、OTel SDK/exporter/W3C 跨仓 trace、A5
+`parent_jti_hash`、P3 动态 bearer、M3/M4 业务幂等/结果查询和 remote-release 演练后，才能把 A6
+改为 `✅`。这类后续工作若涉及真实基础设施、KMS、DNS、Secret 或部署，必须先获得用户批准。
 
 ## 5. 跨仓协调
 
 | 变更 | 生产者 | 消费者 | 安全部署顺序 |
 |---|---|---|---|
 | Channel structured assertion | worker | MultiRAG private API | tolerate API → emit worker → consume API → remove legacy |
-| MCP access token | MultiRAG signer | `of_mcp` verifier/authorizer | A3 verifier/JWKS + A4 Principal/tool policy 已先行并保持业务未远程发布 → P1/P2 → A2 signer emit → P3 逐请求 bearer → A6/企业主体/上线证据 → 独立闸门决定 secure 远程入口；不得把固定测试 token 通过误作 Channel 委托闭环 |
+| MCP access token | MultiRAG signer | `of_mcp` verifier/authorizer | A3 verifier/JWKS + A4 Principal/tool policy + A6 phase-1 execution guard 已先行并保持业务未远程发布 → P1/P2 → A2 signer emit → P3 每次执行换新短 token/JTI → A6 production durable backend/跨仓 trace + 企业主体/上线证据 → 独立闸门决定 secure 远程入口；不得把固定测试 token 或内存 replay 通过误作 Channel 委托闭环 |
 | EIM-A1 corpus | MultiRAG canonical generator + 两仓本地副本 | PyJWT/joserfc 独立 oracle | 已完成：of_mcp `3e1d5ac` → MultiRAG 本次 A1 变更；91-file corpus 字节一致，digest `59f82684aa06365f45623ce9bfad336d487f2c9351879266a6b2ab21bf8fe208`；运行时无依赖 |
-| 新 scope/tool metadata | `of_mcp` policy snapshot | MultiRAG Agent/MCP config、P3 cache/audit | resource 端先提交 canonical `tool-policies.json` 与 `policy_revision` → 调用端按 revision 重算请求与缓存；未知 scope fail closed，不从运行时可见列表反推权限，也不把 revision 自动塞入当前 A1 token profile |
+| 新 scope/tool metadata | `of_mcp` policy snapshot | MultiRAG Agent/MCP config、P3 cache/audit | resource 端先提交包含 effect/replay mode 的 canonical `tool-policies.json` 与 `policy_revision` → 调用端按 revision 重算请求与缓存；未知 scope fail closed，不从运行时可见列表反推权限，也不把 revision 自动塞入当前 A1 token profile |
 | confirmation contract | `of_mcp` challenge | MultiRAG card/channel | resource 端先返回可识别 challenge → UI 接线 → 强制确认 |
 | MCP 双向兼容 fixture | MCP SDK 2/FastMCP 4 主运行时 + PEP 723 FastMCP 3 真实 legacy 子进程 | 两仓 compatibility test | F2/F3/F4/F6/F7/F8 已完成并形成 13/13 基线；后续每次协议/transport 变更逐格复跑；`of_mcp` F4 锚点 `23dd1fd`；不得用本机 sibling import 代替可复现安装 |
 | MRTR interaction | `of_mcp` `input_required`/legacy adapter | MultiRAG U14 state machine，再到 U15 renderer | 先固定 transport-neutral request/response 与恢复语义 → 飞书表单渲染 → 敏感动作最后强制 U7/M3/M4 |

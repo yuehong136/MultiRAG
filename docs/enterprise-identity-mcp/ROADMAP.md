@@ -3,8 +3,8 @@
 > 最后更新：2026-08-12
 > 当前状态：文档基线、EIM-U0、EIM-U1、EIM-U4、EIM-U8～U13 已完成；
 > CHN-U15 迁移/API 重启已完成，CHN-U16 已完成；真实 smoke 仍欠，下一项 CHN-O9，随后稳定浸泡；
-> EIM-A1、EIM-A3、EIM-A4 已完成；下一项 of_mcp 任务是 EIM-A6，MultiRAG 并行进入身份数据、
-> Channel assertion 与 Principal 轨；EIM-F5 / CHN-X14 和 EIM-O4 均保持挂起。
+> EIM-A1、EIM-A3、EIM-A4 已完成；EIM-A6 phase 1 正在收口且保持 `🔵`，MultiRAG 已完成 I1、
+> 后续继续身份 binding、Channel assertion 与 Principal 轨；EIM-F5 / CHN-X14 和 EIM-O4 均保持挂起。
 
 ---
 
@@ -262,7 +262,7 @@ Principal；如需迁移 facade，明确 owner 模块和删除计划。
 | EIM-A3 | of_mcp | gateway protected-resource metadata、WWW-Authenticate、JWT/JWKS + strict profile verifier | ✅ | A1,F4 | `RemoteAuthProvider`/自定义 verifier 组合；认证层 401 与 verifier 故障 503 分层；保留可测 403 seam、真实工具级 403 交给 A4；issuer/resource/JOSE/claims/clock/profile 全验；A3 handoff 保持 local/secure loopback；无 auth 绕过路由 |
 | EIM-A4 | of_mcp | immutable Principal dependency、service scope enforcement、tool visibility/step-up | ✅ | A3 | A1 verified claims 独立投影为 immutable Principal；post-assembly canonical tool registry 完整覆盖并生成带 `policy_revision` 的确定性快照；outer HTTP 403 preflight + inner `tools/list` filter/`tools/call` 执行前重验；scope/tenant/assurance 分层且 domain/core 不 import FastMCP；external business resolver 与 `auth_time` freshness 明确保留为 future seam；local/secure 继续 loopback |
 | EIM-A5 | of_mcp | proxy `mcp_internal_actor` 换发，mount/proxy Principal 与授权等价 | ⬜ | A4,P3 | 独立 issuer/keyset/service audience；scope/TTL attenuation；外部 token 不透传；两形态成功/拒绝/audit 等价 |
-| EIM-A6 | of_mcp | auth audit、OTel、jti 高风险重放防护、指标和脱敏 | ⬜ | A4 | trace 跨两仓；记录 jti/parent hash/resource/tool/policy revision；审计无 token/PII；高风险重放被拒 |
+| EIM-A6 | of_mcp | auth audit、OTel、jti 高风险重放防护、指标和脱敏 | 🔵 | A4 | **phase 1 已落**：显式 effect/replay policy、canonical runtime revision、冻结 audit schema、原子 replay coordinator、OTel API 和 A4 最终 allow 后执行边界；**尚欠完成门禁**：多实例 durable replay/audit、HMAC/KMS 轮换、SDK/exporter 与跨仓 trace、A5 `parent_jti_hash`、生产集成/演练；审计无 token/PII，高风险重复/冲突 fail closed |
 | EIM-A7 | MR MCP server | 把 inbound MultiRAG MCP 变成独立 OAuth Resource Server：protected-resource metadata、audience、scope、Principal 和工具可见性 | ⬜ | F8,A1,P1 | inbound/outbound resource 与 bearer 不复用；401/403/WWW-Authenticate 标准化；`tools/list` 与 direct call 均授权；dataset/tenant 隔离；legacy API-key 仅按明确迁移门禁保留 |
 | EIM-A8 | 两仓架构/PoC | 企业托管与多 issuer 采用闸门：有真实企业 IdP/外部 MCP client 需求时评估 EMA + ID-JAG；FastMCP MultiAuth 只作为组合实现候选；Horizon 只作托管平台 build-vs-buy | ⏸ | A2,A4,A7 + 真实需求 | ADR/威胁模型区分标准、扩展、框架实现和托管产品；EMA fixture 使用真实形状的 IdP assertion，不伪造飞书事件；首期短时 issuer/resource-token 路径不回归；无需求不引入依赖或平台锁定 |
 
@@ -403,7 +403,47 @@ A4 已由 of_mcp `74117a0` 完成：
 A4 定向 **201 passed**；`uv run --locked ofmcp verify` 六步全绿、**417 passed、2 existing skipped**，
 contract snapshot 无漂移。它不改变 MultiRAG 的完成状态：P1/P2、A2/P3 与飞书
 `ExternalIdentityAssertion -> binding/directory -> Principal` 链仍未实现，通用 MCP Client OAuth
-取 token 也未闭环；当前文档仓 `make verify` 全绿、**1904 passed**。
+取 token 也未闭环；当前文档仓 `make verify` 全绿、**1915 passed**。
+
+### EIM-A6 phase 1 安全中间态（仍为 `🔵`）
+
+当前代码已经建立可测试、可替换但尚非生产完整态的执行安全边界：
+
+1. 每个 `service.toml [tool_policies.*]` 必填 `effect=read|prepare|side_effect` 与
+   `replay_mode=reusable|single_use`；模型、registry 和 auth projection 都强制
+   `side_effect => single_use`。leave create/submit 与四个 medic submit 为
+   `side_effect/single_use`，其余当前工具为 `read/reusable`；完整真实工具覆盖仍由 A4 registry 门禁。
+2. `ofmcp.core.policy_snapshot` 是 devkit 与 Gateway 唯一 canonical snapshot/revision 算法。format 2
+   把 effect/replay mode 纳入 hash；local revision 为
+   `7bf9e09082ca4f1d529e51bf3fe8e6dd5c4334c62deaf9a5b6be204af9fca446`。runtime 发布 registry 与
+   revision 的同一不可变快照，A6 不读硬编码值或文件 mtime。
+3. framework-independent coordinator 在 A4 inner middleware 最终 allow 后、业务 `call_next` 前，使用
+   同一个 evaluation policy、runtime revision、Principal 和 canonical arguments。单次工具以
+   `(token_use, issuer, audience, jti)` 的 domain-separated digest claim；这个 key 表示整枚 token/JTI 的
+   **单一 capability**，不按 tool 再切一份。HMAC request fingerprint 才绑定完整 Principal/tenant/
+   Agent/client、tool、policy revision 与 canonical arguments；因此同一 JTI 只能对应一个高风险逻辑
+   操作，未来 P3 必须按执行换发短期 token/JTI。
+4. same-fingerprint duplicate 返回 HTTP 409 `duplicate_operation`；同一 replay key 搬到不同参数或
+   主体返回 HTTP 403 `replay_detected`；replay/audit 前置依赖不可用返回 HTTP 503。三者均
+   `Cache-Control: no-store`、无 OAuth challenge，且业务函数零调用。成功记 `SUCCEEDED`；tool error、
+   异常和取消保守记 `OUTCOME_UNKNOWN`。post-dispatch outcome 持久化失败保留 `DISPATCHED`，只写安全
+   日志，不篡改已经形成的业务响应，也不自动重放。
+5. audit 是无扩展 bag 的冻结 schema；主体/tenant/agent/client 用 keyed HMAC，JTI 只存 SHA-256，记录
+   resource、tool、effect、replay mode、policy revision、request fingerprint、trace/call correlation、
+   decision/reason/state，不记录 token、参数、结果、Provider PII、企业 subject 或医疗正文。OTel adapter
+   只依赖 API，给 current span 增加受控属性并发出低基数 counters；不配置 SDK/exporter 时 no-op，
+   telemetry 故障不改变认证、授权或 replay 决策。
+6. secure Gateway 必须显式注入 coordinator；`production_ready` 只能由 multi-instance-safe replay store
+   与 durable audit sink 共同成立，不能靠配置布尔值伪造。内存实现仅供测试/显式 test-only 启动；
+   当前真实 secure CLI 因没有生产后端 fail-fast，loopback/remote-release gate 继续关闭。
+
+A6 仍不得改为 `✅`，直至至少完成并验证：共享持久 replay store 与 append-only audit sink、容量/
+故障/过期/重启/多副本语义、fingerprint HMAC key 的 KMS 托管和轮换、OTel SDK/provider/exporter 与
+W3C 跨仓 trace propagation、A5 internal actor 的 `parent_jti_hash`、P3 动态 bearer 后的真实主体链、
+业务级 idempotency/result lookup（M3/M4）以及 remote-release 演练。replay claim 只阻止同一 capability
+重复进入代码，不能证明外部系统未执行，也不能替代业务幂等或结果缓存；duplicate 只拒绝，不回放
+先前结果。当前 P3 尚未实现，secure 又因没有生产 coordinator 后端 fail-fast，所以这条 token/JTI
+消费纪律还没有进入真实 MultiRAG 委托流。
 
 ### EIM-A5 两种 token
 
@@ -519,12 +559,13 @@ EIM-O4 / CHN-O14 守门。CHN-U16、CHN-O9 均沿用 Channel 账本自己的 ID�
 EIM-F5 / CHN-X14 仍是长期 upstream-first 的上游审计入口，但当前状态为挂起，不得因为文档已经
 登记就提前刷新滚动兼容基线、批量拉取上游或实现 Canvas execution port。
 
-下一 of_mcp 任务与可并行启动的 MultiRAG 身份候选：
+当前 of_mcp 与 MultiRAG 身份候选：
 
 ```text
-EIM-A6  of_mcp auth audit + OTel + jti/replay + 脱敏（A4 已完成）
+EIM-A6  🔵 phase 1 已落；下一半完成生产 durable backend、key rotation 与跨仓 trace
 EIM-F1  lark-oapi patch 升级
-EIM-I1  User 外部账号模型
+EIM-I1  ✅ User 外部账号模型
+EIM-I2  external identity schema
 EIM-C1  Channel tolerate structured assertion
 ```
 
@@ -568,7 +609,8 @@ I5 -> I7 -> I8 -> M1 -> M2 -> M3 -> M4 -> U7 -> M5 -> U2 -> O1/O2 -> U3
 A8 -> O3  仅在真实企业 IdP、多 issuer 或托管平台需求成立后解除挂起。
 ```
 
-A3/A4 已完成，of_mcp 现在可立即推进 A6。MultiRAG 同时沿 `I1 -> I2 -> I3 -> P1`、
+A3/A4 已完成，of_mcp 的 A6 phase 1 已落但保持进行中；下一步不是把内存 store 当生产后端，而是完成
+durable multi-instance replay/audit、HMAC key rotation 和跨仓 OTel。MultiRAG 同时沿 `I2 -> I3 -> P1`、
 `F1 + I3 -> I4 -> I6` 和 `C1 -> C2` 推进，只有 `C2 + I6 + P1 -> C3 -> P2` 后才能做 A2。
 随后必须等 `P2 + F3 + A2 + A4 -> P3`，再启动 A5/U14 等真实委托消费者。A7 保持独立入站
 resource；A8 仍无真实需求不启动。这个顺序既保留 of_mcp 的 fail-closed verifier/authorizer 先行，
@@ -607,4 +649,5 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 | 2026-08-12 | EIM-A1 | 完成 91-file、RFC 9068-shaped `mcp_access`/`mcp_internal_actor` 契约；PyJWT/joserfc 独立 oracle 共同覆盖 79 token、7 issuance policy、5 delegation cases；增加同一合法 internal actor 在 proxy 通过、Gateway cross-profile 拒绝的向量，固定 401/403/issuance/delegation 分层与跨 resource 安全边界 | of_mcp `3e1d5ac`；MultiRAG 本次变更；corpus `59f82684aa06365f45623ce9bfad336d487f2c9351879266a6b2ab21bf8fe208` | MultiRAG 定向 **96 passed**；`make verify` Ruff format/check、6 条 import contracts、async DB gate、mypy 65 files 全绿，unit **1904 passed in 25.76s**；of_mcp 定向 **100 passed**、`uv run --locked ofmcp verify` **216 passed、2 existing skipped**；两仓 91-file corpus 字节一致、摘要一致，A1 cases 无 skip/xfail | Codex |
 | 2026-08-12 | EIM-A3 | of_mcp 新增独立 strict `mcp_access` verifier、固定 HTTPS JWKS/LKG/轮换/single-flight/cache 防放大、RFC 9728 PRM 与稳定 401/503；secure profile 缺配置 fail-fast、mount-only/hello disabled，production endpoint scopes 保持空并把真实工具 403 留给 A4；A3 交接时 local/secure 均机器限制 loopback，Host/Origin protection 开启 | of_mcp `e4ab560`；MultiRAG docs / 本次变更 | production verifier 全跑 68 个 A1 Gateway cases；定向 **126 passed**；`uv run --locked ofmcp verify` 六步全绿、**342 passed、2 existing skipped**；contract no drift；MultiRAG `make verify` 全绿、**1904 passed**；scope/profile constants 与 A1 manifest 锁定，NaN/Infinity、随机 unknown kid、慢失败 backoff 和非 loopback 负向均覆盖 | Codex |
 | 2026-08-12 | EIM-A4 | of_mcp 将 A3 verified claims 投影为 framework-independent immutable Principal；在 post-assembly canonical tool catalog 上建立完整逐工具 policy registry，生成确定性 snapshot/revision；outer ASGI 返回真实 HTTP 403，inner FastMCP 对 `tools/list` 过滤并在 `tools/call` 执行前重验；default SSE response guard 保持二次拒绝的 403/500；scope/tenant/assurance 分层，external business resolver 与 `auth_time` freshness 明确保留为 future seam；local/secure 继续 loopback | of_mcp `74117a0`；policy revision `6f79e7ddf8f630993a054f284ebd5213424ffe39b252c661d16a2967ed6fdd67`；MultiRAG docs / 本次变更 | of_mcp 定向 **201 passed**；`uv run --locked ofmcp verify` 六步全绿、**417 passed、2 existing skipped**；contract snapshot no drift；MultiRAG `make verify` 全绿、**1904 passed**；本行不宣称 A2/P3、飞书 Principal、M1/M2、A5/A6 已完成 | Codex |
-| 2026-08-12 | EIM-I1 | `User` 支持 nullable email 与 `local/external/hybrid` 账户类型；数据库与 service 双层禁止 external-only 本地密码，登录/找回密码只接受 password-capable 账户；公共 user projection、Admin 创建用户响应与注册失败响应不暴露密码哈希、存量 access token 或 SQL 参数；邀请人姓名在 nickname/email 都缺失时使用稳定非 PII fallback。迁移按存量 `login_channel/password` 可逆分类 local/external/hybrid，fresh DB、upgrade → downgrade → upgrade 与不可重建状态均有真 PostgreSQL 守门；Web OAuth 强制一次性 state 且在 I6 建立 provider-subject binding 前不执行 email 登录、注册或合并 | MultiRAG / 本次变更 | `make verify`：format/Ruff、6 import contracts、async DB gate、mypy 65 files 全绿，unit **1915 passed in 24.79s**；`REQUIRE_SERVICES=1 make integration`：**41 passed in 6.50s**；Alembic 单 head `7c8d9e0f1a2b`；安全复核无剩余 blocker | Codex |
+| 2026-08-12 | EIM-I1 | `User` 支持 nullable email 与 `local/external/hybrid` 账户类型；数据库与 service 双层禁止 external-only 本地密码，登录/找回密码只接受 password-capable 账户；公共 user projection、Admin 创建用户响应与注册失败响应不暴露密码哈希、存量 access token 或 SQL 参数；邀请人姓名在 nickname/email 都缺失时使用稳定非 PII fallback。迁移按存量 `login_channel/password` 可逆分类 local/external/hybrid，fresh DB、upgrade → downgrade → upgrade 与不可重建状态均有真 PostgreSQL 守门；Web OAuth 强制一次性 state 且在 I6 建立 provider-subject binding 前不执行 email 登录、注册或合并 | MultiRAG `7041f92a` | `make verify`：format/Ruff、6 import contracts、async DB gate、mypy 65 files 全绿，unit **1915 passed in 24.79s**；`REQUIRE_SERVICES=1 make integration`：**41 passed in 6.50s**；Alembic 单 head `7c8d9e0f1a2b`；安全复核无剩余 blocker | Codex |
+| 2026-08-12 | EIM-A6 phase 1 | of_mcp 为所有实际工具增加 effect/replay policy 并把它纳入 canonical snapshot/revision；新增冻结脱敏 audit schema、单 capability JTI replay claim/state machine、HMAC request fingerprint、框架无关 security coordinator 与 OTel API adapter；Gateway 在 A4 最终 allow 后、业务执行前 prepare，重复/冲突/依赖故障分别稳定映射 409/403/503，业务结果未知不释放 claim。仅完成安全中间态：生产 durable backend、HMAC/KMS 轮换、OTel SDK/exporter/跨仓 trace、A5 parent JTI、P3 动态 token、业务幂等和远程发布仍未完成，A6 保持 `🔵` | of_mcp `0d1224d`；MultiRAG docs / 本次提交；policy revision `7bf9e09082ca4f1d529e51bf3fe8e6dd5c4334c62deaf9a5b6be204af9fca446` | A6/Gateway 定向 **65 passed**；`uv run --locked ofmcp verify` 六步全绿、**453 passed、2 existing skipped**；MultiRAG `make verify` 静态门禁全绿、**1915 passed**；当前 secure 无生产 coordinator 后端时 fail-fast，remote gate 未开放 | Codex |

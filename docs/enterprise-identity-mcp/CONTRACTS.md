@@ -473,9 +473,11 @@ M2 结合验证后的 tool input 与权威业务系统再落地。
 #### 6.3.1 逐工具 policy registry 与 contract snapshot
 
 `service.toml.scopes` 只登记服务可用的 scope 词表；`tool_policies` 才给每个工具分配
-`required_scopes`、`accepted_acr_values`、`required_amr`、可选 `enterprise_subject` 和
-`external_requirements`。registry 必须在所有 mount/namespace assembly 完成后，针对最终 canonical
-tool catalog 一次性构造：
+`required_scopes`、`effect`、`replay_mode`、`accepted_acr_values`、`required_amr`、可选
+`enterprise_subject` 和 `external_requirements`。`effect` 只允许 `read|prepare|side_effect`，
+`replay_mode` 只允许 `reusable|single_use`，且所有模型层都必须强制 `side_effect => single_use`；不能
+根据工具名、description、scope 名或 annotation 临时猜风险。registry 必须在所有 mount/namespace
+assembly 完成后，针对最终 canonical tool catalog 一次性构造：
 
 - 每个暴露工具必须且只能有一个 policy；缺失或孤儿 policy fail closed；
 - policy scope 必须属于当前 service 的 scope 词表；secure profile 是否属于 A1 resource registry 仍由
@@ -486,11 +488,77 @@ tool catalog 一次性构造：
 
 `ofmcp contract` 必须生成并校验排序稳定的 `apps/gateway/contract/tool-policies.json`。快照包含
 `snapshot_format`、`profile`、service id/namespace/scope 词表，以及每个 canonical tool 的 service id、
-required scopes、ACR/AMR、enterprise subject 和 external requirements。`policy_revision` 等于移除
-revision 字段后的 canonical JSON document 的 SHA-256；当前值为
-`6f79e7ddf8f630993a054f284ebd5213424ffe39b252c661d16a2967ed6fdd67`。策略变更必须显式刷新快照并
-经过 contract review；A6 运行时审计和后续 P3 token/cache key 必须使用同一 revision，不从文件
-mtime 或未排序映射推导。
+required scopes、effect/replay mode、ACR/AMR、enterprise subject 和 external requirements。
+`policy_revision` 等于移除 revision 字段后的 canonical JSON document 的 SHA-256；当前值为
+`7bf9e09082ca4f1d529e51bf3fe8e6dd5c4334c62deaf9a5b6be204af9fca446`（snapshot format 2）。策略变更
+必须显式刷新快照并经过 contract review；Gateway runtime、A6 审计和后续 P3 token/cache key 必须
+调用同一个 canonical builder/已发布 snapshot 获取同一 revision，不从硬编码、文件 mtime 或未排序
+映射推导。
+
+#### 6.3.2 A6 执行审计与单 capability replay contract
+
+A6 的 security coordinator 是 framework-independent domain boundary。Gateway 只能在 A4 内层
+`tools/call` **最终授权允许之后、实际业务 `call_next` 之前**调用它，并必须传入同一次 evaluation 的
+完整 immutable `ToolPolicy`、runtime `policy_revision`、已验证 Principal 与 canonical arguments；
+禁止把外层 preflight 的旧决定、调用方 `_meta` 或 header 重新解释成执行许可。
+
+`single_use` 的 replay claim key 固定为 domain-separated digest：
+
+```text
+sha256(domain, token_use, issuer, audience, jti)
+```
+
+它表示整枚 token/JTI 的**一个 capability**，不是“每个工具一个 key”。request fingerprint 才使用
+keyed HMAC 绑定完整 Principal（platform user、tenant、agent、client）、canonical tool name、
+`policy_revision` 与 canonical JSON arguments。由此得到以下硬语义：
+
+- 同一 JTI + 同一 fingerprint：`409 duplicate_operation`，只拒绝，不返回或重放先前结果；
+- 同一 JTI + 不同参数、主体、工具或 policy revision：`403 replay_detected`；
+- replay store 或 pre-execution audit 不能给出可信结果：`503`，fail closed；
+- 上述响应都 `Cache-Control: no-store`，不发 OAuth `WWW-Authenticate`，且业务函数必须零调用；
+- `read/reusable` 不消费 replay key，但仍必须写 pre-execution audit；它不是绕过 A4 的匿名快路。
+
+未来 P3 必须为每次高风险逻辑执行签发新的短期 token/JTI；把一枚 token 用于多个副作用工具调用会被
+本契约有意拒绝。当前 P3 尚未实现，secure 又因没有 production-ready coordinator fail-fast，因此这条
+纪律尚未进入真实 MultiRAG delegated bearer 链。
+
+claim 生命周期是 `CLAIMED -> DISPATCHED -> SUCCEEDED|FAILED_NO_EFFECT|OUTCOME_UNKNOWN`。进入业务
+代码前必须已完成原子 claim、pre-execution audit 和 `DISPATCHED`；成功才能记 `SUCCEEDED`。当前
+Gateway 对 `ToolResult.is_error`、业务异常和取消都保守记录 `OUTCOME_UNKNOWN`，因为 transport error
+不能证明外部副作用未发生。post-dispatch outcome store 写失败时保留 `DISPATCHED`，只产生脱敏安全
+日志，不得篡改已形成的业务响应或释放 claim。只有未来能以权威证据证明“未产生副作用”时才可记
+`FAILED_NO_EFFECT`。
+
+审计 schema 必须 frozen/allowlisted，禁止任意 `metadata`/attributes bag。v1 允许字段包括：
+
+```text
+schema/event type/event id/time, trace_id, mcp_call_id
+runtime, token_use, token issuer/audience, token_jti_hash
+principal/tenant/agent/client HMACs
+tool_name, effect, replay_mode, policy_revision, request_fingerprint
+decision, reason_code, replay_state
+```
+
+低熵主体标识必须使用 secret-keyed HMAC；JTI 作为高熵关联值只存 issuer-domain-separated SHA-256，
+避免不同 issuer 恰好复用同一 JTI 时审计关联碰撞。绝不保存 bearer、原始 JTI、
+tool arguments/results、Provider ID、姓名/邮箱/电话/员工号、enterprise subject、聊天/表单/医疗正文或
+任意异常原文。HMAC key 至少 256 bit；当前只接受显式注入，生产 KMS ownership、generation、轮换和
+旧摘要查询窗口仍是 A6 未完成项。
+
+OTel 是可观测面，不是安全依赖。phase 1 adapter 只通过 OpenTelemetry API 丰富 current span，并用
+`effect/replay_mode/result` 等低基数属性计数；tool name 与 policy revision 只放 span，不做 metric
+dimension，用户/tenant/client/JTI/fingerprint/参数/结果一律不进入 telemetry。不配置 SDK/exporter 时
+no-op，任何 telemetry 异常都不能改变认证、授权、replay 或业务结果。跨仓 W3C trace propagation、
+SDK/provider/exporter/collector 和 retention policy 仍未实现。
+
+`ReplayClaimStore.multi_instance_safe` 与 `AuditSink.durable` 都为真时 coordinator 才可
+`production_ready`；这两个属性必须由实现结构保证，不能由普通配置布尔值伪造。内置 memory store/
+sink 有界、进程内、重启丢失，仅供单元测试与显式 test-only 启动。secure Gateway 必须显式注入
+coordinator；无 production-ready 后端时真实 secure CLI 必须启动失败，remote-release gate 不得解除。
+
+本 replay contract 不是业务幂等或结果缓存：它只能阻止相同 capability 再次进入本进程执行边界，
+不能证明 OA/Jira 是否已经提交，duplicate 也不会回放结果。M3/M4 仍须用业务 idempotency key、状态
+查询和 unknown-outcome 对账闭环；A5 完成前也没有 `parent_jti_hash` 可供 proxy 链路审计。
 
 ### 6.4 JWKS 和轮换
 

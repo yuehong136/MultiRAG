@@ -132,7 +132,8 @@
   字段被 allowlist 拒绝，跨请求/并发 context 不串主体且请求结束后清空；
 - **A4 tool registry**：真实 assembly 后的 canonical tool catalog 与 `service.toml.tool_policies` 一一对应；
   缺失/孤儿 policy、未在当前 service scope 词表登记的 scope、重复 canonical name、namespace
-  collision 拒绝；snapshot 排序稳定、
+  collision 拒绝；`effect/replay_mode` 必填且 `side_effect=>single_use`，当前真实工具分类逐项锁定；
+  snapshot 排序稳定、
   `policy_revision` 可复算且 contract drift 被门禁发现；
 - **A4 business subject 边界**：已验证 `{type, issuer, subject, tenant}` 与 policy 所需类型/issuer/tenant
   精确匹配；当前 service policy 未启用 external business requirement，使调用参数 `workcode` 真正被
@@ -141,6 +142,24 @@
   的 tenant/membership/role/business denial 返回 403 且不伪装 scope challenge，external resolver
   缺失/失败/非法结果返回 500 invariant failure 而不是用户 403；没有可用的新鲜 JWKS cache 时返回
   503 verifier unavailable，不把基础设施故障误报为 401；
+- **A6 replay state machine**：同一 `(token_use,issuer,audience,jti)` + 同 fingerprint 只有一个
+  execution permit；32 路并发也只允许一个。相同 key/不同 Principal、tool、policy revision 或 canonical
+  arguments 为 conflict；claim 容量耗尽、store 故障、过期和非法状态迁移全部 fail closed，
+  `OUTCOME_UNKNOWN`/`DISPATCHED` 不释放 capability；
+- **A6 Gateway execution boundary**：必须证明 coordinator 在 A4 inner final allow 后、业务函数前运行，
+  并使用同一 evaluation policy 与 runtime revision；duplicate/conflict/dependency failure 分别是
+  HTTP 409/403/503、`no-store`、无 OAuth challenge、业务零调用。成功记 `SUCCEEDED`；tool error、异常、
+  cancellation 记 `OUTCOME_UNKNOWN`；post-dispatch outcome 持久化失败不覆盖业务响应；
+- **A6 audit/privacy**：冻结 schema 无 `metadata`/arguments/result 字段；序列化 event/permit/log/OTel 中
+  不存在 bearer、原始 JTI、Provider ID、低熵主体、enterprise subject、患者/请假正文或异常原文。
+  不同 issuer 的相同 JTI 得到不同 audit digest；HMAC domain separation、key 长度和 deterministic
+  fingerprint 有正反测试；audit/replay 前置依赖失败阻断副作用；
+- **A6 OTel/cardinality**：只验证 API adapter 对 current span/counters 的受控属性；metric dimensions
+  不含 tool、policy revision、user/tenant/client/JTI/fingerprint，参数/结果永不记录；API/SDK/exporter
+  抛错不改变安全决策。不能用 unit fake meter 宣称 exporter/collector 或跨仓 trace 已完成；
+- **A6 production gate**：memory replay/audit 的 `multi_instance_safe/durable` 固定为 false；secure 未显式
+  注入 coordinator、或 coordinator 非 production-ready 时启动失败。test-only 内存开关不得成为真实
+  CLI 默认，local/secure remote gate 均保持关闭；
 - sensitive tool：确认挑战、过期、不同用户/不同参数重放、双击和并发只执行一次；
 - MRTR：合法 `inputResponses + requestState` 可恢复，篡改/过期/错误 schema/revision 明确失败；再次
   返回 `InputRequiredResult` 时不丢失 actor/resource 绑定；
@@ -194,6 +213,24 @@ A4 提交锚点为 of_mcp `74117a0`；定向 **201 passed**，`uv run --locked o
 A2/P3 token 获取与逐请求委托、飞书 Channel identity→Principal、M1/M2 业务主体/对象授权、A5 internal
 actor、A6 audit/replay 或 `auth_time` freshness；secure 仍被机器限制为仅本机验证，不得做远程业务发布
 验收。
+
+A6 phase 1 的最小回归集合包括：
+
+- 所有实际工具的 effect/replay policy 与 format-2 snapshot 完整一致；canonical builder 在不同输入
+  顺序下给出同一 revision，local/secure profile 给出各自 revision，devkit/runtime 不出现第二套 hash；
+- replay store 的 acquire/duplicate/conflict、并发单赢家、状态机、容量/过期和 fail-closed 故障；
+- coordinator 的 request fingerprint、single-capability JTI key、审计顺序、permit 防伪、outcome 保守
+  语义，以及所有错误对象/日志/record 的敏感串扫描；
+- 真实 FastMCP/ASGI wire 覆盖 inner final-allow 到 execution 的边界和 409/403/503；没有 coordinator
+  或仅内存 coordinator 的 secure production path 必须 fail-fast；
+- OTel fake span/meter 覆盖允许属性与低基数 counters，exploding adapter 不影响 execution decision；
+- `uv run --locked ofmcp contract diff`、完整 `uv run --locked ofmcp verify` 与 `git diff --check`。
+
+当前实现只满足上述 phase-1 自动化形状；A6/Gateway 定向 **65 passed**，完整
+`uv run --locked ofmcp verify` 六步全绿、**453 passed、2 existing skipped**，提交锚点统一以 ROADMAP
+变更日志为准。A6 必须保持 `🔵`：自动化尚未覆盖真实多副本 durable store、
+进程重启后 claim/audit、KMS/HMAC key rotation、真实 OTel SDK/exporter/collector/W3C 跨仓 trace、A5
+`parent_jti_hash`、P3 每执行新 token/JTI、业务 idempotency/result lookup 和 remote-release 演练。
 
 ### 3.4 跨仓端到端测试
 
@@ -386,8 +423,11 @@ corpus 还要扫描 normalized claims/JWKS/token payload，确认不存在 Provi
 ## 5. 可观测与审计契约
 
 每条用户消息生成 `trace_id`；渠道事件同时保留 provider `event_id`，MCP 调用生成 `mcp_call_id`，
-多轮输入另生成 `interaction_id`。
-审计记录建议字段：
+多轮输入另生成 `interaction_id`。跨仓传播最终遵循 W3C Trace Context；当前 A6 phase 1 只读取
+of_mcp current span，尚未实现 MultiRAG → of_mcp 的 `traceparent/tracestate` 注入/提取和 collector
+联调，不能把随机/本地 trace id 当成跨仓 trace 已完成。
+
+平台级受控审计的目标字段：
 
 ```text
 occurred_at, trace_id, event_id, mcp_call_id, interaction_id
@@ -401,12 +441,21 @@ interaction_revision, confirmation_id, idempotency_key_hash, latency_ms, result
 必须 hash 或省略：`open_id`、`user_id`、`employee_no`、邮箱、手机号。绝不记录：secret、token
 原文、OAuth code、医疗正文、完整工具参数。只有受控审计库可保存业务必要的可逆映射，应用日志不可保存。
 
+of_mcp A6 的当前 security audit 更严格：它使用 frozen v1 schema，不接受扩展 `metadata`，只记录
+`trace_id/mcp_call_id`、runtime/token profile、issuer/audience、issuer-domain-separated JTI digest、
+主体/tenant/agent/client keyed HMAC、tool/effect/replay mode/policy revision、request fingerprint、
+decision/reason/replay state。它不记录 Provider/event/interaction 原文、enterprise subject、参数、结果
+或异常文本。`parent_jti_hash` 要等 A5 internal actor 才能进入该链；不得填空值冒充已实现。
+
 最低指标：
 
 - identity resolve 的成功/拒绝/冲突/目录错误和 p50/p95/p99；
 - JIT 创建、人工待审批、停用命中、缓存命中与 stale 使用量；
 - contact event lag、对账扫描滞后、漏事件修复数；
 - MCP auth 拒绝原因、工具授权拒绝、确认过期、幂等命中；
+- A6 security preparation 的 prepared/duplicate/conflict/store unavailable/audit unavailable；
+- A6 execution outcome 的 succeeded/failed-no-effect/outcome-unknown/recording-failed；指标维度只使用
+  effect/replay mode/result 等闭集，不使用 user/tenant/tool/JTI/policy revision 等高基数值；
 - InteractionSession 创建/恢复/拒绝/过期、form/H5 mode、revision 冲突和 output schema 失败；
 - 每 binding 收/丢/重复消息数和端到端时延；
 - `first_ack_ms/first_card_ms/first_delta_ms` 的 p50/p95/p99；
@@ -501,3 +550,23 @@ git diff --check
 **417 passed、2 existing skipped**，contract snapshot 无漂移；MultiRAG 文档收口后的 `make verify`
 全绿、**1904 passed**。`contract diff` 的可读输出不能替代 `ofmcp verify` 的 no-drift gate，A4 单仓
 全绿也不能替代未来 A2/P3/飞书链的跨仓 E2E。
+
+EIM-A6 phase 1/后续收口复用同一完整门禁，并必须显式包含 replay/audit/execution/telemetry 测试：
+
+```bash
+uv lock --check
+uv run --locked pytest packages/ofmcp-auth/tests/test_replay.py \
+  packages/ofmcp-auth/tests/test_security_execution.py \
+  packages/ofmcp-auth/tests/test_security_telemetry.py \
+  packages/ofmcp-auth/tests/test_fastmcp_adapter.py \
+  packages/ofmcp-core/tests/test_tool_policy_registry.py \
+  apps/gateway/tests/test_auth.py
+uv run --locked ofmcp contract diff
+uv run --locked ofmcp verify
+git diff --check
+```
+
+当前 A6/Gateway 定向 **65 passed**，完整 verify **453 passed、2 existing skipped**；提交锚点统一以
+ROADMAP 变更日志为准。不得因此把当前 phase 1 改成 `✅`。生产 durable
+store/KMS/collector 与跨仓 E2E
+需要各自额外证据，单元 fake 和内存 store 不能替代。
