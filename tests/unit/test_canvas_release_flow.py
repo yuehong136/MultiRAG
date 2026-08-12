@@ -121,11 +121,11 @@ def test_create_agent_session_uses_release_dsl(monkeypatch) -> None:
     )
 
     class FakeCanvas:
-        def __init__(self, dsl, tenant_id, agent_id, canvas_id=None):
+        def __init__(self, dsl, tenant_id, task_id=None, canvas_id=None):
             captured["canvas_init"] = {
                 "dsl": dsl,
                 "tenant_id": tenant_id,
-                "agent_id": agent_id,
+                "task_id": task_id,
                 "canvas_id": canvas_id,
             }
 
@@ -155,6 +155,7 @@ def test_create_agent_session_uses_release_dsl(monkeypatch) -> None:
 
     assert captured["helper_args"]["release_mode"] is True
     assert captured["canvas_init"]["dsl"] == json.dumps({"published": True}, ensure_ascii=False)
+    assert captured["canvas_init"]["task_id"] is None
     assert captured["saved_conv"]["message"] == [{"role": "assistant", "content": "published-prologue"}]
     assert payload["data"]["agent_id"] == "agent-1"
     fake_db.close()

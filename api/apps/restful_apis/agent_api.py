@@ -15,6 +15,7 @@ import time
 from functools import partial
 from typing import Any
 from urllib.parse import quote_plus
+from uuid import uuid4
 
 import jwt
 from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
@@ -561,7 +562,13 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
     # Agent模式 - SSE流式响应
     try:
         # 组件 __init__ 各自开连接查模型配置——整体入线程池
-        canvas = await asyncio.to_thread(Canvas, dsl_str, tenant_id, canvas_id=req["id"])
+        canvas = await asyncio.to_thread(
+            Canvas,
+            dsl_str,
+            tenant_id,
+            task_id=uuid4().hex,
+            canvas_id=req["id"],
+        )
     except Exception as e:
         return server_error_response(e)
 
@@ -1601,7 +1608,7 @@ def set_session(
         return get_data_error_result(retmsg=str(error))
 
     session_id = get_uuid()
-    canvas = Canvas(dsl, tenant_id, canvas_id, canvas_id=cvs.id)
+    canvas = Canvas(dsl, tenant_id, canvas_id=cvs.id)
     canvas.reset()
     normalized_dsl = json.loads(str(canvas))
     version_title = UserCanvasVersionService.get_latest_version_title(db, cvs.id, release_mode=release_mode)
@@ -2030,7 +2037,12 @@ async def webhook(agent_id: str, request: Request, db: Session = Depends(get_db)
         dsl_str = cvs.dsl
 
     try:
-        canvas = Canvas(dsl_str, cvs.user_id, agent_id, canvas_id=agent_id)
+        canvas = Canvas(
+            dsl_str,
+            cvs.user_id,
+            task_id=uuid4().hex,
+            canvas_id=agent_id,
+        )
     except Exception as e:
         return get_data_error_result(retcode=RetCode.BAD_REQUEST, retmsg=str(e))
 

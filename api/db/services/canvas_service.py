@@ -338,7 +338,15 @@ async def completion(
     session_id = conv["id"]
 
     def _build_canvas() -> Canvas:
-        canvas = Canvas(dsl, tenant_id, agent_id, canvas_id=canvas_id, custom_header=custom_header)
+        # A task id identifies one execution attempt, not the reusable Agent.
+        # Reusing agent_id here made concurrent runs share cancel/log Redis keys.
+        canvas = Canvas(
+            dsl,
+            tenant_id,
+            task_id=uuid4().hex,
+            canvas_id=canvas_id,
+            custom_header=custom_header,
+        )
         if is_new_session:
             canvas.reset()
         return canvas

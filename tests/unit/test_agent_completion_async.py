@@ -6,10 +6,12 @@
 ③ Canvas 构造（组件 __init__ 各自开连接查模型）必须在工作线程执行。
 """
 
+import asyncio
 import json
 import sys
 import threading
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,9 +30,11 @@ class _FakeCanvas:
     """构造即记录所在线程；run() 产出两帧。"""
 
     built_on_worker: list[bool] = []
+    task_ids: list[str | None] = []
 
-    def __init__(self, dsl, tenant_id, agent_id=None, canvas_id=None, custom_header=""):
+    def __init__(self, dsl, tenant_id, task_id=None, canvas_id=None, custom_header=""):
         type(self).built_on_worker.append(threading.current_thread() is not threading.main_thread())
+        type(self).task_ids.append(task_id)
         self.dsl = dsl
         self.error = ""
 
@@ -67,6 +71,7 @@ class _RecordingAsyncSession(AsyncSession):
 @pytest.fixture
 def completion_stubs(monkeypatch):
     _FakeCanvas.built_on_worker = []
+    _FakeCanvas.task_ids = []
     saved: dict[str, object] = {}
 
     conv_row = {"id": "sess-1", "message": [], "reference": [], "dsl": "{}", "errors": ""}
@@ -116,6 +121,21 @@ async def test_completion_raises_when_session_missing(monkeypatch):
 
     with pytest.raises(LookupError, match="Session not found"):
         [f async for f in canvas_service.completion(db, "tenant-unit", "agent-1", session_id="ghost", query="hi")]
+
+
+async def test_completion_allocates_unique_task_id_per_execution(completion_stubs):
+    async def consume_once() -> None:
+        db = _RecordingAsyncSession({"id": "sess-1"})
+        [frame async for frame in canvas_service.completion(db, "tenant-unit", "agent-1", session_id="sess-1", query="hi")]
+
+    await asyncio.gather(*(consume_once() for _ in range(4)))
+
+    assert len(_FakeCanvas.task_ids) == 4
+    assert None not in _FakeCanvas.task_ids
+    task_ids = [task_id for task_id in _FakeCanvas.task_ids if task_id is not None]
+    assert len(set(task_ids)) == 4
+    assert "agent-1" not in task_ids
+    assert all(UUID(hex=task_id).version == 4 for task_id in task_ids)
 
 
 # ---------------------------------------------------------------------------

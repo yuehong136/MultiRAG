@@ -206,7 +206,7 @@ def create_agent_session(agent_id: str, request_body: CreateAgentSessionRequest 
         return get_error_data_result(retmsg=str(e))
 
     session_id = get_uuid()
-    canvas = Canvas(dsl, tenant_id, agent_id, canvas_id=cvs.id)
+    canvas = Canvas(dsl, tenant_id, canvas_id=cvs.id)
     canvas.reset()
 
     cvs.dsl = json.loads(str(canvas))
