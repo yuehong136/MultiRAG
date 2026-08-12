@@ -161,7 +161,7 @@ I3 已完成，代码锚点为 `api/identity/contracts.py`、`policy.py`、`serv
    `REQUIRE_SERVICES=1 make integration` **82 passed in 12.48s**。
 
 P1 已接续 I3 完成；具体边界见下节。`F1/I4.1` 已完成，精确边界见本章后续小节。
-`I6` 再拥有 User/UserTenant/link 的完整事务，C3 才把 Channel assertion
+`I6` 已完成 User/UserTenant/link/event 的完整事务，C3 才把 Channel assertion
 组合成 Principal。FastMCP 4 的 auth 与 tool list/call 能力仍在 MCP composition/adapter 层复用，
 不进入上述 identity domain。
 
@@ -174,7 +174,8 @@ P1 已完成，代码锚点为 `api/identity/principal.py`、`api/identity/legac
    同一 class object 的临时 re-export，存量 route import 迁完即删；
 2. Principal direct constructor 封闭，两个 evidence builder 只是进程内 trusted adapter seam，
    不得直接消费 wire/Channel 任意 DTO；
-3. I3 builder 只提升无 error/provision/reverification 的 `RESOLVED`，同时要求 active identity、
+3. I3 builder 只提升无 error/provision action/provisioning policy revision/reverification 的
+   `RESOLVED`，同时要求 active identity、
    live 同 Tenant membership、合法 `owner/admin/normal` role 和一致 provider/internal identity/proof time；
 4. `validated_at`、真实 `authenticated_at` 与 `assurance_verified_at` 分离；当前 Web/API
    `authenticated_at=None`，directory 与 enterprise proof 分别绑 identity/subject 的原始验证时间；
@@ -189,8 +190,8 @@ P1 已完成，代码锚点为 `api/identity/principal.py`、`api/identity/legac
    安全复核无 blocker。
 
 P1 不交付 C3/P2、A2/P3 或 A7。A7 的代码前置已满足，但仍须作为独立 inbound
-Resource Server 实现/发布；identity 主线从 `I6 -> C3 -> P2` 继续，`C1 -> C2`
-可并行。
+Resource Server 实现/发布；I6 已完成，下一条接线主线必须先做 `C1 -> C2 -> C3 -> P2`。
+I5 与 I7 已由 I4 解锁，可在不共文件时并行；I8 仍要求 I6 + I7，不能跳过依赖。
 
 ### 4.4 外部 API 和 SDK 任务
 
@@ -265,8 +266,48 @@ I4.1 已完成并交接 I6。接手者必须保留以下边界：
    contracts、async gate、mypy 78 files、unit **2123 passed in 34.53s**）；强制 integration
    **84 passed in 12.52s**。
 9. I4 不持久化 Provider tenant/account ownership、ExternalIdentity/Alias 或 User/UserTenant，
-   不实现 I5/I6/I7/C3/Principal/MCP token。它只产生 verified Provider result；真正持久化和
-   Principal 组装仍须按 I6 -> C3/P1 继续。
+   不实现 I5/I6/I7/C3/Principal/MCP token。它只产生 verified Provider result；I6 现已在独立用例
+   事务层消费该 proof，Principal 组装仍须由 C3/P1 接续。
+
+#### EIM-I6 完成边界与 C1/C2/C3 接线交接
+
+I6 的代码锚点为 `api/identity/provisioning_contracts.py`、`provisioning.py`、
+`provisioning_repository.py`、`db_models.py::IdentityTenantPolicy/IdentityLinkCode/IdentityBindingEvent`
+及 forward migration `b4c6d8e0f2a4`。接手者必须保留：
+
+1. 每 Tenant policy 是数据库权威事实：显式 mode + `link_code_ttl_seconds(60..900)` + revision；缺
+   policy fail closed。管理 capability 只有 explicit create/CAS，无 delete/default/generic CRUD，普通
+   `IdentityService`/I6 write 不持有 admin port；
+2. I3 alias-miss plan 携 policy revision。I6 只接受原 I3 request/result + fresh I4 proof，不接受 caller
+   自选 target/action/mode/revision/role。stale-alias reverify 可刷新 canonical active identity；真正
+   inactive/conflict/revoked 不自动恢复；
+3. proof 必须精确匹配 provider/tenant/account/asserted open_id/scope marker，aware、非未来且最多 5
+   分钟。所有可能阻塞的锁之后用 PostgreSQL `clock_timestamp()` 重新校验 proof/code，write/consume/
+   event 使用 post-lock time；事务起点时间不能延长排队期间的有效窗口；
+4. link code 使用 exact 24-byte/192-bit CSPRNG；raw value 只返回一次且 `repr` 隐藏，repository 只接
+   HMAC-SHA256 digest + key id。新签发撤销同 account + target 旧 pending code；policy/account
+   revision 或 scope marker 改变、过期/撤销/猜错/target conflict 对外统一 `IDENTITY_LINK_REQUIRED`；
+5. preprovisioned 只激活已有 pending identity + live membership，不开户；link_only target 只来自
+   当前 authenticated Principal 创建的 grant；JIT 只创建 external-only User 与 active
+   `UserTenant(NORMAL)`，不建个人 Tenant/OWNER/ADMIN，也不写 email/password/access token；
+6. active membership partial unique 与全状态 reverse external-identity unique 是最终数据库防线。
+   User/UserTenant/identity/alias/code/first-binding event 在一个 fresh async transaction 中全成或全败，
+   Provider 网络调用不进入事务；
+7. `IdentityBindingEvent` 是 append-only 首次事实，按 identity/link grant/keyed request fingerprint
+   唯一。它不保存 raw subject/alias/open_id/union_id、raw code 或 PII；复合 FK 所需的 server-owned
+   account scope natural keys 仍在表中且 safe projection 隐藏；
+8. explicit link 是 ExternalIdentity 到一个现有 User 的绑定与可选 local→hybrid，不是双 User merge。
+   name/email/mobile/employee_no 不参与 target 匹配；合法 display name 只作展示并截到 100 字符；I5
+   EnterpriseSubject 仍未实现；
+9. I6 不接 HTTP/UI、Channel/C3、Principal 传播、I7 或 FastMCP/of_mcp。必须先由 C1/C2 建立
+   structured assertion 与 execution contract，C3 adapter 才能把 binding/Channel assertion 组合成
+   ProviderContext，调用 I3→I4→I6，并把最终 active records 重新解析/构造 P1 Principal；不得把 I6
+   的成功 DTO 当 wire Principal；
+10. 完成证据：domain/model unit **143 passed in 5.49s**；identity schema + provisioning schema +
+    I3 repository + I6 repository 真 PostgreSQL **84 passed in 7.80s**；`make verify` 的 Ruff format
+    **1241 files**、Ruff check、**7** 条 import contracts（832 files/2611 dependencies）、async DB gate、
+    mypy **81 source files** 与 unit **2188 passed** 全绿；强制 integration **128 passed in 16.40s**；
+    current-tree 安全终审无 blocker。
 
 MCP Foundation 的 F2/F3/F4/F6/F7/F8 已于 2026-08-12 完成。冷启动 Agent 必须先区分下面两层：
 
@@ -406,9 +447,9 @@ git diff --check
 ```
 
 A4 定向 **201 passed**；`uv run --locked ofmcp verify` 六步全绿、**417 passed、2 existing skipped**，
-contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG F1/I3/I4/P1 已完成，当前推进
-`I6` 与 `C1 -> C2`；只有
-`C3 -> P2` 后才能进入 A2/P3。secure 在独立远程发布闸门解除前仍不能作为远程业务入口。
+contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG F1/I3/I4/I6/P1 已完成；下一条
+接线主线为 `C1 -> C2 -> C3 -> P2`，只有完成 P2 后才能进入 A2/P3。I5/I7 可作为已
+解锁并行支线，但下游仍按依赖图等待。secure 在独立远程发布闸门解除前仍不能作为远程业务入口。
 
 ### 4.8 EIM-A6 phase 1 接手与完成边界
 

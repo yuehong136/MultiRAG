@@ -786,7 +786,16 @@ class Tenant(BaseModel):
 
 class UserTenant(BaseModel):
     __tablename__ = "t_ai_user_tenants"
-    __table_args__ = {"schema": "usr_ai"}
+    __table_args__ = (
+        sa.Index(
+            "uq_user_tenants_active_tenant_user",
+            "tenant_id",
+            "user_id",
+            unique=True,
+            postgresql_where=text("status = '1'"),
+        ),
+        {"schema": "usr_ai"},
+    )
 
     id: Mapped[str] = mapped_column(String(128), primary_key=True, index=False, nullable=False)
     user_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
@@ -971,6 +980,73 @@ class IdentityProviderAccount(BaseModel):
         return payload
 
 
+class IdentityTenantPolicy(BaseModel):
+    """Authoritative, revisioned provisioning policy for one tenant."""
+
+    __tablename__ = "t_ai_identity_tenant_policies"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "tenant_id",
+            name="uq_identity_tenant_policies_tenant",
+        ),
+        sa.CheckConstraint(
+            "id = tenant_id",
+            name="ck_identity_tenant_policies_identity",
+        ),
+        sa.CheckConstraint(
+            "mode IN ('preprovisioned', 'link_only', 'jit')",
+            name="ck_identity_tenant_policies_mode",
+        ),
+        sa.CheckConstraint(
+            "revision >= 1",
+            name="ck_identity_tenant_policies_revision",
+        ),
+        sa.CheckConstraint(
+            "link_code_ttl_seconds BETWEEN 60 AND 900",
+            name="ck_identity_tenant_policies_link_code_ttl",
+        ),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(32),
+        primary_key=True,
+        index=False,
+        nullable=False,
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        String(32),
+        sa.ForeignKey(
+            "usr_ai.t_ai_tenants.id",
+            name="fk_identity_tenant_policies_tenant_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    revision: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=1,
+        server_default=text("1"),
+    )
+    link_code_ttl_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return policy state without exposing its tenant identifier."""
+
+        return {
+            "mode": self.mode,
+            "revision": self.revision,
+            "link_code_ttl_seconds": self.link_code_ttl_seconds,
+            "changed_at": self.changed_at,
+        }
+
+
 class IdentityProviderChannelLink(BaseModel):
     """Immutable one-to-one link from a Provider Account to a Channel."""
 
@@ -1063,6 +1139,14 @@ class ExternalIdentity(BaseModel):
             "provider",
             "provider_tenant_key",
             name="uq_external_identities_alias_parent",
+        ),
+        sa.UniqueConstraint(
+            "tenant_id",
+            "user_id",
+            "provider",
+            "provider_tenant_key",
+            "subject_type",
+            name="uq_external_identities_tenant_user_provider_subject_type",
         ),
         sa.CheckConstraint(
             "btrim(provider) <> '' AND btrim(provider_tenant_key) <> '' AND btrim(subject_type) <> '' AND btrim(subject_value) <> ''",
@@ -1289,6 +1373,377 @@ class ExternalIdentityAlias(BaseModel):
         payload.pop("provider_account_key", None)
         payload.pop("alias_value", None)
         return payload
+
+
+class IdentityLinkCode(BaseModel):
+    """One-time, digest-only proof that an authenticated user requested a link."""
+
+    __tablename__ = "t_ai_identity_link_codes"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "digest_key_id",
+            "code_digest",
+            name="uq_identity_link_codes_digest",
+        ),
+        sa.UniqueConstraint(
+            "id",
+            "tenant_id",
+            "provider",
+            "provider_tenant_key",
+            "provider_account_key",
+            name="uq_identity_link_codes_event_scope",
+        ),
+        sa.CheckConstraint(
+            "btrim(provider) <> '' AND btrim(provider_tenant_key) <> '' AND btrim(provider_account_key) <> '' AND btrim(target_user_id) <> '' AND btrim(digest_key_id) <> ''",
+            name="ck_identity_link_codes_nonempty",
+        ),
+        sa.CheckConstraint(
+            "code_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_identity_link_codes_hash",
+        ),
+        sa.CheckConstraint(
+            "policy_revision >= 1",
+            name="ck_identity_link_codes_revision",
+        ),
+        sa.CheckConstraint(
+            "provider_account_revision >= 1",
+            name="ck_identity_link_codes_account_revision",
+        ),
+        sa.CheckConstraint(
+            "state IN ('pending', 'consumed', 'revoked')",
+            name="ck_identity_link_codes_state",
+        ),
+        sa.CheckConstraint(
+            "expires_at > issued_at AND expires_at <= issued_at + interval '15 minutes'",
+            name="ck_identity_link_codes_lifetime",
+        ),
+        sa.CheckConstraint(
+            "(state = 'pending' AND consumed_at IS NULL AND revoked_at IS NULL "
+            "AND consumed_external_identity_id IS NULL) "
+            "OR (state = 'consumed' AND consumed_at IS NOT NULL AND revoked_at IS NULL "
+            "AND consumed_external_identity_id IS NOT NULL AND consumed_at >= issued_at "
+            "AND consumed_at < expires_at) "
+            "OR (state = 'revoked' AND consumed_at IS NULL AND revoked_at IS NOT NULL "
+            "AND consumed_external_identity_id IS NULL AND revoked_at >= issued_at)",
+            name="ck_identity_link_codes_state_fields",
+        ),
+        sa.ForeignKeyConstraint(
+            [
+                "tenant_id",
+                "provider",
+                "provider_tenant_key",
+                "provider_account_key",
+            ],
+            [
+                "usr_ai.t_ai_identity_provider_accounts.tenant_id",
+                "usr_ai.t_ai_identity_provider_accounts.provider",
+                "usr_ai.t_ai_identity_provider_accounts.provider_tenant_key",
+                "usr_ai.t_ai_identity_provider_accounts.provider_account_key",
+            ],
+            name="fk_identity_link_codes_provider_account",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            [
+                "consumed_external_identity_id",
+                "tenant_id",
+                "provider",
+                "provider_tenant_key",
+            ],
+            [
+                "usr_ai.t_ai_external_identities.id",
+                "usr_ai.t_ai_external_identities.tenant_id",
+                "usr_ai.t_ai_external_identities.provider",
+                "usr_ai.t_ai_external_identities.provider_tenant_key",
+            ],
+            name="fk_identity_link_codes_consumed_identity",
+            ondelete="RESTRICT",
+        ),
+        sa.Index(
+            "ix_identity_link_codes_target_state_expiry",
+            "target_user_id",
+            "state",
+            "expires_at",
+        ),
+        sa.Index(
+            "ix_identity_link_codes_account_state_expiry",
+            "tenant_id",
+            "provider",
+            "provider_tenant_key",
+            "provider_account_key",
+            "state",
+            "expires_at",
+        ),
+        sa.Index(
+            "uq_identity_link_codes_pending_target_account",
+            "tenant_id",
+            "provider",
+            "provider_tenant_key",
+            "provider_account_key",
+            "target_user_id",
+            unique=True,
+            postgresql_where=text("state = 'pending'"),
+        ),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(32),
+        primary_key=True,
+        index=False,
+        nullable=False,
+        default=lambda: uuid.uuid4().hex,
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        String(32),
+        sa.ForeignKey(
+            "usr_ai.t_ai_tenants.id",
+            name="fk_identity_link_codes_tenant_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider_tenant_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    provider_account_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    target_user_id: Mapped[str] = mapped_column(
+        String(32),
+        sa.ForeignKey(
+            "usr_ai.t_ai_users.id",
+            name="fk_identity_link_codes_target_user_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    digest_key_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    code_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    policy_revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    provider_account_revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    provider_account_last_scope_change_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    state: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="pending",
+        server_default=text("'pending'"),
+    )
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    consumed_external_identity_id: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return lifecycle metadata without identifiers or digest material."""
+
+        return {
+            "state": self.state,
+            "policy_revision": self.policy_revision,
+            "provider_account_revision": self.provider_account_revision,
+            "issued_at": self.issued_at,
+            "expires_at": self.expires_at,
+            "consumed_at": self.consumed_at,
+            "revoked_at": self.revoked_at,
+        }
+
+
+class IdentityBindingEvent(BaseModel):
+    """Append-only audit record for the first binding of one external identity."""
+
+    __tablename__ = "t_ai_identity_binding_events"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "external_identity_id",
+            name="uq_identity_binding_events_identity",
+        ),
+        sa.UniqueConstraint(
+            "link_code_id",
+            name="uq_identity_binding_events_link_code",
+        ),
+        sa.UniqueConstraint(
+            "request_digest_key_id",
+            "request_digest",
+            name="uq_identity_binding_events_request",
+        ),
+        sa.CheckConstraint(
+            "btrim(provider) <> '' AND btrim(provider_tenant_key) <> '' "
+            "AND btrim(provider_account_key) <> '' AND btrim(external_identity_id) <> '' "
+            "AND btrim(target_user_id) <> '' AND btrim(request_digest_key_id) <> ''",
+            name="ck_identity_binding_events_nonempty",
+        ),
+        sa.CheckConstraint(
+            "request_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_identity_binding_events_hash",
+        ),
+        sa.CheckConstraint(
+            "policy_revision >= 1",
+            name="ck_identity_binding_events_revision",
+        ),
+        sa.CheckConstraint(
+            "binding_method IN ('jit', 'preprovisioned', 'link_code')",
+            name="ck_identity_binding_events_method",
+        ),
+        sa.CheckConstraint(
+            "(previous_account_kind IS NULL OR previous_account_kind IN ('local', 'external', 'hybrid')) AND result_account_kind IN ('external', 'hybrid')",
+            name="ck_identity_binding_events_account_kind",
+        ),
+        sa.CheckConstraint(
+            "(binding_method = 'jit' AND actor_user_id IS NULL AND link_code_id IS NULL "
+            "AND previous_account_kind IS NULL AND result_account_kind = 'external') "
+            "OR (binding_method = 'preprovisioned' AND actor_user_id IS NULL "
+            "AND link_code_id IS NULL AND previous_account_kind IS NOT NULL "
+            "AND ((previous_account_kind = 'local' AND result_account_kind = 'hybrid') "
+            "OR (previous_account_kind = 'external' AND result_account_kind = 'external') "
+            "OR (previous_account_kind = 'hybrid' AND result_account_kind = 'hybrid'))) "
+            "OR (binding_method = 'link_code' AND actor_user_id = target_user_id "
+            "AND link_code_id IS NOT NULL AND previous_account_kind IS NOT NULL "
+            "AND ((previous_account_kind = 'local' AND result_account_kind = 'hybrid') "
+            "OR (previous_account_kind = 'external' AND result_account_kind = 'external') "
+            "OR (previous_account_kind = 'hybrid' AND result_account_kind = 'hybrid')))",
+            name="ck_identity_binding_events_method_shape",
+        ),
+        sa.CheckConstraint(
+            "provider_verified_at <= occurred_at",
+            name="ck_identity_binding_events_verified_time",
+        ),
+        sa.ForeignKeyConstraint(
+            [
+                "tenant_id",
+                "provider",
+                "provider_tenant_key",
+                "provider_account_key",
+            ],
+            [
+                "usr_ai.t_ai_identity_provider_accounts.tenant_id",
+                "usr_ai.t_ai_identity_provider_accounts.provider",
+                "usr_ai.t_ai_identity_provider_accounts.provider_tenant_key",
+                "usr_ai.t_ai_identity_provider_accounts.provider_account_key",
+            ],
+            name="fk_identity_binding_events_provider_account",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            [
+                "external_identity_id",
+                "tenant_id",
+                "provider",
+                "provider_tenant_key",
+            ],
+            [
+                "usr_ai.t_ai_external_identities.id",
+                "usr_ai.t_ai_external_identities.tenant_id",
+                "usr_ai.t_ai_external_identities.provider",
+                "usr_ai.t_ai_external_identities.provider_tenant_key",
+            ],
+            name="fk_identity_binding_events_identity_scope",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            [
+                "link_code_id",
+                "tenant_id",
+                "provider",
+                "provider_tenant_key",
+                "provider_account_key",
+            ],
+            [
+                "usr_ai.t_ai_identity_link_codes.id",
+                "usr_ai.t_ai_identity_link_codes.tenant_id",
+                "usr_ai.t_ai_identity_link_codes.provider",
+                "usr_ai.t_ai_identity_link_codes.provider_tenant_key",
+                "usr_ai.t_ai_identity_link_codes.provider_account_key",
+            ],
+            name="fk_identity_binding_events_link_code_scope",
+            ondelete="RESTRICT",
+        ),
+        sa.Index(
+            "ix_identity_binding_events_tenant_target_time",
+            "tenant_id",
+            "target_user_id",
+            "occurred_at",
+        ),
+        sa.Index(
+            "ix_identity_binding_events_account_time",
+            "tenant_id",
+            "provider",
+            "provider_tenant_key",
+            "provider_account_key",
+            "occurred_at",
+        ),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(32),
+        primary_key=True,
+        index=False,
+        nullable=False,
+        default=lambda: uuid.uuid4().hex,
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        String(32),
+        sa.ForeignKey(
+            "usr_ai.t_ai_tenants.id",
+            name="fk_identity_binding_events_tenant_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider_tenant_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    provider_account_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    external_identity_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_user_id: Mapped[str] = mapped_column(
+        String(32),
+        sa.ForeignKey(
+            "usr_ai.t_ai_users.id",
+            name="fk_identity_binding_events_target_user_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    actor_user_id: Mapped[str | None] = mapped_column(
+        String(32),
+        sa.ForeignKey(
+            "usr_ai.t_ai_users.id",
+            name="fk_identity_binding_events_actor_user_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=True,
+    )
+    link_code_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    binding_method: Mapped[str] = mapped_column(String(32), nullable=False)
+    previous_account_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    result_account_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    policy_revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    provider_verified_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    request_digest_key_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return non-identifying audit metadata only."""
+
+        return {
+            "provider": self.provider,
+            "binding_method": self.binding_method,
+            "previous_account_kind": self.previous_account_kind,
+            "result_account_kind": self.result_account_kind,
+            "policy_revision": self.policy_revision,
+            "provider_verified_at": self.provider_verified_at,
+            "occurred_at": self.occurred_at,
+        }
 
 
 class EnterpriseSubjectLink(BaseModel):

@@ -51,6 +51,20 @@
   identity 或生成 Principal；
 - identity resolution 每次从数据库重查 live User/UserTenant；重复 active membership、停用/匿名用户、
   非法 role 或 stale revision 都 fail closed，不能任选第一条或沿用旧缓存授权；
+- provisioning policy 必须是显式数据库 row，mode、TTL 和 revision 一起进入 snapshot；缺行/非法值/
+  读取失败不得使用默认 JIT。I3 plan 携 revision，I6 锁后重新核对 action/mode/revision；
+- link code 必须由 exact 24-byte CSPRNG 产生、raw value 只返回一次，持久层只见 domain-separated
+  HMAC-SHA256 digest + key id。TTL 只能来自权威 policy（60～900 秒），新签发撤销同 account + target
+  旧 pending code，所有可探测 invalid/conflict 结果统一要求重新 link；
+- 所有阻塞 policy/account/canonical/target/grant 锁后必须用 PostgreSQL `clock_timestamp()` 重新检查
+  Provider proof 的 5 分钟窗口与 pending code expiry；不能用冻结的事务起点时间延长凭据有效期；
+- preprovisioned 不开户，link_only target 只来自 authenticated Principal 创建的 grant，JIT 只创建
+  external-only User + active `UserTenant(NORMAL)`；全状态 reverse identity unique 与 active membership
+  partial unique 必须由数据库承担并发最终保护；
+- explicit link 不是双 User merge；姓名、display name、邮箱、手机号和 employee_no 永不用于 target
+  匹配。I6 不写 EnterpriseSubject；inactive/conflict/revoked identity 不因新 proof 自动恢复；
+- first-binding event append-only，raw subject/alias/code/PII 不入表；server-owned provider tenant/account
+  scope natural keys 只为复合 FK 存在且 safe projection 隐藏；
 - ProviderContext 的 account revision 与 scope marker 必须同时匹配；read 必须携 alias proof 时间。scope
   变化后的旧 alias 要求 Provider 重验，旧 proof 不能写入或倒退已存 proof；identity conflict 的安全
   结论优先于 freshness，不能被降格成普通重验；
@@ -92,7 +106,7 @@
 | I3 IdentityService | context/alias 结构校验、account health、无效 context 与 alias miss 区分、live membership、三态 plan、policy failure | 框架无关 async unit；只 mock lookup/policy ports |
 | I3 repository | 单 SQL authority snapshot、account generation/alias freshness、ordinary/verified/account-control/ownership 分权、CAS/锁、审计时间、输入/driver 脱敏 | `tests/integration/` 真 PostgreSQL |
 | I4 Provider flow | Auth V3 generated async request/resource/transport + strict live top-level adapter、Tenant V2/Contact V3 typed nested response、阶段化 error、cache/single-flight/限流、credential link/换钥 | ✅ I4.1：live adapter sandbox 三步通过；I4+F1 118、真 PG 1、完整 verify/integration 全绿 |
-| I6 Identity write flow | JIT/link-only/preprovisioned 的 User/UserTenant/identity/alias 真实写事务 | async service + 真 PostgreSQL；尚未实现 |
+| I6 Identity write flow | 权威 policy/revision/TTL，JIT/link/preprovisioned 的 User/UserTenant/identity/alias/code/event 原子事务，post-lock freshness | ✅ framework-neutral async service + 真 PostgreSQL；完整门禁全绿 |
 | DB schema/event | 唯一约束、事务并发、别名归一化、幂等事件 | `tests/integration/` 真 PostgreSQL |
 | P1 Principal | 单一 canonical class、sealed constructor、深不可变/脱敏 repr、evidence 一致、proof time、legacy owner 活查与 JWT fallback 分界 | 纯 domain/auth unit + 真 PostgreSQL owner-membership 行为 |
 | MCP token | 两个 profile、claims/types、固定时钟、TTL、JWKS、轮换、scope registry/交集、cross-resource | 两库独立纯密码学 corpus + HTTP 契约测试 |
@@ -101,10 +115,12 @@
 | InteractionSession | MRTR 多轮、revision/CAS、decline/cancel/expire、重启恢复 | service 单测 + 真库集成 |
 | Structured result | `structuredContent`/`outputSchema` 一致性和安全事件转换 | schema/golden tests |
 
-截至 2026-08-12，EIM-I3 已完成 ProviderContext 驱动的本地 identity lookup、
+截至 2026-08-13，EIM-I3 已完成 ProviderContext 驱动的本地 identity lookup、
 verification-gated policy plan 与窄 repository/CAS seam；EIM-P1 已完成 canonical Principal、
-AuthenticationContext、I3 promotion builder 和 legacy Web/API personal-owner adapter。这仍不包含飞书
-Provider/开户/Channel 组装，也没有把 Principal 传进 Agent/Memory/Workflow/MCP。EIM-F3/F8 只完成
+AuthenticationContext、I3 promotion builder 和 legacy Web/API personal-owner adapter；EIM-I6 已完成
+权威 policy/link/event schema、framework-neutral service 与三种原子 provisioning transaction，并通过
+完整门禁。I6 不包含 Channel 组装，也没有把 Principal 传进
+Agent/Memory/Workflow/MCP。EIM-F3/F8 只完成
 MCP SDK 2/FastMCP 4 的协议运行时迁移和 `InputRequiredResult` 的 transport-level 暴露。
 EIM-A1 已固定 token/JWKS test vectors；A7 的前置虽已满足，独立 audience/scope 和 OAuth
 Resource Server 仍未实现；InteractionSession 仍属于依赖 P3/A4/C3 的 EIM-U14。不能因
@@ -150,13 +166,15 @@ asserted open_id match、stable user id present，以及 activated true、frozen
 最少必须覆盖这些命名场景：
 
 1. 同一个飞书用户通过同一企业的两个应用进入：`open_id` 不同、`user_id` 相同，最终只能有一个
-   enterprise subject 和一个已绑定平台账号；两个应用安装实例都必须归属同一个 MultiRAG Tenant。
+   canonical identity 和一个已绑定平台账号；两个应用安装实例都必须归属同一个 MultiRAG Tenant。
+   enterprise subject 要等 I5 才另行证明，不能把 I6 canonical identity 当工号映射。
 2. 两个企业碰巧出现相同 `user_id`：因为 `tenant_key` 不同，绝不能合并。
 3. 同一个 `open_id` 字符串出现在不同应用：因为 `provider_account_key` 不同，绝不能合并。
 4. `open_id`、`user_id` 同时出现但目录返回的用户不一致：返回 `IDENTITY_CONFLICT`，不猜测。
 5. 飞书返回用户 `status.is_activated=false`、已离职或不可见：拒绝建立/使用会话。
 6. 已存在 alias 的用户更换部门或姓名：身份主体不变化，只更新 profile 快照。
-7. 两个并发首次消息同时 JIT：数据库最终只能生成一条 identity、一条 subject link；另一事务安全重读。
+7. 两个并发首次消息同时 JIT：数据库最终只能生成一条 User、active membership、identity 与首次
+   binding event；另一事务安全重读。I6 不生成 EnterpriseSubjectLink。
 8. 目录接口超时且无可用缓存：拒绝首次登录；已有短期正缓存可按策略工作并打 `stale` 指标。
 9. 负缓存命中后收到 `contact.user.updated_v3`：负缓存立即失效，可重新验证。
 10. `ChannelActor.subject` 被任意伪造：在 C3 之后仍不能直接进入 `Principal.id`。
@@ -234,6 +252,37 @@ asserted open_id match、stable user id present，以及 activated true、frozen
 39. Provider/credential DTO、exception、repr、调试输出和真实 sandbox 证据中不得出现
     app secret、tenant token、raw response/body、完整 account/tenant/user/open/union ID、姓名、手机、邮箱、
     头像或工号。
+40. policy 缺行/非法 TTL、create 并发和 stale CAS：缺行必须让 I3/I6 fail closed；create 只有
+    `CREATED + EXISTS`，CAS 只有正确 revision 能把 mode+TTL 一起更新并 revision+1；普通 provisioning
+    port 无 admin create/update/delete。
+41. I3 alias miss 结果必须携 policy revision，P1 builder 必须拒绝带 action/revision 的 plan。I6
+    action/mode/revision 任一不符、策略在 I3 后改变，均在零 identity/User 写入下返回 policy unavailable。
+42. entropy source 返回 bytes subclass、非 bytes、23/25 bytes 均拒绝；合法 raw code 解码必须正好
+    24 bytes。签发结果 `repr` 不含 raw code/key/digest，数据库列集合不存在 raw code/token/secret。
+43. link code 签发 TTL 只取 locked policy，60 秒与900 秒边界通过，超界拒绝；同 account + target
+    新码原子撤销旧 pending 码且最多一个 pending。旧码、猜码、过期、撤销、policy/account revision 或
+    scope marker 变化、target/canonical conflict 的 outward result 都是 `IDENTITY_LINK_REQUIRED`。
+44. proof exact 5 分钟边界通过，早一瞬间拒绝，任何 future proof 拒绝。事务排队等待 policy/account/
+    canonical/target/grant 锁跨过 proof age 或 code expiry 后，post-lock `clock_timestamp()` 重验必须拒绝
+    且零半写；binding event/consume 时间使用 post-lock wall clock。
+45. preprovisioned 对不存在 canonical pending identity 返回 not found 且 User count 不变；对已有 pending
+    identity 只在 live User + active membership 下激活。link_only 只能从 grant 得到 target，caller
+    command 无 target_user 字段；JIT 只创建 external User + `NORMAL` membership，无 email/password/
+    access token、OWNER/ADMIN 或个人 Tenant。
+46. canonical subject natural key、全状态 reverse slot 和 active membership partial unique 在并发下
+    只有一个 winner；inactive/revoked 行不能通过状态变化释放 reverse slot。任一 alias/event/code
+    冲突使 User/UserTenant/identity/alias/code/event 整体回滚。
+47. explicit link 到 local User 只允许 local→hybrid，不能生成或合并第二个 User；同名、同邮箱、同
+    手机、同 display_name/employee_no 都不得查询或选 target。合法 101～512 字符 display name 仅
+    NFKC/空白规范化并截到 100，不得成为 proof 拒绝或匹配依据。
+48. active canonical identity + fresh proof 可刷新缺失/stale alias并 `ALREADY_BOUND`；真正
+    inactive/conflict/revoked 保持 fail closed。active canonical 若显式提交 code，必须核对 target 与
+    原首次 binding event，不能静默忽略冲突 code。
+49. 每个 identity 只有一条 append-only first-binding event；同 link grant 或 keyed request digest
+    不能产生第二条。event 无 update/delete port，safe projection 不含 provider tenant/account scope
+    natural key、subject/alias、target/actor、digest；表中 scope natural keys 仅服务复合 FK。
+50. I6 import graph 不包含 FastMCP、Channel、HTTP route 或 UI；写事务不触发 Provider 网络调用；
+    employee_no 即使出现在 I4 proof 也不进入 I6 command/schema/identity attributes/BindingEvent。
 
 ### 3.2 MultiRAG 集成测试
 
@@ -254,6 +303,17 @@ asserted open_id match、stable user id present，以及 activated true、frozen
 - I3 mutation 写前锁 account 并复核 revision + scope marker；ordinary pending insert/单向收紧 CAS、
   verified alias refresh/activation、provider health CAS、proof freshness/不倒退、终态、Core 审计时间、
   输入/driver 脱敏和事务回滚都由真库测试证明；
+- I6 policy table 精确强制每 Tenant 一行、mode/revision、TTL 60～900 且无默认 backfill；create concurrency
+  收敛为 CREATED/EXISTS，CAS 对 stale revision 不覆盖。upgrade 遇 active membership/reverse identity
+  重复 group fail closed；
+- I6 link-code table 不存在 raw code/token/secret 列，digest + key id、policy/account generation、状态/
+  时间组合、15 分钟硬上限、同 account + target 仅一条 pending、scope 复合 FK 都由真库约束；
+- I6 first-binding event 对 identity、link grant 与 keyed request digest 唯一，method/account-kind shape、
+  `provider_verified_at<=occurred_at` 和 account/identity/grant scope 复合 FK 由真库强制；有任一 policy/
+  code/event 时 downgrade fail closed；
+- 三种 I6 transaction 在真实并发下只产生一个 canonical identity/reverse slot/active membership/首次
+  event；任一后段失败整笔回滚。所有阻塞锁后以 `clock_timestamp()` 重验 5 分钟 proof/code expiry，
+  人为排队跨界必须零写入；
 - event receipt 的 `(tenant_id, provider, provider_tenant_key, provider_account_key, event_type,
   event_id)` 幂等，且表结构不存在原始 body/payload/headers/metadata 列；
 - 所有 Tenant/User/Channel/identity/provider-account/link 外键均为 `ON DELETE RESTRICT`；有任意 ownership/
@@ -306,6 +366,15 @@ builder、proof-time 绑定、深不可变/脱敏、legacy owner 和凭据 fallb
 personal OWNER Tenant 的活查与歧义拒绝。完整 `make verify` 全绿：7 条 import contracts、
 async gate、mypy **73 files**、unit **2005 passed**；`REQUIRE_SERVICES=1 make integration`
 **83 passed**；安全复核无 blocker，`git diff --check` 通过。
+
+EIM-I6 完成基线（2026-08-13）：domain/model unit **143 passed in 5.49s**；identity schema、provisioning
+schema、I3 repository 与 I6 repository 真 PostgreSQL **84 passed in 7.80s**，覆盖上述三 mode、policy
+CAS、digest-only code、append-only event、并发/回滚与 post-lock freshness。`make verify` 全绿：Ruff
+format **1241 files**、Ruff check、**7** 条 import contracts（832 files/2611 dependencies）、async DB
+gate、mypy **81 source files**、unit **2188 passed**；`REQUIRE_SERVICES=1 make integration`
+**128 passed in 16.40s**；Alembic 单 head `b4c6d8e0f2a4`。首次完整 integration 暴露旧 P1 测试的重复 active membership seed；该用例已
+改为断言 I6 新增的数据库唯一约束并聚焦 **1 passed**，最终完整 integration 全绿。current-tree 安全
+终审无 blocker。
 
 ### 3.3 `of_mcp` 测试
 
@@ -758,6 +827,23 @@ REQUIRE_SERVICES=1 uv run pytest tests/integration/test_identity_repository.py
 当前定向结果分别为 **40 passed** 与 **17 passed**，合计 **57 passed**；连续 repository + schema
 **40 passed**。完整结果：`make verify` unit **1969 passed in 28.85s**，静态门禁全绿；
 `REQUIRE_SERVICES=1 make integration` **82 passed in 12.48s**。
+
+EIM-I6 的快速证据必须覆盖 domain/model 与四个真库面，且不能替代最终完整门禁：
+
+```bash
+uv run pytest tests/unit/test_identity_domain.py \
+  tests/unit/test_identity_provisioning_domain.py \
+  tests/unit/test_identity_models.py \
+  tests/unit/test_principal.py
+REQUIRE_SERVICES=1 uv run pytest tests/integration/test_identity_schema.py \
+  tests/integration/test_identity_provisioning_schema.py \
+  tests/integration/test_identity_repository.py \
+  tests/integration/test_identity_provisioning.py
+```
+
+完成结果为 domain/model unit **143 passed in 5.49s**，四个 identity 真 PostgreSQL 面
+**84 passed in 7.80s**。完整 `make verify` unit **2188 passed** 且静态门禁全绿；完整强制
+integration **128 passed in 16.40s**。
 
 涉及启动、路由、JWKS 端点：启动受控服务后追加：
 

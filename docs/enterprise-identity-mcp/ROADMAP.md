@@ -10,7 +10,10 @@
 > EIM-I4.1 已完成 EIM-I4 的 Auth V3 live-response 兼容与错误码阶段化：旧 stdin-collision
 > sandbox 因实际空参数作废；有效直连与修正后 production adapter sandbox 均证明
 > Auth/Tenant/Contact 三步 HTTP 200/code 0、tenant 匹配且用户 active，全量门禁已绿。
-> 下一条 identity 主线为 EIM-I6；
+> EIM-I6 的权威 policy/link/event schema、framework-neutral domain service 与三种 PostgreSQL
+> 原子 provisioning transaction 已完成，完整门禁与 current-tree 安全终审全绿；
+> 下一条接线主线先走 EIM-C1 -> C2 -> C3，再进入 EIM-P2；I5 与 I7 的 I4 前置已满足，
+> 可作为不共文件的并行 identity 支线，但 I8 仍须同时等待 I6 + I7；
 > Channel assertion 轨可独立推进；EIM-F5 /
 > CHN-X14 和 EIM-O4 均保持挂起。
 
@@ -217,7 +220,7 @@ F1/F3/F4/F7/F8 禁止携带身份功能。F2 只是 characterization/兼容矩�
 | EIM-I3 | MR | `api/identity` contracts/repository/policy/service 骨架，三种 provisioning policy | ✅ | I2.1 | `ProviderContext + AliasKey` 单 SQL 权威快照，revision + scope marker/alias proof freshness；五个窄 port；定向 57 passed，完整 verify 1969 / integration 82 |
 | EIM-I4 | MR | `FeishuEnterpriseIdentityProvider`：open_id -> user_id/status/employee_no，token/cache/限流；I4.1 修正 Auth live response 与阶段化错误码 | ✅ | F1,I3 | I4+F1 定向 118；credential 真 PG 1；production adapter live sandbox 三步通过；完整 verify/integration 全绿 |
 | EIM-I5 | MR | `FeishuEmployeeNumberResolver` + 可插拔 OA/HR resolver SPI | ⬜ | I4 | resolved/not-found/ambiguous/unavailable/inactive 五态；不含原力 if/else |
-| EIM-I6 | MR | `preprovisioned/link_only/jit`、User/UserTenant 事务、一次性 link code、显式合并 | ⬜ | I3,I4 | JIT 只能 NORMAL；并发首次消息只建一个用户；绑定码单次/短 TTL；无邮箱匹配 |
+| EIM-I6 | MR | 权威 policy generation、`preprovisioned/link_only/jit` 原子事务、digest-only link grant 与首次绑定审计 | ✅ | I3,I4 | domain/model unit 143；四个 identity 真 PG 面 84；verify unit 2188；integration 128；无显示字段匹配/双 User merge |
 | EIM-I7 | MR | Contact created/updated/deleted/scope 事件规范化、receipt 幂等、cache/revision 失效 | ⬜ | I4 | 重复事件无副作用；离职禁用；scope 变化触发 account revision，不全量拉取 |
 | EIM-I8 | MR | 已链接活跃用户兜底 reconciliation、identity health、管理员可观测性 | ⬜ | I6,I7 | 不枚举全员；限流/游标；故障续跑；指标和脱敏错误码 |
 
@@ -278,8 +281,7 @@ F1/F3/F4/F7/F8 禁止携带身份功能。F2 只是 characterization/兼容矩�
 - 完成证据：领域 unit **40 passed**、真 PostgreSQL repository **17 passed**，合计定向 **57 passed**；
   repository + identity schema 连续真库 **40 passed**；`make verify` 全绿（Ruff format/check、**7** 条
   import contracts、async gate、mypy **71 files**、unit **1969 passed in 28.85s**）；
-  `REQUIRE_SERVICES=1 make integration` **82 passed in 12.48s**。I3/P1/F1/I4.1 均已完成；下一条
-  identity 主线为 I6。
+  `REQUIRE_SERVICES=1 make integration` **82 passed in 12.48s**。I3/P1/F1/I4.1/I6 均已完成。
 
 ### EIM-I4.1 完成边界
 
@@ -290,8 +292,10 @@ F1/F3/F4/F7/F8 禁止携带身份功能。F2 只是 characterization/兼容矩�
 - 官方 `lark-oapi==1.7.2` 按需加载；预期调用顺序为 Auth V3
   `tenant_access_token.ainternal()` -> Tenant V2 `tenant.aquery()` 精确验证 `tenant_key` ->
   Contact V3 `user.aget()`。Tenant/Contact 显式传递 project-scoped token，不走 SDK 同步、
-  `app_id` 全局 cache 的 `TokenManager` cold path；请求、解码和 domain 仍全部使用官方
-  typed SDK，未重写 HTTP client/签名。
+  `app_id` 全局 cache 的 `TokenManager` cold path。三个 endpoint 的 request/resource/async transport
+  继续使用官方 generated SDK，Tenant V2/Contact V3 的 nested body 保持 typed model；Auth V3 因
+  generated model 与 live wire 不一致，顶层 token/expire 由项目 strict adapter 有界解析后再投影为
+  framework-neutral domain DTO。未重写 HTTP client/签名。
 - 真实响应复核发现 1.7.2 生成的 `InternalTenantAccessTokenResponse` 只声明 `data` body，原
   production adapter 也从 `response.data` 取 token；但 live Auth V3 成功响应把
   `tenant_access_token/expire` 放在顶层。I4.1 已在不重写 SDK transport/签名的前提下兼容并严格
@@ -330,6 +334,38 @@ F1/F3/F4/F7/F8 禁止携带身份功能。F2 只是 characterization/兼容矩�
   mypy **78 files**、unit **2123 passed in 34.53s**）。
 - I4 不新增明文配置或 token 数据库表，不持久化首次 tenant ownership，不写
   ExternalIdentity/Alias/User/UserTenant，不实现 I5/I6/I7/C3/Principal 传播。
+
+### EIM-I6 完成边界
+
+- 新增每 Tenant 显式、revisioned 的权威 provisioning policy：mode + link code TTL（60～900 秒）
+  只能由独立 admin port 首次创建/CAS 更新；无 delete/default，缺 policy fail closed。I3 plan 已携
+  `provisioning_policy_revision`，P1 builder 拒绝把带 plan revision 的结果提升为 Principal。
+- link code 使用 exact 24-byte/192-bit CSPRNG，raw code 只在签发结果返回一次且 `repr` 隐藏；数据库
+  只存 domain-separated HMAC-SHA256 digest + key id、policy/account generation、target 与状态。
+  新签发撤销同 account + target 旧 pending code，TTL 有 15 分钟数据库硬上限；猜错、过期、撤销、
+  generation 变化与 target conflict 对外统一 `IDENTITY_LINK_REQUIRED`。
+- `IdentityBindingEvent` 是 append-only 首次绑定证据，按 identity、link grant、keyed request digest
+  去重；记录 `jit/preprovisioned/link_code`、policy revision、Provider proof 与 account-kind 变化，
+  不记录 raw subject/alias/open_id/union_id、raw code 或 PII；复合外键所需的 server-owned account
+  scope natural keys 仍落库并由 safe projection 隐藏。
+- I6 application service 只接受 I3 plan + fresh I4 proof；proof 距锁后墙钟不得超过 5 分钟、不得晚于
+  该墙钟或早于 scope marker。repository 每个完整 use-case 自开一个 async transaction，重新锁 policy/account
+  generation；所有阻塞锁后用 PostgreSQL `clock_timestamp()` 重验 proof/code 并作为 write/consume/
+  event 时间，再原子写 User/UserTenant/identity/alias/code/event；Provider 网络调用不在事务内。
+- `preprovisioned` 只激活已有 pending identity/live membership，不开户；`link_only` target 只来自
+  当前 authenticated Principal 创建的 grant；`jit` 只创建 external-only User + active
+  `UserTenant(NORMAL)`。active membership partial unique 与全状态 reverse identity unique 是最终并发
+  防线；inactive/conflict/revoked 不自动恢复。
+- “显式 link”只把 ExternalIdentity 绑定到现有 User，并可能 local→hybrid；不合并两个 User，也不按
+  name/email/mobile/employee_no 匹配。合法 display name 仅规范化/截为 100 字符展示；I6 不写
+  EnterpriseSubject，EIM-I5 仍未开始。
+- 本任务只交付 framework-neutral domain、schema/migration、async PostgreSQL repository/application
+  transaction 与测试；不接 HTTP/UI、Channel/C3、Principal 传播、I7 事件或 FastMCP/of_mcp。
+- 完成证据：domain/model unit **143 passed in 5.49s**；identity schema + provisioning schema + I3
+  repository + I6 repository 真 PostgreSQL **84 passed in 7.80s**；`make verify` 全绿（Ruff format
+  **1241 files**、Ruff check、**7** 条 import contracts，832 files/2611 dependencies、async DB gate、
+  mypy **81 source files**、unit **2188 passed**）；强制 integration **128 passed in 16.40s**；
+  Alembic 单 head `b4c6d8e0f2a4`；`git diff --check` 通过；current-tree 安全终审无 blocker。
 
 ---
 
@@ -691,7 +727,10 @@ EIM-I2.1 ✅ Provider Account / Channel explicit link
 EIM-I3  ✅ repository + policy/service
 EIM-P1  ✅ canonical immutable Principal
 EIM-I4  ✅ I4.1 Auth live-response/阶段化错误码、adapter sandbox 与全门禁已收口
-EIM-C1  Channel tolerate structured assertion
+EIM-I6  ✅ authoritative policy + digest link + atomic provisioning 已完成
+EIM-C1  ⬜ 下一条接线起点：Channel tolerate structured assertion
+EIM-I5  ⬜ 已解锁的 enterprise-subject 并行支线（不属于 I6）
+EIM-I7  ⬜ 已解锁的 Contact-event 并行支线（I8 仍需 I6 + I7）
 ```
 
 MCP Foundation 的实际串并行轨道：
@@ -730,15 +769,19 @@ F3 + P3 + A4 + C3 -> U14 -> U15
 A4 + P3 -> A5
 A4 -> A6
 
-I5 -> I7 -> I8 -> M1 -> M2 -> M3 -> M4 -> U7 -> M5 -> U2 -> O1/O2 -> U3
+I4 -> I5                               (已解锁的 enterprise-subject 支线)
+I4 -> I7; I6 + I7 -> I8               (已解锁事件支线；I8 不得跳过 I6/I7)
+A5 + I5 -> M1 -> M2 -> M3 -> M4 -> U7 -> M5
+I6 + I8 -> U2 -> O1/O2 -> U3
 
 A8 -> O3  仅在真实企业 IdP、多 issuer 或托管平台需求成立后解除挂起。
 ```
 
 A3/A4 已完成，of_mcp 的 A6 phase 1 已落但保持进行中；下一步不是把内存 store 当生产后端，而是完成
 durable multi-instance replay/audit、HMAC key rotation 和跨仓 OTel。MultiRAG 已完成 F1/I2/I2.1/I3/I4/P1，
-当前 identity 主线进入 `I6`；`C1 -> C2` 可并行，只有
-`C2 + I6 + P1 -> C3 -> P2` 后才能做 A2。
+I6 已完成；下一条接线主线必须从 `C1 -> C2` 开始，只有 `C2 + I6 + P1` 全部满足后才能进入
+`C3 -> P2`，随后才做 A2。I5 与 I7 因 I4 已完成而可作为不
+共文件的并行支线；但 I8 仍严格等待 I6 + I7，M1 仍等待 A5 + I5，不能因“已解锁”跳过下游依赖。
 随后必须等 `P2 + F3 + A2 + A4 -> P3`，再启动 A5/U14 等真实委托消费者。A7 保持独立入站
 resource；A8 仍无真实需求不启动。这个顺序既保留 of_mcp 的 fail-closed verifier/authorizer 先行，
 又不把未验证的 Channel subject 塞进 token；A4 的 Resource Server Principal 不能替代
@@ -784,4 +827,5 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 | 2026-08-12 | EIM-P1 | 建立 `api.identity.principal` 唯一 canonical Principal/AuthenticationContext，封闭 direct constructor，用 legacy actor 与 I3 RESOLVED 两个进程内 evidence builder 绑定 user/tenant/provider/proof；Principal 不携 email/role/groups/scopes/token，兼容 `.id/.nickname` 与 `api_utils` re-export 只保留到存量 route import 迁完。新增独立 legacy owner adapter，每请求活查 active User + 唯一 personal OWNER Tenant，valid JWT 身份失效不降级为 API token，意外 verifier 错误不吞。本轮不交付 C3/P2、A2/P3、A7，不宣称 sync ORM auth 入口已迁移 | MultiRAG / 本次提交 | P1 定向 unit **49 passed**；真 PostgreSQL P1 **1 passed**；`make verify` 全绿：7 import contracts、async gate、mypy 73 files、unit **2005 passed**；`REQUIRE_SERVICES=1 make integration` **83 passed**；安全复核无 blocker；`git diff --check` 通过 | Codex |
 | 2026-08-12 | EIM-F1 | 将官方 `lark-oapi` 从 1.7.1 升到 1.7.2；新增固定 Contact V3 success fixture，钉住 `user_id_type=open_id` request 与 `GetUserResponse/User/UserStatus` typed response；隔离证明平台 control/provider/verification/identity import 不加载 SDK/不安装 loop，并把 SDK 顶层 import 的模块级 idle loop 明确固定为无 task/无新增 thread 的已知边界。源码审计确认 `TokenManager` 有 cache 但 cache miss 无 single-flight，项目级并发刷新留给 I4。本任务不实现 Provider、身份写入、Principal 或 Channel transport 迁移 | MultiRAG / 本次提交 | 新 contract **7 passed**；广义 Feishu/Channel 定向 **101 passed**；`uv lock --check` 通过；`make verify` 全绿：Ruff 1222 files、7 import contracts、async DB gate、mypy 73 source files、unit **2012 passed in 30.95s**；`git diff --check` 通过 | Codex |
 | 2026-08-13 | EIM-I4.1 | 修正 `lark-oapi==1.7.2` generated Auth response 期待 `data`、live token/expire 位于顶层的差异；保留官方 generated async request/resource/transport 并以 strict live top-level adapter 解析真实 wire shape；Tenant V2/Contact V3 保持 generated typed nested response。错误码按 Auth/Tenant/Contact stage 分类，`10003` 不再充当 credential code，Auth credential mismatch 为 `10015/20002`；Contact 只有 code 0 可用 HTTP 403/404 fallback，未知/瞬时非零 code 不得降级 JIT。既有框架无关 Provider、过渡 Channel credential seam、有界 cache/single-flight/限流不变；本任务不写 identity/User/UserTenant，不实现 I5/I6/I7/C3/Principal/MCP token；下一项 I6 | MultiRAG / 本次提交 | 旧 stdin-collision sandbox 因空参数作废；有效直连与修正后 production adapter sandbox 均为三步 HTTP 200/code 0、tenant match、user active，adapter 另确认 token/expiry、asserted open_id、stable user id 与五项 status，且无 PII/标识/Secret/token 落盘。广义 I4+F1 **118 passed in 5.29s**；credential 真 PG **1 passed in 0.76s**；`make verify` 全绿：Ruff format 1234 files、Ruff check、7 import contracts、async gate、mypy 78 files、unit **2123 passed in 34.53s**；强制 integration **84 passed in 12.52s** | Codex |
+| 2026-08-13 | EIM-I6 | 新增显式 revisioned Tenant provisioning policy 与最小权限 create/CAS admin port；I3 plan 携 policy revision，I6 只消费严格匹配且不超过 5 分钟的 I4 proof。三种 mode 在 fresh async PostgreSQL transaction 中完成 User/UserTenant/identity/alias/code/first-binding event 全成全败；所有阻塞锁后用 `clock_timestamp()` 重验 proof/code。link code 为 192-bit CSPRNG、raw 只返回一次、库内只存 domain-separated HMAC-SHA256 digest/key id；首次 event append-only 且 safe projection 隐藏 scope natural keys。active membership partial unique 与全状态 reverse identity unique 机器防并发；显式 link 不是双 User merge，姓名/邮箱/手机号/employee_no 不匹配，I5 EnterpriseSubject 未实现。本轮不接 HTTP/UI、Channel/Principal、I7 或 FastMCP/of_mcp | MultiRAG / 本次提交 | Alembic 单 head `b4c6d8e0f2a4`；domain/model unit **143 passed in 5.49s**；identity/provisioning schema + I3/I6 repository 真 PostgreSQL **84 passed in 7.80s**；`make verify` 全绿：Ruff format **1241 files**、Ruff check、**7** 条 import contracts（832 files/2611 dependencies）、async DB gate、mypy **81 source files**、unit **2188 passed**；`REQUIRE_SERVICES=1 make integration` **128 passed in 16.40s**；旧 P1 duplicate-membership seed 已改为断言新数据库唯一约束并聚焦 **1 passed**；`git diff --check` 通过；current-tree 安全终审无 blocker | Codex |
 | 2026-08-12 | EIM-A6 phase 1 | of_mcp 为所有实际工具增加 effect/replay policy 并把它纳入 canonical snapshot/revision；新增冻结脱敏 audit schema、单 capability JTI replay claim/state machine、HMAC request fingerprint、框架无关 security coordinator 与 OTel API adapter；Gateway 在 A4 最终 allow 后、业务执行前 prepare，重复/冲突/依赖故障分别稳定映射 409/403/503，业务结果未知不释放 claim。仅完成安全中间态：生产 durable backend、HMAC/KMS 轮换、OTel SDK/exporter/跨仓 trace、A5 parent JTI、P3 动态 token、业务幂等和远程发布仍未完成，A6 保持 `🔵` | of_mcp `0d1224d`；MultiRAG docs / 本次提交；policy revision `7bf9e09082ca4f1d529e51bf3fe8e6dd5c4334c62deaf9a5b6be204af9fca446` | A6/Gateway 定向 **65 passed**；`uv run --locked ofmcp verify` 六步全绿、**453 passed、2 existing skipped**；MultiRAG `make verify` 静态门禁全绿、**1915 passed**；当前 secure 无生产 coordinator 后端时 fail-fast，remote gate 未开放 | Codex |

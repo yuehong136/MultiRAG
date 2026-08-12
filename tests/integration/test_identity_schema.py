@@ -24,14 +24,18 @@ from api.db.db_models import (
     EnterpriseSubjectLink,
     ExternalIdentity,
     ExternalIdentityAlias,
+    IdentityBindingEvent,
     IdentityEventReceipt,
+    IdentityLinkCode,
     IdentityProviderAccount,
     IdentityProviderChannelLink,
     IdentityProviderTenant,
+    IdentityTenantPolicy,
     Tenant,
     User,
 )
 
+_I6_REVISION = "b4c6d8e0f2a4"
 _I21_REVISION = "9a3b5c7d8e0f"
 _I2_REVISION = "8f2c4d6e7a9b"
 _PRE_I2_REVISION = "7c8d9e0f1a2b"
@@ -46,6 +50,9 @@ _IDENTITY_TABLES = (
     ExternalIdentityAlias.__table__,
     EnterpriseSubjectLink.__table__,
     IdentityEventReceipt.__table__,
+    IdentityTenantPolicy.__table__,
+    IdentityLinkCode.__table__,
+    IdentityBindingEvent.__table__,
 )
 _AUDIT_COLUMNS = {
     "create_date",
@@ -216,6 +223,9 @@ def _drop_identity_sidecar(connection: sa.Connection) -> None:
         if inspector.has_table(table.name, schema=_SCHEMA):
             connection.execute(sa.text(f'DROP TABLE {_SCHEMA}."{table.name}"'))
             inspector = sa.inspect(connection)
+    membership_indexes = {index["name"] for index in inspector.get_indexes("t_ai_user_tenants", schema=_SCHEMA)}
+    if "uq_user_tenants_active_tenant_user" in membership_indexes:
+        connection.execute(sa.text("DROP INDEX usr_ai.uq_user_tenants_active_tenant_user"))
     chat_unique = {
         constraint["name"]
         for constraint in inspector.get_unique_constraints(
@@ -495,7 +505,7 @@ def test_stored_database_upgrade_creates_current_identity_sidecar(
             {"revision": _PRE_I2_REVISION},
         )
 
-        command.upgrade(_migration_config(alembic_cfg, connection), _I21_REVISION)
+        command.upgrade(_migration_config(alembic_cfg, connection), _I6_REVISION)
 
         inspector = sa.inspect(connection)
         assert all(inspector.has_table(table.name, schema=_SCHEMA) for table in _IDENTITY_TABLES)
@@ -508,7 +518,7 @@ def test_stored_database_upgrade_creates_current_identity_sidecar(
         }
         assert _CHAT_TENANT_SCOPE_UNIQUE in chat_unique
         assert _CHAT_IDENTITY_SCOPE_UNIQUE in chat_unique
-        assert connection.execute(sa.text("SELECT version_num FROM usr_ai.alembic_version")).scalar_one() == _I21_REVISION
+        assert connection.execute(sa.text("SELECT version_num FROM usr_ai.alembic_version")).scalar_one() == _I6_REVISION
     finally:
         transaction.rollback()
         connection.close()
@@ -831,7 +841,7 @@ def test_empty_identity_sidecar_downgrades_and_upgrades_round_trip(
         assert _CHAT_IDENTITY_SCOPE_UNIQUE not in chat_unique
         assert connection.execute(sa.text("SELECT version_num FROM usr_ai.alembic_version")).scalar_one() == _PRE_I2_REVISION
 
-        command.upgrade(cfg, _I21_REVISION)
+        command.upgrade(cfg, _I6_REVISION)
 
         inspector = sa.inspect(connection)
         assert all(inspector.has_table(table.name, schema=_SCHEMA) for table in _IDENTITY_TABLES)
@@ -844,7 +854,7 @@ def test_empty_identity_sidecar_downgrades_and_upgrades_round_trip(
         }
         assert _CHAT_TENANT_SCOPE_UNIQUE in chat_unique
         assert _CHAT_IDENTITY_SCOPE_UNIQUE in chat_unique
-        assert connection.execute(sa.text("SELECT version_num FROM usr_ai.alembic_version")).scalar_one() == _I21_REVISION
+        assert connection.execute(sa.text("SELECT version_num FROM usr_ai.alembic_version")).scalar_one() == _I6_REVISION
     finally:
         transaction.rollback()
         connection.close()
@@ -1024,7 +1034,7 @@ def test_i2_downgrade_refuses_to_destroy_identity_history(
             schema=_SCHEMA,
         )
         head = ScriptDirectory.from_config(alembic_cfg).get_current_head()
-        assert head == _I21_REVISION
+        assert head == _I6_REVISION
         # The I2.1 step is safely reversible because no account/link rows
         # exist; the following I2 downgrade then refuses to erase the provider
         # tenant history.  Alembic therefore remains at the last completed

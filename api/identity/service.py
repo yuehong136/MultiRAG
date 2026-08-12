@@ -12,7 +12,11 @@ from api.identity.contracts import (
     ProvisioningPolicyResolver,
 )
 from api.identity.policy import decide_provisioning
-from api.identity.validation import valid_alias_key, valid_provider_context
+from api.identity.validation import (
+    valid_alias_key,
+    valid_policy_snapshot,
+    valid_provider_context,
+)
 
 
 class IdentityService:
@@ -53,8 +57,10 @@ class IdentityService:
             )
         if snapshot.identity is None:
             try:
-                mode = await self._policy_resolver.get_mode(context.tenant_id)
-                decision = decide_provisioning(mode)
+                policy = await self._policy_resolver.get_policy(context.tenant_id)
+                if not valid_policy_snapshot(policy, tenant_id=context.tenant_id):
+                    raise ValueError("provisioning policy is unavailable")
+                decision = decide_provisioning(policy.mode)
             except Exception:
                 return IdentityResolutionResult(
                     status=IdentityResolutionStatus.CONFLICT,
@@ -64,6 +70,7 @@ class IdentityService:
                 status=IdentityResolutionStatus.MISSING,
                 error_code=(IdentityErrorCode.LINK_REQUIRED if decision.action is ProvisioningAction.REQUIRE_LINK else None),
                 provisioning_action=decision.action,
+                provisioning_policy_revision=policy.revision,
                 provider_verification_required=True,
             )
 

@@ -313,7 +313,7 @@ def build_principal_from_resolved_identity(
 
     if result.status is not IdentityResolutionStatus.RESOLVED:
         raise PrincipalBuildError(PrincipalErrorCode.IDENTITY_INACTIVE)
-    if result.error_code is not None or result.provisioning_action is not None or result.provider_verification_required:
+    if result.error_code is not None or result.provisioning_action is not None or result.provisioning_policy_revision is not None or result.provider_verification_required:
         raise PrincipalBuildError(PrincipalErrorCode.CONTEXT_CONFLICT)
     identity = result.identity
     membership = result.membership

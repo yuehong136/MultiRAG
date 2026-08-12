@@ -10,10 +10,14 @@ from api.db.db_models import (
     EnterpriseSubjectLink,
     ExternalIdentity,
     ExternalIdentityAlias,
+    IdentityBindingEvent,
     IdentityEventReceipt,
+    IdentityLinkCode,
     IdentityProviderAccount,
     IdentityProviderChannelLink,
     IdentityProviderTenant,
+    IdentityTenantPolicy,
+    UserTenant,
 )
 
 
@@ -225,3 +229,147 @@ def test_external_identity_attributes_use_postgresql_jsonb_with_database_checks(
         "ck_external_identities_attributes_keys",
         "ck_external_identities_attributes_values",
     } <= constraint_names
+
+
+def test_provisioning_models_expose_only_safe_projections() -> None:
+    now = _verified_at()
+    policy = IdentityTenantPolicy(
+        id="tenant-secret",
+        tenant_id="tenant-secret",
+        mode="link_only",
+        revision=7,
+        link_code_ttl_seconds=600,
+        changed_at=now,
+    )
+    link_code = IdentityLinkCode(
+        id="code-id-secret",
+        tenant_id="tenant-secret",
+        provider="feishu",
+        provider_tenant_key="provider-tenant-secret",
+        provider_account_key="app-id-secret",
+        target_user_id="user-id-secret",
+        digest_key_id="link-hmac-v1",
+        code_digest="a" * 64,
+        policy_revision=7,
+        provider_account_revision=3,
+        provider_account_last_scope_change_at=now,
+        state="pending",
+        issued_at=now,
+        expires_at=datetime(2026, 8, 12, 0, 10, tzinfo=UTC),
+    )
+    event = IdentityBindingEvent(
+        id="event-id-secret",
+        tenant_id="tenant-secret",
+        provider="feishu",
+        provider_tenant_key="provider-tenant-secret",
+        provider_account_key="app-id-secret",
+        external_identity_id="identity-id-secret",
+        target_user_id="user-id-secret",
+        actor_user_id="user-id-secret",
+        link_code_id="code-id-secret",
+        binding_method="link_code",
+        previous_account_kind="local",
+        result_account_kind="hybrid",
+        policy_revision=7,
+        provider_verified_at=now,
+        occurred_at=now,
+        request_digest_key_id="event-hmac-v1",
+        request_digest="b" * 64,
+    )
+
+    policy_projection = policy.to_dict()
+    code_projection = link_code.to_dict()
+    event_projection = event.to_dict()
+
+    assert policy_projection == {
+        "mode": "link_only",
+        "revision": 7,
+        "link_code_ttl_seconds": 600,
+        "changed_at": now,
+    }
+    assert {
+        "id",
+        "tenant_id",
+        "provider_tenant_key",
+        "provider_account_key",
+        "target_user_id",
+        "digest_key_id",
+        "code_digest",
+        "provider_account_last_scope_change_at",
+    }.isdisjoint(code_projection)
+    assert {
+        "id",
+        "tenant_id",
+        "provider_tenant_key",
+        "provider_account_key",
+        "external_identity_id",
+        "target_user_id",
+        "actor_user_id",
+        "link_code_id",
+        "request_digest_key_id",
+        "request_digest",
+    }.isdisjoint(event_projection)
+    assert not {
+        "tenant-secret",
+        "provider-tenant-secret",
+        "app-id-secret",
+        "user-id-secret",
+        "identity-id-secret",
+        "code-id-secret",
+        "a" * 64,
+        "b" * 64,
+    }.intersection(
+        {
+            *policy_projection.values(),
+            *code_projection.values(),
+            *event_projection.values(),
+        }
+    )
+
+
+def test_provisioning_model_constraints_are_fail_closed() -> None:
+    policy_constraints = {constraint.name for constraint in IdentityTenantPolicy.__table__.constraints}
+    code_constraints = {constraint.name for constraint in IdentityLinkCode.__table__.constraints}
+    event_constraints = {constraint.name for constraint in IdentityBindingEvent.__table__.constraints}
+    identity_constraints = {constraint.name for constraint in ExternalIdentity.__table__.constraints}
+    membership_indexes = {index.name: index for index in UserTenant.__table__.indexes}
+    code_indexes = {index.name: index for index in IdentityLinkCode.__table__.indexes}
+
+    assert {
+        "ck_identity_tenant_policies_identity",
+        "ck_identity_tenant_policies_mode",
+        "ck_identity_tenant_policies_revision",
+        "ck_identity_tenant_policies_link_code_ttl",
+        "uq_identity_tenant_policies_tenant",
+    } <= policy_constraints
+    assert {
+        "ck_identity_link_codes_hash",
+        "ck_identity_link_codes_lifetime",
+        "ck_identity_link_codes_state_fields",
+        "ck_identity_link_codes_account_revision",
+        "uq_identity_link_codes_digest",
+        "uq_identity_link_codes_event_scope",
+    } <= code_constraints
+    assert {
+        "ck_identity_binding_events_method",
+        "ck_identity_binding_events_method_shape",
+        "ck_identity_binding_events_hash",
+        "uq_identity_binding_events_identity",
+        "uq_identity_binding_events_link_code",
+        "uq_identity_binding_events_request",
+    } <= event_constraints
+    assert "uq_external_identities_tenant_user_provider_subject_type" in identity_constraints
+    assert membership_indexes["uq_user_tenants_active_tenant_user"].unique is True
+    assert membership_indexes["uq_user_tenants_active_tenant_user"].dialect_options["postgresql"]["where"].text == "status = '1'"
+    assert code_indexes["uq_identity_link_codes_pending_target_account"].unique is True
+    assert code_indexes["uq_identity_link_codes_pending_target_account"].dialect_options["postgresql"]["where"].text == "state = 'pending'"
+
+
+def test_provisioning_schema_stores_only_digests_not_raw_codes_or_payloads() -> None:
+    code_columns = set(IdentityLinkCode.__table__.columns.keys())
+    event_columns = set(IdentityBindingEvent.__table__.columns.keys())
+
+    assert {"digest_key_id", "code_digest"} <= code_columns
+    assert {"request_digest_key_id", "request_digest"} <= event_columns
+    assert not code_columns.intersection({"code", "raw_code", "link_code", "token", "secret", "payload"})
+    assert not event_columns.intersection({"raw_request", "request_body", "payload", "provider_payload"})

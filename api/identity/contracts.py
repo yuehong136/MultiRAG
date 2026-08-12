@@ -162,6 +162,7 @@ class IdentityResolutionResult:
     identity: ExternalIdentityRecord | None = field(default=None, repr=False)
     membership: UserMembershipRecord | None = field(default=None, repr=False)
     provisioning_action: ProvisioningAction | None = None
+    provisioning_policy_revision: int | None = None
     provider_verification_required: bool = False
 
 
@@ -169,6 +170,17 @@ class IdentityResolutionResult:
 class ProvisioningDecision:
     action: ProvisioningAction
     member_role: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProvisioningPolicySnapshot:
+    """Database-authoritative tenant provisioning policy generation."""
+
+    tenant_id: str = field(repr=False)
+    mode: ProvisioningMode
+    revision: int
+    link_code_ttl_seconds: int
+    changed_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -318,4 +330,7 @@ class VerifiedOwnershipRepository(Protocol):
 
 @runtime_checkable
 class ProvisioningPolicyResolver(Protocol):
-    async def get_mode(self, tenant_id: str) -> ProvisioningMode: ...
+    async def get_policy(
+        self,
+        tenant_id: str,
+    ) -> ProvisioningPolicySnapshot | None: ...

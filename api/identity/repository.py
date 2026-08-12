@@ -396,14 +396,7 @@ class SqlAlchemyIdentityRepository:
             "attributes": dict(command.attributes),
             **_insert_audit_values(),
         }
-        statement = (
-            insert(ExternalIdentity)
-            .values(**values)
-            .on_conflict_do_nothing(
-                constraint="uq_external_identities_tenant_provider_subject",
-            )
-            .returning(ExternalIdentity)
-        )
+        statement = insert(ExternalIdentity).values(**values).on_conflict_do_nothing().returning(ExternalIdentity)
         try:
             created = (await self._db.scalars(statement)).one_or_none()
         except IntegrityError:
@@ -412,11 +405,18 @@ class SqlAlchemyIdentityRepository:
             return InsertResult(InsertOutcome.CREATED, _identity_record(created))
 
         existing = await self._identity_by_subject(context, command)
-        if existing is None:
-            raise IdentityRepositoryError(IdentityErrorCode.REPOSITORY_UNAVAILABLE)
-        if not _same_identity(command, existing):
+        if existing is not None:
+            if not _same_identity(command, existing):
+                raise IdentityRepositoryError(IdentityErrorCode.LINK_CONFLICT)
+            return InsertResult(
+                InsertOutcome.EXISTING,
+                _identity_record(existing),
+            )
+
+        reverse = await self._identity_by_user_slot(context, command)
+        if reverse is not None:
             raise IdentityRepositoryError(IdentityErrorCode.LINK_CONFLICT)
-        return InsertResult(InsertOutcome.EXISTING, _identity_record(existing))
+        raise IdentityRepositoryError(IdentityErrorCode.REPOSITORY_UNAVAILABLE)
 
     @_redact_database_errors
     async def insert_alias(self, command: ExternalIdentityAliasInsert) -> InsertResult:
@@ -714,6 +714,21 @@ class SqlAlchemyIdentityRepository:
                 ExternalIdentity.provider_tenant_key == context.provider_tenant_key,
                 ExternalIdentity.subject_type == command.subject_type,
                 ExternalIdentity.subject_value == command.subject_value,
+            )
+        )
+
+    async def _identity_by_user_slot(
+        self,
+        context: ProviderContext,
+        command: ExternalIdentityInsert,
+    ) -> ExternalIdentity | None:
+        return await self._db.scalar(
+            select(ExternalIdentity).where(
+                ExternalIdentity.tenant_id == context.tenant_id,
+                ExternalIdentity.user_id == command.user_id,
+                ExternalIdentity.provider == context.provider,
+                ExternalIdentity.provider_tenant_key == context.provider_tenant_key,
+                ExternalIdentity.subject_type == command.subject_type,
             )
         )
 

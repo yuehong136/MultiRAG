@@ -9,12 +9,15 @@ from api.identity.principal import (
     build_principal_from_authenticated_actor,
     build_principal_from_resolved_identity,
 )
+from api.identity.provisioning import HmacLinkCodeCodec, IdentityProvisioningService
 from api.identity.service import IdentityService
 
 __all__ = [
     "AuthenticationContext",
     "AuthenticationSource",
+    "HmacLinkCodeCodec",
     "IdentityAssurance",
+    "IdentityProvisioningService",
     "IdentityService",
     "Principal",
     "ProviderContext",

@@ -298,6 +298,7 @@ def test_resolved_identity_builder_binds_provider_identity_user_and_tenant() -> 
     [
         replace(_resolved(), error_code=IdentityErrorCode.INACTIVE),
         replace(_resolved(), provisioning_action=ProvisioningAction.REQUIRE_LINK),
+        replace(_resolved(), provisioning_policy_revision=1),
         replace(_resolved(), provider_verification_required=True),
     ],
 )

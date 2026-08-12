@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import delete, func, select, text, update
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from api.db import (
@@ -45,6 +45,7 @@ from api.identity.contracts import (
     ProviderAliasType,
     ProviderContext,
     ProvisioningMode,
+    ProvisioningPolicySnapshot,
     VerifiedIdentityActivation,
     VerifiedProviderAccountOnboarding,
     VerifiedProviderTenantOnboarding,
@@ -100,9 +101,15 @@ class _CountingPolicyResolver:
         self.mode = mode
         self.calls: list[str] = []
 
-    async def get_mode(self, tenant_id: str) -> ProvisioningMode:
+    async def get_policy(self, tenant_id: str) -> ProvisioningPolicySnapshot:
         self.calls.append(tenant_id)
-        return self.mode
+        return ProvisioningPolicySnapshot(
+            tenant_id=tenant_id,
+            mode=self.mode,
+            revision=1,
+            link_code_ttl_seconds=600,
+            changed_at=datetime.now(UTC),
+        )
 
 
 def _new_seed() -> _Seed:
@@ -659,30 +666,24 @@ async def test_alias_before_scope_change_requires_provider_reverification(
         assert alias_verified_at == scope_change
 
 
-async def test_duplicate_active_memberships_fail_closed(
+async def test_database_rejects_duplicate_active_memberships(
     bootstrapped_async_engine: AsyncEngine,
 ) -> None:
     factory = _factory(bootstrapped_async_engine)
     seed = _new_seed()
     await _seed_graph(factory, seed)
-    async with factory.begin() as session:
-        session.add(
-            UserTenant(
-                id=uuid.uuid4().hex,
-                user_id=seed.user_id,
-                tenant_id=seed.tenant_id,
-                role=UserTenantRole.ADMIN.value,
-                invited_by=seed.user_id,
-                status=StatusEnum.VALID.value,
+    with pytest.raises(IntegrityError):
+        async with factory.begin() as session:
+            session.add(
+                UserTenant(
+                    id=uuid.uuid4().hex,
+                    user_id=seed.user_id,
+                    tenant_id=seed.tenant_id,
+                    role=UserTenantRole.ADMIN.value,
+                    invited_by=seed.user_id,
+                    status=StatusEnum.VALID.value,
+                )
             )
-        )
-
-    async with factory() as session:
-        with pytest.raises(IdentityRepositoryError) as raised:
-            await SqlAlchemyIdentityRepository(session).resolve_identity(seed.request)
-    assert raised.value.code is IdentityErrorCode.LINK_CONFLICT
-    assert seed.alias_value not in str(raised.value)
-    assert seed.provider_tenant_key not in str(raised.value)
 
 
 async def test_identity_and_alias_inserts_are_idempotent_and_never_overwrite_conflicts(
@@ -725,6 +726,17 @@ async def test_identity_and_alias_inserts_are_idempotent_and_never_overwrite_con
         with pytest.raises(IdentityRepositoryError) as identity_error:
             await SqlAlchemyIdentityRepository(session).insert_identity(conflicting_identity)
     assert identity_error.value.code is IdentityErrorCode.LINK_CONFLICT
+
+    reverse_conflict = _identity_insert(
+        seed,
+        subject_value=f"reverse-{seed.subject_value}",
+    )
+    async with factory.begin() as session:
+        with pytest.raises(IdentityRepositoryError) as reverse_error:
+            await SqlAlchemyIdentityRepository(session).insert_identity(
+                reverse_conflict,
+            )
+    assert reverse_error.value.code is IdentityErrorCode.LINK_CONFLICT
 
     other_subject = f"other-{seed.subject_value}"
     async with factory.begin() as session:
@@ -882,7 +894,7 @@ async def test_identity_state_cas_rejects_stale_and_requires_explicit_verified_a
             ExternalIdentity(
                 id=revoked_identity_id,
                 tenant_id=seed.tenant_id,
-                user_id=seed.user_id,
+                user_id=seed.other_user_id,
                 provider="feishu",
                 provider_tenant_key=seed.provider_tenant_key,
                 subject_type="user_id",

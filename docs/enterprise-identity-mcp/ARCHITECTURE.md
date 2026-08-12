@@ -95,6 +95,9 @@ api/identity/
 ├── principal.py
 ├── legacy_owner.py
 ├── policy.py
+├── provisioning_contracts.py
+├── provisioning.py
+├── provisioning_repository.py
 ├── service.py
 ├── validation.py
 └── repository.py
@@ -117,9 +120,10 @@ api/identity_adapters/
 └── channel_credentials.py
 ```
 
-当前 repository 按仓库规范 async-first，使用 `AsyncSession`；`IdentityService` 本身只依赖框架无关
-`IdentityLookupRepository` 与 provisioning policy resolver。I3 不存在 Provider client，也不访问真实
-飞书/OA。
+当前 repository 按仓库规范 async-first，使用 `AsyncSession`。I3 的 `IdentityService` 只依赖框架无关
+`IdentityLookupRepository` 与 provisioning policy resolver；I6 的 `IdentityProvisioningService` 只依赖
+完整事务 use-case port、同一个权威 policy resolver 与 HMAC codec。I3 不存在 Provider client，也不
+访问真实飞书/OA；I6 同样只消费 I4 已验证 proof，不在数据库事务中发 Provider 网络请求。
 
 I4 没有把飞书 SDK 塞回 I3 service/repository：`FeishuEnterpriseIdentityProvider` 仍只消费
 `ProviderContext + ExternalIdentityAssertion + ProviderCredentialResolver`。唯一知道 ChannelSecret
@@ -156,8 +160,9 @@ Auth/Tenant 位于 credential/tenant ownership 控制面，不能产生 I6 会�
 全局复用：`10003` 不是 credential code，Auth credential mismatch 当前为 `10015/20002`。
 Contact 只有 code 0 才能使用 HTTP 403/404 fallback；未知/瞬时非零 code 不得触发 JIT。
 
-I4 还没有把 Provider proof 写入 ExternalIdentity/Alias，也不会建 User/UserTenant 或构造
-Principal。这些仍由 I6/C3/P1 在独立事务与 trusted adapter 边界完成。
+I4 自身不把 Provider proof 写入 ExternalIdentity/Alias，也不会建 User/UserTenant 或构造 Principal。
+I6 现已在独立事务层消费该 proof 并完成三种 provisioning 写入；C3/P1 的 trusted adapter 组装仍未
+接线。
 
 核心入口接收服务端构造的 Provider Context，而不是 `channel_id`。Channel adapter 先解析唯一 link，
 再调用同一核心接口；目录事件、管理员预绑定、Web OAuth 或未来 SSO 因而可以复用身份服务而不伪造
@@ -187,6 +192,45 @@ identity mutation 独占 alias 新建/只前进刷新和显式 activation；prov
 health/scope/event marker CAS。verified ownership 仍是独立 port，普通 `IdentityService` 无法取得任何
 写 capability；事务 commit/rollback 由上层用例拥有。省略 health command 的 scope/event 时间会保留
 旧值，显式时间不得倒退；Core DML 显式写审计时间，输入和 driver 异常在 repository 边界稳定脱敏。
+
+I6 不是把这些 I3 单表 capability 拼成一串外部可见半事务，而是另设两个完整 use-case：
+
+```mermaid
+flowchart LR
+    P["I3 plan + policy revision"] --> V["I4 fresh verified proof"]
+    V --> S["IdentityProvisioningService\nstrict sanitize + keyed fingerprint"]
+    S --> T["one fresh async DB transaction"]
+    T --> L["lock policy + Provider Account generation"]
+    L --> N["after all blocking locks: clock_timestamp()\nrecheck proof <= 5m + code expiry"]
+    N --> C{"authoritative mode"}
+    C -->|preprovisioned| E["existing pending identity + live member"]
+    C -->|link_only| G["authenticated-user grant target"]
+    C -->|jit| J["new external User + NORMAL membership"]
+    E --> B["canonical identity + aliases + first-binding event"]
+    G --> B
+    J --> B
+    B --> O["write/consume/event use post-lock wall clock"]
+```
+
+policy 是每 Tenant 显式创建、revisioned 的数据库事实，TTL 固定在 60～900 秒；缺 policy 不采用默认
+mode。link code 由 192-bit CSPRNG 生成，raw value 只返回一次，表内只存 HMAC digest/key id 与
+policy/account generation。新签发撤销同 account + target 的旧 pending code，scope/revision 变化使
+旧码失效。`IdentityBindingEvent` 只记录一个 ExternalIdentity 的首次绑定，使用独立 domain 的 keyed
+request digest；普通 revalidation 不篡改首次事实。
+
+事务开始时间只可用于廉价初筛。policy/account/canonical/target/grant 的所有阻塞锁取得后，repository
+必须用 PostgreSQL `clock_timestamp()` 重取真实墙钟，重验 proof 不超过 5 分钟且 pending code 未
+过期；首次写入、grant consume/revoke 与 event 都使用该 post-lock time，锁等待不能延长有效窗口。
+
+preprovisioned 不开户；link_only 的 target 只来自当前已认证 Principal 的 grant；JIT 只创建
+external-only User 和 active `UserTenant(NORMAL)`。姓名、邮箱、手机号、employee_no 都不参与匹配。
+“显式 link”只是 ExternalIdentity 到既有 User 的绑定并可能 local→hybrid，不是两个 User 及其业务
+数据的 merge。inactive/conflict/revoked identity 不自动恢复；只有 canonical identity 仍 active、只是
+alias proof 因 scope marker 过旧时，fresh I4 proof 才能刷新 alias 并返回 `ALREADY_BOUND`。
+
+I6 schema 以全状态 reverse identity unique 和 active membership partial unique 作为并发最后防线；
+User/UserTenant/identity/alias/code/event 同事务提交或全部回滚。I6 没有 HTTP/UI/Channel adapter，
+不写 I5 EnterpriseSubject，也不把 Principal 传入 Agent 或 FastMCP。
 
 #### Principal construction
 
@@ -246,7 +290,7 @@ service 的 `build_server()` 不自行决定 auth，保持 mount/proxy 等价。
 
 ---
 
-## 3. 首次私聊：JIT 身份解析（跨 I3/I4/I6/P1 的目标时序）
+## 3. 首次私聊：JIT 身份解析（I3/I4/I6 已有核心，C1→C2→C3→P2 接线仍是目标）
 
 ```mermaid
 sequenceDiagram
@@ -272,7 +316,7 @@ sequenceDiagram
         I-->>X: verification-gated provisioning plan [I3]
         X->>C: Provider verify open_id/status [I4]
         C-->>X: user_id + status + employee_no?
-        X->>D: 事务内 link/provision + verified activation [I6]
+        X->>D: 锁 policy/account generation；原子 provision/link/activate/event [I6]
     end
     X->>X: immutable Principal construction [P1/C3]
     X->>A: execute(message, principal)
@@ -285,19 +329,23 @@ sequenceDiagram
 - I3 的 `IdentityService` 不调用 Contact；I4 Provider adapter 在组合层消费 I3 返回的验证计划；
 - ProviderContext 必须携最新 account revision + scope marker；旧 alias proof 先进入 Provider 重验，
   verified mutation 只允许 proof 时间前进，绝不倒退已有 alias verification；
-- 同一 `(tenant_key, app_id, open_id)` 首次解析使用 single-flight，避免并发重复开户；
-- JIT 事务内锁定 canonical provider identity，数据库唯一约束是最终并发保护；
-- `User`、`UserTenant`、`ExternalIdentity` 创建要么一起提交，要么全部回滚；
+- I3 plan 携权威 policy revision；I6 重新锁定 mode/revision，缺 policy 或 generation 漂移 fail closed；
+- I4 同一 directory lookup generation 使用 single-flight 降低外部放大；I6 仍锁 canonical/target 并依赖
+  数据库唯一约束作为并发首次消息的最终保护，不能把 cache/single-flight 当正确性锁；
+- JIT 的 `User`、`UserTenant(NORMAL)`、`ExternalIdentity`、alias 与 first-binding event 要么一起提交，
+  要么全部回滚；preprovisioned 不开户，link_only target 只来自 grant；
 - identity insert 固定为 `pending_link`，只有本次权威 Provider 验证成功后的显式 activation 才能进入
   `active`；`conflict/revoked` 不能因新消息自动恢复；
 - Provider 返回 active 不自动授予管理员角色；
-- enterprise subject 缺失时，普通 RAG 是否继续由 policy 决定，高风险 MCP 一律拒绝。
+- I6 不消费 `employee_no` 或写 EnterpriseSubject；I5 尚未实现。enterprise subject 缺失时，高风险
+  MCP 仍一律拒绝。
 
-截至 I4.1 完成，图中已有 `ProviderContext/AliasKey`、单 SQL snapshot、三态 plan、窄
-repository/CAS seam、Principal builder，以及 Auth V3 -> Tenant V2 -> Contact V3 的 Provider 主体，
-production adapter live sandbox 与全量门禁已收口。旧 stdin-collision sandbox 因空参数作废；
-有效直连与 adapter sandbox 均得到三步 HTTP 200/code 0、tenant match、user active，且无
-PII/标识/Secret/token 落盘。I6、C3/P2 仍未实现。
+截至 EIM-I6 完成，图中已有 `ProviderContext/AliasKey`、单 SQL snapshot、携 policy revision
+的三态 plan、Auth V3 -> Tenant V2 -> Contact V3 Provider proof、权威 policy/link/event schema、三种
+原子 provisioning transaction 与 Principal builder。I4.1 的 production adapter live sandbox 与全量
+门禁已收口；I6 完整门禁也已全绿。图中 Worker 的
+structured assertion 与 Execution consumption 仍须先经 C1→C2 才能进入 C3，之后 P2 才传播
+Principal；所以不能跳到 C3，也不能宣称飞书消息端到端已上线。
 
 ---
 
@@ -475,7 +523,7 @@ sequenceDiagram
 | Contact 暂时不可用，cache 过期/不存在 | 拒绝身份建立 | 拒绝 | 不创建匿名用户 |
 | 用户不在应用数据范围 | 明确拒绝 | 拒绝 | 检查飞书数据权限 |
 | employee_no 缺失 | 可按 policy 继续 RAG | 需要企业主体的工具拒绝 | HR/OA 补数据或 resolver |
-| 身份 link 冲突/歧义 | 拒绝 | 拒绝 | 人工合并，禁止自动猜测 |
+| 身份 link 冲突/歧义 | 拒绝 | 拒绝 | 人工审核/纠错；禁止自动猜测或双 User 合并 |
 | token issuer 不可用 | RAG 可继续 | 不调用 MCP | issuer SLO 告警 |
 | of_mcp verifier/JWKS 不可用 | 不调用 MCP | 拒绝 | 使用短期缓存的已验证 JWKS；过期后 fail closed |
 | 业务系统不可用 | RAG 可继续 | tool error，不自动重试副作用 | 幂等后人工/任务重试 |

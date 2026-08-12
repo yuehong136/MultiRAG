@@ -175,17 +175,22 @@ Provider-neutral ReplySession 已管理 `begin/append/replace/complete/fail` 和
   不把旧 OAuth 邮箱升级为已验证外部身份。只要 `email` 非空且 `account_kind` 仍能由旧字段
   重建，upgrade → downgrade → upgrade 必须逐字段恢复；否则 downgrade fail closed。
 - JIT 创建：`email=null`、`password=null`、`account_kind=external`、`login_channel=feishu`。
+- I6 JIT 同一事务只创建一条 active `UserTenant(NORMAL)`；数据库以 partial unique index
+  `UNIQUE(tenant_id, user_id) WHERE status='1'` 拒绝同一用户在同一 Tenant 出现两条 active
+  membership。该约束不删除历史 inactive membership，也不把普通成员提升为管理员。
 - 后续绑定本地/OIDC 登录时显式升级 `hybrid`；禁止按相同邮箱静默合并。
 - 密码登录、找回密码、邮件通知入口必须对 `email is null` 给出确定行为，不能 500。
 - `account_kind=external` 在数据库和 service 层都禁止本地密码；密码登录/找回只查
   `local/hybrid`，对 external-only 账号按无可用密码凭据 fail closed，不对 null 密码调用 bcrypt。
-- 新建密码账号显式写 `local`。I1 不新建 OAuth-only 账号；未来 I6/JIT 只有在 Provider subject
-  绑定验证完成后才可新建 `external` 或通过显式 link/merge 升级为 `hybrid`。
+- 新建密码账号显式写 `local`。I1 不新建 OAuth-only 账号；I6/JIT 只有在 Provider subject
+  绑定验证完成后才可新建 `external`，或通过显式 ExternalIdentity→既有 User 绑定把该 User 升级为
+  `hybrid`；这不是两个 User 的 merge。
 - 现有 Web OAuth callback 在 I1 期间完成 Provider 回调校验后固定返回
   `oauth_identity_binding_required`，**不按 email 登录、注册或合并任何平台账号**；OAuth `state`
-  必须存在且逐字匹配 session 中的一次性值。I6 建立显式 Provider subject binding/link/merge 后才可
-  重新开放账号动作；Channel/JIT 也不得复用 email callback。存量 `login_channel != password`
-  账户仅由迁移保守分类为 `external/hybrid`，不因此获得可用的 verified external identity。
+  必须存在且逐字匹配 session 中的一次性值。I6 只提供显式身份绑定事务，不会自行重新开放 Web
+  OAuth；未来仍须受控 OAuth adapter/composition 复用该绑定契约后，才可恢复相应账号动作。
+  Channel/JIT 也不得复用 email callback。存量 `login_channel != password` 账户仅由迁移保守分类为
+  `external/hybrid`，不因此获得可用的 verified external identity。
 
 ### 3.2 `t_ai_identity_provider_tenants`
 
@@ -303,7 +308,12 @@ account 可以处于 onboarding/pending，但不能执行目录或身份 Provide
 
 ```text
 UNIQUE(tenant_id, provider, provider_tenant_key, subject_type, subject_value)
+UNIQUE(tenant_id, user_id, provider, provider_tenant_key, subject_type)
 ```
+
+第二条是全状态 reverse slot：同一平台用户在同一 Provider Tenant、同一 subject type 下只能绑定
+一个 canonical subject。它不是只约束 active 行；把旧 identity 改成 inactive/revoked 也不能绕过后
+另绑一个 subject。真正换绑或历史纠错必须由未来受控流程审计处理。
 
 `tenant_id` 和 `user_id` 分别以 `ON DELETE RESTRICT` 引用现有 Tenant/User；另有复合
 `ON DELETE RESTRICT` 外键
@@ -476,11 +486,12 @@ verified onboarding/rotation 只能通过显式领域操作执行；account/iden
 使用 `identity_revision` compare-and-set，或在事务中 `SELECT ... FOR UPDATE` 后复核 revision。并发
 冲突 fail closed，禁止先查后写、last-write-wins 或删除重建来“换绑”。
 
-### 3.11 EIM-I2/I2.1/I3/P1 与 FastMCP 4 的边界
+### 3.11 EIM-I2/I2.1/I3/I6/P1 与 FastMCP 4 的边界
 
 I2/I2.1 实现 MultiRAG 领域身份持久化、Alembic 和数据库不变量；I3 增加 identity contracts、policy、
-service 与 repository；P1 在 `api.identity.principal` 定义 MultiRAG 唯一的 Principal 与认证证据
-contract。这些领域层都不 import FastMCP，也不复制 FastMCP 的工具/provider/auth 类型。这不是
+service 与 repository；I6 增加权威 provisioning policy、一次性 link grant、首次绑定审计及完整
+事务；P1 在 `api.identity.principal` 定义 MultiRAG 唯一的 Principal 与认证证据 contract。这些领域层
+都不 import FastMCP，也不复制 FastMCP 的工具/provider/auth 类型。这不是
 重复造工具开放层：FastMCP 4 的
 `RemoteAuthProvider`、`AccessToken`、root `on_list_tools/on_call_tool` middleware 与 HTTP
 Host/Origin 防护已经分别由 A3/A4 使用；未来 A7/P3 继续在 MCP composition/adapter 边界复用。
@@ -551,6 +562,79 @@ verified ownership insert 只是**持久化权限边界**，不等于外部所�
 必须先完成 Provider 凭据和企业/安装实例证明，再构造 `VerifiedProviderTenantOnboarding` 或
 `VerifiedProviderAccountOnboarding`；普通 `IdentityService` 永远拿不到这个 port。I3 没有提供
 Channel link 写 API、credential vault、目录调用或管理员 HTTP API。
+
+### 3.13 EIM-I6 provisioning 持久化与并发不变量
+
+I6 增加三张表，并在同一 forward migration 中加固 §3.1/§3.5 的 active membership 与 reverse
+identity 唯一性。migration 不为任何 Tenant 回填默认策略；发现存量重复 ownership 时 upgrade fail
+closed，而不是任选一行或自动合并。
+
+#### `t_ai_identity_tenant_policies`
+
+每个 Tenant 至多一条权威策略；`id=tenant_id`，并以 `ON DELETE RESTRICT` 引用 active Tenant：
+
+| 字段 | 约束 | 说明 |
+|---|---|---|
+| `tenant_id` | unique, non-null | 策略所属 Tenant；默认 projection 不回显 |
+| `mode` | `preprovisioned/link_only/jit` | 三种模式之一 |
+| `revision` | bigint, `>=1` | 每次受控 CAS 更新加一 |
+| `link_code_ttl_seconds` | integer `60..900` | link code 的权威 TTL |
+| `changed_at` | aware timestamptz | 受控变更时间；不得倒退 |
+
+缺行、非法 mode/TTL/revision 或读取失败都返回 `IDENTITY_POLICY_UNAVAILABLE`；resolver 不采用环境
+默认值、历史默认值或“先放行再补表”。首次 onboarding 必须经独立
+`ProvisioningPolicyAdministrationRepository.create_policy()` 显式写 mode + TTL；后续只用
+`cas_policy(expected_revision, mode, ttl)`，无 delete、generic CRUD 或普通业务写入口。普通 I3/I6
+service 只持有 read/provisioning capability，不持有该管理 port。
+
+I3 的 verification-gated plan 必须携该 snapshot 的 `revision`。I6 在完整事务内锁住策略行，要求
+plan 的 action、mode 与 revision 精确一致；策略变化使旧 plan fail closed，调用方须从 I3 重新规划，
+不能把旧 action 当成长期授权。
+
+#### `t_ai_identity_link_codes`
+
+表内只保存一次性 grant 的 keyed digest，不存在 `code/raw_code/token/secret/payload` 列：
+
+```text
+tenant/provider/provider_tenant/provider_account scope
+target_user_id
+digest_key_id + HMAC-SHA256 code_digest
+policy_revision
+provider_account_revision + provider_account_last_scope_change_at
+state = pending | consumed | revoked
+issued_at / expires_at / consumed_at? / revoked_at?
+consumed_external_identity_id?
+```
+
+raw code 由 24-byte（192-bit）CSPRNG 产生，base64url 编码后只在签发结果中返回一次；DTO `repr` 隐藏
+raw code、digest、key id 和目标 ID。digest 使用独立 domain 的 HMAC-SHA256，key 至少 256 bit，并与
+`digest_key_id` 一起存储以支持受控轮换；禁止存裸 SHA-256 或可逆密文。解码消费严格要求 24 bytes，
+不能用较短 token 降级熵。
+
+TTL 只能来自已锁定 policy snapshot；数据库同时强制 `expires_at>issued_at` 且不超过 15 分钟。签发
+新码会在同一事务撤销该 account + target 的旧 pending 码，partial unique index 再保证最多一个
+active pending grant。grant 绑定 policy revision、Provider Account revision 与 scope marker；三者
+任一变化，旧码统一表现为 `IDENTITY_LINK_REQUIRED`，不向调用方泄露是过期、撤销、猜错、scope
+变化还是目标冲突。`consumed` 只允许一次，并通过复合外键绑定最终 ExternalIdentity。
+
+#### `t_ai_identity_binding_events`
+
+该表保存每个 ExternalIdentity 的**首次**绑定证据：`jit/preprovisioned/link_code`、目标 User、可选
+actor/link grant、绑定前后 account kind、policy revision、Provider proof 时间、发生时间，以及
+`request_digest_key_id + request_digest`。request digest 使用与 link code 不同 domain 的 keyed
+HMAC-SHA256。表内不保存 raw subject/alias/open_id/union_id、raw code、姓名、邮箱、手机号、工号或
+请求正文；为复合外键完整性保留的 server-owned `provider_tenant_key/provider_account_key` 是 scope
+natural-key 列，不是消息断言，并在 safe projection 中隐藏。
+
+repository/application contract 是 append-only：没有 update/delete port；数据库以
+`UNIQUE(external_identity_id)`、`UNIQUE(link_code_id)` 和
+`UNIQUE(request_digest_key_id, request_digest)` 锁定一个 identity/一次 grant/一次规范请求的首次
+事实，并以复合 `ON DELETE RESTRICT` 外键锁定 account、identity 与 grant scope。`link_code_id` 的
+nullable unique 按 PostgreSQL 语义只约束非 null code；JIT/preprovisioned 仍由 identity/request 唯一
+兜底。downgrade 只有 policy/code/event 三表全空时才允许，任何 provisioning 历史都拒绝销毁。
+
+I6 migration 只增加上述表、约束和索引，不创建 EnterpriseSubject；§3.7 仍是 EIM-I5 的目标表，I6
+既不读取也不写 `employee_no`/`EnterpriseSubjectLink`。
 
 ---
 
@@ -646,7 +730,9 @@ P1 Principal。缺 alias 时三种策略只产生：
 | `link_only` | `require_link` + `IDENTITY_LINK_REQUIRED` | 否 |
 | `jit` | `create_normal_member`（角色上限 `NORMAL`） | 否 |
 
-三种 plan 都必须 `provider_verification_required=true`。未知 mode、policy exception 或无法取得 policy
+三种 plan 都必须 `provider_verification_required=true`，并携权威 policy snapshot 的
+`provisioning_policy_revision`；plan 不携 link TTL，也不能由调用方覆盖 action/revision。未知 mode、
+policy exception、缺失 policy row 或无法取得 policy
 返回 `IDENTITY_POLICY_UNAVAILABLE` 并 fail closed；I3 不调用 Contact、不开户、不激活 identity，也不
 把“plan”误当成已验证用户。
 
@@ -726,7 +812,8 @@ build_principal_from_resolved_identity(
 这两个 builder 是**进程内 trusted adapter seam**，不是 wire/security boundary；不得把请求 JSON、
 Channel command 或其他跨信任边界的任意 DTO 直接传入。企业 builder 只接受 I3 产生的
 `RESOLVED` 结果，并再次要求 active identity、live 同 Tenant membership、无 error、无
-provisioning action、无 re-verification flag、membership role 严格为 `owner/admin/normal`，以及
+provisioning action、无 `provisioning_policy_revision`、无 re-verification flag、membership role
+严格为 `owner/admin/normal`，以及
 provider/internal identity/proof time 逐项一致。
 `missing/inactive/conflict` 或仅有 verification-gated plan 的 I3 结果永远不能提升为 Principal。
 
@@ -873,6 +960,89 @@ class EnterpriseSubjectResolver:
 ```
 
 Provider SPI 属于 I4，Enterprise subject SPI 属于 I5；P1 没有实现这两个 SPI。
+
+### 4.4 I6 当前已实现的 provisioning/link 契约
+
+I6 的 framework-neutral application service 只接受 I3 plan 与 I4 proof，不接受调用方提供
+`target_user_id`、mode、action、policy revision、membership role 或 account kind：
+
+```python
+class IdentityProvisioningService:
+    async def provision_verified_identity(
+        self,
+        request: ProvisionIdentityRequest,
+    ) -> ProvisioningResult: ...
+
+    async def issue_link_code(
+        self,
+        request: LinkCodeIssueRequest,
+    ) -> LinkCodeIssueResult: ...
+```
+
+`ProvisionIdentityRequest` 必须逐项包含原 I3 `IdentityResolutionRequest`、对应
+`IdentityResolutionResult`、fresh I4 `ProviderIdentityResult`，以及 `link_only` 时可选 raw code。
+service 只接受两类 verification-gated 输入：
+
+1. `MISSING + action + provisioning_policy_revision + provider_verification_required=true`；
+2. scope marker 变化产生的 `INACTIVE + IDENTITY_INACTIVE + provider_verification_required=true`，且
+   action/revision 都为 null。第二类只用于 fresh proof 后按 canonical active identity 刷新 stale alias；
+   真正 state 为 `inactive/conflict/revoked` 的 identity 仍 fail closed，不能自动恢复。
+
+I4 proof 必须为 `RESOLVED/active`，provider、tenant、account、asserted `open_id` 与 context 精确
+一致，`verified_at` 为 aware time、不晚于 service 捕获的当前时间、距该时间不超过 5 分钟，也不得
+早于 account scope marker。合法 101～512 字符 display name 不会因为 `User.nickname` 上限而被拒绝：I6
+只做 NFKC + 空白规范化并截为 100 字符；空值使用稳定非 PII 展示名。display name 从不参与匹配。
+
+service 把 proof 归一成 `VerifiedProvisioningCommand`：canonical subject 固定为飞书 `user_id`，alias
+只允许本次已验证的 `open_id` 和可选 `union_id`；request fingerprint 使用 keyed、domain-separated
+HMAC 并同时携 `request_digest_key_id`。repository port 只有两个完整用例：
+
+```python
+class IdentityProvisioningRepository(Protocol):
+    async def provision_verified_identity(
+        self, command: VerifiedProvisioningCommand
+    ) -> ProvisioningResult: ...
+
+    async def issue_link_code(
+        self, command: LinkCodeIssueCommand
+    ) -> LinkCodeGrantRecord: ...
+```
+
+port 不暴露 CRUD、session、commit/rollback 或单表半写。SQLAlchemy adapter 为每个完整用例开启一
+个 fresh async transaction，写入前锁定/recheck Provider Account generation 与 policy generation。
+事务开始取得的数据库时间只可用于廉价初筛；等待所有可能阻塞的 policy/account/canonical/target/
+grant 锁之后，必须以 PostgreSQL `clock_timestamp()` 重新取得真实墙钟，再检查
+`proof.verified_at <= post_lock_now`、proof 未超过 5 分钟以及 pending link code 尚未过期。首次写入、
+grant consume/revoke 与 binding event 的发生时间统一使用这个 post-lock time，不能让 lock wait
+冻结 `CURRENT_TIMESTAMP` 而延长 proof/code 的有效窗口。Provider API 已在事务外完成；事务内只消费
+fresh proof 与服务端权威行，避免外部网络调用占住数据库锁。
+
+三种模式的原子结果固定为：
+
+| mode | target 来源 | 事务写入 | 明确禁止 |
+|---|---|---|---|
+| `preprovisioned` | 已存在 `pending_link` identity 的 `user_id` | 验证 live User + active membership，写 alias、activation、首次 event；local 变 hybrid | 创建 User/Tenant/membership；按显示字段找人 |
+| `link_only` | 只来自已登录 Principal 签发并锁住的 grant | 消费同 scope/revision 的 pending code，绑定/激活 identity，写首次 event；local 变 hybrid | caller 传 target、猜码枚举、把两个 User 合并 |
+| `jit` | repository 新生成 opaque User ID | 创建 external-only User + active `UserTenant(NORMAL)` + canonical identity + alias + 首次 event | email/password/access token、个人 Tenant、OWNER/ADMIN、employee_no/subject |
+
+所有写要么一起提交，要么一起回滚。canonical identity 自然键和 reverse slot、active membership
+partial unique、advisory/row lock 共同保证并发首次消息收敛；数据库约束而不是“先查后插”承担最后
+防线。已有 active canonical identity 可在 fresh proof 下返回 `ALREADY_BOUND` 并只前进 alias/
+verified/last-seen 时间；不存在 code 时不因 `link_only` plan 再要求绑定。但如果调用方显式提交 code，
+repository 必须验证它与 canonical target/首次 event 一致，不能悄悄忽略冲突的显式绑定尝试。
+
+这里的“显式 link/绑定”是把**一个外部 canonical identity**绑定到**一个已经认证的现有 User**，并
+可能把该 User 从 `local` 提升为 `hybrid`；它绝不是把两个 `User` 行及其会话、知识库、Memory 或
+业务数据合并。若 canonical identity 已属于另一个 User、reverse slot 被占用、User/membership
+inactive/歧义，均 fail closed。姓名、邮箱、手机号和 `employee_no` 永不用于选择 target。
+
+link code 的 invalid/expired/revoked/stale/scope-changed/target-conflict 等用户可探测分支统一返回
+`IDENTITY_LINK_REQUIRED`，避免持 fresh Provider proof 的调用方把响应当成 code-validity oracle；
+`IDENTITY_POLICY_UNAVAILABLE` 与 `IDENTITY_REPOSITORY_UNAVAILABLE` 保留为运维可诊断的稳定失败。
+
+I6 当前只交付 domain、schema/migration、async PostgreSQL repository/application transaction 与测试。
+它不提供 HTTP route、管理员或用户 UI、Channel adapter、C3 Principal 构造/传播、I5
+EnterpriseSubject、I7 事件消费，也不修改 FastMCP/of_mcp 的工具开放或授权运行时。
 
 ---
 
@@ -1404,7 +1574,9 @@ service-specific key；不支持时先持久化 started 并对外部返回 ID �
 
 ## 10. 管理/API 契约
 
-需要的管理能力，具体路由名称在实现任务中按现有 API 风格定稿：
+下面是目标管理能力，具体路由名称在实现任务中按现有 API 风格定稿。EIM-I6 只提供框架无关的
+policy admin/provisioning ports；这些 HTTP/API/UI 尚未接线，不能把直接实例化 repository 或人工 SQL
+当成生产管理面：
 
 | 能力 | 调用者 | 关键规则 |
 |---|---|---|

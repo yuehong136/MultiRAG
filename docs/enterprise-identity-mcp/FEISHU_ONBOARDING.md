@@ -60,9 +60,14 @@
    仍归 Channel 的过渡期，无 Channel link 时不能调用飞书 API。EIM-I3 只提供
    `VerifiedOwnershipRepository` 的两个窄持久化命令；它不是所有权证明来源，也不是可直接调用的
    管理 API。
-6. 在 MultiRAG Channel 管理端创建 Feishu Channel，由现有 Channel Secret 写入流程保存
+6. 为目标 Tenant 显式创建唯一 `IdentityTenantPolicy`，同时确定
+   `preprovisioned/link_only/jit` 与 link code TTL（60～900 秒，首期建议显式写 600）。缺 policy
+   必须 fail closed；resolver 不提供默认值或自动 backfill。后续 mode/TTL 只能一起用 expected revision
+   CAS 更新。EIM-I6 已提供最小权限 admin repository port，但 HTTP/UI/onboarding composition 尚未
+   接线，生产 onboarding 不得用人工 SQL 或把 admin port 暴露给普通 Channel 请求代替。
+7. 在 MultiRAG Channel 管理端创建 Feishu Channel，由现有 Channel Secret 写入流程保存
    `app_secret`；不得写进 Git、普通 YAML、日志、截图、聊天记录或本文档。
-7. 创建 tenant/provider-safe 的 `IdentityProviderChannelLink`。首期一个 account 和一个 Channel
+8. 创建 tenant/provider-safe 的 `IdentityProviderChannelLink`。首期一个 account 和一个 Channel
    都只能各有一条 link；任一端 scope 不一致就终止 onboarding，不自动纠正或重建。
 
 凭据属性：
@@ -79,8 +84,9 @@
 Channel 建立 link 后使用现有“测试连接”能力验证 `app_id/app_secret`，但该验证只证明应用凭据有效，
 不证明通讯录字段权限、数据范围和事件订阅都正确。
 
-当前管理 API/界面可能仍按 Channel-first 顺序创建配置；EIM-I2.1 只落数据库关系，EIM-I3 只落窄
-repository/policy/service seam。EIM-I4 已在 `api.identity_adapters` 增加一个过渡 credential resolver：
+当前管理 API/界面可能仍按 Channel-first 顺序创建配置；EIM-I2.1 只落数据库关系，EIM-I3 只落解析
+seam，EIM-I6 虽已落权威 policy/admin port 和 provisioning transaction，但仍没有管理 HTTP/UI。
+EIM-I4 已在 `api.identity_adapters` 增加一个过渡 credential resolver：
 它只从精确 Provider Account 出发，沿唯一 tenant/provider-safe link 读取 Channel 公开 `app_id/domain`
 与加密 `ChannelSecret`，用注入 `SecretStore` 解密，并把 Secret version 作为 credential generation。
 它不提供管理 API，不创建/rebind link，不在无 link account 上调 Provider API，也不改变
@@ -90,17 +96,18 @@ repository/policy/service seam。EIM-I4 已在 `api.identity_adapters` 增加一
 正式 onboarding，也不得按 `app_id` 猜测 Provider Account 和 Channel 的关系。控制面编排、
 外部 ownership verification 和通用 Provider credential vault 仍未完成。
 
-I4/I7 组合代码接入 I3 时必须按 capability 注入：普通 provisioning 只能拿 pending identity/单向收紧
-CAS；只有刚完成 Provider 验证的路径能拿 alias refresh/activation；只有目录/account 控制路径能拿
-health/scope/event CAS；ownership 仍只给 onboarding。不能为了调用方便把完整
-`SqlAlchemyIdentityRepository` 注入所有路径。
+I4/I7 组合代码接入 I3 时仍必须按 capability 注入：只有目录/account 控制路径能拿 health/scope/
+event CAS，ownership 只给 onboarding。I6 的完整 provisioning use-case port 自己拥有 fresh async
+transaction，普通 resolver 不得取得 policy admin capability，也不能为了方便把完整 repository 暴露
+给所有路径。
 
 I4 Provider 当前按以下顺序验证 credential 与企业边界：官方 Auth V3 generated async
 request/resource/transport + strict live top-level response adapter -> 官方 Tenant V2 typed nested
 `tenant_key` 精确匹配 -> 官方 Contact V3 typed nested 单用户查询。Tenant/Contact
 显式传递 project-scoped token，不走 SDK 同步/global TokenManager cold path；项目层按
-account revision/scope marker/Secret version/domain 做有界 cache 和 single-flight。这只解决目录验证，
-不代替 I6 的 ownership/identity/user 事务。
+account revision/scope marker/Secret version/domain 做有界 cache 和 single-flight。这只解决目录验证；
+I6 另在数据库事务中重新锁 policy/account generation，所有阻塞锁后以 PostgreSQL
+`clock_timestamp()` 重验 proof 的 5 分钟窗口与 code expiry，再原子写 identity/user/event。
 
 `lark-oapi==1.7.2` 生成的 Auth response model 期待 `data`，但 live 成功响应的 token/expire 位于
 顶层。I4.1 已针对该 live shape 修正 production adapter，同时继续使用官方 async transport/签名；
@@ -237,7 +244,10 @@ Contact API 仍会权限失败。官方说明：[配置应用数据权限](https
 
 - 应用可用范围：实际允许使用 AI 平台的员工；
 - 通讯录数据范围：同一范围，或管理员批准的全员范围；
-- MultiRAG tenant policy：`jit + require_active + default_role=NORMAL`。
+- MultiRAG tenant policy：例如显式 `mode=jit, link_code_ttl_seconds=600`，并记录当前 revision。
+
+Provider active 校验和 JIT `UserTenant(NORMAL)` 是 I6 固定安全不变量，不是可由 tenant policy 放宽的
+`require_active/default_role` 字段。
 
 如果数据范围只覆盖部分部门，范围外员工收到明确的“企业身份未在应用授权范围内”提示，不能
 悄悄创建匿名平台用户。
@@ -320,10 +330,10 @@ approved_at: <时间>
 
 ## 8. 首次身份联调
 
-本节是 I4/I6/C3 的联调清单，**不是 EIM-I3 当前可执行能力**。I3 不持有飞书
+本节是 I4/I6/C3 的联调清单，**不是 EIM-I3 或 EIM-I6 单独可执行的 Channel 能力**。I3 不持有飞书
 SDK/Secret，不调用 Contact，不创建 `User/UserTenant`，也不返回 Principal。I4.1 修正后的
-production adapter sandbox 与 I4.1 全量门禁已完成；只有 I6 写事务和 P1/C3 组装依赖全部满足后，
-才能按本节宣称消息到
+production adapter sandbox 与 I4.1 全量门禁已完成；I6 的 policy/link/JIT 写事务与完整门禁也已完成，
+但 C1/C2 structured assertion 与 C3/P1 组装仍未实现。只有这些依赖全部满足后，才能按本节宣称消息到
 Principal 的端到端结果。
 
 使用一个普通员工测试账号和一个管理员控制账号，执行：
@@ -340,6 +350,11 @@ Principal 的端到端结果。
 6. 再发一条消息，验证不再次调用 Contact API。
 7. 模拟本地 identity cache 过期，验证只刷新一次且并发请求 single-flight。
 8. 使用范围外/冻结测试用户，验证 fail closed 且不创建 `UserTenant`。
+
+I6 三种 mode 的联调还必须分别确认：preprovisioned 未命中不开户；link_only code 只绑定已登录用户
+本人、过期/撤销/旧 generation 统一要求新码；JIT 只创建 external-only User + NORMAL membership。
+任何 name/email/mobile/employee_no 相同都不能触发匹配或双 User merge。I5 尚未实现，所以本轮
+不得因 Contact 返回 employee_no 就宣称 EnterpriseSubject 已建立。
 
 官方 Contact API：[获取单个用户信息](https://open.feishu.cn/document/server-docs/contact-v3/user/get?lang=zh-CN)
 
@@ -391,6 +406,8 @@ INACTIVE       -> 禁止执行和新会话
 ## 11. 上线前飞书侧验收
 
 - [ ] App ID/Secret 已写入 MultiRAG 加密 Secret store，无明文副本。
+- [ ] Tenant provisioning policy 已由受控 onboarding 显式创建，mode、TTL、revision 已记录；缺行不
+      使用默认值，普通 Channel/identity service 无 admin write capability。
 - [ ] 权限列表与本文必需 scope 对账，无多余高危权限。
 - [ ] 应用可用范围与通讯录数据范围已由管理员确认。
 - [ ] 消息和四个 Contact 事件已订阅并发布生效。

@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TypeGuard
 
-from api.identity.contracts import AliasKey, ProviderAliasType, ProviderContext
+from api.identity.contracts import (
+    AliasKey,
+    ProviderAliasType,
+    ProviderContext,
+    ProvisioningMode,
+    ProvisioningPolicySnapshot,
+)
 
 _MAX_BIGINT = (1 << 63) - 1
 
@@ -37,9 +44,25 @@ def valid_opaque_id(value: str) -> bool:
     return valid_text(value, max_length=32)
 
 
-def valid_revision(value: int) -> bool:
+def valid_revision(value: object) -> bool:
     return type(value) is int and 1 <= value <= _MAX_BIGINT
 
 
 def valid_timestamp(value: datetime) -> bool:
     return isinstance(value, datetime) and value.tzinfo is not None and value.utcoffset() is not None
+
+
+def valid_policy_snapshot(
+    value: object,
+    *,
+    tenant_id: str | None = None,
+) -> TypeGuard[ProvisioningPolicySnapshot]:
+    return isinstance(value, ProvisioningPolicySnapshot) and bool(
+        valid_opaque_id(value.tenant_id)
+        and (tenant_id is None or value.tenant_id == tenant_id)
+        and isinstance(value.mode, ProvisioningMode)
+        and valid_revision(value.revision)
+        and type(value.link_code_ttl_seconds) is int
+        and 60 <= value.link_code_ttl_seconds <= 900
+        and valid_timestamp(value.changed_at)
+    )

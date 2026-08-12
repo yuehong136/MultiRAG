@@ -34,7 +34,7 @@
 推荐的派工方式：
 
 ```text
-读 docs/enterprise-identity-mcp/README.md，然后做 EIM-I6。
+读 docs/enterprise-identity-mcp/README.md，然后做 EIM-C1。
 先复核任务锚点和依赖，把准备修改的文件与验收标准告诉我；确认后再写代码。
 ```
 
@@ -182,9 +182,10 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
 
 任何模式都不得把首次用户创建成 `OWNER` 或 `ADMIN`。
 
-该表描述 I4+I6 完成后的策略效果。I3 当前只把三种 mode 映射为
-`bind_preprovisioned/require_link/create_normal_member` 的 verification-gated plan，未执行表中的
-绑定或开户动作。
+I3 仍只把权威 policy snapshot 的三种 mode 映射为携 revision 的
+`bind_preprovisioned/require_link/create_normal_member` verification-gated plan；它本身不写库。I6 已
+完成消费 fresh I4 proof、重新锁定 policy/account generation 并原子执行表中绑定/开户动作的 domain、
+schema 与 PostgreSQL transaction。HTTP/UI/Channel/Principal 传播仍未接线。
 
 ---
 
@@ -256,6 +257,25 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   **1 passed in 0.76s**；`make verify` unit **2123 passed in 34.53s**，Ruff format 1234 files、
   Ruff check、7 import contracts、async gate、mypy 78 files 全绿；强制 integration
   **84 passed in 12.52s**。I4 不写 identity 数据，也不实现 I5/I6/I7/C3/Principal 传播。
+- EIM-I6 已落下权威 `IdentityTenantPolicy(mode/revision/link TTL)`、digest-only
+  `IdentityLinkCode`、append-only 首次 `IdentityBindingEvent`，并加固 active membership partial
+  unique 与全状态 reverse identity unique。policy 缺失不使用默认值；I3 plan 携 revision，I6 在锁后
+  重新核对 generation。
+- I6 link code 是 exact 24-byte/192-bit CSPRNG，raw value 只返回一次；数据库只保存 domain-separated
+  HMAC-SHA256 digest + key id、target、policy/account generation 与生命周期。TTL 由权威 policy 限定
+  60～900 秒，新码撤销同 account + target 的旧 pending 码；所有可探测的 invalid/conflict 分支统一
+  要求重新 link。
+- I6 只接受 I3 plan + 不超过 5 分钟且不晚于 post-lock PostgreSQL `clock_timestamp()` 的 I4 proof。
+  `preprovisioned` 不开户，`link_only` target 只来自 authenticated Principal 创建的 grant，`jit` 只
+  创建 external-only User + active `UserTenant(NORMAL)`。User/UserTenant/identity/alias/code/event 同
+  事务提交或回滚；所有阻塞锁后重新校验 proof/code expiry，锁等待不会延长有效窗口。
+- “显式 link”只把一个 verified ExternalIdentity 绑定到一个现有 User，并可能 local→hybrid；不是
+  两个 User 及其数据的 merge。name/email/mobile/employee_no 都不用于匹配，I6 也不写 I5
+  EnterpriseSubject。inactive/conflict/revoked 不自动恢复。
+- I6 当前只交付 framework-neutral domain、migration/schema 与 async PostgreSQL repository/use-case；
+  不提供 HTTP/UI、Channel/C3、Principal 传播、I7 或 FastMCP/of_mcp 运行时接线。完成证据为 domain/
+  model unit **143 passed in 5.49s**、四个 identity 真 PostgreSQL 面 **84 passed in 7.80s**；完整
+  `make verify` 全绿并收集/执行 unit **2188 passed**，强制 integration **128 passed in 16.40s**。
 - [`api/channels/README.md`](../../api/channels/README.md) 已明确：`IncomingMessage.sender_id`
   是不可信外部标识，不能直接作为 Principal。这条边界必须保留。
 - `api/channels/feishu/channel.py::_normalize` 当前只从 `open_id/union_id/user_id` 中取第一个
@@ -310,18 +330,19 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   composition/adapter 边界复用。
 - P1 的 `build_principal_from_resolved_identity()` 只提升 I3 `RESOLVED` + active identity + live
   `UserTenant(owner/admin/normal)` 的一致快照，并绑定 provider/internal identity/proof time；任何
-  error、provision plan、需重验或非法 membership role 都 fail closed。builder 只是进程内 trusted
-  adapter seam，不接受 wire/Channel 任意 DTO。
+  error、provision action、provisioning policy revision、需重验或非法 membership role 都 fail
+  closed。builder 只是进程内 trusted adapter seam，不接受 wire/Channel 任意 DTO。
 - `api.identity.legacy_owner` 为存量 Web/API 凭据每请求活查 active User + 唯一
   `tenant_id == user.id` 的 personal OWNER Tenant。它不是通用多 Tenant selector；valid JWT 的用户/
   membership 失效不会降级重解释为 API token，意外 verifier 错误也不会被吞。
   存量 sync `Depends(manager)` 仍可能返回 ORM User，所以 P1 不代表所有 auth 入口已统一。
-- I2/I2.1/I3/P1 不 import FastMCP，因为 FastMCP 不拥有平台 Tenant、飞书安装实例或身份库。后续 MCP 入口仍
+- I2/I2.1/I3/I6/P1 不 import FastMCP，因为 FastMCP 不拥有平台 Tenant、飞书安装实例或身份库。后续 MCP 入口仍
   优先复用 FastMCP 4 的 `RemoteAuthProvider`、`AccessToken`、`on_list_tools/on_call_tool` middleware
   和 transport 防护；领域 identity/Principal 保持框架无关，避免重复实现框架已有工具开放能力。
 - P1 已解锁 A7 的代码前置，但 A7 仍是独立 inbound Resource Server 任务，不能立即宣称
-  可发布。F1/I4.1 已完成；identity 主线按 `I6 -> C3 -> P2` 继续，
-  `C1 -> C2` 可并行；
+  可发布。F1/I4.1/I6 已完成；下一条接线主线必须先走
+  `C1 -> C2 -> C3 -> P2`。I5 与 I7 已由 I4 解锁，可作为不共文件的并行支线；I8 仍需 I6 + I7，
+  不能跳依赖；
   C3/P2、A2/P3/A7 均不属于 P1 完成面。
 - MCP 出站已使用官方 SDK 2 `Client`：Streamable HTTP 使用 `mode="auto"` 和 SDK
   `create_mcp_http_client()` 受管 client（30 秒 connect/write/pool、300 秒 read），SSE 使用
@@ -442,8 +463,8 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   OAuth 获取 token 流。of_mcp 仍缺 A5 proxy internal actor；A6 虽已有 phase-1 domain/runtime
   安全边界，但仍缺生产多实例 replay/audit、HMAC/KMS 轮换、OTel SDK/exporter 与跨仓 trace，因此
   保持 `🔵`。M1/M2 企业主体与业务对象授权、持久 Interaction/Confirmation/Idempotency 也未完成。
-  F1/I4.1 已完成；MultiRAG 当前主线是
-  `I6 -> C3 -> P2`，`C1 -> C2` 可并行；不能跳过
+  F1/I4.1/I6 已完成；MultiRAG 下一条接线主线是
+  `C1 -> C2 -> C3 -> P2`；I5/I7 是已解锁并行支线，但 I8 仍需 I6 + I7。不能跳过
   `C3 -> P2` 直接做 A2/P3。A7 虽已解锁前置，仍须作为独立入站安全面实现和验收。
 
 ---

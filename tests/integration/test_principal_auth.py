@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from api.db import UserAccountKind, UserTenantRole
@@ -94,19 +95,13 @@ def test_legacy_owner_adapter_uses_one_live_personal_membership(
         assert principal.authentication.validated_at == validated_at
         assert principal.authentication.authenticated_at is None
 
-        # A duplicate live personal-owner membership is ambiguous and must not
-        # be reduced with first()/last-write-wins semantics.
-        session.add(_membership(user_id, user_id))
-        session.flush()
-        assert (
-            principal_from_legacy_owner_context(
-                session,
-                user,
-                AuthenticationSource.SDK_API_TOKEN,
-                validated_at=validated_at,
-            )
-            is None
-        )
+        # I6 makes the previously ambiguous state unrepresentable at the
+        # database boundary.  The migration tests cover pre-I6 duplicate data.
+        with pytest.raises(IntegrityError) as duplicate:
+            with session.begin_nested():
+                session.add(_membership(user_id, user_id))
+                session.flush()
+        assert duplicate.value.orig.diag.constraint_name == "uq_user_tenants_active_tenant_user"
 
         user.is_active = False
         assert (

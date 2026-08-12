@@ -550,3 +550,62 @@ Account、Channel 或其数据库 schema。主流企业平台可借鉴的是“�
 MultiRAG 仍按仓内 `port-ragflow-commit` Skill 对本地 RAGFlow 上游逐 commit 跟进。本轮只新增
 加法式表、约束和迁移，不为假想 Git 冲突搬移 `api/db/db_models.py` 中的模型；遇到真实上游 commit
 时再由 Skill 的语义移植、契约测试和适配层规则处理。
+
+---
+
+## EIM-ADR-25：Provisioning policy 与首次绑定是 revision-locked 的数据库事实
+
+**状态**：Accepted
+**日期**：2026-08-13
+
+`preprovisioned/link_only/jit` 不是进程配置、Channel 参数或缺行时可猜测的默认值。每个启用企业身份
+的 Tenant 必须显式创建一条 `IdentityTenantPolicy(mode, link_code_ttl_seconds, revision)`；缺行、非法
+值或读取失败一律 fail closed。首次创建与后续 compare-and-set 更新使用独立最小权限 admin port，
+不提供 delete/default/generic CRUD，也不把管理 capability 交给普通 identity resolution/provisioning。
+
+I3 对 alias miss 生成的 verification-gated plan 必须携当时权威 policy revision。I6 在一个完整数据库
+事务中重新锁定并核对 policy mode/revision、Provider Account revision/scope marker、fresh I4 proof 和
+当前 User/UserTenant/ExternalIdentity 状态。任一代际变化都使旧 plan/code 失效；不能在 Provider 调用
+与数据库写之间继续使用过期 action，也不能因策略缺失而回退到 JIT。
+
+`link_only` grant 使用 192-bit CSPRNG raw code；raw code 只返回一次，数据库只保存 domain-separated
+HMAC-SHA256 digest + key id、policy/account generation、目标 User、TTL 与状态。TTL 由 policy 显式
+给出且只能在 60～900 秒内，数据库另以 15 分钟硬上限兜底。新码撤销同 account + target 的旧
+pending 码；猜错、过期、撤销、scope/revision 变化和可探测 target conflict 对外统一为
+`IDENTITY_LINK_REQUIRED`。
+
+每个 ExternalIdentity 的首次绑定另写一条 append-only `IdentityBindingEvent`，记录绑定方式、
+policy revision、Provider proof 时间、account-kind 变化和 keyed request fingerprint；不保存 raw
+subject/alias/open_id/union_id、raw code 或 PII。复合外键需要的 server-owned provider tenant/account
+scope natural keys 仍持久化，但 safe projection 隐藏。identity、link grant 和 request fingerprint 的
+唯一约束使首次事实不可被第二次“补写”覆盖。User/UserTenant/identity/alias/code/event 必须同事务
+提交或全部回滚；Provider 网络调用在事务外完成。所有阻塞锁取得后须用 PostgreSQL
+`clock_timestamp()` 重新校验 proof 的 5 分钟窗口和 code expiry，并用该 post-lock time 写入/消费/
+记录事件，不能让事务起点时间冻结等待期间的有效期。
+
+选择这一形状的代价是：onboarding 必须显式创建 policy，策略变更会让在途 plan/code 重新开始，
+first-binding event 也不记录每次普通 revalidation。收益是所有开户/绑定决定都能关联一个可重放审计的
+权威 generation，并避免配置漂移、TOCTOU 和半写。后续 HTTP/UI 只能组合这些 ports，不能另建绕过
+revision/transaction 的写路径。
+
+---
+
+## EIM-ADR-26：显式 link 是 ExternalIdentity 到既有 User 的绑定，不是双 User 合并
+
+**状态**：Accepted；细化 EIM-ADR-10 的“账号合并必须显式”措辞
+**日期**：2026-08-13
+
+首期 `link_only` 的目标只能来自已经认证的当前 Principal 所签发的一次性 grant；
+`preprovisioned` 的目标只能来自管理员预建的 `pending_link` identity。两者都把一个经过 Provider
+验证的 canonical external identity 绑定到一个现有 `User.id`，并在需要时把该 User 的
+`account_kind` 从 `local` 提升为 `hybrid`。它们不新建第二个本地 User，也不搬移会话、知识库、
+Memory、API token 或业务对象。
+
+因此，ADR-10 中的“显式合并”在 I6 语境下只表示**显式身份绑定**。如果 Provider canonical identity
+已经属于另一个 User、目标 User 的同 Provider reverse slot 被占用、存在 inactive/冲突/revoked
+历史，或 User/membership 不再有效，I6 必须拒绝；不得把两个 User 行自动合并后继续。姓名、显示名、
+邮箱、手机号、employee_no 和 prompt 中的任何自述都不能用于搜索或选择目标。
+
+真正的 User-to-User consolidation 若未来出现需求，必须另立 ADR、迁移和人工审核流程，明确数据
+归属、不可合并资源、凭据撤销、引用重写、回滚与审计；不得复用 link code 或删除冲突 identity 来
+偷偷实现。

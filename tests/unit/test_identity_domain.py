@@ -42,6 +42,7 @@ from api.identity.contracts import (
     ProvisioningAction,
     ProvisioningDecision,
     ProvisioningMode,
+    ProvisioningPolicySnapshot,
     UserMembershipRecord,
     VerifiedIdentityActivation,
     VerifiedIdentityMutationRepository,
@@ -157,11 +158,22 @@ class _PolicyResolver:
         self.mode = mode
         self.tenant_ids: list[str] = []
 
-    async def get_mode(self, tenant_id: str) -> ProvisioningMode:
+    async def get_policy(
+        self,
+        tenant_id: str,
+    ) -> ProvisioningPolicySnapshot | None:
         self.tenant_ids.append(tenant_id)
         if isinstance(self.mode, Exception):
             raise self.mode
-        return cast(ProvisioningMode, self.mode)
+        if isinstance(self.mode, ProvisioningMode):
+            return ProvisioningPolicySnapshot(
+                tenant_id=tenant_id,
+                mode=self.mode,
+                revision=9,
+                link_code_ttl_seconds=600,
+                changed_at=_NOW,
+            )
+        return cast(ProvisioningPolicySnapshot | None, self.mode)
 
 
 def _service(
@@ -228,6 +240,7 @@ async def test_valid_account_with_missing_alias_returns_verification_gated_plan_
         status=IdentityResolutionStatus.MISSING,
         error_code=error_code,
         provisioning_action=action,
+        provisioning_policy_revision=9,
         provider_verification_required=True,
     )
     assert policy.tenant_ids == [context.tenant_id]
@@ -501,6 +514,13 @@ def _all_dto_instances() -> tuple[object, ...]:
             status=IdentityResolutionStatus.RESOLVED,
             identity=identity,
             membership=membership,
+        ),
+        ProvisioningPolicySnapshot(
+            tenant_id="tenant-1",
+            mode=ProvisioningMode.JIT,
+            revision=1,
+            link_code_ttl_seconds=600,
+            changed_at=_NOW,
         ),
         ProvisioningDecision(action=ProvisioningAction.CREATE_NORMAL_MEMBER, member_role="normal"),
         InsertResult(outcome=InsertOutcome.CREATED, record=identity),
