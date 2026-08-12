@@ -48,9 +48,13 @@ Channel 仓内的强制记账，不是重复任务。
 完整链路固定为：
 
 ```text
+(CustomerOrganization 1:1 Tenant；首期仅目标术语，不落表)
+  -> MultiRAG tenant_id
 (provider, provider_tenant_key)
   -> exactly one MultiRAG tenant_id（首期机器强制）
-  -> (provider_account_key/app_id, channel binding) 固定同一 tenant_id
+  -> independent Provider Account / app installation 固定同一 tenant_id
+  -> tenant/provider-safe IdentityProviderChannelLink
+  -> Channel binding 固定同一 tenant_id
   -> open_id alias
   -> 飞书 tenant-scoped user_id
   -> MultiRAG platform_user_id
@@ -59,8 +63,10 @@ Channel 仓内的强制记账，不是重复任务。
   -> of_mcp Principal + scope + 业务侧授权
 ```
 
-MultiRAG 平台仍是多租户系统，但首期单个飞书企业接入强制为单 Tenant。同一企业可以安装多个应用，
-这些 Provider Account 必须归属同一个 Tenant；同一个安装实例或 Channel binding 在任何阶段都不能
+`CustomerOrganization` 表示真实客户企业/合同与治理边界；首期与 Tenant 1:1，只是目标架构术语，
+不新增表、claim、API 或运行时路由。MultiRAG 平台仍是多租户系统，但首期单个飞书企业接入强制为
+单 Tenant。同一企业可以安装多个应用，这些 Provider Account 必须归属同一个 Tenant；同一个安装实例
+或 Channel binding 在任何阶段都不能
 动态路由多个 Tenant。未来集团级多 Tenant 需要每个目标 Tenant 使用不同应用安装实例/binding，且
 必须通过新的 ADR、schema 迁移和上线评审显式开放；当前 schema 不预埋绕过路径。
 
@@ -219,15 +225,22 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   Principal。
 - EIM-I2 已完成六张身份持久化表：provider tenant ownership、provider account ownership、canonical
   identity、tenant-scoped alias、enterprise subject 与 body-free event receipt。首期
-  `(provider, provider_tenant_key)` 机器固定一个 Tenant；account/channel、canonical identity、
-  alias/receipt 再由唯一约束和复合 `ON DELETE RESTRICT` 外键继承同一 scope。Alembic 单 head 为
+  `(provider, provider_tenant_key)` 机器固定一个 Tenant；canonical identity、alias/receipt 再由唯一
+  约束和复合 `ON DELETE RESTRICT` 外键继承同一 scope。I2 当时的 account/channel 直接关系正由
+  I2.1 forward migration 解耦。I2 Alembic head 为
   `8f2c4d6e7a9b`；identity 真 PostgreSQL integration 为 **11 passed**，完整 `make verify` 为
   **1925 passed**，完整 integration 为 **52 passed**。
   这仍只证明持久化边界，不代表 Channel 已有 Principal。
-- I2 不 import FastMCP，因为 FastMCP 不拥有平台 Tenant、飞书安装实例或身份库。后续 MCP 入口仍
+- EIM-I2.1 已用第七张 `IdentityProviderChannelLink` 表把 Provider Account 从 Channel 所有权中
+  解耦：account 可以独立存在，Channel 通过 tenant/provider-safe 双复合外键和首期双唯一引用。
+  Alembic 单 head 为 `9a3b5c7d8e0f`；I2.1 identity integration **23 passed**，相关 I2.1 unit
+  **14 passed**，完整 `make verify` unit **1929 passed**，完整 integration **65 passed**。飞书 Secret
+  仍在 `ChannelSecret`，因此这里只能宣称数据模型解耦，不能宣称凭据已解耦。
+- I2/I2.1 不 import FastMCP，因为 FastMCP 不拥有平台 Tenant、飞书安装实例或身份库。后续 MCP 入口仍
   优先复用 FastMCP 4 的 `RemoteAuthProvider`、`AccessToken`、`on_list_tools/on_call_tool` middleware
   和 transport 防护；领域 identity/Principal 保持框架无关，避免重复实现框架已有工具开放能力。
-- 下一项是 EIM-I3 repository/policy：普通路径禁止 ownership 换绑或 hard-delete；状态、scope 和
+- 下一项 EIM-I3 repository/policy 已解除暂停：核心入口依赖 Provider
+  Context 而非 Channel，普通路径禁止 ownership/link 换绑或 hard-delete；状态、scope 和
   revision 变化必须使用 `identity_revision` CAS，或同一事务内行锁后复核 revision，冲突 fail closed。
 - MCP 出站已使用官方 SDK 2 `Client`：Streamable HTTP 使用 `mode="auto"` 和 SDK
   `create_mcp_http_client()` 受管 client（30 秒 connect/write/pool、300 秒 read），SSE 使用
@@ -347,7 +360,7 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   OAuth 获取 token 流。of_mcp 仍缺 A5 proxy internal actor；A6 虽已有 phase-1 domain/runtime
   安全边界，但仍缺生产多实例 replay/audit、HMAC/KMS 轮换、OTel SDK/exporter 与跨仓 trace，因此
   保持 `🔵`。M1/M2 企业主体与业务对象授权、持久 Interaction/Confirmation/Idempotency 也未完成。
-  MultiRAG 应从已完成 I2 继续推进 `I3 -> P1`、`F1 + I3 -> I4 -> I6` 与 `C1 -> C2`，不能跳过
+  MultiRAG 应继续推进 `I3 -> P1`、`F1 + I3 -> I4 -> I6` 与 `C1 -> C2`，不能跳过
   `C3 -> P2` 直接做 A2/P3。本仓文档收口后的 `make verify` 全绿、**1915 passed**。
 
 ---

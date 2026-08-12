@@ -13,6 +13,8 @@ from api.db.db_models import (
     ChannelSecret,
     ChatChannel,
     Dialog,
+    IdentityProviderAccount,
+    IdentityProviderChannelLink,
     UserCanvas,
     UserCanvasVersion,
     UserTenant,
@@ -34,6 +36,14 @@ class ChannelRepository(Protocol):
     async def get_binding(self, channel_id: str, *, for_update: bool = False) -> ChannelBinding | None: ...
 
     async def get_runtime(self, binding_id: str, *, for_update: bool = False) -> ChannelRuntimeStatus | None: ...
+
+    async def get_linked_identity_provider_account(
+        self,
+        tenant_id: str,
+        channel_id: str,
+        *,
+        for_update: bool = False,
+    ) -> IdentityProviderAccount | None: ...
 
     async def list_enabled_channels(self, tenant_id: str, provider: str) -> list[ChatChannel]: ...
 
@@ -109,6 +119,33 @@ class SqlAlchemyChannelRepository:
         statement = select(ChannelRuntimeStatus).where(ChannelRuntimeStatus.binding_id == binding_id)
         if for_update:
             statement = statement.with_for_update()
+        return (await self._db.scalars(statement)).first()
+
+    async def get_linked_identity_provider_account(
+        self,
+        tenant_id: str,
+        channel_id: str,
+        *,
+        for_update: bool = False,
+    ) -> IdentityProviderAccount | None:
+        """Lock and return the enterprise connection explicitly linked to a channel."""
+
+        statement = (
+            select(IdentityProviderAccount)
+            .join(
+                IdentityProviderChannelLink,
+                IdentityProviderChannelLink.provider_account_id == IdentityProviderAccount.id,
+            )
+            .where(
+                IdentityProviderChannelLink.tenant_id == tenant_id,
+                IdentityProviderChannelLink.channel_id == channel_id,
+                IdentityProviderAccount.tenant_id == tenant_id,
+            )
+        )
+        if for_update:
+            statement = statement.with_for_update(
+                of=(IdentityProviderChannelLink, IdentityProviderAccount),
+            )
         return (await self._db.scalars(statement)).first()
 
     async def list_enabled_channels(self, tenant_id: str, provider: str) -> list[ChatChannel]:

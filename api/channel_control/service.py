@@ -27,7 +27,7 @@ from api.channel_control.verification_throttle import VERIFICATION_THROTTLE, Ver
 from api.channel_providers import ProviderSpec, provider_spec, resolve_path
 from api.channel_providers.functions import ProviderConfigInvalid, merge_config_patch, missing_required_fields, split_config, validate_config
 from api.channels.verification import ChannelCredentialRejected, ChannelVerificationUnavailable, credential_verifier
-from api.db.db_models import ChannelBinding, ChannelRuntimeStatus, ChannelSecret, ChatChannel
+from api.db.db_models import ChannelBinding, ChannelRuntimeStatus, ChannelSecret, ChatChannel, IdentityProviderAccount
 from common.app_config import get_app_config
 from common.constants import TenantPermission
 from common.misc_utils import get_uuid
@@ -109,6 +109,16 @@ class ChannelTargetNotAccessible(ChannelControlError):
         super().__init__(
             "You do not have permission to bind this target to an external channel.",
             error_code="CHANNEL_TARGET_NOT_ACCESSIBLE",
+        )
+
+
+class ChannelIdentityOwnershipLocked(ChannelControlError):
+    """A normal Channel mutation may not move a server-owned identity scope."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "This channel is linked to enterprise identity. Keep the same provider account, or disable the channel instead of replacing or deleting it.",
+            error_code="CHANNEL_IDENTITY_OWNERSHIP_LOCKED",
         )
 
 
@@ -363,18 +373,38 @@ class ChannelControlService:
     async def update_channel(self, tenant_id: str, channel_id: str, request: ChannelUpdateRequest) -> dict[str, Any]:
         try:
             channel = await self._require_channel(tenant_id, channel_id, for_update=True)
+            identity_account = await self._repository.get_linked_identity_provider_account(
+                tenant_id,
+                channel.id,
+                for_update=True,
+            )
             secret = await self._repository.get_secret(channel.id, for_update=True)
             binding = await self._repository.get_binding(channel.id, for_update=True)
             runtime_changed = False
             binding_generation_advanced = False
 
-            if request.name is not None:
-                channel.name = request.name
+            next_public_config: dict[str, Any] | None = None
+            plaintext: dict[str, str] | None = None
+            config_changed = False
             if request.config is not None:
                 spec = _spec_for(channel)
-                public, plaintext, config_changed = _patch_public_config(spec, channel.config, _parse_config(spec, request.config, partial=True))
+                next_public_config, plaintext, config_changed = _patch_public_config(
+                    spec,
+                    channel.config,
+                    _parse_config(spec, request.config, partial=True),
+                )
+
+            self._ensure_identity_account_unchanged(
+                channel,
+                identity_account,
+                next_public_config if next_public_config is not None else channel.config,
+            )
+
+            if request.name is not None:
+                channel.name = request.name
+            if next_public_config is not None:
                 if config_changed:
-                    channel.config = public
+                    channel.config = next_public_config
                     runtime_changed = True
                 if plaintext is not None:
                     next_version = (secret.version + 1) if secret is not None else 1
@@ -468,6 +498,13 @@ class ChannelControlService:
     async def delete_channel(self, tenant_id: str, channel_id: str) -> bool:
         try:
             channel = await self._require_channel(tenant_id, channel_id, for_update=True)
+            identity_account = await self._repository.get_linked_identity_provider_account(
+                tenant_id,
+                channel.id,
+                for_update=True,
+            )
+            if identity_account is not None:
+                raise ChannelIdentityOwnershipLocked
             await self._repository.delete(channel)
             await self._repository.commit()
             return True
@@ -948,6 +985,18 @@ class ChannelControlService:
         if channel is None:
             raise ChannelAccessDenied
         return channel
+
+    @staticmethod
+    def _ensure_identity_account_unchanged(
+        channel: ChatChannel,
+        identity_account: IdentityProviderAccount | None,
+        next_public_config: Mapping[str, Any],
+    ) -> None:
+        if identity_account is None:
+            return
+        next_account_key = _spec_for(channel).account_identity(next_public_config)
+        if channel.channel != identity_account.provider or next_account_key != identity_account.provider_account_key:
+            raise ChannelIdentityOwnershipLocked
 
     async def _validate_target(self, tenant_id: str, request: ChannelBindingUpsertRequest) -> None:
         """Resolve the target, then authorize the caller against its owner.

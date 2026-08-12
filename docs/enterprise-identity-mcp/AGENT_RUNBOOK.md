@@ -75,6 +75,10 @@ rg -n "相关模型、迁移、测试或错误码" .
   应用安装实例和 Channel binding 永远固定单 Tenant。未来集团级多 Tenant 必须使用不同安装实例，
   经新 ADR/schema 迁移受控开放，不允许一个 binding 动态路由；全体员工是“可识别主体”，不等于
   自动拥有所有资源权限；
+- Provider Account 是独立企业连接，Channel 通过 tenant/provider-safe 的显式一对一 link 引用；
+  account 可无 Channel，但在 Provider credential vault 完成前不得调用 Provider API。飞书 Secret
+  仍在 ChannelSecret，不能把 I2.1 宣称为凭据已解耦；
+- `CustomerOrganization` 首期只作目标术语并与 Tenant 1:1，不落表、claim、API 或运行时路由；
 - `platform_user_id = MultiRAG User.id`；飞书长连接返回的 `open_id` 只是外部 alias；
 - 飞书规范主键为 `(tenant_key, user_id)`；`(provider_account_key, open_id)` 是解析入口；
 - 不做每日全量组织复制：首次 JIT + Contact 事件失效 + 周期性增量/对账；
@@ -119,8 +123,12 @@ FastAPI 自动序列化出去，因此 tolerate PR 必须用线格测试证明�
 - I2 必须先用 provider-tenant ownership 强制外部企业单 Tenant，再让 provider account、alias 和
   receipt 通过复合外键逐级继承同一 tenant/provider scope；只给每张业务表加 `tenant_id` 不等于守住
   account/binding ownership；
-- I3 不把 ownership 实现成普通 CRUD：普通路径禁止修改其 tenant/provider/channel scope、禁止
-  hard-delete；verified onboarding/rotation 用显式领域方法。状态和 revision 更新必须使用
+- I2.1 必须保留已提交 I2 revision，使用 forward migration 把旧 `account.channel_id` 无损 backfill
+  到显式 link；link 两端同时绑定 tenant/provider scope、首期双唯一且 `ON DELETE RESTRICT`。
+  无 link account 合法；downgrade 只有 account/link 两表都为空时允许，任一有数据都 fail closed；
+- I3 不把 ownership 实现成普通 CRUD：普通路径禁止修改 account 的 tenant/provider scope，禁止
+  unlink/rebind link 的 account/channel scope，也禁止 hard-delete；verified onboarding/rotation 用
+  显式领域方法。状态和 revision 更新必须使用
   `identity_revision` CAS，或在同一事务 `SELECT ... FOR UPDATE` 后复核 revision，冲突 fail closed；
 - 身份历史外键使用 `ON DELETE RESTRICT`；有数据 downgrade 必须 fail closed，不用 CASCADE 或清表
   换取回滚成功；
@@ -278,7 +286,7 @@ git diff --check
 ```
 
 A4 定向 **201 passed**；`uv run --locked ofmcp verify` 六步全绿、**417 passed、2 existing skipped**，
-contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG 已完成 I2，当前可并行做
+contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG 已完成 I2/I2.1，当前可并行做
 `I3 -> P1`、`F1 + I3 -> I4 -> I6`、`C1 -> C2`，只有
 `C3 -> P2` 后才能进入 A2/P3。secure 在独立远程发布闸门解除前仍不能作为远程业务入口。
 

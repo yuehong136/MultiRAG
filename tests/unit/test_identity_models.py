@@ -12,6 +12,7 @@ from api.db.db_models import (
     ExternalIdentityAlias,
     IdentityEventReceipt,
     IdentityProviderAccount,
+    IdentityProviderChannelLink,
     IdentityProviderTenant,
 )
 
@@ -106,7 +107,6 @@ def test_provider_ownership_projections_redact_binding_material() -> None:
     provider_account = IdentityProviderAccount(
         id="provider-account-id",
         tenant_id="tenant-id",
-        channel_id="channel-id-secret",
         provider="feishu",
         provider_tenant_key="tenant-key-secret",
         provider_account_key="app-id-secret",
@@ -114,17 +114,46 @@ def test_provider_ownership_projections_redact_binding_material() -> None:
         identity_health_state="error",
         identity_health_error_code="provider-credential-invalid",
     )
+    channel_link = IdentityProviderChannelLink(
+        id="channel-link-id",
+        tenant_id="tenant-id",
+        provider="feishu",
+        provider_account_id="provider-account-id",
+        channel_id="channel-id-secret",
+        linked_at=_verified_at(),
+    )
 
     tenant_projection = provider_tenant.to_dict()
     account_projection = provider_account.to_dict()
+    link_projection = channel_link.to_dict()
 
     assert "provider_tenant_key" not in tenant_projection
     assert {
-        "channel_id",
         "provider_tenant_key",
         "provider_account_key",
         "identity_health_error_code",
     }.isdisjoint(account_projection)
+    assert {
+        "tenant_id",
+        "provider_account_id",
+        "channel_id",
+    }.isdisjoint(link_projection)
+    assert "provider-account-id" not in link_projection.values()
+    assert "channel-id-secret" not in link_projection.values()
+
+
+def test_provider_account_is_independent_from_channel_link() -> None:
+    account_columns = set(IdentityProviderAccount.__table__.columns.keys())
+    link_columns = set(IdentityProviderChannelLink.__table__.columns.keys())
+
+    assert "channel_id" not in account_columns
+    assert {
+        "tenant_id",
+        "provider",
+        "provider_account_id",
+        "channel_id",
+        "linked_at",
+    } <= link_columns
 
 
 def test_external_identity_attributes_are_allowlisted_and_defensively_copied() -> None:

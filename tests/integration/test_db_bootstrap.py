@@ -59,16 +59,30 @@ def test_model_first_existing_database_can_upgrade_candidate_revision(
     bootstrapped_engine: sa.Engine,
     alembic_cfg: Config,
 ) -> None:
-    """Model-first startup accepts the exact sidecar instead of recreating it."""
+    """The latest migration accepts an exact model-first schema from its predecessor.
 
-    head = ScriptDirectory.from_config(alembic_cfg).get_current_head()
+    Historical migrations are immutable and cannot be expected to recognize the
+    schema of a future head.  Stored old-schema upgrade paths are covered by each
+    migration's dedicated integration tests.
+    """
+
+    script = ScriptDirectory.from_config(alembic_cfg)
+    head = script.get_current_head()
+    assert head is not None
+    head_revision = script.get_revision(head)
+    assert head_revision is not None
+    predecessor = head_revision.down_revision
+    assert isinstance(predecessor, str), "latest migration must have one direct predecessor"
     cfg = Config(alembic_cfg.config_file_name)
     cfg.set_main_option(
         "script_location",
         alembic_cfg.get_main_option("script_location"),
     )
     with bootstrapped_engine.begin() as connection:
-        connection.execute(sa.text("UPDATE usr_ai.alembic_version SET version_num = 'c1dbaa153d0a'"))
+        connection.execute(
+            sa.text("UPDATE usr_ai.alembic_version SET version_num = :revision"),
+            {"revision": predecessor},
+        )
         cfg.attributes["connection"] = connection
         command.upgrade(cfg, "head")
         version = connection.execute(sa.text("SELECT version_num FROM usr_ai.alembic_version")).scalar_one()

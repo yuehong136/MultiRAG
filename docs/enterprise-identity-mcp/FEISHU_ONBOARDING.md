@@ -32,7 +32,7 @@
 | 角色 | 必须提供/确认 |
 |---|---|
 | 飞书企业管理员 | 创建/审批应用、权限、可用范围、通讯录数据范围、发布版本 |
-| AI 平台管理员 | MultiRAG tenant、Channel binding、JIT/link policy、默认 NORMAL 角色 |
+| AI 平台管理员 | Customer Organization/Tenant（首期 1:1）、Provider Account、Channel link、JIT/link policy、默认 NORMAL 角色 |
 | HR/OA 负责人 | `employee_no` 是否稳定、是否等于 talent_id/workcode、离职同步延迟 |
 | 安全/基础设施 | issuer/resource 域名、TLS、JWT signing key/JWKS、密钥轮换和审计留存 |
 | of_mcp 服务负责人 | 每个 service 的 audience、scope、业务授权接口、下游服务账户 |
@@ -55,22 +55,31 @@
 4. 获取：
    - `App ID`，格式通常为 `cli_...`；
    - `App Secret`。
-5. 在 MultiRAG 管理端创建 Feishu Channel，由现有 Channel Secret 写入流程保存；不得写进
-   Git、普通 YAML、日志、截图、聊天记录或本文档。
+5. 在 MultiRAG 身份控制面创建独立 Feishu Provider Account，固定已验证的 Tenant、provider、
+   `tenant_key/app_id`。该 account 可以先于 Channel 存在，但在首期凭据仍归 Channel 的过渡期，
+   无 Channel link 时不能调用飞书 API。
+6. 在 MultiRAG Channel 管理端创建 Feishu Channel，由现有 Channel Secret 写入流程保存
+   `app_secret`；不得写进 Git、普通 YAML、日志、截图、聊天记录或本文档。
+7. 创建 tenant/provider-safe 的 `IdentityProviderChannelLink`。首期一个 account 和一个 Channel
+   都只能各有一条 link；任一端 scope 不一致就终止 onboarding，不自动纠正或重建。
 
 凭据属性：
 
 | 值 | 是否 Secret | 保存位置 | 备注 |
 |---|:---:|---|---|
-| `app_id` | 否 | Channel provider account 配置 | 仍不应在普通日志完整输出 |
+| `app_id` | 否 | 独立 Provider Account | 仍不应在普通日志完整输出 |
 | `app_secret` | 是 | MultiRAG `ChannelSecret` 加密存储 | 只写不读回，支持主密钥环 |
 | `tenant_access_token` | 是 | SDK 内存/受控 cache | 不由管理员复制，不持久化到 Channel 表 |
 | `tenant_key` | 敏感标识 | ExternalIdentity/provider account | 来自可信事件/安装上下文，不接受用户消息覆盖 |
 | verification token | 是 | 仅 Webhook 模式需要 | 长连接首期不申请/不配置 |
 | encrypt key | 是 | 仅 Webhook 加密模式需要 | 长连接首期不申请/不配置 |
 
-Channel 创建后使用现有“测试连接”能力验证 `app_id/app_secret`，但该验证只证明应用凭据有效，
+Channel 建立 link 后使用现有“测试连接”能力验证 `app_id/app_secret`，但该验证只证明应用凭据有效，
 不证明通讯录字段权限、数据范围和事件订阅都正确。
+
+当前管理 API/界面可能仍按 Channel-first 顺序创建配置；EIM-I2.1 只落数据库关系，不宣称控制面
+编排或 credential vault 已经完成。I3/I4 接线前不得用人工 SQL 代替正式 onboarding，也不得按
+`app_id` 猜测 Provider Account 和 Channel 的关系。
 
 ---
 

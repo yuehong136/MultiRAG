@@ -7,8 +7,13 @@
 
 ## EIM-ADR-01：一个企业客户映射一个 MultiRAG Tenant
 
-**状态**：Accepted
+**状态**：Superseded in part by EIM-ADR-23
 **日期**：2026-08-07
+
+**失效范围**：下文“同一飞书租户可以映射多个 MultiRAG Tenant”的例外已被
+[EIM-ADR-23](#eim-adr-23首期一个飞书企业一个-tenantprovider-account-与-binding-固定单-tenant)
+收紧。企业边界必须由服务端决定、消息不得选择 Tenant，以及默认一个企业客户一个 Tenant 的部分
+继续有效。
 
 默认模型：一个企业客户对应一个 MultiRAG `Tenant`，员工通过 `UserTenant` 成为该 Tenant 的
 成员。飞书租户 `tenant_key` 通过服务端管理的 Channel account/binding 映射到 MultiRAG
@@ -443,7 +448,7 @@ ownership/rotation、OTel SDK/exporter/collector 与 W3C 跨仓 trace、A5/P3/M3
 
 ## EIM-ADR-23：首期一个飞书企业一个 Tenant，Provider Account 与 binding 固定单 Tenant
 
-**状态**：Accepted
+**状态**：Accepted；Provider Account 与 Channel 的所有权形状由 EIM-ADR-24 取代
 **日期**：2026-08-12
 **取代范围**：收紧 ADR-01 中“一个飞书租户可由不同 binding、应用或服务端路由策略映射多个
 MultiRAG Tenant”的例外措辞；ADR-01 的企业边界由服务端决定、消息不得选择 Tenant 继续有效。
@@ -488,3 +493,60 @@ I2 只建立持久化不变量；I3 repository 不得把 ownership 暴露为普�
 hard-delete。verified onboarding/rotation 使用显式领域命令；状态、scope 和 revision 变化必须通过
 `identity_revision` 的 compare-and-set，或同一事务内的行锁 + revision 复核。冲突 fail closed，不能
 last-write-wins、删除重建或靠 FastMCP middleware 修补身份库竞态。
+
+EIM-ADR-23 对 `ProviderTenant -> Tenant` 的固定单 Tenant 关系继续完整有效；其中
+`IdentityProviderAccount.channel_id NOT NULL UNIQUE` 以及“Provider Account 从属于 Channel”的实现
+形状，由下述 EIM-ADR-24 取代。Channel/binding 固定单 Tenant 的安全结论没有放宽。
+
+---
+
+## EIM-ADR-24：Provider Account 是独立企业连接，Channel 通过显式 link 引用
+
+**状态**：Accepted
+**日期**：2026-08-12
+**取代范围**：取代 EIM-ADR-23 中 Provider Account 直接持有 `channel_id`、随 Channel 存在的关系
+形状；不改变一个 Provider Tenant、Provider Account 和 Channel 均固定单 Tenant 的安全不变量。
+
+Provider Account 表示一个服务端验证、平台管理的外部企业连接/应用安装实例。它可以先于 Channel
+创建，也可以在没有聊天入口时用于目录同步、管理员预绑定，或未来的 Web OAuth/SSO adapter；因此
+核心身份服务不能把 Channel 当成 Provider Account 的所有者。
+
+Channel 是该企业连接的一个消费者。首期通过独立的
+`IdentityProviderChannelLink` 建立 tenant-safe、provider-safe 的一对一引用：
+
+```text
+IdentityProviderAccount
+  UNIQUE(id, tenant_id, provider)
+
+IdentityProviderChannelLink
+  UNIQUE(provider_account_id)
+  UNIQUE(channel_id)
+  FOREIGN KEY(provider_account_id, tenant_id, provider)
+    -> IdentityProviderAccount(id, tenant_id, provider) ON DELETE RESTRICT
+  FOREIGN KEY(channel_id, tenant_id, provider)
+    -> ChatChannel(id, tenant_id, channel) ON DELETE RESTRICT
+```
+
+数据库同时拒绝跨 Tenant、跨 Provider、一个 Channel 关联两个 account，以及首期一个 account 关联
+多个 Channel。后一条是一对一的首期保守约束：当前飞书 `app_secret` 仍由 `ChannelSecret` 持有，
+在通用 Provider credential vault 落地前，不允许多个 worker/Channel 猜测或共享同一个 account 的
+凭据。将来需要一对多必须另立 ADR、迁移凭据所有权并补并发、轮换和撤销门禁，不能只删除唯一约束。
+
+EIM-I2.1 只完成持久化关系解耦。凭据关系仍是
+`IdentityProviderAccount -> IdentityProviderChannelLink -> ChatChannel -> ChannelSecret`；这不是
+Provider credential 已与 Channel 解耦，也不支持无 Channel account 调用 Provider API。I4 在通用
+凭据库出现前必须沿唯一 link 精确取得 ChannelSecret；找不到、多条或 scope 不一致一律 fail closed，
+不得按 `app_id` 猜测 Channel。
+
+目标架构增加 `CustomerOrganization` 术语，表示真实客户企业/合同与治理边界。首期保持
+`CustomerOrganization 1:1 Tenant`，只存在于架构语义，不新增表、claim、API 或运行时路由；
+`IdentityProviderTenant` 仍直接固定到 `Tenant`。未来集团级多 Tenant 由新 ADR 决定
+Organization、Tenant 和 Provider Tenant 的关系，不能借本 ADR 预埋动态路由。
+
+MCP 规范、MCP Python SDK 2 和 FastMCP 4 都不定义 MultiRAG 的 Customer Organization、Provider
+Account、Channel 或其数据库 schema。主流企业平台可借鉴的是“稳定企业连接/凭据资源与消费入口、
+授权资源分层”的职责边界，不是某套可直接复制的统一表结构；本领域模型继续保持框架无关。
+
+MultiRAG 仍按仓内 `port-ragflow-commit` Skill 对本地 RAGFlow 上游逐 commit 跟进。本轮只新增
+加法式表、约束和迁移，不为假想 Git 冲突搬移 `api/db/db_models.py` 中的模型；遇到真实上游 commit
+时再由 Skill 的语义移植、契约测试和适配层规则处理。

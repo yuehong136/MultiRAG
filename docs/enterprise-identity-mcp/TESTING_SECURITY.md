@@ -43,8 +43,8 @@
 - `open_id` 的唯一键必须包含 tenant-scoped `provider_account_key`，`user_id` 的唯一键必须包含
   tenant-scoped `provider_tenant_key`；
 - 首期数据库必须强制 `(provider, provider_tenant_key) -> exactly one tenant_id`；同一
-  `(provider, provider_tenant_key, provider_account_key)` 与同一 Channel 也各自只能归属一个 Tenant，
-  任何消息或动态路由不能改写 ownership；
+  `(provider, provider_tenant_key, provider_account_key)` 与同一 Channel 也各自只能归属一个 Tenant；
+  account↔Channel link 必须同时匹配两端 tenant/provider scope，任何消息或动态路由不能改写 ownership；
 - 目录验证失败、用户停用、企业映射冲突时必须 fail closed；
 - `platform_user_id` 始终是 MultiRAG `User.id`，不是飞书 `open_id`；
 - `enterprise_subject_id` 与 `platform_user_id` 分离，员工号不能成为公开认证凭据；
@@ -101,8 +101,14 @@
 10. `ChannelActor.subject` 被任意伪造：在 C3 之后仍不能直接进入 `Principal.id`。
 11. 同一 `(provider, tenant_key)` 以不同 app/account 写入另一个 MultiRAG Tenant：provider tenant
     ownership 唯一约束必须拒绝；不能因 app_id 不同而绕过首期企业单 Tenant。
-12. 同一 provider account 或 `channel_id` 换一个 Tenant 重建：account/channel 唯一约束或复合外键
-    必须拒绝；未来集团级多 Tenant 即使经新 ADR/schema 迁移开放，也只能用不同安装实例和 binding。
+12. 同一 provider account 或 `channel_id` 换一个 Tenant/Provider 建 link：link 的两组复合外键必须
+    拒绝；未来集团级多 Tenant 即使经新 ADR/schema 迁移开放，也只能用不同安装实例和 binding。
+13. Provider Account 无 Channel 独立创建：允许持久化但不能调用 Provider API；删除 Channel 不级联
+    删除 account；已有 link 时删除任一端因 `ON DELETE RESTRICT` 失败。
+14. 同一个 Channel 关联两个 account，或同一个 account 关联两个 Channel：首期双唯一必须拒绝；
+    service 不能用 `app_id` 猜测、任选第一条或自动换绑。
+15. I2 旧 account/channel 数据升级：每条 account 恰好 backfill 一条同 Tenant/Provider link 后才删除
+    旧列；account/link 任一有数据时 downgrade 必须 fail closed，不能丢弃独立企业连接。
 
 ### 3.2 MultiRAG 集成测试
 
@@ -111,8 +117,8 @@
 
 - schema upgrade 与 downgrade/rollback 路径；
 - 部署旧代码读取新表时不受影响；
-- provider tenant ownership 拒绝同一外部企业跨 Tenant；provider account/channel ownership 拒绝同一
-  安装实例或 Channel 跨 Tenant；
+- provider tenant ownership 拒绝同一外部企业跨 Tenant；provider account 独立存在合法；显式 link 的
+  account/channel 复合外键拒绝 tenant/provider 任一错配，双唯一拒绝一端多绑；
 - alias/receipt 的 provider-account 复合外键、canonical identity 复合外键都拒绝 tenant/provider/
   provider-tenant 任一维度错配；
 - canonical、alias、enterprise subject 与 receipt 在各自 tenant-scoped 唯一边界内拒绝重复，在合法的
@@ -120,7 +126,7 @@
 - `SELECT ... FOR UPDATE` 或唯一约束重试能收敛首次绑定竞态；
 - event receipt 的 `(tenant_id, provider, provider_tenant_key, provider_account_key, event_type,
   event_id)` 幂等，且表结构不存在原始 body/payload/headers/metadata 列；
-- 所有 Tenant/User/Channel/identity/provider-account 外键均为 `ON DELETE RESTRICT`；有任意 ownership/
+- 所有 Tenant/User/Channel/identity/provider-account/link 外键均为 `ON DELETE RESTRICT`；有任意 ownership/
   identity/alias/subject/receipt 历史时 downgrade fail closed，空表才能按依赖逆序回滚再升级；
 - model-first upgrade 对现存表逐项比较 server default 与规范化 CHECK SQL，不只比较名称；任一默认值、
   检查表达式或 shape 漂移都 fail closed；错误 server default 与六表部分存在的半迁移 schema 分别有
@@ -143,6 +149,14 @@ EIM-I2 完成基线（2026-08-12）：Alembic 单 head `8f2c4d6e7a9b`；模型�
 server default、六表部分存在的半迁移 schema、model-first shape、空表 downgrade → upgrade、有历史
 拒绝、六表锁竞争、唯一/复合外键和双 AsyncSession 并发 alias 单 winner；完整 `make verify`
 **1925 passed** 且 lint/import/async/mypy 全绿；`REQUIRE_SERVICES=1 make integration` **52 passed**。
+
+EIM-I2.1 完成基线（2026-08-12）：Alembic 单 head `9a3b5c7d8e0f`；I2.1 identity integration
+**23 passed**，覆盖旧数据 backfill、fresh/model-first 精确 shape、unlinked account、link 双唯一、
+跨 Tenant/Provider 复合外键、两端 RESTRICT、空表 downgrade round trip，以及 account/link 任一有
+数据 downgrade fail closed；相关 I2.1 unit（identity models + table order）**14 passed**；
+identity schema + Channel control persistence **25 passed**，相关 identity + Channel control unit
+**67 passed**；完整 `make verify` unit **1929 passed**，`REQUIRE_SERVICES=1 make integration`
+**65 passed**，`git diff --check` 通过。
 
 ### 3.3 `of_mcp` 测试
 

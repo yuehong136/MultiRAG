@@ -9,7 +9,12 @@
 
 ```mermaid
 flowchart LR
-    U["企业员工"] --> F["飞书企业自建应用"]
+    O["Customer Organization\n首期 1:1 Tenant"] --> U["企业员工"]
+    O --> T["MultiRAG Tenant"]
+    T --> PA["Independent Provider Account"]
+    PA --> L["IdentityProviderChannelLink"]
+    L --> F["飞书企业自建应用 / Channel"]
+    U --> F
     F -->|"长连接事件：不可信 actor assertion"| CW["MultiRAG Channel Worker"]
     CW -->|"binding-scoped authenticated command"| CE["Channel Execution"]
     CE --> ID["Enterprise Identity Service"]
@@ -34,6 +39,10 @@ flowchart LR
 | Identity Service -> Principal | DB binding + Contact 验证 + tenant policy | 平台可用的可信 Principal |
 | MultiRAG -> of_mcp | OAuth bearer | 只在签名、issuer、audience、scope、exp 全部通过后可信 |
 | of_mcp -> 下游业务 | 工具参数 + Principal | 工具参数不提供身份；业务权限仍由 service/PDP 判定 |
+
+`CustomerOrganization` 是真实客户企业/合同与治理边界的目标术语。首期它与 `Tenant` 保持 1:1，
+只用于解释架构，不落表、不进入 JWT claim/API，也不参与运行时路由。当前机器约束仍由
+`IdentityProviderTenant -> Tenant` 承担；未来集团多 Tenant 必须另立 ADR 和迁移。
 
 ---
 
@@ -65,8 +74,13 @@ ReplySession 状态。该体验链不依赖 transport 从 `lark-oapi.ws.Client` 
 
 #### Channel control/runtime
 
-负责 provider account、加密凭据、tenant-owned binding、supervisor/worker 和 runtime 状态。
-`app_id -> channel/binding -> tenant_id` 是服务端配置，不由飞书消息决定。
+负责加密凭据、tenant-owned binding、supervisor/worker 和 runtime 状态。Provider Account 是身份
+控制面的独立企业连接，Channel 通过 tenant/provider-safe 的 `IdentityProviderChannelLink` 引用它；
+`provider account -> link -> channel/binding -> tenant_id` 是服务端配置，不由飞书消息决定。
+
+EIM-I2.1 只解耦持久化关系。飞书 `app_secret` 暂时仍归 `ChannelSecret`，所以 I4 调用 Provider API
+必须沿 account 的唯一 link 精确取得 credential；无 link、多 link 或 scope 不一致 fail closed。通用
+Provider credential vault 是后续独立任务，不能把 I2.1 描述成凭据已经脱离 Channel。
 
 #### Enterprise Identity Service
 
@@ -88,6 +102,10 @@ api/identity/
 
 新 service 按仓库规范 async-first，使用 `AsyncSession`；Provider client 通过依赖注入，单元测试不
 访问真实飞书/OA。
+
+核心入口接收服务端构造的 Provider Context，而不是 `channel_id`。Channel adapter 先解析唯一 link，
+再调用同一核心接口；目录事件、管理员预绑定、Web OAuth 或未来 SSO 因而可以复用身份服务而不伪造
+聊天入口。
 
 #### Principal propagation
 

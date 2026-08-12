@@ -25,6 +25,7 @@ from api.channel_control.service import (
     ChannelAccessDenied,
     ChannelControlService,
     ChannelCredentialUnavailable,
+    ChannelIdentityOwnershipLocked,
     ChannelTargetNotAccessible,
     ChannelVerificationInconclusive,
     ChannelVerificationNotSupported,
@@ -38,7 +39,7 @@ from api.channel_control.verification_throttle import VerificationThrottle
 from api.channel_execution.errors import TargetRevisionUnavailableError
 from api.channel_providers import provider_names
 from api.channels.verification import ChannelCredentialRejected, ChannelVerificationUnavailable
-from api.db.db_models import ChannelBinding, ChannelRuntimeStatus, ChannelSecret, ChatChannel
+from api.db.db_models import ChannelBinding, ChannelRuntimeStatus, ChannelSecret, ChatChannel, IdentityProviderAccount
 from common.app_config import get_app_config
 from common.channel_secret_crypto import ChannelSecretCipher
 from common.constants import RetCode
@@ -50,6 +51,7 @@ class FakeRepository:
         self.secrets: dict[str, ChannelSecret] = {}
         self.bindings: dict[str, ChannelBinding] = {}
         self.runtimes: dict[str, ChannelRuntimeStatus] = {}
+        self.linked_identity_provider_accounts: dict[str, IdentityProviderAccount] = {}
         self.dialogs: set[tuple[str, str]] = set()
         self.latest_canvas_revisions: set[tuple[str, str, str]] = set()
         # canvas_id -> (owning tenant, permission). Registering a revision also
@@ -80,6 +82,17 @@ class FakeRepository:
     async def get_runtime(self, binding_id: str, *, for_update: bool = False) -> ChannelRuntimeStatus | None:
         del for_update
         return self.runtimes.get(binding_id)
+
+    async def get_linked_identity_provider_account(
+        self,
+        tenant_id: str,
+        channel_id: str,
+        *,
+        for_update: bool = False,
+    ) -> IdentityProviderAccount | None:
+        del for_update
+        account = self.linked_identity_provider_accounts.get(channel_id)
+        return account if account is not None and account.tenant_id == tenant_id else None
 
     async def list_enabled_channels(self, tenant_id: str, provider: str) -> list[ChatChannel]:
         return [channel for channel in self.channels.values() if channel.tenant_id == tenant_id and channel.channel == provider and channel.status == 1]
@@ -246,6 +259,21 @@ def _create_request(*, chat_id: str | None = None, status: int = 0, app_id: str 
             "chat_id": chat_id,
             "status": status,
         }
+    )
+
+
+def _link_identity_provider_account(
+    repository: FakeRepository,
+    channel_id: str,
+    *,
+    account_key: str = "cli_unit",
+) -> None:
+    repository.linked_identity_provider_accounts[channel_id] = IdentityProviderAccount(
+        id="identity-provider-account-1",
+        tenant_id="tenant-a",
+        provider="feishu",
+        provider_tenant_key="provider-tenant-unit",
+        provider_account_key=account_key,
     )
 
 
@@ -947,6 +975,7 @@ async def test_secret_rotation_increments_version_without_returning_secret() -> 
     secret_store = FakeSecretStore()
     service = ChannelControlService(repository, secret_store)
     created = await service.create_channel("tenant-a", _create_request())
+    _link_identity_provider_account(repository, created["id"])
 
     updated = await service.update_channel(
         "tenant-a",
@@ -957,6 +986,78 @@ async def test_secret_rotation_increments_version_without_returning_secret() -> 
     assert updated["secret"] == {"configured": True, "version": 2}
     assert "replacement-secret" not in repr(updated)
     assert repository.secrets[created["id"]].ciphertext == "ciphertext-v2"
+
+
+async def test_identity_owned_channel_rejects_account_replacement_before_mutation() -> None:
+    repository = FakeRepository()
+    secret_store = FakeSecretStore()
+    service = ChannelControlService(repository, secret_store)
+    created = await service.create_channel("tenant-a", _create_request())
+    channel_id = created["id"]
+    _link_identity_provider_account(repository, channel_id)
+
+    with pytest.raises(ChannelIdentityOwnershipLocked) as caught:
+        await service.update_channel(
+            "tenant-a",
+            channel_id,
+            ChannelUpdateRequest.model_validate(
+                {
+                    "name": "Must not stick",
+                    "config": {
+                        "credential": {
+                            "app_id": "cli_replacement",
+                            "app_secret": "replacement-secret",
+                        }
+                    },
+                }
+            ),
+        )
+
+    assert caught.value.error_code == "CHANNEL_IDENTITY_OWNERSHIP_LOCKED"
+    assert "cli_unit" not in caught.value.safe_message
+    assert "cli_replacement" not in caught.value.safe_message
+    assert repository.channels[channel_id].name == "Leadership demo"
+    assert repository.channels[channel_id].config["credential"]["app_id"] == "cli_unit"
+    assert repository.secrets[channel_id].version == 1
+    assert repository.secrets[channel_id].ciphertext == "ciphertext-v1"
+    assert secret_store.plaintexts == [{"app_secret": "never-return-this-secret"}]
+
+
+async def test_identity_owned_channel_rejects_unrelated_patch_when_current_account_has_drifted() -> None:
+    repository = FakeRepository()
+    service = ChannelControlService(repository, FakeSecretStore())
+    created = await service.create_channel("tenant-a", _create_request())
+    channel_id = created["id"]
+    _link_identity_provider_account(repository, channel_id)
+    repository.channels[channel_id].config = {
+        "credential": {"app_id": "cli_drifted"},
+        "behavior": {"receive_mode": "websocket"},
+    }
+
+    with pytest.raises(ChannelIdentityOwnershipLocked):
+        await service.update_channel(
+            "tenant-a",
+            channel_id,
+            ChannelUpdateRequest(name="Must not revive a drifted link"),
+        )
+
+    assert repository.channels[channel_id].name == "Leadership demo"
+
+
+async def test_identity_owned_channel_rejects_delete_and_preserves_the_channel() -> None:
+    repository = FakeRepository()
+    service = ChannelControlService(repository, FakeSecretStore())
+    created = await service.create_channel("tenant-a", _create_request())
+    channel_id = created["id"]
+    _link_identity_provider_account(repository, channel_id)
+
+    with pytest.raises(ChannelIdentityOwnershipLocked) as caught:
+        await service.delete_channel("tenant-a", channel_id)
+
+    assert caught.value.error_code == "CHANNEL_IDENTITY_OWNERSHIP_LOCKED"
+    assert "disable" in caught.value.safe_message
+    assert channel_id not in caught.value.safe_message
+    assert channel_id in repository.channels
 
 
 async def test_update_applies_connection_and_binding_in_one_transaction() -> None:

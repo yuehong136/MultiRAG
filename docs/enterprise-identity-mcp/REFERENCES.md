@@ -273,10 +273,13 @@ FastMCP 实现/产品资料（不是 MCP 标准）：
 ### FastMCP 4 的采用边界
 
 - EIM-I2 的 provider tenant/account ownership、canonical identity、alias、enterprise subject 与 event
-  receipt 是 MultiRAG 领域持久化，不是 MCP component，因而不 import FastMCP。FastMCP 没有飞书
-  tenant/app/channel binding 到 MultiRAG Tenant 的 ownership 模型；自行建立这六张表不是重复造其
-  工具开放、auth provider 或 middleware。I2 已以 Alembic head `8f2c4d6e7a9b` 和真 PostgreSQL
-  门禁完成；下一项 I3 继续保持 domain/repository 框架无关，并用 revision/CAS/行锁保护 ownership，
+  receipt，以及 I2.1 的显式 ProviderAccount↔Channel link，都是 MultiRAG 领域持久化，不是 MCP
+  component，因而不 import FastMCP。FastMCP 没有 Customer Organization、飞书 tenant/app/channel
+  binding 到 MultiRAG Tenant 的 ownership 模型；自行建立这些表不是重复造其工具开放、auth provider
+  或 middleware。I2 已以 Alembic head `8f2c4d6e7a9b` 和真 PostgreSQL 门禁完成；I2.1 已以单
+  Alembic head `9a3b5c7d8e0f`、identity integration **23 passed** 和完整 integration **65 passed**
+  完成；下一项 I3 继续保持
+  domain/repository 框架无关，并用 revision/CAS/行锁保护 ownership，
   不把普通换绑或 hard-delete 委托给 FastMCP。
 - `RemoteAuthProvider` 已用于 EIM-A3，负责 RFC 9728 protected-resource metadata 和 FastMCP
   auth 接口；框架默认 backend 无法把 typed JWKS outage 映射为 503，因此精确 `/mcp` bearer 和
@@ -326,6 +329,10 @@ tenant、JTI、fingerprint、参数和结果不做 metric labels。`MemoryAuditS
 这些项目用于校准网关/策略/凭据隔离，不构成引入另一个 MCP 平台的决定。MultiRAG 继续拥有
 Principal 与 Agent/知识库权限，of_mcp 继续拥有 Resource Server、工具策略和业务 adapter；任何
 平台的 unsigned identity header、全局 server credential 或 UI 可见性都不能作为最终授权证据。
+同理，DeerFlow 的用户拥有 `channel_connections`、Open WebUI 的稳定 tool server connection 和上述
+Gateway 的 backend credential resource，只能支持“稳定连接资源与消费入口/授权资源分层”的设计
+方向，不能证明存在跨项目统一的 `IdentityProviderAccount` 表结构。EIM-I2.1 的 link schema 来自
+MultiRAG 自己的 Tenant、ChannelSecret 和数据库不变量；MCP SDK 2/FastMCP 4 不负责这一层。
 当前 A4 的 external resolver API 也不等于已经获得 ContextForge 式生产 PDP：现有 service policy 未
 启用外部要求，raw tool arguments 尚无统一 schema-normalized 业务对象契约，M1/M2 必须另行验收。
 A6 的 in-memory replay/audit 也不等于 agentgateway/ContextForge 式生产分布式控制面：没有 durable
@@ -346,6 +353,13 @@ MultiRAG 实体；不得把外部项目名当作本仓运行时组件名。
 - `api/channel_runtime/`：supervisor/worker 私有契约；
 - `common/channel_secret_crypto.py`：Channel credential 加密和密钥环；
 - `api/db/db_models.py::User/UserTenant`：现有平台用户与租户成员关系。
+
+本机的 RAGFlow 上游 checkout 由仓内 `.claude/skills/port-ragflow-commit/SKILL.md` 规定的流程逐
+commit 跟进：先审计真实上游 diff，再做直接移植、语义移植或适配层吸收，并运行 MultiRAG 契约门禁。
+“某个文件未来可能冲突”本身不是移动本仓模型或建立另一套数据库模块的授权。EIM-I2.1 因此保留
+`api/db/db_models.py` 这一既有接缝，只增加独立 link 模型和 forward migration；遇到实际 RAGFlow
+commit 时才用该 Skill 评估真实冲突。这里的 upstream-first 不改变 Provider Account/Channel 身份
+不变量，也不允许机械覆盖 MultiRAG 已有 SQLAlchemy 模型。
 
 不要为了采用外部项目而替换现有控制面。外部参考只填补 transport、身份链接、授权和 UX
 能力；MultiRAG 已经具备更适合多租户产品的 managed binding 和 Secret 生命周期。

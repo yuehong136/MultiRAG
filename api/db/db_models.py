@@ -873,8 +873,10 @@ class IdentityProviderAccount(BaseModel):
             name="uq_identity_provider_accounts_provider_account",
         ),
         sa.UniqueConstraint(
-            "channel_id",
-            name="uq_identity_provider_accounts_channel",
+            "id",
+            "tenant_id",
+            "provider",
+            name="uq_identity_provider_accounts_link_scope",
         ),
         sa.UniqueConstraint(
             "tenant_id",
@@ -909,15 +911,6 @@ class IdentityProviderAccount(BaseModel):
             name="fk_identity_provider_accounts_provider_tenant",
             ondelete="RESTRICT",
         ),
-        sa.ForeignKeyConstraint(
-            ["channel_id", "tenant_id"],
-            [
-                "usr_ai.t_ai_chat_channels.id",
-                "usr_ai.t_ai_chat_channels.tenant_id",
-            ],
-            name="fk_identity_provider_accounts_channel_tenant",
-            ondelete="RESTRICT",
-        ),
         sa.Index(
             "ix_identity_provider_accounts_tenant_health",
             "tenant_id",
@@ -942,7 +935,6 @@ class IdentityProviderAccount(BaseModel):
         ),
         nullable=False,
     )
-    channel_id: Mapped[str] = mapped_column(String(32), nullable=False)
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
     provider_tenant_key: Mapped[str] = mapped_column(String(255), nullable=False)
     provider_account_key: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -973,10 +965,82 @@ class IdentityProviderAccount(BaseModel):
 
     def to_dict(self) -> dict[str, Any]:
         payload = super().to_dict()
-        payload.pop("channel_id", None)
         payload.pop("provider_tenant_key", None)
         payload.pop("provider_account_key", None)
         payload.pop("identity_health_error_code", None)
+        return payload
+
+
+class IdentityProviderChannelLink(BaseModel):
+    """Immutable one-to-one link from a Provider Account to a Channel."""
+
+    __tablename__ = "t_ai_identity_provider_channel_links"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "provider_account_id",
+            name="uq_identity_provider_channel_links_account",
+        ),
+        sa.UniqueConstraint(
+            "channel_id",
+            name="uq_identity_provider_channel_links_channel",
+        ),
+        sa.CheckConstraint(
+            "btrim(provider) <> ''",
+            name="ck_identity_provider_channel_links_provider_nonempty",
+        ),
+        sa.ForeignKeyConstraint(
+            ["provider_account_id", "tenant_id", "provider"],
+            [
+                "usr_ai.t_ai_identity_provider_accounts.id",
+                "usr_ai.t_ai_identity_provider_accounts.tenant_id",
+                "usr_ai.t_ai_identity_provider_accounts.provider",
+            ],
+            name="fk_identity_provider_channel_links_account_scope",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["channel_id", "tenant_id", "provider"],
+            [
+                "usr_ai.t_ai_chat_channels.id",
+                "usr_ai.t_ai_chat_channels.tenant_id",
+                "usr_ai.t_ai_chat_channels.channel",
+            ],
+            name="fk_identity_provider_channel_links_channel_scope",
+            ondelete="RESTRICT",
+        ),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(32),
+        primary_key=True,
+        index=False,
+        nullable=False,
+        default=lambda: uuid.uuid4().hex,
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        String(32),
+        sa.ForeignKey(
+            "usr_ai.t_ai_tenants.id",
+            name="fk_identity_provider_channel_links_tenant_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider_account_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    channel_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    linked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=get_utc_now,
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = super().to_dict()
+        payload.pop("tenant_id", None)
+        payload.pop("provider_account_id", None)
+        payload.pop("channel_id", None)
         return payload
 
 
@@ -1878,6 +1942,12 @@ class ChatChannel(BaseModel):
             "id",
             "tenant_id",
             name="uq_chat_channels_tenant_scope",
+        ),
+        sa.UniqueConstraint(
+            "id",
+            "tenant_id",
+            "channel",
+            name="uq_chat_channels_identity_scope",
         ),
         sa.CheckConstraint("status IN (0, 1)", name="ck_chat_channels_status"),
         sa.CheckConstraint("generation >= 1", name="ck_chat_channels_generation"),
