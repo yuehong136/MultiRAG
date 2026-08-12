@@ -1,0 +1,51 @@
+"""Framework-neutral enterprise identity provider boundary."""
+
+from api.identity.providers.contracts import (
+    EnterpriseIdentityProvider,
+    ExternalIdentityAssertion,
+    ExternalIdentityIdentifier,
+    FeishuClientFailure,
+    FeishuDirectoryClient,
+    FeishuDirectoryClientError,
+    FeishuDirectoryUser,
+    FeishuDomain,
+    FeishuGetUserResponse,
+    FeishuProviderCredential,
+    FeishuTenantResponse,
+    FeishuTenantTokenResponse,
+    ProviderCredentialError,
+    ProviderCredentialResolver,
+    ProviderDirectoryStatus,
+    ProviderErrorCode,
+    ProviderIdentifierKind,
+    ProviderIdentity,
+    ProviderIdentityResult,
+    ProviderIdentityStatus,
+)
+from api.identity.providers.feishu import FeishuEnterpriseIdentityProvider
+from api.identity.providers.lark_oapi import LarkOapiFeishuDirectoryClient
+
+__all__ = [
+    "EnterpriseIdentityProvider",
+    "ExternalIdentityAssertion",
+    "ExternalIdentityIdentifier",
+    "FeishuClientFailure",
+    "FeishuDirectoryClient",
+    "FeishuDirectoryClientError",
+    "FeishuDirectoryUser",
+    "FeishuDomain",
+    "FeishuEnterpriseIdentityProvider",
+    "FeishuGetUserResponse",
+    "FeishuProviderCredential",
+    "FeishuTenantResponse",
+    "FeishuTenantTokenResponse",
+    "LarkOapiFeishuDirectoryClient",
+    "ProviderCredentialError",
+    "ProviderCredentialResolver",
+    "ProviderDirectoryStatus",
+    "ProviderErrorCode",
+    "ProviderIdentifierKind",
+    "ProviderIdentity",
+    "ProviderIdentityResult",
+    "ProviderIdentityStatus",
+]

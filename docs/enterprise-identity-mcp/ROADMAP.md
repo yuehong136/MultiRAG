@@ -1,13 +1,16 @@
 # EIM 实施路线图与进度账本
 
-> 最后更新：2026-08-12
+> 最后更新：2026-08-13
 > 当前状态：文档基线、EIM-U0、EIM-U1、EIM-U4、EIM-U8～U13 已完成；
 > CHN-U15 迁移/API 重启已完成，CHN-U16 已完成；真实 smoke 仍欠，下一项 CHN-O9，随后稳定浸泡；
 > EIM-A1、EIM-A3、EIM-A4 已完成；EIM-A6 phase 1 正在收口且保持 `🔵`；MultiRAG 已完成
 > EIM-I2 首期固定 Tenant ownership 与 identity schema；EIM-I2.1 已把 Provider Account 与 Channel
 > 解耦为 tenant/provider-safe 显式 link；EIM-I3 repository/policy/service 与 EIM-P1 canonical
 > Principal 已完成。EIM-F1 已以 `lark-oapi==1.7.2` 和 Contact V3/import contract fixture 收口；
-> EIM-I4 已解锁但尚未实现，Channel assertion 轨可独立推进；EIM-F5 /
+> EIM-I4 已完成框架无关 Provider、official SDK typed async 调用链、过渡 credential adapter
+> 与有界 cache/single-flight/限流；真实飞书 sandbox 因测试 credential 在 Auth V3 返回业务码
+> `10003`，仍留作独立现场复验，未宣称 Contact 成功。下一条 identity 主线为 EIM-I6；
+> Channel assertion 轨可独立推进；EIM-F5 /
 > CHN-X14 和 EIM-O4 均保持挂起。
 
 ---
@@ -211,7 +214,7 @@ F1/F3/F4/F7/F8 禁止携带身份功能。F2 只是 characterization/兼容矩�
 | EIM-I2 | MR | 新增 provider tenant/account ownership、canonical identity、alias、enterprise subject、event receipt 六表与 Alembic | ✅ | I1 | [CONTRACTS §3](CONTRACTS.md#3-数据模型) 的固定单 Tenant、唯一/复合外键、RESTRICT、脱敏与安全回滚约束；并发 insert 真库测试；head `8f2c4d6e7a9b` |
 | EIM-I2.1 | MR | Provider Account 去除 Channel 所有权；新增 tenant/provider-safe 一对一 `IdentityProviderChannelLink`，迁移旧关系且保留现有 ChannelSecret 归属 | ✅ | I2 | forward revision/单 head `9a3b5c7d8e0f`；account 可无 Channel，link 两端复合 FK + 双唯一 + RESTRICT；旧 account→link 无损 backfill；account/link 任一有数据则 downgrade fail closed；不宣称凭据已解耦 |
 | EIM-I3 | MR | `api/identity` contracts/repository/policy/service 骨架，三种 provisioning policy | ✅ | I2.1 | `ProviderContext + AliasKey` 单 SQL 权威快照，revision + scope marker/alias proof freshness；五个窄 port；定向 57 passed，完整 verify 1969 / integration 82 |
-| EIM-I4 | MR | `FeishuEnterpriseIdentityProvider`：open_id -> user_id/status/employee_no，token/cache/限流 | ⬜ | F1,I3 | Contact V3 fixture + 可选真实 sandbox；scope/status/error 分类；single-flight |
+| EIM-I4 | MR | `FeishuEnterpriseIdentityProvider`：open_id -> user_id/status/employee_no，token/cache/限流 | ✅ | F1,I3 | I4-specific unit 86 + F1 contract 7；credential 真 PostgreSQL 1；完整 verify/integration 全绿；可选真实 sandbox 保留脱敏失败分层 |
 | EIM-I5 | MR | `FeishuEmployeeNumberResolver` + 可插拔 OA/HR resolver SPI | ⬜ | I4 | resolved/not-found/ambiguous/unavailable/inactive 五态；不含原力 if/else |
 | EIM-I6 | MR | `preprovisioned/link_only/jit`、User/UserTenant 事务、一次性 link code、显式合并 | ⬜ | I3,I4 | JIT 只能 NORMAL；并发首次消息只建一个用户；绑定码单次/短 TTL；无邮箱匹配 |
 | EIM-I7 | MR | Contact created/updated/deleted/scope 事件规范化、receipt 幂等、cache/revision 失效 | ⬜ | I4 | 重复事件无副作用；离职禁用；scope 变化触发 account revision，不全量拉取 |
@@ -274,15 +277,51 @@ F1/F3/F4/F7/F8 禁止携带身份功能。F2 只是 characterization/兼容矩�
 - 完成证据：领域 unit **40 passed**、真 PostgreSQL repository **17 passed**，合计定向 **57 passed**；
   repository + identity schema 连续真库 **40 passed**；`make verify` 全绿（Ruff format/check、**7** 条
   import contracts、async gate、mypy **71 files**、unit **1969 passed in 28.85s**）；
-  `REQUIRE_SERVICES=1 make integration` **82 passed in 12.48s**。I3/P1/F1 均已完成；I4 已解锁但尚未
-  实现。
+  `REQUIRE_SERVICES=1 make integration` **82 passed in 12.48s**。I3/P1/F1/I4 均已完成；下一条
+  identity 主线为 I6。
 
-### EIM-I4 开工简报
+### EIM-I4 完成边界
 
-- App Secret 从现有 Channel Secret dependency 获取，不新增配置明文入口。
-- provider account 的 tenant_key 首次绑定必须验证并持久化；后续不一致是安全事件。
-- SDK response 只提取白名单字段；不要把完整 User model/原始响应持久化或记录日志。
-- `tenant_access_token` 交给官方 SDK 生命周期，不自建数据库 token 表。
+- 已新增框架无关 `api.identity.providers` 边界：
+  `FeishuEnterpriseIdentityProvider.resolve()/refresh()/invalidate()` 只消费服务端
+  `ProviderContext`、外部 assertion 和 credential port，不依赖 Channel、FastMCP、数据库模型或
+  Principal。
+- 官方 `lark-oapi==1.7.2` 按需加载；调用顺序为 Auth V3
+  `tenant_access_token.ainternal()` -> Tenant V2 `tenant.aquery()` 精确验证 `tenant_key` ->
+  Contact V3 `user.aget()`。Tenant/Contact 显式传递 project-scoped token，不走 SDK 同步、
+  `app_id` 全局 cache 的 `TokenManager` cold path；请求、解码和 domain 仍全部使用官方
+  typed SDK，未重写 HTTP client/签名。
+- 临时 credential composition 位于 `api.identity_adapters.channel_credentials`；它从精确
+  Provider Account 出发，沿唯一 tenant/provider-safe link 读取 Channel 公开 `app_id/domain`，
+  再用注入的 `SecretStore` 解密 `ChannelSecret`。缺失/多条/跨 scope/停用/污染明文/解密失败
+  全部稳定映射为 `IDENTITY_PROVIDER_CREDENTIAL_UNAVAILABLE`，不按 `app_id` 猜测。
+- token 和 directory result 的 cache/single-flight key 绑定 account id + revision + scope marker +
+  `ChannelSecret.version` + Feishu/Lark domain。token 最多 512 项、identity 最多 2048 项、全局
+  distinct in-flight 最多 512；正向/NOT_FOUND·NOT_IN_SCOPE·INACTIVE 负向 TTL 分别为
+  300/30 秒，token 在 Provider expiry 前 600 秒过期。同 key cold miss 折叠，等待者取消
+  不取消共享 producer，失败不缓存并释放 slot；跨 account/generation/domain 绝不共享。
+- Contact 按 account 限制为 15 calls/s，最长排队 2 秒；容量或排队耗尽、timeout、transport
+  失败都 fail closed 为可重试 `IDENTITY_PROVIDER_UNAVAILABLE`。scope/不可见、inactive、
+  assertion/tenant/link conflict 保持独立稳定分类；五个 status primitive 全部必须是真
+  `bool`，只有 activated 且未 frozen/resigned/exited/unjoin 才是 active。
+- SDK response 只投影 `user_id/open_id/union_id/employee_no/display_name/status`；空的可选
+  `employee_no/display_name` 归一为 `None`。完整 SDK model、raw response、token、Secret 与
+  任何真实个人信息均不进入 domain repr、日志或持久化。
+- Auth/Tenant/Contact 三个 endpoint 都同时保留 HTTP status 与业务 code；即使业务 code 为 0，
+  非 2xx HTTP envelope 仍按失败处理。Auth/Tenant 属于控制面，任何 403/404 都不得伪装成
+  identity `NOT_IN_SCOPE/NOT_FOUND` 并进入开户/JIT；业务码 `10003` 在 Contact 的 403/404
+  envelope 中也优先归为 credential failure。
+- 2026-08-13 真实 sandbox 只得到脱敏分层结果：凭据端点 HTTP 200，Provider
+  business code `10003`，因此未签发 token，Tenant V2/Contact V3 均未调用。这不是真实
+  Contact 通过证据；没有任何 credential、token、tenant/user ID 或个人字段落盘。ROADMAP
+  原定验收是固定 fixture + **可选**真实 sandbox，因此该外部 credential 失败不阻塞 I4 的自动化
+  `✅`；更新测试 credential 后仍须单独从 Auth V3 -> Tenant V2 -> Contact V3 脱敏复验。
+- 完成证据：I4-specific unit **86 passed**，加 F1 contract 7 为组合定向 **93 passed**；
+  Channel credential 真 PostgreSQL **1 passed**；`make verify` 全绿（format/Ruff **1234 files**、
+  7 import contracts、async gate、mypy **78 source files**、unit **2098 passed in 33.26s**）；
+  `REQUIRE_SERVICES=1 make integration` **84 passed in 11.51s**。
+- I4 不新增明文配置或 token 数据库表，不持久化首次 tenant ownership，不写
+  ExternalIdentity/Alias/User/UserTenant，不实现 I5/I6/I7/C3/Principal 传播。
 
 ---
 
@@ -643,7 +682,7 @@ EIM-I2  ✅ provider ownership + external identity schema
 EIM-I2.1 ✅ Provider Account / Channel explicit link
 EIM-I3  ✅ repository + policy/service
 EIM-P1  ✅ canonical immutable Principal
-EIM-I4  Feishu directory provider                   <- 已解锁但尚未实现
+EIM-I4  ✅ Feishu directory provider；自动化门禁已收口，真实 Contact sandbox 单独待复验
 EIM-C1  Channel tolerate structured assertion
 ```
 
@@ -689,8 +728,8 @@ A8 -> O3  仅在真实企业 IdP、多 issuer 或托管平台需求成立后解�
 ```
 
 A3/A4 已完成，of_mcp 的 A6 phase 1 已落但保持进行中；下一步不是把内存 store 当生产后端，而是完成
-durable multi-instance replay/audit、HMAC key rotation 和跨仓 OTel。MultiRAG 已完成 F1/I2/I2.1/I3/P1，
-当前 identity 主链从已解锁的 `I4 -> I6` 继续，`C1 -> C2` 可并行，只有
+durable multi-instance replay/audit、HMAC key rotation 和跨仓 OTel。MultiRAG 已完成 F1/I2/I2.1/I3/I4/P1，
+当前 identity 主线为 `I6`，`C1 -> C2` 可并行，只有
 `C2 + I6 + P1 -> C3 -> P2` 后才能做 A2。
 随后必须等 `P2 + F3 + A2 + A4 -> P3`，再启动 A5/U14 等真实委托消费者。A7 保持独立入站
 resource；A8 仍无真实需求不启动。这个顺序既保留 of_mcp 的 fail-closed verifier/authorizer 先行，
@@ -736,4 +775,5 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 | 2026-08-12 | EIM-I3 | 新增框架无关 `ProviderContext`/identity contracts、三态 provisioning plan、只读 `IdentityService`、共享输入 validation 与纯异步 SQLAlchemy repository；单 SQL 区分无效 account context 与有效 alias miss，重查 live User/UserTenant，并用 account revision + scope marker/alias proof 判 freshness。ordinary mutation 仅 pending insert/单向收紧 CAS；verified identity mutation 独占 alias refresh/activation；provider control 独占 health CAS；ownership 独立。旧 proof 拒绝/不降级，health 时间 preserve/monotonic，Core 写显式审计时间，输入和 SQLAlchemy 异常稳定脱敏；conflict/revoked 终态均先于 freshness 分类且不可复活。本任务不交付飞书 Provider、开户、Principal、Channel 接线、动态 MCP token 或 FastMCP 运行时变更 | MultiRAG / 本次提交 | I3 定向 **57 passed**（unit 40 + 真 PG 17）；repository + identity schema 连续真库 **40 passed**；`make verify` 全绿：Ruff format/check、7 import contracts、async gate、mypy 71 files、unit **1969 passed in 28.85s**；`REQUIRE_SERVICES=1 make integration` **82 passed in 12.48s**；`git diff --check` 通过 | Codex |
 | 2026-08-12 | EIM-P1 | 建立 `api.identity.principal` 唯一 canonical Principal/AuthenticationContext，封闭 direct constructor，用 legacy actor 与 I3 RESOLVED 两个进程内 evidence builder 绑定 user/tenant/provider/proof；Principal 不携 email/role/groups/scopes/token，兼容 `.id/.nickname` 与 `api_utils` re-export 只保留到存量 route import 迁完。新增独立 legacy owner adapter，每请求活查 active User + 唯一 personal OWNER Tenant，valid JWT 身份失效不降级为 API token，意外 verifier 错误不吞。本轮不交付 C3/P2、A2/P3、A7，不宣称 sync ORM auth 入口已迁移 | MultiRAG / 本次提交 | P1 定向 unit **49 passed**；真 PostgreSQL P1 **1 passed**；`make verify` 全绿：7 import contracts、async gate、mypy 73 files、unit **2005 passed**；`REQUIRE_SERVICES=1 make integration` **83 passed**；安全复核无 blocker；`git diff --check` 通过 | Codex |
 | 2026-08-12 | EIM-F1 | 将官方 `lark-oapi` 从 1.7.1 升到 1.7.2；新增固定 Contact V3 success fixture，钉住 `user_id_type=open_id` request 与 `GetUserResponse/User/UserStatus` typed response；隔离证明平台 control/provider/verification/identity import 不加载 SDK/不安装 loop，并把 SDK 顶层 import 的模块级 idle loop 明确固定为无 task/无新增 thread 的已知边界。源码审计确认 `TokenManager` 有 cache 但 cache miss 无 single-flight，项目级并发刷新留给 I4。本任务不实现 Provider、身份写入、Principal 或 Channel transport 迁移 | MultiRAG / 本次提交 | 新 contract **7 passed**；广义 Feishu/Channel 定向 **101 passed**；`uv lock --check` 通过；`make verify` 全绿：Ruff 1222 files、7 import contracts、async DB gate、mypy 73 source files、unit **2012 passed in 30.95s**；`git diff --check` 通过 | Codex |
+| 2026-08-13 | EIM-I4 | 新增框架无关飞书 Provider SPI/DTO 与 `resolve/refresh/invalidate`；以官方 `lark-oapi==1.7.2` typed async Auth V3 -> Tenant V2 -> Contact V3 完成 token、企业归属和单人目录验证；用 account/revision/scope/credential generation/domain 分区的有界 cache、single-flight 与每 account 限流防止跨企业复用和冷启动放大；沿唯一 Provider Account link 精确读取仍归 `ChannelSecret` 的过渡 credential。三 endpoint 保留 HTTP/business envelope，Auth/Tenant 控制面不产生 identity miss，business `10003` 优先归 credential failure。本任务不写 identity/User/UserTenant，不实现 I5/I6/I7/C3/Principal/MCP token；下一项 I6 | MultiRAG / 本次提交 | I4-specific unit **86 passed**，加 F1 contract 7 为组合定向 **93 passed**；credential 真 PostgreSQL **1 passed**；`make verify` 全绿：format/Ruff 1234 files、7 import contracts、async gate、mypy 78 source files、unit **2098 passed in 33.26s**；`REQUIRE_SERVICES=1 make integration` **84 passed in 11.51s**。真实 sandbox 仅为 Auth V3 HTTP 200/business `10003`、无 token、Tenant/Contact 未调用，不宣称真实 Contact 成功；更新测试 credential 后单独复验 | Codex |
 | 2026-08-12 | EIM-A6 phase 1 | of_mcp 为所有实际工具增加 effect/replay policy 并把它纳入 canonical snapshot/revision；新增冻结脱敏 audit schema、单 capability JTI replay claim/state machine、HMAC request fingerprint、框架无关 security coordinator 与 OTel API adapter；Gateway 在 A4 最终 allow 后、业务执行前 prepare，重复/冲突/依赖故障分别稳定映射 409/403/503，业务结果未知不释放 claim。仅完成安全中间态：生产 durable backend、HMAC/KMS 轮换、OTel SDK/exporter/跨仓 trace、A5 parent JTI、P3 动态 token、业务幂等和远程发布仍未完成，A6 保持 `🔵` | of_mcp `0d1224d`；MultiRAG docs / 本次提交；policy revision `7bf9e09082ca4f1d529e51bf3fe8e6dd5c4334c62deaf9a5b6be204af9fca446` | A6/Gateway 定向 **65 passed**；`uv run --locked ofmcp verify` 六步全绿、**453 passed、2 existing skipped**；MultiRAG `make verify` 静态门禁全绿、**1915 passed**；当前 secure 无生产 coordinator 后端时 fail-fast，remote gate 未开放 | Codex |

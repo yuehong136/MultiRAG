@@ -764,10 +764,96 @@ Provider SPI：
 
 ```python
 class EnterpriseIdentityProvider:
-    async def resolve(self, context: ProviderContext, assertion: ExternalIdentityAssertion) -> ProviderIdentity: ...
+    async def resolve(
+        self,
+        context: ProviderContext,
+        assertion: ExternalIdentityAssertion,
+    ) -> ProviderIdentityResult: ...
 
-    async def refresh(self, context: ProviderContext, provider_user_id: str) -> ProviderIdentity: ...
+    async def refresh(
+        self,
+        context: ProviderContext,
+        provider_user_id: str,
+    ) -> ProviderIdentityResult: ...
 ```
+
+I4 已将此 SPI 落到 `api.identity.providers`，其 domain contract 只接受服务端已固定的
+`ProviderContext`，不接受 `channel_id/app_id/tenant_id` 等 payload 路由字段。精确结果形状是：
+
+```text
+ProviderIdentityResult
+  status = resolved | not_found | not_in_scope | inactive | unavailable | invalid | conflict
+  identity = ProviderIdentity | null
+  error_code = stable ProviderErrorCode | null
+  retryable = bool
+  from_cache = bool
+
+ProviderIdentity（只有 resolved 携带）
+  provider
+  provider_tenant_key
+  provider_account_id
+  provider_user_id
+  verified_at
+  open_id? / union_id? / employee_no? / display_name?
+  provider_status = active
+```
+
+ID/Secret/个人字段均在 dataclass `repr` 中隐去。`verified_at` 是本次真实 Contact proof
+时间；cache hit 只返回原 proof，不用当前请求时间伪造更新的验证时间。
+
+Feishu 运行时链固定为：
+
+```text
+ProviderContext
+  -> ProviderCredentialResolver.resolve(context)
+  -> official Auth V3 tenant_access_token.ainternal()
+  -> official Tenant V2 tenant.aquery() == context.provider_tenant_key
+  -> official Contact V3 user.aget(user_id_type=open_id|user_id)
+  -> strict primitive/status validation
+  -> allowlisted ProviderIdentityResult
+```
+
+Auth/Tenant/Contact 都用 `lark-oapi==1.7.2` typed async request/response。Tenant/Contact 显式传递
+project-scoped `tenant_access_token`；不走 SDK 同步 `TokenManager` cold path，也不重写官方
+HTTP/签名。SDK import 保持 lazy，只在实际 Provider call 发生，导入 `api.identity.providers`
+本身不安装 SDK 模块级 loop。
+
+三个 endpoint 的 adapter response 都必须保留 `(http_status, business_code)` envelope：业务码为 0
+也不能覆盖非 2xx HTTP 失败。Auth V3 与 Tenant V2 是 credential/tenant ownership 控制面；其
+403/404 永远不能映射为 identity `not_in_scope/not_found`，否则 I6 会被错误诱导进入 link/JIT。
+只有 Contact V3 的用户查询面可以产生这两个 identity 结果。已知 credential 业务码（当前含
+`10003`）优先于 Contact 的 HTTP 403/404 分类，稳定返回 credential unavailable。
+
+`ProviderCredentialResolver` 是独立 port。当前唯一 concrete adapter 在
+`api.identity_adapters.channel_credentials`；它用 account-rooted 单 SQL 同时要求精确
+Provider Account revision/scope marker、唯一 link、同 Tenant/Provider Channel、公开 `app_id/domain`
+和一条 `ChannelSecret`，再由注入的 `SecretStore` 解密。credential 只在调用期存活；
+`credential_generation=ChannelSecret.version`。明文 `app_secret` 出现在 Channel JSON、缺失/多条
+结果、scope/account/revision 不匹配、Provider Account 停用或解密失败都 fail closed，不会按
+`app_id` 猜测。这是 I2.1 到通用 Provider credential vault 之间的过渡 adapter，不改变
+`ChannelSecret` 仍是当前 credential owner 的事实。
+
+I4 cache/rate contract：
+
+- account generation key 包含 provider account id、identity revision、scope marker、credential generation
+  和 Feishu/Lark domain；不把 app secret/token 本身放入 key；
+- token cache 最多 512 项，directory cache 最多 2048 项，distinct in-flight 最多 512；
+  LRU/expiry 使用注入的 monotonic clock；
+- resolved 正向 cache 300 秒；`not_found/not_in_scope/inactive` 负向 cache 30 秒；其他失败
+  不缓存；token 在 Provider expiry 前 600 秒失效；
+- 同 key cold miss single-flight；跨 account/revision/scope/secret-version/domain 不合并；一个等待者
+  取消不会取消 shared producer，producer 失败/取消不进 cache 且会释放 slot；
+- Contact 每 account 最多 15 calls/s，排队超过 2 秒即可重试 unavailable；这个限流
+  不放宽 Provider 自己的 429/配额判定。
+
+Contact response 只投影 `user_id/open_id/union_id/employee_no/name/status`；空的可选字符串
+归一为 `None`，required ID 仍拒绝空值。`UserStatus` 的 `is_frozen/is_resigned/is_activated/
+is_exited/is_unjoin` 必须全部是真 `bool`；只有 activated 且其余四个全为 false 才产生
+resolved。SDK 对 primitive 的宽松 unmarshal 不是项目的安全判定。
+
+I4 只返回 Provider proof，不调用 I3 write capabilities，不保存 Provider tenant ownership/
+ExternalIdentity/Alias/User/UserTenant，也不构造 Principal。首次 ownership 持久化与 verified
+identity 事务仍属 I6/onboarding composition，Contact event invalidation 的持久化属 I7。
 
 Enterprise subject SPI：
 
@@ -800,8 +886,13 @@ Provider SPI 属于 I4，Enterprise subject SPI 属于 I5；P1 没有实现这�
 | `IDENTITY_POLICY_UNAVAILABLE` | 503/safe domain result | provisioning policy 缺失、无效或读取失败；不采用默认放行 |
 | `IDENTITY_REPOSITORY_UNAVAILABLE` | 503/safe domain result | repository 无法安全判定结果；错误不含 SQL/Provider 标识 |
 | `IDENTITY_PROVIDER_UNAVAILABLE` | 503 | 飞书/OA 暂时不可用且无可接受 cache |
+| `IDENTITY_PROVIDER_CREDENTIAL_UNAVAILABLE` | 503 | 精确 Provider Account 无唯一、scope-safe 且可解密的 credential |
 | `ENTERPRISE_SUBJECT_REQUIRED` | 403/tool error | 当前工具需要 talent/workcode，但未解析 |
 | `IDENTITY_ASSURANCE_INSUFFICIENT` | 403/step-up | cache freshness 不满足操作风险 |
+
+Provider 的 `IDENTITY_NOT_FOUND/IDENTITY_NOT_IN_SCOPE` 只允许来自 Contact 用户查询面；Auth/Tenant
+控制面即使返回 HTTP 403/404，也必须保持 provider/credential unavailable，不能形成开户、绑定或
+JIT 所消费的 identity miss。credential business code 的判定优先于 HTTP status。
 
 用户可见文案不包含具体权限、内部 ID、组织状态细节；管理员通过 trace/audit 查原因。
 

@@ -2,7 +2,8 @@
 
 > **基础版本核验：2026-08-07；飞书 SDK、官方文档和交互参考仓刷新：2026-08-09；
 > 对话执行、重新生成和持久化参考刷新：2026-08-10；MCP/FastMCP/扩展边界刷新：2026-08-12；
-> `lark-oapi` 1.7.2 可执行契约刷新：2026-08-12
+> `lark-oapi` 1.7.2 可执行契约刷新：2026-08-12；I4 官方 typed async 调用链实现刷新：
+> 2026-08-13
 > （Asia/Shanghai）**
 > 版本会变化。本文记录的是可复现快照和选型规则，不是“永远最新”的承诺。
 
@@ -13,7 +14,7 @@
 | 组件 | 当前仓库 | 最近核验的官方最新 | 本项目目标 | 处理方式 |
 |---|---|---|---|---|
 | Python | MultiRAG `>=3.12,<3.14`；of_mcp `>=3.12` | — | 保持各仓声明范围 | 不降级 |
-| `lark-oapi` | 声明 `>=1.7.2,<2`，lock 为 **1.7.2** | **1.7.2** | 已达成 | EIM-F1 已完成；I4 再实现 Provider/cache/single-flight |
+| `lark-oapi` | 声明 `>=1.7.2,<2`，lock 为 **1.7.2** | **1.7.2** | 已达成 | EIM-F1/I4 已完成；I4 用官方 Auth V3/Tenant V2/Contact V3 typed async seam 实现 Provider/cache/single-flight；真实 Contact sandbox 独立待复验 |
 | `lark-channel-sdk` | 未安装 | **1.2.0** | `>=1.2.0,<2` | EIM-C5 PoC 通过后才引入 |
 | MCP Python SDK `mcp` | MultiRAG 与 of_mcp 均 exact `2.0.0` | **2.0.0 stable** | 已达成；MultiRAG outbound 使用官方 `Client` | F3 已完成；后续升级单独重跑双时代矩阵 |
 | `mcp-types` | 两仓 lock 均为 2.0.0（由 `mcp` 精确约束） | **2.0.0 stable** | 与实际 SDK/框架锁一致 | 业务代码从 `mcp.types` 导入；不重复直依赖 |
@@ -178,8 +179,9 @@ ReplySession/Provider 接口上，transport 后续可替换。
 EIM-F1 已把根依赖与 lock 对齐到 1.7.2，并用本地固定 fixture 验证
 `GetUserRequest(user_id_type="open_id")` 指向 `GET /open-apis/contact/v3/users/:user_id`，成功响应按
 `GetUserResponse -> GetUserResponseBody -> User -> UserStatus` typed model 解码；fixture 只保留
-`open_id/user_id/employee_no/status` 白名单字段，不包含真实租户、用户或 Secret。该契约只为 I4 固定
-官方 SDK seam，不代表 Contact Provider、目录缓存或身份链已实现。
+`open_id/user_id/employee_no/status` 白名单字段，不包含真实租户、用户或 Secret。该契约为 I4 固定
+官方 SDK seam；I4 现已在此 seam 上落 Provider 主体，但不因而代表身份写入、Principal
+或真实 Contact sandbox 已完成。
 
 1.7.2 的顶层 `lark_oapi` import 会加载 WebSocket 模块并安装一个模块级 event loop。隔离进程实证该
 loop 保持 idle、未运行/未关闭、无 task 且不启动新 thread，Client build 也不改变这一点。平台模块
@@ -188,10 +190,30 @@ loop 保持 idle、未运行/未关闭、无 task 且不启动新 thread，Clien
 “已知、隔离的 idle-loop 副作用”，不能宣称 SDK 顶层 import 完全无副作用，也不能把 SDK eager import
 扩散到 API/control/identity 进程。
 
-SDK `TokenManager` 已提供进程内 token cache 和提前过期，但 1.7.2 的 cache-miss 路径是直接取 token、
-再写 cache，没有锁或 single-flight。F1 不重写官方 token client；I4 必须在项目 Provider adapter 层按
-Provider Account scope 实现并发折叠、故障传播和隔离测试。已有 CardKit/IM typed API 仍由 EIM-U1
-基线覆盖，F1 不迁移 `lark-channel-sdk` transport。
+SDK `TokenManager` 已提供进程内 token cache 和提前过期，但 1.7.2 的 cache-miss 路径是同步
+取 token、再写只按 `app_id` 分区的 global cache，没有锁或 single-flight。I4 因此使用同一
+官方 SDK 的 typed async `tenant_access_token.ainternal()` 端点，然后在项目 Provider adapter 层按
+account id/revision/scope marker/Secret version/domain 实现有界 token cache 与 single-flight。这不是
+重写 token HTTP/签名；Tenant V2 与 Contact V3 也继续由官方 typed async SDK 发送且显式携该 token。
+已有 CardKit/IM typed API 仍由 EIM-U1 基线覆盖，I4 不迁移 `lark-channel-sdk` transport。
+
+I4 对三个 endpoint 均保留 `(HTTP status, business code)` envelope；非 2xx + code 0 仍按失败。
+Auth/Tenant 控制面错误不会产生 identity not-found/not-in-scope；只有 Contact 用户查询面可以。
+business `10003` 作为 credential failure 优先于 Contact 的 HTTP 403/404 分类。
+
+I4 项目运行时参数当前固定为：token 在 Provider expiry 前 600 秒失效；identity 正/负
+cache 300/30 秒；Contact 15 calls/s/account 与 2 秒最长排队；token/identity/in-flight 容量均
+有硬上限。这些是当前 I4 contract，不是 `lark-oapi` 官方默认。
+
+2026-08-13 真实 sandbox 脱敏证据为 Auth V3 HTTP 200/business code `10003`、无 token；
+Tenant V2/Contact V3 均未调用。这证明了实际失败分层，不能作为凭据、scope 或
+Contact success 证据；记录不包含任何真实标识、个人信息或可逆摘要。该 sandbox 在 I4 验收中
+是可选项，不阻塞 I4 完成；更新测试 credential 后仍须单独脱敏复验。
+
+I4 完成证据为 I4-specific unit **86 passed**，加 F1 contract 7 为组合定向 **93 passed**；
+credential 真 PostgreSQL **1 passed**；`make verify` 全绿（format/Ruff **1234 files**、7 import
+contracts、async gate、mypy **78 source files**、unit **2098 passed in 33.26s**）；强制 integration
+**84 passed in 11.51s**。
 
 F1 完成证据：新 contract **7 passed**，广义 Feishu/Channel 定向 **101 passed**；
 `uv lock --check` 通过；`make verify` 的 Ruff format/check（1222 files）、7 import contracts、async DB
@@ -248,8 +270,9 @@ SEP 为准，不能因此退回旧 session 设计。
   `open_id -> user_id/status/employee_no` request/response seam；
 - 平台 control/provider/verification/identity import 不加载 SDK，也不安装 event loop；
 - SDK 顶层 import 的已知模块级 loop 必须保持 idle、无 task、无新增 thread，Client build 不启动它；
-- 1.7.2 `TokenManager` 只有 cache、没有 cache-miss single-flight；并发刷新测试和项目级折叠属于 I4，
-  不能为了把 F1 写成完成而假称 SDK 已提供该能力。
+- 1.7.2 `TokenManager` 只有 global/app-id cache、没有 cache-miss single-flight；I4 已在项目
+  Provider scope 上用有界缓存、single-flight、跨 account/generation/domain 隔离和失败恢复契约补齐。
+  不能反过来宣称这是 SDK 原生能力，也不能用纯单测代替真实 token/Tenant/Contact 门禁。
 
 ### `lark-channel-sdk`
 

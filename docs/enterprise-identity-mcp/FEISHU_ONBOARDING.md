@@ -71,7 +71,7 @@
 |---|:---:|---|---|
 | `app_id` | 否 | 独立 Provider Account | 仍不应在普通日志完整输出 |
 | `app_secret` | 是 | MultiRAG `ChannelSecret` 加密存储 | 只写不读回，支持主密钥环 |
-| `tenant_access_token` | 是 | SDK 内存/受控 cache | 不由管理员复制，不持久化到 Channel 表 |
+| `tenant_access_token` | 是 | I4 Provider 有界进程 cache；由官方 Auth V3 typed async endpoint 签发 | 不由管理员复制，不持久化到 Channel/identity 表 |
 | `tenant_key` | 敏感标识 | ExternalIdentity/provider account | 来自可信事件/安装上下文，不接受用户消息覆盖 |
 | verification token | 是 | 仅 Webhook 模式需要 | 长连接首期不申请/不配置 |
 | encrypt key | 是 | 仅 Webhook 加密模式需要 | 长连接首期不申请/不配置 |
@@ -80,14 +80,46 @@ Channel 建立 link 后使用现有“测试连接”能力验证 `app_id/app_se
 不证明通讯录字段权限、数据范围和事件订阅都正确。
 
 当前管理 API/界面可能仍按 Channel-first 顺序创建配置；EIM-I2.1 只落数据库关系，EIM-I3 只落窄
-repository/policy/service seam，都不宣称控制面编排、外部 ownership verification 或 credential vault
-已经完成。I4/onboarding composition 接线前不得用人工 SQL、直接实例化 privileged repository 或普通
-Channel update 代替正式 onboarding，也不得按 `app_id` 猜测 Provider Account 和 Channel 的关系。
+repository/policy/service seam。EIM-I4 已在 `api.identity_adapters` 增加一个过渡 credential resolver：
+它只从精确 Provider Account 出发，沿唯一 tenant/provider-safe link 读取 Channel 公开 `app_id/domain`
+与加密 `ChannelSecret`，用注入 `SecretStore` 解密，并把 Secret version 作为 credential generation。
+它不提供管理 API，不创建/rebind link，不在无 link account 上调 Provider API，也不改变
+`ChannelSecret` 仍是当前 credential owner 的事实。
+
+因此，当前仍不能用人工 SQL、直接实例化 privileged repository 或普通 Channel update 代替
+正式 onboarding，也不得按 `app_id` 猜测 Provider Account 和 Channel 的关系。控制面编排、
+外部 ownership verification 和通用 Provider credential vault 仍未完成。
 
 I4/I7 组合代码接入 I3 时必须按 capability 注入：普通 provisioning 只能拿 pending identity/单向收紧
 CAS；只有刚完成 Provider 验证的路径能拿 alias refresh/activation；只有目录/account 控制路径能拿
 health/scope/event CAS；ownership 仍只给 onboarding。不能为了调用方便把完整
 `SqlAlchemyIdentityRepository` 注入所有路径。
+
+I4 Provider 当前按以下顺序验证 credential 与企业边界：官方 Auth V3 typed async token
+-> 官方 Tenant V2 `tenant_key` 精确匹配 -> 官方 Contact V3 单用户查询。Tenant/Contact
+显式传递 project-scoped token，不走 SDK 同步/global TokenManager cold path；项目层按
+account revision/scope marker/Secret version/domain 做有界 cache 和 single-flight。这只解决目录验证，
+不代替 I6 的 ownership/identity/user 事务。
+
+三个 endpoint 都保留 HTTP status + business code envelope；非 2xx + code 0 仍按失败。Auth/Tenant
+是控制面，不会把 403/404 解释成 identity not-found/not-in-scope；只有 Contact 查询面可以。
+business `10003` 即使与 Contact HTTP 403/404 同时出现也优先归为 credential failure。
+
+2026-08-13 使用用户批准的测试应用进行了一次真实 sandbox，只保留下列脱敏证据：
+
+```text
+Auth V3 HTTP status: 200
+Provider business code: 10003
+tenant access token issued: false
+Tenant V2 called: false
+Contact V3 called: false
+```
+
+这证明请求到达了凭据端点并正确停在 Provider business failure，不证明凭据、权限、数据范围
+或 Contact 成功。证据不包含 app/tenant/account/user ID、Secret、token、姓名、手机、邮箱、头像、
+工号或任何可逆摘要。更新测试 credential 后须从 Auth V3 重跑，只有 token -> Tenant -> Contact
+都得到预期脱敏结果，才能将真实 Contact 项标为通过。该现场项在 I4 ROADMAP 验收中为可选，
+不阻塞 I4 自动化门禁已完成；它仍是上线前必须明确处置的独立复验待办。
 
 ---
 
@@ -268,9 +300,10 @@ approved_at: <时间>
 
 ## 8. 首次身份联调
 
-本节是 I4/I6/C3 的后续联调清单，**不是 EIM-I3 当前可执行能力**。I3 不持有飞书 SDK/Secret，不调用
-Contact，不创建 `User/UserTenant`，也不返回 Principal；只有 F1、I4、I6、P1/C3 依赖全部满足后才能
-按本节宣称端到端结果。
+本节是 I4/I6/C3 的联调清单，**不是 EIM-I3 当前可执行能力**。I3 不持有飞书
+SDK/Secret，不调用 Contact，不创建 `User/UserTenant`，也不返回 Principal。I4 Provider 与自动化
+门禁已完成，但 2026-08-13 sandbox 尚未获得 token，所以真实 Tenant/Contact 仍未验证；只有该
+现场复验、I6 写事务和 P1/C3 组装依赖全部满足后，才能按本节宣称端到端结果。
 
 使用一个普通员工测试账号和一个管理员控制账号，执行：
 

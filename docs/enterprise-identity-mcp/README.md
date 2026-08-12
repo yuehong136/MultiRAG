@@ -34,7 +34,7 @@
 推荐的派工方式：
 
 ```text
-读 docs/enterprise-identity-mcp/README.md，然后做 EIM-I4。
+读 docs/enterprise-identity-mcp/README.md，然后做 EIM-I6。
 先复核任务锚点和依赖，把准备修改的文件与验收标准告诉我；确认后再写代码。
 ```
 
@@ -222,9 +222,34 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   `channel_control/channel_providers/channels.verification/identity` 模块导入不会加载 SDK 或安装 loop；
   显式顶层导入 SDK 的已知行为是安装一个 idle、无 task、无新增 thread 的模块级 loop，不能误写成
   “完全无 import-time 副作用”。1.7.2 `TokenManager` 有 SDK cache，但 cache miss 没有 single-flight；
-  按 Provider Account scope 的并发刷新仍由 I4 实现。F1 证据为 contract **7 passed**、广义 Feishu/
+  按 Provider Account scope 的并发刷新已由已完成的 I4 补齐。F1 证据为 contract **7 passed**、广义 Feishu/
   Channel **101 passed**，`make verify` unit **2012 passed in 30.95s**；它只解锁 I4，不代表目录身份链
   已实现。
+- EIM-I4 已完成：`api.identity.providers` 提供框架无关 Provider SPI/DTO、有界
+  cache/single-flight/限流与 `FeishuEnterpriseIdentityProvider`；按需加载的 1.7.2 adapter 通过官方
+  typed async Auth V3 -> Tenant V2 -> Contact V3 调用链，显式传递 project-scoped
+  `tenant_access_token`，避开 SDK 同步且只按 `app_id` 分区的 global TokenManager cold path。
+  正向/负向 identity cache 为 300/30 秒，token 在上游 expiry 前 600 秒失效，Contact
+  每 account 15 calls/s 且最多排队 2 秒；所有 cache key 包含 account revision/scope marker、
+  `ChannelSecret.version` 和 Feishu/Lark domain。
+- Auth/Tenant/Contact 三个官方 endpoint 都同时保留 HTTP status 与业务 code；非 2xx 即使业务
+  code 为 0 也不会丢失 transport failure。Auth/Tenant 控制面失败不会被解释为目录用户
+  `NOT_FOUND/NOT_IN_SCOPE`；业务码 `10003` 在 Contact 的 HTTP 403/404 envelope 中仍优先归为
+  credential failure，避免错误进入 link/JIT。
+- I4 的临时 credential adapter 独立放在 `api.identity_adapters`，从精确 Provider Account 沿
+  唯一 tenant/provider-safe link 取 Channel 公开配置与加密 `ChannelSecret`；任一歧义、
+  scope 漂移、明文污染或解密失败均 fail closed，不按 `app_id` 猜测。这仍是
+  Channel-owned credential 的过渡形态，不是通用 Provider credential vault。
+- 2026-08-13 的真实飞书 sandbox 只证明实际请求达到凭据端点：脱敏结果为
+  HTTP 200 + Provider business code `10003`；没有签发 token，所以 Tenant V2 与 Contact V3
+  未调用。本轮没有保存 credential/token/真实 tenant 或 user 标识/个人字段；不能宣称
+  真实 Contact 链已通。ROADMAP 对 I4 的外部 sandbox 是可选验收，因此该 credential failure
+  不阻塞已完成的代码门禁；更新测试 credential 后仍须独立复验 Auth -> Tenant -> Contact。
+- I4 完成证据为 I4-specific unit **86 passed**，加 F1 contract 7 为组合定向
+  **93 passed**，Channel credential 真 PostgreSQL **1 passed**；`make verify` unit
+  **2098 passed in 33.26s**，强制 integration **84 passed in 11.51s**；其余
+  静态门禁计数见 [ROADMAP](ROADMAP.md) 变更日志。I4 没有写 identity 数据，也没有实现
+  I5/I6/I7/C3/Principal 传播。
 - [`api/channels/README.md`](../../api/channels/README.md) 已明确：`IncomingMessage.sender_id`
   是不可信外部标识，不能直接作为 Principal。这条边界必须保留。
 - `api/channels/feishu/channel.py::_normalize` 当前只从 `open_id/union_id/user_id` 中取第一个
@@ -289,7 +314,8 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   优先复用 FastMCP 4 的 `RemoteAuthProvider`、`AccessToken`、`on_list_tools/on_call_tool` middleware
   和 transport 防护；领域 identity/Principal 保持框架无关，避免重复实现框架已有工具开放能力。
 - P1 已解锁 A7 的代码前置，但 A7 仍是独立 inbound Resource Server 任务，不能立即宣称
-  可发布。F1 已完成；identity 主链从尚未实现的 `I4 -> I6 -> C3 -> P2` 继续，`C1 -> C2` 可并行；
+  可发布。F1/I4 已完成；identity 主线现在按 `I6 -> C3 -> P2` 继续，
+  `C1 -> C2` 可并行；
   C3/P2、A2/P3/A7 均不属于 P1 完成面。
 - MCP 出站已使用官方 SDK 2 `Client`：Streamable HTTP 使用 `mode="auto"` 和 SDK
   `create_mcp_http_client()` 受管 client（30 秒 connect/write/pool、300 秒 read），SSE 使用
@@ -410,7 +436,8 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   OAuth 获取 token 流。of_mcp 仍缺 A5 proxy internal actor；A6 虽已有 phase-1 domain/runtime
   安全边界，但仍缺生产多实例 replay/audit、HMAC/KMS 轮换、OTel SDK/exporter 与跨仓 trace，因此
   保持 `🔵`。M1/M2 企业主体与业务对象授权、持久 Interaction/Confirmation/Idempotency 也未完成。
-  F1 已完成并解锁 I4；MultiRAG 当前主链是 `I4 -> I6 -> C3 -> P2`，`C1 -> C2` 可并行；不能跳过
+  F1/I4 已完成；MultiRAG 当前主线是
+  `I6 -> C3 -> P2`，`C1 -> C2` 可并行；不能跳过
   `C3 -> P2` 直接做 A2/P3。A7 虽已解锁前置，仍须作为独立入站安全面实现和验收。
 
 ---

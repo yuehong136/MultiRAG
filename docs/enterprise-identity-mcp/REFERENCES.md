@@ -75,9 +75,31 @@
 EIM-F1 已将本仓基线升到 `lark-oapi==1.7.2`，并以可执行 contract 固定三项事实：Contact V3
 `user_id_type=open_id` request 和 `GetUserResponse/User/UserStatus` typed response 可用；平台模块可保持
 不加载 SDK；显式顶层导入 SDK 会安装一个 idle、无 task/新 thread 的模块级 loop。SDK
-`TokenManager` 提供 cache，但自建应用 tenant token 的 cache miss 没有 single-flight；I4 必须按
+`TokenManager` 提供 cache，但自建应用 tenant token 的 cache miss 没有 single-flight；I4 已按
 Provider Account scope 在项目 adapter 层补并发折叠，不能从“官方 SDK 自动管理 token”推断这项安全
-能力已经存在。F1 没有实现 Provider、目录缓存、身份绑定或 transport 迁移。
+能力由 SDK 原生提供。F1 没有实现 Provider、目录缓存、身份绑定或 transport 迁移。
+
+I4 现已在不改写 SDK HTTP/签名的前提下补这个工程边界：用官方 Auth V3
+`tenant_access_token.ainternal()` 的 typed async seam 取 token，再显式传给官方 Tenant V2
+`tenant.aquery()` 和 Contact V3 `user.aget()`。项目层以 account id/revision/scope marker/
+`ChannelSecret.version`/domain 为 generation key 提供有界 cache、single-flight 和每 account
+限流。这是对官方 typed SDK 的薄编排，不是自建 Feishu client，也不能被写成 SDK 原生
+single-flight。
+
+项目 adapter 还保留 Auth/Tenant/Contact 的 HTTP status + business code envelope；非 2xx + code 0
+仍是失败。Auth/Tenant 控制面不会产生 identity not-found/not-in-scope，business `10003` 也优先于
+Contact HTTP 403/404 归为 credential failure。这些是 MultiRAG 的领域分类保护，不是官方 SDK
+自动提供的语义。
+
+I4 另外严格补齐 SDK primitive unmarshal 边界：required ID 必须是非空 string，五个
+UserStatus 字段必须是真 bool；只投影 `user_id/open_id/union_id/employee_no/name/status`，
+完整 SDK User/raw body 不进入 domain/log/storage。空的 optional employee/display 字段是“未提供”，
+不是 malformed response。
+
+I4 自动化完成证据为 I4-specific unit **86 passed**、F1+I4 组合 **93 passed**、credential 真
+PostgreSQL **1 passed**、`make verify` unit **2098 passed in 33.26s** 与强制 integration
+**84 passed in 11.51s**。真实 sandbox 仍只到 Auth V3 HTTP 200/business `10003`，没有 token，
+Tenant/Contact 未调用；该可选现场失败分层不等于 Contact success，更新测试 credential 后须独立复验。
 
 ### 不能照搬
 
