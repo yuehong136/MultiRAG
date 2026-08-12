@@ -2,7 +2,7 @@
 
 > **基础版本核验：2026-08-07；飞书 SDK、官方文档和交互参考仓刷新：2026-08-09；
 > 对话执行、重新生成和持久化参考刷新：2026-08-10；MCP/FastMCP/扩展边界刷新：2026-08-12；
-> `lark-oapi` 1.7.2 可执行契约刷新：2026-08-12；I4 官方 typed async 调用链实现刷新：
+> `lark-oapi` 1.7.2 可执行契约刷新：2026-08-12；I4/I4.1 官方 SDK/live wire 调用链实现刷新：
 > 2026-08-13
 > （Asia/Shanghai）**
 > 版本会变化。本文记录的是可复现快照和选型规则，不是“永远最新”的承诺。
@@ -14,7 +14,7 @@
 | 组件 | 当前仓库 | 最近核验的官方最新 | 本项目目标 | 处理方式 |
 |---|---|---|---|---|
 | Python | MultiRAG `>=3.12,<3.14`；of_mcp `>=3.12` | — | 保持各仓声明范围 | 不降级 |
-| `lark-oapi` | 声明 `>=1.7.2,<2`，lock 为 **1.7.2** | **1.7.2** | 已达成 | EIM-F1/I4 已完成；I4 用官方 Auth V3/Tenant V2/Contact V3 typed async seam 实现 Provider/cache/single-flight；真实 Contact sandbox 独立待复验 |
+| `lark-oapi` | 声明 `>=1.7.2,<2`，lock 为 **1.7.2** | **1.7.2** | 已达成 | EIM-F1/I4.1 已完成；Auth 用 generated async request/resource/transport + strict live top-level adapter，Tenant/Contact 用 typed nested response |
 | `lark-channel-sdk` | 未安装 | **1.2.0** | `>=1.2.0,<2` | EIM-C5 PoC 通过后才引入 |
 | MCP Python SDK `mcp` | MultiRAG 与 of_mcp 均 exact `2.0.0` | **2.0.0 stable** | 已达成；MultiRAG outbound 使用官方 `Client` | F3 已完成；后续升级单独重跑双时代矩阵 |
 | `mcp-types` | 两仓 lock 均为 2.0.0（由 `mcp` 精确约束） | **2.0.0 stable** | 与实际 SDK/框架锁一致 | 业务代码从 `mcp.types` 导入；不重复直依赖 |
@@ -192,28 +192,37 @@ loop 保持 idle、未运行/未关闭、无 task 且不启动新 thread，Clien
 
 SDK `TokenManager` 已提供进程内 token cache 和提前过期，但 1.7.2 的 cache-miss 路径是同步
 取 token、再写只按 `app_id` 分区的 global cache，没有锁或 single-flight。I4 因此使用同一
-官方 SDK 的 typed async `tenant_access_token.ainternal()` 端点，然后在项目 Provider adapter 层按
+官方 SDK 的 generated async request/resource/transport 调用 `tenant_access_token.ainternal()`，再由
+strict live top-level wire adapter 解析响应；项目 Provider adapter 层按
 account id/revision/scope marker/Secret version/domain 实现有界 token cache 与 single-flight。这不是
-重写 token HTTP/签名；Tenant V2 与 Contact V3 也继续由官方 typed async SDK 发送且显式携该 token。
+重写 token HTTP/签名；Tenant V2 与 Contact V3 继续使用官方 generated typed nested response 且显式携该 token。
 已有 CardKit/IM typed API 仍由 EIM-U1 基线覆盖，I4 不迁移 `lark-channel-sdk` transport。
+
+1.7.2 的 generated `InternalTenantAccessTokenResponse` 只声明 `data` body；有效 live Auth V3
+成功响应实际把 `tenant_access_token/expire` 放在 JSON 顶层。原 production adapter 从
+`response.data` 读取，会把有效响应判 invalid；I4.1 在不替换官方 async transport/签名的前提下
+修正这条响应适配，并用 live adapter sandbox 守门。
 
 I4 对三个 endpoint 均保留 `(HTTP status, business code)` envelope；非 2xx + code 0 仍按失败。
 Auth/Tenant 控制面错误不会产生 identity not-found/not-in-scope；只有 Contact 用户查询面可以。
-business `10003` 作为 credential failure 优先于 Contact 的 HTTP 403/404 分类。
+业务码必须按 endpoint stage 分类：`10003` 不是 credential code；Auth credential mismatch 当前为
+`10015/20002`，不能把 code 集合跨 Auth/Tenant/Contact 全局复用。Contact 只有 code 0 才允许
+HTTP 403/404 fallback；未知/瞬时非零 code 不得降级为 JIT identity miss。
 
 I4 项目运行时参数当前固定为：token 在 Provider expiry 前 600 秒失效；identity 正/负
 cache 300/30 秒；Contact 15 calls/s/account 与 2 秒最长排队；token/identity/in-flight 容量均
 有硬上限。这些是当前 I4 contract，不是 `lark-oapi` 官方默认。
 
-2026-08-13 真实 sandbox 脱敏证据为 Auth V3 HTTP 200/business code `10003`、无 token；
-Tenant V2/Contact V3 均未调用。这证明了实际失败分层，不能作为凭据、scope 或
-Contact success 证据；记录不包含任何真实标识、个人信息或可逆摘要。该 sandbox 在 I4 验收中
-是可选项，不阻塞 I4 完成；更新测试 credential 后仍须单独脱敏复验。
+旧 sandbox 因 Python 源码与 credential 共用 stdin，实际使用空参数，相关记录作废。新的有效
+直连 sandbox 已证明 Auth/Tenant/Contact 三步 HTTP 200/code 0、
+tenant 匹配且用户 active，无任何 Secret/token/真实标识、个人信息或可逆摘要落盘。它先证明外部
+链真实可用；production adapter 修正后的同等脱敏 sandbox 也已通过，并额外确认 token/expiry、
+asserted open_id、stable user id 和五项 status。
 
-I4 完成证据为 I4-specific unit **86 passed**，加 F1 contract 7 为组合定向 **93 passed**；
-credential 真 PostgreSQL **1 passed**；`make verify` 全绿（format/Ruff **1234 files**、7 import
-contracts、async gate、mypy **78 source files**、unit **2098 passed in 33.26s**）；强制 integration
-**84 passed in 11.51s**。
+I4.1 完成证据：广义 I4+F1 **118 passed in 5.29s**；credential 真 PostgreSQL
+**1 passed in 0.76s**；`make verify` 全绿（Ruff format 1234 files、Ruff check、7 import
+contracts、async gate、mypy 78 files、unit **2123 passed in 34.53s**）；强制 integration
+**84 passed in 12.52s**。
 
 F1 完成证据：新 contract **7 passed**，广义 Feishu/Channel 定向 **101 passed**；
 `uv lock --check` 通过；`make verify` 的 Ruff format/check（1222 files）、7 import contracts、async DB

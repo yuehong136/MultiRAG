@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from typing import Any
 
@@ -21,10 +22,13 @@ _MAX_PROVIDER_VALUE_LENGTH = 512
 
 
 class LarkOapiFeishuDirectoryClient:
-    """Typed SDK seam that exposes only the provider's approved fields.
+    """Official async SDK seam that exposes only approved provider fields.
 
     All SDK imports are local so importing the platform identity package never
-    installs the SDK's module-global event loop.
+    installs the SDK's module-global event loop.  Auth V3 keeps the generated
+    request/transport but parses the official top-level wire response strictly
+    because ``lark-oapi==1.7.2`` models that response under a nonexistent
+    ``data`` field.
     """
 
     def __init__(self, *, timeout_seconds: float = 10.0) -> None:
@@ -54,13 +58,7 @@ class LarkOapiFeishuDirectoryClient:
         http_status, code = _response_envelope(response)
         if code != 0 or not 200 <= http_status < 300:
             return FeishuTenantTokenResponse(http_status=http_status, code=code)
-        data = response.data
-        if not isinstance(data, sdk["InternalTenantAccessTokenResponseBody"]):
-            raise FeishuDirectoryClientError(FeishuClientFailure.RESPONSE_INVALID)
-        token = _optional_text(data.tenant_access_token, max_length=_MAX_TOKEN_LENGTH, required=True)
-        expires_in = data.expire
-        if type(expires_in) is not int or expires_in <= 0 or expires_in > 86_400:
-            raise FeishuDirectoryClientError(FeishuClientFailure.RESPONSE_INVALID)
+        token, expires_in = _parse_auth_success_wire(response, expected_code=code)
         return FeishuTenantTokenResponse(
             http_status=http_status,
             code=code,
@@ -168,7 +166,6 @@ def _load_sdk() -> dict[str, Any]:
             InternalTenantAccessTokenRequest,
             InternalTenantAccessTokenRequestBody,
             InternalTenantAccessTokenResponse,
-            InternalTenantAccessTokenResponseBody,
         )
         from lark_oapi.api.contact.v3 import GetUserRequest, GetUserResponse, GetUserResponseBody, User, UserStatus
         from lark_oapi.api.tenant.v2 import QueryTenantRequest, QueryTenantResponse, QueryTenantResponseBody, Tenant
@@ -186,7 +183,6 @@ def _load_sdk() -> dict[str, Any]:
         "InternalTenantAccessTokenRequest": InternalTenantAccessTokenRequest,
         "InternalTenantAccessTokenRequestBody": InternalTenantAccessTokenRequestBody,
         "InternalTenantAccessTokenResponse": InternalTenantAccessTokenResponse,
-        "InternalTenantAccessTokenResponseBody": InternalTenantAccessTokenResponseBody,
         "LARK_DOMAIN": LARK_DOMAIN,
         "QueryTenantRequest": QueryTenantRequest,
         "QueryTenantResponse": QueryTenantResponse,
@@ -211,6 +207,35 @@ def _response_envelope(response: Any) -> tuple[int, int]:
     if type(response.code) is not int:
         raise FeishuDirectoryClientError(FeishuClientFailure.RESPONSE_INVALID)
     return raw.status_code, response.code
+
+
+def _parse_auth_success_wire(
+    response: Any,
+    *,
+    expected_code: int,
+) -> tuple[str, int]:
+    raw = response.raw
+    content = raw.content if raw is not None else None
+    if type(content) is not bytes:
+        raise FeishuDirectoryClientError(FeishuClientFailure.RESPONSE_INVALID)
+    try:
+        payload: object = json.loads(content)
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
+        raise FeishuDirectoryClientError(FeishuClientFailure.RESPONSE_INVALID) from None
+    if type(payload) is not dict:
+        raise FeishuDirectoryClientError(FeishuClientFailure.RESPONSE_INVALID)
+    wire_code = payload.get("code")
+    if type(wire_code) is not int or wire_code != expected_code:
+        raise FeishuDirectoryClientError(FeishuClientFailure.RESPONSE_INVALID)
+    token = _optional_text(
+        payload.get("tenant_access_token"),
+        max_length=_MAX_TOKEN_LENGTH,
+        required=True,
+    )
+    expires_in = payload.get("expire")
+    if token is None or type(expires_in) is not int or expires_in <= 0 or expires_in > 86_400:
+        raise FeishuDirectoryClientError(FeishuClientFailure.RESPONSE_INVALID)
+    return token, expires_in
 
 
 def _optional_text(

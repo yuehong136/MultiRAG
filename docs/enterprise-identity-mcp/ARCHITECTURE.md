@@ -141,8 +141,10 @@ flowchart LR
 ```
 
 SDK 仅在首次调用时 lazy import。I4 显式传递 project-scoped tenant token，不走 SDK 同步/
-global TokenManager cold path；Auth/Tenant/Contact 的 request/response/domain 仍都由官方 1.7.2
-typed SDK 完成。一次 account generation 由 account id/revision/scope marker + Secret version + domain
+global TokenManager cold path。Auth V3 使用官方 generated async request/resource/transport，再由项目
+adapter 严格解析 live 顶层 wire response；Tenant V2/Contact V3 保持官方 generated typed nested
+response。I4.1 已兼容 1.7.2 生成 Auth response 期待 `data`、实际 token/expire 位于顶层的差异。
+一次 account generation 由 account id/revision/scope marker + Secret version + domain
 组成，同 generation 的 token/directory cold miss single-flight，跨 generation 绝不共享。有界 cache
 使用 300 秒正向、30 秒负向 TTL，token 预留 600 秒安全窗；Contact 按 account
 15 calls/s，排队超过 2 秒即 fail closed。一个 waiter 取消不会取消共享 producer，失败结果
@@ -150,8 +152,9 @@ typed SDK 完成。一次 account generation 由 account id/revision/scope marke
 
 三个 SDK endpoint 都保留 HTTP status 与 business code envelope；非 2xx + code 0 仍是失败。
 Auth/Tenant 位于 credential/tenant ownership 控制面，不能产生 I6 会消费的 identity
-`not_found/not_in_scope`；只有 Contact 用户查询面可以。known credential code `10003` 优先于
-Contact 的 HTTP 403/404，避免把坏 credential 误判为可开户的用户缺失。
+`not_found/not_in_scope`；只有 Contact 用户查询面可以。业务码按 endpoint stage 分类，不能
+全局复用：`10003` 不是 credential code，Auth credential mismatch 当前为 `10015/20002`。
+Contact 只有 code 0 才能使用 HTTP 403/404 fallback；未知/瞬时非零 code 不得触发 JIT。
 
 I4 还没有把 Provider proof 写入 ExternalIdentity/Alias，也不会建 User/UserTenant 或构造
 Principal。这些仍由 I6/C3/P1 在独立事务与 trusted adapter 边界完成。
@@ -290,12 +293,11 @@ sequenceDiagram
 - Provider 返回 active 不自动授予管理员角色；
 - enterprise subject 缺失时，普通 RAG 是否继续由 policy 决定，高风险 MCP 一律拒绝。
 
-截至 I4 完成，图中已有 `ProviderContext/AliasKey`、单 SQL snapshot、三态 plan、窄
-repository/CAS seam、Principal builder，以及 Auth V3 -> Tenant V2 -> Contact V3 的 Provider 代码；
-I4 自动化门禁已全绿。
-2026-08-13 真实 sandbox 在 credential endpoint 得到 HTTP 200/business code `10003`，未签发 token，
-因此 Tenant/Contact 未实际调用；该图仍不能作为真实飞书端到端已打通的证据。I6、C3/P2
-也仍未实现。
+截至 I4.1 完成，图中已有 `ProviderContext/AliasKey`、单 SQL snapshot、三态 plan、窄
+repository/CAS seam、Principal builder，以及 Auth V3 -> Tenant V2 -> Contact V3 的 Provider 主体，
+production adapter live sandbox 与全量门禁已收口。旧 stdin-collision sandbox 因空参数作废；
+有效直连与 adapter sandbox 均得到三步 HTTP 200/code 0、tenant match、user active，且无
+PII/标识/Secret/token 落盘。I6、C3/P2 仍未实现。
 
 ---
 

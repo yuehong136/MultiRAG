@@ -91,7 +91,7 @@
 | F1 `lark-oapi` contract | 1.7.2 lock、平台 import 隔离、SDK 已知 idle loop、Contact V3 typed request/response | 隔离子进程 + 固定无 PII fixture；不访问真实飞书 |
 | I3 IdentityService | context/alias 结构校验、account health、无效 context 与 alias miss 区分、live membership、三态 plan、policy failure | 框架无关 async unit；只 mock lookup/policy ports |
 | I3 repository | 单 SQL authority snapshot、account generation/alias freshness、ordinary/verified/account-control/ownership 分权、CAS/锁、审计时间、输入/driver 脱敏 | `tests/integration/` 真 PostgreSQL |
-| I4 Provider flow | Auth V3/Tenant V2/Contact V3 typed seam、status/scope/error、cache/single-flight/限流、credential link/换钥 | ✅ closed async provider/SDK unit + Channel credential 真 PostgreSQL；I4-specific 86、F1+I4 组合 93、真库 1 |
+| I4 Provider flow | Auth V3 generated async request/resource/transport + strict live top-level adapter、Tenant V2/Contact V3 typed nested response、阶段化 error、cache/single-flight/限流、credential link/换钥 | ✅ I4.1：live adapter sandbox 三步通过；I4+F1 118、真 PG 1、完整 verify/integration 全绿 |
 | I6 Identity write flow | JIT/link-only/preprovisioned 的 User/UserTenant/identity/alias 真实写事务 | async service + 真 PostgreSQL；尚未实现 |
 | DB schema/event | 唯一约束、事务并发、别名归一化、幂等事件 | `tests/integration/` 真 PostgreSQL |
 | P1 Principal | 单一 canonical class、sealed constructor、深不可变/脱敏 repr、evidence 一致、proof time、legacy owner 活查与 JWT fallback 分界 | 纯 domain/auth unit + 真 PostgreSQL owner-membership 行为 |
@@ -115,12 +115,17 @@ verification/identity 模块导入不得加载 `lark_oapi` 或创建 event loop�
 模块级 loop，但只在 loop idle、无 task、无新增 thread 且 Client build 不启动工作的前提下通过。
 Contact fixture 只证明官方 typed request/response seam；不证明真实 app scope、token 获取、目录可用性
 或身份映射。SDK `TokenManager` 的 cache miss 没有 single-flight，项目级并发刷新/隔离负向已由 I4
-实现并完成验收。
+主体实现，I4.1 的 live Auth response 修正与复验已完成。
 
-I4 当前的可执行安全边界是：官方 typed async Auth V3 取 token、Tenant V2 精确验
-`provider_tenant_key`、Contact V3 查单人；Tenant/Contact 显式传递 project token，不走 SDK 同步
-TokenManager cold path。Provider DTO 只投影白名单字段，并在 SDK 宽松 primitive
-unmarshal 之后再严格校验 required string 和五个 status bool。官方 SDK 仍 lazy import。
+I4 的可执行安全边界是：Auth V3 使用官方 generated async request/resource/transport，再由项目
+adapter 严格解析 live 顶层 token/expire；Tenant V2/Contact V3 保持 generated typed nested response，
+分别精确验证 `provider_tenant_key` 和查询单人。Tenant/Contact 显式传递 project token，不走 SDK
+同步 TokenManager cold path。Provider DTO 只投影白名单字段，并在 SDK 宽松 primitive unmarshal
+之后再严格校验 required string 和五个 status bool。官方 SDK 仍 lazy import。
+
+1.7.2 generated Auth response 只声明 `data`，live 成功响应却把 token/expire 放在顶层。I4.1 已增加
+真实顶层 shape regression，并用修正后的 adapter sandbox 证明 Auth -> Tenant -> Contact；测试不再
+以手造 `response.data` fixture 代替 live wire 契约。
 
 token/directory cache 按 account id/revision/scope marker/Secret version/domain 分区，容量、in-flight、TTL
 和限流队列都有硬上限；同 key cold miss single-flight，cancelled waiter 不取消 producer，失败
@@ -130,16 +135,17 @@ token safety 600 秒、Contact 15 calls/s/account 与 2 秒最长排队。临时
 `app_id` 或接受 Channel JSON 明文 Secret。
 
 Auth/Tenant/Contact 三个 adapter response 都必须保留 HTTP/business envelope；非 2xx + code 0
-仍是失败。Auth/Tenant 控制面失败不能产生目录 identity `NOT_FOUND/NOT_IN_SCOPE`，只有 Contact
-用户查询面可以；known credential business code（当前含 `10003`）须优先于 Contact HTTP
-403/404，防止错误进入 link/JIT。
+仍是失败。业务码按 endpoint stage 分类，不能跨阶段共用：`10003` 不是 credential code；Auth
+credential mismatch 当前为 `10015/20002`。Auth/Tenant 控制面失败不能产生目录 identity
+`NOT_FOUND/NOT_IN_SCOPE`，只有 Contact 用户查询面可以；且 HTTP 403/404 fallback 只在 code 0
+时成立，未知/瞬时非零 Contact code 绝不能降级成 JIT 可消费的 identity miss。
 
-2026-08-13 真实 sandbox 只观测到凭据端点 HTTP 200 + Provider business code `10003`；
-没有签发 token，所以 Tenant V2/Contact V3 均未调用。这是一条有价值的实际失败分层，
-但不是 Contact success 或 scope 通过证据。证据只记 HTTP/business 分类与下游未调用，
-不保存 credential/token/真实 tenant、account、user ID 或个人字段。真实 sandbox 在 ROADMAP
-中是可选验收，该失败不阻塞自动化门禁已完成的 I4；更新测试 credential 后仍须单独重跑
-token -> Tenant -> Contact，并继续只记录脱敏结果。
+先前 sandbox 把 Python 源码与 credential 同时放进 stdin，导致脚本实际读到空参数，相关证据
+全部作废。新的有效直连 sandbox 使用非空
+credential，Auth V3、Tenant V2、Contact V3 均为 HTTP 200/code 0，tenant 精确匹配、用户 active；
+修正后的 production adapter sandbox 还确认 token present/expiry valid、tenant/user present、
+asserted open_id match、stable user id present，以及 activated true、frozen/resigned/exited/unjoin
+全 false。只记录这些状态，不保存 credential/token/真实 tenant、account、user ID 或个人字段。
 
 最少必须覆盖这些命名场景：
 
@@ -211,11 +217,13 @@ token -> Tenant -> Contact，并继续只记录脱敏结果。
 35. I4 官方 adapter 必须按 Auth V3 -> Tenant V2 -> Contact V3 调用，Tenant/Contact 显式
     放入同一 project token，SDK 同步 `TokenManager.get_self_tenant_token` 零调用；空可选
     employee/display 字段归一 `None`，空/非字符串 required ID、非 bool 或缺失任一 status 拒绝；
-    三 endpoint 的非 2xx + code 0 envelope 必须完整保留，不能被 SDK business success 覆盖。
+    三 endpoint 的非 2xx + code 0 envelope 必须完整保留，不能被 SDK business success 覆盖；
+    Auth 成功 fixture 必须覆盖 live 顶层 `tenant_access_token/expire`，不能只构造 `response.data`。
 36. Tenant V2 返回与 `ProviderContext` 不一致时返回 `IDENTITY_TENANT_MISMATCH`，token 不进
     cache、Contact 零调用；Auth/Tenant 403/404 也不能映射为 identity not-found/not-in-scope。
-    Contact 的 scope/not-found/inactive/invalid/transient 各自映射稳定脱敏结果，credential code
-    `10003` 优先于 HTTP 403/404。
+    Contact 的 scope/not-found/inactive/invalid/transient 各自映射稳定脱敏结果；错误码按 stage
+    分类，Auth `10015/20002` 为 credential mismatch，`10003` 不得作为全局 credential code；
+    Contact 只有 code 0 可用 HTTP 403/404 fallback，未知/瞬时非零 code 不得降级 JIT。
 37. identity 正向 cache 和 not-found/not-in-scope/inactive 负向 cache 按注入时钟分别在 300/30 秒
     过期；unavailable/invalid/conflict 不缓存。account revision、scope marker、Secret version 或 domain 变化
     都必须产生新 key，不复用旧 token/identity。
@@ -719,10 +727,11 @@ uv run pytest tests/unit/test_lark_oapi_contract.py
 它覆盖四个不加载 SDK 的平台 import、SDK idle-loop 边界和 Contact V3 typed fixture；不需要真实
 飞书应用、网络或 Secret。完成结果为新 contract **7 passed**、广义 Feishu/Channel 定向
 **101 passed**；`uv lock --check` 通过；`make verify` 全绿：Ruff 1222 files、7 import contracts、
-async DB gate、mypy 73 source files、unit **2012 passed in 30.95s**。I4 后续已补齐 token/cache
-single-flight、scope/status/error 分类和可选 sandbox 失败分层；F1 的纯 fixture 仍不能替代这些证据。
+async DB gate、mypy 73 source files、unit **2012 passed in 30.95s**。I4/I4.1 已补 token/cache
+single-flight、scope/status/error、live Auth top-level response 与阶段化 error regression；F1 的纯
+fixture 不能替代这些证据。
 
-EIM-I4 完成时的快速回路（不替代最终 `make verify`/integration）：
+EIM-I4.1 完成时的快速回路（不替代最终 `make verify`/integration）：
 
 ```bash
 uv run pytest tests/unit/test_identity_provider_runtime.py \
@@ -732,13 +741,12 @@ uv run pytest tests/unit/test_identity_provider_runtime.py \
 REQUIRE_SERVICES=1 uv run pytest tests/integration/test_identity_channel_credentials.py
 ```
 
-上述命令已覆盖 tenant mismatch、scope/status/error classification、identity cache、
-refresh/invalidate、三 endpoint envelope 与控制面/Contact 分类边界。完成证据：I4-specific unit
-**86 passed**，加 F1 contract 7 为组合定向 **93 passed**；credential 真 PostgreSQL
-**1 passed**；`make verify` 全绿（format/Ruff **1234 files**、7 import contracts、async gate、
-mypy **78 source files**、unit **2098 passed in 33.26s**）；
-`REQUIRE_SERVICES=1 make integration` **84 passed in 11.51s**。真实 Contact sandbox 仍是独立
-外部复验待办，不得把 Auth V3 business `10003` 的失败记录写成成功。
+最终命令覆盖 tenant mismatch、scope/status/error classification、identity cache、refresh/invalidate、
+live Auth 顶层 token/expire、三 endpoint envelope 与阶段化分类。完成证据：广义 I4+F1
+**118 passed in 5.29s**；credential 真 PostgreSQL **1 passed in 0.76s**；`make verify` 全绿
+（Ruff format 1234 files、Ruff check、7 import contracts、async gate、mypy 78 files、unit
+**2123 passed in 34.53s**）；`REQUIRE_SERVICES=1 make integration` **84 passed in 12.52s**；
+production adapter 三步脱敏 sandbox 通过。旧 stdin-collision sandbox 不计入验收。
 
 EIM-I3 的快速证据必须分别保留纯领域与真库边界；它们不能替代上面的完整门禁：
 

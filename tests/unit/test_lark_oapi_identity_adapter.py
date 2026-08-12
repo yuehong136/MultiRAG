@@ -90,7 +90,8 @@ async def test_sdk_token_tenant_and_contact_calls_use_typed_async_seams_and_expl
             payload = {
                 "code": 0,
                 "msg": "success",
-                "data": {"tenant_access_token": token, "expire": 7200},
+                "tenant_access_token": token,
+                "expire": 7200,
             }
         elif isinstance(request, QueryTenantRequest):
             payload = {"code": 0, "msg": "success", "data": {"tenant": {"tenant_key": "tenant-key-test"}}}
@@ -153,6 +154,72 @@ async def test_sdk_token_tenant_and_contact_calls_use_typed_async_seams_and_expl
     assert isinstance(requests[2][3], GetUserRequest)
     assert requests[2][3].queries == [("user_id_type", "open_id")]
     assert requests[2][3].paths == {"user_id": "ou_test"}
+
+
+async def test_auth_v3_rejects_generated_nested_success_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lark_oapi.core.http import Transport
+    from lark_oapi.core.model import RawResponse
+
+    async def aexecute(*_args: object, **_kwargs: object) -> RawResponse:
+        response = RawResponse()
+        response.status_code = 200
+        response.headers = {}
+        response.content = json.dumps(
+            {
+                "code": 0,
+                "msg": "success",
+                "data": {"tenant_access_token": "nested-token-must-not-pass", "expire": 7200},
+            }
+        ).encode()
+        return response
+
+    monkeypatch.setattr(Transport, "aexecute", staticmethod(aexecute))
+
+    with pytest.raises(FeishuDirectoryClientError) as caught:
+        await LarkOapiFeishuDirectoryClient().fetch_tenant_token(_credential())
+
+    assert caught.value.failure is FeishuClientFailure.RESPONSE_INVALID
+    assert "nested-token-must-not-pass" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"code": 0, "msg": "success", "expire": 7200},
+        {"code": 0, "msg": "success", "tenant_access_token": None, "expire": 7200},
+        {"code": 0, "msg": "success", "tenant_access_token": 7, "expire": 7200},
+        {"code": 0, "msg": "success", "tenant_access_token": "", "expire": 7200},
+        {"code": 0, "msg": "success", "tenant_access_token": "x" * 16_385, "expire": 7200},
+        {"code": 0, "msg": "success", "tenant_access_token": "sensitive-token"},
+        {"code": 0, "msg": "success", "tenant_access_token": "sensitive-token", "expire": True},
+        {"code": 0, "msg": "success", "tenant_access_token": "sensitive-token", "expire": "7200"},
+        {"code": 0, "msg": "success", "tenant_access_token": "sensitive-token", "expire": 0},
+        {"code": 0, "msg": "success", "tenant_access_token": "sensitive-token", "expire": 86_401},
+    ],
+)
+async def test_auth_v3_rejects_malformed_top_level_success_shape(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: dict[str, Any],
+) -> None:
+    from lark_oapi.core.http import Transport
+    from lark_oapi.core.model import RawResponse
+
+    async def aexecute(*_args: object, **_kwargs: object) -> RawResponse:
+        response = RawResponse()
+        response.status_code = 200
+        response.headers = {}
+        response.content = json.dumps(payload).encode()
+        return response
+
+    monkeypatch.setattr(Transport, "aexecute", staticmethod(aexecute))
+
+    with pytest.raises(FeishuDirectoryClientError) as caught:
+        await LarkOapiFeishuDirectoryClient().fetch_tenant_token(_credential())
+
+    assert caught.value.failure is FeishuClientFailure.RESPONSE_INVALID
+    assert "sensitive-token" not in str(caught.value)
 
 
 @pytest.mark.parametrize(

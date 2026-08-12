@@ -79,27 +79,35 @@ EIM-F1 已将本仓基线升到 `lark-oapi==1.7.2`，并以可执行 contract �
 Provider Account scope 在项目 adapter 层补并发折叠，不能从“官方 SDK 自动管理 token”推断这项安全
 能力由 SDK 原生提供。F1 没有实现 Provider、目录缓存、身份绑定或 transport 迁移。
 
-I4 现已在不改写 SDK HTTP/签名的前提下补这个工程边界：用官方 Auth V3
-`tenant_access_token.ainternal()` 的 typed async seam 取 token，再显式传给官方 Tenant V2
-`tenant.aquery()` 和 Contact V3 `user.aget()`。项目层以 account id/revision/scope marker/
+I4 现已在不改写 SDK HTTP/签名的前提下补这个工程边界：Auth V3 复用官方 generated async
+request/resource/transport，并以 strict live top-level adapter 解析 token，再显式传给官方 Tenant V2
+`tenant.aquery()` 与 Contact V3 `user.aget()` 的 generated typed nested response。项目层以 account id/revision/scope marker/
 `ChannelSecret.version`/domain 为 generation key 提供有界 cache、single-flight 和每 account
 限流。这是对官方 typed SDK 的薄编排，不是自建 Feishu client，也不能被写成 SDK 原生
 single-flight。
 
 项目 adapter 还保留 Auth/Tenant/Contact 的 HTTP status + business code envelope；非 2xx + code 0
-仍是失败。Auth/Tenant 控制面不会产生 identity not-found/not-in-scope，business `10003` 也优先于
-Contact HTTP 403/404 归为 credential failure。这些是 MultiRAG 的领域分类保护，不是官方 SDK
-自动提供的语义。
+仍是失败。Auth/Tenant 控制面不会产生 identity not-found/not-in-scope；业务码必须按 endpoint
+stage 分类，`10003` 不是 credential code，Auth credential mismatch 当前为 `10015/20002`。
+Contact 只有 code 0 可用 HTTP 403/404 fallback，未知/瞬时非零 code 不得降级 JIT。这些是
+MultiRAG 的领域分类保护，不是官方 SDK 自动提供的语义。
+
+1.7.2 generated `InternalTenantAccessTokenResponse` 期待 `data` body，但有效 live Auth V3 成功响应
+把 token/expire 放在 JSON 顶层。I4 原 adapter 从 `response.data` 读取，因而不能消费该 live shape；
+I4.1 在保留官方 async transport/签名的同时增加严格顶层兼容，并以 production adapter sandbox
+验证，而不是据手造 `response.data` fixture 推断成功。
 
 I4 另外严格补齐 SDK primitive unmarshal 边界：required ID 必须是非空 string，五个
 UserStatus 字段必须是真 bool；只投影 `user_id/open_id/union_id/employee_no/name/status`，
 完整 SDK User/raw body 不进入 domain/log/storage。空的 optional employee/display 字段是“未提供”，
 不是 malformed response。
 
-I4 自动化完成证据为 I4-specific unit **86 passed**、F1+I4 组合 **93 passed**、credential 真
-PostgreSQL **1 passed**、`make verify` unit **2098 passed in 33.26s** 与强制 integration
-**84 passed in 11.51s**。真实 sandbox 仍只到 Auth V3 HTTP 200/business `10003`，没有 token，
-Tenant/Contact 未调用；该可选现场失败分层不等于 Contact success，更新测试 credential 后须独立复验。
+旧 stdin-collision sandbox 因实际使用空参数而作废。有效直连 sandbox 与 I4.1 修正后的
+production adapter sandbox 均得到三步 HTTP 200/code
+0、tenant match、user active；adapter 证据还确认 token present/expiry valid、asserted open_id match、
+stable provider user id present，以及 frozen/resigned/exited/unjoin 全 false。证据不含任何原始标识、
+PII、Secret 或 token。广义 I4+F1 **118 passed in 5.29s**、credential 真 PostgreSQL
+**1 passed in 0.76s**；完整门禁证据以 ROADMAP 最终变更日志为准。
 
 ### 不能照搬
 

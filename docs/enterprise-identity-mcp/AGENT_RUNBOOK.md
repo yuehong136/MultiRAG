@@ -160,8 +160,7 @@ I3 已完成，代码锚点为 `api/identity/contracts.py`、`policy.py`、`serv
    schema 连续真库 **40 passed**；`make verify` unit **1969 passed in 28.85s** 且静态门禁全绿；
    `REQUIRE_SERVICES=1 make integration` **82 passed in 12.48s**。
 
-P1 已接续 I3 完成；具体边界见下节。`F1` 与 `I4` 也已完成；I4 的精确边界和独立
-真实 sandbox 待办见本章后续小节。
+P1 已接续 I3 完成；具体边界见下节。`F1/I4.1` 已完成，精确边界见本章后续小节。
 `I6` 再拥有 User/UserTenant/link 的完整事务，C3 才把 Channel assertion
 组合成 Principal。FastMCP 4 的 auth 与 tool list/call 能力仍在 MCP composition/adapter 层复用，
 不进入上述 identity domain。
@@ -225,22 +224,23 @@ F1 已以 `pyproject.toml`/`uv.lock` 中的 `lark-oapi` 1.7.2 和
    `uv lock --check` 通过；`make verify` 的 Ruff 1222 files、7 import contracts、async DB gate、
    mypy 73 source files 全绿，unit **2012 passed in 30.95s**；`git diff --check` 通过。
 
-F1 的 `✅` 只代表 I4 的 SDK/fixture 前置已满足。I4 已在独立任务中落地 Contact 调用、字段
-白名单、scope/status/error 分类、token/cache/single-flight 和 sandbox 失败分层；但不能把 F1
-fixture 或当前无 token 的 sandbox 写成目录身份链已经完成。
+F1 的 `✅` 只代表 I4 的 SDK/fixture 前置已满足。I4/I4.1 已完成 Contact 调用、字段白名单、
+token/cache/single-flight、live Auth response 与阶段化错误码；F1 fixture 不能替代最终 production
+adapter sandbox。
 
-#### EIM-I4 完成边界与 I6 交接
+#### EIM-I4.1 完成边界与 I6 交接
 
-I4 已按 ROADMAP 的固定 fixture + 可选 sandbox 标准完成。接手 I6 时必须保留以下边界，
-不得把未成功的真实 Contact sandbox 或未实现的写事务误写成 I4 能力：
+I4.1 已完成并交接 I6。接手者必须保留以下边界：
 
 1. `api.identity.providers` 是框架无关边界；导出 `FeishuEnterpriseIdentityProvider`
    的 `resolve(context, assertion)`、`refresh(context, provider_user_id)` 与受信事件使用的
    `invalidate(context)`。它不 import Channel、SQLAlchemy、FastMCP 或 Principal。
-2. `LarkOapiFeishuDirectoryClient` 只在首次调用时 import `lark_oapi==1.7.2`；按
-   Auth V3 typed async token -> Tenant V2 typed async query -> Contact V3 typed async get 顺序执行。
+2. `LarkOapiFeishuDirectoryClient` 只在首次调用时 import `lark_oapi==1.7.2`；按 Auth V3 generated
+   async request/resource/transport + strict live top-level adapter -> Tenant V2/Contact V3 generated
+   typed nested response 顺序执行。
    Tenant/Contact 显式携 project token，不走 SDK 同步 `TokenManager` cold path；没有自建
-   HTTP/签名客户端。
+   HTTP/签名客户端。1.7.2 生成 Auth response 期待 `data`，live 成功响应的 token/expire 位于
+   顶层；I4.1 已在不重写 transport/签名的前提下严格兼容真实 wire shape。
 3. `api.identity_adapters.channel_credentials.ChannelProviderCredentialResolver` 是唯一知道
    I2.1 过渡 credential 形状的 composition seam。它用一条 account-rooted SQL 要求精确一条
    account/link/channel/secret，再用注入的 `SecretStore` 解密；不会 cache、commit、猜测
@@ -254,16 +254,16 @@ I4 已按 ROADMAP 的固定 fixture + 可选 sandbox 标准完成。接手 I6 �
    归一为 `None`，status 的五个字段都必须是真 `bool`。完整 SDK model/raw body、
    token、Secret、tenant/user/account 标识和个人信息不得进入 repr/log/error/snapshot。
 6. 三个 SDK endpoint 都保留 HTTP status + business code envelope；非 2xx + code 0 仍是失败。
-   Auth/Tenant 控制面失败永不产生目录 identity `NOT_FOUND/NOT_IN_SCOPE`；business `10003`
-   即使随 Contact HTTP 403/404 返回也先归 credential failure，不允许触发 link/JIT。
-7. 2026-08-13 真实 sandbox 的脱敏结果是 credential endpoint HTTP 200 + business code
-   `10003`；因未签发 token，Tenant/Contact 没有调用。它只是真实凭据失败分层证据，不是
-   Contact success。它作为 ROADMAP 中的可选 sandbox 不阻塞 I4 完成；重试只能使用用户明确批准的
-   测试凭据，同样只记脱敏结果。
-8. I4 完成证据是 I4-specific unit **86 passed**，加 F1 contract 7 为组合定向
-   **93 passed**；Channel credential 真 PostgreSQL **1 passed**；`make verify` 全绿（format/Ruff
-   1234 files、7 import contracts、async gate、mypy 78 source files、unit **2098 passed in 33.26s**）；
-   强制 integration **84 passed in 11.51s**。
+   业务码按 endpoint stage 分类，`10003` 不是 credential code；Auth credential mismatch 当前为
+   `10015/20002`。Auth/Tenant 控制面失败永不产生目录 identity `NOT_FOUND/NOT_IN_SCOPE`；Contact
+   只有 code 0 可用 HTTP 403/404 fallback，未知/瞬时非零 code 不得降级 JIT。
+7. 旧 stdin-collision sandbox 因实际使用空参数而作废。有效直连与修正后 production adapter
+   sandbox 均为 Auth/Tenant/Contact 三步 HTTP 200/code 0、tenant match、user active；adapter 另
+   确认 token/expiry、asserted open_id、stable user id 和五项 status，且无 Secret/token/标识/PII 落盘。
+8. I4.1 完成证据：广义 I4+F1 **118 passed in 5.29s**；Channel credential 真 PostgreSQL
+   **1 passed in 0.76s**；`make verify` 全绿（Ruff format 1234 files、Ruff check、7 import
+   contracts、async gate、mypy 78 files、unit **2123 passed in 34.53s**）；强制 integration
+   **84 passed in 12.52s**。
 9. I4 不持久化 Provider tenant/account ownership、ExternalIdentity/Alias 或 User/UserTenant，
    不实现 I5/I6/I7/C3/Principal/MCP token。它只产生 verified Provider result；真正持久化和
    Principal 组装仍须按 I6 -> C3/P1 继续。
@@ -406,8 +406,8 @@ git diff --check
 ```
 
 A4 定向 **201 passed**；`uv run --locked ofmcp verify` 六步全绿、**417 passed、2 existing skipped**，
-contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG F1/I3/I4/P1 已完成，当前可推进
-`I6` 和 `C1 -> C2`，只有
+contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG F1/I3/I4/P1 已完成，当前推进
+`I6` 与 `C1 -> C2`；只有
 `C3 -> P2` 后才能进入 A2/P3。secure 在独立远程发布闸门解除前仍不能作为远程业务入口。
 
 ### 4.8 EIM-A6 phase 1 接手与完成边界

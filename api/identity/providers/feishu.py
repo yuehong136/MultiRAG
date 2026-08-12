@@ -48,9 +48,11 @@ _MAX_IN_FLIGHT = 512
 
 _SCOPE_ERROR_CODES = frozenset({41050})
 _NOT_FOUND_ERROR_CODES = frozenset({41012})
-_INVALID_ERROR_CODES = frozenset({40001})
+_CONTACT_INVALID_ERROR_CODES = frozenset({10003, 40001})
+_CONTACT_PROVIDER_ERROR_CODES = frozenset({10005, 10015, 20002})
+_AUTH_CREDENTIAL_ERROR_CODES = frozenset({10015, 20002})
+_CONTROL_PLANE_KNOWN_ERROR_CODES = frozenset({10003, 10005, 10015, 20002})
 _TRANSIENT_ERROR_CODES = frozenset({40003})
-_CREDENTIAL_ERROR_CODES = frozenset({10003})
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,7 +257,7 @@ class FeishuEnterpriseIdentityProvider:
         if response.http_status == 401:
             await self._token_cache.invalidate(lambda key: key == account)
         if response.code != 0 or not 200 <= response.http_status < 300:
-            return _classify_api_error(response.http_status, response.code)
+            return _classify_contact_error(response.http_status, response.code)
         if response.user is None:
             return _result(ProviderIdentityStatus.INVALID, ProviderErrorCode.ASSERTION_INVALID)
         return _identity_from_user(context, response.user, self._now())
@@ -277,7 +279,7 @@ class FeishuEnterpriseIdentityProvider:
             if not _valid_envelope(response.http_status, response.code):
                 raise _ProviderCallFailed(_result(ProviderIdentityStatus.INVALID, ProviderErrorCode.ASSERTION_INVALID))
             if response.code != 0 or not 200 <= response.http_status < 300:
-                raise _ProviderCallFailed(_classify_control_plane_error(response.http_status, response.code))
+                raise _ProviderCallFailed(_classify_auth_error(response.http_status, response.code))
             token = response.tenant_access_token
             expires_in = response.expires_in_seconds
             if not (type(token) is str and valid_text(token, max_length=16_384) and type(expires_in) is int and 0 < expires_in <= 86_400):
@@ -295,7 +297,7 @@ class FeishuEnterpriseIdentityProvider:
             if not _valid_envelope(tenant.http_status, tenant.code):
                 raise _ProviderCallFailed(_result(ProviderIdentityStatus.INVALID, ProviderErrorCode.ASSERTION_INVALID))
             if tenant.code != 0 or not 200 <= tenant.http_status < 300:
-                raise _ProviderCallFailed(_classify_control_plane_error(tenant.http_status, tenant.code))
+                raise _ProviderCallFailed(_classify_tenant_error(tenant.http_status, tenant.code))
             if not valid_text(tenant.tenant_key, max_length=255):
                 raise _ProviderCallFailed(_result(ProviderIdentityStatus.INVALID, ProviderErrorCode.ASSERTION_INVALID))
             if tenant.tenant_key != context.provider_tenant_key:
@@ -410,26 +412,60 @@ def _identity_from_user(
     )
 
 
-def _classify_api_error(http_status: int, code: int) -> ProviderIdentityResult:
+def _classify_contact_error(http_status: int, code: int) -> ProviderIdentityResult:
     if not _valid_envelope(http_status, code):
         return _result(ProviderIdentityStatus.INVALID, ProviderErrorCode.ASSERTION_INVALID)
-    # A credential failure remains a credential failure even when an edge or
-    # proxy rewrites the HTTP status to 403/404.  Do not let callers interpret
-    # it as a missing directory user and enter linking/JIT logic.
-    if code in _CREDENTIAL_ERROR_CODES:
-        return _result(ProviderIdentityStatus.UNAVAILABLE, ProviderErrorCode.CREDENTIAL_UNAVAILABLE)
-    if http_status == 403 or code in _SCOPE_ERROR_CODES:
-        return _result(ProviderIdentityStatus.NOT_IN_SCOPE, ProviderErrorCode.NOT_IN_SCOPE)
-    if http_status == 404 or code in _NOT_FOUND_ERROR_CODES:
-        return _result(ProviderIdentityStatus.NOT_FOUND, ProviderErrorCode.NOT_FOUND)
-    if code in _INVALID_ERROR_CODES:
+    # Known business codes take precedence over an edge-rewritten HTTP status.
+    # Otherwise an app/control-plane failure could become a user miss and enter
+    # linking/JIT, while an invalid identifier could be misreported as a bad
+    # provider credential.
+    if code in _CONTACT_INVALID_ERROR_CODES:
         return _result(ProviderIdentityStatus.INVALID, ProviderErrorCode.ASSERTION_INVALID)
-    retryable = http_status in {401, 429} or http_status >= 500 or code in _TRANSIENT_ERROR_CODES
+    if code in _CONTACT_PROVIDER_ERROR_CODES:
+        return _result(ProviderIdentityStatus.UNAVAILABLE, ProviderErrorCode.PROVIDER_UNAVAILABLE)
+    if code in _SCOPE_ERROR_CODES:
+        return _result(ProviderIdentityStatus.NOT_IN_SCOPE, ProviderErrorCode.NOT_IN_SCOPE)
+    if code in _NOT_FOUND_ERROR_CODES:
+        return _result(ProviderIdentityStatus.NOT_FOUND, ProviderErrorCode.NOT_FOUND)
+    if code in _TRANSIENT_ERROR_CODES:
+        return _result(
+            ProviderIdentityStatus.UNAVAILABLE,
+            ProviderErrorCode.PROVIDER_UNAVAILABLE,
+            retryable=True,
+        )
+    # An unknown business failure is never evidence that an identity is absent
+    # or out of scope.  Only a code-zero transport response may use 403/404 as
+    # the Contact outcome; otherwise linking/JIT could run on an upstream error.
+    if code != 0:
+        return _result(ProviderIdentityStatus.UNAVAILABLE, ProviderErrorCode.PROVIDER_UNAVAILABLE)
+    if http_status == 403:
+        return _result(ProviderIdentityStatus.NOT_IN_SCOPE, ProviderErrorCode.NOT_IN_SCOPE)
+    if http_status == 404:
+        return _result(ProviderIdentityStatus.NOT_FOUND, ProviderErrorCode.NOT_FOUND)
+    retryable = http_status in {401, 429} or http_status >= 500
     return _result(ProviderIdentityStatus.UNAVAILABLE, ProviderErrorCode.PROVIDER_UNAVAILABLE, retryable=retryable)
 
 
+def _classify_auth_error(http_status: int, code: int) -> ProviderIdentityResult:
+    """Classify Auth failures without creating an identity-miss signal."""
+
+    if not _valid_envelope(http_status, code):
+        return _result(ProviderIdentityStatus.INVALID, ProviderErrorCode.ASSERTION_INVALID)
+    if code in _AUTH_CREDENTIAL_ERROR_CODES:
+        return _result(ProviderIdentityStatus.UNAVAILABLE, ProviderErrorCode.CREDENTIAL_UNAVAILABLE)
+    return _classify_control_plane_error(http_status, code)
+
+
+def _classify_tenant_error(http_status: int, code: int) -> ProviderIdentityResult:
+    """Classify tenant-ownership failures without an identity-miss signal."""
+
+    if not _valid_envelope(http_status, code):
+        return _result(ProviderIdentityStatus.INVALID, ProviderErrorCode.ASSERTION_INVALID)
+    return _classify_control_plane_error(http_status, code)
+
+
 def _classify_control_plane_error(http_status: int, code: int) -> ProviderIdentityResult:
-    """Classify Auth/Tenant failures without creating an identity-miss signal.
+    """Map shared Auth/Tenant transport and service failures.
 
     ``NOT_FOUND`` and ``NOT_IN_SCOPE`` are actionable Contact outcomes.  An
     Auth or tenant-ownership failure must never trigger linking/JIT logic, even
@@ -438,8 +474,8 @@ def _classify_control_plane_error(http_status: int, code: int) -> ProviderIdenti
 
     if not _valid_envelope(http_status, code):
         return _result(ProviderIdentityStatus.INVALID, ProviderErrorCode.ASSERTION_INVALID)
-    if code in _CREDENTIAL_ERROR_CODES:
-        return _result(ProviderIdentityStatus.UNAVAILABLE, ProviderErrorCode.CREDENTIAL_UNAVAILABLE)
+    if code in _CONTROL_PLANE_KNOWN_ERROR_CODES:
+        return _result(ProviderIdentityStatus.UNAVAILABLE, ProviderErrorCode.PROVIDER_UNAVAILABLE)
     retryable = http_status in {401, 429} or http_status >= 500 or code in _TRANSIENT_ERROR_CODES
     return _result(
         ProviderIdentityStatus.UNAVAILABLE,

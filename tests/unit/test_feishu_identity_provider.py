@@ -222,7 +222,14 @@ async def test_every_non_active_directory_state_is_inactive_and_negative_cached(
     [
         (403, 41050, ProviderIdentityStatus.NOT_IN_SCOPE, ProviderErrorCode.NOT_IN_SCOPE, False),
         (404, 41012, ProviderIdentityStatus.NOT_FOUND, ProviderErrorCode.NOT_FOUND, False),
-        (404, 10003, ProviderIdentityStatus.UNAVAILABLE, ProviderErrorCode.CREDENTIAL_UNAVAILABLE, False),
+        (404, 10003, ProviderIdentityStatus.INVALID, ProviderErrorCode.ASSERTION_INVALID, False),
+        (403, 10005, ProviderIdentityStatus.UNAVAILABLE, ProviderErrorCode.PROVIDER_UNAVAILABLE, False),
+        (404, 10015, ProviderIdentityStatus.UNAVAILABLE, ProviderErrorCode.PROVIDER_UNAVAILABLE, False),
+        (404, 20002, ProviderIdentityStatus.UNAVAILABLE, ProviderErrorCode.PROVIDER_UNAVAILABLE, False),
+        (403, 99999, ProviderIdentityStatus.UNAVAILABLE, ProviderErrorCode.PROVIDER_UNAVAILABLE, False),
+        (404, 99999, ProviderIdentityStatus.UNAVAILABLE, ProviderErrorCode.PROVIDER_UNAVAILABLE, False),
+        (403, 40003, ProviderIdentityStatus.UNAVAILABLE, ProviderErrorCode.PROVIDER_UNAVAILABLE, True),
+        (404, 40003, ProviderIdentityStatus.UNAVAILABLE, ProviderErrorCode.PROVIDER_UNAVAILABLE, True),
         (429, 0, ProviderIdentityStatus.UNAVAILABLE, ProviderErrorCode.PROVIDER_UNAVAILABLE, True),
         (503, 40003, ProviderIdentityStatus.UNAVAILABLE, ProviderErrorCode.PROVIDER_UNAVAILABLE, True),
     ],
@@ -247,21 +254,33 @@ async def test_contact_errors_have_stable_non_overlapping_classification(
     assert result.retryable is retryable
 
 
-async def test_invalid_credential_business_code_is_non_retryable_and_contact_is_not_called() -> None:
-    class InvalidCredentialDirectory(_Directory):
+@pytest.mark.parametrize(
+    ("code", "error"),
+    [
+        (10003, ProviderErrorCode.PROVIDER_UNAVAILABLE),
+        (10005, ProviderErrorCode.PROVIDER_UNAVAILABLE),
+        (10015, ProviderErrorCode.CREDENTIAL_UNAVAILABLE),
+        (20002, ProviderErrorCode.CREDENTIAL_UNAVAILABLE),
+    ],
+)
+async def test_auth_business_codes_are_stage_aware_and_contact_is_not_called(
+    code: int,
+    error: ProviderErrorCode,
+) -> None:
+    class AuthErrorDirectory(_Directory):
         async def fetch_tenant_token(
             self,
             credential: FeishuProviderCredential,
         ) -> FeishuTenantTokenResponse:
             del credential
             self.token_calls += 1
-            return FeishuTenantTokenResponse(http_status=200, code=10003)
+            return FeishuTenantTokenResponse(http_status=200, code=code)
 
-    directory = InvalidCredentialDirectory()
+    directory = AuthErrorDirectory()
     result = await _provider(directory).resolve(_context(), _assertion())
 
     assert result.status is ProviderIdentityStatus.UNAVAILABLE
-    assert result.error_code is ProviderErrorCode.CREDENTIAL_UNAVAILABLE
+    assert result.error_code is error
     assert result.retryable is False
     assert directory.tenant_calls == 0
     assert directory.user_calls == 0
@@ -296,6 +315,30 @@ async def test_control_plane_404_never_becomes_an_identity_not_found_result(stag
             )
 
     directory = MissingControlPlaneDirectory()
+    result = await _provider(directory).resolve(_context(), _assertion())
+
+    assert result.status is ProviderIdentityStatus.UNAVAILABLE
+    assert result.error_code is ProviderErrorCode.PROVIDER_UNAVAILABLE
+    assert result.retryable is False
+    assert directory.user_calls == 0
+
+
+@pytest.mark.parametrize("code", [10003, 10005, 10015, 20002])
+async def test_tenant_control_plane_business_codes_never_become_identity_miss(
+    code: int,
+) -> None:
+    class TenantErrorDirectory(_Directory):
+        async def get_tenant(
+            self,
+            credential: FeishuProviderCredential,
+            *,
+            tenant_access_token: str,
+        ) -> FeishuTenantResponse:
+            del credential, tenant_access_token
+            self.tenant_calls += 1
+            return FeishuTenantResponse(http_status=404, code=code)
+
+    directory = TenantErrorDirectory()
     result = await _provider(directory).resolve(_context(), _assertion())
 
     assert result.status is ProviderIdentityStatus.UNAVAILABLE

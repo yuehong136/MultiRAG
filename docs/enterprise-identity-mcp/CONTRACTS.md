@@ -777,7 +777,8 @@ class EnterpriseIdentityProvider:
     ) -> ProviderIdentityResult: ...
 ```
 
-I4 已将此 SPI 落到 `api.identity.providers`，其 domain contract 只接受服务端已固定的
+I4/I4.1 已将此 SPI 与 live Auth response 兼容落到 `api.identity.providers`。domain contract
+只接受服务端已固定的
 `ProviderContext`，不接受 `channel_id/app_id/tenant_id` 等 payload 路由字段。精确结果形状是：
 
 ```text
@@ -813,16 +814,25 @@ ProviderContext
   -> allowlisted ProviderIdentityResult
 ```
 
-Auth/Tenant/Contact 都用 `lark-oapi==1.7.2` typed async request/response。Tenant/Contact 显式传递
-project-scoped `tenant_access_token`；不走 SDK 同步 `TokenManager` cold path，也不重写官方
-HTTP/签名。SDK import 保持 lazy，只在实际 Provider call 发生，导入 `api.identity.providers`
-本身不安装 SDK 模块级 loop。
+Auth V3 使用 `lark-oapi==1.7.2` generated async request/resource/transport + strict live top-level
+wire response adapter；Tenant V2/Contact V3 保持 generated typed nested response，并显式传递
+project-scoped `tenant_access_token`。不走 SDK 同步 `TokenManager` cold path，也不重写官方 HTTP/签名。
+SDK import 保持 lazy，只在实际 Provider call 发生，导入 `api.identity.providers` 本身不安装 SDK
+模块级 loop。
+
+live contract 另有一个 1.7.2 generated-model mismatch：`InternalTenantAccessTokenResponse` 的生成
+类型只声明 `data: InternalTenantAccessTokenResponseBody`，但有效 Auth V3 成功响应将
+`tenant_access_token/expire` 放在 JSON 顶层。I4.1 继续复用官方 async transport/签名，同时对实际
+顶层字段做有界、严格、脱敏的兼容解析；production adapter sandbox 已验证该链。
 
 三个 endpoint 的 adapter response 都必须保留 `(http_status, business_code)` envelope：业务码为 0
-也不能覆盖非 2xx HTTP 失败。Auth V3 与 Tenant V2 是 credential/tenant ownership 控制面；其
-403/404 永远不能映射为 identity `not_in_scope/not_found`，否则 I6 会被错误诱导进入 link/JIT。
-只有 Contact V3 的用户查询面可以产生这两个 identity 结果。已知 credential 业务码（当前含
-`10003`）优先于 Contact 的 HTTP 403/404 分类，稳定返回 credential unavailable。
+也不能覆盖非 2xx HTTP 失败。业务码只能结合 endpoint stage 解释，禁止使用跨 Auth/Tenant/Contact
+的全局 code 集合：`10003` 不是 credential code；Auth credential mismatch 当前为 `10015/20002`。
+Auth V3 与 Tenant V2 是 credential/tenant ownership 控制面；其 403/404 永远不能映射为 identity
+`not_in_scope/not_found`，否则 I6 会被错误诱导进入 link/JIT。只有 Contact V3 用户查询面可以产生
+这两个 identity 结果；Contact 也只有在 business code 为 0 时才允许用 HTTP 403/404 fallback。
+未知或瞬时非零 Contact code 即使搭配 403/404，也必须保持 invalid/unavailable 等非 JIT 结果，
+不得降级为 `not_in_scope/not_found`。
 
 `ProviderCredentialResolver` 是独立 port。当前唯一 concrete adapter 在
 `api.identity_adapters.channel_credentials`；它用 account-rooted 单 SQL 同时要求精确
@@ -892,7 +902,9 @@ Provider SPI 属于 I4，Enterprise subject SPI 属于 I5；P1 没有实现这�
 
 Provider 的 `IDENTITY_NOT_FOUND/IDENTITY_NOT_IN_SCOPE` 只允许来自 Contact 用户查询面；Auth/Tenant
 控制面即使返回 HTTP 403/404，也必须保持 provider/credential unavailable，不能形成开户、绑定或
-JIT 所消费的 identity miss。credential business code 的判定优先于 HTTP status。
+JIT 所消费的 identity miss。business code 必须先按 endpoint stage 解释；Auth 的
+`10015/20002` 才是当前 credential mismatch，`10003` 不得再作为全局 credential code。Contact
+HTTP fallback 必须满足 code 0；任何未知/瞬时非零 code 都不能借 403/404 触发 JIT。
 
 用户可见文案不包含具体权限、内部 ID、组织状态细节；管理员通过 trace/audit 查原因。
 
