@@ -5,6 +5,7 @@
 """
 
 import types
+from datetime import UTC, datetime
 from typing import NoReturn
 
 import pytest
@@ -142,6 +143,14 @@ def client(client_user):
 
     import api.apps as api_apps
     from api.db.db_models import get_async_db, get_db
+    from api.identity.principal import (
+        AuthenticatedActor,
+        AuthenticationContext,
+        AuthenticationSource,
+        IdentityAssurance,
+        TenantMembershipEvidence,
+        build_principal_from_authenticated_actor,
+    )
     from api.utils import api_utils
 
     app = api_apps.app
@@ -150,7 +159,21 @@ def client(client_user):
         get_async_db: lambda: AsyncSession(),
         api_apps.manager: lambda: client_user,
         api_utils.current_tenant_id: lambda: "tenant-unit",
-        api_utils.async_current_user: lambda: api_utils.Principal(id=client_user.id, email=client_user.email, nickname=client_user.nickname),
+        api_utils.async_current_user: lambda: build_principal_from_authenticated_actor(
+            actor=AuthenticatedActor(
+                platform_user_id=client_user.id,
+                display_name=client_user.nickname,
+            ),
+            membership=TenantMembershipEvidence(
+                platform_user_id=client_user.id,
+                tenant_id="tenant-unit",
+            ),
+            authentication=AuthenticationContext(
+                source=AuthenticationSource.WEB_SESSION,
+                assurance=IdentityAssurance.AUTHENTICATED,
+                validated_at=datetime.now(UTC),
+            ),
+        ),
         api_utils.async_current_tenant_id: lambda: "tenant-unit",
     }
     app.dependency_overrides.update(baseline)

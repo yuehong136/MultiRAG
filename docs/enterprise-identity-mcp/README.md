@@ -222,8 +222,9 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   非空字符串，无法支持正式身份解析。
 - `api/channel_execution/adapters.py::SqlAlchemyBindingResolver.resolve` 当前把
   `principal_id` 固定为 `None`，这里是验证后身份提升的装配点。
-- `api/utils/api_utils.py::Principal` 当前只有 `id/email/nickname`，不足以表达租户、认证方式、
-  企业业务主体和委托上下文。
+- EIM-P1 已将 canonical Principal 的唯一 owner 固定为 `api.identity.principal`；
+  `api.utils.api_utils.Principal` 只 re-export 同一 class，待存量 route import 迁移后删除。Principal
+  direct constructor 已封闭，不含 email/role/groups/scopes/token，`.id/.nickname` 只是兼容 property。
 - EIM-I1 已使 `User.email` 可空，并引入 `local/external/hybrid` 账户类型；external-only 账户不能使用
   本地密码登录或找回密码。它只解决账户承载形状，尚未建立 Provider identity/binding 或 Channel
   Principal。
@@ -251,7 +252,7 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
 - I3 的三种 provisioning policy 目前只产生
   `bind_preprovisioned/require_link/create_normal_member` 的**待 Provider 验证计划**；三种结果都带
   `provider_verification_required=true`。它不会调用飞书、创建 `User/UserTenant`、激活 identity、
-  构造 Principal 或接入 Channel。写侧按 capability 分权：ordinary mutation 只能创建
+  在 I3 内构造 Principal 或接入 Channel。写侧按 capability 分权：ordinary mutation 只能创建
   `pending_link` identity 与执行单向收紧状态 CAS；verified identity mutation 独占 alias 新建/刷新和
   显式 activation；provider-account control 独占 health/scope/event marker CAS；verified ownership
   仍是独立的两个窄 insert 命令。`conflict/revoked` 是终态，两者都优先于 alias freshness 且不提示
@@ -267,12 +268,20 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   unit **1969 passed in 28.85s**；`REQUIRE_SERVICES=1 make integration` **82 passed in 12.48s**。
   本层仍不 import FastMCP：FastMCP 4 的 auth、tool list/call middleware 继续只在 MCP
   composition/adapter 边界复用。
-- I2/I2.1/I3 不 import FastMCP，因为 FastMCP 不拥有平台 Tenant、飞书安装实例或身份库。后续 MCP 入口仍
+- P1 的 `build_principal_from_resolved_identity()` 只提升 I3 `RESOLVED` + active identity + live
+  `UserTenant(owner/admin/normal)` 的一致快照，并绑定 provider/internal identity/proof time；任何
+  error、provision plan、需重验或非法 membership role 都 fail closed。builder 只是进程内 trusted
+  adapter seam，不接受 wire/Channel 任意 DTO。
+- `api.identity.legacy_owner` 为存量 Web/API 凭据每请求活查 active User + 唯一
+  `tenant_id == user.id` 的 personal OWNER Tenant。它不是通用多 Tenant selector；valid JWT 的用户/
+  membership 失效不会降级重解释为 API token，意外 verifier 错误也不会被吞。
+  存量 sync `Depends(manager)` 仍可能返回 ORM User，所以 P1 不代表所有 auth 入口已统一。
+- I2/I2.1/I3/P1 不 import FastMCP，因为 FastMCP 不拥有平台 Tenant、飞书安装实例或身份库。后续 MCP 入口仍
   优先复用 FastMCP 4 的 `RemoteAuthProvider`、`AccessToken`、`on_list_tools/on_call_tool` middleware
   和 transport 防护；领域 identity/Principal 保持框架无关，避免重复实现框架已有工具开放能力。
-- I3 已首先解锁 MultiRAG immutable Principal，下一项为 P1；I4 还同时依赖尚未完成的
-  F1，不能因 I3 repository 已存在就提前宣称飞书目录解析可用。I4/I5/I6/I7、P1、C1-C3、A2/P3
-  均不属于 I3 当前完成面。
+- P1 已解锁 A7 的代码前置，但 A7 仍是独立 inbound Resource Server 任务，不能立即宣称
+  可发布。identity 主链仍是 `F1 -> I4 -> I6 -> C3 -> P2`，`C1 -> C2` 可并行；
+  C3/P2、A2/P3/A7 均不属于 P1 完成面。
 - MCP 出站已使用官方 SDK 2 `Client`：Streamable HTTP 使用 `mode="auto"` 和 SDK
   `create_mcp_http_client()` 受管 client（30 秒 connect/write/pool、300 秒 read），SSE 使用
   `mode="legacy"`，业务代码不再手调 `initialize()`。HTTP
@@ -386,14 +395,14 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
   六步全绿、**417 passed、2 existing skipped**，contract snapshot 无漂移。该完成态只证明 of_mcp
   能把已验证 token 构造成 Principal，并按确定性逐工具策略做发现/调用授权；不证明 MultiRAG 已经
   产生这样的 token 或第三方 Channel 身份已经进入该 Principal。
-- A2/P1/P2/P3 尚未实现，因此 MultiRAG 还不会为当前 Principal 签发并逐请求发送 token；飞书的
+- P1 已实现领域 Principal 与存量 Web/API adapter，但 A2/P2/P3 尚未实现，因此 MultiRAG
+  还不会为当前 Principal 签发并逐请求发送 token；飞书的
   `ExternalIdentityAssertion -> binding/directory -> Principal` 链也尚未完成，通用 MCP Client 仍无完整
   OAuth 获取 token 流。of_mcp 仍缺 A5 proxy internal actor；A6 虽已有 phase-1 domain/runtime
   安全边界，但仍缺生产多实例 replay/audit、HMAC/KMS 轮换、OTel SDK/exporter 与跨仓 trace，因此
   保持 `🔵`。M1/M2 企业主体与业务对象授权、持久 Interaction/Confirmation/Idempotency 也未完成。
-  MultiRAG 当前推进 `P1`、`F1 -> I4 -> I6` 与 `C1 -> C2`；不能跳过 `C3 -> P2` 直接做 A2/P3。
-  I3 当前完整门禁为 unit **1969 passed**、integration **82 passed**；先前 A6 文档中的
-  **1915 passed** 只是其当时快照，不覆盖 I3 证据。
+  MultiRAG 当前主链是 `F1 -> I4 -> I6 -> C3 -> P2`，`C1 -> C2` 可并行；不能跳过
+  `C3 -> P2` 直接做 A2/P3。A7 虽已解锁前置，仍须作为独立入站安全面实现和验收。
 
 ---
 

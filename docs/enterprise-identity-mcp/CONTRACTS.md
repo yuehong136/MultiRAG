@@ -476,10 +476,11 @@ verified onboarding/rotation 只能通过显式领域操作执行；account/iden
 使用 `identity_revision` compare-and-set，或在事务中 `SELECT ... FOR UPDATE` 后复核 revision。并发
 冲突 fail closed，禁止先查后写、last-write-wins 或删除重建来“换绑”。
 
-### 3.11 EIM-I2/I2.1/I3 与 FastMCP 4 的边界
+### 3.11 EIM-I2/I2.1/I3/P1 与 FastMCP 4 的边界
 
 I2/I2.1 实现 MultiRAG 领域身份持久化、Alembic 和数据库不变量；I3 增加 identity contracts、policy、
-service 与 repository。三者都不 import FastMCP，也不复制 FastMCP 的工具/provider/auth 类型。这不是
+service 与 repository；P1 在 `api.identity.principal` 定义 MultiRAG 唯一的 Principal 与认证证据
+contract。这些领域层都不 import FastMCP，也不复制 FastMCP 的工具/provider/auth 类型。这不是
 重复造工具开放层：FastMCP 4 的
 `RemoteAuthProvider`、`AccessToken`、root `on_list_tools/on_call_tool` middleware 与 HTTP
 Host/Origin 防护已经分别由 A3/A4 使用；未来 A7/P3 继续在 MCP composition/adapter 边界复用。
@@ -649,7 +650,7 @@ P1 Principal。缺 alias 时三种策略只产生：
 返回 `IDENTITY_POLICY_UNAVAILABLE` 并 fail closed；I3 不调用 Contact、不开户、不激活 identity，也不
 把“plan”误当成已验证用户。
 
-### 4.2 P1/I4/I6/C3 目标组合接口（尚未实现）
+### 4.2 P1 已实现的 Principal 契约
 
 ```python
 from dataclasses import dataclass
@@ -657,16 +658,22 @@ from datetime import datetime
 from enum import StrEnum
 
 
+class AuthenticationSource(StrEnum):
+    WEB_SESSION = "web_session"
+    SDK_API_TOKEN = "sdk_api_token"
+    ENTERPRISE_IDENTITY = "enterprise_identity"
+
+
 class IdentityAssurance(StrEnum):
-    CACHED = "cached"
+    AUTHENTICATED = "authenticated"
     DIRECTORY_VERIFIED = "directory_verified"
     ENTERPRISE_VERIFIED = "enterprise_verified"
 
 
 @dataclass(frozen=True, slots=True)
 class EnterpriseSubject:
-    type: str
-    value: str
+    subject_type: str
+    subject: str
     issuer: str
     issuer_tenant: str
     verified_at: datetime
@@ -674,23 +681,77 @@ class EnterpriseSubject:
 
 @dataclass(frozen=True, slots=True)
 class AuthenticationContext:
-    provider: str
-    external_identity_id: str
+    source: AuthenticationSource
     assurance: IdentityAssurance
-    authenticated_at: datetime
+    validated_at: datetime
+    authenticated_at: datetime | None = None
+    assurance_verified_at: datetime | None = None
+    provider: str | None = None
+    external_identity_id: str | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class Principal:
-    id: str
+    platform_user_id: str
     tenant_id: str
     authentication: AuthenticationContext
     enterprise_subject: EnterpriseSubject | None = None
     display_name: str = ""
 ```
 
-Principal 不包含 tenant role、业务权限集合或飞书 access token。角色和业务权限是变化更快的授权
-状态，按对应边界查询。以上 DTO 属于 P1 目标，不是 I3 当前返回类型。
+`validated_at` 是 MultiRAG 对本次凭据完成校验的时间；`authenticated_at` 只能是凭据真实
+证明的上游人类认证时间，不得用请求时间、token 过期时间或 cache 命中时间伪造。
+`assurance_verified_at` 记录权威目录/企业主体 proof 的原始时间，cache 或新请求不得刷新它。
+当前 Web session 与 SDK API token 只能产生 `AUTHENTICATED`，`authenticated_at=None`，且不得
+填写 provider/external identity/directory proof。企业身份上下文则必须同时有 provider、内部
+`external_identity_id` 和 proof 时间；`DIRECTORY_VERIFIED` 严格绑定 I3
+`identity.verified_at`，`ENTERPRISE_VERIFIED` 严格绑定 `EnterpriseSubject.verified_at`。
+
+`Principal` 的 direct constructor 已封闭，只能经过两个证据 builder 构造：
+
+```python
+build_principal_from_authenticated_actor(
+    actor: AuthenticatedActor,
+    membership: TenantMembershipEvidence,
+    authentication: AuthenticationContext,
+) -> Principal
+
+build_principal_from_resolved_identity(
+    result: IdentityResolutionResult,
+    authentication: AuthenticationContext,
+    enterprise_subject_evidence: VerifiedEnterpriseSubjectEvidence | None = None,
+) -> Principal
+```
+
+这两个 builder 是**进程内 trusted adapter seam**，不是 wire/security boundary；不得把请求 JSON、
+Channel command 或其他跨信任边界的任意 DTO 直接传入。企业 builder 只接受 I3 产生的
+`RESOLVED` 结果，并再次要求 active identity、live 同 Tenant membership、无 error、无
+provisioning action、无 re-verification flag、membership role 严格为 `owner/admin/normal`，以及
+provider/internal identity/proof time 逐项一致。
+`missing/inactive/conflict` 或仅有 verification-gated plan 的 I3 结果永远不能提升为 Principal。
+
+canonical owner 唯一是 `api.identity.principal.Principal`。`api.utils.api_utils.Principal` 只是对
+同一 class object 的兼容 re-export，不是第二个 Principal；存量 route 迁移到
+`api.identity.principal` 后删除该 facade。`.id/.nickname` 也只是存量消费方的兼容 property。
+Principal 不包含 email、tenant role、groups、scopes、业务权限集合、Provider token 或飞书
+原始标识；展示名不是身份键或授权依据，敏感主体字段默认不进 `repr`。角色和业务
+权限是变化更快的授权状态，在对应边界重查，不由 Principal 快照携带。
+
+### 4.3 legacy Web/API owner context 与后续组合边界
+
+`api.identity.legacy_owner` 只为现有 Web JWT 与 SDK API token 保留 RAGFlow 个人 owner 语义。
+它每次请求重查 active/non-anonymous `User`，并用窄 SQL 要求恰好一条 active
+`UserTenant(OWNER)` 且 `tenant_id == user.id`；缺失、重复或停用都 fail closed。它不是通用
+active-Tenant selector，不会根据 header/payload 在多 Tenant 间动态选择。P2/C3 必须传入它们自己
+经服务端验证的 membership tenant，不能复用该兼容规则。
+
+Web JWT 只有在 JWT 解析明确返回预期的 `not_authenticated` 时才能进入 API-token fallback。
+已成功解析的 JWT 如果 User/membership 无效，必须直接拒绝，不得再解释为另一类凭据；
+未预期 verifier/runtime 异常必须向上传播，`DISABLE_SDK` 必须继续阻断 fallback。
+
+这个兼容面只覆盖 async `async_current_user`。存量 sync `Depends(manager)` 仍可能返回 ORM User，
+`async_current_tenant_id` 的 broad fallback 也是既有债务；P1 不得宣称所有入口已统一为 Principal。
+此轮也不包含 C3 Channel 组装、P2 全链传播、A2/P3 动态委托或 A7 inbound Resource Server。
 
 旧提案中的 `EnterpriseIdentityService.resolve_channel_actor(tenant_id, channel_id, ...) -> Principal`
 **不再是 identity core 契约**。C3 的 Channel adapter 将来负责
@@ -715,7 +776,7 @@ class EnterpriseSubjectResolver:
     async def resolve(self, provider_identity: ProviderIdentity) -> EnterpriseSubjectResolution: ...
 ```
 
-Provider SPI 属于 I4，Enterprise subject SPI 属于 I5；本轮只有文档契约，I3 未实现这两个 SPI。
+Provider SPI 属于 I4，Enterprise subject SPI 属于 I5；P1 没有实现这两个 SPI。
 
 ---
 

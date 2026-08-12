@@ -54,6 +54,14 @@
 - ProviderContext 的 account revision 与 scope marker 必须同时匹配；read 必须携 alias proof 时间。scope
   变化后的旧 alias 要求 Provider 重验，旧 proof 不能写入或倒退已存 proof；identity conflict 的安全
   结论优先于 freshness，不能被降格成普通重验；
+- Principal 只能由进程内 trusted adapter 经 evidence builder 构造；direct constructor 、wire DTO、
+  未验证 subject、非 `RESOLVED`、非 `owner/admin/normal` membership 或带
+  error/provision/reverification 的 I3 结果都不能提升；
+- `DIRECTORY_VERIFIED` 必须绑定 I3 identity 的原始 `verified_at`，`ENTERPRISE_VERIFIED`
+  必须绑定 enterprise subject 的原始 `verified_at`；cache/请求命中不得刷新 proof 时间；
+- legacy Web/API Principal 每请求活查 active User 与恰好一条 `tenant_id == user.id` 的
+  active OWNER membership；它不是多 Tenant selector，valid JWT 的用户/成员失效也不得降级
+  重解释为 API token；
 - `platform_user_id` 始终是 MultiRAG `User.id`，不是飞书 `open_id`；
 - `enterprise_subject_id` 与 `platform_user_id` 分离，员工号不能成为公开认证凭据；
 - MCP token 必须校验 `typ/alg/kid`、`iss`、单一精确 `aud/resource`、`iat/nbf/exp/max_ttl`、`jti`、
@@ -84,7 +92,7 @@
 | I3 repository | 单 SQL authority snapshot、account generation/alias freshness、ordinary/verified/account-control/ownership 分权、CAS/锁、审计时间、输入/driver 脱敏 | `tests/integration/` 真 PostgreSQL |
 | I4/I6 Identity flow | Contact status/scope/cache/event、JIT/link-only/preprovisioned 的真实写事务 | async provider/service + 真 PostgreSQL；尚未实现 |
 | DB schema/event | 唯一约束、事务并发、别名归一化、幂等事件 | `tests/integration/` 真 PostgreSQL |
-| Principal | 未验证 subject 不提升；验证后携带 tenant/membership | execution 路由契约测试 |
+| P1 Principal | 单一 canonical class、sealed constructor、深不可变/脱敏 repr、evidence 一致、proof time、legacy owner 活查与 JWT fallback 分界 | 纯 domain/auth unit + 真 PostgreSQL owner-membership 行为 |
 | MCP token | 两个 profile、claims/types、固定时钟、TTL、JWKS、轮换、scope registry/交集、cross-resource | 两库独立纯密码学 corpus + HTTP 契约测试 |
 | MCP client | resource/audience、失败映射、无静态用户 header | mock transport/官方 SDK 测试 |
 | MCP resource server | modern/legacy 协议、独立 audience、scope、无 bearer 透传 | ASGI/官方 Client 契约测试 |
@@ -92,11 +100,13 @@
 | Structured result | `structuredContent`/`outputSchema` 一致性和安全事件转换 | schema/golden tests |
 
 截至 2026-08-12，EIM-I3 已完成 ProviderContext 驱动的本地 identity lookup、
-verification-gated policy plan 与窄 repository/CAS seam，不包含飞书 Provider、开户、Principal 或
-Channel 接线。EIM-F3/F8 只完成了 MCP SDK 2/FastMCP 4 的协议运行时迁移和
-`InputRequiredResult` 的 transport-level 暴露。EIM-A1 已固定 token/JWKS test vectors；Principal、
-独立 audience/scope 和 OAuth Resource Server 仍属于依赖 A1/P1 的 EIM-A7；InteractionSession 仍
-属于依赖 P3/A4/C3 的 EIM-U14。不能因为 modern/legacy 协议测试通过就把这些安全测试标为已满足。
+verification-gated policy plan 与窄 repository/CAS seam；EIM-P1 已完成 canonical Principal、
+AuthenticationContext、I3 promotion builder 和 legacy Web/API personal-owner adapter。这仍不包含飞书
+Provider/开户/Channel 组装，也没有把 Principal 传进 Agent/Memory/Workflow/MCP。EIM-F3/F8 只完成
+MCP SDK 2/FastMCP 4 的协议运行时迁移和 `InputRequiredResult` 的 transport-level 暴露。
+EIM-A1 已固定 token/JWKS test vectors；A7 的前置虽已满足，独立 audience/scope 和 OAuth
+Resource Server 仍未实现；InteractionSession 仍属于依赖 P3/A4/C3 的 EIM-U14。不能因
+P1 或 modern/legacy 协议测试通过就把这些安全测试标为已满足。
 
 最少必须覆盖这些命名场景：
 
@@ -149,6 +159,15 @@ Channel 接线。EIM-F3/F8 只完成了 MCP SDK 2/FastMCP 4 的协议运行时�
     alias conflict 一起回滚，不能留下半条映射。
 27. 超长/空白/未知 enum、重复或未知 attributes 在发 SQL 前拒绝；故意携敏感 bind parameter 的
     SQLAlchemy/driver exception 只暴露 `IDENTITY_REPOSITORY_UNAVAILABLE`，错误文本与 repr 无原值。
+28. Principal direct constructor、actor/membership 跨 user，enterprise subject 跨 user/tenant，以及
+    wrong provider/internal identity 全部拒绝；错误只携稳定 code，不回显输入标识。
+29. I3 `RESOLVED` 如果同时带 error、provision action、`provider_verification_required` 或伪造
+    membership role，不得构造 Principal；directory proof 缺失、早于 identity proof 或晚于本次
+    validation 都拒绝。
+30. Web/API 当前不得伪造 `authenticated_at`、directory/enterprise assurance；Principal 中不存在
+    email/role/groups/scopes/access token，PII 和 Provider 标识默认不进 repr。
+31. valid JWT 下 User 停用或 personal OWNER membership 缺失/重复时 API-token query 零调用；
+    只有预期 JWT invalid 才 fallback，意外 verifier/runtime error 原样传播。
 
 ### 3.2 MultiRAG 集成测试
 
@@ -213,6 +232,14 @@ CAS、health 时间 preserve/monotonic、Core 审计时间、行锁、事务回�
 child→parent 显式清理，证明测试数据不污染共享 scratch schema。完整 `make verify` 全绿：Ruff
 format/check、7 import contracts、async gate、mypy 71 files、unit **1969 passed in 28.85s**；
 `REQUIRE_SERVICES=1 make integration` **82 passed in 12.48s**。
+
+EIM-P1 完成基线（2026-08-12）：`tests/unit/test_principal.py` 与
+`tests/unit/test_async_auth_deps.py` 定向 **49 passed**，覆盖单一 canonical class、sealed constructor、证据
+builder、proof-time 绑定、深不可变/脱敏、legacy owner 和凭据 fallback 分界；
+`tests/integration/test_principal_auth.py` 真 PostgreSQL **1 passed**，覆盖 active User + 唯一
+personal OWNER Tenant 的活查与歧义拒绝。完整 `make verify` 全绿：7 条 import contracts、
+async gate、mypy **73 files**、unit **2005 passed**；`REQUIRE_SERVICES=1 make integration`
+**83 passed**；安全复核无 blocker，`git diff --check` 通过。
 
 ### 3.3 `of_mcp` 测试
 

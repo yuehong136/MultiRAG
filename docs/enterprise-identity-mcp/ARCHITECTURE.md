@@ -92,6 +92,8 @@ EIM-I3 当前包边界：
 ```text
 api/identity/
 ├── contracts.py
+├── principal.py
+├── legacy_owner.py
 ├── policy.py
 ├── service.py
 ├── validation.py
@@ -142,10 +144,20 @@ health/scope/event marker CAS。verified ownership 仍是独立 port，普通 `I
 写 capability；事务 commit/rollback 由上层用例拥有。省略 health command 的 scope/event 时间会保留
 旧值，显式时间不得倒退；Core DML 显式写审计时间，输入和 driver 异常在 repository 边界稳定脱敏。
 
-#### Principal propagation
+#### Principal construction
 
-Principal 是 request-scoped 不可变 DTO，经 Channel Execution、Agent、Memory、Workflow、
-MCP tool call 传递。模型看不到或修改不了 Principal。
+EIM-P1 已在 `api.identity.principal` 建立唯一的 request-scoped immutable Principal 与
+AuthenticationContext。Principal 只有 platform user、tenant、认证证据、可选企业主体和
+展示名；不携 role/groups/scopes/email/token/Provider 原始标识，也不允许 direct construction。
+
+I3 `RESOLVED` 结果只能在进程内 trusted adapter 经 builder 提升；不一致的 user/tenant/provider/
+proof time、待 provisioning 或需重验状态均 fail closed。存量 Web/API 凭据通过独立
+`legacy_owner` adapter 每请求活查用户和唯一 personal OWNER Tenant；它只保留现有兼容
+语义，不是多 Tenant 动态选择器。`api.utils.api_utils.Principal` 只 re-export 同一领域 class。
+
+P1 尚未把 Principal 经 Channel Execution、Agent、Memory、Workflow 和 MCP tool call 全链传递；
+这属于 C3/P2。现有 sync `Depends(manager)` 也仍可能暴露 ORM User。目标态仍要求
+模型看不到或修改不了 Principal，但不能因 P1 完成就宣称传播链已打通。
 
 #### MCP Token Issuer
 
@@ -237,9 +249,9 @@ sequenceDiagram
 - Provider 返回 active 不自动授予管理员角色；
 - enterprise subject 缺失时，普通 RAG 是否继续由 policy 决定，高风险 MCP 一律拒绝。
 
-截至 I3 完成，图中只有 `ProviderContext/AliasKey`、单 SQL snapshot、三态 plan 与窄
-repository/CAS seam 已落地；I4、I6、P1、C3 仍未实现，所以该图不能作为真实飞书端到端已打通的
-证据。
+截至 P1 完成，图中已有 `ProviderContext/AliasKey`、单 SQL snapshot、三态 plan、窄
+repository/CAS seam 与 Principal builder；I4、I6、C3/P2 仍未实现，所以该图不能作为真实飞书
+端到端已打通的证据。
 
 ---
 

@@ -147,7 +147,7 @@ async def create(
     _role: str = Depends(require_member_manager),
 ):
     def _invite(s):
-        inviter = tenant_api_service.inviter_display_name(s, user.id, user.email)
+        inviter = tenant_api_service.inviter_display_name(s, user.id, None)
         result = tenant_api_service.invite_user_to_tenant(s, tenant_id, request_body.email, user.id)
         profile = tenant_api_service.invited_user_profile(s, result["user_id"]) if result.get("user_id") else None
         return inviter, result, profile
@@ -174,7 +174,7 @@ async def batch_create(
     emails = tenant_api_service.normalize_batch_emails(request_body.emails)
 
     def _invite_all(s):
-        inviter = tenant_api_service.inviter_display_name(s, user.id, user.email)
+        inviter = tenant_api_service.inviter_display_name(s, user.id, None)
         return inviter, [tenant_api_service.invite_user_to_tenant(s, tenant_id, email, user.id) for email in emails]
 
     inviter, results = await db.run_sync(_invite_all)  # TODO(async-phase4)

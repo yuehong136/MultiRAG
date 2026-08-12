@@ -11,7 +11,7 @@
 用户应尽量按 ID 派工：
 
 ```text
-读 docs/enterprise-identity-mcp/README.md 和 AGENT_RUNBOOK.md，执行 EIM-P1。
+读 docs/enterprise-identity-mcp/README.md 和 AGENT_RUNBOOK.md，执行用户指定的 EIM-<ID>。
 先复核依赖和当前代码；按 ROADMAP 维护协议记账。涉及部署或外部管理后台操作时先停下来征得批准。
 ```
 
@@ -160,9 +160,37 @@ I3 已完成，代码锚点为 `api/identity/contracts.py`、`policy.py`、`serv
    schema 连续真库 **40 passed**；`make verify` unit **1969 passed in 28.85s** 且静态门禁全绿；
    `REQUIRE_SERVICES=1 make integration` **82 passed in 12.48s**。
 
-I3 完成后优先可做 `P1`。`I4` 还依赖 `F1`，只能在 F1 完成后接入 Contact Provider；`I6` 再拥有
-User/UserTenant/link 的完整事务，C3 才把 Channel assertion 组合成 Principal。FastMCP 4 的 auth 与
-tool list/call 能力仍在 MCP composition/adapter 层复用，不进入上述 identity domain。
+P1 已接续 I3 完成；具体边界见下节。`I4` 还依赖 `F1`，只能在 F1 完成后接入
+Contact Provider；`I6` 再拥有 User/UserTenant/link 的完整事务，C3 才把 Channel assertion
+组合成 Principal。FastMCP 4 的 auth 与 tool list/call 能力仍在 MCP composition/adapter 层复用，
+不进入上述 identity domain。
+
+#### EIM-P1 完成边界与后续接手
+
+P1 已完成，代码锚点为 `api/identity/principal.py`、`api/identity/legacy_owner.py` 与
+`api/utils/api_utils.py::async_current_user`。后续任务必须保留：
+
+1. `api.identity.principal.Principal` 是唯一 canonical class；`api.utils.api_utils.Principal` 只是
+   同一 class object 的临时 re-export，存量 route import 迁完即删；
+2. Principal direct constructor 封闭，两个 evidence builder 只是进程内 trusted adapter seam，
+   不得直接消费 wire/Channel 任意 DTO；
+3. I3 builder 只提升无 error/provision/reverification 的 `RESOLVED`，同时要求 active identity、
+   live 同 Tenant membership、合法 `owner/admin/normal` role 和一致 provider/internal identity/proof time；
+4. `validated_at`、真实 `authenticated_at` 与 `assurance_verified_at` 分离；当前 Web/API
+   `authenticated_at=None`，directory 与 enterprise proof 分别绑 identity/subject 的原始验证时间；
+5. Principal 不包含 email/role/groups/scopes/token，PII 默认不进 repr；`.id/.nickname` 只是兼容
+   property，不得成为新代码的领域命名；
+6. legacy Web/API adapter 每请求活查 active User + 唯一 personal OWNER Tenant，不是多
+   Tenant selector；valid JWT 用户/成员失效不 fallback，意外 verifier/runtime error 不吞；
+7. 存量 sync `Depends(manager)` 仍可能返回 ORM User，`async_current_tenant_id` broad fallback
+   也不属于 P1；不得宣称所有 auth 入口已统一；
+8. 完成证据为定向 unit **49 passed**、真 PostgreSQL **1 passed**、`make verify` unit
+   **2005 passed** 且 7 import contracts/async gate/mypy 73 files 全绿，强制 integration **83 passed**，
+   安全复核无 blocker。
+
+P1 不交付 C3/P2、A2/P3 或 A7。A7 的代码前置已满足，但仍须作为独立 inbound
+Resource Server 实现/发布；identity 主链仍按 `F1 -> I4 -> I6 -> C3 -> P2`，`C1 -> C2`
+可并行。
 
 ### 4.4 外部 API 和 SDK 任务
 
@@ -193,12 +221,12 @@ MCP Foundation 的 F2/F3/F4/F6/F7/F8 已于 2026-08-12 完成。冷启动 Agent 
    SDK/FastMCP/transport 改动都必须复跑，而不能用 mock 或 sibling import 替代。
 4. **下一协议相关入口**：EIM-A1 已完成并固定 token/JWKS test vectors；of_mcp EIM-A3 已由
    `e4ab560` 完成 strict Resource Server，EIM-A4 已由 `74117a0` 接续 immutable Principal、
-   per-tool policy 与真实 403。MultiRAG EIM-A7 的 A1 前置已满足，仍必须等待 P1，才实现自己独立的
+   per-tool policy 与真实 403。MultiRAG EIM-A7 的 A1/P1 前置已满足，但仍须通过 A7 独立实现
    inbound OAuth Resource Server、Principal/scope 和工具可见性；
    `InputRequiredResult` 目前只由 EIM-F3 暴露，EIM-U14 还必须等待 P3/A4/C3，才实现持久化暂停/恢复、
    Principal 绑定、revision/CAS 和重授权。当前协议升级**不证明** Principal、scope、delegated token、
    OAuth Resource Server 或 InteractionSession 已在 MultiRAG/Channel 端到端实现；of_mcp A4 的完成态
-   不能替代 P1/P2、A2/P3 或飞书 identity resolver。
+   不能替代 P2、A2/P3 或飞书 identity resolver。
 
 HTTP 调用超时的已验证契约是：本地等待及时取消，直接并发调用不再被单 server FIFO 队列产生
 head-of-line blocking；远端是否停止取决于 transport/server 的协作式取消，服务端仍可能完成调用。
@@ -315,8 +343,8 @@ git diff --check
 ```
 
 A4 定向 **201 passed**；`uv run --locked ofmcp verify` 六步全绿、**417 passed、2 existing skipped**，
-contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG I3 已完成，当前可并行做
-`P1`、`F1 -> I4 -> I6`、`C1 -> C2`，只有
+contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG I3/P1 已完成，当前可并行做
+`F1 -> I4 -> I6`、`C1 -> C2`，只有
 `C3 -> P2` 后才能进入 A2/P3。secure 在独立远程发布闸门解除前仍不能作为远程业务入口。
 
 ### 4.8 EIM-A6 phase 1 接手与完成边界
@@ -374,7 +402,7 @@ production multi-instance durable replay/audit、HMAC KMS/rotation、OTel SDK/ex
 | 变更 | 生产者 | 消费者 | 安全部署顺序 |
 |---|---|---|---|
 | Channel structured assertion | worker | MultiRAG private API | tolerate API → emit worker → consume API → remove legacy |
-| MCP access token | MultiRAG signer | `of_mcp` verifier/authorizer | A3 verifier/JWKS + A4 Principal/tool policy + A6 phase-1 execution guard 已先行并保持业务未远程发布 → P1/P2 → A2 signer emit → P3 每次执行换新短 token/JTI → A6 production durable backend/跨仓 trace + 企业主体/上线证据 → 独立闸门决定 secure 远程入口；不得把固定测试 token 或内存 replay 通过误作 Channel 委托闭环 |
+| MCP access token | MultiRAG signer | `of_mcp` verifier/authorizer | A3 verifier/JWKS + A4 Principal/tool policy + A6 phase-1 execution guard 已先行并保持业务未远程发布 → P1 已完成、继续 C3/P2 → A2 signer emit → P3 每次执行换新短 token/JTI → A6 production durable backend/跨仓 trace + 企业主体/上线证据 → 独立闸门决定 secure 远程入口；不得把固定测试 token 或内存 replay 通过误作 Channel 委托闭环 |
 | EIM-A1 corpus | MultiRAG canonical generator + 两仓本地副本 | PyJWT/joserfc 独立 oracle | 已完成：of_mcp `3e1d5ac` → MultiRAG 本次 A1 变更；91-file corpus 字节一致，digest `59f82684aa06365f45623ce9bfad336d487f2c9351879266a6b2ab21bf8fe208`；运行时无依赖 |
 | 新 scope/tool metadata | `of_mcp` policy snapshot | MultiRAG Agent/MCP config、P3 cache/audit | resource 端先提交包含 effect/replay mode 的 canonical `tool-policies.json` 与 `policy_revision` → 调用端按 revision 重算请求与缓存；未知 scope fail closed，不从运行时可见列表反推权限，也不把 revision 自动塞入当前 A1 token profile |
 | confirmation contract | `of_mcp` challenge | MultiRAG card/channel | resource 端先返回可识别 challenge → UI 接线 → 强制确认 |

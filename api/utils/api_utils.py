@@ -3,11 +3,10 @@ import logging
 import os
 import time
 from copy import deepcopy
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError
@@ -17,6 +16,8 @@ from sqlalchemy.orm import Session
 from api.db.db_models import APIToken, get_async_db, get_db
 from api.db.services.api_service import APITokenService
 from api.db.services.tenant_llm_service import LLMFactoriesService
+from api.identity.legacy_owner import principal_from_legacy_owner_context
+from api.identity.principal import AuthenticationSource, Principal
 from common import settings
 from common.connection_utils import timeout
 from common.constants import RetCode
@@ -362,15 +363,6 @@ def current_tenant_id(request: Request, db: Session = Depends(get_db)) -> str:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class Principal:
-    """鉴权产物:不可变身份 DTO,ORM User 对象不逸出鉴权依赖。"""
-
-    id: str
-    email: str = ""
-    nickname: str = ""
-
-
 async def async_token_required(request: Request, db: AsyncSession = Depends(get_async_db)) -> str:
     """token_required 的 AsyncSession 版:校验 SDK API token,返回 tenant_id。"""
     if os.environ.get("DISABLE_SDK"):
@@ -450,29 +442,24 @@ async def async_current_tenant_id(request: Request, db: AsyncSession = Depends(g
 async def async_current_user(request: Request, db: AsyncSession = Depends(get_async_db)) -> Principal:
     """``Depends(manager)`` 的 AsyncSession 版:返回不可变 Principal。
 
-    对齐 _TokenFallbackLoginManager 的双认语义:web JWT 优先,解码/加载失败时把
-    Authorization 值当 SDK API token 反查 owner 用户;用户与 Token 查询全部走
+    对齐 _TokenFallbackLoginManager 的双认语义:web JWT 优先,仅在预期 JWT 解码
+    失败时把 Authorization 值当 SDK API token 反查 owner 用户;用户与 Token 查询全部走
     注入的 AsyncSession(run_sync),不再自开 SessionLocal。
     """
     from api.apps import load_user, manager  # 延迟导入避免循环依赖
     from api.db.services.user_service import UserService
 
-    def _principal_of(user: Any) -> Principal | None:
-        if user is None or not getattr(user, "id", None):
-            return None
-        return Principal(id=str(user.id), email=str(user.email or ""), nickname=str(user.nickname or ""))
-
+    token = await manager._get_token(request)
     try:
-        token = await manager._get_token(request)
         payload = manager._get_payload(token)
-        email = payload.get("sub")
-        principal = None
-        if email:
-            principal = await db.run_sync(lambda s: _principal_of(load_user(email, s)))  # type: ignore[operator]  # TODO(async-phase4)；fastapi-login user_loader 标注 artifact，运行时为同步函数
-        if principal is None:
-            raise manager.not_authenticated_exception
-        return principal
-    except Exception:
+    except HTTPException as exc:
+        if exc is not manager.not_authenticated_exception:
+            raise
+        if os.environ.get("DISABLE_SDK"):
+            raise
+        # Only a credential that failed JWT parsing may enter the SDK-token
+        # fallback.  A valid JWT whose user/membership is disabled must remain
+        # rejected rather than being reinterpreted under a second trust model.
         authorization = request.headers.get("Authorization")
         if authorization:
             parts = authorization.split()
@@ -480,15 +467,27 @@ async def async_current_user(request: Request, db: AsyncSession = Depends(get_as
 
             def _by_api_token(s: Session) -> Principal | None:
                 objs = APITokenService.query(s, token=token)
-                if not objs:
+                if len(objs) != 1:
                     return None
                 users = UserService.query(s, id=objs[0].tenant_id)
-                return _principal_of(users[0] if users else None)
+                if len(users) != 1:
+                    return None
+                return principal_from_legacy_owner_context(s, users[0], AuthenticationSource.SDK_API_TOKEN)
 
             principal = await db.run_sync(_by_api_token)  # TODO(async-phase4)
             if principal is not None:
                 return principal
         raise
+
+    email = payload.get("sub") if isinstance(payload, dict) else None
+    principal = None
+    if type(email) is str and 0 < len(email.strip()) <= 255 and len(email) <= 255:
+        principal = await db.run_sync(
+            lambda s: principal_from_legacy_owner_context(s, load_user(email, s), AuthenticationSource.WEB_SESSION)  # type: ignore[operator]  # TODO(async-phase4)；fastapi-login user_loader 标注 artifact，运行时为同步函数
+        )
+    if principal is None:
+        raise manager.not_authenticated_exception
+    return principal
 
 
 # def token_required(func):
