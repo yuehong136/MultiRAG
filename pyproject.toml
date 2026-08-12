@@ -327,6 +327,29 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
+name = "Run Platform 协议核心不依赖路由、存储、Channel 或 Runtime 实现"
+type = "forbidden"
+source_modules = [
+    "api.run_platform.domain",
+    "api.run_platform.schemas",
+    "api.run_platform.events",
+]
+forbidden_modules = [
+    "api.apps",
+    "api.db",
+    "api.identity",
+    "api.identity_adapters",
+    "api.execution_control",
+    "api.security",
+    "api.channels",
+    "api.channel_control",
+    "api.channel_runtime",
+    "api.channel_execution",
+    "core",
+    "agent",
+]
+
+[[tool.importlinter.contracts]]
 name = "deepdoc（文档解析）不依赖 api/agent/workflow*"
 type = "forbidden"
 source_modules = ["deepdoc"]
@@ -437,7 +460,7 @@ known-first-party = ["api", "common", "core", "agent", "deepdoc", "workflow", "w
 # ============================================================
 [tool.mypy]
 python_version = "3.12"
-files = ["common", "api/utils", "api/identity", "scripts"]
+files = ["common", "api/utils", "api/identity", "api/run_platform", "scripts"]
 exclude = [
     "^server/", "^internal/", "^tests/", "^docker/", "^temp/", "^tmp/",
     # 燃尽目标：SaaS 连接器与向量库后端存量类型问题较多（各约 60/30 个），
@@ -463,6 +486,11 @@ disallow_untyped_defs = true
 
 [[tool.mypy.overrides]]
 module = ["api.identity", "api.identity.*"]
+check_untyped_defs = true
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["api.run_platform", "api.run_platform.*"]
 check_untyped_defs = true
 disallow_untyped_defs = true
 

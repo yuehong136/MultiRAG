@@ -1,6 +1,6 @@
 # MultiRAG Run Platform
 
-> 状态：**F0 架构与契约基线，纯文档；目标 v2 尚未实现**
+> 状态：**F0 已完成；RUN-F1 机器契约/纯状态机垂直切片进行中；目标 v2 路由与持久化尚未实现**
 > 最后核验：2026-08-13
 > 维护范围：远程 Run API、持久化状态机、事件协议、事务 outbox、Valkey Streams 投递、取消授权与发布顺序
 
@@ -104,13 +104,21 @@ SSE 回放。慢消费者必须收到 `slow_consumer + cursor` 后主动重连�
 9. **高频输出先合并。** 不按模型 token 写 PostgreSQL；持久化的是有界合并后的增量与权威终态。
 10. **跨版本先 tolerate 后 emit。** 新字段/事件先让旧消费者安全忽略或拒绝，再由生产者发出。
 
-## 5. F0 交付边界
+## 5. 当前交付边界
 
-本轮只建立文档基线：
+F0 已建立文档基线。RUN-F1 当前只新增无副作用的协议核心：
 
-- 不新增依赖、数据库迁移、路由、worker、配置或业务代码；
+- `api/run_platform/domain.py`：九状态、四终态和完整合法转换表；
+- `api/run_platform/schemas.py`：九字段 v2 envelope 与 `message.delta` data 的 strict schema；
+- `api/run_platform/events.py`：按 `seq` 的纯投影、identity 稳定、terminal 不可追加；
+- `api/run_platform/protocol/generated/`：两份由 Pydantic 真源生成并可 `--check` 的 JSON Schema。
+
+仍未实现且不得宣称具备：
+
+- `/api/v2/runs` 路由、PostgreSQL Run/Event/Outbox 表、dispatcher、worker claim、WS/SSE gateway；
+- EIM/Channel/SDK 的 Principal 或 workload 映射、团队角色策略、OIDC provider-subject 绑定；
 - 不改变当前 Channel v1 SSE wire；
-- 不启动 CHN-O14 的代码实现，也不宣称已有 durable recovery；
+- 不启动 CHN-O14 的接入，也不宣称已有 durable recovery；
 - 后续任何实现阶段必须在 [ROADMAP](ROADMAP.md) 记账，并在改变上述不变量前新增或修订
   [DECISIONS](DECISIONS.md) 中的 ADR。
 

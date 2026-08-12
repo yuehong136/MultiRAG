@@ -1,6 +1,6 @@
 # Run Platform v2 契约
 
-> 状态：F0 规范草案，**路由、表和事件尚未实现**
+> 状态：RUN-F1a 进行中；v2 envelope、`message.delta` schema 与纯 reducer 已落地，**路由、表、投递和远程事件服务尚未实现**
 > 目标前缀：`/api/v2/runs`
 > 当前 v1 仍以代码和 [Channel CONTRACT](../channel-program/CONTRACT.md) 为准
 
@@ -100,7 +100,7 @@ Location: /api/v2/runs/run_...
     "id": "run_...",
     "status": "queued",
     "desired_state": "running",
-    "version": 1,
+    "version": 2,
     "last_event_seq": 2,
     "thread_id": "thread_...",
     "turn_id": "turn_...",
@@ -167,6 +167,7 @@ snapshot 是当前聚合，不代替事件日志。客户端先按事件 reducer
 - `v` 是整数常量 `2`；不兼容协议必须使用新 major，不能改变 `v: 2` 既有字段含义；
 - `thread_id` 与 `turn_id` 由服务端在接受 Run 时解析或分配，同一 Run 内保持不变；
 - `seq` 由 PostgreSQL 为单 Run 分配，严格递增且已提交序列无空洞；
+- 每个 Run 的首个已提交 `seq` 固定为 `1`，首事件固定为 `run.accepted`；
 - `created_at` 是事件成为权威事实的服务端时间；排序只看 `seq`，不用时间戳排序；
 - `data` 由 `type` 对应的 JSON Schema 校验；禁止任意未验证对象穿透。
 
@@ -357,6 +358,16 @@ Run Platform 不定义 Principal 如何产生，也不签发 MCP token；它依�
 [企业身份与 MCP](../enterprise-identity-mcp/README.md) 的 canonical identity 和 authorization ports。
 身份依赖未满足时 fail closed，不能把 fixed service header 当用户委托。
 
+Run-facing service 未来只消费 EIM 冻结并由认证依赖构造的 `AuthenticatedExecutionContext`。其中
+`tenant_id`、`principal_id`、`authentication_source` 都是 opaque reference；authorization handle 或
+policy decision 也只能由 EIM/目标领域产生。Run Platform 可以持久化不可变的 tenant/principal reference
+用于所有权和审计，但每次敏感操作仍要通过授权 port 重验当前 membership/policy。以下行为禁止：
+
+- 从 API Key 文本、Channel actor、邮箱、客户端 `user_id` 或 target id 自行拼 Principal；
+- 在 Run 模块定义 owner/admin/member 的团队策略；
+- 让 Web、OIDC、SDK、Channel 通过字符串前缀共享或碰撞 execution ownership；
+- 接受 wire body 覆盖上述上下文或授权结果。
+
 ## 11. 错误契约
 
 ```json
@@ -419,6 +430,12 @@ F1 必须建立：
 - golden fixtures：正常、失败、cancel/completion race、未知 additive event、重连 gap、重复 outbox；
 - N/N-1 producer-consumer 契约测试；
 - 安全测试：跨租户枚举、伪造 principal/tenant、过期 membership、workload 越权、日志脱敏。
+
+RUN-F1a 当前只把已冻结的公共 envelope 与 `message.delta` data 变成机器 schema。
+创建请求和 snapshot 的示例继续作为语义草案：artifact/upload part、opaque ID 约束、input limits、
+target revision、terminal/output/timestamp 条件以及授权可见字段尚未冻结，不生成公开 JSON Schema。
+`message.snapshot`、interaction、terminal summary 等尚未冻结 exact `data` shape 的事件只通过 envelope
+兼容，不得因已有事件名就推断其 payload 已稳定；它们需后续 ADR/schema 评审后再进入 typed union。
 
 协议 major 升级必须新增 Run ADR 和独立 endpoint/media negotiation；不得在相同 `2.x` envelope 中
 改变已有字段含义。

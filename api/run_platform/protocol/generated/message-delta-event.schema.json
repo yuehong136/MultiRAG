@@ -1,0 +1,80 @@
+{
+  "$defs": {
+    "MessageDeltaData": {
+      "additionalProperties": false,
+      "properties": {
+        "delta": {
+          "title": "Delta",
+          "type": "string"
+        },
+        "part_id": {
+          "title": "Part Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "part_id",
+        "delta"
+      ],
+      "title": "MessageDeltaData",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The concrete message.delta envelope frozen by RUN-F1a.",
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "data": {
+      "$ref": "#/$defs/MessageDeltaData"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "seq": {
+      "minimum": 1,
+      "title": "Seq",
+      "type": "integer"
+    },
+    "thread_id": {
+      "title": "Thread Id",
+      "type": "string"
+    },
+    "turn_id": {
+      "title": "Turn Id",
+      "type": "string"
+    },
+    "type": {
+      "const": "message.delta",
+      "title": "Type",
+      "type": "string"
+    },
+    "v": {
+      "const": 2,
+      "title": "V",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "v",
+    "event_id",
+    "run_id",
+    "thread_id",
+    "turn_id",
+    "seq",
+    "type",
+    "created_at",
+    "data"
+  ],
+  "title": "MessageDeltaEvent",
+  "type": "object"
+}

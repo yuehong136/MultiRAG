@@ -19,6 +19,7 @@
 | [RUN-ADR-10](#run-adr-10--依赖版本使用受支持稳定通道) | 依赖版本使用受支持稳定通道 | 采纳，目标态 |
 | [RUN-ADR-11](#run-adr-11--多-run-websocket-为首选企业代理阻断时回退-sse) | 多 Run WebSocket 首选，代理阻断时回退 SSE | 采纳，目标态 |
 | [RUN-ADR-12](#run-adr-12--公共消息事件使用-message-命名) | 公共消息事件使用 `message.*` 命名 | 采纳，目标态 |
+| [RUN-ADR-13](#run-adr-13--run-platform-只消费身份上下文不构造身份语义) | Run Platform 只消费身份上下文，不构造身份语义 | 采纳，RUN-F1 起生效 |
 
 ## RUN-ADR-01 · Run Platform 独占远程运行契约
 
@@ -266,3 +267,30 @@ VPN 或安全网关可能拒绝 WebSocket upgrade。传输差异不能改变事�
 **决策**：首期公共文本事件固定为 `message.delta` 和权威 `message.snapshot`。Runner 内部可以使用 output/chunk 等实现术语，但不得进入公共 Schema。只有可替代的 delta/progress 可以合并；终态、tool-call 和 approval/interaction 生命周期事件不得合并、采样或丢弃。
 
 **后果**：公共协议与批准示例一致；v1 adapter 显式将 `message.delta` / `message.snapshot + run.completed` 投影为旧 `message_delta` / `message_completed`。
+
+---
+
+## RUN-ADR-13 · Run Platform 只消费身份上下文，不构造身份语义
+
+**日期**：2026-08-13
+**状态**：采纳，RUN-F1 起生效
+
+**背景**：Run 会被 Web、OIDC、SDK、Channel workload 和内部服务调用，但这些入口的认证保证、active
+tenant、service identity、外部 actor 绑定和团队角色属于 EIM/Channel/目标领域。若 Run/客户端工程先行
+发明 `sdk-tenant:*`、target-derived workload Principal 或 owner/admin/member 规则，会与并行身份工程形成
+第二真相源。
+
+**决策**：Run Platform 的 wire 永不接受可信 tenant/principal/policy 字段；service 层未来只消费由 EIM
+稳定 port 产出的 authenticated execution context 和授权结果。Run 只拥有自身的 immutable owner reference、
+状态机和授权调用点，不拥有 Principal 构造、credential 映射、membership 语义或 Channel candidate capability。
+EIM port 未冻结时，RUN-F1 只实现纯协议/状态机；涉及身份的 API 与 cancel policy 保持未实现并 fail closed。
+
+**否决**：
+
+- 从 API Key、邮箱、Channel actor、target id 或客户端 `user_id` 派生 Principal；
+- 用字符串命名约定模拟 service/workload identity；
+- 在 Run 模块复制团队角色和资源授权规则；
+- 为赶进度把 Channel candidate token 固化为公共 Run 协议。
+
+**后果**：RUN-F5 必须等待 EIM 的 canonical context/authorization port；纯领域与 schema 工作可独立推进。
+跨入口是否共享 execution ownership 由身份契约决定，不由客户端或 Run 项目猜测。

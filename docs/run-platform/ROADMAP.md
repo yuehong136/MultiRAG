@@ -1,6 +1,6 @@
 # Run Platform 路线图
 
-> 状态：F0 文档基线
+> 状态：F0 已完成；RUN-F1a 进行中
 > 最后更新：2026-08-13
 > 说明：工作量为工程估算，不是承诺日期；实施前必须按当前代码、依赖和环境重新校准
 
@@ -22,7 +22,7 @@
 | ID | 阶段 | 状态 | 估算 | 核心交付 |
 |---|---|---:|---:|---|
 | RUN-F0 | 架构/契约/ADR 基线 | ✅ 完成（2026-08-13） | 后端 2–3 人日 | 本目录五份权威文档 + README 入口；两仓 F0 总计 4–6 人日 |
-| RUN-F1 | 机器契约与领域骨架 | ⬜ | 6–8 人日 | canonical schema、状态 reducer、生成类型、依赖边界 |
+| RUN-F1 | 机器契约与领域骨架 | 🔵 进行中（2026-08-13） | 6–8 人日 | F1a Python schema/reducer/JSON Schema 已落；完整事件 data、TS 生成/消费与 N/N-1 fixture 待完成 |
 | RUN-F2 | PostgreSQL ledger + outbox | ⬜ | 10–14 人日 | additive migration、Run/event/dedup/outbox、CAS |
 | RUN-F3 | Dispatcher + Valkey Streams | ⬜ | 7–10 人日 | transactional outbox publisher、去重、backpressure、对账 |
 | RUN-F4 | Worker claim 与 target adapter | ⬜ | 11–16 人日 | lease/fence、Dialog 首适配、四终态、崩溃收口 |
@@ -71,6 +71,15 @@
 - 纯领域 transition reducer、idempotency digest、event envelope；
 - import-linter/架构测试确保 protocol 不依赖 route/DB/Valkey/Channel；
 - feature flag 默认关闭。
+
+当前切片（RUN-F1a，2026-08-13）：`domain.py/schemas.py/events.py`、两份生成 JSON Schema、schema
+drift 检查、合法/非法转换与 envelope/replay 单测已落地；没有路由、migration、worker、配置或生产流量。
+只冻结文档已有 exact shape 的 envelope 与 `message.delta`，没有猜创建请求、snapshot、interaction、
+terminal summary 或 `message.snapshot` 的 wire ABI。身份依赖只记录为 EIM 前置，未实现 SDK service principal、
+Channel workload 或 tenant role 推导。
+
+剩余：其余核心 event data 的 ADR/schema、OpenAPI 组合、TypeScript 生成物与 Web 只读 golden consumer、
+N/N-1 additive fixtures、默认关闭的 composition flag。上述证据齐全前不得把 RUN-F1 标为完成。
 
 验收：
 

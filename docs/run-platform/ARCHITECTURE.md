@@ -1,6 +1,6 @@
 # Run Platform 架构
 
-> 状态：F0 目标架构；除“当前 v1”小节外均未实现
+> 状态：F0 已完成，RUN-F1a 纯协议/状态核心进行中；除当前 v1 与文中明确列出的 F1a 切片外，其余仍是目标架构
 > 权威入口：[README](README.md)
 > API/事件细节：[CONTRACT](CONTRACT.md)
 
@@ -232,6 +232,7 @@ stateDiagram-v2
     running --> interrupted: crash / unknown outcome / unsafe resume
     cancel_requested --> completed: completion committed before cancel CAS
     cancel_requested --> failed: failure committed before cancel CAS
+    cancel_requested --> interrupted: worker crash / outcome unknown
 
     completed --> [*]
     failed --> [*]
@@ -239,7 +240,7 @@ stateDiagram-v2
     interrupted --> [*]
 ```
 
-`accepted`、`queued` 是否在首期合并为一个物理状态由 F1 决定，但对外事件语义保持清晰。核心规则：
+RUN-F1a 已冻结分离的 `accepted`、`queued` 领域状态与对应对外事件；未来物理存储可以优化，但不得合并公共语义。核心规则：
 
 - 每次迁移使用 `WHERE run_id=? AND version=? AND status IN (...)` 的 CAS；
 - 状态、`version`、对应 `RunEvent` 和 `RunOutbox` 同事务提交；
@@ -360,6 +361,10 @@ multirag/
 ```
 
 依赖方向为 route → service → domain ports；repository/outbox/stream/authorization/runners 向内实现 ports。`schemas.py` 不依赖 Channel Provider 或 Web/Desktop 源码，生成客户端只能单向消费它。
+
+截至 2026-08-13，只有 `domain.py`、`schemas.py`、`events.py` 与生成 JSON Schema 的 RUN-F1a
+切片已落地；图中的 service/repository/outbox/stream/authorization/runners/route 均仍是目标目录。
+Run 的 authorization port 只消费 EIM 产出的认证上下文，不负责构造 SDK、Channel、OIDC 或团队角色语义。
 
 禁止：
 
