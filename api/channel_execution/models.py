@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 TargetType = Literal["multirag.canvas_agent", "multirag.dialog"]
 ExecutionOperation = Literal["message", "regenerate"]
@@ -35,6 +35,53 @@ class ChannelMessage(BaseModel):
     content: str = Field(min_length=1, max_length=4000)
 
 
+class ExternalIdentityIdentifier(BaseModel):
+    """One bounded, untrusted identifier supplied by a Channel adapter."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: str = Field(min_length=1, max_length=64)
+    value: str = Field(min_length=1, max_length=255, repr=False)
+
+    @model_validator(mode="after")
+    def reject_blank_text(self) -> ExternalIdentityIdentifier:
+        if not self.kind.strip() or self.kind != self.kind.strip() or not self.value.strip() or self.value != self.value.strip():
+            raise ValueError("external identity identifier cannot be blank")
+        return self
+
+
+class ExternalIdentityAssertion(BaseModel):
+    """Structured Provider identity material that is not yet a Principal."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: str = Field(min_length=1, max_length=64)
+    provider_tenant_key: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=255,
+        repr=False,
+    )
+    identifiers: tuple[ExternalIdentityIdentifier, ...] = Field(
+        min_length=1,
+        max_length=8,
+        repr=False,
+    )
+
+    @model_validator(mode="after")
+    def validate_identity_material(self) -> ExternalIdentityAssertion:
+        if (
+            not self.provider.strip()
+            or self.provider != self.provider.strip()
+            or (self.provider_tenant_key is not None and (not self.provider_tenant_key.strip() or self.provider_tenant_key != self.provider_tenant_key.strip()))
+        ):
+            raise ValueError("external identity assertion cannot be blank")
+        kinds = [identifier.kind for identifier in self.identifiers]
+        if len(kinds) != len(set(kinds)):
+            raise ValueError("external identity identifier kinds must be unique")
+        return self
+
+
 class ChannelActor(BaseModel):
     """Untrusted external identity assertions supplied by a Channel adapter."""
 
@@ -43,6 +90,17 @@ class ChannelActor(BaseModel):
     provider: str = Field(min_length=1, max_length=64)
     subject: str = Field(min_length=1, max_length=255)
     conversation: str = Field(min_length=1, max_length=255)
+    identity: ExternalIdentityAssertion | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        repr=False,
+    )
+
+    @model_validator(mode="after")
+    def validate_identity_provider(self) -> ChannelActor:
+        if self.identity is not None and self.identity.provider != self.provider:
+            raise ValueError("structured identity provider must match legacy actor provider")
+        return self
 
 
 class ChannelExecutionCommand(BaseModel):

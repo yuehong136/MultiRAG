@@ -196,8 +196,8 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 | CHN-X2 | `channel-api/vN` 版本标记落地 + web 侧 5 行断言（唯一的工具预算） | ✅ | `web:src/api/__tests__/channel.test.ts` |
 | CHN-X3 | 端到端联调验收：钉钉注册后，CHN-P7 那次构建出来的前端不重新部署就能渲染并保存 | ✅ | — |
 | CHN-X4 | ⏸ Go 侧 channel。**不做**——JSON 形状本身就是缝，且已被下面的规则版本化 | ⏸ | — |
-| CHN-X5 | private command **tolerate** 结构化 `ExternalIdentityAssertion`，保持旧 payload 逐字节不变并继续读 legacy `subject` | ⬜ | [EIM-C1](../enterprise-identity-mcp/ROADMAP.md) |
-| CHN-X6 | 飞书 worker **emit** `tenant_key` 与全部类型化用户 ID；resolver 继续兼容 legacy | ⬜ | CHN-X5；[EIM-C2](../enterprise-identity-mcp/ROADMAP.md) |
+| CHN-X5 | private command **tolerate** 结构化 `ExternalIdentityAssertion`，保持旧 payload 逐字节不变并继续读 legacy `subject` | 🔵 | `api/channel_execution/models.py::{ExternalIdentityIdentifier,ExternalIdentityAssertion,ChannelActor}`、`tests/unit/test_channel_identity_assertion.py`、[EIM-C1](../enterprise-identity-mcp/ROADMAP.md) |
+| CHN-X6 | 飞书 worker **emit** `tenant_key` 与全部类型化用户 ID；execution 仍不消费 identity 并保留 legacy 字段 | ⬜ | CHN-X5；[EIM-C2](../enterprise-identity-mcp/ROADMAP.md) |
 | CHN-X7 | execution resolver 只把 IdentityService 已验证主体提升为 Principal；外部 subject 永不直通 | ⬜ | CHN-X6、EIM-I6、EIM-P1；[EIM-C3](../enterprise-identity-mcp/ROADMAP.md) |
 | CHN-X8 | 全部 runner 浸泡并有部署证据后，删除 legacy `ChannelActor.subject` | ⬜ | CHN-X7；[EIM-C4](../enterprise-identity-mcp/ROADMAP.md) |
 | CHN-X9 | 不改现有 execution SSE wire，以加法暴露 async event stream 与 transport-neutral ReplySession，兼容 `ask()`/纯文本 Provider 行为 | ✅ | `api/channels/runtime_client.py::MultiRAGBindingExecutionClient.stream`、`api/channels/execution_events.py`、`api/channels/core/base.py::ReplySession`、`api/channels/reply_session.py::BufferedReplySession`、`api/channels/binding_bridge.py::BindingBridge`；[EIM-U0](../enterprise-identity-mcp/ROADMAP.md)、[UX §4](../enterprise-identity-mcp/FEISHU_BOT_UX.md#4-transport-neutral-契约) |
@@ -208,6 +208,20 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 | CHN-X14 | RAGFlow Canvas/Agent/Channel 上游对齐审计：Channel 稳定且用户恢复从约 4 月 24 日上游基线逐 commit 跟进时启动；固定版本三层语义，随正常同步分类“直接跟进 / 语义移植 / 适配层吸收 / 暂不采纳”，判断 no-store 或 checkpoint 执行缝；只读审计，不预设重构结论 | ⏸ | 触发条件未满足；[CHN-ADR-08](DECISIONS.md#chn-adr-08--canvas-与-channel-演进以上游同步为主只在适配层吸收现代执行不变量)、[EIM-F5](../enterprise-identity-mcp/ROADMAP.md) |
 | CHN-X15 | MCP InteractionSession 的飞书 renderer：结束流式卡片后按批准 schema 渲染 Card JSON 2.0 form，复杂/凭据流程转 H5 URL mode；callback 只规范化 `form_value`、验证 operator、持久化响应、幂等 claim 当前 revision、快速 ACK 并异步恢复工具调用。卡片只携带 opaque action ID/nonce，不携带 `requestState`、Principal、scope 或工具参数 | ⬜ | CHN-U8、CHN-U9、CHN-X7、EIM-U14；[EIM-U15](../enterprise-identity-mcp/ROADMAP.md)、[UX §8.2](../enterprise-identity-mcp/FEISHU_BOT_UX.md#82-mcp-结构化表单与-h5url-elicitation) |
 | CHN-X16 | 企业身份 ownership 漂移门禁：Channel 已有关联 Provider Account 时，普通 PATCH 只允许同账号密钥轮换，拒绝替换 provider account；DELETE 稳定拒绝并引导 disable。Channel 行锁后按 tenant/channel 锁读 Link 与 Account，不依赖通用 FK 异常 | ✅ | EIM-I2.1；`api/channel_control/repository.py::get_linked_identity_provider_account`、`service.py::ChannelIdentityOwnershipLocked` |
+
+---
+
+**CHN-X5 当前半态**：源码只改 private API consumer。`ChannelActor.identity` 可选，旧
+`provider/subject/conversation` 仍必填，缺 identity 的 dump 不新增 null；runtime client/worker 未
+emit，resolver 不 consume，C2/X6、C3/X7、C4/X8 均未开始。authority 字段与
+`app_id/provider_account_key` 夹带由 `extra="forbid"` 拒绝，服务端 binding ownership 不从 assertion
+读取。这不是公开前后端契约，`channel-api/v1` 不 bump、web 无改动。隔离于 `HEAD a0581f2f`、只应用
+C1 13 条路径的等价完整 `make verify` 已全绿（Ruff format 1242 files、Ruff check、7 条 import
+contracts / 832 files / 2611 dependencies、async DB gate、mypy 81 source files、unit **2223 passed in
+32.28s**），C1 三文件定向 **74 passed in 12.94s**。当前运行旧 API 的通用 smoke 也通过
+（ping/healthz 200，db/chat/db_pool/redis/doc_engine/storage 全部 ok），但只能证明既有健康状态。
+唯一仍缺旧 worker -> 新 API 混合版本活体，需要用户批准后重启 API；因此 X5 保持 `🔵`，不能宣称
+deployed，也不能提前启动 X6。
 
 ---
 
@@ -731,6 +745,7 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 
 | 日期 | 变更 | 提交 | 记录人 |
 |---|---|---|---|
+| 2026-08-13 | **CHN-X5 / EIM-C1 consumer/tolerate 本地验收完成，部署闸门未过。** private command 可选接受 bounded structured assertion，同时保持 legacy 三字段必填、旧 request bytes 不变；nested extra-forbid 拒绝 authority 夹带，resolver 不 consume，worker 不 emit，公开 `channel-api/v1` 不变。任务继续 `🔵`，X6 不启动 | 本次提交（进行中）；隔离 `HEAD a0581f2f` + C1 13 路径等价 `make verify` 全绿（unit **2223 passed in 32.28s**，全部静态门禁绿）；C1 三文件 **74 passed in 12.94s**；当前旧 API 通用 smoke PASS（ping/healthz 200、六组件 ok），但不是 C1 部署证据；唯一缺旧 worker -> 新 API 混合版本活体，需用户批准重启 API | Codex |
 | 2026-08-05 | 文档集建立。审计结论收敛为 CHN-S/U/P/O/X 五族共 40 个条目；`.gitignore:232` 由裸 `docs` 改为 `docs/*` + 白名单。**验证**：`git check-ignore -v docs/channel-program/README.md` 返回空（exit 1 = 未被忽略）、`docs/feishu-multitenant/PROGRESS.md` 仍命中 `.gitignore:235:docs/*`、`git ls-files docs` 仍只有既有的 `references/http_api_reference.md`、`git status --untracked-files=all docs/` 列出 4 个新文件 | cdc09928 | Claude |
 | 2026-08-05 | **记录 `tests/unit` 先天失败基线**（见下方专节）。实测 `PYTHONUTF8=1 uv run --no-sync pytest tests/unit -q`：**6 failed / 1486 passed / 761.94s** | — | Claude |
 | 2026-08-05 | **CHN-X1 完成**：读完 `web:src/api/__tests__/channel.test.ts` 全部 **11 条**（不是 10 条）断言，逐条反推出 CONTRACT v1——端点清单、写请求形状、凭据写入语义、状态词表、错误信封。标出 **3 条编码了错误行为的断言**（§6）：`:68` 的测试名 `'…for the Feishu form only'` 把飞书特例固化成期望、`:219`/`:252` 的 `putCalled === false` 把「绑定修改必须塞进 PATCH」固化、`:251` 的 `enabled` 取自可能陈旧 5 分钟的缓存。运行时错误码表**不手抄**——用 grep 实测枚举出 12 个，命令写进 §4.2 供重跑（这条是评审明确指出手抄码表必漏而改的） | — | Claude |

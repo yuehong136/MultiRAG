@@ -1,6 +1,6 @@
 # Channel 前后端契约
 
-> **契约版本**：`channel-api/v1` · **最后变更**：2026-08-10 · **变更提交**：见文末变更日志
+> **契约版本**：`channel-api/v1` · **最后变更**：2026-08-13 · **变更提交**：见文末变更日志
 >
 > 本文件是 channel 前后端接口的**唯一真源**。前端仓不得保存第二份契约描述。
 > 契约变更 = 改本文件 + 在本文件末尾的变更日志追加一行
@@ -85,6 +85,55 @@ worker 使用，不属于前端 `channel-api/v1`。它沿用 workload bearer tok
   worker 忽略未来新增字段，以允许服务端做加法演进，删除或改变既有字段语义则必须升级端点版本。
 - `regenerate` 与 action retry 在 `POST .../executions` claim event 前再次按 Target 和 RunPolicy 授权；
   拒绝产生 SSE `execution_failed(error_code="CHANNEL_OPERATION_NOT_ALLOWED")`，且不占用 event claim。
+
+### 1.2 私有 execution command 身份兼容态（EIM-C1 / CHN-X5）
+
+`POST /api/v1/internal/channel-bindings/{binding_id}/executions` 只供 binding-scoped managed worker
+使用，不属于前端 `channel-api/v1`。C1 的 consumer/tolerate 半步只在既有 `actor` 上增加可选
+`identity`：
+
+```jsonc
+{
+  "event_id": "evt_opaque",
+  "conversation_key": "provider-scoped-opaque-key",
+  "message": {"type": "text", "content": "hello"},
+  "actor": {
+    "provider": "feishu",             // legacy，仍必填
+    "subject": "ou_legacy",           // legacy，仍必填且仍是当前兼容输入
+    "conversation": "oc_legacy",      // legacy，仍必填
+    "identity": {                      // C1 新增，可选；不是 Principal
+      "provider": "feishu",
+      "provider_tenant_key": "tenant_external",
+      "identifiers": [
+        {"kind": "open_id", "value": "ou_external"},
+        {"kind": "user_id", "value": "user_external"},
+        {"kind": "union_id", "value": "on_external"}
+      ]
+    }
+  }
+}
+```
+
+当前兼容规则：
+
+- `actor.provider/subject/conversation` 仍全部必填；有 `identity` 不能替代任何 legacy 字段。
+- `identity.provider` 必须与 legacy `actor.provider` 相同；identifier 的 `kind/value` 必须非空、
+  无首尾空白，kind 在同一 assertion 内唯一。未知但有界的 kind 可被 tolerate，留给后续 Provider
+  resolver 解释，不能自动成为 canonical subject。
+- 所有模型保持 `extra="forbid"`。`tenant_id`、target/revision/session、`principal_id`、role、scopes、
+  audience、confirmation、access token、`app_id` 或 `provider_account_key` 无论放在 actor、identity
+  还是 identifier 中都不被接受；`app_id`/Provider Account 只从服务端 binding ownership 取得。
+- identity 缺失时，旧 actor 的 `model_dump(mode="json")` 与 C1 前逐字段相同，不新增
+  `"identity": null`。当前 `api/channels/runtime_client.py` 也仍只发送旧三字段，C2 尚未 emit。
+- execution resolver 在 C1 不读取 structured identity；Tenant、目标和版本仍只由 workload credential
+  与服务端 binding 决定，当前 execution owner 行为保持 C1 前不变且绝不取自 assertion。C3 前不得把
+  assertion 或 legacy subject 提升为 MultiRAG Principal。
+
+因此这是一条 private API 的向后兼容加法，公开 `channel-api/v1` 不 bump，web 仓无字段或部署义务。
+C1 当前仍为 `🔵`：隔离于 `HEAD a0581f2f`、只应用 C1 13 条路径的等价完整 `make verify`
+已经全绿，C1 三文件定向也全绿。当前运行 API 的通用 `make smoke` 通过，但该进程没有加载 C1，
+所以 smoke 只证明既有 ping/healthz，不是新 private DTO 的部署证据。唯一仍缺的是旧 worker -> 新 API
+混合版本活体；在用户批准并按顺序重启 API、完成该证据前，不能宣称 tolerate 已部署。
 
 ---
 
@@ -360,3 +409,4 @@ JSON Schema（`config_schema`）仅用于服务端请求校验与 OpenAPI，**�
 | 2026-08-06 | v1（加法，不 bump） | 新增 `POST /chat-channels/{id}/verify`（CHN-O6）与五个错误码（§4.1）。**向后兼容**：新端点，老前端不调用即可；错误码只出现在这条新路径上，其它端点的信封一个字节没动。§7 那条「保存前无法验证凭据」的空白随之收窄——**只**收窄到「已保存的渠道」，创建表单里的即时试连仍然不做，理由写在 §1 与 §7 | 本次提交 |
 | 2026-08-06 | v1（消费侧，线格未变） | 前端接上了 `POST /{id}/verify`（CHN-O13）：五个错误码进 `CHANNEL_ERROR_CODES` + 两份 locale，编辑抽屉页脚出现「测试连接」。§1 的「尚未接入」随之改成 `channelAPI.verify`。契约本身一个字节没动。前端多了一个纯函数 `channelVerifyFailure`，把 `CHANNEL_CREDENTIAL_REJECTED` 与 `CHANNEL_VERIFICATION_UNAVAILABLE` 分成两种结局并由测试钉住——§1 里「必须分开渲染」那条从此有断言撑着，不只是一句叮嘱 | web `ea0e5af` |
 | 2026-08-10 | v1（公开 manifest 加法 + 私有端点加法，不 bump） | Provider capabilities 增加渐进式、交互、取消、反馈与 threading 声明；新增 generation-scoped `execution-capabilities` 私有 preflight。旧前端忽略 manifest 新键；旧 API 时新 worker 降级为 buffered/无操作，不修改 `RuntimeBindingConfig` 或 execution SSE wire（EIM-U11 / CHN-X13） | 本次提交 |
+| 2026-08-13 | v1（仅 private command tolerate，不 bump） | `ChannelActor` 可选接受有界、extra-forbid 的 `ExternalIdentityAssertion`（EIM-C1 / CHN-X5）；legacy 三字段仍必填且旧 dump 不新增 null，worker/resolver 均未 emit/consume。公开 Channel API 与 web 契约零变化；隔离等价完整 `make verify` 与 C1 定向全绿，当前旧 API 的通用 smoke 通过但不算 C1 部署；唯一待回填为旧 worker -> 新 API 混合版本活体 | 本次提交（进行中） |

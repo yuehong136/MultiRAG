@@ -15,7 +15,14 @@ from api.channel_execution.dependencies import (
     get_channel_execution_service,
     require_channel_workload,
 )
-from api.channel_execution.models import ChannelExecutionCommand, ExecutionEvent, WorkloadIdentity
+from api.channel_execution.models import (
+    ChannelActor,
+    ChannelExecutionCommand,
+    ExecutionEvent,
+    ExternalIdentityAssertion,
+    ExternalIdentityIdentifier,
+    WorkloadIdentity,
+)
 from api.channel_runtime.tokens import derive_binding_workload_token
 
 
@@ -48,6 +55,18 @@ def _payload() -> dict[str, object]:
         "conversation_key": "feishu:chat:user",
         "message": {"type": "text", "content": "hello"},
         "actor": {"provider": "feishu", "subject": "ou-1", "conversation": "oc-1"},
+    }
+
+
+def _structured_identity() -> dict[str, object]:
+    return {
+        "provider": "feishu",
+        "provider_tenant_key": "tenant-external",
+        "identifiers": [
+            {"kind": "open_id", "value": "ou-external"},
+            {"kind": "user_id", "value": "user-external"},
+            {"kind": "union_id", "value": "on-external"},
+        ],
     }
 
 
@@ -100,6 +119,289 @@ def test_internal_route_returns_only_sanitized_sse_contract(client) -> None:
     assert 'data:{"event":"message_completed","content":"authoritative ##0$$ answer","session_id":"session-1"}' in response.text
     assert "data:[DONE]" in response.text
     assert "trace" not in response.text
+
+
+def test_internal_route_tolerates_structured_identity_but_keeps_legacy_actor_authoritative(client) -> None:
+    class _ToleratingRouteService(_RouteService):
+        async def execute(
+            self,
+            *,
+            binding_id: str,
+            workload: WorkloadIdentity,
+            command: ChannelExecutionCommand,
+        ) -> AsyncIterator[ExecutionEvent]:
+            assert command.actor.subject == "ou-1"
+            assert command.actor.identity == ExternalIdentityAssertion(
+                provider="feishu",
+                provider_tenant_key="tenant-external",
+                identifiers=(
+                    ExternalIdentityIdentifier(kind="open_id", value="ou-external"),
+                    ExternalIdentityIdentifier(kind="user_id", value="user-external"),
+                    ExternalIdentityIdentifier(kind="union_id", value="on-external"),
+                ),
+            )
+            return await super().execute(
+                binding_id=binding_id,
+                workload=workload,
+                command=command,
+            )
+
+    client.app.dependency_overrides[require_channel_workload] = lambda: WorkloadIdentity(subject="runner-unit")
+    client.app.dependency_overrides[get_channel_execution_service] = lambda: _ToleratingRouteService()
+    payload = _payload()
+    payload["actor"] = {**payload["actor"], "identity": _structured_identity()}
+
+    response = client.post(
+        "/api/v1/internal/channel-bindings/binding-1/executions",
+        headers={"Idempotency-Key": "evt-1"},
+        json=payload,
+    )
+
+    assert response.status_code == 200
+
+
+def test_legacy_actor_dump_does_not_gain_an_identity_null_field() -> None:
+    actor = ChannelActor(provider="feishu", subject="ou-1", conversation="oc-1")
+
+    assert actor.model_dump(mode="json") == {
+        "provider": "feishu",
+        "subject": "ou-1",
+        "conversation": "oc-1",
+    }
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        {
+            **_structured_identity(),
+            "tenant_id": "attacker-selected-tenant",
+        },
+        {
+            **_structured_identity(),
+            "provider_account_key": "attacker-selected-app",
+        },
+        {
+            **_structured_identity(),
+            "app_id": "attacker-selected-app",
+        },
+        {
+            **_structured_identity(),
+            "principal_id": "attacker-selected-principal",
+        },
+        {
+            **_structured_identity(),
+            "role": "owner",
+        },
+        {
+            **_structured_identity(),
+            "scopes": ["admin"],
+        },
+        {
+            **_structured_identity(),
+            "audience": "internal-resource",
+        },
+        {
+            **_structured_identity(),
+            "confirmed": True,
+        },
+        {
+            **_structured_identity(),
+            "access_token": "attacker-token",
+        },
+        {
+            **_structured_identity(),
+            "identifiers": [
+                {
+                    "kind": "open_id",
+                    "value": "ou-external",
+                    "tenant_id": "attacker-selected-tenant",
+                }
+            ],
+        },
+        {
+            **_structured_identity(),
+            "identifiers": [
+                {"kind": "open_id", "value": "ou-one"},
+                {"kind": "open_id", "value": "ou-two"},
+            ],
+        },
+        {
+            **_structured_identity(),
+            "identifiers": [
+                {"kind": "open_id", "value": "ou-one"},
+                {"kind": "open_id ", "value": "ou-two"},
+            ],
+        },
+        {
+            **_structured_identity(),
+            "identifiers": [],
+        },
+        {
+            **_structured_identity(),
+            "identifiers": [{"kind": f"provider_id_{index}", "value": f"external-{index}"} for index in range(9)],
+        },
+        {
+            **_structured_identity(),
+            "identifiers": [{"kind": "k" * 65, "value": "external"}],
+        },
+        {
+            **_structured_identity(),
+            "identifiers": [{"kind": "open_id", "value": "v" * 256}],
+        },
+        {
+            **_structured_identity(),
+            "provider": "p" * 65,
+        },
+        {
+            **_structured_identity(),
+            "provider_tenant_key": "t" * 256,
+        },
+    ],
+    ids=[
+        "tenant",
+        "provider-account",
+        "app-id",
+        "principal",
+        "role",
+        "scopes",
+        "audience",
+        "confirmation",
+        "token",
+        "identifier-extra",
+        "duplicate-kind",
+        "kind-whitespace",
+        "identifiers-empty",
+        "identifiers-over-limit",
+        "kind-over-limit",
+        "value-over-limit",
+        "provider-over-limit",
+        "provider-tenant-over-limit",
+    ],
+)
+def test_internal_route_rejects_identity_authority_smuggling_and_duplicate_kinds(
+    client,
+    identity: dict[str, object],
+) -> None:
+    client.app.dependency_overrides[require_channel_workload] = lambda: WorkloadIdentity(subject="runner-unit")
+    client.app.dependency_overrides[get_channel_execution_service] = lambda: _RouteService()
+    payload = _payload()
+    payload["actor"] = {**payload["actor"], "identity": identity}
+
+    response = client.post(
+        "/api/v1/internal/channel-bindings/binding-1/executions",
+        headers={"Idempotency-Key": "evt-1"},
+        json=payload,
+    )
+
+    assert response.status_code == 422
+
+
+def test_internal_route_accepts_unknown_identifier_kind_for_later_provider_resolution(client) -> None:
+    class _UnknownKindRouteService(_RouteService):
+        async def execute(
+            self,
+            *,
+            binding_id: str,
+            workload: WorkloadIdentity,
+            command: ChannelExecutionCommand,
+        ) -> AsyncIterator[ExecutionEvent]:
+            assert command.actor.identity is not None
+            assert command.actor.identity.identifiers[0].kind == "provider_future_id"
+            return await super().execute(
+                binding_id=binding_id,
+                workload=workload,
+                command=command,
+            )
+
+    client.app.dependency_overrides[require_channel_workload] = lambda: WorkloadIdentity(subject="runner-unit")
+    client.app.dependency_overrides[get_channel_execution_service] = lambda: _UnknownKindRouteService()
+    payload = _payload()
+    payload["actor"] = {
+        **payload["actor"],
+        "identity": {
+            "provider": "feishu",
+            "identifiers": [{"kind": "provider_future_id", "value": "future-external"}],
+        },
+    }
+
+    response = client.post(
+        "/api/v1/internal/channel-bindings/binding-1/executions",
+        headers={"Idempotency-Key": "evt-1"},
+        json=payload,
+    )
+
+    assert response.status_code == 200
+
+
+def test_internal_route_rejects_mismatched_legacy_and_structured_providers(client) -> None:
+    client.app.dependency_overrides[require_channel_workload] = lambda: WorkloadIdentity(subject="runner-unit")
+    client.app.dependency_overrides[get_channel_execution_service] = lambda: _RouteService()
+    payload = _payload()
+    payload["actor"] = {
+        **payload["actor"],
+        "identity": {**_structured_identity(), "provider": "dingtalk"},
+    }
+
+    response = client.post(
+        "/api/v1/internal/channel-bindings/binding-1/executions",
+        headers={"Idempotency-Key": "evt-1"},
+        json=payload,
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "tenant_id",
+        "target_id",
+        "principal_id",
+        "provider_account_key",
+        "app_id",
+        "role",
+        "scopes",
+        "audience",
+        "confirmed",
+        "access_token",
+    ],
+)
+def test_internal_route_rejects_actor_level_authority_smuggling(
+    client,
+    field: str,
+) -> None:
+    client.app.dependency_overrides[require_channel_workload] = lambda: WorkloadIdentity(subject="runner-unit")
+    client.app.dependency_overrides[get_channel_execution_service] = lambda: _RouteService()
+    payload = _payload()
+    payload["actor"] = {**payload["actor"], field: "attacker-selected"}
+
+    response = client.post(
+        "/api/v1/internal/channel-bindings/binding-1/executions",
+        headers={"Idempotency-Key": "evt-1"},
+        json=payload,
+    )
+
+    assert response.status_code == 422
+
+
+def test_structured_identity_does_not_make_legacy_subject_optional(client) -> None:
+    client.app.dependency_overrides[require_channel_workload] = lambda: WorkloadIdentity(subject="runner-unit")
+    client.app.dependency_overrides[get_channel_execution_service] = lambda: _RouteService()
+    payload = _payload()
+    payload["actor"] = {
+        "provider": "feishu",
+        "conversation": "oc-1",
+        "identity": _structured_identity(),
+    }
+
+    response = client.post(
+        "/api/v1/internal/channel-bindings/binding-1/executions",
+        headers={"Idempotency-Key": "evt-1"},
+        json=payload,
+    )
+
+    assert response.status_code == 422
 
 
 async def test_static_bearer_authenticator_uses_constant_time_credential(monkeypatch) -> None:

@@ -373,11 +373,21 @@ F1/F3/F4/F7/F8 禁止携带身份功能。F2 只是 characterization/兼容矩�
 
 | ID | CHN ID | 仓库 | 任务 | 状态 | 依赖 | 完成条件 |
 |---|---|---|---|:---:|---|---|
-| EIM-C1 | CHN-X5 | MR | private command tolerate 新 `ExternalIdentityAssertion`，仍读 legacy subject | ⬜ | F0 | extra-forbid 兼容测试；旧 worker -> 新 API 活体通过；更新 Channel CONTRACT |
-| EIM-C2 | CHN-X6 | MR | Feishu worker emit tenant_key + 全部 ID；resolver 仍兼容 legacy | ⬜ | C1 | 新 worker -> 新 API；缺字段/重复 kind 拒绝；重启与部署证据 |
+| EIM-C1 | CHN-X5 | MR | private command tolerate 新 `ExternalIdentityAssertion`，仍读 legacy subject | 🔵 | F0 | extra-forbid 兼容测试；旧 worker -> 新 API 活体通过；更新 Channel CONTRACT |
+| EIM-C2 | CHN-X6 | MR | Feishu worker emit tenant_key + 全部 ID；execution 仍不消费 identity 并保留 legacy 字段 | ⬜ | C1 | 新 worker -> 新 API；缺字段/重复 kind 拒绝；重启与部署证据 |
 | EIM-C3 | CHN-X7 | MR | execution 调 IdentityService，把 verified user 提升为 `TrustedChannelContext.principal_id`/Principal | ⬜ | C2,I6,P1 | 外部 subject 永不直通；JIT/link/inactive 路由契约测试；端到端私聊 |
 | EIM-C4 | CHN-X8 | MR | 所有 runner 升级后删除 legacy `ChannelActor.subject` | ⬜ | C3 + deployment soak | tolerate/emit/remove 第四步；先 API 后 supervisor；日志无 extra_forbidden |
 | EIM-C5 | CHN-P14 | MR | 对官方 `lark-channel-sdk` 做 transport PoC；门禁全过才切换，失败则保留现有实现 | ⬜ | C4,F1 | 身份字段无损；公开生命周期；去重、卡片、长连接、凭据日志、回滚实测；audit 后才 strict |
+
+C1 当前源码边界是纯 consumer/tolerate：`ChannelActor.identity` 可选接受有界
+`ExternalIdentityAssertion`，legacy `provider/subject/conversation` 仍必填，旧 dump 不新增 null；
+private API 保持 `extra="forbid"` 并拒绝 Tenant/Principal/Provider Account/app_id/role/scope/token
+夹带。`runtime_client`/worker 没有 emit，resolver 不 consume，公开 `channel-api/v1` 不 bump。
+隔离于 `HEAD a0581f2f`、只应用 C1 13 条路径的等价完整 `make verify` 已全绿（unit **2223
+passed in 32.28s**，全部静态门禁绿），C1 三文件定向 **74 passed in 12.94s**。当前运行旧 API 的
+通用 smoke 也通过（ping/healthz 200、六项组件均 ok），但旧进程并未加载 C1，不能作为新 private DTO
+部署证据。唯一仍缺旧 worker -> 新 API 混合版本活体，需要用户批准后重启 API；因此 C1 保持 `🔵`，
+C2/C3/C4 不得提前启动或标记完成。
 
 ### Channel 部署硬规则
 
@@ -728,7 +738,7 @@ EIM-I3  ✅ repository + policy/service
 EIM-P1  ✅ canonical immutable Principal
 EIM-I4  ✅ I4.1 Auth live-response/阶段化错误码、adapter sandbox 与全门禁已收口
 EIM-I6  ✅ authoritative policy + digest link + atomic provisioning 已完成
-EIM-C1  ⬜ 下一条接线起点：Channel tolerate structured assertion
+EIM-C1  🔵 本地门禁全绿；尚缺旧 worker -> 新 API 混合版本活体，且未 emit/consume
 EIM-I5  ⬜ 已解锁的 enterprise-subject 并行支线（不属于 I6）
 EIM-I7  ⬜ 已解锁的 Contact-event 并行支线（I8 仍需 I6 + I7）
 ```
@@ -798,6 +808,7 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 
 | 日期 | ID | 变更 | 仓库/提交 | 验证证据 | 记录人 |
 |---|---|---|---|---|---|
+| 2026-08-13 | EIM-C1 / CHN-X5 | private execution consumer 已完成 optional structured assertion tolerate：legacy 三字段与旧 request bytes 不变，nested extra-forbid 拒绝 authority 夹带，resolver 不 consume，worker 不 emit；公开 `channel-api/v1` 不变。任务因部署闸门仍保持 `🔵` | MultiRAG / 本次提交（进行中） | 以 `HEAD a0581f2f` 为基线、只应用 C1 13 路径的隔离等价 `make verify` 全绿：Ruff format 1242 files、Ruff check、7 import contracts（832 files/2611 dependencies）、async DB gate、mypy 81 files、unit **2223 passed in 32.28s**；C1 三文件 **74 passed in 12.94s**；当前旧 API 通用 smoke PASS（ping/healthz 200、六组件 ok），但不算 C1 部署；唯一缺旧 worker -> 新 API 混合版本活体，需用户批准重启 API | Codex |
 | 2026-08-07 | EIM-F0 | 建立企业身份与 MCP 授权权威文档集；核验飞书/MCP 最新官方文档、PyPI 版本和参考仓 HEAD | MultiRAG docs / 本次提交 | 文档互链与本地路径检查；版本来源见 VERSION_BASELINE | Codex |
 | 2026-08-09 | EIM-F0 | 按当前 Channel 代码和官方/主流飞书项目重构体验路线：新增 ReplySession/渐进式回复基线，拆开 SDK、普通 UX 与敏感确认依赖，登记 U0/U4-U7 和 CHN 映射 | MultiRAG docs / 本次提交 | PyPI/官方仓 HEAD 复核；任务 ID 双向检查；相对链接和 `git diff --check` | Codex |
 | 2026-08-09 | EIM-U0 / CHN-X9 | 完成 worker 侧类型化 `message_delta/message_completed/execution_failed` 流；`stream()` 统一 command/header/HTTP/SSE/超时/完整性/session/安全错误与跨 delta reasoning 过滤，`ask()` 仅聚合同一流；BindingBridge 改为 `stream() -> ReplySession`，普通 Channel 默认 buffer，成功只发送一次，部分结果失败时丢弃并发送安全提示。未改服务端 SSE wire，未实现 CardKit/U1；`ask()` 只为迁移/回滚保留，新代码禁用，待生产调用归零且 U1 稳定后单独删除 | MultiRAG / `feat(channel): stream execution replies (EIM-U0, CHN-X9)` | 定向 `test_channel_runtime_client.py test_reply_session.py test_binding_bridge.py`: **50 passed in 0.26s**，覆盖有序 delta、DONE/非法/中断/超时/未知事件、安全码、跨片 reasoning、跨片截断、ask 单路径、ReplySession 全状态机/发送失败、Bridge 去重/reset/顺序/异常与 tombstone；`make fix`: Ruff 全绿、1175 files unchanged；`make verify`: format/Ruff、6 import contracts、async DB gate、mypy 62 files 全绿，unit **1641 passed, 1 warning in 25.60s**；`git diff --check` 通过 | Codex |

@@ -46,7 +46,10 @@ resolver 返回值都不能选择/覆盖目标 `tenant_id`。未来集团级多 
 
 ## 2. Channel 私有输入契约
 
-### 2.1 最终 DTO
+### 2.1 当前 C1 tolerate DTO 与最终 DTO
+
+EIM-C1 / CHN-X5 先只改变 private execution API 的消费侧。当前源码接受下面的兼容形状；
+`provider/subject/conversation` 仍全部必填，`identity` 只是可选的不可信材料：
 
 ```python
 from typing import Literal
@@ -67,10 +70,30 @@ class ExternalIdentityAssertion(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     provider: str = Field(min_length=1, max_length=64)
-    provider_tenant_key: str | None = Field(default=None, max_length=255)
+    provider_tenant_key: str | None = Field(default=None, min_length=1, max_length=255)
     identifiers: tuple[ExternalIdentityIdentifier, ...] = Field(min_length=1, max_length=8)
 
 
+class ChannelActor(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: str = Field(min_length=1, max_length=64)
+    subject: str = Field(min_length=1, max_length=255)
+    conversation: str = Field(min_length=1, max_length=255)
+    identity: ExternalIdentityAssertion | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+```
+
+`exclude_if` 是 C1 的 wire 兼容闸门：旧 actor 做 `model_dump(mode="json")` 时不新增
+`"identity": null`。当前 `api/channels/runtime_client.py` 仍只发送旧三字段；execution resolver
+只校验 actor provider 与服务端 binding provider 一致，不读取 `identity`，也不据此改写 Tenant、目标、
+session 或 Principal。C2 才允许 worker emit，C3 才允许经 IdentityService 验证后 consume。
+
+C4 完成、所有 runner 浸泡并具备部署证据后，目标形状才删除 legacy `subject`，收敛为：
+
+```python
 class ChannelActor(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -114,15 +137,22 @@ class ChannelActor(BaseModel):
 
 ### 2.3 兼容升级
 
-当前 `ChannelActor` 只有 `provider/subject/conversation`，且私有模型 `extra="forbid"`。必须走：
+旧 worker 只有 `provider/subject/conversation`，且私有模型 `extra="forbid"`。必须走：
 
 1. **tolerate**：API 同时接受 legacy `subject` 和新 `identity`，只读旧字段；部署 API/execution。
-2. **emit**：worker 开始发送新 `identity`，resolver 优先新字段并保留 legacy 回退；重启 supervisor/
+2. **emit**：worker 开始发送新 `identity`；execution 仍不消费它并保留 legacy 行为；重启 supervisor/
    worker，观察无 `extra_forbidden`。
-3. **use**：启用 verified resolver 和 Principal；完成活体联调。
+3. **consume**：由服务端 binding/account link 构造 ProviderContext，经 Provider verification、
+   IdentityService 与 provisioning 后，才把已验证平台用户提升为 Principal；完成活体联调。
 4. **remove**：所有 runner 已升级后删除 legacy `subject`，再次按先 API 后 worker 部署。
 
 每一步是独立 PR/任务，映射的 `CHN-*` 见 [ROADMAP](ROADMAP.md)。
+
+截至 2026-08-13，C1 源码与契约测试已在隔离 clean tree 验证：以 `HEAD a0581f2f` 为基线、只应用
+C1 13 条路径的等价完整 `make verify` 全绿，C1 三文件定向全绿。当前运行旧 API 的通用 smoke 也通过，
+但它没有加载本 DTO，不能证明 C1 已部署。任务仍保持 `🔵`，唯一缺口是用户批准重启 API 后完成
+“旧 worker -> 新 API”混合版本活体；C2/C3/C4 均未开始，不得把可解析的 assertion 描述为已验证
+身份或已上线 Principal。
 
 ### 2.4 Channel 交互契约的所有权
 

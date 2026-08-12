@@ -228,6 +228,43 @@ async def test_binding_execution_request_cannot_override_trusted_context(caplog:
 
 
 @pytest.mark.asyncio
+async def test_legacy_binding_execution_payload_is_byte_for_byte_unchanged() -> None:
+    captured: list[bytes] = []
+    sse = 'data:{"event":"message_delta","content":"answer","session_id":"session-server"}\n\ndata:{"event":"message_completed","session_id":"session-server"}\n\ndata:[DONE]\n\n'
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request.content)
+        return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = MultiRAGBindingExecutionClient(
+            base_url="http://multirag.local",
+            binding_id="binding-1",
+            binding_generation=7,
+            api_token="runtime-token",
+            client=http_client,
+        )
+        events = [
+            event
+            async for event in client.stream(
+                question="legacy question",
+                event_id="legacy-event",
+                conversation_key="legacy-conversation-key",
+                provider="feishu",
+                subject="ou-legacy",
+                conversation="oc-legacy",
+            )
+        ]
+
+    assert events[-1] == MessageCompletedEvent(session_id="session-server")
+    assert captured == [
+        b'{"event_id":"legacy-event","conversation_key":"legacy-conversation-key",'
+        b'"message":{"type":"text","content":"legacy question"},'
+        b'"actor":{"provider":"feishu","subject":"ou-legacy","conversation":"oc-legacy"}}'
+    ]
+
+
+@pytest.mark.asyncio
 async def test_binding_execution_sends_regenerate_only_for_explicit_action() -> None:
     captured: list[dict[str, object]] = []
     sse = 'data:{"event":"message_delta","content":"answer","session_id":"session-server"}\n\ndata:{"event":"message_completed","session_id":"session-server"}\n\ndata:[DONE]\n\n'

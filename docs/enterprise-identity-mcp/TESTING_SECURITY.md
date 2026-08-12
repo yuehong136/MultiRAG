@@ -71,6 +71,9 @@
 - Principal 只能由进程内 trusted adapter 经 evidence builder 构造；direct constructor 、wire DTO、
   未验证 subject、非 `RESOLVED`、非 `owner/admin/normal` membership 或带
   error/provision/reverification 的 I3 结果都不能提升；
+- C1 tolerate 期间 structured assertion 必须保持可选；legacy `provider/subject/conversation` 仍必填，
+  旧 actor 序列化不得新增 `identity:null`。resolver 必须对“无 assertion”和“有攻击者哨兵 assertion”
+  产生相同 authority context，且 worker/client 生产的旧 request body 不得变化；
 - `DIRECTORY_VERIFIED` 必须绑定 I3 identity 的原始 `verified_at`，`ENTERPRISE_VERIFIED`
   必须绑定 enterprise subject 的原始 `verified_at`；cache/请求命中不得刷新 proof 时间；
 - legacy Web/API Principal 每请求活查 active User 与恰好一条 `tenant_id == user.id` 的
@@ -100,8 +103,8 @@
 
 | 范围 | 必测内容 | 推荐测试形态 |
 |---|---|---|
-| Channel DTO | tolerate/emit/remove 各半步、`extra="forbid"`、旧/新进程组合 | Pydantic 纯测试 + private HTTP 契约测试 |
-| Feishu assertion | 保留 `open_id/user_id/union_id/tenant_key/app_id`，不再 first-nonempty | 纯函数测试 |
+| Channel DTO | tolerate/emit/consume/remove 各半步、`extra="forbid"`、旧/新进程组合；C1 必证 legacy dump/request 不变且 resolver 不消费 | Pydantic 纯测试 + private HTTP 契约测试 |
+| Feishu assertion | 保留 `open_id/user_id/union_id/tenant_key`，不再 first-nonempty；`app_id`/provider account 只取服务端 ownership，assertion 夹带必须拒绝 | 纯函数测试 |
 | F1 `lark-oapi` contract | 1.7.2 lock、平台 import 隔离、SDK 已知 idle loop、Contact V3 typed request/response | 隔离子进程 + 固定无 PII fixture；不访问真实飞书 |
 | I3 IdentityService | context/alias 结构校验、account health、无效 context 与 alias miss 区分、live membership、三态 plan、policy failure | 框架无关 async unit；只 mock lookup/policy ports |
 | I3 repository | 单 SQL authority snapshot、account generation/alias freshness、ordinary/verified/account-control/ownership 分权、CAS/锁、审计时间、输入/driver 脱敏 | `tests/integration/` 真 PostgreSQL |
@@ -125,6 +128,14 @@ MCP SDK 2/FastMCP 4 的协议运行时迁移和 `InputRequiredResult` 的 transp
 EIM-A1 已固定 token/JWKS test vectors；A7 的前置虽已满足，独立 audience/scope 和 OAuth
 Resource Server 仍未实现；InteractionSession 仍属于依赖 P3/A4/C3 的 EIM-U14。不能因
 P1 或 modern/legacy 协议测试通过就把这些安全测试标为已满足。
+
+EIM-C1 / CHN-X5 当前源码处于 tolerate 收口中：private API 可解析可选、有界、extra-forbid 的
+`ExternalIdentityAssertion`，同时保持 legacy actor 必填；runtime client/worker 未 emit，resolver 未
+consume，C2/C3/C4 均未完成。C1 必须拒绝 command/actor/assertion/identifier 任一层的 Tenant、Principal、
+Provider Account/app_id、role/scope/audience/confirmation/token 夹带，拒绝重复 kind 和 legacy/
+structured provider 不一致；未知但有界 kind 只允许保留，不产生信任。等价完整 `make verify` 和 C1
+三文件定向均已在隔离 clean tree 通过；当前运行旧 API 的通用 smoke 也通过，但不是 C1 部署证据。
+唯一仍缺旧 worker -> 新 API 混合版本活体，故任务继续为 `🔵`。
 
 EIM-F1 已以 1.7.2 contract fixture 收口，并准确区分两个 import 边界：平台 control/provider/
 verification/identity 模块导入不得加载 `lark_oapi` 或创建 event loop；显式导入官方 SDK 则允许其已知
@@ -177,7 +188,8 @@ asserted open_id match、stable user id present，以及 activated true、frozen
    binding event；另一事务安全重读。I6 不生成 EnterpriseSubjectLink。
 8. 目录接口超时且无可用缓存：拒绝首次登录；已有短期正缓存可按策略工作并打 `stale` 指标。
 9. 负缓存命中后收到 `contact.user.updated_v3`：负缓存立即失效，可重新验证。
-10. `ChannelActor.subject` 被任意伪造：在 C3 之后仍不能直接进入 `Principal.id`。
+10. C1 的 `ChannelActor.subject` 或 `identity` 被任意伪造：resolver authority 与不带 assertion 时相同；
+    在 C3 之后也只能经 Provider/IdentityService 验证，永不能直接进入 `Principal.id`。
 11. 同一 `(provider, tenant_key)` 以不同 app/account 写入另一个 MultiRAG Tenant：provider tenant
     ownership 唯一约束必须拒绝；不能因 app_id 不同而绕过首期企业单 Tenant。
 12. 同一 provider account 或 `channel_id` 换一个 Tenant/Provider 建 link：link 的两组复合外键必须
@@ -844,6 +856,31 @@ REQUIRE_SERVICES=1 uv run pytest tests/integration/test_identity_schema.py \
 完成结果为 domain/model unit **143 passed in 5.49s**，四个 identity 真 PostgreSQL 面
 **84 passed in 7.80s**。完整 `make verify` unit **2188 passed** 且静态门禁全绿；完整强制
 integration **128 passed in 16.40s**。
+
+EIM-C1 / CHN-X5 的快速回路必须同时覆盖 DTO、private HTTP 与 resolver authority 不变性：
+
+```bash
+uv run pytest tests/unit/test_channel_identity_assertion.py \
+  tests/unit/test_channel_execution_api.py \
+  tests/unit/test_channel_runtime_client.py
+make verify
+make smoke
+```
+
+定向断言至少要证明：旧 actor dump 不出现 `identity:null`；runtime client 的 legacy body 不变；新
+assertion 可解析但不能替代 legacy subject；重复 kind、Provider mismatch 与 authority 字段夹带返回
+422；有无 assertion 得到同一服务端 Tenant/target/execution owner。
+
+2026-08-13 本地证据：以 `HEAD a0581f2f` 为基线、只应用 C1 13 条路径的隔离 clean tree 执行等价
+完整 `make verify` 全绿——Ruff format **1242 files**、Ruff check、**7** 条 import contracts
+（832 files / 2611 dependencies）、async DB gate、mypy **81 source files**、unit
+**2223 passed in 32.28s**。C1 三文件定向 **74 passed in 12.94s**。当前运行 API 的通用
+`make smoke` 也为 **PASS**：ping/healthz 均 HTTP 200，db/chat/db_pool/redis/doc_engine/storage
+全部 `ok`；但该进程仍是旧 API，没有加载 C1，因此这不是新 private DTO 的部署证据。
+
+唯一仍缺的是实际运行的旧 worker 调新 API：需用户批准后重启 API，再确认请求成功、日志无
+`extra_forbidden`，且日志不含 assertion tenant key、完整 external ID、token 或请求正文。完成前
+C1/X5 保持 `🔵`，不得宣称 deployed，也不得进入 C2 emit。
 
 涉及启动、路由、JWKS 端点：启动受控服务后追加：
 

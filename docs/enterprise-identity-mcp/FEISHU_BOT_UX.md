@@ -214,7 +214,7 @@ mentions, mentioned_bot, mentioned_all
 quoted_message_id
 content type + normalized text
 attachments[]
-tenant_key/header app_id（仅作为 assertion，与服务端 binding 交叉验证）
+tenant_key；app_id/provider account 只从服务端 binding/ownership 取得，不进入 assertion
 ```
 
 不持久化或排队完整 SDK event；只提取业务需要的白名单字段。`raw` 继续默认为 `None`。

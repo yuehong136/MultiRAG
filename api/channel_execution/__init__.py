@@ -6,6 +6,8 @@ from api.channel_execution.models import (
     ChannelMessage,
     ExecutionEvent,
     ExecutionTargetRef,
+    ExternalIdentityAssertion,
+    ExternalIdentityIdentifier,
     TrustedChannelContext,
     WorkloadIdentity,
 )
@@ -19,6 +21,8 @@ __all__ = [
     "ChannelMessage",
     "ExecutionEvent",
     "ExecutionTargetRef",
+    "ExternalIdentityAssertion",
+    "ExternalIdentityIdentifier",
     "PublishedTargetExecutionService",
     "TargetExecutorRegistry",
     "TrustedChannelContext",
