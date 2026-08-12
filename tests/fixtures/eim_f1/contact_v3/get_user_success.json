@@ -1,0 +1,18 @@
+{
+  "code": 0,
+  "msg": "success",
+  "data": {
+    "user": {
+      "open_id": "ou_eim_f1_example",
+      "user_id": "u_eim_f1_example",
+      "employee_no": "EMP-EIM-F1-0001",
+      "status": {
+        "is_frozen": false,
+        "is_resigned": false,
+        "is_activated": true,
+        "is_exited": false,
+        "is_unjoin": false
+      }
+    }
+  }
+}

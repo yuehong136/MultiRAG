@@ -160,8 +160,8 @@ I3 已完成，代码锚点为 `api/identity/contracts.py`、`policy.py`、`serv
    schema 连续真库 **40 passed**；`make verify` unit **1969 passed in 28.85s** 且静态门禁全绿；
    `REQUIRE_SERVICES=1 make integration` **82 passed in 12.48s**。
 
-P1 已接续 I3 完成；具体边界见下节。`I4` 还依赖 `F1`，只能在 F1 完成后接入
-Contact Provider；`I6` 再拥有 User/UserTenant/link 的完整事务，C3 才把 Channel assertion
+P1 已接续 I3 完成；具体边界见下节。`F1` 也已完成并解锁 `I4`，但 Contact Provider 尚未实现；
+`I6` 再拥有 User/UserTenant/link 的完整事务，C3 才把 Channel assertion
 组合成 Principal。FastMCP 4 的 auth 与 tool list/call 能力仍在 MCP composition/adapter 层复用，
 不进入上述 identity domain。
 
@@ -189,7 +189,7 @@ P1 已完成，代码锚点为 `api/identity/principal.py`、`api/identity/legac
    安全复核无 blocker。
 
 P1 不交付 C3/P2、A2/P3 或 A7。A7 的代码前置已满足，但仍须作为独立 inbound
-Resource Server 实现/发布；identity 主链仍按 `F1 -> I4 -> I6 -> C3 -> P2`，`C1 -> C2`
+Resource Server 实现/发布；identity 主链从已解锁的 `I4 -> I6 -> C3 -> P2` 继续，`C1 -> C2`
 可并行。
 
 ### 4.4 外部 API 和 SDK 任务
@@ -204,6 +204,29 @@ Resource Server 实现/发布；identity 主链仍按 `F1 -> I4 -> I6 -> C3 -> P
 - 飞书流式更新必须有节流、严格 sequence、final flush、finish 和 post/text fallback；不得每个
   token 调一次 OpenAPI，也不得在 fallback 时重新执行 Agent。
 - 卡片状态只用服务端白名单；不展示 chain-of-thought、原始 tool trace、MCP 参数或底层异常。
+
+#### EIM-F1 完成边界与 I4 交接
+
+F1 已以 `pyproject.toml`/`uv.lock` 中的 `lark-oapi` 1.7.2 和
+`tests/unit/test_lark_oapi_contract.py` 完成。接手者必须保持以下精确边界：
+
+1. F1 只做官方 SDK patch 升级与可执行契约，不新增 Provider、token wrapper、cache、数据库、
+   Principal、Channel DTO 或 transport 迁移；
+2. Contact V3 fixture 固定 `user_id_type=open_id` request 与
+   `GetUserResponse/GetUserResponseBody/User/UserStatus` typed response，只使用明显虚假的测试标识；
+3. 平台 `api.channel_control`、`api.channel_providers`、`api.channels.verification`、`api.identity`
+   import 不得加载 SDK，也不得安装进程 event loop；
+4. 显式顶层导入 1.7.2 SDK 会安装其模块级 event loop，这是已知边界。测试要求它 idle、未运行、
+   无 task、无新 thread，且构造 Client 不启动后台工作；禁止把结果误写成“SDK 无 import 副作用”；
+5. 1.7.2 `TokenManager` 有进程内 cache，但 cache miss 不带 single-flight。F1 不重写官方 token 获取；
+   I4 在 Provider Account scope 上实现项目级并发折叠，并覆盖跨 account 隔离、失败恢复和过期刷新；
+6. F1 完成证据为新 contract **7 passed**、广义 Feishu/Channel 定向 **101 passed**；
+   `uv lock --check` 通过；`make verify` 的 Ruff 1222 files、7 import contracts、async DB gate、
+   mypy 73 source files 全绿，unit **2012 passed in 30.95s**；`git diff --check` 通过。
+
+F1 的 `✅` 只代表 I4 的 SDK/fixture 前置已满足；I4 仍要独立实现 Contact 调用、字段白名单、
+scope/status/error 分类、token/cache/single-flight 和可选真实 sandbox，不能把 fixture 通过当目录身份链
+已经完成。
 
 MCP Foundation 的 F2/F3/F4/F6/F7/F8 已于 2026-08-12 完成。冷启动 Agent 必须先区分下面两层：
 
@@ -343,8 +366,8 @@ git diff --check
 ```
 
 A4 定向 **201 passed**；`uv run --locked ofmcp verify` 六步全绿、**417 passed、2 existing skipped**，
-contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG I3/P1 已完成，当前可并行做
-`F1 -> I4 -> I6`、`C1 -> C2`，只有
+contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG F1/I3/P1 已完成，当前可推进
+`I4 -> I6` 和 `C1 -> C2`，只有
 `C3 -> P2` 后才能进入 A2/P3。secure 在独立远程发布闸门解除前仍不能作为远程业务入口。
 
 ### 4.8 EIM-A6 phase 1 接手与完成边界

@@ -1,7 +1,8 @@
 # 技术版本与上游基线
 
 > **基础版本核验：2026-08-07；飞书 SDK、官方文档和交互参考仓刷新：2026-08-09；
-> 对话执行、重新生成和持久化参考刷新：2026-08-10；MCP/FastMCP/扩展边界刷新：2026-08-12
+> 对话执行、重新生成和持久化参考刷新：2026-08-10；MCP/FastMCP/扩展边界刷新：2026-08-12；
+> `lark-oapi` 1.7.2 可执行契约刷新：2026-08-12
 > （Asia/Shanghai）**
 > 版本会变化。本文记录的是可复现快照和选型规则，不是“永远最新”的承诺。
 
@@ -12,7 +13,7 @@
 | 组件 | 当前仓库 | 最近核验的官方最新 | 本项目目标 | 处理方式 |
 |---|---|---|---|---|
 | Python | MultiRAG `>=3.12,<3.14`；of_mcp `>=3.12` | — | 保持各仓声明范围 | 不降级 |
-| `lark-oapi` | 声明 `>=1.7.1,<2`，lock 为 1.7.1 | **1.7.2** | `>=1.7.2,<2` | EIM-F1 独立升级 |
+| `lark-oapi` | 声明 `>=1.7.2,<2`，lock 为 **1.7.2** | **1.7.2** | 已达成 | EIM-F1 已完成；I4 再实现 Provider/cache/single-flight |
 | `lark-channel-sdk` | 未安装 | **1.2.0** | `>=1.2.0,<2` | EIM-C5 PoC 通过后才引入 |
 | MCP Python SDK `mcp` | MultiRAG 与 of_mcp 均 exact `2.0.0` | **2.0.0 stable** | 已达成；MultiRAG outbound 使用官方 `Client` | F3 已完成；后续升级单独重跑双时代矩阵 |
 | `mcp-types` | 两仓 lock 均为 2.0.0（由 `mcp` 精确约束） | **2.0.0 stable** | 与实际 SDK/框架锁一致 | 业务代码从 `mcp.types` 导入；不重复直依赖 |
@@ -166,7 +167,7 @@ ReplySession/Provider 接口上，transport 后续可替换。
 
 保留 `lark-oapi` 负责：
 
-- Contact V3 `GET /contact/v3/users/:user_id`；
+- Contact V3 `GET /open-apis/contact/v3/users/:user_id`；
 - tenant access token 生命周期；
 - IM reply/create 的 `uuid`、`reply_in_thread`，消息 reaction、CardKit create/update/finish；
 - 消息图片/文件/音视频资源上传下载；
@@ -174,10 +175,27 @@ ReplySession/Provider 接口上，transport 后续可替换。
 - 通讯录 created/updated/deleted/scope events；
 - 未来可选的飞书文档、日历等 OpenAPI。
 
-2026-08-09 已复核当前 lock 对应的 `lark-oapi` 1.7.1 tag（commit `2cecb91d`）：
-`lark_oapi/api/cardkit/v1/` 已包含 create card、element content update 和 card settings typed request，
-`lark_oapi/api/im/v1/` 已包含消息发送/回复模型。因此 EIM-U1 不把 F1/C5 设为硬依赖；F1 仍应作为
-独立补丁升级尽早完成，但不能和 U1 混成一个提交。
+EIM-F1 已把根依赖与 lock 对齐到 1.7.2，并用本地固定 fixture 验证
+`GetUserRequest(user_id_type="open_id")` 指向 `GET /open-apis/contact/v3/users/:user_id`，成功响应按
+`GetUserResponse -> GetUserResponseBody -> User -> UserStatus` typed model 解码；fixture 只保留
+`open_id/user_id/employee_no/status` 白名单字段，不包含真实租户、用户或 Secret。该契约只为 I4 固定
+官方 SDK seam，不代表 Contact Provider、目录缓存或身份链已实现。
+
+1.7.2 的顶层 `lark_oapi` import 会加载 WebSocket 模块并安装一个模块级 event loop。隔离进程实证该
+loop 保持 idle、未运行/未关闭、无 task 且不启动新 thread，Client build 也不改变这一点。平台模块
+`api.channel_control`、`api.channel_providers`、`api.channels.verification`、`api.identity` 必须继续
+不加载任何 `lark_oapi*` 模块，并在调用前没有 event loop 的进程中保持 loop 仍不存在。这里固定的是
+“已知、隔离的 idle-loop 副作用”，不能宣称 SDK 顶层 import 完全无副作用，也不能把 SDK eager import
+扩散到 API/control/identity 进程。
+
+SDK `TokenManager` 已提供进程内 token cache 和提前过期，但 1.7.2 的 cache-miss 路径是直接取 token、
+再写 cache，没有锁或 single-flight。F1 不重写官方 token client；I4 必须在项目 Provider adapter 层按
+Provider Account scope 实现并发折叠、故障传播和隔离测试。已有 CardKit/IM typed API 仍由 EIM-U1
+基线覆盖，F1 不迁移 `lark-channel-sdk` transport。
+
+F1 完成证据：新 contract **7 passed**，广义 Feishu/Channel 定向 **101 passed**；
+`uv lock --check` 通过；`make verify` 的 Ruff format/check（1222 files）、7 import contracts、async DB
+gate、mypy 73 source files 全绿，unit **2012 passed in 30.95s**。
 
 禁止重新手写 token 刷新、请求签名或完整通讯录 HTTP client；只有为解决 SDK 未覆盖/阻塞行为且有
 测试证据时，才允许封装最小 httpx adapter。
@@ -225,9 +243,13 @@ SEP 为准，不能因此退回旧 session 设计。
 ### `lark-oapi`
 
 - 现有飞书 Channel 单元测试全绿；
-- Contact V3 的 open_id -> user_id 实测；
-- tenant token 缓存和并发刷新测试；
-- 无新 import-time event-loop 副作用。
+- 根声明与 lock 精确解析到 1.7.2，且现有 IM/CardKit Channel 契约不回归；
+- 固定、无真实 PII/Secret 的 Contact V3 fixture 通过官方 typed model 解码，并钉住
+  `open_id -> user_id/status/employee_no` request/response seam；
+- 平台 control/provider/verification/identity import 不加载 SDK，也不安装 event loop；
+- SDK 顶层 import 的已知模块级 loop 必须保持 idle、无 task、无新增 thread，Client build 不启动它；
+- 1.7.2 `TokenManager` 只有 cache、没有 cache-miss single-flight；并发刷新测试和项目级折叠属于 I4，
+  不能为了把 F1 写成完成而假称 SDK 已提供该能力。
 
 ### `lark-channel-sdk`
 

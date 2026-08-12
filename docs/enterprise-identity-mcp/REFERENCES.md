@@ -72,6 +72,13 @@
 - v2 event dispatcher 的 `contact.user.*_v3` 事件类型；
 - SDK 示例仓中的“获取部门用户”和机器人 quickstart，仅用于 API 调用形状。
 
+EIM-F1 已将本仓基线升到 `lark-oapi==1.7.2`，并以可执行 contract 固定三项事实：Contact V3
+`user_id_type=open_id` request 和 `GetUserResponse/User/UserStatus` typed response 可用；平台模块可保持
+不加载 SDK；显式顶层导入 SDK 会安装一个 idle、无 task/新 thread 的模块级 loop。SDK
+`TokenManager` 提供 cache，但自建应用 tenant token 的 cache miss 没有 single-flight；I4 必须按
+Provider Account scope 在项目 adapter 层补并发折叠，不能从“官方 SDK 自动管理 token”推断这项安全
+能力已经存在。F1 没有实现 Provider、目录缓存、身份绑定或 transport 迁移。
+
 ### 不能照搬
 
 - `lark_oapi.channel` 已是兼容期 legacy Channel 入口，新功能在独立

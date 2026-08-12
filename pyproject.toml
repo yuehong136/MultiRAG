@@ -74,9 +74,9 @@ dependencies = [
     # v4 移除了 start_generation()，改用 start_observation(as_type="generation")；
     # 下界必须钉在 4.0.1，否则解析到 4.x 而代码还按 v3 写就是全线 AttributeError
     "langfuse>=4.0.1",
-    # 1.7.1 is the first repository-verified baseline for CardKit v1 content/
-    # settings operations and message reaction builders used by EIM-U1.
-    "lark-oapi>=1.7.1,<2.0.0",
+    # 1.7.2 is the EIM-F1 verified baseline for the existing IM/CardKit calls
+    # plus the Contact V3 typed response contract consumed by EIM-I4.
+    "lark-oapi>=1.7.2,<2.0.0",
     "litellm~=1.82.0,!=1.82.7,!=1.82.8",
     "mammoth>=1.11.0",
     "markdown==3.8.2",

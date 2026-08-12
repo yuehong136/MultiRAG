@@ -88,6 +88,7 @@
 |---|---|---|
 | Channel DTO | tolerate/emit/remove 各半步、`extra="forbid"`、旧/新进程组合 | Pydantic 纯测试 + private HTTP 契约测试 |
 | Feishu assertion | 保留 `open_id/user_id/union_id/tenant_key/app_id`，不再 first-nonempty | 纯函数测试 |
+| F1 `lark-oapi` contract | 1.7.2 lock、平台 import 隔离、SDK 已知 idle loop、Contact V3 typed request/response | 隔离子进程 + 固定无 PII fixture；不访问真实飞书 |
 | I3 IdentityService | context/alias 结构校验、account health、无效 context 与 alias miss 区分、live membership、三态 plan、policy failure | 框架无关 async unit；只 mock lookup/policy ports |
 | I3 repository | 单 SQL authority snapshot、account generation/alias freshness、ordinary/verified/account-control/ownership 分权、CAS/锁、审计时间、输入/driver 脱敏 | `tests/integration/` 真 PostgreSQL |
 | I4/I6 Identity flow | Contact status/scope/cache/event、JIT/link-only/preprovisioned 的真实写事务 | async provider/service + 真 PostgreSQL；尚未实现 |
@@ -107,6 +108,13 @@ MCP SDK 2/FastMCP 4 的协议运行时迁移和 `InputRequiredResult` 的 transp
 EIM-A1 已固定 token/JWKS test vectors；A7 的前置虽已满足，独立 audience/scope 和 OAuth
 Resource Server 仍未实现；InteractionSession 仍属于依赖 P3/A4/C3 的 EIM-U14。不能因
 P1 或 modern/legacy 协议测试通过就把这些安全测试标为已满足。
+
+EIM-F1 已以 1.7.2 contract fixture 收口，并准确区分两个 import 边界：平台 control/provider/
+verification/identity 模块导入不得加载 `lark_oapi` 或创建 event loop；显式导入官方 SDK 则允许其已知
+模块级 loop，但只在 loop idle、无 task、无新增 thread 且 Client build 不启动工作的前提下通过。
+Contact fixture 只证明官方 typed request/response seam；不证明真实 app scope、token 获取、目录可用性
+或身份映射。SDK `TokenManager` 的 cache miss 没有 single-flight，项目级并发刷新/隔离负向仍由 I4
+实现和验收。
 
 最少必须覆盖这些命名场景：
 
@@ -168,6 +176,13 @@ P1 或 modern/legacy 协议测试通过就把这些安全测试标为已满足�
     email/role/groups/scopes/access token，PII 和 Provider 标识默认不进 repr。
 31. valid JWT 下 User 停用或 personal OWNER membership 缺失/重复时 API-token query 零调用；
     只有预期 JWT invalid 才 fallback，意外 verifier/runtime error 原样传播。
+32. 平台模块在 `asyncio.set_event_loop(None)` 后逐个导入：`lark_oapi*` 模块集合保持空且当前 loop 仍
+    不存在；显式 SDK import/Client build 只产生一个 idle loop，无 task、新 thread 或后台工作。
+33. Contact V3 固定成功 fixture 必须经 `GetUserResponse/User/UserStatus` typed model 解码，request 精确为
+    `GET /open-apis/contact/v3/users/:user_id?user_id_type=open_id`；把 `status` 换成字符串等错误 shape
+    必须由 SDK unmarshal 拒绝。
+34. 不得用 F1 fixture 宣称 token 并发刷新已安全：1.7.2 `TokenManager` 的 cache miss 可并发发起请求；
+    I4 必须另测同一 Provider Account single-flight、跨 account 不合并、失败后可恢复且不缓存错误结果。
 
 ### 3.2 MultiRAG 集成测试
 
@@ -650,6 +665,19 @@ make mcp-compat
 ```bash
 REQUIRE_SERVICES=1 make integration
 ```
+
+EIM-F1 快速契约命令固定为：
+
+```bash
+uv lock --check
+uv run pytest tests/unit/test_lark_oapi_contract.py
+```
+
+它覆盖四个不加载 SDK 的平台 import、SDK idle-loop 边界和 Contact V3 typed fixture；不需要真实
+飞书应用、网络或 Secret。完成结果为新 contract **7 passed**、广义 Feishu/Channel 定向
+**101 passed**；`uv lock --check` 通过；`make verify` 全绿：Ruff 1222 files、7 import contracts、
+async DB gate、mypy 73 source files、unit **2012 passed in 30.95s**。I4 后续还要另加 token/cache
+single-flight、scope/status/error 分类和可选 sandbox 证据，F1 的纯 fixture 不能替代。
 
 EIM-I3 的快速证据必须分别保留纯领域与真库边界；它们不能替代上面的完整门禁：
 
