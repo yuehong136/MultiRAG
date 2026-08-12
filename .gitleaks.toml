@@ -26,6 +26,11 @@ paths = [
     '''configs/public\.pem''',
 ]
 
+[[allowlists]]
+description = "EIM-A1 字节锁定的合成 JWT 契约向量（只豁免 jwt 规则；目录校验和与测试会检测任何内容漂移）"
+targetRules = ["jwt"]
+paths = ['''^tests/fixtures/eim_a1/v1/tokens/[^/]+\.jwt$''']
+
 # ---- 内容豁免（占位符/测试假值） ----
 
 [[allowlists]]

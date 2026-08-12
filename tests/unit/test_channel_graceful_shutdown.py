@@ -562,5 +562,14 @@ async def test_queue_overflow_tells_the_user_instead_of_dropping_silently() -> N
     assert len(harness.cards) == 2
     assert api.executed_event_ids == ["message-running"]
 
+    # Finish the two accepted turns before tearing the harness down. Running
+    # shutdown cancellation is covered above; making this overflow contract
+    # depend on that separate timing path was flaky under suite-wide coverage.
+    api.streams[0].release.set()
+    await _until(lambda: len(api.streams) == 2)
+    api.streams[1].release.set()
+    await _until(lambda: all(card.finished for card in harness.cards))
+    assert api.executed_event_ids == ["message-running", "message-followup"]
+
     await harness.stop()
     await harness.aclose()
