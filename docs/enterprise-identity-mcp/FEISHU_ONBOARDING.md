@@ -55,26 +55,37 @@
 4. 获取：
    - `App ID`，格式通常为 `cli_...`；
    - `App Secret`。
-5. 在 MultiRAG 身份控制面完成企业/安装实例所有权验证后，创建独立 Feishu Provider Account，固定
-   已验证的 Tenant、provider、`tenant_key/app_id`。该 account 可以先于 Channel 存在，但在首期凭据
-   仍归 Channel 的过渡期，无 Channel link 时不能调用飞书 API。EIM-I3 只提供
-   `VerifiedOwnershipRepository` 的两个窄持久化命令；它不是所有权证明来源，也不是可直接调用的
-   管理 API。
-6. 为目标 Tenant 显式创建唯一 `IdentityTenantPolicy`，同时确定
-   `preprovisioned/link_only/jit` 与 link code TTL（60～900 秒，首期建议显式写 600）。缺 policy
-   必须 fail closed；resolver 不提供默认值或自动 backfill。后续 mode/TTL 只能一起用 expected revision
-   CAS 更新。EIM-I6 已提供最小权限 admin repository port，但 HTTP/UI/onboarding composition 尚未
-   接线，生产 onboarding 不得用人工 SQL 或把 admin port 暴露给普通 Channel 请求代替。
-7. 在 MultiRAG Channel 管理端创建 Feishu Channel，由现有 Channel Secret 写入流程保存
+5. 在 MultiRAG Channel 管理端创建 Feishu Channel，由现有 Channel Secret 写入流程保存
    `app_secret`；不得写进 Git、普通 YAML、日志、截图、聊天记录或本文档。
-8. 创建 tenant/provider-safe 的 `IdentityProviderChannelLink`。首期一个 account 和一个 Channel
-   都只能各有一条 link；任一端 scope 不一致就终止 onboarding，不自动纠正或重建。
+6. 先运行受控 onboarding CLI 的默认 dry-run。CLI 只接收现有 Channel 的 opaque ID、明确的
+   `preprovisioned/link_only/jit` mode 与 60～900 秒 link code TTL；不接收 App ID、App Secret、
+   tenant key 或 Provider Account 作为命令行 authority。它从加密 Channel Secret 读取 credential，
+   在数据库事务外依次调用官方 Auth V3 和 Tenant V2，只输出状态、稳定错误码与 action 名称。
+7. 审核 dry-run 后才显式 `--apply`。apply 在 fresh transaction 中锁定并复核 Channel/Secret
+   generation、外部 tenant ownership、Provider Account、policy 与 link；幂等创建或复用独立 Feishu
+   Provider Account、`IdentityTenantPolicy` 和 tenant/provider-safe `IdentityProviderChannelLink`。
+   首期一个 account 和一个 Channel 都只能各有一条 link；任一端 scope 不一致、已有 tenant rebind、
+   mode/TTL 漂移或计划重放都 fail closed，不自动纠正、删除或重建。
+8. 原力首期已采用显式 `mode=jit, link_code_ttl_seconds=300`；这不是全局默认值。缺 policy 仍必须
+   fail closed，resolver 不做默认 backfill；后续 mode/TTL 只能一起用 expected revision CAS 更新。
+
+在 API 主机、加载同一受控 secrets env 后执行；第一条只计划，第二条才写入：
+
+```bash
+uv run --no-sync python scripts/onboard_feishu_identity.py \
+  --channel-id <opaque-channel-id> --mode jit --link-code-ttl-seconds 300
+uv run --no-sync python scripts/onboard_feishu_identity.py \
+  --channel-id <opaque-channel-id> --mode jit --link-code-ttl-seconds 300 --apply
+```
+
+输出只允许 `status/code/action_count/actions`；不能打印 channel/app/tenant/account 标识、Secret、token、
+Provider 原始响应或 HMAC key。apply 完成后重跑第一条，预期 `action_count=0`。
 
 凭据属性：
 
 | 值 | 是否 Secret | 保存位置 | 备注 |
 |---|:---:|---|---|
-| `app_id` | 否 | 独立 Provider Account | 仍不应在普通日志完整输出 |
+| `app_id` | 否 | Channel 公开配置 + 独立 Provider Account ownership | 仍不应在普通日志完整输出 |
 | `app_secret` | 是 | MultiRAG `ChannelSecret` 加密存储 | 只写不读回，支持主密钥环 |
 | `tenant_access_token` | 是 | I4 Provider 有界进程 cache；官方 Auth V3 generated async request/resource/transport + strict live top-level adapter | 不由管理员复制，不持久化到 Channel/identity 表 |
 | `tenant_key` | 敏感标识 | ExternalIdentity/provider account | 来自可信事件/安装上下文，不接受用户消息覆盖 |
@@ -84,17 +95,22 @@
 Channel 建立 link 后使用现有“测试连接”能力验证 `app_id/app_secret`，但该验证只证明应用凭据有效，
 不证明通讯录字段权限、数据范围和事件订阅都正确。
 
-当前管理 API/界面可能仍按 Channel-first 顺序创建配置；EIM-I2.1 只落数据库关系，EIM-I3 只落解析
-seam，EIM-I6 虽已落权威 policy/admin port 和 provisioning transaction，但仍没有管理 HTTP/UI。
+当前管理界面仍按 Channel-first 顺序创建配置；EIM-I6.1 / CHN-X17 已提供受控运维 CLI，把现有
+Channel 安全提升为已验证的 Provider Tenant/Account/Policy/Link，但没有新增公开管理 HTTP/UI。
 EIM-I4 已在 `api.identity_adapters` 增加一个过渡 credential resolver：
 它只从精确 Provider Account 出发，沿唯一 tenant/provider-safe link 读取 Channel 公开 `app_id/domain`
 与加密 `ChannelSecret`，用注入 `SecretStore` 解密，并把 Secret version 作为 credential generation。
 它不提供管理 API，不创建/rebind link，不在无 link account 上调 Provider API，也不改变
 `ChannelSecret` 仍是当前 credential owner 的事实。
 
-因此，当前仍不能用人工 SQL、直接实例化 privileged repository 或普通 Channel update 代替
-正式 onboarding，也不得按 `app_id` 猜测 Provider Account 和 Channel 的关系。控制面编排、
-外部 ownership verification 和通用 Provider credential vault 仍未完成。
+因此，当前生产接入必须使用该受控 dry-run/apply 路径，不能用人工 SQL、直接实例化 privileged
+repository 或普通 Channel update 代替，也不得按 `app_id` 猜测 Provider Account 和 Channel 的关系。
+通用 Provider credential vault 和完整管理 HTTP/UI 仍未完成。
+
+Identity provisioning HMAC keyring 与 Channel Secret 加密 key 必须独立。有效 key 至少 32 bytes，
+真实材料仅注入 API 进程的 mode `0600` secrets env；不得进入仓库、普通 YAML、supervisor/worker
+启动参数或日志。CLI 在 plan 阶段就验证 keyring 可用性，避免 apply 后才发现 I6 link-code codec 无法
+构造。
 
 I4/I7 组合代码接入 I3 时仍必须按 capability 注入：只有目录/account 控制路径能拿 health/scope/
 event CAS，ownership 只给 onboarding。I6 的完整 provisioning use-case port 自己拥有 fresh async
@@ -148,6 +164,13 @@ is_frozen/is_resigned/is_exited/is_unjoin: all false
 或任何可逆摘要；任何后续复验也只能保留同等级脱敏状态。I4.1 广义定向
 **118 passed in 5.29s**、credential 真 PostgreSQL **1 passed in 0.76s**；完整门禁见 ROADMAP。
 
+EIM-I6.1 的真实企业连接验收另只调用 Auth V3 + Tenant V2，不查询用户 Contact。一个应用最初因未
+开通 Tenant V2 企业信息只读权限而 fail closed；管理员补齐最小权限并重新发布后，两个 Channel 的
+dry-run 均通过且证明属于同一外部企业。显式 apply 后 Provider Tenant/Account/Policy/Link 为
+**1/2/1/2**，两 account 均 healthy/revision 1，policy 为 `jit`、TTL 300、revision 1；两个 Channel
+各重放一次均零 action 且状态不变。六张用户身份 sidecar 均为零，`User/UserTenant` 未变化。这只
+证明企业连接 ownership 与配置落库，不证明 C3/X7 已把消息 assertion 解析为 Principal。
+
 ---
 
 ## 4. 申请 API 权限
@@ -158,6 +181,7 @@ is_frozen/is_resigned/is_exited/is_unjoin: all false
 
 | Scope ID | 飞书名称 | 用途 |
 |---|---|---|
+| `tenant:tenant:readonly` | 获取企业基本信息 | Tenant V2 ownership 验证；缺失时 onboarding fail closed |
 | `im:message.p2p_msg:readonly` | 读取用户发给机器人的单聊消息 | 私聊消息事件 |
 | `im:message:send_as_bot` | 以应用身份发消息 | 回复用户和发送状态卡片 |
 | `contact:contact.base:readonly` | 获取通讯录基本信息 | Contact V3 API 和人员事件 |
@@ -244,7 +268,7 @@ Contact API 仍会权限失败。官方说明：[配置应用数据权限](https
 
 - 应用可用范围：实际允许使用 AI 平台的员工；
 - 通讯录数据范围：同一范围，或管理员批准的全员范围；
-- MultiRAG tenant policy：例如显式 `mode=jit, link_code_ttl_seconds=600`，并记录当前 revision。
+- MultiRAG tenant policy：例如显式 `mode=jit, link_code_ttl_seconds=300`，并记录当前 revision。
 
 Provider active 校验和 JIT `UserTenant(NORMAL)` 是 I6 固定安全不变量，不是可由 tenant policy 放宽的
 `require_active/default_role` 字段。
@@ -330,7 +354,8 @@ approved_at: <时间>
 
 ## 8. 首次身份联调
 
-本节是 I4/I6/C3 的联调清单，**不是 EIM-I3 或 EIM-I6 单独可执行的 Channel 能力**。I3 不持有飞书
+本节是 I4/I6/C3 的联调清单，**不是 EIM-I3、EIM-I6 或已完成的 I6.1 onboarding 单独可执行的消息
+身份能力**。I3 不持有飞书
 SDK/Secret，不调用 Contact，不创建 `User/UserTenant`，也不返回 Principal。I4.1 修正后的
 production adapter sandbox 与 I4.1 全量门禁已完成；I6 的 policy/link/JIT 写事务与完整门禁也已完成，
 C1 tolerate 与 C2 structured assertion emit 也已完成真实消息验证，但 C3 尚未把 assertion 交给
@@ -407,8 +432,12 @@ INACTIVE       -> 禁止执行和新会话
 ## 11. 上线前飞书侧验收
 
 - [ ] App ID/Secret 已写入 MultiRAG 加密 Secret store，无明文副本。
+- [ ] `tenant:tenant:readonly` 已审批并随应用版本重新发布；两个官方 ownership endpoint 均成功。
+- [ ] 受控 onboarding 默认 dry-run 已审核，显式 apply 后再次 dry-run 为零 action；未用人工 SQL。
 - [ ] Tenant provisioning policy 已由受控 onboarding 显式创建，mode、TTL、revision 已记录；缺行不
       使用默认值，普通 Channel/identity service 无 admin write capability。
+- [ ] Identity HMAC keyring 与 Channel 加密 key 独立，至少 32 bytes，仅存在于 API mode `0600`
+      secrets env；repo、supervisor/worker 参数和日志均无副本。
 - [ ] 权限列表与本文必需 scope 对账，无多余高危权限。
 - [ ] 应用可用范围与通讯录数据范围已由管理员确认。
 - [ ] 消息和四个 Contact 事件已订阅并发布生效。

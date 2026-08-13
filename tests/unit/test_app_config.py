@@ -5,9 +5,13 @@
 单例缓存语义。
 """
 
+import base64
+import json
 import textwrap
+import traceback
 
 import pytest
+from pydantic import ValidationError
 
 from common import app_config, config_utils
 from common.app_config import AppConfigError, get_app_config, load_app_config, reset_app_config
@@ -41,6 +45,13 @@ tcadp_config:
   region: ap-shanghai
   secret_id: sid
 """
+
+
+def _encoded_test_hmac_key(offset: int, *, length: int = 32, padded: bool = True) -> str:
+    """Return deterministic non-production material for config parsing tests."""
+    material = bytes((offset + index) % 256 for index in range(length))
+    encoded = base64.urlsafe_b64encode(material).decode("ascii")
+    return encoded if padded else encoded.rstrip("=")
 
 
 class TestSourcePrecedence:
@@ -191,6 +202,148 @@ class TestValidation:
         cfg = load_app_config()
 
         assert cfg.vastbase.schema_ == "my_schema"
+
+
+class TestIdentityProvisioningConfig:
+    def test_pydantic_validation_traceback_redacts_rejected_hmac_material(self):
+        marker = "LEAK-MARKER-identity-HMAC"
+
+        with pytest.raises(ValidationError) as raised:
+            app_config.AppConfig.model_validate(
+                {"identity": {"provisioning": {"hmac_keyring": {"active": marker}}}},
+            )
+
+        error = raised.value
+        assert error.__cause__ is None
+        assert error.__context__ is None
+        assert marker not in str(error)
+        assert marker not in repr(error)
+        assert marker not in "".join(traceback.format_exception(error))
+
+    def test_yaml_parses_active_and_retired_hmac_keys(self, conf_dir):
+        active = _encoded_test_hmac_key(0)
+        retired = _encoded_test_hmac_key(32, length=48, padded=False)
+        conf_dir(
+            SERVICE_CONF,
+            f"""
+            identity:
+              provisioning:
+                active_key_id: active_2026
+                hmac_keyring:
+                  active_2026: "{active}"
+                  retired-2025: "{retired}"
+            """,
+        )
+
+        cfg = load_app_config()
+
+        assert cfg.identity.provisioning.active_key_id == "active_2026"
+        assert cfg.identity.provisioning.require_hmac_keyring() == {
+            "active_2026": bytes(range(32)),
+            "retired-2025": bytes(range(32, 80)),
+        }
+
+    def test_env_parses_nested_identity_keyring(self, conf_dir, monkeypatch):
+        active = _encoded_test_hmac_key(80)
+        retired = _encoded_test_hmac_key(112)
+        conf_dir(SERVICE_CONF, BASE_YAML)
+        monkeypatch.setenv("MULTIRAG_IDENTITY__PROVISIONING__ACTIVE_KEY_ID", "active-v2")
+        monkeypatch.setenv(
+            "MULTIRAG_IDENTITY__PROVISIONING__HMAC_KEYRING",
+            json.dumps({"active-v2": active, "retired_v1": retired}),
+        )
+
+        provisioning = load_app_config().identity.provisioning
+
+        assert provisioning.active_key_id == "active-v2"
+        assert set(provisioning.require_hmac_keyring()) == {"active-v2", "retired_v1"}
+
+    def test_empty_identity_config_preserves_startup_but_runtime_fails_fast(self, conf_dir):
+        conf_dir(SERVICE_CONF, BASE_YAML)
+
+        provisioning = load_app_config().identity.provisioning
+
+        assert provisioning.active_key_id == ""
+        assert provisioning.hmac_keyring == {}
+        with pytest.raises(AppConfigError, match=r"identity\.provisioning\.active_key_id"):
+            provisioning.require_hmac_keyring()
+
+    def test_keyring_without_active_id_only_fails_when_identity_is_enabled(self, conf_dir):
+        key = _encoded_test_hmac_key(144)
+        conf_dir(
+            SERVICE_CONF,
+            f'identity: {{provisioning: {{hmac_keyring: {{retired: "{key}"}}}}}}\n',
+        )
+
+        provisioning = load_app_config().identity.provisioning
+
+        with pytest.raises(AppConfigError, match=r"identity\.provisioning\.active_key_id"):
+            provisioning.require_hmac_keyring()
+
+    def test_active_id_must_resolve_in_keyring_when_identity_is_enabled(self, conf_dir):
+        key = _encoded_test_hmac_key(176)
+        conf_dir(
+            SERVICE_CONF,
+            f'identity: {{provisioning: {{active_key_id: active, hmac_keyring: {{retired: "{key}"}}}}}}\n',
+        )
+
+        provisioning = load_app_config().identity.provisioning
+
+        with pytest.raises(AppConfigError, match="must name a key in hmac_keyring"):
+            provisioning.require_hmac_keyring()
+
+    @pytest.mark.parametrize("key_id", ["", "has space", "nonascii-é", "x" * 65, "dot.not.allowed"])
+    def test_keyring_rejects_invalid_key_ids(self, conf_dir, key_id):
+        key = _encoded_test_hmac_key(208)
+        conf_dir(
+            SERVICE_CONF,
+            "identity:\n  provisioning:\n    hmac_keyring: " + json.dumps({key_id: key}) + "\n",
+        )
+
+        with pytest.raises(AppConfigError, match=r"identity\.provisioning\.hmac_keyring"):
+            load_app_config()
+
+    @pytest.mark.parametrize("key_id", ["has space", "nonascii-é", "x" * 65, "dot.not.allowed"])
+    def test_active_key_id_rejects_invalid_values(self, conf_dir, key_id):
+        conf_dir(
+            SERVICE_CONF,
+            "identity:\n  provisioning:\n    active_key_id: " + json.dumps(key_id) + "\n",
+        )
+
+        with pytest.raises(AppConfigError, match=r"identity\.provisioning\.active_key_id"):
+            load_app_config()
+
+    @pytest.mark.parametrize("invalid", [_encoded_test_hmac_key(0, length=31), "not+canonical/base64"])
+    def test_keyring_rejects_weak_or_malformed_material_without_echoing_it(self, conf_dir, invalid):
+        conf_dir(
+            SERVICE_CONF,
+            f'identity: {{provisioning: {{hmac_keyring: {{weak: "{invalid}"}}}}}}\n',
+        )
+
+        with pytest.raises(AppConfigError, match=r"identity\.provisioning\.hmac_keyring") as raised:
+            load_app_config()
+
+        error = raised.value
+        assert error.__cause__ is None
+        assert error.__context__ is None
+        assert invalid not in str(error)
+        assert invalid not in repr(error)
+        assert invalid not in "".join(traceback.format_exception(error))
+
+    def test_identity_secrets_are_redacted_from_repr_and_json_dump(self, conf_dir):
+        secret = _encoded_test_hmac_key(16)
+        conf_dir(
+            SERVICE_CONF,
+            f'identity: {{provisioning: {{active_key_id: active, hmac_keyring: {{active: "{secret}"}}}}}}\n',
+        )
+
+        cfg = load_app_config()
+        rendered = repr(cfg.identity.provisioning)
+        dumped = cfg.model_dump(mode="json")
+
+        assert secret not in rendered
+        assert secret not in json.dumps(dumped)
+        assert dumped["identity"]["provisioning"]["hmac_keyring"]["active"] == "**********"
 
 
 class TestDefaultModelsResolutionParity:

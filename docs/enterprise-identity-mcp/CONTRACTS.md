@@ -498,11 +498,11 @@ link、把每条旧 `IdentityProviderAccount.channel_id` 原样 backfill 为一�
 才恢复旧 `channel_id NOT NULL UNIQUE` 并删除 link/新 parent keys。这样无 link account 必然 fail
 closed，也不会静默丢掉独立企业连接或误恢复 ownership。
 
-### 3.10 Provider account 控制面后续接线
+### 3.10 Provider account 控制面与已实现 onboarding
 
 I2 已把下列字段持久化到 §3.3 Provider Account；I2.1 用 §3.4 link 解耦 account 与 Channel；I3
-已经提供窄 repository/CAS seam，I4/I7 后续再接入现有 `ChatChannel` onboarding、scope event 和
-rotation 控制面：
+已经提供窄 repository/CAS seam，I6.1 已把现有 `ChatChannel` 接入受控 ownership onboarding；I7
+后续再接 scope event 和 rotation 控制面：
 
 ```text
 provider_tenant_key
@@ -1083,6 +1083,26 @@ I6 当前只交付 domain、schema/migration、async PostgreSQL repository/appli
 它不提供 HTTP route、管理员或用户 UI、Channel adapter、C3 Principal 构造/传播、I5
 EnterpriseSubject、I7 事件消费，也不修改 FastMCP/of_mcp 的工具开放或授权运行时。
 
+### 4.5 I6.1 已实现的企业连接 onboarding 契约
+
+受控 CLI 只接受现有 Feishu Channel ID、明确 mode 与 TTL；App ID/Secret、tenant key 和 Provider
+Account 都不能作为命令行 authority。`plan()` 先验证独立 Identity HMAC keyring readiness，再关闭
+数据库读 session、解密 Channel Secret，并在无数据库事务时调用官方 Auth V3 + Tenant V2。公开 plan
+只含 mode、TTL 和 action 枚举；tenant/account/channel/credential/proof 都留在进程内 sealed intent，
+同一 service 实例只允许 exact plan object apply 一次，复制、篡改或重放均拒绝。
+
+`apply()` 在一个 fresh async transaction 中按固定顺序锁 Channel、Tenant、tenant/provider advisory
+domain、policy、Provider Tenant/Account/link 与 Secret，重新核对 Channel generation、公开配置 digest、
+Secret version/envelope digest、外部 tenant proof 的 5 分钟窗口和 policy shape。允许同一外部企业在
+同一 MultiRAG Tenant 下有多个 Provider Account；跨 Tenant ownership、account/channel rebind、已有
+policy 的 mode/TTL 漂移均 fail closed。网络验证不进入写事务；最终 Provider Tenant/Account/Policy/
+Link 全成或全败，重复 dry-run/apply 对已匹配状态产生零 action。
+
+Identity HMAC keyring 与 Channel Secret 加密 key 独立，每把 key 至少 32 bytes；生产材料只能注入 API
+进程的 mode `0600` secrets env，不进入仓库、supervisor/worker 参数或日志。I6.1 是运维 CLI，不是
+公开 HTTP/UI，不创建 ExternalIdentity/User/UserTenant，也不让 execution consume assertion；C3/X7
+仍负责消息到 Principal 的组合。
+
 ---
 
 ## 5. 身份状态与错误码
@@ -1613,8 +1633,8 @@ service-specific key；不支持时先持久化 started 并对外部返回 ID �
 
 ## 10. 管理/API 契约
 
-下面是目标管理能力，具体路由名称在实现任务中按现有 API 风格定稿。EIM-I6 只提供框架无关的
-policy admin/provisioning ports；这些 HTTP/API/UI 尚未接线，不能把直接实例化 repository 或人工 SQL
+下面是目标管理能力，具体路由名称在实现任务中按现有 API 风格定稿。EIM-I6.1 已提供默认 dry-run、
+显式 apply 的受控运维 CLI；其余 HTTP/API/UI 尚未接线，不能把直接实例化 repository 或人工 SQL
 当成生产管理面：
 
 | 能力 | 调用者 | 关键规则 |

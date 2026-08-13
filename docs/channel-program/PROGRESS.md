@@ -209,6 +209,7 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 | CHN-X14 | RAGFlow Canvas/Agent/Channel 上游对齐审计：Channel 稳定且用户恢复从约 4 月 24 日上游基线逐 commit 跟进时启动；固定版本三层语义，随正常同步分类“直接跟进 / 语义移植 / 适配层吸收 / 暂不采纳”，判断 no-store 或 checkpoint 执行缝；只读审计，不预设重构结论 | ⏸ | 触发条件未满足；[CHN-ADR-08](DECISIONS.md#chn-adr-08--canvas-与-channel-演进以上游同步为主只在适配层吸收现代执行不变量)、[EIM-F5](../enterprise-identity-mcp/ROADMAP.md) |
 | CHN-X15 | MCP InteractionSession 的飞书 renderer：结束流式卡片后按批准 schema 渲染 Card JSON 2.0 form，复杂/凭据流程转 H5 URL mode；callback 只规范化 `form_value`、验证 operator、持久化响应、幂等 claim 当前 revision、快速 ACK 并异步恢复工具调用。卡片只携带 opaque action ID/nonce，不携带 `requestState`、Principal、scope 或工具参数 | ⬜ | CHN-U8、CHN-U9、CHN-X7、EIM-U14；[EIM-U15](../enterprise-identity-mcp/ROADMAP.md)、[UX §8.2](../enterprise-identity-mcp/FEISHU_BOT_UX.md#82-mcp-结构化表单与-h5url-elicitation) |
 | CHN-X16 | 企业身份 ownership 漂移门禁：Channel 已有关联 Provider Account 时，普通 PATCH 只允许同账号密钥轮换，拒绝替换 provider account；DELETE 稳定拒绝并引导 disable。Channel 行锁后按 tenant/channel 锁读 Link 与 Account，不依赖通用 FK 异常 | ✅ | EIM-I2.1；`api/channel_control/repository.py::get_linked_identity_provider_account`、`service.py::ChannelIdentityOwnershipLocked` |
+| CHN-X17 | 受控企业连接 onboarding：从现有 Channel 的加密凭据验证飞书 tenant ownership，幂等创建 Provider Tenant/Account/Link/Policy；默认 dry-run，显式 apply，独立 Identity HMAC keyring | ✅ | EIM-I6.1；双 Channel live dry-run 与 1/2/1/2 atomic apply 已完成；继续 CHN-X7/EIM-C3 |
 
 ---
 
@@ -228,11 +229,25 @@ connected；约 10:10 真实消息只记录 identity/tenant presence、identifie
 `exp_user_id=null`、errors 为空，10 张 EIM sidecar 零行；resolver 仍不 consume、`principal_id=None`。所以 X6
 只完成 emit，不宣称 Contact/I3 consume、数据库映射或 Principal；下一条身份主线是 CHN-X7/EIM-C3。
 
+**CHN-X17 / EIM-I6.1 已完成**：受控 CLI 只复用现有 Channel 的加密凭据，默认 dry-run 在事务外
+调用官方 Auth V3 与 Tenant V2；显式 apply 才在 fresh transaction 中锁定并复核 Channel/Secret
+generation 与 ownership，幂等创建 Provider Tenant/Account/Policy/Link。两个真实 Channel 在飞书侧
+补齐并重新发布 Tenant V2 企业信息只读权限后均通过 dry-run，且安全证明属于同一外部企业；最终
+Provider Tenant/Account/Policy/Link 计数为 **1/2/1/2**，两 account 均 healthy/revision 1，唯一 policy
+为 `jit`、TTL 300、revision 1。两个 Channel 各重放一次均为 **0 action** 且状态不变；六张用户身份
+sidecar 均为 0，`User/UserTenant` 不变。
+
+Identity HMAC 使用独立至少 32-byte keyring，不复用 Channel Secret 加密 key。真实 key 仅进入 API
+进程的 mode `0600` secrets env，不进入仓库、supervisor/worker 参数或日志。完整 `make verify`
+**2316 passed in 36.68s**、强制 integration **159 passed in 17.36s**、smoke 六组件全绿，安全终审
+**NO BLOCKER**。本任务没有新增公开 Channel API/UI，也没有让 execution consume assertion；
+CHN-X7/EIM-C3 仍未实现，现恢复为下一条身份主线。
+
 ---
 
 ### 企业身份扩展的权威简报
 
-CHN-X5～X16、CHN-U8～U15、CHN-O14 与 CHN-P14 属于 EIM 项目，不在本文件重复字段、数据库、JWT 和
+CHN-X5～X17、CHN-U8～U15、CHN-O14 与 CHN-P14 属于 EIM 项目，不在本文件重复字段、数据库、JWT 和
 飞书交互设计；CHN-U16 是 Channel 稳定化的独立近期任务，不新增 EIM 对应项。零上下文
 开工时先读 [`docs/enterprise-identity-mcp/README.md`](../enterprise-identity-mcp/README.md)，
 其中 UX 任务还必须完整读取
@@ -750,6 +765,7 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 
 | 日期 | 变更 | 提交 | 记录人 |
 |---|---|---|---|
+| 2026-08-13 | **CHN-X17 / EIM-I6.1 完成。** 新增受控企业连接 onboarding：从既有 Channel 加密凭据生成默认 dry-run 的 Auth V3/Tenant V2 脱敏计划，显式 apply 才锁定并复核 generation/ownership 后原子创建或复用 Provider Tenant/Account、`jit` policy 与 link；拒绝 rebind、policy drift、篡改和重放。飞书侧补齐并重新发布最小 Tenant V2 企业信息只读权限后，两个 Channel live dry-run 均通过且属于同一外部企业；atomic apply 最终计数为 **1/2/1/2**，两 account healthy/revision 1，policy TTL 300/revision 1，两个 Channel 各重放一次均 **0 action**。六张用户身份 sidecar 为 0，User/Membership 不变。独立 32-byte+ Identity HMAC key 仅注入 API mode `0600` secrets env，不进 repo、supervisor/worker 或日志。公开 Channel API/UI 未变，C3/X7 仍未实现 | 本次提交；`make verify` **2316 passed in 36.68s**；强制 integration **159 passed in 17.36s**；smoke 六组件全绿；安全终审 **NO BLOCKER** | Codex |
 | 2026-08-13 | **CHN-O15 / EIM-I2.2 完成。** C1 首次切换暴露存量库 bootstrap 顺序缺陷：model-first 在 Alembic 安装 I2.1 父复合唯一键前尝试创建 Link，API 在 serving 前 fail closed。`bd3df59d` 统一 fresh create→stamp / stored migrate→model-first，迁移失败不继续建表，`init_data.py` 复用同一编排。恢复前确认误建的 9 张 identity sidecar 全部零行且无外部依赖；用户理解风险并明确豁免备份后，以白名单、无 `CASCADE` 的事务删除，再由正式 Alembic 升至 `b4c6d8e0f2a4 (head)`。I2.1/I6 表、复合 FK、唯一约束与 partial index 均通过核验，原有业务数据计数保持；新 API ping/healthz 六组件全绿 | `bd3df59d`；bootstrap unit **8 passed**，隔离真 PostgreSQL old-schema→head **2 passed**，identity/bootstrap schema **49 passed**；隔离完整 `make verify` 全绿、unit **2226 passed in 69.49s**；完整 integration 的 identity/迁移路径通过，套件 **128 passed / 1 个既有 MinIO `SignatureDoesNotMatch` 环境失败**；真实库恢复、head 与 smoke 已完成 | Codex |
 | 2026-08-13 | **CHN-X5 / EIM-C1 consumer/tolerate 完成并通过活体。** private command 可选接受 bounded structured assertion，同时保持 legacy 三字段必填、旧 request bytes 不变；nested extra-forbid 拒绝 authority 夹带，resolver 不 consume，公开 `channel-api/v1` 不变。C1 前 producer 等价的 legacy-shape 飞书请求被加载 `536a1ea5` 的新 API 接受并完整执行，形成 completed claim、session 与终态会话记录。恢复后 worker 是新进程，并非旧 PID 跨版本存活；C1 对三个生产 emitter 文件零 diff，因此证据只证明旧线格兼容。活体无 `identity`、`principal_id` 为空、identity sidecar 零写入；本条历史证据不证明后续 emit/consume/Principal，X6 完成证据见下一行 | `536a1ea5`；隔离 `HEAD a0581f2f` + C1 13 路径等价 `make verify` 全绿（unit **2223 passed in 32.28s**，全部静态门禁绿）；C1 三文件 **74 passed in 12.94s**；新 API smoke 与 legacy-shape 真实飞书执行完成 | Codex |
 | 2026-08-13 | **CHN-X6 / EIM-C2 producer/emit 完成并通过活体。** 飞书 normalize 要求 header tenant/open ID，保留存在的 user/union ID；核对可选 sender tenant 与本地配置 app，app 不进入 assertion。transport DTO 冻结且 repr 脱敏，经 Bridge、regenerate、runtime client 透传；legacy subject/conversation 与无 identity 请求保持兼容。10:08 按 `scripts/run_channel_supervisor.example.sh` 重启，两个飞书 worker（generation 2/11）connected；约 10:10 真实消息出现 identity/tenant presence、三种 identifier kind 与 count 的安全结构日志，private execution HTTP 200 并完成。resolver 不 consume，Canvas 为 `user_id=""`、`exp_user_id=null`、errors 为空，10 张 EIM sidecar 零行；不宣称 Contact/I3 consume、DB mapping 或 Principal | `896c582d`；C2 定向 **104 passed in 2.03s**；独立兼容 **153 passed**；安全扫描 **0 findings**；`make verify` 8 imports、mypy 86、unit **2265 passed in 37.20s**；`make smoke` 六组件全绿 | Codex |

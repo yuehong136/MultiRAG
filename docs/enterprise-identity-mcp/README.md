@@ -185,7 +185,8 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
 I3 仍只把权威 policy snapshot 的三种 mode 映射为携 revision 的
 `bind_preprovisioned/require_link/create_normal_member` verification-gated plan；它本身不写库。I6 已
 完成消费 fresh I4 proof、重新锁定 policy/account generation 并原子执行表中绑定/开户动作的 domain、
-schema 与 PostgreSQL transaction。HTTP/UI/Channel/Principal 传播仍未接线。
+schema 与 PostgreSQL transaction。I6.1 已提供从既有 Channel 加密凭据出发、默认 dry-run 且显式
+apply 的受控企业连接 CLI；公开 HTTP/UI、消息侧 C3 consume 与 Principal 传播仍未接线。
 
 ---
 
@@ -273,9 +274,22 @@ schema 与 PostgreSQL transaction。HTTP/UI/Channel/Principal 传播仍未接线
   两个 User 及其数据的 merge。name/email/mobile/employee_no 都不用于匹配，I6 也不写 I5
   EnterpriseSubject。inactive/conflict/revoked 不自动恢复。
 - I6 当前只交付 framework-neutral domain、migration/schema 与 async PostgreSQL repository/use-case；
-  不提供 HTTP/UI、Channel/C3、Principal 传播、I7 或 FastMCP/of_mcp 运行时接线。完成证据为 domain/
+  不提供公开 HTTP/UI、消息侧 C3、Principal 传播、I7 或 FastMCP/of_mcp 运行时接线。完成证据为 domain/
   model unit **143 passed in 5.49s**、四个 identity 真 PostgreSQL 面 **84 passed in 7.80s**；完整
   `make verify` 全绿并收集/执行 unit **2188 passed**，强制 integration **128 passed in 16.40s**。
+- EIM-I6.1 / CHN-X17 已完成受控企业连接 onboarding。CLI 只接受现有 Channel 引用，不接受命令行
+  明文 app/tenant/Secret；默认 dry-run 在数据库事务外经官方 Auth V3 + Tenant V2 验证 credential 与
+  企业 ownership，再生成有时效、进程内一次性且不可篡改的脱敏计划。显式 apply 在 fresh transaction
+  中锁定并复核 Channel/Secret generation 与 tenant/provider ownership，幂等创建或复用 Provider
+  Tenant/Account、Tenant policy 与 link，拒绝 rebind、policy drift 和计划重放。
+- 两个真实 Channel 在飞书侧补齐并重新发布 Tenant V2 企业信息只读权限后，Auth/Tenant dry-run 均
+  通过且属于同一外部企业；最终 Provider Tenant/Account/Policy/Link 为 **1/2/1/2**，两 account
+  healthy/revision 1，policy 为 `jit`、TTL 300、revision 1。两个 Channel 各重放一次均零 action；六张
+  用户身份 sidecar 为零，`User/UserTenant` 不变。Identity HMAC 使用独立至少 32-byte keyring，真实
+  key 仅注入 API 的 mode `0600` secrets env，不进仓库、supervisor/worker 参数或日志。
+- I6.1 完成门禁：`make verify` **2316 passed in 36.68s**，强制 integration
+  **159 passed in 17.36s**，smoke 六组件全绿，安全终审 **NO BLOCKER**。它没有新增公开管理 UI/API，
+  也没有让 execution consume assertion；C3/X7 仍是下一条身份主线。
 - [`api/channels/README.md`](../../api/channels/README.md) 已明确：`IncomingMessage.sender_id`
   是不可信外部标识，不能直接作为 Principal。这条边界必须保留。
 - EIM-C2 已让 `api/channels/feishu/channel.py::_normalize` 要求 header tenant 与 sender open ID，并
@@ -342,7 +356,7 @@ schema 与 PostgreSQL transaction。HTTP/UI/Channel/Principal 传播仍未接线
   优先复用 FastMCP 4 的 `RemoteAuthProvider`、`AccessToken`、`on_list_tools/on_call_tool` middleware
   和 transport 防护；领域 identity/Principal 保持框架无关，避免重复实现框架已有工具开放能力。
 - P1 已解锁 A7 的代码前置，但 A7 仍是独立 inbound Resource Server 任务，不能立即宣称
-  可发布。F1/I4.1/I6/C1/C2 已完成；下一条接线主线是
+  可发布。F1/I4.1/I6/I6.1/C1/C2 已完成；下一条接线主线是
   `C3 -> P2`。I5 与 I7 已由 I4 解锁，可作为不共文件的并行支线；I8 仍需 I6 + I7，
   不能跳依赖；
   C3/P2、A2/P3/A7 均不属于 P1 完成面。
@@ -465,7 +479,7 @@ schema 与 PostgreSQL transaction。HTTP/UI/Channel/Principal 传播仍未接线
   OAuth 获取 token 流。of_mcp 仍缺 A5 proxy internal actor；A6 虽已有 phase-1 domain/runtime
   安全边界，但仍缺生产多实例 replay/audit、HMAC/KMS 轮换、OTel SDK/exporter 与跨仓 trace，因此
   保持 `🔵`。M1/M2 企业主体与业务对象授权、持久 Interaction/Confirmation/Idempotency 也未完成。
-  F1/I4.1/I6/C1/C2 已完成；MultiRAG 下一条接线主线是
+  F1/I4.1/I6/I6.1/C1/C2 已完成；MultiRAG 下一条接线主线是
   `C3 -> P2`；I5/I7 是已解锁并行支线，但 I8 仍需 I6 + I7。不能跳过
   `C3 -> P2` 直接做 A2/P3。A7 虽已解锁前置，仍须作为独立入站安全面实现和验收。
 

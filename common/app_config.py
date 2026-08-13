@@ -18,6 +18,8 @@
     cfg.get_section("tcadp_config")  # 未建模 section 的原样 dict
 """
 
+import base64
+import binascii
 import copy
 import ipaddress
 import json
@@ -211,6 +213,108 @@ class AuthenticationConfig(_Section):
     client: dict[str, Any] = {}
     site: dict[str, Any] = {}
     disable_password_login: bool = False
+
+
+_IDENTITY_HMAC_KEY_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+_IDENTITY_HMAC_MIN_KEY_BYTES = 32
+
+
+def _valid_identity_hmac_key_id(value: str) -> bool:
+    return 1 <= len(value) <= 64 and value.isascii() and all(char in _IDENTITY_HMAC_KEY_ID_CHARS for char in value)
+
+
+def _decode_identity_hmac_key(encoded: str) -> bytes:
+    """Strictly decode one canonical base64url identity HMAC key."""
+    if not encoded or encoded != encoded.strip():
+        raise ValueError("identity HMAC key must be canonical URL-safe base64")
+
+    unpadded = encoded.rstrip("=")
+    padding_length = len(encoded) - len(unpadded)
+    if not unpadded or padding_length > 2 or any(char not in _IDENTITY_HMAC_KEY_ID_CHARS for char in unpadded):
+        raise ValueError("identity HMAC key must be canonical URL-safe base64")
+
+    try:
+        decoded = base64.b64decode(
+            unpadded + "=" * (-len(unpadded) % 4),
+            altchars=b"-_",
+            validate=True,
+        )
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError("identity HMAC key must be canonical URL-safe base64") from exc
+
+    canonical_padded = base64.urlsafe_b64encode(decoded).decode("ascii")
+    if encoded not in {canonical_padded, canonical_padded.rstrip("=")}:
+        raise ValueError("identity HMAC key must be canonical URL-safe base64")
+    if len(decoded) < _IDENTITY_HMAC_MIN_KEY_BYTES:
+        raise ValueError("identity HMAC key must decode to at least 32 bytes")
+    return decoded
+
+
+class IdentityProvisioningConfig(_Section):
+    """Runtime key ownership for I6 link codes and binding fingerprints.
+
+    The empty default preserves startup compatibility while identity
+    provisioning is not wired into the process. The future runtime assembly
+    must call :meth:`require_hmac_keyring` before enabling that identity path.
+    """
+
+    # Pydantic otherwise renders the original keyring as ``input_value`` when
+    # a validator rejects key material. Keep this on every public validation
+    # boundary that can own the nested secret, including AppConfig below.
+    model_config = ConfigDict(extra="allow", hide_input_in_errors=True)
+
+    active_key_id: str = ""
+    hmac_keyring: dict[str, SecretStr] = Field(default_factory=dict)
+
+    @field_validator("active_key_id")
+    @classmethod
+    def validate_active_key_id(cls, value: str) -> str:
+        if value and not _valid_identity_hmac_key_id(value):
+            raise ValueError("active_key_id must contain 1..64 ASCII alphanumeric, '_' or '-' characters")
+        return value
+
+    @field_validator("hmac_keyring", mode="before")
+    @classmethod
+    def normalize_hmac_keyring(cls, value: Any) -> Any:
+        if value is None or value == "":
+            return {}
+        if type(value) is not dict:
+            return value
+        if any(type(key_id) is not str or type(secret) not in (str, SecretStr) for key_id, secret in value.items()):
+            raise ValueError("hmac_keyring must map string key ids to string secrets")
+        return value
+
+    @field_validator("hmac_keyring")
+    @classmethod
+    def validate_hmac_keyring(cls, value: dict[str, SecretStr]) -> dict[str, SecretStr]:
+        for key_id, secret in value.items():
+            if not _valid_identity_hmac_key_id(key_id):
+                raise ValueError("hmac_keyring key ids must contain 1..64 ASCII alphanumeric, '_' or '-' characters")
+            _decode_identity_hmac_key(secret.get_secret_value())
+        return value
+
+    def require_hmac_keyring(self) -> dict[str, bytes]:
+        """Return decoded active+retired keys or fail before identity starts."""
+        if not self.active_key_id:
+            raise AppConfigError("identity.provisioning.active_key_id is required when identity provisioning is enabled")
+        if not _valid_identity_hmac_key_id(self.active_key_id):
+            raise AppConfigError("identity.provisioning.active_key_id is invalid")
+        if not self.hmac_keyring:
+            raise AppConfigError("identity.provisioning.hmac_keyring is required when identity provisioning is enabled")
+        if self.active_key_id not in self.hmac_keyring:
+            raise AppConfigError("identity.provisioning.active_key_id must name a key in hmac_keyring")
+        try:
+            return {key_id: _decode_identity_hmac_key(secret.get_secret_value()) for key_id, secret in self.hmac_keyring.items()}
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise AppConfigError("identity.provisioning.hmac_keyring is invalid") from exc
+
+
+class IdentityConfig(_Section):
+    """Enterprise identity runtime configuration."""
+
+    model_config = ConfigDict(extra="allow", hide_input_in_errors=True)
+
+    provisioning: IdentityProvisioningConfig = Field(default_factory=IdentityProvisioningConfig)
 
 
 # ---------------------------------------------------------------------------
@@ -525,7 +629,7 @@ class ChannelsConfig(_Section):
 class AppConfig(BaseModel):
     """service_conf.yaml（含 local 覆盖与 env 覆盖）的类型化视图。"""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow", hide_input_in_errors=True)
 
     multirag: ServerConfig = ServerConfig()
     admin: ServerConfig = ServerConfig()
@@ -552,6 +656,7 @@ class AppConfig(BaseModel):
     task_executor: TaskExecutorConfig = TaskExecutorConfig()
     observability: ObservabilityConfig = ObservabilityConfig()
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
+    identity: IdentityConfig = Field(default_factory=IdentityConfig)
 
     _raw: dict[str, Any] = PrivateAttr(default_factory=dict)
 
@@ -626,10 +731,16 @@ def load_app_config(conf_name: str = SERVICE_CONF) -> AppConfig:
     try:
         config = AppConfig.model_validate(merged)
     except ValidationError as exc:
-        paths = "; ".join(".".join(str(p) for p in err["loc"]) + f" ← {err['msg']}" for err in exc.errors())
-        raise AppConfigError(f"service_conf 配置校验失败（检查 yaml/local 覆盖/MULTIRAG_* 环境变量）: {paths}") from exc
-    config._raw = merged
-    return config
+        paths = "; ".join(".".join(str(p) for p in err["loc"]) + f" ← {err['msg']}" for err in exc.errors(include_input=False, include_context=False))
+        error = AppConfigError(f"service_conf 配置校验失败（检查 yaml/local 覆盖/MULTIRAG_* 环境变量）: {paths}")
+    else:
+        config._raw = merged
+        return config
+
+    # Raise after leaving the ``except`` suite: the raw ValidationError is not
+    # retained as either __cause__ or __context__, so traceback renderers and
+    # error reporters cannot recover secret configuration input from the chain.
+    raise error
 
 
 @lru_cache(maxsize=1)
