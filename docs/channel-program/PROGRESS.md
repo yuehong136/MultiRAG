@@ -255,7 +255,8 @@ C3 自动门禁为定向 **203 passed**、`make verify`
 `make smoke` 六组件全绿；真实飞书 live 覆盖 **2/2** account，四条 alias 收敛到一个 active
 ExternalIdentity/一个 canonical User，仅有一条 valid NORMAL membership 与一条 BindingEvent。Canvas、
 Dialog 各一条本次 Principal owner 记录且空 owner 为 **0**；Redis completed/replied 存在，processing/failed
-为 **0**。P2 已完成且未部署；后续 A2/P3 仍是独立任务。CHN-O9 可并行，C4/CHN-X8 仍等待全部
+为 **0**。P2 后续已完成本机 API rollout；Canvas/Dialog 真实飞书各一条均 completed、owned session
+与数据库 owner 非空，两个 runtime connected 且无错误。后续 A2/P3 仍是独立任务。CHN-O9 可并行，C4/CHN-X8 仍等待全部
 runner 的 deployment soak。
 
 ---
@@ -780,6 +781,7 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 
 | 日期 | 变更 | 提交 | 记录人 |
 |---|---|---|---|
+| 2026-08-13 | **CHN-X18 / EIM-P2 本机 rollout 完成。** API 重启加载 `4165d439`（含 P2 `549cc9c6`），supervisor/两个飞书 worker 未重启；Canvas、Dialog 各完成一条真实飞书新对话。`make smoke` 六组件全绿；近 30 分钟 event `completed=2`、owned session `2`、legacy raw `0`，数据库 Canvas/Dialog 各 1 条且空 owner 均为 `0`、缺失 session `0`，两个 runtime connected、runtime/API error `0`。Canvas 实际装配 Agent/Retrieval/Message 与 MCP 配置但没有 `memory_ids`，因此不把此次 live 写成真实 Memory 或 MCP 工具调用证据；完整 UX smoke 仍是独立 rollout gate | `549cc9c6` + runtime `4165d439` | Codex |
 | 2026-08-13 | **CHN-X18 / EIM-P2 完成 `✅`。** 新增 frozen/slots、repr-safe 的 `RunContext`；Channel target executor/driver 把 C3 同一 Principal 显式送入 Dialog/Canvas，在 `Graph.load()` 前进入 Agent/RAG/Memory/Canvas component workflow，并给 MCP session 注入 instance-local opaque call context。LINKED 的 session/Memory user key 只取可信平台用户，Memory ID 精确校验 tenant，DSL 不能覆盖；NO_LINK 与非 Channel 调用保留 legacy。未改 wire/schema/迁移/启动/路由，未签 token、未取 credential、未发 bearer；未重启、部署或发真实飞书消息。失败优先收集 **4 errors**，修复后定向 **92 passed**；`make fix` 全绿；`make verify` 8 imports、mypy 90、unit **2415 passed in 31.09s**；强制 integration **163 passed in 23.63s**，其中当前 `msgStoreConn` backend 双用户隔离 **1 passed**。未改启动/路由，故未跑 smoke | 本次提交 | Codex |
 | 2026-08-13 | **CHN-X18 / EIM-P2 交接准备，状态保持 `⬜`。** 冻结 private run-context 传播契约：C3 immutable Principal 从 Channel Execution 显式进入 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas workflow 与 MCP call context seam；LINKED 禁止静默匿名与 DSL 覆盖，NO_LINK 保留显式 legacy；Memory 至少按 tenant + platform user 隔离；MCP 不签 token、不取 credential、不发 bearer。补齐 Channel/EIM 双 ID、当前代码断点、backend-aware 测试矩阵和非目标，并校准 U16、O9 与完整 UX smoke 的并行 soak 门。本条只改文档，未启动 P2 运行时实现 | 14 份文档、**161** 个相对链接存在、code fences 平衡、陈旧/credential-like 样式扫描与 `git diff --check` 通过；`make verify` 全绿：Ruff format **1262 files**、Ruff check、**8** 条 import contracts（841 files/2656 dependencies）、async DB gate、mypy **89 source files**、unit **2405 passed in 33.35s** | Codex |
 | 2026-08-13 | **CHN-X7 / EIM-C3 完成 `✅`。** execution 在成功 claim 后经服务端 authority/link 组合 initial I3→I4→I6→final I3→P1；NO_LINK 兼容 anonymous，LINKED identity 损坏 fail closed。full-window claim/tombstone 阻止短窗后重放；owned session envelope 与 Dialog/Canvas owner 校验隔离 tenant/principal。只完成 Principal promotion 与 `principal_id` target/session ownership，不含 P2 全链传播或 MCP token。下一条 EIM 主线为 P2；CHN-O9 可并行，C4/X8 等 deployment soak | `0ded51ff`；定向 **203 passed**；`make verify` **2403 passed**；强制 integration **162 passed**；12:42 API 为 `v0.9.9-579-g2b0482c7`，smoke 六组件全绿；live 覆盖 **2/2** account，四 alias→一 active ExternalIdentity/一 canonical User、一 valid NORMAL membership/一 BindingEvent；Canvas/Dialog 各一条 Principal owner、空 owner **0**；Redis completed/replied 存在且 processing/failed **0**；全程只留脱敏计数/状态 | Codex |

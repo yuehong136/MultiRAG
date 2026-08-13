@@ -394,7 +394,8 @@ target/session；后续 P2 已完成 Agent/RAG/Memory/Canvas workflow/MCP contex
 integration **162 passed**。12:42 API 已重启到 `v0.9.9-579-g2b0482c7`，`make smoke` 六组件全绿；
 真实飞书 live 覆盖 **2/2** account，四条 alias 收敛到一个 active ExternalIdentity/一个 canonical User，
 只有一条 valid NORMAL membership 与一条 BindingEvent。Canvas、Dialog 各一条本次 Principal owner 记录，
-空 owner 为 **0**；Redis completed/replied 存在、processing/failed 为 **0**。P2 已完成但未部署；
+空 owner 为 **0**；Redis completed/replied 存在、processing/failed 为 **0**。P2 后续已完成本机 API
+rollout；Canvas/Dialog 真实飞书各一条均 completed、owned session 与数据库 owner 非空，smoke 六组件全绿；
 CHN-O9 可并行，C4/CHN-X8 仍等待全部 runner 升级与 deployment soak。A2/P3 token
 issuance/credential 仍未实现。
 

@@ -189,12 +189,12 @@ P1 已完成，代码锚点为 `api/identity/principal.py`、`api/identity/legac
    **2005 passed** 且 7 import contracts/async gate/mypy 73 files 全绿，强制 integration **83 passed**，
    安全复核无 blocker。
 
-P1 当时不交付 C3/P2、A2/P3 或 A7。C3 已在后续独立任务完成源码、自动门禁和双 account 飞书
-live；A7 的代码前置虽已满足，仍须作为独立 inbound Resource Server 实现/发布。当前接线主线直接是
-P2/CHN-X18，不得重做 C3，也不得跳过 P2 去做 A2/P3。
+P1 当时不交付 C3/P2、A2/P3 或 A7。C3、P2 已在后续独立任务完成源码、自动门禁和本机飞书
+live；A7 的代码前置虽已满足，仍须作为独立 inbound Resource Server 实现/发布。当前 token 主线是
+A2；不得重做 C3/P2，也不得跳过 A2 去做 P3。
 I5 与 I7 已由 I4 解锁，可在不共文件时并行；I8 仍要求 I6 + I7，不能跳过依赖。
 
-#### EIM-P2 / CHN-X18 当前交接边界
+#### EIM-P2 / CHN-X18 已完成边界
 
 P2 开工前先复核下列当前事实；发现符号漂移先更新锚点，不要按历史行号机械修改：
 
@@ -219,6 +219,42 @@ P2 开工前先复核下列当前事实；发现符号漂移先更新锚点，�
 最低验收不是“删掉三个空字符串”，而是证明同一个可信 Principal 从 service 到 target driver、
 Dialog/Canvas Graph、Agent/RAG/Memory/workflow/MCP context seam 保持一致；LINKED fail closed、NO_LINK
 兼容不回归；同租户双用户与并发 run 不串 session/Memory/context；repr、日志和 wire 无主体原值。
+
+P2 实现提交为 `549cc9c6`，本机 API 后续运行于包含该提交的 `4165d439`。Canvas、Dialog 各完成一条
+真实飞书新对话，均形成非空 owner 并进入 completed；`make smoke` 六组件全绿，两个 runtime connected，
+runtime/API error 为 0。Canvas 当次装配 Agent/Retrieval/Message 与 MCP 配置但没有 `memory_ids`，所以该
+live 只证明 Principal/owner/context 装配，不替代完整 Channel UX、真实 Memory 写读或 MCP 工具调用证据。
+
+#### EIM-A2 当前接手审计边界
+
+A2 开工前必须重新复核以下当前事实；这些是代码/文档锚点，不代替尚待写入的实现契约：
+
+1. A1 与 P2 已完成，A2 是当前 token 主线；P3、A5、A7、A8、O1 仍是独立任务，不能把 bearer
+   注入、proxy 换发、inbound Resource Server、多个 issuer 或真实 DNS/TLS/KMS rollout 混入 A2；
+2. `tests/fixtures/eim_a1/v1/manifest.json` 是签发 profile、resource、scope registry 与七条
+   `issuance_policy_cases` 的冻结机器可读来源；生产 signer 不得 import 测试 oracle，也不能重签/改写
+   A1 golden corpus；
+3. `api.identity.principal.Principal` 是唯一主体来源。`sub/tenant_id` 只能取服务端 Principal，
+   `agent_id/resource/requested_scopes/allowed_scopes` 只能取服务端发布/策略上下文；调用方不得选择 tenant、
+   audience、未登记 scope 或任意 claim；
+4. 当前生产依赖已有 `cryptography`，PyJWT 仅是 A1 的 dev direct dependency；A2 若在运行时代码使用
+   PyJWT，必须显式提升为 runtime direct dependency 并同步 lock，不能依赖 MCP SDK 的传递依赖；
+5. 当前 `IdentityConfig` 只有 provisioning HMAC keyring，`MCPServer`/Canvas MCP 配置也没有 A1 scope、
+   Agent policy 或 tenant grant 的权威字段。A2 可以实现纯 issuer/policy boundary，但不得假装 P3 所需
+   policy source 已存在，更不能从工具名、模型选择、静态 header 或 DSL 推导授权；
+6. 当前 REST 自动发现只把 `restful_apis` 挂到 `/api/v1`，仓库没有 JWKS route。CONTRACTS 已冻结
+   public EC P-256/ES256 JWKS、唯一 `kid` 和 publish-before-sign/retention 轮换顺序，但没有冻结 JWKS
+   URI；ROADMAP 写有 “KMS/file key provider”，却未选择任何云 KMS 供应商或 SDK；
+7. A1 允许的 `acr/amr/auth_time` 值已冻结，但 P1 的 `AuthenticationSource/IdentityAssurance` 到这些
+   claims 的生产投影仍未冻结。不得把请求时间伪造成 `auth_time`，也不得因存在 enterprise Principal
+   就自动签发 `enterprise_subject`；
+8. 因而在写实现前，必须先把 JWKS 公共路径、首期 key-provider 交付面、issuer/client/resource 配置
+   authority，以及 authentication claim 投影写成可审阅契约和失败测试。涉及真实私钥生成/轮换、KMS、
+   DNS/TLS、重启或部署时，仍按外部变更闸门单独申请批准。
+
+A2 最低验证应覆盖 A1 七条 issuance policy、精确 audience、scope 只减不增、`typ/alg/kid`、300 秒
+TTL、不可预测 JTI、条件 claims、4096-byte 上限、只含 public key 的 JWKS、轮换顺序/旧 key 保留、
+配置 fail-closed、repr/log/异常不泄漏 private material，并证明 production code 不依赖测试 oracle。
 
 ### 4.4 外部 API 和 SDK 任务
 
@@ -474,8 +510,8 @@ git diff --check
 ```
 
 A4 定向 **201 passed**；`uv run --locked ofmcp verify` 六步全绿、**417 passed、2 existing skipped**，
-contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG F1/I3/I4/I6/P1/C1/C2/C3 已完成；
-当前接线主线为 P2/CHN-X18，只有完成 P2 后才能进入 A2/P3。I5/I7 可作为已
+contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG F1/I3/I4/I6/P1/P2/C1/C2/C3 已完成；
+当前 token 主线为 A2，只有完成 A2 后才能进入 P3。I5/I7 可作为已
 解锁并行支线，但下游仍按依赖图等待。secure 在独立远程发布闸门解除前仍不能作为远程业务入口。
 
 ### 4.8 EIM-A6 phase 1 接手与完成边界
@@ -614,7 +650,7 @@ integration；FastMCP/MCP 升级任务还要跑协议版本、legacy client 和 
 ```text
 feat(identity): resolve verified Feishu users (EIM-I6)
 feat(channel): emit structured external identity (EIM-C2, CHN-X6)
-feat(auth): verify delegated MCP access tokens (EIM-A2)
+feat(auth): issue short-lived MCP access tokens (EIM-A2)
 ```
 
 完成汇报模板：

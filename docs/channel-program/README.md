@@ -65,8 +65,8 @@ CHN-X9、CHN-X13、CHN-U8、CHN-U11～U15 已完成，其余状态以 [PROGRESS]
 | **U** | 今日可见缺陷（U1–U9、U11–U16 完成；U10 挂起） | 🔵 扩展中 |
 | **P** | Provider 通用化（P1–P11、P13 全部完成并部署） | ✅ 完成 |
 | **O** | 运维（O1–O7、O12 完成；**O9 是当前下一项**，O8/O10/O11 未排期） | 🔵 扩展中 |
-| **X** | 跨仓契约（X1–X3、X5–X7、X9、X13、X16–X17 完成；X18 映射 EIM-P2） | 🔵 扩展中 |
-| **EIM 扩展** | C3/X7 verified Principal live 已完成；当前 EIM 主线 P2/X18，Channel 稳定轨下一项 O9；完整 UX smoke 与 O9 都在 soak 前补齐；F5/X14 挂起到恢复逐 commit 上游同步 | 🔵 进行中 |
+| **X** | 跨仓契约（X1–X3、X5–X7、X9、X13、X16–X18 完成） | 🔵 扩展中 |
+| **EIM 扩展** | P2/X18 已完成并取得 Canvas/Dialog 双目标本机 live；当前 EIM 主线 A2，Channel 稳定轨下一项 O9；完整 UX smoke 与 O9 都在 soak 前补齐；F5/X14 挂起到恢复逐 commit 上游同步 | 🔵 进行中 |
 
 执行架构的 CHN-U15 已实现：X13 完成 Provider/Target 能力协商和目标私有 driver，U14 完成 Dialog
 内存工作副本、终态单次 CAS 与权威终态快照；U15 再把 Canvas 候选所有权移入 MultiRAG 自有
@@ -76,7 +76,8 @@ CHN-U16 已完成：停止接收后清空队列，queued 卡零执行调用地�
 按安全取消语义终态化，已越过 terminal barrier 的 run 则允许交付完；`drain` 参数随之删除。
 **完整 Dialog/Canvas UX smoke 仍然欠着，U16 与 C3 的 Principal-owner live 都不替代它**——前者证明
 停机进程行为，后者证明 verified identity 与 target owner，不覆盖 CardKit/fallback/action 全矩阵。
-CHN-O9 可与该 smoke 并行，二者都在稳定浸泡前补齐。EIM 身份接线主线则是 P2/CHN-X18；两条账本
+CHN-O9 可与该 smoke 并行，二者都在稳定浸泡前补齐。EIM-P2 / CHN-X18 已完成本机 rollout，
+EIM token 主线转入 A2；两条账本
 不要互相覆盖。U16 不承诺 kill -9、进程崩溃或跨实例恢复；这些
 仍属于挂起的 CHN-O14。Windows 上 supervisor 停子进程走 `TerminateProcess`，没有合作窗口，
 本条清理不会执行（见 [PROGRESS 待决事项 CHN-Q3](PROGRESS.md#待决事项)）。EIM-F5 / CHN-X14 同步挂起，

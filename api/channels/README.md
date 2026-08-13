@@ -801,9 +801,10 @@ upstream-first 长期原则不变，但当前不立即执行 EIM-F5 / CHN-X14。
 
 CHN-U16、CHN-O9 是 Channel 账本任务，不新增 EIM 映射。正常停机终态化不等于 durable recovery；
 没有 `kill -9`/跨实例/终态不确定性等明确恢复需求时，CHN-O14 继续挂起。
-EIM-P2 / CHN-X18 已完成本地实现与自动门禁，但未重启、部署或做真实飞书验证。后续 A2/P3 仍是
-独立任务；CHN-O9 可并行。C4/X8 不抢跑，必须等待全部 runner 升级以及由可观测证据支撑的
-deployment soak。
+EIM-P2 / CHN-X18 已完成实现、自动门禁与本机 API rollout；Canvas/Dialog 真实飞书各一条均
+completed，Redis owner envelope 与数据库 owner 非空，smoke 六组件全绿。该证据不替代完整 UX
+矩阵，也未触发真实 Memory 或 MCP 工具调用。后续 A2/P3 仍是独立任务；CHN-O9 可并行。C4/X8
+不抢跑，必须等待全部 runner 升级以及由可观测证据支撑的 deployment soak。
 
 ## 与上游同步策略
 

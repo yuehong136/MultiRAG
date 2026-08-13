@@ -493,8 +493,8 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   六步全绿、**417 passed、2 existing skipped**，contract snapshot 无漂移。该完成态只证明 of_mcp
   能把已验证 token 构造成 Principal，并按确定性逐工具策略做发现/调用授权；不证明 MultiRAG 已经
   产生这样的 token 或第三方 Channel 身份已经进入该 Principal。
-- P1 已实现领域 Principal 与存量 Web/API adapter；C3 已取得部署 live 证据，P2 已完成本地传播与
-  自动门禁但未部署；A2/P3 尚未实现，因此 MultiRAG
+- P1 已实现领域 Principal 与存量 Web/API adapter；C3 已取得部署 live 证据，P2 已完成传播、
+  自动门禁与本机 API rollout，Canvas/Dialog 各一条真实飞书 owned-session live 均完成；A2/P3 尚未实现，因此 MultiRAG
   还不会为当前 Principal 签发并逐请求发送 token；飞书的
   `ExternalIdentityAssertion -> binding/directory -> Principal` 已完成到 target/session owner，通用 MCP Client 仍无完整
   OAuth 获取 token 流。of_mcp 仍缺 A5 proxy internal actor；A6 虽已有 phase-1 domain/runtime
