@@ -15,7 +15,8 @@
 > EIM-I2.2、EIM-C1、EIM-C2 与 EIM-I6.1 / CHN-X17 已完成；两个 Channel 的真实 Auth V3 +
 > Tenant V2 ownership dry-run 在飞书侧补齐最小企业信息只读权限并重新发布后均通过，且证明属于同一
 > 外部企业。受控 apply 已幂等落下 1 个 Provider Tenant、2 个 healthy Provider Account、1 个
-> `jit/TTL=300` policy 与 2 条 Channel link；下一条接线主线恢复为 EIM-C3，再走 EIM-P2；
+> `jit/TTL=300` policy 与 2 条 Channel link。EIM-C3 / CHN-X7 的源码与自动门禁已完成，当前保持
+> `🔵`，等待新 API 部署后的真实飞书消息验收；live 收口后下一条接线主线是 EIM-P2；
 > I5 与 I7 的 I4 前置已满足，
 > 可作为不共文件的并行 identity 支线，但 I8 仍须同时等待 I6 + I7；
 > Channel assertion 轨可独立推进；EIM-F5 /
@@ -226,7 +227,7 @@ F1/F3/F4/F7/F8 禁止携带身份功能。F2 只是 characterization/兼容矩�
 | EIM-I4 | MR | `FeishuEnterpriseIdentityProvider`：open_id -> user_id/status/employee_no，token/cache/限流；I4.1 修正 Auth live response 与阶段化错误码 | ✅ | F1,I3 | I4+F1 定向 118；credential 真 PG 1；production adapter live sandbox 三步通过；完整 verify/integration 全绿 |
 | EIM-I5 | MR | `FeishuEmployeeNumberResolver` + 可插拔 OA/HR resolver SPI | ⬜ | I4 | resolved/not-found/ambiguous/unavailable/inactive 五态；不含原力 if/else |
 | EIM-I6 | MR | 权威 policy generation、`preprovisioned/link_only/jit` 原子事务、digest-only link grant 与首次绑定审计 | ✅ | I3,I4 | domain/model unit 143；四个 identity 真 PG 面 84；verify unit 2188；integration 128；无显示字段匹配/双 User merge |
-| EIM-I6.1 | CHN-X17 / MR | 经验证的企业连接 onboarding：复用加密 Channel 凭据验证 Auth/Tenant ownership，原子创建 Provider Tenant/Account/Link/Policy，并提供独立 Identity HMAC keyring 与受控 CLI | ✅ | I2.1,I4,I6,C2 | 双 Channel live dry-run 同企业；apply 为 1/2/1/2 且两次重放零 action；六张用户身份 sidecar 与 User/Membership 不变；完整 verify 2316、integration 159、smoke 全绿；C3/X7 仍未实现 |
+| EIM-I6.1 | CHN-X17 / MR | 经验证的企业连接 onboarding：复用加密 Channel 凭据验证 Auth/Tenant ownership，原子创建 Provider Tenant/Account/Link/Policy，并提供独立 Identity HMAC keyring 与受控 CLI | ✅ | I2.1,I4,I6,C2 | 双 Channel live dry-run 同企业；apply 为 1/2/1/2 且两次重放零 action；六张用户身份 sidecar 与 User/Membership 不变；完整 verify 2316、integration 159、smoke 全绿；本任务本身不交付 C3/X7 |
 | EIM-I7 | MR | Contact created/updated/deleted/scope 事件规范化、receipt 幂等、cache/revision 失效 | ⬜ | I4 | 重复事件无副作用；离职禁用；scope 变化触发 account revision，不全量拉取 |
 | EIM-I8 | MR | 已链接活跃用户兜底 reconciliation、identity health、管理员可观测性 | ⬜ | I6,I7 | 不枚举全员；限流/游标；故障续跑；指标和脱敏错误码 |
 
@@ -381,7 +382,7 @@ F1/F3/F4/F7/F8 禁止携带身份功能。F2 只是 characterization/兼容矩�
 |---|---|---|---|:---:|---|---|
 | EIM-C1 | CHN-X5 | MR | private command tolerate 新 `ExternalIdentityAssertion`，仍读 legacy subject | ✅ | F0 | extra-forbid 兼容测试；C1 前 producer 等价 legacy shape -> 新 API 活体通过；更新 Channel CONTRACT |
 | EIM-C2 | CHN-X6 | MR | Feishu worker emit tenant_key + 全部 ID；execution 仍不消费 identity 并保留 legacy 字段 | ✅ | C1 | 新 worker -> 新 API；缺字段/重复 kind 拒绝；重启与部署证据 |
-| EIM-C3 | CHN-X7 | MR | execution 调 IdentityService，把 verified user 提升为 `TrustedChannelContext.principal_id`/Principal | ⬜ | C2,I6,P1 | 外部 subject 永不直通；JIT/link/inactive 路由契约测试；端到端私聊 |
+| EIM-C3 | CHN-X7 | MR | execution 调 IdentityService，把 verified user 提升为 `TrustedChannelContext.principal_id`/Principal | 🔵 | C2,I6,P1 | 源码与自动门禁已完成：claim 后 authority→I3→I4→I6→final I3→P1；外部 subject 永不直通，owner-aware session/target 隔离与 full-window tombstone 已覆盖；尚欠新 API 部署后的真实私聊 live 证据 |
 | EIM-C4 | CHN-X8 | MR | 所有 runner 升级后删除 legacy `ChannelActor.subject` | ⬜ | C3 + deployment soak | tolerate/emit/remove 第四步；先 API 后 supervisor；日志无 extra_forbidden |
 | EIM-C5 | CHN-P14 | MR | 对官方 `lark-channel-sdk` 做 transport PoC；门禁全过才切换，失败则保留现有实现 | ⬜ | C4,F1 | 身份字段无损；公开生命周期；去重、卡片、长连接、凭据日志、回滚实测；audit 后才 strict |
 
@@ -401,7 +402,8 @@ C2 代码提交为 `896c582d`：定向 **104 passed in 2.03s**、独立兼容矩
 private execution HTTP 200 并 `execution_completed`。最新 Canvas 记录仍为 `user_id=""`、
 `exp_user_id=null`、errors 为空，10 张 EIM sidecar 均为零行。resolver 仍不 consume assertion、
 `principal_id=None`；因此
-C2 只完成 emit，未接 Contact/I3/I6、未建立数据库映射或 Principal。下一条主线是 C3/X7。
+C2 只完成 emit，未接 Contact/I3/I6、未建立数据库映射或 Principal。该句是 C2 完成时的历史边界；
+C3/X7 源码与自动门禁现已完成，仍待部署后的真实飞书 live 收口。
 
 ### Channel 部署硬规则
 
@@ -416,6 +418,12 @@ server binding tenant + provider account + structured assertion
   -> verified platform User/UserTenant
   -> Principal
 ```
+
+C3 当前源码只在成功 claim 后执行这条链，并在进入 target 前完成 Principal promotion。linked event
+逻辑上每次都做 I4（允许命中同 generation 的有界 cache），再按当前 I3 结果执行 I6 reverify 或
+provision，最后 fresh I3 与 P1 精确绑定。NO_LINK 保留 legacy anonymous 行为；LINKED 的 assertion、
+authority 或 proof 任一损坏都 fail closed。它只把 `principal_id` 用于 Dialog/Canvas owner 与会话隔离，
+不会把 Principal 传播进 Agent/RAG/Memory/Workflow/MCP；后者仍属于 P2。
 
 ---
 
@@ -752,9 +760,10 @@ EIM-I3  ✅ repository + policy/service
 EIM-P1  ✅ canonical immutable Principal
 EIM-I4  ✅ I4.1 Auth live-response/阶段化错误码、adapter sandbox 与全门禁已收口
 EIM-I6  ✅ authoritative policy + digest link + atomic provisioning 已完成
-EIM-I6.1 ✅ verified enterprise connection onboarding + Identity HMAC runtime；C3/X7 仍未实现
+EIM-I6.1 ✅ verified enterprise connection onboarding + Identity HMAC runtime
 EIM-C1  ✅ 本地门禁与 C1 前 producer 等价 legacy-shape 飞书活体均通过
-EIM-C2  ✅ worker emit 与新 worker -> 新 API 活体通过；resolver 未 consume、Principal 仍为空
+EIM-C2  ✅ worker emit 与新 worker -> 新 API 活体通过
+EIM-C3  🔵 verified consume 源码/自动门禁完成；新 API/真实飞书 live 待验
 EIM-I5  ⬜ 已解锁的 enterprise-subject 并行支线（不属于 I6）
 EIM-I7  ⬜ 已解锁的 Contact-event 并行支线（I8 仍需 I6 + I7）
 ```
@@ -805,7 +814,7 @@ A8 -> O3  仅在真实企业 IdP、多 issuer 或托管平台需求成立后解�
 
 A3/A4 已完成，of_mcp 的 A6 phase 1 已落但保持进行中；下一步不是把内存 store 当生产后端，而是完成
 durable multi-instance replay/audit、HMAC key rotation 和跨仓 OTel。MultiRAG 已完成 F1/I2/I2.1/I3/I4/P1，
-I6 与 C2 已完成；下一条接线主线是 `C3 -> P2`，随后才做 A2。I5 与 I7 因 I4 已完成而可作为不
+I6 与 C2 已完成；C3 源码/门禁完成并待 live，收口后下一条接线主线是 P2，随后才做 A2。I5 与 I7 因 I4 已完成而可作为不
 共文件的并行支线；但 I8 仍严格等待 I6 + I7，M1 仍等待 A5 + I5，不能因“已解锁”跳过下游依赖。
 随后必须等 `P2 + F3 + A2 + A4 -> P3`，再启动 A5/U14 等真实委托消费者。A7 保持独立入站
 resource；A8 仍无真实需求不启动。这个顺序既保留 of_mcp 的 fail-closed verifier/authorizer 先行，
@@ -823,6 +832,7 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 
 | 日期 | ID | 变更 | 仓库/提交 | 验证证据 | 记录人 |
 |---|---|---|---|---|---|
+| 2026-08-13 | EIM-C3 / CHN-X7 | verified consume 源码与自动门禁完成，状态保持 `🔵`：成功 claim 后按 authority→initial I3→I4→I6→final I3→P1 提升 Principal；linked assertion/authority/proof 损坏 fail closed，NO_LINK 保留 legacy anonymous；Redis session 改为 tenant/principal owner envelope，legacy raw 仅 NO_LINK 可续用，Dialog/Canvas 既有行再做 owner 纵深校验；claim 一开始即占满 dedupe window，所有 post-claim 失败/取消写 full-window tombstone。当前仅完成 Principal promotion 与 `principal_id` target/session ownership，未做 P2/MCP 传播 | MultiRAG / 本次提交 | C3 定向 **203 passed**；`make verify` **2403 passed**；`REQUIRE_SERVICES=1 make integration` **162 passed**。当前 `make smoke` 命中 09:38 启动的旧 API，只能作为部署前基线，**不计 C3 live**；真实飞书消息、Principal/owner 行为与新进程 smoke 留待提交后重启 API 验收 | Codex |
 | 2026-08-13 | EIM-I6.1 / CHN-X17 | 新增受控企业连接 onboarding：只从现有 Channel 解密凭据，默认 dry-run 在数据库事务外调用官方 Auth V3 + Tenant V2，并生成有时效、进程内一次性、不可篡改的脱敏计划；显式 apply 在 fresh transaction 中锁定并复核 Channel/Secret generation 与 tenant/provider ownership，幂等创建或复用 Provider Tenant/Account、`jit` policy 和 Channel link，拒绝跨租户 rebind、策略漂移和重复消费。Identity HMAC 使用独立至少 32-byte keyring，不复用 Channel 加密 key；真实 key 仅注入 API 进程的 mode `0600` secrets env，不进仓库、supervisor/worker 参数或日志。未新增公开 HTTP/UI，也未接 C3/X7 | MultiRAG / 本次提交 | 一处真实飞书应用最初因缺 Tenant V2 企业信息只读权限而 fail closed；管理员补齐最小权限并重新发布后，两个 Channel 的 Auth V3/Tenant V2 dry-run 均通过且 tenant 相同。atomic apply 最终计数 Provider Tenant/Account/Policy/Link = **1/2/1/2**；两 account 均 `healthy`、revision 1，policy 为 `jit`、TTL 300、revision 1；两个 Channel 各重放一次均 **0 action** 且计数不变。六张用户身份 sidecar 均为 0，`User/UserTenant` 计数不变。`make verify` **2316 passed in 36.68s**；`REQUIRE_SERVICES=1 make integration` **159 passed in 17.36s**；`make smoke` 六组件全绿；安全终审 **NO BLOCKER** | Codex |
 | 2026-08-13 | EIM-C2 / CHN-X6 | 飞书 worker 完成 structured identity emit：transport DTO 有界且 repr 脱敏，事件 header tenant 与 open ID 必填，存在的 user/union ID 全保留；可选 sender tenant/app 分别与 header tenant/本地配置账户核对，app 不进入 assertion。Bridge、regenerate、runtime client 透传 identity，同时 legacy subject/conversation 与无 identity 请求保持兼容。execution resolver 仍不 consume，Principal 仍为空 | MultiRAG / `896c582d` | C2 定向 **104 passed in 2.03s**；独立兼容矩阵 **153 passed**；安全扫描 **0 findings**；`make verify` 全绿（8 imports、mypy 86、unit **2265 passed in 37.20s**）；`make smoke` ping/healthz 六组件全绿。10:08 重启 supervisor 后两个飞书 worker（generation 2/11）connected；约 10:10 真实消息记录 identity/tenant present、三种 identifier kind、count 3 的脱敏结构，private execution HTTP 200 并完成。Canvas 为 `user_id=""`、`exp_user_id=null`、errors 为空；10 张 EIM sidecar 零行。不宣称 Contact/I3 consume、数据库映射或 Principal | Codex |
 | 2026-08-13 | EIM-I2.2 / CHN-O15 | C1 切换暴露存量库 bootstrap 顺序缺陷：model-first 在 Alembic 安装 I2.1 父复合唯一键前尝试创建 Link，API 在 serving 前 fail closed。`bd3df59d` 统一 fresh create→stamp / stored migrate→model-first 两条路径，迁移失败不继续建表，独立 init-data 入口复用同一编排。恢复前确认误建的 9 张 identity sidecar 全部零行且无外部依赖；用户理解风险并明确豁免备份后，以白名单、无 `CASCADE` 的事务删除，再由正式 Alembic 升至 `b4c6d8e0f2a4 (head)` | MultiRAG / `bd3df59d` | bootstrap unit **8 passed**；隔离真 PostgreSQL old-schema→head **2 passed**；identity/bootstrap schema **49 passed**；隔离完整 `make verify` 全绿、unit **2226 passed in 69.49s**；完整 integration 的 identity/迁移路径通过，套件 **128 passed / 1 个既有 MinIO `SignatureDoesNotMatch` 环境失败**；I2.1/I6 表、复合 FK、唯一约束、partial index、原业务数据计数与新 API 六组件 smoke 均验证 | Codex |

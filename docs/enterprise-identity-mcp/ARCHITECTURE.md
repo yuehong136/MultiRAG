@@ -115,7 +115,8 @@ flowchart LR
 读 session 在解密前关闭，Auth/Tenant 网络调用不持数据库事务；apply 再锁定并复核 Channel/Secret
 generation、tenant/provider ownership、policy 与 link。两个真实 Channel 已在飞书补齐企业信息只读
 权限并重新发布后证明属于同一外部企业，最终允许同 Tenant 下两个独立 Provider Account。这个控制面
-不查询 Contact、不创建 User/ExternalIdentity，也不改变下文 C3 尚未 consume assertion 的事实。
+不查询 Contact、不创建 User/ExternalIdentity；后续 C3 已在消息 execution composition 中消费 assertion，
+但 I6.1 本身仍不是消息入口。
 
 #### Enterprise Identity Service
 
@@ -196,8 +197,8 @@ Auth/Tenant 位于 credential/tenant ownership 控制面，不能产生 I6 会�
 Contact 只有 code 0 才能使用 HTTP 403/404 fallback；未知/瞬时非零 code 不得触发 JIT。
 
 I4 自身不把 Provider proof 写入 ExternalIdentity/Alias，也不会建 User/UserTenant 或构造 Principal。
-I6 现已在独立事务层消费该 proof 并完成三种 provisioning 写入；P1 的 Principal builder 已存在，
-但 C3 尚未把 Channel assertion、Provider verification、I6 事务与该 builder 组合接线。
+I6 在独立事务层消费 proof 并完成 provisioning/reverify；P1 builder 已存在，C3 已把 Channel
+assertion、Provider verification、I6 与该 builder 组合接线，源码与自动门禁完成但尚待 live。
 
 核心入口接收服务端构造的 Provider Context，而不是 `channel_id`。Channel adapter 先解析唯一 link，
 再调用同一核心接口；目录事件、管理员预绑定、Web OAuth 或未来 SSO 因而可以复用身份服务而不伪造
@@ -265,8 +266,8 @@ alias proof 因 scope marker 过旧时，fresh I4 proof 才能刷新 alias 并�
 
 I6 schema 以全状态 reverse identity unique 和 active membership partial unique 作为并发最后防线；
 User/UserTenant/identity/alias/code/event 同事务提交或全部回滚。I6.1 已增加独立运维 onboarding adapter/
-CLI，但没有公开 HTTP/UI 或消息侧 C3 adapter；它不写 I5 EnterpriseSubject，也不把 Principal 传入
-Agent 或 FastMCP。
+CLI，但没有公开 HTTP/UI；消息侧 C3 adapter 后续独立落地。它不写 I5 EnterpriseSubject；C3 也不把
+Principal 传入 Agent 或 FastMCP，后者仍属于 P2。
 
 #### Principal construction
 
@@ -326,7 +327,7 @@ service 的 `build_server()` 不自行决定 auth，保持 mount/proxy 等价。
 
 ---
 
-## 3. 首次私聊：JIT 身份解析（I3/I4/I6 与 C1/C2 已有，C3→P2 接线仍是目标）
+## 3. 首次私聊：C3 verified consume（源码门禁完成，live 待部署）
 
 ```mermaid
 sequenceDiagram
@@ -343,26 +344,29 @@ sequenceDiagram
     F->>W: im.message.receive_v1
     W->>W: 3 秒内规范化、入队、返回
     W->>X: authenticated binding command + identity assertion
-    X->>X: 由 workload/binding + account link 构造 ProviderContext
+    X->>X: pre-claim policy/capability checks + full-window claim
+    X->>X: 由 workload/binding + account link 构造 authority/ProviderContext
     X->>I: resolve_external_identity(ProviderContext, AliasKey) [I3]
     I->>D: 单 SQL 查 account generation + alias proof + identity + live membership
-    alt 命中且未过期
-        D-->>I: active identity + live UserTenant
-    else account 有效但 alias 缺失
-        I-->>X: verification-gated provisioning plan [I3]
-        X->>C: Provider verify open_id/status [I4]
-        C-->>X: user_id + status + employee_no?
+    X->>C: Provider verify open_id/status [I4，可命中有界 cache]
+    C-->>X: user_id + status + proof time
+    alt active RESOLVED
+        X->>D: reverify resolved identity [I6]
+    else missing/stale 且 policy 允许
         X->>D: 锁 policy/account generation；原子 provision/link/activate/event [I6]
     end
+    X->>I: fresh resolve_external_identity [final I3]
     X->>X: immutable Principal construction [P1/C3]
-    X->>A: execute(message, principal)
+    X->>A: execute(message, principal_id owner)
     A-->>E: 回复
 ```
 
 关键规则：
 
 - Contact 调用在 SDK callback 之外；
+- upgrade/run-policy/target capability deny/cancel 保持 claim 前；成功 claim 后才执行 authority/I3/I4/I6；
 - I3 的 `IdentityService` 不调用 Contact；I4 Provider adapter 在组合层消费 I3 返回的验证计划；
+- linked event 逻辑上每次执行 I4，cache hit 不刷新 proof time；I6 后必须 fresh final I3 再构造 P1；
 - ProviderContext 必须携最新 account revision + scope marker；旧 alias proof 先进入 Provider 重验，
   verified mutation 只允许 proof 时间前进，绝不倒退已有 alias verification；
 - I3 plan 携权威 policy revision；I6 重新锁定 mode/revision，缺 policy 或 generation 漂移 fail closed；
@@ -373,17 +377,17 @@ sequenceDiagram
 - identity insert 固定为 `pending_link`，只有本次权威 Provider 验证成功后的显式 activation 才能进入
   `active`；`conflict/revoked` 不能因新消息自动恢复；
 - Provider 返回 active 不自动授予管理员角色；
+- 初始 claim 与 post-claim failure/cancel tombstone 都覆盖完整 dedupe TTL；owner-aware session 与
+  Dialog/Canvas existing row 都校验本次 tenant/principal；
 - I6 不消费 `employee_no` 或写 EnterpriseSubject；I5 尚未实现。enterprise subject 缺失时，高风险
   MCP 仍一律拒绝。
 
-截至 EIM-I6.1 完成，图中已有 `ProviderContext/AliasKey`、单 SQL snapshot、携 policy revision
-的三态 plan、Auth V3 -> Tenant V2 -> Contact V3 Provider proof、权威 policy/link/event schema、三种
-原子 provisioning transaction 与 Principal builder。I4.1 的 production adapter live sandbox 与全量
-门禁已收口；I6 完整门禁也已全绿。I6.1 又完成双 Channel Auth/Tenant ownership 验证与原子
-Provider Tenant/Account/Policy/Link 落库。C1 tolerate 与 C2 emit 均已完成真实飞书活体，但 resolver 仍不
-consume assertion、`principal_id=None`，Contact/I3/I6 没有从消息执行链接线，identity sidecar 也无写入。
-下一条是 C3 verified consume，之后 P2 才传播 Principal；不能把 C2 的 structured transport 描述为
-飞书身份端到端已上线。
+C1/C2 已有真实飞书 transport 证据；C3 verified consume 的源码与自动门禁现已完成。成功 claim 后按
+authority→initial I3→I4→I6→final I3→P1，linked event 逻辑上每次执行 I4（允许有界 cache）；NO_LINK
+保留 legacy anonymous。full-window claim/tombstone 阻止短窗后重放，owner envelope 与 Dialog/Canvas
+owner 校验隔离 tenant/principal。C3 只提升 `TrustedChannelContext` 并以 `principal_id` 约束 target/session，
+不传播到 Agent/RAG/Memory/Workflow/MCP。定向 **203 passed**、`make verify` **2403 passed**、强制
+integration **162 passed**；当前 smoke 来自 09:38 启动的旧 API，不是 C3 live，新 API/真实消息待验。
 
 ---
 

@@ -10,7 +10,12 @@ from dataclasses import replace
 from api.channel_capabilities import RunCapabilityPolicy, TargetCapabilities
 from api.channel_execution.errors import BindingDisabledError, BindingNotFoundError, ChannelExecutionError, DuplicateEventError
 from api.channel_execution.models import ChannelExecutionCommand, ExecutionEvent, TrustedChannelContext, WorkloadIdentity
-from api.channel_execution.protocols import BindingResolver, ChannelConversationStore, ExecutionClaimStore
+from api.channel_execution.protocols import (
+    BindingResolver,
+    ChannelConversationStore,
+    ChannelPrincipalResolver,
+    ExecutionClaimStore,
+)
 from api.channel_execution.registry import TargetExecutorRegistry
 
 LOGGER = logging.getLogger(__name__)
@@ -83,11 +88,13 @@ class ChannelExecutionService:
         self,
         *,
         binding_resolver: BindingResolver,
+        principal_resolver: ChannelPrincipalResolver,
         conversation_store: ChannelConversationStore,
         claim_store: ExecutionClaimStore,
         target_service: PublishedTargetExecutionService,
     ) -> None:
         self._binding_resolver = binding_resolver
+        self._principal_resolver = principal_resolver
         self._conversation_store = conversation_store
         self._claim_store = claim_store
         self._target_service = target_service
@@ -152,32 +159,44 @@ class ChannelExecutionService:
             raise DuplicateEventError()
 
         try:
+            context = await self._principal_resolver.resolve(
+                context=context,
+                command=command,
+            )
             session_id = await self._conversation_store.get_session(
                 binding_id=binding_id,
                 binding_generation=context.binding_generation,
                 conversation_key=command.conversation_key,
+                tenant_id=context.tenant_id,
+                principal_id=context.principal_id,
+            )
+            trusted_context = replace(context, session_id=session_id)
+            events = await self._target_service.execute(
+                context=trusted_context,
+                command=command,
             )
         except asyncio.CancelledError:
+            await self._fail_claim(binding_id=binding_id, event_id=command.event_id)
             raise
         except ChannelExecutionError as exc:
             await self._fail_claim(binding_id=binding_id, event_id=command.event_id)
             return _one_failure(exc.code)
         except Exception as exc:
             LOGGER.warning(
-                "channel_execution_event=session_load_failed error_type=%s",
+                "channel_execution_event=execution_prepare_failed error_type=%s",
                 type(exc).__name__,
             )
             await self._fail_claim(binding_id=binding_id, event_id=command.event_id)
-            return _one_failure("CHANNEL_STATE_UNAVAILABLE")
+            return _one_failure("CHANNEL_EXECUTION_FAILED")
 
-        trusted_context = replace(context, session_id=session_id)
-        events = await self._target_service.execute(context=trusted_context, command=command)
         return self._persist_completed_session(
             events,
             binding_id=binding_id,
             binding_generation=context.binding_generation,
             conversation_key=command.conversation_key,
             event_id=command.event_id,
+            tenant_id=trusted_context.tenant_id,
+            principal_id=trusted_context.principal_id,
         )
 
     async def _persist_completed_session(
@@ -188,6 +207,8 @@ class ChannelExecutionService:
         binding_generation: int,
         conversation_key: str,
         event_id: str,
+        tenant_id: str,
+        principal_id: str | None,
     ) -> AsyncIterator[ExecutionEvent]:
         try:
             async for event in events:
@@ -201,6 +222,8 @@ class ChannelExecutionService:
                         binding_generation=binding_generation,
                         conversation_key=conversation_key,
                         session_id=event.session_id,
+                        tenant_id=tenant_id,
+                        principal_id=principal_id,
                     )
                     await self._claim_store.complete(binding_id=binding_id, event_id=event_id)
                     yield event

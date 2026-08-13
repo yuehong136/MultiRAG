@@ -1,5 +1,6 @@
 """Tests for concrete Channel execution boundary adapters."""
 
+import json
 from collections.abc import AsyncIterator
 from copy import deepcopy
 from types import SimpleNamespace
@@ -32,7 +33,7 @@ from api.channel_execution.session_models import (
 
 class FakeCanvasHistoryTransaction:
     def __init__(self) -> None:
-        self.prepared: list[tuple[str, str | None, str, ExecutionOperation]] = []
+        self.prepared: list[tuple[str, str | None, str, ExecutionOperation, str | None]] = []
         self.completed: list[str] = []
         self.aborted: list[str | None] = []
 
@@ -43,14 +44,16 @@ class FakeCanvasHistoryTransaction:
         session_id: str | None,
         question: str,
         operation: ExecutionOperation,
+        user_id: str | None = None,
     ) -> PreparedCanvasExecution:
-        self.prepared.append((target_id, session_id, question, operation))
+        self.prepared.append((target_id, session_id, question, operation, user_id))
         return PreparedCanvasExecution(
             session_id,
             "candidate-canvas" if session_id else None,
             "source-fingerprint" if session_id else None,
             "owner-token",
             "canvas-1",
+            user_id or "",
         )
 
     async def commit(
@@ -274,6 +277,8 @@ async def test_redis_state_store_is_atomic_opaque_and_persistent() -> None:
         binding_generation=4,
         conversation_key="conversation-raw",
         session_id="session-value",
+        tenant_id="tenant-raw",
+        principal_id=None,
     )
 
     assert (
@@ -281,6 +286,8 @@ async def test_redis_state_store_is_atomic_opaque_and_persistent() -> None:
             binding_id="binding-raw",
             binding_generation=4,
             conversation_key="conversation-raw",
+            tenant_id="tenant-raw",
+            principal_id=None,
         )
         == "session-value"
     )
@@ -299,6 +306,39 @@ async def test_redis_state_store_is_atomic_opaque_and_persistent() -> None:
 
 
 @pytest.mark.asyncio
+async def test_initial_claim_uses_full_dedupe_ttl_and_survives_failed_tombstone() -> None:
+    class _FailingTombstoneRedis(FakeRedis):
+        async def set(
+            self,
+            name: str,
+            value: str,
+            *,
+            ex: int | None = None,
+            nx: bool = False,
+        ) -> bool:
+            if value == "executed":
+                raise RuntimeError("simulated tombstone write failure")
+            return await super().set(name, value, ex=ex, nx=nx)
+
+    redis = _FailingTombstoneRedis()
+    store = RedisChannelExecutionStateStore(
+        redis,
+        dedupe_ttl_seconds=86_400,
+    )
+
+    assert await store.claim(binding_id="binding-raw", event_id="event-raw")
+    claim_call = redis.calls[0]
+    assert claim_call[1:] == ("processing", 86_400, True)
+
+    with pytest.raises(RuntimeError, match="tombstone write failure"):
+        await store.fail(binding_id="binding-raw", event_id="event-raw")
+
+    # Even a failed best-effort status transition must not shorten ownership
+    # back to the historical ten-minute processing lease.
+    assert await store.claim(binding_id="binding-raw", event_id="event-raw") is False
+
+
+@pytest.mark.asyncio
 async def test_session_mapping_is_scoped_by_binding_generation() -> None:
     redis = FakeRedis()
     store = RedisChannelExecutionStateStore(redis)
@@ -307,6 +347,8 @@ async def test_session_mapping_is_scoped_by_binding_generation() -> None:
         binding_generation=1,
         conversation_key="conversation-raw",
         session_id="session-v1",
+        tenant_id="tenant-raw",
+        principal_id=None,
     )
 
     assert (
@@ -314,9 +356,84 @@ async def test_session_mapping_is_scoped_by_binding_generation() -> None:
             binding_id="binding-raw",
             binding_generation=2,
             conversation_key="conversation-raw",
+            tenant_id="tenant-raw",
+            principal_id=None,
         )
         is None
     )
+
+
+@pytest.mark.asyncio
+async def test_session_envelope_is_principal_owned_and_legacy_safe() -> None:
+    redis = FakeRedis()
+    store = RedisChannelExecutionStateStore(redis)
+    arguments = {
+        "binding_id": "binding-raw",
+        "binding_generation": 4,
+        "conversation_key": "conversation-raw",
+        "tenant_id": "tenant-raw",
+    }
+
+    await store.put_session(
+        **arguments,
+        session_id="legacy-session",
+        principal_id=None,
+    )
+    assert await store.get_session(**arguments, principal_id=None) == "legacy-session"
+    assert await store.get_session(**arguments, principal_id="principal-a") is None
+
+    await store.put_session(
+        **arguments,
+        session_id="owned-session",
+        principal_id="principal-a",
+    )
+    assert await store.get_session(**arguments, principal_id="principal-a") == "owned-session"
+    assert await store.get_session(**arguments, principal_id="principal-b") is None
+    assert await store.get_session(**arguments, principal_id=None) is None
+    assert (
+        await store.get_session(
+            **{**arguments, "tenant_id": "other-tenant"},
+            principal_id="principal-a",
+        )
+        is None
+    )
+
+    stored = next(value for value in redis.values.values() if value.startswith("{"))
+    assert "principal-a" not in stored
+    assert "tenant-raw" not in stored
+    assert json.loads(stored)["v"] == 1
+
+
+@pytest.mark.asyncio
+async def test_session_envelope_rejects_malformed_and_tampered_values_then_resets() -> None:
+    redis = FakeRedis()
+    store = RedisChannelExecutionStateStore(redis)
+    arguments = {
+        "binding_id": "binding-raw",
+        "binding_generation": 4,
+        "conversation_key": "conversation-raw",
+        "tenant_id": "tenant-raw",
+        "principal_id": "principal-a",
+    }
+    await store.put_session(
+        **arguments,
+        session_id="owned-session",
+    )
+    session_key = next(key for key, value in redis.values.items() if value.startswith("{"))
+
+    redis.values[session_key] = "{malformed"
+    with pytest.raises(TypeError, match="invalid channel session"):
+        await store.get_session(**arguments)
+
+    redis.values[session_key] = json.dumps({"v": 1, "session_id": "owned-session", "owner": "tampered"})
+    assert await store.get_session(**arguments) is None
+
+    await store.reset_session(
+        binding_id="binding-raw",
+        binding_generation=4,
+        conversation_key="conversation-raw",
+    )
+    assert await store.get_session(**arguments) is None
 
 
 @pytest.mark.asyncio
@@ -333,6 +450,8 @@ async def test_canvas_adapter_guards_latest_release_without_extending_canvas_con
     db = AsyncSession()
 
     async def _run_sync(operation):
+        if not db.in_transaction():
+            await db.begin()
         return operation(SimpleNamespace())
 
     monkeypatch.setattr(db, "run_sync", _run_sync)
@@ -362,6 +481,7 @@ async def test_canvas_adapter_guards_latest_release_without_extending_canvas_con
 
     await adapter.validate_revision(tenant_id="tenant-1", target=target)
     safe_capabilities = await adapter.capabilities(tenant_id="tenant-1", target=target)
+    assert db.in_transaction() is False
     assert safe_capabilities.regeneration == "always"
     assert safe_capabilities.retryable is True
     assert safe_capabilities.effect_class == "generation_only"
@@ -372,6 +492,7 @@ async def test_canvas_adapter_guards_latest_release_without_extending_canvas_con
         }
     }
     unsafe_capabilities = await adapter.capabilities(tenant_id="tenant-1", target=target)
+    assert db.in_transaction() is False
     assert unsafe_capabilities.regeneration == "never"
     assert unsafe_capabilities.retryable is False
     assert unsafe_capabilities.effect_class == "unknown"
@@ -408,7 +529,7 @@ async def test_canvas_adapter_guards_latest_release_without_extending_canvas_con
     assert "release_revision_id" not in captured
     assert all("candidate-canvas" not in frame for frame in frames)
     assert all('"session_id": "session-1"' in frame for frame in frames)
-    assert sessions.prepared == [("agent-1", "session-1", "hello", "regenerate")]
+    assert sessions.prepared == [("agent-1", "session-1", "hello", "regenerate", None)]
     assert sessions.completed == ["candidate-canvas"]
     assert sessions.aborted == []
 

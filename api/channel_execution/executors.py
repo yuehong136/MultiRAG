@@ -134,7 +134,13 @@ class SqlAlchemyCanvasTargetDriver:
                 return None
             return canvas_regeneration_is_safe(latest_release.dsl)
 
-        regeneration_safe = await self._db.run_sync(_resolve)  # TODO(async-phase4)
+        try:
+            regeneration_safe = await self._db.run_sync(_resolve)  # TODO(async-phase4)
+        finally:
+            # Capability preflight is deliberately before event claim.  It
+            # must not leave a request transaction open across Redis claim or
+            # enterprise-provider network verification.
+            await self._db.rollback()
         if regeneration_safe is None:
             raise TargetRevisionUnavailableError()
         return _CANVAS_CAPABILITIES.model_copy(
@@ -201,6 +207,7 @@ class SqlAlchemyCanvasTargetDriver:
             session_id=session_id,
             question=question,
             operation=operation,
+            user_id=principal_id,
         )
         generated_session_id = prepared.execution_session_id
         terminal = False

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -15,6 +15,7 @@ class PreparedCanvasExecution:
     source_fingerprint: str | None
     owner_token: str
     target_id: str
+    expected_user_id: str = field(default="", repr=False)
 
 
 @dataclass(frozen=True, slots=True)

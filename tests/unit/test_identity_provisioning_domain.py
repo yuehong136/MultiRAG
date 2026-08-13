@@ -54,6 +54,7 @@ from api.identity.provisioning_contracts import (
     ProvisioningRepositoryError,
     ProvisioningResult,
     ProvisioningStatus,
+    ReverifyResolvedIdentityRequest,
     VerifiedProvisioningCommand,
 )
 
@@ -151,12 +152,37 @@ def _identity() -> ExternalIdentityRecord:
         user_id="platform-user-secret",
         provider="feishu",
         provider_tenant_key="provider-tenant-secret",
-        subject_type="provider_user_id",
+        subject_type="user_id",
         subject_value="stable-user-secret",
         state="active",
         verified_at=_NOW,
         last_seen_at=_NOW,
         identity_revision=2,
+    )
+
+
+def _resolved() -> IdentityResolutionResult:
+    identity = _identity()
+    return IdentityResolutionResult(
+        status=IdentityResolutionStatus.RESOLVED,
+        identity=identity,
+        membership=UserMembershipRecord(
+            user_id=identity.user_id,
+            tenant_id=identity.tenant_id,
+            role="normal",
+        ),
+    )
+
+
+def _reverify_request(
+    *,
+    resolution: IdentityResolutionResult | None = None,
+    provider_result: ProviderIdentityResult | None = None,
+) -> ReverifyResolvedIdentityRequest:
+    return ReverifyResolvedIdentityRequest(
+        resolution_request=_resolution_request(),
+        resolution=resolution or _resolved(),
+        provider_result=provider_result or _provider_result(),
     )
 
 
@@ -413,6 +439,78 @@ async def test_stale_alias_reverification_does_not_fabricate_policy_or_target() 
     assert command.policy_revision is None
     assert command.link_code_digest is None
     assert not hasattr(command, "target_user_id")
+
+
+async def test_active_resolution_reverification_persists_only_exact_fresh_proof() -> None:
+    service, repository, _policy_resolver = _service()
+
+    result = await service.reverify_resolved_identity(_reverify_request())
+
+    assert result.status is ProvisioningStatus.RESOLVED
+    [command] = repository.provision_commands
+    assert command.action is None
+    assert command.policy_revision is None
+    assert command.subject_value == "stable-user-secret"
+    assert command.verified_at == _NOW
+    assert command.link_code_digest is None
+
+
+@pytest.mark.parametrize(
+    "resolution",
+    [
+        IdentityResolutionResult(status=IdentityResolutionStatus.RESOLVED),
+        replace(_resolved(), provider_verification_required=True),
+        replace(_resolved(), error_code=IdentityErrorCode.INACTIVE),
+        replace(_resolved(), identity=replace(_identity(), state="inactive")),
+        replace(_resolved(), identity=replace(_identity(), tenant_id="tenant-2")),
+        replace(_resolved(), identity=replace(_identity(), subject_type="employee_no")),
+        replace(
+            _resolved(),
+            membership=UserMembershipRecord(
+                user_id="different-user",
+                tenant_id="tenant-1",
+                role="normal",
+            ),
+        ),
+    ],
+)
+async def test_active_reverification_rejects_non_exact_i3_snapshot(
+    resolution: IdentityResolutionResult,
+) -> None:
+    service, repository, _policy_resolver = _service()
+
+    result = await service.reverify_resolved_identity(
+        _reverify_request(resolution=resolution),
+    )
+
+    assert result.error_code is IdentityErrorCode.TRANSITION_INVALID
+    assert repository.provision_commands == []
+
+
+async def test_active_reverification_rejects_proof_for_another_canonical_subject() -> None:
+    service, repository, _policy_resolver = _service()
+
+    result = await service.reverify_resolved_identity(
+        _reverify_request(
+            provider_result=_provider_result(
+                identity={"provider_user_id": "different-subject"},
+            ),
+        ),
+    )
+
+    assert result.error_code is IdentityErrorCode.ASSERTION_INVALID
+    assert repository.provision_commands == []
+
+
+async def test_active_resolved_snapshot_remains_invalid_for_provisioning_entrypoint() -> None:
+    service, repository, _policy_resolver = _service()
+
+    result = await service.provision_verified_identity(
+        _provision_request(resolution=_resolved()),
+    )
+
+    assert result.error_code is IdentityErrorCode.TRANSITION_INVALID
+    assert repository.provision_commands == []
 
 
 @pytest.mark.parametrize(

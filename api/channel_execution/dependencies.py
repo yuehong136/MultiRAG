@@ -4,14 +4,20 @@ from __future__ import annotations
 
 import secrets
 from collections.abc import AsyncIterator
+from threading import Lock
+from typing import cast
 
 from fastapi import Depends, HTTPException, Request, status
 from pydantic import SecretStr
 from redis.asyncio import Redis
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from api.channel_control.repository import SqlAlchemyChannelRepository
-from api.channel_execution.adapters import RedisChannelExecutionStateStore, SqlAlchemyBindingResolver
+from api.channel_control.secret_store import get_channel_secret_store
+from api.channel_execution.adapters import (
+    AsyncExecutionRedis,
+    RedisChannelExecutionStateStore,
+    SessionFactoryBindingResolver,
+)
 from api.channel_execution.errors import ChannelStateUnavailableError
 from api.channel_execution.executors import (
     MultiRAGCanvasAgentExecutor,
@@ -24,6 +30,7 @@ from api.channel_execution.protocols import (
     BindingCapabilityResolver,
     BindingResolver,
     ChannelConversationStore,
+    ChannelPrincipalResolver,
     ExecutionClaimStore,
     WorkloadAuthenticator,
 )
@@ -31,6 +38,16 @@ from api.channel_execution.registry import TargetExecutorRegistry
 from api.channel_execution.service import ChannelExecutionService, PublishedTargetExecutionService
 from api.channel_runtime.tokens import derive_binding_workload_token
 from api.db.db_models import get_async_db
+from api.identity.providers.feishu import FeishuEnterpriseIdentityProvider
+from api.identity.provisioning import HmacLinkCodeCodec, IdentityProvisioningService
+from api.identity.provisioning_repository import SqlAlchemyIdentityProvisioningRepository
+from api.identity_adapters.channel_credentials import SessionFactoryChannelProviderCredentialResolver
+from api.identity_adapters.channel_runtime import (
+    ChannelIdentityResolver,
+    IdentityProviderRegistry,
+    SqlAlchemyChannelIdentityAuthorityResolver,
+    SqlAlchemyChannelIdentityReader,
+)
 from common.app_config import get_app_config
 
 
@@ -120,8 +137,10 @@ class MissingChannelConversationStore:
         binding_id: str,
         binding_generation: int,
         conversation_key: str,
+        tenant_id: str,
+        principal_id: str | None,
     ) -> str | None:
-        del binding_id, binding_generation, conversation_key
+        del binding_id, binding_generation, conversation_key, tenant_id, principal_id
         raise ChannelStateUnavailableError()
 
     async def put_session(
@@ -131,8 +150,10 @@ class MissingChannelConversationStore:
         binding_generation: int,
         conversation_key: str,
         session_id: str,
+        tenant_id: str,
+        principal_id: str | None,
     ) -> None:
-        del binding_id, binding_generation, conversation_key, session_id
+        del binding_id, binding_generation, conversation_key, session_id, tenant_id, principal_id
         raise ChannelStateUnavailableError()
 
     async def reset_session(
@@ -182,18 +203,108 @@ async def require_channel_workload(
     return await authenticator.authenticate(request)
 
 
-def get_binding_resolver(db: AsyncSession = Depends(get_async_db)) -> BindingResolver:
+def _require_async_session_factory() -> async_sessionmaker[AsyncSession]:
+    from api.db import db_models
+
+    session_factory = db_models.async_session_factory
+    if session_factory is None:
+        raise ChannelStateUnavailableError()
+    return session_factory
+
+
+def get_binding_resolver() -> BindingResolver:
     """Resolve trusted bindings from the MultiRAG control-plane tables."""
 
-    return SqlAlchemyBindingResolver(SqlAlchemyChannelRepository(db))
+    return SessionFactoryBindingResolver(_require_async_session_factory())
 
 
-def get_binding_capability_resolver(
-    db: AsyncSession = Depends(get_async_db),
-) -> BindingCapabilityResolver:
+def get_binding_capability_resolver() -> BindingCapabilityResolver:
     """Resolve one binding for a generation-scoped capability preflight."""
 
-    return SqlAlchemyBindingResolver(SqlAlchemyChannelRepository(db))
+    return SessionFactoryBindingResolver(_require_async_session_factory())
+
+
+_identity_provider_registry_lock = Lock()
+_identity_provider_registry: IdentityProviderRegistry | None = None
+_identity_provider_registry_session_factory: async_sessionmaker[AsyncSession] | None = None
+
+
+def _build_identity_provider_registry(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> IdentityProviderRegistry:
+    credential_resolver = SessionFactoryChannelProviderCredentialResolver(
+        session_factory,
+        get_channel_secret_store(),
+    )
+    return IdentityProviderRegistry(
+        {
+            "feishu": lambda: FeishuEnterpriseIdentityProvider(
+                credential_resolver,
+            ),
+        },
+    )
+
+
+def get_identity_provider_registry() -> IdentityProviderRegistry:
+    """Retain exactly one provider registry for the active DB lifecycle.
+
+    FastAPI may run this synchronous dependency concurrently in its thread
+    pool.  ``functools.lru_cache`` permits duplicate cold-miss executions, so
+    it is not sufficient for provider cache and single-flight ownership.
+    """
+
+    global _identity_provider_registry
+    global _identity_provider_registry_session_factory
+
+    session_factory = _require_async_session_factory()
+    registry = _identity_provider_registry
+    if registry is not None and _identity_provider_registry_session_factory is session_factory:
+        return registry
+    with _identity_provider_registry_lock:
+        registry = _identity_provider_registry
+        if registry is None or _identity_provider_registry_session_factory is not session_factory:
+            registry = _build_identity_provider_registry(session_factory)
+            _identity_provider_registry = registry
+            _identity_provider_registry_session_factory = session_factory
+        return registry
+
+
+def _reset_identity_provider_registry_for_testing() -> None:
+    """Drop retained process state at an explicit application/test boundary."""
+
+    global _identity_provider_registry
+    global _identity_provider_registry_session_factory
+
+    with _identity_provider_registry_lock:
+        _identity_provider_registry = None
+        _identity_provider_registry_session_factory = None
+
+
+def _build_identity_provisioning_service() -> IdentityProvisioningService:
+    session_factory = _require_async_session_factory()
+    repository = SqlAlchemyIdentityProvisioningRepository(session_factory)
+    provisioning = get_app_config().identity.provisioning
+    codec = HmacLinkCodeCodec(
+        keys=provisioning.require_hmac_keyring(),
+        active_key_id=provisioning.active_key_id,
+    )
+    return IdentityProvisioningService(repository, repository, codec)
+
+
+def get_channel_principal_resolver(
+    provider_registry: IdentityProviderRegistry = Depends(get_identity_provider_registry),
+) -> ChannelPrincipalResolver:
+    """Compose link authority, I3/I4/I6 and P1 over short sessions."""
+
+    session_factory = _require_async_session_factory()
+    return ChannelIdentityResolver(
+        authority_resolver=SqlAlchemyChannelIdentityAuthorityResolver(
+            session_factory,
+        ),
+        identity_reader=SqlAlchemyChannelIdentityReader(session_factory),
+        provider_registry=provider_registry,
+        provisioning_service_factory=_build_identity_provisioning_service,
+    )
 
 
 def _redis_host_port(raw_host: str) -> tuple[str, int]:
@@ -238,7 +349,7 @@ def get_channel_execution_state_store(
 
     control = get_app_config().channels.control
     return RedisChannelExecutionStateStore(
-        redis,
+        cast(AsyncExecutionRedis, redis),
         session_ttl_seconds=control.session_ttl_seconds,
         dedupe_ttl_seconds=control.dedupe_ttl_seconds,
     )
@@ -276,6 +387,7 @@ def get_published_target_execution_service(
 
 def get_channel_execution_service(
     binding_resolver: BindingResolver = Depends(get_binding_resolver),
+    principal_resolver: ChannelPrincipalResolver = Depends(get_channel_principal_resolver),
     conversation_store: ChannelConversationStore = Depends(get_channel_conversation_store),
     claim_store: ExecutionClaimStore = Depends(get_execution_claim_store),
     target_service: PublishedTargetExecutionService = Depends(get_published_target_execution_service),
@@ -284,6 +396,7 @@ def get_channel_execution_service(
 
     return ChannelExecutionService(
         binding_resolver=binding_resolver,
+        principal_resolver=principal_resolver,
         conversation_store=conversation_store,
         claim_store=claim_store,
         target_service=target_service,

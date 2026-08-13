@@ -38,6 +38,7 @@ from api.identity.provisioning_contracts import (
     ProvisioningRepositoryError,
     ProvisioningResult,
     ProvisioningStatus,
+    ReverifyResolvedIdentityRequest,
     VerifiedProvisioningAlias,
     VerifiedProvisioningCommand,
 )
@@ -187,6 +188,26 @@ class IdentityProvisioningService:
             result = _provisioning_rejection(exc.code)
         return _sanitize_link_code_result(command_or_error, result)
 
+    async def reverify_resolved_identity(
+        self,
+        request: ReverifyResolvedIdentityRequest,
+    ) -> ProvisioningResult:
+        """Persist this I4 proof for exactly one active I3 resolution.
+
+        Keeping this separate from provisioning prevents an ordinary resolved
+        snapshot from being mistaken for a JIT/link plan while still ensuring
+        a Channel Principal is built from proof that was durably re-read.
+        """
+
+        command_or_error = self._verified_command(request, reverify_resolved=True)
+        if isinstance(command_or_error, IdentityErrorCode):
+            return _provisioning_rejection(command_or_error)
+        try:
+            result = await self._repository.provision_verified_identity(command_or_error)
+        except ProvisioningRepositoryError as exc:
+            result = _provisioning_rejection(exc.code)
+        return _sanitize_link_code_result(command_or_error, result)
+
     async def issue_link_code(
         self,
         request: LinkCodeIssueRequest,
@@ -231,7 +252,9 @@ class IdentityProvisioningService:
 
     def _verified_command(
         self,
-        request: ProvisionIdentityRequest,
+        request: ProvisionIdentityRequest | ReverifyResolvedIdentityRequest,
+        *,
+        reverify_resolved: bool = False,
     ) -> VerifiedProvisioningCommand | IdentityErrorCode:
         resolution_request = request.resolution_request
         resolution = request.resolution
@@ -240,7 +263,10 @@ class IdentityProvisioningService:
             return IdentityErrorCode.ASSERTION_INVALID
         if resolution_request.alias.alias_type is not ProviderAliasType.OPEN_ID:
             return IdentityErrorCode.ASSERTION_INVALID
-        if not _valid_resolution_plan(resolution):
+        if reverify_resolved:
+            if not _valid_resolved_snapshot(resolution, context=context):
+                return IdentityErrorCode.TRANSITION_INVALID
+        elif not _valid_resolution_plan(resolution):
             return IdentityErrorCode.TRANSITION_INVALID
 
         now = self._now()
@@ -249,15 +275,22 @@ class IdentityProvisioningService:
         proof = _valid_provider_proof(request, context, now=now)
         if isinstance(proof, IdentityErrorCode):
             return proof
+        if reverify_resolved and not _resolved_snapshot_matches_proof(
+            resolution,
+            context=context,
+            proof=proof,
+        ):
+            return IdentityErrorCode.ASSERTION_INVALID
         aliases = _provider_aliases(proof)
         if aliases is None:
             return IdentityErrorCode.ASSERTION_INVALID
 
         link_material: LinkCodeMaterial | None = None
-        if request.link_code is not None:
+        link_code = request.link_code if isinstance(request, ProvisionIdentityRequest) else None
+        if link_code is not None:
             if resolution.provisioning_action is not ProvisioningAction.REQUIRE_LINK:
                 return IdentityErrorCode.TRANSITION_INVALID
-            link_material = self._codec.digest(request.link_code)
+            link_material = self._codec.digest(link_code)
             if link_material is None:
                 return IdentityErrorCode.LINK_REQUIRED
 
@@ -326,8 +359,50 @@ def _valid_resolution_plan(result: IdentityResolutionResult) -> bool:
     )
 
 
+def _valid_resolved_snapshot(
+    result: IdentityResolutionResult,
+    *,
+    context: ProviderContext,
+) -> bool:
+    identity = result.identity
+    membership = result.membership
+    return bool(
+        result.status is IdentityResolutionStatus.RESOLVED
+        and result.error_code is None
+        and result.provisioning_action is None
+        and result.provisioning_policy_revision is None
+        and not result.provider_verification_required
+        and identity is not None
+        and membership is not None
+        and identity.state == "active"
+        and identity.tenant_id == context.tenant_id
+        and identity.provider == context.provider
+        and identity.provider_tenant_key == context.provider_tenant_key
+        and identity.subject_type == "user_id"
+        and membership.user_id == identity.user_id
+        and membership.tenant_id == context.tenant_id
+        and membership.role in {"owner", "admin", "normal"}
+    )
+
+
+def _resolved_snapshot_matches_proof(
+    result: IdentityResolutionResult,
+    *,
+    context: ProviderContext,
+    proof: ProviderIdentity,
+) -> bool:
+    identity = result.identity
+    return bool(
+        identity is not None
+        and identity.tenant_id == context.tenant_id
+        and identity.provider == proof.provider
+        and identity.provider_tenant_key == proof.provider_tenant_key
+        and identity.subject_value == proof.provider_user_id
+    )
+
+
 def _valid_provider_proof(
-    request: ProvisionIdentityRequest,
+    request: ProvisionIdentityRequest | ReverifyResolvedIdentityRequest,
     context: ProviderContext,
     *,
     now: datetime,

@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from api.identity.principal import AuthenticationSource, Principal
+
 TargetType = Literal["multirag.canvas_agent", "multirag.dialog"]
 ExecutionOperation = Literal["message", "regenerate"]
 ExecutionEventType = Literal[
@@ -140,8 +142,22 @@ class TrustedChannelContext:
     binding_generation: int
     provider: str = ""
     run_policy: dict[str, Any] = field(default_factory=dict)
-    principal_id: str | None = None
+    principal_id: str | None = field(default=None, repr=False)
+    principal: Principal | None = field(default=None, repr=False)
     session_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.principal is None:
+            if self.principal_id is not None:
+                raise ValueError("channel principal context is inconsistent")
+            return
+        if (
+            self.principal_id != self.principal.platform_user_id
+            or self.tenant_id != self.principal.tenant_id
+            or self.principal.authentication.source is not AuthenticationSource.ENTERPRISE_IDENTITY
+            or self.principal.authentication.provider != self.provider
+        ):
+            raise ValueError("channel principal context is inconsistent")
 
 
 class ExecutionEvent(BaseModel):

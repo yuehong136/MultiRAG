@@ -60,6 +60,15 @@ class ProvisionIdentityRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class ReverifyResolvedIdentityRequest:
+    """Fresh I4 proof for one strict I3 active-identity snapshot."""
+
+    resolution_request: IdentityResolutionRequest = field(repr=False)
+    resolution: IdentityResolutionResult
+    provider_result: ProviderIdentityResult = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
 class LinkCodeIssueRequest:
     """Issue a grant for the authenticated Principal in this exact account."""
 
@@ -211,6 +220,7 @@ __all__ = [
     "ProvisioningRepositoryError",
     "ProvisioningResult",
     "ProvisioningStatus",
+    "ReverifyResolvedIdentityRequest",
     "VerifiedProvisioningAlias",
     "VerifiedProvisioningCommand",
 ]

@@ -89,9 +89,9 @@ class ChannelActor(BaseModel):
 `exclude_if` 是 C1/C2 的 wire 兼容闸门：旧 actor 做 `model_dump(mode="json")` 时不新增
 `"identity": null`，runtime client 收到 `identity=None` 时仍产生旧请求字节。Channel transport 内使用
 冻结、脱敏 repr 的 `IncomingIdentityAssertion/IncomingIdentityIdentifier`；飞书规范化后由 Bridge
-传给 runtime client，regenerate 也保留原 assertion，再映射为上面的 private DTO。execution resolver
-只校验 actor provider 与服务端 binding provider 一致，不读取 `identity`，也不据此改写 Tenant、目标、
-session 或 Principal。C3 才允许经 IdentityService 验证后 consume。
+传给 runtime client，regenerate 也保留原 assertion，再映射为上面的 private DTO。C3 execution
+composition 只在成功 claim 后消费 `identity`，且只能结合服务端 binding/account link、Provider proof、
+I3/I6 与 P1 得出 Principal；assertion 仍不能改写 Tenant、目标、session 或 Principal。
 
 飞书 C2 的 Provider-specific 约束比通用 DTO 更窄：事件 header `tenant_key` 和 sender `open_id` 必填，
 存在的 `user_id/union_id` 全部按 kind 保留；sender tenant 有值时必须匹配 header tenant。header app
@@ -161,7 +161,22 @@ contracts、mypy 86 source files、unit **2265 passed in 37.20s**，smoke 六组
 两个飞书 worker 均 connected；真实消息只记录 identity/tenant 是否存在、identifier kinds/count 的
 脱敏结构，随后 private execution HTTP 200 并完成。resolver 未 consume，Canvas 仍为 `user_id=""`、
 `exp_user_id=null`，10 张 EIM sidecar 零写入；不得把已 emit 的 assertion 描述为已验证身份、数据库映射
-或已上线 Principal。
+或已上线 Principal。该句是 C2 当时的 live 边界；C3/X7 源码与自动门禁现已完成但新 API 尚未部署，
+因此 C3 仍保持 `🔵`，不得用旧进程 smoke 宣称 live。
+
+C3 consume 的当前私有契约是：pre-claim 的 upgrade/run-policy/target capability deny/cancel 行为不变；
+成功 Redis claim 后才按 authority→initial I3→I4→I6→final I3→P1 解析身份，并在 session/target 前完成。
+每个 linked event 逻辑上执行 I4，允许命中同 account generation 的有界 cache，但 cache hit 沿用原 proof
+时间。NO_LINK 保留 legacy anonymous；LINKED 缺 assertion、authority 非唯一/损坏、Provider/Tenant/
+subject 不一致、identity inactive/conflict/revoked 或 proof/canonical drift 均 fail closed。
+
+成功 claim 的初始 NX 直接占满完整 dedupe TTL；之后 identity、session、target、stream、session put 或
+complete 的错误与取消都写同一 full-window failure tombstone，不能在短 TTL 后重放。会话值为带版本的
+tenant/principal owner envelope；legacy raw 仅 NO_LINK 可续用，linked principal 不复用 raw 或其他 owner
+会话。Dialog/Canvas 已有数据库行还要校验 owner 等于本次 `principal_id`。这只完成 C3 Principal
+promotion 与 target/session ownership，不把 Principal 传播进 Agent/RAG/Memory/Workflow/MCP；P2 仍负责
+后者。自动证据为 C3 定向 **203 passed**、`make verify` **2403 passed**、强制 integration
+**162 passed**；新 API smoke 与真实飞书 live 尚待部署后补齐。
 
 ### 2.4 Channel 交互契约的所有权
 
@@ -877,14 +892,14 @@ Web JWT 只有在 JWT 解析明确返回预期的 `not_authenticated` 时才能�
 
 这个兼容面只覆盖 async `async_current_user`。存量 sync `Depends(manager)` 仍可能返回 ORM User，
 `async_current_tenant_id` 的 broad fallback 也是既有债务；P1 不得宣称所有入口已统一为 Principal。
-此轮也不包含 C3 Channel 组装、P2 全链传播、A2/P3 动态委托或 A7 inbound Resource Server。
+P1 此轮本身不包含 C3 Channel 组装、P2 全链传播、A2/P3 动态委托或 A7 inbound Resource Server；
+C3 已在后续独立 composition 中实现源码并等待 live。
 
 旧提案中的 `EnterpriseIdentityService.resolve_channel_actor(tenant_id, channel_id, ...) -> Principal`
-**不再是 identity core 契约**。C3 的 Channel adapter 将来负责
-`channel_id -> IdentityProviderChannelLink -> ProviderContext`，再组合 I4 Provider verification、I6
-provision/link transaction、I3 `resolve_external_identity()` 与 P1 Principal builder。`channel_id` 只留在
-该 adapter，不得重新进入通用 identity repository/service。目录事件消费和 linked identity 重验分别
-由 I7/I8 落地。
+**不再是 identity core 契约**。当前 C3 adapter 位于 `api.identity_adapters.channel_runtime`，按
+`channel_id -> IdentityProviderChannelLink -> ProviderContext` 组合 I3、I4、I6 与 P1 builder；
+`channel_id` 只留在该 adapter，不重新进入通用 identity repository/service。active resolved identity 的
+每消息重验由 I6 的窄 `reverify_resolved_identity` 用例完成；目录事件消费与批量兜底仍分别属于 I7/I8。
 
 Provider SPI：
 

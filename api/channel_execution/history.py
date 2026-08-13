@@ -194,6 +194,8 @@ def _canvas_fingerprint(row: API4Conversation) -> str:
             "reference": row.reference,
             "dsl": row.dsl,
             "round": row.round,
+            "user_id": row.user_id,
+            "exp_user_id": row.exp_user_id,
         }
     )
 
@@ -218,11 +220,13 @@ class SqlAlchemyCanvasHistoryTransaction:
         session_id: str | None,
         question: str,
         operation: ExecutionOperation,
+        user_id: str | None = None,
     ) -> PreparedCanvasExecution:
         # Revision validation may have opened a read transaction. Candidate
         # creation owns a short, independent transaction before the long stream.
         await self._db.rollback()
         owner_token = get_uuid()
+        expected_user_id = user_id or ""
         if session_id is None:
             if operation == "regenerate":
                 raise LookupError("A session is required for regeneration")
@@ -230,6 +234,7 @@ class SqlAlchemyCanvasHistoryTransaction:
                 self._db,
                 owner_token=owner_token,
                 target_id=target_id,
+                expected_user_id=expected_user_id,
             )
             return PreparedCanvasExecution(
                 public_session_id=None,
@@ -237,10 +242,11 @@ class SqlAlchemyCanvasHistoryTransaction:
                 source_fingerprint=None,
                 owner_token=owner_token,
                 target_id=target_id,
+                expected_user_id=expected_user_id,
             )
 
         source = await self._db.get(API4Conversation, session_id)
-        if source is None or source.dialog_id != target_id:
+        if source is None or source.dialog_id != target_id or source.user_id != expected_user_id:
             raise LookupError("Session not found")
         messages = _sanitize_messages(source.message)
         references = deepcopy(source.reference)
@@ -295,6 +301,7 @@ class SqlAlchemyCanvasHistoryTransaction:
             source_fingerprint=source_fingerprint,
             owner_token=owner_token,
             target_id=target_id,
+            expected_user_id=expected_user_id,
         )
 
     async def commit(
@@ -320,7 +327,7 @@ class SqlAlchemyCanvasHistoryTransaction:
             messages = _sanitize_messages(candidate.message)
             if not _has_visible_assistant(messages):
                 raise TargetExecutionFailedError()
-            if metadata.publish_user_id is None:
+            if metadata.publish_user_id != prepared.expected_user_id:
                 raise TargetExecutionFailedError()
             metadata.state = CANVAS_CANDIDATE_STATE_FINALIZING
             candidate.message = messages
@@ -429,7 +436,7 @@ class SqlAlchemyDialogHistoryTransaction:
 
         try:
             source = await self._db.get(Conversation, session_id)
-            if source is None or source.dialog_id != target_id:
+            if source is None or source.dialog_id != target_id or source.user_id != user_id:
                 raise LookupError("Session not found")
             expected_head = DialogHistoryHead(
                 messages=deepcopy(source.message),

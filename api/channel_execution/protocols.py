@@ -66,6 +66,18 @@ class BindingCapabilityResolver(Protocol):
 
 
 @runtime_checkable
+class ChannelPrincipalResolver(Protocol):
+    """Promotes a linked, provider-verified actor after event ownership."""
+
+    async def resolve(
+        self,
+        *,
+        context: TrustedChannelContext,
+        command: ChannelExecutionCommand,
+    ) -> TrustedChannelContext: ...
+
+
+@runtime_checkable
 class ChannelConversationStore(Protocol):
     """Persists the trusted external-conversation to target-session mapping."""
 
@@ -75,6 +87,8 @@ class ChannelConversationStore(Protocol):
         binding_id: str,
         binding_generation: int,
         conversation_key: str,
+        tenant_id: str,
+        principal_id: str | None,
     ) -> str | None: ...
 
     async def put_session(
@@ -84,6 +98,8 @@ class ChannelConversationStore(Protocol):
         binding_generation: int,
         conversation_key: str,
         session_id: str,
+        tenant_id: str,
+        principal_id: str | None,
     ) -> None: ...
 
     async def reset_session(
@@ -124,6 +140,7 @@ class CanvasHistoryTransaction(Protocol):
         session_id: str | None,
         question: str,
         operation: ExecutionOperation,
+        user_id: str | None = None,
     ) -> PreparedCanvasExecution: ...
 
     async def commit(

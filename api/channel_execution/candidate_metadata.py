@@ -8,7 +8,7 @@ atomically without adding Channel parameters to the upstream-facing service.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from sqlalchemy import event, func
@@ -31,6 +31,7 @@ _NEW_CANVAS_CANDIDATE_INFO_KEY = "multirag.channel.canvas_candidate"
 class _NewCanvasCandidateCapture:
     owner_token: str
     target_id: str
+    expected_user_id: str = field(repr=False)
     expires_at: datetime | ColumnElement[datetime]
     candidate_session_id: str | None = None
     committed: bool = False
@@ -49,6 +50,7 @@ def arm_new_canvas_candidate_capture(
     *,
     owner_token: str,
     target_id: str,
+    expected_user_id: str,
     expires_at: datetime | ColumnElement[datetime] | None = None,
 ) -> None:
     """Arm one AsyncSession for the next core-created Canvas conversation."""
@@ -59,6 +61,7 @@ def arm_new_canvas_candidate_capture(
     info[_NEW_CANVAS_CANDIDATE_INFO_KEY] = _NewCanvasCandidateCapture(
         owner_token=owner_token,
         target_id=target_id,
+        expected_user_id=expected_user_id,
         expires_at=candidate_expires_at() if expires_at is None else expires_at,
     )
 
@@ -110,7 +113,7 @@ def _capture_new_canvas_candidate(
         raise RuntimeError("Canvas candidate capture requires exactly one conversation")
 
     conversation = conversations[0]
-    if not conversation.id or conversation.user_id is None:
+    if not conversation.id or conversation.user_id is None or conversation.user_id != capture.expected_user_id:
         raise RuntimeError("Canvas candidate conversation has no publish identity")
 
     publish_user_id = conversation.user_id

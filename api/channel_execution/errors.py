@@ -39,3 +39,9 @@ class ChannelStateUnavailableError(ChannelExecutionError):
 
 class DuplicateEventError(ChannelExecutionError):
     code = "EVENT_ALREADY_CLAIMED"
+
+
+class ChannelIdentityResolutionError(ChannelExecutionError):
+    """Fail-closed identity promotion with a stable, non-sensitive code."""
+
+    code = "IDENTITY_REPOSITORY_UNAVAILABLE"

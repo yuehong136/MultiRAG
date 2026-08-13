@@ -120,6 +120,7 @@ async def test_dialog_existing_session_commits_one_detached_cas_without_candidat
                 session_id=public_id,
                 question=question,
                 operation=operation,
+                user_id="user-1",
             )
             if operation == "regenerate":
                 assert [message["content"] for message in prepared.working_copy.message] == [
@@ -184,12 +185,14 @@ async def test_dialog_two_detached_runs_from_same_head_allow_only_one_commit(
             session_id=public_id,
             question="first concurrent question",
             operation="message",
+            user_id="user-2",
         )
         second = await second_transaction.prepare(
             target_id="dialog-2",
             session_id=public_id,
             question="second concurrent question",
             operation="message",
+            user_id="user-2",
         )
         first.working_copy.message.extend(
             [
@@ -216,6 +219,46 @@ async def test_dialog_two_detached_runs_from_same_head_allow_only_one_commit(
         assert public is not None
         assert public.message[-1]["content"] == "first answer"
         assert all(message.get("content") != "second answer" for message in public.message)
+
+
+async def test_existing_dialog_session_is_owned_by_current_principal(
+    bootstrapped_async_engine: AsyncEngine,
+) -> None:
+    factory = async_sessionmaker(bootstrapped_async_engine, expire_on_commit=False)
+    public_id = "dialog-owner-000000000000000001"
+
+    async with factory() as db:
+        db.add(
+            Conversation(
+                id=public_id,
+                dialog_id="dialog-owner-check",
+                name="public",
+                message=_dialog_messages(),
+                reference=[{"chunks": []}, {"chunks": []}],
+                user_id="principal-a",
+            )
+        )
+        await db.commit()
+        transaction = SqlAlchemyDialogHistoryTransaction(db)
+
+        prepared = await transaction.prepare(
+            target_id="dialog-owner-check",
+            session_id=public_id,
+            question="continue",
+            operation="message",
+            user_id="principal-a",
+        )
+        assert prepared.working_copy.user_id == "principal-a"
+        await transaction.abort(prepared)
+
+        with pytest.raises(LookupError, match="Session not found"):
+            await transaction.prepare(
+                target_id="dialog-owner-check",
+                session_id=public_id,
+                question="cross principal",
+                operation="message",
+                user_id="principal-b",
+            )
 
 
 async def test_dialog_new_session_exists_only_after_terminal_commit(
@@ -286,6 +329,7 @@ async def test_dialog_reasoning_only_result_keeps_public_head_unchanged(
             session_id=public_id,
             question="hidden answer",
             operation="message",
+            user_id="user-reasoning",
         )
         prepared.working_copy.message.extend(
             [
@@ -335,6 +379,7 @@ async def test_dialog_cas_accepts_legacy_null_json_storage(
             session_id=public_id,
             question="hello",
             operation="message",
+            user_id="user-null",
         )
         prepared.working_copy.message.extend(
             [
@@ -411,6 +456,7 @@ async def test_canvas_regenerate_projects_visible_history_before_execution(
             session_id=public_id,
             question="same question",
             operation="regenerate",
+            user_id="user-1",
         )
         assert prepared.execution_session_id is not None
         candidate = await db.get(API4Conversation, prepared.execution_session_id)
@@ -466,6 +512,7 @@ async def test_canvas_new_session_is_registered_atomically_and_restores_publish_
             session_id=None,
             question="hello",
             operation="message",
+            user_id="principal-new",
         )
 
         def _core_save(sync_db: Session) -> str:
@@ -518,6 +565,48 @@ async def test_canvas_new_session_is_registered_atomically_and_restores_publish_
         assert candidate_id in await db.run_sync(lambda sync_db: _listed_canvas_session_ids(sync_db, "canvas-new"))
 
 
+async def test_existing_canvas_session_is_owned_by_current_principal(
+    bootstrapped_async_engine: AsyncEngine,
+) -> None:
+    factory = async_sessionmaker(bootstrapped_async_engine, expire_on_commit=False)
+    public_id = "canvas-owner-000000000000000001"
+
+    async with factory() as db:
+        db.add(
+            API4Conversation(
+                id=public_id,
+                name="public",
+                dialog_id="canvas-owner-check",
+                user_id="principal-a",
+                message=_dialog_messages()[1:],
+                reference=[],
+                source="agent",
+                dsl=_safe_canvas_dsl(),
+            )
+        )
+        await db.commit()
+        transaction = SqlAlchemyCanvasHistoryTransaction(db)
+
+        prepared = await transaction.prepare(
+            target_id="canvas-owner-check",
+            session_id=public_id,
+            question="continue",
+            operation="message",
+            user_id="principal-a",
+        )
+        assert prepared.expected_user_id == "principal-a"
+        await transaction.abort(prepared, prepared.execution_session_id)
+
+        with pytest.raises(LookupError, match="Session not found"):
+            await transaction.prepare(
+                target_id="canvas-owner-check",
+                session_id=public_id,
+                question="cross principal",
+                operation="message",
+                user_id="principal-b",
+            )
+
+
 async def test_canvas_owner_token_fences_commit_and_abort(
     bootstrapped_async_engine: AsyncEngine,
 ) -> None:
@@ -544,6 +633,7 @@ async def test_canvas_owner_token_fences_commit_and_abort(
             session_id=public_id,
             question="follow up",
             operation="message",
+            user_id="principal-owner",
         )
         candidate_id = prepared.execution_session_id
         assert candidate_id is not None
@@ -582,6 +672,7 @@ async def test_canvas_abort_finds_core_candidate_before_first_frame(
             session_id=None,
             question="hello",
             operation="message",
+            user_id="principal-pre-frame",
         )
 
         def _commit_then_fail(sync_db: Session) -> None:

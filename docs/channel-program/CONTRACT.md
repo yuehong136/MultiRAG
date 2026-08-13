@@ -132,15 +132,22 @@ worker 使用，不属于前端 `channel-api/v1`。它沿用 workload bearer tok
   不记录 tenant key、外部 identifier 或 app ID 的原值或 hash；既有 account/binding/message 等运维日志
   仍只使用不可逆短 hash 关联事件，不进入 identity 结构字段。
 - execution resolver 在 C1/C2 不读取 structured identity；Tenant、目标和版本仍只由 workload credential
-  与服务端 binding 决定，当前 execution owner 行为保持 C1 前不变且绝不取自 assertion。C3 前不得把
-  assertion 或 legacy subject 提升为 MultiRAG Principal。
+  与服务端 binding 决定，execution owner 绝不直接取自 assertion。C3 只允许在成功 claim 后，经服务端
+  authority/link、I3/I4/I6 与 P1 验证后提升 Principal；legacy subject 永不直通。
 
 因此这是 private API 的向后兼容加法，公开 `channel-api/v1` 不 bump，web 仓无字段或部署义务。C1
 tolerate 与 C2 emit 均已完成。`896c582d` 通过 C2 定向 **104 passed**、独立兼容 **153 passed**、安全
 扫描 **0 findings** 和完整门禁；重启后的两个飞书 worker connected，真实消息记录安全结构并由 private
-API HTTP 200 完成。resolver 仍不 consume、`principal_id=None`，Canvas 为 `user_id=""`、
-`exp_user_id=null` 且 10 张 EIM sidecar 零写入；不能由此宣称 C3、Contact/I3 consume、数据库映射或
-Principal 已上线。
+API HTTP 200 完成。resolver 当时仍不 consume、`principal_id=None`，Canvas 为 `user_id=""`、
+`exp_user_id=null` 且 10 张 EIM sidecar 零写入；这是 C2 的历史 live 边界。
+
+C3/X7 源码与自动门禁现已完成但尚未部署 live：claim 后按 authority→initial I3→I4→I6→final I3→P1
+提升 Principal；NO_LINK 保留 legacy anonymous，LINKED 损坏 fail closed。claim 与失败 tombstone 都覆盖
+完整 dedupe window；Redis session 使用 tenant/principal owner envelope，legacy raw 仅 NO_LINK 可续用，
+Dialog/Canvas 再校验 `principal_id` owner。该 private consume 不 bump 公开 `channel-api/v1`，也不改 web；
+它只交付 Principal promotion/target ownership，不含 P2 的 Agent/RAG/Memory/Workflow/MCP 传播。证据为
+定向 **203 passed**、`make verify` **2403 passed**、强制 integration **162 passed**；旧 API smoke 仅是
+部署前基线，新进程与真实飞书消息待验。
 
 ---
 

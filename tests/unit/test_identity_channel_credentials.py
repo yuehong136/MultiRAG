@@ -6,12 +6,13 @@ import asyncio
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
+from types import TracebackType
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.channel_control.secret_store import EncryptedSecret, SecretStoreUnavailable
 from api.identity.contracts import ProviderContext
@@ -22,7 +23,10 @@ from api.identity.providers.contracts import (
     ProviderCredentialResolver,
     ProviderErrorCode,
 )
-from api.identity_adapters.channel_credentials import ChannelProviderCredentialResolver
+from api.identity_adapters.channel_credentials import (
+    ChannelProviderCredentialResolver,
+    SessionFactoryChannelProviderCredentialResolver,
+)
 
 _NOW = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
 _SENSITIVE = "must-never-appear"
@@ -106,6 +110,68 @@ class _SecretStore:
         if self.error is not None:
             raise self.error
         return self.plaintext
+
+
+class _TrackedSessionContext:
+    def __init__(
+        self,
+        session: AsyncSession,
+        state: dict[str, bool],
+    ) -> None:
+        self._session = session
+        self._state = state
+
+    async def __aenter__(self) -> AsyncSession:
+        self._state["open"] = True
+        return self._session
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        del exc_type, exc_value, traceback
+        self._state["open"] = False
+
+
+class _TrackedSessionFactory(async_sessionmaker[AsyncSession]):
+    def __init__(
+        self,
+        session: AsyncSession,
+        state: dict[str, bool],
+    ) -> None:
+        super().__init__()
+        self._session = session
+        self._state = state
+
+    def __call__(self) -> _TrackedSessionContext:
+        return _TrackedSessionContext(self._session, self._state)
+
+
+class _ExitAwareSecretStore(_SecretStore):
+    def __init__(
+        self,
+        state: dict[str, bool],
+        *,
+        error: BaseException | None = None,
+    ) -> None:
+        super().__init__(error=error)
+        self._state = state
+
+    async def decrypt(
+        self,
+        *,
+        tenant_id: str,
+        channel_id: str,
+        encrypted: EncryptedSecret,
+    ) -> Mapping[str, str]:
+        assert self._state["open"] is False
+        return await super().decrypt(
+            tenant_id=tenant_id,
+            channel_id=channel_id,
+            encrypted=encrypted,
+        )
 
 
 def _resolver(
@@ -350,3 +416,66 @@ def test_test_double_has_the_same_secret_store_shape() -> None:
     store: Any = _SecretStore()
     assert callable(store.encrypt)
     assert callable(store.decrypt)
+
+
+async def test_factory_resolver_closes_db_session_before_decrypt(
+    async_db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = {"open": False}
+    execute = AsyncMock(return_value=_Rows([_row()]))
+    monkeypatch.setattr(async_db, "execute", execute)
+    store = _ExitAwareSecretStore(state)
+    resolver = SessionFactoryChannelProviderCredentialResolver(
+        _TrackedSessionFactory(async_db, state),
+        store,
+    )
+
+    credential = await resolver.resolve(_context())
+
+    assert state["open"] is False
+    assert credential.credential_generation == 3
+    assert _SENSITIVE not in repr(credential)
+
+
+@pytest.mark.parametrize("health_state", ["pending", "degraded", "error", "disabled"])
+async def test_factory_resolver_requires_exact_healthy_before_decrypt(
+    async_db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    health_state: str,
+) -> None:
+    state = {"open": False}
+    execute = AsyncMock(return_value=_Rows([_row(health_state=health_state)]))
+    monkeypatch.setattr(async_db, "execute", execute)
+    store = _ExitAwareSecretStore(state)
+    resolver = SessionFactoryChannelProviderCredentialResolver(
+        _TrackedSessionFactory(async_db, state),
+        store,
+    )
+
+    with pytest.raises(ProviderCredentialError) as caught:
+        await resolver.resolve(_context())
+
+    assert caught.value.code is ProviderErrorCode.CREDENTIAL_UNAVAILABLE
+    assert state["open"] is False
+    assert store.calls == []
+
+
+async def test_factory_resolver_propagates_decrypt_cancellation_after_session_exit(
+    async_db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = {"open": False}
+    execute = AsyncMock(return_value=_Rows([_row()]))
+    monkeypatch.setattr(async_db, "execute", execute)
+    store = _ExitAwareSecretStore(state, error=asyncio.CancelledError())
+    resolver = SessionFactoryChannelProviderCredentialResolver(
+        _TrackedSessionFactory(async_db, state),
+        store,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await resolver.resolve(_context())
+
+    assert state["open"] is False
+    assert len(store.calls) == 1

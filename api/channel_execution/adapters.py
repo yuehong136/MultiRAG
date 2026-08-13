@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Protocol, runtime_checkable
+import json
+from typing import Protocol, cast, runtime_checkable
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.channel_execution.models import (
     ChannelExecutionCommand,
     ExecutionTargetRef,
+    TargetType,
     TrustedChannelContext,
     WorkloadIdentity,
 )
 from api.db.db_models import ChannelBinding, ChannelSecret, ChatChannel
 
 _STATE_PREFIX = "multirag:channel-execution:v1"
-_PROCESSING_TTL_SECONDS = 600
 _DEFAULT_STATE_TTL_SECONDS = 86_400
 
 
@@ -94,7 +97,7 @@ class SqlAlchemyBindingResolver:
             return None
         try:
             target = ExecutionTargetRef(
-                target_type=binding.target_type,
+                target_type=cast(TargetType, binding.target_type),
                 target_id=binding.target_id,
                 revision_id=binding.target_revision_id,
             )
@@ -112,6 +115,50 @@ class SqlAlchemyBindingResolver:
             # MultiRAG principal. A later verified identity mapper can set it.
             principal_id=None,
         )
+
+
+class SessionFactoryBindingResolver:
+    """Resolve binding authority in a short, self-closing DB session."""
+
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        self._session_factory = session_factory
+
+    async def resolve(
+        self,
+        *,
+        binding_id: str,
+        workload: WorkloadIdentity,
+        command: ChannelExecutionCommand,
+    ) -> TrustedChannelContext | None:
+        async with self._session_factory() as session:
+            from api.channel_control.repository import SqlAlchemyChannelRepository
+
+            return await SqlAlchemyBindingResolver(
+                SqlAlchemyChannelRepository(session),
+            ).resolve(
+                binding_id=binding_id,
+                workload=workload,
+                command=command,
+            )
+
+    async def resolve_capabilities(
+        self,
+        *,
+        binding_id: str,
+        workload: WorkloadIdentity,
+    ) -> TrustedChannelContext | None:
+        async with self._session_factory() as session:
+            from api.channel_control.repository import SqlAlchemyChannelRepository
+
+            return await SqlAlchemyBindingResolver(
+                SqlAlchemyChannelRepository(session),
+            ).resolve_capabilities(
+                binding_id=binding_id,
+                workload=workload,
+            )
 
 
 class RedisChannelExecutionStateStore:
@@ -136,14 +183,21 @@ class RedisChannelExecutionStateStore:
         binding_id: str,
         binding_generation: int,
         conversation_key: str,
+        tenant_id: str,
+        principal_id: str | None,
     ) -> str | None:
         value = await self._redis.get(self._session_key(binding_id, binding_generation, conversation_key))
         if value is None:
             return None
         if isinstance(value, bytes):
-            return value.decode("utf-8")
+            value = value.decode("utf-8")
         if isinstance(value, str):
-            return value
+            return _decode_session_value(
+                value,
+                binding_id=binding_id,
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+            )
         raise TypeError("Redis returned an invalid channel session value")
 
     async def put_session(
@@ -153,12 +207,19 @@ class RedisChannelExecutionStateStore:
         binding_generation: int,
         conversation_key: str,
         session_id: str,
+        tenant_id: str,
+        principal_id: str | None,
     ) -> None:
         if not session_id:
             raise ValueError("channel session ID must not be empty")
         await self._redis.set(
             self._session_key(binding_id, binding_generation, conversation_key),
-            session_id,
+            _encode_session_value(
+                session_id,
+                binding_id=binding_id,
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+            ),
             ex=self._session_ttl_seconds,
         )
 
@@ -175,7 +236,10 @@ class RedisChannelExecutionStateStore:
         claimed = await self._redis.set(
             self._event_key(binding_id, event_id),
             "processing",
-            ex=_PROCESSING_TTL_SECONDS,
+            # Initial ownership already spans the full dedupe window.  I6 or
+            # target effects may have happened even if the later status write
+            # fails, so a short processing lease would permit unsafe replay.
+            ex=self._dedupe_ttl_seconds,
             nx=True,
         )
         return bool(claimed)
@@ -205,3 +269,72 @@ class RedisChannelExecutionStateStore:
     @staticmethod
     def _event_key(binding_id: str, event_id: str) -> str:
         return f"{_STATE_PREFIX}:event:{_opaque_key(binding_id, event_id)}"
+
+
+def _session_owner(
+    *,
+    binding_id: str,
+    tenant_id: str,
+    principal_id: str,
+) -> str:
+    return _opaque_key(
+        "multirag.channel-session-owner.v1",
+        binding_id,
+        tenant_id,
+        principal_id,
+    )
+
+
+def _encode_session_value(
+    session_id: str,
+    *,
+    binding_id: str,
+    tenant_id: str,
+    principal_id: str | None,
+) -> str:
+    if principal_id is None:
+        return session_id
+    return json.dumps(
+        {
+            "v": 1,
+            "session_id": session_id,
+            "owner": _session_owner(
+                binding_id=binding_id,
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+            ),
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _decode_session_value(
+    value: str,
+    *,
+    binding_id: str,
+    tenant_id: str,
+    principal_id: str | None,
+) -> str | None:
+    if not value.startswith("{"):
+        # Legacy C2 raw sessions remain available only to an unlinked actor.
+        return value if principal_id is None else None
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise TypeError("Redis returned an invalid channel session value") from exc
+    if not isinstance(payload, dict) or set(payload) != {"v", "session_id", "owner"} or payload.get("v") != 1:
+        raise TypeError("Redis returned an invalid channel session value")
+    session_id = payload.get("session_id")
+    owner = payload.get("owner")
+    if not isinstance(session_id, str) or not session_id or not isinstance(owner, str):
+        raise TypeError("Redis returned an invalid channel session value")
+    if principal_id is None:
+        # Never let anonymous legacy execution consume an owned history.
+        return None
+    expected = _session_owner(
+        binding_id=binding_id,
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+    )
+    return session_id if owner == expected else None

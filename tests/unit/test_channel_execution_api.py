@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+from time import sleep
 
 import pytest
 from fastapi import HTTPException
@@ -24,6 +27,7 @@ from api.channel_execution.models import (
     WorkloadIdentity,
 )
 from api.channel_runtime.tokens import derive_binding_workload_token
+from api.identity_adapters.channel_runtime import IdentityProviderRegistry
 
 
 class _RouteService:
@@ -484,3 +488,65 @@ async def test_static_bearer_authenticator_scopes_child_token_to_binding_generat
     with pytest.raises(HTTPException) as raised:
         await authenticator.authenticate(oversized_generation)
     assert raised.value.status_code == 401
+
+
+def test_identity_provider_registry_cold_start_is_atomic_across_threads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from api.channel_execution import dependencies
+
+    callers = 12
+    barrier = Barrier(callers)
+    session_factory = object()
+    registry_builds = 0
+    provider_builds = 0
+
+    class _Provider:
+        async def resolve(self, context, assertion):
+            del context, assertion
+            raise AssertionError("not exercised")
+
+        async def refresh(self, context, provider_user_id):
+            del context, provider_user_id
+            raise AssertionError("not exercised")
+
+    def _build(_session_factory: object) -> IdentityProviderRegistry:
+        nonlocal registry_builds, provider_builds
+        assert _session_factory is session_factory
+        registry_builds += 1
+
+        def _provider_factory() -> _Provider:
+            nonlocal provider_builds
+            provider_builds += 1
+            # Widen the cold-miss window so this asserts synchronization,
+            # rather than accidentally passing under the GIL.
+            sleep(0.02)
+            return _Provider()
+
+        return IdentityProviderRegistry({"feishu": _provider_factory})
+
+    dependencies._reset_identity_provider_registry_for_testing()
+    monkeypatch.setattr(
+        dependencies,
+        "_require_async_session_factory",
+        lambda: session_factory,
+    )
+    monkeypatch.setattr(dependencies, "_build_identity_provider_registry", _build)
+
+    def _cold_get() -> tuple[int, int]:
+        barrier.wait()
+        registry = dependencies.get_identity_provider_registry()
+        provider = registry.get("feishu")
+        assert provider is not None
+        return id(registry), id(provider)
+
+    try:
+        with ThreadPoolExecutor(max_workers=callers) as executor:
+            identities = list(executor.map(lambda _index: _cold_get(), range(callers)))
+
+        assert len({registry_id for registry_id, _ in identities}) == 1
+        assert len({provider_id for _, provider_id in identities}) == 1
+        assert registry_builds == 1
+        assert provider_builds == 1
+    finally:
+        dependencies._reset_identity_provider_registry_for_testing()

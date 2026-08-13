@@ -184,7 +184,7 @@ streaming card；否则回退 buffered reply。卡片失败只切换交付方式
 `reply_to_message_id`、Redis claim 和 executed/replied tombstone 语义保持不变。同会话串行只有
 `ChannelWorker` 一个所有者；Bridge 不再叠第二把会话锁。
 
-### Structured actor identity 的 C1 tolerate + C2 emit 兼容态
+### Structured actor identity 的 C1/C2 transport 与 C3 consume
 
 EIM-C1 / CHN-X5 已让 private execution API **tolerate** 可选的结构化
 `ExternalIdentityAssertion`。它位于 `ChannelActor.identity`，包含 provider、可选
@@ -200,19 +200,26 @@ subject。
 - `IncomingIdentityAssertion/IncomingIdentityIdentifier` 冻结且 repr 隐藏 tenant key 与 identifier values；Bridge、
   regenerate 与 `MultiRAGBindingExecutionClient` 透传 identity。legacy subject 仍为 open ID，conversation
   仍为 chat ID；identity 缺失时旧 request bytes 不变。
-- execution resolver 只校验 legacy provider 与服务端 binding provider 一致，不消费 `identity`；
-  assertion 既不能改变服务端 binding 的 Tenant/目标/版本，也不能成为 Principal。
+- C3 execution composition 只在成功 claim 后消费 `identity`，并且只能结合服务端 binding/account link、
+  I3/I4/I6 与 P1 得出 Principal；assertion 仍不能改变 Tenant/目标/版本或直接成为 Principal。
 - `app_id`、Provider Account、`tenant_id`、`principal_id`、role/scopes/audience/confirmation/token 都不是
   assertion 字段，夹带会被拒绝；前两者只来自服务端 ownership/link/credential。
 
-因此当前源码能解析新旧两种 private command，飞书 managed worker 已 emit structured identity；C3
-才沿 Provider Account link、I4/I6/P1 验证并 consume，C4 才会在全部 runner 浸泡后删除 legacy
+因此当前源码能解析新旧两种 private command，飞书 managed worker 已 emit structured identity；C3 已沿
+Provider Account link、I3/I4/I6/P1 验证并 consume，C4 才会在全部 runner 浸泡后删除 legacy
 `subject`。这项 private 加法不改变公开 `channel-api/v1`。C2 提交 `896c582d` 通过定向 **104 passed**、
 独立兼容 **153 passed**、安全扫描 **0 findings** 与完整 `make verify`；smoke 六组件全绿。重启后的两个
 飞书 worker connected，真实消息只记录 identity/tenant presence、identifier kinds/count 的安全结构，
 private execution HTTP 200 并完成。resolver `principal_id` 为空，Canvas 为 `user_id=""`、
-`exp_user_id=null`，10 张 EIM sidecar 零写入；emit 已上线，但 consume/Contact/数据库映射/Principal
-仍未上线。
+`exp_user_id=null`，10 张 EIM sidecar 零写入；这是 C2 的历史 live 边界。
+
+C3/X7 源码与自动门禁已完成、尚未部署 live。成功 claim 后按 authority→initial I3→I4→I6→final
+I3→P1 提升 Principal；每个 linked event 逻辑上执行 I4（允许有界 cache），NO_LINK 保留 legacy
+anonymous。初始 claim 与 post-claim failure/cancel tombstone 都使用完整 dedupe TTL。Redis session 使用
+tenant/principal owner envelope，legacy raw 仅 NO_LINK 可续用；Dialog/Canvas existing row 再校验
+`principal_id` owner。它只完成 Principal promotion 与 target/session ownership，尚未传播到
+Agent/RAG/Memory/Workflow/MCP。定向 **203 passed**、`make verify` **2403 passed**、强制 integration
+**162 passed**；当前 smoke 命中 09:38 启动的旧 API，只是部署前基线。
 
 EIM-U12 / CHN-U14 允许 `message_completed` 携带可选的用户可见权威正文。
 新 worker 收到时先用 `ReplySession.replace()` 整体替换内存中的 delta，再执行 `complete()`；这能表达
@@ -681,10 +688,11 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
   binding 解析，不接受 worker 或用户消息覆盖。
 - Supervisor 的主 workload token 不下发给 child；child token 绑定 binding ID 和 generation，
   修改配置、轮换凭据、禁用或更新 binding 后，旧 worker 会被服务端 generation fence 拒绝。
-- execution 使用事件幂等键和 Redis 会话隔离；外部用户只能作为 transport actor 记录，
-  不会被提升为 MultiRAG Principal。
-- private execution API 可解析 C1/C2 structured assertion，飞书 worker 已 emit，但 resolver 明确不消费；legacy subject 与
-  structured IDs 都不能直接成为 Principal，服务端 ownership 字段不接受 payload 覆盖。
+- execution 使用事件幂等键和 owner-aware Redis 会话隔离；NO_LINK 外部用户保持 transport actor，
+  LINKED 用户只能经 C3 的服务端 verified consume 提升为 MultiRAG Principal。
+- private execution API 可解析 C1/C2 structured assertion，飞书 worker 已 emit；C3 resolver 只消费经
+  binding/account authority 与 I3/I4/I6/P1 验证的 identity。legacy subject 与 structured IDs 都不能直接
+  成为 Principal，服务端 ownership 字段不接受 payload 覆盖。
 - Canvas 候选 owner/create/state/expiry 位于 MultiRAG 自有 sidecar；公开 Canvas/Dialog 表无 Channel
   私有列。API 侧 collector 有 batch/cycle 上限并用 `SKIP LOCKED` 协调多实例；worker 不查数据库。
 - Supervisor 不记录原始 binding ID，worker 不记录原始飞书 ID、问题、答案或 SSE 帧。
@@ -693,8 +701,8 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
 
 - API 与 supervisor 之间的主 internal token 目前仍是静态 workload token，不等于 mTLS 或
   短期 delegated token；child token 虽已缩小作用域，仍由该主 token 确定性派生。
-- execution 尚未经 IdentityService 把飞书 assertion 映射为 MultiRAG 用户 Principal；C2 emit 不等于
-  C3 consume、Contact verification、数据库 identity mapping 或 Principal 已完成。
+- C3 verified consume 尚未部署到当前运行中的 API，也没有真实飞书 live 证据；旧进程 smoke 不能证明
+  新 Principal/owner 行为已上线。
 - 尚未实现基于 `RunContext.principal` 的用户级 MCP/SQL 授权。
 - 主加密密钥支持在线轮换（密钥环，见上），但**没有存量密文重加密流程**：旧密文要靠旧
   密钥留在环上才读得到，只有该渠道下次保存新凭据时才会改用 active 密钥重写。因此

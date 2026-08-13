@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -12,6 +14,7 @@ from api.channel_capabilities import TargetCapabilities
 from api.channel_execution.errors import (
     BindingDisabledError,
     BindingNotFoundError,
+    ChannelIdentityResolutionError,
     DuplicateEventError,
     TargetExecutionFailedError,
     TargetRevisionUnavailableError,
@@ -26,6 +29,18 @@ from api.channel_execution.models import (
 )
 from api.channel_execution.registry import TargetExecutorRegistry
 from api.channel_execution.service import ChannelExecutionService, PublishedTargetExecutionService
+from api.identity.contracts import (
+    ExternalIdentityRecord,
+    IdentityResolutionResult,
+    IdentityResolutionStatus,
+    UserMembershipRecord,
+)
+from api.identity.principal import (
+    AuthenticationContext,
+    AuthenticationSource,
+    IdentityAssurance,
+    build_principal_from_resolved_identity,
+)
 
 
 def _command(**overrides: object) -> ChannelExecutionCommand:
@@ -47,6 +62,39 @@ def _context(
     session_id: str | None = None,
     run_policy: dict[str, object] | None = None,
 ) -> TrustedChannelContext:
+    verified_at = datetime(2026, 8, 13, tzinfo=UTC)
+    principal = build_principal_from_resolved_identity(
+        result=IdentityResolutionResult(
+            status=IdentityResolutionStatus.RESOLVED,
+            identity=ExternalIdentityRecord(
+                id="identity-trusted",
+                tenant_id="tenant-trusted",
+                user_id="principal-trusted",
+                provider="feishu",
+                provider_tenant_key="provider-tenant-secret",
+                subject_type="user_id",
+                subject_value="provider-user-secret",
+                state="active",
+                verified_at=verified_at,
+                last_seen_at=verified_at,
+                identity_revision=1,
+                attributes=(("display_name", "Trusted principal"),),
+            ),
+            membership=UserMembershipRecord(
+                user_id="principal-trusted",
+                tenant_id="tenant-trusted",
+                role="normal",
+            ),
+        ),
+        authentication=AuthenticationContext(
+            source=AuthenticationSource.ENTERPRISE_IDENTITY,
+            assurance=IdentityAssurance.DIRECTORY_VERIFIED,
+            validated_at=verified_at,
+            assurance_verified_at=verified_at,
+            provider="feishu",
+            external_identity_id="identity-trusted",
+        ),
+    )
     return TrustedChannelContext(
         binding_id="binding-1",
         tenant_id="tenant-trusted",
@@ -60,6 +108,7 @@ def _context(
         provider="feishu",
         run_policy=run_policy or {},
         principal_id="principal-trusted",
+        principal=principal,
         session_id=session_id,
     )
 
@@ -88,7 +137,7 @@ class _Resolver:
 class _ConversationStore:
     def __init__(self, session_id: str | None = None) -> None:
         self.session_id = session_id
-        self.saved: list[tuple[str, int, str, str]] = []
+        self.saved: list[tuple[str, int, str, str, str, str | None]] = []
 
     async def get_session(
         self,
@@ -96,12 +145,16 @@ class _ConversationStore:
         binding_id: str,
         binding_generation: int,
         conversation_key: str,
+        tenant_id: str,
+        principal_id: str | None,
     ) -> str | None:
         assert (binding_id, binding_generation, conversation_key) == (
             "binding-1",
             7,
             "feishu:chat:user",
         )
+        assert tenant_id == "tenant-trusted"
+        assert principal_id == "principal-trusted"
         return self.session_id
 
     async def put_session(
@@ -111,8 +164,19 @@ class _ConversationStore:
         binding_generation: int,
         conversation_key: str,
         session_id: str,
+        tenant_id: str,
+        principal_id: str | None,
     ) -> None:
-        self.saved.append((binding_id, binding_generation, conversation_key, session_id))
+        self.saved.append(
+            (
+                binding_id,
+                binding_generation,
+                conversation_key,
+                session_id,
+                tenant_id,
+                principal_id,
+            )
+        )
 
     async def reset_session(
         self,
@@ -141,6 +205,161 @@ class _ClaimStore:
 
     async def fail(self, *, binding_id: str, event_id: str) -> None:
         self.failed.append((binding_id, event_id))
+
+
+class _PrincipalResolver:
+    def __init__(
+        self,
+        *,
+        error: Exception | None = None,
+        cancel: bool = False,
+        order: list[str] | None = None,
+    ) -> None:
+        self.error = error
+        self.cancel = cancel
+        self.order = order
+        self.calls: list[TrustedChannelContext] = []
+
+    async def resolve(
+        self,
+        *,
+        context: TrustedChannelContext,
+        command: ChannelExecutionCommand,
+    ) -> TrustedChannelContext:
+        del command
+        self.calls.append(context)
+        if self.order is not None:
+            self.order.append("principal")
+        if self.cancel:
+            raise asyncio.CancelledError
+        if self.error is not None:
+            raise self.error
+        return context
+
+
+class _FaultingConversationStore(_ConversationStore):
+    def __init__(self, stage: str, *, cancel: bool) -> None:
+        super().__init__("session-existing")
+        self.stage = stage
+        self.cancel = cancel
+
+    def _raise(self) -> None:
+        if self.cancel:
+            raise asyncio.CancelledError
+        raise RuntimeError("sensitive state-store failure")
+
+    async def get_session(
+        self,
+        *,
+        binding_id: str,
+        binding_generation: int,
+        conversation_key: str,
+        tenant_id: str,
+        principal_id: str | None,
+    ) -> str | None:
+        if self.stage == "session_get":
+            self._raise()
+        return await super().get_session(
+            binding_id=binding_id,
+            binding_generation=binding_generation,
+            conversation_key=conversation_key,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+        )
+
+    async def put_session(
+        self,
+        *,
+        binding_id: str,
+        binding_generation: int,
+        conversation_key: str,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str | None,
+    ) -> None:
+        if self.stage == "put":
+            self._raise()
+        await super().put_session(
+            binding_id=binding_id,
+            binding_generation=binding_generation,
+            conversation_key=conversation_key,
+            session_id=session_id,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+        )
+
+
+class _FaultingClaimStore(_ClaimStore):
+    def __init__(self, stage: str, *, cancel: bool) -> None:
+        super().__init__()
+        self.stage = stage
+        self.cancel = cancel
+
+    async def complete(self, *, binding_id: str, event_id: str) -> None:
+        if self.stage == "complete":
+            if self.cancel:
+                raise asyncio.CancelledError
+            raise RuntimeError("sensitive completion failure")
+        await super().complete(binding_id=binding_id, event_id=event_id)
+
+
+class _FaultingExecutor:
+    target_type = "multirag.canvas_agent"
+
+    def __init__(self, stage: str, *, cancel: bool) -> None:
+        self.stage = stage
+        self.cancel = cancel
+        self.context: TrustedChannelContext | None = None
+
+    async def capabilities(
+        self,
+        *,
+        context: TrustedChannelContext,
+    ) -> TargetCapabilities:
+        del context
+        return TargetCapabilities(
+            streaming=True,
+            cancellable=True,
+            regeneration="always",
+            retryable=True,
+            feedback=True,
+            commit_mode="candidate_cas",
+            effect_class="generation_only",
+        )
+
+    async def execute(
+        self,
+        *,
+        context: TrustedChannelContext,
+        command: ChannelExecutionCommand,
+    ) -> AsyncIterator[ExecutionEvent]:
+        if self.stage == "target_prepare":
+            if self.cancel:
+                raise asyncio.CancelledError
+            raise RuntimeError("sensitive target prepare failure")
+        if self.stage != "stream":
+            self.context = context
+
+            async def _completed() -> AsyncIterator[ExecutionEvent]:
+                yield ExecutionEvent(
+                    event="message_delta",
+                    content=command.message.content,
+                    session_id="session-new",
+                )
+                yield ExecutionEvent(
+                    event="message_completed",
+                    session_id="session-new",
+                )
+
+            return _completed()
+
+        async def _events() -> AsyncIterator[ExecutionEvent]:
+            if self.cancel:
+                raise asyncio.CancelledError
+            raise RuntimeError("sensitive target stream failure")
+            yield ExecutionEvent(event="message_delta", content="unreachable")
+
+        return _events()
 
 
 class _RecordingExecutor:
@@ -197,6 +416,7 @@ async def test_service_uses_resolved_target_and_server_side_session() -> None:
     executor = _RecordingExecutor()
     service = ChannelExecutionService(
         binding_resolver=resolver,
+        principal_resolver=_PrincipalResolver(),
         conversation_store=store,
         claim_store=claims,
         target_service=PublishedTargetExecutionService(TargetExecutorRegistry([executor])),
@@ -213,7 +433,16 @@ async def test_service_uses_resolved_target_and_server_side_session() -> None:
     assert executor.context.tenant_id == "tenant-trusted"
     assert executor.context.target.target_id == "target-trusted"
     assert executor.context.session_id == "session-existing"
-    assert store.saved == [("binding-1", 7, "feishu:chat:user", "session-new")]
+    assert store.saved == [
+        (
+            "binding-1",
+            7,
+            "feishu:chat:user",
+            "session-new",
+            "tenant-trusted",
+            "principal-trusted",
+        )
+    ]
     assert claims.claims == [("binding-1", "evt-1")]
     assert claims.completed == [("binding-1", "evt-1")]
     assert claims.failed == []
@@ -224,6 +453,7 @@ async def test_legacy_action_without_operation_fails_closed_before_execution() -
     claims = _ClaimStore()
     service = ChannelExecutionService(
         binding_resolver=_Resolver(_context()),
+        principal_resolver=_PrincipalResolver(),
         conversation_store=_ConversationStore("session-existing"),
         claim_store=claims,
         target_service=PublishedTargetExecutionService(TargetExecutorRegistry([executor])),
@@ -257,6 +487,7 @@ async def test_regenerate_is_authorized_before_claiming_the_event(denied_by: str
     context = _context(run_policy={"reply_capabilities": {"regenerate": False}} if denied_by == "run_policy" else None)
     service = ChannelExecutionService(
         binding_resolver=_Resolver(context),
+        principal_resolver=_PrincipalResolver(),
         conversation_store=_ConversationStore("session-existing"),
         claim_store=claims,
         target_service=PublishedTargetExecutionService(TargetExecutorRegistry([executor])),
@@ -289,6 +520,7 @@ async def test_failed_action_retry_is_authorized_before_claiming_the_event(denie
     context = _context(run_policy={"reply_capabilities": {"retry": False}} if denied_by == "run_policy" else None)
     service = ChannelExecutionService(
         binding_resolver=_Resolver(context),
+        principal_resolver=_PrincipalResolver(),
         conversation_store=_ConversationStore("session-existing"),
         claim_store=claims,
         target_service=PublishedTargetExecutionService(TargetExecutorRegistry([executor])),
@@ -333,6 +565,7 @@ async def test_service_fails_before_target_for_missing_or_disabled_binding(
 ) -> None:
     service = ChannelExecutionService(
         binding_resolver=_Resolver(resolved),
+        principal_resolver=_PrincipalResolver(),
         conversation_store=_ConversationStore(),
         claim_store=_ClaimStore(),
         target_service=PublishedTargetExecutionService(TargetExecutorRegistry([_RecordingExecutor()])),
@@ -348,8 +581,10 @@ async def test_service_fails_before_target_for_missing_or_disabled_binding(
 async def test_duplicate_event_never_reaches_target_executor() -> None:
     executor = _RecordingExecutor()
     claims = _ClaimStore(claimed=False)
+    principal_resolver = _PrincipalResolver()
     service = ChannelExecutionService(
         binding_resolver=_Resolver(_context()),
+        principal_resolver=principal_resolver,
         conversation_store=_ConversationStore(),
         claim_store=claims,
         target_service=PublishedTargetExecutionService(TargetExecutorRegistry([executor])),
@@ -363,7 +598,122 @@ async def test_duplicate_event_never_reaches_target_executor() -> None:
         )
 
     assert claims.claims == [("binding-1", "evt-1")]
+    assert principal_resolver.calls == []
     assert executor.context is None
+
+
+async def test_identity_resolution_runs_only_after_successful_claim() -> None:
+    order: list[str] = []
+
+    class _OrderedClaimStore(_ClaimStore):
+        async def claim(self, *, binding_id: str, event_id: str) -> bool:
+            order.append("claim")
+            return await super().claim(binding_id=binding_id, event_id=event_id)
+
+    claims = _OrderedClaimStore()
+    principal_resolver = _PrincipalResolver(order=order)
+    service = ChannelExecutionService(
+        binding_resolver=_Resolver(_context()),
+        principal_resolver=principal_resolver,
+        conversation_store=_ConversationStore("session-existing"),
+        claim_store=claims,
+        target_service=PublishedTargetExecutionService(TargetExecutorRegistry([_RecordingExecutor()])),
+    )
+
+    events = await service.execute(
+        binding_id="binding-1",
+        workload=WorkloadIdentity(subject="runner"),
+        command=_command(),
+    )
+    await _collect(events)
+
+    assert order == ["claim", "principal"]
+
+
+async def test_identity_failure_after_claim_writes_tombstone_and_skips_target() -> None:
+    claims = _ClaimStore()
+    executor = _RecordingExecutor()
+    principal_resolver = _PrincipalResolver(error=ChannelIdentityResolutionError("IDENTITY_INACTIVE"))
+    service = ChannelExecutionService(
+        binding_resolver=_Resolver(_context()),
+        principal_resolver=principal_resolver,
+        conversation_store=_ConversationStore("session-existing"),
+        claim_store=claims,
+        target_service=PublishedTargetExecutionService(TargetExecutorRegistry([executor])),
+    )
+
+    events = await service.execute(
+        binding_id="binding-1",
+        workload=WorkloadIdentity(subject="runner"),
+        command=_command(),
+    )
+
+    assert [event.model_dump(exclude_none=True) for event in await _collect(events)] == [{"event": "execution_failed", "error_code": "IDENTITY_INACTIVE"}]
+    assert claims.claims == [("binding-1", "evt-1")]
+    assert claims.failed == [("binding-1", "evt-1")]
+    assert executor.context is None
+
+
+async def test_identity_cancellation_after_claim_writes_tombstone_and_propagates() -> None:
+    claims = _ClaimStore()
+    service = ChannelExecutionService(
+        binding_resolver=_Resolver(_context()),
+        principal_resolver=_PrincipalResolver(cancel=True),
+        conversation_store=_ConversationStore("session-existing"),
+        claim_store=claims,
+        target_service=PublishedTargetExecutionService(TargetExecutorRegistry([_RecordingExecutor()])),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await service.execute(
+            binding_id="binding-1",
+            workload=WorkloadIdentity(subject="runner"),
+            command=_command(),
+        )
+
+    assert claims.claims == [("binding-1", "evt-1")]
+    assert claims.failed == [("binding-1", "evt-1")]
+
+
+@pytest.mark.parametrize(
+    "stage",
+    ["session_get", "target_prepare", "stream", "put", "complete"],
+)
+@pytest.mark.parametrize("cancel", [False, True], ids=["error", "cancel"])
+async def test_every_postclaim_stage_is_tombstoned_on_error_or_cancellation(
+    stage: str,
+    cancel: bool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    claims = _FaultingClaimStore(stage, cancel=cancel)
+    store = _FaultingConversationStore(stage, cancel=cancel)
+    executor = _FaultingExecutor(stage, cancel=cancel)
+    service = ChannelExecutionService(
+        binding_resolver=_Resolver(_context()),
+        principal_resolver=_PrincipalResolver(),
+        conversation_store=store,
+        claim_store=claims,
+        target_service=PublishedTargetExecutionService(TargetExecutorRegistry([executor])),
+    )
+
+    async def _run() -> list[ExecutionEvent]:
+        events = await service.execute(
+            binding_id="binding-1",
+            workload=WorkloadIdentity(subject="runner"),
+            command=_command(),
+        )
+        return await _collect(events)
+
+    if cancel:
+        with pytest.raises(asyncio.CancelledError):
+            await _run()
+    else:
+        events = await _run()
+        assert events[-1].event == "execution_failed"
+
+    assert claims.claims == [("binding-1", "evt-1")]
+    assert claims.failed == [("binding-1", "evt-1")]
+    assert "sensitive" not in caplog.text
 
 
 class _CanvasAdapter:
