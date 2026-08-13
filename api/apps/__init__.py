@@ -15,6 +15,7 @@ from fastapi_login.exceptions import InvalidCredentialsException
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
+from api.apps.well_known import router as well_known_router
 from api.constants import API_VERSION
 from api.db.db_models import APIToken, SessionLocal, get_db
 from api.db.services import UserService
@@ -91,7 +92,12 @@ async def lifespan(app: FastAPI):
     # 1. 显示配置信息
     # 注意：settings.init_settings() 已在模块级别执行（见上方）
     # 无需重复初始化，避免资源浪费
+    from api.identity.mcp_issuer.runtime import get_mcp_token_issuer
+    from common.app_config import get_app_config
     from common.config_utils import show_configs
+
+    if get_app_config().identity.mcp_issuer.enabled:
+        get_mcp_token_issuer()
 
     show_configs()
     settings.print_rag_settings()
@@ -154,6 +160,11 @@ app = FastAPI(
     redoc_url=None,
     lifespan=lifespan,
 )
+
+# A2 public trust metadata intentionally lives at the origin root rather than
+# under the versioned application API. It has no user/session dependency and
+# returns only the configured public signing-key snapshot.
+app.include_router(well_known_router)
 
 # 注意：settings.init_settings() 已移到 lifespan 函数中
 # 这样确保在 FastAPI 应用完全启动前完成初始化

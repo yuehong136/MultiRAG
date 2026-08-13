@@ -346,6 +346,128 @@ class TestIdentityProvisioningConfig:
         assert dumped["identity"]["provisioning"]["hmac_keyring"]["active"] == "**********"
 
 
+class TestMcpIssuerConfig:
+    def test_empty_issuer_config_preserves_startup_but_runtime_fails_closed(self, conf_dir):
+        conf_dir(SERVICE_CONF, BASE_YAML)
+
+        issuer = load_app_config().identity.mcp_issuer
+
+        assert issuer.enabled is False
+        with pytest.raises(AppConfigError, match=r"identity\.mcp_issuer is disabled"):
+            issuer.require_enabled()
+
+    def test_enabled_file_issuer_parses_fixed_authority_and_redacts_private_path(self, conf_dir):
+        private_path = "/run/secrets/eim-a2-private-marker.pem"
+        conf_dir(
+            SERVICE_CONF,
+            f"""
+            identity:
+              mcp_issuer:
+                enabled: true
+                issuer: https://auth.multirag.example
+                client_id: multirag-first-party
+                ttl_seconds: 300
+                jwks_cache_ttl_seconds: 300
+                resources:
+                  ofmcp_gateway:
+                    audience: https://gateway.ofmcp.example/mcp
+                    registered_scopes: [leave:read, leave:submit]
+                    enterprise_subject:
+                      subject_type: workcode
+                      issuer: https://hr.example
+                      issuer_tenant: issuer-tenant-a
+                key_provider:
+                  kind: file
+                  active_key_id: current-2026
+                  private_key_file: {private_path}
+                  public_key_files:
+                    current-2026: /etc/multirag/current.pub.pem
+                    next-2026: /etc/multirag/next.pub.pem
+            """,
+        )
+
+        cfg = load_app_config()
+        issuer = cfg.identity.mcp_issuer.require_enabled()
+        dumped = cfg.model_dump(mode="json")
+
+        assert issuer.resources["ofmcp_gateway"].registered_scopes == ["leave:read", "leave:submit"]
+        assert issuer.resources["ofmcp_gateway"].enterprise_subject.subject_type == "workcode"
+        assert issuer.key_provider.active_key_id == "current-2026"
+        assert issuer.minimum_retired_key_retention_seconds == 630
+        assert private_path not in repr(issuer)
+        assert private_path not in json.dumps(dumped)
+        assert dumped["identity"]["mcp_issuer"]["key_provider"]["private_key_file"] == "**********"
+        masked = config_utils._mask_sensitive_fields(
+            {"identity": {"mcp_issuer": {"private_key_file": private_path}}},
+        )
+        assert private_path not in repr(masked)
+
+    @pytest.mark.parametrize(
+        "fragment",
+        [
+            "issuer: http://auth.local",
+            "issuer: https://user@auth.example",
+            "issuer: https://auth.example?tenant=a",
+            "ttl_seconds: 301",
+            "jwks_cache_ttl_seconds: 0",
+        ],
+    )
+    def test_enabled_issuer_rejects_invalid_security_boundary(self, conf_dir, fragment):
+        body = """
+        identity:
+          mcp_issuer:
+            enabled: true
+            issuer: https://auth.multirag.example
+            client_id: multirag-first-party
+            ttl_seconds: 300
+            jwks_cache_ttl_seconds: 300
+            resources:
+              gateway:
+                audience: https://gateway.ofmcp.example/mcp
+                registered_scopes: [leave:read]
+            key_provider:
+              kind: file
+              active_key_id: current
+              private_key_file: /run/secrets/current.pem
+              public_key_files: {current: /etc/current.pub.pem}
+        """
+        body = (
+            body.replace("issuer: https://auth.multirag.example", fragment)
+            if fragment.startswith("issuer:")
+            else body.replace("ttl_seconds: 300", fragment, 1)
+            if fragment.startswith("ttl")
+            else body.replace("jwks_cache_ttl_seconds: 300", fragment)
+        )
+        conf_dir(SERVICE_CONF, body)
+
+        with pytest.raises(AppConfigError, match=r"identity\.mcp_issuer"):
+            load_app_config()
+
+    def test_resource_registry_rejects_unknown_claim_and_duplicate_scope(self, conf_dir):
+        conf_dir(
+            SERVICE_CONF,
+            """
+            identity:
+              mcp_issuer:
+                enabled: true
+                issuer: https://auth.multirag.example
+                client_id: multirag-first-party
+                resources:
+                  gateway:
+                    audience: https://gateway.ofmcp.example/mcp
+                    registered_scopes: [leave:read, leave:read]
+                    allowed_claims: [roles]
+                key_provider:
+                  active_key_id: current
+                  private_key_file: /run/secrets/current.pem
+                  public_key_files: {current: /etc/current.pub.pem}
+            """,
+        )
+
+        with pytest.raises(AppConfigError, match=r"identity\.mcp_issuer"):
+            load_app_config()
+
+
 class TestDefaultModelsResolutionParity:
     """resolved_model 与旧 settings._resolve_per_model_config 逐条等价。"""
 

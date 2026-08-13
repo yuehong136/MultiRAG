@@ -191,7 +191,7 @@ P1 已完成，代码锚点为 `api/identity/principal.py`、`api/identity/legac
 
 P1 当时不交付 C3/P2、A2/P3 或 A7。C3、P2 已在后续独立任务完成源码、自动门禁和本机飞书
 live；A7 的代码前置虽已满足，仍须作为独立 inbound Resource Server 实现/发布。当前 token 主线是
-A2；不得重做 C3/P2，也不得跳过 A2 去做 P3。
+P3；不得重做 C3/P2/A2，也不得把 A2 的独立 signer 当成 bearer 已接线。
 I5 与 I7 已由 I4 解锁，可在不共文件时并行；I8 仍要求 I6 + I7，不能跳过依赖。
 
 #### EIM-P2 / CHN-X18 已完成边界
@@ -225,36 +225,42 @@ P2 实现提交为 `549cc9c6`，本机 API 后续运行于包含该提交的 `41
 runtime/API error 为 0。Canvas 当次装配 Agent/Retrieval/Message 与 MCP 配置但没有 `memory_ids`，所以该
 live 只证明 Principal/owner/context 装配，不替代完整 Channel UX、真实 Memory 写读或 MCP 工具调用证据。
 
-#### EIM-A2 当前接手审计边界
+#### EIM-A2 已完成边界与 P3 交接
 
-A2 开工前必须重新复核以下当前事实；这些是代码/文档锚点，不代替尚待写入的实现契约：
+A2 的代码锚点是 `api/identity/mcp_issuer/{contracts,keys,service,runtime}.py`、
+`api/apps/well_known.py` 与 `common/app_config.py::McpIssuerConfig`。后续必须保留：
 
-1. A1 与 P2 已完成，A2 是当前 token 主线；P3、A5、A7、A8、O1 仍是独立任务，不能把 bearer
-   注入、proxy 换发、inbound Resource Server、多个 issuer 或真实 DNS/TLS/KMS rollout 混入 A2；
-2. `tests/fixtures/eim_a1/v1/manifest.json` 是签发 profile、resource、scope registry 与七条
-   `issuance_policy_cases` 的冻结机器可读来源；生产 signer 不得 import 测试 oracle，也不能重签/改写
-   A1 golden corpus；
-3. `api.identity.principal.Principal` 是唯一主体来源。`sub/tenant_id` 只能取服务端 Principal，
-   `agent_id/resource/requested_scopes/allowed_scopes` 只能取服务端发布/策略上下文；调用方不得选择 tenant、
-   audience、未登记 scope 或任意 claim；
-4. 当前生产依赖已有 `cryptography`，PyJWT 仅是 A1 的 dev direct dependency；A2 若在运行时代码使用
-   PyJWT，必须显式提升为 runtime direct dependency 并同步 lock，不能依赖 MCP SDK 的传递依赖；
-5. 当前 `IdentityConfig` 只有 provisioning HMAC keyring，`MCPServer`/Canvas MCP 配置也没有 A1 scope、
-   Agent policy 或 tenant grant 的权威字段。A2 可以实现纯 issuer/policy boundary，但不得假装 P3 所需
-   policy source 已存在，更不能从工具名、模型选择、静态 header 或 DSL 推导授权；
-6. 当前 REST 自动发现只把 `restful_apis` 挂到 `/api/v1`，仓库没有 JWKS route。CONTRACTS 已冻结
-   public EC P-256/ES256 JWKS、唯一 `kid` 和 publish-before-sign/retention 轮换顺序，但没有冻结 JWKS
-   URI；ROADMAP 写有 “KMS/file key provider”，却未选择任何云 KMS 供应商或 SDK；
-7. A1 允许的 `acr/amr/auth_time` 值已冻结，但 P1 的 `AuthenticationSource/IdentityAssurance` 到这些
-   claims 的生产投影仍未冻结。不得把请求时间伪造成 `auth_time`，也不得因存在 enterprise Principal
-   就自动签发 `enterprise_subject`；
-8. 因而在写实现前，必须先把 JWKS 公共路径、首期 key-provider 交付面、issuer/client/resource 配置
-   authority，以及 authentication claim 投影写成可审阅契约和失败测试。涉及真实私钥生成/轮换、KMS、
-   DNS/TLS、重启或部署时，仍按外部变更闸门单独申请批准。
+1. 唯一公共面是 unauthenticated `GET /.well-known/jwks.json`；disabled/unready 返回 safe 503，A2
+   没有公开 token endpoint、OAuth grant、refresh token 或 third-party client registration；
+2. `identity.mcp_issuer` 默认 disabled。启用时 canonical HTTPS issuer、first-party client、resource→
+   exact audience/scope/可选 enterprise authority 与 key provider 缺一即 fail-fast；disabled 不读 key；
+3. production signer 只用 `cryptography`，PyJWT 只作测试 oracle。`SigningKeyProvider` 只暴露 active
+   `kid`、public snapshot 与 ES256 operation；file provider 要求 absolute、非 symlink、regular、当前
+   进程 owner 的 mode 0400/0600 private PEM，并校验 active P-256 private/public 完全匹配；
+4. `sub/tenant_id` 只来自 immutable Principal；resource/audience 与 registered scopes 只来自 registry，
+   allowed scopes 由服务端 grant 提供。A2 执行 A1 七条 issuance policy，但没有虚构 P3 所需的 Agent/
+   tenant/user policy source；
+5. token 固定 `typ=at+jwt`、ES256、active `kid`、`mcp_access`、单值 audience、`nbf=iat`、至多 300 秒、
+   不可预测 JTI 和 4096-byte 上限。`auth_time` 只投影真实 NumericDate；`acr` 只投影
+   `ENTERPRISE_VERIFIED`；首期不猜 `amr`，enterprise subject 要精确匹配 resource authority；
+6. key 轮换是 prepublish → switch → retain/remove contract；旧 public key 默认至少保留
+   `300 + 30 + 300 = 630` 秒。真实多副本发布、key generation/KMS、DNS/TLS 与演练仍属 O1；
+7. P3、A5、A7、A8 均未被 A2 暗含完成。当前 API 未因 A2 重启/部署，未配置真实 key，也没有真实
+   Channel/MCP bearer 流量。
 
-A2 最低验证应覆盖 A1 七条 issuance policy、精确 audience、scope 只减不增、`typ/alg/kid`、300 秒
-TTL、不可预测 JTI、条件 claims、4096-byte 上限、只含 public key 的 JWKS、轮换顺序/旧 key 保留、
-配置 fail-closed、repr/log/异常不泄漏 private material，并证明 production code 不依赖测试 oracle。
+A2 失败基线为新增模块收集 **2 errors**；A1+A2 定向 **130 passed**，定向 mypy **8 source files**。
+另用临时 P-256 key 动态签发且不输出 token/key，由 of_mcp production
+`StrictMcpAccessVerifier` + `parse_jwks_document` 成功验收。`make fix` **1275 files unchanged**；
+`make verify` 的 Ruff、8 条 import contracts（848 files/2679 dependencies）、async DB gate、mypy
+**95 source files** 与 unit **2450 passed** 全绿。只读 `make smoke` 对仍运行旧代码的 API 显示 ping/
+healthz HTTP 200、六组件 `ok`；这只是运行基线，不是 A2 rollout 或 JWKS live 证据。
+
+P3 开工先审计 `RunContext` 到 `common/mcp_tool_call_conn.py` 的真实每次调用路径、A4 canonical tool
+policy/scope revision 的消费方式，以及 MultiRAG 当前 Agent/tenant/user grant authority。不得从工具名、
+模型、DSL、静态 header 或运行时可见 tool list 推导授权；若现有 schema/公共 API 无法表达权威 grant，
+先提交证据与方案，不得在 P3 顺手扩 schema。credential provider 必须按 Principal/tenant/agent/resource/
+requested scopes/policy revision/credential generation 隔离；Agent/session 不缓存用户 bearer，每次高风险
+逻辑操作获得新 JTI，每个 HTTP request 动态注入且不修改静态 server headers。
 
 ### 4.4 外部 API 和 SDK 任务
 
@@ -511,7 +517,7 @@ git diff --check
 
 A4 定向 **201 passed**；`uv run --locked ofmcp verify` 六步全绿、**417 passed、2 existing skipped**，
 contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG F1/I3/I4/I6/P1/P2/C1/C2/C3 已完成；
-当前 token 主线为 A2，只有完成 A2 后才能进入 P3。I5/I7 可作为已
+当前 A2 已完成，token 接线主线为 P3。I5/I7 可作为已
 解锁并行支线，但下游仍按依赖图等待。secure 在独立远程发布闸门解除前仍不能作为远程业务入口。
 
 ### 4.8 EIM-A6 phase 1 接手与完成边界
@@ -569,7 +575,7 @@ production multi-instance durable replay/audit、HMAC KMS/rotation、OTel SDK/ex
 | 变更 | 生产者 | 消费者 | 安全部署顺序 |
 |---|---|---|---|
 | Channel structured assertion | worker | MultiRAG private API | tolerate API → emit worker → consume API → remove legacy |
-| MCP access token | MultiRAG signer | `of_mcp` verifier/authorizer | A3 verifier/JWKS + A4 Principal/tool policy + A6 phase-1 execution guard 已先行并保持业务未远程发布 → P1/C3 已完成、当前继续 P2 → A2 signer emit → P3 每次执行换新短 token/JTI → A6 production durable backend/跨仓 trace + 企业主体/上线证据 → 独立闸门决定 secure 远程入口；不得把固定测试 token 或内存 replay 通过误作 Channel 委托闭环 |
+| MCP access token | MultiRAG signer | `of_mcp` verifier/authorizer | A3 verifier/JWKS + A4 Principal/tool policy + A6 phase-1 execution guard 已先行并保持业务未远程发布 → P1/C3/P2 已完成 → A2 signer/JWKS 已完成但默认 disabled、未部署 → P3 每次执行换新短 token/JTI → A6 production durable backend/跨仓 trace + 企业主体/上线证据 → 独立闸门决定 secure 远程入口；不得把动态互操作测试或内存 replay 通过误作 Channel 委托闭环 |
 | EIM-A1 corpus | MultiRAG canonical generator + 两仓本地副本 | PyJWT/joserfc 独立 oracle | 已完成：of_mcp `3e1d5ac` → MultiRAG 本次 A1 变更；91-file corpus 字节一致，digest `59f82684aa06365f45623ce9bfad336d487f2c9351879266a6b2ab21bf8fe208`；运行时无依赖 |
 | 新 scope/tool metadata | `of_mcp` policy snapshot | MultiRAG Agent/MCP config、P3 cache/audit | resource 端先提交包含 effect/replay mode 的 canonical `tool-policies.json` 与 `policy_revision` → 调用端按 revision 重算请求与缓存；未知 scope fail closed，不从运行时可见列表反推权限，也不把 revision 自动塞入当前 A1 token profile |
 | confirmation contract | `of_mcp` challenge | MultiRAG card/channel | resource 端先返回可识别 challenge → UI 接线 → 强制确认 |

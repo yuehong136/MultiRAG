@@ -274,6 +274,7 @@ FastMCP 实现/产品资料（不是 MCP 标准）：
 |---|---|
 | MultiRAG SDK v2 客户端 | Python SDK `docs/whats-new.md`、migration、Client、OAuth for clients |
 | resource metadata | [RFC 9728](https://www.rfc-editor.org/rfc/rfc9728) well-known、`WWW-Authenticate resource_metadata=...` |
+| Authorization Server/JWKS metadata | [RFC 8414](https://www.rfc-editor.org/rfc/rfc8414) canonical HTTPS issuer 与 `jwks_uri`；规范不强制 JWKS 的具体 path，本项目由 ADR-27 固定 |
 | audience/resource | [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707) Resource Indicators 和 server audience validation |
 | 项目 JWT profile | [RFC 9068](https://www.rfc-editor.org/rfc/rfc9068) 的 `at+jwt`、标准 access-token claims 和非对称签名；只称 RFC 9068-shaped，不声称 MCP 强制 JWT |
 | 用户/actor 委托 | [RFC 8693](https://www.rfc-editor.org/rfc/rfc8693) 的 `act` 语义；顶层 `sub` 保持用户，内部 token 另做 resource/scope attenuation |

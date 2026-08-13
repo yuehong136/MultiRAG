@@ -35,7 +35,7 @@
 
 ```text
 读 docs/enterprise-identity-mcp/README.md，然后完成 ROADMAP 中当前主线任务
-（EIM-P2 / CHN-X18 已完成；下一条接线主线需按 ROADMAP 重新选择）。
+（EIM-A2 已完成；下一条 token 接线主线是 EIM-P3，仍须先做只读审计和契约确认）。
 先复核任务锚点和依赖，把准备修改的文件与验收标准告诉我；确认后再写代码。
 ```
 
@@ -374,7 +374,7 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   优先复用 FastMCP 4 的 `RemoteAuthProvider`、`AccessToken`、`on_list_tools/on_call_tool` middleware
   和 transport 防护；领域 identity/Principal 保持框架无关，避免重复实现框架已有工具开放能力。
 - P1 已解锁 A7 的代码前置，但 A7 仍是独立 inbound Resource Server 任务，不能立即宣称
-  可发布。F1/I4.1/I6/I6.1/C1/C2/C3/P2 已完成；下一条 token 主线是 A2。CHN-O9 是不阻塞 A2 的
+  可发布。F1/I4.1/I6/I6.1/C1/C2/C3/P2/A2 已完成；下一条 token 接线主线是 P3。CHN-O9 是不阻塞 P3 的
   Channel 可观测并行支线；C4/CHN-X8 仍须等待全部 runner 升级与 deployment soak。I5 与 I7 已由
   I4 解锁，可作为不共文件的并行支线；I8 仍需 I6 + I7，
   不能跳依赖；
@@ -491,17 +491,25 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   本仓文档账本的 `make verify` 同样全绿、**1904 passed**。
 - EIM-A4 已在 of_mcp `74117a0` 完成；定向 **201 passed**，`uv run --locked ofmcp verify`
   六步全绿、**417 passed、2 existing skipped**，contract snapshot 无漂移。该完成态只证明 of_mcp
-  能把已验证 token 构造成 Principal，并按确定性逐工具策略做发现/调用授权；不证明 MultiRAG 已经
-  产生这样的 token 或第三方 Channel 身份已经进入该 Principal。
+  能把已验证 token 构造成 Principal，并按确定性逐工具策略做发现/调用授权；不证明 MultiRAG 已经把
+  当前执行 Principal 逐请求接成 bearer。
+- EIM-A2 已在 MultiRAG 完成代码与契约：`api.identity.mcp_issuer` 提供生产签发策略、进程内 issuer、
+  vendor-neutral signing operation 和严格的 P-256 file provider；唯一公共面是
+  `GET /.well-known/jwks.json`。`identity.mcp_issuer` 默认 disabled，启用时启动即校验 issuer/client/
+  resource/scope/key authority；token 固定 ES256、精确 audience、至多 300 秒、4096 bytes，条件 claim
+  只取 immutable Principal 的真实证据。file provider 校验 absolute/non-symlink/regular/owner-only
+  private PEM、active private/public 匹配、public-only JWKS，以及至少 630 秒的 publish→switch→retain
+  轮换顺序。production code 只用 `cryptography`；PyJWT 只在测试作独立 oracle。
 - P1 已实现领域 Principal 与存量 Web/API adapter；C3 已取得部署 live 证据，P2 已完成传播、
-  自动门禁与本机 API rollout，Canvas/Dialog 各一条真实飞书 owned-session live 均完成；A2/P3 尚未实现，因此 MultiRAG
-  还不会为当前 Principal 签发并逐请求发送 token；飞书的
+  自动门禁与本机 API rollout，Canvas/Dialog 各一条真实飞书 owned-session live 均完成；A2 的签发面
+  已完成，但默认禁用、未配置真实 key、未重启/部署，P3 尚未实现，因此 MultiRAG 仍不会为当前
+  Principal 逐请求发送 token；飞书的
   `ExternalIdentityAssertion -> binding/directory -> Principal` 已完成到 target/session owner，通用 MCP Client 仍无完整
   OAuth 获取 token 流。of_mcp 仍缺 A5 proxy internal actor；A6 虽已有 phase-1 domain/runtime
   安全边界，但仍缺生产多实例 replay/audit、HMAC/KMS 轮换、OTel SDK/exporter 与跨仓 trace，因此
   保持 `🔵`。M1/M2 企业主体与业务对象授权、持久 Interaction/Confirmation/Idempotency 也未完成。
-  F1/I4.1/I6/I6.1/C1/C2/C3/P2 已完成；MultiRAG 下一条 token 主线是 A2；I5/I7 是已解锁
-  并行支线，但 I8 仍需 I6 + I7。P3 仍必须等待 A2，不能把 P2 的 context seam 当成 token 能力。
+  F1/I4.1/I6/I6.1/C1/C2/C3/P2/A2 已完成；MultiRAG 下一条 token 接线主线是 P3；I5/I7 是已解锁
+  并行支线，但 I8 仍需 I6 + I7。不能把 A2 的独立 issuer 或 P2 的 context seam 当成 bearer 已接线。
   A7 虽已解锁前置，仍须作为独立入站
   安全面实现和验收。
 

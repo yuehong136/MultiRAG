@@ -90,6 +90,7 @@ def _mask_sensitive_fields(config: Any, _already_copied: bool = False) -> Any:
         "sas_token",
         "client_secret",
         "http_secret_key",
+        "private_key_file",
     }
 
     for key, value in config.items():

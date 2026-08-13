@@ -1438,7 +1438,48 @@ Host/Origin/DNS rebinding 绕开本机边界。工具授权完成不会自动解
 至少在 A2/P3 request-scoped delegation、权威企业主体、A6 审计/重放与远程发布证据完成前，secure
 仍只能用于本机验证。
 
-### 6.5 EIM-A1 corpus wire contract
+### 6.5 A2 issuer、配置与 public JWKS
+
+首期 A2 是与 MultiRAG API 同进程但独立包/配置的逻辑 Authorization Server。唯一公共 route 固定为：
+
+```http
+GET /.well-known/jwks.json
+```
+
+该 route 不要求 Web session/bearer，不接收任何用户输入，只返回当前原子 public JWKS snapshot，并设置
+与配置一致的有界 public cache header；disabled/unready 时稳定返回 503，不把路径、PEM、异常或配置
+内容写入响应。A2 不提供公开 token endpoint；P3 后续只从进程内 issuer service 获取 token。
+
+`identity.mcp_issuer` 默认 disabled，启用时必须完整给出 canonical HTTPS `issuer`、first-party
+`client_id`、1～300 秒 TTL、固定 30 秒 skew、JWKS cache TTL、resource name 到精确 HTTPS
+audience/registered scopes/可选 enterprise subject type+issuer+issuer-tenant authority 的映射，以及 file key provider。配置中的 private PEM path
+使用 secret 类型，必须是 absolute、非 symlink、regular file，且 POSIX 下必须归当前进程 owner、只能由
+owner 读写；active
+private P-256 key 必须与 public keyset 中同 `kid` 的 key 完全匹配。production code 只依赖
+`cryptography`，不得 import A1 test oracle 或依赖 MCP SDK 传递的 JWT 包。
+
+进程内签发输入分成两部分：
+
+- immutable `Principal`、已发布 `agent_id`、resource name、requested scopes/claims；
+- 由调用它的服务端策略层计算出的 allowed scopes。A2 验证 resource registry 与 requested/allowed
+  关系，但不虚构 P3 尚不存在的 Agent/tenant/user policy source。
+
+签发必须先执行 A1 七条 `issuance_policy_cases` 对应的 production policy：raw Provider subject、caller-
+selected tenant、unknown scope、scope elevation、forbidden claim 或缺 verified assurance 时根本不生成
+token。成功 token 固定 `typ=at+jwt`、`alg=ES256`、active `kid`、`token_use=mcp_access`、精确单值
+audience、不可预测 JTI、`nbf=iat` 和 `exp-iat<=300`，compact bytes 不超过 4096。
+
+`sub/tenant_id` 只从 Principal 取得；`auth_time` 仅在 Principal 真实携带时投影且不得晚于 `iat`；
+`acr` 首期只在 `ENTERPRISE_VERIFIED` 时投影为冻结值；因当前 Principal 不含已冻结 method evidence，
+首期不签 `amr`。`enterprise_subject` 只有 resource 显式允许、调用方请求且 Principal 是 matching
+enterprise-verified 时，才投影 `{type, issuer, subject, tenant}`；普通 token 不携带它。
+
+`SigningKeyProvider` 只暴露 active `kid`、完整 public JWKS snapshot 和 ES256 signing operation；未来
+KMS adapter 不得迫使 issuer 读取 private bytes。轮换 successor contract 要求 next active key 已存在于
+上一版 JWKS，切换后旧 active key 继续存在；旧 key 的 removal deadline 至少是 switch time 加
+`max TTL + skew + JWKS cache TTL`。单进程 contract 不替代 O1 的多副本发布/回滚演练。
+
+### 6.6 EIM-A1 corpus wire contract
 
 MultiRAG 与 of_mcp 各自保存字节一致、无需网络的 `eim-a1/v1` corpus：
 
@@ -1513,7 +1554,7 @@ bytes 和只读 public JWKS；canonical PEP 723 generator 使用 test-only key �
 ES256，只负责可复现地产生 corpus。验证仍必须读取提交的固定 token，不能靠运行时重新签发替代。
 两仓 CI 不做 sibling import、网络下载或运行时共享 verifier。
 
-### 6.6 首期标准化程度
+### 6.7 首期标准化程度
 
 首期 MultiRAG 是唯一预注册 MCP client，issuer 根据已经认证的内部 Principal 签发 access token；
 不对外宣称支持任意第三方 OAuth grant。of_mcp 仍按标准 protected resource 实现 metadata、
@@ -1523,7 +1564,7 @@ challenge、audience 和 bearer validation。
 Credentials extension。不能通过自定义 Header 扩张首期协议，也不能把飞书事件字段伪造成 ID
 Token/SAML/Identity Assertion。
 
-### 6.7 MultiRAG 入站 MCP Resource Server
+### 6.8 MultiRAG 入站 MCP Resource Server
 
 `mcp/server/` 是不同于 `of_mcp` gateway 的另一个 protected resource。正式启用用户级或企业级
 访问前必须为它定义独立的 canonical HTTPS resource URI、audience、issuer policy、keyset 和最小
