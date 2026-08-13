@@ -146,6 +146,61 @@ async def test_failed_producer_is_not_cached_and_releases_the_in_flight_slot() -
     assert calls == 2
 
 
+async def test_done_callback_accepts_concrete_task_result_without_loop_exception() -> None:
+    """Runtime checking must not reject Task[str] passed by asyncio itself."""
+
+    cache = _cache(_Clock())
+    loop = asyncio.get_running_loop()
+    loop_errors: list[dict[str, object]] = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: loop_errors.append(context))
+
+    async def produce() -> ProducedValue[str]:
+        return ProducedValue("token-a", ttl_seconds=30.0)
+
+    try:
+        assert await cache.get_or_create("account-a", produce) == ("token-a", False)
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+    assert loop_errors == []
+
+
+async def test_orphaned_failed_producer_is_consumed_without_loop_error_or_leak() -> None:
+    cache = _cache(_Clock())
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    loop_errors: list[dict[str, object]] = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: loop_errors.append(context))
+
+    async def fail_after_waiter_cancels() -> ProducedValue[str]:
+        entered.set()
+        try:
+            await release.wait()
+            raise RuntimeError("sensitive-upstream-response")
+        finally:
+            finished.set()
+
+    waiter = asyncio.create_task(cache.get_or_create("account-a", fail_after_waiter_cancels))
+    try:
+        await entered.wait()
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        release.set()
+        await finished.wait()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+    assert loop_errors == []
+
+
 async def test_distinct_in_flight_keys_are_bounded_without_cancelling_the_admitted_call() -> None:
     clock = _Clock()
     cache = _cache(clock, max_in_flight=1)

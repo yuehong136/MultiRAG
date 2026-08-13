@@ -157,7 +157,7 @@ class PerKeyRateLimiter(Generic[_K]):
             await self._sleep(delay)
 
 
-def _consume_task_exception(task: asyncio.Task[object]) -> None:
+def _consume_task_exception(task: asyncio.Task[_V]) -> None:
     """Retrieve orphaned producer failures after every waiter is cancelled."""
 
     if not task.cancelled():
