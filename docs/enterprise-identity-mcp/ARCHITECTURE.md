@@ -75,15 +75,15 @@ Progressive reply adapter
 ReplySession 状态。该体验链不依赖 transport 从 `lark-oapi.ws.Client` 迁移到 `lark-channel-sdk`，完整设计见
 [FEISHU_BOT_UX](FEISHU_BOT_UX.md)。
 
-EIM-C1 / CHN-X5 当前只在 Channel Execution 的 private consumer 上增加可选
+EIM-C1 / CHN-X5 已在 Channel Execution 的 private consumer 上增加可选
 `ExternalIdentityAssertion`，形成有意的兼容半态：旧 `provider/subject/conversation` 仍必填且 worker
 仍只发送旧形状；新 assertion 缺失时序列化线格不新增 null 字段。API 会拒绝重复 kind、Provider
 不一致以及 `tenant_id/principal_id/app_id/provider_account_key/role/scopes/token` 等 authority
-夹带，但 execution resolver 暂不读取合法 assertion。C2 emit、C3 verified consume 和 C4 legacy remove
-均未发生；公开 `channel-api/v1` 不受这条 private 加法影响。C1 的 clean-tree 等价完整门禁与定向测试
-已全绿。用户批准后的新 API 切换确认加载 `536a1ea5`，但在 serving 前被存量 schema bootstrap 顺序
-缺陷阻断，没有产生旧 worker -> 新 API 混合版本请求；EIM-I2.2 / CHN-O15 正在修复并恢复。因此本段
-描述的是已验证源码兼容边界，不是已部署身份链。
+夹带，但 execution resolver 暂不读取合法 assertion。C1 的 clean-tree 等价完整门禁与定向测试全绿；
+EIM-I2.2 / CHN-O15 恢复后，新 API smoke 与一条 C1 前 producer 等价的 legacy-shape 飞书活体均通过。
+恢复后 worker 是新进程，不是旧 PID 跨版本存活；C1 对生产 emitter 文件零 diff。C2 emit 已进入进行中
+但尚无 emit 证据，C3 verified consume 和 C4 legacy remove 均未发生；公开 `channel-api/v1` 不受这条
+private 加法影响。因此本段描述的是已部署的 tolerate 边界，不是已部署身份链。
 
 #### Channel control/runtime
 
@@ -353,9 +353,9 @@ sequenceDiagram
 截至 EIM-I6 完成，图中已有 `ProviderContext/AliasKey`、单 SQL snapshot、携 policy revision
 的三态 plan、Auth V3 -> Tenant V2 -> Contact V3 Provider proof、权威 policy/link/event schema、三种
 原子 provisioning transaction 与 Principal builder。I4.1 的 production adapter live sandbox 与全量
-门禁已收口；I6 完整门禁也已全绿。C1 当前源码只允许 Execution 解析可选 structured assertion，
-worker 尚未 emit，resolver 也未 consume；仍须在用户批准重启 API 后完成 C1 混合版本活体，并经过
-C2 才能进入 C3，之后 P2 才传播 Principal。所以不能跳到 C3，也不能宣称飞书消息端到端已上线。
+门禁已收口；I6 完整门禁也已全绿。C1 已完成并通过 C1 前 producer 等价 legacy-shape 飞书活体；
+C2 已进入进行中，但 worker 尚无 structured identity emit 证据，resolver 也未 consume。只有 C2
+完成后才能进入 C3，之后 P2 才传播 Principal。所以不能跳到 C3，也不能宣称飞书身份端到端已上线。
 
 ---
 

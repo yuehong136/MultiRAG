@@ -185,7 +185,7 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 | CHN-O13 | **WEB**：CHN-O6 的前端半边。`channelAPI.verify(id)`（无请求体）+ 五个错误码 + 两份 locale + 编辑抽屉页脚的「测试连接」+ 10 秒冷却禁用。`channelVerifyFailure` 把「被拒」和「没查成」分成两种结局 | ✅ | CHN-O6 | `web:src/api/channel.ts`、`use-channel-request.ts::useVerifyChannel`、`channel-form-sheet.tsx` |
 | CHN-O12 | 空 env 变量把 `str`/`SecretStr` 配置项打成 `None` → 配置加载抛 `AppConfigError`，**默认 docker 部署起不来**。收敛点落在 `_Section` 基类：只把「类型容不下 None」的 `str`/`SecretStr` 字段的 `None` 收成 `""`，`x \| None` 不动 | ✅ | — | `common/app_config.py::_Section._empty_env_value_is_a_blank_not_a_null` |
 | CHN-O14 | Channel API 侧 durable run ledger：worker 重启恢复、单会话单活、跨实例取消与终态 CAS；不替代或复制 Canvas 目标 checkpoint runtime，只有真实恢复需求确认后才启动 | ⏸ | CHN-X13、CHN-U14/U15 | [执行架构 §8](EXECUTION_ARCHITECTURE.md#8-run-生命周期与会话历史分离)、[EIM-O4](../enterprise-identity-mcp/ROADMAP.md) |
-| CHN-O15 | 存量数据库先 Alembic、后 model-first 补表；全新库保持 create→stamp，杜绝新子表在迁移补父约束前创建。修复后安全恢复本次启动留下的零行 identity partial schema | 🔵 | EIM-I2.2；新 API 启动闸门 | `api/db/schema_bootstrap.py::bootstrap_database_schema`、`tests/unit/test_schema_bootstrap.py`、`tests/integration/test_db_bootstrap.py::test_stored_database_bootstrap_migrates_parents_before_model_first_children` |
+| CHN-O15 | 存量数据库先 Alembic、后 model-first 补表；全新库保持 create→stamp，杜绝新子表在迁移补父约束前创建。修复后安全恢复本次启动留下的零行 identity partial schema | ✅ | EIM-I2.2；新 API 启动闸门 | `api/db/schema_bootstrap.py::bootstrap_database_schema`、`tests/unit/test_schema_bootstrap.py`、`tests/integration/test_db_bootstrap.py::test_stored_database_bootstrap_migrates_parents_before_model_first_children` |
 
 ---
 
@@ -197,8 +197,8 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 | CHN-X2 | `channel-api/vN` 版本标记落地 + web 侧 5 行断言（唯一的工具预算） | ✅ | `web:src/api/__tests__/channel.test.ts` |
 | CHN-X3 | 端到端联调验收：钉钉注册后，CHN-P7 那次构建出来的前端不重新部署就能渲染并保存 | ✅ | — |
 | CHN-X4 | ⏸ Go 侧 channel。**不做**——JSON 形状本身就是缝，且已被下面的规则版本化 | ⏸ | — |
-| CHN-X5 | private command **tolerate** 结构化 `ExternalIdentityAssertion`，保持旧 payload 逐字节不变并继续读 legacy `subject` | 🔵 | `api/channel_execution/models.py::{ExternalIdentityIdentifier,ExternalIdentityAssertion,ChannelActor}`、`tests/unit/test_channel_identity_assertion.py`、[EIM-C1](../enterprise-identity-mcp/ROADMAP.md) |
-| CHN-X6 | 飞书 worker **emit** `tenant_key` 与全部类型化用户 ID；execution 仍不消费 identity 并保留 legacy 字段 | ⬜ | CHN-X5；[EIM-C2](../enterprise-identity-mcp/ROADMAP.md) |
+| CHN-X5 | private command **tolerate** 结构化 `ExternalIdentityAssertion`，保持旧 payload 逐字节不变并继续读 legacy `subject` | ✅ | `api/channel_execution/models.py::{ExternalIdentityIdentifier,ExternalIdentityAssertion,ChannelActor}`、`tests/unit/test_channel_identity_assertion.py`、[EIM-C1](../enterprise-identity-mcp/ROADMAP.md) |
+| CHN-X6 | 飞书 worker **emit** `tenant_key` 与全部类型化用户 ID；execution 仍不消费 identity 并保留 legacy 字段 | 🔵 | CHN-X5；[EIM-C2](../enterprise-identity-mcp/ROADMAP.md) |
 | CHN-X7 | execution resolver 只把 IdentityService 已验证主体提升为 Principal；外部 subject 永不直通 | ⬜ | CHN-X6、EIM-I6、EIM-P1；[EIM-C3](../enterprise-identity-mcp/ROADMAP.md) |
 | CHN-X8 | 全部 runner 浸泡并有部署证据后，删除 legacy `ChannelActor.subject` | ⬜ | CHN-X7；[EIM-C4](../enterprise-identity-mcp/ROADMAP.md) |
 | CHN-X9 | 不改现有 execution SSE wire，以加法暴露 async event stream 与 transport-neutral ReplySession，兼容 `ask()`/纯文本 Provider 行为 | ✅ | `api/channels/runtime_client.py::MultiRAGBindingExecutionClient.stream`、`api/channels/execution_events.py`、`api/channels/core/base.py::ReplySession`、`api/channels/reply_session.py::BufferedReplySession`、`api/channels/binding_bridge.py::BindingBridge`；[EIM-U0](../enterprise-identity-mcp/ROADMAP.md)、[UX §4](../enterprise-identity-mcp/FEISHU_BOT_UX.md#4-transport-neutral-契约) |
@@ -212,20 +212,20 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 
 ---
 
-**CHN-X5 当前半态**：源码只改 private API consumer。`ChannelActor.identity` 可选，旧
-`provider/subject/conversation` 仍必填，缺 identity 的 dump 不新增 null；runtime client/worker 未
-emit，resolver 不 consume，C2/X6、C3/X7、C4/X8 均未开始。authority 字段与
+**CHN-X5 已完成 consumer/tolerate 半步**：`ChannelActor.identity` 可选，旧
+`provider/subject/conversation` 仍必填，缺 identity 的 dump 不新增 null；C2/X6 已进入进行中但尚无
+emit 证据，resolver 仍不 consume，C3/X7、C4/X8 均未开始。authority 字段与
 `app_id/provider_account_key` 夹带由 `extra="forbid"` 拒绝，服务端 binding ownership 不从 assertion
 读取。这不是公开前后端契约，`channel-api/v1` 不 bump、web 无改动。隔离于 `HEAD a0581f2f`、只应用
 C1 13 条路径的等价完整 `make verify` 已全绿（Ruff format 1242 files、Ruff check、7 条 import
 contracts / 832 files / 2611 dependencies、async DB gate、mypy 81 source files、unit **2223 passed in
-32.28s**），C1 三文件定向 **74 passed in 12.94s**。当前运行旧 API 的通用 smoke 也通过
-（ping/healthz 200，db/chat/db_pool/redis/doc_engine/storage 全部 ok），但只能证明既有健康状态。
-用户已批准并在 2026-08-13 尝试切换 API；新进程确认加载 `536a1ea5`，但在开始 serving 前被存量库
-model-first 早于 Alembic 的顺序缺陷阻断。该失败没有产生旧 worker -> 新 API 请求，也不是 C1 DTO /
-resolver 失败；旧 supervisor 与两个 worker 保持原进程。CHN-O15 / EIM-I2.2 已新增统一 bootstrap 修复，
-但真实库安全恢复、新 API smoke 与混合版本活体仍未完成。因此 X5 保持 `🔵`，不能宣称 deployed，
-也不能提前启动 X6。
+32.28s**），C1 三文件定向 **74 passed in 12.94s**。CHN-O15 / EIM-I2.2 完成真实库恢复后，新 API
+通过 ping/healthz smoke；随后一条 C1 前 producer 等价的 legacy-shape 飞书请求由新 API 完整执行，
+留下 completed execution claim、session 与终态会话记录，证明 tolerate 已部署。该 worker 是恢复后
+重启的进程，不是跨版本保留的旧 PID；C1 对生产 `runtime_client.py` / `worker.py` /
+`binding_bridge.py` 零 diff，所以这里只证明 legacy producer 线格兼容。活体仍未携带 structured
+identity，resolver 的 `principal_id` 仍为空，identity sidecar 零写入；不得宣称 C2 emit、C3 consume
+或 Principal 已上线。
 
 ---
 
@@ -749,8 +749,8 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 
 | 日期 | 变更 | 提交 | 记录人 |
 |---|---|---|---|
-| 2026-08-13 | **CHN-O15 / EIM-I2.2 进行中：修复存量 schema bootstrap 顺序。** C1 切换尝试确认新 API 加载 `536a1ea5`，随后在 serving 前因新 Link 表引用的 ChatChannel 复合唯一键尚未由 I2.1 迁移安装而 fail closed。统一入口改为 fresh create→stamp、stored migrate→model-first，迁移失败不继续建表；`init_data.py` 独立入口同步复用。现场已确认 Alembic 仍在旧 revision、提前创建的 identity sidecar 全为零行，但属于跨 I1/I2/I2.1/I6 partial schema；不 stamp、不手补约束，待备份与显式无 CASCADE 恢复获批 | 本次提交（进行中）；bootstrap unit **8 passed**，隔离真 PostgreSQL old-schema→head **2 passed**，identity/bootstrap schema **49 passed**；隔离完整 `make verify` 全绿、unit **2226 passed in 69.49s**；完整 integration 的 identity/迁移路径通过，套件 **128 passed / 1 个既有 MinIO `SignatureDoesNotMatch` 环境失败**；真实库恢复与新 API smoke 待完成 | Codex |
-| 2026-08-13 | **CHN-X5 / EIM-C1 consumer/tolerate 本地验收完成，部署闸门未过。** private command 可选接受 bounded structured assertion，同时保持 legacy 三字段必填、旧 request bytes 不变；nested extra-forbid 拒绝 authority 夹带，resolver 不 consume，worker 不 emit，公开 `channel-api/v1` 不变。任务继续 `🔵`，X6 不启动 | `536a1ea5`；隔离 `HEAD a0581f2f` + C1 13 路径等价 `make verify` 全绿（unit **2223 passed in 32.28s**，全部静态门禁绿）；C1 三文件 **74 passed in 12.94s**。用户已批准并尝试切换，新 API 在 serving 前被 CHN-O15 schema bootstrap 缺陷阻断；仍缺实际旧 worker -> 新 API 混合版本活体 | Codex |
+| 2026-08-13 | **CHN-O15 / EIM-I2.2 完成。** C1 首次切换暴露存量库 bootstrap 顺序缺陷：model-first 在 Alembic 安装 I2.1 父复合唯一键前尝试创建 Link，API 在 serving 前 fail closed。`bd3df59d` 统一 fresh create→stamp / stored migrate→model-first，迁移失败不继续建表，`init_data.py` 复用同一编排。恢复前确认误建的 9 张 identity sidecar 全部零行且无外部依赖；用户理解风险并明确豁免备份后，以白名单、无 `CASCADE` 的事务删除，再由正式 Alembic 升至 `b4c6d8e0f2a4 (head)`。I2.1/I6 表、复合 FK、唯一约束与 partial index 均通过核验，原有业务数据计数保持；新 API ping/healthz 六组件全绿 | `bd3df59d`；bootstrap unit **8 passed**，隔离真 PostgreSQL old-schema→head **2 passed**，identity/bootstrap schema **49 passed**；隔离完整 `make verify` 全绿、unit **2226 passed in 69.49s**；完整 integration 的 identity/迁移路径通过，套件 **128 passed / 1 个既有 MinIO `SignatureDoesNotMatch` 环境失败**；真实库恢复、head 与 smoke 已完成 | Codex |
+| 2026-08-13 | **CHN-X5 / EIM-C1 consumer/tolerate 完成并通过活体。** private command 可选接受 bounded structured assertion，同时保持 legacy 三字段必填、旧 request bytes 不变；nested extra-forbid 拒绝 authority 夹带，resolver 不 consume，公开 `channel-api/v1` 不变。C1 前 producer 等价的 legacy-shape 飞书请求被加载 `536a1ea5` 的新 API 接受并完整执行，形成 completed claim、session 与终态会话记录。恢复后 worker 是新进程，并非旧 PID 跨版本存活；C1 对三个生产 emitter 文件零 diff，因此证据只证明旧线格兼容。活体无 `identity`、`principal_id` 为空、identity sidecar 零写入；C2/X6 仅转 `🔵`，尚不能宣称 emit/consume/Principal | `536a1ea5`；隔离 `HEAD a0581f2f` + C1 13 路径等价 `make verify` 全绿（unit **2223 passed in 32.28s**，全部静态门禁绿）；C1 三文件 **74 passed in 12.94s**；新 API smoke 与 legacy-shape 真实飞书执行完成 | Codex |
 | 2026-08-05 | 文档集建立。审计结论收敛为 CHN-S/U/P/O/X 五族共 40 个条目；`.gitignore:232` 由裸 `docs` 改为 `docs/*` + 白名单。**验证**：`git check-ignore -v docs/channel-program/README.md` 返回空（exit 1 = 未被忽略）、`docs/feishu-multitenant/PROGRESS.md` 仍命中 `.gitignore:235:docs/*`、`git ls-files docs` 仍只有既有的 `references/http_api_reference.md`、`git status --untracked-files=all docs/` 列出 4 个新文件 | cdc09928 | Claude |
 | 2026-08-05 | **记录 `tests/unit` 先天失败基线**（见下方专节）。实测 `PYTHONUTF8=1 uv run --no-sync pytest tests/unit -q`：**6 failed / 1486 passed / 761.94s** | — | Claude |
 | 2026-08-05 | **CHN-X1 完成**：读完 `web:src/api/__tests__/channel.test.ts` 全部 **11 条**（不是 10 条）断言，逐条反推出 CONTRACT v1——端点清单、写请求形状、凭据写入语义、状态词表、错误信封。标出 **3 条编码了错误行为的断言**（§6）：`:68` 的测试名 `'…for the Feishu form only'` 把飞书特例固化成期望、`:219`/`:252` 的 `putCalled === false` 把「绑定修改必须塞进 PATCH」固化、`:251` 的 `enabled` 取自可能陈旧 5 分钟的缓存。运行时错误码表**不手抄**——用 grep 实测枚举出 12 个，命令写进 §4.2 供重跑（这条是评审明确指出手抄码表必漏而改的） | — | Claude |

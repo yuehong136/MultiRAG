@@ -184,9 +184,9 @@ streaming card；否则回退 buffered reply。卡片失败只切换交付方式
 `reply_to_message_id`、Redis claim 和 executed/replied tombstone 语义保持不变。同会话串行只有
 `ChannelWorker` 一个所有者；Bridge 不再叠第二把会话锁。
 
-### Structured actor identity 的 C1 兼容半态
+### Structured actor identity 的 C1 兼容态
 
-EIM-C1 / CHN-X5 当前只让 private execution API **tolerate** 可选的结构化
+EIM-C1 / CHN-X5 已让 private execution API **tolerate** 可选的结构化
 `ExternalIdentityAssertion`。它位于 `ChannelActor.identity`，包含 provider、可选
 `provider_tenant_key` 和 1～8 个有界 `{kind, value}`；同一 assertion 的 kind 必须唯一，所有层级
 继续 `extra="forbid"`。未知但有界的 kind 可保留给未来 Provider resolver，不能自动成为 canonical
@@ -201,13 +201,15 @@ subject。
 - `app_id`、Provider Account、`tenant_id`、`principal_id`、role/scopes/audience/confirmation/token 都不是
   assertion 字段，夹带会被拒绝；前两者只来自服务端 ownership/link/credential。
 
-因此当前源码能解析新旧两种 private command，却仍只有旧 worker 形状在运行。C2 才能在 C1 API
-部署后让 worker emit；C3 才能沿 Provider Account link、I4/I6/P1 验证并 consume；C4 才会在全部 runner
-浸泡后删除 legacy `subject`。这项 private 加法不改变公开 `channel-api/v1`。截至 2026-08-13，C1
-已在隔离 clean tree 通过等价完整 `make verify` 与三文件定向。用户随后批准并尝试切换 API；新进程
-确认加载 `536a1ea5`，但在开始 serving 前被存量库 model-first 早于 Alembic 的 bootstrap 顺序缺陷
-阻断，因而没有产生旧 worker -> 新 API 混合版本请求。EIM-I2.2 / CHN-O15 正在统一修复启动编排并
-安全恢复该零行 partial schema；新 API smoke 与混合版本活体完成前，不能宣称该半态已经部署。
+因此当前源码能解析新旧两种 private command，已验活的 worker 仍只发送 legacy shape。C2/X6 已进入
+进行中但尚无 structured identity emit 证据；C3 才能沿 Provider Account link、I4/I6/P1 验证并
+consume；C4 才会在全部 runner 浸泡后删除 legacy `subject`。这项 private 加法不改变公开
+`channel-api/v1`。截至 2026-08-13，C1 已在隔离 clean tree 通过等价完整 `make verify` 与三文件定向。
+EIM-I2.2 / CHN-O15 完成真实库恢复后，新 API smoke 全绿，一条 C1 前 producer 等价的 legacy-shape
+飞书请求被接受并完整执行。恢复后 worker 是新进程，不是旧 PID 跨版本存活；C1 对生产
+`runtime_client.py` / `worker.py` / `binding_bridge.py` 零 diff。活体无 structured identity，resolver
+`principal_id` 为空，identity sidecar 零写入；C1 tolerate 已部署，但身份 emit/consume/Principal
+仍未上线。
 
 EIM-U12 / CHN-U14 允许 `message_completed` 携带可选的用户可见权威正文。
 新 worker 收到时先用 `ReplySession.replace()` 整体替换内存中的 delta，再执行 `complete()`；这能表达

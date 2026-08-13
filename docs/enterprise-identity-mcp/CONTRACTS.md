@@ -148,11 +148,12 @@ class ChannelActor(BaseModel):
 
 每一步是独立 PR/任务，映射的 `CHN-*` 见 [ROADMAP](ROADMAP.md)。
 
-截至 2026-08-13，C1 源码与契约测试已在隔离 clean tree 验证：以 `HEAD a0581f2f` 为基线、只应用
-C1 13 条路径的等价完整 `make verify` 全绿，C1 三文件定向全绿。当前运行旧 API 的通用 smoke 也通过，
-但它没有加载本 DTO，不能证明 C1 已部署。任务仍保持 `🔵`，唯一缺口是用户批准重启 API 后完成
-“旧 worker -> 新 API”混合版本活体；C2/C3/C4 均未开始，不得把可解析的 assertion 描述为已验证
-身份或已上线 Principal。
+截至 2026-08-13，C1 已完成：以 `HEAD a0581f2f` 为基线、只应用 C1 13 条路径的隔离等价完整
+`make verify` 与 C1 三文件定向全绿。CHN-O15 恢复后，新 API smoke 全绿，一条 C1 前 producer 等价的
+legacy-shape 飞书请求被新 API 接受并完整执行。恢复后 worker 是新进程，并非旧 PID 跨版本存活；
+C1 对生产 emitter 文件零 diff，因此该活体证明旧线格与新 consumer 兼容。C2 已进入进行中但尚无
+structured identity emit 证据；resolver 未 consume，Principal 未提升，仍不得把可解析的 assertion
+描述为已验证身份或已上线 Principal。
 
 ### 2.4 Channel 交互契约的所有权
 

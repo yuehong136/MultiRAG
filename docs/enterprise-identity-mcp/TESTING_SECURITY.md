@@ -129,14 +129,16 @@ EIM-A1 已固定 token/JWKS test vectors；A7 的前置虽已满足，独立 aud
 Resource Server 仍未实现；InteractionSession 仍属于依赖 P3/A4/C3 的 EIM-U14。不能因
 P1 或 modern/legacy 协议测试通过就把这些安全测试标为已满足。
 
-EIM-C1 / CHN-X5 当前源码处于 tolerate 收口中：private API 可解析可选、有界、extra-forbid 的
+EIM-C1 / CHN-X5 已完成 tolerate：private API 可解析可选、有界、extra-forbid 的
 `ExternalIdentityAssertion`，同时保持 legacy actor 必填；runtime client/worker 未 emit，resolver 未
-consume，C2/C3/C4 均未完成。C1 必须拒绝 command/actor/assertion/identifier 任一层的 Tenant、Principal、
+consume，C2 已进入进行中但尚无 emit 证据，C3/C4 均未完成。C1 必须拒绝
+command/actor/assertion/identifier 任一层的 Tenant、Principal、
 Provider Account/app_id、role/scope/audience/confirmation/token 夹带，拒绝重复 kind 和 legacy/
 structured provider 不一致；未知但有界 kind 只允许保留，不产生信任。等价完整 `make verify` 和 C1
-三文件定向均已在隔离 clean tree 通过。用户批准后的新 API 切换确认加载 `536a1ea5`，但在 serving
-前被存量 schema bootstrap 顺序缺陷阻断，并未产生旧 worker -> 新 API 请求；EIM-I2.2 / CHN-O15
-修复与安全恢复完成前，C1 继续为 `🔵`。
+三文件定向均已在隔离 clean tree 通过。EIM-I2.2 / CHN-O15 完成真实库恢复后，新 API smoke 全绿；
+一条 C1 前 producer 等价的 legacy-shape 飞书请求被新 API 接受并完整执行。恢复后 worker 是新进程，
+不是旧 PID 跨版本存活；C1 对生产 emitter 文件零 diff。活体无 structured identity，resolver
+`principal_id` 为空，identity sidecar 零写入；这只完成 C1 兼容验证，不是身份注入或 Principal 验证。
 
 EIM-F1 已以 1.7.2 contract fixture 收口，并准确区分两个 import 边界：平台 control/provider/
 verification/identity 模块导入不得加载 `lark_oapi` 或创建 event loop；显式导入官方 SDK 则允许其已知
@@ -875,14 +877,17 @@ assertion 可解析但不能替代 legacy subject；重复 kind、Provider misma
 2026-08-13 本地证据：以 `HEAD a0581f2f` 为基线、只应用 C1 13 条路径的隔离 clean tree 执行等价
 完整 `make verify` 全绿——Ruff format **1242 files**、Ruff check、**7** 条 import contracts
 （832 files / 2611 dependencies）、async DB gate、mypy **81 source files**、unit
-**2223 passed in 32.28s**。C1 三文件定向 **74 passed in 12.94s**。当前运行 API 的通用
-`make smoke` 也为 **PASS**：ping/healthz 均 HTTP 200，db/chat/db_pool/redis/doc_engine/storage
-全部 `ok`；但该进程仍是旧 API，没有加载 C1，因此这不是新 private DTO 的部署证据。
+**2223 passed in 32.28s**。C1 三文件定向 **74 passed in 12.94s**。EIM-I2.2 / CHN-O15 随后完成：
+恢复前确认误建的 9 张 sidecar 均为零行且无外部依赖；用户理解风险并明确豁免备份，操作以白名单、
+无 `CASCADE` 的事务完成，正式 Alembic 到 `b4c6d8e0f2a4 (head)`。新 API 的 ping/healthz 均 HTTP 200，
+db/chat/db_pool/redis/doc_engine/storage 全部 `ok`。
 
-用户已批准并尝试切换；新 API 在 serving 前被存量 schema bootstrap 顺序缺陷阻断，未产生混合版本
-请求。先完成 EIM-I2.2 / CHN-O15 的备份、无 CASCADE 安全恢复及新 API smoke，再让仍运行的旧 worker
-调用新 API，确认请求成功、日志无 `extra_forbidden`，且日志不含 assertion tenant key、完整 external
-ID、token 或请求正文。完成前 C1/X5 保持 `🔵`，不得宣称 deployed，也不得进入 C2 emit。
+恢复后，一条 C1 前 producer 等价的 legacy-shape 飞书请求被新 API 完整执行，形成 completed
+execution claim、session 与终态会话记录。worker 是恢复后新进程，不宣称旧 PID 跨版本；C1 对
+`runtime_client.py` / `worker.py` / `binding_bridge.py` 的生产 diff 为零。请求没有 structured identity，
+resolver `principal_id` 为空，identity sidecar 零写入；日志和记录均不得包含 assertion tenant key、
+完整 external ID、token 或请求正文。C1/X5 据此完成；C2/X6 仅进入 `🔵`，尚不能宣称 emit、consume
+或 Principal。
 
 涉及启动、路由、JWKS 端点：启动受控服务后追加：
 
