@@ -41,6 +41,7 @@ from api.identity.principal import (
     IdentityAssurance,
     build_principal_from_resolved_identity,
 )
+from api.identity.run_context import RunContext
 
 
 def _command(**overrides: object) -> ChannelExecutionCommand:
@@ -722,6 +723,7 @@ class _CanvasAdapter:
         self.invalid_revision = invalid_revision
         self.validated: tuple[str, str | None] | None = None
         self.operations: list[object] = []
+        self.run_contexts: list[RunContext] = []
         self.closed = False
 
     async def capabilities(
@@ -753,10 +755,11 @@ class _CanvasAdapter:
         target: ExecutionTargetRef,
         question: str,
         session_id: str | None,
-        principal_id: str | None,
+        run_context: RunContext,
         operation: object,
     ) -> AsyncIterator[str]:
-        del tenant_id, target, question, session_id, principal_id
+        del tenant_id, target, question, session_id
+        self.run_contexts.append(run_context)
         self.operations.append(operation)
 
         async def _frames() -> AsyncIterator[str]:
@@ -786,8 +789,9 @@ async def test_canvas_executor_filters_reasoning_trace_and_tool_events() -> None
         ]
     )
     executor = MultiRAGCanvasAgentExecutor(adapter)
+    context = _context()
 
-    events = await executor.execute(context=_context(), command=_command())
+    events = await executor.execute(context=context, command=_command())
 
     assert [event.model_dump(exclude_none=True) for event in await _collect(events)] == [
         {"event": "message_delta", "content": "answer", "session_id": "s-1"},
@@ -795,6 +799,8 @@ async def test_canvas_executor_filters_reasoning_trace_and_tool_events() -> None
     ]
     assert adapter.validated == ("tenant-trusted", "rev-1")
     assert adapter.operations == ["message"]
+    assert adapter.run_contexts[0].principal is context.principal
+    assert adapter.run_contexts[0].platform_user_id == "principal-trusted"
 
 
 async def test_target_executors_declare_current_target_private_capabilities() -> None:
@@ -832,6 +838,7 @@ class _DialogAdapter:
     def __init__(self, frames: list[str] | None = None) -> None:
         self.sessions: list[str | None] = []
         self.operations: list[object] = []
+        self.run_contexts: list[RunContext] = []
         self.frames = frames
         self.closed = False
 
@@ -842,10 +849,11 @@ class _DialogAdapter:
         target: ExecutionTargetRef,
         question: str,
         session_id: str | None,
-        principal_id: str | None,
+        run_context: RunContext,
         operation: object,
     ) -> AsyncIterator[str]:
-        del tenant_id, target, question, principal_id
+        del tenant_id, target, question
+        self.run_contexts.append(run_context)
         self.sessions.append(session_id)
         self.operations.append(operation)
 
@@ -879,6 +887,8 @@ async def test_dialog_executor_generates_first_answer_in_one_target_run() -> Non
             "session_id": "dialog-session",
         },
     ]
+    assert adapter.run_contexts[0].principal is context.principal
+    assert adapter.run_contexts[0].platform_user_id == "principal-trusted"
     assert adapter.sessions == [None]
     assert adapter.operations == ["message"]
 

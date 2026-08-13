@@ -26,6 +26,7 @@ from api.channel_execution.protocols import (
 )
 from api.channel_execution.reasoning import StreamingReasoningFilter, strip_reasoning
 from api.db.db_models import Dialog
+from api.identity.run_context import RunContext
 from common.constants import StatusEnum
 
 _CANVAS_CAPABILITIES = TargetCapabilities(
@@ -178,7 +179,7 @@ class SqlAlchemyCanvasTargetDriver:
         target: ExecutionTargetRef,
         question: str,
         session_id: str | None,
-        principal_id: str | None,
+        run_context: RunContext,
         operation: ExecutionOperation = "message",
     ) -> AsyncIterator[str]:
         return self._stream(
@@ -186,7 +187,7 @@ class SqlAlchemyCanvasTargetDriver:
             target=target,
             question=question,
             session_id=session_id,
-            principal_id=principal_id,
+            run_context=run_context,
             operation=operation,
         )
 
@@ -197,33 +198,36 @@ class SqlAlchemyCanvasTargetDriver:
         target: ExecutionTargetRef,
         question: str,
         session_id: str | None,
-        principal_id: str | None,
+        run_context: RunContext,
         operation: ExecutionOperation,
     ) -> AsyncIterator[str]:
         from api.db.services.canvas_service import completion as canvas_completion
 
+        if run_context.tenant_id != tenant_id:
+            raise TargetExecutionFailedError()
         prepared = await self._history.prepare(
             target_id=target.target_id,
             session_id=session_id,
             question=question,
             operation=operation,
-            user_id=principal_id,
+            user_id=run_context.platform_user_id,
         )
         generated_session_id = prepared.execution_session_id
         terminal = False
         promoted = False
+        completion_kwargs: dict[str, Any] = {
+            "db": self._db,
+            "tenant_id": tenant_id,
+            "agent_id": target.target_id,
+            "session_id": prepared.execution_session_id,
+            "query": question,
+            "release": True,
+            "run_context": run_context,
+        }
+        if run_context.principal is None:
+            completion_kwargs["user_id"] = ""
         try:
-            async with aclosing(
-                canvas_completion(
-                    db=self._db,
-                    tenant_id=tenant_id,
-                    agent_id=target.target_id,
-                    session_id=prepared.execution_session_id,
-                    query=question,
-                    release=True,
-                    user_id=principal_id or "",
-                )
-            ) as frames:
+            async with aclosing(canvas_completion(**completion_kwargs)) as frames:
                 async for frame in frames:
                     payload = _decode_sse_payload(frame)
                     if payload is None:
@@ -262,7 +266,7 @@ class SqlAlchemyDialogTargetDriver:
         target: ExecutionTargetRef,
         question: str,
         session_id: str | None,
-        principal_id: str | None,
+        run_context: RunContext,
         operation: ExecutionOperation = "message",
     ) -> AsyncIterator[str]:
         return self._stream(
@@ -270,7 +274,7 @@ class SqlAlchemyDialogTargetDriver:
             target=target,
             question=question,
             session_id=session_id,
-            principal_id=principal_id,
+            run_context=run_context,
             operation=operation,
         )
 
@@ -281,12 +285,14 @@ class SqlAlchemyDialogTargetDriver:
         target: ExecutionTargetRef,
         question: str,
         session_id: str | None,
-        principal_id: str | None,
+        run_context: RunContext,
         operation: ExecutionOperation,
     ) -> AsyncIterator[str]:
         from api.db.services.conversation_service import structure_answer
         from api.db.services.dialog_service import async_chat
 
+        if run_context.tenant_id != tenant_id:
+            raise TargetExecutionFailedError()
         dialog = await self._load_dialog_snapshot(
             tenant_id=tenant_id,
             target_id=target.target_id,
@@ -296,7 +302,7 @@ class SqlAlchemyDialogTargetDriver:
             session_id=session_id,
             question=question,
             operation=operation,
-            user_id=principal_id or "",
+            user_id=run_context.platform_user_id or "",
         )
         working = prepared.working_copy
         if prepared.expected_head is None:
@@ -334,6 +340,9 @@ class SqlAlchemyDialogTargetDriver:
 
         saw_final = False
         committed = False
+        chat_kwargs: dict[str, Any] = {"run_context": run_context}
+        if run_context.principal is None:
+            chat_kwargs["user_id"] = ""
         try:
             async with aclosing(
                 async_chat(
@@ -341,7 +350,7 @@ class SqlAlchemyDialogTargetDriver:
                     prompt_messages,
                     self._db,
                     True,
-                    user_id=principal_id or "",
+                    **chat_kwargs,
                 )
             ) as answers:
                 async for answer in answers:
@@ -428,7 +437,10 @@ class MultiRAGCanvasAgentExecutor:
             target=context.target,
             question=command.message.content,
             session_id=context.session_id,
-            principal_id=context.principal_id,
+            run_context=RunContext(
+                tenant_id=context.tenant_id,
+                principal=context.principal,
+            ),
             operation=command.operation,
         )
         return self._events(frames)
@@ -505,7 +517,10 @@ class MultiRAGDialogExecutor:
             target=context.target,
             question=command.message.content,
             session_id=context.session_id,
-            principal_id=context.principal_id,
+            run_context=RunContext(
+                tenant_id=context.tenant_id,
+                principal=context.principal,
+            ),
             operation=command.operation,
         )
         return self._dialog_events(frames)

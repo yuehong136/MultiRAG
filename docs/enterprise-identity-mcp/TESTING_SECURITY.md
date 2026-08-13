@@ -124,9 +124,9 @@ verification-gated policy plan 与窄 repository/CAS seam；EIM-P1 已完成 can
 AuthenticationContext、I3 promotion builder 和 legacy Web/API personal-owner adapter；EIM-I6 已完成
 权威 policy/link/event schema、framework-neutral service 与三种原子 provisioning transaction，并通过
 完整门禁。EIM-C3 / CHN-X7 后续已完成 Channel identity composition 与部署 live：完整 Principal 已进入
-`TrustedChannelContext`，`principal_id` 已约束 target/session owner；但 target executor 仍只向下传
-字符串，Canvas/Dialog 下游仍有 `principal_id or ""`，尚未把 Principal 传进
-Agent/RAG/Memory/Canvas workflow/MCP call context，这正是 P2/CHN-X18。EIM-F3/F8 只完成
+`TrustedChannelContext`，`principal_id` 已约束 target/session owner。EIM-P2 / CHN-X18 又以
+`RunContext` 完成 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas workflow/MCP call-context 传播，
+并补当前 `msgStoreConn` backend 的同租户双用户隔离证据。EIM-F3/F8 只完成
 MCP SDK 2/FastMCP 4 的协议运行时迁移和 `InputRequiredResult` 的 transport-level 暴露。
 EIM-A1 已固定 token/JWKS test vectors；A7 的前置虽已满足，独立 audience/scope 和 OAuth
 Resource Server 仍未实现；InteractionSession 仍属于依赖 P3/A4/C3 的 EIM-U14。不能因
@@ -152,9 +152,9 @@ Contact/I3 consume、身份映射或 Principal。
 
 当前 C3/X7 通过 success claim 后的 authority→initial I3→I4→I6→final I3→P1 提升 Principal；
 NO_LINK 才保留 legacy anonymous，LINKED 缺 assertion/authority/proof 任一条件都 fail closed。Redis
-owner envelope 与 Dialog/Canvas 数据库 owner 已按 tenant/principal 隔离。P2 测试必须在此基础上继续：
-不能删除 C3 纵深校验，也不能把完整 Principal 写进 DSL、prompt、wire、日志或 MCP arguments；应证明
-同租户双用户的 session/Memory、并发 Graph/MCP run、retry/regenerate/cancel 都保持正确上下文。
+owner envelope 与 Dialog/Canvas 数据库 owner 已按 tenant/principal 隔离。P2 测试在此基础上保留
+C3 纵深校验，并证明完整 Principal 不进入 DSL、prompt、wire、日志或 MCP arguments；同租户 Memory
+按可信用户隔离，Graph/component 在 load 前持有同一 context，MCP session 只持实例级 opaque 引用。
 
 EIM-F1 已以 1.7.2 contract fixture 收口，并准确区分两个 import 边界：平台 control/provider/
 verification/identity 模块导入不得加载 `lark_oapi` 或创建 event loop；显式导入官方 SDK 则允许其已知

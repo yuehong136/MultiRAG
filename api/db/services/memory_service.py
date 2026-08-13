@@ -23,6 +23,23 @@ class MemoryService(CommonService):
     model = Memory
 
     @classmethod
+    def get_by_ids_for_tenant(
+        cls,
+        db: Session,
+        memory_ids: list[str],
+        tenant_id: str,
+    ) -> list[Memory]:
+        """Return an exact set of memories only when every row belongs to tenant."""
+        if not memory_ids:
+            return []
+        memories = cls.get_by_ids(db, memory_ids)
+        expected_ids = set(memory_ids)
+        actual_ids = {memory.id for memory in memories}
+        if actual_ids != expected_ids or any(memory.tenant_id != tenant_id for memory in memories):
+            raise PermissionError("Memory not available")
+        return memories
+
+    @classmethod
     def get_by_memory_id(cls, db: Session, memory_id: str) -> Memory | None:
         """
         根据Memory ID获取Memory对象

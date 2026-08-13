@@ -74,7 +74,7 @@ class AgentParam(LLMParam, ToolParamBase):
 class Agent(LLM, ToolBase):
     component_name = "Agent"
 
-    def __init__(self, canvas, id, param: LLMParam):
+    def __init__(self, canvas: Any, id: str, param: LLMParam) -> None:
         LLM.__init__(self, canvas, id, param)
         self.tools = {}
         for idx, cpn in enumerate(self._param.tools):
@@ -113,7 +113,12 @@ class Agent(LLM, ToolBase):
             with db_connection() as db:
                 mcp_server = MCPServerService.get_by_id(db, mcp["mcp_id"])
             custom_header = self._param.custom_header
-            tool_call_session = MCPToolCallSession(mcp_server, mcp_server.variables, custom_header)
+            tool_call_session = MCPToolCallSession(
+                mcp_server,
+                mcp_server.variables,
+                custom_header,
+                call_context=self._canvas.get_run_context(),
+            )
             self._mcp_sessions.append(tool_call_session)
             for tnm, meta in mcp["tools"].items():
                 self.tool_meta.append(mcp_tool_metadata_to_openai_tool(meta))

@@ -80,6 +80,9 @@ if user_id == tenant_id:
 > `principal_id` 隔离 target/session owner；NO_LINK 仍显式保留 legacy anonymous。完整 Principal 尚未
 > 下传到 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas workflow/MCP call context，且下游仍存在
 > `principal_id or ""`，该后续工作已登记为 EIM-P2 / CHN-X18。
+>
+> **2026-08-13 再后续状态**：EIM-P2 / CHN-X18 已以 frozen、repr-safe 的进程内 `RunContext`
+> 完成上述传播；该完成不含 A2/P3 token/credential，也不改变本 ADR 的历史范围。
 
 ---
 

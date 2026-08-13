@@ -1,6 +1,8 @@
 import asyncio
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -9,6 +11,16 @@ from agent.component.message import Message
 from agent.tools import retrieval as retrieval_module
 from agent.tools.retrieval import Retrieval
 from api.db.joint_services import memory_message_service as memory_message_service_module
+from api.db.services.memory_service import MemoryService
+from api.identity.principal import (
+    AuthenticatedActor,
+    AuthenticationContext,
+    AuthenticationSource,
+    IdentityAssurance,
+    TenantMembershipEvidence,
+    build_principal_from_authenticated_actor,
+)
+from api.identity.run_context import RunContext
 from common.constants import MemoryType
 
 
@@ -28,6 +40,23 @@ class _DummyAsyncDBContext:
 
     async def __aexit__(self, exc_type, exc, tb):
         return False
+
+
+def _run_context(*, tenant_id: str = "tenant-1", user_id: str = "trusted-user") -> RunContext:
+    validated_at = datetime(2026, 8, 13, tzinfo=UTC)
+    principal = build_principal_from_authenticated_actor(
+        actor=AuthenticatedActor(platform_user_id=user_id),
+        membership=TenantMembershipEvidence(
+            platform_user_id=user_id,
+            tenant_id=tenant_id,
+        ),
+        authentication=AuthenticationContext(
+            source=AuthenticationSource.WEB_SESSION,
+            assurance=IdentityAssurance.AUTHENTICATED,
+            validated_at=validated_at,
+        ),
+    )
+    return RunContext(tenant_id=tenant_id, principal=principal)
 
 
 def test_query_message_passes_user_id_filter_when_provided(monkeypatch) -> None:
@@ -273,3 +302,143 @@ def test_retrieval_resolves_variable_user_id_before_querying_memory(monkeypatch)
     assert captured["db"] == "db"
     assert captured["filter_dict"] == {"memory_id": ["mem-1"], "user_id": "user-1"}
     assert captured["params"]["top_n"] == 3
+
+
+def test_linked_retrieval_ignores_dsl_user_and_passes_trusted_context(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    run_context = _run_context()
+    canvas = SimpleNamespace(
+        get_component_name=lambda _cpn_id: "",
+        get_variable_value=lambda _ref: "attacker-user",
+        get_run_context=lambda: run_context,
+    )
+    param = SimpleNamespace(
+        memory_ids=["mem-1"],
+        user_id="{sys.user_id}",
+        similarity_threshold=0.3,
+        keywords_similarity_weight=0.7,
+        top_n=3,
+        empty_response="",
+        outputs={},
+    )
+    tool = object.__new__(Retrieval)
+    tool._canvas = canvas
+    tool._param = param
+    fake_memory = SimpleNamespace(id="mem-1", tenant_id="tenant-1", embd_id="embd-1")
+
+    monkeypatch.setattr(retrieval_module, "db_connection", lambda: _DummyDBContext())
+    monkeypatch.setattr(
+        retrieval_module.MemoryService,
+        "get_by_ids_for_tenant",
+        classmethod(lambda cls, _db, memory_ids, tenant_id: [fake_memory]),
+    )
+    monkeypatch.setattr(retrieval_module, "memory_prompt", lambda message_list, _limit: ["memory text"])
+
+    def fake_query_message(db, filter_dict, params, *, run_context=None):
+        captured["db"] = db
+        captured["filter_dict"] = dict(filter_dict)
+        captured["params"] = dict(params)
+        captured["run_context"] = run_context
+        return [{"content": "memory"}]
+
+    monkeypatch.setattr(retrieval_module.memory_message_service, "query_message", fake_query_message)
+
+    result = asyncio.run(tool._retrieve_memory("hello"))
+
+    assert result == "memory text"
+    assert captured["filter_dict"] == {"memory_id": ["mem-1"], "user_id": "trusted-user"}
+    assert captured["run_context"] is run_context
+
+
+def test_linked_message_ignores_dsl_user_when_saving(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    run_context = _run_context()
+    canvas = SimpleNamespace(
+        _id="agent-1",
+        task_id="session-1",
+        get_sys_query=lambda: "hi",
+        get_variable_value=lambda _ref: "attacker-user",
+        get_run_context=lambda: run_context,
+    )
+    component = object.__new__(Message)
+    component._canvas = canvas
+    component._param = SimpleNamespace(memory_ids=["mem-1"], user_id="{sys.user_id}")
+
+    async def fake_queue_save_to_memory_task(db, memory_ids, message_dict, *, run_context=None):
+        captured.update(
+            db=db,
+            memory_ids=memory_ids,
+            message_dict=message_dict,
+            run_context=run_context,
+        )
+        return True, "ok"
+
+    monkeypatch.setattr(message_module, "async_db_connection", lambda: _DummyAsyncDBContext())
+    monkeypatch.setattr(message_module, "queue_save_to_memory_task", fake_queue_save_to_memory_task)
+
+    assert asyncio.run(component._save_to_memory("hello")) == (True, "ok")
+    assert captured["message_dict"]["user_id"] == "trusted-user"
+    assert captured["run_context"] is run_context
+
+
+def test_memory_service_rejects_missing_or_cross_tenant_ids(monkeypatch) -> None:
+    rows = [
+        SimpleNamespace(id="mem-owned", tenant_id="tenant-1"),
+        SimpleNamespace(id="mem-other", tenant_id="tenant-2"),
+    ]
+    monkeypatch.setattr(
+        MemoryService,
+        "get_by_ids",
+        classmethod(lambda cls, _db, _memory_ids: rows),
+    )
+
+    with pytest.raises(PermissionError, match="Memory not available"):
+        MemoryService.get_by_ids_for_tenant(
+            Session(),
+            ["mem-owned", "mem-other"],
+            "tenant-1",
+        )
+    with pytest.raises(PermissionError, match="Memory not available"):
+        MemoryService.get_by_ids_for_tenant(
+            Session(),
+            ["mem-owned", "mem-missing"],
+            "tenant-1",
+        )
+
+
+def test_linked_memory_save_rejects_cross_tenant_before_storage(monkeypatch) -> None:
+    fake_db = AsyncSession()
+    run_context = _run_context()
+
+    def reject_mixed_tenants(
+        _cls: type[MemoryService],
+        _db: Session,
+        _memory_ids: list[str],
+        _tenant_id: str,
+    ) -> list[object]:
+        raise PermissionError("Memory not available")
+
+    monkeypatch.setattr(
+        memory_message_service_module.MemoryService,
+        "get_by_ids_for_tenant",
+        classmethod(reject_mixed_tenants),
+    )
+    monkeypatch.setattr(
+        memory_message_service_module,
+        "_embedding_bundle_for",
+        lambda *_args, **_kwargs: pytest.fail("storage path must not run"),
+    )
+
+    with pytest.raises(PermissionError, match="Memory not available"):
+        asyncio.run(
+            memory_message_service_module.queue_save_to_memory_task(
+                db=fake_db,
+                memory_ids=["mem-owned", "mem-other"],
+                message_dict={
+                    "user_id": "attacker-user",
+                    "agent_id": "agent-1",
+                    "session_id": "session-1",
+                },
+                run_context=run_context,
+            )
+        )

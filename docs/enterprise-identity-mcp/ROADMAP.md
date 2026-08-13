@@ -17,8 +17,9 @@
 > Tenant V2 ownership dry-run 在飞书侧补齐最小企业信息只读权限并重新发布后均通过，且证明属于同一
 > 外部企业。受控 apply 已幂等落下 1 个 Provider Tenant、2 个 healthy Provider Account、1 个
 > `jit/TTL=300` policy 与 2 条 Channel link。EIM-C3 / CHN-X7 的源码、自动门禁与新 API 真实飞书
-> live 均已完成并标记 `✅`；下一条接线主线是 EIM-P2，CHN-O9 可作为不阻塞 P2 的 Channel
-> 可观测并行支线，EIM-C4 / CHN-X8 仍等待全部 runner 升级与 deployment soak；
+> live 均已完成并标记 `✅`；EIM-P2 / CHN-X18 也已完成本地实现与自动门禁但尚未部署，
+> 下一条 token 主线是 EIM-A2。CHN-O9 可作为并行 Channel 可观测支线，EIM-C4 / CHN-X8
+> 仍等待全部 runner 升级与 deployment soak；
 > I5 与 I7 的 I4 前置已满足，
 > 可作为不共文件的并行 identity 支线，但 I8 仍须同时等待 I6 + I7；
 > Channel assertion 轨可独立推进；EIM-F5 /
@@ -434,7 +435,7 @@ authority 或 proof 任一损坏都 fail closed。它只把 `principal_id` 用�
 | ID | Channel ID | 仓库 | 任务 | 状态 | 依赖 | 完成条件 |
 |---|---|---|---|:---:|---|---|
 | EIM-P1 | — | MR | 扩展/统一 immutable Principal 与 AuthenticationContext，不把 ORM 对象带出请求 | ✅ | I3 | [CONTRACTS §4](CONTRACTS.md#4-identity-service-接口)；web/token auth 基线不回归 |
-| EIM-P2 | CHN-X18 | MR | 把 C3 immutable Principal 从 Channel Execution 显式传入 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas workflow 与 MCP call context seam；按 tenant + platform user 隔离 | ⬜ | P1,C3 | LINKED 不再用 `principal_id or ""` 静默匿名；NO_LINK 保留显式 legacy；同租户跨用户 session/Memory 不串；Agent/workflow/MCP 边界拿到同一不可变 Principal；不签 token、不取 credential、不发 bearer |
+| EIM-P2 | CHN-X18 | MR | 把 C3 immutable Principal 从 Channel Execution 显式传入 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas workflow 与 MCP call context seam；按 tenant + platform user 隔离 | ✅ | P1,C3 | `api.identity.run_context.RunContext`、Channel target driver、Canvas Graph 构造、Memory component/service 与 MCP instance-local call context 已接线；LINKED 不再用 `principal_id or ""` 静默匿名，NO_LINK 保留显式 legacy；未签 token、未取 credential、未发 bearer |
 | EIM-P3 | — | MR | MCP request-scoped credential provider；按 Principal/resource/scope 获取 token | ⬜ | P2,F3,A2,A4 | Agent 初始化不缓存用户 token；cache key 绑定 principal/tenant/agent/resource/scope/policy revision/credential generation；并发用户不串 token；每 HTTP request 携带 bearer |
 
 P1 已完成现有消费方审计：唯一 owner 是 `api.identity.principal.Principal`，
@@ -442,14 +443,12 @@ P1 已完成现有消费方审计：唯一 owner 是 `api.identity.principal.Pri
 legacy Web/API 只活查 personal OWNER context，不代表一般多 Tenant 选择；C3/P2、A2/P3/A7
 继续按独立任务验收。
 
-当前主线是 P2/CHN-X18：`TrustedChannelContext` 已同时携 `principal_id` 与完整 Principal，但
-`api.channel_execution` 的 target driver 仍只向下传字符串，Canvas/Dialog 下游还有
-`principal_id or ""`，Canvas Graph 又在 `run()` 之前就构造组件和 MCP session。P2 必须在 Graph/component
-构造前建立显式、不可序列化的 run identity context，并把同一可信 Principal 送到 Agent、RAG、Memory、
-Canvas workflow 与 MCP call context seam；不能只机械替换三个空字符串。Memory 的读写键至少绑定
-tenant + platform user，DSL/模型输入不得覆盖服务端主体。
+P2/CHN-X18 已完成：`TrustedChannelContext.principal` 在 target executor 构造 frozen、repr-safe 的
+`RunContext`，并在 `Graph.load()` 前进入 Dialog/Canvas、Agent、RAG/Memory、Canvas component workflow
+和 MCP instance-local call context seam。LINKED 的 session/Memory user key 只取
+`Principal.platform_user_id`，Memory ID 同时校验 tenant；DSL/模型输入不能覆盖服务端主体。
 
-P2 不修改飞书 wire、C3 authority/I3-I6/P1 proof 链，不删除 NO_LINK legacy，也不签发 token、不获取
+本步没有修改飞书 wire、C3 authority/I3-I6/P1 proof 链，没有删除 NO_LINK legacy，也没有签发 token、获取
 request-scoped credential、不发送 bearer；这些仍属于 C4 与 A2/P3。这里的 Workflow 专指 Channel
 当前实际运行的 Canvas Graph/component workflow，不顺手改独立 `workflow/`、`workflow_v2/` 或
 `api.run_platform`。CHN-O9 可并行补 binding 级可观测，不构成 P2 前置；C4/CHN-X8 只有在全部 runner
@@ -829,13 +828,13 @@ A8 -> O3  仅在真实企业 IdP、多 issuer 或托管平台需求成立后解�
 
 A3/A4 已完成，of_mcp 的 A6 phase 1 已落但保持进行中；下一步不是把内存 store 当生产后端，而是完成
 durable multi-instance replay/audit、HMAC key rotation 和跨仓 OTel。MultiRAG 已完成 F1/I2/I2.1/I3/I4/P1、
-I6、C2 与 C3；下一条接线主线是 P2，随后才做 A2。CHN-O9 是可并行的 Channel 可观测支线，
+I6、C2、C3 与 P2；下一条 token 主线是 A2。CHN-O9 是可并行的 Channel 可观测支线，
 C4/CHN-X8 仍等待 deployment soak。I5 与 I7 因 I4 已完成而可作为不
 共文件的并行支线；但 I8 仍严格等待 I6 + I7，M1 仍等待 A5 + I5，不能因“已解锁”跳过下游依赖。
-随后必须等 `P2 + F3 + A2 + A4 -> P3`，再启动 A5/U14 等真实委托消费者。A7 保持独立入站
+随后必须等 `F3 + A2 + A4` 与已完成的 P2 共同满足 P3，再启动 A5/U14 等真实委托消费者。A7 保持独立入站
 resource；A8 仍无真实需求不启动。这个顺序既保留 of_mcp 的 fail-closed verifier/authorizer 先行，
 又不把未验证的 Channel subject 塞进 token；A4 的 Resource Server Principal 不能替代
-MultiRAG P2 的执行链传播。
+MultiRAG 已完成的 P2 执行链传播。
 
 C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任务并行；不得为了迁移 SDK
 把 UX 任务重新绑回 C5。
@@ -848,6 +847,7 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 
 | 日期 | ID | 变更 | 仓库/提交 | 验证证据 | 记录人 |
 |---|---|---|---|---|---|
+| 2026-08-13 | EIM-P2 / CHN-X18 | 完成 private execution Principal 全链传播：新增 frozen/slots、repr-safe 的 `RunContext`；Channel target executor/driver 把 C3 同一 Principal 显式送入 Dialog/Canvas，在 `Graph.load()` 前进入 Agent/RAG/Memory/Canvas component workflow，并给 MCP session 注入 instance-local opaque call context。LINKED 的 session/Memory user key 只取可信 `Principal.platform_user_id`，Memory ID 精确校验 tenant，DSL `user_id` 不能覆盖；NO_LINK 与非 Channel 调用保留 legacy。未改 wire/schema/迁移/启动/路由，未签 token、未取 credential、未发 bearer；未重启、部署或发送真实飞书消息。另按当前代码同步 of_mcp README 的 A4/A6 状态 | MultiRAG / 本次提交；of_mcp docs / 单独提交 | 失败优先：新增模块前定向收集 **4 errors**；修复后定向 **92 passed**。`make fix` 全绿；`make verify`：Ruff format/check、**8** 条 import contracts（842 files/2663 dependencies）、async DB gate、mypy **90 source files**、unit **2415 passed in 31.09s**。`REQUIRE_SERVICES=1 make integration` **163 passed in 23.63s**；其中当前 `msgStoreConn` backend 同租户双用户隔离 **1 passed**。未改启动/路由，故未跑 smoke；of_mcp `uv run ofmcp verify` 六步全绿，**453 passed、2 skipped**，contract 无漂移 | Codex |
 | 2026-08-13 | EIM-P2 / CHN-X18 交接准备 | 为零上下文实施冻结 P2 边界并保持任务 `⬜`：C3 full Principal 从 `TrustedChannelContext` 显式传播到 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas workflow 与 MCP call context seam；LINKED 禁止 `principal_id or ""` 静默匿名和 DSL 覆盖，NO_LINK 保留显式 legacy；Memory 至少按 tenant + platform user 隔离；MCP 只接进程内 context，不签 token、不取 credential、不发 bearer。补齐 Channel 映射、双账本维护义务、当前代码断点、backend-aware 测试矩阵和独立 workflow/run-platform 非目标；同时修正 C1/C2 历史快照、I7/I8 目标快速路径、低风险 card action operator、I4.1 live、O9/完整 UX smoke 与飞书 reaction scope 等陈旧表述。本条只改文档，未启动 P2 运行时实现或部署 | MultiRAG / 本次提交 | 14 份文档、**161** 个相对链接存在、code fences 平衡、陈旧/credential-like 样式扫描与 `git diff --check` 通过；`make verify` 全绿：Ruff format **1262 files**、Ruff check、**8** 条 import contracts（841 files/2656 dependencies）、async DB gate、mypy **89 source files**、unit **2405 passed in 33.35s** | Codex |
 | 2026-08-13 | EIM-C3 / CHN-X7 | verified consume 完成并标记 `✅`：成功 claim 后按 authority→initial I3→I4→I6→final I3→P1 提升 Principal；linked assertion/authority/proof 损坏 fail closed，NO_LINK 保留 legacy anonymous；Redis session 使用 tenant/principal owner envelope，legacy raw 仅 NO_LINK 可续用，Dialog/Canvas 既有行再做 owner 纵深校验；claim 一开始即占满 dedupe window，所有 post-claim 失败/取消写 full-window tombstone。当前仅完成 Principal promotion 与 `principal_id` target/session ownership，未做 P2 全链 Principal 传播或 A2/P3 MCP token | MultiRAG / `0ded51ff` + live `2b0482c7` | C3 定向 **203 passed**；`make verify` **2403 passed**；`REQUIRE_SERVICES=1 make integration` **162 passed**。12:42 API 重启到 `v0.9.9-579-g2b0482c7`，`make smoke` 六组件全绿。真实飞书 live 覆盖 **2/2** account；四条 alias 收敛到一个 active ExternalIdentity 和一个 canonical User，只有一条 valid NORMAL membership 与一条 BindingEvent；Canvas、Dialog 各一条本次 Principal owner 记录且空 owner 为 **0**；Redis completed/replied 存在、processing/failed 为 **0**。证据不含完整 app/tenant/account/user 标识或 Secret | Codex |
 | 2026-08-13 | EIM-I6.1 / CHN-X17 | 新增受控企业连接 onboarding：只从现有 Channel 解密凭据，默认 dry-run 在数据库事务外调用官方 Auth V3 + Tenant V2，并生成有时效、进程内一次性、不可篡改的脱敏计划；显式 apply 在 fresh transaction 中锁定并复核 Channel/Secret generation 与 tenant/provider ownership，幂等创建或复用 Provider Tenant/Account、`jit` policy 和 Channel link，拒绝跨租户 rebind、策略漂移和重复消费。Identity HMAC 使用独立至少 32-byte keyring，不复用 Channel 加密 key；真实 key 仅注入 API 进程的 mode `0600` secrets env，不进仓库、supervisor/worker 参数或日志。未新增公开 HTTP/UI，也未接 C3/X7 | MultiRAG / 本次提交 | 一处真实飞书应用最初因缺 Tenant V2 企业信息只读权限而 fail closed；管理员补齐最小权限并重新发布后，两个 Channel 的 Auth V3/Tenant V2 dry-run 均通过且 tenant 相同。atomic apply 最终计数 Provider Tenant/Account/Policy/Link = **1/2/1/2**；两 account 均 `healthy`、revision 1，policy 为 `jit`、TTL 300、revision 1；两个 Channel 各重放一次均 **0 action** 且计数不变。六张用户身份 sidecar 均为 0，`User/UserTenant` 计数不变。`make verify` **2316 passed in 36.68s**；`REQUIRE_SERVICES=1 make integration` **159 passed in 17.36s**；`make smoke` 六组件全绿；安全终审 **NO BLOCKER** | Codex |

@@ -510,15 +510,27 @@ class Message(ComponentBase):
         except Exception as e:
             logging.error(f"Error converting content to {self._param.output_format}: {e}")
 
-    async def _save_to_memory(self, content):
+    async def _save_to_memory(self, content: Any) -> tuple[bool, str]:
         """Save conversation to memory if memory_ids are configured."""
         if not hasattr(self._param, "memory_ids") or not self._param.memory_ids:
             return True, "No memory selected."
 
-        user_id = getattr(self._param, "user_id", "")
-        if user_id and re.match(r"^{.*}$", user_id):
-            user_id = self._canvas.get_variable_value(user_id)
+        get_run_context = getattr(self._canvas, "get_run_context", None)
+        run_context = get_run_context() if get_run_context is not None else None
+        if run_context is not None and run_context.principal is not None:
+            user_id = run_context.platform_user_id
+        else:
+            user_id = getattr(self._param, "user_id", "")
+            if user_id and re.match(r"^{.*}$", user_id):
+                user_id = self._canvas.get_variable_value(user_id)
 
         message_dict = {"user_id": user_id or "", "agent_id": self._canvas._id, "session_id": self._canvas.task_id, "user_input": self._canvas.get_sys_query(), "agent_response": content}
         async with async_db_connection() as db:
-            return await queue_save_to_memory_task(db, self._param.memory_ids, message_dict)
+            if run_context is None:
+                return await queue_save_to_memory_task(db, self._param.memory_ids, message_dict)
+            return await queue_save_to_memory_task(
+                db,
+                self._param.memory_ids,
+                message_dict,
+                run_context=run_context,
+            )

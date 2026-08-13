@@ -17,6 +17,7 @@ from api.channel_execution.models import (
     WorkloadIdentity,
 )
 from api.channel_execution.session_models import PreparedCanvasExecution, PreparedDialogExecution
+from api.identity.run_context import RunContext
 
 
 @runtime_checkable
@@ -200,7 +201,7 @@ class CanvasTargetDriver(Protocol):
         target: ExecutionTargetRef,
         question: str,
         session_id: str | None,
-        principal_id: str | None,
+        run_context: RunContext,
         operation: ExecutionOperation,
     ) -> AsyncIterator[str]: ...
 
@@ -216,6 +217,6 @@ class DialogTargetDriver(Protocol):
         target: ExecutionTargetRef,
         question: str,
         session_id: str | None,
-        principal_id: str | None,
+        run_context: RunContext,
         operation: ExecutionOperation,
     ) -> AsyncIterator[str]: ...

@@ -266,8 +266,8 @@ alias proof 因 scope marker 过旧时，fresh I4 proof 才能刷新 alias 并�
 
 I6 schema 以全状态 reverse identity unique 和 active membership partial unique 作为并发最后防线；
 User/UserTenant/identity/alias/code/event 同事务提交或全部回滚。I6.1 已增加独立运维 onboarding adapter/
-CLI，但没有公开 HTTP/UI；消息侧 C3 adapter 已在独立任务落地并完成 live。它不写 I5 EnterpriseSubject；C3 也不把
-Principal 传入 Agent 或 FastMCP，后者仍属于 P2。
+CLI，但没有公开 HTTP/UI；消息侧 C3 adapter 已在独立任务落地并完成 live。它不写 I5 EnterpriseSubject；
+后续 P2 已把 Principal 传入 Agent 与 MCP call-context seam，但没有实现 token/credential 或授权。
 
 #### Principal construction
 
@@ -280,14 +280,12 @@ proof time、待 provisioning 或需重验状态均 fail closed。存量 Web/API
 `legacy_owner` adapter 每请求活查用户和唯一 personal OWNER Tenant；它只保留现有兼容
 语义，不是多 Tenant 动态选择器。`api.utils.api_utils.Principal` 只 re-export 同一领域 class。
 
-P1/C3 已把 verified identity 提升到 `TrustedChannelContext` 和 target/session owner，但 target executor
-目前只继续传 `principal_id`，Canvas/Dialog 下游仍有 `principal_id or ""`；Canvas Graph 又在
-`run()` 前构造组件和 MCP session。P2/CHN-X18 必须在 Graph/component 构造前显式传递 immutable
-Principal/run context，覆盖 Dialog/Canvas Graph、Agent、RAG、Memory、Canvas workflow 与 MCP call
-context seam，同时让 Memory 按 tenant + platform user 隔离。模型、DSL、prompt、custom header、wire
-和日志都看不到或修改不了 Principal。P2 只传 context，不签 token、不取 credential、不发 bearer；
-A2/P3 才负责动态委托。现有 sync `Depends(manager)` 仍可能暴露 ORM User，不能因 P1/C3 完成就宣称
-传播链已打通。
+P1/C3 已把 verified identity 提升到 `TrustedChannelContext` 和 target/session owner；P2/CHN-X18
+随后在 Graph/component 构造前显式传递 immutable `RunContext`，覆盖 Dialog/Canvas Graph、Agent、
+RAG/Memory、Canvas component workflow 与 MCP call-context seam。Memory ID 先校验 tenant，消息读写
+按 `Principal.platform_user_id` 过滤；模型、DSL、prompt、custom header、wire 和日志都看不到或修改
+不了 Principal。P2 只传 context，不签 token、不取 credential、不发 bearer；A2/P3 才负责动态委托。
+现有 sync `Depends(manager)` 仍可能暴露 ORM User，不能因 P2 完成就宣称所有 auth 入口已统一。
 
 #### MCP Token Issuer
 
@@ -390,13 +388,15 @@ sequenceDiagram
 C1/C2 已有真实飞书 transport 证据；C3 verified consume 的源码、自动门禁与部署 live 均已完成。成功 claim 后按
 authority→initial I3→I4→I6→final I3→P1，linked event 逻辑上每次执行 I4（允许有界 cache）；NO_LINK
 保留 legacy anonymous。full-window claim/tombstone 阻止短窗后重放，owner envelope 与 Dialog/Canvas
-owner 校验隔离 tenant/principal。C3 只提升 `TrustedChannelContext` 并以 `principal_id` 约束 target/session，
-不传播到 Agent/RAG/Memory/Workflow/MCP。定向 **203 passed**、`make verify` **2403 passed**、强制
+owner 校验隔离 tenant/principal。C3 当时只提升 `TrustedChannelContext` 并以 `principal_id` 约束
+target/session；后续 P2 已完成 Agent/RAG/Memory/Canvas workflow/MCP context 传播。C3 定向
+**203 passed**、`make verify` **2403 passed**、强制
 integration **162 passed**。12:42 API 已重启到 `v0.9.9-579-g2b0482c7`，`make smoke` 六组件全绿；
 真实飞书 live 覆盖 **2/2** account，四条 alias 收敛到一个 active ExternalIdentity/一个 canonical User，
 只有一条 valid NORMAL membership 与一条 BindingEvent。Canvas、Dialog 各一条本次 Principal owner 记录，
-空 owner 为 **0**；Redis completed/replied 存在、processing/failed 为 **0**。下一主线是 P2；CHN-O9
-可并行，C4/CHN-X8 仍等待全部 runner 升级与 deployment soak。P2 不包含 A2/P3 token issuance/credential。
+空 owner 为 **0**；Redis completed/replied 存在、processing/failed 为 **0**。P2 已完成但未部署；
+CHN-O9 可并行，C4/CHN-X8 仍等待全部 runner 升级与 deployment soak。A2/P3 token
+issuance/credential 仍未实现。
 
 ---
 

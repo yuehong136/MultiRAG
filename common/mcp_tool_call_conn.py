@@ -103,9 +103,12 @@ class MCPToolCallSession(ToolCallSession):
         mcp_server: Any,
         server_variables: dict[str, Any] | None = None,
         custom_header: dict[str, str] | None = None,
+        *,
+        call_context: object | None = None,
     ) -> None:
         self.__class__._ALL_INSTANCES.add(self)
 
+        self._call_context = call_context
         self._custom_header = custom_header
         self._mcp_server = mcp_server
         self._server_variables = server_variables or {}
@@ -461,6 +464,11 @@ class MCPToolCallSession(ToolCallSession):
         if self._last_tool_call_meta is None:
             return None
         return dict(self._last_tool_call_meta)
+
+    @property
+    def call_context(self) -> object | None:
+        """Return opaque, instance-local context for future call authorization."""
+        return self._call_context
 
     @property
     def server_instructions(self) -> str | None:

@@ -88,7 +88,7 @@ class Retrieval(ToolBase, ABC):
     def _dataset_ids(self):
         return getattr(self._param, "dataset_ids", None) or getattr(self._param, "kb_ids", None) or []
 
-    async def _retrieve_memory(self, query_text: str):
+    async def _retrieve_memory(self, query_text: str) -> str:
         """Retrieve from memory storage.
 
         整体入线程池：块内是纯同步链（DB + query_message 内的 embedding HTTP 与消息库检索），
@@ -96,13 +96,23 @@ class Retrieval(ToolBase, ABC):
         """
         return await asyncio.to_thread(self._retrieve_memory_sync, query_text)
 
-    def _retrieve_memory_sync(self, query_text: str):
+    def _retrieve_memory_sync(self, query_text: str) -> str:
         with db_connection() as db:
             memory_ids: list[str] = list(self._param.memory_ids)
-            user_id = getattr(self._param, "user_id", None)
-            if user_id and isinstance(user_id, str) and re.match(r"^{.*}$", user_id):
-                user_id = self._canvas.get_variable_value(user_id)
-            memory_list = MemoryService.get_by_ids(db, memory_ids)
+            get_run_context = getattr(self._canvas, "get_run_context", None)
+            run_context = get_run_context() if get_run_context is not None else None
+            if run_context is not None and run_context.principal is not None:
+                user_id = run_context.platform_user_id
+                memory_list = MemoryService.get_by_ids_for_tenant(
+                    db,
+                    memory_ids,
+                    run_context.tenant_id,
+                )
+            else:
+                user_id = getattr(self._param, "user_id", None)
+                if user_id and isinstance(user_id, str) and re.match(r"^{.*}$", user_id):
+                    user_id = self._canvas.get_variable_value(user_id)
+                memory_list = MemoryService.get_by_ids(db, memory_ids)
             if not memory_list:
                 raise Exception("No memory is selected.")
 
@@ -117,16 +127,25 @@ class Retrieval(ToolBase, ABC):
             filter_dict: dict = {"memory_id": memory_ids}
             if user_id:
                 filter_dict["user_id"] = user_id
-            message_list = memory_message_service.query_message(
-                db,
-                filter_dict,
-                {
-                    "query": query,
-                    "similarity_threshold": self._param.similarity_threshold,
-                    "keywords_similarity_weight": self._param.keywords_similarity_weight,
-                    "top_n": self._param.top_n,
-                },
-            )
+            query_params = {
+                "query": query,
+                "similarity_threshold": self._param.similarity_threshold,
+                "keywords_similarity_weight": self._param.keywords_similarity_weight,
+                "top_n": self._param.top_n,
+            }
+            if run_context is None:
+                message_list = memory_message_service.query_message(
+                    db,
+                    filter_dict,
+                    query_params,
+                )
+            else:
+                message_list = memory_message_service.query_message(
+                    db,
+                    filter_dict,
+                    query_params,
+                    run_context=run_context,
+                )
             if not message_list:
                 self.set_output("formalized_content", self._param.empty_response)
                 return ""

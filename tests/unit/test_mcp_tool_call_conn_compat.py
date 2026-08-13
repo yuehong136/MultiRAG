@@ -1,6 +1,7 @@
 """Unit contracts for MultiRAG's MCP SDK 2 client wrapper."""
 
 import asyncio
+import inspect
 import json
 from contextvars import ContextVar
 from types import SimpleNamespace
@@ -59,6 +60,20 @@ def _bare_session(server_type: MCPServerType = MCPServerType.STREAMABLE_HTTP) ->
     session._recent_logs = []
     session._last_tool_call_meta = None
     return session
+
+
+def test_mcp_session_exposes_an_opaque_instance_local_call_context_seam() -> None:
+    assert "call_context" in inspect.signature(MCPToolCallSession).parameters
+    session_a = _bare_session()
+    session_b = _bare_session()
+    context_a = object()
+    context_b = object()
+    session_a._call_context = context_a
+    session_b._call_context = context_b
+
+    assert session_a.call_context is context_a
+    assert session_b.call_context is context_b
+    assert session_a.call_context is not session_b.call_context
 
 
 @pytest.mark.parametrize(

@@ -13,6 +13,8 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+from __future__ import annotations
+
 import asyncio
 import base64
 import binascii
@@ -25,7 +27,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from agent.a2ui import A2UI_EVENT
 from agent.component import component_class
@@ -40,6 +42,9 @@ from common.exceptions import TaskCanceledException
 from common.misc_utils import get_uuid, hash_str2int
 from core.prompts.generator import chunks_format
 from core.utils.redis_conn import REDIS_CONN
+
+if TYPE_CHECKING:
+    from api.identity.run_context import RunContext
 
 
 class Graph:
@@ -83,13 +88,23 @@ class Graph:
     }
     """
 
-    def __init__(self, dsl: str, tenant_id=None, task_id=None, custom_header=None):
+    def __init__(
+        self,
+        dsl: str,
+        tenant_id: str | None = None,
+        task_id: str | None = None,
+        custom_header: Any = None,
+        run_context: RunContext | None = None,
+    ) -> None:
         self.path = []
         self.components = {}
         self.error = ""
         self.dsl = normalize_chunker_dsl(json.loads(dsl))
         self._sensitive_values = []
         self._tenant_id = tenant_id
+        if run_context is not None and run_context.tenant_id != tenant_id:
+            raise ValueError("run identity context is inconsistent")
+        self._run_context = run_context
         self.task_id = task_id if task_id else get_uuid()
         self.custom_header = custom_header
         self._thread_pool = ThreadPoolExecutor(max_workers=5)
@@ -163,8 +178,13 @@ class Graph:
     def get_component_input_form(self, cpn_id) -> dict:
         return self.components.get(cpn_id)["obj"].get_input_form()
 
-    def get_tenant_id(self):
+    def get_tenant_id(self) -> str | None:
         return self._tenant_id
+
+    def get_run_context(self) -> RunContext | None:
+        """Return the process-local context without copying it into the DSL."""
+
+        return self._run_context
 
     def register_sensitive_value(self, value: Any) -> None:
         if isinstance(value, str) and value and value not in self._sensitive_values:
@@ -291,7 +311,15 @@ class Graph:
 
 
 class Canvas(Graph):
-    def __init__(self, dsl: str, tenant_id=None, task_id=None, canvas_id=None, custom_header=None):
+    def __init__(
+        self,
+        dsl: str,
+        tenant_id: str | None = None,
+        task_id: str | None = None,
+        canvas_id: str | None = None,
+        custom_header: Any = None,
+        run_context: RunContext | None = None,
+    ) -> None:
         self.globals = {
             "sys.query": "",
             "sys.user_id": tenant_id,
@@ -301,7 +329,13 @@ class Canvas(Graph):
             "sys.date": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S"),
         }
         self.variables = {}
-        super().__init__(dsl, tenant_id, task_id, custom_header=custom_header)
+        super().__init__(
+            dsl,
+            tenant_id,
+            task_id,
+            custom_header=custom_header,
+            run_context=run_context,
+        )
         self._id = canvas_id
 
     def load(self):

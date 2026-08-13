@@ -35,7 +35,7 @@
 
 ```text
 读 docs/enterprise-identity-mcp/README.md，然后完成 ROADMAP 中当前主线任务
-（当前为 EIM-P2 / CHN-X18）。
+（EIM-P2 / CHN-X18 已完成；下一条接线主线需按 ROADMAP 重新选择）。
 先复核任务锚点和依赖，把准备修改的文件与验收标准告诉我；确认后再写代码。
 ```
 
@@ -374,11 +374,11 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   优先复用 FastMCP 4 的 `RemoteAuthProvider`、`AccessToken`、`on_list_tools/on_call_tool` middleware
   和 transport 防护；领域 identity/Principal 保持框架无关，避免重复实现框架已有工具开放能力。
 - P1 已解锁 A7 的代码前置，但 A7 仍是独立 inbound Resource Server 任务，不能立即宣称
-  可发布。F1/I4.1/I6/I6.1/C1/C2/C3 已完成；下一条接线主线是 P2。CHN-O9 是不阻塞 P2 的
+  可发布。F1/I4.1/I6/I6.1/C1/C2/C3/P2 已完成；下一条 token 主线是 A2。CHN-O9 是不阻塞 A2 的
   Channel 可观测并行支线；C4/CHN-X8 仍须等待全部 runner 升级与 deployment soak。I5 与 I7 已由
   I4 解锁，可作为不共文件的并行支线；I8 仍需 I6 + I7，
   不能跳依赖；
-  C3/P2、A2/P3/A7 均不属于 P1 完成面。
+  C3/P2、A2/P3/A7 均不属于 P1 完成面；其中 C3/P2 已由后续独立任务完成。
 - MCP 出站已使用官方 SDK 2 `Client`：Streamable HTTP 使用 `mode="auto"` 和 SDK
   `create_mcp_http_client()` 受管 client（30 秒 connect/write/pool、300 秒 read），SSE 使用
   `mode="legacy"`，业务代码不再手调 `initialize()`。HTTP
@@ -493,14 +493,16 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   六步全绿、**417 passed、2 existing skipped**，contract snapshot 无漂移。该完成态只证明 of_mcp
   能把已验证 token 构造成 Principal，并按确定性逐工具策略做发现/调用授权；不证明 MultiRAG 已经
   产生这样的 token 或第三方 Channel 身份已经进入该 Principal。
-- P1 已实现领域 Principal 与存量 Web/API adapter；C3 已取得部署 live 证据，A2/P2/P3 尚未实现，因此 MultiRAG
+- P1 已实现领域 Principal 与存量 Web/API adapter；C3 已取得部署 live 证据，P2 已完成本地传播与
+  自动门禁但未部署；A2/P3 尚未实现，因此 MultiRAG
   还不会为当前 Principal 签发并逐请求发送 token；飞书的
   `ExternalIdentityAssertion -> binding/directory -> Principal` 已完成到 target/session owner，通用 MCP Client 仍无完整
   OAuth 获取 token 流。of_mcp 仍缺 A5 proxy internal actor；A6 虽已有 phase-1 domain/runtime
   安全边界，但仍缺生产多实例 replay/audit、HMAC/KMS 轮换、OTel SDK/exporter 与跨仓 trace，因此
   保持 `🔵`。M1/M2 企业主体与业务对象授权、持久 Interaction/Confirmation/Idempotency 也未完成。
-  F1/I4.1/I6/I6.1/C1/C2/C3 已完成；MultiRAG 下一条接线主线是 P2；I5/I7 是已解锁
-  并行支线，但 I8 仍需 I6 + I7。不能跳过 P2 直接做 A2/P3。A7 虽已解锁前置，仍须作为独立入站
+  F1/I4.1/I6/I6.1/C1/C2/C3/P2 已完成；MultiRAG 下一条 token 主线是 A2；I5/I7 是已解锁
+  并行支线，但 I8 仍需 I6 + I7。P3 仍必须等待 A2，不能把 P2 的 context seam 当成 token 能力。
+  A7 虽已解锁前置，仍须作为独立入站
   安全面实现和验收。
 
 ---

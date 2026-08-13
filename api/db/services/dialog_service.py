@@ -25,6 +25,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
+from api.identity.run_context import RunContext
 from common import settings
 from common.constants import LLMType, ParserType, StatusEnum
 from common.metadata_utils import apply_meta_data_filter
@@ -984,10 +985,13 @@ async def async_chat(
     messages: list[dict[str, Any]],
     db: AsyncSession,
     stream: bool = True,
+    run_context: RunContext | None = None,
     **kwargs: Any,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """异步版本的 chat(AsyncSession 全链路;遗留同步 service 经 run_sync 桥接)"""
     logging.debug("Begin async_chat")
+    if run_context is not None and run_context.tenant_id != dialog.tenant_id:
+        raise PermissionError("run identity context is inconsistent")
     # 确保最后一条消息是用户的消息
     assert messages[-1]["role"] == "user", "The last content of this conversation is not from user."
     use_web_search = _should_use_web_search(dialog.prompt_config, kwargs.get("internet"))

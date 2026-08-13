@@ -1020,7 +1020,7 @@ class EnterpriseSubjectResolver:
 
 Provider SPI 属于 I4，Enterprise subject SPI 属于 I5；P1 没有实现这两个 SPI。
 
-### 4.4 P2 execution Principal 传播契约（待实现）
+### 4.4 P2 execution Principal 传播契约（已实现）
 
 P2/CHN-X18 的唯一可信输入是 C3 已构造并放入 `TrustedChannelContext.principal` 的 canonical
 `api.identity.principal.Principal`。worker assertion、legacy subject、DSL、模型输入、MCP arguments、
@@ -1028,7 +1028,7 @@ custom header 或调用方传入的 `user_id` 都不能创建、替换或补全�
 `principal_id == principal.platform_user_id` 与 tenant/provider 证据一致；任一缺失或漂移 fail closed。
 NO_LINK 才允许服务端明确选择 legacy anonymous，不能把 linked failure 降级成 `""`。
 
-传播链必须是显式参数/不可变 run context：
+传播链已实现为显式参数/不可变 run context：
 
 ```text
 TrustedChannelContext.principal
@@ -1037,6 +1037,17 @@ TrustedChannelContext.principal
   -> Canvas Graph/component construction (before load/prewarm)
   -> Agent / RAG / Memory / Canvas workflow / MCP call context seam
 ```
+
+MultiRAG 内部最终形状为 `api.identity.run_context.RunContext`：它是 `frozen + slots` 的进程内
+值对象，只持 `tenant_id` 与 `principal: Principal | None`，两个字段均不进入 repr。LINKED 只允许
+`principal` 非空且 tenant 一致；`principal.platform_user_id` 是 session/Memory user key 的唯一可信
+来源，不再复制一份可漂移的 `principal_id`。`principal=None` 只表达服务端已经明确判定的 NO_LINK
+legacy；非 Channel 调用方省略 run context 时继续保持原兼容行为。
+
+Canvas/Graph 持有该对象的实例级引用，并在 `Graph.load()` 构造组件前完成注入；组件只能通过
+Graph getter 读取，不能从 DSL、`sys.*` 或模型参数重建。MCP client wrapper 只接收一个不透明的
+instance-local call-context 引用，供本次工具调用的后续授权层消费；P2 不解释它、不序列化它，也不
+据此修改 header、transport 或 arguments。`common` 继续不依赖 `api.identity`。
 
 - Canvas 组件与 MCP session 在 `run()` 前构造，因此只在 `Canvas.run(user_id=...)` 写 globals 太晚；
 - Principal 或 run context 不得进入 DSL、`sys.*` globals、prompt、model-visible history、SSE、数据库
@@ -1050,9 +1061,9 @@ TrustedChannelContext.principal
 - 这里的 Workflow 是当前 Channel 可达的 Canvas Graph/component workflow，不扩到独立
   `workflow/`、`workflow_v2/` 或 `api.run_platform`，也不顺手改公开 Memory CRUD/PDP。
 
-实现必须以失败测试证明 linked 不再命中 `principal_id or ""`，同时保留 NO_LINK legacy；Dialog 与
-Canvas 各覆盖一次全链传播，Memory 覆盖同租户双用户与跨 tenant 拒绝，并发 Canvas/MCP run 不串
-context，repr/log/wire 不出现平台或外部主体原值。
+失败优先测试已证明 linked 不再命中 `principal_id or ""`，同时保留 NO_LINK legacy；Dialog 与
+Canvas 均覆盖同对象传播，Memory 覆盖可信 user 覆盖、跨 tenant 拒绝与当前 `msgStoreConn` 的同租户
+双用户隔离，MCP session 的 context 为实例级引用，repr/DSL/序列化不出现平台或外部主体原值。
 
 ### 4.5 I6 当前已实现的 provisioning/link 契约
 

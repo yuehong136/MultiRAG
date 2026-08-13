@@ -3,6 +3,7 @@
 import json
 from collections.abc import AsyncIterator
 from copy import deepcopy
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -29,6 +30,38 @@ from api.channel_execution.session_models import (
     PreparedCanvasExecution,
     PreparedDialogExecution,
 )
+from api.identity.principal import (
+    AuthenticatedActor,
+    AuthenticationContext,
+    AuthenticationSource,
+    IdentityAssurance,
+    TenantMembershipEvidence,
+    build_principal_from_authenticated_actor,
+)
+from api.identity.run_context import RunContext
+
+
+def _run_context(
+    *,
+    tenant_id: str = "tenant-1",
+    user_id: str | None = None,
+) -> RunContext:
+    if user_id is None:
+        return RunContext(tenant_id=tenant_id, principal=None)
+    validated_at = datetime(2026, 8, 13, tzinfo=UTC)
+    principal = build_principal_from_authenticated_actor(
+        actor=AuthenticatedActor(platform_user_id=user_id),
+        membership=TenantMembershipEvidence(
+            platform_user_id=user_id,
+            tenant_id=tenant_id,
+        ),
+        authentication=AuthenticationContext(
+            source=AuthenticationSource.WEB_SESSION,
+            assurance=IdentityAssurance.AUTHENTICATED,
+            validated_at=validated_at,
+        ),
+    )
+    return RunContext(tenant_id=tenant_id, principal=principal)
 
 
 class FakeCanvasHistoryTransaction:
@@ -509,6 +542,7 @@ async def test_canvas_adapter_guards_latest_release_without_extending_canvas_con
         return _frames()
 
     monkeypatch.setattr(canvas_service_module, "completion", _completion)
+    run_context = _run_context()
     frames = [
         frame
         async for frame in adapter.stream(
@@ -516,13 +550,14 @@ async def test_canvas_adapter_guards_latest_release_without_extending_canvas_con
             target=target,
             question="hello",
             session_id="session-1",
-            principal_id=None,
+            run_context=run_context,
             operation="regenerate",
         )
     ]
 
     assert captured["release"] is True
     assert captured["session_id"] == "candidate-canvas"
+    assert captured["run_context"] is run_context
     assert "regenerate" not in captured
     assert "persist_reasoning" not in captured
     assert "require_visible_answer" not in captured
@@ -567,7 +602,7 @@ async def test_canvas_driver_closes_inner_stream_and_aborts_when_consumer_cancel
         target=target,
         question="hello",
         session_id="session-1",
-        principal_id=None,
+        run_context=_run_context(),
     )
 
     assert "partial" in await anext(stream)
@@ -612,6 +647,7 @@ async def test_dialog_driver_commits_complete_answer_from_detached_working_copy(
         yield {"answer": "answer", "reference": {}, "final": True}
 
     monkeypatch.setattr(dialog_service_module, "async_chat", _chat)
+    run_context = _run_context(user_id="principal-1")
     frames = [
         frame
         async for frame in adapter.stream(
@@ -619,13 +655,14 @@ async def test_dialog_driver_commits_complete_answer_from_detached_working_copy(
             target=target,
             question="same question",
             session_id="dialog-session",
-            principal_id="principal-1",
+            run_context=run_context,
             operation="regenerate",
         )
     ]
 
     assert captured["stream"] is True
     assert captured["db"] is db
+    assert captured["run_context"] is run_context
     assert captured["messages"] == [{"content": "same question", "role": "user", "id": captured["messages"][0]["id"]}]
     assert '"session_id": "dialog-session"' in frames[0]
     assert frames[-1] == 'data:{"code": 0, "data": true}\n\n'
@@ -673,7 +710,7 @@ async def test_dialog_driver_generates_new_session_once_without_exposing_prologu
             target=target,
             question="hello",
             session_id=None,
-            principal_id="principal-1",
+            run_context=_run_context(user_id="principal-1"),
         )
     ]
 
@@ -714,7 +751,7 @@ async def test_dialog_driver_discards_working_copy_when_generation_fails(monkeyp
                 target=target,
                 question="same question",
                 session_id="dialog-session",
-                principal_id=None,
+                run_context=_run_context(),
                 operation="regenerate",
             )
         ]
@@ -747,7 +784,7 @@ async def test_dialog_driver_rejects_partial_stream_without_final_snapshot(monke
                 target=ExecutionTargetRef(target_type="multirag.dialog", target_id="dialog-1"),
                 question="hello",
                 session_id="dialog-session",
-                principal_id=None,
+                run_context=_run_context(),
             )
         ]
 
@@ -779,7 +816,7 @@ async def test_dialog_driver_preserves_complete_snapshot_for_terminal_projection
             target=ExecutionTargetRef(target_type="multirag.dialog", target_id="dialog-1"),
             question="hello",
             session_id="dialog-session",
-            principal_id=None,
+            run_context=_run_context(),
         )
     ]
 
@@ -815,7 +852,7 @@ async def test_dialog_driver_closes_inner_stream_and_aborts_when_consumer_cancel
         target=ExecutionTargetRef(target_type="multirag.dialog", target_id="dialog-1"),
         question="hello",
         session_id="dialog-session",
-        principal_id=None,
+        run_context=_run_context(),
     )
 
     assert "partial" in await anext(stream)

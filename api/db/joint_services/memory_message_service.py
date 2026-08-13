@@ -30,6 +30,7 @@ from api.db.services.llm_service import LLMBundle
 from api.db.services.memory_service import MemoryService
 from api.db.services.task_service import TaskService
 from api.db.services.tenant_llm_service import TenantLLMService
+from api.identity.run_context import RunContext
 from api.utils.db_utils import bulk_insert_into_db
 from api.utils.memory_utils import get_memory_type_human
 from common import settings
@@ -297,7 +298,13 @@ async def embed_and_save(db: Session, memory: Memory, message_list: list[dict], 
     return _embed_and_save_messages(embedding_model, memory, message_list, _report)
 
 
-def query_message(db: Session, filter_dict: dict, params: dict):
+def query_message(
+    db: Session,
+    filter_dict: dict,
+    params: dict,
+    *,
+    run_context: RunContext | None = None,
+) -> list[dict]:
     """
     Query messages from memory with semantic search.
 
@@ -318,7 +325,18 @@ def query_message(db: Session, filter_dict: dict, params: dict):
         List of matching messages
     """
     memory_ids = filter_dict["memory_id"]
-    memory_list = MemoryService.get_by_ids(db, memory_ids)
+    if run_context is not None and run_context.principal is not None:
+        memory_list = MemoryService.get_by_ids_for_tenant(
+            db,
+            memory_ids,
+            run_context.tenant_id,
+        )
+        filter_dict = {
+            **filter_dict,
+            "user_id": run_context.platform_user_id,
+        }
+    else:
+        memory_list = MemoryService.get_by_ids(db, memory_ids)
     if not memory_list:
         return []
 
@@ -424,7 +442,13 @@ def judge_system_prompt_is_default(system_prompt: str, memory_type: int | list[s
     return system_prompt == PromptAssembler.assemble_system_prompt({"memory_type": memory_type_list})
 
 
-async def queue_save_to_memory_task(db: AsyncSession, memory_ids: list[str], message_dict: dict) -> tuple[bool, str]:
+async def queue_save_to_memory_task(
+    db: AsyncSession,
+    memory_ids: list[str],
+    message_dict: dict,
+    *,
+    run_context: RunContext | None = None,
+) -> tuple[bool, str]:
     """
     Queue save to memory tasks.
 
@@ -450,8 +474,22 @@ async def queue_save_to_memory_task(db: AsyncSession, memory_ids: list[str], mes
 
     not_found_memory = []
     failed_memory = []
+    trusted_message_dict = dict(message_dict)
+    linked_memories: dict[str, Memory] | None = None
+    if run_context is not None and run_context.principal is not None:
+        trusted_message_dict["user_id"] = run_context.platform_user_id
+        memories = await db.run_sync(
+            lambda s: MemoryService.get_by_ids_for_tenant(
+                s,
+                memory_ids,
+                run_context.tenant_id,
+            )
+        )  # TODO(async-phase4)
+        linked_memories = {memory.id: memory for memory in memories}
     for memory_id in memory_ids:
-        memory = await db.run_sync(lambda s, mid=memory_id: MemoryService.get_by_memory_id(s, mid))  # TODO(async-phase4)
+        memory = (
+            linked_memories[memory_id] if linked_memories is not None else await db.run_sync(lambda s, mid=memory_id: MemoryService.get_by_memory_id(s, mid))  # TODO(async-phase4)
+        )
         if not memory:
             not_found_memory.append(memory_id)
             continue
@@ -462,10 +500,10 @@ async def queue_save_to_memory_task(db: AsyncSession, memory_ids: list[str], mes
             "message_type": MemoryType.RAW.name.lower(),
             "source_id": 0,
             "memory_id": memory_id,
-            "user_id": message_dict.get("user_id", ""),
-            "agent_id": message_dict["agent_id"],
-            "session_id": message_dict["session_id"],
-            "content": f"User Input: {message_dict.get('user_input')}\nAgent Response: {message_dict.get('agent_response')}",
+            "user_id": trusted_message_dict.get("user_id", ""),
+            "agent_id": trusted_message_dict["agent_id"],
+            "session_id": trusted_message_dict["session_id"],
+            "content": f"User Input: {trusted_message_dict.get('user_input')}\nAgent Response: {trusted_message_dict.get('agent_response')}",
             "valid_at": timestamp_to_date(current_timestamp()),
             "invalid_at": None,
             "forget_at": None,
@@ -481,7 +519,7 @@ async def queue_save_to_memory_task(db: AsyncSession, memory_ids: list[str], mes
 
         task = new_task(memory_id, raw_message_id)
         await db.run_sync(lambda s, t=task: bulk_insert_into_db(s, Task, [t], replace_on_conflict=True))  # TODO(async-phase4)
-        task_message = {"id": task["id"], "task_id": task["id"], "task_type": task["task_type"], "memory_id": memory_id, "source_id": raw_message_id, "message_dict": message_dict}
+        task_message = {"id": task["id"], "task_id": task["id"], "task_type": task["task_type"], "memory_id": memory_id, "source_id": raw_message_id, "message_dict": trusted_message_dict}
         if not await asyncio.to_thread(REDIS_CONN.queue_product, settings.get_svr_queue_name(priority=0), message=task_message):
             failed_memory.append({"memory_id": memory_id, "fail_msg": "Can't access Redis."})
 

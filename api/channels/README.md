@@ -217,8 +217,9 @@ C3/X7 已完成源码、自动门禁和部署 live。成功 claim 后按 authori
 I3→P1 提升 Principal；每个 linked event 逻辑上执行 I4（允许有界 cache），NO_LINK 保留 legacy
 anonymous。初始 claim 与 post-claim failure/cancel tombstone 都使用完整 dedupe TTL。Redis session 使用
 tenant/principal owner envelope，legacy raw 仅 NO_LINK 可续用；Dialog/Canvas existing row 再校验
-`principal_id` owner。它只完成 Principal promotion 与 target/session ownership，尚未传播到
-Agent/RAG/Memory/Workflow/MCP。定向 **203 passed**、`make verify` **2403 passed**、强制 integration
+`principal_id` owner。C3 当时只完成 Principal promotion 与 target/session ownership；后续
+EIM-P2 / CHN-X18 已用同一 frozen `RunContext` 传播到 Agent/RAG/Memory/Canvas workflow 与 MCP
+instance-local call context。C3 定向 **203 passed**、`make verify` **2403 passed**、强制 integration
 **162 passed**。12:42 API 已重启到 `v0.9.9-579-g2b0482c7`，smoke 六组件全绿；真实飞书 live 覆盖
 **2/2** account，四条 alias 收敛到一个 active ExternalIdentity/一个 canonical User，仅有一条 valid
 NORMAL membership 与一条 BindingEvent。Canvas、Dialog 各一条本次 Principal owner 记录，空 owner
@@ -707,7 +708,8 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
 
 - API 与 supervisor 之间的主 internal token 目前仍是静态 workload token，不等于 mTLS 或
   短期 delegated token；child token 虽已缩小作用域，仍由该主 token 确定性派生。
-- 尚未实现基于 `RunContext.principal` 的用户级 MCP/SQL 授权。
+- `RunContext.principal` 已到达 MCP call-context seam，但尚未实现用户级 MCP/SQL 授权；A2/P3 的
+  token issuance、credential provider、动态 bearer 与业务 PDP 均未实现。
 - 主加密密钥支持在线轮换（密钥环，见上），但**没有存量密文重加密流程**：旧密文要靠旧
   密钥留在环上才读得到，只有该渠道下次保存新凭据时才会改用 active 密钥重写。因此
   **仍然不得直接替换旧 key**——替换 ≠ 轮换。
@@ -799,8 +801,9 @@ upstream-first 长期原则不变，但当前不立即执行 EIM-F5 / CHN-X14。
 
 CHN-U16、CHN-O9 是 Channel 账本任务，不新增 EIM 映射。正常停机终态化不等于 durable recovery；
 没有 `kill -9`/跨实例/终态不确定性等明确恢复需求时，CHN-O14 继续挂起。
-EIM 账本在 C3/X7 live 收口后的主线是 P2；它与 CHN-O9 可并行。C4/X8 不抢跑，必须等待全部
-runner 升级以及由可观测证据支撑的 deployment soak；P2 不包含 A2/P3 的 token issuance/credential。
+EIM-P2 / CHN-X18 已完成本地实现与自动门禁，但未重启、部署或做真实飞书验证。后续 A2/P3 仍是
+独立任务；CHN-O9 可并行。C4/X8 不抢跑，必须等待全部 runner 升级以及由可观测证据支撑的
+deployment soak。
 
 ## 与上游同步策略
 

@@ -6,6 +6,8 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import AsyncGenerator
+from typing import Any
 from uuid import uuid4
 
 import tiktoken
@@ -21,6 +23,7 @@ from api.db.db_models import CanvasTemplate, User, UserCanvas, UserCanvasVersion
 from api.db.services.api_service import API4ConversationService
 from api.db.services.common_service import CommonService
 from api.db.services.user_canvas_version import UserCanvasVersionService
+from api.identity.run_context import RunContext
 from api.utils.api_utils import get_data_openai
 from common.misc_utils import get_uuid
 
@@ -278,8 +281,9 @@ async def completion(
     tenant_id: str,
     agent_id: str,
     session_id: str | None = None,
-    **kwargs,
-):
+    run_context: RunContext | None = None,
+    **kwargs: Any,
+) -> AsyncGenerator[str, None]:
     """
     FastAPI 里可直接作为 StreamingResponse 的迭代器：
         return StreamingResponse(completion(db, tenant_id, agent_id, **payload), media_type="text/event-stream")
@@ -293,7 +297,10 @@ async def completion(
     inputs = kwargs.get("inputs", {}) or {}
     a2ui_messages = validate_client_a2ui_messages(kwargs.get("a2ui"))
     metadata = kwargs.get("metadata") if isinstance(kwargs.get("metadata"), dict) else {}
-    user_id = kwargs.get("user_id", "") or ""
+    if run_context is not None and run_context.tenant_id != tenant_id:
+        raise PermissionError("run identity context is inconsistent")
+    legacy_user_id = kwargs.get("user_id", "") or ""
+    user_id = run_context.platform_user_id if run_context is not None and run_context.principal is not None else legacy_user_id
     custom_header = kwargs.get("custom_header", "")
     release_mode = str(kwargs.get("release", "")).strip().lower()
     is_new_session = not session_id
@@ -346,7 +353,13 @@ async def completion(
             task_id=uuid4().hex,
             canvas_id=canvas_id,
             custom_header=custom_header,
+            run_context=run_context,
         )
+        if run_context is not None and run_context.principal is not None:
+            # The trusted platform user is carried only by RunContext.  Clear
+            # any persisted/attacker-controlled DSL value instead of making it
+            # model-visible through ``sys.user_id``.
+            canvas.globals["sys.user_id"] = ""
         if is_new_session:
             canvas.reset()
         return canvas
@@ -372,14 +385,16 @@ async def completion(
     txt = ""
     a2ui_commands = []
     a2ui_surface_ids = set()
-    async for ans in canvas.run(
-        query=query,
-        files=files,
-        user_id=user_id,
-        inputs=inputs,
-        a2ui=a2ui_messages,
-        metadata=metadata,
-    ):
+    run_kwargs: dict[str, Any] = {
+        "query": query,
+        "files": files,
+        "inputs": inputs,
+        "a2ui": a2ui_messages,
+        "metadata": metadata,
+    }
+    if run_context is None or run_context.principal is None:
+        run_kwargs["user_id"] = legacy_user_id
+    async for ans in canvas.run(**run_kwargs):
         ans["session_id"] = session_id
         if ans["event"] == "message":
             txt += ans["data"]["content"]

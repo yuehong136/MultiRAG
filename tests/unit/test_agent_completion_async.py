@@ -32,7 +32,16 @@ class _FakeCanvas:
     built_on_worker: list[bool] = []
     task_ids: list[str | None] = []
 
-    def __init__(self, dsl, tenant_id, task_id=None, canvas_id=None, custom_header=""):
+    def __init__(
+        self,
+        dsl: str,
+        tenant_id: str | None,
+        task_id: str | None = None,
+        canvas_id: str | None = None,
+        custom_header: object = "",
+        run_context: object | None = None,
+    ) -> None:
+        del tenant_id, canvas_id, custom_header, run_context
         type(self).built_on_worker.append(threading.current_thread() is not threading.main_thread())
         type(self).task_ids.append(task_id)
         self.dsl = dsl
