@@ -7,10 +7,17 @@ import math
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Hashable
 from dataclasses import dataclass, field
-from typing import Generic, TypeVar
+from typing import Generic, Protocol, TypeVar, runtime_checkable
 
 _K = TypeVar("_K", bound=Hashable)
 _V = TypeVar("_V")
+
+
+@runtime_checkable
+class _CompletedTask(Protocol):
+    def cancelled(self) -> bool: ...
+
+    def exception(self) -> BaseException | None: ...
 
 
 class ProviderRuntimeCapacityError(RuntimeError):
@@ -157,7 +164,7 @@ class PerKeyRateLimiter(Generic[_K]):
             await self._sleep(delay)
 
 
-def _consume_task_exception(task: asyncio.Task[_V]) -> None:
+def _consume_task_exception(task: _CompletedTask) -> None:
     """Retrieve orphaned producer failures after every waiter is cancelled."""
 
     if not task.cancelled():
