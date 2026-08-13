@@ -5,7 +5,7 @@
 > 适用仓库：**MultiRAG**（本仓）与 **`of_mcp`**（另一个独立 checkout）。
 > 两者的本地路径随机器而变（本仓同时被 Windows 与 macOS 开发机使用），本目录一律按仓名指代；
 > 需要绝对路径时以你当前机器上的实际 checkout 为准。
-> 外部事实最近核验：2026-08-12（版本与上游提交见 [VERSION_BASELINE](VERSION_BASELINE.md)）
+> 外部事实最近核验：2026-08-13（版本与上游提交见 [VERSION_BASELINE](VERSION_BASELINE.md)）
 
 本目录是后续实现“企业级飞书身份接入、MultiRAG 平台用户、MCP 身份委托、of_mcp
 授权和敏感操作确认”的**项目级单一事实来源**。后续 Agent 可以没有任何历史对话，但必须从
@@ -35,7 +35,7 @@
 
 ```text
 读 docs/enterprise-identity-mcp/README.md，然后完成 ROADMAP 中当前主线任务
-（EIM-A2 已完成；下一条 token 接线主线是 EIM-P3，仍须先做只读审计和契约确认）。
+（EIM-P3 已完成本地代码与自动门禁但尚未 rollout；下一任务从 A5/U14 等已解锁项中按依赖选择）。
 先复核任务锚点和依赖，把准备修改的文件与验收标准告诉我；确认后再写代码。
 ```
 
@@ -374,7 +374,7 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   优先复用 FastMCP 4 的 `RemoteAuthProvider`、`AccessToken`、`on_list_tools/on_call_tool` middleware
   和 transport 防护；领域 identity/Principal 保持框架无关，避免重复实现框架已有工具开放能力。
 - P1 已解锁 A7 的代码前置，但 A7 仍是独立 inbound Resource Server 任务，不能立即宣称
-  可发布。F1/I4.1/I6/I6.1/C1/C2/C3/P2/A2 已完成；下一条 token 接线主线是 P3。CHN-O9 是不阻塞 P3 的
+  可发布。F1/I4.1/I6/I6.1/C1/C2/C3/P2/A2/P3 已完成；A5 与 U14 已由 P3 解锁。CHN-O9 是不阻塞它们的
   Channel 可观测并行支线；C4/CHN-X8 仍须等待全部 runner 升级与 deployment soak。I5 与 I7 已由
   I4 解锁，可作为不共文件的并行支线；I8 仍需 I6 + I7，
   不能跳依赖；
@@ -382,8 +382,14 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
 - MCP 出站已使用官方 SDK 2 `Client`：Streamable HTTP 使用 `mode="auto"` 和 SDK
   `create_mcp_http_client()` 受管 client（30 秒 connect/write/pool、300 秒 read），SSE 使用
   `mode="legacy"`，业务代码不再手调 `initialize()`。HTTP
-  response hook 保留 `401`/`403` 分类，但 headers 仍来自 Server 配置/调用参数，不是
-  request-scoped Principal 委托 token。
+  response hook 保留 `401`/`403` 分类。legacy server 继续使用既有静态 headers；P3 登记的 delegated
+  server 只允许 Streamable HTTP，并通过 SDK 2 `httpx2.Auth` 在每次逻辑调用动态注入新短 token。
+- EIM-P3 的当前实现见 [`api/identity/mcp_delegation/README.md`](../../api/identity/mcp_delegation/README.md)：
+  API lifespan 加载 A4 secure snapshot 与 MultiRAG immutable grant snapshot，精确绑定 Principal、tenant、
+  published Canvas agent/revision、server/resource/audience、canonical tool、scope、policy/grant revision 与
+  credential generation。只缓存有界授权决定，ACR/AMR/enterprise subject 每次重验；模型 alias 不进入
+  wire/authorization。每次逻辑 `tools/call` 新签 token/JTI，同一 operation 的 initialize/call/retry 复用
+  一个 bearer，完成即关闭 client。功能默认 disabled，尚未配置制品/key、重启、部署或做真实 MCP 调用。
 - 出站旧串行队列已删除，并发调用不再形成 HOL；超时会取消本地 task，但远端取消仍是
   协作式，不能由本地超时推断业务未执行。
 - `InputRequiredResult` 已表面化为 `interaction_required` 结构和旁路 metadata，但尚无
@@ -502,14 +508,15 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   轮换顺序。production code 只用 `cryptography`；PyJWT 只在测试作独立 oracle。
 - P1 已实现领域 Principal 与存量 Web/API adapter；C3 已取得部署 live 证据，P2 已完成传播、
   自动门禁与本机 API rollout，Canvas/Dialog 各一条真实飞书 owned-session live 均完成；A2 的签发面
-  已完成，但默认禁用、未配置真实 key、未重启/部署，P3 尚未实现，因此 MultiRAG 仍不会为当前
-  Principal 逐请求发送 token；飞书的
-  `ExternalIdentityAssertion -> binding/directory -> Principal` 已完成到 target/session owner，通用 MCP Client 仍无完整
-  OAuth 获取 token 流。of_mcp 仍缺 A5 proxy internal actor；A6 虽已有 phase-1 domain/runtime
+  与 P3 request-scoped provider/bearer 接线都已完成代码和自动门禁，但默认禁用、未配置真实 key 与
+  secure policy/grant 制品、未重启/部署，因此当前运行中的 MultiRAG 仍不会为 Principal 发送 token。
+  飞书的 `ExternalIdentityAssertion -> binding/directory -> Principal` 已完成到 target/session owner；
+  带已验证 Canvas release 的 Channel Canvas 是现有动态委托入口，Dialog 因没有可寻址发布 revision
+  而 fail closed。of_mcp 仍缺 A5 proxy internal actor；A6 虽已有 phase-1 domain/runtime
   安全边界，但仍缺生产多实例 replay/audit、HMAC/KMS 轮换、OTel SDK/exporter 与跨仓 trace，因此
   保持 `🔵`。M1/M2 企业主体与业务对象授权、持久 Interaction/Confirmation/Idempotency 也未完成。
-  F1/I4.1/I6/I6.1/C1/C2/C3/P2/A2 已完成；MultiRAG 下一条 token 接线主线是 P3；I5/I7 是已解锁
-  并行支线，但 I8 仍需 I6 + I7。不能把 A2 的独立 issuer 或 P2 的 context seam 当成 bearer 已接线。
+  F1/I4.1/I6/I6.1/C1/C2/C3/P2/A2/P3 已完成；A5/U14 已解锁，I5/I7 是已解锁并行支线，但 I8 仍需
+  I6 + I7。不能把 P3 本地门禁通过当成 secure endpoint 已发布或真实 bearer E2E 已完成。
   A7 虽已解锁前置，仍须作为独立入站
   安全面实现和验收。
 

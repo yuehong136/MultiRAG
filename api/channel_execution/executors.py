@@ -440,6 +440,8 @@ class MultiRAGCanvasAgentExecutor:
             run_context=RunContext(
                 tenant_id=context.tenant_id,
                 principal=context.principal,
+                agent_id=context.target.target_id,
+                agent_revision_id=context.target.revision_id,
             ),
             operation=command.operation,
         )

@@ -284,8 +284,8 @@ P1/C3 已把 verified identity 提升到 `TrustedChannelContext` 和 target/sess
 随后在 Graph/component 构造前显式传递 immutable `RunContext`，覆盖 Dialog/Canvas Graph、Agent、
 RAG/Memory、Canvas component workflow 与 MCP call-context seam。Memory ID 先校验 tenant，消息读写
 按 `Principal.platform_user_id` 过滤；模型、DSL、prompt、custom header、wire 和日志都看不到或修改
-不了 Principal。P2 只传 context，不签 token、不取 credential、不发 bearer；A2 已完成独立签发面，P3
-才把它接成动态委托。
+不了 Principal。P2 只传 context，不签 token、不取 credential、不发 bearer；A2 提供独立签发面，P3
+已把二者通过 immutable policy/grant authority 接成默认关闭的动态委托。
 现有 sync `Depends(manager)` 仍可能暴露 ORM User，不能因 P2 完成就宣称所有 auth 入口已统一。
 
 #### MCP Token Issuer
@@ -296,10 +296,11 @@ RAG/Memory、Canvas component workflow 与 MCP call-context seam。Memory ID 先
 public trust 面固定为 `GET /.well-known/jwks.json`，没有公开 token endpoint。配置启用时 API startup
 fail-fast 加载 key snapshot；默认配置不改变旧启动行为。
 
-当前完成态只证明 A2 可从 immutable Principal 与服务端 grant 产生被 of_mcp strict verifier 接受的
-resource-bound token，并安全发布 public JWKS。真实 key/KMS、DNS/TLS、多副本轮换和部署仍由 O1
-守门；P3 尚未提供 Agent/tenant/user policy authority、request-scoped credential provider 或每次 HTTP
-request 的 bearer 注入，所以运行中的 Channel/MCP 调用仍不会使用 A2 token。
+P3 现在从 A4 secure policy snapshot 与 MultiRAG grant snapshot 获得 Agent/tenant/user authority，
+将 request-scoped credential provider 接到 SDK 2 operation-scoped HTTP auth；每次逻辑调用新签 token/JTI，
+其 initialize/call/retry 的每个 HTTP request 都携带同一短 bearer。真实 key/KMS、DNS/TLS、多副本轮换
+和部署仍由 O1 守门；配置默认关闭且当前没有真实制品或重启，所以运行中的 Channel/MCP 调用仍不会使用
+A2 token。
 
 #### MCP Host/Client
 
@@ -405,8 +406,8 @@ integration **162 passed**。12:42 API 已重启到 `v0.9.9-579-g2b0482c7`，`ma
 只有一条 valid NORMAL membership 与一条 BindingEvent。Canvas、Dialog 各一条本次 Principal owner 记录，
 空 owner 为 **0**；Redis completed/replied 存在、processing/failed 为 **0**。P2 后续已完成本机 API
 rollout；Canvas/Dialog 真实飞书各一条均 completed、owned session 与数据库 owner 非空，smoke 六组件全绿；
-CHN-O9 可并行，C4/CHN-X8 仍等待全部 runner 升级与 deployment soak。A2 token issuer 已实现但默认
-disabled、未部署；P3 request-scoped credential/bearer 接线仍未实现。
+CHN-O9 可并行，C4/CHN-X8 仍等待全部 runner 升级与 deployment soak。A2 issuer 与 P3
+request-scoped credential/bearer 接线已实现但默认 disabled、未配置 policy/grant/key、未部署。
 
 ---
 

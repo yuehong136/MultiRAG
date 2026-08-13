@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
+from errors.exceptions import AITranslateException
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -25,7 +26,6 @@ from common.constants import RetCode
 from common.log_ctx import bind_log_context
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, datetime_format
-from errors.exceptions import AITranslateException
 from workflow_v2.workflow_exceptions import NodeExecutionError, WorkflowValidationError
 from workflow_v2.workflow_state_manager import workflow_state_manager
 
@@ -98,6 +98,10 @@ async def lifespan(app: FastAPI):
 
     if get_app_config().identity.mcp_issuer.enabled:
         get_mcp_token_issuer()
+    if get_app_config().identity.mcp_delegation.enabled:
+        from api.identity.mcp_delegation.runtime import activate_mcp_delegation
+
+        activate_mcp_delegation()
 
     show_configs()
     settings.print_rag_settings()
@@ -131,6 +135,9 @@ async def lifespan(app: FastAPI):
     from common.mcp_tool_call_conn import shutdown_all_mcp_sessions
 
     shutdown_all_mcp_sessions()
+    from api.identity.mcp_delegation.runtime import reset_mcp_delegation_service
+
+    reset_mcp_delegation_service()
 
     logging.info("Shutting down workflow state manager...")
     await workflow_state_manager.shutdown()

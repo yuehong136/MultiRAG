@@ -1359,9 +1359,9 @@ keyed HMAC 绑定完整 Principal（platform user、tenant、agent、client）�
 - 上述响应都 `Cache-Control: no-store`，不发 OAuth `WWW-Authenticate`，且业务函数必须零调用；
 - `read/reusable` 不消费 replay key，但仍必须写 pre-execution audit；它不是绕过 A4 的匿名快路。
 
-未来 P3 必须为每次高风险逻辑执行签发新的短期 token/JTI；把一枚 token 用于多个副作用工具调用会被
-本契约有意拒绝。当前 P3 尚未实现，secure 又因没有 production-ready coordinator fail-fast，因此这条
-纪律尚未进入真实 MultiRAG delegated bearer 链。
+P3 已按每次逻辑工具执行签发新的短期 token/JTI；把一枚 token 用于多个副作用工具调用仍被本契约
+有意拒绝。该接线默认关闭且尚未 rollout，secure 又因没有 production-ready coordinator fail-fast，
+因此这条纪律尚未取得真实 MultiRAG delegated bearer E2E 证据。
 
 claim 生命周期是 `CLAIMED -> DISPATCHED -> SUCCEEDED|FAILED_NO_EFFECT|OUTCOME_UNKNOWN`。进入业务
 代码前必须已完成原子 claim、pre-execution audit 和 `DISPATCHED`；成功才能记 `SUCCEEDED`。当前
@@ -1478,6 +1478,46 @@ enterprise-verified 时，才投影 `{type, issuer, subject, tenant}`；普通 t
 KMS adapter 不得迫使 issuer 读取 private bytes。轮换 successor contract 要求 next active key 已存在于
 上一版 JWKS，切换后旧 active key 继续存在；旧 key 的 removal deadline 至少是 switch time 加
 `max TTL + skew + JWKS cache TTL`。单进程 contract 不替代 O1 的多副本发布/回滚演练。
+
+#### 6.5.1 EIM-P3 request-scoped credential provider
+
+P3 不从 Agent DSL、模型可见工具名、MCP tool description、静态 headers 或数据库中的 MCP server
+名称猜授权。首期 authority 是两个启动时一次性加载、深度不可变且可独立评审的 JSON 工件：
+
+- A4 `tool-policies.json`：必须是 format 2，并重新计算 canonical SHA-256 验证
+  `policy_revision`；逐 canonical tool 提供 `required_scopes`、`effect`、`replay_mode` 与 assurance；
+- MultiRAG `mcp-grants.json`：format 1，带 canonical `grant_revision`、正整数
+  `credential_generation`、MCP server → resource/audience 的 delegated binding，以及精确到
+  `(tenant_id, platform_user_id, published agent_id, agent_revision_id, resource_name)` 的 grants。
+
+两者只经 `identity.mcp_delegation` 的绝对路径装配，默认 disabled。启动时验证 grant policy revision
+与 A4 snapshot 完全相同、grant scopes 属于 snapshot scope registry、server/resource/audience 唯一；
+启用后任何缺项、hash 漂移或 authority 歧义都 fail fast/fail closed。现有未登记 server 继续走 legacy
+static auth；登记为 delegated 的 server 只允许 Streamable HTTP，URL 必须与 A2 resource audience 和
+binding audience 三者逐字相同，且不得再携静态 `Authorization`。SSE delegated 首期拒绝，不静默降级。
+
+`RunContext` 的 `agent_id/agent_revision_id` 只能由服务端已经验证的 execution target 填入；没有完整
+Principal 或 published revision 时 delegated call 在网络前拒绝。模型可见 alias 只解决同名工具路由，
+授权、token、cache 与审计始终使用 MCP server 上的 original canonical tool name。一个 binding 至少固定：
+
+```text
+model alias -> MCP server id -> resource name/audience -> canonical tool -> A4 policy
+```
+
+Provider 只缓存 immutable grant/scope decision，不缓存 bearer；请求的 ACR、AMR 与 enterprise subject
+每次重新校验。A2 当前不签 `amr`，所以 policy 的 `required_amr` 非空时必须在发网前拒绝。decision key 完整包含 principal、
+tenant、agent+revision、server/resource/canonical tool、required scopes、A4 policy revision、grant revision
+与 credential generation。每次逻辑 `tools/call` 都调用 A2 取得新 token/JTI；`side_effect/single_use`
+由此满足 A6 单 capability 约束。该 bearer 作为一个 logical-operation credential lease 注入 MCP SDK 2
+`create_mcp_http_client(auth=httpx2.Auth)`，initialize、call 与 transport retry 可复用同一 lease；下一次
+逻辑调用必须新签。Agent/session/global 对象均不得保存某位用户的 token，异常、repr、日志与 tool meta
+也不得出现 bearer。
+
+为避免初始化阶段需要宽 scope token，delegated session 不在 Agent 构造时建立用户连接；它在每次逻辑
+调用取得最小 tool scopes 后创建 operation-scoped SDK 2 Client，完成 initialize + call 后关闭。legacy
+static session 的预热、SSE/HTTP 兼容和 headers 行为保持不变。本步不新增 DB、公开 token endpoint、
+OAuth grant、refresh token、外部管理后台操作或 remote release，也不完成 A5/A6 production backend、
+M1/M2 业务对象授权、U14 interaction resume。
 
 ### 6.6 EIM-A1 corpus wire contract
 

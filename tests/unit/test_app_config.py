@@ -468,6 +468,63 @@ class TestMcpIssuerConfig:
             load_app_config()
 
 
+class TestMcpDelegationConfig:
+    def test_empty_delegation_config_preserves_legacy_startup(self, conf_dir):
+        conf_dir(SERVICE_CONF, BASE_YAML)
+
+        delegation = load_app_config().identity.mcp_delegation
+
+        assert delegation.enabled is False
+        with pytest.raises(AppConfigError, match=r"identity\.mcp_delegation is disabled"):
+            delegation.require_enabled()
+
+    def test_delegation_requires_enabled_issuer_and_absolute_policy_paths(self, conf_dir):
+        conf_dir(
+            SERVICE_CONF,
+            """
+            identity:
+              mcp_delegation:
+                enabled: true
+                tool_policy_file: relative/tool-policies.json
+                grant_policy_file: /etc/multirag/mcp-grants.json
+            """,
+        )
+
+        with pytest.raises(AppConfigError, match=r"identity\.mcp_delegation"):
+            load_app_config()
+
+    def test_enabled_delegation_parses_only_with_complete_a2_authority(self, conf_dir):
+        conf_dir(
+            SERVICE_CONF,
+            """
+            identity:
+              mcp_issuer:
+                enabled: true
+                issuer: https://auth.multirag.example
+                client_id: multirag-first-party
+                resources:
+                  ofmcp_gateway:
+                    audience: https://gateway.ofmcp.example/mcp
+                    registered_scopes: [leave:read]
+                key_provider:
+                  kind: file
+                  active_key_id: current
+                  private_key_file: /run/secrets/mcp-private.pem
+                  public_key_files:
+                    current: /etc/multirag/mcp-public.pem
+              mcp_delegation:
+                enabled: true
+                tool_policy_file: /etc/multirag/tool-policies.json
+                grant_policy_file: /etc/multirag/mcp-grants.json
+            """,
+        )
+
+        delegation = load_app_config().identity.mcp_delegation.require_enabled()
+
+        assert delegation.tool_policy_file == "/etc/multirag/tool-policies.json"
+        assert delegation.grant_policy_file == "/etc/multirag/mcp-grants.json"
+
+
 class TestDefaultModelsResolutionParity:
     """resolved_model 与旧 settings._resolve_per_model_config 逐条等价。"""
 

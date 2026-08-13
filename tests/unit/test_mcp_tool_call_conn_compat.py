@@ -7,11 +7,13 @@ from contextvars import ContextVar
 from types import SimpleNamespace
 from typing import Any
 
+import httpx2
 import pytest
 
 from common.constants import MCPServerType
 from common.mcp_tool_call_conn import (
     MCPConnectionError,
+    MCPRequestCredential,
     MCPToolCallSession,
     MCPToolTimeoutError,
     _extract_http_status,
@@ -32,6 +34,7 @@ def _bare_session(server_type: MCPServerType = MCPServerType.STREAMABLE_HTTP) ->
     """Build a wrapper without starting its background thread or network."""
     session = object.__new__(MCPToolCallSession)
     session._custom_header = {"X-Request-ID": "request-1"}
+    session._credential_provider = None
     session._mcp_server = SimpleNamespace(
         id="compat-server",
         url=" http://127.0.0.1:8765/mcp ",
@@ -54,12 +57,122 @@ def _bare_session(server_type: MCPServerType = MCPServerType.STREAMABLE_HTTP) ->
     )
     session._client = None
     session._inflight_tasks = set()
+    session._runner_future = None
     session._server_instructions = None
     session._server_capabilities = None
     session._protocol_version = None
     session._recent_logs = []
     session._last_tool_call_meta = None
     return session
+
+
+async def test_delegated_streamable_http_uses_one_sdk2_auth_lease_per_logical_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from common import mcp_tool_call_conn
+
+    issued: list[str] = []
+    auth_objects: list[Any] = []
+
+    class Provider:
+        resource_name = "ofmcp_gateway"
+
+        def credential_for(self, canonical_tool_name: str) -> MCPRequestCredential:
+            bearer = f"secret-bearer-{len(issued) + 1}"
+            issued.append(bearer)
+            return MCPRequestCredential(
+                bearer=bearer,
+                resource_name=self.resource_name,
+                canonical_tool_name=canonical_tool_name,
+                policy_revision="a" * 64,
+                credential_generation=3,
+                replay_mode="single_use",
+            )
+
+    class FakeHTTPClient:
+        def __init__(self, **kwargs: Any) -> None:
+            auth_objects.append(kwargs["auth"])
+            self.event_hooks: dict[str, list[Any]] = {"request": [], "response": []}
+
+        async def __aenter__(self) -> "FakeHTTPClient":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    class FakeWireSession:
+        async def call_tool(self, *_args: object, **_kwargs: object) -> CallToolResult:
+            return CallToolResult(content=[TextContent(text="ok")], isError=False)
+
+    class FakeClient:
+        instructions = None
+        server_capabilities = {"tools": True}
+        protocol_version = "2026-07-28"
+        session = FakeWireSession()
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        async def __aenter__(self) -> "FakeClient":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    monkeypatch.setattr(mcp_tool_call_conn.httpx2, "AsyncClient", FakeHTTPClient)
+    monkeypatch.setattr(mcp_tool_call_conn, "streamable_http_client", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(mcp_tool_call_conn, "Client", FakeClient)
+
+    session = _bare_session()
+    session._credential_provider = Provider()
+
+    assert await session._call_mcp_tool("leave_submit_leave", {}) == "ok"
+    assert await session._call_mcp_tool("leave_submit_leave", {}) == "ok"
+    assert issued == ["secret-bearer-1", "secret-bearer-2"]
+    assert len(auth_objects) == 2
+    assert all("secret-bearer" not in repr(auth) for auth in auth_objects)
+
+    observed_headers: list[str] = []
+    for auth in auth_objects:
+        flow = auth.async_auth_flow(httpx2.Request("POST", "https://gateway.ofmcp.example/mcp"))
+        request = await anext(flow)
+        observed_headers.append(request.headers["Authorization"])
+        await flow.aclose()
+    assert observed_headers == ["Bearer secret-bearer-1", "Bearer secret-bearer-2"]
+
+
+def test_delegated_constructor_is_network_lazy_and_rejects_static_authorization() -> None:
+    class Provider:
+        resource_name = "ofmcp_gateway"
+
+        def credential_for(self, canonical_tool_name: str) -> MCPRequestCredential:
+            return MCPRequestCredential(
+                bearer="unused-secret",
+                resource_name=self.resource_name,
+                canonical_tool_name=canonical_tool_name,
+                policy_revision="a" * 64,
+                credential_generation=1,
+                replay_mode="reusable",
+            )
+
+    server = SimpleNamespace(
+        id="delegated-server",
+        url="https://gateway.ofmcp.example/mcp",
+        server_type=MCPServerType.STREAMABLE_HTTP,
+        headers={},
+    )
+    session = MCPToolCallSession(server, credential_provider=Provider())
+    try:
+        assert session.wait_ready(timeout=1)
+        assert session._runner_future is None
+        assert session._client is None
+        assert session.delegated_resource_name == "ofmcp_gateway"
+    finally:
+        session.close_sync(timeout=1)
+
+    server.headers = {"authorization": "Bearer legacy-secret"}
+    with pytest.raises(ValueError, match="static Authorization"):
+        MCPToolCallSession(server, credential_provider=Provider())
 
 
 def test_mcp_session_exposes_an_opaque_instance_local_call_context_seam() -> None:

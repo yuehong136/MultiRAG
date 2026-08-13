@@ -194,6 +194,8 @@ def test_production_policy_executes_every_a1_issuance_case(case: dict[str, Any])
 
 def test_issuer_signs_exact_short_lived_audience_bound_access_token(tmp_path: Path) -> None:
     issuer, public_key = _issuer(tmp_path)
+    assert issuer.resource_audience("ofmcp_gateway") == AUDIENCE
+    assert issuer.resource_audience("unknown") is None
     result = issuer.issue(
         McpAccessTokenRequest(
             principal=_principal(authenticated_at=NOW - timedelta(minutes=2)),

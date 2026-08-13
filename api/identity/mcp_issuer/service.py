@@ -63,6 +63,12 @@ class McpTokenIssuer:
     def jwks_document(self) -> dict[str, list[dict[str, str]]]:
         return self._signing_keys.snapshot.to_jwks_document()
 
+    def resource_audience(self, resource_name: str) -> str | None:
+        """Return the server-owned exact audience without exposing the profile."""
+
+        resource = self._profile.resource(resource_name)
+        return resource.audience if resource is not None else None
+
     def issue(
         self,
         request: McpAccessTokenRequest,

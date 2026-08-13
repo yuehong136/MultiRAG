@@ -460,6 +460,34 @@ class McpIssuerConfig(_Section):
         return self
 
 
+class McpDelegationConfig(_Section):
+    """Disabled-by-default immutable P3 policy artifact configuration."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    enabled: bool = False
+    tool_policy_file: str = ""
+    grant_policy_file: str = ""
+
+    @field_validator("tool_policy_file", "grant_policy_file")
+    @classmethod
+    def validate_policy_path(cls, value: str) -> str:
+        if value and (value != value.strip() or not os.path.isabs(value)):
+            raise ValueError("MCP delegation policy paths must be absolute")
+        return value
+
+    @model_validator(mode="after")
+    def validate_enabled_delegation(self) -> Self:
+        if self.enabled and (not self.tool_policy_file or not self.grant_policy_file):
+            raise ValueError("enabled MCP delegation requires both policy files")
+        return self
+
+    def require_enabled(self) -> Self:
+        if not self.enabled:
+            raise AppConfigError("identity.mcp_delegation is disabled")
+        return self
+
+
 class IdentityConfig(_Section):
     """Enterprise identity runtime configuration."""
 
@@ -467,6 +495,13 @@ class IdentityConfig(_Section):
 
     provisioning: IdentityProvisioningConfig = Field(default_factory=IdentityProvisioningConfig)
     mcp_issuer: McpIssuerConfig = Field(default_factory=McpIssuerConfig)
+    mcp_delegation: McpDelegationConfig = Field(default_factory=McpDelegationConfig)
+
+    @model_validator(mode="after")
+    def validate_delegation_has_issuer(self) -> Self:
+        if self.mcp_delegation.enabled and not self.mcp_issuer.enabled:
+            raise ValueError("identity.mcp_delegation requires identity.mcp_issuer")
+        return self
 
 
 # ---------------------------------------------------------------------------

@@ -23,7 +23,7 @@ from timeit import default_timer as timer
 from typing import Any, TypedDict
 
 from agent.component.base import ComponentBase, ComponentParamBase
-from common.mcp_tool_call_conn import MCP_TOOL_CALL_TIMEOUT, MCPToolCallSession, ToolCallSession
+from common.mcp_tool_call_conn import MCP_TOOL_CALL_TIMEOUT, MCPToolBinding, MCPToolCallSession, ToolCallSession
 from common.misc_utils import hash_str2int, thread_pool_exec
 from core.prompts.generator import kb_prompt
 
@@ -65,7 +65,19 @@ class LLMToolPluginCallSession(ToolCallSession):
         logging.info(f"[ToolCall] invoke name={name} arguments={str(arguments)[:200]}")
         st = timer()
         tool_obj = self.tools_map[name]
-        if isinstance(tool_obj, MCPToolCallSession):
+        if isinstance(tool_obj, MCPToolBinding):
+            # The alias selected by the model is never used as authorization
+            # or wire authority. Dispatch only the server canonical name.
+            resp = await thread_pool_exec(
+                tool_obj.session.tool_call,
+                tool_obj.original_name,
+                arguments,
+                MCP_TOOL_CALL_TIMEOUT,
+            )
+            recent_logs = getattr(tool_obj.session, "_recent_logs", None)
+            if recent_logs:
+                self.callback(f"{name}:mcp_logs", {}, "\n".join(recent_logs))
+        elif isinstance(tool_obj, MCPToolCallSession):
             # MCP 调用仍然是同步的，需要放到线程中
             resp = await thread_pool_exec(tool_obj.tool_call, name, arguments, MCP_TOOL_CALL_TIMEOUT)
             # Phase 4: 将 MCP 服务端日志/进度通过 callback 上报前端

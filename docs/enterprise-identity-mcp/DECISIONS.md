@@ -420,8 +420,8 @@ single-use replay key 只由 domain-separated `(token_use, issuer, audience, jti
 token/JTI 的一个 capability；它故意不包含 tool。完整 Principal、tool、policy revision 和 canonical
 arguments 进入另一个 secret-keyed HMAC fingerprint：同 key/同 fingerprint 是 duplicate；同 key/不同
 fingerprint 是 replay conflict。这样可阻止拿同一授权 capability 改参数、换主体或换工具。相应代价是
-一枚 JTI 只能承载一个高风险逻辑执行；未来 P3 必须每次执行换发新的短期 token/JTI，不能给一个 Agent
-run 发一枚“多次提交券”。
+一枚 JTI 只能承载一个高风险逻辑执行；P3 已按每次逻辑执行换发新的短期 token/JTI，不能给一个 Agent
+run 发一枚“多次提交券”。该实现默认关闭且未 rollout，真实跨仓证据仍是独立闸门。
 
 coordinator 只能插在 A4 inner final allow 后、业务执行前。它先原子 claim、写 pre-execution audit、
 标记 dispatched，再给出不可伪造的 process-local permit。duplicate/conflict/replay-or-audit unavailable

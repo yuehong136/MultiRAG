@@ -245,8 +245,8 @@ A2 的代码锚点是 `api/identity/mcp_issuer/{contracts,keys,service,runtime}.
    `ENTERPRISE_VERIFIED`；首期不猜 `amr`，enterprise subject 要精确匹配 resource authority；
 6. key 轮换是 prepublish → switch → retain/remove contract；旧 public key 默认至少保留
    `300 + 30 + 300 = 630` 秒。真实多副本发布、key generation/KMS、DNS/TLS 与演练仍属 O1；
-7. P3、A5、A7、A8 均未被 A2 暗含完成。当前 API 未因 A2 重启/部署，未配置真实 key，也没有真实
-   Channel/MCP bearer 流量。
+7. A2 当时未暗含 P3、A5、A7、A8；后续 P3 已作为独立任务完成本地代码与自动门禁。当前 API 仍未
+   配置真实 key/policy/grant 或加载 P3，也没有真实 Channel/MCP bearer 流量。
 
 A2 失败基线为新增模块收集 **2 errors**；A1+A2 定向 **130 passed**，定向 mypy **8 source files**。
 另用临时 P-256 key 动态签发且不输出 token/key，由 of_mcp production
@@ -255,12 +255,35 @@ A2 失败基线为新增模块收集 **2 errors**；A1+A2 定向 **130 passed**�
 **95 source files** 与 unit **2450 passed** 全绿。只读 `make smoke` 对仍运行旧代码的 API 显示 ping/
 healthz HTTP 200、六组件 `ok`；这只是运行基线，不是 A2 rollout 或 JWKS live 证据。
 
-P3 开工先审计 `RunContext` 到 `common/mcp_tool_call_conn.py` 的真实每次调用路径、A4 canonical tool
-policy/scope revision 的消费方式，以及 MultiRAG 当前 Agent/tenant/user grant authority。不得从工具名、
-模型、DSL、静态 header 或运行时可见 tool list 推导授权；若现有 schema/公共 API 无法表达权威 grant，
-先提交证据与方案，不得在 P3 顺手扩 schema。credential provider 必须按 Principal/tenant/agent/resource/
-requested scopes/policy revision/credential generation 隔离；Agent/session 不缓存用户 bearer，每次高风险
-逻辑操作获得新 JTI，每个 HTTP request 动态注入且不修改静态 server headers。
+#### EIM-P3 已完成边界与后续 rollout 交接
+
+P3 的代码锚点是 `api/identity/mcp_delegation/`、`RunContext.agent_id/agent_revision_id`、
+`common.mcp_tool_call_conn.MCPToolBinding/MCPRequestCredentialProvider`、Agent MCP 装配和 API lifespan。
+后续必须保留：
+
+1. authority 只来自 A4 `secure` format-2 snapshot、MultiRAG format-1 grant snapshot、C3/P2 Principal 与
+   服务端已验证 Canvas release；不从模型/DSL/description/static headers/runtime tool list 猜授权；
+2. 两个 snapshot absolute、regular、non-symlink、有界且 revision 可复算；POSIX group/world writable、
+   policy drift、重复 server/resource/audience、未知 scope 均 fail fast；hash 是 drift check，不冒充制品签名；
+3. binding 精确核对 server tenant、Streamable HTTP、URL、A2 resource audience 与 grant audience；
+   delegated SSE、静态 Authorization、缺 Principal/revision、Dialog/non-Channel context 均 fail closed，
+   不回退 legacy。未登记 server 才保持原 static mode；
+4. grant 绑定 tenant/platform user/published agent+revision/resource。model alias 与 canonical wire name
+   分离；未授权 tool 不进入模型 metadata，执行仍用 canonical name 二次判定；
+5. 只缓存有界 grant/scope decision，key 含 principal/tenant/agent+revision/server/resource/canonical tool/
+   scopes/policy+grant revision/credential generation；ACR/AMR/enterprise subject 每次重新验证。A2 当前
+   不签 AMR，所以非空 `required_amr` 在发网前拒绝；
+6. 每次逻辑调用新签 token/JTI；SDK 2 operation-scoped `httpx2.Auth` 只在该次 initialize/call/retry
+   复用 bearer，完成即关闭。Agent/session/global/static headers/repr/error/meta 不保存或泄露 token；
+7. 配置默认 disabled。当前没有真实 key、secure snapshot、grant、重启、部署、remote release 或真实
+   MCP bearer E2E；Dialog 没有 published revision，只有 Channel Canvas 具备现有动态委托上下文。
+
+P3 失败优先收集到新增模块 `ModuleNotFoundError`；定向 **109 passed**，扩展 Agent/MCP/A2 回归
+**178 passed**，Channel 执行回归 **88 passed**，`make mcp-compat` **13/13 PASS**。`make fix` 全绿；
+`make verify` 为 8 条 import contracts（853 files/2695 dependencies）、mypy 100 files、unit
+**2470 passed**；只读 `make smoke` 六组件全绿，但命中的是未重启的旧 runtime，不是 P3 rollout。
+未跑 integration（无 DB/存储/检索变更）。A5/U14 已解锁；任何真实 artifact/key/config/restart/
+secure endpoint/飞书 MCP 调用仍须另行精确批准。
 
 ### 4.4 外部 API 和 SDK 任务
 
@@ -538,7 +561,7 @@ contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG F1
 
 - replay key 只绑定 `(token_use,issuer,audience,jti)`，是整枚 token/JTI 的单一 capability，不按工具
   分桶；fingerprint 才绑定完整 Principal、tool、policy revision 与 canonical arguments。同一 JTI
-  只能对应一个高风险逻辑操作，未来 P3 每次执行必须换新短 token/JTI；
+  只能对应一个高风险逻辑操作，P3 已实现每次逻辑执行换新短 token/JTI；
 - duplicate 只返回 409，不回放结果；不同 fingerprint 返回 403 replay detected；store/audit 前置
   故障返回 503。均 no-store、无 OAuth challenge、业务零调用；
 - claim 在业务 dispatch 后不释放。成功为 `SUCCEEDED`；tool error/异常/取消保守为
@@ -567,7 +590,7 @@ git diff --check
 本轮 A6/Gateway 定向 **65 passed**，完整 `uv run --locked ofmcp verify` 六步全绿、
 **453 passed、2 existing skipped**；提交锚点统一以 ROADMAP 变更日志为准。即使以上全绿，也只有完成
 production multi-instance durable replay/audit、HMAC KMS/rotation、OTel SDK/exporter/W3C 跨仓 trace、A5
-`parent_jti_hash`、P3 动态 bearer、M3/M4 业务幂等/结果查询和 remote-release 演练后，才能把 A6
+`parent_jti_hash`、P3 动态 bearer 的真实跨仓证据、M3/M4 业务幂等/结果查询和 remote-release 演练后，才能把 A6
 改为 `✅`。这类后续工作若涉及真实基础设施、KMS、DNS、Secret 或部署，必须先获得用户批准。
 
 ## 5. 跨仓协调
@@ -575,7 +598,7 @@ production multi-instance durable replay/audit、HMAC KMS/rotation、OTel SDK/ex
 | 变更 | 生产者 | 消费者 | 安全部署顺序 |
 |---|---|---|---|
 | Channel structured assertion | worker | MultiRAG private API | tolerate API → emit worker → consume API → remove legacy |
-| MCP access token | MultiRAG signer | `of_mcp` verifier/authorizer | A3 verifier/JWKS + A4 Principal/tool policy + A6 phase-1 execution guard 已先行并保持业务未远程发布 → P1/C3/P2 已完成 → A2 signer/JWKS 已完成但默认 disabled、未部署 → P3 每次执行换新短 token/JTI → A6 production durable backend/跨仓 trace + 企业主体/上线证据 → 独立闸门决定 secure 远程入口；不得把动态互操作测试或内存 replay 通过误作 Channel 委托闭环 |
+| MCP access token | MultiRAG signer | `of_mcp` verifier/authorizer | A3 verifier/JWKS + A4 Principal/tool policy + A6 phase-1 execution guard 已先行并保持业务未远程发布 → P1/C3/P2 已完成 → A2 signer/JWKS + P3 每执行新短 token/JTI 已完成代码但默认 disabled、未部署 → A6 production durable backend/跨仓 trace + 企业主体/上线证据 → 独立闸门决定 secure 远程入口；不得把自动门禁或内存 replay 通过误作 Channel 委托闭环 |
 | EIM-A1 corpus | MultiRAG canonical generator + 两仓本地副本 | PyJWT/joserfc 独立 oracle | 已完成：of_mcp `3e1d5ac` → MultiRAG 本次 A1 变更；91-file corpus 字节一致，digest `59f82684aa06365f45623ce9bfad336d487f2c9351879266a6b2ab21bf8fe208`；运行时无依赖 |
 | 新 scope/tool metadata | `of_mcp` policy snapshot | MultiRAG Agent/MCP config、P3 cache/audit | resource 端先提交包含 effect/replay mode 的 canonical `tool-policies.json` 与 `policy_revision` → 调用端按 revision 重算请求与缓存；未知 scope fail closed，不从运行时可见列表反推权限，也不把 revision 自动塞入当前 A1 token profile |
 | confirmation contract | `of_mcp` challenge | MultiRAG card/channel | resource 端先返回可识别 challenge → UI 接线 → 强制确认 |
