@@ -1020,7 +1020,41 @@ class EnterpriseSubjectResolver:
 
 Provider SPI 属于 I4，Enterprise subject SPI 属于 I5；P1 没有实现这两个 SPI。
 
-### 4.4 I6 当前已实现的 provisioning/link 契约
+### 4.4 P2 execution Principal 传播契约（待实现）
+
+P2/CHN-X18 的唯一可信输入是 C3 已构造并放入 `TrustedChannelContext.principal` 的 canonical
+`api.identity.principal.Principal`。worker assertion、legacy subject、DSL、模型输入、MCP arguments、
+custom header 或调用方传入的 `user_id` 都不能创建、替换或补全它。LINKED context 必须同时满足
+`principal_id == principal.platform_user_id` 与 tenant/provider 证据一致；任一缺失或漂移 fail closed。
+NO_LINK 才允许服务端明确选择 legacy anonymous，不能把 linked failure 降级成 `""`。
+
+传播链必须是显式参数/不可变 run context：
+
+```text
+TrustedChannelContext.principal
+  -> target executor / driver
+  -> Dialog or Canvas completion
+  -> Canvas Graph/component construction (before load/prewarm)
+  -> Agent / RAG / Memory / Canvas workflow / MCP call context seam
+```
+
+- Canvas 组件与 MCP session 在 `run()` 前构造，因此只在 `Canvas.run(user_id=...)` 写 globals 太晚；
+- Principal 或 run context 不得进入 DSL、`sys.*` globals、prompt、model-visible history、SSE、数据库
+  message payload、static MCP headers、日志或 repr；不得用 module-global/隐式 ContextVar 在并发 run 间传递；
+- session/history 与 Memory 读写至少按 `(tenant_id, platform_user_id)` 隔离。同租户两个 Principal 即使
+  复用同一 Channel conversation、Agent、Memory 配置或攻击者 DSL `user_id`，也不得互读/互写；
+- retry、regenerate、cancel 与同一 run 的 MCP/tool call 必须携带同一个不可变 Principal context；
+  target owner 的现有 C3 纵深校验继续保留，P2 不重做 identity mapping；
+- MCP 侧本轮只接收 request/run context seam。P2 不签发 token、不查用户 credential、不写
+  `Authorization`/bearer、不修改静态 server headers；A2/P3 才实现动态委托；
+- 这里的 Workflow 是当前 Channel 可达的 Canvas Graph/component workflow，不扩到独立
+  `workflow/`、`workflow_v2/` 或 `api.run_platform`，也不顺手改公开 Memory CRUD/PDP。
+
+实现必须以失败测试证明 linked 不再命中 `principal_id or ""`，同时保留 NO_LINK legacy；Dialog 与
+Canvas 各覆盖一次全链传播，Memory 覆盖同租户双用户与跨 tenant 拒绝，并发 Canvas/MCP run 不串
+context，repr/log/wire 不出现平台或外部主体原值。
+
+### 4.5 I6 当前已实现的 provisioning/link 契约
 
 I6 的 framework-neutral application service 只接受 I3 plan 与 I4 proof，不接受调用方提供
 `target_user_id`、mode、action、policy revision、membership role 或 account kind：
@@ -1103,7 +1137,7 @@ I6 当前只交付 domain、schema/migration、async PostgreSQL repository/appli
 它不提供 HTTP route、管理员或用户 UI、Channel adapter、C3 Principal 构造/传播、I5
 EnterpriseSubject、I7 事件消费，也不修改 FastMCP/of_mcp 的工具开放或授权运行时。
 
-### 4.5 I6.1 已实现的企业连接 onboarding 契约
+### 4.6 I6.1 已实现的企业连接 onboarding 契约
 
 受控 CLI 只接受现有 Feishu Channel ID、明确 mode 与 TTL；App ID/Secret、tenant key 和 Provider
 Account 都不能作为命令行 authority。`plan()` 先验证独立 Identity HMAC keyring readiness，再关闭

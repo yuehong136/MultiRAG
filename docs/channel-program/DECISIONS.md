@@ -75,6 +75,12 @@ if user_id == tenant_id:
 没有终端用户归属。缝已经存在（`TrustedChannelContext.principal_id: str | None` 一路串到
 `user_id=principal_id or ""`），将来做身份映射不需要契约变更。那是独立的、更大的一件事。
 
+> **2026-08-13 后续状态（不改写本 ADR 的历史判断）**：EIM-C3 / CHN-X7 已让 LINKED 消息经
+> 服务端 authority、I3/I4/I6 与 P1 提升为 `TrustedChannelContext.principal`，并用
+> `principal_id` 隔离 target/session owner；NO_LINK 仍显式保留 legacy anonymous。完整 Principal 尚未
+> 下传到 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas workflow/MCP call context，且下游仍存在
+> `principal_id or ""`，该后续工作已登记为 EIM-P2 / CHN-X18。
+
 ---
 
 ## CHN-ADR-02 · 运行时状态走自适应轮询，否决 SSE / WebSocket

@@ -180,8 +180,9 @@ EIM-F1 已把根依赖与 lock 对齐到 1.7.2，并用本地固定 fixture 验�
 `GetUserRequest(user_id_type="open_id")` 指向 `GET /open-apis/contact/v3/users/:user_id`，成功响应按
 `GetUserResponse -> GetUserResponseBody -> User -> UserStatus` typed model 解码；fixture 只保留
 `open_id/user_id/employee_no/status` 白名单字段，不包含真实租户、用户或 Secret。该契约为 I4 固定
-官方 SDK seam；I4 现已在此 seam 上落 Provider 主体，但不因而代表身份写入、Principal
-或真实 Contact sandbox 已完成。
+官方 SDK seam。**F1 fixture 本身**不代表身份写入、Principal 或真实 Contact sandbox；后续 I4.1 已用
+有效直连与修正后的 production adapter sandbox 证明 Auth/Tenant/Contact 真实链可用，证据见本节后文。
+不要把两个时间点合并成“F1 已做 live”，也不要继续声称 I4.1 未做 live。
 
 1.7.2 的顶层 `lark_oapi` import 会加载 WebSocket 模块并安装一个模块级 event loop。隔离进程实证该
 loop 保持 idle、未运行/未关闭、无 task 且不启动新 thread，Client build 也不改变这一点。平台模块

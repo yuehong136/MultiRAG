@@ -54,7 +54,7 @@ Agent message_delta
 | `api/channels/core/base.py::ChannelAction` | 只含 opaque action、operator/chat/message/event ID，不表达 form value 或 InteractionSession revision | 当前低风险按钮契约不能直接承载 MCP MRTR，必须 additive 演进 |
 | `api/channels/core/base.py` | `Channel.begin_reply()` 默认 buffered；`ReplyContext` 携带状态、动作与最终能力 | 普通 Provider 完成时只发一条文本，支持逐 Provider 覆盖 |
 | `api/channels/feishu/channel.py` | 协商允许时使用 Typing + CardKit 2.0；否则 buffered text，CardKit 故障仍有 post/text fallback | Markdown/公式走 CardKit renderer，能力缺失时仍能交付最终答案 |
-| `api/channels/feishu/channel.py` | 入站只提取 text，并折叠 open/user/union ID | 无话题、引用、附件、mention 和结构化身份 |
+| `api/channels/feishu/channel.py` | 入站仍只支持 text，但已保留 header tenant 与类型化 open/user/union ID，Bridge/runtime client 发送冻结、repr 脱敏的 structured assertion | 无话题、引用、附件或 mention；C3 已把 LINKED assertion 提升到 `TrustedChannelContext`/target owner，P2 尚未把完整 Principal 传进 Agent/RAG/Memory/workflow/MCP context |
 | `api/channel_providers/feishu.py` | 声明私聊文本、CardKit 渐进式、交互、取消、反馈与 threaded reply；文件/图片仍为 false | 管理面与运行时共用同一 Provider 事实源 |
 
 必须保留的已有优势：SDK 回调只规范化并入队、有界队列、每会话顺序、Redis 原子去重、
@@ -385,9 +385,11 @@ CHN-O14 / EIM-O4。Windows 上 supervisor 停子进程走 `TerminateProcess`，�
 - 查看来源；
 - 下载已授权产物。
 
-`card.action.trigger` 回调只做验签/长连接信任检查、规范化、身份解析前置、幂等 claim 和入队，
-必须快速返回；业务执行异步完成。按钮 value 只携带 opaque nonce/action ID，不携带 Principal、
-scope、工具参数、工号或目标 URL。
+当前 U4 的低风险 `card.action.trigger` 回调只做长连接信任、规范化，并以 raw operator ID 与原消息
+sender 做同值校验，再绑定 chat/message/nonce/action 后入队；它**尚未**把 action operator 解析为
+verified Principal，不能据此授权敏感操作。业务执行异步完成，按钮 value 只携带 opaque
+nonce/action ID，不携带 Principal、scope、工具参数、工号或目标 URL。U7/U14/U15 的敏感确认必须
+另行接入 verified operator Principal、持久幂等 claim 与执行前重授权。
 
 ### 8.2 MCP 结构化表单与 H5/URL Elicitation
 
@@ -608,7 +610,7 @@ candidate，公开历史不含半轮或 `<think>`。这些现场结果和相关�
 | EIM-U11 | CHN-X13 | ✅ Provider/Target capabilities、启动预取与目标私有 driver | U4 |
 | EIM-U12 | CHN-U14 | ✅ 权威快照 consumer 已部署；Dialog detached working copy + 终态 CAS emit | U11 |
 | EIM-U13 | CHN-U15 | ✅ Canvas sidecar 所有权、同 flush 新会话捕获与 API 周期 GC | U11、U12 |
-| — | CHN-U16 | ✅ 正常停机终态化；queued cancel、busy 交付和 worker→HTTP/SSE→ReplySession 跨层测试（target 段仍由 integration 覆盖） | U15 真实 smoke（仍欠，不阻塞本条） |
+| — | CHN-U16 | ✅ 正常停机终态化；queued cancel、busy 交付和 worker→HTTP/SSE→ReplySession 跨层测试（target 段仍由 integration 覆盖） | CHN-U9/U15；完整 UX smoke 是 soak gate，不是 U16 实现依赖 |
 | — | CHN-O9 | 稳定性最小可观测：首卡/首正文、队列、CardKit update/fallback、终态与停机结果 | CHN-U16 ✅ |
 | EIM-U3 | CHN-U10 | mention-only 群聊、话题、thread session | U1、U2、C3、O2 |
 | EIM-U5 | CHN-X10 | references/artifacts 结构化事件与渲染 | U0、P2 |

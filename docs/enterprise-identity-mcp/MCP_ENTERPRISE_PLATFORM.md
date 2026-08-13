@@ -841,12 +841,14 @@ U7 + M4 + I8 -> vertical E2E/canary
 ### 13.6 Channel 稳定轨
 
 ```text
-Dialog/Canvas 真实飞书 smoke
-  -> CHN-O9 最小可观测
-  -> 稳定浸泡
+CHN-O9 最小可观测 ────────────────────────────────┐
+                                                  ├─> 稳定浸泡
+完整 Dialog/Canvas UX smoke（以既有 C3 live 为身份前置） ─┘
 ```
 
-它不阻塞 F2/I1/C1 的设计和封闭开发，但敏感写操作进入生产 canary 前必须完成。
+CHN-O9 与完整 UX smoke 是可并行的两条稳定化证据；O9 不再等待 smoke，C3 的 Principal-owner live
+也不替代 CardKit/fallback/action 的完整 UX 矩阵。两者都在稳定浸泡前完成；它们不阻塞 P2 的封闭开发，
+但敏感写操作进入生产 canary 前必须完成。
 
 ---
 

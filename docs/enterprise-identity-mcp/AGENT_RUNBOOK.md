@@ -189,9 +189,36 @@ P1 已完成，代码锚点为 `api/identity/principal.py`、`api/identity/legac
    **2005 passed** 且 7 import contracts/async gate/mypy 73 files 全绿，强制 integration **83 passed**，
    安全复核无 blocker。
 
-P1 不交付 C3/P2、A2/P3 或 A7。A7 的代码前置已满足，但仍须作为独立 inbound
-Resource Server 实现/发布；I6 与 C1/C2 已完成，下一条接线主线是 `C3 -> P2`。
+P1 当时不交付 C3/P2、A2/P3 或 A7。C3 已在后续独立任务完成源码、自动门禁和双 account 飞书
+live；A7 的代码前置虽已满足，仍须作为独立 inbound Resource Server 实现/发布。当前接线主线直接是
+P2/CHN-X18，不得重做 C3，也不得跳过 P2 去做 A2/P3。
 I5 与 I7 已由 I4 解锁，可在不共文件时并行；I8 仍要求 I6 + I7，不能跳过依赖。
+
+#### EIM-P2 / CHN-X18 当前交接边界
+
+P2 开工前先复核下列当前事实；发现符号漂移先更新锚点，不要按历史行号机械修改：
+
+1. C3 已把完整、immutable `Principal` 放入 `TrustedChannelContext.principal`，并让
+   `principal_id == principal.platform_user_id`；execution service 进入 target 前仍保留完整 context；
+2. 第一处真实断点在 `api/channel_execution/executors.py` 与 driver Protocol：Canvas/Dialog executor
+   只把 `principal_id` 字符串传下去，Canvas completion、Dialog history/`async_chat` 仍有
+   `principal_id or ""`。LINKED 不得再静默匿名；NO_LINK 只能作为服务端明确判定的 legacy 分支；
+3. Canvas Graph 在 `Canvas.run()` 前就 `load()` 组件并预热 MCP session。Principal/run context 必须在
+   Graph/component 构造前显式注入，不能晚到 `run()`，也不能依赖 module-global 或隐式 ContextVar；
+4. Principal 不得序列化到 worker/private API、DSL、`sys.*` globals、prompt、custom header、SSE、日志
+   或 MCP arguments。模型和 DSL 都不能覆盖服务端 tenant/platform user；
+5. Memory save/query 必须同时绑定 tenant 与 platform user；同租户两个 Principal 的会话、Memory、
+   retry/regenerate/cancel 均不得串线。不要顺手重构公开 Memory CRUD 或实现完整数据 PDP；
+6. MCP 本轮只增加 request/run context seam，让每次工具调用知道当前 immutable Principal；不签 token、
+   不取 credential、不添加 Authorization/bearer、不改 static headers，后者严格属于 A2/P3；
+7. 本任务中的 Workflow 指 Channel 当前实际运行的 Canvas Graph/component workflow，不含独立
+   `workflow/`、`workflow_v2/` 或 `api.run_platform` durable-run 主线；
+8. 本任务会改 `api/channel_execution/`，因此与 Channel 账本映射为 CHN-X18；开工、提交标题、
+   `ROADMAP`、Channel `PROGRESS/CONTRACT` 和变更日志都必须同时带 EIM-P2 与 CHN-X18。
+
+最低验收不是“删掉三个空字符串”，而是证明同一个可信 Principal 从 service 到 target driver、
+Dialog/Canvas Graph、Agent/RAG/Memory/workflow/MCP context seam 保持一致；LINKED fail closed、NO_LINK
+兼容不回归；同租户双用户与并发 run 不串 session/Memory/context；repr、日志和 wire 无主体原值。
 
 ### 4.4 外部 API 和 SDK 任务
 
@@ -447,8 +474,8 @@ git diff --check
 ```
 
 A4 定向 **201 passed**；`uv run --locked ofmcp verify` 六步全绿、**417 passed、2 existing skipped**，
-contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG F1/I3/I4/I6/P1/C1/C2 已完成；
-下一条接线主线为 `C3 -> P2`，只有完成 P2 后才能进入 A2/P3。I5/I7 可作为已
+contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG F1/I3/I4/I6/P1/C1/C2/C3 已完成；
+当前接线主线为 P2/CHN-X18，只有完成 P2 后才能进入 A2/P3。I5/I7 可作为已
 解锁并行支线，但下游仍按依赖图等待。secure 在独立远程发布闸门解除前仍不能作为远程业务入口。
 
 ### 4.8 EIM-A6 phase 1 接手与完成边界
@@ -506,7 +533,7 @@ production multi-instance durable replay/audit、HMAC KMS/rotation、OTel SDK/ex
 | 变更 | 生产者 | 消费者 | 安全部署顺序 |
 |---|---|---|---|
 | Channel structured assertion | worker | MultiRAG private API | tolerate API → emit worker → consume API → remove legacy |
-| MCP access token | MultiRAG signer | `of_mcp` verifier/authorizer | A3 verifier/JWKS + A4 Principal/tool policy + A6 phase-1 execution guard 已先行并保持业务未远程发布 → P1 已完成、继续 C3/P2 → A2 signer emit → P3 每次执行换新短 token/JTI → A6 production durable backend/跨仓 trace + 企业主体/上线证据 → 独立闸门决定 secure 远程入口；不得把固定测试 token 或内存 replay 通过误作 Channel 委托闭环 |
+| MCP access token | MultiRAG signer | `of_mcp` verifier/authorizer | A3 verifier/JWKS + A4 Principal/tool policy + A6 phase-1 execution guard 已先行并保持业务未远程发布 → P1/C3 已完成、当前继续 P2 → A2 signer emit → P3 每次执行换新短 token/JTI → A6 production durable backend/跨仓 trace + 企业主体/上线证据 → 独立闸门决定 secure 远程入口；不得把固定测试 token 或内存 replay 通过误作 Channel 委托闭环 |
 | EIM-A1 corpus | MultiRAG canonical generator + 两仓本地副本 | PyJWT/joserfc 独立 oracle | 已完成：of_mcp `3e1d5ac` → MultiRAG 本次 A1 变更；91-file corpus 字节一致，digest `59f82684aa06365f45623ce9bfad336d487f2c9351879266a6b2ab21bf8fe208`；运行时无依赖 |
 | 新 scope/tool metadata | `of_mcp` policy snapshot | MultiRAG Agent/MCP config、P3 cache/audit | resource 端先提交包含 effect/replay mode 的 canonical `tool-policies.json` 与 `policy_revision` → 调用端按 revision 重算请求与缓存；未知 scope fail closed，不从运行时可见列表反推权限，也不把 revision 自动塞入当前 A1 token profile |
 | confirmation contract | `of_mcp` challenge | MultiRAG card/channel | resource 端先返回可识别 challenge → UI 接线 → 强制确认 |

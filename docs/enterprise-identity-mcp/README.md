@@ -34,7 +34,8 @@
 推荐的派工方式：
 
 ```text
-读 docs/enterprise-identity-mcp/README.md，然后完成 ROADMAP 中当前主线任务（当前为 EIM-P2）。
+读 docs/enterprise-identity-mcp/README.md，然后完成 ROADMAP 中当前主线任务
+（当前为 EIM-P2 / CHN-X18）。
 先复核任务锚点和依赖，把准备修改的文件与验收标准告诉我；确认后再写代码。
 ```
 
@@ -159,18 +160,24 @@ MRTR/飞书交互和分阶段门禁见
 
 ## 4. 同步策略定案
 
-不做“每天把全公司组织架构完整复制到 MultiRAG”。使用：
+不做“每天把全公司组织架构完整复制到 MultiRAG”。目标稳态使用：
 
 ```text
 JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
 ```
 
 - 首次消息、本地映射缺失、缓存过期或高风险操作前才调用飞书通讯录。
-- 订阅 `contact.user.created_v3`、`contact.user.updated_v3`、
+- EIM-I7 落地后订阅 `contact.user.created_v3`、`contact.user.updated_v3`、
   `contact.user.deleted_v3`、`contact.scope.updated_v3`。
 - 离职、冻结、主动退出、不可见或数据权限被收窄时 fail closed。
 - 周期任务只校验已链接且近期活跃的身份，不抓取全量组织树。
-- 正常 RAG 对话命中本地映射后不再调用飞书或 OA。
+- I7/I8 与可配置 freshness policy 落地后，正常 RAG 对话命中仍新鲜的本地映射可不发外部
+  Contact/OA 请求。
+
+**当前实现边界（2026-08-13）**：I7/I8 尚未实现，C3 对每个 LINKED event 都逻辑调用 I4；同一
+account generation、subject 与 scope 的请求可以命中 I4 的有界正缓存，因此不等于每条消息都发一次
+Contact 网络请求，cache hit 也不会把 proof 时间伪装成当前请求时间。不要把上面的目标稳态写成
+当前已订阅 Contact 事件或已有 24 小时本地快速路径。
 
 企业策略支持三种 provisioning 模式：
 

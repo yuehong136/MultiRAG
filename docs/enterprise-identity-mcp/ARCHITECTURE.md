@@ -280,9 +280,14 @@ proof time、待 provisioning 或需重验状态均 fail closed。存量 Web/API
 `legacy_owner` adapter 每请求活查用户和唯一 personal OWNER Tenant；它只保留现有兼容
 语义，不是多 Tenant 动态选择器。`api.utils.api_utils.Principal` 只 re-export 同一领域 class。
 
-P1/C3 已把 verified identity 提升到 `TrustedChannelContext` 和 target/session owner，但尚未把 Principal 经
-Agent、Memory、Workflow 和 MCP tool call 全链传递；这属于 P2。现有 sync `Depends(manager)` 也仍可能暴露 ORM User。目标态仍要求
-模型看不到或修改不了 Principal，但不能因 P1 完成就宣称传播链已打通。
+P1/C3 已把 verified identity 提升到 `TrustedChannelContext` 和 target/session owner，但 target executor
+目前只继续传 `principal_id`，Canvas/Dialog 下游仍有 `principal_id or ""`；Canvas Graph 又在
+`run()` 前构造组件和 MCP session。P2/CHN-X18 必须在 Graph/component 构造前显式传递 immutable
+Principal/run context，覆盖 Dialog/Canvas Graph、Agent、RAG、Memory、Canvas workflow 与 MCP call
+context seam，同时让 Memory 按 tenant + platform user 隔离。模型、DSL、prompt、custom header、wire
+和日志都看不到或修改不了 Principal。P2 只传 context，不签 token、不取 credential、不发 bearer；
+A2/P3 才负责动态委托。现有 sync `Depends(manager)` 仍可能暴露 ORM User，不能因 P1/C3 完成就宣称
+传播链已打通。
 
 #### MCP Token Issuer
 
@@ -395,7 +400,12 @@ integration **162 passed**。12:42 API 已重启到 `v0.9.9-579-g2b0482c7`，`ma
 
 ---
 
-## 4. 后续消息快速路径
+## 4. I7/I8 后的目标快速路径（当前 C3 尚未启用）
+
+当前 C3 对每个 LINKED event 都逻辑调用 I4，并允许同 account generation、subject 与 scope 命中
+有界 Provider cache；cache hit 沿用原始 proof time，不等于每条消息都发一次 Contact 网络请求。
+下面的“纯本地快速路径”只有在 EIM-I7 事件失效、EIM-I8 reconciliation 与可配置 freshness policy
+落地后才能启用，不能据此把当前实现改成无条件跳过 I4。
 
 ```text
 event -> binding tenant -> open_id alias cache/DB -> active platform_user_id -> Principal -> Agent
@@ -422,7 +432,7 @@ event -> binding tenant -> open_id alias cache/DB -> active platform_user_id -> 
 
 ---
 
-## 5. Contact 事件失效流程
+## 5. Contact 事件失效流程（EIM-I7 目标，当前未订阅）
 
 ```mermaid
 sequenceDiagram
@@ -440,7 +450,9 @@ sequenceDiagram
     I->>AU: identity.revoked
 ```
 
-事件处理不能物理删除 identity link。保留历史用于审计、避免工号/open_id 被复用后静默继承旧
+当前 Channel dispatcher 不消费下面四个 Contact V3 事件；在 I7 的 receipt/CAS/invalidation consumer
+落地前不要在飞书后台订阅并把“事件已推送”误当成身份已失效。目标事件处理不能物理删除 identity
+link。保留历史用于审计、避免工号/open_id 被复用后静默继承旧
 权限。员工重新加入必须产生明确 reactivation/link decision。
 
 `contact.scope.updated_v3` 不试图猜出哪些用户受影响：先 bump provider account 的

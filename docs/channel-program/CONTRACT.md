@@ -152,6 +152,16 @@ Dialog/Canvas 再校验 `principal_id` owner。该 private consume 不 bump 公�
 Canvas、Dialog 各一条本次 Principal owner 记录且空 owner 为 **0**；Redis completed/replied 存在、
 processing/failed 为 **0**。下一 EIM 主线为 P2；CHN-O9 可并行，C4/X8 等 deployment soak。
 
+**EIM-P2 / CHN-X18 的待实现 private execution 契约**：LINKED 请求必须把 C3 已验证的同一份
+immutable Principal 从 `TrustedChannelContext` 显式传入 Dialog/Canvas Graph、Agent、RAG、Memory、
+Canvas workflow 与 MCP call context seam；不得在任何下游以 `principal_id or ""` 静默降级为匿名，
+也不得让 DSL、模型输入或客户端字段覆盖服务端主体。Memory 读写至少按 tenant + platform user 隔离。
+NO_LINK 继续保留明确的 legacy anonymous 分支，但不能成为 LINKED 失败的 fallback。Principal 只存在于
+进程内 request/run context，不进入 public/private wire、DSL、prompt、日志或静态 MCP header；P2 不签
+token、不获取 credential、不发送 bearer，这些仍属于 A2/P3。这里的 workflow 仅指当前 Channel 实际
+执行的 Canvas Graph/component workflow，不扩到独立 `workflow/`、`workflow_v2/` 或
+`api.run_platform`。这是内部传播边界，不改变公开 `channel-api/v1`，因此不 bump 版本。
+
 ---
 
 ## 2. 写请求形状
@@ -429,3 +439,4 @@ JSON Schema（`config_schema`）仅用于服务端请求校验与 OpenAPI，**�
 | 2026-08-13 | v1（仅 private command tolerate，不 bump） | `ChannelActor` 可选接受有界、extra-forbid 的 `ExternalIdentityAssertion`（EIM-C1 / CHN-X5）；legacy 三字段仍必填且旧 dump 不新增 null。隔离等价完整 `make verify` 与 C1 定向全绿；CHN-O15 恢复后，新 API smoke 及 C1 前 producer 等价 legacy-shape 飞书活体均通过。worker 是恢复后新进程，不宣称旧 PID 跨版本；生产 emitter 在 C1 零 diff。活体仍未 emit identity，resolver 未 consume，公开 Channel API 与 web 契约零变化 | `536a1ea5` |
 | 2026-08-13 | v1（仅 private command emit，不 bump） | 飞书 worker 以 transport-neutral、冻结且 repr 脱敏的 DTO emit header tenant + open ID + 所有存在的 user/union ID；可选 sender tenant/app 本地核对，app 不进入 assertion。Bridge/regenerate/runtime client 透传，legacy 三字段和 identity 缺失线格不变（EIM-C2 / CHN-X6）。重启后的真实飞书消息出现安全结构日志并由 private API HTTP 200 完成；resolver 未 consume、Principal 为空、identity sidecar 零写入，公开 Channel API 与 web 契约零变化 | `896c582d` |
 | 2026-08-13 | v1（仅 private command consume，不 bump） | C3/X7 只在成功 claim 后经 authority、I3/I4/I6 与 P1 提升 Principal，并以 owner-aware session/target 隔离 linked 用户；NO_LINK 与 legacy subject 兼容仍保留，公开 Channel API/web 线格不变。`0ded51ff` 自动门禁全绿；加载 `2b0482c7` 的新 API smoke 六组件全绿，双 account live 的 alias/canonical identity/membership/BindingEvent、Canvas/Dialog Principal owner 与 Redis tombstone 均通过脱敏计数核验。P2 全链传播、MCP token 与 C4 legacy remove 均不属于本步 | `0ded51ff` + live `2b0482c7` |
+| 2026-08-13 | v1（仅定义 private run-context 传播，不 bump） | 为 EIM-P2 增加 CHN-X18 记账：定义 LINKED full Principal 从 Channel Execution 到 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas workflow/MCP call context seam 的进程内传播边界，禁止静默匿名与 DSL 覆盖，保留 NO_LINK legacy；不签 token、不取 credential、不发 bearer，也不改变公开或 private wire。当前仅冻结契约与零上下文交接，运行时代码仍未实现 | 本次提交 |

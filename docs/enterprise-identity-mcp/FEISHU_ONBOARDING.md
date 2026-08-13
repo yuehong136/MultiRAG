@@ -182,7 +182,7 @@ owner 的部署 live，不能把 I6.1 的历史零写入当作当前消息路径
 
 | Scope ID | 飞书名称 | 用途 |
 |---|---|---|
-| `tenant:tenant:readonly` | 获取企业基本信息 | Tenant V2 ownership 验证；缺失时 onboarding fail closed |
+| `tenant:tenant:readonly` | 获取企业信息 | Tenant V2 ownership 验证；缺失时 onboarding fail closed |
 | `im:message.p2p_msg:readonly` | 读取用户发给机器人的单聊消息 | 私聊消息事件 |
 | `im:message:send_as_bot` | 以应用身份发消息 | 回复用户和发送状态卡片 |
 | `contact:contact.base:readonly` | 获取通讯录基本信息 | Contact V3 单人查询的基础访问；人员事件消费仍属于 EIM-I7 |
@@ -208,7 +208,8 @@ EIM-U1/CHN-U8 代码已落地；部署到目标租户前，按飞书开发者后
 | Scope ID | 用途 |
 |---|---|
 | `cardkit:card:write` | 创建和更新 CardKit 2.0 卡片实体、结束流式模式 |
-| `im:message` | CardKit 引用发送、消息回复和 reaction 所需的消息能力；若后台提供更细权限则取窄 |
+| `im:message` | 飞书官方流式卡片前置要求的“获取与发送单聊、群组消息”；用于 CardKit 引用发送/回复 |
+| `im:message.reactions:write_only` | 添加和删除 Typing reaction；可选 UX，缺失时只降级为无 Typing |
 
 `im:message:send_as_bot` 已在首期必需权限中。不同租户 UI 可能仍显示旧的
 `cardkit:card:read/cardkit:card:update` 拆分；以开工时官方文档和测试租户 API 实测为准，并把
@@ -320,8 +321,10 @@ EIM-I7 实现 `contact.scope.updated_v3` 后，account control 必须以 CAS 单
 |---|---|
 | `card.action.trigger` | 低风险反馈/重新生成，或敏感操作确认、取消、查看状态 |
 
-卡片 action payload 中的用户 ID 仍要走外部身份 resolver，并校验与待确认操作的
-`platform_user_id` 相同；不能只信 action 中的按钮 value。
+当前 U4 低风险 action 只把 raw operator ID 与原消息 sender ID 做同值校验，并绑定
+chat/message/nonce/action；它还没有把 action operator 解析为 verified Principal。只有 U7/U14/U15
+敏感确认链落地后，action payload 的用户 ID 才能经外部身份 resolver 与待确认操作的
+`platform_user_id` 精确比对。任何阶段都不能只信按钮 value。
 
 官方教程：[卡片交互机器人](https://open.feishu.cn/document/develop-a-card-interactive-bot/introduction?lang=zh-CN)
 

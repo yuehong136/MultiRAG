@@ -431,21 +431,29 @@ authority 或 proof 任一损坏都 fail closed。它只把 `principal_id` 用�
 
 ## 7. Phase P · Principal 与 MultiRAG 执行链
 
-| ID | 仓库 | 任务 | 状态 | 依赖 | 完成条件 |
-|---|---|---|:---:|---|---|
-| EIM-P1 | MR | 扩展/统一 immutable Principal 与 AuthenticationContext，不把 ORM 对象带出请求 | ✅ | I3 | [CONTRACTS §4](CONTRACTS.md#4-identity-service-接口)；web/token auth 基线不回归 |
-| EIM-P2 | MR | Channel Execution -> Agent/RAG/Memory/Workflow 全链传 Principal；按 platform user 隔离 | ⬜ | P1,C3 | 不再用 `principal_id or ""` 静默匿名；跨用户会话/Memory 隔离测试 |
-| EIM-P3 | MR | MCP request-scoped credential provider；按 Principal/resource/scope 获取 token | ⬜ | P2,F3,A2,A4 | Agent 初始化不缓存用户 token；cache key 绑定 principal/tenant/agent/resource/scope/policy revision/credential generation；并发用户不串 token；每 HTTP request 携带 bearer |
+| ID | Channel ID | 仓库 | 任务 | 状态 | 依赖 | 完成条件 |
+|---|---|---|---|:---:|---|---|
+| EIM-P1 | — | MR | 扩展/统一 immutable Principal 与 AuthenticationContext，不把 ORM 对象带出请求 | ✅ | I3 | [CONTRACTS §4](CONTRACTS.md#4-identity-service-接口)；web/token auth 基线不回归 |
+| EIM-P2 | CHN-X18 | MR | 把 C3 immutable Principal 从 Channel Execution 显式传入 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas workflow 与 MCP call context seam；按 tenant + platform user 隔离 | ⬜ | P1,C3 | LINKED 不再用 `principal_id or ""` 静默匿名；NO_LINK 保留显式 legacy；同租户跨用户 session/Memory 不串；Agent/workflow/MCP 边界拿到同一不可变 Principal；不签 token、不取 credential、不发 bearer |
+| EIM-P3 | — | MR | MCP request-scoped credential provider；按 Principal/resource/scope 获取 token | ⬜ | P2,F3,A2,A4 | Agent 初始化不缓存用户 token；cache key 绑定 principal/tenant/agent/resource/scope/policy revision/credential generation；并发用户不串 token；每 HTTP request 携带 bearer |
 
 P1 已完成现有消费方审计：唯一 owner 是 `api.identity.principal.Principal`，
 `api.utils.api_utils.Principal` 只是同一 class object 的兼容 re-export，存量 route import 迁完即删。
 legacy Web/API 只活查 personal OWNER context，不代表一般多 Tenant 选择；C3/P2、A2/P3/A7
 继续按独立任务验收。
 
-当前主线是 P2：把 C3 已构造的 immutable Principal 传到 Agent/RAG/Memory/Workflow 及 MCP 调用的
-request/run context 边界，并按 tenant + platform user 隔离；P2 不签发 token、不获取 request-scoped
-credential、不发送 bearer，这些仍属于 A2/P3。CHN-O9 可并行补 binding 级可观测，不构成 P2 前置；
-C4/CHN-X8 只有在全部 runner 升级并完成 deployment soak 后才能删除 legacy `subject`。
+当前主线是 P2/CHN-X18：`TrustedChannelContext` 已同时携 `principal_id` 与完整 Principal，但
+`api.channel_execution` 的 target driver 仍只向下传字符串，Canvas/Dialog 下游还有
+`principal_id or ""`，Canvas Graph 又在 `run()` 之前就构造组件和 MCP session。P2 必须在 Graph/component
+构造前建立显式、不可序列化的 run identity context，并把同一可信 Principal 送到 Agent、RAG、Memory、
+Canvas workflow 与 MCP call context seam；不能只机械替换三个空字符串。Memory 的读写键至少绑定
+tenant + platform user，DSL/模型输入不得覆盖服务端主体。
+
+P2 不修改飞书 wire、C3 authority/I3-I6/P1 proof 链，不删除 NO_LINK legacy，也不签发 token、不获取
+request-scoped credential、不发送 bearer；这些仍属于 C4 与 A2/P3。这里的 Workflow 专指 Channel
+当前实际运行的 Canvas Graph/component workflow，不顺手改独立 `workflow/`、`workflow_v2/` 或
+`api.run_platform`。CHN-O9 可并行补 binding 级可观测，不构成 P2 前置；C4/CHN-X8 只有在全部 runner
+升级并完成 deployment soak 后才能删除 legacy `subject`。
 
 ---
 
@@ -840,6 +848,7 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 
 | 日期 | ID | 变更 | 仓库/提交 | 验证证据 | 记录人 |
 |---|---|---|---|---|---|
+| 2026-08-13 | EIM-P2 / CHN-X18 交接准备 | 为零上下文实施冻结 P2 边界并保持任务 `⬜`：C3 full Principal 从 `TrustedChannelContext` 显式传播到 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas workflow 与 MCP call context seam；LINKED 禁止 `principal_id or ""` 静默匿名和 DSL 覆盖，NO_LINK 保留显式 legacy；Memory 至少按 tenant + platform user 隔离；MCP 只接进程内 context，不签 token、不取 credential、不发 bearer。补齐 Channel 映射、双账本维护义务、当前代码断点、backend-aware 测试矩阵和独立 workflow/run-platform 非目标；同时修正 C1/C2 历史快照、I7/I8 目标快速路径、低风险 card action operator、I4.1 live、O9/完整 UX smoke 与飞书 reaction scope 等陈旧表述。本条只改文档，未启动 P2 运行时实现或部署 | MultiRAG / 本次提交 | 14 份文档、**161** 个相对链接存在、code fences 平衡、陈旧/credential-like 样式扫描与 `git diff --check` 通过；`make verify` 全绿：Ruff format **1262 files**、Ruff check、**8** 条 import contracts（841 files/2656 dependencies）、async DB gate、mypy **89 source files**、unit **2405 passed in 33.35s** | Codex |
 | 2026-08-13 | EIM-C3 / CHN-X7 | verified consume 完成并标记 `✅`：成功 claim 后按 authority→initial I3→I4→I6→final I3→P1 提升 Principal；linked assertion/authority/proof 损坏 fail closed，NO_LINK 保留 legacy anonymous；Redis session 使用 tenant/principal owner envelope，legacy raw 仅 NO_LINK 可续用，Dialog/Canvas 既有行再做 owner 纵深校验；claim 一开始即占满 dedupe window，所有 post-claim 失败/取消写 full-window tombstone。当前仅完成 Principal promotion 与 `principal_id` target/session ownership，未做 P2 全链 Principal 传播或 A2/P3 MCP token | MultiRAG / `0ded51ff` + live `2b0482c7` | C3 定向 **203 passed**；`make verify` **2403 passed**；`REQUIRE_SERVICES=1 make integration` **162 passed**。12:42 API 重启到 `v0.9.9-579-g2b0482c7`，`make smoke` 六组件全绿。真实飞书 live 覆盖 **2/2** account；四条 alias 收敛到一个 active ExternalIdentity 和一个 canonical User，只有一条 valid NORMAL membership 与一条 BindingEvent；Canvas、Dialog 各一条本次 Principal owner 记录且空 owner 为 **0**；Redis completed/replied 存在、processing/failed 为 **0**。证据不含完整 app/tenant/account/user 标识或 Secret | Codex |
 | 2026-08-13 | EIM-I6.1 / CHN-X17 | 新增受控企业连接 onboarding：只从现有 Channel 解密凭据，默认 dry-run 在数据库事务外调用官方 Auth V3 + Tenant V2，并生成有时效、进程内一次性、不可篡改的脱敏计划；显式 apply 在 fresh transaction 中锁定并复核 Channel/Secret generation 与 tenant/provider ownership，幂等创建或复用 Provider Tenant/Account、`jit` policy 和 Channel link，拒绝跨租户 rebind、策略漂移和重复消费。Identity HMAC 使用独立至少 32-byte keyring，不复用 Channel 加密 key；真实 key 仅注入 API 进程的 mode `0600` secrets env，不进仓库、supervisor/worker 参数或日志。未新增公开 HTTP/UI，也未接 C3/X7 | MultiRAG / 本次提交 | 一处真实飞书应用最初因缺 Tenant V2 企业信息只读权限而 fail closed；管理员补齐最小权限并重新发布后，两个 Channel 的 Auth V3/Tenant V2 dry-run 均通过且 tenant 相同。atomic apply 最终计数 Provider Tenant/Account/Policy/Link = **1/2/1/2**；两 account 均 `healthy`、revision 1，policy 为 `jit`、TTL 300、revision 1；两个 Channel 各重放一次均 **0 action** 且计数不变。六张用户身份 sidecar 均为 0，`User/UserTenant` 计数不变。`make verify` **2316 passed in 36.68s**；`REQUIRE_SERVICES=1 make integration` **159 passed in 17.36s**；`make smoke` 六组件全绿；安全终审 **NO BLOCKER** | Codex |
 | 2026-08-13 | EIM-C2 / CHN-X6 | 飞书 worker 完成 structured identity emit：transport DTO 有界且 repr 脱敏，事件 header tenant 与 open ID 必填，存在的 user/union ID 全保留；可选 sender tenant/app 分别与 header tenant/本地配置账户核对，app 不进入 assertion。Bridge、regenerate、runtime client 透传 identity，同时 legacy subject/conversation 与无 identity 请求保持兼容。execution resolver 仍不 consume，Principal 仍为空 | MultiRAG / `896c582d` | C2 定向 **104 passed in 2.03s**；独立兼容矩阵 **153 passed**；安全扫描 **0 findings**；`make verify` 全绿（8 imports、mypy 86、unit **2265 passed in 37.20s**）；`make smoke` ping/healthz 六组件全绿。10:08 重启 supervisor 后两个飞书 worker（generation 2/11）connected；约 10:10 真实消息记录 identity/tenant present、三种 identifier kind、count 3 的脱敏结构，private execution HTTP 200 并完成。Canvas 为 `user_id=""`、`exp_user_id=null`、errors 为空；10 张 EIM sidecar 零行。不宣称 Contact/I3 consume、数据库映射或 Principal | Codex |

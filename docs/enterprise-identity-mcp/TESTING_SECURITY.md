@@ -112,6 +112,7 @@
 | I6 Identity write flow | 权威 policy/revision/TTL，JIT/link/preprovisioned 的 User/UserTenant/identity/alias/code/event 原子事务，post-lock freshness | ✅ framework-neutral async service + 真 PostgreSQL；完整门禁全绿 |
 | DB schema/event | 唯一约束、事务并发、别名归一化、幂等事件 | `tests/integration/` 真 PostgreSQL |
 | P1 Principal | 单一 canonical class、sealed constructor、深不可变/脱敏 repr、evidence 一致、proof time、legacy owner 活查与 JWT fallback 分界 | 纯 domain/auth unit + 真 PostgreSQL owner-membership 行为 |
+| P2 / CHN-X18 execution context | C3 Principal 显式贯穿 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas workflow/MCP call context；LINKED 零匿名；NO_LINK legacy；tenant+platform-user Memory/session 隔离；并发与 repr/wire 脱敏 | target/driver/Graph/component/MCP 纯 unit + target/history 真 PostgreSQL integration + Memory component/service user filter 与 tenant ownership 测试；若声明真实 Memory 存储隔离，必须补与当前 `msgStoreConn` backend 匹配的 integration，不能用 PostgreSQL 替代；不测试 token/bearer |
 | MCP token | 两个 profile、claims/types、固定时钟、TTL、JWKS、轮换、scope registry/交集、cross-resource | 两库独立纯密码学 corpus + HTTP 契约测试 |
 | MCP client | resource/audience、失败映射、无静态用户 header | mock transport/官方 SDK 测试 |
 | MCP resource server | modern/legacy 协议、独立 audience、scope、无 bearer 透传 | ASGI/官方 Client 契约测试 |
@@ -122,14 +123,17 @@
 verification-gated policy plan 与窄 repository/CAS seam；EIM-P1 已完成 canonical Principal、
 AuthenticationContext、I3 promotion builder 和 legacy Web/API personal-owner adapter；EIM-I6 已完成
 权威 policy/link/event schema、framework-neutral service 与三种原子 provisioning transaction，并通过
-完整门禁。I6 不包含 Channel 组装，也没有把 Principal 传进
-Agent/Memory/Workflow/MCP。EIM-F3/F8 只完成
+完整门禁。EIM-C3 / CHN-X7 后续已完成 Channel identity composition 与部署 live：完整 Principal 已进入
+`TrustedChannelContext`，`principal_id` 已约束 target/session owner；但 target executor 仍只向下传
+字符串，Canvas/Dialog 下游仍有 `principal_id or ""`，尚未把 Principal 传进
+Agent/RAG/Memory/Canvas workflow/MCP call context，这正是 P2/CHN-X18。EIM-F3/F8 只完成
 MCP SDK 2/FastMCP 4 的协议运行时迁移和 `InputRequiredResult` 的 transport-level 暴露。
 EIM-A1 已固定 token/JWKS test vectors；A7 的前置虽已满足，独立 audience/scope 和 OAuth
 Resource Server 仍未实现；InteractionSession 仍属于依赖 P3/A4/C3 的 EIM-U14。不能因
 P1 或 modern/legacy 协议测试通过就把这些安全测试标为已满足。
 
-EIM-C1 / CHN-X5 已完成 tolerate，EIM-C2 / CHN-X6 已完成 emit。private API 解析可选、有界、
+下面的 C1/C2 描述是 **C3 之前的历史兼容快照**，不得用于解释当前 resolver。EIM-C1 / CHN-X5
+已完成 tolerate，EIM-C2 / CHN-X6 已完成 emit。private API 解析可选、有界、
 extra-forbid 的 `ExternalIdentityAssertion` 并保持 legacy actor 必填；飞书 adapter 要求 header tenant
 与 open ID，保留所有存在的 user/union ID，核对可选 sender tenant 与本地配置 app。app 不进入
 assertion，legacy subject 仍为 open ID。command/actor/assertion/identifier 任一层的 Tenant、Principal、
@@ -142,9 +146,15 @@ C2 的定向 **104 passed in 2.03s**、独立兼容矩阵 **153 passed**、安�
 supervisor/worker 后，真实飞书消息出现 identity/tenant presence、三种 identifier kind 与 count 的安全
 结构日志并完成 private execution。identity 结构日志不记录 tenant key、外部 identifier 或 app ID 的
 原值或 hash；既有 account/binding/message 等运维日志仍只使用不可逆短 hash 关联事件，不记录原值或
-PII。resolver 仍不 consume、`principal_id=None`，Canvas 仍为
+PII。当时 resolver 仍不 consume、`principal_id=None`，Canvas 仍为
 `user_id=""`、`exp_user_id=null`，10 张 EIM sidecar 零写入。这只完成 C1/C2 transport，不是
 Contact/I3 consume、身份映射或 Principal。
+
+当前 C3/X7 通过 success claim 后的 authority→initial I3→I4→I6→final I3→P1 提升 Principal；
+NO_LINK 才保留 legacy anonymous，LINKED 缺 assertion/authority/proof 任一条件都 fail closed。Redis
+owner envelope 与 Dialog/Canvas 数据库 owner 已按 tenant/principal 隔离。P2 测试必须在此基础上继续：
+不能删除 C3 纵深校验，也不能把完整 Principal 写进 DSL、prompt、wire、日志或 MCP arguments；应证明
+同租户双用户的 session/Memory、并发 Graph/MCP run、retry/regenerate/cancel 都保持正确上下文。
 
 EIM-F1 已以 1.7.2 contract fixture 收口，并准确区分两个 import 边界：平台 control/provider/
 verification/identity 模块导入不得加载 `lark_oapi` 或创建 event loop；显式导入官方 SDK 则允许其已知
@@ -900,15 +910,17 @@ resolver `principal_id` 为空，identity sidecar 零写入；日志和记录均
 完整 external ID、token 或请求正文。C1/X5 据此完成；本条历史证据不用于证明后续 C2 emit、consume
 或 Principal，C2 完成证据见下一段。
 
-随后 C2/X6 在 `896c582d` 完成：C2 定向 **104 passed in 2.03s**，独立兼容矩阵 **153 passed**，
+随后 C2/X6 在 `896c582d` 完成；以下仍是 **C2 当时的历史快照**，不是当前 C3 行为：C2 定向
+**104 passed in 2.03s**，独立兼容矩阵 **153 passed**，
 安全扫描 **0 findings**；`make verify` 8 条 import contracts、mypy 86 source files、unit **2265 passed
 in 37.20s**，`make smoke` 的 ping/healthz 六组件全绿。10:08 按仓库脚本重启 supervisor，两个飞书
 worker（generation 2/11）connected。约 10:10 的真实消息只记录
 `identity_present=true`、tenant key present、identifier kinds `open_id,user_id,union_id` 与 count 3，
 private execution HTTP 200 并完成；不记录 tenant key、外部 ID 或 app ID 的原值或 hash，既有
 account/binding/message 运维关联只使用不可逆短 hash。Canvas 为
-`user_id=""`、`exp_user_id=null`、errors 为空，10 张 EIM sidecar 零行；resolver 仍不 consume、
-Principal 未提升。
+`user_id=""`、`exp_user_id=null`、errors 为空，10 张 EIM sidecar 零行；当时 resolver 未 consume、
+Principal 未提升。C3/X7 后续已完成 consume 和 target/session ownership；P2/CHN-X18 只接续完整
+Principal 的 Agent/RAG/Memory/workflow/MCP context 传播，不能回退到这条 C2 快照。
 
 涉及启动、路由、JWKS 端点：启动受控服务后追加：
 
