@@ -34,7 +34,7 @@
 推荐的派工方式：
 
 ```text
-读 docs/enterprise-identity-mcp/README.md，然后做 EIM-C1。
+读 docs/enterprise-identity-mcp/README.md，然后做 ROADMAP 中第一条未阻塞主线任务（当前为 EIM-C3）。
 先复核任务锚点和依赖，把准备修改的文件与验收标准告诉我；确认后再写代码。
 ```
 
@@ -278,8 +278,10 @@ schema 与 PostgreSQL transaction。HTTP/UI/Channel/Principal 传播仍未接线
   `make verify` 全绿并收集/执行 unit **2188 passed**，强制 integration **128 passed in 16.40s**。
 - [`api/channels/README.md`](../../api/channels/README.md) 已明确：`IncomingMessage.sender_id`
   是不可信外部标识，不能直接作为 Principal。这条边界必须保留。
-- `api/channels/feishu/channel.py::_normalize` 当前只从 `open_id/union_id/user_id` 中取第一个
-  非空字符串，无法支持正式身份解析。
+- EIM-C2 已让 `api/channels/feishu/channel.py::_normalize` 要求 header tenant 与 sender open ID，并
+  保留所有存在的 user/union ID；sender tenant/app 分别与 header tenant/本地配置账户核对。冻结、脱敏
+  的 transport assertion 经 Bridge/regenerate/runtime client 发往 private API，legacy subject 仍为 open ID。
+  这只完成 transport emit，尚未做 IdentityService consume。
 - `api/channel_execution/adapters.py::SqlAlchemyBindingResolver.resolve` 当前把
   `principal_id` 固定为 `None`，这里是验证后身份提升的装配点。
 - EIM-P1 已将 canonical Principal 的唯一 owner 固定为 `api.identity.principal`；
@@ -340,8 +342,8 @@ schema 与 PostgreSQL transaction。HTTP/UI/Channel/Principal 传播仍未接线
   优先复用 FastMCP 4 的 `RemoteAuthProvider`、`AccessToken`、`on_list_tools/on_call_tool` middleware
   和 transport 防护；领域 identity/Principal 保持框架无关，避免重复实现框架已有工具开放能力。
 - P1 已解锁 A7 的代码前置，但 A7 仍是独立 inbound Resource Server 任务，不能立即宣称
-  可发布。F1/I4.1/I6 已完成；下一条接线主线必须先走
-  `C1 -> C2 -> C3 -> P2`。I5 与 I7 已由 I4 解锁，可作为不共文件的并行支线；I8 仍需 I6 + I7，
+  可发布。F1/I4.1/I6/C1/C2 已完成；下一条接线主线是
+  `C3 -> P2`。I5 与 I7 已由 I4 解锁，可作为不共文件的并行支线；I8 仍需 I6 + I7，
   不能跳依赖；
   C3/P2、A2/P3/A7 均不属于 P1 完成面。
 - MCP 出站已使用官方 SDK 2 `Client`：Streamable HTTP 使用 `mode="auto"` 和 SDK
@@ -463,8 +465,8 @@ schema 与 PostgreSQL transaction。HTTP/UI/Channel/Principal 传播仍未接线
   OAuth 获取 token 流。of_mcp 仍缺 A5 proxy internal actor；A6 虽已有 phase-1 domain/runtime
   安全边界，但仍缺生产多实例 replay/audit、HMAC/KMS 轮换、OTel SDK/exporter 与跨仓 trace，因此
   保持 `🔵`。M1/M2 企业主体与业务对象授权、持久 Interaction/Confirmation/Idempotency 也未完成。
-  F1/I4.1/I6 已完成；MultiRAG 下一条接线主线是
-  `C1 -> C2 -> C3 -> P2`；I5/I7 是已解锁并行支线，但 I8 仍需 I6 + I7。不能跳过
+  F1/I4.1/I6/C1/C2 已完成；MultiRAG 下一条接线主线是
+  `C3 -> P2`；I5/I7 是已解锁并行支线，但 I8 仍需 I6 + I7。不能跳过
   `C3 -> P2` 直接做 A2/P3。A7 虽已解锁前置，仍须作为独立入站安全面实现和验收。
 
 ---

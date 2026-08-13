@@ -190,7 +190,7 @@ P1 已完成，代码锚点为 `api/identity/principal.py`、`api/identity/legac
    安全复核无 blocker。
 
 P1 不交付 C3/P2、A2/P3 或 A7。A7 的代码前置已满足，但仍须作为独立 inbound
-Resource Server 实现/发布；I6 已完成，下一条接线主线必须先做 `C1 -> C2 -> C3 -> P2`。
+Resource Server 实现/发布；I6 与 C1/C2 已完成，下一条接线主线是 `C3 -> P2`。
 I5 与 I7 已由 I4 解锁，可在不共文件时并行；I8 仍要求 I6 + I7，不能跳过依赖。
 
 ### 4.4 外部 API 和 SDK 任务
@@ -447,8 +447,8 @@ git diff --check
 ```
 
 A4 定向 **201 passed**；`uv run --locked ofmcp verify` 六步全绿、**417 passed、2 existing skipped**，
-contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG F1/I3/I4/I6/P1 已完成；下一条
-接线主线为 `C1 -> C2 -> C3 -> P2`，只有完成 P2 后才能进入 A2/P3。I5/I7 可作为已
+contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG F1/I3/I4/I6/P1/C1/C2 已完成；
+下一条接线主线为 `C3 -> P2`，只有完成 P2 后才能进入 A2/P3。I5/I7 可作为已
 解锁并行支线，但下游仍按依赖图等待。secure 在独立远程发布闸门解除前仍不能作为远程业务入口。
 
 ### 4.8 EIM-A6 phase 1 接手与完成边界

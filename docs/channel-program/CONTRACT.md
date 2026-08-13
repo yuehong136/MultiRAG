@@ -86,11 +86,11 @@ worker 使用，不属于前端 `channel-api/v1`。它沿用 workload bearer tok
 - `regenerate` 与 action retry 在 `POST .../executions` claim event 前再次按 Target 和 RunPolicy 授权；
   拒绝产生 SSE `execution_failed(error_code="CHANNEL_OPERATION_NOT_ALLOWED")`，且不占用 event claim。
 
-### 1.2 私有 execution command 身份兼容态（EIM-C1 / CHN-X5）
+### 1.2 私有 execution command 身份兼容态（EIM-C1/C2 · CHN-X5/X6）
 
 `POST /api/v1/internal/channel-bindings/{binding_id}/executions` 只供 binding-scoped managed worker
-使用，不属于前端 `channel-api/v1`。C1 的 consumer/tolerate 半步只在既有 `actor` 上增加可选
-`identity`：
+使用，不属于前端 `channel-api/v1`。C1 的 consumer/tolerate 半步在既有 `actor` 上增加可选
+`identity`，C2 的 producer/emit 半步让飞书 worker 发送同一形状：
 
 ```jsonc
 {
@@ -124,19 +124,23 @@ worker 使用，不属于前端 `channel-api/v1`。它沿用 workload bearer tok
   audience、confirmation、access token、`app_id` 或 `provider_account_key` 无论放在 actor、identity
   还是 identifier 中都不被接受；`app_id`/Provider Account 只从服务端 binding ownership 取得。
 - identity 缺失时，旧 actor 的 `model_dump(mode="json")` 与 C1 前逐字段相同，不新增
-  `"identity": null`。C2 已进入进行中，但当前已验活的 `api/channels/runtime_client.py` 仍只发送
-  旧三字段，尚无 structured identity emit 证据。
-- execution resolver 在 C1 不读取 structured identity；Tenant、目标和版本仍只由 workload credential
+  `"identity": null`；runtime client 也保持旧 request bytes。飞书 C2 要求事件 header tenant 与 sender
+  open ID，保留存在的 user/union ID；可选 sender tenant/app 分别与 header tenant/本地账户核对，app
+  不进入 assertion。legacy subject 固定仍为 open ID，conversation 仍为 chat ID。
+- Channel transport 内用冻结、repr 脱敏的 `IncomingIdentityAssertion`；Bridge、regenerate 与 runtime
+  client 透传后才映射为 private DTO。日志只记录 identity/tenant presence、identifier kinds/count，
+  不记录 tenant key、外部 identifier 或 app ID 的原值或 hash；既有 account/binding/message 等运维日志
+  仍只使用不可逆短 hash 关联事件，不进入 identity 结构字段。
+- execution resolver 在 C1/C2 不读取 structured identity；Tenant、目标和版本仍只由 workload credential
   与服务端 binding 决定，当前 execution owner 行为保持 C1 前不变且绝不取自 assertion。C3 前不得把
   assertion 或 legacy subject 提升为 MultiRAG Principal。
 
-因此这是一条 private API 的向后兼容加法，公开 `channel-api/v1` 不 bump，web 仓无字段或部署义务。
-C1 已完成：隔离于 `HEAD a0581f2f`、只应用 C1 13 条路径的等价完整 `make verify` 与 C1 三文件定向
-均全绿；CHN-O15 恢复后，新 API 通过 ping/healthz smoke，一条 C1 前 producer 等价的 legacy-shape
-飞书请求随后被接受并完整执行。恢复后 worker 是新进程，不是旧 PID 跨版本存活；C1 对生产
-`runtime_client.py` / `worker.py` / `binding_bridge.py` 零 diff，所以该活体精确证明 legacy 线格由
-新 consumer 兼容。请求未携带 structured identity，resolver 仍不 consume，不能由此宣称 C2/C3
-或 Principal 已上线。
+因此这是 private API 的向后兼容加法，公开 `channel-api/v1` 不 bump，web 仓无字段或部署义务。C1
+tolerate 与 C2 emit 均已完成。`896c582d` 通过 C2 定向 **104 passed**、独立兼容 **153 passed**、安全
+扫描 **0 findings** 和完整门禁；重启后的两个飞书 worker connected，真实消息记录安全结构并由 private
+API HTTP 200 完成。resolver 仍不 consume、`principal_id=None`，Canvas 为 `user_id=""`、
+`exp_user_id=null` 且 10 张 EIM sidecar 零写入；不能由此宣称 C3、Contact/I3 consume、数据库映射或
+Principal 已上线。
 
 ---
 
@@ -413,3 +417,4 @@ JSON Schema（`config_schema`）仅用于服务端请求校验与 OpenAPI，**�
 | 2026-08-06 | v1（消费侧，线格未变） | 前端接上了 `POST /{id}/verify`（CHN-O13）：五个错误码进 `CHANNEL_ERROR_CODES` + 两份 locale，编辑抽屉页脚出现「测试连接」。§1 的「尚未接入」随之改成 `channelAPI.verify`。契约本身一个字节没动。前端多了一个纯函数 `channelVerifyFailure`，把 `CHANNEL_CREDENTIAL_REJECTED` 与 `CHANNEL_VERIFICATION_UNAVAILABLE` 分成两种结局并由测试钉住——§1 里「必须分开渲染」那条从此有断言撑着，不只是一句叮嘱 | web `ea0e5af` |
 | 2026-08-10 | v1（公开 manifest 加法 + 私有端点加法，不 bump） | Provider capabilities 增加渐进式、交互、取消、反馈与 threading 声明；新增 generation-scoped `execution-capabilities` 私有 preflight。旧前端忽略 manifest 新键；旧 API 时新 worker 降级为 buffered/无操作，不修改 `RuntimeBindingConfig` 或 execution SSE wire（EIM-U11 / CHN-X13） | 本次提交 |
 | 2026-08-13 | v1（仅 private command tolerate，不 bump） | `ChannelActor` 可选接受有界、extra-forbid 的 `ExternalIdentityAssertion`（EIM-C1 / CHN-X5）；legacy 三字段仍必填且旧 dump 不新增 null。隔离等价完整 `make verify` 与 C1 定向全绿；CHN-O15 恢复后，新 API smoke 及 C1 前 producer 等价 legacy-shape 飞书活体均通过。worker 是恢复后新进程，不宣称旧 PID 跨版本；生产 emitter 在 C1 零 diff。活体仍未 emit identity，resolver 未 consume，公开 Channel API 与 web 契约零变化 | `536a1ea5` |
+| 2026-08-13 | v1（仅 private command emit，不 bump） | 飞书 worker 以 transport-neutral、冻结且 repr 脱敏的 DTO emit header tenant + open ID + 所有存在的 user/union ID；可选 sender tenant/app 本地核对，app 不进入 assertion。Bridge/regenerate/runtime client 透传，legacy 三字段和 identity 缺失线格不变（EIM-C2 / CHN-X6）。重启后的真实飞书消息出现安全结构日志并由 private API HTTP 200 完成；resolver 未 consume、Principal 为空、identity sidecar 零写入，公开 Channel API 与 web 契约零变化 | `896c582d` |

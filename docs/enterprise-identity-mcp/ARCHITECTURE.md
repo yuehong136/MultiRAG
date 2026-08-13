@@ -75,15 +75,20 @@ Progressive reply adapter
 ReplySession 状态。该体验链不依赖 transport 从 `lark-oapi.ws.Client` 迁移到 `lark-channel-sdk`，完整设计见
 [FEISHU_BOT_UX](FEISHU_BOT_UX.md)。
 
-EIM-C1 / CHN-X5 已在 Channel Execution 的 private consumer 上增加可选
-`ExternalIdentityAssertion`，形成有意的兼容半态：旧 `provider/subject/conversation` 仍必填且 worker
-仍只发送旧形状；新 assertion 缺失时序列化线格不新增 null 字段。API 会拒绝重复 kind、Provider
-不一致以及 `tenant_id/principal_id/app_id/provider_account_key/role/scopes/token` 等 authority
-夹带，但 execution resolver 暂不读取合法 assertion。C1 的 clean-tree 等价完整门禁与定向测试全绿；
-EIM-I2.2 / CHN-O15 恢复后，新 API smoke 与一条 C1 前 producer 等价的 legacy-shape 飞书活体均通过。
-恢复后 worker 是新进程，不是旧 PID 跨版本存活；C1 对生产 emitter 文件零 diff。C2 emit 已进入进行中
-但尚无 emit 证据，C3 verified consume 和 C4 legacy remove 均未发生；公开 `channel-api/v1` 不受这条
-private 加法影响。因此本段描述的是已部署的 tolerate 边界，不是已部署身份链。
+EIM-C1 / CHN-X5 已让 Channel Execution private consumer tolerate 可选 `ExternalIdentityAssertion`；
+EIM-C2 / CHN-X6 又让飞书 producer emit 对应的 transport-neutral `IncomingIdentityAssertion`。飞书
+adapter 要求事件 header tenant 与 sender open ID，保留存在的 user/union ID；可选 sender tenant 必须
+匹配 header tenant，可选 header app 只与本地配置账户核对且不进入 assertion。Bridge、regenerate 与
+runtime client 透传同一对象，legacy `provider/subject/conversation` 仍必填，subject 保持 open ID，无
+assertion 的序列化线格不新增 null。API 继续拒绝重复 kind、Provider 不一致以及
+`tenant_id/principal_id/app_id/provider_account_key/role/scopes/token` 等 authority 夹带。
+
+`896c582d` 的定向、兼容、完整门禁与安全扫描均通过；supervisor/worker 重启后，真实飞书消息出现
+identity/tenant presence、三种 identifier kind 与 count 的脱敏结构日志，并由 private API HTTP 200 完成
+执行。execution resolver 仍不读取合法 assertion，Canvas 仍为 `user_id=""`、`exp_user_id=null`，10 张
+EIM sidecar 零写入。
+C3 verified consume 和 C4 legacy remove 均未发生；公开 `channel-api/v1` 不受这条 private 加法影响。
+因此这里描述的是已部署的 tolerate + emit 边界，不是已部署的身份解析或 Principal 链。
 
 #### Channel control/runtime
 
@@ -300,7 +305,7 @@ service 的 `build_server()` 不自行决定 auth，保持 mount/proxy 等价。
 
 ---
 
-## 3. 首次私聊：JIT 身份解析（I3/I4/I6 已有核心，C1→C2→C3→P2 接线仍是目标）
+## 3. 首次私聊：JIT 身份解析（I3/I4/I6 与 C1/C2 已有，C3→P2 接线仍是目标）
 
 ```mermaid
 sequenceDiagram
@@ -350,12 +355,13 @@ sequenceDiagram
 - I6 不消费 `employee_no` 或写 EnterpriseSubject；I5 尚未实现。enterprise subject 缺失时，高风险
   MCP 仍一律拒绝。
 
-截至 EIM-I6 完成，图中已有 `ProviderContext/AliasKey`、单 SQL snapshot、携 policy revision
+截至 EIM-C2 完成，图中已有 `ProviderContext/AliasKey`、单 SQL snapshot、携 policy revision
 的三态 plan、Auth V3 -> Tenant V2 -> Contact V3 Provider proof、权威 policy/link/event schema、三种
 原子 provisioning transaction 与 Principal builder。I4.1 的 production adapter live sandbox 与全量
-门禁已收口；I6 完整门禁也已全绿。C1 已完成并通过 C1 前 producer 等价 legacy-shape 飞书活体；
-C2 已进入进行中，但 worker 尚无 structured identity emit 证据，resolver 也未 consume。只有 C2
-完成后才能进入 C3，之后 P2 才传播 Principal。所以不能跳到 C3，也不能宣称飞书身份端到端已上线。
+门禁已收口；I6 完整门禁也已全绿。C1 tolerate 与 C2 emit 均已完成真实飞书活体，但 resolver 仍不
+consume assertion、`principal_id=None`，Contact/I3/I6 没有从消息执行链接线，identity sidecar 也无写入。
+下一条是 C3 verified consume，之后 P2 才传播 Principal；不能把 C2 的 structured transport 描述为
+飞书身份端到端已上线。
 
 ---
 

@@ -333,8 +333,9 @@ approved_at: <时间>
 本节是 I4/I6/C3 的联调清单，**不是 EIM-I3 或 EIM-I6 单独可执行的 Channel 能力**。I3 不持有飞书
 SDK/Secret，不调用 Contact，不创建 `User/UserTenant`，也不返回 Principal。I4.1 修正后的
 production adapter sandbox 与 I4.1 全量门禁已完成；I6 的 policy/link/JIT 写事务与完整门禁也已完成，
-但 C1/C2 structured assertion 与 C3/P1 组装仍未实现。只有这些依赖全部满足后，才能按本节宣称消息到
-Principal 的端到端结果。
+C1 tolerate 与 C2 structured assertion emit 也已完成真实消息验证，但 C3 尚未把 assertion 交给
+IdentityService/Contact/I6，也未用 P1 builder 构造 Principal。只有 C3/P1 组装完成后，才能按本节宣称
+消息到 Principal 的端到端结果；C2 期间 10 张 identity sidecar 保持零写入是预期边界。
 
 使用一个普通员工测试账号和一个管理员控制账号，执行：
 

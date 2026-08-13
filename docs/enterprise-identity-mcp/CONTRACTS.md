@@ -46,10 +46,10 @@ resolver 返回值都不能选择/覆盖目标 `tenant_id`。未来集团级多 
 
 ## 2. Channel 私有输入契约
 
-### 2.1 当前 C1 tolerate DTO 与最终 DTO
+### 2.1 当前 C1 tolerate + C2 emit DTO 与最终 DTO
 
-EIM-C1 / CHN-X5 先只改变 private execution API 的消费侧。当前源码接受下面的兼容形状；
-`provider/subject/conversation` 仍全部必填，`identity` 只是可选的不可信材料：
+EIM-C1 / CHN-X5 先改变 private execution API 的消费侧，EIM-C2 / CHN-X6 再让飞书 worker 发送同一
+形状。`provider/subject/conversation` 仍全部必填，`identity` 仍是不可信材料：
 
 ```python
 from typing import Literal
@@ -86,10 +86,17 @@ class ChannelActor(BaseModel):
     )
 ```
 
-`exclude_if` 是 C1 的 wire 兼容闸门：旧 actor 做 `model_dump(mode="json")` 时不新增
-`"identity": null`。当前 `api/channels/runtime_client.py` 仍只发送旧三字段；execution resolver
+`exclude_if` 是 C1/C2 的 wire 兼容闸门：旧 actor 做 `model_dump(mode="json")` 时不新增
+`"identity": null`，runtime client 收到 `identity=None` 时仍产生旧请求字节。Channel transport 内使用
+冻结、脱敏 repr 的 `IncomingIdentityAssertion/IncomingIdentityIdentifier`；飞书规范化后由 Bridge
+传给 runtime client，regenerate 也保留原 assertion，再映射为上面的 private DTO。execution resolver
 只校验 actor provider 与服务端 binding provider 一致，不读取 `identity`，也不据此改写 Tenant、目标、
-session 或 Principal。C2 才允许 worker emit，C3 才允许经 IdentityService 验证后 consume。
+session 或 Principal。C3 才允许经 IdentityService 验证后 consume。
+
+飞书 C2 的 Provider-specific 约束比通用 DTO 更窄：事件 header `tenant_key` 和 sender `open_id` 必填，
+存在的 `user_id/union_id` 全部按 kind 保留；sender tenant 有值时必须匹配 header tenant。header app
+有值时只与 worker 本地配置账户核对，既不进入 assertion，也不替代后续服务端 Provider Account
+ownership。legacy `subject` 固定继续使用同一个 `open_id`，`conversation` 继续使用 chat ID。
 
 C4 完成、所有 runner 浸泡并具备部署证据后，目标形状才删除 legacy `subject`，收敛为：
 
@@ -148,12 +155,13 @@ class ChannelActor(BaseModel):
 
 每一步是独立 PR/任务，映射的 `CHN-*` 见 [ROADMAP](ROADMAP.md)。
 
-截至 2026-08-13，C1 已完成：以 `HEAD a0581f2f` 为基线、只应用 C1 13 条路径的隔离等价完整
-`make verify` 与 C1 三文件定向全绿。CHN-O15 恢复后，新 API smoke 全绿，一条 C1 前 producer 等价的
-legacy-shape 飞书请求被新 API 接受并完整执行。恢复后 worker 是新进程，并非旧 PID 跨版本存活；
-C1 对生产 emitter 文件零 diff，因此该活体证明旧线格与新 consumer 兼容。C2 已进入进行中但尚无
-structured identity emit 证据；resolver 未 consume，Principal 未提升，仍不得把可解析的 assertion
-描述为已验证身份或已上线 Principal。
+截至 2026-08-13，C1 tolerate 与 C2 emit 均已完成。C2 提交 `896c582d` 的定向 **104 passed in
+2.03s**、独立兼容矩阵 **153 passed**、安全扫描 **0 findings**；完整 `make verify` 为 8 条 import
+contracts、mypy 86 source files、unit **2265 passed in 37.20s**，smoke 六组件全绿。supervisor 重启后
+两个飞书 worker 均 connected；真实消息只记录 identity/tenant 是否存在、identifier kinds/count 的
+脱敏结构，随后 private execution HTTP 200 并完成。resolver 未 consume，Canvas 仍为 `user_id=""`、
+`exp_user_id=null`，10 张 EIM sidecar 零写入；不得把已 emit 的 assertion 描述为已验证身份、数据库映射
+或已上线 Principal。
 
 ### 2.4 Channel 交互契约的所有权
 
