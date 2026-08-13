@@ -25,6 +25,7 @@ from api.db.services.user_service import UserService
 
 _USER_ACCOUNT_REVISION = "7c8d9e0f1a2b"
 _PRE_USER_ACCOUNT_REVISION = "e4f6a8b0c2d4"
+_NON_SECRET_PLACEHOLDER = "x"
 
 
 @pytest.fixture
@@ -252,7 +253,7 @@ def test_fresh_install_supports_multiple_external_users_without_email(
             assert local_user.password is None
 
         invalid_external = _external_values("external-with-password")
-        invalid_external["password"] = "must-not-be-stored"
+        invalid_external["password"] = _NON_SECRET_PLACEHOLDER
         savepoint = connection.begin_nested()
         try:
             with pytest.raises(IntegrityError):
