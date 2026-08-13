@@ -22,6 +22,8 @@ from api.channels.binding_bridge import BindingBridge
 from api.channels.core.base import (
     Channel,
     ChannelAction,
+    IncomingIdentityAssertion,
+    IncomingIdentityIdentifier,
     IncomingMessage,
     OutgoingMessage,
     ReplyContext,
@@ -222,6 +224,7 @@ def _message(
     sender_type: str = "user",
     message_type: str = "text",
     operation: Literal["message", "regenerate"] = "message",
+    identity: IncomingIdentityAssertion | None = None,
 ) -> IncomingMessage:
     return IncomingMessage(
         channel="feishu",
@@ -234,6 +237,7 @@ def _message(
         message_type=message_type,
         sender_type=sender_type,
         operation=operation,
+        identity=identity,
     )
 
 
@@ -278,6 +282,7 @@ async def test_bridge_passes_only_transport_command_fields_to_binding_executor()
             "provider": "feishu",
             "subject": "ou-user",
             "conversation": "oc-chat",
+            "identity": None,
             "operation": "message",
         }
     ]
@@ -298,6 +303,28 @@ async def test_bridge_passes_only_transport_command_fields_to_binding_executor()
     assert "oc-chat" not in expected_conversation_key
     assert channel.sent == [OutgoingMessage(chat_id="oc-chat", content="managed answer", reply_to_message_id="message-1")]
     assert state.status == {"message-1": "replied"}
+
+
+@pytest.mark.asyncio
+async def test_bridge_passes_structured_identity_to_binding_executor() -> None:
+    identity = IncomingIdentityAssertion(
+        provider="feishu",
+        provider_tenant_key="tenant-sensitive",
+        identifiers=(
+            IncomingIdentityIdentifier(kind="open_id", value="open-sensitive"),
+            IncomingIdentityIdentifier(kind="user_id", value="user-sensitive"),
+            IncomingIdentityIdentifier(kind="union_id", value="union-sensitive"),
+        ),
+    )
+    executor = _Executor()
+
+    await _bridge(
+        channel=_Channel(),
+        state=_StateStore(),
+        executor=executor,
+    ).handle_message(_message(identity=identity))
+
+    assert executor.calls[0]["identity"] is identity
 
 
 @pytest.mark.asyncio
@@ -886,12 +913,17 @@ async def test_regenerate_reenters_scheduler_with_fresh_execution_identity() -> 
     channel = _LifecycleChannel()
     bridge = _bridge(channel=channel, state=_StateStore(), executor=_Executor())
     scheduled: list[IncomingMessage] = []
+    identity = IncomingIdentityAssertion(
+        provider="feishu",
+        provider_tenant_key="tenant-sensitive",
+        identifiers=(IncomingIdentityIdentifier(kind="open_id", value="open-sensitive"),),
+    )
 
     async def schedule(message: IncomingMessage) -> None:
         scheduled.append(message)
 
     bridge.set_message_scheduler(schedule)
-    await bridge.handle_message(_message(content="original question"))
+    await bridge.handle_message(_message(content="original question", identity=identity))
     regenerate_id = channel.contexts[0].actions.regenerate
 
     response = await bridge.handle_action(_action(regenerate_id, event_id="regenerate-event-1"))
@@ -904,6 +936,7 @@ async def test_regenerate_reenters_scheduler_with_fresh_execution_identity() -> 
     assert regenerated.event_id == "regenerate-event-1"
     assert regenerated.execution_id == "action:regenerate-event-1"
     assert regenerated.content == "original question"
+    assert regenerated.identity is identity
     assert regenerated.operation == "regenerate"
 
 

@@ -1,6 +1,9 @@
 import asyncio
+import hashlib
 import json
+import logging
 import threading
+from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
 from typing import Any
 
@@ -10,6 +13,8 @@ from api.channel_capabilities import EffectiveReplyCapabilities
 from api.channels.core.base import (
     ChannelAction,
     ChannelActionResponse,
+    IncomingIdentityAssertion,
+    IncomingIdentityIdentifier,
     IncomingMessage,
     OutgoingMessage,
     ReplyContext,
@@ -179,17 +184,29 @@ def _event(
     *,
     content: str = '{"text":"hello"}',
     sender_type: str = "user",
+    header_tenant_key: Any = "tenant-key",
+    sender_tenant_key: Any = "tenant-key",
+    app_id: Any = "app-id",
+    open_id: Any = "ou-user",
+    user_id: Any = "user-id",
+    union_id: Any = "on-user",
 ) -> Any:
     return SimpleNamespace(
-        header=SimpleNamespace(event_id="evt-1", create_time="1720000000000"),
+        header=SimpleNamespace(
+            event_id="evt-1",
+            create_time="1720000000000",
+            tenant_key=header_tenant_key,
+            app_id=app_id,
+        ),
         event=SimpleNamespace(
             event_id="ignored-event-id",
             sender=SimpleNamespace(
                 sender_type=sender_type,
+                tenant_key=sender_tenant_key,
                 sender_id=SimpleNamespace(
-                    open_id="ou-user",
-                    union_id="on-user",
-                    user_id="user-id",
+                    open_id=open_id,
+                    union_id=union_id,
+                    user_id=user_id,
                 ),
             ),
             message=SimpleNamespace(
@@ -257,6 +274,15 @@ def test_normalize_maps_feishu_message_envelope() -> None:
         message_id="om-message",
         sender_id="ou-user",
         content="hello",
+        identity=IncomingIdentityAssertion(
+            provider="feishu",
+            provider_tenant_key="tenant-key",
+            identifiers=(
+                IncomingIdentityIdentifier(kind="open_id", value="ou-user"),
+                IncomingIdentityIdentifier(kind="user_id", value="user-id"),
+                IncomingIdentityIdentifier(kind="union_id", value="on-user"),
+            ),
+        ),
         message_type="text",
         chat_type="p2p",
         sender_type="user",
@@ -266,6 +292,160 @@ def test_normalize_maps_feishu_message_envelope() -> None:
     )
     assert message.text == "hello"
     assert message.raw is None
+
+
+def test_normalized_identity_is_frozen_and_redacts_provider_values() -> None:
+    channel, _ = _channel()
+
+    identity = channel._normalize(_event()).identity
+
+    assert identity is not None
+    rendered = repr(identity)
+    assert "tenant-key" not in rendered
+    assert "ou-user" not in rendered
+    assert "user-id" not in rendered
+    assert "on-user" not in rendered
+    assert "app-id" not in rendered
+    assert "ou-user" not in repr(identity.identifiers[0])
+    with pytest.raises(FrozenInstanceError):
+        identity.provider = "other"
+
+
+@pytest.mark.parametrize(
+    ("kind", "value"),
+    [
+        (None, "external-id"),
+        (1, "external-id"),
+        ("open_id", None),
+        ("open_id", 1),
+        (" open_id", "external-id"),
+        ("open_id", " external-id"),
+    ],
+)
+def test_incoming_identity_identifier_rejects_malformed_values(kind: Any, value: Any) -> None:
+    with pytest.raises(ValueError, match="identifier is invalid"):
+        IncomingIdentityIdentifier(kind=kind, value=value)
+
+
+@pytest.mark.parametrize(
+    ("provider", "tenant_key", "identifiers"),
+    [
+        (None, "tenant-key", (IncomingIdentityIdentifier("open_id", "external-id"),)),
+        (1, "tenant-key", (IncomingIdentityIdentifier("open_id", "external-id"),)),
+        ("feishu", 1, (IncomingIdentityIdentifier("open_id", "external-id"),)),
+        ("feishu", "tenant-key", [IncomingIdentityIdentifier("open_id", "external-id")]),
+        ("feishu", "tenant-key", (object(),)),
+    ],
+)
+def test_incoming_identity_assertion_rejects_malformed_types(
+    provider: Any,
+    tenant_key: Any,
+    identifiers: Any,
+) -> None:
+    with pytest.raises(ValueError, match="assertion is invalid"):
+        IncomingIdentityAssertion(
+            provider=provider,
+            provider_tenant_key=tenant_key,
+            identifiers=identifiers,
+        )
+
+
+def test_incoming_identity_assertion_rejects_duplicate_identifier_kinds() -> None:
+    with pytest.raises(ValueError, match="identifier kinds must be unique"):
+        IncomingIdentityAssertion(
+            provider="feishu",
+            provider_tenant_key="tenant-key",
+            identifiers=(
+                IncomingIdentityIdentifier("open_id", "external-id-1"),
+                IncomingIdentityIdentifier("open_id", "external-id-2"),
+            ),
+        )
+
+
+@pytest.mark.parametrize("tenant_key", [None, "", " tenant-key"])
+def test_normalize_rejects_missing_or_malformed_header_tenant(tenant_key: Any) -> None:
+    channel, _ = _channel()
+
+    with pytest.raises(ValueError, match="identity field"):
+        channel._normalize(_event(header_tenant_key=tenant_key))
+
+
+@pytest.mark.parametrize("open_id", [None, "", " ou-user"])
+def test_normalize_requires_canonical_open_id(open_id: Any) -> None:
+    channel, _ = _channel()
+
+    with pytest.raises(ValueError, match="identity field"):
+        channel._normalize(_event(open_id=open_id))
+
+
+def test_normalize_rejects_sender_tenant_conflict() -> None:
+    channel, _ = _channel()
+
+    with pytest.raises(ValueError, match="sender tenant"):
+        channel._normalize(_event(sender_tenant_key="other-tenant"))
+
+
+def test_normalize_rejects_event_app_conflict_without_propagating_app_id() -> None:
+    channel, _ = _channel()
+
+    with pytest.raises(ValueError, match="event app"):
+        channel._normalize(_event(app_id="other-app"))
+
+    identity = channel._normalize(_event()).identity
+    assert identity is not None
+    assert not hasattr(identity, "app_id")
+
+
+def test_normalize_accepts_absent_optional_sender_identity_fields() -> None:
+    channel, _ = _channel()
+
+    message = channel._normalize(
+        _event(
+            sender_tenant_key=None,
+            app_id=None,
+            user_id=None,
+            union_id=None,
+        )
+    )
+
+    assert message.identity == IncomingIdentityAssertion(
+        provider="feishu",
+        provider_tenant_key="tenant-key",
+        identifiers=(IncomingIdentityIdentifier(kind="open_id", value="ou-user"),),
+    )
+    assert message.sender_id == "ou-user"
+    assert message.raw is None
+
+
+def test_message_callback_logs_identity_structure_without_identity_values(caplog: pytest.LogCaptureFixture) -> None:
+    channel, _ = _channel()
+    identity_values = (
+        "tenant-secret-sentinel",
+        "open-secret-sentinel",
+        "user-secret-sentinel",
+        "union-secret-sentinel",
+    )
+
+    with caplog.at_level(logging.INFO, logger="api.channels.feishu.channel"):
+        channel._on_message_receive(
+            _event(
+                header_tenant_key=identity_values[0],
+                sender_tenant_key=identity_values[0],
+                open_id=identity_values[1],
+                user_id=identity_values[2],
+                union_id=identity_values[3],
+            )
+        )
+
+    assert "channel_event=identity_normalized" in caplog.text
+    assert "identity_present=true" in caplog.text
+    assert "tenant_key_present=true" in caplog.text
+    assert "identifier_kinds=open_id,user_id,union_id" in caplog.text
+    assert "identifier_count=3" in caplog.text
+    assert "app-id" not in caplog.text
+    for value in identity_values:
+        assert value not in caplog.text
+        assert hashlib.sha256(value.encode()).hexdigest()[:16] not in caplog.text
 
 
 def test_incoming_message_accepts_upstream_constructor_contract() -> None:
@@ -286,6 +466,7 @@ def test_incoming_message_accepts_upstream_constructor_contract() -> None:
     assert message.content == "hello"
     assert message.message_type == "text"
     assert message.raw is raw
+    assert message.identity is None
 
 
 def test_normalize_preserves_non_user_sender_type() -> None:

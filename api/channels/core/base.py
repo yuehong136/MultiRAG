@@ -20,7 +20,7 @@ import hashlib
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, ClassVar, Literal, Protocol, runtime_checkable
 
@@ -39,6 +39,90 @@ _DEFAULT_REPLY_CAPABILITIES = EffectiveReplyCapabilities(
 
 def _short_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class IncomingIdentityIdentifier:
+    """One bounded external identifier extracted by a Channel adapter."""
+
+    kind: str
+    value: str = field(repr=False)
+
+    def __init__(self, kind: Any, value: Any) -> None:
+        # ``Any`` is intentional at this untrusted transport boundary. Validate
+        # before assigning so runtime type instrumentation cannot turn malformed
+        # SDK data into a different exception class.
+        if type(kind) is not str or type(value) is not str:
+            raise ValueError("incoming identity identifier is invalid")
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "value", value)
+        self.__post_init__()
+
+    def __post_init__(self) -> None:
+        if type(self.kind) is not str or type(self.value) is not str:
+            raise ValueError("incoming identity identifier is invalid")
+        if (
+            not self.kind
+            or len(self.kind) > 64
+            or not self.kind.strip()
+            or self.kind != self.kind.strip()
+            or not self.value
+            or len(self.value) > 255
+            or not self.value.strip()
+            or self.value != self.value.strip()
+        ):
+            raise ValueError("incoming identity identifier is invalid")
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class IncomingIdentityAssertion:
+    """Provider identity material normalized by a Channel but not yet trusted."""
+
+    provider: str
+    provider_tenant_key: str | None = field(default=None, repr=False)
+    identifiers: tuple[IncomingIdentityIdentifier, ...] = field(default=(), repr=False)
+
+    def __init__(
+        self,
+        provider: Any,
+        provider_tenant_key: Any = None,
+        identifiers: Any = (),
+    ) -> None:
+        if (
+            type(provider) is not str
+            or (provider_tenant_key is not None and type(provider_tenant_key) is not str)
+            or type(identifiers) is not tuple
+            or any(type(identifier) is not IncomingIdentityIdentifier for identifier in identifiers)
+        ):
+            raise ValueError("incoming identity assertion is invalid")
+        object.__setattr__(self, "provider", provider)
+        object.__setattr__(self, "provider_tenant_key", provider_tenant_key)
+        object.__setattr__(self, "identifiers", identifiers)
+        self.__post_init__()
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.provider) is not str
+            or (self.provider_tenant_key is not None and type(self.provider_tenant_key) is not str)
+            or type(self.identifiers) is not tuple
+            or any(type(identifier) is not IncomingIdentityIdentifier for identifier in self.identifiers)
+        ):
+            raise ValueError("incoming identity assertion is invalid")
+        if (
+            not self.provider
+            or len(self.provider) > 64
+            or not self.provider.strip()
+            or self.provider != self.provider.strip()
+            or (
+                self.provider_tenant_key is not None
+                and (not self.provider_tenant_key or len(self.provider_tenant_key) > 255 or not self.provider_tenant_key.strip() or self.provider_tenant_key != self.provider_tenant_key.strip())
+            )
+            or not 1 <= len(self.identifiers) <= 8
+        ):
+            raise ValueError("incoming identity assertion is invalid")
+        kinds = [identifier.kind for identifier in self.identifiers]
+        if len(kinds) != len(set(kinds)):
+            raise ValueError("incoming identity identifier kinds must be unique")
 
 
 @dataclass(slots=True, init=False)
@@ -61,6 +145,7 @@ class IncomingMessage:
     sender_id: str
     content: str
     raw: Any = None
+    identity: IncomingIdentityAssertion | None = None
     message_type: str = "text"
     sender_type: str = ""
     event_id: str = ""
@@ -80,6 +165,7 @@ class IncomingMessage:
         raw: Any = None,
         *,
         content: str | None = None,
+        identity: IncomingIdentityAssertion | None = None,
         message_type: str = "text",
         sender_type: str = "",
         event_id: str = "",
@@ -103,6 +189,7 @@ class IncomingMessage:
         self.sender_id = sender_id
         self.content = value
         self.raw = raw
+        self.identity = identity
         self.message_type = message_type
         self.sender_type = sender_type
         self.event_id = event_id

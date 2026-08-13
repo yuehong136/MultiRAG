@@ -15,6 +15,7 @@ import httpx
 from api.channel_capabilities import EffectiveReplyCapabilities, parse_effective_reply_capabilities
 from api.channel_runtime.schemas import DesiredRuntime, DesiredRuntimeList, RuntimeBindingConfig, RuntimeState
 from api.channels.agent_bridge import AgentExecutionError, AgentReply
+from api.channels.core.base import IncomingIdentityAssertion
 from api.channels.core.reply import StreamingReasoningFilter, strip_reasoning, truncate_answer
 from api.channels.execution_events import (
     BindingExecutionEvent,
@@ -225,6 +226,7 @@ class MultiRAGBindingExecutionClient:
         provider: str,
         subject: str,
         conversation: str,
+        identity: IncomingIdentityAssertion | None = None,
     ) -> AgentReply:
         """Compatibility facade that aggregates the canonical event stream."""
 
@@ -238,6 +240,7 @@ class MultiRAGBindingExecutionClient:
             provider=provider,
             subject=subject,
             conversation=conversation,
+            identity=identity,
         ):
             if isinstance(event, MessageDeltaEvent):
                 chunks.append(event.content)
@@ -266,6 +269,7 @@ class MultiRAGBindingExecutionClient:
         provider: str,
         subject: str,
         conversation: str,
+        identity: IncomingIdentityAssertion | None = None,
         operation: Literal["message", "regenerate"] = "message",
     ) -> AsyncGenerator[BindingExecutionEvent, None]:
         """Execute a binding and yield its only trusted, user-visible event stream.
@@ -275,15 +279,31 @@ class MultiRAGBindingExecutionClient:
         private SSE response deterministically.
         """
 
-        body = {
+        actor: dict[str, object] = {
+            "provider": provider,
+            "subject": subject,
+            "conversation": conversation,
+        }
+        if identity is not None:
+            identity_payload: dict[str, object] = {
+                "provider": identity.provider,
+                "identifiers": [
+                    {
+                        "kind": identifier.kind,
+                        "value": identifier.value,
+                    }
+                    for identifier in identity.identifiers
+                ],
+            }
+            if identity.provider_tenant_key is not None:
+                identity_payload["provider_tenant_key"] = identity.provider_tenant_key
+            actor["identity"] = identity_payload
+
+        body: dict[str, object] = {
             "event_id": event_id,
             "conversation_key": conversation_key,
             "message": {"type": "text", "content": question},
-            "actor": {
-                "provider": provider,
-                "subject": subject,
-                "conversation": conversation,
-            },
+            "actor": actor,
         }
         if operation == "regenerate" or event_id.startswith("action:"):
             body["operation"] = operation

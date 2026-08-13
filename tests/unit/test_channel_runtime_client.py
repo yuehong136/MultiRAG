@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from api.channel_runtime.schemas import RuntimeBindingConfig, RuntimeCredential
 from api.channels.agent_bridge import AgentExecutionError, AgentReply
+from api.channels.core.base import IncomingIdentityAssertion, IncomingIdentityIdentifier
 from api.channels.core.reply import truncate_answer
 from api.channels.execution_events import ExecutionFailedEvent, MessageCompletedEvent, MessageDeltaEvent
 from api.channels.runtime_client import ChannelRuntimeClient, ChannelRuntimeClientError, MultiRAGBindingExecutionClient
@@ -253,6 +254,7 @@ async def test_legacy_binding_execution_payload_is_byte_for_byte_unchanged() -> 
                 provider="feishu",
                 subject="ou-legacy",
                 conversation="oc-legacy",
+                identity=None,
             )
         ]
 
@@ -262,6 +264,73 @@ async def test_legacy_binding_execution_payload_is_byte_for_byte_unchanged() -> 
         b'"message":{"type":"text","content":"legacy question"},'
         b'"actor":{"provider":"feishu","subject":"ou-legacy","conversation":"oc-legacy"}}'
     ]
+
+
+@pytest.mark.asyncio
+async def test_binding_execution_maps_structured_identity_without_logging_values(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sensitive_values = (
+        "tenant-sensitive",
+        "open-sensitive",
+        "user-sensitive",
+        "union-sensitive",
+    )
+    identity = IncomingIdentityAssertion(
+        provider="feishu",
+        provider_tenant_key=sensitive_values[0],
+        identifiers=(
+            IncomingIdentityIdentifier(kind="open_id", value=sensitive_values[1]),
+            IncomingIdentityIdentifier(kind="user_id", value=sensitive_values[2]),
+            IncomingIdentityIdentifier(kind="union_id", value=sensitive_values[3]),
+        ),
+    )
+    captured: list[dict[str, object]] = []
+    sse = 'data:{"event":"message_delta","content":"answer","session_id":"session-server"}\n\ndata:{"event":"message_completed","session_id":"session-server"}\n\ndata:[DONE]\n\n'
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+
+    caplog.set_level(logging.DEBUG)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = MultiRAGBindingExecutionClient(
+            base_url="http://multirag.local",
+            binding_id="binding-1",
+            binding_generation=7,
+            api_token="runtime-token",
+            client=http_client,
+        )
+        events = [
+            event
+            async for event in client.stream(
+                question="identity question",
+                event_id="identity-event",
+                conversation_key="identity-conversation",
+                provider="feishu",
+                subject="legacy-subject",
+                conversation="legacy-conversation",
+                identity=identity,
+            )
+        ]
+
+    assert events[-1] == MessageCompletedEvent(session_id="session-server")
+    assert captured[0]["actor"] == {
+        "provider": "feishu",
+        "subject": "legacy-subject",
+        "conversation": "legacy-conversation",
+        "identity": {
+            "provider": "feishu",
+            "provider_tenant_key": "tenant-sensitive",
+            "identifiers": [
+                {"kind": "open_id", "value": "open-sensitive"},
+                {"kind": "user_id", "value": "user-sensitive"},
+                {"kind": "union_id", "value": "union-sensitive"},
+            ],
+        },
+    }
+    for sensitive in sensitive_values:
+        assert sensitive not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -457,6 +526,7 @@ _STREAM_ARGUMENTS = {
     "provider": "feishu",
     "subject": "ou-user",
     "conversation": "oc-chat",
+    "identity": None,
 }
 
 

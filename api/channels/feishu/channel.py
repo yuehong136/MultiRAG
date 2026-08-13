@@ -32,6 +32,8 @@ from ..core.base import (
     Channel,
     ChannelAction,
     ChannelActionResponse,
+    IncomingIdentityAssertion,
+    IncomingIdentityIdentifier,
     IncomingMessage,
     OutgoingMessage,
     ReplyContext,
@@ -368,6 +370,23 @@ def _first_non_empty(*values: Any) -> str:
         if normalized:
             return normalized
     return ""
+
+
+def _optional_identity_text(value: Any) -> str | None:
+    """Normalize one SDK identity value without coercing malformed input."""
+
+    if value is None or value == "":
+        return None
+    if type(value) is not str or not value.strip() or value != value.strip():
+        raise ValueError("Feishu identity field is invalid")
+    return value
+
+
+def _required_identity_text(value: Any, *, field_name: str) -> str:
+    normalized = _optional_identity_text(value)
+    if normalized is None:
+        raise ValueError(f"Feishu identity field is missing: {field_name}")
+    return normalized
 
 
 class FeishuChannel(Channel):
@@ -795,6 +814,20 @@ class FeishuChannel(Channel):
 
         try:
             incoming = self._normalize(data)
+            identity = incoming.identity
+            identifier_kinds = "none"
+            identifier_count = 0
+            if identity is not None:
+                identifier_kinds = ",".join(identifier.kind for identifier in identity.identifiers)
+                identifier_count = len(identity.identifiers)
+            LOGGER.info(
+                "channel_event=identity_normalized channel=feishu account_id_hash=%s identity_present=%s tenant_key_present=%s identifier_kinds=%s identifier_count=%d result=ok",
+                _short_hash(self.account_id),
+                str(identity is not None).lower(),
+                str(identity is not None and identity.provider_tenant_key is not None).lower(),
+                identifier_kinds,
+                identifier_count,
+            )
             loop = self._loop
             if loop is None or loop.is_closed():
                 LOGGER.warning(
@@ -897,10 +930,34 @@ class FeishuChannel(Channel):
 
         sender = getattr(event, "sender", None)
         sender_ids = getattr(sender, "sender_id", None)
-        sender_id = _first_non_empty(
+        open_id = _required_identity_text(
             getattr(sender_ids, "open_id", None),
-            getattr(sender_ids, "union_id", None),
-            getattr(sender_ids, "user_id", None),
+            field_name="open_id",
+        )
+        user_id = _optional_identity_text(getattr(sender_ids, "user_id", None))
+        union_id = _optional_identity_text(getattr(sender_ids, "union_id", None))
+
+        header = getattr(data, "header", None)
+        provider_tenant_key = _required_identity_text(
+            getattr(header, "tenant_key", None),
+            field_name="tenant_key",
+        )
+        sender_tenant_key = _optional_identity_text(getattr(sender, "tenant_key", None))
+        if sender_tenant_key is not None and sender_tenant_key != provider_tenant_key:
+            raise ValueError("Feishu sender tenant does not match event tenant")
+        event_app_id = _optional_identity_text(getattr(header, "app_id", None))
+        if event_app_id is not None and event_app_id != self.account.app_id:
+            raise ValueError("Feishu event app does not match configured account")
+
+        identifiers = [IncomingIdentityIdentifier(kind="open_id", value=open_id)]
+        if user_id is not None:
+            identifiers.append(IncomingIdentityIdentifier(kind="user_id", value=user_id))
+        if union_id is not None:
+            identifiers.append(IncomingIdentityIdentifier(kind="union_id", value=union_id))
+        identity = IncomingIdentityAssertion(
+            provider=self.channel_id,
+            provider_tenant_key=provider_tenant_key,
+            identifiers=tuple(identifiers),
         )
 
         message_type = _string(getattr(message, "message_type", None))
@@ -914,7 +971,6 @@ class FeishuChannel(Channel):
             if isinstance(payload, dict) and isinstance(payload.get("text"), str):
                 content = payload["text"]
 
-        header = getattr(data, "header", None)
         message_id = _string(getattr(message, "message_id", None))
         event_id = _first_non_empty(
             getattr(header, "event_id", None),
@@ -931,8 +987,11 @@ class FeishuChannel(Channel):
             account_id=self.account_id,
             chat_id=_string(getattr(message, "chat_id", None)),
             message_id=message_id,
-            sender_id=sender_id,
+            # Keep the legacy subject stable while the structured identity is
+            # propagated independently through the execution boundary.
+            sender_id=open_id,
             content=content,
+            identity=identity,
             message_type=message_type,
             chat_type=_string(getattr(message, "chat_type", None)),
             sender_type=_string(getattr(sender, "sender_type", None)),

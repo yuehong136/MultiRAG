@@ -25,6 +25,7 @@ from api.channels.core.base import (
     Channel,
     ChannelAction,
     ChannelActionResponse,
+    IncomingIdentityAssertion,
     IncomingMessage,
     OutgoingMessage,
     ReplyActionIds,
@@ -69,6 +70,7 @@ class BindingExecutor(Protocol):
         provider: str,
         subject: str,
         conversation: str,
+        identity: IncomingIdentityAssertion | None = None,
         operation: Literal["message", "regenerate"] = "message",
     ) -> AsyncGenerator[BindingExecutionEvent, None]: ...
 
@@ -571,6 +573,7 @@ class BindingBridge:
                     provider=message.channel,
                     subject=message.sender_id,
                     conversation=message.chat_id,
+                    identity=message.identity,
                     operation=message.operation,
                 )
             ) as events:
@@ -845,6 +848,7 @@ class BindingBridge:
             message_id=source.message_id,
             sender_id=source.sender_id,
             content=source.content,
+            identity=source.identity,
             message_type=source.message_type,
             sender_type=source.sender_type,
             event_id=action.event_id,
