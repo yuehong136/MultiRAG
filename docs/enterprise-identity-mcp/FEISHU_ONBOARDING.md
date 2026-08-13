@@ -169,7 +169,8 @@ EIM-I6.1 的真实企业连接验收另只调用 Auth V3 + Tenant V2，不查询
 dry-run 均通过且证明属于同一外部企业。显式 apply 后 Provider Tenant/Account/Policy/Link 为
 **1/2/1/2**，两 account 均 healthy/revision 1，policy 为 `jit`、TTL 300、revision 1；两个 Channel
 各重放一次均零 action 且状态不变。六张用户身份 sidecar 均为零，`User/UserTenant` 未变化。这只
-证明企业连接 ownership 与配置落库，不证明 C3/X7 已把消息 assertion 解析为 Principal。
+证明 I6.1 当时的企业连接 ownership 与配置落库；后续 C3/X7 已另行完成消息 assertion 到 Principal
+owner 的部署 live，不能把 I6.1 的历史零写入当作当前消息路径状态。
 
 ---
 
@@ -184,14 +185,15 @@ dry-run 均通过且证明属于同一外部企业。显式 apply 后 Provider T
 | `tenant:tenant:readonly` | 获取企业基本信息 | Tenant V2 ownership 验证；缺失时 onboarding fail closed |
 | `im:message.p2p_msg:readonly` | 读取用户发给机器人的单聊消息 | 私聊消息事件 |
 | `im:message:send_as_bot` | 以应用身份发消息 | 回复用户和发送状态卡片 |
-| `contact:contact.base:readonly` | 获取通讯录基本信息 | Contact V3 API 和人员事件 |
+| `contact:contact.base:readonly` | 获取通讯录基本信息 | Contact V3 单人查询的基础访问；人员事件消费仍属于 EIM-I7 |
 | `contact:user.base:readonly` | 获取用户基本信息 | 姓名/头像等最小显示字段 |
 | `contact:user.employee_id:readonly` | 获取用户 user ID | 从 app-scoped open_id 得到 tenant-scoped user_id |
-| `contact:user.employee:readonly` | 获取用户受雇信息 | 用户 status、employee_no、employee_type；用于状态校验和原力工号映射 |
+| `contact:user.employee:readonly` | 获取用户受雇信息 | 用户 active/离职等 status；`employee_no` 仅为可选 proof 字段，I5 前不作为 C3 上线条件 |
 
-`contact:user.employee:readonly` 范围较宽。如果企业不允许，可评估更窄的
-`contact:user.employee_number:read` 只读工号，但仍必须找到一个受支持、可验证离职/冻结状态的
-来源；没有状态来源不能启用自动 JIT。
+`contact:user.employee:readonly` 范围较宽。如果企业不允许，应在当次飞书后台与官方用户字段文档中
+重新确认能提供 active/离职/冻结状态的更窄权限；没有可验证状态来源不能启用自动 JIT。只有 I5 或
+明确的企业主体消费者需要工号时，才另行评估 `contact:user.employee_number:read` 等工号权限；
+`employee_no` 缺失不阻断当前 C3 普通对话。
 
 官方来源：
 
@@ -296,18 +298,23 @@ Provider active 校验和 JIT `UserTenant(NORMAL)` 是 I6 固定安全不变量�
 | `contact.user.deleted_v3` | 员工离职，立即禁用 | EIM-I7 |
 | `contact.scope.updated_v3` | 应用通讯录范围变化，清缓存并重验 | EIM-I7 |
 
+当前 production handler 只把 `im.message.receive_v1` 作为身份消息入口；四个 Contact 事件仍属于尚未
+实现的 EIM-I7，当前 C3 上线不订阅它们。否则事件到达时没有 I7 的 receipt/CAS/invalidation consumer，
+不能把“后台已订阅”误当成离职或 scope 变更已经生效。
+
 飞书可能重复推送事件。消息以 `message_id` 去重；通讯录事件以 `event_id + event_type` 去重，
 同时数据库更新必须幂等。不要依赖“只会收到一次”。
 
-`contact.scope.updated_v3` 后，account control 必须以 CAS 单调推进 revision/scope marker；后续 read
+EIM-I7 实现 `contact.scope.updated_v3` 后，account control 必须以 CAS 单调推进 revision/scope marker；后续 read
 若发现 alias proof 早于 marker，只返回“需要 Provider 重验”，不能继续使用旧 link。新 proof
 `verified_at` 早于 marker 时写入拒绝，早于当前 alias proof 时也不能倒退已有时间。省略 event/scope
 时间表示保留旧值，不是清空；乱序旧事件不得回拨 marker。
 
 ### 卡片回调
 
-纯流式输出 EIM-U1 不需要 `card.action.trigger`。EIM-U4 的重新生成/反馈或 EIM-U7 的敏感确认
-上线时，才在“回调配置”中使用长连接订阅：
+纯流式输出 EIM-U1 不需要 `card.action.trigger`。EIM-U4 的重新生成/反馈已经上线；当前部署只要启用
+这些交互能力，就必须在“回调配置”中使用长连接订阅。仅明确关闭交互、只保留纯流式输出的部署可不
+订阅；未来 EIM-U7 的敏感确认也复用同一 callback：
 
 | Callback | 用途 |
 |---|---|
@@ -358,22 +365,29 @@ approved_at: <时间>
 身份能力**。I3 不持有飞书
 SDK/Secret，不调用 Contact，不创建 `User/UserTenant`，也不返回 Principal。I4.1 修正后的
 production adapter sandbox 与 I4.1 全量门禁已完成；I6 的 policy/link/JIT 写事务与完整门禁也已完成，
-C1 tolerate 与 C2 structured assertion emit 也已完成真实消息验证，但 C3 尚未把 assertion 交给
-IdentityService/Contact/I6，也未用 P1 builder 构造 Principal。只有 C3/P1 组装完成后，才能按本节宣称
-消息到 Principal 的端到端结果；C2 期间 10 张 identity sidecar 保持零写入是预期边界。
+C1 tolerate、C2 structured assertion emit 与 C3 verified consume 均已完成真实消息验证。C3 只把
+Principal 提升到 `TrustedChannelContext` 和 target/session owner；Agent/RAG/Memory/Workflow/MCP 的
+全链传播仍属于 P2，不能因本节通过就宣称动态 MCP 委托完成。
+
+当前脱敏 live 基线为：**2/2** account 有 alias 覆盖，四条 alias 收敛到一个 active ExternalIdentity
+和一个 canonical User；仅一条 valid NORMAL membership 与一条 BindingEvent；Canvas、Dialog 各一条
+本次 Principal owner 记录且空 owner 为 **0**；Redis completed/replied 存在、processing/failed 为 **0**。
 
 使用一个普通员工测试账号和一个管理员控制账号，执行：
 
 1. 普通员工给机器人发私聊。
 2. 记录脱敏 trace ID，不记录完整 open_id。
 3. 验证事件中能得到 `tenant_key/app_id/open_id`，有权限时也可能直接得到 `user_id`。
-4. 调用 `GET /open-apis/contact/v3/users/{open_id}?user_id_type=open_id`。
+4. 验证 production C3 链在 SDK callback 外通过 I4 调用
+   `GET /open-apis/contact/v3/users/{open_id}?user_id_type=open_id`；人工直调只用于权限诊断，不能替代
+   Channel execution、I6、final I3 与 P1 的端到端证据。
 5. 验证响应：
    - `user_id` 非空；
    - `status.is_activated=true`；
    - 未冻结、未离职、未主动退出；
    - 原力启用工号映射时 `employee_no` 非空。
-6. 再发一条消息，验证不再次调用 Contact API。
+6. 再发一条消息，验证 linked event 仍逻辑执行 I4；同 generation 的未过期 cache 命中时不再发起
+   外部 Contact 网络请求，并沿用原 proof time，不能伪造更晚验证时间。
 7. 模拟本地 identity cache 过期，验证只刷新一次且并发请求 single-flight。
 8. 使用范围外/冻结测试用户，验证 fail closed 且不创建 `UserTenant`。
 
@@ -440,11 +454,13 @@ INACTIVE       -> 禁止执行和新会话
       secrets env；repo、supervisor/worker 参数和日志均无副本。
 - [ ] 权限列表与本文必需 scope 对账，无多余高危权限。
 - [ ] 应用可用范围与通讯录数据范围已由管理员确认。
-- [ ] 消息和四个 Contact 事件已订阅并发布生效。
+- [ ] 当前 C3 只订阅并发布 `im.message.receive_v1`；四个 Contact 事件等待 EIM-I7 consumer 落地后再订阅。
 - [ ] `cardkit:card:write`、消息/reaction 权限已在测试租户实测，应用重新发布/安装。
-- [ ] card action 仅在 EIM-U4 或 EIM-U7 实际上线时订阅；纯流式输出不提前申请。
+- [ ] 当前启用 EIM-U4 重新生成/反馈时已订阅 `card.action.trigger`；明确关闭交互、只做纯流式输出时
+      才可不订阅。
 - [ ] 正常、范围外、冻结/离职测试账号行为符合预期。
-- [ ] `employee_no -> talent_id` 语义已经 HR/OA 负责人签字确认，或已配置 OA resolver。
+- [ ] 只有启用 I5/企业主体消费者时，`employee_no -> talent_id` 语义才作为上线条件，并须由 HR/OA
+      负责人签字确认或配置 OA resolver；当前 C3 普通对话不以 `employee_no` 为阻断项。
 - [ ] 事件 callback 3 秒内返回，模型和 Contact API 不在 SDK callback 内执行。
 - [ ] 飞书后台事件日志、MultiRAG 脱敏 trace 和身份审计能关联排障。
 - [ ] Secret 轮换和应用下线联系人明确。

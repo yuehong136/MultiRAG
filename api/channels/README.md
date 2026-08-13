@@ -213,13 +213,16 @@ Provider Account link、I3/I4/I6/P1 验证并 consume，C4 才会在全部 runne
 private execution HTTP 200 并完成。resolver `principal_id` 为空，Canvas 为 `user_id=""`、
 `exp_user_id=null`，10 张 EIM sidecar 零写入；这是 C2 的历史 live 边界。
 
-C3/X7 源码与自动门禁已完成、尚未部署 live。成功 claim 后按 authority→initial I3→I4→I6→final
+C3/X7 已完成源码、自动门禁和部署 live。成功 claim 后按 authority→initial I3→I4→I6→final
 I3→P1 提升 Principal；每个 linked event 逻辑上执行 I4（允许有界 cache），NO_LINK 保留 legacy
 anonymous。初始 claim 与 post-claim failure/cancel tombstone 都使用完整 dedupe TTL。Redis session 使用
 tenant/principal owner envelope，legacy raw 仅 NO_LINK 可续用；Dialog/Canvas existing row 再校验
 `principal_id` owner。它只完成 Principal promotion 与 target/session ownership，尚未传播到
 Agent/RAG/Memory/Workflow/MCP。定向 **203 passed**、`make verify` **2403 passed**、强制 integration
-**162 passed**；当前 smoke 命中 09:38 启动的旧 API，只是部署前基线。
+**162 passed**。12:42 API 已重启到 `v0.9.9-579-g2b0482c7`，smoke 六组件全绿；真实飞书 live 覆盖
+**2/2** account，四条 alias 收敛到一个 active ExternalIdentity/一个 canonical User，仅有一条 valid
+NORMAL membership 与一条 BindingEvent。Canvas、Dialog 各一条本次 Principal owner 记录，空 owner
+为 **0**；Redis completed/replied 存在、processing/failed 为 **0**。
 
 EIM-U12 / CHN-U14 允许 `message_completed` 携带可选的用户可见权威正文。
 新 worker 收到时先用 `ReplySession.replace()` 整体替换内存中的 delta，再执行 `complete()`；这能表达
@@ -693,6 +696,9 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
 - private execution API 可解析 C1/C2 structured assertion，飞书 worker 已 emit；C3 resolver 只消费经
   binding/account authority 与 I3/I4/I6/P1 验证的 identity。legacy subject 与 structured IDs 都不能直接
   成为 Principal，服务端 ownership 字段不接受 payload 覆盖。
+- C3 新 API 与真实飞书 live 已验证：两个 account 的 alias 收敛到同一 active canonical identity/user，
+  Canvas/Dialog owner 均为当前平台 Principal 且无空 owner，Redis 只有 completed/replied 终态。证据只含
+  计数和状态，不含完整外部标识、PII 或 Secret。
 - Canvas 候选 owner/create/state/expiry 位于 MultiRAG 自有 sidecar；公开 Canvas/Dialog 表无 Channel
   私有列。API 侧 collector 有 batch/cycle 上限并用 `SKIP LOCKED` 协调多实例；worker 不查数据库。
 - Supervisor 不记录原始 binding ID，worker 不记录原始飞书 ID、问题、答案或 SSE 帧。
@@ -701,8 +707,6 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
 
 - API 与 supervisor 之间的主 internal token 目前仍是静态 workload token，不等于 mTLS 或
   短期 delegated token；child token 虽已缩小作用域，仍由该主 token 确定性派生。
-- C3 verified consume 尚未部署到当前运行中的 API，也没有真实飞书 live 证据；旧进程 smoke 不能证明
-  新 Principal/owner 行为已上线。
 - 尚未实现基于 `RunContext.principal` 的用户级 MCP/SQL 授权。
 - 主加密密钥支持在线轮换（密钥环，见上），但**没有存量密文重加密流程**：旧密文要靠旧
   密钥留在环上才读得到，只有该渠道下次保存新凭据时才会改用 active 密钥重写。因此
@@ -777,10 +781,10 @@ channel_event=worker_started
 
 upstream-first 长期原则不变，但当前不立即执行 EIM-F5 / CHN-X14。近期顺序固定为：
 
-1. U15 数据库迁移与 API/supervisor 重启已经完成；**真实飞书 smoke 仍然欠着**，Dialog、Canvas
+1. U15 数据库迁移与 API/supervisor 重启已经完成；**完整 UX 矩阵的真实飞书 smoke 仍然欠着**，Dialog、Canvas
    都要覆盖短答/长答、Markdown/公式、连续追问、queue full、queued/running cancel、retry、
    regenerate 和 feedback；Canvas 额外核对 candidate 收口及公开历史无 reasoning/半轮污染。
-   U16 先行落地不改变这条：跨层测试证明的是进程行为，不是真实飞书会话行为。
+   U16 先行落地不改变这条；C3 已完成的各一条 Principal-owner live 也不替代这组完整 UX smoke。
 2. ✅ CHN-U16 已完成（2026-08-11）：可控正常停机不再遗留 queued/running 卡，跨层测试从 worker
    队列穿过私有 HTTP/SSE 直到 ReplySession 的卡片调用；queued cancel 不启动执行、queue full
    确实向用户交付 busy 都已钉住。目标侧（Dialog/Canvas driver）那一段仍由
@@ -795,6 +799,8 @@ upstream-first 长期原则不变，但当前不立即执行 EIM-F5 / CHN-X14。
 
 CHN-U16、CHN-O9 是 Channel 账本任务，不新增 EIM 映射。正常停机终态化不等于 durable recovery；
 没有 `kill -9`/跨实例/终态不确定性等明确恢复需求时，CHN-O14 继续挂起。
+EIM 账本在 C3/X7 live 收口后的主线是 P2；它与 CHN-O9 可并行。C4/X8 不抢跑，必须等待全部
+runner 升级以及由可观测证据支撑的 deployment soak；P2 不包含 A2/P3 的 token issuance/credential。
 
 ## 与上游同步策略
 

@@ -141,13 +141,16 @@ tolerate 与 C2 emit 均已完成。`896c582d` 通过 C2 定向 **104 passed**�
 API HTTP 200 完成。resolver 当时仍不 consume、`principal_id=None`，Canvas 为 `user_id=""`、
 `exp_user_id=null` 且 10 张 EIM sidecar 零写入；这是 C2 的历史 live 边界。
 
-C3/X7 源码与自动门禁现已完成但尚未部署 live：claim 后按 authority→initial I3→I4→I6→final I3→P1
+C3/X7 已完成源码、自动门禁和部署 live：claim 后按 authority→initial I3→I4→I6→final I3→P1
 提升 Principal；NO_LINK 保留 legacy anonymous，LINKED 损坏 fail closed。claim 与失败 tombstone 都覆盖
 完整 dedupe window；Redis session 使用 tenant/principal owner envelope，legacy raw 仅 NO_LINK 可续用，
 Dialog/Canvas 再校验 `principal_id` owner。该 private consume 不 bump 公开 `channel-api/v1`，也不改 web；
 它只交付 Principal promotion/target ownership，不含 P2 的 Agent/RAG/Memory/Workflow/MCP 传播。证据为
-定向 **203 passed**、`make verify` **2403 passed**、强制 integration **162 passed**；旧 API smoke 仅是
-部署前基线，新进程与真实飞书消息待验。
+定向 **203 passed**、`make verify` **2403 passed**、强制 integration **162 passed**。12:42 API 已重启到
+`v0.9.9-579-g2b0482c7`，smoke 六组件全绿；真实飞书 live 覆盖 **2/2** account，四条 alias 收敛到
+一个 active ExternalIdentity/一个 canonical User，仅有一条 valid NORMAL membership 与一条 BindingEvent；
+Canvas、Dialog 各一条本次 Principal owner 记录且空 owner 为 **0**；Redis completed/replied 存在、
+processing/failed 为 **0**。下一 EIM 主线为 P2；CHN-O9 可并行，C4/X8 等 deployment soak。
 
 ---
 
@@ -425,3 +428,4 @@ JSON Schema（`config_schema`）仅用于服务端请求校验与 OpenAPI，**�
 | 2026-08-10 | v1（公开 manifest 加法 + 私有端点加法，不 bump） | Provider capabilities 增加渐进式、交互、取消、反馈与 threading 声明；新增 generation-scoped `execution-capabilities` 私有 preflight。旧前端忽略 manifest 新键；旧 API 时新 worker 降级为 buffered/无操作，不修改 `RuntimeBindingConfig` 或 execution SSE wire（EIM-U11 / CHN-X13） | 本次提交 |
 | 2026-08-13 | v1（仅 private command tolerate，不 bump） | `ChannelActor` 可选接受有界、extra-forbid 的 `ExternalIdentityAssertion`（EIM-C1 / CHN-X5）；legacy 三字段仍必填且旧 dump 不新增 null。隔离等价完整 `make verify` 与 C1 定向全绿；CHN-O15 恢复后，新 API smoke 及 C1 前 producer 等价 legacy-shape 飞书活体均通过。worker 是恢复后新进程，不宣称旧 PID 跨版本；生产 emitter 在 C1 零 diff。活体仍未 emit identity，resolver 未 consume，公开 Channel API 与 web 契约零变化 | `536a1ea5` |
 | 2026-08-13 | v1（仅 private command emit，不 bump） | 飞书 worker 以 transport-neutral、冻结且 repr 脱敏的 DTO emit header tenant + open ID + 所有存在的 user/union ID；可选 sender tenant/app 本地核对，app 不进入 assertion。Bridge/regenerate/runtime client 透传，legacy 三字段和 identity 缺失线格不变（EIM-C2 / CHN-X6）。重启后的真实飞书消息出现安全结构日志并由 private API HTTP 200 完成；resolver 未 consume、Principal 为空、identity sidecar 零写入，公开 Channel API 与 web 契约零变化 | `896c582d` |
+| 2026-08-13 | v1（仅 private command consume，不 bump） | C3/X7 只在成功 claim 后经 authority、I3/I4/I6 与 P1 提升 Principal，并以 owner-aware session/target 隔离 linked 用户；NO_LINK 与 legacy subject 兼容仍保留，公开 Channel API/web 线格不变。`0ded51ff` 自动门禁全绿；加载 `2b0482c7` 的新 API smoke 六组件全绿，双 account live 的 alias/canonical identity/membership/BindingEvent、Canvas/Dialog Principal owner 与 Redis tombstone 均通过脱敏计数核验。P2 全链传播、MCP token 与 C4 legacy remove 均不属于本步 | `0ded51ff` + live `2b0482c7` |

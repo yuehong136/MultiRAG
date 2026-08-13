@@ -161,8 +161,8 @@ contracts、mypy 86 source files、unit **2265 passed in 37.20s**，smoke 六组
 两个飞书 worker 均 connected；真实消息只记录 identity/tenant 是否存在、identifier kinds/count 的
 脱敏结构，随后 private execution HTTP 200 并完成。resolver 未 consume，Canvas 仍为 `user_id=""`、
 `exp_user_id=null`，10 张 EIM sidecar 零写入；不得把已 emit 的 assertion 描述为已验证身份、数据库映射
-或已上线 Principal。该句是 C2 当时的 live 边界；C3/X7 源码与自动门禁现已完成但新 API 尚未部署，
-因此 C3 仍保持 `🔵`，不得用旧进程 smoke 宣称 live。
+或已上线 Principal。该句是 C2 当时的 live 边界；C3/X7 后续已完成新 API 部署和真实飞书 live，
+不得再用这段历史快照解释当前行为。
 
 C3 consume 的当前私有契约是：pre-claim 的 upgrade/run-policy/target capability deny/cancel 行为不变；
 成功 Redis claim 后才按 authority→initial I3→I4→I6→final I3→P1 解析身份，并在 session/target 前完成。
@@ -176,7 +176,12 @@ tenant/principal owner envelope；legacy raw 仅 NO_LINK 可续用，linked prin
 会话。Dialog/Canvas 已有数据库行还要校验 owner 等于本次 `principal_id`。这只完成 C3 Principal
 promotion 与 target/session ownership，不把 Principal 传播进 Agent/RAG/Memory/Workflow/MCP；P2 仍负责
 后者。自动证据为 C3 定向 **203 passed**、`make verify` **2403 passed**、强制 integration
-**162 passed**；新 API smoke 与真实飞书 live 尚待部署后补齐。
+**162 passed**。12:42 API 已重启到 `v0.9.9-579-g2b0482c7`，`make smoke` 六组件全绿；真实飞书
+live 覆盖 **2/2** account，四条 alias 收敛到一个 active ExternalIdentity/一个 canonical User，只有
+一条 valid NORMAL membership 与一条 BindingEvent。Canvas、Dialog 各一条本次 Principal owner 记录，
+空 owner 为 **0**；Redis completed/replied 存在且 processing/failed 为 **0**。这些是脱敏计数/状态证据，
+不包含完整 app/tenant/account/user 标识或 Secret。下一主线 P2 负责全链 Principal context；不在本契约
+中提前实现 A2/P3 token，CHN-O9 可并行，C4/CHN-X8 仍等待全部 runner 的 deployment soak。
 
 ### 2.4 Channel 交互契约的所有权
 
@@ -893,7 +898,7 @@ Web JWT 只有在 JWT 解析明确返回预期的 `not_authenticated` 时才能�
 这个兼容面只覆盖 async `async_current_user`。存量 sync `Depends(manager)` 仍可能返回 ORM User，
 `async_current_tenant_id` 的 broad fallback 也是既有债务；P1 不得宣称所有入口已统一为 Principal。
 P1 此轮本身不包含 C3 Channel 组装、P2 全链传播、A2/P3 动态委托或 A7 inbound Resource Server；
-C3 已在后续独立 composition 中实现源码并等待 live。
+C3 已在后续独立 composition 中实现并完成部署 live。
 
 旧提案中的 `EnterpriseIdentityService.resolve_channel_actor(tenant_id, channel_id, ...) -> Principal`
 **不再是 identity core 契约**。当前 C3 adapter 位于 `api.identity_adapters.channel_runtime`，按

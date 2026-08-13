@@ -87,8 +87,8 @@ assertion 的序列化线格不新增 null。API 继续拒绝重复 kind、Provi
 identity/tenant presence、三种 identifier kind 与 count 的脱敏结构日志，并由 private API HTTP 200 完成
 执行。execution resolver 仍不读取合法 assertion，Canvas 仍为 `user_id=""`、`exp_user_id=null`，10 张
 EIM sidecar 零写入。
-C3 verified consume 和 C4 legacy remove 均未发生；公开 `channel-api/v1` 不受这条 private 加法影响。
-因此这里描述的是已部署的 tolerate + emit 边界，不是已部署的身份解析或 Principal 链。
+C3 verified consume 后续已部署并完成 live，C4 legacy remove 尚未发生。公开 `channel-api/v1` 不受
+这条 private 加法影响；上两句只描述 C2 完成时的历史快照。
 
 #### Channel control/runtime
 
@@ -198,7 +198,7 @@ Contact 只有 code 0 才能使用 HTTP 403/404 fallback；未知/瞬时非零 c
 
 I4 自身不把 Provider proof 写入 ExternalIdentity/Alias，也不会建 User/UserTenant 或构造 Principal。
 I6 在独立事务层消费 proof 并完成 provisioning/reverify；P1 builder 已存在，C3 已把 Channel
-assertion、Provider verification、I6 与该 builder 组合接线，源码与自动门禁完成但尚待 live。
+assertion、Provider verification、I6 与该 builder 组合接线，并完成自动门禁和部署 live。
 
 核心入口接收服务端构造的 Provider Context，而不是 `channel_id`。Channel adapter 先解析唯一 link，
 再调用同一核心接口；目录事件、管理员预绑定、Web OAuth 或未来 SSO 因而可以复用身份服务而不伪造
@@ -266,7 +266,7 @@ alias proof 因 scope marker 过旧时，fresh I4 proof 才能刷新 alias 并�
 
 I6 schema 以全状态 reverse identity unique 和 active membership partial unique 作为并发最后防线；
 User/UserTenant/identity/alias/code/event 同事务提交或全部回滚。I6.1 已增加独立运维 onboarding adapter/
-CLI，但没有公开 HTTP/UI；消息侧 C3 adapter 后续独立落地。它不写 I5 EnterpriseSubject；C3 也不把
+CLI，但没有公开 HTTP/UI；消息侧 C3 adapter 已在独立任务落地并完成 live。它不写 I5 EnterpriseSubject；C3 也不把
 Principal 传入 Agent 或 FastMCP，后者仍属于 P2。
 
 #### Principal construction
@@ -280,8 +280,8 @@ proof time、待 provisioning 或需重验状态均 fail closed。存量 Web/API
 `legacy_owner` adapter 每请求活查用户和唯一 personal OWNER Tenant；它只保留现有兼容
 语义，不是多 Tenant 动态选择器。`api.utils.api_utils.Principal` 只 re-export 同一领域 class。
 
-P1 尚未把 Principal 经 Channel Execution、Agent、Memory、Workflow 和 MCP tool call 全链传递；
-这属于 C3/P2。现有 sync `Depends(manager)` 也仍可能暴露 ORM User。目标态仍要求
+P1/C3 已把 verified identity 提升到 `TrustedChannelContext` 和 target/session owner，但尚未把 Principal 经
+Agent、Memory、Workflow 和 MCP tool call 全链传递；这属于 P2。现有 sync `Depends(manager)` 也仍可能暴露 ORM User。目标态仍要求
 模型看不到或修改不了 Principal，但不能因 P1 完成就宣称传播链已打通。
 
 #### MCP Token Issuer
@@ -327,7 +327,7 @@ service 的 `build_server()` 不自行决定 auth，保持 mount/proxy 等价。
 
 ---
 
-## 3. 首次私聊：C3 verified consume（源码门禁完成，live 待部署）
+## 3. 首次私聊：C3 verified consume（已完成 live）
 
 ```mermaid
 sequenceDiagram
@@ -382,12 +382,16 @@ sequenceDiagram
 - I6 不消费 `employee_no` 或写 EnterpriseSubject；I5 尚未实现。enterprise subject 缺失时，高风险
   MCP 仍一律拒绝。
 
-C1/C2 已有真实飞书 transport 证据；C3 verified consume 的源码与自动门禁现已完成。成功 claim 后按
+C1/C2 已有真实飞书 transport 证据；C3 verified consume 的源码、自动门禁与部署 live 均已完成。成功 claim 后按
 authority→initial I3→I4→I6→final I3→P1，linked event 逻辑上每次执行 I4（允许有界 cache）；NO_LINK
 保留 legacy anonymous。full-window claim/tombstone 阻止短窗后重放，owner envelope 与 Dialog/Canvas
 owner 校验隔离 tenant/principal。C3 只提升 `TrustedChannelContext` 并以 `principal_id` 约束 target/session，
 不传播到 Agent/RAG/Memory/Workflow/MCP。定向 **203 passed**、`make verify` **2403 passed**、强制
-integration **162 passed**；当前 smoke 来自 09:38 启动的旧 API，不是 C3 live，新 API/真实消息待验。
+integration **162 passed**。12:42 API 已重启到 `v0.9.9-579-g2b0482c7`，`make smoke` 六组件全绿；
+真实飞书 live 覆盖 **2/2** account，四条 alias 收敛到一个 active ExternalIdentity/一个 canonical User，
+只有一条 valid NORMAL membership 与一条 BindingEvent。Canvas、Dialog 各一条本次 Principal owner 记录，
+空 owner 为 **0**；Redis completed/replied 存在、processing/failed 为 **0**。下一主线是 P2；CHN-O9
+可并行，C4/CHN-X8 仍等待全部 runner 升级与 deployment soak。P2 不包含 A2/P3 token issuance/credential。
 
 ---
 

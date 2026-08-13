@@ -34,7 +34,7 @@
 推荐的派工方式：
 
 ```text
-读 docs/enterprise-identity-mcp/README.md，然后收口 ROADMAP 中当前主线任务（当前为 EIM-C3 live 验收）。
+读 docs/enterprise-identity-mcp/README.md，然后完成 ROADMAP 中当前主线任务（当前为 EIM-P2）。
 先复核任务锚点和依赖，把准备修改的文件与验收标准告诉我；确认后再写代码。
 ```
 
@@ -186,8 +186,8 @@ I3 仍只把权威 policy snapshot 的三种 mode 映射为携 revision 的
 `bind_preprovisioned/require_link/create_normal_member` verification-gated plan；它本身不写库。I6 已
 完成消费 fresh I4 proof、重新锁定 policy/account generation 并原子执行表中绑定/开户动作的 domain、
 schema 与 PostgreSQL transaction。I6.1 已提供从既有 Channel 加密凭据出发、默认 dry-run 且显式
-apply 的受控企业连接 CLI。C3 消息侧 verified consume 源码与自动门禁现已完成，尚未部署 live；
-公开 HTTP/UI 与 P2 Principal 传播仍未接线。
+apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码、自动门禁和真实飞书 live；
+公开 HTTP/UI 与 P2 Principal 全链传播仍未接线。
 
 ---
 
@@ -297,15 +297,18 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 源码与自动�
   保留所有存在的 user/union ID；sender tenant/app 分别与 header tenant/本地配置账户核对。冻结、脱敏
   的 transport assertion 经 Bridge/regenerate/runtime client 发往 private API，legacy subject 仍为 open ID。
   C2 本身只完成 transport emit；C3 现通过服务端 authority/link 与 IdentityService consume。
-- EIM-C3 / CHN-X7 源码与自动门禁已完成但尚未部署 live：成功 claim 后按
+- EIM-C3 / CHN-X7 已完成并部署 live：成功 claim 后按
   authority→initial I3→I4→I6→final I3→P1 提升 `TrustedChannelContext.principal`/`principal_id`，linked
   event 逻辑上每次执行 I4（可命中有界 cache）；NO_LINK 保留 legacy anonymous，LINKED 缺失/损坏
   assertion 或 authority/proof 漂移均 fail closed。Redis 会话按 tenant/principal owner envelope 隔离，
   legacy raw 仅 NO_LINK 可续用，Dialog/Canvas 再校验 `principal_id` owner。它尚未把 Principal 传播到
   Agent/RAG/Memory/Workflow/MCP，那是 P2。
-- C3 当前证据为定向 **203 passed**、`make verify` **2403 passed**、强制 integration **162 passed**。
-  当前 smoke 命中 09:38 启动的旧 API，只能作为部署前基线；新 API 重启后的 smoke 与真实飞书消息
-  尚未执行，所以 C3/X7 保持 `🔵`，不能写成已上线。
+- C3 自动证据为定向 **203 passed**、`make verify` **2403 passed**、强制 integration **162 passed**。
+  12:42 API 已重启到 `v0.9.9-579-g2b0482c7`，`make smoke` 六组件全绿。真实飞书 live 覆盖
+  **2/2** Provider Account，四条 alias 收敛到一个 active ExternalIdentity 和一个 canonical User；仅有
+  一条 valid NORMAL membership 与一条 first-binding event。Canvas、Dialog 各有一条本次 Principal
+  owner 记录且空 owner 为 **0**；Redis 仅保留对应 completed/replied 状态，processing/failed 为 **0**。
+  证据只记录计数和状态，不包含完整 app/tenant/account/user 标识或任何 Secret。
 - EIM-P1 已将 canonical Principal 的唯一 owner 固定为 `api.identity.principal`；
   `api.utils.api_utils.Principal` 只 re-export 同一 class，待存量 route import 迁移后删除。Principal
   direct constructor 已封闭，不含 email/role/groups/scopes/token，`.id/.nickname` 只是兼容 property。
@@ -364,8 +367,9 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 源码与自动�
   优先复用 FastMCP 4 的 `RemoteAuthProvider`、`AccessToken`、`on_list_tools/on_call_tool` middleware
   和 transport 防护；领域 identity/Principal 保持框架无关，避免重复实现框架已有工具开放能力。
 - P1 已解锁 A7 的代码前置，但 A7 仍是独立 inbound Resource Server 任务，不能立即宣称
-  可发布。F1/I4.1/I6/I6.1/C1/C2 已完成；C3 源码与门禁完成、live 待验，随后下一条接线主线是
-  P2。I5 与 I7 已由 I4 解锁，可作为不共文件的并行支线；I8 仍需 I6 + I7，
+  可发布。F1/I4.1/I6/I6.1/C1/C2/C3 已完成；下一条接线主线是 P2。CHN-O9 是不阻塞 P2 的
+  Channel 可观测并行支线；C4/CHN-X8 仍须等待全部 runner 升级与 deployment soak。I5 与 I7 已由
+  I4 解锁，可作为不共文件的并行支线；I8 仍需 I6 + I7，
   不能跳依赖；
   C3/P2、A2/P3/A7 均不属于 P1 完成面。
 - MCP 出站已使用官方 SDK 2 `Client`：Streamable HTTP 使用 `mode="auto"` 和 SDK
@@ -389,7 +393,8 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 源码与自动�
   飞书已实现 CardKit 渐进式回复，`ask()` 只保留为兼容聚合入口。Provider/Target capabilities、
   Dialog detached CAS 与 Canvas candidate sidecar/周期 GC 已分别由 EIM-U11～U13 收口。CHN-U15 迁移与
   API/supervisor 重启已完成，CHN-U16 优雅停机终态化与跨层测试已于 2026-08-11 完成；
-  **Dialog/Canvas 真实飞书 smoke 仍然欠着**，下一项是 CHN-O9 可观测，随后稳定浸泡。
+  **Dialog/Canvas 完整 UX 矩阵的真实飞书 smoke 仍然欠着**；C3 已完成的各一条 Principal-owner live
+  不替代该矩阵。Channel 稳定性下一项是 CHN-O9 可观测，随后稳定浸泡。
   EIM-F5 / CHN-X14 保留为 upstream-first 长期任务，但挂起到
   Channel 稳定、且用户恢复从约 2026-04-24 本地同步点逐 commit 跟进 RAGFlow 时再启动；不预设自行
   实现 Canvas runtime。
@@ -481,13 +486,13 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 源码与自动�
   六步全绿、**417 passed、2 existing skipped**，contract snapshot 无漂移。该完成态只证明 of_mcp
   能把已验证 token 构造成 Principal，并按确定性逐工具策略做发现/调用授权；不证明 MultiRAG 已经
   产生这样的 token 或第三方 Channel 身份已经进入该 Principal。
-- P1 已实现领域 Principal 与存量 Web/API adapter；C3 已完成源码与门禁、尚待 live，A2/P2/P3 尚未实现，因此 MultiRAG
+- P1 已实现领域 Principal 与存量 Web/API adapter；C3 已取得部署 live 证据，A2/P2/P3 尚未实现，因此 MultiRAG
   还不会为当前 Principal 签发并逐请求发送 token；飞书的
-  `ExternalIdentityAssertion -> binding/directory -> Principal` 链尚未取得部署 live 证据，通用 MCP Client 仍无完整
+  `ExternalIdentityAssertion -> binding/directory -> Principal` 已完成到 target/session owner，通用 MCP Client 仍无完整
   OAuth 获取 token 流。of_mcp 仍缺 A5 proxy internal actor；A6 虽已有 phase-1 domain/runtime
   安全边界，但仍缺生产多实例 replay/audit、HMAC/KMS 轮换、OTel SDK/exporter 与跨仓 trace，因此
   保持 `🔵`。M1/M2 企业主体与业务对象授权、持久 Interaction/Confirmation/Idempotency 也未完成。
-  F1/I4.1/I6/I6.1/C1/C2 已完成；C3 live 收口后 MultiRAG 下一条接线主线是 P2；I5/I7 是已解锁
+  F1/I4.1/I6/I6.1/C1/C2/C3 已完成；MultiRAG 下一条接线主线是 P2；I5/I7 是已解锁
   并行支线，但 I8 仍需 I6 + I7。不能跳过 P2 直接做 A2/P3。A7 虽已解锁前置，仍须作为独立入站
   安全面实现和验收。
 
