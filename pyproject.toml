@@ -252,6 +252,10 @@ constraint-dependencies = [
     # 依赖图内无任何 <0.6.3 上界的冲突方，constraint 即可钳住（曾误放 override，
     # 那会抹掉 pyasn1-modules 的 <0.7.0 上界，未来 0.7 破坏版会静默越界）
     "pyasn1>=0.6.3",
+    # PYSEC-2026-3716: datasets <5.0.1 的 *folder builder 信任 metadata
+    # file_name，可越界读取本地文件。BCEmbedding/FlagEmbedding 间接引入该包；
+    # 用 constraint 保留间接依赖属性，并防止将来重锁回退到受影响版本。
+    "datasets>=5.0.1,<6.0.0",
 ]
 python-install-mirror = "http://maven.datav.com/repository/static/indygreg/python-build-standalone/"
 [[tool.uv.index]]

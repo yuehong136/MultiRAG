@@ -12,6 +12,7 @@ resolution-markers = [
 
 [manifest]
 constraints = [
+    { name = "datasets", specifier = ">=5.0.1,<6.0.0" },
     { name = "fastmcp-slim", specifier = "==4.0.0b2" },
     { name = "pyasn1", specifier = ">=0.6.3" },
 ]
@@ -1715,13 +1716,13 @@ wheels = [
 
 [[package]]
 name = "datasets"
-version = "3.4.1"
+version = "5.0.1"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
-    { name = "aiohttp" },
     { name = "dill" },
     { name = "filelock" },
     { name = "fsspec", extra = ["http"] },
+    { name = "httpx" },
     { name = "huggingface-hub" },
     { name = "multiprocess" },
     { name = "numpy" },
@@ -1733,9 +1734,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "xxhash" },
 ]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/99/4b/40cda74a4e0e58450b0c85a737e134ab5df65e6f5c33c5e175db5d6a5227/datasets-3.4.1.tar.gz", hash = "sha256:e23968da79bc014ef9f7540eeb7771c6180eae82c86ebcfcc10535a03caf08b5" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/0a/5b/836516269d4f618efe621661cfb6f9acc57e6f95265db3efaee48a5ffe04/datasets-5.0.1.tar.gz", hash = "sha256:ce22bb851efd7494f08aad33b940803784434f6e77763d00679a0dc45fcf686a" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/16/44/5de560a2625d31801895fb2663693df210c6465960d61a99192caa9afd63/datasets-3.4.1-py3-none-any.whl", hash = "sha256:b91cf257bd64132fa9d953dd4768ab6d63205597301f132a74271cfcce8b5dd3" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/44/0b/98fc6eb83333508ca5f44c52b3e287ea8137a0ad582714e2cbc67a02154b/datasets-5.0.1-py3-none-any.whl", hash = "sha256:9fbf73688f8c18f7529b4fe592abd04015f81d1e58001e4bac73ffb2b39d7cc4" },
 ]
 
 [[package]]
