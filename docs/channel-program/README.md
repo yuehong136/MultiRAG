@@ -55,14 +55,15 @@ CHN-O7（主密钥密钥环）、CHN-O12（空 env 变量）、CHN-O6（连接�
 [`docs/enterprise-identity-mcp/`](../enterprise-identity-mcp/README.md) 的 EIM 路线图驱动；其中
 CHN-X9、CHN-X13、CHN-U8、CHN-U11～U15 已完成，其余状态以 [PROGRESS](PROGRESS.md) 为准。旧程序“全部完成”
 的历史结论保持成立，但不再表示 Channel 子系统没有后续待办。CHN-U16 是 Channel 稳定化的独立
-近期任务，不新增 EIM 对应项，**已于 2026-08-11 完成**。
+近期任务，不新增 EIM 对应项，**已于 2026-08-11 完成**；CHN-U17 于 2026-08-13 补上其后发现的
+Python 3.12 双重取消竞态。
 **最后更新**：2026-08-13
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | **PR-0** | 建立账本与契约文档（两仓 docs-only） | ✅ 完成 |
 | **S** | 安全加固（S1–S6） | ✅ 完成 |
-| **U** | 今日可见缺陷（U1–U9、U11–U16 完成；U10 挂起） | 🔵 扩展中 |
+| **U** | 今日可见缺陷（U1–U9、U11–U17 完成；U10 挂起） | 🔵 扩展中 |
 | **P** | Provider 通用化（P1–P11、P13 全部完成并部署） | ✅ 完成 |
 | **O** | 运维（O1–O7、O12 完成；**O9 是当前下一项**，O8/O10/O11 未排期） | 🔵 扩展中 |
 | **X** | 跨仓契约（X1–X3、X5–X7、X9、X13、X16–X18 完成） | 🔵 扩展中 |
@@ -74,6 +75,8 @@ sidecar，并将 TTL 回收移到 API 启动/周期任务。U15 是在当前 Can
 不是另起一套 Canvas runtime 的起点。数据库迁移、API/supervisor 重启与 healthz 已确认。
 CHN-U16 已完成：停止接收后清空队列，queued 卡零执行调用地进入终态，running 卡关闭私有 SSE 流后
 按安全取消语义终态化，已越过 terminal barrier 的 run 则允许交付完；`drain` 参数随之删除。
+CHN-U17 进一步保证 Python 3.12 同轮取消 execution 与 consumer 时，回复先终态化且 consumer
+自身取消继续传播，不会回到下一轮队列等待并卡死 worker close。
 **完整 Dialog/Canvas UX smoke 仍然欠着，U16 与 C3 的 Principal-owner live 都不替代它**——前者证明
 停机进程行为，后者证明 verified identity 与 target owner，不覆盖 CardKit/fallback/action 全矩阵。
 CHN-O9 可与该 smoke 并行，二者都在稳定浸泡前补齐。EIM-P2 / CHN-X18 已完成本机 rollout，

@@ -545,7 +545,17 @@ class BindingBridge:
         except asyncio.CancelledError:
             if not record.cancel_requested:
                 raise
+            # The execution task and its caller can be cancelled in the same
+            # event-loop turn during worker shutdown. On Python 3.12 the
+            # caller then observes the child's CancelledError while its own
+            # cancellation request remains recorded on the task. Finalize the
+            # visible reply, but do not swallow that outer cancellation or the
+            # worker consumer can continue into its next Queue.get forever.
+            current_task = asyncio.current_task()
+            propagate_caller_cancel = current_task is not None and current_task.cancelling() > 0
             await self._finalize_cancel(record)
+            if propagate_caller_cancel:
+                raise
         finally:
             record.execution_task = None
 

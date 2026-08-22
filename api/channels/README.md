@@ -787,9 +787,11 @@ upstream-first 长期原则不变，但当前不立即执行 EIM-F5 / CHN-X14。
    都要覆盖短答/长答、Markdown/公式、连续追问、queue full、queued/running cancel、retry、
    regenerate 和 feedback；Canvas 额外核对 candidate 收口及公开历史无 reasoning/半轮污染。
    U16 先行落地不改变这条；C3 已完成的各一条 Principal-owner live 也不替代这组完整 UX smoke。
-2. ✅ CHN-U16 已完成（2026-08-11）：可控正常停机不再遗留 queued/running 卡，跨层测试从 worker
+2. ✅ CHN-U16 / CHN-U17 已完成（2026-08-13）：可控正常停机不再遗留 queued/running 卡，跨层测试从 worker
    队列穿过私有 HTTP/SSE 直到 ReplySession 的卡片调用；queued cancel 不启动执行、queue full
-   确实向用户交付 busy 都已钉住。目标侧（Dialog/Canvas driver）那一段仍由
+   确实向用户交付 busy 都已钉住。Python 3.12 下 execution 与 consumer 同轮取消时，Bridge 在完成
+   回复终态化后继续传播 consumer 自身的取消，不会回到下一轮队列等待并卡死 worker close。
+   目标侧（Dialog/Canvas driver）那一段仍由
    `tests/integration/test_channel_history_manager.py` 覆盖，单元层不接真库。
 3. CHN-O9（**当前下一项**）补最小可观测：首卡/首正文、queue wait/depth/overflow、
    CardKit update/fallback、terminal 与 shutdown outcome，能够支撑真实浸泡判断。U16 已经放出
@@ -799,7 +801,7 @@ upstream-first 长期原则不变，但当前不立即执行 EIM-F5 / CHN-X14。
 5. Channel 稳定后，等待用户恢复从约 2026-04-24 本地同步点逐 commit 跟进 RAGFlow，再解除
    EIM-F5 / CHN-X14 挂起并把本轮改动随上游迭代一并审计。
 
-CHN-U16、CHN-O9 是 Channel 账本任务，不新增 EIM 映射。正常停机终态化不等于 durable recovery；
+CHN-U16、CHN-U17、CHN-O9 是 Channel 账本任务，不新增 EIM 映射。正常停机终态化不等于 durable recovery；
 没有 `kill -9`/跨实例/终态不确定性等明确恢复需求时，CHN-O14 继续挂起。
 EIM-P2 / CHN-X18 已完成实现、自动门禁与本机 API rollout；Canvas/Dialog 真实飞书各一条均
 completed，Redis owner envelope 与数据库 owner 非空，smoke 六组件全绿。该证据不替代完整 UX

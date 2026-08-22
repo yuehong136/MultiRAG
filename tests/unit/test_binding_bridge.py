@@ -909,6 +909,37 @@ async def test_cancel_action_stops_active_stream_once_and_tombstones_reply() -> 
 
 
 @pytest.mark.asyncio
+async def test_cancelling_execution_and_its_caller_does_not_swallow_caller_cancellation() -> None:
+    channel = _LifecycleChannel()
+    state = _StateStore()
+    executor = _BlockingExecutor()
+    bridge = _bridge(channel=channel, state=state, executor=executor)
+    message = _message()
+
+    bridge.message_queued(message, queue_position=0)
+    running = asyncio.create_task(bridge.handle_message(message))
+    await asyncio.wait_for(executor.started.wait(), timeout=1)
+    record = bridge._live_records[message.execution_id]
+    execution = record.execution_task
+    assert execution is not None
+
+    # Reproduce the worker shutdown race in one event-loop turn: Bridge.close
+    # cancels the child execution, then ChannelWorker.close cancels the
+    # consumer awaiting handle_message. Python 3.12 otherwise lets the child
+    # cancellation mask and consume the caller's own cancellation request.
+    record.cancel_requested = True
+    execution.cancel()
+    running.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await running
+
+    assert channel.sessions[0].state is ReplySessionState.CANCELLED
+    assert state.status == {"message-1": "replied"}
+    await bridge.close()
+
+
+@pytest.mark.asyncio
 async def test_regenerate_reenters_scheduler_with_fresh_execution_identity() -> None:
     channel = _LifecycleChannel()
     bridge = _bridge(channel=channel, state=_StateStore(), executor=_Executor())
