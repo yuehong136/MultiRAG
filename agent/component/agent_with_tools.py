@@ -32,8 +32,9 @@ from api.db.joint_services.tenant_model_service import get_model_config_by_type_
 from api.db.services.llm_service import LLMBundle
 from api.db.services.mcp_server_service import MCPServerService
 from api.db.services.tenant_llm_service import TenantLLMService
+from api.identity.mcp_delegation.runtime import resolve_mcp_credential_provider
 from common.connection_utils import timeout
-from common.mcp_tool_call_conn import MCPToolCallSession, mcp_tool_metadata_to_openai_tool
+from common.mcp_tool_call_conn import MCPToolBinding, MCPToolCallSession, mcp_tool_metadata_to_openai_tool
 from core.prompts.generator import citation_plus, citation_prompt, full_question, kb_prompt, message_fit_in, structured_output_prompt
 
 
@@ -109,20 +110,44 @@ class Agent(LLM, ToolBase):
             self.tool_meta.append(indexed_meta)
 
         self._mcp_sessions = []  # 保存 MCP 会话引用以便预热
+        mcp_name_counts: dict[str, int] = {}
+        for mcp in self._param.mcp:
+            for canonical_name in mcp["tools"]:
+                mcp_name_counts[canonical_name] = mcp_name_counts.get(canonical_name, 0) + 1
+        mcp_tool_index = len(self.tools)
         for mcp in self._param.mcp:
             with db_connection() as db:
                 mcp_server = MCPServerService.get_by_id(db, mcp["mcp_id"])
             custom_header = self._param.custom_header
+            run_context = self._canvas.get_run_context()
+            credential_provider = resolve_mcp_credential_provider(
+                mcp_server=mcp_server,
+                run_context=run_context,
+            )
+            session_kwargs: dict[str, Any] = {"call_context": run_context}
+            if credential_provider is not None:
+                session_kwargs["credential_provider"] = credential_provider
             tool_call_session = MCPToolCallSession(
                 mcp_server,
                 mcp_server.variables,
                 custom_header,
-                call_context=self._canvas.get_run_context(),
+                **session_kwargs,
             )
             self._mcp_sessions.append(tool_call_session)
             for tnm, meta in mcp["tools"].items():
-                self.tool_meta.append(mcp_tool_metadata_to_openai_tool(meta))
-                self.tools[tnm] = tool_call_session
+                if credential_provider is not None and not credential_provider.is_authorized(tnm):
+                    continue
+                model_name = tnm
+                if mcp_name_counts[tnm] > 1 or model_name in self.tools:
+                    model_name = f"{tnm}_{mcp_tool_index}"
+                    while model_name in self.tools:
+                        mcp_tool_index += 1
+                        model_name = f"{tnm}_{mcp_tool_index}"
+                mcp_tool_index += 1
+                self.tool_meta.append(
+                    mcp_tool_metadata_to_openai_tool(meta, function_name=model_name),
+                )
+                self.tools[model_name] = MCPToolBinding.from_session(tool_call_session, tnm)
 
         # 预热 MCP 会话：等待所有会话初始化完成
         for session in self._mcp_sessions:

@@ -186,6 +186,8 @@ def test_agent_passes_the_same_run_context_into_mcp_session(
             call_context: object | None = None,
         ) -> None:
             observed.append(call_context)
+            self._mcp_server = _server
+            self.delegated_resource_name = None
 
         def wait_ready(self, *, timeout: float) -> bool:
             del timeout
@@ -214,13 +216,44 @@ def test_agent_passes_the_same_run_context_into_mcp_session(
     )
     monkeypatch.setattr(
         "agent.component.agent_with_tools.MCPServerService.get_by_id",
-        lambda *_args, **_kwargs: SimpleNamespace(variables={}),
+        lambda _db, server_id: SimpleNamespace(id=server_id, variables={}),
     )
     monkeypatch.setattr("agent.component.agent_with_tools.MCPToolCallSession", _MCPSession)
 
     param = AgentParam()
     param.llm_id = "fixture-model"
-    param.mcp = [{"mcp_id": "mcp-1", "tools": {}}]
-    Agent(canvas, "agent-1", param)
+    tool_meta = {
+        "name": "search",
+        "description": "Search",
+        "inputSchema": {"type": "object", "properties": {}},
+    }
+    param.mcp = [
+        {"mcp_id": "mcp-1", "tools": {"search": tool_meta}},
+        {"mcp_id": "mcp-2", "tools": {"search": tool_meta}},
+    ]
+    agent = Agent(canvas, "agent-1", param)
 
-    assert observed == [run_context]
+    assert observed == [run_context, run_context]
+    assert set(agent.tools) == {"search_0", "search_1"}
+    assert {binding.original_name for binding in agent.tools.values()} == {"search"}
+    assert {binding.mcp_server_id for binding in agent.tools.values()} == {"mcp-1", "mcp-2"}
+
+
+def test_run_context_requires_agent_and_published_revision_as_one_server_owned_pair() -> None:
+    principal = _principal()
+
+    context = RunContext(
+        tenant_id=principal.tenant_id,
+        principal=principal,
+        agent_id="agent-a",
+        agent_revision_id="release-a",
+    )
+    assert context.agent_id == "agent-a"
+    assert context.agent_revision_id == "release-a"
+
+    with pytest.raises(ValueError, match="execution target"):
+        RunContext(
+            tenant_id=principal.tenant_id,
+            principal=principal,
+            agent_id="agent-a",
+        )

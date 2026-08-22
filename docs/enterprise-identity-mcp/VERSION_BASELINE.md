@@ -3,7 +3,7 @@
 > **基础版本核验：2026-08-07；飞书 SDK、官方文档和交互参考仓刷新：2026-08-09；
 > 对话执行、重新生成和持久化参考刷新：2026-08-10；MCP/FastMCP/扩展边界刷新：2026-08-12；
 > `lark-oapi` 1.7.2 可执行契约刷新：2026-08-12；I4/I4.1 官方 SDK/live wire 调用链实现刷新：
-> 2026-08-13
+> 2026-08-13；RAGFlow P3 定向只读对照：2026-08-13
 > （Asia/Shanghai）**
 > 版本会变化。本文记录的是可复现快照和选型规则，不是“永远最新”的承诺。
 
@@ -93,6 +93,15 @@ CHN-O9 和稳定浸泡，且用户明确恢复这条同步主线后，才重新�
 | `open-webui/open-webui` | `01f4282f1ffe0d6212f58d3afbeae21fffd0c4be` | 独立消息表、parent/children 分支和重新生成语义对照 |
 
 源码参考的具体内容和禁止照搬项见 [REFERENCES](REFERENCES.md)。
+
+### 2026-08-13 RAGFlow P3 定向只读对照
+
+为 EIM-P3 单独核验了 `infiniflow/ragflow` 当日 official main
+`913777d96578b3349ebb70630c01501747247d1c`。这不是恢复 F5/X14 逐 commit 同步，也不替换上表的滚动
+兼容审计基线。结论是：上游仍把 MCP headers 在 session 构造时作为静态配置传给 SSE/Streamable
+HTTP，依赖仍为 `mcp>=1.28.1,<2.0.0`，没有提供 MultiRAG 所需的 Principal/tenant/published agent
+revision/grant/policy authority，不能拿来替代 P3。可采用的设计启发是其 `MCPToolBinding` 把模型 alias
+与 server canonical tool name 分开；本仓按自己的 SDK 2/A4/A2 契约实现同类分层，没有复制上游代码。
 
 ---
 

@@ -420,8 +420,8 @@ single-use replay key 只由 domain-separated `(token_use, issuer, audience, jti
 token/JTI 的一个 capability；它故意不包含 tool。完整 Principal、tool、policy revision 和 canonical
 arguments 进入另一个 secret-keyed HMAC fingerprint：同 key/同 fingerprint 是 duplicate；同 key/不同
 fingerprint 是 replay conflict。这样可阻止拿同一授权 capability 改参数、换主体或换工具。相应代价是
-一枚 JTI 只能承载一个高风险逻辑执行；未来 P3 必须每次执行换发新的短期 token/JTI，不能给一个 Agent
-run 发一枚“多次提交券”。
+一枚 JTI 只能承载一个高风险逻辑执行；P3 已按每次逻辑执行换发新的短期 token/JTI，不能给一个 Agent
+run 发一枚“多次提交券”。该实现默认关闭且未 rollout，真实跨仓证据仍是独立闸门。
 
 coordinator 只能插在 A4 inner final allow 后、业务执行前。它先原子 claim、写 pre-execution audit、
 标记 dispatched，再给出不可伪造的 process-local permit。duplicate/conflict/replay-or-audit unavailable
@@ -609,3 +609,33 @@ Memory、API token 或业务对象。
 真正的 User-to-User consolidation 若未来出现需求，必须另立 ADR、迁移和人工审核流程，明确数据
 归属、不可合并资源、凭据撤销、引用重写、回滚与审计；不得复用 link code 或删除冲突 identity 来
 偷偷实现。
+
+---
+
+## EIM-ADR-27：首期 issuer 内嵌部署、只公开 JWKS，签名能力与密钥存储解耦
+
+**状态**：Accepted
+**日期**：2026-08-13
+
+EIM-A2 首期把逻辑 Authorization Server 与 MultiRAG API 同部署，但放在独立 identity issuer 包和
+`identity.mcp_issuer` 配置下。唯一新增公共面是 `GET /.well-known/jwks.json`；token 签发只通过进程内
+service，等待 P3 从 request-scoped Principal/tool policy 组合调用。本阶段不增加公开 token endpoint、
+OAuth grant、refresh token 或 arbitrary third-party client registration。
+
+issuer 固定一个显式配置的 canonical HTTPS issuer、first-party MultiRAG client、resource name 到精确
+audience/scope registry 的映射，以及不超过 300 秒的 TTL。`sub/tenant_id` 只来自 canonical immutable
+Principal；调用方不能选择 tenant、audience、未登记 scope 或任意 claim。`auth_time` 只投影真实上游
+认证时间；`acr` 首期只投影 `ENTERPRISE_VERIFIED`；当前 Principal 没有经过冻结的 authentication-method
+证据，因此不从 `AuthenticationSource` 猜测 `amr`。`enterprise_subject` 只有目标 resource 显式允许且
+Principal 携带匹配的 verified subject 时才签发。
+
+签名边界使用 vendor-neutral `SigningKeyProvider`：它只暴露 active `kid`、public JWKS snapshot 和
+ES256 signing operation。首期实现从绝对路径、非 symlink、仅 owner 可读写的 PEM 文件加载 P-256
+private key；public keyset 独立列出并必须包含与 active private key 匹配的 key。private material 不进
+数据库、配置 dump、repr、日志、异常或 JWKS。云 KMS adapter、真实 key generation/rotation、DNS/TLS
+和发布仍由 O1 的外部状态闸门决定，本 ADR 不选择 AWS/GCP/Azure SDK。
+
+轮换必须采用三阶段：先把 next public key 加入 JWKS，再切 active signer；旧 public key 至少保留
+`max token TTL + 30s skew + verifier JWKS cache TTL`，默认即 630 秒，之后才允许移除。A2 用 provider
+snapshot/rotation contract 测试这个顺序；真实多副本配置发布与演练属于 O1，不能因单进程测试通过就
+宣称生产换钥完成。

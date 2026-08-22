@@ -6,11 +6,12 @@ import re
 import threading
 import time
 import weakref
+from collections.abc import AsyncGenerator
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from contextlib import AsyncExitStack
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from string import Template
 from typing import Any, Protocol, cast, override
 
@@ -71,6 +72,27 @@ class _HTTPAuthStatus:
     status_code: int | None = None
 
 
+class _BearerLeaseAuth(httpx2.Auth):
+    """Inject one operation-local bearer through the SDK 2 HTTP auth seam."""
+
+    __slots__ = ("_bearer",)
+
+    def __init__(self, bearer: str) -> None:
+        if not bearer:
+            raise ValueError("MCP bearer lease is empty")
+        self._bearer = bearer
+
+    def __repr__(self) -> str:
+        return "_BearerLeaseAuth(<redacted>)"
+
+    async def async_auth_flow(
+        self,
+        request: httpx2.Request,
+    ) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
+        request.headers["Authorization"] = f"Bearer {self._bearer}"
+        yield request
+
+
 def _extract_http_status(error: BaseException) -> int | None:
     """Find an HTTP status in nested SDK/httpx exception groups."""
     response = getattr(error, "response", None)
@@ -95,6 +117,56 @@ class ToolCallSession(Protocol):
     def tool_call(self, name: str, arguments: dict[str, Any]) -> str: ...
 
 
+@dataclass(frozen=True, slots=True)
+class MCPRequestCredential:
+    """One bearer lease for one logical MCP tool execution."""
+
+    bearer: str = field(repr=False)
+    resource_name: str
+    canonical_tool_name: str
+    policy_revision: str
+    credential_generation: int
+    replay_mode: str
+
+    def __post_init__(self) -> None:
+        if not self.bearer or not self.resource_name or not self.canonical_tool_name:
+            raise ValueError("invalid MCP request credential")
+
+
+class MCPRequestCredentialProvider(Protocol):
+    """Transport-neutral P3 seam injected by the identity composition layer."""
+
+    @property
+    def resource_name(self) -> str: ...
+
+    def is_authorized(self, canonical_tool_name: str) -> bool: ...
+
+    def credential_for(self, canonical_tool_name: str) -> MCPRequestCredential: ...
+
+
+@dataclass(frozen=True, slots=True)
+class MCPToolBinding:
+    """Separate a model-visible alias from the server canonical tool name."""
+
+    session: "MCPToolCallSession"
+    original_name: str
+    mcp_server_id: str
+    resource_name: str | None
+
+    @classmethod
+    def from_session(
+        cls,
+        session: "MCPToolCallSession",
+        original_name: str,
+    ) -> "MCPToolBinding":
+        return cls(
+            session=session,
+            original_name=original_name,
+            mcp_server_id=str(session._mcp_server.id),
+            resource_name=session.delegated_resource_name,
+        )
+
+
 class MCPToolCallSession(ToolCallSession):
     _ALL_INSTANCES: weakref.WeakSet["MCPToolCallSession"] = weakref.WeakSet()
 
@@ -105,10 +177,12 @@ class MCPToolCallSession(ToolCallSession):
         custom_header: dict[str, str] | None = None,
         *,
         call_context: object | None = None,
+        credential_provider: MCPRequestCredentialProvider | None = None,
     ) -> None:
         self.__class__._ALL_INSTANCES.add(self)
 
         self._call_context = call_context
+        self._credential_provider = credential_provider
         self._custom_header = custom_header
         self._mcp_server = mcp_server
         self._server_variables = server_variables or {}
@@ -135,6 +209,14 @@ class MCPToolCallSession(ToolCallSession):
         # 最近一次工具调用的旁路元数据，供 API / SSE / 调试界面按需读取
         self._last_tool_call_meta: dict[str, Any] | None = None
 
+        if self._credential_provider is not None:
+            if self._mcp_server.server_type != MCPServerType.STREAMABLE_HTTP:
+                self.__class__._ALL_INSTANCES.discard(self)
+                raise ValueError("delegated MCP credentials require Streamable HTTP")
+            if any(name.casefold() == "authorization" for name in self._build_headers()):
+                self.__class__._ALL_INSTANCES.discard(self)
+                raise ValueError("delegated MCP credentials conflict with static Authorization")
+
         self._event_loop = asyncio.new_event_loop()
         self._thread_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="multirag-mcp")
         self._owner_loop_started = threading.Event()
@@ -144,7 +226,14 @@ class MCPToolCallSession(ToolCallSession):
             self._finalize_owner_thread(timeout=1)
             raise RuntimeError(f"MCP owner event loop did not start for server {self._mcp_server.id}")
 
-        self._runner_future = asyncio.run_coroutine_threadsafe(self._mcp_server_loop(), self._event_loop)
+        self._runner_future = None
+        if self._credential_provider is None:
+            self._runner_future = asyncio.run_coroutine_threadsafe(self._mcp_server_loop(), self._event_loop)
+        else:
+            # A delegated session is network-lazy. The first logical tool call
+            # obtains minimum scopes before SDK initialize sends any request.
+            self._initialized.set()
+            self._client_closed.set()
 
     def _build_headers(self) -> dict[str, str]:
         raw_headers: dict[str, str] = self._mcp_server.headers or {}
@@ -264,6 +353,8 @@ class MCPToolCallSession(ToolCallSession):
     ) -> Any:
         if self._close:
             raise ValueError("Session is closed")
+        if self._credential_provider is not None:
+            raise MCPConnectionError("delegated MCP requests require a canonical tool binding")
 
         if not await self._wait_initialized(timeout=MCP_INIT_TIMEOUT + 5):
             raise MCPConnectionError(
@@ -311,6 +402,65 @@ class MCPToolCallSession(ToolCallSession):
             if current_task is not None:
                 self._inflight_tasks.discard(current_task)
 
+    async def _call_delegated_tool(
+        self,
+        *,
+        name: str,
+        arguments: dict[str, Any],
+        request_timeout: float | int,
+        progress_callback: Any,
+    ) -> CallToolResult | InputRequiredResult:
+        provider = self._credential_provider
+        if provider is None:
+            raise RuntimeError("delegated MCP credential provider is unavailable")
+        credential = provider.credential_for(name)
+        auth_status = _HTTPAuthStatus()
+        auth_status_token = self._http_auth_status.set(auth_status)
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            self._inflight_tasks.add(current_task)
+        try:
+            async with AsyncExitStack() as stack:
+                owned_http_client = create_mcp_http_client(
+                    headers=self._build_headers(),
+                    auth=_BearerLeaseAuth(credential.bearer),
+                )
+                owned_http_client.event_hooks["response"].append(self._on_http_response)
+                http_client = await stack.enter_async_context(owned_http_client)
+                transport = cast(
+                    Transport,
+                    streamable_http_client(self._mcp_server.url.strip(), http_client=http_client),
+                )
+                async with asyncio.timeout(request_timeout):
+                    client = await stack.enter_async_context(
+                        Client(
+                            transport,
+                            mode="auto",
+                            logging_callback=self._on_logging,
+                            read_timeout_seconds=request_timeout,
+                        )
+                    )
+                    self._save_client_state(client)
+                    return await client.session.call_tool(
+                        name,
+                        arguments,
+                        read_timeout_seconds=request_timeout,
+                        progress_callback=progress_callback,
+                        allow_input_required=True,
+                    )
+        except TimeoutError:
+            raise MCPToolTimeoutError(f"MCP request 'tool_call' timed out after {request_timeout}s") from None
+        except Exception as error:
+            status_code = _extract_http_status(error) or auth_status.status_code
+            raise MCPConnectionError(
+                "delegated MCP operation failed",
+                status_code=status_code,
+            ) from error
+        finally:
+            self._http_auth_status.reset(auth_status_token)
+            if current_task is not None:
+                self._inflight_tasks.discard(current_task)
+
     async def _call_mcp_tool(self, name: str, arguments: dict[str, Any], request_timeout: float | int = MCP_TOOL_CALL_TIMEOUT) -> str:
         self._last_tool_call_meta = None
         # Progress notifications are request-scoped. Generic server logging has
@@ -324,13 +474,21 @@ class MCPToolCallSession(ToolCallSession):
             msg = f" {message}" if message else ""
             call_logs.append(f"[progress {progress}{total_str}]{msg}")
 
-        result: CallToolResult | InputRequiredResult = await self._call_mcp_server(
-            "tool_call",
-            name=name,
-            arguments=arguments,
-            progress_callback=_on_progress,
-            request_timeout=request_timeout,
-        )
+        if self._credential_provider is None:
+            result: CallToolResult | InputRequiredResult = await self._call_mcp_server(
+                "tool_call",
+                name=name,
+                arguments=arguments,
+                progress_callback=_on_progress,
+                request_timeout=request_timeout,
+            )
+        else:
+            result = await self._call_delegated_tool(
+                name=name,
+                arguments=arguments,
+                request_timeout=request_timeout,
+                progress_callback=_on_progress,
+            )
 
         if isinstance(result, InputRequiredResult):
             payload = result.model_dump(mode="json", by_alias=True, exclude_none=True)
@@ -471,6 +629,12 @@ class MCPToolCallSession(ToolCallSession):
         return self._call_context
 
     @property
+    def delegated_resource_name(self) -> str | None:
+        if self._credential_provider is None:
+            return None
+        return self._credential_provider.resource_name
+
+    @property
     def server_instructions(self) -> str | None:
         """Phase 1: 获取 MCP 服务端在 initialize() 中返回的 instructions。
 
@@ -570,7 +734,7 @@ class MCPToolCallSession(ToolCallSession):
                 )
 
         self._shutdown_event.set()
-        if not self._initialized.is_set() and not self._runner_future.done():
+        if self._runner_future is not None and not self._initialized.is_set() and not self._runner_future.done():
             self._runner_future.cancel()
 
         if not self._client_closed.is_set():
@@ -580,7 +744,8 @@ class MCPToolCallSession(ToolCallSession):
                     raise TimeoutError
                 await asyncio.wait_for(self._client_closed.wait(), timeout=remaining)
             except TimeoutError:
-                self._runner_future.cancel()
+                if self._runner_future is not None:
+                    self._runner_future.cancel()
                 logging.error(
                     "Timeout while closing MCP client for server %s (timeout=%ss)",
                     self._mcp_server.id,
@@ -760,7 +925,11 @@ def _summarize_output_schema(output_schema: dict[str, Any]) -> str:
     return "Returns fields: " + ", ".join(fields)
 
 
-def mcp_tool_metadata_to_openai_tool(mcp_tool: Tool | dict[str, Any]) -> dict[str, Any]:
+def mcp_tool_metadata_to_openai_tool(
+    mcp_tool: Tool | dict[str, Any],
+    *,
+    function_name: str | None = None,
+) -> dict[str, Any]:
     """将 MCP Tool 元数据转换为 OpenAI function calling 格式。
 
     Phase 2 增强：
@@ -813,7 +982,7 @@ def mcp_tool_metadata_to_openai_tool(mcp_tool: Tool | dict[str, Any]) -> dict[st
     return {
         "type": "function",
         "function": {
-            "name": name,
+            "name": function_name or name,
             "description": desc,
             "parameters": schema,
         },

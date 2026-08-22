@@ -314,6 +314,16 @@ asserted open_id match、stable user id present，以及 activated true、frozen
     natural key、subject/alias、target/actor、digest；表中 scope natural keys 仅服务复合 FK。
 50. I6 import graph 不包含 FastMCP、Channel、HTTP route 或 UI；写事务不触发 Provider 网络调用；
     employee_no 即使出现在 I4 proof 也不进入 I6 command/schema/identity attributes/BindingEvent。
+51. P3 的 A4/grant snapshot 必须重算 canonical revision，拒绝 local profile、symlink、非 regular、超界、
+    POSIX group/world writable、重复 server/resource/audience、未知 scope 和 policy revision drift。
+52. delegated binding 精确核对 server tenant、Streamable HTTP、URL/A2 audience/grant audience 与无静态
+    Authorization；缺 Principal 或 published agent revision、Dialog/legacy context、未授权 grant/tool/scope/
+    assurance 都在网络前 fail closed，未登记 server 保持 legacy。
+53. 模型可见 alias 与 canonical wire name 分离；同名工具可稳定路由到不同 MCP server，policy/cache/token
+    只消费 original name。未授权工具不进入模型 tool metadata，不能靠 alias 绕过。
+54. decision cache key 覆盖 principal/tenant/agent+revision/server/resource/canonical tool/scope/policy+grant
+    revision/credential generation；并发双用户不共享 bearer。每次逻辑调用重新签 token/JTI，同一 SDK 2
+    auth lease 覆盖 initialize/call/retry，下一次调用获得不同 bearer，repr/异常/meta 不泄露 token。
 
 ### 3.2 MultiRAG 集成测试
 
@@ -504,7 +514,7 @@ A4 提交锚点为 of_mcp `74117a0`；定向 **201 passed**，`uv run --locked o
 **417 passed、2 existing skipped**，contract snapshot 无漂移。这些测试仍不证明
 A2/P3 token 获取与逐请求委托、飞书 Channel identity→Principal、M1/M2 业务主体/对象授权、A5 internal
 actor、A6 audit/replay 或 `auth_time` freshness；secure 仍被机器限制为仅本机验证，不得做远程业务发布
-验收。
+验收。P3 后续有自己的 MultiRAG 测试证据，不能倒填成 A4 当时已完成跨仓链路。
 
 A6 phase 1 的最小回归集合包括：
 
@@ -522,7 +532,8 @@ A6 phase 1 的最小回归集合包括：
 `uv run --locked ofmcp verify` 六步全绿、**453 passed、2 existing skipped**，提交锚点统一以 ROADMAP
 变更日志为准。A6 必须保持 `🔵`：自动化尚未覆盖真实多副本 durable store、
 进程重启后 claim/audit、KMS/HMAC key rotation、真实 OTel SDK/exporter/collector/W3C 跨仓 trace、A5
-`parent_jti_hash`、P3 每执行新 token/JTI、业务 idempotency/result lookup 和 remote-release 演练。
+`parent_jti_hash`、P3 动态 bearer 的真实跨仓运行证据、业务 idempotency/result lookup 和
+remote-release 演练。
 
 ### 3.4 跨仓端到端测试
 
@@ -946,7 +957,7 @@ git diff --check
 当前提交锚点为 of_mcp `74117a0`：上述定向命令 **201 passed**，完整 `ofmcp verify` 六步全绿、
 **417 passed、2 existing skipped**，contract snapshot 无漂移；MultiRAG 文档收口后的 `make verify`
 全绿、**1904 passed**。`contract diff` 的可读输出不能替代 `ofmcp verify` 的 no-drift gate，A4 单仓
-全绿也不能替代未来 A2/P3/飞书链的跨仓 E2E。
+全绿也不能替代后续 A2/P3/飞书链的真实跨仓 E2E。
 
 EIM-A6 phase 1/后续收口复用同一完整门禁，并必须显式包含 replay/audit/execution/telemetry 测试：
 

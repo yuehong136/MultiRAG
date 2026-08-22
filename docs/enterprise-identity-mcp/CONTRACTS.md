@@ -1359,9 +1359,9 @@ keyed HMAC 绑定完整 Principal（platform user、tenant、agent、client）�
 - 上述响应都 `Cache-Control: no-store`，不发 OAuth `WWW-Authenticate`，且业务函数必须零调用；
 - `read/reusable` 不消费 replay key，但仍必须写 pre-execution audit；它不是绕过 A4 的匿名快路。
 
-未来 P3 必须为每次高风险逻辑执行签发新的短期 token/JTI；把一枚 token 用于多个副作用工具调用会被
-本契约有意拒绝。当前 P3 尚未实现，secure 又因没有 production-ready coordinator fail-fast，因此这条
-纪律尚未进入真实 MultiRAG delegated bearer 链。
+P3 已按每次逻辑工具执行签发新的短期 token/JTI；把一枚 token 用于多个副作用工具调用仍被本契约
+有意拒绝。该接线默认关闭且尚未 rollout，secure 又因没有 production-ready coordinator fail-fast，
+因此这条纪律尚未取得真实 MultiRAG delegated bearer E2E 证据。
 
 claim 生命周期是 `CLAIMED -> DISPATCHED -> SUCCEEDED|FAILED_NO_EFFECT|OUTCOME_UNKNOWN`。进入业务
 代码前必须已完成原子 claim、pre-execution audit 和 `DISPATCHED`；成功才能记 `SUCCEEDED`。当前
@@ -1438,7 +1438,88 @@ Host/Origin/DNS rebinding 绕开本机边界。工具授权完成不会自动解
 至少在 A2/P3 request-scoped delegation、权威企业主体、A6 审计/重放与远程发布证据完成前，secure
 仍只能用于本机验证。
 
-### 6.5 EIM-A1 corpus wire contract
+### 6.5 A2 issuer、配置与 public JWKS
+
+首期 A2 是与 MultiRAG API 同进程但独立包/配置的逻辑 Authorization Server。唯一公共 route 固定为：
+
+```http
+GET /.well-known/jwks.json
+```
+
+该 route 不要求 Web session/bearer，不接收任何用户输入，只返回当前原子 public JWKS snapshot，并设置
+与配置一致的有界 public cache header；disabled/unready 时稳定返回 503，不把路径、PEM、异常或配置
+内容写入响应。A2 不提供公开 token endpoint；P3 后续只从进程内 issuer service 获取 token。
+
+`identity.mcp_issuer` 默认 disabled，启用时必须完整给出 canonical HTTPS `issuer`、first-party
+`client_id`、1～300 秒 TTL、固定 30 秒 skew、JWKS cache TTL、resource name 到精确 HTTPS
+audience/registered scopes/可选 enterprise subject type+issuer+issuer-tenant authority 的映射，以及 file key provider。配置中的 private PEM path
+使用 secret 类型，必须是 absolute、非 symlink、regular file，且 POSIX 下必须归当前进程 owner、只能由
+owner 读写；active
+private P-256 key 必须与 public keyset 中同 `kid` 的 key 完全匹配。production code 只依赖
+`cryptography`，不得 import A1 test oracle 或依赖 MCP SDK 传递的 JWT 包。
+
+进程内签发输入分成两部分：
+
+- immutable `Principal`、已发布 `agent_id`、resource name、requested scopes/claims；
+- 由调用它的服务端策略层计算出的 allowed scopes。A2 验证 resource registry 与 requested/allowed
+  关系，但不虚构 P3 尚不存在的 Agent/tenant/user policy source。
+
+签发必须先执行 A1 七条 `issuance_policy_cases` 对应的 production policy：raw Provider subject、caller-
+selected tenant、unknown scope、scope elevation、forbidden claim 或缺 verified assurance 时根本不生成
+token。成功 token 固定 `typ=at+jwt`、`alg=ES256`、active `kid`、`token_use=mcp_access`、精确单值
+audience、不可预测 JTI、`nbf=iat` 和 `exp-iat<=300`，compact bytes 不超过 4096。
+
+`sub/tenant_id` 只从 Principal 取得；`auth_time` 仅在 Principal 真实携带时投影且不得晚于 `iat`；
+`acr` 首期只在 `ENTERPRISE_VERIFIED` 时投影为冻结值；因当前 Principal 不含已冻结 method evidence，
+首期不签 `amr`。`enterprise_subject` 只有 resource 显式允许、调用方请求且 Principal 是 matching
+enterprise-verified 时，才投影 `{type, issuer, subject, tenant}`；普通 token 不携带它。
+
+`SigningKeyProvider` 只暴露 active `kid`、完整 public JWKS snapshot 和 ES256 signing operation；未来
+KMS adapter 不得迫使 issuer 读取 private bytes。轮换 successor contract 要求 next active key 已存在于
+上一版 JWKS，切换后旧 active key 继续存在；旧 key 的 removal deadline 至少是 switch time 加
+`max TTL + skew + JWKS cache TTL`。单进程 contract 不替代 O1 的多副本发布/回滚演练。
+
+#### 6.5.1 EIM-P3 request-scoped credential provider
+
+P3 不从 Agent DSL、模型可见工具名、MCP tool description、静态 headers 或数据库中的 MCP server
+名称猜授权。首期 authority 是两个启动时一次性加载、深度不可变且可独立评审的 JSON 工件：
+
+- A4 `tool-policies.json`：必须是 format 2，并重新计算 canonical SHA-256 验证
+  `policy_revision`；逐 canonical tool 提供 `required_scopes`、`effect`、`replay_mode` 与 assurance；
+- MultiRAG `mcp-grants.json`：format 1，带 canonical `grant_revision`、正整数
+  `credential_generation`、MCP server → resource/audience 的 delegated binding，以及精确到
+  `(tenant_id, platform_user_id, published agent_id, agent_revision_id, resource_name)` 的 grants。
+
+两者只经 `identity.mcp_delegation` 的绝对路径装配，默认 disabled。启动时验证 grant policy revision
+与 A4 snapshot 完全相同、grant scopes 属于 snapshot scope registry、server/resource/audience 唯一；
+启用后任何缺项、hash 漂移或 authority 歧义都 fail fast/fail closed。现有未登记 server 继续走 legacy
+static auth；登记为 delegated 的 server 只允许 Streamable HTTP，URL 必须与 A2 resource audience 和
+binding audience 三者逐字相同，且不得再携静态 `Authorization`。SSE delegated 首期拒绝，不静默降级。
+
+`RunContext` 的 `agent_id/agent_revision_id` 只能由服务端已经验证的 execution target 填入；没有完整
+Principal 或 published revision 时 delegated call 在网络前拒绝。模型可见 alias 只解决同名工具路由，
+授权、token、cache 与审计始终使用 MCP server 上的 original canonical tool name。一个 binding 至少固定：
+
+```text
+model alias -> MCP server id -> resource name/audience -> canonical tool -> A4 policy
+```
+
+Provider 只缓存 immutable grant/scope decision，不缓存 bearer；请求的 ACR、AMR 与 enterprise subject
+每次重新校验。A2 当前不签 `amr`，所以 policy 的 `required_amr` 非空时必须在发网前拒绝。decision key 完整包含 principal、
+tenant、agent+revision、server/resource/canonical tool、required scopes、A4 policy revision、grant revision
+与 credential generation。每次逻辑 `tools/call` 都调用 A2 取得新 token/JTI；`side_effect/single_use`
+由此满足 A6 单 capability 约束。该 bearer 作为一个 logical-operation credential lease 注入 MCP SDK 2
+`create_mcp_http_client(auth=httpx2.Auth)`，initialize、call 与 transport retry 可复用同一 lease；下一次
+逻辑调用必须新签。Agent/session/global 对象均不得保存某位用户的 token，异常、repr、日志与 tool meta
+也不得出现 bearer。
+
+为避免初始化阶段需要宽 scope token，delegated session 不在 Agent 构造时建立用户连接；它在每次逻辑
+调用取得最小 tool scopes 后创建 operation-scoped SDK 2 Client，完成 initialize + call 后关闭。legacy
+static session 的预热、SSE/HTTP 兼容和 headers 行为保持不变。本步不新增 DB、公开 token endpoint、
+OAuth grant、refresh token、外部管理后台操作或 remote release，也不完成 A5/A6 production backend、
+M1/M2 业务对象授权、U14 interaction resume。
+
+### 6.6 EIM-A1 corpus wire contract
 
 MultiRAG 与 of_mcp 各自保存字节一致、无需网络的 `eim-a1/v1` corpus：
 
@@ -1513,7 +1594,7 @@ bytes 和只读 public JWKS；canonical PEP 723 generator 使用 test-only key �
 ES256，只负责可复现地产生 corpus。验证仍必须读取提交的固定 token，不能靠运行时重新签发替代。
 两仓 CI 不做 sibling import、网络下载或运行时共享 verifier。
 
-### 6.6 首期标准化程度
+### 6.7 首期标准化程度
 
 首期 MultiRAG 是唯一预注册 MCP client，issuer 根据已经认证的内部 Principal 签发 access token；
 不对外宣称支持任意第三方 OAuth grant。of_mcp 仍按标准 protected resource 实现 metadata、
@@ -1523,7 +1604,7 @@ challenge、audience 和 bearer validation。
 Credentials extension。不能通过自定义 Header 扩张首期协议，也不能把飞书事件字段伪造成 ID
 Token/SAML/Identity Assertion。
 
-### 6.7 MultiRAG 入站 MCP Resource Server
+### 6.8 MultiRAG 入站 MCP Resource Server
 
 `mcp/server/` 是不同于 `of_mcp` gateway 的另一个 protected resource。正式启用用户级或企业级
 访问前必须为它定义独立的 canonical HTTPS resource URI、audience、issuer policy、keyset 和最小

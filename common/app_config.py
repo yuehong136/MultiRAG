@@ -309,12 +309,199 @@ class IdentityProvisioningConfig(_Section):
             raise AppConfigError("identity.provisioning.hmac_keyring is invalid") from exc
 
 
+def _validate_canonical_https_uri(value: str, field_name: str) -> str:
+    if not value or value != value.strip() or not value.isascii() or len(value) > 4096:
+        raise ValueError(f"{field_name} must be a non-empty canonical HTTPS URI")
+    parsed = urlsplit(value)
+    if parsed.scheme != "https" or not parsed.netloc or parsed.hostname is None:
+        raise ValueError(f"{field_name} must be an absolute HTTPS URI with a host")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(f"{field_name} must not contain userinfo")
+    if parsed.query or parsed.fragment:
+        raise ValueError(f"{field_name} must not contain a query or fragment")
+    try:
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must contain a valid port") from exc
+    return value
+
+
+def _valid_oauth_scope_token(value: str) -> bool:
+    return 1 <= len(value) <= 128 and value.isascii() and all("!" <= char <= "~" and char not in {'"', "\\"} for char in value)
+
+
+class McpIssuerEnterpriseSubjectConfig(_Section):
+    """Exact resource-local enterprise subject authority."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    subject_type: Literal["employee_no", "talent_id", "workcode"]
+    issuer: str
+    issuer_tenant: str
+
+    @field_validator("issuer", "issuer_tenant")
+    @classmethod
+    def validate_subject_authority(cls, value: str) -> str:
+        if not value or value != value.strip() or len(value) > 255:
+            raise ValueError("enterprise subject authority must be a non-empty canonical value")
+        return value
+
+
+class McpIssuerResourceConfig(_Section):
+    """One server-owned MCP resource registry entry."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    audience: str = ""
+    registered_scopes: list[str] = Field(default_factory=list)
+    enterprise_subject: McpIssuerEnterpriseSubjectConfig | None = None
+
+    @field_validator("audience")
+    @classmethod
+    def validate_audience(cls, value: str) -> str:
+        return _validate_canonical_https_uri(value, "audience")
+
+    @field_validator("registered_scopes")
+    @classmethod
+    def validate_registered_scopes(cls, value: list[str]) -> list[str]:
+        if not value or len(value) != len(set(value)) or any(not _valid_oauth_scope_token(scope) for scope in value):
+            raise ValueError("registered_scopes must contain unique RFC 6749 scope tokens")
+        return value
+
+
+class McpIssuerFileKeyProviderConfig(_Section):
+    """File-backed A2 signer configuration; private path is always redacted."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    kind: Literal["file"] = "file"
+    active_key_id: str = ""
+    private_key_file: SecretStr = SecretStr("")
+    public_key_files: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("active_key_id")
+    @classmethod
+    def validate_active_key_id(cls, value: str) -> str:
+        if value and not _valid_identity_hmac_key_id(value):
+            raise ValueError("active_key_id must contain 1..64 ASCII alphanumeric, '_' or '-' characters")
+        return value
+
+    @field_validator("public_key_files")
+    @classmethod
+    def validate_public_key_files(cls, value: dict[str, str]) -> dict[str, str]:
+        if len(value) > 32:
+            raise ValueError("public_key_files may contain at most 32 keys")
+        for key_id, path in value.items():
+            if not _valid_identity_hmac_key_id(key_id) or not path or not os.path.isabs(path):
+                raise ValueError("public_key_files requires valid key ids and absolute paths")
+        return value
+
+    @model_validator(mode="after")
+    def validate_complete_file_provider(self) -> Self:
+        private_path = self.private_key_file.get_secret_value()
+        if not self.active_key_id or not private_path or not os.path.isabs(private_path):
+            raise ValueError("file key provider requires active_key_id and an absolute private_key_file")
+        if self.active_key_id not in self.public_key_files:
+            raise ValueError("active_key_id must name a key in public_key_files")
+        return self
+
+
+class McpIssuerConfig(_Section):
+    """Disabled-by-default first-party EIM-A2 Authorization issuer."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    enabled: bool = False
+    issuer: str = ""
+    client_id: str = ""
+    ttl_seconds: int = Field(default=300, ge=1, le=300)
+    clock_skew_seconds: Literal[30] = 30
+    jwks_cache_ttl_seconds: int = Field(default=300, ge=1, le=86_400)
+    resources: dict[str, McpIssuerResourceConfig] = Field(default_factory=dict)
+    key_provider: McpIssuerFileKeyProviderConfig | None = None
+
+    @field_validator("issuer")
+    @classmethod
+    def validate_issuer(cls, value: str) -> str:
+        return _validate_canonical_https_uri(value, "issuer") if value else value
+
+    @field_validator("client_id")
+    @classmethod
+    def validate_client_id(cls, value: str) -> str:
+        if value and (len(value) > 128 or not value.isascii() or any(not "!" <= char <= "~" for char in value)):
+            raise ValueError("client_id must be 1..128 canonical ASCII characters")
+        return value
+
+    @field_validator("resources")
+    @classmethod
+    def validate_resources(cls, value: dict[str, McpIssuerResourceConfig]) -> dict[str, McpIssuerResourceConfig]:
+        if len(value) > 32 or any(not _valid_identity_hmac_key_id(name) for name in value):
+            raise ValueError("resources must use valid names and contain at most 32 entries")
+        audiences = [resource.audience for resource in value.values()]
+        if len(audiences) != len(set(audiences)):
+            raise ValueError("resource audiences must be unique")
+        return value
+
+    @model_validator(mode="after")
+    def validate_enabled_issuer(self) -> Self:
+        if not self.enabled:
+            return self
+        if not self.issuer or not self.client_id or not self.resources or self.key_provider is None:
+            raise ValueError("enabled MCP issuer requires issuer, client_id, resources and key_provider")
+        return self
+
+    @property
+    def minimum_retired_key_retention_seconds(self) -> int:
+        return self.ttl_seconds + self.clock_skew_seconds + self.jwks_cache_ttl_seconds
+
+    def require_enabled(self) -> Self:
+        if not self.enabled:
+            raise AppConfigError("identity.mcp_issuer is disabled")
+        return self
+
+
+class McpDelegationConfig(_Section):
+    """Disabled-by-default immutable P3 policy artifact configuration."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    enabled: bool = False
+    tool_policy_file: str = ""
+    grant_policy_file: str = ""
+
+    @field_validator("tool_policy_file", "grant_policy_file")
+    @classmethod
+    def validate_policy_path(cls, value: str) -> str:
+        if value and (value != value.strip() or not os.path.isabs(value)):
+            raise ValueError("MCP delegation policy paths must be absolute")
+        return value
+
+    @model_validator(mode="after")
+    def validate_enabled_delegation(self) -> Self:
+        if self.enabled and (not self.tool_policy_file or not self.grant_policy_file):
+            raise ValueError("enabled MCP delegation requires both policy files")
+        return self
+
+    def require_enabled(self) -> Self:
+        if not self.enabled:
+            raise AppConfigError("identity.mcp_delegation is disabled")
+        return self
+
+
 class IdentityConfig(_Section):
     """Enterprise identity runtime configuration."""
 
     model_config = ConfigDict(extra="allow", hide_input_in_errors=True)
 
     provisioning: IdentityProvisioningConfig = Field(default_factory=IdentityProvisioningConfig)
+    mcp_issuer: McpIssuerConfig = Field(default_factory=McpIssuerConfig)
+    mcp_delegation: McpDelegationConfig = Field(default_factory=McpDelegationConfig)
+
+    @model_validator(mode="after")
+    def validate_delegation_has_issuer(self) -> Self:
+        if self.mcp_delegation.enabled and not self.mcp_issuer.enabled:
+            raise ValueError("identity.mcp_delegation requires identity.mcp_issuer")
+        return self
 
 
 # ---------------------------------------------------------------------------
