@@ -413,7 +413,8 @@ MCP Foundation 的 F2/F3/F4/F6/F7/F8 已于 2026-08-12 完成。冷启动 Agent 
    并保留 legacy 协议兼容。F6 因当前没有 FastMCP 3 生产消费者，经用户明确批准选择了全根协同
    升级，而不是原默认的 `mcp/server` 独立 project/venv。
 3. **真实 legacy 只留在测试边界**：FastMCP 3 通过 PEP 723 锁定的真实子进程 fixture 运行，
-   不与根环境在同一解释器导入。`make mcp-compat` 当前协议矩阵为 **13/13 PASS**；任何后续
+   不与根环境在同一解释器导入。`make mcp-compat` 当前协议矩阵为 **22/22 PASS**：双方向逐一
+   覆盖 SDK 2 registry 的五个已发布 revision 并拒绝未知 revision；任何后续
    SDK/FastMCP/transport 改动都必须复跑，而不能用 mock 或 sibling import 替代。
 4. **下一协议相关入口**：EIM-A1 已完成并固定 token/JWKS test vectors；of_mcp EIM-A3 已由
    `e4ab560` 完成 strict Resource Server，EIM-A4 已由 `74117a0` 接续 immutable Principal、
@@ -548,8 +549,10 @@ A5 以 of_mcp `5b4162a` 为完成锚点；冷启动 agent 必须保持以下不�
    assurance 只衰减，外部 Authorization 与透明 incoming headers 不转发；
 2. FastMCP 4 异步 `ProxyProvider.client_factory` 从真实 request context 读取 Principal、ToolPolicy 与
    protocol version；每个逻辑目录/调用操作新建 `ProxyClient(auth=...)` 和 bearer，不共享用户 session；
-3. backend 精确镜像 modern `2026-07-28` 或 `legacy`，不能用 `auto` 静默降级；ProxyProvider cache
-   只保存 raw catalog，用户 visibility 每请求执行，远端 direct call 在执行前重验；
+3. backend 对 SDK registry 中 modern `2026-07-28` 精确镜像，对四个 handshake revision 使用官方
+   `legacy` initialize 协商；未知/缺失 revision 在建 client 前 fail closed，不能用 `auto` 静默降级
+   或按日期字符串猜测；ProxyProvider cache 只保存 raw catalog，用户 visibility 每请求执行，远端
+   direct call 在执行前重验；
 4. 独立 proxy composition root 使用 `RemoteAuthProvider`/PRM 与 strict internal verifier；Gateway 拒绝
    actor、proxy 拒绝 access、service resource 漂移 fail closed；audit schema v2 严格区分 access record
    与带 `parent_jti_hash` 的 actor record；
@@ -560,6 +563,11 @@ A5 失败优先覆盖缺模块、默认 auto era、raw catalog mode 与 service 
 **256 passed**，完整 `uv run --locked ofmcp verify` 六步全绿、**484 passed、2 skipped**，3 条 import
 contracts 与 contract snapshot 无漂移。后续触碰 proxy factory、internal issuer/verifier、mixed assembly
 或 audit schema 必须至少复跑 A5 定向矩阵、contract diff 和完整 verify。
+
+EIM-F9 后续把 A5 的 era 分类扩成 SDK registry 驱动的完整门禁：四个已发布 handshake revision
+统一使用 `legacy`，modern revision 精确镜像，未知/缺失 revision fail closed；MultiRAG 双方向真实
+进程矩阵为 **22/22 PASS**，of_mcp 分类/真实 proxy HTTP 定向 **20 passed**，完整 verify 为
+**499 passed、2 existing skipped**。FastMCP 4.0.0b3 升级仍须另立版本任务，不能借 F9 静默升级。
 
 A6 phase 1 已接续且保持 `🔵`；MultiRAG F1/I3/I4/I6/P1/P2/C1/C2/C3/A2/P3 已完成。I5/I7/U14
 可作为已解锁支线，但 M1 仍等待 I5。secure 在独立远程发布闸门解除前仍不能作为远程业务入口。
@@ -623,7 +631,7 @@ P3/A5 动态 bearer 的真实跨仓证据、M3/M4 业务幂等/结果查询和 r
 | EIM-A1 corpus | MultiRAG canonical generator + 两仓本地副本 | PyJWT/joserfc 独立 oracle | 已完成：of_mcp `3e1d5ac` → MultiRAG 本次 A1 变更；91-file corpus 字节一致，digest `59f82684aa06365f45623ce9bfad336d487f2c9351879266a6b2ab21bf8fe208`；运行时无依赖 |
 | 新 scope/tool metadata | `of_mcp` policy snapshot | MultiRAG Agent/MCP config、P3 cache/audit | resource 端先提交包含 effect/replay mode 的 canonical `tool-policies.json` 与 `policy_revision` → 调用端按 revision 重算请求与缓存；未知 scope fail closed，不从运行时可见列表反推权限，也不把 revision 自动塞入当前 A1 token profile |
 | confirmation contract | `of_mcp` challenge | MultiRAG card/channel | resource 端先返回可识别 challenge → UI 接线 → 强制确认 |
-| MCP 双向兼容 fixture | MCP SDK 2/FastMCP 4 主运行时 + PEP 723 FastMCP 3 真实 legacy 子进程 | 两仓 compatibility test | F2/F3/F4/F6/F7/F8 已完成并形成 13/13 基线；后续每次协议/transport 变更逐格复跑；`of_mcp` F4 锚点 `23dd1fd`；不得用本机 sibling import 代替可复现安装 |
+| MCP 双向兼容 fixture | MCP SDK 2/FastMCP 4 主运行时 + PEP 723 FastMCP 3 真实 legacy 子进程 | 两仓 compatibility test | F2/F3/F4/F6/F7/F8/F9 已完成并形成 22/22 基线；双方向覆盖五个已发布 revision、未知版本拒绝及既有 auth/error/cancel 行为；后续每次协议/transport 变更逐格复跑；`of_mcp` F4 锚点 `23dd1fd`；不得用本机 sibling import 代替可复现安装 |
 | MRTR interaction | `of_mcp` `input_required`/legacy adapter | MultiRAG U14 state machine，再到 U15 renderer | 先固定 transport-neutral request/response 与恢复语义 → 飞书表单渲染 → 敏感动作最后强制 U7/M3/M4 |
 
 跨仓任务必须在两边都留下同一个 `EIM-*` ID；完成日志列出两个 SHA。不能只改一侧后把另一侧
@@ -673,7 +681,7 @@ integration；FastMCP/MCP 升级任务还要跑协议版本、legacy client 和 
 - server 以随机本机端口启动，输出结构化 ready/protocol 证据；测试负责终止并检查退出，不遗留进程。
 - legacy fixture 必须能从自己的 PEP 723 lock 在干净 cache/临时环境冷安装；不能依赖父进程
   `sys.path`、绝对 sibling checkout，或把 FastMCP 3/MCP 1 混入根运行时。
-- 当前 `make mcp-compat` 必须保持 **13/13 PASS**。完成日志同时记录 MultiRAG SHA、of_mcp SHA、
+- 当前 `make mcp-compat` 必须保持 **22/22 PASS**。完成日志同时记录 MultiRAG SHA、of_mcp SHA、
   主/legacy lock 摘要和每格协商分支；新增或减少格子必须说明协议风险，不能只改分母换绿。
 - timeout/caller cancel 必须证明本地等待有界、同 server 快调用不被慢调用阻塞；远端取消是协作式，
   远端仍完成不等于矩阵失败，但必须被观测，副作用路径还要另证业务幂等与结果未知处置。

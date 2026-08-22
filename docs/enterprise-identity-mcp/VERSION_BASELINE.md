@@ -1,7 +1,7 @@
 # 技术版本与上游基线
 
 > **基础版本核验：2026-08-07；飞书 SDK、官方文档和交互参考仓刷新：2026-08-09；
-> 对话执行、重新生成和持久化参考刷新：2026-08-10；MCP/FastMCP/扩展边界刷新：2026-08-12；
+> 对话执行、重新生成和持久化参考刷新：2026-08-10；MCP/FastMCP/扩展边界刷新：2026-08-22；
 > `lark-oapi` 1.7.2 可执行契约刷新：2026-08-12；I4/I4.1 官方 SDK/live wire 调用链实现刷新：
 > 2026-08-13；RAGFlow P3 定向只读对照：2026-08-13
 > （Asia/Shanghai）**
@@ -19,8 +19,8 @@
 | MCP Python SDK `mcp` | MultiRAG 与 of_mcp 均 exact `2.0.0` | **2.0.0 stable** | 已达成；MultiRAG outbound 使用官方 `Client` | F3 已完成；后续升级单独重跑双时代矩阵 |
 | `mcp-types` | 两仓 lock 均为 2.0.0（由 `mcp` 精确约束） | **2.0.0 stable** | 与实际 SDK/框架锁一致 | 业务代码从 `mcp.types` 导入；不重复直依赖 |
 | FastMCP stable | 仅隔离 legacy fixture exact 3.4.7 | **3.4.7** | 只作 legacy compatibility oracle | PEP 723 lock，不进入 MultiRAG 生产根环境 |
-| FastMCP 4 prerelease | MultiRAG 与 of_mcp 均 exact 4.0.0b2；MultiRAG 另 constraint `fastmcp-slim==4.0.0b2` | **4.0.0b2 beta** | 当前已验证基线 | F4/F7 已完成；b3/RC/GA 必须另立显式版本任务 |
-| MCP 协议 | MultiRAG inbound/outbound modern 主路径为 `2026-07-28`；HTTP/SSE legacy 门禁为 `2025-11-25` | **2026-07-28** | modern 主路径 + 明确 legacy compatibility | 13 格真实进程矩阵必须同时证明 modern 和 fallback，不以调用成功替代协商证据 |
+| FastMCP 4 prerelease | MultiRAG 与 of_mcp 均 exact 4.0.0b2；MultiRAG 另 constraint `fastmcp-slim==4.0.0b2` | **4.0.0b3 beta**（2026-08-14） | b2 是当前已验证基线 | F4/F7 已完成；b3 的 auth/proxy 兼容加固值得独立评估，但升级必须另立版本任务 |
+| MCP 协议 | modern 主路径 `2026-07-28`；handshake 支持 `2024-11-05`、`2025-03-26`、`2025-06-18`、`2025-11-25` | **2026-07-28** | 官方 SDK 2 registry 的五个已发布 revision | F9 的 22 格真实进程矩阵双向覆盖五版本并拒绝未知 revision；不能用日期字符串猜兼容性 |
 
 版本来源：
 
@@ -29,7 +29,10 @@
 - [`mcp` PyPI](https://pypi.org/project/mcp/)
 - [`fastmcp` PyPI](https://pypi.org/project/fastmcp/)
 - [MCP Python SDK v2 What's New](https://github.com/modelcontextprotocol/python-sdk/blob/main/docs/whats-new.md)
+- [MCP Python SDK v2 protocol versions](https://github.com/modelcontextprotocol/python-sdk/blob/main/docs/protocol-versions.md)
+- [MCP Python SDK v2 version registry](https://github.com/modelcontextprotocol/python-sdk/blob/main/src/mcp-types/mcp_types/version.py)
 - [MCP 2026-07-28 发布说明](https://blog.modelcontextprotocol.io/posts/2026-07-28/)
+- [FastMCP updates](https://github.com/PrefectHQ/fastmcp/blob/main/docs/updates.mdx)
 
 ### 为什么 MultiRAG 新客户端直接依赖 `mcp`，不以 FastMCP Client 为核心
 
@@ -46,6 +49,12 @@ FastMCP 继续作为 of_mcp 的 server/composition 框架，但授权契约必�
 服务负担，并批准全根原子升级。EIM-F7/F3/F8 因而在同一技术提交中 exact pin FastMCP 4.0.0b2
 与 MCP SDK 2.0.0，同时迁完直接 API。FastMCP 3.4.7 只保留在隔离、确定锁定的 compatibility
 fixture 中。该决策不意味着以后可静默跟随新 beta；每个 b3/RC/GA 都要重新做显式版本任务。
+
+EIM-F9 又把“legacy”从单个日期修正为官方定义的 handshake **时代**：Client 使用
+`mode="legacy"` 进入 initialize 流程，最终协议 revision 由握手协商；官方 SDK 只允许精确 pin modern
+revision，不允许把旧日期直接作为 `mode`。of_mcp A5 逐请求 proxy factory 因而只对官方
+`HANDSHAKE_PROTOCOL_VERSIONS` 返回 `legacy`，只对 `MODERN_PROTOCOL_VERSIONS` 返回精确版本，任何
+未知/缺失 revision 都在创建后端 client 前 fail closed。
 
 本仓顶层目录也叫 `mcp/`，但保持**无 `__init__.py`**，因此不会遮蔽 site-packages 中官方
 regular package。入站服务继续以 `python mcp/server/server.py`/`uv run mcp/server/server.py`
@@ -308,6 +317,10 @@ SEP 为准，不能因此退回旧 session 设计。
 - 隔离 FastMCP 3.4.7 与官方 MCP 2.0.0 script locks 必须继续 `uv lock --check --script`；
 - 同时验证 MultiRAG SDK2 Client -> modern/legacy server、官方 SDK2 Client -> MultiRAG
   FastMCP4 modern/legacy inbound；SSE 只保留 legacy 冒烟；
+- 官方 `HANDSHAKE_PROTOCOL_VERSIONS` 与 `MODERN_PROTOCOL_VERSIONS` 必须等于项目评审过的枚举；新增
+  revision 先使 ratchet 测试失败，经明确兼容评审和矩阵扩展后再接受；
+- 双方向逐一覆盖 `2024-11-05`、`2025-03-26`、`2025-06-18`、`2025-11-25`、
+  `2026-07-28`，并证明未知 revision 结构化拒绝；
 - 每格记录 `server/discover`、legacy `initialize` 等实际协商路径，不能只断言工具返回值；
 - list/call/tool error、取消、超时和认证 401/403 行为固定；
 - 请求级 token 不被跨 Principal 复用；
@@ -327,7 +340,8 @@ SEP 为准，不能因此退回旧 session 设计。
   exact beta；
 - 只有 editable sibling path、已有本机 cache 或未提交 lock 才能安装，干净环境不能复现；
 - 根 lock、两个 script lock 任一不可确定复现，或当前文件入口启动/回滚失败；
-- compatibility gate 只得到“调用成功”，无法证明 modern 或 legacy 分支，或取消/close 留下悬挂线程；
+- compatibility gate 未完整得到 22/22，或只得到“调用成功”而无法证明精确 revision/modern/
+  handshake 分支，或取消/close 留下悬挂线程；
 - Tasks/Apps/EMA 等扩展的官方状态、SDK 支持和本项目假设不一致，却需要把它们当生产硬依赖。
 
 ### FastMCP 4 beta

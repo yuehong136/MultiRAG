@@ -521,8 +521,11 @@ A5 完成态的最小回归集合包括：
 - internal actor 签发严格固定独立 issuer/keyset/workload client 与精确 service audience，TTL 不超过
   60 秒且不晚于父 token，scope/assurance/enterprise subject 只衰减不提升；private key file 的
   owner/mode/symlink/public mismatch 与轮换边界 fail closed；
-- 真实 FastMCP HTTP proxy 链分别证明 modern `2026-07-28` 精确镜像和 legacy 回滚；backend client
-  不得使用 `auto` 静默回到 legacy，也不得透明转发 inbound Authorization/header；
+- 真实 FastMCP HTTP proxy 链分别证明 modern `2026-07-28` 精确镜像，以及官方 registry 中四个
+  handshake revision 均进入 `legacy` initialize 协商；backend client 不得使用 `auto` 静默回到
+  legacy，也不得透明转发 inbound Authorization/header；
+- 未知、空或未来 revision 必须在创建 backend client 前 fail closed；版本分类只消费 SDK 官方
+  `HANDSHAKE_PROTOCOL_VERSIONS` / `MODERN_PROTOCOL_VERSIONS`，不按日期或字符串大小猜测；
 - 每个逻辑目录/调用操作创建新的 `ProxyClient` 与 actor bearer；并发 broad/narrow Principal 在
   ProxyProvider 内建 raw catalog cache 命中时仍保持用户级 visibility 隔离，无 token/session 串线；
 - mount/proxy 的 Principal、成功调用、直接 403、最终授权重验和审计主体摘要等价；external
@@ -594,9 +597,10 @@ EIM-F2/F3/F4/F6/F7/F8 完成后的可复现基线是 MCP SDK 2/FastMCP 4 主运�
 make mcp-compat
 ```
 
-当前结果必须为 **13/13 PASS**。矩阵至少证明双方向真实协商分支、tools/list/call、401/403、tool
-error、caller cancel/timeout、现代 inbound discover/sessionless/structured result、legacy 回退和
-fixture 有界退出。PEP 723 fixture 必须使用自己的 lock/解释器，不得因根依赖已经升级而改成 mock，
+当前结果必须为 **22/22 PASS**。矩阵逐一覆盖 SDK 2 registry 的四个 handshake revision 与一个
+modern revision，并证明未知 revision 结构化拒绝；同时证明双方向真实协商分支、tools/list/call、
+401/403、tool error、caller cancel/timeout、现代 inbound discover/sessionless/structured result、
+legacy 回退和 fixture 有界退出。PEP 723 fixture 必须使用自己的 lock/解释器，不得因根依赖已经升级而改成 mock，
 也不得用 sibling checkout 或父进程 `sys.path` 假装可复现。
 
 HTTP timeout/caller cancellation 的安全断言只到本地边界：等待必须有界，被取消的本地调用不能继续
@@ -604,7 +608,7 @@ HTTP timeout/caller cancellation 的安全断言只到本地边界：等待必�
 timeout 后仍完成是允许且必须观测的结果，不得据此推断副作用没有发生。高风险工具另以 Confirmation、
 业务幂等、结果未知对账和恢复前重授权验收。
 
-这份 13/13 是协议兼容证据，不是 EIM-A1 的 token/JWKS test vectors、EIM-A7 的 inbound OAuth
+这份 22/22 是协议兼容证据，不是 EIM-A1 的 token/JWKS test vectors、EIM-A7 的 inbound OAuth
 Resource Server/Principal/scope，也不是 EIM-U14 的持久化 InteractionSession 证据。上述任务完成时
 必须在本矩阵之外增加各自的安全正反路径。
 
@@ -842,7 +846,7 @@ make verify
 make mcp-compat
 ```
 
-必须得到完整 **13/13 PASS**；单仓 `make verify` 或只跑 modern happy path 不能替代该矩阵。
+必须得到完整 **22/22 PASS**；单仓 `make verify` 或只跑 modern happy path 不能替代该矩阵。
 
 涉及数据库/身份存储：
 

@@ -24,6 +24,16 @@ MODERN_SERVER = ROOT / "tests" / "compat" / "mcp" / "modern_server.py"
 CURRENT_PROBE = ROOT / "tests" / "compat" / "mcp" / "current_client_probe.py"
 MULTIRAG_SERVER = ROOT / "tests" / "compat" / "mcp" / "multirag_server.py"
 
+# Intentional review ratchet: a dependency upgrade that adds/removes a released
+# protocol revision must update the executable matrix and its documentation.
+EXPECTED_HANDSHAKE_PROTOCOL_VERSIONS = (
+    "2024-11-05",
+    "2025-03-26",
+    "2025-06-18",
+    "2025-11-25",
+)
+EXPECTED_MODERN_PROTOCOL_VERSIONS = ("2026-07-28",)
+
 
 @dataclass
 class ManagedServer:
@@ -145,6 +155,8 @@ def _modern_probe(
     list_only: bool = False,
     token: str | None = None,
     tool: str | None = None,
+    handshake_version: str | None = None,
+    unknown_version: str | None = None,
 ) -> dict[str, Any]:
     command = [
         uv,
@@ -166,6 +178,10 @@ def _modern_probe(
         command.extend(("--token", token))
     if tool is not None:
         command.extend(("--tool", tool))
+    if handshake_version is not None:
+        command.extend(("--handshake-version", handshake_version))
+    if unknown_version is not None:
+        command.extend(("--unknown-version", unknown_version))
     return _run(command, timeout=30)
 
 
@@ -215,15 +231,15 @@ def run_matrix() -> list[dict[str, Any]]:
     uv = shutil.which("uv")
     if uv is None:
         raise RuntimeError("uv is required for the isolated MCP SDK 2 fixture")
-    modern_command = [
+    modern_script_command = [
         uv,
         "run",
         "--locked",
         "--no-project",
         "--script",
         str(MODERN_SERVER),
-        "--serve",
     ]
+    modern_command = [*modern_script_command, "--serve"]
     legacy_command = [
         uv,
         "run",
@@ -232,15 +248,27 @@ def run_matrix() -> list[dict[str, Any]]:
         "--script",
         str(LEGACY_SERVER),
     ]
+    handshake_servers = {
+        version: ManagedServer(
+            f"handshake-{version}",
+            [*modern_script_command, "--serve-handshake", version],
+        )
+        for version in EXPECTED_HANDSHAKE_PROTOCOL_VERSIONS
+    }
     servers = [
         ManagedServer("legacy-http", [*legacy_command, "--transport", "http"]),
         ManagedServer("legacy-sse", [*legacy_command, "--transport", "sse"]),
         ManagedServer("multirag-current", [sys.executable, str(MULTIRAG_SERVER)]),
         ManagedServer("modern-http", modern_command),
+        *handshake_servers.values(),
     ]
     rows: list[dict[str, Any]] = []
     try:
-        legacy_http, legacy_sse, multirag_current, modern = (server.start() for server in servers)
+        ready = {server.name: server.start() for server in servers}
+        legacy_http = ready["legacy-http"]
+        legacy_sse = ready["legacy-sse"]
+        multirag_current = ready["multirag-current"]
+        modern = ready["modern-http"]
 
         legacy_sse_result = _current_probe(url=legacy_sse["url"], transport="sse", scenario="echo")
         rows.append(
@@ -324,6 +352,67 @@ def run_matrix() -> list[dict[str, Any]]:
             )
         )
 
+        for protocol_version in EXPECTED_HANDSHAKE_PROTOCOL_VERSIONS:
+            inbound_exact = _modern_probe(
+                uv,
+                url=multirag_current["url"],
+                mode="legacy",
+                token="eim-f2-multirag",
+                tool="list_datasets",
+                handshake_version=protocol_version,
+            )
+            inbound_exact_headers = _read_json(multirag_current["headers_url"])
+            inbound_exact_ok = (
+                inbound_exact.get("requested_protocol_version") == protocol_version
+                and inbound_exact.get("negotiated_protocol_version") == protocol_version
+                and inbound_exact.get("initialize_status") == 200
+                and inbound_exact.get("initialized_status") == 202
+                and inbound_exact.get("list_status") == 200
+                and inbound_exact.get("call_status") == 200
+                and inbound_exact.get("tools") == ["list_datasets", "multirag_retrieval"]
+                and inbound_exact.get("tool_result") == {"result": []}
+                and inbound_exact.get("is_error") is False
+                and inbound_exact_headers.get("mcp-protocol-version") == protocol_version
+                and "mcp-method" not in inbound_exact_headers
+                and "mcp-name" not in inbound_exact_headers
+            )
+            rows.append(
+                _row(
+                    f"exact-handshake-{protocol_version}-to-multirag",
+                    "MCP SDK 2 typed exact-handshake probe",
+                    "MultiRAG FastMCP 4 dual-era",
+                    protocol_version,
+                    "stateless HTTP",
+                    inbound_exact_ok,
+                    "released handshake revision supports initialize, list, and call",
+                    {
+                        "probe": inbound_exact,
+                        "headers": inbound_exact_headers,
+                    },
+                )
+            )
+
+        unknown_version = "2099-01-01"
+        unknown_result = _modern_probe(
+            uv,
+            url=multirag_current["url"],
+            mode="auto",
+            token="eim-f2-multirag",
+            unknown_version=unknown_version,
+        )
+        rows.append(
+            _row(
+                "unknown-protocol-version-rejected",
+                "MCP SDK 2 typed unknown-version probe",
+                "MultiRAG FastMCP 4 dual-era",
+                unknown_version,
+                "stateless HTTP",
+                unknown_result.get("status") == 400 and unknown_result.get("error_code") == -32022,
+                "unknown revision fails closed instead of downgrading to legacy",
+                unknown_result,
+            )
+        )
+
         legacy_http_result = _current_probe(url=legacy_http["url"], transport="streamable-http", scenario="echo")
         rows.append(
             _row(
@@ -340,6 +429,41 @@ def run_matrix() -> list[dict[str, Any]]:
                 },
             )
         )
+
+        for protocol_version in EXPECTED_HANDSHAKE_PROTOCOL_VERSIONS:
+            handshake_ready = ready[f"handshake-{protocol_version}"]
+            outbound_exact = _current_probe(
+                url=handshake_ready["url"],
+                transport="streamable-http",
+                scenario="echo",
+            )
+            outbound_exact_headers = _read_json(handshake_ready["headers_url"])
+            outbound_exact_ok = (
+                outbound_exact.get("initial_ready") is True
+                and outbound_exact.get("protocol_version") == protocol_version
+                and (outbound_exact.get("meta") or {}).get("is_error") is not True
+                and f'"server_protocol_version": "{protocol_version}"' in outbound_exact.get("text", "")
+                and outbound_exact_headers.get("mcp-protocol-version") == protocol_version
+                and "server/discover" in outbound_exact_headers.get("methods_seen", [])
+                and "initialize" in outbound_exact_headers.get("methods_seen", [])
+                and "mcp-method" not in outbound_exact_headers
+                and "mcp-name" not in outbound_exact_headers
+            )
+            rows.append(
+                _row(
+                    f"multirag-client-to-handshake-{protocol_version}",
+                    "MultiRAG MCP SDK 2 auto",
+                    "MCP SDK 2 typed handshake counteroffer oracle",
+                    protocol_version,
+                    "stateless HTTP",
+                    outbound_exact_ok,
+                    "server/discover falls back and accepts the released counteroffer",
+                    {
+                        "protocol_version": outbound_exact.get("protocol_version"),
+                        "headers": outbound_exact_headers,
+                    },
+                )
+            )
 
         modern_result = _modern_probe(uv, url=modern["url"], mode="2026-07-28")
         modern_headers = modern_result.get("echo", {}).get("request_headers", {})

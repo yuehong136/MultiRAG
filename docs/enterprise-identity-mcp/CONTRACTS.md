@@ -1661,8 +1661,11 @@ proxy 可接受，但按 Gateway 的 `mcp_access` profile/resource 必须拒绝�
 A5 当前实现额外固定以下运行语义：Gateway 使用 FastMCP 4 的异步、逐请求
 `ProxyProvider.client_factory`，在真实 request context 中读取 Principal、`ToolPolicy` 和前端协议版本；
 每个逻辑目录/调用操作都创建新的 `ProxyClient(..., auth=<actor bearer>)`，不复用带用户 bearer 的
-client/session。modern `2026-07-28` 前端必须使后端使用同一 protocol version，legacy 前端必须使用
-`legacy`，不能以 `auto` 静默降级。ProxyProvider 自带 cache 只能缓存远端 raw metadata，用户级
+client/session。协议版本必须按当前 MCP SDK 2 的官方枚举分类：modern 前端使后端使用同一 modern
+protocol version；任何已知 handshake revision 统一使用官方 `legacy` mode，由 initialize 协商实际
+旧版本。legacy 是精确 era 镜像，不承诺把某个旧日期直接 pin 到 backend；官方高层 Client 也不接受
+旧日期作为 `mode`。缺失、未知或未被当前 SDK 支持的版本必须 fail closed，不能被归入 legacy，也
+不能以 `auto` 静默降级。ProxyProvider 自带 cache 只能缓存远端 raw metadata，用户级
 visibility/auth 必须在每个请求后应用；远端 direct call 仍在执行前重验本地 policy。
 
 Gateway 必须关闭透明 incoming-header forwarding，使用官方 `ProxyClient` auth 面携带 actor bearer；

@@ -1,7 +1,7 @@
 # MCP 2026 兼容矩阵与迁移后运行基线
 
-> 状态：EIM-F2/F3/F4/F6/F7/F8 已完成后的可执行事实。
-> 最近验证：2026-08-12（Asia/Shanghai）。
+> 状态：EIM-F2/F3/F4/F6/F7/F8/F9 已完成后的可执行事实。
+> 最近验证：2026-08-22（Asia/Shanghai）。
 > 长期架构见 [MCP_ENTERPRISE_PLATFORM](MCP_ENTERPRISE_PLATFORM.md)，版本来源见
 > [VERSION_BASELINE](VERSION_BASELINE.md)，任务状态只以 [ROADMAP](ROADMAP.md) 为准。
 
@@ -20,11 +20,15 @@
 - MultiRAG outbound 使用官方 `mcp.client.Client` 2.0.0；
 - Streamable HTTP 使用 `mode="auto"`，会先 `server/discover`，必要时回退 legacy `initialize`；
 - SSE 明确使用 `mode="legacy"`，它不会由 `auto` 自动切换 transport；
-- MultiRAG inbound 使用 FastMCP 4.0.0b2，真实协商 MCP `2026-07-28`，同时保留 legacy HTTP/SSE；
+- MultiRAG inbound 使用 FastMCP 4.0.0b2，真实协商 MCP `2026-07-28`，同时接受 SDK 2 官方
+  registry 中四个 handshake revision：`2024-11-05`、`2025-03-26`、`2025-06-18`、
+  `2025-11-25`；
 - of_mcp 已在提交 `23dd1fd` 固定 FastMCP 4.0.0b2、MCP/mcp-types 2.0.0；
 - 生产主环境不再安装 FastMCP3/MCP1，但测试用 PEP 723 独立锁固定 FastMCP 3.4.7，继续证明
   legacy fallback；
-- `make mcp-compat` 的每一格都跑真实 loopback 子进程，不以 mock 或“工具调用成功”替代 wire 证据。
+- `make mcp-compat` 的每一格都跑真实 loopback 子进程，不以 mock 或“工具调用成功”替代 wire 证据；
+- 协议版本是官方枚举，不按日期字符串猜新旧。SDK registry 漂移会先使单元测试失败；未知 revision
+  必须结构化拒绝，不能静默降级成 legacy。
 
 这不代表：
 
@@ -40,10 +44,10 @@
 
 | 运行单元 | 版本 | 锁/提交 |
 |---|---|---|
-| MultiRAG root | FastMCP/slim `4.0.0b2`、MCP/mcp-types `2.0.0`、httpx2 `2.10.0`、sse-starlette `3.4.8` | `uv.lock` SHA-256 `298728583b2deadcb7c59e170653df1abd1de324b6fd5cccbc10fa87a0d00794` |
+| MultiRAG root | FastMCP/slim `4.0.0b2`、MCP/mcp-types `2.0.0`、httpx2 `2.10.0`、sse-starlette `3.4.8` | `uv.lock` SHA-256 `9d66f20bb3f91f99e99b20e17248699cfbc8ad2e2b5a3d2cfa3ae957c45c2323` |
 | legacy oracle | FastMCP `3.4.7` 及其 MCP1 依赖 | `tests/compat/mcp/legacy_server.py.lock` SHA-256 `deadb04931edf60400b23544d7be3f1a94c2fd570062d35b92d6db4da23b96fc` |
 | modern oracle | MCP SDK `2.0.0` | `tests/compat/mcp/modern_server.py.lock` SHA-256 `84b2c9bb83231bec210b4a7b8a49a789637cacd2f4a1d8d9e62375de36d40907` |
-| of_mcp | FastMCP/slim `4.0.0b2`、MCP/mcp-types `2.0.0` | EIM-F4 `23dd1fd`；lock SHA-256 `2d8c7f7201fa96e35b3455a578188b20b989450ab4ebc1fc38fe2c6f8478c45c` |
+| of_mcp | FastMCP/slim `4.0.0b2`、MCP/mcp-types `2.0.0` | EIM-F4 `23dd1fd`；lock SHA-256 `9ceecde115825a75320a7877cf5c203ff731d594645aaae629014f6d3c3ca8ce` |
 
 FastMCP 4 仍是 beta，因此 MultiRAG 同时：
 
@@ -81,12 +85,13 @@ python -m mcp.server.server
 |---|---|
 | `tests/compat/mcp/legacy_server.py` | PEP 723 FastMCP3 legacy-only HTTP/SSE；echo、tool error、wait/status |
 | `tests/compat/mcp/legacy_server.py.lock` | 真实旧时代 oracle 的独立锁，不污染 root |
-| `tests/compat/mcp/modern_server.py` | PEP 723 MCPServer2 dual-era、protected endpoint、routing-header capture、SDK2 probe |
+| `tests/compat/mcp/modern_server.py` | PEP 723 MCPServer2 dual-era、四个 typed handshake counteroffer oracle、未知版本/protected endpoint、routing-header capture、SDK2 probe |
 | `tests/compat/mcp/modern_server.py.lock` | modern oracle 独立锁 |
 | `tests/compat/mcp/current_client_probe.py` | 从 MultiRAG root 调真实生产 `MCPToolCallSession` |
 | `tests/compat/mcp/multirag_server.py` | 启动真实 inbound Server，隔离后端 API，并只暴露协议路由 header 证据 |
-| `scripts/check_mcp_compat.py` | 分配随机 loopback 端口、启动/回收四类 server、执行矩阵、输出 Markdown + JSON |
+| `scripts/check_mcp_compat.py` | 分配随机 loopback 端口、启动/回收全部 server oracle、执行 22 格矩阵、输出 Markdown + JSON |
 | `tests/unit/test_mcp_tool_call_conn_compat.py` | 不走网络，固定 SDK2 API、类型、并发、MRTR、auth 分类和 owner-loop close |
+| `tests/unit/test_mcp_protocol_versions.py` | 钉住 SDK 2 官方协议 registry、handshake/modern 分类和精确 pin 的接受/拒绝边界 |
 
 fixture 禁止：
 
@@ -104,8 +109,10 @@ PEP 723 fixture 只在显式 `make mcp-compat` 中运行；默认 unit 使用已
 ## 4. 执行命令
 
 ```bash
-# SDK2 wrapper 的封闭行为测试
-uv run --no-sync pytest -q tests/unit/test_mcp_tool_call_conn_compat.py
+# SDK2 wrapper 与协议 registry 的封闭行为测试
+uv run --no-sync pytest -q \
+  tests/unit/test_mcp_protocol_versions.py \
+  tests/unit/test_mcp_tool_call_conn_compat.py
 
 # inbound Server modern/legacy/security 契约
 uv run --no-sync pytest -q \
@@ -132,14 +139,17 @@ uv lock --check --script tests/compat/mcp/modern_server.py
 
 ---
 
-## 5. 当前 13 格矩阵
+## 5. 当前 22 格矩阵
 
 | ID | Client | Server | 预期协议/行为 | 证明什么 |
 |---|---|---|---|---|
 | `legacy-sse-success` | MultiRAG SDK2 `mode=legacy` | FastMCP3 fixture | `2025-11-25` / SSE | 显式 legacy SSE 仍可连接并返回 structured echo |
 | `modern-client-to-multirag` | 官方 SDK2 `auto` | MultiRAG FastMCP4 | `2026-07-28` | 真实 inbound 使用 discover、routing headers、无 session、structured result |
 | `legacy-mode-client-to-multirag` | 官方 SDK2 `legacy` | MultiRAG FastMCP4 | `2025-11-25` | inbound dual-era 仍接受 initialize 路径，modern routing headers 不泄漏到 legacy |
+| `exact-handshake-<version>-to-multirag`（4 格） | SDK2 typed wire probe | MultiRAG FastMCP4 | 四个已发布 handshake revision | 每个 revision 都完成 initialize/initialized、list、call，且 wire header 与协商结果精确一致 |
+| `unknown-protocol-version-rejected` | SDK2 typed wire probe | MultiRAG FastMCP4 | `2099-01-01` | HTTP 400 / MCP `-32022`；未知 revision fail closed，不被当作 legacy |
 | `legacy-http-success` | MultiRAG SDK2 `auto` | FastMCP3 fixture | `2025-11-25` | production wrapper 对 legacy-only HTTP 自动 fallback |
+| `multirag-client-to-handshake-<version>`（4 格） | MultiRAG SDK2 `auto` | SDK2 typed counteroffer oracle | 四个已发布 handshake revision | production wrapper 先 discover，再接受各个真实 server counteroffer；不发送 modern routing headers |
 | `modern-self-probe` | 官方 SDK2 modern | MCPServer2 | `2026-07-28` | oracle 本身确实是 modern，不把 fallback 误报为 modern |
 | `multirag-client-to-modern-server` | MultiRAG SDK2 `auto` | MCPServer2 | `2026-07-28` | production wrapper 真实发送 `Mcp-Method/Mcp-Name` 且无 session |
 | `modern-client-auto-fallback` | 官方 SDK2 `auto` | FastMCP3 fixture | `2025-11-25` | SDK 标准 discover -> initialize fallback |
@@ -154,7 +164,10 @@ uv lock --check --script tests/compat/mcp/modern_server.py
 
 - modern：`protocol_version=2026-07-28`、`Mcp-Method=tools/call`、`Mcp-Name=<tool>`、无
   `Mcp-Session-Id`；
-- legacy：`protocol_version=2025-11-25`，经过 initialize，不能出现 modern routing headers；
+- handshake era：四个已发布 revision 均经过 initialize，不能出现 modern routing headers；
+- `mode="legacy"` 表示选择 handshake **时代**，最终精确 revision 由 initialize 协商结果决定；官方
+  Client 不允许把 handshake 日期作为 `mode` 精确 pin；
+- unknown：未出现在 SDK registry 的 revision 返回结构化 400，不能用字符串大小比较或 fallback 接受；
 - auth：raw HTTP status 与 wrapper `connection_status` 一致；
 - timeout/cancel：本地任务和进程有界退出，远端状态不被包装层伪造。
 
@@ -280,7 +293,7 @@ Client wrapper 使用低层 `client.session.call_tool(..., allow_input_required=
 FastMCP4 同一个 HTTP server 自动支持 modern 与 legacy：
 
 - modern `2026-07-28` 本身无 session；
-- legacy HTTP 仍可 initialize；
+- handshake era 的 `2024-11-05`、`2025-03-26`、`2025-06-18`、`2025-11-25` 仍可 initialize；
 - `stateless_http=True` 只影响 legacy session 管理，不是 modern 开关；
 - SSE 永远属于 legacy。
 
@@ -356,7 +369,8 @@ FastMCP/MCP Tasks、MCP Apps、EMA/MultiAuth/Horizon 都不是 U14/U15 或敏感
 - FastMCP wrapper/slim 离开同一 exact prerelease；
 - root lock 或任一 script lock 不能 `--check`；
 - modern 调用无法证明 `2026-07-28` routing headers/no-session；
-- legacy fallback、SSE、401/403、tool error、timeout/cancel 任一被 skip/xfail；
+- 五个已发布 revision、未知版本拒绝、legacy fallback、SSE、401/403、tool error、timeout/cancel
+  任一被 skip/xfail；
 - 测试需要真实 Secret、外网业务服务、固定 sibling path 或固定端口；
 - owner loop/thread 或 fixture 子进程不能有界退出；
 - 把 `InputRequiredResult`、飞书确认或 annotations 当成鉴权；

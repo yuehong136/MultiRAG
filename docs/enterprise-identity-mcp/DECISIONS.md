@@ -293,8 +293,9 @@ EIM-F4 commit `23dd1fd`。
 - MultiRAG outbound 使用官方 MCP 2 高层 `Client`，HTTP 现代优先并自动协商 legacy；
 - MultiRAG inbound 使用 FastMCP 4/MCP 2 的 `2026-07-28` modern Server，同时保留 legacy 协议兼容；
 - FastMCP 3 只以 PEP 723 + 独立 lock 的真实子进程 fixture 存在，不与根运行时混装；
-- `make mcp-compat` 的双向协议矩阵为 13/13，通过依据包括实际协商分支，而不只是 tools/list/call
-  的业务结果。
+- EIM-F9 后的 `make mcp-compat` 双向协议矩阵为 22/22：逐一覆盖 SDK 2 registry 的四个
+  handshake revision 和 modern `2026-07-28`，未知 revision fail closed；通过依据包括实际协商
+  分支，而不只是 tools/list/call 的业务结果。
 
 这次依赖协同切换不把两个 MCP 角色合并成同一安全主体，也不证明身份/授权链已经落地。EIM-A1 先
 固定 token/JWKS test vectors；EIM-A7 仍依赖 A1/P1，才实现 inbound OAuth Resource Server、

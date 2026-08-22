@@ -51,6 +51,8 @@ def main() -> None:
     }
 
     if args.scenario in {"echo", "auth"}:
+        if args.scenario == "echo":
+            output["tools"] = sorted(tool.name for tool in session.get_tools(timeout=1))
         output["text"] = session.tool_call("compat_echo", {"value": args.scenario}, timeout=1)
         output["structured_content"] = _structured(session)
         output["meta"] = session.get_last_tool_call_meta()

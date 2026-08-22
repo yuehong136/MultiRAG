@@ -735,7 +735,7 @@ inbound:  legacy Client / modern Client -> MultiRAG current MCP Server
 | scope shortfall | 403 | 403 + insufficient_scope | 可 step-up，有限次重试 |
 | timeout | server delay | server delay | Client 取消请求并清理 task |
 | cancellation | explicit cancel/close | request cancellation | 无悬挂线程/stream |
-| interaction | legacy elicitation | InputRequiredResult | 仅由封闭 unit 固定，不计入当前 13 格跨进程矩阵；F3 已表面化，U14 前不能持久/恢复（见 [兼容矩阵 §5 与 §7](MCP_COMPATIBILITY.md)） |
+| interaction | legacy elicitation | InputRequiredResult | 仅由封闭 unit 固定，不计入当前 22 格跨进程矩阵；F3 已表面化，U14 前不能持久/恢复（见 [兼容矩阵 §5 与 §7](MCP_COMPATIBILITY.md)） |
 | cache | connection-era list | private/public scope | 不跨 Principal 复用 |
 | headers | legacy transport | protocol/method/name | Gateway 可观测和路由 |
 

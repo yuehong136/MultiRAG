@@ -5,7 +5,7 @@
 > 适用仓库：**MultiRAG**（本仓）与 **`of_mcp`**（另一个独立 checkout）。
 > 两者的本地路径随机器而变（本仓同时被 Windows 与 macOS 开发机使用），本目录一律按仓名指代；
 > 需要绝对路径时以你当前机器上的实际 checkout 为准。
-> 外部事实最近核验：2026-08-13（版本与上游提交见 [VERSION_BASELINE](VERSION_BASELINE.md)）
+> 外部事实最近核验：2026-08-22（版本与上游提交见 [VERSION_BASELINE](VERSION_BASELINE.md)）
 
 本目录是后续实现“企业级飞书身份接入、MultiRAG 平台用户、MCP 身份委托、of_mcp
 授权和敏感操作确认”的**项目级单一事实来源**。后续 Agent 可以没有任何历史对话，但必须从
@@ -35,7 +35,7 @@
 
 ```text
 读 docs/enterprise-identity-mcp/README.md，然后完成 ROADMAP 中当前主线任务
-（EIM-A5 已完成本地代码与自动门禁但尚未 rollout；下一任务可按依赖选择 I5 或 U14）。
+（EIM-A5/F9 已完成本地代码与自动门禁但尚未 rollout；下一任务可按依赖选择 I5 或 U14）。
 先复核任务锚点和依赖，把准备修改的文件与验收标准告诉我；确认后再写代码。
 ```
 
@@ -396,12 +396,15 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   持久 `InteractionSession`、resume 或自动重试；这只完成 EIM-F3 的协议接线，不等于 U14/U15。
 - MultiRAG 还通过 [`mcp/server/server.py`](../../mcp/server/server.py) 对外提供 `/mcp` 与 legacy
   `/sse`。入站已升级到 FastMCP `4.0.0b2` / MCP SDK `2.0.0`；真实 Server 已验证
-  `2026-07-28` `server/discover`、路由 headers 和无 session 的 Streamable HTTP，同时保留
-  legacy HTTP/SSE 兼容。这不代表 Principal、scope 或 OAuth Resource Server 已完成。
+  `2026-07-28` `server/discover`、路由 headers 和无 session 的 Streamable HTTP，同时逐一验证
+  `2024-11-05`、`2025-03-26`、`2025-06-18`、`2025-11-25` handshake HTTP 兼容及 legacy SSE。
+  未知 revision 返回结构化拒绝。这不代表 Principal、scope 或 OAuth Resource Server 已完成。
 - EIM-F2 兼容矩阵已转化为 EIM-F6/F7/F3/F8 实施与回归；当前共享运行时的 exact pins
   是 `fastmcp==4.0.0b2` 与 `mcp==2.0.0`。顶层 `mcp/` 目录故意不包含
   `__init__.py`，避免遮蔽官方 `mcp` 依赖。模块当前行为与不能宣称的能力见
   [`mcp/README.md`](../../mcp/README.md)。
+  EIM-F9 又把矩阵扩为 22 格：双方向覆盖 SDK 2 registry 的五个已发布 revision，并以 registry
+  ratchet 和 unknown-version 拒绝防止字符串猜测或静默 downgrade。
 - Channel Execution 已通过 `stream()` 直接向 transport-neutral ReplySession 交付类型化事件；
   飞书已实现 CardKit 渐进式回复，`ask()` 只保留为兼容聚合入口。Provider/Target capabilities、
   Dialog detached CAS 与 Canvas candidate sidecar/周期 GC 已分别由 EIM-U11～U13 收口。CHN-U15 迁移与
@@ -464,7 +467,9 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
 - EIM-A5 已在 of_mcp `5b4162a` 完成。Gateway 通过 FastMCP 4 的异步、逐请求
   `ProxyProvider.client_factory` 为每次逻辑操作签发新的 `mcp_internal_actor` 并创建新的
   `ProxyClient(auth=...)`；不共享用户 bearer session，不转发外部 Authorization。后端精确镜像前端
-  modern `2026-07-28` 或 legacy era。内建 provider cache 只保存远端 raw metadata，用户级工具可见性
+  modern `2026-07-28`；四个 SDK 2 已知 handshake revision 统一进入官方 `legacy` initialize 协商，
+  未知/缺失 revision 在建 client 前 fail closed。这里的 legacy 表示协议时代，不承诺 pin 某个旧日期。
+  内建 provider cache 只保存远端 raw metadata，用户级工具可见性
   仍逐请求执行；独立 proxy Resource Server 再验精确 audience、Principal 与本地策略。audit schema v2
   已加入 `parent_jti_hash`。真实 key/TLS、部署、远程发布与跨仓 E2E 仍未执行。
 - EIM-A6 已进入 `🔵` phase 1。每个工具 policy 现在显式声明 `effect=read|prepare|side_effect` 和
