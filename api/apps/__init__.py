@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
-from errors.exceptions import AITranslateException
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -26,6 +25,7 @@ from common.constants import RetCode
 from common.log_ctx import bind_log_context
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, datetime_format
+from errors.exceptions import AITranslateException
 from workflow_v2.workflow_exceptions import NodeExecutionError, WorkflowValidationError
 from workflow_v2.workflow_state_manager import workflow_state_manager
 
