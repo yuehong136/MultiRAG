@@ -516,6 +516,27 @@ A2/P3 token 获取与逐请求委托、飞书 Channel identity→Principal、M1/
 actor、A6 audit/replay 或 `auth_time` freshness；secure 仍被机器限制为仅本机验证，不得做远程业务发布
 验收。P3 后续有自己的 MultiRAG 测试证据，不能倒填成 A4 当时已完成跨仓链路。
 
+A5 完成态的最小回归集合包括：
+
+- internal actor 签发严格固定独立 issuer/keyset/workload client 与精确 service audience，TTL 不超过
+  60 秒且不晚于父 token，scope/assurance/enterprise subject 只衰减不提升；private key file 的
+  owner/mode/symlink/public mismatch 与轮换边界 fail closed；
+- 真实 FastMCP HTTP proxy 链分别证明 modern `2026-07-28` 精确镜像和 legacy 回滚；backend client
+  不得使用 `auto` 静默回到 legacy，也不得透明转发 inbound Authorization/header；
+- 每个逻辑目录/调用操作创建新的 `ProxyClient` 与 actor bearer；并发 broad/narrow Principal 在
+  ProxyProvider 内建 raw catalog cache 命中时仍保持用户级 visibility 隔离，无 token/session 串线；
+- mount/proxy 的 Principal、成功调用、直接 403、最终授权重验和审计主体摘要等价；external
+  `mcp_access` 在 proxy 被 401 拒绝，同一合法 actor token 在 Gateway 被 cross-profile 拒绝，service A
+  token 在 service B 因 resource drift 被拒绝；
+- audit schema v2 的 actor record 必须含父 JTI 摘要且 access record 不得伪造该字段；用户/tenant/agent
+  HMAC 关联与 token/PII 脱敏不回归；modern sessionless 测试不依赖跨请求 Context/transport state。
+
+A5 提交锚点为 of_mcp `5b4162a`；失败优先覆盖缺模块、默认 auto era、raw catalog mode 与 service
+resource drift，定向 **256 passed**。`uv run --locked ofmcp verify` 六步全绿：Ruff、format
+**128 files unchanged**、ty、3 条 import contracts（134 files/530 dependencies）、**484 passed、
+2 skipped**、contract snapshot 无漂移。该证据仍不代表真实 key/config、私网 TLS/mTLS、部署、
+MultiRAG→of_mcp 跨仓 E2E 或 remote release 已完成。
+
 A6 phase 1 的最小回归集合包括：
 
 - 所有实际工具的 effect/replay policy 与 format-2 snapshot 完整一致；canonical builder 在不同输入
@@ -531,8 +552,8 @@ A6 phase 1 的最小回归集合包括：
 当前实现只满足上述 phase-1 自动化形状；A6/Gateway 定向 **65 passed**，完整
 `uv run --locked ofmcp verify` 六步全绿、**453 passed、2 existing skipped**，提交锚点统一以 ROADMAP
 变更日志为准。A6 必须保持 `🔵`：自动化尚未覆盖真实多副本 durable store、
-进程重启后 claim/audit、KMS/HMAC key rotation、真实 OTel SDK/exporter/collector/W3C 跨仓 trace、A5
-`parent_jti_hash`、P3 动态 bearer 的真实跨仓运行证据、业务 idempotency/result lookup 和
+进程重启后 claim/audit、KMS/HMAC key rotation、真实 OTel SDK/exporter/collector/W3C 跨仓 trace、
+P3/A5 动态 bearer 的真实跨仓运行证据、业务 idempotency/result lookup 和
 remote-release 演练。
 
 ### 3.4 跨仓端到端测试
@@ -744,11 +765,12 @@ interaction_revision, confirmation_id, idempotency_key_hash, latency_ms, result
 必须 hash 或省略：`open_id`、`user_id`、`employee_no`、邮箱、手机号。绝不记录：secret、token
 原文、OAuth code、医疗正文、完整工具参数。只有受控审计库可保存业务必要的可逆映射，应用日志不可保存。
 
-of_mcp A6 的当前 security audit 更严格：它使用 frozen v1 schema，不接受扩展 `metadata`，只记录
+of_mcp A6/A5 的当前 security audit 更严格：它使用 frozen v2 schema，不接受扩展 `metadata`，只记录
 `trace_id/mcp_call_id`、runtime/token profile、issuer/audience、issuer-domain-separated JTI digest、
 主体/tenant/agent/client keyed HMAC、tool/effect/replay mode/policy revision、request fingerprint、
 decision/reason/replay state。它不记录 Provider/event/interaction 原文、enterprise subject、参数、结果
-或异常文本。`parent_jti_hash` 要等 A5 internal actor 才能进入该链；不得填空值冒充已实现。
+或异常文本。actor token record 必须记录 `parent_jti_hash`，access token record 则不得携带；两者都不
+保存父/子原始 JTI。
 
 最低指标：
 

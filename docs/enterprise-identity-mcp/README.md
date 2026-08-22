@@ -35,7 +35,7 @@
 
 ```text
 读 docs/enterprise-identity-mcp/README.md，然后完成 ROADMAP 中当前主线任务
-（EIM-P3 已完成本地代码与自动门禁但尚未 rollout；下一任务从 A5/U14 等已解锁项中按依赖选择）。
+（EIM-A5 已完成本地代码与自动门禁但尚未 rollout；下一任务可按依赖选择 I5 或 U14）。
 先复核任务锚点和依赖，把准备修改的文件与验收标准告诉我；确认后再写代码。
 ```
 
@@ -374,7 +374,7 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   优先复用 FastMCP 4 的 `RemoteAuthProvider`、`AccessToken`、`on_list_tools/on_call_tool` middleware
   和 transport 防护；领域 identity/Principal 保持框架无关，避免重复实现框架已有工具开放能力。
 - P1 已解锁 A7 的代码前置，但 A7 仍是独立 inbound Resource Server 任务，不能立即宣称
-  可发布。F1/I4.1/I6/I6.1/C1/C2/C3/P2/A2/P3 已完成；A5 与 U14 已由 P3 解锁。CHN-O9 是不阻塞它们的
+  可发布。F1/I4.1/I6/I6.1/C1/C2/C3/P2/A2/P3/A5 已完成；U14 已由 P3 解锁。CHN-O9 是不阻塞它的
   Channel 可观测并行支线；C4/CHN-X8 仍须等待全部 runner 升级与 deployment soak。I5 与 I7 已由
   I4 解锁，可作为不共文件的并行支线；I8 仍需 I6 + I7，
   不能跳依赖；
@@ -433,9 +433,10 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   single-flight、轮换重叠、未知 `kid` 负缓存与跨 `kid` 全局刷新冷却、负缓存条目硬上限和刷新退避。
   慢失败从请求**完成时钟**开始计算 backoff，所有浮点 cache/timeout 配置拒绝 NaN/Infinity。
 - profile 现在把“是否是 OAuth Resource Server”与历史 `oauth_enabled` 分开：`local` 保持匿名且
-  `secure` 强制认证、缺 issuer/JWKS/resource 配置即启动失败，只允许 mount，并因 A1 scope registry
-  未登记 `hello:greet` 而关闭 hello。生产 profile/scope constants 与 A1 manifest 有机器锁定测试，
-  不能单边漂移。A5 完成 internal actor token 之前，proxy 在 secure profile 下直接拒绝装配。
+  `secure` 强制认证、缺 issuer/JWKS/resource 配置即启动失败；默认 secure service 仍只使用 mount，
+  并因 A1 scope registry 未登记 `hello:greet` 而关闭 hello。生产 profile/scope constants 与 A1 manifest
+  有机器锁定测试，不能单边漂移。A5 proxy 只有显式提供独立 internal issuer/key/service resource 与
+  request-scoped provider 时才能装配，remote-release gate 仍保持关闭。
 - A4 完成后 `local` 和 `secure` 仍由 CLI 机器拒绝绑定非 loopback；`fastmcp.json` 固定
   `127.0.0.1`，CLI 与 JSON 启动面都启用 FastMCP `host_origin_protection=auto`。这条限制现在是独立的
   remote-release gate：工具授权完成不等于 A2/P3 动态委托、企业主体绑定、A6 审计或远程发布条件已经
@@ -460,6 +461,12 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   enterprise assurance 与业务拒绝不伪装为 scope challenge。外部 membership/role/business resolver
   当前只是 fail-closed 扩展接口，现有 service policy 未启用它，也没有完成 schema-normalized 的业务
   对象授权。
+- EIM-A5 已在 of_mcp `5b4162a` 完成。Gateway 通过 FastMCP 4 的异步、逐请求
+  `ProxyProvider.client_factory` 为每次逻辑操作签发新的 `mcp_internal_actor` 并创建新的
+  `ProxyClient(auth=...)`；不共享用户 bearer session，不转发外部 Authorization。后端精确镜像前端
+  modern `2026-07-28` 或 legacy era。内建 provider cache 只保存远端 raw metadata，用户级工具可见性
+  仍逐请求执行；独立 proxy Resource Server 再验精确 audience、Principal 与本地策略。audit schema v2
+  已加入 `parent_jti_hash`。真实 key/TLS、部署、远程发布与跨仓 E2E 仍未执行。
 - EIM-A6 已进入 `🔵` phase 1。每个工具 policy 现在显式声明 `effect=read|prepare|side_effect` 和
   `replay_mode=reusable|single_use`，并强制 `side_effect -> single_use`；leave 的 create/submit 与
   四个 medic submit 被归为单次副作用，其余当前工具为可复用只读。canonical policy snapshot
@@ -512,10 +519,12 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   secure policy/grant 制品、未重启/部署，因此当前运行中的 MultiRAG 仍不会为 Principal 发送 token。
   飞书的 `ExternalIdentityAssertion -> binding/directory -> Principal` 已完成到 target/session owner；
   带已验证 Canvas release 的 Channel Canvas 是现有动态委托入口，Dialog 因没有可寻址发布 revision
-  而 fail closed。of_mcp 仍缺 A5 proxy internal actor；A6 虽已有 phase-1 domain/runtime
-  安全边界，但仍缺生产多实例 replay/audit、HMAC/KMS 轮换、OTel SDK/exporter 与跨仓 trace，因此
-  保持 `🔵`。M1/M2 企业主体与业务对象授权、持久 Interaction/Confirmation/Idempotency 也未完成。
-  F1/I4.1/I6/I6.1/C1/C2/C3/P2/A2/P3 已完成；A5/U14 已解锁，I5/I7 是已解锁并行支线，但 I8 仍需
+  而 fail closed。of_mcp A5 已在 `5b4162a` 完成 request-scoped internal actor proxy、精确协议 era
+  镜像与 mount/proxy 授权/审计等价，但未配置真实 key/TLS、部署或做跨仓 E2E；A6 虽已有 phase-1
+  domain/runtime 安全边界与 A5 audit v2 parent link，仍缺生产多实例 replay/audit、HMAC/KMS 轮换、
+  OTel SDK/exporter 与跨仓 trace，因此保持 `🔵`。M1/M2 企业主体与业务对象授权、持久
+  Interaction/Confirmation/Idempotency 也未完成。
+  F1/I4.1/I6/I6.1/C1/C2/C3/P2/A2/P3/A5 已完成；U14 已解锁，I5/I7 是已解锁并行支线，但 I8 仍需
   I6 + I7。不能把 P3 本地门禁通过当成 secure endpoint 已发布或真实 bearer E2E 已完成。
   A7 虽已解锁前置，仍须作为独立入站
   安全面实现和验收。

@@ -1399,7 +1399,8 @@ coordinator；无 production-ready 后端时真实 secure CLI 必须启动失败
 
 本 replay contract 不是业务幂等或结果缓存：它只能阻止相同 capability 再次进入本进程执行边界，
 不能证明 OA/Jira 是否已经提交，duplicate 也不会回放结果。M3/M4 仍须用业务 idempotency key、状态
-查询和 unknown-outcome 对账闭环；A5 完成前也没有 `parent_jti_hash` 可供 proxy 链路审计。
+查询和 unknown-outcome 对账闭环。A5 已在 audit schema v2 加入 actor token 的
+`parent_jti_hash`；这只建立父子 capability 的不可逆关联，不替代 durable audit 或业务幂等。
 
 ### 6.4 JWKS 和轮换
 
@@ -1429,8 +1430,10 @@ Gateway 部署契约额外固定：`resource_auth_mode` 与历史 `oauth_enabled
 `disabled`，`secure` 为 `enforce`。secure 启动时必须提供 canonical issuer、
 固定 JWKS URI、resource base URL 和精确 expected audience，且
 `expected_audience == resource_base_url + "/mcp"`；缺失、非 HTTPS、尾斜杠漂移或 service scope 超出
-A1 registry 都在装配期失败。secure 在 A5 前只接受 mount service，proxy 不能形成绕过 Gateway 的
-直连面。production profile/scope constants 必须以测试逐字段匹配 A1 manifest，不得只改运行时词表。
+A1 registry 都在装配期失败。默认 secure profile 继续只装配 mount service；A5 proxy 必须显式提供
+独立 internal issuer/keyset、精确 service resource、私有 composition root 与 request-scoped provider，
+不能形成绕过 Gateway 的直连面。production profile/scope constants 必须以测试逐字段匹配 A1 manifest，
+不得只改运行时词表。
 
 A4 完成后 `local` 与 `secure` 两种 profile 仍必须在 CLI/启动门禁机器拒绝非 loopback host。
 `fastmcp.json` 固定 loopback，CLI 与 JSON 启动面都启用 `host_origin_protection=auto`，防止
@@ -1654,6 +1657,20 @@ proxy 可接受，但按 Gateway 的 `mcp_access` profile/resource 必须拒绝�
 
 这不是 token passthrough，而是 gateway 在已验证主体基础上的内部下游委托。mount/proxy 等价测试
 必须证明 service 获得的 Principal、工具可见性、直接调用授权和审计结果一致。
+
+A5 当前实现额外固定以下运行语义：Gateway 使用 FastMCP 4 的异步、逐请求
+`ProxyProvider.client_factory`，在真实 request context 中读取 Principal、`ToolPolicy` 和前端协议版本；
+每个逻辑目录/调用操作都创建新的 `ProxyClient(..., auth=<actor bearer>)`，不复用带用户 bearer 的
+client/session。modern `2026-07-28` 前端必须使后端使用同一 protocol version，legacy 前端必须使用
+`legacy`，不能以 `auto` 静默降级。ProxyProvider 自带 cache 只能缓存远端 raw metadata，用户级
+visibility/auth 必须在每个请求后应用；远端 direct call 仍在执行前重验本地 policy。
+
+Gateway 必须关闭透明 incoming-header forwarding，使用官方 `ProxyClient` auth 面携带 actor bearer；
+内建 proxy `_meta` 与当前 OTel span 负责协议/trace 传播，token `trace_id` 只作安全关联，调用方 `_meta`
+不能成为授权证据。modern sessionless 模式不得依赖跨请求 `Context.set_state` 或 transport session 保存
+Principal、token、policy、replay 状态。这些实现事实已经由 of_mcp `5b4162a` 的 modern/legacy 真实 HTTP、
+并发 visibility isolation、每操作新 token/client、cross-profile/resource drift 与 audit v2 测试覆盖；
+真实私网 TLS/mTLS、key/config、部署和跨仓 rollout 仍不属于完成事实。
 
 ---
 

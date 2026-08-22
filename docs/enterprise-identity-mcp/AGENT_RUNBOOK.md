@@ -282,8 +282,8 @@ P3 失败优先收集到新增模块 `ModuleNotFoundError`；定向 **109 passed
 **178 passed**，Channel 执行回归 **88 passed**，`make mcp-compat` **13/13 PASS**。`make fix` 全绿；
 `make verify` 为 8 条 import contracts（853 files/2695 dependencies）、mypy 100 files、unit
 **2470 passed**；只读 `make smoke` 六组件全绿，但命中的是未重启的旧 runtime，不是 P3 rollout。
-未跑 integration（无 DB/存储/检索变更）。A5/U14 已解锁；任何真实 artifact/key/config/restart/
-secure endpoint/飞书 MCP 调用仍须另行精确批准。
+未跑 integration（无 DB/存储/检索变更）。A5 后续已在 of_mcp 完成本地实现，U14 仍已解锁；任何真实
+artifact/key/config/restart/secure endpoint/飞书 MCP 调用仍须另行精确批准。
 
 ### 4.4 外部 API 和 SDK 任务
 
@@ -468,7 +468,7 @@ A1 禁止顺手添加生产 issuer/verifier、FastMCP `auth=`、JWKS HTTP route�
 动态 Authorization 或真实 Secret。A3 才把基础 JWT/JWKS verifier 与严格项目 validator 装配到
 of_mcp composition root；A2/P3 才签发和传递 request-scoped token。
 
-### 4.7 EIM-A3/A4 完成基线与下一任务边界
+### 4.7 EIM-A3/A4/A5 完成基线与下一任务边界
 
 修改 A3 认证基线时，以 of_mcp `e4ab560` 为完成锚点。A3 实现包含
 `packages/ofmcp-auth/`、Gateway `auth.py/settings.py`、`resource_auth_mode` 和
@@ -482,8 +482,9 @@ of_mcp composition root；A2/P3 才签发和传递 request-scoped token。
    last-known-good + atomic replacement + single-flight + per-key negative cache + 全局 unknown-kid
    refresh cooldown + 负缓存硬上限；慢失败从完成时钟开始 backoff，过期后 fail closed，NaN/Infinity
    配置拒绝；
-4. `local` 是匿名开发 profile；`secure` 缺配置即 fail-fast、hello disabled、mount-only。A5 前 proxy
-   不能进入 secure Gateway；production scope/profile constants 必须逐字段匹配 A1 manifest；
+4. `local` 是匿名开发 profile；`secure` 缺配置即 fail-fast、hello disabled，默认 service 保持
+   mount-only。A5 proxy 只能通过显式 internal issuer/key/service resource 与 request-scoped provider
+   装配；production scope/profile constants 必须逐字段匹配 A1 manifest；
 5. production `required_scopes=[]`。这不是放弃授权，而是避免 endpoint 级 union-of-all-scopes；
    test-only 403 seam 继续保留，真实 `tool -> required scopes` 由 A4 registry 独立执行；
 6. health 只返回最小状态；日志、HTTP 错误和 fixture 不包含 bearer、claims、subject、患者或真实配置；
@@ -539,9 +540,29 @@ git diff --check
 ```
 
 A4 定向 **201 passed**；`uv run --locked ofmcp verify` 六步全绿、**417 passed、2 existing skipped**，
-contract snapshot 无漂移。A6 phase 1 已接续且保持 `🔵`；MultiRAG F1/I3/I4/I6/P1/P2/C1/C2/C3 已完成；
-当前 A2 已完成，token 接线主线为 P3。I5/I7 可作为已
-解锁并行支线，但下游仍按依赖图等待。secure 在独立远程发布闸门解除前仍不能作为远程业务入口。
+contract snapshot 无漂移。A4 的历史边界不能倒填后续 A5 证据。
+
+A5 以 of_mcp `5b4162a` 为完成锚点；冷启动 agent 必须保持以下不变量：
+
+1. internal actor 使用独立 issuer/P-256 keyset/workload client 与精确 service audience；scope/TTL/
+   assurance 只衰减，外部 Authorization 与透明 incoming headers 不转发；
+2. FastMCP 4 异步 `ProxyProvider.client_factory` 从真实 request context 读取 Principal、ToolPolicy 与
+   protocol version；每个逻辑目录/调用操作新建 `ProxyClient(auth=...)` 和 bearer，不共享用户 session；
+3. backend 精确镜像 modern `2026-07-28` 或 `legacy`，不能用 `auto` 静默降级；ProxyProvider cache
+   只保存 raw catalog，用户 visibility 每请求执行，远端 direct call 在执行前重验；
+4. 独立 proxy composition root 使用 `RemoteAuthProvider`/PRM 与 strict internal verifier；Gateway 拒绝
+   actor、proxy 拒绝 access、service resource 漂移 fail closed；audit schema v2 严格区分 access record
+   与带 `parent_jti_hash` 的 actor record；
+5. modern sessionless 不把 Principal/token/policy/replay 状态存在跨请求 Context 或 transport session；
+   真实 key/config、私网 TLS/mTLS、部署、跨仓 E2E 与 remote release 均未完成。
+
+A5 失败优先覆盖缺模块、默认 auto era、raw catalog mode 与 service resource drift；定向
+**256 passed**，完整 `uv run --locked ofmcp verify` 六步全绿、**484 passed、2 skipped**，3 条 import
+contracts 与 contract snapshot 无漂移。后续触碰 proxy factory、internal issuer/verifier、mixed assembly
+或 audit schema 必须至少复跑 A5 定向矩阵、contract diff 和完整 verify。
+
+A6 phase 1 已接续且保持 `🔵`；MultiRAG F1/I3/I4/I6/P1/P2/C1/C2/C3/A2/P3 已完成。I5/I7/U14
+可作为已解锁支线，但 M1 仍等待 I5。secure 在独立远程发布闸门解除前仍不能作为远程业务入口。
 
 ### 4.8 EIM-A6 phase 1 接手与完成边界
 
@@ -589,8 +610,8 @@ git diff --check
 
 本轮 A6/Gateway 定向 **65 passed**，完整 `uv run --locked ofmcp verify` 六步全绿、
 **453 passed、2 existing skipped**；提交锚点统一以 ROADMAP 变更日志为准。即使以上全绿，也只有完成
-production multi-instance durable replay/audit、HMAC KMS/rotation、OTel SDK/exporter/W3C 跨仓 trace、A5
-`parent_jti_hash`、P3 动态 bearer 的真实跨仓证据、M3/M4 业务幂等/结果查询和 remote-release 演练后，才能把 A6
+production multi-instance durable replay/audit、HMAC KMS/rotation、OTel SDK/exporter/W3C 跨仓 trace、
+P3/A5 动态 bearer 的真实跨仓证据、M3/M4 业务幂等/结果查询和 remote-release 演练后，才能把 A6
 改为 `✅`。这类后续工作若涉及真实基础设施、KMS、DNS、Secret 或部署，必须先获得用户批准。
 
 ## 5. 跨仓协调

@@ -1,6 +1,6 @@
 # EIM 实施路线图与进度账本
 
-> 最后更新：2026-08-13
+> 最后更新：2026-08-22
 > 当前状态：文档基线、EIM-U0、EIM-U1、EIM-U4、EIM-U8～U13 已完成；
 > CHN-U15 迁移/API 重启已完成，CHN-U16 已完成；Channel 完整 UX 矩阵的真实 smoke 仍欠（C3 的
 > Principal-owner live 不替代该矩阵），Channel 稳定性下一项 CHN-O9，随后稳定浸泡；
@@ -20,7 +20,8 @@
 > live 均已完成并标记 `✅`；EIM-P2 / CHN-X18 也已完成实现、自动门禁与本机 API rollout，
 > Canvas/Dialog 双目标真实飞书各 1 条均形成 owned session 且终态完成，
 > EIM-P3 request-scoped credential/bearer 接线已完成代码与自动门禁，但 A2/P3 均默认关闭且未部署；
-> A5 与 U14 已解锁，真实 rollout 仍是独立审批闸门。
+> EIM-A5 已在 of_mcp 完成本地实现与自动门禁；U14 已解锁，A5 的真实 key/config、私网 TLS、
+> rollout 与跨仓 E2E 仍是独立审批闸门。
 > CHN-O9 可作为并行 Channel 可观测支线，EIM-C4 / CHN-X8
 > 仍等待全部 runner 升级与 deployment soak；
 > I5 与 I7 的 I4 前置已满足，
@@ -467,8 +468,8 @@ request-scoped credential、不发送 bearer；这些仍属于 C4 与 A2/P3。�
 | EIM-A2 | MR | issuer 模块、KMS/file key provider、JWKS、短 token 签发和轮换 | ✅ | A1,P2 | scopes 取交集；audience 固定；5 分钟；private key 不入 DB/log；轮换测试 |
 | EIM-A3 | of_mcp | gateway protected-resource metadata、WWW-Authenticate、JWT/JWKS + strict profile verifier | ✅ | A1,F4 | `RemoteAuthProvider`/自定义 verifier 组合；认证层 401 与 verifier 故障 503 分层；保留可测 403 seam、真实工具级 403 交给 A4；issuer/resource/JOSE/claims/clock/profile 全验；A3 handoff 保持 local/secure loopback；无 auth 绕过路由 |
 | EIM-A4 | of_mcp | immutable Principal dependency、service scope enforcement、tool visibility/step-up | ✅ | A3 | A1 verified claims 独立投影为 immutable Principal；post-assembly canonical tool registry 完整覆盖并生成带 `policy_revision` 的确定性快照；outer HTTP 403 preflight + inner `tools/list` filter/`tools/call` 执行前重验；scope/tenant/assurance 分层且 domain/core 不 import FastMCP；external business resolver 与 `auth_time` freshness 明确保留为 future seam；local/secure 继续 loopback |
-| EIM-A5 | of_mcp | proxy `mcp_internal_actor` 换发，mount/proxy Principal 与授权等价 | ⬜ | A4,P3 | 独立 issuer/keyset/service audience；scope/TTL attenuation；外部 token 不透传；两形态成功/拒绝/audit 等价 |
-| EIM-A6 | of_mcp | auth audit、OTel、jti 高风险重放防护、指标和脱敏 | 🔵 | A4 | **phase 1 已落**：显式 effect/replay policy、canonical runtime revision、冻结 audit schema、原子 replay coordinator、OTel API 和 A4 最终 allow 后执行边界；**尚欠完成门禁**：多实例 durable replay/audit、HMAC/KMS 轮换、SDK/exporter 与跨仓 trace、A5 `parent_jti_hash`、生产集成/演练；审计无 token/PII，高风险重复/冲突 fail closed |
+| EIM-A5 | of_mcp | proxy `mcp_internal_actor` 换发，mount/proxy Principal 与授权等价 | ✅ | A4,P3 | 独立 issuer/keyset/service audience；scope/TTL attenuation；外部 token/header 不透传；逐逻辑调用新 bearer/client；精确镜像 modern/legacy protocol era；内建 raw catalog cache 后逐请求授权；两形态成功/拒绝/audit 等价 |
+| EIM-A6 | of_mcp | auth audit、OTel、jti 高风险重放防护、指标和脱敏 | 🔵 | A4 | **phase 1 已落**：显式 effect/replay policy、canonical runtime revision、冻结 audit schema、原子 replay coordinator、OTel API 和 A4 最终 allow 后执行边界；A5 已把 `parent_jti_hash` 纳入 audit v2；**尚欠完成门禁**：多实例 durable replay/audit、HMAC/KMS 轮换、SDK/exporter 与跨仓 trace、生产集成/演练；审计无 token/PII，高风险重复/冲突 fail closed |
 | EIM-A7 | MR MCP server | 把 inbound MultiRAG MCP 变成独立 OAuth Resource Server：protected-resource metadata、audience、scope、Principal 和工具可见性 | ⬜ | F8,A1,P1 | inbound/outbound resource 与 bearer 不复用；401/403/WWW-Authenticate 标准化；`tools/list` 与 direct call 均授权；dataset/tenant 隔离；legacy API-key 仅按明确迁移门禁保留 |
 | EIM-A8 | 两仓架构/PoC | 企业托管与多 issuer 采用闸门：有真实企业 IdP/外部 MCP client 需求时评估 EMA + ID-JAG；FastMCP MultiAuth 只作为组合实现候选；Horizon 只作托管平台 build-vs-buy | ⏸ | A2,A4,A7 + 真实需求 | ADR/威胁模型区分标准、扩展、框架实现和托管产品；EMA fixture 使用真实形状的 IdP assertion，不伪造飞书事件；首期短时 issuer/resource-token 路径不回归；无需求不引入依赖或平台锁定 |
 
@@ -645,7 +646,7 @@ SDK 2 request-scoped bearer，但默认 disabled、未配置真实制品或部�
 
 A6 仍不得改为 `✅`，直至至少完成并验证：共享持久 replay store 与 append-only audit sink、容量/
 故障/过期/重启/多副本语义、fingerprint HMAC key 的 KMS 托管和轮换、OTel SDK/provider/exporter 与
-W3C 跨仓 trace propagation、A5 internal actor 的 `parent_jti_hash`、P3 动态 bearer 后的真实主体链、
+W3C 跨仓 trace propagation、P3/A5 动态 bearer 后的真实主体链、
 业务级 idempotency/result lookup（M3/M4）以及 remote-release 演练。replay claim 只阻止同一 capability
 重复进入代码，不能证明外部系统未执行，也不能替代业务幂等或结果缓存；duplicate 只拒绝，不回放
 先前结果。P3 已实现但默认关闭、未 rollout；secure 又因没有生产 coordinator 后端 fail-fast，所以这条
@@ -653,9 +654,22 @@ token/JTI 消费纪律还没有取得真实 MultiRAG 委托流证据。
 
 ### EIM-A5 两种 token
 
-外部 token audience 是 gateway。proxy 路径由 gateway 在已验证 Principal 基础上签发/交换 60 秒
-internal actor token，scope 只减不增；service composition root 验证。严禁把外部 bearer 原样
-forward。
+外部 token audience 是 gateway。A5 已在 of_mcp `5b4162a` 落地：proxy 路径由 gateway 在已验证
+Principal 与 A4 `ToolPolicy` 基础上签发最长 60 秒的 `mcp_internal_actor`，scope/TTL 只减不增，
+并使用独立 issuer、P-256 keyset、workload client 与精确 service resource；远端独立 composition root
+通过 `RemoteAuthProvider`/Protected Resource Metadata 和 strict internal profile 再验 token 与本地策略。
+Gateway 不转发外部 `Authorization` 或透明 incoming headers。
+
+代理使用 FastMCP 4 的异步、逐请求 `ProxyProvider.client_factory`；每次逻辑目录/调用操作创建新的
+`ProxyClient(..., auth=<actor bearer>)`，不共享含用户 bearer 的 client/session。后端精确镜像前端已协商
+的 protocol era：modern `2026-07-28` 使用同一版本，legacy 使用 `legacy`，不得静默落回 auto/legacy。
+ProxyProvider 内建 cache 只缓存远端 raw metadata；Gateway 的用户级 visibility 与授权仍在每个请求后
+应用，远端在执行前也重验。Principal、token、policy 与 replay 状态保持 request-scoped 或外部持久化，
+modern sessionless 路径不依赖跨请求 `Context.set_state`/transport session。
+
+A5 同时把 `parent_jti_hash` 纳入 audit schema v2，并验证 mount/proxy 的 Principal、可见性、直接调用
+拒绝和审计关联等价。这里只完成代码与自动化门禁；未配置真实 key/service artifact、私网 TLS/mTLS，
+未重启、部署、发送真实流量或做跨仓 rollout。
 
 ### EIM-A7 inbound Resource Server 边界
 
@@ -829,12 +843,13 @@ I6 + I8 -> U2 -> O1/O2 -> U3
 A8 -> O3  仅在真实企业 IdP、多 issuer 或托管平台需求成立后解除挂起。
 ```
 
-A3/A4 已完成，of_mcp 的 A6 phase 1 已落但保持进行中；下一步不是把内存 store 当生产后端，而是完成
+A3/A4/A5 已完成，of_mcp 的 A6 phase 1 已落但保持进行中；下一步不是把内存 store 当生产后端，而是完成
 durable multi-instance replay/audit、HMAC key rotation 和跨仓 OTel。MultiRAG 已完成 F1/I2/I2.1/I3/I4/P1、
-I6、C2、C3、P2、A2 与 P3；A5/U14 已解锁。CHN-O9 是可并行的 Channel 可观测支线，
+I6、C2、C3、P2、A2 与 P3；U14 已解锁。CHN-O9 是可并行的 Channel 可观测支线，
 C4/CHN-X8 仍等待 deployment soak。I5 与 I7 因 I4 已完成而可作为不
 共文件的并行支线；但 I8 仍严格等待 I6 + I7，M1 仍等待 A5 + I5，不能因“已解锁”跳过下游依赖。
-`F3 + A2 + A4 + P2` 已共同完成 P3；现在可分别启动 A5/U14 等真实委托消费者。A7 保持独立入站
+`F3 + A2 + A4 + P2` 已共同完成 P3，A5 也已完成本地实现；现在可启动 U14，或先完成 I5 后进入
+M1/M2。A7 保持独立入站
 resource；A8 仍无真实需求不启动。这个顺序既保留 of_mcp 的 fail-closed verifier/authorizer 先行，
 又不把未验证的 Channel subject 塞进 token；A4 的 Resource Server Principal 不能替代
 MultiRAG 已完成的 P2 执行链传播。
@@ -850,6 +865,7 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 
 | 日期 | ID | 变更 | 仓库/提交 | 验证证据 | 记录人 |
 |---|---|---|---|---|---|
+| 2026-08-22 | EIM-A5 | 完成 mount/proxy 内部委托：独立 internal actor issuer/keyset/service audience，scope/TTL attenuation，逐逻辑操作新 bearer 与 `ProxyClient`，禁止透明转发外部 Authorization；FastMCP 4 异步 request-scoped factory 精确镜像 modern `2026-07-28`/legacy era，内建 cache 只保存 raw catalog、用户可见性逐请求应用，远端 direct call 再授权。新增独立 proxy Resource Server/PRM、mixed mount/proxy registry 与 audit schema v2 `parent_jti_hash`；未改依赖版本，未配置真实 key/TLS、重启、部署或发送真实流量 | of_mcp `5b4162a`；MultiRAG docs / 本次提交 | 失败优先覆盖缺模块、默认 auto era、raw catalog mode 与 service resource drift；定向 **256 passed**。`uv run --locked ofmcp verify` 六步全绿：Ruff、format **128 files unchanged**、ty、3 条 import contracts（134 files/530 dependencies）、**484 passed、2 skipped**、contract snapshot 无漂移；`git diff --check` 通过 | Codex |
 | 2026-08-13 | EIM-P3 | 完成默认关闭的 request-scoped MCP delegation：严格消费 A4 secure format-2 policy 与 MR format-1 grant snapshot，复算 revision 并拒绝可写/歧义 authority；精确绑定 Principal、tenant、published Canvas agent/revision、server/resource/audience、canonical tool、scope、policy/grant revision 与 generation。模型 alias 与 wire authority 分离，未授权 tool 不暴露；有界 cache 只保存 grant/scope decision，ACR/AMR/enterprise subject 每次重验。SDK 2 operation-scoped `httpx2.Auth` 每次逻辑调用新签 token/JTI，同次 initialize/call/retry 复用，完成即关 client；legacy 未登记 server 不回归。未新增 DB/public token API，未改 of_mcp、生产配置或真实数据；未配置 key/secure snapshot/grant，未重启/部署/发真实飞书或 MCP 消息 | MultiRAG / 本次提交 | 失败优先：新增模块先收集 `ModuleNotFoundError`；定向 **109 passed**，扩大 Agent/MCP/A2 **178 passed**，Channel execution **88 passed**；`make mcp-compat` **13/13 PASS**；`make fix` 全绿。`make verify`：Ruff、8 条 import contracts（853 files/2695 dependencies）、async DB gate、mypy **100 source files**、unit **2470 passed in 38.86s**。只读 `make smoke` 六组件全绿，但运行实例未重启，不是 P3 rollout。未跑 integration（无 DB/存储/检索变更） | Codex |
 | 2026-08-13 | EIM-A2 | 完成默认关闭的进程内 Authorization issuer、A1 production issuance policy、vendor-neutral signing operation、严格 P-256 file provider 与 public root JWKS。启用配置固定 issuer/client/resource/audience/scope/enterprise authority；Principal 是唯一主体来源，token 固定 ES256/`at+jwt`/`mcp_access`、至多 300 秒/4096 bytes，条件 claims 只投影真实证据且不猜 `amr`。private PEM path/异常/repr/log 脱敏并要求 absolute/non-symlink/regular/当前进程 owner 0400/0600；active private/public 匹配，provider snapshot 有界；轮换机器守住 prepublish→switch→旧 key 至少 630 秒。唯一公共面为 `GET /.well-known/jwks.json`，没有公开 token endpoint。P3 bearer 注入、A5/A7/A8、真实 key/KMS/DNS/TLS/多副本轮换/重启/部署均未执行 | MultiRAG / 本次提交 | 失败优先：新增实现前定向收集 **2 errors**；安全边界新增用例先 **4 failed** 后转绿。A1+A2 定向 **130 passed**；定向 mypy **8 source files**；临时 P-256 动态 token/JWKS 被 of_mcp production `StrictMcpAccessVerifier` 接受且未输出 token/key。`make fix` **1275 files unchanged**；`make verify`：Ruff、**8** 条 import contracts（848 files/2679 dependencies）、async DB gate、mypy **95 source files**、unit **2450 passed** 全绿。只读 `make smoke` 对仍运行旧代码的 API：ping/healthz HTTP 200、六组件 `ok`；不是 A2 rollout。未跑 integration（无 DB/存储/检索变更） | Codex |
 | 2026-08-13 | EIM-P2 / CHN-X18 rollout | 本机 API 重启加载 `4165d439`（包含 P2 `549cc9c6` 与后续 I4 asyncio 兼容修复）；supervisor 与两个飞书 worker 未重启，旧 consumer 继续兼容。真实飞书分别完成 Canvas、Dialog 各一条新对话；本次只验证 private execution/owner/context 装配，不宣称完整 Channel UX smoke、真实 Memory 写入或 MCP 工具调用 | MultiRAG / `549cc9c6` + runtime `4165d439` | `make smoke` ping/healthz 六组件全绿；近 30 分钟 Redis event `completed=2`、owned session `2`、legacy raw `0`；数据库 Canvas/Dialog 各 1 条且空 owner 均为 `0`、缺失 session `0`；两个 runtime connected、runtime/API error `0`。Canvas DSL 含 Agent、Retrieval、Message 与 MCP 配置，但无 `memory_ids`；真实 Memory 隔离继续由当前 `msgStoreConn` backend integration 证明 | Codex |
