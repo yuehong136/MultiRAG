@@ -8,7 +8,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
 MULTIRAG_IMAGE="${1:-${MULTIRAG_IMAGE:-datav/multirag:latest}}"
-MULTIRAG_DEPS_IMAGE="${MULTIRAG_DEPS_IMAGE:-multirag_deps:uv0.12.3-tika3.3.0-build-only}"
+MULTIRAG_DEPS_IMAGE="${MULTIRAG_DEPS_IMAGE:-multirag_deps:uv0.12.5-tika3.3.0-build-only}"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
 NEED_MIRROR="${NEED_MIRROR:-1}"
 REDIS_BUILD_JOBS="${REDIS_BUILD_JOBS:-2}"
@@ -16,7 +16,7 @@ REDIS_BUILD_JOBS="${REDIS_BUILD_JOBS:-2}"
 if ! command -v uv >/dev/null 2>&1; then
   echo "uv is required to run download_deps.py." >&2
   echo "Install the pinned WSL/Linux version with:" >&2
-  echo "  python -m pip install -U 'uv==0.12.3' -i https://pypi.tuna.tsinghua.edu.cn/simple" >&2
+  echo "  python -m pip install -U 'uv==0.12.5' -i https://pypi.tuna.tsinghua.edu.cn/simple" >&2
   exit 1
 fi
 if ! command -v docker >/dev/null 2>&1; then
@@ -49,7 +49,7 @@ uv run --script download_deps.py "${download_args[@]}"
 echo "[2/4] Building ${MULTIRAG_DEPS_IMAGE}"
 docker build \
   --platform "${DOCKER_PLATFORM}" \
-  --build-arg UV_VERSION=0.12.3 \
+  --build-arg UV_VERSION=0.12.5 \
   -f Dockerfile.deps \
   -t "${MULTIRAG_DEPS_IMAGE}" \
   .
