@@ -282,7 +282,7 @@ P3 失败优先收集到新增模块 `ModuleNotFoundError`；定向 **109 passed
 **178 passed**，Channel 执行回归 **88 passed**，`make mcp-compat` **13/13 PASS**。`make fix` 全绿；
 `make verify` 为 8 条 import contracts（853 files/2695 dependencies）、mypy 100 files、unit
 **2470 passed**；只读 `make smoke` 六组件全绿，但命中的是未重启的旧 runtime，不是 P3 rollout。
-未跑 integration（无 DB/存储/检索变更）。A5 后续已在 of_mcp 完成本地实现，U14 仍已解锁；任何真实
+未跑 integration（无 DB/存储/检索变更）。A5 后续已在 of_mcp 完成本地实现，U14 也已完成本地实现并解锁 U15；任何真实
 artifact/key/config/restart/secure endpoint/飞书 MCP 调用仍须另行精确批准。
 
 ### 4.4 外部 API 和 SDK 任务
@@ -416,14 +416,14 @@ MCP Foundation 的 F2/F3/F4/F6/F7/F8 已于 2026-08-12 完成。冷启动 Agent 
    不与根环境在同一解释器导入。`make mcp-compat` 当前协议矩阵为 **22/22 PASS**：双方向逐一
    覆盖 SDK 2 registry 的五个已发布 revision 并拒绝未知 revision；任何后续
    SDK/FastMCP/transport 改动都必须复跑，而不能用 mock 或 sibling import 替代。
-4. **下一协议相关入口**：EIM-A1 已完成并固定 token/JWKS test vectors；of_mcp EIM-A3 已由
+4. **当前协议相关入口**：EIM-A1 已完成并固定 token/JWKS test vectors；of_mcp EIM-A3 已由
    `e4ab560` 完成 strict Resource Server，EIM-A4 已由 `74117a0` 接续 immutable Principal、
    per-tool policy 与真实 403。MultiRAG EIM-A7 的 A1/P1 前置已满足，但仍须通过 A7 独立实现
-   inbound OAuth Resource Server、Principal/scope 和工具可见性；
-   `InputRequiredResult` 目前只由 EIM-F3 暴露，EIM-U14 还必须等待 P3/A4/C3，才实现持久化暂停/恢复、
-   Principal 绑定、revision/CAS 和重授权。当前协议升级**不证明** Principal、scope、delegated token、
-   OAuth Resource Server 或 InteractionSession 已在 MultiRAG/Channel 端到端实现；of_mcp A4 的完成态
-   不能替代 P2、A2/P3 或飞书 identity resolver。
+   inbound OAuth Resource Server、Principal/scope 和工具可见性。EIM-U14 已在 P3/A4/C3 完成后实现
+   默认关闭的持久化暂停/恢复、Principal 绑定、revision/CAS、DB lease、恢复前重授权，以及 modern MRTR
+   与声明式 legacy ask-before-effect 适配；它尚未启用、部署或接 U15 飞书 renderer。当前协议升级本身
+   仍**不证明** inbound OAuth Resource Server 或生产 rollout；of_mcp A4 的完成态也不能替代 P2、A2/P3
+   或飞书 identity resolver。
 
 HTTP 调用超时的已验证契约是：本地等待及时取消，直接并发调用不再被单 server FIFO 队列产生
 head-of-line blocking；远端是否停止取决于 transport/server 的协作式取消，服务端仍可能完成调用。
@@ -569,8 +569,8 @@ EIM-F9 后续把 A5 的 era 分类扩成 SDK registry 驱动的完整门禁：�
 进程矩阵为 **22/22 PASS**，of_mcp 分类/真实 proxy HTTP 定向 **20 passed**，完整 verify 为
 **499 passed、2 existing skipped**。FastMCP 4.0.0b3 升级仍须另立版本任务，不能借 F9 静默升级。
 
-A6 phase 1 已接续且保持 `🔵`；MultiRAG F1/I3/I4/I6/P1/P2/C1/C2/C3/A2/P3 已完成。I5/I7/U14
-可作为已解锁支线，但 M1 仍等待 I5。secure 在独立远程发布闸门解除前仍不能作为远程业务入口。
+A6 phase 1 已接续且保持 `🔵`；MultiRAG F1/I3/I4/I6/P1/P2/C1/C2/C3/A2/P3/U14 已完成。
+U15、I5/I7 可作为已解锁支线，但 M1 仍等待 I5。secure 在独立远程发布闸门解除前仍不能作为远程业务入口。
 
 ### 4.8 EIM-A6 phase 1 接手与完成边界
 

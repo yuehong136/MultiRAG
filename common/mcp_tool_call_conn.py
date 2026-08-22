@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -12,15 +13,37 @@ from concurrent.futures import TimeoutError as FuturesTimeoutError
 from contextlib import AsyncExitStack
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from string import Template
 from typing import Any, Protocol, cast, override
 
 import httpx2
 
+from common.mcp_interactions import (
+    InteractionEffect,
+    InteractionHandler,
+    InteractionReceipt,
+    InteractionRequest,
+    InteractionResume,
+    MCPInteractionPaused,
+)
 from mcp.client import Client, Transport
+from mcp.client.session import ClientRequestContext
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
-from mcp.types import CallToolResult, ImageContent, InputRequiredResult, ListToolsResult, TextContent, Tool
+from mcp.types import (
+    CallToolResult,
+    ElicitRequest,
+    ElicitRequestFormParams,
+    ElicitRequestParams,
+    ElicitResult,
+    ImageContent,
+    InputRequiredResult,
+    ListToolsResult,
+    RequestParamsMeta,
+    TextContent,
+    Tool,
+)
 
 # MCP 服务器初始化超时时间（秒），可通过环境变量配置
 MCP_INIT_TIMEOUT = int(os.environ.get("MCP_INIT_TIMEOUT", 15))
@@ -126,10 +149,11 @@ class MCPRequestCredential:
     canonical_tool_name: str
     policy_revision: str
     credential_generation: int
+    effect: str
     replay_mode: str
 
     def __post_init__(self) -> None:
-        if not self.bearer or not self.resource_name or not self.canonical_tool_name:
+        if not self.bearer or not self.resource_name or not self.canonical_tool_name or self.effect not in {effect.value for effect in InteractionEffect}:
             raise ValueError("invalid MCP request credential")
 
 
@@ -167,6 +191,95 @@ class MCPToolBinding:
         )
 
 
+class _LegacyElicitationBridge:
+    """Turn one declared legacy guard into the same durable U14 contract."""
+
+    def __init__(
+        self,
+        *,
+        session: "MCPToolCallSession",
+        name: str,
+        arguments: dict[str, Any],
+        credential: MCPRequestCredential,
+        input_responses: dict[str, Any] | None,
+        expected_input_requests: dict[str, Any] | None,
+        expected_request_state: str | None,
+        expires_at: datetime | None,
+        interaction_id: str | None,
+        interaction_revision: int | None,
+    ) -> None:
+        self._session = session
+        self._name = name
+        self._arguments = arguments
+        self._credential = credential
+        self._input_responses = input_responses
+        self._expected_input_requests = expected_input_requests
+        self._expected_request_state = expected_request_state
+        self._expires_at = expires_at
+        self._interaction_id = interaction_id
+        self._interaction_revision = interaction_revision
+        self._receipt: InteractionReceipt | None = None
+        self._called = False
+        self._responded = False
+
+    async def __call__(
+        self,
+        context: ClientRequestContext,
+        params: ElicitRequestParams,
+    ) -> ElicitResult:
+        del context
+        if self._called or not isinstance(params, ElicitRequestFormParams):
+            raise ValueError("legacy MCP interaction guard is invalid")
+        self._called = True
+        request_payload = ElicitRequest(params=params).model_dump(
+            mode="json",
+            by_alias=True,
+            exclude_none=True,
+        )
+        canonical = json.dumps(
+            request_payload,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        guard_digest = hashlib.sha256(("multirag.mcp-interaction.legacy-guard.v1\x00" + canonical).encode()).hexdigest()
+        request_id = f"legacy-{guard_digest[:32]}"
+        input_requests = {request_id: request_payload}
+        request_state = f"legacy.callback.v1.{guard_digest}"
+        if self._expected_input_requests is None:
+            handler = self._session._interaction_handler
+            if handler is None or self._input_responses is not None:
+                raise ValueError("legacy MCP interaction host is unavailable")
+            request = self._session._interaction_request(
+                name=self._name,
+                arguments=self._arguments,
+                input_requests=input_requests,
+                request_state=request_state,
+                credential=self._credential,
+                expires_at=self._expires_at,
+                interaction_id=self._interaction_id,
+                interaction_revision=self._interaction_revision,
+            )
+            self._receipt = await handler.pause(request)
+            # The declared ask-before-effect server must terminate this attempt
+            # without business work. The Host discards its tool result below.
+            return ElicitResult(action="cancel")
+        if input_requests != self._expected_input_requests or request_state != self._expected_request_state or self._input_responses is None or set(self._input_responses) != {request_id}:
+            raise ValueError("legacy MCP interaction guard changed during resume")
+        self._responded = True
+        return ElicitResult.model_validate(self._input_responses[request_id])
+
+    def raise_if_paused_or_incomplete(self) -> None:
+        if self._receipt is not None:
+            raise MCPInteractionPaused(
+                interaction_id=self._receipt.interaction_id,
+                revision=self._receipt.revision,
+            )
+        if self._expected_input_requests is not None and not self._responded:
+            raise ValueError("legacy MCP interaction guard was not replayed")
+
+
 class MCPToolCallSession(ToolCallSession):
     _ALL_INSTANCES: weakref.WeakSet["MCPToolCallSession"] = weakref.WeakSet()
 
@@ -178,11 +291,17 @@ class MCPToolCallSession(ToolCallSession):
         *,
         call_context: object | None = None,
         credential_provider: MCPRequestCredentialProvider | None = None,
+        interaction_handler: InteractionHandler | None = None,
+        legacy_interaction_tools: frozenset[str] = frozenset(),
+        tool_output_schemas: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self.__class__._ALL_INSTANCES.add(self)
 
         self._call_context = call_context
         self._credential_provider = credential_provider
+        self._interaction_handler = interaction_handler
+        self._legacy_interaction_tools = legacy_interaction_tools
+        self._tool_output_schemas = tool_output_schemas or {}
         self._custom_header = custom_header
         self._mcp_server = mcp_server
         self._server_variables = server_variables or {}
@@ -407,18 +526,35 @@ class MCPToolCallSession(ToolCallSession):
         *,
         name: str,
         arguments: dict[str, Any],
+        input_responses: dict[str, Any] | None,
+        request_state: str | None,
+        credential: MCPRequestCredential,
         request_timeout: float | int,
         progress_callback: Any,
+        interaction_expires_at: datetime | None,
+        interaction_id: str | None,
+        interaction_revision: int | None,
+        interaction_input_requests: dict[str, Any] | None,
     ) -> CallToolResult | InputRequiredResult:
-        provider = self._credential_provider
-        if provider is None:
-            raise RuntimeError("delegated MCP credential provider is unavailable")
-        credential = provider.credential_for(name)
         auth_status = _HTTPAuthStatus()
         auth_status_token = self._http_auth_status.set(auth_status)
         current_task = asyncio.current_task()
         if current_task is not None:
             self._inflight_tasks.add(current_task)
+        legacy_bridge: _LegacyElicitationBridge | None = None
+        if getattr(self, "_interaction_handler", None) is not None and name in getattr(self, "_legacy_interaction_tools", frozenset()) and not (request_state or "").startswith("legacy.ofmcp.v1."):
+            legacy_bridge = _LegacyElicitationBridge(
+                session=self,
+                name=name,
+                arguments=arguments,
+                credential=credential,
+                input_responses=input_responses,
+                expected_input_requests=interaction_input_requests,
+                expected_request_state=request_state,
+                expires_at=interaction_expires_at,
+                interaction_id=interaction_id,
+                interaction_revision=interaction_revision,
+            )
         try:
             async with AsyncExitStack() as stack:
                 owned_http_client = create_mcp_http_client(
@@ -437,17 +573,36 @@ class MCPToolCallSession(ToolCallSession):
                             transport,
                             mode="auto",
                             logging_callback=self._on_logging,
+                            elicitation_callback=legacy_bridge,
                             read_timeout_seconds=request_timeout,
                         )
                     )
                     self._save_client_state(client)
-                    return await client.session.call_tool(
+                    legacy_meta: RequestParamsMeta | None = None
+                    if request_state is not None and request_state.startswith("legacy.ofmcp.v1.") and input_responses is not None and interaction_input_requests is not None:
+                        legacy_meta = cast(
+                            RequestParamsMeta,
+                            {
+                                "com.ofmcp/interaction": {
+                                    "version": 1,
+                                    "guardDigest": request_state.removeprefix("legacy.ofmcp.v1."),
+                                    "inputResponses": input_responses,
+                                }
+                            },
+                        )
+                    result = await client.session.call_tool(
                         name,
                         arguments,
+                        input_responses=input_responses,
+                        request_state=request_state,
                         read_timeout_seconds=request_timeout,
                         progress_callback=progress_callback,
+                        meta=legacy_meta,
                         allow_input_required=True,
                     )
+                    if legacy_bridge is not None:
+                        legacy_bridge.raise_if_paused_or_incomplete()
+                    return result
         except TimeoutError:
             raise MCPToolTimeoutError(f"MCP request 'tool_call' timed out after {request_timeout}s") from None
         except Exception as error:
@@ -461,7 +616,19 @@ class MCPToolCallSession(ToolCallSession):
             if current_task is not None:
                 self._inflight_tasks.discard(current_task)
 
-    async def _call_mcp_tool(self, name: str, arguments: dict[str, Any], request_timeout: float | int = MCP_TOOL_CALL_TIMEOUT) -> str:
+    async def _call_mcp_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        request_timeout: float | int = MCP_TOOL_CALL_TIMEOUT,
+        *,
+        input_responses: dict[str, Any] | None = None,
+        request_state: str | None = None,
+        interaction_expires_at: datetime | None = None,
+        interaction_id: str | None = None,
+        interaction_revision: int | None = None,
+        interaction_input_requests: dict[str, Any] | None = None,
+    ) -> str:
         self._last_tool_call_meta = None
         # Progress notifications are request-scoped. Generic server logging has
         # no request correlation and stays only in the bounded connection log.
@@ -474,42 +641,82 @@ class MCPToolCallSession(ToolCallSession):
             msg = f" {message}" if message else ""
             call_logs.append(f"[progress {progress}{total_str}]{msg}")
 
+        credential: MCPRequestCredential | None = None
         if self._credential_provider is None:
             result: CallToolResult | InputRequiredResult = await self._call_mcp_server(
                 "tool_call",
                 name=name,
                 arguments=arguments,
+                input_responses=input_responses,
+                request_state=request_state,
                 progress_callback=_on_progress,
                 request_timeout=request_timeout,
             )
         else:
+            credential = self._credential_provider.credential_for(name)
             result = await self._call_delegated_tool(
                 name=name,
                 arguments=arguments,
+                input_responses=input_responses,
+                request_state=request_state,
+                credential=credential,
                 request_timeout=request_timeout,
                 progress_callback=_on_progress,
+                interaction_expires_at=interaction_expires_at,
+                interaction_id=interaction_id,
+                interaction_revision=interaction_revision,
+                interaction_input_requests=interaction_input_requests,
             )
 
         if isinstance(result, InputRequiredResult):
             payload = result.model_dump(mode="json", by_alias=True, exclude_none=True)
-            structured_content = {
-                "interaction_required": True,
-                "input_required": payload,
-            }
-            text_result = json.dumps(structured_content, ensure_ascii=False, indent=2)
-            self._last_tool_call_meta = {
-                "tool_name": name,
-                "arguments": arguments,
-                "text": text_result,
-                "structured_content": structured_content,
-                "meta": result.meta,
-                "server_logs": list(call_logs),
-                "is_error": False,
-                "interaction_required": True,
-                "input_requests": payload.get("inputRequests"),
-                "request_state": payload.get("requestState"),
-            }
-            return text_result
+            self._last_tool_call_meta = None
+            handler = getattr(self, "_interaction_handler", None)
+            if handler is None or credential is None:
+                return "MCP interaction requires an enabled interaction host."
+            request = self._interaction_request(
+                name=name,
+                arguments=arguments,
+                input_requests=payload.get("inputRequests") or {},
+                request_state=payload.get("requestState") or "",
+                credential=credential,
+                expires_at=interaction_expires_at,
+                interaction_id=interaction_id,
+                interaction_revision=interaction_revision,
+            )
+            receipt = await handler.pause(request)
+            raise MCPInteractionPaused(
+                interaction_id=receipt.interaction_id,
+                revision=receipt.revision,
+            )
+
+        legacy_envelope = self._legacy_interaction_envelope(
+            name=name,
+            result=result,
+        )
+        if legacy_envelope is not None:
+            if credential is None:
+                return "MCP interaction requires an enabled interaction host."
+            handler = getattr(self, "_interaction_handler", None)
+            if handler is None:
+                return "MCP interaction requires an enabled interaction host."
+            guard_digest, input_requests = legacy_envelope
+            request = self._interaction_request(
+                name=name,
+                arguments=arguments,
+                input_requests=input_requests,
+                request_state=f"legacy.ofmcp.v1.{guard_digest}",
+                credential=credential,
+                expires_at=interaction_expires_at,
+                interaction_id=interaction_id,
+                interaction_revision=interaction_revision,
+            )
+            receipt = await handler.pause(request)
+            self._last_tool_call_meta = None
+            raise MCPInteractionPaused(
+                interaction_id=receipt.interaction_id,
+                revision=receipt.revision,
+            )
 
         if result.is_error:
             self._last_tool_call_meta = {
@@ -565,6 +772,75 @@ class MCPToolCallSession(ToolCallSession):
             parts.extend(call_logs[-10:])  # 最多附带 10 条，防止过长
 
         return "\n".join(parts)
+
+    def _interaction_request(
+        self,
+        *,
+        name: str,
+        arguments: dict[str, Any],
+        input_requests: dict[str, Any],
+        request_state: str,
+        credential: MCPRequestCredential,
+        expires_at: datetime | None,
+        interaction_id: str | None,
+        interaction_revision: int | None,
+    ) -> InteractionRequest:
+        context = self._call_context
+        principal = getattr(context, "principal", None)
+        authentication = getattr(principal, "authentication", None)
+        return InteractionRequest(
+            tenant_id=getattr(context, "tenant_id", ""),
+            platform_user_id=getattr(context, "platform_user_id", ""),
+            external_identity_id=getattr(authentication, "external_identity_id", None),
+            identity_revision=getattr(context, "identity_revision", None),
+            agent_id=getattr(context, "agent_id", ""),
+            agent_revision_id=getattr(context, "agent_revision_id", ""),
+            mcp_server_id=str(self._mcp_server.id),
+            resource_name=credential.resource_name,
+            resource_uri=str(self._mcp_server.url),
+            tool_name=name,
+            original_arguments=arguments,
+            input_requests=input_requests,
+            output_schema=self._tool_output_schemas.get(name),
+            request_state=request_state,
+            effect=InteractionEffect(credential.effect),
+            replay_mode=credential.replay_mode,
+            policy_revision=credential.policy_revision,
+            credential_generation=credential.credential_generation,
+            expires_at=expires_at or datetime.now(UTC) + timedelta(minutes=10),
+            interaction_id=interaction_id,
+            previous_revision=interaction_revision,
+        )
+
+    def _legacy_interaction_envelope(
+        self,
+        *,
+        name: str,
+        result: CallToolResult,
+    ) -> tuple[str, dict[str, Any]] | None:
+        if name not in getattr(self, "_legacy_interaction_tools", frozenset()):
+            return None
+        candidate: object = result.structured_content
+        if isinstance(candidate, dict) and set(candidate) == {"result"} and isinstance(candidate["result"], dict):
+            candidate = candidate["result"]
+        if not isinstance(candidate, dict) or candidate.get("kind") != "com.ofmcp/input-required":
+            return None
+        if (
+            set(candidate)
+            != {
+                "guard_digest",
+                "input_requests",
+                "kind",
+                "version",
+            }
+            or candidate.get("version") != 1
+        ):
+            raise ValueError("legacy MCP interaction envelope is invalid")
+        guard_digest = candidate.get("guard_digest")
+        input_requests = candidate.get("input_requests")
+        if not isinstance(guard_digest, str) or re.fullmatch(r"[0-9a-f]{64}", guard_digest) is None or not isinstance(input_requests, dict) or not input_requests:
+            raise ValueError("legacy MCP interaction envelope is invalid")
+        return guard_digest, input_requests
 
     async def _get_tools_from_mcp_server(self, request_timeout: float | int = 15) -> list[Tool]:
         try:
@@ -622,6 +898,32 @@ class MCPToolCallSession(ToolCallSession):
         if self._last_tool_call_meta is None:
             return None
         return dict(self._last_tool_call_meta)
+
+    async def resume_tool_call(self, resume: InteractionResume) -> object:
+        """Resume one exact persisted MRTR call with a newly issued bearer."""
+
+        request = resume.request
+        if (
+            str(self._mcp_server.id) != request.mcp_server_id
+            or str(self._mcp_server.url) != request.resource_uri
+            or self.delegated_resource_name != request.resource_name
+            or resume.call_digest != request.call_digest
+        ):
+            raise ValueError("MCP interaction resume binding is invalid")
+        text = await self._call_mcp_tool(
+            request.tool_name,
+            dict(request.original_arguments),
+            input_responses=dict(resume.input_responses),
+            request_state=request.request_state,
+            interaction_expires_at=request.expires_at,
+            interaction_id=resume.interaction_id,
+            interaction_revision=resume.revision,
+            interaction_input_requests=dict(request.input_requests),
+        )
+        metadata = self.get_last_tool_call_meta()
+        if metadata is not None and metadata.get("structured_content") is not None:
+            return metadata["structured_content"]
+        return text
 
     @property
     def call_context(self) -> object | None:

@@ -327,8 +327,9 @@ SEP 为准，不能因此退回旧 session 设计。
 - HTTP 自定义 header 只能放进调用方通过 SDK `create_mcp_http_client()` 创建并拥有的
   `httpx2.AsyncClient`；必须保留 MCP 30/300 秒 transport 默认值，不能回落到通用 5 秒默认值；
   401/403 response hook 只记录状态码，不记录 credential、body 或完整 header；
-- `InputRequiredResult` 目前只序列化到旁路 metadata 交给 Host；没有 U14 持久 InteractionSession
-  前，不得自动重跑或宣称可以跨进程恢复；
+- `InputRequiredResult` 已由 U14 转成不进入模型的 transport-neutral pause，并以加密 InteractionSession、
+  revision/CAS、DB lease 和恢复前重授权支持跨进程恢复；功能默认关闭，未启用 U15 renderer 时不得
+  宣称飞书表单闭环或生产 rollout；
 - timeout 必须取消本地底层调用并消除旧串行队列/HOL；HTTP 远端 handler 是否终止是协作式语义，
   matrix 要记录最终 `cancelled/completed`，不能伪造“远端一定取消”；
 - inbound modern `server/discover`、`Mcp-Method/Mcp-Name`、无 session、structured result 与 legacy

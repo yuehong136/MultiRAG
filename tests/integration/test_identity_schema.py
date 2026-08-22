@@ -36,6 +36,7 @@ from api.db.db_models import (
 )
 
 _I6_REVISION = "b4c6d8e0f2a4"
+_U14_REVISION = "c6d8e0f2a4b6"
 _I21_REVISION = "9a3b5c7d8e0f"
 _I2_REVISION = "8f2c4d6e7a9b"
 _PRE_I2_REVISION = "7c8d9e0f1a2b"
@@ -1034,7 +1035,7 @@ def test_i2_downgrade_refuses_to_destroy_identity_history(
             schema=_SCHEMA,
         )
         head = ScriptDirectory.from_config(alembic_cfg).get_current_head()
-        assert head == _I6_REVISION
+        assert head == _U14_REVISION
         # The I2.1 step is safely reversible because no account/link rows
         # exist; the following I2 downgrade then refuses to erase the provider
         # tenant history.  Alembic therefore remains at the last completed

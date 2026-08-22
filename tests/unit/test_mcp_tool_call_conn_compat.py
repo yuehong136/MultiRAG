@@ -73,6 +73,7 @@ async def test_delegated_streamable_http_uses_one_sdk2_auth_lease_per_logical_ca
 
     issued: list[str] = []
     auth_objects: list[Any] = []
+    wire_calls: list[dict[str, Any]] = []
 
     class Provider:
         resource_name = "ofmcp_gateway"
@@ -86,6 +87,7 @@ async def test_delegated_streamable_http_uses_one_sdk2_auth_lease_per_logical_ca
                 canonical_tool_name=canonical_tool_name,
                 policy_revision="a" * 64,
                 credential_generation=3,
+                effect="read",
                 replay_mode="single_use",
             )
 
@@ -101,7 +103,8 @@ async def test_delegated_streamable_http_uses_one_sdk2_auth_lease_per_logical_ca
             return None
 
     class FakeWireSession:
-        async def call_tool(self, *_args: object, **_kwargs: object) -> CallToolResult:
+        async def call_tool(self, *_args: object, **kwargs: Any) -> CallToolResult:
+            wire_calls.append(kwargs)
             return CallToolResult(content=[TextContent(text="ok")], isError=False)
 
     class FakeClient:
@@ -128,9 +131,26 @@ async def test_delegated_streamable_http_uses_one_sdk2_auth_lease_per_logical_ca
 
     assert await session._call_mcp_tool("leave_submit_leave", {}) == "ok"
     assert await session._call_mcp_tool("leave_submit_leave", {}) == "ok"
-    assert issued == ["secret-bearer-1", "secret-bearer-2"]
-    assert len(auth_objects) == 2
+    assert (
+        await session._call_mcp_tool(
+            "leave_submit_leave",
+            {},
+            input_responses={"leave-form": {"action": "cancel"}},
+            request_state=f"legacy.ofmcp.v1.{'a' * 64}",
+            interaction_input_requests={"leave-form": {"method": "elicitation/create"}},
+        )
+        == "ok"
+    )
+    assert issued == ["secret-bearer-1", "secret-bearer-2", "secret-bearer-3"]
+    assert len(auth_objects) == 3
     assert all("secret-bearer" not in repr(auth) for auth in auth_objects)
+    assert wire_calls[-1]["meta"] == {
+        "com.ofmcp/interaction": {
+            "version": 1,
+            "guardDigest": "a" * 64,
+            "inputResponses": {"leave-form": {"action": "cancel"}},
+        }
+    }
 
     observed_headers: list[str] = []
     for auth in auth_objects:
@@ -138,7 +158,11 @@ async def test_delegated_streamable_http_uses_one_sdk2_auth_lease_per_logical_ca
         request = await anext(flow)
         observed_headers.append(request.headers["Authorization"])
         await flow.aclose()
-    assert observed_headers == ["Bearer secret-bearer-1", "Bearer secret-bearer-2"]
+    assert observed_headers == [
+        "Bearer secret-bearer-1",
+        "Bearer secret-bearer-2",
+        "Bearer secret-bearer-3",
+    ]
 
 
 def test_delegated_constructor_is_network_lazy_and_rejects_static_authorization() -> None:
@@ -152,6 +176,7 @@ def test_delegated_constructor_is_network_lazy_and_rejects_static_authorization(
                 canonical_tool_name=canonical_tool_name,
                 policy_revision="a" * 64,
                 credential_generation=1,
+                effect="read",
                 replay_mode="reusable",
             )
 
@@ -453,7 +478,7 @@ async def test_tool_error_remains_text_with_side_channel_metadata(monkeypatch: p
     }
 
 
-async def test_input_required_is_surfaced_once_and_json_serializable(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_input_required_without_host_is_safe_and_never_exposes_request_state(monkeypatch: pytest.MonkeyPatch) -> None:
     request = ElicitRequest(
         params=ElicitRequestFormParams(
             message="Need leave dates",
@@ -479,17 +504,12 @@ async def test_input_required_is_surfaced_once_and_json_serializable(monkeypatch
     monkeypatch.setattr(session, "_call_mcp_server", fake_call_server)
 
     text = await session._call_mcp_tool("prepare_leave", {"days": 1})
-    payload = json.loads(text)
     meta = session.get_last_tool_call_meta()
 
     assert call_count == 1
-    assert payload["interaction_required"] is True
-    assert payload["input_required"]["resultType"] == "input_required"
-    assert payload["input_required"]["requestState"] == "opaque-state"
-    assert meta is not None and meta["interaction_required"] is True
-    assert meta["request_state"] == "opaque-state"
-    assert meta["input_requests"]["leave-form"]["method"] == "elicitation/create"
-    json.dumps(meta)
+    assert text == "MCP interaction requires an enabled interaction host."
+    assert "opaque-state" not in text
+    assert meta is None
 
 
 async def test_concurrent_calls_do_not_head_of_line_block_and_timeout_cancels() -> None:

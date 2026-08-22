@@ -126,7 +126,7 @@ local.service_conf.yaml > service_conf.yaml）→ `common/resources.py`（有状
    （测试用 `app.dependency_overrides` 替换，见 tests/unit/test_api_deps.py 示范），
    不要直接引用 `settings.docStoreConn`/`settings.STORAGE_IMPL`；
 3. **例外：紧跟 ragflow 上游的文件保持 `settings.X` 风格**，保证上游 diff
-   可照抄（映射表：internal/ragflow_settings_porting_map.md）；
+   可照抄（映射表：[docs/enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md](docs/enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)）；
 4. 新入口点（脚本/服务）先调 `common.bootstrap.ensure_initialized()`；
    核心资源未初始化即访问会 fail-fast 抛 `ResourcesNotInitialized`。
 5. **依赖方向受 import-linter 契约约束**（`make lint` 内含，配置见 pyproject

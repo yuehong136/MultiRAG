@@ -207,12 +207,16 @@ def test_provider_uses_canonical_tool_and_issues_a_new_token_per_logical_call(tm
 
     first = provider.credential_for("leave_submit_leave")
     second = provider.credential_for("leave_submit_leave")
+    interaction_authorization = provider.interaction_authorization("leave_submit_leave")
 
     assert first.bearer != second.bearer
     assert first.canonical_tool_name == "leave_submit_leave"
     assert first.resource_name == "ofmcp_gateway"
     assert first.replay_mode == "single_use"
     assert first.credential_generation == 7
+    assert interaction_authorization.effect == "side_effect"
+    assert interaction_authorization.replay_mode == "single_use"
+    assert interaction_authorization.credential_generation == 7
     assert len(issuer.requests) == 2
     assert "sensitive-bearer" not in repr(first)
 

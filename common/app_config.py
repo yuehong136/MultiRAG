@@ -35,6 +35,7 @@ from common.channel_secret_crypto import ChannelSecretCipherError, decode_channe
 from common.config_utils import decrypt_database_password, read_config
 from common.constants import SERVICE_CONF
 from common.file_utils import get_project_base_directory
+from common.mcp_interactions import decode_interaction_payload_key
 
 ENV_PREFIX = "MULTIRAG_"
 
@@ -488,6 +489,56 @@ class McpDelegationConfig(_Section):
         return self
 
 
+class McpInteractionsConfig(_Section):
+    """Disabled-by-default U14 persistence and recovery limits."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    enabled: bool = False
+    payload_encryption_keys: list[SecretStr] = Field(default_factory=list)
+    ttl_seconds: PositiveInt = 600
+    lease_seconds: PositiveInt = 30
+    poll_seconds: float = Field(default=1.0, gt=0, le=60)
+    batch_size: PositiveInt = Field(default=10, le=100)
+    max_rounds: PositiveInt = Field(default=5, le=20)
+    max_payload_bytes: PositiveInt = Field(default=65_536, le=1_048_576)
+
+    @field_validator("payload_encryption_keys", mode="before")
+    @classmethod
+    def lift_payload_keyring(cls, value: Any) -> Any:
+        if value is None or value == "":
+            return []
+        if isinstance(value, str | SecretStr):
+            return [value]
+        return value
+
+    @field_validator("payload_encryption_keys")
+    @classmethod
+    def validate_payload_keyring(
+        cls,
+        value: list[SecretStr],
+    ) -> list[SecretStr]:
+        decoded: list[bytes] = []
+        for secret in value:
+            decoded.append(decode_interaction_payload_key(secret.get_secret_value()))
+        if len(set(decoded)) != len(decoded):
+            raise ValueError("payload_encryption_keys must be unique")
+        return value
+
+    @model_validator(mode="after")
+    def validate_enabled_interactions(self) -> Self:
+        if self.enabled and not self.payload_encryption_keys:
+            raise ValueError("enabled MCP interactions require payload_encryption_keys")
+        return self
+
+    def require_enabled(self) -> Self:
+        if not self.enabled:
+            raise AppConfigError("identity.mcp_interactions is disabled")
+        if not self.payload_encryption_keys:
+            raise AppConfigError("identity.mcp_interactions payload key ring is unavailable")
+        return self
+
+
 class IdentityConfig(_Section):
     """Enterprise identity runtime configuration."""
 
@@ -496,6 +547,7 @@ class IdentityConfig(_Section):
     provisioning: IdentityProvisioningConfig = Field(default_factory=IdentityProvisioningConfig)
     mcp_issuer: McpIssuerConfig = Field(default_factory=McpIssuerConfig)
     mcp_delegation: McpDelegationConfig = Field(default_factory=McpDelegationConfig)
+    mcp_interactions: McpInteractionsConfig = Field(default_factory=McpInteractionsConfig)
 
     @model_validator(mode="after")
     def validate_delegation_has_issuer(self) -> Self:

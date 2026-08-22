@@ -129,8 +129,9 @@ AuthenticationContext、I3 promotion builder 和 legacy Web/API personal-owner a
 并补当前 `msgStoreConn` backend 的同租户双用户隔离证据。EIM-F3/F8 只完成
 MCP SDK 2/FastMCP 4 的协议运行时迁移和 `InputRequiredResult` 的 transport-level 暴露。
 EIM-A1 已固定 token/JWKS test vectors；A7 的前置虽已满足，独立 audience/scope 和 OAuth
-Resource Server 仍未实现；InteractionSession 仍属于依赖 P3/A4/C3 的 EIM-U14。不能因
-P1 或 modern/legacy 协议测试通过就把这些安全测试标为已满足。
+Resource Server 仍未实现。EIM-U14 已在 P3/A4/C3 之后补齐加密 InteractionSession、revision/CAS、
+DB-time lease、重启恢复、恢复前重授权和 structured result schema 校验；飞书 renderer/callback 仍是
+U15。不能因 P1 或 modern/legacy 协议测试通过就把 A7/U15 的安全测试标为已满足。
 
 下面的 C1/C2 描述是 **C3 之前的历史兼容快照**，不得用于解释当前 resolver。EIM-C1 / CHN-X5
 已完成 tolerate，EIM-C2 / CHN-X6 已完成 emit。private API 解析可选、有界、
@@ -608,9 +609,10 @@ HTTP timeout/caller cancellation 的安全断言只到本地边界：等待必�
 timeout 后仍完成是允许且必须观测的结果，不得据此推断副作用没有发生。高风险工具另以 Confirmation、
 业务幂等、结果未知对账和恢复前重授权验收。
 
-这份 22/22 是协议兼容证据，不是 EIM-A1 的 token/JWKS test vectors、EIM-A7 的 inbound OAuth
-Resource Server/Principal/scope，也不是 EIM-U14 的持久化 InteractionSession 证据。上述任务完成时
-必须在本矩阵之外增加各自的安全正反路径。
+这份 22/22 仍只是协议兼容证据，不是 EIM-A1 的 token/JWKS test vectors、EIM-A7 的 inbound OAuth
+Resource Server/Principal/scope，也不能单独充当 EIM-U14 的持久化 InteractionSession 证据。U14 由
+独立 service/crypto/schema/connector unit、真实 PostgreSQL restart/CAS/lease/result-schema integration
+和 of_mcp 真实 modern/legacy HTTP 用例验收；后续任务也必须在本矩阵之外增加自己的安全正反路径。
 
 ### 3.6 EIM-A1 固定 corpus 与两仓互操作门禁
 

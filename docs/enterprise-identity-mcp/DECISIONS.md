@@ -274,6 +274,16 @@ InteractionSession 只证明“哪次交互收到了什么输入”。敏感副�
 身份、scope/业务授权、持久化 Confirmation 和端到端幂等；不能用 MRTR、表单提交或一次按钮点击
 替代执行前重新授权。
 
+**2026-08-22 实施补充**：interaction claim 拆为 durable `response_ready` 和有时限的 `resuming`
+lease，避免进程在 CAS 后崩溃时永久卡死。精确恢复必须加密保存原始 arguments，并绑定 published
+`agent_revision_id`、MCP server/resource 和 canonical tool；Principal snapshot 只供审计，恢复 authority
+来自当前 identity/membership/grant/policy 的重新校验与新 bearer。首期只自动恢复 `read/prepare`。
+legacy 只支持可证明 ask-before-effect 的 guard adapter，任意 mid-tool elicitation 不声称可恢复。
+
+RAGFlow upstream-first 继续成立：状态机、repository、crypto 和 lease 位于 MultiRAG 自有 identity
+模块；上游同步区只保留可删除的 typed outcome / injection seam。每次上游 MCP/Agent/Canvas commit
+都按 `RAGFLOW_PORTING_MAP.md` 的不变量测试判断收敛或保留，不复制上游执行内核。
+
 ---
 
 ## EIM-ADR-19：当前无 FastMCP 3 生产消费者，MCP 2/FastMCP 4 采用全根协同切换
@@ -297,11 +307,11 @@ EIM-F4 commit `23dd1fd`。
   handshake revision 和 modern `2026-07-28`，未知 revision fail closed；通过依据包括实际协商
   分支，而不只是 tools/list/call 的业务结果。
 
-这次依赖协同切换不把两个 MCP 角色合并成同一安全主体，也不证明身份/授权链已经落地。EIM-A1 先
-固定 token/JWKS test vectors；EIM-A7 仍依赖 A1/P1，才实现 inbound OAuth Resource Server、
-Principal、audience/scope 和工具可见性；EIM-U14 仍依赖 P3/A4/C3，才把 `InputRequiredResult` 接入
-持久化 InteractionSession、CAS 和恢复前重授权。协议层可以暴露输入请求，但在这些任务完成前不得
-宣称 delegated token、企业级授权或飞书表单闭环完成。
+这次依赖协同切换不把两个 MCP 角色合并成同一安全主体，也不证明身份/授权链已经落地。EIM-A1 后续
+固定了 token/JWKS test vectors；EIM-A7 仍依赖 A1/P1，才实现 inbound OAuth Resource Server、
+Principal、audience/scope 和工具可见性；EIM-U14 已在 P3/A4/C3 完成后把 `InputRequiredResult` 接入
+持久化 InteractionSession、CAS、DB lease 和恢复前重授权。U14 默认关闭且不包含 U15 renderer，因此
+仍不得据此宣称 inbound Resource Server、生产 delegated rollout 或飞书表单闭环完成。
 
 HTTP timeout 的边界是取消本地等待和底层本地调用 task，并消除旧单 server FIFO 导致的 HOL；远端
 是否停止仍依赖 transport/server 协作，可能在调用方超时后完成。因此 timeout 不是业务“未执行”证明，

@@ -33,6 +33,7 @@ from api.db.services.llm_service import LLMBundle
 from api.db.services.mcp_server_service import MCPServerService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.identity.mcp_delegation.runtime import resolve_mcp_credential_provider
+from api.identity.mcp_interactions.runtime import resolve_mcp_interaction_handler
 from common.connection_utils import timeout
 from common.mcp_tool_call_conn import MCPToolBinding, MCPToolCallSession, mcp_tool_metadata_to_openai_tool
 from core.prompts.generator import citation_plus, citation_prompt, full_question, kb_prompt, message_fit_in, structured_output_prompt
@@ -127,6 +128,26 @@ class Agent(LLM, ToolBase):
             session_kwargs: dict[str, Any] = {"call_context": run_context}
             if credential_provider is not None:
                 session_kwargs["credential_provider"] = credential_provider
+                interaction_handler = resolve_mcp_interaction_handler()
+                if interaction_handler is not None:
+                    session_kwargs["interaction_handler"] = interaction_handler
+                    session_kwargs["tool_output_schemas"] = {
+                        tool_name: output_schema
+                        for tool_name, tool_meta in mcp["tools"].items()
+                        if isinstance(tool_meta, dict)
+                        and isinstance(
+                            output_schema := tool_meta.get(
+                                "outputSchema",
+                                tool_meta.get("output_schema"),
+                            ),
+                            dict,
+                        )
+                    }
+                    session_kwargs["legacy_interaction_tools"] = frozenset(
+                        tool_name
+                        for tool_name, tool_meta in mcp["tools"].items()
+                        if isinstance(tool_meta, dict) and isinstance(tool_meta.get("_meta"), dict) and tool_meta["_meta"].get("com.ofmcp/interaction-mode") == "ask-before-effect"
+                    )
             tool_call_session = MCPToolCallSession(
                 mcp_server,
                 mcp_server.variables,

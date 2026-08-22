@@ -102,6 +102,10 @@ async def lifespan(app: FastAPI):
         from api.identity.mcp_delegation.runtime import activate_mcp_delegation
 
         activate_mcp_delegation()
+    if get_app_config().identity.mcp_interactions.enabled:
+        from api.identity.mcp_interactions.runtime import start_mcp_interactions
+
+        await start_mcp_interactions()
 
     show_configs()
     settings.print_rag_settings()
@@ -132,6 +136,13 @@ async def lifespan(app: FastAPI):
     stop_event.set()
 
     logging.info("Shutting down MCP sessions...")
+    from api.identity.mcp_interactions.runtime import (
+        reset_mcp_interactions,
+        stop_mcp_interactions,
+    )
+
+    await stop_mcp_interactions()
+    reset_mcp_interactions()
     from common.mcp_tool_call_conn import shutdown_all_mcp_sessions
 
     shutdown_all_mcp_sessions()

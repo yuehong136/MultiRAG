@@ -615,7 +615,7 @@ candidate，公开历史不含半轮或 `<think>`。这些现场结果和相关�
 | EIM-U3 | CHN-U10 | mention-only 群聊、话题、thread session | U1、U2、C3、O2 |
 | EIM-U5 | CHN-X10 | references/artifacts 结构化事件与渲染 | U0、P2 |
 | EIM-U6 | CHN-X11 | 图片/文件/语音输入输出 | U0、U5、C3、附件安全基建 |
-| EIM-U14 | — | provider-neutral InteractionSession、MRTR resume 和结构化结果事件 | F3、P3、A4、C3 |
+| EIM-U14 | — | ✅ provider-neutral InteractionSession、MRTR/legacy resume、加密结果与 outputSchema 校验；默认关闭、无 renderer | F3、P3、A4、C3 |
 | EIM-U15 | CHN-X15 | 飞书 Form/H5 renderer、快速 callback 和持久化恢复 | U14、U1、U4 |
 | EIM-U7 | CHN-X12 | 敏感确认卡和 action callback | U15、M3、M4 |
 | EIM-C5 | CHN-P14 | 官方 Channel SDK transport PoC | 与上述 UX 并行，非阻塞依赖 |

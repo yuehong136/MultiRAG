@@ -91,13 +91,17 @@
 - 已能读取 `structuredContent`、`meta`、多段 Content 和 tool annotations；
 - 旧的每 Server 串行队列已删除，并发调用不再受 HOL 阻塞；超时取消并清理本地 task，
   但远端取消取决于 server/transport 的协作；
-- `InputRequiredResult` 会被表面化为 `interaction_required` 结构和旁路 metadata；不会自动
-  重调工具，尚无持久化或 resume；
-- 没有 request-scoped Principal credential provider；
-- 没有按 resource/scope 的 OAuth discovery、step-up 或 delegated token。
+- EIM-U14 在显式启用时把 modern `InputRequiredResult` 与已声明的 legacy
+  `ask-before-effect` guard 归一为不进入模型的持久化 InteractionSession；暂停不重调工具，
+  resume 由数据库 revision/CAS、response idempotency 与 lease 驱动；默认仍关闭；
+- EIM-P3 已为登记且具备 published Canvas revision 的 Channel 请求注入 request-scoped Principal
+  credential provider，按 server/resource/tool 的 grant/policy 换发短期 bearer；未登记 server 保持
+  legacy static mode，Dialog 因没有 published revision 仍不能进入该委托路径；
+- 仍没有交互式 OAuth discovery/step-up 编排；U14 恢复只重验已有 identity/membership/grant/policy，
+  不自行扩大 scope。
 
-因此它现在是双时代协议 Client，但仍不是能代表当前用户完成企业委托和 scope
-step-up 的授权 Host。`401`/`403` 分类是后续授权编排的技术前提，不是 A1/A2/A4 已完成。
+因此它现在是双时代协议 Client，并已具备默认关闭、限于已发布 Canvas 上下文的企业委托与持久暂停恢复；
+它仍不是通用 OAuth discovery/scope step-up Host。`401`/`403` 分类只提供失败语义，不能替代授权或提权。
 
 ### 3.2 MultiRAG inbound：自己暴露 RAG MCP Server
 
@@ -160,17 +164,18 @@ SDK/mcp-types `2.0.0`，具备：
 ### 3.5 飞书交互
 
 MultiRAG 已有 CardKit 渐进式回复、ReplySession、低风险 stop/regenerate/retry/feedback、Redis
-事件去重和确定性 delivery UUID。EIM-F3 已让 outbound Client 能识别并表面化
-`InputRequiredResult`，但还没有：
+事件去重和确定性 delivery UUID。EIM-U14 已在 F3 的 transport-level 识别之上，把 modern
+`InputRequiredResult` 与声明式 legacy guard 归一为加密、可恢复的 InteractionSession，并实现
+revision/CAS、幂等响应、DB-time lease、重启恢复、恢复前重授权与结果 schema 校验；默认仍关闭。
+当前还没有：
 
 - 通用 Form/H5 交互协议；
-- `InputRequiredResult` 持久化和恢复；
-- interaction revision/CAS；
 - 通用 callback executor；
 - persistent confirmation；
 - 写操作端到端幂等和 unknown-outcome reconciliation。
 
-`ReplySession` 负责“把输出可靠交付到 Channel”，不是等待用户输入的 continuation store。
+`ReplySession` 仍只负责“把输出可靠交付到 Channel”；等待用户输入的 continuation store 是 U14
+InteractionSession。把 InteractionSession 投影为飞书卡片并处理回调属于 U15。
 
 ---
 
@@ -735,7 +740,7 @@ inbound:  legacy Client / modern Client -> MultiRAG current MCP Server
 | scope shortfall | 403 | 403 + insufficient_scope | 可 step-up，有限次重试 |
 | timeout | server delay | server delay | Client 取消请求并清理 task |
 | cancellation | explicit cancel/close | request cancellation | 无悬挂线程/stream |
-| interaction | legacy elicitation | InputRequiredResult | 仅由封闭 unit 固定，不计入当前 22 格跨进程矩阵；F3 已表面化，U14 前不能持久/恢复（见 [兼容矩阵 §5 与 §7](MCP_COMPATIBILITY.md)） |
+| interaction | 声明式 ask-before-effect adapter | InputRequiredResult | U14 以独立 modern/legacy HTTP + 真库证据验收，不混入 22 格协议矩阵；持久 Host 默认关闭，U15 才接 Provider renderer（见 [兼容矩阵 §5 与 §7](MCP_COMPATIBILITY.md)） |
 | cache | connection-era list | private/public scope | 不跨 Principal 复用 |
 | headers | legacy transport | protocol/method/name | Gateway 可观测和路由 |
 
@@ -792,7 +797,7 @@ F4 of_mcp FastMCP beta 纯版本升级 ✅（独立完成）
 ```
 
 这条轨道只完成技术 modern 基线。授权轨 A1+、身份轨 I1+、交互轨 U14/U15 仍按下述
-依赖独立实施，不能从 F3/F8 状态推导它们已完成。
+依赖独立实施，不能从 F3/F8 状态推导它们已完成；当前 U14 后续已独立完成，U15 尚未开始。
 
 ### 13.2 身份轨
 

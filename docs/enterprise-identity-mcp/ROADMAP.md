@@ -21,7 +21,7 @@
 > Canvas/Dialog 双目标真实飞书各 1 条均形成 owned session 且终态完成，
 > EIM-P3 request-scoped credential/bearer 接线已完成代码与自动门禁，但 A2/P3 均默认关闭且未部署；
 > EIM-A5 已在 of_mcp 完成本地实现与自动门禁；EIM-F9 已完成五个已发布协议 revision 的双向
-> 兼容加固与未知版本拒绝；U14 已解锁，A5 的真实 key/config、私网 TLS、
+> 兼容加固与未知版本拒绝；U14 已完成两仓本地实现与自动门禁，U15 已解锁；A5/U14 的真实 key/config、私网 TLS、
 > rollout 与跨仓 E2E 仍是独立审批闸门。
 > CHN-O9 可作为并行 Channel 可观测支线，EIM-C4 / CHN-X8
 > 仍等待全部 runner 升级与 deployment soak；
@@ -727,7 +727,7 @@ EIM-C5 与 U0/U1 并行，不是前置依赖。
 | EIM-U11 | CHN-X13 | MR | Provider/Target capabilities、启动预取与目标私有 driver；Dialog 为主目标、Canvas 为扩展目标，拆除具体目标方法组成的通用 session manager | ✅ | U4 | Provider × Target 无组合分支；现有行为逐事件等价；新增目标不修改既有 Provider；见 [执行架构](../channel-program/EXECUTION_ARCHITECTURE.md) |
 | EIM-U12 | CHN-U14 | MR | Dialog detached working copy + 终态单次 CAS，移除 Dialog 候选会话写放大；私有 SSE 按 consumer/tolerate → worker 部署 → producer/emit 执行 | ✅ | U11 | generation 8 worker 先部署 consumer；terminal commit barrier 前失败/取消/仅推理零公开历史写；并发头冲突不覆盖；新会话终态才发布；普通/重新生成均无候选 insert/delete |
 | EIM-U13 | CHN-U15 | MR | Canvas candidate strategy 独立化、候选元数据显式化、TTL GC 移出请求热路径 | ✅ | U11、U12 | 保持 MultiRAG Canvas 同步区零 Channel 私参；周期批量回收 Canvas 与 U14 前遗留 Dialog 候选；公开历史 CAS；完整 `make integration` |
-| EIM-U14 | — | 两仓 runtime/contract | 建 transport-neutral 的持久化 `InteractionRequest`/`InteractionResponse` 暂停恢复状态机，承接 MCP 2026 MRTR `input_required`，也允许 legacy server 适配到同一内部契约 | ⬜ | F3,P3,A4,C3 | 缺参时不阻塞连接；状态绑定 principal/tenant/tool/参数 digest/expiry/idempotency；重启可恢复；恢复前重授权；超时/取消/重复响应 fail closed；renderer fallback 绝不重跑工具 |
+| EIM-U14 | — | 两仓 runtime/contract | 建 transport-neutral 的持久化 `InteractionRequest`/`InteractionResponse` 暂停恢复状态机，承接 MCP 2026 MRTR `input_required`，也允许 legacy server 适配到同一内部契约 | ✅ | F3,P3,A4,C3 | 缺参时不阻塞连接；状态绑定 principal/tenant/tool/参数 digest/expiry/idempotency；重启可恢复；恢复前重授权；超时/取消/重复响应 fail closed；renderer fallback 绝不重跑工具 |
 | EIM-U15 | CHN-X15 | MR + 飞书 | 在 U14 上实现 CardKit“点击 -> 表单 -> 提交 -> 后端处理 -> 原卡结果页”闭环；卡片只负责渲染与收集，不承担授权 | ⬜ | U14,U1,U4 | `card.action.trigger` 3 秒内验签、去重、持久化并应答；后台恢复同一 interaction；成功/字段错误/授权拒绝/过期/取消/未知结果均更新原卡；本任务不启用敏感写，后续 U7 仅在 M3/M4 完成后开放 |
 
 所有工具过程卡片只显示服务端白名单安全摘要；不能显示完整 MCP 参数、模型推理、企业工号、token、
@@ -736,6 +736,15 @@ EIM-C5 与 U0/U1 并行，不是前置依赖。
 U14/U15 首期不依赖 MCP Tasks 或 MCP Apps：MRTR 只定义跨请求补充输入，持久化状态、授权、幂等和
 结果恢复仍由两仓负责；Tasks 当前实现成熟度不足以替代本项目 run/interaction ledger。MCP Apps 要求
 host 支持受控 web UI，飞书 CardKit 不是 Apps host；未来另有 Web host 需求时再单独立项。
+
+> **U14 完成边界（2026-08-22）**：用户批准按双仓修正版契约实施。RAGFlow `origin/main`
+> 动态只读基线为 `f796721ff25f0f86e4499c166f0c49228d5f6ad7`；这不是恢复 F5/X14 逐 commit
+> 移植。Interaction 状态机、加密、恢复租约和授权放在 MultiRAG 自有模块；上游同步文件只保留
+> transport-neutral pause/outcome 注入缝，并以契约测试保护删除条件。MultiRAG 以加密 Interaction/
+> response job、revision/CAS、DB-time lease、重启恢复、每轮 live reauthorization/new bearer 与持久
+> outputSchema 复验收口；of_mcp root 使用稳定可轮换 requestState key ring，并为 modern MRTR 与显式
+> ask-before-effect legacy guard 提供同一业务语义。首期只恢复 `read/prepare`，URL renderer 未开放，
+> `side_effect` 继续等待 U7/M3/M4；真实 config、迁移、重启、部署和跨仓 live E2E 均未执行。
 
 ---
 
@@ -847,11 +856,11 @@ A8 -> O3  仅在真实企业 IdP、多 issuer 或托管平台需求成立后解�
 
 A3/A4/A5 已完成，of_mcp 的 A6 phase 1 已落但保持进行中；下一步不是把内存 store 当生产后端，而是完成
 durable multi-instance replay/audit、HMAC key rotation 和跨仓 OTel。MultiRAG 已完成 F1/I2/I2.1/I3/I4/P1、
-I6、C2、C3、P2、A2 与 P3；U14 已解锁。CHN-O9 是可并行的 Channel 可观测支线，
+I6、C2、C3、P2、A2、P3 与 U14；U15 已解锁。CHN-O9 是可并行的 Channel 可观测支线，
 C4/CHN-X8 仍等待 deployment soak。I5 与 I7 因 I4 已完成而可作为不
 共文件的并行支线；但 I8 仍严格等待 I6 + I7，M1 仍等待 A5 + I5，不能因“已解锁”跳过下游依赖。
-`F3 + A2 + A4 + P2` 已共同完成 P3，A5 也已完成本地实现；现在可启动 U14，或先完成 I5 后进入
-M1/M2。A7 保持独立入站
+`F3 + A2 + A4 + P2` 已共同完成 P3，A5/U14 也已完成本地实现；现在可启动 U15/CHN-X15，或先完成
+I5 后进入 M1/M2。A7 保持独立入站
 resource；A8 仍无真实需求不启动。这个顺序既保留 of_mcp 的 fail-closed verifier/authorizer 先行，
 又不把未验证的 Channel subject 塞进 token；A4 的 Resource Server Principal 不能替代
 MultiRAG 已完成的 P2 执行链传播。
@@ -867,6 +876,7 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 
 | 日期 | ID | 变更 | 仓库/提交 | 验证证据 | 记录人 |
 |---|---|---|---|---|---|
+| 2026-08-22 | EIM-U14 | 完成默认关闭的双仓持久交互 Host：MultiRAG 将 modern MRTR 与显式 legacy ask-before-effect guard 归一为不进入模型的 transport-neutral pause，以 AES-256-GCM key ring 加密原参数、输入请求/响应、requestState、outputSchema 与结果；PostgreSQL revision/CAS、response idempotency、DB-time `SKIP LOCKED` lease、重启恢复和只读/prepare replay fail closed。每轮恢复活查 identity/membership/server/grant/policy 并换发 bearer；结果按暂停时 outputSchema 再校验。of_mcp 在 root 注入稳定可轮换 `RequestStateSecurity`，提供 modern/legacy guard helper 与真实 HTTP 兼容工具。RAGFlow 同步区只保留 connector/composition seam，并新增逐上游 commit 退出判据。未启用真实 key/config、未迁移真实数据库、未重启/部署/发送真实流量；U15 renderer、side effect Confirmation/业务幂等仍在围栏外 | MultiRAG / 本次提交；of_mcp / 本次提交 | 定向 MultiRAG interaction unit **24 passed**、真 PostgreSQL **4 passed**；`make verify`：Ruff、8 条 import contracts、async DB gate、mypy **108 source files**、unit **2510 passed**；`REQUIRE_SERVICES=1 make integration` **167 passed**；`make mcp-compat` **22/22 PASS**；只读 `make smoke` 对未重启的旧运行实例六组件全绿，不是 U14 rollout。of_mcp `ofmcp verify` 六步全绿：Ruff、format、ty、3 条 import contracts、**514 passed、2 existing skipped**、contract snapshot 无漂移 | Codex |
 | 2026-08-22 | EIM-F9 | 按 MCP SDK 2 官方 registry 把 legacy 从单日期修正为 handshake era：MultiRAG 用 typed wire oracle 双方向覆盖 `2024-11-05`、`2025-03-26`、`2025-06-18`、`2025-11-25` 与 modern `2026-07-28`，未知 revision 结构化拒绝；of_mcp A5 proxy factory 只把已知 handshake revision 映射为官方 `legacy`、只精确镜像 modern，未知/空值在创建 backend client 前 fail closed。新增 SDK registry review ratchet，未升级 FastMCP b2、未改配置 schema/公共 API、未重启/部署/发送真实流量 | MultiRAG / 本次提交；of_mcp / 本次提交 | 失败优先：of_mcp 新分类测试先 **4 failed、6 passed**，修复后定向 **20 passed**；两仓跨模块定向分别 **38 passed** / **285 passed**。`make mcp-compat` **22/22 PASS**；MultiRAG `make verify`：8 条 import contracts、mypy 100 files、unit **2477 passed**；of_mcp `ofmcp verify` 六步全绿、**499 passed、2 existing skipped**、3 条 import contracts、contract snapshot 无漂移；两仓 `git diff --check` 通过 | Codex |
 | 2026-08-22 | EIM-A5 | 完成 mount/proxy 内部委托：独立 internal actor issuer/keyset/service audience，scope/TTL attenuation，逐逻辑操作新 bearer 与 `ProxyClient`，禁止透明转发外部 Authorization；FastMCP 4 异步 request-scoped factory 精确镜像 modern `2026-07-28`/legacy era，内建 cache 只保存 raw catalog、用户可见性逐请求应用，远端 direct call 再授权。新增独立 proxy Resource Server/PRM、mixed mount/proxy registry 与 audit schema v2 `parent_jti_hash`；未改依赖版本，未配置真实 key/TLS、重启、部署或发送真实流量 | of_mcp `5b4162a`；MultiRAG docs / 本次提交 | 失败优先覆盖缺模块、默认 auto era、raw catalog mode 与 service resource drift；定向 **256 passed**。`uv run --locked ofmcp verify` 六步全绿：Ruff、format **128 files unchanged**、ty、3 条 import contracts（134 files/530 dependencies）、**484 passed、2 skipped**、contract snapshot 无漂移；`git diff --check` 通过 | Codex |
 | 2026-08-13 | EIM-P3 | 完成默认关闭的 request-scoped MCP delegation：严格消费 A4 secure format-2 policy 与 MR format-1 grant snapshot，复算 revision 并拒绝可写/歧义 authority；精确绑定 Principal、tenant、published Canvas agent/revision、server/resource/audience、canonical tool、scope、policy/grant revision 与 generation。模型 alias 与 wire authority 分离，未授权 tool 不暴露；有界 cache 只保存 grant/scope decision，ACR/AMR/enterprise subject 每次重验。SDK 2 operation-scoped `httpx2.Auth` 每次逻辑调用新签 token/JTI，同次 initialize/call/retry 复用，完成即关 client；legacy 未登记 server 不回归。未新增 DB/public token API，未改 of_mcp、生产配置或真实数据；未配置 key/secure snapshot/grant，未重启/部署/发真实飞书或 MCP 消息 | MultiRAG / 本次提交 | 失败优先：新增模块先收集 `ModuleNotFoundError`；定向 **109 passed**，扩大 Agent/MCP/A2 **178 passed**，Channel execution **88 passed**；`make mcp-compat` **13/13 PASS**；`make fix` 全绿。`make verify`：Ruff、8 条 import contracts（853 files/2695 dependencies）、async DB gate、mypy **100 source files**、unit **2470 passed in 38.86s**。只读 `make smoke` 六组件全绿，但运行实例未重启，不是 P3 rollout。未跑 integration（无 DB/存储/检索变更） | Codex |

@@ -71,7 +71,7 @@ ragflow commit hash / PR 号。动手前的固定体检：
 |---|---|
 | Quart/Flask `@manager.route`、`request.get_json()` | FastAPI `APIRouter` + Pydantic body + `Depends` |
 | peewee 查询 | SQLAlchemy 2.0 `select().where()`，`db: Session` 依赖注入 |
-| `api/settings.py`、`rag/settings.py` 本体改动 | **查表翻译**：`internal/ragflow_settings_porting_map.md`。消费者侧 `settings.X` 用法 diff **照抄**（`common/settings.py` 是永久兼容 facade） |
+| `api/settings.py`、`rag/settings.py` 本体改动 | **查表翻译**：`docs/enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md`。消费者侧 `settings.X` 用法 diff **照抄**（`common/settings.py` 是永久兼容 facade） |
 | `rag/` 目录 | `core/`（如 `rag/llm/chat_model.py` ↔ `core/llm/chat.py`） |
 | `api/apps/restful_apis/*_api.py` | 我方同名文件 |
 | `api/apps/services/`（路由层服务） | 落位须过 import-linter「api 服务层不依赖路由层」契约；映射决策记入 porting map |
@@ -119,7 +119,7 @@ ragflow commit hash / PR 号。动手前的固定体检：
 ## 6. 收尾
 
 1. 更新记忆 `project-ragflow-followup`：当前跟进位置、backlog、新判例（含跳过判例与理由）；
-2. 发现上游**结构性变化**（目录重组、框架迁移、门禁工具变更、nginx hybrid 默认档位变化）→ 补 `internal/ragflow_settings_porting_map.md` 与方案文档 §10 各一行；
+2. 发现上游**结构性变化**（目录重组、框架迁移、门禁工具变更、nginx hybrid 默认档位变化）→ 补 `docs/enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md` 与方案文档 §10 各一行；
 3. **观察哨**：留意上游 nginx conf 默认 scheme 是否翻 `go`、Python 侧 commit 密度是否骤降（Python 进维护模式 = 跟进经济学根本改变，届时向用户报告重开决策）。
 
 ## 附：判例库（按教训索引）

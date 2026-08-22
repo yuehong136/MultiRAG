@@ -35,7 +35,7 @@
 
 ```text
 读 docs/enterprise-identity-mcp/README.md，然后完成 ROADMAP 中当前主线任务
-（EIM-A5/F9 已完成本地代码与自动门禁但尚未 rollout；下一任务可按依赖选择 I5 或 U14）。
+（EIM-U14 已完成两仓本地代码与自动门禁但尚未 rollout；下一任务可按依赖选择 U15/CHN-X15 或 I5）。
 先复核任务锚点和依赖，把准备修改的文件与验收标准告诉我；确认后再写代码。
 ```
 
@@ -374,7 +374,7 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   优先复用 FastMCP 4 的 `RemoteAuthProvider`、`AccessToken`、`on_list_tools/on_call_tool` middleware
   和 transport 防护；领域 identity/Principal 保持框架无关，避免重复实现框架已有工具开放能力。
 - P1 已解锁 A7 的代码前置，但 A7 仍是独立 inbound Resource Server 任务，不能立即宣称
-  可发布。F1/I4.1/I6/I6.1/C1/C2/C3/P2/A2/P3/A5 已完成；U14 已由 P3 解锁。CHN-O9 是不阻塞它的
+  可发布。F1/I4.1/I6/I6.1/C1/C2/C3/P2/A2/P3/A5/U14 已完成；U15 已解锁。CHN-O9 是不阻塞它的
   Channel 可观测并行支线；C4/CHN-X8 仍须等待全部 runner 升级与 deployment soak。I5 与 I7 已由
   I4 解锁，可作为不共文件的并行支线；I8 仍需 I6 + I7，
   不能跳依赖；
@@ -392,8 +392,13 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   一个 bearer，完成即关闭 client。功能默认 disabled，尚未配置制品/key、重启、部署或做真实 MCP 调用。
 - 出站旧串行队列已删除，并发调用不再形成 HOL；超时会取消本地 task，但远端取消仍是
   协作式，不能由本地超时推断业务未执行。
-- `InputRequiredResult` 已表面化为 `interaction_required` 结构和旁路 metadata，但尚无
-  持久 `InteractionSession`、resume 或自动重试；这只完成 EIM-F3 的协议接线，不等于 U14/U15。
+- EIM-U14 已把 `InputRequiredResult` 从模型可见旁路升级为默认关闭的持久
+  `InteractionSession`：transport-neutral pause 控制信号不会进入模型历史；tenant/Principal、published
+  agent revision、server/resource/tool、原参数、输入/输出 schema、TTL/revision/idempotency 均绑定并加密
+  持久化；DB-time lease 在每轮恢复前活查 identity/membership/grant/policy 并换发 bearer。现代
+  `2026-07-28` 使用 MRTR `inputResponses + requestState`；已声明 ask-before-effect 的 legacy tool 才允许
+  适配到同一状态机。恢复结果由 Host 再按持久 `outputSchema` 校验。首期只允许 `read/prepare`，功能
+  未启用、未迁移真实环境、未 rollout；飞书 Form/H5 renderer 与 callback 仍属于 U15。
 - MultiRAG 还通过 [`mcp/server/server.py`](../../mcp/server/server.py) 对外提供 `/mcp` 与 legacy
   `/sse`。入站已升级到 FastMCP `4.0.0b2` / MCP SDK `2.0.0`；真实 Server 已验证
   `2026-07-28` `server/discover`、路由 headers 和无 session 的 Streamable HTTP，同时逐一验证
@@ -528,8 +533,8 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   镜像与 mount/proxy 授权/审计等价，但未配置真实 key/TLS、部署或做跨仓 E2E；A6 虽已有 phase-1
   domain/runtime 安全边界与 A5 audit v2 parent link，仍缺生产多实例 replay/audit、HMAC/KMS 轮换、
   OTel SDK/exporter 与跨仓 trace，因此保持 `🔵`。M1/M2 企业主体与业务对象授权、持久
-  Interaction/Confirmation/Idempotency 也未完成。
-  F1/I4.1/I6/I6.1/C1/C2/C3/P2/A2/P3/A5 已完成；U14 已解锁，I5/I7 是已解锁并行支线，但 I8 仍需
+  Confirmation/业务 Idempotency 仍未完成；U14 Interaction ledger 已完成本地实现。
+  F1/I4.1/I6/I6.1/C1/C2/C3/P2/A2/P3/A5/U14 已完成；U15、I5/I7 是已解锁并行支线，但 I8 仍需
   I6 + I7。不能把 P3 本地门禁通过当成 secure endpoint 已发布或真实 bearer E2E 已完成。
   A7 虽已解锁前置，仍须作为独立入站
   安全面实现和验收。

@@ -260,28 +260,21 @@ prepare/execute、幂等台账和 reconciliation。
 
 ## 7. MRTR / `InputRequiredResult` 当前边界
 
-Client wrapper 使用低层 `client.session.call_tool(..., allow_input_required=True)`，原因是 Host 必须
-把交互暂停交给将来的 InteractionSession，而不是在没有用户 UI 的后台自动驱动多轮回调。
+Client wrapper 继续使用低层 `client.session.call_tool(..., allow_input_required=True)`，但 EIM-U14 已把
+F3 的旁路观察升级为真正 Host 边界：
 
-当前行为：
+1. 收到 modern `InputRequiredResult` 后转换为 transport-neutral `InteractionRequest`；
+2. opaque `requestState`、原始参数、输入请求与工具 `outputSchema` 加密落 PostgreSQL，模型只能收到
+   不含 continuation 的 pause 控制信号；
+3. response 以 Principal/tenant/revision/idempotency CAS 入库，worker 使用 DB-time lease；
+4. 每次恢复重新读取 active identity/membership/grant/policy，换发 operation bearer，并按原参数调用
+   `inputResponses + requestState`；再次缺参推进 revision，成功结果由 Host 按持久 output schema 复验；
+5. 只有工具 metadata 显式声明 `com.ofmcp/interaction-mode=ask-before-effect` 时，legacy callback 或
+   stateless extension envelope 才能进入同一状态机；guard 漂移、未知协议和 side effect fail closed。
 
-1. 收到 `InputRequiredResult`；
-2. `model_dump(mode="json", by_alias=True, exclude_none=True)`；
-3. 返回 `interaction_required=true` 的模型可读 JSON；
-4. 旁路 metadata 保留 JSON-safe `input_requests` 和 opaque `request_state`；
-5. 本次不自动重跑工具。
-
-当前**没有**：
-
-- durable `InteractionSession`；
-- revision/CAS、TTL、owner Principal binding；
-- 飞书 Form/H5 renderer；
-- 收到表单后的 `input_responses + request_state` resume；
-- process restart 后的 server key/state 可用性保证；
-- confirmation、authorization 或 idempotency。
-
-因此 F3 只完成协议接收面。U14 才建设 transport-neutral pause/resume，U15 才接飞书；任何
-`input_required`、按钮或表单 `confirm` 都不是授权事实。
+U14 功能默认关闭，尚未做真实配置、数据库迁移或 rollout；当前也**没有**飞书 Form/H5 renderer、
+callback route、持久 Confirmation 或业务副作用幂等。URL mode 在 U15 建立短期 nonce/H5 renderer 前
+保持拒绝。任何 `input_required`、按钮或表单 `confirm` 都不是授权事实。
 
 ---
 

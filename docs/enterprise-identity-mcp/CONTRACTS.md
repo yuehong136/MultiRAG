@@ -1722,18 +1722,31 @@ MCP 多轮输入是持久化业务交互，不依赖 MCP transport session 或�
 interaction_id            opaque random
 tenant_id
 platform_user_id
+external_identity_id      audit/revalidation evidence, never deserialized as authority
+identity_revision
 agent_id
+agent_revision_id         published execution target revision
+mcp_server_id
+resource_name             P3 binding key
 resource_uri              canonical MCP resource/audience
-tool_name
+tool_name                 canonical server tool name, never model alias
 call_digest               canonical tool + original arguments hash
-mode                      form/url
-requested_schema          approved canonical schema; null for url mode
+original_arguments        encrypted canonical JSON required for exact resume
+mode                      form in U14; url waits for U15 nonce/renderer; sampling/roots are not human-renderable
+input_requests            encrypted approved normalized requests
+requested_schema          approved canonical form schema; null for url mode
 schema_digest             canonical JSON hash
+output_schema             encrypted tool outputSchema captured at pause
+output_schema_digest      canonical JSON hash; null only when tool declares no schema
 request_state             encrypted opaque continuation
-input_response            encrypted normalized response; null before submit
 result                    encrypted validated structured result; null before completion
-state                     awaiting_input/resuming/completed/declined/cancelled/expired/failed
+request_state_key_id / payload_key_id
+policy_revision / credential_generation
+effect                    read/prepare/side_effect
+replay_mode               reusable/single_use
+state                     awaiting_input/response_ready/resuming/completed/declined/cancelled/expired/failed
 revision                  monotonically increasing integer
+round_count               bounded independently from revision
 expires_at
 provider                  feishu/web/other
 presentation_ref          opaque provider card/page locator
@@ -1741,24 +1754,62 @@ created_at
 updated_at
 ```
 
+用户响应和恢复租约另记为 append-only logical job；不能只把 interaction 行从 `awaiting_input` 改成
+`resuming`，否则进程在 claim 后、发起 MCP 前崩溃会留下无法判断是否安全重试的永久状态：
+
+```text
+interaction_id / revision     unique logical response round
+response_idempotency_key      opaque digest, unique per tenant/interaction/revision
+input_response                encrypted normalized InputResponses
+payload_key_id
+state                         response_ready/leased/succeeded/terminal_failed
+lease_owner / lease_until     DB-time bounded worker ownership
+attempt / next_attempt_at
+safe_error_code               stable non-sensitive classification only
+created_at / updated_at
+```
+
 不变量：
 
 - `platform_user_id`、tenant、resource 和 tool 来自服务端执行上下文，不从表单、URL 或
   `requestState` 读取；
-- `agent_id` 与 `call_digest` 绑定发起调用和原始参数；恢复时不能把本轮输入附加到另一个 Agent、工具
-  或参数集合；
+- `(agent_id, agent_revision_id)`、`mcp_server_id`、`resource_name`、resource、canonical tool 与
+  `call_digest` 共同绑定发起调用和原始参数；恢复时不能把本轮输入附加到另一个发布版本、server、
+  resource、工具或参数集合；原始参数必须加密持久化，因为 MCP SDK 的 wire `requestState` 同时绑定
+  原参数 digest，只有 digest 不能重建恢复调用；
 - `request_state` 按敏感 continuation 加密存储，不写日志、不进入模型上下文、不放入卡片 value 或
   URL；用户响应必须先规范化并加密落库，再快速 ACK 和异步恢复；结构化结果也按其数据分级加密或
   脱敏保存；URL mode 只携带另一个短期一次性 opaque nonce；
 - form mode 只接受已批准的有限 schema；Host 先校验 `inputResponses`，resource server 恢复调用后
   必须再次验证；密码、API key、access token、OAuth code 和支付凭据禁止经 form mode 收集；
-- 回调先把飞书 operator 解析为 verified Principal，再以
-  `(interaction_id, revision, state=awaiting_input)` compare-and-set 进入 `resuming`；换人、跨 tenant、
-  过期 revision、重复响应和过期会话全部拒绝；
+- 回调先把 operator 解析为 verified Principal，再以
+  `(interaction_id, revision, state=awaiting_input)` compare-and-set 写入唯一 response job 并进入
+  `response_ready`；后台 worker 用短 lease 进入 `resuming`。换人、跨 tenant、过期 revision、重复响应
+  和过期会话全部拒绝；过期 lease 只允许 `read/prepare` 回到 `response_ready`，`side_effect` 不得
+  因进程崩溃自动重放；
+- 恢复前重新读取 active membership/identity/grant/tool policy 并授权，换发新的 operation-scoped
+  bearer；持久化的 Principal/authorization snapshot 只供审计和 revalidation，不能反序列化成 authority，
+  bearer、JTI、access token 永不进入 interaction 表；
 - 一次恢复可以再次得到 `InputRequiredResult`；此时生成下一 revision 并回到 `awaiting_input`。成功
   结果必须按工具 `outputSchema` 校验后保存为结构化结果，再由 Provider 渲染；
 - decline、cancel 和 expire 是持久化终态。网络超时不能擅自当作 cancel，也不能自动重放可能已有
   副作用的工具调用。
+
+现代 `2026-07-28` server 使用同参数 `tools/call + inputResponses + requestState` 恢复。legacy adapter
+只接受声明为 **ask-before-effect** 的 elicitation guard：首次调用在任何业务动作前提出输入请求并快速
+结束；响应后以同一参数重新调用，只有完全相同的 guard request 才获准取得已验证响应。任意 mid-tool
+elicitation、请求前已经读写外部系统、或无法证明 guard digest 稳定的 legacy tool 都必须 fail closed。
+未知 protocol revision 继续拒绝。
+
+U14 首期只允许 `effect=read|prepare` 自动恢复；`side_effect` 必须等待 U7/M3/M4 的持久 Confirmation、
+业务幂等键与未知结果对账契约。renderer 只消费持久化的安全投影，渲染失败、重试或 fallback 都不得
+调用 MCP tool。
+
+> **U14 实现记录（2026-08-22）**：两仓已按本节落地默认关闭的 form-mode 状态机。MultiRAG 对
+> original arguments、input requests/responses、requestState、outputSchema 和 result 使用独立 purpose
+> 的 AES-256-GCM AAD 加密；PostgreSQL 行/response job 固定 revision/CAS、DB-time lease 与失败终态。
+> of_mcp root 使用显式稳定 key ring 生成可跨重启验证的 requestState。URL mode、Provider renderer、
+> callback route 和 side-effect confirmation 未实现，不能从 U14 完成态推导。
 
 InteractionSession 只证明用户对一次输入请求作出了响应，不代表敏感动作已经获批。需要副作用确认
 时，服务端从已验证的规范化输入生成下面的 Confirmation record，并通过 `interaction_id` 建立审计

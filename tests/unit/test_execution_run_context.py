@@ -163,7 +163,16 @@ def test_agent_passes_the_same_run_context_into_mcp_session(
         run_context=run_context,
     )
     canvas.tool_use_callback = lambda *_args, **_kwargs: None
-    observed: list[object | None] = []
+    observed: list[dict[str, object]] = []
+    interaction_handler = object()
+
+    class _Provider:
+        resource_name = "search-service"
+
+        def is_authorized(self, _tool_name: str) -> bool:
+            return True
+
+    provider = _Provider()
 
     class _DBContext:
         def __enter__(self) -> object:
@@ -184,10 +193,22 @@ def test_agent_passes_the_same_run_context_into_mcp_session(
             _custom_header: object,
             *,
             call_context: object | None = None,
+            credential_provider: object | None = None,
+            interaction_handler: object | None = None,
+            legacy_interaction_tools: frozenset[str] = frozenset(),
+            tool_output_schemas: dict[str, dict[str, object]] | None = None,
         ) -> None:
-            observed.append(call_context)
+            observed.append(
+                {
+                    "call_context": call_context,
+                    "credential_provider": credential_provider,
+                    "interaction_handler": interaction_handler,
+                    "legacy_interaction_tools": legacy_interaction_tools,
+                    "tool_output_schemas": tool_output_schemas,
+                }
+            )
             self._mcp_server = _server
-            self.delegated_resource_name = None
+            self.delegated_resource_name = "search-service"
 
         def wait_ready(self, *, timeout: float) -> bool:
             del timeout
@@ -219,6 +240,14 @@ def test_agent_passes_the_same_run_context_into_mcp_session(
         lambda _db, server_id: SimpleNamespace(id=server_id, variables={}),
     )
     monkeypatch.setattr("agent.component.agent_with_tools.MCPToolCallSession", _MCPSession)
+    monkeypatch.setattr(
+        "agent.component.agent_with_tools.resolve_mcp_credential_provider",
+        lambda **_kwargs: provider,
+    )
+    monkeypatch.setattr(
+        "agent.component.agent_with_tools.resolve_mcp_interaction_handler",
+        lambda: interaction_handler,
+    )
 
     param = AgentParam()
     param.llm_id = "fixture-model"
@@ -226,6 +255,11 @@ def test_agent_passes_the_same_run_context_into_mcp_session(
         "name": "search",
         "description": "Search",
         "inputSchema": {"type": "object", "properties": {}},
+        "outputSchema": {
+            "type": "object",
+            "properties": {"result": {"type": "string"}},
+        },
+        "_meta": {"com.ofmcp/interaction-mode": "ask-before-effect"},
     }
     param.mcp = [
         {"mcp_id": "mcp-1", "tools": {"search": tool_meta}},
@@ -233,7 +267,22 @@ def test_agent_passes_the_same_run_context_into_mcp_session(
     ]
     agent = Agent(canvas, "agent-1", param)
 
-    assert observed == [run_context, run_context]
+    assert observed == [
+        {
+            "call_context": run_context,
+            "credential_provider": provider,
+            "interaction_handler": interaction_handler,
+            "legacy_interaction_tools": frozenset({"search"}),
+            "tool_output_schemas": {"search": tool_meta["outputSchema"]},
+        },
+        {
+            "call_context": run_context,
+            "credential_provider": provider,
+            "interaction_handler": interaction_handler,
+            "legacy_interaction_tools": frozenset({"search"}),
+            "tool_output_schemas": {"search": tool_meta["outputSchema"]},
+        },
+    ]
     assert set(agent.tools) == {"search_0", "search_1"}
     assert {binding.original_name for binding in agent.tools.values()} == {"search"}
     assert {binding.mcp_server_id for binding in agent.tools.values()} == {"mcp-1", "mcp-2"}

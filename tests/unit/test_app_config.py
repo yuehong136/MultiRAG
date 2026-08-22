@@ -525,6 +525,53 @@ class TestMcpDelegationConfig:
         assert delegation.grant_policy_file == "/etc/multirag/mcp-grants.json"
 
 
+class TestMcpInteractionsConfig:
+    @staticmethod
+    def _key(byte: int) -> str:
+        return base64.urlsafe_b64encode(bytes([byte]) * 32).decode().rstrip("=")
+
+    def test_interactions_default_disabled_and_require_explicit_keyring(self, conf_dir):
+        conf_dir(SERVICE_CONF, BASE_YAML)
+
+        interactions = load_app_config().identity.mcp_interactions
+
+        assert interactions.enabled is False
+        assert interactions.payload_encryption_keys == []
+        with pytest.raises(AppConfigError, match=r"identity\.mcp_interactions is disabled"):
+            interactions.require_enabled()
+
+    def test_enabled_interactions_require_strong_unique_keyring(self, conf_dir):
+        conf_dir(
+            SERVICE_CONF,
+            """
+            identity:
+              mcp_interactions:
+                enabled: true
+            """,
+        )
+
+        with pytest.raises(AppConfigError, match=r"identity\.mcp_interactions"):
+            load_app_config()
+
+    def test_interaction_keyring_is_active_first_and_redacted(self, conf_dir):
+        active = self._key(1)
+        retired = self._key(2)
+        conf_dir(
+            SERVICE_CONF,
+            f"identity:\n  mcp_interactions:\n    enabled: true\n    payload_encryption_keys: [{active!r}, {retired!r}]\n",
+        )
+
+        interactions = load_app_config().identity.mcp_interactions.require_enabled()
+        rendered = repr(interactions)
+
+        assert [key.get_secret_value() for key in interactions.payload_encryption_keys] == [
+            active,
+            retired,
+        ]
+        assert active not in rendered
+        assert retired not in rendered
+
+
 class TestDefaultModelsResolutionParity:
     """resolved_model 与旧 settings._resolve_per_model_config 逐条等价。"""
 

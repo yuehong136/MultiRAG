@@ -1959,6 +1959,207 @@ class IdentityEventReceipt(BaseModel):
         return payload
 
 
+class McpInteraction(BaseModel):
+    """Provider-neutral durable MCP input round owned by MultiRAG Host."""
+
+    __tablename__ = "t_ai_mcp_interactions"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "id",
+            "tenant_id",
+            name="uq_mcp_interactions_id_tenant",
+        ),
+        sa.CheckConstraint(
+            "state IN ('awaiting_input', 'response_ready', 'resuming', 'completed', 'declined', 'cancelled', 'expired', 'failed')",
+            name="ck_mcp_interactions_state",
+        ),
+        sa.CheckConstraint(
+            "effect IN ('read', 'prepare', 'side_effect')",
+            name="ck_mcp_interactions_effect",
+        ),
+        sa.CheckConstraint(
+            "replay_mode IN ('reusable', 'single_use')",
+            name="ck_mcp_interactions_replay_mode",
+        ),
+        sa.CheckConstraint(
+            "revision > 0 AND round_count > 0 AND credential_generation >= 0",
+            name="ck_mcp_interactions_revision_round",
+        ),
+        sa.CheckConstraint(
+            "call_digest ~ '^[0-9a-f]{64}$' AND schema_digest ~ '^[0-9a-f]{64}$' AND (output_schema_digest IS NULL OR output_schema_digest ~ '^[0-9a-f]{64}$')",
+            name="ck_mcp_interactions_digest",
+        ),
+        sa.CheckConstraint(
+            "(output_schema_digest IS NULL AND output_schema_ciphertext IS NULL AND output_schema_key_id IS NULL) OR "
+            "(output_schema_digest IS NOT NULL AND output_schema_ciphertext IS NOT NULL AND output_schema_key_id IS NOT NULL)",
+            name="ck_mcp_interactions_output_schema_payload",
+        ),
+        sa.CheckConstraint(
+            "btrim(agent_id) <> '' AND btrim(agent_revision_id) <> '' AND btrim(mcp_server_id) <> '' AND btrim(resource_name) <> '' AND btrim(resource_uri) <> '' AND btrim(tool_name) <> ''",
+            name="ck_mcp_interactions_binding_nonempty",
+        ),
+        sa.Index(
+            "ix_mcp_interactions_tenant_user_state",
+            "tenant_id",
+            "platform_user_id",
+            "state",
+        ),
+        sa.Index(
+            "ix_mcp_interactions_state_expiry",
+            "state",
+            "expires_at",
+        ),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(32),
+        primary_key=True,
+        index=False,
+        nullable=False,
+        default=lambda: uuid.uuid4().hex,
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        String(32),
+        sa.ForeignKey(
+            "usr_ai.t_ai_tenants.id",
+            name="fk_mcp_interactions_tenant_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    platform_user_id: Mapped[str] = mapped_column(
+        String(32),
+        sa.ForeignKey(
+            "usr_ai.t_ai_users.id",
+            name="fk_mcp_interactions_platform_user_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    external_identity_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    identity_revision: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    agent_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    agent_revision_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    mcp_server_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    resource_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    resource_uri: Mapped[str] = mapped_column(Text, nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    call_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_schema_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    output_schema_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    output_schema_key_id: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    original_arguments_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    original_arguments_key_id: Mapped[str] = mapped_column(String(16), nullable=False)
+    input_requests_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    input_requests_key_id: Mapped[str] = mapped_column(String(16), nullable=False)
+    request_state_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    request_state_key_id: Mapped[str] = mapped_column(String(16), nullable=False)
+    policy_revision: Mapped[str] = mapped_column(String(128), nullable=False)
+    credential_generation: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    effect: Mapped[str] = mapped_column(String(16), nullable=False)
+    replay_mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    round_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    result_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result_key_id: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    presentation_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=get_utc_now,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=get_utc_now,
+    )
+
+
+class McpInteractionResumeJob(BaseModel):
+    """One durable, idempotent user response and bounded recovery lease."""
+
+    __tablename__ = "t_ai_mcp_interaction_resume_jobs"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "interaction_id",
+            "revision",
+            name="uq_mcp_interaction_jobs_round",
+        ),
+        sa.UniqueConstraint(
+            "tenant_id",
+            "response_idempotency_key",
+            name="uq_mcp_interaction_jobs_tenant_idempotency",
+        ),
+        sa.ForeignKeyConstraint(
+            ["interaction_id", "tenant_id"],
+            [
+                "usr_ai.t_ai_mcp_interactions.id",
+                "usr_ai.t_ai_mcp_interactions.tenant_id",
+            ],
+            name="fk_mcp_interaction_jobs_interaction_scope",
+            ondelete="RESTRICT",
+        ),
+        sa.CheckConstraint(
+            "state IN ('response_ready', 'leased', 'succeeded', 'terminal_failed')",
+            name="ck_mcp_interaction_jobs_state",
+        ),
+        sa.CheckConstraint(
+            "revision > 0 AND attempt >= 0",
+            name="ck_mcp_interaction_jobs_revision_attempt",
+        ),
+        sa.CheckConstraint(
+            "(state = 'leased' AND lease_owner IS NOT NULL AND lease_until IS NOT NULL) OR (state <> 'leased' AND lease_owner IS NULL AND lease_until IS NULL)",
+            name="ck_mcp_interaction_jobs_lease",
+        ),
+        sa.CheckConstraint(
+            "response_idempotency_key ~ '^[0-9a-f]{64}$'",
+            name="ck_mcp_interaction_jobs_idempotency",
+        ),
+        sa.Index(
+            "ix_mcp_interaction_jobs_ready",
+            "state",
+            "next_attempt_at",
+            "created_at",
+        ),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(32),
+        primary_key=True,
+        index=False,
+        nullable=False,
+        default=lambda: uuid.uuid4().hex,
+    )
+    interaction_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    response_idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_response_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    input_response_key_id: Mapped[str] = mapped_column(String(16), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    lease_owner: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    safe_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=get_utc_now,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=get_utc_now,
+    )
+
+
 class LLMFactories(BaseModel):
     __tablename__ = "t_ai_llm_factories"
     __table_args__ = {"schema": "usr_ai"}

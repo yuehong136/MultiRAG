@@ -45,6 +45,16 @@ class _AuthorizationDecision:
 
 
 @dataclass(frozen=True, slots=True)
+class McpInteractionAuthorization:
+    """Current non-secret policy facts needed before a durable resume."""
+
+    effect: str
+    replay_mode: str
+    policy_revision: str
+    credential_generation: int
+
+
+@dataclass(frozen=True, slots=True)
 class BoundMcpCredentialProvider:
     """One immutable server/run binding; tokens are never retained."""
 
@@ -101,7 +111,26 @@ class BoundMcpCredentialProvider:
             canonical_tool_name=canonical_tool_name,
             policy_revision=self._service.tool_policy.policy_revision,
             credential_generation=self._service.grant_policy.credential_generation,
+            effect=decision.policy.effect,
             replay_mode=decision.policy.replay_mode,
+        )
+
+    def interaction_authorization(
+        self,
+        canonical_tool_name: str,
+    ) -> McpInteractionAuthorization:
+        decision = self._service.authorize(
+            principal=self._principal,
+            agent_id=self._agent_id,
+            agent_revision_id=self._agent_revision_id,
+            binding=self._binding,
+            canonical_tool_name=canonical_tool_name,
+        )
+        return McpInteractionAuthorization(
+            effect=decision.policy.effect,
+            replay_mode=decision.policy.replay_mode,
+            policy_revision=self._service.tool_policy.policy_revision,
+            credential_generation=self._service.grant_policy.credential_generation,
         )
 
 
@@ -249,4 +278,8 @@ class McpDelegationService:
             raise McpDelegationError(DelegationErrorCode.ASSURANCE_DENIED)
 
 
-__all__ = ["BoundMcpCredentialProvider", "McpDelegationService"]
+__all__ = [
+    "BoundMcpCredentialProvider",
+    "McpDelegationService",
+    "McpInteractionAuthorization",
+]
