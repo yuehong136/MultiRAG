@@ -19,6 +19,14 @@ from api.channels.core.base import (
     MessageHandler,
 )
 from api.channels.feishu import provider as feishu_provider
+from api.channels.telemetry import (
+    NOOP_CHANNEL_TELEMETRY,
+    ChannelMetric,
+    ChannelReason,
+    ChannelResult,
+    ChannelTelemetry,
+    InMemoryChannelTelemetry,
+)
 from api.channels.worker import ChannelWorker, ChannelWorkerError
 from common.app_config import AppConfig, ChannelsConfig, FeishuChannelConfig
 
@@ -211,6 +219,7 @@ def _worker(
     queue_size: int = 2,
     worker_concurrency: int = 1,
     followup_queue_size: int = 5,
+    telemetry: ChannelTelemetry = NOOP_CHANNEL_TELEMETRY,
 ) -> ChannelWorker:
     return ChannelWorker(
         provider_name="feishu",
@@ -222,6 +231,7 @@ def _worker(
         queue_size=queue_size,
         worker_concurrency=worker_concurrency,
         followup_queue_size=followup_queue_size,
+        telemetry=telemetry,
     )
 
 
@@ -566,6 +576,117 @@ async def test_leader_loss_cancels_consumers_without_draining_old_queue() -> Non
     assert [message.message_id for message in bridge.messages] == ["message-in-flight"]
     assert channel.stopped is True
     assert state_store.released == ["owner-token"]
+
+
+@pytest.mark.asyncio
+async def test_each_ingress_gets_one_disposition_across_running_abandoned_and_full_queue() -> None:
+    channel = FakeChannel()
+    bridge = LifecycleBlockingBridge()
+    telemetry = InMemoryChannelTelemetry()
+    worker = _worker(
+        channel=channel,
+        bridge=bridge,
+        agent_client=FakeAgentClient(),
+        state_store=FakeStateStore(),
+        redis=FakeRedis(),
+        queue_size=1,
+        telemetry=telemetry,
+    )
+    stop_event = asyncio.Event()
+    run_task = asyncio.create_task(worker.run(stop_event))
+    await channel.started.wait()
+    assert channel.handler is not None
+
+    await channel.handler(_message("message-running"))
+    await asyncio.wait_for(bridge.first_started.wait(), timeout=1)
+    await channel.handler(_message("message-abandoned"))
+    await channel.handler(_message("message-overflow"))
+    stop_event.set()
+    await asyncio.wait_for(run_task, timeout=1)
+
+    events = telemetry.snapshot().recent_events
+    dispositions = [event for event in events if event.metric is ChannelMetric.MESSAGES_TOTAL]
+    assert len(dispositions) == 3
+    assert sum(event.value for event in dispositions) == 3
+    assert {(event.labels.result, event.labels.reason) for event in dispositions} == {
+        (ChannelResult.CANCELLED, ChannelReason.SHUTDOWN),
+        (ChannelResult.DROPPED, ChannelReason.QUEUE_ABANDONED),
+        (ChannelResult.REJECTED, ChannelReason.GLOBAL_QUEUE_FULL),
+    }
+    abandoned = [event for event in events if event.metric is ChannelMetric.QUEUE_ABANDONED_TOTAL]
+    assert len(abandoned) == 1
+    assert abandoned[0].value == 1
+    assert any(event.metric is ChannelMetric.QUEUE_WAIT_SECONDS for event in events)
+    assert any(event.metric is ChannelMetric.QUEUE_DEPTH for event in events)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_disposes_same_conversation_ticket_already_dequeued_by_waiter() -> None:
+    channel = FakeChannel()
+    bridge = LifecycleBlockingBridge()
+    telemetry = InMemoryChannelTelemetry()
+    worker = _worker(
+        channel=channel,
+        bridge=bridge,
+        agent_client=FakeAgentClient(),
+        state_store=FakeStateStore(),
+        redis=FakeRedis(),
+        queue_size=2,
+        worker_concurrency=2,
+        telemetry=telemetry,
+    )
+    stop_event = asyncio.Event()
+    run_task = asyncio.create_task(worker.run(stop_event))
+    await channel.started.wait()
+    assert channel.handler is not None
+
+    await channel.handler(_message("message-running"))
+    await channel.handler(_message("message-waiting-for-turn"))
+    await asyncio.wait_for(bridge.first_started.wait(), timeout=1)
+    for _ in range(100):
+        if worker._queue.empty():
+            break
+        await asyncio.sleep(0)
+    assert worker._queue.empty()
+
+    stop_event.set()
+    await asyncio.wait_for(run_task, timeout=1)
+
+    events = telemetry.snapshot().recent_events
+    dispositions = [event for event in events if event.metric is ChannelMetric.MESSAGES_TOTAL]
+    assert len(dispositions) == 2
+    assert {(event.labels.result, event.labels.reason) for event in dispositions} == {(ChannelResult.CANCELLED, ChannelReason.SHUTDOWN)}
+    assert not any(event.metric is ChannelMetric.QUEUE_ABANDONED_TOTAL for event in events)
+
+
+@pytest.mark.asyncio
+async def test_successful_ingress_records_one_ok_disposition() -> None:
+    channel = FakeChannel()
+    bridge = FakeBridge()
+    telemetry = InMemoryChannelTelemetry()
+    worker = _worker(
+        channel=channel,
+        bridge=bridge,
+        agent_client=FakeAgentClient(),
+        state_store=FakeStateStore(),
+        redis=FakeRedis(),
+        telemetry=telemetry,
+    )
+    stop_event = asyncio.Event()
+    run_task = asyncio.create_task(worker.run(stop_event))
+    await channel.started.wait()
+    assert channel.handler is not None
+
+    await channel.handler(_message("message-ok"))
+    for _ in range(100):
+        if any(event.metric is ChannelMetric.MESSAGES_TOTAL for event in telemetry.snapshot().recent_events):
+            break
+        await asyncio.sleep(0)
+    stop_event.set()
+    await run_task
+
+    dispositions = [event for event in telemetry.snapshot().recent_events if event.metric is ChannelMetric.MESSAGES_TOTAL]
+    assert [(event.labels.result, event.labels.reason) for event in dispositions] == [(ChannelResult.OK, ChannelReason.NONE)]
 
 
 @pytest.mark.asyncio

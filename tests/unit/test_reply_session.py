@@ -8,11 +8,18 @@ from api.channels.core.base import (
     Channel,
     IncomingMessage,
     OutgoingMessage,
+    ReplyContext,
     ReplySession,
     ReplySessionState,
     ReplySessionStateError,
 )
 from api.channels.core.reply import SERVICE_UNAVAILABLE_TEXT, truncate_answer
+from api.channels.telemetry import (
+    ChannelMetric,
+    ChannelReason,
+    ChannelResult,
+    InMemoryChannelTelemetry,
+)
 
 
 class _Channel(Channel):
@@ -162,7 +169,12 @@ async def test_buffered_reply_session_send_failure_propagates_and_keeps_a_termin
     expected_state: ReplySessionState,
 ) -> None:
     channel = _Channel(send_failure=True)
-    session = await channel.begin_reply(_source(), max_content_chars=100)
+    telemetry = InMemoryChannelTelemetry()
+    session = await channel.begin_reply(
+        _source(),
+        max_content_chars=100,
+        context=ReplyContext(telemetry=telemetry),
+    )
     await session.append("answer")
 
     with pytest.raises(RuntimeError, match="provider send failed"):
@@ -175,3 +187,7 @@ async def test_buffered_reply_session_send_failure_propagates_and_keeps_a_termin
     assert channel.send_calls == 1
     with pytest.raises(ReplySessionStateError):
         await session.append("late")
+    delivery = [event for event in telemetry.snapshot().recent_events if event.metric is ChannelMetric.DELIVERY_TOTAL]
+    assert len(delivery) == 1
+    assert delivery[0].labels.result is ChannelResult.FAILED
+    assert delivery[0].labels.reason is ChannelReason.DELIVERY_FAILURE

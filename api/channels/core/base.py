@@ -27,6 +27,7 @@ from types import MappingProxyType
 from typing import Any, ClassVar, Literal, Protocol, runtime_checkable
 
 from api.channel_capabilities import EffectiveReplyCapabilities
+from api.channels.telemetry import NOOP_CHANNEL_TELEMETRY, ChannelTelemetry
 
 LOGGER = logging.getLogger(__name__)
 _DEFAULT_REPLY_CAPABILITIES = EffectiveReplyCapabilities(
@@ -316,6 +317,8 @@ class ReplyContext:
     queue_position: int = 0
     actions: ReplyActionIds = ReplyActionIds()
     capabilities: EffectiveReplyCapabilities = _DEFAULT_REPLY_CAPABILITIES
+    telemetry: ChannelTelemetry = NOOP_CHANNEL_TELEMETRY
+    telemetry_started_at: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -15,6 +15,12 @@ from api.channel_execution.candidate_gc import (
     CandidateCleanupBatch,
     ChannelCandidateGCWorker,
 )
+from api.channels.telemetry import (
+    ChannelMetric,
+    ChannelReason,
+    ChannelResult,
+    InMemoryChannelTelemetry,
+)
 from common.app_config import ChannelCandidateGCConfig
 
 
@@ -103,6 +109,7 @@ async def test_run_logs_cycle_failure_and_continues(caplog: pytest.LogCaptureFix
     sessions = _FakeSessionFactory()
     stop_event = asyncio.Event()
     calls = 0
+    telemetry = InMemoryChannelTelemetry()
 
     async def collect(
         _db: AsyncSession,
@@ -116,13 +123,14 @@ async def test_run_logs_cycle_failure_and_continues(caplog: pytest.LogCaptureFix
         if calls == 1:
             raise RuntimeError("database unavailable")
         stop_event.set()
-        return CandidateCleanupBatch()
+        return CandidateCleanupBatch(explicit_canvas=1)
 
     worker = ChannelCandidateGCWorker(
         sessions,
         _config(max_batches_per_cycle=1),
         collector=collect,
         jitter=lambda _lower, _upper: 0,
+        telemetry=telemetry,
     )
     caplog.set_level(logging.INFO)
 
@@ -132,6 +140,13 @@ async def test_run_logs_cycle_failure_and_continues(caplog: pytest.LogCaptureFix
     assert "candidate_gc_cycle result=failed" in caplog.text
     assert "database unavailable" in caplog.text
     assert sessions.closed == sessions.created
+    cycles = [event for event in telemetry.snapshot().recent_events if event.metric is ChannelMetric.CANDIDATE_GC_CYCLES_TOTAL]
+    assert [(event.labels.result, event.labels.reason) for event in cycles] == [
+        (ChannelResult.FAILED, ChannelReason.CANDIDATE_GC_FAILURE),
+        (ChannelResult.OK, ChannelReason.NONE),
+    ]
+    deleted = [event for event in telemetry.snapshot().recent_events if event.metric is ChannelMetric.CANDIDATE_GC_DELETED_TOTAL]
+    assert [event.value for event in deleted] == [1]
 
 
 async def test_run_propagates_cancellation_and_closes_batch_session() -> None:

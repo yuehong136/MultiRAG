@@ -30,6 +30,15 @@ from api.channels.feishu.reply import (
     render_text,
     streaming_card_json,
 )
+from api.channels.telemetry import (
+    NOOP_CHANNEL_TELEMETRY,
+    ChannelMetric,
+    ChannelReason,
+    ChannelResult,
+    ChannelStage,
+    ChannelTelemetry,
+    InMemoryChannelTelemetry,
+)
 
 
 class _Clock:
@@ -260,11 +269,16 @@ async def _session(
     clock: _Clock,
     *,
     sleeper: _ManualSleeper | None = None,
+    telemetry: ChannelTelemetry = NOOP_CHANNEL_TELEMETRY,
 ) -> FeishuProgressiveReplySession:
     return await FeishuProgressiveReplySession.begin(
         transport=transport,
         source=_source(),
         max_content_chars=4000,
+        context=ReplyContext(
+            telemetry=telemetry,
+            telemetry_started_at=clock() - 0.5,
+        ),
         update_interval_seconds=0.25,
         clock=clock,
         sleep=sleeper or asyncio.sleep,
@@ -516,6 +530,43 @@ async def test_interaction_pause_fails_closed_without_mutable_reply_card() -> No
     assert transport.fallbacks == []
 
 
+@pytest.mark.parametrize(
+    ("failure", "expected_stage", "expected_reason"),
+    [
+        (
+            "card_update",
+            ChannelStage.CARD_UPDATE,
+            ChannelReason.CARD_UPDATE_FAILURE,
+        ),
+        (
+            "card_finish",
+            ChannelStage.CARD_FINISH,
+            ChannelReason.CARD_FINISH_FAILURE,
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_interaction_pause_records_card_delivery_failure(
+    failure: str,
+    expected_stage: ChannelStage,
+    expected_reason: ChannelReason,
+) -> None:
+    telemetry = InMemoryChannelTelemetry()
+    session = await _session(
+        _Transport(failures={failure}),
+        _Clock(),
+        telemetry=telemetry,
+    )
+    await session.append("表单前说明")
+
+    with pytest.raises(RuntimeError, match=f"{failure} failed"):
+        await session.pause_for_interaction()
+
+    failures = [event for event in telemetry.snapshot().recent_events if event.metric is ChannelMetric.DELIVERY_TOTAL and event.labels.result is ChannelResult.FAILED]
+    assert [(event.labels.stage, event.labels.reason) for event in failures] == [(expected_stage, expected_reason)]
+    assert session.state is ReplySessionState.FAILED
+
+
 @pytest.mark.asyncio
 async def test_terminal_snapshot_replaces_streamed_deltas_before_finishing_card() -> None:
     transport = _Transport()
@@ -672,6 +723,60 @@ async def test_card_creation_failure_falls_back_to_one_post_without_losing_answe
     assert "完整回答" in content
     assert fallback_uuid == delivery_uuid(_source(), "final_fallback")
     assert transport.card_replies == []
+
+
+@pytest.mark.asyncio
+async def test_reply_records_first_card_and_first_visible_content_once() -> None:
+    telemetry = InMemoryChannelTelemetry()
+    clock = _Clock()
+    session = await _session(_Transport(), clock, telemetry=telemetry)
+    clock.now += 0.25
+
+    await session.append("第一段")
+    await session.append("第二段")
+    await session.complete()
+
+    events = telemetry.snapshot().recent_events
+    first_card = [event for event in events if event.metric is ChannelMetric.FIRST_CARD_SECONDS]
+    first_content = [event for event in events if event.metric is ChannelMetric.FIRST_CONTENT_SECONDS]
+    assert [(event.labels.stage, event.value) for event in first_card] == [(ChannelStage.CARD_CREATE, 0.5)]
+    assert [(event.labels.stage, event.value) for event in first_content] == [(ChannelStage.CARD_UPDATE, 0.75)]
+
+
+@pytest.mark.asyncio
+async def test_card_failure_and_fallback_have_closed_delivery_outcomes() -> None:
+    telemetry = InMemoryChannelTelemetry()
+    clock = _Clock()
+    session = await _session(
+        _Transport(failures={"card_create", "fallback_post"}),
+        clock,
+        telemetry=telemetry,
+    )
+    await session.append("最终回答")
+
+    await session.complete()
+
+    events = telemetry.snapshot().recent_events
+    relevant_stages = {
+        ChannelStage.CARD_CREATE,
+        ChannelStage.FALLBACK_POST,
+        ChannelStage.FALLBACK_TEXT,
+    }
+    outcomes = [(event.labels.stage, event.labels.result, event.labels.reason) for event in events if event.metric is ChannelMetric.DELIVERY_TOTAL and event.labels.stage in relevant_stages]
+    assert outcomes == [
+        (
+            ChannelStage.CARD_CREATE,
+            ChannelResult.FAILED,
+            ChannelReason.CARD_CREATE_FAILURE,
+        ),
+        (
+            ChannelStage.FALLBACK_POST,
+            ChannelResult.FAILED,
+            ChannelReason.POST_FALLBACK_FAILURE,
+        ),
+        (ChannelStage.FALLBACK_TEXT, ChannelResult.FALLBACK, ChannelReason.NONE),
+    ]
+    assert sum(event.metric is ChannelMetric.FIRST_CONTENT_SECONDS for event in events) == 1
 
 
 @pytest.mark.asyncio

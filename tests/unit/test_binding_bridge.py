@@ -42,6 +42,15 @@ from api.channels.execution_events import (
 from api.channels.feishu.reply import FeishuProgressiveReplySession
 from api.channels.interaction_models import ClaimedInteractionDelivery
 from api.channels.state_store import binding_conversation_key
+from api.channels.telemetry import (
+    NOOP_CHANNEL_TELEMETRY,
+    ChannelMessageOutcome,
+    ChannelMetric,
+    ChannelReason,
+    ChannelResult,
+    ChannelTelemetry,
+    InMemoryChannelTelemetry,
+)
 
 _FULL_REPLY_CAPABILITIES = EffectiveReplyCapabilities(
     progressive_reply=True,
@@ -69,6 +78,12 @@ class _Channel(Channel):
 
     async def send(self, message: OutgoingMessage) -> None:
         self.sent.append(message)
+
+
+class _SendFailureChannel(_Channel):
+    async def send(self, message: OutgoingMessage) -> None:
+        del message
+        raise RuntimeError("provider send failed")
 
 
 class _CardFailureChannel(_Channel):
@@ -184,6 +199,12 @@ class _StateStore:
         del conversation
 
 
+class _MarkRepliedFailureState(_StateStore):
+    async def mark_replied(self, message_id: str) -> None:
+        del message_id
+        raise RuntimeError("state write failed")
+
+
 class _Executor:
     def __init__(
         self,
@@ -221,6 +242,12 @@ class _FailingExecutor(_Executor):
         self.calls.append(kwargs)
         yield MessageDeltaEvent(content="partial answer", session_id="server-session")
         raise AgentExecutionError("CHANNEL_EXECUTION_TIMEOUT")
+
+
+class _ResetFailingExecutor(_Executor):
+    async def reset(self, *, conversation_key: str) -> None:
+        del conversation_key
+        raise AgentExecutionError("CHANNEL_RESET_FAILED")
 
 
 def _message(
@@ -261,6 +288,7 @@ def _bridge(
     capabilities: EffectiveReplyCapabilities | None = None,
     interaction_client: Any | None = None,
     interaction_presenter: Any | None = None,
+    telemetry: ChannelTelemetry = NOOP_CHANNEL_TELEMETRY,
 ) -> BindingBridge:
     return BindingBridge(
         channel=channel,
@@ -274,6 +302,8 @@ def _bridge(
         capabilities=capabilities or _FULL_REPLY_CAPABILITIES,
         interaction_client=interaction_client,
         interaction_presenter=interaction_presenter,
+        telemetry=telemetry,
+        provider_name="feishu",
     )
 
 
@@ -317,6 +347,146 @@ async def test_bridge_passes_only_transport_command_fields_to_binding_executor()
     assert "oc-chat" not in expected_conversation_key
     assert channel.sent == [OutgoingMessage(chat_id="oc-chat", content="managed answer", reply_to_message_id="message-1")]
     assert state.status == {"message-1": "replied"}
+
+
+@pytest.mark.asyncio
+async def test_bridge_records_execution_and_first_visible_content_without_identity_labels() -> None:
+    telemetry = InMemoryChannelTelemetry()
+    bridge = _bridge(
+        channel=_Channel(),
+        state=_StateStore(),
+        executor=_Executor(),
+        telemetry=telemetry,
+    )
+
+    outcome = await bridge.handle_message(_message())
+
+    assert outcome.result is ChannelResult.OK
+    events = telemetry.snapshot().recent_events
+    assert sum(event.metric is ChannelMetric.EXECUTION_DURATION_SECONDS for event in events) == 1
+    assert sum(event.metric is ChannelMetric.FIRST_CONTENT_SECONDS for event in events) == 1
+    assert sum(event.metric is ChannelMetric.DELIVERY_TOTAL for event in events) == 1
+    assert "ou-user" not in repr(events)
+    assert "oc-chat" not in repr(events)
+    assert "message-1" not in repr(events)
+
+
+@pytest.mark.asyncio
+async def test_bridge_duplicate_returns_closed_drop_outcome() -> None:
+    state = _StateStore()
+    bridge = _bridge(channel=_Channel(), state=state, executor=_Executor())
+
+    assert (await bridge.handle_message(_message())).result is ChannelResult.OK
+    duplicate = await bridge.handle_message(_message())
+
+    assert duplicate.result is ChannelResult.DUPLICATE
+    assert duplicate.reason is ChannelReason.DUPLICATE
+
+
+@pytest.mark.asyncio
+async def test_direct_reply_send_failure_is_not_reported_as_ok() -> None:
+    bridge = _bridge(
+        channel=_SendFailureChannel(),
+        state=_StateStore(),
+        executor=_Executor(),
+    )
+
+    outcome = await bridge.handle_message(_message(message_type="image"))
+
+    assert outcome == ChannelMessageOutcome(
+        ChannelResult.FAILED,
+        ChannelReason.DELIVERY_FAILURE,
+    )
+
+
+@pytest.mark.asyncio
+async def test_empty_message_state_failure_is_not_reported_as_ok() -> None:
+    bridge = _bridge(
+        channel=_Channel(),
+        state=_MarkRepliedFailureState(),
+        executor=_Executor(),
+    )
+
+    outcome = await bridge.handle_message(_message(content="   "))
+
+    assert outcome == ChannelMessageOutcome(
+        ChannelResult.FAILED,
+        ChannelReason.STATE_FAILURE,
+    )
+
+
+@pytest.mark.asyncio
+async def test_completed_reply_state_failure_is_not_reported_as_delivery_failure() -> None:
+    channel = _Channel()
+    bridge = _bridge(
+        channel=channel,
+        state=_MarkRepliedFailureState(),
+        executor=_Executor(),
+    )
+
+    outcome = await bridge.handle_message(_message())
+
+    assert outcome == ChannelMessageOutcome(
+        ChannelResult.FAILED,
+        ChannelReason.STATE_FAILURE,
+    )
+    assert channel.sent == [
+        OutgoingMessage(
+            chat_id="oc-chat",
+            content="managed answer",
+            reply_to_message_id="message-1",
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reset_failure_is_not_reported_as_ok() -> None:
+    bridge = _bridge(
+        channel=_Channel(),
+        state=_StateStore(),
+        executor=_ResetFailingExecutor(),
+    )
+
+    outcome = await bridge.handle_message(_message(content="/reset"))
+
+    assert outcome == ChannelMessageOutcome(
+        ChannelResult.FAILED,
+        ChannelReason.EXECUTION_FAILURE,
+    )
+
+
+def test_bridge_policy_rejections_have_closed_reasons() -> None:
+    bridge = _bridge(channel=_Channel(), state=_StateStore(), executor=_Executor())
+
+    assert bridge.message_rejection_reason(_message(chat_type="group")) is ChannelReason.PRIVATE_CHAT_REQUIRED
+    assert bridge.message_rejection_reason(_message(sender_type="bot")) is ChannelReason.USER_SENDER_REQUIRED
+    assert bridge.message_rejection_reason(_message(sender_id="")) is ChannelReason.MESSAGE_IDENTITY_MISSING
+
+
+@pytest.mark.asyncio
+async def test_bridge_collects_existing_shutdown_finalized_event_in_telemetry() -> None:
+    telemetry = InMemoryChannelTelemetry()
+    state = _StateStore()
+    bridge = _bridge(
+        channel=_Channel(),
+        state=state,
+        executor=_Executor(),
+        telemetry=telemetry,
+    )
+    message = _message(message_id="queued-for-shutdown")
+    bridge.message_queued(message, queue_position=1)
+    for _ in range(100):
+        if state.status.get(message.message_id) == "processing":
+            break
+        await asyncio.sleep(0)
+
+    await bridge.close()
+
+    events = telemetry.snapshot().recent_events
+    shutdown = [event for event in events if event.metric is ChannelMetric.SHUTDOWN_TOTAL]
+    assert len(shutdown) == 1
+    assert shutdown[0].labels.result is ChannelResult.OK
+    assert any(event.metric is ChannelMetric.SHUTDOWN_REPLIES_TOTAL for event in events)
 
 
 @pytest.mark.asyncio

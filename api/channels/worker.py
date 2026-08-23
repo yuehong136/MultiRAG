@@ -33,14 +33,48 @@ from api.channels.core.base import (
 from api.channels.provider import ChannelWorkerError, supported_provider_names, worker_provider
 from api.channels.runtime_client import ChannelRuntimeClient, ChannelRuntimeClientError, MultiRAGBindingExecutionClient
 from api.channels.state_store import RedisChannelStateStore
+from api.channels.telemetry import (
+    NOOP_CHANNEL_TELEMETRY,
+    PROCESS_CHANNEL_TELEMETRY,
+    ChannelMessageOutcome,
+    ChannelOperation,
+    ChannelProvider,
+    ChannelReason,
+    ChannelResult,
+    ChannelTelemetry,
+    channel_operation,
+    channel_provider,
+)
 from common.app_config import AppConfig, AppConfigError, FeishuChannelConfig, get_app_config
 from common.bootstrap import ensure_initialized
 
 LOGGER = logging.getLogger(__name__)
+_CONSUMER_SETTLE_GRACE_SECONDS = 0.5
 
 _CHANNEL_MONITOR_INTERVAL_SECONDS = 2
 _REDIS_CONNECT_TIMEOUT_SECONDS = 5
 _REDIS_OPERATION_TIMEOUT_SECONDS = 5
+
+
+@dataclass(slots=True)
+class _IngressObservation:
+    """Own the exactly-once final disposition for one SDK input."""
+
+    telemetry: ChannelTelemetry
+    provider: ChannelProvider
+    operation: ChannelOperation
+    finalized: bool = False
+
+    def finalize(self, result: ChannelResult, reason: ChannelReason) -> None:
+        if self.finalized:
+            return
+        self.finalized = True
+        self.telemetry.message_disposition(
+            provider=self.provider,
+            operation=self.operation,
+            result=result,
+            reason=reason,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +83,7 @@ class _QueuedMessage:
     enqueued_at: float
     order_key: str
     ticket: int
+    observation: _IngressObservation
 
 
 @dataclass(slots=True)
@@ -80,7 +115,20 @@ class FormActionChannel(Protocol):
 
 @runtime_checkable
 class MessageBridge(Protocol):
-    async def handle_message(self, message: IncomingMessage) -> None: ...
+    async def handle_message(
+        self,
+        message: IncomingMessage,
+    ) -> ChannelMessageOutcome | None: ...
+
+
+@runtime_checkable
+class MessagePolicyBridge(Protocol):
+    """Optional pure policy hook that explains a pre-queue rejection."""
+
+    def message_rejection_reason(
+        self,
+        message: IncomingMessage,
+    ) -> ChannelReason | None: ...
 
 
 @runtime_checkable
@@ -193,8 +241,10 @@ class ChannelWorker:
         queue_size: int,
         worker_concurrency: int,
         followup_queue_size: int = 5,
+        telemetry: ChannelTelemetry = NOOP_CHANNEL_TELEMETRY,
     ) -> None:
         self._provider_name = provider_name
+        self._provider = channel_provider(provider_name)
         self._channel = channel
         self._bridge = bridge
         self._agent_client = agent_client
@@ -212,6 +262,7 @@ class ChannelWorker:
         self._runtime_error_code = ""
         self._started = False
         self._accepting_messages = False
+        self._telemetry = telemetry
 
     async def run(self, stop_event: asyncio.Event) -> None:
         self._stop_event = stop_event
@@ -256,11 +307,30 @@ class ChannelWorker:
     async def enqueue(self, message: IncomingMessage) -> None:
         """Fast SDK callback target: no Redis, HTTP, or reply I/O is allowed."""
 
+        observation = _IngressObservation(
+            telemetry=self._telemetry,
+            provider=self._provider,
+            operation=channel_operation(message.operation),
+        )
         lifecycle = self._bridge if isinstance(self._bridge, LifecycleMessageBridge) else None
-        if lifecycle is not None and not lifecycle.accepts_message(message):
-            return
+        if lifecycle is not None:
+            if isinstance(self._bridge, MessagePolicyBridge):
+                rejection_reason = self._bridge.message_rejection_reason(message)
+                if rejection_reason is not None:
+                    observation.finalize(ChannelResult.DROPPED, rejection_reason)
+                    return
+            elif not lifecycle.accepts_message(message):
+                observation.finalize(
+                    ChannelResult.DROPPED,
+                    ChannelReason.POLICY_REJECTED,
+                )
+                return
 
         if not self._accepting_messages:
+            observation.finalize(
+                ChannelResult.DROPPED,
+                ChannelReason.WORKER_STOPPING,
+            )
             LOGGER.warning(
                 "channel_event=queue_rejected trace_id=%s message_id_hash=%s result=dropped error_code=WORKER_STOPPING",
                 _short_hash(message.message_id),
@@ -278,6 +348,10 @@ class ChannelWorker:
         if lifecycle is not None and queue_position > self._followup_queue_size:
             if order.pending == 0:
                 self._conversation_orders.pop(order_key, None)
+            observation.finalize(
+                ChannelResult.REJECTED,
+                ChannelReason.FOLLOWUP_QUEUE_FULL,
+            )
             lifecycle.message_rejected(message, reason="FOLLOWUP_QUEUE_FULL")
             LOGGER.warning(
                 "channel_event=followup_queue_full trace_id=%s message_id_hash=%s queue_position=%s result=rejected error_code=FOLLOWUP_QUEUE_FULL",
@@ -294,11 +368,16 @@ class ChannelWorker:
                     enqueued_at=time.monotonic(),
                     order_key=order_key,
                     ticket=ticket,
+                    observation=observation,
                 )
             )
         except asyncio.QueueFull:
             if order.pending == 0:
                 self._conversation_orders.pop(order_key, None)
+            observation.finalize(
+                ChannelResult.REJECTED,
+                ChannelReason.GLOBAL_QUEUE_FULL,
+            )
             if lifecycle is not None:
                 lifecycle.message_rejected(message, reason="GLOBAL_QUEUE_FULL")
             LOGGER.error(
@@ -312,6 +391,11 @@ class ChannelWorker:
         order.pending += 1
         if lifecycle is not None:
             lifecycle.message_queued(message, queue_position=queue_position)
+        self._telemetry.queue_depth(
+            provider=self._provider,
+            operation=observation.operation,
+            depth=self._queue.qsize(),
+        )
 
     async def close(self) -> None:
         """Stop intake, terminalize what is already visible, then release.
@@ -349,6 +433,20 @@ class ChannelWorker:
         # barrier, and only the bridge knows which replies those are.
         if isinstance(self._bridge, LifecycleMessageBridge):
             await self._bridge.close()
+            # ``bridge.close`` publishes the closed outcome for every visible
+            # managed reply. Give already-dequeued consumers a bounded chance
+            # to return that outcome and call ``task_done`` before task
+            # cancellation falls back to the coarser shutdown disposition.
+            # A legacy/fake bridge that cannot settle must not consume the
+            # supervisor's whole graceful-shutdown window.
+            try:
+                async with asyncio.timeout(_CONSUMER_SETTLE_GRACE_SECONDS):
+                    await self._queue.join()
+            except TimeoutError:
+                LOGGER.warning(
+                    "channel_event=consumer_settle_timeout channel=%s result=failed error_code=CONSUMER_SETTLE_TIMEOUT",
+                    self._provider_name,
+                )
 
         for task in self._tasks:
             task.cancel()
@@ -373,11 +471,26 @@ class ChannelWorker:
         abandoned = 0
         while True:
             try:
-                self._queue.get_nowait()
+                queued = self._queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
+            queued.observation.finalize(
+                ChannelResult.DROPPED,
+                ChannelReason.QUEUE_ABANDONED,
+            )
+            self._telemetry.queue_abandoned(
+                provider=self._provider,
+                operation=queued.observation.operation,
+                count=1,
+            )
             self._queue.task_done()
             abandoned += 1
+        if abandoned:
+            self._telemetry.queue_depth(
+                provider=self._provider,
+                operation=ChannelOperation.OTHER,
+                depth=0,
+            )
         return abandoned
 
     async def _preflight(self) -> None:
@@ -403,7 +516,18 @@ class ChannelWorker:
                     await order.condition.wait_for(lambda: queued.ticket == order.next_to_run)
                     turn_acquired = True
 
-                queue_wait_ms = round((time.monotonic() - queued.enqueued_at) * 1000)
+                queue_wait_seconds = max(0.0, time.monotonic() - queued.enqueued_at)
+                queue_wait_ms = round(queue_wait_seconds * 1000)
+                self._telemetry.queue_wait(
+                    provider=self._provider,
+                    operation=queued.observation.operation,
+                    seconds=queue_wait_seconds,
+                )
+                self._telemetry.queue_depth(
+                    provider=self._provider,
+                    operation=queued.observation.operation,
+                    depth=self._queue.qsize(),
+                )
                 LOGGER.info(
                     "channel_event=message_dequeued trace_id=%s message_id_hash=%s queue_wait_ms=%s result=ok",
                     _short_hash(queued.message.execution_id),
@@ -411,13 +535,37 @@ class ChannelWorker:
                     queue_wait_ms,
                 )
                 try:
-                    await self._bridge.handle_message(queued.message)
+                    outcome = await self._bridge.handle_message(queued.message)
+                except asyncio.CancelledError:
+                    queued.observation.finalize(
+                        ChannelResult.CANCELLED,
+                        ChannelReason.SHUTDOWN,
+                    )
+                    raise
                 except Exception:
+                    queued.observation.finalize(
+                        ChannelResult.FAILED,
+                        ChannelReason.HANDLER_FAILURE,
+                    )
                     LOGGER.error(
                         "channel_event=handler_failed trace_id=%s message_id_hash=%s result=failed error_code=MESSAGE_HANDLER_FAILURE",
                         _short_hash(queued.message.execution_id),
                         _short_hash(queued.message.execution_id),
                     )
+                else:
+                    if outcome is None:
+                        outcome = ChannelMessageOutcome(ChannelResult.OK)
+                    queued.observation.finalize(outcome.result, outcome.reason)
+            except asyncio.CancelledError:
+                # This outer fence also covers a later ticket that another
+                # consumer already dequeued but is still waiting for its
+                # conversation predecessor. It is no longer visible to
+                # ``_abandon_queue``, so cancellation must dispose it here.
+                queued.observation.finalize(
+                    ChannelResult.CANCELLED,
+                    ChannelReason.SHUTDOWN,
+                )
+                raise
             finally:
                 if turn_acquired:
                     async with order.condition:
@@ -652,6 +800,8 @@ async def _run_managed_channel(
             private_chat_only=runtime.private_chat_only or not provider_spec(provider.name).capabilities.group_chat,
             interaction_client=interaction_client,
             interaction_presenter=interaction_presenter,
+            telemetry=PROCESS_CHANNEL_TELEMETRY,
+            provider_name=provider.name,
         )
         worker = ChannelWorker(
             provider_name=provider.name,
@@ -663,6 +813,7 @@ async def _run_managed_channel(
             queue_size=tuning.queue_size,
             worker_concurrency=tuning.worker_concurrency,
             followup_queue_size=tuning.followup_queue_size,
+            telemetry=PROCESS_CHANNEL_TELEMETRY,
         )
         await _safe_runtime_report(
             runtime_client,

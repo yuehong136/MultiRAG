@@ -23,6 +23,13 @@ from api.channels.core.base import (
 )
 from api.channels.core.reply import SERVICE_UNAVAILABLE_TEXT, strip_reasoning, truncate_answer
 from api.channels.reply_session import CANCELLED_TEXT
+from api.channels.telemetry import (
+    ChannelReason,
+    ChannelResult,
+    ChannelStage,
+    channel_operation,
+    channel_provider,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -46,6 +53,27 @@ _IMAGE_RE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)(?:\s+[^)]*)?\)")
 _MASS_MENTION_RE = re.compile(r"(?i)@(all|everyone)\b")
 _TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
+_DELIVERY_FAILURE_LABELS = {
+    "card_create_failed": (ChannelStage.CARD_CREATE, ChannelReason.CARD_CREATE_FAILURE),
+    "card_update_failed": (ChannelStage.CARD_UPDATE, ChannelReason.CARD_UPDATE_FAILURE),
+    "card_finish_failed": (ChannelStage.CARD_FINISH, ChannelReason.CARD_FINISH_FAILURE),
+    "card_controls_failed": (ChannelStage.CARD_CONTROLS, ChannelReason.CARD_CONTROLS_FAILURE),
+    "card_feedback_failed": (ChannelStage.CARD_CONTROLS, ChannelReason.CARD_CONTROLS_FAILURE),
+    "card_failure_render_failed": (
+        ChannelStage.CARD_FAILURE,
+        ChannelReason.CARD_FAILURE_RENDER_FAILURE,
+    ),
+    "card_cancel_render_failed": (
+        ChannelStage.CARD_CANCEL,
+        ChannelReason.CARD_CANCEL_RENDER_FAILURE,
+    ),
+    "typing_add_failed": (ChannelStage.TYPING, ChannelReason.TYPING_FAILURE),
+    "typing_remove_failed": (ChannelStage.TYPING, ChannelReason.TYPING_FAILURE),
+    "post_fallback_failed": (
+        ChannelStage.FALLBACK_POST,
+        ChannelReason.POST_FALLBACK_FAILURE,
+    ),
+}
 
 
 @runtime_checkable
@@ -369,6 +397,11 @@ class FeishuProgressiveReplySession:
         self._update_interval_seconds = update_interval_seconds
         self._clock = clock
         self._sleep = sleep
+        self._telemetry = context.telemetry
+        self._provider = channel_provider(source.channel)
+        self._operation = channel_operation(source.operation)
+        self._telemetry_started_at = context.telemetry_started_at if context.telemetry_started_at is not None else clock()
+        self._first_content_recorded = False
         self._started_at = clock()
         self._parts: list[str] = []
         self._state = ReplySessionState.OPEN
@@ -507,8 +540,16 @@ class FeishuProgressiveReplySession:
                 )
             answer = strip_reasoning("".join(self._parts))
             if answer:
-                await self._patch_answer(answer=answer)
-            await self._finish_card()
+                try:
+                    await self._patch_answer(answer=answer)
+                except Exception:
+                    self._log("card_update_failed", "FEISHU_CARD_UPDATE_FAILED")
+                    raise
+            try:
+                await self._finish_card()
+            except Exception:
+                self._log("card_finish_failed", "FEISHU_CARD_FINISH_FAILED")
+                raise
             return self._reply_message_id
         except Exception:
             self._state = ReplySessionState.FAILED
@@ -636,6 +677,12 @@ class FeishuProgressiveReplySession:
             delivery_uuid=delivery_uuid(self._source, f"card_update:{sequence}"),
         )
         self._last_rendered = rendered
+        self._record_delivery(
+            stage=ChannelStage.CARD_UPDATE,
+            result=ChannelResult.OK,
+            reason=ChannelReason.NONE,
+        )
+        self._record_first_content(ChannelStage.CARD_UPDATE)
 
     async def _patch_lifecycle(
         self,
@@ -688,6 +735,11 @@ class FeishuProgressiveReplySession:
             actions,
             sequence=sequence,
             delivery_uuid=delivery_uuid(self._source, f"card_lifecycle:{sequence}"),
+        )
+        self._record_delivery(
+            stage=ChannelStage.CARD_CONTROLS,
+            result=ChannelResult.OK,
+            reason=ChannelReason.NONE,
         )
 
     def _schedule_card_update(self) -> None:
@@ -752,6 +804,11 @@ class FeishuProgressiveReplySession:
             delivery_uuid=delivery_uuid(self._source, f"card_finish:{sequence}"),
         )
         self._card_active = False
+        self._record_delivery(
+            stage=ChannelStage.CARD_FINISH,
+            result=ChannelResult.OK,
+            reason=ChannelReason.NONE,
+        )
 
     async def _fallback(self, answer: str, *, stage: str) -> None:
         fallback_uuid = delivery_uuid(self._source, stage)
@@ -763,18 +820,38 @@ class FeishuProgressiveReplySession:
                 message_type="post",
                 delivery_uuid=fallback_uuid,
             )
+            self._record_delivery(
+                stage=ChannelStage.FALLBACK_POST,
+                result=ChannelResult.FALLBACK,
+                reason=ChannelReason.NONE,
+            )
+            self._record_first_content(ChannelStage.FALLBACK_POST)
             return
         except Exception:
             self._log("post_fallback_failed", "FEISHU_POST_FALLBACK_FAILED")
-        await self._transport.reply_content(
-            self._source.message_id,
-            json.dumps(
-                {"text": render_text(answer, max_chars=self._max_content_chars)},
-                ensure_ascii=False,
-            ),
-            message_type="text",
-            delivery_uuid=fallback_uuid,
+        try:
+            await self._transport.reply_content(
+                self._source.message_id,
+                json.dumps(
+                    {"text": render_text(answer, max_chars=self._max_content_chars)},
+                    ensure_ascii=False,
+                ),
+                message_type="text",
+                delivery_uuid=fallback_uuid,
+            )
+        except Exception:
+            self._record_delivery(
+                stage=ChannelStage.FALLBACK_TEXT,
+                result=ChannelResult.FAILED,
+                reason=ChannelReason.TEXT_FALLBACK_FAILURE,
+            )
+            raise
+        self._record_delivery(
+            stage=ChannelStage.FALLBACK_TEXT,
+            result=ChannelResult.FALLBACK,
+            reason=ChannelReason.NONE,
         )
+        self._record_first_content(ChannelStage.FALLBACK_TEXT)
 
     async def _remove_typing(self) -> None:
         reaction_id = self._reaction_id
@@ -795,6 +872,15 @@ class FeishuProgressiveReplySession:
             raise ReplySessionStateError(f"cannot {operation} a {self._state.value} reply")
 
     def _log(self, event: str, error_code: str) -> None:
+        stage, reason = _DELIVERY_FAILURE_LABELS.get(
+            event,
+            (ChannelStage.DELIVERY, ChannelReason.DELIVERY_FAILURE),
+        )
+        self._record_delivery(
+            stage=stage,
+            result=ChannelResult.FAILED,
+            reason=reason,
+        )
         LOGGER.warning(
             "channel_event=%s channel=feishu account_id_hash=%s message_id_hash=%s card_visible=%s result=failed error_code=%s",
             event,
@@ -805,6 +891,24 @@ class FeishuProgressiveReplySession:
         )
 
     def _log_latency(self, event: str, started_at: float) -> None:
+        if event == "streaming_card_created":
+            self._record_delivery(
+                stage=ChannelStage.CARD_CREATE,
+                result=ChannelResult.OK,
+                reason=ChannelReason.NONE,
+            )
+            self._telemetry.first_visible(
+                provider=self._provider,
+                operation=self._operation,
+                stage=ChannelStage.CARD_CREATE,
+                seconds=max(0.0, self._clock() - self._telemetry_started_at),
+            )
+        elif event == "typing_added":
+            self._record_delivery(
+                stage=ChannelStage.TYPING,
+                result=ChannelResult.OK,
+                reason=ChannelReason.NONE,
+            )
         elapsed_ms = round((self._clock() - started_at) * 1000)
         LOGGER.info(
             "channel_event=%s channel=feishu account_id_hash=%s message_id_hash=%s elapsed_ms=%s result=ok error_code=",
@@ -812,6 +916,32 @@ class FeishuProgressiveReplySession:
             _short_hash(self._source.account_id),
             _short_hash(self._source.message_id),
             elapsed_ms,
+        )
+
+    def _record_delivery(
+        self,
+        *,
+        stage: ChannelStage,
+        result: ChannelResult,
+        reason: ChannelReason,
+    ) -> None:
+        self._telemetry.delivery(
+            provider=self._provider,
+            operation=self._operation,
+            stage=stage,
+            result=result,
+            reason=reason,
+        )
+
+    def _record_first_content(self, stage: ChannelStage) -> None:
+        if self._first_content_recorded:
+            return
+        self._first_content_recorded = True
+        self._telemetry.first_visible(
+            provider=self._provider,
+            operation=self._operation,
+            stage=stage,
+            seconds=max(0.0, self._clock() - self._telemetry_started_at),
         )
 
 

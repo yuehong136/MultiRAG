@@ -780,6 +780,8 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
 - 停机终态化只覆盖**有合作窗口**的停机（POSIX SIGTERM、两端的 Ctrl+C、显式 close）。
   `kill -9`、主机掉电、容器被强杀，以及 **Windows 上 supervisor 触发的 worker 停止**都没有这个
   窗口，卡片会停在最后一次显示的状态；这不是 CHN-U16 的回归，也不能靠它验收。
+- CHN-O9 当前工作树只有**进程内有界聚合**，没有 Prometheus/OpenTelemetry exporter、HTTP 指标端点、
+  跨进程汇总或持久化时序存储；未部署前也不能把它写成生产监控已经生效。
 
 因此，生产 binding 仍应绑定只读、最小权限的 Agent/Dialog；涉及副作用的 MCP 工具必须
 自行验证授权和幂等键。正式 Principal/ToolRuntime 接入后，可替换内部执行适配器，而无需
@@ -813,6 +815,23 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
   存量密文继续由旧密钥解密。确认没有旧密钥的密文了，才能把旧密钥从列表里摘掉——
   摘早了那些渠道会直接报 `CHANNEL_SECRET_STORE_UNAVAILABLE`。
 - 主加密密钥丢失：现有飞书凭据无法恢复；必须从 secret manager 备份恢复或重新录入。
+
+### CHN-O9 可观测边界（本地实现，待全门禁与 rollout）
+
+- `ChannelTelemetry` 是 Provider-neutral、同步、无 await/无外部 I/O 的 seam；组件默认注入 no-op。
+  `InMemoryChannelTelemetry` 只保存有界 series、histogram samples 和 recent events，快照用于进程内诊断与测试。
+- managed `BindingBridge` composition 会把同一个进程级 recorder 显式注入 worker 与 Bridge；API 侧
+  candidate GC 也显式注入进程级 recorder。legacy/demo `FeishuAgentBridge` 仍使用 no-op，因为它的兼容
+  `None` outcome 不能准确区分 duplicate、policy drop、Redis/Agent/provider 失败，不能用假 `OK` 污染指标。
+- 封闭指标覆盖 ingress 最终 disposition、queue depth/wait/abandoned、execution duration、首卡、首个可见正文、
+  delivery/fallback、shutdown finalization，以及 candidate GC cycle/duration/deleted/batches/remaining。
+  每条 accepted/rejected/dropped ingress 最终只发布一次 disposition；已经 dequeue 但等待同会话前序的 ticket、
+  provider cancel failure、状态写失败和 shutdown timeout 都有确定的 closed outcome。
+- label 只有 provider、operation、result、reason、stage；原始 binding/sender/chat/message/session ID 与正文不进入
+  recorder。首卡和首个可见正文已有 latency；**首 ACK latency 尚未提供**，因为当前没有可靠且 Provider-neutral
+  的 ingress/SDK ACK 完成钩子，不能用 enqueue 时间冒充。
+- 生产外部仍只能从既有 `channel_event=queue_abandoned` 与 `channel_event=shutdown_finalized` 生命周期日志核对
+  对应停机事实；其余进程内聚合尚无跨进程 exporter 或 HTTP 读取面。本轮没有新增或宣称 Prometheus endpoint。
 
 ### 一次性升级代价：Redis 命名空间 v1 → v2（CHN-S3）
 
@@ -856,10 +875,10 @@ upstream-first 长期原则不变，但当前不立即执行 EIM-F5 / CHN-X14。
    回复终态化后继续传播 consumer 自身的取消，不会回到下一轮队列等待并卡死 worker close。
    目标侧（Dialog/Canvas driver）那一段仍由
    `tests/integration/test_channel_history_manager.py` 覆盖，单元层不接真库。
-3. CHN-O9（**当前下一项**）补最小可观测：首卡/首正文、queue wait/depth/overflow、
-   CardKit update/fallback、terminal 与 shutdown outcome，能够支撑真实浸泡判断。U16 已经放出
-   `channel_event=shutdown_finalized`（含 `queued=`/`running=`）与 `channel_event=queue_abandoned`
-   两条结构化事件，O9 直接收编，不要另发明第三种写法。
+3. 🔵 CHN-O9 本地实现已补最小进程内可观测：首卡/首正文、queue wait/depth/overflow、
+   CardKit update/fallback、terminal、shutdown outcome 与 candidate GC；U16 的
+   `channel_event=shutdown_finalized`（含 `queued=`/`running=`）和 `channel_event=queue_abandoned`
+   已收编。状态保持进行中，等待仓库全门禁与 rollout；首 ACK 和跨进程 exporter 不在本轮完成面。
 4. 稳定浸泡期间不新增执行架构；记录失败率、悬空卡、重复执行/交付、候选孤儿和重启结果。
 5. Channel 稳定后，等待用户恢复从约 2026-04-24 本地同步点逐 commit 跟进 RAGFlow，再解除
    EIM-F5 / CHN-X14 挂起并把本轮改动随上游迭代一并审计。
@@ -932,6 +951,7 @@ uv run pytest tests/unit/test_channel_config.py tests/unit/test_channel_secret_c
 uv run pytest tests/unit/test_chat_channel_control.py tests/unit/test_channel_execution.py tests/unit/test_channel_execution_api.py
 uv run pytest tests/unit/test_channel_execution_adapters.py tests/unit/test_channel_runtime_api.py tests/unit/test_channel_runtime_client.py
 uv run pytest tests/unit/test_channel_candidate_gc.py tests/unit/test_channel_config.py
+uv run pytest tests/unit/test_channel_telemetry.py tests/unit/test_channel_graceful_shutdown.py
 uv run pytest tests/integration/test_channel_history_manager.py tests/integration/test_channel_candidate_gc.py
 uv run pytest tests/unit/test_feishu_agent_bridge.py tests/unit/test_binding_bridge.py tests/unit/test_reply_session.py tests/unit/test_feishu_channel.py
 uv run pytest tests/unit/test_feishu_state_store.py tests/unit/test_feishu_worker.py tests/unit/test_channel_supervisor.py

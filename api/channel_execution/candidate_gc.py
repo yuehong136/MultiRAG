@@ -28,6 +28,13 @@ from api.channel_execution.candidate_metadata import (
     CANVAS_CANDIDATE_STATE_ACTIVE,
     CANVAS_CANDIDATE_STATE_FINALIZING,
 )
+from api.channels.telemetry import (
+    NOOP_CHANNEL_TELEMETRY,
+    PROCESS_CHANNEL_TELEMETRY,
+    ChannelReason,
+    ChannelResult,
+    ChannelTelemetry,
+)
 from api.db.db_models import API4Conversation, ChannelCanvasCandidate, Conversation, async_session_factory
 from common.app_config import ChannelCandidateGCConfig, get_app_config
 
@@ -235,11 +242,13 @@ class ChannelCandidateGCWorker:
         *,
         collector: CandidateBatchCollector = collect_expired_candidate_batch,
         jitter: Callable[[float, float], float] = random.uniform,
+        telemetry: ChannelTelemetry = NOOP_CHANNEL_TELEMETRY,
     ) -> None:
         self._session_factory = session_factory
         self._config = config
         self._collector = collector
         self._jitter = jitter
+        self._telemetry = telemetry
 
     async def collect_cycle(self) -> CandidateCleanupCycle:
         explicit_canvas = 0
@@ -287,12 +296,34 @@ class ChannelCandidateGCWorker:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                elapsed_seconds = max(0.0, time.monotonic() - started_at)
+                self._telemetry.candidate_gc(
+                    result=ChannelResult.FAILED,
+                    reason=ChannelReason.CANDIDATE_GC_FAILURE,
+                    seconds=elapsed_seconds,
+                    explicit_canvas=0,
+                    legacy_canvas=0,
+                    legacy_dialog=0,
+                    batches=0,
+                    has_more=False,
+                )
                 LOGGER.exception(
                     "channel_execution_event=candidate_gc_cycle result=failed error_code=CANDIDATE_GC_FAILED error_type=%s elapsed_ms=%s",
                     type(exc).__name__,
-                    round((time.monotonic() - started_at) * 1_000),
+                    round(elapsed_seconds * 1_000),
                 )
             else:
+                elapsed_seconds = max(0.0, time.monotonic() - started_at)
+                self._telemetry.candidate_gc(
+                    result=ChannelResult.OK,
+                    reason=ChannelReason.NONE,
+                    seconds=elapsed_seconds,
+                    explicit_canvas=result.explicit_canvas,
+                    legacy_canvas=result.legacy_canvas,
+                    legacy_dialog=result.legacy_dialog,
+                    batches=result.batches,
+                    has_more=result.has_more,
+                )
                 LOGGER.info(
                     "channel_execution_event=candidate_gc_cycle result=ok error_code= explicit_canvas=%s legacy_canvas=%s legacy_dialog=%s batches=%s has_more=%s elapsed_ms=%s",
                     result.explicit_canvas,
@@ -300,7 +331,7 @@ class ChannelCandidateGCWorker:
                     result.legacy_dialog,
                     result.batches,
                     str(result.has_more).lower(),
-                    round((time.monotonic() - started_at) * 1_000),
+                    round(elapsed_seconds * 1_000),
                 )
 
             if stop_event.is_set():
@@ -328,4 +359,5 @@ def build_channel_candidate_gc_worker() -> ChannelCandidateGCWorker | None:
     return ChannelCandidateGCWorker(
         cast(CandidateGCSessionFactory, async_session_factory),
         config,
+        telemetry=PROCESS_CHANNEL_TELEMETRY,
     )

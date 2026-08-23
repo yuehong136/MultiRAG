@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from api.channels.core.base import (
     Channel,
     IncomingMessage,
@@ -12,6 +14,13 @@ from api.channels.core.base import (
     ReplyStatus,
 )
 from api.channels.core.reply import SERVICE_UNAVAILABLE_TEXT, strip_reasoning, truncate_answer
+from api.channels.telemetry import (
+    ChannelReason,
+    ChannelResult,
+    ChannelStage,
+    channel_operation,
+    channel_provider,
+)
 
 CANCELLED_TEXT = "已停止生成。若此前已发起外部操作，其结果不视为已撤销。"
 
@@ -33,6 +42,9 @@ class BufferedReplySession:
         self._source = source
         self._max_content_chars = max_content_chars
         self._context = context
+        self._telemetry = context.telemetry
+        self._telemetry_started_at = context.telemetry_started_at if context.telemetry_started_at is not None else time.monotonic()
+        self._first_content_recorded = False
         self._parts: list[str] = []
         self._state = ReplySessionState.OPEN
 
@@ -79,12 +91,8 @@ class BufferedReplySession:
         content = strip_reasoning("".join(self._parts))
         if not content:
             raise ReplySessionStateError("cannot complete an empty reply")
-        await self._channel.send(
-            OutgoingMessage(
-                chat_id=self._source.chat_id,
-                content=truncate_answer(content, self._max_content_chars),
-                reply_to_message_id=self._source.message_id,
-            )
+        await self._deliver(
+            truncate_answer(content, self._max_content_chars),
         )
 
     async def fail(self, error_code: str) -> None:
@@ -93,30 +101,52 @@ class BufferedReplySession:
             raise ValueError("reply failure code must not be empty")
         self._state = ReplySessionState.FAILED
         self._parts.clear()
-        await self._channel.send(
-            OutgoingMessage(
-                chat_id=self._source.chat_id,
-                content=SERVICE_UNAVAILABLE_TEXT,
-                reply_to_message_id=self._source.message_id,
-            )
-        )
+        await self._deliver(SERVICE_UNAVAILABLE_TEXT)
 
     async def cancel(self) -> None:
         self._require_open("cancel")
         self._state = ReplySessionState.CANCELLED
         self._parts.clear()
-        await self._channel.send(
-            OutgoingMessage(
-                chat_id=self._source.chat_id,
-                content=CANCELLED_TEXT,
-                reply_to_message_id=self._source.message_id,
-            )
-        )
+        await self._deliver(CANCELLED_TEXT)
 
     async def acknowledge_feedback(self, *, helpful: bool) -> None:
         """Providers without mutable cards acknowledge through their callback toast."""
 
         del helpful
+
+    async def _deliver(self, content: str) -> None:
+        try:
+            await self._channel.send(
+                OutgoingMessage(
+                    chat_id=self._source.chat_id,
+                    content=content,
+                    reply_to_message_id=self._source.message_id,
+                )
+            )
+        except Exception:
+            self._telemetry.delivery(
+                provider=channel_provider(self._source.channel),
+                operation=channel_operation(self._source.operation),
+                stage=ChannelStage.DELIVERY,
+                result=ChannelResult.FAILED,
+                reason=ChannelReason.DELIVERY_FAILURE,
+            )
+            raise
+        self._telemetry.delivery(
+            provider=channel_provider(self._source.channel),
+            operation=channel_operation(self._source.operation),
+            stage=ChannelStage.DELIVERY,
+            result=ChannelResult.OK,
+            reason=ChannelReason.NONE,
+        )
+        if not self._first_content_recorded:
+            self._first_content_recorded = True
+            self._telemetry.first_visible(
+                provider=channel_provider(self._source.channel),
+                operation=channel_operation(self._source.operation),
+                stage=ChannelStage.DELIVERY,
+                seconds=max(0.0, time.monotonic() - self._telemetry_started_at),
+            )
 
     def _require_open(self, operation: str) -> None:
         if self._state is not ReplySessionState.OPEN:

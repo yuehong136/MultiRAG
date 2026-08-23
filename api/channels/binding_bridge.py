@@ -9,7 +9,7 @@ import logging
 import secrets
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal, Protocol, runtime_checkable
 
@@ -47,6 +47,17 @@ from api.channels.execution_events import (
 )
 from api.channels.interaction_models import ClaimedInteractionDelivery
 from api.channels.state_store import ChannelStateStore, binding_conversation_key
+from api.channels.telemetry import (
+    NOOP_CHANNEL_TELEMETRY,
+    ChannelMessageOutcome,
+    ChannelOperation,
+    ChannelReason,
+    ChannelResult,
+    ChannelStage,
+    ChannelTelemetry,
+    channel_operation,
+    channel_provider,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -140,6 +151,10 @@ class _ExecutionRecord:
     execution_task: asyncio.Task[None] | None = None
     cancel_requested: bool = False
     feedback: bool | None = None
+    telemetry_outcome: ChannelMessageOutcome | None = None
+    telemetry_reason: ChannelReason = ChannelReason.NONE
+    finalization_done: asyncio.Event = field(default_factory=asyncio.Event)
+    finalization_outcome: ChannelMessageOutcome | None = None
     # A stop callback and a cooperative shutdown can both reach one reply. The
     # flag keeps the provider-visible terminal transition single even while the
     # first attempt is suspended on provider I/O.
@@ -153,6 +168,7 @@ class _PreparedMessage:
     kind: _WorkKind
     direct_content: str = ""
     record: _ExecutionRecord | None = None
+    outcome: ChannelMessageOutcome | None = None
 
 
 @dataclass(slots=True)
@@ -191,6 +207,8 @@ class BindingBridge:
         private_chat_only: bool = True,
         interaction_client: InteractionDeliveryClient | None = None,
         interaction_presenter: InteractionPresenter | None = None,
+        telemetry: ChannelTelemetry = NOOP_CHANNEL_TELEMETRY,
+        provider_name: str = "other",
     ) -> None:
         if (interaction_client is None) != (interaction_presenter is None):
             raise ValueError("interaction client and presenter must be configured together")
@@ -205,11 +223,13 @@ class BindingBridge:
         self._capabilities = capabilities
         self._interaction_client = interaction_client
         self._interaction_presenter = interaction_presenter
+        self._telemetry = telemetry
+        self._provider = channel_provider(provider_name)
         self._interaction_owner = f"channel-{secrets.token_hex(12)}"
         self._interaction_revisions: dict[str, int] = {}
         self._interaction_wakeup = asyncio.Event()
         self._scheduler: Callable[[IncomingMessage], Awaitable[None]] | None = None
-        self._preparations: dict[int, asyncio.Task[_PreparedMessage | None]] = {}
+        self._preparations: dict[int, asyncio.Task[_PreparedMessage]] = {}
         self._actions: dict[str, _RegisteredAction] = {}
         self._latest_execution_by_conversation: dict[str, str] = {}
         self._background_tasks: set[asyncio.Task[None]] = set()
@@ -228,16 +248,24 @@ class BindingBridge:
     def accepts_message(self, message: IncomingMessage) -> bool:
         """Apply transport-only policy before the worker allocates a ticket."""
 
+        return self.message_rejection_reason(message) is None
+
+    def message_rejection_reason(
+        self,
+        message: IncomingMessage,
+    ) -> ChannelReason | None:
+        """Return one closed reason for a pre-queue policy rejection."""
+
         if self._closing:
-            return False
+            return ChannelReason.WORKER_STOPPING
         if self._private_chat_only and message.chat_type != "p2p":
-            return False
+            return ChannelReason.PRIVATE_CHAT_REQUIRED
         if message.sender_type != "user":
-            return False
+            return ChannelReason.USER_SENDER_REQUIRED
         if not message.message_id or not message.chat_id or not message.sender_id:
             self._log(logging.WARNING, "event_rejected", message, "MESSAGE_IDENTITY_MISSING")
-            return False
-        return True
+            return ChannelReason.MESSAGE_IDENTITY_MISSING
+        return None
 
     def message_queued(self, message: IncomingMessage, *, queue_position: int) -> None:
         """Start claim/card preparation without blocking the SDK callback."""
@@ -245,7 +273,11 @@ class BindingBridge:
         if self._closing:
             return
         task = asyncio.create_task(
-            self._prepare_message(message, queue_position=queue_position),
+            self._prepare_message(
+                message,
+                queue_position=queue_position,
+                telemetry_started_at=time.monotonic(),
+            ),
             name=f"channel-prepare-{_short_hash(message.execution_id)}",
         )
         self._preparations[id(message)] = task
@@ -258,32 +290,50 @@ class BindingBridge:
             name=f"channel-reject-{_short_hash(message.execution_id)}",
         )
 
-    async def handle_message(self, message: IncomingMessage) -> None:
+    async def handle_message(
+        self,
+        message: IncomingMessage,
+    ) -> ChannelMessageOutcome:
         """Run a previously prepared message after its worker ticket starts."""
 
         if self._closing:
             # Intake already stopped, so this ticket must not reach the target.
             # ``close`` owns the terminal state of the card it already showed.
-            return
+            return ChannelMessageOutcome(
+                ChannelResult.DROPPED,
+                ChannelReason.SHUTDOWN,
+            )
         preparation = self._preparations.pop(id(message), None)
         if preparation is None:
-            if not self.accepts_message(message):
-                return
-            preparation = asyncio.create_task(self._prepare_message(message, queue_position=0))
+            rejection_reason = self.message_rejection_reason(message)
+            if rejection_reason is not None:
+                return ChannelMessageOutcome(
+                    ChannelResult.DROPPED,
+                    rejection_reason,
+                )
+            preparation = asyncio.create_task(
+                self._prepare_message(
+                    message,
+                    queue_position=0,
+                    telemetry_started_at=time.monotonic(),
+                )
+            )
         prepared = await preparation
-        if prepared is None:
-            return
+        if prepared.outcome is not None:
+            return prepared.outcome
         if prepared.kind is _WorkKind.DIRECT:
-            await self._reply_and_complete(message, prepared.direct_content)
-            return
+            return await self._reply_and_complete(message, prepared.direct_content)
         if prepared.kind is _WorkKind.EMPTY:
-            await self._mark_replied(message)
-            return
+            return await self._mark_replied(message)
         if prepared.kind is _WorkKind.RESET:
-            await self._run_reset(prepared)
-            return
+            return await self._run_reset(prepared)
         if prepared.record is not None:
             await self._run_question(prepared.record)
+            return self._message_outcome(prepared.record)
+        return ChannelMessageOutcome(
+            ChannelResult.FAILED,
+            ChannelReason.HANDLER_FAILURE,
+        )
 
     async def handle_action(self, action: ChannelAction) -> ChannelActionResponse:
         """Claim a low-risk action and enqueue work without provider I/O."""
@@ -487,11 +537,21 @@ class BindingBridge:
             return
         queued = sum(1 for record in records if record.status is ReplyStatus.QUEUED)
         running = sum(1 for record in records if record.status is ReplyStatus.RUNNING)
+        outcomes: list[ChannelMessageOutcome] = []
         try:
             async with asyncio.timeout(_SHUTDOWN_FINALIZE_BUDGET_SECONDS):
                 for record in records:
-                    await self._finalize_on_shutdown(record)
+                    outcome = await self._finalize_on_shutdown(record)
+                    if outcome is not None:
+                        outcomes.append(outcome)
         except TimeoutError:
+            self._telemetry.shutdown(
+                provider=self._provider,
+                result=ChannelResult.FAILED,
+                reason=ChannelReason.SHUTDOWN_TIMEOUT,
+                queued=queued,
+                running=running,
+            )
             LOGGER.error(
                 "channel_event=shutdown_finalized binding_id_hash=%s queued=%s running=%s result=failed error_code=SHUTDOWN_FINALIZE_TIMEOUT",
                 _short_hash(self._binding_id),
@@ -499,6 +559,33 @@ class BindingBridge:
                 running,
             )
             return
+        failed = next(
+            (outcome for outcome in outcomes if outcome.result is ChannelResult.FAILED),
+            None,
+        )
+        if failed is not None:
+            self._telemetry.shutdown(
+                provider=self._provider,
+                result=ChannelResult.FAILED,
+                reason=failed.reason,
+                queued=queued,
+                running=running,
+            )
+            LOGGER.error(
+                "channel_event=shutdown_finalized binding_id_hash=%s queued=%s running=%s result=failed error_code=SHUTDOWN_FINALIZE_FAILED reason=%s",
+                _short_hash(self._binding_id),
+                queued,
+                running,
+                failed.reason.value,
+            )
+            return
+        self._telemetry.shutdown(
+            provider=self._provider,
+            result=ChannelResult.OK,
+            reason=ChannelReason.NONE,
+            queued=queued,
+            running=running,
+        )
         LOGGER.info(
             "channel_event=shutdown_finalized binding_id_hash=%s queued=%s running=%s result=ok error_code=",
             _short_hash(self._binding_id),
@@ -506,8 +593,12 @@ class BindingBridge:
             running,
         )
 
-    async def _finalize_on_shutdown(self, record: _ExecutionRecord) -> None:
+    async def _finalize_on_shutdown(
+        self,
+        record: _ExecutionRecord,
+    ) -> ChannelMessageOutcome | None:
         task = record.execution_task
+        outcome: ChannelMessageOutcome | None = None
         if record.status in {ReplyStatus.QUEUED, ReplyStatus.RUNNING}:
             # Cancel and finalize with no await in between: once the execution
             # task is cancelled it can no longer append to this reply, so the
@@ -516,31 +607,50 @@ class BindingBridge:
             # times. ``cancel_requested`` tells ``_run_question`` that the
             # unwind is a shutdown rather than a stream that failed by itself.
             record.cancel_requested = True
+            record.telemetry_reason = ChannelReason.SHUTDOWN
             if task is not None and not task.done():
                 task.cancel()
-            await self._finalize_cancel(record)
+            outcome = await self._finalize_cancel(record)
         if task is not None and not task.done():
             # Reached for a record past its terminal barrier, which was not
             # cancelled above: it holds a real answer from a target that
             # already committed, so the honest move is to let its delivery
             # finish. For a cancelled task this is what closes the stream.
             await asyncio.gather(task, return_exceptions=True)
+        return outcome or record.telemetry_outcome
 
     async def _prepare_message(
         self,
         message: IncomingMessage,
         *,
         queue_position: int,
-    ) -> _PreparedMessage | None:
+        telemetry_started_at: float,
+    ) -> _PreparedMessage:
         try:
             claimed = await self._state_store.claim_message(message.execution_id)
         except Exception:
             self._log(logging.ERROR, "state_failed", message, "REDIS_CLAIM_FAILED")
             await self._safe_reply(message, SERVICE_UNAVAILABLE_TEXT)
-            return None
+            return _PreparedMessage(
+                source=message,
+                conversation_key="",
+                kind=_WorkKind.EMPTY,
+                outcome=ChannelMessageOutcome(
+                    ChannelResult.FAILED,
+                    ChannelReason.STATE_FAILURE,
+                ),
+            )
         if not claimed:
             self._log(logging.INFO, "duplicate_dropped", message, "", result="duplicate")
-            return None
+            return _PreparedMessage(
+                source=message,
+                conversation_key="",
+                kind=_WorkKind.EMPTY,
+                outcome=ChannelMessageOutcome(
+                    ChannelResult.DUPLICATE,
+                    ChannelReason.DUPLICATE,
+                ),
+            )
 
         conversation = binding_conversation_key(
             self._binding_id,
@@ -603,6 +713,8 @@ class BindingBridge:
                     queue_position=queue_position,
                     actions=action_ids,
                     capabilities=self._capabilities,
+                    telemetry=self._telemetry,
+                    telemetry_started_at=telemetry_started_at,
                 ),
             )
             record.reply_message_id = record.reply_session.reply_message_id
@@ -612,7 +724,15 @@ class BindingBridge:
             self._log(logging.ERROR, "reply_failed", message, "REPLY_BEGIN_FAILURE")
             await self._mark_executed(message)
             await self._safe_reply(message, SERVICE_UNAVAILABLE_TEXT)
-            return None
+            return _PreparedMessage(
+                source=message,
+                conversation_key=conversation,
+                kind=_WorkKind.EMPTY,
+                outcome=ChannelMessageOutcome(
+                    ChannelResult.FAILED,
+                    ChannelReason.DELIVERY_FAILURE,
+                ),
+            )
 
         if action_ids.regenerate or action_ids.retry:
             self._latest_execution_by_conversation[conversation] = message.execution_id
@@ -677,6 +797,12 @@ class BindingBridge:
                 raise
         finally:
             record.execution_task = None
+            self._telemetry.execution_duration(
+                provider=self._provider,
+                operation=channel_operation(record.source.operation),
+                result=self._execution_result(record.status),
+                seconds=max(0.0, time.monotonic() - started_at),
+            )
 
     async def _consume_execution(
         self,
@@ -866,6 +992,13 @@ class BindingBridge:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            self._telemetry.delivery(
+                provider=self._provider,
+                operation=ChannelOperation.OTHER,
+                stage=ChannelStage.DELIVERY,
+                result=ChannelResult.FAILED,
+                reason=ChannelReason.DELIVERY_FAILURE,
+            )
             LOGGER.warning(
                 "channel_event=interaction_render result=failed error_code=CHANNEL_INTERACTION_RENDER_FAILED error_type=%s",
                 type(exc).__name__,
@@ -891,10 +1024,24 @@ class BindingBridge:
         except asyncio.CancelledError:
             raise
         except Exception:
+            self._telemetry.delivery(
+                provider=self._provider,
+                operation=ChannelOperation.OTHER,
+                stage=ChannelStage.DELIVERY,
+                result=ChannelResult.FAILED,
+                reason=ChannelReason.STATE_FAILURE,
+            )
             LOGGER.warning(
                 "channel_event=interaction_delivery_ack result=failed error_code=CHANNEL_INTERACTION_ACK_FAILED",
             )
             return False
+        self._telemetry.delivery(
+            provider=self._provider,
+            operation=ChannelOperation.OTHER,
+            stage=ChannelStage.DELIVERY,
+            result=ChannelResult.OK,
+            reason=ChannelReason.NONE,
+        )
         return True
 
     async def _complete_reply(
@@ -920,18 +1067,33 @@ class BindingBridge:
             if authoritative_content is not None:
                 await reply_session.replace(authoritative_content)
             await reply_session.complete()
-            await self._state_store.mark_replied(message.execution_id)
         except Exception:
-            self._log(logging.ERROR, "reply_failed", message, "REPLY_OR_STATE_FAILURE")
+            record.telemetry_outcome = ChannelMessageOutcome(
+                ChannelResult.FAILED,
+                ChannelReason.DELIVERY_FAILURE,
+            )
+            self._log(logging.ERROR, "reply_failed", message, "REPLY_DELIVERY_FAILURE")
             await self._mark_executed(message)
             if reply_session.state is ReplySessionState.OPEN:
-                await self._fail_reply_session(record, "REPLY_OR_STATE_FAILURE")
+                await self._fail_reply_session(record, "REPLY_DELIVERY_FAILURE")
             elif reply_session.state is ReplySessionState.COMPLETED:
                 record.status = ReplyStatus.FINAL
             else:
                 record.status = ReplyStatus.ERROR
             self._release_record(record)
             return
+        try:
+            await self._state_store.mark_replied(message.execution_id)
+        except Exception:
+            record.telemetry_outcome = ChannelMessageOutcome(
+                ChannelResult.FAILED,
+                ChannelReason.STATE_FAILURE,
+            )
+            self._log(logging.ERROR, "state_failed", message, "REDIS_MARK_REPLIED")
+            await self._mark_executed(message)
+            self._release_record(record)
+            return
+        record.telemetry_outcome = ChannelMessageOutcome(ChannelResult.OK)
         self._release_record(record)
         self._log(
             logging.INFO,
@@ -959,19 +1121,37 @@ class BindingBridge:
             self._log(logging.ERROR, "reply_failed", record.source, "REPLY_FAILED")
         self._release_record(record)
 
-    async def _finalize_cancel(self, record: _ExecutionRecord) -> None:
-        if record.status in _TERMINAL_REPLY_STATUSES or record.finalizing:
-            return
+    async def _finalize_cancel(
+        self,
+        record: _ExecutionRecord,
+    ) -> ChannelMessageOutcome:
+        if record.status in _TERMINAL_REPLY_STATUSES:
+            return self._message_outcome(record)
+        if record.finalizing:
+            await record.finalization_done.wait()
+            if record.finalization_outcome is not None:
+                return record.finalization_outcome
+            # The owner itself was cancelled before publishing an outcome.
+            # Take ownership and retry instead of letting a waiter infer OK.
+            return await self._finalize_cancel(record)
         reply_session = record.reply_session
         if reply_session is None:
+            outcome = ChannelMessageOutcome(
+                ChannelResult.FAILED,
+                ChannelReason.DELIVERY_FAILURE,
+            )
+            record.status = ReplyStatus.ERROR
+            record.telemetry_outcome = outcome
+            record.finalization_outcome = outcome
             self._release_record(record)
-            return
+            return outcome
         record.finalizing = True
+        record.finalization_done.clear()
+        outcome: ChannelMessageOutcome | None = None
         try:
             if reply_session.state is ReplySessionState.OPEN:
                 try:
                     await reply_session.cancel()
-                    await self._state_store.mark_replied(record.source.execution_id)
                 except Exception:
                     self._log(
                         logging.ERROR,
@@ -980,28 +1160,91 @@ class BindingBridge:
                         "REPLY_CANCEL_FAILURE",
                     )
                     await self._mark_executed(record.source)
-                    return
-            record.status = ReplyStatus.CANCELLED
+                    record.status = ReplyStatus.ERROR
+                    outcome = ChannelMessageOutcome(
+                        ChannelResult.FAILED,
+                        ChannelReason.DELIVERY_FAILURE,
+                    )
+                else:
+                    try:
+                        await self._state_store.mark_replied(record.source.execution_id)
+                    except Exception:
+                        self._log(
+                            logging.ERROR,
+                            "state_failed",
+                            record.source,
+                            "REDIS_MARK_REPLIED",
+                        )
+                        await self._mark_executed(record.source)
+                        record.status = ReplyStatus.CANCELLED
+                        outcome = ChannelMessageOutcome(
+                            ChannelResult.FAILED,
+                            ChannelReason.STATE_FAILURE,
+                        )
+            if outcome is None:
+                record.status = ReplyStatus.CANCELLED
+                outcome = ChannelMessageOutcome(
+                    ChannelResult.CANCELLED,
+                    record.telemetry_reason,
+                )
+            record.telemetry_outcome = outcome
+            record.finalization_outcome = outcome
             self._release_record(record)
+        except asyncio.CancelledError:
+            reason = ChannelReason.SHUTDOWN_TIMEOUT if record.telemetry_reason is ChannelReason.SHUTDOWN else ChannelReason.DELIVERY_FAILURE
+            outcome = ChannelMessageOutcome(ChannelResult.FAILED, reason)
+            record.status = ReplyStatus.ERROR
+            record.telemetry_outcome = outcome
+            record.finalization_outcome = outcome
+            self._telemetry.delivery(
+                provider=self._provider,
+                operation=channel_operation(record.source.operation),
+                stage=ChannelStage.DELIVERY,
+                result=ChannelResult.FAILED,
+                reason=reason,
+            )
+            self._release_record(record)
+            raise
         finally:
             record.finalizing = False
-        self._log(
-            logging.INFO,
-            "execution_cancelled",
-            record.source,
-            "",
-            result="ok",
-        )
+            record.finalization_done.set()
+        if outcome.result is ChannelResult.CANCELLED:
+            self._log(
+                logging.INFO,
+                "execution_cancelled",
+                record.source,
+                "",
+                result="ok",
+            )
+        return outcome
 
-    async def _run_reset(self, prepared: _PreparedMessage) -> None:
+    async def _run_reset(self, prepared: _PreparedMessage) -> ChannelMessageOutcome:
+        started_at = time.monotonic()
         try:
             await self._executor.reset(conversation_key=prepared.conversation_key)
         except Exception:
             await self._mark_executed(prepared.source)
             await self._safe_reply(prepared.source, SERVICE_UNAVAILABLE_TEXT)
-            return
+            outcome = ChannelMessageOutcome(
+                ChannelResult.FAILED,
+                ChannelReason.EXECUTION_FAILURE,
+            )
+            self._telemetry.execution_duration(
+                provider=self._provider,
+                operation=channel_operation(prepared.source.operation),
+                result=outcome.result,
+                seconds=max(0.0, time.monotonic() - started_at),
+            )
+            return outcome
         self._latest_execution_by_conversation.pop(prepared.conversation_key, None)
-        await self._reply_and_complete(prepared.source, SESSION_RESET_TEXT)
+        outcome = await self._reply_and_complete(prepared.source, SESSION_RESET_TEXT)
+        self._telemetry.execution_duration(
+            provider=self._provider,
+            operation=channel_operation(prepared.source.operation),
+            result=outcome.result,
+            seconds=max(0.0, time.monotonic() - started_at),
+        )
+        return outcome
 
     async def _reply_queue_rejected(
         self,
@@ -1086,6 +1329,25 @@ class BindingBridge:
         if self._live_records.get(record.source.execution_id) is record:
             del self._live_records[record.source.execution_id]
 
+    @staticmethod
+    def _execution_result(status: ReplyStatus) -> ChannelResult:
+        if status is ReplyStatus.FINAL:
+            return ChannelResult.OK
+        if status is ReplyStatus.AWAITING_INPUT:
+            return ChannelResult.AWAITING_INPUT
+        if status is ReplyStatus.CANCELLED:
+            return ChannelResult.CANCELLED
+        return ChannelResult.FAILED
+
+    @classmethod
+    def _message_outcome(cls, record: _ExecutionRecord) -> ChannelMessageOutcome:
+        if record.telemetry_outcome is not None:
+            return record.telemetry_outcome
+        result = cls._execution_result(record.status)
+        if result is ChannelResult.FAILED:
+            return ChannelMessageOutcome(result, ChannelReason.EXECUTION_FAILURE)
+        return ChannelMessageOutcome(result, record.telemetry_reason)
+
     def _drop_actions(self, record: _ExecutionRecord) -> None:
         for action_id in (
             record.action_ids.cancel,
@@ -1147,7 +1409,11 @@ class BindingBridge:
                 _short_hash(self._binding_id),
             )
 
-    async def _reply_and_complete(self, message: IncomingMessage, content: str) -> None:
+    async def _reply_and_complete(
+        self,
+        message: IncomingMessage,
+        content: str,
+    ) -> ChannelMessageOutcome:
         try:
             await self._channel.send(
                 OutgoingMessage(
@@ -1156,10 +1422,37 @@ class BindingBridge:
                     reply_to_message_id=message.message_id,
                 )
             )
-            await self._state_store.mark_replied(message.execution_id)
         except Exception:
             self._log(logging.ERROR, "reply_failed", message, "REPLY_OR_STATE_FAILURE")
             await self._mark_executed(message)
+            self._telemetry.delivery(
+                provider=self._provider,
+                operation=channel_operation(message.operation),
+                stage=ChannelStage.DELIVERY,
+                result=ChannelResult.FAILED,
+                reason=ChannelReason.DELIVERY_FAILURE,
+            )
+            return ChannelMessageOutcome(
+                ChannelResult.FAILED,
+                ChannelReason.DELIVERY_FAILURE,
+            )
+        self._telemetry.delivery(
+            provider=self._provider,
+            operation=channel_operation(message.operation),
+            stage=ChannelStage.DELIVERY,
+            result=ChannelResult.OK,
+            reason=ChannelReason.NONE,
+        )
+        try:
+            await self._state_store.mark_replied(message.execution_id)
+        except Exception:
+            self._log(logging.ERROR, "state_failed", message, "REDIS_MARK_REPLIED")
+            await self._mark_executed(message)
+            return ChannelMessageOutcome(
+                ChannelResult.FAILED,
+                ChannelReason.STATE_FAILURE,
+            )
+        return ChannelMessageOutcome(ChannelResult.OK)
 
     async def _safe_reply(self, message: IncomingMessage, content: str) -> None:
         try:
@@ -1172,12 +1465,32 @@ class BindingBridge:
             )
         except Exception:
             self._log(logging.ERROR, "reply_failed", message, "REPLY_FAILED")
+            self._telemetry.delivery(
+                provider=self._provider,
+                operation=channel_operation(message.operation),
+                stage=ChannelStage.DELIVERY,
+                result=ChannelResult.FAILED,
+                reason=ChannelReason.DELIVERY_FAILURE,
+            )
+            return
+        self._telemetry.delivery(
+            provider=self._provider,
+            operation=channel_operation(message.operation),
+            stage=ChannelStage.DELIVERY,
+            result=ChannelResult.FALLBACK,
+            reason=ChannelReason.NONE,
+        )
 
-    async def _mark_replied(self, message: IncomingMessage) -> None:
+    async def _mark_replied(self, message: IncomingMessage) -> ChannelMessageOutcome:
         try:
             await self._state_store.mark_replied(message.execution_id)
         except Exception:
             self._log(logging.ERROR, "state_failed", message, "REDIS_MARK_REPLIED")
+            return ChannelMessageOutcome(
+                ChannelResult.FAILED,
+                ChannelReason.STATE_FAILURE,
+            )
+        return ChannelMessageOutcome(ChannelResult.OK)
 
     async def _mark_executed(self, message: IncomingMessage) -> None:
         try:
