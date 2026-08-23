@@ -168,8 +168,9 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
 ```
 
 - 首次消息、本地映射缺失、缓存过期或高风险操作前才调用飞书通讯录。
-- EIM-I7/CHN-X21 已完成四个 Contact V3 event 的 managed-only consumer 代码；只有 handler 安装后
-  Feishu SDK 才注册 processor。飞书后台真实订阅、API/worker 重启与 rollout 仍需独立执行。
+- EIM-I7/CHN-X21 已完成四个 Contact V3 event 的 managed-only consumer 代码；只有 current API
+  preflight 广告 `identity_event_receipt=true` 并安装 handler 后，Feishu SDK 才注册 processor；旧响应
+  缺字段或 preflight 失败默认关闭。飞书后台真实订阅、API/worker 重启与 rollout 仍需独立执行。
 - 离职、冻结、主动退出、不可见或数据权限被收窄时 fail closed。
 - EIM-I8 / CHN-X22 已落下 default-disabled 的 durable reconciliation slice：只从本地账号中选择
   有 account alias、active identity、active User/UserTenant 且近期 `last_seen_at` 的已链接主体；不抓取、
