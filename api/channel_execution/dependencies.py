@@ -43,6 +43,7 @@ from api.channel_execution.registry import TargetExecutorRegistry
 from api.channel_execution.service import ChannelExecutionService, PublishedTargetExecutionService
 from api.channel_runtime.tokens import derive_binding_workload_token
 from api.db.db_models import get_async_db
+from api.identity.directory_event_repository import SqlAlchemyDirectoryEventRepository
 from api.identity.enterprise_subjects.contracts import EnterpriseSubjectEvidenceService
 from api.identity.enterprise_subjects.feishu_employee_number import FeishuEmployeeNumberResolver
 from api.identity.enterprise_subjects.repository import SqlAlchemyEnterpriseSubjectRepository
@@ -53,6 +54,7 @@ from api.identity.providers.feishu import FeishuEnterpriseIdentityProvider
 from api.identity.provisioning import HmacLinkCodeCodec, IdentityProvisioningService
 from api.identity.provisioning_repository import SqlAlchemyIdentityProvisioningRepository
 from api.identity_adapters.channel_credentials import SessionFactoryChannelProviderCredentialResolver
+from api.identity_adapters.channel_directory_events import ChannelDirectoryEventService
 from api.identity_adapters.channel_runtime import (
     ChannelIdentityResolver,
     IdentityProviderRegistry,
@@ -278,6 +280,17 @@ def get_identity_provider_registry() -> IdentityProviderRegistry:
             _identity_provider_registry = registry
             _identity_provider_registry_session_factory = session_factory
         return registry
+
+
+def get_channel_directory_event_service(
+    provider_registry: IdentityProviderRegistry = Depends(get_identity_provider_registry),
+) -> ChannelDirectoryEventService:
+    """Compose durable event handling from the active async DB lifecycle."""
+
+    return ChannelDirectoryEventService(
+        SqlAlchemyDirectoryEventRepository(_require_async_session_factory()),
+        provider_registry,
+    )
 
 
 def _reset_identity_provider_registry_for_testing() -> None:

@@ -178,10 +178,10 @@ Supervisor 只协调 desired state，不接触飞书 App Secret。每个 child w
 supervisor 会停止或重启相应进程；异常退出采用有上限的指数退避。
 
 Managed worker 每次启动会为当前 binding generation 调一次 workload-authenticated 的
-`execution-capabilities` preflight；进程内缓存的结果只含渐进式、queued/running cancel、regenerate、
-retry 和 feedback 布尔值，不含 target type/id/revision 或图结构。同 generation 的
-worker 崩溃重启允许重新读取；普通消息、模型 delta 和卡片 patch 不查目标数据库。旧 API、超时或
-非法响应时继续交付 buffered 回答，但不签发任何交互 action ID。
+`execution-capabilities` preflight；进程内缓存的结果只含六个 reply 布尔值与加法的
+`identity_event_receipt` 服务能力，不含 target type/id/revision 或图结构。同 generation 的 worker
+崩溃重启允许重新读取；普通消息、模型 delta 和卡片 patch 不查目标数据库。旧 API 缺少新字段、
+preflight 404/超时或非法响应时继续交付 buffered 回答，但不签发交互 action ID，也不订阅 Contact。
 
 Managed worker 的唯一核心**执行**路径是 `MultiRAGBindingExecutionClient.stream()`：它统一构造请求、
 读取和校验 SSE、检查 completion/`[DONE]`、传播 session、执行跨 delta reasoning 过滤，并映射安全
@@ -232,6 +232,37 @@ instance-local call context。C3 定向 **203 passed**、`make verify` **2403 pa
 **2/2** account，四条 alias 收敛到一个 active ExternalIdentity/一个 canonical User，仅有一条 valid
 NORMAL membership 与一条 BindingEvent。Canvas、Dialog 各一条本次 Principal owner 记录，空 owner
 为 **0**；Redis completed/replied 存在、processing/failed 为 **0**。
+
+### Managed Contact directory event（EIM-I7 / CHN-X21）
+
+当前 managed composition 只有在 `execution-capabilities` 返回
+`identity_event_receipt=true` 且 transport 实现 runtime-checkable `IdentityEventChannel` 时，才于
+`Channel.start()` 前安装 `ChannelRuntimeClient.submit_identity_event`。Feishu 只有在这个 handler 已安装
+时才向 SDK 注册 `contact.user.created_v3`、`contact.user.updated_v3`、
+`contact.user.deleted_v3`、`contact.scope.updated_v3`；demo/legacy runner 不安装 handler，因此不会
+订阅 Contact processor。
+
+Feishu callback 只投影 bounded header proof、`open_id/user_id/union_id` 与五个 bool status，姓名、
+邮箱、手机、工号、部门和 scope 用户列表都不进入 DTO。`event_id` 必须是 HTTP header-safe ASCII
+token，并作为 `Idempotency-Key`；runtime client 用 2 秒 HTTP window，SDK callback 外层保留 2.5 秒，
+只在 private API 已 durable terminal 后 ACK。callback 对外只抛固定 safe error，SDK 日志不得格式化
+原 ValidationError 或 identifier。
+
+private endpoint 只接受精确 `application/json`、最大 4 KiB、extra-forbid body；observed app/tenant
+只是 event-header proof，MultiRAG tenant/account/revision 不在 body。服务端从 binding 重建 authority，
+按 `Channel→Tenant→ProviderTenant/Account+Link→Binding→receipt→Alias/Identity` 锁定并复核
+generation/enabled/provider。无 account link 的合法 managed Channel 保持 C3 NO_LINK compatibility：
+返回 no-store 204 且零 receipt/零 mutation；只有 linked account 执行 receipt/CAS。
+
+linked path 的 account revision 是跨 API 进程 cache fence，post-commit provider invalidate 只是当前进程
+加速。stale distinct event 不重复 bump；unknown created/updated 不 JIT 但 bump negative cache；inactive
+update 只收紧为 inactive，deleted 收紧为 terminal revoked，created/active update 不激活，scope 不枚举。
+durable semantic conflict 写 failed receipt、保留 safe code、只 bump 一次并 ACK 204；只有未提交的
+repository/timeout 才让飞书重试。
+
+这是本地代码/契约完成边界，不表示飞书后台已订阅、API/supervisor/worker 已重启、staging/live 或
+生产 rollout。I8 reconciliation、管理员观测与可配置 freshness fast path 尚未实现；C3 仍按现有 I4
+逻辑重验，不能因 I7 落地就无条件跳过 Contact。
 
 EIM-U12 / CHN-U14 允许 `message_completed` 携带可选的用户可见权威正文。
 新 worker 收到时先用 `ReplySession.replace()` 整体替换内存中的 delta，再执行 `complete()`；这能表达
@@ -780,7 +811,7 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
 - 停机终态化只覆盖**有合作窗口**的停机（POSIX SIGTERM、两端的 Ctrl+C、显式 close）。
   `kill -9`、主机掉电、容器被强杀，以及 **Windows 上 supervisor 触发的 worker 停止**都没有这个
   窗口，卡片会停在最后一次显示的状态；这不是 CHN-U16 的回归，也不能靠它验收。
-- CHN-O9 当前工作树只有**进程内有界聚合**，没有 Prometheus/OpenTelemetry exporter、HTTP 指标端点、
+- CHN-O9 当前实现只有**进程内有界聚合**，没有 Prometheus/OpenTelemetry exporter、HTTP 指标端点、
   跨进程汇总或持久化时序存储；未部署前也不能把它写成生产监控已经生效。
 
 因此，生产 binding 仍应绑定只读、最小权限的 Agent/Dialog；涉及副作用的 MCP 工具必须
@@ -816,7 +847,7 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
   摘早了那些渠道会直接报 `CHANNEL_SECRET_STORE_UNAVAILABLE`。
 - 主加密密钥丢失：现有飞书凭据无法恢复；必须从 secret manager 备份恢复或重新录入。
 
-### CHN-O9 可观测边界（本地实现，待全门禁与 rollout）
+### CHN-O9 可观测边界（本地实现与全门禁完成，未 rollout）
 
 - `ChannelTelemetry` 是 Provider-neutral、同步、无 await/无外部 I/O 的 seam；组件默认注入 no-op。
   `InMemoryChannelTelemetry` 只保存有界 series、histogram samples 和 recent events，快照用于进程内诊断与测试。
@@ -875,10 +906,10 @@ upstream-first 长期原则不变，但当前不立即执行 EIM-F5 / CHN-X14。
    回复终态化后继续传播 consumer 自身的取消，不会回到下一轮队列等待并卡死 worker close。
    目标侧（Dialog/Canvas driver）那一段仍由
    `tests/integration/test_channel_history_manager.py` 覆盖，单元层不接真库。
-3. 🔵 CHN-O9 本地实现已补最小进程内可观测：首卡/首正文、queue wait/depth/overflow、
+3. ✅ CHN-O9 本地实现与全门禁已补最小进程内可观测：首卡/首正文、queue wait/depth/overflow、
    CardKit update/fallback、terminal、shutdown outcome 与 candidate GC；U16 的
    `channel_event=shutdown_finalized`（含 `queued=`/`running=`）和 `channel_event=queue_abandoned`
-   已收编。状态保持进行中，等待仓库全门禁与 rollout；首 ACK 和跨进程 exporter 不在本轮完成面。
+   已收编。源码尚未 rollout；首 ACK 和跨进程 exporter 不在本轮完成面。
 4. 稳定浸泡期间不新增执行架构；记录失败率、悬空卡、重复执行/交付、候选孤儿和重启结果。
 5. Channel 稳定后，等待用户恢复从约 2026-04-24 本地同步点逐 commit 跟进 RAGFlow，再解除
    EIM-F5 / CHN-X14 挂起并把本轮改动随上游迭代一并审计。

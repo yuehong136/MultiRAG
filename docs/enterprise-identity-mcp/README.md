@@ -168,17 +168,19 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
 ```
 
 - 首次消息、本地映射缺失、缓存过期或高风险操作前才调用飞书通讯录。
-- EIM-I7 落地后订阅 `contact.user.created_v3`、`contact.user.updated_v3`、
-  `contact.user.deleted_v3`、`contact.scope.updated_v3`。
+- EIM-I7/CHN-X21 已完成四个 Contact V3 event 的 managed-only consumer 代码；只有 handler 安装后
+  Feishu SDK 才注册 processor。飞书后台真实订阅、API/worker 重启与 rollout 仍需独立执行。
 - 离职、冻结、主动退出、不可见或数据权限被收窄时 fail closed。
 - 周期任务只校验已链接且近期活跃的身份，不抓取全量组织树。
-- I7/I8 与可配置 freshness policy 落地后，正常 RAG 对话命中仍新鲜的本地映射可不发外部
+- I8 与可配置 freshness policy 在 I7 durable fence 之上落地后，正常 RAG 对话命中仍新鲜的本地映射可不发外部
   Contact/OA 请求。
 
-**当前实现边界（2026-08-13）**：I7/I8 尚未实现，C3 对每个 LINKED event 都逻辑调用 I4；同一
-account generation、subject 与 scope 的请求可以命中 I4 的有界正缓存，因此不等于每条消息都发一次
-Contact 网络请求，cache hit 也不会把 proof 时间伪装成当前请求时间。不要把上面的目标稳态写成
-当前已订阅 Contact 事件或已有 24 小时本地快速路径。
+**当前实现边界（2026-08-24）**：I7 本地 consumer 已实现 bounded normalize、generation-scoped
+private route、原子 receipt/CAS、durable account revision fence 与 post-commit cache invalidation；未做
+飞书后台订阅、服务重启或 live。I8 与可配置 freshness 仍未实现，因此 C3 对每个 LINKED event 仍逻辑
+调用 I4；同一 account generation、subject 与 scope 可命中 I4 有界正缓存，不等于每条消息都发一次
+Contact 网络请求，cache hit 也不会把 proof 时间伪装成当前请求时间。不得把 I7 代码完成写成已经
+上线 Contact 事件或已有 24 小时纯本地快速路径。
 
 企业策略支持三种 provisioning 模式：
 
@@ -535,8 +537,8 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   domain/runtime 安全边界与 A5 audit v2 parent link，仍缺生产多实例 replay/audit、HMAC/KMS 轮换、
   OTel SDK/exporter 与跨仓 trace，因此保持 `🔵`。M1/M2 企业主体与业务对象授权、持久
   Confirmation/业务 Idempotency 仍未完成；U14 Interaction ledger 已完成本地实现。
-  F1/I4.1/I5/I6/I6.1/C1/C2/C3/P2/A2/P3/A5/U14/U15 已完成默认关闭的本地实现；I7 是已解锁支线，
-  I8 仍需 I6 + I7。I5 内建 authority 只证明 Feishu `employee_no`，不等于 OA `workcode`；不能把
+  F1/I4.1/I5/I6/I6.1/I7/C1/C2/C3/P2/A2/P3/A5/U14/U15 已完成本地实现；I7 未 rollout，I8 的
+  I6 + I7 依赖已闭合。I5 内建 authority 只证明 Feishu `employee_no`，不等于 OA `workcode`；不能把
   本地门禁通过当成生产企业主体、secure endpoint 或真实 bearer rollout 已完成。
   A7 虽已解锁前置，仍须作为独立入站
   安全面实现和验收。

@@ -447,7 +447,7 @@ request-scoped credential/bearer 接线已实现但默认 disabled、未配置 p
 
 ---
 
-## 4. I7/I8 后的目标快速路径（当前 C3 尚未启用）
+## 4. I7/I8 后的目标快速路径（I7 已实现，I8/freshness 尚未）
 
 当前 C3 对每个 LINKED event 都逻辑调用 I4，并允许同 account generation、subject 与 scope 命中
 有界 Provider cache；cache hit 沿用原始 proof time，不等于每条消息都发一次 Contact 网络请求。
@@ -479,7 +479,7 @@ event -> binding tenant -> open_id alias cache/DB -> active platform_user_id -> 
 
 ---
 
-## 5. Contact 事件失效流程（EIM-I7 目标，当前未订阅）
+## 5. Contact 事件失效流程（EIM-I7 源码已实现，未 rollout）
 
 ```mermaid
 sequenceDiagram
@@ -487,23 +487,30 @@ sequenceDiagram
     participant W as Channel Worker
     participant I as Identity Service
     participant D as DB/Cache
-    participant AU as Audit
 
     F->>W: contact.user.deleted_v3
-    W->>I: normalized directory event
-    I->>D: event_id 幂等检查
-    I->>D: 标记 ExternalIdentity inactive/revoked
-    I->>D: 失效缓存，禁用对应 external login/member execution
-    I->>AU: identity.revoked
+    W->>I: bounded event + binding generation
+    I->>D: ordered authority locks + atomic receipt claim
+    I->>D: ExternalIdentity revoked + account revision CAS
+    D-->>I: receipt terminal commit
+    I->>D: best-effort process-local cache invalidate
+    I-->>W: 204 no-store ACK
 ```
 
-当前 Channel dispatcher 不消费下面四个 Contact V3 事件；在 I7 的 receipt/CAS/invalidation consumer
-落地前不要在飞书后台订阅并把“事件已推送”误当成身份已失效。目标事件处理不能物理删除 identity
-link。保留历史用于审计、避免工号/open_id 被复用后静默继承旧
-权限。员工重新加入必须产生明确 reactivation/link decision。
+managed Channel 在 runtime-checkable handler 于启动前安装后会注册四个 Contact V3 processor；
+demo/legacy 不注册。worker 只规范化 header proof、三种 identifier 与 status，经 generation-scoped
+private API 到单事务 receipt/CAS。API body 不携 MultiRAG authority；服务端按固定锁序从 binding/link
+重新验证。合法 Channel 零 link 时安全 NO_LINK/204 且零 receipt，只有 linked account mutation。
+
+本地代码落地不表示飞书后台已订阅、API/worker 已重启或生产已 rollout；在这些发布门禁完成前，
+不能把“事件已推送”当成运行环境身份已失效。事件处理不物理删除 identity link：updated inactive
+只单向收紧为 inactive，deleted 单向收紧为 terminal revoked，created/active update 不激活。保留历史
+用于审计并避免 identifier 复用后静默继承权限；员工重新加入必须有独立 reactivation/link decision。
 
 `contact.scope.updated_v3` 不试图猜出哪些用户受影响：先 bump provider account 的
 `identity_revision` 并失效该 account 下 cache；下一次使用逐个重验。高风险操作立即重验。
+account revision 是跨 API 进程 correctness fence，当前进程 invalidate 仅加速；I8 reconciliation 与
+可配置 freshness fast path 仍未实现，因此 I7 不能单独授权 C3 无条件跳过 I4。
 
 ---
 

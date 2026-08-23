@@ -127,6 +127,7 @@
 | I4 Provider flow | Auth V3 generated async request/resource/transport + strict live top-level adapter、Tenant V2/Contact V3 typed nested response、阶段化 error、cache/single-flight/限流、credential link/换钥 | ✅ I4.1：live adapter sandbox 三步通过；I4+F1 118、真 PG 1、完整 verify/integration 全绿 |
 | I5 enterprise subject | server-owned authority、五态、Feishu employee_no exact mapping、default-disabled composition、persisted readback、negative/fatal 分层、repr/error 脱敏 | resolver/service/Channel pure async unit + repository 真 PostgreSQL；不以 OA/workcode、I7/I8 freshness 或 rollout 代替 |
 | I6 Identity write flow | 权威 policy/revision/TTL，JIT/link/preprovisioned 的 User/UserTenant/identity/alias/code/event 原子事务，post-lock freshness | ✅ framework-neutral async service + 真 PostgreSQL；完整门禁全绿 |
+| I7 / CHN-X21 directory event | 四事件 bounded normalize、managed-only subscription、generation/private body fence、ordered authority locks、atomic receipt、stale/future、terminal poison ACK、revision/cache generation、NO_LINK | DTO/route/worker/provider unit + 真 PostgreSQL并发/rollback/CAS；必须覆盖两进程等价 cache、late old-key refill 与 NOT_FOUND negative cache，不以后台订阅或 live 代替 |
 | DB schema/event | 唯一约束、事务并发、别名归一化、幂等事件 | `tests/integration/` 真 PostgreSQL |
 | P1 Principal | 单一 canonical class、sealed constructor、深不可变/脱敏 repr、evidence 一致、proof time、legacy owner 活查与 JWT fallback 分界 | 纯 domain/auth unit + 真 PostgreSQL owner-membership 行为 |
 | P2 / CHN-X18 execution context | C3 Principal 显式贯穿 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas workflow/MCP call context；LINKED 零匿名；NO_LINK legacy；tenant+platform-user Memory/session 隔离；并发与 repr/wire 脱敏 | target/driver/Graph/component/MCP 纯 unit + target/history 真 PostgreSQL integration + Memory component/service user filter 与 tenant ownership 测试；若声明真实 Memory 存储隔离，必须补与当前 `msgStoreConn` backend 匹配的 integration，不能用 PostgreSQL 替代；不测试 token/bearer |
@@ -144,8 +145,10 @@ AuthenticationContext、I3 promotion builder 和 legacy Web/API personal-owner a
 完整门禁。EIM-I5 已完成 default-disabled 的五态 resolver/service/repository 和 Channel 可选组合：
 Feishu authority 只证明 `employee_no@feishu_contact`，成功 evidence 必须来自持久化回读；定向 unit
 **87 passed**、真 PostgreSQL **10 passed**，`make verify` **2663 passed**、强制 integration
-**181 passed**、`make mcp-compat` **22/22 PASS**；不宣称真实 OA/workcode、I7/I8 freshness 或
-rollout。EIM-C3 /
+**181 passed**、`make mcp-compat` **22/22 PASS**；该 I5 证据不宣称真实 OA/workcode、I7/I8 freshness
+或 rollout。EIM-I7/CHN-X21 后续已完成本地 managed Contact consumer：account revision 是跨进程
+cache fence，post-commit invalidate 只加速；I8 reconciliation/freshness、后台订阅与 rollout 仍未完成。
+EIM-C3 /
 CHN-X7 后续已完成 Channel identity composition 与部署 live：完整 Principal 已进入
 `TrustedChannelContext`，`principal_id` 已约束 target/session owner。EIM-P2 / CHN-X18 又以
 `RunContext` 完成 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas workflow/MCP call-context 传播，

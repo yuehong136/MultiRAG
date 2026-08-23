@@ -94,6 +94,7 @@ def test_capability_preflight_returns_only_sanitized_effective_features(client) 
         "regenerate": True,
         "retry": True,
         "feedback": False,
+        "identity_event_receipt": True,
     }
     serialized = response.text
     for forbidden in (

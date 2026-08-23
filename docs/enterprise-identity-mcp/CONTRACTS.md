@@ -495,7 +495,7 @@ UNIQUE(tenant_id, provider, provider_tenant_key, provider_account_key, event_typ
 | `provider_account_key` | non-null | 应用安装实例/account 边界 |
 | `event_type` | non-null | Provider 事件类型 |
 | `event_id` | non-null | Provider 事件 ID |
-| `event_hash` | 64-char lowercase hex | 事件摘要；v1 为 SHA-256 形状，具体规范化输入由 I7 固定 |
+| `event_hash` | 64-char lowercase hex | I7 v1 规范化事件的 SHA-256；输入规则见下文 |
 | `processing_state` | non-null | `processing/succeeded/failed` |
 | `event_at` | timestamptz/null | Provider 声明的事件时间 |
 | `processed_at` | timestamptz/null | 本次处理完成时间 |
@@ -512,6 +512,32 @@ tenant 本身也为 `RESTRICT`。默认安全 projection 省略
 该 tenant-scoped 幂等键防止跨 Tenant 碰撞，也不放宽 §1：同一个 Provider Account/binding 仍只能
 对应一个 Tenant。I7 的处理器必须在固定 binding 上原子 claim；不得因换一个 `tenant_id` 就绕过
 重复事件。
+
+EIM-I7 已固定 v1 hash：将 `version/event_type/event_id/event_at/observed_app_id/
+observed_tenant_key/subject` 组成 JSON，key 排序、UTF-8、无额外空白；`event_at` 统一为 UTC、六位
+microsecond、`Z` 后缀；user subject 含 `directory_status` 与按 identifier kind 排序的
+`{kind,value}`，scope subject 为 null。body 不携 MultiRAG tenant/account/binding generation
+authority；observed app/tenant 只是 event-header proof，必须在锁定数据库 authority 后逐字复核。
+
+处理顺序固定为：先非锁读 binding 取得 Channel hint，再锁
+`Channel → Tenant → ProviderTenant/Account+Link → Binding → receipt → ExternalIdentityAlias/
+ExternalIdentity`，最后复核 generation/enabled/provider。合法 binding/channel 但无 link 的 Contact
+事件直接 NO_LINK/204，零 receipt、零 mutation；多 link、dangling/cross-scope 都 fail closed。
+
+linked event 使用 PostgreSQL `INSERT ... ON CONFLICT DO NOTHING RETURNING` 原子 claim，再锁读
+receipt 区分 claim/duplicate/hash conflict。claim、identity/account CAS 与 receipt terminal state 位于
+同一事务；SQL/瞬时失败 rollback，不留下 processing poison。durable semantic failure（当前 identity
+identifier conflict）写 `failed + 原 safe error_code`、bump account fence 一次并 ACK 204；同 receipt
+重放保留原 code 且零副作用。不同 hash 的同 key 也 terminal ACK，避免 Provider 无限重试；只有未提交
+的 repository/timeout 或异常 processing 状态才要求重试。
+
+每个已知 identity 的乱序 floor 是 `max(identity.verified_at, identity.last_seen_at, succeeded linked
+receipt.event_at)`；不得用 account 全局 `last_directory_event_at` 阻挡另一个用户。旧 distinct user event
+与早于 `last_scope_change_at` 的 scope event 都写 succeeded/STALE 且不 bump。unknown created/updated
+不 JIT，但必须 bump `IdentityProviderAccount.identity_revision` 以失效跨 API 进程 negative cache。
+updated inactive 只单向收紧为 `inactive`，deleted 只单向收紧为终态 `revoked`；created/active update
+不激活，reactivation 是独立后续决策。scope 不枚举用户。锁后以 PostgreSQL `clock_timestamp()` 拒绝
+超过 5 分钟的未来事件；不设置全局旧事件年龄丢弃。
 
 ### 3.9 迁移、删除与回滚约束
 
@@ -926,7 +952,7 @@ C3 已在后续独立 composition 中实现并完成部署 live。
 **不再是 identity core 契约**。当前 C3 adapter 位于 `api.identity_adapters.channel_runtime`，按
 `channel_id -> IdentityProviderChannelLink -> ProviderContext` 组合 I3、I4、I6 与 P1 builder；
 `channel_id` 只留在该 adapter，不重新进入通用 identity repository/service。active resolved identity 的
-每消息重验由 I6 的窄 `reverify_resolved_identity` 用例完成；目录事件消费与批量兜底仍分别属于 I7/I8。
+每消息重验由 I6 的窄 `reverify_resolved_identity` 用例完成；目录事件消费已由 I7 完成，批量兜底仍属于 I8。
 
 Provider SPI：
 

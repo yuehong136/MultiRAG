@@ -28,6 +28,7 @@ from api.channels.feishu.channel import (
     _LarkOapiSDK,
 )
 from api.channels.feishu.reply import FeishuReplyTransport
+from api.channels.identity_events import ChannelIdentityEvent
 
 
 class _Response:
@@ -76,6 +77,7 @@ class _FakeSDK:
         self.websocket = _BlockingWebSocket()
         self.callback: Any = None
         self.action_callback: Any = None
+        self.identity_callback: Any = None
         self.bound_loop: asyncio.AbstractEventLoop | None = None
         self.replies: list[tuple[str, str]] = []
         self.reply_details: list[tuple[str, str, str, str | None]] = []
@@ -101,9 +103,11 @@ class _FakeSDK:
         account: FeishuAccount,
         message_callback: Any,
         action_callback: Any,
+        identity_callback: Any,
     ) -> Any:
         self.callback = message_callback
         self.action_callback = action_callback
+        self.identity_callback = identity_callback
         return self.websocket
 
     def card_action_response(self, response: ChannelActionResponse) -> Any:
@@ -294,6 +298,55 @@ def _form_action_event(
     )
 
 
+def _directory_event(
+    event_type: str,
+    *,
+    app_id: Any = "app-id",
+    tenant_key: Any = "tenant-key",
+    create_time: Any = "1787551200123",
+    open_id: Any = "ou-directory-user",
+    old_open_id: Any = "ou-directory-user",
+    user_id: Any = "directory-user-id",
+    union_id: Any = "on-directory-user",
+    status: Any = None,
+) -> Any:
+    directory_status = status
+    if directory_status is None:
+        directory_status = SimpleNamespace(
+            is_activated=True,
+            is_frozen=False,
+            is_resigned=False,
+            is_exited=False,
+            is_unjoin=False,
+        )
+    user = SimpleNamespace(
+        open_id=open_id,
+        user_id=user_id,
+        union_id=union_id,
+        status=directory_status,
+        name="must-not-cross-private-boundary",
+        email="must-not-cross-private-boundary@example.invalid",
+        mobile="must-not-cross-private-boundary",
+        employee_no="must-not-cross-private-boundary",
+        department_ids=["must-not-cross-private-boundary"],
+    )
+    return SimpleNamespace(
+        header=SimpleNamespace(
+            event_id="directory-event-1",
+            event_type=event_type,
+            create_time=create_time,
+            tenant_key=tenant_key,
+            app_id=app_id,
+        ),
+        event=SimpleNamespace(
+            object=user,
+            old_object=SimpleNamespace(open_id=old_open_id),
+            added=SimpleNamespace(users=[user]),
+            removed=SimpleNamespace(users=[user]),
+        ),
+    )
+
+
 def _channel(
     sdk: _FakeSDK | None = None,
     *,
@@ -478,6 +531,196 @@ def test_normalize_accepts_absent_optional_sender_identity_fields() -> None:
     assert message.raw is None
 
 
+@pytest.mark.parametrize(
+    ("event_type", "expected_status"),
+    [
+        ("contact.user.created_v3", "active"),
+        ("contact.user.updated_v3", "active"),
+        ("contact.user.deleted_v3", "inactive"),
+    ],
+)
+def test_normalize_contact_user_event_keeps_only_bounded_header_and_identity(
+    event_type: str,
+    expected_status: str,
+) -> None:
+    channel, _ = _channel()
+
+    event = channel._normalize_identity_event(_directory_event(event_type))
+
+    assert event.model_dump(mode="json") == {
+        "version": 1,
+        "event_type": event_type,
+        "event_id": "directory-event-1",
+        "event_at": "2026-08-24T06:00:00.123000Z",
+        "observed_app_id": "app-id",
+        "observed_tenant_key": "tenant-key",
+        "subject": {
+            "identifiers": [
+                {"kind": "open_id", "value": "ou-directory-user"},
+                {"kind": "user_id", "value": "directory-user-id"},
+                {"kind": "union_id", "value": "on-directory-user"},
+            ],
+            "directory_status": expected_status,
+        },
+    }
+    rendered = repr(event)
+    for forbidden in (
+        "directory-event-1",
+        "app-id",
+        "tenant-key",
+        "ou-directory-user",
+        "directory-user-id",
+        "on-directory-user",
+        "must-not-cross-private-boundary",
+    ):
+        assert forbidden not in rendered
+
+
+def test_normalize_contact_updated_with_incomplete_status_only_stales_proof() -> None:
+    channel, _ = _channel()
+    incomplete = SimpleNamespace(
+        is_activated=True,
+        is_frozen=False,
+        is_resigned=None,
+        is_exited=False,
+        is_unjoin=False,
+    )
+
+    event = channel._normalize_identity_event(_directory_event("contact.user.updated_v3", status=incomplete))
+
+    assert event.subject is not None
+    assert event.subject.directory_status == "unknown"
+
+
+def test_normalize_contact_updated_inactive_status_is_fail_closed() -> None:
+    channel, _ = _channel()
+    inactive = SimpleNamespace(
+        is_activated=True,
+        is_frozen=True,
+        is_resigned=False,
+        is_exited=False,
+        is_unjoin=False,
+    )
+
+    event = channel._normalize_identity_event(_directory_event("contact.user.updated_v3", status=inactive))
+
+    assert event.subject is not None
+    assert event.subject.directory_status == "inactive"
+
+
+def test_normalize_contact_status_rejects_non_boolean_values() -> None:
+    channel, _ = _channel()
+    malformed = SimpleNamespace(
+        is_activated="false",
+        is_frozen=False,
+        is_resigned=False,
+        is_exited=False,
+        is_unjoin=False,
+    )
+
+    with pytest.raises(ValueError, match="status"):
+        channel._normalize_identity_event(_directory_event("contact.user.updated_v3", status=malformed))
+
+
+def test_normalize_contact_deleted_can_use_old_open_id() -> None:
+    channel, _ = _channel()
+
+    event = channel._normalize_identity_event(
+        _directory_event(
+            "contact.user.deleted_v3",
+            open_id=None,
+            old_open_id="ou-directory-old",
+            user_id=None,
+            union_id=None,
+        )
+    )
+
+    assert event.subject is not None
+    assert [item.model_dump() for item in event.subject.identifiers] == [{"kind": "open_id", "value": "ou-directory-old"}]
+    assert event.subject.directory_status == "inactive"
+
+
+def test_normalize_contact_deleted_rejects_conflicting_open_ids() -> None:
+    channel, _ = _channel()
+
+    with pytest.raises(ValueError, match="inconsistent"):
+        channel._normalize_identity_event(
+            _directory_event(
+                "contact.user.deleted_v3",
+                open_id="ou-current",
+                old_open_id="ou-old",
+            )
+        )
+
+
+def test_normalize_scope_event_never_enumerates_changed_users() -> None:
+    channel, _ = _channel()
+
+    event = channel._normalize_identity_event(_directory_event("contact.scope.updated_v3"))
+
+    assert event.subject is None
+    payload = event.model_dump_json()
+    assert "must-not-cross-private-boundary" not in payload
+    assert "added" not in payload
+    assert "removed" not in payload
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("app_id", "other-app"),
+        ("tenant_key", None),
+        ("create_time", "not-a-time"),
+    ],
+)
+def test_normalize_directory_event_rejects_invalid_header_proof(
+    field: str,
+    value: Any,
+) -> None:
+    channel, _ = _channel()
+    kwargs = {field: value}
+
+    with pytest.raises(ValueError):
+        channel._normalize_identity_event(_directory_event("contact.user.updated_v3", **kwargs))
+
+
+async def test_directory_callback_waits_for_durable_handler() -> None:
+    channel, _ = _channel()
+    channel._loop = asyncio.get_running_loop()
+    received: list[str] = []
+
+    async def handle(event: ChannelIdentityEvent) -> None:
+        received.append(event.event_type)
+
+    channel.set_identity_event_handler(handle)
+
+    await asyncio.to_thread(
+        channel._on_identity_event,
+        _directory_event("contact.user.updated_v3"),
+    )
+
+    assert received == ["contact.user.updated_v3"]
+
+
+async def test_directory_callback_propagates_only_stable_failure_for_provider_retry(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    channel, _ = _channel()
+    channel._loop = asyncio.get_running_loop()
+
+    async def fail(_event: ChannelIdentityEvent) -> None:
+        raise RuntimeError("classified-private-api-failure")
+
+    channel.set_identity_event_handler(fail)
+
+    with pytest.raises(RuntimeError, match=r"^FEISHU_IDENTITY_EVENT_FAILED$"):
+        await asyncio.to_thread(
+            channel._on_identity_event,
+            _directory_event("contact.user.updated_v3"),
+        )
+    assert "classified-private-api-failure" not in caplog.text
+
+
 def test_message_callback_logs_identity_structure_without_identity_values(caplog: pytest.LogCaptureFixture) -> None:
     channel, _ = _channel()
     identity_values = (
@@ -658,7 +901,12 @@ def test_lark_sdk_registers_read_receipt_as_intentionally_ignored() -> None:
         app_secret="app-secret",
     )
 
-    sdk.build_ws_client(account, lambda data: None, lambda data: None)
+    sdk.build_ws_client(
+        account,
+        lambda data: None,
+        lambda data: None,
+        lambda data: None,
+    )
 
     processors = captured["event_handler"]._processorMap
     assert "p2.im.message.receive_v1" in processors
@@ -666,7 +914,21 @@ def test_lark_sdk_registers_read_receipt_as_intentionally_ignored() -> None:
     assert "p2.im.message.reaction.created_v1" in processors
     assert "p2.im.message.reaction.deleted_v1" in processors
     assert "p2.im.chat.access_event.bot_p2p_chat_entered_v1" in processors
+    assert "p2.contact.user.created_v3" in processors
+    assert "p2.contact.user.updated_v3" in processors
+    assert "p2.contact.user.deleted_v3" in processors
+    assert "p2.contact.scope.updated_v3" in processors
     assert "p2.card.action.trigger" in captured["event_handler"]._callback_processor_map
+
+    captured.clear()
+    sdk.build_ws_client(
+        account,
+        lambda data: None,
+        lambda data: None,
+        None,
+    )
+    processors = captured["event_handler"]._processorMap
+    assert not {key for key in processors if key.startswith("p2.contact.")}
 
 
 async def test_sdk_callback_schedules_handler_without_waiting() -> None:
@@ -950,6 +1212,7 @@ async def test_start_and_stop_use_isolated_thread_with_bounded_join() -> None:
     assert await asyncio.to_thread(sdk.websocket.started.wait, 1)
     assert channel.is_running
     assert sdk.bound_loop is not asyncio.get_running_loop()
+    assert sdk.identity_callback is None
 
     await channel.stop()
 

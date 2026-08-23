@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Path, Re
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.channel_capabilities import EffectiveReplyCapabilities, RunCapabilityPolicy, resolve_effective_reply_capabilities
+from api.channel_capabilities import ChannelRuntimeCapabilities, RunCapabilityPolicy, resolve_effective_reply_capabilities
 from api.channel_control.repository import SqlAlchemyChannelRepository
 from api.channel_execution.candidate_gc import build_channel_candidate_gc_worker
 from api.channel_execution.dependencies import (
@@ -252,7 +252,7 @@ def _encode_sse(event: ExecutionEvent) -> str:
 
 @router.get(
     "/internal/channel-bindings/{binding_id}/execution-capabilities",
-    response_model=EffectiveReplyCapabilities,
+    response_model=ChannelRuntimeCapabilities,
     include_in_schema=False,
 )
 async def get_channel_execution_capabilities(
@@ -261,7 +261,7 @@ async def get_channel_execution_capabilities(
     workload: WorkloadIdentity = Depends(require_channel_workload),
     resolver: BindingCapabilityResolver = Depends(get_binding_capability_resolver),
     target_service: PublishedTargetExecutionService = Depends(get_published_target_execution_service),
-) -> EffectiveReplyCapabilities:
+) -> ChannelRuntimeCapabilities:
     """Resolve one sanitized capability envelope per binding generation."""
 
     context = await resolver.resolve_capabilities(
@@ -278,10 +278,16 @@ async def get_channel_execution_capabilities(
     except (ChannelExecutionError, UnknownChannelProvider) as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="EXECUTION_CAPABILITIES_UNAVAILABLE") from exc
     response.headers["Cache-Control"] = "private, no-store"
-    return resolve_effective_reply_capabilities(
+    reply_capabilities = resolve_effective_reply_capabilities(
         provider,
         target,
         RunCapabilityPolicy.from_binding_policy(context.run_policy),
+    )
+    return ChannelRuntimeCapabilities.model_validate(
+        {
+            **reply_capabilities.model_dump(),
+            "identity_event_receipt": True,
+        }
     )
 
 

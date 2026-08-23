@@ -3,31 +3,50 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
 from pydantic import SecretStr
 
-from api.channel_capabilities import EffectiveReplyCapabilities
+from api.channel_capabilities import ChannelRuntimeCapabilities, EffectiveReplyCapabilities
 from api.channel_runtime.schemas import RuntimeBindingConfig, RuntimeCredential
 from api.channels import worker as worker_module
+from api.channels.identity_events import ChannelIdentityEvent, IdentityEventHandler
 from api.channels.provider import WorkerTuning
 from api.channels.runtime_client import ChannelRuntimeClientError
 from common.app_config import AppConfig
 
 
-@pytest.mark.parametrize("preflight_available", [True, False])
+def _app_config() -> AppConfig:
+    return AppConfig.model_construct(
+        channels=SimpleNamespace(
+            control=SimpleNamespace(
+                runtime_api_base_url="http://multirag.local",
+                internal_api_token=SecretStr("runtime-token"),
+                runtime_heartbeat_seconds=30,
+            )
+        ),
+        identity=SimpleNamespace(
+            mcp_interactions=SimpleNamespace(enabled=False),
+        ),
+        redis=SimpleNamespace(),
+    )
+
+
+@pytest.mark.parametrize("preflight_mode", ["current", "old_response", "http_404"])
 async def test_managed_worker_fetches_capabilities_once_and_passes_them_only_to_bridge(
     monkeypatch: pytest.MonkeyPatch,
-    preflight_available: bool,
+    preflight_mode: str,
 ) -> None:
-    negotiated = EffectiveReplyCapabilities(
+    negotiated = ChannelRuntimeCapabilities(
         progressive_reply=True,
         cancel_queued=True,
         cancel_running=False,
         regenerate=True,
         retry=False,
         feedback=True,
+        identity_event_receipt=preflight_mode == "current",
     )
     runtime = RuntimeBindingConfig(
         binding_id="binding-1",
@@ -37,6 +56,7 @@ async def test_managed_worker_fetches_capabilities_once_and_passes_them_only_to_
         credential=RuntimeCredential(fields={"app_id": "app-1", "app_secret": "secret"}),
     )
     fetch_calls = 0
+    submitted_events: list[ChannelIdentityEvent] = []
 
     class _RuntimeClient:
         def __init__(self, **_kwargs: object) -> None:
@@ -45,17 +65,35 @@ async def test_managed_worker_fetches_capabilities_once_and_passes_them_only_to_
         async def fetch_binding(self, _binding_id: str) -> RuntimeBindingConfig:
             return runtime
 
-        async def fetch_execution_capabilities(self, _binding_id: str) -> EffectiveReplyCapabilities:
+        async def fetch_execution_capabilities(self, _binding_id: str) -> ChannelRuntimeCapabilities:
             nonlocal fetch_calls
             fetch_calls += 1
-            if not preflight_available:
+            if preflight_mode == "http_404":
                 raise ChannelRuntimeClientError("RUNTIME_API_HTTP_404")
             return negotiated
+
+        async def submit_identity_event(
+            self,
+            event: ChannelIdentityEvent,
+        ) -> None:
+            submitted_events.append(event)
 
         async def close(self) -> None:
             return None
 
-    channel = SimpleNamespace(is_running=False)
+    class _IdentityChannel:
+        is_running = False
+
+        def __init__(self) -> None:
+            self.identity_handler: IdentityEventHandler | None = None
+
+        def set_identity_event_handler(
+            self,
+            handler: IdentityEventHandler,
+        ) -> None:
+            self.identity_handler = handler
+
+    channel = _IdentityChannel()
     tuning = WorkerTuning(
         queue_size=10,
         followup_queue_size=5,
@@ -96,7 +134,19 @@ async def test_managed_worker_fetches_capabilities_once_and_passes_them_only_to_
             return None
 
         async def run(self, _stop_event: asyncio.Event) -> None:
-            return None
+            if preflight_mode == "current":
+                assert channel.identity_handler is not None
+                await channel.identity_handler(
+                    ChannelIdentityEvent(
+                        event_type="contact.scope.updated_v3",
+                        event_id="scope-event-1",
+                        event_at=datetime(2026, 8, 24, 6, 0, tzinfo=UTC),
+                        observed_app_id="app-1",
+                        observed_tenant_key="tenant-1",
+                    )
+                )
+            else:
+                assert channel.identity_handler is None
 
     class _Redis:
         async def aclose(self) -> None:
@@ -123,22 +173,8 @@ async def test_managed_worker_fetches_capabilities_once_and_passes_them_only_to_
     monkeypatch.setattr(worker_module, "_safe_runtime_report", _report)
     monkeypatch.setattr(worker_module, "_runtime_heartbeat", _heartbeat)
 
-    app_config = AppConfig.model_construct(
-        channels=SimpleNamespace(
-            control=SimpleNamespace(
-                runtime_api_base_url="http://multirag.local",
-                internal_api_token=SecretStr("runtime-token"),
-                runtime_heartbeat_seconds=30,
-            )
-        ),
-        identity=SimpleNamespace(
-            mcp_interactions=SimpleNamespace(enabled=False),
-        ),
-        redis=SimpleNamespace(),
-    )
-
     await worker_module._run_managed_channel(
-        app_config=app_config,
+        app_config=_app_config(),
         provider_name="feishu",
         binding_id="binding-1",
         binding_generation=7,
@@ -147,9 +183,12 @@ async def test_managed_worker_fetches_capabilities_once_and_passes_them_only_to_
 
     assert fetch_calls == 1
     assert "capabilities" not in execution_client_kwargs
-    assert bridge_kwargs["capabilities"] == (negotiated if preflight_available else EffectiveReplyCapabilities())
+    expected_reply_capabilities = negotiated.to_reply_capabilities() if preflight_mode != "http_404" else EffectiveReplyCapabilities()
+    assert type(bridge_kwargs["capabilities"]) is EffectiveReplyCapabilities
+    assert bridge_kwargs["capabilities"] == expected_reply_capabilities
     assert bridge_kwargs["interaction_client"] is None
     assert bridge_kwargs["interaction_presenter"] is None
+    assert [event.event_id for event in submitted_events] == (["scope-event-1"] if preflight_mode == "current" else [])
 
 
 async def test_managed_worker_requires_full_feishu_transport_when_interactions_enabled(
@@ -175,8 +214,8 @@ async def test_managed_worker_requires_full_feishu_transport_when_interactions_e
         async def fetch_execution_capabilities(
             self,
             _binding_id: str,
-        ) -> EffectiveReplyCapabilities:
-            return EffectiveReplyCapabilities()
+        ) -> ChannelRuntimeCapabilities:
+            return ChannelRuntimeCapabilities()
 
         async def close(self) -> None:
             return None

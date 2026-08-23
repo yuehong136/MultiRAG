@@ -13,8 +13,9 @@
 > Auth/Tenant/Contact 三步 HTTP 200/code 0、tenant 匹配且用户 active，全量门禁已绿。
 > EIM-I5 / CHN-X19 已完成 default-disabled enterprise-subject resolver/service/repository 与 Channel
 > 可选组合：内建 Feishu authority 只证明逐字 `employee_no@feishu_contact`，五态闭合且成功
-> `ENTERPRISE_VERIFIED` evidence 只来自持久化回读；未实现 OA/workcode 等价、I7/I8 freshness、leave
-> 业务或生产 rollout；本地实现与门禁虽已完成，仍不能据此推导真实 OA/workcode 等价或生产可用。
+> `ENTERPRISE_VERIFIED` evidence 只来自持久化回读；I5 本身不实现 OA/workcode 等价、I7/I8 freshness、
+> leave 业务或 production rollout。I7 后续已完成本地 consumer 但未 rollout，I8/freshness 仍未实现；
+> 不能据此推导真实 OA/workcode 等价或生产可用。
 > EIM-I6 的权威 policy/link/event schema、framework-neutral domain service 与三种 PostgreSQL
 > 原子 provisioning transaction 已完成，完整门禁与 current-tree 安全终审全绿；
 > EIM-I2.2、EIM-C1、EIM-C2 与 EIM-I6.1 / CHN-X17 已完成；两个 Channel 的真实 Auth V3 +
@@ -251,7 +252,7 @@ F1/F3/F4/F7/F8 禁止携带身份功能。F2 只是 characterization/兼容矩�
 | EIM-I5 | CHN-X19 / MR | default-disabled `FeishuEmployeeNumberResolver` + 可插拔 authority/SPI + 持久化回读后 Principal 提升 | ✅ | I4 | 五态闭合；同槽/跨用户冲突不覆盖；`UNAVAILABLE` 零写；Feishu 只证明 employee_no，不等于 OA workcode；无 I7/I8 freshness 或 rollout 声明 |
 | EIM-I6 | MR | 权威 policy generation、`preprovisioned/link_only/jit` 原子事务、digest-only link grant 与首次绑定审计 | ✅ | I3,I4 | domain/model unit 143；四个 identity 真 PG 面 84；verify unit 2188；integration 128；无显示字段匹配/双 User merge |
 | EIM-I6.1 | CHN-X17 / MR | 经验证的企业连接 onboarding：复用加密 Channel 凭据验证 Auth/Tenant ownership，原子创建 Provider Tenant/Account/Link/Policy，并提供独立 Identity HMAC keyring 与受控 CLI | ✅ | I2.1,I4,I6,C2 | 双 Channel live dry-run 同企业；apply 为 1/2/1/2 且两次重放零 action；六张用户身份 sidecar 与 User/Membership 不变；完整 verify 2316、integration 159、smoke 全绿；本任务本身不交付 C3/X7 |
-| EIM-I7 | MR | Contact created/updated/deleted/scope 事件规范化、receipt 幂等、cache/revision 失效 | ⬜ | I4 | 重复事件无副作用；离职禁用；scope 变化触发 account revision，不全量拉取 |
+| EIM-I7 | CHN-X21 / MR | Contact created/updated/deleted/scope 事件规范化、receipt 幂等、cache/revision 失效 | ✅ | I4 | managed-only capability；generation-scoped private API；原子 receipt/CAS；deleted→revoked、inactive update→inactive；scope/unknown user durable revision fence；不枚举全员 |
 | EIM-I8 | MR | 已链接活跃用户兜底 reconciliation、identity health、管理员可观测性 | ⬜ | I6,I7 | 不枚举全员；限流/游标；故障续跑；指标和脱敏错误码 |
 
 ### EIM-I1 开工简报
@@ -421,6 +422,34 @@ F1/F3/F4/F7/F8 禁止携带身份功能。F2 只是 characterization/兼容矩�
   **1241 files**、Ruff check、**7** 条 import contracts，832 files/2611 dependencies、async DB gate、
   mypy **81 source files**、unit **2188 passed**）；强制 integration **128 passed in 16.40s**；
   Alembic 单 head `b4c6d8e0f2a4`；`git diff --check` 通过；current-tree 安全终审无 blocker。
+
+### EIM-I7 / CHN-X21 完成边界
+
+- 只有 generation-scoped preflight 广告 `identity_event_receipt=true`，且 managed transport 实现
+  `IdentityEventChannel` capability 时，才会在 `start()` 前安装 handler；当前 Feishu 因此注册四个
+  Contact V3 processor。旧响应缺字段、404/超时与 demo/legacy 均不安装 handler；本任务未改配置、
+  未替管理员在飞书后台订阅，也未 rollout。
+- worker 只规范化 allowlist 事件 header 与 `open_id/user_id/union_id/status`，不转发姓名、邮箱、手机、
+  部门或 scope 用户列表。private DTO 有界、`extra="forbid"`、identifier 与 observed proof 均 repr 隐藏；
+  body 不接受 MultiRAG tenant/account authority。`event_id` 同时作为 ASCII-visible
+  `Idempotency-Key`，HTTP body 最大 4 KiB，成功、duplicate 与 durable terminal failure 都只返回
+  no-store 204；只有未提交的瞬时失败才要求 Provider 重试。
+- API 先非锁读 binding 定位 Channel，再按
+  `Channel → Tenant → ProviderTenant/Account+Link → Binding → receipt → Alias/ExternalIdentity`
+  锁序重新验证 generation/enabled/provider，以及 DB authority 与 event header 的 app/tenant proof。
+  合法 binding/channel 但零 link 是 204 NO_LINK、零 receipt/零 mutation；多 link、dangling 或跨 scope
+  fail closed。
+- receipt 用 PostgreSQL `INSERT ... ON CONFLICT DO NOTHING RETURNING` 原子 claim；claim、identity/account
+  CAS 与 succeeded/failed receipt 位于同一事务，瞬时失败整体 rollback。account `identity_revision` 是
+  跨 API 进程 correctness fence，provider cache invalidation 只在 commit 后加速，失败不回滚已提交事件。
+  identity conflict 会持久化原始 safe error、bump 一次并 ACK；重放保留该 code，不泛化且不重复 mutation。
+- user stale floor 取该 identity 的 `verified_at/last_seen_at/已成功 linked receipt event_at` 最大值，
+  不使用全局 account marker 阻挡其他用户；旧 distinct user/scope event 记 succeeded/STALE 且不 bump。
+  unknown created/updated 不 JIT 但仍 bump negative-cache fence。updated 只可收紧为 `inactive`，deleted
+  只可收紧为终态 `revoked`；created/active update 不激活，reactivation 独立后置。scope 只推进 account
+  revision/marker，不枚举用户；锁后 DB 时钟拒绝超过 5 分钟的未来事件，不设置全局旧事件年龄丢弃。
+- I7 只完成事件失效与 durable fence；I8 reconciliation、可配置 freshness/纯本地快速路径、管理员
+  可观测、真实后台订阅、API/worker 重启、staging/live 与 production rollout 均不在本任务。
 
 ---
 
@@ -908,7 +937,7 @@ EIM-C3  ✅ verified consume、新 API smoke 与双 account 真实飞书 live �
 EIM-I5  ✅ default-disabled 五态 resolver + persisted readback + Channel optional composition
 EIM-L1  ✅ 代码/契约与完整门禁已完成；默认关闭，未配置真实 authority 或 rollout
 EIM-L2  ✅ p2p-only 低敏请假原生表单 + OA preview + 严格终态投影；代码/契约与双仓门禁完成，未 rollout
-EIM-I7  ⬜ 已解锁的 Contact-event 并行支线（I8 仍需 I6 + I7）
+EIM-I7  ✅ managed Contact-event receipt/CAS/invalidation 已完成；未 rollout（I8 现已解锁）
 ```
 
 MCP Foundation 的实际串并行轨道：
@@ -950,7 +979,7 @@ A4 + P3 -> A5
 A4 -> A6
 
 I4 -> I5                               (✅ default-disabled；无 OA/workcode 等价或 rollout)
-I4 -> I7; I6 + I7 -> I8               (已解锁事件支线；I8 不得跳过 I6/I7)
+I4 -> I7 (✅); I6 + I7 -> I8          (I8 已解锁，但仍不得跳过 I6/I7)
 A5 + I5 -> L1                          (✅ code/contract；named binding，secure fail-fast，未 rollout)
 L1 + U15 -> L2                         (✅ native form read-only preview；p2p-only，未 rollout)
 A5 + I5 -> M1 -> M2 -> M3 -> M4 -> U7 -> M5
@@ -960,9 +989,10 @@ A8 -> O3  仅在真实企业 IdP、多 issuer 或托管平台需求成立后解�
 ```
 
 A3/A4/A5 已完成，of_mcp 的 A6 phase 1 已落但保持进行中；下一步不是把内存 store 当生产后端，而是完成
-durable multi-instance replay/audit、HMAC key rotation 和跨仓 OTel。MultiRAG 已完成 F1/I2/I2.1/I3/I4/I5/P1、
+durable multi-instance replay/audit、HMAC key rotation 和跨仓 OTel。MultiRAG 已完成 F1/I2/I2.1/I3/I4/I5/I7/P1、
 I6、C2、C3、P2、A2、P3、U14 与 U15/CHN-X15；U15 默认关闭，单机临时 live 已通过但生产 rollout 未开始。CHN-O9 是可并行的 Channel 可观测支线，
-C4/CHN-X8 仍等待 deployment soak。I7 因 I4 已完成而可作为并行支线；I8 仍严格等待 I6 + I7。
+C4/CHN-X8 仍等待 deployment soak。I7/CHN-X21 已完成本地 managed event consumer，但未做飞书后台
+订阅、重启或 live；I8 的 I6 + I7 依赖现已闭合。
 L1 与 M1 的代码依赖 A5 + I5 均已满足。L1 的代码、contract snapshot 与完整 verify 已完成并标
 `✅`，但仍默认关闭、未 rollout；L2/CHN-X20 已在这个围栏内增加 p2p-only 的七字段低敏 form 和
 `doCreateRequest` 零调用的 OA preview，并在双仓门禁全绿后标为 `✅`。`ecology_userid` 是 service-owned
@@ -986,6 +1016,7 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 
 | 日期 | ID | 变更 | 仓库/提交 | 验证证据 | 记录人 |
 |---|---|---|---|---|---|
+| 2026-08-24 | EIM-I7 / CHN-X21 | `✅`：完成 managed-only Contact directory event consumer。只有 current generation-scoped preflight 广告 `identity_event_receipt=true` 才订阅四事件；旧响应缺字段、404/超时与非法响应均关闭 producer。事件经过 bounded/repr-safe normalization 与 private API，locked DB authority 复核后使用 PostgreSQL atomic receipt claim、per-identity stale floor、identity/account CAS 与 durable terminal state；合法 NO_LINK 零写，unknown created/updated 只 bump negative-cache fence、不 JIT，inactive/revoked 只单向收紧，scope 不枚举。durable semantic poison 保存 safe code 并 ACK/no redo，未提交 transient 才重试；account revision 是跨 API 进程 correctness fence，post-commit provider invalidate 仅加速。未改配置/依赖、未替管理员订阅飞书后台、未重启/部署/staging/live；I8 reconciliation 与 freshness fast path 后置 | MultiRAG / 本次提交（未部署） | 定向 unit **177 passed**；repository unit + integration **24 passed**、强制真 PostgreSQL **15 passed**；洁净树 `make verify`：8 条 import contracts、mypy **116 source files**、unit **2753 passed**；现有服务 integration **195 passed / 1 个既有 MinIO 凭据错误**，一次性匹配凭据 testcontainer 全量 **196 passed**；最终安全 diff scan 覆盖 **11/11** 生产面、**0 findings**；lock/diff check 全绿 | Codex |
 | 2026-08-24 | EIM-L2 / CHN-X20 | `✅`：完成 p2p-only 低敏请假原生表单阶段。`preview_leave_form` 无外层业务参数，form 只含事假/年假/星光假/阳光假与起止日期/小时/半小时共 7 字段；绑定 `leave:read`、prepare/reusable、server-owned `leave_applicant`。接受后只做当前主体 OA preview，`doCreateRequest` 调用数为 0；写工具继续无条件禁用。终态仅允许 direct 或 FastMCP wrapper 的严格四键 envelope，message 必须单行/trimmed/printable/≤240，否则 generic。secure interaction 要求稳定 key ring，TTL 900s 大于 MR 600s；默认关闭、真实 authority 未配置、未 rollout。reason/身份/PM/CC/remark、群聊、H5/URL 与敏感写 deferred；跨字段时间窗无效当前会 terminal failed，不伪称可重开表单 | MultiRAG + of_mcp / 本次双仓提交（未部署） | of_mcp focused **114 passed**、完整 verify **580 passed / 2 skipped**、contract diff **breaking 0 / behavioral 0 / additive 1**；MultiRAG focused **89 passed**、`make verify` **2762 passed**、强制 integration **182 passed**、MCP compatibility **22/22**；安全 diff scan **0 findings** | Codex |
 | 2026-08-24 | EIM-L1 | 完成独立 Leave 只读业务身份轨：三个读/预览工具消费 exact、server-owned `leave_applicant`，所有模式始终忽略 `oa_user_id`；service 固定 `subject_type=ecology_userid`，secure 只覆盖 issuer/tenant，type 漂移启动 fail-fast，dependency 再独立拒绝非 `ecology_userid` 主体。`verify_leave_request` 用同一响应执行 owner/workflow/form fence，输出最小化；两个写工具无条件 `LEAVE_WRITE_DISABLED` 且 OA 零调用。明确 Feishu `employee_no@feishu_contact` 不等于 Ecology userid/workcode；仍默认关闭，未配置真实 OA/HR authority，未实现 L2/U7/I7/I8 或 rollout，M1 继续 medic-only | of_mcp code + 双仓账本文档 / 本次工作树 | focused core + gateway + proxy + leave **146 passed、2 skipped**；`uv run --locked ofmcp verify` 六步全绿，test **556 passed、2 skipped**；contract diff **breaking 0 / behavioral 7 / additive 0**（service + gateway），已审查 snapshot 与当前生成结果一致 | Codex |
 | 2026-08-24 | EIM-I5 / CHN-X19 | 完成 default-disabled enterprise-subject resolver/service/repository 与 Channel 可选组合：五态闭合，`RESOLVED` 只从数据库回读生成 evidence，同槽换值/跨 user 占用进入 conflict，negative 单向收紧，`UNAVAILABLE`/fatal 零写；Feishu 内建 authority 只证明逐字 `employee_no@feishu_contact`，不推断 OA workcode。沿用 I2 表、无 migration；未启用配置、未重启/部署/发真实流量，未实现 I7/I8 freshness、真实 OA/HR 或 leave 业务 | MultiRAG / 本次提交 | 定向 unit **87 passed**、真 PostgreSQL **10 passed**；`make verify` **2663 passed**；强制 integration **181 passed**；`make mcp-compat` **22/22 PASS**；final P0/P1 audit **no blockers** | Codex |

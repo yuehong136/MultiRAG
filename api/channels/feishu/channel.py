@@ -25,6 +25,7 @@ import threading
 import time
 import warnings
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from importlib import import_module
 from typing import Any, Protocol, runtime_checkable
 
@@ -40,9 +41,16 @@ from ..core.base import (
     ReplyContext,
     ReplySession,
 )
+from ..identity_events import (
+    ChannelIdentityEvent,
+    ChannelIdentityIdentifier,
+    ChannelIdentitySubject,
+    IdentityEventHandler,
+)
 from .reply import CARD_ANSWER_ELEMENT_ID, FeishuProgressiveReplySession
 
 LOGGER = logging.getLogger(__name__)
+_IDENTITY_EVENT_TIMEOUT_SECONDS = 2.5
 
 
 class FeishuDependencyError(RuntimeError):
@@ -78,6 +86,7 @@ class _FeishuSDK(Protocol):
         account: FeishuAccount,
         message_callback: Any,
         action_callback: Any,
+        identity_callback: Any | None,
     ) -> Any: ...
 
     def card_action_response(self, response: ChannelActionResponse) -> Any: ...
@@ -216,8 +225,9 @@ class _LarkOapiSDK:
         account: FeishuAccount,
         message_callback: Any,
         action_callback: Any,
+        identity_callback: Any | None,
     ) -> Any:
-        handler = (
+        builder = (
             self._lark.EventDispatcherHandler.builder("", "")
             .register_p2_im_message_receive_v1(message_callback)
             .register_p2_card_action_trigger(action_callback)
@@ -230,8 +240,15 @@ class _LarkOapiSDK:
             .register_p2_im_message_reaction_created_v1(self._ignore_transport_event)
             .register_p2_im_message_reaction_deleted_v1(self._ignore_transport_event)
             .register_p2_im_chat_access_event_bot_p2p_chat_entered_v1(self._ignore_transport_event)
-            .build()
         )
+        if identity_callback is not None:
+            builder = (
+                builder.register_p2_contact_user_created_v3(identity_callback)
+                .register_p2_contact_user_updated_v3(identity_callback)
+                .register_p2_contact_user_deleted_v3(identity_callback)
+                .register_p2_contact_scope_updated_v3(identity_callback)
+            )
+        handler = builder.build()
         kwargs: dict[str, Any] = {
             "domain": self._domain(account.domain),
             "event_handler": handler,
@@ -408,6 +425,33 @@ def _required_identity_text(value: Any, *, field_name: str) -> str:
     return normalized
 
 
+def _directory_event_time(value: Any) -> datetime:
+    raw = _required_identity_text(value, field_name="create_time")
+    if len(raw) != 13 or not raw.isascii() or not raw.isdigit():
+        raise ValueError("Feishu directory event time is invalid")
+    milliseconds = int(raw)
+    if not 946_684_800_000 <= milliseconds <= 4_102_444_800_000:
+        raise ValueError("Feishu directory event time is invalid")
+    return datetime.fromtimestamp(milliseconds / 1000, UTC)
+
+
+def _directory_status(value: Any) -> str:
+    fields = (
+        "is_activated",
+        "is_frozen",
+        "is_resigned",
+        "is_exited",
+        "is_unjoin",
+    )
+    statuses = {name: getattr(value, name, None) for name in fields}
+    if any(item is not None and type(item) is not bool for item in statuses.values()):
+        raise ValueError("Feishu directory status is invalid")
+    if any(item is None for item in statuses.values()):
+        return "unknown"
+    inactive = not statuses["is_activated"] or statuses["is_frozen"] or statuses["is_resigned"] or statuses["is_exited"] or statuses["is_unjoin"]
+    return "inactive" if inactive else "active"
+
+
 class FeishuChannel(Channel):
     """Feishu/Lark long-connection transport for one application account."""
 
@@ -444,6 +488,12 @@ class FeishuChannel(Channel):
         self._thread_finished = threading.Event()
         self._stopping = threading.Event()
         self._rest = self._sdk.build_rest_client(account)
+        self._identity_event_handler: IdentityEventHandler | None = None
+
+    def set_identity_event_handler(self, handler: IdentityEventHandler) -> None:
+        """Install the optional durable directory-event capability."""
+
+        self._identity_event_handler = handler
 
     @property
     def is_running(self) -> bool:
@@ -521,6 +571,7 @@ class FeishuChannel(Channel):
                 self.account,
                 self._on_message_receive,
                 self._on_card_action,
+                (self._on_identity_event if self._identity_event_handler is not None else None),
             )
             self._thread_ready.set()
             # lark-oapi start() blocks for the life of the connection.
@@ -882,6 +933,105 @@ class FeishuChannel(Channel):
                 "channel_event=normalize_failed channel=feishu account_id_hash=%s result=dropped error_code=FEISHU_EVENT_INVALID",
                 _short_hash(self.account_id),
             )
+
+    def _on_identity_event(self, data: Any) -> None:
+        """Normalize and durably receipt a Contact event inside the ACK window."""
+
+        try:
+            event = self._normalize_identity_event(data)
+            loop = self._loop
+            if loop is None or loop.is_closed():
+                raise RuntimeError("identity event dispatch loop is unavailable")
+            future = asyncio.run_coroutine_threadsafe(
+                self._dispatch_identity_event(event),
+                loop,
+            )
+            try:
+                future.result(timeout=_IDENTITY_EVENT_TIMEOUT_SECONDS)
+            except TimeoutError:
+                future.cancel()
+                raise
+        except Exception:
+            LOGGER.error(
+                "channel_event=identity_event_receipt channel=feishu account_id_hash=%s result=failed error_code=FEISHU_IDENTITY_EVENT_FAILED",
+                _short_hash(self.account_id),
+            )
+            # lark-oapi logs callback exceptions. Never let a Pydantic error
+            # carry the rejected identifier or raw SDK value into that log.
+            raise RuntimeError("FEISHU_IDENTITY_EVENT_FAILED") from None
+
+    async def _dispatch_identity_event(self, event: ChannelIdentityEvent) -> None:
+        handler = self._identity_event_handler
+        if handler is None:
+            raise RuntimeError("identity event handler is unavailable")
+        await handler(event)
+
+    def _normalize_identity_event(self, data: Any) -> ChannelIdentityEvent:
+        header = getattr(data, "header", None)
+        event_type = _required_identity_text(
+            getattr(header, "event_type", None),
+            field_name="event_type",
+        )
+        event_id = _required_identity_text(
+            getattr(header, "event_id", None),
+            field_name="event_id",
+        )
+        observed_tenant_key = _required_identity_text(
+            getattr(header, "tenant_key", None),
+            field_name="tenant_key",
+        )
+        observed_app_id = _required_identity_text(
+            getattr(header, "app_id", None),
+            field_name="app_id",
+        )
+        if observed_app_id != self.account.app_id:
+            raise ValueError("Feishu directory event app does not match account")
+        event_at = _directory_event_time(getattr(header, "create_time", None))
+        if event_type == "contact.scope.updated_v3":
+            return ChannelIdentityEvent.model_validate(
+                {
+                    "version": 1,
+                    "event_type": event_type,
+                    "event_id": event_id,
+                    "event_at": event_at,
+                    "observed_app_id": observed_app_id,
+                    "observed_tenant_key": observed_tenant_key,
+                    "subject": None,
+                }
+            )
+
+        event = getattr(data, "event", None)
+        subject = getattr(event, "object", None)
+        if subject is None:
+            raise ValueError("Feishu directory event subject is missing")
+        values = {
+            "open_id": _optional_identity_text(getattr(subject, "open_id", None)),
+            "user_id": _optional_identity_text(getattr(subject, "user_id", None)),
+            "union_id": _optional_identity_text(getattr(subject, "union_id", None)),
+        }
+        if event_type == "contact.user.deleted_v3":
+            old_subject = getattr(event, "old_object", None)
+            old_open_id = _optional_identity_text(getattr(old_subject, "open_id", None))
+            if values["open_id"] is not None and old_open_id is not None and values["open_id"] != old_open_id:
+                raise ValueError("Feishu deleted user identity is inconsistent")
+            if values["open_id"] is None:
+                values["open_id"] = old_open_id
+        identifiers = tuple(ChannelIdentityIdentifier(kind=kind, value=value) for kind, value in values.items() if value is not None)
+        status_value = "inactive" if event_type == "contact.user.deleted_v3" else _directory_status(getattr(subject, "status", None))
+        return ChannelIdentityEvent.model_validate(
+            {
+                "version": 1,
+                "event_type": event_type,
+                "event_id": event_id,
+                "event_at": event_at,
+                "observed_app_id": observed_app_id,
+                "observed_tenant_key": observed_tenant_key,
+                "subject": ChannelIdentitySubject(
+                    identifiers=identifiers,
+                    directory_status=status_value,
+                ),
+            }
+        )
 
     def _on_card_action(self, data: Any) -> Any:
         """Normalize, claim and enqueue a card action within Feishu's deadline."""

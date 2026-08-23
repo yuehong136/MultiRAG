@@ -27,6 +27,11 @@ from api.channels.execution_events import (
     MessageCompletedEvent,
     MessageDeltaEvent,
 )
+from api.channels.identity_events import (
+    ChannelIdentityEvent,
+    ChannelIdentityIdentifier,
+    ChannelIdentitySubject,
+)
 from api.channels.interaction_models import ClaimedInteractionDelivery
 from api.channels.runtime_client import ChannelRuntimeClient, ChannelRuntimeClientError, MultiRAGBindingExecutionClient
 
@@ -127,6 +132,7 @@ async def test_runtime_fetches_sanitized_execution_capabilities_once() -> None:
                 "regenerate": True,
                 "retry": True,
                 "feedback": False,
+                "identity_event_receipt": True,
                 "future_additive_capability": True,
             },
         )
@@ -145,15 +151,45 @@ async def test_runtime_fetches_sanitized_execution_capabilities_once() -> None:
     assert capabilities.regenerate is True
     assert capabilities.retry is True
     assert capabilities.feedback is False
+    assert capabilities.identity_event_receipt is True
     assert len(captured) == 1
     assert captured[0].url.path == "/api/v1/internal/channel-bindings/binding/one/execution-capabilities"
     assert captured[0].headers["X-Channel-Binding-Generation"] == "7"
 
 
 @pytest.mark.asyncio
-async def test_runtime_rejects_malformed_execution_capabilities() -> None:
+async def test_runtime_defaults_missing_identity_event_receipt_capability_to_false() -> None:
     async def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"regenerate": "yes"})
+        return httpx.Response(200, json={"regenerate": True})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = ChannelRuntimeClient(
+            base_url="http://multirag.local",
+            api_token="runtime-token",
+            runner_id="runner-1",
+            binding_id="binding-1",
+            binding_generation=7,
+            client=http_client,
+        )
+        capabilities = await client.fetch_execution_capabilities("binding-1")
+
+    assert capabilities.regenerate is True
+    assert capabilities.identity_event_receipt is False
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"regenerate": "yes"},
+        {"identity_event_receipt": "true"},
+    ],
+)
+@pytest.mark.asyncio
+async def test_runtime_rejects_malformed_execution_capabilities(
+    payload: dict[str, object],
+) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
         client = ChannelRuntimeClient(
@@ -168,6 +204,113 @@ async def test_runtime_rejects_malformed_execution_capabilities() -> None:
             await client.fetch_execution_capabilities("binding-1")
 
     assert captured.value.code == "RUNTIME_CAPABILITIES_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_runtime_submits_generation_scoped_identity_event_with_idempotency_key() -> None:
+    captured: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(204)
+
+    event = ChannelIdentityEvent(
+        event_type="contact.user.updated_v3",
+        event_id="directory-event-1",
+        event_at=datetime(2026, 8, 24, 6, 0, tzinfo=UTC),
+        observed_app_id="app-observed",
+        observed_tenant_key="tenant-observed",
+        subject=ChannelIdentitySubject(
+            identifiers=(
+                ChannelIdentityIdentifier(kind="open_id", value="ou-observed"),
+                ChannelIdentityIdentifier(kind="user_id", value="user-observed"),
+            ),
+            directory_status="inactive",
+        ),
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = ChannelRuntimeClient(
+            base_url="http://multirag.local",
+            api_token="binding-token",
+            runner_id="runner-1",
+            binding_id="binding/one",
+            binding_generation=7,
+            client=http_client,
+        )
+        await client.submit_identity_event(event)
+
+    assert len(captured) == 1
+    request = captured[0]
+    assert request.method == "POST"
+    assert request.url.raw_path == b"/api/v1/internal/channel-bindings/binding%2Fone/identity-events"
+    assert request.headers["Authorization"] == "Bearer binding-token"
+    assert request.headers["X-Channel-Binding-Generation"] == "7"
+    assert request.headers["Idempotency-Key"] == "directory-event-1"
+    payload = json.loads(request.content)
+    assert payload == event.model_dump(mode="json")
+    assert not {
+        "tenant_id",
+        "provider_account_id",
+        "provider_account_key",
+        "provider_account_revision",
+        "binding_generation",
+    } & _all_mapping_keys(payload)
+
+
+@pytest.mark.asyncio
+async def test_runtime_refuses_identity_event_without_binding_scope() -> None:
+    event = ChannelIdentityEvent(
+        event_type="contact.scope.updated_v3",
+        event_id="scope-event-1",
+        event_at=datetime(2026, 8, 24, 6, 0, tzinfo=UTC),
+        observed_app_id="app-observed",
+        observed_tenant_key="tenant-observed",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _request: httpx.Response(204))) as http_client:
+        client = ChannelRuntimeClient(
+            base_url="http://multirag.local",
+            api_token="control-token",
+            runner_id="runner-1",
+            client=http_client,
+        )
+        with pytest.raises(ChannelRuntimeClientError) as captured:
+            await client.submit_identity_event(event)
+
+    assert captured.value.code == "RUNTIME_BINDING_SCOPE_MISMATCH"
+
+
+@pytest.mark.parametrize(
+    "protected_header",
+    ["Authorization", "x-channel-binding-generation"],
+)
+async def test_runtime_extra_headers_cannot_override_workload_authority(
+    protected_header: str,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(204)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = ChannelRuntimeClient(
+            base_url="http://multirag.local",
+            api_token="binding-token",
+            runner_id="runner-1",
+            binding_id="binding-1",
+            binding_generation=7,
+            client=http_client,
+        )
+        with pytest.raises(ChannelRuntimeClientError) as captured:
+            await client._request(
+                "POST",
+                "http://multirag.local/private",
+                extra_headers={protected_header: "attacker-value"},
+                expected_status=204,
+            )
+
+    assert captured.value.code == "RUNTIME_HEADER_OVERRIDE"
+    assert requests == []
 
 
 @pytest.mark.asyncio

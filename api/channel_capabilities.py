@@ -90,6 +90,24 @@ class EffectiveReplyCapabilities(BaseModel):
     feedback: bool = False
 
 
+class ChannelRuntimeCapabilities(EffectiveReplyCapabilities):
+    """Additive worker preflight envelope with fail-closed server features."""
+
+    identity_event_receipt: bool = False
+
+    def to_reply_capabilities(self) -> EffectiveReplyCapabilities:
+        """Keep non-reply server features out of reply rendering contracts."""
+
+        return EffectiveReplyCapabilities(
+            progressive_reply=self.progressive_reply,
+            cancel_queued=self.cancel_queued,
+            cancel_running=self.cancel_running,
+            regenerate=self.regenerate,
+            retry=self.retry,
+            feedback=self.feedback,
+        )
+
+
 def parse_effective_reply_capabilities(payload: object) -> EffectiveReplyCapabilities:
     """Validate known fields while tolerating future additive wire features."""
 
@@ -97,6 +115,15 @@ def parse_effective_reply_capabilities(payload: object) -> EffectiveReplyCapabil
         raise TypeError("Capability payload must be an object")
     known = {field: payload[field] for field in EffectiveReplyCapabilities.model_fields if field in payload}
     return EffectiveReplyCapabilities.model_validate(known)
+
+
+def parse_channel_runtime_capabilities(payload: object) -> ChannelRuntimeCapabilities:
+    """Accept old additive responses while defaulting server features off."""
+
+    if not isinstance(payload, Mapping):
+        raise TypeError("Capability payload must be an object")
+    known = {field: payload[field] for field in ChannelRuntimeCapabilities.model_fields if field in payload}
+    return ChannelRuntimeCapabilities.model_validate(known)
 
 
 def resolve_effective_reply_capabilities(

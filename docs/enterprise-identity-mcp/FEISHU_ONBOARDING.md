@@ -299,14 +299,17 @@ Provider active 校验和 JIT `UserTenant(NORMAL)` 是 I6 固定安全不变量�
 | `contact.user.deleted_v3` | 员工离职，立即禁用 | EIM-I7 |
 | `contact.scope.updated_v3` | 应用通讯录范围变化，清缓存并重验 | EIM-I7 |
 
-当前 production handler 只把 `im.message.receive_v1` 作为身份消息入口；四个 Contact 事件仍属于尚未
-实现的 EIM-I7，当前 C3 上线不订阅它们。否则事件到达时没有 I7 的 receipt/CAS/invalidation consumer，
-不能把“后台已订阅”误当成离职或 scope 变更已经生效。
+EIM-I7/CHN-X21 已完成 managed-only consumer：worker 只有在 generation-scoped preflight 广告
+`identity_event_receipt=true` 并安装 handler 后才注册四个 Contact processor；旧响应缺字段、404/超时与
+demo/legacy 都不注册。事件经 bounded private API、原子 receipt/CAS、durable account revision fence 与
+post-commit cache invalidation 收敛。仓库代码完成不表示飞书后台已订阅、API/
+supervisor/worker 已重启或 rollout。只有发布相容 API、重启 managed worker 并完成下述 staging 后，
+才可在飞书后台启用四个事件；不能把“后台已订阅”单独当成离职或 scope 失效已经生效。
 
 飞书可能重复推送事件。消息以 `message_id` 去重；通讯录事件以 `event_id + event_type` 去重，
 同时数据库更新必须幂等。不要依赖“只会收到一次”。
 
-EIM-I7 实现 `contact.scope.updated_v3` 后，account control 必须以 CAS 单调推进 revision/scope marker；后续 read
+EIM-I7 已实现 `contact.scope.updated_v3`：account control 以 CAS 单调推进 revision/scope marker；后续 read
 若发现 alias proof 早于 marker，只返回“需要 Provider 重验”，不能继续使用旧 link。新 proof
 `verified_at` 早于 marker 时写入拒绝，早于当前 alias proof 时也不能倒退已有时间。省略 event/scope
 时间表示保留旧值，不是清空；乱序旧事件不得回拨 marker。
@@ -458,7 +461,9 @@ INACTIVE       -> 禁止执行和新会话
       secrets env；repo、supervisor/worker 参数和日志均无副本。
 - [ ] 权限列表与本文必需 scope 对账，无多余高危权限。
 - [ ] 应用可用范围与通讯录数据范围已由管理员确认。
-- [ ] 当前 C3 只订阅并发布 `im.message.receive_v1`；四个 Contact 事件等待 EIM-I7 consumer 落地后再订阅。
+- [ ] 已先发布含 I7 private consumer 的 API 并重启对应 managed worker；确认 demo/legacy 不注册 Contact，
+      再在飞书后台为 staging 启用四个事件，完成 duplicate、inactive、deleted、scope 与 NO_LINK 验收后
+      才进入生产 rollout。
 - [ ] `cardkit:card:write`、消息/reaction 权限已在测试租户实测，应用重新发布/安装。
 - [ ] 当前启用 EIM-U4 重新生成/反馈时已订阅 `card.action.trigger`；明确关闭交互、只做纯流式输出时
       才可不订阅。
@@ -466,6 +471,7 @@ INACTIVE       -> 禁止执行和新会话
 - [ ] 只有启用 I5/企业主体消费者时，`employee_no` 的唯一性与复用规则才作为上线条件；若业务需要
       `talent_id/workcode`，必须由 HR/OA 负责人确认并配置对应 OA/HR resolver，禁止把 employee_no
       自动改名或转换；当前 C3 普通对话不以 `employee_no` 为阻断项。
-- [ ] 事件 callback 3 秒内返回，模型和 Contact API 不在 SDK callback 内执行。
+- [ ] 事件 callback 3 秒内返回；I7 只等待最多 2.5 秒的 durable private receipt（HTTP 2 秒），模型和
+      Contact API 不在 SDK callback 内执行。
 - [ ] 飞书后台事件日志、MultiRAG 脱敏 trace 和身份审计能关联排障。
 - [ ] Secret 轮换和应用下线联系人明确。

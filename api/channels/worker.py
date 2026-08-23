@@ -16,7 +16,7 @@ from typing import Protocol, runtime_checkable
 
 from redis.asyncio import Redis
 
-from api.channel_capabilities import EffectiveReplyCapabilities
+from api.channel_capabilities import ChannelRuntimeCapabilities
 from api.channel_providers import provider_spec
 from api.channel_runtime.schemas import RuntimeState
 from api.channels.agent_bridge import FeishuAgentBridge, MultiRAGAgentClient
@@ -30,6 +30,7 @@ from api.channels.core.base import (
     IncomingMessage,
     MessageHandler,
 )
+from api.channels.identity_events import IdentityEventChannel
 from api.channels.provider import ChannelWorkerError, supported_provider_names, worker_provider
 from api.channels.runtime_client import ChannelRuntimeClient, ChannelRuntimeClientError, MultiRAGBindingExecutionClient
 from api.channels.state_store import RedisChannelStateStore
@@ -726,17 +727,18 @@ async def _run_managed_channel(
             raise ChannelWorkerError("CHANNEL_RUNTIME_BINDING_INVALID")
         generation = runtime.generation
         try:
-            execution_capabilities = await runtime_client.fetch_execution_capabilities(binding_id)
+            runtime_capabilities = await runtime_client.fetch_execution_capabilities(binding_id)
         except ChannelRuntimeClientError as exc:
             # Capability negotiation is additive. During a rolling deploy, or
             # if its preflight is temporarily unavailable, keep answering but
             # expose no callback controls rather than guessing target safety.
-            execution_capabilities = EffectiveReplyCapabilities()
+            runtime_capabilities = ChannelRuntimeCapabilities()
             LOGGER.warning(
                 "channel_event=capabilities_unavailable binding_id_hash=%s result=degraded error_code=%s",
                 _short_hash(binding_id),
                 exc.code,
             )
+        execution_capabilities = runtime_capabilities.to_reply_capabilities()
 
         # The provider owns its credential shape, its account rules and its
         # tuning section; everything below is transport-agnostic.
@@ -757,6 +759,11 @@ async def _run_managed_channel(
             leader_renew_interval_seconds=tuning.leader_renew_seconds,
         )
         channel = plan.channel
+        if runtime_capabilities.identity_event_receipt and isinstance(channel, IdentityEventChannel):
+            # The current API advertises durable receipt support before the
+            # handler becomes the transport subscription gate. Old API
+            # responses and failed preflights leave the capability disabled.
+            channel.set_identity_event_handler(runtime_client.submit_identity_event)
         execution_client = MultiRAGBindingExecutionClient(
             base_url=base_url,
             binding_id=binding_id,

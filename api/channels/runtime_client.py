@@ -5,14 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from datetime import UTC, datetime
 from typing import Literal
 from urllib.parse import quote
 
 import httpx
 
-from api.channel_capabilities import EffectiveReplyCapabilities, parse_effective_reply_capabilities
+from api.channel_capabilities import ChannelRuntimeCapabilities, parse_channel_runtime_capabilities
 from api.channel_runtime.schemas import DesiredRuntime, DesiredRuntimeList, RuntimeBindingConfig, RuntimeState
 from api.channels.agent_bridge import AgentExecutionError, AgentReply
 from api.channels.core.base import ChannelFormAction, IncomingIdentityAssertion
@@ -24,6 +24,7 @@ from api.channels.execution_events import (
     MessageCompletedEvent,
     MessageDeltaEvent,
 )
+from api.channels.identity_events import ChannelIdentityEvent
 from api.channels.interaction_models import (
     ClaimedInteractionDelivery,
     InteractionCallbackReceipt,
@@ -102,7 +103,7 @@ class ChannelRuntimeClient:
     async def fetch_execution_capabilities(
         self,
         binding_id: str,
-    ) -> EffectiveReplyCapabilities:
+    ) -> ChannelRuntimeCapabilities:
         """Fetch the generation-scoped capability envelope once at startup."""
 
         if self._binding_id is not None and binding_id != self._binding_id:
@@ -113,9 +114,27 @@ class ChannelRuntimeClient:
             f"{self._base_url}/api/v1/internal/channel-bindings/{encoded}/execution-capabilities",
         )
         try:
-            return parse_effective_reply_capabilities(response.json())
+            return parse_channel_runtime_capabilities(response.json())
         except (ValueError, TypeError) as exc:
             raise ChannelRuntimeClientError("RUNTIME_CAPABILITIES_INVALID") from exc
+
+    async def submit_identity_event(self, event: ChannelIdentityEvent) -> None:
+        """Durably receipt one bounded event through this binding generation."""
+
+        if self._binding_id is None or self._binding_generation is None:
+            raise ChannelRuntimeClientError("RUNTIME_BINDING_SCOPE_MISMATCH")
+        encoded = quote(self._binding_id, safe="")
+        try:
+            async with asyncio.timeout(_CALLBACK_RECEIPT_TIMEOUT_SECONDS):
+                await self._request(
+                    "POST",
+                    f"{self._base_url}/api/v1/internal/channel-bindings/{encoded}/identity-events",
+                    json=event.model_dump(mode="json"),
+                    extra_headers={"Idempotency-Key": event.event_id},
+                    expected_status=status_code_no_content(),
+                )
+        except TimeoutError as exc:
+            raise ChannelRuntimeClientError("RUNTIME_API_TIMEOUT") from exc
 
     async def report(
         self,
@@ -149,13 +168,20 @@ class ChannelRuntimeClient:
         url: str,
         *,
         json: dict[str, object] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
         expected_status: int = 200,
     ) -> httpx.Response:
+        headers = dict(self._headers)
+        if extra_headers:
+            protected = {"authorization", "x-channel-binding-generation"}
+            if protected & {name.lower() for name in extra_headers}:
+                raise ChannelRuntimeClientError("RUNTIME_HEADER_OVERRIDE")
+            headers.update(extra_headers)
         try:
             response = await self._client.request(
                 method,
                 url,
-                headers=self._headers,
+                headers=headers,
                 json=json,
             )
         except httpx.TimeoutException as exc:

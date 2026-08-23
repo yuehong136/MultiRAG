@@ -103,7 +103,7 @@ web 侧 commit scope 从 `settings` 切到 `channel`（后端已有 `feat(channe
 提交后重启且 healthz 全绿；飞书测试会话的 Dialog/Canvas 现场 smoke **仍未完成**。U16 的代码与
 跨层测试已落地（不依赖现场 smoke 即可证明卡片终态与零执行调用），但它**不替代**那次 smoke——
 进入稳定浸泡前仍要按 [UX §14](../enterprise-identity-mcp/FEISHU_BOT_UX.md#14-测试与验收矩阵)
-跑完 Dialog/Canvas 现场用例。O9 本地实现已进入 `🔵`，等待全门禁与 rollout；X14/F5 不在当前
+跑完 Dialog/Canvas 现场用例。O9 本地实现与全门禁已完成 `✅`，但尚未 rollout；X14/F5 不在当前
 稳定化关键路径。
 
 **CHN-U6 为什么是 refetch 而不是省略字段或加后端令牌**：省略 `enabled` 时老后端会读到
@@ -181,7 +181,7 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 | CHN-O6 | 连接自检端点 `POST /chat-channels/{id}/verify`：用**已存**凭据向 provider 打一次「只认证、不建连」的探针，把数十秒的反馈环压到一次往返。探针是 SDK-free 的 `api/channels/<name>/verify.py`，由 API 进程按名字懒加载 | ✅ | CHN-U1 | `api/channels/verification.py`、`api/channels/{feishu,dingtalk}/verify.py`、`service.py::verify_channel_credential` |
 | CHN-O7 | 主密钥 keyring 读侧：`secret_encryption_key` 由一把变成**有序密钥环**（第 0 把 active 负责加密，其余按 `key_id` 解密自己写下的存量密文）。轮换从「全租户凭据永久不可解密」变成一次前插 + 重启 API | ✅ | — | `common/app_config.py::ChannelControlConfig`、`api/channel_control/secret_store.py::AESGCMChannelSecretStore` |
 | CHN-O8 | 凭据变更审计轨迹 | ⬜ | — | 未排期 |
-| CHN-O9 | binding 级可观测（消息量、丢弃原因、时延分位） | 🔵 | CHN-U16 ✅ | 本地实现与定向门禁完成，待仓库全门禁和 rollout；`api/channels/telemetry.py`、`tests/unit/test_channel_telemetry.py`、[UX §13](../enterprise-identity-mcp/FEISHU_BOT_UX.md#13-指标和-slo) |
+| CHN-O9 | binding 级可观测（消息量、丢弃原因、时延分位） | ✅ | CHN-U16 ✅ | Provider-neutral 进程内 seam、封闭 labels、exactly-once disposition 与全门禁完成；未 rollout，且不宣称 exporter/跨进程 SLO；`api/channels/telemetry.py`、`tests/unit/test_channel_telemetry.py`、[UX §13](../enterprise-identity-mcp/FEISHU_BOT_UX.md#13-指标和-slo) |
 | CHN-O10 | 自适应轮询（**SSE 已否决**，见 `CHN-ADR-02`） | ⬜ | — | 未排期 |
 | CHN-O11 | 渠道数配额 | ⬜ | — | 未排期 |
 | CHN-O13 | **WEB**：CHN-O6 的前端半边。`channelAPI.verify(id)`（无请求体）+ 五个错误码 + 两份 locale + 编辑抽屉页脚的「测试连接」+ 10 秒冷却禁用。`channelVerifyFailure` 把「被拒」和「没查成」分成两种结局 | ✅ | CHN-O6 | `web:src/api/channel.ts`、`use-channel-request.ts::useVerifyChannel`、`channel-form-sheet.tsx` |
@@ -215,6 +215,24 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 | CHN-X18 | 把 CHN-X7 已提升的 immutable Principal 从 Channel Execution 显式传入 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas workflow 与 MCP call context seam；LINKED 禁止静默匿名，NO_LINK 保留显式 legacy | ✅ | EIM-P2、CHN-X7；`api.identity.run_context.RunContext`、`api/channel_execution/{protocols,executors}.py`、Canvas Graph/Memory/MCP instance-local call context 已接线；MCP 不签 token、不取 credential、不发 bearer |
 | CHN-X19 | Channel execution 可选消费 EIM-I5 enterprise-subject evidence：default-disabled registry composition，五态分流，只有 persisted readback 才提升 `ENTERPRISE_VERIFIED`；不改 private wire | ✅ | EIM-I5、CHN-X7；`api/identity_adapters/channel_runtime.py`、`api/channel_execution/dependencies.py`；Feishu 只证明 employee_no，不等于 OA workcode；无 I7/I8 freshness 或 rollout 声明 |
 | CHN-X20 | EIM-L2 的 p2p-only 低敏请假原生表单与严格终态投影：7 个 flat/ref-free 字段提交后只做当前 Principal 的 OA preview，CardKit 不显示 raw tool result | ✅ | EIM-L2、CHN-X15、CHN-X19；`api/channel_execution/interaction_presentations.py`、of_mcp `preview_leave_form`；H5/URL、群聊、reason/身份/PM/CC/remark 与敏感写 deferred；双仓门禁全绿，真实 authority 未配置、未 rollout |
+| CHN-X21 | managed Feishu Contact V3 事件经 bounded normalize、generation-scoped private API、原子 receipt/CAS 与 durable account revision fence 收敛；post-commit provider invalidation 只加速 | ✅ | EIM-I7、CHN-X17；`api/channels/identity_events.py`、`api/channels/{feishu/channel.py,runtime_client.py,worker.py}`、`api/apps/restful_apis/channel_identity_event_api.py`、`api/identity/{directory_events.py,directory_event_repository.py}`；未改配置/后台订阅、未 rollout |
+
+> **CHN-X21 / EIM-I7 完成边界（2026-08-24，本地实现 `✅`，未 rollout）**：managed
+> capability 只有在 generation-scoped preflight 加法广告 `identity_event_receipt=true` 时，才于
+> `start()` 前安装 handler 并注册四个 Contact processor；旧响应缺字段、404/超时与 demo/legacy 均不注册。worker
+> 仅转发 bounded header proof、三种 identifier 与状态；private body 不带 MultiRAG authority，4 KiB
+> parser、ASCII `Idempotency-Key`、binding/generation workload fence 与锁后 DB authority 复核均 fail
+> closed。合法 binding/channel 无 link 为 204 NO_LINK、零 receipt/零 mutation；linked 路径按
+> `Channel→Tenant→ProviderTenant/Account+Link→Binding→receipt→Alias/Identity` 锁序，用 PostgreSQL
+> atomic claim 将 receipt、identity/account CAS 与 terminal state 放在同一事务。
+>
+> account revision 是跨 API 进程 correctness fence；仅当前进程收到的 provider invalidate 失败也不
+> 影响新 revision cache miss。user stale floor 为 identity proof/last-seen/succeeded linked receipt 的
+> 最大值，不拿 account 全局 marker 挡别的用户；stale user/scope 零 bump。unknown created/updated 不
+> JIT 但 bump negative cache；updated inactive 单向 inactive，deleted 单向终态 revoked，scope 不枚举。
+> durable conflict 保留原 safe code、只 bump 一次并 ACK 204，重放不 redo；只有未提交 transient failure
+> 重试。未来时间只按锁后 DB clock 拒绝 >5min，无全局旧事件截止。本任务没有配置/依赖变化、飞书
+> 后台订阅、API/worker 重启、staging/live、I8 reconciliation 或纯本地 freshness fast path。
 
 > **CHN-X20 / EIM-L2 完成边界（2026-08-24，代码/契约 `✅`，未 rollout）**：
 > `preview_leave_form` 外层无业务参数，response schema 只含事假/年假/星光假/阳光假与起止
@@ -582,8 +600,8 @@ CHN-X5～X20、CHN-U8～U15、CHN-O14 与 CHN-P14 属于 EIM 项目，不在本�
 
 ### CHN-O9 · binding 级可观测
 
-- **当前状态 `🔵`**：Provider-neutral、默认 no-op 的 `ChannelTelemetry` seam 与有界
-  `InMemoryChannelTelemetry` 已在当前工作树实现；热路径方法全部同步，无 await、Redis、HTTP、数据库或
+- **当前状态 `✅`（本地代码与全门禁，未 rollout）**：Provider-neutral、默认 no-op 的 `ChannelTelemetry` seam 与有界
+  `InMemoryChannelTelemetry` 已实现；热路径方法全部同步，无 await、Redis、HTTP、数据库或
   exporter I/O。managed BindingBridge/worker 和 API candidate GC composition 显式注入进程级 recorder；
   legacy/demo 因 `FeishuAgentBridge` 的兼容 `None` outcome 无法精确分类，刻意保持 no-op，避免系统性假绿。
 - **覆盖面**：封闭枚举记录 ingress 最终 disposition、queue depth/wait/abandoned、execution duration、首卡、
@@ -601,8 +619,8 @@ CHN-X5～X20、CHN-U8～U15、CHN-O14 与 CHN-P14 属于 EIM 项目，不在本�
   汇总或持久化时序库；生产外部可验证路径仍只有既有 structured lifecycle logs。首卡/首个可见正文 latency
   已实现，**首 ACK latency 未实现**，因为没有可靠且 Provider-neutral 的 ACK 完成钩子，不能拿 enqueue 冒充。
 - **本轮证据**：scoped Ruff format/check 通过；O9 定向组（telemetry、worker、BindingBridge、buffered、
-  Feishu、candidate GC、真实 graceful-shutdown harness）**121 passed**。按本轮围栏尚未跑仓库全量
-  `make verify`、未部署、未发真实 OA/飞书流量，因此状态保持 `🔵`。
+  Feishu、candidate GC、真实 graceful-shutdown harness）**121 passed**；后续最终洁净树
+  `make verify` **2753 passed**。未部署、未发真实 OA/飞书流量，且仍只有进程内 recorder。
 
 ### CHN-O10 · 自适应轮询（**SSE 已否决，先读 CHN-ADR-02**）
 
@@ -824,7 +842,7 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 | ID | 问题 | 需要谁定 |
 |---|---|---|
 | CHN-Q1 | 第三个 provider 是不是企业微信？它的 `connection_type` 判别式分支会逼出 `visible_when` 与 number 控件，届时 `FormField` 需要扩展 | 产品 |
-| CHN-Q2 | O9 本地实现已进入 `🔵`；全门禁/rollout 后，O8 / O10 / O11 的后续相对顺序仍待产品与运维决定 | 产品 + 运维 |
+| CHN-Q2 | O9 本地实现与全门禁已完成 `✅`、尚未 rollout；O8 / O10 / O11 的后续相对顺序仍待产品与运维决定 | 产品 + 运维 |
 | CHN-Q3 | Windows 上 supervisor 停子 worker 走 `TerminateProcess`（`asyncio` 在 Windows 对 `terminate()` 的实现），子进程收不到信号，CHN-U16 的合作式清理**一行都不会跑**；Linux/macOS 与 Ctrl+C 不受影响。要不要给 Windows 子进程加 `CREATE_NEW_PROCESS_GROUP` + `CTRL_BREAK_EVENT`？代价是信号发给整个进程组，而 supervisor 自身由 PowerShell 脚本拉起，爆炸半径需要评估；也可以判定「Windows 只是开发机，生产在 docker/Linux」而不做 | 用户 + 运维 |
 
 ---
@@ -833,7 +851,8 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 
 | 日期 | 变更 | 提交 | 记录人 |
 |---|---|---|---|
-| 2026-08-24 | **CHN-O9 本地实现进入 `🔵`。** 新增 Provider-neutral default no-op telemetry、有界进程内 recorder 与封闭 labels；managed worker/BindingBridge 及 API candidate GC 显式注入，legacy/demo 保持 no-op。覆盖 ingress exactly-once disposition、queue、execution、首卡/首正文、delivery/fallback、shutdown 和 GC；真实 Bridge+Worker 回归钉住同会话 dequeue waiter、provider cancel/Redis terminal write/shutdown-timeout 的 closed failure，用户 cancel 不冒充 shutdown。无 exporter/HTTP/跨进程聚合，首 ACK 未实现，未部署或发真实流量。**验证**：scoped Ruff format/check 通过；O9 定向 **121 passed**；按围栏未跑仓库全量 `make verify` | 本次提交（待全门禁） | Codex |
+| 2026-08-24 | **CHN-X21 / EIM-I7 本地实现完成 `✅`，未 rollout。** managed Feishu 只在 generation-scoped preflight 广告 `identity_event_receipt=true` 后注册四个 Contact V3 processor；旧响应缺字段、404/超时与非法响应均不订阅。bounded normalizer 与 4 KiB/no-echo private route 只转发 event header proof、identifier/status，`Idempotency-Key` 精确绑定 ASCII event ID。API 按 authority 全局锁序复核 binding/channel/tenant/provider account+link 后，以 PostgreSQL atomic claim 将 receipt、identity/account CAS 和 terminal state 放在同一事务；合法 NO_LINK 零写，stale 零 bump，unknown created/updated bump negative-cache fence，inactive/revoked 单向收紧。durable semantic poison 保存 safe code 后 ACK 204，瞬时 rollback 才重试；account revision 是跨进程 correctness fence，post-commit invalidate 仅加速。未改配置/依赖，未替管理员订阅后台，未重启、staging/live 或实现 I8。**验证**：定向 unit **177 passed**；repository unit + integration **24 passed**，其中强制真 PostgreSQL **15 passed**；洁净树 `make verify` 全绿（8 条 import contracts、mypy **116 source files**、unit **2753 passed**）；现有服务 integration **195 passed / 1 个既有 MinIO 凭据错误**，一次性匹配凭据 testcontainer 全量 **196 passed**；最终安全 diff scan 覆盖 **11/11** 生产面、**0 findings**；`uv lock --check`、`git diff --check` 全绿 | 本次提交（未部署） | Codex |
+| 2026-08-24 | **CHN-O9 本地实现与全门禁完成 `✅`，未 rollout。** 新增 Provider-neutral default no-op telemetry、有界进程内 recorder 与封闭 labels；managed worker/BindingBridge 及 API candidate GC 显式注入，legacy/demo 保持 no-op。覆盖 ingress exactly-once disposition、queue、execution、首卡/首正文、delivery/fallback、shutdown 和 GC；真实 Bridge+Worker 回归钉住同会话 dequeue waiter、provider cancel/Redis terminal write/shutdown-timeout 的 closed failure，用户 cancel 不冒充 shutdown。无 exporter/HTTP/跨进程聚合，首 ACK 未实现，未部署或发真实流量。**验证**：scoped Ruff format/check 通过；O9 定向 **121 passed**；后续最终洁净树 `make verify` **2753 passed** | `68e84a85`（未部署） | Codex |
 | 2026-08-24 | **CHN-X20 / EIM-L2 本地代码与契约完成 `✅`。** 冻结 p2p-only 七字段低敏请假 form、`leave:read` + prepare/reusable + `leave_applicant`、accepted 只做 OA preview 且 `doCreateRequest` 调用数为 0、写工具/OA create/submit 继续禁用；MultiRAG 只对 direct/单键 FastMCP wrapper 的严格四键 terminal envelope 投影单行 trimmed printable ≤240 message，其余 generic。secure 需 stable key、requestState TTL 900s > MR 600s；default closed、未配置真实 authority、未 rollout。H5/URL、群聊、reason/身份/PM/CC/remark 和敏感写 deferred；`end<=start` 当前 terminal failed。**验证**：MR focused **89 passed**、verify **2762 passed**、强制 integration **182 passed**、MCP compatibility **22/22**；of_mcp focused **114 passed**、verify **580 passed / 2 skipped**、diff **breaking 0 / behavioral 0 / additive 1**；安全 diff scan **0 findings** | 本次双仓提交（未部署） | Codex |
 | 2026-08-24 | **CHN-X19 / EIM-I5 本地实现完成 `✅`。** Channel execution 增加 default-disabled enterprise-subject resolver registry composition；关闭时保持 C3 directory Principal/零 subject 写，开启后五态分流且只有 repository 持久化回读可提升 `ENTERPRISE_VERIFIED`。`NOT_FOUND/UNAVAILABLE` ordinary RAG directory-only，`AMBIGUOUS/INACTIVE` linked fail closed；Feishu authority 仅为逐字 employee_no，不推断 OA workcode。private wire/channel-api 不变，无 migration；未启用配置、重启、部署、发真实流量，未实现 I7/I8 freshness、真实 OA/HR 或 leave。**验证**：定向 unit **87 passed**、真 PostgreSQL **10 passed**；`make verify` **2663 passed**；强制 integration **181 passed**；`make mcp-compat` **22/22 PASS**；final P0/P1 audit **no blockers** | 本次提交 | Codex |
 | 2026-08-24 | **CHN-X15 / EIM-U15 本机真实 native-form 闭环通过。** 单机临时启用 A2/P3/U14/U15，使用 loopback TLS、严格签名与 tenant/user/agent/revision/resource/scope 精确 grant；真实飞书表单完成 durable receipt、首次 lease/claim、首次 resume job、第二次 MCP 调用、U14 completed 与原消息 terminal ACK。live 失败优先发现并修复飞书 300302（Card JSON 2.0 form/terminal 需 `update_multi=true`）和 `date_picker` 回传 `YYYY-MM-DD ±HHMM`；字段响应非法现在拒绝当前 receipt、保留 interaction 并重新投递 fresh-nonce form，密文/映射损坏仍 terminal fail closed。分类器误路由的一次请求没有创建 interaction，不计作 U15 失败。H5/URL 与敏感写仍 deferred；未升级依赖、未改 RAGFlow 主循环或 `of_mcp` 生产行为。**验证**：`demo-004` live 的 receipt `claimed`/attempt 1、resume job `succeeded`/attempt 1、interaction `completed`、terminal delivery `delivered`/ACK，全部 safe error 为空；定向表单/receipt/renderer **43 passed**；`make verify` **2620 passed**；`REQUIRE_SERVICES=1 make integration` **172 passed** | `41675183` 后续工作树修复 + 本机临时 rollout | Codex |

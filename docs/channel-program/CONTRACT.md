@@ -268,6 +268,31 @@ MR focused **89 passed** / verify **2762 passed** / 强制 integration **182 pas
 **22/22**；of_mcp focused **114 passed** / verify **580 passed / 2 skipped** / contract diff
 **breaking 0 / behavioral 0 / additive 1**；安全 diff scan **0 findings**。
 
+### 1.5 私有 Contact directory event（EIM-I7 / CHN-X21）
+
+`POST /api/v1/internal/channel-bindings/{binding_id}/identity-events` 只供 binding/generation-scoped
+managed worker 使用，不属于公开 `channel-api/v1`，web 无消费方。请求必须同时携 workload bearer、
+`X-Channel-Binding-Generation`、`Content-Type: application/json` 与逐字等于 body `event_id` 的
+`Idempotency-Key`；body 最大 4 KiB，`event_id` 限 ASCII token `[A-Za-z0-9._:-]{1,255}`。
+
+body 严格 extra-forbid，只有 version 1、四种 Contact V3 `event_type`、event ID/time、repr-hidden
+`observed_app_id/observed_tenant_key` 与可选 subject。user event subject 只含最多三种且 kind 唯一的
+`open_id/user_id/union_id` 和 `active/inactive/unknown`；scope event 的 subject 必须为 null，不传用户
+列表。observed header 只是 proof，不是 authority；body 禁止 MultiRAG tenant/account/link/revision、
+Principal、role、scope 或 token。服务端在数据库锁内从 binding 重新取得并复核全部 authority。
+
+成功、duplicate、STALE、NO_LINK 与 durable semantic failure 都返回空 204，并带
+`Cache-Control: private, no-store`；response 不返回 identity、revision 或错误上下文。永久 identity/hash
+conflict 已由 failed receipt 和 safe log 闭合，ACK 后不得重做；只有未提交的 repository/timeout 或异常
+processing receipt 返回 retryable 非 2xx。binding/generation/provider/authority mismatch 统一为不泄漏
+的 401/404 边界，解析错误使用固定 detail，不回显原 body/path。
+
+managed composition 必须先从 generation-scoped `execution-capabilities` 取得
+`identity_event_receipt=true`，再在 Channel `start()` 前安装 runtime-checkable handler；只有此时 Feishu
+SDK 才注册四个 Contact processor。旧响应缺字段、404/超时与 demo/legacy 都不注册。本契约是 private additive，不 bump
+`channel-api/v1`。代码落地不等于飞书后台已订阅，也不等于 API/worker 已重启、staging/live 或生产
+rollout；这些仍需独立发布门禁。
+
 ---
 
 ## 2. 写请求形状
@@ -549,4 +574,5 @@ JSON Schema（`config_schema`）仅用于服务端请求校验与 OpenAPI，**�
 | 2026-08-13 | v1（仅实现 private run-context 传播，不 bump） | EIM-P2 / CHN-X18 已把 C3 full Principal 经 frozen `RunContext` 显式送入 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas component workflow 与 MCP instance-local call context；LINKED 的 user key 只取可信 Principal，Memory 同时校验 tenant，NO_LINK 保留 legacy。未改 public/private wire、DSL、MCP header/arguments 或 token 体系 | 本次提交 |
 | 2026-08-24 | v1（private terminal 行为兼容，不 bump） | 完成 EIM-L2 / CHN-X20：p2p-only 七字段低敏请假 form 接受后只做当前主体 OA preview，`doCreateRequest` 调用数为 0；新增 strict opt-in completed terminal envelope（direct 或 single-key FastMCP wrapper），message 单行/trimmed/printable/≤240，其余 generic。未改 private endpoint/body/ACK/state wire；H5/URL、群聊、reason/身份/PM/CC/remark、敏感写和生产 rollout deferred。双仓完整门禁与安全复核全绿，代码/契约 `✅`、未部署 | 本次双仓提交 |
 | 2026-08-24 | v1（private callback 行为兼容，不 bump） | 实机确认 CardKit `date_picker` 回传带 RFC 822 风格 offset；date-only mapping 严格归一为 `YYYY-MM-DD`。RESPONSE_INVALID 现在拒绝当前 durable receipt 并重新投递 fresh-nonce form，坏密文/映射仍 terminal；private wire 字段与状态码集合未变。单机临时真实飞书/P3/of_mcp E2E 已完成，不表示生产 rollout | `41675183` 后续工作树修复 + 本机 live |
+| 2026-08-24 | v1（private additive，不 bump） | 新增 EIM-I7 / CHN-X21 generation-scoped Contact directory event endpoint。body 只含 bounded event/header proof/identifier/status，不携 MultiRAG authority；worker 用相同 ASCII event ID 发送 `Idempotency-Key`。服务端重锁 DB authority，以 atomic receipt + identity/account CAS 单事务实现 duplicate/stale/terminal poison ACK；account revision 是跨进程 cache fence，invalidate 仅加速。当前 API 在既有 preflight 加法广告 `identity_event_receipt=true`；旧响应缺字段或 preflight 失败默认 false，只有 advertised managed Feishu 安装 handler 并订阅，demo/legacy 不订阅；合法 NO_LINK 为 204 零写。公开 Channel API、execution SSE 与已有 private command 均未改变；未改配置、未后台订阅或 rollout | 本次提交（未 rollout） |
 | 2026-08-23 | v1（private additive，不 bump） | 定义 EIM-U15 / CHN-X15 的 generation-scoped delivery claim/ACK 与 durable callback receipt：只有 PostgreSQL receipt 提交后才快速 ACK，Principal 解析、当前 revision claim 与 U14 MCP 恢复全部异步；CardKit 只消费安全 native-form/terminal projection，H5/URL 和敏感写后置。当前是 app-bound WebSocket + tenant/app/operator/message lineage，不把 webhook signature 写成已实现 | `41675183`（状态 `✅`） |

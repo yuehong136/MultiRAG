@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 
@@ -144,10 +146,13 @@ class _Directory:
 def _provider(
     directory: _Directory,
     credentials: _Credentials | None = None,
+    *,
+    clock: Callable[[], float] | None = None,
 ) -> FeishuEnterpriseIdentityProvider:
     return FeishuEnterpriseIdentityProvider(
         credentials or _Credentials(),
         directory_client=directory,
+        clock=clock or time.monotonic,
         now=lambda: _NOW,
         contact_calls_per_second=1.0,
         sleep=lambda _delay: asyncio.sleep(0),
@@ -415,4 +420,133 @@ async def test_secret_generation_change_never_reuses_token_or_identity_cache() -
     assert first.status is second.status is ProviderIdentityStatus.RESOLVED
     assert directory.token_calls == 2
     assert directory.tenant_calls == 2
+    assert directory.user_calls == 2
+
+
+async def test_account_revision_fences_two_provider_caches_and_late_old_refill() -> None:
+    class Clock:
+        value = 100.0
+
+        def __call__(self) -> float:
+            return self.value
+
+    class RevisionDirectory(_Directory):
+        def __init__(self) -> None:
+            super().__init__()
+            self.old_refill_entered = asyncio.Event()
+            self.release_old_refill = asyncio.Event()
+
+        async def get_user(
+            self,
+            credential: FeishuProviderCredential,
+            *,
+            tenant_access_token: str,
+            identifier_type: str,
+            identifier_value: str,
+        ) -> FeishuGetUserResponse:
+            del credential, tenant_access_token, identifier_type, identifier_value
+            self.user_calls += 1
+            if self.user_calls == 2:
+                self.old_refill_entered.set()
+                await self.release_old_refill.wait()
+                user_id = "old-revision-late"
+            elif self.user_calls >= 3:
+                user_id = "new-revision"
+            else:
+                user_id = "old-revision"
+            return FeishuGetUserResponse(
+                http_status=200,
+                code=0,
+                user=replace(
+                    self.user,
+                    user_id=user_id,
+                ),
+            )
+
+    clock = Clock()
+    directory_a = _Directory()
+    directory_b = RevisionDirectory()
+    provider_a = _provider(directory_a, clock=clock)
+    provider_b = _provider(directory_b, clock=clock)
+    old_context = _context(provider_account_revision=3)
+    new_context = _context(provider_account_revision=4)
+
+    old_a = await provider_a.resolve(old_context, _assertion())
+    old_b = await provider_b.resolve(old_context, _assertion())
+    assert old_a.from_cache is False
+    assert old_b.from_cache is False
+    assert (await provider_a.resolve(old_context, _assertion())).from_cache is True
+    assert (await provider_b.resolve(old_context, _assertion())).from_cache is True
+
+    # Only this process gets the best-effort post-commit acceleration.
+    await provider_a.invalidate(new_context)
+    clock.value = 1_000.0
+
+    new_a = await provider_a.resolve(new_context, _assertion())
+    assert new_a.from_cache is False
+    assert directory_a.user_calls == 2
+
+    old_refill = asyncio.create_task(provider_b.resolve(old_context, _assertion()))
+    await directory_b.old_refill_entered.wait()
+    new_b = await provider_b.resolve(new_context, _assertion())
+    assert new_b.from_cache is False
+    assert new_b.identity is not None
+    assert new_b.identity.provider_user_id == "new-revision"
+
+    directory_b.release_old_refill.set()
+    late = await old_refill
+    assert late.identity is not None
+    assert late.identity.provider_user_id == "old-revision-late"
+
+    new_b_again = await provider_b.resolve(new_context, _assertion())
+    assert new_b_again.from_cache is True
+    assert new_b_again.identity is not None
+    assert new_b_again.identity.provider_user_id == "new-revision"
+    assert directory_b.user_calls == 3
+
+
+async def test_account_revision_bump_fences_cached_not_found() -> None:
+    class MutableDirectory(_Directory):
+        def __init__(self) -> None:
+            super().__init__()
+            self.exists = False
+
+        async def get_user(
+            self,
+            credential: FeishuProviderCredential,
+            *,
+            tenant_access_token: str,
+            identifier_type: str,
+            identifier_value: str,
+        ) -> FeishuGetUserResponse:
+            del credential, tenant_access_token, identifier_type, identifier_value
+            self.user_calls += 1
+            if not self.exists:
+                return FeishuGetUserResponse(http_status=404, code=41012)
+            return FeishuGetUserResponse(
+                http_status=200,
+                code=0,
+                user=self.user,
+            )
+
+    directory = MutableDirectory()
+    provider = _provider(directory)
+    old_context = _context(provider_account_revision=3)
+
+    missing = await provider.resolve(old_context, _assertion())
+    cached_missing = await provider.resolve(old_context, _assertion())
+    assert missing.status is ProviderIdentityStatus.NOT_FOUND
+    assert cached_missing.from_cache is True
+    assert directory.user_calls == 1
+
+    # EIM-I7 created/updated bumps this durable revision even for an unknown
+    # identity, so another API process cannot keep hitting the old miss key.
+    directory.exists = True
+    refreshed = await provider.resolve(
+        _context(provider_account_revision=4),
+        _assertion(),
+    )
+
+    assert refreshed.status is ProviderIdentityStatus.RESOLVED
+    assert refreshed.from_cache is False
     assert directory.user_calls == 2

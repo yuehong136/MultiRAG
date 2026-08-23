@@ -193,7 +193,8 @@ P1 已完成，代码锚点为 `api/identity/principal.py`、`api/identity/legac
 P1 当时不交付 C3/P2、A2/P3 或 A7。C3、P2 已在后续独立任务完成源码、自动门禁和本机飞书
 live；A7 的代码前置虽已满足，仍须作为独立 inbound Resource Server 实现/发布。当前 token 主线是
 P3；不得重做 C3/P2/A2，也不得把 A2 的独立 signer 当成 bearer 已接线。
-I5 已在后续独立任务完成且默认关闭；I7 已由 I4 解锁，I8 仍要求 I6 + I7，不能跳过依赖。
+I5 已在后续独立任务完成且默认关闭；I7/CHN-X21 也已完成本地 managed event consumer、未 rollout，
+I8 的 I6 + I7 依赖现已闭合，但仍不能跳过 reconciliation/freshness 自身门禁。
 
 #### EIM-P2 / CHN-X18 已完成边界
 
@@ -717,8 +718,9 @@ EIM-F9 后续把 A5 的 era 分类扩成 SDK registry 驱动的完整门禁：�
 进程矩阵为 **22/22 PASS**，of_mcp 分类/真实 proxy HTTP 定向 **20 passed**，完整 verify 为
 **499 passed、2 existing skipped**。FastMCP 4.0.0b3 升级仍须另立版本任务，不能借 F9 静默升级。
 
-A6 phase 1 已接续且保持 `🔵`；MultiRAG F1/I3/I4/I5/I6/P1/P2/C1/C2/C3/A2/P3/U14/U15 已完成。
-I7 仍是已解锁支线；L1 代码、契约与最终门禁已完成并标 `✅`，但仍默认关闭；真实
+A6 phase 1 已接续且保持 `🔵`；MultiRAG F1/I3/I4/I5/I6/I7/P1/P2/C1/C2/C3/A2/P3/U14/U15 已完成。
+I7 未做飞书后台订阅、服务重启或 live，I8/freshness 仍待实现；L1 代码、契约与最终门禁已完成并标
+`✅`，但仍默认关闭；真实
 `leave_applicant` authority 未配置，不能由 Feishu employee_no resolver 推断。M1 继续 medic-only；secure 在独立远程
 发布闸门解除前仍不能作为远程业务入口。
 
