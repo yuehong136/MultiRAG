@@ -26,6 +26,7 @@ from api.identity.providers.contracts import (
 from api.identity_adapters.channel_credentials import (
     ChannelProviderCredentialResolver,
     SessionFactoryChannelProviderCredentialResolver,
+    SessionFactoryReconciliationProviderCredentialResolver,
 )
 
 _NOW = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
@@ -449,6 +450,51 @@ async def test_factory_resolver_requires_exact_healthy_before_decrypt(
     monkeypatch.setattr(async_db, "execute", execute)
     store = _ExitAwareSecretStore(state)
     resolver = SessionFactoryChannelProviderCredentialResolver(
+        _TrackedSessionFactory(async_db, state),
+        store,
+    )
+
+    with pytest.raises(ProviderCredentialError) as caught:
+        await resolver.resolve(_context())
+
+    assert caught.value.code is ProviderErrorCode.CREDENTIAL_UNAVAILABLE
+    assert state["open"] is False
+    assert store.calls == []
+
+
+@pytest.mark.parametrize("health_state", ["healthy", "degraded"])
+async def test_reconciliation_factory_resolver_allows_recovery_health_states(
+    async_db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    health_state: str,
+) -> None:
+    state = {"open": False}
+    execute = AsyncMock(return_value=_Rows([_row(health_state=health_state)]))
+    monkeypatch.setattr(async_db, "execute", execute)
+    store = _ExitAwareSecretStore(state)
+    resolver = SessionFactoryReconciliationProviderCredentialResolver(
+        _TrackedSessionFactory(async_db, state),
+        store,
+    )
+
+    credential = await resolver.resolve(_context())
+
+    assert state["open"] is False
+    assert credential.credential_generation == 3
+    assert len(store.calls) == 1
+
+
+@pytest.mark.parametrize("health_state", ["pending", "error", "disabled"])
+async def test_reconciliation_factory_resolver_rejects_non_recovery_health_states(
+    async_db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    health_state: str,
+) -> None:
+    state = {"open": False}
+    execute = AsyncMock(return_value=_Rows([_row(health_state=health_state)]))
+    monkeypatch.setattr(async_db, "execute", execute)
+    store = _ExitAwareSecretStore(state)
+    resolver = SessionFactoryReconciliationProviderCredentialResolver(
         _TrackedSessionFactory(async_db, state),
         store,
     )

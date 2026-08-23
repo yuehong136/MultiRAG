@@ -147,10 +147,13 @@ def _provider(
     directory: _Directory,
     credentials: _Credentials | None = None,
     *,
+    reconciliation_credentials: _Credentials | None = None,
     clock: Callable[[], float] | None = None,
 ) -> FeishuEnterpriseIdentityProvider:
+    foreground_credentials = credentials if credentials is not None else _Credentials()
     return FeishuEnterpriseIdentityProvider(
-        credentials or _Credentials(),
+        foreground_credentials,
+        reconciliation_credential_resolver=(reconciliation_credentials if reconciliation_credentials is not None else foreground_credentials),
         directory_client=directory,
         clock=clock or time.monotonic,
         now=lambda: _NOW,
@@ -164,6 +167,7 @@ def test_reconciliation_limiter_must_be_finite_and_positive(limit: float) -> Non
     with pytest.raises(ValueError, match="provider runtime limits"):
         FeishuEnterpriseIdentityProvider(
             _Credentials(),
+            reconciliation_credential_resolver=_Credentials(),
             directory_client=_Directory(),
             reconciliation_calls_per_second=limit,
         )
@@ -204,6 +208,27 @@ async def test_reconciliation_bypasses_identity_cache_but_reuses_verified_token(
     assert directory.token_calls == 1
     assert directory.tenant_calls == 1
     assert directory.user_calls == 3
+
+
+async def test_reconciliation_uses_its_dedicated_credential_resolver() -> None:
+    directory = _Directory()
+    foreground_credentials = _Credentials()
+    reconciliation_credentials = _Credentials()
+    provider = _provider(
+        directory,
+        foreground_credentials,
+        reconciliation_credentials=reconciliation_credentials,
+    )
+
+    resolved = await provider.resolve(_context(), _assertion())
+    refreshed = await provider.refresh(_context(), "user-test")
+    reconciled = await provider.reconcile(_context(), "user-test")
+
+    assert resolved.status is ProviderIdentityStatus.RESOLVED
+    assert refreshed.status is ProviderIdentityStatus.RESOLVED
+    assert reconciled.status is ProviderIdentityStatus.RESOLVED
+    assert foreground_credentials.calls == 2
+    assert reconciliation_credentials.calls == 1
 
 
 async def test_reconciliation_rejects_mismatched_subject_and_never_caches_result() -> None:

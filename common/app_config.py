@@ -572,6 +572,7 @@ class IdentityReconciliationConfig(_Section):
     active_window_seconds: PositiveInt = Field(default=2_592_000, le=31_536_000)
     lease_seconds: PositiveInt = Field(default=60, ge=15, le=300)
     probe_safety_margin_seconds: float = Field(default=5.0, gt=0, le=60)
+    probe_interval_seconds: float = Field(default=1.0, ge=0.1, le=60)
     backoff_initial_seconds: PositiveInt = Field(default=5, le=3_600)
     backoff_max_seconds: PositiveInt = Field(default=300, le=86_400)
     not_found_confirmation_seconds: PositiveInt = Field(

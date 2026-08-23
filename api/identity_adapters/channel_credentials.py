@@ -39,6 +39,15 @@ from common.constants import StatusEnum
 
 _FEISHU_PROVIDER = "feishu"
 _FEISHU_DOMAINS = frozenset(FeishuDomain)
+_FOREGROUND_HEALTH_STATES = frozenset(
+    {IdentityProviderHealthState.HEALTHY.value},
+)
+_RECONCILIATION_HEALTH_STATES = frozenset(
+    {
+        IdentityProviderHealthState.HEALTHY.value,
+        IdentityProviderHealthState.DEGRADED.value,
+    },
+)
 
 
 class ChannelProviderCredentialResolver:
@@ -208,8 +217,8 @@ class _DetachedCredentialMaterial:
     domain: FeishuDomain
 
 
-class SessionFactoryChannelProviderCredentialResolver:
-    """Resolve DB material in a short session, then decrypt after it closes.
+class _SessionFactoryProviderCredentialResolver:
+    """Resolve permitted DB material in a short session, then decrypt outside it.
 
     ``SecretStore.decrypt`` may use a remote KMS.  Keeping that call outside
     the session prevents a provider/KMS network wait from retaining an
@@ -220,13 +229,19 @@ class SessionFactoryChannelProviderCredentialResolver:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         secret_store: SecretStore,
+        allowed_health_states: frozenset[str],
     ) -> None:
         self._session_factory = session_factory
         self._secret_store = secret_store
+        self._allowed_health_states = allowed_health_states
 
     async def resolve(self, context: ProviderContext) -> FeishuProviderCredential:
         async with self._session_factory() as session:
-            material = await _load_detached_material(session, context)
+            material = await _load_detached_material(
+                session,
+                context,
+                allowed_health_states=self._allowed_health_states,
+            )
         try:
             plaintext = await self._secret_store.decrypt(
                 tenant_id=context.tenant_id,
@@ -251,9 +266,45 @@ class SessionFactoryChannelProviderCredentialResolver:
         )
 
 
+class SessionFactoryChannelProviderCredentialResolver(
+    _SessionFactoryProviderCredentialResolver,
+):
+    """Foreground resolver that accepts only an exactly healthy account."""
+
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        secret_store: SecretStore,
+    ) -> None:
+        super().__init__(
+            session_factory,
+            secret_store,
+            _FOREGROUND_HEALTH_STATES,
+        )
+
+
+class SessionFactoryReconciliationProviderCredentialResolver(
+    _SessionFactoryProviderCredentialResolver,
+):
+    """Recovery resolver limited to healthy or degraded accounts."""
+
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        secret_store: SecretStore,
+    ) -> None:
+        super().__init__(
+            session_factory,
+            secret_store,
+            _RECONCILIATION_HEALTH_STATES,
+        )
+
+
 async def _load_detached_material(
     db: AsyncSession,
     context: ProviderContext,
+    *,
+    allowed_health_states: frozenset[str],
 ) -> _DetachedCredentialMaterial:
     if not valid_provider_context(context) or context.provider != _FEISHU_PROVIDER:
         _credential_unavailable()
@@ -332,7 +383,7 @@ async def _load_detached_material(
     if (
         account_id != context.provider_account_id
         or account_key != context.provider_account_key
-        or health_state != IdentityProviderHealthState.HEALTHY.value
+        or health_state not in allowed_health_states
         or link_tenant_id != context.tenant_id
         or link_provider != context.provider
         or channel_tenant_id != context.tenant_id

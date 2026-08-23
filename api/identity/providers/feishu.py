@@ -87,6 +87,7 @@ class FeishuEnterpriseIdentityProvider:
         self,
         credential_resolver: ProviderCredentialResolver,
         *,
+        reconciliation_credential_resolver: ProviderCredentialResolver,
         directory_client: FeishuDirectoryClient | None = None,
         clock: Callable[[], float] = time.monotonic,
         now: Callable[[], datetime] | None = None,
@@ -98,6 +99,7 @@ class FeishuEnterpriseIdentityProvider:
         if not math.isfinite(request_timeout_seconds) or request_timeout_seconds <= 0 or not math.isfinite(reconciliation_calls_per_second) or reconciliation_calls_per_second <= 0:
             raise ValueError("provider runtime limits must be finite and positive")
         self._credential_resolver = credential_resolver
+        self._reconciliation_credential_resolver = reconciliation_credential_resolver
         self._directory_client = directory_client or LarkOapiFeishuDirectoryClient(timeout_seconds=request_timeout_seconds)
         self._clock = clock
         self._now = now or (lambda: datetime.now(tz=UTC))
@@ -197,7 +199,7 @@ class FeishuEnterpriseIdentityProvider:
         invalid = _validate_refresh_input(context, provider_user_id)
         if invalid is not None:
             return invalid
-        credential = await self._resolve_credential(context)
+        credential = await self._resolve_reconciliation_credential(context)
         if isinstance(credential, ProviderIdentityResult):
             return credential
         account = _account_generation(context, credential)
@@ -245,8 +247,27 @@ class FeishuEnterpriseIdentityProvider:
         self,
         context: ProviderContext,
     ) -> FeishuProviderCredential | ProviderIdentityResult:
+        return await self._resolve_credential_with(
+            self._credential_resolver,
+            context,
+        )
+
+    async def _resolve_reconciliation_credential(
+        self,
+        context: ProviderContext,
+    ) -> FeishuProviderCredential | ProviderIdentityResult:
+        return await self._resolve_credential_with(
+            self._reconciliation_credential_resolver,
+            context,
+        )
+
+    async def _resolve_credential_with(
+        self,
+        resolver: ProviderCredentialResolver,
+        context: ProviderContext,
+    ) -> FeishuProviderCredential | ProviderIdentityResult:
         try:
-            credential = await self._credential_resolver.resolve(context)
+            credential = await resolver.resolve(context)
         except ProviderCredentialError as exc:
             return _result(ProviderIdentityStatus.UNAVAILABLE, exc.code)
         except Exception:

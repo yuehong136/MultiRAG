@@ -52,6 +52,7 @@ class IdentityReconciliationRepository(Protocol):
         *,
         owner: str,
         lease_seconds: int,
+        probe_interval_seconds: float,
         active_since: datetime,
         cycle_interval_seconds: int,
     ) -> ReconciliationLease | None: ...
@@ -61,6 +62,7 @@ class IdentityReconciliationRepository(Protocol):
         *,
         lease: ReconciliationLease,
         observation: ReconciliationObservation,
+        probe_interval_seconds: float,
         unavailable_delay_seconds: int,
         not_found_confirmation_seconds: int,
         cycle_interval_seconds: int,
@@ -85,6 +87,7 @@ class InvalidatableIdentityProvider(Protocol):
 class IdentityReconciliationLimits:
     lease_seconds: int
     probe_safety_margin_seconds: float
+    probe_interval_seconds: float
     cycle_interval_seconds: int
     active_window_seconds: int
     backoff_initial_seconds: int
@@ -114,6 +117,10 @@ class IdentityReconciliationLimits:
         ):
             raise ValueError(
                 "identity reconciliation probe safety margin must be positive and shorter than its lease",
+            )
+        if type(self.probe_interval_seconds) not in {float, int} or not math.isfinite(self.probe_interval_seconds) or not 0.1 <= self.probe_interval_seconds <= 60.0:
+            raise ValueError(
+                "identity reconciliation probe interval must be between 0.1 and 60 seconds",
             )
         if self.backoff_initial_seconds > self.backoff_max_seconds:
             raise ValueError("identity reconciliation backoff limits are invalid")
@@ -205,6 +212,7 @@ class IdentityReconciliationService:
             lease = await self._repository.claim_next(
                 owner=owner,
                 lease_seconds=self._limits.lease_seconds,
+                probe_interval_seconds=self._limits.probe_interval_seconds,
                 active_since=claimed_at - timedelta(seconds=self._limits.active_window_seconds),
                 cycle_interval_seconds=self._limits.cycle_interval_seconds,
             )
@@ -236,6 +244,7 @@ class IdentityReconciliationService:
             applied = await self._repository.apply(
                 lease=lease,
                 observation=observation,
+                probe_interval_seconds=self._limits.probe_interval_seconds,
                 unavailable_delay_seconds=self._backoff_seconds(
                     lease.consecutive_failures,
                 ),

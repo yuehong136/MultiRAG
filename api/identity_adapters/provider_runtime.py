@@ -15,7 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.channel_control.secret_store import get_channel_secret_store
 from api.identity.providers.feishu import FeishuEnterpriseIdentityProvider
-from api.identity_adapters.channel_credentials import SessionFactoryChannelProviderCredentialResolver
+from api.identity_adapters.channel_credentials import (
+    SessionFactoryChannelProviderCredentialResolver,
+    SessionFactoryReconciliationProviderCredentialResolver,
+)
 from api.identity_adapters.channel_runtime import IdentityProviderRegistry
 
 IdentityProviderRegistryBuilder = Callable[[async_sessionmaker[AsyncSession]], IdentityProviderRegistry]
@@ -35,14 +38,20 @@ def build_identity_provider_registry(
 ) -> IdentityProviderRegistry:
     """Compose providers over the active DB lifecycle and Channel secrets."""
 
+    secret_store = get_channel_secret_store()
     credential_resolver = SessionFactoryChannelProviderCredentialResolver(
         session_factory,
-        get_channel_secret_store(),
+        secret_store,
+    )
+    reconciliation_credential_resolver = SessionFactoryReconciliationProviderCredentialResolver(
+        session_factory,
+        secret_store,
     )
     return IdentityProviderRegistry(
         {
             "feishu": lambda: FeishuEnterpriseIdentityProvider(
                 credential_resolver,
+                reconciliation_credential_resolver=reconciliation_credential_resolver,
             ),
         },
     )

@@ -7,6 +7,17 @@ from collections.abc import Callable, Iterator
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from api.channel_control.secret_store import UnavailableSecretStore
+from api.identity.contracts import ProviderContext
+from api.identity.providers.contracts import (
+    ExternalIdentityAssertion,
+    ProviderIdentityResult,
+)
+from api.identity_adapters import provider_runtime
+from api.identity_adapters.channel_credentials import (
+    SessionFactoryChannelProviderCredentialResolver,
+    SessionFactoryReconciliationProviderCredentialResolver,
+)
 from api.identity_adapters.channel_runtime import IdentityProviderRegistry
 from api.identity_adapters.provider_runtime import (
     IdentityProviderRuntimeUnavailableError,
@@ -30,6 +41,24 @@ def _registry_builder(
         return IdentityProviderRegistry({})
 
     return _build
+
+
+class _Provider:
+    async def resolve(
+        self,
+        context: ProviderContext,
+        assertion: ExternalIdentityAssertion,
+    ) -> ProviderIdentityResult:
+        del context, assertion
+        raise AssertionError("composition test must not call the provider")
+
+    async def refresh(
+        self,
+        context: ProviderContext,
+        provider_user_id: str,
+    ) -> ProviderIdentityResult:
+        del context, provider_user_id
+        raise AssertionError("composition test must not call the provider")
 
 
 def test_registry_is_retained_only_for_same_session_factory() -> None:
@@ -96,6 +125,49 @@ def test_default_composition_reads_current_async_session_factory(
 
     assert isinstance(registry, IdentityProviderRegistry)
     assert builds == [session_factory]
+
+
+def test_default_composition_injects_separate_foreground_and_reconciliation_resolvers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[tuple[object, object]] = []
+
+    def _provider_factory(
+        credential_resolver: object,
+        *,
+        reconciliation_credential_resolver: object,
+    ) -> _Provider:
+        captured.append(
+            (
+                credential_resolver,
+                reconciliation_credential_resolver,
+            )
+        )
+        return _Provider()
+
+    monkeypatch.setattr(
+        provider_runtime,
+        "get_channel_secret_store",
+        lambda: UnavailableSecretStore(),
+    )
+    monkeypatch.setattr(
+        provider_runtime,
+        "FeishuEnterpriseIdentityProvider",
+        _provider_factory,
+    )
+
+    registry = provider_runtime.build_identity_provider_registry(async_sessionmaker())
+    provider = registry.get("feishu")
+
+    assert isinstance(provider, _Provider)
+    assert len(captured) == 1
+    foreground, reconciliation = captured[0]
+    assert isinstance(foreground, SessionFactoryChannelProviderCredentialResolver)
+    assert isinstance(
+        reconciliation,
+        SessionFactoryReconciliationProviderCredentialResolver,
+    )
+    assert foreground is not reconciliation
 
 
 def test_default_composition_fails_closed_without_async_db(

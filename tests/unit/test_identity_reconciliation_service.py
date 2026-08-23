@@ -81,6 +81,7 @@ def _limits() -> IdentityReconciliationLimits:
     return IdentityReconciliationLimits(
         lease_seconds=30,
         probe_safety_margin_seconds=5.0,
+        probe_interval_seconds=1.0,
         cycle_interval_seconds=600,
         active_window_seconds=3_600,
         backoff_initial_seconds=5,
@@ -129,11 +130,13 @@ class _Repository:
         *,
         owner: str,
         lease_seconds: int,
+        probe_interval_seconds: float,
         active_since: datetime,
         cycle_interval_seconds: int,
     ) -> ReconciliationLease | None:
         assert owner == "worker-safe"
         assert lease_seconds == 30
+        assert probe_interval_seconds == 1.0
         assert active_since == NOW - timedelta(seconds=3_600)
         assert cycle_interval_seconds == 600
         self.events.append("claim")
@@ -144,6 +147,7 @@ class _Repository:
         *,
         lease: ReconciliationLease,
         observation: ReconciliationObservation,
+        probe_interval_seconds: float,
         unavailable_delay_seconds: int,
         not_found_confirmation_seconds: int,
         cycle_interval_seconds: int,
@@ -151,6 +155,7 @@ class _Repository:
         max_tighten_per_cycle: int,
     ) -> ReconciliationApplyResult:
         assert lease is self.lease
+        assert probe_interval_seconds == 1.0
         assert not_found_confirmation_seconds == 600
         assert cycle_interval_seconds == 600
         assert degrade_after_failures == 3
@@ -563,10 +568,11 @@ async def test_repository_failure_is_closed_and_does_not_escape_details() -> Non
             *,
             owner: str,
             lease_seconds: int,
+            probe_interval_seconds: float,
             active_since: datetime,
             cycle_interval_seconds: int,
         ) -> ReconciliationLease | None:
-            del owner, lease_seconds, active_since, cycle_interval_seconds
+            del owner, lease_seconds, probe_interval_seconds, active_since, cycle_interval_seconds
             raise ReconciliationRepositoryError(
                 ReconciliationErrorCode.REPOSITORY_UNAVAILABLE,
             )
@@ -599,3 +605,9 @@ def test_limits_reject_invalid_backoff_and_confirmation_windows() -> None:
         replace(_limits(), not_found_confirmation_seconds=599)
     with pytest.raises(ValueError, match="probe safety margin"):
         replace(_limits(), probe_safety_margin_seconds=30.0)
+    for interval in (False, 0.09, 60.01, float("nan"), float("inf")):
+        with pytest.raises(
+            (ValueError, BeartypeCallHintParamViolation),
+            match=r"probe interval|probe_interval_seconds",
+        ):
+            replace(_limits(), probe_interval_seconds=interval)

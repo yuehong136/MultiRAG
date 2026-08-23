@@ -74,6 +74,7 @@ def _build_identity_reconciliation_worker(
         IdentityReconciliationLimits(
             lease_seconds=config.lease_seconds,
             probe_safety_margin_seconds=config.probe_safety_margin_seconds,
+            probe_interval_seconds=config.probe_interval_seconds,
             cycle_interval_seconds=config.cycle_interval_seconds,
             active_window_seconds=config.active_window_seconds,
             backoff_initial_seconds=config.backoff_initial_seconds,

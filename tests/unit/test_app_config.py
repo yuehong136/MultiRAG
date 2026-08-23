@@ -621,6 +621,7 @@ class TestIdentityReconciliationConfig:
         assert reconciliation.lease_seconds == 60
         assert reconciliation.seed_interval_seconds == 60.0
         assert reconciliation.probe_safety_margin_seconds == 5.0
+        assert reconciliation.probe_interval_seconds == 1.0
         assert reconciliation.lease_seconds - reconciliation.probe_safety_margin_seconds == 55.0
         with pytest.raises(AppConfigError, match=r"identity\.reconciliation is disabled"):
             reconciliation.require_enabled()
@@ -634,6 +635,7 @@ class TestIdentityReconciliationConfig:
                 enabled: true
                 seed_interval_seconds: 30
                 probe_safety_margin_seconds: 7.5
+                probe_interval_seconds: 2.5
                 cycle_interval_seconds: 300
                 not_found_confirmation_seconds: 600
                 backoff_initial_seconds: 3
@@ -647,6 +649,7 @@ class TestIdentityReconciliationConfig:
         assert reconciliation.not_found_confirmation_seconds == 600
         assert reconciliation.seed_interval_seconds == 30.0
         assert reconciliation.probe_safety_margin_seconds == 7.5
+        assert reconciliation.probe_interval_seconds == 2.5
 
     def test_reconciliation_rejects_confirmation_inside_same_cycle(self, conf_dir):
         conf_dir(
@@ -677,6 +680,24 @@ class TestIdentityReconciliationConfig:
         )
 
         with pytest.raises(AppConfigError, match="probe safety margin"):
+            load_app_config()
+
+    @pytest.mark.parametrize("probe_interval_seconds", [0.09, 60.01])
+    def test_reconciliation_rejects_unbounded_probe_interval(
+        self,
+        conf_dir,
+        probe_interval_seconds,
+    ):
+        conf_dir(
+            SERVICE_CONF,
+            f"""
+            identity:
+              reconciliation:
+                probe_interval_seconds: {probe_interval_seconds}
+            """,
+        )
+
+        with pytest.raises(AppConfigError, match="probe_interval_seconds"):
             load_app_config()
 
 

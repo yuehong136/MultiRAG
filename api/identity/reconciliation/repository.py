@@ -9,6 +9,7 @@ across the transaction-free provider call.
 from __future__ import annotations
 
 import hashlib
+import math
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -44,6 +45,8 @@ from common.constants import StatusEnum
 
 _CLAIM_SEARCH_LIMIT = 256
 _MAX_FUTURE_SKEW = timedelta(minutes=5)
+_MIN_PROBE_INTERVAL_SECONDS = 0.1
+_MAX_PROBE_INTERVAL_SECONDS = 60.0
 _RECONCILABLE_HEALTH = frozenset(
     {
         IdentityProviderHealthState.HEALTHY.value,
@@ -118,6 +121,7 @@ class SqlAlchemyIdentityReconciliationRepository:
         *,
         owner: str,
         lease_seconds: int,
+        probe_interval_seconds: float,
         active_since: datetime,
         cycle_interval_seconds: int,
     ) -> ReconciliationLease | None:
@@ -125,6 +129,7 @@ class SqlAlchemyIdentityReconciliationRepository:
 
         _validate_owner(owner)
         _require_positive(lease_seconds, "lease_seconds")
+        _require_probe_interval(probe_interval_seconds)
         _require_positive(cycle_interval_seconds, "cycle_interval_seconds")
         _require_aware(active_since, "active_since")
         try:
@@ -134,6 +139,7 @@ class SqlAlchemyIdentityReconciliationRepository:
                     checkpoint_id=checkpoint_id,
                     owner=owner,
                     lease_seconds=lease_seconds,
+                    probe_interval_seconds=probe_interval_seconds,
                     active_since=active_since.astimezone(UTC),
                     cycle_interval_seconds=cycle_interval_seconds,
                 )
@@ -150,6 +156,7 @@ class SqlAlchemyIdentityReconciliationRepository:
         *,
         lease: ReconciliationLease,
         observation: ReconciliationObservation,
+        probe_interval_seconds: float,
         unavailable_delay_seconds: int,
         not_found_confirmation_seconds: int,
         cycle_interval_seconds: int,
@@ -158,6 +165,7 @@ class SqlAlchemyIdentityReconciliationRepository:
     ) -> ReconciliationApplyResult:
         """Apply one provider observation under the durable lease/generation fence."""
 
+        _require_probe_interval(probe_interval_seconds)
         _require_positive(unavailable_delay_seconds, "unavailable_delay_seconds")
         _require_positive(
             not_found_confirmation_seconds,
@@ -202,6 +210,13 @@ class SqlAlchemyIdentityReconciliationRepository:
                 now = await _database_now(session)
                 if not _lease_matches(checkpoint, lease, now=now):
                     return _fence_result(account.identity_revision)
+                # A successful provider call can finish after the claim-time
+                # reservation.  Re-anchor the floor to the apply DB clock so
+                # every valid outcome preserves the full configured gap.
+                _advance_checkpoint_next_run(
+                    checkpoint,
+                    now + timedelta(seconds=probe_interval_seconds),
+                )
                 if tenant.status != StatusEnum.VALID.value:
                     _complete_cycle(
                         account,
@@ -346,6 +361,7 @@ class SqlAlchemyIdentityReconciliationRepository:
                                     and_(
                                         IdentityReconciliationCheckpoint.lease_owner.is_not(None),
                                         IdentityReconciliationCheckpoint.lease_until <= now,
+                                        IdentityReconciliationCheckpoint.next_run_at <= now,
                                     ),
                                 ),
                             ),
@@ -372,6 +388,7 @@ class SqlAlchemyIdentityReconciliationRepository:
         checkpoint_id: str,
         owner: str,
         lease_seconds: int,
+        probe_interval_seconds: float,
         active_since: datetime,
         cycle_interval_seconds: int,
     ) -> ReconciliationLease | None:
@@ -413,7 +430,7 @@ class SqlAlchemyIdentityReconciliationRepository:
             if checkpoint.lease_owner is not None:
                 if checkpoint.lease_until is None or checkpoint.lease_until > eligibility_now:
                     return None
-            elif checkpoint.next_run_at > eligibility_now:
+            if checkpoint.next_run_at > eligibility_now:
                 return None
             if account.identity_health_state not in _RECONCILABLE_HEALTH:
                 _complete_cycle(
@@ -468,7 +485,7 @@ class SqlAlchemyIdentityReconciliationRepository:
                         checkpoint.cursor_identity_id,
                         identity.id,
                     )
-                    checkpoint.next_run_at = eligibility_now
+                    _advance_checkpoint_next_run(checkpoint, eligibility_now)
                     _clear_lease(checkpoint)
                     return None
                 has_alias = identity is not None and await _has_account_alias(session, identity, account)
@@ -491,7 +508,7 @@ class SqlAlchemyIdentityReconciliationRepository:
                     if identity is not None:
                         checkpoint.cursor_identity_id = identity.id
                     checkpoint.error_count += 1
-                    checkpoint.next_run_at = eligibility_now
+                    _advance_checkpoint_next_run(checkpoint, eligibility_now)
                     _clear_lease(checkpoint)
                     return None
                 if target.account_revision != account.identity_revision or target.account_scope_change_at != account.last_scope_change_at or target.identity_revision != identity.identity_revision:
@@ -612,7 +629,12 @@ class SqlAlchemyIdentityReconciliationRepository:
             checkpoint.lease_owner = owner
             checkpoint.lease_attempt += 1
             checkpoint.lease_until = lease_now + timedelta(seconds=lease_seconds)
-            checkpoint.next_run_at = lease_now
+            # Commit the account-wide reservation in the claim transaction,
+            # before the caller can make the transaction-free provider call.
+            _advance_checkpoint_next_run(
+                checkpoint,
+                lease_now + timedelta(seconds=probe_interval_seconds),
+            )
             await session.flush()
             return ReconciliationLease(
                 checkpoint_id=checkpoint.id,
@@ -674,10 +696,13 @@ def _apply_observation(
             code=code,
             degrade_after_failures=degrade_after_failures,
         )
-        retry_at = now + timedelta(seconds=unavailable_delay_seconds)
+        retry_at = max(
+            checkpoint.next_run_at,
+            now + timedelta(seconds=unavailable_delay_seconds),
+        )
         target.state = "pending"
         target.next_attempt_at = retry_at
-        checkpoint.next_run_at = retry_at
+        _advance_checkpoint_next_run(checkpoint, retry_at)
         _clear_lease(checkpoint)
         return ReconciliationApplyResult(
             outcome=ReconciliationApplyOutcome.RETRY_SCHEDULED,
@@ -704,8 +729,11 @@ def _apply_observation(
             failed=True,
             error_code=code,
         )
-        retry_at = now + timedelta(seconds=unavailable_delay_seconds)
-        checkpoint.next_run_at = retry_at
+        retry_at = max(
+            checkpoint.next_run_at,
+            now + timedelta(seconds=unavailable_delay_seconds),
+        )
+        _advance_checkpoint_next_run(checkpoint, retry_at)
         return ReconciliationApplyResult(
             outcome=ReconciliationApplyOutcome.TARGET_REJECTED,
             identity_changed=False,
@@ -723,7 +751,10 @@ def _apply_observation(
             target.not_found_count = 1
             target.first_not_found_at = now
             target.last_not_found_at = now
-            retry_at = now + timedelta(seconds=not_found_confirmation_seconds)
+            retry_at = max(
+                checkpoint.next_run_at,
+                now + timedelta(seconds=not_found_confirmation_seconds),
+            )
             target.state = "pending"
             target.next_attempt_at = retry_at
             _advance_past_pending_target(
@@ -743,7 +774,7 @@ def _apply_observation(
         ):
             _record_success(account, checkpoint, target)
             retry_at = max(
-                now,
+                checkpoint.next_run_at,
                 (last_not_found_at or now) + timedelta(seconds=not_found_confirmation_seconds),
             )
             target.state = "pending"
@@ -904,7 +935,7 @@ def _finish_target(
         identity_id,
     )
     checkpoint.processed_count += 1
-    checkpoint.next_run_at = now
+    _advance_checkpoint_next_run(checkpoint, now)
     _clear_lease(checkpoint)
     if target is not None:
         target.state = "failed" if failed else "completed"
@@ -922,7 +953,7 @@ def _reject_fence(
     checkpoint.safe_error_code = ReconciliationErrorCode.FENCE_CONFLICT.value
     checkpoint.cycle_started_at = None
     checkpoint.cursor_identity_id = None
-    checkpoint.next_run_at = now
+    _advance_checkpoint_next_run(checkpoint, now)
     _clear_lease(checkpoint)
     if target is not None:
         target.state = "failed"
@@ -946,7 +977,8 @@ def _complete_cycle(
     checkpoint.cursor_identity_id = None
     checkpoint.last_completed_at = now
     cycle_due_at = now + timedelta(seconds=cycle_interval_seconds)
-    checkpoint.next_run_at = min(cycle_due_at, pending_attempt_at) if pending_attempt_at is not None else cycle_due_at
+    next_cycle_at = min(cycle_due_at, pending_attempt_at) if pending_attempt_at is not None else cycle_due_at
+    _advance_checkpoint_next_run(checkpoint, next_cycle_at)
     _clear_lease(checkpoint)
     if not preserve_counts:
         checkpoint.processed_count = 0
@@ -972,8 +1004,18 @@ def _advance_past_pending_target(
         identity_id,
     )
     checkpoint.processed_count += 1
-    checkpoint.next_run_at = now
+    _advance_checkpoint_next_run(checkpoint, now)
     _clear_lease(checkpoint)
+
+
+def _advance_checkpoint_next_run(
+    checkpoint: IdentityReconciliationCheckpoint,
+    candidate: datetime,
+) -> None:
+    """Advance the durable account schedule without shortening a reservation."""
+
+    if candidate > checkpoint.next_run_at:
+        checkpoint.next_run_at = candidate
 
 
 def _max_cursor(current: str | None, candidate: str) -> str:
@@ -1154,6 +1196,13 @@ def _admin_account_ref(tenant_id: str, provider_account_id: str) -> str:
 def _require_positive(value: int, name: str) -> None:
     if type(value) is not int or value <= 0:
         raise ValueError(f"{name} must be a positive integer")
+
+
+def _require_probe_interval(value: float) -> None:
+    if type(value) not in {float, int} or not math.isfinite(value) or not _MIN_PROBE_INTERVAL_SECONDS <= value <= _MAX_PROBE_INTERVAL_SECONDS:
+        raise ValueError(
+            "probe_interval_seconds must be between 0.1 and 60 seconds",
+        )
 
 
 def _require_aware(value: datetime, name: str) -> None:
