@@ -18,7 +18,7 @@ from api.channel_execution.interaction_presentations import (
     InteractionPresentationRepository,
 )
 from api.channel_execution.models import ChannelActor
-from api.db.db_models import McpInteractionCallbackReceipt, McpInteractionPresentation
+from api.db.db_models import McpInteraction, McpInteractionCallbackReceipt, McpInteractionPresentation
 from api.identity.mcp_interactions.contracts import InteractionErrorCode
 from api.identity.mcp_interactions.crypto import EncryptedInteractionPayload, InteractionPayloadCipher
 
@@ -37,6 +37,10 @@ class _ScriptedSession(AsyncSession):
 
     async def scalar(self, _statement: object) -> Any:
         assert self.responses, "unexpected database scalar call"
+        return self.responses.pop(0)
+
+    async def scalars(self, _statement: object) -> Any:
+        assert self.responses, "unexpected database scalars call"
         return self.responses.pop(0)
 
     def add(self, instance: object, *, _warn: bool = True) -> None:
@@ -80,6 +84,195 @@ def _presentation(now: datetime) -> McpInteractionPresentation:
         created_at=now,
         updated_at=now,
     )
+
+
+def _interaction(
+    now: datetime,
+    *,
+    cipher: InteractionPayloadCipher,
+    result: object | None,
+) -> McpInteraction:
+    encrypted = (
+        cipher.encrypt(
+            tenant_id="tenant000000000000000000000001",
+            interaction_id="interaction0000000000000000001",
+            revision=2,
+            purpose="result",
+            value=result,
+        )
+        if result is not None
+        else None
+    )
+    return McpInteraction(
+        id="interaction0000000000000000001",
+        tenant_id="tenant000000000000000000000001",
+        platform_user_id="user00000000000000000000000001",
+        external_identity_id="identity00000000000000000000001",
+        identity_revision=1,
+        agent_id="agent-1",
+        agent_revision_id="revision-1",
+        mcp_server_id="server0000000000000000000000001",
+        resource_name="leave-service",
+        resource_uri="https://mcp.example/leave",
+        tool_name="preview_leave_form",
+        call_digest="a" * 64,
+        schema_digest="b" * 64,
+        output_schema_digest=None,
+        output_schema_ciphertext=None,
+        output_schema_key_id=None,
+        original_arguments_ciphertext="v1.original-arguments",
+        original_arguments_key_id="original-key-id",
+        input_requests_ciphertext="v1.input-requests",
+        input_requests_key_id="input-key-id",
+        request_state_ciphertext="v1.request-state",
+        request_state_key_id="state-key-id",
+        policy_revision="policy-1",
+        credential_generation=1,
+        effect="prepare",
+        replay_mode="reusable",
+        state="completed",
+        revision=2,
+        round_count=1,
+        expires_at=now + timedelta(minutes=10),
+        result_ciphertext=encrypted.ciphertext if encrypted is not None else None,
+        result_key_id=encrypted.key_id if encrypted is not None else None,
+        provider="feishu",
+        presentation_ref="message-1",
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _terminal_envelope(message: object = "请假预览已完成：OA 试算 8 小时；未创建请假单。") -> dict[str, object]:
+    return {
+        "kind": "com.ofmcp/interaction-terminal",
+        "version": 1,
+        "message": message,
+        "preview_only": True,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "result",
+    [
+        _terminal_envelope(),
+        {"result": _terminal_envelope()},
+    ],
+)
+async def test_reconcile_projects_only_strict_completed_terminal_summary(
+    result: object,
+) -> None:
+    now = _now()
+    cipher = InteractionPayloadCipher([b"k" * 32])
+    presentation = _presentation(now)
+    interaction = _interaction(now, cipher=cipher, result=result)
+    session = _ScriptedSession(now, [presentation], interaction)
+
+    changed = await _repository(session, cipher).reconcile()
+
+    assert changed == 1
+    assert session.flushes == 1
+    assert presentation.response_state == "terminal"
+    assert presentation.delivery_kind == "terminal"
+    assert presentation.delivery_state == "pending"
+    assert presentation.delivery_projection == {
+        "state": "completed",
+        "message": "请假预览已完成：OA 试算 8 小时；未创建请假单。",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "result",
+    [
+        "raw-tool-result",
+        {"result": _terminal_envelope(), "raw": "must-not-render"},
+        {**_terminal_envelope(), "raw": "must-not-render"},
+        {**_terminal_envelope(), "kind": "unknown"},
+        {**_terminal_envelope(), "version": "1"},
+        {**_terminal_envelope(), "version": True},
+        {**_terminal_envelope(), "preview_only": False},
+        {**_terminal_envelope(), "preview_only": 1},
+        _terminal_envelope("line-one\nraw-secret"),
+        _terminal_envelope("raw-secret\tvalue"),
+        _terminal_envelope("x" * 241),
+        _terminal_envelope(""),
+        _terminal_envelope("   "),
+        _terminal_envelope(" leading-space"),
+        _terminal_envelope("trailing-space "),
+        _terminal_envelope({"raw": "nested-result"}),
+        {"result": "raw-tool-result"},
+    ],
+)
+async def test_reconcile_falls_back_for_unknown_or_invalid_completed_results(
+    result: object,
+) -> None:
+    now = _now()
+    cipher = InteractionPayloadCipher([b"k" * 32])
+    presentation = _presentation(now)
+    interaction = _interaction(now, cipher=cipher, result=result)
+    session = _ScriptedSession(now, [presentation], interaction)
+
+    changed = await _repository(session, cipher).reconcile()
+
+    assert changed == 1
+    assert presentation.delivery_projection == {
+        "state": "completed",
+        "message": "处理已完成。",
+    }
+    assert "raw" not in repr(presentation.delivery_projection)
+
+
+@pytest.mark.asyncio
+async def test_reconcile_falls_back_when_completed_result_is_missing_or_cannot_decrypt() -> None:
+    now = _now()
+    cipher = InteractionPayloadCipher([b"k" * 32])
+    for ciphertext in (None, "v1.not-valid-ciphertext"):
+        presentation = _presentation(now)
+        interaction = _interaction(now, cipher=cipher, result=None)
+        if ciphertext is not None:
+            interaction.result_ciphertext = ciphertext
+            interaction.result_key_id = cipher.encrypt(
+                tenant_id=interaction.tenant_id,
+                interaction_id=interaction.id,
+                revision=interaction.revision,
+                purpose="result",
+                value=_terminal_envelope("raw-secret"),
+            ).key_id
+        session = _ScriptedSession(now, [presentation], interaction)
+
+        changed = await _repository(session, cipher).reconcile()
+
+        assert changed == 1
+        assert presentation.delivery_projection == {
+            "state": "completed",
+            "message": "处理已完成。",
+        }
+        assert "raw-secret" not in repr(presentation.delivery_projection)
+
+
+@pytest.mark.asyncio
+async def test_noncompleted_terminal_state_never_projects_result_message() -> None:
+    now = _now()
+    cipher = InteractionPayloadCipher([b"k" * 32])
+    presentation = _presentation(now)
+    interaction = _interaction(
+        now,
+        cipher=cipher,
+        result=_terminal_envelope("raw-secret"),
+    )
+    interaction.state = "failed"
+    session = _ScriptedSession(now, [presentation], interaction)
+
+    changed = await _repository(session, cipher).reconcile()
+
+    assert changed == 1
+    assert presentation.delivery_projection == {
+        "state": "failed",
+        "message": "处理未完成，请稍后重试。",
+    }
+    assert "raw-secret" not in repr(presentation.delivery_projection)
 
 
 def _receipt(

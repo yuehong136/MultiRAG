@@ -37,6 +37,7 @@ MultiRAG 与 `of_mcp`；不要把相邻任务“顺手”并入一个提交。
 | EIM-I | [DECISIONS](DECISIONS.md)、[CONTRACTS](CONTRACTS.md)、[ARCHITECTURE](ARCHITECTURE.md) |
 | EIM-C | 上述三份 + `docs/channel-program/README.md`、`PROGRESS.md`、`CONTRACT.md` |
 | EIM-P / EIM-A | [CONTRACTS](CONTRACTS.md)、[TESTING_SECURITY](TESTING_SECURITY.md)、`of_mcp` 本仓说明 |
+| EIM-L | [CONTRACTS](CONTRACTS.md)、[TESTING_SECURITY](TESTING_SECURITY.md)、`of_mcp` 的 `AGENTS.md`/README/service contract；涉及 CardKit 时再读 Channel `PROGRESS.md`/`CONTRACT.md` |
 | EIM-M | [ARCHITECTURE](ARCHITECTURE.md)、[REFERENCES](REFERENCES.md)、[TESTING_SECURITY](TESTING_SECURITY.md) |
 | EIM-U | [FEISHU_BOT_UX](FEISHU_BOT_UX.md)、[FEISHU_ONBOARDING](FEISHU_ONBOARDING.md)、[TESTING_SECURITY](TESTING_SECURITY.md)、Channel `PROGRESS.md` |
 | EIM-O | [FEISHU_ONBOARDING](FEISHU_ONBOARDING.md)、[TESTING_SECURITY](TESTING_SECURITY.md) |
@@ -321,8 +322,9 @@ U15 当前为 `✅`：源码、完整门禁、integration、账本与 `41675183`
 - API background processor 必须重新读取 binding/generation/enabled/provider、解析 verified Principal，
   再让 U14 对当前 revision 做 CAS/重授权/恢复；duplicate、lease loss、identity TTL、tool gate 与未知
   outcome 都 fail closed；
-- terminal card 只显示固定安全状态；字段错误重新投递 form，renderer failure 只重试 delivery，绝不
-  重跑工具。
+- terminal card 默认只显示固定安全状态；只有 EIM-L2/CHN-X20 精确定义的 direct/FastMCP-wrapper
+  四键 envelope 才可投影最多 240 字符的单行 trimmed printable message，其他结果仍用 generic；字段
+  错误重新投递 form，renderer failure 只重试 delivery，绝不重跑工具。
 
 安全部署顺序固定为：先执行 migration，在 `identity.mcp_interactions.enabled=false` 下部署并重启新
 API；再重启所有 supervisor/child consumer，并确认新 generation 能消费 `interaction_required`、
@@ -472,6 +474,40 @@ settings/assembly、`services/leave/service.toml`、identity、五个工具、op
    一致，`uv run --locked ofmcp verify` 六步全绿（test **556 passed、2 skipped**）；
 8. 真实 OA/HR resolver、leave 写入、Confirmation、业务幂等/unknown-outcome、L2、U7、I7/I8、
    配置 Secret、重启、部署、远程发布和生产 rollout 均不属于 L1。M1 始终只管 medic。
+
+#### EIM-L2 / CHN-X20 原生低敏请假试算交接（`✅`，未 rollout）
+
+L2 是 L1 + U15 的窄组合，不是 leave 写入阶段。当前代码锚点为 of_mcp
+`services/leave/src/ofmcp/services/leave/{interaction.py,tools/preview_leave_form.py}`、
+`services/leave/service.toml`、`deploy/profiles/secure.toml` 与 core requestState helper；MultiRAG 只在
+`api/channel_execution/interaction_presentations.py` 增加严格 terminal 投影。不得改 RAGFlow 主循环、
+升级依赖、扩展 H5/URL，或借此解除写工具围栏。
+
+接手者必须逐项保留：
+
+1. `preview_leave_form` 的外层业务参数 schema 为空，身份只来自 `current_verified_read_subject`；
+   policy 固定 `leave:read`、prepare/reusable、`leave_applicant`。任何用户可控 `oa_user_id`、Principal、
+   tenant、scope、PM/CC/人员字段都不能进入工具 schema 或授权输入；
+2. response schema 必须 flat/ref-free 且恰好 7 字段：`leave_type` 仅事假/年假/星光假/阳光假，起止各
+   date + `0..23` hour + `00|30` minute。reason、身份、项目人员/项目经理、CC、remark、附件、H5/URL
+   一律 deferred；当前只允许 p2p，不得从一次私聊 live 外推群聊；
+3. 首次 input-required、decline、cancel、expire、换人/跨 tenant、身份 TTL、tool gate、revision 冲突均
+   OA 零调用。accepted 仍须让 U14 重验 Principal/scope/policy/lease，并只对当前 `leave_applicant` 执行
+   OA preview；固定 `person_type=non_project`、服务端低敏 reason，且 `doCreateRequest` 调用数为 0；不得调用
+   draft/submit。`create_leave_draft`/`submit_leave` 继续 `LEAVE_WRITE_DISABLED`；
+4. terminal 只接受 direct envelope 或 top-level **仅含** `result` 的 FastMCP wrapper；内层精确四键
+   `kind/version/message/preview_only`，kind 固定 `com.ofmcp/interaction-terminal`、version 是 int 1、
+   preview_only 是 bool true，message 非空、单行、trimmed、printable、最多 240 字符。任何漂移显示
+   `处理已完成。`，不得把 raw result、异常或 OA payload交给卡片；
+5. `secure` profile 显式 `interactions_enabled=true`，缺稳定 `OFMCP_REQUEST_STATE_KEY` 必须 fail-fast；
+   key ring active-first，requestState TTL 900 秒严格大于 MR 600 秒，旧 key 至少保留覆盖最大 TTL。
+   这只完成 state 安全接线；真实 OA authority、A6 production backend、remote-release 与 rollout 仍未配置；
+6. 当前 `end > start` 在资源端 cross-field validator 中执行。无效窗口恢复后会 terminal failed，而不是
+   Host 的 fresh-nonce form 重投；测试与文档必须诚实固定这个限制，后续改善要另立任务；
+7. 两仓最终门禁已经回填：of_mcp focused **114 passed**、verify **580 passed / 2 skipped**、contract
+   diff **breaking 0 / behavioral 0 / additive 1**；MultiRAG focused **89 passed**、`make verify`
+   **2762 passed**、强制 integration **182 passed**、MCP compatibility **22/22**。这足以标代码/契约
+   `✅`，但真实 authority、部署与生产 rollout 仍须另行批准。
 
 #### EIM-I6 完成边界与 C1/C2/C3 接线交接
 
@@ -746,7 +782,7 @@ P3/A5 动态 bearer 的真实跨仓证据、M3/M4 业务幂等/结果查询和 r
 | 新 scope/tool metadata | `of_mcp` policy snapshot | MultiRAG Agent/MCP config、P3 cache/audit | resource 端先提交包含 effect/replay mode 的 canonical `tool-policies.json` 与 `policy_revision` → 调用端按 revision 重算请求与缓存；未知 scope fail closed，不从运行时可见列表反推权限，也不把 revision 自动塞入当前 A1 token profile |
 | confirmation contract | `of_mcp` challenge | MultiRAG card/channel | resource 端先返回可识别 challenge → UI 接线 → 强制确认 |
 | MCP 双向兼容 fixture | MCP SDK 2/FastMCP 4 主运行时 + PEP 723 FastMCP 3 真实 legacy 子进程 | 两仓 compatibility test | F2/F3/F4/F6/F7/F8/F9 已完成并形成 22/22 基线；双方向覆盖五个已发布 revision、未知版本拒绝及既有 auth/error/cancel 行为；后续每次协议/transport 变更逐格复跑；`of_mcp` F4 锚点 `23dd1fd`；不得用本机 sibling import 代替可复现安装 |
-| MRTR interaction | `of_mcp` `input_required`/legacy adapter | MultiRAG U14 state machine，再到 U15 renderer | 先固定 transport-neutral request/response 与恢复语义 → 飞书表单渲染 → 敏感动作最后强制 U7/M3/M4 |
+| MRTR interaction | `of_mcp` `input_required`/legacy adapter | MultiRAG U14 state machine，再到 U15 renderer | 先固定 transport-neutral request/response 与恢复语义 → 飞书表单渲染 → L2 只开放 p2p/read-only preview 与严格 terminal envelope → 敏感动作最后强制 U7/M3/M4；L2 不把 form submit 变成授权或确认 |
 
 跨仓任务必须在两边都留下同一个 `EIM-*` ID；完成日志列出两个 SHA。不能只改一侧后把另一侧
 写成“后续处理”。如果本次任务只负责 tolerate 半步，要明确写成安全中间态，并保留旧行为。

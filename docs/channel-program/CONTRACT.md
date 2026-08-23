@@ -1,6 +1,6 @@
 # Channel 前后端契约
 
-> **契约版本**：`channel-api/v1` · **最后变更**：2026-08-23 · **变更提交**：见文末变更日志
+> **契约版本**：`channel-api/v1` · **最后变更**：2026-08-24 · **变更提交**：见文末变更日志
 >
 > 本文件是 channel 前后端接口的**唯一真源**。前端仓不得保存第二份契约描述。
 > 契约变更 = 改本文件 + 在本文件末尾的变更日志追加一行
@@ -197,9 +197,10 @@ one-time nonce。回调只在 receipt 与加密 payload 已进入 PostgreSQL 后
 同步回调路径到此结束：它不解析 Principal、不等待 MCP/OA、也不恢复工具。API-local background
 processor 另取有 fence 的 callback lease，重新读取当前 binding/generation/enabled/provider，沿
 I3/I4/I6/P1 重新解析 verified Principal，再调用 U14 对当前 revision 做一次 accept/decline/cancel；
-U14 自己继续负责工具 gate、identity TTL、lease、重授权和幂等恢复。字段错误可重新投递安全 form，
-终态只投递 `completed/declined/cancelled/expired/failed` 的固定安全摘要并整卡替换原消息，不显示原始
-工具结果或底层异常。
+U14 自己继续负责工具 gate、identity TTL、lease、重授权和幂等恢复。字段错误可重新投递安全 form。
+终态默认只投递 `completed/declined/cancelled/expired/failed` 的固定安全摘要并整卡替换原消息；只有
+§1.4 EIM-L2/CHN-X20 的严格 opt-in envelope 可替换 completed message，任何其他原始工具结果或底层
+异常仍不得显示。
 
 原生 mapper 首期只接受严格的 JSON Schema object 子集：最多 4 个 request、合计 12 个字段、每个
 枚举最多 20 项；支持 text、integer/number、boolean、date、single enum、enum array，文本最多 1000
@@ -215,6 +216,57 @@ terminal fail closed。
 能够消费 `interaction_required`、claim/ACK delivery 和持久 callback → 最后启用 producer 并重启
 API。回滚先关闭 producer 并重启 API，停止产生新的 interaction，再处理或终态化已持久记录；不要先
 降级 consumer，也不要对已有数据执行破坏性 downgrade。
+
+### 1.4 L2 p2p leave preview / strict terminal projection（EIM-L2 / CHN-X20）
+
+本节不新增 private/public endpoint，不改变 §1.3 callback body、ACK、状态码或 delivery wire，也不 bump
+`channel-api/v1`。它只冻结一个允许 U15 form/terminal 安全 projection 消费的工具级 profile。
+
+`preview_leave_form` 只允许 `chat_type=p2p`。表单 schema 必须是 flat/ref-free object，恰好 7 个字段：
+
+| 字段 | CardKit/规范值 |
+|---|---|
+| `leave_type` | single select：事假、年假、星光假、阳光假 |
+| `start_date` / `end_date` | `date_picker`；带 `±HHMM` 的 callback 只在 encrypted mapping 证明 date 时归一为 `YYYY-MM-DD` |
+| `start_hour` / `end_hour` | numeric text input；Host 规范化为 integer，范围 0～23 |
+| `start_minute` / `end_minute` | single select，`00` 或 `30` |
+
+不允许 reason、Principal/身份、项目人员/项目经理、CC、remark、人员/附件、密码/token 或 schema 外
+字段；nested/local ref/remote ref、H5/URL 和多步骤继续 deferred。CardKit 只收集上面字段，不产生
+Principal、scope、业务授权或确认事实。当前更新卡使用 `update_multi`，加上请假数据的可见性要求，
+因此不能把 p2p 卡片复用到群聊/话题；后续群聊需求必须独立评审并另立任务。
+
+accept callback 仍先 durable receipt + 快速 ACK，随后后台重新验证 operator、tenant、binding、message
+lineage、Principal、identity TTL、tool gate 与当前 revision。通过后只允许 of_mcp 的
+`leave:read`、prepare/reusable、`leave_applicant` 工具对当前主体执行 OA preview，固定
+`doCreateRequest` 调用数为 0；不得创建草稿、请假单或审批。decline/cancel/expiry、换人、过期 identity、lease
+或 gate 失败都必须 OA 零调用。当前跨字段 `end > start` 在资源端恢复时验证：无效窗口会进入
+terminal failed，不是 Host 可识别并 fresh-nonce 重投的字段错误；这是当前限制。
+
+completed result 只有两种合法外形：直接 envelope，或 top-level **仅含** `result` 的 FastMCP wrapper：
+
+```json
+{
+  "kind": "com.ofmcp/interaction-terminal",
+  "version": 1,
+  "message": "当前用户的 OA 请假试算已完成。仅预览，未创建请假单或发起审批。",
+  "preview_only": true
+}
+```
+
+内层必须精确四键；`kind` 逐字如上，`version` 必须是 int 1（bool 不算），`preview_only` 必须是 bool
+true。`message` 必须非空、单行、全部 printable、首尾无空白且最多 240 字符。额外键、raw/nested
+result、错误 kind/version/type、换行/tab/控制字符、首尾空白、空串或超长一律不得进入卡片，completed
+统一回退 `处理已完成。`；其他终态仍用 §1.3 固定摘要。该终态 message 是显示投影，不是授权或
+Confirmation record。
+
+运行配置仍 default closed。of_mcp `secure` profile 虽显式启用 interaction，但必须提供稳定
+active-first requestState key ring，TTL 900 秒严格大于 MultiRAG InteractionSession 600 秒；缺 key、
+旧 key 提前退役或恢复过期都 fail closed。仓库未配置真实 OA/HR authority、production A6 backend、
+remote-release 或 rollout；不得宣称群聊、敏感写、H5/URL 或生产可用。当前代码/契约状态为 `✅`：
+MR focused **89 passed** / verify **2762 passed** / 强制 integration **182 passed** / MCP compatibility
+**22/22**；of_mcp focused **114 passed** / verify **580 passed / 2 skipped** / contract diff
+**breaking 0 / behavioral 0 / additive 1**；安全 diff scan **0 findings**。
 
 ---
 
@@ -495,5 +547,6 @@ JSON Schema（`config_schema`）仅用于服务端请求校验与 OpenAPI，**�
 | 2026-08-13 | v1（仅 private command consume，不 bump） | C3/X7 只在成功 claim 后经 authority、I3/I4/I6 与 P1 提升 Principal，并以 owner-aware session/target 隔离 linked 用户；NO_LINK 与 legacy subject 兼容仍保留，公开 Channel API/web 线格不变。`0ded51ff` 自动门禁全绿；加载 `2b0482c7` 的新 API smoke 六组件全绿，双 account live 的 alias/canonical identity/membership/BindingEvent、Canvas/Dialog Principal owner 与 Redis tombstone 均通过脱敏计数核验。P2 全链传播、MCP token 与 C4 legacy remove 均不属于本步 | `0ded51ff` + live `2b0482c7` |
 | 2026-08-13 | v1（仅定义 private run-context 传播，不 bump） | 为 EIM-P2 增加 CHN-X18 记账：定义 LINKED full Principal 从 Channel Execution 到 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas workflow/MCP call context seam 的进程内传播边界，禁止静默匿名与 DSL 覆盖，保留 NO_LINK legacy；不签 token、不取 credential、不发 bearer，也不改变公开或 private wire。当前仅冻结契约与零上下文交接，运行时代码仍未实现 | 本次提交 |
 | 2026-08-13 | v1（仅实现 private run-context 传播，不 bump） | EIM-P2 / CHN-X18 已把 C3 full Principal 经 frozen `RunContext` 显式送入 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas component workflow 与 MCP instance-local call context；LINKED 的 user key 只取可信 Principal，Memory 同时校验 tenant，NO_LINK 保留 legacy。未改 public/private wire、DSL、MCP header/arguments 或 token 体系 | 本次提交 |
+| 2026-08-24 | v1（private terminal 行为兼容，不 bump） | 完成 EIM-L2 / CHN-X20：p2p-only 七字段低敏请假 form 接受后只做当前主体 OA preview，`doCreateRequest` 调用数为 0；新增 strict opt-in completed terminal envelope（direct 或 single-key FastMCP wrapper），message 单行/trimmed/printable/≤240，其余 generic。未改 private endpoint/body/ACK/state wire；H5/URL、群聊、reason/身份/PM/CC/remark、敏感写和生产 rollout deferred。双仓完整门禁与安全复核全绿，代码/契约 `✅`、未部署 | 本次双仓提交 |
 | 2026-08-24 | v1（private callback 行为兼容，不 bump） | 实机确认 CardKit `date_picker` 回传带 RFC 822 风格 offset；date-only mapping 严格归一为 `YYYY-MM-DD`。RESPONSE_INVALID 现在拒绝当前 durable receipt 并重新投递 fresh-nonce form，坏密文/映射仍 terminal；private wire 字段与状态码集合未变。单机临时真实飞书/P3/of_mcp E2E 已完成，不表示生产 rollout | `41675183` 后续工作树修复 + 本机 live |
 | 2026-08-23 | v1（private additive，不 bump） | 定义 EIM-U15 / CHN-X15 的 generation-scoped delivery claim/ACK 与 durable callback receipt：只有 PostgreSQL receipt 提交后才快速 ACK，Principal 解析、当前 revision claim 与 U14 MCP 恢复全部异步；CardKit 只消费安全 native-form/terminal projection，H5/URL 和敏感写后置。当前是 app-bound WebSocket + tenant/app/operator/message lineage，不把 webhook signature 写成已实现 | `41675183`（状态 `✅`） |

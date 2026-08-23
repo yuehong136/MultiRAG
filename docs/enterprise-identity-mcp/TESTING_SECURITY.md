@@ -101,6 +101,12 @@
 - `requestState`、form value、H5 nonce 和卡片 action 不能决定 Principal、tenant、scope 或确认状态；
 - InteractionSession 的响应必须绑定 verified operator、tenant、resource、tool、revision 和 expiry，
   并以 compare-and-set 只消费一次；
+- L2 请假表单只能在 p2p 收集批准的 7 个低敏字段；不得收集 reason/身份/PM/CC/remark，群聊、H5/URL
+  与敏感写保持关闭。接受前、取消/拒绝/过期/换人/身份过期或 gate 失败时 OA 必须零调用；接受后也只
+  允许当前主体 preview，且 `doCreateRequest` 调用数必须为 0；
+- completed terminal 只允许严格 `com.ofmcp/interaction-terminal` v1 envelope（direct 或仅含 `result`
+  的 FastMCP wrapper）；message 必须单行、trimmed、printable、至多 240 字符，其他结果统一 generic，
+  不能让 tool result 直接进入飞书卡片；
 - `of_mcp` 不采信参数中的 `workcode`/`talent_id` 作为调用者身份；
 - 高风险工具必须同时满足授权、用户确认、短时有效和幂等；
 - 日志不得记录 secret、完整 bearer token、OAuth code、手机号或患者敏感正文。
@@ -128,6 +134,7 @@
 | MCP client | resource/audience、失败映射、无静态用户 header | mock transport/官方 SDK 测试 |
 | MCP resource server | modern/legacy 协议、独立 audience、scope、无 bearer 透传 | ASGI/官方 Client 契约测试 |
 | InteractionSession | MRTR 多轮、revision/CAS、decline/cancel/expire、重启恢复 | service 单测 + 真库集成 |
+| EIM-L2 / CHN-X20 leave form | 空外层参数、7 字段 flat/ref-free schema、p2p-only、operator/identity TTL、OA 零写/预览、strict terminal/generic fallback、stable key 与 900s > 600s TTL | 两仓 schema/policy/unit + modern/legacy FastMCP + U14/U15 presentation/restart 契约；of_mcp focused 114 / verify 580+2 skip，MR focused 89 / verify 2762，安全 diff scan 0 findings |
 | Structured result | `structuredContent`/`outputSchema` 一致性和安全事件转换 | schema/golden tests |
 
 截至 2026-08-24，EIM-I3 已完成 ProviderContext 驱动的本地 identity lookup、
@@ -146,8 +153,10 @@ CHN-X7 后续已完成 Channel identity composition 与部署 live：完整 Prin
 MCP SDK 2/FastMCP 4 的协议运行时迁移和 `InputRequiredResult` 的 transport-level 暴露。
 EIM-A1 已固定 token/JWKS test vectors；A7 的前置虽已满足，独立 audience/scope 和 OAuth
 Resource Server 仍未实现。EIM-U14 已在 P3/A4/C3 之后补齐加密 InteractionSession、revision/CAS、
-DB-time lease、重启恢复、恢复前重授权和 structured result schema 校验；飞书 renderer/callback 仍是
-U15。不能因 P1 或 modern/legacy 协议测试通过就把 A7/U15 的安全测试标为已满足。
+DB-time lease、重启恢复、恢复前重授权和 structured result schema 校验；U15 已完成默认关闭的飞书
+native renderer/callback 和一次单机临时 live。EIM-L2/CHN-X20 已在其上接 p2p-only 的低敏请假 OA
+preview 与严格 terminal 投影，并在双仓最终门禁全绿后标为 `✅`。不能因 P1、modern/legacy 协议测试
+或单机 live 通过就把 A7、L2 生产 authority/rollout、群聊、H5/URL 或敏感写标为已满足。
 
 下面的 C1/C2 描述是 **C3 之前的历史兼容快照**，不得用于解释当前 resolver。EIM-C1 / CHN-X5
 已完成 tolerate，EIM-C2 / CHN-X6 已完成 emit。private API 解析可选、有界、
@@ -389,6 +398,10 @@ asserted open_id match、stable user id present，以及 activated true、frozen
   projection 不回显 Provider 原始 ID、事件 ID/hash、业务 subject 或 health error；
 - `jti`/confirmation/idempotency key 在并发提交下只消费一次；
 - `(interaction_id, revision)` 在两个并发 callback 下只有一个进入 `resuming`，重启后仍可恢复或明确过期；
+- L2 callback 的 operator、tenant、binding generation、message lineage 与当前 revision 任一不匹配时
+  OA 零调用；接受后跨进程恢复仍只产生一次 `prepare/reusable` preview，绝不触发 draft/submit；
+- secure requestState key ring 跨 Gateway 重启后仍能恢复未过期交互，active-first 轮换兼容旧 key；
+  TTL 固定 900 秒并大于 MR 600 秒，缺 key/删旧 key/remote state 先过期均 fail closed；
 - opaque `requestState`、规范化用户响应和敏感结构化结果按数据分级加密保存；跨 tenant、跨 Principal、
   跨 agent/tool/call digest、跨 resource 搬运全部拒绝；
 - 删除/停用不是只清缓存，数据库状态也能阻断下一次请求。
@@ -483,6 +496,19 @@ gate、mypy **81 source files**、unit **2188 passed**；`REQUIRE_SERVICES=1 mak
 - **A6 production gate**：memory replay/audit 的 `multi_instance_safe/durable` 固定为 false；secure 未显式
   注入 coordinator、或 coordinator 非 production-ready 时启动失败。test-only 内存开关不得成为真实
   CLI 默认，local/secure remote gate 均保持关闭；
+- **L2 native leave form**：工具外层 input schema 无业务参数；response schema 恰好 7 个 flat/ref-free
+  字段，四种假种、日期、0..23 小时和 `00|30` 分钟逐项锁定；reason/identity/PM/CC/remark、nested、
+  local/remote ref 与 schema 外字段拒绝。modern 与显式 ask-before-effect legacy 首轮 OA 零调用；
+- **L2 policy/effect/identity**：catalog 与 gateway snapshot 都固定 `leave:read`、prepare/reusable、
+  `leave_applicant`；伪造 `oa_user_id` 或 form identity 无效。accepted 只用 Principal subject 调
+  preview 且 `doCreateRequest` 调用数为 0，cancel/decline/expiry/身份不符/重启 lease 失败全部 OA 零调用，写工具仍拒绝；
+- **L2 terminal/privacy**：direct 与仅含 `result` wrapper 的合法四键 envelope 投影 message；额外键、
+  错 kind/version/bool、raw/nested、换行/tab、首尾空白、空串和 241 字符全部走固定 generic。OA raw、
+  subject、requestState 和底层异常不得出现在卡片/日志；cross-field `end<=start` 当前断言 terminal failed，
+  不误写成 Host fresh-nonce 重开；
+- **L2 profile gate**：secure profile interaction 显式启用，但稳定 key env 缺失必须启动失败；900 秒
+  requestState TTL 大于 MR 600 秒，旧 key 轮换窗口、restart 恢复与 local 无可信 Principal 都有负向。
+  这些测试不证明真实 OA authority、production A6 backend、remote-release 或 rollout；
 - sensitive tool：确认挑战、过期、不同用户/不同参数重放、双击和并发只执行一次；
 - MRTR：合法 `inputResponses + requestState` 可恢复，篡改/过期/错误 schema/revision 明确失败；再次
   返回 `InputRequiredResult` 时不丢失 actor/resource 绑定；
@@ -608,6 +634,7 @@ remote-release 演练。
 | E2E-19 | H5 URL mode | URL 只含短期一次性 nonce；免登同人校验；`requestState`/token 不出现在 URL、卡片或日志 |
 | E2E-20 | MultiRAG 双 MCP 角色 audience 混用 | 发给 of_mcp 的 token 不能调用 MultiRAG MCP Server，反向同样拒绝 |
 | E2E-21 | Host 或 Resource Server 版本回滚 | 现代/legacy 兼容矩阵内可回滚，不要求两个 MCP 方向同时升级或同时回滚 |
+| E2E-22 | L2 p2p 低敏请假试算 | 私聊展示 7 字段原生表单；同一 verified operator 提交后只产生当前主体 OA preview，`doCreateRequest` 调用数为 0、零草稿/审批；安全 terminal 更新原卡。群聊、换人、过期、取消和非法字段拒绝且 OA 零调用；当前 `end<=start` 明确终态失败，不伪装已重开 |
 
 ### 3.5 MCP Foundation 当前兼容基线
 
@@ -753,6 +780,10 @@ corpus 还要扫描 normalized claims/JWKS/token payload，确认不存在 Provi
 - 在 form value 中提交超深 JSON、超长文本、schema 外字段、伪造 enum、无效日期和凭据字段；Host
   必须限制大小、按批准 schema 校验，并拒绝密码/token/API key 的 form-mode 收集；
 - `requestState` 被放入卡片 value、H5 URL、模型 prompt 或日志；测试必须扫描并阻断这些泄漏面；
+- 把 L2 请假表单投递到群聊/话题、增加 reason/身份/PM/CC/remark 或把人员/附件/URL 当 native 字段；
+  必须在 presentation/tool schema 边界拒绝，不能依赖用户“不填写”；
+- 伪造 completed result 夹带 OA raw/subject/异常、额外 wrapper/envelope 键、控制字符、首尾空白或超长
+  message；只允许严格四键 terminal envelope，其余固定 generic，不把工具结果直出；
 - 群聊/话题串会话键碰撞；键中必须包含 provider、tenant/account、conversation/thread。
 - Markdown 伪造 `@all`、`javascript:`/隐藏跳转链接、未闭合代码块或超大卡片；renderer 必须转义、
   限制和安全降级；模型文本不能产生真实 mention。
@@ -845,6 +876,9 @@ decision/reason/replay state。它不记录 Provider/event/interaction 原文、
    legacy compatibility 退出前必须有调用方清单和零流量证据。
 8. Interaction worker 在 `awaiting_input`、CAS 后 `resuming` 和收到 structured result 三个位置重启；
    分别证明可恢复、不会双消费，结果未知时不自动重放副作用。
+9. L2 requestState key ring 轮换：secure 先加入新 active key，旧 key 至少保留 900 秒；分别在 of_mcp
+   Gateway 与 MultiRAG interaction worker 重启，证明 MR 600 秒窗口内可恢复、过期/删旧 key fail closed，
+   且任何路径只有 preview、无 create/submit。
 
 ### 6.3 事故处置优先级
 
@@ -990,6 +1024,31 @@ make smoke
 `of_mcp` 代理必须先读该仓自己的 `AGENTS.md`/README/CI，再记录等价的 lint、typecheck、unit、
 integration 命令；不得把 MultiRAG 的门禁命令机械复制过去。真实飞书和业务沙箱 E2E 需要管理员
 明确批准，且必须使用测试企业/测试患者数据。
+
+EIM-L2 / CHN-X20 的最小回路固定如下；它们不替代两仓完整门禁：
+
+```bash
+# MultiRAG
+uv run pytest -q tests/unit/test_channel_interaction_presentations.py \
+  tests/unit/test_channel_interaction_forms.py \
+  tests/unit/test_mcp_interaction_validation.py
+make verify
+
+# of_mcp
+uv run --locked pytest -q services/leave/tests/test_leave_interaction.py \
+  services/leave/tests/test_ecology.py \
+  packages/ofmcp-core/tests/test_request_state_security.py \
+  packages/ofmcp-core/tests/test_interactions.py \
+  packages/ofmcp-core/tests/test_tool_policy_registry.py
+uv run --locked ofmcp contract diff
+uv run --locked ofmcp verify
+```
+
+最终证据为：MultiRAG focused **89 passed**、完整 `make verify` **2762 passed**、强制 integration
+**182 passed**、MCP compatibility **22/22**；of_mcp focused **114 passed**、完整
+**580 passed / 2 skipped**、contract diff **breaking 0 / behavioral 0 / additive 1**。安全 diff scan
+覆盖 10/10 production/contract surfaces，**0 findings**。单机 live 或旧进程 health 仍不能代替这些证据，
+真实 authority 与 rollout 也未因此完成。
 
 EIM-A4 的最终证据至少要记录以下命令，不得只运行一个 happy-path HTTP 测试：
 

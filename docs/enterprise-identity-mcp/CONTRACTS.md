@@ -1767,7 +1767,7 @@ A4 已提供 request-scoped `current_principal()`：外层把 A3 verified claims
 assurance；role/group/department、Provider 原始字段和上游 token 不属于其模型。service/domain 不 import
 FastMCP 或 auth provider 类型。
 
-leave 的三个读/预览工具已由 EIM-L1 消费 Principal；medic 工具仍未接线。A4 的通用
+leave 的三个 L1 读/预览工具和 L2 的原生表单预览工具都消费 Principal；medic 工具仍未接线。A4 的通用
 context/policy seam 本身不是业务主体已接线的证明，medic 的高风险链仍由 EIM-M1/M2 独立负责，
 两者不能合并。
 
@@ -1830,10 +1830,87 @@ owner/workflow/form fence、最小输出、写工具零 OA 调用与非 `ecology
 gateway + proxy + leave **146 passed、2 skipped**；`uv run --locked ofmcp verify` 六步全绿（test
 **556 passed、2 skipped**）；contract diff 为
 **breaking 0 / behavioral 7 / additive 0**，已审查 snapshot 与当前生成结果一致。因此 L1 的代码与
-契约状态为 `✅`；真实 OA/HR authority、leave 写入、L2、U7、I7/I8 freshness、密钥/部署/远程发布与
+契约状态为 `✅`；真实 OA/HR authority、leave 写入、U7、I7/I8 freshness、密钥/部署/远程发布与
 生产 rollout 均在围栏外，能力仍默认关闭。
 
-### 8.2 EIM-M1/M2 medic Principal 与业务授权（目标，尚未实现）
+### 8.2 EIM-L2 / CHN-X20 原生低敏请假试算（`✅`，未 rollout）
+
+L2 复用 L1 的 exact `leave_applicant`，不增加另一种主体来源。新增工具
+`preview_leave_form` 的 MCP 业务参数 schema 为空；`Context`、`VerifiedSubject` 和 service settings
+均由依赖注入，不会成为模型可控参数，尤其没有 `oa_user_id` 或任意 identity 字段。工具策略冻结为：
+
+```text
+required_scopes = ["leave:read"]
+effect = prepare
+replay_mode = reusable
+enterprise_subject_binding = leave_applicant
+subject_type = ecology_userid
+```
+
+首次调用只能返回 native interaction request，OA 调用数必须为零。表单 response schema 只允许下面
+7 个顶层、flat/ref-free 字段；`additionalProperties=false`，不接受 nested、local/remote `$ref` 或
+未批准关键字：
+
+| 字段 | 类型与约束 |
+|---|---|
+| `leave_type` | string enum：`事假` / `年假` / `星光假` / `阳光假` |
+| `start_date` | ISO date；飞书带 offset 的 date-only callback 经 U15 mapping 归一为 `YYYY-MM-DD` |
+| `start_hour` | integer，`0..23` |
+| `start_minute` | string enum：`00` / `30` |
+| `end_date` | 同 `start_date` |
+| `end_hour` | integer，`0..23` |
+| `end_minute` | string enum：`00` / `30` |
+
+reason、调用者身份、项目人员/项目经理、CC、remark、附件、人员选择、密码/token/OAuth/支付字段都不在
+本 schema；H5/URL mode 也继续 deferred。该表单仅允许 p2p/private chat；当前 CardKit 更新使用共享
+`update_multi` 语义，群聊里展示此 HR 相关表单会扩大可见范围，因此 group/thread 不得进入这一工具。
+
+状态与外部效果必须按下表解释：
+
+| 结果 | 状态与 OA 行为 |
+|---|---|
+| 首次调用 / 下一轮输入 | `input_required`，持久化 `awaiting_input`；OA 零调用 |
+| verified operator 接受且字段有效 | 当前 revision 只消费一次，恢复前重验 Principal/scope/policy；只调用当前 `leave_applicant` 的 OA preview |
+| decline / cancel | Host 持久化对应终态且不恢复工具；direct/legacy helper 若收到该 outcome 则返回 `LEAVE_FORM_NOT_ACCEPTED`；OA 零调用 |
+| expiry / identity TTL / operator、tenant、resource、tool 或 revision 不匹配 | Host fail closed 为对应终态或安全失败；OA 零调用 |
+| callback/restart 重放 | 只允许 `prepare/reusable` 的有 fence lease 恢复；同 receipt/revision 不得产生第二次有效响应 |
+
+accepted 路径固定 `person_type=non_project`，使用服务端固定的低敏 reason 调用既有 preview；对 Ecology
+只允许预览读取，`doCreateRequest` 调用数必须为 0。它不创建草稿、请假单或审批，不调用 submit；
+`create_leave_draft` / `submit_leave` 继续无条件 `LEAVE_WRITE_DISABLED`。表单本身、点击 accept 或
+`input_required` 都不是身份、授权或副作用确认事实。当前 `end > start` 是资源端 Pydantic
+cross-field validator：无效窗口会在恢复调用中形成 terminal failure，而不是 U15 Host 可识别的
+`RESPONSE_INVALID` fresh-nonce 重投；这是当前 UX 限制，不能宣称已自动重开表单。
+
+成功结果只允许下列终态 envelope；MultiRAG 接受它作为直接结果，或接受**仅有** `result` 一个键的
+FastMCP wrapper。两层之外的任意额外键都拒绝：
+
+```json
+{
+  "kind": "com.ofmcp/interaction-terminal",
+  "version": 1,
+  "message": "当前用户的 OA 请假试算已完成。仅预览，未创建请假单或发起审批。",
+  "preview_only": true
+}
+```
+
+envelope 必须精确包含上述四键：`version` 必须是整数 1（bool 不算），`preview_only` 必须是 bool true；
+`message` 必须非空、最多 240 字符、单行、全部 printable，且 `message == message.strip()`。任何 raw tool
+result、错误 kind/version/type、控制字符/换行/tab、首尾空白、超长、nested message、额外键或非精确
+wrapper 都不得进入卡片，统一显示固定 generic `处理已完成。`。该 envelope 只影响 completed terminal
+的安全展示；declined/cancelled/expired/failed 继续使用 Host 固定摘要。
+
+`secure` profile 对本阶段显式 `interactions_enabled=true`，必须从
+`OFMCP_REQUEST_STATE_KEY` 读取 active-first 的稳定 AES-GCM key ring，
+`request_state_ttl_seconds=900`，严格大于 MultiRAG InteractionSession 的 600 秒 TTL，避免远端
+requestState 先到期。缺 key、格式错误或轮换时过早移除旧 key 都要启动/恢复 fail closed；退役 key
+至少保留覆盖最大 TTL。`local` 仍不产生可信 Principal；仓库也没有真实 OA/HR authority、production
+replay/audit backend 或 remote-release。故 L2 代码/契约状态为 `✅`，默认业务能力关闭、未 rollout；
+of_mcp focused **114 passed**、完整 verify **580 passed / 2 skipped**、contract diff
+**breaking 0 / behavioral 0 / additive 1**；MultiRAG focused **89 passed**、完整 verify
+**2762 passed**。这些门禁不能从代码存在推导为群聊、敏感写或生产可用。
+
+### 8.3 EIM-M1/M2 medic Principal 与业务授权（目标，尚未实现）
 
 下面只描述 medic 工具适配层，不包含 leave：
 
@@ -1881,7 +1958,7 @@ resource_uri              canonical MCP resource/audience
 tool_name                 canonical server tool name, never model alias
 call_digest               canonical tool + original arguments hash
 original_arguments        encrypted canonical JSON required for exact resume
-mode                      form in U14; url waits for U15 nonce/renderer; sampling/roots are not human-renderable
+mode                      form in U14/U15; url remains deferred; sampling/roots are not human-renderable
 input_requests            encrypted approved normalized requests
 requested_schema          approved canonical form schema; null for url mode
 schema_digest             canonical JSON hash
@@ -1959,6 +2036,11 @@ U14 首期只允许 `effect=read|prepare` 自动恢复；`side_effect` 必须等
 > 的 AES-256-GCM AAD 加密；PostgreSQL 行/response job 固定 revision/CAS、DB-time lease 与失败终态。
 > of_mcp root 使用显式稳定 key ring 生成可跨重启验证的 requestState。URL mode、Provider renderer、
 > callback route 和 side-effect confirmation 未实现，不能从 U14 完成态推导。
+
+> **U15/L2 后续实现记录（2026-08-24）**：U15 已在 MultiRAG/飞书侧完成 native form renderer、
+> durable callback receipt 与异步 resume，URL mode 仍未实现。L2 只在本节严格七字段/p2p/read-only
+> 范围内让 `preview_leave_form` 消费这条链，并增加上面的 opt-in terminal envelope；它没有改变 U14
+> 对 Principal、lease、tool gate、identity TTL、revision/CAS 与重授权的要求。
 
 InteractionSession 只证明用户对一次输入请求作出了响应，不代表敏感动作已经获批。需要副作用确认
 时，服务端从已验证的规范化输入生成下面的 Confirmation record，并通过 `interaction_id` 建立审计
