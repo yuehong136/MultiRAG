@@ -19,6 +19,7 @@ from api.channel_execution.interaction_presentations import (
 )
 from api.channel_execution.models import ChannelActor
 from api.db.db_models import McpInteractionCallbackReceipt, McpInteractionPresentation
+from api.identity.mcp_interactions.contracts import InteractionErrorCode
 from api.identity.mcp_interactions.crypto import EncryptedInteractionPayload, InteractionPayloadCipher
 
 _FIELD_ID = "f_aaaaaaaaaaaaaaaaaaaaaaaa"
@@ -470,6 +471,91 @@ async def test_poisoned_durable_receipt_is_rejected_instead_of_hot_looping() -> 
     assert row.response_state == "terminal"
     assert row.delivery_kind == "terminal"
     assert row.delivery_state == "pending"
+
+
+@pytest.mark.asyncio
+async def test_invalid_form_response_reopens_with_a_fresh_delivery_nonce(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = _now()
+    row = _presentation(now)
+    row.response_state = "received"
+    cipher = InteractionPayloadCipher([b"k" * 32])
+    mapping = {
+        "requests": {
+            "request-1": {
+                _FIELD_ID: {
+                    "name": "required_date",
+                    "type": "string",
+                    "kind": "date",
+                    "required": True,
+                    "options": {},
+                    "min": 0,
+                    "max": 1000,
+                },
+            },
+        },
+    }
+    encrypted_mapping = cipher.encrypt(
+        tenant_id=row.tenant_id,
+        interaction_id=row.interaction_id,
+        revision=row.revision,
+        purpose="form_mapping",
+        value=mapping,
+    )
+    row.form_mapping_ciphertext = encrypted_mapping.ciphertext
+    row.form_mapping_key_id = encrypted_mapping.key_id
+    callback = _payload(
+        nonce="action-nonce-0123456789",
+        form_value={},
+    )
+    encrypted_callback = cipher.encrypt(
+        tenant_id=row.tenant_id,
+        interaction_id=row.interaction_id,
+        revision=row.revision,
+        purpose="channel_callback",
+        value=callback.model_dump(mode="json"),
+    )
+    receipt = _receipt(
+        now=now,
+        row=row,
+        ciphertext=encrypted_callback.ciphertext,
+        key_id=encrypted_callback.key_id,
+    )
+    session = _ScriptedSession(now, receipt, row, now)
+
+    repository = _repository(session, cipher)
+    lease = await repository.lease_callback(
+        owner="callback-worker",
+        lease_seconds=30,
+    )
+
+    assert lease is None
+    assert receipt.state == "rejected"
+    assert receipt.safe_error_code == InteractionErrorCode.RESPONSE_INVALID.value
+    assert row.response_state == "open"
+    assert row.delivery_kind == "form"
+    assert row.delivery_state == "pending"
+    assert row.nonce_digest is None
+    assert row.safe_error_code == InteractionErrorCode.RESPONSE_INVALID.value
+
+    tokens = iter(("new-delivery-token-0123456789", "new-action-nonce-0123456789"))
+    monkeypatch.setattr(
+        "api.channel_execution.interaction_presentations.secrets.token_urlsafe",
+        lambda _size: next(tokens),
+    )
+    session.extend(now, row, object(), now)
+    delivery = await repository.claim_delivery(
+        binding_id=row.binding_id,
+        binding_generation=row.binding_generation,
+        owner="worker-a",
+        lease_seconds=30,
+    )
+
+    assert delivery is not None
+    assert delivery.action_nonce == "new-action-nonce-0123456789"
+    assert delivery.action_nonce != callback.nonce
+    assert delivery.safe_error_code == InteractionErrorCode.RESPONSE_INVALID.value
 
 
 @pytest.mark.asyncio

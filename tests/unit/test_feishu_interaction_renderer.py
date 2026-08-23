@@ -21,7 +21,9 @@ from api.channels.feishu.interaction_renderer import (
     FeishuInteractionRenderer,
     FeishuInteractionRenderError,
     render_interaction_form,
+    render_interaction_terminal,
 )
+from api.channels.interaction_models import ChannelInteractionTerminalProjection
 
 
 class _CardTransport:
@@ -119,7 +121,7 @@ def test_native_form_maps_only_projection_fields_and_opaque_routing() -> None:
 
     assert card["schema"] == "2.0"
     assert card["config"] == {
-        "update_multi": False,
+        "update_multi": True,
         "summary": {"content": "等待补充信息"},
     }
     form = card["body"]["elements"][0]
@@ -325,3 +327,16 @@ async def test_renderer_updates_the_original_finished_reply_message() -> None:
     assert transport.updates == [
         ("om-original-reply", rendered.card_json),
     ]
+
+
+def test_terminal_card_keeps_cardkit_multi_update_enabled() -> None:
+    card = json.loads(
+        render_interaction_terminal(
+            ChannelInteractionTerminalProjection(
+                state="completed",
+                message="差旅方案预演已完成。",
+            ),
+        ),
+    )
+
+    assert card["config"]["update_multi"] is True

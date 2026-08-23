@@ -266,7 +266,8 @@ orphan，不能充当运行 lease、取消或终态判断，worker 仍不导入�
 ### MCP 原生 CardKit 表单（EIM-U15 / CHN-X15）
 
 当前源码在默认关闭的 `identity.mcp_interactions` gate 后，把 U14 的持久 InteractionSession 接到
-飞书原生 Card JSON 2.0 form；尚未做真实配置、进程重启、数据库 rollout 或飞书 live。execution
+飞书原生 Card JSON 2.0 form。2026-08-24 已在用户批准的单机临时配置下完成真实飞书/P3/of_mcp
+native-form E2E；源码默认值仍关闭，这不表示生产配置、生产 secret 或多实例 rollout 已完成。execution
 遇到 `MCPInteractionPaused` 时不进入 RAGFlow/Canvas/Agent 主循环重试，而是在 API 事务边界登记
 presentation，完成原 event claim，并发送终态 `interaction_required`。Bridge 先结束正在编辑的流式卡，
 再用原回复 message ID 领取并投递安全 projection；form 和 terminal 都使用整卡更新，避免 stream
@@ -279,6 +280,12 @@ nested/ref/remote schema、pattern、非法日期/数值、schema 外字段和�
 opaque action ID、one-time nonce 和 revision，不带 `requestState`、Principal、scope、工具参数、
 credential 或原始 schema。submit 与 cancel 可用；复杂联动、人员/附件、多步骤、密码/API key/token/
 OAuth/支付凭据的 H5/URL mode 明确后置。
+
+飞书 CardKit `date_picker` 的 callback 会把日期表示为 `YYYY-MM-DD ±HHMM`；服务端只在加密映射已证明
+opaque 字段是 date 后校验 ASCII 形状、实际日历日与最大 `±14:00` offset，再归一为 `YYYY-MM-DD`，
+普通 text 不做该转换。字段响应不合法时只拒绝当前 receipt，presentation 重新进入 pending 并投递
+fresh-nonce form；密文、映射或不可解释状态损坏仍终态 fail closed。form/terminal Card JSON 2.0 均
+设置 `update_multi=true`，满足原消息整卡更新要求。
 
 worker 与 API 使用三条 generation-scoped private route：delivery `claim`、精确 lease/token `ack`、
 以及 callback durable receipt。claim/ACK 只负责卡片交付，不执行 MCP。飞书 form callback 在当前
@@ -750,7 +757,8 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
   私有列。API 侧 collector 有 batch/cycle 上限并用 `SKIP LOCKED` 协调多实例；worker 不查数据库。
 - 默认关闭的 U15 源码提供 generation-scoped interaction delivery outbox、durable callback receipt、
   API 后台 Principal 重验/U14 恢复和飞书 native form/terminal 原卡更新；callback 202/飞书 toast 只在
-  receipt 持久提交后返回，worker 不直接恢复 MCP。
+  receipt 持久提交后返回，worker 不直接恢复 MCP。单机临时 live 已验证一次 form → receipt → resume →
+  第二次 MCP → terminal ACK；默认关闭与生产 rollout 边界不变。
 - Supervisor 不记录原始 binding ID，worker 不记录原始飞书 ID、问题、答案或 SSE 帧。
 
 ### 尚未实现或不能宣称
@@ -758,14 +766,14 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
 - API 与 supervisor 之间的主 internal token 目前仍是静态 workload token，不等于 mTLS 或
   短期 delegated token；child token 虽已缩小作用域，仍由该主 token 确定性派生。
 - `RunContext.principal` 已经由 P2 到达 MCP call-context seam；A2/P3 的 token issuance、
-  request-scoped credential provider 与动态 bearer 源码也已实现，但均默认关闭、未配置真实 key/policy/
-  grant、未部署且没有真实 Channel/MCP bearer 流量。业务对象 PDP/SQL 授权仍未实现，不能把这些源码
-  边界写成生产委托已打通。
+  request-scoped credential provider 与动态 bearer 源码也已实现且默认关闭。2026-08-24 单机临时
+  key/policy/grant + loopback TLS 已产生真实 Channel/MCP bearer 流量并完成 U15 E2E，但这不是生产
+  key 管理、私网 TLS、多实例发布或业务 PDP/SQL 授权证据，不能写成生产委托已打通。
 - 主加密密钥支持在线轮换（密钥环，见上），但**没有存量密文重加密流程**：旧密文要靠旧
   密钥留在环上才读得到，只有该渠道下次保存新凭据时才会改用 active 密钥重写。因此
   **仍然不得直接替换旧 key**——替换 ≠ 轮换。
-- 当前支持飞书私聊文本、CardKit 渐进式回复，以及默认关闭、尚未 rollout/live 的 native MCP form
-  源码；仍不支持群聊、图片、文件、语音或 H5/URL elicitation。
+- 当前支持飞书私聊文本、CardKit 渐进式回复，以及默认关闭但已完成一次单机临时 live 的 native MCP
+  form 源码；生产 rollout 仍未完成，也仍不支持群聊、图片、文件、语音或 H5/URL elicitation。
 - native form 本阶段不开放 U7 敏感写；密码/API key/token/OAuth/支付凭据、复杂联动、附件、人员选择
   和多步骤表单均不进入 CardKit。`lark-channel-sdk` 也未安装或迁移，仍由后续 EIM-C5/CHN-P14 PoC
   单独决定。

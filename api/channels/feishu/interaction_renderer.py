@@ -248,7 +248,11 @@ def render_interaction_form(
     card = {
         "schema": "2.0",
         "config": {
-            "update_multi": False,
+            # CardKit card entities reject JSON 2.0 payloads with
+            # ``update_multi=false`` (provider code 300302).  The interaction
+            # presenter replaces the bot's one shared reply card, so enabling
+            # multi-user updates is also the correct message-level semantic.
+            "update_multi": True,
             "summary": {"content": "等待补充信息"},
         },
         "header": {
@@ -325,7 +329,7 @@ def render_interaction_terminal(
         {
             "schema": "2.0",
             "config": {
-                "update_multi": False,
+                "update_multi": True,
                 "summary": {"content": title},
             },
             "header": {

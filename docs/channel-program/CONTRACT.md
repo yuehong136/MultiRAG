@@ -205,7 +205,10 @@ U14 自己继续负责工具 gate、identity TTL、lease、重授权和幂等恢
 枚举最多 20 项；支持 text、integer/number、boolean、date、single enum、enum array，文本最多 1000
 字符。field/option 映射加密留在服务端，未知关键字、nested/ref/remote schema、pattern、非有限数、
 非法日期、schema 外字段和重复多选全部拒绝。H5/URL、附件、人员选择、多步骤、密码/token/OAuth/支付
-凭据均不在本阶段。
+凭据均不在本阶段。CardKit `date_picker` callback 可返回 ASCII `YYYY-MM-DD ±HHMM`；只有 encrypted
+mapping 已证明该 opaque 字段为 date 时，服务端才校验真实日历日与最大 `±14:00` offset，并归一为
+`YYYY-MM-DD`。可恢复的字段响应错误拒绝当前 receipt 并重新投递 fresh-nonce form；密文/映射损坏仍
+terminal fail closed。
 
 这是 private additive contract，公开 `channel-api/v1` 不 bump。安全 rollout 必须是：先迁移并在
 `identity.mcp_interactions.enabled=false` 下部署新 API → 重启全部 supervisor/child consumer，让其
@@ -492,4 +495,5 @@ JSON Schema（`config_schema`）仅用于服务端请求校验与 OpenAPI，**�
 | 2026-08-13 | v1（仅 private command consume，不 bump） | C3/X7 只在成功 claim 后经 authority、I3/I4/I6 与 P1 提升 Principal，并以 owner-aware session/target 隔离 linked 用户；NO_LINK 与 legacy subject 兼容仍保留，公开 Channel API/web 线格不变。`0ded51ff` 自动门禁全绿；加载 `2b0482c7` 的新 API smoke 六组件全绿，双 account live 的 alias/canonical identity/membership/BindingEvent、Canvas/Dialog Principal owner 与 Redis tombstone 均通过脱敏计数核验。P2 全链传播、MCP token 与 C4 legacy remove 均不属于本步 | `0ded51ff` + live `2b0482c7` |
 | 2026-08-13 | v1（仅定义 private run-context 传播，不 bump） | 为 EIM-P2 增加 CHN-X18 记账：定义 LINKED full Principal 从 Channel Execution 到 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas workflow/MCP call context seam 的进程内传播边界，禁止静默匿名与 DSL 覆盖，保留 NO_LINK legacy；不签 token、不取 credential、不发 bearer，也不改变公开或 private wire。当前仅冻结契约与零上下文交接，运行时代码仍未实现 | 本次提交 |
 | 2026-08-13 | v1（仅实现 private run-context 传播，不 bump） | EIM-P2 / CHN-X18 已把 C3 full Principal 经 frozen `RunContext` 显式送入 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas component workflow 与 MCP instance-local call context；LINKED 的 user key 只取可信 Principal，Memory 同时校验 tenant，NO_LINK 保留 legacy。未改 public/private wire、DSL、MCP header/arguments 或 token 体系 | 本次提交 |
-| 2026-08-23 | v1（private additive，不 bump） | 定义 EIM-U15 / CHN-X15 的 generation-scoped delivery claim/ACK 与 durable callback receipt：只有 PostgreSQL receipt 提交后才快速 ACK，Principal 解析、当前 revision claim 与 U14 MCP 恢复全部异步；CardKit 只消费安全 native-form/terminal projection，H5/URL 和敏感写后置。当前是 app-bound WebSocket + tenant/app/operator/message lineage，不把 webhook signature 写成已实现 | 本次提交（状态保持 `🔵`，待完整门禁与提交 SHA） |
+| 2026-08-24 | v1（private callback 行为兼容，不 bump） | 实机确认 CardKit `date_picker` 回传带 RFC 822 风格 offset；date-only mapping 严格归一为 `YYYY-MM-DD`。RESPONSE_INVALID 现在拒绝当前 durable receipt 并重新投递 fresh-nonce form，坏密文/映射仍 terminal；private wire 字段与状态码集合未变。单机临时真实飞书/P3/of_mcp E2E 已完成，不表示生产 rollout | `41675183` 后续工作树修复 + 本机 live |
+| 2026-08-23 | v1（private additive，不 bump） | 定义 EIM-U15 / CHN-X15 的 generation-scoped delivery claim/ACK 与 durable callback receipt：只有 PostgreSQL receipt 提交后才快速 ACK，Principal 解析、当前 revision claim 与 U14 MCP 恢复全部异步；CardKit 只消费安全 native-form/terminal projection，H5/URL 和敏感写后置。当前是 app-bound WebSocket + tenant/app/operator/message lineage，不把 webhook signature 写成已实现 | `41675183`（状态 `✅`） |

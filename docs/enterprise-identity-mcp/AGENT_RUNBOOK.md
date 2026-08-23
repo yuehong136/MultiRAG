@@ -245,8 +245,9 @@ A2 的代码锚点是 `api/identity/mcp_issuer/{contracts,keys,service,runtime}.
    `ENTERPRISE_VERIFIED`；首期不猜 `amr`，enterprise subject 要精确匹配 resource authority；
 6. key 轮换是 prepublish → switch → retain/remove contract；旧 public key 默认至少保留
    `300 + 30 + 300 = 630` 秒。真实多副本发布、key generation/KMS、DNS/TLS 与演练仍属 O1；
-7. A2 当时未暗含 P3、A5、A7、A8；后续 P3 已作为独立任务完成本地代码与自动门禁。当前 API 仍未
-   配置真实 key/policy/grant 或加载 P3，也没有真实 Channel/MCP bearer 流量。
+7. A2 当时未暗含 P3、A5、A7、A8；后续 P3 已作为独立任务完成本地代码与自动门禁。2026-08-24
+   曾经用户批准，以单机临时 key/policy/grant、loopback TLS 和严格 verifier 加载 P3 并完成一次真实
+   Channel/MCP bearer + U15 live；源码默认关闭，不能把该本机证据写成生产 key/rollout 已完成。
 
 A2 失败基线为新增模块收集 **2 errors**；A1+A2 定向 **130 passed**，定向 mypy **8 source files**。
 另用临时 P-256 key 动态签发且不输出 token/key，由 of_mcp production
@@ -282,13 +283,15 @@ P3 失败优先收集到新增模块 `ModuleNotFoundError`；定向 **109 passed
 **178 passed**，Channel 执行回归 **88 passed**，`make mcp-compat` **13/13 PASS**。`make fix` 全绿；
 `make verify` 为 8 条 import contracts（853 files/2695 dependencies）、mypy 100 files、unit
 **2470 passed**；只读 `make smoke` 六组件全绿，但命中的是未重启的旧 runtime，不是 P3 rollout。
-未跑 integration（无 DB/存储/检索变更）。A5 后续已在 of_mcp 完成本地实现，U14 也已完成本地实现并解锁 U15；任何真实
-artifact/key/config/restart/secure endpoint/飞书 MCP 调用仍须另行精确批准。
+未跑 integration（无 DB/存储/检索变更）。A5 后续已在 of_mcp 完成本地实现，U14/U15 也已完成；
+2026-08-24 的用户批准只覆盖本机临时 live。任何生产 artifact/key/config/restart/secure endpoint、
+多实例部署或对外 MCP 流量仍须另行精确批准。
 
 #### EIM-U15 / CHN-X15 当前实现与 rollout 交接
 
-U15 当前保持 `🔵`，直到根任务完成完整门禁、integration、smoke、MCP compatibility、账本和提交
-对账；源码存在不等于已部署或飞书 live。接手时按以下顺序读当前锚点：
+U15 当前为 `✅`：源码、完整门禁、integration、账本与 `41675183` 已完成；2026-08-24 又在用户批准
+的单机临时环境完成真实飞书/P3/of_mcp E2E。源码默认值仍关闭，该 live 不等于生产部署。接手时按
+以下顺序读当前锚点：
 
 1. U14/P0：`common/mcp_interactions.py`、`common/mcp_tool_call_conn.py` 与
    `api/identity/mcp_interactions/{contracts,repository,runtime,service}.py`。恢复必须携
@@ -309,7 +312,8 @@ U15 当前保持 `🔵`，直到根任务完成完整门禁、integration、smok
 - 原生 mapper 只支持服务端 allowlist 的 text、integer/number、boolean、date、enum 与 enum array；
   H5/URL、人员/附件、多步骤和 credential 输入 deferred；
 - execution pause 只在 MultiRAG 自有 composition/service 层登记 presentation，不改 RAGFlow
-  `core/llm`、Canvas/Agent 主循环，不改 `of_mcp`，也不启用 U7 敏感写；
+  `core/llm`、Canvas/Agent 主循环或 `of_mcp` 生产 runtime/contract，也不启用 U7 敏感写；2026-08-24
+  live 只给 `of_mcp` testing compat server 增加 opt-in 严格 P3 fixture；
 - worker 只能 claim 安全 projection、更新原卡并 ACK delivery；form callback 只有在 PostgreSQL
   receipt 提交后才快速应答，不能同步解析 Principal 或调用 MCP；
 - 当前 managed transport 是 app-bound WebSocket。adapter 校验 tenant/app/operator/conversation/
@@ -325,6 +329,8 @@ API；再重启所有 supervisor/child consumer，并确认新 generation 能消
 claim/ACK 和 durable callback；最后才启用 producer 并重启 API。回滚先关闭 producer 并重启 API，
 停止产生新 interaction；保留新 consumer 处理/终态化已持久记录，再考虑退代码。新增表有数据时不得
 destructive downgrade。真实迁移、重启、配置 key 和飞书 live 都属于外部状态操作，仍需单独批准。
+2026-08-24 已批准并执行的仅是当次单机临时 rollout；后续重新启用、生产 key、私网 TLS、多实例或
+正式飞书流量仍按本条重新取得批准。
 
 ### 4.4 外部 API 和 SDK 任务
 

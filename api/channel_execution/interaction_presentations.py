@@ -27,7 +27,10 @@ from api.db.db_models import (
     McpInteractionCallbackReceipt,
     McpInteractionPresentation,
 )
-from api.identity.mcp_interactions.contracts import InteractionStateError
+from api.identity.mcp_interactions.contracts import (
+    InteractionErrorCode,
+    InteractionStateError,
+)
 from api.identity.mcp_interactions.crypto import (
     EncryptedInteractionPayload,
     InteractionPayloadCipher,
@@ -555,9 +558,37 @@ class InteractionPresentationRepository:
                 action=callback.action,
                 form_value=callback.form_value,
             )
+        except InteractionStateError as exc:
+            if exc.code is InteractionErrorCode.RESPONSE_INVALID:
+                receipt.state = "rejected"
+                receipt.safe_error_code = exc.code.value
+                receipt.lease_owner = None
+                receipt.lease_until = None
+                receipt.next_attempt_at = None
+                receipt.updated_at = now
+                presentation.response_state = "open"
+                presentation.delivery_kind = "form"
+                presentation.delivery_state = "pending"
+                presentation.delivery_lease_owner = None
+                presentation.delivery_lease_until = None
+                presentation.delivery_token_digest = None
+                presentation.delivery_next_attempt_at = None
+                presentation.nonce_digest = None
+                presentation.safe_error_code = exc.code.value
+                presentation.updated_at = now
+                await self._session.flush()
+                return None
+            receipt.state = "rejected"
+            receipt.safe_error_code = InteractionPresentationErrorCode.PAYLOAD_INVALID.value
+            receipt.lease_owner = None
+            receipt.lease_until = None
+            receipt.updated_at = now
+            self._terminalize(presentation, state="failed", now=now)
+            presentation.safe_error_code = InteractionPresentationErrorCode.PAYLOAD_INVALID.value
+            await self._session.flush()
+            return None
         except (
             InteractionPayloadCipherError,
-            InteractionStateError,
             TypeError,
             ValueError,
         ):

@@ -3,8 +3,9 @@
 > 状态：设计基线；EIM-U0/CHN-X9 的执行流与 buffered ReplySession、
 > EIM-U1/CHN-U8 的飞书 CardKit 渐进式回复、EIM-U11/CHN-X13、EIM-U12/CHN-U14 与
 > EIM-U13/CHN-U15 的目标事务均已实现；EIM-U14 的持久 InteractionSession 已完成，
-> EIM-U15/CHN-X15 native form 源码正在收口，状态保持 `🔵`，尚未 rollout/live。
-> 最后核验：2026-08-23（Asia/Shanghai）。
+> EIM-U15/CHN-X15 native form 已完成源码、自动门禁和一次单机临时真实飞书/P3/of_mcp E2E；
+> 源码默认关闭，生产 rollout、H5/URL 与敏感写仍未开始。
+> 最后核验：2026-08-24（Asia/Shanghai）。
 > 适用范围：MultiRAG `api/channels/`、`api/channel_execution/`、飞书企业自建应用，以及后续
 > 与 `of_mcp` 的确认交互。
 
@@ -56,7 +57,7 @@ Agent message_delta
 | `api/channels/core/base.py` | `ChannelAction` 保持低风险 opaque action；独立 `ChannelFormAction` 携 opaque action/nonce/revision、有界 form value 和 typed operator assertion | form value 仍是不可信输入；必须由 API 异步提升 Principal 并二次验证 |
 | `api/channels/core/base.py` | `Channel.begin_reply()` 默认 buffered；`ReplyContext` 携带状态、动作与最终能力 | 普通 Provider 完成时只发一条文本，支持逐 Provider 覆盖 |
 | `api/channels/feishu/channel.py` | 协商允许时使用 Typing + CardKit 2.0；否则 buffered text；form callback 校验 app-bound WS 的 tenant/app/operator/message lineage | Markdown/公式走 CardKit renderer；native form 只接收有界 typed callback，不宣称 webhook signature 验证 |
-| `api/channels/feishu/channel.py` | 入站消息仍只支持 text，但已保留 header tenant 与类型化 open/user/union ID，Bridge/runtime client 发送冻结、repr 脱敏的 structured assertion | 无话题、引用、附件或 mention；C3 已提升 LINKED Principal，P2 已把它传入 Agent/RAG/Memory/workflow/MCP context seam；A2/P3 源码默认关闭且未 rollout |
+| `api/channels/feishu/channel.py` | 入站消息仍只支持 text，但已保留 header tenant 与类型化 open/user/union ID，Bridge/runtime client 发送冻结、repr 脱敏的 structured assertion | 无话题、引用、附件或 mention；C3 已提升 LINKED Principal，P2 已把它传入 Agent/RAG/Memory/workflow/MCP context seam；A2/P3 源码默认关闭，单机临时 live 已通过但生产 rollout 未开始 |
 | `api/channel_providers/feishu.py` | 声明私聊文本、CardKit 渐进式、交互、取消、反馈与 threaded reply；文件/图片仍为 false | 管理面与运行时共用同一 Provider 事实源 |
 
 必须保留的已有优势：SDK 回调只规范化并入队、有界队列、每会话顺序、Redis 原子去重、
@@ -420,6 +421,9 @@ EIM-U15/CHN-X15 当前源码把这个子集固定为最多 4 个 request、合�
 option value 全部换成 opaque ID，反向映射加密留在 presentation store。未知关键字、nested/ref/
 remote schema、pattern、非法日期/非有限数、schema 外字段与重复多选 fail closed。native card 只提供
 submit/cancel；terminal card 只展示 `completed/declined/cancelled/expired/failed` 的服务端白名单摘要。
+CardKit `date_picker` 的实机 callback 形状包含 `YYYY-MM-DD ±HHMM`；adapter 只对已由加密映射
+证明为 date 的 opaque 字段校验日历日和 offset 后归一为 `YYYY-MM-DD`。非法字段响应拒绝当前 receipt
+并重新投递 fresh-nonce form；密文/映射损坏仍终态拒绝。
 
 交互生命周期：
 
@@ -642,7 +646,7 @@ candidate，公开历史不含半轮或 `<think>`。这些现场结果和相关�
 | EIM-U5 | CHN-X10 | references/artifacts 结构化事件与渲染 | U0、P2 |
 | EIM-U6 | CHN-X11 | 图片/文件/语音输入输出 | U0、U5、C3、附件安全基建 |
 | EIM-U14 | — | ✅ provider-neutral InteractionSession、MRTR/legacy resume、加密结果与 outputSchema 校验；默认关闭 | F3、P3、A4、C3 |
-| EIM-U15 | CHN-X15 | 🔵 飞书 native form/terminal renderer、durable-receipt ACK 与后台恢复；H5/URL deferred，待完整门禁与 rollout/live | U14、U1、U4 |
+| EIM-U15 | CHN-X15 | ✅ 飞书 native form/terminal renderer、durable-receipt ACK 与后台恢复；自动门禁和一次单机临时真实 live 已通过，源码默认关闭且生产 rollout/H5/URL deferred | U14、U1、U4 |
 | EIM-U7 | CHN-X12 | 敏感确认卡和 action callback | U15、M3、M4 |
 | EIM-C5 | CHN-P14 | 官方 Channel SDK transport PoC | 与上述 UX 并行，非阻塞依赖 |
 

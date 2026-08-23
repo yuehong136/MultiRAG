@@ -165,6 +165,36 @@ def test_decode_accepts_required_list_and_normalizes_allowlisted_values() -> Non
 
 
 @pytest.mark.parametrize(
+    "value",
+    (
+        "2026-08-23 +0800",
+        "2026-08-23 -0330",
+        "2026-08-23 +1400",
+    ),
+)
+def test_decode_normalizes_cardkit_date_picker_offset(value: str) -> None:
+    _, mapping = build_form_projection(
+        interaction_id="interaction-1",
+        revision=3,
+        input_requests=_input_requests(),
+    )
+
+    decoded = decode_form_submission(
+        mapping=mapping,
+        action="accept",
+        form_value={
+            _field_id(mapping, "internal_reason"): "批准上线",
+            _field_id(mapping, "internal_date"): value,
+            _field_id(mapping, "internal_tags"): [
+                _option_id(mapping, "internal_tags", "raw-secret-a"),
+            ],
+        },
+    )
+
+    assert decoded["request-secret-id"]["content"]["internal_date"] == "2026-08-23"
+
+
+@pytest.mark.parametrize(
     ("form_value", "expected_code"),
     [
         ({}, InteractionErrorCode.RESPONSE_INVALID),
@@ -209,8 +239,21 @@ def test_decline_and_cancel_never_accept_form_values() -> None:
     [
         ("internal_count", 1.9),
         ("internal_date", "2026-02-31"),
+        ("internal_date", "2026-08-23 +1460"),
+        ("internal_date", "2026-08-23 +1401"),
+        ("internal_date", "2026-02-31 +0800"),
+        ("internal_date", "2026-08-23T00:00"),
+        ("internal_date", "２０２６-０８-２３ +０８００"),
     ],
-    ids=("integer-float-truncation", "invalid-calendar-date"),
+    ids=(
+        "integer-float-truncation",
+        "invalid-calendar-date",
+        "invalid-date-offset",
+        "invalid-maximum-date-offset",
+        "invalid-offset-calendar-date",
+        "unexpected-date-shape",
+        "unicode-date-digits",
+    ),
 )
 def test_decode_rejects_values_that_only_look_compatible(
     property_name: str,

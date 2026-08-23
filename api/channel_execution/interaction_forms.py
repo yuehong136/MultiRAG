@@ -13,7 +13,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from api.identity.mcp_interactions.contracts import InteractionErrorCode, InteractionStateError
 
-_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_DATE_ONLY = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+_DATE_WITH_OFFSET = re.compile(
+    r"^([0-9]{4}-[0-9]{2}-[0-9]{2}) ([+-])([0-9]{2})([0-9]{2})$",
+)
 _MAX_REQUESTS = 4
 _MAX_FIELDS = 12
 _MAX_OPTIONS = 20
@@ -91,6 +94,23 @@ def _number(value: object) -> float | None:
     if not isinstance(value, int | float) or isinstance(value, bool) or not math.isfinite(float(value)):
         _reject()
     return float(value)
+
+
+def _normalized_date(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError
+    normalized = value
+    if _DATE_ONLY.fullmatch(value) is None:
+        match = _DATE_WITH_OFFSET.fullmatch(value)
+        if match is None:
+            raise ValueError
+        offset_hours = int(match.group(3))
+        offset_minutes = int(match.group(4))
+        if offset_hours > 14 or offset_minutes > 59 or (offset_hours == 14 and offset_minutes != 0):
+            raise ValueError
+        normalized = match.group(1)
+    date.fromisoformat(normalized)
+    return normalized
 
 
 def _options(
@@ -359,14 +379,18 @@ def decode_form_submission(
                     if not isinstance(value, str):
                         raise ValueError
                     if kind == "date":
-                        if _DATE.fullmatch(value) is None:
-                            raise ValueError
-                        date.fromisoformat(value)
+                        # CardKit date_picker form callbacks append the user's
+                        # RFC 822-style UTC offset (for example `` +0800``).
+                        # Normalize only after the encrypted mapping proves
+                        # this opaque field is a date; arbitrary text remains
+                        # byte-for-byte unchanged.
+                        normalized = _normalized_date(value)
+                    else:
+                        normalized = value
                     minimum = raw_spec.get("min") or 0
                     maximum = raw_spec.get("max") or _MAX_TEXT
-                    if not minimum <= len(value) <= maximum:
+                    if not minimum <= len(normalized) <= maximum:
                         raise ValueError
-                    normalized = value
                 else:
                     raise ValueError
             except (TypeError, ValueError, OverflowError) as exc:
